@@ -145,6 +145,7 @@ const API_HANDLER_SETTINGS_FIELDS = {
 	enableParallelToolCalling: { default: true as boolean },
 
 	// Plan mode configurations
+	planModeAnthropicModelInfo: { default: undefined as ModelInfo | undefined },
 	planModeApiModelId: { default: undefined as string | undefined },
 	planModeThinkingBudgetTokens: { default: undefined as number | undefined },
 	geminiPlanModeThinkingLevel: { default: undefined as string | undefined },
@@ -189,6 +190,7 @@ const API_HANDLER_SETTINGS_FIELDS = {
 	planModeVercelAiGatewayModelInfo: { default: undefined as ModelInfo | undefined },
 
 	// Act mode configurations
+	actModeAnthropicModelInfo: { default: undefined as ModelInfo | undefined },
 	actModeApiModelId: { default: undefined as string | undefined },
 	actModeThinkingBudgetTokens: { default: undefined as number | undefined },
 	geminiActModeThinkingLevel: { default: undefined as string | undefined },
