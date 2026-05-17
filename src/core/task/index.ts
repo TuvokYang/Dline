@@ -709,6 +709,7 @@ export class Task {
 					partial,
 				})
 				await this.postStateToWebview()
+				await sendPartialMessageEvent(convertClineMessageToProto(this.messageStateHandler.getClineMessages().at(-1)!))
 				throw new Error("Current ask promise was ignored 2")
 			}
 			// partial=false means its a complete version of a previously partial message
@@ -750,6 +751,7 @@ export class Task {
 					text,
 				})
 				await this.postStateToWebview()
+				await sendPartialMessageEvent(convertClineMessageToProto(this.messageStateHandler.getClineMessages().at(-1)!))
 			}
 		} else {
 			// this is a new non-partial message, so add it like normal
@@ -767,6 +769,7 @@ export class Task {
 				text,
 			})
 			await this.postStateToWebview()
+			await sendPartialMessageEvent(convertClineMessageToProto(this.messageStateHandler.getClineMessages().at(-1)!))
 		}
 
 		if (type !== "command_output") {
@@ -875,6 +878,7 @@ export class Task {
 					modelInfo,
 				})
 				await this.postStateToWebview()
+				await sendPartialMessageEvent(convertClineMessageToProto(this.messageStateHandler.getClineMessages().at(-1)!))
 				return sayTs
 			}
 			// partial=false means its a complete version of a previously partial message
@@ -908,6 +912,7 @@ export class Task {
 				modelInfo,
 			})
 			await this.postStateToWebview()
+			await sendPartialMessageEvent(convertClineMessageToProto(this.messageStateHandler.getClineMessages().at(-1)!))
 			return sayTs
 		}
 		// this is a new non-partial message, so add it like normal
@@ -923,6 +928,7 @@ export class Task {
 			modelInfo,
 		})
 		await this.postStateToWebview()
+		await sendPartialMessageEvent(convertClineMessageToProto(this.messageStateHandler.getClineMessages().at(-1)!))
 		return sayTs
 	}
 
