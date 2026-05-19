@@ -415,7 +415,11 @@ export class Controller {
 
 				return true
 			}
-			this.cancelTask()
+			// Do NOT cancel the task.  Switching mode only needs to replace the
+			// API handler (already done above).  Destroying and recreating the
+			// task causes MessagesArea to unmount/remount, which makes Virtuoso
+			// lose its scroll position and visually "bounce" to the top.
+			await this.postStateToWebview()
 			return false
 		}
 
