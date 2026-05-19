@@ -2031,7 +2031,13 @@ export class Task {
 		} catch (error) {
 			const isContextWindowExceededError = checkContextWindowExceededError(error)
 			const { model, providerId } = this.getCurrentProviderInfo()
-			const clineError = ErrorService.get().toClineError(error, model.id, providerId)
+			// Use provider-specific parseError if available, otherwise fall back to generic classification.
+			// Telemetry: toClineError logs internally; parseError must log manually when used.
+			const clineError =
+				this.api.parseError?.(error, model.id) ?? ErrorService.get().toClineError(error, model.id, providerId)
+			if (this.api.parseError) {
+				ErrorService.get().logException(clineError, { modelId: model.id, providerId })
+			}
 
 			// Capture provider failure telemetry using clineError
 			ErrorService.get().logMessage(clineError.message)
@@ -3009,7 +3015,13 @@ export class Task {
 				await streamCoordinator?.stop()
 				// abandoned happens when extension is no longer waiting for the cline instance to finish aborting (error is thrown here when any function in the for loop throws due to this.abort)
 				if (!this.taskState.abandoned) {
-					const clineError = ErrorService.get().toClineError(error, this.api.getModel().id)
+					// Use provider-specific parseError if available, otherwise fall back to generic classification
+					const clineError =
+						this.api.parseError?.(error, this.api.getModel().id) ??
+						ErrorService.get().toClineError(error, this.api.getModel().id)
+					if (this.api.parseError) {
+						ErrorService.get().logException(clineError, { modelId: this.api.getModel().id })
+					}
 					const errorMessage = clineError.serialize()
 					const isStreamingSpendLimitError = clineError.isErrorType(ClineErrorType.SpendLimit)
 					// Auto-retry for streaming failures (skip for spend limit errors)
