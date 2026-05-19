@@ -89,6 +89,12 @@ export function filterVisibleMessages(messages: ClineMessage[]): ClineMessage[] 
 				} catch {
 					break // keep on parse error to be safe
 				}
+				// Keep this row if a subsequent api_req_failed needs it as an error carrier.
+				// api_req_failed messages are filtered out and are only used to update the
+				// latest api_req_started row. If we drop the carrier row, the error is invisible.
+				if (arr.slice(index + 1).some((m) => m.ask === "api_req_failed")) {
+					break
+				}
 				return false
 			}
 			case "text":
