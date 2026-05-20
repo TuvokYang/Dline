@@ -1,5 +1,44 @@
 # Changelog
 
+## [5.0.0]
+
+### Added
+
+- DeepSeek V4 models with adaptive thinking support and reasoning_content handling
+- Anthropic provider custom model with mode-specific features (plan/act mode independent)
+- I18n framework foundation for multi-language system prompt support
+- ApiHandler.parseError for provider-specific error classification
+- GitHub Actions release workflow for automated publishing
+
+### Changed
+
+- Rebase dev branch onto clean v3.83.0 base, removing all upstream merge contamination
+- Remove upstream remote tracking and all upstream-synced code
+- Remove legacy CLI directory (replaced by sdk/apps/cli)
+- Switch package management from npm to bun for faster installs
+- Update publisher to tuvokyang, repository to TuvokYang/cline
+- Restore release workflow publish job to npm ci for vsce compatibility
+
+### Fixed
+
+- Prevent Virtuoso bounce when switching between plan/act modes
+- Fix input bounce in debounced text fields
+- Keep api_req_started row visible when api_req_failed needs it as error carrier
+- Fix missing error messages in chat view
+- Deduplicate completion_result and fix scroll-to-top stall
+- Preserve reasoning effort selection and remove dead thinkingBlock code
+- Handle string-content assistant messages in V4 thinking mode
+- Fix tab-switch sync after mid-type gRPC update
+- Fix Anthropic custom model sync between plan and act modes
+- Fix duplicate loadConfigData declaration in config-view.tsx
+- Replace buf with npx buf in proto-lint.sh
+
+### Performance
+
+- Virtual-scroll sliding window via fetchMessage RPC to reduce gRPC payload
+- Replace bulk clineMessages push with fetchMessage RPC for better performance
+- Move debug-appropriate messages from Logger.log to Logger.debug
+
 ## [3.83.0]
 
 ### Fixed
