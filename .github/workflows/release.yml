@@ -115,7 +115,7 @@ jobs:
         run: npm ci
 
       - name: Install webview-ui dependencies
-        run: cd webview-ui && npm ci
+        run: cd webview-ui && npm install
 
       - name: Install Publishing Tools
         run: npm install -g @vscode/vsce ovsx

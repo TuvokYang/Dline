@@ -29,7 +29,6 @@ jobs:
                   cache: 'npm'
                   cache-dependency-path: |
                       package-lock.json
-                      webview-ui/package-lock.json
 
             - name: Install root dependencies
               run: npm ci
@@ -37,7 +36,7 @@ jobs:
                   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
             - name: Install webview-ui dependencies
-              run: cd webview-ui && npm ci
+              run: cd webview-ui && npm install
 
             - name: Run Quality Checks (Parallel)
               run: npm run ci:check-all
