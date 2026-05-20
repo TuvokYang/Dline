@@ -73,7 +73,7 @@ jobs:
                   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
             - name: Install webview-ui dependencies
-              run: cd webview-ui && npm ci
+              run: cd webview-ui && npm install
 
             - name: Set up NPM on Windows
               if: runner.os == 'Windows'
@@ -173,7 +173,7 @@ jobs:
                   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
             - name: Install webview-ui dependencies
-              run: cd webview-ui && npm ci
+              run: cd webview-ui && npm install
 
             - name: Download ripgrep binaries
               run: npm run download-ripgrep
