@@ -270,7 +270,7 @@ export class Task {
 	private readonly remoteWorkspaceDetectionPromise: Promise<void>
 	private readonly presentationScheduler: TaskPresentationScheduler
 	private readonly presentationSchedulingDisabled = isPresentationSchedulingDisabled()
-	private lastLoggedPresentationTrigger = ""
+	private lastLoggedPresentationTrigger = 0
 
 	constructor(params: TaskParams) {
 		const {
@@ -633,9 +633,9 @@ export class Task {
 		}
 
 		// Only log when trigger or priority changes to avoid log spam during streaming
-		const logKey = `${trigger}:${priority}`
-		if (this.lastLoggedPresentationTrigger !== logKey) {
-			this.lastLoggedPresentationTrigger = logKey
+		const currentSecond = Math.floor(Date.now() / 1000)
+		if (this.lastLoggedPresentationTrigger !== currentSecond) {
+			this.lastLoggedPresentationTrigger = currentSecond
 			Logger.debug(`[Task ${this.taskId}] schedule assistant presentation (${trigger}, ${priority})`)
 		}
 		this.presentationScheduler.requestFlush(priority)
@@ -2806,7 +2806,6 @@ export class Task {
 			await this.diffViewProvider.reset()
 			this.streamHandler.reset()
 			this.presentationScheduler.reset()
-			this.lastLoggedPresentationTrigger = ""
 			this.taskState.toolUseIdMap.clear()
 
 			const { toolUseHandler, reasonsHandler } = this.streamHandler.getHandlers()
@@ -3112,7 +3111,9 @@ export class Task {
 			// toolUseHandler may have accumulated tool_use blocks even when useNativeToolCalls is false
 			// (e.g., from Claude Code provider when the model returns native tool_use blocks).
 			const hasAccumulatedToolCalls = toolUseHandler.getAllFinalizedToolUses().length > 0
-			const assistantHasContent = assistantMessage.length > 0 || this.useNativeToolCalls || hasAccumulatedToolCalls
+			const hasReceivedReasoning = reasonsHandler.hasReceivedReasoning()
+			const assistantHasContent =
+				assistantMessage.length > 0 || this.useNativeToolCalls || hasAccumulatedToolCalls || hasReceivedReasoning
 			if (assistantHasContent) {
 				telemetryService.captureConversationTurnEvent(
 					this.ulid,
