@@ -1,5 +1,6 @@
 import { ApiConfiguration, ModelInfo, QwenApiRegions } from "@shared/api"
 import { Mode } from "@shared/storage/types"
+import { ClineError } from "@/services/error"
 import { ClineStorageMessage } from "@/shared/messages/content"
 import { Logger } from "@/shared/services/Logger"
 import { ClineTool } from "@/shared/tools"
@@ -55,6 +56,8 @@ export interface ApiHandler {
 	getModel(): ApiHandlerModel
 	getApiStreamUsage?(): Promise<ApiStreamUsageChunk | undefined>
 	abort?(): void
+	/** Parse a provider-specific error into a ClineError. Falls back to generic ClineError.transform if not implemented. */
+	parseError?(error: any, modelId?: string): ClineError
 }
 
 export interface ApiHandlerModel {

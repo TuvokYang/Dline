@@ -3,6 +3,7 @@ import { calculateApiCostOpenAI } from "@utils/cost"
 import OpenAI from "openai"
 import type { ChatCompletionTool as OpenAITool } from "openai/resources/chat/completions"
 import { buildExternalBasicHeaders } from "@/services/EnvUtils"
+import { ClineError } from "@/services/error"
 import { ClineStorageMessage } from "@/shared/messages/content"
 import { fetch } from "@/shared/net"
 import { ApiHandler, CommonApiHandlerOptions } from "../"
@@ -157,5 +158,61 @@ export class DeepSeekHandler implements ApiHandler {
 			id: deepSeekDefaultModelId,
 			info: deepSeekModels[deepSeekDefaultModelId],
 		}
+	}
+
+	/**
+	 * Parse DeepSeek-specific API errors into typed ClineError.
+	 * Maps DeepSeek error codes (https://api-docs.deepseek.com/quick_start/error_codes):
+	 *   402 → Balance (余额不足)
+	 *   401 → Auth (认证失败)
+	 *   429 → RateLimit (请求速率达到上限)
+	 *   Other 4xx/5xx → falls back to generic ClineError.transform
+	 * @param error Raw error from OpenAI SDK or fetch
+	 * @param modelId Optional model identifier
+	 * @returns ClineError with appropriate error type
+	 */
+	parseError(error: any, modelId?: string): ClineError {
+		const status = error?.status || error?.statusCode || error?.response?.status
+		const message = error?.message || String(error)
+
+		if (status === 402) {
+			return new ClineError(
+				{
+					code: "insufficient_credits",
+					message: message || "DeepSeek 账户余额不足，请充值",
+					status: 402,
+					details: { current_balance: 0 },
+				},
+				modelId,
+				"deepseek",
+			)
+		}
+
+		if (status === 401) {
+			return new ClineError(
+				{
+					code: "unauthorized",
+					message: message || "DeepSeek API key 无效，请检查",
+					status: 401,
+				},
+				modelId,
+				"deepseek",
+			)
+		}
+
+		if (status === 429) {
+			return new ClineError(
+				{
+					code: "rate_limit_exceeded",
+					message: message || "DeepSeek 请求速率达到上限，请稍后重试",
+					status: 429,
+				},
+				modelId,
+				"deepseek",
+			)
+		}
+
+		// Fallback to generic error classification
+		return ClineError.transform(error, modelId, "deepseek")
 	}
 }
