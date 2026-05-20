@@ -23,7 +23,7 @@ The open source coding agent in your IDE and terminal.
 <a href="https://www.reddit.com/r/cline/" target="_blank"><strong>r/cline</strong></a>
 </td>
 <td align="center">
-<a href="https://github.com/cline/cline/discussions/categories/feature-requests?discussions_q=is%3Aopen+category%3A%22Feature+Requests%22+sort%3Atop" target="_blank"><strong>Feature Requests</strong></a>
+<a href="https://github.com/TuvokYang/cline/discussions/categories/feature-requests?discussions_q=is%3Aopen+category%3A%22Feature+Requests%22+sort%3Atop" target="_blank"><strong>Feature Requests</strong></a>
 </td>
 <td align="center">
 <a href="https://cline.bot/join-us" target="_blank"><strong>Join us!</strong></a>
@@ -81,7 +81,7 @@ AI coding assistant in your editor.
 Create files, run commands, browse the web,
 and use tools with human-in-the-loop approval.
 
-<a href="https://marketplace.visualstudio.com/items?itemName=saoudrizwan.claude-dev">Install from VS Marketplace</a>
+<a href="https://marketplace.visualstudio.com/items?itemName=tuvokyang.claude-dev">Install from VS Marketplace</a>
 <br><br>
 
 </td>
@@ -128,9 +128,9 @@ npm install @cline/sdk
 
 | Product | Description | Location |
 |---------|------------|--------------|
-| **SDK** | Node.js programmatic agent API and extension exports. | [`sdk/`](https://github.com/cline/cline/tree/main/sdk) |
-| **CLI** | Terminal UI, headless mode, shell commands, and CLI-specific flows. | [`sdk/apps/cli/`](https://github.com/cline/cline/tree/main/sdk/apps/cli) |
-| **VS Code Extension** | The Marketplace extension and extension host integration. | [`/`](https://github.com/cline/cline/tree/main) (WIP migrating) |
+| **SDK** | Node.js programmatic agent API and extension exports. | [`sdk/`](https://github.com/TuvokYang/cline/tree/main/sdk) |
+| **CLI** | Terminal UI, headless mode, shell commands, and CLI-specific flows. | [`sdk/apps/cli/`](https://github.com/TuvokYang/cline/tree/main/sdk/apps/cli) |
+| **VS Code Extension** | The Marketplace extension and extension host integration. | [`/`](https://github.com/TuvokYang/cline/tree/main) (WIP migrating) |
 | **JetBrains Plugin** | JetBrains-hosted client that talks to the shared agent core. | Currently we are not open-sourcing JetBrains plugins |
 | **Kanban** | Web-based multi-agent task board. | [`cline/kanban`](https://github.com/cline/kanban). |
 | **Docs site** | Public documentation pages. | [`docs/`](https://docs.cline.bot/) |

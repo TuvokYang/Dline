@@ -14,10 +14,10 @@
 		"name": "Cline Bot Inc."
 	},
 	"license": "Apache-2.0",
-	"publisher": "saoudrizwan",
+	"publisher": "tuvokyang",
 	"repository": {
 		"type": "git",
-		"url": "https://github.com/cline/cline"
+		"url": "https://github.com/TuvokYang/cline"
 	},
 	"homepage": "https://cline.bot",
 	"categories": [
