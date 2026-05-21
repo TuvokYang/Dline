@@ -1,5 +1,6 @@
 import { ApiConfiguration, ModelInfo, QwenApiRegions } from "@shared/api"
 import { Mode } from "@shared/storage/types"
+import { ClineError } from "@/services/error"
 import { ClineStorageMessage } from "@/shared/messages/content"
 import { Logger } from "@/shared/services/Logger"
 import { ClineTool } from "@/shared/tools"
@@ -55,6 +56,8 @@ export interface ApiHandler {
 	getModel(): ApiHandlerModel
 	getApiStreamUsage?(): Promise<ApiStreamUsageChunk | undefined>
 	abort?(): void
+	/** Parse a provider-specific error into a ClineError. Falls back to generic ClineError.transform if not implemented. */
+	parseError?(error: any, modelId?: string): ClineError
 }
 
 export interface ApiHandlerModel {
@@ -83,8 +86,11 @@ function createHandlerForProvider(
 			return new AnthropicHandler({
 				onRetryAttempt: options.onRetryAttempt,
 				apiKey: options.apiKey,
-				anthropicBaseUrl: options.anthropicBaseUrl,
+				anthropicBaseUrl:
+					(mode === "plan" ? options.planModeAnthropicBaseUrl : options.actModeAnthropicBaseUrl) ??
+					options.anthropicBaseUrl,
 				apiModelId: mode === "plan" ? options.planModeApiModelId : options.actModeApiModelId,
+				anthropicModelInfo: mode === "plan" ? options.planModeAnthropicModelInfo : options.actModeAnthropicModelInfo,
 				reasoningEffort: mode === "plan" ? options.planModeReasoningEffort : options.actModeReasoningEffort,
 				thinkingBudgetTokens:
 					mode === "plan" ? options.planModeThinkingBudgetTokens : options.actModeThinkingBudgetTokens,
@@ -199,6 +205,7 @@ function createHandlerForProvider(
 				onRetryAttempt: options.onRetryAttempt,
 				deepSeekApiKey: options.deepSeekApiKey,
 				apiModelId: mode === "plan" ? options.planModeApiModelId : options.actModeApiModelId,
+				reasoningEffort: mode === "plan" ? options.planModeReasoningEffort : options.actModeReasoningEffort,
 			})
 		case "requesty":
 			return new RequestyHandler({

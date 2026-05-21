@@ -3,18 +3,19 @@ import { calculateApiCostOpenAI } from "@utils/cost"
 import OpenAI from "openai"
 import type { ChatCompletionTool as OpenAITool } from "openai/resources/chat/completions"
 import { buildExternalBasicHeaders } from "@/services/EnvUtils"
+import { ClineError } from "@/services/error"
 import { ClineStorageMessage } from "@/shared/messages/content"
 import { fetch } from "@/shared/net"
 import { ApiHandler, CommonApiHandlerOptions } from "../"
 import { withRetry } from "../retry"
-import { convertToOpenAiMessages } from "../transform/openai-format"
-import { addReasoningContent } from "../transform/r1-format"
+import { convertDeepSeekMessages, convertDeepseekToOpenAiMessages } from "../transform/deepseek-format"
 import { ApiStream } from "../transform/stream"
 import { getOpenAIToolParams, ToolCallProcessor } from "../transform/tool-call-processor"
 
 interface DeepSeekHandlerOptions extends CommonApiHandlerOptions {
 	deepSeekApiKey?: string
 	apiModelId?: string
+	reasoningEffort?: string
 }
 
 export class DeepSeekHandler implements ApiHandler {
@@ -32,7 +33,7 @@ export class DeepSeekHandler implements ApiHandler {
 			}
 			try {
 				this.client = new OpenAI({
-					baseURL: "https://api.deepseek.com/v1",
+					baseURL: "https://api.deepseek.com",
 					apiKey: this.options.deepSeekApiKey,
 					defaultHeaders: buildExternalBasicHeaders(),
 					fetch, // Use configured fetch with proxy support
@@ -81,22 +82,35 @@ export class DeepSeekHandler implements ApiHandler {
 		const client = this.ensureClient()
 		const model = this.getModel()
 
-		const isDeepseekReasoner = model.id.includes("deepseek-reasoner")
+		const isThinkingEnabled = this.options.reasoningEffort && this.options.reasoningEffort !== "none"
+		const reasoningEffort = isThinkingEnabled
+			? (this.options.reasoningEffort as OpenAI.ChatCompletionReasoningEffort)
+			: undefined
+		const supportsReasoning = model.info.supportsReasoning ?? false
 
-		const convertedMessages = convertToOpenAiMessages(messages)
-		const openAiMessages: OpenAI.Chat.ChatCompletionMessageParam[] = isDeepseekReasoner
-			? [{ role: "system", content: systemPrompt }, ...addReasoningContent(convertedMessages, messages)]
-			: [{ role: "system", content: systemPrompt }, ...convertedMessages]
-
+		// All deepseek models now use the same message conversion: V4-native format when thinking is on,
+		// plain OpenAI format otherwise. deepseek-chat and deepseek-reasoner are deprecated as of 2026-07-24.
+		// Only call the appropriate converter to avoid unnecessary warnings from skipping
+		// pure-thinking messages in the non-thinking converter when thinking is actually enabled.
+		const openAiMessages: OpenAI.Chat.ChatCompletionMessageParam[] = isThinkingEnabled
+			? convertDeepSeekMessages(messages, systemPrompt)
+			: [{ role: "system", content: systemPrompt }, ...convertDeepseekToOpenAiMessages(messages)]
 		const stream = await client.chat.completions.create({
 			model: model.id,
 			max_completion_tokens: model.info.maxTokens,
 			messages: openAiMessages,
 			stream: true,
 			stream_options: { include_usage: true },
-			// Only set temperature for non-reasoner models
-			...(model.id === "deepseek-reasoner" ? {} : { temperature: 0 }),
+			...(supportsReasoning ? {} : { temperature: 0 }),
 			...getOpenAIToolParams(tools),
+			...(supportsReasoning
+				? {
+						extra_body: {
+							thinking: { type: isThinkingEnabled ? "enabled" : "disabled" },
+						},
+						...(isThinkingEnabled ? { reasoning_effort: reasoningEffort } : {}),
+					}
+				: {}),
 		})
 
 		const toolCallProcessor = new ToolCallProcessor()
@@ -115,9 +129,12 @@ export class DeepSeekHandler implements ApiHandler {
 			}
 
 			if (delta && "reasoning_content" in delta && delta.reasoning_content) {
-				yield {
-					type: "reasoning",
-					reasoning: (delta.reasoning_content as string | undefined) || "",
+				const shouldYieldReasoning = this.options.reasoningEffort && this.options.reasoningEffort !== "none"
+				if (shouldYieldReasoning) {
+					yield {
+						type: "reasoning",
+						reasoning: (delta.reasoning_content as string | undefined) || "",
+					}
 				}
 			}
 
@@ -129,6 +146,10 @@ export class DeepSeekHandler implements ApiHandler {
 
 	getModel(): { id: DeepSeekModelId; info: ModelInfo } {
 		const modelId = this.options.apiModelId
+		// Smooth migration from deprecated model names to v4-flash:
+		// deepseek-chat → deepseek-v4-flash (non-thinking, reasoningEffort=none by default)
+		// deepseek-reasoner → deepseek-v4-flash (thinking, existing reasoningEffort setting preserved)
+		// Both now resolve to v4-flash; thinking is controlled solely by reasoningEffort.
 		if (modelId && modelId in deepSeekModels) {
 			const id = modelId as DeepSeekModelId
 			return { id, info: deepSeekModels[id] }
@@ -137,5 +158,61 @@ export class DeepSeekHandler implements ApiHandler {
 			id: deepSeekDefaultModelId,
 			info: deepSeekModels[deepSeekDefaultModelId],
 		}
+	}
+
+	/**
+	 * Parse DeepSeek-specific API errors into typed ClineError.
+	 * Maps DeepSeek error codes (https://api-docs.deepseek.com/quick_start/error_codes):
+	 *   402 → Balance (余额不足)
+	 *   401 → Auth (认证失败)
+	 *   429 → RateLimit (请求速率达到上限)
+	 *   Other 4xx/5xx → falls back to generic ClineError.transform
+	 * @param error Raw error from OpenAI SDK or fetch
+	 * @param modelId Optional model identifier
+	 * @returns ClineError with appropriate error type
+	 */
+	parseError(error: any, modelId?: string): ClineError {
+		const status = error?.status || error?.statusCode || error?.response?.status
+		const message = error?.message || String(error)
+
+		if (status === 402) {
+			return new ClineError(
+				{
+					code: "insufficient_credits",
+					message: message || "DeepSeek 账户余额不足，请充值",
+					status: 402,
+					details: { current_balance: 0 },
+				},
+				modelId,
+				"deepseek",
+			)
+		}
+
+		if (status === 401) {
+			return new ClineError(
+				{
+					code: "unauthorized",
+					message: message || "DeepSeek API key 无效，请检查",
+					status: 401,
+				},
+				modelId,
+				"deepseek",
+			)
+		}
+
+		if (status === 429) {
+			return new ClineError(
+				{
+					code: "rate_limit_exceeded",
+					message: message || "DeepSeek 请求速率达到上限，请稍后重试",
+					status: 429,
+				},
+				modelId,
+				"deepseek",
+			)
+		}
+
+		// Fallback to generic error classification
+		return ClineError.transform(error, modelId, "deepseek")
 	}
 }

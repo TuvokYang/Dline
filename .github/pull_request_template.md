@@ -2,7 +2,7 @@
 Thank you for contributing to Cline!
 
 ⚠️ Important: Before submitting this PR, please ensure you have:
-- For feature requests: Created a discussion in our Feature Requests discussions board https://github.com/cline/cline/discussions/categories/feature-requests and received approval from core maintainers before implementation
+- For feature requests: Created a discussion in our Feature Requests discussions board https://github.com/TuvokYang/cline/discussions/categories/feature-requests and received approval from core maintainers before implementation
 - For all changes: Link the associated issue/discussion in the "Related Issue" section below
 
 Limited exceptions:
@@ -47,7 +47,7 @@ We're not looking for exhaustive documentation - just evidence that you've thoug
 <!-- Put an 'x' in all boxes that apply -->
 
 -   [ ] 🐛 Bug fix (non-breaking change which fixes an issue)
--   [ ] ✨ New feature (non-breaking change which adds functionality)
+-   [ ] �?New feature (non-breaking change which adds functionality)
 -   [ ] 💥 Breaking change (fix or feature that would cause existing functionality to not work as expected)
 -   [ ] ♻️ Refactor Changes
 -   [ ] 💅 Cosmetic Changes
@@ -60,7 +60,7 @@ We're not looking for exhaustive documentation - just evidence that you've thoug
 
 -   [ ] Changes are limited to a single feature, bugfix or chore (split larger changes into separate PRs)
 -   [ ] Tests are passing (`npm test`) and code is formatted and linted (`npm run format && npm run lint`)
--   [ ] I have reviewed [contributor guidelines](https://github.com/cline/cline/blob/main/CONTRIBUTING.md)
+-   [ ] I have reviewed [contributor guidelines](https://github.com/TuvokYang/cline/blob/main/CONTRIBUTING.md)
 
 ### Screenshots
 

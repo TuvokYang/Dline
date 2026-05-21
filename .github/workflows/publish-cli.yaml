@@ -42,7 +42,7 @@ jobs:
       contents: write
       id-token: write
     if: |
-      github.repository == 'cline/cline' &&
+      github.repository == 'TuvokYang/cline' &&
       github.ref == 'refs/heads/main' &&
       github.event_name == 'workflow_dispatch' &&
       github.event.inputs.publish_target == 'main' &&
@@ -238,7 +238,7 @@ jobs:
       contents: read
       id-token: write
     if: |
-      github.repository == 'cline/cline' &&
+      github.repository == 'TuvokYang/cline' &&
       github.ref == 'refs/heads/main' &&
       (
         github.event_name == 'schedule' ||

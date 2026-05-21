@@ -1,14 +1,14 @@
-name: "Publish Release To Github"
+name: "Publish Draft Release (Dev)"
 
-# Triggered by v* tags on main branch → full release
+# Triggered by dev-v* tags on dev branch → draft only
 on:
   push:
     tags:
-      - 'v*'
+      - 'dev-v*'
   workflow_dispatch:
     inputs:
       tag:
-        description: "Tag to publish (e.g., v3.1.2)"
+        description: "Tag to publish as draft (e.g., dev-v3.1.2)"
         required: true
         type: string
 
@@ -24,7 +24,7 @@ jobs:
 
   publish:
     needs: test
-    name: Publish Extension
+    name: Publish Draft
     runs-on: ubuntu-latest
     environment: publish
 
@@ -44,8 +44,8 @@ jobs:
             echo "Error: tag is required"
             exit 1
           fi
-          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.]+)?$ ]]; then
-            echo "Error: tag must match vX.Y.Z (optionally with -suffix or .suffix)"
+          if [[ ! "$TAG" =~ ^dev-v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.]+)?$ ]]; then
+            echo "Error: tag must match dev-vX.Y.Z (optionally with -suffix or .suffix)"
             exit 1
           fi
 
@@ -60,19 +60,17 @@ jobs:
           git checkout --detach "$TAG_REF^{commit}"
           TAG_SHA=$(git rev-parse HEAD)
 
+          # Extract version number from tag (strip dev- prefix)
+          VERSION_NUM="${TAG#dev-v}"
+
           echo "tag=$TAG" >> $GITHUB_OUTPUT
           echo "resolved_sha=$TAG_SHA" >> $GITHUB_OUTPUT
+          echo "version_num=$VERSION_NUM" >> $GITHUB_OUTPUT
 
-          # Determine prerelease: true if tag has suffix (e.g. v3.1.2-beta, v3.1.2-rc.1)
-          # This is a full release, never a draft
-          echo "release_draft=false" >> $GITHUB_OUTPUT
-          if [[ "$TAG" =~ -[0-9A-Za-z.]+$ ]]; then
-            echo "release_prerelease=true" >> $GITHUB_OUTPUT
-            echo "release_type=pre-release" >> $GITHUB_OUTPUT
-          else
-            echo "release_prerelease=false" >> $GITHUB_OUTPUT
-            echo "release_type=release" >> $GITHUB_OUTPUT
-          fi
+          # This is always a draft, never a full release
+          echo "release_draft=true" >> $GITHUB_OUTPUT
+          echo "release_prerelease=false" >> $GITHUB_OUTPUT
+          echo "release_type=draft" >> $GITHUB_OUTPUT
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -96,13 +94,13 @@ jobs:
 
       - name: Verify Tag Matches Package Version
         run: |
-          TAG="${{ steps.resolve_tag.outputs.tag }}"
-          VERSION="v${{ steps.get_version.outputs.version }}"
-          if [[ "$TAG" != "$VERSION" ]]; then
-            echo "Error: tag '$TAG' does not match package version '$VERSION'"
+          TAG_VERSION="${{ steps.resolve_tag.outputs.version_num }}"
+          PKG_VERSION="${{ steps.get_version.outputs.version }}"
+          if [[ "$TAG_VERSION" != "$PKG_VERSION" ]]; then
+            echo "Error: tag version '$TAG_VERSION' does not match package version '$PKG_VERSION'"
             exit 1
           fi
-          echo "Tag and package version match: $TAG"
+          echo "Tag version matches package: $TAG_VERSION"
 
       - name: Verify LFS media assets are resolved
         run: |
@@ -141,8 +139,7 @@ jobs:
       - name: Get Changelog Entry
         id: changelog
         run: |
-          TAG="${{ steps.resolve_tag.outputs.tag }}"
-          VERSION_NUM="${TAG#v}"
+          VERSION_NUM="${{ steps.resolve_tag.outputs.version_num }}"
           ESCAPED_VER=$(echo "$VERSION_NUM" | sed 's/\./\\./g')
           CONTENT=$(awk -v ver="$ESCAPED_VER" '
             $0 ~ "^## \\[" ver "\\]" { found=1; next }
@@ -158,7 +155,7 @@ jobs:
           echo "$CONTENT" >> $GITHUB_OUTPUT
           echo "${DELIM}" >> $GITHUB_OUTPUT
 
-      - name: Create GitHub Release
+      - name: Create GitHub Draft Release
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ steps.resolve_tag.outputs.tag }}

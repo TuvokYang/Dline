@@ -270,6 +270,7 @@ export class Task {
 	private readonly remoteWorkspaceDetectionPromise: Promise<void>
 	private readonly presentationScheduler: TaskPresentationScheduler
 	private readonly presentationSchedulingDisabled = isPresentationSchedulingDisabled()
+	private lastLoggedPresentationTrigger = 0
 
 	constructor(params: TaskParams) {
 		const {
@@ -631,8 +632,12 @@ export class Task {
 			return
 		}
 
-		// Immediate semantic boundaries: first visible token, tool transitions, finalization, and cleanup drains.
-		Logger.debug(`[Task ${this.taskId}] schedule assistant presentation (${trigger}, ${priority})`)
+		// Only log when trigger or priority changes to avoid log spam during streaming
+		const currentSecond = Math.floor(Date.now() / 1000)
+		if (this.lastLoggedPresentationTrigger !== currentSecond) {
+			this.lastLoggedPresentationTrigger = currentSecond
+			Logger.debug(`[Task ${this.taskId}] schedule assistant presentation (${trigger}, ${priority})`)
+		}
 		this.presentationScheduler.requestFlush(priority)
 	}
 
@@ -2037,7 +2042,13 @@ export class Task {
 		} catch (error) {
 			const isContextWindowExceededError = checkContextWindowExceededError(error)
 			const { model, providerId } = this.getCurrentProviderInfo()
-			const clineError = ErrorService.get().toClineError(error, model.id, providerId)
+			// Use provider-specific parseError if available, otherwise fall back to generic classification.
+			// Telemetry: toClineError logs internally; parseError must log manually when used.
+			const clineError =
+				this.api.parseError?.(error, model.id) ?? ErrorService.get().toClineError(error, model.id, providerId)
+			if (this.api.parseError) {
+				ErrorService.get().logException(clineError, { modelId: model.id, providerId })
+			}
 
 			// Capture provider failure telemetry using clineError
 			ErrorService.get().logMessage(clineError.message)
@@ -3015,7 +3026,13 @@ export class Task {
 				await streamCoordinator?.stop()
 				// abandoned happens when extension is no longer waiting for the cline instance to finish aborting (error is thrown here when any function in the for loop throws due to this.abort)
 				if (!this.taskState.abandoned) {
-					const clineError = ErrorService.get().toClineError(error, this.api.getModel().id)
+					// Use provider-specific parseError if available, otherwise fall back to generic classification
+					const clineError =
+						this.api.parseError?.(error, this.api.getModel().id) ??
+						ErrorService.get().toClineError(error, this.api.getModel().id)
+					if (this.api.parseError) {
+						ErrorService.get().logException(clineError, { modelId: this.api.getModel().id })
+					}
 					const errorMessage = clineError.serialize()
 					const isStreamingSpendLimitError = clineError.isErrorType(ClineErrorType.SpendLimit)
 					// Auto-retry for streaming failures (skip for spend limit errors)
@@ -3106,7 +3123,9 @@ export class Task {
 			// toolUseHandler may have accumulated tool_use blocks even when useNativeToolCalls is false
 			// (e.g., from Claude Code provider when the model returns native tool_use blocks).
 			const hasAccumulatedToolCalls = toolUseHandler.getAllFinalizedToolUses().length > 0
-			const assistantHasContent = assistantMessage.length > 0 || this.useNativeToolCalls || hasAccumulatedToolCalls
+			const hasReceivedReasoning = reasonsHandler.hasReceivedReasoning()
+			const assistantHasContent =
+				assistantMessage.length > 0 || this.useNativeToolCalls || hasAccumulatedToolCalls || hasReceivedReasoning
 			if (assistantHasContent) {
 				telemetryService.captureConversationTurnEvent(
 					this.ulid,

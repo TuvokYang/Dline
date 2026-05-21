@@ -18,7 +18,7 @@ env:
 jobs:
     publish:
         name: Publish Cline New SDK Extension Nightly
-        if: github.repository == 'cline/cline' && github.ref == 'refs/heads/main'
+        if: github.repository == 'TuvokYang/cline' && github.ref == 'refs/heads/main'
         runs-on: ubuntu-latest
         environment: PublishNightly
 
