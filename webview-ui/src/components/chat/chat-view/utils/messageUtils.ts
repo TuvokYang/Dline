@@ -69,18 +69,15 @@ export function filterVisibleMessages(messages: ClineMessage[]): ClineMessage[] 
 				}
 				break
 		}
+		// Generic partial dedup based on ts: if a partial message has a non-partial
+		// version with the same ts later in the array, skip the partial to avoid
+		// duplicate rows. This covers all message types transparently.
+		if (message.partial === true) {
+			const hasCompleteAfter = arr.slice(index + 1).some((m) => m.ts === message.ts && m.partial !== true)
+			if (hasCompleteAfter) return false
+		}
+
 		switch (message.say) {
-			case "completion_result":
-				// Filter out partial completion_result when a non-partial one exists later.
-				// This prevents duplicate "Task Completed" rows and ensures
-				// "View Changes" / "Explain Changes" buttons render correctly.
-				if (message.partial === true) {
-					const hasCompleteAfter = arr
-						.slice(index + 1)
-						.some((m) => m.type === "say" && m.say === "completion_result" && m.partial !== true)
-					if (hasCompleteAfter) return false
-				}
-				break
 			case "api_req_finished": // combineApiRequests removes this from modifiedMessages anyways
 			case "api_req_retried": // this message is used to update the latest api_req_started that the request was retried
 			case "deleted_api_reqs": // aggregated api_req metrics from deleted messages
