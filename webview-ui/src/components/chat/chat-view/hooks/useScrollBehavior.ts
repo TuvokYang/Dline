@@ -137,24 +137,32 @@ export function useScrollBehavior(
 		() =>
 			debounce(
 				() => {
-					virtuosoRef.current?.scrollTo({
-						top: Number.MAX_SAFE_INTEGER,
-						behavior: "smooth",
-					})
+					const lastIndex = groupedMessages.length - 1
+					if (lastIndex >= 0) {
+						virtuosoRef.current?.scrollToIndex({
+							index: lastIndex,
+							align: "end",
+							behavior: "smooth",
+						})
+					}
 				},
 				10,
 				{ immediate: true },
 			),
-		[],
+		[groupedMessages],
 	)
 
 	// Smooth scroll to bottom with debounce
 	const scrollToBottomAuto = useCallback(() => {
-		virtuosoRef.current?.scrollTo({
-			top: Number.MAX_SAFE_INTEGER,
-			behavior: "auto", // instant causes crash
-		})
-	}, [])
+		const lastIndex = groupedMessages.length - 1
+		if (lastIndex >= 0) {
+			virtuosoRef.current?.scrollToIndex({
+				index: lastIndex,
+				align: "end",
+				behavior: "auto",
+			})
+		}
+	}, [groupedMessages])
 
 	const scrollToMessage = useCallback(
 		(messageIndex: number) => {
@@ -278,18 +286,21 @@ export function useScrollBehavior(
 
 	useEffect(() => {
 		if (!disableAutoScrollRef.current) {
-			scrollToBottomSmooth()
-			setTimeout(() => {
-				if (!disableAutoScrollRef.current) {
-					scrollToBottomAuto()
-				}
-			}, 40)
-			setTimeout(() => {
-				if (!disableAutoScrollRef.current) {
-					scrollToBottomAuto()
-				}
-			}, 70)
-			// return () => clearTimeout(timer) // dont cleanup since if visibleMessages.length changes it cancels.
+			// Delay one frame so Virtuoso has finished laying out new items
+			// before we compute the target index.
+			requestAnimationFrame(() => {
+				scrollToBottomSmooth()
+				setTimeout(() => {
+					if (!disableAutoScrollRef.current) {
+						scrollToBottomAuto()
+					}
+				}, 40)
+				setTimeout(() => {
+					if (!disableAutoScrollRef.current) {
+						scrollToBottomAuto()
+					}
+				}, 70)
+			})
 		}
 	}, [groupedMessages.length, scrollToBottomSmooth, scrollToBottomAuto])
 
@@ -315,6 +326,19 @@ export function useScrollBehavior(
 		}
 	}, [])
 	useEvent("wheel", handleWheel, window, { passive: true }) // passive improves scrolling performance
+
+	// When webview becomes visible again (user switches back to this tab),
+	// scroll to bottom if auto-scroll is enabled. Without this, messages
+	// accumulated while the webview was hidden are not scrolled into view.
+	useEffect(() => {
+		const handleFocus = () => {
+			if (!disableAutoScrollRef.current) {
+				scrollToBottomAuto()
+			}
+		}
+		window.addEventListener("focus", handleFocus)
+		return () => window.removeEventListener("focus", handleFocus)
+	}, [scrollToBottomAuto])
 
 	return {
 		virtuosoRef,

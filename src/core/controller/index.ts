@@ -389,6 +389,12 @@ export class Controller {
 	async togglePlanActMode(modeToSwitchTo: Mode, chatContent?: ChatContent): Promise<boolean> {
 		const didSwitchToActMode = modeToSwitchTo === "act"
 
+		// When switching from ACT to PLAN, cancel any in-flight request first
+		// so the task is clean before the mode change.
+		if (!didSwitchToActMode && this.task?.taskState.isStreaming) {
+			await this.cancelTask()
+		}
+
 		// Store mode to global state
 		this.stateManager.setGlobalState("mode", modeToSwitchTo)
 
@@ -444,6 +450,7 @@ export class Controller {
 		try {
 			this.updateBackgroundCommandState(false)
 
+			Logger.debug("[cancelTask] aborting task...")
 			try {
 				await this.task.abortTask()
 			} catch (error) {
@@ -455,41 +462,25 @@ export class Controller {
 					this.task === undefined ||
 					this.task.taskState.isStreaming === false ||
 					this.task.taskState.didFinishAbortingStream ||
-					this.task.taskState.isWaitingForFirstChunk, // if only first chunk is processed, then there's no need to wait for graceful abort (closes edits, browser, etc)
-				{
-					timeout: 3_000,
-				},
+					this.task.taskState.isWaitingForFirstChunk,
+				{ timeout: 3_000 },
 			).catch(() => {
 				Logger.error("Failed to abort task")
 			})
 
+			// Remove partial messages AFTER streaming has stopped, so no new
+			// partials can be added while we're cleaning up.
 			if (this.task) {
-				// 'abandoned' will prevent this cline instance from affecting future cline instance gui. this may happen if its hanging on a streaming request
-				this.task.taskState.abandoned = true
+				Logger.debug("[cancelTask] removing partial messages...")
+				try {
+					await this.task.messageStateHandler.removePartialMessages()
+				} catch (error) {
+					Logger.error("Failed to remove partial messages after cancel", error)
+				}
 			}
 
-			// Small delay to ensure state manager has persisted the history update
-			//await new Promise((resolve) => setTimeout(resolve, 100))
-
-			// NOW try to get history after abort has finished (hook may have saved messages)
-			let historyItem: HistoryItem | undefined
-			try {
-				const result = await this.getTaskWithId(this.task.taskId)
-				historyItem = result.historyItem
-			} catch (error) {
-				// Task not in history yet (new task with no messages); catch the
-				// error to enable the agent to continue making progress.
-				Logger.log(`[Controller.cancelTask] Task not found in history: ${error}`)
-			}
-
-			// Only re-initialize if we found a history item, otherwise just clear
-			if (historyItem) {
-				// Re-initialize task to keep it visible in UI with resume button
-				await this.initTask(undefined, undefined, undefined, historyItem, undefined)
-			} else {
-				await this.clearTask()
-			}
-
+			// abortTask already handles the resume ask via TaskCancel hook.
+			// Just push the updated state so the frontend re-syncs.
 			await this.postStateToWebview()
 		} finally {
 			// Always clear the flag, even if cancellation fails

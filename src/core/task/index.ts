@@ -1461,6 +1461,172 @@ export class Task {
 		await this.initiateTaskLoop(newUserContent)
 	}
 
+	/**
+	 * Resume the current task without reloading messages from disk.
+	 * Used after cancellation so the message list stays in-place (no flicker)
+	 * while still showing the resume prompt and handling the user response.
+	 */
+	public async resumeTask() {
+		// Reset abort state so ask() and subsequent operations work
+		this.taskState.abort = false
+		this.taskState.isInitialized = true
+
+		const lastClineMessage = this.messageStateHandler
+			.getClineMessages()
+			.slice()
+			.reverse()
+			.find((m) => !(m.ask === "resume_task" || m.ask === "resume_completed_task"))
+
+		let askType: ClineAsk
+		if (lastClineMessage?.ask === "completion_result") {
+			askType = "resume_completed_task"
+		} else {
+			askType = "resume_task"
+		}
+
+		Logger.debug(`[resumeTask] askType=${askType}`)
+		const { response, text, images, files } = await this.ask(askType)
+
+		// --- Below is the same post-ask logic as resumeTaskFromHistory ---
+
+		const newUserContent: ClineContent[] = []
+
+		const hooksEnabled = getHooksEnabledSafe(this.stateManager.getGlobalSettingsKey("hooksEnabled"))
+		if (hooksEnabled) {
+			const clineMessages = this.messageStateHandler.getClineMessages()
+			const taskResumeResult = await executeHook({
+				hookName: "TaskResume",
+				hookInput: {
+					taskResume: {
+						taskMetadata: { taskId: this.taskId, ulid: this.ulid },
+						previousState: {
+							lastMessageTs: lastClineMessage?.ts?.toString() || "",
+							messageCount: clineMessages.length.toString(),
+							conversationHistoryDeleted: (this.taskState.conversationHistoryDeletedRange !== undefined).toString(),
+						},
+					},
+				},
+				isCancellable: true,
+				say: this.say.bind(this),
+				setActiveHookExecution: this.setActiveHookExecution.bind(this),
+				clearActiveHookExecution: this.clearActiveHookExecution.bind(this),
+				messageStateHandler: this.messageStateHandler,
+				taskId: this.taskId,
+				hooksEnabled,
+				model: getHookModelContext(this.api, this.stateManager),
+			})
+
+			if (taskResumeResult.cancel === true) {
+				await this.handleHookCancellation("TaskResume", taskResumeResult.wasCancelled)
+				await this.cancelTask()
+				return
+			}
+
+			if (taskResumeResult.contextModification) {
+				newUserContent.push({
+					type: "text",
+					text: `<hook_context source="TaskResume" type="general">\n${taskResumeResult.contextModification}\n</hook_context>`,
+				})
+			}
+		}
+
+		if (this.taskState.abort) return
+
+		let responseText: string | undefined
+		let responseImages: string[] | undefined
+		let responseFiles: string[] | undefined
+		if (response === "messageResponse" || text || (images && images.length > 0) || (files && files.length > 0)) {
+			await this.say("user_feedback", text, images, files)
+			await this.checkpointManager?.saveCheckpoint()
+			responseText = text
+			responseImages = images
+			responseFiles = files
+		}
+
+		const existingApiConversationHistory = this.messageStateHandler.getApiConversationHistory()
+		let modifiedOldUserContent: ClineContent[]
+		let modifiedApiConversationHistory: ClineStorageMessage[]
+		if (existingApiConversationHistory.length > 0) {
+			const lastMessage = existingApiConversationHistory[existingApiConversationHistory.length - 1]
+			if (lastMessage.role === "assistant") {
+				modifiedApiConversationHistory = [...existingApiConversationHistory]
+				modifiedOldUserContent = []
+			} else if (lastMessage.role === "user") {
+				const existingUserContent: ClineContent[] = Array.isArray(lastMessage.content)
+					? lastMessage.content
+					: [{ type: "text", text: lastMessage.content }]
+				modifiedApiConversationHistory = existingApiConversationHistory.slice(0, -1)
+				modifiedOldUserContent = [...existingUserContent]
+			} else {
+				throw new Error("Unexpected: Last message is not a user or assistant message")
+			}
+		} else {
+			modifiedApiConversationHistory = []
+			modifiedOldUserContent = []
+		}
+
+		newUserContent.push(...modifiedOldUserContent)
+
+		const agoText = (() => {
+			const timestamp = lastClineMessage?.ts ?? Date.now()
+			const now = Date.now()
+			const diff = now - timestamp
+			const minutes = Math.floor(diff / 60000)
+			const hours = Math.floor(minutes / 60)
+			const days = Math.floor(hours / 24)
+			if (days > 0) return `${days} day${days > 1 ? "s" : ""} ago`
+			if (hours > 0) return `${hours} hour${hours > 1 ? "s" : ""} ago`
+			if (minutes > 0) return `${minutes} minute${minutes > 1 ? "s" : ""} ago`
+			return "just now"
+		})()
+
+		const wasRecent = lastClineMessage?.ts && Date.now() - lastClineMessage.ts < 30_000
+
+		const pendingContextWarning = await this.fileContextTracker.retrieveAndClearPendingFileContextWarning()
+		const hasPendingFileContextWarnings = pendingContextWarning && pendingContextWarning.length > 0
+
+		const mode = this.stateManager.getGlobalSettingsKey("mode")
+		const [taskResumptionMessage, userResponseMessage] = formatResponse.taskResumption(
+			mode === "plan" ? "plan" : "act",
+			agoText,
+			this.cwd,
+			wasRecent,
+			responseText,
+			hasPendingFileContextWarnings,
+		)
+
+		if (taskResumptionMessage !== "") {
+			newUserContent.push({ type: "text", text: taskResumptionMessage })
+		}
+		if (userResponseMessage !== "") {
+			newUserContent.push({ type: "text", text: userResponseMessage })
+		}
+		if (responseImages && responseImages.length > 0) {
+			newUserContent.push(...formatResponse.imageBlocks(responseImages))
+		}
+		if (responseFiles && responseFiles.length > 0) {
+			const fileContentString = await processFilesIntoText(responseFiles)
+			if (fileContentString) {
+				newUserContent.push({ type: "text", text: fileContentString })
+			}
+		}
+		if (pendingContextWarning && pendingContextWarning.length > 0) {
+			const fileContextWarning = formatResponse.fileContextWarning(pendingContextWarning)
+			if (fileContextWarning) {
+				newUserContent.push({ type: "text", text: fileContextWarning })
+			}
+		}
+
+		try {
+			await this.environmentContextTracker.recordEnvironment()
+		} catch (error) {
+			Logger.error("Failed to record environment metadata on resume:", error)
+		}
+
+		await this.messageStateHandler.overwriteApiConversationHistory(modifiedApiConversationHistory)
+		await this.initiateTaskLoop(newUserContent)
+	}
+
 	private async initiateTaskLoop(userContent: ClineContent[]): Promise<void> {
 		let nextUserContent = userContent
 		let includeFileDetails = true

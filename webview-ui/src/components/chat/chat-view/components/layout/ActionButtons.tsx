@@ -113,16 +113,18 @@ export const ActionButtons: React.FC<ActionButtonsProps> = ({
 		}
 		// Show scroll to top button when there are no action buttons
 		const handleScrollToTop = () => {
-			scrollBehavior.virtuosoRef.current?.scrollTo({
-				top: 0,
+			scrollBehavior.virtuosoRef.current?.scrollToIndex({
+				index: 0,
+				align: "start",
 				behavior: "smooth",
 			})
 			disableAutoScrollRef.current = true
 			// Virtual rendering may not have all items rendered when at bottom,
 			// so scroll again after a delay to ensure we reach the true top
 			setTimeout(() => {
-				scrollBehavior.virtuosoRef.current?.scrollTo({
-					top: 0,
+				scrollBehavior.virtuosoRef.current?.scrollToIndex({
+					index: 0,
+					align: "start",
 					behavior: "smooth",
 				})
 			}, 300)

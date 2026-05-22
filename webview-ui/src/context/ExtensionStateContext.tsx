@@ -314,13 +314,17 @@ export const ExtensionStateContextProvider: React.FC<{
 	const [firstItemIndex, setFirstItemIndex] = useState(0)
 
 	const prevTotalRef = useRef(0)
+	const refetchLockRef = useRef(false)
 
-	// Reset when task is cleared; bootstrap initial fetch on task switch
+	// Reset when task is cleared; bootstrap initial fetch on task switch;
+	// refetch when totalMessageCount changes (e.g. after cancel removes partials).
 	useEffect(() => {
 		const total = state.totalMessageCount ?? 0
 		if (total === 0) {
 			setClineMessages([])
 			setFirstItemIndex(0)
+			prevTotalRef.current = 0
+			return
 		}
 		if (prevTotalRef.current === 0 && total > 0 && clineMessages.length === 0) {
 			TaskServiceClient.fetchMessage(FetchMessageRequest.create({ referenceIndex: -1, count: 200 }))
@@ -330,6 +334,23 @@ export const ExtensionStateContextProvider: React.FC<{
 					setFirstItemIndex(Math.max(0, resp.startIndex))
 				})
 				.catch(() => {})
+			prevTotalRef.current = total
+			return
+		}
+		// Refetch when totalMessageCount changes and we already have messages.
+		// This syncs the sliding window after cancel removes partial messages.
+		if (prevTotalRef.current !== 0 && prevTotalRef.current !== total && clineMessages.length > 0 && !refetchLockRef.current) {
+			refetchLockRef.current = true
+			TaskServiceClient.fetchMessage(FetchMessageRequest.create({ referenceIndex: -1, count: 200 }))
+				.then((resp) => {
+					const converted = (resp.messages as any[]).map((m) => convertProtoToClineMessage(m))
+					setClineMessages(converted)
+					setFirstItemIndex(Math.max(0, resp.startIndex))
+				})
+				.catch(() => {})
+				.finally(() => {
+					refetchLockRef.current = false
+				})
 		}
 		prevTotalRef.current = total
 	}, [state.totalMessageCount, clineMessages.length])

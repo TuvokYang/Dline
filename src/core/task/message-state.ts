@@ -288,4 +288,39 @@ export class MessageStateHandler extends EventEmitter<MessageStateHandlerEvents>
 			await this.saveClineMessagesAndUpdateHistoryInternal()
 		})
 	}
+
+	/**
+	 * Remove all partial messages from clineMessages.
+	 * Used after task cancellation to clean up incomplete streaming messages
+	 * before re-initializing the task from persistent history.
+	 */
+	async removePartialMessages(): Promise<void> {
+		return await this.withStateLock(async () => {
+			const totalBefore = this.clineMessages.length
+			const partialMessages = this.clineMessages.filter((m) => m.partial === true)
+			Logger.debug(
+				`[removePartialMessages] total=${totalBefore}, partial=${partialMessages.length}` +
+					partialMessages.map((m) => ` [ts=${m.ts} type=${m.type} say=${m.say}]`).join(""),
+			)
+
+			if (partialMessages.length === 0) {
+				Logger.debug("[removePartialMessages] no partial messages to remove")
+				return
+			}
+
+			const previousMessages = [...this.clineMessages]
+			this.clineMessages = this.clineMessages.filter((m) => m.partial !== true)
+			const totalAfter = this.clineMessages.length
+
+			Logger.debug(`[removePartialMessages] removed=${totalBefore - totalAfter}, remaining=${totalAfter}`)
+
+			this.emitClineMessagesChanged({
+				type: "set",
+				messages: this.clineMessages,
+				previousMessages,
+			})
+
+			await this.saveClineMessagesAndUpdateHistoryInternal()
+		})
+	}
 }
