@@ -262,7 +262,12 @@
 			"dependsOn": [
 				"watch"
 			],
-			"command": "rm -rf ${workspaceFolder}/dist/tmp/user && mkdir -p ${workspaceFolder}/dist/tmp/user"
+			"windows": {
+				"command": "Remove-Item -Path  ${workspaceFolder}/dist/tmp/user -Recurse -Force -ErrorAction SilentlyContinue; New-Item -Path ${workspaceFolder}/dist/tmp/user -ItemType Directory -Force"
+			},
+			"linux": {
+				"command": "rm -rf ${workspaceFolder}/dist/tmp/user && mkdir -p ${workspaceFolder}/dist/tmp/user"
+			}
 		},
 		{
 			"type": "npm",

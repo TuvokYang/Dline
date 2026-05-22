@@ -336,7 +336,10 @@ export interface CommandExecutorCallbacks {
 	 * Update a cline message by index
 	 * Supports updating commandCompleted status and/or text content
 	 */
-	updateClineMessage: (index: number, updates: { commandCompleted?: boolean; text?: string }) => Promise<void>
+	updateClineMessage: (
+		index: number,
+		updates: { text?: string; exitCode?: number; commandStatus?: "pending" | "running" | "completed" | "skipped" },
+	) => Promise<void>
 	/** Get cline messages array */
 	getClineMessages: () => Array<{ ask?: string; say?: string; text?: string }>
 	/** Add content to user message for next API request */

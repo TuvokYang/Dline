@@ -93,23 +93,44 @@ export async function orchestrateCommandExecution(
 	// Track command execution state
 	callbacks.updateBackgroundCommandState(true)
 
-	const clearCommandState = async () => {
+	// Mark command as running
+	const initialMessages = callbacks.getClineMessages()
+	const initialCmdIndex = findLastIndex(initialMessages, (m) => m.ask === "command" || m.say === "command")
+	if (initialCmdIndex !== -1) {
+		await callbacks.updateClineMessage(initialCmdIndex, { commandStatus: "running" })
+	}
+
+	const clearCommandState = async (exitCode?: number | null) => {
 		callbacks.updateBackgroundCommandState(false)
 
-		// Mark the command message as completed
+		// Mark the command message as completed with exit code
 		const clineMessages = callbacks.getClineMessages()
+		Logger.debug(`[clearCommandState] total messages=${clineMessages.length}, exitCode=${exitCode}`)
 		const lastCommandIndex = findLastIndex(clineMessages, (m) => m.ask === "command" || m.say === "command")
+		Logger.debug(`[clearCommandState] lastCommandIndex=${lastCommandIndex}`)
 		if (lastCommandIndex !== -1) {
-			await callbacks.updateClineMessage(lastCommandIndex, {
-				commandCompleted: true,
-			})
+			try {
+				await callbacks.updateClineMessage(lastCommandIndex, {
+					commandStatus: "completed",
+					exitCode: exitCode ?? undefined,
+				})
+				Logger.debug(`[clearCommandState] updateClineMessage succeeded`)
+			} catch (e) {
+				Logger.error(`[clearCommandState] updateClineMessage failed: ${e}`)
+			}
+		} else {
+			Logger.debug(`[clearCommandState] no command message found`)
 		}
 	}
 
-	process.once("completed", clearCommandState)
-	process.once("error", clearCommandState)
+	process.once("completed", (details) => {
+		clearCommandState(details?.exitCode)
+	})
+	process.once("error", () => {
+		clearCommandState(-1) // mark as failed
+	})
 	process.catch(() => {
-		clearCommandState()
+		clearCommandState(-1)
 	})
 
 	let userFeedback: { text?: string; images?: string[]; files?: string[] } | undefined
@@ -257,6 +278,12 @@ export async function orchestrateCommandExecution(
 					telemetryService.captureTerminalUserIntervention(TerminalUserInterventionAction.CANCELLED, terminalType)
 					// Set flags BEFORE resuming the process to prevent new lines from being processed
 					didCancelViaUi = true
+					// Mark command as skipped
+					const cancelMsgs = callbacks.getClineMessages()
+					const cancelCmdIndex = findLastIndex(cancelMsgs, (m) => m.ask === "command" || m.say === "command")
+					if (cancelCmdIndex !== -1) {
+						await callbacks.updateClineMessage(cancelCmdIndex, { commandStatus: "skipped" })
+					}
 					userFeedback = undefined
 					didContinue = true
 					outputBuffer = []

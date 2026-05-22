@@ -569,13 +569,20 @@ export const ExtensionStateContextProvider: React.FC<{
 
 					const partialMessage = convertProtoToClineMessage(protoMessage)
 					setClineMessages((prev) => {
-						const lastIndex = findLastIndex(prev, (msg) => msg.ts === partialMessage.ts)
-						if (lastIndex !== -1) {
+						const existingIndex = findLastIndex(prev, (msg) => msg.ts === partialMessage.ts)
+						if (existingIndex !== -1) {
 							const next = [...prev]
-							next[lastIndex] = partialMessage
+							next[existingIndex] = partialMessage
 							return next
 						}
-						return [...prev, partialMessage]
+						// Insert at correct position sorted by ts (ascending) to prevent message order corruption
+						const insertIndex = prev.findIndex((msg) => msg.ts > partialMessage.ts)
+						if (insertIndex === -1) {
+							return [...prev, partialMessage] // ts is largest, append
+						}
+						const next = [...prev]
+						next.splice(insertIndex, 0, partialMessage)
+						return next
 					})
 				} catch (error) {
 					console.error("Failed to process partial message:", error, protoMessage)

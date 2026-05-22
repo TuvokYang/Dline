@@ -1,7 +1,7 @@
 import { COMMAND_OUTPUT_STRING, COMMAND_REQ_APP_STRING } from "@shared/combineCommandSequences"
 import { ClineMessage } from "@shared/ExtensionMessage"
 import { StringRequest } from "@shared/proto/cline/common"
-import { memo, useEffect, useRef } from "react"
+import { memo, useEffect, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { FileServiceClient } from "@/services/grpc-client"
@@ -25,13 +25,9 @@ export const CommandOutputContent = memo(
 		const shouldAutoShow = lineCount <= 5
 		const outputRef = useRef<HTMLDivElement>(null)
 
-		// Auto-scroll to bottom when output changes (only when showing limited output)
 		useEffect(() => {
 			if (!isOutputFullyExpanded && outputRef.current) {
-				// Direct scrollTop manipulation
 				outputRef.current.scrollTop = outputRef.current.scrollHeight
-
-				// Another attempt with more delay (for slower renders) to ensure scrolling works
 				setTimeout(() => {
 					if (outputRef.current) {
 						outputRef.current.scrollTop = outputRef.current.scrollHeight
@@ -40,30 +36,22 @@ export const CommandOutputContent = memo(
 			}
 		}, [output, isOutputFullyExpanded])
 
-		// Don't render anything if container is collapsed
 		if (!isContainerExpanded) {
 			return null
 		}
 
-		// Check if output contains a log file path indicator
 		const logFilePathMatch = output.match(/📋 Output is being logged to: ([^\n]+)/)
 		const logFilePath = logFilePathMatch ? logFilePathMatch[1].trim() : null
 
-		// Render output with clickable log file path
 		const renderOutput = () => {
 			if (!logFilePath) {
 				return <CodeBlock forceWrap={true} source={`${"```"}shell\n${output}\n${"```"}`} />
 			}
-
-			// Split output into parts: before log path, log path line, after log path
 			const logPathLineStart = output.indexOf("📋 Output is being logged to:")
 			const logPathLineEnd = output.indexOf("\n", logPathLineStart)
 			const beforeLogPath = output.substring(0, logPathLineStart)
 			const afterLogPath = logPathLineEnd !== -1 ? output.substring(logPathLineEnd) : ""
-
-			// Extract just the filename from the full path for display
 			const fileName = logFilePath.split("/").pop() || logFilePath
-
 			return (
 				<div className="border border-editor-group-border rounded-sm">
 					{beforeLogPath && <CodeBlock forceWrap={true} source={`${"```"}shell\n${beforeLogPath}\n${"```"}`} />}
@@ -97,7 +85,6 @@ export const CommandOutputContent = memo(
 					ref={outputRef}>
 					<div className="bg-code">{renderOutput()}</div>
 				</div>
-				{/* Show notch only if there's more than 5 lines */}
 				{lineCount > 5 && <ExpandHandle isExpanded={isOutputFullyExpanded} onToggle={onToggle} />}
 			</div>
 		)
@@ -112,7 +99,7 @@ export const CommandOutputRow = memo(
 		isCommandExecuting = false,
 		isCommandPending = false,
 		isCommandCompleted = false,
-		isBackgroundExec = false, // vscodeTerminalExecutionMode === "backgroundExec"
+		isBackgroundExec = false,
 		onCancelCommand,
 		icon,
 		title,
@@ -120,16 +107,33 @@ export const CommandOutputRow = memo(
 		setIsOutputFullyExpanded,
 	}: {
 		message: ClineMessage
+		exitCode?: number | null
 		isCommandExecuting?: boolean
 		isCommandPending?: boolean
 		isCommandCompleted?: boolean
 		isBackgroundExec?: boolean
+		isLast?: boolean
 		onCancelCommand?: () => void
 		icon?: JSX.Element | null
 		title?: JSX.Element | null
 		isOutputFullyExpanded: boolean
 		setIsOutputFullyExpanded: (expanded: boolean) => void
 	}) => {
+		const exitCode = message.exitCode
+		const colors = getStatusColor(isCommandExecuting, isCommandPending, isCommandCompleted, exitCode)
+		const statusText = getCommandStatusText(isCommandExecuting, isCommandPending, isCommandCompleted, exitCode)
+		const isActive = isCommandExecuting || isCommandPending
+		const [isCollapsed, setIsCollapsed] = useState(false)
+
+		// Auto-collapse when command completes, expand when running/pending
+		useEffect(() => {
+			if (isCommandCompleted && !isActive) {
+				setIsCollapsed(true)
+			} else if (isActive) {
+				setIsCollapsed(false)
+			}
+		}, [isCommandCompleted, isActive])
+
 		const splitMessage = (text: string) => {
 			const outputIndex = text.indexOf(COMMAND_OUTPUT_STRING)
 			if (outputIndex === -1) {
@@ -163,8 +167,7 @@ export const CommandOutputRow = memo(
 
 		const requestsApproval = rawCommand.endsWith(COMMAND_REQ_APP_STRING)
 		const command = requestsApproval ? rawCommand.slice(0, -COMMAND_REQ_APP_STRING.length) : rawCommand
-		const showCancelButton =
-			(isCommandExecuting || isCommandPending) && typeof onCancelCommand === "function" && isBackgroundExec
+		const showCancelButton = isActive && typeof onCancelCommand === "function" && isBackgroundExec
 
 		const commandHeader = (
 			<div className="flex items-center gap-2.5 mb-3">
@@ -173,30 +176,46 @@ export const CommandOutputRow = memo(
 			</div>
 		)
 
+		// Collapsed bar: dot + truncated command, colored background by exitCode
+		if (isCollapsed && isCommandCompleted) {
+			return (
+				<>
+					{commandHeader}
+					<button
+						className={cn("w-full flex items-center gap-2 px-2 py-1.5 rounded-sm cursor-pointer transition-colors", {
+							"bg-success/10 border border-success/30": exitCode === 0,
+							"bg-error/10 border border-error/30": exitCode != null && exitCode !== 0,
+							"bg-description/10 border border-description/30": exitCode == null,
+						})}
+						onClick={() => setIsCollapsed(false)}
+						type="button">
+						<div className={cn("rounded-full w-2 h-2 shrink-0", colors.dot)} />
+						<span className="text-sm text-left truncate flex-1 opacity-70">{command}</span>
+					</button>
+				</>
+			)
+		}
+
 		return (
 			<>
 				{commandHeader}
 				<div
 					className="bg-code rounded-sm border border-editor-group-border"
-					style={{
-						transition: "all 0.3s ease-in-out",
-					}}>
+					style={{ transition: "all 0.3s ease-in-out" }}>
 					{command && (
-						<div className="bg-code flex items-center justify-between px-2 py-2.5 border-b border-editor-group-border rounded-sm rounded-b-none overflow-hidden">
-							<div className="flex items-center gap-2 flex-1 m-w-0">
-								<div
-									className={cn("bg-description rounded-full w-2 h-2 shrink-0", {
-										"bg-success animate-pulse": isCommandExecuting,
-										"bg-editor-warning-foreground": isCommandPending,
-									})}
-								/>
-								<span
-									className={cn("text-description font-medium text-base shrink-0", {
-										"text-success": isCommandExecuting,
-										"text-editor-warning-foreground": isCommandPending,
-									})}>
-									{getCommandStatusText(isCommandExecuting, isCommandPending, isCommandCompleted)}
-								</span>
+						<div
+							className={cn(
+								"bg-code flex items-center justify-between px-2 py-2.5 border-b border-editor-group-border rounded-sm rounded-b-none overflow-hidden",
+								{
+									"cursor-pointer": isCommandCompleted,
+								},
+							)}
+							onClick={() => {
+								if (isCommandCompleted) setIsCollapsed(true)
+							}}>
+							<div className="flex items-center gap-2 flex-1 min-w-0">
+								<div className={cn("rounded-full w-2 h-2 shrink-0", colors.dot)} />
+								<span className={cn("font-medium text-base shrink-0", colors.text)}>{statusText}</span>
 							</div>
 							<div className="flex items-center gap-2 shrink-0">
 								{showCancelButton && (
@@ -206,7 +225,6 @@ export const CommandOutputRow = memo(
 											if (isBackgroundExec) {
 												onCancelCommand?.()
 											} else {
-												// For regular terminal mode, show a message
 												alert(
 													"This command is running in the VSCode terminal. You can manually stop it using Ctrl+C in the terminal, or switch to Background Execution mode in settings for cancellable commands.",
 												)
@@ -248,21 +266,36 @@ export const CommandOutputRow = memo(
 CommandOutputRow.displayName = "CommandOutputRow"
 
 const CommandStatusMap = {
-	executing: "Running",
+	running: "Running",
 	pending: "Pending",
+	success: "Success",
+	failed: "Failed",
 	completed: "Completed",
 	skipped: "Skipped",
 }
 
-function getCommandStatusText(isExecuting: boolean, isPending: boolean, isCompleted: boolean): string {
-	if (isExecuting) {
-		return CommandStatusMap.executing
-	}
-	if (isPending) {
-		return CommandStatusMap.pending
-	}
+function getCommandStatusText(isExecuting: boolean, isPending: boolean, isCompleted: boolean, exitCode?: number | null): string {
+	if (isExecuting) return CommandStatusMap.running
+	if (isPending) return CommandStatusMap.pending
 	if (isCompleted) {
+		if (exitCode === 0) return CommandStatusMap.success
+		if (exitCode != null) return CommandStatusMap.failed
 		return CommandStatusMap.completed
 	}
 	return CommandStatusMap.skipped
+}
+
+function getStatusColor(
+	isExecuting: boolean,
+	isPending: boolean,
+	isCompleted: boolean,
+	exitCode?: number | null,
+): { dot: string; text: string } {
+	if (isExecuting) return { dot: "bg-success animate-pulse", text: "text-success" }
+	if (isPending) return { dot: "bg-editor-warning-foreground", text: "text-editor-warning-foreground" }
+	if (isCompleted) {
+		if (exitCode === 0) return { dot: "bg-success", text: "text-success" }
+		if (exitCode != null) return { dot: "bg-error", text: "text-error" }
+	}
+	return { dot: "bg-description", text: "text-description" }
 }

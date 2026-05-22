@@ -450,6 +450,17 @@ export class Controller {
 		try {
 			this.updateBackgroundCommandState(false)
 
+			// Snapshot partial message ts BEFORE abort, since abortTask
+			// may convert them to non-partial during its cleanup phase.
+			const partialTs: number[] = []
+			if (this.task) {
+				const msgs = this.task.messageStateHandler.getClineMessages()
+				for (const m of msgs) {
+					if (m.partial === true) partialTs.push(m.ts)
+				}
+				Logger.debug(`[cancelTask] partial ts to remove: ${partialTs.length}`)
+			}
+
 			Logger.debug("[cancelTask] aborting task...")
 			try {
 				await this.task.abortTask()
@@ -468,19 +479,18 @@ export class Controller {
 				Logger.error("Failed to abort task")
 			})
 
-			// Remove partial messages AFTER streaming has stopped, so no new
-			// partials can be added while we're cleaning up.
-			if (this.task) {
-				Logger.debug("[cancelTask] removing partial messages...")
+			// Remove residual streaming messages by the timestamps we captured.
+			if (this.task && partialTs.length > 0) {
+				Logger.debug("[cancelTask] removing by ts...")
 				try {
-					await this.task.messageStateHandler.removePartialMessages()
+					await this.task.messageStateHandler.removeMessagesByTs(partialTs)
 				} catch (error) {
-					Logger.error("Failed to remove partial messages after cancel", error)
+					Logger.error("Failed to remove messages by ts", error)
 				}
 			}
 
-			// abortTask already handles the resume ask via TaskCancel hook.
-			// Just push the updated state so the frontend re-syncs.
+			// abortTask's TaskCancel hook already sends a resume ask.
+			// Just push the final state so the frontend re-syncs.
 			await this.postStateToWebview()
 		} finally {
 			// Always clear the flag, even if cancellation fails

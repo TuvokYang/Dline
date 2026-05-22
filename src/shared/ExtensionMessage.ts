@@ -140,7 +140,9 @@ export interface ClineMessage {
 	images?: string[]
 	files?: string[]
 	partial?: boolean
-	commandCompleted?: boolean
+	commandStatus?: "pending" | "running" | "completed" | "skipped"
+	exitCode?: number
+	logPath?: string
 	lastCheckpointHash?: string
 	isCheckpointCheckedOut?: boolean
 	isOperationOutsideWorkspace?: boolean

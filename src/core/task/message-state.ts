@@ -294,6 +294,29 @@ export class MessageStateHandler extends EventEmitter<MessageStateHandlerEvents>
 	 * Used after task cancellation to clean up incomplete streaming messages
 	 * before re-initializing the task from persistent history.
 	 */
+	/**
+	 * Remove messages by their timestamps.
+	 * Used after task cancellation to delete specific streaming artifacts
+	 * that may have been converted to non-partial by abortTask.
+	 */
+	async removeMessagesByTs(tsList: number[]): Promise<void> {
+		if (tsList.length === 0) return
+		return await this.withStateLock(async () => {
+			const tsSet = new Set(tsList)
+			const previousMessages = [...this.clineMessages]
+			this.clineMessages = this.clineMessages.filter((m) => !tsSet.has(m.ts))
+			const removed = previousMessages.length - this.clineMessages.length
+			if (removed === 0) return
+			Logger.debug(`[removeMessagesByTs] removed=${removed}`)
+			this.emitClineMessagesChanged({
+				type: "set",
+				messages: this.clineMessages,
+				previousMessages,
+			})
+			await this.saveClineMessagesAndUpdateHistoryInternal()
+		})
+	}
+
 	async removePartialMessages(): Promise<void> {
 		return await this.withStateLock(async () => {
 			const totalBefore = this.clineMessages.length

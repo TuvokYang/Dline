@@ -548,8 +548,16 @@ export class Task {
 			},
 			updateBackgroundCommandState: (isRunning: boolean) =>
 				this.controller.updateBackgroundCommandState(isRunning, this.taskId),
-			updateClineMessage: async (index: number, updates: { commandCompleted?: boolean; text?: string }) => {
+			updateClineMessage: async (
+				index: number,
+				updates: { text?: string; exitCode?: number; commandStatus?: "pending" | "running" | "completed" | "skipped" },
+			) => {
 				await this.messageStateHandler.updateClineMessage(index, updates)
+				// Notify frontend so the sliding window reflects updated fields (e.g. commandStatus, exitCode)
+				const updatedMessage = this.messageStateHandler.getClineMessages()[index]
+				if (updatedMessage) {
+					await sendPartialMessageEvent(convertClineMessageToProto(updatedMessage))
+				}
 			},
 			getClineMessages: () => this.messageStateHandler.getClineMessages() as Array<{ ask?: string; say?: string }>,
 			addToUserMessageContent: (content: { type: string; text: string }) => {
@@ -931,6 +939,7 @@ export class Task {
 			images,
 			files,
 			modelInfo,
+			commandStatus: type === "command" ? "pending" : undefined,
 		})
 		await this.postStateToWebview()
 		await sendPartialMessageEvent(convertClineMessageToProto(this.messageStateHandler.getClineMessages().at(-1)!))

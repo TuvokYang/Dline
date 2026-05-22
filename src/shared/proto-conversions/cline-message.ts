@@ -213,6 +213,9 @@ export function convertClineMessageToProto(message: AppClineMessage): ProtoCline
 		askNewTask: undefined,
 		apiReqInfo: undefined,
 		modelInfo: message.modelInfo ?? undefined,
+		commandStatus: message.commandStatus ?? "",
+		exitCode: message.exitCode ?? 0,
+		logPath: message.logPath ?? "",
 	}
 
 	return protoMessage
@@ -278,6 +281,16 @@ export function convertProtoToClineMessage(protoMessage: ProtoClineMessage): App
 			protoMessage.conversationHistoryDeletedRange.startIndex,
 			protoMessage.conversationHistoryDeletedRange.endIndex,
 		]
+	}
+
+	// Convert command state fields (commandStatus/exitCode/logPath)
+	if (protoMessage.commandStatus !== "") {
+		message.commandStatus = protoMessage.commandStatus as "pending" | "running" | "completed"
+		// exitCode is meaningful when commandStatus is set (includes 0 for success)
+		message.exitCode = protoMessage.exitCode
+	}
+	if (protoMessage.logPath !== "") {
+		message.logPath = protoMessage.logPath
 	}
 
 	return message
