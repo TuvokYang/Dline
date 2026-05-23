@@ -8,6 +8,7 @@ import { StickyUserMessage } from "@/components/chat/task-header/StickyUserMessa
 import { useExtensionState } from "@/context/ExtensionStateContext"
 import { cn } from "@/lib/utils"
 import { TaskServiceClient } from "@/services/grpc-client"
+import { isApiReqActive } from "../../shared/buttonConfig"
 import type { ChatState, MessageHandlers, ScrollBehavior } from "../../types/chatTypes"
 import { isToolGroup } from "../../utils/messageUtils"
 import { createMessageRenderer } from "../messages/MessageRenderer"
@@ -189,13 +190,12 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 		if (lastRawMessage?.type === "ask") return false
 		if (lastRawMessage?.type === "say" && lastRawMessage.say === "completion_result") return false
 
-		if (lastRawMessage?.type === "say" && lastRawMessage.say === "api_req_started") {
-			try {
-				const info = JSON.parse(lastRawMessage.text || "{}")
-				if (info.cancelReason === "user_cancelled") return false
-			} catch {
-				// Ignore malformed api_req_started payloads.
-			}
+		if (
+			lastRawMessage?.type === "say" &&
+			lastRawMessage.say === "api_req_started" &&
+			!isApiReqActive(lastRawMessage)
+		) {
+			return false
 		}
 
 		if (visibleGroupedMessages.length === 0) return true

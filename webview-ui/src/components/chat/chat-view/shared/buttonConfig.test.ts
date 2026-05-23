@@ -123,7 +123,7 @@ describe("getButtonConfig", () => {
 	})
 
 	// Test API request states
-	it("returns api_req_active config for api_req_started say message", () => {
+	it("returns api_req_active config for unfinished api_req_started say message", () => {
 		const apiReqMessage: ClineMessage = {
 			type: "say",
 			say: "api_req_started",
@@ -131,6 +131,28 @@ describe("getButtonConfig", () => {
 		}
 		const config = getButtonConfig(apiReqMessage)
 		expect(config).toEqual(BUTTON_CONFIGS.api_req_active)
+	})
+
+	it("returns default config for completed api_req_started say message", () => {
+		const apiReqMessage: ClineMessage = {
+			type: "say",
+			say: "api_req_started",
+			text: JSON.stringify({ request: "test", cost: 0.001 }),
+			ts: Date.now(),
+		}
+		const config = getButtonConfig(apiReqMessage)
+		expect(config).toEqual(BUTTON_CONFIGS.default)
+	})
+
+	it("returns default config for cancelled api_req_started say message", () => {
+		const apiReqMessage: ClineMessage = {
+			type: "say",
+			say: "api_req_started",
+			text: JSON.stringify({ request: "test", cancelReason: "user_cancelled" }),
+			ts: Date.now(),
+		}
+		const config = getButtonConfig(apiReqMessage)
+		expect(config).toEqual(BUTTON_CONFIGS.default)
 	})
 
 	// Test mode parameter (though not extensively used in the current implementation)

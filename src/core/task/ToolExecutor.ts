@@ -122,6 +122,10 @@ export class ToolExecutor {
 			userContent: ClineContent[],
 			context: "initial_task" | "resume" | "feedback",
 		) => Promise<{ cancel?: boolean; wasCancelled?: boolean; contextModification?: string; errorMessage?: string }>,
+		private updateClineMessage: (
+			index: number,
+			updates: { text?: string; exitCode?: number; commandStatus?: "pending" | "running" | "completed" | "skipped" },
+		) => Promise<void>,
 	) {
 		this.autoApprover = new AutoApprove(this.stateManager)
 
@@ -186,6 +190,7 @@ export class ToolExecutor {
 				clearActiveHookExecution: this.clearActiveHookExecution,
 				getActiveHookExecution: this.getActiveHookExecution,
 				runUserPromptSubmitHook: this.runUserPromptSubmitHook,
+				updateClineMessage: this.updateClineMessage,
 			},
 			coordinator: this.coordinator,
 		}

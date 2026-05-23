@@ -623,6 +623,7 @@ export class Task {
 			this.clearActiveHookExecution.bind(this),
 			this.getActiveHookExecution.bind(this),
 			this.runUserPromptSubmitHook.bind(this),
+			commandExecutorCallbacks.updateClineMessage,
 		)
 	}
 
@@ -1228,8 +1229,15 @@ export class Task {
 			}
 		}
 
+		// Clean up any residual partial:true messages from a previously interrupted
+		// task so the frontend does not show a stale Cancel button on history load.
+		for (const msg of savedClineMessages) {
+			if (msg.partial === true) {
+				msg.partial = false
+			}
+		}
+
 		await this.messageStateHandler.overwriteClineMessages(savedClineMessages)
-		this.messageStateHandler.setClineMessages(await getSavedClineMessages(this.taskId))
 
 		// Now present the cline messages to the user and ask if they want to resume (NOTE: we ran into a bug before where the apiconversationhistory wouldn't be initialized when opening a old task, and it was because we were waiting for resume)
 		// This is important in case the user deletes messages without resuming the task first
@@ -1247,17 +1255,92 @@ export class Task {
 			.reverse()
 			.find((m) => !(m.ask === "resume_task" || m.ask === "resume_completed_task")) // could be multiple resume tasks
 
-		let askType: ClineAsk
+		// Show a resume affordance for any incomplete historical task. Once a task
+		// is loaded from disk there is no live ask promise to consume responses
+		// from an old tool/followup/api state, so we create a fresh resume ask.
+		const lastApiReqMsg = findLast(savedClineMessages, (m) => m.say === "api_req_started")
+		let wasCancelled = false
+		if (lastApiReqMsg?.text) {
+			try {
+				const info: ClineApiReqInfo = JSON.parse(lastApiReqMsg.text)
+				wasCancelled = info.cancelReason !== undefined
+			} catch {}
+		}
+
+		let askType: ClineAsk | undefined
 		if (lastClineMessage?.ask === "completion_result") {
 			askType = "resume_completed_task"
-		} else {
+		} else if (wasCancelled) {
+			// Task was cancelled — the original ask is stale, use resume_task.
+			askType = "resume_task"
+		} else if (lastClineMessage?.ask) {
+			// Re-issue the original ask type so the frontend shows the correct
+			// buttons (e.g. Approve/Reject for tool, text input for followup).
+			askType = lastClineMessage.ask
+		} else if (lastClineMessage) {
+			// Message exists but has no ask (e.g. an api_req_started say).
 			askType = "resume_task"
 		}
+
+
+		if (!askType) {
+			// No ask type means the task is complete with no resume affordance needed.
+			// Clean up any stale api_req_started messages that lack completion markers
+			// to prevent the frontend from showing a Cancel button with no work to cancel.
+			const clineMsgs = this.messageStateHandler.getClineMessages()
+			const staleApiReqIndices: number[] = []
+			for (let i = 0; i < clineMsgs.length; i++) {
+				const m = clineMsgs[i]
+				if (m.type !== "say" || m.say !== "api_req_started" || !m.text) {
+					continue
+				}
+				try {
+					const info = JSON.parse(m.text)
+					if (info.cost == null && info.cancelReason == null && info.streamingFailedMessage == null) {
+						staleApiReqIndices.push(i)
+					}
+				} catch {
+					staleApiReqIndices.push(i)
+				}
+			}
+			if (staleApiReqIndices.length > 0) {
+				const staleTs = staleApiReqIndices.map((i) => clineMsgs[i].ts)
+				await this.messageStateHandler.removeMessagesByTs(staleTs)
+			}
+			this.taskState.isInitialized = true
+			this.taskState.abort = true
+			await this.postStateToWebview()
+			return
+		}
+
 
 		this.taskState.isInitialized = true
 		this.taskState.abort = false // Reset abort flag when resuming task
 
-		const { response, text, images, files } = await this.ask(askType) // calls poststatetowebview
+		// When re-issuing a plan_mode_respond ask, mark that we're awaiting a plan
+		// response so that switching to Act mode triggers automatic continuation.
+		if (askType === "plan_mode_respond") {
+			this.taskState.isAwaitingPlanResponse = true
+		}
+
+		// Remove the old ask message of the same type to avoid duplicates when
+		// the user re-opens the task multiple times. Each re-open would otherwise
+		// add another blank plan_mode_respond / followup message.
+		const isConversationalAsk = askType === "plan_mode_respond" || askType === "followup"
+		if (isConversationalAsk) {
+			const clineMsgs = this.messageStateHandler.getClineMessages()
+			const oldAskIndex = findLastIndex(clineMsgs, (m) => m.type === "ask" && m.ask === askType)
+			if (oldAskIndex !== -1) {
+				clineMsgs.splice(oldAskIndex, 1)
+			}
+		}
+
+		// For conversational asks (plan_mode_respond / followup), pass the
+		// original text so the Plan Created / question content is preserved.
+		const askText = isConversationalAsk ? lastClineMessage?.text : undefined
+		const { response, text, images, files } = await this.ask(askType, askText)
+
+
 
 		// Initialize newUserContent array for hook context
 		const newUserContent: ClineContent[] = []
@@ -1319,7 +1402,10 @@ export class Task {
 		let responseText: string | undefined
 		let responseImages: string[] | undefined
 		let responseFiles: string[] | undefined
-		if (response === "messageResponse" || text || (images && images.length > 0) || (files && files.length > 0)) {
+		// "PLAN_MODE_TOGGLE_RESPONSE" is a technical signal from togglePlanActMode,
+		// not user-generated content — skip displaying it as user_feedback.
+		const isToggleSignal = text === "PLAN_MODE_TOGGLE_RESPONSE"
+		if (!isToggleSignal && (response === "messageResponse" || text || (images && images.length > 0) || (files && files.length > 0))) {
 			await this.say("user_feedback", text, images, files)
 			await this.checkpointManager?.saveCheckpoint()
 			responseText = text
@@ -1386,31 +1472,48 @@ export class Task {
 		const pendingContextWarning = await this.fileContextTracker.retrieveAndClearPendingFileContextWarning()
 		const hasPendingFileContextWarnings = pendingContextWarning && pendingContextWarning.length > 0
 
-		const mode = this.stateManager.getGlobalSettingsKey("mode")
-		const [taskResumptionMessage, userResponseMessage] = formatResponse.taskResumption(
-			mode === "plan" ? "plan" : "act",
-			agoText,
-			this.cwd,
-			wasRecent,
-			responseText,
-			hasPendingFileContextWarnings,
-		)
+		// Only add task resumption context for resume-type asks.
+		// For followup/plan_mode_respond/tool etc. the conversation continues
+		// naturally — no "resumed X ago" preamble needed.
+		const isResumption = askType === "resume_task" || askType === "resume_completed_task"
+		if (isResumption) {
+			const mode = this.stateManager.getGlobalSettingsKey("mode")
+			const [taskResumptionMessage, userResponseMessage] = formatResponse.taskResumption(
+				mode === "plan" ? "plan" : "act",
+				agoText,
+				this.cwd,
+				wasRecent,
+				responseText,
+				hasPendingFileContextWarnings,
+			)
 
-		if (taskResumptionMessage !== "") {
+			if (taskResumptionMessage !== "") {
+				newUserContent.push({
+					type: "text",
+					text: taskResumptionMessage,
+				})
+			}
+
+			if (userResponseMessage !== "") {
+				newUserContent.push({
+					type: "text",
+					text: userResponseMessage,
+				})
+			}
+		} else if (responseText) {
+			// For non-resumption asks (followup, plan_mode_respond, tool, etc.),
+			// directly add the user's response so the AI receives it in the next
+			// API request. Resume asks already include the response via
+			// formatResponse.taskResumption above.
 			newUserContent.push({
 				type: "text",
-				text: taskResumptionMessage,
+				text: `<user_response>\n${responseText}\n</user_response>`,
 			})
 		}
 
-		if (userResponseMessage !== "") {
-			newUserContent.push({
-				type: "text",
-				text: userResponseMessage,
-			})
-		}
 
 		if (responseImages && responseImages.length > 0) {
+
 			newUserContent.push(...formatResponse.imageBlocks(responseImages))
 		}
 
@@ -1475,7 +1578,12 @@ export class Task {
 	 * Used after cancellation so the message list stays in-place (no flicker)
 	 * while still showing the resume prompt and handling the user response.
 	 */
-	public async resumeTask() {
+	public async resumeTask(preObtainedResponse?: {
+		response: ClineAskResponse
+		text?: string
+		images?: string[]
+		files?: string[]
+	}) {
 		// Reset abort state so ask() and subsequent operations work
 		this.taskState.abort = false
 		this.taskState.isInitialized = true
@@ -1493,8 +1601,24 @@ export class Task {
 			askType = "resume_task"
 		}
 
-		Logger.debug(`[resumeTask] askType=${askType}`)
-		const { response, text, images, files } = await this.ask(askType)
+		let response: ClineAskResponse
+		let text: string | undefined
+		let images: string[] | undefined
+		let files: string[] | undefined
+
+		if (preObtainedResponse) {
+			response = preObtainedResponse.response
+			text = preObtainedResponse.text
+			images = preObtainedResponse.images
+			files = preObtainedResponse.files
+		} else {
+			Logger.debug(`[resumeTask] askType=${askType}`)
+			const askResult = await this.ask(askType)
+			response = askResult.response
+			text = askResult.text
+			images = askResult.images
+			files = askResult.files
+		}
 
 		// --- Below is the same post-ask logic as resumeTaskFromHistory ---
 
@@ -1717,16 +1841,17 @@ export class Task {
 		return true
 	}
 
-	async abortTask() {
+	/**
+	 * Pause the task — stop execution but preserve all resources.
+	 * The task can be resumed later via resume().
+	 * Called when the user clicks the cancel button.
+	 */
+	async pause() {
 		try {
 			// PHASE 1: Check if TaskCancel should run BEFORE any cleanup
-			// We must capture this state now because subsequent cleanup will
-			// clear the active work indicators that shouldRunTaskCancelHook checks
 			const shouldRunTaskCancelHook = await this.shouldRunTaskCancelHook()
 
 			// PHASE 2: Set abort flag to prevent race conditions
-			// This must happen before canceling hooks so that hook catch blocks
-			// can properly detect the abort state
 			this.taskState.abort = true
 
 			// PHASE 3: Cancel any running hook execution
@@ -1734,11 +1859,9 @@ export class Task {
 			if (activeHook) {
 				try {
 					await this.cancelHookExecution()
-					// Clear activeHookExecution after hook is signaled
 					await this.clearActiveHookExecution()
 				} catch (error) {
-					Logger.error("Failed to cancel hook during task abort", error)
-					// Still clear state even on error to prevent stuck state
+					Logger.error("Failed to cancel hook during task pause", error)
 					await this.clearActiveHookExecution()
 				}
 			}
@@ -1747,13 +1870,11 @@ export class Task {
 				try {
 					await this.commandExecutor.cancelBackgroundCommand()
 				} catch (error) {
-					Logger.error("Failed to cancel background command during task abort", error)
+					Logger.error("Failed to cancel background command during task pause", error)
 				}
 			}
 
-			// PHASE 4: Run TaskCancel hook
-			// This allows the hook UI to appear in the webview
-			// Use the shouldRunTaskCancelHook value we captured in Phase 1
+			// PHASE 4: Run TaskCancel hook (conditional)
 			const hooksEnabled = getHooksEnabledSafe(this.stateManager.getGlobalSettingsKey("hooksEnabled"))
 			if (hooksEnabled && shouldRunTaskCancelHook) {
 				try {
@@ -1768,74 +1889,132 @@ export class Task {
 								},
 							},
 						},
-						isCancellable: false, // TaskCancel is NOT cancellable
+						isCancellable: false,
 						say: this.say.bind(this),
-						// No setActiveHookExecution or clearActiveHookExecution for non-cancellable hooks
 						messageStateHandler: this.messageStateHandler,
 						taskId: this.taskId,
 						hooksEnabled,
 						model: getHookModelContext(this.api, this.stateManager),
 					})
-
-					// TaskCancel completed successfully
-					// Present resume button after successful TaskCancel hook
-					const lastClineMessage = this.messageStateHandler
-						.getClineMessages()
-						.slice()
-						.reverse()
-						.find((m) => !(m.ask === "resume_task" || m.ask === "resume_completed_task"))
-
-					let askType: ClineAsk
-					if (lastClineMessage?.ask === "completion_result") {
-						askType = "resume_completed_task"
-					} else {
-						askType = "resume_task"
-					}
-
-					// Present the resume ask - this will show the resume button in the UI
-					// We don't await this because we want to set the abort flag immediately
-					// The ask will be waiting when the user decides to resume
-					this.ask(askType).catch((error) => {
-						// If ask fails (e.g., task was cleared), that's okay - just log it
-						Logger.log("[TaskCancel] Resume ask failed (task may have been cleared):", error)
-					})
 				} catch (error) {
-					// TaskCancel hook failed - non-fatal, just log
 					Logger.error("[TaskCancel Hook] Failed (non-fatal):", error)
 				}
 			}
 
-			// PHASE 5: Immediately update UI to reflect abort state
-			try {
-				await this.messageStateHandler.saveClineMessagesAndUpdateHistory()
-				await this.postStateToWebview()
-			} catch (error) {
-				Logger.error("Failed to post state after setting abort flag", error)
+			// Revert diff changes without disposing the provider
+			await this.diffViewProvider.revertChanges()
+
+			// Save state and update UI so the frontend reflects the pause
+			await this.messageStateHandler.saveClineMessagesAndUpdateHistory()
+			await this.postStateToWebview()
+
+			// PHASE 4.5: Always present resume ask after pause.
+			// Fire-and-forget: the ask promise stays alive and resumes the
+			// task when the user clicks the resume button.
+			{
+				const lastRealMessage = this.messageStateHandler
+					.getClineMessages()
+					.slice()
+					.reverse()
+					.find((m) => !(m.ask === "resume_task" || m.ask === "resume_completed_task"))
+
+				if (lastRealMessage?.ask !== "completion_result") {
+					this.ask("resume_task").then(async ({ response, text, images, files }) => {
+						if (response === "yesButtonClicked") {
+							await this.resumeTask({ response, text, images, files })
+						}
+					}).catch((error) => {
+						Logger.log("[pause] Resume ask failed:", error)
+					})
+				}
+			}
+		} catch (error) {
+			Logger.error("[pause] Failed:", error)
+		}
+	}
+
+	/**
+	 * Terminate the task completely — dispose all resources and release locks.
+	 * Called when the task is cleared, reset, or the extension is shutting down.
+	 * No resume ask is sent because the task is being destroyed.
+	 */
+	async terminate() {
+		try {
+			// PHASE 1: Check if TaskCancel should run BEFORE any cleanup
+			const shouldRunTaskCancelHook = await this.shouldRunTaskCancelHook()
+
+			// PHASE 2: Set abort flag
+			this.taskState.abort = true
+
+			// PHASE 3: Cancel hooks and background commands
+			const activeHook = await this.getActiveHookExecution()
+			if (activeHook) {
+				try {
+					await this.cancelHookExecution()
+					await this.clearActiveHookExecution()
+				} catch (error) {
+					Logger.error("Failed to cancel hook during task terminate", error)
+					await this.clearActiveHookExecution()
+				}
 			}
 
-			// PHASE 6: Check for incomplete progress
+			if (this.commandExecutor.hasActiveBackgroundCommand()) {
+				try {
+					await this.commandExecutor.cancelBackgroundCommand()
+				} catch (error) {
+					Logger.error("Failed to cancel background command during task terminate", error)
+				}
+			}
+
+			// PHASE 4: Run TaskCancel hook (conditional)
+			const hooksEnabled = getHooksEnabledSafe(this.stateManager.getGlobalSettingsKey("hooksEnabled"))
+			if (hooksEnabled && shouldRunTaskCancelHook) {
+				try {
+					await executeHook({
+						hookName: "TaskCancel",
+						hookInput: {
+							taskCancel: {
+								taskMetadata: {
+									taskId: this.taskId,
+									ulid: this.ulid,
+									completionStatus: this.taskState.abandoned ? "abandoned" : "cancelled",
+								},
+							},
+						},
+						isCancellable: false,
+						say: this.say.bind(this),
+						messageStateHandler: this.messageStateHandler,
+						taskId: this.taskId,
+						hooksEnabled,
+						model: getHookModelContext(this.api, this.stateManager),
+					})
+				} catch (error) {
+					Logger.error("[TaskCancel Hook] Failed (non-fatal):", error)
+				}
+			}
+
+			// Save state before cleanup
+			await this.messageStateHandler.saveClineMessagesAndUpdateHistory()
+			await this.postStateToWebview()
+
+			// PHASE 6: Check for incomplete progress (focus chain)
 			if (this.FocusChainManager) {
-				// Extract current model and provider for telemetry
 				const apiConfig = this.stateManager.getApiConfiguration()
 				const currentMode = this.stateManager.getGlobalSettingsKey("mode")
 				const currentProvider = (
 					currentMode === "plan" ? apiConfig.planModeApiProvider : apiConfig.actModeApiProvider
 				) as string
 				const currentModelId = this.api.getModel().id
-
 				this.FocusChainManager.checkIncompleteProgressOnCompletion(currentModelId, currentProvider)
 			}
 
-			// PHASE 7: Clean up resources
+			// PHASE 7: Dispose all resources (only on terminate, not pause)
 			this.terminalManager.disposeAll()
 			this.urlContentFetcher.closeBrowser()
 			await this.browserSession.dispose()
 			this.clineIgnoreController.dispose()
 			this.fileContextTracker.dispose()
-			// need to await for when we want to make sure directories/files are reverted before
-			// re-starting the task from a checkpoint
 			await this.diffViewProvider.revertChanges()
-			// Clear the notification callback when task is aborted
 			this.mcpHub.clearNotificationCallback()
 			if (this.FocusChainManager) {
 				this.FocusChainManager.dispose()
@@ -1853,11 +2032,11 @@ export class Task {
 				}
 			}
 
-			// Final state update to notify UI that abort is complete
+			// Final state update
 			try {
 				await this.postStateToWebview()
 			} catch (error) {
-				Logger.error("Failed to post final state after abort", error)
+				Logger.error("Failed to post final state after terminate", error)
 			}
 		}
 	}
@@ -2919,14 +3098,16 @@ export class Task {
 					await this.diffViewProvider.revertChanges() // closes diff view
 				}
 
-				// if last message is a partial we need to update and save it
+				// if last message is a partial we need to finalize it in memory.
+				// Do NOT push to frontend here — the Controller will later remove
+				// this message via removeMessagesByTs and refresh via postStateToWebview.
+				// Sending a partialMessageEvent would re-insert the message after removal.
+				const lastIndex = this.messageStateHandler.getClineMessages().length - 1
 				const lastMessage = this.messageStateHandler.getClineMessages().at(-1)
 				if (lastMessage?.partial) {
-					// lastMessage.ts = Date.now() DO NOT update ts since it is used as a key for virtuoso list
-					lastMessage.partial = false
-					// instead of streaming partialMessage events, we do a save and post like normal to persist to disk
-					Logger.log("updating partial message", lastMessage)
-					// await this.saveClineMessagesAndUpdateHistory()
+					await this.messageStateHandler.updateClineMessage(lastIndex, {
+						partial: false,
+					})
 				}
 				// update api_req_started to have cancelled and cost, so that we can display the cost of the partial stream
 				await finalizeApiReqMsg(cancelReason, streamingFailedMessage)
@@ -3252,7 +3433,7 @@ export class Task {
 					}
 
 					// needs to happen after the say, otherwise the say would fail
-					this.abortTask() // if the stream failed, there's various states the task could be in (i.e. could have streamed some tools the user may have executed), so we just resort to replicating a cancel task
+					this.pause() // if the stream failed, there's various states the task could be in (i.e. could have streamed some tools the user may have executed), so we just resort to replicating a cancel task
 
 					await abortStream("streaming_failed", errorMessage)
 					await this.reinitExistingTaskFromId(this.taskId)

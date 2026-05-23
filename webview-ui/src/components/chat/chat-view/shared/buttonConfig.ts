@@ -1,4 +1,4 @@
-import type { ClineMessage, ClineSayTool } from "@shared/ExtensionMessage"
+import type { ClineApiReqInfo, ClineMessage, ClineSayTool } from "@shared/ExtensionMessage"
 import type { Mode } from "@shared/storage/types"
 
 /**
@@ -209,6 +209,27 @@ export const BUTTON_CONFIGS: Record<string, ButtonConfig> = {
 
 const errorTypes = ["api_req_failed", "mistake_limit_reached"]
 
+export function isApiReqActive(message: ClineMessage | undefined): boolean {
+	if (message?.type !== "say" || message.say !== "api_req_started") {
+		return false
+	}
+
+	if (message.partial === true) {
+		return true
+	}
+
+	if (!message.text) {
+		return true
+	}
+
+	try {
+		const info = JSON.parse(message.text) as ClineApiReqInfo
+		return info.cost == null && info.cancelReason == null && info.streamingFailedMessage == null
+	} catch {
+		return true
+	}
+}
+
 /**
  * Determines button configuration based on message type and state
  * This is the single source of truth used by both ActionButtons and useMessageHandlers
@@ -296,7 +317,7 @@ export function getButtonConfig(message: ClineMessage | undefined, _mode: Mode =
 	}
 
 	// Handle say messages (typically don't require buttons except in special cases)
-	if (message.type === "say" && message.say === "api_req_started") {
+	if (isApiReqActive(message)) {
 		return BUTTON_CONFIGS.api_req_active
 	}
 
@@ -306,5 +327,5 @@ export function getButtonConfig(message: ClineMessage | undefined, _mode: Mode =
 		return BUTTON_CONFIGS.command_output
 	}
 
-	return BUTTON_CONFIGS.partial
+	return BUTTON_CONFIGS.default
 }

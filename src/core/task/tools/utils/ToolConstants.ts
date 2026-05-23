@@ -71,6 +71,7 @@ export const TASK_CALLBACKS_KEYS = [
 	"clearActiveHookExecution",
 	"getActiveHookExecution",
 	"runUserPromptSubmitHook",
+	"updateClineMessage",
 ] as const
 
 /**

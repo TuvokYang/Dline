@@ -115,7 +115,7 @@ export class TaskCheckpointManager implements ICheckpointManager {
 	 * @param isAttemptCompletionMessage - Whether this checkpoint is for an attempt completion message
 	 * @param completionMessageTs - Optional timestamp of the completion message to update with checkpoint hash
 	 */
-	async saveCheckpoint(isAttemptCompletionMessage: boolean = false, completionMessageTs?: number): Promise<void> {
+	async saveCheckpoint(isAttemptCompletionMessage = false, completionMessageTs?: number): Promise<void> {
 		try {
 			// If checkpoints are disabled or previously encountered a timeout error, return early
 			if (
@@ -793,14 +793,14 @@ export class TaskCheckpointManager implements ICheckpointManager {
 						"Checkpoints are taking longer than expected to initialize. Working in a large repository? Consider re-opening Cline in a project that uses git, or disabling checkpoints.",
 					)
 				}
-			}, 7_000)
+			}, 15_000)
 
 			// Timeout - If checkpoints take too long to initialize, warn user and disable checkpoints for the task
 			const workspacePath = await this.getWorkspacePath()
 			const tracker = await pTimeout(
 				CheckpointTracker.create(this.task.taskId, this.config.enableCheckpoints, workspacePath),
 				{
-					milliseconds: 15_000,
+					milliseconds: 30_000,
 					message:
 						"Checkpoints taking too long to initialize. Consider re-opening Cline in a project that uses git, or disabling checkpoints.",
 				},

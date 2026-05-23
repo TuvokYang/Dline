@@ -1,6 +1,7 @@
 import { COMMAND_OUTPUT_STRING, COMMAND_REQ_APP_STRING } from "@shared/combineCommandSequences"
 import { ClineMessage } from "@shared/ExtensionMessage"
 import { StringRequest } from "@shared/proto/cline/common"
+import { TerminalIcon } from "lucide-react"
 import { memo, useEffect, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
@@ -189,7 +190,7 @@ export const CommandOutputRow = memo(
 						})}
 						onClick={() => setIsCollapsed(false)}
 						type="button">
-						<div className={cn("rounded-full w-2 h-2 shrink-0", colors.dot)} />
+						<TerminalIcon className={cn("size-2 shrink-0", colors.text)} />
 						<span className="text-sm text-left truncate flex-1 opacity-70">{command}</span>
 					</button>
 				</>
@@ -214,7 +215,7 @@ export const CommandOutputRow = memo(
 								if (isCommandCompleted) setIsCollapsed(true)
 							}}>
 							<div className="flex items-center gap-2 flex-1 min-w-0">
-								<div className={cn("rounded-full w-2 h-2 shrink-0", colors.dot)} />
+								<TerminalIcon className={cn("size-2 shrink-0", colors.text)} />
 								<span className={cn("font-medium text-base shrink-0", colors.text)}>{statusText}</span>
 							</div>
 							<div className="flex items-center gap-2 shrink-0">

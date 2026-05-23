@@ -4,6 +4,7 @@ import { WorkspacePathAdapter } from "@core/workspace/WorkspacePathAdapter"
 import { showApprovalNotification, showSystemNotification } from "@integrations/notifications"
 import { COMMAND_REQ_APP_STRING } from "@shared/combineCommandSequences"
 import { ClineAsk } from "@shared/ExtensionMessage"
+import { findLastIndex } from "@shared/array"
 import { arePathsEqual } from "@utils/path"
 import { telemetryService } from "@/services/telemetry"
 import { ClineDefaultTool } from "@/shared/tools"
@@ -254,6 +255,12 @@ export class ExecuteCommandToolHandler implements IFullyManagedTool {
 				config,
 			)
 			if (!didApprove) {
+				// Mark the command ask message as skipped so the UI shows the correct status
+				const msgs = config.messageState.getClineMessages()
+				const cmdIdx = findLastIndex(msgs, (m: any) => m.ask === "command" || m.say === "command")
+				if (cmdIdx !== -1) {
+					await config.callbacks.updateClineMessage(cmdIdx, { commandStatus: "skipped" })
+				}
 				telemetryService.captureToolUsage(
 					config.ulid,
 					block.name,

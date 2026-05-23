@@ -4,7 +4,7 @@ import { AskResponseRequest, NewTaskRequest } from "@shared/proto/cline/task"
 import { useCallback, useRef } from "react"
 import { useExtensionState } from "@/context/ExtensionStateContext"
 import { SlashServiceClient, TaskServiceClient } from "@/services/grpc-client"
-import type { ButtonActionType } from "../shared/buttonConfig"
+import { isApiReqActive, type ButtonActionType } from "../shared/buttonConfig"
 import type { ChatState, MessageHandlers } from "../types/chatTypes"
 
 /**
@@ -99,8 +99,7 @@ export function useMessageHandlers(messages: ClineMessage[], chatState: ChatStat
 					// No clineAsk set - check if task is actively running
 					// If so, allow interrupting it with feedback
 					const lastMessage = messages[messages.length - 1]
-					const isTaskRunning =
-						lastMessage.partial === true || (lastMessage.type === "say" && lastMessage.say === "api_req_started")
+					const isTaskRunning = lastMessage.partial === true || isApiReqActive(lastMessage)
 
 					if (isTaskRunning) {
 						// Task is running - send message as interruption/feedback

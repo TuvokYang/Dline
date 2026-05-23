@@ -138,6 +138,12 @@ export interface TaskCallbacks {
 		userContent: ClineContent[],
 		context: "initial_task" | "resume" | "feedback",
 	) => Promise<{ cancel?: boolean; wasCancelled?: boolean; contextModification?: string; errorMessage?: string }>
+
+	/** Update a cline message at given index and notify frontend (used for command status updates) */
+	updateClineMessage: (
+		index: number,
+		updates: { text?: string; exitCode?: number; commandStatus?: "pending" | "running" | "completed" | "skipped" },
+	) => Promise<void>
 }
 
 /**

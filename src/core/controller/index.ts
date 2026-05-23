@@ -327,7 +327,7 @@ export class Controller {
 		})
 
 		if (historyItem) {
-			this.task.resumeTaskFromHistory()
+			await this.task.resumeTaskFromHistory()
 		} else if (task || images || files) {
 			this.task.startTask(task, images, files)
 		}
@@ -390,9 +390,13 @@ export class Controller {
 		const didSwitchToActMode = modeToSwitchTo === "act"
 
 		// When switching from ACT to PLAN, cancel any in-flight request first
-		// so the task is clean before the mode change.
-		if (!didSwitchToActMode && this.task?.taskState.isStreaming) {
-			await this.cancelTask()
+		// so the task is clean before the mode change. Only cancel if there is
+		// actual active work to avoid redundant cancellation after user cancel.
+		if (!didSwitchToActMode && this.task) {
+			const hasActiveWork = this.task.taskState.isStreaming || this.task.taskState.isWaitingForFirstChunk
+			if (hasActiveWork) {
+				await this.cancelTask()
+			}
 		}
 
 		// Store mode to global state
@@ -444,6 +448,40 @@ export class Controller {
 			return
 		}
 
+		// Only cancel if there is actual active work to stop.
+		// If the task is already idle (waiting for user input, completed,
+		// or paused), still clean up residual messages so the frontend
+		// doesn't show a stale Cancel button.
+		const hasActiveWork = this.task.taskState.isStreaming || this.task.taskState.isWaitingForFirstChunk
+		if (!hasActiveWork) {
+			const msgs = this.task.messageStateHandler.getClineMessages()
+			// Remove any partial messages left over from streaming
+			const partialTs = msgs.filter((m) => m.partial === true).map((m) => m.ts)
+			// Also remove api_req_started messages that lack completion markers
+			// (no cost, cancelReason, or streamingFailedMessage). These are stale
+			// API request markers from interrupted historical tasks that cause the
+			// frontend to show a Cancel button with no actual work to cancel.
+			const staleApiReqTs = msgs
+				.filter((m) => {
+					if (m.type !== "say" || m.say !== "api_req_started" || !m.text) {
+						return false
+					}
+					try {
+						const info = JSON.parse(m.text)
+						return info.cost == null && info.cancelReason == null && info.streamingFailedMessage == null
+					} catch {
+						return true
+					}
+				})
+				.map((m) => m.ts)
+			const allTsToRemove = [...new Set([...partialTs, ...staleApiReqTs])]
+			if (allTsToRemove.length > 0) {
+				await this.task.messageStateHandler.removeMessagesByTs(allTsToRemove)
+				await this.postStateToWebview()
+			}
+			return
+		}
+
 		// Set flag to prevent concurrent cancellations
 		this.cancelInProgress = true
 
@@ -461,9 +499,9 @@ export class Controller {
 				Logger.debug(`[cancelTask] partial ts to remove: ${partialTs.length}`)
 			}
 
-			Logger.debug("[cancelTask] aborting task...")
+			Logger.debug("[cancelTask] pausing task...")
 			try {
-				await this.task.abortTask()
+				await this.task.pause()
 			} catch (error) {
 				Logger.error("Failed to abort task", error)
 			}
@@ -1040,7 +1078,7 @@ export class Controller {
 			// Clear task settings cache when task ends
 			await this.stateManager.clearTaskSettings()
 		}
-		await this.task?.abortTask()
+		await this.task?.terminate()
 		this.task = undefined // removes reference to it, so once promises end it will be garbage collected
 		await this.postStateToWebview()
 	}

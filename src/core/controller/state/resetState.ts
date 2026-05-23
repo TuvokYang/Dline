@@ -30,7 +30,7 @@ export async function resetState(controller: Controller, request: ResetStateRequ
 		}
 
 		if (controller.task) {
-			controller.task.abortTask()
+			controller.task.terminate()
 			controller.task = undefined
 		}
 
