@@ -183,11 +183,7 @@ export const CommandOutputRow = memo(
 				<>
 					{commandHeader}
 					<button
-						className={cn("w-full flex items-center gap-2 px-2 py-1.5 rounded-sm cursor-pointer transition-colors", {
-							"bg-success/10 border border-success/30": exitCode === 0,
-							"bg-error/10 border border-error/30": exitCode != null && exitCode !== 0,
-							"bg-description/10 border border-description/30": exitCode == null,
-						})}
+						className="w-full flex items-center gap-2 p-2 bg-code border border-editor-group-border rounded-xs cursor-pointer transition-colors"
 						onClick={() => setIsCollapsed(false)}
 						type="button">
 						<TerminalIcon className={cn("size-2 shrink-0", colors.text)} />

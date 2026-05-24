@@ -37,11 +37,16 @@ interface DiffEditRowProps {
 }
 
 export const DiffEditRow = memo<DiffEditRowProps>(({ patch, path, isLoading, startLineNumbers }) => {
-	const { parsedFiles, isStreaming } = useMemo(() => {
+	const { parsedFiles, isStreaming, matchFailed } = useMemo(() => {
 		const parsed = parsePatch(patch, path)
+		// Match failed: message is complete (not partial) but SEARCH blocks lack REPLACE counterparts
+		const searchCount = (patch.match(/-{7,} SEARCH/g) || []).length
+		const replaceCount = (patch.match(/\+{7,} REPLACE/g) || []).length
+		const matchFailed = !isLoading && searchCount > 0 && replaceCount < searchCount
 		return {
 			parsedFiles: parsed.parsedFiles,
 			isStreaming: isLoading || parsed.isStreaming,
+			matchFailed,
 		}
 	}, [patch, path, isLoading])
 
@@ -55,6 +60,8 @@ export const DiffEditRow = memo<DiffEditRowProps>(({ patch, path, isLoading, sta
 				<FileBlock
 					file={file}
 					isStreaming={isStreaming}
+					isPartial={isLoading}
+					matchFailed={matchFailed}
 					key={`${file.path}-${index}`}
 					startLineNumber={startLineNumbers?.[index]}
 				/>
@@ -63,9 +70,15 @@ export const DiffEditRow = memo<DiffEditRowProps>(({ patch, path, isLoading, sta
 	)
 })
 
-const FileBlock = memo<{ file: Patch; isStreaming: boolean; startLineNumber?: number }>(
-	({ file, isStreaming, startLineNumber }) => {
-		const [isExpanded, setIsExpanded] = useState(true)
+const FileBlock = memo<{
+	file: Patch
+	isStreaming: boolean
+	isPartial?: boolean
+	matchFailed?: boolean
+	startLineNumber?: number
+}>(
+	({ file, isStreaming, isPartial, matchFailed, startLineNumber }) => {
+		const [isExpanded, setIsExpanded] = useState(false)
 		const scrollContainerRef = useRef<HTMLDivElement>(null)
 		const shouldFollowRef = useRef(true)
 		const isProgrammaticScrollRef = useRef(false)
@@ -84,6 +97,11 @@ const FileBlock = memo<{ file: Patch; isStreaming: boolean; startLineNumber?: nu
 				isProgrammaticScrollRef.current = false
 			})
 		}, [file.lines.length, isExpanded, isStreaming])
+
+		// Auto-expand while partial content streams in, collapse when complete
+		useEffect(() => {
+			setIsExpanded(!!isPartial)
+		}, [isPartial])
 
 		const handleScroll = () => {
 			const container = scrollContainerRef.current
@@ -146,7 +164,10 @@ const FileBlock = memo<{ file: Patch; isStreaming: boolean; startLineNumber?: nu
 						<div className={cn("flex items-center gap-2 w-full", actionStyle.borderClass)}>
 							<ActionIcon className={cn("w-5 h-5", actionStyle.iconClass)} />
 							<span
-								className="font-medium truncate hover:underline hover:text-link"
+								className={cn(
+									"font-medium truncate hover:underline hover:text-link",
+									matchFailed && "line-through decoration-2 decoration-error",
+								)}
 								onClick={handleOpenFile}
 								title="Open file in editor">
 								{file.path}
@@ -181,6 +202,8 @@ const FileBlock = memo<{ file: Patch; isStreaming: boolean; startLineNumber?: nu
 	},
 	(prev, next) =>
 		prev.isStreaming === next.isStreaming &&
+		prev.isPartial === next.isPartial &&
+		prev.matchFailed === next.matchFailed &&
 		prev.startLineNumber === next.startLineNumber &&
 		prev.file.path === next.file.path &&
 		prev.file.action === next.file.action &&

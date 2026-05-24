@@ -27,14 +27,10 @@ import {
 	LightbulbIcon,
 	Link2Icon,
 	LoaderCircleIcon,
-	PencilIcon,
 	RefreshCwIcon,
 	SearchIcon,
 	SettingsIcon,
-	SquareArrowOutUpRightIcon,
-	SquareMinusIcon,
-	TerminalIcon,
-	TriangleAlertIcon,
+	SquareArrowOutUpRightIcon, TriangleAlertIcon
 } from "lucide-react"
 import { MouseEvent, memo, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useSize } from "react-use"
@@ -323,10 +319,7 @@ export const ChatRowContent = memo(
 						<span className="text-error font-bold">Cline is having trouble...</span>,
 					]
 				case "command":
-					return [
-						null,
-						null,
-					]
+					return [null, null]
 				case "use_mcp_server":
 					const mcpServerUse = JSON.parse(message.text || "{}") as ClineAskUseMcpServer
 					return [
@@ -430,19 +423,8 @@ export const ChatRowContent = memo(
 
 			switch (tool.tool) {
 				case "editedExistingFile":
-					const content = tool?.content || ""
-					const isApplyingPatch = content?.startsWith("%%bash") && !content.endsWith("*** End Patch\nEOF")
-					const editToolTitle = isApplyingPatch
-						? "Cline is creating patches to edit this file:"
-						: "Cline wants to edit this file:"
 					return (
-						<div>
-							<div className={HEADER_CLASSNAMES}>
-								<PencilIcon className="size-2" />
-								{tool.operationIsLocatedInWorkspace === false &&
-									toolIcon("sign-out", "yellow", -90, "This file is outside of your workspace")}
-								<span style={{ fontWeight: "bold" }}>{editToolTitle}</span>
-							</div>
+						<>
 							{backgroundEditEnabled && tool.path && tool.content ? (
 								<DiffEditRow
 									isLoading={message.partial}
@@ -452,42 +434,26 @@ export const ChatRowContent = memo(
 								/>
 							) : (
 								<CodeAccordian
-									// isLoading={message.partial}
 									code={tool.content}
 									isExpanded={isExpanded}
 									onToggleExpand={handleToggle}
 									path={tool.path!}
 								/>
 							)}
-						</div>
+						</>
 					)
 				case "fileDeleted":
 					return (
-						<div>
-							<div className={HEADER_CLASSNAMES}>
-								<SquareMinusIcon className="size-2" />
-								{tool.operationIsLocatedInWorkspace === false &&
-									toolIcon("sign-out", "yellow", -90, "This file is outside of your workspace")}
-								<span style={{ fontWeight: "bold" }}>Cline wants to delete this file:</span>
-							</div>
-							<CodeAccordian
-								// isLoading={message.partial}
-								code={tool.content}
-								isExpanded={isExpanded}
-								onToggleExpand={handleToggle}
-								path={tool.path!}
-							/>
-						</div>
+						<CodeAccordian
+							code={tool.content}
+							isExpanded={isExpanded}
+							onToggleExpand={handleToggle}
+							path={tool.path!}
+						/>
 					)
 				case "newFileCreated":
 					return (
-						<div>
-							<div className={HEADER_CLASSNAMES}>
-								<FilePlus2Icon className="size-2" />
-								{tool.operationIsLocatedInWorkspace === false &&
-									toolIcon("sign-out", "yellow", -90, "This file is outside of your workspace")}
-								<span className="font-bold">Cline wants to create a new file:</span>
-							</div>
+						<>
 							{backgroundEditEnabled && tool.path && tool.content ? (
 								<DiffEditRow patch={tool.content} path={tool.path} startLineNumbers={tool.startLineNumbers} />
 							) : (
@@ -499,7 +465,7 @@ export const ChatRowContent = memo(
 									path={tool.path!}
 								/>
 							)}
-						</div>
+						</>
 					)
 				case "readFile":
 					const isImage = isImageFile(tool.path || "")
