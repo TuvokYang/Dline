@@ -1,5 +1,30 @@
 # Changelog
 
+## [5.0.2]
+
+### Added
+
+- Auto-detect Windows terminal encoding via jschardet + iconv-lite in StandaloneTerminalProcess, fixing GBK/CP936 garbled text in CLI/JetBrains mode
+- ANSI escape sequence rendering in CommandOutputRow (ansi-to-html + DOMPurify sanitization)
+- Floating scroll-to-bottom button for long message history navigation
+- Command execution status display with colored backgrounds and collapse bar
+- README_en.md with Chinese/English language switcher links
+
+### Fixed
+
+- Webview gray screen crash under long conversation context (root cause fix)
+- Non-ASCII characters (CJK, emoji) stripped from first line of VSCode terminal output
+- Message area scroll jank and bounce on cancel/toBottom button issues
+- Command status color indicators and match-failed detection logic
+- Diff edit collapse behavior and command bar visual consistency
+- Historical task scroll positioning stability
+- Cancel/resume flow partial cleanup and scroll edge cases
+
+### Changed
+
+- Diff Edit and Command output rows collapsed by default after completion
+- Rewrite README.md to focus on Dline improvements over Cline
+
 ## [5.0.1]
 
 ### Changed
