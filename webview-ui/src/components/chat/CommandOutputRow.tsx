@@ -177,13 +177,20 @@ export const CommandOutputRow = memo(
 			</div>
 		)
 
-		// Collapsed bar: dot + truncated command, colored background by exitCode
+		// Collapsed bar with colored background by exitCode
 		if (isCollapsed && isCommandCompleted) {
 			return (
 				<>
 					{commandHeader}
 					<button
-						className="w-full flex items-center gap-2 p-2 bg-code border border-editor-group-border rounded-xs cursor-pointer transition-colors"
+						className={cn(
+							"w-full flex items-center gap-2 p-2 rounded-xs cursor-pointer transition-colors border",
+							{
+								"bg-success/10 border-success/30": exitCode === 0,
+								"bg-error/10 border-error/30": exitCode != null && exitCode !== 0,
+								"bg-description/10 border-description/30": exitCode == null,
+							},
+						)}
 						onClick={() => setIsCollapsed(false)}
 						type="button">
 						<TerminalIcon className={cn("size-2 shrink-0", colors.text)} />
@@ -236,7 +243,12 @@ export const CommandOutputRow = memo(
 						</div>
 					)}
 
-					<div className="bg-code opacity-60 text-sm">
+					<div
+						className={cn("opacity-60 text-sm", {
+							"bg-success/5": exitCode === 0,
+									"bg-error/10": exitCode != null && exitCode !== 0,
+							"bg-code": exitCode == null || exitCode === undefined,
+						})}>
 						<CodeBlock forceWrap={true} source={`${"```"}shell\n${command}\n${"```"}`} />
 					</div>
 

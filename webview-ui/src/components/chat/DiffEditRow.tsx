@@ -39,10 +39,9 @@ interface DiffEditRowProps {
 export const DiffEditRow = memo<DiffEditRowProps>(({ patch, path, isLoading, startLineNumbers }) => {
 	const { parsedFiles, isStreaming, matchFailed } = useMemo(() => {
 		const parsed = parsePatch(patch, path)
-		// Match failed: message is complete (not partial) but SEARCH blocks lack REPLACE counterparts
+		// Match failed: completed SEARCH/REPLACE format without line numbers from backend
 		const searchCount = (patch.match(/-{7,} SEARCH/g) || []).length
-		const replaceCount = (patch.match(/\+{7,} REPLACE/g) || []).length
-		const matchFailed = !isLoading && searchCount > 0 && replaceCount < searchCount
+		const matchFailed = !isLoading && searchCount > 0 && (!startLineNumbers || startLineNumbers.length === 0)
 		return {
 			parsedFiles: parsed.parsedFiles,
 			isStreaming: isLoading || parsed.isStreaming,
