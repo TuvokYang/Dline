@@ -11,7 +11,11 @@ import type { ChatState, MessageHandlers } from "../types/chatTypes"
  * Custom hook for managing message handlers
  * Handles sending messages, button clicks, and task management
  */
-export function useMessageHandlers(messages: ClineMessage[], chatState: ChatState): MessageHandlers {
+export function useMessageHandlers(
+	messages: ClineMessage[],
+	chatState: ChatState,
+	disableAutoScrollRef?: React.MutableRefObject<boolean>,
+): MessageHandlers {
 	const { backgroundCommandRunning } = useExtensionState()
 	const {
 		setInputValue,
@@ -124,9 +128,9 @@ export function useMessageHandlers(messages: ClineMessage[], chatState: ChatStat
 					setSelectedFiles([])
 					setEnableButtons(false)
 
-					// Reset auto-scroll
-					if ("disableAutoScrollRef" in chatState) {
-						;(chatState as any).disableAutoScrollRef.current = false
+					// Reset auto-scroll so new responses continue to scroll into view
+					if (disableAutoScrollRef) {
+						disableAutoScrollRef.current = false
 					}
 				}
 			}
@@ -141,6 +145,7 @@ export function useMessageHandlers(messages: ClineMessage[], chatState: ChatStat
 			setSelectedImages,
 			setSelectedFiles,
 			setEnableButtons,
+			disableAutoScrollRef,
 			chatState,
 		],
 	)
@@ -288,8 +293,9 @@ export function useMessageHandlers(messages: ClineMessage[], chatState: ChatStat
 					break
 			}
 
-			if ("disableAutoScrollRef" in chatState) {
-				;(chatState as any).disableAutoScrollRef.current = false
+			// Reset auto-scroll so new responses continue to scroll into view
+			if (disableAutoScrollRef) {
+				disableAutoScrollRef.current = false
 			}
 		},
 		[
@@ -299,7 +305,7 @@ export function useMessageHandlers(messages: ClineMessage[], chatState: ChatStat
 			clearInputState,
 			handleSendMessage,
 			startNewTask,
-			chatState,
+			disableAutoScrollRef,
 			backgroundCommandRunning,
 			setSendingDisabled,
 			setEnableButtons,

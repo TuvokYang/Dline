@@ -133,36 +133,32 @@ export function useScrollBehavior(
 		// Range changed callback - we now use scroll position instead
 		// but keep this for potential future use
 	}, [])
+	// User-initiated smooth scroll (e.g., to-bottom button).
+	// Uses scrollTo with MAX_SAFE_INTEGER so Virtuoso's Footer is included.
 	const scrollToBottomSmooth = useMemo(
 		() =>
 			debounce(
 				() => {
-					const lastIndex = groupedMessages.length - 1
-					if (lastIndex >= 0) {
-						virtuosoRef.current?.scrollToIndex({
-							index: lastIndex,
-							align: "end",
-							behavior: "smooth",
-						})
-					}
+					virtuosoRef.current?.scrollTo({
+						top: Number.MAX_SAFE_INTEGER,
+						behavior: "smooth",
+					})
 				},
 				10,
 				{ immediate: true },
 			),
-		[groupedMessages],
+		[],
 	)
 
-	// Smooth scroll to bottom with debounce
+	// Programmatic instant scroll to bottom.
+	// Uses scrollTo with MAX_SAFE_INTEGER so Virtuoso's Footer is included,
+	// fixing the issue where to-bottom button couldn't reach the true bottom.
 	const scrollToBottomAuto = useCallback(() => {
-		const lastIndex = groupedMessages.length - 1
-		if (lastIndex >= 0) {
-			virtuosoRef.current?.scrollToIndex({
-				index: lastIndex,
-				align: "end",
-				behavior: "auto",
-			})
-		}
-	}, [groupedMessages])
+		virtuosoRef.current?.scrollTo({
+			top: Number.MAX_SAFE_INTEGER,
+			behavior: "auto",
+		})
+	}, [])
 
 	const scrollToMessage = useCallback(
 		(messageIndex: number) => {
@@ -269,11 +265,15 @@ export function useScrollBehavior(
 		[groupedMessages, expandedRows, scrollToBottomAuto, isAtBottom],
 	)
 
+	// Handle row height changes during streaming.
+	// Uses auto (instant) scroll so it doesn't compete with other scroll sources.
+	// When the last row grows taller we follow immediately; when it shrinks we
+	// defer by one tick so Virtuoso can finish adjusting its internal layout.
 	const handleRowHeightChange = useCallback(
 		(isTaller: boolean) => {
 			if (!disableAutoScrollRef.current) {
 				if (isTaller) {
-					scrollToBottomSmooth()
+					scrollToBottomAuto()
 				} else {
 					setTimeout(() => {
 						scrollToBottomAuto()
@@ -281,28 +281,21 @@ export function useScrollBehavior(
 				}
 			}
 		},
-		[scrollToBottomSmooth, scrollToBottomAuto],
+		[scrollToBottomAuto],
 	)
 
+	// When new messages arrive, scroll to bottom in a single auto scroll.
+	// requestAnimationFrame ensures Virtuoso has finished laying out new items.
+	// The cleanup cancels stale rAFs when groupedMessages.length changes rapidly
+	// (e.g. during streaming or cancel), preventing scroll storms.
 	useEffect(() => {
 		if (!disableAutoScrollRef.current) {
-			// Delay one frame so Virtuoso has finished laying out new items
-			// before we compute the target index.
-			requestAnimationFrame(() => {
-				scrollToBottomSmooth()
-				setTimeout(() => {
-					if (!disableAutoScrollRef.current) {
-						scrollToBottomAuto()
-					}
-				}, 40)
-				setTimeout(() => {
-					if (!disableAutoScrollRef.current) {
-						scrollToBottomAuto()
-					}
-				}, 70)
+			const rafId = requestAnimationFrame(() => {
+				scrollToBottomAuto()
 			})
+			return () => cancelAnimationFrame(rafId)
 		}
-	}, [groupedMessages.length, scrollToBottomSmooth, scrollToBottomAuto])
+	}, [groupedMessages.length, scrollToBottomAuto])
 
 	useEffect(() => {
 		if (pendingScrollToMessage !== null) {
@@ -328,16 +321,24 @@ export function useScrollBehavior(
 	useEvent("wheel", handleWheel, window, { passive: true }) // passive improves scrolling performance
 
 	// When webview becomes visible again (user switches back to this tab),
-	// scroll to bottom if auto-scroll is enabled. Without this, messages
-	// accumulated while the webview was hidden are not scrolled into view.
+	// scroll to bottom if auto-scroll is enabled. We wait one frame so Virtuoso
+	// has a chance to re-layout after being hidden.
+	// Both "focus" and "visibilitychange" are monitored to cover all cases
+	// (window focus, tab switch, IDE panel toggle).
 	useEffect(() => {
-		const handleFocus = () => {
+		const handleVisibility = () => {
 			if (!disableAutoScrollRef.current) {
-				scrollToBottomAuto()
+				requestAnimationFrame(() => {
+					scrollToBottomAuto()
+				})
 			}
 		}
-		window.addEventListener("focus", handleFocus)
-		return () => window.removeEventListener("focus", handleFocus)
+		window.addEventListener("focus", handleVisibility)
+		document.addEventListener("visibilitychange", handleVisibility)
+		return () => {
+			window.removeEventListener("focus", handleVisibility)
+			document.removeEventListener("visibilitychange", handleVisibility)
+		}
 	}, [scrollToBottomAuto])
 
 	return {

@@ -514,14 +514,17 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 
 			<div className="grow flex" ref={scrollContainerRef}>
 				<Virtuoso
-					atBottomStateChange={(isAtBottom) => {
-						setIsAtBottom(isAtBottom)
+					atBottomStateChange={(atBottom) => {
+						setIsAtBottom(atBottom)
 
-						if (isAtBottom) {
+						// Reset auto-scroll flag when the user manually scrolls to the bottom
+						if (atBottom) {
 							disableAutoScrollRef.current = false
 						}
 
-						setShowScrollToBottom(disableAutoScrollRef.current && !isAtBottom)
+						// Show the to-bottom button when auto-scroll is disabled
+						// AND the user is not already at the bottom
+						setShowScrollToBottom(disableAutoScrollRef.current && !atBottom)
 					}}
 					atBottomThreshold={10}
 					className="scrollable grow overflow-y-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
