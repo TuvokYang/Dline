@@ -11,6 +11,8 @@
 import { telemetryService } from "@services/telemetry"
 import { ChildProcess, spawn } from "child_process"
 import { EventEmitter } from "events"
+import * as iconv from "iconv-lite"
+import * as chardet from "jschardet"
 import { terminateProcessTree } from "@/utils/process-termination"
 
 import {
@@ -70,8 +72,42 @@ export class StandaloneTerminalProcess extends EventEmitter<TerminalProcessEvent
 	/** Whether the process has completed */
 	private isCompleted = false
 
+	/** Detected encoding for the process output (cached after first detection) */
+	private detectedEncoding: string | null = null
+
 	constructor() {
 		super()
+	}
+
+	/**
+	 * Decode a Buffer to string using auto-detected encoding.
+	 * Uses jschardet on the first chunk to detect encoding, caches it for
+	 * subsequent chunks. Falls back to UTF-8 if detection fails.
+	 * This ensures correct handling of non-UTF-8 terminals (e.g., Windows cmd.exe with CP936/GBK).
+	 *
+	 * @param data The Buffer to decode
+	 * @returns Decoded UTF-8 string
+	 */
+	private decodeBuffer(data: Buffer): string {
+		if (!this.detectedEncoding) {
+			let encoding: string
+			const result = chardet.detect(data)
+			if (typeof result === "string") {
+				encoding = result
+			} else if (result && (result as any).encoding) {
+				encoding = (result as any).encoding
+			} else {
+				encoding = "utf-8"
+			}
+			// Normalize encoding name for iconv-lite compatibility
+			// GB2312/GBK variants all map to "gbk" in iconv-lite
+			if (encoding.toLowerCase().startsWith("gb")) {
+				encoding = "gbk"
+			}
+			this.detectedEncoding = encoding
+		}
+		// Use detected encoding; iconv-lite gracefully handles pure ASCII as subset
+		return iconv.decode(data, this.detectedEncoding!)
 	}
 
 	/**
@@ -128,7 +164,7 @@ export class StandaloneTerminalProcess extends EventEmitter<TerminalProcessEvent
 
 			// Handle stdout
 			this.childProcess.stdout?.on("data", (data: Buffer) => {
-				const output = data.toString()
+				const output = this.decodeBuffer(data)
 				this.handleOutput(output, didEmitEmptyLine)
 				if (!didEmitEmptyLine && output) {
 					this.emit("line", "") // Signal start of output
@@ -138,7 +174,7 @@ export class StandaloneTerminalProcess extends EventEmitter<TerminalProcessEvent
 
 			// Handle stderr
 			this.childProcess.stderr?.on("data", (data: Buffer) => {
-				const output = data.toString()
+				const output = this.decodeBuffer(data)
 				this.handleOutput(output, didEmitEmptyLine)
 				if (!didEmitEmptyLine && output) {
 					this.emit("line", "")

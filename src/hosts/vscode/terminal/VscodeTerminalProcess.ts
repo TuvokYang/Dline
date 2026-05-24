@@ -115,9 +115,10 @@ export class VscodeTerminalProcess extends EventEmitter<TerminalProcessEvents> i
 					data = stripAnsi(data)
 					// Split data by newlines
 					const lines = data ? data.split("\n") : []
-					// Remove non-human readable characters from the first line
+					// Strip control characters (0x00-0x1F and 0x7F-0x9F) from the first line,
+					// but preserve multi-byte characters (e.g., CJK, emoji) for international use.
 					if (lines.length > 0) {
-						lines[0] = lines[0].replace(/[^\x20-\x7E]/g, "")
+						lines[0] = lines[0].replace(/[\x00-\x1F\x7F-\x9F]/g, "")
 					}
 					// Check for duplicated first character that might be a terminal artifact
 					// But skip this check for known syntax characters like {, [, ", etc.

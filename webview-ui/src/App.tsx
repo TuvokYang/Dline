@@ -11,7 +11,7 @@ import WorktreesView from "./components/worktrees/WorktreesView"
 import { useClineAuth } from "./context/ClineAuthContext"
 import { useExtensionState } from "./context/ExtensionStateContext"
 import { Providers } from "./Providers"
-import { StateServiceClient, UiServiceClient } from "./services/grpc-client"
+import { UiServiceClient } from "./services/grpc-client"
 
 const AppContent = () => {
 	const {

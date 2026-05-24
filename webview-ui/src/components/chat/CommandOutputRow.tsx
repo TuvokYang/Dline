@@ -1,6 +1,8 @@
 import { COMMAND_OUTPUT_STRING, COMMAND_REQ_APP_STRING } from "@shared/combineCommandSequences"
 import { ClineMessage } from "@shared/ExtensionMessage"
 import { StringRequest } from "@shared/proto/cline/common"
+import AnsiUp from "ansi-to-html"
+import DOMPurify from "dompurify"
 import { TerminalIcon } from "lucide-react"
 import { memo, useEffect, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
@@ -8,6 +10,19 @@ import { cn } from "@/lib/utils"
 import { FileServiceClient } from "@/services/grpc-client"
 import CodeBlock from "../common/CodeBlock"
 import ExpandHandle from "./ExpandHandle"
+
+// ANSI color converter instance (shared across renders for performance)
+const ansiUp = new AnsiUp()
+
+// ANSI escape sequence regex pattern for detection
+const ANSI_ESCAPE_PATTERN = /\x1b\[[\d;]*[A-Za-z]/
+
+/**
+ * Check if a string contains ANSI escape sequences.
+ */
+function hasAnsiSequences(text: string): boolean {
+	return ANSI_ESCAPE_PATTERN.test(text)
+}
 
 export const CommandOutputContent = memo(
 	({
@@ -44,7 +59,57 @@ export const CommandOutputContent = memo(
 		const logFilePathMatch = output.match(/📋 Output is being logged to: ([^\n]+)/)
 		const logFilePath = logFilePathMatch ? logFilePathMatch[1].trim() : null
 
+		/**
+		 * Render ANSI-colored output as sanitized HTML.
+		 * Converts ANSI escape sequences to HTML spans with inline styles.
+		 */
+		const renderAnsiOutput = (text: string) => {
+			const rawHtml = ansiUp.toHtml(text)
+			const cleanHtml = DOMPurify.sanitize(rawHtml, {
+				ALLOWED_TAGS: ["span", "br"],
+				ALLOWED_ATTR: ["style"],
+			})
+			return (
+				<pre
+					className="text-white p-3 m-0 font-mono text-xs leading-relaxed whitespace-pre-wrap break-all"
+					dangerouslySetInnerHTML={{ __html: cleanHtml }}
+					style={{ backgroundColor: "var(--vscode-editor-background, #1e1e1e)" }}
+				/>
+			)
+		}
+
 		const renderOutput = () => {
+			// If output contains ANSI escape sequences, render with color support
+			if (hasAnsiSequences(output)) {
+				if (!logFilePath) {
+					return renderAnsiOutput(output)
+				}
+				// Split around log file path and render each segment with ANSI support
+				const logPathLineStart = output.indexOf("📋 Output is being logged to:")
+				const logPathLineEnd = output.indexOf("\n", logPathLineStart)
+				const beforeLogPath = output.substring(0, logPathLineStart)
+				const afterLogPath = logPathLineEnd !== -1 ? output.substring(logPathLineEnd) : ""
+				const fileName = logFilePath.split("/").pop() || logFilePath
+				return (
+					<div className="border border-editor-group-border rounded-sm">
+						{beforeLogPath && renderAnsiOutput(beforeLogPath)}
+						<div
+							className="flex flex-wrap items-center gap-1.5 px-3 py-2 mx-2 my-1.5 rounded-sm bg-banner-background cursor-pointer hover:brightness-110 transition-colors"
+							onClick={() => {
+								FileServiceClient.openFile(StringRequest.create({ value: logFilePath })).catch((err) =>
+									console.error("Failed to open log file:", err),
+								)
+							}}
+							title={`Click to open: ${logFilePath}`}>
+							<span className="shrink-0">📋 Output is being logged to:</span>
+							<span className="text-vscode-textLink-foreground underline break-all">{fileName}</span>
+						</div>
+						{afterLogPath && renderAnsiOutput(afterLogPath)}
+					</div>
+				)
+			}
+
+			// Fallback: no ANSI sequences, use standard CodeBlock rendering
 			if (!logFilePath) {
 				return <CodeBlock forceWrap={true} source={`${"```"}shell\n${output}\n${"```"}`} />
 			}
@@ -183,14 +248,11 @@ export const CommandOutputRow = memo(
 				<>
 					{commandHeader}
 					<button
-						className={cn(
-							"w-full flex items-center gap-2 p-2 rounded-xs cursor-pointer transition-colors border",
-							{
-								"bg-success/10 border-success/30": exitCode === 0,
-								"bg-error/10 border-error/30": exitCode != null && exitCode !== 0,
-								"bg-description/10 border-description/30": exitCode == null,
-							},
-						)}
+						className={cn("w-full flex items-center gap-2 p-2 rounded-xs cursor-pointer transition-colors border", {
+							"bg-success/10 border-success/30": exitCode === 0,
+							"bg-error/10 border-error/30": exitCode != null && exitCode !== 0,
+							"bg-description/10 border-description/30": exitCode == null,
+						})}
 						onClick={() => setIsCollapsed(false)}
 						type="button">
 						<TerminalIcon className={cn("size-2 shrink-0", colors.text)} />
@@ -246,7 +308,7 @@ export const CommandOutputRow = memo(
 					<div
 						className={cn("opacity-60 text-sm", {
 							"bg-success/5": exitCode === 0,
-									"bg-error/10": exitCode != null && exitCode !== 0,
+							"bg-error/10": exitCode != null && exitCode !== 0,
 							"bg-code": exitCode == null || exitCode === undefined,
 						})}>
 						<CodeBlock forceWrap={true} source={`${"```"}shell\n${command}\n${"```"}`} />
