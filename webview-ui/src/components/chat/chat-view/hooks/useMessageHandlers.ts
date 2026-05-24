@@ -4,7 +4,7 @@ import { AskResponseRequest, NewTaskRequest } from "@shared/proto/cline/task"
 import { useCallback, useRef } from "react"
 import { useExtensionState } from "@/context/ExtensionStateContext"
 import { SlashServiceClient, TaskServiceClient } from "@/services/grpc-client"
-import { isApiReqActive, type ButtonActionType } from "../shared/buttonConfig"
+import { type ButtonActionType, isApiReqActive } from "../shared/buttonConfig"
 import type { ChatState, MessageHandlers } from "../types/chatTypes"
 
 /**

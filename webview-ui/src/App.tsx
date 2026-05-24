@@ -18,7 +18,6 @@ const AppContent = () => {
 		didHydrateState,
 		showWelcome,
 		shouldShowAnnouncement,
-		dismissedBanners,
 		showMcp,
 		mcpTab,
 		showSettings,
@@ -57,12 +56,12 @@ const AppContent = () => {
 		if (!didHydrateState || showWelcome || hasShownKanbanModal) {
 			return
 		}
-		const hasDismissedKanbanModal = dismissedBanners?.some((banner) => banner.bannerId === CLINE_KANBAN_MODAL_DISMISS_ID)
+		const hasDismissedKanbanModal = localStorage.getItem(CLINE_KANBAN_MODAL_DISMISS_ID) === "true"
 		if (!hasDismissedKanbanModal) {
 			setShowKanbanModal(true)
 		}
 		setHasShownKanbanModal(true)
-	}, [didHydrateState, dismissedBanners, hasShownKanbanModal, showWelcome])
+	}, [didHydrateState, hasShownKanbanModal, showWelcome])
 
 	// Keep update announcements queued until the Kanban modal has either shown and closed or been skipped.
 	useEffect(() => {
@@ -87,9 +86,7 @@ const AppContent = () => {
 	const handleCloseKanbanModal = useCallback((doNotShowAgain: boolean) => {
 		setShowKanbanModal(false)
 		if (doNotShowAgain) {
-			StateServiceClient.dismissBanner({ value: CLINE_KANBAN_MODAL_DISMISS_ID }).catch((error) =>
-				console.error("Failed to persist Cline Kanban modal dismissal:", error),
-			)
+			localStorage.setItem(CLINE_KANBAN_MODAL_DISMISS_ID, "true")
 		}
 	}, [])
 

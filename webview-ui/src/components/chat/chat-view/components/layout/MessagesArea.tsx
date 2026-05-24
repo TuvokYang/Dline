@@ -190,11 +190,7 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 		if (lastRawMessage?.type === "ask") return false
 		if (lastRawMessage?.type === "say" && lastRawMessage.say === "completion_result") return false
 
-		if (
-			lastRawMessage?.type === "say" &&
-			lastRawMessage.say === "api_req_started" &&
-			!isApiReqActive(lastRawMessage)
-		) {
+		if (lastRawMessage?.type === "say" && lastRawMessage.say === "api_req_started" && !isApiReqActive(lastRawMessage)) {
 			return false
 		}
 

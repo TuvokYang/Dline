@@ -1282,7 +1282,6 @@ export class Task {
 			askType = "resume_task"
 		}
 
-
 		if (!askType) {
 			// No ask type means the task is complete with no resume affordance needed.
 			// Clean up any stale api_req_started messages that lack completion markers
@@ -1313,7 +1312,6 @@ export class Task {
 			return
 		}
 
-
 		this.taskState.isInitialized = true
 		this.taskState.abort = false // Reset abort flag when resuming task
 
@@ -1339,8 +1337,6 @@ export class Task {
 		// original text so the Plan Created / question content is preserved.
 		const askText = isConversationalAsk ? lastClineMessage?.text : undefined
 		const { response, text, images, files } = await this.ask(askType, askText)
-
-
 
 		// Initialize newUserContent array for hook context
 		const newUserContent: ClineContent[] = []
@@ -1405,7 +1401,10 @@ export class Task {
 		// "PLAN_MODE_TOGGLE_RESPONSE" is a technical signal from togglePlanActMode,
 		// not user-generated content — skip displaying it as user_feedback.
 		const isToggleSignal = text === "PLAN_MODE_TOGGLE_RESPONSE"
-		if (!isToggleSignal && (response === "messageResponse" || text || (images && images.length > 0) || (files && files.length > 0))) {
+		if (
+			!isToggleSignal &&
+			(response === "messageResponse" || text || (images && images.length > 0) || (files && files.length > 0))
+		) {
 			await this.say("user_feedback", text, images, files)
 			await this.checkpointManager?.saveCheckpoint()
 			responseText = text
@@ -1511,9 +1510,7 @@ export class Task {
 			})
 		}
 
-
 		if (responseImages && responseImages.length > 0) {
-
 			newUserContent.push(...formatResponse.imageBlocks(responseImages))
 		}
 
@@ -1919,13 +1916,15 @@ export class Task {
 					.find((m) => !(m.ask === "resume_task" || m.ask === "resume_completed_task"))
 
 				if (lastRealMessage?.ask !== "completion_result") {
-					this.ask("resume_task").then(async ({ response, text, images, files }) => {
-						if (response === "yesButtonClicked") {
-							await this.resumeTask({ response, text, images, files })
-						}
-					}).catch((error) => {
-						Logger.log("[pause] Resume ask failed:", error)
-					})
+					this.ask("resume_task")
+						.then(async ({ response, text, images, files }) => {
+							if (response === "yesButtonClicked") {
+								await this.resumeTask({ response, text, images, files })
+							}
+						})
+						.catch((error) => {
+							Logger.log("[pause] Resume ask failed:", error)
+						})
 				}
 			}
 		} catch (error) {

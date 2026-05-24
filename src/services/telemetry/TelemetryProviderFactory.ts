@@ -1,10 +1,6 @@
-import { ClineEndpoint } from "@/config"
 import {
-	getValidOpenTelemetryConfig,
-	getValidRuntimeOpenTelemetryConfig,
 	OpenTelemetryClientValidConfig,
 } from "@/shared/services/config/otel-config"
-import { isPostHogConfigValid, posthogConfig } from "@/shared/services/config/posthog-config"
 import { Logger } from "@/shared/services/Logger"
 import type { ITelemetryProvider, TelemetryProperties, TelemetrySettings } from "./providers/ITelemetryProvider"
 import { OpenTelemetryClientProvider } from "./providers/opentelemetry/OpenTelemetryClientProvider"
@@ -104,36 +100,8 @@ export class TelemetryProviderFactory {
 	 * @returns Default configuration using available providers
 	 */
 	public static getDefaultConfigs(): TelemetryProviderConfig[] {
-		const configs: TelemetryProviderConfig[] = []
-
-		// Skip PostHog in selfHosted mode - enterprise customers should not send telemetry to PostHog
-		if (!ClineEndpoint.isSelfHosted() && isPostHogConfigValid(posthogConfig)) {
-			configs.push({ type: "posthog", ...posthogConfig })
-		}
-
-		// Skip build-time OTEL in selfHosted mode - enterprise customers should not send telemetry to Cline's collector
-		// Note: Runtime env OTEL and remote config OTEL are still allowed (user/org explicitly configured them)
-		const otelConfig = getValidOpenTelemetryConfig()
-		if (!ClineEndpoint.isSelfHosted() && otelConfig) {
-			configs.push({
-				type: "opentelemetry",
-				config: otelConfig,
-				bypassUserSettings: false,
-			})
-		}
-
-		const runtimeOtelConfig = getValidRuntimeOpenTelemetryConfig()
-		if (runtimeOtelConfig) {
-			configs.push({
-				type: "opentelemetry",
-				config: runtimeOtelConfig,
-				// If the user has `CLINE_OTEL_TELEMETRY_ENABLED` in his environment, enable
-				// OTEL regardless of his Cline telemetry settings
-				bypassUserSettings: true,
-			})
-		}
-
-		return configs.length > 0 ? configs : [{ type: "no-op" }]
+		// All telemetry providers disabled - no data sent to any external server
+		return [{ type: "no-op" }]
 	}
 }
 

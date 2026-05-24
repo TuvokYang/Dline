@@ -1,28 +1,28 @@
-import { WebviewProvider } from "./core/webview"
-import "./utils/path" // necessary to have access to String.prototype.toPosix
+import { WebviewProvider } from "./core/webview";
+import "./utils/path"; // necessary to have access to String.prototype.toPosix
 
-import { HostProvider } from "@/hosts/host-provider"
-import { Logger } from "@/shared/services/Logger"
-import type { StorageContext } from "@/shared/storage/storage-context"
-import { FileContextTracker } from "./core/context/context-tracking/FileContextTracker"
-import { clearOnboardingModelsCache } from "./core/controller/models/getClineOnboardingModels"
-import { HookDiscoveryCache } from "./core/hooks/HookDiscoveryCache"
-import { HookProcessRegistry } from "./core/hooks/HookProcessRegistry"
-import { StateManager } from "./core/storage/StateManager"
-import { AgentConfigLoader } from "./core/task/tools/subagent/AgentConfigLoader"
-import { ExtensionRegistryInfo } from "./registry"
-import { ErrorService } from "./services/error"
-import { featureFlagsService } from "./services/feature-flags"
-import { getDistinctId } from "./services/logging/distinctId"
-import { telemetryService } from "./services/telemetry"
-import { PostHogClientProvider } from "./services/telemetry/providers/posthog/PostHogClientProvider"
-import { ClineTempManager } from "./services/temp"
-import { cleanupTestMode } from "./services/test/TestMode"
-import { ShowMessageType } from "./shared/proto/host/window"
-import { syncWorker } from "./shared/services/worker/sync"
-import { getBlobStoreSettingsFromEnv } from "./shared/services/worker/worker"
-import { getLatestAnnouncementId } from "./utils/announcements"
-import { arePathsEqual } from "./utils/path"
+import { HostProvider } from "@/hosts/host-provider";
+import { Logger } from "@/shared/services/Logger";
+import type { StorageContext } from "@/shared/storage/storage-context";
+import { FileContextTracker } from "./core/context/context-tracking/FileContextTracker";
+import { clearOnboardingModelsCache } from "./core/controller/models/getClineOnboardingModels";
+import { HookDiscoveryCache } from "./core/hooks/HookDiscoveryCache";
+import { HookProcessRegistry } from "./core/hooks/HookProcessRegistry";
+import { StateManager } from "./core/storage/StateManager";
+import { AgentConfigLoader } from "./core/task/tools/subagent/AgentConfigLoader";
+import { ExtensionRegistryInfo } from "./registry";
+import { ErrorService } from "./services/error";
+import { featureFlagsService } from "./services/feature-flags";
+import { getDistinctId } from "./services/logging/distinctId";
+import { telemetryService } from "./services/telemetry";
+import { PostHogClientProvider } from "./services/telemetry/providers/posthog/PostHogClientProvider";
+import { ClineTempManager } from "./services/temp";
+import { cleanupTestMode } from "./services/test/TestMode";
+import { ShowMessageType } from "./shared/proto/host/window";
+import { syncWorker } from "./shared/services/worker/sync";
+import { getBlobStoreSettingsFromEnv } from "./shared/services/worker/worker";
+import { getLatestAnnouncementId } from "./utils/announcements";
+import { arePathsEqual } from "./utils/path";
 
 /**
  * Performs intialization for Cline that is common to all platforms.
@@ -45,7 +45,7 @@ export async function initialize(storageContext: StorageContext): Promise<Webvie
 	try {
 		await StateManager.initialize(storageContext)
 	} catch (error) {
-		Logger.error("[Cline] CRITICAL: Failed to initialize StateManager:", error)
+		Logger.error("[Dline] CRITICAL: Failed to initialize StateManager:", error)
 		HostProvider.window.showMessage({
 			type: ShowMessageType.ERROR,
 			message: "Failed to initialize storage. Please check logs for details or try restarting the client.",
@@ -54,10 +54,7 @@ export async function initialize(storageContext: StorageContext): Promise<Webvie
 
 	// =============== External services ===============
 	await ErrorService.initialize()
-	// Initialize PostHog client provider (skip in self-hosted mode)
-	if (!ClineEndpoint.isSelfHosted()) {
-		PostHogClientProvider.getInstance()
-	}
+	// PostHog client provider disabled - no telemetry data upload
 
 	// =============== Webview services ===============
 	const webview = HostProvider.get().createWebviewProvider()
@@ -89,7 +86,7 @@ async function showVersionUpdateAnnouncement(stateManager: StateManager) {
 	// Perform post-update actions if necessary
 	try {
 		if (!previousVersion || currentVersion !== previousVersion) {
-			Logger.log(`Cline version changed: ${previousVersion} -> ${currentVersion}. First run or update detected.`)
+			Logger.log(`Dline version changed: ${previousVersion} -> ${currentVersion}. First run or update detected.`)
 
 			// Check if there's a new announcement to show
 			const lastShownAnnouncementId = stateManager.getGlobalStateKey("lastShownAnnouncementId")
@@ -98,8 +95,8 @@ async function showVersionUpdateAnnouncement(stateManager: StateManager) {
 			if (lastShownAnnouncementId !== latestAnnouncementId) {
 				// Show notification when there's a new announcement (major/minor updates or fresh installs)
 				const message = previousVersion
-					? `Cline has been updated to v${currentVersion}`
-					: `Welcome to Cline v${currentVersion}`
+					? `Dline has been updated to v${currentVersion}`
+					: `Welcome to Dline v${currentVersion}`
 				HostProvider.window.showMessage({
 					type: ShowMessageType.INFORMATION,
 					message,

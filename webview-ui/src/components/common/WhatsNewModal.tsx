@@ -1,4 +1,3 @@
-import { BannerAction, BannerCardData } from "@shared/cline/banner"
 import React from "react"
 import { useMount } from "react-use"
 import DiscordIcon from "@/assets/DiscordIcon"
@@ -14,11 +13,9 @@ interface WhatsNewModalProps {
 	open: boolean
 	onClose: () => void
 	version: string
-	welcomeBanners?: BannerCardData[]
-	onBannerAction?: (action: BannerAction) => void
 }
 
-export const WhatsNewModal: React.FC<WhatsNewModalProps> = ({ open, onClose, version, welcomeBanners, onBannerAction }) => {
+export const WhatsNewModal: React.FC<WhatsNewModalProps> = ({ open, onClose, version }) => {
 	const { refreshOpenRouterModels } = useExtensionState()
 
 	// Get latest model list in case user hits shortcut button to set model
@@ -48,9 +45,7 @@ export const WhatsNewModal: React.FC<WhatsNewModalProps> = ({ open, onClose, ver
 
 					<WhatsNewItems
 						inlineCodeStyle={inlineCodeStyle}
-						onBannerAction={onBannerAction}
 						onClose={onClose}
-						welcomeBanners={welcomeBanners}
 					/>
 
 					{/* Social Icons Section */}

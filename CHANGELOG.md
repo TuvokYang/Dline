@@ -1,5 +1,18 @@
 # Changelog
 
+## [5.0.1]
+
+### Changed
+
+- Rename Cline to Dline: package name, displayName, output channel, and branding
+
+### Fixed
+
+- Resume historical tasks with correct ask type and prevent stale UI state
+- Fix cancel/resume flow and scroll behavior edge cases
+- Restore Waiting state and replace partial dedup with generic logic
+- Command status display with collapse bar and exitCode tracking
+
 ## [5.0.0]
 
 ### Added
