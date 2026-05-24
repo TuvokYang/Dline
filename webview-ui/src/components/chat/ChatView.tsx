@@ -55,6 +55,8 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 		hooksEnabled,
 		apiMetrics,
 		lastApiReqTotalTokens: lastApiReqTotalTokensFromState,
+		totalMessageCount,
+		firstItemIndex,
 	} = useExtensionState()
 	const isProdHostedApp = userInfo?.apiBaseUrl === "https://app.cline.bot"
 	const shouldShowQuickWins = isProdHostedApp && (!taskHistory || taskHistory.length < QUICK_WINS_HISTORY_THRESHOLD)
@@ -311,7 +313,15 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 	}, [visibleMessages])
 
 	// Use scroll behavior hook
-	const scrollBehavior = useScrollBehavior(messages, visibleMessages, groupedMessages, expandedRows, setExpandedRows)
+	const scrollBehavior = useScrollBehavior(
+		messages,
+		visibleMessages,
+		groupedMessages,
+		expandedRows,
+		setExpandedRows,
+		totalMessageCount,
+		firstItemIndex,
+	)
 
 	// Use message handlers hook (must come after scrollBehavior so we can pass disableAutoScrollRef)
 	const messageHandlers = useMessageHandlers(messages, chatState, scrollBehavior.disableAutoScrollRef)
@@ -367,12 +377,6 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 					messageHandlers={messageHandlers}
 					messages={messages}
 					mode={mode}
-					scrollBehavior={{
-						scrollToBottomSmooth: scrollBehavior.scrollToBottomSmooth,
-						disableAutoScrollRef: scrollBehavior.disableAutoScrollRef,
-						showScrollToBottom: scrollBehavior.showScrollToBottom,
-						virtuosoRef: scrollBehavior.virtuosoRef,
-					}}
 					task={task}
 				/>
 				<InputSection

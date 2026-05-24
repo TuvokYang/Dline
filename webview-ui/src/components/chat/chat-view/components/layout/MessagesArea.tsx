@@ -2,7 +2,7 @@ import type { ClineMessage } from "@shared/ExtensionMessage"
 import { FetchMessageRequest } from "@shared/proto/cline/task"
 import { convertProtoToClineMessage } from "@shared/proto-conversions/cline-message"
 import type React from "react"
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react"
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { Virtuoso } from "react-virtuoso"
 import { StickyUserMessage } from "@/components/chat/task-header/StickyUserMessage"
 import { useExtensionState } from "@/context/ExtensionStateContext"
@@ -65,6 +65,12 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 	const scrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 	const mergeLockRef = useRef(false)
 
+	// Floating scroll-to-bottom/top button state
+	const [floatingBtnVisible, setFloatingBtnVisible] = useState(false)
+	const [floatingBtnDir, setFloatingBtnDir] = useState<"bottom" | "top">("bottom")
+	const hideBtnTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+	const wasBtnShownRef = useRef(false)
+
 	useEffect(() => {
 		firstItemIndexRef.current = firstItemIndex
 	}, [firstItemIndex])
@@ -75,6 +81,12 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 
 	const lastRawMessage = useMemo(() => clineMessages.at(-1), [clineMessages])
 
+	// Reset auto-scroll flag when entering a new task so the view scrolls
+	// to the bottom instead of staying wherever the previous task left it.
+	useEffect(() => {
+		scrollBehavior.disableAutoScrollRef.current = false
+	}, [task.ts, scrollBehavior.disableAutoScrollRef])
+
 	const {
 		virtuosoRef,
 		scrollContainerRef,
@@ -84,6 +96,10 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 		setShowScrollToBottom,
 		disableAutoScrollRef,
 		scrolledPastUserMessage,
+		isAtBottom,
+		isAtBottomRef,
+		showScrollToBottom,
+		scrollToBottomSmooth,
 	} = scrollBehavior
 
 	const messageIndexByTs = useMemo(() => {
@@ -432,23 +448,59 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 		],
 	)
 
-	// Mark user scrolling via native scroll events on the container.
+	// Floating button: scroll listener for visibility + wheel listener for direction.
+	// Attached to Virtuoso inner scroller, not the outer scrollContainerRef.
 	useEffect(() => {
-		const el = scrollContainerRef.current
-		if (!el) return
+		const container = scrollContainerRef.current
+		if (!container) return
+
+		const showButton = () => {
+			if (hideBtnTimerRef.current) clearTimeout(hideBtnTimerRef.current)
+			if (!isAtBottomRef.current) {
+				setFloatingBtnVisible(true)
+				wasBtnShownRef.current = true
+				hideBtnTimerRef.current = setTimeout(() => {
+					setFloatingBtnVisible(false)
+				}, 5000)
+			}
+		}
+
 		const onScroll = () => {
 			isUserScrollingRef.current = true
 			if (scrollTimerRef.current) clearTimeout(scrollTimerRef.current)
 			scrollTimerRef.current = setTimeout(() => {
 				isUserScrollingRef.current = false
 			}, 300)
+
+			showButton()
 		}
-		el.addEventListener("scroll", onScroll, { passive: true })
+
+		// Wheel event carries deltaY — use it to determine scroll direction
+		const onWheel = (e: WheelEvent) => {
+			if (Math.abs(e.deltaY) < 5) return // ignore micro-scrolls / trackpad noise
+			setFloatingBtnDir(e.deltaY < 0 ? "top" : "bottom")
+			showButton()
+		}
+
+		const raf = requestAnimationFrame(() => {
+			const el = container.querySelector('[data-virtuoso-scroller="true"]') as HTMLElement | null
+			if (el) {
+				el.addEventListener("scroll", onScroll, { passive: true })
+				el.addEventListener("wheel", onWheel, { passive: true })
+			}
+		})
+
 		return () => {
-			el.removeEventListener("scroll", onScroll)
+			cancelAnimationFrame(raf)
+			const el = container.querySelector('[data-virtuoso-scroller="true"]') as HTMLElement | null
+			if (el) {
+				el.removeEventListener("scroll", onScroll)
+				el.removeEventListener("wheel", onWheel)
+			}
 			if (scrollTimerRef.current) clearTimeout(scrollTimerRef.current)
+			if (hideBtnTimerRef.current) clearTimeout(hideBtnTimerRef.current)
 		}
-	}, [scrollContainerRef])
+	}, [scrollContainerRef, isAtBottomRef])
 
 	// Idle trim: only when user is NOT actively scrolling.
 	useEffect(() => {
@@ -512,10 +564,12 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 				/>
 			</div>
 
-			<div className="grow flex" ref={scrollContainerRef}>
+			<div className="grow flex relative" ref={scrollContainerRef}>
 				<Virtuoso
 					atBottomStateChange={(atBottom) => {
 						setIsAtBottom(atBottom)
+						// Keep ref in sync so scroll handlers read the latest value immediately
+						isAtBottomRef.current = atBottom
 
 						// Reset auto-scroll flag when the user manually scrolls to the bottom
 						if (atBottom) {
@@ -540,7 +594,61 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 					style={{ overflowAnchor: "none" }}
 					totalCount={totalMessageCount ?? clineMessages.length}
 				/>
+
+				{/* Floating scroll direction button — appears on scroll, auto-hides after 5s idle */}
+				{!isAtBottom && (
+					<div
+						className={cn(
+							"absolute bottom-4 right-4 z-20 transition-all duration-300 ease-out",
+							floatingBtnVisible ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none",
+						)}>
+						<button
+							aria-label={floatingBtnDir === "bottom" ? "Scroll to bottom" : "Scroll to top"}
+							className={cn(
+								"w-10 h-10 rounded-full bg-background/65 backdrop-blur-sm shadow-md",
+								"flex items-center justify-center cursor-pointer border-0",
+								"hover:bg-background/90 hover:shadow-xl hover:scale-105",
+								"active:scale-95 transition-all duration-200",
+							)}
+							onClick={() => {
+								if (floatingBtnDir === "bottom") {
+									scrollToBottomSmooth()
+									disableAutoScrollRef.current = false
+								} else {
+									virtuosoRef.current?.scrollToIndex({ index: 0, align: "start", behavior: "smooth" })
+									disableAutoScrollRef.current = true
+								}
+								if (hideBtnTimerRef.current) clearTimeout(hideBtnTimerRef.current)
+								setFloatingBtnVisible(false)
+							}}
+							style={{
+								animation: !wasBtnShownRef.current
+									? undefined
+									: floatingBtnVisible
+										? "btnAppear 400ms cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards"
+										: undefined,
+							}}
+							type="button">
+							<span
+								className={cn(
+									"codicon text-base",
+									floatingBtnDir === "bottom" ? "codicon-chevron-down" : "codicon-chevron-up",
+								)}
+							/>
+						</button>
+					</div>
+				)}
 			</div>
+
+			{/* Button appear animation */}
+			<style>{`
+				@keyframes btnAppear {
+					0% { transform: scale(0); opacity: 0; box-shadow: 0 0 0 0 rgba(0,0,0,0); }
+					40% { transform: scale(1.4); opacity: 1; box-shadow: 0 0 16px 2px rgba(0,0,0,0.25); }
+					70% { transform: scale(0.85); box-shadow: 0 0 8px 1px rgba(0,0,0,0.12); }
+					100% { transform: scale(1); box-shadow: 0 1px 3px 1px rgba(0,0,0,0.08); }
+				}
+			`}</style>
 		</div>
 	)
 }

@@ -18,6 +18,8 @@ export function useScrollBehavior(
 	groupedMessages: (ClineMessage | ClineMessage[])[],
 	expandedRows: Record<number, boolean>,
 	setExpandedRows: React.Dispatch<React.SetStateAction<Record<number, boolean>>>,
+	totalMessageCount?: number,
+	firstItemIndex?: number,
 ): ScrollBehavior & {
 	showScrollToBottom: boolean
 	setShowScrollToBottom: React.Dispatch<React.SetStateAction<boolean>>
@@ -32,6 +34,11 @@ export function useScrollBehavior(
 	const virtuosoRef = useRef<VirtuosoHandle>(null)
 	const scrollContainerRef = useRef<HTMLDivElement>(null)
 	const disableAutoScrollRef = useRef(false)
+	// Ref mirror of isAtBottom so scroll handlers can read the latest value
+	// without stale-closure issues (Virtuoso atBottomStateChange fires after scroll events)
+	const isAtBottomRef = useRef(false)
+	// Throttle timestamp for handleRowHeightChange to prevent scroll jitter
+	const lastRowHeightChangeRef = useRef(0)
 
 	// State
 	const [showScrollToBottom, setShowScrollToBottom] = useState(false)
@@ -133,32 +140,56 @@ export function useScrollBehavior(
 		// Range changed callback - we now use scroll position instead
 		// but keep this for potential future use
 	}, [])
+	// Refs for computing the global last-item index.
+	// totalMessageCount arrives asynchronously (via subscribeToState) and may be
+	// undefined on first render. When it's not available we fall back to the
+	// local window: firstItemIndex + groupedMessages.length - 1.
+	const totalCountRef = useRef(totalMessageCount)
+	totalCountRef.current = totalMessageCount
+	const firstItemIndexRef = useRef(firstItemIndex)
+	firstItemIndexRef.current = firstItemIndex
+	const groupedLenRef = useRef(groupedMessages.length)
+	groupedLenRef.current = groupedMessages.length
+
+	const getLastGlobalIndex = useCallback(() => {
+		const tc = totalCountRef.current
+		if (tc && tc > 0) return tc - 1
+		const fi = firstItemIndexRef.current ?? 0
+		const len = groupedLenRef.current
+		return fi + len - 1
+	}, [])
+
 	// User-initiated smooth scroll (e.g., to-bottom button).
-	// Uses scrollTo with MAX_SAFE_INTEGER so Virtuoso's Footer is included.
 	const scrollToBottomSmooth = useMemo(
 		() =>
 			debounce(
 				() => {
-					virtuosoRef.current?.scrollTo({
-						top: Number.MAX_SAFE_INTEGER,
-						behavior: "smooth",
-					})
+					const lastIdx = getLastGlobalIndex()
+					if (lastIdx >= 0) {
+						virtuosoRef.current?.scrollToIndex({
+							index: lastIdx,
+							align: "end",
+							behavior: "smooth",
+						})
+					}
 				},
 				10,
 				{ immediate: true },
 			),
-		[],
+		[getLastGlobalIndex],
 	)
 
-	// Programmatic instant scroll to bottom.
-	// Uses scrollTo with MAX_SAFE_INTEGER so Virtuoso's Footer is included,
-	// fixing the issue where to-bottom button couldn't reach the true bottom.
+	// Programmatic instant scroll to bottom (auto-scroll, focus restore).
 	const scrollToBottomAuto = useCallback(() => {
-		virtuosoRef.current?.scrollTo({
-			top: Number.MAX_SAFE_INTEGER,
-			behavior: "auto",
-		})
-	}, [])
+		const lastIdx = getLastGlobalIndex()
+		if (lastIdx >= 0) {
+			virtuosoRef.current?.scrollToIndex({
+				index: lastIdx,
+				align: "end",
+				behavior: "auto",
+			})
+		}
+	}, [getLastGlobalIndex])
 
 	const scrollToMessage = useCallback(
 		(messageIndex: number) => {
@@ -266,14 +297,19 @@ export function useScrollBehavior(
 	)
 
 	// Handle row height changes during streaming.
-	// Uses auto (instant) scroll so it doesn't compete with other scroll sources.
-	// When the last row grows taller we follow immediately; when it shrinks we
-	// defer by one tick so Virtuoso can finish adjusting its internal layout.
+	// Throttled to max once per 50ms so rapid height changes (e.g. during
+	// streaming or cancel) don't trigger cascading scrolls that cause jitter.
 	const handleRowHeightChange = useCallback(
 		(isTaller: boolean) => {
 			if (!disableAutoScrollRef.current) {
+				const now = Date.now()
+				if (now - lastRowHeightChangeRef.current < 50) {
+					return
+				}
+				lastRowHeightChangeRef.current = now
+
 				if (isTaller) {
-					scrollToBottomAuto()
+					scrollToBottomSmooth()
 				} else {
 					setTimeout(() => {
 						scrollToBottomAuto()
@@ -281,21 +317,21 @@ export function useScrollBehavior(
 				}
 			}
 		},
-		[scrollToBottomAuto],
+		[scrollToBottomSmooth, scrollToBottomAuto],
 	)
 
-	// When new messages arrive, scroll to bottom in a single auto scroll.
-	// requestAnimationFrame ensures Virtuoso has finished laying out new items.
-	// The cleanup cancels stale rAFs when groupedMessages.length changes rapidly
-	// (e.g. during streaming or cancel), preventing scroll storms.
+	// When new messages arrive (or totalMessageCount resolves), scroll to
+	// bottom. totalMessageCount arrives asynchronously via subscribeToState;
+	// including it in deps ensures we re-scroll once the true total is known
+	// so the global last-index calculation in getLastGlobalIndex() is correct.
 	useEffect(() => {
 		if (!disableAutoScrollRef.current) {
 			const rafId = requestAnimationFrame(() => {
-				scrollToBottomAuto()
+				scrollToBottomSmooth()
 			})
 			return () => cancelAnimationFrame(rafId)
 		}
-	}, [groupedMessages.length, scrollToBottomAuto])
+	}, [groupedMessages.length, totalMessageCount, scrollToBottomSmooth])
 
 	useEffect(() => {
 		if (pendingScrollToMessage !== null) {
@@ -345,6 +381,7 @@ export function useScrollBehavior(
 		virtuosoRef,
 		scrollContainerRef,
 		disableAutoScrollRef,
+		isAtBottomRef,
 		scrollToBottomSmooth,
 		scrollToBottomAuto,
 		scrollToMessage,

@@ -14,7 +14,7 @@
  */
 
 import { HostProvider } from "@hosts/host-provider"
-import { ShowMessageType } from "@shared/proto/host/window"
+import { SelectedResponse, ShowMessageType } from "@shared/proto/host/window"
 import * as cp from "child_process"
 import * as os from "os"
 import * as util from "util"
@@ -162,7 +162,7 @@ export async function openUrlInBrowser(url: string): Promise<void> {
 						items: ["Copy URL Again"],
 					},
 				})
-				.then((response) => {
+				.then((response: SelectedResponse) => {
 					if (response.selectedOption === "Copy URL Again") {
 						writeTextToClipboard(url)
 					}
