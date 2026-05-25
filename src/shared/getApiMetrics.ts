@@ -6,6 +6,8 @@ export interface ApiMetrics {
 	totalCacheWrites?: number
 	totalCacheReads?: number
 	totalCost: number
+	cacheHitRate?: number
+	currency?: string
 }
 
 /**
@@ -62,11 +64,21 @@ export function getApiMetrics(messages: ClineMessage[]): ApiMetrics {
 				if (typeof cost === "number") {
 					result.totalCost += cost
 				}
+				// Extract currency from the first message that has it
+				if (!result.currency && typeof parsedData.currency === "string") {
+					result.currency = parsedData.currency
+				}
 			} catch {
 				// Ignore JSON parse errors
 			}
 		}
 	})
+
+	// Calculate overall cache hit rate
+	const totalInput = result.totalTokensIn + (result.totalCacheWrites ?? 0) + (result.totalCacheReads ?? 0)
+	if (totalInput > 0 && result.totalCacheReads) {
+		result.cacheHitRate = (result.totalCacheReads / totalInput) * 100
+	}
 
 	return result
 }

@@ -43,6 +43,7 @@ import {
 } from "@/utils/slash-commands"
 import ClineRulesToggleModal from "../cline-rules/ClineRulesToggleModal"
 import ServersToggleModal from "./ServersToggleModal"
+import { UsageBar } from "./UsageBar"
 
 const { MAX_IMAGES_AND_FILES_PER_MESSAGE } = CHAT_CONSTANTS
 
@@ -124,7 +125,7 @@ const ButtonGroup = styled.div`
 	display: flex;
 	align-items: center;
 	gap: 4px;
-	flex: 1;
+	flex: 0 1 auto;
 	min-width: 0;
 `
 
@@ -1414,7 +1415,7 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 					)}
 					<div
 						className={cn(
-							"absolute bottom-2.5 top-2.5 whitespace-pre-wrap break-words rounded-xs overflow-hidden bg-input-background",
+							"absolute bottom-2.5 top-2.5 whitespace-pre-wrap wrap-break-word rounded-xs overflow-hidden bg-input-background",
 							isTextAreaFocused ? "left-3.5 right-3.5" : "left-3.5 right-3.5 border border-input-border",
 						)}
 						ref={highlightLayerRef}
@@ -1549,96 +1550,97 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 						</div>
 					</div>
 				</div>
-				<div className="flex justify-between items-center -mt-[2px] px-3 pb-2">
-					{/* Always render both components, but control visibility with CSS */}
-					<div className="relative flex-1 min-w-0 h-5">
-						{/* ButtonGroup - always in DOM but visibility controlled */}
-						<ButtonGroup className="absolute top-0 left-0 right-0 ease-in-out w-full h-5 z-10 flex items-center">
-							<Tooltip>
-								<TooltipContent>Add Context</TooltipContent>
-								<TooltipTrigger>
-									<VSCodeButton
-										appearance="icon"
-										aria-label="Add Context"
-										className="p-0 m-0 flex items-center"
-										data-testid="context-button"
-										onClick={handleContextButtonClick}>
-										<ButtonContainer>
-											<AtSignIcon size={12} />
-										</ButtonContainer>
-									</VSCodeButton>
-								</TooltipTrigger>
-							</Tooltip>
+				<div className="flex items-center -mt-0.5 px-3 pb-2 gap-2">
+					<ButtonGroup className="ease-in-out h-5 z-10 flex items-center min-w-0 max-w-[60%]">
+						<Tooltip>
+							<TooltipContent>Add Context</TooltipContent>
+							<TooltipTrigger>
+								<VSCodeButton
+									appearance="icon"
+									aria-label="Add Context"
+									className="p-0 m-0 flex items-center"
+									data-testid="context-button"
+									onClick={handleContextButtonClick}>
+									<ButtonContainer>
+										<AtSignIcon size={12} />
+									</ButtonContainer>
+								</VSCodeButton>
+							</TooltipTrigger>
+						</Tooltip>
 
-							<Tooltip>
-								<TooltipContent>Add Files & Images</TooltipContent>
-								<TooltipTrigger>
-									<VSCodeButton
-										appearance="icon"
-										aria-label="Add Files & Images"
-										className="p-0 m-0 flex items-center"
-										data-testid="files-button"
-										disabled={shouldDisableFilesAndImages}
-										onClick={() => {
-											if (!shouldDisableFilesAndImages) {
-												onSelectFilesAndImages()
-											}
-										}}>
-										<ButtonContainer>
-											<PlusIcon size={13} />
-										</ButtonContainer>
-									</VSCodeButton>
-								</TooltipTrigger>
-							</Tooltip>
+						<Tooltip>
+							<TooltipContent>Add Files & Images</TooltipContent>
+							<TooltipTrigger>
+								<VSCodeButton
+									appearance="icon"
+									aria-label="Add Files & Images"
+									className="p-0 m-0 flex items-center"
+									data-testid="files-button"
+									disabled={shouldDisableFilesAndImages}
+									onClick={() => {
+										if (!shouldDisableFilesAndImages) {
+											onSelectFilesAndImages()
+										}
+									}}>
+									<ButtonContainer>
+										<PlusIcon size={13} />
+									</ButtonContainer>
+								</VSCodeButton>
+							</TooltipTrigger>
+						</Tooltip>
 
-							<ServersToggleModal />
+						<ServersToggleModal />
 
-							<ClineRulesToggleModal />
+						<ClineRulesToggleModal />
 
-							<ModelContainer>
-								<ModelButtonWrapper>
-									<ModelDisplayButton
-										disabled={false}
-										onClick={handleModelButtonClick}
-										role="button"
-										tabIndex={0}
-										title="Open API Settings">
-										<ModelButtonContent className="text-xs">{modelDisplayName}</ModelButtonContent>
-									</ModelDisplayButton>
-								</ModelButtonWrapper>
-							</ModelContainer>
-						</ButtonGroup>
-					</div>
+						<ModelContainer>
+							<ModelButtonWrapper>
+								<ModelDisplayButton
+									disabled={false}
+									onClick={handleModelButtonClick}
+									role="button"
+									tabIndex={0}
+									title="Open API Settings">
+									<ModelButtonContent className="text-xs">{modelDisplayName}</ModelButtonContent>
+								</ModelDisplayButton>
+							</ModelButtonWrapper>
+						</ModelContainer>
+					</ButtonGroup>
+					<span className="shrink-0">
+						<UsageBar />
+					</span>
 					{/* Tooltip for Plan/Act toggle remains outside the conditional rendering */}
-					<Tooltip>
-						<TooltipContent
-							className="text-xs px-2 flex flex-col gap-1"
-							hidden={shownTooltipMode === null}
-							side="top">
-							{`In ${shownTooltipMode === "act" ? "Act" : "Plan"}  mode, Cline will ${shownTooltipMode === "act" ? "complete the task immediately" : "gather information to architect a plan"}`}
-							<p className="text-description/80 text-xs mb-0">
-								Toggle w/ <kbd className="text-muted-foreground mx-1">{togglePlanActKeys}</kbd>
-							</p>
-						</TooltipContent>
-						<TooltipTrigger>
-							<SwitchContainer data-testid="mode-switch" disabled={false} onClick={onModeToggle}>
-								<Slider isAct={mode === "act"} isPlan={mode === "plan"} />
-								{["Plan", "Act"].map((m) => (
-									<div
-										aria-checked={mode === m.toLowerCase()}
-										className={cn(
-											"pt-0.5 pb-px px-2 z-10 text-xs w-1/2 text-center bg-transparent",
-											mode === m.toLowerCase() ? "text-white" : "text-input-foreground",
-										)}
-										onMouseLeave={() => setShownTooltipMode(null)}
-										onMouseOver={() => setShownTooltipMode(m.toLowerCase() === "plan" ? "plan" : "act")}
-										role="switch">
-										{m}
-									</div>
-								))}
-							</SwitchContainer>
-						</TooltipTrigger>
-					</Tooltip>
+					<div className="ml-auto shrink-0">
+						<Tooltip>
+							<TooltipContent
+								className="text-xs px-2 flex flex-col gap-1"
+								hidden={shownTooltipMode === null}
+								side="top">
+								{`In ${shownTooltipMode === "act" ? "Act" : "Plan"}  mode, Cline will ${shownTooltipMode === "act" ? "complete the task immediately" : "gather information to architect a plan"}`}
+								<p className="text-description/80 text-xs mb-0">
+									Toggle w/ <kbd className="text-muted-foreground mx-1">{togglePlanActKeys}</kbd>
+								</p>
+							</TooltipContent>
+							<TooltipTrigger>
+								<SwitchContainer data-testid="mode-switch" disabled={false} onClick={onModeToggle}>
+									<Slider isAct={mode === "act"} isPlan={mode === "plan"} />
+									{["Plan", "Act"].map((m) => (
+										<div
+											aria-checked={mode === m.toLowerCase()}
+											className={cn(
+												"pt-0.5 pb-px px-2 z-10 text-xs w-1/2 text-center bg-transparent",
+												mode === m.toLowerCase() ? "text-white" : "text-input-foreground",
+											)}
+											onMouseLeave={() => setShownTooltipMode(null)}
+											onMouseOver={() => setShownTooltipMode(m.toLowerCase() === "plan" ? "plan" : "act")}
+											role="switch">
+											{m}
+										</div>
+									))}
+								</SwitchContainer>
+							</TooltipTrigger>
+						</Tooltip>
+					</div>
 				</div>
 			</div>
 		)

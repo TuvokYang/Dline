@@ -24,6 +24,8 @@ interface TaskHeaderProps {
 	cacheWrites?: number
 	cacheReads?: number
 	totalCost: number
+	cacheHitRate?: number
+	currency?: string
 	lastApiReqTotalTokens?: number
 	lastProgressMessageText?: string
 	showFocusChainPlaceholder?: boolean
@@ -40,6 +42,8 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 	cacheWrites,
 	cacheReads,
 	totalCost,
+	cacheHitRate,
+	currency,
 	lastApiReqTotalTokens,
 	lastProgressMessageText,
 	showFocusChainPlaceholder,
@@ -171,9 +175,36 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 					<div className="inline-flex items-center justify-end select-none shrink-0">
 						{isCostAvailable && (
 							<div
-								className="mx-1 px-1 py-0.25 rounded-full inline-flex shrink-0 text-badge-background bg-badge-foreground/80 items-center"
-								id="price-tag">
-								<span className="text-xs sm:text-sm">${totalCost?.toFixed(4)}</span>
+								className="mx-1 px-1.5 py-0.25 rounded-full inline-flex shrink-0 text-badge-background bg-badge-foreground/80 items-center gap-1.5"
+								id="price-tag"
+								title={`In: ${tokensIn} / Out: ${tokensOut} / Cache: ${cacheReads ?? 0}`}>
+								{tokensIn > 0 && (
+									<span className="text-[10px] opacity-80">
+										In:
+										{tokensIn >= 1000000
+											? `${(tokensIn / 1000000).toFixed(2)}M`
+											: tokensIn >= 1000
+												? `${(tokensIn / 1000).toFixed(1)}K`
+												: tokensIn}
+									</span>
+								)}
+								{tokensOut > 0 && (
+									<span className="text-[10px] opacity-80">
+										Out:
+										{tokensOut >= 1000000
+											? `${(tokensOut / 1000000).toFixed(2)}M`
+											: tokensOut >= 1000
+												? `${(tokensOut / 1000).toFixed(1)}K`
+												: tokensOut}
+									</span>
+								)}
+								{cacheHitRate != null && cacheHitRate > 0 && (
+									<span className="text-[10px] opacity-80">Cache:{cacheHitRate.toFixed(0)}%</span>
+								)}
+								<span className="text-xs sm:text-sm font-medium">
+									{currency === "CNY" ? "¥" : "$"}
+									{totalCost?.toFixed(4)}
+								</span>
 							</div>
 						)}
 						<NewTaskButton className={BUTTON_CLASS} onClick={onClose} />

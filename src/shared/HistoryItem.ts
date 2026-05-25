@@ -8,6 +8,8 @@ export type HistoryItem = {
 	cacheWrites?: number
 	cacheReads?: number
 	totalCost: number
+	cacheHitRate?: number // Cache hit rate percentage (0-100)
+	currency?: string // Billing currency code
 
 	size?: number
 	shadowGitConfigWorkTree?: string

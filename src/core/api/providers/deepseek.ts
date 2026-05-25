@@ -6,7 +6,8 @@ import { buildExternalBasicHeaders } from "@/services/EnvUtils"
 import { ClineError } from "@/services/error"
 import { ClineStorageMessage } from "@/shared/messages/content"
 import { fetch } from "@/shared/net"
-import { ApiHandler, CommonApiHandlerOptions } from "../"
+import { Logger } from "@/shared/services/Logger"
+import { AccountUsage, ApiHandler, CommonApiHandlerOptions } from "../"
 import { withRetry } from "../retry"
 import { convertDeepSeekMessages, convertDeepseekToOpenAiMessages } from "../transform/deepseek-format"
 import { ApiStream } from "../transform/stream"
@@ -157,6 +158,119 @@ export class DeepSeekHandler implements ApiHandler {
 		return {
 			id: deepSeekDefaultModelId,
 			info: deepSeekModels[deepSeekDefaultModelId],
+		}
+	}
+
+	/**
+	 * Query DeepSeek account balance + daily usage.
+	 * Calls /user/balance for balance and /api/v0/usage/amount for daily tokens.
+	 * Returns AccountUsage with balance breakdown and today's usage for the current model.
+	 * @see https://api-docs.deepseek.com/zh-cn/api/get-user-balance
+	 */
+	async getAccountUsage(): Promise<AccountUsage | undefined> {
+		if (!this.options.deepSeekApiKey) {
+			return undefined
+		}
+		try {
+			const headers = {
+				Authorization: `Bearer ${this.options.deepSeekApiKey}`,
+				...buildExternalBasicHeaders(),
+			}
+
+			// Fetch balance
+			const balanceResp = await fetch("https://api.deepseek.com/user/balance", { headers })
+			if (!balanceResp.ok) {
+				Logger.warn(`[DeepSeek] Balance API failed: ${balanceResp.status}`)
+				return undefined
+			}
+			const balanceData = (await balanceResp.json()) as {
+				is_available: boolean
+				balance_infos: Array<{
+					currency: string
+					total_balance: string
+					granted_balance: string
+					topped_up_balance: string
+				}>
+			}
+			const firstBalance = balanceData?.balance_infos?.[0]
+			if (!firstBalance) {
+				return undefined
+			}
+
+			// Fetch daily usage
+			const now = new Date()
+			const month = now.getMonth() + 1
+			const year = now.getFullYear()
+			const todayStr = `${year}-${String(month).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`
+
+			let dailyInputTokens = 0
+			let dailyOutputTokens = 0
+			let dailyCacheHitTokens = 0
+			let dailyCacheMissTokens = 0
+
+			try {
+				const usageResp = await fetch(`https://platform.deepseek.com/api/v0/usage/amount?month=${month}&year=${year}`, {
+					headers,
+				})
+				if (usageResp.ok) {
+					const usageData = (await usageResp.json()) as {
+						code: number
+						data?: {
+							biz_data?: {
+								days?: Array<{
+									date: string
+									data?: Array<{
+										model: string
+										usage?: Array<{ type: string; amount: string }>
+									}>
+								}>
+							}
+						}
+					}
+					// Find today's data and match current model
+					const today = usageData?.data?.biz_data?.days?.find((d) => d.date === todayStr)
+					if (today?.data) {
+						const model = this.getModel()
+						const modelData = today.data.find((d) => d.model === model.id || d.model.includes("deepseek-v4")) // match current model or v4 family
+						if (modelData?.usage) {
+							for (const u of modelData.usage) {
+								const amt = Number.parseInt(u.amount, 10) || 0
+								switch (u.type) {
+									case "PROMPT_CACHE_HIT_TOKEN":
+										dailyCacheHitTokens += amt
+										break
+									case "PROMPT_CACHE_MISS_TOKEN":
+										dailyCacheMissTokens += amt
+										break
+									case "RESPONSE_TOKEN":
+										dailyOutputTokens += amt
+										break
+								}
+							}
+							dailyInputTokens = dailyCacheHitTokens + dailyCacheMissTokens
+						}
+					}
+				} else {
+					Logger.warn(`[DeepSeek] Usage API failed: ${usageResp.status}`)
+				}
+			} catch (e) {
+				Logger.warn(`[DeepSeek] Usage API error: ${e}`)
+			}
+
+			return {
+				currency: firstBalance.currency,
+				remainingBalance: Number.parseFloat(firstBalance.total_balance),
+				toppedUpBalance: Number.parseFloat(firstBalance.topped_up_balance),
+				grantedBalance: Number.parseFloat(firstBalance.granted_balance),
+				isAvailable: balanceData.is_available,
+				dailyInputTokens,
+				dailyOutputTokens,
+				dailyCacheHitTokens,
+				dailyCacheMissTokens,
+			}
+		} catch (e) {
+			Logger.warn(`[DeepSeek] getAccountUsage error: ${e}`)
+			return undefined
 		}
 	}
 

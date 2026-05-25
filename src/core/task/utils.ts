@@ -17,6 +17,7 @@ type UpdateApiReqMsgParams = {
 	cacheWriteTokens: number
 	cacheReadTokens: number
 	totalCost?: number
+	cacheHitRate?: number
 	api: ApiHandler
 	cancelReason?: ClineApiReqCancelReason
 	streamingFailedMessage?: string
@@ -30,6 +31,10 @@ export const updateApiReqMsg = async (params: UpdateApiReqMsgParams) => {
 	const currentApiReqInfo: ClineApiReqInfo = JSON.parse(clineMessages[params.lastApiReqIndex].text || "{}")
 	delete currentApiReqInfo.retryStatus // Clear retry status when request is finalized
 
+	const modelInfo = params.api.getModel().info
+	const totalInputTokens = params.inputTokens + (params.cacheWriteTokens || 0) + (params.cacheReadTokens || 0)
+	const cacheHitRate = params.cacheHitRate ?? (totalInputTokens > 0 ? (params.cacheReadTokens / totalInputTokens) * 100 : 0)
+
 	await params.messageStateHandler.updateClineMessage(params.lastApiReqIndex, {
 		text: JSON.stringify({
 			...currentApiReqInfo, // Spread the modified info (with retryStatus removed)
@@ -40,12 +45,16 @@ export const updateApiReqMsg = async (params: UpdateApiReqMsgParams) => {
 			cost:
 				params.totalCost ??
 				calculateApiCostAnthropic(
-					params.api.getModel().info,
+					modelInfo,
 					params.inputTokens,
 					params.outputTokens,
 					params.cacheWriteTokens,
 					params.cacheReadTokens,
 				),
+			cacheHitRate: Math.round(cacheHitRate * 100) / 100, // Round to 2 decimal places
+			currency: modelInfo.currency || "USD",
+			inputPrice: modelInfo.inputPrice,
+			outputPrice: modelInfo.outputPrice,
 			cancelReason: params.cancelReason,
 			streamingFailedMessage: params.streamingFailedMessage,
 		} satisfies ClineApiReqInfo),

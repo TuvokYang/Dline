@@ -118,9 +118,42 @@ export interface ExtensionState {
 		totalCacheWrites?: number
 		totalCacheReads?: number
 		totalCost: number
+		cacheHitRate?: number // Overall cache hit rate percentage (0-100)
+		currency?: string // Billing currency code
 	}
 	/** Total tokens from the last API request for context window progress bar */
 	lastApiReqTotalTokens?: number
+	/** Account-level usage/balance info queried from provider API */
+	accountUsage?: AccountUsageData
+}
+
+/**
+ * Account-level usage or balance information.
+ * Shared type used by both core API handlers and webview UI.
+ * Kept in sync with proto AccountUsage message.
+ */
+export interface AccountUsageData {
+	currency: string
+	remainingBalance?: number
+	toppedUpBalance?: number
+	grantedBalance?: number
+	/** Usage quota windows for quota-mode providers (e.g., Codex, Copilot) */
+	quotas?: AccountUsageQuotaData[]
+	isAvailable?: boolean
+	dailyInputTokens?: number
+	dailyOutputTokens?: number
+	dailyCacheHitTokens?: number
+	dailyCacheMissTokens?: number
+}
+
+/** Single usage quota window */
+export interface AccountUsageQuotaData {
+	type: string
+	label: string
+	used: number
+	limit: number
+	resetAt?: string
+	resetLabel?: string
 }
 
 export interface ClineMessage {
@@ -359,6 +392,10 @@ export interface ClineApiReqInfo {
 	cacheWrites?: number
 	cacheReads?: number
 	cost?: number
+	cacheHitRate?: number // Cache hit rate as percentage (0-100)
+	currency?: string // Billing currency code
+	inputPrice?: number // Price per 1M input tokens
+	outputPrice?: number // Price per 1M output tokens
 	cancelReason?: ClineApiReqCancelReason
 	streamingFailedMessage?: string
 	retryStatus?: {

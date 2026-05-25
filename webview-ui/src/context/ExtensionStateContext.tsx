@@ -9,6 +9,7 @@ import { EmptyRequest } from "@shared/proto/cline/common"
 import type { OpenRouterCompatibleModelInfo } from "@shared/proto/cline/models"
 import { OnboardingModelGroup, type TerminalProfile } from "@shared/proto/cline/state"
 import { FetchMessageRequest } from "@shared/proto/cline/task"
+import { protoToAccountUsage } from "@shared/proto-conversions/account-usage-conversion"
 import { convertProtoToClineMessage } from "@shared/proto-conversions/cline-message"
 import { convertProtoMcpServersToMcpServers } from "@shared/proto-conversions/mcp/mcp-server-conversion"
 import { fromProtobufModels } from "@shared/proto-conversions/models/typeConversion"
@@ -422,6 +423,7 @@ export const ExtensionStateContextProvider: React.FC<{
 
 							const newState = {
 								...stateData,
+								accountUsage: protoToAccountUsage(response.accountUsage),
 								autoApprovalSettings: shouldUpdateAutoApproval
 									? stateData.autoApprovalSettings
 									: prevState.autoApprovalSettings,

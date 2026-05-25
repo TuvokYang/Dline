@@ -290,8 +290,33 @@ message Settings {
   optional string act_mode_anthropic_base_url = 189;
 }
 
+// Account usage quota for rate-limited providers (e.g., Codex, Copilot)
+message UsageQuota {
+  string type = 1;           // "daily" | "5hour" | "weekly" | "monthly" | "custom"
+  string label = 2;          // Human-readable label
+  int64 used = 3;            // Tokens consumed
+  int64 limit = 4;           // Token limit
+  optional string reset_at = 5;       // ISO timestamp
+  optional string reset_label = 6;    // Human-readable reset description
+}
+
+// Account-level usage or balance information
+message AccountUsage {
+  string currency = 1;                     // "CNY", "USD", etc.
+  optional double remaining_balance = 2;
+  optional double topped_up_balance = 3;
+  optional double granted_balance = 4;
+  repeated UsageQuota quotas = 5;          // Quota windows for quota-mode providers
+  optional bool is_available = 6;
+  optional int64 daily_input_tokens = 7;
+  optional int64 daily_output_tokens = 8;
+  optional int64 daily_cache_hit_tokens = 9;
+  optional int64 daily_cache_miss_tokens = 10;
+}
+
 message State {
   string state_json = 1;
+  optional AccountUsage account_usage = 2;
 }
 
 message TerminalProfiles {

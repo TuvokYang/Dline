@@ -37,6 +37,7 @@ const HistoryViewItem = ({
 	selectedItems,
 }: HistoryViewItemProps) => {
 	const [expanded, setExpanded] = useState(false)
+	const costSymbol = item.currency === "CNY" ? "¥" : "$"
 
 	const isFavoritedItem = useMemo(
 		() => pendingFavoriteToggles[item.id] ?? item.isFavorited,
@@ -140,7 +141,10 @@ const HistoryViewItem = ({
 					<div className="flex items-center justify-between w-full">
 						<div className="text-description text-xs uppercase">{formatDate(item.ts)}</div>
 						<div className="self-end flex items-center text-xs">
-							<span className="text-description">${item.totalCost?.toFixed(4) ?? 0}</span>
+							<span className="text-description">
+								{costSymbol}
+								{item.totalCost?.toFixed(4) ?? 0}
+							</span>
 							{expanded ? (
 								<ChevronsDownUpIcon className="text-description" />
 							) : (

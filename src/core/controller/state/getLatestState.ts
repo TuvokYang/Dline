@@ -1,5 +1,6 @@
 import { EmptyRequest } from "@shared/proto/cline/common"
 import { State } from "@shared/proto/cline/state"
+import { accountUsageToProto } from "@shared/proto-conversions/account-usage-conversion"
 import { Controller } from "../index"
 
 /**
@@ -11,12 +12,14 @@ import { Controller } from "../index"
 export async function getLatestState(controller: Controller, _: EmptyRequest): Promise<State> {
 	// Get the state using the existing method
 	const state = await controller.getStateToPostToWebview()
+	const accountUsage = controller.getAccountUsage()
 
 	// Convert the state to a JSON string
 	const stateJson = JSON.stringify(state)
 
-	// Return the state as a JSON string
+	// Return the state with accountUsage proto-serialized separately
 	return State.create({
 		stateJson,
+		accountUsage: accountUsageToProto(accountUsage),
 	})
 }

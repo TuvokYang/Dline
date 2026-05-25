@@ -90,6 +90,7 @@ export interface ModelInfo {
 	}[]
 	temperature?: number
 	apiFormat?: ApiFormat // The API format used by this model
+	currency?: string // Billing currency code, e.g. "USD", "CNY". Defaults to "USD".
 }
 
 export interface OpenAiCompatibleModelInfo extends ModelInfo {
@@ -2216,10 +2217,11 @@ export const deepSeekModels = {
 		supportsImages: false,
 		supportsPromptCache: true,
 		supportsReasoning: true,
-		inputPrice: 0.417,
-		outputPrice: 0.833,
-		cacheWritesPrice: 0.417,
-		cacheReadsPrice: 0.0035,
+		inputPrice: 3,
+		outputPrice: 6,
+		cacheWritesPrice: 3,
+		cacheReadsPrice: 0.025,
+		currency: "CNY",
 	},
 	"deepseek-v4-flash": {
 		maxTokens: 384_000,
@@ -2227,10 +2229,11 @@ export const deepSeekModels = {
 		supportsImages: false,
 		supportsPromptCache: true,
 		supportsReasoning: true,
-		inputPrice: 0.139,
-		outputPrice: 0.278,
-		cacheWritesPrice: 0.139,
-		cacheReadsPrice: 0.0028,
+		inputPrice: 1,
+		outputPrice: 2,
+		cacheWritesPrice: 1,
+		cacheReadsPrice: 0.02,
+		currency: "CNY",
 	},
 } as const satisfies Record<string, ModelInfo>
 

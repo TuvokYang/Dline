@@ -1,5 +1,7 @@
+import type { AccountUsage } from "@core/api"
 import { EmptyRequest } from "@shared/proto/cline/common"
 import { State } from "@shared/proto/cline/state"
+import { accountUsageToProto } from "@shared/proto-conversions/account-usage-conversion"
 import { telemetryService } from "@/services/telemetry"
 import { ExtensionState } from "@/shared/ExtensionMessage"
 import { Logger } from "@/shared/services/Logger"
@@ -15,6 +17,7 @@ const activeStateSubscriptions = new Set<StreamingResponseHandler<State>>()
 // webview memory. 50ms trailing debounce reduces push frequency ~80% without
 // perceptible UI lag.
 let pendingStateJson: string | null = null
+let pendingAccountUsage: AccountUsage | undefined
 let debounceTimer: ReturnType<typeof setTimeout> | null = null
 
 /**
@@ -46,6 +49,7 @@ export async function subscribeToState(
 	// Send the initial state
 	const initialState = await controller.getStateToPostToWebview()
 	const initialStateJson = JSON.stringify(initialState)
+	const accountUsage = controller.getAccountUsage()
 
 	recordStateSizeTelemetry(Buffer.byteLength(initialStateJson, "utf8"))
 
@@ -53,6 +57,7 @@ export async function subscribeToState(
 		await responseStream(
 			{
 				stateJson: initialStateJson,
+				accountUsage: accountUsageToProto(accountUsage),
 			},
 			false, // Not the last message
 		)
@@ -65,8 +70,9 @@ export async function subscribeToState(
 /**
  * Send a state update to all active subscribers
  * @param state The state to send
+ * @param accountUsage Optional account usage data (proto-serialized separately from stateJson)
  */
-export async function sendStateUpdate(state: ExtensionState): Promise<void> {
+export async function sendStateUpdate(state: ExtensionState, accountUsage?: AccountUsage): Promise<void> {
 	let stateJson: string
 	try {
 		stateJson = JSON.stringify(state)
@@ -76,6 +82,7 @@ export async function sendStateUpdate(state: ExtensionState): Promise<void> {
 	}
 
 	pendingStateJson = stateJson
+	pendingAccountUsage = accountUsage
 
 	if (debounceTimer) {
 		return // debounce in progress, latest state will be sent when timer fires
@@ -84,7 +91,9 @@ export async function sendStateUpdate(state: ExtensionState): Promise<void> {
 	debounceTimer = setTimeout(async () => {
 		debounceTimer = null
 		const finalStateJson = pendingStateJson!
+		const finalAccountUsage = pendingAccountUsage
 		pendingStateJson = null
+		pendingAccountUsage = undefined
 
 		recordStateSizeTelemetry(Buffer.byteLength(finalStateJson, "utf8"))
 
@@ -93,6 +102,7 @@ export async function sendStateUpdate(state: ExtensionState): Promise<void> {
 				await responseStream(
 					{
 						stateJson: finalStateJson,
+						accountUsage: accountUsageToProto(finalAccountUsage),
 					},
 					false, // Not the last message
 				)

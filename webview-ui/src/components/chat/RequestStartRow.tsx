@@ -10,6 +10,17 @@ import ErrorRow from "./ErrorRow"
 import { ThinkingRow } from "./ThinkingRow"
 import { TypewriterText } from "./TypewriterText"
 
+interface UsageInfo {
+	tokensIn?: number
+	tokensOut?: number
+	cacheWrites?: number
+	cacheReads?: number
+	cacheHitRate?: number
+	currency?: string
+	inputPrice?: number
+	outputPrice?: number
+}
+
 interface RequestStartRowProps {
 	message: ClineMessage
 	apiRequestFailedMessage?: string
@@ -22,6 +33,7 @@ interface RequestStartRowProps {
 	classNames?: string
 	isExpanded: boolean
 	handleToggle: () => void
+	usageInfo?: UsageInfo
 }
 
 // State type for api_req_started rendering
@@ -139,6 +151,7 @@ export const RequestStartRow: React.FC<RequestStartRowProps> = ({
 	handleToggle,
 	isExpanded,
 	message,
+	usageInfo,
 }) => {
 	// Derive explicit state
 	const hasError = !!(apiRequestFailedMessage || apiReqStreamingFailedMessage)

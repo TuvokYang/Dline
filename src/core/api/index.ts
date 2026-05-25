@@ -1,4 +1,5 @@
 import { ApiConfiguration, ModelInfo, QwenApiRegions } from "@shared/api"
+import type { AccountUsageData, AccountUsageQuotaData } from "@shared/ExtensionMessage"
 import { Mode } from "@shared/storage/types"
 import { ClineError } from "@/services/error"
 import { ClineStorageMessage } from "@/shared/messages/content"
@@ -51,10 +52,20 @@ import { ApiStream, ApiStreamUsageChunk } from "./transform/stream"
 export type CommonApiHandlerOptions = {
 	onRetryAttempt?: ApiConfiguration["onRetryAttempt"]
 }
+
+/**
+ * Re-export shared types for account usage.
+ * Single source of truth: @shared/ExtensionMessage.
+ */
+export type UsageQuota = AccountUsageQuotaData
+export type AccountUsage = AccountUsageData
+
 export interface ApiHandler {
 	createMessage(systemPrompt: string, messages: ClineStorageMessage[], tools?: ClineTool[], useResponseApi?: boolean): ApiStream
 	getModel(): ApiHandlerModel
 	getApiStreamUsage?(): Promise<ApiStreamUsageChunk | undefined>
+	/** Query account-level usage/balance from the provider. Returns undefined if not supported. */
+	getAccountUsage?(): Promise<AccountUsage | undefined>
 	abort?(): void
 	/** Parse a provider-specific error into a ClineError. Falls back to generic ClineError.transform if not implemented. */
 	parseError?(error: any, modelId?: string): ClineError

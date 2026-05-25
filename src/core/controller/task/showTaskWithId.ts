@@ -38,6 +38,8 @@ export async function showTaskWithId(controller: Controller, request: StringRequ
 				tokensOut: historyItem.tokensOut || 0,
 				cacheWrites: historyItem.cacheWrites || 0,
 				cacheReads: historyItem.cacheReads || 0,
+				cacheHitRate: historyItem.cacheHitRate || 0,
+				currency: historyItem.currency || "",
 			})
 		}
 
@@ -61,6 +63,7 @@ export async function showTaskWithId(controller: Controller, request: StringRequ
 			tokensOut: fetchedItem.tokensOut || 0,
 			cacheWrites: fetchedItem.cacheWrites || 0,
 			cacheReads: fetchedItem.cacheReads || 0,
+			cacheHitRate: fetchedItem.cacheHitRate || 0,
 		})
 	} catch (error) {
 		Logger.error("Error in showTaskWithId:", error)

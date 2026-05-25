@@ -76,6 +76,8 @@ message TaskResponse {
   int32 cache_writes = 9;
   int32 cache_reads = 10;
   string model_id = 11;
+  optional double cache_hit_rate = 12;
+  optional string currency = 13;
 }
 
 // Request for getting task history with filtering
@@ -106,6 +108,8 @@ message TaskItem {
   int32 cache_writes = 9;
   int32 cache_reads = 10;
   string model_id = 11;
+  optional double cache_hit_rate = 12;
+  optional string currency = 13;
 }
 
 // Request for ask response operation

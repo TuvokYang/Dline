@@ -11,6 +11,8 @@ interface TaskSectionProps {
 		totalCacheWrites?: number
 		totalCacheReads?: number
 		totalCost: number
+		cacheHitRate?: number
+		currency?: string
 	}
 	lastApiReqTotalTokens?: number
 	selectedModelInfo: {
@@ -37,8 +39,10 @@ export const TaskSection: React.FC<TaskSectionProps> = ({
 }) => {
 	return (
 		<TaskHeader
+			cacheHitRate={apiMetrics.cacheHitRate}
 			cacheReads={apiMetrics.totalCacheReads}
 			cacheWrites={apiMetrics.totalCacheWrites}
+			currency={apiMetrics.currency}
 			doesModelSupportPromptCache={selectedModelInfo.supportsPromptCache}
 			lastApiReqTotalTokens={lastApiReqTotalTokens}
 			lastProgressMessageText={lastProgressMessageText}

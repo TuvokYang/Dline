@@ -30,7 +30,8 @@ import {
 	RefreshCwIcon,
 	SearchIcon,
 	SettingsIcon,
-	SquareArrowOutUpRightIcon, TriangleAlertIcon
+	SquareArrowOutUpRightIcon,
+	TriangleAlertIcon,
 } from "lucide-react"
 import { MouseEvent, memo, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useSize } from "react-use"
@@ -196,10 +197,25 @@ export const ChatRowContent = memo(
 			prevIsLastRef.current = isLast
 		}, [isLast, message.ask, message.say])
 
-		const [cost, apiReqCancelReason, apiReqStreamingFailedMessage] = useMemo(() => {
+		const [cost, apiReqCancelReason, apiReqStreamingFailedMessage, , usageInfo] = useMemo(() => {
 			if (message.text != null && message.say === "api_req_started") {
 				const info: ClineApiReqInfo = JSON.parse(message.text)
-				return [info.cost, info.cancelReason, info.streamingFailedMessage, info.retryStatus]
+				return [
+					info.cost,
+					info.cancelReason,
+					info.streamingFailedMessage,
+					info.retryStatus,
+					{
+						tokensIn: info.tokensIn,
+						tokensOut: info.tokensOut,
+						cacheWrites: info.cacheWrites,
+						cacheReads: info.cacheReads,
+						cacheHitRate: info.cacheHitRate,
+						currency: info.currency,
+						inputPrice: info.inputPrice,
+						outputPrice: info.outputPrice,
+					},
+				]
 			}
 			return [undefined, undefined, undefined, undefined, undefined]
 		}, [message.text, message.say])
@@ -823,6 +839,7 @@ export const ChatRowContent = memo(
 								mode={mode}
 								reasoningContent={reasoningContent}
 								responseStarted={responseStarted}
+								usageInfo={usageInfo}
 							/>
 						)
 					case "api_req_finished":

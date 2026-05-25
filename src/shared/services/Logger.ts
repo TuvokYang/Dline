@@ -51,12 +51,13 @@ export class Logger {
 
 	static #output(level: string, message: string, error: Error | undefined, args: any[]) {
 		try {
-			let fullMessage = message
+			const timestamp = new Date().toISOString().replace("T", " ").slice(0, 23)
+			let fullMessage = `${timestamp} [${level.toLowerCase()}] ${message}`
 			if (Logger.isVerbose && args.length > 0) {
 				fullMessage += ` ${args.map((arg) => JSON.stringify(arg)).join(" ")}`
 			}
 			const errorSuffix = error?.message ? ` ${error.message}` : ""
-			Logger.output(`${level} ${fullMessage}${errorSuffix}`.trimEnd())
+			Logger.output(`${fullMessage}${errorSuffix}`.trimEnd())
 		} catch {
 			// do nothing if Logger fails
 		}

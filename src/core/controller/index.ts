@@ -1,5 +1,5 @@
 import type { Anthropic } from "@anthropic-ai/sdk"
-import { buildApiHandler } from "@core/api"
+import { AccountUsage, buildApiHandler } from "@core/api"
 import { getHooksEnabledSafe } from "@core/hooks/hooks-utils"
 import { tryAcquireTaskLockWithRetry } from "@core/task/TaskLockUtils"
 import { detectWorkspaceRoots } from "@core/workspace/detection"
@@ -84,6 +84,15 @@ export class Controller {
 
 	// Timer for periodic remote config fetching
 	private remoteConfigTimer?: NodeJS.Timeout
+	// Timer for periodic account usage polling
+	private accountUsageTimer?: NodeJS.Timeout
+	// Account usage data (refreshed every 60s, zero overhead on state push)
+	private _accountUsage?: AccountUsage
+
+	/** Public getter for account usage data, used by subscribeToState/getLatestState. */
+	getAccountUsage(): AccountUsage | undefined {
+		return this._accountUsage
+	}
 
 	// Public getter for workspace manager with lazy initialization - To get workspaces when task isn't initialized (Used by file mentions)
 	async ensureWorkspaceManager(): Promise<WorkspaceRootManager | undefined> {
@@ -154,6 +163,8 @@ export class Controller {
 		// Check CLI installation status once on startup
 		checkCliInstallation(this)
 
+		// Start account usage polling independent of tasks
+		this.startAccountUsagePolling()
 		Logger.log("[Controller] ClineProvider instantiated")
 	}
 
@@ -324,12 +335,18 @@ export class Controller {
 			taskLockAcquired,
 		})
 
-		if (historyItem) {
-			await this.task.resumeTaskFromHistory()
-		} else if (task || images || files) {
-			this.task.startTask(task, images, files)
+		try {
+			if (historyItem) {
+				await this.task.resumeTaskFromHistory()
+			} else if (task || images || files) {
+				this.task.startTask(task, images, files)
+			}
+		} finally {
+			// Start polling regardless of task start success/failure
+			this.startAccountUsagePolling()
 		}
 
+		await new Promise((r) => setTimeout(r, 1000))
 		await this.postStateToWebview()
 		return this.task.taskId
 	}
@@ -881,7 +898,7 @@ export class Controller {
 
 	async postStateToWebview() {
 		const state = await this.getStateToPostToWebview()
-		await sendStateUpdate(state)
+		await sendStateUpdate(state, this._accountUsage)
 	}
 
 	async getStateToPostToWebview(): Promise<ExtensionState> {
@@ -1055,6 +1072,37 @@ export class Controller {
 			lazyTeammateModeEnabled,
 			showFeatureTips,
 			openAiCodexIsAuthenticated,
+		}
+	}
+
+	/** Poll account usage every 60 seconds and push to webview */
+	private startAccountUsagePolling() {
+		const poll = async () => {
+			try {
+				const apiConfig = this.stateManager.getApiConfiguration()
+				const mode = this.stateManager.getGlobalSettingsKey("mode") || "act"
+				const handler = buildApiHandler(apiConfig, mode)
+				if (!handler.getAccountUsage) {
+					return
+				}
+				const usage = await handler.getAccountUsage()
+				if (usage) {
+					this._accountUsage = usage
+					Logger.debug("[UsagePoll] accountUsage updated")
+					await this.postStateToWebview()
+				}
+			} catch (e) {
+				Logger.warn(`[UsagePoll] Failed: ${e}`)
+			}
+		}
+		poll() // immediate first call
+		this.accountUsageTimer = setInterval(poll, 60_000)
+	}
+
+	private stopAccountUsagePolling() {
+		if (this.accountUsageTimer) {
+			clearInterval(this.accountUsageTimer)
+			this.accountUsageTimer = undefined
 		}
 	}
 
