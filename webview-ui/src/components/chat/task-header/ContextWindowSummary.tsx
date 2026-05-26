@@ -67,12 +67,13 @@ const TOKEN_DETAILS_CONFIG: Omit<TokenDetail, "value">[] = [
 ]
 
 const TokenUsageDetails = memo<TokenUsageInfoProps>(({ tokensIn, tokensOut, cacheWrites, cacheReads }) => {
+	const totalPromptTokens = (tokensIn || 0) + (cacheWrites || 0) + (cacheReads || 0)
 	const contextTokenDetails = useMemo(() => {
-		const values = [tokensIn, tokensOut, cacheWrites || 0, cacheReads || 0]
+		const values = [totalPromptTokens, tokensOut, cacheWrites || 0, cacheReads || 0]
 		return TOKEN_DETAILS_CONFIG.map((config, index) => ({ ...config, value: values[index] })).filter((item) => item.value)
-	}, [tokensIn, tokensOut, cacheWrites, cacheReads])
+	}, [totalPromptTokens, tokensOut, cacheWrites, cacheReads])
 
-	if (!tokensIn) {
+	if (!totalPromptTokens && !tokensOut) {
 		return <div>No token usage data available</div>
 	}
 
@@ -118,7 +119,8 @@ export const ContextWindowSummary: React.FC<TaskContextWindowButtonsProps> = ({
 		})
 	}, [])
 
-	const totalTokens = (tokensIn || 0) + (tokensOut || 0) + (cacheWrites || 0) + (cacheReads || 0)
+	const totalInputTokens = (tokensIn || 0) + (cacheWrites || 0) + (cacheReads || 0)
+	const totalTokens = totalInputTokens + (tokensOut || 0)
 
 	return (
 		<div className="context-window-tooltip-content flex flex-col gap-2 bg-menu rounded shadow-sm z-100 w-60 p-1">

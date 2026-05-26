@@ -14,6 +14,12 @@ export async function showTaskWithId(controller: Controller, request: StringRequ
 	try {
 		const id = request.value
 
+		let didNavigate = false
+		const onHistoryTaskReadyToDisplay = async () => {
+			didNavigate = true
+			await sendChatButtonClickedEvent()
+		}
+
 		// First check if task exists in global state for faster access
 		const taskHistory = controller.stateManager.getGlobalStateKey("taskHistory")
 		const historyItem = taskHistory.find((item) => item.id === id)
@@ -21,10 +27,12 @@ export async function showTaskWithId(controller: Controller, request: StringRequ
 		// We need to initialize the task before returning data
 		if (historyItem) {
 			// Always initialize the task with the history item
-			await controller.initTask(undefined, undefined, undefined, historyItem)
-
-			// Send UI update to show the chat view
-			await sendChatButtonClickedEvent()
+			await controller.initTask(undefined, undefined, undefined, historyItem, undefined, {
+				onHistoryTaskReadyToDisplay,
+			})
+			if (!didNavigate) {
+				await sendChatButtonClickedEvent()
+			}
 
 			// Return task data for gRPC response
 			return TaskResponse.create({
@@ -47,10 +55,12 @@ export async function showTaskWithId(controller: Controller, request: StringRequ
 		const { historyItem: fetchedItem } = await controller.getTaskWithId(id)
 
 		// Initialize the task with the fetched item
-		await controller.initTask(undefined, undefined, undefined, fetchedItem)
-
-		// Send UI update to show the chat view
-		await sendChatButtonClickedEvent()
+		await controller.initTask(undefined, undefined, undefined, fetchedItem, undefined, {
+			onHistoryTaskReadyToDisplay,
+		})
+		if (!didNavigate) {
+			await sendChatButtonClickedEvent()
+		}
 
 		return TaskResponse.create({
 			id: fetchedItem.id,
@@ -64,6 +74,7 @@ export async function showTaskWithId(controller: Controller, request: StringRequ
 			cacheWrites: fetchedItem.cacheWrites || 0,
 			cacheReads: fetchedItem.cacheReads || 0,
 			cacheHitRate: fetchedItem.cacheHitRate || 0,
+			currency: fetchedItem.currency || "",
 		})
 	} catch (error) {
 		Logger.error("Error in showTaskWithId:", error)

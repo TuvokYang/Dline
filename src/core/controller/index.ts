@@ -10,6 +10,8 @@ import { ClineAccountService } from "@services/account/ClineAccountService"
 import { McpHub } from "@services/mcp/McpHub"
 import type { ApiProvider, ModelInfo } from "@shared/api"
 import type { ChatContent } from "@shared/ChatContent"
+import { combineApiRequests } from "@shared/combineApiRequests"
+import { combineCommandSequences } from "@shared/combineCommandSequences"
 import type { ExtensionState, Platform } from "@shared/ExtensionMessage"
 import type { HistoryItem } from "@shared/HistoryItem"
 import type { McpMarketplaceCatalog, McpMarketplaceItem } from "@shared/mcp"
@@ -58,6 +60,14 @@ import { appendClineStealthModels } from "./models/refreshOpenRouterModels"
 import { checkCliInstallation } from "./state/checkCliInstallation"
 import { sendStateUpdate } from "./state/subscribeToState"
 import { sendChatButtonClickedEvent } from "./ui/subscribeToChatButtonClicked"
+
+type InitTaskOptions = {
+	onHistoryTaskReadyToDisplay?: () => Promise<void>
+}
+
+type PostStateOptions = {
+	immediate?: boolean
+}
 
 /*
 https://github.com/microsoft/vscode-webview-ui-toolkit-samples/blob/main/default/weather-webview/src/providers/WeatherViewProvider.ts
@@ -242,6 +252,7 @@ export class Controller {
 		files?: string[],
 		historyItem?: HistoryItem,
 		taskSettings?: Partial<Settings>,
+		options?: InitTaskOptions,
 	) {
 		// Fire-and-forget: We intentionally don't await fetchRemoteConfig here.
 		// Remote config is already fetched in startRemoteConfigTimer() which runs in the constructor,
@@ -316,7 +327,7 @@ export class Controller {
 			controller: this,
 			mcpHub: this.mcpHub,
 			updateTaskHistory: (historyItem) => this.updateTaskHistory(historyItem),
-			postStateToWebview: () => this.postStateToWebview(),
+			postStateToWebview: (options) => this.postStateToWebview(options),
 			reinitExistingTaskFromId: (taskId) => this.reinitExistingTaskFromId(taskId),
 			cancelTask: () => this.cancelTask(),
 			shellIntegrationTimeout,
@@ -337,7 +348,9 @@ export class Controller {
 
 		try {
 			if (historyItem) {
-				await this.task.resumeTaskFromHistory()
+				await this.task.resumeTaskFromHistory({
+					onReadyToDisplay: options?.onHistoryTaskReadyToDisplay,
+				})
 			} else if (task || images || files) {
 				this.task.startTask(task, images, files)
 			}
@@ -346,8 +359,12 @@ export class Controller {
 			this.startAccountUsagePolling()
 		}
 
-		await new Promise((r) => setTimeout(r, 1000))
+		// Brief yield to let the UI frame render before pushing state.
+		// Previously was 1000ms; reduced to a single microtask tick since
+		// history resumes can push immediate state before navigating.
+		await new Promise((r) => setTimeout(r, 0))
 		await this.postStateToWebview()
+
 		return this.task.taskId
 	}
 
@@ -896,9 +913,9 @@ export class Controller {
 		return updatedTaskHistory
 	}
 
-	async postStateToWebview() {
+	async postStateToWebview(options?: PostStateOptions) {
 		const state = await this.getStateToPostToWebview()
-		await sendStateUpdate(state, this._accountUsage)
+		await sendStateUpdate(state, this._accountUsage, options)
 	}
 
 	async getStateToPostToWebview(): Promise<ExtensionState> {
@@ -981,9 +998,15 @@ export class Controller {
 		// These are passed through subscribeToState so the frontend
 		// renders task header stats without depending on clineMessages.
 		const allMessages = this.task?.messageStateHandler.getClineMessages() || []
+		let metricMessages = allMessages
+		try {
+			metricMessages = combineApiRequests(combineCommandSequences(allMessages))
+		} catch (error) {
+			Logger.warn("Failed to combine messages for api metrics:", error)
+		}
 		const { getApiMetrics, getLastApiReqTotalTokens, getLastTaskProgressText } = await import("@shared/getApiMetrics")
-		const apiMetrics = getApiMetrics(allMessages)
-		const lastApiReqTotalTokens = getLastApiReqTotalTokens(allMessages)
+		const apiMetrics = getApiMetrics(metricMessages)
+		const lastApiReqTotalTokens = getLastApiReqTotalTokens(metricMessages)
 
 		// If currentFocusChainChecklist is null, fall back to searching
 		// the full message list (not the window slice) for task_progress.

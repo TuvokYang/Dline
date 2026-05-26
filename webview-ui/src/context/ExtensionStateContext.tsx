@@ -311,20 +311,51 @@ export const ExtensionStateContextProvider: React.FC<{
 
 	const prevTotalRef = useRef(0)
 	const refetchLockRef = useRef(false)
+	// Stabilize window after cancel: delay refetch by 200ms so rapid state
+	// changes (remove partials, postState, total update) settle before
+	// triggering a Virtuoso data swap that causes layout jitter.
+	const cancelStabilizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+	const currentTaskIdRef = useRef<string | undefined>(state.currentTaskItem?.id)
+	const prevRefetchTaskIdRef = useRef<string | undefined>(state.currentTaskItem?.id)
+	const prevHistoryTaskIdRef = useRef<string | undefined>(state.currentTaskItem?.id)
 
 	// Reset when task is cleared; bootstrap initial fetch on task switch;
 	// refetch when totalMessageCount changes (e.g. after cancel removes partials).
 	useEffect(() => {
+		const currentId = state.currentTaskItem?.id
+		if (currentId !== prevRefetchTaskIdRef.current) {
+			currentTaskIdRef.current = currentId
+			prevRefetchTaskIdRef.current = currentId
+			if (cancelStabilizeTimerRef.current) {
+				clearTimeout(cancelStabilizeTimerRef.current)
+				cancelStabilizeTimerRef.current = null
+			}
+			refetchLockRef.current = false
+			setClineMessages([])
+			setFirstItemIndex(0)
+			prevTotalRef.current = 0
+			return
+		}
+		currentTaskIdRef.current = currentId
+
 		const total = state.totalMessageCount ?? 0
 		if (total === 0) {
+			if (cancelStabilizeTimerRef.current) {
+				clearTimeout(cancelStabilizeTimerRef.current)
+				cancelStabilizeTimerRef.current = null
+			}
 			setClineMessages([])
 			setFirstItemIndex(0)
 			prevTotalRef.current = 0
 			return
 		}
 		if (prevTotalRef.current === 0 && total > 0 && clineMessages.length === 0) {
+			const scheduledTaskId = currentTaskIdRef.current
 			TaskServiceClient.fetchMessage(FetchMessageRequest.create({ referenceIndex: -1, count: 200 }))
 				.then((resp) => {
+					if (currentTaskIdRef.current !== scheduledTaskId) {
+						return
+					}
 					const converted = (resp.messages as any[]).map((m) => convertProtoToClineMessage(m))
 					setClineMessages(converted)
 					setFirstItemIndex(Math.max(0, resp.startIndex))
@@ -335,21 +366,47 @@ export const ExtensionStateContextProvider: React.FC<{
 		}
 		// Refetch when totalMessageCount changes and we already have messages.
 		// This syncs the sliding window after cancel removes partial messages.
+		// Delayed by 200ms via cancelStabilizeTimerRef so rapid state changes
+		// (remove partials, postState, total update) settle before triggering
+		// a Virtuoso data swap that causes layout jitter.
 		if (prevTotalRef.current !== 0 && prevTotalRef.current !== total && clineMessages.length > 0 && !refetchLockRef.current) {
-			refetchLockRef.current = true
-			TaskServiceClient.fetchMessage(FetchMessageRequest.create({ referenceIndex: -1, count: 200 }))
-				.then((resp) => {
-					const converted = (resp.messages as any[]).map((m) => convertProtoToClineMessage(m))
-					setClineMessages(converted)
-					setFirstItemIndex(Math.max(0, resp.startIndex))
-				})
-				.catch(() => {})
-				.finally(() => {
-					refetchLockRef.current = false
-				})
+			if (cancelStabilizeTimerRef.current) {
+				clearTimeout(cancelStabilizeTimerRef.current)
+			}
+			const scheduledTaskId = currentTaskIdRef.current
+			cancelStabilizeTimerRef.current = setTimeout(() => {
+				cancelStabilizeTimerRef.current = null
+				if (currentTaskIdRef.current !== scheduledTaskId) {
+					return
+				}
+				refetchLockRef.current = true
+				TaskServiceClient.fetchMessage(FetchMessageRequest.create({ referenceIndex: -1, count: 200 }))
+					.then((resp) => {
+						if (currentTaskIdRef.current !== scheduledTaskId) {
+							return
+						}
+						const converted = (resp.messages as any[]).map((m) => convertProtoToClineMessage(m))
+						setClineMessages(converted)
+						setFirstItemIndex(Math.max(0, resp.startIndex))
+					})
+					.catch(() => {})
+					.finally(() => {
+						refetchLockRef.current = false
+					})
+			}, 200)
 		}
+
 		prevTotalRef.current = total
-	}, [state.totalMessageCount, clineMessages.length])
+	}, [state.currentTaskItem?.id, state.totalMessageCount, clineMessages.length])
+
+	useEffect(() => {
+		return () => {
+			if (cancelStabilizeTimerRef.current) {
+				clearTimeout(cancelStabilizeTimerRef.current)
+				cancelStabilizeTimerRef.current = null
+			}
+		}
+	}, [])
 
 	const [showWelcome, setShowWelcome] = useState(false)
 	const [onboardingModels, setOnboardingModels] = useState<OnboardingModelGroup | undefined>(undefined)
@@ -745,6 +802,25 @@ export const ExtensionStateContextProvider: React.FC<{
 			}
 		}
 	}, [])
+
+	// Safety net for task switches while HistoryView is open. The primary
+	// navigation path is the backend history-ready event; this only handles a
+	// missed event without closing HistoryView just because a task already exists.
+	useEffect(() => {
+		const currentId = state.currentTaskItem?.id
+		const prevId = prevHistoryTaskIdRef.current
+
+		if (!showHistory) {
+			prevHistoryTaskIdRef.current = currentId
+			return
+		}
+
+		if (currentId && currentId !== prevId) {
+			navigateToChat()
+		}
+
+		prevHistoryTaskIdRef.current = currentId
+	}, [state.currentTaskItem?.id, showHistory, navigateToChat])
 
 	const refreshOpenRouterModels = useCallback(() => {
 		ModelsServiceClient.refreshOpenRouterModelsRpc(EmptyRequest.create({}))

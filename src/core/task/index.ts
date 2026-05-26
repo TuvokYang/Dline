@@ -137,7 +137,7 @@ type TaskParams = {
 	controller: Controller
 	mcpHub: McpHub
 	updateTaskHistory: (historyItem: HistoryItem) => Promise<HistoryItem[]>
-	postStateToWebview: () => Promise<void>
+	postStateToWebview: (options?: { immediate?: boolean }) => Promise<void>
 	reinitExistingTaskFromId: (taskId: string) => Promise<void>
 	cancelTask: () => Promise<void>
 	shellIntegrationTimeout: number
@@ -154,6 +154,10 @@ type TaskParams = {
 	historyItem?: HistoryItem
 	taskId: string
 	taskLockAcquired: boolean
+}
+
+type ResumeTaskFromHistoryOptions = {
+	onReadyToDisplay?: () => Promise<void>
 }
 
 export class Task {
@@ -247,7 +251,7 @@ export class Task {
 
 	// Callbacks
 	private updateTaskHistory: (historyItem: HistoryItem) => Promise<HistoryItem[]>
-	private postStateToWebview: () => Promise<void>
+	private postStateToWebview: (options?: { immediate?: boolean }) => Promise<void>
 	private reinitExistingTaskFromId: (taskId: string) => Promise<void>
 	private cancelTask: () => Promise<void>
 
@@ -1199,7 +1203,7 @@ export class Task {
 		await this.initiateTaskLoop(userContent)
 	}
 
-	public async resumeTaskFromHistory() {
+	public async resumeTaskFromHistory(options?: ResumeTaskFromHistoryOptions) {
 		try {
 			await this.clineIgnoreController.initialize()
 		} catch (error) {
@@ -1308,7 +1312,8 @@ export class Task {
 			}
 			this.taskState.isInitialized = true
 			this.taskState.abort = true
-			await this.postStateToWebview()
+			await this.postStateToWebview({ immediate: true })
+			await options?.onReadyToDisplay?.()
 			return
 		}
 
@@ -1336,6 +1341,8 @@ export class Task {
 		// For conversational asks (plan_mode_respond / followup), pass the
 		// original text so the Plan Created / question content is preserved.
 		const askText = isConversationalAsk ? lastClineMessage?.text : undefined
+		await this.postStateToWebview({ immediate: true })
+		await options?.onReadyToDisplay?.()
 		const { response, text, images, files } = await this.ask(askType, askText)
 
 		// Initialize newUserContent array for hook context

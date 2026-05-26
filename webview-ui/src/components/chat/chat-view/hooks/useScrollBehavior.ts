@@ -160,22 +160,22 @@ export function useScrollBehavior(
 	}, [])
 
 	// User-initiated smooth scroll (e.g., to-bottom button).
+	// Debounced at 30ms without immediate-first to reduce excessive
+	// scrolling during streaming. The trailing edge fires after the
+	// scroll settles, giving Virtuoso time to complete any in-progress
+	// re-layout before receiving another scroll command.
 	const scrollToBottomSmooth = useMemo(
 		() =>
-			debounce(
-				() => {
-					const lastIdx = getLastGlobalIndex()
-					if (lastIdx >= 0) {
-						virtuosoRef.current?.scrollToIndex({
-							index: lastIdx,
-							align: "end",
-							behavior: "smooth",
-						})
-					}
-				},
-				10,
-				{ immediate: true },
-			),
+			debounce(() => {
+				const lastIdx = getLastGlobalIndex()
+				if (lastIdx >= 0) {
+					virtuosoRef.current?.scrollToIndex({
+						index: lastIdx,
+						align: "end",
+						behavior: "smooth",
+					})
+				}
+			}, 30),
 		[getLastGlobalIndex],
 	)
 
@@ -297,13 +297,15 @@ export function useScrollBehavior(
 	)
 
 	// Handle row height changes during streaming.
-	// Throttled to max once per 50ms so rapid height changes (e.g. during
+	// Throttled to max once per 120ms so rapid height changes (e.g. during
 	// streaming or cancel) don't trigger cascading scrolls that cause jitter.
+	// The wider window reduces overlap with the groupedMessages.length
+	// useEffect auto-scroll, lowering the chance of dual-path scroll conflicts.
 	const handleRowHeightChange = useCallback(
 		(isTaller: boolean) => {
 			if (!disableAutoScrollRef.current) {
 				const now = Date.now()
-				if (now - lastRowHeightChangeRef.current < 50) {
+				if (now - lastRowHeightChangeRef.current < 120) {
 					return
 				}
 				lastRowHeightChangeRef.current = now

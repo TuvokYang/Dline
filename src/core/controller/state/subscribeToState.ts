@@ -20,6 +20,10 @@ let pendingStateJson: string | null = null
 let pendingAccountUsage: AccountUsage | undefined
 let debounceTimer: ReturnType<typeof setTimeout> | null = null
 
+type StateUpdateOptions = {
+	immediate?: boolean
+}
+
 /**
  * Subscribe to state updates
  * @param controller The controller instance
@@ -72,7 +76,11 @@ export async function subscribeToState(
  * @param state The state to send
  * @param accountUsage Optional account usage data (proto-serialized separately from stateJson)
  */
-export async function sendStateUpdate(state: ExtensionState, accountUsage?: AccountUsage): Promise<void> {
+export async function sendStateUpdate(
+	state: ExtensionState,
+	accountUsage?: AccountUsage,
+	options?: StateUpdateOptions,
+): Promise<void> {
 	let stateJson: string
 	try {
 		stateJson = JSON.stringify(state)
@@ -83,6 +91,21 @@ export async function sendStateUpdate(state: ExtensionState, accountUsage?: Acco
 
 	pendingStateJson = stateJson
 	pendingAccountUsage = accountUsage
+
+	if (options?.immediate) {
+		if (debounceTimer) {
+			clearTimeout(debounceTimer)
+			debounceTimer = null
+		}
+
+		const finalStateJson = pendingStateJson!
+		const finalAccountUsage = pendingAccountUsage
+		pendingStateJson = null
+		pendingAccountUsage = undefined
+
+		await sendStateJsonToSubscribers(finalStateJson, finalAccountUsage)
+		return
+	}
 
 	if (debounceTimer) {
 		return // debounce in progress, latest state will be sent when timer fires
@@ -95,25 +118,29 @@ export async function sendStateUpdate(state: ExtensionState, accountUsage?: Acco
 		pendingStateJson = null
 		pendingAccountUsage = undefined
 
-		recordStateSizeTelemetry(Buffer.byteLength(finalStateJson, "utf8"))
-
-		const promises = Array.from(activeStateSubscriptions).map(async (responseStream) => {
-			try {
-				await responseStream(
-					{
-						stateJson: finalStateJson,
-						accountUsage: accountUsageToProto(finalAccountUsage),
-					},
-					false, // Not the last message
-				)
-			} catch (error) {
-				Logger.error("Error sending state update:", error)
-				activeStateSubscriptions.delete(responseStream)
-			}
-		})
-
-		await Promise.all(promises)
+		await sendStateJsonToSubscribers(finalStateJson, finalAccountUsage)
 	}, 50)
+}
+
+async function sendStateJsonToSubscribers(finalStateJson: string, finalAccountUsage?: AccountUsage): Promise<void> {
+	recordStateSizeTelemetry(Buffer.byteLength(finalStateJson, "utf8"))
+
+	const promises = Array.from(activeStateSubscriptions).map(async (responseStream) => {
+		try {
+			await responseStream(
+				{
+					stateJson: finalStateJson,
+					accountUsage: accountUsageToProto(finalAccountUsage),
+				},
+				false, // Not the last message
+			)
+		} catch (error) {
+			Logger.error("Error sending state update:", error)
+			activeStateSubscriptions.delete(responseStream)
+		}
+	})
+
+	await Promise.all(promises)
 }
 
 function recordStateSizeTelemetry(sizeBytes: number): void {

@@ -106,6 +106,8 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 			modeFields.apiProvider !== "ollama" &&
 			modeFields.apiProvider !== "lmstudio" &&
 			modeFields.apiProvider !== "openai-codex") // Subscription-based, no per-token costs
+	const displayCurrency = currency || selectedModelInfo.currency || "USD"
+	const totalInputTokens = tokensIn + (cacheWrites ?? 0) + (cacheReads ?? 0)
 
 	// Event handlers
 	const toggleTaskExpanded = useCallback(() => setIsTaskExpanded(!isTaskExpanded), [setIsTaskExpanded, isTaskExpanded])
@@ -177,19 +179,19 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 							<div
 								className="mx-1 px-1.5 py-0.25 rounded-full inline-flex shrink-0 text-badge-background bg-badge-foreground/80 items-center gap-1.5"
 								id="price-tag"
-								title={`In: ${tokensIn} / Out: ${tokensOut} / Cache: ${cacheReads ?? 0}`}>
-								{tokensIn > 0 && (
-									<span className="text-[10px] opacity-80">
+								title={`In: ${totalInputTokens} / Out: ${tokensOut} / Cache read: ${cacheReads ?? 0} / Cache write: ${cacheWrites ?? 0}`}>
+								{totalInputTokens > 0 && (
+									<span className="text-xs sm:text-sm font-medium opacity-90">
 										In:
-										{tokensIn >= 1000000
-											? `${(tokensIn / 1000000).toFixed(2)}M`
-											: tokensIn >= 1000
-												? `${(tokensIn / 1000).toFixed(1)}K`
-												: tokensIn}
+										{totalInputTokens >= 1000000
+											? `${(totalInputTokens / 1000000).toFixed(2)}M`
+											: totalInputTokens >= 1000
+												? `${(totalInputTokens / 1000).toFixed(1)}K`
+												: totalInputTokens}
 									</span>
 								)}
 								{tokensOut > 0 && (
-									<span className="text-[10px] opacity-80">
+									<span className="text-xs sm:text-sm font-medium opacity-90">
 										Out:
 										{tokensOut >= 1000000
 											? `${(tokensOut / 1000000).toFixed(2)}M`
@@ -199,11 +201,13 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 									</span>
 								)}
 								{cacheHitRate != null && cacheHitRate > 0 && (
-									<span className="text-[10px] opacity-80">Cache:{cacheHitRate.toFixed(0)}%</span>
+									<span className="text-xs sm:text-sm font-medium opacity-90">
+										Hit:{cacheHitRate.toFixed(0)}%
+									</span>
 								)}
 								<span className="text-xs sm:text-sm font-medium">
-									{currency === "CNY" ? "¥" : "$"}
-									{totalCost?.toFixed(4)}
+									{displayCurrency === "CNY" ? "¥" : "$"}
+									{totalCost?.toFixed(2)}
 								</span>
 							</div>
 						)}

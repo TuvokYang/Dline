@@ -38,6 +38,7 @@ const HistoryViewItem = ({
 }: HistoryViewItemProps) => {
 	const [expanded, setExpanded] = useState(false)
 	const costSymbol = item.currency === "CNY" ? "¥" : "$"
+	const totalInputTokens = (item.tokensIn || 0) + (item.cacheWrites || 0) + (item.cacheReads || 0)
 
 	const isFavoritedItem = useMemo(
 		() => pendingFavoriteToggles[item.id] ?? item.isFavorited,
@@ -169,7 +170,7 @@ const HistoryViewItem = ({
 										<div className="flex items-center gap-1 text-description text-xs">
 											<span className="flex items-center gap-1 text-description">
 												<ArrowUpIcon className="text-description !size-1" />
-												{formatLargeNumber(item.tokensIn || 0)}
+												{formatLargeNumber(totalInputTokens)}
 											</span>
 											<span className="flex items-center gap-1 text-description">
 												<ArrowDownIcon className="text-description !size-1" />
