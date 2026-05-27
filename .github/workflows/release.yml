@@ -12,6 +12,9 @@ on:
         required: true
         type: string
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 permissions:
   contents: write
   packages: write
@@ -80,10 +83,10 @@ jobs:
           node-version: 22
 
       - name: Install root dependencies
-        run: npm ci
+        run: npm ci --include=optional
 
       - name: Install webview-ui dependencies
-        run: cd webview-ui && npm install
+        run: cd webview-ui && npm ci
 
       - name: Install Publishing Tools
         run: npm install -g @vscode/vsce ovsx
@@ -129,7 +132,7 @@ jobs:
           OTEL_EXPORTER_OTLP_HEADERS: ${{ secrets.OTEL_EXPORTER_OTLP_HEADERS }}
         run: |
           # Required to generate the .vsix
-          vsce package --allow-package-secrets sendgrid --out "cline-${{ steps.get_version.outputs.version }}.vsix"
+          vsce package --allow-package-secrets sendgrid --out "dline-${{ steps.get_version.outputs.version }}.vsix"
 
       - name: Get Previous Tag
         id: prev_tag

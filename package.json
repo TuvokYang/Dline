@@ -17,9 +17,9 @@
 	"publisher": "tuvokyang",
 	"repository": {
 		"type": "git",
-		"url": "https://github.com/TuvokYang/cline"
+		"url": "https://github.com/TuvokYang/Dline"
 	},
-	"homepage": "https://github.com/TuvokYang/cline",
+	"homepage": "https://github.com/TuvokYang/Dline",
 	"categories": [
 		"AI",
 		"Chat",
@@ -625,8 +625,6 @@
 			"**/src/xml/**",
 			"**/standalone/**",
 			"**/src/generated/**",
-			"**/evals/cli/dist/**",
-			"**/evals/cli/src/**",
 			"dist"
 		],
 		"all": true,

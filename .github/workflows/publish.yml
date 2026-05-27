@@ -21,6 +21,9 @@ on:
                 required: true
                 type: string
 
+env:
+    FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 permissions:
     contents: write
     packages: write
@@ -111,10 +114,10 @@ jobs:
                   node-version: 22
 
             - name: Install root dependencies
-              run: npm install --include=optional
+              run: npm ci --include=optional
 
             - name: Install webview-ui dependencies
-              run: cd webview-ui && npm install --include=optional
+              run: cd webview-ui && npm ci --include=optional
 
             - name: Install Publishing Tools
               run: npm install -g @vscode/vsce ovsx
@@ -168,7 +171,7 @@ jobs:
                   trap 'node scripts/marketplace-readme.mjs restore' EXIT
 
                   # Required to generate the .vsix
-                  vsce package  --allow-package-secrets sendgrid --out "cline-${{ steps.get_version.outputs.version }}.vsix"
+                  vsce package  --allow-package-secrets sendgrid --out "dline-${{ steps.get_version.outputs.version }}.vsix"
 
                   if [ "$RELEASE_TYPE" = "pre-release" ]; then
                     npm run publish:marketplace:prerelease
@@ -214,12 +217,12 @@ jobs:
                   token: ${{ secrets.SLACK_RELEASE_BOT_TOKEN }}
                   payload: |
                     channel: "C0APVKGGZFC"
-                    text: "Cline ${{ steps.resolve_tag.outputs.tag }}"
+                    text: "Dline ${{ steps.resolve_tag.outputs.tag }}"
                     blocks:
                       - type: "section"
                         text:
                           type: "mrkdwn"
-                          text: "*Cline ${{ steps.resolve_tag.outputs.tag }}*"
+                          text: "*Dline ${{ steps.resolve_tag.outputs.tag }}*"
                       - type: "section"
                         text:
                           type: "mrkdwn"

@@ -29,7 +29,7 @@
  *   `major.minor.<unix-timestamp>`, the most recently published build
  *   wins. When this script is used for a manual pre-release publish, the
  *   scheduled release nightly workflow will eventually publish a newer
- *   timestamp and pull pre-release users forward onto release — which is
+ *   timestamp and pull pre-release users forward onto release - which is
  *   the desired behavior once an experimental branch is abandoned, but
  *   means ongoing previews require re-publishing from the branch at
  *   least as often as the scheduled release nightly runs.
@@ -76,9 +76,9 @@ const log = {
 // Configuration
 const config = {
 	// The name and display name for the nightly version
-	nightlyName: "cline-nightly",
-	originalName: "claude-dev",
-	nightlyDisplayName: "Cline (Nightly)",
+	nightlyName: "dline-nightly",
+	originalName: "dline",
+	nightlyDisplayName: "Dline (Nightly)",
 	projectRoot: path.join(__dirname, ".."),
 	get packageJsonPath() {
 		return path.join(this.projectRoot, "package.json")
@@ -90,7 +90,7 @@ const config = {
 		return path.join(this.projectRoot, "dist")
 	},
 	get vsixPath() {
-		return path.join(this.distDir, "cline-nightly.vsix")
+		return path.join(this.distDir, "dline-nightly.vsix")
 	},
 	get nodeModulesPath() {
 		return path.join(this.projectRoot, "node_modules")
