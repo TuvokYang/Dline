@@ -2,14 +2,14 @@
 
 SESSION="cline-dev"
 WORKSPACE="${CLINE_WORKSPACE:-$(cd "$(dirname "$0")/.." && pwd)}"
-ENVIRONMENT="${CLINE_ENVIRONMENT:-production}"
+ENVIRONMENT="${DLINE_ENVIRONMENT:-production}"
 
 cd "$WORKSPACE"
 
 # Export env vars -- tmux inherits them automatically
 export IS_DEV=true
 export DEV_WORKSPACE_FOLDER="$WORKSPACE"
-export CLINE_ENVIRONMENT="$ENVIRONMENT"
+export DLINE_ENVIRONMENT="$ENVIRONMENT"
 if [ -f .env ]; then
   set -a
   source .env

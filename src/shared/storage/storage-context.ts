@@ -92,8 +92,8 @@ function hashString(str: string): string {
  * @returns A StorageContext ready for use by StateManager
  */
 export function createStorageContext(opts: StorageContextOptions = {}): StorageContext {
-	const clineDir = opts.clineDir || process.env.CLINE_DIR || path.join(os.homedir(), ".cline")
-	const dataDir = path.join(clineDir, SETTINGS_SUBFOLDER)
+	const dlineDir = opts.clineDir || process.env.DLINE_DIR || process.env.CLINE_DIR || path.join(os.homedir(), ".dline")
+	const dataDir = path.join(dlineDir, SETTINGS_SUBFOLDER)
 
 	// Resolve workspace storage directory
 	let workspaceDir: string

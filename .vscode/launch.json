@@ -27,7 +27,7 @@
 			"env": {
 				"IS_DEV": "true",
 				"DEV_WORKSPACE_FOLDER": "${workspaceFolder}",
-				"CLINE_ENVIRONMENT": "production"
+				"DLINE_ENVIRONMENT": "production"
 			}
 		},
 		{
@@ -51,7 +51,7 @@
 			"env": {
 				"IS_DEV": "true",
 				"DEV_WORKSPACE_FOLDER": "${workspaceFolder}",
-				"CLINE_ENVIRONMENT": "staging"
+				"DLINE_ENVIRONMENT": "staging"
 			}
 		},
 		{
@@ -75,7 +75,31 @@
 			"env": {
 				"IS_DEV": "true",
 				"DEV_WORKSPACE_FOLDER": "${workspaceFolder}",
-				"CLINE_ENVIRONMENT": "local"
+				"DLINE_ENVIRONMENT": "local"
+			}
+		},
+		{
+			"name": "Run Extension (Semi-Fresh, keep .dline)",
+			"type": "extensionHost",
+			"request": "launch",
+			"runtimeExecutable": "${execPath}",
+			"args": [
+				"--user-data-dir=${workspaceFolder}/dist/tmp/user",
+				"--profile-temp",
+				"--sync=off",
+				"--extensionDevelopmentPath=${workspaceFolder}",
+				"${workspaceFolder}"
+			],
+			"outFiles": [
+				"${workspaceFolder}/dist/**/*.js"
+			],
+			"preLaunchTask": "clean-tmp-user",
+			"envFile": "${workspaceFolder}/.env",
+			"env": {
+				"IS_DEV": "true",
+				"DEV_WORKSPACE_FOLDER": "${workspaceFolder}",
+				"DLINE_ENVIRONMENT": "production",
+				"DLINE_DOCS_DIR": "${workspaceFolder}/dist/tmp/Dline"
 			}
 		},
 		{
@@ -103,9 +127,10 @@
 			"envFile": "${workspaceFolder}/.env",
 			"env": {
 				"IS_DEV": "true",
-				"TEMP_PROFILE": "true",
 				"DEV_WORKSPACE_FOLDER": "${workspaceFolder}",
-				"CLINE_ENVIRONMENT": "production"
+				"DLINE_ENVIRONMENT": "production",
+				"DLINE_HOME_DIR": "${workspaceFolder}/dist/tmp/.dline",
+				"DLINE_DOCS_DIR": "${workspaceFolder}/dist/tmp/Dline"
 			}
 		},
 		{
@@ -137,7 +162,7 @@
 				"HOSTBRIDGE_PORT": "26041",
 				"WORKSPACE_DIR": "${workspaceFolder}",
 				"E2E_TEST": "true",
-				"CLINE_ENVIRONMENT": "local"
+				"DLINE_ENVIRONMENT": "local"
 			},
 			"console": "integratedTerminal",
 			"internalConsoleOptions": "neverOpen"
@@ -174,7 +199,7 @@
 				"TS_NODE_PROJECT": "./tsconfig.unit-test.json",
 				"NODE_ENV": "test",
 				"IS_DEV": "true",
-				"CLINE_ENVIRONMENT": "local"
+				"DLINE_ENVIRONMENT": "local"
 			},
 			"console": "integratedTerminal",
 			"internalConsoleOptions": "openOnSessionStart"

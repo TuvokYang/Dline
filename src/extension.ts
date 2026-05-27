@@ -19,6 +19,7 @@ import path from "node:path"
 import type { ExtensionContext } from "vscode"
 import { HostProvider } from "@/hosts/host-provider"
 import { vscodeHostBridgeClient } from "@/hosts/vscode/hostbridge/client/host-grpc-client"
+import { migrateFromClineToDline } from "@/shared/services/migration"
 import { createStorageContext } from "@/shared/storage/storage-context"
 import { readTextFromClipboard, writeTextToClipboard } from "@/utils/env"
 import { initialize, tearDown } from "./common"
@@ -72,7 +73,12 @@ export async function activate(context: vscode.ExtensionContext) {
 	// Must run BEFORE the file export so we copy clean state.
 	await cleanupLegacyVSCodeStorage(context)
 
-	// 3. One-time export of VSCode's native storage to shared file-backed stores.
+	// 3. Migrate legacy Cline data to Dline paths BEFORE creating StorageContext.
+	// IMPORTANT: Must run before createStorageContext() because that call creates
+	// ~/.dline/data/ directory, which would make the migration skip itself.
+	await migrateFromClineWithProgress()
+
+	// 4. One-time export of VSCode's native storage to shared file-backed stores.
 	// After this, all platforms (VSCode, CLI, JetBrains) read from ~/.cline/data/.
 	const workspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
 	const storageContext = createStorageContext({ workspacePath })
@@ -713,6 +719,29 @@ if (IS_DEV) {
 	})
 }
 
+/**
+ * Migrate legacy Cline data to Dline paths with VSCode progress notification.
+ * Shows a progress indicator in the VSCode status bar during migration.
+ * Migration only runs once — subsequent startups skip it.
+ */
+async function migrateFromClineWithProgress(): Promise<void> {
+	await vscode.window.withProgress(
+		{
+			location: vscode.ProgressLocation.Notification,
+			title: "Dline: Checking for legacy Cline data...",
+			cancellable: false,
+		},
+		async (progress) => {
+			progress.report({ message: "Scanning for Cline data to migrate..." })
+			const result = await migrateFromClineToDline()
+			if (result.migrated) {
+				progress.report({ message: result.details.join(", ") })
+				vscode.window.showInformationMessage(`Dline: Data migrated — ${result.details.join(", ")}`)
+			}
+		},
+	)
+}
+
 // VSCode-specific storage migrations
 async function cleanupLegacyVSCodeStorage(context: ExtensionContext): Promise<void> {
 	try {
@@ -745,6 +774,6 @@ async function cleanupLegacyVSCodeStorage(context: ExtensionContext): Promise<vo
 
 		Logger.info("[VS Code Storage Migrations] Completed")
 	} catch (error) {
-		Logger.warn("[VS Code Storage Migrations] Failed" + (error instanceof Error ? `: ${error.message}` : ""))
+		Logger.warn(`[VS Code Storage Migrations] Failed${error instanceof Error ? `: ${error.message}` : ""}`)
 	}
 }

@@ -6,7 +6,7 @@ import * as esbuild from "esbuild"
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
-const production = process.argv.includes("--production") || process.env["IS_DEBUG_BUILD"] === "false"
+const production = process.argv.includes("--production") || process.env.IS_DEBUG_BUILD === "false"
 const watch = process.argv.includes("--watch")
 const standalone = process.argv.includes("--standalone")
 const e2eBuild = process.argv.includes("--e2e-build")
@@ -134,8 +134,8 @@ if (production) {
 }
 // Set the environment and telemetry env vars. The API key env vars need to be populated in the GitHub
 // workflows from the secrets.
-if (process.env.CLINE_ENVIRONMENT) {
-	buildEnvVars["process.env.CLINE_ENVIRONMENT"] = JSON.stringify(process.env.CLINE_ENVIRONMENT)
+if (process.env.DLINE_ENVIRONMENT) {
+	buildEnvVars["process.env.DLINE_ENVIRONMENT"] = JSON.stringify(process.env.DLINE_ENVIRONMENT)
 }
 if (process.env.TELEMETRY_SERVICE_API_KEY) {
 	buildEnvVars["process.env.TELEMETRY_SERVICE_API_KEY"] = JSON.stringify(process.env.TELEMETRY_SERVICE_API_KEY)

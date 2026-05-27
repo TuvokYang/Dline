@@ -36,11 +36,12 @@ class ClineEndpoint {
 	private onPremiseConfig: EndpointsFileSchema | null = null
 	private environment: Environment = Environment.production
 	// Track if config came from bundled file (enterprise distribution)
-	private isBundled: boolean = false
+	private isBundled = false
 
 	private constructor() {
 		// Set environment at module load. Use override if provided.
-		const _env = process?.env?.CLINE_ENVIRONMENT_OVERRIDE || process?.env?.CLINE_ENVIRONMENT
+		const _env =
+			process?.env?.DLINE_ENVIRONMENT_OVERRIDE || process?.env?.DLINE_ENVIRONMENT || process?.env?.DLINE_ENVIRONMENT
 		if (_env && Object.values(Environment).includes(_env as Environment)) {
 			this.environment = _env as Environment
 		}
@@ -125,10 +126,10 @@ class ClineEndpoint {
 
 	/**
 	 * Returns the path to the endpoints.json configuration file.
-	 * Located at ~/.cline/endpoints.json
+	 * Located at ~/.dline/endpoints.json
 	 */
 	private static getEndpointsFilePath(): string {
-		return path.join(os.homedir(), ".cline", "endpoints.json")
+		return path.join(os.homedir(), ".dline", "endpoints.json")
 	}
 
 	/**

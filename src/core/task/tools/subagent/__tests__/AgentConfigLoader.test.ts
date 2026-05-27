@@ -4,7 +4,12 @@ import { afterEach, describe, it } from "mocha"
 import os from "os"
 import * as path from "path"
 import { ClineDefaultTool, getToolUseNames } from "@/shared/tools"
-import { AgentConfigLoader, getAgentsConfigPath, parseAgentConfigFromYaml, readAgentConfigsFromDisk } from "../AgentConfigLoader"
+import {
+	AGENTS_CONFIG_DIRECTORY_NAME,
+	AgentConfigLoader,
+	parseAgentConfigFromYaml,
+	readAgentConfigsFromDisk,
+} from "../AgentConfigLoader"
 
 async function createTempHomeDir(): Promise<string> {
 	return fs.mkdtemp(path.join(os.tmpdir(), "agent-config-loader-"))
@@ -71,7 +76,7 @@ Prompt body`
 		const tempHome = await createTempHomeDir()
 		tempDirs.push(tempHome)
 
-		const result = await readAgentConfigsFromDisk(tempHome)
+		const result = await readAgentConfigsFromDisk(path.join(tempHome, "Documents", "Dline", AGENTS_CONFIG_DIRECTORY_NAME))
 		assert.equal(result.size, 0)
 	})
 
@@ -79,7 +84,7 @@ Prompt body`
 		const tempHome = await createTempHomeDir()
 		tempDirs.push(tempHome)
 
-		const directoryPath = getAgentsConfigPath(tempHome)
+		const directoryPath = path.join(tempHome, "Documents", "Dline", AGENTS_CONFIG_DIRECTORY_NAME)
 		await fs.mkdir(directoryPath, { recursive: true })
 		await fs.writeFile(
 			path.join(directoryPath, "local-agent.yaml"),
@@ -124,7 +129,7 @@ Reviewer prompt`,
 		const tempHome = await createTempHomeDir()
 		tempDirs.push(tempHome)
 
-		const directoryPath = getAgentsConfigPath(tempHome)
+		const directoryPath = path.join(tempHome, "Documents", "Dline", AGENTS_CONFIG_DIRECTORY_NAME)
 		await fs.mkdir(directoryPath, { recursive: true })
 		await fs.writeFile(
 			path.join(directoryPath, "code-reviewer.yaml"),

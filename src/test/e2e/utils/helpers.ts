@@ -237,9 +237,8 @@ export const e2e = test
 					executablePath,
 					env: {
 						...process.env,
-						TEMP_PROFILE: "true",
 						E2E_TEST: "true",
-						CLINE_ENVIRONMENT: "local",
+						DLINE_ENVIRONMENT: "local",
 						CLINE_DIR: clineTestDir, // Isolate test data from user's ~/.cline
 						GRPC_RECORDER_FILE_NAME: E2ETestHelper.generateTestFileName(testInfo.title, testInfo.project.name),
 						// GRPC_RECORDER_ENABLED: "true",
@@ -273,9 +272,9 @@ export const e2e = test
 			const workspacePath = workspaceType === "single" ? workspaceDir : multiRootWorkspaceDir
 
 			// Track the clineTestDir created in openVSCode
-			let clineTestDir: string | undefined
+			let _clineTestDir: string | undefined
 			const originalOpenVSCode = openVSCode
-			const wrappedOpenVSCode = async (wp: string) => {
+			const _wrappedOpenVSCode = async (wp: string) => {
 				const app = await originalOpenVSCode(wp)
 				// Extract CLINE_DIR from the launched app's environment
 				// We'll need to pass it through the fixture chain
@@ -304,7 +303,7 @@ export const e2e = test
 							cleanupTasks.push(E2ETestHelper.rmForRetries(path.join(tmpDir, entry), { recursive: true }))
 						}
 					}
-				} catch (error) {
+				} catch (_error) {
 					// Ignore cleanup errors
 				}
 

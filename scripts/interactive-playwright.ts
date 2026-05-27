@@ -46,9 +46,8 @@ async function main() {
 		executablePath,
 		env: {
 			...process.env,
-			TEMP_PROFILE: "true",
 			E2E_TEST: "true",
-			CLINE_ENVIRONMENT: "local",
+			DLINE_ENVIRONMENT: "local",
 			GRPC_RECORDER_ENABLED: "true",
 			GRPC_RECORDER_TESTS_FILTERS_ENABLED: "true",
 		},

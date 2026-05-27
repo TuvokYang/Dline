@@ -263,10 +263,10 @@
 				"watch"
 			],
 			"windows": {
-				"command": "Remove-Item -Path  ${workspaceFolder}/dist/tmp/user -Recurse -Force -ErrorAction SilentlyContinue; New-Item -Path ${workspaceFolder}/dist/tmp/user -ItemType Directory -Force"
+				"command": "Remove-Item -Path ${workspaceFolder}/dist/tmp -Recurse -Force -ErrorAction SilentlyContinue; New-Item -Path ${workspaceFolder}/dist/tmp -ItemType Directory -Force"
 			},
 			"linux": {
-				"command": "rm -rf ${workspaceFolder}/dist/tmp/user && mkdir -p ${workspaceFolder}/dist/tmp/user"
+				"command": "rm -rf ${workspaceFolder}/dist/tmp && mkdir -p ${workspaceFolder}/dist/tmp"
 			}
 		},
 		{

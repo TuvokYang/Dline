@@ -120,7 +120,7 @@ jobs:
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
           OVSX_PAT: ${{ secrets.OVSX_PAT }}
-          CLINE_ENVIRONMENT: production
+          DLINE_ENVIRONMENT: production
           RELEASE_TYPE: ${{ steps.resolve_tag.outputs.release_type }}
           TELEMETRY_SERVICE_API_KEY: ${{ secrets.TELEMETRY_SERVICE_API_KEY }}
           ERROR_SERVICE_API_KEY: ${{ secrets.ERROR_SERVICE_API_KEY }}
