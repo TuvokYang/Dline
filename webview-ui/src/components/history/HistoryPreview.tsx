@@ -148,7 +148,7 @@ const HistoryPreview = ({ showHistoryView }: HistoryPreviewProps) => {
 					{taskHistory.filter((item) => item.ts && item.task).length > 0 ? (
 						taskHistory
 							.filter((item) => item.ts && item.task)
-							.slice(0, 3)
+							.slice(0, 5)
 							.map((item) => (
 								<div className="history-preview-item" key={item.id} onClick={() => handleHistorySelect(item.id)}>
 									<div className="history-task-content">

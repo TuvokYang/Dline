@@ -15,9 +15,10 @@ export class PromptRegistry {
 	private components: ComponentRegistry = {}
 	public nativeTools: ClineTool[] | undefined = undefined
 
+	private _loaded = false
+
 	private constructor() {
-		registerClineToolSets()
-		this.load()
+		// Defer loading — variants and components are loaded lazily on first get() call
 	}
 
 	static getInstance(): PromptRegistry {
@@ -28,11 +29,25 @@ export class PromptRegistry {
 	}
 
 	/**
-	 * Load all prompts and components on initialization
+	 * Load all prompts and components lazily on first use.
+	 * Called automatically by get() if not yet loaded.
 	 */
-	load(): void {
+	private ensureLoaded(): void {
+		if (this._loaded) {
+			return
+		}
+		registerClineToolSets()
 		this.loadVariants()
 		this.loadComponents()
+		this._loaded = true
+	}
+
+	/**
+	 * Load all prompts and components on initialization
+	 * @deprecated Use ensureLoaded() for lazy loading
+	 */
+	load(): void {
+		this.ensureLoaded()
 	}
 
 	getModelFamily(context: SystemPromptContext) {
@@ -84,6 +99,7 @@ export class PromptRegistry {
 	 * Get prompt by matching against all registered variants
 	 */
 	async get(context: SystemPromptContext): Promise<string> {
+		this.ensureLoaded()
 		const variant = this.getVariant(context)
 
 		// Hacky way to get native tools for the current variant - it's bad and ugly

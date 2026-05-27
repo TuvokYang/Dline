@@ -14,7 +14,7 @@ import {
 } from "@shared/storage/state-keys"
 import { Logger } from "@/shared/services/Logger"
 import { ClineMemento } from "@/shared/storage"
-import { readTaskHistoryFromState } from "../disk"
+import { readTaskHistoryRecent } from "../disk"
 import { StateManager } from "../StateManager"
 
 // ─── File-backed storage readers (used by StateManager) ────────────────────
@@ -110,8 +110,9 @@ async function handleComputedProperties(result: any, stateValues: Map<string, an
  * Handle properties that require async operations
  */
 async function handleAsyncProperties(result: any): Promise<void> {
-	// Task history requires async disk read
-	result.taskHistory = await readTaskHistoryFromState()
+	// Load only the most recent 5 tasks at startup for fast initial UI render.
+	// Full task history is loaded asynchronously in the background after initialization.
+	result.taskHistory = await readTaskHistoryRecent(5)
 }
 
 export async function resetWorkspaceState() {

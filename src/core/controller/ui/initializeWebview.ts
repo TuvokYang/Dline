@@ -28,41 +28,27 @@ export async function initializeWebview(controller: Controller, _request: EmptyR
 			sendOpenRouterModelsEvent(OpenRouterCompatibleModelInfo.create({ models: lastCachedModels }))
 		}
 
-		// Refresh OpenRouter models from API
+		// Refresh OpenRouter models from API (public API, always available)
 		refreshOpenRouterModels(controller).then(async (models) => {
 			if (models && Object.keys(models).length > 0) {
-				// Update model info in state (this needs to be done here since we don't want to update state while settings is open, and we may refresh models there)
 				const apiConfiguration = controller.stateManager.getApiConfiguration()
 				const planActSeparateModelsSetting = controller.stateManager.getGlobalSettingsKey("planActSeparateModelsSetting")
 				const currentMode = controller.stateManager.getGlobalSettingsKey("mode")
 
 				if (planActSeparateModelsSetting) {
-					// Separate models: update only current mode
 					const modelIdField = currentMode === "plan" ? "planModeOpenRouterModelId" : "actModeOpenRouterModelId"
 					const modelInfoField = currentMode === "plan" ? "planModeOpenRouterModelInfo" : "actModeOpenRouterModelInfo"
 					const modelId = apiConfiguration[modelIdField]
-
 					if (modelId && models[modelId]) {
 						controller.stateManager.setGlobalState(modelInfoField, models[modelId])
 						await controller.postStateToWebview()
 					}
 				} else {
-					// Shared models: update both plan and act modes
 					const planModelId = apiConfiguration.planModeOpenRouterModelId
 					const actModelId = apiConfiguration.actModeOpenRouterModelId
 					const updates: Partial<GlobalStateAndSettings> = {}
-
-					// Update plan mode model info if we have a model ID
-					if (planModelId && models[planModelId]) {
-						updates.planModeOpenRouterModelInfo = models[planModelId]
-					}
-
-					// Update act mode model info if we have a model ID
-					if (actModelId && models[actModelId]) {
-						updates.actModeOpenRouterModelInfo = models[actModelId]
-					}
-
-					// Post state update if we updated any model info
+					if (planModelId && models[planModelId]) updates.planModeOpenRouterModelInfo = models[planModelId]
+					if (actModelId && models[actModelId]) updates.actModeOpenRouterModelInfo = models[actModelId]
 					if (Object.keys(updates).length > 0) {
 						controller.stateManager.setGlobalStateBatch(updates)
 						await controller.postStateToWebview()
@@ -71,188 +57,43 @@ export async function initializeWebview(controller: Controller, _request: EmptyR
 			}
 		})
 
-		refreshClineModels(controller).then(async (models) => {
-			if (models && Object.keys(models).length > 0) {
-				// Update model info in state for Cline (this needs to be done here since we don't want to update state while settings is open, and we may refresh models there)
-				const apiConfiguration = controller.stateManager.getApiConfiguration()
-				const planActSeparateModelsSetting = controller.stateManager.getGlobalSettingsKey("planActSeparateModelsSetting")
-				const currentMode = controller.stateManager.getGlobalSettingsKey("mode")
+		// Only refresh provider-specific models if the corresponding credentials are configured.
+		// This avoids unnecessary network requests for unauthenticated users or providers
+		// without configured API keys.
 
-				if (planActSeparateModelsSetting) {
-					// Separate models: update only current mode
-					const modelIdField = currentMode === "plan" ? "planModeClineModelId" : "actModeClineModelId"
-					const modelInfoField = currentMode === "plan" ? "planModeClineModelInfo" : "actModeClineModelInfo"
-					const modelId = apiConfiguration[modelIdField]
+		// Cline models require authentication
+		const clineApiKey = controller.stateManager.getSecretKey("clineApiKey")
+		if (clineApiKey) {
+			refreshClineModels(controller)
+		}
 
-					if (modelId && models[modelId]) {
-						controller.stateManager.setGlobalState(modelInfoField, models[modelId])
-						await controller.postStateToWebview()
-					}
-				} else {
-					// Shared models: update both plan and act modes
-					const planModelId = apiConfiguration.planModeClineModelId
-					const actModelId = apiConfiguration.actModeClineModelId
-					const updates: Partial<GlobalStateAndSettings> = {}
+		// Groq models require an API key
+		const groqApiKey = controller.stateManager.getSecretKey("groqApiKey")
+		if (groqApiKey) {
+			refreshGroqModels(controller)
+		}
 
-					// Update plan mode model info if we have a model ID
-					if (planModelId && models[planModelId]) {
-						updates.planModeClineModelInfo = models[planModelId]
-					}
+		// Baseten models require an API key
+		const basetenApiKey = controller.stateManager.getSecretKey("basetenApiKey")
+		if (basetenApiKey) {
+			refreshBasetenModels(controller)
+		}
 
-					// Update act mode model info if we have a model ID
-					if (actModelId && models[actModelId]) {
-						updates.actModeClineModelInfo = models[actModelId]
-					}
+		// Hicap models require an API key
+		const hicapApiKey = controller.stateManager.getSecretKey("hicapApiKey")
+		if (hicapApiKey) {
+			refreshHicapModels(controller, EmptyRequest.create())
+		}
 
-					// Post state update if we updated any model info
-					if (Object.keys(updates).length > 0) {
-						controller.stateManager.setGlobalStateBatch(updates)
-						await controller.postStateToWebview()
-					}
-				}
-			}
-		})
-
-		refreshGroqModels(controller).then(async (models) => {
-			if (models && Object.keys(models).length > 0) {
-				// Update model info in state for Groq (this needs to be done here since we don't want to update state while settings is open, and we may refresh models there)
-				const apiConfiguration = controller.stateManager.getApiConfiguration()
-				const planActSeparateModelsSetting = controller.stateManager.getGlobalSettingsKey("planActSeparateModelsSetting")
-				const currentMode = controller.stateManager.getGlobalSettingsKey("mode")
-
-				if (planActSeparateModelsSetting) {
-					// Separate models: update only current mode
-					const modelIdField = currentMode === "plan" ? "planModeGroqModelId" : "actModeGroqModelId"
-					const modelInfoField = currentMode === "plan" ? "planModeGroqModelInfo" : "actModeGroqModelInfo"
-					const modelId = apiConfiguration[modelIdField]
-
-					if (modelId && models[modelId]) {
-						controller.stateManager.setGlobalState(modelInfoField, models[modelId])
-						await controller.postStateToWebview()
-					}
-				} else {
-					// Shared models: update both plan and act modes
-					const planModelId = apiConfiguration.planModeGroqModelId
-					const actModelId = apiConfiguration.actModeGroqModelId
-					const updates: Partial<GlobalStateAndSettings> = {}
-
-					// Update plan mode model info if we have a model ID
-					if (planModelId && models[planModelId]) {
-						updates.planModeGroqModelInfo = models[planModelId]
-					}
-
-					// Update act mode model info if we have a model ID
-					if (actModelId && models[actModelId]) {
-						updates.actModeGroqModelInfo = models[actModelId]
-					}
-
-					// Post state update if we updated any model info
-					if (Object.keys(updates).length > 0) {
-						controller.stateManager.setGlobalStateBatch(updates)
-						await controller.postStateToWebview()
-					}
-				}
-			}
-		})
-
-		refreshBasetenModels(controller).then(async (models) => {
-			if (models && Object.keys(models).length > 0) {
-				// Update model info in state for Baseten (this needs to be done here since we don't want to update state while settings is open, and we may refresh models there)
-				const apiConfiguration = controller.stateManager.getApiConfiguration()
-				const planActSeparateModelsSetting = controller.stateManager.getGlobalSettingsKey("planActSeparateModelsSetting")
-
-				const currentMode = controller.stateManager.getGlobalSettingsKey("mode")
-
-				if (planActSeparateModelsSetting) {
-					// Separate models: update only current mode
-					const modelIdField = currentMode === "plan" ? "planModeBasetenModelId" : "actModeBasetenModelId"
-					const modelInfoField = currentMode === "plan" ? "planModeBasetenModelInfo" : "actModeBasetenModelInfo"
-					const modelId = apiConfiguration[modelIdField]
-
-					if (modelId && models[modelId]) {
-						controller.stateManager.setGlobalState(modelInfoField, models[modelId])
-						await controller.postStateToWebview()
-					}
-				} else {
-					// Shared models: update both plan and act modes
-					const planModelId = apiConfiguration.planModeBasetenModelId
-					const actModelId = apiConfiguration.actModeBasetenModelId
-
-					// Update plan mode model info if we have a model ID
-					if (planModelId && models[planModelId]) {
-						controller.stateManager.setGlobalState("planModeBasetenModelInfo", models[planModelId])
-					}
-
-					// Update act mode model info if we have a model ID
-					if (actModelId && models[actModelId]) {
-						controller.stateManager.setGlobalState("actModeBasetenModelInfo", models[actModelId])
-					}
-
-					// Post state update if we updated any model info
-					if ((planModelId && models[planModelId]) || (actModelId && models[actModelId])) {
-						await controller.postStateToWebview()
-					}
-				}
-			}
-		})
-
-		// Refresh Hicap models from API
-		refreshHicapModels(controller, EmptyRequest.create()).then(async (response) => {
-			if (response && response.models) {
-				// Update model info in state (this needs to be done here since we don't want to update state while settings is open, and we may refresh models there)
-				const apiConfiguration = controller.stateManager.getApiConfiguration()
-				const planActSeparateModelsSetting = controller.stateManager.getGlobalSettingsKey("planActSeparateModelsSetting")
-				const currentMode = controller.stateManager.getGlobalSettingsKey("mode")
-
-				if (planActSeparateModelsSetting) {
-					// Separate models: update only current mode
-					const modelIdField = currentMode === "plan" ? "planModeHicapModelId" : "actModeHicapModelId"
-					const modelInfoField = currentMode === "plan" ? "planModeHicapModelInfo" : "actModeHicapModelInfo"
-					const modelId = apiConfiguration[modelIdField]
-
-					if (modelId && response.models[modelId]) {
-						controller.stateManager.setGlobalState(modelInfoField, response.models[modelId])
-						await controller.postStateToWebview()
-					}
-				} else {
-					// Shared models: update both plan and act modes
-					const planModelId = apiConfiguration.planModeHicapModelId
-					const actModelId = apiConfiguration.actModeHicapModelId
-					const updates: Partial<GlobalStateAndSettings> = {}
-
-					// Update plan mode model info if we have a model ID
-					if (planModelId && response.models[planModelId]) {
-						updates.planModeHicapModelInfo = response.models[planModelId]
-					}
-
-					// Update act mode model info if we have a model ID
-					if (actModelId && response.models[actModelId]) {
-						updates.actModeHicapModelInfo = response.models[actModelId]
-					}
-
-					// Post state update if we updated any model info
-					if ((planModelId && response.models[planModelId]) || (actModelId && response.models[actModelId])) {
-						controller.stateManager.setGlobalStateBatch(updates)
-						await controller.postStateToWebview()
-					}
-				}
-			}
-		})
-
+		// LiteLLM requires both base URL and API key
 		const liteLlmBaseUrl = controller.stateManager.getGlobalSettingsKey("liteLlmBaseUrl")
 		const liteLlmApiKey = controller.stateManager.getSecretKey("liteLlmApiKey")
 		if (liteLlmBaseUrl && liteLlmApiKey) {
 			await refreshLiteLlmModels()
 		}
 
-		// GUI relies on model info to be up-to-date to provide the most accurate pricing, so we need to fetch the latest details on launch.
-		// We do this for all users since many users switch between api providers and if they were to switch back to openrouter it would be showing outdated model info if we hadn't retrieved the latest at this point
-		// (see normalizeApiConfiguration > openrouter)
-		// Prefetch marketplace and OpenRouter models
-
 		// Send stored MCP marketplace catalog if available
 		const mcpMarketplaceCatalog = await readMcpMarketplaceCatalogFromCache()
-
 		if (mcpMarketplaceCatalog) {
 			sendMcpMarketplaceCatalogEvent(mcpMarketplaceCatalog)
 		}
@@ -270,7 +111,6 @@ export async function initializeWebview(controller: Controller, _request: EmptyR
 		return Empty.create({})
 	} catch (error) {
 		Logger.error("Failed to initialize webview:", error)
-		// Return empty response even on error to not break the frontend
 		return Empty.create({})
 	}
 }

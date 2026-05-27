@@ -409,6 +409,26 @@ export async function taskHistoryStateFileExists(): Promise<boolean> {
 	return fileExistsAtPath(filePath)
 }
 
+/**
+ * Read only the most recent N task history items from the state file.
+ * Faster startup by avoiding full parsing delay for the initial UI render.
+ *
+ * @param limit Maximum number of recent items to return (default 5)
+ */
+export async function readTaskHistoryRecent(limit = 5): Promise<HistoryItem[]> {
+	try {
+		const items = await readTaskHistoryFromState()
+		// Sort by timestamp descending and take the most recent items
+		return items
+			.filter((item) => item.ts)
+			.sort((a, b) => b.ts - a.ts)
+			.slice(0, limit)
+	} catch (error) {
+		Logger.error("[Disk] Failed to read recent task history:", error)
+		return []
+	}
+}
+
 export async function readTaskHistoryFromState(): Promise<HistoryItem[]> {
 	try {
 		const filePath = await getTaskHistoryStateFilePath()

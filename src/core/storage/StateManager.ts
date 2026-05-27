@@ -151,7 +151,11 @@ export class StateManager {
 
 			StateManager.instance.isInitialized = true
 
-			await AgentConfigLoader.getInstance().ready()
+			// Start agent config loading in background — does NOT block initialization
+			AgentConfigLoader.getInstance()
+
+			// Load full task history in background to update cache after initial render
+			loadFullTaskHistoryAsync(StateManager.instance)
 		} catch (error) {
 			Logger.error("[StateManager] Failed to initialize:", error)
 			throw error
@@ -960,5 +964,22 @@ export class StateManager {
 			throw new Error(STATE_MANAGER_NOT_INITIALIZED)
 		}
 		return { ...this.workspaceStateCache }
+	}
+}
+
+/**
+ * Load the full task history from disk in the background and update the cache.
+ * This runs after initialization completes so that the UI can render immediately
+ * with just the recent 5 items loaded during startup.
+ *
+ * @param stateManager The StateManager instance to update
+ */
+async function loadFullTaskHistoryAsync(stateManager: StateManager): Promise<void> {
+	try {
+		const fullHistory = await readTaskHistoryFromState()
+		// Update cache with full history in a single atomic operation
+		stateManager.setGlobalStateBatch({ taskHistory: fullHistory })
+	} catch (error) {
+		Logger.warn("[StateManager] Failed to load full task history in background:", error)
 	}
 }
