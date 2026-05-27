@@ -9,7 +9,7 @@
  */
 
 import { telemetryService } from "@services/telemetry"
-import { ChildProcess, spawn } from "child_process"
+import { ChildProcess, execSync, spawn } from "child_process"
 import { EventEmitter } from "events"
 import * as iconv from "iconv-lite"
 import * as chardet from "jschardet"
@@ -75,21 +75,99 @@ export class StandaloneTerminalProcess extends EventEmitter<TerminalProcessEvent
 	/** Detected encoding for the process output (cached after first detection) */
 	private detectedEncoding: string | null = null
 
+	/** System terminal encoding detected via chcp (Windows) or locale (Unix) */
+	private systemEncoding: string | null = null
+
 	constructor() {
 		super()
+		this.detectSystemEncoding()
 	}
 
 	/**
-	 * Decode a Buffer to string using auto-detected encoding.
-	 * Uses jschardet on the first chunk to detect encoding, caches it for
-	 * subsequent chunks. Falls back to UTF-8 if detection fails.
-	 * This ensures correct handling of non-UTF-8 terminals (e.g., Windows cmd.exe with CP936/GBK).
+	 * Detect system terminal encoding using OS-specific commands.
+	 * On Windows, uses chcp to get the active code page (e.g., 936 = GBK, 65001 = UTF-8).
+	 * On Unix, uses locale charmap. Sets this.systemEncoding on success.
+	 */
+	private detectSystemEncoding(): void {
+		try {
+			if (process.platform === "win32") {
+				const output = execSync("chcp", { encoding: "utf-8", timeout: 1000 })
+				const match = output.match(/(\d+)/)
+				if (match) {
+					const cp = Number.parseInt(match[1], 10)
+					// Map common Windows code pages to iconv-lite encoding names
+					const cpMap: Record<number, string> = {
+						936: "gbk",
+						65001: "utf-8",
+						950: "big5",
+						932: "shift_jis",
+						949: "euc-kr",
+						437: "cp437",
+						850: "cp850",
+						1252: "windows-1252",
+						1251: "windows-1251",
+					}
+					this.systemEncoding = cpMap[cp] || "utf-8"
+				}
+			} else {
+				const output = execSync("locale charmap", { encoding: "utf-8", timeout: 1000 })
+				const charmap = output.trim()
+				if (charmap && charmap.toUpperCase() === "UTF-8") {
+					this.systemEncoding = "utf-8"
+				} else if (charmap) {
+					this.systemEncoding = charmap.toLowerCase()
+				}
+			}
+		} catch {
+			// Detection failed (e.g., chcp not available), leave systemEncoding as null
+			// Fallback logic in decodeBuffer will handle this
+		}
+	}
+
+	/**
+	 * Decode a Buffer to string using optimal encoding detection.
+	 *
+	 * Detection strategy (on first chunk only):
+	 * 1. Try UTF-8 first — most modern CLI tools (biome, npm, git) output UTF-8.
+	 * 2. If UTF-8 produces no replacement characters (U+FFFD), cache "utf-8" and use it.
+	 * 3. If UTF-8 has errors, try the system encoding (from chcp/locale) if different.
+	 * 4. Choose the encoding that produces fewer U+FFFD replacement characters.
+	 * 5. If neither works, fall back to jschardet auto-detection.
+	 *
+	 * This approach avoids jschardet's known issue of misdetecting encoding on small
+	 * sample sizes (e.g., a few dozen bytes with ANSI control sequences mixed in).
 	 *
 	 * @param data The Buffer to decode
-	 * @returns Decoded UTF-8 string
+	 * @returns Decoded string
 	 */
 	private decodeBuffer(data: Buffer): string {
 		if (!this.detectedEncoding) {
+			// Step 1: Try UTF-8 first
+			const utf8Result = data.toString("utf-8")
+			const utf8Errors = (utf8Result.match(/\uFFFD/g) || []).length
+
+			if (utf8Errors === 0) {
+				// UTF-8 is clean — most modern CLI tools output UTF-8
+				this.detectedEncoding = "utf-8"
+				return utf8Result
+			}
+
+			// Step 2: UTF-8 has errors, try system encoding if available
+			if (this.systemEncoding && this.systemEncoding !== "utf-8") {
+				try {
+					const sysResult = iconv.decode(data, this.systemEncoding)
+					const sysErrors = (sysResult.match(/\uFFFD/g) || []).length
+					if (sysErrors < utf8Errors) {
+						// System encoding produces fewer errors — use it
+						this.detectedEncoding = this.systemEncoding
+						return sysResult
+					}
+				} catch {
+					// iconv decode failed for system encoding, fall through
+				}
+			}
+
+			// Step 3: Final fallback — jschardet auto-detection
 			let encoding: string
 			const result = chardet.detect(data)
 			if (typeof result === "string") {
@@ -105,8 +183,9 @@ export class StandaloneTerminalProcess extends EventEmitter<TerminalProcessEvent
 				encoding = "gbk"
 			}
 			this.detectedEncoding = encoding
+			return iconv.decode(data, encoding)
 		}
-		// Use detected encoding; iconv-lite gracefully handles pure ASCII as subset
+		// Use cached encoding; iconv-lite gracefully handles pure ASCII as subset
 		return iconv.decode(data, this.detectedEncoding!)
 	}
 
