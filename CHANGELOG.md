@@ -1,5 +1,30 @@
 # Changelog
 
+## [5.0.3]
+
+### Added
+
+- Proto AccountUsage transmission and UsageBar component for real-time usage display
+- Logger timestamp support for better debugging
+
+### Fixed
+
+- Replace proto-lint.sh with Node.js script to avoid diff dependency on Windows
+- Atomic write rename retry and missing mock for getAccountUsage
+- Normalize leading-slash paths on Windows to prevent path.resolve from discarding cwd
+- History task navigation deadlock and Virtuoso scroll jitter
+- Currency display and In=0 metrics fixes
+- Revert webview-ui install from npm ci back to npm install (missing package-lock.json in CI)
+
+### Changed
+
+- CI: trigger test/e2e workflows on dev branch push
+- Remove JetBrains/CLI/SDK related workflows, keep VSCode only
+- Merge publish-new-sdk-extension-nightly into publish-nightly with schedule cron
+- Rename label-jetbrains-issues to label-issues (VSCode tags only)
+- Add FORCE_JAVASCRIPT_ACTIONS_TO_NODE24 to all workflows
+- Update repository remote URL to TuvokYang/Dline
+
 ## [5.0.2]
 
 ### Added
