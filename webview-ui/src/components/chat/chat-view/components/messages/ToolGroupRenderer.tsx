@@ -208,7 +208,17 @@ export const ToolGroupRenderer = memo(({ messages, allMessages, isLastGroup }: T
 						<div className="min-w-0" key={tool.ts}>
 							<Button
 								className="flex items-center gap-[3px] cursor-pointer text-[13px] text-description py-[1px] hover:text-link min-w-0 max-w-full px-0 leading-tight -my-0.5"
-								onClick={() => (isExpandable ? handleItemToggle(tool.ts) : handleOpenFile(info.path))}
+								onClick={() => {
+									if (isExpandable) {
+										handleItemToggle(tool.ts)
+									} else {
+										const filePathWithLine =
+											parsedTool.readLineStart != null
+												? `${info.path}:${parsedTool.readLineStart}`
+												: info.path
+										handleOpenFile(filePathWithLine)
+									}
+								}}
 								size="icon"
 								variant="text">
 								<info.icon className="opacity-70 shrink-0 size-[12px]" />

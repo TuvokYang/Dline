@@ -500,9 +500,11 @@ export const ChatRowContent = memo(
 									})}
 									onClick={() => {
 										if (!isImage) {
-											FileServiceClient.openFile(StringRequest.create({ value: tool.content })).catch(
-												(err) => console.error("Failed to open file:", err),
-											)
+											const filePathWithLine =
+												tool.readLineStart != null ? `${tool.path}:${tool.readLineStart}` : tool.path
+											FileServiceClient.openFileRelativePath(
+												StringRequest.create({ value: filePathWithLine }),
+											).catch((err) => console.error("Failed to open file:", err))
 										}
 									}}>
 									{tool.path?.startsWith(".") && <span>.</span>}

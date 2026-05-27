@@ -129,12 +129,14 @@ export class SearchFilesToolHandler implements IFullyManagedTool {
 	): string {
 		const allResults: string[] = []
 		let totalResultCount = 0
+		let anySuccess = false
 
 		for (const { workspaceName, workspaceResults, resultCount, success } of searchResults) {
 			if (!success || !workspaceResults) {
 				continue
 			}
 
+			anySuccess = true
 			totalResultCount += resultCount
 
 			// If multi-workspace and we have results, annotate with workspace name
@@ -155,6 +157,12 @@ export class SearchFilesToolHandler implements IFullyManagedTool {
 				// Single workspace mode or single workspace search
 				allResults.push(workspaceResults)
 			}
+		}
+
+		// If all searches failed, return a clear error message instead of misleading "Found 0 results."
+		if (!anySuccess) {
+			const failedPaths = searchPaths.map((p) => p.absolutePath).join(", ")
+			return `Search failed: unable to search in ${failedPaths}. This may be caused by ripgrep not being available or the search path not being accessible. Try a different directory path or check the tool requirements.`
 		}
 
 		// Combine results
