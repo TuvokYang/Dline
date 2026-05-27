@@ -45,7 +45,6 @@ export function useMessageHandlers(
 			}
 
 			if (hasContent) {
-				console.log("[ChatView] handleSendMessage - Sending message:", messageToSend)
 				let messageSent = false
 
 				if (messages.length === 0) {

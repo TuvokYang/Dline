@@ -28,17 +28,24 @@ export const OptionsButtons = ({
 	selected,
 	isActive,
 	inputValue,
+	images,
+	files,
+	onInputConsumed,
 }: {
 	options?: string[]
 	selected?: string
 	isActive?: boolean
 	inputValue?: string
+	images?: string[]
+	files?: string[]
+	onInputConsumed?: () => void
 }) => {
 	if (!options?.length) {
 		return null
 	}
 
 	const hasSelected = selected !== undefined && options.includes(selected)
+	const trimmedInput = inputValue?.trim()
 
 	return (
 		<div
@@ -65,10 +72,12 @@ export const OptionsButtons = ({
 							await TaskServiceClient.askResponse(
 								AskResponseRequest.create({
 									responseType: "messageResponse",
-									text: option + (inputValue ? `: ${inputValue?.trim()}` : ""),
-									images: [],
+									text: option + (trimmedInput ? `: ${trimmedInput}` : ""),
+									images: images ?? [],
+									files: files ?? [],
 								}),
 							)
+							onInputConsumed?.()
 						} catch (error) {
 							console.error("Error sending option response:", error)
 						}

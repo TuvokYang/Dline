@@ -18,8 +18,6 @@ export function useScrollBehavior(
 	groupedMessages: (ClineMessage | ClineMessage[])[],
 	expandedRows: Record<number, boolean>,
 	setExpandedRows: React.Dispatch<React.SetStateAction<Record<number, boolean>>>,
-	totalMessageCount?: number,
-	firstItemIndex?: number,
 ): ScrollBehavior & {
 	showScrollToBottom: boolean
 	setShowScrollToBottom: React.Dispatch<React.SetStateAction<boolean>>
@@ -39,6 +37,8 @@ export function useScrollBehavior(
 	const isAtBottomRef = useRef(false)
 	// Throttle timestamp for handleRowHeightChange to prevent scroll jitter
 	const lastRowHeightChangeRef = useRef(0)
+	const pendingAutoScrollRef = useRef(false)
+	const autoScrollRetryTimersRef = useRef<ReturnType<typeof setTimeout>[]>([])
 
 	// State
 	const [showScrollToBottom, setShowScrollToBottom] = useState(false)
@@ -140,34 +140,23 @@ export function useScrollBehavior(
 		// Range changed callback - we now use scroll position instead
 		// but keep this for potential future use
 	}, [])
-	// Refs for computing the global last-item index.
-	// totalMessageCount arrives asynchronously (via subscribeToState) and may be
-	// undefined on first render. When it's not available we fall back to the
-	// local window: firstItemIndex + groupedMessages.length - 1.
-	const totalCountRef = useRef(totalMessageCount)
-	totalCountRef.current = totalMessageCount
-	const firstItemIndexRef = useRef(firstItemIndex)
-	firstItemIndexRef.current = firstItemIndex
+	// Refs for computing the last rendered Virtuoso row index.
+	// The chat can group many messages into one row, so scroll targets must use
+	// rendered row offsets instead of message indexes or totalMessageCount.
 	const groupedLenRef = useRef(groupedMessages.length)
 	groupedLenRef.current = groupedMessages.length
 
-	const getLastGlobalIndex = useCallback(() => {
-		const tc = totalCountRef.current
-		if (tc && tc > 0) return tc - 1
-		const fi = firstItemIndexRef.current ?? 0
+	const getLastRenderedRowIndex = useCallback(() => {
 		const len = groupedLenRef.current
-		return fi + len - 1
+		return len - 1
 	}, [])
 
-	// User-initiated smooth scroll (e.g., to-bottom button).
-	// Debounced at 30ms without immediate-first to reduce excessive
-	// scrolling during streaming. The trailing edge fires after the
-	// scroll settles, giving Virtuoso time to complete any in-progress
-	// re-layout before receiving another scroll command.
+	// User-initiated smooth scroll (e.g., to-bottom button). Automatic
+	// streaming scrolls use instant behavior to avoid competing animations.
 	const scrollToBottomSmooth = useMemo(
 		() =>
 			debounce(() => {
-				const lastIdx = getLastGlobalIndex()
+				const lastIdx = getLastRenderedRowIndex()
 				if (lastIdx >= 0) {
 					virtuosoRef.current?.scrollToIndex({
 						index: lastIdx,
@@ -176,12 +165,12 @@ export function useScrollBehavior(
 					})
 				}
 			}, 30),
-		[getLastGlobalIndex],
+		[getLastRenderedRowIndex],
 	)
 
 	// Programmatic instant scroll to bottom (auto-scroll, focus restore).
 	const scrollToBottomAuto = useCallback(() => {
-		const lastIdx = getLastGlobalIndex()
+		const lastIdx = getLastRenderedRowIndex()
 		if (lastIdx >= 0) {
 			virtuosoRef.current?.scrollToIndex({
 				index: lastIdx,
@@ -189,7 +178,49 @@ export function useScrollBehavior(
 				behavior: "auto",
 			})
 		}
-	}, [getLastGlobalIndex])
+	}, [getLastRenderedRowIndex])
+
+	const clearAutoScrollRetryTimers = useCallback(() => {
+		for (const timer of autoScrollRetryTimersRef.current) {
+			clearTimeout(timer)
+		}
+		autoScrollRetryTimersRef.current = []
+	}, [])
+
+	const queueAutoScrollToBottom = useCallback(
+		(retryAfterLayout = false) => {
+			if (disableAutoScrollRef.current) {
+				pendingAutoScrollRef.current = false
+				clearAutoScrollRetryTimers()
+				return
+			}
+
+			if (document.visibilityState === "hidden") {
+				pendingAutoScrollRef.current = true
+				return
+			}
+
+			pendingAutoScrollRef.current = false
+			clearAutoScrollRetryTimers()
+
+			const scroll = () => {
+				if (!disableAutoScrollRef.current && document.visibilityState !== "hidden") {
+					scrollToBottomAuto()
+				}
+			}
+
+			const rafId = requestAnimationFrame(scroll)
+
+			if (retryAfterLayout) {
+				autoScrollRetryTimersRef.current = [50, 250, 750].map((delay) => setTimeout(scroll, delay))
+			}
+
+			return () => {
+				cancelAnimationFrame(rafId)
+			}
+		},
+		[clearAutoScrollRetryTimers, scrollToBottomAuto],
+	)
 
 	const scrollToMessage = useCallback(
 		(messageIndex: number) => {
@@ -311,29 +342,25 @@ export function useScrollBehavior(
 				lastRowHeightChangeRef.current = now
 
 				if (isTaller) {
-					scrollToBottomSmooth()
+					queueAutoScrollToBottom()
 				} else {
 					setTimeout(() => {
-						scrollToBottomAuto()
+						queueAutoScrollToBottom()
 					}, 0)
 				}
 			}
 		},
-		[scrollToBottomSmooth, scrollToBottomAuto],
+		[queueAutoScrollToBottom],
 	)
 
-	// When new messages arrive (or totalMessageCount resolves), scroll to
-	// bottom. totalMessageCount arrives asynchronously via subscribeToState;
-	// including it in deps ensures we re-scroll once the true total is known
-	// so the global last-index calculation in getLastGlobalIndex() is correct.
+	// When rendered rows arrive, scroll to the bottom if auto-scroll is enabled.
+	// totalMessageCount changes alone should not issue a scroll command; the
+	// partial-message stream owns row updates during active conversations.
 	useEffect(() => {
 		if (!disableAutoScrollRef.current) {
-			const rafId = requestAnimationFrame(() => {
-				scrollToBottomSmooth()
-			})
-			return () => cancelAnimationFrame(rafId)
+			return queueAutoScrollToBottom()
 		}
-	}, [groupedMessages.length, totalMessageCount, scrollToBottomSmooth])
+	}, [groupedMessages.length, queueAutoScrollToBottom])
 
 	useEffect(() => {
 		if (pendingScrollToMessage !== null) {
@@ -365,19 +392,25 @@ export function useScrollBehavior(
 	// (window focus, tab switch, IDE panel toggle).
 	useEffect(() => {
 		const handleVisibility = () => {
-			if (!disableAutoScrollRef.current) {
-				requestAnimationFrame(() => {
-					scrollToBottomAuto()
-				})
+			if (document.visibilityState === "hidden") {
+				pendingAutoScrollRef.current = !disableAutoScrollRef.current
+				return
+			}
+
+			if (!disableAutoScrollRef.current || pendingAutoScrollRef.current) {
+				queueAutoScrollToBottom(true)
 			}
 		}
 		window.addEventListener("focus", handleVisibility)
+		window.addEventListener("resize", handleVisibility)
 		document.addEventListener("visibilitychange", handleVisibility)
 		return () => {
 			window.removeEventListener("focus", handleVisibility)
+			window.removeEventListener("resize", handleVisibility)
 			document.removeEventListener("visibilitychange", handleVisibility)
+			clearAutoScrollRetryTimers()
 		}
-	}, [scrollToBottomAuto])
+	}, [clearAutoScrollRetryTimers, queueAutoScrollToBottom])
 
 	return {
 		virtuosoRef,

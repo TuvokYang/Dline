@@ -55,8 +55,6 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 		hooksEnabled,
 		apiMetrics,
 		lastApiReqTotalTokens: lastApiReqTotalTokensFromState,
-		totalMessageCount,
-		firstItemIndex,
 	} = useExtensionState()
 	const isProdHostedApp = userInfo?.apiBaseUrl === "https://app.cline.bot"
 	const shouldShowQuickWins = isProdHostedApp && (!taskHistory || taskHistory.length < QUICK_WINS_HISTORY_THRESHOLD)
@@ -319,8 +317,6 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 		groupedMessages,
 		expandedRows,
 		setExpandedRows,
-		totalMessageCount,
-		firstItemIndex,
 	)
 
 	// Use message handlers hook (must come after scrollBehavior so we can pass disableAutoScrollRef)

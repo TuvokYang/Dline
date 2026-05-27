@@ -319,8 +319,10 @@ export const ExtensionStateContextProvider: React.FC<{
 	const prevRefetchTaskIdRef = useRef<string | undefined>(state.currentTaskItem?.id)
 	const prevHistoryTaskIdRef = useRef<string | undefined>(state.currentTaskItem?.id)
 
-	// Reset when task is cleared; bootstrap initial fetch on task switch;
-	// refetch when totalMessageCount changes (e.g. after cancel removes partials).
+	// Reset when task is cleared; bootstrap initial fetch on task switch.
+	// New messages arrive through subscribeToPartialMessage; refetching the
+	// latest window on every total increase fights Virtuoso's scroll anchor.
+	// We only refetch when the total shrinks, which happens after cancel/cleanup.
 	useEffect(() => {
 		const currentId = state.currentTaskItem?.id
 		if (currentId !== prevRefetchTaskIdRef.current) {
@@ -364,12 +366,12 @@ export const ExtensionStateContextProvider: React.FC<{
 			prevTotalRef.current = total
 			return
 		}
-		// Refetch when totalMessageCount changes and we already have messages.
+		// Refetch when totalMessageCount shrinks and we already have messages.
 		// This syncs the sliding window after cancel removes partial messages.
 		// Delayed by 200ms via cancelStabilizeTimerRef so rapid state changes
 		// (remove partials, postState, total update) settle before triggering
 		// a Virtuoso data swap that causes layout jitter.
-		if (prevTotalRef.current !== 0 && prevTotalRef.current !== total && clineMessages.length > 0 && !refetchLockRef.current) {
+		if (prevTotalRef.current !== 0 && total < prevTotalRef.current && clineMessages.length > 0 && !refetchLockRef.current) {
 			if (cancelStabilizeTimerRef.current) {
 				clearTimeout(cancelStabilizeTimerRef.current)
 			}
@@ -503,7 +505,6 @@ export const ExtensionStateContextProvider: React.FC<{
 						console.error("Error parsing state JSON:", error)
 					}
 				}
-				console.debug('ended "got subscribed state"')
 			},
 			onError: (error) => {
 				console.error("Error in state subscription:", error)

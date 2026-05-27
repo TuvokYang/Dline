@@ -73,6 +73,9 @@ interface ChatRowProps {
 	isLast: boolean
 	onHeightChange: (isTaller: boolean) => void
 	inputValue?: string
+	selectedImages?: string[]
+	selectedFiles?: string[]
+	onInputConsumed?: () => void
 	sendMessageFromChatRow?: (text: string, images: string[], files: string[]) => void
 	onSetQuote: (text: string) => void
 	onCancelCommand?: () => void
@@ -137,6 +140,9 @@ export const ChatRowContent = memo(
 		lastModifiedMessage,
 		isLast,
 		inputValue,
+		selectedImages,
+		selectedFiles,
+		onInputConsumed,
 		sendMessageFromChatRow,
 		onSetQuote,
 		onCancelCommand,
@@ -1215,11 +1221,14 @@ export const ChatRowContent = memo(
 								</WithCopyButton>
 								<div className="pt-3">
 									<OptionsButtons
+										files={selectedFiles}
+										images={selectedImages}
 										inputValue={inputValue}
 										isActive={
 											(isLast && lastModifiedMessage?.ask === "followup") ||
 											(!selected && options && options.length > 0)
 										}
+										onInputConsumed={onInputConsumed}
 										options={options}
 										selected={selected}
 									/>
@@ -1276,11 +1285,14 @@ export const ChatRowContent = memo(
 									text={response || message.text || ""}
 								/>
 								<OptionsButtons
+									files={selectedFiles}
+									images={selectedImages}
 									inputValue={inputValue}
 									isActive={
 										(isLast && lastModifiedMessage?.ask === "plan_mode_respond") ||
 										(!selected && options && options.length > 0)
 									}
+									onInputConsumed={onInputConsumed}
 									options={options}
 									selected={selected}
 								/>

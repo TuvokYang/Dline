@@ -37,12 +37,12 @@ type RenderRow = {
 	endMessageTs?: number
 }
 
-type ScrollDirection = "up" | "down" | "none"
-
 type PendingAnchor = {
 	ts: number
 	align: "start" | "center" | "end"
 }
+
+type ScrollEdge = "top" | "bottom"
 
 export const MessagesArea: React.FC<MessagesAreaProps> = ({
 	task,
@@ -56,20 +56,25 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 
 	const firstItemIndexRef = useRef(firstItemIndex)
 	const clineMessagesLengthRef = useRef(clineMessages.length)
-	const lastViewportCenterRef = useRef<number | null>(null)
 	const inflightRef = useRef<Set<string>>(new Set())
 	const pendingAnchorRef = useRef<PendingAnchor | null>(null)
+	const pendingEdgeScrollRef = useRef<ScrollEdge | null>(null)
 	const prevRangeRef = useRef<{ start: number; end: number } | null>(null)
 	const lastRangeProcessedRef = useRef(0)
 	const isUserScrollingRef = useRef(false)
 	const scrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 	const mergeLockRef = useRef(false)
+	const windowVersionRef = useRef(0)
+	const edgeJumpInFlightRef = useRef<ScrollEdge | null>(null)
+	const edgeScrollRafRef = useRef<number | null>(null)
+	const edgeScrollTimersRef = useRef<ReturnType<typeof setTimeout>[]>([])
 
 	// Floating scroll-to-bottom/top button state
 	const [floatingBtnVisible, setFloatingBtnVisible] = useState(false)
 	const [floatingBtnDir, setFloatingBtnDir] = useState<"bottom" | "top">("bottom")
 	const hideBtnTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 	const wasBtnShownRef = useRef(false)
+	const showScrollToBottomRef = useRef(false)
 
 	useEffect(() => {
 		firstItemIndexRef.current = firstItemIndex
@@ -99,8 +104,11 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 		isAtBottom,
 		isAtBottomRef,
 		showScrollToBottom,
-		scrollToBottomSmooth,
 	} = scrollBehavior
+
+	useEffect(() => {
+		showScrollToBottomRef.current = showScrollToBottom
+	}, [showScrollToBottom])
 
 	const messageIndexByTs = useMemo(() => {
 		const map = new Map<number, number>()
@@ -167,7 +175,46 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 		[virtuosoRef],
 	)
 
+	const clearEdgeScrollTimers = useCallback(() => {
+		if (edgeScrollRafRef.current != null) {
+			cancelAnimationFrame(edgeScrollRafRef.current)
+			edgeScrollRafRef.current = null
+		}
+		for (const timer of edgeScrollTimersRef.current) {
+			clearTimeout(timer)
+		}
+		edgeScrollTimersRef.current = []
+	}, [])
+
+	const scrollToLoadedEdge = useCallback(
+		(edge: ScrollEdge, behavior: "auto" | "smooth" = "auto") => {
+			if (renderRows.length === 0) return
+
+			clearEdgeScrollTimers()
+
+			const index = edge === "top" ? 0 : renderRows.length - 1
+			const align = edge === "top" ? "start" : "end"
+			const scroll = () => scrollToRowOffset(index, align, behavior)
+			edgeScrollRafRef.current = requestAnimationFrame(() => {
+				edgeScrollRafRef.current = null
+				scroll()
+			})
+
+			edgeScrollTimersRef.current = [50, 200, 500].map((delay) =>
+				setTimeout(() => scrollToRowOffset(index, align, "auto"), delay),
+			)
+		},
+		[clearEdgeScrollTimers, renderRows.length, scrollToRowOffset],
+	)
+
 	useLayoutEffect(() => {
+		const pendingEdge = pendingEdgeScrollRef.current
+		if (pendingEdge && renderRows.length > 0) {
+			pendingEdgeScrollRef.current = null
+			scrollToLoadedEdge(pendingEdge)
+			return
+		}
+
 		const pendingAnchor = pendingAnchorRef.current
 		if (!pendingAnchor) return
 		if (renderRows.length === 0) return
@@ -177,7 +224,9 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 
 		pendingAnchorRef.current = null
 		scrollToRowOffset(rowOffset, pendingAnchor.align, "auto")
-	}, [renderRows.length, findRowOffsetByMessageTs, scrollToRowOffset])
+	}, [renderRows.length, findRowOffsetByMessageTs, scrollToLoadedEdge, scrollToRowOffset])
+
+	useEffect(() => clearEdgeScrollTimers, [clearEdgeScrollTimers])
 
 	const scrolledPastUserMessageRowOffset = useMemo(() => {
 		if (!scrolledPastUserMessage) return -1
@@ -190,7 +239,23 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 		}
 	}, [scrolledPastUserMessageRowOffset, scrollToRowOffset])
 
-	const { expandedRows, inputValue, setActiveQuote } = chatState
+	const {
+		expandedRows,
+		inputValue,
+		selectedImages,
+		selectedFiles,
+		setActiveQuote,
+		setInputValue,
+		setSelectedImages,
+		setSelectedFiles,
+	} = chatState
+
+	const handleInputConsumed = useCallback(() => {
+		setInputValue("")
+		setActiveQuote(null)
+		setSelectedImages([])
+		setSelectedFiles([])
+	}, [setInputValue, setActiveQuote, setSelectedImages, setSelectedFiles])
 
 	const lastVisibleRow = useMemo(() => visibleGroupedMessages.at(-1), [visibleGroupedMessages])
 
@@ -249,6 +314,9 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 				handleRowHeightChange,
 				setActiveQuote,
 				inputValue,
+				selectedImages,
+				selectedFiles,
+				handleInputConsumed,
 				messageHandlers,
 				false,
 			),
@@ -260,6 +328,9 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 			handleRowHeightChange,
 			setActiveQuote,
 			inputValue,
+			selectedImages,
+			selectedFiles,
+			handleInputConsumed,
 			messageHandlers,
 		],
 	)
@@ -282,6 +353,7 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 			if (inflightRef.current.has(key)) return false
 
 			inflightRef.current.add(key)
+			const requestVersion = windowVersionRef.current
 
 			if (anchor) {
 				pendingAnchorRef.current = anchor
@@ -291,6 +363,11 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 				const resp = await TaskServiceClient.fetchMessage(FetchMessageRequest.create({ referenceIndex: start, count }))
 				const msgs = (resp.messages as any[]).map((m) => convertProtoToClineMessage(m)) as ClineMessage[]
 				const si = resp.startIndex
+
+				if (requestVersion !== windowVersionRef.current) {
+					if (anchor) pendingAnchorRef.current = null
+					return false
+				}
 
 				if (msgs.length === 0) {
 					if (anchor) pendingAnchorRef.current = null
@@ -342,6 +419,51 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 		[setClineMessages, setFirstItemIndex],
 	)
 
+	const jumpToEdge = useCallback(
+		async (edge: ScrollEdge) => {
+			if (edgeJumpInFlightRef.current === edge) return
+
+			edgeJumpInFlightRef.current = edge
+			windowVersionRef.current += 1
+			const requestVersion = windowVersionRef.current
+			inflightRef.current.clear()
+			pendingAnchorRef.current = null
+			pendingEdgeScrollRef.current = edge
+
+			try {
+				const request =
+					edge === "top"
+						? FetchMessageRequest.create({ referenceIndex: 0, count: LOAD_COUNT })
+						: FetchMessageRequest.create({ referenceIndex: -1, count: LOAD_COUNT })
+
+				const resp = await TaskServiceClient.fetchMessage(request)
+				if (requestVersion !== windowVersionRef.current) return
+
+				const converted = (resp.messages as any[]).map((m) => convertProtoToClineMessage(m)) as ClineMessage[]
+				const nextFirstItemIndex = Math.max(0, resp.startIndex)
+
+				firstItemIndexRef.current = nextFirstItemIndex
+				clineMessagesLengthRef.current = converted.length
+				mergeLockRef.current = true
+				prevRangeRef.current = null
+				setClineMessages(converted)
+				setFirstItemIndex(nextFirstItemIndex)
+
+				if (converted.length === 0) {
+					pendingEdgeScrollRef.current = null
+				}
+			} catch (e) {
+				pendingEdgeScrollRef.current = null
+				console.error("fetchMessage:", e)
+			} finally {
+				if (edgeJumpInFlightRef.current === edge) {
+					edgeJumpInFlightRef.current = null
+				}
+			}
+		},
+		[setClineMessages, setFirstItemIndex],
+	)
+
 	const handleRangeChanged = useCallback(
 		(range: { startIndex: number; endIndex: number }) => {
 			const dataLen = clineMessagesLengthRef.current
@@ -371,8 +493,8 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 				return
 			prevRangeRef.current = { start: range.startIndex, end: range.endIndex }
 
-			const localStart = range.startIndex - fi
-			const localEnd = range.endIndex - fi
+			const localStart = range.startIndex
+			const localEnd = range.endIndex
 			const firstVisibleRow = renderRows[localStart]
 			const lastVisibleRow = renderRows[localEnd]
 
@@ -391,31 +513,7 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 			const aheadCount = Math.max(0, firstVisibleMessageIndex - fi)
 			const behindCount = Math.max(0, fi + dataLen - 1 - lastVisibleMessageIndex)
 
-			const viewportCenter = (firstVisibleMessageIndex + lastVisibleMessageIndex) / 2
-			const prevViewportCenter = lastViewportCenterRef.current
-			lastViewportCenterRef.current = viewportCenter
-
-			let scrollDirection: ScrollDirection = "none"
-
-			if (prevViewportCenter != null) {
-				if (viewportCenter > prevViewportCenter + 2) {
-					scrollDirection = "down"
-				} else if (viewportCenter < prevViewportCenter - 2) {
-					scrollDirection = "up"
-				}
-			}
-
 			setShowScrollToBottom(disableAutoScrollRef.current || !isAllLoaded || lastVisibleMessageIndex < total - 1)
-
-			console.debug(
-				`[MessagesArea] rangeChanged: visibleRows=[${range.startIndex},${range.endIndex}] ` +
-					`localRows=[${localStart},${localEnd}] ` +
-					`visibleMessages=[${firstVisibleMessageIndex},${lastVisibleMessageIndex}] ` +
-					`fi=${fi} dataLen=${dataLen} total=${total} | ` +
-					`ahead=${aheadCount} behind=${behindCount} ` +
-					`topRows=${topRowDistance} bottomRows=${bottomRowDistance} ` +
-					`direction=${scrollDirection}`,
-			)
 
 			if ((topRowDistance <= ROW_LOAD_THRESHOLD || aheadCount < LOAD_THRESHOLD) && fi > 0) {
 				const start = Math.max(fi - LOAD_COUNT, 0)
@@ -456,7 +554,7 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 
 		const showButton = () => {
 			if (hideBtnTimerRef.current) clearTimeout(hideBtnTimerRef.current)
-			if (!isAtBottomRef.current) {
+			if (!isAtBottomRef.current || showScrollToBottomRef.current) {
 				setFloatingBtnVisible(true)
 				wasBtnShownRef.current = true
 				hideBtnTimerRef.current = setTimeout(() => {
@@ -571,32 +669,40 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 						// Keep ref in sync so scroll handlers read the latest value immediately
 						isAtBottomRef.current = atBottom
 
-						// Reset auto-scroll flag when the user manually scrolls to the bottom
-						if (atBottom) {
+						const total = totalMessageCount ?? clineMessagesLengthRef.current
+						const absoluteBottomLoaded = firstItemIndexRef.current + clineMessagesLengthRef.current >= total
+
+						// Reset auto-scroll only at the real conversation bottom, not merely
+						// the bottom of the currently loaded sliding window.
+						if (atBottom && absoluteBottomLoaded) {
 							disableAutoScrollRef.current = false
 						}
 
-						// Show the to-bottom button when auto-scroll is disabled
-						// AND the user is not already at the bottom
-						setShowScrollToBottom(disableAutoScrollRef.current && !atBottom)
+						const shouldShowScrollToBottom = !absoluteBottomLoaded || (disableAutoScrollRef.current && !atBottom)
+						setShowScrollToBottom(shouldShowScrollToBottom)
+
+						if (atBottom && !absoluteBottomLoaded) {
+							setFloatingBtnDir("bottom")
+							setFloatingBtnVisible(true)
+						}
 					}}
 					atBottomThreshold={10}
 					className="scrollable grow overflow-y-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
 					components={virtuosoComponents}
 					data={visibleGroupedMessages}
-					firstItemIndex={firstItemIndex}
+					firstItemIndex={0}
 					increaseViewportBy={{ top: 100, bottom: 100 }}
-					initialTopMostItemIndex={firstItemIndex + Math.max(visibleGroupedMessages.length - 1, 0)}
+					initialTopMostItemIndex={Math.max(visibleGroupedMessages.length - 1, 0)}
 					itemContent={itemContent}
 					key={task.ts}
 					rangeChanged={handleRangeChanged}
 					ref={virtuosoRef}
 					style={{ overflowAnchor: "none" }}
-					totalCount={totalMessageCount ?? clineMessages.length}
+					totalCount={visibleGroupedMessages.length}
 				/>
 
 				{/* Floating scroll direction button — appears on scroll, auto-hides after 5s idle */}
-				{!isAtBottom && (
+				{(!isAtBottom || showScrollToBottom) && (
 					<div
 						className={cn(
 							"absolute bottom-4 right-4 z-20 transition-all duration-300 ease-out",
@@ -612,11 +718,11 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 							)}
 							onClick={() => {
 								if (floatingBtnDir === "bottom") {
-									scrollToBottomSmooth()
 									disableAutoScrollRef.current = false
+									void jumpToEdge("bottom")
 								} else {
-									virtuosoRef.current?.scrollToIndex({ index: 0, align: "start", behavior: "smooth" })
 									disableAutoScrollRef.current = true
+									void jumpToEdge("top")
 								}
 								if (hideBtnTimerRef.current) clearTimeout(hideBtnTimerRef.current)
 								setFloatingBtnVisible(false)

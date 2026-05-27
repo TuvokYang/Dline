@@ -19,6 +19,9 @@ interface MessageRendererProps {
 	onHeightChange: (isTaller: boolean) => void
 	onSetQuote: (quote: string | null) => void
 	inputValue: string
+	selectedImages: string[]
+	selectedFiles: string[]
+	onInputConsumed: () => void
 	messageHandlers: MessageHandlers
 	footerActive: boolean
 }
@@ -37,6 +40,9 @@ export const MessageRenderer: React.FC<MessageRendererProps> = ({
 	onHeightChange,
 	onSetQuote,
 	inputValue,
+	selectedImages,
+	selectedFiles,
+	onInputConsumed,
 	messageHandlers,
 	footerActive,
 }) => {
@@ -115,10 +121,13 @@ export const MessageRenderer: React.FC<MessageRendererProps> = ({
 				mode={mode}
 				onCancelCommand={() => messageHandlers.executeButtonAction("cancel")}
 				onHeightChange={onHeightChange}
+				onInputConsumed={onInputConsumed}
 				onSetQuote={onSetQuote}
 				onToggleExpand={onToggleExpand}
 				reasoningContent={reasoningData.reasoning}
 				responseStarted={reasoningData.responseStarted}
+				selectedFiles={selectedFiles}
+				selectedImages={selectedImages}
 				sendMessageFromChatRow={messageHandlers.handleSendMessage}
 			/>
 		</div>
@@ -137,6 +146,9 @@ export const createMessageRenderer = (
 	onHeightChange: (isTaller: boolean) => void,
 	onSetQuote: (quote: string | null) => void,
 	inputValue: string,
+	selectedImages: string[],
+	selectedFiles: string[],
+	onInputConsumed: () => void,
 	messageHandlers: MessageHandlers,
 	footerActive: boolean,
 ) => {
@@ -151,8 +163,11 @@ export const createMessageRenderer = (
 			messageOrGroup={messageOrGroup}
 			modifiedMessages={modifiedMessages}
 			onHeightChange={onHeightChange}
+			onInputConsumed={onInputConsumed}
 			onSetQuote={onSetQuote}
 			onToggleExpand={onToggleExpand}
+			selectedFiles={selectedFiles}
+			selectedImages={selectedImages}
 		/>
 	)
 }
