@@ -13,9 +13,10 @@ export async function executeCommandInTerminal(
 	try {
 		// Create terminal with fixed options
 		const terminalOptions: vscode.TerminalOptions = {
-			name: "Cline",
-			iconPath: new vscode.ThemeIcon("cline-icon"),
+			name: "Dline",
+			iconPath: new vscode.ThemeIcon("dline-icon"),
 			env: {
+				DLINE_ACTIVE: "true",
 				CLINE_ACTIVE: "true",
 			},
 		}

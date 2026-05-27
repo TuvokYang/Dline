@@ -15,9 +15,9 @@ describe("formatResponse.replaceInFileMissingDiffError", () => {
 
 	it("should include the SEARCH/REPLACE block format", () => {
 		const result = formatResponse.replaceInFileMissingDiffError("src/index.ts")
-		result.should.containEql("<<<<<<< SEARCH")
+		result.should.containEql("------- SEARCH")
 		result.should.containEql("=======")
-		result.should.containEql(">>>>>>> REPLACE")
+		result.should.containEql("+++++++ REPLACE")
 	})
 
 	it("should include rules about exact matching", () => {

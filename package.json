@@ -50,7 +50,7 @@
 	"main": "./dist/extension.js",
 	"contributes": {
 		"icons": {
-			"d-icon": {
+			"dline-icon": {
 				"description": "dline",
 				"default": {
 					"fontPath": "assets/icons/cline-bot.woff",
@@ -186,7 +186,7 @@
 				"command": "dline.generateGitCommitMessage",
 				"title": "Generate Commit Message with Dline",
 				"category": "Dline",
-				"icon": "$(cline-icon)"
+				"icon": "$(dline-icon)"
 			},
 			{
 				"command": "dline.abortGitCommitMessage",
