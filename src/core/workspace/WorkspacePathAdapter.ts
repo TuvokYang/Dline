@@ -9,6 +9,7 @@
 
 import * as path from "path"
 import { Logger } from "@/shared/services/Logger"
+import { normalizeWorkspaceRelativeInputPath } from "./utils/normalizeWorkspaceRelativeInputPath"
 import { resolveWorkspacePath } from "./WorkspaceResolver"
 import type { WorkspaceRootManager } from "./WorkspaceRootManager"
 
@@ -29,23 +30,27 @@ export class WorkspacePathAdapter {
 	 * @returns The resolved absolute path
 	 */
 	resolvePath(relativePath: string, workspaceHint?: string): string {
+		// Normalize input to prevent Windows path.resolve/path.join from misinterpreting
+		// a leading "/" as a drive-relative absolute path
+		const rel = normalizeWorkspaceRelativeInputPath(relativePath)
+
 		// Single-root mode (backward compatible)
 		if (!this.config.isMultiRootEnabled || !this.config.workspaceManager) {
-			return resolveWorkspacePath(this.config.cwd, relativePath, "WorkspacePathAdapter") as string
+			return resolveWorkspacePath(this.config.cwd, rel, "WorkspacePathAdapter") as string
 		}
 
 		// Multi-root mode
 		const manager = this.config.workspaceManager as WorkspaceRootManager
 
 		// If absolute path, find which workspace it belongs to
-		if (path.isAbsolute(relativePath)) {
+		if (path.isAbsolute(rel)) {
 			// Already absolute, just validate it belongs to a workspace
-			const root = manager.resolvePathToRoot(relativePath)
+			const root = manager.resolvePathToRoot(rel)
 			if (!root) {
 				// Path doesn't belong to any workspace, but return it anyway
-				Logger.warn(`[WorkspacePathAdapter] Absolute path ${relativePath} doesn't belong to any workspace`)
+				Logger.warn(`[WorkspacePathAdapter] Absolute path ${rel} doesn't belong to any workspace`)
 			}
-			return relativePath
+			return rel
 		}
 
 		// If hint provided, try to use that workspace
@@ -61,10 +66,10 @@ export class WorkspacePathAdapter {
 
 			if (root) {
 				// If no relative path specified, return the workspace root itself
-				if (!relativePath) {
+				if (!rel) {
 					return root.path
 				}
-				return path.join(root.path, relativePath)
+				return path.join(root.path, rel)
 			}
 
 			Logger.warn(`[WorkspacePathAdapter] Workspace hint '${workspaceHint}' not found, using primary workspace`)
@@ -74,15 +79,15 @@ export class WorkspacePathAdapter {
 		const primaryRoot = manager.getPrimaryRoot()
 		if (primaryRoot) {
 			// If no relative path specified, return the workspace root itself
-			if (!relativePath) {
+			if (!rel) {
 				return primaryRoot.path
 			}
-			return path.join(primaryRoot.path, relativePath)
+			return path.join(primaryRoot.path, rel)
 		}
 
 		// Fallback to cwd if no roots (shouldn't happen, but defensive)
 		Logger.warn(`[WorkspacePathAdapter] No workspace roots found, falling back to cwd`)
-		return resolveWorkspacePath(this.config.cwd, relativePath, "WorkspacePathAdapter-fallback") as string
+		return resolveWorkspacePath(this.config.cwd, rel, "WorkspacePathAdapter-fallback") as string
 	}
 
 	/**
@@ -93,14 +98,18 @@ export class WorkspacePathAdapter {
 	 * @returns Array of absolute paths, one for each workspace
 	 */
 	getAllPossiblePaths(relativePath: string): string[] {
+		// Normalize input to prevent Windows path.join from misinterpreting
+		// a leading "/" as a drive-relative absolute path
+		const rel = normalizeWorkspaceRelativeInputPath(relativePath)
+
 		// Single-root mode
 		if (!this.config.isMultiRootEnabled || !this.config.workspaceManager) {
-			return [resolveWorkspacePath(this.config.cwd, relativePath, "WorkspacePathAdapter-getAllPaths") as string]
+			return [resolveWorkspacePath(this.config.cwd, rel, "WorkspacePathAdapter-getAllPaths") as string]
 		}
 
 		// Multi-root mode
 		const manager = this.config.workspaceManager as WorkspaceRootManager
-		return manager.getRoots().map((root) => path.join(root.path, relativePath))
+		return manager.getRoots().map((root) => path.join(root.path, rel))
 	}
 
 	/**

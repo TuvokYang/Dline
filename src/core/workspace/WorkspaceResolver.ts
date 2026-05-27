@@ -9,6 +9,7 @@ import { WorkspaceRoot } from "@shared/multi-root/types"
 import * as path from "path"
 import { Logger } from "@/shared/services/Logger"
 import { MigrationReporter, type UsageStats } from "./MigrationReporter"
+import { normalizeWorkspaceRelativeInputPath } from "./utils/normalizeWorkspaceRelativeInputPath"
 import { parseWorkspaceInlinePath } from "./utils/parseWorkspaceInlinePath"
 import { WorkspacePathAdapter } from "./WorkspacePathAdapter"
 
@@ -78,16 +79,20 @@ export class WorkspaceResolver {
 	 * @returns Absolute path
 	 */
 	private resolveSingleRootPath(cwd: string, relativePath: string, context?: string): string {
+		// Normalize input to prevent Windows path.resolve() from misinterpreting
+		// a leading "/" as a drive-relative absolute path (e.g., "/src/a.ts" -> "E:\src\a.ts")
+		const normalized = normalizeWorkspaceRelativeInputPath(relativePath)
+
 		// Track usage for migration planning
 		if (context) {
-			this.trackUsage(context, relativePath)
+			this.trackUsage(context, normalized)
 
 			if (this.traceEnabled) {
-				Logger.debug(`[MULTI-ROOT-TRACE] ${context}: resolving "${relativePath}" against "${cwd}"`)
+				Logger.debug(`[MULTI-ROOT-TRACE] ${context}: resolving "${normalized}" against "${cwd}"`)
 			}
 		}
 
-		return path.resolve(cwd, relativePath)
+		return path.resolve(cwd, normalized)
 	}
 
 	/**
@@ -101,13 +106,16 @@ export class WorkspaceResolver {
 		workspaceRoots: WorkspaceRoot[],
 		relativePath: string,
 	): { absolutePath: string; root: WorkspaceRoot } {
+		// Normalize input to prevent Windows from treating "/src/a.ts" as absolute
+		const normalized = normalizeWorkspaceRelativeInputPath(relativePath)
+
 		// Handle absolute paths
-		if (path.isAbsolute(relativePath)) {
-			return this.resolveAbsolutePath(workspaceRoots, relativePath)
+		if (path.isAbsolute(normalized)) {
+			return this.resolveAbsolutePath(workspaceRoots, normalized)
 		}
 
-		// Handle relative paths
-		return this.resolveRelativePath(workspaceRoots, relativePath)
+		// Handle relative paths (normalized value carries through to selectBestRoot)
+		return this.resolveRelativePath(workspaceRoots, normalized)
 	}
 
 	/**
@@ -286,16 +294,24 @@ export function resolveWorkspacePath(
 ): string | WorkspacePathResult {
 	// Backward compatibility: if first param is a string, return string
 	if (typeof cwdOrConfig === "string") {
-		return workspaceResolver.resolveWorkspacePath(cwdOrConfig, relativePath, context) as string
+		const normalized = normalizeWorkspaceRelativeInputPath(relativePath)
+		return workspaceResolver.resolveWorkspacePath(cwdOrConfig, normalized, context) as string
 	}
 
 	// New behavior: handle multi-root workspaces
 	const config = cwdOrConfig
 
+	// Normalize input once before any parsing
+	const normalizedInput = normalizeWorkspaceRelativeInputPath(relativePath)
+
 	// If multi-root is enabled and we have a workspace manager
 	if (config.isMultiRootEnabled && config.workspaceManager) {
 		// Parse workspace hint from the path (e.g., @frontend:src/index.ts)
-		const { workspaceHint, relPath: parsedPath } = parseWorkspaceInlinePath(relativePath)
+		const { workspaceHint, relPath } = parseWorkspaceInlinePath(normalizedInput)
+
+		// Normalize again after parsing: "@frontend:/src/App.tsx" → relPath="/src/App.tsx"
+		// needs to become "src/App.tsx" so displayPath/resolvedPath are clean
+		const parsedPath = normalizeWorkspaceRelativeInputPath(relPath)
 
 		// Create adapter for multi-workspace path resolution
 		const adapter = new WorkspacePathAdapter({
@@ -318,12 +334,12 @@ export function resolveWorkspacePath(
 	}
 
 	// Fallback to single-workspace behavior
-	const absolutePath = workspaceResolver.resolveWorkspacePath(config.cwd, relativePath, context) as string
+	const absolutePath = workspaceResolver.resolveWorkspacePath(config.cwd, normalizedInput, context) as string
 
 	return {
 		absolutePath,
-		displayPath: relativePath,
-		resolvedPath: relativePath,
+		displayPath: normalizedInput,
+		resolvedPath: normalizedInput,
 	}
 }
 

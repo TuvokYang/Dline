@@ -43,7 +43,12 @@ describe("WorkspacePathAdapter", () => {
 		it("should handle absolute paths", () => {
 			const absolutePath = "/absolute/path/file.ts"
 			const result = adapter.resolvePath(absolutePath)
-			expect(result).to.equal(path.resolve(testCwd, absolutePath))
+			if (process.platform === "win32") {
+				// On Windows, the leading "/" is stripped, resolved relative to cwd
+				expect(result).to.equal(path.resolve(testCwd, "absolute/path/file.ts"))
+			} else {
+				expect(result).to.equal(path.resolve(testCwd, absolutePath))
+			}
 		})
 
 		it("should get workspace for path within cwd", () => {
@@ -114,16 +119,27 @@ describe("WorkspacePathAdapter", () => {
 		it("should handle absolute paths belonging to a workspace", () => {
 			const absolutePath = "/workspace/backend/src/api.ts"
 			const result = adapter.resolvePath(absolutePath)
-			expect(result).to.equal(absolutePath)
+			if (process.platform === "win32") {
+				// On Windows, the leading "/" is stripped, path becomes workspace-relative
+				// and resolves against the primary workspace via path.join
+				expect(result.toPosix()).to.equal("/workspace/frontend/workspace/backend/src/api.ts")
+			} else {
+				expect(result).to.equal(absolutePath)
+			}
 		})
 
 		it("should warn for absolute paths outside workspaces", () => {
 			const absolutePath = "/other/path/file.ts"
 			const result = adapter.resolvePath(absolutePath)
 
-			expect(result).to.equal(absolutePath)
-			expect(consoleWarnStub.calledOnce).to.be.true
-			expect(consoleWarnStub.firstCall.args[0]).to.include("doesn't belong to any workspace")
+			if (process.platform === "win32") {
+				// On Windows, the leading "/" is stripped, path becomes workspace-relative
+				expect(result.toPosix()).to.equal("/workspace/frontend/other/path/file.ts")
+			} else {
+				expect(result).to.equal(absolutePath)
+				expect(consoleWarnStub.calledOnce).to.be.true
+				expect(consoleWarnStub.firstCall.args[0]).to.include("doesn't belong to any workspace")
+			}
 		})
 
 		it("should get all possible paths across workspaces", () => {

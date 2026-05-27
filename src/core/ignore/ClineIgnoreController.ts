@@ -3,6 +3,7 @@ import chokidar, { FSWatcher } from "chokidar"
 import fs from "fs/promises"
 import ignore, { Ignore } from "ignore"
 import path from "path"
+import { normalizeWorkspaceRelativeInputPath } from "@/core/workspace/utils/normalizeWorkspaceRelativeInputPath"
 import { Logger } from "@/shared/services/Logger"
 
 export const LOCK_TEXT_SYMBOL = "\u{1F512}"
@@ -158,8 +159,11 @@ export class ClineIgnoreController {
 			return true
 		}
 		try {
-			// Normalize path to be relative to cwd and use forward slashes
-			const absolutePath = path.resolve(this.cwd, filePath)
+			// Normalize path to be relative to cwd and use forward slashes.
+			// Also strip a leading "/" on Windows to prevent path.resolve from
+			// treating it as a drive-relative absolute path.
+			const normalized = normalizeWorkspaceRelativeInputPath(filePath)
+			const absolutePath = path.resolve(this.cwd, normalized)
 			const relativePath = path.relative(this.cwd, absolutePath).toPosix()
 
 			// Ignore expects paths to be path.relative()'d

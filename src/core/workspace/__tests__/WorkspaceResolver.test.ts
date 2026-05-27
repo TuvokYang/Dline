@@ -82,7 +82,14 @@ describe("WorkspaceResolver", () => {
 			const absolutePath = "/absolute/path/file.ts"
 			const result = resolver.resolveWorkspacePath(testCwd, absolutePath)
 
-			expect(result).to.equal(path.resolve(testCwd, absolutePath))
+			if (process.platform === "win32") {
+				// On Windows, a leading "/" is stripped by normalizeWorkspaceRelativeInputPath
+				// so the path is resolved relative to cwd
+				expect(result).to.equal(path.resolve(testCwd, "absolute/path/file.ts"))
+			} else {
+				// On POSIX, "/absolute/path/file.ts" remains an absolute path
+				expect(result).to.equal(path.resolve(testCwd, absolutePath))
+			}
 		})
 
 		it("should handle empty relative path", () => {
@@ -108,7 +115,15 @@ describe("WorkspaceResolver", () => {
 			const result = resolver.resolveWorkspacePath(workspaceRoots, absolutePath)
 
 			expect(result).to.be.an("object")
-			expect((result as any).absolutePath).to.equal(absolutePath)
+			if (process.platform === "win32") {
+				// On Windows, the leading "/" is stripped, so the path becomes
+				// workspace-relative and resolves against the primary root
+				expect((result as any).absolutePath).to.equal(
+					path.resolve(workspaceRoots[0].path, "workspace/primary/src/file.ts"),
+				)
+			} else {
+				expect((result as any).absolutePath).to.equal(absolutePath)
+			}
 			expect((result as any).root).to.equal(workspaceRoots[0])
 		})
 
@@ -117,7 +132,11 @@ describe("WorkspaceResolver", () => {
 			const result = resolver.resolveWorkspacePath(workspaceRoots, absolutePath)
 
 			expect(result).to.be.an("object")
-			expect((result as any).absolutePath).to.equal(absolutePath)
+			if (process.platform === "win32") {
+				expect((result as any).absolutePath).to.equal(path.resolve(workspaceRoots[0].path, "other/path/file.ts"))
+			} else {
+				expect((result as any).absolutePath).to.equal(absolutePath)
+			}
 			expect((result as any).root).to.equal(workspaceRoots[0])
 		})
 
