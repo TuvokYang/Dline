@@ -111,11 +111,15 @@ jobs:
             - name: Extension Integration Tests - Linux
               id: integration_tests_linux
               if: ${{ !cancelled() && steps.build_step.outcome == 'success' && runner.os == 'Linux' }}
+              env:
+                  IS_TEST: "true"
               run: xvfb-run -a npm run test:coverage
 
             - name: Extension Integration Tests - Non-Linux
               id: integration_tests_non_linux
               if: ${{ !cancelled() && steps.build_step.outcome == 'success' && runner.os != 'Linux' }}
+              env:
+                  IS_TEST: "true"
               run: |
                   for attempt in 1 2 3; do
                     echo "Running extension integration tests (attempt ${attempt}/3)"

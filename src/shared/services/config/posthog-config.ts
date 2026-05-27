@@ -50,7 +50,7 @@ const isTestEnv = process.env.E2E_TEST === "true" || process.env.IS_TEST === "tr
 export function isPostHogConfigValid(config: PostHogClientConfig): config is PostHogClientValidConfig {
 	// Allow invalid config in test environment to enable mocking and stubbing
 	if (isTestEnv) {
-		return false
+		return true
 	}
 	return (
 		typeof config.apiKey === "string" &&
