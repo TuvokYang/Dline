@@ -30,12 +30,15 @@ Cline is an excellent AI coding agent, but we encountered stability issues in da
 ### I18n Foundation
 - Multi-language system prompt framework groundwork
 
+### Auto Migration
+- **Cline → Dline one-click migration** — Automatically migrates all your Cline data (settings, API keys, task history, configs) on first launch. Non-destructive, safe to rollback. See [migration guide](docs/getting-started/migration-cline-to-dline.mdx)
+
 ## Known Issues
 - **Occasional scroll bounce** — A side effect of the gray screen fix; still being investigated
 
 ## Roadmap
 - [ ] Token usage and cost display
-- [ ] Multi-language prompts (Chinese, Japanese, etc.)
+- [ ] Multi-language prompts (Chinese, etc.)
 - [ ] Fix Anthropic provider subagent missing thinking mode
 
 ## License

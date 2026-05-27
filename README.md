@@ -30,12 +30,15 @@ Cline 是一个优秀的 AI 编码助手，但在日常生产中我们遇到了�
 ### I18n 基础
 - 多语言系统提示词框架基础
 
+### 自动迁移
+- **Cline → Dline 一键迁移** — 首次启动时自动迁移 Cline 的全部数据（设置、API keys、任务历史、配置等），非破坏性，可随时回滚。详见 [迁移指南](docs/getting-started/migration-cline-to-dline.mdx)
+
 ## 已知问题
 - **滚动偶发弹跳** — 灰屏修复的已知副作用，仍在排查中
 
 ## 下一步计划
 - [ ] 使用量和金额显示
-- [ ] 多语言提示词（中文、日文等）
+- [ ] 多语言提示词（中文等）
 - [ ] 修复 Anthropic provider subagent 未携带 thinking 的问题
 
 ## License
