@@ -551,6 +551,29 @@ describe("disk - atomic writes", () => {
 			// (The atomicWriteFile function attempts cleanup but doesn't throw if it fails)
 		})
 
+		it("should retry transient rename failures", async () => {
+			const originalRename = fs.rename
+			const transientError = Object.assign(new Error("Simulated transient file lock"), { code: "EPERM" })
+			let renameAttempts = 0
+			const renameStub = sandbox.stub(fs, "rename")
+			renameStub.callsFake(async (oldPath, newPath) => {
+				renameAttempts++
+				if (renameAttempts === 1) {
+					throw transientError
+				}
+				return originalRename(oldPath, newPath)
+			})
+
+			const items = [createTestHistoryItem("retry-rename", "Retry rename task")]
+			await writeTaskHistoryToState(items)
+
+			renameAttempts.should.equal(2)
+			const result = await readTaskHistoryFromState()
+			result.should.have.length(1)
+			result[0].id.should.equal("retry-rename")
+			sinon.assert.calledTwice(renameStub)
+		})
+
 		it("should ignore temp files during read operations", async () => {
 			// Write valid data
 			const items = [createTestHistoryItem("valid-1", "Valid task")]

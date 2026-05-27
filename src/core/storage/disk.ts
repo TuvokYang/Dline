@@ -18,6 +18,31 @@ import { syncWorker } from "@/shared/services/worker/sync"
 import { reconstructTaskHistory } from "../commands/reconstructTaskHistory"
 import { StateManager } from "./StateManager"
 
+const ATOMIC_WRITE_RENAME_MAX_ATTEMPTS = 5
+const ATOMIC_WRITE_RENAME_RETRY_DELAYS_MS = [10, 25, 50, 100]
+const RETRYABLE_RENAME_ERROR_CODES = new Set(["EPERM", "EBUSY", "EACCES"])
+
+function isRetryableRenameError(error: unknown): boolean {
+	const code = (error as NodeJS.ErrnoException | undefined)?.code
+	return typeof code === "string" && RETRYABLE_RENAME_ERROR_CODES.has(code)
+}
+
+async function renameWithRetry(tmpPath: string, filePath: string): Promise<void> {
+	for (let attempt = 1; attempt <= ATOMIC_WRITE_RENAME_MAX_ATTEMPTS; attempt++) {
+		try {
+			await fs.rename(tmpPath, filePath)
+			return
+		} catch (error) {
+			if (!isRetryableRenameError(error) || attempt === ATOMIC_WRITE_RENAME_MAX_ATTEMPTS) {
+				throw error
+			}
+
+			const delayMs = ATOMIC_WRITE_RENAME_RETRY_DELAYS_MS[attempt - 1] ?? ATOMIC_WRITE_RENAME_RETRY_DELAYS_MS.at(-1) ?? 0
+			await new Promise((resolve) => setTimeout(resolve, delayMs))
+		}
+	}
+}
+
 /**
  * Atomically write data to a file using temp file + rename pattern.
  * This prevents readers from seeing partial/incomplete data by writing to a temporary
@@ -33,7 +58,7 @@ async function atomicWriteFile(filePath: string, data: string): Promise<void> {
 		// Write to temporary file first
 		await fs.writeFile(tmpPath, data, "utf8")
 		// Rename temp file to target (atomic in most cases)
-		await fs.rename(tmpPath, filePath)
+		await renameWithRetry(tmpPath, filePath)
 	} catch (error) {
 		// Clean up temp file if it exists
 		fs.unlink(tmpPath).catch(() => {})

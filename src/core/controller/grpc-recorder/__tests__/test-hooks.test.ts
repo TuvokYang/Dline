@@ -45,6 +45,7 @@ describe("test-hooks", () => {
 	it("should execute hook and call recorder methods", async () => {
 		const mockController = {
 			getStateToPostToWebview: sinon.stub().returns({}),
+			getAccountUsage: sinon.stub().returns(undefined),
 		} as any as Controller
 
 		const hooks = testHooks(mockController)
