@@ -20,16 +20,21 @@ export async function openFileRelativePath(_controller: Controller, request: Str
 	}
 
 	if (request.value) {
+		// Parse optional line number suffix: "path/to/file.ts:42"
+		let filePath = request.value
+		let lineNumber: number | undefined
+		const lineMatch = filePath.match(/^(.+):(\d+)$/)
+		if (lineMatch) {
+			filePath = lineMatch[1]
+			lineNumber = Number.parseInt(lineMatch[2], 10)
+		}
+
 		// Resolve the relative path to absolute path
-		const resolvedPath = workspaceResolver.resolveWorkspacePath(
-			workspacePath,
-			request.value,
-			"Controller.openFileRelativePath",
-		)
+		const resolvedPath = workspaceResolver.resolveWorkspacePath(workspacePath, filePath, "Controller.openFileRelativePath")
 		const absolutePath = typeof resolvedPath === "string" ? resolvedPath : resolvedPath.absolutePath
 
 		// Open the file using the existing integration
-		openFileIntegration(absolutePath)
+		openFileIntegration(absolutePath, false, false, lineNumber)
 	}
 
 	return Empty.create()

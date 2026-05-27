@@ -43,10 +43,7 @@ export const WhatsNewModal: React.FC<WhatsNewModalProps> = ({ open, onClose, ver
 						🎉 New in v{version}
 					</h2>
 
-					<WhatsNewItems
-						inlineCodeStyle={inlineCodeStyle}
-						onClose={onClose}
-					/>
+					<WhatsNewItems inlineCodeStyle={inlineCodeStyle} onClose={onClose} />
 
 					{/* Social Icons Section */}
 					<div className="flex flex-col items-center gap-3 mt-4 pt-4 border-t border-[var(--vscode-widget-border)]">

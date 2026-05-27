@@ -58,10 +58,10 @@ export const DiffEditRow = memo<DiffEditRowProps>(({ patch, path, isLoading, sta
 			{parsedFiles.map((file, index) => (
 				<FileBlock
 					file={file}
-					isStreaming={isStreaming}
 					isPartial={isLoading}
-					matchFailed={matchFailed}
+					isStreaming={isStreaming}
 					key={`${file.path}-${index}`}
+					matchFailed={matchFailed}
 					startLineNumber={startLineNumbers?.[index]}
 				/>
 			))}
@@ -116,7 +116,8 @@ const FileBlock = memo<{
 			event.stopPropagation()
 
 			if (file.path) {
-				FileServiceClient.openFileRelativePath(StringRequest.create({ value: file.path })).catch((err) =>
+				const pathWithLine = startLineNumber ? `${file.path}:${startLineNumber}` : file.path
+				FileServiceClient.openFileRelativePath(StringRequest.create({ value: pathWithLine })).catch((err) =>
 					console.error("Failed to open file:", err),
 				)
 			}

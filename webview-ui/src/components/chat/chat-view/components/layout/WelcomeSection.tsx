@@ -48,10 +48,7 @@ export const WelcomeSection: React.FC<WelcomeSectionProps> = ({
 			.catch(() => setIsGitRepo(false))
 	}, [])
 
-	const {
-		navigateToWorktrees,
-		worktreesEnabled,
-	} = useExtensionState()
+	const { navigateToWorktrees, worktreesEnabled } = useExtensionState()
 
 	// Show What's New modal on first launch after version update
 	useEffect(() => {
@@ -76,11 +73,7 @@ export const WelcomeSection: React.FC<WelcomeSectionProps> = ({
 
 	return (
 		<div className="flex flex-col flex-1 w-full h-full p-0 m-0">
-			<WhatsNewModal
-				onClose={handleCloseWhatsNewModal}
-				open={showWhatsNewModal}
-				version={version}
-			/>
+			<WhatsNewModal onClose={handleCloseWhatsNewModal} open={showWhatsNewModal} version={version} />
 			<div className="overflow-y-auto flex flex-col pb-2.5">
 				<HomeHeader shouldShowQuickWins={shouldShowQuickWins} />
 				{!showWhatsNewModal && (

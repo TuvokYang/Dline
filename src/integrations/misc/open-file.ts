@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs"
 import { writeFile } from "@utils/fs"
 import * as os from "os"
 import * as path from "path"
@@ -29,11 +30,21 @@ export async function openImage(dataUri: string) {
 	}
 }
 
-export async function openFile(absolutePath: string, preserveFocus: boolean = false, preview: boolean = false) {
+export async function openFile(absolutePath: string, preserveFocus = false, preview = false, lineNumber?: number) {
 	try {
+		if (!existsSync(absolutePath)) {
+			return
+		}
+		const options: Record<string, unknown> = {
+			preserveFocus: lineNumber ? true : preserveFocus,
+			preview,
+		}
+		if (lineNumber && lineNumber > 0) {
+			options.selection = { start: { line: lineNumber - 1, character: 0 }, end: { line: lineNumber - 1, character: 0 } }
+		}
 		await HostProvider.window.showTextDocument({
 			path: absolutePath,
-			options: { preserveFocus, preview },
+			options,
 		})
 	} catch (_error) {
 		HostProvider.window.showMessage({

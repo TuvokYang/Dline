@@ -44,11 +44,24 @@ message ShowTextDocumentRequest {
   optional ShowTextDocumentOptions options = 3;
 }
 
+// A position in a text document (zero-based line and character offset)
+message Position {
+  int32 line = 1;
+  int32 character = 2;
+}
+
+// A range in a text document
+message Range {
+  Position start = 1;
+  Position end = 2;
+}
+
 // See https://code.visualstudio.com/api/references/vscode-api#TextDocumentShowOptions
 message ShowTextDocumentOptions {
   optional bool preview = 1;
   optional bool preserve_focus = 2;
   optional int32 view_column = 3;
+  optional Range selection = 4;
 }
 
 message TextEditorInfo {
