@@ -3,7 +3,8 @@ import path from "path"
 import * as vscode from "vscode"
 import { HistoryItem } from "@/shared/HistoryItem"
 import { Logger } from "@/shared/services/Logger"
-import { ensureRulesDirectoryExists, readTaskHistoryFromState, writeTaskHistoryToState } from "./disk"
+import { fileExistsAtPath } from "@/utils/fs"
+import { ensureRulesDirectoryExists, getTaskHistoryStateFilePath, writeTaskHistoryToState } from "./disk"
 
 export async function migrateWorkspaceToGlobalStorage(context: vscode.ExtensionContext) {
 	// Keys to migrate from workspace storage back to global storage
@@ -81,41 +82,18 @@ export async function migrateTaskHistoryToFile(context: vscode.ExtensionContext)
 			return
 		}
 
-		let finalData: HistoryItem[]
-		let migrationAction: string
-
-		const newLocationData = await readTaskHistoryFromState()
-
-		if (newLocationData.length === 0) {
-			// Move old data to new location
-			finalData = oldLocationData
-			migrationAction = "Migrated task history from old location to new location"
-		} else {
-			// Merge old data (more recent) with new data
-			finalData = [...newLocationData, ...oldLocationData]
-			migrationAction = "Merged task history from old and new locations"
-		}
-
-		// Perform migration operations sequentially - only clear old data if write succeeds
-		await writeTaskHistoryToState(finalData)
-
-		const successfullyWrittenData = await readTaskHistoryFromState()
-
-		if (!Array.isArray(successfullyWrittenData)) {
-			Logger.error("[Storage Migration] Failed to write taskHistory to file: Written data is not an array")
+		const targetPath = await getTaskHistoryStateFilePath()
+		if (await fileExistsAtPath(targetPath)) {
+			Logger.log("[Storage Migration] Task history target already exists; skipping legacy migration")
 			return
 		}
 
-		if (successfullyWrittenData.length !== finalData.length) {
-			Logger.error(
-				"[Storage Migration] Failed to write taskHistory to file: Written data does not match the old location data",
-			)
-			return
-		}
+		await fs.mkdir(path.dirname(targetPath), { recursive: true })
+		await writeTaskHistoryToState(oldLocationData)
 
 		await context.globalState.update("taskHistory", undefined)
 
-		Logger.log(`[Storage Migration] ${migrationAction}`)
+		Logger.log("[Storage Migration] Migrated task history from old location to new location")
 	} catch (error) {
 		Logger.error("[Storage Migration] Failed to migrate task history to file:", error)
 	}
@@ -159,21 +137,13 @@ export async function migrateCustomInstructionsToGlobalRules(context: vscode.Ext
 			const migrationFilePath = path.join(globalRulesDir, migrationFileName)
 
 			try {
-				// Check if file already exists to determine if we should append
-				let existingContent = ""
-				try {
-					existingContent = await fs.readFile(migrationFilePath, "utf8")
-				} catch (_readError) {
-					// File doesn't exist, which is fine
+				if (await fileExistsAtPath(migrationFilePath)) {
+					Logger.log(`Custom instructions target already exists; skipping migration file: ${migrationFilePath}`)
+					return
 				}
 
-				// Append or create the file with custom instructions
-				const contentToWrite = existingContent
-					? `${existingContent}\n\n---\n\n${customInstructions.trim()}`
-					: customInstructions.trim()
-
-				await fs.writeFile(migrationFilePath, contentToWrite)
-				Logger.log(`Successfully ${existingContent ? "appended to" : "created"} migration file: ${migrationFilePath}`)
+				await fs.writeFile(migrationFilePath, customInstructions.trim())
+				Logger.log(`Successfully created migration file: ${migrationFilePath}`)
 			} catch (fileError) {
 				Logger.error("Failed to write migration file:", fileError)
 				return
