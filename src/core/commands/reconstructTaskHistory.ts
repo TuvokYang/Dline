@@ -1,4 +1,4 @@
-import { getSavedClineMessages, getTaskMetadata, readTaskHistoryFromState, writeTaskHistoryToState } from "@core/storage/disk"
+import { getDlineDocumentsPath, getSavedClineMessages, getTaskMetadata, readTaskHistoryFromState, writeTaskHistoryToState } from "@core/storage/disk"
 import { HostProvider } from "@hosts/host-provider"
 import { ClineMessage } from "@shared/ExtensionMessage"
 import { HistoryItem } from "@shared/HistoryItem"
@@ -88,7 +88,7 @@ async function performTaskHistoryReconstruction(): Promise<TaskReconstructionRes
 	await backupExistingTaskHistory()
 
 	// Get tasks directory
-	const tasksDir = path.join(HostProvider.get().globalStorageFsPath, "tasks")
+	const tasksDir = path.join(await getDlineDocumentsPath(), "tasks")
 
 	// Check if tasks directory exists
 	if (!(await fileExistsAtPath(tasksDir))) {
@@ -135,7 +135,7 @@ async function backupExistingTaskHistory(): Promise<void> {
 	try {
 		const existingHistory = await readTaskHistoryFromState()
 		if (existingHistory.length > 0) {
-			const backupPath = path.join(HostProvider.get().globalStorageFsPath, "state", `taskHistory.backup.${Date.now()}.json`)
+			const backupPath = path.join(await getDlineDocumentsPath(), "tasks", `taskHistory.backup.${Date.now()}.json`)
 
 			// Ensure state directory exists
 			const fs = await import("fs/promises")

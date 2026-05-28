@@ -10,7 +10,7 @@
  * - Atomic file writes for safety
  */
 import * as path from "node:path"
-import { HostProvider } from "@/hosts/host-provider"
+import { getDlineCacheDir } from "@/core/storage/disk"
 import { Logger } from "@/shared/services/Logger"
 import { blobStorage } from "../../storage/ClineBlobStorage"
 import { backfillTasks } from "./backfill"
@@ -30,7 +30,7 @@ let syncQueueInstance: SyncQueue | null = null
  * Get the sync queue file path.
  */
 function getSyncQueuePath(): string {
-	return path.join(HostProvider.get().globalStorageFsPath, "cache", "sync-queue.json")
+	return path.join(getDlineCacheDir(), "sync-queue.json")
 }
 
 /**

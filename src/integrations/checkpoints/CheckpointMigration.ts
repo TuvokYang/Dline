@@ -1,7 +1,7 @@
 import { fileExistsAtPath } from "@utils/fs"
 import fs from "fs/promises"
 import * as path from "path"
-import { HostProvider } from "@/hosts/host-provider"
+import { getDlineDocumentsPath } from "@/core/storage/disk"
 import { Logger } from "@/shared/services/Logger"
 
 /**
@@ -12,7 +12,7 @@ import { Logger } from "@/shared/services/Logger"
  */
 export async function cleanupLegacyCheckpoints(): Promise<void> {
 	try {
-		const tasksDir = path.join(HostProvider.get().globalStorageFsPath, "tasks")
+		const tasksDir = path.join(await getDlineDocumentsPath(), "tasks")
 
 		// Check if tasks directory exists
 		if (!(await fileExistsAtPath(tasksDir))) {

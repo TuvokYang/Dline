@@ -15,12 +15,24 @@ type PendingToolUseResumeStateForTest = {
 type TaskPrivateForTest = {
 	getPendingToolUseResumeState: (history: ClineStorageMessage[]) => PendingToolUseResumeStateForTest | undefined
 	resumePendingToolUseFromHistory: (pendingToolUse: PendingToolUseResumeStateForTest) => Promise<void>
+	promptAndResumePendingToolUseFromHistory: (
+		pendingToolUse: PendingToolUseResumeStateForTest,
+		lastClineMessage: ClineMessage | undefined,
+	) => Promise<void>
 	taskState: {
 		assistantMessageContent: Array<{ name: string; params: Record<string, string>; call_id?: string }>
 		toolUseIdMap: Map<string, string>
 		userMessageContent: unknown[]
 		userMessageContentReady: boolean
 	}
+}
+
+type PendingToolUseApprovalResponseForTest = {
+	type: string
+	response: string
+	text?: string
+	images?: string[]
+	files?: string[]
 }
 
 function createTaskLike<T extends object>(overrides: T) {
@@ -234,5 +246,150 @@ describe("Task pending tool-use history resume", () => {
 				content: "file contents",
 			},
 		])
+	})
+
+	it("shows a resume ask before restoring pending tool_use blocks when no approval ask exists", async () => {
+		const storedToolUseBlocks: ClineAssistantToolUseBlock[] = [
+			{
+				type: "tool_use",
+				id: "toolu_read",
+				name: ClineDefaultTool.FILE_READ,
+				input: { path: "src/index.ts" },
+				call_id: "call_read",
+			},
+		]
+		const order: string[] = []
+
+		const task = createTaskLike({
+			taskState: {
+				currentStreamingContentIndex: -1,
+				assistantMessageContent: [],
+				didCompleteReadingStream: false,
+				userMessageContent: [],
+				userMessageContentReady: false,
+				didRejectTool: false,
+				didAlreadyUseTool: false,
+				presentAssistantMessageLocked: false,
+				presentAssistantMessageHasPendingUpdates: false,
+				toolUseIdMap: new Map<string, string>(),
+			},
+			ask: async (type: string) => {
+				order.push(`ask:${type}`)
+				return { response: "yesButtonClicked" }
+			},
+			messageStateHandler: {
+				getClineMessages: () => [],
+				overwriteApiConversationHistory: async () => undefined,
+				removeMessagesByTs: async () => undefined,
+			},
+			postStateToWebview: async () => undefined,
+			presentAssistantMessage: async function (this: {
+				taskState: { userMessageContent: unknown[]; userMessageContentReady: boolean }
+			}) {
+				order.push("present")
+				this.taskState.userMessageContent.push({
+					type: "tool_result",
+					tool_use_id: "toolu_read",
+					content: "file contents",
+				})
+				this.taskState.userMessageContentReady = true
+			},
+			checkpointManager: {
+				saveCheckpoint: async () => undefined,
+			},
+			recursivelyMakeClineRequests: async () => false,
+		})
+
+		await task.promptAndResumePendingToolUseFromHistory(
+			{
+				assistantIndex: 0,
+				toolUseBlocks: storedToolUseBlocks,
+				answeredToolResults: [],
+				sanitizedHistory: [{ role: "assistant", content: storedToolUseBlocks }],
+			},
+			{ ts: 1, type: "say", say: "api_req_started" },
+		)
+
+		assert.deepEqual(order, ["ask:resume_task", "present"])
+	})
+
+	it("uses an existing tool approval ask instead of a resume ask before restoring pending tool_use blocks", async () => {
+		const storedToolUseBlocks: ClineAssistantToolUseBlock[] = [
+			{
+				type: "tool_use",
+				id: "toolu_read",
+				name: ClineDefaultTool.FILE_READ,
+				input: { path: "src/index.ts" },
+				call_id: "call_read",
+			},
+		]
+		const clineMessages: ClineMessage[] = [{ ts: 1, type: "ask", ask: "tool", text: "approval text" }]
+		const visibleAsks: Array<{ type: string; text?: string }> = []
+		let consumedApproval = false
+
+		const task = createTaskLike({
+			taskState: {
+				currentStreamingContentIndex: -1,
+				assistantMessageContent: [],
+				didCompleteReadingStream: false,
+				userMessageContent: [],
+				userMessageContentReady: false,
+				didRejectTool: false,
+				didAlreadyUseTool: false,
+				presentAssistantMessageLocked: false,
+				presentAssistantMessageHasPendingUpdates: false,
+				toolUseIdMap: new Map<string, string>(),
+			},
+			ask: async function (
+				this: { pendingToolUseApprovalResponse?: PendingToolUseApprovalResponseForTest },
+				type: string,
+				text?: string,
+				partial?: boolean,
+			) {
+				if (this.pendingToolUseApprovalResponse?.type === type && partial === false) {
+					consumedApproval = true
+					const approvalResponse = this.pendingToolUseApprovalResponse
+					this.pendingToolUseApprovalResponse = undefined
+					return approvalResponse
+				}
+				visibleAsks.push({ type, text })
+				return { response: "yesButtonClicked" }
+			},
+			messageStateHandler: {
+				getClineMessages: () => clineMessages,
+				overwriteApiConversationHistory: async () => undefined,
+				removeMessagesByTs: async () => undefined,
+			},
+			postStateToWebview: async () => undefined,
+			presentAssistantMessage: async function (this: {
+				ask: (type: string, text?: string, partial?: boolean) => Promise<{ response: string }>
+				taskState: { userMessageContent: unknown[]; userMessageContentReady: boolean }
+			}) {
+				await this.ask("tool", "replayed approval", false)
+				this.taskState.userMessageContent.push({
+					type: "tool_result",
+					tool_use_id: "toolu_read",
+					content: "file contents",
+				})
+				this.taskState.userMessageContentReady = true
+			},
+			checkpointManager: {
+				saveCheckpoint: async () => undefined,
+			},
+			recursivelyMakeClineRequests: async () => false,
+		})
+
+		await task.promptAndResumePendingToolUseFromHistory(
+			{
+				assistantIndex: 0,
+				toolUseBlocks: storedToolUseBlocks,
+				answeredToolResults: [],
+				sanitizedHistory: [{ role: "assistant", content: storedToolUseBlocks }],
+			},
+			clineMessages[0],
+		)
+
+		assert.deepEqual(visibleAsks, [{ type: "tool", text: "approval text" }])
+		assert.equal(consumedApproval, true)
 	})
 })

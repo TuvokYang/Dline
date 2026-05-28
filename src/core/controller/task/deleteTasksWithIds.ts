@@ -1,6 +1,6 @@
 import { Empty, StringArrayRequest } from "@shared/proto/cline/common"
 import fs from "fs/promises"
-import path from "path"
+import { getDlineCheckpointsDir, getDlineTasksDir } from "@/core/storage/disk"
 import { HostProvider } from "@/hosts/host-provider"
 import { ShowMessageType } from "@/shared/proto/host/window"
 import { Logger } from "@/shared/services/Logger"
@@ -81,8 +81,8 @@ async function deleteTaskWithId(controller: Controller, id: string): Promise<voi
 
 		// If no tasks remain, clean up everything
 		if (updatedTaskHistory.length === 0) {
-			const taskDirPath = path.join(HostProvider.get().globalStorageFsPath, "tasks")
-			const checkpointsDirPath = path.join(HostProvider.get().globalStorageFsPath, "checkpoints")
+			const taskDirPath = await getDlineTasksDir()
+			const checkpointsDirPath = await getDlineCheckpointsDir()
 
 			if (await fileExistsAtPath(taskDirPath)) {
 				await fs.rm(taskDirPath, { recursive: true, force: true })

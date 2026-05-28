@@ -1,7 +1,7 @@
 import { access, constants, mkdir } from "fs/promises"
 import os from "os"
 import * as path from "path"
-import { HostProvider } from "@/hosts/host-provider"
+import { getDlineCheckpointsDir } from "@/core/storage/disk"
 import { getCwd, getDesktopDir } from "@/utils/path"
 
 /**
@@ -18,7 +18,7 @@ import { getCwd, getDesktopDir } from "@/utils/path"
  * @throws Error if global storage path is invalid
  */
 export async function getShadowGitPath(cwdHash: string): Promise<string> {
-	const checkpointsDir = path.join(HostProvider.get().globalStorageFsPath, "checkpoints", cwdHash)
+	const checkpointsDir = path.join(await getDlineCheckpointsDir(), cwdHash)
 	await mkdir(checkpointsDir, { recursive: true })
 	const gitPath = path.join(checkpointsDir, ".git")
 	return gitPath

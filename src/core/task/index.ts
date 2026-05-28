@@ -170,6 +170,14 @@ type PendingToolUseResumeState = {
 	sanitizedHistory: ClineStorageMessage[]
 }
 
+type PendingToolUseApprovalResponse = {
+	type: ClineAsk
+	response: ClineAskResponse
+	text?: string
+	images?: string[]
+	files?: string[]
+}
+
 export class Task {
 	// Core task variables
 	readonly taskId: string
@@ -285,6 +293,7 @@ export class Task {
 	private readonly presentationScheduler: TaskPresentationScheduler
 	private readonly presentationSchedulingDisabled = isPresentationSchedulingDisabled()
 	private lastLoggedPresentationTrigger = 0
+	private pendingToolUseApprovalResponse?: PendingToolUseApprovalResponse
 
 	constructor(params: TaskParams) {
 		const {
@@ -701,6 +710,51 @@ export class Task {
 		if (this.taskState.abort && type !== "resume_task" && type !== "resume_completed_task") {
 			throw new Error("Cline instance aborted")
 		}
+		const pendingApprovalResponse = this.pendingToolUseApprovalResponse
+		if (pendingApprovalResponse && pendingApprovalResponse.type === type && partial === false) {
+			const clineMessages = this.messageStateHandler.getClineMessages()
+			const lastMessage = clineMessages.at(-1)
+			const lastMessageIndex = clineMessages.length - 1
+			const isUpdatingPreviousPartial = lastMessage?.partial && lastMessage.type === "ask" && lastMessage.ask === type
+			let askTs: number
+
+			if (isUpdatingPreviousPartial) {
+				askTs = lastMessage.ts
+				this.taskState.lastMessageTs = askTs
+				await this.messageStateHandler.updateClineMessage(lastMessageIndex, {
+					text,
+					partial: false,
+				})
+				const updatedMessage = this.messageStateHandler.getClineMessages().at(lastMessageIndex)
+				if (updatedMessage) {
+					await sendPartialMessageEvent(convertClineMessageToProto(updatedMessage))
+				}
+			} else {
+				askTs = Date.now()
+				this.taskState.lastMessageTs = askTs
+				await this.messageStateHandler.addToClineMessages({
+					ts: askTs,
+					type: "ask",
+					ask: type,
+					text,
+				})
+				await this.postStateToWebview()
+				const addedMessage = this.messageStateHandler.getClineMessages().at(-1)
+				if (addedMessage) {
+					await sendPartialMessageEvent(convertClineMessageToProto(addedMessage))
+				}
+			}
+
+			this.pendingToolUseApprovalResponse = undefined
+			return {
+				response: pendingApprovalResponse.response,
+				text: pendingApprovalResponse.text,
+				images: pendingApprovalResponse.images,
+				files: pendingApprovalResponse.files,
+				askTs,
+			}
+		}
+
 		let askTs: number
 		if (partial !== undefined) {
 			const clineMessages = this.messageStateHandler.getClineMessages()
@@ -1363,6 +1417,49 @@ export class Task {
 		}
 	}
 
+	private isPendingToolApprovalAsk(ask: ClineAsk | undefined): ask is ClineAsk {
+		return (
+			ask === "tool" ||
+			ask === "command" ||
+			ask === "browser_action_launch" ||
+			ask === "use_mcp_server" ||
+			ask === "use_subagents"
+		)
+	}
+
+	private async promptAndResumePendingToolUseFromHistory(
+		pendingToolUse: PendingToolUseResumeState,
+		lastClineMessage: ClineMessage | undefined,
+		options?: ResumeTaskFromHistoryOptions,
+	) {
+		const approvalAsk = this.isPendingToolApprovalAsk(lastClineMessage?.ask) ? lastClineMessage.ask : undefined
+		const askType = approvalAsk ?? "resume_task"
+		const askText = approvalAsk ? lastClineMessage?.text : undefined
+
+		this.taskState.isInitialized = true
+		this.taskState.abort = false
+
+		if (approvalAsk) {
+			await this.removeStalePendingToolResumeAsks()
+		}
+
+		await this.postStateToWebview({ immediate: true })
+		await options?.onReadyToDisplay?.()
+		const { response, text, images, files } = await this.ask(askType, askText)
+
+		if (approvalAsk) {
+			this.pendingToolUseApprovalResponse = {
+				type: approvalAsk,
+				response,
+				text,
+				images,
+				files,
+			}
+		}
+
+		await this.resumePendingToolUseFromHistory(pendingToolUse)
+	}
+
 	private async resumePendingToolUseFromHistory(
 		pendingToolUse: PendingToolUseResumeState,
 		options?: ResumeTaskFromHistoryOptions,
@@ -1397,8 +1494,12 @@ export class Task {
 		await this.postStateToWebview({ immediate: true })
 		await options?.onReadyToDisplay?.()
 
-		await this.presentAssistantMessage()
-		await pWaitFor(() => this.taskState.userMessageContentReady)
+		try {
+			await this.presentAssistantMessage()
+			await pWaitFor(() => this.taskState.userMessageContentReady)
+		} finally {
+			this.pendingToolUseApprovalResponse = undefined
+		}
 		await this.checkpointManager?.saveCheckpoint()
 		await this.recursivelyMakeClineRequests(this.taskState.userMessageContent)
 	}
@@ -1473,7 +1574,7 @@ export class Task {
 
 		const pendingToolUse = this.getPendingToolUseResumeState(savedApiConversationHistory)
 		if (pendingToolUse) {
-			await this.resumePendingToolUseFromHistory(pendingToolUse, options)
+			await this.promptAndResumePendingToolUseFromHistory(pendingToolUse, lastClineMessage, options)
 			return
 		}
 

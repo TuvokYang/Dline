@@ -4,6 +4,7 @@ import path from "path"
 import { HostProvider } from "@/hosts/host-provider"
 import { ShowMessageRequest, ShowMessageType } from "@/shared/proto/host/window"
 import { Logger } from "@/shared/services/Logger"
+import { getDlineCheckpointsDir, getDlineDocumentsPath } from "@/core/storage/disk"
 import { fileExistsAtPath } from "../../../utils/fs"
 import { Controller } from ".."
 
@@ -92,13 +93,13 @@ export async function deleteAllTaskHistory(controller: Controller): Promise<Dele
 
 		try {
 			// Remove all contents of tasks directory
-			const taskDirPath = path.join(HostProvider.get().globalStorageFsPath, "tasks")
+			const taskDirPath = path.join(await getDlineDocumentsPath(), "tasks")
 			if (await fileExistsAtPath(taskDirPath)) {
 				await fs.rm(taskDirPath, { recursive: true, force: true })
 			}
 
 			// Remove checkpoints directory contents
-			const checkpointsDirPath = path.join(HostProvider.get().globalStorageFsPath, "checkpoints")
+			const checkpointsDirPath = await getDlineCheckpointsDir()
 			if (await fileExistsAtPath(checkpointsDirPath)) {
 				await fs.rm(checkpointsDirPath, { recursive: true, force: true })
 			}
@@ -129,7 +130,7 @@ export async function deleteAllTaskHistory(controller: Controller): Promise<Dele
  * Helper function to cleanup task files while preserving specified tasks
  */
 async function cleanupTaskFiles(preserveTaskIds: string[]) {
-	const taskDirPath = path.join(HostProvider.get().globalStorageFsPath, "tasks")
+	const taskDirPath = path.join(await getDlineDocumentsPath(), "tasks")
 
 	try {
 		if (await fileExistsAtPath(taskDirPath)) {

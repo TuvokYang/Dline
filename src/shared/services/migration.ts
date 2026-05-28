@@ -147,6 +147,9 @@ async function getMigrationPaths(options: ClineToDlineMigrationOptions) {
 		oldDocuments: path.join(documentsDir, "Cline"),
 		newDocuments: dlineDocumentsDir,
 		newTasksDir: path.join(dlineDocumentsDir, "tasks"),
+		newCheckpointsDir: path.join(dlineDocumentsDir, "checkpoints"),
+		newPuppeteerDir: path.join(homeDir, ".dline", "puppeteer"),
+		newCacheDir: path.join(homeDir, ".dline", "cache"),
 		legacyVscodeGlobalStoragePaths: uniquePaths(options.legacyVscodeGlobalStoragePaths),
 	}
 }
@@ -223,6 +226,94 @@ async function createTaskMigrationStep(
 	}
 }
 
+async function createCheckpointsMigrationStep(
+	legacyVscodeGlobalStoragePaths: string[],
+	newCheckpointsDir: string,
+): Promise<MigrationStep | undefined> {
+	if (!(await isEmptyDirectoryTarget(newCheckpointsDir))) {
+		return undefined
+	}
+
+	for (const globalStoragePath of legacyVscodeGlobalStoragePaths) {
+		const srcCheckpointsDir = path.join(globalStoragePath, "checkpoints")
+		if (!(await directoryHasContent(srcCheckpointsDir))) {
+			continue
+		}
+
+		return {
+			detail: "legacy VSCode checkpoints -> Documents/dline/checkpoints/",
+			run: async () => {
+				if (!(await isEmptyDirectoryTarget(newCheckpointsDir))) {
+					Logger.log(`[Migration] Skipped legacy VSCode checkpoints: destination is not empty: ${newCheckpointsDir}`)
+					return false
+				}
+				await copyDirIntoEmptyTarget(srcCheckpointsDir, newCheckpointsDir)
+				return true
+			},
+		}
+	}
+
+	return undefined
+}
+
+async function createPuppeteerMigrationStep(
+	legacyVscodeGlobalStoragePaths: string[],
+	newPuppeteerDir: string,
+): Promise<MigrationStep | undefined> {
+	if (!(await isEmptyDirectoryTarget(newPuppeteerDir))) {
+		return undefined
+	}
+
+	for (const globalStoragePath of legacyVscodeGlobalStoragePaths) {
+		const srcPuppeteerDir = path.join(globalStoragePath, "puppeteer")
+		if (!(await directoryHasContent(srcPuppeteerDir))) {
+			continue
+		}
+
+		return {
+			detail: "legacy VSCode puppeteer -> ~/.dline/puppeteer/",
+			run: async () => {
+				if (!(await isEmptyDirectoryTarget(newPuppeteerDir))) {
+					Logger.log(`[Migration] Skipped legacy VSCode puppeteer: destination is not empty: ${newPuppeteerDir}`)
+					return false
+				}
+				await copyDirIntoEmptyTarget(srcPuppeteerDir, newPuppeteerDir)
+				return true
+			},
+		}
+	}
+
+	return undefined
+}
+
+async function createCacheMigrationStep(
+	legacyVscodeGlobalStoragePaths: string[],
+	newCacheDir: string,
+): Promise<MigrationStep | undefined> {
+	for (const globalStoragePath of legacyVscodeGlobalStoragePaths) {
+		const srcSyncQueue = path.join(globalStoragePath, "cache", "sync-queue.json")
+		const destSyncQueue = path.join(newCacheDir, "sync-queue.json")
+
+		if (!(await fileExistsAtPath(srcSyncQueue))) {
+			continue
+		}
+
+		return {
+			detail: "legacy VSCode sync-queue -> ~/.dline/cache/sync-queue.json",
+			run: async () => {
+				if (!(await shouldCopyFile(srcSyncQueue, destSyncQueue))) {
+					Logger.log(`[Migration] Skipped legacy VSCode sync-queue: destination already exists or source missing`)
+					return false
+				}
+				await copyFileIntoEmptyTarget(srcSyncQueue, destSyncQueue)
+				return true
+			},
+		}
+	}
+
+	return undefined
+}
+
 async function buildMigrationPlan(options: ClineToDlineMigrationOptions = {}): Promise<MigrationStep[]> {
 	if (process.env.DLINE_HOME_DIR || process.env.DLINE_DOCS_DIR) {
 		return []
@@ -273,6 +364,21 @@ async function buildMigrationPlan(options: ClineToDlineMigrationOptions = {}): P
 	const taskStep = await createTaskMigrationStep(paths.legacyVscodeGlobalStoragePaths, paths.newTasksDir)
 	if (taskStep) {
 		steps.push(taskStep)
+	}
+
+	const checkpointsStep = await createCheckpointsMigrationStep(paths.legacyVscodeGlobalStoragePaths, paths.newCheckpointsDir)
+	if (checkpointsStep) {
+		steps.push(checkpointsStep)
+	}
+
+	const puppeteerStep = await createPuppeteerMigrationStep(paths.legacyVscodeGlobalStoragePaths, paths.newPuppeteerDir)
+	if (puppeteerStep) {
+		steps.push(puppeteerStep)
+	}
+
+	const cacheStep = await createCacheMigrationStep(paths.legacyVscodeGlobalStoragePaths, paths.newCacheDir)
+	if (cacheStep) {
+		steps.push(cacheStep)
 	}
 
 	return steps

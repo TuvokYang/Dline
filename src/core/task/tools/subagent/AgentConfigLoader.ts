@@ -5,10 +5,10 @@ import chokidar, { type FSWatcher } from "chokidar"
 import fs from "fs/promises"
 import * as path from "path"
 import { z } from "zod"
-import { getDlineAgentsDirectoryPath } from "@/core/storage/disk"
+import { getDlineSubagentsDirectoryPath } from "@/core/storage/disk"
 import { buildSubagentToolName } from "./SubagentToolName"
 
-export const AGENTS_CONFIG_DIRECTORY_NAME = "Agents"
+export const AGENTS_CONFIG_DIRECTORY_NAME = "subagents"
 const SUBAGENT_DYNAMIC_TOOL_NAMESPACE = "subagent"
 
 const AgentBaseConfigSchema = z.object({
@@ -139,7 +139,7 @@ export class AgentConfigLoader {
 
 	public static getInstance(dirPath?: string): AgentConfigLoader {
 		if (!AgentConfigLoader.instance) {
-			AgentConfigLoader.instance = new AgentConfigLoader(dirPath || getDlineAgentsDirectoryPath())
+			AgentConfigLoader.instance = new AgentConfigLoader(dirPath || getDlineSubagentsDirectoryPath())
 		}
 		return AgentConfigLoader.instance
 	}

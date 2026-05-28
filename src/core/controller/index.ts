@@ -27,6 +27,7 @@ import pWaitFor from "p-wait-for"
 import * as path from "path"
 import { ClineEnv } from "@/config"
 import type { FolderLockWithRetryResult } from "@/core/locks/types"
+import { getDlineDocumentsPath } from "@/core/storage/disk"
 import { HostProvider } from "@/hosts/host-provider"
 import { ExtensionRegistryInfo } from "@/registry"
 import { AuthService } from "@/services/auth/AuthService"
@@ -870,7 +871,7 @@ export class Controller {
 		const history = this.stateManager.getGlobalStateKey("taskHistory")
 		const historyItem = history.find((item) => item.id === id)
 		if (historyItem) {
-			const taskDirPath = path.join(HostProvider.get().globalStorageFsPath, "tasks", id)
+			const taskDirPath = path.join(await getDlineDocumentsPath(), "tasks", id)
 			const apiConversationHistoryFilePath = path.join(taskDirPath, GlobalFileNames.apiConversationHistory)
 			const uiMessagesFilePath = path.join(taskDirPath, GlobalFileNames.uiMessages)
 			const contextHistoryFilePath = path.join(taskDirPath, GlobalFileNames.contextHistory)

@@ -107,11 +107,11 @@ export function getDlineHomePath(): string {
 }
 export function getDlineDocumentsPathSync(): string {
 	if (process.env.DLINE_DOCS_DIR) return process.env.DLINE_DOCS_DIR
-	return path.join(os.homedir(), "Documents", "Dline")
+	return path.join(os.homedir(), "Documents", "dline")
 }
 export async function getDlineDocumentsPath(): Promise<string> {
 	if (process.env.DLINE_DOCS_DIR) return process.env.DLINE_DOCS_DIR
-	return path.join(await getDocumentsPath(), "Dline")
+	return path.join(await getDocumentsPath(), "dline")
 }
 
 export async function ensureTaskDirectoryExists(taskId: string): Promise<string> {
@@ -122,51 +122,75 @@ export async function ensureTaskDirectoryExists(taskId: string): Promise<string>
 }
 export async function ensureRulesDirectoryExists(): Promise<string> {
 	const d = await getDlineDocumentsPath()
-	const dir = path.join(d, "Rules")
+	const dir = path.join(d, "rules")
 	try {
 		await fs.mkdir(dir, { recursive: true })
 	} catch {
-		return path.join(os.homedir(), "Documents", "Dline", "Rules")
+		return path.join(os.homedir(), "Documents", "dline", "rules")
 	}
 	return dir
 }
 export async function ensureWorkflowsDirectoryExists(): Promise<string> {
 	const d = await getDlineDocumentsPath()
-	const dir = path.join(d, "Workflows")
+	const dir = path.join(d, "workflows")
 	try {
 		await fs.mkdir(dir, { recursive: true })
 	} catch {
-		return path.join(os.homedir(), "Documents", "Dline", "Workflows")
+		return path.join(os.homedir(), "Documents", "dline", "workflows")
 	}
 	return dir
 }
 export async function ensureMcpServersDirectoryExists(): Promise<string> {
 	const d = await getDlineDocumentsPath()
-	const dir = path.join(d, "MCP")
+	const dir = path.join(d, "mcp")
 	try {
 		await fs.mkdir(dir, { recursive: true })
 	} catch {
-		return path.join(os.homedir(), "Documents", "Dline", "MCP")
+		return path.join(os.homedir(), "Documents", "dline", "mcp")
 	}
 	return dir
 }
 export async function ensureHooksDirectoryExists(): Promise<string> {
 	const d = await getDlineDocumentsPath()
-	const dir = path.join(d, "Hooks")
+	const dir = path.join(d, "hooks")
 	try {
 		await fs.mkdir(dir, { recursive: true })
 	} catch {
-		return path.join(os.homedir(), "Documents", "Dline", "Hooks")
+		return path.join(os.homedir(), "Documents", "dline", "hooks")
 	}
 	return dir
 }
 
 function getDlineSkillsDirectoryPath(): string {
-	return path.join(getDlineDocumentsPathSync(), "Skills")
+	return path.join(getDlineDocumentsPathSync(), "skills")
 }
 
-export function getDlineAgentsDirectoryPath(): string {
-	return path.join(getDlineDocumentsPathSync(), "Agents")
+export function getDlineSubagentsDirectoryPath(): string {
+	return path.join(getDlineDocumentsPathSync(), "subagents")
+}
+
+export async function getDlineCheckpointsDir(): Promise<string> {
+	const d = await getDlineDocumentsPath()
+	const dir = path.join(d, "checkpoints")
+	await fs.mkdir(dir, { recursive: true })
+	return dir
+}
+
+export async function getDlineTasksDir(): Promise<string> {
+	const d = await getDlineDocumentsPath()
+	const dir = path.join(d, "tasks")
+	await fs.mkdir(dir, { recursive: true })
+	return dir
+}
+
+export function getDlinePuppeteerDir(): string {
+	const dir = path.join(getDlineHomePath(), "puppeteer")
+	return dir
+}
+
+export function getDlineCacheDir(): string {
+	const dir = path.join(getDlineHomePath(), "cache")
+	return dir
 }
 
 function getAgentSkillsDirectoryPath(): string {
@@ -272,7 +296,9 @@ export async function ensureStateDirectoryExists(): Promise<string> {
 	return getDlineStorageDir("state")
 }
 export async function ensureCacheDirectoryExists(): Promise<string> {
-	return getDlineStorageDir("cache")
+	const dir = getDlineCacheDir()
+	await fs.mkdir(dir, { recursive: true })
+	return dir
 }
 
 export async function readMcpMarketplaceCatalogFromCache(): Promise<McpMarketplaceCatalog | undefined> {
