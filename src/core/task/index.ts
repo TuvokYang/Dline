@@ -93,8 +93,10 @@ import {
 import { ClineError, ClineErrorType, ErrorService } from "@/services/error"
 import { telemetryService } from "@/services/telemetry"
 import { ClineClient } from "@/shared/cline"
+import { CLINE_MCP_TOOL_IDENTIFIER } from "@/shared/mcp"
 import {
 	ClineAssistantContent,
+	ClineAssistantToolUseBlock,
 	ClineContent,
 	ClineImageContentBlock,
 	ClineMessageModelInfo,
@@ -102,6 +104,7 @@ import {
 	ClineTextContentBlock,
 	ClineToolResponseContent,
 	ClineUserContent,
+	ClineUserToolResultContentBlock,
 } from "@/shared/messages"
 import { ApiFormat } from "@/shared/proto/cline/models"
 import { ShowMessageType } from "@/shared/proto/index.host"
@@ -158,6 +161,13 @@ type TaskParams = {
 
 type ResumeTaskFromHistoryOptions = {
 	onReadyToDisplay?: () => Promise<void>
+}
+
+type PendingToolUseResumeState = {
+	assistantIndex: number
+	toolUseBlocks: ClineAssistantToolUseBlock[]
+	answeredToolResults: ClineUserToolResultContentBlock[]
+	sanitizedHistory: ClineStorageMessage[]
 }
 
 export class Task {
@@ -1203,6 +1213,196 @@ export class Task {
 		await this.initiateTaskLoop(userContent)
 	}
 
+	private getPendingToolUseResumeState(apiConversationHistory: ClineStorageMessage[]): PendingToolUseResumeState | undefined {
+		for (let i = apiConversationHistory.length - 1; i >= 0; i--) {
+			const message = apiConversationHistory[i]
+			if (message.role !== "assistant" || !Array.isArray(message.content)) {
+				continue
+			}
+
+			const toolUseBlocks = message.content.filter(
+				(block): block is ClineAssistantToolUseBlock =>
+					block.type === "tool_use" && typeof block.id === "string" && typeof block.name === "string",
+			)
+			if (toolUseBlocks.length === 0) {
+				continue
+			}
+
+			const nextMessage = apiConversationHistory[i + 1]
+			const answeredToolUseIds = new Set<string>()
+			const answeredToolResults: ClineUserToolResultContentBlock[] = []
+			if (nextMessage?.role === "user" && Array.isArray(nextMessage.content)) {
+				for (const block of nextMessage.content) {
+					if (block.type === "tool_result" && typeof block.tool_use_id === "string") {
+						answeredToolUseIds.add(block.tool_use_id)
+						answeredToolResults.push(block)
+					}
+				}
+			}
+
+			const pendingToolUseBlocks = toolUseBlocks.filter((block) => !answeredToolUseIds.has(block.id))
+			if (pendingToolUseBlocks.length === 0) {
+				return undefined
+			}
+
+			return {
+				assistantIndex: i,
+				toolUseBlocks: pendingToolUseBlocks,
+				answeredToolResults,
+				sanitizedHistory: apiConversationHistory.slice(0, i + 1),
+			}
+		}
+
+		return undefined
+	}
+
+	private parseStoredToolInput(input: unknown): unknown {
+		if (typeof input !== "string") {
+			return input
+		}
+
+		try {
+			return JSON.parse(input)
+		} catch {
+			return input
+		}
+	}
+
+	private stringifyToolParam(value: unknown): string {
+		if (typeof value === "string") {
+			return value
+		}
+		if (value === undefined || value === null) {
+			return ""
+		}
+
+		try {
+			return JSON.stringify(value)
+		} catch {
+			return String(value)
+		}
+	}
+
+	private storedToolUseToRuntimeToolUse(block: ClineAssistantToolUseBlock): ToolUse {
+		const callId = block.call_id || block.id
+		const input = this.parseStoredToolInput(block.input)
+
+		if (block.name.includes(CLINE_MCP_TOOL_IDENTIFIER)) {
+			const [serverKey, toolName] = block.name.split(CLINE_MCP_TOOL_IDENTIFIER)
+			return {
+				type: "tool_use",
+				name: ClineDefaultTool.MCP_USE,
+				params: {
+					server_name: McpHub.getMcpServerByKey(serverKey),
+					tool_name: toolName,
+					arguments: this.stringifyToolParam(input),
+				},
+				partial: false,
+				isNativeToolCall: true,
+				call_id: callId,
+				signature: block.signature,
+			}
+		}
+
+		const params: Record<string, string> = {}
+		if (input && typeof input === "object" && !Array.isArray(input)) {
+			for (const [key, value] of Object.entries(input)) {
+				params[key] = this.stringifyToolParam(value)
+			}
+		} else if (input !== undefined && input !== null) {
+			params.input = this.stringifyToolParam(input)
+		}
+
+		return {
+			type: "tool_use",
+			name: block.name as ClineDefaultTool,
+			params: params as ToolUse["params"],
+			partial: false,
+			isNativeToolCall: true,
+			call_id: callId,
+			signature: block.signature,
+		}
+	}
+
+	private async removeStalePendingToolResumeAsks() {
+		const pendingToolAskTypes = new Set<ClineAsk>([
+			"followup",
+			"plan_mode_respond",
+			"act_mode_respond",
+			"command",
+			"tool",
+			"browser_action_launch",
+			"use_mcp_server",
+			"new_task",
+			"condense",
+			"summarize_task",
+			"report_bug",
+			"use_subagents",
+		])
+		const clineMessages = this.messageStateHandler.getClineMessages()
+		const staleAskIndices = new Set<number>()
+		const stalePendingToolAskIndex = findLastIndex(
+			clineMessages,
+			(message) => message.type === "ask" && !!message.ask && pendingToolAskTypes.has(message.ask),
+		)
+		if (stalePendingToolAskIndex !== -1) {
+			staleAskIndices.add(stalePendingToolAskIndex)
+		}
+
+		const staleApiFailureAskIndex = findLastIndex(
+			clineMessages,
+			(message) => message.type === "ask" && message.ask === "api_req_failed",
+		)
+		if (staleApiFailureAskIndex !== -1) {
+			staleAskIndices.add(staleApiFailureAskIndex)
+		}
+
+		if (staleAskIndices.size > 0) {
+			const staleTs = [...staleAskIndices].sort((a, b) => a - b).map((index) => clineMessages[index].ts)
+			await this.messageStateHandler.removeMessagesByTs(staleTs)
+		}
+	}
+
+	private async resumePendingToolUseFromHistory(
+		pendingToolUse: PendingToolUseResumeState,
+		options?: ResumeTaskFromHistoryOptions,
+	) {
+		const runtimeToolUses = pendingToolUse.toolUseBlocks.map((block) => this.storedToolUseToRuntimeToolUse(block))
+		if (runtimeToolUses.length === 0) {
+			return
+		}
+
+		this.taskState.isInitialized = true
+		this.taskState.abort = false
+		this.taskState.currentStreamingContentIndex = 0
+		this.taskState.assistantMessageContent = runtimeToolUses
+		this.taskState.didCompleteReadingStream = true
+		this.taskState.userMessageContent = cloneDeep(pendingToolUse.answeredToolResults)
+		this.taskState.userMessageContentReady = false
+		this.taskState.didRejectTool = false
+		this.taskState.didAlreadyUseTool = false
+		this.taskState.presentAssistantMessageLocked = false
+		this.taskState.presentAssistantMessageHasPendingUpdates = false
+		this.taskState.toolUseIdMap.clear()
+
+		for (let i = 0; i < runtimeToolUses.length; i++) {
+			const callId = runtimeToolUses[i].call_id
+			if (callId) {
+				this.taskState.toolUseIdMap.set(callId, pendingToolUse.toolUseBlocks[i].id)
+			}
+		}
+
+		await this.messageStateHandler.overwriteApiConversationHistory(pendingToolUse.sanitizedHistory)
+		await this.removeStalePendingToolResumeAsks()
+		await this.postStateToWebview({ immediate: true })
+		await options?.onReadyToDisplay?.()
+
+		await this.presentAssistantMessage()
+		await pWaitFor(() => this.taskState.userMessageContentReady)
+		await this.checkpointManager?.saveCheckpoint()
+		await this.recursivelyMakeClineRequests(this.taskState.userMessageContent)
+	}
+
 	public async resumeTaskFromHistory(options?: ResumeTaskFromHistoryOptions) {
 		try {
 			await this.clineIgnoreController.initialize()
@@ -1269,6 +1469,12 @@ export class Task {
 				const info: ClineApiReqInfo = JSON.parse(lastApiReqMsg.text)
 				wasCancelled = info.cancelReason !== undefined
 			} catch {}
+		}
+
+		const pendingToolUse = this.getPendingToolUseResumeState(savedApiConversationHistory)
+		if (pendingToolUse) {
+			await this.resumePendingToolUseFromHistory(pendingToolUse, options)
+			return
 		}
 
 		let askType: ClineAsk | undefined

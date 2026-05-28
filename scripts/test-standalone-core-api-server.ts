@@ -23,7 +23,7 @@
  *   HOSTBRIDGE_PORT - HostBridge server port (default: 26041)
  *   WORKSPACE_DIR - Working directory (default: current directory)
  *   E2E_TEST - Enable E2E test mode (default: true)
- *   CLINE_ENVIRONMENT - Environment setting (default: local)
+ *   DLINE_ENVIRONMENT - Environment setting (default: local)
  *
  * Ideal for local development, testing, or lightweight E2E scenarios.
  */
@@ -39,7 +39,7 @@ const PROTOBUS_PORT = process.env.PROTOBUS_PORT || "26040"
 const HOSTBRIDGE_PORT = process.env.HOSTBRIDGE_PORT || "26041"
 const WORKSPACE_DIR = process.env.WORKSPACE_DIR || process.cwd()
 const E2E_TEST = process.env.E2E_TEST || "true"
-const CLINE_ENVIRONMENT = process.env.CLINE_ENVIRONMENT || "local"
+const DLINE_ENVIRONMENT = process.env.DLINE_ENVIRONMENT || "local"
 const USE_C8 = process.env.USE_C8 === "true"
 
 // Locate the standalone build directory and core file with flexible path resolution
@@ -130,7 +130,7 @@ async function main(): Promise<void> {
 			PROTOBUS_ADDRESS: `127.0.0.1:${PROTOBUS_PORT}`,
 			HOST_BRIDGE_ADDRESS: `localhost:${HOSTBRIDGE_PORT}`,
 			E2E_TEST,
-			CLINE_ENVIRONMENT,
+			DLINE_ENVIRONMENT,
 			CLINE_DIR: userDataDir,
 			INSTALL_DIR: extensionsDir,
 		},

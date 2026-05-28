@@ -9,7 +9,7 @@ import { log } from "./utils"
 import { EnvironmentVariableCollection, MementoStore, readJson, SecretStore } from "./vscode-context-utils"
 
 log("Running standalone cline", ExtensionRegistryInfo.version)
-log(`CLINE_ENVIRONMENT: ${process.env.CLINE_ENVIRONMENT}`)
+log(`DLINE_ENVIRONMENT: ${process.env.DLINE_ENVIRONMENT}`)
 
 // WE WILL HAVE TO MIGRATE THIS FROM DATA TO v1 LATER
 const SETTINGS_SUBFOLDER = "data"

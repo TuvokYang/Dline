@@ -272,10 +272,10 @@ export type {
 	ResolveClineEnvironmentOptions,
 } from "./runtime/cline-environment";
 export {
-	CLINE_ENVIRONMENT_ENV,
-	CLINE_ENVIRONMENT_OVERRIDE_ENV,
-	CLINE_ENVIRONMENTS,
-	DEFAULT_CLINE_ENVIRONMENT,
+	DLINE_ENVIRONMENT_ENV,
+	DLINE_ENVIRONMENT_OVERRIDE_ENV,
+	DLINE_ENVIRONMENTS,
+	DEFAULT_DLINE_ENVIRONMENT,
 	getClineEnvironmentConfig,
 	resolveClineEnvironment,
 } from "./runtime/cline-environment";

@@ -13,7 +13,7 @@ export class AuthServiceMock extends AuthService {
 	protected constructor(controller: Controller) {
 		super(controller)
 
-		if (process?.env?.CLINE_ENVIRONMENT !== "local") {
+		if (process?.env?.DLINE_ENVIRONMENT !== "local") {
 			throw new Error("AuthServiceMock should only be used in local environment for testing purposes.")
 		}
 

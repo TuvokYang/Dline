@@ -1,5 +1,5 @@
-export const CLINE_ENVIRONMENT_ENV = "CLINE_ENVIRONMENT";
-export const CLINE_ENVIRONMENT_OVERRIDE_ENV = "CLINE_ENVIRONMENT_OVERRIDE";
+export const DLINE_ENVIRONMENT_ENV = "DLINE_ENVIRONMENT";
+export const DLINE_ENVIRONMENT_OVERRIDE_ENV = "DLINE_ENVIRONMENT_OVERRIDE";
 
 export type ClineEnvironment = "production" | "staging" | "local";
 
@@ -11,7 +11,7 @@ export interface ClineEnvironmentConfig {
 	readonly workOsClientId: string;
 }
 
-export const CLINE_ENVIRONMENTS: Readonly<
+export const DLINE_ENVIRONMENTS: Readonly<
 	Record<ClineEnvironment, ClineEnvironmentConfig>
 > = {
 	production: {
@@ -37,7 +37,7 @@ export const CLINE_ENVIRONMENTS: Readonly<
 	},
 };
 
-export const DEFAULT_CLINE_ENVIRONMENT: ClineEnvironment = "production";
+export const DEFAULT_DLINE_ENVIRONMENT: ClineEnvironment = "production";
 
 export interface ResolveClineEnvironmentOptions {
 	env?: Partial<NodeJS.ProcessEnv>;
@@ -72,9 +72,9 @@ export function resolveClineEnvironment(
 ): ClineEnvironment {
 	const env = options.env ?? readProcessEnv();
 	return (
-		normalizeClineEnvironment(env[CLINE_ENVIRONMENT_OVERRIDE_ENV]) ??
-		normalizeClineEnvironment(env[CLINE_ENVIRONMENT_ENV]) ??
-		DEFAULT_CLINE_ENVIRONMENT
+		normalizeClineEnvironment(env[DLINE_ENVIRONMENT_OVERRIDE_ENV]) ??
+		normalizeClineEnvironment(env[DLINE_ENVIRONMENT_ENV]) ??
+		DEFAULT_DLINE_ENVIRONMENT
 	);
 }
 
@@ -82,7 +82,7 @@ export function getClineEnvironmentConfig(
 	environmentOrOptions?: ClineEnvironment | ResolveClineEnvironmentOptions,
 ): ClineEnvironmentConfig {
 	if (typeof environmentOrOptions === "string") {
-		return CLINE_ENVIRONMENTS[environmentOrOptions];
+		return DLINE_ENVIRONMENTS[environmentOrOptions];
 	}
-	return CLINE_ENVIRONMENTS[resolveClineEnvironment(environmentOrOptions)];
+	return DLINE_ENVIRONMENTS[resolveClineEnvironment(environmentOrOptions)];
 }

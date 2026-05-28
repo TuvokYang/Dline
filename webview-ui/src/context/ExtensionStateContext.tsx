@@ -39,6 +39,9 @@ import {
 // Sliding window constants (adjustable)
 const MAX_COUNT = 300 // maximum messages in the window
 
+const getTaskViewKey = (taskId?: string, taskTitleMessageTs?: number) =>
+	taskId ?? (taskTitleMessageTs != null ? `task-title:${taskTitleMessageTs}` : undefined)
+
 export interface ExtensionStateContextType extends ExtensionState {
 	clineMessages: ClineMessage[]
 	setClineMessages: React.Dispatch<React.SetStateAction<ClineMessage[]>>
@@ -315,19 +318,35 @@ export const ExtensionStateContextProvider: React.FC<{
 	// changes (remove partials, postState, total update) settle before
 	// triggering a Virtuoso data swap that causes layout jitter.
 	const cancelStabilizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-	const currentTaskIdRef = useRef<string | undefined>(state.currentTaskItem?.id)
-	const prevRefetchTaskIdRef = useRef<string | undefined>(state.currentTaskItem?.id)
-	const prevHistoryTaskIdRef = useRef<string | undefined>(state.currentTaskItem?.id)
+	const initialTaskViewKey = getTaskViewKey(state.currentTaskItem?.id, state.taskTitleMessage?.ts)
+	const currentTaskViewKeyRef = useRef<string | undefined>(initialTaskViewKey)
+	const prevRefetchTaskViewKeyRef = useRef<string | undefined>(initialTaskViewKey)
+	const prevHistoryTaskViewKeyRef = useRef<string | undefined>(initialTaskViewKey)
 
 	// Reset when task is cleared; bootstrap initial fetch on task switch.
 	// New messages arrive through subscribeToPartialMessage; refetching the
 	// latest window on every total increase fights Virtuoso's scroll anchor.
 	// We only refetch when the total shrinks, which happens after cancel/cleanup.
 	useEffect(() => {
-		const currentId = state.currentTaskItem?.id
-		if (currentId !== prevRefetchTaskIdRef.current) {
-			currentTaskIdRef.current = currentId
-			prevRefetchTaskIdRef.current = currentId
+		const currentTaskViewKey = getTaskViewKey(state.currentTaskItem?.id, state.taskTitleMessage?.ts)
+		const total = state.totalMessageCount ?? 0
+
+		const fetchLatestWindow = (scheduledTaskViewKey: string | undefined) => {
+			TaskServiceClient.fetchMessage(FetchMessageRequest.create({ referenceIndex: -1, count: 200 }))
+				.then((resp) => {
+					if (currentTaskViewKeyRef.current !== scheduledTaskViewKey) {
+						return
+					}
+					const converted = resp.messages.map((m) => convertProtoToClineMessage(m))
+					setClineMessages(converted)
+					setFirstItemIndex(Math.max(0, resp.startIndex))
+				})
+				.catch(() => {})
+		}
+
+		if (currentTaskViewKey !== prevRefetchTaskViewKeyRef.current) {
+			currentTaskViewKeyRef.current = currentTaskViewKey
+			prevRefetchTaskViewKeyRef.current = currentTaskViewKey
 			if (cancelStabilizeTimerRef.current) {
 				clearTimeout(cancelStabilizeTimerRef.current)
 				cancelStabilizeTimerRef.current = null
@@ -335,12 +354,14 @@ export const ExtensionStateContextProvider: React.FC<{
 			refetchLockRef.current = false
 			setClineMessages([])
 			setFirstItemIndex(0)
-			prevTotalRef.current = 0
+			prevTotalRef.current = total
+			if (total > 0) {
+				fetchLatestWindow(currentTaskViewKey)
+			}
 			return
 		}
-		currentTaskIdRef.current = currentId
+		currentTaskViewKeyRef.current = currentTaskViewKey
 
-		const total = state.totalMessageCount ?? 0
 		if (total === 0) {
 			if (cancelStabilizeTimerRef.current) {
 				clearTimeout(cancelStabilizeTimerRef.current)
@@ -352,17 +373,7 @@ export const ExtensionStateContextProvider: React.FC<{
 			return
 		}
 		if (prevTotalRef.current === 0 && total > 0 && clineMessages.length === 0) {
-			const scheduledTaskId = currentTaskIdRef.current
-			TaskServiceClient.fetchMessage(FetchMessageRequest.create({ referenceIndex: -1, count: 200 }))
-				.then((resp) => {
-					if (currentTaskIdRef.current !== scheduledTaskId) {
-						return
-					}
-					const converted = (resp.messages as any[]).map((m) => convertProtoToClineMessage(m))
-					setClineMessages(converted)
-					setFirstItemIndex(Math.max(0, resp.startIndex))
-				})
-				.catch(() => {})
+			fetchLatestWindow(currentTaskViewKeyRef.current)
 			prevTotalRef.current = total
 			return
 		}
@@ -375,19 +386,19 @@ export const ExtensionStateContextProvider: React.FC<{
 			if (cancelStabilizeTimerRef.current) {
 				clearTimeout(cancelStabilizeTimerRef.current)
 			}
-			const scheduledTaskId = currentTaskIdRef.current
+			const scheduledTaskViewKey = currentTaskViewKeyRef.current
 			cancelStabilizeTimerRef.current = setTimeout(() => {
 				cancelStabilizeTimerRef.current = null
-				if (currentTaskIdRef.current !== scheduledTaskId) {
+				if (currentTaskViewKeyRef.current !== scheduledTaskViewKey) {
 					return
 				}
 				refetchLockRef.current = true
 				TaskServiceClient.fetchMessage(FetchMessageRequest.create({ referenceIndex: -1, count: 200 }))
 					.then((resp) => {
-						if (currentTaskIdRef.current !== scheduledTaskId) {
+						if (currentTaskViewKeyRef.current !== scheduledTaskViewKey) {
 							return
 						}
-						const converted = (resp.messages as any[]).map((m) => convertProtoToClineMessage(m))
+						const converted = resp.messages.map((m) => convertProtoToClineMessage(m))
 						setClineMessages(converted)
 						setFirstItemIndex(Math.max(0, resp.startIndex))
 					})
@@ -399,7 +410,7 @@ export const ExtensionStateContextProvider: React.FC<{
 		}
 
 		prevTotalRef.current = total
-	}, [state.currentTaskItem?.id, state.totalMessageCount, clineMessages.length])
+	}, [state.currentTaskItem?.id, state.taskTitleMessage?.ts, state.totalMessageCount, clineMessages.length])
 
 	useEffect(() => {
 		return () => {
@@ -556,7 +567,7 @@ export const ExtensionStateContextProvider: React.FC<{
 				onResponse: () => {
 					// When chat button is clicked, navigate to chat
 					console.debug("Received chat button clicked event from gRPC stream")
-					navigateToChat()
+					setTimeout(() => navigateToChat(), 0)
 				},
 				onError: (error) => {
 					console.error("Error in chat button subscription:", error)
@@ -808,20 +819,20 @@ export const ExtensionStateContextProvider: React.FC<{
 	// navigation path is the backend history-ready event; this only handles a
 	// missed event without closing HistoryView just because a task already exists.
 	useEffect(() => {
-		const currentId = state.currentTaskItem?.id
-		const prevId = prevHistoryTaskIdRef.current
+		const currentTaskViewKey = getTaskViewKey(state.currentTaskItem?.id, state.taskTitleMessage?.ts)
+		const prevTaskViewKey = prevHistoryTaskViewKeyRef.current
 
 		if (!showHistory) {
-			prevHistoryTaskIdRef.current = currentId
+			prevHistoryTaskViewKeyRef.current = currentTaskViewKey
 			return
 		}
 
-		if (currentId && currentId !== prevId) {
+		if (currentTaskViewKey && currentTaskViewKey !== prevTaskViewKey) {
 			navigateToChat()
 		}
 
-		prevHistoryTaskIdRef.current = currentId
-	}, [state.currentTaskItem?.id, showHistory, navigateToChat])
+		prevHistoryTaskViewKeyRef.current = currentTaskViewKey
+	}, [state.currentTaskItem?.id, state.taskTitleMessage?.ts, showHistory, navigateToChat])
 
 	const refreshOpenRouterModels = useCallback(() => {
 		ModelsServiceClient.refreshOpenRouterModelsRpc(EmptyRequest.create({}))
