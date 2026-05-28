@@ -1,5 +1,5 @@
 import { strict as assert } from "node:assert"
-import type { ToolUse } from "@core/assistant-message"
+import type { AssistantMessageContent, ToolUse } from "@core/assistant-message"
 import { registerPartialMessageCallback } from "@core/controller/ui/subscribeToPartialMessage"
 import { Task } from "@core/task"
 import type { ClineMessage } from "@shared/ExtensionMessage"
@@ -48,7 +48,7 @@ describe("Task.processNativeToolCalls", () => {
 				},
 			},
 			taskState: {
-				assistantMessageContent: [],
+				assistantMessageContent: [] as AssistantMessageContent[],
 				currentStreamingContentIndex: 0,
 				userMessageContentReady: true,
 			},
@@ -73,5 +73,55 @@ describe("Task.processNativeToolCalls", () => {
 		} finally {
 			unsubscribe()
 		}
+	})
+
+	it("moves turn-ending native tool calls after regular tool calls", async () => {
+		const clineMessages: ClineMessage[] = []
+		const toolBlocks: ToolUse[] = [
+			{
+				type: "tool_use",
+				name: ClineDefaultTool.ATTEMPT,
+				params: {
+					result: "done",
+				},
+				partial: true,
+				isNativeToolCall: true,
+				call_id: "call-attempt",
+			},
+			{
+				type: "tool_use",
+				name: ClineDefaultTool.FILE_NEW,
+				params: {
+					path: "result.txt",
+					content: "content",
+				},
+				partial: true,
+				isNativeToolCall: true,
+				call_id: "call-write",
+			},
+		]
+
+		const fakeTask = {
+			messageStateHandler: {
+				getClineMessages: () => clineMessages,
+				saveClineMessagesAndUpdateHistory: async () => {},
+			},
+			taskState: {
+				assistantMessageContent: [] as AssistantMessageContent[],
+				currentStreamingContentIndex: 0,
+				userMessageContentReady: true,
+			},
+		}
+
+		await (
+			Task.prototype as unknown as { processNativeToolCalls: (text: string, blocks: ToolUse[]) => Promise<void> }
+		).processNativeToolCalls.call(fakeTask, "", toolBlocks)
+
+		assert.deepEqual(
+			fakeTask.taskState.assistantMessageContent.map((block) => (block.type === "tool_use" ? block.call_id : "")),
+			["call-write", "call-attempt"],
+		)
+		assert.equal(fakeTask.taskState.currentStreamingContentIndex, 0)
+		assert.equal(fakeTask.taskState.userMessageContentReady, false)
 	})
 })

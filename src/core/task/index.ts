@@ -117,6 +117,7 @@ import { refreshWorkflowToggles } from "../context/instructions/user-instruction
 import { Controller } from "../controller"
 import { executeHook } from "../hooks/hook-executor"
 import { StateManager } from "../storage/StateManager"
+import { isTurnEndingToolUse, orderTurnEndingContentBlocks, orderTurnEndingNativeToolBlocks } from "./assistant-message-order"
 import { FocusChainManager } from "./focus-chain"
 import {
 	getPresentationCadenceMs,
@@ -2986,6 +2987,10 @@ export class Task {
 				break
 			}
 			case "tool_use":
+				if (isTurnEndingToolUse(block) && !this.taskState.didCompleteReadingStream) {
+					this.taskState.presentAssistantMessageLocked = false
+					return
+				}
 				// If we have a pending initial commit, we must block unsafe tools until it finishes.
 				// Safe tools (read-only) can run in parallel.
 				if (this.initialCheckpointCommitPromise) {
@@ -3570,9 +3575,15 @@ export class Task {
 							// fixes bug where cancelling task > aborts task > for loop may be in middle of streaming reasoning > say function throws error before we get a chance to properly clean up and cancel the task.
 							if (!this.taskState.abort) {
 								const thinkingBlock = reasonsHandler.getCurrentReasoning()
+								const hasPendingNativeToolUse = toolUseHandler.getPartialToolUsesAsContent().length > 0
 								// Some providers can interleave reasoning after text has started.
-								// Keep rendering stable by only streaming reasoning UI before the first text chunk.
-								if (thinkingBlock?.thinking && chunk.reasoning && assistantMessage.length === 0) {
+								// Keep rendering stable by only streaming reasoning UI before the first text chunk or native tool call.
+								if (
+									thinkingBlock?.thinking &&
+									chunk.reasoning &&
+									assistantMessage.length === 0 &&
+									!hasPendingNativeToolUse
+								) {
 									await this.say("reasoning", thinkingBlock.thinking, undefined, undefined, true)
 								}
 							}
@@ -3600,6 +3611,12 @@ export class Task {
 							// Use call_id as key to support multiple calls to the same tool
 							if (chunk.tool_call.function?.id && chunk.tool_call.call_id) {
 								this.taskState.toolUseIdMap.set(chunk.tool_call.call_id, chunk.tool_call.function.id)
+							}
+
+							const currentReasoning = reasonsHandler.getCurrentReasoning()
+							if (currentReasoning?.thinking && !didFinalizeReasoningForUi) {
+								await finalizePendingReasoningMessage(currentReasoning.thinking)
+								didFinalizeReasoningForUi = true
 							}
 
 							await this.processNativeToolCalls(assistantTextOnly, toolUseHandler.getPartialToolUsesAsContent())
@@ -3630,7 +3647,9 @@ export class Task {
 							// parse raw assistant message into content blocks
 							const prevLength = this.taskState.assistantMessageContent.length
 
-							this.taskState.assistantMessageContent = parseAssistantMessageV2(assistantMessage)
+							this.taskState.assistantMessageContent = orderTurnEndingContentBlocks(
+								parseAssistantMessageV2(assistantMessage),
+							)
 
 							if (this.taskState.assistantMessageContent.length > prevLength) {
 								this.taskState.userMessageContentReady = false // new content we need to present, reset to false in case previous content set this to true
@@ -3843,9 +3862,10 @@ export class Task {
 					// for providers that required reasoning traces included with assistant content.
 					hasAssistantText ? undefined : thinkingBlock?.summary,
 				)
+				const orderedToolUseBlocks = orderTurnEndingNativeToolBlocks(toolUseBlocks)
 				// Append tool use blocks if any exist
-				if (toolUseBlocks.length > 0) {
-					assistantContent.push(...toolUseBlocks)
+				if (orderedToolUseBlocks.length > 0) {
+					assistantContent.push(...orderedToolUseBlocks)
 				}
 
 				// Append the assistant's content to the API conversation history only if there's content
@@ -4173,13 +4193,15 @@ export class Task {
 			await sendPartialMessageEvent(protoMessage)
 		}
 
-		this.taskState.assistantMessageContent = [...textBlocks, ...toolBlocks]
+		this.taskState.assistantMessageContent = orderTurnEndingContentBlocks([...textBlocks, ...toolBlocks])
 
 		// Reset index to the first tool block position so they can be executed
 		// This fixes the issue where tools remain unexecuted because the index
 		// advanced past them or was out of bounds during streaming
 		if (toolBlocks.length > 0) {
-			this.taskState.currentStreamingContentIndex = textBlocks.length
+			const firstToolIndex = this.taskState.assistantMessageContent.findIndex((block) => block.type === "tool_use")
+			this.taskState.currentStreamingContentIndex =
+				firstToolIndex === -1 ? this.taskState.assistantMessageContent.length : firstToolIndex
 			this.taskState.userMessageContentReady = false
 		} else if (this.taskState.assistantMessageContent.length > prevLength) {
 			this.taskState.userMessageContentReady = false
