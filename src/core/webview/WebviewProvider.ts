@@ -10,17 +10,57 @@ import { getNonce } from "./getNonce"
 
 export abstract class WebviewProvider {
 	private static instance: WebviewProvider | null = null
-	controller: Controller
+	private _controller?: Controller
+	private controllerReadyResolve!: (controller: Controller) => void
+	readonly controllerReady: Promise<Controller>
 
-	constructor(readonly context: ClineExtensionContext) {
+	constructor(
+		readonly context: ClineExtensionContext,
+		options?: { deferController?: boolean },
+	) {
 		WebviewProvider.instance = this
+		this.controllerReady = new Promise((resolve) => {
+			this.controllerReadyResolve = resolve
+		})
 
-		// Create controller with cache service
-		this.controller = new Controller(context)
+		if (!options?.deferController) {
+			this.ensureController()
+		}
+	}
+
+	get controller(): Controller {
+		if (!this._controller) {
+			throw new Error("WebviewProvider controller not initialized")
+		}
+		return this._controller
+	}
+
+	hasController(): boolean {
+		return this._controller !== undefined
+	}
+
+	ensureController(): Controller {
+		if (!this._controller) {
+			this.attachController(new Controller(this.context))
+		}
+		const controller = this._controller
+		if (!controller) {
+			throw new Error("WebviewProvider controller not initialized")
+		}
+		return controller
+	}
+
+	attachController(controller: Controller): Controller {
+		if (this._controller) {
+			return this._controller
+		}
+		this._controller = controller
+		this.controllerReadyResolve(controller)
+		return controller
 	}
 
 	async dispose() {
-		await this.controller.dispose()
+		await this._controller?.dispose()
 		WebviewProvider.instance = null
 	}
 

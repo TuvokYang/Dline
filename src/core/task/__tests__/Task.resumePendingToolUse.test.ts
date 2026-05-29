@@ -22,6 +22,7 @@ type TaskPrivateForTest = {
 	promptAndResumePendingToolUseFromHistory: (
 		pendingToolUse: PendingToolUseResumeStateForTest,
 		lastClineMessage: ClineMessage | undefined,
+		options?: { onReadyToDisplay?: () => Promise<void> },
 	) => Promise<void>
 	taskState: {
 		assistantMessageContent: Array<{ name: string; params: Record<string, string>; call_id?: string }>
@@ -277,8 +278,14 @@ describe("Task pending tool-use history resume", () => {
 				presentAssistantMessageHasPendingUpdates: false,
 				toolUseIdMap: new Map<string, string>(),
 			},
-			ask: async (type: string) => {
+			ask: async (
+				type: string,
+				_text?: string,
+				_partial?: boolean,
+				options?: { onAskVisible?: (askTs: number) => Promise<void> | void },
+			) => {
 				order.push(`ask:${type}`)
+				await options?.onAskVisible?.(123)
 				return { response: "yesButtonClicked" }
 			},
 			messageStateHandler: {
@@ -312,9 +319,14 @@ describe("Task pending tool-use history resume", () => {
 				sanitizedHistory: [{ role: "assistant", content: storedToolUseBlocks }],
 			},
 			{ ts: 1, type: "say", say: "api_req_started" },
+			{
+				onReadyToDisplay: async () => {
+					order.push("ready")
+				},
+			},
 		)
 
-		assert.deepEqual(order, ["ask:resume_task", "present"])
+		assert.deepEqual(order, ["ask:resume_task", "ready", "present"])
 	})
 
 	it("uses an existing tool approval ask instead of a resume ask before restoring pending tool_use blocks", async () => {
@@ -618,5 +630,83 @@ describe("resumePendingToolUseFromHistory", () => {
 				content: pushed[0].content,
 			},
 		])
+	})
+
+	it("allows a turn-ending tool after another tool ran when parallel calls are disabled", async () => {
+		let executedToolName: string | undefined
+		const executor = Object.assign(Object.create(ToolExecutor.prototype), {
+			taskState: {
+				didRejectTool: false,
+				didAlreadyUseTool: true,
+				userMessageContent: [],
+			},
+			coordinator: {
+				has: () => true,
+				getHandler: () => undefined,
+			},
+			asToolConfig: () => ({}),
+			isParallelToolCallingEnabled: () => false,
+			stateManager: {
+				getGlobalSettingsKey: () => false,
+			},
+			browserSession: {
+				closeBrowser: async () => undefined,
+			},
+			handleCompleteBlock: async (block: { name?: string }) => {
+				executedToolName = block.name
+			},
+		}) as { execute: (block: unknown) => Promise<boolean> }
+
+		const handled = await executor.execute({
+			type: "tool_use",
+			name: ClineDefaultTool.ATTEMPT,
+			params: { result: "done" },
+			partial: false,
+			isNativeToolCall: true,
+			call_id: "call_attempt",
+		})
+
+		assert.equal(handled, true)
+		assert.equal(executedToolName, ClineDefaultTool.ATTEMPT)
+	})
+
+	it("still skips a turn-ending tool after a previous tool was rejected", async () => {
+		const userMessageContent: unknown[] = []
+		const executor = Object.assign(Object.create(ToolExecutor.prototype), {
+			taskState: {
+				didRejectTool: true,
+				didAlreadyUseTool: false,
+				userMessageContent,
+			},
+			coordinator: {
+				has: () => true,
+				getHandler: () => undefined,
+			},
+			asToolConfig: () => ({}),
+			isParallelToolCallingEnabled: () => false,
+			pushToolResult: (content: unknown, block: { call_id?: string }) => {
+				userMessageContent.push({
+					type: "tool_result",
+					tool_use_id: "toolu_attempt",
+					call_id: block.call_id,
+					content,
+				})
+			},
+		}) as { execute: (block: unknown) => Promise<boolean> }
+
+		const handled = await executor.execute({
+			type: "tool_use",
+			name: ClineDefaultTool.ATTEMPT,
+			params: { result: "done" },
+			partial: false,
+			isNativeToolCall: true,
+			call_id: "call_attempt",
+		})
+
+		assert.equal(handled, true)
+		assert.deepEqual(
+			userMessageContent.map((block) => (block as { call_id?: string }).call_id),
+			["call_attempt"],
+		)
 	})
 })

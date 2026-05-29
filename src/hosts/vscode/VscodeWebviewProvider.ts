@@ -101,9 +101,10 @@ export class VscodeWebviewProvider extends WebviewProvider implements vscode.Web
 		// Listen for configuration changes
 		vscode.workspace.onDidChangeConfiguration(
 			async (e) => {
-				if (e && e.affectsConfiguration("cline.mcpMarketplace.enabled")) {
+				if (e?.affectsConfiguration("cline.mcpMarketplace.enabled")) {
 					// Update state when marketplace tab setting changes
-					await this.controller.postStateToWebview()
+					const controller = await this.controllerReady
+					await controller.postStateToWebview()
 				}
 			},
 			null,
@@ -111,7 +112,9 @@ export class VscodeWebviewProvider extends WebviewProvider implements vscode.Web
 		)
 
 		// if the extension is starting a new session, clear previous task state
-		this.controller.clearTask()
+		if (this.hasController()) {
+			this.controller.clearTask()
+		}
 
 		Logger.log("[VscodeWebviewProvider] Webview view resolved")
 
@@ -164,7 +167,8 @@ export class VscodeWebviewProvider extends WebviewProvider implements vscode.Web
 		switch (message.type) {
 			case "grpc_request": {
 				if (message.grpc_request) {
-					await handleGrpcRequest(this.controller, postMessageToWebview, message.grpc_request)
+					const controller = await this.controllerReady
+					await handleGrpcRequest(controller, postMessageToWebview, message.grpc_request)
 				}
 				break
 			}

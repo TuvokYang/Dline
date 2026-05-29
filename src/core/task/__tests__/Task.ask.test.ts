@@ -42,6 +42,50 @@ function createFakeTask(taskState: {
 }
 
 describe("Task.ask", () => {
+	it("notifies after a non-partial ask is visible", async () => {
+		const clock = sinon.useFakeTimers()
+		const taskState = {
+			abort: false,
+			askResponse: undefined as string | undefined,
+			askResponseText: undefined as string | undefined,
+			askResponseImages: undefined as string[] | undefined,
+			askResponseFiles: undefined as string[] | undefined,
+			lastMessageTs: undefined as number | undefined,
+		}
+		const { clineMessages, fakeTask } = createFakeTask(taskState)
+		let visibleAskTs: number | undefined
+		let visibleMessageCount = 0
+
+		try {
+			const askPromise = (
+				Task.prototype as unknown as {
+					ask: (
+						type: "resume_task",
+						text?: string,
+						partial?: boolean,
+						options?: { onAskVisible?: (askTs: number) => void },
+					) => Promise<{ response: string; text?: string }>
+				}
+			).ask.call(fakeTask, "resume_task", undefined, undefined, {
+				onAskVisible: (askTs) => {
+					visibleAskTs = askTs
+					visibleMessageCount = clineMessages.length
+				},
+			})
+
+			await flushMicrotasks()
+			assert.equal(visibleAskTs, taskState.lastMessageTs)
+			assert.equal(visibleMessageCount, 1)
+
+			taskState.askResponse = "yesButtonClicked"
+			await clock.tickAsync(100)
+			const result = await askPromise
+			assert.equal(result.response, "yesButtonClicked")
+		} finally {
+			clock.restore()
+		}
+	})
+
 	it("keeps resume asks waiting for a user response even when the task is aborted", async () => {
 		const clock = sinon.useFakeTimers()
 		const taskState: {

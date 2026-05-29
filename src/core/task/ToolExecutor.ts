@@ -20,6 +20,7 @@ import { formatResponse } from "../prompts/responses"
 import { StateManager } from "../storage/StateManager"
 import { WorkspaceRootManager } from "../workspace"
 import { ToolResponse } from "."
+import { isTurnEndingToolName } from "./assistant-message-order"
 import { checkRepeatedToolCall, LOOP_DETECTION_SOFT_THRESHOLD, toolCallSignature } from "./loop-detection"
 import { MessageStateHandler } from "./message-state"
 import { TaskState } from "./TaskState"
@@ -339,7 +340,7 @@ export class ToolExecutor {
 			}
 
 			// Check if a tool has already been used in this message (only enforced when parallel tool calling is disabled)
-			if (!this.isParallelToolCallingEnabled() && this.taskState.didAlreadyUseTool) {
+			if (!this.isParallelToolCallingEnabled() && this.taskState.didAlreadyUseTool && !isTurnEndingToolName(block.name)) {
 				const message = formatResponse.toolAlreadyUsed(block.name)
 				if (!this.pushSkippedNativeToolResult(block, message)) {
 					this.taskState.userMessageContent.push({

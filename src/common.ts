@@ -58,6 +58,7 @@ export async function initialize(storageContext: StorageContext): Promise<Webvie
 
 	// =============== Webview services ===============
 	const webview = HostProvider.get().createWebviewProvider()
+	webview.ensureController()
 
 	const stateManager = StateManager.get()
 	// Non-blocking announcement check and display

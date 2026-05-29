@@ -36,11 +36,22 @@ import {
 	UiServiceClient,
 } from "../services/grpc-client"
 
-// Sliding window constants (adjustable)
-const MAX_COUNT = 300 // maximum messages in the window
-
 const getTaskViewKey = (taskId?: string, taskTitleMessageTs?: number) =>
 	taskId ?? (taskTitleMessageTs != null ? `task-title:${taskTitleMessageTs}` : undefined)
+
+const mergeClineMessagesByTs = (existing: ClineMessage[], incoming: ClineMessage[]): ClineMessage[] => {
+	if (existing.length === 0) {
+		return incoming
+	}
+	const byTs = new Map<number, ClineMessage>()
+	for (const message of incoming) {
+		byTs.set(message.ts, message)
+	}
+	for (const message of existing) {
+		byTs.set(message.ts, message)
+	}
+	return Array.from(byTs.values()).sort((a, b) => a.ts - b.ts)
+}
 
 export interface ExtensionStateContextType extends ExtensionState {
 	clineMessages: ClineMessage[]
@@ -338,7 +349,7 @@ export const ExtensionStateContextProvider: React.FC<{
 						return
 					}
 					const converted = resp.messages.map((m) => convertProtoToClineMessage(m))
-					setClineMessages(converted)
+					setClineMessages((prev) => mergeClineMessagesByTs(prev, converted))
 					setFirstItemIndex(Math.max(0, resp.startIndex))
 				})
 				.catch(() => {})

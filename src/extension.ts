@@ -58,6 +58,9 @@ import { SharedUriHandler, TASK_URI_PATH } from "./services/uri/SharedUriHandler
 import { ShowMessageType } from "./shared/proto/host/window"
 import { fileExistsAtPath } from "./utils/fs"
 
+const RELOAD_WINDOW_ACTION = "Reload Window"
+const RELOAD_WINDOW_PROMPT_VERSION_KEY = "dlineReloadWindowPromptVersion"
+
 // This method is called when the VS Code extension is activated.
 // NOTE: This is VS Code specific - services that should be registered
 // for all-platform should be registered in common.ts.
@@ -67,6 +70,12 @@ export async function activate(context: vscode.ExtensionContext) {
 	// 1. Set up HostProvider for VSCode
 	// IMPORTANT: This must be done before any service can be registered
 	setupHostProvider(context)
+	const webview = HostProvider.get().createWebviewProvider() as VscodeWebviewProvider
+	context.subscriptions.push(
+		vscode.window.registerWebviewViewProvider(VscodeWebviewProvider.SIDEBAR_ID, webview, {
+			webviewOptions: { retainContextWhenHidden: true },
+		}),
+	)
 
 	// 2. Migrate legacy Cline data before Dline cleanup can create target files.
 	await migrateFromClineWithProgress(context)
@@ -83,7 +92,8 @@ export async function activate(context: vscode.ExtensionContext) {
 
 	// 4. Register services and perform common initialization
 	// IMPORTANT: Must be done after host provider is setup and migrations are complete
-	const webview = (await initialize(storageContext)) as VscodeWebviewProvider
+	await initialize(storageContext)
+	void showReloadWindowPromptIfNeeded(context)
 
 	// 5. Register services and commands specific to VS Code
 	// Initialize test mode and add disposables to context
@@ -116,12 +126,6 @@ export async function activate(context: vscode.ExtensionContext) {
 			context.subscriptions.push(disposable)
 			return disposable
 		},
-	)
-
-	context.subscriptions.push(
-		vscode.window.registerWebviewViewProvider(VscodeWebviewProvider.SIDEBAR_ID, webview, {
-			webviewOptions: { retainContextWhenHidden: true },
-		}),
 	)
 
 	// NOTE: Commands must be added to the internal registry before registering them with VSCode
@@ -550,6 +554,24 @@ ${ctx.cellJson || "{}"}
 	return createClineAPI(webview.controller)
 }
 
+async function showReloadWindowPromptIfNeeded(context: vscode.ExtensionContext) {
+	const currentVersion = ExtensionRegistryInfo.version
+	const lastPromptedVersion = context.globalState.get<string>(RELOAD_WINDOW_PROMPT_VERSION_KEY)
+	if (lastPromptedVersion === currentVersion) {
+		return
+	}
+
+	const selected = await vscode.window.showInformationMessage(
+		`Dline v${currentVersion} is installed. Reload VS Code to finish activating the extension.`,
+		RELOAD_WINDOW_ACTION,
+	)
+	await context.globalState.update(RELOAD_WINDOW_PROMPT_VERSION_KEY, currentVersion)
+
+	if (selected === RELOAD_WINDOW_ACTION) {
+		await vscode.commands.executeCommand("workbench.action.reloadWindow")
+	}
+}
+
 async function showJupyterPromptInput(title: string, placeholder: string): Promise<string | undefined> {
 	return new Promise((resolve) => {
 		const quickPick = vscode.window.createQuickPick()
@@ -600,7 +622,11 @@ function setupHostProvider(context: ExtensionContext) {
 	const outputChannel = registerClineOutputChannel(context)
 	outputChannel.appendLine("[Dline] Setting up VS Code host...")
 
-	const createWebview = () => new VscodeWebviewProvider(context)
+	let webviewProvider: VscodeWebviewProvider | undefined
+	const createWebview = () => {
+		webviewProvider ??= new VscodeWebviewProvider(context, { deferController: true })
+		return webviewProvider
+	}
 	const createDiffView = () => new VscodeDiffViewProvider()
 	const createCommentReview = () => getVscodeCommentReviewController()
 	const createTerminalManager = () => new VscodeTerminalManager()

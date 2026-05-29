@@ -164,6 +164,10 @@ type ResumeTaskFromHistoryOptions = {
 	onReadyToDisplay?: () => Promise<void>
 }
 
+type AskOptions = {
+	onAskVisible?: (askTs: number) => Promise<void> | void
+}
+
 type PendingToolUseResumeOptions = {
 	resumeUserContent?: TaskState["userMessageContent"]
 }
@@ -704,6 +708,7 @@ export class Task {
 		type: ClineAsk,
 		text?: string,
 		partial?: boolean,
+		options?: AskOptions,
 	): Promise<{
 		response: ClineAskResponse
 		text?: string
@@ -714,6 +719,14 @@ export class Task {
 		// Allow resume asks even when aborted to enable resume button after cancellation
 		if (this.taskState.abort && type !== "resume_task" && type !== "resume_completed_task") {
 			throw new Error("Cline instance aborted")
+		}
+		let didNotifyAskVisible = false
+		const notifyAskVisible = async (askTs: number) => {
+			if (!options?.onAskVisible || didNotifyAskVisible) {
+				return
+			}
+			didNotifyAskVisible = true
+			await options.onAskVisible(askTs)
 		}
 		const pendingApprovalResponse = this.pendingToolUseApprovalResponse
 		if (pendingApprovalResponse && pendingApprovalResponse.type === type && partial === false) {
@@ -734,6 +747,7 @@ export class Task {
 				if (updatedMessage) {
 					await sendPartialMessageEvent(convertClineMessageToProto(updatedMessage))
 				}
+				await notifyAskVisible(askTs)
 			} else {
 				askTs = Date.now()
 				this.taskState.lastMessageTs = askTs
@@ -748,6 +762,7 @@ export class Task {
 				if (addedMessage) {
 					await sendPartialMessageEvent(convertClineMessageToProto(addedMessage))
 				}
+				await notifyAskVisible(askTs)
 			}
 
 			this.pendingToolUseApprovalResponse = undefined
@@ -771,6 +786,7 @@ export class Task {
 			if (partial) {
 				if (isUpdatingPreviousPartial) {
 					// existing partial message, so update it
+					askTs = lastMessage.ts
 					await this.messageStateHandler.updateClineMessage(lastMessageIndex, {
 						text,
 						partial,
@@ -780,6 +796,7 @@ export class Task {
 					// await this.postStateToWebview()
 					const protoMessage = convertClineMessageToProto(lastMessage)
 					await sendPartialMessageEvent(protoMessage)
+					await notifyAskVisible(askTs)
 					throw new Error("Current ask promise was ignored 1")
 				}
 				// this is a new partial message, so add it with partial state
@@ -797,6 +814,7 @@ export class Task {
 				})
 				await this.postStateToWebview()
 				await sendPartialMessageEvent(convertClineMessageToProto(this.messageStateHandler.getClineMessages().at(-1)!))
+				await notifyAskVisible(askTs)
 				throw new Error("Current ask promise was ignored 2")
 			}
 			// partial=false means its a complete version of a previously partial message
@@ -823,6 +841,7 @@ export class Task {
 				// await this.postStateToWebview()
 				const protoMessage = convertClineMessageToProto(lastMessage)
 				await sendPartialMessageEvent(protoMessage)
+				await notifyAskVisible(askTs)
 			} else {
 				// this is a new partial=false message, so add it like normal
 				this.taskState.askResponse = undefined
@@ -839,6 +858,7 @@ export class Task {
 				})
 				await this.postStateToWebview()
 				await sendPartialMessageEvent(convertClineMessageToProto(this.messageStateHandler.getClineMessages().at(-1)!))
+				await notifyAskVisible(askTs)
 			}
 		} else {
 			// this is a new non-partial message, so add it like normal
@@ -857,6 +877,7 @@ export class Task {
 			})
 			await this.postStateToWebview()
 			await sendPartialMessageEvent(convertClineMessageToProto(this.messageStateHandler.getClineMessages().at(-1)!))
+			await notifyAskVisible(askTs)
 		}
 
 		if (type !== "command_output") {
@@ -1448,9 +1469,9 @@ export class Task {
 			await this.removeStalePendingToolResumeAsks()
 		}
 
-		await this.postStateToWebview({ immediate: true })
-		await options?.onReadyToDisplay?.()
-		const { response, text, images, files } = await this.ask(askType, askText)
+		const { response, text, images, files } = await this.ask(askType, askText, undefined, {
+			onAskVisible: options?.onReadyToDisplay,
+		})
 
 		const resumeUserContent: TaskState["userMessageContent"] = []
 		if (approvalAsk) {
@@ -1683,9 +1704,9 @@ export class Task {
 		// For conversational asks (plan_mode_respond / followup), pass the
 		// original text so the Plan Created / question content is preserved.
 		const askText = isConversationalAsk ? lastClineMessage?.text : undefined
-		await this.postStateToWebview({ immediate: true })
-		await options?.onReadyToDisplay?.()
-		const { response, text, images, files } = await this.ask(askType, askText)
+		const { response, text, images, files } = await this.ask(askType, askText, undefined, {
+			onAskVisible: options?.onReadyToDisplay,
+		})
 
 		// Initialize newUserContent array for hook context
 		const newUserContent: ClineContent[] = []
@@ -3715,15 +3736,10 @@ export class Task {
 						break
 					}
 
-					// Interrupt stream if a tool was used and parallel calling is disabled
-					// PREV: we need to let the request finish for openrouter to get generation details
-					// UPDATE: it's better UX to interrupt the request at the cost of the api cost not being retrieved
-					if (!this.isParallelToolCallingEnabled() && this.taskState.didAlreadyUseTool) {
-						assistantMessage +=
-							"\n\n[Response interrupted by a tool use result. Only one tool may be used at a time and should be placed at the end of the message.]"
-						shouldInterruptStream = true
-						break
-					}
+					// Keep reading the current assistant response after a tool has run.
+					// ToolExecutor skips additional non-terminal tools when parallel tool
+					// calling is disabled, but terminal tools such as attempt_completion
+					// may still arrive later in the same response and must be handled.
 				}
 
 				if (shouldInterruptStream) {
