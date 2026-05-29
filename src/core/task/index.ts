@@ -164,6 +164,10 @@ type ResumeTaskFromHistoryOptions = {
 	onReadyToDisplay?: () => Promise<void>
 }
 
+type PendingToolUseResumeOptions = {
+	resumeUserContent?: TaskState["userMessageContent"]
+}
+
 type PendingToolUseResumeState = {
 	assistantIndex: number
 	toolUseBlocks: ClineAssistantToolUseBlock[]
@@ -1448,6 +1452,7 @@ export class Task {
 		await options?.onReadyToDisplay?.()
 		const { response, text, images, files } = await this.ask(askType, askText)
 
+		const resumeUserContent: TaskState["userMessageContent"] = []
 		if (approvalAsk) {
 			this.pendingToolUseApprovalResponse = {
 				type: approvalAsk,
@@ -1456,16 +1461,42 @@ export class Task {
 				images,
 				files,
 			}
+		} else if (text || (images && images.length > 0) || (files && files.length > 0)) {
+			await this.say("user_feedback", text, images, files)
+
+			if (text) {
+				resumeUserContent.push({
+					type: "text",
+					text: `<user_response>\n${text}\n</user_response>`,
+				})
+			}
+			if (images && images.length > 0) {
+				resumeUserContent.push(...formatResponse.imageBlocks(images))
+			}
+			if (files && files.length > 0) {
+				const fileContentString = await processFilesIntoText(files)
+				if (fileContentString) {
+					resumeUserContent.push({
+						type: "text",
+						text: fileContentString,
+					})
+				}
+			}
 		}
 
-		await this.resumePendingToolUseFromHistory(pendingToolUse)
+		await this.resumePendingToolUseFromHistory(pendingToolUse, { resumeUserContent })
 	}
 
 	private async resumePendingToolUseFromHistory(
 		pendingToolUse: PendingToolUseResumeState,
-		options?: ResumeTaskFromHistoryOptions,
+		options?: PendingToolUseResumeOptions,
 	) {
-		const runtimeToolUses = pendingToolUse.toolUseBlocks.map((block) => this.storedToolUseToRuntimeToolUse(block))
+		const runtimePairs = pendingToolUse.toolUseBlocks.map((storedToolUse) => ({
+			storedToolUse,
+			runtimeToolUse: this.storedToolUseToRuntimeToolUse(storedToolUse),
+		}))
+		const runtimePairByToolUse = new Map(runtimePairs.map((pair) => [pair.runtimeToolUse, pair.storedToolUse]))
+		const runtimeToolUses = orderTurnEndingContentBlocks(runtimePairs.map((pair) => pair.runtimeToolUse))
 		if (runtimeToolUses.length === 0) {
 			return
 		}
@@ -1483,23 +1514,26 @@ export class Task {
 		this.taskState.presentAssistantMessageHasPendingUpdates = false
 		this.taskState.toolUseIdMap.clear()
 
-		for (let i = 0; i < runtimeToolUses.length; i++) {
-			const callId = runtimeToolUses[i].call_id
+		for (const runtimeToolUse of runtimeToolUses) {
+			const callId = runtimeToolUse.call_id
+			const storedToolUse = runtimePairByToolUse.get(runtimeToolUse)
 			if (callId) {
-				this.taskState.toolUseIdMap.set(callId, pendingToolUse.toolUseBlocks[i].id)
+				this.taskState.toolUseIdMap.set(callId, storedToolUse?.id ?? callId)
 			}
 		}
 
 		await this.messageStateHandler.overwriteApiConversationHistory(pendingToolUse.sanitizedHistory)
 		await this.removeStalePendingToolResumeAsks()
 		await this.postStateToWebview({ immediate: true })
-		await options?.onReadyToDisplay?.()
 
 		try {
 			await this.presentAssistantMessage()
 			await pWaitFor(() => this.taskState.userMessageContentReady)
 		} finally {
 			this.pendingToolUseApprovalResponse = undefined
+		}
+		if (options?.resumeUserContent && options.resumeUserContent.length > 0) {
+			this.taskState.userMessageContent.push(...options.resumeUserContent)
 		}
 		await this.checkpointManager?.saveCheckpoint()
 		await this.recursivelyMakeClineRequests(this.taskState.userMessageContent)

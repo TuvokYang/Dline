@@ -4,6 +4,7 @@ import type { ClineMessage } from "@shared/ExtensionMessage"
 import type { ClineAssistantToolUseBlock, ClineStorageMessage, ClineUserToolResultContentBlock } from "@shared/messages"
 import { ClineDefaultTool } from "@shared/tools"
 import { describe, it } from "mocha"
+import { ToolExecutor } from "../ToolExecutor"
 
 type PendingToolUseResumeStateForTest = {
 	assistantIndex: number
@@ -14,7 +15,10 @@ type PendingToolUseResumeStateForTest = {
 
 type TaskPrivateForTest = {
 	getPendingToolUseResumeState: (history: ClineStorageMessage[]) => PendingToolUseResumeStateForTest | undefined
-	resumePendingToolUseFromHistory: (pendingToolUse: PendingToolUseResumeStateForTest) => Promise<void>
+	resumePendingToolUseFromHistory: (
+		pendingToolUse: PendingToolUseResumeStateForTest,
+		options?: { resumeUserContent?: unknown[] },
+	) => Promise<void>
 	promptAndResumePendingToolUseFromHistory: (
 		pendingToolUse: PendingToolUseResumeStateForTest,
 		lastClineMessage: ClineMessage | undefined,
@@ -391,5 +395,228 @@ describe("Task pending tool-use history resume", () => {
 
 		assert.deepEqual(visibleAsks, [{ type: "tool", text: "approval text" }])
 		assert.equal(consumedApproval, true)
+	})
+})
+
+describe("resumePendingToolUseFromHistory", () => {
+	it("preserves resume text after pending tool results", async () => {
+		const storedToolUseBlocks: ClineAssistantToolUseBlock[] = [
+			{
+				type: "tool_use",
+				id: "toolu_read",
+				name: ClineDefaultTool.FILE_READ,
+				input: { path: "src/index.ts" },
+				call_id: "call_read",
+			},
+		]
+		const clineMessages: ClineMessage[] = []
+		const says: Array<{ type: string; text?: string }> = []
+		let continuedWith: unknown[] | undefined
+
+		const task = createTaskLike({
+			taskState: {
+				currentStreamingContentIndex: -1,
+				assistantMessageContent: [],
+				didCompleteReadingStream: false,
+				userMessageContent: [],
+				userMessageContentReady: false,
+				didRejectTool: false,
+				didAlreadyUseTool: false,
+				presentAssistantMessageLocked: false,
+				presentAssistantMessageHasPendingUpdates: false,
+				toolUseIdMap: new Map<string, string>(),
+			},
+			ask: async () => ({ response: "yesButtonClicked", text: "continue with this context" }),
+			say: async (type: string, text?: string) => {
+				says.push({ type, text })
+				return undefined
+			},
+			messageStateHandler: {
+				getClineMessages: () => clineMessages,
+				overwriteApiConversationHistory: async () => undefined,
+				removeMessagesByTs: async () => undefined,
+			},
+			postStateToWebview: async () => undefined,
+			presentAssistantMessage: async function (this: {
+				taskState: { userMessageContent: unknown[]; userMessageContentReady: boolean }
+			}) {
+				this.taskState.userMessageContent.push({
+					type: "tool_result",
+					tool_use_id: "toolu_read",
+					content: "file contents",
+				})
+				this.taskState.userMessageContentReady = true
+			},
+			checkpointManager: {
+				saveCheckpoint: async () => undefined,
+			},
+			recursivelyMakeClineRequests: async (content: unknown[]) => {
+				continuedWith = content
+				return false
+			},
+		})
+
+		await task.promptAndResumePendingToolUseFromHistory(
+			{
+				assistantIndex: 0,
+				toolUseBlocks: storedToolUseBlocks,
+				answeredToolResults: [],
+				sanitizedHistory: [{ role: "assistant", content: storedToolUseBlocks }],
+			},
+			{ ts: 1, type: "say", say: "api_req_started" },
+		)
+
+		assert.deepEqual(says, [{ type: "user_feedback", text: "continue with this context" }])
+		assert.deepEqual(continuedWith, [
+			{
+				type: "tool_result",
+				tool_use_id: "toolu_read",
+				content: "file contents",
+			},
+			{
+				type: "text",
+				text: "<user_response>\ncontinue with this context\n</user_response>",
+			},
+		])
+	})
+
+	it("orders pending turn-ending tool uses without corrupting tool id mapping", async () => {
+		const storedToolUseBlocks: ClineAssistantToolUseBlock[] = [
+			{
+				type: "tool_use",
+				id: "toolu_attempt",
+				name: ClineDefaultTool.ATTEMPT,
+				input: { result: "done" },
+				call_id: "call_attempt",
+			},
+			{
+				type: "tool_use",
+				id: "toolu_command",
+				name: ClineDefaultTool.BASH,
+				input: { command: "npm test", requires_approval: "false" },
+				call_id: "call_command",
+			},
+		]
+		const clineMessages: ClineMessage[] = []
+		let continuedWith: unknown[] | undefined
+
+		const task = createTaskLike({
+			taskState: {
+				currentStreamingContentIndex: -1,
+				assistantMessageContent: [],
+				didCompleteReadingStream: false,
+				userMessageContent: [],
+				userMessageContentReady: false,
+				didRejectTool: false,
+				didAlreadyUseTool: false,
+				presentAssistantMessageLocked: false,
+				presentAssistantMessageHasPendingUpdates: false,
+				toolUseIdMap: new Map<string, string>(),
+			},
+			messageStateHandler: {
+				getClineMessages: () => clineMessages,
+				overwriteApiConversationHistory: async () => undefined,
+				removeMessagesByTs: async () => undefined,
+			},
+			postStateToWebview: async () => undefined,
+			presentAssistantMessage: async function (this: {
+				taskState: {
+					assistantMessageContent: Array<{ call_id?: string; name: string }>
+					userMessageContent: unknown[]
+					userMessageContentReady: boolean
+				}
+			}) {
+				assert.deepEqual(
+					this.taskState.assistantMessageContent.map((block) => block.call_id),
+					["call_command", "call_attempt"],
+				)
+				this.taskState.userMessageContent.push(
+					{
+						type: "tool_result",
+						tool_use_id: "toolu_command",
+						content: "command output",
+					},
+					{
+						type: "tool_result",
+						tool_use_id: "toolu_attempt",
+						content: "done",
+					},
+				)
+				this.taskState.userMessageContentReady = true
+			},
+			checkpointManager: {
+				saveCheckpoint: async () => undefined,
+			},
+			recursivelyMakeClineRequests: async (content: unknown[]) => {
+				continuedWith = content
+				return false
+			},
+		})
+
+		await task.resumePendingToolUseFromHistory({
+			assistantIndex: 0,
+			toolUseBlocks: storedToolUseBlocks,
+			answeredToolResults: [],
+			sanitizedHistory: [{ role: "assistant", content: storedToolUseBlocks }],
+		})
+
+		assert.equal(task.taskState.toolUseIdMap.get("call_command"), "toolu_command")
+		assert.equal(task.taskState.toolUseIdMap.get("call_attempt"), "toolu_attempt")
+		assert.deepEqual(
+			continuedWith && (continuedWith as Array<{ tool_use_id?: string }>).map((block) => block.tool_use_id).filter(Boolean),
+			["toolu_command", "toolu_attempt"],
+		)
+	})
+
+	it("creates a native tool_result when a restored tool is skipped after another tool ran", async () => {
+		const userMessageContent: unknown[] = []
+		const pushed: Array<{ content: unknown; callId?: string }> = []
+		const taskState = {
+			didRejectTool: false,
+			didAlreadyUseTool: true,
+			userMessageContent,
+		}
+		const executor = Object.assign(Object.create(ToolExecutor.prototype), {
+			taskState,
+			coordinator: {
+				has: () => true,
+				getHandler: () => undefined,
+			},
+			asToolConfig: () => ({}),
+			isParallelToolCallingEnabled: () => false,
+			pushToolResult: (content: unknown, block: { call_id?: string }) => {
+				pushed.push({ content, callId: block.call_id })
+				userMessageContent.push({
+					type: "tool_result",
+					tool_use_id: "toolu_command",
+					call_id: block.call_id,
+					content,
+				})
+				taskState.didAlreadyUseTool = true
+			},
+		}) as { execute: (block: unknown) => Promise<boolean> }
+
+		const handled = await executor.execute({
+			type: "tool_use",
+			name: ClineDefaultTool.BASH,
+			params: { command: "npm test", requires_approval: "false" },
+			partial: false,
+			isNativeToolCall: true,
+			call_id: "call_command",
+		})
+
+		assert.equal(handled, true)
+		assert.deepEqual(
+			pushed.map((entry) => entry.callId),
+			["call_command"],
+		)
+		assert.deepEqual(userMessageContent, [
+			{
+				type: "tool_result",
+				tool_use_id: "toolu_command",
+				call_id: "call_command",
+				content: pushed[0].content,
+			},
+		])
 	})
 })

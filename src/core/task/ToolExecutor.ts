@@ -331,16 +331,22 @@ export class ToolExecutor {
 				const reason = block.partial
 					? "Tool was interrupted and not executed due to user rejecting a previous tool."
 					: "Skipping tool due to user rejecting a previous tool."
-				this.createToolRejectionMessage(block, reason)
+				const message = `${reason} ${ToolDisplayUtils.getToolDescription(block, this.coordinator)}`
+				if (!this.pushSkippedNativeToolResult(block, message)) {
+					this.createToolRejectionMessage(block, reason)
+				}
 				return true
 			}
 
 			// Check if a tool has already been used in this message (only enforced when parallel tool calling is disabled)
 			if (!this.isParallelToolCallingEnabled() && this.taskState.didAlreadyUseTool) {
-				this.taskState.userMessageContent.push({
-					type: "text",
-					text: formatResponse.toolAlreadyUsed(block.name),
-				})
+				const message = formatResponse.toolAlreadyUsed(block.name)
+				if (!this.pushSkippedNativeToolResult(block, message)) {
+					this.taskState.userMessageContent.push({
+						type: "text",
+						text: message,
+					})
+				}
 				return true
 			}
 
@@ -409,6 +415,15 @@ export class ToolExecutor {
 			type: "text",
 			text: `${reason} ${ToolDisplayUtils.getToolDescription(block, this.coordinator)}`,
 		})
+	}
+
+	private pushSkippedNativeToolResult(block: ToolUse, message: string): boolean {
+		if (block.partial || !block.isNativeToolCall || !block.call_id) {
+			return false
+		}
+
+		this.pushToolResult(formatResponse.toolError(message), block)
+		return true
 	}
 
 	/**
