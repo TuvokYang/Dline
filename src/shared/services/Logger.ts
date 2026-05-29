@@ -8,14 +8,14 @@
  *   - "debug": all above + debug
  *   - "trace": all above + trace
  *
- * Migration can be skipped via SKIP_MIGRATION=1 or DLINE_SKIP_MIGRATION=1.
+ * Migration can be skipped via DLINE_SKIP_MIGRATION=1.
  */
 export class Logger {
 	/** Runtime log level, read once at module load. Defaults to "info". */
 	private static readonly logLevel = Logger.readLogLevel()
 
 	/** Whether migration should be skipped. Read from SKIP_MIGRATION or DLINE_SKIP_MIGRATION. */
-	static readonly skipMigration = process.env.SKIP_MIGRATION === "1" || process.env.DLINE_SKIP_MIGRATION === "1"
+	static readonly skipMigration = process.env.DLINE_SKIP_MIGRATION === "1"
 
 	private static subscribers: Set<(msg: string) => void> = new Set()
 
