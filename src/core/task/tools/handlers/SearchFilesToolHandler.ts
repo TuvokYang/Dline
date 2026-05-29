@@ -63,6 +63,10 @@ export class SearchFilesToolHandler implements IFullyManagedTool {
 			}))
 		}
 		// Single-workspace mode (backward compatible)
+		// Absolute paths should be used as-is without prepending cwd
+		if (path.isAbsolute(parsedPath)) {
+			return [{ absolutePath: path.resolve(parsedPath), workspaceRoot: config.cwd }]
+		}
 		const pathResult = resolveWorkspacePath(config, originalPath, "SearchFilesTool.execute")
 		const absolutePath = typeof pathResult === "string" ? pathResult : pathResult.absolutePath
 		return [{ absolutePath, workspaceRoot: config.cwd }]

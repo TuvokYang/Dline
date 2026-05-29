@@ -102,6 +102,14 @@ export class WorkspacePathAdapter {
 		// a leading "/" as a drive-relative absolute path
 		const rel = normalizeWorkspaceRelativeInputPath(relativePath)
 
+		// Absolute paths should not be joined with workspace roots.
+		// path.join() concatenates unconditionally (unlike path.resolve()),
+		// so we must return the absolute path directly to avoid
+		// e.g. path.join("e:\\root", "e:\\root") → "e:\\root\\e:\\root".
+		if (path.isAbsolute(rel)) {
+			return [rel]
+		}
+
 		// Single-root mode
 		if (!this.config.isMultiRootEnabled || !this.config.workspaceManager) {
 			return [resolveWorkspacePath(this.config.cwd, rel, "WorkspacePathAdapter-getAllPaths") as string]
