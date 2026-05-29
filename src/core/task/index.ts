@@ -117,7 +117,7 @@ import { refreshWorkflowToggles } from "../context/instructions/user-instruction
 import { Controller } from "../controller"
 import { executeHook } from "../hooks/hook-executor"
 import { StateManager } from "../storage/StateManager"
-import { isTurnEndingToolUse, orderTurnEndingContentBlocks, orderTurnEndingNativeToolBlocks } from "./assistant-message-order"
+import { isTurnEndingToolName, isTurnEndingToolUse, orderTurnEndingContentBlocks, orderTurnEndingNativeToolBlocks } from "./assistant-message-order"
 import { FocusChainManager } from "./focus-chain"
 import {
 	getPresentationCadenceMs,
@@ -1320,7 +1320,9 @@ export class Task {
 				}
 			}
 
-			const pendingToolUseBlocks = toolUseBlocks.filter((block) => !answeredToolUseIds.has(block.id))
+			const pendingToolUseBlocks = toolUseBlocks.filter(
+				(block) => !answeredToolUseIds.has(block.id) && !isTurnEndingToolName(block.name),
+			)
 			if (pendingToolUseBlocks.length === 0) {
 				return undefined
 			}
@@ -1643,7 +1645,11 @@ export class Task {
 		} else if (lastClineMessage?.ask) {
 			// Re-issue the original ask type so the frontend shows the correct
 			// buttons (e.g. Approve/Reject for tool, text input for followup).
-			askType = lastClineMessage.ask
+			// Turn-ending tools (plan_mode_respond, attempt_completion) have
+			// already completed — show resume instead of re-asking.
+			askType = isTurnEndingToolName(lastClineMessage.ask)
+				? "resume_task"
+				: lastClineMessage.ask
 		} else if (lastClineMessage) {
 			// Message exists but has no ask (e.g. an api_req_started say).
 			askType = "resume_task"
@@ -2597,12 +2603,15 @@ export class Task {
 	}
 
 	async *attemptApiRequest(previousApiReqIndex: number): ApiStream {
+		const apiReqStart = performance.now();
+		Logger.debug(`[Task ${this.taskId}] attemptApiRequest: start (req #${this.taskState.apiRequestCount})`)
 		// Wait for MCP servers to be connected before generating system prompt
 		await pWaitFor(() => this.mcpHub.isConnecting !== true, {
 			timeout: 10_000,
 		}).catch(() => {
 			Logger.error("MCP servers failed to connect in time")
-		})
+		});
+		Logger.debug(`[Task ${this.taskId}] attemptApiRequest: MCP connected +${Math.round(performance.now()-apiReqStart)}ms`)
 
 		const providerInfo = this.getCurrentProviderInfo()
 		const host = await HostProvider.env.getHostVersion({})
@@ -2731,7 +2740,9 @@ export class Task {
 			await this.say("conditional_rules_applied", JSON.stringify({ rules: activatedConditionalRules }))
 		}
 
-		const { systemPrompt, tools } = await getSystemPrompt(promptContext)
+		Logger.debug(`[Task ${this.taskId}] attemptApiRequest: before systemPrompt +${Math.round(performance.now()-apiReqStart)}ms`);
+		const { systemPrompt, tools } = await getSystemPrompt(promptContext);
+		Logger.debug(`[Task ${this.taskId}] attemptApiRequest: after systemPrompt +${Math.round(performance.now()-apiReqStart)}ms`)
 		this.useNativeToolCalls = !!tools?.length
 		await this.writePromptMetadataArtifacts({ systemPrompt, providerInfo })
 
@@ -2752,6 +2763,7 @@ export class Task {
 		}
 
 		// Response API requires native tool calls to be enabled
+		Logger.debug(`[Task ${this.taskId}] attemptApiRequest: after contextMgmt +${Math.round(performance.now()-apiReqStart)}ms`);
 		const stream = this.api.createMessage(systemPrompt, contextManagementMetadata.truncatedConversationHistory, tools)
 
 		const iterator = stream[Symbol.asyncIterator]()
@@ -2761,7 +2773,8 @@ export class Task {
 			this.taskState.isWaitingForFirstChunk = true
 			const firstChunk = await iterator.next()
 			yield firstChunk.value
-			this.taskState.isWaitingForFirstChunk = false
+			this.taskState.isWaitingForFirstChunk = false;
+			Logger.debug(`[Task ${this.taskId}] attemptApiRequest: TTFB +${Math.round(performance.now()-apiReqStart)}ms`)
 		} catch (error) {
 			const isContextWindowExceededError = checkContextWindowExceededError(error)
 			const { model, providerId } = this.getCurrentProviderInfo()

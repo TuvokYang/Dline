@@ -437,12 +437,25 @@ export class ContextManager {
 			}
 
 			// Add missing tool_results
+			// Turn-ending tools (attempt_completion, ask_followup_question, plan_mode_respond)
+			// do not produce results, so provide a success message instead of "result missing".
 			for (const toolUseId of toolUseIds) {
 				if (!toolResultMap.has(toolUseId)) {
+					const toolBlock = (message.content as any[]).find(
+						(b: any) => b.type === "tool_use" && b.id === toolUseId,
+					)
+					const toolName = toolBlock?.name || "unknown"
+					const isTurnEnding =
+						toolName === "attempt_completion" ||
+						toolName === "ask_followup_question" ||
+						toolName === "plan_mode_respond"
+					const resultContent = isTurnEnding
+						? `Tool ${toolName} executed successfully.`
+						: "result missing"
 					toolResultMap.set(toolUseId, {
 						type: "tool_result",
 						tool_use_id: toolUseId,
-						content: "result missing",
+						content: resultContent,
 					})
 					needsUpdate = true
 				}

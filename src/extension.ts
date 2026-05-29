@@ -65,10 +65,12 @@ const RELOAD_WINDOW_PROMPT_VERSION_KEY = "dlineReloadWindowPromptVersion"
 // NOTE: This is VS Code specific - services that should be registered
 // for all-platform should be registered in common.ts.
 export async function activate(context: vscode.ExtensionContext) {
-	const activationStartTime = performance.now()
+	const activationStartTime = performance.now();
+	Logger.debug("[Dline] extension activate: start")
 
 	// 1. Set up HostProvider for VSCode
 	// IMPORTANT: This must be done before any service can be registered
+	Logger.debug(`[Dline] extension activate: setupHostProvider +${Math.round(performance.now()-activationStartTime)}ms`);
 	setupHostProvider(context)
 	const webview = HostProvider.get().createWebviewProvider() as VscodeWebviewProvider
 	context.subscriptions.push(
@@ -78,21 +80,29 @@ export async function activate(context: vscode.ExtensionContext) {
 	)
 
 	// 2. Migrate legacy Cline data before Dline cleanup can create target files.
-	await migrateFromClineWithProgress(context)
+	Logger.debug(`[Dline] extension activate: before migrate +${Math.round(performance.now()-activationStartTime)}ms`);
+	await migrateFromClineWithProgress(context);
+	Logger.debug(`[Dline] extension activate: after migrate +${Math.round(performance.now()-activationStartTime)}ms`)
 
 	// 3. Clean up legacy data patterns within VSCode's native storage.
 	// Must run BEFORE the file export so we copy clean state.
-	await cleanupLegacyVSCodeStorage(context)
+	Logger.debug(`[Dline] extension activate: before cleanupLegacy +${Math.round(performance.now()-activationStartTime)}ms`);
+	await cleanupLegacyVSCodeStorage(context);
+	Logger.debug(`[Dline] extension activate: after cleanupLegacy +${Math.round(performance.now()-activationStartTime)}ms`)
 
 	// 4. One-time export of VSCode's native storage to shared file-backed stores.
 	// After this, all platforms (VSCode, CLI, JetBrains) read from ~/.cline/data/.
 	const workspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
 	const storageContext = createStorageContext({ workspacePath })
-	await exportVSCodeStorageToSharedFiles(context, storageContext)
+	Logger.debug(`[Dline] extension activate: before exportVSCode +${Math.round(performance.now()-activationStartTime)}ms`);
+	await exportVSCodeStorageToSharedFiles(context, storageContext);
+	Logger.debug(`[Dline] extension activate: after exportVSCode +${Math.round(performance.now()-activationStartTime)}ms`)
 
 	// 4. Register services and perform common initialization
 	// IMPORTANT: Must be done after host provider is setup and migrations are complete
-	await initialize(storageContext)
+	Logger.debug(`[Dline] extension activate: before initialize +${Math.round(performance.now()-activationStartTime)}ms`);
+	await initialize(storageContext);
+	Logger.debug(`[Dline] extension activate: after initialize +${Math.round(performance.now()-activationStartTime)}ms`)
 	void showReloadWindowPromptIfNeeded(context)
 
 	// 5. Register services and commands specific to VS Code
@@ -747,6 +757,10 @@ if (IS_DEV) {
  * Shows a progress indicator only when there is eligible data to migrate.
  */
 async function migrateFromClineWithProgress(context: ExtensionContext): Promise<void> {
+	if (Logger.skipMigration) {
+		Logger.log("[Dline] Migration skipped via SKIP_MIGRATION env var")
+		return
+	}
 	const migrationOptions = {
 		legacyVscodeGlobalStoragePaths: getLegacyClineGlobalStoragePaths(context),
 	}

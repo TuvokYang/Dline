@@ -32,7 +32,10 @@ import { arePathsEqual } from "./utils/path"
  * @throws ClineConfigurationError if endpoints.json exists but is invalid
  */
 export async function initialize(storageContext: StorageContext): Promise<WebviewProvider> {
+	const initStart = performance.now();
+	Logger.debug("[Dline] common.initialize: start")
 	// Configure the shared Logging class to use HostProvider's output channels and debug logger
+	Logger.debug(`[Dline] common.initialize: Logger configured +${Math.round(performance.now()-initStart)}ms`);
 	Logger.subscribe((msg: string) => HostProvider.get().logToChannel(msg)) // File system logging
 	Logger.subscribe((msg: string) => HostProvider.env.debugLog({ value: msg })) // Host debug logging
 
@@ -40,10 +43,14 @@ export async function initialize(storageContext: StorageContext): Promise<Webvie
 	// This must be done before any other code that calls ClineEnv.config()
 	// Throws ClineConfigurationError if config file exists but is invalid
 	const { ClineEndpoint } = await import("./config")
-	await ClineEndpoint.initialize(HostProvider.get().extensionFsPath)
+	Logger.debug(`[Dline] common.initialize: before ClineEndpoint +${Math.round(performance.now()-initStart)}ms`);
+	await ClineEndpoint.initialize(HostProvider.get().extensionFsPath);
+	Logger.debug(`[Dline] common.initialize: after ClineEndpoint +${Math.round(performance.now()-initStart)}ms`)
 
 	try {
-		await StateManager.initialize(storageContext)
+		Logger.debug(`[Dline] common.initialize: before StateManager +${Math.round(performance.now()-initStart)}ms`);
+		await StateManager.initialize(storageContext);
+		Logger.debug(`[Dline] common.initialize: after StateManager +${Math.round(performance.now()-initStart)}ms`)
 	} catch (error) {
 		Logger.error("[Dline] CRITICAL: Failed to initialize StateManager:", error)
 		HostProvider.window.showMessage({
@@ -57,8 +64,10 @@ export async function initialize(storageContext: StorageContext): Promise<Webvie
 	// PostHog client provider disabled - no telemetry data upload
 
 	// =============== Webview services ===============
+	Logger.debug(`[Dline] common.initialize: before createWebview +${Math.round(performance.now()-initStart)}ms`);
 	const webview = HostProvider.get().createWebviewProvider()
-	webview.ensureController()
+	webview.ensureController();
+	Logger.debug(`[Dline] common.initialize: after ensureController +${Math.round(performance.now()-initStart)}ms`)
 
 	const stateManager = StateManager.get()
 	// Non-blocking announcement check and display
@@ -77,6 +86,7 @@ export async function initialize(storageContext: StorageContext): Promise<Webvie
 
 	telemetryService.captureExtensionActivated()
 
+	Logger.debug(`[Dline] common.initialize: done +${Math.round(performance.now()-initStart)}ms`);
 	return webview
 }
 

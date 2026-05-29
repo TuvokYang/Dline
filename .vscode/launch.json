@@ -27,7 +27,9 @@
 			"env": {
 				"IS_DEV": "true",
 				"DEV_WORKSPACE_FOLDER": "${workspaceFolder}",
-				"DLINE_ENVIRONMENT": "production"
+				"DLINE_ENVIRONMENT": "production",
+				"CLINE_LOG_LEVEL": "debug",
+				"SKIP_MIGRATION": "1"
 			}
 		},
 		{
@@ -51,7 +53,9 @@
 			"env": {
 				"IS_DEV": "true",
 				"DEV_WORKSPACE_FOLDER": "${workspaceFolder}",
-				"DLINE_ENVIRONMENT": "staging"
+				"DLINE_ENVIRONMENT": "staging",
+				"CLINE_LOG_LEVEL": "debug",
+				"SKIP_MIGRATION": "1"
 			}
 		},
 		{
@@ -75,7 +79,9 @@
 			"env": {
 				"IS_DEV": "true",
 				"DEV_WORKSPACE_FOLDER": "${workspaceFolder}",
-				"DLINE_ENVIRONMENT": "local"
+				"DLINE_ENVIRONMENT": "local",
+				"CLINE_LOG_LEVEL": "debug",
+				"SKIP_MIGRATION": "1"
 			}
 		},
 		{
@@ -99,6 +105,8 @@
 				"IS_DEV": "true",
 				"DEV_WORKSPACE_FOLDER": "${workspaceFolder}",
 				"DLINE_ENVIRONMENT": "production",
+				"CLINE_LOG_LEVEL": "debug",
+				"SKIP_MIGRATION": "1",
 				"DLINE_DOCS_DIR": "${workspaceFolder}/dist/tmp/Dline"
 			}
 		},
@@ -129,6 +137,8 @@
 				"IS_DEV": "true",
 				"DEV_WORKSPACE_FOLDER": "${workspaceFolder}",
 				"DLINE_ENVIRONMENT": "production",
+				"CLINE_LOG_LEVEL": "debug",
+				"SKIP_MIGRATION": "1",
 				"DLINE_HOME_DIR": "${workspaceFolder}/dist/tmp/.dline",
 				"DLINE_DOCS_DIR": "${workspaceFolder}/dist/tmp/Dline"
 			}
