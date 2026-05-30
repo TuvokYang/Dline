@@ -259,6 +259,14 @@ export function buildToolsWithReasoning(messages: ClineMessage[]): ToolWithReaso
 			continue
 		}
 
+		// Skip partial tool messages — only render completed tools.
+		// Intermediate partial states (e.g. path="e" while streaming
+		// "e:\workspace\...") produce stale entries that the dedup
+		// logic below cannot clean up because paths don't match.
+		if (msg.partial === true) {
+			continue
+		}
+
 		if (isLowStakesTool(msg)) {
 			const parsedTool = parseToolSafe(msg.text)
 			const previous = result.at(-1)

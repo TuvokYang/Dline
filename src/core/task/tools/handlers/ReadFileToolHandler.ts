@@ -151,6 +151,15 @@ export class ReadFileToolHandler implements IFullyManagedTool {
 	async handlePartialBlock(block: ToolUse, uiHelpers: StronglyTypedUIHelpers): Promise<void> {
 		const relPath = block.params.path
 
+		// TODO: Add path integrity check here to skip obviously incomplete paths
+		// during streaming (e.g. single-char paths like "e" before the full
+		// "e:\workspace\..." is available). This would reduce meaningless
+		// intermediate partial messages sent to the frontend.
+		// Example guard:
+		//   if (relPath && relPath.length < 3 && !relPath.includes(path.sep) && !relPath.includes("/")) {
+		//       return  // wait for a more complete path
+		//   }
+
 		const config = uiHelpers.getConfig()
 		if (config.isSubagentExecution) {
 			return

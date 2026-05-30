@@ -778,23 +778,28 @@ export class Task {
 		let askTs: number
 		if (partial !== undefined) {
 			const clineMessages = this.messageStateHandler.getClineMessages()
-			const lastMessage = clineMessages.at(-1)
-			const lastMessageIndex = clineMessages.length - 1
-
-			const isUpdatingPreviousPartial =
-				lastMessage && lastMessage.partial && lastMessage.type === "ask" && lastMessage.ask === type
+			// Find the most recent partial message of the same type+ask, not just
+			// at(-1). Streaming output interleaves reasoning/text between tool
+			// partial updates, so the last message overall may not be the partial
+			// we need to update. (Same root cause as the say() fix above.)
+			const lastPartialIndex = findLastIndex(
+				clineMessages,
+				(m) => m.partial === true && m.type === "ask" && m.ask === type,
+			)
+			const isUpdatingPreviousPartial = lastPartialIndex !== -1
+			const lastPartialMessage = lastPartialIndex !== -1 ? clineMessages[lastPartialIndex] : undefined
 			if (partial) {
 				if (isUpdatingPreviousPartial) {
 					// existing partial message, so update it
-					askTs = lastMessage.ts
-					await this.messageStateHandler.updateClineMessage(lastMessageIndex, {
+					askTs = lastPartialMessage!.ts
+					await this.messageStateHandler.updateClineMessage(lastPartialIndex, {
 						text,
 						partial,
 					})
 					// todo be more efficient about saving and posting only new data or one whole message at a time so ignore partial for saves, and only post parts of partial message instead of whole array in new listener
 					// await this.saveClineMessagesAndUpdateHistory()
 					// await this.postStateToWebview()
-					const protoMessage = convertClineMessageToProto(lastMessage)
+					const protoMessage = convertClineMessageToProto(lastPartialMessage!)
 					await sendPartialMessageEvent(protoMessage)
 					await notifyAskVisible(askTs)
 					throw new Error("Current ask promise was ignored 1")
@@ -831,15 +836,15 @@ export class Task {
 					The lesson here is if you see flickering when rendering lists, it's likely because the key prop is not stable.
 					So in this case we must make sure that the message ts is never altered after first setting it.
 					*/
-				askTs = lastMessage.ts
+				askTs = lastPartialMessage!.ts
 				this.taskState.lastMessageTs = askTs
 				// lastMessage.ts = askTs
-				await this.messageStateHandler.updateClineMessage(lastMessageIndex, {
+				await this.messageStateHandler.updateClineMessage(lastPartialIndex, {
 					text,
 					partial: false,
 				})
 				// await this.postStateToWebview()
-				const protoMessage = convertClineMessageToProto(lastMessage)
+				const protoMessage = convertClineMessageToProto(lastPartialMessage!)
 				await sendPartialMessageEvent(protoMessage)
 				await notifyAskVisible(askTs)
 			} else {
@@ -954,21 +959,30 @@ export class Task {
 		}
 
 		if (partial !== undefined) {
-			const lastMessage = this.messageStateHandler.getClineMessages().at(-1)
-			const isUpdatingPreviousPartial =
-				lastMessage && lastMessage.partial && lastMessage.type === "say" && lastMessage.say === type
+			const clineMessages = this.messageStateHandler.getClineMessages()
+			// Find the most recent partial message of the same type+say, not just
+			// at(-1). Streaming output interleaves reasoning/text between tool
+			// partial updates, so the last message overall may not be the partial
+			// we need to update. Using at(-1) alone causes duplicate partial
+			// messages with different ts, leaving stale intermediate-state entries
+			// (e.g. path="e") that frontend dedup cannot clean up.
+			const lastPartialIndex = findLastIndex(
+				clineMessages,
+				(m) => m.partial === true && m.type === "say" && m.say === type,
+			)
+			const isUpdatingPreviousPartial = lastPartialIndex !== -1
+			const lastPartialMessage = lastPartialIndex !== -1 ? clineMessages[lastPartialIndex] : undefined
 			if (partial) {
 				if (isUpdatingPreviousPartial) {
 					// existing partial message, so update it
-					const lastIndex = this.messageStateHandler.getClineMessages().length - 1
-					await this.messageStateHandler.updateClineMessage(lastIndex, {
+					await this.messageStateHandler.updateClineMessage(lastPartialIndex, {
 						text,
 						images,
 						files,
 						partial,
 					})
 
-					const protoMessage = convertClineMessageToProto(lastMessage)
+					const protoMessage = convertClineMessageToProto(lastPartialMessage!)
 					await sendPartialMessageEvent(protoMessage)
 					return undefined
 				}
@@ -992,10 +1006,9 @@ export class Task {
 			// partial=false means its a complete version of a previously partial message
 			if (isUpdatingPreviousPartial) {
 				// this is the complete version of a previously partial message, so replace the partial with the complete version
-				this.taskState.lastMessageTs = lastMessage.ts
-				const lastIndex = this.messageStateHandler.getClineMessages().length - 1
+				this.taskState.lastMessageTs = lastPartialMessage!.ts
 				// updateClineMessage emits the change event and saves to disk
-				await this.messageStateHandler.updateClineMessage(lastIndex, {
+				await this.messageStateHandler.updateClineMessage(lastPartialIndex, {
 					text,
 					images,
 					files,
@@ -1003,7 +1016,7 @@ export class Task {
 				})
 
 				// await this.postStateToWebview()
-				const protoMessage = convertClineMessageToProto(lastMessage)
+				const protoMessage = convertClineMessageToProto(lastPartialMessage!)
 				await sendPartialMessageEvent(protoMessage) // more performant than an entire postStateToWebview
 				return undefined
 			}

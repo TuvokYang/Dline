@@ -27,7 +27,7 @@ import pWaitFor from "p-wait-for"
 import * as path from "path"
 import { ClineEnv } from "@/config"
 import type { FolderLockWithRetryResult } from "@/core/locks/types"
-import { getDlineDocumentsPath } from "@/core/storage/disk"
+import { getDlineDocumentsPath, readTaskHistoryFromState } from "@/core/storage/disk"
 import { HostProvider } from "@/hosts/host-provider"
 import { ExtensionRegistryInfo } from "@/registry"
 import { AuthService } from "@/services/auth/AuthService"
@@ -1159,7 +1159,11 @@ export class Controller {
 	*/
 
 	async updateTaskHistory(item: HistoryItem): Promise<HistoryItem[]> {
-		const history = this.stateManager.getGlobalStateKey("taskHistory")
+		// Read full history from disk instead of the in-memory cache.
+		// The cache is initially populated with only 5 recent items
+		// (readTaskHistoryRecent) for the RECENT list. Writing the
+		// truncated cache back to disk would permanently lose history.
+		const history = await readTaskHistoryFromState()
 		const existingItemIndex = history.findIndex((h) => h.id === item.id)
 		if (existingItemIndex !== -1) {
 			history[existingItemIndex] = item

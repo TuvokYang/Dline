@@ -1,5 +1,16 @@
 # Changelog
 
+## [dev-5.0.4]
+
+### Fixed
+
+- Warmup documents path cache at startup so getDlineDocumentsPathSync uses real system Documents directory instead of hardcoded os.homedir() fallback
+- ClineEndpoint tests: fix .cline → .dline path mismatch in test directory creation
+- AgentConfigLoader tests: fix getInstance parameter from tempHome to directoryPath
+- Fix streaming partial message dedup: Task.say() and Task.ask() use findLastIndex instead of at(-1) to locate partial messages by type, preventing stale intermediate-state tool entries (e.g. path="e") when reasoning/text interleaves between tool partial updates
+- Fix ToolGroupRenderer showing phantom files: filter partial===true messages in buildToolsWithReasoning as defense layer
+- Fix taskHistory.json truncation: Controller.updateTaskHistory now reads from disk (readTaskHistoryFromState) instead of depending on the truncated in-memory cache initialized by readTaskHistoryRecent(5), preventing permanent history loss during race with background loadFullTaskHistoryAsync
+- Add TODO comment in ReadFileToolHandler.handlePartialBlock for future path integrity check during streaming
 ## [5.0.3]
 
 ### Added
