@@ -46,6 +46,19 @@
 			}
 		},
 		{
+			"label": "watch:debug",
+			"dependsOn": [
+				"npm: protos",
+				"npm: dev:webview",
+				"npm: watch:esbuild",
+				"npm: watch:tsc"
+			],
+			"presentation": {
+				"reveal": "always"
+			},
+			"group": "build"
+		},
+		{
 			"label": "watch:test",
 			"dependsOn": [
 				"npm: protos",

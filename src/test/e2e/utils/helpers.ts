@@ -84,7 +84,7 @@ export class E2ETestHelper {
 
 				try {
 					const title = await frame.title()
-					if (title.startsWith("Cline")) {
+					if (title.startsWith("Cline") || title.startsWith("Dline")) {
 						this.cachedFrame = frame
 						return frame
 					}
@@ -119,16 +119,25 @@ export class E2ETestHelper {
 	}
 
 	public async signin(webview: Frame): Promise<void> {
-		await webview.getByRole("button", { name: "Login to Cline" }).click({ delay: 100 })
+		await webview.getByRole("button", { name: /Login to (Cline|Dline)/ }).click({ delay: 100 })
 
 		// Verify start up page is no longer visible
-		await expect(webview.getByRole("button", { name: "Login to Cline" })).not.toBeVisible()
+		await expect(webview.getByRole("button", { name: /Login to (Cline|Dline)/ })).not.toBeVisible()
 
-		await webview.getByRole("button", { name: "Close" }).click({ delay: 50 })
+		// Close Kanban announcement dialog if present (shadcn Dialog X button)
+		const kanbanHeading = webview.getByRole("heading", { name: /Introducing Cline Kanban/ })
+		try {
+			await kanbanHeading.waitFor({ state: "visible", timeout: 5_000 })
+			// Click the Dialog's close button (X button with aria-label "Close")
+			await webview.locator('[role="dialog"] button[aria-label="Close"]').click()
+			await expect(kanbanHeading).not.toBeVisible()
+		} catch {
+			// Kanban dialog not shown — ignore
+		}
 	}
 
 	public static async openClineSidebar(page: Page): Promise<void> {
-		await page.getByRole("tab", { name: /Cline/ }).locator("a").click()
+		await page.getByRole("tab", { name: /Dline/ }).locator("a").click()
 	}
 
 	public static async runCommandPalette(page: Page, command: string): Promise<void> {

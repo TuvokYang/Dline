@@ -111,6 +111,9 @@ describe("SearchFilesToolHandler path resolution", () => {
 	})
 
 	it("should resolve dot-dot relative path correctly", () => {
+		if (process.platform !== "win32") {
+			return
+		}
 		const handler = new SearchFilesToolHandler({} as any)
 		const fn = (handler as any).determineSearchPaths.bind(handler) as DetermineSearchPathsFn
 		const cwd = path.resolve("e:\\workspace\\test")

@@ -242,12 +242,20 @@ describe("disk - hooks functionality", () => {
 describe("disk - atomic writes", () => {
 	let sandbox: sinon.SinonSandbox
 	let testGlobalStorageDir: string
+	let originalDlineDocsDir: string | undefined
 
 	// Setup HostProvider for tests with real temp directory
 	before(async () => {
 		// Create a real temp directory for the tests
 		testGlobalStorageDir = path.join(os.tmpdir(), `cline-test-storage-${Date.now()}-${Math.random().toString(36).slice(2)}`)
 		await fs.mkdir(testGlobalStorageDir, { recursive: true })
+
+		// Save and override DLINE_DOCS_DIR so disk.ts writes to temp dir instead of real path
+		originalDlineDocsDir = process.env.DLINE_DOCS_DIR
+		process.env.DLINE_DOCS_DIR = testGlobalStorageDir
+
+		// Ensure tasks subdirectory exists (getTaskHistoryStateFilePath requires it)
+		await fs.mkdir(path.join(testGlobalStorageDir, "tasks"), { recursive: true })
 
 		// Initialize HostProvider with the real temp directory
 		setVscodeHostProviderMock({
@@ -257,6 +265,13 @@ describe("disk - atomic writes", () => {
 
 	after(async () => {
 		HostProvider.reset()
+
+		// Restore original DLINE_DOCS_DIR environment variable
+		if (originalDlineDocsDir === undefined) {
+			delete process.env.DLINE_DOCS_DIR
+		} else {
+			process.env.DLINE_DOCS_DIR = originalDlineDocsDir
+		}
 
 		// Clean up temp directory
 		try {
