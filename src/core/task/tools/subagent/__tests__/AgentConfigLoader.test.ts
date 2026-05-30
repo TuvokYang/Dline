@@ -112,7 +112,7 @@ Reviewer prompt`,
 		)
 		await fs.writeFile(path.join(directoryPath, "ignored.txt"), "not yaml", "utf8")
 
-		const loader = AgentConfigLoader.getInstance(tempHome)
+		const loader = AgentConfigLoader.getInstance(directoryPath)
 		await loader.load()
 
 		const localAgent = loader.getCachedConfig("local-agent")
@@ -144,7 +144,7 @@ Reviewer prompt`,
 			"utf8",
 		)
 
-		const loader = AgentConfigLoader.getInstance(tempHome)
+		const loader = AgentConfigLoader.getInstance(directoryPath)
 		await loader.load()
 
 		const withToolNames = loader.getAllCachedConfigsWithToolNames()

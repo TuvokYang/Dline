@@ -39,6 +39,12 @@ export async function initialize(storageContext: StorageContext): Promise<Webvie
 	Logger.subscribe((msg: string) => HostProvider.get().logToChannel(msg)) // File system logging
 	Logger.subscribe((msg: string) => HostProvider.env.debugLog({ value: msg })) // Host debug logging
 
+	// Prime cachedDocumentsPath so synchronous consumers (getDlineDocumentsPathSync)
+	// use the correct system Documents directory. Must run before StateManager.init
+	// which calls AgentConfigLoader.getInstance → getDlineDocumentsPathSync.
+	const { warmupDocumentsPathCache } = await import("./core/storage/disk")
+	await warmupDocumentsPathCache()
+
 	// Initialize ClineEndpoint configuration (reads bundled and ~/.cline/endpoints.json if present)
 	// This must be done before any other code that calls ClineEnv.config()
 	// Throws ClineConfigurationError if config file exists but is invalid

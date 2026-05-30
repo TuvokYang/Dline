@@ -77,7 +77,11 @@ export const GlobalFileNames = {
 	remoteConfig: (orgId: string) => `remote_config_${orgId}.json`,
 }
 
+let cachedDocumentsPath: string | undefined
+
 export async function getDocumentsPath(): Promise<string> {
+	if (cachedDocumentsPath) return cachedDocumentsPath
+
 	if (process.platform === "win32") {
 		try {
 			const { stdout: docsPath } = await execa("powershell", [
@@ -85,7 +89,10 @@ export async function getDocumentsPath(): Promise<string> {
 				"-Command",
 				"[System.Environment]::GetFolderPath([System.Environment+SpecialFolder]::MyDocuments)",
 			])
-			if (docsPath.trim()) return docsPath.trim()
+			if (docsPath.trim()) {
+				cachedDocumentsPath = docsPath.trim()
+				return cachedDocumentsPath
+			}
 		} catch {
 			Logger.error("Failed to retrieve Windows Documents path.")
 		}
@@ -93,12 +100,17 @@ export async function getDocumentsPath(): Promise<string> {
 		try {
 			await execa("which", ["xdg-user-dir"])
 			const { stdout } = await execa("xdg-user-dir", ["DOCUMENTS"])
-			if (stdout.trim()) return stdout.trim()
+			if (stdout.trim()) {
+				cachedDocumentsPath = stdout.trim()
+				return cachedDocumentsPath
+			}
 		} catch {
 			Logger.error("Failed to retrieve XDG Documents path.")
 		}
 	}
-	return path.join(os.homedir(), "Documents")
+
+	cachedDocumentsPath = path.join(os.homedir(), "Documents")
+	return cachedDocumentsPath
 }
 
 export function getDlineHomePath(): string {
@@ -107,11 +119,25 @@ export function getDlineHomePath(): string {
 }
 export function getDlineDocumentsPathSync(): string {
 	if (process.env.DLINE_DOCS_DIR) return process.env.DLINE_DOCS_DIR
+	if (cachedDocumentsPath) return path.join(cachedDocumentsPath, "dline")
 	return path.join(os.homedir(), "Documents", "dline")
 }
+
+/**
+ * Prime the Documents path cache at startup so synchronous consumers
+ * (getDlineDocumentsPathSync) use the correct system Documents directory.
+ * Call once during extension initialization, before any filesystem operations.
+ */
+export async function warmupDocumentsPathCache(): Promise<void> {
+	await getDocumentsPath()
+}
+let cachedDlineDocumentsPath: string | undefined
+
 export async function getDlineDocumentsPath(): Promise<string> {
 	if (process.env.DLINE_DOCS_DIR) return process.env.DLINE_DOCS_DIR
-	return path.join(await getDocumentsPath(), "dline")
+	if (cachedDlineDocumentsPath) return cachedDlineDocumentsPath
+	cachedDlineDocumentsPath = path.join(await getDocumentsPath(), "dline")
+	return cachedDlineDocumentsPath
 }
 
 export async function ensureTaskDirectoryExists(taskId: string): Promise<string> {
