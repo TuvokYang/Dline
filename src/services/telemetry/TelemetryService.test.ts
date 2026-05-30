@@ -9,10 +9,7 @@
 
 import * as assert from "assert"
 import * as sinon from "sinon"
-import { ClineEndpoint } from "@/config"
 import { HostProvider } from "@/hosts/host-provider"
-import * as otelConfigModule from "@/shared/services/config/otel-config"
-import * as posthogConfigModule from "@/shared/services/config/posthog-config"
 import { setVscodeHostProviderMock } from "@/test/host-provider-test-utils"
 import { NoOpTelemetryProvider, TelemetryProviderFactory } from "./TelemetryProviderFactory"
 import { TelemetryMetadata, TelemetryService } from "./TelemetryService"
@@ -342,122 +339,36 @@ describe("Telemetry system is abstracted and can easily switch between providers
 	})
 
 	describe("Factory Configuration", () => {
-		let sandbox: sinon.SinonSandbox
+		it("should return only no-op configuration by default", () => {
+			const configs = TelemetryProviderFactory.getDefaultConfigs()
 
-		beforeEach(() => {
-			sandbox = sinon.createSandbox()
+			assert.ok(configs.length > 0, "Should return at least one configuration")
+			assert.strictEqual(configs.length, 1, "Should return exactly one configuration")
+			assert.strictEqual(configs[0].type, "no-op", "Should return no-op configuration")
 		})
 
-		afterEach(() => {
-			sandbox.restore()
+		it("should always return no-op configuration regardless of conditions", () => {
+			// Test multiple calls - should always return same no-op config
+			const configs1 = TelemetryProviderFactory.getDefaultConfigs()
+			const configs2 = TelemetryProviderFactory.getDefaultConfigs()
+
+			assert.strictEqual(configs1.length, 1, "First call should return exactly one config")
+			assert.strictEqual(configs1[0].type, "no-op", "First call should return no-op")
+			assert.strictEqual(configs2.length, 1, "Second call should return exactly one config")
+			assert.strictEqual(configs2[0].type, "no-op", "Second call should return no-op")
 		})
 
-		it("should return default configurations", () => {
-			// Mock PostHog config validation to return true for this test
-			sandbox.stub(posthogConfigModule, "isPostHogConfigValid").returns(true)
-			sandbox.stub(ClineEndpoint, "isSelfHosted").returns(false)
+		it("should create NoOpTelemetryProvider from factory", async () => {
+			const providers = await TelemetryProviderFactory.createProviders()
 
-			const defaultConfigs = TelemetryProviderFactory.getDefaultConfigs()
-
-			// Should include at least PostHog
-			assert.ok(defaultConfigs.length > 0, "Should return at least one configuration")
+			assert.ok(providers.length > 0, "Should return at least one provider")
 			assert.ok(
-				defaultConfigs.some((c) => c.type === "posthog"),
-				"Should include PostHog configuration",
+				providers[0] instanceof NoOpTelemetryProvider,
+				"Should return NoOpTelemetryProvider instance",
 			)
-		})
+			assert.strictEqual(providers[0].isEnabled(), false, "NoOp provider should be disabled")
 
-		it("should NOT include PostHog config when in selfHosted mode", () => {
-			// Stub ClineEndpoint.isSelfHosted() to return true (selfHosted mode)
-			sandbox.stub(ClineEndpoint, "isSelfHosted").returns(true)
-			// Even if PostHog config is valid, it should be skipped
-			sandbox.stub(posthogConfigModule, "isPostHogConfigValid").returns(true)
-
-			const configs = TelemetryProviderFactory.getDefaultConfigs()
-
-			// Should NOT include PostHog when in selfHosted mode
-			const hasPosthog = configs.some((c) => c.type === "posthog")
-			assert.strictEqual(hasPosthog, false, "Should NOT include PostHog configuration in selfHosted mode")
-		})
-
-		it("should include PostHog config when NOT in selfHosted mode and config is valid", () => {
-			// Stub ClineEndpoint.isSelfHosted() to return false (normal mode)
-			sandbox.stub(ClineEndpoint, "isSelfHosted").returns(false)
-			sandbox.stub(posthogConfigModule, "isPostHogConfigValid").returns(true)
-
-			const configs = TelemetryProviderFactory.getDefaultConfigs()
-
-			// Should include PostHog when NOT in selfHosted mode and config is valid
-			const hasPosthog = configs.some((c) => c.type === "posthog")
-			assert.strictEqual(hasPosthog, true, "Should include PostHog configuration when not in selfHosted mode")
-		})
-
-		it("should NOT include build-time OTEL config when in selfHosted mode", () => {
-			// Stub ClineEndpoint.isSelfHosted() to return true (selfHosted mode)
-			sandbox.stub(ClineEndpoint, "isSelfHosted").returns(true)
-			// Even if build-time OTEL config is valid, it should be skipped
-			sandbox.stub(otelConfigModule, "getValidOpenTelemetryConfig").returns({
-				enabled: true,
-				metricsExporter: "otlp",
-			})
-			// Disable runtime OTEL to isolate test
-			sandbox.stub(otelConfigModule, "getValidRuntimeOpenTelemetryConfig").returns(null)
-			// Disable PostHog to isolate test
-			sandbox.stub(posthogConfigModule, "isPostHogConfigValid").returns(false)
-
-			const configs = TelemetryProviderFactory.getDefaultConfigs()
-
-			// Should NOT include build-time OTEL when in selfHosted mode
-			const hasOtel = configs.some((c) => c.type === "opentelemetry")
-			assert.strictEqual(hasOtel, false, "Should NOT include build-time OTEL configuration in selfHosted mode")
-		})
-
-		it("should include build-time OTEL config when NOT in selfHosted mode", () => {
-			// Stub ClineEndpoint.isSelfHosted() to return false (normal mode)
-			sandbox.stub(ClineEndpoint, "isSelfHosted").returns(false)
-			sandbox.stub(otelConfigModule, "getValidOpenTelemetryConfig").returns({
-				enabled: true,
-				metricsExporter: "otlp",
-			})
-			// Disable runtime OTEL to isolate test
-			sandbox.stub(otelConfigModule, "getValidRuntimeOpenTelemetryConfig").returns(null)
-			// Disable PostHog to isolate test
-			sandbox.stub(posthogConfigModule, "isPostHogConfigValid").returns(false)
-
-			const configs = TelemetryProviderFactory.getDefaultConfigs()
-
-			// Should include build-time OTEL when NOT in selfHosted mode
-			const hasOtel = configs.some((c) => c.type === "opentelemetry")
-			assert.strictEqual(hasOtel, true, "Should include build-time OTEL configuration when not in selfHosted mode")
-		})
-
-		it("should STILL include runtime env OTEL config even in selfHosted mode", () => {
-			// Stub ClineEndpoint.isSelfHosted() to return true (selfHosted mode)
-			sandbox.stub(ClineEndpoint, "isSelfHosted").returns(true)
-			// Disable build-time OTEL
-			sandbox.stub(otelConfigModule, "getValidOpenTelemetryConfig").returns(null)
-			// Enable runtime OTEL (user explicitly configured it)
-			sandbox.stub(otelConfigModule, "getValidRuntimeOpenTelemetryConfig").returns({
-				enabled: true,
-				metricsExporter: "otlp",
-				otlpEndpoint: "http://user-collector:4317",
-			})
-			// Disable PostHog to isolate test
-			sandbox.stub(posthogConfigModule, "isPostHogConfigValid").returns(false)
-
-			const configs = TelemetryProviderFactory.getDefaultConfigs()
-
-			// Should STILL include runtime env OTEL even in selfHosted mode (user explicitly enabled it)
-			const hasOtel = configs.some((c) => c.type === "opentelemetry")
-			assert.strictEqual(hasOtel, true, "Should include runtime env OTEL configuration even in selfHosted mode")
-
-			// Verify it has bypassUserSettings: true
-			const otelConfig = configs.find((c) => c.type === "opentelemetry")
-			assert.strictEqual(
-				(otelConfig as any).bypassUserSettings,
-				true,
-				"Runtime env OTEL should have bypassUserSettings: true",
-			)
+			await Promise.all(providers.map((p) => p.dispose()))
 		})
 
 		it("should handle provider switching seamlessly", async () => {
