@@ -426,7 +426,10 @@ export class Controller {
 		// so the task is clean before the mode change. Only cancel if there is
 		// actual active work to avoid redundant cancellation after user cancel.
 		if (!didSwitchToActMode && this.task) {
-			const hasActiveWork = this.task.taskState.isStreaming || this.task.taskState.isWaitingForFirstChunk
+			const hasActiveWork =
+				this.task.taskState.isStreaming ||
+				this.task.taskState.isWaitingForFirstChunk ||
+				this.task.taskState.isExecutingSubagent
 			if (hasActiveWork) {
 				await this.cancelTask()
 			}
@@ -485,7 +488,10 @@ export class Controller {
 		// If the task is already idle (waiting for user input, completed,
 		// or paused), still clean up residual messages so the frontend
 		// doesn't show a stale Cancel button.
-		const hasActiveWork = this.task.taskState.isStreaming || this.task.taskState.isWaitingForFirstChunk
+		const hasActiveWork =
+			this.task.taskState.isStreaming ||
+			this.task.taskState.isWaitingForFirstChunk ||
+			this.task.taskState.isExecutingSubagent
 		if (!hasActiveWork) {
 			const msgs = this.task.messageStateHandler.getClineMessages()
 			// Remove any partial messages left over from streaming

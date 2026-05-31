@@ -74,6 +74,9 @@ export class TaskState {
 	didFinishAbortingStream = false
 	abandoned = false
 
+	// Subagent execution tracking for cancel detection
+	isExecutingSubagent = false
+
 	// Hook execution tracking for cancellation
 	activeHookExecution?: HookExecution
 

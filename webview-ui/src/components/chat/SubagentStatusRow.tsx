@@ -16,12 +16,14 @@ import {
 	NetworkIcon,
 } from "lucide-react"
 import { useEffect, useMemo, useRef, useState } from "react"
+import { Button } from "@/components/ui/button"
 import MarkdownBlock from "../common/MarkdownBlock"
 
 interface SubagentStatusRowProps {
 	message: ClineMessage
 	isLast: boolean
 	lastModifiedMessage?: ClineMessage
+	onCancelCommand?: () => void
 }
 
 type DisplayStatus = SubagentExecutionStatus | "cancelled"
@@ -177,7 +179,7 @@ function SubagentPromptText({ prompt, isExpanded, onShowMore }: SubagentPromptTe
 	)
 }
 
-export default function SubagentStatusRow({ message, isLast, lastModifiedMessage }: SubagentStatusRowProps) {
+export default function SubagentStatusRow({ message, isLast, lastModifiedMessage, onCancelCommand }: SubagentStatusRowProps) {
 	const [expandedItems, setExpandedItems] = useState<Record<number, boolean>>({})
 	const [expandedPrompts, setExpandedPrompts] = useState<Record<number, boolean>>({})
 	const data = useMemo(() => parseSubagentRowData(message), [message])
@@ -195,6 +197,8 @@ export default function SubagentStatusRow({ message, isLast, lastModifiedMessage
 			lastModifiedMessage?.ask === "resume_task" ||
 			lastModifiedMessage?.ask === "resume_completed_task" ||
 			resumedBeforeNextVisibleMessage)
+
+	const showCancelButton = data.status === "running" && !wasCancelled && typeof onCancelCommand === "function"
 
 	const singular = data.items.length === 1
 	const title = singular ? "Cline wants to use a subagent:" : "Cline wants to use subagents:"
@@ -217,6 +221,18 @@ export default function SubagentStatusRow({ message, isLast, lastModifiedMessage
 			<div className="flex items-center gap-2.5 mb-3">
 				<NetworkIcon className="size-2 text-foreground" />
 				<span className="font-bold text-foreground">{title}</span>
+				{showCancelButton && (
+					<Button
+						className="ml-auto"
+						onClick={(e) => {
+							e.stopPropagation()
+							onCancelCommand?.()
+						}}
+						size="sm"
+						variant="secondary">
+						cancel
+					</Button>
+				)}
 			</div>
 			<div className="space-y-2">
 				{data.items.map((entry, index) => {

@@ -766,7 +766,7 @@ export const ChatRowContent = memo(
 		}
 
 		if (message.ask === "use_subagents" || message.say === "use_subagents") {
-			return <SubagentStatusRow isLast={isLast} lastModifiedMessage={lastModifiedMessage} message={message} />
+			return <SubagentStatusRow isLast={isLast} lastModifiedMessage={lastModifiedMessage} message={message} onCancelCommand={onCancelCommand} />
 		}
 
 		if (message.ask === "use_mcp_server" || message.say === "use_mcp_server") {
@@ -1102,7 +1102,7 @@ export const ChatRowContent = memo(
 						// hook_output_stream messages are combined with hook_status messages, so we don't render them separately
 						return <InvisibleSpacer />
 					case "subagent":
-						return <SubagentStatusRow isLast={isLast} lastModifiedMessage={lastModifiedMessage} message={message} />
+						return <SubagentStatusRow isLast={isLast} lastModifiedMessage={lastModifiedMessage} message={message} onCancelCommand={onCancelCommand} />
 					case "shell_integration_warning_with_suggestion":
 						const isBackgroundModeEnabled = vscodeTerminalExecutionMode === "backgroundExec"
 						return (

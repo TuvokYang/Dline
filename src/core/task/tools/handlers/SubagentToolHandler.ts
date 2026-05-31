@@ -159,6 +159,7 @@ export class UseSubagentsToolHandler implements IFullyManagedTool {
 		}
 
 		config.taskState.consecutiveMistakeCount = 0
+		config.taskState.isExecutingSubagent = true
 
 		const entries: SubagentStatusItem[] = prompts.map((prompt, index) => ({
 			index: index + 1,
@@ -257,6 +258,7 @@ export class UseSubagentsToolHandler implements IFullyManagedTool {
 
 		const settled = await Promise.allSettled(execution)
 		clearInterval(abortPollInterval)
+		config.taskState.isExecutingSubagent = false
 		let usageTokensIn = 0
 		let usageTokensOut = 0
 		let usageCacheWrites = 0

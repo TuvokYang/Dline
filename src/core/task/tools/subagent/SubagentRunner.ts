@@ -413,6 +413,13 @@ export class SubagentRunner {
 			]
 
 			while (true) {
+				if (this.shouldAbort()) {
+					await this.abort()
+					const error = "Subagent run cancelled."
+					onProgress({ status: "failed", error, stats: { ...stats } })
+					return { status: "failed", error, stats }
+				}
+
 				if (
 					usageState.lastRequest &&
 					this.shouldCompactBeforeNextRequest(usageState.lastRequest.totalTokens, api, providerInfo.model.id)
@@ -667,6 +674,14 @@ export class SubagentRunner {
 					const serializedToolResult = serializeToolResult(toolResult)
 					const toolDescription = handler?.getDescription(toolCallBlock) || `[${toolName}]`
 					pushSubagentToolResultBlock(toolResultBlocks, call, toolDescription, serializedToolResult)
+
+					// Check for abort after each tool execution to exit early
+					if (this.shouldAbort()) {
+						await this.abort()
+						const error = "Subagent run cancelled."
+						onProgress({ status: "failed", error, stats: { ...stats } })
+						return { status: "failed", error, stats }
+					}
 				}
 
 				conversation.push({
