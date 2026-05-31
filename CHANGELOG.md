@@ -11,6 +11,7 @@
 - Streaming partial message dedup for interleaved reasoning/text
 - ToolGroupRenderer phantom file filter
 - taskHistory.json truncation from in-memory cache
+- Fix sporadic empty command output in background exec mode caused by jschardet encoding misdetection
 
 ## [5.0.3]
 
