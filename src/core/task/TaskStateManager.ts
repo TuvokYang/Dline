@@ -51,4 +51,40 @@ export class TaskStateManager {
 		// Tell global SM to persist this change (debounced disk write)
 		this.globalSm.markTaskSettingDirty(this.taskId, "mode")
 	}
+
+	// ──────────────── profiles ────────────────
+
+	/**
+	 * Get the plan mode profile. Returns undefined if not set at task level,
+	 * allowing fallback to global settings.
+	 */
+	get planModeProfile(): string | undefined {
+		return this.cache.planModeProfile as string | undefined
+	}
+
+	/**
+	 * Set the plan mode profile. Writes to both local cache (instant) and
+	 * delegates to global StateManager for debounced disk persistence.
+	 */
+	setPlanModeProfile(profile: string): void {
+		this.cache.planModeProfile = profile
+		this.globalSm.markTaskSettingDirty(this.taskId, "planModeProfile")
+	}
+
+	/**
+	 * Get the act mode profile. Returns undefined if not set at task level,
+	 * allowing fallback to global settings.
+	 */
+	get actModeProfile(): string | undefined {
+		return this.cache.actModeProfile as string | undefined
+	}
+
+	/**
+	 * Set the act mode profile. Writes to both local cache (instant) and
+	 * delegates to global StateManager for debounced disk persistence.
+	 */
+	setActModeProfile(profile: string): void {
+		this.cache.actModeProfile = profile
+		this.globalSm.markTaskSettingDirty(this.taskId, "actModeProfile")
+	}
 }

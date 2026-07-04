@@ -1186,22 +1186,36 @@ export class Controller {
 
 	async getStateToPostToWebview(): Promise<ExtensionState> {
 		const startTime = performance.now()
-		// Get API configuration from cache for immediate access
-		const onboardingModels = getClineOnboardingModels()
-		const apiConfiguration = this.stateManager.getApiConfiguration()
-		const lastShownAnnouncementId = this.stateManager.getGlobalStateKey("lastShownAnnouncementId")
-		const taskHistory = this.stateManager.getGlobalStateKey("taskHistory")
-		const autoApprovalSettings = this.stateManager.getGlobalSettingsKey("autoApprovalSettings")
-		const browserSettings = this.stateManager.getGlobalSettingsKey("browserSettings")
 		// Ensure per-task settings isolation: set active task before reading
-		// task-level keys like "mode" so multi-controller setups don't interfere.
-		const focusChainSettings = this.stateManager.getGlobalSettingsKey("focusChainSettings")
-		const preferredLanguage = this.stateManager.getGlobalSettingsKey("preferredLanguage")
+		// any settings that depend on task-level overrides (apiConfiguration, mode, etc.).
 		if (this.task?.taskId) {
 			this.stateManager.setActiveTaskId(this.task.taskId)
 		} else {
 			this.stateManager.setActiveTaskId(undefined)
 		}
+		// Get API configuration from cache — must be AFTER setActiveTaskId
+		// so that getSettingWithOverride() can read task-level profile overrides.
+		const onboardingModels = getClineOnboardingModels()
+		let apiConfiguration = this.stateManager.getApiConfiguration()
+
+		// Override with task-level profile settings if available (multi-window isolation fix)
+		if (this.task?.taskSm) {
+			const taskPlanProfile = this.task.taskSm.planModeProfile
+			const taskActProfile = this.task.taskSm.actModeProfile
+			if (taskPlanProfile !== undefined || taskActProfile !== undefined) {
+				apiConfiguration = {
+					...apiConfiguration,
+					...(taskPlanProfile !== undefined && { planModeProfile: taskPlanProfile }),
+					...(taskActProfile !== undefined && { actModeProfile: taskActProfile }),
+				}
+			}
+		}
+		const lastShownAnnouncementId = this.stateManager.getGlobalStateKey("lastShownAnnouncementId")
+		const taskHistory = this.stateManager.getGlobalStateKey("taskHistory")
+		const autoApprovalSettings = this.stateManager.getGlobalSettingsKey("autoApprovalSettings")
+		const browserSettings = this.stateManager.getGlobalSettingsKey("browserSettings")
+		const focusChainSettings = this.stateManager.getGlobalSettingsKey("focusChainSettings")
+		const preferredLanguage = this.stateManager.getGlobalSettingsKey("preferredLanguage")
 		const mode = this.task?.taskSm?.mode ?? this.stateManager.getGlobalSettingsKey("mode")
 		const strictPlanModeEnabled = this.stateManager.getGlobalSettingsKey("strictPlanModeEnabled")
 		const yoloModeToggled = this.stateManager.getGlobalSettingsKey("yoloModeToggled")
