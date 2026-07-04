@@ -111,6 +111,8 @@ const LEGACY_REPLACE_BLOCK_CHAR = ">"
 // Replace the exact string constants with flexible regex patterns
 const SEARCH_BLOCK_START_REGEX = /^[-]{7,} SEARCH>?$/
 const LEGACY_SEARCH_BLOCK_START_REGEX = /^[<]{7,} SEARCH>?$/
+const SHORT_SEARCH_START_REGEX = /^[-]{1,6} SEARCH>?$/
+const LEGACY_SHORT_SEARCH_START_REGEX = /^[<]{1,6} SEARCH>?$/
 
 const SEARCH_BLOCK_END_REGEX = /^[=]{7,}$/
 
@@ -129,6 +131,19 @@ function countLeadingChar(ch: string, line: string): number {
 // Helper functions to check if a line matches the flexible patterns
 function isSearchBlockStart(line: string): boolean {
 	return SEARCH_BLOCK_START_REGEX.test(line) || LEGACY_SEARCH_BLOCK_START_REGEX.test(line)
+}
+
+/** Check if line is a complete SEARCH marker with too few delimiters. */
+function isShortSearchStart(line: string): boolean {
+	return SHORT_SEARCH_START_REGEX.test(line) || LEGACY_SHORT_SEARCH_START_REGEX.test(line)
+}
+
+/** Count the SEARCH marker delimiter characters for dash and legacy markers. */
+function countSearchDelimiter(line: string): number {
+	const trimmed = line.trimStart()
+	if (trimmed.startsWith(SEARCH_BLOCK_CHAR)) return countLeadingChar(SEARCH_BLOCK_CHAR, trimmed)
+	if (trimmed.startsWith(LEGACY_SEARCH_BLOCK_CHAR)) return countLeadingChar(LEGACY_SEARCH_BLOCK_CHAR, trimmed)
+	return 0
 }
 
 /** Check if line is a SEARCH marker with EXACT dash count matching expectedN. */
@@ -457,6 +472,7 @@ async function constructNewFileContentV1(
 			lastLine.startsWith("=") ||
 			lastLine.startsWith(REPLACE_BLOCK_CHAR) ||
 			lastLine.startsWith(LEGACY_REPLACE_BLOCK_CHAR)) &&
+		!isShortSearchStart(lastLine) &&
 		!isSearchBlockStart(lastLine) &&
 		!isSearchBlockEnd(lastLine) &&
 		!isReplaceBlockEnd(lastLine)
@@ -465,12 +481,20 @@ async function constructNewFileContentV1(
 	}
 
 	for (const line of lines) {
+		if (!inSearch && !inReplace && isShortSearchStart(line)) {
+			blockDelimiterCount = countSearchDelimiter(line)
+			throw new DiffError(
+				DIFF_ERROR_CODE.DELIMITER_TOO_SHORT,
+				getPrompt("responses", "diffDelimiterTooShort", { count: String(blockDelimiterCount) }),
+			)
+		}
+
 		if (!inSearch && !inReplace && isSearchBlockStart(line)) {
 			inSearch = true
 			currentSearchContent = ""
 			currentReplaceContent = ""
 			currentBlockIndex++
-			blockDelimiterCount = countLeadingChar("-", line.trimStart())
+			blockDelimiterCount = countSearchDelimiter(line)
 			if (blockDelimiterCount < 7) {
 				throw new DiffError(
 					DIFF_ERROR_CODE.DELIMITER_TOO_SHORT,
@@ -899,8 +923,16 @@ class NewFileContentConstructor {
 		pendingNonStandardLineLimit: number,
 	): number {
 		let removeLineCount = 0
+		if (!this.isSearchingActive() && !this.isReplacingActive() && isShortSearchStart(line)) {
+			this.blockDelimiterCount = countSearchDelimiter(line)
+			throw new DiffError(
+				DIFF_ERROR_CODE.DELIMITER_TOO_SHORT,
+				getPrompt("responses", "diffDelimiterTooShort", { count: String(this.blockDelimiterCount) }),
+			)
+		}
+
 		if (!this.isSearchingActive() && !this.isReplacingActive() && isSearchBlockStart(line)) {
-			this.blockDelimiterCount = countLeadingChar("-", line.trimStart())
+			this.blockDelimiterCount = countSearchDelimiter(line)
 			if (this.blockDelimiterCount < 7) {
 				throw new DiffError(
 					DIFF_ERROR_CODE.DELIMITER_TOO_SHORT,
@@ -1054,7 +1086,7 @@ class NewFileContentConstructor {
 		if (!lineLimit) {
 			throw new DiffError(DIFF_ERROR_CODE.UNCLOSED_SEARCH, getPrompt("responses", "diffUnclosedSearch"))
 		}
-		const searchTagRegexp = /^([-]{3,}|[<]{3,}) SEARCH$/
+		const searchTagRegexp = /^([-]{7,}|[<]{7,}) SEARCH$/
 		const searchTagIndex = this.findLastMatchingLineIndex(searchTagRegexp, lineLimit)
 		if (searchTagIndex !== -1) {
 			const fixLines = this.pendingNonStandardLines.slice(searchTagIndex, lineLimit)
@@ -1164,6 +1196,7 @@ export async function constructNewFileContentV2(
 			lastLine.startsWith("=") ||
 			lastLine.startsWith(REPLACE_BLOCK_CHAR) ||
 			lastLine.startsWith(LEGACY_REPLACE_BLOCK_CHAR)) &&
+		!isShortSearchStart(lastLine) &&
 		lastLine !== SEARCH_BLOCK_START &&
 		lastLine !== SEARCH_BLOCK_END &&
 		lastLine !== REPLACE_BLOCK_END
@@ -1327,8 +1360,15 @@ export class DiffParser {
 			}
 		}
 
+		if (isShortSearchStart(trimmed)) {
+			this.delimiterN = countSearchDelimiter(trimmed)
+			this.currentRawLines = [line]
+			this.pushBlock(0, DIFF_ERROR_CODE.DELIMITER_TOO_SHORT)
+			return
+		}
+
 		if (isSearchBlockStart(trimmed)) {
-			this.delimiterN = countLeadingChar("-", trimmed)
+			this.delimiterN = countSearchDelimiter(trimmed)
 			if (this.delimiterN < 7) {
 				this.pushBlock(0, DIFF_ERROR_CODE.DELIMITER_TOO_SHORT)
 				return

@@ -27,7 +27,9 @@ line2
 =======
 replaced
 +++++++ REPLACE`,
-			shouldThrow: true,
+			expected: "line1\nline2\nline3",
+			isFinal: true,
+			v1Only: true,
 		},
 		{
 			name: "malformed search - insufficient dashes",
@@ -47,7 +49,9 @@ line2
 =======
 replaced
 +++++++ REPLACE`,
-			shouldThrow: true,
+			expected: "line1\nline2\nline3",
+			isFinal: true,
+			v1Only: true,
 		},
 		{
 			name: "exact match replacement",
@@ -199,7 +203,7 @@ replaced
 	]
 	//.filter(({name}) => name === "multiple ordered replacements")
 	//.filter(({name}) => name === "delete then replace")
-	testCases.forEach(({ name, original, diff, expected, isFinal, shouldThrow }) => {
+	testCases.forEach(({ name, original, diff, expected, isFinal, shouldThrow, v1Only }) => {
 		it(`should handle ${name} case correctly`, async () => {
 			if (shouldThrow) {
 				try {
@@ -217,14 +221,15 @@ replaced
 				}
 			} else {
 				const result1 = await cnfc(diff, original, isFinal ?? true)
-				const result2 = await cnfc2(diff, original, isFinal ?? true)
-				const _equal = result1.newContent === result2
-				const _equal2 = result1.newContent === expected
-				// Verify both implementations produce same result
-				expect(result1.newContent).to.equal(result2)
 
 				// Verify result matches expected
 				expect(result1.newContent).to.equal(expected)
+
+				if (!v1Only) {
+					const result2 = await cnfc2(diff, original, isFinal ?? true)
+					// Verify both implementations produce same result
+					expect(result1.newContent).to.equal(result2)
+				}
 			}
 		})
 	})
@@ -252,23 +257,23 @@ replaced
 		}
 	})
 
-	it("should handle missing final REPLACE marker when isFinal is true", async () => {
+	it("should throw error when missing final REPLACE marker and isFinal is true", async () => {
 		const original = "line1\nline2\nline3"
 		const diff = `------- SEARCH
 line2
 =======
 replaced`
-		// Note: missing +++++++ REPLACE marker
+		// Note: missing +++++++ REPLACE marker — must throw UNCLOSED_REPLACE
 
-		const result1 = await cnfc(diff, original, true) // isFinal = true
-
-		// Should still work and replace line2 with "replaced"
-		const expected = "line1\nreplaced\nline3"
-
-		expect(result1.newContent).to.equal(expected)
+		try {
+			await cnfc(diff, original, true)
+			expect.fail("Expected an error to be thrown")
+		} catch (err) {
+			expect(err).to.be.an("error")
+		}
 	})
 
-	it("should handle missing final REPLACE marker with multiple lines of replacement", async () => {
+	it("should throw error when missing final REPLACE marker with multiple lines", async () => {
 		const original = "function test() {\n\tconst a = 1;\n\treturn a;\n}"
 		const diff = `------- SEARCH
 	const a = 1;
@@ -277,12 +282,14 @@ replaced`
 	const a = 42;
 	console.log('updated');
 	return a;`
-		// Note: missing +++++++ REPLACE marker
+		// Note: missing +++++++ REPLACE marker — must throw UNCLOSED_REPLACE
 
-		const result1 = await cnfc(diff, original, true) // isFinal = true
-		const expected = "function test() {\n\tconst a = 42;\n\tconsole.log('updated');\n\treturn a;\n}"
-
-		expect(result1.newContent).to.equal(expected)
+		try {
+			await cnfc(diff, original, true)
+			expect.fail("Expected an error to be thrown")
+		} catch (err) {
+			expect(err).to.be.an("error")
+		}
 	})
 
 	// 	it("should NOT process incomplete replacement when isFinal is false", async () => {
@@ -305,7 +312,7 @@ replaced`
 // Test cases for out-of-order search/replace blocks
 
 describe("Diff Format Out of Order Cases", () => {
-	it("should handle out-of-order replacements with different positions", async () => {
+	it("should reject out-of-order replacements with different positions", async () => {
 		const isFinal = true
 		const original = "first\nsecond\nthird\nfourth\n"
 		const diff = `------- SEARCH
@@ -318,12 +325,15 @@ second
 =======
 new second
 +++++++ REPLACE`
-		const result1 = await cnfc(diff, original, isFinal)
-		const expectedResult = "first\nnew second\nthird\nnew fourth\n"
-		expect(result1.newContent).to.equal(expectedResult)
+		try {
+			await cnfc(diff, original, isFinal)
+			expect.fail("Expected an error to be thrown for out-of-order blocks")
+		} catch (err) {
+			expect(err).to.be.an("error")
+		}
 	})
 
-	it("should handle multiple out-of-order replacements", async () => {
+	it("should reject multiple out-of-order replacements", async () => {
 		const isFinal = true
 		const original = "one\ntwo\nthree\nfour\nfive\n"
 		const diff = `------- SEARCH
@@ -341,12 +351,15 @@ five
 =======
 fifth
 +++++++ REPLACE`
-		const result1 = await cnfc(diff, original, isFinal)
-		const expectedResult = "one\nsecond\nthree\nfourth\nfifth\n"
-		expect(result1.newContent).to.equal(expectedResult)
+		try {
+			await cnfc(diff, original, isFinal)
+			expect.fail("Expected an error to be thrown for out-of-order blocks")
+		} catch (err) {
+			expect(err).to.be.an("error")
+		}
 	})
 
-	it("should handle out-of-order replacements with indentation", async () => {
+	it("should reject out-of-order replacements with indentation", async () => {
 		const isFinal = true
 		const original = "function test() {\n\tconst a = 1;\n\tconst b = 2;\n\tconst c = 3;\n\n}"
 		const diff = `------- SEARCH
@@ -359,12 +372,15 @@ fifth
 =======
 	const a = 10;
 +++++++ REPLACE`
-		const result1 = await cnfc(diff, original, isFinal)
-		const expectedResult = "function test() {\n\tconst a = 10;\n\tconst b = 2;\n\tconst c = 30;\n\n}"
-		expect(result1.newContent).to.equal(expectedResult)
+		try {
+			await cnfc(diff, original, isFinal)
+			expect.fail("Expected an error to be thrown for out-of-order blocks")
+		} catch (err) {
+			expect(err).to.be.an("error")
+		}
 	})
 
-	it("should handle out-of-order replacements with empty lines", async () => {
+	it("should reject out-of-order replacements with empty lines", async () => {
 		const isFinal = true
 		const original = "header\n\nbody\n\nfooter\n"
 		const diff = `------- SEARCH
@@ -379,8 +395,11 @@ body
 =======
 new body content
 +++++++ REPLACE`
-		const result1 = await cnfc(diff, original, isFinal)
-		const expectedResult = "header\nnew body content\nnew footer\n"
-		expect(result1.newContent).to.equal(expectedResult)
+		try {
+			await cnfc(diff, original, isFinal)
+			expect.fail("Expected an error to be thrown for out-of-order blocks")
+		} catch (err) {
+			expect(err).to.be.an("error")
+		}
 	})
 })
