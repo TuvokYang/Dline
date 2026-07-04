@@ -18,17 +18,21 @@ let updateApiProfilesQueue: Promise<Empty> = Promise.resolve(Empty.create({}))
 
 /**
  * Save ApiProfiles to api_profiles.json.
+ *
+ * After persisting, rebuild the active task's API handler so that the next
+ * conversation turn picks up the updated profile content (model, reasoning,
+ * etc.). Without this rebuild the handler keeps a stale profile snapshot.
  */
-export async function updateApiProfiles(_controller: Controller, request: UpdateApiProfilesRequest): Promise<Empty> {
+export async function updateApiProfiles(controller: Controller, request: UpdateApiProfilesRequest): Promise<Empty> {
 	const nextUpdate = updateApiProfilesQueue.then(
-		() => updateApiProfilesImpl(request),
-		() => updateApiProfilesImpl(request),
+		() => updateApiProfilesImpl(controller, request),
+		() => updateApiProfilesImpl(controller, request),
 	)
 	updateApiProfilesQueue = nextUpdate.catch(() => Empty.create({}))
 	return nextUpdate
 }
 
-async function updateApiProfilesImpl(request: UpdateApiProfilesRequest): Promise<Empty> {
+async function updateApiProfilesImpl(controller: Controller, request: UpdateApiProfilesRequest): Promise<Empty> {
 	const settingsDir = path.join(getDlineDataDir(), "settings")
 	const filePath = path.join(settingsDir, API_PROFILES_FILE)
 
@@ -59,6 +63,11 @@ async function updateApiProfilesImpl(request: UpdateApiProfilesRequest): Promise
 	try {
 		await writeApiProfilesToFile(filePath, profiles)
 		Logger.log(`[updateApiProfiles] Saved ${profiles.length} profile(s)`)
+
+		// Rebuild the active task's API handler so the next turn uses the
+		// latest profile content from disk instead of the stale snapshot.
+		controller.task?.rebuildApiHandler()
+
 		return Empty.create({})
 	} catch (err) {
 		Logger.error("[updateApiProfiles] Failed to write api_profiles.json:", err)

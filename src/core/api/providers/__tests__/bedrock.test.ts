@@ -1,11 +1,11 @@
 // @ts-nocheck -- test file accesses private class members intentionally
 import { ConverseStreamCommand } from "@aws-sdk/client-bedrock-runtime"
+import type { ApiHandlerContext } from "@core/api"
 import { bedrockModels, ModelInfo, vertexGlobalModels, vertexModels } from "@shared/api"
 import should from "should"
 import { Readable } from "stream"
 import type { ClineStorageMessage } from "@/shared/messages/content"
 import { isNativeToolCallingConfig } from "@/utils/model-utils"
-import type { AwsBedrockHandlerOptions } from "../bedrock"
 import { AwsBedrockHandler } from "../bedrock"
 
 describe("AwsBedrockHandler", () => {
@@ -220,24 +220,6 @@ describe("AwsBedrockHandler", () => {
 		})
 	})
 
-	const mockOptions: AwsBedrockHandlerOptions = {
-		apiModelId: "anthropic.claude-3-7-sonnet-20250219-v1:0",
-		awsRegion: "us-east-1",
-		awsAccessKey: "test-key",
-		awsSecretKey: "test-secret",
-		awsSessionToken: "",
-		awsUseProfile: false,
-		awsProfile: "",
-		awsBedrockApiKey: "",
-		awsBedrockUsePromptCache: false,
-		awsUseCrossRegionInference: false,
-		awsUseGlobalInference: false,
-		awsBedrockEndpoint: "",
-		awsBedrockCustomSelected: false,
-		awsBedrockCustomModelBaseId: undefined,
-		thinkingBudgetTokens: 1600,
-	}
-
 	const mockModelInfo: ModelInfo = {
 		id: "test-model",
 		capabilities: {
@@ -254,11 +236,57 @@ describe("AwsBedrockHandler", () => {
 		},
 	}
 
+	// Factory to build ApiHandlerContext with defaults matching the old mockContext.
+	function createMockContext(
+		overrides: Partial<{
+			profile: Partial<ApiHandlerContext["profile"]>
+			mode: ApiHandlerContext["mode"]
+		}> = {},
+	): ApiHandlerContext {
+		const p = overrides.profile || {}
+		return {
+			profile: {
+				id: "test-profile",
+				name: "test-bedrock",
+				provider: "bedrock",
+				apiKey: "",
+				modelId: p.modelId ?? "anthropic.claude-3-7-sonnet-20250219-v1:0",
+				modelInfo: p.modelInfo ?? mockModelInfo,
+				usedFor: [],
+				enabled: true,
+				bedrock: {
+					awsRegion: "us-east-1",
+					awsAccessKey: "test-key",
+					awsSecretKey: "test-secret",
+					awsSessionToken: "",
+					awsAuthentication: "keys",
+					awsProfile: "",
+					awsBedrockApiKey: "",
+					awsBedrockEndpoint: "",
+					awsBedrockUsePromptCache: false,
+					awsUseCrossRegionInference: false,
+					awsUseGlobalInference: false,
+					awsBedrockCustomSelected: false,
+					awsBedrockCustomModelBaseId: "",
+					reasoning: { thinkingBudget: 1600 },
+					customModelEnabled: false,
+					capabilities: undefined,
+					pricing: undefined,
+					...(p.bedrock || {}),
+				},
+				...p,
+			},
+			mode: overrides.mode ?? ("act" as ApiHandlerContext["mode"]),
+		}
+	}
+
+	const mockContext = createMockContext()
+
 	describe("executeConverseStream", () => {
 		let handler: AwsBedrockHandler
 
 		beforeEach(() => {
-			handler = new AwsBedrockHandler(mockOptions)
+			handler = new AwsBedrockHandler(mockContext)
 		})
 
 		describe("thinking response handling (new API structure)", () => {
@@ -878,7 +906,7 @@ describe("AwsBedrockHandler", () => {
 
 	describe("tool config mapping", () => {
 		it("should map Anthropic tools to Bedrock toolConfig", () => {
-			const handler = new AwsBedrockHandler(mockOptions)
+			const handler = new AwsBedrockHandler(mockContext)
 			const toolConfig = handler.mapClineToolsToBedrockToolConfig([
 				{
 					name: "read_file",
@@ -904,13 +932,13 @@ describe("AwsBedrockHandler", () => {
 		})
 
 		it("should return undefined when tools is undefined or empty", () => {
-			const handler = new AwsBedrockHandler(mockOptions)
+			const handler = new AwsBedrockHandler(mockContext)
 			should.not.exist(handler.mapClineToolsToBedrockToolConfig(undefined))
 			should.not.exist(handler.mapClineToolsToBedrockToolConfig([]))
 		})
 
 		it("should silently drop tools without input_schema", () => {
-			const handler = new AwsBedrockHandler(mockOptions)
+			const handler = new AwsBedrockHandler(mockContext)
 			// A tool missing input_schema doesn't match the AnthropicTool type guard
 			const toolConfig = handler.mapClineToolsToBedrockToolConfig([{ name: "bad_tool", description: "No schema" } as any])
 			// All tools filtered out → undefined
@@ -920,7 +948,7 @@ describe("AwsBedrockHandler", () => {
 
 	describe("formatMessagesForConverseAPI", () => {
 		it("should format tool_use and tool_result blocks", () => {
-			const handler = new AwsBedrockHandler(mockOptions)
+			const handler = new AwsBedrockHandler(mockContext)
 			const messages: ClineStorageMessage[] = [
 				{
 					role: "assistant",
@@ -956,7 +984,7 @@ describe("AwsBedrockHandler", () => {
 		})
 
 		it("should format tool_result with array content", () => {
-			const handler = new AwsBedrockHandler(mockOptions)
+			const handler = new AwsBedrockHandler(mockContext)
 			const messages: ClineStorageMessage[] = [
 				{
 					role: "user",
@@ -982,7 +1010,7 @@ describe("AwsBedrockHandler", () => {
 		})
 
 		it("should map is_error to error status on tool_result", () => {
-			const handler = new AwsBedrockHandler(mockOptions)
+			const handler = new AwsBedrockHandler(mockContext)
 			const messages: ClineStorageMessage[] = [
 				{
 					role: "user",
@@ -1006,146 +1034,158 @@ describe("AwsBedrockHandler", () => {
 
 	describe("getModelId", () => {
 		it("should return raw model ID for custom models", async () => {
-			const customOptions: AwsBedrockHandlerOptions = {
-				...mockOptions,
-				awsBedrockCustomSelected: true,
-				apiModelId:
-					"arn:aws:bedrock:us-west-2:123456789012:custom-model/anthropic.claude-3-5-sonnet-20241022-v2:0/Qk8MMyLmRd",
-			}
-			const customHandler = new AwsBedrockHandler(customOptions)
+			const handler = new AwsBedrockHandler(
+				createMockContext({
+					profile: {
+						bedrock: { awsBedrockCustomSelected: true },
+						modelId:
+							"arn:aws:bedrock:us-west-2:123456789012:custom-model/anthropic.claude-3-5-sonnet-20241022-v2:0/Qk8MMyLmRd",
+					},
+				}),
+			)
 
-			const modelId = await customHandler.getModelId()
+			const modelId = await handler.getModelId()
 			modelId.should.equal(
 				"arn:aws:bedrock:us-west-2:123456789012:custom-model/anthropic.claude-3-5-sonnet-20241022-v2:0/Qk8MMyLmRd",
 			)
 		})
 
 		it("should not encode custom model IDs with slashes", async () => {
-			const customOptions: AwsBedrockHandlerOptions = {
-				...mockOptions,
-				awsBedrockCustomSelected: true,
-				apiModelId: "my-namespace/my-custom-model",
-			}
-			const customHandler = new AwsBedrockHandler(customOptions)
+			const handler = new AwsBedrockHandler(
+				createMockContext({
+					profile: {
+						bedrock: { awsBedrockCustomSelected: true },
+						modelId: "my-namespace/my-custom-model",
+					},
+				}),
+			)
 
-			const modelId = await customHandler.getModelId()
+			const modelId = await handler.getModelId()
 			modelId.should.equal("my-namespace/my-custom-model")
 			modelId.should.not.match(/%2F/)
 		})
 
 		it("should apply cross-region prefix for non-custom models when enabled", async () => {
-			const crossRegionOptions: AwsBedrockHandlerOptions = {
-				...mockOptions,
-				awsUseCrossRegionInference: true,
-				awsRegion: "us-west-2",
-			}
-			const crossRegionHandler = new AwsBedrockHandler(crossRegionOptions)
+			const handler = new AwsBedrockHandler(
+				createMockContext({
+					profile: {
+						bedrock: { awsUseCrossRegionInference: true, awsRegion: "us-west-2" },
+					},
+				}),
+			)
 
-			const modelId = await crossRegionHandler.getModelId()
+			const modelId = await handler.getModelId()
 			modelId.should.equal("us.anthropic.claude-3-7-sonnet-20250219-v1:0")
 		})
 
 		it("should apply EU cross-region prefix", async () => {
-			const euOptions: AwsBedrockHandlerOptions = {
-				...mockOptions,
-				awsUseCrossRegionInference: true,
-				awsRegion: "eu-central-1",
-			}
-			const euHandler = new AwsBedrockHandler(euOptions)
+			const handler = new AwsBedrockHandler(
+				createMockContext({
+					profile: {
+						bedrock: { awsUseCrossRegionInference: true, awsRegion: "eu-central-1" },
+					},
+				}),
+			)
 
-			const modelId = await euHandler.getModelId()
+			const modelId = await handler.getModelId()
 			modelId.should.equal("eu.anthropic.claude-3-7-sonnet-20250219-v1:0")
 		})
 
 		it("should apply JP cross-region prefix for sonnet 4.5", async () => {
-			const jpOptions: AwsBedrockHandlerOptions = {
-				...mockOptions,
-				awsUseCrossRegionInference: true,
-				apiModelId: "anthropic.claude-sonnet-4-5-20250929-v1:0",
-				awsRegion: "ap-northeast-1",
-			}
-			const jpHandler = new AwsBedrockHandler(jpOptions)
+			const handler = new AwsBedrockHandler(
+				createMockContext({
+					profile: {
+						bedrock: { awsUseCrossRegionInference: true, awsRegion: "ap-northeast-1" },
+						modelId: "anthropic.claude-sonnet-4-5-20250929-v1:0",
+					},
+				}),
+			)
 
-			const modelId = await jpHandler.getModelId()
+			const modelId = await handler.getModelId()
 			modelId.should.equal("jp.anthropic.claude-sonnet-4-5-20250929-v1:0")
 		})
 
 		it("should apply JP cross-region prefix for sonnet 4.6", async () => {
-			const jpOptions: AwsBedrockHandlerOptions = {
-				...mockOptions,
-				awsUseCrossRegionInference: true,
-				apiModelId: "anthropic.claude-sonnet-4-6",
-				awsRegion: "ap-northeast-1",
-			}
-			const jpHandler = new AwsBedrockHandler(jpOptions)
+			const handler = new AwsBedrockHandler(
+				createMockContext({
+					profile: {
+						bedrock: { awsUseCrossRegionInference: true, awsRegion: "ap-northeast-1" },
+						modelId: "anthropic.claude-sonnet-4-6",
+					},
+				}),
+			)
 
-			const modelId = await jpHandler.getModelId()
+			const modelId = await handler.getModelId()
 			modelId.should.equal("jp.anthropic.claude-sonnet-4-6")
 		})
 
 		it("should apply global cross-region prefix for supported models", async () => {
-			const globalOptions: AwsBedrockHandlerOptions = {
-				...mockOptions,
-				awsUseCrossRegionInference: true,
-				awsUseGlobalInference: true,
-				apiModelId: "anthropic.claude-sonnet-4-5-20250929-v1:0",
-				awsRegion: "ap-northeast-1",
-			}
-			const globalHandler = new AwsBedrockHandler(globalOptions)
+			const handler = new AwsBedrockHandler(
+				createMockContext({
+					profile: {
+						bedrock: { awsUseCrossRegionInference: true, awsUseGlobalInference: true, awsRegion: "ap-northeast-1" },
+						modelId: "anthropic.claude-opus-4-7",
+					},
+				}),
+			)
 
-			const modelId = await globalHandler.getModelId()
-			modelId.should.equal("global.anthropic.claude-sonnet-4-5-20250929-v1:0")
+			const modelId = await handler.getModelId()
+			modelId.should.equal("global.anthropic.claude-opus-4-7")
 		})
 
 		it("should NOT apply global cross-region prefix for unsupported models", async () => {
-			const options: AwsBedrockHandlerOptions = {
-				...mockOptions,
-				awsUseCrossRegionInference: true,
-				awsUseGlobalInference: true,
-				apiModelId: "anthropic.claude-3-7-sonnet-20250219-v1:0", // 3.7 does not support a global inference profile
-				awsRegion: "us-west-2",
-			}
-			const usHandler = new AwsBedrockHandler(options)
+			const handler = new AwsBedrockHandler(
+				createMockContext({
+					profile: {
+						bedrock: { awsUseCrossRegionInference: true, awsUseGlobalInference: true, awsRegion: "us-west-2" },
+						modelId: "anthropic.claude-3-7-sonnet-20250219-v1:0",
+					},
+				}),
+			)
 
-			const modelId = await usHandler.getModelId()
+			const modelId = await handler.getModelId()
 			modelId.should.equal("us.anthropic.claude-3-7-sonnet-20250219-v1:0")
 		})
 
 		it("should apply APAC cross-region prefix", async () => {
-			const apacOptions: AwsBedrockHandlerOptions = {
-				...mockOptions,
-				awsUseCrossRegionInference: true,
-				awsRegion: "ap-northeast-1",
-			}
-			const apacHandler = new AwsBedrockHandler(apacOptions)
+			const handler = new AwsBedrockHandler(
+				createMockContext({
+					profile: {
+						bedrock: { awsUseCrossRegionInference: true, awsRegion: "ap-northeast-1" },
+					},
+				}),
+			)
 
-			const modelId = await apacHandler.getModelId()
+			const modelId = await handler.getModelId()
 			modelId.should.equal("apac.anthropic.claude-3-7-sonnet-20250219-v1:0")
 		})
 
 		it("should not apply cross-region prefix for custom models even when enabled", async () => {
-			const customCrossRegionOptions: AwsBedrockHandlerOptions = {
-				...mockOptions,
-				awsBedrockCustomSelected: true,
-				apiModelId: "arn:aws:bedrock:us-west-2:123456789012:custom-model/my-model",
-				awsUseCrossRegionInference: true,
-			}
-			const customCrossRegionHandler = new AwsBedrockHandler(customCrossRegionOptions)
+			const handler = new AwsBedrockHandler(
+				createMockContext({
+					profile: {
+						bedrock: { awsBedrockCustomSelected: true, awsUseCrossRegionInference: true },
+						modelId: "arn:aws:bedrock:us-west-2:123456789012:custom-model/my-model",
+					},
+				}),
+			)
 
-			const modelId = await customCrossRegionHandler.getModelId()
+			const modelId = await handler.getModelId()
 			modelId.should.equal("arn:aws:bedrock:us-west-2:123456789012:custom-model/my-model")
 		})
 
 		it("should handle UltraThink model ARN correctly", async () => {
-			const ultraThinkOptions: AwsBedrockHandlerOptions = {
-				...mockOptions,
-				awsBedrockCustomSelected: true,
-				apiModelId:
-					"arn:aws:bedrock:us-west-2:123456789012:custom-model/anthropic.claude-3-5-sonnet-20241022-v2:0/Qk8MMyLmRd",
-			}
-			const ultraThinkHandler = new AwsBedrockHandler(ultraThinkOptions)
+			const handler = new AwsBedrockHandler(
+				createMockContext({
+					profile: {
+						bedrock: { awsBedrockCustomSelected: true },
+						modelId:
+							"arn:aws:bedrock:us-west-2:123456789012:custom-model/anthropic.claude-3-5-sonnet-20241022-v2:0/Qk8MMyLmRd",
+					},
+				}),
+			)
 
-			const modelId = await ultraThinkHandler.getModelId()
+			const modelId = await handler.getModelId()
 			// Should return the raw ARN without any encoding
 			modelId.should.equal(
 				"arn:aws:bedrock:us-west-2:123456789012:custom-model/anthropic.claude-3-5-sonnet-20241022-v2:0/Qk8MMyLmRd",
@@ -1160,11 +1200,11 @@ describe("AwsBedrockHandler", () => {
 			// This is the integration gap: if Bedrock is removed from isNextGenModelProvider(),
 			// native tool calling silently stops working and falls back to XML tools.
 			// Note: requires a Claude 4+ model — Claude 3.x is NOT in the next-gen model family.
-			const claude4Options: AwsBedrockHandlerOptions = {
-				...mockOptions,
-				apiModelId: "anthropic.claude-sonnet-4-5-20250929-v1:0",
-			}
-			const handler = new AwsBedrockHandler(claude4Options)
+			const handler = new AwsBedrockHandler(
+				createMockContext({
+					profile: { modelId: "anthropic.claude-sonnet-4-5-20250929-v1:0" },
+				}),
+			)
 			const model = handler.getModel()
 			const providerInfo = {
 				providerId: "bedrock",
@@ -1177,7 +1217,7 @@ describe("AwsBedrockHandler", () => {
 
 		it("should not use native tool calling for pre-4.0 Claude models", () => {
 			// Claude 3.x models are NOT in the next-gen family and should use XML tools
-			const handler = new AwsBedrockHandler(mockOptions) // uses Claude 3.7
+			const handler = new AwsBedrockHandler(mockContext) // uses Claude 3.7
 			const model = handler.getModel()
 			const providerInfo = {
 				providerId: "bedrock",
@@ -1189,11 +1229,11 @@ describe("AwsBedrockHandler", () => {
 		})
 
 		it("should not use native tool calling when the setting is disabled", () => {
-			const claude4Options: AwsBedrockHandlerOptions = {
-				...mockOptions,
-				apiModelId: "anthropic.claude-sonnet-4-5-20250929-v1:0",
-			}
-			const handler = new AwsBedrockHandler(claude4Options)
+			const handler = new AwsBedrockHandler(
+				createMockContext({
+					profile: { modelId: "anthropic.claude-sonnet-4-5-20250929-v1:0" },
+				}),
+			)
 			const model = handler.getModel()
 			const providerInfo = {
 				providerId: "bedrock",
@@ -1205,7 +1245,7 @@ describe("AwsBedrockHandler", () => {
 		})
 
 		it("should pass toolConfig to ConverseStreamCommand when tools are provided", async () => {
-			const handler = new AwsBedrockHandler(mockOptions)
+			const handler = new AwsBedrockHandler(mockContext)
 
 			// Capture the command passed to executeConverseStream
 			let capturedCommand: any = null
@@ -1243,7 +1283,7 @@ describe("AwsBedrockHandler", () => {
 
 		it("should format a complete tool call round-trip correctly", () => {
 			// Simulates the full cycle: model returns tool_use → Cline executes → sends tool_result back
-			const handler = new AwsBedrockHandler(mockOptions)
+			const handler = new AwsBedrockHandler(mockContext)
 
 			// Turn 1: assistant calls a tool
 			// Turn 2: user sends tool result
@@ -1316,7 +1356,7 @@ describe("AwsBedrockHandler", () => {
 		})
 
 		it("should silently skip thinking blocks without warnings", () => {
-			const h = new AwsBedrockHandler(mockOptions)
+			const h = new AwsBedrockHandler(mockContext)
 			const conversation: any[] = [
 				{
 					role: "assistant",
@@ -1344,7 +1384,7 @@ describe("AwsBedrockHandler", () => {
 		})
 
 		it("should silently skip redacted_thinking blocks without warnings", () => {
-			const h = new AwsBedrockHandler(mockOptions)
+			const h = new AwsBedrockHandler(mockContext)
 			const conversation: any[] = [
 				{
 					role: "assistant",
@@ -1363,7 +1403,7 @@ describe("AwsBedrockHandler", () => {
 		})
 
 		it("should handle messages with only thinking blocks by producing empty content", () => {
-			const h = new AwsBedrockHandler(mockOptions)
+			const h = new AwsBedrockHandler(mockContext)
 			const conversation: any[] = [
 				{
 					role: "assistant",
