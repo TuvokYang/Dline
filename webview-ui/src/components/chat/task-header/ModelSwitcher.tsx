@@ -18,11 +18,14 @@ type ModeTab = "act" | "plan"
  * planActSeparateModelsSetting is enabled.
  */
 const ModelSwitcher: React.FC<ModelSwitcherProps> = ({ onOpenSettings }) => {
-	const { apiConfiguration, mode, planActSeparateModelsSetting } = useExtensionState()
+	const { apiConfiguration, mode, planActSeparateModelsSetting, currentTaskItem } = useExtensionState()
 	const { profiles, selectProfile } = useApiProfiles()
 	const [open, setOpen] = useState(false)
 	const [activeTab, setActiveTab] = useState<ModeTab>(mode || "act")
 	const [hoveredId, setHoveredId] = useState<string | null>(null)
+
+	// Get current task ID for task-level profile settings
+	const taskId = currentTaskItem?.id
 
 	// Resolve currently selected profile name per mode
 	const planProfileName = apiConfiguration?.planModeProfile
@@ -54,12 +57,12 @@ const ModelSwitcher: React.FC<ModelSwitcherProps> = ({ onOpenSettings }) => {
 		if (!profile) return
 
 		if (planActSeparateModelsSetting) {
-			// Separated mode: write to the active tab's mode
-			selectProfile(profile.id, activeTab)
+			// Separated mode: write to the active tab's mode (task-level)
+			selectProfile(profile.id, activeTab, taskId)
 		} else {
-			// Unified mode: write to both plan and act
-			selectProfile(profile.id, "plan")
-			selectProfile(profile.id, "act")
+			// Unified mode: write to both plan and act (task-level)
+			selectProfile(profile.id, "plan", taskId)
+			selectProfile(profile.id, "act", taskId)
 		}
 	}
 
@@ -76,8 +79,8 @@ const ModelSwitcher: React.FC<ModelSwitcherProps> = ({ onOpenSettings }) => {
 			return visibleProfiles[0]?.name === profileName
 		}
 		// Unified mode: handleSelect writes same profile to both plan and act,
-	// so only check planProfileName to avoid double-selection when they differ.
-	if (planProfileName) {
+		// so only check planProfileName to avoid double-selection when they differ.
+		if (planProfileName) {
 			return planProfileName === profileName
 		}
 		return visibleProfiles[0]?.name === profileName

@@ -2,7 +2,7 @@ import { EmptyRequest } from "@shared/proto/dline/common"
 import { ApiProfile, ApiProfilesResponse, UpdateApiProfilesRequest } from "@shared/proto/dline/profile"
 import PROVIDERS from "@shared/providers/providers.json"
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { updateSetting } from "@/components/settings/utils/settingsHandlers"
+import { updateSetting, updateTaskSetting } from "@/components/settings/utils/settingsHandlers"
 import { FileServiceClient } from "@/services/grpc-client"
 import { createEmptyApiProfile, generateApiProfileName } from "./ProviderProfile"
 
@@ -140,21 +140,30 @@ export function useApiProfiles() {
 
 	/**
 	 * Select a single profile for the given mode.
-	 * Persists the profile name to planModeProfile or actModeProfile in globalState.
-	 * Does NOT modify enabled flags — enabled indicates "configured", not "selected".
-	 * The current selection is tracked solely via planModeProfile / actModeProfile.
+	 * Persists the profile name to planModeProfile or actModeProfile.
+	 *
+	 * - If taskId is provided: updates task-level settings (only affects that task)
+	 * - If taskId is undefined: updates global settings (default for new tasks)
 	 *
 	 * @param id The profile id to select
 	 * @param mode The mode to set the profile for ("plan" or "act")
+	 * @param taskId Optional task ID. If provided, updates task-level settings instead of global.
 	 */
 	const selectProfile = useCallback(
-		(id: string, mode: "plan" | "act") => {
+		(id: string, mode: "plan" | "act", taskId?: string) => {
 			const profile = profiles.find((p) => p.id === id)
 			if (!profile) return
 
 			const profileName = profile.name || ""
 			const settingKey = mode === "plan" ? "planModeProfile" : "actModeProfile"
-			updateSetting(settingKey as any, profileName)
+
+			if (taskId) {
+				// Update task-level setting (only affects this task)
+				updateTaskSetting(taskId, settingKey, profileName)
+			} else {
+				// Update global setting (default for new tasks)
+				updateSetting(settingKey as any, profileName)
+			}
 		},
 		[profiles],
 	)

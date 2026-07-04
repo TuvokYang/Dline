@@ -1,4 +1,4 @@
-import { McpDisplayMode, UpdateSettingsRequest } from "@shared/proto/dline/state"
+import { McpDisplayMode, Settings, UpdateSettingsRequest, UpdateTaskSettingsRequest } from "@shared/proto/dline/state"
 import { StateServiceClient } from "@/services/grpc-client"
 
 /**
@@ -38,5 +38,28 @@ export const updateSetting = (field: keyof UpdateSettingsRequest, value: any) =>
 
 	StateServiceClient.updateSettings(UpdateSettingsRequest.create(updateRequest)).catch((error) => {
 		console.error(`Failed to update setting ${field}:`, error)
+	})
+}
+
+/**
+ * Updates a task-level setting for a specific task.
+ * Used when you want to override global settings for a particular task.
+ *
+ * @param taskId - The task ID to update settings for
+ * @param field - The settings field to update (e.g., "planModeProfile", "actModeProfile")
+ * @param value - The new value for the field
+ */
+export const updateTaskSetting = (taskId: string, field: keyof Settings, value: any) => {
+	const settings: Partial<Settings> = {
+		[field]: value,
+	}
+
+	const request = UpdateTaskSettingsRequest.create({
+		taskId,
+		settings,
+	})
+
+	StateServiceClient.updateTaskSettings(request).catch((error) => {
+		console.error(`Failed to update task setting ${field} for task ${taskId}:`, error)
 	})
 }
