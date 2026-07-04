@@ -80,7 +80,7 @@ export class GitOperations {
 
 		// Clean up any leftover .git_disabled directories from a previous crash/interruption.
 		// If addCheckpointFiles() was interrupted mid disable/enable cycle, nested repos may still be disabled.
-		await this.renameNestedGitRepos(false).catch((error) => {
+		await this.renameNestedGitRepos(false, [], taskId).catch((error) => {
 			Logger.warn("CheckpointTracker failed best-effort nested git cleanup during shadow git init:", error)
 		})
 
@@ -159,7 +159,7 @@ export class GitOperations {
 		const lfsPatterns = await getLfsPatterns(cwd)
 		await writeExcludesFile(gitPath, lfsPatterns, workspaceIgnoreContent || undefined)
 
-		const addFilesResult = await this.addCheckpointFiles(git)
+		const addFilesResult = await this.addCheckpointFiles(git, undefined, taskId)
 		if (!addFilesResult.success) {
 			Logger.error("Failed to add at least one file(s) to checkpoints shadow git")
 			throw new Error("Failed to add at least one file(s) to checkpoints shadow git")
@@ -226,9 +226,11 @@ export class GitOperations {
 	 * only processes actual directories (not files named .git).
 	 *
 	 * @param disable - If true, adds suffix to disable nested git repos. If false, removes suffix to re-enable them.
+	 * @param excludeDirs - Additional directories to exclude from the search
+	 * @param taskId - Optional task ID for logging purposes
 	 * @throws Error if renaming any .git directory fails
 	 */
-	public async renameNestedGitRepos(disable: boolean, excludeDirs: string[] = []) {
+	public async renameNestedGitRepos(disable: boolean, excludeDirs: string[] = [], taskId?: string) {
 		// Build ignore list: root .git, excluded directories from shadow git's
 		// info/exclude rules, workspace .gitignore/.dlineignore globs, and any
 		// caller-supplied ignore patterns.
@@ -255,18 +257,21 @@ export class GitOperations {
 
 			try {
 				await fs.rename(fullPath, newPath)
-				Logger.log(`CheckpointTracker ${disable ? "disabled" : "enabled"} nested git repo ${gitPath}`)
+				Logger.log(`[task ${taskId}] CheckpointTracker ${disable ? "disabled" : "enabled"} nested git repo ${gitPath}`)
 			} catch (error) {
 				const errCode = (error as NodeJS.ErrnoException)?.code
 				// EPERM / EBUSY on Windows means another process holds the directory.
 				// Skip this entry so one stuck directory does not block all others.
 				if (errCode === "EPERM" || errCode === "EBUSY") {
 					Logger.warn(
-						`CheckpointTracker cannot ${disable ? "disable" : "enable"} nested git repo ${gitPath}: ${errCode} (skipped)`,
+						`[task ${taskId}] CheckpointTracker cannot ${disable ? "disable" : "enable"} nested git repo ${gitPath}: ${errCode} (skipped)`,
 					)
 					continue
 				}
-				Logger.error(`CheckpointTracker failed to ${disable ? "disable" : "enable"} nested git repo ${gitPath}:`, error)
+				Logger.error(
+					`[task ${taskId}] CheckpointTracker failed to ${disable ? "disable" : "enable"} nested git repo ${gitPath}:`,
+					error,
+				)
 				throw new Error(
 					`Failed to ${disable ? "disable" : "enable"} nested git repo ${gitPath}: ${
 						error instanceof Error ? error.message : String(error)
@@ -291,6 +296,7 @@ export class GitOperations {
 	 * @param fileList - Optional list of file paths to add. When provided, only
 	 *                   these files are staged. When omitted, all files are staged
 	 *                   via `git add .` (backward compatible).
+	 * @param taskId - Optional task ID for logging purposes
 	 * @returns Promise<CheckpointAddResult> Object containing success status
 	 * @throws Error if:
 	 *  - File operations fail
@@ -298,12 +304,12 @@ export class GitOperations {
 	 *  - LFS pattern updates fail
 	 *  - Nested git repo handling fails
 	 */
-	public async addCheckpointFiles(git: SimpleGit, fileList?: string[]): Promise<CheckpointAddResult> {
+	public async addCheckpointFiles(git: SimpleGit, fileList?: string[], taskId?: string): Promise<CheckpointAddResult> {
 		const startTime = performance.now()
 		try {
 			// Update exclude patterns before each commit
-			await this.renameNestedGitRepos(true)
-			Logger.info("Starting checkpoint add operation...")
+			await this.renameNestedGitRepos(true, [], taskId)
+			Logger.info(`[task ${taskId}] Starting checkpoint add operation...`)
 
 			try {
 				if (fileList && fileList.length > 0) {
@@ -312,7 +318,7 @@ export class GitOperations {
 					// these files were explicitly modified by tool handlers and
 					// should be checkpointed regardless of exclusion patterns.
 					await git.add(["-f", ...fileList])
-					Logger.debug(`Checkpoint add operation: staged ${fileList.length} file(s) with -f`)
+					Logger.debug(`[task ${taskId}] Checkpoint add operation: staged ${fileList.length} file(s) with -f`)
 				} else {
 					// Backward compatible: stage all files.
 					// Any files with permissions errors will not be added,
@@ -328,17 +334,17 @@ export class GitOperations {
 		} catch (_error) {
 			return { success: false }
 		} finally {
-			await retryWithBackoff(() => this.renameNestedGitRepos(false), {
+			await retryWithBackoff(() => this.renameNestedGitRepos(false, [], taskId), {
 				operationName: "CheckpointTracker re-enable nested git repos",
 				maxAttempts: 3,
 				baseDelayMs: 50,
 				onRetry: (_error, attempt, maxAttempts, delayMs) => {
 					Logger.warn(
-						`CheckpointTracker re-enable nested git repos failed on attempt ${attempt}/${maxAttempts}. Retrying in ${delayMs}ms`,
+						`[task ${taskId}] CheckpointTracker re-enable nested git repos failed on attempt ${attempt}/${maxAttempts}. Retrying in ${delayMs}ms`,
 					)
 				},
 			}).catch((error) => {
-				Logger.error("CheckpointTracker failed to re-enable nested git repos after retries:", error)
+				Logger.error(`[task ${taskId}] CheckpointTracker failed to re-enable nested git repos after retries:`, error)
 			})
 		}
 	}

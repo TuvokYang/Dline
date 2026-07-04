@@ -287,7 +287,7 @@ class CheckpointTracker {
 			// VS Code: fall back to process-level mutex to serialize
 			// operations on the shared shadow git repository
 			if (!lockResult.acquired && lockResult.skipped) {
-				Logger.log("Using process-level mutex for checkpoint commit - VS Code")
+				Logger.log(`[task ${this.taskId}] Using process-level mutex for checkpoint commit - VS Code`)
 				const commitHash = await CheckpointMutexRegistry.getInstance().runExclusive(this.cwdHash, async () => {
 					return this.doCommitFiles(filesToCommit)
 				})
@@ -314,7 +314,7 @@ class CheckpointTracker {
 			throw new Error(`Failed to create checkpoint: ${error instanceof Error ? error.message : String(error)}`)
 		} finally {
 			if (lockAcquired) {
-				Logger.info("Releasing checkpoint folder lock")
+				Logger.info(`[task ${this.taskId}] Releasing checkpoint folder lock`)
 				await releaseCheckpointLock(this.cwdHash, this.taskId)
 			}
 		}
@@ -339,7 +339,7 @@ class CheckpointTracker {
 		const gitPath = await getShadowGitPath(this.cwdHash)
 		const git = simpleGit(path.dirname(gitPath))
 
-		Logger.info(`Using shadow git at: ${gitPath}`)
+		Logger.info(`[task ${this.taskId}] Using shadow git at: ${gitPath}`)
 
 		// Stage files: incremental with tracked list or full scan as fallback
 		if (files.length > 0) {
@@ -349,7 +349,7 @@ class CheckpointTracker {
 				`[CheckpointTracker] doCommitFiles: fallback to full git add . (no tracked files) for task ${this.taskId}`,
 			)
 		}
-		const addFilesResult = await this.gitOperations.addCheckpointFiles(git, files.length > 0 ? files : undefined)
+		const addFilesResult = await this.gitOperations.addCheckpointFiles(git, files.length > 0 ? files : undefined, this.taskId)
 		if (!addFilesResult.success) {
 			// When specific files were requested but staging failed (e.g. path
 			// mismatch, permissions), do NOT create an empty commit — it would
@@ -362,7 +362,7 @@ class CheckpointTracker {
 				)
 				return undefined
 			}
-			Logger.error("Failed to add at least one file(s) to checkpoints shadow git")
+			Logger.error(`[task ${this.taskId}] Failed to add at least one file(s) to checkpoints shadow git`)
 		}
 
 		const commitMessage = `checkpoint-${this.cwdHash}-${this.taskId}`
@@ -371,13 +371,13 @@ class CheckpointTracker {
 		// leaking the user's global git name/email into checkpoint history.
 		await this.gitOperations.ensureShadowGitIdentity(git)
 
-		Logger.info(`Creating checkpoint commit with message: ${commitMessage}`)
+		Logger.info(`[task ${this.taskId}] Creating checkpoint commit with message: ${commitMessage}`)
 		const result = await git.commit(commitMessage, {
 			"--allow-empty": null,
 			"--no-verify": null,
 		})
 		const commitHash = (result.commit || "").replace(/^HEAD\s+/, "")
-		Logger.warn(`Checkpoint commit created: `, commitHash)
+		Logger.warn(`[task ${this.taskId}] Checkpoint commit created: ${commitHash}`)
 
 		// Clear tracked files after a successful commit so the next
 		// checkpoint only captures newly modified files.
@@ -470,7 +470,7 @@ class CheckpointTracker {
 
 			// VS Code: fall back to process-level mutex
 			if (!lockResult.acquired && lockResult.skipped) {
-				Logger.log("Using process-level mutex for checkpoint reset - VS Code")
+				Logger.log(`[task ${this.taskId}] Using process-level mutex for checkpoint reset - VS Code`)
 				await CheckpointMutexRegistry.getInstance().runExclusive(this.cwdHash, async () => {
 					await this.doResetHead(commitHash)
 				})
@@ -559,7 +559,7 @@ class CheckpointTracker {
 
 			// VS Code: fall back to process-level mutex
 			if (!lockResult.acquired && lockResult.skipped) {
-				Logger.log("Using process-level mutex for checkpoint restore - VS Code")
+				Logger.log(`[task ${this.taskId}] Using process-level mutex for checkpoint restore - VS Code`)
 				await CheckpointMutexRegistry.getInstance().runExclusive(this.cwdHash, async () => {
 					await this.doRestoreFiles(cleanHash, files)
 				})
@@ -633,7 +633,7 @@ class CheckpointTracker {
 		const diffRange = cleanRhs ? `${cleanLhs}..${cleanRhs}` : cleanLhs
 
 		Logger.info(`Getting diff between commits: ${lhsHash || "initial"} -> ${rhsHash || "working directory"}`)
-		Logger.info(`Diff range: ${diffRange}`)
+		Logger.info(`[task ${this.taskId}] Diff range: ${diffRange}`)
 
 		const gitPath = await getShadowGitPath(this.cwdHash)
 		const git = simpleGit(path.dirname(gitPath))
@@ -649,7 +649,7 @@ class CheckpointTracker {
 			// Working-directory comparison: stage files to discover untracked changes,
 			// then diff. Serialized via mutex to protect the shared shadow git index.
 			changedFileNames = await CheckpointMutexRegistry.getInstance().runExclusive(this.cwdHash, async () => {
-				await this.gitOperations.addCheckpointFiles(git)
+				await this.gitOperations.addCheckpointFiles(git, undefined, this.taskId)
 				const summary = await git.diffSummary([diffRange])
 				return summary.files.map((f) => f.file)
 			})
@@ -752,7 +752,7 @@ class CheckpointTracker {
 		} else {
 			// Working-directory comparison: stage files to discover untracked changes
 			changedFileCount = await CheckpointMutexRegistry.getInstance().runExclusive(this.cwdHash, async () => {
-				await this.gitOperations.addCheckpointFiles(git)
+				await this.gitOperations.addCheckpointFiles(git, undefined, this.taskId)
 				const diffSummary = await git.diffSummary([diffRange])
 				return diffSummary.files.length
 			})
