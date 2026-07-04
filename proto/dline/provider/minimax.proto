@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+package dline.provider;
+
+import "dline/models/metadata.proto";
+import "dline/provider/common.proto";
+
+message MinimaxProviderConfig {
+  ReasoningConfig reasoning = 1;
+  bool custom_model_enabled = 2;
+  dline.models.ModelCapabilities capabilities = 3;
+  dline.models.ModelPricing pricing = 4;
+  string minimax_api_line = 5;
+}

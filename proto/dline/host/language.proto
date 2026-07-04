@@ -1,0 +1,111 @@
+syntax = "proto3";
+
+package dline.host;
+
+option go_package = "github.com/cline/grpc-go/host";
+option java_multiple_files = true;
+option java_package = "bot.dline.host.proto";
+
+// Provides LSP-based language features (find references, rename symbol).
+// Only available on hosts with LSP support (e.g. VSCode).
+// Non-LSP hosts return has_lsp_support=false with an error message
+// so the AI can fall back to search_files + replace_text.
+service LanguageService {
+  // Find all references to the symbol at the given position.
+  rpc findReferences(FindReferencesRequest) returns (FindReferencesResponse);
+
+  // Rename the symbol at the given position.
+  // When dry_run=true, returns the preview without applying changes.
+  rpc renameSymbol(RenameSymbolRequest) returns (RenameSymbolResponse);
+}
+
+// ---- findReferences ----
+
+message FindReferencesRequest {
+  // Absolute path to the file containing the symbol.
+  string file_path = 1;
+  // 1-based line number.
+  uint32 line = 2;
+  // 1-based character offset on the line.
+  uint32 character = 3;
+}
+
+message FindReferencesResponse {
+  // All reference locations found. Empty if none or LSP unavailable.
+  repeated ReferenceLocation references = 1;
+  // False when the host lacks LSP support.
+  bool has_lsp_support = 2;
+  // Non-empty when an error occurred (e.g. LSP unavailable, file not found).
+  string error_message = 3;
+}
+
+message ReferenceLocation {
+  // Absolute path to the file containing the reference.
+  string file_path = 1;
+  // 1-based start line of the reference.
+  uint32 start_line = 2;
+  // 1-based start character of the reference.
+  uint32 start_character = 3;
+  // 1-based end line of the reference.
+  uint32 end_line = 4;
+  // 1-based end character of the reference.
+  uint32 end_character = 5;
+  // The full line of code containing the reference (for context).
+  string context_line = 6;
+}
+
+// ---- renameSymbol ----
+
+message RenameSymbolRequest {
+  // Absolute path to the file containing the symbol.
+  string file_path = 1;
+  // 1-based line number.
+  uint32 line = 2;
+  // 1-based character offset on the line.
+  uint32 character = 3;
+  // The new name for the symbol.
+  string new_name = 4;
+  // When true, returns a preview without applying edits.
+  bool dry_run = 5;
+}
+
+message RenameSymbolResponse {
+  // True if the rename was applied (or previewed) successfully.
+  bool success = 1;
+  // Number of files that would be / were modified.
+  uint32 files_changed = 2;
+  // Total number of occurrences changed.
+  uint32 total_changes = 3;
+  // False when the host lacks LSP support.
+  bool has_lsp_support = 4;
+  // Non-empty when an error occurred.
+  string error_message = 5;
+  // Ordered list of per-file edits. Populated for both dry_run and applied renames.
+  repeated FileEdit preview = 6;
+}
+
+message FileEdit {
+  // Absolute path to the modified file.
+  string file_path = 1;
+  // All text edits in this file.
+  repeated TextEdit edits = 2;
+}
+
+message TextEdit {
+  // 1-based start line.
+  uint32 start_line = 1;
+  // 1-based start character.
+  uint32 start_character = 2;
+  // 1-based end line.
+  uint32 end_line = 3;
+  // 1-based end character.
+  uint32 end_character = 4;
+  // The replacement text (symbol name fragment from LSP).
+  string new_text = 5;
+  // The original text being replaced (symbol name fragment).
+  string original_text = 6;
+  // The original full line before rename (for diff rendering).
+  string old_line = 7;
+  // The new full line after rename (for diff rendering).
+  string new_line = 8;
+}

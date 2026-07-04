@@ -1,0 +1,472 @@
+import { strict as assert } from "node:assert"
+import * as NotificationHook from "@core/hooks/notification-hook"
+import { Task } from "@core/task"
+import type { ClineMessage } from "@shared/ExtensionMessage"
+import { describe, it, vi } from "vitest"
+
+// sinon import removed: using vitest globals
+
+async function flushMicrotasks(iterations = 5) {
+	for (let i = 0; i < iterations; i++) {
+		await Promise.resolve()
+	}
+}
+
+function createFakeTask(taskState: {
+	abort: boolean
+	askResponse: string | undefined
+	askResponseText: string | undefined
+	askResponseImages: string[] | undefined
+	askResponseFiles: string[] | undefined
+	lastMessageTs: number | undefined
+}) {
+	const clineMessages: ClineMessage[] = []
+
+	let lastGeneratedTs = 0
+	const fakeTask = {
+		taskState,
+		api: { getModel: () => ({ id: "test-model" }) },
+		stateManager: {
+			getGlobalSettingsKey: (key: string) => (key === "hooksEnabled" ? true : "act"),
+			getApiConfiguration: () => ({ actModeProfile: "anthropic", planModeProfile: "anthropic" }),
+		},
+		taskId: "task-1",
+		messageStateHandler: {
+			addToClineMessages: async (message: ClineMessage) => {
+				clineMessages.push(message)
+			},
+			upsertClineMessageInMemory: async (message: ClineMessage) => {
+				const idx = clineMessages.findIndex((m) => m.ts === message.ts)
+				if (idx >= 0) {
+					clineMessages[idx] = message
+				} else {
+					clineMessages.push(message)
+				}
+				return message
+			},
+			finalizeClineMessage: async (message: ClineMessage) => {
+				const idx = clineMessages.findIndex((m) => m.ts === message.ts)
+				if (idx >= 0) {
+					clineMessages[idx] = message
+				} else {
+					clineMessages.push(message)
+				}
+				return message
+			},
+			get clineMessages(): ClineMessage[] {
+				return clineMessages
+			},
+		},
+		taskController: {
+			/**
+			 * Mock ask implementation that mirrors the real channel-based ask:
+			 * creates a message, fires onAskVisible, then polls for askResponse.
+			 */
+			async ask(type: string, text?: string, _partial?: boolean, options?: { onAskVisible?: (askTs: number) => void }) {
+				const ts = fakeTask.genMessageTs()
+				const message: ClineMessage = {
+					ts,
+					type: "ask",
+					ask: type as any,
+					text: text ?? "",
+				} as ClineMessage
+				clineMessages.push(message)
+				taskState.lastMessageTs = ts
+
+				// Fire onAskVisible callback synchronously after message is added
+				if (options?.onAskVisible) {
+					options.onAskVisible(ts)
+				}
+
+				// Poll until askResponse is set (mirrors real channel polling)
+				const shouldWakeOnAbort = type !== "resume_task" && type !== "resume_completed_task"
+				while (taskState.askResponse === undefined && !(shouldWakeOnAbort && taskState.abort)) {
+					await new Promise((r) => setTimeout(r, 10))
+				}
+				if (shouldWakeOnAbort && taskState.abort) {
+					throw new Error("Dline instance aborted")
+				}
+
+				return {
+					response: taskState.askResponse,
+					text: taskState.askResponseText,
+					images: taskState.askResponseImages,
+					files: taskState.askResponseFiles,
+				}
+			},
+			advanceNextPendingApproval: () => {},
+		},
+		withApprovalVisibleCallback: (Task.prototype as any).withApprovalVisibleCallback,
+		markApprovalAskVisible: (Task.prototype as any).markApprovalAskVisible,
+		isPendingToolApprovalAsk: (Task.prototype as any).isPendingToolApprovalAsk,
+		isParallelToolCallingEnabled: () => false,
+		emitStateSnapshot: async () => undefined,
+		postStateToWebview: async () => undefined,
+		genMessageTs: () => {
+			const maxExisting = clineMessages.reduce((max, m) => Math.max(max, m.ts), 0)
+			const ts = Math.max(Date.now(), maxExisting + 1, taskState.lastMessageTs ?? 0, lastGeneratedTs + 1)
+			lastGeneratedTs = ts
+			return ts
+		},
+	}
+
+	return { clineMessages, fakeTask }
+}
+
+describe("Task.ask", () => {
+	it("notifies after a non-partial ask is visible", async () => {
+		const clock = vi.useFakeTimers()
+		const taskState = {
+			abort: false,
+			askResponse: undefined as string | undefined,
+			askResponseText: undefined as string | undefined,
+			askResponseImages: undefined as string[] | undefined,
+			askResponseFiles: undefined as string[] | undefined,
+			lastMessageTs: undefined as number | undefined,
+		}
+		const { clineMessages, fakeTask } = createFakeTask(taskState)
+		let visibleAskTs: number | undefined
+		let visibleMessageCount = 0
+
+		try {
+			const askPromise = (
+				Task.prototype as unknown as {
+					ask: (
+						type: "resume_task",
+						text?: string,
+						partial?: boolean,
+						options?: { onAskVisible?: (askTs: number) => void },
+					) => Promise<{ response: string; text?: string }>
+				}
+			).ask.call(fakeTask, "resume_task", undefined, undefined, {
+				onAskVisible: (askTs) => {
+					visibleAskTs = askTs
+					visibleMessageCount = clineMessages.length
+				},
+			})
+
+			await flushMicrotasks()
+			assert.equal(visibleAskTs, taskState.lastMessageTs)
+			assert.equal(visibleMessageCount, 1)
+
+			taskState.askResponse = "yesButtonClicked"
+			await await clock.advanceTimersByTimeAsync(100)
+			const result = await askPromise
+			assert.equal(result.response, "yesButtonClicked")
+		} finally {
+			clock.useRealTimers()
+		}
+	})
+
+	it("marks tool approvals as awaiting before the user responds", async () => {
+		const clock = vi.useFakeTimers()
+		const notificationStub = vi.spyOn(NotificationHook, "emitUserAttentionNotification").mockResolvedValue()
+		const taskState = {
+			abort: false,
+			askResponse: undefined as string | undefined,
+			askResponseText: undefined as string | undefined,
+			askResponseImages: undefined as string[] | undefined,
+			askResponseFiles: undefined as string[] | undefined,
+			lastMessageTs: undefined as number | undefined,
+		}
+		const { fakeTask } = createFakeTask(taskState)
+		const approvalBlock = {
+			callId: "call_read",
+			toolName: "read_file",
+			phase: "awaiting_approval",
+			ts: 123,
+			requiresApproval: true,
+			conversationHistoryIndex: 5,
+		}
+		let didAdvance = false
+		let didTransition = false
+		let didPostState = false
+		let didCallOriginalVisible = false
+
+		const controller = fakeTask.taskController as any
+		controller.getActiveBlock = () => null
+		controller.advanceNextPendingApproval = () => {
+			didAdvance = true
+			return approvalBlock
+		}
+		controller.toolNameToAskType = () => "tool"
+		controller.getBlocks = () => [approvalBlock]
+		controller.transition = (phase: string, ctx: any) => {
+			didTransition = true
+			assert.equal(phase, "awaiting_approval")
+			assert.equal(ctx.apiIndex, 5)
+			assert.equal(ctx.approval.activeCallId, "call_read")
+		}
+		fakeTask.postStateToWebview = async () => {
+			didPostState = true
+		}
+
+		try {
+			const askPromise = (
+				Task.prototype as unknown as {
+					ask: (
+						type: "tool",
+						text?: string,
+						partial?: boolean,
+						options?: { onAskVisible?: (askTs: number) => void },
+					) => Promise<{ response: string; text?: string }>
+				}
+			).ask.call(fakeTask, "tool", "{}", false, {
+				onAskVisible: () => {
+					didCallOriginalVisible = true
+				},
+			})
+
+			await flushMicrotasks()
+			assert.equal(didAdvance, true)
+			assert.equal(didTransition, true)
+			assert.equal(didPostState, true)
+			assert.equal(didCallOriginalVisible, true)
+			assert.equal(taskState.askResponse, undefined)
+
+			taskState.askResponse = "yesButtonClicked"
+			await await clock.advanceTimersByTimeAsync(100)
+			const result = await askPromise
+			assert.equal(result.response, "yesButtonClicked")
+		} finally {
+			notificationStub.mockRestore()
+			clock.useRealTimers()
+		}
+	})
+
+	it("keeps resume asks waiting for a user response even when the task is aborted", async () => {
+		const clock = vi.useFakeTimers()
+		const taskState: {
+			abort: boolean
+			askResponse: string | undefined
+			askResponseText: string | undefined
+			askResponseImages: string[] | undefined
+			askResponseFiles: string[] | undefined
+			lastMessageTs: number | undefined
+		} = {
+			abort: true,
+			askResponse: undefined,
+			askResponseText: undefined,
+			askResponseImages: undefined,
+			askResponseFiles: undefined,
+			lastMessageTs: undefined,
+		}
+		const { clineMessages, fakeTask } = createFakeTask(taskState)
+
+		try {
+			const askPromise = (
+				Task.prototype as unknown as {
+					ask: (type: "resume_task") => Promise<{ response: string; text?: string }>
+				}
+			).ask.call(fakeTask, "resume_task")
+
+			let settled = false
+			void askPromise.then(
+				() => {
+					settled = true
+				},
+				() => {
+					settled = true
+				},
+			)
+
+			await flushMicrotasks()
+			assert.equal(clineMessages.length, 1)
+			assert.equal(clineMessages[0].ask, "resume_task")
+			assert.notEqual(taskState.lastMessageTs, undefined)
+
+			await await clock.advanceTimersByTimeAsync(1_000)
+			assert.equal(settled, false)
+			assert.equal(taskState.askResponse, undefined)
+
+			taskState.askResponse = "yesButtonClicked"
+			taskState.askResponseText = "resume"
+
+			await await clock.advanceTimersByTimeAsync(100)
+			const result = await askPromise
+
+			assert.equal(result.response, "yesButtonClicked")
+			assert.equal(result.text, "resume")
+		} finally {
+			clock.useRealTimers()
+		}
+	})
+
+	it("keeps resume-completed asks waiting for a user response even when the task is aborted", async () => {
+		const clock = vi.useFakeTimers()
+		const taskState: {
+			abort: boolean
+			askResponse: string | undefined
+			askResponseText: string | undefined
+			askResponseImages: string[] | undefined
+			askResponseFiles: string[] | undefined
+			lastMessageTs: number | undefined
+		} = {
+			abort: true,
+			askResponse: undefined,
+			askResponseText: undefined,
+			askResponseImages: undefined,
+			askResponseFiles: undefined,
+			lastMessageTs: undefined,
+		}
+		const { clineMessages, fakeTask } = createFakeTask(taskState)
+
+		try {
+			const askPromise = (
+				Task.prototype as unknown as {
+					ask: (type: "resume_completed_task") => Promise<{ response: string; text?: string }>
+				}
+			).ask.call(fakeTask, "resume_completed_task")
+
+			let settled = false
+			void askPromise.then(
+				() => {
+					settled = true
+				},
+				() => {
+					settled = true
+				},
+			)
+
+			await flushMicrotasks()
+			assert.equal(clineMessages.length, 1)
+			assert.equal(clineMessages[0].ask, "resume_completed_task")
+			assert.notEqual(taskState.lastMessageTs, undefined)
+
+			await await clock.advanceTimersByTimeAsync(1_000)
+			assert.equal(settled, false)
+			assert.equal(taskState.askResponse, undefined)
+
+			taskState.askResponse = "yesButtonClicked"
+			taskState.askResponseText = "resume completed"
+
+			await await clock.advanceTimersByTimeAsync(100)
+			const result = await askPromise
+
+			assert.equal(result.response, "yesButtonClicked")
+			assert.equal(result.text, "resume completed")
+		} finally {
+			clock.useRealTimers()
+		}
+	})
+
+	it("still wakes non-resume asks when abort is triggered after the ask is shown", async () => {
+		const clock = vi.useFakeTimers()
+		const taskState: {
+			abort: boolean
+			askResponse: string | undefined
+			askResponseText: string | undefined
+			askResponseImages: string[] | undefined
+			askResponseFiles: string[] | undefined
+			lastMessageTs: number | undefined
+		} = {
+			abort: false,
+			askResponse: undefined,
+			askResponseText: undefined,
+			askResponseImages: undefined,
+			askResponseFiles: undefined,
+			lastMessageTs: undefined,
+		}
+		const { clineMessages, fakeTask } = createFakeTask(taskState)
+
+		try {
+			const askPromise = (
+				Task.prototype as unknown as {
+					ask: (type: "completion_result") => Promise<{ response: string }>
+				}
+			).ask.call(fakeTask, "completion_result")
+
+			await flushMicrotasks()
+			assert.equal(clineMessages.length, 1)
+			assert.equal(clineMessages[0].ask, "completion_result")
+
+			const rejectionPromise = assert.rejects(askPromise, /Dline instance aborted/)
+			taskState.abort = true
+
+			await await clock.advanceTimersByTimeAsync(100)
+			await rejectionPromise
+		} finally {
+			clock.useRealTimers()
+		}
+	})
+
+	it("emits notification hooks for non-command_output asks", async () => {
+		const clock = vi.useFakeTimers()
+		const notificationStub = vi.spyOn(NotificationHook, "emitUserAttentionNotification").mockResolvedValue()
+		const taskState: {
+			abort: boolean
+			askResponse: string | undefined
+			askResponseText: string | undefined
+			askResponseImages: string[] | undefined
+			askResponseFiles: string[] | undefined
+			lastMessageTs: number | undefined
+		} = {
+			abort: false,
+			askResponse: undefined,
+			askResponseText: undefined,
+			askResponseImages: undefined,
+			askResponseFiles: undefined,
+			lastMessageTs: undefined,
+		}
+		const { fakeTask } = createFakeTask(taskState)
+
+		try {
+			const askPromise = (
+				Task.prototype as unknown as {
+					ask: (type: "completion_result", text?: string) => Promise<{ response: string }>
+				}
+			).ask.call(fakeTask, "completion_result", "Need approval")
+
+			await flushMicrotasks()
+			expect(notificationStub)
+			assert.equal(notificationStub.mock.calls[0][1].source, "completion_result")
+			assert.equal(notificationStub.mock.calls[0][1].message, "Need approval")
+
+			taskState.askResponse = "yesButtonClicked"
+			await await clock.advanceTimersByTimeAsync(100)
+			await askPromise
+		} finally {
+			notificationStub.mockRestore()
+			clock.useRealTimers()
+		}
+	})
+
+	it("skips notification hooks for command_output asks", async () => {
+		const clock = vi.useFakeTimers()
+		const notificationStub = vi.spyOn(NotificationHook, "emitUserAttentionNotification").mockResolvedValue()
+		const taskState: {
+			abort: boolean
+			askResponse: string | undefined
+			askResponseText: string | undefined
+			askResponseImages: string[] | undefined
+			askResponseFiles: string[] | undefined
+			lastMessageTs: number | undefined
+		} = {
+			abort: false,
+			askResponse: undefined,
+			askResponseText: undefined,
+			askResponseImages: undefined,
+			askResponseFiles: undefined,
+			lastMessageTs: undefined,
+		}
+		const { fakeTask } = createFakeTask(taskState)
+
+		try {
+			const askPromise = (
+				Task.prototype as unknown as {
+					ask: (type: "command_output", text?: string) => Promise<{ response: string }>
+				}
+			).ask.call(fakeTask, "command_output", "stream update")
+
+			await flushMicrotasks()
+			expect(notificationStub)
+
+			taskState.askResponse = "yesButtonClicked"
+			await await clock.advanceTimersByTimeAsync(100)
+			await askPromise
+		} finally {
+			notificationStub.mockRestore()
+			clock.useRealTimers()
+		}
+	})
+})

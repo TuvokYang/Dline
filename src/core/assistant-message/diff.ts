@@ -1,0 +1,1489 @@
+import { getPrompt } from "@core/prompts/i18n"
+
+const SEARCH_BLOCK_START = "------- SEARCH"
+const SEARCH_BLOCK_END = "======="
+
+/**
+ * Structured diff block returned from SEARCH/REPLACE parsing.
+ * Used by the frontend for direct rendering without re-parsing.
+ */
+export interface DiffBlock {
+	/** Lines in the SEARCH section (original content to find) */
+	searchLines: string[]
+	/** Lines in the REPLACE section (new content to replace with) */
+	replaceLines: string[]
+	/** 1-based line number where the match starts in the original file */
+	matchStartLine: number
+	/** Matching strategy used: "exact" | "line_trim" | "block_anchor" | "empty" */
+	status: "exact" | "line_trim" | "block_anchor" | "empty"
+}
+
+/**
+ * A single parsed SEARCH/REPLACE block produced by the unified diff state machine.
+ * Contains both raw text (for error display) and structured data (for matching).
+ */
+export interface ParsedBlock {
+	/** Full original block text including delimiters (for error display) */
+	rawText: string
+	/** SEARCH section content lines (no delimiter prefix, no +/- prefix) */
+	searchText: string
+	/** REPLACE section content lines (no delimiter prefix, no +/- prefix) */
+	replaceText: string
+	/** 1-based line number where the SEARCH matched, 0 if unmatched */
+	startLine: number
+	/** Whether this block has a parsing/matching error */
+	hasError: boolean
+	/** Error code from DIFF_ERROR_CODE, undefined if no error */
+	errorCode?: string
+	/** Full error message for API response (formatResponse.toolError) */
+	errorMessage?: string
+}
+
+/**
+ * Result from the unified diff parser (constructNewFileContent).
+ * Consumed by both the webview renderer and file modification logic.
+ */
+export interface DiffResult {
+	/** Parsed blocks with metadata (per-block errors in ParsedBlock.errorMessage) */
+	blocks: ParsedBlock[]
+	/** Full new file content after applying all successful blocks */
+	newContent: string
+}
+
+/**
+ * Error codes for SEARCH/REPLACE diff parsing failures.
+ * Shared by constructNewFileContent (API result) and StreamingDiffParser (webview).
+ * All values use UPPER_CASE for consistency across modules.
+ */
+export const DIFF_ERROR_CODE = {
+	// Common: constructNewFileContent + StreamingDiffParser
+	SEARCH_NOT_FOUND: "SEARCH_NOT_FOUND",
+	EMPTY_SEARCH_CONTENT_CONFLICT: "EMPTY_SEARCH_CONTENT_CONFLICT",
+	DELIMITER_CONFLICT: "DELIMITER_CONFLICT",
+	DELIMITER_MISMATCH: "DELIMITER_MISMATCH",
+	DELIMITER_TOO_SHORT: "DELIMITER_TOO_SHORT",
+	UNCLOSED_SEARCH: "UNCLOSED_SEARCH",
+	UNCLOSED_REPLACE: "UNCLOSED_REPLACE",
+	BLOCK_OVERLAP: "BLOCK_OVERLAP",
+	BLOCK_OUT_OF_ORDER: "BLOCK_OUT_OF_ORDER",
+	// StreamingDiffParser-only: real-time streaming detection
+	EXTRA_CLOSE_MARKER: "EXTRA_CLOSE_MARKER",
+	NESTED_SEARCH_MARKER: "NESTED_SEARCH_MARKER",
+	MISSING_SEPARATOR: "MISSING_SEPARATOR",
+	SEARCH_MARKER_IN_REPLACE: "SEARCH_MARKER_IN_REPLACE",
+	FINAL_VALIDATION: "FINAL_VALIDATION",
+} as const
+
+export type DiffErrorCode = (typeof DIFF_ERROR_CODE)[keyof typeof DIFF_ERROR_CODE]
+
+/**
+ * Structured error thrown by constructNewFileContent when SEARCH/REPLACE parsing fails.
+ * Carries a machine-readable code so callers can route to correct diagnostics.
+ */
+export class DiffError extends Error {
+	public readonly code: DiffErrorCode
+
+	constructor(code: DiffErrorCode, message: string) {
+		super(message)
+		this.code = code
+		this.name = "DiffError"
+	}
+}
+
+const REPLACE_BLOCK_END = "+++++++ REPLACE"
+
+/**
+ * Converts a character index in a string to a 1-based line number.
+ * @param content - The full content string
+ * @param charIndex - The character index in the content
+ * @returns The 1-based line number where charIndex falls
+ */
+export function getLineNumberFromCharIndex(content: string, charIndex: number): number {
+	if (charIndex <= 0) return 1
+	return content.substring(0, charIndex).split("\n").length
+}
+
+const SEARCH_BLOCK_CHAR = "-"
+const REPLACE_BLOCK_CHAR = "+"
+const LEGACY_SEARCH_BLOCK_CHAR = "<"
+const LEGACY_REPLACE_BLOCK_CHAR = ">"
+
+// Replace the exact string constants with flexible regex patterns
+const SEARCH_BLOCK_START_REGEX = /^[-]{7,} SEARCH>?$/
+const LEGACY_SEARCH_BLOCK_START_REGEX = /^[<]{7,} SEARCH>?$/
+
+const SEARCH_BLOCK_END_REGEX = /^[=]{7,}$/
+
+const REPLACE_BLOCK_END_REGEX = /^[+]{7,} REPLACE>?$/
+const LEGACY_REPLACE_BLOCK_END_REGEX = /^[>]{7,} REPLACE>?$/
+
+// Count leading occurrences of a character
+function countLeadingChar(ch: string, line: string): number {
+	let count = 0
+	while (count < line.length && line[count] === ch) {
+		count++
+	}
+	return count
+}
+
+// Helper functions to check if a line matches the flexible patterns
+function isSearchBlockStart(line: string): boolean {
+	return SEARCH_BLOCK_START_REGEX.test(line) || LEGACY_SEARCH_BLOCK_START_REGEX.test(line)
+}
+
+/** Check if line is a SEARCH marker with EXACT dash count matching expectedN. */
+function isSearchBlockStartExact(line: string, expectedN: number): boolean {
+	const trimmed = line.trimStart()
+	const dashCount = countLeadingChar("-", trimmed)
+	if (dashCount !== expectedN) return false
+	const after = trimmed.slice(dashCount)
+	return /^ SEARCH>?$/.test(after)
+}
+
+function isSearchBlockEnd(line: string, expectedN?: number): boolean {
+	// When expectedN is set, use exact count to avoid false positives
+	// on SEARCH content that contains "=======" with a different N.
+	if (expectedN && expectedN >= 7) {
+		const trimmed = line.trimStart()
+		const eqCount = countLeadingChar("=", trimmed)
+		return eqCount === expectedN && trimmed.length === expectedN
+	}
+	return SEARCH_BLOCK_END_REGEX.test(line)
+}
+
+function isReplaceBlockEnd(line: string, expectedN?: number): boolean {
+	// When expectedN is set, use exact count to avoid false positives
+	if (expectedN && expectedN >= 7) {
+		const trimmed = line.trimStart()
+		const plusCount = countLeadingChar("+", trimmed)
+		const after = trimmed.slice(plusCount)
+		return plusCount === expectedN && /^ REPLACE>?$/.test(after)
+	}
+	return REPLACE_BLOCK_END_REGEX.test(line) || LEGACY_REPLACE_BLOCK_END_REGEX.test(line)
+}
+
+/**
+ * Attempts a line-trimmed fallback match for the given search content in the original content.
+ * It tries to match `searchContent` lines against a block of lines in `originalContent` starting
+ * from `lastProcessedIndex`. Lines are matched by trimming leading/trailing whitespace and ensuring
+ * they are identical afterwards.
+ *
+ * Returns [matchIndexStart, matchIndexEnd] if found, or false if not found.
+ */
+function lineTrimmedFallbackMatch(originalContent: string, searchContent: string, startIndex: number): [number, number] | false {
+	// Split both contents into lines
+	const originalLines = originalContent.split("\n")
+	const searchLines = searchContent.split("\n")
+
+	// Trim trailing empty line if exists (from the trailing \n in searchContent)
+	if (searchLines[searchLines.length - 1] === "") {
+		searchLines.pop()
+	}
+
+	// Find the line number where startIndex falls
+	let startLineNum = 0
+	let currentIndex = 0
+	while (currentIndex < startIndex && startLineNum < originalLines.length) {
+		currentIndex += originalLines[startLineNum].length + 1 // +1 for \n
+		startLineNum++
+	}
+
+	// For each possible starting position in original content
+	for (let i = startLineNum; i <= originalLines.length - searchLines.length; i++) {
+		let matches = true
+
+		// Try to match all search lines from this position
+		for (let j = 0; j < searchLines.length; j++) {
+			const originalTrimmed = originalLines[i + j].trim()
+			const searchTrimmed = searchLines[j].trim()
+
+			if (originalTrimmed !== searchTrimmed) {
+				matches = false
+				break
+			}
+		}
+
+		// If we found a match, calculate the exact character positions
+		if (matches) {
+			// Find start character index
+			let matchStartIndex = 0
+			for (let k = 0; k < i; k++) {
+				matchStartIndex += originalLines[k].length + 1 // +1 for \n
+			}
+
+			// Find end character index
+			let matchEndIndex = matchStartIndex
+			for (let k = 0; k < searchLines.length; k++) {
+				matchEndIndex += originalLines[i + k].length + 1 // +1 for \n
+			}
+
+			return [matchStartIndex, matchEndIndex]
+		}
+	}
+
+	return false
+}
+
+/**
+ * Attempts to match blocks of code by using the first and last lines as anchors.
+ * This is a third-tier fallback strategy that helps match blocks where we can identify
+ * the correct location by matching the beginning and end, even if the exact content
+ * differs slightly.
+ *
+ * The matching strategy:
+ * 1. Only attempts to match blocks of 3 or more lines to avoid false positives
+ * 2. Extracts from the search content:
+ *    - First line as the "start anchor"
+ *    - Last line as the "end anchor"
+ * 3. For each position in the original content:
+ *    - Checks if the next line matches the start anchor
+ *    - If it does, jumps ahead by the search block size
+ *    - Checks if that line matches the end anchor
+ *    - All comparisons are done after trimming whitespace
+ *
+ * This approach is particularly useful for matching blocks of code where:
+ * - The exact content might have minor differences
+ * - The beginning and end of the block are distinctive enough to serve as anchors
+ * - The overall structure (number of lines) remains the same
+ *
+ * @param originalContent - The full content of the original file
+ * @param searchContent - The content we're trying to find in the original file
+ * @param startIndex - The character index in originalContent where to start searching
+ * @returns A tuple of [startIndex, endIndex] if a match is found, false otherwise
+ */
+function blockAnchorFallbackMatch(originalContent: string, searchContent: string, startIndex: number): [number, number] | false {
+	const originalLines = originalContent.split("\n")
+	const searchLines = searchContent.split("\n")
+
+	// Only use this approach for blocks of 3+ lines
+	if (searchLines.length < 3) {
+		return false
+	}
+
+	// Trim trailing empty line if exists
+	if (searchLines[searchLines.length - 1] === "") {
+		searchLines.pop()
+	}
+
+	const firstLineSearch = searchLines[0].trim()
+	const lastLineSearch = searchLines[searchLines.length - 1].trim()
+	const searchBlockSize = searchLines.length
+
+	// Find the line number where startIndex falls
+	let startLineNum = 0
+	let currentIndex = 0
+	while (currentIndex < startIndex && startLineNum < originalLines.length) {
+		currentIndex += originalLines[startLineNum].length + 1
+		startLineNum++
+	}
+
+	// Look for matching start and end anchors
+	for (let i = startLineNum; i <= originalLines.length - searchBlockSize; i++) {
+		// Check if first line matches
+		if (originalLines[i].trim() !== firstLineSearch) {
+			continue
+		}
+
+		// Check if last line matches at the expected position
+		if (originalLines[i + searchBlockSize - 1].trim() !== lastLineSearch) {
+			continue
+		}
+
+		// Calculate exact character positions
+		let matchStartIndex = 0
+		for (let k = 0; k < i; k++) {
+			matchStartIndex += originalLines[k].length + 1
+		}
+
+		let matchEndIndex = matchStartIndex
+		for (let k = 0; k < searchBlockSize; k++) {
+			matchEndIndex += originalLines[i + k].length + 1
+		}
+
+		return [matchStartIndex, matchEndIndex]
+	}
+
+	return false
+}
+
+/**
+ * This function reconstructs the file content by applying a streamed diff (in a
+ * specialized SEARCH/REPLACE block format) to the original file content. It is designed
+ * to handle both incremental updates and the final resulting file after all chunks have
+ * been processed.
+ *
+ * The diff format is a custom structure that uses three markers to define changes:
+ *
+ *   ------- SEARCH
+ *   [Exact content to find in the original file]
+ *   =======
+ *   [Content to replace with]
+ *   +++++++ REPLACE
+ *
+ * Behavior and Assumptions:
+ * 1. The file is processed chunk-by-chunk. Each chunk of `diffContent` may contain
+ *    partial or complete SEARCH/REPLACE blocks. By calling this function with each
+ *    incremental chunk (with `isFinal` indicating the last chunk), the final reconstructed
+ *    file content is produced.
+ *
+ * 2. Matching Strategy (in order of attempt):
+ *    a. Exact Match: First attempts to find the exact SEARCH block text in the original file
+ *    b. Line-Trimmed Match: Falls back to line-by-line comparison ignoring leading/trailing whitespace
+ *    c. Block Anchor Match: For blocks of 3+ lines, tries to match using first/last lines as anchors
+ *    If all matching strategies fail, an error is thrown.
+ *
+ * 3. Empty SEARCH Section:
+ *    - If SEARCH is empty and the original file is empty, this indicates creating a new file
+ *      (pure insertion).
+ *    - If SEARCH is empty and the original file is not empty, this indicates a complete
+ *      file replacement (the entire original content is considered matched and replaced).
+ *
+ * 4. Applying Changes:
+ *    - Before encountering the "=======" marker, lines are accumulated as search content.
+ *    - After "=======" and before ">>>>>>> REPLACE", lines are accumulated as replacement content.
+ *    - Once the block is complete (">>>>>>> REPLACE"), the matched section in the original
+ *      file is replaced with the accumulated replacement lines, and the position in the original
+ *      file is advanced.
+ *
+ * 5. Incremental Output:
+ *    - As soon as the match location is found and we are in the REPLACE section, each new
+ *      replacement line is appended to the result so that partial updates can be viewed
+ *      incrementally.
+ *
+ * 6. Partial Markers:
+ *    - If the final line of the chunk looks like it might be part of a marker but is not one
+ *      of the known markers, it is removed. This prevents incomplete or partial markers
+ *      from corrupting the output.
+ *
+ * 7. Finalization:
+ *    - Once all chunks have been processed (when `isFinal` is true), any remaining original
+ *      content after the last replaced section is appended to the result.
+ *    - Trailing newlines are not forcibly added. The code tries to output exactly what is specified.
+ *
+ * Errors:
+ * - If the search block cannot be matched using any of the available matching strategies,
+ *   an error is thrown.
+ */
+export async function constructNewFileContent(
+	diffContent: string,
+	originalContent: string,
+	isFinal: boolean,
+	version: "v1" | "v2" = "v1",
+): Promise<DiffResult> {
+	const constructor = constructNewFileContentVersionMapping[version]
+	if (!constructor) {
+		throw new Error(`Invalid version '${version}' for file content constructor`)
+	}
+	const rawResult = await constructor(diffContent, originalContent, isFinal)
+
+	// Split raw diff into individual blocks by SEARCH markers for rawText
+	const rawBlocks = diffContent.split(/(?=\n*------- SEARCH)/).filter((b) => b.trim())
+
+	const parsedBlocks: ParsedBlock[] = rawBlocks.map((rawText, i) => {
+		const diffBlock = rawResult.blocks[i]
+		const hasError = !diffBlock || diffBlock.status === "empty"
+
+		return {
+			rawText: rawText.trim(),
+			searchText: diffBlock ? diffBlock.searchLines.join("\n") : "",
+			replaceText: diffBlock ? diffBlock.replaceLines.join("\n") : "",
+			startLine: diffBlock ? diffBlock.matchStartLine : 0,
+			hasError,
+			errorCode: hasError && rawResult.error ? rawResult.error.code : undefined,
+			errorMessage: hasError && rawResult.error ? rawResult.error.message : undefined,
+		}
+	})
+
+	return {
+		blocks: parsedBlocks,
+		newContent: rawResult.newContent,
+	}
+}
+
+const constructNewFileContentVersionMapping: Record<
+	string,
+	(
+		diffContent: string,
+		originalContent: string,
+		isFinal: boolean,
+	) => Promise<{ newContent: string; matchIndices: number[]; blocks: DiffBlock[]; error?: DiffError }>
+> = {
+	v1: constructNewFileContentV1,
+	v2: constructNewFileContentV2,
+} as const
+
+async function constructNewFileContentV1(
+	diffContent: string,
+	originalContent: string,
+	isFinal: boolean,
+): Promise<{ newContent: string; matchIndices: number[]; blocks: DiffBlock[]; error?: DiffError }> {
+	let diffError: DiffError | undefined
+	let result = ""
+	let lastProcessedIndex = 0
+
+	let currentSearchContent = ""
+	let currentReplaceContent = ""
+	let inSearch = false
+	let inReplace = false
+
+	let searchMatchIndex = -1
+	let searchEndIndex = -1
+	let blockDelimiterCount = 0 // Locked delimiter count per block for consistency validation
+
+	// Track all replacements for overlap validation and structured frontend output
+	const replacements: Array<{
+		start: number
+		end: number
+		content: string
+		searchLines: string[]
+		replaceLines: string[]
+		matchStartLine: number
+		status: DiffBlock["status"]
+	}> = []
+	/** Current block's matching strategy, set during SEARCH→REPLACE transition */
+	let currentMatchStatus: DiffBlock["status"] = "exact"
+	/** Current block index for error messages (1-based) */
+	let currentBlockIndex = 0
+
+	const lines = diffContent.split("\n")
+
+	// If the last line looks like a partial marker but isn't recognized,
+	// remove it because it might be incomplete.
+	const lastLine = lines[lines.length - 1]
+	if (
+		lines.length > 0 &&
+		(lastLine.startsWith(SEARCH_BLOCK_CHAR) ||
+			lastLine.startsWith(LEGACY_SEARCH_BLOCK_CHAR) ||
+			lastLine.startsWith("=") ||
+			lastLine.startsWith(REPLACE_BLOCK_CHAR) ||
+			lastLine.startsWith(LEGACY_REPLACE_BLOCK_CHAR)) &&
+		!isSearchBlockStart(lastLine) &&
+		!isSearchBlockEnd(lastLine) &&
+		!isReplaceBlockEnd(lastLine)
+	) {
+		lines.pop()
+	}
+
+	for (const line of lines) {
+		if (!inSearch && !inReplace && isSearchBlockStart(line)) {
+			inSearch = true
+			currentSearchContent = ""
+			currentReplaceContent = ""
+			currentBlockIndex++
+			blockDelimiterCount = countLeadingChar("-", line.trimStart())
+			if (blockDelimiterCount < 7) {
+				throw new DiffError(
+					DIFF_ERROR_CODE.DELIMITER_TOO_SHORT,
+					getPrompt("responses", "diffDelimiterTooShort", { count: String(blockDelimiterCount) }),
+				)
+			}
+			continue
+		}
+
+		if (inSearch && isSearchBlockEnd(line, blockDelimiterCount)) {
+			const endCount = countLeadingChar("=", line.trimStart())
+			if (endCount !== blockDelimiterCount) {
+				throw new DiffError(
+					DIFF_ERROR_CODE.DELIMITER_MISMATCH,
+					getPrompt("responses", "diffDelimiterMismatch", {
+						searchN: String(blockDelimiterCount),
+						closeN: String(endCount),
+					}),
+				)
+			}
+			// Check delimiter uniqueness in SEARCH content
+			for (const contentLine of currentSearchContent.split("\n")) {
+				const trimmed = contentLine.trimStart()
+				const dashCount = countLeadingChar("-", trimmed)
+				const eqCount = countLeadingChar("=", trimmed)
+				const plusCount = countLeadingChar("+", trimmed)
+				if (dashCount === blockDelimiterCount && /^[-]{7,} SEARCH>?$/.test(trimmed)) {
+					throw new DiffError(
+						DIFF_ERROR_CODE.DELIMITER_CONFLICT,
+						getPrompt("responses", "diffDelimiterConflict", {
+							blockType: "SEARCH",
+							count: String(dashCount),
+							char: "-",
+						}),
+					)
+				}
+				if (eqCount === blockDelimiterCount && /^[=]{7,}$/.test(trimmed)) {
+					throw new DiffError(
+						DIFF_ERROR_CODE.DELIMITER_CONFLICT,
+						getPrompt("responses", "diffDelimiterConflict", {
+							blockType: "SEARCH",
+							count: String(eqCount),
+							char: "=",
+						}),
+					)
+				}
+				if (plusCount === blockDelimiterCount && /^[+]{7,} REPLACE>?$/.test(trimmed)) {
+					throw new DiffError(
+						DIFF_ERROR_CODE.DELIMITER_CONFLICT,
+						getPrompt("responses", "diffDelimiterConflict", {
+							blockType: "SEARCH",
+							count: String(plusCount),
+							char: "+",
+						}),
+					)
+				}
+			}
+			inSearch = false
+			inReplace = true
+
+			// Remove trailing linebreak for adding the === marker
+			// if (currentSearchContent.endsWith("\r\n")) {
+			// 	currentSearchContent = currentSearchContent.slice(0, -2)
+			// } else if (currentSearchContent.endsWith("\n")) {
+			// 	currentSearchContent = currentSearchContent.slice(0, -1)
+			// }
+
+			if (!currentSearchContent) {
+				// Empty search block
+				if (originalContent.length === 0) {
+					// New file scenario: nothing to match, just start inserting
+					searchMatchIndex = 0
+					searchEndIndex = 0
+					currentMatchStatus = "empty"
+				} else {
+					// Empty SEARCH with non-empty file: SEARCH content may have been consumed as delimiter
+					throw new DiffError(
+						DIFF_ERROR_CODE.EMPTY_SEARCH_CONTENT_CONFLICT,
+						getPrompt("responses", "diffEmptySearchContentConflict"),
+					)
+				}
+			} else {
+				// Add check for inefficient full-file search
+				// if (currentSearchContent.trim() === originalContent.trim()) {
+				// 	throw new Error(
+				// 		"The SEARCH block contains the entire file content. Please either:\n" +
+				// 			"1. Use an empty SEARCH block to replace the entire file, or\n" +
+				// 			"2. Make focused changes to specific parts of the file that need modification.",
+				// 	)
+				// }
+
+				// Exact search match scenario
+				const exactIndex = originalContent.indexOf(currentSearchContent, lastProcessedIndex)
+				if (exactIndex !== -1) {
+					searchMatchIndex = exactIndex
+					searchEndIndex = exactIndex + currentSearchContent.length
+					currentMatchStatus = "exact"
+				} else {
+					// Attempt fallback line-trimmed matching
+					const lineMatch = lineTrimmedFallbackMatch(originalContent, currentSearchContent, lastProcessedIndex)
+					if (lineMatch) {
+						searchMatchIndex = (lineMatch as [number, number])[0]
+						searchEndIndex = (lineMatch as [number, number])[1]
+						currentMatchStatus = "line_trim"
+					} else {
+						// Try block anchor fallback for larger blocks
+						const blockMatch = blockAnchorFallbackMatch(originalContent, currentSearchContent, lastProcessedIndex)
+						if (blockMatch) {
+							searchMatchIndex = (blockMatch as [number, number])[0]
+							searchEndIndex = (blockMatch as [number, number])[1]
+							currentMatchStatus = "block_anchor"
+						} else {
+							// Check overlap before reporting SEARCH_NOT_FOUND
+							let isOverlap = false
+							for (const existing of replacements) {
+								const existingLines = existing.searchLines
+								const searchContentLines = currentSearchContent.split("\n").filter((l) => l !== "")
+								for (const sLine of searchContentLines) {
+									if (existingLines.some((eLine) => eLine.trim() === sLine.trim())) {
+										isOverlap = true
+										break
+									}
+								}
+								if (isOverlap) break
+							}
+							if (isOverlap) {
+								diffError = new DiffError(
+									DIFF_ERROR_CODE.BLOCK_OVERLAP,
+									getPrompt("responses", "diffBlockOverlap", {
+										blockIndex: String(currentBlockIndex),
+										prevIndex: String(1),
+									}),
+								)
+								result += originalContent.slice(lastProcessedIndex)
+								return {
+									newContent: result,
+									matchIndices: replacements.map((r) => r.start),
+									blocks: replacements.map((r) => ({
+										searchLines: r.searchLines,
+										replaceLines: r.replaceLines,
+										matchStartLine: r.matchStartLine,
+										status: r.status,
+									})),
+									error: diffError,
+								}
+							}
+							throw new DiffError(
+								DIFF_ERROR_CODE.SEARCH_NOT_FOUND,
+								getPrompt("responses", "diffSearchNotFound", {
+									lineCount: String(currentSearchContent.split("\n").filter((l) => l).length),
+								}),
+							)
+						}
+					}
+				}
+			}
+
+			// Reject out-of-order replacements: blocks must match in file order
+			// to prevent disordered edits and overlapping ranges.
+			if (searchMatchIndex < lastProcessedIndex) {
+				throw new DiffError(
+					DIFF_ERROR_CODE.BLOCK_OUT_OF_ORDER,
+					getPrompt("responses", "diffBlockOutOfOrder", { blockIndex: String(currentBlockIndex) }),
+				)
+			}
+
+			// Check for overlap with previously stored replacements
+			for (const existing of replacements) {
+				if (searchMatchIndex < existing.end && searchEndIndex > existing.start) {
+					diffError = new DiffError(
+						DIFF_ERROR_CODE.BLOCK_OVERLAP,
+						getPrompt("responses", "diffBlockOverlap", {
+							blockIndex: String(currentBlockIndex),
+							prevIndex: String(replacements.indexOf(existing) + 1),
+						}),
+					)
+					result += originalContent.slice(lastProcessedIndex)
+					return {
+						newContent: result,
+						matchIndices: replacements.map((r) => r.start),
+						blocks: replacements.map((r) => ({
+							searchLines: r.searchLines,
+							replaceLines: r.replaceLines,
+							matchStartLine: r.matchStartLine,
+							status: r.status,
+						})),
+						error: diffError,
+					}
+				}
+			}
+
+			// Output everything up to the match location
+			result += originalContent.slice(lastProcessedIndex, searchMatchIndex)
+			continue
+		}
+
+		if (inReplace && isReplaceBlockEnd(line, blockDelimiterCount)) {
+			const replaceCount = countLeadingChar("+", line.trimStart())
+			if (replaceCount !== blockDelimiterCount) {
+				throw new DiffError(
+					DIFF_ERROR_CODE.DELIMITER_MISMATCH,
+					getPrompt("responses", "diffDelimiterMismatch", {
+						searchN: String(blockDelimiterCount),
+						closeN: String(replaceCount),
+					}),
+				)
+			}
+			// Finished one replace block
+
+			if (searchMatchIndex === -1) {
+				throw new DiffError(DIFF_ERROR_CODE.UNCLOSED_SEARCH, getPrompt("responses", "diffUnclosedSearch"))
+			}
+
+			// Store this replacement with structured diff block info for frontend rendering
+			// Extract search/replace lines (remove trailing empty line from \n accumulation)
+			const searchLinesRaw = currentSearchContent.split("\n")
+			if (searchLinesRaw[searchLinesRaw.length - 1] === "") searchLinesRaw.pop()
+			const replaceLinesRaw = currentReplaceContent.split("\n")
+			if (replaceLinesRaw[replaceLinesRaw.length - 1] === "") replaceLinesRaw.pop()
+			const matchStartLine = searchMatchIndex >= 0 ? getLineNumberFromCharIndex(originalContent, searchMatchIndex) : 1
+
+			replacements.push({
+				start: searchMatchIndex,
+				end: searchEndIndex,
+				content: currentReplaceContent,
+				searchLines: searchLinesRaw,
+				replaceLines: replaceLinesRaw,
+				matchStartLine,
+				status: currentMatchStatus,
+			})
+
+			// Reset match status for next block
+			currentMatchStatus = "exact"
+
+			lastProcessedIndex = searchEndIndex
+
+			// Reset for next block
+			inSearch = false
+			inReplace = false
+			currentSearchContent = ""
+			currentReplaceContent = ""
+			searchMatchIndex = -1
+			searchEndIndex = -1
+			continue
+		}
+
+		// Accumulate content for search or replace
+		// (currentReplaceContent is not being used for anything right now since we directly append to result.)
+		// (We artificially add a linebreak since we split on \n at the beginning. In order to not include a trailing linebreak in the final search/result blocks we need to remove it before using them. This allows for partial line matches to be correctly identified.)
+		// NOTE: search/replace blocks must be arranged in the order they appear in the file due to how we build the content using lastProcessedIndex. We also cannot strip the trailing newline since for non-partial lines it would remove the linebreak from the original content. (If we remove end linebreak from search, then we'd also have to remove it from replace but we can't know if it's a partial line or not since the model may be using the line break to indicate the end of the block rather than as part of the search content.) We require the model to output full lines in order for our fallbacks to work as well.
+		if (inSearch) {
+			currentSearchContent += `${line}\n`
+		} else if (inReplace) {
+			// Check delimiter conflict in REPLACE content (same rules as SEARCH content)
+			const trimmed = line.trimStart()
+			const dashCount = countLeadingChar("-", trimmed)
+			const eqCount = countLeadingChar("=", trimmed)
+			const plusCount = countLeadingChar("+", trimmed)
+			if (dashCount === blockDelimiterCount && /^[-]{7,} SEARCH>?$/.test(trimmed)) {
+				throw new DiffError(
+					DIFF_ERROR_CODE.DELIMITER_CONFLICT,
+					getPrompt("responses", "diffDelimiterConflict", {
+						blockType: "REPLACE",
+						count: String(dashCount),
+						char: "-",
+					}),
+				)
+			}
+			if (eqCount === blockDelimiterCount && /^[=]{7,}$/.test(trimmed)) {
+				throw new DiffError(
+					DIFF_ERROR_CODE.DELIMITER_CONFLICT,
+					getPrompt("responses", "diffDelimiterConflict", { blockType: "REPLACE", count: String(eqCount), char: "=" }),
+				)
+			}
+			if (plusCount === blockDelimiterCount && /^[+]{7,} REPLACE>?$/.test(trimmed)) {
+				throw new DiffError(
+					DIFF_ERROR_CODE.DELIMITER_CONFLICT,
+					getPrompt("responses", "diffDelimiterConflict", {
+						blockType: "REPLACE",
+						count: String(plusCount),
+						char: "+",
+					}),
+				)
+			}
+			currentReplaceContent += `${line}\n`
+			// Output replacement lines immediately once match is found
+			if (searchMatchIndex !== -1) {
+				result += `${line}\n`
+			}
+		}
+	}
+
+	// If this is the final chunk, validate that all blocks are complete.
+	// Unclosed SEARCH or REPLACE blocks at finalization indicate a malformed
+	// diff from the model and must be rejected rather than auto-closed.
+	if (isFinal) {
+		if (inSearch) {
+			throw new DiffError(DIFF_ERROR_CODE.UNCLOSED_SEARCH, getPrompt("responses", "diffUnclosedSearch"))
+		}
+		if (inReplace) {
+			throw new DiffError(DIFF_ERROR_CODE.UNCLOSED_REPLACE, getPrompt("responses", "diffUnclosedReplace"))
+		}
+
+		result += originalContent.slice(lastProcessedIndex)
+	}
+
+	// Return structured diff block info for frontend rendering
+	return {
+		newContent: result,
+		matchIndices: replacements.map((r) => r.start),
+		blocks: replacements.map((r) => ({
+			searchLines: r.searchLines,
+			replaceLines: r.replaceLines,
+			matchStartLine: r.matchStartLine,
+			status: r.status,
+		})),
+		error: diffError,
+	}
+}
+
+enum ProcessingState {
+	Idle = 0,
+	StateSearch = 1 << 0,
+	StateReplace = 1 << 1,
+}
+
+class NewFileContentConstructor {
+	private originalContent: string
+	private isFinal: boolean
+	private state: number
+	private pendingNonStandardLines: string[]
+	private result: string
+	private lastProcessedIndex: number
+	private currentSearchContent: string
+	private searchMatchIndex: number
+	private searchEndIndex: number
+	private blockDelimiterCount: number
+
+	constructor(originalContent: string, isFinal: boolean) {
+		this.originalContent = originalContent
+		this.isFinal = isFinal
+		this.pendingNonStandardLines = []
+		this.result = ""
+		this.lastProcessedIndex = 0
+		this.state = ProcessingState.Idle
+		this.currentSearchContent = ""
+		this.searchMatchIndex = -1
+		this.searchEndIndex = -1
+		this.blockDelimiterCount = 0
+	}
+
+	private resetForNextBlock() {
+		// Reset for next block
+		this.state = ProcessingState.Idle
+		this.currentSearchContent = ""
+		this.searchMatchIndex = -1
+		this.searchEndIndex = -1
+	}
+
+	private findLastMatchingLineIndex(regx: RegExp, lineLimit: number) {
+		for (let i = lineLimit; i > 0; ) {
+			i--
+			if (this.pendingNonStandardLines[i].match(regx)) {
+				return i
+			}
+		}
+		return -1
+	}
+
+	private updateProcessingState(newState: ProcessingState) {
+		const isValidTransition =
+			(this.state === ProcessingState.Idle && newState === ProcessingState.StateSearch) ||
+			(this.state === ProcessingState.StateSearch && newState === ProcessingState.StateReplace)
+
+		if (!isValidTransition) {
+			throw new DiffError(DIFF_ERROR_CODE.UNCLOSED_SEARCH, getPrompt("responses", "diffUnclosedSearch"))
+		}
+
+		this.state |= newState
+	}
+
+	private isStateActive(state: ProcessingState): boolean {
+		return (this.state & state) === state
+	}
+
+	private activateReplaceState() {
+		this.updateProcessingState(ProcessingState.StateReplace)
+	}
+
+	private activateSearchState() {
+		this.updateProcessingState(ProcessingState.StateSearch)
+		this.currentSearchContent = ""
+	}
+
+	private isSearchingActive(): boolean {
+		return this.isStateActive(ProcessingState.StateSearch)
+	}
+
+	private isReplacingActive(): boolean {
+		return this.isStateActive(ProcessingState.StateReplace)
+	}
+
+	private hasPendingNonStandardLines(pendingNonStandardLineLimit: number): boolean {
+		return this.pendingNonStandardLines.length - pendingNonStandardLineLimit < this.pendingNonStandardLines.length
+	}
+
+	public processLine(line: string) {
+		this.internalProcessLine(line, true, this.pendingNonStandardLines.length)
+	}
+
+	public getResult(): { newContent: string; matchIndices: number[]; blocks: DiffBlock[] } {
+		// If this is the final chunk, append any remaining original content
+		if (this.isFinal && this.lastProcessedIndex < this.originalContent.length) {
+			this.result += this.originalContent.slice(this.lastProcessedIndex)
+		}
+		if (this.isFinal && this.state !== ProcessingState.Idle) {
+			throw new DiffError(DIFF_ERROR_CODE.UNCLOSED_SEARCH, getPrompt("responses", "diffUnclosedSearch"))
+		}
+		// Note: V2 implementation doesn't currently track match indices or diff blocks
+		return { newContent: this.result, matchIndices: [], blocks: [] }
+	}
+
+	private internalProcessLine(
+		line: string,
+		canWritependingNonStandardLines: boolean,
+		pendingNonStandardLineLimit: number,
+	): number {
+		let removeLineCount = 0
+		if (!this.isSearchingActive() && !this.isReplacingActive() && isSearchBlockStart(line)) {
+			this.blockDelimiterCount = countLeadingChar("-", line.trimStart())
+			if (this.blockDelimiterCount < 7) {
+				throw new DiffError(
+					DIFF_ERROR_CODE.DELIMITER_TOO_SHORT,
+					getPrompt("responses", "diffDelimiterTooShort", { count: String(this.blockDelimiterCount) }),
+				)
+			}
+			removeLineCount = this.trimPendingNonStandardTrailingEmptyLines(pendingNonStandardLineLimit)
+			if (removeLineCount > 0) {
+				pendingNonStandardLineLimit = pendingNonStandardLineLimit - removeLineCount
+			}
+			if (this.hasPendingNonStandardLines(pendingNonStandardLineLimit)) {
+				this.tryFixSearchReplaceBlock(pendingNonStandardLineLimit)
+				canWritependingNonStandardLines && (this.pendingNonStandardLines.length = 0)
+			}
+			this.activateSearchState()
+		} else if (isSearchBlockEnd(line)) {
+			const endCount = countLeadingChar("=", line.trimStart())
+			if (endCount !== this.blockDelimiterCount) {
+				throw new DiffError(
+					DIFF_ERROR_CODE.DELIMITER_MISMATCH,
+					getPrompt("responses", "diffDelimiterMismatch", {
+						searchN: String(this.blockDelimiterCount),
+						closeN: String(endCount),
+					}),
+				)
+			}
+			// 校验非标内容
+			if (!this.isSearchingActive()) {
+				this.tryFixSearchBlock(pendingNonStandardLineLimit)
+				canWritependingNonStandardLines && (this.pendingNonStandardLines.length = 0)
+			}
+			this.activateReplaceState()
+			this.beforeReplace()
+		} else if (this.isReplacingActive() && isReplaceBlockEnd(line)) {
+			const replaceCount = countLeadingChar("+", line.trimStart())
+			if (replaceCount !== this.blockDelimiterCount) {
+				throw new DiffError(
+					DIFF_ERROR_CODE.DELIMITER_MISMATCH,
+					getPrompt("responses", "diffDelimiterMismatch", {
+						searchN: String(this.blockDelimiterCount),
+						closeN: String(replaceCount),
+					}),
+				)
+			}
+			if (!this.isReplacingActive()) {
+				this.tryFixReplaceBlock(pendingNonStandardLineLimit)
+				canWritependingNonStandardLines && (this.pendingNonStandardLines.length = 0)
+			}
+			this.lastProcessedIndex = this.searchEndIndex
+			this.resetForNextBlock()
+		} else {
+			// Accumulate content for search or replace
+			// (currentReplaceContent is not being used for anything right now since we directly append to result.)
+			// (We artificially add a linebreak since we split on \n at the beginning. In order to not include a trailing linebreak in the final search/result blocks we need to remove it before using them. This allows for partial line matches to be correctly identified.)
+			// NOTE: search/replace blocks must be arranged in the order they appear in the file due to how we build the content using lastProcessedIndex. We also cannot strip the trailing newline since for non-partial lines it would remove the linebreak from the original content. (If we remove end linebreak from search, then we'd also have to remove it from replace but we can't know if it's a partial line or not since the model may be using the line break to indicate the end of the block rather than as part of the search content.) We require the model to output full lines in order for our fallbacks to work as well.
+			if (this.isReplacingActive()) {
+				// Output replacement lines immediately if we know the insertion point
+				if (this.searchMatchIndex !== -1) {
+					this.result += `${line}\n`
+				}
+			} else if (this.isSearchingActive()) {
+				this.currentSearchContent += `${line}\n`
+			} else {
+				const appendToPendingNonStandardLines = canWritependingNonStandardLines
+				if (appendToPendingNonStandardLines) {
+					// 处理非标内容
+					this.pendingNonStandardLines.push(line)
+				}
+			}
+		}
+		return removeLineCount
+	}
+
+	private beforeReplace() {
+		// Remove trailing linebreak for adding the === marker
+		// if (currentSearchContent.endsWith("\r\n")) {
+		// 	currentSearchContent = currentSearchContent.slice(0, -2)
+		// } else if (currentSearchContent.endsWith("\n")) {
+		// 	currentSearchContent = currentSearchContent.slice(0, -1)
+		// }
+
+		if (!this.currentSearchContent) {
+			// Empty search block
+			if (this.originalContent.length === 0) {
+				// New file scenario: nothing to match, just start inserting
+				this.searchMatchIndex = 0
+				this.searchEndIndex = 0
+			} else {
+				// Complete file replacement scenario: treat the entire file as matched
+				this.searchMatchIndex = 0
+				this.searchEndIndex = this.originalContent.length
+			}
+		} else {
+			// Add check for inefficient full-file search
+			// if (currentSearchContent.trim() === originalContent.trim()) {
+			// 	throw new Error(
+			// 		"The SEARCH block contains the entire file content. Please either:\n" +
+			// 			"1. Use an empty SEARCH block to replace the entire file, or\n" +
+			// 			"2. Make focused changes to specific parts of the file that need modification.",
+			// 	)
+			// }
+			// Exact search match scenario
+			const exactIndex = this.originalContent.indexOf(this.currentSearchContent, this.lastProcessedIndex)
+			if (exactIndex !== -1) {
+				this.searchMatchIndex = exactIndex
+				this.searchEndIndex = exactIndex + this.currentSearchContent.length
+			} else {
+				// Attempt fallback line-trimmed matching
+				const lineMatch = lineTrimmedFallbackMatch(
+					this.originalContent,
+					this.currentSearchContent,
+					this.lastProcessedIndex,
+				)
+				if (lineMatch) {
+					;[this.searchMatchIndex, this.searchEndIndex] = lineMatch
+				} else {
+					// Try block anchor fallback for larger blocks
+					const blockMatch = blockAnchorFallbackMatch(
+						this.originalContent,
+						this.currentSearchContent,
+						this.lastProcessedIndex,
+					)
+					if (blockMatch) {
+						;[this.searchMatchIndex, this.searchEndIndex] = blockMatch
+					} else {
+						throw new DiffError(
+							DIFF_ERROR_CODE.SEARCH_NOT_FOUND,
+							getPrompt("responses", "diffSearchNotFound", {
+								lineCount: String(this.currentSearchContent.split("\n").filter((l) => l).length),
+							}),
+						)
+					}
+				}
+			}
+		}
+		if (this.searchMatchIndex < this.lastProcessedIndex) {
+			throw new DiffError(
+				DIFF_ERROR_CODE.BLOCK_OUT_OF_ORDER,
+				getPrompt("responses", "diffBlockOutOfOrder", { blockIndex: "?" }),
+			)
+		}
+		// Output everything up to the match location
+		this.result += this.originalContent.slice(this.lastProcessedIndex, this.searchMatchIndex)
+	}
+
+	private tryFixSearchBlock(lineLimit: number): number {
+		let removeLineCount = 0
+		if (lineLimit < 0) {
+			lineLimit = this.pendingNonStandardLines.length
+		}
+		if (!lineLimit) {
+			throw new DiffError(DIFF_ERROR_CODE.UNCLOSED_SEARCH, getPrompt("responses", "diffUnclosedSearch"))
+		}
+		const searchTagRegexp = /^([-]{3,}|[<]{3,}) SEARCH$/
+		const searchTagIndex = this.findLastMatchingLineIndex(searchTagRegexp, lineLimit)
+		if (searchTagIndex !== -1) {
+			const fixLines = this.pendingNonStandardLines.slice(searchTagIndex, lineLimit)
+			fixLines[0] = SEARCH_BLOCK_START
+			for (const line of fixLines) {
+				removeLineCount += this.internalProcessLine(line, false, searchTagIndex)
+			}
+		} else {
+			throw new DiffError(DIFF_ERROR_CODE.UNCLOSED_REPLACE, getPrompt("responses", "diffUnclosedReplace"))
+		}
+		return removeLineCount
+	}
+
+	private tryFixReplaceBlock(lineLimit: number): number {
+		let removeLineCount = 0
+		if (lineLimit < 0) {
+			lineLimit = this.pendingNonStandardLines.length
+		}
+		if (!lineLimit) {
+			throw new DiffError(DIFF_ERROR_CODE.UNCLOSED_REPLACE, getPrompt("responses", "diffUnclosedReplace"))
+		}
+		const replaceBeginTagRegexp = /^[=]{3,}$/
+		const replaceBeginTagIndex = this.findLastMatchingLineIndex(replaceBeginTagRegexp, lineLimit)
+		if (replaceBeginTagIndex !== -1) {
+			// // 校验非标内容
+			// if (!this.isSearchingActive()) {
+			// 	removeLineCount += this.tryFixSearchBlock(replaceBeginTagIndex)
+			// }
+			const fixLines = this.pendingNonStandardLines.slice(
+				replaceBeginTagIndex - removeLineCount,
+				lineLimit - removeLineCount,
+			)
+			fixLines[0] = SEARCH_BLOCK_END
+			for (const line of fixLines) {
+				removeLineCount += this.internalProcessLine(line, false, replaceBeginTagIndex - removeLineCount)
+			}
+		} else {
+			throw new DiffError(DIFF_ERROR_CODE.UNCLOSED_REPLACE, getPrompt("responses", "diffUnclosedReplace"))
+		}
+		return removeLineCount
+	}
+
+	private tryFixSearchReplaceBlock(lineLimit: number): number {
+		let removeLineCount = 0
+		if (lineLimit < 0) {
+			lineLimit = this.pendingNonStandardLines.length
+		}
+		if (!lineLimit) {
+			throw new DiffError(DIFF_ERROR_CODE.UNCLOSED_REPLACE, getPrompt("responses", "diffUnclosedReplace"))
+		}
+
+		const replaceEndTagRegexp = /^([+]{3,}|[>]{3,}) REPLACE$/
+		const replaceEndTagIndex = this.findLastMatchingLineIndex(replaceEndTagRegexp, lineLimit)
+		const likeReplaceEndTag = replaceEndTagIndex === lineLimit - 1
+		if (likeReplaceEndTag) {
+			// // 校验非标内容
+			// if (!this.isReplacingActive()) {
+			// 	removeLineCount += this.tryFixReplaceBlock(replaceEndTagIndex)
+			// }
+			const fixLines = this.pendingNonStandardLines.slice(replaceEndTagIndex - removeLineCount, lineLimit - removeLineCount)
+			fixLines[fixLines.length - 1] = REPLACE_BLOCK_END
+			for (const line of fixLines) {
+				removeLineCount += this.internalProcessLine(line, false, replaceEndTagIndex - removeLineCount)
+			}
+		} else {
+			throw new Error("Malformed SEARCH/REPLACE block structure: Missing valid closing REPLACE marker")
+		}
+		return removeLineCount
+	}
+
+	/**
+	 * Removes trailing empty lines from the pendingNonStandardLines array
+	 * @param lineLimit - The index to start checking from (exclusive).
+	 *                    Removes empty lines from lineLimit-1 backwards.
+	 * @returns The number of empty lines removed
+	 */
+	private trimPendingNonStandardTrailingEmptyLines(lineLimit: number): number {
+		let removedCount = 0
+		let i = Math.min(lineLimit, this.pendingNonStandardLines.length) - 1
+
+		while (i >= 0 && this.pendingNonStandardLines[i].trim() === "") {
+			this.pendingNonStandardLines.pop()
+			removedCount++
+			i--
+		}
+
+		return removedCount
+	}
+}
+
+export async function constructNewFileContentV2(
+	diffContent: string,
+	originalContent: string,
+	isFinal: boolean,
+): Promise<{ newContent: string; matchIndices: number[]; blocks: DiffBlock[] }> {
+	const newFileContentConstructor = new NewFileContentConstructor(originalContent, isFinal)
+
+	const lines = diffContent.split("\n")
+
+	// If the last line looks like a partial marker but isn't recognized,
+	// remove it because it might be incomplete.
+	const lastLine = lines[lines.length - 1]
+	if (
+		lines.length > 0 &&
+		(lastLine.startsWith(SEARCH_BLOCK_CHAR) ||
+			lastLine.startsWith(LEGACY_SEARCH_BLOCK_CHAR) ||
+			lastLine.startsWith("=") ||
+			lastLine.startsWith(REPLACE_BLOCK_CHAR) ||
+			lastLine.startsWith(LEGACY_REPLACE_BLOCK_CHAR)) &&
+		lastLine !== SEARCH_BLOCK_START &&
+		lastLine !== SEARCH_BLOCK_END &&
+		lastLine !== REPLACE_BLOCK_END
+	) {
+		lines.pop()
+	}
+
+	for (const line of lines) {
+		newFileContentConstructor.processLine(line)
+	}
+
+	const result = newFileContentConstructor.getResult()
+	return result
+}
+
+/**
+ * Unified diff parser that produces ParsedBlock[] for both webview rendering
+ * and file modification. Splits raw diff into individual SEARCH/REPLACE blocks
+ * and merges with match results from constructNewFileContent.
+ *
+ * @param diffContent - Raw SEARCH/REPLACE diff string from the AI
+ * @param originalContent - Current file content to match against
+ * @param isFinal - Whether this is the final (non-partial) parse
+ * @returns DiffResult with parsed blocks, new content, and errors
+ */
+// ─── Match helpers (shared by constructNewFileContent and DiffParser) ────────
+
+/**
+ * Match SEARCH lines against original file content.
+ * Uses 3-tier strategy: exact → line-trimmed → block-anchor.
+ */
+function matchSearchInFile(
+	searchLines: string[],
+	originalContent: string,
+	lastProcessedIndex: number,
+): { matchStartIndex: number; matchEndIndex: number } | null {
+	if (searchLines.length === 0) return null
+	const searchContent = `${searchLines.join("\n")}\n`
+
+	const exactIndex = originalContent.indexOf(searchContent, lastProcessedIndex)
+	if (exactIndex !== -1) {
+		return { matchStartIndex: exactIndex, matchEndIndex: exactIndex + searchContent.length }
+	}
+	const lineMatch = lineTrimmedFallbackMatch(originalContent, searchContent, lastProcessedIndex)
+	if (lineMatch) return { matchStartIndex: lineMatch[0], matchEndIndex: lineMatch[1] }
+	if (searchLines.length >= 3) {
+		const blockMatch = blockAnchorFallbackMatch(originalContent, searchContent, lastProcessedIndex)
+		if (blockMatch) return { matchStartIndex: blockMatch[0], matchEndIndex: blockMatch[1] }
+	}
+	return null
+}
+
+/**
+ * Unified DiffParser — processes SEARCH/REPLACE diff line-by-line.
+ * Blocks are matched and applied immediately on close. Unclosed blocks
+ * and overlap checks are deferred to finalize().
+ */
+export class DiffParser {
+	private state: "idle" | "search" | "replace" = "idle"
+	private delimiterN = 0
+	private blockIndex = 0
+	private originalContent: string
+
+	private searchLines: string[] = []
+	private replaceLines: string[] = []
+	private currentRawLines: string[] = []
+	private currentWebviewLines: string[] = []
+
+	private blocks: ParsedBlock[] = []
+	private newContent = ""
+	private lastProcessedIndex = 0
+	private readonly isPartial: boolean
+
+	/** When true, idle-state lines are drained into the previous error block's rawText. */
+	private drainToPrevBlock = false
+
+	/**
+	 * @param originalContent - Current file content to match against
+	 * @param isPartial - When true, finalize() skips UNCLOSED errors
+	 *   (normal during streaming — the diff isn't complete yet)
+	 */
+	constructor(originalContent: string, isPartial = false) {
+		this.originalContent = originalContent
+		this.isPartial = isPartial
+	}
+
+	processLine(line: string): void {
+		switch (this.state) {
+			case "idle":
+				this.handleIdle(line)
+				break
+			case "search":
+				this.handleSearch(line)
+				break
+			case "replace":
+				this.handleReplace(line)
+				break
+		}
+	}
+
+	finalize(): void {
+		// In partial mode, skip UNCLOSED errors — the diff is still streaming
+		// and an unclosed block is expected, not a real error.
+		if (!this.isPartial && (this.state === "search" || this.state === "replace") && this.currentRawLines.length > 0) {
+			const errCode = this.state === "search" ? DIFF_ERROR_CODE.UNCLOSED_SEARCH : DIFF_ERROR_CODE.UNCLOSED_REPLACE
+			this.pushBlock(0, errCode)
+		}
+		// Overlap detection: if a failed block's searchText is contained within any
+		// previous successful block's searchText, it's an overlap (not SEARCH_NOT_FOUND).
+		for (let i = 1; i < this.blocks.length; i++) {
+			const curr = this.blocks[i]
+			if (!curr.hasError || !curr.searchText) continue
+			for (let j = 0; j < i; j++) {
+				const prev = this.blocks[j]
+				if (prev.hasError || !prev.searchText) continue
+				if (prev.searchText.includes(curr.searchText)) {
+					curr.errorCode = DIFF_ERROR_CODE.BLOCK_OVERLAP
+					curr.errorMessage = getPrompt("responses", "diffBlockOverlap", {
+						blockIndex: String(i + 1),
+						prevIndex: String(j + 1),
+					})
+					break
+				}
+			}
+		}
+		// Append remaining original content
+		if (this.lastProcessedIndex < this.originalContent.length) {
+			this.newContent += this.originalContent.slice(this.lastProcessedIndex)
+		}
+	}
+
+	getResult(): DiffResult {
+		return { blocks: this.blocks, newContent: this.newContent }
+	}
+
+	// ─── State handlers ──────────────────────────────────────────────
+
+	private handleIdle(line: string): void {
+		const trimmed = line.trim()
+
+		// Drain mode: previous block errored, collect stray lines into its rawText
+		// so the complete malformed diff block is visible for diagnostics.
+		if (this.drainToPrevBlock) {
+			const lastBlock = this.blocks[this.blocks.length - 1]
+			if (isSearchBlockStart(trimmed)) {
+				// Next real block starts — stop draining and handle normally below
+				this.drainToPrevBlock = false
+			} else if (isReplaceBlockEnd(trimmed)) {
+				// Close marker belonging to the errored block — append and stop drain
+				if (lastBlock) {
+					lastBlock.rawText = lastBlock.rawText ? lastBlock.rawText + "\n" + line : line
+				}
+				this.drainToPrevBlock = false
+				return
+			} else {
+				// Stray content line between error and close marker — append
+				if (lastBlock) {
+					lastBlock.rawText = lastBlock.rawText ? lastBlock.rawText + "\n" + line : line
+				}
+				return
+			}
+		}
+
+		if (isSearchBlockStart(trimmed)) {
+			this.delimiterN = countLeadingChar("-", trimmed)
+			if (this.delimiterN < 7) {
+				this.pushBlock(0, DIFF_ERROR_CODE.DELIMITER_TOO_SHORT)
+				return
+			}
+			this.state = "search"
+			this.searchLines = []
+			this.replaceLines = []
+			this.currentRawLines = [line]
+			this.currentWebviewLines = []
+			return
+		}
+		if (isReplaceBlockEnd(trimmed)) {
+			this.currentRawLines.push(line)
+			this.pushBlock(0, DIFF_ERROR_CODE.EXTRA_CLOSE_MARKER)
+		}
+	}
+
+	private handleSearch(line: string): void {
+		const trimmed = line.trim()
+		this.currentRawLines.push(line)
+		if (isSearchBlockEnd(trimmed, this.delimiterN)) {
+			if (this.searchLines.length === 0 && this.originalContent.length > 0) {
+				this.pushBlock(0, DIFF_ERROR_CODE.EMPTY_SEARCH_CONTENT_CONFLICT)
+				return
+			}
+			this.state = "replace"
+			return
+		}
+		const searchMarkerN = isSearchBlockStartExact(trimmed, this.delimiterN)
+		if (searchMarkerN) {
+			this.pushBlock(0, DIFF_ERROR_CODE.NESTED_SEARCH_MARKER)
+			return
+		}
+		// REPLACE end marker in SEARCH block → missing ======= separator
+		if (isReplaceBlockEnd(trimmed, this.delimiterN)) {
+			this.pushBlock(0, DIFF_ERROR_CODE.MISSING_SEPARATOR)
+			return
+		}
+		this.searchLines.push(line)
+		this.currentWebviewLines.push(`- ${line}`)
+	}
+
+	private handleReplace(line: string): void {
+		const trimmed = line.trim()
+		this.currentRawLines.push(line)
+		if (isReplaceBlockEnd(trimmed, this.delimiterN)) {
+			this.completeBlock()
+			return
+		}
+		if (isSearchBlockEnd(trimmed, this.delimiterN)) {
+			this.replaceLines.push(line)
+			this.currentWebviewLines.push(`+ ${line}`)
+			this.pushBlock(0, DIFF_ERROR_CODE.DELIMITER_CONFLICT)
+			return
+		}
+		const searchMarkerN = isSearchBlockStartExact(trimmed, this.delimiterN)
+		if (searchMarkerN) {
+			this.pushBlock(0, DIFF_ERROR_CODE.SEARCH_MARKER_IN_REPLACE)
+			return
+		}
+		this.replaceLines.push(line)
+		this.currentWebviewLines.push(`+ ${line}`)
+	}
+
+	private completeBlock(): void {
+		const rawText = this.currentRawLines.join("\n")
+		const searchText = this.searchLines.join("\n")
+		const replaceText = this.replaceLines.join("\n")
+		const matchResult = matchSearchInFile(this.searchLines, this.originalContent, this.lastProcessedIndex)
+		if (matchResult) {
+			const startLine = getLineNumberFromCharIndex(this.originalContent, matchResult.matchStartIndex)
+			this.newContent += this.originalContent.slice(this.lastProcessedIndex, matchResult.matchStartIndex)
+			if (replaceText) this.newContent += `${replaceText}\n`
+			this.lastProcessedIndex = matchResult.matchEndIndex
+			this.blocks.push({
+				rawText,
+				searchText,
+				replaceText,
+				startLine,
+				hasError: false,
+				_matchStart: matchResult.matchStartIndex,
+				_matchEnd: matchResult.matchEndIndex,
+			} as any)
+		} else {
+			this.blocks.push({
+				rawText,
+				searchText,
+				replaceText,
+				startLine: 0,
+				hasError: true,
+				errorCode: DIFF_ERROR_CODE.SEARCH_NOT_FOUND,
+				errorMessage: getPrompt("responses", "diffSearchNotFound", { lineCount: String(this.searchLines.length) }),
+			})
+		}
+		this.resetBlock()
+	}
+
+	private pushBlock(startLine: number, errorCode: string): void {
+		this.blocks.push({
+			rawText: this.currentRawLines.join("\n"),
+			searchText: this.searchLines.join("\n"),
+			replaceText: this.replaceLines.join("\n"),
+			startLine,
+			hasError: true,
+			errorCode,
+			errorMessage: this.buildErrorMessage(errorCode),
+		})
+		this.resetBlock()
+		// Enable drain mode so subsequent stray lines (between the error
+		// and the block's close marker) are collected into rawText.
+		this.drainToPrevBlock = true
+	}
+
+	private buildErrorMessage(code: string): string {
+		const n = this.delimiterN
+		switch (code) {
+			case DIFF_ERROR_CODE.DELIMITER_CONFLICT:
+				return getPrompt("responses", "diffDelimiterConflict", { blockType: "REPLACE", count: String(n), char: "=" })
+			case DIFF_ERROR_CODE.DELIMITER_MISMATCH:
+				return getPrompt("responses", "diffDelimiterMismatch", { searchN: String(n), closeN: String(this._closeN ?? n) })
+			case DIFF_ERROR_CODE.DELIMITER_TOO_SHORT:
+				return getPrompt("responses", "diffDelimiterTooShort", { count: String(n) })
+			case DIFF_ERROR_CODE.UNCLOSED_SEARCH:
+				return getPrompt("responses", "diffUnclosedSearch")
+			case DIFF_ERROR_CODE.UNCLOSED_REPLACE:
+				return getPrompt("responses", "diffUnclosedReplace")
+			case DIFF_ERROR_CODE.BLOCK_OVERLAP:
+				return getPrompt("responses", "diffBlockOverlap", {
+					blockIndex: String(this.blockIndex + 1),
+					prevIndex: String(this.blockIndex),
+				})
+			case DIFF_ERROR_CODE.BLOCK_OUT_OF_ORDER:
+				return getPrompt("responses", "diffBlockOutOfOrder", { blockIndex: String(this.blockIndex + 1) })
+			case DIFF_ERROR_CODE.EXTRA_CLOSE_MARKER:
+				return getPrompt("responses", "diffExtraCloseMarker")
+			case DIFF_ERROR_CODE.NESTED_SEARCH_MARKER:
+				return getPrompt("responses", "diffNestedSearchMarker")
+			case DIFF_ERROR_CODE.MISSING_SEPARATOR:
+				return getPrompt("responses", "diffMissingSeparator")
+			case DIFF_ERROR_CODE.SEARCH_MARKER_IN_REPLACE:
+				return getPrompt("responses", "diffSearchMarkerInReplace")
+			case DIFF_ERROR_CODE.EMPTY_SEARCH_CONTENT_CONFLICT:
+				return getPrompt("responses", "diffEmptySearchContentConflict")
+			default:
+				return `SEARCH/REPLACE error: ${code}`
+		}
+	}
+	private _closeN?: number
+
+	private resetBlock(): void {
+		this.state = "idle"
+		this.blockIndex++
+		this.searchLines = []
+		this.replaceLines = []
+		this.currentRawLines = []
+		this.currentWebviewLines = []
+	}
+}

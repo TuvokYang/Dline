@@ -1,0 +1,101 @@
+syntax = "proto3";
+
+package dline;
+
+option go_package = "github.com/dline/grpc-go/dline";
+option java_multiple_files = true;
+option java_package = "bot.dline.proto";
+
+import "dline/models.proto";
+import "dline/provider/anthropic.proto";
+import "dline/provider/bedrock.proto";
+import "dline/provider/vertex.proto";
+import "dline/provider/sapaicore.proto";
+import "dline/provider/claude_code.proto";
+import "dline/provider/openrouter.proto";
+import "dline/provider/openai.proto";
+import "dline/provider/ollama.proto";
+import "dline/provider/lmstudio.proto";
+import "dline/provider/qwen.proto";
+import "dline/provider/qwen_code.proto";
+import "dline/provider/litellm.proto";
+import "dline/provider/moonshot.proto";
+import "dline/provider/asksage.proto";
+import "dline/provider/cline_provider.proto";
+import "dline/provider/zai.proto";
+import "dline/provider/oca.proto";
+import "dline/provider/aihubmix.proto";
+import "dline/provider/minimax.proto";
+import "dline/provider/common.proto";
+import "dline/provider/fireworks.proto";
+import "dline/provider/openai_codex.proto";
+import "dline/provider/dify.proto";
+
+/** A configured provider+model combination (ApiProfile). */
+message ApiProfile {
+  string id = 1;
+  string name = 2;
+  string provider = 3;
+  string api_key = 4;
+  optional string base_url = 5;
+  string model_id = 6;
+  repeated string used_for = 7;
+  bool enabled = 8;
+  optional ModelInfo model_info = 9;  // user defined model info overwrite
+
+  oneof provider_config {
+    dline.provider.AnthropicProviderConfig anthropic = 10;
+    dline.provider.BedrockProviderConfig bedrock = 11;
+    dline.provider.VertexProviderConfig vertex = 12;
+    dline.provider.SapAiCoreProviderConfig sapaicore = 13;
+    dline.provider.ClaudeCodeProviderConfig claude_code = 14;
+    dline.provider.OpenRouterProviderConfig openrouter = 20;
+    dline.provider.OpenAiProviderConfig openai = 21;
+    dline.provider.OllamaProviderConfig ollama = 22;
+    dline.provider.LmStudioProviderConfig lmstudio = 23;
+    dline.provider.QwenProviderConfig qwen = 24;
+    dline.provider.QwenCodeProviderConfig qwen_code = 25;
+    dline.provider.LiteLlmProviderConfig litellm = 26;
+    dline.provider.MoonshotProviderConfig moonshot = 27;
+    dline.provider.AskSageProviderConfig asksage = 28;
+    dline.provider.ClineProviderConfig cline_provider = 29;
+    dline.provider.ZAiProviderConfig zai = 30;
+    dline.provider.OcaProviderConfig oca = 31;
+    dline.provider.AihubmixProviderConfig aihubmix = 32;
+    dline.provider.MinimaxProviderConfig minimax = 33;
+    // --- New provider configs ---
+    dline.provider.BaseProviderConfig deepseek = 34;
+    dline.provider.BaseProviderConfig doubao = 35;
+    dline.provider.BaseProviderConfig mistral = 36;
+    dline.provider.BaseProviderConfig vscode_lm = 37;
+    dline.provider.BaseProviderConfig nebius = 38;
+    dline.provider.FireworksProviderConfig fireworks = 39;
+    dline.provider.BaseProviderConfig xai = 40;
+    dline.provider.BaseProviderConfig sambanova = 41;
+    dline.provider.BaseProviderConfig cerebras = 42;
+    dline.provider.BaseProviderConfig groq = 43;
+    dline.provider.BaseProviderConfig huggingface = 44;
+    dline.provider.BaseProviderConfig huawei_cloud_maas = 45;
+    dline.provider.BaseProviderConfig baseten = 46;
+    dline.provider.BaseProviderConfig vercel_ai_gateway = 47;
+    dline.provider.BaseProviderConfig together = 48;
+    dline.provider.BaseProviderConfig requesty = 49;
+    dline.provider.BaseProviderConfig hicap = 50;
+    dline.provider.OpenAiCodexProviderConfig openai_codex = 51;
+    dline.provider.BaseProviderConfig openai_native = 52;
+    dline.provider.BaseProviderConfig gemini = 53;
+    dline.provider.BaseProviderConfig nous_research = 54;
+    dline.provider.BaseProviderConfig wandb = 55;
+    dline.provider.DifyProviderConfig dify = 56;
+  }
+}
+
+/** Response for getApiProfiles RPC. */
+message ApiProfilesResponse {
+  repeated ApiProfile profiles = 1;
+}
+
+/** Request for updateApiProfiles RPC. */
+message UpdateApiProfilesRequest {
+  repeated ApiProfile profiles = 1;
+}

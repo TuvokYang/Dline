@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+package dline.provider;
+
+import "dline/models/metadata.proto";
+import "dline/provider/common.proto";
+
+/** SAP AI Core-specific provider configuration. */
+message SapAiCoreProviderConfig {
+  ReasoningConfig reasoning = 1;
+  bool custom_model_enabled = 2;
+  dline.models.ModelCapabilities capabilities = 3;
+  dline.models.ModelPricing pricing = 4;
+  string client_id = 5;
+  string client_secret = 6;
+  string resource_group = 7;
+  string token_url = 8;
+  bool use_orchestration_mode = 9;
+}

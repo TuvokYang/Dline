@@ -1,0 +1,768 @@
+import { sendCheckpointEvent } from "@core/controller/checkpoints/subscribeToCheckpoints"
+import fs from "fs/promises"
+import { isBinaryFile } from "isbinaryfile"
+import * as path from "path"
+import simpleGit from "simple-git"
+import type { FolderLockWithRetryResult } from "@/core/locks/types"
+import { telemetryService } from "@/services/telemetry"
+import { Logger } from "@/shared/services/Logger"
+import { GitOperations } from "./CheckpointGitOperations"
+import { releaseCheckpointLock, tryAcquireCheckpointLockWithRetry } from "./CheckpointLockUtils"
+import { CheckpointMutexRegistry } from "./CheckpointMutexRegistry"
+import { getShadowGitPath, hashWorkingDir } from "./CheckpointUtils"
+import type { TaskFileTracker } from "./TaskFileTracker"
+
+/**
+ * Operation types for checkpoint events
+ */
+type CheckpointOperation = "CHECKPOINT_INIT" | "CHECKPOINT_COMMIT" | "CHECKPOINT_RESTORE"
+
+/**
+ * CheckpointTracker Module
+ *
+ * Core implementation of Cline's Checkpoints system that provides version control
+ * capabilities without interfering with the user's main Git repository. Key features:
+ *
+ * Shadow Git Repository:
+ * - Creates and manages an isolated Git repository for tracking checkpoints
+ * - Handles nested Git repositories by temporarily disabling them
+ * - Configures Git settings automatically (identity, LFS, etc.)
+ *
+ * File Management:
+ * - Integrates with CheckpointExclusions for file filtering
+ * - Handles workspace validation and path resolution
+ * - Manages Git worktree configuration
+ *
+ * Checkpoint Operations:
+ * - Creates checkpoints (commits) of the current state
+ * - Provides diff capabilities between checkpoints
+ * - Supports resetting to previous checkpoints
+ *
+ * Safety Features:
+ * - Prevents usage in sensitive directories (home, desktop, etc.)
+ * - Validates workspace configuration
+ * - Handles cleanup and resource disposal
+ *
+ * Checkpoint Architecture:
+ * - Unique shadow git repository for each workspace
+ * - Workspaces are identified by name, and hashed to a unique number
+ * - All commits for a workspace are stored in one shadow git, under a single branch
+ */
+
+class CheckpointTracker {
+	private taskId: string
+	private cwd: string
+	private cwdHash: string
+	private lastRetrievedShadowGitConfigWorkTree?: string
+	private gitOperations: GitOperations
+	/** Optional reference to the per-task file tracker for incremental checkpoint staging */
+	private taskFileTracker?: TaskFileTracker
+
+	/**
+	 * Inject the TaskFileTracker for this task so that commit() can stage only
+	 * the files that were actually modified by tool handlers, instead of
+	 * scanning the entire workspace with git add .
+	 *
+	 * @param tracker - The TaskFileTracker instance created alongside this checkpoint tracker
+	 */
+	public setTaskFileTracker(tracker: TaskFileTracker): void {
+		this.taskFileTracker = tracker
+		Logger.debug(
+			`[CheckpointTracker] TaskFileTracker set for task ${this.taskId} ` +
+				`(${tracker.getModifiedFiles().length} file(s) already tracked)`,
+		)
+	}
+
+	/**
+	 * Helper method to clean commit hashes that might have a "HEAD " prefix.
+	 * Used for backward compatibility with old tasks that stored hashes with the prefix.
+	 */
+	private cleanCommitHash(hash: string): string {
+		return hash.startsWith("HEAD ") ? hash.slice(5) : hash
+	}
+
+	/**
+	 * Send a checkpoint event to all subscribers.
+	 *
+	 * @param operation - The operation type (CHECKPOINT_INIT, CHECKPOINT_COMMIT, or CHECKPOINT_RESTORE)
+	 * @param isActive - true when operation starts, false when complete
+	 * @param commitHash - Optional commit hash for CHECKPOINT_COMMIT and CHECKPOINT_RESTORE operations
+	 */
+	private async sendCheckpointSubscriptionEvent(
+		operation: CheckpointOperation,
+		isActive: boolean,
+		commitHash?: string,
+	): Promise<void> {
+		try {
+			await sendCheckpointEvent({
+				operation,
+				cwdHash: this.cwdHash,
+				isActive,
+				taskId: this.taskId,
+				commitHash,
+			})
+		} catch (error) {
+			Logger.debug("Failed to send checkpoint event:", error)
+		}
+	}
+
+	/**
+	 * Creates a new CheckpointTracker instance to manage checkpoints for a specific task.
+	 * The constructor is private - use the static create() method to instantiate.
+	 *
+	 * @param taskId - Unique identifier for the task being tracked
+	 * @param cwd - The current working directory to track files in
+	 * @param cwdHash - Hash of the working directory path for shadow git organization
+	 */
+	private constructor(taskId: string, cwd: string, cwdHash: string) {
+		this.taskId = taskId
+		this.cwd = cwd
+		this.cwdHash = cwdHash
+		this.gitOperations = new GitOperations(cwd)
+	}
+
+	/**
+	 * Creates a new CheckpointTracker instance for tracking changes in a task.
+	 * Handles initialization of the shadow git repository.
+	 *
+	 * @param taskId - Unique identifier for the task to track
+	 * @param globalStoragePath - the globalStorage path
+	 * @param enableCheckpointsSetting - Whether checkpoints are enabled in settings
+	 * @param workspacePaths - The workspace directory path(s) to track (string or array of strings)
+	 * @returns Promise resolving to new CheckpointTracker instance, or undefined if checkpoints are disabled
+	 * @throws Error if:
+	 * - globalStoragePath is not supplied
+	 * - Git is not installed
+	 * - Working directory is invalid or in a protected location
+	 * - Shadow git initialization fails
+	 *
+	 * Key operations:
+	 * - Validates git installation and settings
+	 * - Creates/initializes shadow git repository
+	 *
+	 * Configuration:
+	 * - Respects 'cline.enableCheckpoints' VS Code setting
+	 */
+	public static async create(
+		taskId: string,
+		enableCheckpointsSetting: boolean,
+		workspacePaths: string | string[],
+	): Promise<CheckpointTracker | undefined> {
+		try {
+			Logger.info(`Creating new CheckpointTracker for task ${taskId}`)
+			const startTime = performance.now()
+
+			// Check if checkpoints are disabled by setting
+			if (!enableCheckpointsSetting) {
+				Logger.info(`Checkpoints disabled by setting for task ${taskId}`)
+				return undefined // Don't create tracker when disabled
+			}
+
+			// Check if git is installed by attempting to get version
+			try {
+				await simpleGit().version()
+			} catch (_error) {
+				throw new Error("Git must be installed to use checkpoints.") // FIXME: must match what we check for in TaskHeader to show link
+			}
+
+			// Validate and normalize workspace paths - for now, we just use the first valid path
+			const pathsToValidate = Array.isArray(workspacePaths) ? workspacePaths : [workspacePaths]
+			const { validateWorkspacePath } = await import("./CheckpointUtils")
+
+			for (const workspacePath of pathsToValidate) {
+				if (!workspacePath) {
+					throw new Error("At least one workspace path must be provided")
+				}
+
+				await validateWorkspacePath(workspacePath)
+			}
+
+			// For now, we just use the first valid path
+			const workingDir = Array.isArray(workspacePaths) ? workspacePaths[0] : workspacePaths
+
+			const cwdHash = hashWorkingDir(workingDir)
+			Logger.debug(`Repository ID (cwdHash): ${cwdHash}`)
+
+			const newTracker = new CheckpointTracker(taskId, workingDir, cwdHash)
+			await newTracker.sendCheckpointSubscriptionEvent("CHECKPOINT_INIT", true)
+
+			const gitPath = await getShadowGitPath(newTracker.cwdHash)
+			// Serialize shadow git initialization with other concurrent tasks
+			// targeting the same workspace to prevent race conditions during
+			// repository creation (VS Code: process-level mutex;
+			// Standalone/CLI: cross-process SqliteLockManager).
+			await CheckpointMutexRegistry.getInstance().runExclusive(newTracker.cwdHash, async () => {
+				await newTracker.gitOperations.initShadowGit(gitPath, workingDir, taskId)
+			})
+			await newTracker.sendCheckpointSubscriptionEvent("CHECKPOINT_INIT", false)
+
+			const durationMs = Math.round(performance.now() - startTime)
+			telemetryService.captureCheckpointUsage(taskId, "shadow_git_initialized", durationMs)
+
+			return newTracker
+		} catch (error) {
+			Logger.error("Failed to create CheckpointTracker:", error)
+			throw error
+		}
+	}
+
+	/**
+	 * Creates a new checkpoint commit in the shadow git repository.
+	 *
+	 * When a TaskFileTracker has been injected, only files tracked as modified
+	 * by tool handlers are staged (incremental git add).  When no tracker is
+	 * set or no files have been tracked, falls back to full workspace staging
+	 * via git add . (backward compatible).
+	 *
+	 * @returns Promise<string | undefined> The created commit hash
+	 * @throws Error if commit creation fails
+	 */
+	public async commit(): Promise<string | undefined> {
+		// Use tracked files for incremental checkpoint when available
+		const trackedFiles = this.taskFileTracker?.getModifiedFiles() ?? []
+		Logger.debug(
+			`[CheckpointTracker] commit: ${trackedFiles.length} tracked file(s) from TaskFileTracker for task ${this.taskId}`,
+		)
+		return this.commitForFiles(trackedFiles)
+	}
+
+	/**
+	 * Creates a checkpoint commit that only includes the specified files.
+	 * When files array is empty, falls back to staging all files via `git add .`
+	 * (backward compatible).
+	 *
+	 * Key behaviors:
+	 * - Acquires folder lock before proceeding to prevent conflicts
+	 * - Stages only the specified files (or all files when list is empty)
+	 * - Creates commit with checkpoint files in shadow git repo
+	 * - Releases folder lock after completion
+	 *
+	 * Commit structure:
+	 * - Commit message: "checkpoint-{cwdHash}-{taskId}"
+	 * - Always allows empty commits
+	 *
+	 * @param files - List of file paths to include in this checkpoint.
+	 *                When empty or omitted, all files are staged (full workspace).
+	 * @returns Promise<string | undefined> The created commit hash, or undefined if:
+	 * - Folder lock acquisition fails or times out
+	 * - Shadow git access fails
+	 * - Staging files fails
+	 * - Commit creation fails
+	 * @throws Error if unable to:
+	 * - Access shadow git path
+	 * - Initialize simple-git
+	 * - Stage or commit files
+	 */
+	public async commitForFiles(files: string[]): Promise<string | undefined> {
+		let lockAcquired = false
+
+		// When no explicit files are provided, try to get tracked files from the
+		// per-task file tracker for incremental staging.
+		let filesToCommit = files
+		if (filesToCommit.length === 0 && this.taskFileTracker) {
+			filesToCommit = this.taskFileTracker.getModifiedFiles()
+			Logger.debug(
+				`[CheckpointTracker] commitForFiles: resolved ${filesToCommit.length} file(s) from TaskFileTracker for task ${this.taskId}`,
+			)
+		}
+
+		try {
+			await this.sendCheckpointSubscriptionEvent("CHECKPOINT_COMMIT", true)
+			Logger.info(`Creating new checkpoint commit for task ${this.taskId}`)
+			const startTime = performance.now()
+
+			const lockResult: FolderLockWithRetryResult = await tryAcquireCheckpointLockWithRetry(this.cwdHash, this.taskId)
+
+			// Locking failed due to conflicting lock
+			if (!lockResult.acquired && !lockResult.skipped) {
+				throw new Error(
+					"Failed to acquire checkpoint folder lock - another Dline instance may be performing checkpoint operations",
+				)
+			}
+
+			if (lockResult.acquired) {
+				lockAcquired = true
+			}
+
+			// VS Code: fall back to process-level mutex to serialize
+			// operations on the shared shadow git repository
+			if (!lockResult.acquired && lockResult.skipped) {
+				Logger.log("Using process-level mutex for checkpoint commit - VS Code")
+				const commitHash = await CheckpointMutexRegistry.getInstance().runExclusive(this.cwdHash, async () => {
+					return this.doCommitFiles(filesToCommit)
+				})
+
+				const durationMs = Math.round(performance.now() - startTime)
+				await this.sendCheckpointSubscriptionEvent("CHECKPOINT_COMMIT", false, commitHash)
+				telemetryService.captureCheckpointUsage(this.taskId, "commit_created", durationMs)
+				return commitHash
+			}
+
+			// Standalone/CLI: cross-process lock already held via SqliteLockManager
+			const commitHash = await this.doCommitFiles(filesToCommit)
+
+			const durationMs = Math.round(performance.now() - startTime)
+			await this.sendCheckpointSubscriptionEvent("CHECKPOINT_COMMIT", false, commitHash)
+			telemetryService.captureCheckpointUsage(this.taskId, "commit_created", durationMs)
+
+			return commitHash
+		} catch (error) {
+			Logger.error("Failed to create checkpoint:", {
+				taskId: this.taskId,
+				error,
+			})
+			throw new Error(`Failed to create checkpoint: ${error instanceof Error ? error.message : String(error)}`)
+		} finally {
+			if (lockAcquired) {
+				Logger.info("Releasing checkpoint folder lock")
+				await releaseCheckpointLock(this.cwdHash, this.taskId)
+			}
+		}
+	}
+
+	/**
+	 * Execute the git add + git commit sequence for the given files.
+	 * Extracted as a private helper so it can be called under different
+	 * locking strategies (cross-process SqliteLockManager or process-level Mutex).
+	 *
+	 * Staging strategy:
+	 * - When files are provided: incremental git add <files> (fast path,
+	 *   avoids expensive full-workspace scan via git add .)
+	 * - When files is empty: fallback to git add . (safe path, covers
+	 *   file modifications from execute_command and other tools that
+	 *   cannot declare their file changes explicitly)
+	 *
+	 * After a successful commit the TaskFileTracker's modified-file cache
+	 * is cleared so the next checkpoint only captures newly modified files.
+	 */
+	private async doCommitFiles(files: string[]): Promise<string | undefined> {
+		const gitPath = await getShadowGitPath(this.cwdHash)
+		const git = simpleGit(path.dirname(gitPath))
+
+		Logger.info(`Using shadow git at: ${gitPath}`)
+
+		// Stage files: incremental with tracked list or full scan as fallback
+		if (files.length > 0) {
+			Logger.debug(`[CheckpointTracker] doCommitFiles: incremental add ${files.length} file(s) for task ${this.taskId}`)
+		} else {
+			Logger.debug(
+				`[CheckpointTracker] doCommitFiles: fallback to full git add . (no tracked files) for task ${this.taskId}`,
+			)
+		}
+		const addFilesResult = await this.gitOperations.addCheckpointFiles(git, files.length > 0 ? files : undefined)
+		if (!addFilesResult.success) {
+			// When specific files were requested but staging failed (e.g. path
+			// mismatch, permissions), do NOT create an empty commit — it would
+			// produce a hash that appears valid but contains none of the
+			// intended files, silently breaking later restores.
+			if (files.length > 0) {
+				Logger.error(
+					`[CheckpointTracker] Failed to stage ${files.length} file(s) for task ${this.taskId}. ` +
+						`Skipping commit to avoid an empty checkpoint.`,
+				)
+				return undefined
+			}
+			Logger.error("Failed to add at least one file(s) to checkpoints shadow git")
+		}
+
+		const commitMessage = `checkpoint-${this.cwdHash}-${this.taskId}`
+
+		// Ensure shadow git identity is set before committing to prevent
+		// leaking the user's global git name/email into checkpoint history.
+		await this.gitOperations.ensureShadowGitIdentity(git)
+
+		Logger.info(`Creating checkpoint commit with message: ${commitMessage}`)
+		const result = await git.commit(commitMessage, {
+			"--allow-empty": null,
+			"--no-verify": null,
+		})
+		const commitHash = (result.commit || "").replace(/^HEAD\s+/, "")
+		Logger.warn(`Checkpoint commit created: `, commitHash)
+
+		// Clear tracked files after a successful commit so the next
+		// checkpoint only captures newly modified files.
+		if (commitHash) {
+			this.taskFileTracker?.clearModifiedFiles()
+			Logger.debug(`[CheckpointTracker] Cleared tracked files after successful commit for task ${this.taskId}`)
+		}
+
+		return commitHash
+	}
+
+	/**
+	 * Retrieves the worktree path from the shadow git configuration.
+	 * The worktree path indicates where the shadow git repository is tracking files,
+	 * which should match the current workspace directory.
+	 *
+	 * Key behaviors:
+	 * - Caches result in lastRetrievedShadowGitConfigWorkTree to avoid repeated reads
+	 * - Returns cached value if available
+	 * - Reads git config if no cached value exists
+	 *
+	 * Configuration read:
+	 * - Uses simple-git to read core.worktree config
+	 * - Operates on shadow git at path from getShadowGitPath()
+	 *
+	 * @returns Promise<string | undefined> The configured worktree path, or undefined if:
+	 * - Shadow git repository doesn't exist
+	 * - Config read fails
+	 * - No worktree is configured
+	 * @throws Error if unable to:
+	 * - Access shadow git path
+	 * - Initialize simple-git
+	 * - Read git configuration
+	 */
+	public async getShadowGitConfigWorkTree(): Promise<string | undefined> {
+		if (this.lastRetrievedShadowGitConfigWorkTree) {
+			return this.lastRetrievedShadowGitConfigWorkTree
+		}
+		try {
+			const gitPath = await getShadowGitPath(this.cwdHash)
+			this.lastRetrievedShadowGitConfigWorkTree = await this.gitOperations.getShadowGitConfigWorkTree(gitPath)
+			return this.lastRetrievedShadowGitConfigWorkTree
+		} catch (error) {
+			Logger.error("Failed to get shadow git config worktree:", error)
+			return undefined
+		}
+	}
+
+	/**
+	 * Resets the shadow git repository's HEAD to a specific checkpoint commit.
+	 * This will discard all changes after the target commit and restore the
+	 * working directory to that checkpoint's state.
+	 *
+	 * Key behaviors:
+	 * - Acquires folder lock before proceeding to prevent conflicts
+	 * - Performs hard reset to target commit
+	 * - Releases folder lock after completion
+	 *
+	 * Dependencies:
+	 * - Requires initialized shadow git (getShadowGitPath)
+	 * - Must be called with a valid commit hash from this task's history
+	 *
+	 * @param commitHash - The hash of the checkpoint commit to reset to
+	 * @returns Promise<void> Resolves when reset is complete
+	 * @throws Error if unable to:
+	 * - Acquire folder lock (timeout or conflict)
+	 * - Access shadow git path
+	 * - Initialize simple-git
+	 * - Reset to target commit
+	 */
+	public async resetHead(commitHash: string): Promise<void> {
+		let lockAcquired = false
+
+		try {
+			Logger.info(`Resetting to checkpoint: ${commitHash}`)
+			const startTime = performance.now()
+			await this.sendCheckpointSubscriptionEvent("CHECKPOINT_RESTORE", true, commitHash)
+			const lockResult: FolderLockWithRetryResult = await tryAcquireCheckpointLockWithRetry(this.cwdHash, this.taskId)
+
+			// Locking failed due to conflicting lock
+			if (!lockResult.acquired && !lockResult.skipped) {
+				throw new Error(
+					"Failed to acquire checkpoint folder lock - another Dline instance may be performing checkpoint operations",
+				)
+			}
+
+			if (lockResult.acquired) {
+				lockAcquired = true
+			}
+
+			// VS Code: fall back to process-level mutex
+			if (!lockResult.acquired && lockResult.skipped) {
+				Logger.log("Using process-level mutex for checkpoint reset - VS Code")
+				await CheckpointMutexRegistry.getInstance().runExclusive(this.cwdHash, async () => {
+					await this.doResetHead(commitHash)
+				})
+			} else {
+				// Standalone/CLI: cross-process lock already held
+				await this.doResetHead(commitHash)
+			}
+
+			const durationMs = Math.round(performance.now() - startTime)
+			await this.sendCheckpointSubscriptionEvent("CHECKPOINT_RESTORE", false, commitHash)
+			telemetryService.captureCheckpointUsage(this.taskId, "restored", durationMs)
+		} catch (error) {
+			Logger.error("Failed to reset to checkpoint:", {
+				taskId: this.taskId,
+				commitHash,
+				error,
+			})
+			throw error
+		} finally {
+			if (lockAcquired) {
+				await releaseCheckpointLock(this.cwdHash, this.taskId)
+			}
+		}
+	}
+
+	/**
+	 * Execute the git reset --hard operation.
+	 * Extracted as a private helper for use under different locking strategies.
+	 */
+	private async doResetHead(commitHash: string): Promise<void> {
+		const gitPath = await getShadowGitPath(this.cwdHash)
+		const git = simpleGit(path.dirname(gitPath))
+		const cleanHash = this.cleanCommitHash(commitHash)
+		Logger.debug(
+			`[CheckpointTracker] doResetHead: resetting to commit ${cleanHash} for task ${this.taskId}, shadow git at ${gitPath}`,
+		)
+		await git.reset(["--hard", cleanHash])
+		Logger.debug(`[CheckpointTracker] Successfully reset to checkpoint: ${cleanHash}`)
+	}
+
+	/**
+	 * Restores only the specified files to a previous checkpoint commit.
+	 * Unlike resetHead which does a full `git reset --hard`, this uses
+	 * `git checkout <hash> -- <files>` to restore only the given files,
+	 * leaving all other files untouched.
+	 *
+	 * Key behaviors:
+	 * - Acquires folder lock before proceeding to prevent conflicts
+	 * - Checks out specified files from the target commit
+	 * - Releases folder lock after completion
+	 * - Does NOT change HEAD — only updates the working tree for those files
+	 *
+	 * @param commitHash - The hash of the checkpoint commit to restore files from
+	 * @param files - List of absolute file paths to restore
+	 * @returns Promise<void> Resolves when restore is complete
+	 * @throws Error if unable to:
+	 * - Acquire folder lock (timeout or conflict)
+	 * - Access shadow git path
+	 * - Checkout files from the target commit
+	 */
+	public async restoreFiles(commitHash: string, files: string[]): Promise<void> {
+		if (files.length === 0) {
+			Logger.debug(`[CheckpointTracker] restoreFiles called with empty file list, nothing to restore`)
+			return
+		}
+
+		let lockAcquired = false
+
+		try {
+			const cleanHash = this.cleanCommitHash(commitHash)
+			Logger.info(`Restoring ${files.length} file(s) to checkpoint: ${cleanHash}`)
+			const startTime = performance.now()
+			await this.sendCheckpointSubscriptionEvent("CHECKPOINT_RESTORE", true, commitHash)
+
+			const lockResult: FolderLockWithRetryResult = await tryAcquireCheckpointLockWithRetry(this.cwdHash, this.taskId)
+
+			if (!lockResult.acquired && !lockResult.skipped) {
+				throw new Error(
+					"Failed to acquire checkpoint folder lock - another Dline instance may be performing checkpoint operations",
+				)
+			}
+
+			if (lockResult.acquired) {
+				lockAcquired = true
+			}
+
+			// VS Code: fall back to process-level mutex
+			if (!lockResult.acquired && lockResult.skipped) {
+				Logger.log("Using process-level mutex for checkpoint restore - VS Code")
+				await CheckpointMutexRegistry.getInstance().runExclusive(this.cwdHash, async () => {
+					await this.doRestoreFiles(cleanHash, files)
+				})
+			} else {
+				// Standalone/CLI: cross-process lock already held
+				await this.doRestoreFiles(cleanHash, files)
+			}
+
+			const durationMs = Math.round(performance.now() - startTime)
+			await this.sendCheckpointSubscriptionEvent("CHECKPOINT_RESTORE", false, commitHash)
+			telemetryService.captureCheckpointUsage(this.taskId, "restored", durationMs)
+		} catch (error) {
+			Logger.error("Failed to restore files to checkpoint:", {
+				taskId: this.taskId,
+				commitHash,
+				files,
+				error,
+			})
+			throw error
+		} finally {
+			if (lockAcquired) {
+				await releaseCheckpointLock(this.cwdHash, this.taskId)
+			}
+		}
+	}
+
+	/**
+	 * Execute git checkout to restore files from a checkpoint.
+	 * Extracted as a private helper for use under different locking strategies.
+	 */
+	private async doRestoreFiles(cleanHash: string, files: string[]): Promise<void> {
+		const gitPath = await getShadowGitPath(this.cwdHash)
+		const git = simpleGit(path.dirname(gitPath))
+
+		// Convert absolute paths to workspace-relative paths for git checkout.
+		// git checkout requires paths relative to the worktree root (this.cwd).
+		const relativeFiles = files.map((f) => path.relative(this.cwd, f))
+		Logger.debug(
+			`[CheckpointTracker] doRestoreFiles: restoring ${files.length} file(s) to commit ${cleanHash} for task ${this.taskId}` +
+				`\n  shadow git: ${gitPath}` +
+				`\n  files: ${relativeFiles.join(", ")}`,
+		)
+		await git.raw(["checkout", cleanHash, "--", ...relativeFiles])
+		Logger.debug(`[CheckpointTracker] Successfully restored ${files.length} file(s) to checkpoint: ${cleanHash}`)
+	}
+
+	/**
+	 * Return an array describing changed files between one commit and either:
+	 *   - another commit (rhsHash provided): uses `git diff --name-only` (read-only, fast)
+	 *   - the current working directory (rhsHash omitted): stages files first to discover untracked changes
+	 *
+	 * @param lhsHash - The commit to compare from (older commit)
+	 * @param rhsHash - The commit to compare to (newer commit).
+	 *                  If omitted, we compare to the working directory.
+	 * @returns Array of file changes with before/after content
+	 */
+	public async getDiffSet(
+		lhsHash: string,
+		rhsHash?: string,
+	): Promise<
+		Array<{
+			relativePath: string
+			absolutePath: string
+			before: string
+			after: string
+		}>
+	> {
+		const startTime = performance.now()
+		const cleanLhs = this.cleanCommitHash(lhsHash)
+		const cleanRhs = rhsHash ? this.cleanCommitHash(rhsHash) : undefined
+		const diffRange = cleanRhs ? `${cleanLhs}..${cleanRhs}` : cleanLhs
+
+		Logger.info(`Getting diff between commits: ${lhsHash || "initial"} -> ${rhsHash || "working directory"}`)
+		Logger.info(`Diff range: ${diffRange}`)
+
+		const gitPath = await getShadowGitPath(this.cwdHash)
+		const git = simpleGit(path.dirname(gitPath))
+
+		// When comparing two commits, use read-only `git diff --name-only`
+		// to get the file list without staging — avoids expensive `git add .`
+		let changedFileNames: string[]
+		if (cleanRhs) {
+			// Two-commit comparison: pure read, no index mutation needed
+			const nameOnlyOutput = await git.raw(["diff", "--name-only", diffRange])
+			changedFileNames = nameOnlyOutput.split("\n").filter((f) => f.length > 0)
+		} else {
+			// Working-directory comparison: stage files to discover untracked changes,
+			// then diff. Serialized via mutex to protect the shared shadow git index.
+			changedFileNames = await CheckpointMutexRegistry.getInstance().runExclusive(this.cwdHash, async () => {
+				await this.gitOperations.addCheckpointFiles(git)
+				const summary = await git.diffSummary([diffRange])
+				return summary.files.map((f) => f.file)
+			})
+		}
+
+		// Read before/after content for each changed file.
+		// `git show` is read-only — safe to run outside the mutex.
+		const result: Array<{
+			relativePath: string
+			absolutePath: string
+			before: string
+			after: string
+		}> = []
+
+		for (const filePath of changedFileNames) {
+			const absolutePath = path.join(this.cwd, filePath)
+
+			// For extensionless files or dotfiles: exclude from diff result if binary
+			const lastDotIndex = filePath.lastIndexOf(".")
+			const lastSlashIndex = Math.max(filePath.lastIndexOf("/"), filePath.lastIndexOf("\\"))
+			const ext = lastDotIndex > lastSlashIndex ? filePath.substring(lastDotIndex).toLowerCase() : ""
+			const isDotfile = lastDotIndex !== -1 && lastDotIndex === lastSlashIndex + 1
+
+			if (!ext || isDotfile) {
+				try {
+					const isBinary = await isBinaryFile(absolutePath).catch(() => false)
+					if (isBinary) {
+						continue
+					}
+				} catch {
+					continue
+				}
+			}
+
+			let beforeContent = ""
+			try {
+				beforeContent = await git.show([`${cleanLhs}:${filePath}`])
+			} catch (_) {
+				// file didn't exist in older commit => remains empty
+			}
+
+			let afterContent = ""
+			if (cleanRhs) {
+				try {
+					afterContent = await git.show([`${cleanRhs}:${filePath}`])
+				} catch (_) {
+					// file didn't exist in newer commit => remains empty
+				}
+			} else {
+				try {
+					afterContent = await fs.readFile(absolutePath, "utf8")
+				} catch (_) {
+					// file might be deleted => remains empty
+				}
+			}
+
+			result.push({
+				relativePath: filePath,
+				absolutePath,
+				before: beforeContent,
+				after: afterContent,
+			})
+		}
+
+		const durationMs = Math.round(performance.now() - startTime)
+		telemetryService.captureCheckpointUsage(this.taskId, "diff_generated", durationMs)
+
+		return result
+	}
+
+	/**
+	 * Returns the number of files changed between two commits.
+	 *
+	 * When comparing two commits (rhsHash provided), uses `git diff --name-only`
+	 * (read-only, no staging required). When comparing to the working directory
+	 * (rhsHash omitted), stages files first to discover untracked changes.
+	 *
+	 * @param lhsHash - The commit to compare from (older commit)
+	 * @param rhsHash - The commit to compare to (newer commit).
+	 *                  If omitted, we compare to the working directory.
+	 * @returns The number of files changed between the commits
+	 */
+	public async getDiffCount(lhsHash: string, rhsHash?: string): Promise<number> {
+		const startTime = performance.now()
+		const cleanLhs = this.cleanCommitHash(lhsHash)
+		const cleanRhs = rhsHash ? this.cleanCommitHash(rhsHash) : undefined
+		const diffRange = cleanRhs ? `${cleanLhs}..${cleanRhs}` : cleanLhs
+
+		Logger.info(`Getting diff count between commits: ${lhsHash || "initial"} -> ${rhsHash || "working directory"}`)
+
+		const gitPath = await getShadowGitPath(this.cwdHash)
+		const git = simpleGit(path.dirname(gitPath))
+
+		let changedFileCount: number
+		if (cleanRhs) {
+			// Two-commit comparison: pure read, no index mutation needed
+			const nameOnlyOutput = await git.raw(["diff", "--name-only", diffRange])
+			const changedFileNames = nameOnlyOutput.split("\n").filter((f) => f.length > 0)
+			changedFileCount = changedFileNames.length
+		} else {
+			// Working-directory comparison: stage files to discover untracked changes
+			changedFileCount = await CheckpointMutexRegistry.getInstance().runExclusive(this.cwdHash, async () => {
+				await this.gitOperations.addCheckpointFiles(git)
+				const diffSummary = await git.diffSummary([diffRange])
+				return diffSummary.files.length
+			})
+		}
+
+		const durationMs = Math.round(performance.now() - startTime)
+		telemetryService.captureCheckpointUsage(this.taskId, "diff_generated", durationMs)
+
+		return changedFileCount
+	}
+}
+
+export default CheckpointTracker

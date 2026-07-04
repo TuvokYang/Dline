@@ -1,0 +1,15 @@
+syntax = "proto3";
+
+package dline.provider;
+
+import "dline/models/metadata.proto";
+import "dline/provider/common.proto";
+
+message FireworksProviderConfig {
+  ReasoningConfig reasoning = 1;
+  bool custom_model_enabled = 2;
+  dline.models.ModelCapabilities capabilities = 3;
+  dline.models.ModelPricing pricing = 4;
+  int64 fireworks_model_max_completion_tokens = 5;
+  int64 fireworks_model_max_tokens = 6;
+}

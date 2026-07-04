@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+package dline.provider;
+
+import "dline/models/metadata.proto";
+import "dline/provider/common.proto";
+
+/** Vertex AI-specific provider configuration. */
+message VertexProviderConfig {
+  ReasoningConfig reasoning = 1;
+  bool custom_model_enabled = 2;
+  dline.models.ModelCapabilities capabilities = 3;
+  dline.models.ModelPricing pricing = 4;
+  string vertex_project_id = 5;
+  string vertex_region = 6;
+}

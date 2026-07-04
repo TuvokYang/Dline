@@ -1,0 +1,23 @@
+syntax = "proto3";
+
+package dline.provider;
+
+import "dline/models/metadata.proto";
+import "dline/provider/common.proto";
+
+message OpenAiProviderConfig {
+  ReasoningConfig reasoning = 1;
+  bool custom_model_enabled = 2;
+  dline.models.ModelCapabilities capabilities = 3;
+  dline.models.ModelPricing pricing = 4;
+  // Azure API version override (e.g., "2024-10-01-preview")
+  optional string azure_api_version = 5;
+  // Use Azure Identity (DefaultAzureCredential) instead of API key
+  bool azure_identity = 6;
+  // Custom HTTP headers to include in OpenAI/Azure API requests
+  map<string, string> open_ai_headers = 7;
+  // Default temperature for model requests
+  optional double temperature = 8;
+  // Whether to include usage stats in stream responses
+  bool stream_include_usage = 9;
+}

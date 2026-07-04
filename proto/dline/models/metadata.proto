@@ -1,0 +1,51 @@
+syntax = "proto3";
+
+package dline.models;
+
+option go_package = "github.com/dline/grpc-go/dline/models";
+
+/** Thinking configuration for models that support thinking/reasoning. */
+message ThinkingConfig {
+  optional bool supported = 1;
+  optional string mode = 2;
+  optional int64 max_budget = 3;
+  repeated string effort_levels = 4;
+}
+
+/** Model capability flags and limits. */
+message ModelCapabilities {
+  bool supports_images = 1;
+  bool supports_prompt_cache = 2;
+  optional bool supports_reasoning = 3;
+  optional bool supports_global_endpoint = 4;
+  optional uint32 max_tokens = 5;
+  optional uint64 context_window = 6;
+  optional ThinkingConfig thinking = 7;
+}
+
+/** Pricing tier for context-window-based tiered models. */
+message PricingTier {
+  uint64 context_window = 1;
+  optional double input_price = 2;
+  optional double output_price = 3;
+  optional double cache_writes_price = 4;
+  optional double cache_reads_price = 5;
+}
+
+/** Thinking output price tier. */
+message ThinkingOutputPriceTier {
+  uint64 token_limit = 1;
+  double price = 2;
+}
+
+/** Per-model pricing information. */
+message ModelPricing {
+  optional double input_price = 1;
+  optional double output_price = 2;
+  optional double cache_writes_price = 3;
+  optional double cache_reads_price = 4;
+  optional string currency = 5;
+  repeated PricingTier tiers = 6;
+  optional double thinking_output_price = 7;
+  repeated ThinkingOutputPriceTier thinking_output_price_tiers = 8;
+}

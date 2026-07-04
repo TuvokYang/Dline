@@ -1,0 +1,119 @@
+import { expect } from "chai"
+import { afterEach, beforeEach, describe, it } from "vitest"
+import type { TaskLockService } from "../../../locks/TaskLockService"
+import { TaskDeletionOrchestrator } from "../TaskDeletionOrchestrator"
+
+/**
+ * Unit tests for TaskDeletionOrchestrator — primarily the closePanelsForTask
+ * logic which ensures Editor Tab panels are disposed when their task is deleted.
+ */
+describe("TaskDeletionOrchestrator", () => {
+	let orchestrator: TaskDeletionOrchestrator
+	let mockController: any
+	let mockLockService: TaskLockService
+
+	beforeEach(() => {
+		mockController = {
+			task: undefined,
+			clearTask: async () => {},
+			getTaskWithId: async (_id: string) => {
+				throw new Error("Task not found")
+			},
+			deleteTaskFromState: async (_id: string) => [],
+			postStateToWebview: async () => {},
+		}
+
+		mockLockService = {
+			checkTaskLock: async (_taskId: string) => ({ isLocked: false, isStale: false }),
+		} as unknown as TaskLockService
+
+		orchestrator = new TaskDeletionOrchestrator(mockController, mockLockService)
+	})
+
+	afterEach(() => {
+		// Clean up any stubs or mocks
+	})
+
+	// ──────────────────────────────────────────────
+	// closePanelsForTask (private, tested via deleteSingle)
+	// ──────────────────────────────────────────────
+
+	it("should skip deletion when task is locked", async () => {
+		const lockedService = {
+			checkTaskLock: async (_taskId: string) => ({
+				isLocked: true,
+				isStale: false,
+				lockedBy: "instance-b",
+				lockedAt: Date.now(),
+			}),
+		} as unknown as TaskLockService
+
+		const svc = new TaskDeletionOrchestrator(mockController, lockedService)
+		const result = await (svc as any).deleteSingle("locked-task")
+
+		expect(result.success).to.be.false
+		expect(result.skippedLocked).to.be.true
+		expect(result.taskId).to.equal("locked-task")
+	})
+
+	it("should handle zombie task (missing files) gracefully", async () => {
+		const result = await (orchestrator as any).deleteSingle("zombie-task")
+
+		// 'zombie-task' doesn't exist in state, so getTaskWithId throws
+		// and it's treated as a zombie (success=true, state cleaned)
+		expect(result.success).to.be.true
+		expect(result.skippedLocked).to.be.false
+		expect(result.taskId).to.equal("zombie-task")
+	})
+
+	it("should clear active task when deleting currently active task", async () => {
+		let clearCalled = false
+		mockController.task = { taskId: "active-task" }
+		mockController.clearTask = async () => {
+			clearCalled = true
+		}
+
+		await (orchestrator as any).deleteSingle("active-task")
+
+		expect(clearCalled).to.be.true
+	})
+
+	it("should not clear active task when deleting a different task", async () => {
+		let clearCalled = false
+		mockController.task = { taskId: "different-task" }
+		mockController.clearTask = async () => {
+			clearCalled = true
+		}
+
+		await (orchestrator as any).deleteSingle("other-task")
+
+		expect(clearCalled).to.be.false
+	})
+
+	it("deleteBatch should process multiple tasks independently", async () => {
+		const result = await orchestrator.deleteBatch(["zombie-1", "zombie-2"])
+
+		expect(result.totalRequested).to.equal(2)
+		expect(result.deleted).to.equal(2)
+		expect(result.failed).to.equal(0)
+		expect(result.skippedLocked).to.equal(0)
+	})
+
+	it("deleteBatch should skip locked tasks", async () => {
+		const lockedService = {
+			checkTaskLock: async (taskId: string) => ({
+				isLocked: taskId === "locked-1",
+				isStale: false,
+				lockedBy: "instance-b",
+				lockedAt: Date.now(),
+			}),
+		} as unknown as TaskLockService
+
+		const svc = new TaskDeletionOrchestrator(mockController, lockedService)
+		const result = await svc.deleteBatch(["locked-1"])
+
+		expect(result.totalRequested).to.equal(1)
+		expect(result.skippedLocked).to.equal(1)
+		expect(result.deleted).to.equal(0)
+	})
+})

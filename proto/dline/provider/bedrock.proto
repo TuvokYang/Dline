@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+package dline.provider;
+
+import "dline/models/metadata.proto";
+import "dline/provider/common.proto";
+
+/** AWS Bedrock-specific provider configuration. */
+message BedrockProviderConfig {
+  ReasoningConfig reasoning = 1;
+  bool custom_model_enabled = 2;
+  dline.models.ModelCapabilities capabilities = 3;
+  dline.models.ModelPricing pricing = 4;
+  string aws_region = 5;
+  string aws_authentication = 6;
+  string aws_profile = 7;
+  string aws_access_key = 8;
+  string aws_secret_key = 9;
+  string aws_session_token = 10;
+  string aws_bedrock_api_key = 11;
+  string aws_bedrock_endpoint = 12;
+  bool aws_use_cross_region_inference = 13;
+  bool aws_use_global_inference = 14;
+  bool aws_bedrock_use_prompt_cache = 15;
+  bool aws_bedrock_custom_selected = 16;
+  string aws_bedrock_custom_model_base_id = 17;
+}

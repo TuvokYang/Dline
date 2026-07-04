@@ -1,0 +1,47 @@
+/**
+ * App-layer type augmentations for provider model configuration.
+ * Proto types from proto/dline/models are re-exported via @shared/api.
+ * This file provides webview-safe augmentations (no proto direct references from webview).
+ */
+import type { ModelInfo } from "../proto/dline/models"
+import type { ModelCapabilities, ModelPricing } from "../proto/dline/models/metadata"
+
+export type { ModelCapabilities, ModelInfo, ModelPricing }
+
+/**
+ * App-layer ThinkingConfig — compatible with model file definitions.
+ * effortLevels is optional; proto conversion layer fills default [] when needed.
+ */
+export interface ThinkingConfig {
+	maxBudget?: number
+	supported?: boolean
+	mode?: string
+	effortLevels?: string[]
+}
+
+/** Pricing tier for context-window-based tiered models. */
+export interface PricingTier {
+	contextWindow: number
+	inputPrice?: number
+	outputPrice?: number
+	cacheWritesPrice?: number
+	cacheReadsPrice?: number
+}
+
+/** Provider model configuration, loaded from JSON. */
+export interface ProviderModelsConfig {
+	provider: string
+	providerName: string
+	baseUrl?: string
+	billingUrl?: string
+	billingMode: string
+	usageLimits?: {
+		hourly?: number
+		daily?: number
+		weekly?: number
+		monthly?: number
+		unit: string
+	}
+	models: { [key: string]: ModelInfo }
+	defaultModelId?: string
+}

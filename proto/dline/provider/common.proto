@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+package dline.provider;
+
+import "dline/models/metadata.proto";
+
+message ReasoningConfig {
+  string effort = 1;
+  int32 thinking_budget = 2;
+}
+
+message BaseProviderConfig {
+  ReasoningConfig reasoning = 1;
+  bool custom_model_enabled = 2;
+  dline.models.ModelCapabilities capabilities = 3;
+  dline.models.ModelPricing pricing = 4;
+}

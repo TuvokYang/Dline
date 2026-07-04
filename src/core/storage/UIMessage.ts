@@ -1,0 +1,220 @@
+import path from "path"
+import { ClineMessage } from "@/shared/ExtensionMessage"
+import { ensureTaskDirectoryExists, GlobalFileNames } from "./disk"
+import { JsonlIndexedStore } from "./JsonlIndexedStore"
+
+/**
+ * UI messages store backed by ui_messages.jsonl.
+ *
+ * Wraps JsonlIndexedStore<ClineMessage> and provides task-scoped
+ * business-level methods for message lifecycle management.
+ * All write operations are protected by JsonlIndexedStore's
+ * internal Mutex + FileLock for thread and process safety.
+ */
+export class UIMessage {
+	private store: JsonlIndexedStore<ClineMessage>
+
+	private constructor(store: JsonlIndexedStore<ClineMessage>) {
+		this.store = store
+	}
+
+	/** Open (or create) the ui_messages.jsonl for a given task. */
+	static async open(taskId: string): Promise<UIMessage> {
+		const dir = await ensureTaskDirectoryExists(taskId)
+		const filePath = path.join(dir, GlobalFileNames.uiMessages)
+		const store = await JsonlIndexedStore.open<ClineMessage>(filePath)
+		return new UIMessage(store)
+	}
+
+	// ── Read ──
+	getAll(): ReadonlyArray<ClineMessage> { return this.store.getAll() }
+	getByTs(ts: number): ClineMessage | undefined { return this.store.getByTs(ts) }
+	getAt(index: number): ClineMessage | undefined { return this.store.getAt(index) }
+	findIndexByTs(ts: number): number { return this.store.findIndexByTs(ts) }
+	get count(): number { return this.store.count }
+
+	// ── Low-level Write (delegated) ──
+	async append(msg: ClineMessage): Promise<void> { await this.store.append(msg) }
+	async truncate(beforeTs: number): Promise<void> { await this.store.truncate(beforeTs) }
+	async overwrite(items: ClineMessage[]): Promise<void> { await this.store.overwrite(items) }
+	async insertAt(index: number, msg: ClineMessage): Promise<void> { await this.store.insertAt(index, msg) }
+	async updateAt(index: number, msg: ClineMessage): Promise<void> { await this.store.updateAt(index, msg) }
+	async deleteAt(index: number): Promise<void> { await this.store.deleteAt(index) }
+	async clear(): Promise<void> { await this.store.clear() }
+	async truncateByLineNum(count: number): Promise<void> { await this.store.truncateByLineNum(count) }
+	/** Force flush any pending dirty data to disk (cross-process safe). */
+	async flush(): Promise<void> { await this.store.flush() }
+
+	// ── Business-level methods ──
+
+	/**
+	 * Add a message, handling partial/complete state automatically.
+	 * Partial messages are upserted in-memory only (no disk write).
+	 * Complete messages are appended to both cache and disk.
+	 *
+	 * @returns The index and message as stored
+	 */
+	async addMessage(msg: ClineMessage): Promise<{ index: number; message: ClineMessage }> {
+		if (msg.partial === true) {
+			return this.upsertMessage(msg)
+		}
+
+		// Complete message — append to cache + disk
+		await this.store.append(msg)
+		return { index: this.store.count - 1, message: msg }
+	}
+
+	/**
+	 * Upsert a message in memory by ts (no disk write).
+	 * If ts exists — replace in-place. If not — insert at ascending ts position.
+	 * Memory-layer only; disk sync is handled by flush timer.
+	 *
+	 * @param msg The message to upsert
+	 * @returns The index and message as stored
+	 */
+	async upsertMessage(msg: ClineMessage): Promise<{ index: number; message: ClineMessage }> {
+		const all = this.store.getAll() as ClineMessage[]
+		const existingIndex = all.findIndex((m) => m.ts === msg.ts)
+
+		if (existingIndex >= 0) {
+			// Same ts — streaming update of existing partial message, replace in-place
+			Object.assign(all[existingIndex], msg)
+			return { index: existingIndex, message: all[existingIndex] }
+		}
+
+		// New ts — find insertion point in ascending order, insert via memory-layer API
+		let insertIndex = all.length
+		for (let i = 0; i < all.length; i++) {
+			if (all[i].ts > msg.ts) {
+				insertIndex = i
+				break
+			}
+		}
+		await this.store.insertLine(insertIndex, msg)
+		return { index: insertIndex, message: msg }
+	}
+
+	/**
+	 * Finalize a partial message: set partial=false and persist to disk.
+	 * Uses upsertByTs for idempotent write (replace if exists, append if new).
+	 *
+	 * @param msg The finalized message (partial must be false)
+	 * @returns The finalized message
+	 */
+	async finalizeMessage(msg: ClineMessage): Promise<ClineMessage> {
+		msg.partial = false
+		await this.store.upsertByTs(msg)
+		return msg
+	}
+
+	/**
+	 * Update a message at the given index (in-memory only, no disk write).
+	 * For streaming chunk updates — disk persistence happens at key lifecycle points.
+	 *
+	 * @param index Zero-based index in the message array
+	 * @param updates Partial fields to merge into the existing message
+	 * @returns The updated message
+	 */
+	updateMessage(index: number, updates: Partial<ClineMessage>): ClineMessage {
+		const all = this.store.getAll() as ClineMessage[]
+		if (index < 0 || index >= all.length) {
+			throw new Error(`UIMessage.updateMessage: index ${index} out of range [0, ${all.length})`)
+		}
+		Object.assign(all[index], updates)
+		return all[index]
+	}
+
+	/**
+	 * Delete a message at the given index.
+	 *
+	 * @param index Zero-based index
+	 * @returns The deleted message
+	 */
+	async deleteMessage(index: number): Promise<ClineMessage> {
+		const all = this.store.getAll() as ClineMessage[]
+		if (index < 0 || index >= all.length) {
+			throw new Error(`UIMessage.deleteMessage: index ${index} out of range [0, ${all.length})`)
+		}
+		const deleted = all[index]
+		await this.store.deleteAt(index)
+		return deleted
+	}
+
+	/**
+	 * Flush a single message to disk (incremental append).
+	 * Skips partial messages.
+	 *
+	 * @param index Zero-based index
+	 */
+	async flushMessage(index: number): Promise<void> {
+		const msg = this.store.getAt(index)
+		if (!msg || msg.partial) return
+		await this.store.upsertByTs(msg)
+	}
+
+	/**
+	 * Flush multiple messages to disk.
+	 *
+	 * @param indices Array of indices to flush
+	 */
+	async flushMessages(indices: number[]): Promise<void> {
+		for (const idx of indices) {
+			await this.flushMessage(idx)
+		}
+	}
+
+	/**
+	 * Remove all partial messages in a single cross-process transaction.
+	 *
+	 * @returns Number of messages removed
+	 */
+	async removePartialMessages(): Promise<number> {
+		let removed = 0
+		await this.store.transact((items) => {
+			const before = items.length
+			const kept = (items as unknown as ClineMessage[]).filter((m) => m.partial !== true)
+			removed = before - kept.length
+			return kept as unknown as typeof items
+		})
+		return removed
+	}
+
+	/**
+	 * Remove messages by their ts values in a single cross-process transaction.
+	 *
+	 * @param tsList Timestamps to remove
+	 * @returns Number of messages removed
+	 */
+	async removeByTs(tsList: number[]): Promise<number> {
+		if (tsList.length === 0) return 0
+		const tsSet = new Set(tsList)
+		let removed = 0
+		await this.store.transact((items) => {
+			const before = items.length
+			const kept = (items as unknown as ClineMessage[]).filter((m) => !tsSet.has(m.ts))
+			removed = before - kept.length
+			return kept as unknown as typeof items
+		})
+		return removed
+	}
+
+	/**
+	 * Clear partial flag on all in-memory messages.
+	 * Partial messages are never persisted to disk, so this is memory-only.
+	 */
+	clearPartialFlags(): void {
+		const all = this.store.getAll() as ClineMessage[]
+		for (const msg of all) {
+			if (msg.partial === true) {
+				msg.partial = false
+			}
+		}
+	}
+
+	/**
+	 * Force-load all entries from disk into the in-memory cache.
+	 */
+	async reload(): Promise<void> {
+		await this.store.loadAll()
+	}
+}

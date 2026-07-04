@@ -1,0 +1,224 @@
+import { EmptyRequest, StringRequest } from "@shared/proto/dline/common"
+import {
+	AvailableToolsResponse,
+	DeleteSubagentRequest,
+	SubagentInfo,
+	ToolGroup,
+	UpdateSubagentConfigRequest,
+} from "@shared/proto/dline/file"
+import { AvailableModelsResponse, ProviderModelGroup } from "@shared/proto/dline/models"
+import { ChevronDownIcon, ChevronRightIcon, PenIcon, Trash2Icon } from "lucide-react"
+import { useEffect, useState } from "react"
+import { Button } from "@/components/ui/button"
+import { Switch } from "@/components/ui/switch"
+import { FileServiceClient, ModelsServiceClient } from "@/services/grpc-client"
+
+interface SubagentRowProps {
+	agent: SubagentInfo
+	isGlobal: boolean
+	onToggle: (path: string, enabled: boolean) => void
+	onDelete: () => void
+}
+
+/**
+ * Subagent row with expandable tool/skill selection.
+ * Tools are loaded from getAvailableTools RPC and grouped by Read-only/Write.
+ */
+const SubagentRow: React.FC<SubagentRowProps> = ({ agent, isGlobal, onToggle, onDelete }) => {
+	const [expanded, setExpanded] = useState(false)
+	const [toolGroups, setToolGroups] = useState<ToolGroup[]>([])
+	const [selectedTools, setSelectedTools] = useState<Set<string>>(new Set(agent.tools))
+	const [modelGroups, setModelGroups] = useState<ProviderModelGroup[]>([])
+	const [selectedModelId, setSelectedModelId] = useState<string>(agent.modelId || "")
+	const [modelsLoading, setModelsLoading] = useState(false)
+	const [toolsLoading, setToolsLoading] = useState(false)
+
+	// Load available tools and models when expanded
+	useEffect(() => {
+		if (!expanded) return
+
+		let cancelled = false
+
+		setToolsLoading(true)
+		FileServiceClient.getAvailableTools({} as EmptyRequest)
+			.then((response: AvailableToolsResponse) => {
+				if (!cancelled) setToolGroups(response.groups || [])
+			})
+			.catch((err) => console.error("Failed to load available tools:", err))
+			.finally(() => {
+				if (!cancelled) setToolsLoading(false)
+			})
+
+		setModelsLoading(true)
+		ModelsServiceClient.getAvailableModels({} as EmptyRequest)
+			.then((response: AvailableModelsResponse) => {
+				if (!cancelled) setModelGroups(response.providers || [])
+			})
+			.catch((err) => console.error("Failed to load available models:", err))
+			.finally(() => {
+				if (!cancelled) setModelsLoading(false)
+			})
+
+		return () => {
+			cancelled = true
+		}
+	}, [expanded])
+
+	const toggleTool = (toolName: string) => {
+		const next = new Set(selectedTools)
+		if (next.has(toolName)) {
+			next.delete(toolName)
+		} else {
+			next.add(toolName)
+		}
+		setSelectedTools(next)
+		FileServiceClient.updateSubagentConfig(
+			UpdateSubagentConfigRequest.create({
+				subagentPath: agent.path,
+				tools: Array.from(next),
+			}),
+		).catch((err) => console.error("Failed to save tools:", err))
+	}
+
+	const handleModelChange = (modelId: string) => {
+		setSelectedModelId(modelId)
+		FileServiceClient.updateSubagentConfig(
+			UpdateSubagentConfigRequest.create({
+				subagentPath: agent.path,
+				modelId: modelId || "",
+			}),
+		).catch((err) => console.error("Failed to save model:", err))
+	}
+
+	const handleDelete = () => {
+		FileServiceClient.deleteSubagentFile(
+			DeleteSubagentRequest.create({
+				subagentPath: agent.path,
+				isGlobal,
+			}),
+		)
+			.then(() => onDelete())
+			.catch((err) => console.error("Failed to delete subagent:", err))
+	}
+
+	const handleEdit = () => {
+		FileServiceClient.openFile(StringRequest.create({ value: agent.path })).catch((err) =>
+			console.error("Failed to open subagent file:", err),
+		)
+	}
+
+	const toolCount = selectedTools.size
+	const description = agent.description || ""
+
+	return (
+		<div className="mb-2.5">
+			{/* Header row */}
+			<div className="flex items-center px-2 py-4 rounded bg-text-block-background max-h-4">
+				{/* Expand toggle */}
+				<button
+					className="mr-1 p-0.5 hover:bg-input-background rounded"
+					onClick={() => setExpanded(!expanded)}
+					type="button">
+					{expanded ? <ChevronDownIcon size={14} /> : <ChevronRightIcon size={14} />}
+				</button>
+
+				<span className="flex-1 overflow-hidden break-all whitespace-normal flex items-center mr-1" title={agent.path}>
+					<span className="ph-no-capture font-medium">{agent.name}</span>
+					{description && <span className="ml-2 text-xs text-description truncate max-w-[200px]">{description}</span>}
+					<span className="ml-2 text-xs text-description">tools: {toolCount}</span>
+				</span>
+
+				{/* Toggle Switch */}
+				<div className="flex items-center space-x-2 gap-2">
+					<Switch
+						checked={agent.enabled}
+						className="mx-1"
+						key={agent.path}
+						onClick={() => onToggle(agent.path, !agent.enabled)}
+					/>
+					<Button
+						aria-label="Edit subagent file"
+						onClick={handleEdit}
+						size="xs"
+						title="Edit subagent file"
+						variant="icon">
+						<PenIcon />
+					</Button>
+					<Button
+						aria-label="Delete subagent file"
+						onClick={handleDelete}
+						size="xs"
+						title="Delete subagent file"
+						variant="icon">
+						<Trash2Icon />
+					</Button>
+				</div>
+			</div>
+
+			{/* Expanded tool and model selection */}
+			{expanded && (
+				<div className="mt-1 ml-6 p-2 rounded bg-input-background max-h-[300px] overflow-y-auto">
+					{/* Model selection */}
+					<div className="mb-2">
+						<div className="text-xs font-medium text-description mb-1">Model</div>
+						{modelsLoading ? (
+							<div className="text-xs text-description">Loading available models...</div>
+						) : modelGroups.length === 0 ? (
+							<div className="text-xs text-description">No models available</div>
+						) : (
+							<select
+								className="w-full text-xs p-1 rounded bg-text-block-background border border-input-border"
+								onChange={(e) => handleModelChange(e.target.value)}
+								value={selectedModelId}>
+								<option value="">Default (act mode provider)</option>
+								{modelGroups.map((provider) => (
+									<optgroup key={provider.provider} label={provider.providerName}>
+										{provider.models.map((model) => (
+											<option key={`${provider.provider}:${model.id}`} value={model.id}>
+												{model.name || model.id}
+											</option>
+										))}
+									</optgroup>
+								))}
+							</select>
+						)}
+					</div>
+
+					{toolsLoading ? (
+						<div className="text-xs text-description">Loading available tools...</div>
+					) : toolGroups.length === 0 ? (
+						<div className="text-xs text-description">No tools available</div>
+					) : (
+						toolGroups.map((group) => (
+							<div className="mb-2" key={group.name}>
+								<div className="text-xs font-medium text-description mb-1 flex items-center gap-1">
+									{!group.tools[0]?.isReadOnly && <span className="text-warning">⚠️</span>}
+									{group.name}
+								</div>
+								<div className="grid grid-cols-2 gap-x-3 gap-y-0.5">
+									{group.tools.map((tool) => (
+										<label
+											className="flex items-center gap-1.5 text-xs cursor-pointer hover:bg-text-block-background rounded px-1 py-0.5"
+											key={tool.name}>
+											<input
+												checked={selectedTools.has(tool.name)}
+												className="w-3 h-3"
+												onChange={() => toggleTool(tool.name)}
+												type="checkbox"
+											/>
+											<span className="truncate" title={tool.description}>
+												{tool.name}
+											</span>
+										</label>
+									))}
+								</div>
+							</div>
+						))
+					)}
+				</div>
+			)}
+		</div>
+	)
+}
+
+export default SubagentRow
