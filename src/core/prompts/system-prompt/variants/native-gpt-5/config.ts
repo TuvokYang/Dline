@@ -1,10 +1,11 @@
-import { isGPT5ModelFamily, isGPT51PlusModel, isGptOssModelFamily, isNextGenModelProvider } from "@utils/model-utils"
+import { isGPT5ModelFamily, isGptOssModelFamily, isNextGenModelProvider } from "@utils/model-utils"
 import { ModelFamily } from "@/shared/prompts"
 import { Logger } from "@/shared/services/Logger"
 import { SystemPromptSection } from "../../templates/placeholders"
-import { ADVANCED_TOOLS, BASIC_TOOLS, ORCHESTRATION_TOOLS } from "../tools"
+import { ADVANCED_TOOLS, BASIC_TOOLS, ORCHESTRATION_TOOLS, STANDARD_EDIT } from "../tools"
 import { createVariant } from "../variant-builder"
 import { validateVariant } from "../variant-validator"
+import { gpt5ComponentOverrides } from "./overrides"
 import { GPT_5_TEMPLATE_OVERRIDES } from "./template"
 
 // Type-safe variant configuration using the builder pattern
@@ -33,8 +34,6 @@ export const config = createVariant(ModelFamily.NATIVE_GPT_5)
 		}
 		return (
 			isGPT5ModelFamily(modelId) &&
-			// GPT-5.1+ uses extended reasoning and needs the native-gpt-5-1 variant.
-			!isGPT51PlusModel(modelId) &&
 			// gpt-5-chat models do not support native tool use
 			!modelId.includes("chat") &&
 			isNextGenModelProvider(providerInfo)
@@ -54,30 +53,18 @@ export const config = createVariant(ModelFamily.NATIVE_GPT_5)
 		SystemPromptSection.USER_INSTRUCTIONS,
 		SystemPromptSection.SKILLS,
 	)
-	.tools(...BASIC_TOOLS, ...ADVANCED_TOOLS, ...ORCHESTRATION_TOOLS)
+	.tools(...STANDARD_EDIT, ...BASIC_TOOLS, ...ADVANCED_TOOLS, ...ORCHESTRATION_TOOLS)
 	.placeholders({
 		MODEL_FAMILY: ModelFamily.NATIVE_GPT_5,
 	})
 	.config({})
-	// Override the RULES component with custom template
-	.overrideComponent(SystemPromptSection.RULES, {
-		template: GPT_5_TEMPLATE_OVERRIDES.RULES,
-	})
-	.overrideComponent(SystemPromptSection.TOOL_USE, {
-		template: GPT_5_TEMPLATE_OVERRIDES.TOOL_USE,
-	})
-	.overrideComponent(SystemPromptSection.ACT_VS_PLAN, {
-		template: GPT_5_TEMPLATE_OVERRIDES.ACT_VS_PLAN,
-	})
-	.overrideComponent(SystemPromptSection.OBJECTIVE, {
-		template: GPT_5_TEMPLATE_OVERRIDES.OBJECTIVE,
-	})
-	.overrideComponent(SystemPromptSection.FEEDBACK, {
-		template: GPT_5_TEMPLATE_OVERRIDES.FEEDBACK,
-	})
-	.overrideComponent(SystemPromptSection.EDITING_FILES, {
-		enabled: false,
-	})
+	// i18n-based component overrides (inherited from native-gpt-5-1)
+	.overrideComponent(SystemPromptSection.AGENT_ROLE, gpt5ComponentOverrides[SystemPromptSection.AGENT_ROLE]!)
+	.overrideComponent(SystemPromptSection.RULES, gpt5ComponentOverrides[SystemPromptSection.RULES]!)
+	.overrideComponent(SystemPromptSection.TOOL_USE, gpt5ComponentOverrides[SystemPromptSection.TOOL_USE]!)
+	.overrideComponent(SystemPromptSection.ACT_VS_PLAN, gpt5ComponentOverrides[SystemPromptSection.ACT_VS_PLAN]!)
+	.overrideComponent(SystemPromptSection.OBJECTIVE, gpt5ComponentOverrides[SystemPromptSection.OBJECTIVE]!)
+	.overrideComponent(SystemPromptSection.FEEDBACK, gpt5ComponentOverrides[SystemPromptSection.FEEDBACK]!)
 	.build()
 
 // Compile-time validation

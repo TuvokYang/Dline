@@ -13,7 +13,6 @@ export { config as glmConfig, type GLMVariantConfig } from "./glm/config"
 export { config as gpt5Config, type GPT5VariantConfig } from "./gpt-5/config"
 export { config as hermesConfig, type HermesVariantConfig } from "./hermes/config"
 export { config as NativeGPT5Config } from "./native-gpt-5/config"
-export { config as NativeGPT51Config } from "./native-gpt-5-1/config"
 export { config as nativeNextGenConfig, type NativeNextGenVariantConfig } from "./native-next-gen/config"
 export { config as nextGenConfig, type NextGenVariantConfig } from "./next-gen/config"
 export { config as trinityConfig, type TrinityVariantConfig } from "./trinity/config"
@@ -27,7 +26,6 @@ import { config as glmConfig } from "./glm/config"
 import { config as gpt5Config } from "./gpt-5/config"
 import { config as hermesConfig } from "./hermes/config"
 import { config as NativeGPT5Config } from "./native-gpt-5/config"
-import { config as NativeGPT51Config } from "./native-gpt-5-1/config"
 import { config as NativeNextGenVariantConfig } from "./native-next-gen/config"
 import { config as nextGenConfig } from "./next-gen/config"
 import { config as trinityConfig } from "./trinity/config"
@@ -47,10 +45,6 @@ export const VARIANT_CONFIGS = {
 	 * GPT-5 variant without native tool support.
 	 */
 	[ModelFamily.GPT_5]: gpt5Config,
-	/**
-	 * GPT-5-1 variant with native tool support.
-	 */
-	[ModelFamily.NATIVE_GPT_5_1]: NativeGPT51Config,
 	/**
 	 * Gemini 3.0 variant - Optimized for Gemini 3 model with native tool calling
 	 */

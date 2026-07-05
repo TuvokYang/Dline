@@ -48,6 +48,5 @@ export const ORCHESTRATION_TOOLS = [
 
 /**
  * Standard file creation and editing pair.
- * GPT-5 native variants use APPLY_PATCH (in ADVANCED) instead and omit this constant.
  */
 export const STANDARD_EDIT = [ClineDefaultTool.FILE_NEW, ClineDefaultTool.FILE_EDIT] as const
