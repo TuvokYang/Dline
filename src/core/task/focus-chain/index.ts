@@ -13,6 +13,7 @@ import { TaskState } from "../TaskState"
 import {
 	appendToFocusChainHistory,
 	createFocusChainMarkdownContent,
+	ensureFocusChainFile,
 	extractExampleItems,
 	extractFocusChainItemsFromText,
 	extractFocusChainListFromText,
@@ -72,6 +73,19 @@ export class FocusChainManager {
 		try {
 			const taskDir = await ensureTaskDirectoryExists(this.taskId)
 			const focusChainFilePath = getFocusChainFilePath(taskDir, this.taskId)
+
+			// Ensure focus chain file exists (create empty file for new tasks)
+			// This prevents EPERM errors when user manually opens the file
+			// and ensures the file is available for watcher events
+			await ensureFocusChainFile(this.taskId, "")
+
+			// Load existing checklist from disk into taskState
+			// This is critical for task resumption: without this, taskState.currentFocusChainChecklist
+			// remains null even if the file exists, causing "no task plan exists" errors
+			const existingChecklist = await this.readFocusChainFromDisk()
+			if (existingChecklist) {
+				this.taskState.currentFocusChainChecklist = existingChecklist
+			}
 
 			// Initialize chokidar watcher
 			this.focusChainFileWatcher = chokidar.watch(focusChainFilePath, {
@@ -358,7 +372,7 @@ export class FocusChainManager {
 
 			// Handle in-progress-only reports (no completed items)
 			if (!hasCompletedItems && hasInProgressItems) {
-				const { updatedText, matchedItem, matchedItemIndex } = mergeInProgressItem(previousList, newContent)
+				const { updatedText, matchedItem: _matchedItem, matchedItemIndex } = mergeInProgressItem(previousList, newContent)
 
 				if (!updatedText) {
 					// - [ ] text mismatch — warn but don't block tools
