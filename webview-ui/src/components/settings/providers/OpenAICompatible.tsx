@@ -12,7 +12,6 @@ import { ModelInfoView } from "../common/ModelInfoView"
 import ReasoningEffortSelector from "../ReasoningEffortSelector"
 import ThinkingBudgetSlider from "../ThinkingBudgetSlider"
 import { parsePrice } from "../utils/pricingUtils"
-import { supportsReasoningEffortForModelId } from "../utils/providerUtils"
 import type { ApiProfile } from "./ProviderProfile"
 
 /**
@@ -57,8 +56,14 @@ export const OpenAICompatibleProvider = ({ showModelOptions, isPopup, profile, o
 	const pc = getOpenAiConfig(profile)
 	const modelId = profile.modelId || ""
 	const modelInfo: ModelInfo | undefined = profile.modelInfo
-	const showReasoningEffort = supportsReasoningEffortForModelId(modelId, true)
 	const thinkingMode = inferThinkingMode(pc)
+
+	/** Currency symbol lookup — used in price labels. */
+	const currSymbol = ((): string => {
+		const c = modelInfo?.pricing?.currency || "USD"
+		const map: Record<string, string> = { USD: "$", CNY: "¥", EUR: "€", GBP: "£" }
+		return map[c] || "$"
+	})()
 
 	// --- Custom Headers management ---
 	const openAiHeaders = pc.openAiHeaders ?? {}
@@ -277,6 +282,54 @@ export const OpenAICompatibleProvider = ({ showModelOptions, isPopup, profile, o
 						Supports Images
 					</VSCodeCheckbox>
 
+					{/* Supports Prompt Cache */}
+					<VSCodeCheckbox
+						checked={!!modelInfo?.capabilities?.supportsPromptCache}
+						onChange={(e: Event | React.FormEvent<HTMLElement>) => {
+							const isChecked = (e.target as HTMLInputElement).checked === true
+							onUpdate({
+								modelInfo: {
+									...modelInfo,
+									id: modelInfo?.id || modelId,
+									capabilities: {
+										...(modelInfo?.capabilities ?? ModelCapabilities.fromPartial({})),
+										supportsPromptCache: isChecked,
+									},
+								},
+							})
+						}}>
+						Supports Prompt Cache
+					</VSCodeCheckbox>
+
+					{/* Currency */}
+					<div style={{ marginTop: 5, marginBottom: 5 }}>
+						<Label className="text-xs font-medium">Currency</Label>
+						<Select
+							onValueChange={(value: string) =>
+								onUpdate({
+									modelInfo: {
+										...modelInfo,
+										id: modelInfo?.id || modelId,
+										pricing: {
+											...modelInfo?.pricing,
+											currency: value,
+										},
+									},
+								})
+							}
+							value={modelInfo?.pricing?.currency || "USD"}>
+							<SelectTrigger className="w-full mt-1">
+								<SelectValue />
+							</SelectTrigger>
+							<SelectContent>
+								<SelectItem value="USD">USD ($)</SelectItem>
+								<SelectItem value="CNY">CNY (¥)</SelectItem>
+								<SelectItem value="EUR">EUR (€)</SelectItem>
+								<SelectItem value="GBP">GBP (£)</SelectItem>
+							</SelectContent>
+						</Select>
+					</div>
+
 					{/* Context Window Size & Max Output Tokens */}
 					<div style={{ display: "flex", gap: 10, marginTop: "5px" }}>
 						<DebouncedTextField
@@ -335,7 +388,7 @@ export const OpenAICompatibleProvider = ({ showModelOptions, isPopup, profile, o
 								})
 							}
 							style={{ flex: 1 }}>
-							<span style={{ fontWeight: 500 }}>Input Price / 1M tokens</span>
+							<span style={{ fontWeight: 500 }}>Input Price ({currSymbol}/1M tokens)</span>
 						</DebouncedTextField>
 
 						<DebouncedTextField
@@ -353,7 +406,50 @@ export const OpenAICompatibleProvider = ({ showModelOptions, isPopup, profile, o
 								})
 							}
 							style={{ flex: 1 }}>
-							<span style={{ fontWeight: 500 }}>Output Price / 1M tokens</span>
+							<span style={{ fontWeight: 500 }}>Output Price ({currSymbol}/1M tokens)</span>
+						</DebouncedTextField>
+					</div>
+
+					{/* Cache Writes Price & Cache Reads Price */}
+					<div style={{ display: "flex", gap: 10, marginTop: "5px" }}>
+						<DebouncedTextField
+							initialValue={
+								modelInfo?.pricing?.cacheWritesPrice != null ? String(modelInfo.pricing.cacheWritesPrice) : ""
+							}
+							onChange={(value) =>
+								onUpdate({
+									modelInfo: {
+										...modelInfo,
+										id: modelInfo?.id || modelId,
+										pricing: {
+											...modelInfo?.pricing,
+											cacheWritesPrice: parsePrice(value, 0),
+										},
+									},
+								})
+							}
+							style={{ flex: 1 }}>
+							<span style={{ fontWeight: 500 }}>Cache Writes ({currSymbol}/M)</span>
+						</DebouncedTextField>
+
+						<DebouncedTextField
+							initialValue={
+								modelInfo?.pricing?.cacheReadsPrice != null ? String(modelInfo.pricing.cacheReadsPrice) : ""
+							}
+							onChange={(value) =>
+								onUpdate({
+									modelInfo: {
+										...modelInfo,
+										id: modelInfo?.id || modelId,
+										pricing: {
+											...modelInfo?.pricing,
+											cacheReadsPrice: parsePrice(value, 0),
+										},
+									},
+								})
+							}
+							style={{ flex: 1 }}>
+							<span style={{ fontWeight: 500 }}>Cache Reads ({currSymbol}/M)</span>
 						</DebouncedTextField>
 					</div>
 
@@ -384,12 +480,7 @@ export const OpenAICompatibleProvider = ({ showModelOptions, isPopup, profile, o
 				</span>
 			</p>
 
-			{showModelOptions && (
-				<>
-					{showReasoningEffort && <ReasoningEffortSelector />}
-					{modelInfo && <ModelInfoView isPopup={isPopup} modelInfo={modelInfo} selectedModelId={modelId} />}
-				</>
-			)}
+			{showModelOptions && modelInfo && <ModelInfoView isPopup={isPopup} modelInfo={modelInfo} selectedModelId={modelId} />}
 		</div>
 	)
 }

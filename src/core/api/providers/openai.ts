@@ -1,6 +1,7 @@
 import { DefaultAzureCredential, getBearerTokenProvider } from "@azure/identity"
 import { azureOpenAiDefaultApiVersion, ModelInfo, OpenAiCompatibleModelInfo, openAiModelInfoSaneDefaults } from "@shared/api"
 import { normalizeOpenaiReasoningEffort } from "@shared/storage/types"
+import { calculateApiCostOpenAI } from "@utils/cost"
 import OpenAI, { AzureOpenAI } from "openai"
 import type { ChatCompletionReasoningEffort, ChatCompletionTool } from "openai/resources/chat/completions"
 import { buildExternalBasicHeaders } from "@/services/EnvUtils"
@@ -118,6 +119,39 @@ export class OpenAiHandler implements ApiHandler {
 			{ role: "system", content: systemPrompt },
 			...convertToOpenAiMessages(messages),
 		]
+
+		// Apply prompt cache control if model supports it
+		const cacheControl = this.modelInfo?.capabilities?.supportsPromptCache
+			? { cache_control: { type: "ephemeral" as const } }
+			: undefined
+
+		if (cacheControl) {
+			// Attach cache_control to system message (index 0)
+			openAiMessages[0] = { ...openAiMessages[0], ...cacheControl }
+
+			// Find the last two user messages for cache breakpoints
+			let lastUserIdx = -1
+			let secondLastUserIdx = -1
+			for (let i = openAiMessages.length - 1; i >= 0; i--) {
+				if (openAiMessages[i].role === "user") {
+					if (lastUserIdx === -1) {
+						lastUserIdx = i
+					} else {
+						secondLastUserIdx = i
+						break
+					}
+				}
+			}
+
+			// Attach cache_control to the last two user messages
+			if (lastUserIdx >= 0) {
+				openAiMessages[lastUserIdx] = { ...openAiMessages[lastUserIdx], ...cacheControl }
+			}
+			if (secondLastUserIdx >= 0) {
+				openAiMessages[secondLastUserIdx] = { ...openAiMessages[secondLastUserIdx], ...cacheControl }
+			}
+		}
+
 		let temperature: number | undefined
 		const configTemp = this.config?.temperature
 		temperature = configTemp != null && configTemp !== 0 ? Number(configTemp) : undefined
@@ -137,13 +171,19 @@ export class OpenAiHandler implements ApiHandler {
 
 		const thinkingBudget = this.config?.reasoning?.thinkingBudget ?? 0
 		if (thinkingBudget > 0) {
+			// Budget mode: use enable_thinking + thinking_budget, no effort
 			openAiMessages = [{ role: "developer", content: systemPrompt }, ...convertToOpenAiMessages(messages)]
 			reasoningEffort = undefined
-		} else if (isReasoningModelFamily) {
-			openAiMessages = [{ role: "developer", content: systemPrompt }, ...convertToOpenAiMessages(messages)]
-			temperature = undefined // does not support temperature
+		} else {
+			// Effort mode: send reasoning_effort based on the config value, not model ID prefix
 			const requestedEffort = normalizeOpenaiReasoningEffort(this.reasoningEffort)
 			reasoningEffort = requestedEffort === "none" ? undefined : (requestedEffort as ChatCompletionReasoningEffort)
+		}
+
+		// o-series model-specific handling: developer role + no temperature
+		if (isReasoningModelFamily) {
+			openAiMessages = [{ role: "developer", content: systemPrompt }, ...convertToOpenAiMessages(messages)]
+			temperature = undefined // does not support temperature
 		}
 
 		const requestParams: any = {
@@ -154,9 +194,12 @@ export class OpenAiHandler implements ApiHandler {
 			stream: true,
 			reasoning_effort: reasoningEffort,
 		}
+		// Enable thinking: budget mode uses explicit budget; effort mode uses reasoning_effort + enable_thinking
 		if (thinkingBudget > 0) {
 			requestParams.enable_thinking = true
 			requestParams.thinking_budget = thinkingBudget
+		} else if (reasoningEffort) {
+			requestParams.enable_thinking = true
 		}
 		if (this.config?.streamIncludeUsage !== false) {
 			requestParams.stream_options = { include_usage: true }
@@ -191,13 +234,31 @@ export class OpenAiHandler implements ApiHandler {
 
 			if (chunk.usage && !usageYielded) {
 				usageYielded = true
+				// Parse cache tokens from multiple possible field names
+				// Different OpenAI-compatible providers use different field names
+				const inputTokens = chunk.usage.prompt_tokens || 0
+				const outputTokens = chunk.usage.completion_tokens || 0
+				const cacheReadTokens =
+					chunk.usage.cache_read_input_tokens ??
+					chunk.usage.prompt_cache_hit_tokens ??
+					chunk.usage.prompt_tokens_details?.cached_tokens ??
+					0
+				const cacheWriteTokens =
+					chunk.usage.cache_creation_input_tokens ??
+					chunk.usage.prompt_cache_miss_tokens ??
+					chunk.usage.prompt_tokens_details?.cache_miss_tokens ??
+					0
+				const nonCachedInputTokens = Math.max(0, inputTokens - cacheReadTokens - cacheWriteTokens)
+				const modelInfo = this.modelInfo ?? openAiModelInfoSaneDefaults
+				const totalCost = calculateApiCostOpenAI(modelInfo, inputTokens, outputTokens, cacheWriteTokens, cacheReadTokens)
+
 				yield {
 					type: "usage",
-					inputTokens: chunk.usage.prompt_tokens || 0,
-					outputTokens: chunk.usage.completion_tokens || 0,
-					cacheReadTokens: chunk.usage.prompt_tokens_details?.cached_tokens || chunk.usage.prompt_cache_hit_tokens || 0,
-					cacheWriteTokens:
-						chunk.usage.prompt_cache_miss_tokens || chunk.usage.prompt_tokens_details?.cache_miss_tokens || 0,
+					inputTokens: nonCachedInputTokens,
+					outputTokens,
+					cacheReadTokens,
+					cacheWriteTokens,
+					totalCost,
 				}
 			}
 		}

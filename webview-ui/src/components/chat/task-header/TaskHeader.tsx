@@ -112,7 +112,8 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 			currentProvider !== "ollama" &&
 			currentProvider !== "lmstudio" &&
 			currentProvider !== "openai-codex") // Subscription-based, no per-token costs
-	const displayCurrency = currency || currentProfile?.modelInfo?.pricing?.currency || "USD"
+	// Profile currency takes priority over apiMetrics currency (set at task creation time)
+	const displayCurrency = currentProfile?.modelInfo?.pricing?.currency || currency || "USD"
 	const totalInputTokens = tokensIn + (cacheWrites ?? 0) + (cacheReads ?? 0)
 
 	// Event handlers
@@ -213,7 +214,7 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 									</span>
 								)}
 								<span className="text-xs sm:text-sm font-medium">
-									{displayCurrency === "CNY" ? "¥" : "$"}
+									{{ USD: "$", CNY: "¥", EUR: "€", GBP: "£" }[displayCurrency] || "$"}
 									{totalCost?.toFixed(3)}
 								</span>
 							</div>
