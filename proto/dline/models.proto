@@ -84,12 +84,24 @@ message PriceTier {
 
 
 /** Canonical per-model metadata (layered). */
+enum ApiFormat {
+  ANTHROPIC_CHAT = 0;
+  GEMINI_CHAT = 1;
+  OPENAI_CHAT = 2;
+  R1_CHAT = 3;
+  OPENAI_RESPONSES = 4;
+  OPENAI_RESPONSES_WEBSOCKET_MODE = 5;
+}
+
 message ModelInfo {
   string id = 1;
   optional string name = 2;
   optional string description = 3;
   optional dline.models.ModelCapabilities capabilities = 4;
   optional dline.models.ModelPricing pricing = 5;
+  optional ApiFormat api_format = 6;
+  optional double temperature = 7;
+  optional string system_role = 8;
 }
 
 /** Complete provider definition: metadata + model list. */
@@ -508,15 +520,6 @@ enum ApiProvider {
   NOUSRESEARCH = 39;
   OPENAI_CODEX = 40;
   WANDB = 41;
-}
-
-enum ApiFormat {
-  ANTHROPIC_CHAT = 0;
-  GEMINI_CHAT = 1;
-  OPENAI_CHAT = 2;
-  R1_CHAT = 3;
-  OPENAI_RESPONSES = 4;
-  OPENAI_RESPONSES_WEBSOCKET_MODE = 5;
 }
 
 // Model info for OpenAI-compatible models

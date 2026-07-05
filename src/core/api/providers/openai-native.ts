@@ -1,6 +1,5 @@
 import {
 	ModelInfo,
-	OpenAiCompatibleModelInfo,
 	OpenAiNativeModelId,
 	openAiNativeDefaultModelId,
 	openAiNativeModels,
@@ -118,7 +117,7 @@ export class OpenAiNativeHandler implements ApiHandler {
 		this.abortController = new AbortController()
 
 		// Handle o1 models separately as they don't support streaming
-		if (model.info.supportsStreaming === false) {
+		if (model.info.capabilities?.supportsStreaming === false) {
 			const response = await client.chat.completions.create(
 				{
 					model: model.id,
@@ -134,9 +133,9 @@ export class OpenAiNativeHandler implements ApiHandler {
 			return
 		}
 
-		const systemRole = model.info.systemRole ?? "system"
+		const systemRole = (model.info.systemRole as "system" | "developer" | undefined) ?? "system"
 		const includeReasoning = model.info.capabilities?.supportsReasoning
-		const includeTools = model.info.supportsTools ?? true
+		const includeTools = model.info.capabilities?.supportsTools ?? true
 		const requestedEffort = normalizeOpenaiReasoningEffort(this.reasoningEffort)
 		const reasoningEffort =
 			includeReasoning && requestedEffort !== "none" ? (requestedEffort as ChatCompletionReasoningEffort) : undefined
@@ -698,7 +697,7 @@ export class OpenAiNativeHandler implements ApiHandler {
 		this.abortController = undefined
 	}
 
-	getModel(): { id: OpenAiNativeModelId; info: OpenAiCompatibleModelInfo } {
+	getModel(): { id: OpenAiNativeModelId; info: ModelInfo } {
 		const modelId = this.modelId
 		if (modelId && modelId in openAiNativeModels) {
 			const id = modelId as OpenAiNativeModelId

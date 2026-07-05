@@ -1,5 +1,5 @@
 import { DefaultAzureCredential, getBearerTokenProvider } from "@azure/identity"
-import { azureOpenAiDefaultApiVersion, ModelInfo, OpenAiCompatibleModelInfo, openAiModelInfoSaneDefaults } from "@shared/api"
+import { azureOpenAiDefaultApiVersion, ModelInfo, openAiModelInfoSaneDefaults } from "@shared/api"
 import { normalizeOpenaiReasoningEffort } from "@shared/storage/types"
 import { calculateApiCostOpenAI } from "@utils/cost"
 import OpenAI, { AzureOpenAI } from "openai"
@@ -29,7 +29,7 @@ export class OpenAiHandler implements ApiHandler {
 		return this.ctx.profile.modelId || ""
 	}
 	private get modelInfo() {
-		return this.ctx.profile.modelInfo as OpenAiCompatibleModelInfo | undefined
+		return this.ctx.profile.modelInfo as ModelInfo | undefined
 	}
 	private get baseUrl() {
 		return this.ctx.profile.baseUrl
@@ -111,7 +111,6 @@ export class OpenAiHandler implements ApiHandler {
 		const client = this.ensureClient()
 		const modelId = this.modelId
 		const isDeepseekReasoner = modelId.includes("deepseek-reasoner")
-		const isR1FormatRequired = this.modelInfo?.isR1FormatRequired ?? false
 		const isReasoningModelFamily =
 			["o1", "o3", "o4", "gpt-5"].some((prefix) => modelId.includes(prefix)) && !modelId.includes("chat")
 
@@ -165,7 +164,7 @@ export class OpenAiHandler implements ApiHandler {
 			maxTokens = undefined
 		}
 
-		if (isDeepseekReasoner || isR1FormatRequired) {
+		if (isDeepseekReasoner) {
 			openAiMessages = convertToR1Format([{ role: "user", content: systemPrompt }, ...messages])
 		}
 

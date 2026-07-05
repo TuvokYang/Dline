@@ -90,7 +90,7 @@ export const allProviderModels: Record<string, ProviderModelsConfig> = {
 	"openai-codex": {
 		provider: "openai-codex",
 		providerName: "OpenAI Codex",
-		billingMode: "token",
+		billingMode: "subscription",
 		models: openAiCodexModels,
 		defaultModelId: firstKey(openAiCodexModels),
 	},

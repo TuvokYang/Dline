@@ -1,5 +1,4 @@
 import { vertexModels } from "../core/api/providers/models/vertex"
-import { ApiFormat } from "./proto/dline/models"
 import type { ModelInfo } from "./providers/types"
 
 export type ApiProvider =
@@ -80,18 +79,7 @@ export interface ApiHandlerOptions extends ApiConfiguration {
 export type { ModelInfo } from "./proto/dline/models"
 export type { ModelCapabilities, ModelPricing, ThinkingConfig } from "./proto/dline/models/metadata"
 
-export interface OpenAiCompatibleModelInfo extends ModelInfo {
-	/** API format for OpenAI-compatible providers */
-	apiFormat?: ApiFormat
-	temperature?: number
-	isR1FormatRequired?: boolean
-	systemRole?: "developer" | "system"
-	supportsReasoningEffort?: boolean
-	supportsTools?: boolean
-	supportsStreaming?: boolean
-}
-
-export interface OcaModelInfo extends OpenAiCompatibleModelInfo {
+export interface OcaModelInfo extends ModelInfo {
 	modelName: string
 	surveyId?: string
 	banner?: string
@@ -167,7 +155,7 @@ export const anthropicModelInfoSaneDefaults: ModelInfo = {
 			supported: true,
 			mode: "budget",
 			maxBudget: 64000,
-			effortLevels: []
+			effortLevels: [],
 		},
 	},
 	pricing: {
@@ -297,7 +285,7 @@ export const liteLlmModelInfoSaneDefaults: LiteLLMModelInfo = {
 export const liteLlmDefaultModelId = "anthropic/claude-3-7-sonnet-20250219"
 
 // OpenAI compatible defaults
-export const openAiModelInfoSaneDefaults: OpenAiCompatibleModelInfo = {
+export const openAiModelInfoSaneDefaults: ModelInfo = {
 	id: "",
 	capabilities: {
 		supportsImages: true,
@@ -306,7 +294,6 @@ export const openAiModelInfoSaneDefaults: OpenAiCompatibleModelInfo = {
 		maxTokens: -1,
 		contextWindow: 128_000,
 	},
-	isR1FormatRequired: false,
 }
 
 // Azure

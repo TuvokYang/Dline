@@ -21,6 +21,8 @@ message ModelCapabilities {
   optional uint32 max_tokens = 5;
   optional uint64 context_window = 6;
   optional ThinkingConfig thinking = 7;
+  optional bool supports_streaming = 8;
+  optional bool supports_tools = 9;
 }
 
 /** Pricing tier for context-window-based tiered models. */

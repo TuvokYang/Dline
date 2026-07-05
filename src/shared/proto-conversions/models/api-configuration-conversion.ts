@@ -11,7 +11,7 @@ import {
 	ApiConfiguration,
 	ApiProvider,
 	LiteLLMModelInfo as AppLiteLLMModelInfo,
-	OpenAiCompatibleModelInfo as AppOpenAiCompatibleModelInfo,
+	ModelInfo as AppModelInfo,
 	ModelInfo,
 	OcaModelInfo,
 } from "../../api"
@@ -206,7 +206,7 @@ function _convertProtoToLiteLLMModelInfo(info: LiteLLMModelInfo | undefined): Ap
 
 // Convert application OpenAiCompatibleModelInfo to proto OpenAiCompatibleModelInfo
 function _convertOpenAiCompatibleModelInfoToProto(
-	info: AppOpenAiCompatibleModelInfo | undefined,
+	info: AppModelInfo | undefined,
 ): OpenAiCompatibleModelInfo | undefined {
 	if (!info) {
 		return undefined
@@ -226,14 +226,13 @@ function _convertOpenAiCompatibleModelInfoToProto(
 		description: info.description,
 		tiers: info.pricing?.tiers || [],
 		temperature: info.temperature,
-		isR1FormatRequired: info.isR1FormatRequired,
 	}
 }
 
 // Convert proto OpenAiCompatibleModelInfo to application OpenAiCompatibleModelInfo
 function _convertProtoToOpenAiCompatibleModelInfo(
 	info: OpenAiCompatibleModelInfo | undefined,
-): AppOpenAiCompatibleModelInfo | undefined {
+): AppModelInfo | undefined {
 	if (!info) {
 		return undefined
 	}
@@ -257,7 +256,6 @@ function _convertProtoToOpenAiCompatibleModelInfo(
 		},
 		description: info.description,
 		temperature: info.temperature,
-		isR1FormatRequired: info.isR1FormatRequired,
 	}
 }
 
