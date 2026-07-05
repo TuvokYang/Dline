@@ -386,8 +386,27 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 			}
 		}
 
-		// Restart usage polling when profile changes
+		// Synchronize profiles when unified mode is active (planActSeparateModelsSetting = false)
 		if (didChangeProfile) {
+			const separateModels = controller.stateManager.getGlobalSettingsKey("planActSeparateModelsSetting")
+
+			if (separateModels === false) {
+				// Unified mode: synchronize both profiles to the same value
+				const newProfile = request.planModeProfile || request.actModeProfile
+				if (newProfile) {
+					Logger.info("[updateSettings] Unified mode: synchronizing both profiles to", newProfile)
+					controller.stateManager.setGlobalState("planModeProfile", newProfile)
+					controller.stateManager.setGlobalState("actModeProfile", newProfile)
+
+					// Clear task overrides for both profiles to ensure consistency
+					if (controller.task) {
+						controller.stateManager.clearTaskSetting(controller.task.taskId, "planModeProfile")
+						controller.stateManager.clearTaskSetting(controller.task.taskId, "actModeProfile")
+					}
+				}
+			}
+
+			// Restart usage polling when profile changes
 			controller.task?.rebuildApiHandler()
 			controller.restartAccountUsagePolling()
 		}
