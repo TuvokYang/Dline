@@ -129,7 +129,7 @@ export class StateManager {
 	private pendingSecrets = new Set<SecretKey>()
 	private pendingWorkspaceState = new Set<LocalStateKey>()
 	private persistenceTimeout: NodeJS.Timeout | null = null
-	private readonly PERSISTENCE_DELAY_MS = 500
+	private readonly PERSISTENCE_DELAY_MS = 2000
 
 	// Callbacks for persistence errors — multiple controllers may register.
 	private onPersistenceErrorCallbacks = new Set<(event: PersistenceErrorEvent) => void | Promise<void>>()
