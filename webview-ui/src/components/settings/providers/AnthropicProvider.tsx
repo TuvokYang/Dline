@@ -18,6 +18,7 @@ import { ModelSelector } from "../common/ModelSelector"
 import { RemotelyConfiguredInputWrapper } from "../common/RemotelyConfiguredInputWrapper"
 import ReasoningEffortSelector from "../ReasoningEffortSelector"
 import ThinkingBudgetSlider from "../ThinkingBudgetSlider"
+import { buildCustomModelInfo } from "./anthropicCustomModel"
 import { useProviderModels } from "./useProviderModels"
 
 // Anthropic models that support thinking/reasoning mode
@@ -65,15 +66,17 @@ export const AnthropicProvider = ({ showModelOptions, isPopup, profile, onUpdate
 
 	const pc = profile.anthropic ?? AnthropicProviderConfig.create()
 	const modelId = profile.modelId || anthropicDefaultModelId
-	const modelInfo = profile.modelInfo ?? anthropicModels[modelId] ?? anthropicModelInfoSaneDefaults
 	const customModelEnabled = pc?.customModelEnabled ?? false
 	const customModelInfo: ModelInfo | null = pc?.customModelEnabled
-		? {
-				id: modelId,
-				capabilities: pc.capabilities ?? anthropicModelInfoSaneDefaults.capabilities,
-				pricing: pc.pricing ?? anthropicModelInfoSaneDefaults.pricing,
-			}
+		? buildCustomModelInfo({
+				modelId,
+				defaults: anthropicModelInfoSaneDefaults,
+				current: profile.modelInfo,
+				capabilities: pc.capabilities,
+				pricing: pc.pricing,
+			})
 		: null
+	const modelInfo = customModelInfo ?? profile.modelInfo ?? anthropicModels[modelId] ?? anthropicModelInfoSaneDefaults
 	const reasoningEffort = pc?.reasoning?.effort ?? ""
 	const thinkingBudgetTokens = pc?.reasoning?.thinkingBudget ?? 0
 
@@ -90,6 +93,20 @@ export const AnthropicProvider = ({ showModelOptions, isPopup, profile, onUpdate
 
 	// --- Handlers ---
 	const handleModelChange = (newModelId: string) => {
+		if (useCustomModel) {
+			onUpdate({
+				modelId: newModelId,
+				modelInfo: buildCustomModelInfo({
+					modelId: newModelId,
+					defaults: anthropicModelInfoSaneDefaults,
+					current: customModelInfo ?? profile.modelInfo,
+					capabilities: pc.capabilities,
+					pricing: pc.pricing,
+				}),
+			})
+			return
+		}
+
 		onUpdate({ modelId: newModelId, modelInfo: anthropicModels[newModelId] })
 	}
 
@@ -97,17 +114,45 @@ export const AnthropicProvider = ({ showModelOptions, isPopup, profile, onUpdate
 		const capFields = new Set(["maxTokens", "contextWindow", "supportsImages", "supportsPromptCache", "supportsReasoning"])
 		if (capFields.has(field)) {
 			const caps = pc.capabilities ?? ModelCapabilities.fromPartial({})
-			onUpdate({ anthropic: { ...pc, capabilities: { ...caps, [field]: value as never } } })
+			const nextCapabilities = { ...caps, [field]: value as never }
+			onUpdate({
+				modelInfo: buildCustomModelInfo({
+					modelId,
+					defaults: anthropicModelInfoSaneDefaults,
+					current: customModelInfo ?? profile.modelInfo,
+					capabilities: nextCapabilities,
+					pricing: pc.pricing,
+				}),
+				anthropic: { ...pc, capabilities: nextCapabilities },
+			})
 		} else {
 			const prc = pc.pricing ?? ModelPricing.fromPartial({})
-			onUpdate({ anthropic: { ...pc, pricing: { ...prc, [field]: value as never } } })
+			const nextPricing = { ...prc, [field]: value as never }
+			onUpdate({
+				modelInfo: buildCustomModelInfo({
+					modelId,
+					defaults: anthropicModelInfoSaneDefaults,
+					current: customModelInfo ?? profile.modelInfo,
+					capabilities: pc.capabilities,
+					pricing: nextPricing,
+				}),
+				anthropic: { ...pc, pricing: nextPricing },
+			})
 		}
 	}
 
 	const handleToggleCustomModel = (checked: boolean) => {
 		setUseCustomModel(checked)
 		const newModelId = checked ? modelId || "custom-model" : Object.keys(anthropicModels)[0]
-		const newModelInfo = checked ? customModelInfo || modelInfo || { ...anthropicModelInfoSaneDefaults } : undefined
+		const newModelInfo = checked
+			? buildCustomModelInfo({
+					modelId: newModelId,
+					defaults: anthropicModelInfoSaneDefaults,
+					current: customModelInfo ?? modelInfo,
+					capabilities: pc.capabilities,
+					pricing: pc.pricing,
+				})
+			: undefined
 		onUpdate({
 			modelId: newModelId,
 			modelInfo: newModelInfo,

@@ -10,6 +10,7 @@ import {
 	ANTHROPIC_FAST_MODE_SUFFIX,
 	AnthropicModelId,
 	anthropicDefaultModelId,
+	anthropicModelInfoSaneDefaults,
 	anthropicModels,
 	CLAUDE_SONNET_1M_SUFFIX,
 	ModelInfo,
@@ -50,6 +51,24 @@ export class AnthropicHandler implements ApiHandler {
 	}
 	private get thinkingBudgetTokens() {
 		return this.config?.reasoning?.thinkingBudget ?? 0
+	}
+
+	/**
+	 * Build model metadata for custom Anthropic-compatible models.
+	 *
+	 * @param modelId Custom model identifier configured by the user.
+	 * @returns ModelInfo using profile overrides, provider custom config, or sane defaults.
+	 */
+	private buildCustomModelInfo(modelId: string): ModelInfo {
+		const profileInfo = this.modelInfo
+		return {
+			...anthropicModelInfoSaneDefaults,
+			...profileInfo,
+			id: modelId,
+			name: profileInfo?.name ?? modelId,
+			capabilities: profileInfo?.capabilities ?? this.config?.capabilities ?? anthropicModelInfoSaneDefaults.capabilities,
+			pricing: profileInfo?.pricing ?? this.config?.pricing ?? anthropicModelInfoSaneDefaults.pricing,
+		}
 	}
 
 	private ensureClient(): Anthropic {
@@ -315,19 +334,28 @@ export class AnthropicHandler implements ApiHandler {
 		}
 	}
 
+	/**
+	 * Resolve the Anthropic model ID and metadata for the current profile.
+	 *
+	 * @returns Configured model ID and model metadata without replacing custom IDs.
+	 */
 	getModel(): { id: AnthropicModelId; info: ModelInfo } {
 		const mid = this.modelId
-		// If model info is explicitly provided, use it
-		if (this.modelInfo) {
+		if (mid && this.modelInfo) {
 			return {
-				id: (mid || anthropicDefaultModelId) as AnthropicModelId,
-				info: this.modelInfo,
+				id: mid as AnthropicModelId,
+				info: this.buildCustomModelInfo(mid),
 			}
 		}
-		// If model is in predefined list
 		if (mid && anthropicModels[mid]) {
 			const id = mid as AnthropicModelId
 			return { id, info: anthropicModels[id] }
+		}
+		if (mid) {
+			return {
+				id: mid as AnthropicModelId,
+				info: this.buildCustomModelInfo(mid),
+			}
 		}
 		return {
 			id: anthropicDefaultModelId,
