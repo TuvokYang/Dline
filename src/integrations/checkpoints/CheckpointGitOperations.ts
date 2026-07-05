@@ -257,19 +257,19 @@ export class GitOperations {
 
 			try {
 				await fs.rename(fullPath, newPath)
-				Logger.log(`[task ${taskId}] CheckpointTracker ${disable ? "disabled" : "enabled"} nested git repo ${gitPath}`)
+				Logger.log(`[Task ${taskId}] CheckpointTracker ${disable ? "disabled" : "enabled"} nested git repo ${gitPath}`)
 			} catch (error) {
 				const errCode = (error as NodeJS.ErrnoException)?.code
 				// EPERM / EBUSY on Windows means another process holds the directory.
 				// Skip this entry so one stuck directory does not block all others.
 				if (errCode === "EPERM" || errCode === "EBUSY") {
 					Logger.warn(
-						`[task ${taskId}] CheckpointTracker cannot ${disable ? "disable" : "enable"} nested git repo ${gitPath}: ${errCode} (skipped)`,
+						`[Task ${taskId}] CheckpointTracker cannot ${disable ? "disable" : "enable"} nested git repo ${gitPath}: ${errCode} (skipped)`,
 					)
 					continue
 				}
 				Logger.error(
-					`[task ${taskId}] CheckpointTracker failed to ${disable ? "disable" : "enable"} nested git repo ${gitPath}:`,
+					`[Task ${taskId}] CheckpointTracker failed to ${disable ? "disable" : "enable"} nested git repo ${gitPath}:`,
 					error,
 				)
 				throw new Error(
@@ -309,7 +309,7 @@ export class GitOperations {
 		try {
 			// Update exclude patterns before each commit
 			await this.renameNestedGitRepos(true, [], taskId)
-			Logger.info(`[task ${taskId}] Starting checkpoint add operation...`)
+			Logger.info(`[Task ${taskId}] Starting checkpoint add operation...`)
 
 			try {
 				if (fileList && fileList.length > 0) {
@@ -318,7 +318,7 @@ export class GitOperations {
 					// these files were explicitly modified by tool handlers and
 					// should be checkpointed regardless of exclusion patterns.
 					await git.add(["-f", ...fileList])
-					Logger.debug(`[task ${taskId}] Checkpoint add operation: staged ${fileList.length} file(s) with -f`)
+					Logger.debug(`[Task ${taskId}] Checkpoint add operation: staged ${fileList.length} file(s) with -f`)
 				} else {
 					// Backward compatible: stage all files.
 					// Any files with permissions errors will not be added,
@@ -340,11 +340,11 @@ export class GitOperations {
 				baseDelayMs: 50,
 				onRetry: (_error, attempt, maxAttempts, delayMs) => {
 					Logger.warn(
-						`[task ${taskId}] CheckpointTracker re-enable nested git repos failed on attempt ${attempt}/${maxAttempts}. Retrying in ${delayMs}ms`,
+						`[Task ${taskId}] CheckpointTracker re-enable nested git repos failed on attempt ${attempt}/${maxAttempts}. Retrying in ${delayMs}ms`,
 					)
 				},
 			}).catch((error) => {
-				Logger.error(`[task ${taskId}] CheckpointTracker failed to re-enable nested git repos after retries:`, error)
+				Logger.error(`[Task ${taskId}] CheckpointTracker failed to re-enable nested git repos after retries:`, error)
 			})
 		}
 	}

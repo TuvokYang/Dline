@@ -2791,6 +2791,7 @@ export class Task {
 		}
 
 		const promptContext: SystemPromptContext = {
+			taskId: this.taskId,
 			cwd: this.cwd,
 			ide,
 			providerInfo,

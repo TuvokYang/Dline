@@ -52,13 +52,14 @@ export class PromptRegistry {
 
 	getModelFamily(context: SystemPromptContext) {
 		// Ensure providerInfo and model ID are available
+		const taskPrefix = context.taskId ? `[Task ${context.taskId}] ` : ""
 		if (context.providerInfo?.model?.id) {
 			const modelId = context.providerInfo.model.id
 			// Loop through all registered variants to find the first one that matches
 			for (const [_, v] of this.variants.entries()) {
 				try {
 					if (v.matcher(context)) {
-						Logger.log(`[Prompt variant] Selected: ${v.family} (model: ${modelId})`)
+						Logger.log(`${taskPrefix}[Prompt variant] Selected: ${v.family} (model: ${modelId})`)
 						return v.family
 					}
 				} catch {
@@ -68,7 +69,7 @@ export class PromptRegistry {
 		}
 		// Fallback to generic variant if no match found
 		const modelId = context.providerInfo?.model?.id ?? "unknown"
-		Logger.log(`[Prompt variant] No matching variant found for model: ${modelId}, falling back to generic`)
+		Logger.log(`${taskPrefix}[Prompt variant] No matching variant found for model: ${modelId}, falling back to generic`)
 		return ModelFamily.GENERIC
 	}
 
