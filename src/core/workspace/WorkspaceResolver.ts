@@ -129,7 +129,11 @@ export class WorkspaceResolver {
 		workspaceRoots: WorkspaceRoot[],
 		absolutePath: string,
 	): { absolutePath: string; root: WorkspaceRoot } {
-		const matchingRoot = workspaceRoots.find((root) => absolutePath.startsWith(root.path))
+		// Use path.relative for cross-platform safe comparison (handles / vs \ on Windows)
+		const matchingRoot = workspaceRoots.find((root) => {
+			const rel = path.relative(root.path, absolutePath)
+			return !rel.startsWith("..") && !path.isAbsolute(rel)
+		})
 		return {
 			absolutePath,
 			root: matchingRoot || workspaceRoots[0], // fallback to primary

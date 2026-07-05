@@ -102,7 +102,9 @@ export class WorkspaceRootManager {
 		const sortedRoots = [...this.roots].sort((a, b) => b.path.length - a.path.length)
 
 		for (const root of sortedRoots) {
-			if (absolutePath.startsWith(root.path)) {
+			// Use path.relative for cross-platform safe comparison (handles / vs \ on Windows)
+			const rel = path.relative(root.path, absolutePath)
+			if (!rel.startsWith("..") && !path.isAbsolute(rel)) {
 				return root
 			}
 		}

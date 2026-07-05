@@ -130,7 +130,9 @@ export class WorkspacePathAdapter {
 		// Single-root mode
 		if (!this.config.isMultiRootEnabled || !this.config.workspaceManager) {
 			// In single-root, check if path is within cwd
-			if (absolutePath.startsWith(this.config.cwd)) {
+			// Use path.relative for cross-platform safe comparison (handles / vs \ on Windows)
+			const rel = path.relative(this.config.cwd, absolutePath)
+			if (!rel.startsWith("..") && !path.isAbsolute(rel)) {
 				return {
 					name: path.basename(this.config.cwd),
 					path: this.config.cwd,
@@ -161,8 +163,10 @@ export class WorkspacePathAdapter {
 	getRelativePath(absolutePath: string): string {
 		// Single-root mode
 		if (!this.config.isMultiRootEnabled || !this.config.workspaceManager) {
-			if (absolutePath.startsWith(this.config.cwd)) {
-				return path.relative(this.config.cwd, absolutePath)
+			// Use path.relative for cross-platform safe comparison (handles / vs \ on Windows)
+			const rel = path.relative(this.config.cwd, absolutePath)
+			if (!rel.startsWith("..") && !path.isAbsolute(rel)) {
+				return rel
 			}
 			return absolutePath
 		}
