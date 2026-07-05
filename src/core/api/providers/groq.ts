@@ -138,12 +138,9 @@ export class GroqHandler implements ApiHandler {
 		// Calculate cost using OpenAI-compatible cost calculation
 		const totalCost = calculateApiCostOpenAI(info, inputTokens, outputTokens, cacheWriteTokens, cacheReadTokens)
 
-		// Calculate non-cached input tokens for proper reporting
-		const nonCachedInputTokens = Math.max(0, inputTokens - cacheReadTokens - cacheWriteTokens)
-
 		yield {
 			type: "usage",
-			inputTokens: nonCachedInputTokens,
+			inputTokens: inputTokens,
 			outputTokens,
 			cacheWriteTokens,
 			cacheReadTokens,

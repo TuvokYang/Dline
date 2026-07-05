@@ -1,9 +1,4 @@
-import {
-	ModelInfo,
-	OpenAiNativeModelId,
-	openAiNativeDefaultModelId,
-	openAiNativeModels,
-} from "@shared/api"
+import { ModelInfo, OpenAiNativeModelId, openAiNativeDefaultModelId, openAiNativeModels } from "@shared/api"
 import { normalizeOpenaiReasoningEffort } from "@shared/storage/types"
 import { calculateApiCostOpenAI } from "@utils/cost"
 import OpenAI from "openai"
@@ -81,10 +76,9 @@ export class OpenAiNativeHandler implements ApiHandler {
 		const cacheReadTokens = usage?.prompt_tokens_details?.cached_tokens || 0
 		const cacheWriteTokens = 0
 		const totalCost = calculateApiCostOpenAI(info, inputTokens, outputTokens, cacheWriteTokens, cacheReadTokens)
-		const nonCachedInputTokens = Math.max(0, inputTokens - cacheReadTokens - cacheWriteTokens)
 		yield {
 			type: "usage",
-			inputTokens: nonCachedInputTokens,
+			inputTokens: inputTokens,
 			outputTokens: outputTokens,
 			cacheWriteTokens: cacheWriteTokens,
 			cacheReadTokens: cacheReadTokens,

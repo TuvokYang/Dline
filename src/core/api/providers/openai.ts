@@ -247,13 +247,12 @@ export class OpenAiHandler implements ApiHandler {
 					chunk.usage.prompt_cache_miss_tokens ??
 					chunk.usage.prompt_tokens_details?.cache_miss_tokens ??
 					0
-				const nonCachedInputTokens = Math.max(0, inputTokens - cacheReadTokens - cacheWriteTokens)
 				const modelInfo = this.modelInfo ?? openAiModelInfoSaneDefaults
 				const totalCost = calculateApiCostOpenAI(modelInfo, inputTokens, outputTokens, cacheWriteTokens, cacheReadTokens)
 
 				yield {
 					type: "usage",
-					inputTokens: nonCachedInputTokens,
+					inputTokens: inputTokens,
 					outputTokens,
 					cacheReadTokens,
 					cacheWriteTokens,

@@ -81,10 +81,9 @@ export class DeepSeekHandler implements ApiHandler {
 		const cacheReadTokens = deepUsage?.prompt_cache_hit_tokens || 0
 		const cacheWriteTokens = deepUsage?.prompt_cache_miss_tokens || 0
 		const totalCost = calculateApiCostOpenAI(info, inputTokens, outputTokens, cacheWriteTokens, cacheReadTokens)
-		const nonCachedInputTokens = Math.max(0, inputTokens - cacheReadTokens - cacheWriteTokens) // this will always be 0
 		yield {
 			type: "usage",
-			inputTokens: nonCachedInputTokens,
+			inputTokens: inputTokens,
 			outputTokens: outputTokens,
 			cacheWriteTokens: cacheWriteTokens,
 			cacheReadTokens: cacheReadTokens,

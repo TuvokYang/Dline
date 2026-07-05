@@ -102,7 +102,7 @@ export class MoonshotHandler implements ApiHandler {
 					type: "usage",
 					cacheWriteTokens: 0,
 					cacheReadTokens: usage.cached_tokens ?? 0,
-					inputTokens: (usage.prompt_tokens || 0) - (usage.cached_tokens ?? 0),
+					inputTokens: usage.prompt_tokens || 0,
 					outputTokens: usage.completion_tokens || 0,
 				}
 			}
