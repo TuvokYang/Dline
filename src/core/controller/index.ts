@@ -531,13 +531,11 @@ export class Controller {
 			// ── Context overflow detection before switching ──
 			if (this.task) {
 				// Check if user already confirmed the compact dialog (re-entry with contextOverflowInfo set)
-				const previousOverflowInfo = this.stateManager.getGlobalStateKey("contextOverflowInfo" as any) as
-					| { targetMode: string; currentTokens: number; targetMaxAllowed: number }
-					| undefined
+				const previousOverflowInfo = this.task.taskSm?.contextOverflowInfo
 				if (previousOverflowInfo && previousOverflowInfo.targetMode === modeToSwitchTo) {
 					// User confirmed: inject summarize_task and clear the prompt state
 					Logger.info(`[togglePlanActMode] User confirmed compact for mode ${modeToSwitchTo}`)
-					this.stateManager.setGlobalState("contextOverflowInfo", undefined)
+					this.task.taskSm.setContextOverflowInfo(undefined)
 					await this.injectSummarizeTaskForCompact()
 					await this.postStateToWebview()
 					return false
@@ -559,7 +557,7 @@ export class Controller {
 					Logger.info(
 						`[togglePlanActMode] Context overflow detected (${overflowInfo.currentTokens}/${overflowInfo.targetMaxAllowed}), prompting user`,
 					)
-					this.stateManager.setGlobalState("contextOverflowInfo", overflowInfo)
+					this.task.taskSm.setContextOverflowInfo(overflowInfo)
 					await this.postStateToWebview()
 					return false
 				}

@@ -87,4 +87,25 @@ export class TaskStateManager {
 		this.cache.actModeProfile = profile
 		this.globalSm.markTaskSettingDirty(this.taskId, "actModeProfile")
 	}
+
+	// ──────────────── contextOverflowInfo ────────────────
+
+	/**
+	 * Get the context overflow info for mode switching detection.
+	 * Returns undefined if not set at task level.
+	 */
+	get contextOverflowInfo(): { targetMode: string; currentTokens: number; targetMaxAllowed: number } | undefined {
+		return this.cache.contextOverflowInfo as
+			| { targetMode: string; currentTokens: number; targetMaxAllowed: number }
+			| undefined
+	}
+
+	/**
+	 * Set the context overflow info. Writes to both local cache (instant) and
+	 * delegates to global StateManager for debounced disk persistence.
+	 */
+	setContextOverflowInfo(info: { targetMode: string; currentTokens: number; targetMaxAllowed: number } | undefined): void {
+		this.cache.contextOverflowInfo = info as any
+		this.globalSm.markTaskSettingDirty(this.taskId, "contextOverflowInfo" as any)
+	}
 }
