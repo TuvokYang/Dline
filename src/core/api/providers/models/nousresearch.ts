@@ -38,3 +38,6 @@ export const nousResearchModels: Record<string, ModelInfo> = {
 		},
 	},
 }
+
+/** Default model ID for Nous Research provider */
+export const nousResearchDefaultModelId = "Hermes-4-405B"

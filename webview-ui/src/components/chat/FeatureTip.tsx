@@ -32,10 +32,10 @@ const FEATURE_TIPS: FeatureTipItem[] = [
 		text: "Enable auto-approve for read-only tools like file reads to speed up exploration.",
 	},
 	{
-		text: "Use the quote button to select text from Cline's response and reference it in your reply.",
+		text: "Use the quote button to select text from Dline's response and reference it in your reply.",
 	},
 	{
-		text: "You can drag and drop images into the chat to share screenshots with Cline.",
+		text: "You can drag and drop images into the chat to share screenshots with Dline.",
 	},
 	{
 		text: "Cline can browse websites — ask it to test your local dev server in the browser.",

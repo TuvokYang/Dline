@@ -33,7 +33,7 @@ describe("FocusChainManager - Task Resumption", () => {
 			taskId,
 			taskState,
 			mode: "act",
-			stateManager: {} as unknown as Parameters<typeof FocusChainManager>[0]["stateManager"],
+			stateManager: {} as any,
 			postStateToWebview: vi.fn(),
 			say: vi.fn(),
 			focusChainSettings: { enabled: true, remindClineInterval: 10 },

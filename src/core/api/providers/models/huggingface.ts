@@ -113,3 +113,6 @@ export const huggingFaceModels: Record<string, ModelInfo> = {
 		},
 	},
 }
+
+/** Default model ID for HuggingFace provider */
+export const huggingFaceDefaultModelId = "moonshotai/Kimi-K2-Instruct"

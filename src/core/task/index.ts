@@ -989,7 +989,7 @@ export class Task {
 		return historyLen - 1
 	}
 
-	private findLatestStateSnapshot(): TaskSnapshot | undefined {
+	public findLatestStateSnapshot(): TaskSnapshot | undefined {
 		let latest: { snapshot: TaskSnapshot; order: number; timestamp: number } | undefined
 		const messages = this.messageStateHandler.clineMessages
 
@@ -1533,7 +1533,24 @@ export class Task {
 			ask === "use_mcp_server" ||
 			ask === "use_subagents" ||
 			ask === "spawn_task" ||
-			ask === "focus_chain_change"
+			ask === "focus_chain_change" ||
+			ask === "status_acknowledgment"
+		)
+	}
+
+	/**
+	 * Check if an ask type is conversational (Q&A / plan / report).
+	 * These tools display a text response in the footer without approve/reject buttons and
+	 * expect a text reply via the input box. They must set conversation awaiting in the
+	 * snapshot so buildTaskUiState returns cancelEnabled=false and no action buttons.
+	 */
+	private isConversationalAsk(ask: ClineAsk | undefined): ask is ClineAsk {
+		return (
+			ask === "plan_mode_respond" ||
+			ask === "qna_respond" ||
+			ask === "followup" ||
+			ask === "generate_report" ||
+			ask === "act_mode_respond"
 		)
 	}
 
@@ -1544,8 +1561,9 @@ export class Task {
 		options?: AskOptions,
 	): AskOptions | undefined {
 		const shouldTrackApproval = this.isPendingToolApprovalAsk(type) && partial !== true
+		const shouldTrackConversation = this.isConversationalAsk(type) && partial !== true
 		const shouldNotify = type !== "command_output" && partial !== true
-		if (!shouldTrackApproval && !shouldNotify) {
+		if (!shouldTrackApproval && !shouldTrackConversation && !shouldNotify) {
 			return options
 		}
 
@@ -1554,6 +1572,9 @@ export class Task {
 			onAskVisible: async (askTs: number) => {
 				if (shouldTrackApproval) {
 					await this.markApprovalAskVisible(type)
+				}
+				if (shouldTrackConversation) {
+					await this.markConversationAskVisible(type, askTs)
 				}
 				await options?.onAskVisible?.(askTs)
 				if (shouldNotify) {
@@ -1587,6 +1608,11 @@ export class Task {
 
 		this.taskController.transition(TaskPhase.AWAITING_APPROVAL, {
 			apiIndex: block.conversationHistoryIndex,
+			awaiting: {
+				kind: type === "status_acknowledgment" ? "approval" : "approval",
+				taskAsk: type,
+				activeCallId: block.callId,
+			},
 			approval: {
 				mode: this.isParallelToolCallingEnabled() ? "parallel" : "serial",
 				blocks: this.taskController.getBlocks().map((candidate) => ({
@@ -1596,6 +1622,25 @@ export class Task {
 					apiIndex: candidate.conversationHistoryIndex,
 				})),
 				activeCallId: block.callId,
+			},
+			onSnapshot: this.emitStateSnapshot.bind(this),
+		})
+		await this.postStateToWebview()
+	}
+
+	/**
+	 * Create a conversation-awaiting snapshot for Q&A tools (plan_mode_respond,
+	 * qna_respond, followup, generate_report, act_mode_respond).
+	 * This ensures buildTaskUiState returns cancelEnabled=false and empty actions,
+	 * so the frontend hides the Cancel button and shows only the input area.
+	 */
+	private async markConversationAskVisible(type: ClineAsk, askTs: number): Promise<void> {
+		this.taskController.transition(TaskPhase.AWAITING_APPROVAL, {
+			apiIndex: this.messageStateHandler.apiConversationHistory.length - 1,
+			awaiting: {
+				kind: "conversation",
+				taskAsk: type,
+				messageTs: askTs,
 			},
 			onSnapshot: this.emitStateSnapshot.bind(this),
 		})
@@ -1752,6 +1797,12 @@ export class Task {
 
 		await ensureTaskDirectoryExists(this.taskId)
 		await this.contextManager.initializeContextHistory(await ensureTaskDirectoryExists(this.taskId))
+
+		// Hydrate machines from latest snapshot for accurate state restoration
+		const latestSnapshot = this.findLatestStateSnapshot()
+		if (latestSnapshot) {
+			this.restoreHandler.hydrateFromSnapshot(latestSnapshot)
+		}
 
 		// Mark task as initialized so checkpoint restore can proceed
 		this.taskState.isInitialized = true
@@ -3344,7 +3395,7 @@ export class Task {
 			const { response, text, images, files } = await this.ask(
 				"mistake_limit_reached",
 				this.api.getModel().id.includes("claude")
-					? `This may indicate a failure in Cline's thought process or inability to use a tool properly, which can be mitigated with some user guidance (e.g. "Try breaking down the task into smaller steps").`
+					? `This may indicate a failure in Dline's thought process or inability to use a tool properly, which can be mitigated with some user guidance (e.g. "Try breaking down the task into smaller steps").`
 					: "Dline uses complex prompts and iterative task execution. Verify your chosen model supports advanced agentic coding and complex prompt following.",
 			)
 			if (response === "messageResponse") {

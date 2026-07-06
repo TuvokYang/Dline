@@ -517,3 +517,6 @@ export const bedrockModels: Record<string, ModelInfo> = {
 		},
 	},
 }
+
+/** Default model ID for Bedrock provider */
+export const bedrockDefaultModelId = "anthropic.claude-sonnet-4-5-20250929-v1:0"

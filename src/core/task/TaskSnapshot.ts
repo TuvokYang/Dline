@@ -1,3 +1,4 @@
+import type { ClineAsk } from "@shared/ExtensionMessage"
 import type { BlockPhase } from "./TaskController"
 import type { TaskPhase } from "./TaskPhase"
 
@@ -12,6 +13,35 @@ export function isValidApiIndex(index: unknown, historyLength: number): index is
 }
 
 /**
+ * Awaiting kinds classify what the task is waiting for.
+ */
+export type TaskSnapshotAwaitingKind = "none" | "conversation" | "approval" | "resume" | "completion" | "error_recovery"
+
+/**
+ * Awaiting context stored in a TaskSnapshot to classify waiting states.
+ */
+export interface TaskSnapshotAwaiting {
+	kind: TaskSnapshotAwaitingKind
+	taskAsk?: ClineAsk
+	activeCallId?: string
+	messageTs?: number
+}
+
+/**
+ * Block status reason tracks why a block is in its current phase.
+ */
+export type TaskSnapshotBlockStatusReason =
+	| "ready"
+	| "auto_approved"
+	| "awaiting_user"
+	| "user_approved"
+	| "user_rejected"
+	| "cascade_skipped"
+	| "user_cancelled"
+	| "completed"
+	| "restored"
+
+/**
  * Approval context stored in a TaskSnapshot when phase is AWAITING_APPROVAL.
  */
 export interface TaskSnapshotApproval {
@@ -22,6 +52,10 @@ export interface TaskSnapshotApproval {
 		phase: BlockPhase
 		/** Index of this block's tool_use in apiConversationHistory */
 		apiIndex: number
+		askType?: ClineAsk
+		requiresApproval?: boolean
+		ts?: number
+		statusReason?: TaskSnapshotBlockStatusReason
 	}>
 	activeCallId?: string
 }
@@ -54,6 +88,29 @@ export interface TaskSnapshotCancel {
 }
 
 /**
+ * Error recovery kind classifies the type of error awaiting user action.
+ */
+export type TaskSnapshotErrorKind = "api_req_failed" | "mistake_limit_reached"
+
+/**
+ * Error recovery action types available to user.
+ */
+export type TaskSnapshotErrorAction = "retry" | "process_anyway" | "start_new_task"
+
+/**
+ * Error recovery context stored in a TaskSnapshot when awaiting error recovery.
+ */
+export interface TaskSnapshotErrorRecovery {
+	kind: TaskSnapshotErrorKind
+	sourceAsk: ClineAsk
+	message: string
+	actions: TaskSnapshotErrorAction[]
+	messageTs?: number
+	retryable: boolean
+	processAllowed: boolean
+}
+
+/**
  * State snapshot persisted as a state_snapshot message in ui_messages.jsonl.
  *
  * On resume, the latest snapshot is read to determine the exact recovery action
@@ -65,8 +122,10 @@ export interface TaskSnapshot {
 	/** Last index in apiConversationHistory that this snapshot corresponds to */
 	apiIndex: number
 	timestamp: number
+	awaiting?: TaskSnapshotAwaiting
 	approval?: TaskSnapshotApproval
 	execution?: TaskSnapshotExecution
 	resume?: TaskSnapshotResume
 	cancel?: TaskSnapshotCancel
+	error?: TaskSnapshotErrorRecovery
 }

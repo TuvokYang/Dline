@@ -95,3 +95,6 @@ export const huaweiCloudMaasModels: Record<string, ModelInfo> = {
 		},
 	},
 }
+
+/** Default model ID for Huawei Cloud MaaS provider */
+export const huaweiCloudMaasDefaultModelId = "DeepSeek-V3"

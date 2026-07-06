@@ -67,6 +67,8 @@ export interface ExtensionState {
 	telemetrySetting: TelemetrySetting
 	/** Active approval block driving frontend button rendering */
 	activeBlock?: { callId: string; toolName: string; phase: string; askType: string }
+	/** Unified task UI state derived from snapshot */
+	taskUiState?: TaskUiState
 	shellIntegrationTimeout: number
 	terminalReuseEnabled?: boolean
 	terminalOutputLineLimit: number
@@ -257,6 +259,44 @@ export type ClineSay =
 	| "conditional_rules_applied"
 	| "partial_tool_result"
 	| "state_snapshot"
+
+/**
+ * Task UI phase classifications for frontend footer/input state.
+ */
+export type TaskUiPhase =
+	| "idle"
+	| "working"
+	| "awaiting_input"
+	| "awaiting_approval"
+	| "awaiting_acknowledgment"
+	| "awaiting_resume"
+	| "awaiting_error_recovery"
+	| "completed"
+	| "cancelled"
+
+/**
+ * Action types available to user in task UI.
+ */
+export interface TaskUiAction {
+	type: "approve" | "reject" | "cancel" | "resume" | "retry" | "process_anyway" | "start_new_task" | "primary" | "secondary"
+	label: string
+	enabled: boolean
+}
+
+/**
+ * Unified task UI state derived from TaskSnapshot.
+ * This is the single source of truth for footer buttons and input state.
+ */
+export interface TaskUiState {
+	phase: TaskUiPhase
+	inputEnabled: boolean
+	cancelEnabled: boolean
+	showFooter: boolean
+	actions: TaskUiAction[]
+	activeAsk?: ClineAsk
+	activeCallId?: string
+	reason: string
+}
 
 export interface ClineSayTool {
 	tool:

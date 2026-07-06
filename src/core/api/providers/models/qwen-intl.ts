@@ -486,3 +486,12 @@ export const internationalQwenModels: Record<string, ModelInfo> = {
 		},
 	},
 }
+
+/** Default model ID for Qwen international provider */
+export const internationalQwenDefaultModelId = "qwen3-coder-plus"
+
+/** Qwen API region selector */
+export enum QwenApiRegions {
+	CHINA = "china",
+	INTERNATIONAL = "international",
+}

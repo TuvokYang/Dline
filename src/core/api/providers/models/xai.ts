@@ -325,3 +325,6 @@ export const xaiModels: Record<string, ModelInfo> = {
 		},
 	},
 }
+
+/** Default model ID for xAI provider */
+export const xaiDefaultModelId = "grok-4"

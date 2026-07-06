@@ -371,3 +371,6 @@ export const claudeCodeModels: Record<string, ModelInfo> = {
 		},
 	},
 }
+
+/** Default model ID for Claude Code provider */
+export const claudeCodeDefaultModelId = "claude-sonnet-4-5-20250929"

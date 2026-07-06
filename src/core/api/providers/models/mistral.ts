@@ -244,3 +244,6 @@ export const mistralModels: Record<string, ModelInfo> = {
 		},
 	},
 }
+
+/** Default model ID for Mistral provider */
+export const mistralDefaultModelId = "devstral-2512"

@@ -160,3 +160,6 @@ export const fireworksModels: Record<string, ModelInfo> = {
 		},
 	},
 }
+
+/** Default model ID for Fireworks provider */
+export const fireworksDefaultModelId = "accounts/fireworks/models/kimi-k2p5"

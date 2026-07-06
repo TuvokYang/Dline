@@ -124,3 +124,6 @@ export const minimaxModels: Record<string, ModelInfo> = {
 		},
 	},
 }
+
+/** Default model ID for MiniMax provider */
+export const minimaxDefaultModelId = "MiniMax-M2.7"

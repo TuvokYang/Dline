@@ -125,4 +125,152 @@ describe("ActionButtons", () => {
 		expect(approveBtnAfter).toBeTruthy()
 		expect((approveBtnAfter as HTMLButtonElement).disabled).toBe(false)
 	})
+
+	describe("with taskUiState (snapshot-first architecture)", () => {
+		it("renders buttons from taskUiState.actions", () => {
+			const mockChatStateWithTaskUi = {
+				...mockChatState,
+				taskUiState: {
+					phase: "awaiting_approval" as const,
+					inputEnabled: false,
+					cancelEnabled: true,
+					showFooter: true,
+					actions: [
+						{ type: "approve" as const, label: "Approve", enabled: true },
+						{ type: "reject" as const, label: "Reject", enabled: true },
+					],
+					reason: "tool approval required",
+				},
+			}
+
+			const finalMessage = makeMsg({
+				ts: 1000,
+				partial: false,
+			})
+
+			render(
+				<ActionButtons
+					chatState={mockChatStateWithTaskUi}
+					messageHandlers={mockMessageHandlers}
+					messages={[finalMessage]}
+					mode="act"
+					task={finalMessage}
+				/>,
+			)
+
+			expect(screen.getByText("Approve")).toBeTruthy()
+			expect(screen.getByText("Reject")).toBeTruthy()
+		})
+
+		it("renders 3 buttons when provided", () => {
+			const mockChatStateWithMultiActions = {
+				...mockChatState,
+				taskUiState: {
+					phase: "awaiting_error_recovery" as const,
+					inputEnabled: false,
+					cancelEnabled: false,
+					showFooter: true,
+					actions: [
+						{ type: "retry" as const, label: "Retry", enabled: true },
+						{ type: "process_anyway" as const, label: "Process Anyway", enabled: true },
+						{ type: "start_new_task" as const, label: "Start New", enabled: true },
+					],
+					reason: "error recovery",
+				},
+			}
+
+			const finalMessage = makeMsg({
+				ts: 1000,
+				partial: false,
+			})
+
+			render(
+				<ActionButtons
+					chatState={mockChatStateWithMultiActions}
+					messageHandlers={mockMessageHandlers}
+					messages={[finalMessage]}
+					mode="act"
+					task={finalMessage}
+				/>,
+			)
+
+			expect(screen.getByText("Retry")).toBeTruthy()
+			expect(screen.getByText("Process Anyway")).toBeTruthy()
+			expect(screen.getByText("Start New")).toBeTruthy()
+		})
+
+		it("respects action.enabled flag", () => {
+			const mockChatStateWithDisabled = {
+				...mockChatState,
+				taskUiState: {
+					phase: "awaiting_approval" as const,
+					inputEnabled: false,
+					cancelEnabled: false,
+					showFooter: true,
+					actions: [{ type: "approve" as const, label: "Approve", enabled: false }],
+					reason: "disabled for testing",
+				},
+			}
+
+			const finalMessage = makeMsg({
+				ts: 1000,
+				partial: false,
+			})
+
+			render(
+				<ActionButtons
+					chatState={mockChatStateWithDisabled}
+					messageHandlers={mockMessageHandlers}
+					messages={[finalMessage]}
+					mode="act"
+					task={finalMessage}
+				/>,
+			)
+
+			const approveBtn = screen.getByText("Approve") as HTMLButtonElement
+			expect(approveBtn.disabled).toBe(true)
+		})
+
+		it("truncates to max 3 buttons when more are provided", () => {
+			const mockChatStateWithManyActions = {
+				...mockChatState,
+				taskUiState: {
+					phase: "awaiting_approval" as const,
+					inputEnabled: false,
+					cancelEnabled: false,
+					showFooter: true,
+					actions: [
+						{ type: "approve" as const, label: "Button 1", enabled: true },
+						{ type: "reject" as const, label: "Button 2", enabled: true },
+						{ type: "cancel" as const, label: "Button 3", enabled: true },
+						{ type: "retry" as const, label: "Button 4", enabled: true },
+						{ type: "resume" as const, label: "Button 5", enabled: true },
+					],
+					reason: "truncation test",
+				},
+			}
+
+			const finalMessage = makeMsg({
+				ts: 1000,
+				partial: false,
+			})
+
+			render(
+				<ActionButtons
+					chatState={mockChatStateWithManyActions}
+					messageHandlers={mockMessageHandlers}
+					messages={[finalMessage]}
+					mode="act"
+					task={finalMessage}
+				/>,
+			)
+
+			// Only first 3 buttons should be visible
+			expect(screen.getByText("Button 1")).toBeTruthy()
+			expect(screen.getByText("Button 2")).toBeTruthy()
+			expect(screen.getByText("Button 3")).toBeTruthy()
+			expect(screen.queryByText("Button 4")).toBeNull()
+			expect(screen.queryByText("Button 5")).toBeNull()
+		})
+	})
 })

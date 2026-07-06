@@ -251,3 +251,6 @@ export const wandbModels: Record<string, ModelInfo> = {
 		},
 	},
 }
+
+/** Default model ID for Weights & Biases (WandB) provider */
+export const wandbDefaultModelId = "meta-llama/Llama-3.3-70B-Instruct"

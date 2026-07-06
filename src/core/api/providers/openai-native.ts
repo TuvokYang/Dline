@@ -71,14 +71,18 @@ export class OpenAiNativeHandler implements ApiHandler {
 	}
 
 	private async *yieldUsage(info: ModelInfo, usage: OpenAI.Completions.CompletionUsage | undefined): ApiStream {
-		const inputTokens = usage?.prompt_tokens || 0 // sum of cache hits and misses
+		const rawInputTokens = usage?.prompt_tokens || 0 // OpenAI semantic: includes cached tokens
 		const outputTokens = usage?.completion_tokens || 0
 		const cacheReadTokens = usage?.prompt_tokens_details?.cached_tokens || 0
-		const cacheWriteTokens = 0
-		const totalCost = calculateApiCostOpenAI(info, inputTokens, outputTokens, cacheWriteTokens, cacheReadTokens)
+		const cacheWriteTokens = (usage?.prompt_tokens_details as any)?.cache_miss_tokens || 0
+		// Yield usage in Anthropic semantic (inputTokens excludes cache tokens) to
+		// match ContextManager and updateApiReqMsg expectations. Cost calculation
+		// still uses OpenAI semantic (rawInputTokens includes cache) for correct billing.
+		const nonCachedInputTokens = Math.max(0, rawInputTokens - cacheReadTokens - cacheWriteTokens)
+		const totalCost = calculateApiCostOpenAI(info, rawInputTokens, outputTokens, cacheWriteTokens, cacheReadTokens)
 		yield {
 			type: "usage",
-			inputTokens: inputTokens,
+			inputTokens: nonCachedInputTokens,
 			outputTokens: outputTokens,
 			cacheWriteTokens: cacheWriteTokens,
 			cacheReadTokens: cacheReadTokens,
@@ -659,7 +663,7 @@ export class OpenAiNativeHandler implements ApiHandler {
 				const inputTokens = usage.input_tokens || 0
 				const outputTokens = usage.output_tokens || 0
 				const cacheReadTokens = usage.input_tokens_details?.cached_tokens || 0
-				const cacheWriteTokens = 0
+				const cacheWriteTokens = (usage.input_tokens_details as any)?.cache_miss_tokens || 0
 				const reasoningTokens = usage.output_tokens_details?.reasoning_tokens || 0
 				const totalTokens = usage.total_tokens || 0
 				Logger.log(`Total tokens from Responses API usage: ${totalTokens}`)

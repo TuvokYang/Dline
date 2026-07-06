@@ -97,3 +97,6 @@ export const moonshotModels: Record<string, ModelInfo> = {
 		},
 	},
 }
+
+/** Default model ID for Moonshot provider */
+export const moonshotDefaultModelId = "kimi-k2-0905-preview"

@@ -32,6 +32,7 @@ function createFakeTask(taskState: {
 		},
 		taskId: "task-1",
 		messageStateHandler: {
+			apiConversationHistory: [] as any[],
 			addToClineMessages: async (message: ClineMessage) => {
 				clineMessages.push(message)
 			},
@@ -95,10 +96,13 @@ function createFakeTask(taskState: {
 				}
 			},
 			advanceNextPendingApproval: () => {},
+			transition: async () => undefined,
 		},
 		withApprovalVisibleCallback: (Task.prototype as any).withApprovalVisibleCallback,
 		markApprovalAskVisible: (Task.prototype as any).markApprovalAskVisible,
+		markConversationAskVisible: (Task.prototype as any).markConversationAskVisible,
 		isPendingToolApprovalAsk: (Task.prototype as any).isPendingToolApprovalAsk,
+		isConversationalAsk: (Task.prototype as any).isConversationalAsk,
 		isParallelToolCallingEnabled: () => false,
 		emitStateSnapshot: async () => undefined,
 		postStateToWebview: async () => undefined,

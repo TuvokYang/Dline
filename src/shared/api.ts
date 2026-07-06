@@ -79,7 +79,71 @@ export interface ApiHandlerOptions extends ApiConfiguration {
 export type { ModelInfo } from "./proto/dline/models"
 export type { ModelCapabilities, ModelPricing, ThinkingConfig } from "./proto/dline/models/metadata"
 
-export interface OcaModelInfo extends ModelInfo {
+/**
+ * Provider-specific constants and types are now defined in their respective
+ * model files under src/core/api/providers/models/.  This file re-exports
+ * them for backward compatibility.
+ */
+
+// Anthropic constants (used by webview-ui)
+export {
+	ANTHROPIC_FAST_MODE_SUFFIX,
+	ANTHROPIC_MAX_THINKING_BUDGET,
+	ANTHROPIC_MIN_THINKING_BUDGET,
+	anthropicDefaultModelId,
+	anthropicModelInfoSaneDefaults,
+	CLAUDE_SONNET_1M_SUFFIX,
+} from "../core/api/providers/models/anthropic"
+export { askSageDefaultModelId, askSageDefaultURL } from "../core/api/providers/models/asksage"
+export { basetenDefaultModelId } from "../core/api/providers/models/baseten"
+export { bedrockDefaultModelId } from "../core/api/providers/models/bedrock"
+export { cerebrasDefaultModelId } from "../core/api/providers/models/cerebras"
+// Provider default model IDs (used by webview-ui provider components)
+export { claudeCodeDefaultModelId } from "../core/api/providers/models/claude-code"
+export { deepSeekDefaultModelId } from "../core/api/providers/models/deepseek"
+export { doubaoDefaultModelId } from "../core/api/providers/models/doubao"
+export { fireworksDefaultModelId } from "../core/api/providers/models/fireworks"
+export { geminiDefaultModelId } from "../core/api/providers/models/gemini"
+export { groqDefaultModelId } from "../core/api/providers/models/groq"
+export { huaweiCloudMaasDefaultModelId } from "../core/api/providers/models/huawei-cloud-maas"
+export { huggingFaceDefaultModelId } from "../core/api/providers/models/huggingface"
+// LiteLLM
+export { type LiteLLMModelInfo, liteLlmDefaultModelId, liteLlmModelInfoSaneDefaults } from "../core/api/providers/models/litellm"
+export { minimaxDefaultModelId } from "../core/api/providers/models/minimax"
+export { mistralDefaultModelId } from "../core/api/providers/models/mistral"
+export { moonshotDefaultModelId } from "../core/api/providers/models/moonshot"
+export { nebiusDefaultModelId } from "../core/api/providers/models/nebius"
+export { nousResearchDefaultModelId } from "../core/api/providers/models/nousresearch"
+export { openAiCodexDefaultModelId } from "../core/api/providers/models/openai-codex"
+// OpenAI-compatible
+export { azureOpenAiDefaultApiVersion, openAiModelInfoSaneDefaults } from "../core/api/providers/models/openai-compatible"
+export { openAiNativeDefaultModelId } from "../core/api/providers/models/openai-native"
+// OpenRouter
+export {
+	OPENROUTER_PROVIDER_PREFERENCES,
+	openRouterClaudeOpus461mModelId,
+	openRouterClaudeOpus471mModelId,
+	openRouterClaudeSonnet41mModelId,
+	openRouterClaudeSonnet451mModelId,
+	openRouterClaudeSonnet461mModelId,
+	openRouterDefaultModelId,
+	openRouterDefaultModelInfo,
+} from "../core/api/providers/models/openrouter"
+export { mainlandQwenDefaultModelId } from "../core/api/providers/models/qwen-cn"
+export { qwenCodeDefaultModelId } from "../core/api/providers/models/qwen-code"
+export { internationalQwenDefaultModelId, QwenApiRegions } from "../core/api/providers/models/qwen-intl"
+// Requesty
+export { requestyDefaultModelId, requestyDefaultModelInfo } from "../core/api/providers/models/requesty"
+export { sambanovaDefaultModelId } from "../core/api/providers/models/sambanova"
+export { sapAiCoreDefaultModelId } from "../core/api/providers/models/sapaicore"
+export { vertexDefaultModelId, vertexGlobalModels } from "../core/api/providers/models/vertex"
+export { wandbDefaultModelId } from "../core/api/providers/models/wandb"
+export { xaiDefaultModelId } from "../core/api/providers/models/xai"
+export { mainlandZAiDefaultModelId } from "../core/api/providers/models/zai-cn"
+export { internationalZAiDefaultModelId } from "../core/api/providers/models/zai-intl"
+
+// OcaModelInfo (used by oca provider, proto-conversions, state-keys)
+export type OcaModelInfo = ModelInfo & {
 	modelName: string
 	surveyId?: string
 	banner?: string
@@ -88,92 +152,8 @@ export interface OcaModelInfo extends ModelInfo {
 	reasoningEffortOptions: string[]
 }
 
-export const CLAUDE_SONNET_1M_SUFFIX = ":1m"
-export const ANTHROPIC_FAST_MODE_SUFFIX = ":fast"
-export const CLAUDE_SONNET_1M_TIERS = [
-	{
-		contextWindow: 200000,
-		inputPrice: 3.0,
-		outputPrice: 15,
-		cacheWritesPrice: 3.75,
-		cacheReadsPrice: 0.3,
-	},
-	{
-		contextWindow: Number.MAX_SAFE_INTEGER, // storing infinity in vs storage is not possible, it converts to 'null', which causes crash in webview ModelInfoView
-		inputPrice: 6,
-		outputPrice: 22.5,
-		cacheWritesPrice: 7.5,
-		cacheReadsPrice: 0.6,
-	},
-]
-export const CLAUDE_OPUS_1M_TIERS = [
-	{
-		contextWindow: 200000,
-		inputPrice: 5.0,
-		outputPrice: 25,
-		cacheWritesPrice: 6.25,
-		cacheReadsPrice: 0.5,
-	},
-	{
-		contextWindow: Number.MAX_SAFE_INTEGER,
-		inputPrice: 10,
-		outputPrice: 37.5,
-		cacheWritesPrice: 12.5,
-		cacheReadsPrice: 1.0,
-	},
-]
-
-export interface HicapCompatibleModelInfo extends ModelInfo {
-	temperature?: number
-}
-
-export const hicapModelInfoSaneDefaults: HicapCompatibleModelInfo = {
-	id: "",
-	capabilities: {
-		supportsImages: true,
-		supportsPromptCache: true,
-		supportsReasoning: false,
-		maxTokens: -1,
-		contextWindow: 128_000,
-	},
-	pricing: {
-		inputPrice: 0,
-		outputPrice: 0,
-	},
-	temperature: 1,
-}
-
-export const anthropicModelInfoSaneDefaults: ModelInfo = {
-	id: "",
-	capabilities: {
-		supportsImages: false,
-		supportsPromptCache: true,
-		supportsReasoning: true,
-		maxTokens: 384000,
-		contextWindow: 1_000_000,
-		thinking: {
-			supported: true,
-			mode: "budget",
-			maxBudget: 64000,
-			effortLevels: [],
-		},
-	},
-	pricing: {
-		inputPrice: 1,
-		outputPrice: 2,
-		cacheWritesPrice: 0.2,
-		cacheReadsPrice: 0.2,
-	},
-}
-
-// Anthropic
-// https://docs.anthropic.com/en/docs/about-claude/models // prices updated 2025-01-02
+// Provider model ID type aliases (all string-based, used by backend provider files)
 export type AnthropicModelId = string
-export const anthropicDefaultModelId: AnthropicModelId = "claude-sonnet-4-5-20250929"
-export const ANTHROPIC_MIN_THINKING_BUDGET = 1_024
-export const ANTHROPIC_MAX_THINKING_BUDGET = 6_000
-
-// Type aliases for all provider model IDs (all string types since models are now ModelInfo[] arrays)
 export type ClaudeCodeModelId = string
 export type BedrockModelId = string
 export type VertexModelId = string
@@ -204,68 +184,14 @@ export type QwenCodeModelId = string
 export type MinimaxModelId = string
 export type NousResearchModelId = string
 
-// Default model ID constants for all providers
-export const claudeCodeDefaultModelId: ClaudeCodeModelId = "claude-sonnet-4-5-20250929"
-export const bedrockDefaultModelId: BedrockModelId = "anthropic.claude-sonnet-4-5-20250929-v1:0"
-export const vertexDefaultModelId: VertexModelId = "gemini-3-pro-preview"
-export const geminiDefaultModelId: GeminiModelId = "gemini-3.1-pro-preview"
-export const openAiNativeDefaultModelId: OpenAiNativeModelId = "gpt-5.5"
-export const openAiCodexDefaultModelId: OpenAiCodexModelId = "gpt-5.3-codex"
-export const deepSeekDefaultModelId: DeepSeekModelId = "deepseek-v4-flash"
-export const huggingFaceDefaultModelId: HuggingFaceModelId = "moonshotai/Kimi-K2-Instruct"
-export const internationalQwenDefaultModelId: InternationalQwenModelId = "qwen3-coder-plus"
-export const mainlandQwenDefaultModelId: MainlandQwenModelId = "qwen3-coder-plus"
-export const doubaoDefaultModelId: DoubaoModelId = "doubao-1-5-pro-256k-250115"
-export const mistralDefaultModelId: MistralModelId = "devstral-2512"
-export const askSageDefaultModelId: AskSageModelId = "claude-4-sonnet"
-export const askSageDefaultURL: string = "https://api.asksage.ai/server"
-export const nebiusDefaultModelId = "Qwen/Qwen2.5-32B-Instruct-fast"
-export const wandbDefaultModelId = "meta-llama/Llama-3.3-70B-Instruct"
-export const xaiDefaultModelId: XAIModelId = "grok-4"
-export const sambanovaDefaultModelId: SambanovaModelId = "Meta-Llama-3.3-70B-Instruct"
-export const cerebrasDefaultModelId: CerebrasModelId = "zai-glm-4.7"
-export const groqDefaultModelId: GroqModelId = "moonshotai/kimi-k2-instruct-0905"
-export const sapAiCoreDefaultModelId: SapAiCoreModelId = "anthropic--claude-3.5-sonnet"
-export const moonshotDefaultModelId = "kimi-k2-0905-preview"
-export const huaweiCloudMaasDefaultModelId: HuaweiCloudMaasModelId = "DeepSeek-V3"
-export const basetenDefaultModelId = "zai-org/GLM-4.6"
-export const internationalZAiDefaultModelId: internationalZAiModelId = "glm-5.1"
-export const mainlandZAiDefaultModelId: mainlandZAiModelId = "glm-5.1"
-export const fireworksDefaultModelId: FireworksModelId = "accounts/fireworks/models/kimi-k2p5"
-export const qwenCodeDefaultModelId: QwenCodeModelId = "qwen3-coder-plus"
-export const minimaxDefaultModelId: MinimaxModelId = "MiniMax-M2.7"
-export const nousResearchDefaultModelId: NousResearchModelId = "Hermes-4-405B"
+// CLAUDE tiers (used by refresh models)
+export { CLAUDE_OPUS_1M_TIERS, CLAUDE_SONNET_1M_TIERS } from "../core/api/providers/models/anthropic"
 
-// OpenRouter
-export const openRouterDefaultModelId = "anthropic/claude-sonnet-4.5"
-export const openRouterDefaultModelInfo: ModelInfo = {
-	id: "",
-	description: "Claude Sonnet 4.5 delivers superior intelligence across coding, agentic search, and AI agent capabilities.",
-	capabilities: {
-		supportsImages: true,
-		supportsPromptCache: true,
-		supportsReasoning: true,
-		maxTokens: 64_000,
-		contextWindow: 200_000,
-	},
-	pricing: {
-		inputPrice: 3.0,
-		outputPrice: 15.0,
-		cacheWritesPrice: 3.75,
-		cacheReadsPrice: 0.3,
-	},
-}
-export const openRouterClaudeSonnet41mModelId = `anthropic/claude-sonnet-4${CLAUDE_SONNET_1M_SUFFIX}`
-export const openRouterClaudeSonnet451mModelId = `anthropic/claude-sonnet-4.5${CLAUDE_SONNET_1M_SUFFIX}`
-export const openRouterClaudeSonnet461mModelId = `anthropic/claude-sonnet-4.6${CLAUDE_SONNET_1M_SUFFIX}`
-export const openRouterClaudeOpus461mModelId = `anthropic/claude-opus-4.6${CLAUDE_SONNET_1M_SUFFIX}`
-export const openRouterClaudeOpus471mModelId = `anthropic/claude-opus-4.7${CLAUDE_SONNET_1M_SUFFIX}`
-
-// LiteLLM
-export interface LiteLLMModelInfo extends ModelInfo {
+// Hicap (kept inline to avoid circular dependency with @shared/api ModelInfo import)
+export interface HicapCompatibleModelInfo extends ModelInfo {
 	temperature?: number
 }
-export const liteLlmModelInfoSaneDefaults: LiteLLMModelInfo = {
+export const hicapModelInfoSaneDefaults: HicapCompatibleModelInfo = {
 	id: "",
 	capabilities: {
 		supportsImages: true,
@@ -274,67 +200,11 @@ export const liteLlmModelInfoSaneDefaults: LiteLLMModelInfo = {
 		maxTokens: -1,
 		contextWindow: 128_000,
 	},
-	pricing: {
-		inputPrice: 0,
-		outputPrice: 0,
-		cacheWritesPrice: 0,
-		cacheReadsPrice: 0,
-	},
-	temperature: 0,
-}
-export const liteLlmDefaultModelId = "anthropic/claude-3-7-sonnet-20250219"
-
-// OpenAI compatible defaults
-export const openAiModelInfoSaneDefaults: ModelInfo = {
-	id: "",
-	capabilities: {
-		supportsImages: true,
-		supportsPromptCache: false,
-		supportsReasoning: false,
-		maxTokens: -1,
-		contextWindow: 128_000,
-	},
+	pricing: { inputPrice: 0, outputPrice: 0 },
+	temperature: 1,
 }
 
-// Azure
-export const azureOpenAiDefaultApiVersion = "2024-08-01-preview"
-
-// Qwen
-export enum QwenApiRegions {
-	CHINA = "china",
-	INTERNATIONAL = "international",
-}
-
-// Requesty
-export const requestyDefaultModelId = "anthropic/claude-3-7-sonnet-latest"
-export const requestyDefaultModelInfo: ModelInfo = {
-	id: "",
-	capabilities: {
-		supportsImages: true,
-		supportsPromptCache: true,
-		supportsReasoning: false,
-		maxTokens: 64_000,
-		contextWindow: 200_000,
-	},
-	pricing: {
-		inputPrice: 3.0,
-		outputPrice: 15.0,
-		cacheWritesPrice: 3.75,
-		cacheReadsPrice: 0.3,
-	},
-}
-
-// Vertex global models (filtered from vertexModels for models with global endpoint support)
-export const vertexGlobalModels: Record<string, ModelInfo> = Object.fromEntries(
-	Object.entries(vertexModels)
-		.filter(([, model]) => model.capabilities?.supportsGlobalEndpoint)
-		.map(([id, model]) => [id, model as ModelInfo]),
-)
-
-// OpenRouter provider preferences
-export const OPENROUTER_PROVIDER_PREFERENCES: Record<string, { order: string[]; allow_fallbacks: boolean }> = {}
-
-// Model data re-exports (canonical source: src/shared/providers/models/)
+// Model data re-exports (canonical source: src/core/api/providers/models/)
 export { anthropicModels } from "../core/api/providers/models/anthropic"
 export { askSageModels } from "../core/api/providers/models/asksage"
 export { basetenModels } from "../core/api/providers/models/baseten"

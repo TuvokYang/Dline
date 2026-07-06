@@ -52,3 +52,6 @@ export const cerebrasModels: Record<string, ModelInfo> = {
 		},
 	},
 }
+
+/** Default model ID for Cerebras provider */
+export const cerebrasDefaultModelId = "zai-glm-4.7"

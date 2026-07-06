@@ -102,3 +102,6 @@ export const internationalZAiModels: Record<string, ModelInfo> = {
 		},
 	},
 }
+
+/** Default model IDs for ZAi international provider */
+export const internationalZAiDefaultModelId = "glm-5.1"

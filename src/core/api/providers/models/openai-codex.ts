@@ -47,3 +47,6 @@ export const openAiCodexModels: Record<string, ModelInfo> = {
 		pricing: { inputPrice: 0, outputPrice: 0 },
 	},
 }
+
+/** Default model ID for OpenAI Codex provider */
+export const openAiCodexDefaultModelId = "gpt-5.3-codex"

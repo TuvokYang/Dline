@@ -121,21 +121,22 @@ export class AnthropicHandler implements ApiHandler {
 		}
 
 		const budget_tokens = this.thinkingBudgetTokens
+		const enableThinking = this.config?.reasoning?.enableThinking ?? false
 
 		// Tools are available only when native tools are enabled.
 		const nativeToolsOn = tools?.length && tools?.length > 0
-		const reasoningOn = (model.info.capabilities?.supportsReasoning ?? false) && budget_tokens !== 0
+		const reasoningOn = enableThinking && (model.info.capabilities?.supportsReasoning ?? false) && budget_tokens !== 0
 
 		// Claude Opus 4.5+ uses adaptive thinking instead of budgeted extended thinking.
 		const isCustomModel = !anthropicModels[modelId]
-		const hasReasoningEffort = this.reasoningEffort && this.reasoningEffort !== "none"
+		const hasReasoningEffort = enableThinking && this.reasoningEffort && this.reasoningEffort !== "none"
 		const isAdaptiveThinkingModel = isClaudeOpusAdaptiveThinkingModel(modelId) || (isCustomModel && hasReasoningEffort)
 		const adaptiveThinking = isAdaptiveThinkingModel
 			? resolveClaudeOpusAdaptiveThinking(this.reasoningEffort, budget_tokens)
 			: undefined
 		const adaptiveThinkingEnabled = adaptiveThinking?.enabled === true
 		const adaptiveThinkingEffort = adaptiveThinking?.effort
-		const thinkingEnabled = isAdaptiveThinkingModel ? adaptiveThinkingEnabled : reasoningOn
+		const thinkingEnabled = enableThinking && (isAdaptiveThinkingModel ? adaptiveThinkingEnabled : reasoningOn)
 		const thinkingConfig = thinkingEnabled
 			? isAdaptiveThinkingModel
 				? ({ type: "adaptive" } as any)

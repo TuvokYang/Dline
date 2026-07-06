@@ -230,3 +230,6 @@ export const openAiNativeModels: Record<string, ModelInfo> = {
 		pricing: { inputPrice: 0.15, outputPrice: 0.6, cacheReadsPrice: 0.075 },
 	},
 }
+
+/** Default model ID for OpenAI Native provider */
+export const openAiNativeDefaultModelId = "gpt-5.5"

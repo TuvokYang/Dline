@@ -4,7 +4,7 @@ import { combineErrorRetryMessages } from "@shared/combineErrorRetryMessages"
 import { combineHookSequences } from "@shared/combineHookSequences"
 import { BooleanRequest, StringRequest } from "@shared/proto/dline/common"
 import { useCallback, useEffect, useMemo } from "react"
-import { normalizeApiConfiguration } from "@/components/settings/utils/providerUtils"
+import { useApiProfiles } from "@/components/settings/providers/useApiProfiles"
 import { useExtensionState } from "@/context/ExtensionStateContext"
 import { useShowNavbar } from "@/context/PlatformContext"
 import { FileServiceClient, UiServiceClient } from "@/services/grpc-client"
@@ -178,9 +178,11 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 
 	// handleFocusChange is already provided by chatState
 
-	const { selectedModelInfo } = useMemo(() => {
-		return normalizeApiConfiguration(apiConfiguration, mode)
-	}, [apiConfiguration, mode])
+	const { profiles } = useApiProfiles()
+	const selectedModelInfo = useMemo(() => {
+		const activeProfile = profiles.find((p) => p.usedFor?.includes(mode)) ?? profiles[0]
+		return activeProfile?.modelInfo ?? { capabilities: {} as any, pricing: {} as any }
+	}, [profiles, mode])
 
 	const selectFilesAndImages = useCallback(async () => {
 		try {

@@ -142,3 +142,6 @@ export const mainlandZAiModels: Record<string, ModelInfo> = {
 		},
 	},
 }
+
+/** Default model ID for ZAi mainland China provider */
+export const mainlandZAiDefaultModelId = "glm-5.1"

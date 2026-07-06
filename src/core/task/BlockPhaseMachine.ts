@@ -22,6 +22,7 @@ export enum BlockPhase {
 	COMPLETED = "completed",
 	REJECTED = "rejected",
 	SKIPPED = "skipped",
+	CANCELLED = "cancelled",
 }
 
 /**
@@ -125,9 +126,23 @@ export class BlockPhaseMachine {
 			phase === BlockPhase.COMPLETED ||
 			phase === BlockPhase.REJECTED ||
 			phase === BlockPhase.SKIPPED ||
+			phase === BlockPhase.CANCELLED ||
 			phase === BlockPhase.EXECUTING ||
 			phase === BlockPhase.AWAITING_APPROVAL
 		)
+	}
+
+	/**
+	 * Cancel the currently active approval block without marking it rejected.
+	 * @returns The cancelled block, or null when no approval token is active.
+	 */
+	cancelActiveBlock(): BlockLifecycle | null {
+		if (!this.activeTokenCallId) return null
+		const block = this.findBlock(this.activeTokenCallId)
+		if (!block) return null
+		block.phase = BlockPhase.CANCELLED
+		this.activeTokenCallId = null
+		return block
 	}
 
 	releaseToken(): BlockLifecycle | null {
@@ -297,7 +312,11 @@ export class BlockPhaseMachine {
 
 	get isTurnComplete(): boolean {
 		return this.turnBlocks.every(
-			(b) => b.phase === BlockPhase.COMPLETED || b.phase === BlockPhase.REJECTED || b.phase === BlockPhase.SKIPPED,
+			(b) =>
+				b.phase === BlockPhase.COMPLETED ||
+				b.phase === BlockPhase.REJECTED ||
+				b.phase === BlockPhase.SKIPPED ||
+				b.phase === BlockPhase.CANCELLED,
 		)
 	}
 
@@ -344,6 +363,8 @@ export class BlockPhaseMachine {
 				return "use_subagents"
 			case "focus_chain_change":
 				return "focus_chain_change"
+			case "status_update":
+				return "status_acknowledgment"
 			default:
 				return "tool"
 		}

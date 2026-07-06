@@ -254,6 +254,49 @@ export class RestoreHandler {
 			call_id: callId,
 		} as ToolUse
 	}
+
+	/**
+	 * Hydrate TaskPhaseMachine and BlockPhaseMachine from a persisted snapshot.
+	 * This is used when loading a historical task to restore the exact state
+	 * without replaying tools or re-inferring from messages.
+	 */
+	hydrateFromSnapshot(snapshot: TaskSnapshot): void {
+		// Restore TaskPhaseMachine
+		this.ctx.controller.restoreFrom(snapshot)
+
+		// Restore BlockPhaseMachine if approval blocks exist
+		if (snapshot.approval?.blocks && snapshot.approval.blocks.length > 0) {
+			// Build turn from snapshot blocks
+			this.ctx.controller.blockPhase.buildTurn(
+				snapshot.approval.blocks.map((block) => ({
+					type: "tool_use",
+					call_id: block.callId,
+					name: block.name,
+					ts: block.ts,
+					conversationHistoryIndex: block.apiIndex,
+				})),
+				this.ctx.shouldAutoApproveTool,
+			)
+
+			// Restore each block's phase
+			for (const block of snapshot.approval.blocks) {
+				const blockLifecycle = this.ctx.controller.blockPhase.getBlocks().find((b) => b.callId === block.callId)
+				if (blockLifecycle) {
+					blockLifecycle.phase = block.phase
+				}
+			}
+
+			// Restore active approval if exists
+			if (snapshot.approval.activeCallId) {
+				const activeBlock = this.ctx.controller.blockPhase
+					.getBlocks()
+					.find((b) => b.callId === snapshot.approval?.activeCallId)
+				if (activeBlock) {
+					this.ctx.controller.blockPhase.acquireToken(activeBlock.callId)
+				}
+			}
+		}
+	}
 }
 
 // Re-export for convenience

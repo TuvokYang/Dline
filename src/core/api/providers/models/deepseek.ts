@@ -42,3 +42,6 @@ export const deepSeekModels: Record<string, ModelInfo> = {
 		},
 	},
 }
+
+/** Default model ID for DeepSeek provider */
+export const deepSeekDefaultModelId = "deepseek-v4-flash"

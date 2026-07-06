@@ -1,5 +1,13 @@
 import { TaskPhase } from "./TaskPhase"
-import type { TaskSnapshot, TaskSnapshotApproval, TaskSnapshotExecution, TaskSnapshotResume, TaskSnapshotCancel } from "./TaskSnapshot"
+import type {
+	TaskSnapshot,
+	TaskSnapshotApproval,
+	TaskSnapshotAwaiting,
+	TaskSnapshotCancel,
+	TaskSnapshotErrorRecovery,
+	TaskSnapshotExecution,
+	TaskSnapshotResume,
+} from "./TaskSnapshot"
 
 // ── Types ──
 
@@ -8,12 +16,14 @@ import type { TaskSnapshot, TaskSnapshotApproval, TaskSnapshotExecution, TaskSna
  */
 export interface TransitionContext {
 	apiIndex: number
+	awaiting?: TaskSnapshotAwaiting
 	approval?: TaskSnapshotApproval
 	execution?: TaskSnapshotExecution
 	resume?: TaskSnapshotResume
 	cancel?: TaskSnapshotCancel
+	error?: TaskSnapshotErrorRecovery
 	/** Callback invoked after transition to persist the state_snapshot. */
-	onSnapshot?: (snapshot: TaskSnapshot) => void
+	onSnapshot?: (snapshot: TaskSnapshot) => Promise<void> | void
 }
 
 // ── TaskPhaseMachine ──
@@ -44,18 +54,21 @@ export class TaskPhaseMachine {
 	/**
 	 * Transition to a new task phase. This is the ONLY way to change phase.
 	 * Automatically generates a snapshot and invokes the persist callback.
+	 * Async to ensure snapshot persistence completes before returning.
 	 */
-	transition(to: TaskPhase, ctx: TransitionContext): TaskSnapshot {
+	async transition(to: TaskPhase, ctx: TransitionContext): Promise<TaskSnapshot> {
 		this._phase = to
 
 		const snap = this.snapshot(ctx.apiIndex, {
+			awaiting: ctx.awaiting,
 			approval: ctx.approval,
 			execution: ctx.execution,
 			resume: ctx.resume,
 			cancel: ctx.cancel,
+			error: ctx.error,
 		})
 
-		ctx.onSnapshot?.(snap)
+		await ctx.onSnapshot?.(snap)
 		return snap
 	}
 

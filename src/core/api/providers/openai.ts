@@ -14,6 +14,76 @@ import { convertToR1Format } from "../transform/r1-format"
 import { ApiStream } from "../transform/stream"
 import { getOpenAIToolParams, ToolCallProcessor } from "../transform/tool-call-processor"
 
+/**
+ * Applies prompt cache control to messages at the content-block level.
+ *
+ * Many third-party OpenAI-compatible APIs (e.g., LiteLLM, OpenRouter with
+ * Anthropic backends) support an Anthropic-style cache_control field.
+ * Per the Anthropic protocol, cache_control must be placed on individual
+ * content blocks, not at the message top-level.
+ *
+ * NOTE: Native OpenAI does NOT use cache_control — prompt caching is
+ * automatic there. This function exists solely for third-party compatibility.
+ *
+ * @param messages - Chat completion messages to annotate (mutated in-place)
+ * @param cacheControl - The cache_control annotation, or undefined to skip
+ */
+function applyCacheControlToMessages(
+	messages: OpenAI.Chat.ChatCompletionMessageParam[],
+	cacheControl: { cache_control: { type: "ephemeral" } } | undefined,
+): void {
+	if (!cacheControl) {
+		return
+	}
+
+	// Attach cache_control to a single message at content-block level
+	const attachToMessage = (msg: OpenAI.Chat.ChatCompletionMessageParam) => {
+		if (typeof msg.content === "string") {
+			// Wrap string content in an array so cache_control can live on the block
+			msg.content = [{ type: "text", text: msg.content, ...cacheControl } as any]
+		} else if (Array.isArray(msg.content)) {
+			const lastIdx = msg.content.length - 1
+			if (lastIdx >= 0) {
+				msg.content[lastIdx] = { ...msg.content[lastIdx], ...cacheControl }
+			}
+		}
+		// Messages without content (e.g. assistant with only tool_calls) are skipped
+	}
+
+	// Always cache the system/developer message (index 0)
+	if (messages.length > 0) {
+		const firstRole = messages[0].role
+		if (firstRole === "system" || firstRole === "developer") {
+			attachToMessage(messages[0])
+		}
+	}
+
+	// Find the last two user messages for cache breakpoints.
+	// Strategy: mark the latest user message as ephemeral so it can be cached
+	// for the *next* request, and mark the second-to-last user message as
+	// ephemeral to tell the server which message to retrieve from cache for
+	// the *current* request.
+	let lastUserIdx = -1
+	let secondLastUserIdx = -1
+	for (let i = messages.length - 1; i >= 0; i--) {
+		if (messages[i].role === "user") {
+			if (lastUserIdx === -1) {
+				lastUserIdx = i
+			} else {
+				secondLastUserIdx = i
+				break
+			}
+		}
+	}
+
+	if (lastUserIdx >= 0) {
+		attachToMessage(messages[lastUserIdx])
+	}
+	if (secondLastUserIdx >= 0) {
+		attachToMessage(messages[secondLastUserIdx])
+	}
+}
+
 export class OpenAiHandler implements ApiHandler {
 	private client: OpenAI | undefined
 
@@ -119,37 +189,11 @@ export class OpenAiHandler implements ApiHandler {
 			...convertToOpenAiMessages(messages),
 		]
 
-		// Apply prompt cache control if model supports it
+		// Determine cache_control annotation — applied later after all message
+		// transformations are complete (see applyCacheControlToMessages below)
 		const cacheControl = this.modelInfo?.capabilities?.supportsPromptCache
 			? { cache_control: { type: "ephemeral" as const } }
 			: undefined
-
-		if (cacheControl) {
-			// Attach cache_control to system message (index 0)
-			openAiMessages[0] = { ...openAiMessages[0], ...cacheControl }
-
-			// Find the last two user messages for cache breakpoints
-			let lastUserIdx = -1
-			let secondLastUserIdx = -1
-			for (let i = openAiMessages.length - 1; i >= 0; i--) {
-				if (openAiMessages[i].role === "user") {
-					if (lastUserIdx === -1) {
-						lastUserIdx = i
-					} else {
-						secondLastUserIdx = i
-						break
-					}
-				}
-			}
-
-			// Attach cache_control to the last two user messages
-			if (lastUserIdx >= 0) {
-				openAiMessages[lastUserIdx] = { ...openAiMessages[lastUserIdx], ...cacheControl }
-			}
-			if (secondLastUserIdx >= 0) {
-				openAiMessages[secondLastUserIdx] = { ...openAiMessages[secondLastUserIdx], ...cacheControl }
-			}
-		}
 
 		let temperature: number | undefined
 		const configTemp = this.config?.temperature
@@ -184,6 +228,11 @@ export class OpenAiHandler implements ApiHandler {
 			openAiMessages = [{ role: "developer", content: systemPrompt }, ...convertToOpenAiMessages(messages)]
 			temperature = undefined // does not support temperature
 		}
+
+		// Apply prompt cache control AFTER all message transformations are complete.
+		// This ensures cache_control is not lost when openAiMessages is reassigned
+		// for deepseek-reasoner, thinking budget, or o-series model paths above.
+		applyCacheControlToMessages(openAiMessages, cacheControl)
 
 		const requestParams: any = {
 			model: modelId,
@@ -235,7 +284,7 @@ export class OpenAiHandler implements ApiHandler {
 				usageYielded = true
 				// Parse cache tokens from multiple possible field names
 				// Different OpenAI-compatible providers use different field names
-				const inputTokens = chunk.usage.prompt_tokens || 0
+				const rawInputTokens = chunk.usage.prompt_tokens || 0
 				const outputTokens = chunk.usage.completion_tokens || 0
 				const cacheReadTokens =
 					chunk.usage.cache_read_input_tokens ??
@@ -248,11 +297,22 @@ export class OpenAiHandler implements ApiHandler {
 					chunk.usage.prompt_tokens_details?.cache_miss_tokens ??
 					0
 				const modelInfo = this.modelInfo ?? openAiModelInfoSaneDefaults
-				const totalCost = calculateApiCostOpenAI(modelInfo, inputTokens, outputTokens, cacheWriteTokens, cacheReadTokens)
+				// Yield inputTokens in Anthropic semantic (excluding cache) so
+				// ContextManager and updateApiReqMsg can accurately estimate
+				// context pressure. Cost calculation still uses OpenAI semantic
+				// (rawInputTokens includes cache) for correct provider billing.
+				const nonCachedInputTokens = Math.max(0, rawInputTokens - cacheReadTokens - cacheWriteTokens)
+				const totalCost = calculateApiCostOpenAI(
+					modelInfo,
+					rawInputTokens,
+					outputTokens,
+					cacheWriteTokens,
+					cacheReadTokens,
+				)
 
 				yield {
 					type: "usage",
-					inputTokens: inputTokens,
+					inputTokens: nonCachedInputTokens,
 					outputTokens,
 					cacheReadTokens,
 					cacheWriteTokens,

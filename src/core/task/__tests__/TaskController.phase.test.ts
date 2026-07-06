@@ -17,12 +17,14 @@ describe("TaskController — phase state machine", () => {
 		assert.equal(tc.phase, TaskPhase.IDLE)
 	})
 
-	it("transitions from IDLE to INITIALIZING and persists snapshot", () => {
+	it("transitions from IDLE to INITIALIZING and persists snapshot", async () => {
 		const tc = new TaskController(mockChannel)
 		const snapshots: any[] = []
-		const snap = tc.transition(TaskPhase.INITIALIZING, {
+		const snap = await tc.transition(TaskPhase.INITIALIZING, {
 			apiIndex: 0,
-			onSnapshot: (s) => snapshots.push(s),
+			onSnapshot: (s) => {
+				snapshots.push(s)
+			},
 		})
 		assert.equal(tc.phase, TaskPhase.INITIALIZING)
 		assert.equal(snapshots.length, 1)
@@ -30,25 +32,25 @@ describe("TaskController — phase state machine", () => {
 		assert.equal(snap.phase, TaskPhase.INITIALIZING)
 	})
 
-	it("transitions through full lifecycle: IDLE → STREAMING → EXECUTING → BETWEEN_TURNS", () => {
+	it("transitions through full lifecycle: IDLE → STREAMING → EXECUTING → BETWEEN_TURNS", async () => {
 		const tc = new TaskController(mockChannel)
-		tc.transition(TaskPhase.STREAMING, { apiIndex: 0 })
+		await tc.transition(TaskPhase.STREAMING, { apiIndex: 0 })
 		assert.equal(tc.phase, TaskPhase.STREAMING)
 
-		tc.transition(TaskPhase.EXECUTING, {
+		await tc.transition(TaskPhase.EXECUTING, {
 			apiIndex: 1,
 			execution: { mode: "parallel", executing: ["c1", "c2"] },
 		})
 		assert.equal(tc.phase, TaskPhase.EXECUTING)
 
-		tc.transition(TaskPhase.BETWEEN_TURNS, { apiIndex: 2 })
+		await tc.transition(TaskPhase.BETWEEN_TURNS, { apiIndex: 2 })
 		assert.equal(tc.phase, TaskPhase.BETWEEN_TURNS)
 	})
 
-	it("transitions to CANCELLING with cancel context", () => {
+	it("transitions to CANCELLING with cancel context", async () => {
 		const tc = new TaskController(mockChannel)
-		tc.transition(TaskPhase.STREAMING, { apiIndex: 0 })
-		const snap = tc.transition(TaskPhase.CANCELLING, {
+		await tc.transition(TaskPhase.STREAMING, { apiIndex: 0 })
+		const snap = await tc.transition(TaskPhase.CANCELLING, {
 			apiIndex: 0,
 			cancel: { source: "user", fromPhase: TaskPhase.STREAMING },
 		})
@@ -56,9 +58,9 @@ describe("TaskController — phase state machine", () => {
 		assert.equal(snap.cancel?.source, "user")
 	})
 
-	it("snapshot() includes phase, apiIndex, and timestamp", () => {
+	it("snapshot() includes phase, apiIndex, and timestamp", async () => {
 		const tc = new TaskController(mockChannel)
-		tc.transition(TaskPhase.EXECUTING, { apiIndex: 5 })
+		await tc.transition(TaskPhase.EXECUTING, { apiIndex: 5 })
 		const snap = tc.snapshot(5)
 		assert.equal(snap.phase, TaskPhase.EXECUTING)
 		assert.equal(snap.apiIndex, 5)
@@ -71,9 +73,9 @@ describe("TaskController — phase state machine", () => {
 		assert.equal(tc.phase, TaskPhase.EXECUTING)
 	})
 
-	it("transition generates snapshot with approval context", () => {
+	it("transition generates snapshot with approval context", async () => {
 		const tc = new TaskController(mockChannel)
-		const snap = tc.transition(TaskPhase.AWAITING_APPROVAL, {
+		const snap = await tc.transition(TaskPhase.AWAITING_APPROVAL, {
 			apiIndex: 2,
 			approval: {
 				mode: "serial",
@@ -85,9 +87,9 @@ describe("TaskController — phase state machine", () => {
 		assert.equal(snap.approval?.activeCallId, "c1")
 	})
 
-	it("transition generates snapshot with resume context", () => {
+	it("transition generates snapshot with resume context", async () => {
 		const tc = new TaskController(mockChannel)
-		const snap = tc.transition(TaskPhase.RESUMING, {
+		const snap = await tc.transition(TaskPhase.RESUMING, {
 			apiIndex: 3,
 			resume: {
 				assistantApiIndex: 1,
@@ -99,15 +101,15 @@ describe("TaskController — phase state machine", () => {
 		assert.deepEqual(snap.resume?.pendingToolUseIds, ["t1", "t2"])
 	})
 
-	it("transitions to PAUSED before CANCELLING", () => {
+	it("transitions to PAUSED before CANCELLING", async () => {
 		const tc = new TaskController(mockChannel)
-		tc.transition(TaskPhase.STREAMING, { apiIndex: 0 })
+		await tc.transition(TaskPhase.STREAMING, { apiIndex: 0 })
 
-		const pausedSnap = tc.transition(TaskPhase.PAUSED, { apiIndex: 1 })
+		const pausedSnap = await tc.transition(TaskPhase.PAUSED, { apiIndex: 1 })
 		assert.equal(tc.phase, TaskPhase.PAUSED)
 		assert.equal(pausedSnap.phase, TaskPhase.PAUSED)
 
-		const cancelSnap = tc.transition(TaskPhase.CANCELLING, {
+		const cancelSnap = await tc.transition(TaskPhase.CANCELLING, {
 			apiIndex: 1,
 			cancel: { source: "user", fromPhase: TaskPhase.PAUSED },
 		})
@@ -115,13 +117,15 @@ describe("TaskController — phase state machine", () => {
 		assert.equal(cancelSnap.cancel?.fromPhase, TaskPhase.PAUSED)
 	})
 
-	it("onSnapshot callback receives correct phase and apiIndex on transition", () => {
+	it("onSnapshot callback receives correct phase and apiIndex on transition", async () => {
 		const tc = new TaskController(mockChannel)
 		const captured: any[] = []
 
-		tc.transition(TaskPhase.STREAMING, {
+		await tc.transition(TaskPhase.STREAMING, {
 			apiIndex: 7,
-			onSnapshot: (s) => captured.push(s),
+			onSnapshot: (s) => {
+				captured.push(s)
+			},
 		})
 
 		assert.equal(captured.length, 1)
@@ -130,15 +134,15 @@ describe("TaskController — phase state machine", () => {
 		assert.ok(typeof captured[0].timestamp === "number")
 	})
 
-	it("apiIndex updates correctly across multiple transitions (not stuck at -1)", () => {
+	it("apiIndex updates correctly across multiple transitions (not stuck at -1)", async () => {
 		const tc = new TaskController(mockChannel)
 
 		// Simulate: history empty at start → apiIndex = -1
-		const snap1 = tc.transition(TaskPhase.STREAMING, { apiIndex: -1 })
+		const snap1 = await tc.transition(TaskPhase.STREAMING, { apiIndex: -1 })
 		assert.equal(snap1.apiIndex, -1)
 
 		// Simulate: after API response, history has 1 entry → apiIndex = 0
-		const snap2 = tc.transition(TaskPhase.EXECUTING, {
+		const snap2 = await tc.transition(TaskPhase.EXECUTING, {
 			apiIndex: 0,
 			execution: { mode: "serial", executing: ["c1"] },
 		})
@@ -146,7 +150,7 @@ describe("TaskController — phase state machine", () => {
 		assert.equal(snap2.phase, TaskPhase.EXECUTING)
 
 		// Simulate: after another response, history has 3 entries → apiIndex = 2
-		const snap3 = tc.transition(TaskPhase.AWAITING_APPROVAL, {
+		const snap3 = await tc.transition(TaskPhase.AWAITING_APPROVAL, {
 			apiIndex: 2,
 			approval: {
 				mode: "serial",

@@ -663,3 +663,16 @@ export const vertexModels: Record<string, ModelInfo> = {
 		},
 	},
 }
+
+/** Default model ID for Vertex AI provider */
+export const vertexDefaultModelId = "gemini-3-pro-preview"
+
+/**
+ * Vertex models filtered to those supporting global endpoint.
+ * Stored as a pre-filtered map for fast lookups.
+ */
+export const vertexGlobalModels: Record<string, ModelInfo> = Object.fromEntries(
+	Object.entries(vertexModels)
+		.filter(([, model]) => model.capabilities?.supportsGlobalEndpoint)
+		.map(([id, model]) => [id, model as ModelInfo]),
+)

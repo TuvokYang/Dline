@@ -1,19 +1,19 @@
-import type { ClineAsk, ClineSay } from "@shared/ExtensionMessage"
+import type { ClineAsk, ClineSay, TaskUiAction, TaskUiState } from "@shared/ExtensionMessage"
 import type { ClineAskResponse } from "@shared/WebviewMessage"
+import type { BlockEvent, BlockLifecycle, TurnBlockInput } from "./BlockPhaseMachine"
 import { BlockPhaseMachine } from "./BlockPhaseMachine"
-import type { BlockLifecycle, BlockEvent, TurnBlockInput } from "./BlockPhaseMachine"
-import { MessageChannel } from "./MessageChannel"
+import type { FocusChainManager } from "./focus-chain"
 import type { AskOptions, AskResult } from "./MessageChannel"
-import { TaskPhaseMachine } from "./TaskPhaseMachine"
-import type { TransitionContext } from "./TaskPhaseMachine"
+import { MessageChannel } from "./MessageChannel"
 import { TaskPhase } from "./TaskPhase"
+import type { TransitionContext } from "./TaskPhaseMachine"
+import { TaskPhaseMachine } from "./TaskPhaseMachine"
 import type { TaskSnapshot } from "./TaskSnapshot"
 import type { ToolExecutor } from "./ToolExecutor"
-import type { FocusChainManager } from "./focus-chain"
 
 // Re-export types for backward compatibility
 export { BlockPhase } from "./BlockPhaseMachine"
-export type { BlockLifecycle, BlockEvent }
+export type { BlockEvent, BlockLifecycle }
 
 /**
  * Callback signature for say() — used by releaseApprovalLock to flush buffered
@@ -191,11 +191,137 @@ export class TaskController {
 		return this.taskPhase.snapshot(apiIndex, extra)
 	}
 
-	transition(to: TaskPhase, ctx: TransitionContext): TaskSnapshot {
+	async transition(to: TaskPhase, ctx: TransitionContext): Promise<TaskSnapshot> {
 		return this.taskPhase.transition(to, ctx)
 	}
 
 	restoreFrom(snapshot: TaskSnapshot): void {
 		this.taskPhase.restoreFrom(snapshot)
+	}
+
+	/**
+	 * Build TaskUiState from current snapshot for frontend consumption.
+	 * This is the single source of truth for footer buttons and input state.
+	 */
+	buildTaskUiState(snapshot: TaskSnapshot | null): TaskUiState {
+		if (!snapshot) {
+			return {
+				phase: "idle",
+				inputEnabled: true,
+				cancelEnabled: false,
+				showFooter: false,
+				actions: [],
+				reason: "no-snapshot",
+			}
+		}
+
+		// Conversation awaiting (plan_mode_respond, qna_respond, etc.)
+		if (snapshot.awaiting?.kind === "conversation") {
+			return {
+				phase: "awaiting_input",
+				inputEnabled: true,
+				cancelEnabled: false,
+				showFooter: false,
+				actions: [],
+				activeAsk: snapshot.awaiting.taskAsk,
+				reason: "conversation-awaiting",
+			}
+		}
+
+		// Error recovery awaiting
+		if (snapshot.awaiting?.kind === "error_recovery" && snapshot.error) {
+			const actions: TaskUiAction[] = snapshot.error.actions.map((actionType) => {
+				if (actionType === "retry") {
+					return { type: "retry", label: "Retry", enabled: true }
+				}
+				if (actionType === "process_anyway") {
+					return { type: "process_anyway", label: "Process Anyway", enabled: true }
+				}
+				return { type: "start_new_task", label: "Start New Task", enabled: true }
+			})
+
+			return {
+				phase: "awaiting_error_recovery",
+				inputEnabled: snapshot.error.kind === "mistake_limit_reached",
+				cancelEnabled: false,
+				showFooter: true,
+				actions,
+				activeAsk: snapshot.error.sourceAsk,
+				reason: `error-recovery:${snapshot.error.kind}`,
+			}
+		}
+
+		// Status acknowledgment awaiting (Acknowledge / Stop buttons with input enabled)
+		if (snapshot.awaiting?.kind === "approval" && snapshot.awaiting?.taskAsk === "status_acknowledgment") {
+			return {
+				phase: "awaiting_acknowledgment",
+				inputEnabled: true,
+				cancelEnabled: false,
+				showFooter: true,
+				actions: [
+					{ type: "primary", label: "Acknowledge", enabled: true },
+					{ type: "secondary", label: "Stop", enabled: true },
+				],
+				activeAsk: snapshot.awaiting.taskAsk,
+				activeCallId: snapshot.awaiting.activeCallId,
+				reason: "status-acknowledgment",
+			}
+		}
+
+		// Approval awaiting
+		if (snapshot.awaiting?.kind === "approval" && snapshot.approval) {
+			return {
+				phase: "awaiting_approval",
+				inputEnabled: false,
+				cancelEnabled: true,
+				showFooter: true,
+				actions: [
+					{ type: "approve", label: "Approve", enabled: true },
+					{ type: "reject", label: "Reject", enabled: true },
+				],
+				activeAsk: snapshot.awaiting.taskAsk,
+				activeCallId: snapshot.awaiting.activeCallId,
+				reason: "approval-awaiting",
+			}
+		}
+
+		// Resume awaiting
+		if (snapshot.awaiting?.kind === "resume") {
+			return {
+				phase: "awaiting_resume",
+				inputEnabled: false,
+				cancelEnabled: false,
+				showFooter: true,
+				actions: [{ type: "resume", label: "Resume", enabled: true }],
+				activeAsk: snapshot.awaiting.taskAsk,
+				reason: "resume-awaiting",
+			}
+		}
+
+		// Working (streaming, executing, etc.)
+		if (
+			snapshot.phase === TaskPhase.STREAMING ||
+			snapshot.phase === TaskPhase.EXECUTING ||
+			snapshot.phase === TaskPhase.RESUMING
+		) {
+			return {
+				phase: "working",
+				inputEnabled: false,
+				cancelEnabled: true,
+				showFooter: true,
+				actions: [{ type: "cancel", label: "Cancel", enabled: true }],
+				reason: `working:${snapshot.phase}`,
+			}
+		}
+
+		// Default idle
+		return {
+			phase: "idle",
+			inputEnabled: true,
+			cancelEnabled: false,
+			showFooter: false,
+			actions: [],
+			reason: `idle:${snapshot.phase}`,
+		}
 	}
 }

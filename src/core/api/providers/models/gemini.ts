@@ -348,3 +348,6 @@ export const geminiModels: Record<string, ModelInfo> = {
 		},
 	},
 }
+
+/** Default model ID for Gemini provider */
+export const geminiDefaultModelId = "gemini-3.1-pro-preview"

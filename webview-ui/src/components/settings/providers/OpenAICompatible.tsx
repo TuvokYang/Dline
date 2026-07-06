@@ -1,17 +1,13 @@
 import type { ModelInfo } from "@shared/api"
-import { ModelCapabilities } from "@shared/proto/dline/models/metadata"
 import { OpenAiProviderConfig } from "@shared/proto/dline/provider/openai"
 import { VSCodeButton, VSCodeCheckbox } from "@vscode/webview-ui-toolkit/react"
-import { useCallback, useState } from "react"
-import { Label } from "@/components/ui/label"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { useCallback } from "react"
 import { ApiKeyField } from "../common/ApiKeyField"
 import { BaseUrlField } from "../common/BaseUrlField"
 import { DebouncedTextField } from "../common/DebouncedTextField"
+import { ModelConfiguration } from "../common/ModelConfiguration"
 import { ModelInfoView } from "../common/ModelInfoView"
-import ReasoningEffortSelector from "../ReasoningEffortSelector"
-import ThinkingBudgetSlider from "../ThinkingBudgetSlider"
-import { parsePrice } from "../utils/pricingUtils"
+import ThinkingControl from "../ThinkingControl"
 import type { ApiProfile } from "./ProviderProfile"
 
 /**
@@ -32,18 +28,6 @@ function getOpenAiConfig(profile: ApiProfile): OpenAiProviderConfig {
 	return profile.openai ?? OpenAiProviderConfig.create({ streamIncludeUsage: true })
 }
 
-type ThinkingMode = "effort" | "budget"
-
-/**
- * Infer current thinking mode from ReasoningConfig.
- */
-function inferThinkingMode(pc: OpenAiProviderConfig): ThinkingMode {
-	if (pc.reasoning?.thinkingBudget != null && pc.reasoning.thinkingBudget > 0) {
-		return "budget"
-	}
-	return "effort"
-}
-
 /**
  * The OpenAI Compatible provider configuration component.
  * Supports custom base URL, custom headers, Azure config, model configuration,
@@ -51,19 +35,9 @@ function inferThinkingMode(pc: OpenAiProviderConfig): ThinkingMode {
  * All data sourced from ApiProfile.
  */
 export const OpenAICompatibleProvider = ({ showModelOptions, isPopup, profile, onUpdate }: OpenAICompatibleProviderProps) => {
-	const [modelConfigurationSelected, setModelConfigurationSelected] = useState(false)
-
 	const pc = getOpenAiConfig(profile)
 	const modelId = profile.modelId || ""
 	const modelInfo: ModelInfo | undefined = profile.modelInfo
-	const thinkingMode = inferThinkingMode(pc)
-
-	/** Currency symbol lookup — used in price labels. */
-	const currSymbol = ((): string => {
-		const c = modelInfo?.pricing?.currency || "USD"
-		const map: Record<string, string> = { USD: "$", CNY: "¥", EUR: "€", GBP: "£" }
-		return map[c] || "$"
-	})()
 
 	// --- Custom Headers management ---
 	const openAiHeaders = pc.openAiHeaders ?? {}
@@ -96,6 +70,17 @@ export const OpenAICompatibleProvider = ({ showModelOptions, isPopup, profile, o
 		[profile, onUpdate, openAiHeaders, pc],
 	)
 
+	// Update ModelInfo directly (no longer update providerConfig.capabilities/pricing/temperature)
+	const handleModelInfoUpdate = (updates: Partial<ModelInfo>) => {
+		onUpdate({
+			modelInfo: {
+				...profile.modelInfo,
+				...updates,
+				id: modelId,
+			},
+		})
+	}
+
 	return (
 		<div>
 			{/* Base URL */}
@@ -122,6 +107,35 @@ export const OpenAICompatibleProvider = ({ showModelOptions, isPopup, profile, o
 				style={{ width: "100%", marginBottom: 10 }}>
 				<span style={{ fontWeight: 500 }}>Model ID</span>
 			</DebouncedTextField>
+
+			{/* ThinkingControl - placed after Model ID */}
+			<ThinkingControl
+				maxBudget={modelInfo?.capabilities?.thinking?.maxBudget}
+				mode="both"
+				modeSelectorLabel="Thinking Mode"
+				modeSelectorOptions={[
+					{ value: "effort", label: "Reasoning Effort" },
+					{ value: "budget", label: "Thinking Budget" },
+				]}
+				onReasoningConfigUpdate={(reasoning) => {
+					onUpdate({ openai: { ...pc, reasoning } })
+				}}
+				reasoningConfig={pc.reasoning}
+				showModeSelector={true}
+			/>
+
+			{/* ModelConfiguration component */}
+			<ModelConfiguration
+				defaults={{}}
+				fields={{
+					capabilities: ["maxTokens", "contextWindow", "supportsImages", "supportsPromptCache"],
+					pricing: ["inputPrice", "outputPrice", "cacheWritesPrice", "cacheReadsPrice"],
+					other: ["temperature"],
+				}}
+				modelId={modelId}
+				modelInfo={modelInfo!}
+				onModelInfoUpdate={handleModelInfoUpdate}
+			/>
 
 			{/* Custom Headers */}
 			<div style={{ marginBottom: 10 }}>
@@ -171,61 +185,6 @@ export const OpenAICompatibleProvider = ({ showModelOptions, isPopup, profile, o
 				Use Azure Identity Authentication
 			</VSCodeCheckbox>
 
-			{/* Thinking / Reasoning Controls */}
-			<div style={{ marginTop: 10 }}>
-				<Label className="text-xs font-medium">Thinking Mode</Label>
-				<Select
-					onValueChange={(value: ThinkingMode) => {
-						if (value === "effort") {
-							onUpdate({
-								openai: {
-									...pc,
-									reasoning: { effort: pc.reasoning?.effort ?? "medium", thinkingBudget: 0 },
-								},
-							})
-						} else {
-							onUpdate({
-								openai: {
-									...pc,
-									reasoning: { effort: "", thinkingBudget: pc.reasoning?.thinkingBudget || 16000 },
-								},
-							})
-						}
-					}}
-					value={thinkingMode}>
-					<SelectTrigger className="w-full mt-1">
-						<SelectValue />
-					</SelectTrigger>
-					<SelectContent>
-						<SelectItem value="effort">Reasoning Effort</SelectItem>
-						<SelectItem value="budget">Thinking Budget</SelectItem>
-					</SelectContent>
-				</Select>
-			</div>
-
-			{thinkingMode === "effort" && (
-				<ReasoningEffortSelector
-					onReasoningEffortChange={(v) =>
-						onUpdate({
-							openai: { ...pc, reasoning: { effort: v, thinkingBudget: 0 } },
-						})
-					}
-					reasoningEffort={pc.reasoning?.effort}
-				/>
-			)}
-
-			{thinkingMode === "budget" && (
-				<ThinkingBudgetSlider
-					maxBudget={modelInfo?.capabilities?.thinking?.maxBudget}
-					onThinkingBudgetTokensChange={(v) =>
-						onUpdate({
-							openai: { ...pc, reasoning: { effort: "", thinkingBudget: v } },
-						})
-					}
-					thinkingBudgetTokens={pc.reasoning?.thinkingBudget ?? 0}
-				/>
-			)}
-
 			{/* Include usage in stream */}
 			<VSCodeCheckbox
 				checked={pc.streamIncludeUsage ?? true}
@@ -235,237 +194,6 @@ export const OpenAICompatibleProvider = ({ showModelOptions, isPopup, profile, o
 				}}>
 				Include usage stats in stream responses
 			</VSCodeCheckbox>
-
-			{/* Model Configuration Collapsible */}
-			<div
-				onClick={() => setModelConfigurationSelected((val) => !val)}
-				onKeyDown={(e) => {
-					if (e.key === "Enter" || e.key === " ") {
-						e.preventDefault()
-						setModelConfigurationSelected((val) => !val)
-					}
-				}}
-				role="button"
-				style={{
-					color: "var(--vscode-descriptionForeground)",
-					display: "flex",
-					margin: "10px 0",
-					cursor: "pointer",
-					alignItems: "center",
-				}}
-				tabIndex={0}>
-				<span
-					className={`codicon ${modelConfigurationSelected ? "codicon-chevron-down" : "codicon-chevron-right"}`}
-					style={{ marginRight: "4px" }}
-				/>
-				<span style={{ fontWeight: 700, textTransform: "uppercase" }}>Model Configuration</span>
-			</div>
-
-			{modelConfigurationSelected && (
-				<>
-					{/* Supports Images */}
-					<VSCodeCheckbox
-						checked={!!modelInfo?.capabilities?.supportsImages}
-						onChange={(e: Event | React.FormEvent<HTMLElement>) => {
-							const isChecked = (e.target as HTMLInputElement).checked === true
-							onUpdate({
-								modelInfo: {
-									...modelInfo,
-									id: modelInfo?.id || modelId,
-									capabilities: {
-										...(modelInfo?.capabilities ?? ModelCapabilities.fromPartial({})),
-										supportsImages: isChecked,
-									},
-								},
-							})
-						}}>
-						Supports Images
-					</VSCodeCheckbox>
-
-					{/* Supports Prompt Cache */}
-					<VSCodeCheckbox
-						checked={!!modelInfo?.capabilities?.supportsPromptCache}
-						onChange={(e: Event | React.FormEvent<HTMLElement>) => {
-							const isChecked = (e.target as HTMLInputElement).checked === true
-							onUpdate({
-								modelInfo: {
-									...modelInfo,
-									id: modelInfo?.id || modelId,
-									capabilities: {
-										...(modelInfo?.capabilities ?? ModelCapabilities.fromPartial({})),
-										supportsPromptCache: isChecked,
-									},
-								},
-							})
-						}}>
-						Supports Prompt Cache
-					</VSCodeCheckbox>
-
-					{/* Currency */}
-					<div style={{ marginTop: 5, marginBottom: 5 }}>
-						<Label className="text-xs font-medium">Currency</Label>
-						<Select
-							onValueChange={(value: string) =>
-								onUpdate({
-									modelInfo: {
-										...modelInfo,
-										id: modelInfo?.id || modelId,
-										pricing: {
-											...modelInfo?.pricing,
-											currency: value,
-										},
-									},
-								})
-							}
-							value={modelInfo?.pricing?.currency || "USD"}>
-							<SelectTrigger className="w-full mt-1">
-								<SelectValue />
-							</SelectTrigger>
-							<SelectContent>
-								<SelectItem value="USD">USD ($)</SelectItem>
-								<SelectItem value="CNY">CNY (¥)</SelectItem>
-								<SelectItem value="EUR">EUR (€)</SelectItem>
-								<SelectItem value="GBP">GBP (£)</SelectItem>
-							</SelectContent>
-						</Select>
-					</div>
-
-					{/* Context Window Size & Max Output Tokens */}
-					<div style={{ display: "flex", gap: 10, marginTop: "5px" }}>
-						<DebouncedTextField
-							initialValue={
-								modelInfo?.capabilities?.contextWindow ? String(modelInfo.capabilities.contextWindow) : ""
-							}
-							onChange={(value) =>
-								onUpdate({
-									modelInfo: {
-										...modelInfo,
-										id: modelInfo?.id || modelId,
-										capabilities: {
-											...(modelInfo?.capabilities ?? ModelCapabilities.fromPartial({})),
-											contextWindow: Number(value),
-										},
-									},
-								})
-							}
-							style={{ flex: 1 }}>
-							<span style={{ fontWeight: 500 }}>Context Window Size</span>
-						</DebouncedTextField>
-
-						<DebouncedTextField
-							initialValue={modelInfo?.capabilities?.maxTokens ? String(modelInfo.capabilities.maxTokens) : ""}
-							onChange={(value) =>
-								onUpdate({
-									modelInfo: {
-										...modelInfo,
-										id: modelInfo?.id || modelId,
-										capabilities: {
-											...(modelInfo?.capabilities ?? ModelCapabilities.fromPartial({})),
-											maxTokens: Number(value),
-										},
-									},
-								})
-							}
-							style={{ flex: 1 }}>
-							<span style={{ fontWeight: 500 }}>Max Output Tokens</span>
-						</DebouncedTextField>
-					</div>
-
-					{/* Input Price & Output Price */}
-					<div style={{ display: "flex", gap: 10, marginTop: "5px" }}>
-						<DebouncedTextField
-							initialValue={modelInfo?.pricing?.inputPrice != null ? String(modelInfo.pricing.inputPrice) : ""}
-							onChange={(value) =>
-								onUpdate({
-									modelInfo: {
-										...modelInfo,
-										id: modelInfo?.id || modelId,
-										pricing: {
-											...modelInfo?.pricing,
-											inputPrice: parsePrice(value, 0),
-										},
-									},
-								})
-							}
-							style={{ flex: 1 }}>
-							<span style={{ fontWeight: 500 }}>Input Price ({currSymbol}/1M tokens)</span>
-						</DebouncedTextField>
-
-						<DebouncedTextField
-							initialValue={modelInfo?.pricing?.outputPrice != null ? String(modelInfo.pricing.outputPrice) : ""}
-							onChange={(value) =>
-								onUpdate({
-									modelInfo: {
-										...modelInfo,
-										id: modelInfo?.id || modelId,
-										pricing: {
-											...modelInfo?.pricing,
-											outputPrice: parsePrice(value, 0),
-										},
-									},
-								})
-							}
-							style={{ flex: 1 }}>
-							<span style={{ fontWeight: 500 }}>Output Price ({currSymbol}/1M tokens)</span>
-						</DebouncedTextField>
-					</div>
-
-					{/* Cache Writes Price & Cache Reads Price */}
-					<div style={{ display: "flex", gap: 10, marginTop: "5px" }}>
-						<DebouncedTextField
-							initialValue={
-								modelInfo?.pricing?.cacheWritesPrice != null ? String(modelInfo.pricing.cacheWritesPrice) : ""
-							}
-							onChange={(value) =>
-								onUpdate({
-									modelInfo: {
-										...modelInfo,
-										id: modelInfo?.id || modelId,
-										pricing: {
-											...modelInfo?.pricing,
-											cacheWritesPrice: parsePrice(value, 0),
-										},
-									},
-								})
-							}
-							style={{ flex: 1 }}>
-							<span style={{ fontWeight: 500 }}>Cache Writes ({currSymbol}/M)</span>
-						</DebouncedTextField>
-
-						<DebouncedTextField
-							initialValue={
-								modelInfo?.pricing?.cacheReadsPrice != null ? String(modelInfo.pricing.cacheReadsPrice) : ""
-							}
-							onChange={(value) =>
-								onUpdate({
-									modelInfo: {
-										...modelInfo,
-										id: modelInfo?.id || modelId,
-										pricing: {
-											...modelInfo?.pricing,
-											cacheReadsPrice: parsePrice(value, 0),
-										},
-									},
-								})
-							}
-							style={{ flex: 1 }}>
-							<span style={{ fontWeight: 500 }}>Cache Reads ({currSymbol}/M)</span>
-						</DebouncedTextField>
-					</div>
-
-					{/* Temperature — stored in OpenAiProviderConfig, not modelInfo */}
-					<DebouncedTextField
-						initialValue={pc.temperature != null ? String(pc.temperature) : ""}
-						onChange={(value) =>
-							onUpdate({
-								openai: { ...pc, temperature: parsePrice(value, 0) },
-							})
-						}
-						style={{ marginTop: "5px" }}>
-						<span style={{ fontWeight: 500 }}>Temperature</span>
-					</DebouncedTextField>
-				</>
-			)}
 
 			{/* Note about complex prompts */}
 			<p

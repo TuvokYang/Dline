@@ -40,3 +40,6 @@ export const qwenCodeModels: Record<string, ModelInfo> = {
 		},
 	},
 }
+
+/** Default model ID for Qwen Code provider */
+export const qwenCodeDefaultModelId = "qwen3-coder-plus"

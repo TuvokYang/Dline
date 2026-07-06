@@ -179,3 +179,6 @@ export const groqModels: Record<string, ModelInfo> = {
 		},
 	},
 }
+
+/** Default model ID for Groq provider */
+export const groqDefaultModelId = "moonshotai/kimi-k2-instruct-0905"

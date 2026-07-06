@@ -70,3 +70,6 @@ export const doubaoModels: Record<string, ModelInfo> = {
 		},
 	},
 }
+
+/** Default model ID for Doubao provider */
+export const doubaoDefaultModelId = "doubao-1-5-pro-256k-250115"

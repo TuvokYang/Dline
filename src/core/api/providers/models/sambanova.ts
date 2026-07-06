@@ -171,3 +171,6 @@ export const sambanovaModels: Record<string, ModelInfo> = {
 		},
 	},
 }
+
+/** Default model ID for SambaNova provider */
+export const sambanovaDefaultModelId = "Meta-Llama-3.3-70B-Instruct"

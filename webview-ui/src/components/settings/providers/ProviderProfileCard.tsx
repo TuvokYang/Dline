@@ -2,7 +2,7 @@ import { EmptyRequest } from "@shared/proto/dline/common"
 import { AvailableModelsResponse } from "@shared/proto/dline/models"
 import type { Mode } from "@shared/storage/types"
 import { ChevronDownIcon, ChevronRightIcon } from "lucide-react"
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { ModelsServiceClient } from "@/services/grpc-client"
 import type { ApiProfile } from "./ProviderProfile"
 import ApiProfileEditor from "./ProviderProfileEditor"
@@ -89,20 +89,30 @@ const ApiProfileCard: React.FC<ApiProfileCardProps> = ({
 	// The tooltip display uses loadedModelInfo as fallback; the profile's
 	// actual modelInfo is only persisted when the user explicitly selects a model.
 	const [loadedModelInfo, setLoadedModelInfo] = useState<any>(profile.modelInfo || null)
+
+	// Guard: only fire onUpdate once per provider+modelId combination to prevent
+	// load-onUpdate-persist-load infinite cycles when profiles-changed re-renders this card.
+	const hasUpdatedModelInfoRef = useRef(false)
+	useEffect(() => {
+		// Reset guard when provider or modelId changes (new combination needs fresh lookup)
+		hasUpdatedModelInfoRef.current = false
+	}, [profile.provider, profile.modelId])
+
 	useEffect(() => {
 		if (profile.modelInfo || !profile.provider || !profile.modelId) return
+		// Skip if we already fired onUpdate for this provider+modelId
+		if (hasUpdatedModelInfoRef.current) return
 		let cancelled = false
 		ModelsServiceClient.getAvailableModels({} as EmptyRequest)
 			.then((response: AvailableModelsResponse) => {
-				if (cancelled) return
+				if (cancelled || hasUpdatedModelInfoRef.current) return
 				for (const group of response.providers || []) {
 					if (group.provider === profile.provider) {
 						const found = group.models.find((m) => m.id === profile.modelId)
 						if (found) {
 							setLoadedModelInfo(found)
-							// Only persist modelInfo to profile if the profile doesn't already
-							// have modelInfo (first-time resolution). This avoids the
-							// load-onUpdate-persist-load cycle.
+							// Mark as updated before calling onUpdate to prevent re-entry
+							hasUpdatedModelInfoRef.current = true
 							onUpdate({ modelInfo: found as any })
 						}
 						break

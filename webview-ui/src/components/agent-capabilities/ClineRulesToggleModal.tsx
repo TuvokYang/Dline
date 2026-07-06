@@ -588,7 +588,7 @@ const ClineRulesToggleModal: React.FC = () => {
 								</p>
 							) : (
 								<p>
-									Hooks allow you to execute custom scripts at specific points in Cline's execution lifecycle,
+									Hooks allow you to execute custom scripts at specific points in Dline's execution lifecycle,
 									enabling automation and integration with external tools.
 								</p>
 							)}

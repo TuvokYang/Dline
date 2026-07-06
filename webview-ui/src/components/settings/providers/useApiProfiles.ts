@@ -1,7 +1,7 @@
 import { EmptyRequest } from "@shared/proto/dline/common"
 import { ApiProfile, ApiProfilesResponse, UpdateApiProfilesRequest } from "@shared/proto/dline/profile"
 import PROVIDERS from "@shared/providers/providers.json"
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { updateSetting, updateTaskSetting } from "@/components/settings/utils/settingsHandlers"
 import { FileServiceClient } from "@/services/grpc-client"
 import { createEmptyApiProfile, generateApiProfileName } from "./ProviderProfile"
@@ -20,6 +20,8 @@ export function useApiProfiles() {
 	const [expandedId, setExpandedId] = useState<string | null>(null)
 	const [editMode, setEditMode] = useState(false)
 	const [loaded, setLoaded] = useState(false)
+	// Unique ID per hook instance — used to skip self-triggered profiles-changed events
+	const instanceId = useRef(crypto.randomUUID())
 
 	// Shared load function so persist can refresh after save
 	const loadProfiles = useCallback(() => {
@@ -37,8 +39,13 @@ export function useApiProfiles() {
 	}, [loadProfiles])
 
 	// Listen for cross-component profile changes (Bug 3 fix)
+	// Skip events triggered by this same instance to avoid redundant reloads
 	useEffect(() => {
-		const handler = () => loadProfiles()
+		const handler = (e: Event) => {
+			const sourceId = (e as CustomEvent<{ sourceId?: string }>).detail?.sourceId
+			if (sourceId === instanceId.current) return
+			loadProfiles()
+		}
 		window.addEventListener("profiles-changed", handler)
 		return () => window.removeEventListener("profiles-changed", handler)
 	}, [loadProfiles])
@@ -59,7 +66,8 @@ export function useApiProfiles() {
 					// Refresh from backend to get apiKey backfills (Bug 4 fix)
 					loadProfiles()
 					// Notify other useApiProfiles instances (Bug 3 fix)
-					window.dispatchEvent(new CustomEvent("profiles-changed"))
+					// Attach sourceId so this instance can skip its own event (prevents redundant reload)
+					window.dispatchEvent(new CustomEvent("profiles-changed", { detail: { sourceId: instanceId.current } }))
 				})
 				.catch((err) => console.error("Failed to persist ApiProfiles:", err))
 		},

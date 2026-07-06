@@ -27,7 +27,7 @@ export function useChatState(messages: ClineMessage[]): ChatState {
 	const textAreaRef = useRef<HTMLTextAreaElement>(null)
 
 	// Active approval block from extension state
-	const { activeBlock } = useExtensionState()
+	const { activeBlock, taskUiState } = useExtensionState()
 
 	// Derived state
 	const lastMessage = useMemo(() => findInteractionMessage(messages), [messages])
@@ -94,6 +94,7 @@ export function useChatState(messages: ClineMessage[]): ChatState {
 
 		// Derived values
 		activeBlock,
+		taskUiState,
 		lastMessage,
 		secondLastMessage,
 		clineAsk,

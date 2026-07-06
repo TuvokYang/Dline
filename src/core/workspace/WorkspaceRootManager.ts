@@ -6,6 +6,7 @@
 import { VcsType, WorkspaceRoot } from "@shared/multi-root/types"
 import { execa } from "execa"
 import * as path from "path"
+import { Logger } from "@/shared/services/Logger"
 import { getGitRemoteUrls, getLatestGitCommitHash } from "../../utils/git"
 
 export interface WorkspaceContext {
@@ -108,6 +109,11 @@ export class WorkspaceRootManager {
 				return root
 			}
 		}
+
+		// Diagnostic: log when no root matches to help identify root cause
+		Logger.debug(
+			`[WorkspaceRootManager] No root matched. path="${absolutePath}", roots=[${sortedRoots.map((r) => r.path).join(", ")}], rootCount=${sortedRoots.length}`,
+		)
 
 		return undefined
 	}

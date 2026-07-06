@@ -1432,6 +1432,13 @@ export class Controller {
 			/** Task lock status — computed on each state push so the frontend
 			 *  can show a lock banner when the task is in read-only mode. */
 			taskLockStatus: this.getTaskLockStatus(),
+			/** Unified task UI state derived from snapshot.
+			 *  Single source of truth for footer buttons and input state. */
+			taskUiState: (() => {
+				if (!this.task?.taskController) return undefined
+				const snapshot = this.task.findLatestStateSnapshot()
+				return this.task.taskController.buildTaskUiState(snapshot ?? null)
+			})(),
 		}
 
 		const durationMs = Math.round(performance.now() - startTime)

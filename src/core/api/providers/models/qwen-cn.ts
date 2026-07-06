@@ -503,3 +503,6 @@ export const mainlandQwenModels: Record<string, ModelInfo> = {
 		},
 	},
 }
+
+/** Default model ID for Qwen mainland China provider */
+export const mainlandQwenDefaultModelId = "qwen3-coder-plus"

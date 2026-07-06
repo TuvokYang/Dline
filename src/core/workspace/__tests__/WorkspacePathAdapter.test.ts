@@ -6,8 +6,8 @@ import { toPosixPath } from "@/utils/path"
 
 import { VcsType, WorkspaceRoot } from "@shared/multi-root/types"
 import { expect } from "chai"
-import { afterEach, beforeEach, describe, it, vi } from "vitest"
 import * as path from "path"
+import { afterEach, beforeEach, describe, it, vi } from "vitest"
 // sinon import removed
 import { Logger } from "@/shared/services/Logger"
 import { createWorkspacePathAdapter, WorkspacePathAdapter } from "../WorkspacePathAdapter"
@@ -227,6 +227,189 @@ describe("WorkspacePathAdapter", () => {
 
 			expect(adapter).to.be.instanceOf(WorkspacePathAdapter)
 			expect(adapter.isMultiRootEnabled()).to.be.false
+		})
+	})
+
+	describe("Windows Drive Letter Case Sensitivity", () => {
+		// These tests only run on Windows since drive letters are a Windows concept.
+		// On POSIX, path.relative is case-sensitive but drive letters don't exist.
+		const runWinOnly = process.platform === "win32" ? describe : describe.skip
+
+		runWinOnly("resolvePath with case-mismatched drive letter (multi-root)", () => {
+			const winCwd = "E:\\workspace\\vscode\\dline"
+			const winRoots: WorkspaceRoot[] = [{ path: "E:\\workspace\\vscode\\dline", name: "dline", vcs: VcsType.Git }]
+
+			it("should NOT warn when absolute path uses lowercase drive letter with forward slashes", () => {
+				const manager = new WorkspaceRootManager(winRoots, 0)
+				const adapter = new WorkspacePathAdapter({
+					cwd: winCwd,
+					isMultiRootEnabled: true,
+					workspaceManager: manager,
+				})
+
+				// Simulate path coming from Node.js module resolution: lowercase 'e', forward slashes
+				const absolutePath = "e:/workspace/vscode/dline/src/core/api/providers/models/xai.ts"
+				const result = adapter.resolvePath(absolutePath)
+
+				// Should return the path as-is (already absolute) and NOT warn
+				expect(toPosixPath(result)).to.equal("e:/workspace/vscode/dline/src/core/api/providers/models/xai.ts")
+
+				// The key assertion: no "doesn't belong" warning should fire
+				const warnCalls = consoleWarnStub.mock.calls.filter(
+					(call: string[]) => typeof call[0] === "string" && call[0].includes("doesn't belong"),
+				)
+				expect(warnCalls).to.have.lengthOf(0)
+			})
+
+			it("should NOT warn when absolute path uses forward slashes with matching drive letter", () => {
+				const manager = new WorkspaceRootManager(winRoots, 0)
+				const adapter = new WorkspacePathAdapter({
+					cwd: winCwd,
+					isMultiRootEnabled: true,
+					workspaceManager: manager,
+				})
+
+				const absolutePath = "E:/workspace/vscode/dline/src/file.ts"
+				const result = adapter.resolvePath(absolutePath)
+
+				expect(toPosixPath(result)).to.equal("E:/workspace/vscode/dline/src/file.ts")
+
+				const warnCalls = consoleWarnStub.mock.calls.filter(
+					(call: string[]) => typeof call[0] === "string" && call[0].includes("doesn't belong"),
+				)
+				expect(warnCalls).to.have.lengthOf(0)
+			})
+		})
+
+		runWinOnly("getWorkspaceForPath with case-mismatched drive letter", () => {
+			const winCwd = "E:\\workspace\\vscode\\dline"
+
+			it("should find workspace when path uses lowercase drive letter (multi-root)", () => {
+				const winRoots: WorkspaceRoot[] = [{ path: "E:\\workspace\\vscode\\dline", name: "dline", vcs: VcsType.Git }]
+				const manager = new WorkspaceRootManager(winRoots, 0)
+				const adapter = new WorkspacePathAdapter({
+					cwd: winCwd,
+					isMultiRootEnabled: true,
+					workspaceManager: manager,
+				})
+
+				const workspace = adapter.getWorkspaceForPath("e:/workspace/vscode/dline/src/core/api/providers/models/xai.ts")
+				expect(workspace).to.not.be.undefined
+				expect(workspace!.name).to.equal("dline")
+			})
+
+			it("should find workspace when path uses lowercase drive letter (single-root)", () => {
+				const adapter = new WorkspacePathAdapter({
+					cwd: winCwd,
+					isMultiRootEnabled: false,
+				})
+
+				const workspace = adapter.getWorkspaceForPath("e:/workspace/vscode/dline/src/core/api/providers/models/xai.ts")
+				expect(workspace).to.not.be.undefined
+				expect(workspace!.name).to.equal("dline")
+			})
+		})
+
+		runWinOnly("getRelativePath with case-mismatched drive letter", () => {
+			const winCwd = "E:\\workspace\\vscode\\dline"
+
+			it("should return relative path (not absolute) for case-mismatched input (multi-root)", () => {
+				const winRoots: WorkspaceRoot[] = [{ path: "E:\\workspace\\vscode\\dline", name: "dline", vcs: VcsType.Git }]
+				const manager = new WorkspaceRootManager(winRoots, 0)
+				const adapter = new WorkspacePathAdapter({
+					cwd: winCwd,
+					isMultiRootEnabled: true,
+					workspaceManager: manager,
+				})
+
+				const relative = adapter.getRelativePath("e:/workspace/vscode/dline/src/core/api/providers/models/xai.ts")
+				// Should be a relative path, not an absolute path (which would indicate failure)
+				expect(path.isAbsolute(relative)).to.be.false
+			})
+
+			it("should return relative path (not absolute) for case-mismatched input (single-root)", () => {
+				const adapter = new WorkspacePathAdapter({
+					cwd: winCwd,
+					isMultiRootEnabled: false,
+				})
+
+				const relative = adapter.getRelativePath("e:/workspace/vscode/dline/src/core/api/providers/models/xai.ts")
+				expect(path.isAbsolute(relative)).to.be.false
+			})
+		})
+
+		runWinOnly("WorkspaceRootManager.resolvePathToRoot with case-mismatched drive letter", () => {
+			it("should find root when absolute path has different drive letter case", () => {
+				const winRoots: WorkspaceRoot[] = [{ path: "E:\\workspace\\vscode\\dline", name: "dline", vcs: VcsType.Git }]
+				const manager = new WorkspaceRootManager(winRoots, 0)
+
+				const root = manager.resolvePathToRoot("e:/workspace/vscode/dline/src/core/api/providers/models/xai.ts")
+				expect(root).to.not.be.undefined
+				expect(root!.name).to.equal("dline")
+			})
+
+			it("should find root when path uses forward slashes but matching drive letter", () => {
+				const winRoots: WorkspaceRoot[] = [{ path: "E:\\workspace\\vscode\\dline", name: "dline", vcs: VcsType.Git }]
+				const manager = new WorkspaceRootManager(winRoots, 0)
+
+				const root = manager.resolvePathToRoot("E:/workspace/vscode/dline/src/file.ts")
+				expect(root).to.not.be.undefined
+				expect(root!.name).to.equal("dline")
+			})
+
+			it("should handle multiple roots with mixed case", () => {
+				const winRoots: WorkspaceRoot[] = [
+					{ path: "E:\\workspace\\frontend", name: "frontend", vcs: VcsType.Git },
+					{ path: "E:\\workspace\\backend", name: "backend", vcs: VcsType.Git },
+				]
+				const manager = new WorkspaceRootManager(winRoots, 0)
+
+				// Path in backend workspace with lowercase drive letter
+				const root = manager.resolvePathToRoot("e:/workspace/backend/src/api.ts")
+				expect(root).to.not.be.undefined
+				expect(root!.name).to.equal("backend")
+			})
+		})
+
+		runWinOnly("resolvePath with empty or mismatched roots (multi-root)", () => {
+			it("SHOULD warn when roots array is empty", () => {
+				const manager = new WorkspaceRootManager([], 0)
+				const adapter = new WorkspacePathAdapter({
+					cwd: "E:\\workspace\\vscode\\dline",
+					isMultiRootEnabled: true,
+					workspaceManager: manager,
+				})
+
+				const absolutePath = "e:/workspace/vscode/dline/src/core/api/providers/models/xai.ts"
+				const result = adapter.resolvePath(absolutePath)
+
+				// Result should still be returned (path passed through)
+				expect(toPosixPath(result)).to.equal("e:/workspace/vscode/dline/src/core/api/providers/models/xai.ts")
+
+				// BUG: warning fires when roots is empty
+				const warnCalls = consoleWarnStub.mock.calls.filter(
+					(call: string[]) => typeof call[0] === "string" && call[0].includes("doesn't belong"),
+				)
+				expect(warnCalls).to.have.lengthOf(1)
+			})
+
+			it("SHOULD warn when roots don't contain the target path (different root)", () => {
+				const winRoots: WorkspaceRoot[] = [{ path: "D:\\other\\project", name: "other", vcs: VcsType.Git }]
+				const manager = new WorkspaceRootManager(winRoots, 0)
+				const adapter = new WorkspacePathAdapter({
+					cwd: "E:\\workspace\\vscode\\dline",
+					isMultiRootEnabled: true,
+					workspaceManager: manager,
+				})
+
+				const absolutePath = "e:/workspace/vscode/dline/src/core/api/providers/models/xai.ts"
+				adapter.resolvePath(absolutePath)
+
+				const warnCalls = consoleWarnStub.mock.calls.filter(
+					(call: string[]) => typeof call[0] === "string" && call[0].includes("doesn't belong"),
+				)
+				expect(warnCalls).to.have.lengthOf(1)
+			})
 		})
 	})
 })

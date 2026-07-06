@@ -216,3 +216,9 @@ export const askSageModels: Record<string, ModelInfo> = {
 		},
 	},
 }
+
+/** Default model ID for Ask Sage provider */
+export const askSageDefaultModelId = "claude-4-sonnet"
+
+/** Default API URL for Ask Sage provider */
+export const askSageDefaultURL = "https://api.asksage.ai/server"

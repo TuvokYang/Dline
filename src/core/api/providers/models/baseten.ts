@@ -204,3 +204,6 @@ export const basetenModels: Record<string, ModelInfo> = {
 		},
 	},
 }
+
+/** Default model ID for Baseten provider */
+export const basetenDefaultModelId = "zai-org/GLM-4.6"

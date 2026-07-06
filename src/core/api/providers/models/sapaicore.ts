@@ -341,3 +341,6 @@ export const sapAiCoreModels: Record<string, ModelInfo> = {
 		},
 	},
 }
+
+/** Default model ID for SAP AI Core provider */
+export const sapAiCoreDefaultModelId = "anthropic--claude-3.5-sonnet"

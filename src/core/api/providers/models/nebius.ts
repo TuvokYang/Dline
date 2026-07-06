@@ -314,3 +314,6 @@ export const nebiusModels: Record<string, ModelInfo> = {
 		},
 	},
 }
+
+/** Default model ID for Nebius provider */
+export const nebiusDefaultModelId = "Qwen/Qwen2.5-32B-Instruct-fast"

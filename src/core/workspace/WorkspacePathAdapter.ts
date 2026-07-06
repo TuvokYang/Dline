@@ -47,6 +47,11 @@ export class WorkspacePathAdapter {
 			// Already absolute, just validate it belongs to a workspace
 			const root = manager.resolvePathToRoot(rel)
 			if (!root) {
+				// Diagnostic: log context to help identify root cause
+				const roots = manager.getRoots()
+				Logger.debug(
+					`[WorkspacePathAdapter] Path not in any workspace. path="${rel}", cwd="${this.config.cwd}", roots=[${roots.map((r) => r.path).join(", ")}]`,
+				)
 				// Path doesn't belong to any workspace, but return it anyway
 				Logger.warn(`[WorkspacePathAdapter] Absolute path ${rel} doesn't belong to any workspace`)
 			}
