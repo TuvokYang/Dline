@@ -723,7 +723,7 @@ class Controller {
   async downloadMcp(mcpId: string) {
     // Fetch server details from marketplace
     const response = await axios.post<McpDownloadResponse>(
-      "https://api.dline.bot/v1/mcp/download",
+      "https://api.cline.bot/v1/mcp/download",
       { mcpId },
       {
         headers: { "Content-Type": "application/json" },
