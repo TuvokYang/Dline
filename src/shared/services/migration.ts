@@ -150,6 +150,8 @@ async function getMigrationPaths(options: ClineToDlineMigrationOptions) {
 		newCheckpointsDir: path.join(dlineDocumentsDir, "checkpoints"),
 		newPuppeteerDir: path.join(homeDir, ".dline", "puppeteer"),
 		newCacheDir: path.join(homeDir, ".dline", "cache"),
+		oldMcpSettings: path.join(documentsDir, "Cline", "settings", "cline_mcp_settings.json"),
+		newMcpSettings: path.join(dlineDocumentsDir, "settings", "mcp_settings.json"),
 		legacyVscodeGlobalStoragePaths: uniquePaths(options.legacyVscodeGlobalStoragePaths),
 	}
 }
@@ -343,6 +345,19 @@ async function buildMigrationPlan(options: ClineToDlineMigrationOptions = {}): P
 					return false
 				}
 				await copyFileIntoEmptyTarget(paths.oldEndpoints, paths.newEndpoints)
+				return true
+			},
+		})
+	}
+
+	if (await shouldCopyFile(paths.oldMcpSettings, paths.newMcpSettings)) {
+		steps.push({
+			detail: "Documents/Cline/settings/cline_mcp_settings.json -> Documents/Dline/settings/mcp_settings.json",
+			run: async () => {
+				if (!(await shouldCopyFile(paths.oldMcpSettings, paths.newMcpSettings))) {
+					return false
+				}
+				await copyFileIntoEmptyTarget(paths.oldMcpSettings, paths.newMcpSettings)
 				return true
 			},
 		})

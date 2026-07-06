@@ -16,7 +16,7 @@ describe("syncRemoteMcpServersToSettings", () => {
 		sandbox = { mockRestore: () => {} }
 		tempDir = path.join(os.tmpdir(), `mcp-sync-test-${Date.now()}-${Math.random().toString(36).slice(2)}`)
 		await fs.mkdir(tempDir, { recursive: true })
-		settingsPath = path.join(tempDir, "cline_mcp_settings.json")
+		settingsPath = path.join(tempDir, "mcp_settings.json")
 
 		vi.spyOn(diskModule, "getMcpSettingsFilePath").mockImplementation(async () => {
 			try {

@@ -98,7 +98,7 @@ export const GlobalFileNames = {
 	groqModels: "groq_models.json",
 	basetenModels: "baseten_models.json",
 	hicapModels: "hicap_models.json",
-	mcpSettings: "cline_mcp_settings.json",
+	mcpSettings: "mcp_settings.json",
 	dlineDir: ".dline",
 	dlineRulesDir: ".dline/rules",
 	hooksDir: ".dline/hooks",
