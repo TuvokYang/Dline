@@ -325,14 +325,14 @@ class ClineEndpoint {
 					environment: Environment.local,
 					appBaseUrl: "http://localhost:3000",
 					apiBaseUrl: "http://localhost:7777",
-					mcpBaseUrl: "https://api.cline.bot/v1/mcp",
+					mcpBaseUrl: "https://api.dline.bot/v1/mcp",
 				}
 			default:
 				return {
 					environment: Environment.production,
 					appBaseUrl: "https://app.dline.bot",
 					apiBaseUrl: "https://api.dline.bot",
-					mcpBaseUrl: "https://api.cline.bot/v1/mcp",
+					mcpBaseUrl: "https://api.dline.bot/v1/mcp",
 				}
 		}
 	}
