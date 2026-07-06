@@ -9,7 +9,7 @@ vi.mock("@/config", () => ({
 			environment: "production",
 			appBaseUrl: "https://app.dline.bot",
 			apiBaseUrl: "https://api.dline.bot",
-			mcpBaseUrl: "https://mcp.dline.bot",
+			mcpBaseUrl: "https://mcp.cline.bot",
 		},
 	},
 	ClineEnv: {

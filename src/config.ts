@@ -318,21 +318,21 @@ class ClineEndpoint {
 					environment: Environment.staging,
 					appBaseUrl: "https://staging-app.dline.bot",
 					apiBaseUrl: "https://core-api.staging.int.dline.bot",
-					mcpBaseUrl: "https://core-api.staging.int.dline.bot/v1/mcp",
+					mcpBaseUrl: "https://core-api.staging.int.cline.bot/v1/mcp",
 				}
 			case Environment.local:
 				return {
 					environment: Environment.local,
 					appBaseUrl: "http://localhost:3000",
 					apiBaseUrl: "http://localhost:7777",
-					mcpBaseUrl: "https://api.dline.bot/v1/mcp",
+					mcpBaseUrl: "https://api.cline.bot/v1/mcp",
 				}
 			default:
 				return {
 					environment: Environment.production,
 					appBaseUrl: "https://app.dline.bot",
 					apiBaseUrl: "https://api.dline.bot",
-					mcpBaseUrl: "https://api.dline.bot/v1/mcp",
+					mcpBaseUrl: "https://api.cline.bot/v1/mcp",
 				}
 		}
 	}
