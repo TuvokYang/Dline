@@ -153,13 +153,19 @@ export const ActionButtons: React.FC<ActionButtonsProps> = ({
 	// Keyboard event handler
 	const handleKeyDown = useCallback(
 		(event: KeyboardEvent) => {
-			if (event.key === "Escape") {
-				event.preventDefault()
-				event.stopPropagation()
-				handleActionClick("cancel")
+			if (event.key !== "Escape") {
+				return
 			}
+
+			if (chatState.taskUiState && !chatState.taskUiState.cancelEnabled) {
+				return
+			}
+
+			event.preventDefault()
+			event.stopPropagation()
+			handleActionClick("cancel")
 		},
-		[handleActionClick],
+		[chatState.taskUiState, handleActionClick],
 	)
 
 	useEffect(() => {
@@ -167,22 +173,17 @@ export const ActionButtons: React.FC<ActionButtonsProps> = ({
 		return () => window.removeEventListener("keydown", handleKeyDown)
 	}, [handleKeyDown])
 
-	if (!task) {
-		return null
-	}
-
 	// Priority 1: Use taskUiState if available (snapshot-first architecture)
 	if (chatState.taskUiState?.actions && chatState.taskUiState.actions.length > 0) {
 		// Limit to max 3 buttons to prevent UI crowding
 		const visibleActions = chatState.taskUiState.actions.slice(0, 3)
 		const canInteract = !isProcessing
-		const isStreaming = task.partial === true
+		const isStreaming = task?.partial === true
 		const opacity = canInteract || isStreaming ? 1 : 0.5
 
 		return (
 			<div className="flex mx-3.5 border border-(--vscode-panel-border) rounded gap-1.5" style={{ opacity }}>
 				{visibleActions.map((action, index) => {
-					const mappedAction = mapActionType(action.type)
 					// First button is primary, rest are secondary
 					const appearance = index === 0 ? "primary" : "secondary"
 
@@ -192,7 +193,15 @@ export const ActionButtons: React.FC<ActionButtonsProps> = ({
 							className="flex-1 focus:ring-2 focus:ring-[--vscode-focusBorder] rounded"
 							disabled={!action.enabled || !canInteract}
 							key={action.type}
-							onClick={() => handleActionClick(mappedAction, inputValue, selectedImages, selectedFiles)}>
+							onClick={() => {
+								if (isProcessing) {
+									return
+								}
+								setIsProcessing(true)
+								void messageHandlers.executeTaskUiAction(action).catch(() => {
+									setIsProcessing(false)
+								})
+							}}>
 							{action.label}
 						</VSCodeButton>
 					)
@@ -204,6 +213,10 @@ export const ActionButtons: React.FC<ActionButtonsProps> = ({
 	// When taskUiState says hide footer (conversation awaiting, idle, etc.), don't fall
 	// back to legacy buttonConfig — it could incorrectly show a Cancel button.
 	if (chatState.taskUiState && !chatState.taskUiState.showFooter) {
+		return null
+	}
+
+	if (!task) {
 		return null
 	}
 

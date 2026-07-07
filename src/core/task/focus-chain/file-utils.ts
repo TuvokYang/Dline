@@ -407,12 +407,7 @@ export async function ensureFocusChainFile(taskId: string, initialFocusChainCont
 
 	// Create file if it doesn't exist
 	if (!fileExists) {
-		const focusChainContent =
-			initialFocusChainContent ||
-			`- [ ] Example checklist item
-- [ ] Another checklist item
-- [x] Completed example item`
-
+		const focusChainContent = initialFocusChainContent || ""
 		const fileContent = createFocusChainMarkdownContent(taskId, focusChainContent)
 		await fs.writeFile(focusChainFilePath, fileContent, "utf8")
 	}

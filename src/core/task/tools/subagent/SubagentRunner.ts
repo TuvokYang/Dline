@@ -2,6 +2,7 @@ import * as path from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import type { ApiHandler, buildApiHandler } from "@core/api"
 import { resolveProviderFromProfile } from "@core/api"
+import { DEFAULT_API_PROVIDER } from "@shared/api"
 import { parseAssistantMessageV2, ToolUse } from "@core/assistant-message"
 import { discoverAvailableSkills } from "@core/context/instructions/user-instructions/skills"
 import { formatResponse } from "@core/prompts/responses"
@@ -322,15 +323,11 @@ export class SubagentRunner {
 
 		try {
 			const mode = this.baseConfig.services.stateManager.getGlobalSettingsKey("mode")
-			const apiConfiguration = this.baseConfig.services.stateManager.getApiConfiguration()
 			const api = this.apiHandler
 			this.activeApiAbort = api.abort?.bind(api)
 
-			const providerId = (
-				mode === "plan"
-					? resolveProviderFromProfile(apiConfiguration.planModeProfile)
-					: resolveProviderFromProfile(apiConfiguration.actModeProfile)
-			) as string
+			// Use handler's provider ID to avoid cross-task interference from global StateManager
+			const providerId = api.getProviderId?.() ?? DEFAULT_API_PROVIDER
 			const providerInfo = {
 				providerId,
 				model: api.getModel(),

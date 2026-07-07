@@ -2,7 +2,7 @@
  * Shared types and interfaces for the chat view components
  */
 
-import { ClineAsk, ClineMessage, TaskUiState } from "@shared/ExtensionMessage"
+import { ClineAsk, ClineMessage, TaskUiAction, TaskUiState } from "@shared/ExtensionMessage"
 import { ListRange, VirtuosoHandle } from "react-virtuoso"
 import { ButtonActionType } from "../shared/buttonConfig"
 
@@ -71,6 +71,7 @@ export interface ChatState {
  */
 export interface MessageHandlers {
 	executeButtonAction: (action: ButtonActionType, text?: string, images?: string[], files?: string[]) => Promise<void>
+	executeTaskUiAction: (action: TaskUiAction) => Promise<void>
 	handleSendMessage: (text: string, images: string[], files: string[]) => Promise<void>
 	handleTaskCloseButtonClick: () => void
 	startNewTask: () => Promise<void>

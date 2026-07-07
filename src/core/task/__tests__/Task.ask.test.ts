@@ -101,8 +101,12 @@ function createFakeTask(taskState: {
 		withApprovalVisibleCallback: (Task.prototype as any).withApprovalVisibleCallback,
 		markApprovalAskVisible: (Task.prototype as any).markApprovalAskVisible,
 		markConversationAskVisible: (Task.prototype as any).markConversationAskVisible,
+		markErrorRecoveryAskVisible: (Task.prototype as any).markErrorRecoveryAskVisible,
+		markResumeAskVisible: (Task.prototype as any).markResumeAskVisible,
 		isPendingToolApprovalAsk: (Task.prototype as any).isPendingToolApprovalAsk,
 		isConversationalAsk: (Task.prototype as any).isConversationalAsk,
+		isErrorRecoveryAsk: (Task.prototype as any).isErrorRecoveryAsk,
+		isResumeAsk: (Task.prototype as any).isResumeAsk,
 		isParallelToolCallingEnabled: () => false,
 		emitStateSnapshot: async () => undefined,
 		postStateToWebview: async () => undefined,
@@ -158,6 +162,82 @@ describe("Task.ask", () => {
 			const result = await askPromise
 			assert.equal(result.response, "yesButtonClicked")
 		} finally {
+			clock.useRealTimers()
+		}
+	})
+
+	it("marks error recovery asks in snapshot before the user responds", async () => {
+		const clock = vi.useFakeTimers()
+		const notificationStub = vi.spyOn(NotificationHook, "emitUserAttentionNotification").mockResolvedValue()
+		const taskState = {
+			abort: false,
+			askResponse: undefined as string | undefined,
+			askResponseText: undefined as string | undefined,
+			askResponseImages: undefined as string[] | undefined,
+			askResponseFiles: undefined as string[] | undefined,
+			lastMessageTs: undefined as number | undefined,
+		}
+		const { fakeTask } = createFakeTask(taskState)
+		let capturedPhase: string | undefined
+		let capturedContext: unknown
+		let didPostState = false
+
+		const controller = fakeTask.taskController as {
+			transition: (phase: string, ctx: unknown) => Promise<void>
+		}
+		controller.transition = async (phase: string, ctx: unknown) => {
+			capturedPhase = phase
+			capturedContext = ctx
+		}
+		fakeTask.postStateToWebview = async () => {
+			didPostState = true
+		}
+
+		try {
+			const askPromise = (
+				Task.prototype as unknown as {
+					ask: (
+						type: "api_req_failed",
+						text?: string,
+						partial?: boolean,
+						options?: { onAskVisible?: (askTs: number) => void },
+					) => Promise<{ response: string; text?: string }>
+				}
+			).ask.call(fakeTask, "api_req_failed", "network failed")
+
+			await flushMicrotasks()
+			assert.equal(capturedPhase, "awaiting_approval")
+			const context = capturedContext as {
+				apiIndex: number
+				awaiting: unknown
+				error: unknown
+				onSnapshot: unknown
+			}
+			assert.equal(context.apiIndex, -1)
+			assert.deepEqual(context.awaiting, {
+				kind: "error_recovery",
+				taskAsk: "api_req_failed",
+				messageTs: taskState.lastMessageTs,
+			})
+			assert.deepEqual(context.error, {
+				kind: "api_req_failed",
+				sourceAsk: "api_req_failed",
+				message: "network failed",
+				actions: ["retry", "start_new_task"],
+				retryable: true,
+				processAllowed: false,
+				messageTs: taskState.lastMessageTs,
+			})
+			assert.equal(typeof context.onSnapshot, "function")
+			assert.equal(didPostState, true)
+			assert.equal(taskState.askResponse, undefined)
+
+			taskState.askResponse = "yesButtonClicked"
+			await await clock.advanceTimersByTimeAsync(100)
+			const result = await askPromise
+			assert.equal(result.response, "yesButtonClicked")
+		} finally {
+			notificationStub.mockRestore()
 			clock.useRealTimers()
 		}
 	})
@@ -234,6 +314,65 @@ describe("Task.ask", () => {
 			assert.equal(result.response, "yesButtonClicked")
 		} finally {
 			notificationStub.mockRestore()
+			clock.useRealTimers()
+		}
+	})
+
+	it("marks resume asks in snapshot before the user responds", async () => {
+		const clock = vi.useFakeTimers()
+		const taskState = {
+			abort: false,
+			askResponse: undefined as string | undefined,
+			askResponseText: undefined as string | undefined,
+			askResponseImages: undefined as string[] | undefined,
+			askResponseFiles: undefined as string[] | undefined,
+			lastMessageTs: undefined as number | undefined,
+		}
+		const { fakeTask } = createFakeTask(taskState)
+		let capturedPhase: string | undefined
+		let capturedContext: unknown
+		let didPostState = false
+
+		const controller = fakeTask.taskController as {
+			transition: (phase: string, ctx: unknown) => Promise<void>
+		}
+		controller.transition = async (phase: string, ctx: unknown) => {
+			capturedPhase = phase
+			capturedContext = ctx
+		}
+		fakeTask.postStateToWebview = async () => {
+			didPostState = true
+		}
+
+		try {
+			const askPromise = (
+				Task.prototype as unknown as {
+					ask: (type: "resume_task") => Promise<{ response: string; text?: string }>
+				}
+			).ask.call(fakeTask, "resume_task")
+
+			await flushMicrotasks()
+			assert.equal(capturedPhase, "paused")
+			const context = capturedContext as {
+				apiIndex: number
+				awaiting: unknown
+				onSnapshot: unknown
+			}
+			assert.equal(context.apiIndex, -1)
+			assert.deepEqual(context.awaiting, {
+				kind: "resume",
+				taskAsk: "resume_task",
+				messageTs: taskState.lastMessageTs,
+			})
+			assert.equal(typeof context.onSnapshot, "function")
+			assert.equal(didPostState, true)
+			assert.equal(taskState.askResponse, undefined)
+
+			taskState.askResponse = "yesButtonClicked"
+			await await clock.advanceTimersByTimeAsync(100)
+			const result = await askPromise
+			assert.equal(result.response, "yesButtonClicked")
+		} finally {
 			clock.useRealTimers()
 		}
 	})

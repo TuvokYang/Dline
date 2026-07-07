@@ -87,6 +87,8 @@ export interface ApiHandler {
 	abort?(): void
 	/** Parse a provider-specific error into a ClineError. Falls back to generic ClineError.transform if not implemented. */
 	parseError?(error: any, modelId?: string): ClineError
+	/** Return the provider ID this handler was built for (from profile.provider). */
+	getProviderId?(): string
 }
 
 export interface ApiHandlerModel {
@@ -159,95 +161,99 @@ function fromProfileModelInfo(modelInfo?: ProtoModelInfo): ModelInfo | undefined
  */
 function createHandlerForProvider(ctx: ApiHandlerContext): ApiHandler {
 	const { profile } = ctx
+	const providerId = profile.provider
 
+	let handler: ApiHandler
 	switch (profile.provider) {
 		case "anthropic":
-			return new AnthropicHandler(ctx)
+			handler = new AnthropicHandler(ctx); break
 		case "openrouter":
-			return new OpenRouterHandler(ctx)
+			handler = new OpenRouterHandler(ctx); break
 		case "bedrock":
-			return new AwsBedrockHandler(ctx)
+			handler = new AwsBedrockHandler(ctx); break
 		case "vertex":
-			return new VertexHandler(ctx)
+			handler = new VertexHandler(ctx); break
 		case "openai":
-			return new OpenAiHandler(ctx)
+			handler = new OpenAiHandler(ctx); break
 		case "ollama":
-			return new OllamaHandler(ctx)
+			handler = new OllamaHandler(ctx); break
 		case "lmstudio":
-			return new LmStudioHandler(ctx)
+			handler = new LmStudioHandler(ctx); break
 		case "gemini":
-			return new GeminiHandler(ctx)
+			handler = new GeminiHandler(ctx); break
 		case "openai-native":
-			return new OpenAiNativeHandler(ctx)
+			handler = new OpenAiNativeHandler(ctx); break
 		case "openai-codex":
-			return new OpenAiCodexHandler(ctx)
+			handler = new OpenAiCodexHandler(ctx); break
 		case "deepseek":
-			return new DeepSeekHandler(ctx)
+			handler = new DeepSeekHandler(ctx); break
 		case "requesty":
-			return new RequestyHandler(ctx)
+			handler = new RequestyHandler(ctx); break
 		case "fireworks":
-			return new FireworksHandler(ctx)
+			handler = new FireworksHandler(ctx); break
 		case "together":
-			return new TogetherHandler(ctx)
+			handler = new TogetherHandler(ctx); break
 		case "qwen":
-			return new QwenHandler(ctx)
+			handler = new QwenHandler(ctx); break
 		case "qwen-code":
-			return new QwenCodeHandler(ctx)
+			handler = new QwenCodeHandler(ctx); break
 		case "doubao":
-			return new DoubaoHandler(ctx)
+			handler = new DoubaoHandler(ctx); break
 		case "mistral":
-			return new MistralHandler(ctx)
+			handler = new MistralHandler(ctx); break
 		case "vscode-lm":
-			return new VsCodeLmHandler(ctx)
+			handler = new VsCodeLmHandler(ctx); break
 		case "cline":
-			return new ClineHandler(ctx)
+			handler = new ClineHandler(ctx); break
 		case "litellm":
-			return new LiteLlmHandler(ctx)
+			handler = new LiteLlmHandler(ctx); break
 		case "moonshot":
-			return new MoonshotHandler(ctx)
+			handler = new MoonshotHandler(ctx); break
 		case "nebius":
-			return new NebiusHandler(ctx)
+			handler = new NebiusHandler(ctx); break
 		case "asksage":
-			return new AskSageHandler(ctx)
+			handler = new AskSageHandler(ctx); break
 		case "xai":
-			return new XAIHandler(ctx)
+			handler = new XAIHandler(ctx); break
 		case "sambanova":
-			return new SambanovaHandler(ctx)
+			handler = new SambanovaHandler(ctx); break
 		case "cerebras":
-			return new CerebrasHandler(ctx)
+			handler = new CerebrasHandler(ctx); break
 		case "groq":
-			return new GroqHandler(ctx)
+			handler = new GroqHandler(ctx); break
 		case "sapaicore":
-			return new SapAiCoreHandler(ctx)
+			handler = new SapAiCoreHandler(ctx); break
 		case "baseten":
-			return new BasetenHandler(ctx)
+			handler = new BasetenHandler(ctx); break
 		case "huggingface":
-			return new HuggingFaceHandler(ctx)
+			handler = new HuggingFaceHandler(ctx); break
 		case "huawei-cloud-maas":
-			return new HuaweiCloudMaaSHandler(ctx)
+			handler = new HuaweiCloudMaaSHandler(ctx); break
 		case "claude-code":
-			return new ClaudeCodeHandler(ctx)
+			handler = new ClaudeCodeHandler(ctx); break
 		case "dify":
-			return new DifyHandler(ctx)
+			handler = new DifyHandler(ctx); break
 		case "vercel-ai-gateway":
-			return new VercelAIGatewayHandler(ctx)
+			handler = new VercelAIGatewayHandler(ctx); break
 		case "zai":
-			return new ZAiHandler(ctx)
+			handler = new ZAiHandler(ctx); break
 		case "oca":
-			return new OcaHandler(ctx)
+			handler = new OcaHandler(ctx); break
 		case "aihubmix":
-			return new AIhubmixHandler(ctx)
+			handler = new AIhubmixHandler(ctx); break
 		case "minimax":
-			return new MinimaxHandler(ctx)
+			handler = new MinimaxHandler(ctx); break
 		case "hicap":
-			return new HicapHandler(ctx)
+			handler = new HicapHandler(ctx); break
 		case "nousResearch":
-			return new NousResearchHandler(ctx)
+			handler = new NousResearchHandler(ctx); break
 		case "wandb":
-			return new WandbHandler(ctx)
+			handler = new WandbHandler(ctx); break
 		default:
 			throw new Error(`Unknown provider: ${profile.provider}`)
 	}
+	// Inject provider ID so callers can get it without going through global StateManager
+	return Object.assign(handler, { getProviderId: () => providerId })
 }
 
 /** @deprecated Each handler now reads its own provider config via ctx.profile.[provider] */

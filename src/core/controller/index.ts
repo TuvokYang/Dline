@@ -599,7 +599,18 @@ export class Controller {
 
 			if (this.task) {
 				const apiConfiguration = this.stateManager.getApiConfiguration()
-				this.task.api = buildApiHandler({ ...apiConfiguration, ulid: this.task.ulid }, modeToSwitchTo)
+				const effectiveConfig = { ...apiConfiguration, ulid: this.task.ulid }
+				this.task.api = buildApiHandler(effectiveConfig, modeToSwitchTo)
+				// Sync per-task profile cache so getCurrentProviderInfo reads the correct value
+				const currentProfile =
+					modeToSwitchTo === "plan" ? effectiveConfig.planModeProfile : effectiveConfig.actModeProfile
+				if (currentProfile) {
+					if (modeToSwitchTo === "plan") {
+						this.task.taskSm.setPlanModeProfile(currentProfile)
+					} else {
+						this.task.taskSm.setActModeProfile(currentProfile)
+					}
+				}
 			}
 
 			await this.postStateToWebview()
@@ -1303,6 +1314,33 @@ export class Controller {
 		const checklistFromTaskState = this.task?.taskState.currentFocusChainChecklist || null
 		const checklistForState = checklistFromTaskState || getLastTaskProgressText(allMessages)
 
+		const isTaskWorkingForUi = (() => {
+			if (!this.task) return false
+			const ts = this.task.taskState
+			// Active streaming states
+			if (ts.isStreaming || ts.isWaitingForFirstChunk || ts.isExecutingSubagent) return true
+			// Not initialized or already aborted
+			if (!ts.isInitialized || ts.abort) return false
+			// Check for natural stop points in message history
+			const msgs = this.task.messageStateHandler.clineMessages
+			const lastMsg = msgs[msgs.length - 1]
+			if (!lastMsg) return false
+			// Turn-end or resume waiting = stopped
+			if (
+				lastMsg.ask === "completion_result" ||
+				lastMsg.ask === "resume_task" ||
+				lastMsg.ask === "resume_completed_task" ||
+				lastMsg.ask === "qna_respond" ||
+				lastMsg.ask === "followup" ||
+				lastMsg.ask === "plan_mode_respond"
+			)
+				return false
+			// Unanswered approval ask = waiting for user = stopped
+			if (lastMsg.type === "ask" && ts.askResponse === undefined) return false
+			// Otherwise: tool executing, checkpoint saving, etc. = working
+			return true
+		})()
+
 		const result: ExtensionState = {
 			version,
 			apiConfiguration,
@@ -1403,32 +1441,7 @@ export class Controller {
 			 *  Drives Cancel button visibility in the frontend.
 			 *  True when: streaming, waiting for first chunk, subagent, tool execution, checkpoint.
 			 *  False when: turn-end, resume waiting, approval waiting, aborted. */
-			isWorking: (() => {
-				if (!this.task) return false
-				const ts = this.task.taskState
-				// Active streaming states
-				if (ts.isStreaming || ts.isWaitingForFirstChunk || ts.isExecutingSubagent) return true
-				// Not initialized or already aborted
-				if (!ts.isInitialized || ts.abort) return false
-				// Check for natural stop points in message history
-				const msgs = this.task.messageStateHandler.clineMessages
-				const lastMsg = msgs[msgs.length - 1]
-				if (!lastMsg) return false
-				// Turn-end or resume waiting = stopped
-				if (
-					lastMsg.ask === "completion_result" ||
-					lastMsg.ask === "resume_task" ||
-					lastMsg.ask === "resume_completed_task" ||
-					lastMsg.ask === "qna_respond" ||
-					lastMsg.ask === "followup" ||
-					lastMsg.ask === "plan_mode_respond"
-				)
-					return false
-				// Unanswered approval ask = waiting for user = stopped
-				if (lastMsg.type === "ask" && ts.askResponse === undefined) return false
-				// Otherwise: tool executing, checkpoint saving, etc. = working
-				return true
-			})(),
+			isWorking: isTaskWorkingForUi,
 			/** Task lock status — computed on each state push so the frontend
 			 *  can show a lock banner when the task is in read-only mode. */
 			taskLockStatus: this.getTaskLockStatus(),
@@ -1437,7 +1450,7 @@ export class Controller {
 			taskUiState: (() => {
 				if (!this.task?.taskController) return undefined
 				const snapshot = this.task.findLatestStateSnapshot()
-				return this.task.taskController.buildTaskUiState(snapshot ?? null)
+				return this.task.taskController.buildTaskUiState(snapshot ?? null, { isTaskWorking: isTaskWorkingForUi })
 			})(),
 		}
 

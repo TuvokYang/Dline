@@ -13,7 +13,8 @@ import { computeLineDiffStats } from "./lineDiffStats"
  */
 export function getModelInfo(config: TaskConfig): { providerId: string; modelId: string } {
 	const apiConfig = config.services.stateManager.getApiConfiguration()
-	const currentMode = config.services.stateManager.getGlobalSettingsKey("mode")
+	// Use task-level mode instead of global mode to avoid cross-task interference
+	const currentMode = config.mode
 	const providerId = resolveProvider(apiConfig, currentMode)
 	const modelId = config.api.getModel().id
 	return { providerId: providerId ?? "", modelId }

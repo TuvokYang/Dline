@@ -11,6 +11,10 @@ import { TaskPhaseMachine } from "./TaskPhaseMachine"
 import type { TaskSnapshot } from "./TaskSnapshot"
 import type { ToolExecutor } from "./ToolExecutor"
 
+export interface BuildTaskUiStateOptions {
+	isTaskWorking?: boolean
+}
+
 // Re-export types for backward compatibility
 export { BlockPhase } from "./BlockPhaseMachine"
 export type { BlockEvent, BlockLifecycle }
@@ -203,7 +207,7 @@ export class TaskController {
 	 * Build TaskUiState from current snapshot for frontend consumption.
 	 * This is the single source of truth for footer buttons and input state.
 	 */
-	buildTaskUiState(snapshot: TaskSnapshot | null): TaskUiState {
+	buildTaskUiState(snapshot: TaskSnapshot | null, options: BuildTaskUiStateOptions = {}): TaskUiState {
 		if (!snapshot) {
 			return {
 				phase: "idle",
@@ -273,7 +277,7 @@ export class TaskController {
 			return {
 				phase: "awaiting_approval",
 				inputEnabled: false,
-				cancelEnabled: true,
+				cancelEnabled: false,
 				showFooter: true,
 				actions: [
 					{ type: "approve", label: "Approve", enabled: true },
@@ -298,12 +302,38 @@ export class TaskController {
 			}
 		}
 
-		// Working (streaming, executing, etc.)
-		if (
+		const isWorkingPhase =
 			snapshot.phase === TaskPhase.STREAMING ||
 			snapshot.phase === TaskPhase.EXECUTING ||
 			snapshot.phase === TaskPhase.RESUMING
-		) {
+		const isRecoverableStalePhase = isWorkingPhase || snapshot.phase === TaskPhase.CANCELLING || snapshot.phase === TaskPhase.PAUSED
+		const isTaskWorking = options.isTaskWorking ?? isWorkingPhase
+
+		if (isRecoverableStalePhase && !isTaskWorking) {
+			return {
+				phase: "awaiting_resume",
+				inputEnabled: true,
+				cancelEnabled: false,
+				showFooter: true,
+				actions: [{ type: "resume", label: "Resume", enabled: true }],
+				activeAsk: "resume_task",
+				reason: `resume-from-stale-working:${snapshot.phase}`,
+			}
+		}
+
+		if (snapshot.phase === TaskPhase.CANCELLING) {
+			return {
+				phase: "cancelled",
+				inputEnabled: false,
+				cancelEnabled: false,
+				showFooter: false,
+				actions: [],
+				reason: "cancelling",
+			}
+		}
+
+		// Working (streaming, executing, etc.)
+		if (isWorkingPhase && isTaskWorking) {
 			return {
 				phase: "working",
 				inputEnabled: false,

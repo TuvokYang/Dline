@@ -1,4 +1,4 @@
-import type { ClineMessage } from "@shared/ExtensionMessage"
+import type { ClineMessage, TaskUiAction } from "@shared/ExtensionMessage"
 import { EmptyRequest, StringRequest } from "@shared/proto/dline/common"
 import { AskResponseRequest, NewTaskRequest } from "@shared/proto/dline/task"
 import { useCallback, useRef } from "react"
@@ -30,6 +30,7 @@ export function useMessageHandlers(
 		setEnableButtons,
 		clineAsk,
 		lastMessage,
+		taskUiState,
 	} = chatState
 	const cancelInFlightRef = useRef(false)
 
@@ -172,6 +173,66 @@ export function useMessageHandlers(
 		setSelectedImages([])
 		setSelectedFiles([])
 	}, [setInputValue, setActiveQuote, setSelectedImages, setSelectedFiles])
+
+	/**
+	 * Execute a snapshot-first task action with explicit semantics.
+	 * Button-only actions do not forward input text unless the action type requires it.
+	 */
+	const executeTaskUiAction = useCallback(
+		async (action: TaskUiAction) => {
+			switch (action.type) {
+				case "retry":
+				case "process_anyway":
+				case "resume":
+				case "approve":
+				case "primary":
+					await TaskServiceClient.askResponse(AskResponseRequest.create({ responseType: "yesButtonClicked" }))
+					if (action.type === "retry" || action.type === "process_anyway") {
+						clearInputState()
+					}
+					break
+				case "reject":
+				case "secondary":
+					await TaskServiceClient.askResponse(AskResponseRequest.create({ responseType: "noButtonClicked" }))
+					clearInputState()
+					break
+				case "start_new_task":
+					await startNewTask()
+					break
+				case "cancel":
+					if (taskUiState?.cancelEnabled !== true || cancelInFlightRef.current) {
+						return
+					}
+					cancelInFlightRef.current = true
+					setSendingDisabled(true)
+					setEnableButtons(false)
+					try {
+						if (backgroundCommandRunning) {
+							await TaskServiceClient.cancelBackgroundCommand(EmptyRequest.create({})).catch((err) =>
+								console.error("Failed to cancel background command:", err),
+							)
+						}
+						await TaskServiceClient.cancelTask(EmptyRequest.create({}))
+					} finally {
+						cancelInFlightRef.current = false
+					}
+					break
+			}
+
+			if (disableAutoScrollRef) {
+				disableAutoScrollRef.current = false
+			}
+		},
+		[
+			backgroundCommandRunning,
+			clearInputState,
+			disableAutoScrollRef,
+			setEnableButtons,
+			setSendingDisabled,
+			startNewTask,
+			taskUiState?.cancelEnabled,
+		],
+	)
 
 	// Execute button action based on type
 	const executeButtonAction = useCallback(
@@ -336,8 +397,9 @@ export function useMessageHandlers(
 	}, [startNewTask])
 
 	return {
-		handleSendMessage,
 		executeButtonAction,
+		executeTaskUiAction,
+		handleSendMessage,
 		handleTaskCloseButtonClick,
 		startNewTask,
 	}

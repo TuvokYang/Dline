@@ -1,6 +1,6 @@
 import type { ClineMessage } from "@shared/ExtensionMessage"
-import { render, screen } from "@testing-library/react"
-import { describe, expect, it } from "vitest"
+import { fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { describe, expect, it, vi } from "vitest"
 import { ActionButtons } from "./ActionButtons"
 
 function makeMsg(overrides: Partial<ClineMessage> = {}): ClineMessage {
@@ -31,6 +31,7 @@ const mockChatState = {
 
 const mockMessageHandlers = {
 	executeButtonAction: () => Promise.resolve(),
+	executeTaskUiAction: () => Promise.resolve(),
 } as any
 
 describe("ActionButtons", () => {
@@ -127,6 +128,143 @@ describe("ActionButtons", () => {
 	})
 
 	describe("with taskUiState (snapshot-first architecture)", () => {
+		it("renders resume from taskUiState even when no visible task message exists", () => {
+			const mockChatStateWithTaskUi = {
+				...mockChatState,
+				taskUiState: {
+					phase: "awaiting_resume" as const,
+					inputEnabled: true,
+					cancelEnabled: false,
+					showFooter: true,
+					actions: [{ type: "resume" as const, label: "Resume", enabled: true }],
+					activeAsk: "resume_task" as const,
+					reason: "resume-from-stale-working:streaming",
+				},
+			}
+
+			render(
+				<ActionButtons
+					chatState={mockChatStateWithTaskUi}
+					messageHandlers={mockMessageHandlers}
+					messages={[]}
+					mode="act"
+					task={undefined}
+				/>,
+			)
+
+			expect(screen.getByText("Resume")).toBeTruthy()
+			expect(screen.queryByText(/Cancel/i)).toBeNull()
+		})
+
+		it("does not fall back to hidden resume when taskUiState hides footer", () => {
+			const mockChatStateWithTaskUi = {
+				...mockChatState,
+				taskUiState: {
+					phase: "awaiting_input" as const,
+					inputEnabled: true,
+					cancelEnabled: false,
+					showFooter: false,
+					actions: [],
+					activeAsk: "plan_mode_respond" as const,
+					reason: "conversation-awaiting",
+				},
+			}
+			const hiddenResume = makeMsg({
+				ask: "resume_task",
+				ts: 1000,
+			})
+
+			render(
+				<ActionButtons
+					chatState={mockChatStateWithTaskUi}
+					isLastMsgResume={true}
+					isWorking={true}
+					messageHandlers={mockMessageHandlers}
+					messages={[hiddenResume]}
+					mode="act"
+					task={hiddenResume}
+				/>,
+			)
+
+			expect(screen.queryByText(/Resume|Resume Task/i)).toBeNull()
+			expect(screen.queryByText(/Cancel/i)).toBeNull()
+		})
+
+		it("ignores Escape when taskUiState does not allow cancel", async () => {
+			const executeTaskUiAction = vi.fn().mockResolvedValue(undefined)
+			const executeButtonAction = vi.fn().mockResolvedValue(undefined)
+			const mockChatStateWithTaskUi = {
+				...mockChatState,
+				taskUiState: {
+					phase: "awaiting_error_recovery" as const,
+					inputEnabled: true,
+					cancelEnabled: false,
+					showFooter: true,
+					actions: [{ type: "process_anyway" as const, label: "Process Anyway", enabled: true }],
+					activeAsk: "mistake_limit_reached" as const,
+					reason: "error-recovery:mistake_limit_reached",
+				},
+			}
+			const finalMessage = makeMsg({
+				ts: 1000,
+				partial: false,
+			})
+
+			render(
+				<ActionButtons
+					chatState={mockChatStateWithTaskUi}
+					messageHandlers={{ ...mockMessageHandlers, executeButtonAction, executeTaskUiAction }}
+					messages={[finalMessage]}
+					mode="act"
+					task={finalMessage}
+				/>,
+			)
+
+			fireEvent.keyDown(window, { key: "Escape" })
+
+			await waitFor(() => {
+				expect(executeButtonAction).not.toHaveBeenCalled()
+				expect(executeTaskUiAction).not.toHaveBeenCalled()
+			})
+		})
+
+		it("executes process_anyway without forwarding input text", async () => {
+			const executeTaskUiAction = vi.fn().mockResolvedValue(undefined)
+			const mockChatStateWithTaskUi = {
+				...mockChatState,
+				inputValue: "try smaller steps",
+				taskUiState: {
+					phase: "awaiting_error_recovery" as const,
+					inputEnabled: true,
+					cancelEnabled: false,
+					showFooter: true,
+					actions: [{ type: "process_anyway" as const, label: "Process Anyway", enabled: true }],
+					activeAsk: "mistake_limit_reached" as const,
+					reason: "error-recovery:mistake_limit_reached",
+				},
+			}
+			const finalMessage = makeMsg({
+				ts: 1000,
+				partial: false,
+			})
+
+			render(
+				<ActionButtons
+					chatState={mockChatStateWithTaskUi}
+					messageHandlers={{ ...mockMessageHandlers, executeTaskUiAction }}
+					messages={[finalMessage]}
+					mode="act"
+					task={finalMessage}
+				/>,
+			)
+
+			fireEvent.click(screen.getByText("Process Anyway"))
+
+			await waitFor(() => {
+				expect(executeTaskUiAction).toHaveBeenCalledWith(mockChatStateWithTaskUi.taskUiState.actions[0])
+			})
+		})
+
 		it("renders buttons from taskUiState.actions", () => {
 			const mockChatStateWithTaskUi = {
 				...mockChatState,

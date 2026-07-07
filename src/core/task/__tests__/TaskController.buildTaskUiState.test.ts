@@ -45,6 +45,49 @@ describe("TaskController.buildTaskUiState", () => {
 		assert.equal(uiState.reason, "working:streaming")
 	})
 
+	it("returns resume state for historical streaming snapshot when task is not working", () => {
+		const tc = new TaskController(mockChannel)
+		const snapshot: TaskSnapshot = {
+			phase: TaskPhase.STREAMING,
+			apiIndex: 1,
+			timestamp: Date.now(),
+		}
+		const uiState = tc.buildTaskUiState(snapshot, { isTaskWorking: false })
+
+		assert.equal(uiState.phase, "awaiting_resume")
+		assert.equal(uiState.inputEnabled, true)
+		assert.equal(uiState.cancelEnabled, false)
+		assert.equal(uiState.showFooter, true)
+		assert.equal(uiState.actions.length, 1)
+		assert.equal(uiState.actions[0].type, "resume")
+		assert.equal(uiState.actions[0].label, "Resume")
+		assert.equal(uiState.activeAsk, "resume_task")
+		assert.equal(uiState.reason, "resume-from-stale-working:streaming")
+	})
+
+	it("returns resume state for historical cancelling snapshot when task is not working", () => {
+		const tc = new TaskController(mockChannel)
+		const snapshot: TaskSnapshot = {
+			phase: TaskPhase.CANCELLING,
+			apiIndex: 2,
+			timestamp: Date.now(),
+			cancel: {
+				source: "user",
+				fromPhase: TaskPhase.STREAMING,
+			},
+		}
+		const uiState = tc.buildTaskUiState(snapshot, { isTaskWorking: false })
+
+		assert.equal(uiState.phase, "awaiting_resume")
+		assert.equal(uiState.inputEnabled, true)
+		assert.equal(uiState.cancelEnabled, false)
+		assert.equal(uiState.showFooter, true)
+		assert.equal(uiState.actions.length, 1)
+		assert.equal(uiState.actions[0].type, "resume")
+		assert.equal(uiState.activeAsk, "resume_task")
+		assert.equal(uiState.reason, "resume-from-stale-working:cancelling")
+	})
+
 	it("returns approval awaiting state with approve/reject buttons", () => {
 		const tc = new TaskController(mockChannel)
 		const snapshot: TaskSnapshot = {
@@ -74,7 +117,7 @@ describe("TaskController.buildTaskUiState", () => {
 
 		assert.equal(uiState.phase, "awaiting_approval")
 		assert.equal(uiState.inputEnabled, false)
-		assert.equal(uiState.cancelEnabled, true)
+		assert.equal(uiState.cancelEnabled, false)
 		assert.equal(uiState.showFooter, true)
 		assert.equal(uiState.actions.length, 2)
 		assert.equal(uiState.actions[0].type, "approve")
