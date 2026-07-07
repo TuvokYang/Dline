@@ -16,6 +16,7 @@ interface TaskSectionProps {
 	}
 	lastApiReqTotalTokens?: number
 	selectedModelInfo: {
+		contextWindow?: number
 		supportsPromptCache: boolean
 		supportsImages: boolean
 	}
@@ -42,6 +43,7 @@ export const TaskSection: React.FC<TaskSectionProps> = ({
 			cacheHitRate={apiMetrics.cacheHitRate}
 			cacheReads={apiMetrics.totalCacheReads}
 			cacheWrites={apiMetrics.totalCacheWrites}
+			contextWindow={selectedModelInfo.contextWindow}
 			currency={apiMetrics.currency}
 			doesModelSupportPromptCache={selectedModelInfo.supportsPromptCache}
 			lastApiReqTotalTokens={lastApiReqTotalTokens}

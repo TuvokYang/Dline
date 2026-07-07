@@ -8,6 +8,7 @@ import { Mode } from "@shared/storage/types"
 import { ClineError } from "@/services/error"
 import { ClineStorageMessage } from "@/shared/messages/content"
 import { ClineTool } from "@/shared/tools"
+import { getProfileModelInfo } from "./model-info"
 import { AIhubmixHandler } from "./providers/aihubmix"
 import { AnthropicHandler } from "./providers/anthropic"
 import { AskSageHandler } from "./providers/asksage"
@@ -166,89 +167,131 @@ function createHandlerForProvider(ctx: ApiHandlerContext): ApiHandler {
 	let handler: ApiHandler
 	switch (profile.provider) {
 		case "anthropic":
-			handler = new AnthropicHandler(ctx); break
+			handler = new AnthropicHandler(ctx)
+			break
 		case "openrouter":
-			handler = new OpenRouterHandler(ctx); break
+			handler = new OpenRouterHandler(ctx)
+			break
 		case "bedrock":
-			handler = new AwsBedrockHandler(ctx); break
+			handler = new AwsBedrockHandler(ctx)
+			break
 		case "vertex":
-			handler = new VertexHandler(ctx); break
+			handler = new VertexHandler(ctx)
+			break
 		case "openai":
-			handler = new OpenAiHandler(ctx); break
+			handler = new OpenAiHandler(ctx)
+			break
 		case "ollama":
-			handler = new OllamaHandler(ctx); break
+			handler = new OllamaHandler(ctx)
+			break
 		case "lmstudio":
-			handler = new LmStudioHandler(ctx); break
+			handler = new LmStudioHandler(ctx)
+			break
 		case "gemini":
-			handler = new GeminiHandler(ctx); break
+			handler = new GeminiHandler(ctx)
+			break
 		case "openai-native":
-			handler = new OpenAiNativeHandler(ctx); break
+			handler = new OpenAiNativeHandler(ctx)
+			break
 		case "openai-codex":
-			handler = new OpenAiCodexHandler(ctx); break
+			handler = new OpenAiCodexHandler(ctx)
+			break
 		case "deepseek":
-			handler = new DeepSeekHandler(ctx); break
+			handler = new DeepSeekHandler(ctx)
+			break
 		case "requesty":
-			handler = new RequestyHandler(ctx); break
+			handler = new RequestyHandler(ctx)
+			break
 		case "fireworks":
-			handler = new FireworksHandler(ctx); break
+			handler = new FireworksHandler(ctx)
+			break
 		case "together":
-			handler = new TogetherHandler(ctx); break
+			handler = new TogetherHandler(ctx)
+			break
 		case "qwen":
-			handler = new QwenHandler(ctx); break
+			handler = new QwenHandler(ctx)
+			break
 		case "qwen-code":
-			handler = new QwenCodeHandler(ctx); break
+			handler = new QwenCodeHandler(ctx)
+			break
 		case "doubao":
-			handler = new DoubaoHandler(ctx); break
+			handler = new DoubaoHandler(ctx)
+			break
 		case "mistral":
-			handler = new MistralHandler(ctx); break
+			handler = new MistralHandler(ctx)
+			break
 		case "vscode-lm":
-			handler = new VsCodeLmHandler(ctx); break
+			handler = new VsCodeLmHandler(ctx)
+			break
 		case "cline":
-			handler = new ClineHandler(ctx); break
+			handler = new ClineHandler(ctx)
+			break
 		case "litellm":
-			handler = new LiteLlmHandler(ctx); break
+			handler = new LiteLlmHandler(ctx)
+			break
 		case "moonshot":
-			handler = new MoonshotHandler(ctx); break
+			handler = new MoonshotHandler(ctx)
+			break
 		case "nebius":
-			handler = new NebiusHandler(ctx); break
+			handler = new NebiusHandler(ctx)
+			break
 		case "asksage":
-			handler = new AskSageHandler(ctx); break
+			handler = new AskSageHandler(ctx)
+			break
 		case "xai":
-			handler = new XAIHandler(ctx); break
+			handler = new XAIHandler(ctx)
+			break
 		case "sambanova":
-			handler = new SambanovaHandler(ctx); break
+			handler = new SambanovaHandler(ctx)
+			break
 		case "cerebras":
-			handler = new CerebrasHandler(ctx); break
+			handler = new CerebrasHandler(ctx)
+			break
 		case "groq":
-			handler = new GroqHandler(ctx); break
+			handler = new GroqHandler(ctx)
+			break
 		case "sapaicore":
-			handler = new SapAiCoreHandler(ctx); break
+			handler = new SapAiCoreHandler(ctx)
+			break
 		case "baseten":
-			handler = new BasetenHandler(ctx); break
+			handler = new BasetenHandler(ctx)
+			break
 		case "huggingface":
-			handler = new HuggingFaceHandler(ctx); break
+			handler = new HuggingFaceHandler(ctx)
+			break
 		case "huawei-cloud-maas":
-			handler = new HuaweiCloudMaaSHandler(ctx); break
+			handler = new HuaweiCloudMaaSHandler(ctx)
+			break
 		case "claude-code":
-			handler = new ClaudeCodeHandler(ctx); break
+			handler = new ClaudeCodeHandler(ctx)
+			break
 		case "dify":
-			handler = new DifyHandler(ctx); break
+			handler = new DifyHandler(ctx)
+			break
 		case "vercel-ai-gateway":
-			handler = new VercelAIGatewayHandler(ctx); break
+			handler = new VercelAIGatewayHandler(ctx)
+			break
 		case "zai":
-			handler = new ZAiHandler(ctx); break
+			handler = new ZAiHandler(ctx)
+			break
 		case "oca":
-			handler = new OcaHandler(ctx); break
+			handler = new OcaHandler(ctx)
+			break
 		case "aihubmix":
-			handler = new AIhubmixHandler(ctx); break
+			handler = new AIhubmixHandler(ctx)
+			break
 		case "minimax":
-			handler = new MinimaxHandler(ctx); break
+			handler = new MinimaxHandler(ctx)
+			break
 		case "hicap":
-			handler = new HicapHandler(ctx); break
+			handler = new HicapHandler(ctx)
+			break
 		case "nousResearch":
-			handler = new NousResearchHandler(ctx); break
+			handler = new NousResearchHandler(ctx)
+			break
 		case "wandb":
-			handler = new WandbHandler(ctx); break
+			handler = new WandbHandler(ctx)
+			break
 		default:
 			throw new Error(`Unknown provider: ${profile.provider}`)
 	}
@@ -357,8 +400,7 @@ function resolveProfile(profileName: string): ProfileResolved | undefined {
 	const apiKey = profile.apiKey
 	const baseUrl = profile.baseUrl ?? pInfo?.baseUrl
 	const modelId = profile.modelId
-	const modelInfo =
-		fromProfileModelInfo(profile.modelInfo) ?? (modelId ? (pInfo?.models[modelId] as ModelInfo | undefined) : undefined)
+	const modelInfo = getProfileModelInfo(profile)
 	const providerConfig = getProviderConfig(profile)
 	return { apiKey, baseUrl, modelId, modelInfo, provider: profile.provider, providerConfig }
 }
@@ -390,8 +432,9 @@ export function buildApiHandler(configuration: ApiConfiguration, mode: Mode): Ap
 	if (!profile) {
 		throw new Error(`Profile "${profileName}" not found`)
 	}
+	const runtimeProfile: ApiProfile = { ...profile, modelInfo: getProfileModelInfo(profile) }
 	return createHandlerForProvider({
-		profile,
+		profile: runtimeProfile,
 		mode,
 		ulid: configuration.ulid,
 		onRetryAttempt: configuration.onRetryAttempt,

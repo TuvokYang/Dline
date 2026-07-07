@@ -1,5 +1,6 @@
 import type { Anthropic } from "@anthropic-ai/sdk"
 import { AccountUsage, buildApiHandler } from "@core/api"
+import { getProfileModelInfo } from "@core/api/model-info"
 import { computeMaxAllowedSize } from "@core/context/context-management/context-window-utils"
 import { findEnabledProfileByName, findEnabledProfiles } from "@core/controller/file/getApiProfiles"
 import { getHooksEnabledSafe } from "@core/hooks/hooks-utils"
@@ -643,9 +644,11 @@ export class Controller {
 		if (!targetProfileName) return undefined
 
 		const profile = findEnabledProfileByName(targetProfileName)
-		if (!profile?.modelInfo?.capabilities?.contextWindow) return undefined
+		if (!profile) return undefined
 
-		const targetContextWindow = profile.modelInfo.capabilities.contextWindow
+		const targetModelInfo = getProfileModelInfo(profile)
+		const targetContextWindow = targetModelInfo.capabilities?.contextWindow
+		if (!targetContextWindow) return undefined
 		const targetMaxAllowed = computeMaxAllowedSize(targetContextWindow)
 
 		// Get total tokens from the last API request
@@ -1314,11 +1317,24 @@ export class Controller {
 		const checklistFromTaskState = this.task?.taskState.currentFocusChainChecklist || null
 		const checklistForState = checklistFromTaskState || getLastTaskProgressText(allMessages)
 
+		const runtimeWorkingForUi = (() => {
+			if (!this.task) return false
+			const ts = this.task.taskState
+			const isBackgroundCommandForTask = this.backgroundCommandRunning && this.backgroundCommandTaskId === this.task.taskId
+			return Boolean(
+				ts.isStreaming ||
+					ts.isWaitingForFirstChunk ||
+					ts.isExecutingSubagent ||
+					ts.activeHookExecution ||
+					isBackgroundCommandForTask,
+			)
+		})()
+
 		const isTaskWorkingForUi = (() => {
 			if (!this.task) return false
 			const ts = this.task.taskState
-			// Active streaming states
-			if (ts.isStreaming || ts.isWaitingForFirstChunk || ts.isExecutingSubagent) return true
+			// Active runtime states
+			if (runtimeWorkingForUi) return true
 			// Not initialized or already aborted
 			if (!ts.isInitialized || ts.abort) return false
 			// Check for natural stop points in message history
@@ -1450,7 +1466,10 @@ export class Controller {
 			taskUiState: (() => {
 				if (!this.task?.taskController) return undefined
 				const snapshot = this.task.findLatestStateSnapshot()
-				return this.task.taskController.buildTaskUiState(snapshot ?? null, { isTaskWorking: isTaskWorkingForUi })
+				return this.task.taskController.buildTaskUiState(snapshot ?? null, {
+					isTaskWorking: isTaskWorkingForUi,
+					runtimeWorking: runtimeWorkingForUi,
+				})
 			})(),
 		}
 

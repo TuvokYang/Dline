@@ -2,7 +2,6 @@ import { ClineMessage } from "@shared/ExtensionMessage"
 import { ChevronDownIcon, ChevronRightIcon } from "lucide-react"
 import React, { useCallback, useLayoutEffect, useMemo, useState } from "react"
 import Thumbnails from "@/components/common/Thumbnails"
-import { useApiProfiles } from "@/components/settings/providers/useApiProfiles"
 import { useExtensionState } from "@/context/ExtensionStateContext"
 import { cn } from "@/lib/utils"
 import { getEnvironmentColor } from "@/utils/environmentColors"
@@ -25,6 +24,7 @@ interface TaskHeaderProps {
 	doesModelSupportPromptCache: boolean
 	cacheWrites?: number
 	cacheReads?: number
+	contextWindow?: number
 	totalCost: number
 	cacheHitRate?: number
 	currency?: string
@@ -43,6 +43,7 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 	tokensOut,
 	cacheWrites,
 	cacheReads,
+	contextWindow,
 	totalCost,
 	cacheHitRate,
 	currency,
@@ -96,24 +97,8 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 		return () => document.removeEventListener("mousedown", handleClickOutside)
 	}, [isHighlightedTextExpanded])
 
-	// Profile-driven: resolve current profile and its modelInfo for context window / cost display
-	const { profiles } = useApiProfiles()
-	const currentProfileName = mode === "plan" ? apiConfiguration?.planModeProfile : apiConfiguration?.actModeProfile
-	const currentProfile = currentProfileName ? profiles.find((p) => p.name === currentProfileName) : undefined
-	const maxContextWindow = currentProfile?.modelInfo?.capabilities?.contextWindow
-	const currentProvider = currentProfile?.provider
-
-	const isCostAvailable =
-		(totalCost &&
-			currentProvider === "openai" &&
-			currentProfile?.modelInfo?.pricing?.inputPrice != null &&
-			currentProfile?.modelInfo?.pricing?.outputPrice != null) ||
-		(currentProvider !== "vscode-lm" &&
-			currentProvider !== "ollama" &&
-			currentProvider !== "lmstudio" &&
-			currentProvider !== "openai-codex") // Subscription-based, no per-token costs
-	// Profile currency takes priority over apiMetrics currency (set at task creation time)
-	const displayCurrency = currentProfile?.modelInfo?.pricing?.currency || currency || "USD"
+	const isCostAvailable = totalCost != null
+	const displayCurrency = currency || "USD"
 	const totalInputTokens = tokensIn + (cacheWrites ?? 0) + (cacheReads ?? 0)
 
 	// Event handlers
@@ -255,7 +240,7 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 						<ContextWindow
 							cacheReads={cacheReads}
 							cacheWrites={cacheWrites}
-							contextWindow={maxContextWindow}
+							contextWindow={contextWindow}
 							lastApiReqTotalTokens={lastApiReqTotalTokens}
 							onSendMessage={onSendMessage}
 							tokensIn={tokensIn}

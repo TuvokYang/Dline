@@ -400,10 +400,10 @@ export async function activate(context: vscode.ExtensionContext) {
 					actions.push(explainAction)
 
 					// Improve with Cline (Always available)
-					const improveAction = new vscode.CodeAction("Improve with Cline", vscode.CodeActionKind.RefactorRewrite) // Using a refactor kind
+					const improveAction = new vscode.CodeAction("Improve with Dline", vscode.CodeActionKind.RefactorRewrite) // Using a refactor kind
 					improveAction.command = {
 						command: commands.ImproveCode,
-						title: "Improve with Cline",
+						title: "Improve with Dline",
 						arguments: [expandedRange],
 					}
 					actions.push(improveAction)

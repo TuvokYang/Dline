@@ -308,6 +308,73 @@ describe("ResumeHandler", () => {
 		])
 	})
 
+	it("detectPendingTools ignores turns that only contain turn-ending tools", () => {
+		const apiHistory = [
+			{ role: "user", content: [{ type: "text", text: "start" }] },
+			{
+				role: "assistant",
+				content: [
+					{ type: "tool_use", id: "tool_attempt", call_id: "call_attempt", name: "attempt_completion", input: {} },
+					{ type: "tool_use", id: "tool_ask", call_id: "call_ask", name: "ask_followup_question", input: {} },
+					{ type: "tool_use", id: "tool_plan", call_id: "call_plan", name: "plan_mode_respond", input: {} },
+					{ type: "tool_use", id: "tool_qna", call_id: "call_qna", name: "qna_respond", input: {} },
+					{ type: "tool_use", id: "tool_report", call_id: "call_report", name: "generate_report", input: {} },
+				],
+			},
+		] satisfies ClineStorageMessage[]
+		const ctx = createMockContext({
+			messageStateHandler: {
+				clineMessages: [
+					{
+						ts: 300,
+						type: "say",
+						say: "state_snapshot",
+						text: JSON.stringify({ phase: "streaming", apiIndex: 1, timestamp: 300 }),
+					},
+				],
+				apiConversationHistory: apiHistory,
+			} as unknown as ResumeContext["messageStateHandler"],
+		})
+
+		const handler = new ResumeHandler(ctx)
+		const result = handler.detectPendingTools(apiHistory)
+
+		assert.equal(result, undefined)
+	})
+
+	it("detectPendingTools restores regular tool calls after reasoning-only history close", () => {
+		const apiHistory = [
+			{ role: "user", content: [{ type: "text", text: "start" }] },
+			{
+				role: "assistant",
+				content: [{ type: "tool_use", id: "tool_pending", call_id: "call_pending", name: "read_file", input: {} }],
+			},
+		] satisfies ClineStorageMessage[]
+		const ctx = createMockContext({
+			messageStateHandler: {
+				clineMessages: [
+					{ ts: 250, type: "say", say: "reasoning", text: "thinking" },
+					{
+						ts: 300,
+						type: "say",
+						say: "state_snapshot",
+						text: JSON.stringify({ phase: "streaming", apiIndex: 1, timestamp: 300 }),
+					},
+				],
+				apiConversationHistory: apiHistory,
+			} as unknown as ResumeContext["messageStateHandler"],
+		})
+
+		const handler = new ResumeHandler(ctx)
+		const result = handler.detectPendingTools(apiHistory)
+
+		assert.equal(result?.assistantIndex, 1)
+		assert.deepEqual(
+			result?.toolUseBlocks.map((block) => block.id),
+			["tool_pending"],
+		)
+	})
+
 	it("resumeFromHistory returns false when detectPendingTools finds nothing", async () => {
 		const ctx = createMockContext({
 			messageStateHandler: {

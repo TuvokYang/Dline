@@ -1,6 +1,6 @@
 import { ApiProfile } from "@shared/proto/dline/profile"
 import { describe, expect, it } from "vitest"
-import { applyProfileUpdate } from "./useApiProfiles"
+import { applyProfileUpdate, buildProfileSettings } from "./useApiProfiles"
 
 describe("applyProfileUpdate", () => {
 	it("returns unchanged profiles when an update is a no-op", () => {
@@ -32,5 +32,22 @@ describe("applyProfileUpdate", () => {
 		expect(result.changed).to.equal(true)
 		expect(result.profiles).not.to.equal(profiles)
 		expect(result.profiles[0]?.modelId).to.equal("model-b")
+	})
+})
+
+describe("buildProfileSettings", () => {
+	it("builds both mode profile settings for unified selection", () => {
+		const result = buildProfileSettings("deepseek-selected", ["plan", "act"])
+
+		expect(result).to.deep.equal({
+			planModeProfile: "deepseek-selected",
+			actModeProfile: "deepseek-selected",
+		})
+	})
+
+	it("builds only the target mode profile setting for split selection", () => {
+		const result = buildProfileSettings("anthropic-plan", ["plan"])
+
+		expect(result).to.deep.equal({ planModeProfile: "anthropic-plan" })
 	})
 })

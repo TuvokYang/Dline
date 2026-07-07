@@ -128,6 +128,33 @@ describe("ActionButtons", () => {
 	})
 
 	describe("with taskUiState (snapshot-first architecture)", () => {
+		it("renders cancel from runtime taskUiState even when no visible task message exists", () => {
+			const mockChatStateWithTaskUi = {
+				...mockChatState,
+				taskUiState: {
+					phase: "working" as const,
+					inputEnabled: false,
+					cancelEnabled: true,
+					showFooter: true,
+					actions: [{ type: "cancel" as const, label: "Cancel", enabled: true }],
+					reason: "working:runtime",
+				},
+			}
+
+			render(
+				<ActionButtons
+					chatState={mockChatStateWithTaskUi}
+					messageHandlers={mockMessageHandlers}
+					messages={[]}
+					mode="act"
+					task={undefined}
+				/>,
+			)
+
+			expect(screen.getByText("Cancel")).toBeTruthy()
+			expect(screen.queryByText(/Resume/i)).toBeNull()
+		})
+
 		it("renders resume from taskUiState even when no visible task message exists", () => {
 			const mockChatStateWithTaskUi = {
 				...mockChatState,
@@ -275,6 +302,45 @@ describe("ActionButtons", () => {
 			await waitFor(() => {
 				expect(executeTaskUiAction).toHaveBeenCalledWith(mockChatStateWithTaskUi.taskUiState.actions[0])
 			})
+		})
+
+		it("renders start new task from completion taskUiState when completion ask row is hidden", () => {
+			const mockChatStateWithTaskUi = {
+				...mockChatState,
+				taskUiState: {
+					phase: "completed" as const,
+					inputEnabled: true,
+					cancelEnabled: false,
+					showFooter: true,
+					actions: [{ type: "start_new_task" as const, label: "Start New Task", enabled: true }],
+					activeAsk: "completion_result" as const,
+					reason: "completion-awaiting",
+				},
+			}
+			const stateSnapshot = makeMsg({
+				type: "say",
+				say: "state_snapshot",
+				ts: 1001,
+				text: JSON.stringify({
+					phase: "completed",
+					apiIndex: 1,
+					timestamp: 1001,
+					awaiting: { kind: "completion", taskAsk: "completion_result", messageTs: 1000 },
+				}),
+			})
+
+			render(
+				<ActionButtons
+					chatState={mockChatStateWithTaskUi}
+					messageHandlers={mockMessageHandlers}
+					messages={[stateSnapshot]}
+					mode="act"
+					task={stateSnapshot}
+				/>,
+			)
+
+			expect(screen.getByText("Start New Task")).toBeTruthy()
+			expect(screen.queryByText(/Cancel/i)).toBeNull()
 		})
 
 		it("renders buttons from taskUiState.actions", () => {

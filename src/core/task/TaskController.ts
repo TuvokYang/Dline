@@ -13,6 +13,7 @@ import type { ToolExecutor } from "./ToolExecutor"
 
 export interface BuildTaskUiStateOptions {
 	isTaskWorking?: boolean
+	runtimeWorking?: boolean
 }
 
 // Re-export types for backward compatibility
@@ -208,7 +209,20 @@ export class TaskController {
 	 * This is the single source of truth for footer buttons and input state.
 	 */
 	buildTaskUiState(snapshot: TaskSnapshot | null, options: BuildTaskUiStateOptions = {}): TaskUiState {
+		const runtimeWorking = options.runtimeWorking ?? false
+		const runtimeState: TaskUiState = {
+			phase: "working",
+			inputEnabled: false,
+			cancelEnabled: true,
+			showFooter: true,
+			actions: [{ type: "cancel", label: "Cancel", enabled: true }],
+			reason: "working:runtime",
+		}
+
 		if (!snapshot) {
+			if (runtimeWorking) {
+				return runtimeState
+			}
 			return {
 				phase: "idle",
 				inputEnabled: true,
@@ -219,10 +233,18 @@ export class TaskController {
 			}
 		}
 
+		const isRuntimeOnlyWorkingPhase =
+			snapshot.phase !== TaskPhase.STREAMING &&
+			snapshot.phase !== TaskPhase.EXECUTING &&
+			snapshot.phase !== TaskPhase.RESUMING
+		if (runtimeWorking && isRuntimeOnlyWorkingPhase) {
+			return runtimeState
+		}
+
 		// Conversation awaiting (plan_mode_respond, qna_respond, etc.)
-		// This is an explicit state-machine checkpoint and must take precedence
-		// over message-derived working inference during history recovery.
-		if (snapshot.awaiting?.kind === "conversation") {
+		// This explicit checkpoint takes precedence over stale message-derived
+		// working inference, but not over an actually running runtime task.
+		if (snapshot.awaiting?.kind === "conversation" && !runtimeWorking) {
 			return {
 				phase: "awaiting_input",
 				inputEnabled: true,
@@ -231,6 +253,19 @@ export class TaskController {
 				actions: [],
 				activeAsk: snapshot.awaiting.taskAsk,
 				reason: "conversation-awaiting",
+			}
+		}
+
+		// Completion awaiting
+		if (snapshot.awaiting?.kind === "completion") {
+			return {
+				phase: "completed",
+				inputEnabled: true,
+				cancelEnabled: false,
+				showFooter: true,
+				actions: [{ type: "start_new_task", label: "Start New Task", enabled: true }],
+				activeAsk: snapshot.awaiting.taskAsk,
+				reason: "completion-awaiting",
 			}
 		}
 
@@ -288,6 +323,19 @@ export class TaskController {
 				activeAsk: snapshot.awaiting.taskAsk,
 				activeCallId: snapshot.awaiting.activeCallId,
 				reason: "approval-awaiting",
+			}
+		}
+
+		// Completed task resume awaiting should keep the Start New Task affordance.
+		if (snapshot.awaiting?.kind === "resume" && snapshot.awaiting.taskAsk === "resume_completed_task") {
+			return {
+				phase: "completed",
+				inputEnabled: true,
+				cancelEnabled: false,
+				showFooter: true,
+				actions: [{ type: "start_new_task", label: "Start New Task", enabled: true }],
+				activeAsk: snapshot.awaiting.taskAsk,
+				reason: "completion-resume-awaiting",
 			}
 		}
 

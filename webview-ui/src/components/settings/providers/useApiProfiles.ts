@@ -3,7 +3,7 @@ import { ApiProfile, ApiProfilesResponse, UpdateApiProfilesRequest } from "@shar
 import PROVIDERS from "@shared/providers/providers.json"
 import deepEqual from "fast-deep-equal"
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { updateSetting, updateTaskSetting } from "@/components/settings/utils/settingsHandlers"
+import { updateSetting, updateTaskSettings } from "@/components/settings/utils/settingsHandlers"
 import { FileServiceClient } from "@/services/grpc-client"
 import { createEmptyApiProfile, generateApiProfileName } from "./ProviderProfile"
 
@@ -11,6 +11,8 @@ export interface ProfileUpdateResult {
 	profiles: ApiProfile[]
 	changed: boolean
 }
+
+type ProfileMode = "plan" | "act"
 
 /**
  * Apply a profile update and report whether it changed persisted data.
@@ -45,6 +47,30 @@ export function applyProfileUpdate(prev: ApiProfile[], id: string, updates: Part
 	})
 
 	return { profiles: changed ? next : prev, changed }
+}
+
+/**
+ * Build profile settings for one or more mode slots.
+ *
+ * @param profileName Profile name to select.
+ * @param modes Mode slots to update.
+ * @returns Partial settings containing the requested profile selections.
+ */
+export function buildProfileSettings(
+	profileName: string,
+	modes: ProfileMode[],
+): {
+	planModeProfile?: string
+	actModeProfile?: string
+} {
+	return modes.reduce<{ planModeProfile?: string; actModeProfile?: string }>((settings, mode) => {
+		if (mode === "plan") {
+			settings.planModeProfile = profileName
+		} else {
+			settings.actModeProfile = profileName
+		}
+		return settings
+	}, {})
 }
 
 /**
@@ -178,23 +204,31 @@ export function useApiProfiles() {
 	 * @param mode The mode to set the profile for ("plan" or "act")
 	 * @param taskId Optional task ID. If provided, updates task-level settings instead of global.
 	 */
-	const selectProfile = useCallback(
-		(id: string, mode: "plan" | "act", taskId?: string) => {
+	const selectProfiles = useCallback(
+		(id: string, modes: ProfileMode[], taskId?: string) => {
 			const profile = profiles.find((p) => p.id === id)
 			if (!profile) return
 
 			const profileName = profile.name || ""
-			const settingKey = mode === "plan" ? "planModeProfile" : "actModeProfile"
+			const settings = buildProfileSettings(profileName, modes)
 
 			if (taskId) {
-				// Update task-level setting (only affects this task)
-				updateTaskSetting(taskId, settingKey, profileName)
-			} else {
-				// Update global setting (default for new tasks)
-				updateSetting(settingKey, profileName)
+				updateTaskSettings(taskId, settings)
+				return
+			}
+
+			for (const [field, value] of Object.entries(settings)) {
+				updateSetting(field as keyof typeof settings, value)
 			}
 		},
 		[profiles],
+	)
+
+	const selectProfile = useCallback(
+		(id: string, mode: ProfileMode, taskId?: string) => {
+			selectProfiles(id, [mode], taskId)
+		},
+		[selectProfiles],
 	)
 
 	// Toggle usedFor
@@ -232,6 +266,7 @@ export function useApiProfiles() {
 		toggleUsedFor,
 		toggleExpand,
 		selectProfile,
+		selectProfiles,
 		providerOptions,
 		loaded,
 	}

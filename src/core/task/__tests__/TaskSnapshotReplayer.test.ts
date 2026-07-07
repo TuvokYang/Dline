@@ -58,6 +58,24 @@ function conversationSnapshot(messageTs: number): TaskSnapshot {
 	}
 }
 
+/**
+ * Creates an awaiting-completion snapshot anchored to an ask message.
+ * @param messageTs Ask message timestamp.
+ * @returns A TaskSnapshot object.
+ */
+function completionSnapshot(messageTs: number): TaskSnapshot {
+	return {
+		phase: TaskPhase.COMPLETED,
+		apiIndex: 4,
+		timestamp: 110,
+		awaiting: {
+			kind: "completion",
+			taskAsk: "completion_result",
+			messageTs,
+		},
+	}
+}
+
 describe("TaskSnapshotReplayer", () => {
 	it("does not keep a turn-ending ask active after tail user feedback and a later request", () => {
 		const qnaAsk = askMessage(100, "qna_respond", 3)
@@ -75,5 +93,27 @@ describe("TaskSnapshotReplayer", () => {
 		const result = findAnchoredAsk(conversationSnapshot(qnaAsk.ts), messages)
 
 		assert.equal(result, qnaAsk)
+	})
+
+	it("keeps completion ask active when no tail event consumes it", () => {
+		const completionAsk = askMessage(100, "completion_result", 4)
+		const messages: ClineMessage[] = [completionAsk, sayMessage(120, "state_snapshot", 4)]
+
+		const result = findAnchoredAsk(completionSnapshot(completionAsk.ts), messages)
+
+		assert.equal(result, completionAsk)
+	})
+
+	it("does not keep completion ask active after feedback and a later request", () => {
+		const completionAsk = askMessage(100, "completion_result", 4)
+		const messages: ClineMessage[] = [
+			completionAsk,
+			sayMessage(120, "user_feedback", 4),
+			sayMessage(130, "api_req_started", 5),
+		]
+
+		const result = findAnchoredAsk(completionSnapshot(completionAsk.ts), messages)
+
+		assert.equal(result, undefined)
 	})
 })

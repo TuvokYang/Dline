@@ -25,6 +25,20 @@ describe("TaskController.buildTaskUiState", () => {
 		assert.equal(uiState.reason, "no-snapshot")
 	})
 
+	it("returns working cancel state when runtime is active before a snapshot exists", () => {
+		const tc = new TaskController(mockChannel)
+		const uiState = tc.buildTaskUiState(null, { isTaskWorking: true, runtimeWorking: true })
+
+		assert.equal(uiState.phase, "working")
+		assert.equal(uiState.inputEnabled, false)
+		assert.equal(uiState.cancelEnabled, true)
+		assert.equal(uiState.showFooter, true)
+		assert.equal(uiState.actions.length, 1)
+		assert.equal(uiState.actions[0].type, "cancel")
+		assert.equal(uiState.actions[0].label, "Cancel")
+		assert.equal(uiState.reason, "working:runtime")
+	})
+
 	it("returns working state with cancel button when streaming", () => {
 		const tc = new TaskController(mockChannel)
 		const snapshot: TaskSnapshot = {
@@ -222,6 +236,79 @@ describe("TaskController.buildTaskUiState", () => {
 		assert.equal(uiState.reason, "resume-awaiting")
 	})
 
+	it("returns completed state for resume_completed_task awaiting", () => {
+		const tc = new TaskController(mockChannel)
+		const snapshot: TaskSnapshot = {
+			phase: TaskPhase.PAUSED,
+			apiIndex: 5,
+			timestamp: Date.now(),
+			awaiting: {
+				kind: "resume",
+				taskAsk: "resume_completed_task",
+				messageTs: Date.now(),
+			},
+		}
+		const uiState = tc.buildTaskUiState(snapshot, { isTaskWorking: false })
+
+		assert.equal(uiState.phase, "completed")
+		assert.equal(uiState.inputEnabled, true)
+		assert.equal(uiState.cancelEnabled, false)
+		assert.equal(uiState.showFooter, true)
+		assert.equal(uiState.actions.length, 1)
+		assert.equal(uiState.actions[0].type, "start_new_task")
+		assert.equal(uiState.actions[0].label, "Start New Task")
+		assert.equal(uiState.activeAsk, "resume_completed_task")
+		assert.equal(uiState.reason, "completion-resume-awaiting")
+	})
+
+	it("returns completed state with start-new-task action for completion awaiting", () => {
+		const tc = new TaskController(mockChannel)
+		const snapshot: TaskSnapshot = {
+			phase: TaskPhase.COMPLETED,
+			apiIndex: 6,
+			timestamp: Date.now(),
+			awaiting: {
+				kind: "completion",
+				taskAsk: "completion_result",
+				messageTs: Date.now(),
+			},
+		}
+		const uiState = tc.buildTaskUiState(snapshot, { isTaskWorking: false })
+
+		assert.equal(uiState.phase, "completed")
+		assert.equal(uiState.inputEnabled, true)
+		assert.equal(uiState.cancelEnabled, false)
+		assert.equal(uiState.showFooter, true)
+		assert.equal(uiState.actions.length, 1)
+		assert.equal(uiState.actions[0].type, "start_new_task")
+		assert.equal(uiState.actions[0].label, "Start New Task")
+		assert.equal(uiState.activeAsk, "completion_result")
+		assert.equal(uiState.reason, "completion-awaiting")
+	})
+
+	it("shows cancel for stale completion snapshot when runtime is actively working", () => {
+		const tc = new TaskController(mockChannel)
+		const snapshot: TaskSnapshot = {
+			phase: TaskPhase.COMPLETED,
+			apiIndex: 6,
+			timestamp: Date.now(),
+			awaiting: {
+				kind: "completion",
+				taskAsk: "completion_result",
+				messageTs: Date.now(),
+			},
+		}
+		const uiState = tc.buildTaskUiState(snapshot, { isTaskWorking: true, runtimeWorking: true })
+
+		assert.equal(uiState.phase, "working")
+		assert.equal(uiState.inputEnabled, false)
+		assert.equal(uiState.cancelEnabled, true)
+		assert.equal(uiState.showFooter, true)
+		assert.equal(uiState.actions.length, 1)
+		assert.equal(uiState.actions[0].type, "cancel")
+		assert.equal(uiState.reason, "working:runtime")
+	})
+
 	it("returns conversation awaiting state for plan_mode_respond", () => {
 		const tc = new TaskController(mockChannel)
 		const snapshot: TaskSnapshot = {
@@ -245,7 +332,7 @@ describe("TaskController.buildTaskUiState", () => {
 		assert.equal(uiState.reason, "conversation-awaiting")
 	})
 
-	it("keeps conversation-awaiting state even when stale message inference marks task as working", () => {
+	it("keeps conversation-awaiting state when only stale message inference marks task as working", () => {
 		const tc = new TaskController(mockChannel)
 		const snapshot: TaskSnapshot = {
 			phase: TaskPhase.AWAITING_APPROVAL,
@@ -257,7 +344,7 @@ describe("TaskController.buildTaskUiState", () => {
 				messageTs: Date.now(),
 			},
 		}
-		const uiState = tc.buildTaskUiState(snapshot, { isTaskWorking: true })
+		const uiState = tc.buildTaskUiState(snapshot, { isTaskWorking: true, runtimeWorking: false })
 
 		assert.equal(uiState.phase, "awaiting_input")
 		assert.equal(uiState.inputEnabled, true)
@@ -266,6 +353,29 @@ describe("TaskController.buildTaskUiState", () => {
 		assert.equal(uiState.actions.length, 0)
 		assert.equal(uiState.activeAsk, "qna_respond")
 		assert.equal(uiState.reason, "conversation-awaiting")
+	})
+
+	it("shows cancel for stale conversation snapshot when runtime is actively working", () => {
+		const tc = new TaskController(mockChannel)
+		const snapshot: TaskSnapshot = {
+			phase: TaskPhase.STREAMING,
+			apiIndex: 1,
+			timestamp: Date.now(),
+			awaiting: {
+				kind: "conversation",
+				taskAsk: "qna_respond",
+				messageTs: Date.now(),
+			},
+		}
+		const uiState = tc.buildTaskUiState(snapshot, { isTaskWorking: true, runtimeWorking: true })
+
+		assert.equal(uiState.phase, "working")
+		assert.equal(uiState.inputEnabled, false)
+		assert.equal(uiState.cancelEnabled, true)
+		assert.equal(uiState.showFooter, true)
+		assert.equal(uiState.actions.length, 1)
+		assert.equal(uiState.actions[0].type, "cancel")
+		assert.equal(uiState.reason, "working:streaming")
 	})
 
 	it("returns conversation-awaiting state when isTaskWorking is false (existing behavior)", () => {

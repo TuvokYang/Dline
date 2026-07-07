@@ -1,4 +1,4 @@
-import type { ClineMessage, TaskUiAction } from "@shared/ExtensionMessage"
+import type { ClineAsk, ClineMessage, TaskUiAction } from "@shared/ExtensionMessage"
 import { EmptyRequest, StringRequest } from "@shared/proto/dline/common"
 import { AskResponseRequest, NewTaskRequest } from "@shared/proto/dline/task"
 import { useCallback, useRef } from "react"
@@ -9,6 +9,104 @@ import { isApiReqActive } from "@/utils/streaming"
 import { type ButtonActionType } from "../shared/buttonConfig"
 
 import type { ChatState, MessageHandlers } from "../types/chatTypes"
+
+/**
+ * Resolve the ask type that should receive typed input.
+ * @param clineAsk Ask derived from the visible interaction row.
+ * @param inputEnabled Whether snapshot-first state allows input.
+ * @param activeAsk Ask derived from snapshot-first state.
+ * @returns The ask type that should receive the input, or undefined.
+ */
+function resolveInputAsk(
+	clineAsk: ClineAsk | undefined,
+	inputEnabled: boolean,
+	activeAsk: ClineAsk | undefined,
+): ClineAsk | undefined {
+	if (inputEnabled && activeAsk) {
+		return activeAsk
+	}
+	return clineAsk
+}
+
+/**
+ * Check whether typed input should act like pressing Resume.
+ * @param ask Active ask type.
+ * @returns True when the ask should use yesButtonClicked semantics.
+ */
+function isResumeAsk(ask: ClineAsk): boolean {
+	return ask === "resume_task" || ask === "resume_completed_task"
+}
+
+/**
+ * Check whether an ask accepts a messageResponse payload.
+ * @param ask Active ask type.
+ * @returns True when typed input should be sent as messageResponse.
+ */
+function acceptsMessage(ask: ClineAsk): boolean {
+	switch (ask) {
+		case "followup":
+		case "plan_mode_respond":
+		case "act_mode_respond":
+		case "qna_respond":
+		case "tool":
+		case "browser_action_launch":
+		case "command":
+		case "command_output":
+		case "use_mcp_server":
+		case "use_subagents":
+		case "completion_result":
+		case "mistake_limit_reached":
+		case "api_req_failed":
+		case "new_task":
+		case "spawn_task":
+		case "condense":
+		case "summarize_task":
+		case "report_bug":
+		case "focus_chain_change":
+		case "status_acknowledgment":
+		case "generate_report":
+			return true
+		case "resume_task":
+		case "resume_completed_task":
+			return false
+	}
+}
+
+/**
+ * Send typed input to the resolved ask.
+ * @param ask Active ask type receiving the input.
+ * @param text Text to send with the response.
+ * @param images Selected image payloads.
+ * @param files Selected file payloads.
+ * @returns True when an ask response was sent.
+ */
+async function sendAskReply(ask: ClineAsk, text: string, images: string[], files: string[]): Promise<boolean> {
+	if (isResumeAsk(ask)) {
+		await TaskServiceClient.askResponse(
+			AskResponseRequest.create({
+				responseType: "yesButtonClicked",
+				text,
+				images,
+				files,
+			}),
+		)
+		return true
+	}
+
+	if (acceptsMessage(ask)) {
+		await TaskServiceClient.askResponse(
+			AskResponseRequest.create({
+				responseType: "messageResponse",
+				text,
+				images,
+				files,
+			}),
+		)
+		return true
+	}
+
+	return false
+}
 
 /**
  * Custom hook for managing message handlers
@@ -33,6 +131,8 @@ export function useMessageHandlers(
 		taskUiState,
 	} = chatState
 	const cancelInFlightRef = useRef(false)
+	const taskInputEnabled = taskUiState?.inputEnabled === true
+	const taskActiveAsk = taskUiState?.activeAsk
 
 	// Handle sending a message
 	const handleSendMessage = useCallback(
@@ -60,72 +160,29 @@ export function useMessageHandlers(
 						}),
 					)
 					messageSent = true
-				} else if (clineAsk) {
-					// For resume_task and resume_completed_task, use yesButtonClicked to match Resume button behavior
-					// This ensures Enter key and Resume button work identically
-					if (clineAsk === "resume_task" || clineAsk === "resume_completed_task") {
-						await TaskServiceClient.askResponse(
-							AskResponseRequest.create({
-								responseType: "yesButtonClicked",
-								text: messageToSend,
-								images,
-								files,
-							}),
-						)
-						messageSent = true
-					} else {
-						// All other ask types use messageResponse
-						switch (clineAsk) {
-							case "followup":
-							case "plan_mode_respond":
-							case "act_mode_respond":
-							case "qna_respond":
-							case "tool":
-							case "browser_action_launch":
-							case "command":
-							case "command_output":
-							case "use_mcp_server":
-							case "use_subagents":
-							case "completion_result":
-							case "mistake_limit_reached":
-							case "api_req_failed":
-							case "new_task":
-							case "spawn_task":
-							case "condense":
-							case "summarize_task":
-							case "report_bug":
-							case "focus_chain_change":
-							case "status_acknowledgment":
-							case "generate_report":
-								await TaskServiceClient.askResponse(
-									AskResponseRequest.create({
-										responseType: "messageResponse",
-										text: messageToSend,
-										images,
-										files,
-									}),
-								)
-								messageSent = true
-								break
-						}
-					}
-				} else if (messages.length > 0) {
-					// No clineAsk set - check if task is actively running
-					// If so, allow interrupting it with feedback
-					const taskStatusMessage = lastMessage ?? messages[messages.length - 1]
-					const isTaskRunning = taskStatusMessage.partial === true || isApiReqActive(taskStatusMessage)
+				} else {
+					const inputAsk = resolveInputAsk(clineAsk, taskInputEnabled, taskActiveAsk)
 
-					if (isTaskRunning) {
-						// Task is running - send message as interruption/feedback
-						await TaskServiceClient.askResponse(
-							AskResponseRequest.create({
-								responseType: "messageResponse",
-								text: messageToSend,
-								images,
-								files,
-							}),
-						)
-						messageSent = true
+					if (inputAsk) {
+						messageSent = await sendAskReply(inputAsk, messageToSend, images, files)
+					} else if (messages.length > 0) {
+						// No clineAsk set - check if task is actively running
+						// If so, allow interrupting it with feedback
+						const taskStatusMessage = lastMessage ?? messages[messages.length - 1]
+						const isTaskRunning = taskStatusMessage.partial === true || isApiReqActive(taskStatusMessage)
+
+						if (isTaskRunning) {
+							// Task is running - send message as interruption/feedback
+							await TaskServiceClient.askResponse(
+								AskResponseRequest.create({
+									responseType: "messageResponse",
+									text: messageToSend,
+									images,
+									files,
+								}),
+							)
+							messageSent = true
+						}
 					}
 				}
 
@@ -148,7 +205,10 @@ export function useMessageHandlers(
 		[
 			messages.length,
 			clineAsk,
+			taskInputEnabled,
+			taskActiveAsk,
 			activeQuote,
+			lastMessage,
 			setInputValue,
 			setActiveQuote,
 			setSendingDisabled,

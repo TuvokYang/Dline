@@ -21,6 +21,10 @@ function createFakeTask(taskState: {
 	lastMessageTs: number | undefined
 }) {
 	const clineMessages: ClineMessage[] = []
+	const transitions: Array<{
+		to: string
+		ctx: { awaiting?: { kind?: string; taskAsk?: string; messageTs?: number }; apiIndex?: number }
+	}> = []
 
 	let lastGeneratedTs = 0
 	const fakeTask = {
@@ -96,17 +100,25 @@ function createFakeTask(taskState: {
 				}
 			},
 			advanceNextPendingApproval: () => {},
-			transition: async () => undefined,
+			transition: async (
+				to: string,
+				ctx: { awaiting?: { kind?: string; taskAsk?: string; messageTs?: number }; apiIndex?: number },
+			) => {
+				transitions.push({ to, ctx })
+				return undefined
+			},
 		},
 		withApprovalVisibleCallback: (Task.prototype as any).withApprovalVisibleCallback,
 		markApprovalAskVisible: (Task.prototype as any).markApprovalAskVisible,
 		markConversationAskVisible: (Task.prototype as any).markConversationAskVisible,
 		markErrorRecoveryAskVisible: (Task.prototype as any).markErrorRecoveryAskVisible,
 		markResumeAskVisible: (Task.prototype as any).markResumeAskVisible,
+		markCompletionAskVisible: (Task.prototype as any).markCompletionAskVisible,
 		isPendingToolApprovalAsk: (Task.prototype as any).isPendingToolApprovalAsk,
 		isConversationalAsk: (Task.prototype as any).isConversationalAsk,
 		isErrorRecoveryAsk: (Task.prototype as any).isErrorRecoveryAsk,
 		isResumeAsk: (Task.prototype as any).isResumeAsk,
+		isCompletionAsk: (Task.prototype as any).isCompletionAsk,
 		isParallelToolCallingEnabled: () => false,
 		emitStateSnapshot: async () => undefined,
 		postStateToWebview: async () => undefined,
@@ -118,7 +130,7 @@ function createFakeTask(taskState: {
 		},
 	}
 
-	return { clineMessages, fakeTask }
+	return { clineMessages, fakeTask, transitions }
 }
 
 describe("Task.ask", () => {
@@ -488,6 +500,46 @@ describe("Task.ask", () => {
 
 			assert.equal(result.response, "yesButtonClicked")
 			assert.equal(result.text, "resume completed")
+		} finally {
+			clock.useRealTimers()
+		}
+	})
+
+	it("writes completion awaiting snapshot when completion result ask becomes visible", async () => {
+		const clock = vi.useFakeTimers()
+		const taskState: {
+			abort: boolean
+			askResponse: string | undefined
+			askResponseText: string | undefined
+			askResponseImages: string[] | undefined
+			askResponseFiles: string[] | undefined
+			lastMessageTs: number | undefined
+		} = {
+			abort: false,
+			askResponse: undefined,
+			askResponseText: undefined,
+			askResponseImages: undefined,
+			askResponseFiles: undefined,
+			lastMessageTs: undefined,
+		}
+		const { fakeTask, transitions } = createFakeTask(taskState)
+
+		try {
+			const askPromise = (
+				Task.prototype as unknown as {
+					ask: (type: "completion_result") => Promise<{ response: string }>
+				}
+			).ask.call(fakeTask, "completion_result")
+
+			await flushMicrotasks()
+			assert.equal(transitions.length, 1)
+			assert.equal(transitions[0].ctx.awaiting?.kind, "completion")
+			assert.equal(transitions[0].ctx.awaiting?.taskAsk, "completion_result")
+			assert.equal(transitions[0].ctx.awaiting?.messageTs, taskState.lastMessageTs)
+
+			taskState.askResponse = "yesButtonClicked"
+			await await clock.advanceTimersByTimeAsync(100)
+			await askPromise
 		} finally {
 			clock.useRealTimers()
 		}

@@ -19,7 +19,7 @@ type ModeTab = "act" | "plan"
  */
 const ModelSwitcher: React.FC<ModelSwitcherProps> = ({ onOpenSettings }) => {
 	const { apiConfiguration, mode, planActSeparateModelsSetting, currentTaskItem } = useExtensionState()
-	const { profiles, selectProfile } = useApiProfiles()
+	const { profiles, selectProfile, selectProfiles } = useApiProfiles()
 	const [open, setOpen] = useState(false)
 	const [activeTab, setActiveTab] = useState<ModeTab>(mode || "act")
 	const [hoveredId, setHoveredId] = useState<string | null>(null)
@@ -60,9 +60,8 @@ const ModelSwitcher: React.FC<ModelSwitcherProps> = ({ onOpenSettings }) => {
 			// Separated mode: write to the active tab's mode (task-level)
 			selectProfile(profile.id, activeTab, taskId)
 		} else {
-			// Unified mode: write to both plan and act (task-level)
-			selectProfile(profile.id, "plan", taskId)
-			selectProfile(profile.id, "act", taskId)
+			// Unified mode: write to both plan and act in one task-level request.
+			selectProfiles(profile.id, ["plan", "act"], taskId)
 		}
 	}
 

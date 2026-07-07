@@ -76,11 +76,12 @@ export class DeepSeekHandler implements ApiHandler {
 		}
 		const deepUsage = usage as DeepSeekUsage
 
-		const inputTokens = deepUsage?.prompt_tokens || 0 // sum of cache hits and misses
+		const rawInputTokens = deepUsage?.prompt_tokens || 0 // sum of cache hits and misses
 		const outputTokens = deepUsage?.completion_tokens || 0
 		const cacheReadTokens = deepUsage?.prompt_cache_hit_tokens || 0
 		const cacheWriteTokens = deepUsage?.prompt_cache_miss_tokens || 0
-		const totalCost = calculateApiCostOpenAI(info, inputTokens, outputTokens, cacheWriteTokens, cacheReadTokens)
+		const inputTokens = Math.max(0, rawInputTokens - cacheReadTokens - cacheWriteTokens)
+		const totalCost = calculateApiCostOpenAI(info, rawInputTokens, outputTokens, cacheWriteTokens, cacheReadTokens)
 		yield {
 			type: "usage",
 			inputTokens: inputTokens,
