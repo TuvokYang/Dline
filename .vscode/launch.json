@@ -140,7 +140,8 @@
 				"CLINE_LOG_LEVEL": "debug",
 				"DLINE_SKIP_MIGRATION": "1",
 				"DLINE_HOME_DIR": "${workspaceFolder}/tmp/.dline",
-				"DLINE_DOCS_DIR": "${workspaceFolder}/tmp/dline"
+				"DLINE_DOCS_DIR": "${workspaceFolder}/tmp/dline",
+				"DLINE_DIR": "${workspaceFolder}/tmp/dline"
 			}
 		},
 		{

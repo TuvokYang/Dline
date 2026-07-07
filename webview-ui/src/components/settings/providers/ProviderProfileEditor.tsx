@@ -1,3 +1,8 @@
+import {
+	canStoreRegistryModelInfoOverrides,
+	getModelInfoOverrideFields,
+	pickModelInfoOverride,
+} from "@shared/providers/model-info-overrides"
 import { AIhubmixProvider } from "./AihubmixProvider"
 import { AnthropicProvider } from "./AnthropicProvider"
 import { AskSageProvider } from "./AskSageProvider"
@@ -36,6 +41,7 @@ import { SambanovaProvider } from "./SambanovaProvider"
 import { SapAiCoreProvider } from "./SapAiCoreProvider"
 import { TogetherProvider } from "./TogetherProvider"
 import { useApiProfiles } from "./useApiProfiles"
+import { useProviderModels } from "./useProviderModels"
 import { VercelAIGatewayProvider } from "./VercelAIGatewayProvider"
 import { VertexProvider } from "./VertexProvider"
 import { VSCodeLmProvider } from "./VSCodeLmProvider"
@@ -56,9 +62,25 @@ interface ApiProfileEditorProps {
 const ApiProfileEditor: React.FC<ApiProfileEditorProps> = ({ profile, isPopup }) => {
 	const showModelOptions = true
 	const { updateProfile } = useApiProfiles()
+	const { models } = useProviderModels(profile.provider || "")
 
-	// Build onUpdate callback for this profile
-	const onUpdate = (updates: Partial<ApiProfile>) => updateProfile(profile.id, updates)
+	const onUpdate = (updates: Partial<ApiProfile>) => {
+		const normalized = { ...updates }
+		if ("modelInfo" in normalized && normalized.modelInfo) {
+			const modelId = normalized.modelId ?? profile.modelId
+			const baseModelInfo = modelId ? models[modelId] : undefined
+			if (baseModelInfo) {
+				normalized.modelInfo = canStoreRegistryModelInfoOverrides(profile.provider)
+					? (pickModelInfoOverride(
+							normalized.modelInfo,
+							baseModelInfo,
+							getModelInfoOverrideFields(profile.provider),
+						) as ApiProfile["modelInfo"])
+					: undefined
+			}
+		}
+		updateProfile(profile.id, normalized)
+	}
 
 	switch (profile.provider) {
 		case "cline":

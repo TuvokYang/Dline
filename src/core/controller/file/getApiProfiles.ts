@@ -4,10 +4,18 @@
  * Reads ApiProfile configurations from ~/.dline/data/settings/api_profiles.json.
  */
 
+import { ModelRegistry } from "@core/model-registry/ModelRegistry"
 import { getDlineDataDir, getDlineHomePath } from "@core/storage/disk"
 import { getApiKey, setApiKey } from "@core/storage/secrets"
 import { EmptyRequest } from "@shared/proto/dline/common"
 import { ApiProfile, ApiProfilesResponse } from "@shared/proto/dline/profile"
+import {
+	canStoreRegistryModelInfoOverrides,
+	getModelInfoOverrideFields,
+	mergeModelInfo,
+	modelInfoToStorageJson,
+	pickModelInfoOverride,
+} from "@shared/providers/model-info-overrides"
 import { Logger } from "@shared/services/Logger"
 import { ProviderToApiKeyMap } from "@shared/storage/provider-keys"
 import fsSync from "fs"
@@ -19,6 +27,7 @@ const API_PROFILES_FILE = "api_profiles.json"
 
 let needsCleanRewrite = false
 let apiProfilesWriteQueue: Promise<void> = Promise.resolve()
+let cleanRewriteInProgress = false
 
 const ATOMIC_WRITE_RENAME_RETRY_DELAYS_MS = [20, 50, 100, 200, 500]
 
@@ -127,14 +136,91 @@ function readProfilesFromJson(data: unknown): ApiProfile[] {
 }
 
 export function normalizeApiProfile(profile: unknown): ApiProfile {
-	return ApiProfile.fromJSON(profile ?? {})
+	const normalized = ApiProfile.fromJSON(profile ?? {})
+	if (profile && typeof profile === "object") {
+		const rawProfile = profile as Record<string, unknown>
+		const rawModelInfo = rawProfile.modelInfo ?? rawProfile.model_info
+		if (rawModelInfo && typeof rawModelInfo === "object") {
+			normalized.modelInfo = rawModelInfo as ApiProfile["modelInfo"]
+		}
+	}
+	return normalized
+}
+
+function resolveRegistryModelInfo(profile: ApiProfile) {
+	if (!profile.provider || !profile.modelId) {
+		return undefined
+	}
+	const providerModels = ModelRegistry.getInstance().getProviderModels(profile.provider)
+	return providerModels?.models?.[profile.modelId]
+}
+
+function getProfileModelInfoOverride(profile: ApiProfile) {
+	const baseModelInfo = resolveRegistryModelInfo(profile)
+	if (!baseModelInfo) {
+		return profile.modelInfo
+	}
+	if (!canStoreRegistryModelInfoOverrides(profile.provider)) {
+		return undefined
+	}
+	return pickModelInfoOverride(profile.modelInfo, baseModelInfo, getModelInfoOverrideFields(profile.provider))
+}
+
+function applyRegistryModelInfo(profiles: ApiProfile[]): boolean {
+	let changed = false
+	for (const profile of profiles) {
+		if (!canStoreRegistryModelInfoOverrides(profile.provider)) {
+			// Non-override providers: clear stale modelInfo from the profile.
+			// These providers (e.g. anthropic, deepseek) store model info
+			// inside their provider-specific oneof config, not at the
+			// top-level modelInfo field.  Leaving a top-level modelInfo
+			// (from a prior version or manual edit) causes serialization
+			// to strip it, which would create a read-merge-strip loop.
+			// Clearing it here triggers a one-time clean rewrite.
+			if (profile.modelInfo) {
+				profile.modelInfo = undefined
+				changed = true
+			}
+			continue
+		}
+		// Override-enabled providers (e.g. openai): merge registry modelInfo
+		// with any stored user overrides so the profile always carries an
+		// up-to-date snapshot.
+		const baseModelInfo = resolveRegistryModelInfo(profile)
+		if (!baseModelInfo) {
+			continue
+		}
+		const modelInfoOverride = getProfileModelInfoOverride(profile)
+		const mergedModelInfo = mergeModelInfo(baseModelInfo, modelInfoOverride)
+		if (JSON.stringify(profile.modelInfo ?? undefined) !== JSON.stringify(mergedModelInfo ?? undefined)) {
+			changed = true
+		}
+		profile.modelInfo = ApiProfile.fromJSON({ modelInfo: mergedModelInfo }).modelInfo
+	}
+	return changed
+}
+
+async function hydrateModelInfoFromRegistry(profiles: ApiProfile[]): Promise<boolean> {
+	const registry = ModelRegistry.getInstance()
+	if (!registry.isInitialized) {
+		await registry.reload()
+	}
+	return applyRegistryModelInfo(profiles)
 }
 
 export function serializeApiProfilesForStorage(profiles: ApiProfile[]): unknown[] {
 	return profiles.map((profile) => {
-		const serialized = ApiProfile.toJSON({ ...profile, apiKey: "" }) as Record<string, unknown>
+		const modelInfo = getProfileModelInfoOverride(profile)
+		const serialized = ApiProfile.toJSON({ ...profile, apiKey: "", modelInfo: undefined }) as Record<string, unknown>
 		delete serialized.apiKey
 		delete serialized.api_key
+		delete serialized.model_info
+		const modelInfoJson = modelInfoToStorageJson(modelInfo)
+		if (modelInfoJson) {
+			serialized.modelInfo = modelInfoJson
+		} else {
+			delete serialized.modelInfo
+		}
 		return serialized
 	})
 }
@@ -158,6 +244,13 @@ function hydrateApiKeys(profiles: ApiProfile[]): void {
 }
 
 async function cleanRewriteApiProfiles(profiles: ApiProfile[]): Promise<void> {
+	// Debounce guard: prevent concurrent clean rewrites from piling up
+	// when readApiProfiles() (sync, fire-and-forget) triggers multiple
+	// async writes before the first one completes.
+	if (cleanRewriteInProgress) {
+		return
+	}
+	cleanRewriteInProgress = true
 	const settingsDir = path.join(getDlineDataDir(), "settings")
 	const filePath = path.join(settingsDir, API_PROFILES_FILE)
 	try {
@@ -165,6 +258,8 @@ async function cleanRewriteApiProfiles(profiles: ApiProfile[]): Promise<void> {
 		Logger.log("[cleanRewriteApiProfiles] Stripped apiKey fields from api_profiles.json")
 	} catch (err) {
 		Logger.error("[cleanRewriteApiProfiles] Failed:", err)
+	} finally {
+		cleanRewriteInProgress = false
 	}
 }
 
@@ -181,12 +276,13 @@ export async function getApiProfiles(controller: Controller, _request: EmptyRequ
 		const parsed = parseApiProfilesJson(raw)
 		const profiles = parsed.profiles
 		hydrateApiKeys(profiles)
+		const modelInfoChanged = await hydrateModelInfoFromRegistry(profiles)
 		if (parsed.recovered) {
 			needsCleanRewrite = false
 			await writeApiProfilesToFile(filePath, profiles)
-		} else if (needsCleanRewrite) {
+		} else if (needsCleanRewrite || modelInfoChanged) {
 			needsCleanRewrite = false
-			cleanRewriteApiProfiles(profiles)
+			await cleanRewriteApiProfiles(profiles)
 		}
 		// Flush any pending globalState writes before ensureProfileDefaults
 		// reads planModeProfile/actModeProfile, so it sees the latest values
@@ -209,6 +305,7 @@ export async function getApiProfiles(controller: Controller, _request: EmptyRequ
 				profiles = initializeFromApiConfig(controller)
 				Logger.log(`[getApiProfiles] initializeFromApiConfig returned ${profiles.length} profiles`)
 			}
+			await hydrateModelInfoFromRegistry(profiles)
 			await saveProfilesToFile(filePath, profiles)
 			// Flush any pending globalState writes before ensureProfileDefaults
 			// reads planModeProfile/actModeProfile, so it sees the latest values
@@ -406,8 +503,11 @@ export function readApiProfiles(): ApiProfile[] {
 		const parsed = parseApiProfilesJson(raw)
 		const profiles = parsed.profiles
 		hydrateApiKeys(profiles)
+		const modelInfoChanged = applyRegistryModelInfo(profiles)
 		if (parsed.recovered || needsCleanRewrite) {
 			needsCleanRewrite = false
+			cleanRewriteApiProfiles(profiles)
+		} else if (modelInfoChanged) {
 			cleanRewriteApiProfiles(profiles)
 		}
 		return profiles

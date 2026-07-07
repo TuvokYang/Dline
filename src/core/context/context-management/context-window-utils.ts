@@ -1,6 +1,53 @@
 import { ApiHandler } from "@core/api"
 import { OpenAiHandler } from "@core/api/providers/openai"
 
+const SAFETY_BUFFER_RATIO = 0.03
+const MIN_SAFETY_BUFFER = 5_000
+const MAX_SAFETY_BUFFER = 20_000
+const SUMMARIZE_INSTRUCTION_BUDGET = 2_500
+
+/**
+ * Clamp a numeric value between lower and upper bounds.
+ *
+ * @param value The candidate value to clamp.
+ * @param lower The inclusive lower bound.
+ * @param upper The inclusive upper bound.
+ * @returns The clamped numeric value.
+ */
+function clampValue(value: number, lower: number, upper: number): number {
+	return Math.min(Math.max(value, lower), upper)
+}
+
+/**
+ * Compute the safety buffer reserved for summarize-task request overhead.
+ *
+ * @param contextWindow The raw input context window in tokens.
+ * @returns The safety buffer, equal to 3% clamped to 5k..20k tokens.
+ */
+export function computeSafetyBuffer(contextWindow: number): number {
+	return clampValue(Math.floor(contextWindow * SAFETY_BUFFER_RATIO), MIN_SAFETY_BUFFER, MAX_SAFETY_BUFFER)
+}
+
+/**
+ * Compute the input-token budget for injected summarize_task instructions.
+ *
+ * @returns The fixed summarize-task instruction budget in input tokens.
+ */
+export function computeSummarizeBudget(): number {
+	return SUMMARIZE_INSTRUCTION_BUDGET
+}
+
+/**
+ * Compute the token threshold where proactive compaction should start.
+ *
+ * @param contextWindow The raw input context window in tokens.
+ * @param summarizeInstructionBudget The injected summarize_task input budget in tokens.
+ * @returns The proactive compaction trigger token count.
+ */
+export function computeCompactTrigger(contextWindow: number, summarizeInstructionBudget: number): number {
+	return Math.max(contextWindow - summarizeInstructionBudget - computeSafetyBuffer(contextWindow), 0)
+}
+
 /**
  * Computes the effective max allowed token count for a given context window size.
  * Pure computation — does NOT require an ApiHandler instance.

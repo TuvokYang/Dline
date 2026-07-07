@@ -12,7 +12,7 @@ export const openAiCodexModels: Record<string, ModelInfo> = {
 		apiFormat: ApiFormat.OPENAI_RESPONSES,
 		capabilities: {
 			maxTokens: 128_000,
-			contextWindow: 400_000,
+			contextWindow: 272_000,
 			supportsImages: true,
 			supportsPromptCache: true,
 			supportsReasoning: true,
@@ -25,7 +25,7 @@ export const openAiCodexModels: Record<string, ModelInfo> = {
 		apiFormat: ApiFormat.OPENAI_RESPONSES,
 		capabilities: {
 			maxTokens: 128_000,
-			contextWindow: 1_050_000,
+			contextWindow: 272_000,
 			supportsImages: true,
 			supportsPromptCache: true,
 			supportsReasoning: true,
@@ -38,7 +38,7 @@ export const openAiCodexModels: Record<string, ModelInfo> = {
 		apiFormat: ApiFormat.OPENAI_RESPONSES,
 		capabilities: {
 			maxTokens: 128_000,
-			contextWindow: 400_000,
+			contextWindow: 272_000,
 			supportsImages: true,
 			supportsPromptCache: true,
 			supportsReasoning: true,
@@ -49,4 +49,4 @@ export const openAiCodexModels: Record<string, ModelInfo> = {
 }
 
 /** Default model ID for OpenAI Codex provider */
-export const openAiCodexDefaultModelId = "gpt-5.3-codex"
+export const openAiCodexDefaultModelId = "gpt-5.5-codex"

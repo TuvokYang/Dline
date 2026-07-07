@@ -1,11 +1,11 @@
 import { setTimeout as setTimeoutPromise } from "node:timers/promises"
 import { ApiHandler, ApiProviderInfo, buildApiHandler, resolveProviderFromProfile } from "@core/api"
 import { ApiStream } from "@core/api/transform/stream"
-import { findEnabledProfileByName } from "@core/controller/file/getApiProfiles"
 import { AssistantMessageContent, parseAssistantMessageV2, TextStreamContent, ToolUse } from "@core/assistant-message"
 import { ContextManager } from "@core/context/context-management/ContextManager"
 import { checkContextWindowExceededError } from "@core/context/context-management/context-error-handling"
 import { getContextWindowInfo } from "@core/context/context-management/context-window-utils"
+import { shouldDeferCurrentTurn } from "@core/context/context-management/current-turn-compaction"
 import { EnvironmentContextTracker } from "@core/context/context-tracking/EnvironmentContextTracker"
 import { FileContextTracker } from "@core/context/context-tracking/FileContextTracker"
 import { ModelContextTracker } from "@core/context/context-tracking/ModelContextTracker"
@@ -20,6 +20,7 @@ import {
 	getLocalWindsurfRules,
 	refreshExternalRulesToggles,
 } from "@core/context/instructions/user-instructions/external-rules"
+import { findEnabledProfileByName } from "@core/controller/file/getApiProfiles"
 import { sendPartialMessageEvent } from "@core/controller/ui/subscribeToPartialMessage"
 import { getHookModelContext } from "@core/hooks/hook-model-context"
 import { getHooksEnabledSafe } from "@core/hooks/hooks-utils"
@@ -139,14 +140,14 @@ import { advanceLifecycle, getDeferredToolAction } from "./partial-tool-lifecycl
 import type { PresentationPriority } from "./presentation-types"
 import { type PendingToolUseState, type ReplayOptions, RestoreHandler } from "./RestoreHandler"
 import { ResumeHandler } from "./ResumeHandler"
-import { findAnchoredAsk } from "./TaskSnapshotReplayer"
 import { StreamChunkCoordinator } from "./StreamChunkCoordinator"
 import { StreamResponseHandler } from "./StreamResponseHandler"
 import { TaskController } from "./TaskController"
 import { TaskPhase } from "./TaskPhase"
 import { TaskPresentationScheduler } from "./TaskPresentationScheduler"
-import { TaskSnapshotPersistence } from "./TaskSnapshotPersistence"
 import { isValidApiIndex, type TaskSnapshot } from "./TaskSnapshot"
+import { TaskSnapshotPersistence } from "./TaskSnapshotPersistence"
+import { findAnchoredAsk } from "./TaskSnapshotReplayer"
 import { TaskState } from "./TaskState"
 import { TaskStateManager } from "./TaskStateManager"
 import { withTerminateTimeout } from "./TaskTerminateTimeout"
@@ -1589,13 +1590,19 @@ export class Task {
 		const shouldTrackErrorRecovery = this.isErrorRecoveryAsk(type) && partial !== true
 		const shouldTrackResume = this.isResumeAsk(type) && partial !== true
 		const shouldNotify = type !== "command_output" && partial !== true
-		if (!shouldTrackApproval && !shouldTrackConversation && !shouldTrackErrorRecovery && !shouldTrackResume && !shouldNotify) {
+		if (
+			!shouldTrackApproval &&
+			!shouldTrackConversation &&
+			!shouldTrackErrorRecovery &&
+			!shouldTrackResume &&
+			!shouldNotify
+		) {
 			return options
 		}
 
 		return {
 			...options,
-				onAskVisible: async (askTs: number) => {
+			onAskVisible: async (askTs: number) => {
 				if (shouldTrackApproval) {
 					await this.markApprovalAskVisible(type)
 				}
@@ -2690,8 +2697,7 @@ export class Task {
 		const model = this.api.getModel()
 		const mode = this.taskSm.mode
 		// Read profile from per-task cache first to avoid cross-task interference
-		const currentProfile =
-			mode === "plan" ? this.taskSm.planModeProfile : this.taskSm.actModeProfile
+		const currentProfile = mode === "plan" ? this.taskSm.planModeProfile : this.taskSm.actModeProfile
 		const providerId = resolveProviderFromProfile(currentProfile) || DEFAULT_API_PROVIDER
 		const customPrompt = this.stateManager.getGlobalSettingsKey("customPrompt")
 		return { model, providerId, customPrompt, mode }
@@ -2793,6 +2799,78 @@ export class Task {
 			lastGenerationId?: string
 		}>
 		return apiLike.getLastRequestId?.() ?? apiLike.lastGenerationId
+	}
+
+	/**
+	 * Parse the previous request's total input pressure from UI request metadata.
+	 *
+	 * @param previousApiReqIndex Index of the previous api_req_started UI message.
+	 * @returns Total request pressure tokens, or undefined when metadata is unavailable.
+	 */
+	private parsePreviousTokens(previousApiReqIndex: number): number | undefined {
+		if (previousApiReqIndex < 0) {
+			return undefined
+		}
+
+		const previousRequestText = this.messageStateHandler.clineMessages[previousApiReqIndex]?.text
+		if (!previousRequestText) {
+			return undefined
+		}
+
+		try {
+			const { tokensIn, tokensOut, cacheWrites, cacheReads }: ClineApiReqInfo = JSON.parse(previousRequestText)
+			return (tokensIn || 0) + (tokensOut || 0) + (cacheWrites || 0) + (cacheReads || 0)
+		} catch {
+			return undefined
+		}
+	}
+
+	/**
+	 * Cache the current assistant tool-use turn and remove it from history before summarizing older context.
+	 *
+	 * @param userContent Pending tool result content for the next request.
+	 * @returns True when a current turn was cached and removed from API history.
+	 */
+	private async deferCurrentTurn(userContent: ClineContent[]): Promise<boolean> {
+		const apiHistory = this.messageStateHandler.apiConversationHistory
+		const assistantMessage = apiHistory[apiHistory.length - 1]
+		if (!assistantMessage || assistantMessage.role !== "assistant") {
+			return false
+		}
+
+		this.taskState.deferredCurrentTurn = {
+			assistantMessage: cloneDeep(assistantMessage),
+			userContent: cloneDeep(userContent),
+		}
+
+		await this.messageStateHandler.overwriteApiConversationHistory(apiHistory.slice(0, -1))
+		return true
+	}
+
+	/**
+	 * Restore a deferred current turn after summarize_task has produced compacted context.
+	 *
+	 * @param summaryContent The summarize_task tool result content containing compacted context.
+	 * @returns The deferred tool result content, or the original content if no deferred turn exists.
+	 */
+	private async restoreDeferredTurn(summaryContent: ClineContent[]): Promise<ClineContent[]> {
+		const deferredTurn = this.taskState.deferredCurrentTurn
+		if (!deferredTurn) {
+			return summaryContent
+		}
+
+		this.taskState.deferredCurrentTurn = undefined
+		const summaryText = summaryContent.map((block) => formatContentBlockToMarkdown(block)).join("\n\n")
+		if (summaryText.trim().length > 0) {
+			await this.messageStateHandler.addToApiConversationHistory({
+				role: "user",
+				content: [{ type: "text", text: summaryText }],
+				ts: Date.now(),
+			})
+		}
+
+		await this.messageStateHandler.addToApiConversationHistory(deferredTurn.assistantMessage)
+		return deferredTurn.userContent
 	}
 
 	private async handleContextWindowExceededError(): Promise<void> {
@@ -3679,6 +3757,19 @@ export class Task {
 					previousApiReqIndex,
 				)
 
+				const previousTokens = this.parsePreviousTokens(previousApiReqIndex)
+				if (!shouldCompact && previousTokens !== undefined) {
+					const { contextWindow } = getContextWindowInfo(this.api)
+					const shouldDeferTurn = shouldDeferCurrentTurn({
+						contextWindow,
+						previousTokens,
+						userContent,
+					})
+					if (shouldDeferTurn) {
+						shouldCompact = await this.deferCurrentTurn(userContent)
+					}
+				}
+
 				// Edge case: summarize_task tool call completes but user cancels next request before it finishes.
 				// This results in currentlySummarizing being false, and we fail to update the context window token estimate.
 				// Check active message count to avoid summarizing a summary (bad UX but doesn't break logic).
@@ -3694,7 +3785,7 @@ export class Task {
 				}
 
 				// Determine whether we can save enough tokens from context rewriting to skip auto-compact
-				if (shouldCompact) {
+				if (shouldCompact && !this.taskState.deferredCurrentTurn) {
 					shouldCompact = await this.contextManager.attemptFileReadOptimization(
 						this.messageStateHandler.apiConversationHistory,
 						this.taskState.conversationHistoryDeletedRange,
@@ -3706,6 +3797,11 @@ export class Task {
 			}
 		}
 
+		const deferredUserContent = await this.restoreDeferredTurn(userContent)
+		if (deferredUserContent !== userContent) {
+			return this.recursivelyMakeClineRequests(deferredUserContent, includeFileDetails)
+		}
+
 		// NOW load context based on compaction decision
 		// This optimization avoids expensive context loading when using summarize_task
 		let parsedUserContent: ClineContent[]
@@ -3714,7 +3810,7 @@ export class Task {
 
 		if (shouldCompact) {
 			// When compacting, skip full context loading (use summarize_task instead)
-			parsedUserContent = userContent
+			parsedUserContent = this.taskState.deferredCurrentTurn ? [] : userContent
 			environmentDetails = ""
 			clinerulesError = false
 			this.taskState.lastAutoCompactTriggerIndex = previousApiReqIndex

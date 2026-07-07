@@ -1,12 +1,15 @@
 import { Anthropic } from "@anthropic-ai/sdk"
 import { ClineMessage } from "@shared/ExtensionMessage"
 import { expect } from "chai"
+import fs from "fs/promises"
+import os from "os"
+import path from "path"
 import { ContextManager } from "../ContextManager"
 
 // Minimal mock for ApiHandler — only getModel().info.capabilities.contextWindow is used by shouldCompactContextWindow
 function createMockApi(contextWindow: number) {
 	return {
-		getModel: () => ({ id: "test-model", info: { contextWindow } }),
+		getModel: () => ({ id: "test-model", info: { capabilities: { contextWindow } } }),
 	} as any
 }
 
@@ -464,7 +467,37 @@ describe("ContextManager", () => {
 			expect(result).to.equal(false)
 		})
 
-		it("includes cacheWrites and cacheReads in total token count", () => {
+		it("does not compact at observed 232K pressure on 272K input context", () => {
+			const api = createMockApi(272_000)
+			const clineMessages: ClineMessage[] = [
+				createApiReqMessage({ tokensIn: 100_000, tokensOut: 12_000, cacheWrites: 0, cacheReads: 120_000 }),
+			]
+
+			const result = contextManager.shouldCompactContextWindow(clineMessages, api, 0)
+			expect(result).to.equal(false)
+		})
+
+		it("does not reserve generated summary output against input context", () => {
+			const api = createMockApi(272_000)
+			const clineMessages: ClineMessage[] = [
+				createApiReqMessage({ tokensIn: 130_000, tokensOut: 10_000, cacheWrites: 0, cacheReads: 115_000 }),
+			]
+
+			const result = contextManager.shouldCompactContextWindow(clineMessages, api, 0)
+			expect(result).to.equal(false)
+		})
+
+		it("compacts when summarize instruction overhead and safety buffer are exhausted", () => {
+			const api = createMockApi(272_000)
+			const clineMessages: ClineMessage[] = [
+				createApiReqMessage({ tokensIn: 130_000, tokensOut: 10_000, cacheWrites: 0, cacheReads: 122_000 }),
+			]
+
+			const result = contextManager.shouldCompactContextWindow(clineMessages, api, 0)
+			expect(result).to.equal(true)
+		})
+
+		it("keeps cacheWrites and cacheReads in total token count", () => {
 			const api = createMockApi(200_000)
 			// Low direct tokens but high cache reads push total over threshold
 			const clineMessages: ClineMessage[] = [
@@ -490,6 +523,87 @@ describe("ContextManager", () => {
 
 			const result = contextManager.shouldCompactContextWindow(clineMessages, api, 0, 1.0)
 			expect(result).to.equal(true)
+		})
+	})
+
+	describe("getNewContextMessagesAndMetadata", () => {
+		let contextManager: ContextManager
+
+		beforeEach(() => {
+			contextManager = new ContextManager()
+		})
+
+		it("does not truncate standard context at observed 232K pressure on 272K input context", async () => {
+			const api = createMockApi(272_000)
+			const apiConversationHistory = createMessages(10)
+			const clineMessages: ClineMessage[] = [
+				createApiReqMessage({ tokensIn: 100_000, tokensOut: 12_000, cacheWrites: 0, cacheReads: 120_000 }),
+			]
+			const taskDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "dline-context-test-"))
+
+			const result = await contextManager.getNewContextMessagesAndMetadata(
+				apiConversationHistory,
+				clineMessages,
+				api,
+				undefined,
+				0,
+				taskDirectory,
+				false,
+			)
+
+			expect(result.updatedConversationHistoryDeletedRange).to.equal(false)
+			expect(result.conversationHistoryDeletedRange).to.equal(undefined)
+			expect(result.truncatedConversationHistory).to.deep.equal(apiConversationHistory)
+		})
+
+		it("does not rewrite history when file-read optimization cannot avoid auto compact", async () => {
+			const apiConversationHistory: Anthropic.Messages.MessageParam[] = [
+				{ role: "user", content: "Initial task" },
+				{ role: "assistant", content: "Initial response" },
+				{
+					role: "user",
+					content: [
+						{
+							type: "text",
+							text: "Large stable context prefix. ".repeat(4_000),
+						},
+					],
+				},
+				{ role: "assistant", content: "Intermediate response" },
+				{
+					role: "user",
+					content: [
+						{
+							type: "text",
+							text: "[read_file for 'src/example.ts'] Result:\nconst value = 1\n",
+						},
+					],
+				},
+				{ role: "assistant", content: "Read acknowledged" },
+				{
+					role: "user",
+					content: [
+						{
+							type: "text",
+							text: "[read_file for 'src/example.ts'] Result:\nconst value = 2\n",
+						},
+					],
+				},
+			]
+			const clineMessages: ClineMessage[] = [createApiReqMessage({ tokensIn: 130_000, cacheReads: 132_000 })]
+			const taskDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "dline-context-test-"))
+
+			const shouldCompact = await contextManager.attemptFileReadOptimization(
+				apiConversationHistory,
+				undefined,
+				clineMessages,
+				0,
+				taskDirectory,
+			)
+			const unchangedHistory = contextManager.getTruncatedMessages(apiConversationHistory, undefined)
+
+			expect(shouldCompact).to.equal(true)
+			expect(unchangedHistory).to.deep.equal(apiConversationHistory)
 		})
 	})
 })

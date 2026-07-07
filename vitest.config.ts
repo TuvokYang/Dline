@@ -7,6 +7,7 @@ export default defineConfig({
 			"src/**/*.test.ts",
 			"src/**/__tests__/**/*.test.ts",
 			"webview-ui/src/**/*.test.ts",
+			"webview-ui/src/**/*.test.tsx",
 			"webview-ui/src/**/*.spec.ts",
 			"webview-ui/src/**/*.spec.tsx",
 		],

@@ -9,7 +9,7 @@ import cloneDeep from "clone-deep"
 import * as path from "path"
 import { Logger } from "@/shared/services/Logger"
 import { isTurnEndingToolName } from "../../task/assistant-message-order"
-import { getContextWindowInfo } from "./context-window-utils"
+import { computeCompactTrigger, computeSummarizeBudget, getContextWindowInfo } from "./context-window-utils"
 
 enum EditType {
 	UNDEFINED = 0,
@@ -159,8 +159,8 @@ export class ContextManager {
 					const { contextWindow, maxAllowedSize } = getContextWindowInfo(api)
 					const roundedThreshold = thresholdPercentage
 						? Math.floor(contextWindow * thresholdPercentage)
-						: maxAllowedSize
-					const thresholdTokens = Math.min(roundedThreshold, maxAllowedSize)
+						: computeCompactTrigger(contextWindow, computeSummarizeBudget())
+					const thresholdTokens = thresholdPercentage ? Math.min(roundedThreshold, maxAllowedSize) : roundedThreshold
 					return totalTokens >= thresholdTokens
 				} catch {
 					return false
@@ -239,13 +239,14 @@ export class ContextManager {
 					const timestamp = clineMessages[previousApiReqIndex].ts
 					const { tokensIn, tokensOut, cacheWrites, cacheReads }: ClineApiReqInfo = JSON.parse(previousRequestText)
 					const totalTokens = (tokensIn || 0) + (tokensOut || 0) + (cacheWrites || 0) + (cacheReads || 0)
-					const { maxAllowedSize } = getContextWindowInfo(api)
+					const { contextWindow } = getContextWindowInfo(api)
+					const triggerTokens = computeCompactTrigger(contextWindow, computeSummarizeBudget())
 
-					// This is the most reliable way to know when we're close to hitting the context window.
-					if (totalTokens >= maxAllowedSize) {
+					// Use the same input-context trigger as auto-condense to avoid early standard truncation.
+					if (totalTokens >= triggerTokens) {
 						// Since the user may switch between models with different context windows, truncating half may not be enough (ie if switching from claude 200k to deepseek 64k, half truncation will only remove 100k tokens, but we need to remove much more)
-						// So if totalTokens/2 is greater than maxAllowedSize, we truncate 3/4 instead of 1/2
-						const keep = totalTokens / 2 > maxAllowedSize ? "quarter" : "half"
+						// So if totalTokens/2 is greater than triggerTokens, we truncate 3/4 instead of 1/2
+						const keep = totalTokens / 2 > triggerTokens ? "quarter" : "half"
 
 						// Attempt file read optimization and check if we need to truncate
 						let { anyContextUpdates, needToTruncate } = this.attemptFileReadOptimizationCore(
@@ -750,6 +751,7 @@ export class ContextManager {
 		}
 
 		const timestamp = previousRequest.ts
+		const originalContextHistoryUpdates = cloneDeep(this.contextHistoryUpdates)
 
 		const { anyContextUpdates, needToTruncate } = this.attemptFileReadOptimizationCore(
 			apiConversationHistory,
@@ -757,11 +759,16 @@ export class ContextManager {
 			timestamp,
 		)
 
+		if (needToTruncate) {
+			this.contextHistoryUpdates = originalContextHistoryUpdates
+			return true
+		}
+
 		if (anyContextUpdates) {
 			await this.saveContextHistory(taskDirectory)
 		}
 
-		return needToTruncate
+		return false
 	}
 
 	/**

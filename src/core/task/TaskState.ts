@@ -1,6 +1,7 @@
 import { Anthropic } from "@anthropic-ai/sdk"
 import { AssistantMessageContent } from "@core/assistant-message"
 import { ClineAskResponse } from "@shared/WebviewMessage"
+import type { ClineContent, ClineStorageMessage } from "@/shared/messages"
 import type { PartialToolLifecycle } from "./partial-tool-lifecycle"
 import type { HookExecution } from "./types/HookExecution"
 
@@ -90,6 +91,10 @@ export class TaskState {
 	// Auto-context summarization
 	currentlySummarizing = false
 	lastAutoCompactTriggerIndex?: number
+	deferredCurrentTurn?: {
+		assistantMessage: ClineStorageMessage
+		userContent: ClineContent[]
+	}
 
 	// Block identity: maps source-offset keys to stable UI ts values.
 	// Key format: "text:<startOffset>" or "tool:<openTagStart>".

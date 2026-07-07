@@ -1,5 +1,6 @@
 import { Empty } from "@shared/proto/dline/common"
 import { PlanActMode, UpdateTaskSettingsRequest } from "@shared/proto/dline/state"
+import { Logger } from "@shared/services/Logger"
 import { Mode } from "@/shared/storage/types"
 import { Controller } from ".."
 import { normalizeOpenaiReasoningEffort } from "./reasoningEffort"
@@ -87,13 +88,23 @@ export async function updateTaskSettings(controller: Controller, request: Update
 			controller.stateManager.setTaskSettings(taskId, "customPrompt", "compact")
 		}
 
+		// Track whether any API-handler-affecting settings changed,
+		// so we can rebuild the active task's API handler.
+		let taskProfileChanged = false
+
 		if (typeof planModeProfile === "string") {
+			taskProfileChanged = true
 			controller.stateManager.setTaskSettings(taskId, "planModeProfile", planModeProfile)
 		}
 
 		if (typeof actModeProfile === "string") {
+			taskProfileChanged = true
 			controller.stateManager.setTaskSettings(taskId, "actModeProfile", actModeProfile)
 		}
+
+		const taskReasoningChanged = planModeReasoningEffort !== undefined || actModeReasoningEffort !== undefined
+		const taskModeChanged = mode !== undefined
+		const shouldRebuild = taskProfileChanged || taskReasoningChanged || taskModeChanged
 
 		if (browserSettings !== undefined) {
 			const currentSettings = controller.stateManager.getGlobalSettingsKey("browserSettings")
@@ -122,6 +133,20 @@ export async function updateTaskSettings(controller: Controller, request: Update
 			}
 
 			controller.stateManager.setTaskSettings(taskId, "browserSettings", newBrowserSettings)
+		}
+
+		// Rebuild the active task's API handler when profile, reasoning, or mode changes.
+		// This ensures the next API request uses the updated configuration.
+		if (shouldRebuild && controller.task && controller.task.taskId === taskId) {
+			Logger.info("[updateTaskSettings] profile/mode/reasoning changed — rebuilding API handler", {
+				taskId,
+				planModeProfile: planModeProfile ?? "(unchanged)",
+				actModeProfile: actModeProfile ?? "(unchanged)",
+				planModeReasoningEffort: planModeReasoningEffort ?? "(unchanged)",
+				actModeReasoningEffort: actModeReasoningEffort ?? "(unchanged)",
+				mode: mode ?? "(unchanged)",
+			})
+			controller.task.rebuildApiHandler()
 		}
 	}
 

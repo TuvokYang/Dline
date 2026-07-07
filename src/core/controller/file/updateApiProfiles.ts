@@ -4,6 +4,7 @@
  * Writes ApiProfile configurations to ~/.dline/data/settings/api_profiles.json.
  */
 
+import { ModelRegistry } from "@core/model-registry/ModelRegistry"
 import { getDlineDataDir } from "@core/storage/disk"
 import { deleteApiKey, migrateApiKey, setApiKey } from "@core/storage/secrets"
 import { Empty } from "@shared/proto/dline/common"
@@ -40,6 +41,10 @@ async function updateApiProfilesImpl(controller: Controller, request: UpdateApiP
 	const oldMap = new Map(oldProfiles.map((p) => [p.id, p]))
 	const profiles = (request.profiles || []).map(normalizeApiProfile)
 	const nextIds = new Set(profiles.map((p) => p.id))
+	const registry = ModelRegistry.getInstance()
+	if (!registry.isInitialized) {
+		await registry.reload()
+	}
 
 	for (const oldProfile of oldProfiles) {
 		if (!nextIds.has(oldProfile.id)) {
