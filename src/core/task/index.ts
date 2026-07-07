@@ -66,7 +66,9 @@ import { isFocusChainItem } from "@shared/focus-chain-utils"
 import { HistoryItem } from "@shared/HistoryItem"
 import { DEFAULT_LANGUAGE_SETTINGS, getLanguageKey, LanguageDisplay } from "@shared/Languages"
 import { USER_CONTENT_TAGS } from "@shared/messages/constants"
+import type { ReasoningConfig } from "@shared/proto/dline/provider/common"
 import { convertClineMessageToProto } from "@shared/proto-conversions/cline-message"
+import { PROFILE_PROVIDER_KEYS } from "@shared/providers/profile-model-info"
 import { ClineDefaultTool, READ_ONLY_TOOLS } from "@shared/tools"
 import { ClineAskResponse } from "@shared/WebviewMessage"
 import { isLocalModel, isNextGenModelFamily, isParallelToolCallingEnabled } from "@utils/model-utils"
@@ -2745,24 +2747,15 @@ export class Task {
 			return undefined
 		}
 
-		// Access provider-specific config via profile's provider key
-		const providerKey = profile.provider
-		const rawProfile = profile as unknown as Record<string, unknown>
-		const provCfg = rawProfile[providerKey]
-		if (!provCfg || typeof provCfg !== "object") {
-			return undefined
-		}
-
-		const reasoning = (provCfg as Record<string, unknown>).reasoning as
-			| { effort?: string; thinkingBudget?: number; enableThinking?: boolean }
-			| undefined
+		// Provider configs use proto-generated camelCase fields when provider ids contain hyphens.
+		// Keep the current profile shape and use the shared provider-id to ApiProfile-field map.
+		const providerKey = PROFILE_PROVIDER_KEYS[profile.provider]
+		const provCfg = providerKey ? profile[providerKey] : undefined
+		const reasoning =
+			provCfg && typeof provCfg === "object" ? (provCfg as { reasoning?: ReasoningConfig }).reasoning : undefined
 		if (!reasoning) {
-			return undefined
+			return { enableThinking: true, effort: "medium" }
 		}
-
-		const model = this.api.getModel()
-		const modelInfo = model.info as unknown as Record<string, unknown> | undefined
-		const capabilities = (modelInfo?.capabilities ?? {}) as Record<string, unknown>
 
 		return {
 			enableThinking: reasoning.enableThinking,

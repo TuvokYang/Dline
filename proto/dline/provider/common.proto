@@ -5,9 +5,9 @@ package dline.provider;
 import "dline/models/metadata.proto";
 
 message ReasoningConfig {
-  optional string effort = 1;
-  optional int32 thinking_budget = 2;
-  optional bool enable_thinking = 3;
+  optional bool enable_thinking = 1;
+  optional string effort = 2;
+  optional int32 thinking_budget = 3;
 }
 
 message BaseProviderConfig {

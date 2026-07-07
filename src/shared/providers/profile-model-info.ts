@@ -4,7 +4,7 @@ import type { ApiProfile } from "@shared/proto/dline/profile"
 import { buildEffectiveModelInfo, type ProviderModelOverrides } from "./effective-model-info"
 import type { ProviderModelsConfig } from "./types"
 
-const PROFILE_PROVIDER_KEYS: Partial<Record<string, keyof ApiProfile>> = {
+export const PROFILE_PROVIDER_KEYS: Partial<Record<string, keyof ApiProfile>> = {
 	aihubmix: "aihubmix",
 	anthropic: "anthropic",
 	asksage: "asksage",

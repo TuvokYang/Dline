@@ -232,15 +232,19 @@ export class OpenAiHandler implements ApiHandler {
 			openAiMessages = convertToR1Format([{ role: "user", content: systemPrompt }, ...messages])
 		}
 
-		const thinkingBudget = this.config?.reasoning?.thinkingBudget ?? 0
-		if (thinkingBudget > 0) {
+		const reasoningConfig = this.config?.reasoning
+		const enableThinking = reasoningConfig?.enableThinking ?? true
+		const thinkingBudget = enableThinking ? (reasoningConfig?.thinkingBudget ?? 0) : 0
+		if (enableThinking && thinkingBudget > 0) {
 			// Budget mode: use enable_thinking + thinking_budget, no effort
 			openAiMessages = [{ role: "developer", content: systemPrompt }, ...convertToOpenAiMessages(messages)]
 			reasoningEffort = undefined
-		} else {
+		} else if (enableThinking) {
 			// Effort mode: send reasoning_effort based on the config value, not model ID prefix
 			const requestedEffort = normalizeOpenaiReasoningEffort(this.reasoningEffort)
 			reasoningEffort = requestedEffort === "none" ? undefined : (requestedEffort as ChatCompletionReasoningEffort)
+		} else {
+			reasoningEffort = undefined
 		}
 
 		// o-series model-specific handling: developer role + no temperature
@@ -260,14 +264,13 @@ export class OpenAiHandler implements ApiHandler {
 			temperature,
 			max_tokens: maxTokens,
 			stream: true,
-			reasoning_effort: reasoningEffort,
 		}
-		// Enable thinking: budget mode uses explicit budget; effort mode uses reasoning_effort + enable_thinking
-		if (thinkingBudget > 0) {
-			requestParams.enable_thinking = true
+		// Always pass enable_thinking so explicit false from ThinkingControl disables provider reasoning.
+		requestParams.enable_thinking = enableThinking
+		if (enableThinking && thinkingBudget > 0) {
 			requestParams.thinking_budget = thinkingBudget
-		} else if (reasoningEffort) {
-			requestParams.enable_thinking = true
+		} else if (enableThinking && reasoningEffort) {
+			requestParams.reasoning_effort = reasoningEffort
 		}
 		if (this.config?.streamIncludeUsage !== false) {
 			requestParams.stream_options = { include_usage: true }

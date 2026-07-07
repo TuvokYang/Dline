@@ -51,6 +51,7 @@ export class OpenAiCodexHandler implements ApiHandler {
 	}
 
 	private get config() {
+		// Provider config fields are generated from proto as camelCase members.
 		return this.ctx.profile.openaiCodex
 	}
 	private get modelId() {
@@ -59,8 +60,11 @@ export class OpenAiCodexHandler implements ApiHandler {
 	private get modelInfo() {
 		return this.ctx.profile.modelInfo as ModelInfo | undefined
 	}
+	private get reasoningConfig() {
+		return this.config?.reasoning
+	}
 	private get reasoningEffort() {
-		return this.config?.reasoning?.effort
+		return this.reasoningConfig?.effort
 	}
 
 	private normalizeUsage(usage: any, _model: { id: string; info: ModelInfo }): ApiStreamUsageChunk | undefined {
@@ -90,10 +94,13 @@ export class OpenAiCodexHandler implements ApiHandler {
 				? usage.output_tokens_details.reasoning_tokens
 				: undefined
 
-		// Subscription-based: no per-token costs
+		// Yield inputTokens in Anthropic semantic (excluding cache) so
+		// ContextManager and updateApiReqMsg can accurately estimate
+		// context pressure. Cost is zero for subscription-based billing.
+		const nonCachedInputTokens = Math.max(0, totalInputTokens - cacheReadTokens - cacheWriteTokens)
 		const out: ApiStreamUsageChunk = {
 			type: "usage",
-			inputTokens: totalInputTokens,
+			inputTokens: nonCachedInputTokens,
 			outputTokens: totalOutputTokens,
 			cacheWriteTokens,
 			cacheReadTokens,
@@ -162,9 +169,10 @@ export class OpenAiCodexHandler implements ApiHandler {
 		tools?: ChatCompletionTool[],
 		previousResponseId?: string,
 	): any {
-		// Determine reasoning effort
+		// Determine reasoning effort. Explicit enableThinking=false disables Responses reasoning entirely.
+		const enableThinking = this.reasoningConfig?.enableThinking ?? true
 		const reasoningEffort = normalizeOpenaiReasoningEffort(this.reasoningEffort)
-		const includeReasoning = reasoningEffort !== "none"
+		const includeReasoning = enableThinking && reasoningEffort !== "none"
 
 		const body: any = {
 			model: model.id,
