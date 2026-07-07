@@ -81,13 +81,13 @@ export class ApplyPatchHandler implements IFullyManagedTool {
 			this.initializeHelpers(config)
 
 			// Preview the first file being edited
-			await this.previewPatchStream(rawInput, uiHelpers).catch(() => {})
+			await this.previewPatchStream(rawInput, uiHelpers, block.ts).catch(() => {})
 		} catch {
 			// Wait for more data if parsing fails
 		}
 	}
 
-	private async previewPatchStream(rawInput: string, uiHelpers: StronglyTypedUIHelpers): Promise<void> {
+	private async previewPatchStream(rawInput: string, uiHelpers: StronglyTypedUIHelpers, blockTs?: number): Promise<void> {
 		const config = uiHelpers.getConfig()
 		const provider = config.services.diffViewProvider
 		this.initializeHelpers(config)
@@ -164,6 +164,7 @@ export class ApplyPatchHandler implements IFullyManagedTool {
 					operationIsLocatedInWorkspace: await isLocatedInWorkspace(finalPath),
 				}),
 				true,
+				blockTs !== undefined ? { existingTs: blockTs } : undefined,
 			)
 			.catch(() => {}) // sending true for partial even though it's not a partial, this shows the edit row before the content is streamed into the editor
 
