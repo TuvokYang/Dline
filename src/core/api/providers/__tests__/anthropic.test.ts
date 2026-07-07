@@ -17,6 +17,35 @@ describe("AnthropicHandler", () => {
 	})
 
 	describe("getModel", () => {
+		it("should merge provider overrides into registry model metadata", () => {
+			const handler = new AnthropicHandler({
+				profile: ApiProfile.create({
+					provider: "anthropic",
+					apiKey: "test-api-key",
+					modelId: "claude-opus-4-7",
+					anthropic: {
+						capabilities: {
+							maxTokens: 12_345,
+							supportsPromptCache: false,
+						},
+						pricing: {
+							inputPrice: 0.5,
+						},
+					},
+				}),
+				mode: "act",
+			})
+
+			const result = handler.getModel()
+
+			result.id.should.equal("claude-opus-4-7")
+			result.info.id.should.equal("claude-opus-4-7")
+			should(result.info.capabilities?.contextWindow).equal(anthropicModels["claude-opus-4-7"].capabilities?.contextWindow)
+			should(result.info.capabilities?.maxTokens).equal(12_345)
+			should(result.info.capabilities?.supportsPromptCache).equal(false)
+			should(result.info.pricing?.inputPrice).equal(0.5)
+		})
+
 		it("should return the fast mode model when configured", () => {
 			const handler = new AnthropicHandler({
 				profile: ApiProfile.create({ provider: "anthropic", apiKey: "test-api-key", modelId: "claude-opus-4-6:fast" }),
@@ -247,6 +276,42 @@ describe("AnthropicHandler", () => {
 			requestBody.should.have.property("output_config")
 			requestBody.output_config.should.deepEqual({ effort: "xhigh" })
 			should(requestBody.temperature).equal(undefined)
+		})
+
+		it("should use provider overrides for registry model request max tokens", async () => {
+			const handler = new AnthropicHandler({
+				profile: ApiProfile.create({
+					provider: "anthropic",
+					apiKey: "test-api-key",
+					modelId: "claude-opus-4-7",
+					anthropic: {
+						capabilities: {
+							maxTokens: 12_345,
+							supportsPromptCache: false,
+						},
+					},
+				}),
+				mode: "act",
+			})
+			const standardCreate = vi.fn().mockResolvedValue(createAsyncIterable())
+
+			vi.spyOn(handler as unknown as { ensureClient: () => unknown }, "ensureClient").mockReturnValue({
+				messages: {
+					create: standardCreate,
+				},
+				beta: {
+					messages: {
+						_client: {},
+						create: vi.fn().mockResolvedValue(createAsyncIterable()),
+					},
+				},
+			})
+
+			for await (const _chunk of handler.createMessage("system prompt", [{ role: "user", content: "Hello" }])) {
+			}
+
+			const requestBody = standardCreate.mock.calls[0]?.[0] as { max_tokens?: unknown } | undefined
+			expect(requestBody?.max_tokens).to.equal(12_345)
 		})
 
 		it("should send the custom model id in Anthropic requests", async () => {

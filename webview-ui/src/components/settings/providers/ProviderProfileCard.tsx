@@ -1,8 +1,8 @@
 import { EmptyRequest } from "@shared/proto/dline/common"
-import { AvailableModelsResponse } from "@shared/proto/dline/models"
+import type { AvailableModelsResponse, ModelInfo } from "@shared/proto/dline/models"
 import type { Mode } from "@shared/storage/types"
 import { ChevronDownIcon, ChevronRightIcon } from "lucide-react"
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useState } from "react"
 import { ModelsServiceClient } from "@/services/grpc-client"
 import type { ApiProfile } from "./ProviderProfile"
 import ApiProfileEditor from "./ProviderProfileEditor"
@@ -88,32 +88,19 @@ const ApiProfileCard: React.FC<ApiProfileCardProps> = ({
 	// triggering onUpdate → persist → loadProfiles → re-render cycles.
 	// The tooltip display uses loadedModelInfo as fallback; the profile's
 	// actual modelInfo is only persisted when the user explicitly selects a model.
-	const [loadedModelInfo, setLoadedModelInfo] = useState<any>(profile.modelInfo || null)
-
-	// Guard: only fire onUpdate once per provider+modelId combination to prevent
-	// load-onUpdate-persist-load infinite cycles when profiles-changed re-renders this card.
-	const hasUpdatedModelInfoRef = useRef(false)
-	useEffect(() => {
-		// Reset guard when provider or modelId changes (new combination needs fresh lookup)
-		hasUpdatedModelInfoRef.current = false
-	}, [profile.provider, profile.modelId])
+	const [loadedModelInfo, setLoadedModelInfo] = useState<ModelInfo | null>(profile.modelInfo || null)
 
 	useEffect(() => {
 		if (profile.modelInfo || !profile.provider || !profile.modelId) return
-		// Skip if we already fired onUpdate for this provider+modelId
-		if (hasUpdatedModelInfoRef.current) return
 		let cancelled = false
 		ModelsServiceClient.getAvailableModels({} as EmptyRequest)
 			.then((response: AvailableModelsResponse) => {
-				if (cancelled || hasUpdatedModelInfoRef.current) return
+				if (cancelled) return
 				for (const group of response.providers || []) {
 					if (group.provider === profile.provider) {
 						const found = group.models.find((m) => m.id === profile.modelId)
 						if (found) {
 							setLoadedModelInfo(found)
-							// Mark as updated before calling onUpdate to prevent re-entry
-							hasUpdatedModelInfoRef.current = true
-							onUpdate({ modelInfo: found as any })
 						}
 						break
 					}
@@ -132,13 +119,13 @@ const ApiProfileCard: React.FC<ApiProfileCardProps> = ({
 	const info = loadedModelInfo || profile.modelInfo
 	const tooltipLines: string[] = [displayLine]
 	if (info) {
-		const mi = info as any
+		const mi = info
 		if (mi.capabilities?.contextWindow)
 			tooltipLines.push(`Context: ${mi.capabilities?.contextWindow.toLocaleString()} tokens`)
 		if (mi.pricing?.inputPrice != null)
 			tooltipLines.push(`In: $${mi.pricing?.inputPrice}/M | Out: $${mi.pricing?.outputPrice ?? "?"}/M`)
 		if (mi.capabilities?.supportsReasoning)
-			tooltipLines.push(`🧠 Reasoning: ${mi.capabilities?.thinking?.geminiThinkingLevel || "supported"}`)
+			tooltipLines.push(`🧠 Reasoning: ${mi.capabilities?.thinking?.effortLevels?.join(", ") || "supported"}`)
 		if (mi.capabilities?.supportsImages) tooltipLines.push("🖼�?Images: supported")
 		if (mi.capabilities?.supportsPromptCache) tooltipLines.push("📦 Cache: supported")
 		if (mi.description) tooltipLines.push(mi.description)

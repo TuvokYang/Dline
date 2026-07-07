@@ -1,5 +1,7 @@
-import type { ModelInfo } from "@shared/api"
+import type { ModelInfo } from "@shared/proto/dline/models"
+import type { ModelCapabilities, ModelPricing } from "@shared/proto/dline/models/metadata"
 import { OpenAiProviderConfig } from "@shared/proto/dline/provider/openai"
+import { buildEffectiveModelInfo, mergeCapabilities, mergePricing } from "@shared/providers/effective-model-info"
 import { VSCodeButton, VSCodeCheckbox } from "@vscode/webview-ui-toolkit/react"
 import { useCallback } from "react"
 import { ApiKeyField } from "../common/ApiKeyField"
@@ -9,6 +11,7 @@ import { ModelConfiguration } from "../common/ModelConfiguration"
 import { ModelInfoView } from "../common/ModelInfoView"
 import ThinkingControl from "../ThinkingControl"
 import type { ApiProfile } from "./ProviderProfile"
+import { useProviderModels } from "./useProviderModels"
 
 /**
  * Props for the OpenAICompatibleProvider component
@@ -37,7 +40,12 @@ function getOpenAiConfig(profile: ApiProfile): OpenAiProviderConfig {
 export const OpenAICompatibleProvider = ({ showModelOptions, isPopup, profile, onUpdate }: OpenAICompatibleProviderProps) => {
 	const pc = getOpenAiConfig(profile)
 	const modelId = profile.modelId || ""
-	const modelInfo: ModelInfo | undefined = profile.modelInfo
+	const { models: openAiModels, modelInfoSaneDefaults } = useProviderModels("openai")
+	const registryModel = openAiModels[modelId] ?? modelInfoSaneDefaults
+	const modelInfo: ModelInfo = buildEffectiveModelInfo(modelId, registryModel, {
+		capabilities: pc.capabilities,
+		pricing: pc.pricing,
+	})
 
 	// --- Custom Headers management ---
 	const openAiHeaders = pc.openAiHeaders ?? {}
@@ -70,13 +78,22 @@ export const OpenAICompatibleProvider = ({ showModelOptions, isPopup, profile, o
 		[profile, onUpdate, openAiHeaders, pc],
 	)
 
-	// Update ModelInfo directly (no longer update providerConfig.capabilities/pricing/temperature)
-	const handleModelInfoUpdate = (updates: Partial<ModelInfo>) => {
+	// Update provider capabilities without writing profile.modelInfo.
+	const handleCapabilitiesUpdate = (updates: Partial<ModelCapabilities>) => {
 		onUpdate({
-			modelInfo: {
-				...profile.modelInfo,
-				...updates,
-				id: modelId,
+			openai: {
+				...pc,
+				capabilities: mergeCapabilities(pc.capabilities, updates),
+			},
+		})
+	}
+
+	// Update provider pricing without writing profile.modelInfo.
+	const handlePricingUpdate = (updates: Partial<ModelPricing>) => {
+		onUpdate({
+			openai: {
+				...pc,
+				pricing: mergePricing(pc.pricing, updates),
 			},
 		})
 	}
@@ -126,15 +143,15 @@ export const OpenAICompatibleProvider = ({ showModelOptions, isPopup, profile, o
 
 			{/* ModelConfiguration component */}
 			<ModelConfiguration
-				defaults={{}}
+				capabilities={pc.capabilities}
+				defaults={registryModel}
 				fields={{
-					capabilities: ["maxTokens", "contextWindow", "supportsImages", "supportsPromptCache"],
+					capabilities: ["maxTokens", "contextWindow", "supportsImages", "supportsPromptCache", "temperature"],
 					pricing: ["inputPrice", "outputPrice", "cacheWritesPrice", "cacheReadsPrice"],
-					other: ["temperature"],
 				}}
-				modelId={modelId}
-				modelInfo={modelInfo!}
-				onModelInfoUpdate={handleModelInfoUpdate}
+				onCapabilitiesUpdate={handleCapabilitiesUpdate}
+				onPricingUpdate={handlePricingUpdate}
+				pricing={pc.pricing}
 			/>
 
 			{/* Custom Headers */}
@@ -208,7 +225,7 @@ export const OpenAICompatibleProvider = ({ showModelOptions, isPopup, profile, o
 				</span>
 			</p>
 
-			{showModelOptions && modelInfo && <ModelInfoView isPopup={isPopup} modelInfo={modelInfo} selectedModelId={modelId} />}
+			{showModelOptions && <ModelInfoView isPopup={isPopup} modelInfo={modelInfo} selectedModelId={modelId} />}
 		</div>
 	)
 }

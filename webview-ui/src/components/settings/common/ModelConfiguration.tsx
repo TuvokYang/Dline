@@ -10,21 +10,24 @@ import { DebouncedTextField } from "./DebouncedTextField"
  * Props for the ModelConfiguration component
  */
 interface ModelConfigurationProps {
-	// Current ModelInfo (single source of truth)
-	modelInfo: ModelInfo
-	modelId: string
+	// Provider capability overrides edited by this component.
+	capabilities?: ModelCapabilities
 
-	// Update callback - only updates profile.modelInfo
-	onModelInfoUpdate: (updates: Partial<ModelInfo>) => void
+	// Provider pricing overrides edited by this component.
+	pricing?: ModelPricing
+
+	// Update callback for provider capabilities.
+	onCapabilitiesUpdate: (updates: Partial<ModelCapabilities>) => void
+
+	// Update callback for provider pricing.
+	onPricingUpdate: (updates: Partial<ModelPricing>) => void
 
 	// Which fields to display (data-driven)
 	fields: {
 		// Capabilities related fields
-		capabilities?: Array<"maxTokens" | "contextWindow" | "supportsImages" | "supportsPromptCache">
+		capabilities?: Array<"maxTokens" | "contextWindow" | "supportsImages" | "supportsPromptCache" | "temperature">
 		// Pricing related fields (currency automatically shown first)
 		pricing?: Array<"inputPrice" | "outputPrice" | "cacheWritesPrice" | "cacheReadsPrice">
-		// Other ModelInfo fields
-		other?: Array<"temperature">
 	}
 
 	// Default values (for placeholders)
@@ -33,16 +36,23 @@ interface ModelConfigurationProps {
 
 /**
  * Reusable Model Configuration component for provider settings.
- * Displays a collapsible section with model capabilities, pricing, and other settings.
- * All data is stored in profile.modelInfo to avoid duplication.
+ * Displays a collapsible section with model capabilities and pricing.
+ * All edits are stored in provider-specific capabilities and pricing.
  */
-export const ModelConfiguration = ({ modelInfo, modelId, onModelInfoUpdate, fields, defaults }: ModelConfigurationProps) => {
+export const ModelConfiguration = ({
+	capabilities: capabilityOverrides,
+	pricing: pricingOverrides,
+	onCapabilitiesUpdate,
+	onPricingUpdate,
+	fields,
+	defaults,
+}: ModelConfigurationProps) => {
 	const [expanded, setExpanded] = useState(false)
 
-	// Extract current values from modelInfo
-	const capabilities: ModelCapabilities = modelInfo?.capabilities ?? ({} as ModelCapabilities)
-	const pricing: ModelPricing = modelInfo?.pricing ?? ({} as ModelPricing)
-	const temperature = modelInfo?.temperature
+	// Extract current values from provider overrides
+	const capabilities: ModelCapabilities = capabilityOverrides ?? ({} as ModelCapabilities)
+	const pricing: ModelPricing = pricingOverrides ?? ({} as ModelPricing)
+	const temperature = capabilities.temperature
 
 	// Derive currency symbol from pricing.currency
 	const currencySymbol = (() => {
@@ -57,29 +67,23 @@ export const ModelConfiguration = ({ modelInfo, modelId, onModelInfoUpdate, fiel
 	})()
 
 	// Update capability field
-	const updateCapability = (field: keyof ModelCapabilities, value: any) => {
-		onModelInfoUpdate({
-			capabilities: { ...capabilities, [field]: value },
-		})
+	const updateCapability = (field: keyof ModelCapabilities, value: ModelCapabilities[keyof ModelCapabilities]) => {
+		onCapabilitiesUpdate({ [field]: value } as Partial<ModelCapabilities>)
 	}
 
 	// Update pricing field
-	const updatePricing = (field: keyof ModelPricing, value: any) => {
-		onModelInfoUpdate({
-			pricing: { ...pricing, [field]: value },
-		})
+	const updatePricing = (field: keyof ModelPricing, value: ModelPricing[keyof ModelPricing]) => {
+		onPricingUpdate({ [field]: value } as Partial<ModelPricing>)
 	}
 
 	// Update currency (part of pricing)
 	const updateCurrency = (currency: string) => {
-		onModelInfoUpdate({
-			pricing: { ...pricing, currency },
-		})
+		onPricingUpdate({ currency })
 	}
 
 	// Update temperature
 	const updateTemperature = (value: number) => {
-		onModelInfoUpdate({ temperature: value })
+		onCapabilitiesUpdate({ temperature: value })
 	}
 
 	// Parse price value
@@ -275,11 +279,17 @@ export const ModelConfiguration = ({ modelInfo, modelId, onModelInfoUpdate, fiel
 					)}
 
 					{/* 4. Temperature field */}
-					{fields.other?.includes("temperature") && (
+					{fields.capabilities?.includes("temperature") && (
 						<DebouncedTextField
 							initialValue={temperature != null ? String(temperature) : ""}
 							onChange={(value) => updateTemperature(parsePrice(value, 0))}
-							placeholder={defaults?.temperature != null ? String(defaults.temperature) : ""}
+							placeholder={
+								defaults?.capabilities?.temperature != null
+									? String(defaults.capabilities.temperature)
+									: defaults?.temperature != null
+										? String(defaults.temperature)
+										: ""
+							}
 							style={{ marginTop: "5px" }}>
 							<span style={{ fontWeight: 500 }}>Temperature</span>
 						</DebouncedTextField>

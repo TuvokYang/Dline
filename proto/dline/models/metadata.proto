@@ -14,8 +14,8 @@ message ThinkingConfig {
 
 /** Model capability flags and limits. */
 message ModelCapabilities {
-  bool supports_images = 1;
-  bool supports_prompt_cache = 2;
+  optional bool supports_images = 1;
+  optional bool supports_prompt_cache = 2;
   optional bool supports_reasoning = 3;
   optional bool supports_global_endpoint = 4;
   optional uint32 max_tokens = 5;
@@ -23,6 +23,7 @@ message ModelCapabilities {
   optional ThinkingConfig thinking = 7;
   optional bool supports_streaming = 8;
   optional bool supports_tools = 9;
+  optional double temperature = 10;
 }
 
 /** Pricing tier for context-window-based tiered models. */

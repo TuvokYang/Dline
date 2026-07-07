@@ -10,11 +10,11 @@ import {
 	ANTHROPIC_FAST_MODE_SUFFIX,
 	AnthropicModelId,
 	anthropicDefaultModelId,
-	anthropicModelInfoSaneDefaults,
 	anthropicModels,
 	CLAUDE_SONNET_1M_SUFFIX,
 	ModelInfo,
 } from "@shared/api"
+import { buildEffectiveModelInfo } from "@shared/providers/effective-model-info"
 import { isClaudeOpusAdaptiveThinkingModel, resolveClaudeOpusAdaptiveThinking } from "@shared/utils/reasoning-support"
 import { buildExternalBasicHeaders } from "@/services/EnvUtils"
 import { ClineStorageMessage } from "@/shared/messages/content"
@@ -60,15 +60,23 @@ export class AnthropicHandler implements ApiHandler {
 	 * @returns ModelInfo using profile overrides, provider custom config, or sane defaults.
 	 */
 	private buildCustomModelInfo(modelId: string): ModelInfo {
-		const profileInfo = this.modelInfo
-		return {
-			...anthropicModelInfoSaneDefaults,
-			...profileInfo,
-			id: modelId,
-			name: profileInfo?.name ?? modelId,
-			capabilities: profileInfo?.capabilities ?? this.config?.capabilities ?? anthropicModelInfoSaneDefaults.capabilities,
-			pricing: profileInfo?.pricing ?? this.config?.pricing ?? anthropicModelInfoSaneDefaults.pricing,
-		}
+		return buildEffectiveModelInfo(modelId, undefined, {
+			capabilities: this.config?.capabilities,
+			pricing: this.config?.pricing,
+		})
+	}
+
+	/**
+	 * Build effective Anthropic registry model metadata with provider overrides.
+	 *
+	 * @param modelId Selected registry model identifier.
+	 * @returns Effective model metadata for display and request handling.
+	 */
+	private buildRegistryModelInfo(modelId: string): ModelInfo {
+		return buildEffectiveModelInfo(modelId, anthropicModels[modelId], {
+			capabilities: this.config?.capabilities,
+			pricing: this.config?.pricing,
+		})
 	}
 
 	private ensureClient(): Anthropic {
@@ -121,7 +129,7 @@ export class AnthropicHandler implements ApiHandler {
 		}
 
 		const budget_tokens = this.thinkingBudgetTokens
-		const enableThinking = this.config?.reasoning?.enableThinking ?? false
+		const enableThinking = this.config?.reasoning?.enableThinking ?? Boolean(this.reasoningEffort || budget_tokens > 0)
 
 		// Tools are available only when native tools are enabled.
 		const nativeToolsOn = tools?.length && tools?.length > 0
@@ -350,7 +358,7 @@ export class AnthropicHandler implements ApiHandler {
 		}
 		if (mid && anthropicModels[mid]) {
 			const id = mid as AnthropicModelId
-			return { id, info: anthropicModels[id] }
+			return { id, info: this.buildRegistryModelInfo(id) }
 		}
 		if (mid) {
 			return {
@@ -360,7 +368,7 @@ export class AnthropicHandler implements ApiHandler {
 		}
 		return {
 			id: anthropicDefaultModelId,
-			info: anthropicModels[anthropicDefaultModelId],
+			info: this.buildRegistryModelInfo(anthropicDefaultModelId),
 		}
 	}
 }

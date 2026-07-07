@@ -1,5 +1,6 @@
 import { DefaultAzureCredential, getBearerTokenProvider } from "@azure/identity"
 import { azureOpenAiDefaultApiVersion, ModelInfo, openAiModelInfoSaneDefaults } from "@shared/api"
+import { buildEffectiveModelInfo } from "@shared/providers/effective-model-info"
 import { normalizeOpenaiReasoningEffort } from "@shared/storage/types"
 import { calculateApiCostOpenAI } from "@utils/cost"
 import OpenAI, { AzureOpenAI } from "openai"
@@ -117,6 +118,18 @@ export class OpenAiHandler implements ApiHandler {
 		return this.config?.openAiHeaders
 	}
 
+	/**
+	 * Build effective model metadata from defaults and provider overrides.
+	 *
+	 * @returns Effective model metadata for requests and cost calculation.
+	 */
+	private buildModelInfo(): ModelInfo {
+		return buildEffectiveModelInfo(this.modelId, this.modelInfo ?? openAiModelInfoSaneDefaults, {
+			capabilities: this.config?.capabilities,
+			pricing: this.config?.pricing,
+		})
+	}
+
 	private getAzureAudienceScope(baseUrl?: string): string {
 		const url = baseUrl?.toLowerCase() ?? ""
 		if (url.includes("azure.us")) return "https://cognitiveservices.azure.us/.default"
@@ -189,21 +202,28 @@ export class OpenAiHandler implements ApiHandler {
 			...convertToOpenAiMessages(messages),
 		]
 
+		const model = this.getModel()
 		// Determine cache_control annotation — applied later after all message
 		// transformations are complete (see applyCacheControlToMessages below)
-		const cacheControl = this.modelInfo?.capabilities?.supportsPromptCache
+		const cacheControl = model.info.capabilities?.supportsPromptCache
 			? { cache_control: { type: "ephemeral" as const } }
 			: undefined
 
 		let temperature: number | undefined
+		const capabilityTemp = model.info.capabilities?.temperature
 		const configTemp = this.config?.temperature
-		temperature = configTemp != null && configTemp !== 0 ? Number(configTemp) : undefined
+		temperature =
+			capabilityTemp != null
+				? Number(capabilityTemp)
+				: configTemp != null && configTemp !== 0
+					? Number(configTemp)
+					: undefined
 
 		let reasoningEffort: ChatCompletionReasoningEffort | undefined
 		let maxTokens: number | undefined
 
-		if (this.modelInfo?.capabilities?.maxTokens && this.modelInfo?.capabilities?.maxTokens > 0) {
-			maxTokens = Number(this.modelInfo?.capabilities?.maxTokens)
+		if (model.info.capabilities?.maxTokens && model.info.capabilities.maxTokens > 0) {
+			maxTokens = Number(model.info.capabilities.maxTokens)
 		} else {
 			maxTokens = undefined
 		}
@@ -296,7 +316,7 @@ export class OpenAiHandler implements ApiHandler {
 					chunk.usage.prompt_cache_miss_tokens ??
 					chunk.usage.prompt_tokens_details?.cache_miss_tokens ??
 					0
-				const modelInfo = this.modelInfo ?? openAiModelInfoSaneDefaults
+				const modelInfo = this.getModel().info
 				// Yield inputTokens in Anthropic semantic (excluding cache) so
 				// ContextManager and updateApiReqMsg can accurately estimate
 				// context pressure. Cost calculation still uses OpenAI semantic
@@ -325,7 +345,7 @@ export class OpenAiHandler implements ApiHandler {
 	getModel(): { id: string; info: ModelInfo } {
 		return {
 			id: this.modelId,
-			info: this.modelInfo ?? openAiModelInfoSaneDefaults,
+			info: this.buildModelInfo(),
 		}
 	}
 }

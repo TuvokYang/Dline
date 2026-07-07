@@ -1,7 +1,9 @@
 import { ANTHROPIC_FAST_MODE_SUFFIX, CLAUDE_SONNET_1M_SUFFIX } from "@shared/api"
 import { type ModelInfo } from "@shared/proto/dline/models"
+import type { ModelCapabilities, ModelPricing } from "@shared/proto/dline/models/metadata"
 import type { ApiProfile } from "@shared/proto/dline/profile"
 import { AnthropicProviderConfig } from "@shared/proto/dline/provider/anthropic"
+import { buildEffectiveModelInfo, mergeCapabilities, mergePricing } from "@shared/providers/effective-model-info"
 import { isClaudeOpusAdaptiveThinkingModel } from "@shared/utils/reasoning-support"
 import { VSCodeCheckbox } from "@vscode/webview-ui-toolkit/react"
 import { useMemo, useState } from "react"
@@ -87,10 +89,11 @@ export const AnthropicProvider = ({ showModelOptions, isPopup, profile, onUpdate
 	const pc = profile.anthropic ?? AnthropicProviderConfig.create()
 	const modelId = profile.modelId || anthropicDefaultModelId
 	const customModelEnabled = pc?.customModelEnabled ?? false
-	// Use profile.modelInfo directly - no longer build from pc.capabilities/pricing
-	const modelInfo = profile.modelInfo ?? anthropicModels[modelId] ?? anthropicModelInfoSaneDefaults
-	const reasoningEffort = pc?.reasoning?.effort ?? ""
-	const thinkingBudgetTokens = pc?.reasoning?.thinkingBudget ?? 0
+	const registryModel = anthropicModels[modelId] ?? anthropicModelInfoSaneDefaults
+	const modelInfo = buildEffectiveModelInfo(modelId, registryModel, {
+		capabilities: pc.capabilities,
+		pricing: pc.pricing,
+	})
 
 	const [useCustomModel, setUseCustomModel] = useState(customModelEnabled)
 
@@ -98,28 +101,25 @@ export const AnthropicProvider = ({ showModelOptions, isPopup, profile, onUpdate
 
 	// --- Handlers ---
 	const handleModelChange = (newModelId: string) => {
-		if (useCustomModel) {
-			// For custom model, keep existing modelInfo but update the id
-			onUpdate({
-				modelId: newModelId,
-				modelInfo: {
-					...profile.modelInfo,
-					id: newModelId,
-				},
-			})
-			return
-		}
-
-		onUpdate({ modelId: newModelId, modelInfo: anthropicModels[newModelId] })
+		onUpdate({ modelId: newModelId })
 	}
 
-	// Update ModelInfo directly (no longer update providerConfig.capabilities/pricing)
-	const handleModelInfoUpdate = (updates: Partial<ModelInfo>) => {
+	// Update provider capabilities without writing profile.modelInfo.
+	const handleCapabilitiesUpdate = (updates: Partial<ModelCapabilities>) => {
 		onUpdate({
-			modelInfo: {
-				...profile.modelInfo,
-				...updates,
-				id: modelId,
+			anthropic: {
+				...pc,
+				capabilities: mergeCapabilities(pc.capabilities, updates),
+			},
+		})
+	}
+
+	// Update provider pricing without writing profile.modelInfo.
+	const handlePricingUpdate = (updates: Partial<ModelPricing>) => {
+		onUpdate({
+			anthropic: {
+				...pc,
+				pricing: mergePricing(pc.pricing, updates),
 			},
 		})
 	}
@@ -127,16 +127,8 @@ export const AnthropicProvider = ({ showModelOptions, isPopup, profile, onUpdate
 	const handleToggleCustomModel = (checked: boolean) => {
 		setUseCustomModel(checked)
 		const newModelId = checked ? modelId || "custom-model" : Object.keys(anthropicModels)[0]
-		const newModelInfo = checked
-			? {
-					...anthropicModelInfoSaneDefaults,
-					...profile.modelInfo,
-					id: newModelId,
-				}
-			: undefined
 		onUpdate({
 			modelId: newModelId,
-			modelInfo: newModelInfo,
 			anthropic: {
 				...pc,
 				customModelEnabled: checked,
@@ -178,13 +170,16 @@ export const AnthropicProvider = ({ showModelOptions, isPopup, profile, onUpdate
 
 					{useCustomModel ? (
 						<CustomModelConfig
+							capabilities={pc.capabilities}
 							defaults={anthropicModelInfoSaneDefaults}
 							modelId={modelId}
 							modelInfo={modelInfo}
+							onCapabilitiesUpdate={handleCapabilitiesUpdate}
 							onModelIdChange={handleModelChange}
-							onModelInfoUpdate={handleModelInfoUpdate}
+							onPricingUpdate={handlePricingUpdate}
 							onUpdate={onUpdate}
 							pc={pc}
+							pricing={pc.pricing}
 						/>
 					) : (
 						<>
@@ -243,9 +238,12 @@ interface CustomModelConfigProps {
 	modelId: string
 	modelInfo: ModelInfo
 	defaults: Partial<ModelInfo>
+	capabilities?: ModelCapabilities
+	pricing?: ModelPricing
 	pc: AnthropicProviderConfig
 	onModelIdChange: (modelId: string) => void
-	onModelInfoUpdate: (updates: Partial<ModelInfo>) => void
+	onCapabilitiesUpdate: (updates: Partial<ModelCapabilities>) => void
+	onPricingUpdate: (updates: Partial<ModelPricing>) => void
 	onUpdate: (updates: Partial<ApiProfile>) => void
 }
 
@@ -253,9 +251,12 @@ const CustomModelConfig = ({
 	modelId,
 	modelInfo,
 	defaults,
+	capabilities,
+	pricing,
 	pc,
 	onModelIdChange,
-	onModelInfoUpdate,
+	onCapabilitiesUpdate,
+	onPricingUpdate,
 	onUpdate,
 }: CustomModelConfigProps) => {
 	return (
@@ -291,14 +292,15 @@ const CustomModelConfig = ({
 
 			{/* ModelConfiguration component */}
 			<ModelConfiguration
+				capabilities={capabilities}
 				defaults={defaults}
 				fields={{
 					capabilities: ["maxTokens", "contextWindow", "supportsImages", "supportsPromptCache"],
 					pricing: ["inputPrice", "outputPrice", "cacheWritesPrice", "cacheReadsPrice"],
 				}}
-				modelId={modelId}
-				modelInfo={modelInfo}
-				onModelInfoUpdate={onModelInfoUpdate}
+				onCapabilitiesUpdate={onCapabilitiesUpdate}
+				onPricingUpdate={onPricingUpdate}
+				pricing={pricing}
 			/>
 		</>
 	)
