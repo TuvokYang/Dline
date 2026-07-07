@@ -56,10 +56,17 @@ export type SnapshotBlock = {
 	apiIndex: number
 }
 
+export type SnapshotAwaiting = {
+	kind: string
+	taskAsk?: ClineAsk
+	messageTs?: number
+}
+
 export type StateSnapshot = {
 	phase: string
 	apiIndex: number
 	timestamp: number
+	awaiting?: SnapshotAwaiting
 	approval?: {
 		activeCallId?: string
 		blocks?: SnapshotBlock[]
@@ -142,9 +149,36 @@ function getSnapshotActiveBlock(snapshot: StateSnapshot): SnapshotBlock | undefi
 	return blocks.find((block) => block.phase === "awaiting_approval") ?? blocks.find((block) => block.phase === "executing")
 }
 
+/**
+ * Determine whether messages after a snapshot prove that its awaiting ask was consumed.
+ */
+function isAwaitingConsumed(messages: ClineMessage[], snapshot: StateSnapshot, awaitingAsk: ClineMessage): boolean {
+	const snapshotTs = typeof snapshot.timestamp === "number" ? snapshot.timestamp : 0
+	const anchorTs = Math.max(snapshotTs, awaitingAsk.ts)
+
+	return messages.some((message) => {
+		if (message.ts <= anchorTs) return false
+		if (message.say === "user_feedback") return true
+		if (message.say === "api_req_started" && (message.conversationHistoryIndex ?? -1) > snapshot.apiIndex) return true
+		if (message.type === "ask" && message.ts !== awaitingAsk.ts) return true
+		return false
+	})
+}
+
 export function findSnapshotAnchoredMessage(messages: ClineMessage[]): ClineMessage | undefined {
 	const snapshot = findLatestStateSnapshot(messages)
 	if (!snapshot) return undefined
+
+	if (snapshot.awaiting?.messageTs !== undefined && snapshot.awaiting.taskAsk) {
+		const awaitingAsk = messages.find(
+			(message) =>
+				message.type === "ask" &&
+				message.ts === snapshot.awaiting?.messageTs &&
+				message.ask === snapshot.awaiting?.taskAsk,
+		)
+		if (!awaitingAsk) return undefined
+		return isAwaitingConsumed(messages, snapshot, awaitingAsk) ? undefined : awaitingAsk
+	}
 
 	const activeBlock = getSnapshotActiveBlock(snapshot)
 	const anchorApiIndex = activeBlock?.apiIndex ?? snapshot.resume?.assistantApiIndex ?? snapshot.apiIndex

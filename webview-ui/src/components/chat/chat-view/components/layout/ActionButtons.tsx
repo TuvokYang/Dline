@@ -174,6 +174,10 @@ export const ActionButtons: React.FC<ActionButtonsProps> = ({
 	}, [handleKeyDown])
 
 	// Priority 1: Use taskUiState if available (snapshot-first architecture)
+	if (chatState.taskUiState && (!chatState.taskUiState.showFooter || chatState.taskUiState.actions.length === 0)) {
+		return null
+	}
+
 	if (chatState.taskUiState?.actions && chatState.taskUiState.actions.length > 0) {
 		// Limit to max 3 buttons to prevent UI crowding
 		const visibleActions = chatState.taskUiState.actions.slice(0, 3)
@@ -208,12 +212,6 @@ export const ActionButtons: React.FC<ActionButtonsProps> = ({
 				})}
 			</div>
 		)
-	}
-
-	// When taskUiState says hide footer (conversation awaiting, idle, etc.), don't fall
-	// back to legacy buttonConfig — it could incorrectly show a Cancel button.
-	if (chatState.taskUiState && !chatState.taskUiState.showFooter) {
-		return null
 	}
 
 	if (!task) {

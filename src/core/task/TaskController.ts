@@ -220,6 +220,8 @@ export class TaskController {
 		}
 
 		// Conversation awaiting (plan_mode_respond, qna_respond, etc.)
+		// This is an explicit state-machine checkpoint and must take precedence
+		// over message-derived working inference during history recovery.
 		if (snapshot.awaiting?.kind === "conversation") {
 			return {
 				phase: "awaiting_input",
@@ -306,7 +308,8 @@ export class TaskController {
 			snapshot.phase === TaskPhase.STREAMING ||
 			snapshot.phase === TaskPhase.EXECUTING ||
 			snapshot.phase === TaskPhase.RESUMING
-		const isRecoverableStalePhase = isWorkingPhase || snapshot.phase === TaskPhase.CANCELLING || snapshot.phase === TaskPhase.PAUSED
+		const isRecoverableStalePhase =
+			isWorkingPhase || snapshot.phase === TaskPhase.CANCELLING || snapshot.phase === TaskPhase.PAUSED
 		const isTaskWorking = options.isTaskWorking ?? isWorkingPhase
 
 		if (isRecoverableStalePhase && !isTaskWorking) {

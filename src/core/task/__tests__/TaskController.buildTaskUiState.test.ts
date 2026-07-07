@@ -244,4 +244,49 @@ describe("TaskController.buildTaskUiState", () => {
 		assert.equal(uiState.activeAsk, "plan_mode_respond")
 		assert.equal(uiState.reason, "conversation-awaiting")
 	})
+
+	it("keeps conversation-awaiting state even when stale message inference marks task as working", () => {
+		const tc = new TaskController(mockChannel)
+		const snapshot: TaskSnapshot = {
+			phase: TaskPhase.AWAITING_APPROVAL,
+			apiIndex: 1,
+			timestamp: Date.now(),
+			awaiting: {
+				kind: "conversation",
+				taskAsk: "qna_respond",
+				messageTs: Date.now(),
+			},
+		}
+		const uiState = tc.buildTaskUiState(snapshot, { isTaskWorking: true })
+
+		assert.equal(uiState.phase, "awaiting_input")
+		assert.equal(uiState.inputEnabled, true)
+		assert.equal(uiState.cancelEnabled, false)
+		assert.equal(uiState.showFooter, false)
+		assert.equal(uiState.actions.length, 0)
+		assert.equal(uiState.activeAsk, "qna_respond")
+		assert.equal(uiState.reason, "conversation-awaiting")
+	})
+
+	it("returns conversation-awaiting state when isTaskWorking is false (existing behavior)", () => {
+		const tc = new TaskController(mockChannel)
+		const snapshot: TaskSnapshot = {
+			phase: TaskPhase.AWAITING_APPROVAL,
+			apiIndex: 1,
+			timestamp: Date.now(),
+			awaiting: {
+				kind: "conversation",
+				taskAsk: "qna_respond",
+				messageTs: Date.now(),
+			},
+		}
+		const uiState = tc.buildTaskUiState(snapshot, { isTaskWorking: false })
+
+		assert.equal(uiState.phase, "awaiting_input")
+		assert.equal(uiState.showFooter, false)
+		assert.equal(uiState.cancelEnabled, false)
+		assert.equal(uiState.actions.length, 0)
+		assert.equal(uiState.reason, "conversation-awaiting")
+		assert.equal(uiState.activeAsk, "qna_respond")
+	})
 })

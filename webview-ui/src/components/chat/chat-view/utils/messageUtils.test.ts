@@ -185,4 +185,50 @@ describe("snapshot anchored interaction message", () => {
 		expect(findSnapshotAnchoredMessage([staleSnapshot, qnaAsk, toolAsk])).toBe(qnaAsk)
 		expect(findInteractionMessage([staleSnapshot, qnaAsk, toolAsk])).toBe(toolAsk)
 	})
+
+	it("replays messages after an awaiting snapshot so consumed turn-ending asks do not remain active", () => {
+		const qnaAsk: ClineMessage = {
+			ts: 100,
+			type: "ask",
+			ask: "qna_respond",
+			text: JSON.stringify({ response: "Need clarification" }),
+			partial: false,
+			conversationHistoryIndex: 3,
+		}
+		const awaitingSnapshot: ClineMessage = {
+			ts: 110,
+			type: "say",
+			say: "state_snapshot",
+			text: JSON.stringify({
+				phase: "awaiting_approval",
+				apiIndex: 3,
+				timestamp: 110,
+				awaiting: {
+					kind: "conversation",
+					taskAsk: "qna_respond",
+					messageTs: 100,
+				},
+			}),
+			conversationHistoryIndex: 3,
+		}
+		const userFeedback: ClineMessage = {
+			ts: 120,
+			type: "say",
+			say: "user_feedback",
+			text: "Here is the clarification.",
+			conversationHistoryIndex: 3,
+		}
+		const nextRequest: ClineMessage = {
+			ts: 130,
+			type: "say",
+			say: "api_req_started",
+			text: "{}",
+			conversationHistoryIndex: 4,
+		}
+
+		const messages = [qnaAsk, awaitingSnapshot, userFeedback, nextRequest]
+
+		expect(findSnapshotAnchoredMessage(messages)).toBeUndefined()
+		expect(findInteractionMessage(messages)).toBe(nextRequest)
+	})
 })

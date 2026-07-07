@@ -1,5 +1,6 @@
 import { strict as assert } from "node:assert"
 import { describe, it, vi } from "vitest"
+import type { ClineAssistantToolUseBlock, ClineStorageMessage } from "@/shared/messages"
 import type { ResumeContext } from "../ResumeHandler"
 import { ResumeHandler } from "../ResumeHandler"
 
@@ -11,18 +12,18 @@ describe("ResumeHandler", () => {
 		return {
 			taskState: {
 				abort: false,
-			} as any,
+			} as unknown as ResumeContext["taskState"],
 			controller: {
 				toolNameToAskType: () => "resume_task",
 				rejectActiveBlock: vi.fn(),
-			} as any,
+			} as unknown as ResumeContext["controller"],
 			messageStateHandler: {
 				clineMessages: [],
 				apiConversationHistory: [],
-			} as any,
+			} as unknown as ResumeContext["messageStateHandler"],
 			restoreHandler: {
 				replayPendingTools: async () => {},
-			} as any,
+			} as unknown as ResumeContext["restoreHandler"],
 			ask: async () => ({ response: "yesButtonClicked", text: "" }),
 			say: async () => 0,
 			postStateToWebview: async () => {},
@@ -36,7 +37,7 @@ describe("ResumeHandler", () => {
 			controller: {
 				toolNameToAskType: () => "tool",
 				rejectActiveBlock: rejectSpy,
-			} as any,
+			} as unknown as ResumeContext["controller"],
 			ask: async () => ({ response: "noButtonClicked", text: "" }),
 		})
 
@@ -44,7 +45,7 @@ describe("ResumeHandler", () => {
 		const result = await handler.promptUser(
 			{
 				assistantIndex: 0,
-				toolUseBlocks: [{ type: "tool_use", id: "t1", name: "write_to_file", input: {} } as any],
+				toolUseBlocks: [{ type: "tool_use", id: "t1", name: "write_to_file", input: {} } as ClineAssistantToolUseBlock],
 				answeredToolResults: [],
 				sanitizedHistory: [],
 			},
@@ -62,7 +63,7 @@ describe("ResumeHandler", () => {
 			messageStateHandler: {
 				clineMessages: [],
 				apiConversationHistory: [],
-			} as any,
+			} as unknown as ResumeContext["messageStateHandler"],
 		})
 
 		const handler = new ResumeHandler(ctx)
@@ -97,7 +98,7 @@ describe("ResumeHandler", () => {
 					},
 				],
 			},
-		] as any[]
+		] satisfies ClineStorageMessage[]
 		const ctx = createMockContext({
 			messageStateHandler: {
 				clineMessages: [
@@ -109,11 +110,11 @@ describe("ResumeHandler", () => {
 					},
 				],
 				apiConversationHistory: apiHistory,
-			} as any,
+			} as unknown as ResumeContext["messageStateHandler"],
 		})
 
 		const handler = new ResumeHandler(ctx)
-		const result = handler.detectPendingTools(apiHistory as any)
+		const result = handler.detectPendingTools(apiHistory)
 
 		assert.equal(result?.assistantIndex, 1)
 		assert.equal(result?.toolUseBlocks[0].id, "tool_snapshot")
@@ -130,7 +131,7 @@ describe("ResumeHandler", () => {
 				role: "assistant",
 				content: [{ type: "tool_use", id: "tool_tail", call_id: "call_tail", name: "write_to_file", input: {} }],
 			},
-		] as any[]
+		] satisfies ClineStorageMessage[]
 		const ctx = createMockContext({
 			messageStateHandler: {
 				clineMessages: [
@@ -142,11 +143,11 @@ describe("ResumeHandler", () => {
 					},
 				],
 				apiConversationHistory: apiHistory,
-			} as any,
+			} as unknown as ResumeContext["messageStateHandler"],
 		})
 
 		const handler = new ResumeHandler(ctx)
-		const result = handler.detectPendingTools(apiHistory as any)
+		const result = handler.detectPendingTools(apiHistory)
 
 		assert.equal(result?.assistantIndex, 2)
 		assert.equal(result?.toolUseBlocks[0].id, "tool_tail")
@@ -163,7 +164,7 @@ describe("ResumeHandler", () => {
 				role: "assistant",
 				content: [{ type: "tool_use", id: "tool_active", call_id: "call_active", name: "write_to_file", input: {} }],
 			},
-		] as any[]
+		] satisfies ClineStorageMessage[]
 		const ctx = createMockContext({
 			messageStateHandler: {
 				clineMessages: [
@@ -187,11 +188,11 @@ describe("ResumeHandler", () => {
 					},
 				],
 				apiConversationHistory: apiHistory,
-			} as any,
+			} as unknown as ResumeContext["messageStateHandler"],
 		})
 
 		const handler = new ResumeHandler(ctx)
-		const result = handler.detectPendingTools(apiHistory as any)
+		const result = handler.detectPendingTools(apiHistory)
 
 		assert.equal(result?.assistantIndex, 2)
 		assert.equal(result?.toolUseBlocks[0].id, "tool_active")
@@ -207,7 +208,7 @@ describe("ResumeHandler", () => {
 					{ type: "tool_use", id: "tool_pending", call_id: "call_pending", name: "write_to_file", input: {} },
 				],
 			},
-		] as any[]
+		] satisfies ClineStorageMessage[]
 		const ctx = createMockContext({
 			messageStateHandler: {
 				clineMessages: [
@@ -228,11 +229,11 @@ describe("ResumeHandler", () => {
 					},
 				],
 				apiConversationHistory: apiHistory,
-			} as any,
+			} as unknown as ResumeContext["messageStateHandler"],
 		})
 
 		const handler = new ResumeHandler(ctx)
-		const result = handler.detectPendingTools(apiHistory as any)
+		const result = handler.detectPendingTools(apiHistory)
 
 		assert.equal(result?.assistantIndex, 1)
 		assert.deepEqual(
@@ -241,12 +242,78 @@ describe("ResumeHandler", () => {
 		)
 	})
 
+	it("detectPendingTools restores only pending tools from mixed multi-tool snapshot", () => {
+		const apiHistory = [
+			{ role: "user", content: [{ type: "text", text: "start" }] },
+			{
+				role: "assistant",
+				content: [
+					{ type: "tool_use", id: "tool_done", call_id: "call_done", name: "read_file", input: {} },
+					{ type: "tool_use", id: "tool_pending", call_id: "call_pending", name: "write_to_file", input: {} },
+					{ type: "tool_use", id: "tool_report", call_id: "call_report", name: "qna_respond", input: {} },
+					{ type: "tool_use", id: "tool_rejected", call_id: "call_rejected", name: "execute_command", input: {} },
+					{ type: "tool_use", id: "tool_skipped", call_id: "call_skipped", name: "replace_in_file", input: {} },
+				],
+			},
+		] satisfies ClineStorageMessage[]
+		const ctx = createMockContext({
+			messageStateHandler: {
+				clineMessages: [
+					{
+						ts: 250,
+						type: "say",
+						say: "partial_tool_result",
+						conversationHistoryIndex: 1,
+						text: JSON.stringify({ tool_use_id: "tool_done", result: "already done" }),
+					},
+					{
+						ts: 300,
+						type: "say",
+						say: "state_snapshot",
+						text: JSON.stringify({
+							phase: "awaiting_approval",
+							apiIndex: 1,
+							timestamp: 300,
+							approval: {
+								mode: "serial",
+								activeCallId: "call_pending",
+								blocks: [
+									{ callId: "call_done", name: "read_file", phase: "completed", apiIndex: 1 },
+									{ callId: "call_pending", name: "write_to_file", phase: "awaiting_approval", apiIndex: 1 },
+									{ callId: "call_rejected", name: "execute_command", phase: "rejected", apiIndex: 1 },
+									{ callId: "call_skipped", name: "replace_in_file", phase: "skipped", apiIndex: 1 },
+								],
+							},
+						}),
+					},
+				],
+				apiConversationHistory: apiHistory,
+			} as unknown as ResumeContext["messageStateHandler"],
+		})
+
+		const handler = new ResumeHandler(ctx)
+		const result = handler.detectPendingTools(apiHistory)
+
+		assert.equal(result?.assistantIndex, 1)
+		assert.deepEqual(
+			result?.toolUseBlocks.map((block) => block.id),
+			["tool_pending"],
+		)
+		assert.deepEqual(result?.answeredToolResults, [
+			{
+				type: "tool_result",
+				tool_use_id: "tool_done",
+				content: [{ type: "text", text: "already done" }],
+			},
+		])
+	})
+
 	it("resumeFromHistory returns false when detectPendingTools finds nothing", async () => {
 		const ctx = createMockContext({
 			messageStateHandler: {
 				clineMessages: [],
 				apiConversationHistory: [],
-			} as any,
+			} as unknown as ResumeContext["messageStateHandler"],
 		})
 
 		const handler = new ResumeHandler(ctx)

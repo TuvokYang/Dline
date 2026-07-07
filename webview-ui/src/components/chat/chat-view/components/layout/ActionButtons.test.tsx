@@ -156,7 +156,7 @@ describe("ActionButtons", () => {
 			expect(screen.queryByText(/Cancel/i)).toBeNull()
 		})
 
-		it("does not fall back to hidden resume when taskUiState hides footer", () => {
+		it("hides legacy cancel when conversation taskUiState has empty actions", () => {
 			const mockChatStateWithTaskUi = {
 				...mockChatState,
 				taskUiState: {
@@ -165,29 +165,41 @@ describe("ActionButtons", () => {
 					cancelEnabled: false,
 					showFooter: false,
 					actions: [],
-					activeAsk: "plan_mode_respond" as const,
+					activeAsk: "qna_respond" as const,
 					reason: "conversation-awaiting",
 				},
 			}
-			const hiddenResume = makeMsg({
-				ask: "resume_task",
+			const qnaAsk = makeMsg({
+				ask: "qna_respond",
 				ts: 1000,
+				text: JSON.stringify({ response: "ok" }),
+			})
+			const stateSnapshot = makeMsg({
+				type: "say",
+				say: "state_snapshot",
+				ts: 1001,
+				text: JSON.stringify({
+					phase: "awaiting_approval",
+					apiIndex: 1,
+					timestamp: 1001,
+					awaiting: { kind: "conversation", taskAsk: "qna_respond", messageTs: 1000 },
+				}),
 			})
 
 			render(
 				<ActionButtons
 					chatState={mockChatStateWithTaskUi}
-					isLastMsgResume={true}
 					isWorking={true}
 					messageHandlers={mockMessageHandlers}
-					messages={[hiddenResume]}
+					messages={[qnaAsk, stateSnapshot]}
 					mode="act"
-					task={hiddenResume}
+					task={stateSnapshot}
 				/>,
 			)
 
-			expect(screen.queryByText(/Resume|Resume Task/i)).toBeNull()
-			expect(screen.queryByText(/Cancel/i)).toBeNull()
+			// Snapshot-first conversation state must suppress all legacy buttons,
+			// especially Cancel from stale isWorking inference when state_snapshot is last.
+			expect(screen.queryByRole("button")).toBeNull()
 		})
 
 		it("ignores Escape when taskUiState does not allow cancel", async () => {

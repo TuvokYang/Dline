@@ -36,6 +36,11 @@ export interface ReplayOptions {
 	baseTs?: number
 }
 
+interface CheckpointResolver extends ICheckpointManager {
+	resolveHash?: (checkpointHash: string) => number | undefined
+	revertFiles?: (changedFiles: string[]) => Promise<void>
+}
+
 // ── RestoreHandler ──
 
 /**
@@ -60,7 +65,7 @@ export class RestoreHandler {
 
 		// Resolve the checkpoint hash to a message timestamp, then restore.
 		// The checkpointManager.restoreCheckpoint() expects a messageTs.
-		const tracker = checkpointManager as any
+		const tracker = checkpointManager as CheckpointResolver
 		if (typeof tracker.resolveHash === "function") {
 			const messageTs = tracker.resolveHash(checkpointHash)
 			if (messageTs == null) {
@@ -70,7 +75,7 @@ export class RestoreHandler {
 		} else {
 			// Fallback: use raw hash as messageTs if no resolver available
 			const messageTs = Number.parseInt(checkpointHash, 10)
-			if (isNaN(messageTs)) {
+			if (Number.isNaN(messageTs)) {
 				throw new Error(`Cannot resolve checkpoint hash to timestamp: ${checkpointHash}`)
 			}
 			await checkpointManager.restoreCheckpoint(messageTs, "checkpoint")
@@ -119,7 +124,7 @@ export class RestoreHandler {
 		}
 
 		// For each changed file, revert to the last checkpointed version
-		const tracker = checkpointManager as any
+		const tracker = checkpointManager as CheckpointResolver
 		if (typeof tracker.revertFiles === "function") {
 			await tracker.revertFiles(changedFiles)
 		} else {
@@ -184,7 +189,8 @@ export class RestoreHandler {
 		taskState.currentStreamingContentIndex = 0
 		taskState.assistantMessageContent = runtimeToolUses
 		taskState.didCompleteReadingStream = true
-		taskState.userMessageContent = [...pending.answeredToolResults] as any[]
+		const restoredUserContent = [...pending.answeredToolResults]
+		taskState.userMessageContent = restoredUserContent
 		taskState.userMessageContentReady = false
 		taskState.didAlreadyUseTool = false
 		taskState.presentAssistantMessageLocked = false
@@ -213,7 +219,7 @@ export class RestoreHandler {
 		await this.ctx.messageStateHandler.overwriteApiConversationHistory(pending.sanitizedHistory)
 		await this.ctx.postStateToWebview()
 		await this.ctx.presentAssistantMessage()
-		await this.ctx.recursivelyMakeClineRequests(taskState.userMessageContent)
+		await this.ctx.recursivelyMakeClineRequests(restoredUserContent)
 	}
 
 	// ── Helpers ──
@@ -266,35 +272,17 @@ export class RestoreHandler {
 
 		// Restore BlockPhaseMachine if approval blocks exist
 		if (snapshot.approval?.blocks && snapshot.approval.blocks.length > 0) {
-			// Build turn from snapshot blocks
-			this.ctx.controller.blockPhase.buildTurn(
+			this.ctx.controller.restoreTurnFromSnapshot(
 				snapshot.approval.blocks.map((block) => ({
-					type: "tool_use",
-					call_id: block.callId,
-					name: block.name,
-					ts: block.ts,
+					callId: block.callId,
+					toolName: block.name,
+					phase: block.phase,
 					conversationHistoryIndex: block.apiIndex,
+					ts: block.ts,
+					requiresApproval: true,
 				})),
-				this.ctx.shouldAutoApproveTool,
+				snapshot.approval.activeCallId,
 			)
-
-			// Restore each block's phase
-			for (const block of snapshot.approval.blocks) {
-				const blockLifecycle = this.ctx.controller.blockPhase.getBlocks().find((b) => b.callId === block.callId)
-				if (blockLifecycle) {
-					blockLifecycle.phase = block.phase
-				}
-			}
-
-			// Restore active approval if exists
-			if (snapshot.approval.activeCallId) {
-				const activeBlock = this.ctx.controller.blockPhase
-					.getBlocks()
-					.find((b) => b.callId === snapshot.approval?.activeCallId)
-				if (activeBlock) {
-					this.ctx.controller.blockPhase.acquireToken(activeBlock.callId)
-				}
-			}
 		}
 	}
 }

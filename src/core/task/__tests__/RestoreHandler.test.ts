@@ -1,7 +1,14 @@
 import { strict as assert } from "node:assert"
-import { describe, it } from "vitest"
+import type { ToolUse } from "@core/assistant-message"
+import { describe, it, vi } from "vitest"
+import type { ClineAssistantToolUseBlock, ClineStorageMessage, ClineUserToolResultContentBlock } from "@/shared/messages"
+import { BlockPhase } from "../BlockPhaseMachine"
+import type { MessageChannel } from "../MessageChannel"
 import type { PendingToolUseState, RestoreContext } from "../RestoreHandler"
 import { RestoreHandler } from "../RestoreHandler"
+import { TaskController } from "../TaskController"
+import { TaskPhase } from "../TaskPhase"
+import type { TaskSnapshot } from "../TaskSnapshot"
 
 /**
  * Tests for RestoreHandler — validates all restore modes and replayPendingTools.
@@ -11,19 +18,19 @@ describe("RestoreHandler", () => {
 		return {
 			taskState: {
 				toolUseIdMap: new Map(),
-			} as any,
+			} as unknown as RestoreContext["taskState"],
 			controller: {
 				transition: () => ({}),
 				reset: () => {},
 				buildTurn: () => {},
 				restoreFrom: () => {},
 				phase: "idle",
-			} as any,
+			} as unknown as RestoreContext["controller"],
 			messageStateHandler: {
 				apiConversationHistory: [],
 				overwriteApiConversationHistory: async () => {},
 				clineMessages: [],
-			} as any,
+			} as unknown as RestoreContext["messageStateHandler"],
 			presentAssistantMessage: async () => {},
 			recursivelyMakeClineRequests: async () => false,
 			postStateToWebview: async () => {},
@@ -52,7 +59,9 @@ describe("RestoreHandler", () => {
 			},
 		}
 
-		const handler = new RestoreHandler(createMockContext({ checkpointManager } as any))
+		const handler = new RestoreHandler(
+			createMockContext({ checkpointManager: checkpointManager as unknown as RestoreContext["checkpointManager"] }),
+		)
 
 		// Integer string → parse as messageTs
 		await handler.restoreFromCheckpoint("42")
@@ -65,7 +74,10 @@ describe("RestoreHandler", () => {
 	it("restoreAfterHistoryEdit throws for out-of-range index", async () => {
 		const handler = new RestoreHandler(
 			createMockContext({
-				messageStateHandler: { apiConversationHistory: [], clineMessages: [] } as any,
+				messageStateHandler: {
+					apiConversationHistory: [],
+					clineMessages: [],
+				} as unknown as RestoreContext["messageStateHandler"],
 			}),
 		)
 		await assert.rejects(() => handler.restoreAfterHistoryEdit(5), {
@@ -90,7 +102,9 @@ describe("RestoreHandler", () => {
 			},
 		}
 
-		const handler = new RestoreHandler(createMockContext({ checkpointManager } as any))
+		const handler = new RestoreHandler(
+			createMockContext({ checkpointManager: checkpointManager as unknown as RestoreContext["checkpointManager"] }),
+		)
 
 		await handler.restoreFilesOnly(["file.ts"])
 		assert.ok(restoreCalled, "restoreCheckpoint should be called as fallback")
@@ -110,7 +124,7 @@ describe("RestoreHandler", () => {
 					},
 					buildTurn: () => {},
 					phase: "idle",
-				} as any,
+				} as unknown as RestoreContext["controller"],
 				postStateToWebview: async () => {
 					postStateCalled = true
 				},
@@ -118,7 +132,7 @@ describe("RestoreHandler", () => {
 		)
 
 		await handler.restoreChatOnly({
-			phase: "executing" as any,
+			phase: TaskPhase.EXECUTING,
 			apiIndex: 3,
 			timestamp: Date.now(),
 		})
@@ -128,33 +142,36 @@ describe("RestoreHandler", () => {
 	})
 
 	it("restoreChatOnly restores approval turn state from snapshot", async () => {
-		let restoredBlocks: any[] | undefined
+		let restoredBlocks: Parameters<RestoreContext["controller"]["restoreTurnFromSnapshot"]>[0] | undefined
 		let restoredActiveCallId: string | undefined
 
 		const handler = new RestoreHandler(
 			createMockContext({
 				controller: {
 					restoreFrom: () => {},
-					restoreTurnFromSnapshot: (blocks: any[], activeCallId?: string) => {
+					restoreTurnFromSnapshot: (
+						blocks: Parameters<RestoreContext["controller"]["restoreTurnFromSnapshot"]>[0],
+						activeCallId?: string,
+					) => {
 						restoredBlocks = blocks
 						restoredActiveCallId = activeCallId
 					},
 					buildTurn: () => {},
 					phase: "idle",
-				} as any,
+				} as unknown as RestoreContext["controller"],
 			}),
 		)
 
 		await handler.restoreChatOnly({
-			phase: "awaiting_approval" as any,
+			phase: TaskPhase.AWAITING_APPROVAL,
 			apiIndex: 4,
 			timestamp: Date.now(),
 			approval: {
 				mode: "serial",
 				activeCallId: "call_active",
 				blocks: [
-					{ callId: "call_active", name: "write_to_file", phase: "awaiting_approval" as any, apiIndex: 4 },
-					{ callId: "call_next", name: "execute_command", phase: "streaming" as any, apiIndex: 4 },
+					{ callId: "call_active", name: "write_to_file", phase: BlockPhase.AWAITING_APPROVAL, apiIndex: 4 },
+					{ callId: "call_next", name: "execute_command", phase: BlockPhase.STREAMING, apiIndex: 4 },
 				],
 			},
 		})
@@ -181,25 +198,25 @@ describe("RestoreHandler", () => {
 	// ── replayPendingTools ──
 
 	it("replayPendingTools calls transition and overwriteApiConversationHistory", async () => {
-		const transitionCalls: any[] = []
+		const transitionCalls: Parameters<RestoreContext["controller"]["transition"]>[] = []
 		let overwriteCalled = false
 		const ctx = createMockContext({
 			controller: {
-				transition: (...args: any[]) => {
+				transition: (...args: Parameters<RestoreContext["controller"]["transition"]>) => {
 					transitionCalls.push(args)
-					return {}
+					return {} as ReturnType<RestoreContext["controller"]["transition"]>
 				},
 				reset: () => {},
 				buildTurn: () => {},
 				phase: "idle",
-			} as any,
+			} as unknown as RestoreContext["controller"],
 			messageStateHandler: {
-				apiConversationHistory: [{}, {}, {}, {}, {}],
+				apiConversationHistory: [{}, {}, {}, {}, {}] as unknown as ClineStorageMessage[],
 				overwriteApiConversationHistory: async () => {
 					overwriteCalled = true
 				},
 				clineMessages: [],
-			} as any,
+			} as unknown as RestoreContext["messageStateHandler"],
 		})
 
 		const handler = new RestoreHandler(ctx)
@@ -212,7 +229,7 @@ describe("RestoreHandler", () => {
 					call_id: "call_1",
 					name: "read_file",
 					input: { filePath: "/test.ts" },
-				} as any,
+				} as ClineAssistantToolUseBlock,
 			],
 			answeredToolResults: [],
 			sanitizedHistory: [],
@@ -228,18 +245,18 @@ describe("RestoreHandler", () => {
 		let autoApproveResult: boolean | undefined
 		const ctx = createMockContext({
 			controller: {
-				transition: () => ({}),
+				transition: () => ({}) as ReturnType<RestoreContext["controller"]["transition"]>,
 				reset: () => {},
-				buildTurn: (_blocks: any[], autoApprove: (toolName: string, callId: string) => boolean) => {
+				buildTurn: (_blocks: ToolUse[], autoApprove: (toolName: string, callId: string) => boolean) => {
 					autoApproveResult = autoApprove("read_file", "call_1")
 				},
 				phase: "idle",
-			} as any,
+			} as unknown as RestoreContext["controller"],
 			messageStateHandler: {
-				apiConversationHistory: [{}, {}],
+				apiConversationHistory: [{}, {}] as unknown as ClineStorageMessage[],
 				overwriteApiConversationHistory: async () => {},
 				clineMessages: [],
-			} as any,
+			} as unknown as RestoreContext["messageStateHandler"],
 			shouldAutoApproveTool: (toolName, callId) => toolName === "read_file" && callId === "call_1",
 		})
 
@@ -253,12 +270,126 @@ describe("RestoreHandler", () => {
 					call_id: "call_1",
 					name: "read_file",
 					input: { filePath: "/test.ts" },
-				} as any,
+				} as ClineAssistantToolUseBlock,
 			],
 			answeredToolResults: [],
-			sanitizedHistory: [{}, {}] as any,
+			sanitizedHistory: [{}, {}] as unknown as ClineStorageMessage[],
 		})
 
 		assert.equal(autoApproveResult, true)
+	})
+
+	it("replayPendingTools restores multi-tool execution context without dropping answered results", async () => {
+		const transitionCalls: Parameters<RestoreContext["controller"]["transition"]>[] = []
+		let overwrittenHistory: ClineStorageMessage[] | undefined
+		let recursiveContent: ClineUserToolResultContentBlock[] | undefined
+		const taskState = {
+			toolUseIdMap: new Map<string, string>(),
+		} as unknown as RestoreContext["taskState"]
+		const ctx = createMockContext({
+			taskState,
+			controller: {
+				transition: (...args: Parameters<RestoreContext["controller"]["transition"]>) => {
+					transitionCalls.push(args)
+					return {} as ReturnType<RestoreContext["controller"]["transition"]>
+				},
+				reset: () => {},
+				buildTurn: () => {},
+				phase: "idle",
+			} as unknown as RestoreContext["controller"],
+			messageStateHandler: {
+				apiConversationHistory: [{}, {}, {}] as unknown as ClineStorageMessage[],
+				overwriteApiConversationHistory: async (history: ClineStorageMessage[]) => {
+					overwrittenHistory = history
+				},
+				clineMessages: [],
+			} as unknown as RestoreContext["messageStateHandler"],
+			recursivelyMakeClineRequests: async (content) => {
+				recursiveContent = content as ClineUserToolResultContentBlock[]
+				return false
+			},
+		})
+		const answeredToolResult: ClineUserToolResultContentBlock = {
+			type: "tool_result",
+			tool_use_id: "tool_done",
+			content: [{ type: "text", text: "done" }],
+		}
+		const sanitizedHistory = [
+			{ role: "user", content: [] },
+			{ role: "assistant", content: [] },
+		] as ClineStorageMessage[]
+
+		const handler = new RestoreHandler(ctx)
+		await handler.replayPendingTools(
+			{
+				assistantIndex: 1,
+				toolUseBlocks: [
+					{
+						type: "tool_use",
+						id: "tool_read",
+						call_id: "call_read",
+						name: "read_file",
+						input: { path: "a.ts" },
+					} as ClineAssistantToolUseBlock,
+					{
+						type: "tool_use",
+						id: "tool_write",
+						call_id: "call_write",
+						name: "write_to_file",
+						input: { path: "b.ts", content: "next" },
+					} as ClineAssistantToolUseBlock,
+				],
+				answeredToolResults: [answeredToolResult],
+				sanitizedHistory,
+			},
+			{ baseTs: 2000 },
+		)
+
+		assert.deepEqual(
+			(taskState.assistantMessageContent as ToolUse[]).map((tool) => tool.call_id),
+			["call_read", "call_write"],
+		)
+		assert.deepEqual(taskState.userMessageContent, [answeredToolResult])
+		assert.deepEqual(recursiveContent, [answeredToolResult])
+		assert.equal(taskState.toolUseIdMap.get("call_read"), "tool_read")
+		assert.equal(taskState.toolUseIdMap.get("call_write"), "tool_write")
+		assert.deepEqual(overwrittenHistory, sanitizedHistory)
+		const lastTransition = transitionCalls.at(-1)
+		assert.ok(lastTransition, "Expected replay to enter executing phase")
+		assert.deepEqual(lastTransition[1].execution?.executing, ["call_read", "call_write"])
+	})
+
+	// ── hydrateFromSnapshot ──
+
+	it("hydrateFromSnapshot restores approval block phases and active approval block", () => {
+		const mockChannel: MessageChannel = {
+			say: vi.fn(),
+			ask: vi.fn(),
+			resolve: vi.fn(),
+		} as unknown as MessageChannel
+		const controller = new TaskController(mockChannel)
+		const snapshot: TaskSnapshot = {
+			phase: TaskPhase.AWAITING_APPROVAL,
+			apiIndex: 4,
+			timestamp: 1000,
+			approval: {
+				mode: "serial",
+				activeCallId: "call_active",
+				blocks: [
+					{ callId: "call_done", name: "read_file", phase: BlockPhase.COMPLETED, apiIndex: 4, ts: 100 },
+					{ callId: "call_active", name: "write_to_file", phase: BlockPhase.AWAITING_APPROVAL, apiIndex: 4, ts: 200 },
+					{ callId: "call_next", name: "execute_command", phase: BlockPhase.STREAMING, apiIndex: 4, ts: 300 },
+				],
+			},
+		}
+		const handler = new RestoreHandler(createMockContext({ controller }))
+
+		handler.hydrateFromSnapshot(snapshot)
+
+		assert.equal(controller.phase, TaskPhase.AWAITING_APPROVAL)
+		assert.equal(controller.getPhase("call_done"), BlockPhase.COMPLETED)
+		assert.equal(controller.getPhase("call_active"), BlockPhase.AWAITING_APPROVAL)
+		assert.equal(controller.getPhase("call_next"), BlockPhase.STREAMING)
+		assert.equal(controller.getActiveBlock()?.callId, "call_active")
 	})
 })
