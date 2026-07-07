@@ -304,6 +304,64 @@ describe("ActionButtons", () => {
 			})
 		})
 
+		it("enables runtime cancel after approval action switches taskUiState", async () => {
+			const executeTaskUiAction = vi.fn().mockResolvedValue(undefined)
+			const approvalState = {
+				...mockChatState,
+				taskUiState: {
+					phase: "awaiting_approval" as const,
+					inputEnabled: false,
+					cancelEnabled: false,
+					showFooter: true,
+					actions: [{ type: "approve" as const, label: "Approve", enabled: true }],
+					activeAsk: "command" as const,
+					reason: "approval:command",
+				},
+			}
+			const runningState = {
+				...mockChatState,
+				taskUiState: {
+					phase: "working" as const,
+					inputEnabled: false,
+					cancelEnabled: true,
+					showFooter: true,
+					actions: [{ type: "cancel" as const, label: "Cancel", enabled: true }],
+					reason: "working:runtime",
+				},
+			}
+			const approvalMessage = makeMsg({ ts: 1000, partial: false })
+			const runningMessage = makeMsg({ type: "say", say: "command", ts: 1001, partial: false })
+
+			const { rerender } = render(
+				<ActionButtons
+					chatState={approvalState}
+					messageHandlers={{ ...mockMessageHandlers, executeTaskUiAction }}
+					messages={[approvalMessage]}
+					mode="act"
+					task={approvalMessage}
+				/>,
+			)
+
+			fireEvent.click(screen.getByText("Approve"))
+
+			await waitFor(() => {
+				expect(executeTaskUiAction).toHaveBeenCalledWith(approvalState.taskUiState.actions[0])
+			})
+
+			rerender(
+				<ActionButtons
+					chatState={runningState}
+					messageHandlers={{ ...mockMessageHandlers, executeTaskUiAction }}
+					messages={[approvalMessage, runningMessage]}
+					mode="act"
+					task={runningMessage}
+				/>,
+			)
+
+			const cancelButton = screen.getByText("Cancel") as HTMLButtonElement
+			expect(cancelButton.disabled).toBe(false)
+		})
+
 		it("renders start new task from completion taskUiState when completion ask row is hidden", () => {
 			const mockChatStateWithTaskUi = {
 				...mockChatState,

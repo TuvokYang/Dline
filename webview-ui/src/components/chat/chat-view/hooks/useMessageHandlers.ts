@@ -119,6 +119,9 @@ export function useMessageHandlers(
 ): MessageHandlers {
 	const { backgroundCommandRunning } = useExtensionState()
 	const {
+		inputValue,
+		selectedImages,
+		selectedFiles,
 		setInputValue,
 		activeQuote,
 		setActiveQuote,
@@ -243,13 +246,21 @@ export function useMessageHandlers(
 			switch (action.type) {
 				case "retry":
 				case "process_anyway":
+					await TaskServiceClient.askResponse(AskResponseRequest.create({ responseType: "yesButtonClicked" }))
+					clearInputState()
+					break
 				case "resume":
 				case "approve":
 				case "primary":
-					await TaskServiceClient.askResponse(AskResponseRequest.create({ responseType: "yesButtonClicked" }))
-					if (action.type === "retry" || action.type === "process_anyway") {
-						clearInputState()
-					}
+					await TaskServiceClient.askResponse(
+						AskResponseRequest.create({
+							responseType: "yesButtonClicked",
+							text: inputValue.trim(),
+							images: selectedImages,
+							files: selectedFiles,
+						}),
+					)
+					clearInputState()
 					break
 				case "reject":
 				case "secondary":
@@ -287,6 +298,9 @@ export function useMessageHandlers(
 			backgroundCommandRunning,
 			clearInputState,
 			disableAutoScrollRef,
+			inputValue,
+			selectedFiles,
+			selectedImages,
 			setEnableButtons,
 			setSendingDisabled,
 			startNewTask,

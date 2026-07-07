@@ -2768,8 +2768,6 @@ export class Task {
 			enableThinking: reasoning.enableThinking,
 			effort: reasoning.effort,
 			thinkingBudget: reasoning.thinkingBudget,
-			supportsReasoning: capabilities.supportsReasoning ?? false,
-			supportsThinking: capabilities.supportsThinking ?? false,
 		}
 	}
 
@@ -3534,8 +3532,11 @@ export class Task {
 					// Build turn on first complete tool_use block if not already built
 					if (!block.partial && this.taskState.didCompleteReadingStream) {
 						const allBlocks = this.taskState.assistantMessageContent
-						this.taskController.buildTurn(allBlocks, (toolName, _callId) => {
-							return this.toolExecutor.isAutoApproved(toolName as any)
+						this.taskController.buildTurn(allBlocks, (toolName, callId) => {
+							const candidate = allBlocks.find(
+								(item): item is ToolUse => item.type === "tool_use" && item.call_id === callId,
+							)
+							return this.toolExecutor.isAutoApproved(toolName as ClineDefaultTool, candidate?.params)
 						})
 					}
 

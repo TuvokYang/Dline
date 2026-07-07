@@ -111,11 +111,29 @@ export const ActionButtons: React.FC<ActionButtonsProps> = ({
 		}
 	}, [chatState.taskUiState, setSendingDisabled])
 
-	// Reset isProcessing when lastMessage changes so consecutive same-type
-	// asks (common with parallel tool calls) don't leave buttons disabled.
+	const taskActionKey = useMemo(() => {
+		const state = chatState.taskUiState
+		if (!state) {
+			return ""
+		}
+		return state.actions.map((action) => `${action.type}:${action.label}:${action.enabled}`).join("|")
+	}, [chatState.taskUiState])
+
+	// Reset isProcessing when the active interaction changes so new buttons
+	// are not disabled by the previous action's pending state.
 	useEffect(() => {
 		setIsProcessing(false)
-	}, [])
+	}, [
+		lastMessage?.ts,
+		lastMessage?.type,
+		lastMessage?.ask,
+		lastMessage?.say,
+		chatState.taskUiState?.phase,
+		chatState.taskUiState?.reason,
+		chatState.taskUiState?.activeAsk,
+		chatState.taskUiState?.activeCallId,
+		taskActionKey,
+	])
 
 	// Reset isProcessing after cancel — cancel handler sets sendingDisabled
 	// to false on completion but cannot reach this component's local state.

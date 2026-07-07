@@ -46,15 +46,41 @@ export function canonicalizeAttemptCompletionParams(block: ToolUse): boolean {
 	return false
 }
 
+/**
+ * Resolve whether a tool use should be auto-approved from tool params.
+ * @param toolName Tool name from the assistant block.
+ * @param params Tool parameters from the assistant block.
+ * @param autoApproveResult Auto-approve setting result for the tool.
+ * @returns True when the block should skip manual approval.
+ */
+export function isToolUseAutoApproved(
+	toolName: ClineDefaultTool,
+	params: ToolUse["params"] | undefined,
+	autoApproveResult: boolean | [boolean, boolean],
+): boolean {
+	if (toolName === ClineDefaultTool.BASH) {
+		const [autoApproveSafe, autoApproveAll] = Array.isArray(autoApproveResult)
+			? autoApproveResult
+			: [autoApproveResult, false]
+		const requiresApprovalRaw = params?.requires_approval
+		const requiresApprovalPerLLM = requiresApprovalRaw?.toLowerCase() === "true"
+		return (!requiresApprovalPerLLM && autoApproveSafe) || (requiresApprovalPerLLM && autoApproveSafe && autoApproveAll)
+	}
+
+	if (Array.isArray(autoApproveResult)) {
+		return autoApproveResult[0] || autoApproveResult[1]
+	}
+	return !!autoApproveResult
+}
+
 export class ToolExecutor {
 	private autoApprover: AutoApprove
 	private coordinator: ToolExecutorCoordinator
 
 	/** Public accessor for auto-approve logic used by TaskController.buildTurn(). */
-	public isAutoApproved(toolName: ClineDefaultTool): boolean {
+	public isAutoApproved(toolName: ClineDefaultTool, params?: ToolUse["params"]): boolean {
 		const result = this.autoApprover.shouldAutoApproveTool(toolName)
-		if (Array.isArray(result)) return result[0] || result[1]
-		return !!result
+		return isToolUseAutoApproved(toolName, params, result)
 	}
 
 	// Auto-approval methods using the AutoApprove class

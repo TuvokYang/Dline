@@ -158,4 +158,39 @@ describe("useMessageHandlers taskUiState routing", () => {
 			text: "please adjust the result",
 		})
 	})
+
+	it("sends resume action input using taskUiState when resume ask row is hidden", async () => {
+		const taskUiState: TaskUiState = {
+			phase: "awaiting_resume",
+			inputEnabled: true,
+			cancelEnabled: false,
+			showFooter: true,
+			actions: [{ type: "resume", label: "Resume", enabled: true }],
+			activeAsk: "resume_task",
+			reason: "resume-from-stale-working:streaming",
+		}
+		const lastMessage = createSnapshotMessage(taskUiState)
+		const chatState = createChatState({
+			inputValue: "继续执行并带上说明",
+			selectedImages: ["image-data"],
+			selectedFiles: ["file-data"],
+			taskUiState,
+			lastMessage,
+			clineAsk: undefined,
+		})
+		const { result } = renderHook(() => useMessageHandlers([lastMessage], chatState))
+
+		await act(async () => {
+			await result.current.executeTaskUiAction(taskUiState.actions[0])
+		})
+
+		expect(grpcMocks.taskAskResponse).toHaveBeenCalledTimes(1)
+		expect(grpcMocks.taskAskResponse.mock.calls[0]?.[0]).toMatchObject({
+			responseType: "yesButtonClicked",
+			text: "继续执行并带上说明",
+			images: ["image-data"],
+			files: ["file-data"],
+		})
+		expect(chatState.setInputValue).toHaveBeenCalledWith("")
+	})
 })
