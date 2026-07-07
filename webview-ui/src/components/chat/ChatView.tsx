@@ -3,14 +3,16 @@ import { combineCommandSequences } from "@shared/combineCommandSequences"
 import { combineErrorRetryMessages } from "@shared/combineErrorRetryMessages"
 import { combineHookSequences } from "@shared/combineHookSequences"
 import { BooleanRequest, StringRequest } from "@shared/proto/dline/common"
+import type { ModelInfo } from "@shared/proto/dline/models"
+import { resolveProfileModelInfo } from "@shared/providers/profile-model-info"
 import { useCallback, useEffect, useMemo } from "react"
 import { useApiProfiles } from "@/components/settings/providers/useApiProfiles"
+import { useProviderModels } from "@/components/settings/providers/useProviderModels"
 import { useExtensionState } from "@/context/ExtensionStateContext"
 import { useShowNavbar } from "@/context/PlatformContext"
 import { FileServiceClient, UiServiceClient } from "@/services/grpc-client"
 import { Navbar } from "../menu/Navbar"
 import AutoApproveBar from "./auto-approve-menu/AutoApproveBar"
-
 // Import utilities and hooks from the new structure
 import {
 	ActionButtons,
@@ -28,6 +30,7 @@ import {
 	useScrollBehavior,
 	WelcomeSection,
 } from "./chat-view"
+import { resolveActiveProfile } from "./chat-view/utils/profileUtils"
 
 interface ChatViewProps {
 	isHidden: boolean
@@ -39,6 +42,7 @@ interface ChatViewProps {
 // Use constants from the imported module
 const MAX_IMAGES_AND_FILES_PER_MESSAGE = CHAT_CONSTANTS.MAX_IMAGES_AND_FILES_PER_MESSAGE
 const QUICK_WINS_HISTORY_THRESHOLD = 3
+const EMPTY_MODEL_INFO: ModelInfo = { id: "", capabilities: {}, pricing: {} }
 
 const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryView }: ChatViewProps) => {
 	const showNavbar = useShowNavbar()
@@ -179,10 +183,17 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 	// handleFocusChange is already provided by chatState
 
 	const { profiles } = useApiProfiles()
+	const activeProfile = useMemo(
+		() => resolveActiveProfile(profiles, apiConfiguration, mode),
+		[profiles, apiConfiguration, mode],
+	)
+	const { models, defaultModelId } = useProviderModels(activeProfile?.provider ?? "")
 	const selectedModelInfo = useMemo(() => {
-		const activeProfile = profiles.find((p) => p.usedFor?.includes(mode)) ?? profiles[0]
-		return activeProfile?.modelInfo ?? { capabilities: {} as any, pricing: {} as any }
-	}, [profiles, mode])
+		if (!activeProfile) {
+			return EMPTY_MODEL_INFO
+		}
+		return resolveProfileModelInfo(activeProfile, { models, defaultModelId })
+	}, [activeProfile, models, defaultModelId])
 
 	const selectFilesAndImages = useCallback(async () => {
 		try {
@@ -331,6 +342,7 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 						lastProgressMessageText={lastProgressMessageText}
 						messageHandlers={messageHandlers}
 						selectedModelInfo={{
+							contextWindow: selectedModelInfo.capabilities?.contextWindow,
 							supportsPromptCache: selectedModelInfo.capabilities?.supportsPromptCache ?? false,
 							supportsImages: selectedModelInfo.capabilities?.supportsImages || false,
 						}}

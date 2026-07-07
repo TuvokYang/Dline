@@ -40,6 +40,7 @@ import {
 	getSavedApiConversationHistory,
 	getSavedClineMessages,
 } from "@core/storage/disk"
+import { showContextUsage } from "@core/task/environment-context"
 import { isMultiRootEnabled } from "@core/workspace/multi-root-utils"
 import { WorkspaceRootManager } from "@core/workspace/WorkspaceRootManager"
 import { buildCheckpointManager, shouldUseMultiRoot } from "@integrations/checkpoints/factory"
@@ -68,13 +69,7 @@ import { USER_CONTENT_TAGS } from "@shared/messages/constants"
 import { convertClineMessageToProto } from "@shared/proto-conversions/cline-message"
 import { ClineDefaultTool, READ_ONLY_TOOLS } from "@shared/tools"
 import { ClineAskResponse } from "@shared/WebviewMessage"
-import {
-	isClaude4PlusModelFamily,
-	isGPT5ModelFamily,
-	isLocalModel,
-	isNextGenModelFamily,
-	isParallelToolCallingEnabled,
-} from "@utils/model-utils"
+import { isLocalModel, isNextGenModelFamily, isParallelToolCallingEnabled } from "@utils/model-utils"
 import { arePathsEqual, getDesktopDir } from "@utils/path"
 import { filterExistingFiles } from "@utils/tabFiltering"
 import cloneDeep from "clone-deep"
@@ -1579,6 +1574,14 @@ export class Task {
 		return ask === "resume_task" || ask === "resume_completed_task"
 	}
 
+	/**
+	 * Check if an ask type represents completed task feedback.
+	 * Completion asks keep the task finished while allowing feedback or Start New Task.
+	 */
+	private isCompletionAsk(ask: ClineAsk | undefined): ask is ClineAsk {
+		return ask === "completion_result"
+	}
+
 	private withApprovalVisibleCallback(
 		type: ClineAsk,
 		text: string | undefined,
@@ -1589,12 +1592,14 @@ export class Task {
 		const shouldTrackConversation = this.isConversationalAsk(type) && partial !== true
 		const shouldTrackErrorRecovery = this.isErrorRecoveryAsk(type) && partial !== true
 		const shouldTrackResume = this.isResumeAsk(type) && partial !== true
+		const shouldTrackCompletion = this.isCompletionAsk(type) && partial !== true
 		const shouldNotify = type !== "command_output" && partial !== true
 		if (
 			!shouldTrackApproval &&
 			!shouldTrackConversation &&
 			!shouldTrackErrorRecovery &&
 			!shouldTrackResume &&
+			!shouldTrackCompletion &&
 			!shouldNotify
 		) {
 			return options
@@ -1614,6 +1619,9 @@ export class Task {
 				}
 				if (shouldTrackResume) {
 					await this.markResumeAskVisible(type, askTs)
+				}
+				if (shouldTrackCompletion) {
+					await this.markCompletionAskVisible(type, askTs)
 				}
 				await options?.onAskVisible?.(askTs)
 				if (shouldNotify) {
@@ -1722,6 +1730,23 @@ export class Task {
 			apiIndex: this.messageStateHandler.apiConversationHistory.length - 1,
 			awaiting: {
 				kind: "resume",
+				taskAsk: type,
+				messageTs: askTs,
+			},
+			onSnapshot: this.emitStateSnapshot.bind(this),
+		})
+		await this.postStateToWebview()
+	}
+
+	/**
+	 * Create a completion-awaiting snapshot for finished task feedback.
+	 * This keeps Start New Task visible after attempt_completion completes.
+	 */
+	private async markCompletionAskVisible(type: ClineAsk, askTs: number): Promise<void> {
+		await this.taskController.transition(TaskPhase.COMPLETED, {
+			apiIndex: this.messageStateHandler.apiConversationHistory.length - 1,
+			awaiting: {
+				kind: "completion",
 				taskAsk: type,
 				messageTs: askTs,
 			},
@@ -5043,20 +5068,8 @@ export class Task {
 		const lastApiReqTotalTokens = lastApiReqMessage ? getTotalTokensFromApiReqMessage(lastApiReqMessage) : 0
 		const usagePercentage = Math.round((lastApiReqTotalTokens / contextWindow) * 100)
 
-		// Determine if context window info should be displayed
 		const currentModelId = this.api.getModel().id
-		const isNextGenModel = isClaude4PlusModelFamily(currentModelId) || isGPT5ModelFamily(currentModelId)
-
-		let shouldShowContextWindow = true
-		// For next-gen models, only show context window usage if it exceeds a certain threshold
-		if (isNextGenModel) {
-			const autoCondenseThreshold = 0.75
-			const displayThreshold = autoCondenseThreshold - 0.15
-			const currentUsageRatio = lastApiReqTotalTokens / contextWindow
-			shouldShowContextWindow = currentUsageRatio >= displayThreshold
-		}
-
-		if (shouldShowContextWindow) {
+		if (showContextUsage({ contextWindow, lastApiReqTotalTokens, modelId: currentModelId })) {
 			details += "\n\n# Context Window Usage"
 			details += `\n${lastApiReqTotalTokens.toLocaleString()} / ${(contextWindow / 1000).toLocaleString()}K tokens used (${usagePercentage}%)`
 			// Notify AI that auto-compact is enabled so it doesn't refuse long tasks
