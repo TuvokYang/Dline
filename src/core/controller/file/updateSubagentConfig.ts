@@ -14,11 +14,11 @@ import type { Controller } from ".."
 /**
  * Update a subagent YAML config file.
  *
- * Modifies frontmatter fields (modelId, tools, skills, description)
+ * Modifies frontmatter fields (profile, tools, skills, description)
  * while preserving the system prompt body and comments.
  */
 export async function updateSubagentConfig(_controller: Controller, request: UpdateSubagentConfigRequest): Promise<Empty> {
-	const { subagentPath, modelId, tools, skills, description } = request
+	const { subagentPath, profile, tools, skills, description } = request
 
 	if (!subagentPath) {
 		throw new Error("subagentPath is required")
@@ -47,9 +47,9 @@ export async function updateSubagentConfig(_controller: Controller, request: Upd
 
 	let updatedFrontmatter = frontmatterBody
 
-	// Update modelId if provided (set to empty string to remove)
-	if (modelId !== undefined) {
-		updatedFrontmatter = upsertYamlField(updatedFrontmatter, "modelId", modelId || null)
+	// Update profile if provided (set to empty string to remove)
+	if (profile !== undefined) {
+		updatedFrontmatter = upsertYamlField(updatedFrontmatter, "profile", profile || null)
 	}
 
 	// Update tools if provided

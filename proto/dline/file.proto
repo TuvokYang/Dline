@@ -110,7 +110,7 @@ service FileService {
   // Returns available tools grouped by category for subagent configuration
   rpc getAvailableTools(EmptyRequest) returns (AvailableToolsResponse);
 
-  // Updates a subagent YAML configuration (modelId, tools, skills, description)
+  // Updates a subagent YAML configuration (profile, tools, skills, description)
   rpc updateSubagentConfig(UpdateSubagentConfigRequest) returns (Empty);
 
   // Reads all ApiProfile configurations from api_profiles.json
@@ -380,7 +380,7 @@ message SubagentInfo {
   bool enabled = 4; // Whether the subagent is enabled
   repeated string tools = 5; // Tool names assigned to this subagent
   repeated string skills = 6; // Skill names assigned to this subagent
-  optional string model_id = 7; // Optional model override
+  optional string profile = 7; // Optional ApiProfile name override
 }
 
 // Response for refreshSubagents operation
@@ -439,9 +439,9 @@ message AvailableToolsResponse {
 // Request to update a subagent YAML configuration
 message UpdateSubagentConfigRequest {
   string subagent_path = 1;
-  optional string model_id = 2;
   repeated string tools = 3;
   repeated string skills = 4;
   optional string description = 5;
+  optional string profile = 6;
 }
 

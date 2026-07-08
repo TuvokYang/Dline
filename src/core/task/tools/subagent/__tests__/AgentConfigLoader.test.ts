@@ -24,12 +24,12 @@ describe("AgentConfigLoader", () => {
 		tempDirs.length = 0
 	})
 
-	it("parses an Agents.yaml frontmatter config and system prompt body", () => {
+	it("parses a profile frontmatter config and system prompt body", () => {
 		const content = `---
 name: code-reviewer
 description: Reviews code for quality and best practices
 tools: read_file, list_files, search_files
-modelId: sonnet
+profile: subagent-reviewer
 ---
 
 You are a code reviewer.`
@@ -38,7 +38,8 @@ You are a code reviewer.`
 
 		assert.equal(parsed.name, "code-reviewer")
 		assert.equal(parsed.description, "Reviews code for quality and best practices")
-		assert.equal(parsed.modelId, "sonnet")
+		assert.equal((parsed as { profile?: string }).profile, "subagent-reviewer")
+		assert.equal("modelId" in parsed, false)
 		assert.deepEqual(parsed.tools, [ClineDefaultTool.FILE_READ, ClineDefaultTool.LIST_FILES, ClineDefaultTool.SEARCH])
 		assert.equal(parsed.systemPrompt, "You are a code reviewer.")
 	})
@@ -50,7 +51,7 @@ description: Uses internal ids
 tools:
   - read_file
   - list_files
-modelId: sonnet
+profile: cli-profile
 ---
 
 Prompt body`
@@ -59,12 +60,27 @@ Prompt body`
 		assert.deepEqual(parsed.tools, [ClineDefaultTool.FILE_READ, ClineDefaultTool.LIST_FILES])
 	})
 
+	it("ignores deprecated modelId frontmatter", () => {
+		const content = `---
+name: legacy-agent
+description: legacy
+modelId: old-profile
+---
+
+Prompt body`
+
+		const parsed = parseAgentConfigFromYaml(content)
+
+		assert.equal((parsed as { profile?: string }).profile, undefined)
+		assert.equal("modelId" in parsed, false)
+	})
+
 	it("throws for unknown tools", () => {
 		const content = `---
 name: bad-agent
 description: bad
 tools: Read, NotARealTool
-modelId: sonnet
+profile: bad-profile
 ---
 
 Prompt body`
@@ -92,7 +108,7 @@ Prompt body`
 name: local-agent
 description: local agent
 tools: read_file
-modelId: sonnet
+profile: local-profile
 ---
 
 Prompt body`,
@@ -104,7 +120,7 @@ Prompt body`,
 name: reviewer
 description: reviewer agent
 tools: list_files
-modelId: sonnet
+profile: reviewer-profile
 ---
 
 Reviewer prompt`,
@@ -137,7 +153,7 @@ Reviewer prompt`,
 name: code reviewer
 description: reviewer agent
 tools: read_file
-modelId: sonnet
+profile: reviewer-profile
 ---
 
 Reviewer prompt`,

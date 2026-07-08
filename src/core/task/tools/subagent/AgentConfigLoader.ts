@@ -16,14 +16,14 @@ const AgentBaseConfigSchema = z.object({
 	description: z.string().trim().min(1),
 	tools: z.array(z.nativeEnum(ClineDefaultTool)).default([]),
 	skills: z.array(z.string().trim().min(1)).optional(),
-	modelId: z.string().trim().min(1).nullable().optional(),
+	profile: z.string().trim().min(1).nullable().optional(),
 	systemPrompt: z.string().trim().min(1),
 })
 
 const AgentConfigFrontmatterSchema = z.object({
 	name: z.string().trim().min(1),
 	description: z.string().trim().min(1),
-	modelId: z.string().trim().min(1).nullable().optional(),
+	profile: z.string().trim().min(1).nullable().optional(),
 	tools: z.union([z.string(), z.array(z.string())]).optional(),
 	skills: z.union([z.string(), z.array(z.string())]).optional(),
 })
@@ -71,7 +71,7 @@ export function parseAgentConfigFromYaml(content: string): AgentBaseConfig {
 	return AgentBaseConfigSchema.parse({
 		name: parsedFrontmatter.name,
 		description: parsedFrontmatter.description,
-		modelId: parsedFrontmatter.modelId,
+		profile: parsedFrontmatter.profile,
 		tools: parseTools(parsedFrontmatter.tools),
 		skills: parseSkills(parsedFrontmatter.skills),
 		systemPrompt,
@@ -303,7 +303,7 @@ Place \`.yml\` files here to define custom subagents. Each file = one subagent.
 ---
 name: my-agent
 description: What this agent does
-modelId: (optional) ApiProfile name override
+profile: (optional) ApiProfile name override
 tools:           # optional — defaults to readonly set below
   - read_file
   - search_files
@@ -328,7 +328,7 @@ Write (⚠️ use with caution — subagent can modify files):
 Subagents use these defaults if no YAML overrides are present:
   Tools: read_file, search_files, list_files, list_code_definition_names,
          execute_command (readonly commands only), use_skill, attempt_completion
-  Model: current active profile
+  Profile: default act profile
   System prompt: research subagent — explore codebase, read files,
                  run readonly commands, report findings. No file modifications.
 `

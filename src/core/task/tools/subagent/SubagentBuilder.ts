@@ -1,4 +1,5 @@
 import { buildApiHandler } from "@core/api"
+import { readApiProfiles } from "@core/controller/file/getApiProfiles"
 import { PromptRegistry } from "@core/prompts/system-prompt"
 import { ClineToolSet } from "@core/prompts/system-prompt/registry/ClineToolSet"
 import type { SystemPromptContext } from "@core/prompts/system-prompt/types"
@@ -46,19 +47,13 @@ export class SubagentBuilder {
 		this.agentConfig = subagentConfig ?? {}
 		this.allowedTools = this.resolveAllowedTools(this.agentConfig.tools)
 
-		const mode = this.baseConfig.services.stateManager.getGlobalSettingsKey("mode")
 		const apiConfiguration = this.baseConfig.services.stateManager.getApiConfiguration()
 		const effectiveApiConfiguration = {
 			...apiConfiguration,
+			actModeProfile: this.resolveProfile(this.agentConfig.profile, apiConfiguration.actModeProfile),
 			ulid: this.baseConfig.ulid,
 		}
-		// The YAML field is still named modelId, but the profile-driven backend
-		// expects the value to be an ApiProfile name.
-		if (this.agentConfig.modelId?.trim()) {
-			const profileField = mode === "plan" ? "planModeProfile" : "actModeProfile"
-			;(effectiveApiConfiguration as any)[profileField] = this.agentConfig.modelId.trim()
-		}
-		this.apiHandler = buildApiHandler(effectiveApiConfiguration, mode)
+		this.apiHandler = buildApiHandler(effectiveApiConfiguration, "act")
 	}
 
 	getApiHandler(): ReturnType<typeof buildApiHandler> {
@@ -92,6 +87,25 @@ export class SubagentBuilder {
 
 		const converter = ClineToolSet.getNativeConverter(context.providerInfo.providerId, context.providerInfo.model.id)
 		return filteredToolSpecs.map((tool) => converter(tool, context))
+	}
+
+	/**
+	 * Resolve the effective act profile for a subagent.
+	 *
+	 * @param configuredProfile Optional profile name from subagent YAML.
+	 * @param defaultProfile Act profile used when no valid subagent profile exists.
+	 * @returns Valid subagent profile name or the default act profile.
+	 */
+	private resolveProfile(configuredProfile: string | null | undefined, defaultProfile?: string): string | undefined {
+		const profileName = configuredProfile?.trim()
+		if (!profileName) {
+			return defaultProfile
+		}
+		const profile = readApiProfiles().find((candidate) => candidate.name === profileName)
+		if (!profile?.enabled || !profile.usedFor.includes("subagents")) {
+			return defaultProfile
+		}
+		return profile.name
 	}
 
 	private resolveAllowedTools(configuredTools?: ClineDefaultTool[]): ClineDefaultTool[] {

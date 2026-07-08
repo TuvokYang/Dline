@@ -6,12 +6,12 @@ import {
 	ToolGroup,
 	UpdateSubagentConfigRequest,
 } from "@shared/proto/dline/file"
-import { AvailableModelsResponse, ProviderModelGroup } from "@shared/proto/dline/models"
+import type { ApiProfile } from "@shared/proto/dline/profile"
 import { ChevronDownIcon, ChevronRightIcon, PenIcon, Trash2Icon } from "lucide-react"
 import { useEffect, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
-import { FileServiceClient, ModelsServiceClient } from "@/services/grpc-client"
+import { FileServiceClient } from "@/services/grpc-client"
 
 interface SubagentRowProps {
 	agent: SubagentInfo
@@ -28,12 +28,12 @@ const SubagentRow: React.FC<SubagentRowProps> = ({ agent, isGlobal, onToggle, on
 	const [expanded, setExpanded] = useState(false)
 	const [toolGroups, setToolGroups] = useState<ToolGroup[]>([])
 	const [selectedTools, setSelectedTools] = useState<Set<string>>(new Set(agent.tools))
-	const [modelGroups, setModelGroups] = useState<ProviderModelGroup[]>([])
-	const [selectedModelId, setSelectedModelId] = useState<string>(agent.modelId || "")
-	const [modelsLoading, setModelsLoading] = useState(false)
+	const [profiles, setProfiles] = useState<ApiProfile[]>([])
+	const [selectedProfile, setSelectedProfile] = useState<string>(agent.profile || "")
+	const [profilesLoading, setProfilesLoading] = useState(false)
 	const [toolsLoading, setToolsLoading] = useState(false)
 
-	// Load available tools and models when expanded
+	// Load available tools and profiles when expanded
 	useEffect(() => {
 		if (!expanded) return
 
@@ -49,14 +49,18 @@ const SubagentRow: React.FC<SubagentRowProps> = ({ agent, isGlobal, onToggle, on
 				if (!cancelled) setToolsLoading(false)
 			})
 
-		setModelsLoading(true)
-		ModelsServiceClient.getAvailableModels({} as EmptyRequest)
-			.then((response: AvailableModelsResponse) => {
-				if (!cancelled) setModelGroups(response.providers || [])
+		setProfilesLoading(true)
+		FileServiceClient.getApiProfiles({} as EmptyRequest)
+			.then((response) => {
+				if (!cancelled) {
+					setProfiles(
+						(response.profiles || []).filter((profile) => profile.enabled && profile.usedFor.includes("subagents")),
+					)
+				}
 			})
-			.catch((err) => console.error("Failed to load available models:", err))
+			.catch((err) => console.error("Failed to load available profiles:", err))
 			.finally(() => {
-				if (!cancelled) setModelsLoading(false)
+				if (!cancelled) setProfilesLoading(false)
 			})
 
 		return () => {
@@ -80,14 +84,14 @@ const SubagentRow: React.FC<SubagentRowProps> = ({ agent, isGlobal, onToggle, on
 		).catch((err) => console.error("Failed to save tools:", err))
 	}
 
-	const handleModelChange = (modelId: string) => {
-		setSelectedModelId(modelId)
+	const handleProfileChange = (profile: string) => {
+		setSelectedProfile(profile)
 		FileServiceClient.updateSubagentConfig(
 			UpdateSubagentConfigRequest.create({
 				subagentPath: agent.path,
-				modelId: modelId || "",
+				profile: profile || "",
 			}),
-		).catch((err) => console.error("Failed to save model:", err))
+		).catch((err) => console.error("Failed to save profile:", err))
 	}
 
 	const handleDelete = () => {
@@ -155,30 +159,24 @@ const SubagentRow: React.FC<SubagentRowProps> = ({ agent, isGlobal, onToggle, on
 				</div>
 			</div>
 
-			{/* Expanded tool and model selection */}
+			{/* Expanded tool and profile selection */}
 			{expanded && (
 				<div className="mt-1 ml-6 p-2 rounded bg-input-background max-h-[300px] overflow-y-auto">
-					{/* Model selection */}
+					{/* Profile selection */}
 					<div className="mb-2">
-						<div className="text-xs font-medium text-description mb-1">Model</div>
-						{modelsLoading ? (
-							<div className="text-xs text-description">Loading available models...</div>
-						) : modelGroups.length === 0 ? (
-							<div className="text-xs text-description">No models available</div>
+						<div className="text-xs font-medium text-description mb-1">Profile</div>
+						{profilesLoading ? (
+							<div className="text-xs text-description">Loading available profiles...</div>
 						) : (
 							<select
 								className="w-full text-xs p-1 rounded bg-text-block-background border border-input-border"
-								onChange={(e) => handleModelChange(e.target.value)}
-								value={selectedModelId}>
-								<option value="">Default (act mode provider)</option>
-								{modelGroups.map((provider) => (
-									<optgroup key={provider.provider} label={provider.providerName}>
-										{provider.models.map((model) => (
-											<option key={`${provider.provider}:${model.id}`} value={model.id}>
-												{model.name || model.id}
-											</option>
-										))}
-									</optgroup>
+								onChange={(e) => handleProfileChange(e.target.value)}
+								value={selectedProfile}>
+								<option value="">Default (act profile)</option>
+								{profiles.map((profile) => (
+									<option key={profile.id || profile.name} value={profile.name}>
+										{profile.name}
+									</option>
 								))}
 							</select>
 						)}

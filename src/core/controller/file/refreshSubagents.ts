@@ -44,7 +44,7 @@ async function scanSubagentsDirectory(dirPath: string): Promise<SubagentInfo[]> 
 						enabled: true, // Will be updated with toggle state
 						tools: config.tools,
 						skills: config.skills || [],
-						modelId: config.modelId ?? undefined,
+						profile: config.profile ?? undefined,
 					}),
 				)
 			} catch (error) {
