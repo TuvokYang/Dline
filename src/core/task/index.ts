@@ -3167,7 +3167,6 @@ export class Task {
 			profileName: profileName ?? "(none)",
 			provider: providerInfo.providerId,
 			modelId: providerInfo.model.id,
-			modelName: providerInfo.model.info?.name ?? providerInfo.model.id,
 			thinking: thinkingSummary ?? null,
 		})
 

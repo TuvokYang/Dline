@@ -2,6 +2,25 @@ English | [中文版](../../CHANGELOG.md)
 
 # Changelog
 
+## [0.9.1]
+
+### Features
+- Task-level Profile model switching: ModelSwitcher can isolate API configuration per task and prevent cross-window model/profile contamination
+- OpenAI Native / OpenAI Codex model data updates: synchronized official model metadata and added thinking / reasoning configuration support
+
+### Changed
+- Agent workflow directory migration: moved `.clinerules/workflows` to `.agents/workflows` to unify agent configuration and workflow entry points
+- Task UI state restoration improvements: enhanced snapshot-first TaskUiState, ActionButtons decisions, and message-window scroll/merge behavior
+- Prompt variant configuration simplified: merged Native GPT-5 variant files to reduce duplicate prompt definitions
+- Provider configuration and token semantics unified: fixed profile display, model metadata, cache token accounting, and prompt cache handling
+
+### Fixed
+- Fixed multi-window task Profile isolation, context compaction boundaries, and task-level overflow state restoration
+- Fixed tool approval and Resume flows, including read/list approval, rejection handling, original ask reuse after restore, and Process Anyway input forwarding
+- Fixed `attempt_completion` occasionally continuing after confirmation and showing Start New Task instead of Resume after feedback restore
+- Fixed auto-retry cancellation, exhausted retry prompts, and empty API conversation loops
+- Fixed Apply Patch partial message timestamps, short diff marker search, MCP base URL, and related stability issues
+
 ## [0.9.0]
 
 ### Added

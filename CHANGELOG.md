@@ -2,6 +2,25 @@
 
 # Changelog
 
+## [0.9.1]
+
+### Features
+- 任务级 Profile 模型切换：ModelSwitcher 可按任务隔离 API 配置，避免多窗口会话串用模型配置
+- OpenAI Native / OpenAI Codex 模型数据更新：同步官方模型信息，并补充 thinking / reasoning 相关配置支持
+
+### Changed
+- Agent 工作流目录迁移：将 `.clinerules/workflows` 移动到 `.agents/workflows`，统一 agent 配置与工作流入口
+- 任务 UI 状态恢复机制增强：引入 snapshot-first TaskUiState、ActionButtons 判决与消息窗口滚动/合并优化
+- Prompt 变体配置简化：合并 Native GPT-5 系列变体，减少重复 prompt 文件
+- Provider 配置与 token 语义进一步统一：修正 profile 展示、模型元数据、cache token 与 prompt cache 处理
+
+### Fixed
+- 修复多窗口任务 Profile 隔离、上下文压缩边界与 task-level overflow 状态恢复问题
+- 修复工具审批与 Resume 流程：覆盖 read/list 审批、拒绝审批、恢复后原 ask 复用和 Process Anyway 输入传递
+- 修复 `attempt_completion` 偶发不停止、带 feedback 恢复时错误显示 Start New Task 的状态流转问题
+- 修复 auto-retry 取消无效、重试耗尽后不显示 Retry，以及空 API conversation 造成空响应循环的问题
+- 修复 Apply Patch partial message 时间戳、短 diff 标记搜索和 MCP base URL 等稳定性问题
+
 ## [0.9.0]
 
 ### Added
