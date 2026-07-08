@@ -49,4 +49,4 @@ export const openAiCodexModels: Record<string, ModelInfo> = {
 }
 
 /** Default model ID for OpenAI Codex provider */
-export const openAiCodexDefaultModelId = "gpt-5.5-codex"
+export const openAiCodexDefaultModelId = "gpt-5.5"

@@ -1,1 +1,1 @@
-../../.clinerules/workflows/hotfix-release.md
+../../.agents/workflows/hotfix-release.md

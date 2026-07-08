@@ -286,6 +286,10 @@
 			},
 			{
 				"command": "dline.generateGitCommitMessage",
+				"key": "cmd+g",
+				"mac": "cmd+g",
+				"win": "ctrl+g",
+				"linux": "ctrl+g",
 				"when": "config.git.enabled && scmProvider == git"
 			},
 			{

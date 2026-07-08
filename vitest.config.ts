@@ -1,7 +1,25 @@
 import { resolve } from "path"
+import type { Plugin } from "vite"
 import { defineConfig } from "vitest/config"
 
+/**
+ * Resolve webview-local @ imports before the root @ alias handles backend imports.
+ */
+function resolveWebviewAlias(): Plugin {
+	return {
+		name: "resolve-webview-alias",
+		resolveId(source, importer) {
+			if (!source.startsWith("@/") || !importer?.includes("webview-ui")) {
+				return null
+			}
+
+			return resolve(__dirname, "webview-ui/src", source.slice(2))
+		},
+	}
+}
+
 export default defineConfig({
+	plugins: [resolveWebviewAlias()],
 	test: {
 		include: [
 			"src/**/*.test.ts",
@@ -15,6 +33,7 @@ export default defineConfig({
 		globals: true,
 		setupFiles: ["src/test/setup.ts"],
 		testTimeout: 60_000,
+		environmentMatchGlobs: [["webview-ui/src/**/*.{test,spec}.{ts,tsx}", "jsdom"]],
 		clearMocks: false,
 		restoreMocks: false,
 	},

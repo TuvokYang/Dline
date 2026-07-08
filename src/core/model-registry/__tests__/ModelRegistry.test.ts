@@ -1,11 +1,12 @@
 /**
  * Unit tests for ModelRegistry.
  */
-import { afterEach, beforeEach, describe, it, vi } from "vitest"
+
 import { expect } from "chai"
 // sinon import removed: using vitest globals
 import fsPromises from "fs/promises"
 import * as path from "path"
+import { afterEach, beforeEach, describe, it, vi } from "vitest"
 import { ModelRegistry } from "../ModelRegistry"
 
 describe("ModelRegistry", () => {
@@ -59,16 +60,18 @@ describe("ModelRegistry", () => {
 				provider: "test-provider",
 				providerName: "Test Provider",
 				defaultModelId: "model-1",
-				models: [
-					{
+				models: {
+					"model-1": {
 						id: "model-1",
 						name: "Model 1",
-						maxTokens: 4096,
-						contextWindow: 128000,
-						supportsImages: false,
-						supportsPromptCache: false,
+						capabilities: {
+							maxTokens: 4096,
+							contextWindow: 128000,
+							supportsImages: false,
+							supportsPromptCache: false,
+						},
 					},
-				],
+				},
 			}
 			await fsPromises.writeFile(path.join(tempDir, "test-provider.json"), JSON.stringify(config))
 
@@ -85,16 +88,18 @@ describe("ModelRegistry", () => {
 			const config = {
 				provider: "another",
 				providerName: "Another",
-				models: [
-					{
+				models: {
+					m1: {
 						id: "m1",
 						name: "M1",
-						maxTokens: 100,
-						contextWindow: 1000,
-						supportsImages: false,
-						supportsPromptCache: false,
+						capabilities: {
+							maxTokens: 100,
+							contextWindow: 1000,
+							supportsImages: false,
+							supportsPromptCache: false,
+						},
 					},
-				],
+				},
 			}
 			await fsPromises.writeFile(path.join(tempDir, "another.json"), JSON.stringify(config))
 			await registry.reload()
@@ -109,24 +114,28 @@ describe("ModelRegistry", () => {
 				provider: "doubao",
 				providerName: "Doubao",
 				defaultModelId: "doubao-pro-256k",
-				models: [
-					{
+				models: {
+					"doubao-pro-256k": {
 						id: "doubao-pro-256k",
 						name: "Doubao Pro 256K",
-						maxTokens: 12288,
-						contextWindow: 256000,
-						supportsImages: false,
-						supportsPromptCache: false,
+						capabilities: {
+							maxTokens: 12288,
+							contextWindow: 256000,
+							supportsImages: false,
+							supportsPromptCache: false,
+						},
 					},
-					{
+					"doubao-lite-32k": {
 						id: "doubao-lite-32k",
 						name: "Doubao Lite 32K",
-						maxTokens: 4096,
-						contextWindow: 32000,
-						supportsImages: false,
-						supportsPromptCache: false,
+						capabilities: {
+							maxTokens: 4096,
+							contextWindow: 32000,
+							supportsImages: false,
+							supportsPromptCache: false,
+						},
 					},
-				],
+				},
 			}
 			await fsPromises.writeFile(path.join(tempDir, "doubao.json"), JSON.stringify(config))
 			await registry.initialize()
@@ -142,16 +151,18 @@ describe("ModelRegistry", () => {
 			const config = {
 				provider: "simple",
 				providerName: "Simple",
-				models: [
-					{
+				models: {
+					m1: {
 						id: "m1",
 						name: "M1",
-						maxTokens: 100,
-						contextWindow: 1000,
-						supportsImages: false,
-						supportsPromptCache: false,
+						capabilities: {
+							maxTokens: 100,
+							contextWindow: 1000,
+							supportsImages: false,
+							supportsPromptCache: false,
+						},
 					},
-				],
+				},
 			}
 			await fsPromises.writeFile(path.join(tempDir, "simple.json"), JSON.stringify(config))
 			await registry.initialize()
@@ -200,16 +211,18 @@ describe("ModelRegistry", () => {
 				provider: "anthropic",
 				providerName: "Anthropic",
 				defaultModelId: "claude-sonnet-4-6",
-				models: [
-					{
+				models: {
+					"claude-sonnet-4-6": {
 						id: "claude-sonnet-4-6",
 						name: "Claude Sonnet 4.6",
-						maxTokens: 8192,
-						contextWindow: 200000,
-						supportsImages: true,
-						supportsPromptCache: true,
+						capabilities: {
+							maxTokens: 8192,
+							contextWindow: 200000,
+							supportsImages: true,
+							supportsPromptCache: true,
+						},
 					},
-				],
+				},
 			}
 			await fsPromises.writeFile(path.join(tempDir, "anthropic.json"), JSON.stringify(config))
 			await registry.initialize()
@@ -218,7 +231,7 @@ describe("ModelRegistry", () => {
 			expect(result).to.not.be.undefined
 			expect(result?.provider).to.equal("anthropic")
 			expect(result?.defaultModelId).to.equal("claude-sonnet-4-6")
-			expect(result?.models).to.have.lengthOf(1)
+			expect(Object.keys(result?.models ?? {})).to.have.lengthOf(1)
 		})
 
 		it("should return undefined for unknown provider", async () => {
@@ -233,30 +246,34 @@ describe("ModelRegistry", () => {
 			const configA = {
 				provider: "openai",
 				providerName: "OpenAI",
-				models: [
-					{
+				models: {
+					"gpt-5": {
 						id: "gpt-5",
 						name: "GPT-5",
-						maxTokens: 4096,
-						contextWindow: 128000,
-						supportsImages: false,
-						supportsPromptCache: false,
+						capabilities: {
+							maxTokens: 4096,
+							contextWindow: 128000,
+							supportsImages: false,
+							supportsPromptCache: false,
+						},
 					},
-				],
+				},
 			}
 			const configB = {
 				provider: "gemini",
 				providerName: "Gemini",
-				models: [
-					{
+				models: {
+					"gemini-2.5-pro": {
 						id: "gemini-2.5-pro",
 						name: "Gemini 2.5 Pro",
-						maxTokens: 65536,
-						contextWindow: 1048576,
-						supportsImages: true,
-						supportsPromptCache: false,
+						capabilities: {
+							maxTokens: 65536,
+							contextWindow: 1048576,
+							supportsImages: true,
+							supportsPromptCache: false,
+						},
 					},
-				],
+				},
 			}
 			await fsPromises.writeFile(path.join(tempDir, "openai.json"), JSON.stringify(configA))
 			await fsPromises.writeFile(path.join(tempDir, "gemini.json"), JSON.stringify(configB))
@@ -279,16 +296,18 @@ describe("ModelRegistry", () => {
 			const config = {
 				provider: "doubao",
 				providerName: "Doubao",
-				models: [
-					{
+				models: {
+					m1: {
 						id: "m1",
 						name: "M1",
-						maxTokens: 100,
-						contextWindow: 1000,
-						supportsImages: false,
-						supportsPromptCache: false,
+						capabilities: {
+							maxTokens: 100,
+							contextWindow: 1000,
+							supportsImages: false,
+							supportsPromptCache: false,
+						},
 					},
-				],
+				},
 			}
 			await fsPromises.writeFile(path.join(tempDir, "doubao.json"), JSON.stringify(config))
 			await registry.initialize()
@@ -319,16 +338,18 @@ describe("ModelRegistry", () => {
 			const config = {
 				provider: "test",
 				providerName: "Test",
-				models: [
-					{
+				models: {
+					m1: {
 						id: "m1",
 						name: "M1",
-						maxTokens: 100,
-						contextWindow: 1000,
-						supportsImages: false,
-						supportsPromptCache: false,
+						capabilities: {
+							maxTokens: 100,
+							contextWindow: 1000,
+							supportsImages: false,
+							supportsPromptCache: false,
+						},
 					},
-				],
+				},
 			}
 			await fsPromises.writeFile(path.join(tempDir, "test.json"), JSON.stringify(config))
 			await registry.initialize()
@@ -349,16 +370,18 @@ describe("ModelRegistry", () => {
 			const config = {
 				provider: "test2",
 				providerName: "Test2",
-				models: [
-					{
+				models: {
+					m1: {
 						id: "m1",
 						name: "M1",
-						maxTokens: 100,
-						contextWindow: 1000,
-						supportsImages: false,
-						supportsPromptCache: false,
+						capabilities: {
+							maxTokens: 100,
+							contextWindow: 1000,
+							supportsImages: false,
+							supportsPromptCache: false,
+						},
 					},
-				],
+				},
 			}
 			await fsPromises.writeFile(path.join(tempDir, "test2.json"), JSON.stringify(config))
 			await registry.initialize()

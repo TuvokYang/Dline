@@ -121,8 +121,9 @@ describe("seed-initializer", () => {
 		expect(parsed.defaultModelId).to.equal("test-model-1")
 		expect(parsed.provider).to.equal("test-provider")
 		expect(parsed.providerName).to.equal("Test Provider")
-		expect(parsed.models).to.be.an("array").with.lengthOf(1)
-		expect(parsed.models[0].id).to.equal("test-model-1")
+		expect(parsed.models).to.be.an("object")
+		expect(Object.keys(parsed.models)).to.have.lengthOf(1)
+		expect(parsed.models["test-model-1"].id).to.equal("test-model-1")
 	})
 
 	it("should strip undefined fields from JSON output", async () => {
@@ -137,21 +138,21 @@ describe("seed-initializer", () => {
 
 		const jsonContent = optionalCall?.[1] as string
 		const parsed = JSON.parse(jsonContent)
-		const model = parsed.models[0]
+		const model = parsed.models["opt-model"]
 
 		// Present fields should exist
 		expect(model.id).to.equal("opt-model")
 		expect(model.description).to.equal("A test model with optional fields")
-		expect(model.currency).to.equal("USD")
-		expect(model.supportsReasoning).to.be.true
-		expect(model.inputPrice).to.equal(3.0)
-		expect(model.outputPrice).to.equal(15.0)
+		expect(model.pricing.currency).to.equal("USD")
+		expect(model.capabilities.supportsReasoning).to.be.true
+		expect(model.pricing.inputPrice).to.equal(3.0)
+		expect(model.pricing.outputPrice).to.equal(15.0)
 
 		// Undefined fields must not appear in the JSON
-		expect("temperature" in model).to.be.false
-		expect("cacheWritesPrice" in model).to.be.false
-		expect("cacheReadsPrice" in model).to.be.false
-		expect("supportsGlobalEndpoint" in model).to.be.false
+		expect("temperature" in model.capabilities).to.be.false
+		expect("cacheWritesPrice" in model.pricing).to.be.false
+		expect("cacheReadsPrice" in model.pricing).to.be.false
+		expect("supportsGlobalEndpoint" in model.capabilities).to.be.false
 		expect("apiFormat" in model).to.be.false
 		expect("tiers" in model).to.be.false
 	})

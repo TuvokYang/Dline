@@ -2,6 +2,66 @@
   {
     "type": "function",
     "function": {
+      "name": "write_to_file",
+      "description": "[IMPORTANT: Always output the absolutePath first] Request to write content to a NEW file at the specified path. Use this tool ONLY for creating files that do not already exist. For editing existing files, always use replace_in_file. This tool will automatically create any directories needed to write the file.",
+      "strict": false,
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "absolutePath": {
+            "type": "string",
+            "description": "The absolute path to the file to write to."
+          },
+          "content": {
+            "type": "string",
+            "description": "After providing the path so a file can be created, then use this to provide the content to write to the file."
+          },
+          "task_progress": {
+            "type": "string",
+            "description": "Only report COMPLETED items (`- [x]`) with EXACT item text from the checklist — copy the text character-for-character, do NOT simplify or rephrase. The full checklist is shown in environment_details. The task_progress parameter MUST be included as a separate parameter in the tool, it must be separate from other parameters such as content, arguments, etc. (See 'UPDATING TASK PROGRESS' section for more details)"
+          }
+        },
+        "required": [
+          "absolutePath",
+          "content"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "replace_in_file",
+      "description": "[IMPORTANT: Always output the absolutePath first] Request to edit an existing file using SEARCH/REPLACE blocks. PREFER this tool for all edits to existing files. Only use write_to_file for creating new files.",
+      "strict": false,
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "absolutePath": {
+            "type": "string",
+            "description": "The absolute path to the file to write to."
+          },
+          "diff": {
+            "type": "string",
+            "description": "One or more SEARCH/REPLACE blocks following this exact format:\n  ```\n  ------- SEARCH\n  [exact content to find]\n  =======\n  [new content to replace with]\n  +++++++ REPLACE\n  ```\n  Critical rules:\n  1. SEARCH content must match the associated file section to find EXACTLY:\n     * Match character-for-character including whitespace, indentation, line endings\n     * Include all comments, docstrings, etc.\n  2. SEARCH/REPLACE blocks will ONLY replace the first match occurrence.\n     * Including multiple unique SEARCH/REPLACE blocks if you need to make multiple changes.\n     * Include *just* enough lines in each SEARCH section to uniquely match each set of lines that need to change.\n     * When using multiple SEARCH/REPLACE blocks, list them in the order they appear in the file.\n  3. Keep SEARCH/REPLACE blocks concise:\n     * Break large SEARCH/REPLACE blocks into a series of smaller blocks that each change a small portion of the file.\n     * Include just the changing lines, and a few surrounding lines if needed for uniqueness.\n     * Do not include long runs of unchanging lines in SEARCH/REPLACE blocks.\n     * Each line must be complete. Never truncate lines mid-way through as this can cause matching failures.\n  4. Special operations:\n     * To move code: Use two SEARCH/REPLACE blocks (one to delete from original + one to insert at new location)\n     * To delete code: Use empty REPLACE section\n   5. If your source context came from read_file and includes line labels (for example, \"42 | const x = 1\"), do NOT include the \"42 | \" prefix in SEARCH or REPLACE content. Match only the raw file text.\n   6. DELIMITER CONFLICT: If any line in your SEARCH content starts with 7+ dashes followed by \" SEARCH\", or is exactly 7+ \"=\" signs, or starts with 7+ \"+\" followed by \" REPLACE\", change your delimiter count to a unique value (>= 7). The count must not match any content line format. All three markers within a block must use the same count.\n   7. FAILURE RECOVERY: If SEARCH block fails to match:\n      - The match text may be too short, causing multiple identical matches in the file. Read the file with read_file, select a longer unique snippet around the target lines, and retry.\n      - The match text may not exist exactly in the file due to character differences, whitespace, or indentation. Read the file and copy/paste the EXACT text you need to match.\n      - NEVER use command-line tools (sed, awk, ripgrep, etc.) to edit files. Only use replace_in_file for editing existing files.\n      - Always re-read the file before retrying after a failed match."
+          },
+          "task_progress": {
+            "type": "string",
+            "description": "Only report COMPLETED items (`- [x]`) with EXACT item text from the checklist — copy the text character-for-character, do NOT simplify or rephrase. The full checklist is shown in environment_details. The task_progress parameter MUST be included as a separate parameter in the tool, it must be separate from other parameters such as content, arguments, etc. (See 'UPDATING TASK PROGRESS' section for more details)"
+          }
+        },
+        "required": [
+          "absolutePath",
+          "diff"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
       "name": "read_file",
       "description": "Request to read the contents of a file at the specified path. Use this when you need to examine the contents of an existing file you do not know the contents of, for example to analyze code, review text files, or extract information from configuration files. Returned text lines are prefixed with line labels (e.g. `1 |`, `2 |`). These labels are metadata, not part of the file content. For large files, output is automatically limited to 1000 lines. Use start_line and end_line to read specific sections. Automatically extracts raw text from PDF and DOCX files. May not be suitable for other types of binary files, as it returns the raw content as a string. Do NOT use this tool to list the contents of a directory. Only use this tool on files.",
       "strict": false,

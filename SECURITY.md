@@ -2,7 +2,7 @@
 
 ## Supported Versions
 
-We actively patch only the most recent minor release of Cline. Older versions receive fixes at our discretion.
+We actively patch only the most recent minor release of Dline. Older versions receive fixes at our discretion.
 
 ## Reporting a Vulnerability
 
@@ -20,6 +20,6 @@ Please keep the details private until a resolution has been reached.
 
 ## Escalation
 
-If you are unable to submit through Bugcrowd, you may send an email to security@cline.bot.
+If you are unable to submit through Bugcrowd, you may send an email to security@dline.bot.
 
-Thank you for helping us keep Cline users safe.
+Thank you for helping us keep Dline users safe.

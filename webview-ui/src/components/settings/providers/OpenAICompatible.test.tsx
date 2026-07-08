@@ -1,7 +1,9 @@
+// @vitest-environment jsdom
 import type { ModelInfo } from "@shared/proto/dline/models"
 import type { ModelCapabilities, ModelPricing } from "@shared/proto/dline/models/metadata"
 import { OpenAiProviderConfig } from "@shared/proto/dline/provider/openai"
 import { fireEvent, render, screen } from "@testing-library/react"
+import React from "react"
 import { describe, expect, it, vi } from "vitest"
 import { OpenAICompatibleProvider } from "./OpenAICompatible"
 import type { ApiProfile } from "./ProviderProfile"

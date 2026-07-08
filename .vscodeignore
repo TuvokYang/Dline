@@ -89,3 +89,11 @@ tests/
 *storybook.log
 storybook-static
 **/StorybookDecorator.tsx
+
+# memory bank for dline development
+.memory-bank/
+
+# for AI agents
+.codex/
+.claude/
+.agents/

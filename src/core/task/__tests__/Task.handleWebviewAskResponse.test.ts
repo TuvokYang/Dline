@@ -33,8 +33,10 @@ function createFakeTaskForHandleWebviewAskResponse(controller: TaskController, e
 		// resolveAsk is called first in handleWebviewAskResponse
 		// postStateToWebview is called after transition
 		// emitStateSnapshot is passed to transition as callback
+		// flushTaskSnapshot is called after state transitions are persisted
 		postStateToWebview: vi.fn(async () => {}),
 		emitStateSnapshot: vi.fn(async () => {}),
+		flushTaskSnapshot: vi.fn(async () => {}),
 		// isParallelToolCallingEnabled is used in yesButtonClicked path
 		isParallelToolCallingEnabled: vi.fn(() => true),
 		...extra,

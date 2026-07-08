@@ -1,1 +1,1 @@
-../../.clinerules/workflows/release.md
+../../.agents/workflows/release.md

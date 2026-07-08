@@ -234,6 +234,137 @@ replaced
 		})
 	})
 
+	it("should reject empty search conflict in v1 while v2 replaces the whole file", async () => {
+		const original = "any content"
+		const diff = `------- SEARCH
+=======
+inserted
++++++++ REPLACE`
+
+		try {
+			await cnfc(diff, original, true)
+			expect.fail("Expected an error to be thrown")
+		} catch (err) {
+			expect(err).to.be.an("error")
+		}
+
+		const result2 = await cnfc2(diff, original, true)
+		expect(result2).to.equal("inserted\n")
+	})
+
+	it("should handle mixed line endings", async () => {
+		const original = "line1\r\nline2"
+		const diff = `------- SEARCH
+line1\r
+=======
+line1
++++++++ REPLACE`
+
+		const result1 = await cnfc(diff, original, true)
+		const result2 = await cnfc2(diff, original, true)
+
+		expect(result1.newContent).to.equal("line1\nline2")
+		expect(result2).to.equal("line1\nline2")
+	})
+
+	it("should handle special characters in search content", async () => {
+		const original = "text with $^.*\nend"
+		const diff = `------- SEARCH
+$^.*
+=======
+replaced
++++++++ REPLACE`
+
+		const result1 = await cnfc(diff, original, true)
+		const result2 = await cnfc2(diff, original, true)
+
+		expect(result1.newContent).to.equal("text with replaced\nend")
+		expect(result2).to.equal("text with replaced\nend")
+	})
+
+	it("should handle nested marker text inside search content", async () => {
+		const original = `text with $^.*\n--- SEARCH\nend`
+		const diff = `------- SEARCH
+$^.*
+=======
+replaced
++++++++ REPLACE
+
+------- SEARCH
+--- SEARCH
+=======
+before
++++++++ REPLACE`
+
+		const result1 = await cnfc(diff, original, true)
+		const result2 = await cnfc2(diff, original, true)
+
+		expect(result1.newContent).to.equal("text with replaced\nbefore\nend")
+		expect(result2).to.equal("text with replaced\nbefore\nend")
+	})
+
+	it("should handle long text with multiple search-replace blocks", async () => {
+		const original = `This is a long text with multiple sections.
+Section 1: Lorem ipsum dolor sit amet
+Section 2: consectetur adipiscing elit
+Section 3: sed do eiusmod tempor
+Section 4: incididunt ut labore
+Section 5: et dolore magna aliqua`
+		const diff = `------- SEARCH
+Section 1: Lorem ipsum dolor sit amet
+=======
+Section 1: Replaced text
++++++++ REPLACE
+
+------- SEARCH
+Section 3: sed do eiusmod tempor
+=======
+Section 3: Modified content
++++++++ REPLACE
+
+------- SEARCH
+Section 5: et dolore magna aliqua
+=======
+Section 5: Final replacement
++++++++ REPLACE`
+		const expected = `This is a long text with multiple sections.
+Section 1: Replaced text
+Section 2: consectetur adipiscing elit
+Section 3: Modified content
+Section 4: incididunt ut labore
+Section 5: Final replacement
+`
+
+		const result1 = await cnfc(diff, original, true)
+		const result2 = await cnfc2(diff, original, true)
+
+		expect(result1.newContent).to.equal(expected)
+		expect(result2).to.equal(expected)
+	})
+
+	it("should reject short search markers", async () => {
+		const original = "text with $^.*\n--- SEARCH\nend"
+		const diff = `--- SEARCH
+$^.*
+=======
+replaced
++++++++ REPLACE`
+
+		try {
+			await cnfc(diff, original, true)
+			expect.fail("Expected an error to be thrown")
+		} catch (err) {
+			expect(err).to.be.an("error")
+		}
+
+		try {
+			await cnfc2(diff, original, true)
+			expect.fail("Expected an error to be thrown")
+		} catch (err) {
+			expect(err).to.be.an("error")
+		}
+	})
+
 	it("should throw error when no match found", async () => {
 		const original = "line1\nline2\nline3"
 		const diff = `------- SEARCH
