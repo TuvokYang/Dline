@@ -159,6 +159,41 @@ describe("useMessageHandlers taskUiState routing", () => {
 		})
 	})
 
+	it("sends process-anyway action input using taskUiState", async () => {
+		const taskUiState: TaskUiState = {
+			phase: "awaiting_error_recovery",
+			inputEnabled: true,
+			cancelEnabled: false,
+			showFooter: true,
+			actions: [{ type: "process_anyway", label: "Process Anyway", enabled: true }],
+			activeAsk: "mistake_limit_reached",
+			reason: "error-recovery:mistake_limit_reached",
+		}
+		const lastMessage = createSnapshotMessage(taskUiState)
+		const chatState = createChatState({
+			inputValue: "继续但不要重复刚才的空上下文错误",
+			selectedImages: ["image-data"],
+			selectedFiles: ["file-data"],
+			taskUiState,
+			lastMessage,
+			clineAsk: undefined,
+		})
+		const { result } = renderHook(() => useMessageHandlers([lastMessage], chatState))
+
+		await act(async () => {
+			await result.current.executeTaskUiAction(taskUiState.actions[0])
+		})
+
+		expect(grpcMocks.taskAskResponse).toHaveBeenCalledTimes(1)
+		expect(grpcMocks.taskAskResponse.mock.calls[0]?.[0]).toMatchObject({
+			responseType: "messageResponse",
+			text: "继续但不要重复刚才的空上下文错误",
+			images: ["image-data"],
+			files: ["file-data"],
+		})
+		expect(chatState.setInputValue).toHaveBeenCalledWith("")
+	})
+
 	it("sends resume action input using taskUiState when resume ask row is hidden", async () => {
 		const taskUiState: TaskUiState = {
 			phase: "awaiting_resume",

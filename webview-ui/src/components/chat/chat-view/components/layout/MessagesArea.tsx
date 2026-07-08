@@ -12,6 +12,12 @@ import { isApiReqActive } from "@/utils/streaming"
 
 import type { ChatState, MessageHandlers, ScrollBehavior } from "../../types/chatTypes"
 import { isToolGroup } from "../../utils/messageUtils"
+import {
+	buildMessageRowKey,
+	getBottomFollowIntent,
+	mergeMessageWindow,
+	shouldRestoreBottom,
+} from "../../utils/messageWindowUtils"
 import { createMessageRenderer } from "../messages/MessageRenderer"
 
 const LOAD_THRESHOLD = 100
@@ -82,6 +88,8 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 	const showScrollToBottomRef = useRef(false)
 	// Track webview visibility so we can pause Virtuoso updates when hidden
 	const isWebviewHiddenRef = useRef(false)
+	const wasAtBottomBeforeHiddenRef = useRef(false)
+	const lastMessageSignatureRef = useRef("")
 	// Cache the last visible messages snapshot so Virtuoso data stays stable while hidden
 	const cachedVisibleMessagesRef = useRef<(ClineMessage | ClineMessage[])[]>([])
 
@@ -94,6 +102,10 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 	}, [clineMessages.length])
 
 	const lastRawMessage = useMemo(() => clineMessages.at(-1), [clineMessages])
+	const lastMessageSignature = useMemo(() => {
+		if (!lastRawMessage) return ""
+		return `${lastRawMessage.ts}:${lastRawMessage.partial === true ? "partial" : "final"}:${lastRawMessage.text ?? ""}`
+	}, [lastRawMessage])
 
 	// Reset auto-scroll flag when entering a new task so the view scrolls
 	// to the bottom instead of staying wherever the previous task left it.
@@ -126,24 +138,38 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 	useEffect(() => {
 		const handleVisibility = () => {
 			const wasHidden = isWebviewHiddenRef.current
-			isWebviewHiddenRef.current = document.visibilityState === "hidden"
+			const isHidden = document.visibilityState === "hidden"
+			if (!wasHidden && isHidden) {
+				wasAtBottomBeforeHiddenRef.current = isAtBottomRef.current
+			}
+			isWebviewHiddenRef.current = isHidden
 
-			// Webview just became visible again — trigger a one-frame-delayed
-			// scroll to bottom so Virtuoso has time to re-layout after being hidden.
-			if (wasHidden && document.visibilityState === "visible") {
-				requestAnimationFrame(() => {
-					virtuosoRef.current?.scrollToIndex({
-						index: "LAST",
-						align: "end",
-						behavior: "auto",
-					})
+			const shouldRestore = shouldRestoreBottom({
+				wasHidden,
+				isVisible: document.visibilityState === "visible",
+				disableAutoScroll: disableAutoScrollRef.current,
+				wasAtBottom: wasAtBottomBeforeHiddenRef.current || isAtBottomRef.current,
+			})
+
+			if (!shouldRestore) return
+
+			const scrollToLast = () => {
+				virtuosoRef.current?.scrollToIndex({
+					index: "LAST",
+					align: "end",
+					behavior: "auto",
 				})
 			}
+
+			requestAnimationFrame(scrollToLast)
+			setTimeout(scrollToLast, 50)
+			setTimeout(scrollToLast, 200)
+			setTimeout(scrollToLast, 500)
 		}
 
 		document.addEventListener("visibilitychange", handleVisibility)
 		return () => document.removeEventListener("visibilitychange", handleVisibility)
-	}, [virtuosoRef])
+	}, [disableAutoScrollRef, isAtBottomRef, virtuosoRef])
 
 	const messageIndexByTs = useMemo(() => {
 		const map = new Map<number, number>()
@@ -241,6 +267,17 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 		edgeScrollTimersRef.current = []
 	}, [])
 
+	const scrollToBottomLast = useCallback(
+		(behavior: "auto" | "smooth" = "auto") => {
+			virtuosoRef.current?.scrollToIndex({
+				index: "LAST",
+				align: "end",
+				behavior,
+			})
+		},
+		[virtuosoRef],
+	)
+
 	const scrollToLoadedEdge = useCallback(
 		(edge: ScrollEdge, behavior: "auto" | "smooth" = "auto") => {
 			if (renderRows.length === 0) return
@@ -249,17 +286,29 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 
 			const index = edge === "top" ? 0 : renderRows.length - 1
 			const align = edge === "top" ? "start" : "end"
-			const scroll = () => scrollToRowOffset(index, align, behavior)
+			const scroll = () => {
+				if (edge === "bottom") {
+					scrollToBottomLast(behavior)
+					return
+				}
+				scrollToRowOffset(index, align, behavior)
+			}
 			edgeScrollRafRef.current = requestAnimationFrame(() => {
 				edgeScrollRafRef.current = null
 				scroll()
 			})
 
 			edgeScrollTimersRef.current = [50, 200, 500].map((delay) =>
-				setTimeout(() => scrollToRowOffset(index, align, "auto"), delay),
+				setTimeout(() => {
+					if (edge === "bottom") {
+						scrollToBottomLast("auto")
+						return
+					}
+					scrollToRowOffset(index, align, "auto")
+				}, delay),
 			)
 		},
-		[clearEdgeScrollTimers, renderRows.length, scrollToRowOffset],
+		[clearEdgeScrollTimers, renderRows.length, scrollToBottomLast, scrollToRowOffset],
 	)
 
 	useLayoutEffect(() => {
@@ -282,6 +331,27 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 	}, [renderRows.length, findRowOffsetByMessageTs, scrollToLoadedEdge, scrollToRowOffset])
 
 	useEffect(() => clearEdgeScrollTimers, [clearEdgeScrollTimers])
+
+	useLayoutEffect(() => {
+		const total = totalMessageCount ?? clineMessagesLengthRef.current
+		const absoluteBottomLoaded = firstItemIndexRef.current + clineMessagesLengthRef.current >= total
+		const previousSignature = lastMessageSignatureRef.current
+		const lastMessageTsChanged = previousSignature.split(":", 1)[0] !== String(lastRawMessage?.ts ?? "")
+		const lastMessageContentChanged = previousSignature !== "" && previousSignature !== lastMessageSignature
+		lastMessageSignatureRef.current = lastMessageSignature
+
+		const intent = getBottomFollowIntent({
+			disableAutoScroll: disableAutoScrollRef.current,
+			isAtBottom: isAtBottomRef.current,
+			absoluteBottomLoaded,
+			lastMessageTsChanged,
+			lastMessageContentChanged,
+		})
+
+		if (intent === "follow") {
+			scrollToLoadedEdge("bottom", "auto")
+		}
+	}, [disableAutoScrollRef, isAtBottomRef, lastRawMessage?.ts, lastMessageSignature, scrollToLoadedEdge, totalMessageCount])
 
 	const scrolledPastUserMessageRowOffset = useMemo(() => {
 		if (!scrolledPastUserMessage) return -1
@@ -377,13 +447,11 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 
 		// Wrap to handle the empty placeholder row — returns a 1px invisible
 		// spacer so Virtuoso never encounters a zero-sized element.
-		return (index: number, _groupIndex: number, _data: unknown) => {
-			const item = visibleGroupedMessages[index]
+		return (index: number, item: ClineMessage | ClineMessage[]) => {
 			if (item === EMPTY_PLACEHOLDER_MSG) {
 				return <div style={{ height: 1 }} />
 			}
-			// @ts-expect-error — Virtuoso itemContent signature mismatch with older API
-			return realRenderer(index, _groupIndex, _data)
+			return realRenderer(index, item)
 		}
 	}, [
 		visibleGroupedMessages,
@@ -410,6 +478,10 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 		}),
 		[showThinkingLoaderRow],
 	)
+
+	const computeItemKey = useCallback((index: number, item: ClineMessage | ClineMessage[]) => {
+		return buildMessageRowKey(item, index)
+	}, [])
 
 	const fetchAndMerge = useCallback(
 		async (start: number, count: number, anchor?: PendingAnchor) => {
@@ -442,29 +514,27 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 
 				setClineMessages((prev) => {
 					const fi = firstItemIndexRef.current
+					const result = mergeMessageWindow({
+						existing: prev,
+						incoming: msgs,
+						existingStartIndex: fi,
+						incomingStartIndex: si,
+					})
 
-					if (si === fi + prev.length) {
-						merged = true
-
-						const next = [...prev, ...msgs]
-						clineMessagesLengthRef.current = next.length
-
-						return next
+					if (!result.merged) {
+						return prev
 					}
 
-					if (si + msgs.length <= fi) {
-						merged = true
+					merged = true
+					clineMessagesLengthRef.current = result.messages.length
+
+					if (result.firstItemIndex !== fi) {
 						mergeLockRef.current = true
-						firstItemIndexRef.current = si
-						setFirstItemIndex(si)
-
-						const next = [...msgs, ...prev]
-						clineMessagesLengthRef.current = next.length
-
-						return next
+						firstItemIndexRef.current = result.firstItemIndex
+						setFirstItemIndex(result.firstItemIndex)
 					}
 
-					return prev
+					return result.messages
 				})
 
 				if (!merged && anchor) {
@@ -749,7 +819,7 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 					atBottomThreshold={10}
 					className="scrollable grow overflow-y-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
 					components={virtuosoComponents}
-					// @ts-expect-error — Virtuoso data prop expects readonly number[] but we use grouped messages
+					computeItemKey={computeItemKey}
 					data={visibleGroupedMessages}
 					firstItemIndex={0}
 					increaseViewportBy={{ top: 100, bottom: 100 }}

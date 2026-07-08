@@ -375,6 +375,43 @@ describe("ResumeHandler", () => {
 		)
 	})
 
+	it("promptUser reuses the original tool approval ask timestamp", async () => {
+		const askSpy = vi.fn().mockResolvedValue({ response: "yesButtonClicked", text: "" })
+		const ctx = createMockContext({
+			controller: {
+				toolNameToAskType: () => "tool",
+				rejectActiveBlock: vi.fn(),
+			} as unknown as ResumeContext["controller"],
+			messageStateHandler: {
+				clineMessages: [
+					{
+						ts: 1234,
+						type: "ask",
+						ask: "tool",
+						text: JSON.stringify({ tool: "readFile", path: "README.md" }),
+					},
+				],
+				apiConversationHistory: [],
+			} as unknown as ResumeContext["messageStateHandler"],
+			ask: askSpy,
+		})
+
+		const handler = new ResumeHandler(ctx)
+		await handler.promptUser(
+			{
+				assistantIndex: 0,
+				toolUseBlocks: [{ type: "tool_use", id: "t1", name: "read_file", input: {} } as ClineAssistantToolUseBlock],
+				answeredToolResults: [],
+				sanitizedHistory: [],
+			},
+			undefined,
+		)
+
+		assert.equal(askSpy.mock.calls[0]?.[0], "tool")
+		assert.equal(askSpy.mock.calls[0]?.[1], JSON.stringify({ tool: "readFile", path: "README.md" }))
+		assert.equal(askSpy.mock.calls[0]?.[3]?.existingTs, 1234)
+	})
+
 	it("resumeFromHistory returns false when detectPendingTools finds nothing", async () => {
 		const ctx = createMockContext({
 			messageStateHandler: {

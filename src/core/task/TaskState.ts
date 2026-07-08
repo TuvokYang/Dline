@@ -56,6 +56,8 @@ export class TaskState {
 	consecutiveMistakeCount = 0
 	doubleCheckCompletionPending = false
 	didAutomaticallyRetryFailedApiRequest = false
+	// Marks that the user explicitly accepted attempt_completion and the task loop must stop.
+	didConfirmCompletion = false
 	checkpointManagerErrorMessage?: string
 
 	// Retry tracking for auto-retry feature

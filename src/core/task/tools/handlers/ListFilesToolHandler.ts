@@ -87,32 +87,18 @@ export class ListFilesToolHandler implements IFullyManagedTool {
 			return formatResponse.toolError(formatResponse.clineIgnoreError(relDirPath!))
 		}
 
-		// Resolve the path and execute the list operation inside a single
-		// try/catch so that failures in either step (e.g. bad workspace hint,
-		// non-existent directory) return a graceful tool error instead of
-		// crashing the task.
 		let absolutePath: string
 		let displayPath: string
-		let fileInfos: import("@services/glob/list-files").FileInfo[]
-		let didHitLimit: boolean
 		let usedWorkspaceHint: boolean
 		try {
 			const pathResult = resolveWorkspacePath(config, relDirPath!, "ListFilesToolHandler.execute")
 			;({ absolutePath, displayPath } =
 				typeof pathResult === "string" ? { absolutePath: pathResult, displayPath: relDirPath! } : pathResult)
 			usedWorkspaceHint = typeof pathResult !== "string"
-			;[fileInfos, didHitLimit] = await listFiles(absolutePath, recursive, 200)
 		} catch (error) {
-			// Tool executed normally — returning a toolError result, not a tool crash.
-			// Do NOT increment consecutiveMistakeCount: the model should see the error
-			// and recover by trying a different path.
 			const errorMessage = error instanceof Error ? error.message : String(error)
 			return formatResponse.toolError(`Error listing files: ${errorMessage}`)
 		}
-
-		// Only reset after all validations and the core operation succeed so
-		// repeated failures accumulate toward the yolo-mode mistake limit.
-		config.taskState.consecutiveMistakeCount = 0
 
 		// Determine workspace context for telemetry
 		const fallbackAbsolutePath = path.resolve(config.cwd, relDirPath ?? "")
@@ -123,38 +109,22 @@ export class ListFilesToolHandler implements IFullyManagedTool {
 			resolutionMethod: (usedWorkspaceHint ? "hint" : "primary_fallback") as "hint" | "primary_fallback",
 		}
 
-		const result = formatResponse.formatFilesList(absolutePath, fileInfos, didHitLimit, config.services.clineIgnoreController)
+		const operationIsLocatedInWorkspace = await isLocatedInWorkspace(relDirPath!)
+		const createToolMessage = (content: string) =>
+			JSON.stringify({
+				tool: recursive ? "listFilesRecursive" : "listFilesTopLevel",
+				path: getReadablePath(config.cwd, displayPath),
+				content,
+				operationIsLocatedInWorkspace,
+			})
 
-		// Handle approval flow
-		const sharedMessageProps = {
-			tool: recursive ? "listFilesRecursive" : "listFilesTopLevel",
-			path: getReadablePath(config.cwd, displayPath),
-			content: result,
-			operationIsLocatedInWorkspace: await isLocatedInWorkspace(relDirPath!),
-		}
-
-		const completeMessage = JSON.stringify(sharedMessageProps)
+		const approvalMessage = createToolMessage("")
 
 		const shouldAutoApprove =
 			config.isSubagentExecution || (await config.callbacks.shouldAutoApproveToolWithPath(block.name, relDirPath))
+		let wasAutoApproved = false
 		if (shouldAutoApprove) {
-			// Auto-approval flow
-			if (!config.isSubagentExecution) {
-				const existingTs = block.ts
-				await config.callbacks.say("tool", completeMessage, undefined, undefined, false, existingTs)
-			}
-
-			// Capture telemetry
-			telemetryService.captureToolUsage(
-				config.ulid ?? "",
-				block.name,
-				config.api.getModel().id,
-				provider ?? "",
-				true,
-				true,
-				workspaceContext,
-				block.isNativeToolCall,
-			)
+			wasAutoApproved = true
 		} else {
 			// Manual approval flow
 			const notificationMessage = `Dline wants to view directory ${getWorkspaceBasename(absolutePath, "ListFilesToolHandler.notification")}/`
@@ -162,7 +132,7 @@ export class ListFilesToolHandler implements IFullyManagedTool {
 			// Show notification
 			showNotificationForApproval(notificationMessage, config.autoApprovalSettings.enableNotifications)
 
-			const didApprove = await ToolResultUtils.askApprovalAndPushFeedback("tool", completeMessage, config, block.ts)
+			const didApprove = await ToolResultUtils.askApprovalAndPushFeedback("tool", approvalMessage, config, block.ts)
 			if (!didApprove) {
 				telemetryService.captureToolUsage(
 					config.ulid ?? "",
@@ -176,16 +146,6 @@ export class ListFilesToolHandler implements IFullyManagedTool {
 				)
 				return formatResponse.toolDenied()
 			}
-			telemetryService.captureToolUsage(
-				config.ulid ?? "",
-				block.name,
-				config.api.getModel().id,
-				provider ?? "",
-				false,
-				true,
-				workspaceContext,
-				block.isNativeToolCall,
-			)
 		}
 
 		// Run PreToolUse hook after approval but before execution
@@ -199,6 +159,33 @@ export class ListFilesToolHandler implements IFullyManagedTool {
 			}
 			throw error
 		}
+
+		let fileInfos: import("@services/glob/list-files").FileInfo[]
+		let didHitLimit: boolean
+		try {
+			;[fileInfos, didHitLimit] = await listFiles(absolutePath, recursive, 200)
+		} catch (error) {
+			const errorMessage = error instanceof Error ? error.message : String(error)
+			return formatResponse.toolError(`Error listing files: ${errorMessage}`)
+		}
+
+		const result = formatResponse.formatFilesList(absolutePath, fileInfos, didHitLimit, config.services.clineIgnoreController)
+		config.taskState.consecutiveMistakeCount = 0
+
+		if (!config.isSubagentExecution) {
+			await config.callbacks.say("tool", createToolMessage(result), undefined, undefined, false, block.ts)
+		}
+
+		telemetryService.captureToolUsage(
+			config.ulid ?? "",
+			block.name,
+			config.api.getModel().id,
+			provider ?? "",
+			wasAutoApproved,
+			true,
+			workspaceContext,
+			block.isNativeToolCall,
+		)
 
 		return result
 	}

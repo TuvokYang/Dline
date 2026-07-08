@@ -243,10 +243,23 @@ export function useMessageHandlers(
 	 */
 	const executeTaskUiAction = useCallback(
 		async (action: TaskUiAction) => {
+			const trimmedInput = inputValue.trim()
+			const hasContent = trimmedInput || selectedImages.length > 0 || selectedFiles.length > 0
+
 			switch (action.type) {
 				case "retry":
-				case "process_anyway":
 					await TaskServiceClient.askResponse(AskResponseRequest.create({ responseType: "yesButtonClicked" }))
+					clearInputState()
+					break
+				case "process_anyway":
+					await TaskServiceClient.askResponse(
+						AskResponseRequest.create({
+							responseType: hasContent ? "messageResponse" : "yesButtonClicked",
+							text: trimmedInput,
+							images: selectedImages,
+							files: selectedFiles,
+						}),
+					)
 					clearInputState()
 					break
 				case "resume":

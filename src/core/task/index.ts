@@ -40,6 +40,7 @@ import {
 	getSavedApiConversationHistory,
 	getSavedClineMessages,
 } from "@core/storage/disk"
+import { ensureApiMessages } from "@core/task/api-context"
 import { showContextUsage } from "@core/task/environment-context"
 import { isMultiRootEnabled } from "@core/workspace/multi-root-utils"
 import { WorkspaceRootManager } from "@core/workspace/WorkspaceRootManager"
@@ -124,6 +125,7 @@ import {
 	orderTurnEndingContentBlocks,
 	orderTurnEndingNativeToolBlocks,
 } from "./assistant-message-order"
+import { getRetryDelay, getStreamRetryDecision, MAX_AUTO_RETRY_ATTEMPTS, waitRetryDelay } from "./auto-retry"
 import { FocusChainManager } from "./focus-chain"
 import {
 	getPresentationCadenceMs,
@@ -144,7 +146,7 @@ import { TaskPhase } from "./TaskPhase"
 import { TaskPresentationScheduler } from "./TaskPresentationScheduler"
 import { isValidApiIndex, type TaskSnapshot } from "./TaskSnapshot"
 import { TaskSnapshotPersistence } from "./TaskSnapshotPersistence"
-import { findAnchoredAsk } from "./TaskSnapshotReplayer"
+import { findAnchoredAsk, resolveHydratedSnapshot } from "./TaskSnapshotReplayer"
 import { TaskState } from "./TaskState"
 import { TaskStateManager } from "./TaskStateManager"
 import { withTerminateTimeout } from "./TaskTerminateTimeout"
@@ -1908,10 +1910,14 @@ export class Task {
 		await ensureTaskDirectoryExists(this.taskId)
 		await this.contextManager.initializeContextHistory(await ensureTaskDirectoryExists(this.taskId))
 
-		// Hydrate machines from latest snapshot for accurate state restoration
+		// Hydrate machines from latest snapshot for accurate state restoration.
+		// Completion feedback consumes the completion ask and starts a new API turn,
+		// so restore it as resumable streaming instead of completed Start New Task.
 		const latestSnapshot = this.findLatestStateSnapshot()
 		if (latestSnapshot) {
-			this.restoreHandler.hydrateFromSnapshot(latestSnapshot)
+			this.restoreHandler.hydrateFromSnapshot(
+				resolveHydratedSnapshot(latestSnapshot, this.messageStateHandler.clineMessages),
+			)
 		}
 
 		// Mark task as initialized so checkpoint restore can proceed
@@ -3136,11 +3142,16 @@ export class Task {
 			`[Task ${this.taskId}] attemptApiRequest: after contextMgmt +${Math.round(performance.now() - apiReqStart)}ms`,
 		)
 		// Debug: record full API request context when DLINE_LOG_API_CONTEXT=1 or IS_DEV=true
+		const apiConversationMessages = ensureApiMessages(
+			contextManagementMetadata.truncatedConversationHistory,
+			this.messageStateHandler.apiConversationHistory,
+		)
+
 		await appendDebugRequestContext(this.taskId, {
 			ts: Date.now(),
 			requestIndex: this.taskState.apiRequestCount,
 			systemPrompt,
-			messages: contextManagementMetadata.truncatedConversationHistory,
+			messages: apiConversationMessages,
 			tools,
 		})
 
@@ -3160,7 +3171,7 @@ export class Task {
 			thinking: thinkingSummary ?? null,
 		})
 
-		const stream = this.api.createMessage(systemPrompt, contextManagementMetadata.truncatedConversationHistory, tools)
+		const stream = this.api.createMessage(systemPrompt, apiConversationMessages, tools)
 
 		const iterator = stream[Symbol.asyncIterator]()
 
@@ -3241,13 +3252,13 @@ export class Task {
 					!isAuthError &&
 					!isSpendLimitError &&
 					!quotaExceeded &&
-					this.taskState.autoRetryAttempts < 3
+					this.taskState.autoRetryAttempts < MAX_AUTO_RETRY_ATTEMPTS
 				if (shouldRetry) {
 					// Auto-retry enabled with max 3 attempts: automatically approve the retry
 					this.taskState.autoRetryAttempts++
 
 					// Calculate delay: 2s, 4s, 8s
-					const delay = 2000 * 2 ** (this.taskState.autoRetryAttempts - 1)
+					const delay = getRetryDelay(this.taskState.autoRetryAttempts)
 
 					await updateApiReqMsg({
 						messageStateHandler: this.messageStateHandler,
@@ -3290,7 +3301,9 @@ export class Task {
 						})
 					}
 
-					await setTimeoutPromise(delay)
+					if (!(await waitRetryDelay(delay, () => this.taskState.abort))) {
+						throw new Error("Dline instance aborted")
+					}
 				} else {
 					// Show error_retry with failed flag to indicate all retries exhausted (but not for insufficient credits or spend limit)
 					const showRetry = !isInsufficientCredits && !isAuthError && !isSpendLimitError && !quotaExceeded
@@ -4309,11 +4322,15 @@ export class Task {
 					const errorMessage = clineError.serialize()
 					const isStreamingSpendLimitError = clineError.isErrorType(ClineErrorType.SpendLimit)
 					// Auto-retry for streaming failures (skip for spend limit errors)
-					if (!isStreamingSpendLimitError && this.taskState.autoRetryAttempts < 3) {
+					const retryDecision = getStreamRetryDecision({
+						isSpendLimitError: isStreamingSpendLimitError,
+						autoRetryAttempts: this.taskState.autoRetryAttempts,
+					})
+					if (retryDecision.shouldRetry) {
 						this.taskState.autoRetryAttempts++
 
 						// Calculate exponential backoff for streaming failures: 2s, 4s, 8s
-						const delay = 2000 * 2 ** (this.taskState.autoRetryAttempts - 1)
+						const delay = getRetryDelay(this.taskState.autoRetryAttempts)
 
 						// API Request component is updated to show error message, we then display retry information underneath that...
 						await this.say(
@@ -4327,7 +4344,10 @@ export class Task {
 						)
 
 						// Wait with exponential backoff before auto-resuming
-						setTimeoutPromise(delay).then(async () => {
+						void waitRetryDelay(delay, () => this.taskState.abort).then(async (shouldRetryAfterDelay) => {
+							if (!shouldRetryAfterDelay) {
+								return
+							}
 							// Programmatically click the resume button on the new task instance
 							if (this.controller.task) {
 								// Pass retry state to the new task instance
@@ -4335,7 +4355,7 @@ export class Task {
 								await this.controller.task.handleWebviewAskResponse("yesButtonClicked", "", [])
 							}
 						})
-					} else if (!isStreamingSpendLimitError && this.taskState.autoRetryAttempts >= 3) {
+					} else if (retryDecision.shouldPrompt) {
 						// Show error_retry with failed flag to indicate all retries exhausted
 						await this.say(
 							"error_retry",
@@ -4347,6 +4367,7 @@ export class Task {
 								errorMessage,
 							}),
 						)
+						await this.ask("api_req_failed", errorMessage)
 					}
 
 					// needs to happen after the say, otherwise the say would fail
@@ -4518,6 +4539,10 @@ export class Task {
 				// Reset auto-retry counter for each new API request
 				this.taskState.autoRetryAttempts = 0
 
+				if (this.taskState.didConfirmCompletion) {
+					return true
+				}
+
 				const recDidEndLoop = await this.recursivelyMakeClineRequests(this.taskState.userMessageContent)
 				didEndLoop = recDidEndLoop
 			} else {
@@ -4570,7 +4595,7 @@ export class Task {
 					this.taskState.autoRetryAttempts++
 
 					// Calculate delay: 2s, 4s, 8s
-					const delay = 2000 * 2 ** (this.taskState.autoRetryAttempts - 1)
+					const delay = getRetryDelay(this.taskState.autoRetryAttempts)
 					response = "yesButtonClicked"
 					await this.say(
 						"error_retry",
@@ -4581,7 +4606,9 @@ export class Task {
 							errorMessage: noResponseErrorMessage,
 						}),
 					)
-					await setTimeoutPromise(delay)
+					if (!(await waitRetryDelay(delay, () => this.taskState.abort))) {
+						throw new Error("Dline instance aborted")
+					}
 				} else {
 					// Max retries exhausted (>= 3 attempts), ask user
 					await this.say(

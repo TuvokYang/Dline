@@ -31,6 +31,7 @@ export interface ResumeContext {
 		type: ClineAsk,
 		text?: string,
 		partial?: boolean,
+		options?: { existingTs?: number },
 	) => Promise<{
 		response: ClineAskResponse
 		text?: string
@@ -222,6 +223,22 @@ export class ResumeHandler {
 	// ── Prompt ──
 
 	/**
+	 * Find the latest visible ask message for the resumed approval type.
+	 * @param askType Ask type that should be restored.
+	 * @returns Original ask message when present.
+	 */
+	private findApprovalAsk(askType: ClineAsk): ClineMessage | undefined {
+		const messages = this.ctx.messageStateHandler.clineMessages
+		for (let i = messages.length - 1; i >= 0; i--) {
+			const message = messages[i]
+			if (message.type === "ask" && message.ask === askType) {
+				return message
+			}
+		}
+		return undefined
+	}
+
+	/**
 	 * Prompt user whether to resume pending tools.
 	 * Returns user response and calls rejectActiveBlock on rejection.
 	 */
@@ -235,9 +252,11 @@ export class ResumeHandler {
 		files?: string[]
 	}> {
 		const askType = this.ctx.controller.toolNameToAskType(pending.toolUseBlocks[0]?.name ?? "")
-		const askText = askType !== "resume_task" ? lastMsg?.text : undefined
+		const approvalAsk = askType !== "resume_task" ? this.findApprovalAsk(askType) : undefined
+		const askText = askType !== "resume_task" ? (lastMsg?.text ?? approvalAsk?.text) : undefined
+		const askOptions = approvalAsk ? { existingTs: approvalAsk.ts } : undefined
 
-		const result = await this.ctx.ask(askType, askText)
+		const result = await this.ctx.ask(askType, askText, undefined, askOptions)
 
 		// Note: rejectActiveBlock() is intentionally NOT called here because
 		// the BlockPhaseMachine has no active approval block during resume

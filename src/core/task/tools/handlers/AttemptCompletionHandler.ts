@@ -236,6 +236,7 @@ export class AttemptCompletionHandler implements IToolHandler, IPartialBlockHand
 		const { response, text, images, files: completionFiles } = await config.callbacks.ask("completion_result", "", false)
 		const prefix = "[attempt_completion] Result: Done"
 		if (response === "yesButtonClicked") {
+			config.taskState.didConfirmCompletion = true
 			return prefix // signals to recursive loop to stop (for now this never happens since yesButtonClicked will trigger a new task)
 		}
 

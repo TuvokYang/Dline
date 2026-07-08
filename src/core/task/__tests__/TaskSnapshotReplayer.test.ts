@@ -3,7 +3,7 @@ import type { ClineMessage } from "@shared/ExtensionMessage"
 import { describe, it } from "vitest"
 import { TaskPhase } from "../TaskPhase"
 import type { TaskSnapshot } from "../TaskSnapshot"
-import { findAnchoredAsk } from "../TaskSnapshotReplayer"
+import { findAnchoredAsk, resolveHydratedSnapshot } from "../TaskSnapshotReplayer"
 
 /**
  * Creates an ask message for snapshot replay tests.
@@ -115,5 +115,20 @@ describe("TaskSnapshotReplayer", () => {
 		const result = findAnchoredAsk(completionSnapshot(completionAsk.ts), messages)
 
 		assert.equal(result, undefined)
+	})
+
+	it("hydrates consumed completion feedback as resumable streaming", () => {
+		const completionAsk = askMessage(100, "completion_result", 4)
+		const snapshot = completionSnapshot(completionAsk.ts)
+		const messages: ClineMessage[] = [
+			completionAsk,
+			sayMessage(120, "user_feedback", 4),
+			sayMessage(130, "api_req_started", 5),
+		]
+
+		const result = resolveHydratedSnapshot(snapshot, messages)
+
+		assert.equal(result.phase, TaskPhase.STREAMING)
+		assert.equal(result.awaiting, undefined)
 	})
 })

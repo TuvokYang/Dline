@@ -1,4 +1,5 @@
 import type { ClineMessage } from "@shared/ExtensionMessage"
+import { TaskPhase } from "./TaskPhase"
 import type { TaskSnapshot } from "./TaskSnapshot"
 
 /**
@@ -100,4 +101,27 @@ export function findAnchoredAsk(snapshot: TaskSnapshot | undefined, messages: Cl
 	}
 
 	return undefined
+}
+
+/**
+ * Resolves a persisted snapshot after replaying later UI messages.
+ * @param snapshot Snapshot loaded from history.
+ * @param messages Full UI message list loaded from history.
+ * @returns Snapshot adjusted so consumed completion feedback restores as resumable work.
+ */
+export function resolveHydratedSnapshot(snapshot: TaskSnapshot, messages: ClineMessage[]): TaskSnapshot {
+	if (snapshot.awaiting?.kind !== "completion") {
+		return snapshot
+	}
+
+	const activeAsk = findAnchoredAsk(snapshot, messages)
+	if (activeAsk) {
+		return snapshot
+	}
+
+	return {
+		...snapshot,
+		phase: TaskPhase.STREAMING,
+		awaiting: undefined,
+	}
 }
