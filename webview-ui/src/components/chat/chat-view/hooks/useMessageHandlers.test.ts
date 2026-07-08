@@ -261,4 +261,124 @@ describe("useMessageHandlers taskUiState routing", () => {
 		})
 		expect(chatState.setInputValue).toHaveBeenCalledWith("")
 	})
+
+	it("sends retry action input using taskUiState", async () => {
+		const taskUiState: TaskUiState = {
+			phase: "awaiting_error_recovery",
+			inputEnabled: true,
+			cancelEnabled: false,
+			showFooter: true,
+			actions: [{ type: "retry", label: "Retry", enabled: true }],
+			activeAsk: "api_req_failed",
+			reason: "error-recovery:api_req_failed",
+		}
+		const lastMessage = createSnapshotMessage(taskUiState)
+		const chatState = createChatState({
+			inputValue: "重试时请降低并发",
+			selectedImages: ["retry-image"],
+			selectedFiles: ["retry-file"],
+			taskUiState,
+			lastMessage,
+			clineAsk: undefined,
+		})
+		const { result } = renderHook(() => useMessageHandlers([lastMessage], chatState))
+
+		await act(async () => {
+			await result.current.executeTaskUiAction(taskUiState.actions[0])
+		})
+
+		expect(grpcMocks.taskAskResponse).toHaveBeenCalledTimes(1)
+		expect(grpcMocks.taskAskResponse.mock.calls[0]?.[0]).toMatchObject({
+			responseType: "yesButtonClicked",
+			text: "重试时请降低并发",
+			images: ["retry-image"],
+			files: ["retry-file"],
+		})
+		expect(chatState.setInputValue).toHaveBeenCalledWith("")
+	})
+
+	it("sends retry button input using legacy button action", async () => {
+		const chatState = createChatState({ clineAsk: "api_req_failed" })
+		const { result } = renderHook(() => useMessageHandlers([], chatState))
+
+		await act(async () => {
+			await result.current.executeButtonAction("retry", "  retry with smaller payload  ", ["legacy-image"], ["legacy-file"])
+		})
+
+		expect(grpcMocks.taskAskResponse).toHaveBeenCalledTimes(1)
+		expect(grpcMocks.taskAskResponse.mock.calls[0]?.[0]).toMatchObject({
+			responseType: "yesButtonClicked",
+			text: "retry with smaller payload",
+			images: ["legacy-image"],
+			files: ["legacy-file"],
+		})
+	})
+
+	it("sends status acknowledgment input using taskUiState primary action", async () => {
+		const taskUiState: TaskUiState = {
+			phase: "awaiting_acknowledgment",
+			inputEnabled: true,
+			cancelEnabled: false,
+			showFooter: true,
+			actions: [{ type: "primary", label: "Acknowledge", enabled: true }],
+			activeAsk: "status_acknowledgment",
+			reason: "status-acknowledgment",
+		}
+		const lastMessage = createSnapshotMessage(taskUiState)
+		const chatState = createChatState({
+			inputValue: "我知道了，下一步先检查配置",
+			selectedImages: ["ack-image"],
+			selectedFiles: ["ack-file"],
+			taskUiState,
+			lastMessage,
+			clineAsk: undefined,
+		})
+		const { result } = renderHook(() => useMessageHandlers([lastMessage], chatState))
+
+		await act(async () => {
+			await result.current.executeTaskUiAction(taskUiState.actions[0])
+		})
+
+		expect(grpcMocks.taskAskResponse).toHaveBeenCalledTimes(1)
+		expect(grpcMocks.taskAskResponse.mock.calls[0]?.[0]).toMatchObject({
+			responseType: "yesButtonClicked",
+			text: "我知道了，下一步先检查配置",
+			images: ["ack-image"],
+			files: ["ack-file"],
+		})
+	})
+
+	it("sends status acknowledgment stop input using taskUiState secondary action", async () => {
+		const taskUiState: TaskUiState = {
+			phase: "awaiting_acknowledgment",
+			inputEnabled: true,
+			cancelEnabled: false,
+			showFooter: true,
+			actions: [{ type: "secondary", label: "Stop", enabled: true }],
+			activeAsk: "status_acknowledgment",
+			reason: "status-acknowledgment",
+		}
+		const lastMessage = createSnapshotMessage(taskUiState)
+		const chatState = createChatState({
+			inputValue: "先停止，我要调整方向",
+			selectedImages: ["stop-image"],
+			selectedFiles: ["stop-file"],
+			taskUiState,
+			lastMessage,
+			clineAsk: undefined,
+		})
+		const { result } = renderHook(() => useMessageHandlers([lastMessage], chatState))
+
+		await act(async () => {
+			await result.current.executeTaskUiAction(taskUiState.actions[0])
+		})
+
+		expect(grpcMocks.taskAskResponse).toHaveBeenCalledTimes(1)
+		expect(grpcMocks.taskAskResponse.mock.calls[0]?.[0]).toMatchObject({
+			responseType: "noButtonClicked",
+			text: "先停止，我要调整方向",
+			images: ["stop-image"],
+			files: ["stop-file"],
+		})
+	})
 })

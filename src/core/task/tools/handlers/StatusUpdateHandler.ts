@@ -13,6 +13,28 @@ export class StatusUpdateHandler implements IToolHandler, IPartialBlockHandler {
 		return `[${block.name}]`
 	}
 
+	/**
+	 * Format optional acknowledgment feedback for the tool result.
+	 * @param text User-entered acknowledgment or stop reason.
+	 * @param images Selected image payload identifiers.
+	 * @param files Selected file payload identifiers.
+	 * @returns Formatted feedback suffix for the next model turn.
+	 */
+	private formatFeedback(text?: string, images?: string[], files?: string[]): string {
+		const parts: string[] = []
+		const trimmedText = text?.trim()
+		if (trimmedText) {
+			parts.push(`Feedback: ${trimmedText}`)
+		}
+		if (images && images.length > 0) {
+			parts.push(`Images: ${images.join(", ")}`)
+		}
+		if (files && files.length > 0) {
+			parts.push(`Files: ${files.join(", ")}`)
+		}
+		return parts.length > 0 ? ` ${parts.join("; ")}` : ""
+	}
+
 	async handlePartialBlock(block: ToolUse, uiHelpers: StronglyTypedUIHelpers): Promise<void> {
 		const response = (block.params as Record<string, string>).response
 		const message = uiHelpers.removeClosingTag(block, "response", response)
@@ -41,12 +63,15 @@ export class StatusUpdateHandler implements IToolHandler, IPartialBlockHandler {
 		config.taskState.consecutiveMistakeCount = 0
 
 		if (requiresAck) {
-			// Ask path: show "知晓/停止" buttons, wait for user response
-			const { text } = await config.callbacks.ask("status_acknowledgment" as any, response, false, { existingTs: block.ts })
-			if (text === "stop") {
-				return formatResponse.toolResult("[STATUS_UPDATE] User chose to stop. Wait for further instructions.")
+			// Ask path: show acknowledge/stop buttons, wait for user response.
+			const askResult = await config.callbacks.ask("status_acknowledgment" as any, response, false, {
+				existingTs: block.ts,
+			})
+			const feedback = this.formatFeedback(askResult.text, askResult.images, askResult.files)
+			if (askResult.response === "noButtonClicked") {
+				return formatResponse.toolResult(`[STATUS_UPDATE] User chose to stop.${feedback} Wait for further instructions.`)
 			}
-			return formatResponse.toolResult("[STATUS_UPDATE] User acknowledged. Continue with your next tool call.")
+			return formatResponse.toolResult(`[STATUS_UPDATE] User acknowledged.${feedback} Continue with your next tool call.`)
 		}
 
 		// Say path (default): display as tool message with status_update identifier

@@ -82,30 +82,38 @@ function acceptsMessage(ask: ClineAsk): boolean {
  */
 async function sendAskReply(ask: ClineAsk, text: string, images: string[], files: string[]): Promise<boolean> {
 	if (isResumeAsk(ask)) {
-		await TaskServiceClient.askResponse(
-			AskResponseRequest.create({
-				responseType: "yesButtonClicked",
-				text,
-				images,
-				files,
-			}),
-		)
+		await TaskServiceClient.askResponse(createAskRequest("yesButtonClicked", text, images, files))
 		return true
 	}
 
 	if (acceptsMessage(ask)) {
-		await TaskServiceClient.askResponse(
-			AskResponseRequest.create({
-				responseType: "messageResponse",
-				text,
-				images,
-				files,
-			}),
-		)
+		await TaskServiceClient.askResponse(createAskRequest("messageResponse", text, images, files))
 		return true
 	}
 
 	return false
+}
+
+/**
+ * Build a task ask response request with normalized user input.
+ * @param responseType Button or message response type to send.
+ * @param text Optional typed text from the input box.
+ * @param images Optional selected image payloads.
+ * @param files Optional selected file payloads.
+ * @returns AskResponseRequest carrying the response and user payload.
+ */
+function createAskRequest(
+	responseType: "yesButtonClicked" | "noButtonClicked" | "messageResponse",
+	text?: string,
+	images?: string[],
+	files?: string[],
+): AskResponseRequest {
+	return AskResponseRequest.create({
+		responseType,
+		text: text?.trim() ?? "",
+		images: images ?? [],
+		files: files ?? [],
+	})
 }
 
 /**
@@ -238,8 +246,8 @@ export function useMessageHandlers(
 	}, [setInputValue, setActiveQuote, setSelectedImages, setSelectedFiles])
 
 	/**
-	 * Execute a snapshot-first task action with explicit semantics.
-	 * Button-only actions do not forward input text unless the action type requires it.
+	 * Execute a snapshot-first task action with explicit payload semantics.
+	 * Confirming or rejecting actions preserve typed input as user feedback.
 	 */
 	const executeTaskUiAction = useCallback(
 		async (action: TaskUiAction) => {
@@ -259,17 +267,19 @@ export function useMessageHandlers(
 					clearInputState()
 					break
 				case "retry":
-					await TaskServiceClient.askResponse(AskResponseRequest.create({ responseType: "yesButtonClicked" }))
+					await TaskServiceClient.askResponse(
+						createAskRequest("yesButtonClicked", inputValue, selectedImages, selectedFiles),
+					)
 					clearInputState()
 					break
 				case "process_anyway":
 					await TaskServiceClient.askResponse(
-						AskResponseRequest.create({
-							responseType: hasContent ? "messageResponse" : "yesButtonClicked",
-							text: trimmedInput,
-							images: selectedImages,
-							files: selectedFiles,
-						}),
+						createAskRequest(
+							hasContent ? "messageResponse" : "yesButtonClicked",
+							inputValue,
+							selectedImages,
+							selectedFiles,
+						),
 					)
 					clearInputState()
 					break
@@ -277,18 +287,15 @@ export function useMessageHandlers(
 				case "approve":
 				case "primary":
 					await TaskServiceClient.askResponse(
-						AskResponseRequest.create({
-							responseType: "yesButtonClicked",
-							text: inputValue.trim(),
-							images: selectedImages,
-							files: selectedFiles,
-						}),
+						createAskRequest("yesButtonClicked", inputValue, selectedImages, selectedFiles),
 					)
 					clearInputState()
 					break
 				case "reject":
 				case "secondary":
-					await TaskServiceClient.askResponse(AskResponseRequest.create({ responseType: "noButtonClicked" }))
+					await TaskServiceClient.askResponse(
+						createAskRequest("noButtonClicked", inputValue, selectedImages, selectedFiles),
+					)
 					clearInputState()
 					break
 				case "start_new_task":
@@ -343,12 +350,7 @@ export function useMessageHandlers(
 
 			switch (actionType) {
 				case "retry":
-					// For API retry (api_req_failed), always send simple approval without content
-					await TaskServiceClient.askResponse(
-						AskResponseRequest.create({
-							responseType: "yesButtonClicked",
-						}),
-					)
+					await TaskServiceClient.askResponse(createAskRequest("yesButtonClicked", text, images, files))
 					clearInputState()
 					break
 				case "approve": {
@@ -358,19 +360,10 @@ export function useMessageHandlers(
 
 					if (hasApproveContent) {
 						await TaskServiceClient.askResponse(
-							AskResponseRequest.create({
-								responseType: "yesButtonClicked",
-								text: approveText || trimmedInput,
-								images: images,
-								files: files,
-							}),
+							createAskRequest("yesButtonClicked", approveText || trimmedInput, images, files),
 						)
 					} else {
-						await TaskServiceClient.askResponse(
-							AskResponseRequest.create({
-								responseType: "yesButtonClicked",
-							}),
-						)
+						await TaskServiceClient.askResponse(createAskRequest("yesButtonClicked"))
 					}
 					clearInputState()
 					break
@@ -378,40 +371,18 @@ export function useMessageHandlers(
 
 				case "reject":
 					if (hasContent) {
-						await TaskServiceClient.askResponse(
-							AskResponseRequest.create({
-								responseType: "noButtonClicked",
-								text: trimmedInput,
-								images: images,
-								files: files,
-							}),
-						)
+						await TaskServiceClient.askResponse(createAskRequest("noButtonClicked", trimmedInput, images, files))
 					} else {
-						await TaskServiceClient.askResponse(
-							AskResponseRequest.create({
-								responseType: "noButtonClicked",
-							}),
-						)
+						await TaskServiceClient.askResponse(createAskRequest("noButtonClicked"))
 					}
 					clearInputState()
 					break
 
 				case "proceed":
 					if (hasContent) {
-						await TaskServiceClient.askResponse(
-							AskResponseRequest.create({
-								responseType: "yesButtonClicked",
-								text: trimmedInput,
-								images: images,
-								files: files,
-							}),
-						)
+						await TaskServiceClient.askResponse(createAskRequest("yesButtonClicked", trimmedInput, images, files))
 					} else {
-						await TaskServiceClient.askResponse(
-							AskResponseRequest.create({
-								responseType: "yesButtonClicked",
-							}),
-						)
+						await TaskServiceClient.askResponse(createAskRequest("yesButtonClicked"))
 					}
 					clearInputState()
 					break
