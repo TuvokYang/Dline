@@ -63,6 +63,25 @@ async function flushMicrotasks(iterations = 5) {
 	}
 }
 
+describe("MessageChannel.say", () => {
+	it("allows lifecycle state snapshots while the task is aborted", async () => {
+		const { channel, clineMessages, taskState } = createMessageChannel()
+		taskState.abort = true
+
+		await channel.say("state_snapshot", JSON.stringify({ phase: "cancelling", apiIndex: 1, timestamp: Date.now() }))
+
+		assert.equal(clineMessages.length, 1)
+		assert.equal(clineMessages[0].say, "state_snapshot")
+	})
+
+	it("rejects regular visible messages while the task is aborted", async () => {
+		const { channel, taskState } = createMessageChannel()
+		taskState.abort = true
+
+		await assert.rejects(channel.say("text", "should not continue after abort"), /Dline instance aborted/)
+	})
+})
+
 describe("MessageChannel.ask", () => {
 	it("does not treat state_snapshot messages as superseding a pending ask", async () => {
 		const clock = vi.useFakeTimers()

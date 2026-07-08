@@ -785,10 +785,8 @@ export class Controller {
 				Logger.error("Failed to abort task")
 			})
 
-			// Fire-and-forget resume ask so the frontend shows a working
-			// Resume button.  ask() adds the message synchronously and
-			// creates a Promise that waits for the webview response
-			// without blocking us.
+			// Fire-and-forget resume ask only after cancel cleanup is ready.
+			// Until then TaskUiState keeps Cancel disabled to show cancellation is running.
 			if (this.task) {
 				const msgs = this.task.messageStateHandler.clineMessages
 				const lastRealMessage = [...msgs]

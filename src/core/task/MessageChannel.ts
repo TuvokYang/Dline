@@ -5,6 +5,18 @@ import type { ClineMessageModelInfo } from "@/shared/messages"
 import type { MessageStateHandler } from "./message-state"
 import type { TaskState } from "./TaskState"
 
+const ABORT_ALLOWED_SAY_TYPES = new Set<ClineSay>(["hook_status", "hook_output_stream", "deleted_api_reqs", "state_snapshot"])
+
+/**
+ * Check whether a say message is required for abort-time lifecycle cleanup.
+ *
+ * @param type Say message type being emitted.
+ * @returns True when the message may be persisted after task abort.
+ */
+export function isAbortAllowedSay(type: ClineSay): boolean {
+	return ABORT_ALLOWED_SAY_TYPES.has(type)
+}
+
 // ── Types ──
 
 export interface AskOptions {
@@ -92,8 +104,8 @@ export class MessageChannel {
 		existingTs?: number,
 		commandTs?: number,
 	): Promise<number | undefined> {
-		// Allow hook messages even when aborted to enable proper cleanup
-		if (this.taskState.abort && type !== "hook_status" && type !== "hook_output_stream" && type !== "deleted_api_reqs") {
+		// Allow lifecycle messages during abort so cancel/resume state can be persisted.
+		if (this.taskState.abort && !isAbortAllowedSay(type)) {
 			throw new Error("Dline instance aborted")
 		}
 

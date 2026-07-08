@@ -102,6 +102,30 @@ describe("TaskController.buildTaskUiState", () => {
 		assert.equal(uiState.reason, "resume-from-stale-working:cancelling")
 	})
 
+	it("returns disabled cancel state while cancelling even if runtime is still active", () => {
+		const tc = new TaskController(mockChannel)
+		const snapshot: TaskSnapshot = {
+			phase: TaskPhase.CANCELLING,
+			apiIndex: 2,
+			timestamp: Date.now(),
+			cancel: {
+				source: "user",
+				fromPhase: TaskPhase.STREAMING,
+			},
+		}
+		const uiState = tc.buildTaskUiState(snapshot, { isTaskWorking: true, runtimeWorking: true })
+
+		assert.equal(uiState.phase, "cancelled")
+		assert.equal(uiState.inputEnabled, false)
+		assert.equal(uiState.cancelEnabled, false)
+		assert.equal(uiState.showFooter, true)
+		assert.equal(uiState.actions.length, 1)
+		assert.equal(uiState.actions[0].type, "cancel")
+		assert.equal(uiState.actions[0].label, "Cancel")
+		assert.equal(uiState.actions[0].enabled, false)
+		assert.equal(uiState.reason, "cancelling")
+	})
+
 	it("returns approval awaiting state with approve/reject buttons", () => {
 		const tc = new TaskController(mockChannel)
 		const snapshot: TaskSnapshot = {

@@ -237,6 +237,16 @@ export class TaskController {
 			snapshot.phase !== TaskPhase.STREAMING &&
 			snapshot.phase !== TaskPhase.EXECUTING &&
 			snapshot.phase !== TaskPhase.RESUMING
+		if (snapshot.phase === TaskPhase.CANCELLING && runtimeWorking) {
+			return {
+				phase: "cancelled",
+				inputEnabled: false,
+				cancelEnabled: false,
+				showFooter: true,
+				actions: [{ type: "cancel", label: "Cancel", enabled: false }],
+				reason: "cancelling",
+			}
+		}
 		if (runtimeWorking && isRuntimeOnlyWorkingPhase) {
 			return runtimeState
 		}
