@@ -20,10 +20,12 @@ export async function getCapabilitiesSection(variant: PromptVariant, context: Sy
 			: ""
 
 	const templateEngine = new TemplateEngine()
-	return templateEngine.resolve(template, context, {
+	const baseCapabilities = templateEngine.resolve(template, context, {
 		BROWSER_SUPPORT: browserSupport,
 		BROWSER_CAPABILITIES: browserCapabilities,
 		WEB_TOOLS_CAPABILITIES: webToolsCapabilities,
 		CWD: context.cwd || process.cwd(),
 	})
+	const frozenCapabilities = context.capabilitiesSection?.trim()
+	return frozenCapabilities ? `${baseCapabilities}\n\n${frozenCapabilities}` : baseCapabilities
 }

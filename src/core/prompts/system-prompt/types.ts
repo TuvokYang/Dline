@@ -2,6 +2,7 @@
  * Enhanced type definitions for better type safety and developer experience
  */
 
+import type { CapabilityToggleState } from "@core/prompts/capabilities/CapabilitiesAggregator"
 import { ApiProviderInfo } from "@/core/api"
 import type { McpHub } from "@/services/mcp/McpHub"
 import type { BrowserSettings } from "@/shared/BrowserSettings"
@@ -104,6 +105,8 @@ export interface SystemPromptContext {
 	readonly supportsBrowserUse?: boolean
 	readonly mcpHub?: McpHub
 	readonly skills?: SkillMetadata[]
+	readonly capabilitiesSection?: string
+	readonly capabilityToggleState?: CapabilityToggleState
 	readonly focusChainSettings?: FocusChainSettings
 	readonly globalClineRulesFileInstructions?: string
 	readonly localClineRulesFileInstructions?: string

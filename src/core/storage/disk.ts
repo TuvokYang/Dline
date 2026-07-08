@@ -1,5 +1,6 @@
 import { Anthropic } from "@anthropic-ai/sdk"
 import { EnvironmentMetadataEntry, TaskMetadata } from "@core/context/context-tracking/ContextTrackerTypes"
+import type { TaskContextCache } from "@core/storage/task-context-types"
 import { execa } from "@packages/execa"
 import { ClineMessage } from "@shared/ExtensionMessage"
 import { envFlagEnabled } from "@shared/env"
@@ -15,9 +16,7 @@ import { ExtensionRegistryInfo } from "@/registry"
 import { telemetryService } from "@/services/telemetry"
 import { McpMarketplaceCatalog } from "@/shared/mcp"
 import { Logger } from "@/shared/services/Logger"
-import { reconstructTaskHistory } from "../commands/reconstructTaskHistory"
 import { appendJsonl, readJsonl, writeJsonl } from "./jsonl-utils"
-import { StateManager } from "./StateManager"
 
 const ATOMIC_WRITE_RENAME_MAX_ATTEMPTS = 5
 const ATOMIC_WRITE_RENAME_RETRY_DELAYS_MS = [10, 25, 50, 100]
@@ -88,6 +87,7 @@ async function cleanupStaleTmpFiles(dir: string): Promise<void> {
 export const GlobalFileNames = {
 	apiConversionAll: "api_conversion_all.jsonl",
 	taskSnapshot: "snapshot.json",
+	taskContext: "context.json",
 	apiConversationHistory: "api_conversation_history.jsonl",
 	contextHistory: "context_history.jsonl",
 	uiMessages: "ui_messages.jsonl",
@@ -539,6 +539,72 @@ export async function saveTaskMetadata(taskId: string, m: TaskMetadata) {
 	await fs.writeFile(p, JSON.stringify(m, null, 2), "utf8")
 }
 
+/**
+ * Create an empty task context cache for a task.
+ *
+ * @param taskId Task identifier.
+ * @returns Empty task context cache with timestamps.
+ */
+function createEmptyTaskContext(taskId: string): TaskContextCache {
+	const now = Date.now()
+	return {
+		schemaVersion: 1,
+		taskId,
+		createdAt: now,
+		updatedAt: now,
+	}
+}
+
+/**
+ * Validate task context cache shape before returning parsed JSON.
+ *
+ * @param value Parsed JSON value.
+ * @param taskId Expected task identifier.
+ * @returns True when value is a supported task context cache.
+ */
+function isTaskContextCache(value: unknown, taskId: string): value is TaskContextCache {
+	if (typeof value !== "object" || value === null) {
+		return false
+	}
+	const candidate = value as Partial<TaskContextCache>
+	return candidate.schemaVersion === 1 && candidate.taskId === taskId
+}
+
+/**
+ * Read task-level context cache from context.json.
+ *
+ * @param taskId Task identifier.
+ * @returns Stored task context cache, or an empty cache when missing or invalid.
+ */
+export async function getTaskContext(taskId: string): Promise<TaskContextCache> {
+	const p = path.join(await ensureTaskDirectoryExists(taskId), GlobalFileNames.taskContext)
+	try {
+		if (!(await fileExistsAtPath(p))) {
+			return createEmptyTaskContext(taskId)
+		}
+		const parsed = JSON.parse(await fs.readFile(p, "utf8")) as unknown
+		if (!isTaskContextCache(parsed, taskId)) {
+			Logger.warn(`[getTaskContext] Invalid task context cache shape for task ${taskId}`)
+			return createEmptyTaskContext(taskId)
+		}
+		return parsed
+	} catch (error) {
+		Logger.warn(`[getTaskContext] Failed to read task context cache for task ${taskId}:`, error)
+		return createEmptyTaskContext(taskId)
+	}
+}
+
+/**
+ * Persist task-level context cache to context.json.
+ *
+ * @param taskId Task identifier.
+ * @param context Task context cache to persist.
+ */
+export async function saveTaskContext(taskId: string, context: TaskContextCache): Promise<void> {
+	const p = path.join(await ensureTaskDirectoryExists(taskId), GlobalFileNames.taskContext)
+	await atomicWriteFile(p, JSON.stringify(context, null, 2))
+}
+
 export async function ensureStateDirectoryExists(): Promise<string> {
 	return getDlineStorageDir("state")
 }
@@ -690,6 +756,7 @@ export async function readTaskHistoryFromState(): Promise<HistoryItem[]> {
 						"Corrupted taskHistory.json",
 						"parseError_attemptingReconstruction",
 					)
+					const { reconstructTaskHistory } = await import("../commands/reconstructTaskHistory")
 					const r = await reconstructTaskHistory(false)
 					if (r && r.reconstructedTasks > 0) {
 						return readTaskHistoryJsonl()
@@ -700,6 +767,7 @@ export async function readTaskHistoryFromState(): Promise<HistoryItem[]> {
 		}
 
 		// Priority 3: Neither exists — attempt reconstruction
+		const { reconstructTaskHistory } = await import("../commands/reconstructTaskHistory")
 		const r = await reconstructTaskHistory(false)
 		if (r && r.reconstructedTasks > 0) {
 			return readTaskHistoryJsonl()
@@ -781,6 +849,7 @@ export async function getAllHooksDirs(): Promise<string[]> {
 	return dirs
 }
 export async function getWorkspaceHooksDirs(): Promise<string[]> {
+	const { StateManager } = await import("./StateManager")
 	const roots =
 		StateManager.get()
 			.getGlobalStateKey("workspaceRoots")

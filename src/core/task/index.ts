@@ -44,6 +44,7 @@ import {
 	getSavedApiConversationHistory,
 	getSavedClineMessages,
 } from "@core/storage/disk"
+import type { FrozenSystemPromptCache, SystemPromptRefreshReason } from "@core/storage/task-context-types"
 import { ensureApiMessages, ensureUserContent } from "@core/task/api-context"
 import { showContextUsage } from "@core/task/environment-context"
 import { isMultiRootEnabled } from "@core/workspace/multi-root-utils"
@@ -86,7 +87,7 @@ import pWaitFor from "p-wait-for"
 import * as path from "path"
 import { ulid } from "ulid"
 import type { SystemPromptContext } from "@/core/prompts/system-prompt"
-import { getSystemPrompt } from "@/core/prompts/system-prompt"
+import { SystemPromptCacheService } from "@/core/prompts/system-prompt-cache/SystemPromptCacheService"
 import { HostProvider } from "@/hosts/host-provider"
 import { FileEditProvider } from "@/integrations/editor/FileEditProvider"
 import {
@@ -324,6 +325,8 @@ export class Task {
 	private readonly remoteWorkspaceDetectionPromise: Promise<void>
 	private readonly presentationScheduler: TaskPresentationScheduler
 	private readonly snapshotPersistence: TaskSnapshotPersistence
+	private readonly systemPromptCacheService: SystemPromptCacheService
+	private pendingSystemPromptRefreshReason?: SystemPromptRefreshReason
 	private readonly presentationSchedulingDisabled = isPresentationSchedulingDisabled()
 	private lastLoggedPresentationTrigger = 0
 	/** @deprecated Only used by the deprecated promptAndResumePendingToolUseFromHistory path. */
@@ -411,6 +414,7 @@ export class Task {
 		this.diffViewProvider = backgroundEditEnabled ? new FileEditProvider() : HostProvider.get().createDiffViewProvider()
 
 		this.taskId = taskId
+		this.systemPromptCacheService = new SystemPromptCacheService({ taskId: this.taskId })
 		this.snapshotPersistence = new TaskSnapshotPersistence({
 			writeSnapshot: this.writeTaskSnapshot.bind(this),
 		})
@@ -3048,12 +3052,17 @@ export class Task {
 
 		// Discover and filter available skills
 		const remoteSkillEntries = this.stateManager.getRemoteConfigSettings().remoteGlobalSkills || []
-		const availableSkills = await discoverAvailableSkills(this.cwd, {
+		const capabilityToggleState = {
 			remoteSkillEntries,
 			globalSkillsToggles: this.stateManager.getGlobalSettingsKey("globalSkillsToggles") ?? {},
 			localSkillsToggles: this.stateManager.getWorkspaceStateKey("localSkillsToggles") ?? {},
 			remoteSkillsToggles: this.stateManager.getGlobalStateKey("remoteSkillsToggles") ?? {},
-		})
+			workflowToggles: this.stateManager.getWorkspaceStateKey("workflowToggles") ?? {},
+			globalWorkflowToggles: this.stateManager.getGlobalSettingsKey("globalWorkflowToggles") ?? {},
+			subagentToggles: this.stateManager.getWorkspaceStateKey("localSubagentsToggles") ?? {},
+			globalSubagentToggles: this.stateManager.getGlobalSettingsKey("globalSubagentsToggles") ?? {},
+		}
+		const availableSkills = await discoverAvailableSkills(this.cwd, capabilityToggleState)
 
 		// Snapshot editor tabs so prompt tools can decide whether to include
 		// filetype-specific instructions (e.g. notebooks) without adding bespoke flags.
@@ -3108,6 +3117,7 @@ export class Task {
 			enableParallelToolCalling: this.isParallelToolCallingEnabled(),
 			terminalExecutionMode: this.terminalExecutionMode,
 			disableTools,
+			capabilityToggleState,
 		}
 
 		// Notify user if any conditional rules were applied for this request
@@ -3119,7 +3129,22 @@ export class Task {
 		Logger.debug(
 			`[Task ${this.taskId}] attemptApiRequest: before systemPrompt +${Math.round(performance.now() - apiReqStart)}ms`,
 		)
-		const { systemPrompt, tools } = await getSystemPrompt(promptContext)
+		const refreshReason = this.pendingSystemPromptRefreshReason
+		let frozenPrompt: FrozenSystemPromptCache
+		if (refreshReason) {
+			try {
+				frozenPrompt = await this.systemPromptCacheService.refresh({ promptContext, reason: refreshReason })
+			} catch (error) {
+				Logger.warn(`[Task ${this.taskId}] Failed to refresh frozen system prompt after ${refreshReason}:`, error)
+				frozenPrompt = await this.systemPromptCacheService.getOrCreate({ promptContext })
+			} finally {
+				this.pendingSystemPromptRefreshReason = undefined
+			}
+		} else {
+			frozenPrompt = await this.systemPromptCacheService.getOrCreate({ promptContext })
+		}
+		const systemPrompt = frozenPrompt.text
+		const tools = this.systemPromptCacheService.getLastTools()
 		Logger.debug(
 			`[Task ${this.taskId}] attemptApiRequest: after systemPrompt +${Math.round(performance.now() - apiReqStart)}ms`,
 		)
@@ -3775,6 +3800,7 @@ export class Task {
 			// conversationHistoryDeletedRange to mask out the summarization-trigger user & assistant response messages
 			if (didCompleteSummarization) {
 				this.taskState.currentlySummarizing = false
+				this.pendingSystemPromptRefreshReason = "post_compaction"
 
 				if (this.taskState.conversationHistoryDeletedRange) {
 					const [start, end] = this.taskState.conversationHistoryDeletedRange
