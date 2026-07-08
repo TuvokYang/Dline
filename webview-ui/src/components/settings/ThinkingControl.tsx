@@ -129,8 +129,7 @@ const ThinkingControl = ({
 	const [localBudget, setLocalBudget] = useState(budget || 0)
 
 	const handleEnableChange = useCallback(
-		(event: any) => {
-			const checked = (event.target as HTMLInputElement).checked
+		(checked: boolean) => {
 			if (checked) {
 				// Enable with default values based on mode
 				const defaultMode = mode === "budget-only" ? "budget" : "effort"
@@ -188,10 +187,11 @@ const ThinkingControl = ({
 		[reasoningConfig, onReasoningConfigUpdate],
 	)
 
-	// Determine what to show
-	const shouldShowEffort = mode === "effort-only" || (mode === "both" && activeType === "effort")
-	const shouldShowBudget = mode === "budget-only" || (mode === "both" && activeType === "budget")
-	const shouldShowModeSelector = mode === "both" && showModeSelector
+	// The Enable Thinking checkbox is the single visibility gate for all thinking detail controls.
+	const showThinkingOptions = enableThinking
+	const shouldShowEffort = showThinkingOptions && (mode === "effort-only" || (mode === "both" && activeType === "effort"))
+	const shouldShowBudget = showThinkingOptions && (mode === "budget-only" || (mode === "both" && activeType === "budget"))
+	const shouldShowModeSelector = showThinkingOptions && mode === "both" && showModeSelector
 
 	// Sync local budget with config when external budget changes
 	useEffect(() => {
@@ -201,11 +201,16 @@ const ThinkingControl = ({
 	return (
 		<div className="w-full" style={{ marginTop: 10, marginBottom: 10 }}>
 			{/* Enable Thinking Checkbox */}
-			<VSCodeCheckbox checked={enableThinking} onChange={handleEnableChange}>
+			<VSCodeCheckbox
+				checked={enableThinking}
+				onChange={(event) => {
+					const target = event.target as (EventTarget & { checked?: boolean }) | null
+					handleEnableChange(target?.checked === true)
+				}}>
 				Enable Thinking
 			</VSCodeCheckbox>
 
-			{enableThinking && (
+			{showThinkingOptions && (
 				<>
 					{/* Mode Selector (only in 'both' mode) */}
 					{shouldShowModeSelector && (
