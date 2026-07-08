@@ -84,6 +84,8 @@ const FileBlock = memo<{
 		const shouldFollowRef = useRef(true)
 		const isProgrammaticScrollRef = useRef(false)
 
+		const streamingContentKey = useMemo(() => buildStreamingKey(file.lines), [file.lines])
+
 		useEffect(() => {
 			const container = scrollContainerRef.current
 			if (!isExpanded || !isStreaming || !shouldFollowRef.current || !container) return
@@ -92,7 +94,7 @@ const FileBlock = memo<{
 			requestAnimationFrame(() => {
 				isProgrammaticScrollRef.current = false
 			})
-		}, [isExpanded, isStreaming])
+		}, [isExpanded, isStreaming, streamingContentKey])
 
 		useEffect(() => {
 			setIsExpanded(!!isPartial)
@@ -210,6 +212,17 @@ const FileBlock = memo<{
 		prev.file.deletions === next.file.deletions &&
 		prev.file.lines === next.file.lines,
 )
+
+/**
+ * Build a stable signature for streamed diff content updates.
+ *
+ * @param lines Diff lines currently rendered in the file block.
+ * @returns Signature that changes when the stream appends or updates the tail line.
+ */
+function buildStreamingKey(lines: string[]): string {
+	const lastLine = lines.at(-1) ?? ""
+	return `${lines.length}:${lastLine}`
+}
 
 const DiffStats = memo<{ additions: number; deletions: number }>(({ additions, deletions }) => (
 	<div className="text-xs text-gray-500 flex">
