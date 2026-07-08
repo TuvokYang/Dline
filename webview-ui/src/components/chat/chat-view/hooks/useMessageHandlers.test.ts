@@ -1,3 +1,5 @@
+// @vitest-environment jsdom
+
 import type { ClineMessage, TaskUiState } from "@shared/ExtensionMessage"
 import { act, renderHook } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
@@ -14,8 +16,16 @@ const grpcMocks = vi.hoisted(() => ({
 	slashReportBug: vi.fn(),
 }))
 
+vi.mock("@/components/chat/FocusChainChangeRow", () => ({
+	getFocusChainSelectedPlan: vi.fn(() => ""),
+}))
+
 vi.mock("@/context/ExtensionStateContext", () => ({
 	useExtensionState: () => ({ backgroundCommandRunning: false }),
+}))
+
+vi.mock("@/utils/streaming", () => ({
+	isApiReqActive: vi.fn(() => false),
 }))
 
 vi.mock("@/services/grpc-client", () => ({
@@ -192,6 +202,29 @@ describe("useMessageHandlers taskUiState routing", () => {
 			files: ["file-data"],
 		})
 		expect(chatState.setInputValue).toHaveBeenCalledWith("")
+	})
+
+	it("executes condense utility action using taskUiState when raw clineAsk is missing", async () => {
+		grpcMocks.slashCondense.mockResolvedValue({})
+		const taskUiState: TaskUiState = {
+			phase: "awaiting_input",
+			inputEnabled: true,
+			cancelEnabled: false,
+			showFooter: true,
+			actions: [{ type: "utility", label: "Condense Conversation", enabled: true }],
+			activeAsk: "condense",
+			reason: "utility-awaiting:condense",
+		}
+		const lastMessage = createSnapshotMessage(taskUiState)
+		const chatState = createChatState({ taskUiState, lastMessage, clineAsk: undefined })
+		const { result } = renderHook(() => useMessageHandlers([lastMessage], chatState))
+
+		await act(async () => {
+			await result.current.executeTaskUiAction(taskUiState.actions[0])
+		})
+
+		expect(grpcMocks.slashCondense).toHaveBeenCalledTimes(1)
+		expect(grpcMocks.taskAskResponse).not.toHaveBeenCalled()
 	})
 
 	it("sends resume action input using taskUiState when resume ask row is hidden", async () => {

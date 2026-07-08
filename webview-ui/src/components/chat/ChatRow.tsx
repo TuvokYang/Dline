@@ -50,6 +50,7 @@ import CodeAccordian, { cleanPathPrefix } from "../common/CodeAccordian"
 import ActModeRespondRow from "./ActModeRespondRow"
 import { CommandOutputContent, CommandOutputRow } from "./CommandOutputRow"
 import { CompletionOutputRow } from "./CompletionOutputRow"
+import { resolveApiErrorMessage } from "./chat-view/utils/messageUtils"
 import { DiffEditRow } from "./DiffEditRow"
 import { EditResultRow } from "./EditResultRow"
 import ErrorRow from "./ErrorRow"
@@ -171,6 +172,7 @@ export const ChatRowContent = memo(
 			vscodeTerminalExecutionMode,
 			clineMessages,
 			showFeatureTips,
+			taskUiState,
 		} = useExtensionState()
 		const [seeNewChangesDisabled, setSeeNewChangesDisabled] = useState(false)
 		const [explainChangesDisabled, setExplainChangesDisabled] = useState(false)
@@ -238,11 +240,11 @@ export const ChatRowContent = memo(
 			return [undefined, undefined, undefined, undefined, undefined]
 		}, [message.text, message.say])
 
-		// when resuming task last won't be api_req_failed but a resume_task message so api_req_started will show loading spinner. that's why we just remove the last api_req_started that failed without streaming anything
-		const apiRequestFailedMessage =
-			isLast && lastModifiedMessage?.ask === "api_req_failed" // if request is retried then the latest message is a api_req_retried
-				? lastModifiedMessage?.text
-				: undefined
+		const apiRequestFailedMessage = resolveApiErrorMessage({
+			isLast,
+			lastModifiedMessage,
+			taskUiState,
+		})
 
 		const type = message.type === "ask" ? message.ask : message.say
 

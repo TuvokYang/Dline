@@ -247,6 +247,17 @@ export function useMessageHandlers(
 			const hasContent = trimmedInput || selectedImages.length > 0 || selectedFiles.length > 0
 
 			switch (action.type) {
+				case "utility":
+					switch (taskActiveAsk ?? clineAsk) {
+						case "condense":
+							await SlashServiceClient.condense(StringRequest.create({ value: lastMessage?.text }))
+							break
+						case "report_bug":
+							await SlashServiceClient.reportBug(StringRequest.create({ value: lastMessage?.text }))
+							break
+					}
+					clearInputState()
+					break
 				case "retry":
 					await TaskServiceClient.askResponse(AskResponseRequest.create({ responseType: "yesButtonClicked" }))
 					clearInputState()
@@ -310,13 +321,16 @@ export function useMessageHandlers(
 		[
 			backgroundCommandRunning,
 			clearInputState,
+			clineAsk,
 			disableAutoScrollRef,
 			inputValue,
+			lastMessage?.text,
 			selectedFiles,
 			selectedImages,
 			setEnableButtons,
 			setSendingDisabled,
 			startNewTask,
+			taskActiveAsk,
 			taskUiState?.cancelEnabled,
 		],
 	)

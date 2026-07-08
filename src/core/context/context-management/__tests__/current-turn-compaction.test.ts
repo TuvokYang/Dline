@@ -1,6 +1,6 @@
 import { expect } from "chai"
 import { describe, it } from "vitest"
-import { shouldDeferCurrentTurn } from "../current-turn-compaction"
+import { shouldDeferCurrentTurn, shouldRestoreDeferredTurn } from "../current-turn-compaction"
 
 const CONTEXT_WINDOW = 272_000
 
@@ -75,5 +75,23 @@ describe("current-turn compaction boundary", () => {
 		})
 
 		expect(shouldDefer).to.equal(false)
+	})
+
+	it("defers tool results when the previous request already exceeds the trigger", () => {
+		const previousTokens = 263_000
+
+		const shouldDefer = shouldDeferCurrentTurn({
+			contextWindow: CONTEXT_WINDOW,
+			previousTokens,
+			userContent: [createToolResult("toolu_execute", "[execute_command] Result:\nsmall current result")],
+		})
+
+		expect(shouldDefer).to.equal(true)
+	})
+
+	it("restores deferred turns only after summarize_task has completed", () => {
+		expect(shouldRestoreDeferredTurn({ hasDeferredTurn: true, didCompleteSummarization: false })).to.equal(false)
+		expect(shouldRestoreDeferredTurn({ hasDeferredTurn: false, didCompleteSummarization: true })).to.equal(false)
+		expect(shouldRestoreDeferredTurn({ hasDeferredTurn: true, didCompleteSummarization: true })).to.equal(true)
 	})
 })

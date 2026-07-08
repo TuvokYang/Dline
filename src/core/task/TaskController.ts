@@ -255,6 +255,18 @@ export class TaskController {
 		// This explicit checkpoint takes precedence over stale message-derived
 		// working inference, but not over an actually running runtime task.
 		if (snapshot.awaiting?.kind === "conversation" && !runtimeWorking) {
+			if (snapshot.awaiting.taskAsk === "condense") {
+				return {
+					phase: "awaiting_input",
+					inputEnabled: true,
+					cancelEnabled: false,
+					showFooter: true,
+					actions: [{ type: "utility", label: "Condense Conversation", enabled: true }],
+					activeAsk: snapshot.awaiting.taskAsk,
+					reason: "utility-awaiting:condense",
+				}
+			}
+
 			return {
 				phase: "awaiting_input",
 				inputEnabled: true,
@@ -298,6 +310,7 @@ export class TaskController {
 				showFooter: true,
 				actions,
 				activeAsk: snapshot.error.sourceAsk,
+				message: snapshot.error.message,
 				reason: `error-recovery:${snapshot.error.kind}`,
 			}
 		}

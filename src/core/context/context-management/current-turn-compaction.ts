@@ -9,6 +9,11 @@ export interface CurrentTurnCompactionInput {
 	userContent: Anthropic.Messages.ContentBlockParam[]
 }
 
+export interface DeferredTurnRestoreInput {
+	hasDeferredTurn: boolean
+	didCompleteSummarization: boolean
+}
+
 /**
  * Estimate token usage for current-turn content before it is sent.
  *
@@ -43,10 +48,20 @@ export function shouldDeferCurrentTurn(input: CurrentTurnCompactionInput): boole
 
 	const triggerTokens = computeCompactTrigger(input.contextWindow, computeSummarizeBudget())
 	if (input.previousTokens >= triggerTokens) {
-		return false
+		return true
 	}
 
 	return input.previousTokens + estimateCurrentTokens(input.userContent) >= triggerTokens
+}
+
+/**
+ * Decide whether a cached current turn can be restored.
+ *
+ * @param input Deferred-turn and summarization completion state.
+ * @returns True only when a deferred turn exists and summarize_task has completed.
+ */
+export function shouldRestoreDeferredTurn(input: DeferredTurnRestoreInput): boolean {
+	return input.hasDeferredTurn && input.didCompleteSummarization
 }
 
 /**

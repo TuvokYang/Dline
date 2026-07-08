@@ -4,7 +4,7 @@
 
 import { combineApiRequests } from "@shared/combineApiRequests"
 import { combineCommandSequences } from "@shared/combineCommandSequences"
-import type { ClineAsk, ClineMessage, ClineSayBrowserAction, ClineSayTool } from "@shared/ExtensionMessage"
+import type { ClineAsk, ClineMessage, ClineSayBrowserAction, ClineSayTool, TaskUiState } from "@shared/ExtensionMessage"
 import { FileIcon, FolderOpenDotIcon, FolderOpenIcon, SearchIcon, ShapesIcon, WrenchIcon } from "lucide-react"
 import React from "react"
 
@@ -74,6 +74,27 @@ export type StateSnapshot = {
 	resume?: {
 		assistantApiIndex?: number
 	}
+}
+
+interface ApiErrorMessageInput {
+	isLast: boolean
+	lastModifiedMessage?: ClineMessage
+	taskUiState?: TaskUiState
+}
+
+/**
+ * Resolve the API error text for request rows.
+ */
+export function resolveApiErrorMessage(input: ApiErrorMessageInput): string | undefined {
+	if (input.taskUiState?.phase === "awaiting_error_recovery" && input.taskUiState.message) {
+		return input.taskUiState.message
+	}
+
+	if (input.isLast && input.lastModifiedMessage?.ask === "api_req_failed") {
+		return input.lastModifiedMessage.text
+	}
+
+	return undefined
 }
 
 function parseStateSnapshot(message: ClineMessage): StateSnapshot | undefined {

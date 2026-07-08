@@ -199,6 +199,7 @@ describe("TaskController.buildTaskUiState", () => {
 		assert.equal(uiState.actions[1].type, "start_new_task")
 		assert.equal(uiState.actions[1].label, "Start New Task")
 		assert.equal(uiState.activeAsk, "api_req_failed")
+		assert.equal(uiState.message, "API request failed")
 		assert.equal(uiState.reason, "error-recovery:api_req_failed")
 	})
 
@@ -258,6 +259,31 @@ describe("TaskController.buildTaskUiState", () => {
 		assert.equal(uiState.actions[0].label, "Resume")
 		assert.equal(uiState.activeAsk, "resume_task")
 		assert.equal(uiState.reason, "resume-awaiting")
+	})
+
+	it("returns condense utility action for condense awaiting", () => {
+		const tc = new TaskController(mockChannel)
+		const snapshot: TaskSnapshot = {
+			phase: TaskPhase.BETWEEN_TURNS,
+			apiIndex: 5,
+			timestamp: Date.now(),
+			awaiting: {
+				kind: "conversation",
+				taskAsk: "condense",
+				messageTs: Date.now(),
+			},
+		}
+		const uiState = tc.buildTaskUiState(snapshot)
+
+		assert.equal(uiState.phase, "awaiting_input")
+		assert.equal(uiState.inputEnabled, true)
+		assert.equal(uiState.cancelEnabled, false)
+		assert.equal(uiState.showFooter, true)
+		assert.equal(uiState.actions.length, 1)
+		assert.equal(uiState.actions[0].type, "utility")
+		assert.equal(uiState.actions[0].label, "Condense Conversation")
+		assert.equal(uiState.activeAsk, "condense")
+		assert.equal(uiState.reason, "utility-awaiting:condense")
 	})
 
 	it("returns completed state for resume_completed_task awaiting", () => {

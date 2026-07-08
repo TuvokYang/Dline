@@ -5,7 +5,11 @@ import { AssistantMessageContent, parseAssistantMessageV2, TextStreamContent, To
 import { ContextManager } from "@core/context/context-management/ContextManager"
 import { checkContextWindowExceededError } from "@core/context/context-management/context-error-handling"
 import { getContextWindowInfo } from "@core/context/context-management/context-window-utils"
-import { shouldDeferCurrentTurn } from "@core/context/context-management/current-turn-compaction"
+import {
+	hasToolResult,
+	shouldDeferCurrentTurn,
+	shouldRestoreDeferredTurn,
+} from "@core/context/context-management/current-turn-compaction"
 import { EnvironmentContextTracker } from "@core/context/context-tracking/EnvironmentContextTracker"
 import { FileContextTracker } from "@core/context/context-tracking/FileContextTracker"
 import { ModelContextTracker } from "@core/context/context-tracking/ModelContextTracker"
@@ -40,7 +44,7 @@ import {
 	getSavedApiConversationHistory,
 	getSavedClineMessages,
 } from "@core/storage/disk"
-import { ensureApiMessages } from "@core/task/api-context"
+import { ensureApiMessages, ensureUserContent } from "@core/task/api-context"
 import { showContextUsage } from "@core/task/environment-context"
 import { isMultiRootEnabled } from "@core/workspace/multi-root-utils"
 import { WorkspaceRootManager } from "@core/workspace/WorkspaceRootManager"
@@ -1558,7 +1562,8 @@ export class Task {
 			ask === "qna_respond" ||
 			ask === "followup" ||
 			ask === "generate_report" ||
-			ask === "act_mode_respond"
+			ask === "act_mode_respond" ||
+			ask === "condense"
 		)
 	}
 
@@ -3763,11 +3768,12 @@ export class Task {
 		let shouldCompact = false
 		const useAutoCondense = this.stateManager.getGlobalSettingsKey("useAutoCondense")
 
+		const didCompleteSummarization = this.taskState.currentlySummarizing
 		if (useAutoCondense && isNextGenModelFamily(this.api.getModel().id)) {
 			// When we initially trigger context cleanup, we increase the context window size, so we need state `currentlySummarizing`
 			// to track if we've already started the context summarization flow. After summarizing, we increment
 			// conversationHistoryDeletedRange to mask out the summarization-trigger user & assistant response messages
-			if (this.taskState.currentlySummarizing) {
+			if (didCompleteSummarization) {
 				this.taskState.currentlySummarizing = false
 
 				if (this.taskState.conversationHistoryDeletedRange) {
@@ -3789,13 +3795,17 @@ export class Task {
 				)
 
 				const previousTokens = this.parsePreviousTokens(previousApiReqIndex)
-				if (!shouldCompact && previousTokens !== undefined) {
+				const hasCurrentToolResult = hasToolResult(userContent)
+				if (hasCurrentToolResult) {
 					const { contextWindow } = getContextWindowInfo(this.api)
-					const shouldDeferTurn = shouldDeferCurrentTurn({
-						contextWindow,
-						previousTokens,
-						userContent,
-					})
+					const shouldDeferTurn =
+						shouldCompact ||
+						(previousTokens !== undefined &&
+							shouldDeferCurrentTurn({
+								contextWindow,
+								previousTokens,
+								userContent,
+							}))
 					if (shouldDeferTurn) {
 						shouldCompact = await this.deferCurrentTurn(userContent)
 					}
@@ -3828,9 +3838,16 @@ export class Task {
 			}
 		}
 
-		const deferredUserContent = await this.restoreDeferredTurn(userContent)
-		if (deferredUserContent !== userContent) {
-			return this.recursivelyMakeClineRequests(deferredUserContent, includeFileDetails)
+		if (
+			shouldRestoreDeferredTurn({
+				hasDeferredTurn: this.taskState.deferredCurrentTurn !== undefined,
+				didCompleteSummarization,
+			})
+		) {
+			const deferredUserContent = await this.restoreDeferredTurn(userContent)
+			if (deferredUserContent !== userContent) {
+				return this.recursivelyMakeClineRequests(deferredUserContent, includeFileDetails)
+			}
 		}
 
 		// NOW load context based on compaction decision
@@ -3881,6 +3898,8 @@ export class Task {
 				),
 			})
 		}
+
+		userContent = ensureUserContent(userContent, shouldCompact ? "auto compact request" : "task user turn")
 
 		// getting verbose details is an expensive operation, it uses globby to top-down build file structure of project which for large projects can take a few seconds
 		// for the best UX we show a placeholder api_req_started message with a loading spinner as this happens

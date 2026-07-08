@@ -278,7 +278,17 @@ export type TaskUiPhase =
  * Action types available to user in task UI.
  */
 export interface TaskUiAction {
-	type: "approve" | "reject" | "cancel" | "resume" | "retry" | "process_anyway" | "start_new_task" | "primary" | "secondary"
+	type:
+		| "approve"
+		| "reject"
+		| "cancel"
+		| "resume"
+		| "retry"
+		| "process_anyway"
+		| "start_new_task"
+		| "primary"
+		| "secondary"
+		| "utility"
 	label: string
 	enabled: boolean
 }
@@ -295,6 +305,7 @@ export interface TaskUiState {
 	actions: TaskUiAction[]
 	activeAsk?: ClineAsk
 	activeCallId?: string
+	message?: string
 	reason: string
 }
 

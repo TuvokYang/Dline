@@ -1,6 +1,12 @@
-import type { ClineMessage } from "@shared/ExtensionMessage"
+import type { ClineMessage, TaskUiState } from "@shared/ExtensionMessage"
 import { describe, expect, it } from "vitest"
-import { findInteractionMessage, findSnapshotAnchoredMessage, groupLowStakesTools, isToolGroup } from "./messageUtils"
+import {
+	findInteractionMessage,
+	findSnapshotAnchoredMessage,
+	groupLowStakesTools,
+	isToolGroup,
+	resolveApiErrorMessage,
+} from "./messageUtils"
 
 const createTextMessage = (ts: number, text: string): ClineMessage => ({
 	type: "say",
@@ -21,6 +27,50 @@ const createReasoningMessage = (ts: number, text: string): ClineMessage => ({
 	say: "reasoning",
 	text,
 	ts,
+})
+
+/**
+ * Create an error-recovery task UI state for message resolution tests.
+ */
+const createErrorTaskUiState = (message: string): TaskUiState => ({
+	phase: "awaiting_error_recovery",
+	inputEnabled: false,
+	cancelEnabled: false,
+	showFooter: true,
+	actions: [{ type: "retry", label: "Retry", enabled: true }],
+	activeAsk: "api_req_failed",
+	message,
+	reason: "error-recovery:api_req_failed",
+})
+
+describe("resolveApiErrorMessage", () => {
+	it("prefers snapshot-first error message when the last modified message is not api_req_failed", () => {
+		const resolved = resolveApiErrorMessage({
+			isLast: true,
+			lastModifiedMessage: { type: "say", say: "state_snapshot", text: "{}", ts: 2 },
+			taskUiState: createErrorTaskUiState("API request failed"),
+		})
+
+		expect(resolved).toBe("API request failed")
+	})
+
+	it("keeps legacy api_req_failed message when snapshot-first message is unavailable", () => {
+		const resolved = resolveApiErrorMessage({
+			isLast: true,
+			lastModifiedMessage: { type: "ask", ask: "api_req_failed", text: "Legacy API error", ts: 1 },
+		})
+
+		expect(resolved).toBe("Legacy API error")
+	})
+
+	it("does not show stale legacy api_req_failed message on non-last rows", () => {
+		const resolved = resolveApiErrorMessage({
+			isLast: false,
+			lastModifiedMessage: { type: "ask", ask: "api_req_failed", text: "Legacy API error", ts: 1 },
+		})
+
+		expect(resolved).toBeUndefined()
+	})
 })
 
 describe("groupLowStakesTools", () => {
