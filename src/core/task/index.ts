@@ -3537,11 +3537,11 @@ export class Task {
 					// Build turn on first complete tool_use block if not already built
 					if (!block.partial && this.taskState.didCompleteReadingStream) {
 						const allBlocks = this.taskState.assistantMessageContent
-						this.taskController.buildTurn(allBlocks, (toolName, callId) => {
+						this.taskController.buildTurn(allBlocks, (_toolName, callId) => {
 							const candidate = allBlocks.find(
 								(item): item is ToolUse => item.type === "tool_use" && item.call_id === callId,
 							)
-							return this.toolExecutor.isAutoApproved(toolName as ClineDefaultTool, candidate?.params)
+							return candidate ? this.toolExecutor.isBlockApproved(candidate) : false
 						})
 					}
 

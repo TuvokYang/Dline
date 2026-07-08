@@ -1,3 +1,4 @@
+import path from "node:path"
 import { ApiHandler, resolveProviderFromProfile } from "@core/api"
 import { FileContextTracker } from "@core/context/context-tracking/FileContextTracker"
 import { getHookModelContext } from "@core/hooks/hook-model-context"
@@ -12,17 +13,17 @@ import { UrlContentFetcher } from "@services/browser/UrlContentFetcher"
 import { McpHub } from "@services/mcp/McpHub"
 import { DEFAULT_API_PROVIDER } from "@shared/api"
 import { ClineAsk, ClineSay } from "@shared/ExtensionMessage"
-import { ClineContent } from "@shared/messages/content"
+import { ClineContent, type ClineToolResponseContent } from "@shared/messages/content"
 import { Logger } from "@shared/services/Logger"
 import { ClineDefaultTool, toolUseNames } from "@shared/tools"
 import { ClineAskResponse } from "@shared/WebviewMessage"
 import { isParallelToolCallingEnabled, modelDoesntSupportWebp } from "@/utils/model-utils"
+import { isLocatedInPath } from "@/utils/path"
 import { ToolUse } from "../assistant-message"
 import { ContextManager } from "../context/context-management/ContextManager"
 import { formatResponse } from "../prompts/responses"
 import { StateManager } from "../storage/StateManager"
 import { WorkspaceRootManager } from "../workspace"
-import { ToolResponse } from "."
 import { isTurnEndingToolName } from "./assistant-message-order"
 import { isAllItemsCompleted } from "./focus-chain/file-utils"
 import { checkRepeatedToolCall, LOOP_DETECTION_SOFT_THRESHOLD, toolCallSignature } from "./loop-detection"
@@ -36,6 +37,8 @@ import { TaskConfig, validateTaskConfig } from "./tools/types/TaskConfig"
 import { createUIHelpers } from "./tools/types/UIHelpers"
 import { ToolDisplayUtils } from "./tools/utils/ToolDisplayUtils"
 import { ToolResultUtils } from "./tools/utils/ToolResultUtils"
+
+type ToolResponse = ClineToolResponseContent
 
 export function canonicalizeAttemptCompletionParams(block: ToolUse): boolean {
 	if (block.name === ClineDefaultTool.ATTEMPT && !block.params?.result && typeof block.params?.response === "string") {
@@ -73,6 +76,65 @@ export function isToolUseAutoApproved(
 	return !!autoApproveResult
 }
 
+interface BlockApproveOptions {
+	cwd: string
+	autoApproveResult: boolean | [boolean, boolean]
+	workspaceRoots?: string[]
+}
+
+const PATH_AUTO_APPROVE_TOOLS = new Set<ClineDefaultTool>([
+	ClineDefaultTool.FILE_READ,
+	ClineDefaultTool.LIST_FILES,
+	ClineDefaultTool.LIST_CODE_DEF,
+	ClineDefaultTool.SEARCH,
+])
+
+/**
+ * Extract the filesystem path parameter used for path-scoped auto-approval.
+ * @param block Tool use block emitted by the assistant.
+ * @returns Path parameter when the tool is path-scoped, otherwise undefined.
+ */
+function getApprovePath(block: ToolUse): string | undefined {
+	if (!PATH_AUTO_APPROVE_TOOLS.has(block.name)) {
+		return undefined
+	}
+	return block.params?.path
+}
+
+/**
+ * Resolve whether a path-scoped tool use is inside the workspace roots.
+ * @param cwd Primary workspace path.
+ * @param toolPath Tool path parameter supplied by the assistant.
+ * @param workspaceRoots Optional workspace roots for multi-root workspaces.
+ * @returns True when the resolved path is inside any workspace root.
+ */
+function isLocalPath(cwd: string, toolPath: string, workspaceRoots?: string[]): boolean {
+	const absolutePath = path.isAbsolute(toolPath) ? path.resolve(toolPath) : path.resolve(cwd, toolPath)
+	const roots = workspaceRoots && workspaceRoots.length > 0 ? workspaceRoots : [cwd]
+	return roots.some((root) => isLocatedInPath(root, absolutePath))
+}
+
+/**
+ * Resolve whether a complete tool block should skip manual approval.
+ * @param block Complete tool use block with params.
+ * @param options Workspace and auto-approval settings for this task.
+ * @returns True when the block is safe to auto-execute.
+ */
+export function isBlockAutoApproved(block: ToolUse, options: BlockApproveOptions): boolean {
+	const toolPath = getApprovePath(block)
+	if (!toolPath) {
+		return PATH_AUTO_APPROVE_TOOLS.has(block.name)
+			? false
+			: isToolUseAutoApproved(block.name, block.params, options.autoApproveResult)
+	}
+
+	const [autoApproveLocal, autoApproveExternal] = Array.isArray(options.autoApproveResult)
+		? options.autoApproveResult
+		: [options.autoApproveResult, false]
+	const isLocal = isLocalPath(options.cwd, toolPath, options.workspaceRoots)
+	return (isLocal && autoApproveLocal) || (!isLocal && autoApproveLocal && autoApproveExternal)
+}
+
 export class ToolExecutor {
 	private autoApprover: AutoApprove
 	private coordinator: ToolExecutorCoordinator
@@ -81,6 +143,17 @@ export class ToolExecutor {
 	public isAutoApproved(toolName: ClineDefaultTool, params?: ToolUse["params"]): boolean {
 		const result = this.autoApprover.shouldAutoApproveTool(toolName)
 		return isToolUseAutoApproved(toolName, params, result)
+	}
+
+	/** Public block-scoped accessor used by TaskController.buildTurn(). */
+	public isBlockApproved(block: ToolUse): boolean {
+		const result = this.autoApprover.shouldAutoApproveTool(block.name)
+		const workspaceRoots = this.workspaceManager?.getRoots().map((root) => root.path)
+		return isBlockAutoApproved(block, {
+			cwd: this.cwd,
+			autoApproveResult: result,
+			workspaceRoots,
+		})
 	}
 
 	// Auto-approval methods using the AutoApprove class
