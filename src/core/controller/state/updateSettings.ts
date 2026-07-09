@@ -366,6 +366,10 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 			controller.stateManager.setGlobalState("showFeatureTips", request.showFeatureTips)
 		}
 
+		if (request.showActiveTasksInEnvDetails !== undefined) {
+			controller.stateManager.setGlobalState("showActiveTasksInEnvDetails", request.showActiveTasksInEnvDetails)
+		}
+
 		// Profile-driven model selection
 		Logger.info("[updateSettings] received", {
 			planModeProfile: request.planModeProfile,

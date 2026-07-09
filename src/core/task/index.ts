@@ -131,6 +131,8 @@ import {
 	orderTurnEndingNativeToolBlocks,
 } from "./assistant-message-order"
 import { getRetryDelay, getStreamRetryDecision, MAX_AUTO_RETRY_ATTEMPTS, waitRetryDelay } from "./auto-retry"
+import { buildActiveTasksSection } from "./active-tasks/ActiveTaskContextProvider"
+import { buildTaskBackgroundResults, buildTaskBackgroundSection } from "./background/BackgroundContextInjector"
 import { FocusChainManager } from "./focus-chain"
 import {
 	getPresentationCadenceMs,
@@ -327,6 +329,7 @@ export class Task {
 	private readonly snapshotPersistence: TaskSnapshotPersistence
 	private readonly systemPromptCacheService: SystemPromptCacheService
 	private pendingSystemPromptRefreshReason?: SystemPromptRefreshReason
+	private pendingBackgroundResultIds?: { subagentIds: string[]; commandIds: string[] }
 	private readonly presentationSchedulingDisabled = isPresentationSchedulingDisabled()
 	private lastLoggedPresentationTrigger = 0
 	/** @deprecated Only used by the deprecated promptAndResumePendingToolUseFromHistory path. */
@@ -694,6 +697,7 @@ export class Task {
 				// Cast to ClineTextContentBlock which is compatible with ClineContent
 				this.taskState.userMessageContent.push({ type: "text", text: content.text } as ClineTextContentBlock)
 			},
+			markWorkspaceScanRequired: () => this.taskFileTracker.markWorkspaceScanRequired(),
 		}
 
 		this.commandExecutor = new CommandExecutor(commandExecutorConfig, commandExecutorCallbacks)
@@ -889,6 +893,14 @@ export class Task {
 
 	async handleWebviewAskResponse(askResponse: ClineAskResponse, text?: string, images?: string[], files?: string[]) {
 		this.taskController.resolveAsk(askResponse, text, images, files)
+		const hasFeedback = Boolean(text) || Boolean(images?.length) || Boolean(files?.length)
+		if (hasFeedback) {
+			await this.say("user_feedback", text, images, files)
+			this.taskState.ackedFeedback = { response: askResponse, text, images, files }
+			void this.checkpointManager?.saveCheckpoint().catch((error: unknown) => {
+				Logger.error("Failed to save feedback checkpoint:", error)
+			})
+		}
 
 		// Conversational tools (qna_respond, plan_mode_respond, etc.) handle
 		// user responses internally via their handler's ask(). The block phase
@@ -2210,8 +2222,17 @@ export class Task {
 		let responseImages: string[] | undefined
 		let responseFiles: string[] | undefined
 		if (response === "messageResponse" || text || (images && images.length > 0) || (files && files.length > 0)) {
-			await this.say("user_feedback", text, images, files)
-			await this.checkpointManager?.saveCheckpoint()
+			const ackedFeedback = this.taskState.ackedFeedback
+			const isAckedFeedback =
+				ackedFeedback?.response === response &&
+				ackedFeedback.text === text &&
+				ackedFeedback.images === images &&
+				ackedFeedback.files === files
+			if (!isAckedFeedback) {
+				await this.say("user_feedback", text, images, files)
+				await this.checkpointManager?.saveCheckpoint()
+			}
+			this.taskState.ackedFeedback = undefined
 			responseText = text
 			responseImages = images
 			responseFiles = files
@@ -2696,6 +2717,41 @@ export class Task {
 	 * Cancel a currently running hook execution
 	 * @returns true if a hook was cancelled, false if no hook was running
 	 */
+	/**
+	 * Append injectable background results to the next user message.
+	 * @param userContent Mutable user content for the next model request.
+	 */
+	private async appendBackgroundResults(userContent: ClineContent[]): Promise<void> {
+		const result = await buildTaskBackgroundResults(this.toolExecutor, this.commandExecutor)
+		if (!result.text) return
+		userContent.push({ type: "text", text: result.text })
+		this.pendingBackgroundResultIds = {
+			subagentIds: result.subagentIds,
+			commandIds: result.commandIds,
+		}
+	}
+
+	/**
+	 * Mark pending background results as injected into a successfully sent request.
+	 */
+	private markBackgroundResultsInjected(): void {
+		const ids = this.pendingBackgroundResultIds
+		if (!ids) return
+		this.toolExecutor.getSubagentJobManager().markInjected(ids.subagentIds)
+		this.commandExecutor.markBackgroundCommandsInjected(ids.commandIds)
+	}
+
+	/**
+	 * Mark pending background results as consumed by a successfully sent request.
+	 */
+	private markBackgroundResultsConsumed(): void {
+		const ids = this.pendingBackgroundResultIds
+		if (!ids) return
+		this.toolExecutor.getSubagentJobManager().markConsumed(ids.subagentIds)
+		this.commandExecutor.markBackgroundCommandsConsumed(ids.commandIds)
+		this.pendingBackgroundResultIds = undefined
+	}
+
 	public async cancelHookExecution(): Promise<boolean> {
 		const activeHook = await this.getActiveHookExecution()
 		if (!activeHook) {
@@ -3209,6 +3265,8 @@ export class Task {
 			this.taskState.isWaitingForFirstChunk = true
 			const firstChunk = await iterator.next()
 			yield firstChunk.value
+			this.markBackgroundResultsInjected()
+			this.markBackgroundResultsConsumed()
 			this.taskState.isWaitingForFirstChunk = false
 			Logger.debug(`[Task ${this.taskId}] attemptApiRequest: TTFB +${Math.round(performance.now() - apiReqStart)}ms`)
 		} catch (error) {
@@ -3912,6 +3970,10 @@ export class Task {
 		// do not add environment details to the message which we are compacting the context window
 		if (environmentDetails) {
 			userContent.push({ type: "text", text: environmentDetails })
+		}
+
+		if (!shouldCompact) {
+			await this.appendBackgroundResults(userContent)
 		}
 
 		if (shouldCompact) {
@@ -4947,6 +5009,36 @@ export class Task {
 		return `\n\n# Current Working Directory (${this.cwd.toPosix()}) Files\n`
 	}
 
+	/**
+	 * Return the task summary for Active Tasks environment details.
+	 * @returns The initial task text or an empty string when unavailable.
+	 */
+	getActiveTaskSummary(): string {
+		const taskMessage = this.messageStateHandler.clineMessages.find((message) => message.say === "task")
+		return taskMessage?.text ?? ""
+	}
+
+	/**
+	 * Return the current buildTurn block phase for Active Tasks environment details.
+	 * @returns The first non-completed block phase, completed when all blocks are complete, or idle when no turn exists.
+	 */
+	getActiveTaskPhase(): string {
+		const blocks = this.taskController.getBlocks()
+		if (blocks.length === 0) {
+			return "idle"
+		}
+		const activeBlock = blocks.find((block) => block.phase !== "completed")
+		return activeBlock?.phase ?? "completed"
+	}
+
+	/**
+	 * Return files edited during this active task lifetime.
+	 * @returns Normalized absolute file paths tracked by TaskFileTracker.
+	 */
+	getActiveTaskEditedFiles(): string[] {
+		return this.taskFileTracker.getAllModifiedFiles()
+	}
+
 	async getEnvironmentDetails(includeFileDetails = false) {
 		const host = await HostProvider.env.getHostVersion({})
 		let details = ""
@@ -4990,6 +5082,17 @@ export class Task {
 			details += `\n${allowedOpenTabs}`
 		} else {
 			details += "\n(No open tabs)"
+		}
+
+		if (this.stateManager.getGlobalSettingsKey("showActiveTasksInEnvDetails") !== false) {
+			const { OrchestratorController } = await import("../orchestrator/OrchestratorController")
+			const activeTasksSection = buildActiveTasksSection({
+				controllers: OrchestratorController.getInstance().getActiveControllers(),
+				currentCwd: this.cwd,
+			})
+			if (activeTasksSection) {
+				details += `\n\n${activeTasksSection}`
+			}
 		}
 
 		const busyTerminals = this.terminalManager.getTerminals(true)
@@ -5050,6 +5153,11 @@ export class Task {
 
 		if (terminalDetails) {
 			details += terminalDetails
+		}
+
+		const backgroundDetails = buildTaskBackgroundSection(this.toolExecutor, this.commandExecutor)
+		if (backgroundDetails) {
+			details += `\n\n${backgroundDetails}`
 		}
 
 		// Add recently modified files section

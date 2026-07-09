@@ -9,6 +9,7 @@ vi.mock("@/context/ExtensionStateContext", () => ({
 		enableCheckpointsSetting: true,
 		hooksEnabled: false,
 		showFeatureTips: false,
+		showActiveTasksInEnvDetails: false,
 		mcpDisplayMode: "rich",
 		strictPlanModeEnabled: false,
 		yoloModeToggled: false,
@@ -54,6 +55,18 @@ describe("FeatureSettingsSection", () => {
 		expect(agentSection?.querySelector('[id="Feature Tips"]')).toBeNull()
 	})
 
+	it("renders Active Tasks toggle in the Agent section", () => {
+		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+
+		expect(screen.getByText("Active Tasks")).toBeTruthy()
+
+		const agentSection = container.querySelector("#agent-features")
+		const editorSection = container.querySelector("#optional-features")
+
+		expect(agentSection?.querySelector('[id="Active Tasks"]')).toBeTruthy()
+		expect(editorSection?.querySelector('[id="Active Tasks"]')).toBeNull()
+	})
+
 	it("calls updateSetting with hooksEnabled when toggled", () => {
 		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
 
@@ -74,5 +87,16 @@ describe("FeatureSettingsSection", () => {
 		fireEvent.click(featureTipsSwitch as Element)
 
 		expect(mockUpdateSetting).toHaveBeenCalledWith("showFeatureTips", true)
+	})
+
+	it("calls updateSetting with showActiveTasksInEnvDetails when toggled", () => {
+		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+
+		const activeTasksSwitch = container.querySelector('[id="Active Tasks"]')
+		expect(activeTasksSwitch).toBeTruthy()
+
+		fireEvent.click(activeTasksSwitch as Element)
+
+		expect(mockUpdateSetting).toHaveBeenCalledWith("showActiveTasksInEnvDetails", true)
 	})
 })

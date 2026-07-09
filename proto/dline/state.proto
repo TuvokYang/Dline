@@ -168,6 +168,7 @@ message Settings {
   optional bool double_check_completion_enabled = 176;
   optional bool show_feature_tips = 182;
   optional bool lazy_teammate_mode_enabled = 183;
+  optional bool show_active_tasks_in_env_details = 184;
   optional string plan_mode_profile = 190;
   optional string act_mode_profile = 191;
   optional string global_subagents_toggles = 192;
@@ -343,6 +344,7 @@ message UpdateSettingsRequest {
   // Profile-driven model selection (replaces legacy plan_mode_*/act_mode_* fields)
   optional string plan_mode_profile = 44;
   optional string act_mode_profile = 45;
+  optional bool show_active_tasks_in_env_details = 46;
 }
 
 message UpdateTerminalConnectionTimeoutRequest {

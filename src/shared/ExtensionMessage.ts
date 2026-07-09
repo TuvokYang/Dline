@@ -119,6 +119,7 @@ export interface ExtensionState {
 	doubleCheckCompletionEnabled?: boolean
 	lazyTeammateModeEnabled?: boolean
 	showFeatureTips?: boolean
+	showActiveTasksInEnvDetails?: boolean
 	openAiCodexIsAuthenticated?: boolean
 	/** Whether the task is actively working (streaming, waiting for first chunk, or executing subagent).
 	 *  Used by the frontend to determine Cancel button visibility instead of the fragile isApiActive. */

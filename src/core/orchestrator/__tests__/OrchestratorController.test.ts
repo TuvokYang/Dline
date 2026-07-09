@@ -55,6 +55,21 @@ describe("OrchestratorController — Registry & Spawn Relations", () => {
 			orchestrator.getControllerCount().should.equal(2)
 		})
 
+		it("returns active controllers as a read-only snapshot", () => {
+			const orchestrator = OrchestratorController.initialize()
+			const first = createMockController()
+			const second = createMockController()
+
+			orchestrator.registerController("task-1", first)
+			orchestrator.registerController("task-2", second)
+
+			const active = orchestrator.getActiveControllers()
+
+			active.should.deepEqual([first, second])
+			active.length = 0
+			orchestrator.getControllerCount().should.equal(2)
+		})
+
 		it("should unregister a controller", () => {
 			const orchestrator = OrchestratorController.initialize()
 			orchestrator.registerController("task-1", createMockController())

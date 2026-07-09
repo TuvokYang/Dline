@@ -55,6 +55,13 @@ const agentFeatures: FeatureToggle[] = [
 		settingKey: "enableParallelToolCalling",
 	},
 	{
+		id: "active-tasks-env-details",
+		label: "Active Tasks",
+		description: "Show currently active tasks in environment details.",
+		stateKey: "showActiveTasksInEnvDetails",
+		settingKey: "showActiveTasksInEnvDetails",
+	},
+	{
 		id: "strict-plan-mode",
 		label: "Strict Plan Mode",
 		description: "Prevents file edits while in Plan mode",
@@ -227,6 +234,7 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 		doubleCheckCompletionEnabled,
 		lazyTeammateModeEnabled,
 		showFeatureTips,
+		showActiveTasksInEnvDetails,
 	} = useExtensionState()
 
 	const handleFocusChainIntervalChange = useCallback(
@@ -241,6 +249,7 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 	// State lookup for mapped features
 	const featureState: Record<string, boolean | undefined> = {
 		showFeatureTips,
+		showActiveTasksInEnvDetails,
 		enableCheckpointsSetting,
 		strictPlanModeEnabled,
 		hooksEnabled,

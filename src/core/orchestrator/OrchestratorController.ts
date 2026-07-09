@@ -62,6 +62,14 @@ export class OrchestratorController {
 		return this.controllers.get(taskId)
 	}
 
+	/**
+	 * Return active controllers registered in this VS Code extension process.
+	 * @returns A snapshot array that callers can read without mutating the registry.
+	 */
+	getActiveControllers(): Controller[] {
+		return Array.from(this.controllers.values())
+	}
+
 	/** Get count of active controllers (sidebar + panels). */
 	getControllerCount(): number {
 		return this.controllers.size

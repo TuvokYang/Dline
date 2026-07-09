@@ -135,6 +135,7 @@ const USER_SETTINGS_FIELDS = {
 	doubleCheckCompletionEnabled: { default: false as boolean },
 	lazyTeammateModeEnabled: { default: false as boolean },
 	showFeatureTips: { default: true as boolean },
+	showActiveTasksInEnvDetails: { default: true as boolean },
 
 	// OpenTelemetry configuration
 	openTelemetryEnabled: { default: true as boolean },

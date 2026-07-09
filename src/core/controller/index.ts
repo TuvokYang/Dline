@@ -1259,6 +1259,7 @@ export class Controller {
 		const doubleCheckCompletionEnabled = this.stateManager.getGlobalSettingsKey("doubleCheckCompletionEnabled")
 		const lazyTeammateModeEnabled = this.stateManager.getGlobalSettingsKey("lazyTeammateModeEnabled")
 		const showFeatureTips = this.stateManager.getGlobalSettingsKey("showFeatureTips")
+		const showActiveTasksInEnvDetails = this.stateManager.getGlobalSettingsKey("showActiveTasksInEnvDetails")
 
 		const localClineRulesToggles = this.stateManager.getWorkspaceStateKey("localClineRulesToggles")
 		const localWindsurfRulesToggles = this.stateManager.getWorkspaceStateKey("localWindsurfRulesToggles")
@@ -1438,6 +1439,7 @@ export class Controller {
 			doubleCheckCompletionEnabled,
 			lazyTeammateModeEnabled,
 			showFeatureTips,
+			showActiveTasksInEnvDetails,
 			openAiCodexIsAuthenticated,
 			/** Active approval block driving frontend button rendering.
 			 *  Only non-null when a tool is awaiting user approval. */

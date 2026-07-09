@@ -24,6 +24,10 @@ export class TaskFileTracker {
 
 	/** Local cache of files modified by this task (lowercased absolute paths) */
 	private modifiedFiles = new Set<string>()
+	/** Lifetime cache of files modified by this task. Used for Active Tasks env details. */
+	private allModifiedFiles = new Set<string>()
+	/** Whether command execution may have modified files outside explicit tracking. */
+	private workspaceScanRequired = false
 
 	/**
 	 * Create a new TaskFileTracker for a task.
@@ -45,6 +49,8 @@ export class TaskFileTracker {
 	trackModification(filePath: string): void {
 		const normalizedPath = path.resolve(filePath).toLowerCase()
 
+		this.allModifiedFiles.add(normalizedPath)
+
 		// Avoid duplicate registrations for the same file
 		if (this.modifiedFiles.has(normalizedPath)) {
 			return
@@ -62,6 +68,39 @@ export class TaskFileTracker {
 	 */
 	getModifiedFiles(): string[] {
 		return Array.from(this.modifiedFiles)
+	}
+
+	/**
+	 * Get all files modified during this task lifetime.
+	 * @returns Array of normalized absolute file paths.
+	 */
+	getAllModifiedFiles(): string[] {
+		return Array.from(this.allModifiedFiles)
+	}
+
+	/**
+	 * Mark that this task may have modified files outside explicit tool tracking.
+	 */
+	markWorkspaceScanRequired(): void {
+		this.workspaceScanRequired = true
+		Logger.debug(`[TaskFileTracker] Workspace scan required for task ${this.taskId}`)
+	}
+
+	/**
+	 * Return whether unknown file writes require a workspace scan before checkpoint.
+	 *
+	 * @returns true when command execution may have modified files.
+	 */
+	isWorkspaceScanRequired(): boolean {
+		return this.workspaceScanRequired
+	}
+
+	/**
+	 * Clear the unknown-write scan marker after checkpoint decision completes.
+	 */
+	clearWorkspaceScanRequired(): void {
+		this.workspaceScanRequired = false
+		Logger.debug(`[TaskFileTracker] Cleared workspace scan marker for task ${this.taskId}`)
 	}
 
 	/**
@@ -85,6 +124,8 @@ export class TaskFileTracker {
 		// to perform per-file restore. Registry entries are cleaned up by
 		// releaseTask() only when explicitly called by external lifecycle hooks.
 		this.modifiedFiles.clear()
+		this.allModifiedFiles.clear()
+		this.workspaceScanRequired = false
 		Logger.debug(`[TaskFileTracker] Disposed for task ${this.taskId}`)
 	}
 }
