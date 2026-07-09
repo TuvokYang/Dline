@@ -9,6 +9,7 @@ import CopyTaskButton from "./buttons/CopyTaskButton"
 import DeleteTaskButton from "./buttons/DeleteTaskButton"
 import NewTaskButton from "./buttons/NewTaskButton"
 import OpenDiskConversationHistoryButton from "./buttons/OpenDiskConversationHistoryButton"
+import RefreshPromptButton from "./buttons/RefreshPromptButton"
 import { CheckpointError } from "./CheckpointError"
 import ContextWindow from "./ContextWindow"
 import { FocusChain } from "./FocusChain"
@@ -148,6 +149,7 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 						{isTaskExpanded && (
 							<div className="mt-1 flex justify-end cursor-pointer opacity-80 gap-2 mx-2">
 								<CopyTaskButton className={BUTTON_CLASS} taskText={task.text} />
+								<RefreshPromptButton className={BUTTON_CLASS} taskId={currentTaskItem?.id} />
 								<DeleteTaskButton
 									className={BUTTON_CLASS}
 									taskId={currentTaskItem?.id}

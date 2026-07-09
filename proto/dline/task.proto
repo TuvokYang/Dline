@@ -53,6 +53,8 @@ service TaskService {
   rpc openTaskInNewWindow(StringRequest) returns (Empty);
   // Spawns a new sub-task from the parent task's context
   rpc spawnTask(SpawnTaskRequest) returns (SpawnTaskResponse);
+  // Manually refreshes the frozen system prompt cache for a task
+  rpc refreshPrompt(RefreshPromptRequest) returns (RefreshPromptResponse);
 }
 
 // Request message for creating a new task
@@ -176,6 +178,16 @@ message SpawnTaskRequest {
 // Response for spawning a new sub-task
 message SpawnTaskResponse {
   string task_id = 1;
+}
+
+// Request for manually refreshing system prompt cache
+message RefreshPromptRequest {
+  string task_id = 1;
+}
+
+// Response for manual system prompt cache refresh
+message RefreshPromptResponse {
+  bool success = 1;
 }
 
 // Status of a task folder lock

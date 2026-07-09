@@ -16,10 +16,15 @@ const DeleteTaskButton: React.FC<{
 		<TooltipTrigger
 			className={cn(buttonVariants({ variant: "icon", size: "xs" }), "!overflow-visible !min-h-6", className)}
 			disabled={!taskId}
-			onClick={(e) => {
+			onClick={async (e) => {
 				e.preventDefault()
 				e.stopPropagation()
-				taskId && TaskServiceClient.deleteTasksWithIds(StringArrayRequest.create({ value: [taskId] }))
+				if (!taskId) return
+				try {
+					await TaskServiceClient.deleteTasksWithIds(StringArrayRequest.create({ value: [taskId] }))
+				} catch (err) {
+					console.error("Delete task failed:", err)
+				}
 			}}>
 			<TrashIcon />
 		</TooltipTrigger>

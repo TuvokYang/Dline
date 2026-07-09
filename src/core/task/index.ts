@@ -2359,10 +2359,7 @@ export class Task {
 				const lastToolUse = toolUseBlocks[toolUseBlocks.length - 1]
 				const toolUseId = (lastToolUse as any).id || (lastToolUse as any).call_id || ""
 				const callId = (lastToolUse as any).call_id || toolUseId
-				const resultText =
-					(lastToolUse as any).name === "ask_followup_question"
-						? `<answer>\n${responseText}\n</answer>`
-						: `<user_message>\n${responseText}\n</user_message>`
+				const resultText = `<feedback>\n${responseText}\n</feedback>`
 				newUserContent.push({
 					type: "tool_result",
 					tool_use_id: toolUseId,
@@ -2742,6 +2739,13 @@ export class Task {
 	 */
 	public async cancelBackgroundCommand(): Promise<boolean> {
 		return this.commandExecutor.cancelBackgroundCommand()
+	}
+
+	/**
+	 * Manually refresh the frozen system prompt cache.
+	 */
+	async manualRefreshPrompt(): Promise<void> {
+		this.pendingSystemPromptRefreshReason = "manual"
 	}
 
 	/**

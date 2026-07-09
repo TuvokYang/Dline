@@ -6,6 +6,7 @@ import { GlobalFileNames } from "@core/storage/disk"
 import { readJsonl, writeJsonl } from "@core/storage/jsonl-utils"
 import { ClineApiReqInfo, ClineMessage } from "@shared/ExtensionMessage"
 import cloneDeep from "clone-deep"
+import fs from "fs/promises"
 import * as path from "path"
 import { Logger } from "@/shared/services/Logger"
 import { isTurnEndingToolName } from "../../task/assistant-message-order"
@@ -120,7 +121,13 @@ export class ContextManager {
 				)
 			}
 		} catch (error) {
-			Logger.error("Failed to load context history:", error)
+			Logger.error("Failed to load context history:", error instanceof Error ? error.message : String(error))
+			// Self-heal: delete corrupt file
+			try {
+				await fs.unlink(path.join(taskDirectory, GlobalFileNames.contextHistory))
+			} catch {
+				// File may not exist — ignore
+			}
 		}
 		return new Map()
 	}
