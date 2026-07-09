@@ -67,4 +67,28 @@ describe("ActiveTaskContextProvider", () => {
 		expect(section).toContain("    - ... 2 more")
 		expect(section).not.toContain("src/file-50.ts")
 	})
+
+	it("excludes task when excludeTaskId matches", () => {
+		const section = buildActiveTasksSection({
+			controllers: [
+				createController({
+					taskId: "task-1",
+					getActiveTaskSummary: () => "keep me",
+					getActiveTaskPhase: () => "streaming",
+					getActiveTaskEditedFiles: () => [],
+				}),
+				createController({
+					taskId: "task-2",
+					getActiveTaskSummary: () => "exclude me",
+					getActiveTaskPhase: () => "idle",
+					getActiveTaskEditedFiles: () => [],
+				}),
+			],
+			currentCwd: "e:/workspace/vscode/dline",
+			excludeTaskId: "task-2",
+		})
+
+		expect(section).toContain("- id: task-1")
+		expect(section).not.toContain("- id: task-2")
+	})
 })

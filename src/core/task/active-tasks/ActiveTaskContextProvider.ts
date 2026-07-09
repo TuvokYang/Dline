@@ -17,6 +17,8 @@ export interface ActiveTaskControllerSource {
 export interface ActiveTasksSectionOptions {
 	controllers: ActiveTaskControllerSource[]
 	currentCwd: string
+	/** Task ID to exclude from the active tasks list. */
+	excludeTaskId?: string
 }
 
 /**
@@ -25,7 +27,10 @@ export interface ActiveTasksSectionOptions {
  * @returns Markdown section or an empty string when there are no active tasks.
  */
 export function buildActiveTasksSection(options: ActiveTasksSectionOptions): string {
-	const tasks = options.controllers.map((controller) => controller.task).filter(isActiveTaskSource)
+	const tasks = options.controllers
+		.map((controller) => controller.task)
+		.filter(isActiveTaskSource)
+		.filter((task) => task.taskId !== options.excludeTaskId)
 	if (tasks.length === 0) {
 		return ""
 	}

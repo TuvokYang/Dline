@@ -901,7 +901,9 @@ export class Task {
 		if (hasFeedback) {
 			await this.say("user_feedback", text, images, files)
 			this.taskState.ackedFeedback = { response: askResponse, text, images, files }
-			if (!isConversationalResponse && askResponse === "messageResponse") {
+			const latestSnapshot = this.findLatestStateSnapshot()
+			const isRetryFeedback = askResponse === "yesButtonClicked" && latestSnapshot?.awaiting?.kind === "error_recovery"
+			if (!activeBlock && !isConversationalResponse && (askResponse === "messageResponse" || isRetryFeedback)) {
 				this.taskState.userMessageContent.push(...(await buildUserFeedbackContent(text, images, files)))
 				this.taskState.userMessageContentReady = true
 			}
@@ -5118,6 +5120,7 @@ export class Task {
 			const activeTasksSection = buildActiveTasksSection({
 				controllers: OrchestratorController.getInstance().getActiveControllers(),
 				currentCwd: this.cwd,
+				excludeTaskId: this.taskId,
 			})
 			if (activeTasksSection) {
 				details += `\n\n${activeTasksSection}`

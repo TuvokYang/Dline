@@ -410,6 +410,11 @@ export class Controller {
 		})
 		const taskInstance = this.task
 		const initializedTaskId = taskInstance.taskId
+
+		// Register this controller so active task discovery covers every initTask path.
+		const { OrchestratorController } = await import("@/core/orchestrator/OrchestratorController")
+		OrchestratorController.getInstance().registerController(initializedTaskId, this)
+
 		void this.persistPanelStateIfNeeded(initializedTaskId)
 
 		try {
