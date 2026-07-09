@@ -31,6 +31,7 @@ import { MessageStateHandler } from "./message-state"
 import { TaskController } from "./TaskController"
 import { TaskState } from "./TaskState"
 import { AutoApprove } from "./tools/autoApprove"
+import { SubagentJobManager } from "./tools/subagent/SubagentJobManager"
 import { IPartialBlockHandler, ToolExecutorCoordinator } from "./tools/ToolExecutorCoordinator"
 import { ToolValidator } from "./tools/ToolValidator"
 import { TaskConfig, validateTaskConfig } from "./tools/types/TaskConfig"
@@ -138,6 +139,7 @@ export function isBlockAutoApproved(block: ToolUse, options: BlockApproveOptions
 export class ToolExecutor {
 	private autoApprover: AutoApprove
 	private coordinator: ToolExecutorCoordinator
+	private subagentJobManager = new SubagentJobManager()
 
 	/** Public accessor for auto-approve logic used by TaskController.buildTurn(). */
 	public isAutoApproved(toolName: ClineDefaultTool, params?: ToolUse["params"]): boolean {
@@ -154,6 +156,14 @@ export class ToolExecutor {
 			autoApproveResult: result,
 			workspaceRoots,
 		})
+	}
+
+	/**
+	 * Get the task-local background subagent job manager.
+	 * @returns Subagent job manager owned by this tool executor.
+	 */
+	public getSubagentJobManager(): SubagentJobManager {
+		return this.subagentJobManager
 	}
 
 	// Auto-approval methods using the AutoApprove class
@@ -316,6 +326,7 @@ export class ToolExecutor {
 			},
 			coordinator: this.coordinator,
 			controllerContext: (this as any)._controllerContext,
+			subagentJobManager: this.subagentJobManager,
 		}
 
 		// Validate the config at runtime to catch any missing properties

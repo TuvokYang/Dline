@@ -12,8 +12,13 @@ import { telemetryService } from "@/services/telemetry"
 import { ClineDefaultTool } from "@/shared/tools"
 import type { ToolResponse } from "../../index"
 import { showNotificationForApproval } from "../../utils"
-import { AgentConfigLoader } from "../subagent/AgentConfigLoader"
-import { runSubagent, type SubagentExecResult, type SubagentProgressUpdate, type SubagentRunStats } from "../subagent/SubagentExecutor"
+import { type ResolveAgentConfigOptions, resolveAgentConfig } from "../subagent/AgentConfigLoader"
+import {
+	runSubagent,
+	type SubagentExecResult,
+	type SubagentProgressUpdate,
+	type SubagentRunStats,
+} from "../subagent/SubagentExecutor"
 import { SubagentJobManager } from "../subagent/SubagentJobManager"
 import { parseUseSubagentRequest, parseUseSubagentsRequest } from "../subagent/SubagentRequestParser"
 import { SubagentRunner } from "../subagent/SubagentRunner"
@@ -23,14 +28,32 @@ import type { StronglyTypedUIHelpers } from "../types/UIHelpers"
 import { ToolResultUtils } from "../utils/ToolResultUtils"
 
 const PROMPT_KEYS = ["prompt_1", "prompt_2", "prompt_3", "prompt_4", "prompt_5"] as const
-const subagentJobManager = new SubagentJobManager()
 
 /**
- * Get the task-local background subagent job manager.
- * @returns Shared subagent job manager instance.
+ * Get or create the task-local background subagent job manager.
+ * @param config Current task config.
+ * @returns Task-local subagent job manager instance.
  */
-export function getSubagentJobManager(): SubagentJobManager {
-	return subagentJobManager
+export function getSubagentJobManager(config: TaskConfig): SubagentJobManager {
+	config.subagentJobManager ??= new SubagentJobManager()
+	return config.subagentJobManager
+}
+
+/**
+ * Build subagent config resolve options from current task state.
+ * @param config Current task config.
+ * @returns Local and global subagent toggle maps.
+ */
+function getResolveOptions(config: TaskConfig): ResolveAgentConfigOptions {
+	const stateManager = config.services.stateManager as unknown as {
+		getWorkspaceStateKey?: (key: string) => Record<string, boolean> | undefined
+		getGlobalSettingsKey?: (key: string) => Record<string, boolean> | boolean | string | undefined
+	}
+	return {
+		subagentToggles: stateManager.getWorkspaceStateKey?.("localSubagentsToggles") ?? {},
+		globalSubagentToggles:
+			(stateManager.getGlobalSettingsKey?.("globalSubagentsToggles") as Record<string, boolean> | undefined) ?? {},
+	}
 }
 
 /**
@@ -97,11 +120,11 @@ function applyStats(entry: SubagentStatusItem, stats: SubagentRunStats): void {
  * @param options Additional payload options.
  * @returns Webview subagent status payload.
  */
-function buildStatusPayload(
+export function buildStatusPayload(
 	kind: "single" | "batch",
 	status: ClineSaySubagentStatus["status"],
 	entries: SubagentStatusItem[],
-	options: Pick<ClineSaySubagentStatus, "background" | "timeoutSeconds" | "jobId" | "batchJobId">,
+	options: Pick<ClineSaySubagentStatus, "background" | "timeoutSeconds" | "jobId" | "batchJobId" | "injectionState">,
 ): ClineSaySubagentStatus {
 	const completed = entries.filter((entry) => entry.status !== "pending" && entry.status !== "running").length
 	const successes = entries.filter((entry) => entry.status === "completed").length
@@ -116,7 +139,7 @@ function buildStatusPayload(
 		kind,
 		status,
 		...options,
-		injectionState: "pending",
+		injectionState: options.injectionState ?? entries[0]?.injectionState ?? "pending",
 		total: entries.length,
 		completed,
 		successes,
@@ -293,7 +316,8 @@ export class UseSubagentToolHandler implements IFullyManagedTool {
 			config.taskState.consecutiveMistakeCount++
 			return formatResponse.toolError(error instanceof Error ? error.message : String(error))
 		}
-		if (!AgentConfigLoader.getInstance().getCachedConfig(request.subagentName)) {
+		const resolvedSubagent = await resolveAgentConfig(config.cwd, request.subagentName, getResolveOptions(config))
+		if (!resolvedSubagent) {
 			return formatResponse.toolError(`Unknown or disabled subagent '${request.subagentName}'.`)
 		}
 		const approvalBody = JSON.stringify({
@@ -327,23 +351,49 @@ export class UseSubagentToolHandler implements IFullyManagedTool {
 			...emptyStats(),
 		}
 		if (request.options.background) {
-			const job = subagentJobManager.startJob({
+			const job = getSubagentJobManager(config).startJob({
 				subagentName: request.subagentName,
 				task: request.task,
 				prompt: request.prompt,
 				timeoutSeconds: request.options.timeoutSeconds,
 				runner: () =>
 					runSubagent({
-						runner: new SubagentRunner(config, request.subagentName),
+						runner: new SubagentRunner(config, request.subagentName, resolvedSubagent.config),
 						prompt: request.prompt,
 						timeoutSeconds: request.options.timeoutSeconds,
 						onProgress: () => undefined,
 					}),
+				onStatusChange: async (jobRecord) => {
+					entry.status = jobRecord.status
+					entry.result = jobRecord.result
+					entry.error = jobRecord.error
+					if (jobRecord.stats) applyStats(entry, jobRecord.stats)
+					await config.callbacks.say(
+						"subagent",
+						JSON.stringify(
+							buildStatusPayload("single", jobRecord.status, [entry], {
+								background: true,
+								timeoutSeconds: request.options.timeoutSeconds,
+								jobId: jobRecord.jobId,
+							}),
+						),
+						undefined,
+						undefined,
+						false,
+						block.ts,
+					)
+				},
 			})
 			entry.jobId = job.jobId
 			await config.callbacks.say(
 				"subagent",
-				JSON.stringify(buildStatusPayload("single", "running", [entry], { background: true, timeoutSeconds: request.options.timeoutSeconds, jobId: job.jobId })),
+				JSON.stringify(
+					buildStatusPayload("single", "running", [entry], {
+						background: true,
+						timeoutSeconds: request.options.timeoutSeconds,
+						jobId: job.jobId,
+					}),
+				),
 				undefined,
 				undefined,
 				false,
@@ -356,30 +406,44 @@ export class UseSubagentToolHandler implements IFullyManagedTool {
 		config.taskState.isExecutingSubagent = true
 		await config.callbacks.say(
 			"subagent",
-			JSON.stringify(buildStatusPayload("single", "running", [entry], { background: false, timeoutSeconds: request.options.timeoutSeconds })),
+			JSON.stringify(
+				buildStatusPayload("single", "running", [entry], {
+					background: false,
+					timeoutSeconds: request.options.timeoutSeconds,
+				}),
+			),
 			undefined,
 			undefined,
 			true,
 			block.ts,
 		)
-		const result = await runSubagent({
-			runner: new SubagentRunner(config, request.subagentName),
-			prompt: request.prompt,
-			timeoutSeconds: request.options.timeoutSeconds,
-			onProgress: (update) => {
-				if (update.status === "running") entry.status = "running"
-				if (update.latestToolCall) entry.latestToolCall = update.latestToolCall
-				if (update.stats) applyStats(entry, update.stats)
-			},
-		})
-		config.taskState.isExecutingSubagent = false
+		let result: SubagentExecResult
+		try {
+			result = await runSubagent({
+				runner: new SubagentRunner(config, request.subagentName, resolvedSubagent.config),
+				prompt: request.prompt,
+				timeoutSeconds: request.options.timeoutSeconds,
+				onProgress: (update) => {
+					if (update.status === "running") entry.status = "running"
+					if (update.latestToolCall) entry.latestToolCall = update.latestToolCall
+					if (update.stats) applyStats(entry, update.stats)
+				},
+			})
+		} finally {
+			config.taskState.isExecutingSubagent = false
+		}
 		entry.status = result.status
 		entry.result = result.result
 		entry.error = result.error
 		applyStats(entry, result.stats)
 		await config.callbacks.say(
 			"subagent",
-			JSON.stringify(buildStatusPayload("single", result.status === "completed" ? "completed" : result.status, [entry], { background: false, timeoutSeconds: request.options.timeoutSeconds })),
+			JSON.stringify(
+				buildStatusPayload("single", result.status === "completed" ? "completed" : result.status, [entry], {
+					background: false,
+					timeoutSeconds: request.options.timeoutSeconds,
+				}),
+			),
 			undefined,
 			undefined,
 			false,
@@ -432,7 +496,11 @@ export class UseSubagentsToolHandler implements IFullyManagedTool {
 		if (!config.services.stateManager.getGlobalSettingsKey("subagentsEnabled")) {
 			await config.callbacks.say(
 				"use_subagents",
-				JSON.stringify({ prompts: [], error: "subagentsDisabled", message: getPrompt("toolHandlers", "subagentsDisabled") }),
+				JSON.stringify({
+					prompts: [],
+					error: "subagentsDisabled",
+					message: getPrompt("toolHandlers", "subagentsDisabled"),
+				}),
 				undefined,
 				undefined,
 				false,
@@ -448,7 +516,12 @@ export class UseSubagentsToolHandler implements IFullyManagedTool {
 			return formatResponse.toolError(error instanceof Error ? error.message : String(error))
 		}
 		const prompts = request.items.map((item) => item.prompt)
-		const approvalBody = JSON.stringify({ kind: "batch", prompts, background: request.options.background, timeoutSeconds: request.options.timeoutSeconds } satisfies ClineAskUseSubagents)
+		const approvalBody = JSON.stringify({
+			kind: "batch",
+			prompts,
+			background: request.options.background,
+			timeoutSeconds: request.options.timeoutSeconds,
+		} satisfies ClineAskUseSubagents)
 		const approved = await approveSubagentUse(
 			config,
 			block,
@@ -470,7 +543,7 @@ export class UseSubagentsToolHandler implements IFullyManagedTool {
 			...emptyStats(),
 		}))
 		if (request.options.background) {
-			const batch = subagentJobManager.startBatch({
+			const batch = getSubagentJobManager(config).startBatch({
 				timeoutSeconds: request.options.timeoutSeconds,
 				items: request.items.map((item) => ({
 					task: item.task,
@@ -483,13 +556,44 @@ export class UseSubagentsToolHandler implements IFullyManagedTool {
 							onProgress: () => undefined,
 						}),
 				})),
-			})
-			entries.forEach((entry, index) => {
-				entry.jobId = batch.itemJobIds[index]
+				onCreated: (batchRecord) => {
+					entries.forEach((entry, index) => {
+						entry.jobId = batchRecord.itemJobIds[index]
+					})
+				},
+				onStatusChange: async (jobRecord, batchRecord) => {
+					const entry = entries.find((candidate) => candidate.jobId === jobRecord.jobId)
+					if (entry) {
+						entry.status = jobRecord.status
+						entry.result = jobRecord.result
+						entry.error = jobRecord.error
+						if (jobRecord.stats) applyStats(entry, jobRecord.stats)
+					}
+					await config.callbacks.say(
+						"subagent",
+						JSON.stringify(
+							buildStatusPayload("batch", batchRecord?.status ?? jobRecord.status, entries, {
+								background: true,
+								timeoutSeconds: request.options.timeoutSeconds,
+								batchJobId: batchRecord?.batchJobId,
+							}),
+						),
+						undefined,
+						undefined,
+						false,
+						block.ts,
+					)
+				},
 			})
 			await config.callbacks.say(
 				"subagent",
-				JSON.stringify(buildStatusPayload("batch", "running", entries, { background: true, timeoutSeconds: request.options.timeoutSeconds, batchJobId: batch.batchJobId })),
+				JSON.stringify(
+					buildStatusPayload("batch", "running", entries, {
+						background: true,
+						timeoutSeconds: request.options.timeoutSeconds,
+						batchJobId: batch.batchJobId,
+					}),
+				),
 				undefined,
 				undefined,
 				false,
@@ -500,27 +604,36 @@ export class UseSubagentsToolHandler implements IFullyManagedTool {
 		config.taskState.isExecutingSubagent = true
 		await config.callbacks.say(
 			"subagent",
-			JSON.stringify(buildStatusPayload("batch", "running", entries, { background: false, timeoutSeconds: request.options.timeoutSeconds })),
+			JSON.stringify(
+				buildStatusPayload("batch", "running", entries, {
+					background: false,
+					timeoutSeconds: request.options.timeoutSeconds,
+				}),
+			),
 			undefined,
 			undefined,
 			true,
 			block.ts,
 		)
-		const results = await Promise.all(
-			request.items.map((item, index) =>
-				runSubagent({
-					runner: new SubagentRunner(config),
-					prompt: item.prompt,
-					timeoutSeconds: request.options.timeoutSeconds,
-					onProgress: (update: SubagentProgressUpdate) => {
-						const entry = entries[index]
-						if (update.latestToolCall) entry.latestToolCall = update.latestToolCall
-						if (update.stats) applyStats(entry, update.stats)
-					},
-				}),
-			),
-		)
-		config.taskState.isExecutingSubagent = false
+		let results: SubagentExecResult[]
+		try {
+			results = await Promise.all(
+				request.items.map((item, index) =>
+					runSubagent({
+						runner: new SubagentRunner(config),
+						prompt: item.prompt,
+						timeoutSeconds: request.options.timeoutSeconds,
+						onProgress: (update: SubagentProgressUpdate) => {
+							const entry = entries[index]
+							if (update.latestToolCall) entry.latestToolCall = update.latestToolCall
+							if (update.stats) applyStats(entry, update.stats)
+						},
+					}),
+				),
+			)
+		} finally {
+			config.taskState.isExecutingSubagent = false
+		}
 		results.forEach((result: SubagentExecResult, index) => {
 			const entry = entries[index]
 			entry.status = result.status
@@ -535,7 +648,12 @@ export class UseSubagentsToolHandler implements IFullyManagedTool {
 				: "completed"
 		await config.callbacks.say(
 			"subagent",
-			JSON.stringify(buildStatusPayload("batch", finalStatus, entries, { background: false, timeoutSeconds: request.options.timeoutSeconds })),
+			JSON.stringify(
+				buildStatusPayload("batch", finalStatus, entries, {
+					background: false,
+					timeoutSeconds: request.options.timeoutSeconds,
+				}),
+			),
 			undefined,
 			undefined,
 			false,

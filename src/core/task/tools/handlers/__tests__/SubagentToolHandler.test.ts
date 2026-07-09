@@ -2,15 +2,15 @@ import { strict as assert } from "node:assert"
 import { setTimeout as delay } from "node:timers/promises"
 import { ClineSubagentUsageInfo } from "@shared/ExtensionMessage"
 import { ClineDefaultTool } from "@shared/tools"
-import { afterEach, describe, expect as vitestExpect, it, vi } from "vitest"
 import { expect } from "chai"
+import { afterEach, describe, it, vi, expect as vitestExpect } from "vitest"
 // sinon import removed: using vitest globals
 import { TaskState } from "../../../TaskState"
-import { AgentConfigLoader } from "../../subagent/AgentConfigLoader"
+import * as AgentConfigModule from "../../subagent/AgentConfigLoader"
 import { SubagentRunner } from "../../subagent/SubagentRunner"
 import type { TaskConfig } from "../../types/TaskConfig"
 import { createUIHelpers } from "../../types/UIHelpers"
-import { UseSubagentToolHandler, UseSubagentsToolHandler } from "../SubagentToolHandler"
+import { buildStatusPayload, UseSubagentsToolHandler, UseSubagentToolHandler } from "../SubagentToolHandler"
 
 // Mock SubagentBuilder to avoid buildApiHandler (requires API profile config)
 vi.mock("../../subagent/SubagentBuilder", () => ({
@@ -116,6 +116,33 @@ function createConfig(options?: {
 describe("SubagentToolHandler", () => {
 	afterEach(() => {
 		vi.restoreAllMocks()
+	})
+
+	it("uses real injection state in Webview status payload", () => {
+		const payload = buildStatusPayload(
+			"single",
+			"completed",
+			[
+				{
+					index: 1,
+					prompt: "<task>review</task><context>ctx</context>",
+					status: "completed",
+					toolCalls: 0,
+					inputTokens: 0,
+					outputTokens: 0,
+					totalCost: 0,
+					currency: "USD",
+					contextTokens: 0,
+					contextWindow: 0,
+					contextUsagePercentage: 0,
+					injectionState: "consumed",
+				},
+			],
+			{ background: true, timeoutSeconds: 30, jobId: "subagent_1", injectionState: "consumed" },
+		)
+
+		assert.equal(payload.injectionState, "consumed")
+		assert.equal(payload.items[0].injectionState, "consumed")
 	})
 
 	it("returns missing parameter error when no prompts are provided", async () => {
@@ -411,9 +438,12 @@ describe("SubagentToolHandler", () => {
 	it("runs stable use_subagent with selected YAML subagent", async () => {
 		const { config } = createConfig({ autoApproveSafe: true, autoApproveAll: true })
 		const handler = new UseSubagentToolHandler()
-		vi.spyOn(AgentConfigLoader, "getInstance").mockReturnValue({
-			getCachedConfig: () => ({ name: "code-reviewer", description: "reviewer", tools: [], systemPrompt: "Prompt" }),
-		} as unknown as AgentConfigLoader)
+		const resolvedConfig = { name: "code-reviewer", description: "reviewer", tools: [], systemPrompt: "Prompt" }
+		vi.spyOn(AgentConfigModule, "resolveAgentConfig").mockResolvedValue({
+			config: resolvedConfig,
+			source: "project",
+			path: "/workspace/.agents/subagents/code-reviewer.md",
+		})
 
 		const runStub = vi.spyOn(SubagentRunner.prototype, "run").mockResolvedValue({
 			status: "completed",
@@ -446,11 +476,14 @@ describe("SubagentToolHandler", () => {
 	})
 
 	it("starts stable use_subagent background job", async () => {
-		const { config } = createConfig({ autoApproveSafe: true, autoApproveAll: true })
+		const { config, callbacks } = createConfig({ autoApproveSafe: true, autoApproveAll: true })
 		const handler = new UseSubagentToolHandler()
-		vi.spyOn(AgentConfigLoader, "getInstance").mockReturnValue({
-			getCachedConfig: () => ({ name: "code-reviewer", description: "reviewer", tools: [], systemPrompt: "Prompt" }),
-		} as unknown as AgentConfigLoader)
+		const resolvedConfig = { name: "code-reviewer", description: "reviewer", tools: [], systemPrompt: "Prompt" }
+		vi.spyOn(AgentConfigModule, "resolveAgentConfig").mockResolvedValue({
+			config: resolvedConfig,
+			source: "project",
+			path: "/workspace/.agents/subagents/code-reviewer.md",
+		})
 		vi.spyOn(SubagentRunner.prototype, "run").mockResolvedValue({
 			status: "completed",
 			result: "background done",
@@ -477,6 +510,10 @@ describe("SubagentToolHandler", () => {
 		})
 
 		assert.match(String(result), /Started background subagent job: subagent_/)
+		assert.ok(config.subagentJobManager, "should attach a task-local subagent job manager")
+		await delay(0)
+		const subagentCalls = callbacks.say.mock.calls.filter((call) => call[0] === "subagent")
+		assert.ok(subagentCalls.length >= 2, "should emit running and final background status")
 	})
 
 	it("replaces partial message when subagents are disabled with prompts in payload", async () => {
@@ -504,6 +541,57 @@ describe("SubagentToolHandler", () => {
 		assert.equal(payload.prompts.length, 0) // empty prompts, error card via message
 		assert.equal(payload.error, "subagentsDisabled")
 		assert.ok(payload.message && payload.message.length > 0, "should include error message")
+	})
+
+	it("keeps fast background batch completion mapped to item entries", async () => {
+		const { config, callbacks } = createConfig({ autoApproveSafe: true, autoApproveAll: true })
+		config.subagentJobManager = {
+			startBatch: vi.fn((input) => {
+				const batch = {
+					batchJobId: "subagent_batch_1",
+					status: "completed" as const,
+					startedAt: Date.now(),
+					finishedAt: Date.now(),
+					timeoutSeconds: input.timeoutSeconds,
+					itemJobIds: ["subagent_1"],
+					injectionState: "pending" as const,
+				}
+				input.onCreated?.(batch)
+				void input.onStatusChange?.(
+					{
+						jobId: "subagent_1",
+						batchJobId: "subagent_batch_1",
+						task: "fast",
+						prompt: "<task>fast</task><context>ctx</context>",
+						status: "completed" as const,
+						startedAt: Date.now(),
+						finishedAt: Date.now(),
+						timeoutSeconds: input.timeoutSeconds,
+						result: "fast done",
+						injectionState: "pending" as const,
+					},
+					batch,
+				)
+				return batch
+			}),
+		} as unknown as TaskConfig["subagentJobManager"]
+		const handler = new UseSubagentsToolHandler()
+
+		await handler.execute(config, {
+			type: "tool_use",
+			name: ClineDefaultTool.USE_SUBAGENTS,
+			params: { prompt_1: "<task>fast</task><context>ctx</context>", background: "true" },
+			partial: false,
+			ts: Date.now(),
+		})
+
+		const subagentCalls = callbacks.say.mock.calls.filter((call) => call[0] === "subagent")
+		const completedPayload = subagentCalls
+			.map((call) => JSON.parse(call[1]))
+			.find((payload) => payload.status === "completed")
+		assert.equal(completedPayload.items[0].jobId, "subagent_1")
+		assert.equal(completedPayload.items[0].status, "completed")
+		assert.equal(completedPayload.items[0].result, "fast done")
 	})
 
 	it("allows exactly max prompts without error", async () => {

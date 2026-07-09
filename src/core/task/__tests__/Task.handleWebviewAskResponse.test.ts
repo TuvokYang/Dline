@@ -30,6 +30,7 @@ function createMockChannel(): MessageChannel {
 function createFakeTaskForHandleWebviewAskResponse(controller: TaskController, extra: Partial<Record<string, any>> = {}) {
 	return {
 		taskController: controller,
+		taskState: {},
 		// resolveAsk is called first in handleWebviewAskResponse
 		// postStateToWebview is called after transition
 		// emitStateSnapshot is passed to transition as callback
@@ -75,6 +76,36 @@ describe("Task.handleWebviewAskResponse", () => {
 	// Ensure cleanup between tests
 	afterEach(() => {
 		vi.restoreAllMocks()
+	})
+
+	it("messageResponse with feedback text records visible feedback before returning without waiting for checkpoint", async () => {
+		let resolveCheckpoint!: () => void
+		let checkpointResolved = false
+		const checkpointPromise = new Promise<void>((resolve) => {
+			resolveCheckpoint = () => {
+				checkpointResolved = true
+				resolve()
+			}
+		})
+		const channel = createMockChannel()
+		const controller = new TaskController(channel)
+		const say = vi.fn(async (_type: string, _text?: string) => 123)
+		const saveCheckpoint = vi.fn(() => checkpointPromise)
+		const fakeTask = createFakeTaskForHandleWebviewAskResponse(controller, {
+			say,
+			checkpointManager: { saveCheckpoint },
+		})
+
+		await Task.prototype.handleWebviewAskResponse.call(fakeTask, "messageResponse" as ClineAskResponse, "hello from My lord")
+
+		assert.equal(say.mock.calls.length, 1)
+		assert.equal(say.mock.calls[0][0], "user_feedback")
+		assert.equal(say.mock.calls[0][1], "hello from My lord")
+		assert.equal(saveCheckpoint.mock.calls.length, 1)
+		assert.equal(checkpointResolved, false)
+
+		resolveCheckpoint()
+		await checkpointPromise
 	})
 
 	// =====================================================================

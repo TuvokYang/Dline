@@ -4,12 +4,15 @@ export type SubagentJobStatus = "running" | "completed" | "failed" | "timeout" |
 export type SubagentInjectionState = "pending" | "injected" | "consumed"
 export type SubagentJobRunner = () => Promise<SubagentExecResult>
 
+export type SubagentJobListener = (job: SubagentJobRecord, batch?: SubagentBatchRecord) => void | Promise<void>
+
 export interface StartSubagentJobInput {
 	subagentName?: string
 	task: string
 	prompt: string
 	timeoutSeconds: number
 	runner: SubagentJobRunner
+	onStatusChange?: SubagentJobListener
 }
 
 export interface StartSubagentBatchItemInput {
@@ -22,6 +25,8 @@ export interface StartSubagentBatchItemInput {
 export interface StartSubagentBatchInput {
 	timeoutSeconds: number
 	items: StartSubagentBatchItemInput[]
+	onStatusChange?: SubagentJobListener
+	onCreated?: (batch: SubagentBatchRecord) => void
 }
 
 export interface SubagentJobRecord {
@@ -50,6 +55,10 @@ export interface SubagentBatchRecord {
 	injectionState: SubagentInjectionState
 }
 
+export type SubagentInjectableResult =
+	| { kind: "single"; job: SubagentJobRecord }
+	| { kind: "batch"; batch: SubagentBatchRecord; jobs: SubagentJobRecord[] }
+
 /** Manage task-local background subagent jobs and batches. */
 export class SubagentJobManager {
 	private jobs = new Map<string, SubagentJobRecord>()
@@ -64,7 +73,7 @@ export class SubagentJobManager {
 	 */
 	startJob(input: StartSubagentJobInput): SubagentJobRecord {
 		const job = this.createJob(input)
-		void this.runJob(job.jobId, input.runner)
+		void this.runJob(job.jobId, input.runner, undefined, input.onStatusChange)
 		return job
 	}
 
@@ -75,11 +84,7 @@ export class SubagentJobManager {
 	 */
 	startBatch(input: StartSubagentBatchInput): SubagentBatchRecord {
 		const batchJobId = this.nextBatchId()
-		const itemJobIds = input.items.map((item) => {
-			const job = this.createJob({ ...item, timeoutSeconds: input.timeoutSeconds }, batchJobId)
-			void this.runJob(job.jobId, item.runner, batchJobId)
-			return job.jobId
-		})
+		const itemJobIds: string[] = []
 		const batch: SubagentBatchRecord = {
 			batchJobId,
 			status: "running",
@@ -89,6 +94,16 @@ export class SubagentJobManager {
 			injectionState: "pending",
 		}
 		this.batches.set(batchJobId, batch)
+		const runners: Array<{ jobId: string; runner: SubagentJobRunner }> = []
+		for (const item of input.items) {
+			const job = this.createJob({ ...item, timeoutSeconds: input.timeoutSeconds }, batchJobId)
+			batch.itemJobIds.push(job.jobId)
+			runners.push({ jobId: job.jobId, runner: item.runner })
+		}
+		input.onCreated?.({ ...batch, itemJobIds: [...batch.itemJobIds] })
+		for (const item of runners) {
+			void this.runJob(item.jobId, item.runner, batchJobId, input.onStatusChange)
+		}
 		return { ...batch, itemJobIds: [...batch.itemJobIds] }
 	}
 
@@ -129,6 +144,51 @@ export class SubagentJobManager {
 	}
 
 	/**
+	 * List completed jobs that have not been injected into model context.
+	 * @returns Job records pending result injection.
+	 */
+	listInjectableJobs(): SubagentJobRecord[] {
+		return this.listJobs().filter((job) => job.status !== "running" && job.injectionState === "pending")
+	}
+
+	/**
+	 * List completed single jobs and batches that are ready for model context injection.
+	 * @returns Batch-aware injectable result records.
+	 */
+	listInjectableResults(): SubagentInjectableResult[] {
+		const results: SubagentInjectableResult[] = []
+		const batchedJobIds = new Set<string>()
+		for (const batch of this.listBatches()) {
+			if (batch.status === "running" || batch.injectionState !== "pending") continue
+			const jobs = batch.itemJobIds.map((jobId) => this.getJob(jobId)).filter((job): job is SubagentJobRecord => !!job)
+			if (jobs.length === 0) continue
+			jobs.forEach((job) => batchedJobIds.add(job.jobId))
+			results.push({ kind: "batch", batch, jobs })
+		}
+		for (const job of this.listInjectableJobs()) {
+			if (job.batchJobId || batchedJobIds.has(job.jobId)) continue
+			results.push({ kind: "single", job })
+		}
+		return results
+	}
+
+	/**
+	 * Mark jobs and batches as injected.
+	 * @param ids Job or batch identifiers.
+	 */
+	markInjected(ids: string[]): void {
+		this.markInjectionState(ids, "injected")
+	}
+
+	/**
+	 * Mark jobs and batches as consumed.
+	 * @param ids Job or batch identifiers.
+	 */
+	markConsumed(ids: string[]): void {
+		this.markInjectionState(ids, "consumed")
+	}
+
+	/**
 	 * Create a job record without waiting for the runner.
 	 * @param input Job metadata.
 	 * @param batchJobId Optional parent batch id.
@@ -156,13 +216,22 @@ export class SubagentJobManager {
 	 * @param runner Runner callback.
 	 * @param batchJobId Optional parent batch id.
 	 */
-	private async runJob(jobId: string, runner: SubagentJobRunner, batchJobId?: string): Promise<void> {
+	private async runJob(
+		jobId: string,
+		runner: SubagentJobRunner,
+		batchJobId?: string,
+		onStatusChange?: SubagentJobListener,
+	): Promise<void> {
 		try {
 			this.finishJob(jobId, await runner())
 		} catch (error) {
 			this.failJob(jobId, error)
 		} finally {
 			if (batchJobId) this.refreshBatch(batchJobId)
+			const job = this.jobs.get(jobId)
+			const batch = batchJobId ? this.batches.get(batchJobId) : undefined
+			if (job && onStatusChange)
+				void onStatusChange({ ...job }, batch ? { ...batch, itemJobIds: [...batch.itemJobIds] } : undefined)
 		}
 	}
 
@@ -210,6 +279,75 @@ export class SubagentJobManager {
 		if (jobs.some((job) => job.status === "timeout")) batch.status = "timeout"
 		else if (jobs.some((job) => job.status === "failed")) batch.status = "failed"
 		else batch.status = "completed"
+	}
+
+	/**
+	 * Mark injection state for jobs and batches.
+	 * @param ids Job or batch identifiers.
+	 * @param state Injection state to apply.
+	 */
+	private markInjectionState(ids: string[], state: SubagentInjectionState): void {
+		for (const id of ids) {
+			const job = this.jobs.get(id)
+			if (job) {
+				this.moveJobState(job, state)
+				if (job.batchJobId) this.refreshBatchState(job.batchJobId)
+			}
+			const batch = this.batches.get(id)
+			if (batch) this.moveBatchState(batch, state)
+		}
+	}
+
+	/**
+	 * Move a single job injection state when the transition is valid.
+	 * @param job Job record to update.
+	 * @param state Requested injection state.
+	 */
+	private moveJobState(job: SubagentJobRecord, state: SubagentInjectionState): void {
+		if (this.canMoveState(job.injectionState, state)) job.injectionState = state
+	}
+
+	/**
+	 * Move a batch and all item jobs when the transition is valid.
+	 * @param batch Batch record to update.
+	 * @param state Requested injection state.
+	 */
+	private moveBatchState(batch: SubagentBatchRecord, state: SubagentInjectionState): void {
+		if (!this.canMoveState(batch.injectionState, state)) return
+		batch.injectionState = state
+		for (const jobId of batch.itemJobIds) {
+			const job = this.jobs.get(jobId)
+			if (job) this.moveJobState(job, state)
+		}
+	}
+
+	/**
+	 * Refresh a batch injection state from all item jobs.
+	 * @param batchJobId Batch id to update.
+	 */
+	private refreshBatchState(batchJobId: string): void {
+		const batch = this.batches.get(batchJobId)
+		if (!batch) return
+		const jobs = batch.itemJobIds.map((jobId) => this.jobs.get(jobId)).filter((job): job is SubagentJobRecord => !!job)
+		if (jobs.length === 0) return
+		if (jobs.every((job) => job.injectionState === "consumed") && this.canMoveState(batch.injectionState, "consumed")) {
+			batch.injectionState = "consumed"
+			return
+		}
+		if (jobs.every((job) => job.injectionState !== "pending") && this.canMoveState(batch.injectionState, "injected")) {
+			batch.injectionState = "injected"
+		}
+	}
+
+	/**
+	 * Check whether an injection state transition is valid.
+	 * @param current Current injection state.
+	 * @param next Requested injection state.
+	 * @returns True when the transition keeps the state moving forward.
+	 */
+	private canMoveState(current: SubagentInjectionState, next: SubagentInjectionState): boolean {
+		const order: Record<SubagentInjectionState, number> = { pending: 0, injected: 1, consumed: 2 }
+		return order[next] === order[current] + 1
 	}
 
 	/** Build a stable job id. */

@@ -32,6 +32,12 @@ export class TaskState {
 	askResponseText?: string
 	askResponseImages?: string[]
 	askResponseFiles?: string[]
+	ackedFeedback?: {
+		response: ClineAskResponse
+		text?: string
+		images?: string[]
+		files?: string[]
+	}
 	lastMessageTs?: number
 
 	// Plan mode specific state

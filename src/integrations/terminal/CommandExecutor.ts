@@ -19,6 +19,7 @@ import { Logger } from "@/shared/services/Logger"
 import { orchestrateCommandExecution } from "./CommandOrchestrator"
 import { StandaloneTerminalManager } from "./standalone/StandaloneTerminalManager"
 import type {
+	BackgroundCommand,
 	CommandExecutionOptions,
 	CommandExecutorCallbacks,
 	CommandExecutorConfig,
@@ -110,6 +111,7 @@ export class CommandExecutor {
 		const useStandalone = options?.useBackgroundExecution || this.terminalExecutionMode === "backgroundExec"
 		const manager = useStandalone ? this.standaloneManager : this.terminalManager
 		Logger.debug(`[Task ${this.taskId}] Executing command in ${useStandalone ? "standalone" : "VSCode"} terminal: ${command}`)
+		this.callbacks.markWorkspaceScanRequired?.()
 
 		// Get terminal and run command
 		const terminalInfo = await manager.getOrCreateTerminal(this.cwd)
@@ -230,6 +232,30 @@ export class CommandExecutor {
 	getBackgroundCommandSummary(): string | undefined {
 		const summary = this.standaloneManager.getBackgroundCommandsSummary()
 		return summary || undefined
+	}
+
+	/**
+	 * List task-local background commands for environment details injection.
+	 * @returns All background commands tracked by the standalone manager.
+	 */
+	listBackgroundCommands(): BackgroundCommand[] {
+		return this.standaloneManager.getAllBackgroundCommands()
+	}
+
+	/**
+	 * Mark background commands as injected into model context.
+	 * @param ids Background command identifiers.
+	 */
+	markBackgroundCommandsInjected(ids: string[]): void {
+		this.standaloneManager.markBackgroundCommandsInjected(ids)
+	}
+
+	/**
+	 * Mark background commands as consumed by a sent model request.
+	 * @param ids Background command identifiers.
+	 */
+	markBackgroundCommandsConsumed(ids: string[]): void {
+		this.standaloneManager.markBackgroundCommandsConsumed(ids)
 	}
 
 	/**

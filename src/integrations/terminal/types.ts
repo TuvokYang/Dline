@@ -4,6 +4,7 @@
  * the StandaloneTerminalManager used in CLI/JetBrains environments.
  */
 
+import type { SubagentInjectionState } from "@shared/ExtensionMessage"
 import type { ClineToolResponseContent } from "@shared/messages"
 import type { EventEmitter } from "events"
 
@@ -273,6 +274,8 @@ export interface BackgroundCommand {
 	lineCount: number
 	/** Exit code if the command completed or errored */
 	exitCode?: number
+	/** Context injection lifecycle state for background command visibility */
+	injectionState?: SubagentInjectionState
 	/** The terminal process running the command */
 	process: TerminalProcessResultPromise
 }
@@ -352,6 +355,8 @@ export interface CommandExecutorCallbacks {
 	getClineMessages: () => Array<{ ask?: string; say?: string; text?: string }>
 	/** Add content to user message for next API request */
 	addToUserMessageContent: (content: { type: string; text: string }) => void
+	/** Mark that command execution may have modified workspace files. */
+	markWorkspaceScanRequired?: () => void
 }
 
 /**

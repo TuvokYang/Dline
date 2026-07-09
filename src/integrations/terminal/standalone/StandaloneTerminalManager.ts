@@ -420,6 +420,7 @@ export class StandaloneTerminalManager implements ITerminalManager {
 			status: "running",
 			logFilePath,
 			lineCount: existingOutput.length,
+			injectionState: "pending",
 			process,
 		}
 
@@ -520,6 +521,50 @@ export class StandaloneTerminalManager implements ITerminalManager {
 	 */
 	getAllBackgroundCommands(): BackgroundCommand[] {
 		return Array.from(this.backgroundCommands.values())
+	}
+
+	/**
+	 * Mark background commands as injected into model context.
+	 * @param ids Background command identifiers.
+	 */
+	markBackgroundCommandsInjected(ids: string[]): void {
+		this.markBackgroundCommands(ids, "injected")
+	}
+
+	/**
+	 * Mark background commands as consumed by a sent model request.
+	 * @param ids Background command identifiers.
+	 */
+	markBackgroundCommandsConsumed(ids: string[]): void {
+		this.markBackgroundCommands(ids, "consumed")
+	}
+
+	/**
+	 * Move background command injection state forward only.
+	 * @param ids Background command identifiers.
+	 * @param state Requested injection lifecycle state.
+	 */
+	private markBackgroundCommands(ids: string[], state: NonNullable<BackgroundCommand["injectionState"]>): void {
+		for (const id of ids) {
+			const command = this.backgroundCommands.get(id)
+			if (!command) continue
+			const current = command.injectionState ?? "pending"
+			if (this.canMoveInjectionState(current, state)) command.injectionState = state
+		}
+	}
+
+	/**
+	 * Check whether a background command injection state transition is valid.
+	 * @param current Current injection lifecycle state.
+	 * @param next Requested injection lifecycle state.
+	 * @returns True when the transition moves forward by one step.
+	 */
+	private canMoveInjectionState(
+		current: NonNullable<BackgroundCommand["injectionState"]>,
+		next: NonNullable<BackgroundCommand["injectionState"]>,
+	): boolean {
+		const order: Record<NonNullable<BackgroundCommand["injectionState"]>, number> = { pending: 0, injected: 1, consumed: 2 }
+		return order[next] === order[current] + 1
 	}
 
 	/**
