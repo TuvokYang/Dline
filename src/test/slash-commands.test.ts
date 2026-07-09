@@ -161,33 +161,35 @@ describe("getAvailableSlashCommands", () => {
 	describe("Workflow Deduplication", () => {
 		it("should prefer local workflows over global workflows with same name", async () => {
 			// Same filename in both local and global
-			mockStateManager.getWorkspaceStateKey.mockReturnValue({
-				"/local/path/shared-workflow.md": true,
-			})
-			mockStateManager.getGlobalSettingsKey.mockReturnValue({
-				"/global/path/shared-workflow.md": true,
-			})
+			mockStateManager.getWorkspaceStateKey.mockImplementation((key: string) =>
+				key === "workflowToggles" ? { "/local/path/shared-workflow.md": true } : null,
+			)
+			mockStateManager.getGlobalSettingsKey.mockImplementation((key: string) =>
+				key === "globalWorkflowToggles" ? { "/global/path/shared-workflow.md": true } : null,
+			)
 
 			const response = await getAvailableSlashCommands(mockController as Controller, EmptyRequest.create())
 
 			// Should only appear once
 			const matches = response.commands.filter((cmd) => cmd.name === "shared-workflow")
 			matches.length.should.equal(1)
+			matches[0].section.should.equal("workflow")
 		})
 
 		it("should include global workflow if local with same name is disabled", async () => {
-			mockStateManager.getWorkspaceStateKey.mockReturnValue({
-				"/local/path/shared-workflow.md": false, // disabled locally
-			})
-			mockStateManager.getGlobalSettingsKey.mockReturnValue({
-				"/global/path/shared-workflow.md": true, // enabled globally
-			})
+			mockStateManager.getWorkspaceStateKey.mockImplementation((key: string) =>
+				key === "workflowToggles" ? { "/local/path/shared-workflow.md": false } : null,
+			)
+			mockStateManager.getGlobalSettingsKey.mockImplementation((key: string) =>
+				key === "globalWorkflowToggles" ? { "/global/path/shared-workflow.md": true } : null,
+			)
 
 			const response = await getAvailableSlashCommands(mockController as Controller, EmptyRequest.create())
 
 			// Global should appear since local is disabled
 			const workflow = response.commands.find((cmd) => cmd.name === "shared-workflow")
 			workflow?.should.not.be.undefined()
+			workflow?.section.should.equal("workflow")
 		})
 	})
 
@@ -243,6 +245,42 @@ describe("getAvailableSlashCommands", () => {
 
 			const workflow = response.commands.find((cmd) => cmd.name === "default-enabled")
 			workflow?.should.not.be.undefined()
+		})
+
+		it("should hide remote workflow when local workflow has same name", async () => {
+			mockStateManager.getWorkspaceStateKey.mockImplementation((key: string) =>
+				key === "workflowToggles" ? { "/local/path/shared-workflow.md": true } : null,
+			)
+			mockStateManager.getRemoteConfigSettings.mockReturnValue({
+				remoteGlobalWorkflows: [{ name: "shared-workflow", alwaysEnabled: true }],
+			})
+
+			const response = await getAvailableSlashCommands(mockController as Controller, EmptyRequest.create())
+
+			const matches = response.commands.filter((cmd) => cmd.name === "shared-workflow")
+			matches.length.should.equal(1)
+			matches[0].section.should.equal("workflow")
+		})
+	})
+
+	describe("Skill Deduplication", () => {
+		it("should prefer local skills over global and remote skills with same name", async () => {
+			mockStateManager.getWorkspaceStateKey.mockImplementation((key: string) =>
+				key === "localSkillsToggles" ? { "/local/path/shared-skill.md": true } : null,
+			)
+			mockStateManager.getGlobalSettingsKey.mockImplementation((key: string) =>
+				key === "globalSkillsToggles" ? { "/global/path/shared-skill.md": true } : null,
+			)
+			mockStateManager.getRemoteConfigSettings.mockReturnValue({
+				remoteGlobalSkills: [{ name: "shared-skill", alwaysEnabled: true }],
+			})
+
+			const response = await getAvailableSlashCommands(mockController as Controller, EmptyRequest.create())
+
+			const matches = response.commands.filter((cmd) => cmd.name === "shared-skill")
+			matches.length.should.equal(1)
+			matches[0].description.should.equal("Skill: shared-skill")
+			matches[0].section.should.equal("skill")
 		})
 	})
 

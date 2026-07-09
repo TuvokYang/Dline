@@ -24,6 +24,7 @@ import type { TaskController } from "../../TaskController"
 import type { TaskState } from "../../TaskState"
 import type { AutoApprove } from "../../tools/autoApprove"
 import type { HookExecution } from "../../types/HookExecution"
+import type { SubagentJobManager } from "../subagent/SubagentJobManager"
 import type { ToolExecutorCoordinator } from "../ToolExecutorCoordinator"
 import { TASK_CALLBACKS_KEYS, TASK_CONFIG_KEYS, TASK_SERVICES_KEYS } from "../utils/ToolConstants"
 
@@ -70,6 +71,9 @@ export interface TaskConfig {
 
 	/** VSCode extension context, required by spawn_task to create new webview panels. */
 	controllerContext?: any
+
+	/** Task-local background subagent job manager. */
+	subagentJobManager?: SubagentJobManager
 }
 
 /**

@@ -1,39 +1,21 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process"
 import { DEFAULT_HOST, DEFAULT_PORT } from "./lib/client.mjs"
+import { buildVitestUiArgs, parseServerArgs } from "./lib/server-args.mjs"
+import { createSpawnCommand } from "./lib/spawn-command.mjs"
 
-function parseArgs(argv) {
-	const options = {
-		host: process.env.VITEST_UI_HOST || DEFAULT_HOST,
-		port: Number(process.env.VITEST_UI_PORT || DEFAULT_PORT),
-		config: process.env.VITEST_UI_CONFIG || "vitest.config.ts",
-	}
-	for (let index = 0; index < argv.length; index++) {
-		const arg = argv[index]
-		if (arg === "--host") options.host = argv[++index]
-		else if (arg === "--port") options.port = Number(argv[++index])
-		else if (arg === "--config") options.config = argv[++index]
-	}
-	return options
-}
-
-function bin(name) {
-	return process.platform === "win32" ? `${name}.cmd` : name
-}
-
-const options = parseArgs(process.argv.slice(2))
-const args = ["vitest", "--ui", "--host", options.host, "--port", String(options.port)]
-if (options.config) {
-	args.push("--config", options.config)
-}
+const options = parseServerArgs(process.argv.slice(2), process.env, { host: DEFAULT_HOST, port: DEFAULT_PORT })
+const args = buildVitestUiArgs(options)
 
 console.error(`[vitest-ui] starting: npx ${args.join(" ")}`)
 console.error(`[vitest-ui] url: http://${options.host}:${options.port}/__vitest__/`)
 
-const child = spawn(bin("npx"), args, {
+const spawnCommand = createSpawnCommand({ executable: "npx" })
+const child = spawn(spawnCommand.file, args, {
 	cwd: process.cwd(),
 	env: process.env,
 	stdio: "inherit",
+	...spawnCommand.options,
 })
 
 function shutdown(signal) {

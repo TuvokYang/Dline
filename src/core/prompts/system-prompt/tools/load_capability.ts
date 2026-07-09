@@ -1,6 +1,7 @@
 import { ModelFamily } from "@/shared/prompts"
 import { ClineDefaultTool } from "@/shared/tools"
 import { getPrompt } from "../../i18n"
+import { hasEnabledMcpServers } from "../components/mcp"
 import type { ClineToolSpec } from "../spec"
 
 const LOAD_CAPABILITY_PARAMETERS: ClineToolSpec["parameters"] = [
@@ -26,6 +27,7 @@ function createLoadVariants(id: ClineDefaultTool, name: string): ClineToolSpec[]
 		name,
 		description: getPrompt("loadCapability", "description"),
 		parameters: LOAD_CAPABILITY_PARAMETERS,
+		contextRequirements: id === ClineDefaultTool.LOAD_MCP ? hasEnabledMcpServers : undefined,
 	}
 
 	const nativeNextGen: ClineToolSpec = {

@@ -43,18 +43,13 @@ describe("SubagentBuilder", () => {
 	})
 
 	it("uses cached config profile when it supports subagents", () => {
-		vi.spyOn(AgentConfigLoader, "getInstance").mockReturnValue({
-			getCachedConfig: (subagentName?: string) =>
-				subagentName === "cached-agent"
-					? {
-							name: "cached-agent",
-							description: "cached description",
-							tools: [ClineDefaultTool.LIST_FILES],
-							profile: "subagent-profile",
-							systemPrompt: "cached system prompt",
-						}
-					: undefined,
-		} as unknown as AgentConfigLoader)
+		const agentConfig = {
+			name: "cached-agent",
+			description: "cached description",
+			tools: [ClineDefaultTool.LIST_FILES],
+			profile: "subagent-profile",
+			systemPrompt: "cached system prompt",
+		}
 		vi.spyOn(profileStore, "readApiProfiles").mockReturnValue([
 			{ name: "subagent-profile", enabled: true, usedFor: ["subagents"] },
 		] as ReturnType<typeof profileStore.readApiProfiles>)
@@ -62,7 +57,7 @@ describe("SubagentBuilder", () => {
 		const fakeHandler = { getModel: vi.fn(), createMessage: vi.fn() }
 		const buildApiHandlerStub = vi.spyOn(api, "buildApiHandler").mockReturnValue(fakeHandler as never)
 
-		const builder = new SubagentBuilder(createTaskConfig("act", "act-default-profile"), "cached-agent")
+		const builder = new SubagentBuilder(createTaskConfig("act", "act-default-profile"), "cached-agent", agentConfig)
 
 		assert.equal(buildApiHandlerStub.mock.calls.length, 1)
 		const [effectiveApiConfig, selectedMode] = buildApiHandlerStub.mock.calls[0]
@@ -154,18 +149,13 @@ describe("SubagentBuilder", () => {
 	})
 
 	it("builds native tools by filtering allowed ids and context requirements then converting", () => {
-		vi.spyOn(AgentConfigLoader, "getInstance").mockReturnValue({
-			getCachedConfig: (subagentName?: string) =>
-				subagentName === "tools-agent"
-					? {
-							name: "tools-agent",
-							description: "tool-limited",
-							tools: [ClineDefaultTool.LIST_FILES],
-							profile: "tool-profile",
-							systemPrompt: "tool prompt",
-						}
-					: undefined,
-		} as unknown as AgentConfigLoader)
+		const agentConfig = {
+			name: "tools-agent",
+			description: "tool-limited",
+			tools: [ClineDefaultTool.LIST_FILES],
+			profile: "tool-profile",
+			systemPrompt: "tool prompt",
+		}
 		vi.spyOn(api, "buildApiHandler").mockReturnValue({ getModel: vi.fn(), createMessage: vi.fn() } as never)
 
 		const getModelFamilyStub = vi
@@ -194,7 +184,7 @@ describe("SubagentBuilder", () => {
 		const converter = vi.fn().mockImplementation((tool: { id: string }) => ({ converted: tool.id }))
 		const getConverterStub = vi.spyOn(ClineToolSet, "getNativeConverter").mockReturnValue(converter as never)
 
-		const builder = new SubagentBuilder(createTaskConfig("act", "anthropic"), "tools-agent")
+		const builder = new SubagentBuilder(createTaskConfig("act", "anthropic"), "tools-agent", agentConfig)
 
 		const context = {
 			providerInfo: {

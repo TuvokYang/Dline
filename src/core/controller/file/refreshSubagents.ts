@@ -97,9 +97,11 @@ export async function refreshSubagents(controller: Controller): Promise<Refreshe
 			}
 		}
 
-		// Apply global toggles
+		// Apply global toggles, excluding names shadowed by local subagents.
+		const localNames = new Set(localSubagents.map((agent) => agent.name))
+		const visibleGlobalSubagents = globalSubagents.filter((agent) => !localNames.has(agent.name))
 		const globalToggles = controller.stateManager.getGlobalSettingsKey("globalSubagentsToggles") || {}
-		for (const agent of globalSubagents) {
+		for (const agent of visibleGlobalSubagents) {
 			agent.enabled = globalToggles[agent.path] !== false
 		}
 
@@ -110,7 +112,7 @@ export async function refreshSubagents(controller: Controller): Promise<Refreshe
 		}
 
 		return RefreshedSubagents.create({
-			globalSubagents,
+			globalSubagents: visibleGlobalSubagents,
 			localSubagents,
 		})
 	} catch (error) {

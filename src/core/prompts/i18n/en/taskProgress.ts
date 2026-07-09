@@ -138,7 +138,7 @@ The task_progress parameter MUST be a separate parameter, NOT inside other conte
 - [ ] Add signup page
 </task_progress>`,
 
-	paramInstruction: `Only report COMPLETED items (\`- [x]\`) with EXACT item text from the checklist — copy the text character-for-character, do NOT simplify or rephrase. The full checklist is shown in environment_details. The task_progress parameter MUST be included as a separate parameter in the tool, it must be separate from other parameters such as content, arguments, etc. (See 'UPDATING TASK PROGRESS' section for more details)`,
+	paramInstruction: `Report task_progress as a separate parameter. Follow the UPDATING TASK PROGRESS section: use exact checklist text for completed items, and include full checklists only when starting or replacing a plan.`,
 }
 
 export default prompts

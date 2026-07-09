@@ -59,14 +59,14 @@ export async function getAvailableSlashCommands(controller: Controller, _request
 	const remoteConfigSettings = controller.stateManager.getRemoteConfigSettings()
 	const remoteWorkflows = remoteConfigSettings?.remoteGlobalWorkflows ?? []
 
-	// Track local workflow names to avoid duplicates from global
-	const localNames = new Set<string>()
+	// Track workflow names so local/project entries take precedence over global and remote entries.
+	const workflowNames = new Set<string>()
 
 	// Add local workflows (enabled only, section="workflow", name="xxx")
 	for (const [filePath, enabled] of Object.entries(localWorkflowToggles)) {
 		if (enabled) {
 			const baseName = await extractNameFromMdFile(filePath, (p) => fs.readFile(p, "utf-8"), parseYamlFrontmatter)
-			localNames.add(baseName)
+			workflowNames.add(baseName)
 			const description = await extractWorkflowDescription(filePath)
 			commands.push(
 				SlashCommandInfo.create({
@@ -83,7 +83,8 @@ export async function getAvailableSlashCommands(controller: Controller, _request
 	for (const [filePath, enabled] of Object.entries(globalWorkflowToggles)) {
 		if (enabled) {
 			const baseName = await extractNameFromMdFile(filePath, (p) => fs.readFile(p, "utf-8"), parseYamlFrontmatter)
-			if (!localNames.has(baseName)) {
+			if (!workflowNames.has(baseName)) {
+				workflowNames.add(baseName)
 				const description = await extractWorkflowDescription(filePath)
 				commands.push(
 					SlashCommandInfo.create({
@@ -100,7 +101,8 @@ export async function getAvailableSlashCommands(controller: Controller, _request
 	// Add remote workflows that are enabled
 	for (const workflow of remoteWorkflows) {
 		const enabled = workflow.alwaysEnabled || remoteWorkflowToggles[workflow.name] !== false
-		if (enabled) {
+		if (enabled && !workflowNames.has(workflow.name)) {
+			workflowNames.add(workflow.name)
 			let description = ""
 			if (workflow.contents) {
 				const { data } = parseYamlFrontmatter(workflow.contents)
@@ -112,7 +114,7 @@ export async function getAvailableSlashCommands(controller: Controller, _request
 				SlashCommandInfo.create({
 					name: workflow.name,
 					description,
-					section: "workflow",
+					section: "custom",
 					cliCompatible: true,
 				}),
 			)
@@ -161,10 +163,11 @@ export async function getAvailableSlashCommands(controller: Controller, _request
 		}
 	}
 
-	// Add remote skills that are enabled
+	// Add remote skills that are enabled, skipping names already provided by local or global skills.
 	for (const skill of remoteGlobalSkills) {
 		const enabled = skill.alwaysEnabled || remoteSkillsToggles[skill.name] !== false
-		if (enabled) {
+		if (enabled && !skillNames.has(skill.name)) {
+			skillNames.add(skill.name)
 			commands.push(
 				SlashCommandInfo.create({
 					name: skill.name,

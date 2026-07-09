@@ -5,7 +5,7 @@ import chokidar, { type FSWatcher } from "chokidar"
 import fs from "fs/promises"
 import * as path from "path"
 import { z } from "zod"
-import { getDlineSubagentsDirectoryPath } from "@/core/storage/disk"
+import { getDlineSubagentsDirectoryPath, getSubagentsScanDirectories } from "@/core/storage/disk"
 
 export const AGENTS_CONFIG_DIRECTORY_NAME = "subagents"
 
@@ -27,6 +27,17 @@ const AgentConfigFrontmatterSchema = z.object({
 })
 
 export type AgentBaseConfig = z.infer<typeof AgentBaseConfigSchema>
+
+export interface ResolvedAgentConfig {
+	config: AgentBaseConfig
+	source: "project" | "global"
+	path: string
+}
+
+export interface ResolveAgentConfigOptions {
+	subagentToggles?: Record<string, boolean>
+	globalSubagentToggles?: Record<string, boolean>
+}
 
 function normalizeToolName(toolName: string): ClineDefaultTool {
 	const trimmed = toolName.trim()
@@ -83,6 +94,18 @@ function isYamlFile(filePath: string): boolean {
 	return /\.(yaml|yml)$/i.test(filePath)
 }
 
+/**
+ * Check whether a subagent file path is enabled by configured toggles.
+ * @param filePath Absolute config file path.
+ * @param source Subagent source scope.
+ * @param options Optional local and global toggle maps.
+ * @returns True when the subagent is not explicitly disabled.
+ */
+function isEnabledPath(filePath: string, source: "project" | "global", options?: ResolveAgentConfigOptions): boolean {
+	const toggles = source === "global" ? options?.globalSubagentToggles : options?.subagentToggles
+	return toggles?.[filePath] !== false
+}
+
 export async function readAgentConfigsFromDisk(dirPath: string): Promise<Map<string, AgentBaseConfig>> {
 	const configs = new Map<string, AgentBaseConfig>()
 	try {
@@ -113,10 +136,59 @@ export async function readAgentConfigsFromDisk(dirPath: string): Promise<Map<str
 	}
 }
 
+/**
+ * Resolve a subagent config from project and global scan directories.
+ *
+ * @param cwd Workspace root used for project subagent lookup.
+ * @param subagentName Name requested by load_subagent or use_subagent.
+ * @returns Matching agent config with source, or undefined.
+ */
+export async function resolveAgentConfig(
+	cwd: string,
+	subagentName?: string,
+	options?: ResolveAgentConfigOptions,
+): Promise<ResolvedAgentConfig | undefined> {
+	if (!subagentName?.trim()) return undefined
+	const normalized = normalizeAgentName(subagentName)
+	for (const directory of getSubagentsScanDirectories(cwd)) {
+		const configs = await readAgentConfigsFromDisk(directory.path)
+		const config = configs.get(normalized)
+		if (!config) continue
+		const filePath = await findAgentConfigPath(directory.path, config.name)
+		if (!filePath || !isEnabledPath(filePath, directory.source, options)) return undefined
+		return { config, source: directory.source, path: filePath }
+	}
+	return undefined
+}
+
+/**
+ * Find the YAML file path for a parsed subagent config.
+ * @param dirPath Directory that contains subagent YAML files.
+ * @param subagentName Parsed subagent name.
+ * @returns Matching file path, or undefined.
+ */
+async function findAgentConfigPath(dirPath: string, subagentName: string): Promise<string | undefined> {
+	const normalized = normalizeAgentName(subagentName)
+	try {
+		const entries = await fs.readdir(dirPath, { withFileTypes: true })
+		for (const entry of entries) {
+			if (!entry.isFile() || !isYamlFile(entry.name)) continue
+			const filePath = path.join(dirPath, entry.name)
+			try {
+				const parsed = parseAgentConfigFromYaml(await fs.readFile(filePath, "utf8"))
+				if (normalizeAgentName(parsed.name) === normalized) return filePath
+			} catch {}
+		}
+	} catch {
+		return undefined
+	}
+	return undefined
+}
+
 export type AgentConfigChangeListener = (configs: ReadonlyMap<string, AgentBaseConfig>, error?: Error) => void
 
 export class AgentConfigLoader {
-	private static instance?: AgentConfigLoader
+	private static instances = new Map<string, AgentConfigLoader>()
 	private readonly directoryPath: string
 	private readonly initialLoadPromise: Promise<void>
 	private watcher?: FSWatcher
@@ -134,16 +206,17 @@ export class AgentConfigLoader {
 	}
 
 	public static getInstance(dirPath?: string): AgentConfigLoader {
-		if (!AgentConfigLoader.instance) {
-			AgentConfigLoader.instance = new AgentConfigLoader(dirPath || getDlineSubagentsDirectoryPath())
-		}
-		return AgentConfigLoader.instance
+		const resolvedPath = dirPath || getDlineSubagentsDirectoryPath()
+		const existing = AgentConfigLoader.instances.get(resolvedPath)
+		if (existing) return existing
+		const loader = new AgentConfigLoader(resolvedPath)
+		AgentConfigLoader.instances.set(resolvedPath, loader)
+		return loader
 	}
 
 	public static async resetInstanceForTests(): Promise<void> {
-		if (!AgentConfigLoader.instance) return
-		await AgentConfigLoader.instance.dispose()
-		AgentConfigLoader.instance = undefined
+		await Promise.all(Array.from(AgentConfigLoader.instances.values()).map((loader) => loader.dispose()))
+		AgentConfigLoader.instances.clear()
 	}
 
 	public getConfigPath(): string {
@@ -255,7 +328,6 @@ export class AgentConfigLoader {
 	private notify(configs: ReadonlyMap<string, AgentBaseConfig>, error?: Error): void {
 		for (const listener of this.listeners) listener(new Map(configs), error)
 	}
-
 }
 
 const SUBAGENT_README_CONTENT = `# Dline Subagents

@@ -293,7 +293,7 @@ Content`
 	})
 
 	describe("getAvailableSkills - Override Resolution", () => {
-		it("should override project skill with global skill of same name", async () => {
+		it("should prefer project skill over global skill of same name", async () => {
 			const globalSkillMdPath = path.join(GLOBAL_SKILLS_DIR, "coding", "SKILL.md")
 			const projSkillsDir = path.join(TEST_CWD, ".agents", "skills")
 			const projCodingMd = path.join(projSkillsDir, "coding", "SKILL.md")
@@ -329,8 +329,8 @@ Content`
 			const skills = getAvailableSkills(allSkills)
 
 			expect(skills).toHaveLength(1)
-			expect(skills[0].description).toBe("Global coding skill")
-			expect(skills[0].source).toBe("global")
+			expect(skills[0].description).toBe("Project coding skill")
+			expect(skills[0].source).toBe("project")
 		})
 
 		it("should keep both skills when names are different", async () => {
@@ -668,8 +668,8 @@ description: Test
 			})
 		})
 
-		describe("Override resolution (remote > disk-global > project)", () => {
-			it("remote overrides disk-global skill of same name", async () => {
+		describe("Override resolution (project > disk-global > remote)", () => {
+			it("disk-global overrides remote skill of same name", async () => {
 				const entries = [makeEntry("coding", "Remote coding")]
 				const diskGlobalMd = path.join(GLOBAL_SKILLS_DIR, "coding", "SKILL.md")
 
@@ -686,11 +686,11 @@ description: Test
 
 				const available = getAvailableSkills(await discoverSkills(TEST_CWD, entries))
 				expect(available).toHaveLength(1)
-				expect(available[0].description).toBe("Remote coding")
-				expect(available[0].path).toBe("remote:coding")
+				expect(available[0].description).toBe("Disk global coding")
+				expect(available[0].path).toBe(diskGlobalMd)
 			})
 
-			it("remote overrides project skill of same name", async () => {
+			it("project overrides remote skill of same name", async () => {
 				const entries = [makeEntry("coding", "Remote coding")]
 				const projSkillsDir = path.join(TEST_CWD, ".agents", "skills")
 				const projMd = path.join(projSkillsDir, "coding", "SKILL.md")
@@ -708,8 +708,8 @@ description: Test
 
 				const available = getAvailableSkills(await discoverSkills(TEST_CWD, entries))
 				expect(available).toHaveLength(1)
-				expect(available[0].description).toBe("Remote coding")
-				expect(available[0].path).toBe("remote:coding")
+				expect(available[0].description).toBe("Project coding")
+				expect(available[0].path).toBe(projMd)
 			})
 		})
 

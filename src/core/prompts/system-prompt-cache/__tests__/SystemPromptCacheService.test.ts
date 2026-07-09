@@ -1,5 +1,6 @@
 import type { SystemPromptContext } from "@core/prompts/system-prompt"
 import type { TaskContextCache } from "@core/storage/task-context-types"
+import type { ClineTool } from "@shared/tools"
 import { describe, expect, it } from "vitest"
 import { SystemPromptCacheService } from "../SystemPromptCacheService"
 
@@ -66,6 +67,41 @@ describe("SystemPromptCacheService", () => {
 		expect(result.text).toContain("mcp.tool")
 		expect(result.refreshReason).toBe("task_start")
 		expect(saved?.systemPrompt?.frozen?.text).toBe(result.text)
+	})
+
+	it("restores native tools when reusing a frozen prompt", async () => {
+		const cached = {
+			...emptyContext("task-1"),
+			systemPrompt: {
+				frozen: {
+					text: "old prompt # Capabilities old",
+					capabilitiesHash: "sha256:old",
+					createdAt: 1,
+					refreshedAt: 1,
+					refreshReason: "task_start" as const,
+					promptBuilder: {
+						providerId: "test-provider",
+						modelId: "test-model",
+						nativeTools: true,
+					},
+				},
+			},
+		}
+		const tools: ClineTool[] = [{ type: "function", function: { name: "read_file" } }]
+		const service = new SystemPromptCacheService({
+			taskId: "task-1",
+			deps: {
+				getContext: async () => cached,
+				saveContext: async () => undefined,
+				buildSystemPrompt: async () => ({ systemPrompt: "rebuilt prompt", tools }),
+				getPromptBuilderInfo: () => ({ ...testPromptBuilderInfo, nativeTools: true }),
+			},
+		})
+
+		const result = await service.getOrCreate({ promptContext })
+
+		expect(result.text).toBe("old prompt # Capabilities old")
+		expect(service.getLastTools()).toBe(tools)
 	})
 
 	it("keeps ordinary requests stable when capability sources change", async () => {

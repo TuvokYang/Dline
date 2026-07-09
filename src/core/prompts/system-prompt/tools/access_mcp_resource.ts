@@ -1,6 +1,7 @@
 import { ModelFamily } from "@/shared/prompts"
 import { ClineDefaultTool } from "@/shared/tools"
 import { getPrompt } from "../../i18n"
+import { hasEnabledMcpServers } from "../components/mcp"
 import type { ClineToolSpec } from "../spec"
 import { TASK_PROGRESS_PARAMETER } from "../types"
 
@@ -9,7 +10,7 @@ const generic: ClineToolSpec = {
 	id: ClineDefaultTool.MCP_ACCESS,
 	name: "access_mcp_resource",
 	description: getPrompt("accessMcpResource", "description"),
-	contextRequirements: (context) => context.mcpHub !== undefined && context.mcpHub !== null,
+	contextRequirements: hasEnabledMcpServers,
 	parameters: [
 		{
 			name: "server_name",
@@ -32,7 +33,7 @@ const NATIVE_GPT_5: ClineToolSpec = {
 	id: ClineDefaultTool.MCP_ACCESS,
 	name: "access_mcp_resource",
 	description: getPrompt("accessMcpResource", "nativeDescription"),
-	contextRequirements: (context) => context.mcpHub !== undefined && context.mcpHub !== null,
+	contextRequirements: hasEnabledMcpServers,
 	parameters: [
 		{
 			name: "server_name",

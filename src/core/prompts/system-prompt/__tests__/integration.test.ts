@@ -152,6 +152,8 @@ const baseContext: SystemPromptContext = {
 const isNativeToolsFamily = (family: ModelFamily) =>
 	[ModelFamily.NATIVE_NEXT_GEN, ModelFamily.NATIVE_GPT_5, ModelFamily.GEMINI_3].includes(family)
 
+const MCP_TOOL_NAMES = ["use_mcp_tool", "access_mcp_resource", "load_mcp_documentation", "load_mcp"]
+
 type TestRunner = { skip(): void }
 
 async function runPromptTest(
@@ -262,12 +264,20 @@ describe("Prompt System Integration Tests", () => {
 									return tool?.name
 								})
 								expect(toolNames).to.not.include("focus_chain")
+								if (contextName === "no-mcp") {
+									expect(toolNames).to.not.include.members(MCP_TOOL_NAMES)
+								}
 							} else {
 								expect(tools).to.be.undefined
 							}
 
 							expect(systemPrompt).to.be.a("string").with.length.greaterThan(100)
 							expect(systemPrompt).to.not.include("{{TOOL_USE_SECTION}}")
+							if (contextName === "no-mcp") {
+								for (const mcpToolName of MCP_TOOL_NAMES) {
+									expect(systemPrompt).to.not.include(`## ${mcpToolName}`)
+								}
+							}
 
 							const snapshotName = `${providerId}_${modelId.replace(/[^a-zA-Z0-9]/g, "_")}-${contextName}.snap`
 							await assertSnapshot(snapshotName, systemPrompt)

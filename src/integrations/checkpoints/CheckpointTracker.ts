@@ -265,6 +265,11 @@ class CheckpointTracker {
 				`[CheckpointTracker] commitForFiles: resolved ${filesToCommit.length} file(s) from TaskFileTracker for task ${this.taskId}`,
 			)
 		}
+		const requiresWorkspaceScan = this.taskFileTracker?.isWorkspaceScanRequired() ?? false
+		if (filesToCommit.length === 0 && !requiresWorkspaceScan) {
+			Logger.debug(`[CheckpointTracker] No tracked files for task ${this.taskId}; skipping checkpoint lock and git commit`)
+			return undefined
+		}
 
 		try {
 			await this.sendCheckpointSubscriptionEvent("CHECKPOINT_COMMIT", true)
@@ -326,11 +331,10 @@ class CheckpointTracker {
 	 * locking strategies (cross-process SqliteLockManager or process-level Mutex).
 	 *
 	 * Staging strategy:
-	 * - When files are provided: incremental git add <files> (fast path,
-	 *   avoids expensive full-workspace scan via git add .)
-	 * - When files is empty: fallback to git add . (safe path, covers
-	 *   file modifications from execute_command and other tools that
-	 *   cannot declare their file changes explicitly)
+	 * - When files are provided: incremental git add <files>.
+	 * - When files are empty and command execution may have modified files:
+	 *   run a guarded workspace scan after a readonly change preflight.
+	 * - When files are empty and no workspace scan is required: skip git.
 	 *
 	 * After a successful commit the TaskFileTracker's modified-file cache
 	 * is cleared so the next checkpoint only captures newly modified files.
@@ -338,31 +342,53 @@ class CheckpointTracker {
 	private async doCommitFiles(files: string[]): Promise<string | undefined> {
 		const gitPath = await getShadowGitPath(this.cwdHash)
 		const git = simpleGit(path.dirname(gitPath))
+		const requiresWorkspaceScan = this.taskFileTracker?.isWorkspaceScanRequired() ?? false
 
 		Logger.info(`[Task ${this.taskId}] Using shadow git at: ${gitPath}`)
 
-		// Stage files: incremental with tracked list or full scan as fallback
 		if (files.length > 0) {
-			Logger.debug(`[CheckpointTracker] doCommitFiles: incremental add ${files.length} file(s) for task ${this.taskId}`)
-		} else {
-			Logger.debug(
-				`[CheckpointTracker] doCommitFiles: fallback to full git add . (no tracked files) for task ${this.taskId}`,
-			)
-		}
-		const addFilesResult = await this.gitOperations.addCheckpointFiles(git, files.length > 0 ? files : undefined, this.taskId)
-		if (!addFilesResult.success) {
-			// When specific files were requested but staging failed (e.g. path
-			// mismatch, permissions), do NOT create an empty commit — it would
-			// produce a hash that appears valid but contains none of the
-			// intended files, silently breaking later restores.
-			if (files.length > 0) {
+			Logger.debug(`[CheckpointTracker] doCommitFiles: tracked add ${files.length} file(s) for task ${this.taskId}`)
+			const addFilesResult = await this.gitOperations.addCheckpointFiles({
+				git,
+				mode: "tracked",
+				fileList: files,
+				taskId: this.taskId,
+			})
+			if (!addFilesResult.success) {
 				Logger.error(
-					`[CheckpointTracker] Failed to stage ${files.length} file(s) for task ${this.taskId}. ` +
+					`[CheckpointTracker] Failed to stage ${files.length} tracked file(s) for task ${this.taskId}. ` +
 						`Skipping commit to avoid an empty checkpoint.`,
 				)
 				return undefined
 			}
-			Logger.error(`[Task ${this.taskId}] Failed to add at least one file(s) to checkpoints shadow git`)
+		} else if (requiresWorkspaceScan) {
+			const hasWorkspaceChanges = await this.gitOperations.hasWorkspaceChanges(git, this.taskId)
+			if (!hasWorkspaceChanges) {
+				this.taskFileTracker?.clearWorkspaceScanRequired()
+				Logger.debug(
+					`[CheckpointTracker] No workspace changes after command for task ${this.taskId}; skipping git checkpoint`,
+				)
+				return undefined
+			}
+			const addFilesResult = await this.gitOperations.addCheckpointFiles({
+				git,
+				mode: "workspace-scan",
+				taskId: this.taskId,
+			})
+			if (!addFilesResult.success) {
+				Logger.error(`[CheckpointTracker] Failed workspace-scan staging for task ${this.taskId}`)
+				return undefined
+			}
+		} else {
+			Logger.debug(`[CheckpointTracker] No tracked files for task ${this.taskId}; skipping git checkpoint`)
+			return undefined
+		}
+
+		const hasStagedChanges = await this.gitOperations.hasStagedChanges(git, this.taskId)
+		if (!hasStagedChanges) {
+			this.taskFileTracker?.clearWorkspaceScanRequired()
+			Logger.debug(`[CheckpointTracker] No staged changes for task ${this.taskId}; skipping empty checkpoint commit`)
+			return undefined
 		}
 
 		const commitMessage = `checkpoint-${this.cwdHash}-${this.taskId}`
@@ -373,7 +399,6 @@ class CheckpointTracker {
 
 		Logger.info(`[Task ${this.taskId}] Creating checkpoint commit with message: ${commitMessage}`)
 		const result = await git.commit(commitMessage, {
-			"--allow-empty": null,
 			"--no-verify": null,
 		})
 		const commitHash = (result.commit || "").replace(/^HEAD\s+/, "")
@@ -383,6 +408,7 @@ class CheckpointTracker {
 		// checkpoint only captures newly modified files.
 		if (commitHash) {
 			this.taskFileTracker?.clearModifiedFiles()
+			this.taskFileTracker?.clearWorkspaceScanRequired()
 			Logger.debug(`[CheckpointTracker] Cleared tracked files after successful commit for task ${this.taskId}`)
 		}
 
@@ -649,7 +675,7 @@ class CheckpointTracker {
 			// Working-directory comparison: stage files to discover untracked changes,
 			// then diff. Serialized via mutex to protect the shared shadow git index.
 			changedFileNames = await CheckpointMutexRegistry.getInstance().runExclusive(this.cwdHash, async () => {
-				await this.gitOperations.addCheckpointFiles(git, undefined, this.taskId)
+				await this.gitOperations.addCheckpointFiles({ git, mode: "workspace-scan", taskId: this.taskId })
 				const summary = await git.diffSummary([diffRange])
 				return summary.files.map((f) => f.file)
 			})
@@ -752,7 +778,7 @@ class CheckpointTracker {
 		} else {
 			// Working-directory comparison: stage files to discover untracked changes
 			changedFileCount = await CheckpointMutexRegistry.getInstance().runExclusive(this.cwdHash, async () => {
-				await this.gitOperations.addCheckpointFiles(git, undefined, this.taskId)
+				await this.gitOperations.addCheckpointFiles({ git, mode: "workspace-scan", taskId: this.taskId })
 				const diffSummary = await git.diffSummary([diffRange])
 				return diffSummary.files.length
 			})

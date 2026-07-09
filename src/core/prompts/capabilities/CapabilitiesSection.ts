@@ -18,13 +18,23 @@ function escapeName(name: string): string {
 }
 
 /**
+ * Normalize capability descriptions into a single prompt-safe line.
+ *
+ * @param description Raw capability description.
+ * @returns Sanitized description text.
+ */
+function normalizeDescription(description: string): string {
+	return description.replace(/\s+/g, " ").trim().slice(0, 240)
+}
+
+/**
  * Render one capability entry using only name and description.
  *
  * @param entry Prompt-safe capability entry.
  * @returns Markdown list item for the capability.
  */
 function renderEntry(entry: CapabilityEntry): string {
-	return `- \`${escapeName(entry.name)}\`: ${entry.description}`
+	return `- \`${escapeName(entry.name)}\`: ${normalizeDescription(entry.description)}`
 }
 
 /**

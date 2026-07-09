@@ -214,8 +214,8 @@ describe("vscode-to-file-migration", () => {
 		})
 
 		it("should NOT overwrite existing file store values", async () => {
-			// Pre-populate the file store with a value
-			storageContext.globalState.update("mode", "act")
+			// Pre-populate the settings store with a value
+			storageContext.settings.setBatch({ mode: "act" })
 
 			const mockCtx = createMockVSCodeContext()
 			mockCtx._globalStateStore.set("mode", "plan") // VSCode has different value
@@ -224,8 +224,8 @@ describe("vscode-to-file-migration", () => {
 
 			result.migrated.should.be.true()
 			result.skippedExisting.should.be.greaterThan(0)
-			// File store value should be preserved, NOT overwritten
-			storageContext.globalState.get("mode")?.should.equal("act")
+			// Settings store value should be preserved, NOT overwritten
+			storageContext.settings.get("mode")?.should.equal("act")
 		})
 
 		it("should skip undefined values", async () => {

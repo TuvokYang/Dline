@@ -80,7 +80,5 @@ export const READ_ONLY_TOOLS = [
 	ClineDefaultTool.LOAD_SKILL,
 	ClineDefaultTool.LOAD_WORKFLOW,
 	ClineDefaultTool.LOAD_SUBAGENT,
-	ClineDefaultTool.USE_SUBAGENT,
-	ClineDefaultTool.USE_SUBAGENTS,
 	ClineDefaultTool.FIND_REFERENCES,
 ] as const

@@ -145,10 +145,10 @@ async function loadSkillMetadata(
  * Discover all skills from global (~/.cline/skills), remote config, and project directories.
  *
  * Precedence (highest wins on name collision via getAvailableSkills):
- *   remote (enterprise) > disk-global (user personal) > project (workspace)
+ *   project (workspace) > disk-global (user personal) > remote (enterprise)
  *
  * This is achieved by the array order + getAvailableSkills iterating in reverse (last wins):
- *   [project..., disk-global..., remote...]
+ *   [remote..., disk-global..., project...]
  */
 export async function discoverSkills(cwd: string, remoteSkillEntries?: GlobalInstructionsFile[]): Promise<SkillMetadata[]> {
 	const skills: SkillMetadata[] = []
@@ -176,21 +176,21 @@ export async function discoverSkills(cwd: string, remoteSkillEntries?: GlobalIns
 		source: "global" as const,
 	}))
 
-	// Insert in order: project → disk-global → remote
-	// getAvailableSkills iterates backwards so remote (last) wins, then disk-global, then project
-	skills.push(...projectSkills, ...diskGlobalSkills, ...remoteSkills)
+	// Insert in order: remote → disk-global → project.
+	// getAvailableSkills iterates backwards so project/local wins over global and remote entries.
+	skills.push(...remoteSkills, ...diskGlobalSkills, ...projectSkills)
 
 	return skills
 }
 
 /**
- * Get available skills with override resolution (global > project).
+ * Get available skills with override resolution (project > global > remote).
  */
 export function getAvailableSkills(skills: SkillMetadata[]): SkillMetadata[] {
 	const seen = new Set<string>()
 	const result: SkillMetadata[] = []
 
-	// Iterate backwards: global skills (added last) are seen first and take precedence
+	// Iterate backwards: higher-precedence skills added later are seen first.
 	for (let i = skills.length - 1; i >= 0; i--) {
 		const skill = skills[i]
 		if (!seen.has(skill.name)) {

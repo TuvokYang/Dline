@@ -23,6 +23,7 @@ import { TaskState } from "../../TaskState"
 import { ToolExecutorCoordinator } from "../ToolExecutorCoordinator"
 import { ToolValidator } from "../ToolValidator"
 import type { TaskConfig } from "../types/TaskConfig"
+import type { AgentBaseConfig } from "./AgentConfigLoader"
 import { SubagentBuilder } from "./SubagentBuilder"
 
 const MAX_EMPTY_ASSISTANT_RETRIES = 3
@@ -242,8 +243,9 @@ export class SubagentRunner {
 	constructor(
 		private baseConfig: TaskConfig,
 		subagentName = "subagent",
+		agentConfig?: AgentBaseConfig,
 	) {
-		this.agent = new SubagentBuilder(baseConfig, subagentName)
+		this.agent = new SubagentBuilder(baseConfig, subagentName, agentConfig)
 		this.apiHandler = this.agent.getApiHandler()
 		this.allowedTools = this.agent.getAllowedTools()
 	}

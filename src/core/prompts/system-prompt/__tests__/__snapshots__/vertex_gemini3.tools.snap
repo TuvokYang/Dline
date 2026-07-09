@@ -15,7 +15,7 @@
         },
         "task_progress": {
           "type": "STRING",
-          "description": "Only report COMPLETED items (`- [x]`) with EXACT item text from the checklist — copy the text character-for-character, do NOT simplify or rephrase. The full checklist is shown in environment_details. The task_progress parameter MUST be included as a separate parameter in the tool, it must be separate from other parameters such as content, arguments, etc. (See 'UPDATING TASK PROGRESS' section for more details)"
+          "description": "Report task_progress as a separate parameter. Follow the UPDATING TASK PROGRESS section: use exact checklist text for completed items, and include full checklists only when starting or replacing a plan."
         }
       },
       "required": [
@@ -40,7 +40,7 @@
         },
         "task_progress": {
           "type": "STRING",
-          "description": "Only report COMPLETED items (`- [x]`) with EXACT item text from the checklist — copy the text character-for-character, do NOT simplify or rephrase. The full checklist is shown in environment_details. The task_progress parameter MUST be included as a separate parameter in the tool, it must be separate from other parameters such as content, arguments, etc. (See 'UPDATING TASK PROGRESS' section for more details)"
+          "description": "Report task_progress as a separate parameter. Follow the UPDATING TASK PROGRESS section: use exact checklist text for completed items, and include full checklists only when starting or replacing a plan."
         }
       },
       "required": [
@@ -69,7 +69,7 @@
         },
         "task_progress": {
           "type": "STRING",
-          "description": "Only report COMPLETED items (`- [x]`) with EXACT item text from the checklist — copy the text character-for-character, do NOT simplify or rephrase. The full checklist is shown in environment_details. The task_progress parameter MUST be included as a separate parameter in the tool, it must be separate from other parameters such as content, arguments, etc. (See 'UPDATING TASK PROGRESS' section for more details)"
+          "description": "Report task_progress as a separate parameter. Follow the UPDATING TASK PROGRESS section: use exact checklist text for completed items, and include full checklists only when starting or replacing a plan."
         }
       },
       "required": [
@@ -97,7 +97,7 @@
         },
         "task_progress": {
           "type": "STRING",
-          "description": "Only report COMPLETED items (`- [x]`) with EXACT item text from the checklist — copy the text character-for-character, do NOT simplify or rephrase. The full checklist is shown in environment_details. The task_progress parameter MUST be included as a separate parameter in the tool, it must be separate from other parameters such as content, arguments, etc. (See 'UPDATING TASK PROGRESS' section for more details)"
+          "description": "Report task_progress as a separate parameter. Follow the UPDATING TASK PROGRESS section: use exact checklist text for completed items, and include full checklists only when starting or replacing a plan."
         }
       },
       "required": [
@@ -126,7 +126,7 @@
         },
         "task_progress": {
           "type": "STRING",
-          "description": "Only report COMPLETED items (`- [x]`) with EXACT item text from the checklist — copy the text character-for-character, do NOT simplify or rephrase. The full checklist is shown in environment_details. The task_progress parameter MUST be included as a separate parameter in the tool, it must be separate from other parameters such as content, arguments, etc. (See 'UPDATING TASK PROGRESS' section for more details)"
+          "description": "Report task_progress as a separate parameter. Follow the UPDATING TASK PROGRESS section: use exact checklist text for completed items, and include full checklists only when starting or replacing a plan."
         }
       },
       "required": [
@@ -146,7 +146,7 @@
         },
         "task_progress": {
           "type": "STRING",
-          "description": "Only report COMPLETED items (`- [x]`) with EXACT item text from the checklist — copy the text character-for-character, do NOT simplify or rephrase. The full checklist is shown in environment_details. The task_progress parameter MUST be included as a separate parameter in the tool, it must be separate from other parameters such as content, arguments, etc. (See 'UPDATING TASK PROGRESS' section for more details)"
+          "description": "Report task_progress as a separate parameter. Follow the UPDATING TASK PROGRESS section: use exact checklist text for completed items, and include full checklists only when starting or replacing a plan."
         }
       },
       "required": [
@@ -170,7 +170,7 @@
         },
         "task_progress": {
           "type": "STRING",
-          "description": "Only report COMPLETED items (`- [x]`) with EXACT item text from the checklist — copy the text character-for-character, do NOT simplify or rephrase. The full checklist is shown in environment_details. The task_progress parameter MUST be included as a separate parameter in the tool, it must be separate from other parameters such as content, arguments, etc. (See 'UPDATING TASK PROGRESS' section for more details)"
+          "description": "Report task_progress as a separate parameter. Follow the UPDATING TASK PROGRESS section: use exact checklist text for completed items, and include full checklists only when starting or replacing a plan."
         }
       },
       "required": [
@@ -214,7 +214,7 @@
         },
         "task_progress": {
           "type": "STRING",
-          "description": "Only report COMPLETED items (`- [x]`) with EXACT item text from the checklist — copy the text character-for-character, do NOT simplify or rephrase. The full checklist is shown in environment_details. The task_progress parameter MUST be included as a separate parameter in the tool, it must be separate from other parameters such as content, arguments, etc. (See 'UPDATING TASK PROGRESS' section for more details)"
+          "description": "Report task_progress as a separate parameter. Follow the UPDATING TASK PROGRESS section: use exact checklist text for completed items, and include full checklists only when starting or replacing a plan."
         }
       },
       "required": [
@@ -323,7 +323,7 @@
         },
         "task_progress": {
           "type": "STRING",
-          "description": "Only report COMPLETED items (`- [x]`) with EXACT item text from the checklist — copy the text character-for-character, do NOT simplify or rephrase. The full checklist is shown in environment_details. The task_progress parameter MUST be included as a separate parameter in the tool, it must be separate from other parameters such as content, arguments, etc. (See 'UPDATING TASK PROGRESS' section for more details)"
+          "description": "Report task_progress as a separate parameter. Follow the UPDATING TASK PROGRESS section: use exact checklist text for completed items, and include full checklists only when starting or replacing a plan."
         }
       },
       "required": [
@@ -349,7 +349,7 @@
         },
         "task_progress": {
           "type": "STRING",
-          "description": "Only report COMPLETED items (`- [x]`) with EXACT item text from the checklist — copy the text character-for-character, do NOT simplify or rephrase. The full checklist is shown in environment_details. The task_progress parameter MUST be included as a separate parameter in the tool, it must be separate from other parameters such as content, arguments, etc. (See 'UPDATING TASK PROGRESS' section for more details)"
+          "description": "Report task_progress as a separate parameter. Follow the UPDATING TASK PROGRESS section: use exact checklist text for completed items, and include full checklists only when starting or replacing a plan."
         }
       },
       "required": [
@@ -365,6 +365,70 @@
       "type": "OBJECT",
       "properties": {},
       "required": []
+    }
+  },
+  {
+    "name": "load_mcp",
+    "description": "Load detailed read-only metadata for one named capability. The name parameter must match an advertised capability exactly. This tool does not discover capability lists, modify cached system prompts, refresh metadata, or execute the capability.",
+    "parameters": {
+      "type": "OBJECT",
+      "properties": {
+        "name": {
+          "type": "STRING",
+          "description": "The exact capability name to load."
+        }
+      },
+      "required": [
+        "name"
+      ]
+    }
+  },
+  {
+    "name": "load_skill",
+    "description": "Load detailed read-only metadata for one named capability. The name parameter must match an advertised capability exactly. This tool does not discover capability lists, modify cached system prompts, refresh metadata, or execute the capability.",
+    "parameters": {
+      "type": "OBJECT",
+      "properties": {
+        "name": {
+          "type": "STRING",
+          "description": "The exact capability name to load."
+        }
+      },
+      "required": [
+        "name"
+      ]
+    }
+  },
+  {
+    "name": "load_workflow",
+    "description": "Load detailed read-only metadata for one named capability. The name parameter must match an advertised capability exactly. This tool does not discover capability lists, modify cached system prompts, refresh metadata, or execute the capability.",
+    "parameters": {
+      "type": "OBJECT",
+      "properties": {
+        "name": {
+          "type": "STRING",
+          "description": "The exact capability name to load."
+        }
+      },
+      "required": [
+        "name"
+      ]
+    }
+  },
+  {
+    "name": "load_subagent",
+    "description": "Load detailed read-only metadata for one named capability. The name parameter must match an advertised capability exactly. This tool does not discover capability lists, modify cached system prompts, refresh metadata, or execute the capability.",
+    "parameters": {
+      "type": "OBJECT",
+      "properties": {
+        "name": {
+          "type": "STRING",
+          "description": "The exact capability name to load."
+        }
+      },
+      "required": [
+        "name"
+      ]
     }
   },
   {
@@ -387,7 +451,7 @@
         },
         "task_progress": {
           "type": "STRING",
-          "description": "Only report COMPLETED items (`- [x]`) with EXACT item text from the checklist — copy the text character-for-character, do NOT simplify or rephrase. The full checklist is shown in environment_details. The task_progress parameter MUST be included as a separate parameter in the tool, it must be separate from other parameters such as content, arguments, etc. (See 'UPDATING TASK PROGRESS' section for more details)"
+          "description": "Report task_progress as a separate parameter. Follow the UPDATING TASK PROGRESS section: use exact checklist text for completed items, and include full checklists only when starting or replacing a plan."
         }
       },
       "required": [
@@ -425,7 +489,7 @@
         },
         "task_progress": {
           "type": "STRING",
-          "description": "Only report COMPLETED items (`- [x]`) with EXACT item text from the checklist — copy the text character-for-character, do NOT simplify or rephrase. The full checklist is shown in environment_details. The task_progress parameter MUST be included as a separate parameter in the tool, it must be separate from other parameters such as content, arguments, etc. (See 'UPDATING TASK PROGRESS' section for more details)"
+          "description": "Report task_progress as a separate parameter. Follow the UPDATING TASK PROGRESS section: use exact checklist text for completed items, and include full checklists only when starting or replacing a plan."
         }
       },
       "required": [
@@ -464,7 +528,7 @@
         },
         "task_progress": {
           "type": "STRING",
-          "description": "Only report COMPLETED items (`- [x]`) with EXACT item text from the checklist — copy the text character-for-character, do NOT simplify or rephrase. The full checklist is shown in environment_details. The task_progress parameter MUST be included as a separate parameter in the tool, it must be separate from other parameters such as content, arguments, etc. (See 'UPDATING TASK PROGRESS' section for more details)"
+          "description": "Report task_progress as a separate parameter. Follow the UPDATING TASK PROGRESS section: use exact checklist text for completed items, and include full checklists only when starting or replacing a plan."
         }
       },
       "required": [
@@ -522,23 +586,31 @@
       "properties": {
         "prompt_1": {
           "type": "STRING",
-          "description": "First subagent prompt."
+          "description": "First subagent prompt. Must include <task> and <context> sections."
         },
         "prompt_2": {
           "type": "STRING",
-          "description": "Optional second subagent prompt."
+          "description": "Optional second subagent prompt. Must include <task> and <context> sections when provided."
         },
         "prompt_3": {
           "type": "STRING",
-          "description": "Optional third subagent prompt."
+          "description": "Optional third subagent prompt. Must include <task> and <context> sections when provided."
         },
         "prompt_4": {
           "type": "STRING",
-          "description": "Optional fourth subagent prompt."
+          "description": "Optional fourth subagent prompt. Must include <task> and <context> sections when provided."
         },
         "prompt_5": {
           "type": "STRING",
-          "description": "Optional fifth subagent prompt."
+          "description": "Optional fifth subagent prompt. Must include <task> and <context> sections when provided."
+        },
+        "background": {
+          "type": "STRING",
+          "description": "Optional boolean. Set true to run the batch in background. Defaults to false."
+        },
+        "timeout": {
+          "type": "STRING",
+          "description": "Optional positive integer timeout in seconds for each subagent. Defaults to 600."
         }
       },
       "required": [
@@ -562,7 +634,7 @@
         },
         "task_progress": {
           "type": "STRING",
-          "description": "Only report COMPLETED items (`- [x]`) with EXACT item text from the checklist — copy the text character-for-character, do NOT simplify or rephrase. The full checklist is shown in environment_details. The task_progress parameter MUST be included as a separate parameter in the tool, it must be separate from other parameters such as content, arguments, etc. (See 'UPDATING TASK PROGRESS' section for more details)"
+          "description": "Report task_progress as a separate parameter. Follow the UPDATING TASK PROGRESS section: use exact checklist text for completed items, and include full checklists only when starting or replacing a plan."
         }
       },
       "required": [
@@ -611,7 +683,7 @@
         },
         "task_progress": {
           "type": "STRING",
-          "description": "Only report COMPLETED items (`- [x]`) with EXACT item text from the checklist — copy the text character-for-character, do NOT simplify or rephrase. The full checklist is shown in environment_details. The task_progress parameter MUST be included as a separate parameter in the tool, it must be separate from other parameters such as content, arguments, etc. (See 'UPDATING TASK PROGRESS' section for more details)"
+          "description": "Report task_progress as a separate parameter. Follow the UPDATING TASK PROGRESS section: use exact checklist text for completed items, and include full checklists only when starting or replacing a plan."
         }
       },
       "required": [

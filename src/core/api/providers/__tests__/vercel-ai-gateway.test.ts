@@ -19,7 +19,10 @@ describe("VercelAIGatewayHandler", () => {
 		it("should return configured model and info when both are provided", () => {
 			const customModelInfo = {
 				...openRouterDefaultModelInfo,
-				maxTokens: 123456,
+				capabilities: {
+					...openRouterDefaultModelInfo.capabilities,
+					maxTokens: 123456,
+				},
 			}
 
 			const handler = new VercelAIGatewayHandler({
@@ -33,7 +36,9 @@ describe("VercelAIGatewayHandler", () => {
 
 			const result = handler.getModel()
 			result.id.should.equal("google/gemini-3.1-pro-preview")
-			result.info.should.deepEqual(customModelInfo)
+			result.info.capabilities?.maxTokens?.should.equal(123456)
+			result.info.description?.should.equal(customModelInfo.description)
+			result.info.pricing?.inputPrice?.should.equal(customModelInfo.pricing?.inputPrice)
 		})
 
 		it("should preserve configured model ID when model info is missing", () => {

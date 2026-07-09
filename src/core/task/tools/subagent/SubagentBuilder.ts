@@ -6,7 +6,6 @@ import type { SystemPromptContext } from "@core/prompts/system-prompt/types"
 import { ClineDefaultTool } from "@shared/tools"
 import type { TaskConfig } from "../types/TaskConfig"
 import type { AgentBaseConfig } from "./AgentConfigLoader"
-import { AgentConfigLoader } from "./AgentConfigLoader"
 
 export type AgentConfig = Partial<AgentBaseConfig>
 
@@ -41,10 +40,10 @@ export class SubagentBuilder {
 
 	constructor(
 		private readonly baseConfig: TaskConfig,
-		subagentName?: string,
+		_subagentName?: string,
+		agentConfig?: AgentBaseConfig,
 	) {
-		const subagentConfig = AgentConfigLoader.getInstance().getCachedConfig(subagentName)
-		this.agentConfig = subagentConfig ?? {}
+		this.agentConfig = agentConfig ?? {}
 		this.allowedTools = this.resolveAllowedTools(this.agentConfig.tools)
 
 		const apiConfiguration = this.baseConfig.services.stateManager.getApiConfiguration()
@@ -108,11 +107,20 @@ export class SubagentBuilder {
 		return profile.name
 	}
 
+	/**
+	 * Resolve allowed subagent tools from config and defaults.
+	 * @param configuredTools Optional YAML configured tools.
+	 * @returns De-duplicated tool allowlist with attempt_completion enforced.
+	 */
 	private resolveAllowedTools(configuredTools?: ClineDefaultTool[]): ClineDefaultTool[] {
 		const sourceTools = configuredTools && configuredTools.length > 0 ? configuredTools : SUBAGENT_DEFAULT_ALLOWED_TOOLS
 		return Array.from(new Set([...sourceTools, ClineDefaultTool.ATTEMPT]))
 	}
 
+	/**
+	 * Build an identity section for configured subagents.
+	 * @returns Agent identity prompt section or empty text.
+	 */
 	private buildAgentIdentitySystemPrefix(): string {
 		const name = this.agentConfig?.name?.trim()
 		const description = this.agentConfig?.description?.trim()

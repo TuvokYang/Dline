@@ -33,6 +33,11 @@ describe("load capability tool specs", () => {
 		}
 	})
 
+	it("does not classify subagent execution tools as static read-only tools", () => {
+		expect(READ_ONLY_TOOLS).not.toContain(ClineDefaultTool.USE_SUBAGENT)
+		expect(READ_ONLY_TOOLS).not.toContain(ClineDefaultTool.USE_SUBAGENTS)
+	})
+
 	it("uses stable schema with required name only", () => {
 		registerClineToolSets()
 		for (const tool of LOAD_TOOLS) {

@@ -1,6 +1,7 @@
 import { ModelFamily } from "@/shared/prompts"
 import { ClineDefaultTool } from "@/shared/tools"
 import { getPrompt } from "../../i18n"
+import { hasEnabledMcpServers } from "../components/mcp"
 import type { ClineToolSpec } from "../spec"
 
 const id = ClineDefaultTool.MCP_DOCS
@@ -10,7 +11,7 @@ const generic: ClineToolSpec = {
 	variant: ModelFamily.GENERIC,
 	name: "load_mcp_documentation",
 	description: getPrompt("loadMcpDocumentationTool", "description"),
-	contextRequirements: (context) => context.mcpHub !== undefined && context.mcpHub !== null,
+	contextRequirements: hasEnabledMcpServers,
 }
 
 export const load_mcp_documentation_variants = [generic]

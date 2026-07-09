@@ -46,7 +46,7 @@ describe("SapAiCoreHandler", () => {
 
 			const model = claude4Handler.getModel()
 			model.id.should.equal("anthropic--claude-4-sonnet")
-			model.info.should.have.property("supportsImages", true)
+			model.info.capabilities?.supportsImages?.should.equal(true)
 		})
 
 		it("should create proper user readable request with images", () => {
@@ -99,8 +99,8 @@ describe("SapAiCoreHandler", () => {
 
 				const model = testHandler.getModel()
 				model.id.should.equal(modelId)
-				model.info.should.have.property("maxTokens")
-				model.info.should.have.property("contextWindow")
+				model.info.capabilities?.maxTokens?.should.be.a.Number()
+				model.info.capabilities?.contextWindow?.should.be.a.Number()
 			})
 		})
 	})
@@ -110,7 +110,7 @@ describe("SapAiCoreHandler", () => {
 			const result = handler.getModel()
 			result.should.have.property("id")
 			result.should.have.property("info")
-			result.info.should.have.property("maxTokens")
+			result.info.capabilities?.maxTokens?.should.be.a.Number()
 		})
 
 		it("should return specified model when apiModelId is provided", () => {

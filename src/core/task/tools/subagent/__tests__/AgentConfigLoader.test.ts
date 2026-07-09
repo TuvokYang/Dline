@@ -9,6 +9,7 @@ import {
 	AgentConfigLoader,
 	parseAgentConfigFromYaml,
 	readAgentConfigsFromDisk,
+	resolveAgentConfig,
 } from "../AgentConfigLoader"
 
 async function createTempHomeDir(): Promise<string> {
@@ -141,6 +142,30 @@ Reviewer prompt`,
 		assert.equal(loader.getAllCachedConfigs().size, 2)
 	})
 
+	it("does not resolve disabled project subagents", async () => {
+		const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "agent-config-loader-cwd-"))
+		tempDirs.push(cwd)
+		const directoryPath = path.join(cwd, ".agents", "subagents")
+		const filePath = path.join(directoryPath, "disabled.yaml")
+		await fs.mkdir(directoryPath, { recursive: true })
+		await fs.writeFile(
+			filePath,
+			`---
+name: disabled-agent
+description: disabled agent
+tools: read_file
+profile: reviewer-profile
+---
+
+Reviewer prompt`,
+			"utf8",
+		)
+
+		const resolved = await resolveAgentConfig(cwd, "disabled-agent", { subagentToggles: { [filePath]: false } })
+
+		assert.equal(resolved, undefined)
+	})
+
 	it("does not register dynamic subagent tool names after loading configs", async () => {
 		const tempHome = await createTempHomeDir()
 		tempDirs.push(tempHome)
@@ -169,6 +194,9 @@ Reviewer prompt`,
 		assert.equal(loader.isDynamicSubagentTool("use_subagent_code_reviewer"), false)
 		assert.ok(getToolUseNames().includes(ClineDefaultTool.USE_SUBAGENT))
 		assert.ok(getToolUseNames().includes(ClineDefaultTool.USE_SUBAGENTS))
-		assert.equal(getToolUseNames().some((toolName) => toolName.startsWith("use_subagent_")), false)
+		assert.equal(
+			getToolUseNames().some((toolName) => toolName.startsWith("use_subagent_")),
+			false,
+		)
 	})
 })

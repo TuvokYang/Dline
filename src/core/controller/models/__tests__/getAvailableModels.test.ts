@@ -1,11 +1,11 @@
 /**
  * Unit tests for getAvailableModels handler.
  */
-import { afterEach, beforeEach, describe, it, vi } from "vitest"
 
 // sinon import removed: using vitest globals
 import { ModelRegistry } from "@core/model-registry/ModelRegistry"
 import { expect } from "chai"
+import { afterEach, beforeEach, describe, it, vi } from "vitest"
 import { getAvailableModels } from "../getAvailableModels"
 
 describe("getAvailableModels handler", () => {
@@ -57,7 +57,7 @@ describe("getAvailableModels handler", () => {
 		expect(response.providers?.[0].models?.[0].capabilities?.contextWindow).to.equal(256000)
 	})
 
-	it("should pass thinking_config when model has reasoning support", async () => {
+	it("should pass thinking config when model declares thinking metadata", async () => {
 		const mockRegistry = {
 			isInitialized: true,
 			getAllModels: vi.fn().mockReturnValue([
@@ -74,6 +74,9 @@ describe("getAvailableModels handler", () => {
 								supportsReasoning: true,
 								maxTokens: 65536,
 								contextWindow: 1048576,
+								thinking: {
+									maxBudget: 24576,
+								},
 							},
 						},
 					],
@@ -86,7 +89,7 @@ describe("getAvailableModels handler", () => {
 		const response = await getAvailableModels(controller)
 
 		const model = response.providers?.[0].models?.[0]
-		expect(model.capabilities?.thinking).to.not.be.undefined
+		expect(model.capabilities?.thinking?.maxBudget).to.equal(24576)
 	})
 
 	it("should initialize registry if not initialized", async () => {
@@ -177,7 +180,9 @@ describe("getAvailableModels handler", () => {
 								contextWindow: 128000,
 							},
 							description: "A model for testing",
-							currency: "USD",
+							pricing: {
+								currency: "USD",
+							},
 						},
 					],
 				},

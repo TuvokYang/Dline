@@ -56,4 +56,23 @@ describe("collectCapabilities", () => {
 			await fs.rm(cwd, { recursive: true, force: true })
 		}
 	})
+
+	it("excludes invalid subagent yaml from capabilities", async () => {
+		const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "dline-capabilities-"))
+		try {
+			const subagentDir = path.join(cwd, ".agents", "subagents")
+			await fs.mkdir(subagentDir, { recursive: true })
+			await fs.writeFile(
+				path.join(subagentDir, "invalid.yaml"),
+				"---\nname: invalid\ndescription: Missing body\ntools: []\n---\n",
+				"utf8",
+			)
+
+			const snapshot = await collectCapabilities({ cwd })
+
+			expect(snapshot.subagents).toEqual([])
+		} finally {
+			await fs.rm(cwd, { recursive: true, force: true })
+		}
+	})
 })

@@ -10,7 +10,7 @@ import {
 import type { GlobalInstructionsFile } from "@shared/remote-config/schema"
 import fs from "fs/promises"
 import * as path from "path"
-import { AgentConfigLoader } from "../subagent/AgentConfigLoader"
+import { type ResolveAgentConfigOptions, resolveAgentConfig } from "../subagent/AgentConfigLoader"
 import type { TaskConfig } from "../types/TaskConfig"
 
 interface WorkflowEntry {
@@ -20,6 +20,23 @@ interface WorkflowEntry {
 	source: LoadCapabilitySource
 	path: string
 	enabled: boolean
+}
+
+/**
+ * Build subagent config resolve options from current task state.
+ * @param config Runtime task configuration.
+ * @returns Local and global subagent toggle maps.
+ */
+function getResolveOptions(config: TaskConfig): ResolveAgentConfigOptions {
+	const stateManager = config.services.stateManager as unknown as {
+		getWorkspaceStateKey?: (key: string) => Record<string, boolean> | undefined
+		getGlobalSettingsKey?: (key: string) => Record<string, boolean> | boolean | string | undefined
+	}
+	return {
+		subagentToggles: stateManager.getWorkspaceStateKey?.("localSubagentsToggles") ?? {},
+		globalSubagentToggles:
+			(stateManager.getGlobalSettingsKey?.("globalSubagentsToggles") as Record<string, boolean> | undefined) ?? {},
+	}
 }
 
 /**
@@ -44,7 +61,7 @@ export class LoadCapabilityService {
 				case "workflow":
 					return this.loadWorkflow(name, config)
 				case "subagent":
-					return this.loadSubagent(name)
+					return this.loadSubagent(name, config)
 			}
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error)
@@ -168,25 +185,25 @@ export class LoadCapabilityService {
 	}
 
 	/**
-	 * Load subagent metadata from the current AgentConfigLoader cache.
+	 * Load subagent metadata from the unified subagent registry.
 	 *
 	 * @param name Exact subagent name.
+	 * @param config Runtime task configuration.
 	 * @returns Subagent load payload.
 	 */
-	private async loadSubagent(name: string): Promise<LoadCapabilityPayload> {
-		const loader = AgentConfigLoader.getInstance()
-		await loader.ready()
-		const subagent = loader.getCachedConfig(name)
-		if (!subagent) {
+	private async loadSubagent(name: string, config: TaskConfig): Promise<LoadCapabilityPayload> {
+		const resolved = await resolveAgentConfig(config.cwd, name, getResolveOptions(config))
+		if (!resolved) {
 			return createFailedPayload("subagent", name, `Unknown or disabled subagent '${name}'.`)
 		}
+		const subagent = resolved.config
 
 		return {
 			tool: "loadCapability",
 			kind: "subagent",
 			status: "completed",
 			name,
-			source: "workspace",
+			source: resolved.source,
 			enabled: true,
 			summary: `${subagent.name}: ${subagent.description}`,
 			details: [
@@ -197,7 +214,7 @@ export class LoadCapabilityService {
 				{ label: "Configured skills", value: subagent.skills ?? [] },
 				{
 					label: "Usage",
-					value: `Use use_subagents with subagent_name='${subagent.name}' when subtask execution is needed.`,
+					value: `Use use_subagent with subagent_name='${subagent.name}' for one focused named subagent task. Use use_subagents only for generic parallel subtasks without a named subagent.`,
 				},
 			],
 			body: subagent.systemPrompt,

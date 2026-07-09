@@ -4,10 +4,10 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod/v4"
 import {
-	DEFAULT_HOST,
-	DEFAULT_PORT,
 	collectFailures,
 	connectVitestUi,
+	DEFAULT_HOST,
+	DEFAULT_PORT,
 	filterFiles,
 	normalizeBaseUrl,
 	rerunWithScope,
@@ -15,10 +15,7 @@ import {
 	summarizeFiles,
 	waitForIdle,
 } from "./lib/client.mjs"
-
-function bin(name) {
-	return process.platform === "win32" ? `${name}.cmd` : name
-}
+import { createSpawnCommand } from "./lib/spawn-command.mjs"
 
 function sleep(ms) {
 	return new Promise((resolve) => setTimeout(resolve, ms))
@@ -57,10 +54,12 @@ async function ensureVitestUiServer() {
 	const args = ["vitest", "--ui", "--host", host, "--port", String(port), "--config", config]
 	console.error(`[vitest-ui-mcp] starting: npx ${args.join(" ")}`)
 
-	const child = spawn(bin("npx"), args, {
+	const spawnCommand = createSpawnCommand({ executable: "npx" })
+	const child = spawn(spawnCommand.file, args, {
 		cwd: process.cwd(),
 		env: process.env,
 		stdio: ["ignore", "pipe", "pipe"],
+		...spawnCommand.options,
 	})
 	child.stdout.on("data", (chunk) => process.stderr.write(chunk))
 	child.stderr.on("data", (chunk) => process.stderr.write(chunk))

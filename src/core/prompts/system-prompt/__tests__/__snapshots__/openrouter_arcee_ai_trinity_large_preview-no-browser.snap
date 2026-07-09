@@ -250,6 +250,42 @@ Usage:
 <load_mcp_documentation>
 </load_mcp_documentation>
 
+## load_mcp
+Description: Load detailed read-only metadata for one named capability. The name parameter must match an advertised capability exactly. This tool does not discover capability lists, modify cached system prompts, refresh metadata, or execute the capability.
+Parameters:
+- name: (required) The exact capability name to load.
+Usage:
+<load_mcp>
+<name>capability-name</name>
+</load_mcp>
+
+## load_skill
+Description: Load detailed read-only metadata for one named capability. The name parameter must match an advertised capability exactly. This tool does not discover capability lists, modify cached system prompts, refresh metadata, or execute the capability.
+Parameters:
+- name: (required) The exact capability name to load.
+Usage:
+<load_skill>
+<name>capability-name</name>
+</load_skill>
+
+## load_workflow
+Description: Load detailed read-only metadata for one named capability. The name parameter must match an advertised capability exactly. This tool does not discover capability lists, modify cached system prompts, refresh metadata, or execute the capability.
+Parameters:
+- name: (required) The exact capability name to load.
+Usage:
+<load_workflow>
+<name>capability-name</name>
+</load_workflow>
+
+## load_subagent
+Description: Load detailed read-only metadata for one named capability. The name parameter must match an advertised capability exactly. This tool does not discover capability lists, modify cached system prompts, refresh metadata, or execute the capability.
+Parameters:
+- name: (required) The exact capability name to load.
+Usage:
+<load_subagent>
+<name>capability-name</name>
+</load_subagent>
+
 ## find_references
 Description: Find all semantic references to a symbol at the given file position via the IDE's LSP. Returns file paths, line numbers, and context lines for each reference (definitions, imports, calls). This does NOT find occurrences in string literals, comments, or JSDoc. An empty result may mean the LSP does not support this language or file type, not that no references exist. Use this before renaming or refactoring to understand semantic impact. To search strings and comments, use search_files with regex. Only available in VSCode; other environments return an error suggesting search_files as a fallback.
 Parameters:
@@ -326,11 +362,13 @@ Usage:
 ## use_subagents
 Description: Run up to five focused in-process subagents in parallel. Each subagent gets its own prompt and returns a comprehensive research result with tool and token stats. Use this for broad exploration when reading many files would consume the main agent's context window. You do not need to launch multiple subagents every time; using one subagent is valid when it avoids unnecessary context usage for light discovery work.
 Parameters:
-- prompt_1: (required) First subagent prompt.
-- prompt_2: (optional) Optional second subagent prompt.
-- prompt_3: (optional) Optional third subagent prompt.
-- prompt_4: (optional) Optional fourth subagent prompt.
-- prompt_5: (optional) Optional fifth subagent prompt.
+- prompt_1: (required) First subagent prompt. Must include <task> and <context> sections.
+- prompt_2: (optional) Optional second subagent prompt. Must include <task> and <context> sections when provided.
+- prompt_3: (optional) Optional third subagent prompt. Must include <task> and <context> sections when provided.
+- prompt_4: (optional) Optional fourth subagent prompt. Must include <task> and <context> sections when provided.
+- prompt_5: (optional) Optional fifth subagent prompt. Must include <task> and <context> sections when provided.
+- background: (optional) Optional boolean. Set true to run the batch in background. Defaults to false.
+- timeout: (optional) Optional positive integer timeout in seconds for each subagent. Defaults to 600.
 Usage:
 <use_subagents>
 <prompt_1></prompt_1>
@@ -338,6 +376,8 @@ Usage:
 <prompt_3></prompt_3>
 <prompt_4></prompt_4>
 <prompt_5></prompt_5>
+<background></background>
+<timeout></timeout>
 </use_subagents>
 
 ## status_update

@@ -16,7 +16,6 @@ const TOOL_DESCRIPTIONS: Record<string, { description: string; isReadOnly: boole
 	[ClineDefaultTool.WEB_FETCH]: { description: "Fetch web content", isReadOnly: true },
 	[ClineDefaultTool.WEB_SEARCH]: { description: "Search the web", isReadOnly: true },
 	[ClineDefaultTool.USE_SKILL]: { description: "Load and activate a skill", isReadOnly: true },
-	[ClineDefaultTool.USE_SUBAGENTS]: { description: "Delegate to another subagent", isReadOnly: true },
 	[ClineDefaultTool.MCP_USE]: { description: "Use an MCP tool", isReadOnly: true },
 	[ClineDefaultTool.MCP_ACCESS]: { description: "Access an MCP resource", isReadOnly: true },
 	[ClineDefaultTool.MCP_DOCS]: { description: "Load MCP documentation", isReadOnly: true },

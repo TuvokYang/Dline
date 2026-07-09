@@ -20,6 +20,13 @@ interface CheckpointAddResult {
 	success: boolean
 }
 
+interface AddCheckpointFilesOptions {
+	git: SimpleGit
+	mode: "baseline" | "tracked" | "workspace-scan"
+	fileList?: string[]
+	taskId?: string
+}
+
 /**
  * GitOperations Class
  *
@@ -159,7 +166,7 @@ export class GitOperations {
 		const lfsPatterns = await getLfsPatterns(cwd)
 		await writeExcludesFile(gitPath, lfsPatterns, workspaceIgnoreContent || undefined)
 
-		const addFilesResult = await this.addCheckpointFiles(git, undefined, taskId)
+		const addFilesResult = await this.addCheckpointFiles({ git, mode: "baseline", taskId })
 		if (!addFilesResult.success) {
 			Logger.error("Failed to add at least one file(s) to checkpoints shadow git")
 			throw new Error("Failed to add at least one file(s) to checkpoints shadow git")
@@ -304,34 +311,42 @@ export class GitOperations {
 	 *  - LFS pattern updates fail
 	 *  - Nested git repo handling fails
 	 */
-	public async addCheckpointFiles(git: SimpleGit, fileList?: string[], taskId?: string): Promise<CheckpointAddResult> {
+	public async addCheckpointFiles(options: AddCheckpointFilesOptions): Promise<CheckpointAddResult> {
+		const { git, mode, fileList, taskId } = options
 		const startTime = performance.now()
+		if (mode === "tracked" && (!fileList || fileList.length === 0)) {
+			Logger.error(`[Task ${taskId}] tracked checkpoint add requires explicit files`)
+			return { success: false }
+		}
+		if ((mode === "baseline" || mode === "workspace-scan") && fileList && fileList.length > 0) {
+			Logger.error(`[Task ${taskId}] ${mode} checkpoint add must not receive explicit fileList`)
+			return { success: false }
+		}
 		try {
 			// Update exclude patterns before each commit
 			await this.renameNestedGitRepos(true, [], taskId)
-			Logger.info(`[Task ${taskId}] Starting checkpoint add operation...`)
+			Logger.info(`[Task ${taskId}] Starting checkpoint add operation (${mode})...`)
 
 			try {
-				if (fileList && fileList.length > 0) {
+				if (mode === "tracked") {
 					// Stage only specified files for per-file checkpointing.
-					// Use -f to force-add files that match info/exclude rules —
-					// these files were explicitly modified by tool handlers and
-					// should be checkpointed regardless of exclusion patterns.
-					await git.add(["-f", ...fileList])
-					Logger.debug(`[Task ${taskId}] Checkpoint add operation: staged ${fileList.length} file(s) with -f`)
+					// Use -f to force-add files that match info/exclude rules.
+					await git.add(["-f", ...fileList!])
+					Logger.debug(`[Task ${taskId}] Checkpoint add operation: staged ${fileList!.length} tracked file(s) with -f`)
 				} else {
-					// Backward compatible: stage all files.
-					// Any files with permissions errors will not be added,
-					// but the process will proceed and add the rest (--ignore-errors).
+					// Baseline and guarded workspace-scan modes intentionally stage the workspace.
 					await git.add([".", "--ignore-errors"])
+					Logger.debug(`[Task ${taskId}] Checkpoint add operation: staged workspace via ${mode}`)
 				}
 				const durationMs = Math.round(performance.now() - startTime)
 				Logger.debug(`Checkpoint add operation completed in ${durationMs}ms`)
 				return { success: true }
-			} catch (_error) {
+			} catch (error) {
+				Logger.error(`[Task ${taskId}] Checkpoint add operation failed (${mode}):`, error)
 				return { success: false }
 			}
-		} catch (_error) {
+		} catch (error) {
+			Logger.error(`[Task ${taskId}] Checkpoint add setup failed (${mode}):`, error)
 			return { success: false }
 		} finally {
 			await retryWithBackoff(() => this.renameNestedGitRepos(false, [], taskId), {
@@ -346,6 +361,43 @@ export class GitOperations {
 			}).catch((error) => {
 				Logger.error(`[Task ${taskId}] CheckpointTracker failed to re-enable nested git repos after retries:`, error)
 			})
+		}
+	}
+
+	/**
+	 * Check whether the shadow git worktree has unstaged or untracked changes.
+	 *
+	 * @param git SimpleGit instance configured for the shadow repository.
+	 * @param taskId Optional task ID for logging.
+	 * @returns true when workspace changes exist.
+	 */
+	public async hasWorkspaceChanges(git: SimpleGit, taskId?: string): Promise<boolean> {
+		try {
+			const output = await git.raw(["status", "--porcelain", "--untracked-files=all"])
+			const hasChanges = output.trim().length > 0
+			Logger.debug(`[Task ${taskId}] Workspace change preflight: ${hasChanges ? "changes detected" : "clean"}`)
+			return hasChanges
+		} catch (error) {
+			Logger.warn(`[Task ${taskId}] Workspace change preflight failed; assuming changes exist:`, error)
+			return true
+		}
+	}
+
+	/**
+	 * Check whether the shadow git index has staged changes ready to commit.
+	 *
+	 * @param git SimpleGit instance configured for the shadow repository.
+	 * @param taskId Optional task ID for logging.
+	 * @returns true when staged changes exist.
+	 */
+	public async hasStagedChanges(git: SimpleGit, taskId?: string): Promise<boolean> {
+		try {
+			await git.raw(["diff", "--cached", "--quiet"])
+			Logger.debug(`[Task ${taskId}] No staged checkpoint changes detected`)
+			return false
+		} catch {
+			Logger.debug(`[Task ${taskId}] Staged checkpoint changes detected`)
+			return true
 		}
 	}
 }

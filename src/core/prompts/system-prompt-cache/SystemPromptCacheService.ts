@@ -87,6 +87,7 @@ export class SystemPromptCacheService {
 		const context = await this.getContext(this.taskId)
 		const cached = context.systemPrompt?.frozen
 		if (cached) {
+			await this.restoreTools(input.promptContext, cached)
 			return cached
 		}
 		return this.refresh({ promptContext: input.promptContext, reason: "task_start" })
@@ -131,6 +132,24 @@ export class SystemPromptCacheService {
 			},
 		})
 		return frozen
+	}
+
+	/**
+	 * Rebuild native tool schemas when a cached prompt is reused.
+	 *
+	 * @param context Current prompt context used for tool gating.
+	 * @param cached Frozen prompt cache entry loaded from task context.
+	 */
+	private async restoreTools(context: SystemPromptContext, cached: FrozenSystemPromptCache): Promise<void> {
+		if (!cached.promptBuilder.nativeTools) {
+			this.lastTools = undefined
+			return
+		}
+		if (this.lastTools !== undefined) {
+			return
+		}
+		const built = await this.buildSystemPrompt(context)
+		this.lastTools = built.tools
 	}
 
 	/**

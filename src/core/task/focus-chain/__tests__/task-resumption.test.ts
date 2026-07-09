@@ -81,9 +81,8 @@ describe("FocusChainManager - Task Resumption", () => {
 			.catch(() => false)
 		expect(fileExists).toBe(true)
 
-		// Assert: TaskState loads whatever is in the file (example content in this case)
-		// The key point is that the file exists and is accessible, preventing EPERM errors
-		expect(taskState.currentFocusChainChecklist).not.toBeNull()
+		// Assert: New tasks create an accessible empty file but do not seed example checklist content
+		expect(taskState.currentFocusChainChecklist).toBeNull()
 
 		// Cleanup
 		await manager.dispose()

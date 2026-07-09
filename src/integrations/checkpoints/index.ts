@@ -209,6 +209,12 @@ export class TaskCheckpointManager implements ICheckpointManager {
 				// For attempt_completion, commit then update the completion_result message with the checkpoint hash
 				if (this.state.checkpointTracker) {
 					const commitHash = await this.state.checkpointTracker.commit()
+					if (!commitHash) {
+						Logger.debug(
+							`[TaskCheckpointManager] No file checkpoint hash for completion message in task ${this.task.taskId}; using chat checkpoint only`,
+						)
+						return
+					}
 
 					// If a completionMessageTs is provided, update that specific message with the checkpoint hash
 					if (completionMessageTs) {
@@ -599,8 +605,8 @@ export class TaskCheckpointManager implements ICheckpointManager {
 			}
 			const hash = message.lastCheckpointHash
 			if (!hash) {
-				Logger.error(
-					`[TaskCheckpointManager] No checkpoint hash found for completion message in task ${this.task.taskId}`,
+				Logger.debug(
+					`[TaskCheckpointManager] No file checkpoint hash found for completion message in task ${this.task.taskId}; treating as chat-only checkpoint`,
 				)
 				return false
 			}
