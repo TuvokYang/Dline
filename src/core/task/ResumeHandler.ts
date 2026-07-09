@@ -25,6 +25,8 @@ export interface ResumeContext {
 	controller: TaskController
 	messageStateHandler: MessageStateHandler
 	restoreHandler: RestoreHandler
+	/** Returns the latest snapshot from snapshot.json, with legacy UI fallback owned by Task. */
+	getLatestSnapshot?: () => TaskSnapshot | undefined
 	/** Callback to store a pending approval response for later use. */
 	setPendingApprovalResponse?: (resp: PendingApprovalResponse) => void
 	ask: (
@@ -59,10 +61,14 @@ export class ResumeHandler {
 	// ── Helpers ──
 
 	/**
-	 * Find the last state_snapshot message in clineMessages.
-	 * Returns undefined for old tasks that have no snapshot.
+	 * Find the latest task snapshot.
+	 * Prefer snapshot.json through the injected provider, then fall back to legacy
+	 * state_snapshot UI messages for old tasks.
 	 */
 	private findLatestSnapshot(): TaskSnapshot | undefined {
+		const snapshot = this.ctx.getLatestSnapshot?.()
+		if (snapshot) return snapshot
+
 		const msgs = this.ctx.messageStateHandler.clineMessages
 		let latest: { snapshot: TaskSnapshot; order: number; timestamp: number } | undefined
 

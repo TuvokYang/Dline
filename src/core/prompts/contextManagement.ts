@@ -12,7 +12,7 @@ export const summarizeTask = (focusChainSettings?: { enabled: boolean }, cwd?: s
 	const focusChainUsage = focusChainEnabled ? getPrompt("contextManagement", "summarizeFocusChainUsage") : ""
 	const focusChainExample = focusChainEnabled ? getPrompt("contextManagement", "summarizeFocusChainExample") : ""
 
-	return `${getPrompt("contextManagement", "summarizeMain", { CWD, MULTI_ROOT_HINT, focusChainParam, focusChainUsage, focusChainExample })}\n`
+	return `${getPrompt("contextManagement", "autoCompactMain", { CWD, MULTI_ROOT_HINT, focusChainParam, focusChainUsage, focusChainExample })}\n`
 }
 
 export const continuationPrompt = (summaryText: string) =>

@@ -258,10 +258,10 @@ export function useMessageHandlers(
 				case "utility":
 					switch (taskActiveAsk ?? clineAsk) {
 						case "condense":
-							await SlashServiceClient.condense(StringRequest.create({ value: lastMessage?.text }))
-							break
 						case "report_bug":
-							await SlashServiceClient.reportBug(StringRequest.create({ value: lastMessage?.text }))
+							await TaskServiceClient.askResponse(
+								createAskRequest("yesButtonClicked", inputValue, selectedImages, selectedFiles),
+							)
 							break
 					}
 					clearInputState()

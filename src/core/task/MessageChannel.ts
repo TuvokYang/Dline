@@ -76,7 +76,15 @@ export class MessageChannel {
 	}
 
 	private shouldMessageInvalidateAsk(message: ClineMessage): boolean {
-		return !(message.type === "say" && message.say === "state_snapshot")
+		if (message.type === "say" && message.say === "state_snapshot") {
+			return false
+		}
+
+		if (message.type === "say" && message.say === "user_feedback" && this.taskState.askResponse !== undefined) {
+			return false
+		}
+
+		return true
 	}
 
 	private isAskPromiseSuperseded(invalidationStartIndex: number): boolean {

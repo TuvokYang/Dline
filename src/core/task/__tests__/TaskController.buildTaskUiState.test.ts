@@ -190,7 +190,7 @@ describe("TaskController.buildTaskUiState", () => {
 		const uiState = tc.buildTaskUiState(snapshot)
 
 		assert.equal(uiState.phase, "awaiting_error_recovery")
-		assert.equal(uiState.inputEnabled, false)
+		assert.equal(uiState.inputEnabled, true)
 		assert.equal(uiState.cancelEnabled, false)
 		assert.equal(uiState.showFooter, true)
 		assert.equal(uiState.actions.length, 2)

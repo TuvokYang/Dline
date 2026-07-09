@@ -246,8 +246,9 @@ export class MessageStateHandler extends EventEmitter<MessageStateHandlerEvents>
 			return
 		}
 
-		// Set cross-store context before persisting
-		msg.conversationHistoryIndex = this.apiConversationHistory.length - 1
+		// Set cross-store context before persisting. Callers may provide an
+		// explicit index when replaying or responding to historical asks.
+		msg.conversationHistoryIndex = msg.conversationHistoryIndex ?? this.apiConversationHistory.length - 1
 		msg.conversationHistoryDeletedRange = this.taskState.conversationHistoryDeletedRange
 
 		// Persist via UIMessage store (cache + disk, Mutex-protected)
@@ -296,7 +297,7 @@ export class MessageStateHandler extends EventEmitter<MessageStateHandlerEvents>
 			return freshAll[existingIndex]
 		}
 
-		msg.conversationHistoryIndex = this.apiConversationHistory.length - 1
+		msg.conversationHistoryIndex = msg.conversationHistoryIndex ?? this.apiConversationHistory.length - 1
 		msg.conversationHistoryDeletedRange = this.taskState.conversationHistoryDeletedRange
 
 		// Find insertion point in ascending ts order
@@ -337,7 +338,7 @@ export class MessageStateHandler extends EventEmitter<MessageStateHandlerEvents>
 			msg.conversationHistoryIndex = all[existingIndex].conversationHistoryIndex
 			msg.conversationHistoryDeletedRange = all[existingIndex].conversationHistoryDeletedRange
 		} else {
-			msg.conversationHistoryIndex = this.apiConversationHistory.length - 1
+			msg.conversationHistoryIndex = msg.conversationHistoryIndex ?? this.apiConversationHistory.length - 1
 			msg.conversationHistoryDeletedRange = this.taskState.conversationHistoryDeletedRange
 		}
 

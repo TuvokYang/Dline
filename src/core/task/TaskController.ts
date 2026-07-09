@@ -305,7 +305,7 @@ export class TaskController {
 
 			return {
 				phase: "awaiting_error_recovery",
-				inputEnabled: snapshot.error.kind === "mistake_limit_reached",
+				inputEnabled: true,
 				cancelEnabled: false,
 				showFooter: true,
 				actions,

@@ -3,6 +3,7 @@ import { describe, it, vi } from "vitest"
 import type { ClineAssistantToolUseBlock, ClineStorageMessage } from "@/shared/messages"
 import type { ResumeContext } from "../ResumeHandler"
 import { ResumeHandler } from "../ResumeHandler"
+import { TaskPhase } from "../TaskPhase"
 
 /**
  * Tests for ResumeHandler — validates the new snapshot-aware resume path.
@@ -69,6 +70,49 @@ describe("ResumeHandler", () => {
 		const handler = new ResumeHandler(ctx)
 		const result = handler.detectPendingTools([])
 		assert.equal(result, undefined)
+	})
+
+	it("detectPendingTools reads snapshot json provider before legacy state_snapshot messages", () => {
+		const apiHistory = [
+			{ role: "user", content: [{ type: "text", text: "start" }] },
+			{
+				role: "assistant",
+				content: [
+					{
+						type: "tool_use",
+						id: "tool_snapshot_json",
+						call_id: "call_snapshot_json",
+						name: "read_file",
+						input: {},
+					},
+				],
+			},
+			{
+				role: "assistant",
+				content: [
+					{
+						type: "tool_use",
+						id: "tool_tail",
+						call_id: "call_tail",
+						name: "write_to_file",
+						input: {},
+					},
+				],
+			},
+		] satisfies ClineStorageMessage[]
+		const ctx = createMockContext({
+			getLatestSnapshot: () => ({ phase: TaskPhase.STREAMING, apiIndex: 1, timestamp: 300 }),
+			messageStateHandler: {
+				clineMessages: [],
+				apiConversationHistory: apiHistory,
+			} as unknown as ResumeContext["messageStateHandler"],
+		})
+
+		const handler = new ResumeHandler(ctx)
+		const result = handler.detectPendingTools(apiHistory)
+
+		assert.equal(result?.assistantIndex, 1)
+		assert.equal(result?.toolUseBlocks[0].id, "tool_snapshot_json")
 	})
 
 	it("detectPendingTools starts from snapshot apiIndex instead of the history tail", () => {

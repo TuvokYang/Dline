@@ -5,6 +5,8 @@ import { afterEach, describe, it, vi } from "vitest"
 import { BlockPhase } from "../BlockPhaseMachine"
 import type { MessageChannel } from "../MessageChannel"
 import { TaskController } from "../TaskController"
+import { TaskPhase } from "../TaskPhase"
+import type { TaskSnapshot } from "../TaskSnapshot"
 
 /**
  * Tests for Task.handleWebviewAskResponse — validates that conversational ask
@@ -15,6 +17,10 @@ import { TaskController } from "../TaskController"
  * for messageResponse, which cascades SKIPPED to subsequent conversational
  * tools and causes the task loop to deadlock.
  */
+
+type TaskSnapshotEmitter = {
+	emitStateSnapshot(snapshot: TaskSnapshot): Promise<void>
+}
 
 // ── Helpers ──
 
@@ -30,7 +36,7 @@ function createMockChannel(): MessageChannel {
 function createFakeTaskForHandleWebviewAskResponse(controller: TaskController, extra: Partial<Record<string, any>> = {}) {
 	return {
 		taskController: controller,
-		taskState: {},
+		taskState: { userMessageContent: [] },
 		// resolveAsk is called first in handleWebviewAskResponse
 		// postStateToWebview is called after transition
 		// emitStateSnapshot is passed to transition as callback
@@ -76,6 +82,88 @@ describe("Task.handleWebviewAskResponse", () => {
 	// Ensure cleanup between tests
 	afterEach(() => {
 		vi.restoreAllMocks()
+	})
+
+	it("emitStateSnapshot schedules snapshot json without writing state_snapshot ui messages", async () => {
+		const scheduledSnapshots: TaskSnapshot[] = []
+		const say = vi.fn(async () => 123)
+		const fakeTask = {
+			say,
+			snapshotPersistence: {
+				schedule: (snapshot: TaskSnapshot) => {
+					scheduledSnapshots.push(snapshot)
+				},
+			},
+		}
+		const snapshot: TaskSnapshot = { phase: TaskPhase.STREAMING, apiIndex: 2, timestamp: 300 }
+
+		await (Task.prototype as unknown as TaskSnapshotEmitter).emitStateSnapshot.call(fakeTask, snapshot)
+
+		assert.equal(scheduledSnapshots.length, 1)
+		assert.deepEqual(scheduledSnapshots[0], snapshot)
+		assert.equal(say.mock.calls.length, 0)
+	})
+
+	it("emitStateSnapshot immediately exposes OpenAI auth api_req_failed Retry button before deferred snapshot json write", async () => {
+		const scheduledSnapshots: TaskSnapshot[] = []
+		const fakeTask = {
+			snapshotPersistence: {
+				schedule: (snapshot: TaskSnapshot) => {
+					scheduledSnapshots.push(snapshot)
+				},
+			},
+		}
+		const snapshot: TaskSnapshot = {
+			phase: TaskPhase.AWAITING_APPROVAL,
+			apiIndex: 2,
+			timestamp: 300,
+			awaiting: { kind: "error_recovery", taskAsk: "api_req_failed", messageTs: 123 },
+			error: {
+				kind: "api_req_failed",
+				sourceAsk: "api_req_failed",
+				message: '{"message":"OpenAI API key or Azure Identity Authentication is required","providerId":"openai"}',
+				actions: ["retry", "start_new_task"],
+				retryable: true,
+				processAllowed: false,
+				messageTs: 123,
+			},
+		}
+
+		await (Task.prototype as unknown as TaskSnapshotEmitter).emitStateSnapshot.call(fakeTask, snapshot)
+		const uiState = new TaskController(createMockChannel()).buildTaskUiState(
+			(fakeTask as { latestTaskSnapshot?: TaskSnapshot }).latestTaskSnapshot ?? null,
+		)
+
+		assert.deepEqual((fakeTask as { latestTaskSnapshot?: TaskSnapshot }).latestTaskSnapshot, snapshot)
+		assert.equal(scheduledSnapshots.length, 1)
+		assert.equal(uiState.phase, "awaiting_error_recovery")
+		assert.equal(uiState.activeAsk, "api_req_failed")
+		assert.equal(uiState.message, snapshot.error?.message)
+		assert.equal(uiState.actions[0].type, "retry")
+		assert.equal(uiState.actions[0].label, "Retry")
+	})
+
+	it("messageResponse with running feedback appends content for the next model turn", async () => {
+		const channel = createMockChannel()
+		const controller = new TaskController(channel)
+		const userMessageContent: Array<{ type: "text"; text: string }> = []
+		const say = vi.fn(async (_type: string, _text?: string) => 123)
+		const fakeTask = createFakeTaskForHandleWebviewAskResponse(controller, {
+			say,
+			taskState: { userMessageContent },
+			checkpointManager: { saveCheckpoint: vi.fn(async () => {}) },
+		})
+
+		await Task.prototype.handleWebviewAskResponse.call(
+			fakeTask,
+			"messageResponse" as ClineAskResponse,
+			"please use the new context",
+		)
+
+		assert.equal(say.mock.calls[0][0], "user_feedback")
+		assert.equal(userMessageContent.length, 1)
+		assert.equal(userMessageContent[0].type, "text")
+		assert.match(userMessageContent[0].text, /<feedback>\nplease use the new context\n<\/feedback>/)
 	})
 
 	it("messageResponse with feedback text records visible feedback before returning without waiting for checkpoint", async () => {

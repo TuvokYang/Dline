@@ -204,8 +204,7 @@ describe("useMessageHandlers taskUiState routing", () => {
 		expect(chatState.setInputValue).toHaveBeenCalledWith("")
 	})
 
-	it("executes condense utility action using taskUiState when raw clineAsk is missing", async () => {
-		grpcMocks.slashCondense.mockResolvedValue({})
+	it("sends condense utility input using taskUiState when raw clineAsk is missing", async () => {
 		const taskUiState: TaskUiState = {
 			phase: "awaiting_input",
 			inputEnabled: true,
@@ -216,15 +215,29 @@ describe("useMessageHandlers taskUiState routing", () => {
 			reason: "utility-awaiting:condense",
 		}
 		const lastMessage = createSnapshotMessage(taskUiState)
-		const chatState = createChatState({ taskUiState, lastMessage, clineAsk: undefined })
+		const chatState = createChatState({
+			inputValue: "压缩时保留最近的失败上下文",
+			selectedImages: ["condense-image"],
+			selectedFiles: ["condense-file"],
+			taskUiState,
+			lastMessage,
+			clineAsk: undefined,
+		})
 		const { result } = renderHook(() => useMessageHandlers([lastMessage], chatState))
 
 		await act(async () => {
 			await result.current.executeTaskUiAction(taskUiState.actions[0])
 		})
 
-		expect(grpcMocks.slashCondense).toHaveBeenCalledTimes(1)
-		expect(grpcMocks.taskAskResponse).not.toHaveBeenCalled()
+		expect(grpcMocks.taskAskResponse).toHaveBeenCalledTimes(1)
+		expect(grpcMocks.taskAskResponse.mock.calls[0]?.[0]).toMatchObject({
+			responseType: "yesButtonClicked",
+			text: "压缩时保留最近的失败上下文",
+			images: ["condense-image"],
+			files: ["condense-file"],
+		})
+		expect(grpcMocks.slashCondense).not.toHaveBeenCalled()
+		expect(chatState.setInputValue).toHaveBeenCalledWith("")
 	})
 
 	it("sends resume action input using taskUiState when resume ask row is hidden", async () => {
