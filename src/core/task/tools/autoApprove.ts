@@ -51,6 +51,7 @@ export class AutoApprove {
 				case ClineDefaultTool.FILE_EDIT:
 				case ClineDefaultTool.APPLY_PATCH:
 				case ClineDefaultTool.BASH:
+				case ClineDefaultTool.USE_SUBAGENT:
 				case ClineDefaultTool.USE_SUBAGENTS:
 					return [true, true]
 
@@ -74,6 +75,7 @@ export class AutoApprove {
 				case ClineDefaultTool.FILE_EDIT:
 				case ClineDefaultTool.APPLY_PATCH:
 				case ClineDefaultTool.BASH:
+				case ClineDefaultTool.USE_SUBAGENT:
 				case ClineDefaultTool.USE_SUBAGENTS:
 					return [true, true]
 				case ClineDefaultTool.BROWSER:
@@ -92,6 +94,7 @@ export class AutoApprove {
 			case ClineDefaultTool.LIST_FILES:
 			case ClineDefaultTool.LIST_CODE_DEF:
 			case ClineDefaultTool.SEARCH:
+			case ClineDefaultTool.USE_SUBAGENT:
 			case ClineDefaultTool.USE_SUBAGENTS:
 				return [autoApprovalSettings.actions.readFiles, autoApprovalSettings.actions.readFilesExternally ?? false]
 			case ClineDefaultTool.NEW_RULE:

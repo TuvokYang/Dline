@@ -10,7 +10,7 @@ import { AgentConfigLoader } from "../../subagent/AgentConfigLoader"
 import { SubagentRunner } from "../../subagent/SubagentRunner"
 import type { TaskConfig } from "../../types/TaskConfig"
 import { createUIHelpers } from "../../types/UIHelpers"
-import { UseSubagentsToolHandler } from "../SubagentToolHandler"
+import { UseSubagentToolHandler, UseSubagentsToolHandler } from "../SubagentToolHandler"
 
 // Mock SubagentBuilder to avoid buildApiHandler (requires API profile config)
 vi.mock("../../subagent/SubagentBuilder", () => ({
@@ -130,7 +130,7 @@ describe("SubagentToolHandler", () => {
 			ts: Date.now(),
 		})
 
-		assert.equal(result, "missing")
+		assert.ok(String(result).includes("Missing required parameter: prompt_1"))
 		assert.equal(taskState.consecutiveMistakeCount, 1)
 		expect(callbacks.sayAndCreateMissingParamError)
 	})
@@ -225,8 +225,8 @@ describe("SubagentToolHandler", () => {
 			type: "tool_use",
 			name: ClineDefaultTool.USE_SUBAGENTS,
 			params: {
-				prompt_1: "one",
-				prompt_2: "two",
+				prompt_1: "<task>one</task><context>ctx one</context>",
+				prompt_2: "<task>two</task><context>ctx two</context>",
 			},
 			partial: false,
 			ts: Date.now(),
@@ -263,7 +263,7 @@ describe("SubagentToolHandler", () => {
 			type: "tool_use",
 			name: ClineDefaultTool.USE_SUBAGENTS,
 			params: {
-				prompt_1: "one",
+				prompt_1: "<task>one</task><context>ctx one</context>",
 			},
 			partial: false,
 			ts: Date.now(),
@@ -322,9 +322,9 @@ describe("SubagentToolHandler", () => {
 			type: "tool_use",
 			name: ClineDefaultTool.USE_SUBAGENTS,
 			params: {
-				prompt_1: "one",
-				prompt_2: "two",
-				prompt_3: "three",
+				prompt_1: "<task>one</task><context>ctx one</context>",
+				prompt_2: "<task>two</task><context>ctx two</context>",
+				prompt_3: "<task>three</task><context>ctx three</context>",
 			},
 			partial: false,
 			ts: Date.now(),
@@ -395,8 +395,8 @@ describe("SubagentToolHandler", () => {
 			type: "tool_use",
 			name: ClineDefaultTool.USE_SUBAGENTS,
 			params: {
-				prompt_1: "succeed",
-				prompt_2: "fail",
+				prompt_1: "<task>succeed</task><context>ctx succeed</context>",
+				prompt_2: "<task>fail</task><context>ctx fail</context>",
 			},
 			partial: false,
 			ts: Date.now(),
@@ -408,18 +408,16 @@ describe("SubagentToolHandler", () => {
 		assert.ok((result as string).includes("boom"))
 	})
 
-	it("runs configured subagent tools using the prompt parameter", async () => {
+	it("runs stable use_subagent with selected YAML subagent", async () => {
 		const { config } = createConfig({ autoApproveSafe: true, autoApproveAll: true })
-		const handler = new UseSubagentsToolHandler()
-		const dynamicToolName = "use_subagent_code_reviewer"
+		const handler = new UseSubagentToolHandler()
 		vi.spyOn(AgentConfigLoader, "getInstance").mockReturnValue({
-			resolveSubagentNameForTool: (toolName: string) => (toolName === dynamicToolName ? "code-reviewer" : undefined),
-			getCachedConfig: () => undefined,
+			getCachedConfig: () => ({ name: "code-reviewer", description: "reviewer", tools: [], systemPrompt: "Prompt" }),
 		} as unknown as AgentConfigLoader)
 
 		const runStub = vi.spyOn(SubagentRunner.prototype, "run").mockResolvedValue({
 			status: "completed",
-			result: "dynamic done",
+			result: "stable done",
 			stats: {
 				toolCalls: 1,
 				inputTokens: 2,
@@ -436,42 +434,49 @@ describe("SubagentToolHandler", () => {
 
 		const result = await handler.execute(config, {
 			type: "tool_use",
-			name: dynamicToolName as ClineDefaultTool,
-			params: { prompt: "review this PR" },
+			name: ClineDefaultTool.USE_SUBAGENT,
+			params: { subagent_name: "code-reviewer", task: "review this PR", content: "check quality" },
 			partial: false,
 			ts: Date.now(),
 		})
 
-		assert.match(String(result), /dynamic done/)
+		assert.match(String(result), /stable done/)
 		expect(runStub)
-		assert.equal(runStub.mock.calls[0][0], "review this PR")
+		assert.match(runStub.mock.calls[0][0], /<task>\s*review this PR\s*<\/task>/)
 	})
 
-	it("requires prompt for configured subagent tools", async () => {
-		const { config, callbacks, taskState } = createConfig()
-		const handler = new UseSubagentsToolHandler()
-		const dynamicToolName = "use_subagent_code_reviewer"
+	it("starts stable use_subagent background job", async () => {
+		const { config } = createConfig({ autoApproveSafe: true, autoApproveAll: true })
+		const handler = new UseSubagentToolHandler()
 		vi.spyOn(AgentConfigLoader, "getInstance").mockReturnValue({
-			resolveSubagentNameForTool: (toolName: string) => (toolName === dynamicToolName ? "code-reviewer" : undefined),
-			getCachedConfig: () => undefined,
+			getCachedConfig: () => ({ name: "code-reviewer", description: "reviewer", tools: [], systemPrompt: "Prompt" }),
 		} as unknown as AgentConfigLoader)
+		vi.spyOn(SubagentRunner.prototype, "run").mockResolvedValue({
+			status: "completed",
+			result: "background done",
+			stats: {
+				toolCalls: 0,
+				inputTokens: 0,
+				outputTokens: 0,
+				cacheWriteTokens: 0,
+				cacheReadTokens: 0,
+				totalCost: 0,
+				currency: "USD",
+				contextTokens: 0,
+				contextWindow: 200000,
+				contextUsagePercentage: 0,
+			},
+		})
 
 		const result = await handler.execute(config, {
 			type: "tool_use",
-			name: dynamicToolName as ClineDefaultTool,
-			params: {},
+			name: ClineDefaultTool.USE_SUBAGENT,
+			params: { subagent_name: "code-reviewer", task: "review", content: "ctx", background: "true" },
 			partial: false,
 			ts: Date.now(),
 		})
 
-		assert.equal(result, "missing")
-		assert.equal(taskState.consecutiveMistakeCount, 1)
-		vitestExpect(callbacks.sayAndCreateMissingParamError).toHaveBeenCalledWith(
-			ClineDefaultTool.USE_SUBAGENTS,
-			"prompt",
-			undefined,
-			vitestExpect.any(Number),
-		)
+		assert.match(String(result), /Started background subagent job: subagent_/)
 	})
 
 	it("replaces partial message when subagents are disabled with prompts in payload", async () => {
@@ -525,7 +530,13 @@ describe("SubagentToolHandler", () => {
 		const result = await handler.execute(config, {
 			type: "tool_use",
 			name: ClineDefaultTool.USE_SUBAGENTS,
-			params: { prompt_1: "1", prompt_2: "2", prompt_3: "3", prompt_4: "4", prompt_5: "5" } as any,
+			params: {
+				prompt_1: "<task>1</task><context>ctx 1</context>",
+				prompt_2: "<task>2</task><context>ctx 2</context>",
+				prompt_3: "<task>3</task><context>ctx 3</context>",
+				prompt_4: "<task>4</task><context>ctx 4</context>",
+				prompt_5: "<task>5</task><context>ctx 5</context>",
+			},
 			partial: false,
 			ts: blockTs,
 		})

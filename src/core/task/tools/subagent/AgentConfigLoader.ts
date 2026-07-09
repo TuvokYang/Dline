@@ -1,15 +1,13 @@
 import { parseYamlFrontmatter } from "@core/context/instructions/user-instructions/frontmatter"
 import { Logger } from "@shared/services/Logger"
-import { ClineDefaultTool, setDynamicToolUseNames } from "@shared/tools"
+import { ClineDefaultTool } from "@shared/tools"
 import chokidar, { type FSWatcher } from "chokidar"
 import fs from "fs/promises"
 import * as path from "path"
 import { z } from "zod"
 import { getDlineSubagentsDirectoryPath } from "@/core/storage/disk"
-import { buildSubagentToolName } from "./SubagentToolName"
 
 export const AGENTS_CONFIG_DIRECTORY_NAME = "subagents"
-const SUBAGENT_DYNAMIC_TOOL_NAMESPACE = "subagent"
 
 const AgentBaseConfigSchema = z.object({
 	name: z.string().trim().min(1),
@@ -123,8 +121,6 @@ export class AgentConfigLoader {
 	private readonly initialLoadPromise: Promise<void>
 	private watcher?: FSWatcher
 	private cachedConfigs = new Map<string, AgentBaseConfig>()
-	private cachedAgentToolNames = new Map<string, string>()
-	private cachedToolNameToAgentName = new Map<string, string>()
 	private listeners = new Set<AgentConfigChangeListener>()
 
 	private constructor(dirPath: string) {
@@ -167,30 +163,20 @@ export class AgentConfigLoader {
 	}
 
 	public getAllCachedConfigsWithToolNames(): Array<{ toolName: string; config: AgentBaseConfig }> {
-		const result: Array<{ toolName: string; config: AgentBaseConfig }> = []
-		for (const [normalizedName, config] of this.cachedConfigs.entries()) {
-			const toolName = this.cachedAgentToolNames.get(normalizedName)
-			if (toolName) result.push({ toolName, config })
-		}
-		return result
+		return []
 	}
 
-	public resolveSubagentNameForTool(toolName?: string): string | undefined {
-		if (!toolName?.trim()) return undefined
-		const normalizedName = this.cachedToolNameToAgentName.get(toolName.trim())
-		if (!normalizedName) return undefined
-		return this.cachedConfigs.get(normalizedName)?.name
+	public resolveSubagentNameForTool(_toolName?: string): string | undefined {
+		return undefined
 	}
 
-	public isDynamicSubagentTool(toolName?: string): boolean {
-		if (!toolName?.trim()) return false
-		return this.cachedToolNameToAgentName.has(toolName.trim())
+	public isDynamicSubagentTool(_toolName?: string): boolean {
+		return false
 	}
 
 	public async load(): Promise<ReadonlyMap<string, AgentBaseConfig>> {
 		const configs = await readAgentConfigsFromDisk(this.directoryPath)
 		this.cachedConfigs = configs
-		this.rebuildDynamicToolMappings()
 		Logger.debug(`[AgentConfigLoader] Loaded ${configs.size} agent config(s) from disk.`)
 		await this.ensureReadmeExists()
 		return this.getAllCachedConfigs()
@@ -270,28 +256,6 @@ export class AgentConfigLoader {
 		for (const listener of this.listeners) listener(new Map(configs), error)
 	}
 
-	private rebuildDynamicToolMappings(): void {
-		const sortedConfigs = Array.from(this.cachedConfigs.entries()).sort((a, b) => a[0].localeCompare(b[0]))
-		const usedToolNames = new Set<string>()
-		const agentToolNames = new Map<string, string>()
-		const toolNameToAgentName = new Map<string, string>()
-		for (const [normalizedName, config] of sortedConfigs) {
-			const baseName = buildSubagentToolName(config.name)
-			let candidate = baseName
-			let suffix = 2
-			while (usedToolNames.has(candidate)) {
-				const suffixText = `_${suffix++}`
-				const maxBaseLength = Math.max(1, 64 - suffixText.length)
-				candidate = `${baseName.slice(0, maxBaseLength)}${suffixText}`
-			}
-			usedToolNames.add(candidate)
-			agentToolNames.set(normalizedName, candidate)
-			toolNameToAgentName.set(candidate, normalizedName)
-		}
-		this.cachedAgentToolNames = agentToolNames
-		this.cachedToolNameToAgentName = toolNameToAgentName
-		setDynamicToolUseNames(SUBAGENT_DYNAMIC_TOOL_NAMESPACE, Array.from(toolNameToAgentName.keys()))
-	}
 }
 
 const SUBAGENT_README_CONTENT = `# Dline Subagents

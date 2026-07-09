@@ -142,6 +142,7 @@ function toolNameToAskType(toolName: string): ClineAsk {
 		case "use_mcp_tool":
 		case "access_mcp_resource":
 			return "use_mcp_server"
+		case "use_subagent":
 		case "use_subagents":
 			return "use_subagents"
 		case "focus_chain_change":

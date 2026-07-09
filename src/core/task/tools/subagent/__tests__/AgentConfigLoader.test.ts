@@ -141,7 +141,7 @@ Reviewer prompt`,
 		assert.equal(loader.getAllCachedConfigs().size, 2)
 	})
 
-	it("creates dynamic subagent tool mappings after loading configs", async () => {
+	it("does not register dynamic subagent tool names after loading configs", async () => {
 		const tempHome = await createTempHomeDir()
 		tempDirs.push(tempHome)
 
@@ -163,11 +163,12 @@ Reviewer prompt`,
 		const loader = AgentConfigLoader.getInstance(directoryPath)
 		await loader.load()
 
-		const withToolNames = loader.getAllCachedConfigsWithToolNames()
-		assert.equal(withToolNames.length, 1)
-		assert.equal(withToolNames[0].config.name, "code reviewer")
-		assert.equal(loader.resolveSubagentNameForTool(withToolNames[0].toolName), "code reviewer")
-		assert.equal(loader.isDynamicSubagentTool(withToolNames[0].toolName), true)
-		assert.ok(getToolUseNames().includes(withToolNames[0].toolName))
+		assert.equal(loader.getCachedConfig("code reviewer")?.name, "code reviewer")
+		assert.deepEqual(loader.getAllCachedConfigsWithToolNames(), [])
+		assert.equal(loader.resolveSubagentNameForTool("use_subagent_code_reviewer"), undefined)
+		assert.equal(loader.isDynamicSubagentTool("use_subagent_code_reviewer"), false)
+		assert.ok(getToolUseNames().includes(ClineDefaultTool.USE_SUBAGENT))
+		assert.ok(getToolUseNames().includes(ClineDefaultTool.USE_SUBAGENTS))
+		assert.equal(getToolUseNames().some((toolName) => toolName.startsWith("use_subagent_")), false)
 	})
 })

@@ -10,6 +10,7 @@ import { ClineFeatureSetting } from "./ClineFeatureSetting"
 import { ClineRulesToggles } from "./cline-rules"
 import { FocusChainSettings } from "./FocusChainSettings"
 import { HistoryItem } from "./HistoryItem"
+import type { LoadCapabilityPayload } from "./load-capabilities"
 import { McpDisplayMode } from "./McpDisplayMode"
 import { ClineMessageModelInfo } from "./messages"
 import { OnboardingModelGroup } from "./proto/dline/state"
@@ -323,6 +324,7 @@ export interface ClineSayTool {
 		| "webSearch"
 		| "summarizeTask"
 		| "useSkill"
+		| "loadCapability"
 		| "findReferences"
 		| "renameSymbol"
 		| "replaceText"
@@ -368,6 +370,8 @@ export interface ClineSayTool {
 	count?: number
 	/** Whether the operation is a dry-run preview. */
 	dryRun?: boolean
+	/** Structured payload for load_mcp/load_skill/load_workflow/load_subagent rendering. */
+	loadCapability?: LoadCapabilityPayload
 }
 
 export interface ClineSayHook {
@@ -423,7 +427,9 @@ export interface ClineSayGenerateExplanation {
 	error?: string
 }
 
-export type SubagentExecutionStatus = "pending" | "running" | "completed" | "failed"
+export type SubagentExecutionStatus = "pending" | "running" | "completed" | "failed" | "timeout" | "cancelled"
+
+export type SubagentInjectionState = "pending" | "injected" | "consumed"
 
 export interface SubagentStatusItem {
 	index: number
@@ -437,13 +443,22 @@ export interface SubagentStatusItem {
 	contextTokens: number
 	contextWindow: number
 	contextUsagePercentage: number
+	jobId?: string
+	subagentName?: string
+	task?: string
+	background?: boolean
+	timeoutSeconds?: number
+	startedAt?: number
+	finishedAt?: number
+	injectionState?: SubagentInjectionState
 	latestToolCall?: string
 	result?: string
 	error?: string
 }
 
 export interface ClineSaySubagentStatus {
-	status: "running" | "completed" | "failed"
+	kind?: "single" | "batch"
+	status: SubagentExecutionStatus
 	total: number
 	completed: number
 	successes: number
@@ -455,6 +470,11 @@ export interface ClineSaySubagentStatus {
 	maxContextTokens: number
 	maxContextUsagePercentage: number
 	items: SubagentStatusItem[]
+	jobId?: string
+	batchJobId?: string
+	background?: boolean
+	timeoutSeconds?: number
+	injectionState?: SubagentInjectionState
 }
 
 export type BrowserActionResult = {
@@ -474,6 +494,12 @@ export interface ClineAskUseMcpServer {
 
 export interface ClineAskUseSubagents {
 	prompts: string[]
+	kind?: "single" | "batch"
+	subagentName?: string
+	task?: string
+	content?: string
+	background?: boolean
+	timeoutSeconds?: number
 	error?: string
 	message?: string
 }

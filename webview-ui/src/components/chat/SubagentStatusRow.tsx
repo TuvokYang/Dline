@@ -16,7 +16,6 @@ import {
 	NetworkIcon,
 } from "lucide-react"
 import { useEffect, useMemo, useRef, useState } from "react"
-import { Button } from "@/components/ui/button"
 import MarkdownBlock from "../common/MarkdownBlock"
 
 interface SubagentStatusRowProps {
@@ -26,8 +25,8 @@ interface SubagentStatusRowProps {
 	onCancelCommand?: () => void
 }
 
-type DisplayStatus = SubagentExecutionStatus | "cancelled"
-type SubagentRowStatus = "pending" | "running" | "completed" | "failed"
+type DisplayStatus = SubagentExecutionStatus
+type SubagentRowStatus = SubagentExecutionStatus
 
 interface SubagentRowData {
 	status: SubagentRowStatus
@@ -48,6 +47,8 @@ const statusIcon = (status: DisplayStatus) => {
 			return <CheckIcon className="size-2 text-success shrink-0 mt-[1px]" />
 		case "failed":
 			return <CircleXIcon className="size-2 text-error shrink-0 mt-[1px]" />
+		case "timeout":
+			return <CircleXIcon className="size-2 text-warning shrink-0 mt-[1px]" />
 		case "cancelled":
 			return <CircleSlashIcon className="size-2 text-foreground shrink-0 mt-[1px]" />
 		default:
@@ -232,6 +233,13 @@ export default function SubagentStatusRow({ message, isLast, lastModifiedMessage
 	const singular = data.items.length === 1
 	const title = singular ? "Dline wants to use a subagent:" : "Dline wants to use subagents:"
 	const isPromptConstructionRow = message.ask === "use_subagents" || message.say === "use_subagents"
+	const statusSummary = data.items.some((entry) => entry.background)
+		? "Running in background"
+		: data.status === "timeout"
+			? "Timed out"
+			: data.status === "cancelled"
+				? "Cancelled"
+				: undefined
 	const toggleItem = (index: number) => {
 		setExpandedItems((prev) => ({
 			...prev,
@@ -250,17 +258,17 @@ export default function SubagentStatusRow({ message, isLast, lastModifiedMessage
 			<div className="flex items-center gap-2.5 mb-3">
 				<NetworkIcon className="size-2 text-foreground" />
 				<span className="font-bold text-foreground">{title}</span>
+				{statusSummary && <span className="text-[11px] opacity-70">{statusSummary}</span>}
 				{showCancelButton && (
-					<Button
-						className="ml-auto"
+					<button
+						className="ml-auto rounded-xs border border-editor-group-border px-2 py-1 text-xs text-foreground"
 						onClick={(e) => {
 							e.stopPropagation()
 							onCancelCommand?.()
 						}}
-						size="sm"
-						variant="secondary">
+						type="button">
 						cancel
-					</Button>
+					</button>
 				)}
 			</div>
 			<div className="space-y-2">
@@ -268,13 +276,21 @@ export default function SubagentStatusRow({ message, isLast, lastModifiedMessage
 					const displayStatus: DisplayStatus =
 						wasCancelled && (entry.status === "running" || entry.status === "pending") ? "cancelled" : entry.status
 					const hasDetails = Boolean(
-						(entry.result && entry.status === "completed") || (entry.error && entry.status === "failed"),
+						(entry.result && entry.status === "completed") ||
+							(entry.error && (entry.status === "failed" || entry.status === "timeout" || entry.status === "cancelled")),
 					)
 					const isExpanded = expandedItems[entry.index] === true
 					const isStreamingPromptUnderConstruction =
 						isPromptConstructionRow && message.partial === true && index === data.items.length - 1
 					const shouldShowStats = !isStreamingPromptUnderConstruction
 					const statsText = `${formatCount(entry.toolCalls)} tools called · ${formatCount(entry.contextTokens)} tokens · ${formatCost(entry.totalCost, entry.currency)}`
+					const metadataText = [
+						entry.jobId ? `job ${entry.jobId}` : undefined,
+						entry.timeoutSeconds ? `timeout ${entry.timeoutSeconds}s` : undefined,
+						entry.injectionState ? `result ${entry.injectionState}` : undefined,
+					]
+						.filter((part): part is string => Boolean(part))
+						.join(" · ")
 					const latestToolCallText = entry.latestToolCall?.trim() || ""
 					return (
 						<div
@@ -293,7 +309,7 @@ export default function SubagentStatusRow({ message, isLast, lastModifiedMessage
 							</div>
 							{shouldShowStats && (
 								<div className="mt-1 text-[11px] opacity-70 min-w-0 whitespace-pre-wrap break-words">
-									<span>{statsText}</span>
+									<span>{metadataText ? `${metadataText} · ${statsText}` : statsText}</span>
 								</div>
 							)}
 							{shouldShowStats && hasDetails && (
@@ -318,7 +334,7 @@ export default function SubagentStatusRow({ message, isLast, lastModifiedMessage
 									<MarkdownBlock markdown={entry.result} />
 								</div>
 							)}
-							{isExpanded && entry.error && entry.status === "failed" && (
+							{isExpanded && entry.error && (entry.status === "failed" || entry.status === "timeout" || entry.status === "cancelled") && (
 								<div className="mt-2 text-xs text-error whitespace-pre-wrap break-words">{entry.error}</div>
 							)}
 						</div>
