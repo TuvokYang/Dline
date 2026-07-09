@@ -13,6 +13,7 @@ import { generate_explanation_variants } from "./generate_explanation"
 import { generate_report_variants } from "./generate_report"
 import { list_code_definition_names_variants } from "./list_code_definition_names"
 import { list_files_variants } from "./list_files"
+import { load_mcp_variants, load_skill_variants, load_subagent_variants, load_workflow_variants } from "./load_capability"
 import { load_mcp_documentation_variants } from "./load_mcp_documentation"
 import { new_task_variants } from "./new_task"
 import { plan_mode_respond_variants } from "./plan_mode_respond"
@@ -50,6 +51,10 @@ export function registerClineToolSets(): void {
 		...generate_report_variants,
 		...list_code_definition_names_variants,
 		...list_files_variants,
+		...load_mcp_variants,
+		...load_skill_variants,
+		...load_workflow_variants,
+		...load_subagent_variants,
 		...load_mcp_documentation_variants,
 		...new_task_variants,
 		...plan_mode_respond_variants,

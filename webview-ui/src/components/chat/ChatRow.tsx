@@ -10,6 +10,7 @@ import {
 	ClineSayTool,
 	COMPLETION_RESULT_CHANGES_FLAG,
 } from "@shared/ExtensionMessage"
+import type { LoadCapabilityPayload } from "@shared/load-capabilities"
 import { BooleanRequest, StringRequest } from "@shared/proto/dline/common"
 import { Mode } from "@shared/storage/types"
 import deepEqual from "fast-deep-equal"
@@ -58,6 +59,7 @@ import { FeatureTip } from "./FeatureTip"
 import { FocusChainChangeRow } from "./FocusChainChangeRow"
 import GenerateReportRow from "./GenerateReportRow"
 import HookMessage from "./HookMessage"
+import LoadCapabilityRow from "./LoadCapabilityRow"
 import { MarkdownRow } from "./MarkdownRow"
 import NewTaskPreview from "./NewTaskPreview"
 import PlanCompletionOutputRow from "./PlanCompletionOutputRow"
@@ -770,6 +772,14 @@ export const ChatRowContent = memo(
 								<span className="ph-no-capture font-medium">{tool.path}</span>
 							</div>
 						</div>
+					)
+				case "loadCapability":
+					return (
+						<LoadCapabilityRow
+							isExpanded={isExpanded}
+							onToggleExpand={handleToggle}
+							payload={tool.loadCapability ?? (tool as unknown as LoadCapabilityPayload)}
+						/>
 					)
 				case "renameSymbol":
 					return (

@@ -16,6 +16,7 @@ import { GenerateExplanationToolHandler } from "./handlers/GenerateExplanationTo
 import { GenerateReportHandler } from "./handlers/GenerateReportHandler"
 import { ListCodeDefinitionNamesToolHandler } from "./handlers/ListCodeDefinitionNamesToolHandler"
 import { ListFilesToolHandler } from "./handlers/ListFilesToolHandler"
+import { LoadCapabilityHandler } from "./handlers/LoadCapabilityHandler"
 import { LoadMcpDocumentationHandler } from "./handlers/LoadMcpDocumentationHandler"
 import { NewTaskHandler } from "./handlers/NewTaskHandler"
 import { PlanModeRespondHandler } from "./handlers/PlanModeRespondHandler"
@@ -27,14 +28,13 @@ import { ReportBugHandler } from "./handlers/ReportBugHandler"
 import { SearchFilesToolHandler } from "./handlers/SearchFilesToolHandler"
 import { SpawnTaskHandler } from "./handlers/SpawnTaskHandler"
 import { StatusUpdateHandler } from "./handlers/StatusUpdateHandler"
-import { UseSubagentsToolHandler } from "./handlers/SubagentToolHandler"
+import { UseSubagentsToolHandler, UseSubagentToolHandler } from "./handlers/SubagentToolHandler"
 import { SummarizeTaskHandler } from "./handlers/SummarizeTaskHandler"
 import { UseMcpToolHandler } from "./handlers/UseMcpToolHandler"
 import { UseSkillToolHandler } from "./handlers/UseSkillToolHandler"
 import { WebFetchToolHandler } from "./handlers/WebFetchToolHandler"
 import { WebSearchToolHandler } from "./handlers/WebSearchToolHandler"
 import { WriteToFileToolHandler } from "./handlers/WriteToFileToolHandler"
-import { AgentConfigLoader } from "./subagent/AgentConfigLoader"
 import { ToolValidator } from "./ToolValidator"
 import type { TaskConfig } from "./types/TaskConfig"
 import type { StronglyTypedUIHelpers } from "./types/UIHelpers"
@@ -82,7 +82,6 @@ export class SharedToolHandler implements IFullyManagedTool {
  */
 export class ToolExecutorCoordinator {
 	private handlers = new Map<string, IToolHandler>()
-	private dynamicSubagentHandlers = new Map<string, IToolHandler>()
 
 	private readonly toolHandlersMap: Record<ClineDefaultTool, (v: ToolValidator) => IToolHandler | undefined> = {
 		[ClineDefaultTool.ASK]: (_v: ToolValidator) => new AskFollowupQuestionToolHandler(),
@@ -99,6 +98,12 @@ export class ToolExecutorCoordinator {
 		[ClineDefaultTool.MCP_USE]: (_v: ToolValidator) => new UseMcpToolHandler(),
 		[ClineDefaultTool.MCP_ACCESS]: (_v: ToolValidator) => new AccessMcpResourceHandler(),
 		[ClineDefaultTool.MCP_DOCS]: (_v: ToolValidator) => new LoadMcpDocumentationHandler(),
+		[ClineDefaultTool.LOAD_MCP]: (_v: ToolValidator) => new LoadCapabilityHandler(ClineDefaultTool.LOAD_MCP, "mcp"),
+		[ClineDefaultTool.LOAD_SKILL]: (_v: ToolValidator) => new LoadCapabilityHandler(ClineDefaultTool.LOAD_SKILL, "skill"),
+		[ClineDefaultTool.LOAD_WORKFLOW]: (_v: ToolValidator) =>
+			new LoadCapabilityHandler(ClineDefaultTool.LOAD_WORKFLOW, "workflow"),
+		[ClineDefaultTool.LOAD_SUBAGENT]: (_v: ToolValidator) =>
+			new LoadCapabilityHandler(ClineDefaultTool.LOAD_SUBAGENT, "subagent"),
 		[ClineDefaultTool.NEW_TASK]: (_v: ToolValidator) => new NewTaskHandler(),
 		[ClineDefaultTool.PLAN_MODE]: (_v: ToolValidator) => new PlanModeRespondHandler(),
 		[ClineDefaultTool.ACT_MODE]: (_v: ToolValidator) => new ActModeRespondHandler(),
@@ -114,6 +119,7 @@ export class ToolExecutorCoordinator {
 		[ClineDefaultTool.APPLY_PATCH]: (_v: ToolValidator) => new ApplyPatchHandler(_v),
 		[ClineDefaultTool.GENERATE_EXPLANATION]: (_v: ToolValidator) => new GenerateExplanationToolHandler(),
 		[ClineDefaultTool.USE_SKILL]: (_v: ToolValidator) => new UseSkillToolHandler(),
+		[ClineDefaultTool.USE_SUBAGENT]: (_v: ToolValidator) => new UseSubagentToolHandler(),
 		[ClineDefaultTool.USE_SUBAGENTS]: (_v: ToolValidator) => new UseSubagentsToolHandler(),
 		[ClineDefaultTool.SPAWN_TASK]: (_v: ToolValidator) => new SpawnTaskHandler(),
 		[ClineDefaultTool.GENERATE_REPORT]: (_v: ToolValidator) => new GenerateReportHandler(),
@@ -157,16 +163,6 @@ export class ToolExecutorCoordinator {
 		const staticHandler = this.handlers.get(toolName)
 		if (staticHandler) {
 			return staticHandler
-		}
-
-		if (AgentConfigLoader.getInstance().isDynamicSubagentTool(toolName)) {
-			const existingHandler = this.dynamicSubagentHandlers.get(toolName)
-			if (existingHandler) {
-				return existingHandler
-			}
-			const handler = new SharedToolHandler(toolName as ClineDefaultTool, new UseSubagentsToolHandler())
-			this.dynamicSubagentHandlers.set(toolName, handler)
-			return handler
 		}
 
 		return undefined
