@@ -11,6 +11,7 @@ import { ToolResponse } from "../.."
 import type { IPartialBlockHandler, IToolHandler } from "../ToolExecutorCoordinator"
 import type { TaskConfig } from "../types/TaskConfig"
 import type { StronglyTypedUIHelpers } from "../types/UIHelpers"
+import { sayFeedbackOnce } from "../utils/UserFeedbackUtils"
 
 export class AskFollowupQuestionToolHandler implements IToolHandler, IPartialBlockHandler {
 	readonly name = ClineDefaultTool.ASK
@@ -67,6 +68,7 @@ export class AskFollowupQuestionToolHandler implements IToolHandler, IPartialBlo
 
 		// Ask the question
 		const {
+			response: askResponse,
 			text,
 			images,
 			files: followupFiles,
@@ -89,7 +91,7 @@ export class AskFollowupQuestionToolHandler implements IToolHandler, IPartialBlo
 		} else {
 			// Option not selected, send user feedback
 			telemetryService.captureOptionsIgnored(config.ulid ?? "", options.length, "act")
-			await config.callbacks.say("user_feedback", text ?? "", images, followupFiles)
+			await sayFeedbackOnce(config, askResponse, text, images, followupFiles)
 		}
 
 		// Process any attached files
@@ -98,6 +100,6 @@ export class AskFollowupQuestionToolHandler implements IToolHandler, IPartialBlo
 			fileContentString = await processFilesIntoText(followupFiles)
 		}
 
-		return formatResponse.toolResult(`<answer>\n${text}\n</answer>`, images, fileContentString)
+		return formatResponse.toolResult(`<feedback>\n${text}\n</feedback>`, images, fileContentString)
 	}
 }

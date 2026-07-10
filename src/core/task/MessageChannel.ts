@@ -285,10 +285,10 @@ export class MessageChannel {
 				(shouldWakeOnAbort && this.taskState.abort),
 			{ interval: 100 },
 		)
-		if (shouldWakeOnAbort && this.taskState.abort) {
+		if (shouldWakeOnAbort && this.taskState.abort && this.taskState.askResponse === undefined) {
 			throw new Error("Dline instance aborted")
 		}
-		if (this.isAskPromiseSuperseded(invalidationStartIndex)) {
+		if (this.taskState.askResponse === undefined && this.isAskPromiseSuperseded(invalidationStartIndex)) {
 			throw new Error("Current ask promise was ignored")
 		}
 

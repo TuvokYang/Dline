@@ -7,6 +7,7 @@ import { ClineDefaultTool } from "@/shared/tools"
 import type { ToolResponse } from "../../index"
 import type { IToolHandler } from "../ToolExecutorCoordinator"
 import type { TaskConfig } from "../types/TaskConfig"
+import { sayFeedbackOnce } from "../utils/UserFeedbackUtils"
 
 /**
  * SpawnTaskHandler â€?handles the spawn_task tool.
@@ -46,7 +47,7 @@ export class SpawnTaskHandler implements IToolHandler {
 			config.taskController.rejectActiveBlock()
 			// Handle user feedback if provided
 			if (text || (images && images.length > 0) || (files && files.length > 0)) {
-				await config.callbacks.say("user_feedback", text ?? "", images, files)
+				await sayFeedbackOnce(config, response, text, images, files)
 				return formatResponse.toolResult(
 					`The user provided feedback instead of spawning a task:\n<feedback>\n${text}\n</feedback>`,
 					images,

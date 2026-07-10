@@ -76,12 +76,36 @@ export function mergeMessageWindow(input: MergeMessageWindowInput): MergeMessage
 	const indexedMessages = buildIndexedMessages(existing, existingStartIndex, incoming, incomingStartIndex)
 	const mergedMessages = dedupeMessages(indexedMessages)
 	const firstItemIndex = mergedMessages.at(0)?.index ?? existingStartIndex
+	const messages = mergedMessages.map((item) => item.message)
+
+	if (firstItemIndex === existingStartIndex && areMessageWindowsEqual(existing, messages)) {
+		return {
+			messages: existing,
+			firstItemIndex: existingStartIndex,
+			merged: false,
+		}
+	}
 
 	return {
-		messages: mergedMessages.map((item) => item.message),
+		messages,
 		firstItemIndex,
 		merged: true,
 	}
+}
+
+/**
+ * Compare two message windows by serialized message content.
+ *
+ * @param left First message window.
+ * @param right Second message window.
+ * @returns True when both windows contain identical message data.
+ */
+function areMessageWindowsEqual(left: ClineMessage[], right: ClineMessage[]): boolean {
+	if (left.length !== right.length) {
+		return false
+	}
+
+	return left.every((message, index) => JSON.stringify(message) === JSON.stringify(right[index]))
 }
 
 /**

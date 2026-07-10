@@ -12,6 +12,7 @@ import type { ToolResponse } from "../../index"
 import type { IPartialBlockHandler, IToolHandler } from "../ToolExecutorCoordinator"
 import type { TaskConfig } from "../types/TaskConfig"
 import type { StronglyTypedUIHelpers } from "../types/UIHelpers"
+import { sayFeedbackOnce } from "../utils/UserFeedbackUtils"
 
 export class CondenseHandler implements IToolHandler, IPartialBlockHandler {
 	readonly name = ClineDefaultTool.CONDENSE
@@ -48,6 +49,7 @@ export class CondenseHandler implements IToolHandler, IPartialBlockHandler {
 
 		// Ask user for response
 		const {
+			response: askResponse,
 			text,
 			images,
 			files: condenseFiles,
@@ -60,12 +62,8 @@ export class CondenseHandler implements IToolHandler, IPartialBlockHandler {
 				fileContentString = await processFilesIntoText(condenseFiles)
 			}
 
-			await config.callbacks.say("user_feedback", text ?? "", images, condenseFiles)
-			return formatResponse.toolResult(
-				getPrompt("toolHandlers", "condenseFeedbackResult", { text: text ?? "" }),
-				images,
-				fileContentString,
-			)
+			await sayFeedbackOnce(config, askResponse, text, images, condenseFiles)
+			return formatResponse.toolResult(`<feedback>\n${text}\n</feedback>`, images, fileContentString)
 		}
 		// If no response, the user accepted the condensed version
 		const apiConversationHistory = config.messageState.apiConversationHistory

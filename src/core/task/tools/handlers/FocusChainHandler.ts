@@ -4,6 +4,7 @@ import { ClineDefaultTool } from "@/shared/tools"
 import type { ToolResponse } from "../../index"
 import type { IToolHandler } from "../ToolExecutorCoordinator"
 import type { TaskConfig } from "../types/TaskConfig"
+import { sayFeedbackOnce } from "../utils/UserFeedbackUtils"
 
 /**
  * Handles focus chain change tool.
@@ -60,7 +61,7 @@ export class FocusChainHandler implements IToolHandler {
 		if (!isApproved) {
 			// Write user_feedback before denying so the AI sees the user's input
 			if (responseText || (images && images.length > 0) || (files && files.length > 0)) {
-				await config.callbacks.say("user_feedback", responseText ?? "", images, files)
+				await sayFeedbackOnce(config, response, responseText, images, files)
 			}
 			// Deny: mark all items as [-] in message.text, do NOT touch focus chain file
 			if (askMessageTs !== undefined) {

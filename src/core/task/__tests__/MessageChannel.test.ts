@@ -136,6 +136,28 @@ describe("MessageChannel.ask", () => {
 		}
 	})
 
+	it("allows checkpoint side effects created by the current ask response before the ask settles", async () => {
+		const clock = vi.useFakeTimers()
+		const { channel, clineMessages } = createMessageChannel()
+
+		try {
+			const askPromise = channel.ask("qna_respond")
+
+			await flushMicrotasks()
+			channel.resolve("messageResponse", "My lord response")
+			await channel.say("user_feedback", "My lord response")
+			await channel.say("checkpoint_created")
+			await clock.advanceTimersByTimeAsync(100)
+
+			const result = await askPromise
+			assert.equal(result.response, "messageResponse")
+			assert.equal(result.text, "My lord response")
+			assert.equal(clineMessages.at(-1)?.say, "checkpoint_created")
+		} finally {
+			clock.useRealTimers()
+		}
+	})
+
 	it("still treats non-internal messages as superseding a pending ask", async () => {
 		const clock = vi.useFakeTimers()
 		const { channel } = createMessageChannel()

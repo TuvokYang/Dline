@@ -18,7 +18,7 @@ interface ApiProfileListProps {
 }
 
 const btnClass =
-	"flex items-center justify-center gap-1 py-2 rounded border border-input-border hover:bg-input-background/30 text-description hover:text-foreground transition-colors cursor-pointer bg-transparent"
+	"flex items-center justify-center gap-1 rounded border border-editor-widget-border/40 bg-(--vscode-editor-background) py-2 text-description transition-colors hover:bg-(--vscode-list-hoverBackground) hover:text-foreground cursor-pointer"
 
 /**
  * List of configured provider profiles with edit mode, multi-select, and add/delete.
@@ -96,9 +96,9 @@ const ApiProfileList: React.FC<ApiProfileListProps> = ({
 				</button>
 				{editMode && (
 					<button
-						className={`flex-1 flex items-center justify-center gap-1 py-2 rounded border transition-colors cursor-pointer text-sm ${
+						className={`flex-1 text-sm ${
 							confirmDelete
-								? "bg-red-600 text-white border-red-600"
+								? "flex items-center justify-center gap-1 rounded border border-editor-widget-border/40 bg-(--vscode-editor-background) py-2 text-(--vscode-errorForeground) transition-colors hover:bg-(--vscode-list-hoverBackground) cursor-pointer"
 								: selectedIds.size > 0
 									? btnClass
 									: `${btnClass} opacity-40 cursor-not-allowed`

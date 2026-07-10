@@ -247,6 +247,34 @@ export class TaskController {
 				reason: "cancelling",
 			}
 		}
+
+		// Error recovery awaiting must take priority over runtimeWorking so
+		// the Retry / Process Anyway button is shown when api_req_failed or
+		// mistake_limit_reached has been emitted — otherwise runtimeWorking
+		// masks the explicit error-recovery checkpoint.
+		if (snapshot.awaiting?.kind === "error_recovery" && snapshot.error) {
+			const actions: TaskUiAction[] = snapshot.error.actions.map((actionType) => {
+				if (actionType === "retry") {
+					return { type: "retry", label: "Retry", enabled: true }
+				}
+				if (actionType === "process_anyway") {
+					return { type: "process_anyway", label: "Process Anyway", enabled: true }
+				}
+				return { type: "start_new_task", label: "Start New Task", enabled: true }
+			})
+
+			return {
+				phase: "awaiting_error_recovery",
+				inputEnabled: true,
+				cancelEnabled: false,
+				showFooter: true,
+				actions,
+				activeAsk: snapshot.error.sourceAsk,
+				message: snapshot.error.message,
+				reason: `error-recovery:${snapshot.error.kind}`,
+			}
+		}
+
 		if (runtimeWorking && isRuntimeOnlyWorkingPhase) {
 			return runtimeState
 		}
@@ -290,31 +318,6 @@ export class TaskController {
 				reason: "completion-awaiting",
 			}
 		}
-
-		// Error recovery awaiting
-		if (snapshot.awaiting?.kind === "error_recovery" && snapshot.error) {
-			const actions: TaskUiAction[] = snapshot.error.actions.map((actionType) => {
-				if (actionType === "retry") {
-					return { type: "retry", label: "Retry", enabled: true }
-				}
-				if (actionType === "process_anyway") {
-					return { type: "process_anyway", label: "Process Anyway", enabled: true }
-				}
-				return { type: "start_new_task", label: "Start New Task", enabled: true }
-			})
-
-			return {
-				phase: "awaiting_error_recovery",
-				inputEnabled: true,
-				cancelEnabled: false,
-				showFooter: true,
-				actions,
-				activeAsk: snapshot.error.sourceAsk,
-				message: snapshot.error.message,
-				reason: `error-recovery:${snapshot.error.kind}`,
-			}
-		}
-
 		// Status acknowledgment awaiting (Acknowledge / Stop buttons with input enabled)
 		if (snapshot.awaiting?.kind === "approval" && snapshot.awaiting?.taskAsk === "status_acknowledgment") {
 			return {

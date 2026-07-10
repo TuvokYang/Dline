@@ -6,6 +6,7 @@ import type { ToolResponse } from "../../index"
 import type { IPartialBlockHandler, IToolHandler } from "../ToolExecutorCoordinator"
 import type { TaskConfig } from "../types/TaskConfig"
 import type { StronglyTypedUIHelpers } from "../types/UIHelpers"
+import { sayFeedbackOnce } from "../utils/UserFeedbackUtils"
 
 export class GenerateReportHandler implements IToolHandler, IPartialBlockHandler {
 	readonly name = ClineDefaultTool.GENERATE_REPORT
@@ -41,7 +42,12 @@ export class GenerateReportHandler implements IToolHandler, IPartialBlockHandler
 
 		config.taskState.isAwaitingPlanResponse = true
 
-		const { text, images, files } = await config.callbacks.ask("generate_report" as any, sharedMessage, false, {
+		const {
+			response: askResponse,
+			text,
+			images,
+			files,
+		} = await config.callbacks.ask("generate_report" as any, sharedMessage, false, {
 			existingTs: block.ts,
 		})
 
@@ -57,8 +63,6 @@ export class GenerateReportHandler implements IToolHandler, IPartialBlockHandler
 			return formatResponse.toolResult(switchMsg, images, "")
 		}
 
-		await config.callbacks.saveCheckpoint(true)
-
 		let fileContentString = ""
 		if (files && files.length > 0) {
 			const { processFilesIntoText } = await import("@integrations/misc/extract-text")
@@ -66,8 +70,8 @@ export class GenerateReportHandler implements IToolHandler, IPartialBlockHandler
 		}
 
 		if (text || (images && images.length > 0) || fileContentString) {
-			await config.callbacks.say("user_feedback", text ?? "", images, files)
-			return formatResponse.toolResult(`<user_message>\n${text}\n</user_message>`, images, fileContentString)
+			await sayFeedbackOnce(config, askResponse, text, images, files)
+			return formatResponse.toolResult(`<feedback>\n${text}\n</feedback>`, images, fileContentString)
 		}
 
 		return formatResponse.toolResult("[GENERATE_REPORT] User reviewed the report and continued.")

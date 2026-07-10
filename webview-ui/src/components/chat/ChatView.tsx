@@ -343,6 +343,7 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 						messageHandlers={messageHandlers}
 						selectedModelInfo={{
 							contextWindow: selectedModelInfo.capabilities?.contextWindow,
+							inputPrice: selectedModelInfo.pricing?.inputPrice,
 							supportsPromptCache: selectedModelInfo.capabilities?.supportsPromptCache ?? false,
 							supportsImages: selectedModelInfo.capabilities?.supportsImages || false,
 						}}

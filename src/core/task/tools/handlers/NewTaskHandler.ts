@@ -8,6 +8,7 @@ import type { ToolResponse } from "../../index"
 import type { IPartialBlockHandler, IToolHandler } from "../ToolExecutorCoordinator"
 import type { TaskConfig } from "../types/TaskConfig"
 import type { StronglyTypedUIHelpers } from "../types/UIHelpers"
+import { sayFeedbackOnce } from "../utils/UserFeedbackUtils"
 
 export class NewTaskHandler implements IToolHandler, IPartialBlockHandler {
 	readonly name = ClineDefaultTool.NEW_TASK
@@ -45,6 +46,7 @@ export class NewTaskHandler implements IToolHandler, IPartialBlockHandler {
 
 		// Ask user for response
 		const {
+			response: askResponse,
 			text,
 			images,
 			files: newTaskFiles,
@@ -57,7 +59,7 @@ export class NewTaskHandler implements IToolHandler, IPartialBlockHandler {
 				fileContentString = await processFilesIntoText(newTaskFiles)
 			}
 
-			await config.callbacks.say("user_feedback", text ?? "", images, newTaskFiles)
+			await sayFeedbackOnce(config, askResponse, text, images, newTaskFiles)
 			return formatResponse.toolResult(
 				`The user provided feedback instead of creating a new task:\n<feedback>\n${text}\n</feedback>`,
 				images,

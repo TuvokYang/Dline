@@ -133,10 +133,10 @@ const ApiProfileCard: React.FC<ApiProfileCardProps> = ({
 	const cardTooltip = tooltipLines.join("\n")
 
 	return (
-		<div className="mb-2 rounded border border-input-border bg-text-block-background">
+		<div className="mb-2 rounded border border-editor-widget-border/40 bg-(--vscode-editor-background)">
 			{/* Collapsed header */}
 			<div
-				className="flex items-center px-3 py-2 cursor-pointer hover:bg-input-background/50"
+				className="flex cursor-pointer items-center px-3 py-2 hover:bg-(--vscode-list-hoverBackground)"
 				onClick={onToggleExpand}
 				onKeyDown={(e) => {
 					if (e.key === "Enter" || e.key === " ") {
@@ -207,7 +207,7 @@ const ApiProfileCard: React.FC<ApiProfileCardProps> = ({
 
 			{/* Expanded: delegate to ApiProfileEditor */}
 			{isExpanded && (
-				<div className="px-3 pb-3 pt-1 border-t border-input-border">
+				<div className="border-t border-editor-widget-border/30 px-3 pb-3 pt-1">
 					{/* Provider selector */}
 					<div className="mb-2">
 						<label className="text-xs font-medium text-description block mb-0.5">Provider</label>

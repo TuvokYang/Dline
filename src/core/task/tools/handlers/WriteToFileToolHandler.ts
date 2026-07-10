@@ -35,6 +35,7 @@ import { captureAccepted, captureRejected, getModelInfo } from "../utils/AiOutpu
 import { applyModelContentFixes } from "../utils/ModelContentProcessor"
 import { ToolDisplayUtils } from "../utils/ToolDisplayUtils"
 import { ToolResultUtils } from "../utils/ToolResultUtils"
+import { sayFeedbackOnce } from "../utils/UserFeedbackUtils"
 
 export class WriteToFileToolHandler implements IFullyManagedTool {
 	readonly name = ClineDefaultTool.FILE_NEW // This handler supports write_to_file, replace_in_file, and new_rule
@@ -377,7 +378,7 @@ export class WriteToFileToolHandler implements IFullyManagedTool {
 							images,
 							fileContentString,
 						)
-						await config.callbacks.say("user_feedback", text, images, files)
+						await sayFeedbackOnce(config, response, text, images, files)
 					}
 
 					// // Clean up the diff view when operation is rejected
@@ -426,7 +427,7 @@ export class WriteToFileToolHandler implements IFullyManagedTool {
 						images,
 						fileContentString,
 					)
-					await config.callbacks.say("user_feedback", text, images, files)
+					await sayFeedbackOnce(config, response, text, images, files)
 				}
 
 				telemetryService.captureToolUsage(

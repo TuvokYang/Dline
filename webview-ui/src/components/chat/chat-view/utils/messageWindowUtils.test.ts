@@ -44,6 +44,22 @@ describe("mergeMessageWindow", () => {
 		expect(result.firstItemIndex).toBe(0)
 		expect(result.messages.map((message) => message.ts)).toEqual([100, 200, 300, 400])
 	})
+
+	it("returns the existing array when fetched messages are identical", () => {
+		const existing = [createMessage(100), createMessage(200, "same", true)]
+		const incoming = [createMessage(100), createMessage(200, "same", true)]
+
+		const result = mergeMessageWindow({
+			existing,
+			incoming,
+			existingStartIndex: 0,
+			incomingStartIndex: 0,
+		})
+
+		expect(result.merged).toBe(false)
+		expect(result.firstItemIndex).toBe(0)
+		expect(result.messages).toBe(existing)
+	})
 })
 
 describe("buildMessageRowKey", () => {

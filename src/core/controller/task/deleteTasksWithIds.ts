@@ -1,7 +1,5 @@
 import { StringArrayRequest } from "@shared/proto/dline/common"
 import { TaskDeletionResult } from "@shared/proto/dline/task"
-import { HostProvider } from "@/hosts/host-provider"
-import { ShowMessageType } from "@/shared/proto/dline/host/window"
 import { Logger } from "@/shared/services/Logger"
 import type { Controller } from ".."
 import { TaskDeletionOrchestrator } from "./TaskDeletionOrchestrator"
@@ -20,26 +18,6 @@ export async function deleteTasksWithIds(controller: Controller, request: String
 	}
 
 	const taskCount = request.value.length
-	const message =
-		taskCount === 1
-			? "Are you sure you want to delete this task? This action cannot be undone."
-			: `Are you sure you want to delete these ${taskCount} tasks? This action cannot be undone.`
-
-	const userChoice = await HostProvider.window.showMessage({
-		type: ShowMessageType.WARNING,
-		message,
-		options: { modal: true, items: ["Delete"] },
-	})
-
-	if (userChoice.selectedOption !== "Delete") {
-		return TaskDeletionResult.create({
-			totalRequested: taskCount,
-			deleted: 0,
-			failed: 0,
-			skippedLocked: 0,
-		})
-	}
-
 	const orchestrator = new TaskDeletionOrchestrator(controller, controller.lockService)
 	const result = await orchestrator.deleteBatch(request.value)
 

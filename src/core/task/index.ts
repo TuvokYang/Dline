@@ -131,7 +131,13 @@ import {
 	orderTurnEndingContentBlocks,
 	orderTurnEndingNativeToolBlocks,
 } from "./assistant-message-order"
-import { getRetryDelay, getStreamRetryDecision, MAX_AUTO_RETRY_ATTEMPTS, waitRetryDelay } from "./auto-retry"
+import {
+	getRetryDelay,
+	getStreamRetryDecision,
+	MAX_AUTO_RETRY_ATTEMPTS,
+	runDelayedStreamRetry,
+	waitRetryDelay,
+} from "./auto-retry"
 import { buildTaskBackgroundResults, buildTaskBackgroundSection } from "./background/BackgroundContextInjector"
 import { FocusChainManager } from "./focus-chain"
 import {
@@ -2742,10 +2748,13 @@ export class Task {
 	}
 
 	/**
-	 * Manually refresh the frozen system prompt cache.
+	 * Refresh the frozen system prompt cache immediately.
+	 * @returns Promise that resolves after context.json has been updated.
 	 */
-	async manualRefreshPrompt(): Promise<void> {
-		this.pendingSystemPromptRefreshReason = "manual"
+	async refreshPromptCache(): Promise<void> {
+		const promptContext = await this.buildPromptContext()
+		const providerInfo = promptContext.providerInfo
+		await this.systemPromptCacheService.refresh({ promptContext, reason: "manual" })
 	}
 
 	/**
@@ -3059,16 +3068,16 @@ export class Task {
 		this.taskState.didAutomaticallyRetryFailedApiRequest = true
 	}
 
-	async *attemptApiRequest(previousApiReqIndex: number): ApiStream {
-		const apiReqStart = performance.now()
-		Logger.debug(`[Task ${this.taskId}] attemptApiRequest: start (req #${this.taskState.apiRequestCount})`)
-		// Wait for MCP servers to be connected before generating system prompt
+	/**
+	 * Build the current system prompt context for cache creation or refresh.
+	 * @returns Prompt context containing current rules, tools, model, and workspace state.
+	 */
+	private async buildPromptContext(): Promise<SystemPromptContext> {
 		await pWaitFor(() => this.mcpHub.isConnecting !== true, {
 			timeout: 10_000,
 		}).catch(() => {
 			Logger.error("MCP servers failed to connect in time")
 		})
-		Logger.debug(`[Task ${this.taskId}] attemptApiRequest: MCP connected +${Math.round(performance.now() - apiReqStart)}ms`)
 
 		const providerInfo = this.getCurrentProviderInfo()
 		const host = await HostProvider.env.getHostVersion({})
@@ -3203,7 +3212,7 @@ export class Task {
 			isSubagentRun: false,
 			isCliEnvironment,
 			enableNativeToolCalls:
-				(providerInfo.model.info as any).apiFormat === ApiFormat.OPENAI_RESPONSES ||
+				(providerInfo.model.info as { apiFormat?: ApiFormat }).apiFormat === ApiFormat.OPENAI_RESPONSES ||
 				this.stateManager.getGlobalStateKey("nativeToolCallEnabled"),
 			enableParallelToolCalling: this.isParallelToolCallingEnabled(),
 			terminalExecutionMode: this.terminalExecutionMode,
@@ -3211,11 +3220,14 @@ export class Task {
 			capabilityToggleState,
 		}
 
-		// Notify user if any conditional rules were applied for this request
-		const activatedConditionalRules = [...globalRules.activatedConditionalRules, ...localRules.activatedConditionalRules]
-		if (activatedConditionalRules.length > 0) {
-			await this.say("conditional_rules_applied", JSON.stringify({ rules: activatedConditionalRules }))
-		}
+		return promptContext
+	}
+
+	async *attemptApiRequest(previousApiReqIndex: number): ApiStream {
+		const apiReqStart = performance.now()
+		Logger.debug(`[Task ${this.taskId}] attemptApiRequest: start (req #${this.taskState.apiRequestCount})`)
+		const promptContext = await this.buildPromptContext()
+		const providerInfo = promptContext.providerInfo
 
 		Logger.debug(
 			`[Task ${this.taskId}] attemptApiRequest: before systemPrompt +${Math.round(performance.now() - apiReqStart)}ms`,
@@ -4484,17 +4496,22 @@ export class Task {
 							}),
 						)
 
-						// Wait with exponential backoff before auto-resuming
-						void waitRetryDelay(delay, () => this.taskState.abort).then(async (shouldRetryAfterDelay) => {
-							if (!shouldRetryAfterDelay) {
-								return
-							}
-							// Programmatically click the resume button on the new task instance
-							if (this.controller.task) {
-								// Pass retry state to the new task instance
-								this.controller.task.taskState.autoRetryAttempts = this.taskState.autoRetryAttempts
-								await this.controller.task.handleWebviewAskResponse("yesButtonClicked", "", [])
-							}
+						const taskId = this.taskId
+						const retryAttempts = this.taskState.autoRetryAttempts
+
+						void runDelayedStreamRetry({
+							delay,
+							isAborted: () => this.taskState.abort,
+							isCurrentTask: () => this.controller.task?.taskId === taskId,
+							resume: async () => {
+								const activeTask = this.controller.task
+								if (!activeTask) {
+									return
+								}
+
+								activeTask.taskState.autoRetryAttempts = retryAttempts
+								await activeTask.handleWebviewAskResponse("yesButtonClicked", "", [])
+							},
 						})
 					} else if (retryDecision.shouldPrompt) {
 						// Show error_retry with failed flag to indicate all retries exhausted
@@ -4509,6 +4526,7 @@ export class Task {
 							}),
 						)
 						await this.ask("api_req_failed", errorMessage)
+						return false
 					}
 
 					// needs to happen after the say, otherwise the say would fail

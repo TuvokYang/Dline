@@ -11,6 +11,7 @@ import type { IPartialBlockHandler, IToolHandler } from "../ToolExecutorCoordina
 import type { TaskConfig } from "../types/TaskConfig"
 import type { StronglyTypedUIHelpers } from "../types/UIHelpers"
 import { getTaskCompletionTelemetry } from "../utils"
+import { sayFeedbackOnce } from "../utils/UserFeedbackUtils"
 
 export class PlanModeRespondHandler implements IToolHandler, IPartialBlockHandler {
 	readonly name = ClineDefaultTool.PLAN_MODE
@@ -92,6 +93,7 @@ export class PlanModeRespondHandler implements IToolHandler, IPartialBlockHandle
 
 		// Ask for user response
 		let {
+			response: askResponse,
 			text,
 			images,
 			files: planResponseFiles,
@@ -121,7 +123,7 @@ export class PlanModeRespondHandler implements IToolHandler, IPartialBlockHandle
 			// Option not selected, send user feedback
 			if (text || (images && images.length > 0) || (planResponseFiles && planResponseFiles.length > 0)) {
 				telemetryService.captureOptionsIgnored(config.ulid ?? "", options.length, "plan")
-				await config.callbacks.say("user_feedback", text ?? "", images, planResponseFiles)
+				await sayFeedbackOnce(config, askResponse, text, images, planResponseFiles)
 			}
 		}
 
@@ -144,6 +146,6 @@ export class PlanModeRespondHandler implements IToolHandler, IPartialBlockHandle
 			return result
 		}
 		// if we didn't switch to ACT MODE, then we can just send the user_feedback message
-		return formatResponse.toolResult(`<user_message>\n${text}\n</user_message>`, images, fileContentString)
+		return formatResponse.toolResult(`<feedback>\n${text}\n</feedback>`, images, fileContentString)
 	}
 }

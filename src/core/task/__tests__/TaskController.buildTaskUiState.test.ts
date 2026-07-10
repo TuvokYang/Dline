@@ -449,4 +449,34 @@ describe("TaskController.buildTaskUiState", () => {
 		assert.equal(uiState.reason, "conversation-awaiting")
 		assert.equal(uiState.activeAsk, "qna_respond")
 	})
+
+	it("prioritizes error_recovery Retry over runtimeWorking Cancel for api_req_failed", () => {
+		const tc = new TaskController(mockChannel)
+		const snapshot: TaskSnapshot = {
+			phase: TaskPhase.AWAITING_APPROVAL,
+			apiIndex: 3,
+			timestamp: Date.now(),
+			awaiting: {
+				kind: "error_recovery",
+				taskAsk: "api_req_failed",
+				messageTs: Date.now(),
+			},
+			error: {
+				kind: "api_req_failed",
+				sourceAsk: "api_req_failed",
+				message: "API request failed after auto-retry",
+				actions: ["retry", "start_new_task"],
+				retryable: true,
+				processAllowed: false,
+			},
+		}
+		// runtimeWorking=true simulates the auto-retry/cancel loop still being active
+		const uiState = tc.buildTaskUiState(snapshot, { runtimeWorking: true })
+
+		assert.equal(uiState.phase, "awaiting_error_recovery")
+		assert.equal(uiState.cancelEnabled, false)
+		assert.equal(uiState.actions[0].type, "retry")
+		assert.equal(uiState.actions[0].label, "Retry")
+		assert.equal(uiState.reason, "error-recovery:api_req_failed")
+	})
 })

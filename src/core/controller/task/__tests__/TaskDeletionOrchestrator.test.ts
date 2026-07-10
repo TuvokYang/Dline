@@ -116,4 +116,37 @@ describe("TaskDeletionOrchestrator", () => {
 		expect(result.skippedLocked).to.equal(1)
 		expect(result.deleted).to.equal(0)
 	})
+
+	it("deletes a locked task when the lock is held by a registered controller", async () => {
+		let releasedTaskId: string | undefined
+		let clearedTaskId: string | undefined
+		const lockedService = {
+			checkTaskLock: async () => ({
+				isLocked: true,
+				isStale: false,
+				lockedBy: "vscode-panel",
+				lockedAt: Date.now(),
+			}),
+			releaseTaskLock: async (taskId: string) => {
+				releasedTaskId = taskId
+			},
+		} as unknown as TaskLockService
+		const holderController = {
+			task: { taskId: "panel-task" },
+			clearTask: async () => {
+				clearedTaskId = "panel-task"
+			},
+		}
+
+		const svc = new TaskDeletionOrchestrator(mockController, lockedService, {
+			getControllerForTask: () => holderController as never,
+		})
+		const result = await svc.deleteBatch(["panel-task"])
+
+		expect(result.totalRequested).to.equal(1)
+		expect(result.skippedLocked).to.equal(0)
+		expect(result.deleted).to.equal(1)
+		expect(clearedTaskId).to.equal("panel-task")
+		expect(releasedTaskId).to.equal("panel-task")
+	})
 })

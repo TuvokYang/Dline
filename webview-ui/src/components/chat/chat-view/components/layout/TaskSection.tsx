@@ -19,6 +19,7 @@ interface TaskSectionProps {
 		contextWindow?: number
 		supportsPromptCache: boolean
 		supportsImages: boolean
+		inputPrice?: number
 	}
 	messageHandlers: MessageHandlers
 	lastProgressMessageText?: string
@@ -46,6 +47,7 @@ export const TaskSection: React.FC<TaskSectionProps> = ({
 			contextWindow={selectedModelInfo.contextWindow}
 			currency={apiMetrics.currency}
 			doesModelSupportPromptCache={selectedModelInfo.supportsPromptCache}
+			inputPrice={selectedModelInfo.inputPrice}
 			lastApiReqTotalTokens={lastApiReqTotalTokens}
 			lastProgressMessageText={lastProgressMessageText}
 			onClose={messageHandlers.handleTaskCloseButtonClick}

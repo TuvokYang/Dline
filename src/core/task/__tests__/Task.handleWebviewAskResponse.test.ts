@@ -44,6 +44,7 @@ function createFakeTaskForHandleWebviewAskResponse(controller: TaskController, e
 		postStateToWebview: vi.fn(async () => {}),
 		emitStateSnapshot: vi.fn(async () => {}),
 		flushTaskSnapshot: vi.fn(async () => {}),
+		findLatestStateSnapshot: vi.fn(() => undefined),
 		// isParallelToolCallingEnabled is used in yesButtonClicked path
 		isParallelToolCallingEnabled: vi.fn(() => true),
 		...extra,
@@ -163,7 +164,63 @@ describe("Task.handleWebviewAskResponse", () => {
 		assert.equal(say.mock.calls[0][0], "user_feedback")
 		assert.equal(userMessageContent.length, 1)
 		assert.equal(userMessageContent[0].type, "text")
-		assert.match(userMessageContent[0].text, /<feedback>\nplease use the new context\n<\/feedback>/)
+		assert.match(userMessageContent[0].text, /<user_message>\nplease use the new context\n<\/user_message>/)
+		assert.doesNotMatch(userMessageContent[0].text, /<feedback>/)
+	})
+
+	it("yesButtonClicked with retry feedback appends user_message for the next model turn", async () => {
+		const channel = createMockChannel()
+		const controller = new TaskController(channel)
+		const userMessageContent: Array<{ type: "text"; text: string }> = []
+		const say = vi.fn(async (_type: string, _text?: string) => 123)
+		const fakeTask = createFakeTaskForHandleWebviewAskResponse(controller, {
+			say,
+			taskState: { userMessageContent },
+			checkpointManager: { saveCheckpoint: vi.fn(async () => {}) },
+			findLatestStateSnapshot: () => ({
+				phase: TaskPhase.AWAITING_APPROVAL,
+				apiIndex: 2,
+				timestamp: 300,
+				awaiting: { kind: "error_recovery", taskAsk: "api_req_failed", messageTs: 123 },
+				error: {
+					kind: "api_req_failed",
+					sourceAsk: "api_req_failed",
+					message: "network failed",
+					actions: ["retry", "start_new_task"],
+					retryable: true,
+					processAllowed: false,
+					messageTs: 123,
+				},
+			}),
+		})
+
+		await Task.prototype.handleWebviewAskResponse.call(fakeTask, "yesButtonClicked" as ClineAskResponse, "重试时请换个模型")
+
+		assert.equal(say.mock.calls[0][0], "user_feedback")
+		assert.equal(userMessageContent.length, 1)
+		assert.equal(userMessageContent[0].type, "text")
+		assert.match(userMessageContent[0].text, /<user_message>\n重试时请换个模型\n<\/user_message>/)
+		assert.doesNotMatch(userMessageContent[0].text, /<feedback>/)
+	})
+
+	it("messageResponse for an active approval only renders feedback and lets the tool result carry it", async () => {
+		const channel = createMockChannel()
+		const controller = new TaskController(channel)
+		const blocks = [{ type: "tool_use" as const, name: "write_to_file", call_id: "call_write", ts: 100 }]
+		controller.buildTurn(blocks, () => false)
+		controller.advance("call_write", true)
+		const userMessageContent: Array<{ type: "text"; text: string }> = []
+		const say = vi.fn(async (_type: string, _text?: string) => 123)
+		const fakeTask = createFakeTaskForHandleWebviewAskResponse(controller, {
+			say,
+			taskState: { userMessageContent },
+			checkpointManager: { saveCheckpoint: vi.fn(async () => {}) },
+		})
+
+		await Task.prototype.handleWebviewAskResponse.call(fakeTask, "messageResponse" as ClineAskResponse, "do not lose this")
+
+		assert.equal(say.mock.calls[0][0], "user_feedback")
+		assert.equal(userMessageContent.length, 0)
 	})
 
 	it("messageResponse with feedback text records visible feedback before returning without waiting for checkpoint", async () => {
@@ -179,8 +236,10 @@ describe("Task.handleWebviewAskResponse", () => {
 		const controller = new TaskController(channel)
 		const say = vi.fn(async (_type: string, _text?: string) => 123)
 		const saveCheckpoint = vi.fn(() => checkpointPromise)
+		const userMessageContent: Array<{ type: "text"; text: string }> = []
 		const fakeTask = createFakeTaskForHandleWebviewAskResponse(controller, {
 			say,
+			taskState: { userMessageContent },
 			checkpointManager: { saveCheckpoint },
 		})
 
@@ -189,11 +248,13 @@ describe("Task.handleWebviewAskResponse", () => {
 		assert.equal(say.mock.calls.length, 1)
 		assert.equal(say.mock.calls[0][0], "user_feedback")
 		assert.equal(say.mock.calls[0][1], "hello from My lord")
+		assert.equal(userMessageContent.length, 1)
 		assert.equal(saveCheckpoint.mock.calls.length, 1)
 		assert.equal(checkpointResolved, false)
 
 		resolveCheckpoint()
 		await checkpointPromise
+		assert.equal(userMessageContent.length, 1)
 	})
 
 	// =====================================================================

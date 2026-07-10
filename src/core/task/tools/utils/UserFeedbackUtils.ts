@@ -1,0 +1,49 @@
+import type { ClineAskResponse } from "@shared/WebviewMessage"
+import type { TaskConfig } from "../types/TaskConfig"
+
+/**
+ * Checks whether a received ask response has already been rendered as visible user feedback.
+ * @param config Task configuration containing task state.
+ * @param response Ask response associated with the user feedback.
+ * @param text Optional feedback text.
+ * @param images Optional feedback image payloads.
+ * @param files Optional feedback file payloads.
+ * @returns True when the same feedback was already acknowledged by the webview response path.
+ */
+export function isAckedFeedback(
+	config: Pick<TaskConfig, "taskState">,
+	response: ClineAskResponse,
+	text?: string,
+	images?: string[],
+	files?: string[],
+): boolean {
+	const ackedFeedback = config.taskState.ackedFeedback
+	return Boolean(
+		ackedFeedback?.response === response &&
+			ackedFeedback.text === text &&
+			JSON.stringify(ackedFeedback.images ?? []) === JSON.stringify(images ?? []) &&
+			JSON.stringify(ackedFeedback.files ?? []) === JSON.stringify(files ?? []),
+	)
+}
+
+/**
+ * Renders user feedback only if the same ask response was not already rendered.
+ * @param config Task configuration with callbacks and task state.
+ * @param response Ask response associated with the user feedback.
+ * @param text Optional feedback text.
+ * @param images Optional feedback image payloads.
+ * @param files Optional feedback file payloads.
+ * @returns Promise resolved after optional UI feedback rendering.
+ */
+export async function sayFeedbackOnce(
+	config: Pick<TaskConfig, "callbacks" | "taskState">,
+	response: ClineAskResponse,
+	text?: string,
+	images?: string[],
+	files?: string[],
+): Promise<void> {
+	if (!isAckedFeedback(config, response, text, images, files)) {
+		await config.callbacks.say("user_feedback", text ?? "", images, files)
+	}
+	config.taskState.ackedFeedback = undefined
+}

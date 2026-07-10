@@ -23,7 +23,7 @@ export async function buildUserFeedbackContent(
 	if (text) {
 		content.push({
 			type: "text",
-			text: `<feedback>\n${text}\n</feedback>`,
+			text: `<user_message>\n${text}\n</user_message>`,
 		})
 	}
 

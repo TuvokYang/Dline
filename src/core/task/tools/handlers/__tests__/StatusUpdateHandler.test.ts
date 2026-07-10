@@ -38,7 +38,7 @@ describe("StatusUpdateHandler", () => {
 		} as any)
 
 		expect(result).toContain("User chose to stop")
-		expect(result).toContain("先停止，我要调整方向")
+		expect(result).toContain("<feedback>\n先停止，我要调整方向\n</feedback>")
 	})
 
 	it("includes acknowledge input in tool result", async () => {
@@ -55,8 +55,8 @@ describe("StatusUpdateHandler", () => {
 		} as any)
 
 		expect(result).toContain("User acknowledged")
-		expect(result).toContain("我知道了，下一步先检查配置")
-		expect(result).toContain("ack-image")
-		expect(result).toContain("ack-file")
+		expect(result).toContain("<feedback>\n我知道了，下一步先检查配置\n</feedback>")
+		expect(result).toContain("Images: ack-image")
+		expect(result).toContain("Files: ack-file")
 	})
 })

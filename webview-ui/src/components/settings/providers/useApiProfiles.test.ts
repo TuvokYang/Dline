@@ -33,6 +33,21 @@ describe("applyProfileUpdate", () => {
 		expect(result.profiles).not.to.equal(profiles)
 		expect(result.profiles[0]?.modelId).to.equal("model-b")
 	})
+
+	it("preserves an explicit profile name that starts with the provider prefix", () => {
+		const profile = ApiProfile.create({
+			id: "profile-1",
+			name: "openai:model-a",
+			provider: "openai",
+			modelId: "model-a",
+		})
+		const profiles = [profile]
+
+		const result = applyProfileUpdate(profiles, "profile-1", { name: "openai:custom" })
+
+		expect(result.changed).to.equal(true)
+		expect(result.profiles[0]?.name).to.equal("openai:custom")
+	})
 })
 
 describe("buildProfileSettings", () => {

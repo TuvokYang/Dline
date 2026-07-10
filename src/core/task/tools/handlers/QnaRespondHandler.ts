@@ -6,6 +6,7 @@ import type { ToolResponse } from "../../index"
 import type { IPartialBlockHandler, IToolHandler } from "../ToolExecutorCoordinator"
 import type { TaskConfig } from "../types/TaskConfig"
 import type { StronglyTypedUIHelpers } from "../types/UIHelpers"
+import { sayFeedbackOnce } from "../utils/UserFeedbackUtils"
 
 /**
  * QnaRespondHandler — handles the qna_respond tool.
@@ -43,7 +44,12 @@ export class QnaRespondHandler implements IToolHandler, IPartialBlockHandler {
 
 		config.taskState.isAwaitingPlanResponse = true
 
-		let { text, images, files } = await config.callbacks.ask(this.name, JSON.stringify(sharedMessage), false, {
+		let {
+			response: askResponse,
+			text,
+			images,
+			files,
+		} = await config.callbacks.ask(this.name, JSON.stringify(sharedMessage), false, {
 			existingTs: block.ts,
 		})
 
@@ -53,8 +59,6 @@ export class QnaRespondHandler implements IToolHandler, IPartialBlockHandler {
 			text = ""
 		}
 
-		await config.callbacks.saveCheckpoint(true)
-
 		let fileContentString = ""
 		if (files && files.length > 0) {
 			const { processFilesIntoText } = await import("@integrations/misc/extract-text")
@@ -62,8 +66,8 @@ export class QnaRespondHandler implements IToolHandler, IPartialBlockHandler {
 		}
 
 		if (text || (images && images.length > 0) || fileContentString) {
-			await config.callbacks.say("user_feedback", text ?? "", images, files)
-			return formatResponse.toolResult(`<user_message>\n${text}\n</user_message>`, images, fileContentString)
+			await sayFeedbackOnce(config, askResponse, text, images, files)
+			return formatResponse.toolResult(`<feedback>\n${text}\n</feedback>`, images, fileContentString)
 		}
 
 		return formatResponse.toolResult("User continued the conversation.")

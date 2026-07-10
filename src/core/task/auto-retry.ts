@@ -12,6 +12,13 @@ export interface StreamRetryDecision {
 	shouldPrompt: boolean
 }
 
+export interface DelayedStreamRetryInput {
+	delay: number
+	isAborted: () => boolean
+	isCurrentTask: () => boolean
+	resume: () => Promise<void>
+}
+
 /**
  * Calculate the exponential auto-retry delay in milliseconds.
  * @param attempt One-based retry attempt count.
@@ -30,6 +37,21 @@ export function getRetryDelay(attempt: number): number {
 export async function waitRetryDelay(delay: number, isAborted: () => boolean): Promise<boolean> {
 	await setTimeoutPromise(delay)
 	return !isAborted()
+}
+
+/**
+ * Run delayed stream retry only when cancellation and task identity still allow it.
+ * @param input Delayed retry callbacks and delay configuration.
+ * @returns True when resume ran, false when retry was suppressed.
+ */
+export async function runDelayedStreamRetry(input: DelayedStreamRetryInput): Promise<boolean> {
+	const shouldRetry = await waitRetryDelay(input.delay, input.isAborted)
+	if (!shouldRetry || !input.isCurrentTask()) {
+		return false
+	}
+
+	await input.resume()
+	return true
 }
 
 /**

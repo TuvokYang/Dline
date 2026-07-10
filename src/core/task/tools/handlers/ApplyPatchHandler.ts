@@ -24,6 +24,7 @@ import { type FileOpsResult, FileProviderOperations } from "../utils/FileProvide
 import { PatchParser } from "../utils/PatchParser"
 import { PathResolver } from "../utils/PathResolver"
 import { ToolResultUtils } from "../utils/ToolResultUtils"
+import { sayFeedbackOnce } from "../utils/UserFeedbackUtils"
 
 interface FileChange {
 	type: PatchActionType
@@ -794,7 +795,7 @@ export class ApplyPatchHandler implements IFullyManagedTool {
 		if (text || images?.length || files?.length) {
 			const fileContent = files?.length ? await processFilesIntoText(files) : ""
 			ToolResultUtils.pushAdditionalToolFeedback(config.taskState.userMessageContent, text, images, fileContent)
-			await config.callbacks.say("user_feedback", text, images, files)
+			await sayFeedbackOnce(config, response, text, images, files)
 		}
 
 		const approved = response === "yesButtonClicked"

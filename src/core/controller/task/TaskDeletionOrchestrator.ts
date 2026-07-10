@@ -1,4 +1,5 @@
 import fs from "fs/promises"
+import { OrchestratorController } from "@/core/orchestrator/OrchestratorController"
 import { getDlineCheckpointsDir, getDlineTasksDir } from "@/core/storage/disk"
 import { WebviewProviderRegistry } from "@/core/webview/WebviewProviderRegistry"
 import { Logger } from "@/shared/services/Logger"
@@ -33,10 +34,15 @@ export interface TaskDeletionResult {
  * and file removal.  Separated from the gRPC handler so that the handler
  * only deals with proto serialisation / deserialisation.
  */
+interface TaskDeletionDeps {
+	getControllerForTask?: (taskId: string) => Controller | undefined
+}
+
 export class TaskDeletionOrchestrator {
 	constructor(
 		private controller: Controller,
 		private lockService: TaskLockService,
+		private deps: TaskDeletionDeps = {},
 	) {}
 
 	/**
@@ -81,8 +87,11 @@ export class TaskDeletionOrchestrator {
 		// Phase 1: Lock check
 		const lockStatus = await this.lockService.checkTaskLock(taskId)
 		if (lockStatus.isLocked) {
-			Logger.debug(`[TaskDeletion] Task ${taskId} locked by ${lockStatus.lockedBy} - skipping`)
-			return { success: false, taskId, skippedLocked: true }
+			const releasedLocalLock = await this.releaseLocalTaskLock(taskId)
+			if (!releasedLocalLock) {
+				Logger.debug(`[TaskDeletion] Task ${taskId} locked by ${lockStatus.lockedBy} - skipping`)
+				return { success: false, taskId, skippedLocked: true }
+			}
 		}
 
 		try {
@@ -155,6 +164,51 @@ export class TaskDeletionOrchestrator {
 			const msg = error instanceof Error ? error.message : String(error)
 			Logger.error(`[TaskDeletion] Failed to delete ${taskId}: ${msg}`)
 			return { success: false, taskId, skippedLocked: false, error: msg }
+		}
+	}
+
+	/**
+	 * Release a lock held by a controller in this extension process.
+	 *
+	 * @param taskId The locked task identifier.
+	 * @returns True when a local controller owned and released the lock.
+	 */
+	private async releaseLocalTaskLock(taskId: string): Promise<boolean> {
+		const localController = this.findLocalController(taskId)
+		if (!localController) {
+			return false
+		}
+
+		await localController.clearTask({ clearPanelState: true })
+		await this.lockService.releaseTaskLock(taskId)
+		Logger.debug(`[TaskDeletion] Released local lock for task ${taskId}`)
+		return true
+	}
+
+	/**
+	 * Find a controller in this extension process that owns the task.
+	 *
+	 * @param taskId The task identifier to resolve.
+	 * @returns The local controller when it is known in this process.
+	 */
+	private findLocalController(taskId: string): Controller | undefined {
+		if (this.controller.task?.taskId === taskId) {
+			return this.controller
+		}
+		return this.deps.getControllerForTask?.(taskId) ?? this.findRegisteredController(taskId)
+	}
+
+	/**
+	 * Resolve a registered controller without requiring orchestrator setup in tests.
+	 *
+	 * @param taskId The task identifier to resolve.
+	 * @returns The registered controller when the orchestrator is initialized.
+	 */
+	private findRegisteredController(taskId: string): Controller | undefined {
+		try {
+			return OrchestratorController.getInstance().getController(taskId)
+		} catch {
+			return undefined
 		}
 	}
 

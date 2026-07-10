@@ -13,6 +13,7 @@ import type { ToolResponse } from "../../index"
 import type { IPartialBlockHandler, IToolHandler } from "../ToolExecutorCoordinator"
 import type { TaskConfig } from "../types/TaskConfig"
 import type { StronglyTypedUIHelpers } from "../types/UIHelpers"
+import { sayFeedbackOnce } from "../utils/UserFeedbackUtils"
 
 export class ReportBugHandler implements IToolHandler, IPartialBlockHandler {
 	readonly name = ClineDefaultTool.REPORT_BUG
@@ -97,6 +98,7 @@ export class ReportBugHandler implements IToolHandler, IPartialBlockHandler {
 		})
 
 		const {
+			response: askResponse,
 			text,
 			images,
 			files: reportBugFiles,
@@ -109,7 +111,7 @@ export class ReportBugHandler implements IToolHandler, IPartialBlockHandler {
 				fileContentString = await processFilesIntoText(reportBugFiles)
 			}
 
-			await config.callbacks.say("user_feedback", text ?? "", images, reportBugFiles)
+			await sayFeedbackOnce(config, askResponse, text, images, reportBugFiles)
 			return formatResponse.toolResult(
 				`The user did not submit the bug, and provided feedback on the Github issue generated instead:\n<feedback>\n${text}\n</feedback>`,
 				images,

@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert"
 import { describe, it } from "vitest"
-import { getStreamRetryDecision, waitRetryDelay } from "../auto-retry"
+import { getStreamRetryDecision, runDelayedStreamRetry, waitRetryDelay } from "../auto-retry"
 
 describe("auto retry recovery", () => {
 	it("stops the delayed retry when the task is aborted", async () => {
@@ -11,6 +11,25 @@ describe("auto retry recovery", () => {
 		const shouldRetry = await delayPromise
 
 		assert.equal(shouldRetry, false)
+	})
+
+	it("does not resume delayed stream retry after active task changes", async () => {
+		let resumed = false
+		let isCurrentTask = true
+		const retryPromise = runDelayedStreamRetry({
+			delay: 1,
+			isAborted: () => false,
+			isCurrentTask: () => isCurrentTask,
+			resume: async () => {
+				resumed = true
+			},
+		})
+
+		isCurrentTask = false
+		const didResume = await retryPromise
+
+		assert.equal(didResume, false)
+		assert.equal(resumed, false)
 	})
 
 	it("prompts api failure recovery after stream retries are exhausted", () => {

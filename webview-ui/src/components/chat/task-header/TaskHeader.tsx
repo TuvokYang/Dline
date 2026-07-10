@@ -32,6 +32,7 @@ interface TaskHeaderProps {
 	lastApiReqTotalTokens?: number
 	lastProgressMessageText?: string
 	showFocusChainPlaceholder?: boolean
+	inputPrice?: number
 	onClose: () => void
 	onSendMessage?: (command: string, files: string[], images: string[]) => void
 }
@@ -51,6 +52,7 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 	lastApiReqTotalTokens,
 	lastProgressMessageText,
 	showFocusChainPlaceholder,
+	inputPrice,
 	onClose,
 	onSendMessage,
 }) => {
@@ -101,6 +103,7 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 	const isCostAvailable = totalCost != null
 	const displayCurrency = currency || "USD"
 	const totalInputTokens = tokensIn + (cacheWrites ?? 0) + (cacheReads ?? 0)
+	const currentContextTokens = lastApiReqTotalTokens ?? totalInputTokens
 
 	// Event handlers
 	const toggleTaskExpanded = useCallback(() => setIsTaskExpanded(!isTaskExpanded), [setIsTaskExpanded, isTaskExpanded])
@@ -149,7 +152,13 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 						{isTaskExpanded && (
 							<div className="mt-1 flex justify-end cursor-pointer opacity-80 gap-2 mx-2">
 								<CopyTaskButton className={BUTTON_CLASS} taskText={task.text} />
-								<RefreshPromptButton className={BUTTON_CLASS} taskId={currentTaskItem?.id} />
+								<RefreshPromptButton
+									className={BUTTON_CLASS}
+									currency={displayCurrency}
+									estimatedInputTokens={currentContextTokens}
+									inputPrice={inputPrice}
+									taskId={currentTaskItem?.id}
+								/>
 								<DeleteTaskButton
 									className={BUTTON_CLASS}
 									taskId={currentTaskItem?.id}

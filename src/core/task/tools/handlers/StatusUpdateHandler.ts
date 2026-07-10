@@ -24,7 +24,7 @@ export class StatusUpdateHandler implements IToolHandler, IPartialBlockHandler {
 		const parts: string[] = []
 		const trimmedText = text?.trim()
 		if (trimmedText) {
-			parts.push(`Feedback: ${trimmedText}`)
+			parts.push(`<feedback>\n${trimmedText}\n</feedback>`)
 		}
 		if (images && images.length > 0) {
 			parts.push(`Images: ${images.join(", ")}`)
@@ -32,7 +32,7 @@ export class StatusUpdateHandler implements IToolHandler, IPartialBlockHandler {
 		if (files && files.length > 0) {
 			parts.push(`Files: ${files.join(", ")}`)
 		}
-		return parts.length > 0 ? ` ${parts.join("; ")}` : ""
+		return parts.length > 0 ? `\n${parts.join("\n")}` : ""
 	}
 
 	async handlePartialBlock(block: ToolUse, uiHelpers: StronglyTypedUIHelpers): Promise<void> {
