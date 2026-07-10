@@ -4,7 +4,7 @@ import type {
 	ChatCompletionTool as OpenAITool,
 } from "openai/resources/chat/completions"
 import { Logger } from "@/shared/services/Logger"
-import type { ApiStreamToolCallsChunk } from "./stream"
+import type { ApiRawStreamToolCallsChunk } from "./stream"
 
 /**
  * Helper class to process tool call deltas from OpenAI-compatible streaming responses.
@@ -25,7 +25,7 @@ export class ToolCallProcessor {
 	 */
 	*processToolCallDeltas(
 		toolCallDeltas: ChatCompletionChunk.Choice.Delta.ToolCall[] | undefined,
-	): Generator<ApiStreamToolCallsChunk> {
+	): Generator<ApiRawStreamToolCallsChunk> {
 		if (!toolCallDeltas) {
 			return
 		}
@@ -50,6 +50,8 @@ export class ToolCallProcessor {
 			if (toolCallState.id && toolCallState.name && toolCallDelta.function?.arguments) {
 				yield {
 					type: "tool_calls",
+					function_id: toolCallState.id,
+					tool_index: toolCallIndex,
 					tool_call: {
 						...toolCallDelta,
 						function: {

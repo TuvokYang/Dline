@@ -1,4 +1,4 @@
-import { ApiStream, ApiStreamChunk, ApiStreamUsageChunk } from "@core/api/transform/stream"
+import type { ApiCanonicalStream, ApiStreamChunk, ApiStreamUsageChunk } from "@core/api/transform/stream"
 import { Logger } from "@/shared/services/Logger"
 
 /*
@@ -30,7 +30,7 @@ export class StreamChunkCoordinator {
 	private pumpPromise: Promise<void>
 
 	constructor(
-		stream: ApiStream,
+		stream: ApiCanonicalStream,
 		private readonly options: StreamChunkCoordinatorOptions,
 	) {
 		this.iterator = stream[Symbol.asyncIterator]()

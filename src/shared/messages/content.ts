@@ -16,6 +16,12 @@ export interface ClineReasoningDetailParam {
 interface ClineSharedMessageParam {
 	// The id of the response that the block belongs to
 	call_id?: string
+	/** Stable logical provider or Dline content item identity. */
+	item_id?: string
+	/** Provider-neutral native function call and result pairing identity. */
+	function_id?: string
+	/** Dline trace identity spanning the complete block lifecycle. */
+	dline_tid?: string
 }
 
 export const REASONING_DETAILS_PROVIDERS = ["cline", "openrouter"]
@@ -139,6 +145,9 @@ export function cleanContentBlock(block: ClineContent): Anthropic.ContentBlock {
 	const hasClineFields =
 		"reasoning_details" in block ||
 		"call_id" in block ||
+		"item_id" in block ||
+		"function_id" in block ||
+		"dline_tid" in block ||
 		"summary" in block ||
 		(block.type !== "thinking" && "signature" in block)
 
@@ -147,7 +156,7 @@ export function cleanContentBlock(block: ClineContent): Anthropic.ContentBlock {
 	}
 
 	// Removes Cline-specific fields & the signature field that's added for Gemini.
-	const { reasoning_details, call_id, summary, ...rest } = block as any
+	const { reasoning_details, call_id, item_id, function_id, dline_tid, summary, ...rest } = block as any
 
 	// Remove signature from non-thinking blocks that were added for Gemini
 	if (block.type !== "thinking" && rest.signature) {

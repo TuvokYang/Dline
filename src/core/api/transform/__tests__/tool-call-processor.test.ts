@@ -1,4 +1,5 @@
 import "should"
+import { expect } from "vitest"
 import { getOpenAIToolParams, ToolCallProcessor } from "../tool-call-processor"
 
 describe("ToolCallProcessor", () => {
@@ -37,14 +38,18 @@ describe("ToolCallProcessor", () => {
 		// Intentionally reversed from the setup chunk: output follows incoming
 		// argument-delta order, but reconstruction is correct regardless of arrival
 		// order because id/name/arguments are matched by tool call index.
-		const firstToolCall = secondResult[0]?.tool_call as any
-		const secondToolCall = secondResult[1]?.tool_call as any
-		firstToolCall.function.id.should.equal("call_b")
-		firstToolCall.function.name.should.equal("search_files")
-		firstToolCall.function.arguments.should.equal('{"path":"src"}')
-		secondToolCall.function.id.should.equal("call_a")
-		secondToolCall.function.name.should.equal("read_file")
-		secondToolCall.function.arguments.should.equal('{"path":"README.md"}')
+		const firstToolCall = secondResult[0]
+		const secondToolCall = secondResult[1]
+		expect(firstToolCall.function_id).toBe("call_b")
+		expect(firstToolCall.tool_index).toBe(1)
+		expect(firstToolCall.tool_call.function.id).toBe("call_b")
+		expect(firstToolCall.tool_call.function.name).toBe("search_files")
+		expect(firstToolCall.tool_call.function.arguments).toBe('{"path":"src"}')
+		expect(secondToolCall.function_id).toBe("call_a")
+		expect(secondToolCall.tool_index).toBe(0)
+		expect(secondToolCall.tool_call.function.id).toBe("call_a")
+		expect(secondToolCall.tool_call.function.name).toBe("read_file")
+		expect(secondToolCall.tool_call.function.arguments).toBe('{"path":"README.md"}')
 	})
 
 	it("should clear accumulated state on reset", () => {

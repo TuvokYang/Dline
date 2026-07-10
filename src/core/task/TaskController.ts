@@ -103,12 +103,12 @@ export class TaskController {
 
 	// ── Block Phase API (delegates to BlockPhaseMachine) ──
 
-	buildTurn(blocks: TurnBlockInput[], autoApprove: (toolName: string, callId: string) => boolean): void {
+	buildTurn(blocks: TurnBlockInput[], autoApprove: (toolName: string, dlineTid: string) => boolean): void {
 		this.blockPhase.buildTurn(blocks, autoApprove)
 	}
 
-	advance(callId: string, blockReady: boolean): BlockEvent {
-		return this.blockPhase.advance(callId, blockReady)
+	advance(dlineTid: string, blockReady: boolean): BlockEvent {
+		return this.blockPhase.advance(dlineTid, blockReady)
 	}
 
 	completeActiveBlock(): BlockLifecycle | null {
@@ -129,6 +129,7 @@ export class TaskController {
 
 	restoreTurnFromSnapshot(
 		blocks: Array<{
+			dlineTid?: string
 			callId: string
 			toolName: string
 			phase: BlockLifecycle["phase"]
@@ -145,7 +146,7 @@ export class TaskController {
 		return this.blockPhase.getReadyBlocks()
 	}
 
-	async executeAll(readyBlocks: BlockLifecycle[], executor: (callId: string) => Promise<void>): Promise<void> {
+	async executeAll(readyBlocks: BlockLifecycle[], executor: (dlineTid: string) => Promise<void>): Promise<void> {
 		return this.blockPhase.executeAll(readyBlocks, executor)
 	}
 
@@ -153,16 +154,16 @@ export class TaskController {
 		return this.blockPhase.getActiveBlock()
 	}
 
-	wasRejected(callId: string): boolean {
-		return this.blockPhase.wasRejected(callId)
+	wasRejected(dlineTid: string): boolean {
+		return this.blockPhase.wasRejected(dlineTid)
 	}
 
-	shouldSkip(callId: string): boolean {
-		return this.blockPhase.shouldSkip(callId)
+	shouldSkip(dlineTid: string): boolean {
+		return this.blockPhase.shouldSkip(dlineTid)
 	}
 
-	getPhase(callId: string): ReturnType<BlockPhaseMachine["getPhase"]> {
-		return this.blockPhase.getPhase(callId)
+	getPhase(dlineTid: string): ReturnType<BlockPhaseMachine["getPhase"]> {
+		return this.blockPhase.getPhase(dlineTid)
 	}
 
 	hasAnyRejection(): boolean {

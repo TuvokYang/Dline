@@ -29,6 +29,26 @@ function createMockChannel(): MessageChannel {
 }
 
 /**
+ * Create a canonical native tool block for TaskController tests.
+ *
+ * @param name Native tool name.
+ * @param functionId Provider function pairing identity.
+ * @param ts Stable UI message timestamp.
+ * @returns Canonical runtime tool block.
+ */
+function createToolBlock(name: string, functionId: string, ts: number) {
+	return {
+		type: "tool_use" as const,
+		name,
+		call_id: functionId,
+		function_id: functionId,
+		item_id: `dline_item_${functionId}`,
+		dline_tid: `dline_tid_${functionId}`,
+		ts,
+	}
+}
+
+/**
  * Creates a fake task object with just enough properties for
  * handleWebviewAskResponse to work. Uses a real TaskController so
  * the BlockPhaseMachine state changes are real.
@@ -63,16 +83,13 @@ function setupTwoConversationalBlocks(): {
 	const controller = new TaskController(channel)
 
 	const callIds = ["call_qna_0", "call_qna_1"]
-	const blocks = [
-		{ type: "tool_use" as const, name: "qna_respond", call_id: callIds[0], ts: 100 },
-		{ type: "tool_use" as const, name: "qna_respond", call_id: callIds[1], ts: 200 },
-	]
+	const blocks = [createToolBlock("qna_respond", callIds[0], 100), createToolBlock("qna_respond", callIds[1], 200)]
 
 	// Build turn — none auto-approved (conversational tools are never auto-approved)
 	controller.buildTurn(blocks, () => false)
 
 	// Advance first block to AWAITING_APPROVAL
-	controller.advance(callIds[0], true)
+	controller.advance(`dline_tid_${callIds[0]}`, true)
 
 	return { controller, callIds }
 }
@@ -206,9 +223,9 @@ describe("Task.handleWebviewAskResponse", () => {
 	it("messageResponse for an active approval only renders feedback and lets the tool result carry it", async () => {
 		const channel = createMockChannel()
 		const controller = new TaskController(channel)
-		const blocks = [{ type: "tool_use" as const, name: "write_to_file", call_id: "call_write", ts: 100 }]
+		const blocks = [createToolBlock("write_to_file", "call_write", 100)]
 		controller.buildTurn(blocks, () => false)
-		controller.advance("call_write", true)
+		controller.advance("dline_tid_call_write", true)
 		const userMessageContent: Array<{ type: "text"; text: string }> = []
 		const say = vi.fn(async (_type: string, _text?: string) => 123)
 		const fakeTask = createFakeTaskForHandleWebviewAskResponse(controller, {
@@ -223,19 +240,59 @@ describe("Task.handleWebviewAskResponse", () => {
 		assert.equal(userMessageContent.length, 0)
 	})
 
-	it("messageResponse with feedback text records visible feedback before returning without waiting for checkpoint", async () => {
-		let resolveCheckpoint!: () => void
-		let checkpointResolved = false
-		const checkpointPromise = new Promise<void>((resolve) => {
-			resolveCheckpoint = () => {
-				checkpointResolved = true
-				resolve()
-			}
+	it("messageResponse for a snapshot conversation ask only renders feedback and lets the tool result carry it", async () => {
+		const channel = createMockChannel()
+		const controller = new TaskController(channel)
+		const userMessageContent: Array<{ type: "text"; text: string }> = []
+		const say = vi.fn(async (_type: string, _text?: string) => 123)
+		const fakeTask = createFakeTaskForHandleWebviewAskResponse(controller, {
+			say,
+			taskState: { userMessageContent },
+			findLatestStateSnapshot: () => ({
+				phase: TaskPhase.AWAITING_APPROVAL,
+				apiIndex: 7,
+				timestamp: 300,
+				awaiting: { kind: "conversation", taskAsk: "qna_respond", messageTs: 123 },
+			}),
 		})
+
+		await Task.prototype.handleWebviewAskResponse.call(fakeTask, "messageResponse" as ClineAskResponse, "不要重复入模")
+
+		assert.equal(say.mock.calls[0][0], "user_feedback")
+		assert.equal(userMessageContent.length, 0)
+	})
+
+	it("messageResponse for a snapshot approval ask only renders feedback and lets the tool result carry it", async () => {
+		const channel = createMockChannel()
+		const controller = new TaskController(channel)
+		const userMessageContent: Array<{ type: "text"; text: string }> = []
+		const say = vi.fn(async (_type: string, _text?: string) => 123)
+		const fakeTask = createFakeTaskForHandleWebviewAskResponse(controller, {
+			say,
+			taskState: { userMessageContent },
+			findLatestStateSnapshot: () => ({
+				phase: TaskPhase.AWAITING_APPROVAL,
+				apiIndex: 7,
+				timestamp: 300,
+				awaiting: { kind: "approval", taskAsk: "tool", activeCallId: "call_write", messageTs: 123 },
+			}),
+		})
+
+		await Task.prototype.handleWebviewAskResponse.call(
+			fakeTask,
+			"messageResponse" as ClineAskResponse,
+			"审批反馈不要重复入模",
+		)
+
+		assert.equal(say.mock.calls[0][0], "user_feedback")
+		assert.equal(userMessageContent.length, 0)
+	})
+
+	it("messageResponse with feedback text records visible feedback without creating an immediate checkpoint", async () => {
 		const channel = createMockChannel()
 		const controller = new TaskController(channel)
 		const say = vi.fn(async (_type: string, _text?: string) => 123)
-		const saveCheckpoint = vi.fn(() => checkpointPromise)
+		const saveCheckpoint = vi.fn(async () => {})
 		const userMessageContent: Array<{ type: "text"; text: string }> = []
 		const fakeTask = createFakeTaskForHandleWebviewAskResponse(controller, {
 			say,
@@ -249,12 +306,7 @@ describe("Task.handleWebviewAskResponse", () => {
 		assert.equal(say.mock.calls[0][0], "user_feedback")
 		assert.equal(say.mock.calls[0][1], "hello from My lord")
 		assert.equal(userMessageContent.length, 1)
-		assert.equal(saveCheckpoint.mock.calls.length, 1)
-		assert.equal(checkpointResolved, false)
-
-		resolveCheckpoint()
-		await checkpointPromise
-		assert.equal(userMessageContent.length, 1)
+		assert.equal(saveCheckpoint.mock.calls.length, 0)
 	})
 
 	// =====================================================================
@@ -313,7 +365,11 @@ describe("Task.handleWebviewAskResponse", () => {
 
 			// BUG: second block is SKIPPED → shouldSkip returns true
 			// FIX: second block should not be SKIPPED
-			assert.equal(controller.shouldSkip(callIds[1]), false, "FIX: second qna_respond block should NOT be skipped")
+			assert.equal(
+				controller.shouldSkip(`dline_tid_${callIds[1]}`),
+				false,
+				"FIX: second qna_respond block should NOT be skipped",
+			)
 		})
 	})
 
@@ -327,8 +383,8 @@ describe("Task.handleWebviewAskResponse", () => {
 			const controller = new TaskController(channel)
 
 			const callId = "call_wf_0"
-			controller.buildTurn([{ type: "tool_use" as const, name: "write_to_file", call_id: callId, ts: 100 }], () => false)
-			controller.advance(callId, true)
+			controller.buildTurn([createToolBlock("write_to_file", callId, 100)], () => false)
+			controller.advance(`dline_tid_${callId}`, true)
 
 			const fakeTask = createFakeTaskForHandleWebviewAskResponse(controller)
 			await Task.prototype.handleWebviewAskResponse.call(fakeTask, "messageResponse" as ClineAskResponse)
@@ -357,8 +413,8 @@ describe("Task.handleWebviewAskResponse", () => {
 				const controller = new TaskController(channel)
 
 				const callId = "call_conv_0"
-				controller.buildTurn([{ type: "tool_use" as const, name: toolName, call_id: callId, ts: 100 }], () => false)
-				controller.advance(callId, true)
+				controller.buildTurn([createToolBlock(toolName, callId, 100)], () => false)
+				controller.advance(`dline_tid_${callId}`, true)
 
 				const fakeTask = createFakeTaskForHandleWebviewAskResponse(controller)
 				await Task.prototype.handleWebviewAskResponse.call(fakeTask, "messageResponse" as ClineAskResponse)

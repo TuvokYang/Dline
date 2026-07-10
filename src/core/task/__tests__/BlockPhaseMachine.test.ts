@@ -1,5 +1,5 @@
 import { strict as assert } from "node:assert"
-import { describe, it } from "vitest"
+import { describe, expect, it } from "vitest"
 import { BlockPhase, BlockPhaseMachine } from "../BlockPhaseMachine"
 
 /**
@@ -25,13 +25,43 @@ describe("BlockPhaseMachine - rejectActiveBlock cascade", () => {
 		const callIds = ["call_qna_0", "call_qna_1"]
 
 		const blocks = [
-			{ type: "tool_use" as const, name: "qna_respond", call_id: callIds[0], ts: 100 },
-			{ type: "tool_use" as const, name: "qna_respond", call_id: callIds[1], ts: 200 },
+			{ type: "tool_use" as const, name: "qna_respond", call_id: callIds[0], dline_tid: callIds[0], ts: 100 },
+			{ type: "tool_use" as const, name: "qna_respond", call_id: callIds[1], dline_tid: callIds[1], ts: 200 },
 		]
 
 		machine.buildTurn(blocks, (_toolName, _callId) => autoApprove)
 		return { machine, callIds }
 	}
+
+	it("uses dline_tid as the lifecycle key when provider call IDs are equal", () => {
+		const machine = new BlockPhaseMachine()
+		machine.buildTurn(
+			[
+				{
+					type: "tool_use",
+					name: "read_file",
+					call_id: "call_shared",
+					dline_tid: "dline_tid_first",
+					ts: 100,
+				},
+				{
+					type: "tool_use",
+					name: "write_to_file",
+					call_id: "call_shared",
+					dline_tid: "dline_tid_second",
+					ts: 200,
+				},
+			],
+			() => true,
+		)
+
+		const first = machine.advance("dline_tid_first", true)
+		const second = machine.advance("dline_tid_second", true)
+
+		expect(first).toMatchObject({ type: "auto-execute", dlineTid: "dline_tid_first" })
+		expect(second).toMatchObject({ type: "auto-execute", dlineTid: "dline_tid_second" })
+		expect(machine.getBlocks().map((block) => block.dlineTid)).toEqual(["dline_tid_first", "dline_tid_second"])
+	})
 
 	// ── Rejection cascade ──
 
@@ -108,8 +138,8 @@ describe("BlockPhaseMachine - rejectActiveBlock cascade", () => {
 		const machine = new BlockPhaseMachine()
 
 		const blocks = [
-			{ type: "tool_use" as const, name: "execute_command", call_id: "ec1", ts: 100 },
-			{ type: "tool_use" as const, name: "read_file", call_id: "rf1", ts: 200 },
+			{ type: "tool_use" as const, name: "execute_command", call_id: "ec1", dline_tid: "ec1", ts: 100 },
+			{ type: "tool_use" as const, name: "read_file", call_id: "rf1", dline_tid: "rf1", ts: 200 },
 		]
 
 		// execute_command requires approval, read_file is auto-approved

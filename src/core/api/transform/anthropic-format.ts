@@ -1,5 +1,6 @@
 import { Anthropic } from "@anthropic-ai/sdk"
-import { ClineStorageMessage, convertClineStorageToAnthropicMessage } from "@/shared/messages/content"
+import { type ClineContent, ClineStorageMessage, convertClineStorageToAnthropicMessage } from "@/shared/messages/content"
+import { projectAnthropicResult, projectAnthropicUse } from "./tool-identity-projector"
 
 /**
  * Converts Cline storage messages to Anthropic API format with optional cache control.
@@ -31,7 +32,8 @@ export function sanitizeAnthropicMessages(
 	const secondLastMsgUserIndex = userMsgIndices[indicesLength - 2]
 
 	return clineMessages.map((msg, index) => {
-		const anthropicMsg = convertClineStorageToAnthropicMessage(msg)
+		const projectedMsg = projectAnthropicMessage(msg)
+		const anthropicMsg = convertClineStorageToAnthropicMessage(projectedMsg)
 
 		// Add cache control to the last two user messages
 		if (supportCache && (index === lastUserMsgIndex || index === secondLastMsgUserIndex)) {
@@ -40,6 +42,28 @@ export function sanitizeAnthropicMessages(
 
 		return anthropicMsg
 	})
+}
+
+/**
+ * Project canonical tool identities before shared metadata cleanup.
+ *
+ * @param message Stored Dline or Anthropic message.
+ * @returns Message with Anthropic protocol pairing fields.
+ */
+function projectAnthropicMessage(message: ClineStorageMessage | Anthropic.MessageParam): ClineStorageMessage {
+	if (typeof message.content === "string") {
+		return message as ClineStorageMessage
+	}
+	const content = message.content.map((block) => {
+		if (block.type === "tool_use") {
+			return projectAnthropicUse(block)
+		}
+		if (block.type === "tool_result") {
+			return projectAnthropicResult(block)
+		}
+		return block
+	}) as ClineContent[]
+	return { ...message, content } as ClineStorageMessage
 }
 
 const isThinkingBlock = (

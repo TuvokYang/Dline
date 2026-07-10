@@ -6,6 +6,33 @@ import { ResumeHandler } from "../ResumeHandler"
 import { TaskPhase } from "../TaskPhase"
 
 /**
+ * Add strict canonical identities to native tool fixtures.
+ *
+ * @param messages Conversation history fixture.
+ * @returns The same fixture with canonical native tool metadata.
+ */
+function canonicalizeTools(messages: ClineStorageMessage[]): ClineStorageMessage[] {
+	for (const message of messages) {
+		if (!Array.isArray(message.content)) continue
+		for (const block of message.content) {
+			if (block.type === "tool_use") {
+				block.item_id = `item_${block.id}`
+				block.function_id = block.call_id || block.id
+				block.dline_tid = `tid_${block.id}`
+				block.call_id = block.function_id
+			}
+			if (block.type === "tool_result") {
+				block.item_id = `item_result_${block.tool_use_id}`
+				block.function_id = block.tool_use_id
+				block.dline_tid = `tid_${block.tool_use_id}`
+				block.call_id = block.function_id
+			}
+		}
+	}
+	return messages
+}
+
+/**
  * Tests for ResumeHandler — validates the new snapshot-aware resume path.
  */
 describe("ResumeHandler", () => {
@@ -108,7 +135,9 @@ describe("ResumeHandler", () => {
 			} as unknown as ResumeContext["messageStateHandler"],
 		})
 
+		canonicalizeTools(apiHistory)
 		const handler = new ResumeHandler(ctx)
+		canonicalizeTools(apiHistory)
 		const result = handler.detectPendingTools(apiHistory)
 
 		assert.equal(result?.assistantIndex, 1)
@@ -158,6 +187,7 @@ describe("ResumeHandler", () => {
 		})
 
 		const handler = new ResumeHandler(ctx)
+		canonicalizeTools(apiHistory)
 		const result = handler.detectPendingTools(apiHistory)
 
 		assert.equal(result?.assistantIndex, 1)
@@ -191,6 +221,7 @@ describe("ResumeHandler", () => {
 		})
 
 		const handler = new ResumeHandler(ctx)
+		canonicalizeTools(apiHistory)
 		const result = handler.detectPendingTools(apiHistory)
 
 		assert.equal(result?.assistantIndex, 2)
@@ -236,6 +267,7 @@ describe("ResumeHandler", () => {
 		})
 
 		const handler = new ResumeHandler(ctx)
+		canonicalizeTools(apiHistory)
 		const result = handler.detectPendingTools(apiHistory)
 
 		assert.equal(result?.assistantIndex, 2)
@@ -266,8 +298,8 @@ describe("ResumeHandler", () => {
 							timestamp: 300,
 							resume: {
 								assistantApiIndex: 1,
-								pendingToolUseIds: ["tool_pending"],
-								answeredToolUseIds: ["tool_answered"],
+								pendingToolUseIds: ["call_pending"],
+								answeredToolUseIds: ["call_answered"],
 							},
 						}),
 					},
@@ -277,6 +309,7 @@ describe("ResumeHandler", () => {
 		})
 
 		const handler = new ResumeHandler(ctx)
+		canonicalizeTools(apiHistory)
 		const result = handler.detectPendingTools(apiHistory)
 
 		assert.equal(result?.assistantIndex, 1)
@@ -308,7 +341,7 @@ describe("ResumeHandler", () => {
 						type: "say",
 						say: "partial_tool_result",
 						conversationHistoryIndex: 1,
-						text: JSON.stringify({ tool_use_id: "tool_done", result: "already done" }),
+						text: JSON.stringify({ tool_use_id: "call_done", result: "already done" }),
 					},
 					{
 						ts: 300,
@@ -321,11 +354,36 @@ describe("ResumeHandler", () => {
 							approval: {
 								mode: "serial",
 								activeCallId: "call_pending",
+								activeDlineTid: "tid_tool_pending",
 								blocks: [
-									{ callId: "call_done", name: "read_file", phase: "completed", apiIndex: 1 },
-									{ callId: "call_pending", name: "write_to_file", phase: "awaiting_approval", apiIndex: 1 },
-									{ callId: "call_rejected", name: "execute_command", phase: "rejected", apiIndex: 1 },
-									{ callId: "call_skipped", name: "replace_in_file", phase: "skipped", apiIndex: 1 },
+									{
+										callId: "call_done",
+										dlineTid: "tid_tool_done",
+										name: "read_file",
+										phase: "completed",
+										apiIndex: 1,
+									},
+									{
+										callId: "call_pending",
+										dlineTid: "tid_tool_pending",
+										name: "write_to_file",
+										phase: "awaiting_approval",
+										apiIndex: 1,
+									},
+									{
+										callId: "call_rejected",
+										dlineTid: "tid_tool_rejected",
+										name: "execute_command",
+										phase: "rejected",
+										apiIndex: 1,
+									},
+									{
+										callId: "call_skipped",
+										dlineTid: "tid_tool_skipped",
+										name: "replace_in_file",
+										phase: "skipped",
+										apiIndex: 1,
+									},
 								],
 							},
 						}),
@@ -336,6 +394,7 @@ describe("ResumeHandler", () => {
 		})
 
 		const handler = new ResumeHandler(ctx)
+		canonicalizeTools(apiHistory)
 		const result = handler.detectPendingTools(apiHistory)
 
 		assert.equal(result?.assistantIndex, 1)
@@ -346,7 +405,11 @@ describe("ResumeHandler", () => {
 		assert.deepEqual(result?.answeredToolResults, [
 			{
 				type: "tool_result",
-				tool_use_id: "tool_done",
+				tool_use_id: "call_done",
+				call_id: "call_done",
+				item_id: "partial_item_tool_done",
+				function_id: "call_done",
+				dline_tid: "tid_tool_done",
 				content: [{ type: "text", text: "already done" }],
 			},
 		])
@@ -381,6 +444,7 @@ describe("ResumeHandler", () => {
 		})
 
 		const handler = new ResumeHandler(ctx)
+		canonicalizeTools(apiHistory)
 		const result = handler.detectPendingTools(apiHistory)
 
 		assert.equal(result, undefined)
@@ -410,6 +474,7 @@ describe("ResumeHandler", () => {
 		})
 
 		const handler = new ResumeHandler(ctx)
+		canonicalizeTools(apiHistory)
 		const result = handler.detectPendingTools(apiHistory)
 
 		assert.equal(result?.assistantIndex, 1)

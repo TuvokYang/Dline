@@ -1,5 +1,6 @@
 import { ResponseInput, ResponseInputMessageContentList, ResponseReasoningItem } from "openai/resources/responses/responses"
 import { ClineStorageMessage } from "@/shared/messages/content"
+import { getResultFunctionId, getUseFunctionId, ToolIdentityProjectionError } from "./tool-identity-projector"
 
 /**
  * Converts an array of ClineStorageMessage objects (extension of Anthropic format) to a ResponseInput array to use with OpenAI's Responses API.
@@ -97,7 +98,6 @@ export function convertToOpenAIResponsesInput(
 	}
 
 	const allItems: any[] = []
-	const toolUseIdToCallId = new Map<string, string>()
 
 	for (const m of messages) {
 		if (typeof m.content === "string") {
@@ -186,16 +186,15 @@ export function convertToOpenAIResponsesInput(
 						assistantItems.push(imageItem)
 						break
 					case "tool_use": {
-						// Function calls use call_id, not related to reasoning item ID
-						const call_id = part.call_id || part.id
-						if (part.call_id) {
-							toolUseIdToCallId.set(part.id, part.call_id)
+						const functionId = getUseFunctionId(part)
+						if (!part.item_id) {
+							throw new ToolIdentityProjectionError("OpenAI Responses", "tool_use item")
 						}
+						const itemId = part.item_id
 						assistantItems.push({
 							type: "function_call",
-							call_id,
-							// MAX 53 characters for OpenAI Responses API tool IDs
-							id: !part.id.startsWith("fc_") ? `fc_${part.id.slice(0, 50)}` : part.id,
+							call_id: functionId,
+							id: itemId,
 							name: part.name,
 							arguments: JSON.stringify(part.input ?? {}),
 						})
@@ -227,10 +226,10 @@ export function convertToOpenAIResponsesInput(
 							allItems.push({ role: m.role, content: [...messageContent] })
 							messageContent.length = 0
 						}
-						const call_id = part.call_id || toolUseIdToCallId.get(part.tool_use_id) || part.tool_use_id
+						const functionId = getResultFunctionId(part)
 						allItems.push({
 							type: "function_call_output",
-							call_id,
+							call_id: functionId,
 							output: typeof part.content === "string" ? part.content : JSON.stringify(part.content),
 						})
 						break

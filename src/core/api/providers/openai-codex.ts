@@ -15,6 +15,11 @@ import { FeatureFlag } from "@/shared/services/feature-flags/feature-flags"
 import { Logger } from "@/shared/services/Logger"
 import { ApiHandler, ApiHandlerContext } from "../"
 import { convertToOpenAIResponsesInput } from "../transform/openai-response-format"
+import {
+	createResponsesRegistry,
+	createResponsesToolChunk,
+	ResponsesIdentityRegistry,
+} from "../transform/responses-identity-registry"
 import { ApiStream, ApiStreamUsageChunk } from "../transform/stream"
 
 /**
@@ -42,9 +47,8 @@ export class OpenAiCodexHandler implements ApiHandler {
 	private readonly sessionId: string
 	// Abort controller for cancelling ongoing requests
 	private abortController?: AbortController
-	// Track tool call identity for streaming
-	private pendingToolCallId: string | undefined
-	private pendingToolCallName: string | undefined
+	// Track request-local Responses item and function identities.
+	private responsesRegistry: ResponsesIdentityRegistry = createResponsesRegistry("openai-codex")
 
 	constructor(private ctx: ApiHandlerContext) {
 		this.sessionId = uuidv7()
@@ -113,9 +117,8 @@ export class OpenAiCodexHandler implements ApiHandler {
 	async *createMessage(systemPrompt: string, messages: ClineStorageMessage[], tools?: ChatCompletionTool[]): ApiStream {
 		const model = this.getModel()
 
-		// Reset state for this request
-		this.pendingToolCallId = undefined
-		this.pendingToolCallName = undefined
+		// Reset request-local Responses identity state.
+		this.responsesRegistry = createResponsesRegistry("openai-codex")
 
 		// Get access token from OAuth manager
 		let accessToken = await openAiCodexOAuthManager.getAccessToken()
@@ -636,23 +639,22 @@ export class OpenAiCodexHandler implements ApiHandler {
 
 		// Handle tool/function call deltas
 		if (event?.type === "response.tool_call_arguments.delta" || event?.type === "response.function_call_arguments.delta") {
-			const callId = event.call_id || event.tool_call_id || event.id || this.pendingToolCallId
-			const name = event.name || event.function_name || this.pendingToolCallName
-			const args = event.delta || event.arguments
-
-			if (typeof callId === "string" && callId.length > 0 && typeof name === "string" && name.length > 0) {
-				yield {
-					type: "tool_calls",
-					tool_call: {
-						call_id: callId,
-						function: {
-							id: callId,
-							name,
-							arguments: typeof args === "string" ? args : "",
-						},
-					},
+			const itemId = event.item_id
+			if (typeof itemId !== "string" || itemId.length === 0) {
+				throw new Error("OpenAI Codex Responses argument delta is missing item_id")
+			}
+			let identity = this.responsesRegistry.resolveItem(itemId)
+			if (!identity) {
+				const functionId = event.call_id || event.tool_call_id
+				const name = event.name || event.function_name
+				if (typeof functionId === "string" && functionId.length > 0 && typeof name === "string" && name.length > 0) {
+					identity = this.responsesRegistry.registerItem({ itemId, functionId, name })
+				} else {
+					identity = this.responsesRegistry.requireItem(itemId)
 				}
 			}
+			const args = event.delta || event.arguments
+			yield createResponsesToolChunk(identity, typeof args === "string" ? args : "")
 			return
 		}
 
@@ -660,13 +662,20 @@ export class OpenAiCodexHandler implements ApiHandler {
 		if (event?.type === "response.output_item.added" || event?.type === "response.output_item.done") {
 			const item = event?.item
 			if (item) {
-				// Capture tool identity for subsequent argument deltas
+				// Capture provider-native item and function identities for subsequent argument deltas.
 				if (item.type === "function_call" || item.type === "tool_call") {
-					const callId = item.call_id || item.tool_call_id || item.id
+					const itemId = item.id
+					const functionId = item.call_id || item.tool_call_id
 					const name = item.name || item.function?.name || item.function_name
-					if (typeof callId === "string" && callId.length > 0) {
-						this.pendingToolCallId = callId
-						this.pendingToolCallName = typeof name === "string" ? name : undefined
+					if (
+						typeof itemId === "string" &&
+						itemId.length > 0 &&
+						typeof functionId === "string" &&
+						functionId.length > 0 &&
+						typeof name === "string" &&
+						name.length > 0
+					) {
+						this.responsesRegistry.registerItem({ itemId, functionId, name })
 					}
 				}
 
@@ -684,21 +693,11 @@ export class OpenAiCodexHandler implements ApiHandler {
 					(item.type === "function_call" || item.type === "tool_call") &&
 					event.type === "response.output_item.done"
 				) {
-					const callId = item.call_id || item.tool_call_id || item.id
-					if (callId) {
+					const itemId = item.id
+					if (typeof itemId === "string" && itemId.length > 0) {
+						const identity = this.responsesRegistry.requireItem(itemId)
 						const args = item.arguments || item.function?.arguments || item.function_arguments
-						yield {
-							type: "tool_calls",
-							id: callId,
-							tool_call: {
-								call_id: callId,
-								function: {
-									id: callId,
-									name: item.name || item.function?.name || item.function_name || "",
-									arguments: typeof args === "string" ? args : "{}",
-								},
-							},
-						}
+						yield createResponsesToolChunk(identity, typeof args === "string" ? args : "{}")
 					}
 				}
 			}

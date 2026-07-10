@@ -1,6 +1,8 @@
 import * as path from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import type { ApiHandler, buildApiHandler } from "@core/api"
+import { createIdentityFactory } from "@core/api/transform/block-identity"
+import { createStreamNormalizer, normalizeApiStream } from "@core/api/transform/stream-identity-normalizer"
 import { parseAssistantMessageV2, ToolUse } from "@core/assistant-message"
 import { discoverAvailableSkills } from "@core/context/instructions/user-instructions/skills"
 import { formatResponse } from "@core/prompts/responses"
@@ -75,9 +77,10 @@ interface SubagentUsageState {
 }
 
 interface SubagentToolCall {
-	toolUseId: string
-	id?: string
-	call_id?: string
+	item_id: string
+	function_id: string
+	dline_tid: string
+	call_id: string
 	signature?: string
 	name: string
 	input: unknown
@@ -169,29 +172,16 @@ function normalizeToolCallArguments(argumentsPayload: unknown): string {
 	}
 }
 
-function resolveToolUseId(call: { id?: string; call_id?: string; name?: string }, index: number): string {
-	const id = call.id?.trim()
-	if (id) {
-		return id
-	}
-
-	const callId = call.call_id?.trim()
-	if (callId) {
-		return callId
-	}
-
-	const fallbackId = `subagent_tool_${Date.now()}_${index + 1}`
-	Logger.warn(`[SubagentRunner] Missing tool call id for '${call.name || "unknown"}'; using fallback '${fallbackId}'`)
-	return fallbackId
-}
-
 function toAssistantToolUseBlock(call: SubagentToolCall): ClineAssistantToolUseBlock {
 	return {
 		type: "tool_use",
-		id: call.toolUseId,
+		id: call.item_id,
+		item_id: call.item_id,
+		function_id: call.function_id,
+		dline_tid: call.dline_tid,
 		name: call.name,
 		input: call.input,
-		call_id: call.call_id,
+		call_id: call.function_id,
 		signature: call.signature,
 	}
 }
@@ -205,10 +195,12 @@ function parseNonNativeToolCalls(assistantText: string): SubagentToolCall[] {
 		.filter((block): block is ToolUse => block.type === "tool_use")
 		.filter((block) => !block.partial)
 		.map((block, index) => ({
-			toolUseId: resolveToolUseId({ call_id: block.call_id, name: block.name }, index),
+			item_id: `subagent_xml_item_${index + 1}`,
+			function_id: `subagent_xml_function_${index + 1}`,
+			dline_tid: `subagent_xml_tid_${index + 1}`,
 			name: block.name,
 			input: block.params,
-			call_id: block.call_id,
+			call_id: `subagent_xml_function_${index + 1}`,
 			signature: block.signature,
 			isNativeToolCall: false,
 		}))
@@ -218,8 +210,11 @@ function pushSubagentToolResultBlock(toolResultBlocks: any[], call: SubagentTool
 	if (call.isNativeToolCall) {
 		toolResultBlocks.push({
 			type: "tool_result",
-			tool_use_id: call.toolUseId,
-			call_id: call.call_id,
+			tool_use_id: call.function_id,
+			call_id: call.function_id,
+			item_id: `${call.item_id}_result`,
+			function_id: call.function_id,
+			dline_tid: call.dline_tid,
 			content,
 		})
 		return
@@ -457,7 +452,7 @@ export class SubagentRunner {
 				let assistantTextSignature: string | undefined
 				let requestId: string | undefined
 
-				const stream = this.createMessageWithInitialChunkRetry(
+				const providerStream = this.createMessageWithInitialChunkRetry(
 					api,
 					systemPrompt,
 					conversation,
@@ -467,6 +462,7 @@ export class SubagentRunner {
 					contextManager,
 					contextState,
 				)
+				const stream = normalizeApiStream(providerStream, createStreamNormalizer(createIdentityFactory()))
 
 				for await (const chunk of stream) {
 					switch (chunk.type) {
@@ -506,7 +502,11 @@ export class SubagentRunner {
 									input: normalizeToolCallArguments(chunk.tool_call.function?.arguments),
 									signature: chunk.signature,
 								},
-								chunk.tool_call.call_id,
+								{
+									item_id: chunk.item_id,
+									function_id: chunk.function_id,
+									dline_tid: chunk.dline_tid,
+								},
 							)
 							break
 						case "reasoning":
@@ -539,15 +539,21 @@ export class SubagentRunner {
 				stats.totalCost += calculatedRequestCost || 0
 				usageState.lastRequest = { ...requestUsage }
 
-				const nativeFinalizedToolCalls = toolUseHandler.getAllFinalizedToolUses().map((toolCall, index) => ({
-					toolUseId: resolveToolUseId(toolCall, index),
-					id: toolCall.id,
-					call_id: toolCall.call_id,
-					signature: toolCall.signature,
-					name: toolCall.name,
-					input: toolCall.input,
-					isNativeToolCall: true,
-				}))
+				const nativeFinalizedToolCalls: SubagentToolCall[] = toolUseHandler.getAllFinalizedToolUses().map((toolCall) => {
+					if (!toolCall.item_id || !toolCall.function_id || !toolCall.dline_tid) {
+						throw new Error(`Canonical subagent tool call is missing identity: tool=${toolCall.name}`)
+					}
+					return {
+						item_id: toolCall.item_id,
+						function_id: toolCall.function_id,
+						dline_tid: toolCall.dline_tid,
+						call_id: toolCall.function_id,
+						signature: toolCall.signature,
+						name: toolCall.name,
+						input: toolCall.input,
+						isNativeToolCall: true,
+					}
+				})
 				const parsedNonNativeToolCalls = parseNonNativeToolCalls(assistantText)
 				const fallbackNonNativeToolCalls = nativeFinalizedToolCalls.map((toolCall) => ({
 					...toolCall,
@@ -655,12 +661,11 @@ export class SubagentRunner {
 						partial: false,
 						ts: Date.now(),
 						isNativeToolCall: call.isNativeToolCall,
-						call_id: call.call_id || call.toolUseId,
+						call_id: call.function_id,
+						item_id: call.item_id,
+						function_id: call.function_id,
+						dline_tid: call.dline_tid,
 						signature: call.signature,
-					}
-
-					if (call.call_id) {
-						state.toolUseIdMap.set(call.call_id, call.toolUseId)
 					}
 
 					const latestToolCall = formatToolCallPreview(toolName, toolCallParams)

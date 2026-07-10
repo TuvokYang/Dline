@@ -35,6 +35,12 @@ function createMockConfig(cwd: string, overrides: Partial<TaskConfig> = {}): Tas
 		focusChainSettings: {} as any,
 		callbacks: {} as any,
 		coordinator: {} as any,
+		identityFactory: {
+			/** Return a stable result item identity for this fixture. */
+			nextItemId: () => "dline_item_search_test",
+			/** Return a stable trace identity for this fixture. */
+			nextTraceId: () => "dline_tid_search_test",
+		},
 		...overrides,
 	}
 }

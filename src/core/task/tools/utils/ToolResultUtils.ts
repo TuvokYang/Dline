@@ -3,6 +3,7 @@ import { formatResponse } from "@core/prompts/responses"
 import { ToolResponse } from "@core/task"
 import { processFilesIntoText } from "@/integrations/misc/extract-text"
 import { ClineAsk } from "@/shared/ExtensionMessage"
+import type { ClineUserToolResultContentBlock } from "@/shared/messages/content"
 import { Logger } from "@/shared/services/Logger"
 import type { ToolExecutorCoordinator } from "../ToolExecutorCoordinator"
 import { TaskConfig } from "../types/TaskConfig"
@@ -90,19 +91,26 @@ export class ToolResultUtils {
 	}
 
 	/**
-	 * Append a tool_result or fallback text block to user message content.
+	 * Create a canonical native tool result without consulting runtime maps.
 	 *
-	 * @param userMessageContent Mutable next-user-message content list.
-	 * @param content Tool result content to append.
-	 * @param toolUseId Provider tool_use id, if available.
-	 * @param callId Internal tool call id.
+	 * @param content Tool result content.
+	 * @param block Native tool use carrying provider and Dline identities.
+	 * @param itemId New logical identity allocated for this result block.
+	 * @returns Canonical structured tool result.
 	 */
-	private static pushResultBlock(userMessageContent: any[], content: ToolResponse, toolUseId?: string, callId?: string): void {
-		if (!toolUseId && Array.isArray(content)) {
-			userMessageContent.push(...content)
-			return
+	static createResult(content: ToolResponse, block: ToolUse, itemId: string): ClineUserToolResultContentBlock {
+		if (!block.function_id || !block.dline_tid) {
+			throw new Error(`Native tool result is missing canonical identity: tool=${block.name}`)
 		}
-		userMessageContent.push(ToolResultUtils.createToolResultBlock(content, toolUseId, callId))
+		return {
+			type: "tool_result",
+			tool_use_id: block.function_id,
+			call_id: block.function_id,
+			item_id: itemId,
+			function_id: block.function_id,
+			dline_tid: block.dline_tid,
+			content: typeof content === "string" ? [{ type: "text", text: content }] : content,
+		}
 	}
 
 	/**
@@ -113,8 +121,8 @@ export class ToolResultUtils {
 		block: ToolUse,
 		userMessageContent: any[],
 		toolDescription: (block: ToolUse) => string,
-		coordinator?: ToolExecutorCoordinator,
-		toolUseIdMap?: Map<string, string>,
+		coordinator: ToolExecutorCoordinator | undefined,
+		nextItemId: () => string,
 	): void {
 		const pendingFeedback = ToolResultUtils.drainPendingFeedback(userMessageContent)
 		if (typeof content === "string") {
@@ -128,14 +136,6 @@ export class ToolResultUtils {
 					})()
 				: toolDescription(block)
 
-			// Get tool_use_id from map using call_id; no fallback — if the map
-			// has no entry for this call_id then there is no valid API tool_use id
-			// and the result will be downgraded to text in createToolResultBlock.
-			const toolUseId = toolUseIdMap?.get(block.call_id || "")
-			Logger.debug(
-				`pushToolResult: tool=${block.name} call_id=${block.call_id} tool_use_id=${toolUseId} mapSize=${toolUseIdMap?.size ?? 0}`,
-			)
-
 			// Replace existing tool_result for the same tool_use_id with the
 			// latest result. When a tool is re-executed (e.g. partial→reRender
 			// lifecycle), the newer error message (e.g. "Document not initialized")
@@ -143,50 +143,23 @@ export class ToolResultUtils {
 			// result is what the AI sees, and ensureToolResultsFollowToolUse
 			// deduplicates by tool_use_id before sending to the API.
 			const existingIndex = userMessageContent.findIndex(
-				(item: any) => item.type === "tool_result" && item.tool_use_id === toolUseId,
+				(item: any) => item.type === "tool_result" && item.function_id === block.function_id,
 			)
 			const mergedContent = ToolResultUtils.mergeTextResult(`${description} Result:\n${resultText}`, pendingFeedback)
 			if (existingIndex !== -1) {
-				const newBlock = ToolResultUtils.createToolResultBlock(mergedContent, toolUseId, block.call_id)
+				const existingItemId = userMessageContent[existingIndex]?.item_id
+				const newBlock = ToolResultUtils.createResult(mergedContent, block, existingItemId ?? nextItemId())
 				userMessageContent[existingIndex] = newBlock
-				Logger.warn(`ToolResultUtils: Replaced existing tool_result for tool_use_id ${toolUseId}`)
+				Logger.warn(`ToolResultUtils: Replaced existing tool_result for function_id ${block.function_id}`)
 				return
 			}
 
-			// Create ToolResultBlockParam with description and result
-			ToolResultUtils.pushResultBlock(userMessageContent, mergedContent, toolUseId, block.call_id)
+			userMessageContent.push(ToolResultUtils.createResult(mergedContent, block, nextItemId()))
 		} else {
 			// For complex content (arrays with text/image blocks), pass it through directly
 			// The content array should already be properly formatted with type, text, source, etc.
-			const toolUseId = toolUseIdMap?.get(block.call_id || "")
 			const mergedContent = ToolResultUtils.mergeStructuredResult(content, pendingFeedback)
-
-			// If no valid tool_use_id and content is an array, spread it directly
-			ToolResultUtils.pushResultBlock(userMessageContent, mergedContent, toolUseId, block.call_id)
-		}
-	}
-
-	private static createToolResultBlock(content: ToolResponse, id?: string, call_id?: string) {
-		// Without a valid API tool_use id, we cannot produce a tool_result
-		// block. Downgrade to plain text so the result is still visible to
-		// the model but does not break the tool_use/tool_result pairing
-		// required by the API.
-		if (!id) {
-			return {
-				type: "text",
-				text: typeof content === "string" ? content : JSON.stringify(content, null, 2),
-			}
-		}
-
-		// For tool_result blocks, content is always an array of content blocks
-		// to maintain consistent format for KV cache matching across all code paths.
-		// When content is a string, wrap it as [{type:"text", text:...}].
-		// When content is already an array, pass it through directly.
-		return {
-			type: "tool_result",
-			tool_use_id: id,
-			call_id: call_id,
-			content: typeof content === "string" ? [{ type: "text", text: content }] : content,
+			userMessageContent.push(ToolResultUtils.createResult(mergedContent, block, nextItemId()))
 		}
 	}
 

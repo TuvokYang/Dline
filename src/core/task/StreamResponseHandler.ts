@@ -1,6 +1,6 @@
+import type { ApiStreamToolCallsChunk } from "@core/api/transform/stream"
 import type { ToolUse } from "@core/assistant-message"
 import { JSONParser } from "@streamparser/json"
-import { nanoid } from "nanoid"
 import { McpHub } from "@/services/mcp/McpHub"
 import { CLINE_MCP_TOOL_IDENTIFIER } from "@/shared/mcp"
 import {
@@ -15,6 +15,9 @@ import { ClineDefaultTool } from "@/shared/tools"
 
 export interface PendingToolUse {
 	id: string
+	item_id: string
+	function_id: string
+	dline_tid: string
 	name: string
 	input: string
 	parsedInput?: unknown
@@ -108,14 +111,17 @@ class ToolUseHandler {
 		return this.tsFactory
 	}
 
-	processToolUseDelta(delta: ToolUseDeltaBlock, call_id?: string): void {
+	processToolUseDelta(
+		delta: ToolUseDeltaBlock,
+		identity: Pick<ApiStreamToolCallsChunk, "item_id" | "function_id" | "dline_tid">,
+	): void {
 		if (delta.type !== "tool_use" || !delta.id) {
 			return
 		}
 
-		let pending = this.pendingToolUses.get(delta.id)
+		let pending = this.pendingToolUses.get(identity.dline_tid)
 		if (!pending) {
-			pending = this.createPendingToolUse(delta.id, delta.name || "", call_id)
+			pending = this.createPendingToolUse(delta.id, delta.name || "", identity)
 		}
 
 		if (delta.name) {
@@ -159,7 +165,10 @@ class ToolUseHandler {
 			name: pending.name,
 			input,
 			signature: pending.signature,
-			call_id: pending.call_id,
+			call_id: pending.function_id,
+			item_id: pending.item_id,
+			function_id: pending.function_id,
+			dline_tid: pending.dline_tid,
 		}
 		Logger.debug(`[ToolUseHandler] finalized ${pending.name} id=${pending.id} keys=${Object.keys(input as object).join(",")}`)
 		return block
@@ -218,7 +227,10 @@ class ToolUseHandler {
 					ts: pending.ts,
 					isNativeToolCall: true,
 					signature: pending.signature,
-					call_id: pending.call_id,
+					call_id: pending.function_id,
+					item_id: pending.item_id,
+					function_id: pending.function_id,
+					dline_tid: pending.dline_tid,
 				})
 			} else {
 				const params: Record<string, string> = {}
@@ -235,7 +247,10 @@ class ToolUseHandler {
 					ts: pending.ts,
 					signature: pending.signature,
 					isNativeToolCall: true,
-					call_id: pending.call_id,
+					call_id: pending.function_id,
+					item_id: pending.item_id,
+					function_id: pending.function_id,
+					dline_tid: pending.dline_tid,
 				})
 			}
 		}
@@ -247,7 +262,11 @@ class ToolUseHandler {
 		this.pendingToolUses.clear()
 	}
 
-	private createPendingToolUse(id: string, name: string, callId?: string): PendingToolUse {
+	private createPendingToolUse(
+		id: string,
+		name: string,
+		identity: Pick<ApiStreamToolCallsChunk, "item_id" | "function_id" | "dline_tid">,
+	): PendingToolUse {
 		const jsonParser = new JSONParser()
 		jsonParser.onValue = (info: any) => {
 			if (info.stack.length === 0 && info.value && typeof info.value === "object") {
@@ -259,17 +278,19 @@ class ToolUseHandler {
 
 		const pending: PendingToolUse = {
 			id,
+			item_id: identity.item_id,
+			function_id: identity.function_id,
+			dline_tid: identity.dline_tid,
 			name,
 			input: "",
 			parsedInput: undefined,
 			jsonParser,
-			// Ensure call_id is always set for tracking
-			call_id: callId || id || nanoid(8),
+			call_id: identity.function_id,
 			signature: undefined,
 			ts: this.tsFactory(),
 		}
 
-		this.pendingToolUses.set(id, pending)
+		this.pendingToolUses.set(identity.dline_tid, pending)
 		// Initialize tool call in session tracking
 		Session.get().updateToolCall(pending.call_id, pending.name)
 

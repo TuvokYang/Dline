@@ -7,7 +7,7 @@ import { ToolResultUtils } from "../ToolResultUtils"
 /**
  * Create a minimal tool block for tool result tests.
  *
- * @returns Tool use block with stable call id.
+ * @returns Tool use block with canonical native identities.
  */
 function createBlock(): ToolUse {
 	return {
@@ -16,6 +16,10 @@ function createBlock(): ToolUse {
 		params: {},
 		partial: false,
 		call_id: "call-1",
+		item_id: "dline_item_use_1",
+		function_id: "call-1",
+		dline_tid: "dline_tid_1",
+		isNativeToolCall: true,
 		ts: 1,
 	} as ToolUse
 }
@@ -41,13 +45,16 @@ describe("ToolResultUtils approval feedback", () => {
 			userMessageContent,
 			describeTool,
 			undefined,
-			new Map([["call-1", "toolu-1"]]),
+			() => "dline_item_result_1",
 		)
 
 		assert.equal(userMessageContent.length, 1)
 		const toolResult = userMessageContent[0]
 		assert.equal(toolResult.type, "tool_result")
-		assert.equal(toolResult.tool_use_id, "toolu-1")
+		assert.equal(toolResult.tool_use_id, "call-1")
+		assert.equal(toolResult.item_id, "dline_item_result_1")
+		assert.equal(toolResult.function_id, "call-1")
+		assert.equal(toolResult.dline_tid, "dline_tid_1")
 		assert.match(toolResult.content[0].text, /\[write_to_file\] Result:\nFile written\./)
 		assert.match(toolResult.content[1].text, /<feedback>\n请继续，但注意边界\n<\/feedback>/)
 	})
@@ -65,7 +72,7 @@ describe("ToolResultUtils approval feedback", () => {
 			userMessageContent,
 			describeTool,
 			undefined,
-			new Map([["call-1", "toolu-1"]]),
+			() => "dline_item_result_2",
 		)
 
 		assert.equal(
@@ -114,7 +121,7 @@ describe("ToolResultUtils approval feedback", () => {
 			userMessageContent,
 			describeTool,
 			undefined,
-			new Map([["call-1", "toolu-1"]]),
+			() => "dline_item_result_3",
 		)
 		assert.match(userMessageContent[0].content[1].text, /<feedback>\n审批补充\n<\/feedback>/)
 	})

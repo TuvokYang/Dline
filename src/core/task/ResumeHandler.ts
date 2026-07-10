@@ -2,6 +2,13 @@ import { findLastIndex } from "@shared/array"
 import type { ClineAsk, ClineMessage, ClineSay } from "@shared/ExtensionMessage"
 import type { ClineAskResponse } from "@shared/WebviewMessage"
 import type { ClineAssistantToolUseBlock, ClineStorageMessage, ClineUserToolResultContentBlock } from "@/shared/messages"
+
+interface CanonicalStoredToolUse extends ClineAssistantToolUseBlock {
+	item_id: string
+	function_id: string
+	dline_tid: string
+}
+
 import { isTurnEndingToolName } from "./assistant-message-order"
 import type { MessageStateHandler } from "./message-state"
 import type { PendingToolUseState, RestoreHandler } from "./RestoreHandler"
@@ -135,9 +142,12 @@ export class ResumeHandler {
 			: undefined
 		const snapshotAnsweredIds = new Set((snap?.resume?.answeredToolUseIds ?? []).filter((id) => typeof id === "string"))
 		if (snap?.approval?.blocks) {
-			for (const b of snap.approval.blocks) {
-				if (b.phase === "rejected" || b.phase === "skipped") {
-					rejectedCallIds.add(b.callId)
+			for (const block of snap.approval.blocks) {
+				if (block.phase === "rejected" || block.phase === "skipped") {
+					if (!block.dlineTid) {
+						throw new Error(`Canonical approval snapshot is missing dlineTid: tool=${block.name}`)
+					}
+					rejectedCallIds.add(block.dlineTid)
 				}
 			}
 		}
@@ -168,8 +178,12 @@ export class ResumeHandler {
 			if (message.role !== "assistant" || !Array.isArray(message.content)) continue
 
 			const toolUseBlocks = message.content.filter(
-				(b): b is ClineAssistantToolUseBlock =>
-					b.type === "tool_use" && typeof b.id === "string" && typeof b.name === "string",
+				(block): block is CanonicalStoredToolUse =>
+					block.type === "tool_use" &&
+					typeof block.name === "string" &&
+					typeof block.item_id === "string" &&
+					typeof block.function_id === "string" &&
+					typeof block.dline_tid === "string",
 			)
 			if (toolUseBlocks.length === 0) continue
 
@@ -178,8 +192,13 @@ export class ResumeHandler {
 			const answeredToolResults: ClineUserToolResultContentBlock[] = []
 			if (nextMessage?.role === "user" && Array.isArray(nextMessage.content)) {
 				for (const block of nextMessage.content) {
-					if (block.type === "tool_result" && typeof block.tool_use_id === "string") {
-						answeredToolUseIds.add(block.tool_use_id)
+					if (
+						block.type === "tool_result" &&
+						typeof block.function_id === "string" &&
+						typeof block.item_id === "string" &&
+						typeof block.dline_tid === "string"
+					) {
+						answeredToolUseIds.add(block.function_id)
 						answeredToolResults.push(block)
 					}
 				}
@@ -188,13 +207,17 @@ export class ResumeHandler {
 			// Merge partial_tool_result records
 			const turnPartialResults = partialResultsByIndex.get(i)
 			for (const block of toolUseBlocks) {
-				if (!answeredToolUseIds.has(block.id) && turnPartialResults) {
-					const resultText = turnPartialResults.get(block.id)
+				if (!answeredToolUseIds.has(block.function_id) && turnPartialResults) {
+					const resultText = turnPartialResults.get(block.function_id)
 					if (resultText) {
-						answeredToolUseIds.add(block.id)
+						answeredToolUseIds.add(block.function_id)
 						answeredToolResults.push({
 							type: "tool_result",
-							tool_use_id: block.id,
+							tool_use_id: block.function_id,
+							call_id: block.function_id,
+							item_id: `partial_${block.item_id}`,
+							function_id: block.function_id,
+							dline_tid: block.dline_tid,
 							content: [{ type: "text", text: resultText }],
 						})
 					}
@@ -204,14 +227,11 @@ export class ResumeHandler {
 			// Filter out rejected/skipped blocks from snapshot, plus already answered ones
 			const pendingToolUseBlocks = toolUseBlocks.filter(
 				(block) =>
-					(!snapshotPendingIds ||
-						snapshotPendingIds.has(block.id) ||
-						(typeof block.call_id === "string" && snapshotPendingIds.has(block.call_id))) &&
-					!answeredToolUseIds.has(block.id) &&
-					!snapshotAnsweredIds.has(block.id) &&
-					!(typeof block.call_id === "string" && snapshotAnsweredIds.has(block.call_id)) &&
+					(!snapshotPendingIds || snapshotPendingIds.has(block.function_id)) &&
+					!answeredToolUseIds.has(block.function_id) &&
+					!snapshotAnsweredIds.has(block.function_id) &&
 					!isTurnEndingToolName(block.name) &&
-					!rejectedCallIds.has(block.call_id || block.id),
+					!rejectedCallIds.has(block.dline_tid),
 			)
 			if (pendingToolUseBlocks.length === 0) return undefined
 

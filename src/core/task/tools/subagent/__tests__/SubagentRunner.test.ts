@@ -195,6 +195,8 @@ describe("SubagentRunner", () => {
 		createMessage.mockImplementationOnce(async function* () {
 			yield {
 				type: "tool_calls",
+				function_id: "toolu_subagent_1",
+				tool_index: 0,
 				tool_call: {
 					function: {
 						id: "toolu_subagent_1",
@@ -209,14 +211,21 @@ describe("SubagentRunner", () => {
 			assert.equal(am.role, "assistant")
 			const tu = am.content.find((b: any) => b.type === "tool_use")
 			assert.ok(tu)
-			assert.equal(tu.id, "toolu_subagent_1")
+			assert.equal(tu.function_id, "toolu_subagent_1")
+			assert.ok(tu.item_id)
+			assert.ok(tu.dline_tid)
 			const um = c[2] as any
 			assert.equal(um.role, "user")
 			const tr = um.content.find((b: any) => b.type === "tool_result")
 			assert.ok(tr)
 			assert.equal(tr.tool_use_id, "toolu_subagent_1")
+			assert.equal(tr.function_id, tu.function_id)
+			assert.equal(tr.dline_tid, tu.dline_tid)
+			assert.notEqual(tr.item_id, tu.item_id)
 			yield {
 				type: "tool_calls",
+				function_id: "toolu_subagent_complete_1",
+				tool_index: 0,
 				tool_call: {
 					function: {
 						id: "toolu_subagent_complete_1",

@@ -89,7 +89,13 @@ export interface ToolUse {
 	/**
 	 * The call / response ID this tool use is associated with.
 	 */
-	call_id?: string // optional call ID for tracking tool use calls
+	call_id?: string // optional provider function call ID for compatibility
+	/** Stable logical content item identity. */
+	item_id?: string
+	/** Provider-neutral native function call and result pairing identity. */
+	function_id?: string
+	/** Dline trace identity used as the runtime lifecycle key. */
+	dline_tid?: string
 	/**
 	 * Thought signature associated with this tool use, used by Gemini
 	 */

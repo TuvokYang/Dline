@@ -1,4 +1,8 @@
-export type ApiStream = AsyncGenerator<ApiStreamChunk> & { id?: string }
+export type ApiStream = AsyncGenerator<ApiProviderStreamChunk> & { id?: string }
+export type ApiRawStream = AsyncGenerator<ApiProviderStreamChunk> & { id?: string }
+export type ApiCanonicalStream = AsyncGenerator<ApiStreamChunk> & { id?: string }
+export type ApiProviderStreamChunk = ApiStreamChunk | ApiRawStreamToolCallsChunk | ApiLegacyStreamToolCallsChunk
+export type ApiRawStreamChunk = ApiProviderStreamChunk
 export type ApiStreamChunk = ApiStreamTextChunk | ApiStreamThinkingChunk | ApiStreamUsageChunk | ApiStreamToolCallsChunk
 
 export interface ApiStreamTextChunk {
@@ -31,8 +35,47 @@ export interface ApiStreamUsageChunk {
 	id?: string
 }
 
+export interface ApiLegacyStreamToolCallsChunk {
+	type: "tool_calls"
+	function_id?: never
+	item_id?: never
+	dline_tid?: never
+	tool_index?: number
+	tool_call: ApiStreamToolCall
+	id?: string
+	signature?: string
+}
+
+export interface ApiRawStreamToolCallsChunk {
+	type: "tool_calls"
+	/** Provider-native function call and result pairing identity. */
+	function_id: string
+	/** Provider item identity when the protocol supplies one. */
+	item_id?: string
+	/** Provider response-local tool position used for interleaved deltas. */
+	tool_index?: number
+	/** Dline trace identity is absent before canonical normalization. */
+	dline_tid?: never
+	/**
+	 * The tool call information retained during the compatibility migration.
+	 */
+	tool_call: ApiStreamToolCall
+	/** The response ID associated with this chunk. */
+	id?: string
+	/** The thought signature associated with this chunk used by Gemini. */
+	signature?: string
+}
+
 export interface ApiStreamToolCallsChunk {
 	type: "tool_calls"
+	/** Provider-native function call and result pairing identity. */
+	function_id: string
+	/** Stable logical item identity. */
+	item_id: string
+	/** Dline trace identity for the complete tool lifecycle. */
+	dline_tid: string
+	/** Provider response-local tool position used for interleaved deltas. */
+	tool_index?: number
 	/**
 	 * The tool call information
 	 */

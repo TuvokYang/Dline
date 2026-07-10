@@ -6,6 +6,7 @@ import type { ClineAsk } from "@shared/ExtensionMessage"
 export interface TurnBlockInput {
 	type?: string
 	call_id?: string
+	dline_tid?: string
 	name?: string
 	ts?: number
 	conversationHistoryIndex?: number
@@ -29,6 +30,9 @@ export enum BlockPhase {
  * Lifecycle state for a single tool-use block within a turn.
  */
 export interface BlockLifecycle {
+	/** Dline trace identity used as the lifecycle key. */
+	dlineTid: string
+	/** Provider function identity retained for UI and legacy snapshot compatibility. */
 	callId: string
 	toolName: string
 	phase: BlockPhase
@@ -42,6 +46,7 @@ export interface BlockLifecycle {
  */
 export interface BlockEvent {
 	type: "noop" | "auto-execute" | "awaiting-approval" | "waiting-for-token" | "execute" | "rejected" | "completed"
+	dlineTid: string
 	callId: string
 	toolName?: string
 	askType?: ClineAsk
@@ -63,7 +68,7 @@ interface TokenResult {
  */
 export class BlockPhaseMachine {
 	private turnBlocks: BlockLifecycle[] = []
-	private activeTokenCallId: string | null = null
+	private activeTokenDlineTid: string | null = null
 	private turnBuilt = false
 
 	// ── Turn Building ──
@@ -74,23 +79,28 @@ export class BlockPhaseMachine {
 	 */
 	buildTurn(blocks: TurnBlockInput[], autoApprove: (toolName: string, callId: string) => boolean): void {
 		this.turnBlocks = []
-		this.activeTokenCallId = null
+		this.activeTokenDlineTid = null
 		this.turnBuilt = true
 
 		for (const block of blocks) {
 			if (block.type !== "tool_use") continue
+			if (!block.dline_tid || !block.call_id) {
+				throw new Error(`Canonical runtime tool block is missing identity: tool=${block.name || "unknown"}`)
+			}
 
-			const callId = block.call_id || ""
+			const dlineTid = block.dline_tid
+			const callId = block.call_id
 			const toolName = block.name || ""
 			const ts = block.ts ?? Date.now()
 			const conversationHistoryIndex = block.conversationHistoryIndex ?? 0
 
 			this.turnBlocks.push({
+				dlineTid,
 				callId,
 				toolName,
 				phase: BlockPhase.STREAMING,
 				ts,
-				requiresApproval: !autoApprove(toolName, callId),
+				requiresApproval: !autoApprove(toolName, dlineTid),
 				conversationHistoryIndex,
 			})
 		}
@@ -98,20 +108,20 @@ export class BlockPhaseMachine {
 
 	// ── Approval Token ──
 
-	acquireToken(callId: string): TokenResult {
-		const block = this.findBlock(callId)
+	acquireToken(dlineTid: string): TokenResult {
+		const block = this.findBlock(dlineTid)
 		if (!block) return { granted: false, mustWait: false }
 
 		if (!block.requiresApproval) {
 			return { granted: true, mustWait: false }
 		}
 
-		if (this.activeTokenCallId === callId) {
+		if (this.activeTokenDlineTid === dlineTid) {
 			return { granted: true, mustWait: false }
 		}
 
-		if (this.activeTokenCallId === null) {
-			this.activeTokenCallId = callId
+		if (this.activeTokenDlineTid === null) {
+			this.activeTokenDlineTid = dlineTid
 			return { granted: true, mustWait: false }
 		}
 
@@ -137,20 +147,20 @@ export class BlockPhaseMachine {
 	 * @returns The cancelled block, or null when no approval token is active.
 	 */
 	cancelActiveBlock(): BlockLifecycle | null {
-		if (!this.activeTokenCallId) return null
-		const block = this.findBlock(this.activeTokenCallId)
+		if (!this.activeTokenDlineTid) return null
+		const block = this.findBlock(this.activeTokenDlineTid)
 		if (!block) return null
 		block.phase = BlockPhase.CANCELLED
-		this.activeTokenCallId = null
+		this.activeTokenDlineTid = null
 		return block
 	}
 
 	releaseToken(): BlockLifecycle | null {
-		this.activeTokenCallId = null
+		this.activeTokenDlineTid = null
 
 		for (const block of this.turnBlocks) {
 			if (block.requiresApproval && !this.isTerminalPhase(block.phase)) {
-				this.activeTokenCallId = block.callId
+				this.activeTokenDlineTid = block.dlineTid
 				block.phase = BlockPhase.AWAITING_APPROVAL
 				return block
 			}
@@ -164,34 +174,35 @@ export class BlockPhaseMachine {
 	/**
 	 * Advance a block to its next phase.
 	 */
-	advance(callId: string, blockReady: boolean): BlockEvent {
-		const block = this.findBlock(callId)
-		if (!block) return { type: "noop", callId }
+	advance(dlineTid: string, blockReady: boolean): BlockEvent {
+		const block = this.findBlock(dlineTid)
+		if (!block) return { type: "noop", dlineTid, callId: dlineTid }
 
 		switch (block.phase) {
 			case BlockPhase.STREAMING: {
-				if (!blockReady) return { type: "noop", callId }
+				if (!blockReady) return { type: "noop", dlineTid, callId: block.callId }
 
 				if (!block.requiresApproval) {
 					block.phase = BlockPhase.AUTO_EXECUTING
-					return { type: "auto-execute", callId, toolName: block.toolName }
+					return { type: "auto-execute", dlineTid, callId: block.callId, toolName: block.toolName }
 				}
 
-				const token = this.acquireToken(callId)
+				const token = this.acquireToken(dlineTid)
 				if (token.granted) {
 					block.phase = BlockPhase.AWAITING_APPROVAL
 					return {
 						type: "awaiting-approval",
-						callId,
+						dlineTid,
+						callId: block.callId,
 						toolName: block.toolName,
 					}
 				}
 
-				return { type: "waiting-for-token", callId, toolName: block.toolName }
+				return { type: "waiting-for-token", dlineTid, callId: block.callId, toolName: block.toolName }
 			}
 
 			case BlockPhase.AWAITING_APPROVAL: {
-				return { type: "noop", callId }
+				return { type: "noop", dlineTid, callId: block.callId }
 			}
 
 			case BlockPhase.EXECUTING:
@@ -200,33 +211,33 @@ export class BlockPhaseMachine {
 				if (block.requiresApproval) {
 					this.releaseToken()
 				}
-				return { type: "completed", callId, toolName: block.toolName }
+				return { type: "completed", dlineTid, callId: block.callId, toolName: block.toolName }
 			}
 
 			case BlockPhase.COMPLETED:
 			case BlockPhase.REJECTED:
 			case BlockPhase.SKIPPED:
-				return { type: "noop", callId }
+				return { type: "noop", dlineTid, callId: block.callId }
 
 			default:
-				return { type: "noop", callId }
+				return { type: "noop", dlineTid, callId: block.callId }
 		}
 	}
 
 	// ── Active Block Management ──
 
 	completeActiveBlock(): BlockLifecycle | null {
-		if (!this.activeTokenCallId) return null
-		const block = this.findBlock(this.activeTokenCallId)
+		if (!this.activeTokenDlineTid) return null
+		const block = this.findBlock(this.activeTokenDlineTid)
 		if (!block) return null
 		block.phase = BlockPhase.EXECUTING
 		return block
 	}
 
 	rejectActiveBlock(): BlockLifecycle | null {
-		if (!this.activeTokenCallId) return null
+		if (!this.activeTokenDlineTid) return null
 
-		const block = this.findBlock(this.activeTokenCallId)
+		const block = this.findBlock(this.activeTokenDlineTid)
 		if (!block) return null
 
 		block.phase = BlockPhase.REJECTED
@@ -243,15 +254,15 @@ export class BlockPhaseMachine {
 			}
 		}
 
-		this.activeTokenCallId = null
+		this.activeTokenDlineTid = null
 		return block
 	}
 
 	advanceNextPendingApproval(): BlockLifecycle | null {
 		for (const b of this.turnBlocks) {
 			if (b.phase === BlockPhase.STREAMING && b.requiresApproval) {
-				this.advance(b.callId, true)
-				return this.findBlock(b.callId) ?? null
+				this.advance(b.dlineTid, true)
+				return this.findBlock(b.dlineTid) ?? null
 			}
 		}
 
@@ -264,6 +275,7 @@ export class BlockPhaseMachine {
 
 	restoreTurn(
 		blocks: Array<{
+			dlineTid?: string
 			callId: string
 			toolName: string
 			phase: BlockPhase
@@ -274,6 +286,7 @@ export class BlockPhaseMachine {
 		activeCallId?: string,
 	): void {
 		this.turnBlocks = blocks.map((block) => ({
+			dlineTid: block.dlineTid ?? block.callId,
 			callId: block.callId,
 			toolName: block.toolName,
 			phase: block.phase,
@@ -281,8 +294,11 @@ export class BlockPhaseMachine {
 			requiresApproval: block.requiresApproval ?? true,
 			conversationHistoryIndex: block.conversationHistoryIndex,
 		}))
-		this.activeTokenCallId =
-			activeCallId ?? this.turnBlocks.find((block) => block.phase === BlockPhase.AWAITING_APPROVAL)?.callId ?? null
+		this.activeTokenDlineTid =
+			this.turnBlocks.find((block) => block.callId === activeCallId)?.dlineTid ??
+			activeCallId ??
+			this.turnBlocks.find((block) => block.phase === BlockPhase.AWAITING_APPROVAL)?.dlineTid ??
+			null
 		this.turnBuilt = true
 	}
 
@@ -292,18 +308,18 @@ export class BlockPhaseMachine {
 		return this.turnBlocks.find((b) => b.phase === BlockPhase.AWAITING_APPROVAL) ?? null
 	}
 
-	wasRejected(callId: string): boolean {
-		const block = this.findBlock(callId)
+	wasRejected(dlineTid: string): boolean {
+		const block = this.findBlock(dlineTid)
 		return block?.phase === BlockPhase.REJECTED
 	}
 
-	shouldSkip(callId: string): boolean {
-		const block = this.findBlock(callId)
+	shouldSkip(dlineTid: string): boolean {
+		const block = this.findBlock(dlineTid)
 		return block?.phase === BlockPhase.SKIPPED
 	}
 
-	getPhase(callId: string): BlockPhase | null {
-		return this.findBlock(callId)?.phase ?? null
+	getPhase(dlineTid: string): BlockPhase | null {
+		return this.findBlock(dlineTid)?.phase ?? null
 	}
 
 	hasAnyRejection(): boolean {
@@ -322,7 +338,7 @@ export class BlockPhaseMachine {
 
 	reset(): void {
 		this.turnBlocks = []
-		this.activeTokenCallId = null
+		this.activeTokenDlineTid = null
 		this.turnBuilt = false
 	}
 
@@ -332,14 +348,14 @@ export class BlockPhaseMachine {
 		return this.turnBlocks.filter((b) => b.phase === BlockPhase.AUTO_EXECUTING || b.phase === BlockPhase.EXECUTING)
 	}
 
-	async executeAll(readyBlocks: BlockLifecycle[], executor: (callId: string) => Promise<void>): Promise<void> {
-		await Promise.all(readyBlocks.map((block) => executor(block.callId)))
+	async executeAll(readyBlocks: BlockLifecycle[], executor: (dlineTid: string) => Promise<void>): Promise<void> {
+		await Promise.all(readyBlocks.map((block) => executor(block.dlineTid)))
 	}
 
 	// ── Helpers ──
 
-	private findBlock(callId: string): BlockLifecycle | undefined {
-		return this.turnBlocks.find((b) => b.callId === callId)
+	private findBlock(dlineTid: string): BlockLifecycle | undefined {
+		return this.turnBlocks.find((b) => b.dlineTid === dlineTid)
 	}
 
 	/**

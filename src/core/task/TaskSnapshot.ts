@@ -24,6 +24,8 @@ export interface TaskSnapshotAwaiting {
 	kind: TaskSnapshotAwaitingKind
 	taskAsk?: ClineAsk
 	activeCallId?: string
+	/** Canonical Dline trace identity for the active block. */
+	activeDlineTid?: string
 	messageTs?: number
 }
 
@@ -48,6 +50,8 @@ export interface TaskSnapshotApproval {
 	mode: "serial" | "parallel"
 	blocks: Array<{
 		callId: string
+		/** Canonical Dline trace identity for this lifecycle block. */
+		dlineTid?: string
 		name: string
 		phase: BlockPhase
 		/** Index of this block's tool_use in apiConversationHistory */
@@ -58,6 +62,8 @@ export interface TaskSnapshotApproval {
 		statusReason?: TaskSnapshotBlockStatusReason
 	}>
 	activeCallId?: string
+	/** Canonical Dline trace identity for the active approval block. */
+	activeDlineTid?: string
 }
 
 /**
@@ -65,8 +71,10 @@ export interface TaskSnapshotApproval {
  */
 export interface TaskSnapshotExecution {
 	mode: "serial" | "parallel"
-	/** callId list of currently executing tools */
+	/** Legacy provider call ID list of currently executing tools. */
 	executing: string[]
+	/** Canonical Dline trace identities of currently executing tools. */
+	executingDlineTids?: string[]
 }
 
 /**

@@ -1,6 +1,7 @@
 import OpenAI from "openai"
 import { ModelInfo } from "@/shared/api"
 import { Logger } from "@/shared/services/Logger"
+import { createResponsesRegistry, createResponsesToolChunk } from "../transform/responses-identity-registry"
 
 // Type that represents the OpenAI ResponseStream with its private properties
 // The #private property issue can be resolved by using the AsyncIterable interface
@@ -15,24 +16,19 @@ export async function* handleResponsesApiStreamResponse(
 		cacheReadTokens: number,
 	) => Promise<number>,
 ) {
+	const identityRegistry = createResponsesRegistry("responses-api-support")
 	// Process the response stream
 	for await (const chunk of stream) {
 		// Handle different event types from Responses API
 		if (chunk.type === "response.output_item.added") {
 			const item = chunk.item
 			if (item.type === "function_call" && item.id) {
-				yield {
-					type: "tool_calls",
-					id: item.id,
-					tool_call: {
-						call_id: item.call_id,
-						function: {
-							id: item.id,
-							name: item.name,
-							arguments: item.arguments,
-						},
-					},
-				} as const
+				const identity = identityRegistry.registerItem({
+					itemId: item.id,
+					functionId: item.call_id,
+					name: item.name,
+				})
+				yield createResponsesToolChunk(identity, item.arguments)
 			}
 			if (item.type === "reasoning" && item.encrypted_content && item.id) {
 				yield {
@@ -45,19 +41,13 @@ export async function* handleResponsesApiStreamResponse(
 		}
 		if (chunk.type === "response.output_item.done") {
 			const item = chunk.item
-			if (item.type === "function_call") {
-				yield {
-					type: "tool_calls",
-					id: item.id || item.call_id,
-					tool_call: {
-						call_id: item.call_id,
-						function: {
-							id: item.id,
-							name: item.name,
-							arguments: item.arguments,
-						},
-					},
-				} as const
+			if (item.type === "function_call" && item.id) {
+				const identity = identityRegistry.registerItem({
+					itemId: item.id,
+					functionId: item.call_id,
+					name: item.name,
+				})
+				yield createResponsesToolChunk(identity, item.arguments)
 			}
 			if (item.type === "reasoning") {
 				yield {
@@ -111,30 +101,13 @@ export async function* handleResponsesApiStreamResponse(
 			}
 		}
 		if (chunk.type === "response.function_call_arguments.delta") {
-			yield {
-				type: "tool_calls",
-				tool_call: {
-					function: {
-						id: chunk.item_id,
-						name: chunk.item_id,
-						arguments: chunk.delta,
-					},
-				},
-			} as const
+			const identity = identityRegistry.requireItem(chunk.item_id)
+			yield createResponsesToolChunk(identity, chunk.delta)
 		}
 		if (chunk.type === "response.function_call_arguments.done") {
-			// Handle completed function call
 			if (chunk.item_id && chunk.name && chunk.arguments) {
-				yield {
-					type: "tool_calls",
-					tool_call: {
-						function: {
-							id: chunk.item_id,
-							name: chunk.name,
-							arguments: chunk.arguments,
-						},
-					},
-				} as const
+				const identity = identityRegistry.requireItem(chunk.item_id)
+				yield createResponsesToolChunk(identity, chunk.arguments)
 			}
 		}
 

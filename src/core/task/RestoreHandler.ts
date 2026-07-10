@@ -149,13 +149,14 @@ export class RestoreHandler {
 		if (snapshot.approval?.blocks && snapshot.approval.blocks.length > 0) {
 			controller.restoreTurnFromSnapshot(
 				snapshot.approval.blocks.map((b) => ({
+					...(b.dlineTid ? { dlineTid: b.dlineTid } : {}),
 					callId: b.callId,
 					toolName: b.name,
 					phase: b.phase,
 					conversationHistoryIndex: b.apiIndex,
 					requiresApproval: true,
 				})),
-				snapshot.approval.activeCallId,
+				snapshot.approval.activeDlineTid ?? snapshot.approval.activeCallId,
 			)
 		}
 
@@ -195,24 +196,16 @@ export class RestoreHandler {
 		taskState.didAlreadyUseTool = false
 		taskState.presentAssistantMessageLocked = false
 		taskState.presentAssistantMessageHasPendingUpdates = false
-		taskState.toolUseIdMap.clear()
 
 		controller.reset()
 		controller.buildTurn(runtimeToolUses, this.ctx.shouldAutoApproveTool)
-
-		// Build tool use id map (call_id → block.id)
-		for (const pair of runtimePairs) {
-			const callId = pair.runtime.call_id
-			if (callId) {
-				taskState.toolUseIdMap.set(callId, pair.stored.id ?? callId)
-			}
-		}
 
 		controller.transition(TaskPhase.EXECUTING, {
 			apiIndex: pending.assistantIndex,
 			execution: {
 				mode: "serial",
-				executing: runtimeToolUses.map((t) => t.call_id || ""),
+				executing: runtimeToolUses.map((tool) => tool.function_id || ""),
+				executingDlineTids: runtimeToolUses.map((tool) => tool.dline_tid || ""),
 			},
 		})
 
@@ -229,7 +222,9 @@ export class RestoreHandler {
 	 * Handles MCP tool name prefixing and parameter stringification.
 	 */
 	storedToRuntime(block: ClineAssistantToolUseBlock, baseTs: number): ToolUse {
-		const callId = block.call_id || block.id
+		if (!block.item_id || !block.function_id || !block.dline_tid) {
+			throw new Error(`Canonical stored tool block is missing identity: tool=${block.name}`)
+		}
 		const params: Record<string, string> = {}
 		const input =
 			typeof block.input === "string"
@@ -257,7 +252,10 @@ export class RestoreHandler {
 			partial: false,
 			ts: baseTs,
 			isNativeToolCall: true,
-			call_id: callId,
+			call_id: block.function_id,
+			item_id: block.item_id,
+			function_id: block.function_id,
+			dline_tid: block.dline_tid,
 		} as ToolUse
 	}
 

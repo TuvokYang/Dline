@@ -20,6 +20,7 @@ import { ApiHandler, ApiHandlerContext } from "../"
 import { withRetry } from "../retry"
 import { convertToOpenAiMessages } from "../transform/openai-format"
 import { convertToOpenAIResponsesInput } from "../transform/openai-response-format"
+import { createResponsesRegistry, createResponsesToolChunk } from "../transform/responses-identity-registry"
 import { ApiStream } from "../transform/stream"
 import { getOpenAIToolParams, ToolCallProcessor } from "../transform/tool-call-processor"
 
@@ -509,7 +510,7 @@ export class OpenAiNativeHandler implements ApiHandler {
 		stream: AsyncIterable<OpenAI.Responses.ResponseStreamEvent>,
 		modelInfo: ModelInfo,
 	): ApiStream {
-		const functionCallByItemId = new Map<string, { call_id?: string; name?: string; id?: string }>()
+		const identityRegistry = createResponsesRegistry("openai-native")
 
 		for await (const chunk of stream) {
 			Logger.debug(`OpenAI Responses Chunk: ${JSON.stringify(chunk)}`)
@@ -517,19 +518,12 @@ export class OpenAiNativeHandler implements ApiHandler {
 			if (chunk.type === "response.output_item.added") {
 				const item = chunk.item
 				if (item.type === "function_call" && item.id) {
-					functionCallByItemId.set(item.id, { call_id: item.call_id, name: item.name, id: item.id })
-					yield {
-						type: "tool_calls",
-						id: item.id,
-						tool_call: {
-							call_id: item.call_id,
-							function: {
-								id: item.id,
-								name: item.name,
-								arguments: item.arguments,
-							},
-						},
-					}
+					const identity = identityRegistry.registerItem({
+						itemId: item.id,
+						functionId: item.call_id,
+						name: item.name,
+					})
+					yield createResponsesToolChunk(identity, item.arguments)
 				}
 				if (item.type === "reasoning" && item.encrypted_content && item.id) {
 					yield {
@@ -542,22 +536,13 @@ export class OpenAiNativeHandler implements ApiHandler {
 			}
 			if (chunk.type === "response.output_item.done") {
 				const item = chunk.item
-				if (item.type === "function_call") {
-					if (item.id) {
-						functionCallByItemId.set(item.id, { call_id: item.call_id, name: item.name, id: item.id })
-					}
-					yield {
-						type: "tool_calls",
-						id: item.id || item.call_id,
-						tool_call: {
-							call_id: item.call_id,
-							function: {
-								id: item.id,
-								name: item.name,
-								arguments: item.arguments,
-							},
-						},
-					}
+				if (item.type === "function_call" && item.id) {
+					const identity = identityRegistry.registerItem({
+						itemId: item.id,
+						functionId: item.call_id,
+						name: item.name,
+					})
+					yield createResponsesToolChunk(identity, item.arguments)
 				}
 				if (item.type === "reasoning") {
 					yield {
@@ -609,40 +594,13 @@ export class OpenAiNativeHandler implements ApiHandler {
 				}
 			}
 			if (chunk.type === "response.function_call_arguments.delta") {
-				const pendingCall = functionCallByItemId.get(chunk.item_id)
-				const callId = pendingCall?.call_id
-				const functionName = pendingCall?.name
-				const functionId = pendingCall?.id || chunk.item_id
-
-				yield {
-					type: "tool_calls",
-					tool_call: {
-						call_id: callId,
-						function: {
-							id: functionId,
-							name: functionName,
-							arguments: chunk.delta,
-						},
-					},
-				}
+				const identity = identityRegistry.requireItem(chunk.item_id)
+				yield createResponsesToolChunk(identity, chunk.delta)
 			}
 			if (chunk.type === "response.function_call_arguments.done") {
 				if (chunk.item_id && chunk.name && chunk.arguments) {
-					const pendingCall = functionCallByItemId.get(chunk.item_id)
-					const callId = pendingCall?.call_id
-					const functionId = pendingCall?.id || chunk.item_id
-
-					yield {
-						type: "tool_calls",
-						tool_call: {
-							call_id: callId,
-							function: {
-								id: functionId,
-								name: chunk.name,
-								arguments: chunk.arguments,
-							},
-						},
-					}
+					const identity = identityRegistry.requireItem(chunk.item_id)
+					yield createResponsesToolChunk(identity, chunk.arguments)
 				}
 			}
 

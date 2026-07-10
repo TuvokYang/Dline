@@ -11,14 +11,33 @@ import { TaskPhase } from "../TaskPhase"
 import type { TaskSnapshot } from "../TaskSnapshot"
 
 /**
+ * Create a canonical stored native tool fixture.
+ *
+ * @param id Fixture identity suffix.
+ * @param name Tool name.
+ * @param input Tool input.
+ * @returns Canonical stored tool-use block.
+ */
+function createStoredTool(id: string, name: string, input: Record<string, unknown>): ClineAssistantToolUseBlock {
+	return {
+		type: "tool_use",
+		id: `item_${id}`,
+		item_id: `item_${id}`,
+		function_id: `call_${id}`,
+		dline_tid: `tid_${id}`,
+		call_id: `call_${id}`,
+		name,
+		input,
+	}
+}
+
+/**
  * Tests for RestoreHandler — validates all restore modes and replayPendingTools.
  */
 describe("RestoreHandler", () => {
 	function createMockContext(overrides: Partial<RestoreContext> = {}): RestoreContext {
 		return {
-			taskState: {
-				toolUseIdMap: new Map(),
-			} as unknown as RestoreContext["taskState"],
+			taskState: {} as RestoreContext["taskState"],
 			controller: {
 				transition: () => ({}),
 				reset: () => {},
@@ -222,15 +241,7 @@ describe("RestoreHandler", () => {
 		const handler = new RestoreHandler(ctx)
 		const pending: PendingToolUseState = {
 			assistantIndex: 2,
-			toolUseBlocks: [
-				{
-					type: "tool_use",
-					id: "tool_1",
-					call_id: "call_1",
-					name: "read_file",
-					input: { filePath: "/test.ts" },
-				} as ClineAssistantToolUseBlock,
-			],
+			toolUseBlocks: [createStoredTool("1", "read_file", { filePath: "/test.ts" })],
 			answeredToolResults: [],
 			sanitizedHistory: [],
 		}
@@ -263,15 +274,7 @@ describe("RestoreHandler", () => {
 		const handler = new RestoreHandler(ctx)
 		await handler.replayPendingTools({
 			assistantIndex: 1,
-			toolUseBlocks: [
-				{
-					type: "tool_use",
-					id: "tool_1",
-					call_id: "call_1",
-					name: "read_file",
-					input: { filePath: "/test.ts" },
-				} as ClineAssistantToolUseBlock,
-			],
+			toolUseBlocks: [createStoredTool("1", "read_file", { filePath: "/test.ts" })],
 			answeredToolResults: [],
 			sanitizedHistory: [{}, {}] as unknown as ClineStorageMessage[],
 		})
@@ -283,9 +286,7 @@ describe("RestoreHandler", () => {
 		const transitionCalls: Parameters<RestoreContext["controller"]["transition"]>[] = []
 		let overwrittenHistory: ClineStorageMessage[] | undefined
 		let recursiveContent: ClineUserToolResultContentBlock[] | undefined
-		const taskState = {
-			toolUseIdMap: new Map<string, string>(),
-		} as unknown as RestoreContext["taskState"]
+		const taskState = {} as RestoreContext["taskState"]
 		const ctx = createMockContext({
 			taskState,
 			controller: {
@@ -324,20 +325,8 @@ describe("RestoreHandler", () => {
 			{
 				assistantIndex: 1,
 				toolUseBlocks: [
-					{
-						type: "tool_use",
-						id: "tool_read",
-						call_id: "call_read",
-						name: "read_file",
-						input: { path: "a.ts" },
-					} as ClineAssistantToolUseBlock,
-					{
-						type: "tool_use",
-						id: "tool_write",
-						call_id: "call_write",
-						name: "write_to_file",
-						input: { path: "b.ts", content: "next" },
-					} as ClineAssistantToolUseBlock,
+					createStoredTool("read", "read_file", { path: "a.ts" }),
+					createStoredTool("write", "write_to_file", { path: "b.ts", content: "next" }),
 				],
 				answeredToolResults: [answeredToolResult],
 				sanitizedHistory,
@@ -351,8 +340,6 @@ describe("RestoreHandler", () => {
 		)
 		assert.deepEqual(taskState.userMessageContent, [answeredToolResult])
 		assert.deepEqual(recursiveContent, [answeredToolResult])
-		assert.equal(taskState.toolUseIdMap.get("call_read"), "tool_read")
-		assert.equal(taskState.toolUseIdMap.get("call_write"), "tool_write")
 		assert.deepEqual(overwrittenHistory, sanitizedHistory)
 		const lastTransition = transitionCalls.at(-1)
 		assert.ok(lastTransition, "Expected replay to enter executing phase")

@@ -619,7 +619,7 @@ export class WriteToFileToolHandler implements IFullyManagedTool {
 				config.taskState.userMessageContent,
 				ToolDisplayUtils.getToolDescription,
 				config.coordinator,
-				config.taskState.toolUseIdMap,
+				config.identityFactory.nextItemId,
 			)
 			if (!config.enableParallelToolCalling) {
 				config.taskState.didAlreadyUseTool = true

@@ -18,6 +18,7 @@ import {
 	ClineTextContentBlock,
 	ClineUserToolResultContentBlock,
 } from "@/shared/messages/content"
+import { sanitizeAnthropicMessages } from "../anthropic-format"
 import { convertToAnthropicMessage, convertToOpenAiMessages } from "../openai-format"
 
 describe("Tool Call Parsing", () => {
@@ -30,6 +31,7 @@ describe("Tool Call Parsing", () => {
 						{
 							type: "tool_use",
 							id: "toolu_abc123",
+							function_id: "toolu_abc123",
 							name: "read_file",
 							input: { path: "/test/file.ts" },
 						} as ClineAssistantToolUseBlock,
@@ -56,7 +58,8 @@ describe("Tool Call Parsing", () => {
 					content: [
 						{
 							type: "tool_use",
-							id: longId,
+							id: "dline_item_long",
+							function_id: longId,
 							name: "test_tool",
 							input: {},
 						} as ClineAssistantToolUseBlock,
@@ -79,7 +82,8 @@ describe("Tool Call Parsing", () => {
 					content: [
 						{
 							type: "tool_use",
-							id: responsesApiId,
+							id: "dline_item_responses",
+							function_id: responsesApiId,
 							name: "test_tool",
 							input: {},
 						} as ClineAssistantToolUseBlock,
@@ -95,6 +99,66 @@ describe("Tool Call Parsing", () => {
 			msg.tool_calls[0].id.length.should.be.belowOrEqual(40)
 		})
 
+		it("should reject non-canonical Chat tool blocks", () => {
+			const messages: ClineStorageMessage[] = [
+				{
+					role: "assistant",
+					content: [
+						{
+							type: "tool_use",
+							id: "legacy_only",
+							name: "read_file",
+							input: { path: "/test.ts" },
+						} as ClineAssistantToolUseBlock,
+					],
+				},
+			]
+
+			;(() => convertToOpenAiMessages(messages, "openai-native")).should.throw(/missing function_id/)
+		})
+
+		it("should project canonical function_id to both Chat pairing fields", () => {
+			const functionId = `call_${"p".repeat(50)}`
+			const messages: ClineStorageMessage[] = [
+				{
+					role: "assistant",
+					content: [
+						{
+							type: "tool_use",
+							id: "legacy_use_id",
+							item_id: "dline_item_use",
+							function_id: functionId,
+							dline_tid: "dline_tid_pair",
+							name: "read_file",
+							input: { path: "/test.ts" },
+						} as ClineAssistantToolUseBlock,
+					],
+				},
+				{
+					role: "user",
+					content: [
+						{
+							type: "tool_result",
+							tool_use_id: "legacy_result_id",
+							item_id: "dline_item_result",
+							function_id: functionId,
+							dline_tid: "dline_tid_pair",
+							content: "file contents here",
+						} as ClineUserToolResultContentBlock,
+					],
+				},
+			]
+
+			const result = convertToOpenAiMessages(messages, "openai-native")
+			const assistantMsg = result[0] as OpenAI.Chat.ChatCompletionAssistantMessageParam
+			const toolMsg = result[1] as OpenAI.Chat.ChatCompletionToolMessageParam
+
+			assistantMsg.tool_calls?.[0].id.should.equal(toolMsg.tool_call_id)
+			assistantMsg.tool_calls?.[0].id.should.not.equal("legacy_use_id")
+			toolMsg.tool_call_id.should.not.equal("legacy_result_id")
+			JSON.stringify(result).should.not.match(/item_id|function_id|dline_tid/)
+		})
+
 		it("should match tool_call_id with tool_calls id for tool results", () => {
 			const toolId = "toolu_abc123"
 			const messages: ClineStorageMessage[] = [
@@ -103,7 +167,8 @@ describe("Tool Call Parsing", () => {
 					content: [
 						{
 							type: "tool_use",
-							id: toolId,
+							id: "dline_item_use_match",
+							function_id: toolId,
 							name: "read_file",
 							input: { path: "/test.ts" },
 						} as ClineAssistantToolUseBlock,
@@ -115,6 +180,7 @@ describe("Tool Call Parsing", () => {
 						{
 							type: "tool_result",
 							tool_use_id: toolId,
+							function_id: toolId,
 							content: "file contents here",
 						} as ClineUserToolResultContentBlock,
 					],
@@ -145,13 +211,15 @@ describe("Tool Call Parsing", () => {
 						} as ClineTextContentBlock,
 						{
 							type: "tool_use",
-							id: "tool_1",
+							id: "dline_item_tool_1",
+							function_id: "tool_1",
 							name: "read_file",
 							input: { path: "/file1.ts" },
 						} as ClineAssistantToolUseBlock,
 						{
 							type: "tool_use",
-							id: "tool_2",
+							id: "dline_item_tool_2",
+							function_id: "tool_2",
 							name: "read_file",
 							input: { path: "/file2.ts" },
 						} as ClineAssistantToolUseBlock,
@@ -176,6 +244,7 @@ describe("Tool Call Parsing", () => {
 						{
 							type: "tool_result",
 							tool_use_id: "tool_123",
+							function_id: "tool_123",
 							content: [
 								{ type: "text", text: "Line 1" },
 								{ type: "text", text: "Line 2" },
@@ -200,7 +269,8 @@ describe("Tool Call Parsing", () => {
 					content: [
 						{
 							type: "tool_use",
-							id: "tool_1",
+							id: "dline_item_tool_only",
+							function_id: "tool_1",
 							name: "test",
 							input: {},
 						} as ClineAssistantToolUseBlock,
@@ -213,6 +283,66 @@ describe("Tool Call Parsing", () => {
 			const msg = result[0] as any
 			// Content should be null, not undefined or empty string
 			;(msg.content === null).should.be.true()
+		})
+	})
+
+	describe("sanitizeAnthropicMessages - Canonical Tool Identity", () => {
+		it("should reject non-canonical Anthropic tool blocks", () => {
+			const messages: ClineStorageMessage[] = [
+				{
+					role: "assistant",
+					content: [
+						{
+							type: "tool_use",
+							id: "legacy_only",
+							name: "read_file",
+							input: { path: "/test.ts" },
+						} as ClineAssistantToolUseBlock,
+					],
+				},
+			]
+
+			;(() => sanitizeAnthropicMessages(messages, false)).should.throw(/missing function_id/)
+		})
+
+		it("should project function_id to Anthropic pairing fields and remove Dline metadata", () => {
+			const messages: ClineStorageMessage[] = [
+				{
+					role: "assistant",
+					content: [
+						{
+							type: "tool_use",
+							id: "legacy_use_id",
+							item_id: "dline_item_use",
+							function_id: "call_provider_1",
+							dline_tid: "dline_tid_1",
+							name: "read_file",
+							input: { path: "/test.ts" },
+						} as ClineAssistantToolUseBlock,
+					],
+				},
+				{
+					role: "user",
+					content: [
+						{
+							type: "tool_result",
+							tool_use_id: "legacy_result_id",
+							item_id: "dline_item_result",
+							function_id: "call_provider_1",
+							dline_tid: "dline_tid_1",
+							content: "file contents",
+						} as ClineUserToolResultContentBlock,
+					],
+				},
+			]
+
+			const result = sanitizeAnthropicMessages(messages, false)
+			const toolUse = (result[0].content as ClineAssistantToolUseBlock[])[0]
+			const toolResult = (result[1].content as ClineUserToolResultContentBlock[])[0]
+
+			toolUse.id.should.equal("call_provider_1")
+			toolResult.tool_use_id.should.equal("call_provider_1")
+			JSON.stringify(result).should.not.match(/item_id|function_id|dline_tid|call_id/)
 		})
 	})
 
