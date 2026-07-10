@@ -16,6 +16,7 @@ type UpdateApiReqMsgParams = {
 	outputTokens: number
 	cacheWriteTokens: number
 	cacheReadTokens: number
+	contextTokens: number
 	totalCost?: number
 	cacheHitRate?: number
 	api: ApiHandler
@@ -23,10 +24,13 @@ type UpdateApiReqMsgParams = {
 	streamingFailedMessage?: string
 }
 
-// update api_req_started. we can't use api_req_finished anymore since it's a unique case where it could come after a streaming message (ie in the middle of being updated or executed)
-// fortunately api_req_finished was always parsed out for the gui anyways, so it remains solely for legacy purposes to keep track of prices in tasks from history
-// (it's worth removing a few months from now)
-export const updateApiReqMsg = async (params: UpdateApiReqMsgParams) => {
+/**
+ * Finalize persisted API request usage and pricing metadata.
+ *
+ * @param params Normalized request metrics and persistence dependencies.
+ * @returns A promise that resolves after the request message is updated.
+ */
+export const updateApiReqMsg = async (params: UpdateApiReqMsgParams): Promise<void> => {
 	const clineMessages = params.messageStateHandler.clineMessages
 	const currentApiReqInfo: ClineApiReqInfo = JSON.parse(clineMessages[params.lastApiReqIndex].text || "{}")
 	delete currentApiReqInfo.retryStatus // Clear retry status when request is finalized
@@ -38,6 +42,7 @@ export const updateApiReqMsg = async (params: UpdateApiReqMsgParams) => {
 	await params.messageStateHandler.updateClineMessage(params.lastApiReqIndex, {
 		text: JSON.stringify({
 			...currentApiReqInfo, // Spread the modified info (with retryStatus removed)
+			contextTokens: params.contextTokens,
 			tokensIn: params.inputTokens,
 			tokensOut: params.outputTokens,
 			cacheWrites: params.cacheWriteTokens,

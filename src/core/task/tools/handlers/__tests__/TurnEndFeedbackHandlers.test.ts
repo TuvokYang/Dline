@@ -95,6 +95,12 @@ function createConfig(text: string): TaskConfig {
 		focusChainSettings: {} as TaskConfig["focusChainSettings"],
 		callbacks,
 		coordinator: {} as TaskConfig["coordinator"],
+		identityFactory: {
+			/** Return a stable result item identity for this fixture. */
+			nextItemId: () => "dline_item_turn_end_test",
+			/** Return a stable trace identity for this fixture. */
+			nextTraceId: () => "dline_tid_turn_end_test",
+		},
 	}
 }
 

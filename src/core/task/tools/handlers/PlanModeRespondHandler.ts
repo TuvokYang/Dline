@@ -7,6 +7,7 @@ import { ClinePlanModeResponse } from "@/shared/ExtensionMessage"
 import { Logger } from "@/shared/services/Logger"
 import { ClineDefaultTool } from "@/shared/tools"
 import type { ToolResponse } from "../../index"
+import { isCompactSignal } from "../../mode-switch-signal"
 import type { IPartialBlockHandler, IToolHandler } from "../ToolExecutorCoordinator"
 import type { TaskConfig } from "../types/TaskConfig"
 import type { StronglyTypedUIHelpers } from "../types/UIHelpers"
@@ -100,6 +101,10 @@ export class PlanModeRespondHandler implements IToolHandler, IPartialBlockHandle
 		} = await config.callbacks.ask(this.name, JSON.stringify(sharedMessage), false, { existingTs: block.ts })
 
 		config.taskState.isAwaitingPlanResponse = false
+
+		if (isCompactSignal(text)) {
+			return formatResponse.toolResult("Mode switch context compaction requested.")
+		}
 
 		// webview invoke sendMessage will send this marker in order to put webview into the proper state (responding to an ask) and as a flag to extension that the user switched to ACT mode.
 		if (text === "PLAN_MODE_TOGGLE_RESPONSE") {

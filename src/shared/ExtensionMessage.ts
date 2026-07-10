@@ -13,6 +13,7 @@ import { HistoryItem } from "./HistoryItem"
 import type { LoadCapabilityPayload } from "./load-capabilities"
 import { McpDisplayMode } from "./McpDisplayMode"
 import { ClineMessageModelInfo } from "./messages"
+import type { ModeSwitchSnapshot } from "./mode-switch"
 import { OnboardingModelGroup } from "./proto/dline/state"
 import type { TaskLockStatus } from "./proto/dline/task"
 import { Mode } from "./storage/types"
@@ -38,6 +39,10 @@ export const DEFAULT_PLATFORM = "unknown"
 
 export const COMMAND_CANCEL_TOKEN = "__cline_command_cancel__"
 export interface ExtensionState {
+	/** Monotonic revision used to reject stale asynchronous state snapshots. */
+	stateRevision: number
+	/** Current task-local mode-switch transaction state. */
+	modeSwitch?: ModeSwitchSnapshot
 	isNewUser: boolean
 	welcomeViewCompleted: boolean
 	onboardingModels: OnboardingModelGroup | undefined
@@ -532,6 +537,8 @@ export interface ClineAskSpawnTask {
 
 export interface ClineApiReqInfo {
 	request?: string
+	/** Canonical context occupancy after provider usage normalization. */
+	contextTokens?: number
 	tokensIn?: number
 	tokensOut?: number
 	cacheWrites?: number

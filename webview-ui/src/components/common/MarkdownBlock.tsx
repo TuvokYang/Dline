@@ -1,5 +1,4 @@
 import { StringRequest } from "@shared/proto/dline/common"
-import { PlanActMode, TogglePlanActModeRequest } from "@shared/proto/dline/state"
 import { SquareArrowOutUpRightIcon } from "lucide-react"
 import { marked } from "marked"
 import type { ComponentProps } from "react"
@@ -9,11 +8,12 @@ import rehypeHighlight, { Options } from "rehype-highlight"
 import remarkGfm from "remark-gfm"
 import type { Node } from "unist"
 import { visit } from "unist-util-visit"
+import { useModeSwitch } from "@/components/chat/mode-switch/useModeSwitch"
 import MermaidBlock from "@/components/common/MermaidBlock"
 import { Button } from "@/components/ui/button"
 import { useExtensionState } from "@/context/ExtensionStateContext"
 import { cn } from "@/lib/utils"
-import { FileServiceClient, StateServiceClient } from "@/services/grpc-client"
+import { FileServiceClient } from "@/services/grpc-client"
 import { WithCopyButton } from "./CopyButton"
 import UnsafeImage from "./UnsafeImage"
 
@@ -118,55 +118,23 @@ MemoizedMarkdown.displayName = "MemoizedMarkdown"
  * A component for Act Mode text that contains a clickable toggle and keyboard shortcut hint.
  */
 const ActModeHighlight: React.FC = () => {
-	const { mode } = useExtensionState()
-	const [isSwitchingMode, setIsSwitchingMode] = useState(false)
-	const switchTimerRef = useRef<NodeJS.Timeout>()
-	const canSwitchToAct = mode === "plan" && !isSwitchingMode
+	const { mode, modeSwitch, stateRevision } = useExtensionState()
+	const modeSwitchFlow = useModeSwitch({
+		mode,
+		stateRevision,
+		modeSwitch,
+		draft: { text: "", images: [], files: [] },
+		attachDraft: false,
+		onSend: () => undefined,
+		clearDraft: () => undefined,
+	})
+	const canSwitchToAct = mode === "plan" && !modeSwitchFlow.isSwitchPending
 
-	const releaseSwitchLock = useCallback(() => {
-		setIsSwitchingMode(false)
-		if (switchTimerRef.current) {
-			clearTimeout(switchTimerRef.current)
-			switchTimerRef.current = undefined
-		}
-	}, [])
-
-	useEffect(() => {
-		if (mode !== "plan") {
-			releaseSwitchLock()
-		}
-	}, [mode, releaseSwitchLock])
-
-	useEffect(() => {
-		return () => {
-			if (switchTimerRef.current) {
-				clearTimeout(switchTimerRef.current)
-			}
-		}
-	}, [])
-
+	/** Request Act mode through the shared backend transaction. */
 	const handleSwitchToAct = useCallback(async () => {
-		// Only toggle to Act mode if we're currently in Plan mode
-		if (!canSwitchToAct) {
-			return
-		}
-
-		setIsSwitchingMode(true)
-		switchTimerRef.current = setTimeout(releaseSwitchLock, 3_000)
-		try {
-			const result = await StateServiceClient.togglePlanActModeProto(
-				TogglePlanActModeRequest.create({
-					mode: PlanActMode.ACT,
-				}),
-			)
-			if (!result.value) {
-				releaseSwitchLock()
-			}
-		} catch (error) {
-			console.error("Failed to toggle to Act mode:", error)
-			releaseSwitchLock()
-		}
-	}, [canSwitchToAct, releaseSwitchLock])
+		if (!canSwitchToAct) return
+		await modeSwitchFlow.requestSwitch("act")
+	}, [canSwitchToAct, modeSwitchFlow.requestSwitch])
 
 	return (
 		<span

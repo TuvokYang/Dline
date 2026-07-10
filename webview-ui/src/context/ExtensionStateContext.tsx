@@ -38,6 +38,12 @@ import {
 const getTaskViewKey = (taskId?: string, taskTitleMessageTs?: number) =>
 	taskId ?? (taskTitleMessageTs != null ? `task-title:${taskTitleMessageTs}` : undefined)
 
+/** Decide whether an incoming full state snapshot may replace current Webview state. */
+export function shouldAcceptState(currentRevision: number, incomingRevision?: number): boolean {
+	if (incomingRevision === undefined) return currentRevision === 0
+	return incomingRevision > currentRevision
+}
+
 const mergeClineMessagesByTs = (existing: ClineMessage[], incoming: ClineMessage[]): ClineMessage[] => {
 	const merged: ClineMessage[] = []
 	const indexByTs = new Map<number, number>()
@@ -260,6 +266,7 @@ export const ExtensionStateContextProvider: React.FC<{
 	}, [closeMcpView])
 
 	const [state, setState] = useState<ExtensionState>({
+		stateRevision: 0,
 		version: "",
 		taskHistory: [],
 		shouldShowAnnouncement: false,
@@ -469,6 +476,7 @@ export const ExtensionStateContextProvider: React.FC<{
 
 	// References to store subscription cancellation functions
 	const stateSubscriptionRef = useRef<(() => void) | null>(null)
+	const stateRevisionRef = useRef(0)
 
 	const mcpButtonUnsubscribeRef = useRef<(() => void) | null>(null)
 	const historyButtonClickedSubscriptionRef = useRef<(() => void) | null>(null)
@@ -503,6 +511,10 @@ export const ExtensionStateContextProvider: React.FC<{
 				if (response.stateJson) {
 					try {
 						const stateData = JSON.parse(response.stateJson) as ExtensionState
+						if (!shouldAcceptState(stateRevisionRef.current, stateData.stateRevision)) {
+							return
+						}
+						stateRevisionRef.current = stateData.stateRevision ?? 0
 						setState((prevState) => {
 							// Versioning logic for autoApprovalSettings
 							const incomingVersion = stateData.autoApprovalSettings?.version ?? 1
@@ -952,7 +964,6 @@ export const ExtensionStateContextProvider: React.FC<{
 		refreshVercelAiGatewayModels,
 		state?.apiConfiguration?.planModeProfile,
 		refreshBasetenModels,
-		state?.apiConfiguration?.actModeProfile,
 		refreshLiteLlmModels,
 		openRouterModels,
 		vercelAiGatewayModels,

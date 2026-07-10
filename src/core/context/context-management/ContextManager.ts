@@ -5,11 +5,14 @@ import { formatResponse } from "@core/prompts/responses"
 import { GlobalFileNames } from "@core/storage/disk"
 import { readJsonl, writeJsonl } from "@core/storage/jsonl-utils"
 import { ClineApiReqInfo, ClineMessage } from "@shared/ExtensionMessage"
+import type { ClineAssistantToolUseBlock, ClineUserToolResultContentBlock } from "@shared/messages/content"
 import cloneDeep from "clone-deep"
 import fs from "fs/promises"
 import * as path from "path"
 import { Logger } from "@/shared/services/Logger"
+import { getResultFunctionId, getUseFunctionId } from "../../api/transform/tool-identity-projector"
 import { isTurnEndingToolName } from "../../task/assistant-message-order"
+import { getContextTokens, readContextTokens } from "./context-pressure"
 import { computeCompactTrigger, computeSummarizeBudget, getContextWindowInfo } from "./context-window-utils"
 
 enum EditType {
@@ -160,8 +163,7 @@ export class ContextManager {
 			const previousRequestText = clineMessages[previousApiReqIndex]?.text
 			if (previousRequestText) {
 				try {
-					const { tokensIn, tokensOut, cacheWrites, cacheReads }: ClineApiReqInfo = JSON.parse(previousRequestText)
-					const totalTokens = (tokensIn || 0) + (tokensOut || 0) + (cacheWrites || 0) + (cacheReads || 0)
+					const totalTokens = readContextTokens(previousRequestText)
 
 					const { contextWindow, maxAllowedSize } = getContextWindowInfo(api)
 					const roundedThreshold = thresholdPercentage
@@ -207,8 +209,7 @@ export class ContextManager {
 			const targetRequestText = clineMessages[targetIndex]?.text
 			if (targetRequestText) {
 				try {
-					const { tokensIn, tokensOut, cacheWrites, cacheReads }: ClineApiReqInfo = JSON.parse(targetRequestText)
-					const tokensUsed = (tokensIn || 0) + (tokensOut || 0) + (cacheWrites || 0) + (cacheReads || 0)
+					const tokensUsed = readContextTokens(targetRequestText)
 
 					const { contextWindow } = getContextWindowInfo(api)
 
@@ -244,8 +245,8 @@ export class ContextManager {
 				const previousRequestText = clineMessages[previousApiReqIndex]?.text
 				if (previousRequestText) {
 					const timestamp = clineMessages[previousApiReqIndex].ts
-					const { tokensIn, tokensOut, cacheWrites, cacheReads }: ClineApiReqInfo = JSON.parse(previousRequestText)
-					const totalTokens = (tokensIn || 0) + (tokensOut || 0) + (cacheWrites || 0) + (cacheReads || 0)
+					const requestInfo: ClineApiReqInfo = JSON.parse(previousRequestText)
+					const totalTokens = getContextTokens(requestInfo)
 					const { contextWindow } = getContextWindowInfo(api)
 					const triggerTokens = computeCompactTrigger(contextWindow, computeSummarizeBudget())
 
@@ -373,8 +374,28 @@ export class ContextManager {
 	}
 
 	/**
+	 * Resolve the provider-neutral pairing identity for a stored tool use.
+	 *
+	 * @param block Stored assistant tool-use block.
+	 * @returns Canonical function identity, with the legacy Anthropic id as fallback.
+	 */
+	private getToolFunctionId(block: Anthropic.Messages.ToolUseBlockParam): string {
+		return getUseFunctionId(block as ClineAssistantToolUseBlock)
+	}
+
+	/**
+	 * Resolve the provider-neutral pairing identity for a stored tool result.
+	 *
+	 * @param block Stored user tool-result block.
+	 * @returns Canonical function identity, with the legacy tool_use_id as fallback.
+	 */
+	private getResultFunctionId(block: Anthropic.Messages.ToolResultBlockParam): string {
+		return getResultFunctionId(block as ClineUserToolResultContentBlock)
+	}
+
+	/**
 	 * Ensures that every tool_use block in assistant messages has a corresponding tool_result in the next user message,
-	 * and that tool_result blocks immediately follow their corresponding tool_use blocks
+	 * and that tool_result blocks immediately follow their corresponding tool_use blocks.
 	 */
 	private ensureToolResultsFollowToolUse(messages: Anthropic.Messages.MessageParam[]): void {
 		for (let i = 0; i < messages.length - 1; i++) {
@@ -385,11 +406,11 @@ export class ContextManager {
 				continue
 			}
 
-			// Extract tool_use IDs in order
+			// Extract provider-neutral function identities in order.
 			const toolUseIds: string[] = []
 			for (const block of message.content) {
 				if (block.type === "tool_use" && block.id) {
-					toolUseIds.push(block.id)
+					toolUseIds.push(this.getToolFunctionId(block))
 				}
 			}
 
@@ -407,7 +428,7 @@ export class ContextManager {
 				const unpairedIds: string[] = []
 				for (const block of message.content) {
 					if (block.type === "tool_use" && block.id) {
-						unpairedIds.push(block.id)
+						unpairedIds.push(this.getToolFunctionId(block))
 					}
 				}
 				if (unpairedIds.length === 0) {
@@ -417,7 +438,10 @@ export class ContextManager {
 				// Build synthetic tool_results for all unpaired tool_uses
 				const syntheticResults: Anthropic.Messages.ToolResultBlockParam[] = []
 				for (const toolUseId of unpairedIds) {
-					const toolBlock = (message.content as any[]).find((b: any) => b.type === "tool_use" && b.id === toolUseId)
+					const toolBlock = (message.content as Anthropic.Messages.ContentBlockParam[]).find(
+						(block): block is Anthropic.Messages.ToolUseBlockParam =>
+							block.type === "tool_use" && this.getToolFunctionId(block) === toolUseId,
+					)
 					const toolName = toolBlock?.name || "unknown"
 					const isTurnEnding = isTurnEndingToolName(toolName)
 					const resultContent = isTurnEnding
@@ -447,8 +471,8 @@ export class ContextManager {
 			}
 
 			// Separate tool_results from other blocks.
-			// Use Map to deduplicate by tool_use_id — duplicates can appear when
-			// the same tool executes twice (e.g. partial + reRender lifecycle bug).
+			// Use Map to deduplicate by canonical function identity — duplicates can
+			// appear when the same tool executes twice (e.g. partial + reRender lifecycle bug).
 			// Only the last occurrence is kept; dedup is always performed even when
 			// no other repair is needed, to prevent "tool messages following
 			// tool_calls" mismatches that DeepSeek/OpenAI-compatible APIs reject.
@@ -457,30 +481,33 @@ export class ContextManager {
 
 			for (const block of nextMessage.content) {
 				if (block.type === "tool_result" && block.tool_use_id) {
-					if (toolResultMap.has(block.tool_use_id)) {
+					const functionId = this.getResultFunctionId(block)
+					if (toolResultMap.has(functionId)) {
 						hasDuplicates = true
-						const toolBlock = (message.content as any[]).find(
-							(b: any) => b.type === "tool_use" && b.id === block.tool_use_id,
+						const toolBlock = (message.content as Anthropic.Messages.ContentBlockParam[]).find(
+							(candidate): candidate is Anthropic.Messages.ToolUseBlockParam =>
+								candidate.type === "tool_use" && this.getToolFunctionId(candidate) === functionId,
 						)
 						Logger.warn(
-							`ContextManager: duplicate tool_result for tool_use_id=${block.tool_use_id} ` +
-								`tool=${toolBlock?.name ?? "unknown"} call_id=${(block as any).call_id ?? "N/A"}`,
+							`ContextManager: duplicate tool_result for function_id=${functionId} ` +
+								`tool=${toolBlock?.name ?? "unknown"} call_id=${(block as ClineUserToolResultContentBlock).call_id ?? "N/A"}`,
 						)
 					}
-					toolResultMap.set(block.tool_use_id, block)
+					toolResultMap.set(functionId, block)
 				}
 			}
 
-			// Add missing tool_results
+			// Add missing tool_results.
 			// Turn-ending tools (attempt_completion, ask_followup_question, plan_mode_respond)
-			// do not produce results, so provide a success message.
-			// Non-turn-ending tools: pushToolResult now always produces tool_result blocks,
-			// but with empty tool_use_id when the toolUseIdMap lookup fails. Repair those
-			// by setting the correct tool_use_id instead of injecting a duplicate block.
+			// do not produce results, so provide a success message. Non-turn-ending
+			// synthetic results are reserved for genuinely missing history entries.
 			let needsUpdate = false
 			for (const toolUseId of toolUseIds) {
 				if (!toolResultMap.has(toolUseId)) {
-					const toolBlock = (message.content as any[]).find((b: any) => b.type === "tool_use" && b.id === toolUseId)
+					const toolBlock = (message.content as Anthropic.Messages.ContentBlockParam[]).find(
+						(block): block is Anthropic.Messages.ToolUseBlockParam =>
+							block.type === "tool_use" && this.getToolFunctionId(block) === toolUseId,
+					)
 					const toolName = toolBlock?.name || "unknown"
 					const isTurnEnding = isTurnEndingToolName(toolName)
 
@@ -493,22 +520,9 @@ export class ContextManager {
 						})
 						needsUpdate = true
 					} else {
-						// Find the existing tool_result block with empty tool_use_id
-						// (produced by pushToolResult when toolUseIdMap lookup failed)
-						// and repair it by setting the correct tool_use_id instead of
-						// injecting a duplicate that would cause 400 errors.
-						const emptyBlock = (nextMessage.content as any[]).find(
-							(b: any) => b.type === "tool_result" && (!b.tool_use_id || b.tool_use_id === ""),
-						)
-						if (emptyBlock) {
-							emptyBlock.tool_use_id = toolUseId
-							toolResultMap.set(toolUseId, emptyBlock)
-							needsUpdate = true
-						}
-						// If no empty block exists (context truncation), inject a
-						// synthetic tool_result so that every tool_use has a matching
-						// tool message. Skipping here causes 400 errors from
-						// DeepSeek/OpenAI-compatible APIs.
+						// Missing results after truncation still require a synthetic pair
+						// so providers do not reject the repaired history. Canonical runtime
+						// results are already keyed by function_id and are never guessed here.
 						if (!toolResultMap.has(toolUseId)) {
 							toolResultMap.set(toolUseId, {
 								type: "tool_result",
@@ -546,7 +560,7 @@ export class ContextManager {
 			}
 			for (const block of nextMessage.content as Anthropic.Messages.ContentBlockParam[]) {
 				if (block.type === "tool_result" && block.tool_use_id) {
-					// Already added above in toolUseIds order
+					// Already added above in provider-neutral function identity order.
 				} else {
 					newContent.push(block)
 				}

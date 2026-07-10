@@ -1,4 +1,5 @@
 import type { ApiHandler } from "@core/api"
+import type { IdentityFactory } from "@core/api/transform/block-identity"
 import type { FileContextTracker } from "@core/context/context-tracking/FileContextTracker"
 import type { ClineIgnoreController } from "@core/ignore/ClineIgnoreController"
 import type { CommandPermissionController } from "@core/permissions"
@@ -68,6 +69,8 @@ export interface TaskConfig {
 
 	// Tool coordination
 	coordinator: ToolExecutorCoordinator
+	/** Task-local allocator for result item identities. */
+	identityFactory: IdentityFactory
 
 	/** VSCode extension context, required by spawn_task to create new webview panels. */
 	controllerContext?: any

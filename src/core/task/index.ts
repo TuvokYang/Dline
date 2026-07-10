@@ -1,9 +1,12 @@
 import { setTimeout as setTimeoutPromise } from "node:timers/promises"
 import { ApiHandler, ApiProviderInfo, buildApiHandler, resolveProviderFromProfile } from "@core/api"
+import { createIdentityFactory } from "@core/api/transform/block-identity"
 import { ApiStream } from "@core/api/transform/stream"
+import { createStreamNormalizer, normalizeApiStream } from "@core/api/transform/stream-identity-normalizer"
 import { AssistantMessageContent, parseAssistantMessageV2, TextStreamContent, ToolUse } from "@core/assistant-message"
 import { ContextManager } from "@core/context/context-management/ContextManager"
 import { checkContextWindowExceededError } from "@core/context/context-management/context-error-handling"
+import { getContextTokens, readContextTokens } from "@core/context/context-management/context-pressure"
 import { getContextWindowInfo } from "@core/context/context-management/context-window-utils"
 import {
 	hasToolResult,
@@ -47,6 +50,8 @@ import {
 import type { FrozenSystemPromptCache, SystemPromptRefreshReason } from "@core/storage/task-context-types"
 import { ensureApiMessages, ensureUserContent } from "@core/task/api-context"
 import { showContextUsage } from "@core/task/environment-context"
+import { type ModeCompactResult, ModeSwitchCompaction } from "@core/task/ModeSwitchCompaction"
+import { MODE_SWITCH_COMPACT_SIGNAL } from "@core/task/mode-switch-signal"
 import { isMultiRootEnabled } from "@core/workspace/multi-root-utils"
 import { WorkspaceRootManager } from "@core/workspace/WorkspaceRootManager"
 import { buildCheckpointManager, shouldUseMultiRoot } from "@integrations/checkpoints/factory"
@@ -65,6 +70,7 @@ import { listFiles } from "@services/glob/list-files"
 import { McpHub } from "@services/mcp/McpHub"
 import { ApiConfiguration, DEFAULT_API_PROVIDER } from "@shared/api"
 import { findLast, findLastIndex } from "@shared/array"
+import type { ChatContent } from "@shared/ChatContent"
 import { combineApiRequests } from "@shared/combineApiRequests"
 import { combineCommandSequences } from "@shared/combineCommandSequences"
 import { ClineApiReqCancelReason, ClineApiReqInfo, ClineAsk, ClineMessage, ClineSay } from "@shared/ExtensionMessage"
@@ -75,6 +81,7 @@ import { USER_CONTENT_TAGS } from "@shared/messages/constants"
 import type { ReasoningConfig } from "@shared/proto/dline/provider/common"
 import { convertClineMessageToProto } from "@shared/proto-conversions/cline-message"
 import { PROFILE_PROVIDER_KEYS } from "@shared/providers/profile-model-info"
+import type { Mode } from "@shared/storage/types"
 import { ClineDefaultTool, READ_ONLY_TOOLS } from "@shared/tools"
 import { ClineAskResponse } from "@shared/WebviewMessage"
 import { isLocalModel, isNextGenModelFamily, isParallelToolCallingEnabled } from "@utils/model-utils"
@@ -284,6 +291,7 @@ export class Task {
 	private urlContentFetcher: UrlContentFetcher
 	browserSession: BrowserSession
 	contextManager: ContextManager
+	private readonly modeSwitchCompaction = new ModeSwitchCompaction()
 	private diffViewProvider: DiffViewProvider
 	public checkpointManager?: ICheckpointManager
 	private initialCheckpointCommitPromise?: Promise<string | undefined>
@@ -298,6 +306,7 @@ export class Task {
 	 */
 	private useNativeToolCalls = false
 	private streamHandler: StreamResponseHandler
+	private readonly identityFactory = createIdentityFactory()
 
 	private terminalExecutionMode: "vscodeTerminal" | "backgroundExec"
 
@@ -481,7 +490,7 @@ export class Task {
 			this.FocusChainManager = new FocusChainManager({
 				taskId: this.taskId,
 				taskState: this.taskState,
-				mode: this.taskSm.mode,
+				getMode: () => this.getMode(),
 				stateManager: this.stateManager,
 				postStateToWebview: this.postStateToWebview,
 				say: this.say.bind(this),
@@ -577,16 +586,19 @@ export class Task {
 		const apiConfiguration = this.stateManager.getApiConfiguration()
 		const mode = this.taskSm.mode
 
-		// Establish task-level overrides for profile names
-		if (apiConfiguration.planModeProfile) {
-			this.stateManager.setTaskSettings(this.taskId, "planModeProfile", apiConfiguration.planModeProfile)
+		// Existing history bindings always win; global profiles initialize only
+		// genuinely new tasks whose task-local bindings are absent.
+		if (!historyItem && this.taskSm.planModeProfile === undefined && apiConfiguration.planModeProfile) {
+			this.taskSm.setPlanModeProfile(apiConfiguration.planModeProfile)
 		}
-		if (apiConfiguration.actModeProfile) {
-			this.stateManager.setTaskSettings(this.taskId, "actModeProfile", apiConfiguration.actModeProfile)
+		if (!historyItem && this.taskSm.actModeProfile === undefined && apiConfiguration.actModeProfile) {
+			this.taskSm.setActModeProfile(apiConfiguration.actModeProfile)
 		}
 
 		const effectiveApiConfiguration: ApiConfiguration = {
 			...apiConfiguration,
+			...(this.taskSm.planModeProfile !== undefined && { planModeProfile: this.taskSm.planModeProfile }),
+			...(this.taskSm.actModeProfile !== undefined && { actModeProfile: this.taskSm.actModeProfile }),
 			ulid: this.ulid,
 			onRetryAttempt: async (attempt: number, maxRetries: number, delay: number, error: any) => {
 				const clineMessages = this.messageStateHandler.clineMessages
@@ -617,7 +629,8 @@ export class Task {
 				}
 			},
 		}
-		const currentProfile = mode === "plan" ? apiConfiguration.planModeProfile : apiConfiguration.actModeProfile
+		const currentProfile =
+			mode === "plan" ? effectiveApiConfiguration.planModeProfile : effectiveApiConfiguration.actModeProfile
 		const currentProvider = resolveProviderFromProfile(currentProfile) || DEFAULT_API_PROVIDER
 
 		// Now that ulid is initialized, we can build the API handler
@@ -756,6 +769,8 @@ export class Task {
 			this.commandPermissionController,
 			this.contextManager,
 			this.stateManager,
+			() => this.getMode(),
+			this.identityFactory,
 			cwd,
 			this.taskId,
 			this.ulid,
@@ -794,18 +809,11 @@ export class Task {
 		const apiConfiguration = this.stateManager.getApiConfiguration()
 		const effectiveConfig: ApiConfiguration = {
 			...apiConfiguration,
+			...(this.taskSm.planModeProfile !== undefined && { planModeProfile: this.taskSm.planModeProfile }),
+			...(this.taskSm.actModeProfile !== undefined && { actModeProfile: this.taskSm.actModeProfile }),
 			ulid: this.ulid,
 		}
 		this.api = buildApiHandler(effectiveConfig, mode)
-		// Sync per-task profile cache so getCurrentProviderInfo reads the correct value
-		const currentProfile = mode === "plan" ? effectiveConfig.planModeProfile : effectiveConfig.actModeProfile
-		if (currentProfile) {
-			if (mode === "plan") {
-				this.taskSm.setPlanModeProfile(currentProfile)
-			} else {
-				this.taskSm.setActModeProfile(currentProfile)
-			}
-		}
 		// Update toolExecutor's api reference so tool handlers use the new handler
 		if (this.toolExecutor) {
 			;(this.toolExecutor as any).api = this.api
@@ -899,6 +907,60 @@ export class Task {
 		"generate_report",
 	])
 
+	/** Return the task-local mode without shared active-task routing. */
+	getMode(): Mode {
+		return this.taskSm.mode
+	}
+
+	/**
+	 * Commit a validated task-local mode switch and rebuild runtime dependencies.
+	 *
+	 * @param targetMode Validated target mode.
+	 * @param chatContent Optional pending draft to submit after handler rebuild.
+	 */
+	async commitMode(targetMode: Mode, chatContent?: ChatContent): Promise<void> {
+		this.taskSm.setMode(targetMode)
+		this.rebuildApiHandler()
+		if (targetMode === "act" && this.taskState.isAwaitingPlanResponse) {
+			this.taskState.didRespondToPlanAskBySwitchingMode = true
+			const hasContent = Boolean(chatContent?.message || chatContent?.images?.length || chatContent?.files?.length)
+			await this.handleWebviewAskResponse(
+				"messageResponse",
+				chatContent?.message || (hasContent ? "" : "PLAN_MODE_TOGGLE_RESPONSE"),
+				chatContent?.images,
+				chatContent?.files,
+			)
+		}
+		await this.stateManager.flushPendingState()
+	}
+
+	/**
+	 * Request source-mode context compaction for one mode-switch operation.
+	 *
+	 * @param operationId Coordinator operation identity.
+	 * @returns Completion status after summary application.
+	 */
+	async compactForMode(operationId: string): Promise<ModeCompactResult> {
+		return this.modeSwitchCompaction.request(operationId, () => this.resolveCompactAsk())
+	}
+
+	/** Release the task loop after target-mode commit. */
+	releaseCompact(operationId: string): void {
+		this.modeSwitchCompaction.release(operationId)
+	}
+
+	/** Fail and release a matching mode-switch compaction operation. */
+	failCompact(operationId: string, reason: string): void {
+		this.modeSwitchCompaction.fail(operationId, reason)
+	}
+
+	/** Resolve the current conversational ask with an internal compact signal. */
+	private resolveCompactAsk(): void {
+		if (this.taskState.isAwaitingPlanResponse) {
+			this.taskController.resolveAsk("messageResponse", MODE_SWITCH_COMPACT_SIGNAL)
+		}
+	}
+
 	async handleWebviewAskResponse(askResponse: ClineAskResponse, text?: string, images?: string[], files?: string[]) {
 		this.taskController.resolveAsk(askResponse, text, images, files)
 		const activeBlock = this.taskController.getActiveBlock()
@@ -909,13 +971,23 @@ export class Task {
 			this.taskState.ackedFeedback = { response: askResponse, text, images, files }
 			const latestSnapshot = this.findLatestStateSnapshot()
 			const isRetryFeedback = askResponse === "yesButtonClicked" && latestSnapshot?.awaiting?.kind === "error_recovery"
-			if (!activeBlock && !isConversationalResponse && (askResponse === "messageResponse" || isRetryFeedback)) {
+			const snapshotAsk = latestSnapshot?.awaiting?.taskAsk
+			const isSnapshotConversationResponse = Boolean(
+				latestSnapshot?.awaiting?.kind === "conversation" &&
+					snapshotAsk &&
+					Task.CONVERSATIONAL_TOOL_NAMES.has(snapshotAsk),
+			)
+			const isSnapshotApprovalResponse = latestSnapshot?.awaiting?.kind === "approval"
+			if (
+				!activeBlock &&
+				!isConversationalResponse &&
+				!isSnapshotConversationResponse &&
+				!isSnapshotApprovalResponse &&
+				(askResponse === "messageResponse" || isRetryFeedback)
+			) {
 				this.taskState.userMessageContent.push(...(await buildUserFeedbackContent(text, images, files)))
 				this.taskState.userMessageContentReady = true
 			}
-			void this.checkpointManager?.saveCheckpoint().catch((error: unknown) => {
-				Logger.error("Failed to save feedback checkpoint:", error)
-			})
 		}
 
 		// Conversational tools (qna_respond, plan_mode_respond, etc.) handle
@@ -946,6 +1018,7 @@ export class Task {
 					execution: {
 						mode: this.isParallelToolCallingEnabled() ? "parallel" : "serial",
 						executing: [executing.callId],
+						executingDlineTids: [executing.dlineTid],
 					},
 					onSnapshot: this.emitStateSnapshot.bind(this),
 				})
@@ -1720,16 +1793,19 @@ export class Task {
 				kind: type === "status_acknowledgment" ? "approval" : "approval",
 				taskAsk: type,
 				activeCallId: block.callId,
+				activeDlineTid: block.dlineTid,
 			},
 			approval: {
 				mode: this.isParallelToolCallingEnabled() ? "parallel" : "serial",
 				blocks: this.taskController.getBlocks().map((candidate) => ({
 					callId: candidate.callId,
+					dlineTid: candidate.dlineTid,
 					name: candidate.toolName,
 					phase: candidate.phase,
 					apiIndex: candidate.conversationHistoryIndex,
 				})),
 				activeCallId: block.callId,
+				activeDlineTid: block.dlineTid,
 			},
 			onSnapshot: this.emitStateSnapshot.bind(this),
 		})
@@ -2493,6 +2569,7 @@ export class Task {
 	 */
 	async abortExecution() {
 		try {
+			this.modeSwitchCompaction.abort()
 			// PHASE 1: Check if TaskCancel should run BEFORE any cleanup
 			const shouldRunTaskCancelHook = await this.shouldRunTaskCancelHook()
 
@@ -2578,6 +2655,7 @@ export class Task {
 	 * No resume ask is sent because the task is being destroyed.
 	 */
 	async interrupt(): Promise<void> {
+		this.modeSwitchCompaction.abort()
 		this.taskState.abort = true
 		this.api?.abort?.()
 
@@ -2591,6 +2669,7 @@ export class Task {
 
 	async terminate() {
 		try {
+			this.modeSwitchCompaction.abort()
 			// PHASE 1: Check if TaskCancel should run BEFORE any cleanup
 			const shouldRunTaskCancelHook = await this.shouldRunTaskCancelHook()
 
@@ -2949,8 +3028,8 @@ export class Task {
 		}
 
 		try {
-			const { tokensIn, tokensOut, cacheWrites, cacheReads }: ClineApiReqInfo = JSON.parse(previousRequestText)
-			return (tokensIn || 0) + (tokensOut || 0) + (cacheWrites || 0) + (cacheReads || 0)
+			const requestInfo = JSON.parse(previousRequestText) as ClineApiReqInfo
+			return getContextTokens(requestInfo)
 		} catch {
 			return undefined
 		}
@@ -3401,6 +3480,7 @@ export class Task {
 						outputTokens: 0,
 						cacheWriteTokens: 0,
 						cacheReadTokens: 0,
+						contextTokens: 0,
 						totalCost: undefined,
 						api: this.api,
 						cancelReason: "streaming_failed",
@@ -3672,16 +3752,16 @@ export class Task {
 					// Build turn on first complete tool_use block if not already built
 					if (!block.partial && this.taskState.didCompleteReadingStream) {
 						const allBlocks = this.taskState.assistantMessageContent
-						this.taskController.buildTurn(allBlocks, (_toolName, callId) => {
+						this.taskController.buildTurn(allBlocks, (_toolName, dlineTid) => {
 							const candidate = allBlocks.find(
-								(item): item is ToolUse => item.type === "tool_use" && item.call_id === callId,
+								(item): item is ToolUse => item.type === "tool_use" && item.dline_tid === dlineTid,
 							)
 							return candidate ? this.toolExecutor.isBlockApproved(candidate) : false
 						})
 					}
 
 					// Check if this block should be skipped due to prior rejection
-					if (this.taskController.shouldSkip((block as ToolUse).call_id || "")) {
+					if (this.taskController.shouldSkip((block as ToolUse).dline_tid || "")) {
 						break
 					}
 
@@ -3897,9 +3977,10 @@ export class Task {
 		const useCompactPrompt = customPrompt === "compact" && isLocalModel(this.getCurrentProviderInfo())
 		let shouldCompact = false
 		const useAutoCondense = this.stateManager.getGlobalSettingsKey("useAutoCondense")
+		const forceModeCompact = this.modeSwitchCompaction.shouldForce()
 
 		const didCompleteSummarization = this.taskState.currentlySummarizing
-		if (useAutoCondense && isNextGenModelFamily(this.api.getModel().id)) {
+		if (forceModeCompact || (useAutoCondense && isNextGenModelFamily(this.api.getModel().id))) {
 			// When we initially trigger context cleanup, we increase the context window size, so we need state `currentlySummarizing`
 			// to track if we've already started the context summarization flow. After summarizing, we increment
 			// conversationHistoryDeletedRange to mask out the summarization-trigger user & assistant response messages
@@ -3919,11 +4000,13 @@ export class Task {
 					}
 				}
 			} else {
-				shouldCompact = this.contextManager.shouldCompactContextWindow(
-					this.messageStateHandler.clineMessages,
-					this.api,
-					previousApiReqIndex,
-				)
+				shouldCompact =
+					forceModeCompact ||
+					this.contextManager.shouldCompactContextWindow(
+						this.messageStateHandler.clineMessages,
+						this.api,
+						previousApiReqIndex,
+					)
 
 				const previousTokens = this.parsePreviousTokens(previousApiReqIndex)
 				const hasCurrentToolResult = hasToolResult(userContent)
@@ -3945,7 +4028,7 @@ export class Task {
 				// Edge case: summarize_task tool call completes but user cancels next request before it finishes.
 				// This results in currentlySummarizing being false, and we fail to update the context window token estimate.
 				// Check active message count to avoid summarizing a summary (bad UX but doesn't break logic).
-				if (shouldCompact && this.taskState.conversationHistoryDeletedRange) {
+				if (shouldCompact && !forceModeCompact && this.taskState.conversationHistoryDeletedRange) {
 					const apiHistory = this.messageStateHandler.apiConversationHistory
 					const activeMessageCount = apiHistory.length - this.taskState.conversationHistoryDeletedRange[1] - 1
 
@@ -3957,7 +4040,7 @@ export class Task {
 				}
 
 				// Determine whether we can save enough tokens from context rewriting to skip auto-compact
-				if (shouldCompact && !this.taskState.deferredCurrentTurn) {
+				if (shouldCompact && !forceModeCompact && !this.taskState.deferredCurrentTurn) {
 					shouldCompact = await this.contextManager.attemptFileReadOptimization(
 						this.messageStateHandler.apiConversationHistory,
 						this.taskState.conversationHistoryDeletedRange,
@@ -3967,6 +4050,10 @@ export class Task {
 					)
 				}
 			}
+		}
+
+		if (didCompleteSummarization && this.modeSwitchCompaction.getOperationId()) {
+			await this.modeSwitchCompaction.markApplied()
 		}
 
 		if (
@@ -4094,6 +4181,11 @@ export class Task {
 				cancelReason?: ClineApiReqCancelReason,
 				streamingFailedMessage?: string,
 			) => {
+				const contextTokens =
+					taskMetrics.inputTokens +
+					taskMetrics.outputTokens +
+					taskMetrics.cacheWriteTokens +
+					taskMetrics.cacheReadTokens
 				await updateApiReqMsg({
 					messageStateHandler: this.messageStateHandler,
 					lastApiReqIndex,
@@ -4101,6 +4193,7 @@ export class Task {
 					outputTokens: taskMetrics.outputTokens,
 					cacheWriteTokens: taskMetrics.cacheWriteTokens,
 					cacheReadTokens: taskMetrics.cacheReadTokens,
+					contextTokens,
 					api: this.api,
 					totalCost: taskMetrics.totalCost,
 					cancelReason,
@@ -4219,14 +4312,14 @@ export class Task {
 			await this.diffViewProvider.reset()
 			this.streamHandler.reset()
 			this.presentationScheduler.reset()
-			this.taskState.toolUseIdMap.clear()
 			this.taskState.reasoningTs = undefined
 			this.taskState.parseBlockTsByKey.clear()
 			this.taskState.lastRenderedPartialByTs.clear()
 			this.taskState.partialToolLifecycleByTs.clear()
 
 			const { toolUseHandler, reasonsHandler } = this.streamHandler.getHandlers()
-			const stream = this.attemptApiRequest(previousApiReqIndex) // yields only if the first chunk is successful, otherwise will allow the user to retry the request (most likely due to rate limit error, which gets thrown on the first chunk)
+			const providerStream = this.attemptApiRequest(previousApiReqIndex) // yields only if the first chunk is successful, otherwise will allow the user to retry the request (most likely due to rate limit error, which gets thrown on the first chunk)
+			const stream = normalizeApiStream(providerStream, createStreamNormalizer(this.identityFactory))
 
 			let assistantMessageId = ""
 			let assistantMessage = "" // For UI display (includes XML)
@@ -4349,14 +4442,12 @@ export class Task {
 									input: chunk.tool_call.function?.arguments,
 									signature: chunk?.signature,
 								},
-								chunk.tool_call.call_id,
+								{
+									item_id: chunk.item_id,
+									function_id: chunk.function_id,
+									dline_tid: chunk.dline_tid,
+								},
 							)
-							// Extract and store tool_use_id for creating proper ToolResultBlockParam
-							// Use call_id as key to support multiple calls to the same tool
-							if (chunk.tool_call.function?.id && chunk.tool_call.call_id) {
-								this.taskState.toolUseIdMap.set(chunk.tool_call.call_id, chunk.tool_call.function.id)
-							}
-
 							const currentReasoning = reasonsHandler.getCurrentReasoning()
 							if (currentReasoning?.thinking && !didFinalizeReasoningForUi) {
 								const ok = await finalizePendingReasoningMessage(currentReasoning.thinking)
@@ -5271,16 +5362,9 @@ export class Task {
 		const { contextWindow } = getContextWindowInfo(this.api)
 
 		// Get the token count from the most recent API request to accurately reflect context management
-		const getTotalTokensFromApiReqMessage = (msg: ClineMessage) => {
-			if (!msg.text) {
-				return 0
-			}
-			try {
-				const { tokensIn, tokensOut, cacheWrites, cacheReads } = JSON.parse(msg.text)
-				return (tokensIn || 0) + (tokensOut || 0) + (cacheWrites || 0) + (cacheReads || 0)
-			} catch (_e) {
-				return 0
-			}
+		/** Read normalized context occupancy from one persisted request message. */
+		const getTotalTokensFromApiReqMessage = (msg: ClineMessage): number => {
+			return readContextTokens(msg.text)
 		}
 
 		const clineMessages = this.messageStateHandler.clineMessages

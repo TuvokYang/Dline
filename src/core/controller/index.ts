@@ -1,14 +1,12 @@
 import type { Anthropic } from "@anthropic-ai/sdk"
 import { AccountUsage, buildApiHandler } from "@core/api"
 import { getProfileModelInfo } from "@core/api/model-info"
-import { computeMaxAllowedSize } from "@core/context/context-management/context-window-utils"
+import { readContextTokens } from "@core/context/context-management/context-pressure"
 import { findEnabledProfileByName, findEnabledProfiles } from "@core/controller/file/getApiProfiles"
 import { getHooksEnabledSafe } from "@core/hooks/hooks-utils"
 import { TaskLockService } from "@core/locks/TaskLockService"
-import { summarizeTask } from "@core/prompts/contextManagement"
 import * as SecretsManager from "@core/storage/secrets"
 import { detectWorkspaceRoots } from "@core/workspace/detection"
-import { isMultiRootEnabled } from "@core/workspace/multi-root-utils"
 import { setupWorkspaceManager } from "@core/workspace/setup"
 import type { WorkspaceRootManager } from "@core/workspace/WorkspaceRootManager"
 import { cleanupLegacyCheckpoints } from "@integrations/checkpoints/CheckpointMigration"
@@ -21,6 +19,7 @@ import { combineCommandSequences } from "@shared/combineCommandSequences"
 import type { ExtensionState, Platform } from "@shared/ExtensionMessage"
 import type { HistoryItem } from "@shared/HistoryItem"
 import type { McpMarketplaceCatalog, McpMarketplaceItem } from "@shared/mcp"
+import type { ModeSwitchRequestResult } from "@shared/mode-switch"
 import type { TaskLockStatus } from "@shared/proto/dline/task"
 import { type Settings } from "@shared/storage/state-keys"
 import type { Mode } from "@shared/storage/types"
@@ -66,6 +65,8 @@ import { type PersistenceErrorEvent, StateManager } from "../storage/StateManage
 import { UIMessage } from "../storage/UIMessage"
 import { Task } from "../task"
 import { sendMcpMarketplaceCatalogEvent } from "./mcp/subscribeToMcpMarketplaceCatalog"
+import { ModeSwitchCoordinator } from "./mode-switch/ModeSwitchCoordinator"
+import type { ModeSwitchOperation, ResolvedModeProfile } from "./mode-switch/types"
 import { getClineOnboardingModels } from "./models/getClineOnboardingModels"
 import { appendClineStealthModels } from "./models/refreshOpenRouterModels"
 import { checkCliInstallation } from "./state/checkCliInstallation"
@@ -106,8 +107,9 @@ export class Controller {
 	// Flag to prevent duplicate cancellations from spam clicking
 	private cancelInProgress = false
 
-	// Flag to prevent concurrent mode switch requests
-	private modeSwitchInProgress = false
+	private readonly modeSwitchCoordinator: ModeSwitchCoordinator
+	private nextStateRevision = 0
+	private latestStateRevision = 0
 
 	// Timer for periodic remote config fetching
 	private remoteConfigTimer?: NodeJS.Timeout
@@ -181,6 +183,7 @@ export class Controller {
 		this.authService = AuthService.getInstance(this)
 		this.ocaAuthService = OcaAuthService.initialize(this)
 		this.accountService = ClineAccountService.getInstance()
+		this.modeSwitchCoordinator = this.createModeSwitchCoordinator()
 
 		this.authService.restoreRefreshTokenAndRetrieveAuthInfo().then(() => {
 			this.startRemoteConfigTimer()
@@ -485,228 +488,103 @@ export class Controller {
 		await this.postStateToWebview()
 	}
 
-	async toggleActModeForYoloMode(): Promise<boolean> {
-		const modeToSwitchTo: Mode = "act"
-
-		// Switch to act mode
-		// Store mode at task level (multi-task architecture); no global mode.
-		if (this.task) {
-			this.stateManager.setTaskSettings(this.task.taskId, "mode", modeToSwitchTo)
-		}
-
-		// Update API handler with new mode (buildApiHandler now selects provider based on mode)
-		if (this.task) {
-			const apiConfiguration = this.stateManager.getApiConfiguration()
-			this.task.api = buildApiHandler({ ...apiConfiguration, ulid: this.task.ulid }, modeToSwitchTo)
-		}
-
-		await this.postStateToWebview()
-
-		// Additional safety
-		if (this.task) {
-			return true
-		}
-		return false
-	}
-
-	async togglePlanActMode(modeToSwitchTo: Mode, _chatContent?: ChatContent): Promise<boolean> {
-		Logger.debug("[togglePlanActMode] enter", {
-			modeSwitchInProgress: this.modeSwitchInProgress,
-			requestedMode: modeToSwitchTo,
-			currentMode: this.stateManager.getGlobalSettingsKey("mode"),
-			hasTask: !!this.task,
+	/** Build task-local ports used by the mode-switch transaction. */
+	private createModeSwitchCoordinator(): ModeSwitchCoordinator {
+		return new ModeSwitchCoordinator({
+			profiles: {
+				getSource: () => (this.task ? this.resolveModeProfile(this.task.getMode()) : undefined),
+				resolve: (mode) => this.resolveModeProfile(mode),
+			},
+			pressure: { read: () => this.readModeSwitchPressure() },
+			compaction: {
+				compact: (operationId) => this.task?.compactForMode(operationId) ?? Promise.resolve("failed"),
+				release: (operationId) => this.task?.releaseCompact(operationId),
+				fail: (operationId, reason) => this.task?.failCompact(operationId, reason),
+			},
+			commit: {
+				validate: (operation) => this.validateModeSwitch(operation),
+				commit: async (operation) => {
+					if (!this.task) throw new Error("Active task is unavailable.")
+					await this.task.commitMode(operation.target.mode, operation.chatContent)
+					telemetryService.captureModeSwitch(this.task.ulid, operation.target.mode)
+					await this.postStateToWebview({ immediate: true })
+				},
+			},
+			postState: () => this.postStateToWebview({ immediate: true }),
+			createId: () => crypto.randomUUID(),
+			getTaskId: () => this.task?.taskId,
 		})
-
-		if (this.modeSwitchInProgress) {
-			Logger.debug("[togglePlanActMode] rejected, already in progress")
-			return false
-		}
-		this.modeSwitchInProgress = true
-
-		// Safety timer: if modeSwitchInProgress is not cleared within 3 s
-		// (e.g. due to an unhandled exception), force-unlock to prevent
-		// permanent deadlock of the Plan/Act toggle.
-		const safetyTimer = setTimeout(() => {
-			if (this.modeSwitchInProgress) {
-				Logger.warn("[togglePlanActMode] safety timer fired, force-unlocking")
-				this.modeSwitchInProgress = false
-			}
-		}, 3_000)
-
-		try {
-			// ── Context overflow detection before switching ──
-			if (this.task) {
-				// Check if user already confirmed the compact dialog (re-entry with contextOverflowInfo set)
-				const previousOverflowInfo = this.task.taskSm?.contextOverflowInfo
-				if (previousOverflowInfo && previousOverflowInfo.targetMode === modeToSwitchTo) {
-					// User confirmed: inject summarize_task and clear the prompt state
-					Logger.info(`[togglePlanActMode] User confirmed compact for mode ${modeToSwitchTo}`)
-					this.task.taskSm.setContextOverflowInfo(undefined)
-					await this.injectSummarizeTaskForCompact()
-					await this.postStateToWebview()
-					return false
-				}
-
-				const overflowInfo = this.detectContextOverflow(modeToSwitchTo)
-				if (overflowInfo) {
-					const useAutoCondense = this.stateManager.getGlobalSettingsKey("useAutoCondense")
-					if (useAutoCondense) {
-						// Auto-compact enabled: directly inject summarize_task prompt
-						Logger.info(
-							`[togglePlanActMode] Context overflow detected (${overflowInfo.currentTokens}/${overflowInfo.targetMaxAllowed}), auto-compacting`,
-						)
-						await this.injectSummarizeTaskForCompact()
-						// Don't switch yet; user can retry after compression
-						return false
-					}
-					// Auto-compact disabled: notify webview to show confirmation dialog
-					Logger.info(
-						`[togglePlanActMode] Context overflow detected (${overflowInfo.currentTokens}/${overflowInfo.targetMaxAllowed}), prompting user`,
-					)
-					this.task.taskSm.setContextOverflowInfo(overflowInfo)
-					await this.postStateToWebview()
-					return false
-				}
-			}
-
-			const didSwitchToActMode = modeToSwitchTo === "act"
-
-			// act→plan: cancel any in-flight work.
-			if (!didSwitchToActMode && this.task) {
-				const hasActiveWork =
-					this.task.taskState.isStreaming ||
-					this.task.taskState.isWaitingForFirstChunk ||
-					this.task.taskState.isExecutingSubagent
-				if (hasActiveWork) {
-					await this.cancelTask()
-				}
-			}
-
-			// plan→act: wake up the ask promise so the task loop resumes in act mode.
-			if (this.task && didSwitchToActMode && this.task.taskState.isAwaitingPlanResponse) {
-				this.task.taskState.didRespondToPlanAskBySwitchingMode = true
-				const hasChatContent = !!_chatContent?.message || !!_chatContent?.images?.length || !!_chatContent?.files?.length
-				await this.task.handleWebviewAskResponse(
-					"messageResponse",
-					_chatContent?.message || (hasChatContent ? "" : "PLAN_MODE_TOGGLE_RESPONSE"),
-					_chatContent?.images,
-					_chatContent?.files,
-				)
-			}
-
-			// Store mode at task level if a task exists, otherwise in global state
-			// (e.g. Welcome view where no task is active yet).
-			if (this.task?.taskId) {
-				this.stateManager.setTaskSettings(this.task.taskId, "mode", modeToSwitchTo)
-			} else {
-				this.stateManager.setGlobalState("mode", modeToSwitchTo)
-			}
-			telemetryService.captureModeSwitch(this.task?.ulid ?? "0", modeToSwitchTo)
-
-			if (this.task) {
-				const apiConfiguration = this.stateManager.getApiConfiguration()
-				const effectiveConfig = { ...apiConfiguration, ulid: this.task.ulid }
-				this.task.api = buildApiHandler(effectiveConfig, modeToSwitchTo)
-				// Sync per-task profile cache so getCurrentProviderInfo reads the correct value
-				const currentProfile =
-					modeToSwitchTo === "plan" ? effectiveConfig.planModeProfile : effectiveConfig.actModeProfile
-				if (currentProfile) {
-					if (modeToSwitchTo === "plan") {
-						this.task.taskSm.setPlanModeProfile(currentProfile)
-					} else {
-						this.task.taskSm.setActModeProfile(currentProfile)
-					}
-				}
-			}
-
-			await this.postStateToWebview()
-
-			// cancelTask already fire-and-forgets ask("resume_task") when it
-			// cancels active work, so we don't need a second ask here.
-
-			return true
-		} finally {
-			clearTimeout(safetyTimer)
-			this.modeSwitchInProgress = false
-		}
 	}
 
-	/**
-	 * Detect whether switching to the given mode would overflow the target model's context window.
-	 * Returns overflow info if the current conversation tokens exceed the target model's max allowed
-	 * size, or undefined if the switch is safe.
-	 *
-	 * @param modeToSwitchTo The target mode ("plan" or "act")
-	 * @returns Overflow info with current token count and target max, or undefined if safe
-	 */
-	private detectContextOverflow(
-		modeToSwitchTo: Mode,
-	): { targetMode: string; currentTokens: number; targetMaxAllowed: number } | undefined {
+	/** Resolve effective profile metadata for one task-local mode. */
+	private resolveModeProfile(mode: Mode): ResolvedModeProfile | undefined {
 		if (!this.task) return undefined
-
 		const config = this.stateManager.getApiConfiguration()
-		const targetProfileName = modeToSwitchTo === "plan" ? config.planModeProfile : config.actModeProfile
-		if (!targetProfileName) return undefined
-
-		const profile = findEnabledProfileByName(targetProfileName)
-		if (!profile) return undefined
-
-		const targetModelInfo = getProfileModelInfo(profile)
-		const targetContextWindow = targetModelInfo.capabilities?.contextWindow
-		if (!targetContextWindow) return undefined
-		const targetMaxAllowed = computeMaxAllowedSize(targetContextWindow)
-
-		// Get total tokens from the last API request
-		const clineMessages = this.task.messageStateHandler.clineMessages
-		const modifiedMessages = combineApiRequests(combineCommandSequences(clineMessages.slice(1)))
-		const getTotalTokensFromApiReqMessage = (msg: any) => {
-			if (!msg.text) return 0
-			try {
-				const { tokensIn, tokensOut, cacheWrites, cacheReads } = JSON.parse(msg.text)
-				return (tokensIn || 0) + (tokensOut || 0) + (cacheWrites || 0) + (cacheReads || 0)
-			} catch {
-				return 0
-			}
-		}
-		let lastApiReqTotalTokens = 0
-		for (let i = modifiedMessages.length - 1; i >= 0; i--) {
-			const msg = modifiedMessages[i]
-			if (msg.say === "api_req_started") {
-				const tokens = getTotalTokensFromApiReqMessage(msg)
-				if (tokens > 0) {
-					lastApiReqTotalTokens = tokens
-					break
-				}
-			}
-		}
-
-		if (lastApiReqTotalTokens >= targetMaxAllowed) {
-			return {
-				targetMode: modeToSwitchTo,
-				currentTokens: lastApiReqTotalTokens,
-				targetMaxAllowed,
-			}
-		}
-		return undefined
+		const profileName =
+			mode === "plan"
+				? (this.task.taskSm.planModeProfile ?? config.planModeProfile)
+				: (this.task.taskSm.actModeProfile ?? config.actModeProfile)
+		const profile = findEnabledProfileByName(profileName)
+		const contextWindow = profile ? getProfileModelInfo(profile).capabilities?.contextWindow : undefined
+		return profileName && contextWindow ? { mode, profile: profileName, contextWindow } : undefined
 	}
 
-	/**
-	 * Inject a summarize_task prompt into the current conversation to compress context.
-	 * Used when auto-compact is enabled and context overflow is detected during mode switch.
-	 * Triggers the AI to call summarize_task, which compacts the conversation history.
-	 */
-	private async injectSummarizeTaskForCompact(): Promise<void> {
-		if (!this.task) return
+	/** Read canonical pressure from the latest completed API request. */
+	private readModeSwitchPressure(): number {
+		const messages = this.task?.messageStateHandler.clineMessages ?? []
+		for (let index = messages.length - 1; index >= 0; index--) {
+			const message = messages[index]
+			if (message.say === "api_req_started") {
+				const tokens = readContextTokens(message.text)
+				if (tokens > 0) return tokens
+			}
+		}
+		return 0
+	}
 
-		const focusChainSettings = this.stateManager.getGlobalSettingsKey("focusChainSettings")
-		const multiRoot = isMultiRootEnabled(this.stateManager)
-		const compactPrompt = summarizeTask(focusChainSettings, undefined, multiRoot)
+	/** Validate task, source mode, and source profile immediately before compaction or commit. */
+	private validateModeSwitch(operation: ModeSwitchOperation): boolean {
+		const source = this.task ? this.resolveModeProfile(this.task.getMode()) : undefined
+		return Boolean(
+			this.task?.taskId === operation.taskId &&
+				source?.mode === operation.source.mode &&
+				source.profile === operation.source.profile &&
+				source.contextWindow === operation.source.contextWindow,
+		)
+	}
 
-		// Inject the summarize prompt as a user feedback message — adds to conversation history
-		await this.task.say("user_feedback", compactPrompt)
+	/** Request a task-local transaction or update the welcome-screen global mode. */
+	async requestModeSwitch(targetMode: Mode, chatContent?: ChatContent): Promise<ModeSwitchRequestResult> {
+		if (!this.task) {
+			this.stateManager.setGlobalState("mode", targetMode)
+			await this.postStateToWebview({ immediate: true })
+			return { status: "switched", operationId: crypto.randomUUID() }
+		}
+		return this.modeSwitchCoordinator.request({ taskId: this.task.taskId, targetMode, chatContent })
+	}
 
-		// Wake up the task loop if it's in a waiting state (e.g., plan mode awaiting response)
-		await this.task.handleWebviewAskResponse("messageResponse", compactPrompt)
+	/** Confirm the active mode-switch compaction transaction. */
+	async confirmModeSwitch(operationId: string): Promise<ModeSwitchRequestResult> {
+		return this.modeSwitchCoordinator.confirm(operationId)
+	}
+
+	/** Cancel the active mode-switch confirmation transaction. */
+	async cancelModeSwitch(operationId: string): Promise<ModeSwitchRequestResult> {
+		return this.modeSwitchCoordinator.cancel(operationId)
+	}
+
+	/** Compatibility wrapper for internal callers that still consume a Boolean commit result. */
+	async togglePlanActMode(modeToSwitchTo: Mode, chatContent?: ChatContent): Promise<boolean> {
+		const result = await this.requestModeSwitch(modeToSwitchTo, chatContent)
+		return result.status === "switched"
+	}
+
+	async toggleActModeForYoloMode(): Promise<boolean> {
+		if (!this.task) return false
+		await this.task.commitMode("act")
+		telemetryService.captureModeSwitch(this.task.ulid, "act")
+		await this.postStateToWebview({ immediate: true })
+		return true
 	}
 
 	async cancelTask() {
@@ -1194,12 +1072,30 @@ export class Controller {
 		return updatedTaskHistory
 	}
 
-	async postStateToWebview(options?: PostStateOptions) {
+	/** Build and publish the latest non-stale extension state. */
+	async postStateToWebview(options?: PostStateOptions): Promise<void> {
 		const state = await this.getStateToPostToWebview()
+		if (!this.isStateCurrent(state.stateRevision)) return
 		await sendStateUpdate(this, state, this._accountUsage, options)
 	}
 
+	/** Build a monotonic extension state while preserving the public non-optional contract. */
 	async getStateToPostToWebview(): Promise<ExtensionState> {
+		const revision = ++this.nextStateRevision
+		const state = await this.buildState(revision)
+		if (revision > this.latestStateRevision) {
+			this.latestStateRevision = revision
+		}
+		return state
+	}
+
+	/** Report whether a completed asynchronous state build is still current. */
+	isStateCurrent(revision: number): boolean {
+		return revision >= this.latestStateRevision
+	}
+
+	/** Build one extension-state snapshot for a preallocated revision. */
+	protected async buildState(revision: number): Promise<ExtensionState> {
 		const startTime = performance.now()
 		// Ensure per-task settings isolation: set active task before reading
 		// any settings that depend on task-level overrides (apiConfiguration, mode, etc.).
@@ -1362,6 +1258,8 @@ export class Controller {
 		})()
 
 		const result: ExtensionState = {
+			stateRevision: revision,
+			modeSwitch: this.modeSwitchCoordinator.getSnapshot(),
 			version,
 			apiConfiguration,
 			currentTaskItem,
@@ -1658,6 +1556,7 @@ export class Controller {
 		if (taskId && options?.clearPanelState) {
 			await this.clearPanelStateIfNeeded()
 		}
+		await this.modeSwitchCoordinator.reset("Task cleared during mode switch.")
 		if (this.task) {
 			// Sync task mode to global state so slider works after task closed
 			this.stateManager.setGlobalState("mode", this.task.taskSm.mode)

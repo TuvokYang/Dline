@@ -1,5 +1,6 @@
 import path from "node:path"
 import { ApiHandler, resolveProviderFromProfile } from "@core/api"
+import type { IdentityFactory } from "@core/api/transform/block-identity"
 import { FileContextTracker } from "@core/context/context-tracking/FileContextTracker"
 import { getHookModelContext } from "@core/hooks/hook-model-context"
 import { getHooksEnabledSafe } from "@core/hooks/hooks-utils"
@@ -15,6 +16,7 @@ import { DEFAULT_API_PROVIDER } from "@shared/api"
 import { ClineAsk, ClineSay } from "@shared/ExtensionMessage"
 import { ClineContent, type ClineToolResponseContent } from "@shared/messages/content"
 import { Logger } from "@shared/services/Logger"
+import type { Mode } from "@shared/storage/types"
 import { ClineDefaultTool, toolUseNames } from "@shared/tools"
 import { ClineAskResponse } from "@shared/WebviewMessage"
 import { isParallelToolCallingEnabled, modelDoesntSupportWebp } from "@/utils/model-utils"
@@ -194,6 +196,8 @@ export class ToolExecutor {
 		private commandPermissionController: CommandPermissionController,
 		private contextManager: ContextManager,
 		private stateManager: StateManager,
+		private getMode: () => Mode,
+		private identityFactory: IdentityFactory,
 
 		// Configuration & Settings
 
@@ -270,7 +274,7 @@ export class ToolExecutor {
 		const config: TaskConfig = {
 			taskId: this.taskId,
 			ulid: this.ulid,
-			mode: this.stateManager.getGlobalSettingsKey("mode"),
+			mode: this.getMode(),
 			strictPlanModeEnabled: this.stateManager.getGlobalSettingsKey("strictPlanModeEnabled"),
 			yoloModeToggled: this.stateManager.getGlobalSettingsKey("yoloModeToggled"),
 			doubleCheckCompletionEnabled: this.stateManager.getGlobalSettingsKey("doubleCheckCompletionEnabled"),
@@ -325,6 +329,7 @@ export class ToolExecutor {
 				updateClineMessage: this.updateClineMessage,
 			},
 			coordinator: this.coordinator,
+			identityFactory: this.identityFactory,
 			controllerContext: (this as any)._controllerContext,
 			subagentJobManager: this.subagentJobManager,
 		}
@@ -401,7 +406,7 @@ export class ToolExecutor {
 			this.taskState.userMessageContent,
 			(block: ToolUse) => ToolDisplayUtils.getToolDescription(block),
 			this.coordinator,
-			this.taskState.toolUseIdMap,
+			this.identityFactory.nextItemId,
 		)
 
 		// Mark that a tool has been used (only matters when parallel tool calling is disabled)
@@ -414,10 +419,22 @@ export class ToolExecutor {
 	// webview message order is deterministic — fire-and-forget would let
 	// auto-approved tool results race ahead of a subsequent ask.
 	private async recordPartialToolResult(content: ToolResponse, block: ToolUse): Promise<void> {
+		if (!block.function_id || !block.dline_tid) {
+			throw new Error(`Canonical runtime tool block is missing identity: tool=${block.name}`)
+		}
 		const resultText = typeof content === "string" ? content : JSON.stringify(content)
-		const toolUseId = this.taskState.toolUseIdMap?.get(block.call_id || "") || block.call_id || ""
+		const functionId = block.function_id
 		// Storage + push handled by say(), gated by TaskController.send()
-		await this.say("partial_tool_result", JSON.stringify({ tool_use_id: toolUseId, result: resultText }))
+		await this.say(
+			"partial_tool_result",
+			JSON.stringify({
+				tool_use_id: functionId,
+				item_id: this.identityFactory.nextItemId(),
+				function_id: functionId,
+				dline_tid: block.dline_tid,
+				result: resultText,
+			}),
+		)
 	}
 
 	/**
@@ -430,7 +447,7 @@ export class ToolExecutor {
 		const enableParallelSetting = this.stateManager.getGlobalSettingsKey("enableParallelToolCalling")
 		const model = this.api.getModel()
 		const apiConfig = this.stateManager.getApiConfiguration()
-		const mode = this.stateManager.getGlobalSettingsKey("mode")
+		const mode = this.getMode()
 		const currentProfile = mode === "plan" ? apiConfig.planModeProfile : apiConfig.actModeProfile
 		const providerId = resolveProviderFromProfile(currentProfile) || DEFAULT_API_PROVIDER
 		return isParallelToolCallingEnabled(enableParallelSetting, { providerId, model, mode })
@@ -461,9 +478,6 @@ export class ToolExecutor {
 	 * @returns true if the tool was handled (even if execution failed), false if not registered
 	 */
 	private async execute(block: ToolUse): Promise<boolean> {
-		// Note: MCP tool name transformation happens earlier in ToolUseHandler.getPartialToolUsesAsContent()
-		// The toolUseIdMap is updated at the point of transformation in index.ts
-
 		if (!this.coordinator.has(block.name)) {
 			return false // Tool not handled by coordinator
 		}
@@ -473,7 +487,7 @@ export class ToolExecutor {
 
 		try {
 			// Check if user rejected a previous tool
-			if (this.taskController.wasRejected(block.call_id || "")) {
+			if (this.taskController.wasRejected(block.dline_tid || "")) {
 				const reason = block.partial
 					? "Tool was interrupted and not executed due to user rejecting a previous tool."
 					: "Skipping tool due to user rejecting a previous tool."
@@ -499,7 +513,7 @@ export class ToolExecutor {
 			// Logic for plan-mode tool call restrictions
 			if (
 				this.stateManager.getGlobalSettingsKey("strictPlanModeEnabled") &&
-				this.stateManager.getGlobalSettingsKey("mode") === "plan" &&
+				this.getMode() === "plan" &&
 				block.name &&
 				this.isPlanModeToolRestricted(block.name)
 			) {
@@ -722,7 +736,7 @@ export class ToolExecutor {
 	 * @param block The tool use block to re-render. Must be partial.
 	 */
 	public async reRenderPartialBlock(block: ToolUse, _existingTs?: number): Promise<void> {
-		if (this.taskState.abort || this.taskController.wasRejected(block.call_id || "")) return
+		if (this.taskState.abort || this.taskController.wasRejected(block.dline_tid || "")) return
 		if (!block.partial) return
 		if (!this.coordinator.has(block.name)) return
 		const handler = this.coordinator.getHandler(block.name)

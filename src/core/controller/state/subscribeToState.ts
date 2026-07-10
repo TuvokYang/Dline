@@ -71,8 +71,9 @@ export async function subscribeToState(
 		getRequestRegistry().registerRequest(requestId, cleanup, { type: "state_subscription" }, responseStream)
 	}
 
-	// Send the initial state
+	// Send the initial state only if no newer asynchronous build completed first.
 	const initialState = await controller.getStateToPostToWebview()
+	if (!controller.isStateCurrent(initialState.stateRevision)) return
 	const initialStateJson = JSON.stringify(initialState)
 	const accountUsage = controller.getAccountUsage()
 

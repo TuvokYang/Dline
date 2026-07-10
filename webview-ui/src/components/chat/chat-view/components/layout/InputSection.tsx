@@ -1,5 +1,6 @@
 import React from "react"
 import ChatTextArea from "@/components/chat/ChatTextArea"
+import type { ModeSwitchDraft } from "@/components/chat/mode-switch/useModeSwitch"
 import QuotedMessagePreview from "@/components/chat/QuotedMessagePreview"
 import { ChatState, MessageHandlers, ScrollBehavior } from "../../types/chatTypes"
 
@@ -63,7 +64,13 @@ export const InputSection: React.FC<InputSectionProps> = ({
 					}
 				}}
 				onSelectFilesAndImages={selectFilesAndImages}
-				onSend={() => messageHandlers.handleSendMessage(inputValue, selectedImages, selectedFiles)}
+				onSend={(capturedDraft?: ModeSwitchDraft) =>
+					messageHandlers.handleSendMessage(
+						capturedDraft?.text ?? inputValue,
+						capturedDraft?.images ?? selectedImages,
+						capturedDraft?.files ?? selectedFiles,
+					)
+				}
 				placeholderText={placeholderText}
 				ref={textAreaRef}
 				selectedFiles={selectedFiles}

@@ -30,7 +30,7 @@ import { parseFocusChainListCounts } from "./utils"
 export interface FocusChainDependencies {
 	taskId: string
 	taskState: TaskState
-	mode: Mode
+	getMode: () => Mode
 	stateManager: StateManager
 	postStateToWebview: () => Promise<void>
 	say: (type: ClineSay, text?: string, images?: string[], files?: string[], partial?: boolean) => Promise<number | undefined>
@@ -41,6 +41,7 @@ export class FocusChainManager {
 	private taskId: string
 	private taskState: TaskState
 	private stateManager: StateManager
+	private getMode: () => Mode
 	private postStateToWebview: () => Promise<void>
 	private say: (
 		type: ClineSay,
@@ -58,6 +59,7 @@ export class FocusChainManager {
 		this.taskId = dependencies.taskId
 		this.taskState = dependencies.taskState
 		this.stateManager = dependencies.stateManager
+		this.getMode = dependencies.getMode
 		this.postStateToWebview = dependencies.postStateToWebview
 		this.say = dependencies.say
 		this.focusChainSettings = dependencies.focusChainSettings
@@ -218,7 +220,7 @@ export class FocusChainManager {
 			return `${FocusChainPrompts.initial}`
 		}
 		// When in plan mode, lists are optional
-		if (this.stateManager.getGlobalSettingsKey("mode") === "plan") {
+		if (this.getMode() === "plan") {
 			return FocusChainPrompts.planModeReminder
 		}
 		// Check if we're early in the task

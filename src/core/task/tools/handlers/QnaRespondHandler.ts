@@ -3,6 +3,7 @@ import { formatResponse } from "@core/prompts/responses"
 import type { ClineQnaResponse } from "@shared/ExtensionMessage"
 import { ClineDefaultTool } from "@shared/tools"
 import type { ToolResponse } from "../../index"
+import { isCompactSignal } from "../../mode-switch-signal"
 import type { IPartialBlockHandler, IToolHandler } from "../ToolExecutorCoordinator"
 import type { TaskConfig } from "../types/TaskConfig"
 import type { StronglyTypedUIHelpers } from "../types/UIHelpers"
@@ -54,6 +55,10 @@ export class QnaRespondHandler implements IToolHandler, IPartialBlockHandler {
 		})
 
 		config.taskState.isAwaitingPlanResponse = false
+
+		if (isCompactSignal(text)) {
+			return formatResponse.toolResult("Mode switch context compaction requested.")
+		}
 
 		if (text === "PLAN_MODE_TOGGLE_RESPONSE") {
 			text = ""

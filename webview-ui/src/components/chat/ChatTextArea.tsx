@@ -2,7 +2,6 @@ import { mentionRegex, mentionRegexGlobal } from "@shared/context-mentions"
 import type { ClineAsk } from "@shared/ExtensionMessage"
 import { EmptyRequest, StringRequest } from "@shared/proto/dline/common"
 import { FileSearchRequest, FileSearchType, RefreshedDlineToggles, RelativePathsRequest } from "@shared/proto/dline/file"
-import { PlanActMode, TogglePlanActModeRequest } from "@shared/proto/dline/state"
 import { type SlashCommand } from "@shared/slashCommands"
 import { Mode } from "@shared/storage/types"
 import { VSCodeButton } from "@vscode/webview-ui-toolkit/react"
@@ -13,6 +12,8 @@ import DynamicTextArea from "react-textarea-autosize"
 import styled from "styled-components"
 import ContextMenu from "@/components/chat/ContextMenu"
 import { CHAT_CONSTANTS } from "@/components/chat/chat-view/constants"
+import { ModeSwitchDialog } from "@/components/chat/mode-switch/ModeSwitchDialog"
+import { type ModeSwitchDraft, useModeSwitch } from "@/components/chat/mode-switch/useModeSwitch"
 import SlashCommandMenu from "@/components/chat/SlashCommandMenu"
 import ModelSwitcher from "@/components/chat/task-header/ModelSwitcher"
 import Thumbnails from "@/components/common/Thumbnails"
@@ -21,7 +22,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { useExtensionState } from "@/context/ExtensionStateContext"
 import { usePlatform } from "@/context/PlatformContext"
 import { cn } from "@/lib/utils"
-import { FileServiceClient, SlashServiceClient, StateServiceClient } from "@/services/grpc-client"
+import { FileServiceClient, SlashServiceClient } from "@/services/grpc-client"
 import {
 	ContextMenuOptionType,
 	getContextMenuOptionIndex,
@@ -81,7 +82,7 @@ interface ChatTextAreaProps {
 	selectedImages: string[]
 	setSelectedImages: React.Dispatch<React.SetStateAction<string[]>>
 	setSelectedFiles: React.Dispatch<React.SetStateAction<string[]>>
-	onSend: () => void
+	onSend: (draft?: ModeSwitchDraft) => void
 	onSelectFilesAndImages: () => void
 	shouldDisableFilesAndImages: boolean
 	clineAsk?: ClineAsk
@@ -220,6 +221,8 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 	) => {
 		const {
 			mode,
+			modeSwitch,
+			stateRevision,
 			apiConfiguration,
 			openRouterModels,
 			platform,
@@ -1087,130 +1090,26 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 			[updateCursorPosition],
 		)
 
-		// Prevent duplicate toggle requests while a mode switch is in-flight.
-		// Unlocked when the backend pushes the new mode via subscribeToState,
-		// or after a 3 s timeout to prevent permanent lock-up.
-		const toggleLockRef = useRef(false)
-		const toggleTimerRef = useRef<NodeJS.Timeout>()
-		const sendAfterModeSwitchRef = useRef(false)
-		const onSendRef = useRef(onSend)
-		const [isModeTogglePending, setIsModeTogglePending] = useState(false)
-
-		const releaseModeToggleLock = useCallback(() => {
-			toggleLockRef.current = false
-			sendAfterModeSwitchRef.current = false
-			setIsModeTogglePending(false)
-			if (toggleTimerRef.current) {
-				clearTimeout(toggleTimerRef.current)
-				toggleTimerRef.current = undefined
-			}
-		}, [])
-
-		useEffect(() => {
-			onSendRef.current = onSend
-		}, [onSend])
-
-		useEffect(() => {
-			if (toggleLockRef.current) {
-				const shouldSendAfterModeSwitch = sendAfterModeSwitchRef.current
-				releaseModeToggleLock()
-				// Mode switch completed — send pending input.
-				// handleSendMessage internally clears input on success.
-				if (shouldSendAfterModeSwitch) {
-					onSendRef.current()
-				}
-			}
-		}, [releaseModeToggleLock])
-
-		useEffect(() => {
-			return () => {
-				if (toggleTimerRef.current) {
-					clearTimeout(toggleTimerRef.current)
-				}
-			}
-		}, [])
-
-		const onModeToggle = useCallback(() => {
-			if (toggleLockRef.current) {
-				return
-			}
-
-			const shouldSubmitWithToggle = mode === "plan" && (clineAsk === "plan_mode_respond" || clineAsk === "qna_respond")
-			const hasPendingMessage = !!inputValue.trim() || selectedImages.length > 0 || selectedFiles.length > 0
-
-			console.debug("[onModeToggle] click", {
-				locked: toggleLockRef.current,
-				currentMode: mode,
-				hasInput: hasPendingMessage,
-				shouldSubmitWithToggle,
-			})
-			toggleLockRef.current = true
-			sendAfterModeSwitchRef.current = hasPendingMessage && !shouldSubmitWithToggle
-			setIsModeTogglePending(true)
-			toggleTimerRef.current = setTimeout(releaseModeToggleLock, 3_000)
-
-			// Optimistic clear: when submitting content with the mode toggle,
-			// clear the input immediately so the user sees the feedback right away.
-			// Saved content is restored if the RPC fails.
-			const savedContent = shouldSubmitWithToggle
-				? { text: inputValue, images: [...selectedImages], files: [...selectedFiles] }
-				: null
-			if (shouldSubmitWithToggle) {
+		const attachDraft = mode === "plan" && (clineAsk === "plan_mode_respond" || clineAsk === "qna_respond")
+		const modeSwitchFlow = useModeSwitch({
+			mode,
+			stateRevision,
+			modeSwitch,
+			draft: { text: inputValue, images: selectedImages, files: selectedFiles },
+			attachDraft,
+			onSend: (capturedDraft) => onSend(capturedDraft),
+			clearDraft: () => {
 				setInputValue("")
 				setSelectedImages([])
 				setSelectedFiles([])
-			}
+			},
+		})
 
-			console.debug("[onModeToggle] sending RPC")
-			void (async () => {
-				try {
-					const result = await StateServiceClient.togglePlanActModeProto(
-						TogglePlanActModeRequest.create({
-							mode: mode === "plan" ? PlanActMode.ACT : PlanActMode.PLAN,
-							chatContent: shouldSubmitWithToggle
-								? {
-										message: inputValue || undefined,
-										images: selectedImages,
-										files: selectedFiles,
-									}
-								: undefined,
-						}),
-					)
-					if (!result.value) {
-						console.warn("[onModeToggle] mode switch rejected")
-						// Restore input on rejection
-						if (savedContent) {
-							setInputValue(savedContent.text)
-							setSelectedImages(savedContent.images)
-							setSelectedFiles(savedContent.files)
-						}
-						releaseModeToggleLock()
-						return
-					}
-				} catch (error) {
-					console.error("[onModeToggle] mode switch failed", error)
-					// Restore input on error
-					if (savedContent) {
-						setInputValue(savedContent.text)
-						setSelectedImages(savedContent.images)
-						setSelectedFiles(savedContent.files)
-					}
-					releaseModeToggleLock()
-					return
-				}
-				textAreaRef.current?.focus()
-			})()
-		}, [
-			clineAsk,
-			inputValue,
-			mode,
-			releaseModeToggleLock,
-			selectedFiles,
-			selectedImages,
-			setInputValue,
-			setSelectedImages,
-			setSelectedFiles,
-		])
+		/** Request the opposite mode through the backend transaction. */
+		const onModeToggle = useCallback(() => {
+			const targetMode: Mode = mode === "plan" ? "act" : "plan"
+			void modeSwitchFlow.requestSwitch(targetMode).finally(() => textAreaRef.current?.focus())
+		}, [mode, modeSwitchFlow.requestSwitch])
 
 		useShortcut(usePlatform().togglePlanActKeys, onModeToggle, { disableTextInputs: false }) // important that we don't disable the text input here
 
@@ -1773,6 +1672,11 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 					</span>
 					{/* Tooltip for Plan/Act toggle remains outside the conditional rendering */}
 					<div className="ml-auto shrink-0">
+						<ModeSwitchDialog
+							onCancel={modeSwitchFlow.cancelSwitch}
+							onConfirm={modeSwitchFlow.confirmSwitch}
+							state={modeSwitch ?? { phase: "idle" }}
+						/>
 						<Tooltip>
 							<TooltipContent
 								className="text-xs px-2 flex flex-col gap-1"
@@ -1784,20 +1688,30 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 								</p>
 							</TooltipContent>
 							<TooltipTrigger>
-								<SwitchContainer data-testid="mode-switch" disabled={isModeTogglePending} onClick={onModeToggle}>
-									<Slider isAct={mode === "act"} isPlan={mode === "plan"} />
+								<SwitchContainer
+									data-testid="mode-switch"
+									disabled={modeSwitchFlow.isSwitchPending}
+									onClick={onModeToggle}>
+									<Slider
+										isAct={modeSwitchFlow.displayMode === "act"}
+										isPlan={modeSwitchFlow.displayMode === "plan"}
+									/>
 									{["Plan", "Act"].map((m) => (
 										<div
-											aria-checked={mode === m.toLowerCase()}
+											aria-checked={modeSwitchFlow.displayMode === m.toLowerCase()}
 											className={cn(
 												"pt-0.5 pb-px px-2 z-10 text-xs w-1/2 text-center bg-transparent",
-												mode === m.toLowerCase() ? "text-white" : "text-input-foreground",
+												modeSwitchFlow.displayMode === m.toLowerCase()
+													? "text-white"
+													: "text-input-foreground",
 											)}
 											key={m}
 											onMouseLeave={() => setShownTooltipMode(null)}
 											onMouseOver={() => setShownTooltipMode(m.toLowerCase() === "plan" ? "plan" : "act")}
 											role="switch">
-											{m}
+											{modeSwitchFlow.statusText && m.toLowerCase() === modeSwitchFlow.displayMode
+												? modeSwitchFlow.statusText
+												: m}
 										</div>
 									))}
 								</SwitchContainer>

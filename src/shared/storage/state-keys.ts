@@ -82,10 +82,6 @@ const GLOBAL_STATE_FIELDS = {
 	remoteSkillsToggles: { default: {} as ClineRulesToggles },
 	// Path to worktree that should auto-open Cline sidebar when launched
 	worktreeAutoOpenPath: { default: undefined as string | undefined },
-	/** Transient: context overflow detected during plan/act mode switch. Set by togglePlanActMode, cleared after dialog or compaction. */
-	contextOverflowInfo: {
-		default: undefined as { targetMode: string; currentTokens: number; targetMaxAllowed: number } | undefined,
-	},
 } satisfies FieldDefinitions
 
 // Fields that map directly to ApiConfiguration in @shared/api.ts.

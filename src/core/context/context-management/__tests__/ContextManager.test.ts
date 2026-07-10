@@ -363,6 +363,53 @@ describe("ContextManager", () => {
 			expect(result[2].role).to.equal("user")
 		})
 
+		it("preserves a canonical result paired by function_id when item_id differs", () => {
+			const messages = [
+				{ role: "user", content: "Initial task" },
+				{ role: "assistant", content: "Response 1" },
+				{
+					role: "assistant",
+					content: [
+						{
+							type: "tool_use",
+							id: "resp_item_1",
+							item_id: "resp_item_1",
+							function_id: "call_provider_1",
+							dline_tid: "dline_tid_1",
+							name: "write_to_file",
+							input: { path: "test.txt" },
+						},
+					],
+				},
+				{
+					role: "user",
+					content: [
+						{
+							type: "tool_result",
+							tool_use_id: "call_provider_1",
+							item_id: "dline_item_result_1",
+							function_id: "call_provider_1",
+							dline_tid: "dline_tid_1",
+							content: [
+								{ type: "text", text: "File written." },
+								{ type: "text", text: "Approval feedback." },
+							],
+						},
+					],
+				},
+			] as Anthropic.Messages.MessageParam[]
+
+			const result = contextManager.getTruncatedMessages(messages, undefined)
+			const userContent = result[3].content as unknown as Array<Record<string, unknown>>
+
+			expect(userContent).to.have.lengthOf(1)
+			expect(userContent[0].function_id).to.equal("call_provider_1")
+			expect(userContent[0].tool_use_id).to.equal("call_provider_1")
+			expect(userContent[0].item_id).to.equal("dline_item_result_1")
+			expect(userContent[0].content as unknown[]).to.have.lengthOf(2)
+			expect(JSON.stringify(userContent)).not.to.contain("The result was not recorded")
+		})
+
 		it("removes orphaned tool_results after truncation", () => {
 			// Create messages with tool_use and tool_result blocks
 			const messages: Anthropic.Messages.MessageParam[] = [
