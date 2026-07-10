@@ -59,6 +59,15 @@ const HistoryViewItem = ({
 		)
 	}, [])
 
+	/**
+	 * Stop nested action events from opening the history item.
+	 * @param e React pointer or mouse event from a nested action.
+	 */
+	const stopHistoryOpen = useCallback((e: React.SyntheticEvent) => {
+		e.preventDefault()
+		e.stopPropagation()
+	}, [])
+
 	const formatDate = useCallback((timestamp: number) => {
 		const date = new Date(timestamp)
 		const today = new Date()
@@ -129,9 +138,11 @@ const HistoryViewItem = ({
 							className="p-0 opacity-0 group-hover:opacity-100 transition-opacity"
 							disabled={isFavoritedItem}
 							onClick={(e) => {
-								e.stopPropagation()
+								stopHistoryOpen(e)
 								handleDeleteHistoryItem(item.id)
 							}}
+							onMouseDown={stopHistoryOpen}
+							onPointerDown={stopHistoryOpen}
 							title="Delete"
 							variant="ghost">
 							<span className="flex items-center gap-1 text-xs">
