@@ -311,6 +311,9 @@ describe("MessageStateHandler Mutex Protection", () => {
 		} as ClineMessage)
 		should.equal(partial.partial, true)
 
+		// MessageChannel.pushMessage stores the returned partial in the runtime message collection.
+		await handler.uiMessage?.upsertMessage(partial)
+
 		// Verify single message in memory
 		handler.clineMessages.length.should.equal(1)
 

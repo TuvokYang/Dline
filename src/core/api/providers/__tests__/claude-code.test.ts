@@ -95,18 +95,16 @@ describe("ClaudeCodeHandler", () => {
 			// Verify token counting follows Anthropic API specification
 			usageData.should.have.length(1)
 			usageData[0].should.deepEqual({
-				inputTokens: 100, // Total including cache tokens (per Anthropic API docs)
+				inputTokens: 70, // Normalized non-cache input tokens
 				outputTokens: 50,
-				cacheReadTokens: 20, // Tracked separately for reporting
-				cacheWriteTokens: 10, // Tracked separately for reporting
+				cacheReadTokens: 20,
+				cacheWriteTokens: 10,
 				totalCost: 0.005,
 			})
 
-			// CRITICAL ASSERTION: Verify that input_tokens is NOT inflated by re-adding cache tokens
-			// The bug would have caused inputTokens to be incorrectly calculated as 130 (100 + 20 + 10)
-			// The fix ensures it remains 100, as per Anthropic's specification
-			usageData[0].inputTokens.should.equal(100) // Correct: matches API response
-			usageData[0].inputTokens.should.not.equal(130) // Would be wrong: double-counting cache tokens
+			// The shared usage convention stores cache tokens separately from non-cache input.
+			usageData[0].inputTokens.should.equal(70)
+			;(usageData[0].inputTokens + usageData[0].cacheReadTokens + usageData[0].cacheWriteTokens).should.equal(100)
 		})
 
 		it("should handle missing usage fields with nullish coalescing", async () => {

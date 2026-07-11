@@ -26,6 +26,7 @@ import type { McpHub } from "@/services/mcp/McpHub"
 import { ModelFamily } from "@/shared/prompts"
 import { getSystemPrompt } from "../index"
 import type { SystemPromptContext } from "../types"
+import { assertPromptContent } from "./snapshot-content"
 import { mockProviderInfo } from "./test-helpers"
 
 // ============================================================================
@@ -87,6 +88,7 @@ const compareStrings = (expected: string, actual: string): string | null => {
 
 async function assertSnapshot(name: string, content: string): Promise<void> {
 	const snapshotPath = path.join(SNAPSHOTS_DIR, name)
+	assertPromptContent(name, content)
 
 	if (UPDATE_SNAPSHOTS) {
 		await fs.writeFile(snapshotPath, content, "utf-8")

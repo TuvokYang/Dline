@@ -1,42 +1,12 @@
 import type { LanguageKey } from "@shared/Languages"
-import * as fs from "fs"
-import * as path from "path"
 import { Logger } from "@/shared/services/Logger"
+import { englishPrompts } from "./en"
 
 type PromptModule = Record<string, string>
 type LanguagePack = Record<string, PromptModule>
 
-/**
- * Auto-load all .ts prompt modules from a language directory.
- * Scans the i18n/{lang}/ directory and requires each .ts file,
- * registering its default export as a prompt module.
- */
-function autoLoadLangModules(lang: string): LanguagePack {
-	const modules: LanguagePack = {}
-	const langDir = path.join(__dirname, lang)
-
-	try {
-		const files = fs.readdirSync(langDir).filter((f) => f.endsWith(".ts") && !f.endsWith(".d.ts"))
-		for (const file of files) {
-			const moduleName = file.replace(".ts", "")
-			try {
-				// eslint-disable-next-line @typescript-eslint/no-require-imports
-				const mod = require(`./${lang}/${file}`)
-				modules[moduleName] = mod.default || mod
-			} catch {
-				// Skip files that can't be loaded
-			}
-		}
-	} catch {
-		// Directory doesn't exist — no modules for this language
-	}
-
-	return modules
-}
-
 const registry: Record<string, LanguagePack> = {
-	en: autoLoadLangModules("en"),
-	"zh-cn": autoLoadLangModules("zh-cn"),
+	en: englishPrompts,
 }
 
 /**
@@ -77,23 +47,7 @@ export function getPrompt(module: string, key: string, params?: Record<string, u
 	const effectiveLang = lang ?? "en"
 
 	// Try the requested language first, then fall back to English
-	let prompts = registry[effectiveLang]?.[module]
-	if (!prompts) {
-		// Lazy-load: try to load the module for this language on demand
-		try {
-			// eslint-disable-next-line @typescript-eslint/no-require-imports
-			const mod = require(`./${effectiveLang}/${module}.ts`)
-			const loaded = mod.default || mod
-			if (loaded && typeof loaded === "object") {
-				registerPrompts(effectiveLang, module, loaded)
-				prompts = loaded
-			}
-		} catch {
-			// Module not found for this language
-		}
-	}
-
-	// Fall back to English if still not found
+	const prompts = registry[effectiveLang]?.[module]
 	const enPrompts = registry.en[module] ?? prompts
 	const missingKey = `[MISSING: ${module}.${key}]`
 	if (!prompts?.[key] && !enPrompts?.[key]) {

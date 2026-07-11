@@ -11,4 +11,6 @@ message AnthropicProviderConfig {
   bool custom_model_enabled = 2;
   dline.models.ModelCapabilities capabilities = 3;
   dline.models.ModelPricing pricing = 4;
+  optional bool enable_long_context = 5;
+  optional bool pricing_tiers_enabled = 6;
 }

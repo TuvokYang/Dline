@@ -106,6 +106,36 @@ describe("Cost Utilities", () => {
 			const cost = calculateApiCostOpenAI(modelInfo, 0, 0, 0, 0)
 			cost.should.equal(0)
 		})
+
+		it("uses the OpenAI 5.6 Sol standard pricing tier at 272K", () => {
+			const modelInfo: ModelInfo = {
+				id: "gpt-5.6-sol",
+				capabilities: { contextWindow: 272_000 },
+				pricing: {
+					tiers: [
+						{ contextWindow: 272_000, inputPrice: 5, outputPrice: 30 },
+						{ contextWindow: 1_050_000, inputPrice: 10, outputPrice: 45 },
+					],
+				},
+			}
+
+			calculateApiCostOpenAI(modelInfo, 272_000, 1_000).should.be.approximately(1.39, 1e-12)
+		})
+
+		it("uses the OpenAI 5.6 Sol long pricing tier above 272K", () => {
+			const modelInfo: ModelInfo = {
+				id: "gpt-5.6-sol",
+				capabilities: { contextWindow: 1_050_000 },
+				pricing: {
+					tiers: [
+						{ contextWindow: 272_000, inputPrice: 5, outputPrice: 30 },
+						{ contextWindow: 1_050_000, inputPrice: 10, outputPrice: 45 },
+					],
+				},
+			}
+
+			calculateApiCostOpenAI(modelInfo, 300_000, 1_000).should.be.approximately(3.045, 1e-12)
+		})
 	})
 
 	describe("calculateApiCostQwen", () => {

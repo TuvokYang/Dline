@@ -14,7 +14,7 @@ export const CLAUDE_SONNET_1M_TIERS = [
 		cacheReadsPrice: 0.3,
 	},
 	{
-		contextWindow: Number.MAX_SAFE_INTEGER,
+		contextWindow: 1_000_000,
 		inputPrice: 6,
 		outputPrice: 22.5,
 		cacheWritesPrice: 7.5,
@@ -32,7 +32,7 @@ export const CLAUDE_OPUS_1M_TIERS = [
 		cacheReadsPrice: 0.5,
 	},
 	{
-		contextWindow: Number.MAX_SAFE_INTEGER,
+		contextWindow: 1_000_000,
 		inputPrice: 10,
 		outputPrice: 37.5,
 		cacheWritesPrice: 12.5,
@@ -50,7 +50,7 @@ const CLAUDE_FABLE_1M_TIERS = [
 		cacheReadsPrice: 1.0,
 	},
 	{
-		contextWindow: Number.MAX_SAFE_INTEGER,
+		contextWindow: 1_000_000,
 		inputPrice: 20,
 		outputPrice: 75,
 		cacheWritesPrice: 25,
@@ -65,23 +65,10 @@ export const anthropicModels: Record<string, ModelInfo> = {
 		capabilities: {
 			maxTokens: 128_000,
 			contextWindow: 200_000,
-			supportsImages: true,
-			supportsPromptCache: true,
-			supportsReasoning: true,
-		},
-		pricing: {
-			inputPrice: 10.0,
-			outputPrice: 50.0,
-			cacheWritesPrice: 12.5,
-			cacheReadsPrice: 1.0,
-		},
-	},
-	"claude-fable-5:1m": {
-		id: "claude-fable-5:1m",
-		name: "claude-fable-5:1m",
-		capabilities: {
-			maxTokens: 128_000,
-			contextWindow: 1_000_000,
+			contextWindowTiers: [
+				{ id: "standard", contextWindow: 200_000, label: "200K" },
+				{ id: "long", contextWindow: 1_000_000, label: "1M", apiModelSuffix: ":1m" },
+			],
 			supportsImages: true,
 			supportsPromptCache: true,
 			supportsReasoning: true,
@@ -100,23 +87,10 @@ export const anthropicModels: Record<string, ModelInfo> = {
 		capabilities: {
 			maxTokens: 128_000,
 			contextWindow: 200_000,
-			supportsImages: true,
-			supportsPromptCache: true,
-			supportsReasoning: true,
-		},
-		pricing: {
-			inputPrice: 5.0,
-			outputPrice: 25.0,
-			cacheWritesPrice: 6.25,
-			cacheReadsPrice: 0.5,
-		},
-	},
-	"claude-opus-4-8:1m": {
-		id: "claude-opus-4-8:1m",
-		name: "claude-opus-4-8:1m",
-		capabilities: {
-			maxTokens: 128_000,
-			contextWindow: 1_000_000,
+			contextWindowTiers: [
+				{ id: "standard", contextWindow: 200_000, label: "200K" },
+				{ id: "long", contextWindow: 1_000_000, label: "1M", apiModelSuffix: ":1m" },
+			],
 			supportsImages: true,
 			supportsPromptCache: true,
 			supportsReasoning: true,
@@ -135,23 +109,10 @@ export const anthropicModels: Record<string, ModelInfo> = {
 		capabilities: {
 			maxTokens: 128_000,
 			contextWindow: 200_000,
-			supportsImages: true,
-			supportsPromptCache: true,
-			supportsReasoning: true,
-		},
-		pricing: {
-			inputPrice: 3.0,
-			outputPrice: 15.0,
-			cacheWritesPrice: 3.75,
-			cacheReadsPrice: 0.3,
-		},
-	},
-	"claude-sonnet-5:1m": {
-		id: "claude-sonnet-5:1m",
-		name: "claude-sonnet-5:1m",
-		capabilities: {
-			maxTokens: 128_000,
-			contextWindow: 1_000_000,
+			contextWindowTiers: [
+				{ id: "standard", contextWindow: 200_000, label: "200K" },
+				{ id: "long", contextWindow: 1_000_000, label: "1M", apiModelSuffix: ":1m" },
+			],
 			supportsImages: true,
 			supportsPromptCache: true,
 			supportsReasoning: true,
@@ -170,23 +131,10 @@ export const anthropicModels: Record<string, ModelInfo> = {
 		capabilities: {
 			maxTokens: 64_000,
 			contextWindow: 200_000,
-			supportsImages: true,
-			supportsPromptCache: true,
-			supportsReasoning: true,
-		},
-		pricing: {
-			inputPrice: 3.0,
-			outputPrice: 15.0,
-			cacheWritesPrice: 3.75,
-			cacheReadsPrice: 0.3,
-		},
-	},
-	"claude-sonnet-4-6:1m": {
-		id: "claude-sonnet-4-6:1m",
-		name: "claude-sonnet-4-6:1m",
-		capabilities: {
-			maxTokens: 64_000,
-			contextWindow: 1_000_000,
+			contextWindowTiers: [
+				{ id: "standard", contextWindow: 200_000, label: "200K" },
+				{ id: "long", contextWindow: 1_000_000, label: "1M", apiModelSuffix: ":1m" },
+			],
 			supportsImages: true,
 			supportsPromptCache: true,
 			supportsReasoning: true,
@@ -205,42 +153,10 @@ export const anthropicModels: Record<string, ModelInfo> = {
 		capabilities: {
 			maxTokens: 128_000,
 			contextWindow: 200_000,
-			supportsImages: true,
-			supportsPromptCache: true,
-			supportsReasoning: true,
-		},
-		pricing: {
-			inputPrice: 5.0,
-			outputPrice: 25.0,
-			cacheWritesPrice: 6.25,
-			cacheReadsPrice: 0.5,
-		},
-	},
-	"claude-opus-4-6:fast": {
-		id: "claude-opus-4-6:fast",
-		name: "claude-opus-4-6:fast",
-		description:
-			"Anthropic fast mode preview for Claude Opus 4.6. Same model and capabilities with higher output token speed at premium pricing. Requires fast mode access on your Anthropic account.",
-		capabilities: {
-			maxTokens: 128_000,
-			contextWindow: 200_000,
-			supportsImages: true,
-			supportsPromptCache: true,
-			supportsReasoning: true,
-		},
-		pricing: {
-			inputPrice: 30.0,
-			outputPrice: 150.0,
-			cacheWritesPrice: 37.5,
-			cacheReadsPrice: 3.0,
-		},
-	},
-	"claude-opus-4-6:1m": {
-		id: "claude-opus-4-6:1m",
-		name: "claude-opus-4-6:1m",
-		capabilities: {
-			maxTokens: 128_000,
-			contextWindow: 1_000_000,
+			contextWindowTiers: [
+				{ id: "standard", contextWindow: 200_000, label: "200K" },
+				{ id: "long", contextWindow: 1_000_000, label: "1M", apiModelSuffix: ":1m" },
+			],
 			supportsImages: true,
 			supportsPromptCache: true,
 			supportsReasoning: true,
@@ -253,14 +169,18 @@ export const anthropicModels: Record<string, ModelInfo> = {
 			tiers: CLAUDE_OPUS_1M_TIERS,
 		},
 	},
-	"claude-opus-4-6:1m:fast": {
-		id: "claude-opus-4-6:1m:fast",
-		name: "claude-opus-4-6:1m:fast",
+	"claude-opus-4-6:fast": {
+		id: "claude-opus-4-6:fast",
+		name: "claude-opus-4-6:fast",
 		description:
-			"Anthropic fast mode preview for Claude Opus 4.6 with the 1M context beta enabled. Same model and capabilities with higher output token speed at premium pricing across the full 1M context window. Requires both fast mode and 1M context access on your Anthropic account.",
+			"Anthropic fast mode preview for Claude Opus 4.6. Same model and capabilities with higher output token speed at premium pricing. Requires fast mode access on your Anthropic account.",
 		capabilities: {
 			maxTokens: 128_000,
-			contextWindow: 1_000_000,
+			contextWindow: 200_000,
+			contextWindowTiers: [
+				{ id: "standard", contextWindow: 200_000, label: "200K" },
+				{ id: "long", contextWindow: 1_000_000, label: "1M", apiModelSuffix: ":1m" },
+			],
 			supportsImages: true,
 			supportsPromptCache: true,
 			supportsReasoning: true,
@@ -278,23 +198,10 @@ export const anthropicModels: Record<string, ModelInfo> = {
 		capabilities: {
 			maxTokens: 128_000,
 			contextWindow: 200_000,
-			supportsImages: true,
-			supportsPromptCache: true,
-			supportsReasoning: true,
-		},
-		pricing: {
-			inputPrice: 5.0,
-			outputPrice: 25.0,
-			cacheWritesPrice: 6.25,
-			cacheReadsPrice: 0.5,
-		},
-	},
-	"claude-opus-4-7:1m": {
-		id: "claude-opus-4-7:1m",
-		name: "claude-opus-4-7:1m",
-		capabilities: {
-			maxTokens: 128_000,
-			contextWindow: 1_000_000,
+			contextWindowTiers: [
+				{ id: "standard", contextWindow: 200_000, label: "200K" },
+				{ id: "long", contextWindow: 1_000_000, label: "1M", apiModelSuffix: ":1m" },
+			],
 			supportsImages: true,
 			supportsPromptCache: true,
 			supportsReasoning: true,

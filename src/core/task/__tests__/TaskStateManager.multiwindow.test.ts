@@ -71,6 +71,24 @@ describe("TaskStateManager - Multi-window Profile Isolation", () => {
 		chai.expect(taskSm.actModeProfile).to.be.undefined
 	})
 
+	it("should keep persisted history profiles when global defaults change", async () => {
+		await sm.loadTaskSettings("task-history")
+		const taskSm = new TaskStateManager("task-history", sm)
+		taskSm.setPlanModeProfile("history-plan")
+		taskSm.setActModeProfile("history-act")
+		sm.setGlobalState("planModeProfile", "global-plan")
+		sm.setGlobalState("actModeProfile", "global-act")
+
+		const effectiveConfig = {
+			...sm.getApiConfiguration(),
+			...(taskSm.planModeProfile !== undefined && { planModeProfile: taskSm.planModeProfile }),
+			...(taskSm.actModeProfile !== undefined && { actModeProfile: taskSm.actModeProfile }),
+		}
+
+		effectiveConfig.planModeProfile?.should.equal("history-plan")
+		effectiveConfig.actModeProfile?.should.equal("history-act")
+	})
+
 	it("should persist profile changes via markTaskSettingDirty", async () => {
 		await sm.loadTaskSettings("task-persist")
 		const taskSm = new TaskStateManager("task-persist", sm)

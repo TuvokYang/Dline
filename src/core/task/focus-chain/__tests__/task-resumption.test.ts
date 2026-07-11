@@ -32,7 +32,7 @@ describe("FocusChainManager - Task Resumption", () => {
 		const manager = new FocusChainManager({
 			taskId,
 			taskState,
-			mode: "act",
+			getMode: () => "act",
 			stateManager: {} as any,
 			postStateToWebview: vi.fn(),
 			say: vi.fn(),
@@ -64,7 +64,7 @@ describe("FocusChainManager - Task Resumption", () => {
 		const manager = new FocusChainManager({
 			taskId,
 			taskState,
-			mode: "act",
+			getMode: () => "act",
 			stateManager: {} as any,
 			postStateToWebview: vi.fn(),
 			say: vi.fn(),
@@ -102,7 +102,7 @@ describe("FocusChainManager - Task Resumption", () => {
 		const manager = new FocusChainManager({
 			taskId,
 			taskState,
-			mode: "act",
+			getMode: () => "act",
 			stateManager: {} as any,
 			postStateToWebview: vi.fn(),
 			say: mockSay,

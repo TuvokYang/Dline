@@ -184,14 +184,14 @@ export class ClaudeCodeHandler implements ApiHandler {
 					}
 				}
 
-				// According to Anthropic's API documentation:
-				// https://docs.anthropic.com/en/api/messages#usage-object
-				// The `input_tokens` field already includes both `cache_read_input_tokens` and `cache_creation_input_tokens`.
-				// Therefore, we should not add cache tokens to the input_tokens count again, as this would result in double-counting.
-				usage.inputTokens = message.usage?.input_tokens ?? 0
+				// Normalize Anthropic's cache-inclusive input_tokens into the shared non-cache input convention.
+				const totalInput = message.usage?.input_tokens ?? 0
+				const cacheRead = message.usage?.cache_read_input_tokens ?? 0
+				const cacheWrite = message.usage?.cache_creation_input_tokens ?? 0
+				usage.inputTokens = Math.max(0, totalInput - cacheRead - cacheWrite)
 				usage.outputTokens = message.usage?.output_tokens ?? 0
-				usage.cacheReadTokens = message.usage?.cache_read_input_tokens ?? 0
-				usage.cacheWriteTokens = message.usage?.cache_creation_input_tokens ?? 0
+				usage.cacheReadTokens = cacheRead
+				usage.cacheWriteTokens = cacheWrite
 
 				continue
 			}

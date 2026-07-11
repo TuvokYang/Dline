@@ -8,7 +8,7 @@
 import { FocusChainSettings } from "@shared/FocusChainSettings"
 import { describe, expect, it, vi } from "vitest"
 import { TaskState } from "../../TaskState"
-import { FocusChainManager } from "../index"
+import { type FocusChainDependencies, FocusChainManager } from "../index"
 import { FocusChainPrompts } from "../prompts"
 
 /** Build a simple task_progress report string as AI would send. */
@@ -31,7 +31,7 @@ function checklist(items: Array<{ text: string }>, sections?: string[]): string 
 /** Create a fresh mock say function that records calls. */
 function mockSay() {
 	const calls: Array<{ type: string; text?: string }> = []
-	const fn = vi.fn((type: string, text?: string) => {
+	const fn: FocusChainDependencies["say"] = vi.fn((type, text) => {
 		calls.push({ type, text })
 		return Promise.resolve(1)
 	})
@@ -39,11 +39,11 @@ function mockSay() {
 }
 
 /** Create FocusChainManager with mocked dependencies. */
-function createManager(taskState: TaskState, sayFn: ReturnType<typeof vi.fn>) {
+function createManager(taskState: TaskState, sayFn: FocusChainDependencies["say"]) {
 	const deps = {
 		taskId: "test-task-id",
 		taskState,
-		mode: "act" as const,
+		getMode: () => "act" as const,
 		stateManager: {
 			getGlobalSettingsKey: vi.fn((key: string) => {
 				if (key === "mode") return "act"

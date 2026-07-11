@@ -1,4 +1,6 @@
-// Mode import removed — no longer needed in profile-driven architecture
+import { BaseProviderConfig } from "@shared/proto/dline/provider/common"
+import { buildEffectiveModelInfo } from "@shared/providers/effective-model-info"
+import { VSCodeCheckbox } from "@vscode/webview-ui-toolkit/react"
 import { ApiKeyField } from "../common/ApiKeyField"
 import { ModelInfoView } from "../common/ModelInfoView"
 import { ModelSelector } from "../common/ModelSelector"
@@ -29,10 +31,14 @@ export const OpenAINativeProvider = ({ showModelOptions, isPopup, profile, onUpd
 	} = useProviderModels("openai-native")
 
 	const modelId = profile.modelId || openAiNativeDefaultModelId
-	const modelInfo =
-		profile.modelInfo ??
-		(profile.modelId ? openAiNativeModels[profile.modelId] : undefined) ??
-		openAiNativeModelInfoSaneDefaults
+	const pc = profile.openaiNative ?? BaseProviderConfig.create()
+	const registryModel = openAiNativeModels[modelId] ?? openAiNativeModelInfoSaneDefaults
+	const modelInfo = buildEffectiveModelInfo(modelId, registryModel, {
+		capabilities: pc.capabilities,
+		pricing: pc.pricing,
+		enableLongContext: pc.enableLongContext,
+		pricingTiersEnabled: pc.pricingTiersEnabled,
+	})
 	const showReasoningEffort = supportsReasoningEffortForModelId(modelId, true)
 
 	return (
@@ -49,12 +55,23 @@ export const OpenAINativeProvider = ({ showModelOptions, isPopup, profile, onUpd
 					<ModelSelector
 						label="Model"
 						models={openAiNativeModels}
-						onChange={(e: any) => {
-							const newModelId = e.target.value
-							onUpdate({ modelId: newModelId, modelInfo: openAiNativeModels[newModelId] })
-						}}
+						onChange={(e) => onUpdate({ modelId: (e.target as HTMLSelectElement).value })}
 						selectedModelId={modelId}
 					/>
+					{modelInfo.capabilities?.contextWindowTiers?.length ? (
+						<VSCodeCheckbox
+							checked={pc.enableLongContext === true}
+							onChange={(event: Event | React.FormEvent<HTMLElement>) =>
+								onUpdate({
+									openaiNative: {
+										...pc,
+										enableLongContext: (event.target as HTMLInputElement | null)?.checked === true,
+									},
+								})
+							}>
+							Enable Long Context
+						</VSCodeCheckbox>
+					) : null}
 					{showReasoningEffort && <ReasoningEffortSelector />}
 
 					<ModelInfoView isPopup={isPopup} modelInfo={modelInfo} selectedModelId={modelId} />

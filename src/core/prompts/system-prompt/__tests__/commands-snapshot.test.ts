@@ -9,12 +9,14 @@ import * as fs from "node:fs/promises"
 import * as path from "node:path"
 import { describe, it } from "vitest"
 import { condenseToolResponse, deepPlanningToolResponse, newTaskToolResponse } from "../../commands"
+import { assertPromptContent } from "./snapshot-content"
 
 const UPDATE_SNAPSHOTS = process.argv.includes("--update-snapshots") || process.env.UPDATE_SNAPSHOTS === "true"
 const SNAPSHOTS_DIR = path.join(__dirname, "__snapshots__")
 
 async function assertSnapshot(name: string, content: string): Promise<void> {
 	const snapshotPath = path.join(SNAPSHOTS_DIR, name)
+	assertPromptContent(name, content)
 
 	if (UPDATE_SNAPSHOTS) {
 		await fs.writeFile(snapshotPath, content, "utf-8")

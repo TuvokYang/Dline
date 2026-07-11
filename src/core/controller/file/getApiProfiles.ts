@@ -169,14 +169,16 @@ function getProfileModelInfoOverride(profile: ApiProfile) {
 function applyRegistryModelInfo(profiles: ApiProfile[]): boolean {
 	let changed = false
 	for (const profile of profiles) {
+		const baseModelInfo = resolveRegistryModelInfo(profile)
+		if (!baseModelInfo) {
+			// Custom models have no registry entry, so their top-level
+			// modelInfo remains the authoritative editable metadata.
+			continue
+		}
 		if (!canStoreRegistryModelInfoOverrides(profile.provider)) {
-			// Non-override providers: clear stale modelInfo from the profile.
-			// These providers (e.g. anthropic, deepseek) store model info
-			// inside their provider-specific oneof config, not at the
-			// top-level modelInfo field.  Leaving a top-level modelInfo
-			// (from a prior version or manual edit) causes serialization
-			// to strip it, which would create a read-merge-strip loop.
-			// Clearing it here triggers a one-time clean rewrite.
+			// Registry-backed non-override providers store model metadata in
+			// provider config or registry data, so stale top-level snapshots
+			// must be removed without affecting custom model metadata.
 			if (profile.modelInfo) {
 				profile.modelInfo = undefined
 				changed = true
@@ -186,10 +188,6 @@ function applyRegistryModelInfo(profiles: ApiProfile[]): boolean {
 		// Override-enabled providers (e.g. openai): merge registry modelInfo
 		// with any stored user overrides so the profile always carries an
 		// up-to-date snapshot.
-		const baseModelInfo = resolveRegistryModelInfo(profile)
-		if (!baseModelInfo) {
-			continue
-		}
 		const modelInfoOverride = getProfileModelInfoOverride(profile)
 		const mergedModelInfo = mergeModelInfo(baseModelInfo, modelInfoOverride)
 		if (JSON.stringify(profile.modelInfo ?? undefined) !== JSON.stringify(mergedModelInfo ?? undefined)) {

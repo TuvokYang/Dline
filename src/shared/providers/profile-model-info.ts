@@ -75,8 +75,10 @@ function readOverrides(value: unknown): ProviderModelOverrides {
 	const capabilities = isObject(value.capabilities) ? (value.capabilities as ModelCapabilities) : undefined
 
 	const pricing = isObject(value.pricing) ? (value.pricing as ModelPricing) : undefined
+	const enableLongContext = typeof value.enableLongContext === "boolean" ? value.enableLongContext : undefined
+	const pricingTiersEnabled = typeof value.pricingTiersEnabled === "boolean" ? value.pricingTiersEnabled : undefined
 
-	return { capabilities, pricing }
+	return { capabilities, pricing, enableLongContext, pricingTiersEnabled }
 }
 
 /**

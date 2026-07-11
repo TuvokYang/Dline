@@ -1,10 +1,11 @@
 import type { ModelInfo } from "@shared/proto/dline/models"
 import type { ModelCapabilities, ModelPricing } from "@shared/proto/dline/models/metadata"
 import { VSCodeCheckbox } from "@vscode/webview-ui-toolkit/react"
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { DebouncedTextField } from "./DebouncedTextField"
+import { ContextTierEditor, PricingTierEditor } from "./ModelTierEditor"
 
 const BUILT_IN_CONTEXT_WINDOW = 128_000
 const BUILT_IN_MAX_TOKENS = 8_192
@@ -42,13 +43,18 @@ interface ModelConfigurationProps {
 	// Which fields to display (data-driven)
 	fields: {
 		// Capabilities related fields
-		capabilities?: Array<"maxTokens" | "contextWindow" | "supportsImages" | "supportsPromptCache" | "temperature">
+		capabilities?: Array<
+			"maxTokens" | "contextWindow" | "contextWindowTiers" | "supportsImages" | "supportsPromptCache" | "temperature"
+		>
 		// Pricing related fields (currency automatically shown first)
-		pricing?: Array<"inputPrice" | "outputPrice" | "cacheWritesPrice" | "cacheReadsPrice">
+		pricing?: Array<"inputPrice" | "outputPrice" | "cacheWritesPrice" | "cacheReadsPrice" | "pricingTiers">
 	}
 
 	// Default values (for placeholders)
 	defaults?: Partial<ModelInfo>
+
+	// Whether tier arrays can be added, edited, and removed.
+	tiersEditable?: boolean
 }
 
 /**
@@ -63,13 +69,46 @@ export const ModelConfiguration = ({
 	onPricingUpdate,
 	fields,
 	defaults,
+	tiersEditable = false,
 }: ModelConfigurationProps) => {
 	const [expanded, setExpanded] = useState(false)
+	const [draftChecks, setDraftChecks] = useState<Partial<Record<keyof ModelCapabilities, boolean>>>({})
+	const [pendingChecks, setPendingChecks] = useState<Partial<Record<keyof ModelCapabilities, boolean>>>({})
+	const [draftContextTiers, setDraftContextTiers] = useState(capabilityOverrides?.contextWindowTiers ?? [])
+	const [draftPricingTiers, setDraftPricingTiers] = useState(pricingOverrides?.tiers ?? [])
 
 	// Extract current values from provider overrides
 	const capabilities: ModelCapabilities = capabilityOverrides ?? ({} as ModelCapabilities)
 	const pricing: ModelPricing = pricingOverrides ?? ({} as ModelPricing)
 	const temperature = capabilities.temperature
+
+	useEffect(() => {
+		setPendingChecks((pending) => {
+			const nextPending = { ...pending }
+			const nextDraft = { ...draftChecks }
+			let changed = false
+			for (const field of ["supportsImages", "supportsPromptCache"] as const) {
+				const expected = pending[field]
+				if (expected !== undefined && capabilities[field] === expected) {
+					delete nextPending[field]
+					delete nextDraft[field]
+					changed = true
+				}
+			}
+			if (changed) {
+				setDraftChecks(nextDraft)
+			}
+			return changed ? nextPending : pending
+		})
+	}, [capabilities.supportsImages, capabilities.supportsPromptCache, draftChecks])
+
+	useEffect(() => {
+		setDraftContextTiers(capabilityOverrides?.contextWindowTiers ?? [])
+	}, [capabilityOverrides?.contextWindowTiers])
+
+	useEffect(() => {
+		setDraftPricingTiers(pricingOverrides?.tiers ?? [])
+	}, [pricingOverrides?.tiers])
 
 	// Derive currency symbol from pricing.currency
 	const currencySymbol = (() => {
@@ -88,9 +127,30 @@ export const ModelConfiguration = ({
 		onCapabilitiesUpdate({ [field]: value } as Partial<ModelCapabilities>)
 	}
 
+	/** Optimistically update a capability checkbox until its persisted echo arrives. */
+	const updateCheck = (field: "supportsImages" | "supportsPromptCache", value: boolean) => {
+		setDraftChecks((draft) => ({ ...draft, [field]: value }))
+		setPendingChecks((pending) => ({ ...pending, [field]: value }))
+		updateCapability(field, value)
+	}
+
+	/** Persist context tier changes while keeping the editor responsive before profile echo. */
+	const updateContextTiers = (tiers: ModelCapabilities["contextWindowTiers"]) => {
+		const nextTiers = tiers ?? []
+		setDraftContextTiers(nextTiers)
+		updateCapability("contextWindowTiers", nextTiers)
+	}
+
 	// Update pricing field
 	const updatePricing = (field: keyof ModelPricing, value: ModelPricing[keyof ModelPricing]) => {
 		onPricingUpdate({ [field]: value } as Partial<ModelPricing>)
+	}
+
+	/** Persist pricing tier changes while keeping the editor responsive before profile echo. */
+	const updatePricingTiers = (tiers: ModelPricing["tiers"]) => {
+		const nextTiers = tiers ?? []
+		setDraftPricingTiers(nextTiers)
+		updatePricing("tiers", nextTiers)
 	}
 
 	// Update currency (part of pricing)
@@ -111,12 +171,16 @@ export const ModelConfiguration = ({
 
 	const capabilityFields = fields.capabilities ?? []
 	const pricingFields = fields.pricing ?? []
-	const supportsPromptCache = Boolean(capabilities.supportsPromptCache ?? true)
+	const supportsImages = draftChecks.supportsImages ?? capabilities.supportsImages ?? false
+	const supportsPromptCache = draftChecks.supportsPromptCache ?? capabilities.supportsPromptCache ?? true
 	const hasOptionsFields =
 		capabilityFields.includes("supportsImages") ||
 		capabilityFields.includes("supportsPromptCache") ||
 		capabilityFields.includes("temperature")
-	const hasCapabilityFields = capabilityFields.includes("contextWindow") || capabilityFields.includes("maxTokens")
+	const hasCapabilityFields =
+		capabilityFields.includes("contextWindow") ||
+		capabilityFields.includes("maxTokens") ||
+		capabilityFields.includes("contextWindowTiers")
 	const hasPricingFields = pricingFields.length > 0
 	const hasBasePricingFields = pricingFields.includes("inputPrice") || pricingFields.includes("outputPrice")
 	const hasCachePricingFields =
@@ -125,6 +189,8 @@ export const ModelConfiguration = ({
 	const defaultMaxTokens = defaults?.capabilities?.maxTokens ?? BUILT_IN_MAX_TOKENS
 	const contextWindowValue = capabilities.contextWindow ?? defaultContextWindow
 	const maxTokensValue = capabilities.maxTokens ?? defaultMaxTokens
+	const contextTiers = draftContextTiers
+	const pricingTiers = draftPricingTiers
 
 	return (
 		<div style={{ marginBottom: 8 }}>
@@ -161,12 +227,9 @@ export const ModelConfiguration = ({
 							<Label style={sectionTitleStyle}>Options</Label>
 							{capabilityFields.includes("supportsImages") && (
 								<VSCodeCheckbox
-									checked={Boolean(capabilities.supportsImages ?? false)}
+									checked={supportsImages}
 									onChange={(e: Event | React.FormEvent<HTMLElement>) =>
-										updateCapability(
-											"supportsImages",
-											(e.target as HTMLInputElement | null)?.checked === true,
-										)
+										updateCheck("supportsImages", (e.target as HTMLInputElement | null)?.checked === true)
 									}>
 									Supports Images
 								</VSCodeCheckbox>
@@ -175,7 +238,7 @@ export const ModelConfiguration = ({
 								<VSCodeCheckbox
 									checked={supportsPromptCache}
 									onChange={(e: Event | React.FormEvent<HTMLElement>) =>
-										updateCapability(
+										updateCheck(
 											"supportsPromptCache",
 											(e.target as HTMLInputElement | null)?.checked === true,
 										)
@@ -224,6 +287,9 @@ export const ModelConfiguration = ({
 									</DebouncedTextField>
 								)}
 							</div>
+							{capabilityFields.includes("contextWindowTiers") ? (
+								<ContextTierEditor editable={tiersEditable} onChange={updateContextTiers} tiers={contextTiers} />
+							) : null}
 						</div>
 					)}
 
@@ -304,6 +370,16 @@ export const ModelConfiguration = ({
 									)}
 								</div>
 							)}
+
+							{pricingFields.includes("pricingTiers") ? (
+								<PricingTierEditor
+									currencySymbol={currencySymbol}
+									editable={tiersEditable}
+									onChange={updatePricingTiers}
+									showCachePrices={supportsPromptCache}
+									tiers={pricingTiers}
+								/>
+							) : null}
 						</div>
 					)}
 				</>

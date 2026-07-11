@@ -680,7 +680,6 @@ export class TaskCheckpointManager implements ICheckpointManager {
 	private abortAndClearState(): void {
 		this.taskState.userMessageContent = []
 		this.taskState.assistantMessageContent = []
-		this.taskState.toolUseIdMap.clear()
 		this.taskState.userMessageContentReady = false
 		this.taskState.lastMessageTs = undefined
 		this.taskState.askResponseText = undefined

@@ -192,6 +192,7 @@ export const ModelInfoView = ({
 	const isGemini = Object.keys(geminiModels).includes(selectedModelId)
 	const hasThinkingConfig = hasThinkingBudget(modelInfo)
 	const hasTiers = !!modelInfo.pricing?.tiers && modelInfo.pricing.tiers.length > 0
+	const contextTiers = modelInfo.capabilities?.contextWindowTiers ?? []
 
 	// Capability checks
 	const hasImages = supportsImages(modelInfo)
@@ -258,6 +259,17 @@ export const ModelInfoView = ({
 						</AdvancedRow>
 					)}
 
+					{contextTiers.length > 0 && (
+						<div style={{ marginTop: 8 }}>
+							<div style={{ fontWeight: 500, marginBottom: 4 }}>Context Window Tiers:</div>
+							{contextTiers.map((tier) => (
+								<div key={tier.id}>
+									{tier.label || tier.id}: {formatCompactContext(tier.contextWindow)}
+								</div>
+							))}
+						</div>
+					)}
+
 					{/* Cache Pricing */}
 					{hasCachePricing && (
 						<>
@@ -292,6 +304,20 @@ export const ModelInfoView = ({
 										<br />
 										{formatTiers(modelInfo.pricing?.tiers, "outputPrice")}
 									</div>
+									{modelInfo.capabilities?.supportsPromptCache && (
+										<>
+											<div style={{ marginTop: 4 }}>
+												<span style={{ fontWeight: 500 }}>Cache Writes:</span>
+												<br />
+												{formatTiers(modelInfo.pricing?.tiers, "cacheWritesPrice")}
+											</div>
+											<div style={{ marginTop: 4 }}>
+												<span style={{ fontWeight: 500 }}>Cache Reads:</span>
+												<br />
+												{formatTiers(modelInfo.pricing?.tiers, "cacheReadsPrice")}
+											</div>
+										</>
+									)}
 								</>
 							)}
 						</div>

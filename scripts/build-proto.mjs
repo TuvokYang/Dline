@@ -137,7 +137,7 @@ function tsProtoc(outDir, protoFiles, protoOptions) {
 }
 
 /**
- * Post-process generated ModelPricing to make repeated array fields optional (?).
+ * Post-process generated model metadata to make selected repeated array fields optional (?).
  * Proto3 repeated fields cannot be marked optional, so we fix the TS output.
  * Also fixes serialization code to handle possibly-undefined arrays.
  */
@@ -168,7 +168,16 @@ async function postProcessModels() {
 			changed = true
 		}
 
-		// 2. Make tiers and thinkingOutputPriceTiers optional in the ModelPricing interface
+		// 2. Make contextWindowTiers optional in the ModelCapabilities interface
+		if (/(export interface ModelCapabilities \{[^}]*?)contextWindowTiers: ContextWindowTier\[\];/s.test(content)) {
+			content = content.replace(
+				/(export interface ModelCapabilities \{[^}]*?)contextWindowTiers: ContextWindowTier\[\];/s,
+				"$1contextWindowTiers?: ContextWindowTier[];",
+			)
+			changed = true
+		}
+
+		// 3. Make tiers and thinkingOutputPriceTiers optional in the ModelPricing interface
 		if (/(export interface ModelPricing \{[^}]*?)tiers: PricingTier\[\];/s.test(content)) {
 			content = content.replace(
 				/(export interface ModelPricing \{[^}]*?)tiers: PricingTier\[\];/s,
@@ -184,7 +193,7 @@ async function postProcessModels() {
 			changed = true
 		}
 
-		// 2. Fix encode/decode serialization code that accesses effortLevels directly
+		// 4. Fix encode/decode serialization code that accesses effortLevels directly
 		if (content.includes("for (const v of message.effortLevels) {")) {
 			content = content.replaceAll(
 				"for (const v of message.effortLevels) {",
@@ -193,20 +202,27 @@ async function postProcessModels() {
 			changed = true
 		}
 		if (content.includes("message.effortLevels.push(")) {
-			content = content.replaceAll(
-				"message.effortLevels.push(",
-				"message.effortLevels!.push(",
-			)
+			content = content.replaceAll("message.effortLevels.push(", "message.effortLevels!.push(")
 			changed = true
 		}
 
-		// 3. Fix encode/decode serialization code that accesses tiers directly
+		// 5. Fix encode/decode serialization code that accesses contextWindowTiers directly
+		if (content.includes("for (const v of message.contextWindowTiers) {")) {
+			content = content.replaceAll(
+				"for (const v of message.contextWindowTiers) {",
+				"for (const v of message.contextWindowTiers ?? []) {",
+			)
+			changed = true
+		}
+		if (content.includes("message.contextWindowTiers.push(")) {
+			content = content.replaceAll("message.contextWindowTiers.push(", "message.contextWindowTiers!.push(")
+			changed = true
+		}
+
+		// 6. Fix encode/decode serialization code that accesses pricing tiers directly
 		// for (const v of message.tiers) { → for (const v of message.tiers ?? []) {
 		if (content.includes("for (const v of message.tiers) {")) {
-			content = content.replaceAll(
-				"for (const v of message.tiers) {",
-				"for (const v of message.tiers ?? []) {",
-			)
+			content = content.replaceAll("for (const v of message.tiers) {", "for (const v of message.tiers ?? []) {")
 			changed = true
 		}
 		if (content.includes("for (const v of message.thinkingOutputPriceTiers) {")) {
@@ -218,23 +234,17 @@ async function postProcessModels() {
 		}
 		// message.tiers.push( → message.tiers!.push(
 		if (content.includes("message.tiers.push(")) {
-			content = content.replaceAll(
-				"message.tiers.push(",
-				"message.tiers!.push(",
-			)
+			content = content.replaceAll("message.tiers.push(", "message.tiers!.push(")
 			changed = true
 		}
 		if (content.includes("message.thinkingOutputPriceTiers.push(")) {
-			content = content.replaceAll(
-				"message.thinkingOutputPriceTiers.push(",
-				"message.thinkingOutputPriceTiers!.push(",
-			)
+			content = content.replaceAll("message.thinkingOutputPriceTiers.push(", "message.thinkingOutputPriceTiers!.push(")
 			changed = true
 		}
 
 		if (changed) {
 			await fs.writeFile(filePath, content, "utf-8")
-			console.log(chalk.green(`Post-processed ModelPricing optional arrays in: ${filePath}`))
+			console.log(chalk.green(`Post-processed optional model metadata arrays in: ${filePath}`))
 		}
 	}
 }

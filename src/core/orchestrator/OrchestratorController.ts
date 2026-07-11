@@ -1,5 +1,6 @@
 import { Logger } from "@/shared/services/Logger"
 import { Controller } from "../controller/index"
+import { ProfileChangeCoordinator } from "../profiles/ProfileChangeCoordinator"
 
 /**
  * OrchestratorController — maintains a registry of all active Controllers
@@ -16,8 +17,11 @@ export class OrchestratorController {
 	private controllers = new Map<string, Controller>()
 	/** Parent → child task relationship tracker. */
 	private spawnRelations = new Map<string, string[]>()
+	readonly profileChanges: ProfileChangeCoordinator
 
-	private constructor() {}
+	private constructor() {
+		this.profileChanges = new ProfileChangeCoordinator(() => this.getActiveControllers())
+	}
 
 	static initialize(): OrchestratorController {
 		if (!OrchestratorController.instance) {

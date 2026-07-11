@@ -46,12 +46,7 @@ export const OpenAiCodexProvider = ({ showModelOptions, isPopup, profile, onUpda
 					<ModelSelector
 						label="Model"
 						models={models}
-						onChange={(e) =>
-							onUpdate({
-								modelId: (e.target as HTMLSelectElement).value,
-								modelInfo: models[(e.target as HTMLSelectElement).value],
-							})
-						}
+						onChange={(e) => onUpdate({ modelId: (e.target as HTMLSelectElement).value })}
 						selectedModelId={modelId}
 					/>
 					{/* Store reasoning under the existing proto-generated openaiCodex field. */}

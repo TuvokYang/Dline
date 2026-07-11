@@ -5,6 +5,7 @@
  */
 
 import { ModelRegistry } from "@core/model-registry/ModelRegistry"
+import { OrchestratorController } from "@core/orchestrator/OrchestratorController"
 import { getDlineDataDir } from "@core/storage/disk"
 import { deleteApiKey, migrateApiKey, setApiKey } from "@core/storage/secrets"
 import { Empty } from "@shared/proto/dline/common"
@@ -69,9 +70,13 @@ async function updateApiProfilesImpl(controller: Controller, request: UpdateApiP
 		await writeApiProfilesToFile(filePath, profiles)
 		Logger.log(`[updateApiProfiles] Saved ${profiles.length} profile(s)`)
 
-		// Rebuild the active task's API handler so the next turn uses the
-		// latest profile content from disk instead of the stale snapshot.
-		controller.task?.rebuildApiHandler()
+		try {
+			await OrchestratorController.getInstance().profileChanges.publish(oldProfiles, profiles)
+		} catch {
+			// Standalone controller tests and hosts may not initialize the orchestrator.
+			controller.task?.rebuildApiHandler()
+			await controller.postStateToWebview?.()
+		}
 
 		return Empty.create({})
 	} catch (err) {

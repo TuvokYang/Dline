@@ -378,16 +378,10 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 		const didChangeProfile = request.planModeProfile !== undefined || request.actModeProfile !== undefined
 		if (request.planModeProfile !== undefined) {
 			controller.stateManager.setGlobalState("planModeProfile", request.planModeProfile)
-			if (controller.task) {
-				controller.stateManager.clearTaskSetting(controller.task.taskId, "planModeProfile")
-			}
 		}
 		if (request.actModeProfile !== undefined) {
 			Logger.info("[updateSettings] setting actModeProfile=", request.actModeProfile)
 			controller.stateManager.setGlobalState("actModeProfile", request.actModeProfile)
-			if (controller.task) {
-				controller.stateManager.clearTaskSetting(controller.task.taskId, "actModeProfile")
-			}
 		}
 
 		// Synchronize profiles when unified mode is active (planActSeparateModelsSetting = false)
@@ -401,18 +395,11 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 					Logger.info("[updateSettings] Unified mode: synchronizing both profiles to", newProfile)
 					controller.stateManager.setGlobalState("planModeProfile", newProfile)
 					controller.stateManager.setGlobalState("actModeProfile", newProfile)
-
-					// Clear task overrides for both profiles to ensure consistency
-					if (controller.task) {
-						controller.stateManager.clearTaskSetting(controller.task.taskId, "planModeProfile")
-						controller.stateManager.clearTaskSetting(controller.task.taskId, "actModeProfile")
-					}
 				}
 			}
 
-			// Restart usage polling when profile changes
-			controller.task?.rebuildApiHandler()
-			controller.restartAccountUsagePolling()
+			// Global profile changes are welcome/new-task defaults only. Existing
+			// tasks retain their task-local bindings and handlers unchanged.
 		}
 
 		// Post updated state to webview

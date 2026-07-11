@@ -1,9 +1,11 @@
 import type { ModelInfo } from "@shared/proto/dline/models"
-import type { ModelCapabilities, ModelPricing } from "@shared/proto/dline/models/metadata"
+import type { ContextWindowTier, ModelCapabilities, ModelPricing } from "@shared/proto/dline/models/metadata"
 
 export interface ProviderModelOverrides {
 	capabilities?: ModelCapabilities
 	pricing?: ModelPricing
+	enableLongContext?: boolean
+	pricingTiersEnabled?: boolean
 }
 
 /**
@@ -42,6 +44,33 @@ export function mergePricing(base: ModelPricing | undefined, updates: Partial<Mo
 }
 
 /**
+ * Select the context tier represented by a provider configuration.
+ *
+ * @param capabilities Model capabilities containing selectable context tiers.
+ * @param enableLongContext Whether the provider's long-context option is enabled.
+ * @returns Selected context tier, or undefined when the model has no tiers.
+ */
+export function selectContextTier(
+	capabilities: ModelCapabilities | undefined,
+	enableLongContext: boolean | undefined,
+): ContextWindowTier | undefined {
+	const tiers = capabilities?.contextWindowTiers ?? []
+	if (tiers.length === 0) {
+		return undefined
+	}
+
+	if (enableLongContext === true) {
+		return tiers.find((tier) => tier.id === "long") ?? [...tiers].sort((a, b) => b.contextWindow - a.contextWindow)[0]
+	}
+
+	return (
+		tiers.find((tier) => tier.id === "standard") ??
+		tiers.find((tier) => tier.contextWindow === capabilities?.contextWindow) ??
+		[...tiers].sort((a, b) => a.contextWindow - b.contextWindow)[0]
+	)
+}
+
+/**
  * Build effective model metadata from registry metadata and provider overrides.
  *
  * @param modelId Selected model id, if any.
@@ -55,10 +84,19 @@ export function buildEffectiveModelInfo(
 	overrides: ProviderModelOverrides,
 ): ModelInfo {
 	const base: ModelInfo = registryModel ?? ({ id: modelId ?? "" } as ModelInfo)
-	const capabilities = overrides.capabilities
+	const mergedCapabilities = overrides.capabilities
 		? (mergeDefined(base.capabilities, overrides.capabilities) as ModelCapabilities)
 		: base.capabilities
-	const pricing = overrides.pricing ? (mergeDefined(base.pricing, overrides.pricing) as ModelPricing) : base.pricing
+	const contextTier = selectContextTier(mergedCapabilities, overrides.enableLongContext)
+	const capabilities = contextTier
+		? ({ ...mergedCapabilities, contextWindow: contextTier.contextWindow } as ModelCapabilities)
+		: mergedCapabilities
+	const mergedPricing = overrides.pricing ? (mergeDefined(base.pricing, overrides.pricing) as ModelPricing) : base.pricing
+	const overrideTiers = overrides.pricing?.tiers ?? []
+	const selectedTiers = overrides.pricingTiersEnabled === true && overrideTiers.length > 0 ? overrideTiers : base.pricing?.tiers
+	const pricing = mergedPricing
+		? ({ ...mergedPricing, ...(selectedTiers !== undefined && { tiers: selectedTiers }) } as ModelPricing)
+		: mergedPricing
 
 	return {
 		...base,

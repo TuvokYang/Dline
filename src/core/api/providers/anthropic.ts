@@ -6,15 +6,8 @@ import type {
 import { Tool as AnthropicTool } from "@anthropic-ai/sdk/resources/index"
 import type { MessageCreateParamsStreaming as AnthropicMessageCreateParamsStreaming } from "@anthropic-ai/sdk/resources/messages/messages"
 import { Stream as AnthropicStream } from "@anthropic-ai/sdk/streaming"
-import {
-	ANTHROPIC_FAST_MODE_SUFFIX,
-	AnthropicModelId,
-	anthropicDefaultModelId,
-	anthropicModels,
-	CLAUDE_SONNET_1M_SUFFIX,
-	ModelInfo,
-} from "@shared/api"
-import { buildEffectiveModelInfo } from "@shared/providers/effective-model-info"
+import { ANTHROPIC_FAST_MODE_SUFFIX, AnthropicModelId, anthropicDefaultModelId, anthropicModels, ModelInfo } from "@shared/api"
+import { buildEffectiveModelInfo, selectContextTier } from "@shared/providers/effective-model-info"
 import { isClaudeOpusAdaptiveThinkingModel, resolveClaudeOpusAdaptiveThinking } from "@shared/utils/reasoning-support"
 import { buildExternalBasicHeaders } from "@/services/EnvUtils"
 import { ClineStorageMessage } from "@/shared/messages/content"
@@ -63,6 +56,8 @@ export class AnthropicHandler implements ApiHandler {
 		return buildEffectiveModelInfo(modelId, undefined, {
 			capabilities: this.config?.capabilities,
 			pricing: this.config?.pricing,
+			enableLongContext: this.config?.enableLongContext,
+			pricingTiersEnabled: this.config?.pricingTiersEnabled,
 		})
 	}
 
@@ -76,7 +71,24 @@ export class AnthropicHandler implements ApiHandler {
 		return buildEffectiveModelInfo(modelId, anthropicModels[modelId], {
 			capabilities: this.config?.capabilities,
 			pricing: this.config?.pricing,
+			enableLongContext: this.config?.enableLongContext,
+			pricingTiersEnabled: this.config?.pricingTiersEnabled,
 		})
+	}
+
+	/**
+	 * Resolve the model identifier sent to the Anthropic API.
+	 *
+	 * @param modelId Base registry or custom model identifier.
+	 * @param modelInfo Effective metadata containing selectable context tiers.
+	 * @returns API model identifier with the selected tier suffix applied.
+	 */
+	private resolveApiModelId(modelId: AnthropicModelId, modelInfo: ModelInfo): string {
+		const baseModelId = modelId.endsWith(ANTHROPIC_FAST_MODE_SUFFIX)
+			? modelId.slice(0, -ANTHROPIC_FAST_MODE_SUFFIX.length)
+			: modelId
+		const tier = selectContextTier(modelInfo.capabilities, this.config?.enableLongContext)
+		return `${baseModelId}${tier?.apiModelSuffix ?? ""}`
 	}
 
 	private ensureClient(): Anthropic {
@@ -106,11 +118,10 @@ export class AnthropicHandler implements ApiHandler {
 		let stream: AnthropicStream<Anthropic.RawMessageStreamEvent> | AsyncIterable<BetaRawMessageStreamEvent>
 
 		const useFastMode = model.id.endsWith(ANTHROPIC_FAST_MODE_SUFFIX)
-		const baseModelId = useFastMode ? model.id.slice(0, -ANTHROPIC_FAST_MODE_SUFFIX.length) : model.id
-		const modelId = baseModelId.endsWith(CLAUDE_SONNET_1M_SUFFIX)
-			? baseModelId.slice(0, -CLAUDE_SONNET_1M_SUFFIX.length)
-			: baseModelId
-		const enable1mContextWindow = baseModelId.endsWith(CLAUDE_SONNET_1M_SUFFIX)
+		const modelId = useFastMode ? model.id.slice(0, -ANTHROPIC_FAST_MODE_SUFFIX.length) : model.id
+		const selectedTier = selectContextTier(model.info.capabilities, this.config?.enableLongContext)
+		const apiModelId = this.resolveApiModelId(model.id, model.info)
+		const enable1mContextWindow = Boolean(selectedTier?.apiModelSuffix)
 		const fastModeBetas = enable1mContextWindow
 			? [ANTHROPIC_FAST_MODE_BETA, "context-1m-2025-08-07"]
 			: [ANTHROPIC_FAST_MODE_BETA]
@@ -155,7 +166,7 @@ export class AnthropicHandler implements ApiHandler {
 		if (model.info.capabilities?.supportsPromptCache) {
 			const anthropicMessages = sanitizeAnthropicMessages(messages, true)
 			const requestBody: AnthropicMessageCreateParamsStreaming & Record<string, unknown> = {
-				model: modelId,
+				model: apiModelId,
 				thinking: thinkingConfig,
 				max_tokens: model.info.capabilities?.maxTokens || 8192,
 				// "Thinking isn't compatible with temperature, top_p, or top_k modifications as well as forced tool use."
@@ -202,7 +213,7 @@ export class AnthropicHandler implements ApiHandler {
 					)
 		} else {
 			const requestBody: AnthropicMessageCreateParamsStreaming & Record<string, unknown> = {
-				model: modelId,
+				model: apiModelId,
 				max_tokens: model.info.capabilities?.maxTokens || 8192,
 				temperature: isAdaptiveThinkingModel ? undefined : reasoningOn ? undefined : 0,
 				system: [{ text: systemPrompt, type: "text" }],

@@ -12,6 +12,14 @@ message ThinkingConfig {
   repeated string effort_levels = 4;
 }
 
+/** Context window tier for models with selectable context windows. */
+message ContextWindowTier {
+  string id = 1;
+  uint64 context_window = 2;
+  optional string label = 3;
+  optional string api_model_suffix = 4;
+}
+
 /** Model capability flags and limits. */
 message ModelCapabilities {
   optional bool supports_images = 1;
@@ -24,6 +32,7 @@ message ModelCapabilities {
   optional bool supports_streaming = 8;
   optional bool supports_tools = 9;
   optional double temperature = 10;
+  repeated ContextWindowTier context_window_tiers = 11;
 }
 
 /** Pricing tier for context-window-based tiered models. */

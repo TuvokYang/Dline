@@ -1,4 +1,3 @@
-import { ANTHROPIC_FAST_MODE_SUFFIX, CLAUDE_SONNET_1M_SUFFIX } from "@shared/api"
 import { type ModelInfo } from "@shared/proto/dline/models"
 import type { ModelCapabilities, ModelPricing } from "@shared/proto/dline/models/metadata"
 import type { ApiProfile } from "@shared/proto/dline/profile"
@@ -6,12 +5,11 @@ import { AnthropicProviderConfig } from "@shared/proto/dline/provider/anthropic"
 import { buildEffectiveModelInfo, mergeCapabilities, mergePricing } from "@shared/providers/effective-model-info"
 import { isClaudeOpusAdaptiveThinkingModel } from "@shared/utils/reasoning-support"
 import { VSCodeCheckbox } from "@vscode/webview-ui-toolkit/react"
-import { useMemo, useState } from "react"
+import { useState } from "react"
 import styled from "styled-components"
 import { useExtensionState } from "@/context/ExtensionStateContext"
 import { ApiKeyField } from "../common/ApiKeyField"
 import { BaseUrlField } from "../common/BaseUrlField"
-import { ContextWindowSwitcher } from "../common/ContextWindowSwitcher"
 import { DebouncedTextField } from "../common/DebouncedTextField"
 import { ModelConfiguration } from "../common/ModelConfiguration"
 import { ModelInfoView } from "../common/ModelInfoView"
@@ -21,7 +19,7 @@ import ThinkingControl from "../ThinkingControl"
 import { useProviderModels } from "./useProviderModels"
 
 // Anthropic models that support thinking/reasoning mode (extended thinking with budget)
-export const SUPPORTED_ANTHROPIC_THINKING_MODELS = ["claude-sonnet-4-6", `claude-sonnet-4-6${CLAUDE_SONNET_1M_SUFFIX}`]
+export const SUPPORTED_ANTHROPIC_THINKING_MODELS = ["claude-sonnet-4-6"]
 
 const StyledCheckbox = styled(VSCodeCheckbox)`
 	margin-bottom: 4px;
@@ -52,40 +50,6 @@ export const AnthropicProvider = ({ showModelOptions, isPopup, profile, onUpdate
 		modelInfoSaneDefaults: anthropicModelInfoSaneDefaults,
 	} = useProviderModels("anthropic")
 
-	// Auto-discover context window variant pairs
-	const contextWindowPairs = useMemo(() => {
-		const pairs: Array<{ base200k: string; base1m: string }> = []
-		const processedBase200k = new Set<string>()
-
-		for (const id of Object.keys(anthropicModels)) {
-			// Skip if already processed or is a 1m variant
-			if (processedBase200k.has(id) || id.includes(CLAUDE_SONNET_1M_SUFFIX)) {
-				continue
-			}
-
-			// Case 1: Normal variant (id → id:1m), excluding :fast models
-			if (!id.endsWith(ANTHROPIC_FAST_MODE_SUFFIX)) {
-				const variant = `${id}${CLAUDE_SONNET_1M_SUFFIX}`
-				if (anthropicModels[variant]) {
-					pairs.push({ base200k: id, base1m: variant })
-					processedBase200k.add(id)
-				}
-			}
-
-			// Case 2: Fast mode variant (id:fast → id:1m:fast)
-			if (id.endsWith(ANTHROPIC_FAST_MODE_SUFFIX)) {
-				const base = id.slice(0, -ANTHROPIC_FAST_MODE_SUFFIX.length)
-				const variant = `${base}${CLAUDE_SONNET_1M_SUFFIX}${ANTHROPIC_FAST_MODE_SUFFIX}`
-				if (anthropicModels[variant]) {
-					pairs.push({ base200k: id, base1m: variant })
-					processedBase200k.add(id)
-				}
-			}
-		}
-
-		return pairs
-	}, [anthropicModels])
-
 	const pc = profile.anthropic ?? AnthropicProviderConfig.create()
 	const modelId = profile.modelId || anthropicDefaultModelId
 	const customModelEnabled = pc?.customModelEnabled ?? false
@@ -93,6 +57,8 @@ export const AnthropicProvider = ({ showModelOptions, isPopup, profile, onUpdate
 	const modelInfo = buildEffectiveModelInfo(modelId, registryModel, {
 		capabilities: pc.capabilities,
 		pricing: pc.pricing,
+		enableLongContext: pc.enableLongContext,
+		pricingTiersEnabled: pc.pricingTiersEnabled,
 	})
 
 	const [useCustomModel, setUseCustomModel] = useState(customModelEnabled)
@@ -190,16 +156,20 @@ export const AnthropicProvider = ({ showModelOptions, isPopup, profile, onUpdate
 								selectedModelId={modelId}
 							/>
 
-							{/* Dynamic context window switchers */}
-							{contextWindowPairs.map((pair) => (
-								<ContextWindowSwitcher
-									base1mModelId={pair.base1m}
-									base200kModelId={pair.base200k}
-									key={pair.base200k}
-									onModelChange={handleModelChange}
-									selectedModelId={modelId}
-								/>
-							))}
+							{modelInfo.capabilities?.contextWindowTiers?.length ? (
+								<StyledCheckbox
+									checked={pc.enableLongContext === true}
+									onChange={(event: Event | React.FormEvent<HTMLElement>) =>
+										onUpdate({
+											anthropic: {
+												...pc,
+												enableLongContext: (event.target as HTMLInputElement | null)?.checked === true,
+											},
+										})
+									}>
+									Enable Long Context
+								</StyledCheckbox>
+							) : null}
 						</>
 					)}
 
@@ -295,12 +265,13 @@ const CustomModelConfig = ({
 				capabilities={capabilities}
 				defaults={defaults}
 				fields={{
-					capabilities: ["maxTokens", "contextWindow", "supportsImages", "supportsPromptCache"],
-					pricing: ["inputPrice", "outputPrice", "cacheWritesPrice", "cacheReadsPrice"],
+					capabilities: ["maxTokens", "contextWindow", "contextWindowTiers", "supportsImages", "supportsPromptCache"],
+					pricing: ["inputPrice", "outputPrice", "cacheWritesPrice", "cacheReadsPrice", "pricingTiers"],
 				}}
 				onCapabilitiesUpdate={onCapabilitiesUpdate}
 				onPricingUpdate={onPricingUpdate}
 				pricing={pricing}
+				tiersEditable={true}
 			/>
 		</>
 	)

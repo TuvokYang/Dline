@@ -23,6 +23,17 @@ vi.mock("@/components/ui/select", () => ({
 }))
 
 vi.mock("@vscode/webview-ui-toolkit/react", () => ({
+	VSCodeButton: ({
+		children,
+		onClick,
+	}: {
+		children: React.ReactNode
+		onClick?: React.MouseEventHandler<HTMLButtonElement>
+	}) => (
+		<button onClick={onClick} type="button">
+			{children}
+		</button>
+	),
 	VSCodeCheckbox: ({
 		checked,
 		children,
@@ -57,6 +68,85 @@ vi.mock("./DebouncedTextField", () => ({
 }))
 
 describe("ModelConfiguration", () => {
+	it("keeps checkbox draft state while persisted props are stale", () => {
+		const onCapabilitiesUpdate = vi.fn()
+		const { rerender } = render(
+			<ModelConfiguration
+				capabilities={{ supportsImages: false } as ModelCapabilities}
+				fields={{ capabilities: ["supportsImages"] }}
+				onCapabilitiesUpdate={onCapabilitiesUpdate}
+				onPricingUpdate={vi.fn()}
+			/>,
+		)
+
+		fireEvent.click(screen.getByRole("button", { name: /Model Configuration/i }))
+		fireEvent.click(screen.getByLabelText("Supports Images"))
+		expect(screen.getByLabelText("Supports Images")).toBeChecked()
+
+		rerender(
+			<ModelConfiguration
+				capabilities={{ supportsImages: false } as ModelCapabilities}
+				fields={{ capabilities: ["supportsImages"] }}
+				onCapabilitiesUpdate={onCapabilitiesUpdate}
+				onPricingUpdate={vi.fn()}
+			/>,
+		)
+		expect(screen.getByLabelText("Supports Images")).toBeChecked()
+	})
+
+	it("adds and edits custom context and pricing tiers", () => {
+		const onCapabilitiesUpdate = vi.fn()
+		const onPricingUpdate = vi.fn()
+
+		render(
+			<ModelConfiguration
+				capabilities={{ contextWindowTiers: [] } as unknown as ModelCapabilities}
+				fields={{ capabilities: ["contextWindowTiers"], pricing: ["pricingTiers"] }}
+				onCapabilitiesUpdate={onCapabilitiesUpdate}
+				onPricingUpdate={onPricingUpdate}
+				pricing={{ tiers: [] } as unknown as ModelPricing}
+				tiersEditable={true}
+			/>,
+		)
+
+		fireEvent.click(screen.getByRole("button", { name: /Model Configuration/i }))
+		fireEvent.click(screen.getByRole("button", { name: "Add Context Tier" }))
+		expect(onCapabilitiesUpdate).toHaveBeenCalledWith({
+			contextWindowTiers: [{ id: "standard", contextWindow: 128_000, label: "128K", apiModelSuffix: "" }],
+		})
+
+		fireEvent.change(screen.getByLabelText("Context Tier ID"), { target: { value: "long" } })
+		expect(onCapabilitiesUpdate).toHaveBeenLastCalledWith({
+			contextWindowTiers: [{ id: "long", contextWindow: 128_000, label: "128K", apiModelSuffix: "" }],
+		})
+
+		fireEvent.click(screen.getByRole("button", { name: "Add Pricing Tier" }))
+		expect(onPricingUpdate).toHaveBeenCalledWith({
+			tiers: [{ contextWindow: 128_000, inputPrice: 0, outputPrice: 0, cacheWritesPrice: 0, cacheReadsPrice: 0 }],
+		})
+	})
+
+	it("renders official tiers without add or remove controls", () => {
+		render(
+			<ModelConfiguration
+				capabilities={
+					{
+						contextWindowTiers: [{ id: "standard", contextWindow: 272_000, label: "272K" }],
+					} as unknown as ModelCapabilities
+				}
+				fields={{ capabilities: ["contextWindowTiers"] }}
+				onCapabilitiesUpdate={vi.fn()}
+				onPricingUpdate={vi.fn()}
+				tiersEditable={false}
+			/>,
+		)
+
+		fireEvent.click(screen.getByRole("button", { name: /Model Configuration/i }))
+		expect(screen.getByText("standard")).toBeTruthy()
+		expect(screen.queryByRole("button", { name: "Add Context Tier" })).toBeNull()
+		expect(screen.queryByRole("button", { name: "Remove Context Tier" })).toBeNull()
+	})
+
 	it("writes checkbox changes to provider capabilities", () => {
 		const onCapabilitiesUpdate = vi.fn()
 

@@ -43,16 +43,21 @@ export default defineConfig({
 	optimizeDeps: {
 		force: true, // Forces re-optimization
 	},
-	plugins: [
-		react(),
-		tailwindcss(),
-		writePortToFile(),
-		checker({ typescript: true }) as Plugin,
-	],
+	plugins: [react(), tailwindcss(), writePortToFile(), checker({ typescript: true }) as Plugin],
 	test: {
+		name: "webview",
 		environment: "jsdom",
+		include: ["src/**/*.test.ts", "src/**/*.test.tsx", "src/**/*.spec.ts", "src/**/*.spec.tsx"],
 		globals: true,
 		setupFiles: ["./src/setupTests.ts"],
+		pool: "vmForks",
+		maxWorkers: 2,
+		minWorkers: 1,
+		poolOptions: {
+			vmForks: {
+				memoryLimit: "768MB",
+			},
+		},
 		coverage: {
 			provider: "v8",
 			reportOnFailure: true,

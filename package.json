@@ -502,8 +502,8 @@
 		"@types/sinon": "^21.0.0",
 		"@types/turndown": "^5.0.5",
 		"@types/vscode": "^1.84.0",
-		"@vitest/coverage-v8": "^3.2.6",
-		"@vitest/ui": "^3.2.6",
+		"@vitest/coverage-v8": "^4.1.10",
+		"@vitest/ui": "^4.1.10",
 		"@vscode/test-cli": "^0.0.12",
 		"@vscode/test-electron": "^2.5.2",
 		"@vscode/vsce": "^3.6.0",
@@ -515,6 +515,7 @@
 		"esbuild": "^0.25.0",
 		"grpc-tools": "^1.13.0",
 		"husky": "^9.1.7",
+		"jsdom": "^26.1.0",
 		"lint-staged": "^16.1.0",
 		"minimatch": "^3.0.3",
 		"npm-run-all": "^4.1.5",
@@ -531,7 +532,7 @@
 		"tsconfig-paths": "^4.2.0",
 		"typescript": "^5.4.5",
 		"vite-plugin-checker": "^0.14.4",
-		"vitest": "^3.2.6"
+		"vitest": "^4.1.10"
 	},
 	"dependencies": {
 		"@anthropic-ai/sdk": "^0.37.0",

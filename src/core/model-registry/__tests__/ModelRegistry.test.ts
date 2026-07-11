@@ -31,7 +31,10 @@ describe("ModelRegistry", () => {
 		})
 		// Stub startWatch to prevent chokidar watcher from actually starting,
 		// avoiding EPERM errors on Windows when cleaning up temp directories.
-		vi.spyOn(registry, "startWatch" as never).mockImplementation(() => {})
+		Object.defineProperty(registry, "startWatch", {
+			value: vi.fn(),
+			configurable: true,
+		})
 	})
 
 	afterEach(async () => {

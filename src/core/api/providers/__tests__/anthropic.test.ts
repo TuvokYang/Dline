@@ -58,16 +58,21 @@ describe("AnthropicHandler", () => {
 			result.info.should.deepEqual(anthropicModels["claude-opus-4-6:fast"])
 		})
 
-		it("should return the 1m fast mode model when configured", () => {
+		it("should keep the base model id when long context is enabled", () => {
 			const handler = new AnthropicHandler({
-				profile: ApiProfile.create({ provider: "anthropic", apiKey: "test-api-key", modelId: "claude-opus-4-6:1m:fast" }),
+				profile: ApiProfile.create({
+					provider: "anthropic",
+					apiKey: "test-api-key",
+					modelId: "claude-sonnet-4-6",
+					anthropic: { enableLongContext: true },
+				}),
 				mode: "act",
 			})
 
 			const result = handler.getModel()
 
-			result.id.should.equal("claude-opus-4-6:1m:fast")
-			result.info.should.deepEqual(anthropicModels["claude-opus-4-6:1m:fast"])
+			result.id.should.equal("claude-sonnet-4-6")
+			should(result.info.capabilities?.contextWindow).equal(1_000_000)
 		})
 
 		it("should return the 4.7 model when configured", () => {
@@ -80,18 +85,6 @@ describe("AnthropicHandler", () => {
 
 			result.id.should.equal("claude-opus-4-7")
 			result.info.should.deepEqual(anthropicModels["claude-opus-4-7"])
-		})
-
-		it("should return the 4.7 1m model when configured", () => {
-			const handler = new AnthropicHandler({
-				profile: ApiProfile.create({ provider: "anthropic", apiKey: "test-api-key", modelId: "claude-opus-4-7:1m" }),
-				mode: "act",
-			})
-
-			const result = handler.getModel()
-
-			result.id.should.equal("claude-opus-4-7:1m")
-			result.info.should.deepEqual(anthropicModels["claude-opus-4-7:1m"])
 		})
 
 		it("should preserve a custom model id when profile modelInfo is missing", () => {
@@ -165,9 +158,14 @@ describe("AnthropicHandler", () => {
 			expect(callArgs?.stream).to.equal(true)
 		})
 
-		it("should include the 1m beta when routing 1m fast mode requests through the beta messages API", async () => {
+		it("should append the long-context suffix for fast mode API requests", async () => {
 			const handler = new AnthropicHandler({
-				profile: ApiProfile.create({ provider: "anthropic", apiKey: "test-api-key", modelId: "claude-opus-4-6:1m:fast" }),
+				profile: ApiProfile.create({
+					provider: "anthropic",
+					apiKey: "test-api-key",
+					modelId: "claude-opus-4-6:fast",
+					anthropic: { enableLongContext: true },
+				}),
 				mode: "act",
 			})
 
@@ -195,19 +193,19 @@ describe("AnthropicHandler", () => {
 			expect(standardCreate)
 			expect(betaCreate)
 			const callArgs = betaCreate.mock.calls[0]?.[0] as Record<string, unknown> | undefined
-			expect(callArgs?.model).to.equal("claude-opus-4-6")
+			expect(callArgs?.model).to.equal("claude-opus-4-6:1m")
 			expect(callArgs?.betas).to.deep.equal([ANTHROPIC_FAST_MODE_BETA, "context-1m-2025-08-07"])
 			expect(callArgs?.speed).to.equal("fast")
 			expect(callArgs?.stream).to.equal(true)
 		})
 
-		it("should include the 1m beta header for Claude Opus 4.7 1m requests", async () => {
+		it("should append the long-context suffix and beta header at the API boundary", async () => {
 			const handler = new AnthropicHandler({
 				profile: ApiProfile.create({
 					provider: "anthropic",
 					apiKey: "test-api-key",
-					modelId: "claude-opus-4-7:1m",
-					anthropic: { reasoning: { effort: "high" } },
+					modelId: "claude-opus-4-7",
+					anthropic: { enableLongContext: true, reasoning: { effort: "high" } },
 				}),
 				mode: "act",
 			})
@@ -232,7 +230,7 @@ describe("AnthropicHandler", () => {
 			expect(standardCreate)
 			const requestBody = standardCreate.mock.calls[0][0] as Record<string, any>
 			const requestOptions = standardCreate.mock.calls[0][1] as Record<string, any>
-			requestBody.model.should.equal("claude-opus-4-7")
+			requestBody.model.should.equal("claude-opus-4-7:1m")
 			requestBody.thinking.should.deepEqual({ type: "adaptive" })
 			requestOptions.should.deepEqual({
 				headers: {
