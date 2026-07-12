@@ -36,6 +36,6 @@ export interface FrozenSystemPromptCache {
 export interface FrozenPromptBuilderInfo {
 	readonly providerId: string
 	readonly modelId: string
-	readonly variantFamily?: string
+	readonly profile: "native" | "lite"
 	readonly nativeTools: boolean
 }

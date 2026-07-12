@@ -148,15 +148,20 @@ export class RestoreHandler {
 		// If the snapshot contains approval context, restore approval blocks
 		if (snapshot.approval?.blocks && snapshot.approval.blocks.length > 0) {
 			controller.restoreTurnFromSnapshot(
-				snapshot.approval.blocks.map((b) => ({
-					...(b.dlineTid ? { dlineTid: b.dlineTid } : {}),
-					callId: b.callId,
-					toolName: b.name,
-					phase: b.phase,
-					conversationHistoryIndex: b.apiIndex,
-					requiresApproval: true,
-				})),
-				snapshot.approval.activeDlineTid ?? snapshot.approval.activeCallId,
+				snapshot.approval.blocks.map((b) => {
+					if (!b.dlineTid) {
+						throw new Error("Canonical restored block is missing dlineTid")
+					}
+					return {
+						dlineTid: b.dlineTid,
+						callId: b.callId,
+						toolName: b.name,
+						phase: b.phase,
+						conversationHistoryIndex: b.apiIndex,
+						requiresApproval: true,
+					}
+				}),
+				snapshot.approval.activeDlineTid,
 			)
 		}
 
@@ -183,10 +188,12 @@ export class RestoreHandler {
 
 		const { taskState, controller } = this.ctx
 
-		controller.transition(TaskPhase.STREAMING, {
-			apiIndex: pending.assistantIndex,
-			onSnapshot: undefined,
-		})
+		if (controller.phase !== TaskPhase.STREAMING) {
+			await controller.transitionRequired(TaskPhase.STREAMING, {
+				apiIndex: pending.assistantIndex,
+				onSnapshot: undefined,
+			})
+		}
 		taskState.currentStreamingContentIndex = 0
 		taskState.assistantMessageContent = runtimeToolUses
 		taskState.didCompleteReadingStream = true
@@ -200,7 +207,7 @@ export class RestoreHandler {
 		controller.reset()
 		controller.buildTurn(runtimeToolUses, this.ctx.shouldAutoApproveTool)
 
-		controller.transition(TaskPhase.EXECUTING, {
+		controller.transitionRequired(TaskPhase.EXECUTING, {
 			apiIndex: pending.assistantIndex,
 			execution: {
 				mode: "serial",
@@ -271,15 +278,21 @@ export class RestoreHandler {
 		// Restore BlockPhaseMachine if approval blocks exist
 		if (snapshot.approval?.blocks && snapshot.approval.blocks.length > 0) {
 			this.ctx.controller.restoreTurnFromSnapshot(
-				snapshot.approval.blocks.map((block) => ({
-					callId: block.callId,
-					toolName: block.name,
-					phase: block.phase,
-					conversationHistoryIndex: block.apiIndex,
-					ts: block.ts,
-					requiresApproval: true,
-				})),
-				snapshot.approval.activeCallId,
+				snapshot.approval.blocks.map((block) => {
+					if (!block.dlineTid) {
+						throw new Error("Canonical restored block is missing dlineTid")
+					}
+					return {
+						dlineTid: block.dlineTid,
+						callId: block.callId,
+						toolName: block.name,
+						phase: block.phase,
+						conversationHistoryIndex: block.apiIndex,
+						ts: block.ts,
+						requiresApproval: true,
+					}
+				}),
+				snapshot.approval.activeDlineTid,
 			)
 		}
 	}

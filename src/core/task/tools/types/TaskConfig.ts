@@ -20,6 +20,11 @@ import type { ClineAskResponse } from "@shared/WebviewMessage"
 import { WorkspaceRootManager } from "@/core/workspace"
 import type { ContextManager } from "../../../context/context-management/ContextManager"
 import type { StateManager } from "../../../storage/StateManager"
+import type {
+	CompleteInteractionRequest,
+	InteractionOutcome,
+	OpenInteractionRequest,
+} from "../../interaction/InteractionCoordinator"
 import type { MessageStateHandler } from "../../message-state"
 import type { TaskController } from "../../TaskController"
 import type { TaskState } from "../../TaskState"
@@ -32,6 +37,22 @@ import { TASK_CALLBACKS_KEYS, TASK_CONFIG_KEYS, TASK_SERVICES_KEYS } from "../ut
 /**
  * Strongly-typed configuration object passed to tool handlers
  */
+/** Presentation-only request issued by one handler. */
+export interface SayPresentationRequest {
+	taskSay: ClineSay
+	presentation?: string
+	images?: string[]
+	files?: string[]
+	existingTs?: number
+}
+
+/** Interaction and presentation boundary exposed to handlers. */
+export interface TaskInteractionPorts {
+	open(request: OpenInteractionRequest): Promise<InteractionOutcome>
+	complete(request: CompleteInteractionRequest): Promise<InteractionOutcome>
+	say(request: SayPresentationRequest): Promise<void>
+}
+
 export interface TaskConfig {
 	// Core identifiers
 	taskId: string
@@ -63,6 +84,9 @@ export interface TaskConfig {
 	autoApprover: AutoApprove
 	browserSettings: BrowserSettings
 	focusChainSettings: FocusChainSettings
+
+	// Typed interaction boundary
+	interactions: TaskInteractionPorts
 
 	// Callbacks (strongly typed)
 	callbacks: TaskCallbacks
@@ -180,6 +204,22 @@ export interface TaskCallbacks {
  * Runtime validation function to ensure config has all required properties
  * Automatically derives expected keys from the interface definitions
  */
+/** Return the canonical turn identity for one handler invocation. */
+export function interactionTurnId(block: { dline_tid?: string }): string {
+	if (!block.dline_tid) {
+		throw new Error("Canonical tool interaction is missing dlineTid")
+	}
+	return `turn:${block.dline_tid}`
+}
+
+/** Return the canonical interaction identity for one handler invocation. */
+export function interactionId(block: { dline_tid?: string }): string {
+	if (!block.dline_tid) {
+		throw new Error("Canonical tool interaction is missing dlineTid")
+	}
+	return block.dline_tid
+}
+
 export function validateTaskConfig(config: any): asserts config is TaskConfig {
 	if (!config) {
 		throw new Error("TaskConfig is null or undefined")

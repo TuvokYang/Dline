@@ -11,7 +11,7 @@ import { Logger } from "@/shared/services/Logger"
 import { ClineDefaultTool } from "@/shared/tools"
 import type { ToolResponse } from "../../index"
 import type { IPartialBlockHandler, IToolHandler } from "../ToolExecutorCoordinator"
-import type { TaskConfig } from "../types/TaskConfig"
+import { interactionId, interactionTurnId, type TaskConfig } from "../types/TaskConfig"
 import type { StronglyTypedUIHelpers } from "../types/UIHelpers"
 import { sayFeedbackOnce } from "../utils/UserFeedbackUtils"
 
@@ -97,12 +97,16 @@ export class ReportBugHandler implements IToolHandler, IPartialBlockHandler {
 			cline_version: clineVersion,
 		})
 
-		const {
-			response: askResponse,
-			text,
-			images,
-			files: reportBugFiles,
-		} = await config.callbacks.ask(this.name, bugReportData, false, { existingTs: block.ts })
+		const outcome = await config.interactions.open({
+			turnId: interactionTurnId(block),
+			interactionId: interactionId(block),
+			kind: "report_bug",
+			presentation: bugReportData,
+			existingTs: block.ts,
+		})
+		const text = outcome.draft?.text
+		const images = outcome.draft?.images
+		const reportBugFiles = outcome.draft?.files
 
 		// If the user provided a response, treat it as feedback
 		if (text || (images && images.length > 0) || (reportBugFiles && reportBugFiles.length > 0)) {
@@ -111,7 +115,7 @@ export class ReportBugHandler implements IToolHandler, IPartialBlockHandler {
 				fileContentString = await processFilesIntoText(reportBugFiles)
 			}
 
-			await sayFeedbackOnce(config, askResponse, text, images, reportBugFiles)
+			await sayFeedbackOnce(config, "messageResponse", text, images, reportBugFiles)
 			return formatResponse.toolResult(
 				`The user did not submit the bug, and provided feedback on the Github issue generated instead:\n<feedback>\n${text}\n</feedback>`,
 				images,

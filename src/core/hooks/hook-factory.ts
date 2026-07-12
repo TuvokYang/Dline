@@ -691,7 +691,7 @@ class CombinedHookRunner<Name extends HookName> extends HookRunner<Name> {
  * @returns true if this is an expected error that should be silently handled, false if it should be propagated
  */
 function isExpectedHookError(error: unknown): boolean {
-	if (!(error instanceof Error)) {
+	if (typeof error !== "object" || error === null) {
 		return false
 	}
 

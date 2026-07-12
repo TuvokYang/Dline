@@ -6,7 +6,7 @@ import type { FocusChainManager } from "./focus-chain"
 import type { AskOptions, AskResult } from "./MessageChannel"
 import { MessageChannel } from "./MessageChannel"
 import { TaskPhase } from "./TaskPhase"
-import type { TransitionContext } from "./TaskPhaseMachine"
+import type { TaskTransitionResult, TransitionContext } from "./TaskPhaseMachine"
 import { TaskPhaseMachine } from "./TaskPhaseMachine"
 import type { TaskSnapshot } from "./TaskSnapshot"
 import type { ToolExecutor } from "./ToolExecutor"
@@ -14,6 +14,14 @@ import type { ToolExecutor } from "./ToolExecutor"
 export interface BuildTaskUiStateOptions {
 	isTaskWorking?: boolean
 	runtimeWorking?: boolean
+}
+
+/** Return the accepted snapshot or fail at the invalid call site. */
+export function requireTransition(result: TaskTransitionResult): TaskSnapshot {
+	if (!result.accepted) {
+		throw new Error(`Invalid task phase transition: ${result.error.from} -> ${result.error.to}`)
+	}
+	return result.snapshot
 }
 
 // Re-export types for backward compatibility
@@ -129,7 +137,7 @@ export class TaskController {
 
 	restoreTurnFromSnapshot(
 		blocks: Array<{
-			dlineTid?: string
+			dlineTid: string
 			callId: string
 			toolName: string
 			phase: BlockLifecycle["phase"]
@@ -137,9 +145,9 @@ export class TaskController {
 			ts?: number
 			requiresApproval?: boolean
 		}>,
-		activeCallId?: string,
+		activeDlineTid?: string,
 	): void {
-		this.blockPhase.restoreTurn(blocks, activeCallId)
+		this.blockPhase.restoreTurn(blocks, activeDlineTid)
 	}
 
 	getReadyBlocks(): BlockLifecycle[] {
@@ -197,8 +205,13 @@ export class TaskController {
 		return this.taskPhase.snapshot(apiIndex, extra)
 	}
 
-	async transition(to: TaskPhase, ctx: TransitionContext): Promise<TaskSnapshot> {
+	async transition(to: TaskPhase, ctx: TransitionContext): Promise<TaskTransitionResult> {
 		return this.taskPhase.transition(to, ctx)
+	}
+
+	/** Transition and fail at the exact legacy call site when the edge is invalid. */
+	async transitionRequired(to: TaskPhase, ctx: TransitionContext): Promise<TaskSnapshot> {
+		return requireTransition(await this.transition(to, ctx))
 	}
 
 	restoreFrom(snapshot: TaskSnapshot): void {

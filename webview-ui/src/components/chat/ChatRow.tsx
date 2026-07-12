@@ -174,7 +174,7 @@ export const ChatRowContent = memo(
 			vscodeTerminalExecutionMode,
 			clineMessages,
 			showFeatureTips,
-			taskUiState,
+			taskViewState,
 		} = useExtensionState()
 		const [seeNewChangesDisabled, setSeeNewChangesDisabled] = useState(false)
 		const [explainChangesDisabled, setExplainChangesDisabled] = useState(false)
@@ -245,7 +245,7 @@ export const ChatRowContent = memo(
 		const apiRequestFailedMessage = resolveApiErrorMessage({
 			isLast,
 			lastModifiedMessage,
-			taskUiState,
+			taskViewState,
 		})
 
 		const type = message.type === "ask" ? message.ask : message.say

@@ -1,4 +1,4 @@
-import { getPrompt } from "../../prompts/i18n"
+import { getPrompt, renderPrompt } from "../../prompts/i18n"
 
 // Focus Chain prompts migrated to i18n layer for localization support.
 // Each prompt is resolved via getPrompt() during module initialization.
@@ -9,16 +9,18 @@ const listInstructionsRecommended = getPrompt("focusChain", "listInstructionsRec
 export const FocusChainPrompts = {
 	initial: getPrompt("focusChain", "initial"),
 	reminder,
-	recommended: getPrompt("focusChain", "recommended", {
-		listInstructionsRecommended,
+	recommended: renderPrompt("focusChain", "recommended", {
+		LIST_INSTRUCTIONS_RECOMMENDED: listInstructionsRecommended,
 	}),
-	planModeReminder: getPrompt("focusChain", "planModeReminder", {
-		reminder,
+	planModeReminder: renderPrompt("focusChain", "planModeReminder", {
+		REMINDER: reminder,
 	}),
 	completed: getPrompt("focusChain", "completed"),
-	apiRequestCount: getPrompt("focusChain", "apiRequestCount", {
-		reminder,
-	}),
+	apiRequestCount: (count: number) =>
+		renderPrompt("focusChain", "apiRequestCount", {
+			API_REQUEST_COUNT: count,
+			REMINDER: reminder,
+		}),
 	tamperingRejected: getPrompt("focusChain", "tamperingRejected"),
 	skipOrderRejected: getPrompt("focusChain", "skipOrderRejected"),
 	skipOrderWarning: getPrompt("focusChain", "skipOrderWarning"),

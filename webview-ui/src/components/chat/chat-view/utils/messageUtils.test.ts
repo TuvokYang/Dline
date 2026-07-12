@@ -1,12 +1,6 @@
-import type { ClineMessage, TaskUiState } from "@shared/ExtensionMessage"
+import type { ClineMessage, TaskViewState } from "@shared/ExtensionMessage"
 import { describe, expect, it } from "vitest"
-import {
-	findInteractionMessage,
-	findSnapshotAnchoredMessage,
-	groupLowStakesTools,
-	isToolGroup,
-	resolveApiErrorMessage,
-} from "./messageUtils"
+import { groupLowStakesTools, isToolGroup, resolveApiErrorMessage } from "./messageUtils"
 
 const createTextMessage = (ts: number, text: string): ClineMessage => ({
 	type: "say",
@@ -32,23 +26,31 @@ const createReasoningMessage = (ts: number, text: string): ClineMessage => ({
 /**
  * Create an error-recovery task UI state for message resolution tests.
  */
-const createErrorTaskUiState = (message: string): TaskUiState => ({
-	phase: "awaiting_error_recovery",
-	inputEnabled: false,
-	cancelEnabled: false,
-	showFooter: true,
-	actions: [{ type: "retry", label: "Retry", enabled: true }],
-	activeAsk: "api_req_failed",
-	message,
-	reason: "error-recovery:api_req_failed",
+const createErrorTaskViewState = (): TaskViewState => ({
+	taskId: "task-1",
+	phase: "paused",
+	stateRevision: 2,
+	activeInteraction: {
+		taskId: "task-1",
+		turnId: "turn-1",
+		interactionId: "interaction-1",
+		kind: "error_retry",
+		status: "awaiting",
+		stateRevision: 2,
+		taskAsk: "api_req_failed",
+		presentationKind: "api_req_failed",
+		askMessageTs: 2,
+	},
+	input: { enabled: false, acceptsText: false, acceptsImages: false, acceptsFiles: false },
+	footer: { actions: [] },
 })
 
 describe("resolveApiErrorMessage", () => {
-	it("prefers snapshot-first error message when the last modified message is not api_req_failed", () => {
+	it("uses the projected error interaction with the current presentation message", () => {
 		const resolved = resolveApiErrorMessage({
 			isLast: true,
-			lastModifiedMessage: { type: "say", say: "state_snapshot", text: "{}", ts: 2 },
-			taskUiState: createErrorTaskUiState("API request failed"),
+			lastModifiedMessage: { type: "ask", ask: "api_req_failed", text: "API request failed", ts: 2 },
+			taskViewState: createErrorTaskViewState(),
 		})
 
 		expect(resolved).toBe("API request failed")
@@ -131,154 +133,5 @@ describe("groupLowStakesTools", () => {
 		expect(grouped).toHaveLength(2)
 		expect(grouped[0]).toMatchObject({ type: "say", say: "reasoning", text: "Planning next read" })
 		expect(isToolGroup(grouped[1])).toBe(true)
-	})
-})
-
-describe("snapshot anchored interaction message", () => {
-	it("uses the latest state_snapshot apiIndex instead of the raw last message", () => {
-		const qnaAsk: ClineMessage = {
-			ts: 1782966437140,
-			type: "ask",
-			ask: "qna_respond",
-			text: JSON.stringify({ response: "ok" }),
-			partial: false,
-			conversationHistoryIndex: 3,
-		}
-		const snapshot: ClineMessage = {
-			ts: 1782969236658,
-			type: "say",
-			say: "state_snapshot",
-			text: JSON.stringify({ phase: "streaming", apiIndex: 3, timestamp: 1782969236657 }),
-			conversationHistoryIndex: 3,
-		}
-		const messages: ClineMessage[] = [
-			{
-				ts: 1782966431702,
-				type: "say",
-				say: "api_req_started",
-				text: "{}",
-				conversationHistoryIndex: 1,
-			},
-			qnaAsk,
-			snapshot,
-		]
-
-		expect(findSnapshotAnchoredMessage(messages)).toBe(qnaAsk)
-		expect(findInteractionMessage(messages)).toBe(qnaAsk)
-	})
-
-	it("uses approval block metadata to choose the matching ask type", () => {
-		const commandAsk: ClineMessage = {
-			ts: 200,
-			type: "ask",
-			ask: "command",
-			text: "npm test",
-			conversationHistoryIndex: 4,
-		}
-		const toolAsk: ClineMessage = {
-			ts: 201,
-			type: "ask",
-			ask: "tool",
-			text: "{}",
-			conversationHistoryIndex: 4,
-		}
-		const snapshot: ClineMessage = {
-			ts: 300,
-			type: "say",
-			say: "state_snapshot",
-			text: JSON.stringify({
-				phase: "awaiting_approval",
-				apiIndex: 4,
-				timestamp: 300,
-				approval: {
-					activeCallId: "call_command",
-					blocks: [
-						{
-							callId: "call_command",
-							name: "execute_command",
-							phase: "awaiting_approval",
-							apiIndex: 4,
-						},
-					],
-				},
-			}),
-			conversationHistoryIndex: 4,
-		}
-
-		expect(findSnapshotAnchoredMessage([commandAsk, toolAsk, snapshot])).toBe(commandAsk)
-	})
-
-	it("prefers a newer trailing approval ask over a stale streaming snapshot", () => {
-		const qnaAsk: ClineMessage = {
-			ts: 1782969907777,
-			type: "ask",
-			ask: "qna_respond",
-			text: "{}",
-			conversationHistoryIndex: 3,
-		}
-		const staleSnapshot: ClineMessage = {
-			ts: 1782972083079,
-			type: "say",
-			say: "state_snapshot",
-			text: JSON.stringify({ phase: "streaming", apiIndex: 3, timestamp: 1782972083079 }),
-			conversationHistoryIndex: 3,
-		}
-		const toolAsk: ClineMessage = {
-			ts: 1782972107524,
-			type: "ask",
-			ask: "tool",
-			text: JSON.stringify({ tool: "listFilesTopLevel", path: "e:/workspace/vscode/dline" }),
-			partial: false,
-			conversationHistoryIndex: 5,
-		}
-
-		expect(findSnapshotAnchoredMessage([staleSnapshot, qnaAsk, toolAsk])).toBe(qnaAsk)
-		expect(findInteractionMessage([staleSnapshot, qnaAsk, toolAsk])).toBe(toolAsk)
-	})
-
-	it("replays messages after an awaiting snapshot so consumed turn-ending asks do not remain active", () => {
-		const qnaAsk: ClineMessage = {
-			ts: 100,
-			type: "ask",
-			ask: "qna_respond",
-			text: JSON.stringify({ response: "Need clarification" }),
-			partial: false,
-			conversationHistoryIndex: 3,
-		}
-		const awaitingSnapshot: ClineMessage = {
-			ts: 110,
-			type: "say",
-			say: "state_snapshot",
-			text: JSON.stringify({
-				phase: "awaiting_approval",
-				apiIndex: 3,
-				timestamp: 110,
-				awaiting: {
-					kind: "conversation",
-					taskAsk: "qna_respond",
-					messageTs: 100,
-				},
-			}),
-			conversationHistoryIndex: 3,
-		}
-		const userFeedback: ClineMessage = {
-			ts: 120,
-			type: "say",
-			say: "user_feedback",
-			text: "Here is the clarification.",
-			conversationHistoryIndex: 3,
-		}
-		const nextRequest: ClineMessage = {
-			ts: 130,
-			type: "say",
-			say: "api_req_started",
-			text: "{}",
-			conversationHistoryIndex: 4,
-		}
-
-		const messages = [qnaAsk, awaitingSnapshot, userFeedback, nextRequest]
-
-		expect(findSnapshotAnchoredMessage(messages)).toBeUndefined()
-		expect(findInteractionMessage(messages)).toBe(nextRequest)
 	})
 })

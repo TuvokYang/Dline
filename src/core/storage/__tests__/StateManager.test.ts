@@ -28,7 +28,7 @@ describe("StateManager — Per-Task Settings Isolation", () => {
 	})
 
 	afterEach(async () => {
-		StateManager.resetForTest()
+		await StateManager.resetForTest()
 		try {
 			await fs.rm(tempDir, { recursive: true, force: true })
 		} catch {
@@ -181,11 +181,11 @@ describe("StateManager — Per-Task Settings Isolation", () => {
 			await sm.flushPendingState()
 
 			// Reset and re-init — should load from settings.json
-			StateManager.resetForTest()
+			await StateManager.resetForTest()
 			const sm2 = await StateManager.initialize(createStorageContext({ clineDir: tempDir }))
 
 			sm2.getGlobalSettingsKey("mode" as any)?.should.equal("plan")
-			StateManager.resetForTest()
+			await StateManager.resetForTest()
 		})
 
 		it("should fallback to globalStateCache when settingsCache is empty", () => {
@@ -211,12 +211,12 @@ describe("StateManager — Per-Task Settings Isolation", () => {
 			sm.getSecretKey("wandbApiKey")!.should.equal("wandb-key")
 
 			// Persist across re-init
-			StateManager.resetForTest()
+			await StateManager.resetForTest()
 			const sm2 = await StateManager.initialize(createStorageContext({ clineDir: tempDir }))
 
 			sm2.getSecretKey("clineApiKey")!.should.equal("test-key")
 			sm2.getSecretKey("wandbApiKey")!.should.equal("wandb-key")
-			StateManager.resetForTest()
+			await StateManager.resetForTest()
 		})
 	})
 
@@ -227,6 +227,11 @@ describe("StateManager — Per-Task Settings Isolation", () => {
 			const storageCtx = createStorageContext({ clineDir: tempDir })
 			const sentinel = storageCtx.settings.get("__settingsMigrationVersion")
 			sentinel?.should.equal(1)
+		})
+
+		it("should keep task history inside the injected storage boundary", () => {
+			const storageCtx = createStorageContext({ clineDir: tempDir })
+			storageCtx.taskHistoryPath.should.equal(path.join(tempDir, "tasks", "taskHistory.jsonl"))
 		})
 
 		it("should filter deprecated keys and migrate valid keys", async () => {

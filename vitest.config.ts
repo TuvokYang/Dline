@@ -28,7 +28,6 @@ const sharedTestConfig = {
 	pool: "vmThreads" as const,
 	maxWorkers: 2,
 	minWorkers: 1,
-	vmMemoryLimit: "768MB",
 }
 
 const backendResolve = {
@@ -46,19 +45,40 @@ const backendResolve = {
 	},
 }
 
+/**
+ * Create one bounded backend project for an exclusive test domain.
+ *
+ * @param name Project name exposed to Vitest selectors and reports.
+ * @param include Test file patterns owned by the project.
+ * @param exclude Additional patterns delegated to other backend projects.
+ * @returns A backend project with shared aliases and worker constraints.
+ */
+function createBackendProject(name: string, include: string[], exclude: string[] = []) {
+	return defineProject({
+		plugins: [resolveWebviewAlias()],
+		resolve: backendResolve,
+		test: {
+			...sharedTestConfig,
+			name,
+			environment: "node",
+			include,
+			exclude: [...sharedTestConfig.exclude, ...exclude],
+		},
+	})
+}
+
 export default defineConfig({
 	test: {
 		projects: [
-			defineProject({
-				plugins: [resolveWebviewAlias()],
-				resolve: backendResolve,
-				test: {
-					...sharedTestConfig,
-					name: "backend",
-					environment: "node",
-					include: ["src/**/*.test.ts", "src/**/__tests__/**/*.test.ts"],
-				},
-			}),
+			createBackendProject("backend-task", ["src/core/task/**/*.test.ts"]),
+			createBackendProject("backend-prompts", ["src/core/prompts/**/*.test.ts"]),
+			createBackendProject("backend-hooks", ["src/core/hooks/**/*.test.ts"]),
+			createBackendProject(
+				"backend-core",
+				["src/core/**/*.test.ts"],
+				["src/core/task/**", "src/core/prompts/**", "src/core/hooks/**"],
+			),
+			createBackendProject("backend", ["src/**/*.test.ts", "src/**/__tests__/**/*.test.ts"], ["src/core/**"]),
 			"webview-ui/vitest.config.ts",
 		],
 	},

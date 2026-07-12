@@ -71,10 +71,8 @@ export interface ExtensionState {
 	shouldShowAnnouncement: boolean
 	taskHistory: HistoryItem[]
 	telemetrySetting: TelemetrySetting
-	/** Active approval block driving frontend button rendering */
-	activeBlock?: { callId: string; toolName: string; phase: string; askType: string }
-	/** Unified task UI state derived from snapshot */
-	taskUiState?: TaskUiState
+	/** Complete task interaction projection derived only from runtime state. */
+	taskViewState?: TaskViewState
 	shellIntegrationTimeout: number
 	terminalReuseEnabled?: boolean
 	terminalOutputLineLimit: number
@@ -126,9 +124,6 @@ export interface ExtensionState {
 	showFeatureTips?: boolean
 	showActiveTasksInEnvDetails?: boolean
 	openAiCodexIsAuthenticated?: boolean
-	/** Whether the task is actively working (streaming, waiting for first chunk, or executing subagent).
-	 *  Used by the frontend to determine Cancel button visibility instead of the fragile isApiActive. */
-	isWorking?: boolean
 	/** API usage metrics, computed from all messages by the backend */
 	apiMetrics?: {
 		totalTokensIn: number
@@ -314,6 +309,84 @@ export interface TaskUiState {
 	activeCallId?: string
 	message?: string
 	reason: string
+}
+
+/** Runtime phases projected without message-derived classification. */
+export type TaskViewPhase =
+	| "idle"
+	| "initializing"
+	| "waiting_for_task"
+	| "streaming"
+	| "awaiting_approval"
+	| "executing"
+	| "between_turns"
+	| "resuming"
+	| "cancelling"
+	| "aborted"
+	| "completed"
+	| "paused"
+
+/** Action identifiers supported by the causal task interaction protocol. */
+export type TaskViewActionType =
+	| "approve"
+	| "reject"
+	| "reply"
+	| "resume"
+	| "retry"
+	| "process_anyway"
+	| "start_new_task"
+	| "acknowledge"
+	| "stop"
+	| "confirm_utility"
+	| "cancel"
+
+/** Payload required when dispatching one projected action. */
+export type TaskViewPayloadPolicy = "none" | "draft" | "selection" | "draft_and_selection"
+
+/** One footer action projected from runtime state. */
+export interface TaskViewAction {
+	type: TaskViewActionType
+	label: string
+	appearance: "primary" | "secondary" | "danger"
+	enabled: boolean
+	payloadPolicy: TaskViewPayloadPolicy
+}
+
+/** Input capabilities projected for the current active interaction. */
+export interface TaskInputViewState {
+	enabled: boolean
+	acceptsText: boolean
+	acceptsImages: boolean
+	acceptsFiles: boolean
+	enterAction?: TaskViewActionType
+}
+
+/** Causal identity and presentation anchor for one active interaction. */
+export interface ActiveInteractionView {
+	taskId: string
+	turnId: string
+	interactionId: string
+	kind: string
+	status: "opening" | "awaiting" | "resolving"
+	stateRevision: number
+	taskAsk: ClineAsk
+	presentationKind: string
+	askMessageTs: number
+}
+
+/** Footer content owned exclusively by the backend task projection. */
+export interface TaskFooterViewState {
+	actions: TaskViewAction[]
+}
+
+/** Complete backend projection consumed by the Webview interaction host. */
+export interface TaskViewState {
+	taskId: string
+	phase: TaskViewPhase
+	stateRevision: number
+	activeInteraction?: ActiveInteractionView
+	input: TaskInputViewState
+	footer: TaskFooterViewState
 }
 
 export interface ClineSayTool {

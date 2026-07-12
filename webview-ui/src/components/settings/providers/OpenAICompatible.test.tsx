@@ -82,7 +82,7 @@ describe("OpenAICompatibleProvider", () => {
 		expect(onUpdate).toHaveBeenCalledWith({
 			openai: {
 				...profile.openai,
-				capabilities: { maxTokens: 64_000, supportsImages: true },
+				capabilities: { contextWindowTiers: [], maxTokens: 64_000, supportsImages: true },
 			},
 		})
 	})

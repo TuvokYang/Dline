@@ -22,12 +22,7 @@ import { initializeDistinctId } from "@/services/logging/distinctId"
 import { Logger } from "@/shared/services/Logger"
 import { fileExistsAtPath } from "@/utils/fs"
 import { AgentConfigLoader } from "../task/tools/subagent/AgentConfigLoader"
-import {
-	getTaskHistoryStateFilePath,
-	readTaskSettingsFromStorage,
-	writeTaskHistoryToState,
-	writeTaskSettingsToStorage,
-} from "./disk"
+import { readTaskSettingsFromStorage, writeTaskHistoryToState, writeTaskSettingsToStorage } from "./disk"
 import { STATE_MANAGER_NOT_INITIALIZED } from "./error-messages"
 import { JsonlIndexedStore } from "./JsonlIndexedStore"
 import { filterAllowedRemoteConfigFields } from "./remote-config/utils"
@@ -177,8 +172,8 @@ export class StateManager {
 			// Use populate method to avoid triggering persistence during initialization
 			StateManager.instance.populateCache(globalState, secrets, workspaceState)
 
-			// Create TaskHistory instance (replaces old singleton)
-			const filePath = await getTaskHistoryStateFilePath()
+			// Create TaskHistory inside the injected storage boundary.
+			const filePath = storage.taskHistoryPath
 			const fs = await import("fs/promises")
 
 			// Migrate from legacy JSON if needed
@@ -189,7 +184,7 @@ export class StateManager {
 					if (raw.trim()) {
 						const items = JSON.parse(raw)
 						if (Array.isArray(items) && items.length > 0) {
-							await writeTaskHistoryToState(items)
+							await writeTaskHistoryToState(items, filePath)
 							await fs.rename(legacyPath, `${legacyPath}.bak`).catch(() => {})
 						}
 					}
@@ -297,14 +292,18 @@ export class StateManager {
 		return StateManager.instance
 	}
 
-	/** Reset the singleton for testing. Must be called in afterEach to allow re-initialization. */
-	public static resetForTest(): void {
-		if (StateManager.instance) {
-			StateManager.instance._taskHistory?.dispose()
-			StateManager.instance._taskHistory = null
-			StateManager.instance.dispose()
-			StateManager.instance = null
+	/** Reset the singleton for testing after all owned watcher resources have closed. */
+	public static async resetForTest(): Promise<void> {
+		const instance = StateManager.instance
+		StateManager.instance = null
+		if (!instance) {
+			return
 		}
+
+		const taskHistory = instance._taskHistory
+		instance._taskHistory = null
+		instance.dispose()
+		await taskHistory?.dispose()
 	}
 
 	/**

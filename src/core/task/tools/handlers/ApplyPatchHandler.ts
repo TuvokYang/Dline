@@ -17,7 +17,7 @@ import type { ToolResponse } from "../../index"
 import { showNotificationForApproval } from "../../utils"
 import type { IFullyManagedTool } from "../ToolExecutorCoordinator"
 import type { ToolValidator } from "../ToolValidator"
-import type { TaskConfig } from "../types/TaskConfig"
+import { interactionId, interactionTurnId, type TaskConfig } from "../types/TaskConfig"
 import type { StronglyTypedUIHelpers } from "../types/UIHelpers"
 import { captureAccepted, captureRejected, getModelInfo } from "../utils/AiOutputTelemetry"
 import { type FileOpsResult, FileProviderOperations } from "../utils/FileProviderOperations"
@@ -788,17 +788,30 @@ export class ApplyPatchHandler implements IFullyManagedTool {
 
 		showNotificationForApproval(`Dline wants to edit '${message.path}'`, config.autoApprovalSettings.enableNotifications)
 
-		const { response, text, images, files } = await config.callbacks.ask("tool", completeMessage, false, {
+		const outcome = await config.interactions.open({
+			turnId: interactionTurnId(block),
+			interactionId: interactionId(block),
+			kind: "tool_approval",
+			presentation: completeMessage,
 			existingTs: block.ts,
 		})
+		const text = outcome.draft?.text
+		const images = outcome.draft?.images
+		const files = outcome.draft?.files
 
 		if (text || images?.length || files?.length) {
 			const fileContent = files?.length ? await processFilesIntoText(files) : ""
 			ToolResultUtils.pushAdditionalToolFeedback(config.taskState.userMessageContent, text, images, fileContent)
-			await sayFeedbackOnce(config, response, text, images, files)
+			await sayFeedbackOnce(
+				config,
+				outcome.actionId === "approve" ? "yesButtonClicked" : "noButtonClicked",
+				text,
+				images,
+				files,
+			)
 		}
 
-		const approved = response === "yesButtonClicked"
+		const approved = outcome.actionId === "approve"
 		if (!approved) config.taskController.rejectActiveBlock()
 		telemetryService.captureToolUsage(
 			config.ulid ?? "",

@@ -81,6 +81,7 @@ function setupTwoConversationalBlocks(): {
 } {
 	const channel = createMockChannel()
 	const controller = new TaskController(channel)
+	controller.restoreFrom({ phase: TaskPhase.AWAITING_APPROVAL, apiIndex: 0, timestamp: 1 })
 
 	const callIds = ["call_qna_0", "call_qna_1"]
 	const blocks = [createToolBlock("qna_respond", callIds[0], 100), createToolBlock("qna_respond", callIds[1], 200)]
@@ -223,6 +224,7 @@ describe("Task.handleWebviewAskResponse", () => {
 	it("messageResponse for an active approval only renders feedback and lets the tool result carry it", async () => {
 		const channel = createMockChannel()
 		const controller = new TaskController(channel)
+		controller.restoreFrom({ phase: TaskPhase.AWAITING_APPROVAL, apiIndex: 0, timestamp: 1 })
 		const blocks = [createToolBlock("write_to_file", "call_write", 100)]
 		controller.buildTurn(blocks, () => false)
 		controller.advance("dline_tid_call_write", true)
@@ -381,6 +383,7 @@ describe("Task.handleWebviewAskResponse", () => {
 		it("messageResponse for write_to_file DOES reject the block", async () => {
 			const channel = createMockChannel()
 			const controller = new TaskController(channel)
+			controller.restoreFrom({ phase: TaskPhase.AWAITING_APPROVAL, apiIndex: 0, timestamp: 1 })
 
 			const callId = "call_wf_0"
 			controller.buildTurn([createToolBlock("write_to_file", callId, 100)], () => false)
@@ -411,6 +414,7 @@ describe("Task.handleWebviewAskResponse", () => {
 			it(`messageResponse should NOT reject active block`, async () => {
 				const channel = createMockChannel()
 				const controller = new TaskController(channel)
+				controller.restoreFrom({ phase: TaskPhase.AWAITING_APPROVAL, apiIndex: 0, timestamp: 1 })
 
 				const callId = "call_conv_0"
 				controller.buildTurn([createToolBlock(toolName, callId, 100)], () => false)

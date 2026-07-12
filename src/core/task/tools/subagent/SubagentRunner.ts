@@ -5,9 +5,9 @@ import { createIdentityFactory } from "@core/api/transform/block-identity"
 import { createStreamNormalizer, normalizeApiStream } from "@core/api/transform/stream-identity-normalizer"
 import { parseAssistantMessageV2, ToolUse } from "@core/assistant-message"
 import { discoverAvailableSkills } from "@core/context/instructions/user-instructions/skills"
+import { SystemPromptGenerator } from "@core/prompts/generators/SystemPromptGenerator"
 import { formatResponse } from "@core/prompts/responses"
-import { PromptRegistry } from "@core/prompts/system-prompt"
-import type { SystemPromptContext } from "@core/prompts/system-prompt/types"
+import type { SystemPromptContext } from "@core/prompts/system-prompt/context"
 import { StreamResponseHandler } from "@core/task/StreamResponseHandler"
 import { DEFAULT_API_PROVIDER } from "@shared/api"
 import { ClineAssistantToolUseBlock, ClineStorageMessage, ClineTextContentBlock, ClineUserContent } from "@shared/messages"
@@ -371,11 +371,19 @@ export class SubagentRunner {
 				isSubagentRun: true,
 			}
 
-			const promptRegistry = PromptRegistry.getInstance()
-			const generatedSystemPrompt = await promptRegistry.get(context)
-			const systemPrompt = this.agent.buildSystemPrompt(generatedSystemPrompt)
-			const useNativeToolCalls = !!promptRegistry.nativeTools?.length
-			const nativeTools = useNativeToolCalls ? this.agent.buildNativeTools(context) : undefined
+			const generated = await new SystemPromptGenerator().generate(context)
+			const systemPrompt = this.agent.buildSystemPrompt(generated.systemPrompt)
+			const allowedTools = new Set(this.allowedTools)
+			const nativeTools = generated.tools?.filter((tool) => {
+				if ("function" in tool) {
+					return allowedTools.has(tool.function.name as ClineDefaultTool)
+				}
+				if ("name" in tool && typeof tool.name === "string") {
+					return allowedTools.has(tool.name as ClineDefaultTool)
+				}
+				return false
+			})
+			const useNativeToolCalls = nativeToolCallsRequested
 			const workspaceMetadataEnvironmentBlock = await this.getWorkspaceMetadataEnvironmentBlock()
 
 			if (useNativeToolCalls && (!nativeTools || nativeTools.length === 0)) {

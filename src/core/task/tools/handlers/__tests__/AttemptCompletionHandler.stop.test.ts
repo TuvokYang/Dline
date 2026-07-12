@@ -11,7 +11,10 @@ import { AttemptCompletionHandler } from "../AttemptCompletionHandler"
  * @param taskState Mutable task state used by the handler.
  * @returns TaskConfig with mocked callbacks and services.
  */
-function createConfig(taskState: TaskState): TaskConfig {
+function createConfig(
+	taskState: TaskState,
+	outcome: { actionId: "reply" | "start_new_task"; text?: string } = { actionId: "start_new_task" },
+): TaskConfig {
 	const clineMessages: Array<{ type: "say"; say: string; text?: string; ts: number }> = []
 	return {
 		taskId: "task-1",
@@ -25,6 +28,17 @@ function createConfig(taskState: TaskState): TaskConfig {
 		enableParallelToolCalling: false,
 		isSubagentExecution: false,
 		taskState,
+		interactions: {
+			open: vi.fn(async () => ({
+				actionId: outcome.actionId,
+				draft: { text: outcome.text ?? "", images: [], files: [] },
+			})),
+			complete: vi.fn(async () => ({
+				actionId: outcome.actionId,
+				draft: { text: outcome.text ?? "", images: [], files: [] },
+			})),
+			say: vi.fn(async () => undefined),
+		},
 		taskController: {
 			rejectActiveBlock: vi.fn(),
 		} as unknown as TaskConfig["taskController"],
@@ -71,11 +85,12 @@ function createBlock(): ToolUse {
 		params: { result: "done" },
 		partial: false,
 		ts: 123,
+		dline_tid: "completion-1",
 	} as ToolUse
 }
 
 describe("AttemptCompletionHandler stop behavior", () => {
-	it("marks the task as completed when the user confirms completion", async () => {
+	it("returns terminal completion when the runtime starts a new task", async () => {
 		const taskState = new TaskState()
 		const config = createConfig(taskState)
 		const handler = new AttemptCompletionHandler()
@@ -83,6 +98,22 @@ describe("AttemptCompletionHandler stop behavior", () => {
 		const result = await handler.execute(config, createBlock())
 
 		assert.equal(result, "[attempt_completion] Result: Done")
-		assert.equal(taskState.didConfirmCompletion, true)
+	})
+
+	it("returns completion feedback when the user replies", async () => {
+		const taskState = new TaskState()
+		const config = createConfig(taskState, { actionId: "reply", text: "Please refine the result" })
+		const handler = new AttemptCompletionHandler()
+
+		const result = await handler.execute(config, createBlock())
+
+		assert.deepEqual(result, [
+			{ type: "text", text: "[attempt_completion] Result: Done" },
+			{
+				type: "text",
+				text: "The user has provided feedback on the results. Consider their input to continue the task, and then attempt completion again.",
+			},
+			{ type: "text", text: "<feedback>\nPlease refine the result\n</feedback>" },
+		])
 	})
 })

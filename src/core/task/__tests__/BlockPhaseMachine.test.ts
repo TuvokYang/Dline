@@ -180,6 +180,7 @@ describe("BlockPhaseMachine - rejectActiveBlock cascade", () => {
 		const restoredMachine = new BlockPhaseMachine()
 		restoredMachine.restoreTurn(
 			blocks.map((b) => ({
+				dlineTid: b.dlineTid,
 				callId: b.callId,
 				toolName: b.toolName,
 				phase: b.phase,

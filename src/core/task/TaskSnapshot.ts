@@ -1,4 +1,14 @@
 import type { ClineAsk } from "@shared/ExtensionMessage"
+import type { BlockLifecycle } from "./BlockPhaseMachine"
+import type { ActiveInteraction } from "./interaction/InteractionReducer"
+import type {
+	TaskAnchor,
+	TaskCancellationState,
+	TaskCompletionState,
+	TaskRuntimeError,
+	TaskRuntimeState,
+	TurnState,
+} from "./runtime/TaskRuntimeState"
 import type { BlockPhase } from "./TaskController"
 import type { TaskPhase } from "./TaskPhase"
 
@@ -130,10 +140,139 @@ export interface TaskSnapshot {
 	/** Last index in apiConversationHistory that this snapshot corresponds to */
 	apiIndex: number
 	timestamp: number
+	version?: 2
+	taskId?: string
+	revision?: number
+	anchor?: TaskAnchor
+	turn?: TurnState
+	interaction?: ActiveInteraction
+	cancellation?: TaskCancellationState
+	runtimeError?: TaskRuntimeError
+	completion?: TaskCompletionState
 	awaiting?: TaskSnapshotAwaiting
 	approval?: TaskSnapshotApproval
 	execution?: TaskSnapshotExecution
 	resume?: TaskSnapshotResume
 	cancel?: TaskSnapshotCancel
 	error?: TaskSnapshotErrorRecovery
+}
+
+/** Identity field rejected while hydrating a canonical snapshot. */
+export type TaskSnapshotIdentityField = "taskId" | "turnId" | "interactionId" | "dlineTid"
+
+/** Typed failure raised when a version 2 snapshot lacks canonical identity. */
+export class TaskSnapshotIdentityError extends Error {
+	readonly code = "invalid_snapshot_identity"
+
+	constructor(readonly field: TaskSnapshotIdentityField) {
+		super(`invalid_snapshot_identity: ${field}`)
+		this.name = "TaskSnapshotIdentityError"
+	}
+}
+
+/** Assert a canonical identity is present in a version 2 snapshot. */
+function requireIdentity(value: string | undefined, field: TaskSnapshotIdentityField): string {
+	if (!value) {
+		throw new TaskSnapshotIdentityError(field)
+	}
+	return value
+}
+
+/** Clone one lifecycle block without sharing mutable snapshot state. */
+function cloneBlock(block: BlockLifecycle): BlockLifecycle {
+	return { ...block }
+}
+
+/** Clone canonical turn state and validate every identity. */
+function cloneTurn(turn: TurnState): TurnState {
+	const turnId = requireIdentity(turn.turnId, "turnId")
+	const blocks = turn.blocks.map((block) => ({ ...cloneBlock(block), dlineTid: requireIdentity(block.dlineTid, "dlineTid") }))
+	if (turn.activeDlineTid) {
+		requireIdentity(turn.activeDlineTid, "dlineTid")
+	}
+	return { ...turn, turnId, blocks }
+}
+
+/** Clone one active interaction and validate its causal identity. */
+function cloneInteraction(interaction: ActiveInteraction): ActiveInteraction {
+	const taskId = requireIdentity(interaction.taskId, "taskId")
+	const turnId = requireIdentity(interaction.turnId, "turnId")
+	const interactionId = requireIdentity(interaction.interactionId, "interactionId")
+	const acceptedResponse = interaction.acceptedResponse
+		? {
+				...interaction.acceptedResponse,
+				taskId: requireIdentity(interaction.acceptedResponse.taskId, "taskId"),
+				turnId: requireIdentity(interaction.acceptedResponse.turnId, "turnId"),
+				interactionId: requireIdentity(interaction.acceptedResponse.interactionId, "interactionId"),
+				...(interaction.acceptedResponse.draft
+					? {
+							draft: {
+								...interaction.acceptedResponse.draft,
+								images: [...interaction.acceptedResponse.draft.images],
+								files: [...interaction.acceptedResponse.draft.files],
+							},
+						}
+					: {}),
+				...(interaction.acceptedResponse.selection
+					? { selection: { values: [...interaction.acceptedResponse.selection.values] } }
+					: {}),
+			}
+		: undefined
+	if (interaction.status === "resolving" && !acceptedResponse) {
+		throw new Error("invalid_resolving_interaction")
+	}
+	if (
+		acceptedResponse &&
+		(acceptedResponse.taskId !== taskId ||
+			acceptedResponse.turnId !== turnId ||
+			acceptedResponse.interactionId !== interactionId)
+	) {
+		throw new Error("invalid_resolving_interaction_identity")
+	}
+	return { ...interaction, taskId, turnId, interactionId, ...(acceptedResponse ? { acceptedResponse } : {}) }
+}
+
+/** Convert runtime state into a complete version 2 persistence snapshot. */
+export function createSnapshot(state: Readonly<TaskRuntimeState>, timestamp = Date.now()): TaskSnapshot {
+	return {
+		version: 2,
+		taskId: requireIdentity(state.taskId, "taskId"),
+		phase: state.phase,
+		apiIndex: state.anchor.apiIndex,
+		timestamp,
+		revision: state.revision,
+		anchor: { ...state.anchor },
+		turn: state.turn ? cloneTurn(state.turn) : undefined,
+		interaction: state.interaction ? cloneInteraction(state.interaction) : undefined,
+		cancellation: state.cancellation ? { ...state.cancellation } : undefined,
+		runtimeError: state.error ? { ...state.error } : undefined,
+		completion: state.completion ? { ...state.completion } : undefined,
+	}
+}
+
+/** Hydrate a complete runtime aggregate from a strict version 2 snapshot. */
+export function hydrateSnapshot(snapshot: TaskSnapshot): TaskRuntimeState {
+	if (snapshot.version !== 2 || snapshot.revision === undefined || !snapshot.anchor) {
+		throw new Error("invalid_snapshot_version")
+	}
+	const taskId = requireIdentity(snapshot.taskId, "taskId")
+	const turn = snapshot.turn ? cloneTurn(snapshot.turn) : undefined
+	const interaction = snapshot.interaction ? cloneInteraction(snapshot.interaction) : undefined
+	if (snapshot.anchor.turnId) {
+		requireIdentity(snapshot.anchor.turnId, "turnId")
+	}
+	if (snapshot.anchor.interactionId) {
+		requireIdentity(snapshot.anchor.interactionId, "interactionId")
+	}
+	return {
+		taskId,
+		phase: snapshot.phase,
+		revision: snapshot.revision,
+		anchor: { ...snapshot.anchor },
+		turn,
+		interaction,
+		cancellation: snapshot.cancellation ? { ...snapshot.cancellation } : undefined,
+		error: snapshot.runtimeError ? { ...snapshot.runtimeError } : undefined,
+		completion: snapshot.completion ? { ...snapshot.completion } : undefined,
+	}
 }

@@ -1,5 +1,5 @@
 import type { ToolUse } from "@core/assistant-message"
-import { getPrompt } from "@core/prompts/i18n"
+import { getPrompt, renderPrompt } from "@core/prompts/i18n"
 import { formatResponse } from "@core/prompts/responses"
 import { findLast, parsePartialArrayString } from "@shared/array"
 import { telemetryService } from "@/services/telemetry"
@@ -9,7 +9,7 @@ import { ClineDefaultTool } from "@/shared/tools"
 import type { ToolResponse } from "../../index"
 import { isCompactSignal } from "../../mode-switch-signal"
 import type { IPartialBlockHandler, IToolHandler } from "../ToolExecutorCoordinator"
-import type { TaskConfig } from "../types/TaskConfig"
+import { interactionId, interactionTurnId, type TaskConfig } from "../types/TaskConfig"
 import type { StronglyTypedUIHelpers } from "../types/UIHelpers"
 import { getTaskCompletionTelemetry } from "../utils"
 import { sayFeedbackOnce } from "../utils/UserFeedbackUtils"
@@ -92,13 +92,16 @@ export class PlanModeRespondHandler implements IToolHandler, IPartialBlockHandle
 		// Set awaiting plan response state
 		config.taskState.isAwaitingPlanResponse = true
 
-		// Ask for user response
-		let {
-			response: askResponse,
-			text,
-			images,
-			files: planResponseFiles,
-		} = await config.callbacks.ask(this.name, JSON.stringify(sharedMessage), false, { existingTs: block.ts })
+		const outcome = await config.interactions.open({
+			turnId: interactionTurnId(block),
+			interactionId: interactionId(block),
+			kind: "plan_response",
+			presentation: JSON.stringify(sharedMessage),
+			existingTs: block.ts,
+		})
+		let text = outcome.draft?.text
+		const images = outcome.draft?.images
+		const planResponseFiles = outcome.draft?.files
 
 		config.taskState.isAwaitingPlanResponse = false
 
@@ -128,7 +131,7 @@ export class PlanModeRespondHandler implements IToolHandler, IPartialBlockHandle
 			// Option not selected, send user feedback
 			if (text || (images && images.length > 0) || (planResponseFiles && planResponseFiles.length > 0)) {
 				telemetryService.captureOptionsIgnored(config.ulid ?? "", options.length, "plan")
-				await sayFeedbackOnce(config, askResponse, text, images, planResponseFiles)
+				await sayFeedbackOnce(config, "messageResponse", text, images, planResponseFiles)
 			}
 		}
 
@@ -143,7 +146,7 @@ export class PlanModeRespondHandler implements IToolHandler, IPartialBlockHandle
 		// Handle mode switching response
 		if (config.taskState.didRespondToPlanAskBySwitchingMode) {
 			const switchMsg = text
-				? getPrompt("toolHandlers", "planSwitchToActWithMessage", { text })
+				? renderPrompt("toolHandlers", "planSwitchToActWithMessage", { TEXT: text })
 				: getPrompt("toolHandlers", "planSwitchToAct")
 			const result = formatResponse.toolResult(switchMsg, images, fileContentString)
 			// Reset the flag after using it to prevent it from persisting

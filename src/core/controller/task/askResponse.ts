@@ -35,7 +35,12 @@ export async function askResponse(controller: Controller, request: AskResponseRe
 				return Empty.create()
 		}
 
-		// Call the task's handler for webview responses
+		// The causal interaction RPC owns all projected TaskViewState responses.
+		// This endpoint remains only for legacy callers that do not carry interaction identity.
+		if (controller.task.getRuntimeState().interaction) {
+			Logger.warn("askResponse: Ignoring legacy response for an active causal interaction")
+			return Empty.create()
+		}
 		await controller.task.handleWebviewAskResponse(responseType, request.text, request.images, request.files)
 
 		return Empty.create()

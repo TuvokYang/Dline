@@ -37,6 +37,8 @@ service TaskService {
   rpc getTaskHistory(GetTaskHistoryRequest) returns (TaskHistoryArray);
   // Sends a response to a previous ask operation
   rpc askResponse(AskResponseRequest) returns (Empty);
+  // Dispatches a causally identified response to the active task interaction
+  rpc dispatchInteraction(DispatchInteractionRequest) returns (DispatchInteractionResponse);
   // Records task feedback (thumbs up/down)
   rpc taskFeedback(StringRequest) returns (Empty);
   // Shows task completion changes diff in a view
@@ -129,6 +131,35 @@ message AskResponseRequest {
   string text = 3;
   repeated string images = 4;
   repeated string files = 5;
+}
+
+// Draft content submitted with an interaction response
+message InteractionDraft {
+  string text = 1;
+  repeated string images = 2;
+  repeated string files = 3;
+}
+
+// Selection values submitted with a selection-aware interaction response
+message InteractionSelection {
+  repeated string values = 1;
+}
+
+// Causally identified response to the active task interaction
+message DispatchInteractionRequest {
+  string task_id = 1;
+  string turn_id = 2;
+  string interaction_id = 3;
+  string action_id = 4;
+  int64 state_revision = 5;
+  optional InteractionDraft draft = 6;
+  optional InteractionSelection selection = 7;
+}
+
+// Expected result of dispatching an interaction response
+message DispatchInteractionResponse {
+  bool accepted = 1;
+  string result = 2;
 }
 
 // Request for executing a quick win task

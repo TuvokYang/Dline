@@ -45,7 +45,7 @@ function buildContext(taskId: string): TaskContextCache {
 				promptBuilder: {
 					providerId: "test-provider",
 					modelId: "test-model",
-					variantFamily: "generic",
+					profile: "native",
 					nativeTools: false,
 				},
 			},

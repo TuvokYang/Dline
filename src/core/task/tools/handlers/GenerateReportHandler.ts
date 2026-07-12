@@ -1,11 +1,11 @@
 import type { ToolUse } from "@core/assistant-message"
-import { getPrompt } from "@core/prompts/i18n"
+import { getPrompt, renderPrompt } from "@core/prompts/i18n"
 import { formatResponse } from "@core/prompts/responses"
 import { ClineDefaultTool } from "@shared/tools"
 import type { ToolResponse } from "../../index"
 import { isCompactSignal } from "../../mode-switch-signal"
 import type { IPartialBlockHandler, IToolHandler } from "../ToolExecutorCoordinator"
-import type { TaskConfig } from "../types/TaskConfig"
+import { interactionId, interactionTurnId, type TaskConfig } from "../types/TaskConfig"
 import type { StronglyTypedUIHelpers } from "../types/UIHelpers"
 import { sayFeedbackOnce } from "../utils/UserFeedbackUtils"
 
@@ -43,14 +43,16 @@ export class GenerateReportHandler implements IToolHandler, IPartialBlockHandler
 
 		config.taskState.isAwaitingPlanResponse = true
 
-		const {
-			response: askResponse,
-			text,
-			images,
-			files,
-		} = await config.callbacks.ask("generate_report" as any, sharedMessage, false, {
+		const outcome = await config.interactions.open({
+			turnId: interactionTurnId(block),
+			interactionId: interactionId(block),
+			kind: "generate_report",
+			presentation: sharedMessage,
 			existingTs: block.ts,
 		})
+		const text = outcome.draft?.text
+		const images = outcome.draft?.images
+		const files = outcome.draft?.files
 
 		config.taskState.isAwaitingPlanResponse = false
 
@@ -62,7 +64,7 @@ export class GenerateReportHandler implements IToolHandler, IPartialBlockHandler
 		if (config.taskState.didRespondToPlanAskBySwitchingMode) {
 			config.taskState.didRespondToPlanAskBySwitchingMode = false
 			const switchMsg = text
-				? getPrompt("toolHandlers", "planSwitchToActWithMessage", { text })
+				? renderPrompt("toolHandlers", "planSwitchToActWithMessage", { TEXT: text })
 				: getPrompt("toolHandlers", "planSwitchToAct")
 			// fileContentString is empty at this point, pass images directly
 			return formatResponse.toolResult(switchMsg, images, "")
@@ -75,7 +77,7 @@ export class GenerateReportHandler implements IToolHandler, IPartialBlockHandler
 		}
 
 		if (text || (images && images.length > 0) || fileContentString) {
-			await sayFeedbackOnce(config, askResponse, text, images, files)
+			await sayFeedbackOnce(config, "messageResponse", text, images, files)
 			return formatResponse.toolResult(`<feedback>\n${text}\n</feedback>`, images, fileContentString)
 		}
 

@@ -228,7 +228,7 @@ export class FocusChainManager {
 		if (isEarlyInTask) {
 			return FocusChainPrompts.recommended
 		}
-		return FocusChainPrompts.apiRequestCount.replace("{{apiRequestCount}}", this.taskState.apiRequestCount.toString())
+		return FocusChainPrompts.apiRequestCount(this.taskState.apiRequestCount)
 	}
 
 	/**

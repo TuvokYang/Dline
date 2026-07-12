@@ -119,7 +119,6 @@ export const MessageRenderer: React.FC<MessageRendererProps> = ({
 				lastModifiedMessage={modifiedMessages.at(-1)}
 				message={messageOrGroup}
 				mode={mode}
-				onCancelCommand={() => messageHandlers.executeButtonAction("cancel")}
 				onHeightChange={onHeightChange}
 				onInputConsumed={onInputConsumed}
 				onSetQuote={onSetQuote}

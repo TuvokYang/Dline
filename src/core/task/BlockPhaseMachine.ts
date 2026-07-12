@@ -69,7 +69,6 @@ interface TokenResult {
 export class BlockPhaseMachine {
 	private turnBlocks: BlockLifecycle[] = []
 	private activeTokenDlineTid: string | null = null
-	private turnBuilt = false
 
 	// ── Turn Building ──
 
@@ -80,7 +79,6 @@ export class BlockPhaseMachine {
 	buildTurn(blocks: TurnBlockInput[], autoApprove: (toolName: string, callId: string) => boolean): void {
 		this.turnBlocks = []
 		this.activeTokenDlineTid = null
-		this.turnBuilt = true
 
 		for (const block of blocks) {
 			if (block.type !== "tool_use") continue
@@ -275,7 +273,7 @@ export class BlockPhaseMachine {
 
 	restoreTurn(
 		blocks: Array<{
-			dlineTid?: string
+			dlineTid: string
 			callId: string
 			toolName: string
 			phase: BlockPhase
@@ -283,10 +281,13 @@ export class BlockPhaseMachine {
 			ts?: number
 			requiresApproval?: boolean
 		}>,
-		activeCallId?: string,
+		activeDlineTid?: string,
 	): void {
+		if (blocks.some((block) => !block.dlineTid)) {
+			throw new Error("Canonical restored block is missing dlineTid")
+		}
 		this.turnBlocks = blocks.map((block) => ({
-			dlineTid: block.dlineTid ?? block.callId,
+			dlineTid: block.dlineTid,
 			callId: block.callId,
 			toolName: block.toolName,
 			phase: block.phase,
@@ -294,12 +295,21 @@ export class BlockPhaseMachine {
 			requiresApproval: block.requiresApproval ?? true,
 			conversationHistoryIndex: block.conversationHistoryIndex,
 		}))
-		this.activeTokenDlineTid =
-			this.turnBlocks.find((block) => block.callId === activeCallId)?.dlineTid ??
-			activeCallId ??
-			this.turnBlocks.find((block) => block.phase === BlockPhase.AWAITING_APPROVAL)?.dlineTid ??
-			null
-		this.turnBuilt = true
+		const awaiting = this.turnBlocks.filter((block) => block.phase === BlockPhase.AWAITING_APPROVAL)
+		if (awaiting.length === 0) {
+			if (activeDlineTid) {
+				throw new Error("Canonical activeDlineTid has no awaiting approval block")
+			}
+			this.activeTokenDlineTid = null
+			return
+		}
+		if (!activeDlineTid) {
+			throw new Error("Canonical awaiting turn is missing activeDlineTid")
+		}
+		if (awaiting.length !== 1 || awaiting[0]?.dlineTid !== activeDlineTid) {
+			throw new Error("Canonical activeDlineTid does not identify exactly one awaiting approval block")
+		}
+		this.activeTokenDlineTid = activeDlineTid
 	}
 
 	// ── State Queries ──
@@ -339,7 +349,6 @@ export class BlockPhaseMachine {
 	reset(): void {
 		this.turnBlocks = []
 		this.activeTokenDlineTid = null
-		this.turnBuilt = false
 	}
 
 	// ── Two-Phase Execution ──

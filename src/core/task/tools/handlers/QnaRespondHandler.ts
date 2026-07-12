@@ -5,7 +5,7 @@ import { ClineDefaultTool } from "@shared/tools"
 import type { ToolResponse } from "../../index"
 import { isCompactSignal } from "../../mode-switch-signal"
 import type { IPartialBlockHandler, IToolHandler } from "../ToolExecutorCoordinator"
-import type { TaskConfig } from "../types/TaskConfig"
+import { interactionId, interactionTurnId, type TaskConfig } from "../types/TaskConfig"
 import type { StronglyTypedUIHelpers } from "../types/UIHelpers"
 import { sayFeedbackOnce } from "../utils/UserFeedbackUtils"
 
@@ -45,14 +45,16 @@ export class QnaRespondHandler implements IToolHandler, IPartialBlockHandler {
 
 		config.taskState.isAwaitingPlanResponse = true
 
-		let {
-			response: askResponse,
-			text,
-			images,
-			files,
-		} = await config.callbacks.ask(this.name, JSON.stringify(sharedMessage), false, {
+		const outcome = await config.interactions.open({
+			turnId: interactionTurnId(block),
+			interactionId: interactionId(block),
+			kind: "qna_response",
+			presentation: JSON.stringify(sharedMessage),
 			existingTs: block.ts,
 		})
+		let text = outcome.draft?.text
+		const images = outcome.draft?.images
+		const files = outcome.draft?.files
 
 		config.taskState.isAwaitingPlanResponse = false
 
@@ -71,7 +73,7 @@ export class QnaRespondHandler implements IToolHandler, IPartialBlockHandler {
 		}
 
 		if (text || (images && images.length > 0) || fileContentString) {
-			await sayFeedbackOnce(config, askResponse, text, images, files)
+			await sayFeedbackOnce(config, "messageResponse", text, images, files)
 			return formatResponse.toolResult(`<feedback>\n${text}\n</feedback>`, images, fileContentString)
 		}
 

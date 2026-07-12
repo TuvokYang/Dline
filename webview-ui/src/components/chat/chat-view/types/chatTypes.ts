@@ -2,9 +2,8 @@
  * Shared types and interfaces for the chat view components
  */
 
-import { ClineAsk, ClineMessage, TaskUiAction, TaskUiState } from "@shared/ExtensionMessage"
+import { ClineAsk, ClineMessage } from "@shared/ExtensionMessage"
 import { ListRange, VirtuosoHandle } from "react-virtuoso"
-import { ButtonActionType } from "../shared/buttonConfig"
 
 /**
  * Main ChatView component props
@@ -45,14 +44,9 @@ export interface ChatState {
 	// Refs
 	textAreaRef: React.RefObject<HTMLTextAreaElement>
 
-	// Active approval block from TaskController state machine
-	activeBlock?: { callId: string; toolName: string; phase: string; askType: string }
-	// Unified task UI state from snapshot-first architecture
-	taskUiState?: TaskUiState
-	// Derived values
+	// Derived presentation values
 	lastMessage: ClineMessage | undefined
 	secondLastMessage: ClineMessage | undefined
-	clineAsk: ClineAsk | undefined
 	task: ClineMessage | undefined
 
 	// Handlers
@@ -70,8 +64,6 @@ export interface ChatState {
  * Message handlers interface
  */
 export interface MessageHandlers {
-	executeButtonAction: (action: ButtonActionType, text?: string, images?: string[], files?: string[]) => Promise<void>
-	executeTaskUiAction: (action: TaskUiAction) => Promise<void>
 	handleSendMessage: (text: string, images: string[], files: string[]) => Promise<void>
 	handleTaskCloseButtonClick: () => void
 	startNewTask: () => Promise<void>

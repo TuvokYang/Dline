@@ -1,34 +1,18 @@
 import { showChangedFilesDiff } from "@core/task/multifile-diff"
 import { expect } from "chai"
-import { afterEach, beforeEach, describe, expect as vitestExpect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, it, vi, expect as vitestExpect } from "vitest"
 // sinon import removed: using vitest globals
 import { HostProvider } from "@/hosts/host-provider"
 import { ClineMessage } from "@/shared/ExtensionMessage"
 import { ShowMessageType } from "@/shared/proto/dline/host"
-import { setVscodeHostProviderMock } from "@/test/host-provider-test-utils"
 
 describe("multifile-diff", () => {
-	let sandbox: any /* sinon.SinonSandbox → vitest */
 	let messageStateHandlerStub: any /* sinon.SinonStub → vitest */
 	let checkpointTrackerStub: any /* sinon.SinonStub → vitest */
 
 	beforeEach(() => {
-		sandbox = { mockRestore: () => {} }
-
-		// Create a mock hostBridge client with the necessary methods
-		const mockHostBridgeClient = {
-			windowClient: {
-				showMessage: vi.fn(),
-			},
-			diffClient: {
-				openMultiFileDiff: vi.fn(),
-			},
-		} as any
-
-		// Initialize HostProvider with the mock
-		setVscodeHostProviderMock({
-			hostBridgeClient: mockHostBridgeClient,
-		})
+		vi.mocked(HostProvider.window.showMessage).mockClear()
+		vi.mocked(HostProvider.diff.openMultiFileDiff).mockClear()
 
 		// Create stubs for dependencies
 		messageStateHandlerStub = { clineMessages: [] }
@@ -83,7 +67,10 @@ describe("multifile-diff", () => {
 				},
 				...mockMessages,
 			]
-			Object.defineProperty(messageStateHandlerStub, "clineMessages", { configurable: true, get: () => messagesWithCompletion })
+			Object.defineProperty(messageStateHandlerStub, "clineMessages", {
+				configurable: true,
+				get: () => messagesWithCompletion,
+			})
 
 			checkpointTrackerStub.getDiffSet.mockResolvedValue(mockChangedFiles)
 
@@ -96,7 +83,7 @@ describe("multifile-diff", () => {
 			)
 
 			// Assert
-			expect(checkpointTrackerStub.getDiffSet.mock.calls.some((c:any[]) => c[0] === "previous123", mockHash)).to.be.true
+			vitestExpect(checkpointTrackerStub.getDiffSet).toHaveBeenCalledWith("previous123", mockHash)
 			vitestExpect(HostProvider.diff.openMultiFileDiff).toHaveBeenCalledWith({
 				title: "New changes",
 				diffs: [
@@ -136,7 +123,7 @@ describe("multifile-diff", () => {
 			)
 
 			// Assert
-			expect(checkpointTrackerStub.getDiffSet.mock.calls.some((c:any[]) => c[0] === mockHash)).to.be.true
+			vitestExpect(checkpointTrackerStub.getDiffSet).toHaveBeenCalledWith(mockHash)
 			vitestExpect(HostProvider.diff.openMultiFileDiff).toHaveBeenCalledWith({
 				title: "Changes since snapshot",
 				diffs: [
@@ -172,7 +159,10 @@ describe("multifile-diff", () => {
 					// lastCheckpointHash is missing
 				},
 			]
-			Object.defineProperty(messageStateHandlerStub, "clineMessages", { configurable: true, get: () => messagesWithoutHash })
+			Object.defineProperty(messageStateHandlerStub, "clineMessages", {
+				configurable: true,
+				get: () => messagesWithoutHash,
+			})
 
 			// Act
 			await showChangedFilesDiff(messageStateHandlerStub as any, checkpointTrackerStub as any, mockMessageTs, false)
@@ -224,7 +214,10 @@ describe("multifile-diff", () => {
 				},
 				...mockMessages,
 			]
-			Object.defineProperty(messageStateHandlerStub, "clineMessages", { configurable: true, get: () => messagesWithFirstCheckpoint })
+			Object.defineProperty(messageStateHandlerStub, "clineMessages", {
+				configurable: true,
+				get: () => messagesWithFirstCheckpoint,
+			})
 
 			checkpointTrackerStub.getDiffSet.mockResolvedValue([
 				{
@@ -244,7 +237,7 @@ describe("multifile-diff", () => {
 			)
 
 			// Assert
-			expect(checkpointTrackerStub.getDiffSet.mock.calls.some((c:any[]) => c[0] === "first123", mockHash)).to.be.true
+			vitestExpect(checkpointTrackerStub.getDiffSet).toHaveBeenCalledWith("first123", mockHash)
 		})
 
 		it("should show error when no previous checkpoint hash found for new changes", async () => {

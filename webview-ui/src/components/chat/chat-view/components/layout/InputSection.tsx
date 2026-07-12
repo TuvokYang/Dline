@@ -55,7 +55,6 @@ export const InputSection: React.FC<InputSectionProps> = ({
 
 			<ChatTextArea
 				activeQuote={activeQuote}
-				clineAsk={chatState.clineAsk}
 				inputValue={inputValue}
 				onFocusChange={handleFocusChange}
 				onHeightChange={() => {

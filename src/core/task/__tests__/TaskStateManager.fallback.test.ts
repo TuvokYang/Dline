@@ -19,7 +19,7 @@ describe("TaskStateManager - Global Settings Fallback", () => {
 	})
 
 	afterEach(async () => {
-		StateManager.resetForTest()
+		await StateManager.resetForTest()
 		try {
 			await fs.rm(tempDir, { recursive: true, force: true })
 		} catch {

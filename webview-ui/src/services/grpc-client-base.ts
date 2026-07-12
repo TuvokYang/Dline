@@ -29,7 +29,7 @@ export abstract class ProtoBusClient {
 
 			// Guard against permanently-pending RPCs (e.g. when the backend
 			// terminate is stuck). After 30 s the promise rejects so the
-			// frontend ActionButtons can reset isProcessing via .catch().
+			// Interaction dispatchers can reset pending state via .catch().
 			const timeoutId = setTimeout(() => {
 				if (!settled) {
 					settled = true

@@ -1,120 +1,10 @@
-import type { ClineAsk, ClineMessage, TaskUiAction } from "@shared/ExtensionMessage"
-import { EmptyRequest, StringRequest } from "@shared/proto/dline/common"
-import { AskResponseRequest, NewTaskRequest } from "@shared/proto/dline/task"
-import { useCallback, useRef } from "react"
-import { getFocusChainSelectedPlan } from "@/components/chat/FocusChainChangeRow"
-import { useExtensionState } from "@/context/ExtensionStateContext"
-import { SlashServiceClient, TaskServiceClient } from "@/services/grpc-client"
-import { isApiReqActive } from "@/utils/streaming"
-import { type ButtonActionType } from "../shared/buttonConfig"
+import type { ClineMessage } from "@shared/ExtensionMessage"
+import { EmptyRequest } from "@shared/proto/dline/common"
+import { NewTaskRequest } from "@shared/proto/dline/task"
+import { useCallback } from "react"
+import { TaskServiceClient } from "@/services/grpc-client"
 
 import type { ChatState, MessageHandlers } from "../types/chatTypes"
-
-/**
- * Resolve the ask type that should receive typed input.
- * @param clineAsk Ask derived from the visible interaction row.
- * @param inputEnabled Whether snapshot-first state allows input.
- * @param activeAsk Ask derived from snapshot-first state.
- * @returns The ask type that should receive the input, or undefined.
- */
-function resolveInputAsk(
-	clineAsk: ClineAsk | undefined,
-	inputEnabled: boolean,
-	activeAsk: ClineAsk | undefined,
-): ClineAsk | undefined {
-	if (inputEnabled && activeAsk) {
-		return activeAsk
-	}
-	return clineAsk
-}
-
-/**
- * Check whether typed input should act like pressing Resume.
- * @param ask Active ask type.
- * @returns True when the ask should use yesButtonClicked semantics.
- */
-function isResumeAsk(ask: ClineAsk): boolean {
-	return ask === "resume_task" || ask === "resume_completed_task"
-}
-
-/**
- * Check whether an ask accepts a messageResponse payload.
- * @param ask Active ask type.
- * @returns True when typed input should be sent as messageResponse.
- */
-function acceptsMessage(ask: ClineAsk): boolean {
-	switch (ask) {
-		case "followup":
-		case "plan_mode_respond":
-		case "act_mode_respond":
-		case "qna_respond":
-		case "tool":
-		case "browser_action_launch":
-		case "command":
-		case "command_output":
-		case "use_mcp_server":
-		case "use_subagents":
-		case "completion_result":
-		case "mistake_limit_reached":
-		case "api_req_failed":
-		case "new_task":
-		case "spawn_task":
-		case "condense":
-		case "summarize_task":
-		case "report_bug":
-		case "focus_chain_change":
-		case "status_acknowledgment":
-		case "generate_report":
-			return true
-		case "resume_task":
-		case "resume_completed_task":
-			return false
-	}
-}
-
-/**
- * Send typed input to the resolved ask.
- * @param ask Active ask type receiving the input.
- * @param text Text to send with the response.
- * @param images Selected image payloads.
- * @param files Selected file payloads.
- * @returns True when an ask response was sent.
- */
-async function sendAskReply(ask: ClineAsk, text: string, images: string[], files: string[]): Promise<boolean> {
-	if (isResumeAsk(ask)) {
-		await TaskServiceClient.askResponse(createAskRequest("yesButtonClicked", text, images, files))
-		return true
-	}
-
-	if (acceptsMessage(ask)) {
-		await TaskServiceClient.askResponse(createAskRequest("messageResponse", text, images, files))
-		return true
-	}
-
-	return false
-}
-
-/**
- * Build a task ask response request with normalized user input.
- * @param responseType Button or message response type to send.
- * @param text Optional typed text from the input box.
- * @param images Optional selected image payloads.
- * @param files Optional selected file payloads.
- * @returns AskResponseRequest carrying the response and user payload.
- */
-function createAskRequest(
-	responseType: "yesButtonClicked" | "noButtonClicked" | "messageResponse",
-	text?: string,
-	images?: string[],
-	files?: string[],
-): AskResponseRequest {
-	return AskResponseRequest.create({
-		responseType,
-		text: text?.trim() ?? "",
-		images: images ?? [],
-		files: files ?? [],
-	})
-}
 
 /**
  * Custom hook for managing message handlers
@@ -125,352 +15,60 @@ export function useMessageHandlers(
 	chatState: ChatState,
 	disableAutoScrollRef?: React.MutableRefObject<boolean>,
 ): MessageHandlers {
-	const { backgroundCommandRunning } = useExtensionState()
 	const {
-		inputValue,
-		selectedImages,
-		selectedFiles,
-		setInputValue,
 		activeQuote,
 		setActiveQuote,
-		setSelectedImages,
-		setSelectedFiles,
-		setSendingDisabled,
 		setEnableButtons,
-		clineAsk,
-		lastMessage,
-		taskUiState,
+		setInputValue,
+		setSelectedFiles,
+		setSelectedImages,
+		setSendingDisabled,
 	} = chatState
-	const cancelInFlightRef = useRef(false)
-	const taskInputEnabled = taskUiState?.inputEnabled === true
-	const taskActiveAsk = taskUiState?.activeAsk
 
-	// Handle sending a message
 	const handleSendMessage = useCallback(
 		async (text: string, images: string[], files: string[]) => {
 			let messageToSend = text.trim()
-			const hasContent = messageToSend || images.length > 0 || files.length > 0
-
-			// Prepend the active quote if it exists
-			if (activeQuote && hasContent) {
-				const prefix = "[context] \n> "
-				const formattedQuote = activeQuote
-				const suffix = "\n[/context] \n\n"
-				messageToSend = `${prefix} ${formattedQuote} ${suffix} ${messageToSend}`
+			const hasContent = messageToSend.length > 0 || images.length > 0 || files.length > 0
+			if (!hasContent || messages.length > 0) {
+				return
 			}
-
-			if (hasContent) {
-				let messageSent = false
-
-				if (messages.length === 0) {
-					await TaskServiceClient.newTask(
-						NewTaskRequest.create({
-							text: messageToSend,
-							images,
-							files,
-						}),
-					)
-					messageSent = true
-				} else {
-					const inputAsk = resolveInputAsk(clineAsk, taskInputEnabled, taskActiveAsk)
-
-					if (inputAsk) {
-						messageSent = await sendAskReply(inputAsk, messageToSend, images, files)
-					} else if (messages.length > 0) {
-						// No clineAsk set - check if task is actively running
-						// If so, allow interrupting it with feedback
-						const taskStatusMessage = lastMessage ?? messages[messages.length - 1]
-						const isTaskRunning = taskStatusMessage.partial === true || isApiReqActive(taskStatusMessage)
-
-						if (isTaskRunning) {
-							// Task is running - send message as interruption/feedback
-							await TaskServiceClient.askResponse(
-								AskResponseRequest.create({
-									responseType: "messageResponse",
-									text: messageToSend,
-									images,
-									files,
-								}),
-							)
-							messageSent = true
-						}
-					}
-				}
-
-				// Only clear input and disable UI if message was actually sent
-				if (messageSent) {
-					setInputValue("")
-					setActiveQuote(null)
-					setSendingDisabled(true)
-					setSelectedImages([])
-					setSelectedFiles([])
-					setEnableButtons(false)
-
-					// Reset auto-scroll so new responses continue to scroll into view
-					if (disableAutoScrollRef) {
-						disableAutoScrollRef.current = false
-					}
-				}
+			if (activeQuote) {
+				messageToSend = `[context] \n> ${activeQuote}\n[/context] \n\n${messageToSend}`
+			}
+			await TaskServiceClient.newTask(NewTaskRequest.create({ text: messageToSend, images, files }))
+			setInputValue("")
+			setActiveQuote(null)
+			setSendingDisabled(true)
+			setSelectedImages([])
+			setSelectedFiles([])
+			setEnableButtons(false)
+			if (disableAutoScrollRef) {
+				disableAutoScrollRef.current = false
 			}
 		},
 		[
-			messages.length,
-			clineAsk,
-			taskInputEnabled,
-			taskActiveAsk,
 			activeQuote,
-			lastMessage,
-			setInputValue,
-			setActiveQuote,
-			setSendingDisabled,
-			setSelectedImages,
-			setSelectedFiles,
-			setEnableButtons,
 			disableAutoScrollRef,
-			messages,
+			messages.length,
+			setActiveQuote,
+			setEnableButtons,
+			setInputValue,
+			setSelectedFiles,
+			setSelectedImages,
+			setSendingDisabled,
 		],
 	)
 
-	// Start a new task
 	const startNewTask = useCallback(async () => {
 		setActiveQuote(null)
 		await TaskServiceClient.clearTask(EmptyRequest.create({}))
 	}, [setActiveQuote])
 
-	// Clear input state helper
-	const clearInputState = useCallback(() => {
-		setInputValue("")
-		setActiveQuote(null)
-		setSelectedImages([])
-		setSelectedFiles([])
-	}, [setInputValue, setActiveQuote, setSelectedImages, setSelectedFiles])
-
-	/**
-	 * Execute a snapshot-first task action with explicit payload semantics.
-	 * Confirming or rejecting actions preserve typed input as user feedback.
-	 */
-	const executeTaskUiAction = useCallback(
-		async (action: TaskUiAction) => {
-			const trimmedInput = inputValue.trim()
-			const hasContent = trimmedInput || selectedImages.length > 0 || selectedFiles.length > 0
-
-			switch (action.type) {
-				case "utility":
-					switch (taskActiveAsk ?? clineAsk) {
-						case "condense":
-						case "report_bug":
-							await TaskServiceClient.askResponse(
-								createAskRequest("yesButtonClicked", inputValue, selectedImages, selectedFiles),
-							)
-							break
-					}
-					clearInputState()
-					break
-				case "retry":
-					await TaskServiceClient.askResponse(
-						createAskRequest("yesButtonClicked", inputValue, selectedImages, selectedFiles),
-					)
-					clearInputState()
-					break
-				case "process_anyway":
-					await TaskServiceClient.askResponse(
-						createAskRequest(
-							hasContent ? "messageResponse" : "yesButtonClicked",
-							inputValue,
-							selectedImages,
-							selectedFiles,
-						),
-					)
-					clearInputState()
-					break
-				case "resume":
-				case "approve":
-				case "primary":
-					await TaskServiceClient.askResponse(
-						createAskRequest("yesButtonClicked", inputValue, selectedImages, selectedFiles),
-					)
-					clearInputState()
-					break
-				case "reject":
-				case "secondary":
-					await TaskServiceClient.askResponse(
-						createAskRequest("noButtonClicked", inputValue, selectedImages, selectedFiles),
-					)
-					clearInputState()
-					break
-				case "start_new_task":
-					await startNewTask()
-					break
-				case "cancel":
-					if (taskUiState?.cancelEnabled !== true || cancelInFlightRef.current) {
-						return
-					}
-					cancelInFlightRef.current = true
-					setSendingDisabled(true)
-					setEnableButtons(false)
-					try {
-						if (backgroundCommandRunning) {
-							await TaskServiceClient.cancelBackgroundCommand(EmptyRequest.create({})).catch((err) =>
-								console.error("Failed to cancel background command:", err),
-							)
-						}
-						await TaskServiceClient.cancelTask(EmptyRequest.create({}))
-					} finally {
-						cancelInFlightRef.current = false
-					}
-					break
-			}
-
-			if (disableAutoScrollRef) {
-				disableAutoScrollRef.current = false
-			}
-		},
-		[
-			backgroundCommandRunning,
-			clearInputState,
-			clineAsk,
-			disableAutoScrollRef,
-			inputValue,
-			lastMessage?.text,
-			selectedFiles,
-			selectedImages,
-			setEnableButtons,
-			setSendingDisabled,
-			startNewTask,
-			taskActiveAsk,
-			taskUiState?.cancelEnabled,
-		],
-	)
-
-	// Execute button action based on type
-	const executeButtonAction = useCallback(
-		async (actionType: ButtonActionType, text?: string, images?: string[], files?: string[]) => {
-			const trimmedInput = text?.trim()
-			const hasContent = trimmedInput || (images && images.length > 0) || (files && files.length > 0)
-
-			switch (actionType) {
-				case "retry":
-					await TaskServiceClient.askResponse(createAskRequest("yesButtonClicked", text, images, files))
-					clearInputState()
-					break
-				case "approve": {
-					// For focus_chain_change, use checkbox-selected plan
-					const approveText = clineAsk === "focus_chain_change" ? getFocusChainSelectedPlan() : trimmedInput
-					const hasApproveContent = clineAsk === "focus_chain_change" ? !!approveText : hasContent
-
-					if (hasApproveContent) {
-						await TaskServiceClient.askResponse(
-							createAskRequest("yesButtonClicked", approveText || trimmedInput, images, files),
-						)
-					} else {
-						await TaskServiceClient.askResponse(createAskRequest("yesButtonClicked"))
-					}
-					clearInputState()
-					break
-				}
-
-				case "reject":
-					if (hasContent) {
-						await TaskServiceClient.askResponse(createAskRequest("noButtonClicked", trimmedInput, images, files))
-					} else {
-						await TaskServiceClient.askResponse(createAskRequest("noButtonClicked"))
-					}
-					clearInputState()
-					break
-
-				case "proceed":
-					if (hasContent) {
-						await TaskServiceClient.askResponse(createAskRequest("yesButtonClicked", trimmedInput, images, files))
-					} else {
-						await TaskServiceClient.askResponse(createAskRequest("yesButtonClicked"))
-					}
-					clearInputState()
-					break
-
-				case "new_task":
-					if (clineAsk === "new_task") {
-						// Resolve the pending ask first so the backend's
-						// NewTaskHandler.ask() promise settles before we
-						// call newTask → clearTask → terminate on the old
-						// task, avoiding a race where terminate aborts the
-						// still-pending ask.
-						await TaskServiceClient.askResponse(AskResponseRequest.create({ responseType: "yesButtonClicked" }))
-						await TaskServiceClient.newTask(
-							NewTaskRequest.create({
-								text: lastMessage?.text,
-								images: [],
-								files: [],
-							}),
-						)
-					} else {
-						await startNewTask()
-					}
-					break
-
-				case "cancel": {
-					if (cancelInFlightRef.current) {
-						return
-					}
-					cancelInFlightRef.current = true
-					setSendingDisabled(true)
-					setEnableButtons(false)
-					try {
-						if (backgroundCommandRunning) {
-							await TaskServiceClient.cancelBackgroundCommand(EmptyRequest.create({})).catch((err) =>
-								console.error("Failed to cancel background command:", err),
-							)
-						}
-						await TaskServiceClient.cancelTask(EmptyRequest.create({}))
-					} finally {
-						cancelInFlightRef.current = false
-						// Clear any pending state that might interfere with resume
-						setSendingDisabled(false)
-						setEnableButtons(true)
-					}
-					break
-				}
-
-				case "utility":
-					switch (clineAsk) {
-						case "condense":
-							await SlashServiceClient.condense(StringRequest.create({ value: lastMessage?.text })).catch((err) =>
-								console.error(err),
-							)
-							break
-						case "report_bug":
-							await SlashServiceClient.reportBug(StringRequest.create({ value: lastMessage?.text })).catch((err) =>
-								console.error(err),
-							)
-							break
-					}
-					break
-			}
-
-			// Reset auto-scroll so new responses continue to scroll into view
-			if (disableAutoScrollRef) {
-				disableAutoScrollRef.current = false
-			}
-		},
-		[
-			clineAsk,
-			lastMessage,
-			clearInputState,
-			startNewTask,
-			disableAutoScrollRef,
-			backgroundCommandRunning,
-			setSendingDisabled,
-			setEnableButtons,
-		],
-	)
-
-	// Handle task close button click
 	const handleTaskCloseButtonClick = useCallback(() => {
-		startNewTask()
+		void startNewTask()
 	}, [startNewTask])
 
 	return {
-		executeButtonAction,
-		executeTaskUiAction,
 		handleSendMessage,
 		handleTaskCloseButtonClick,
 		startNewTask,

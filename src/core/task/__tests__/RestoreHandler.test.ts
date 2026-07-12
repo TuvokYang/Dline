@@ -39,7 +39,7 @@ describe("RestoreHandler", () => {
 		return {
 			taskState: {} as RestoreContext["taskState"],
 			controller: {
-				transition: () => ({}),
+				transitionRequired: () => ({}),
 				reset: () => {},
 				buildTurn: () => {},
 				restoreFrom: () => {},
@@ -216,14 +216,14 @@ describe("RestoreHandler", () => {
 
 	// ── replayPendingTools ──
 
-	it("replayPendingTools calls transition and overwriteApiConversationHistory", async () => {
-		const transitionCalls: Parameters<RestoreContext["controller"]["transition"]>[] = []
+	it("replayPendingTools calls transitionRequired and overwriteApiConversationHistory", async () => {
+		const transitionRequiredCalls: Parameters<RestoreContext["controller"]["transitionRequired"]>[] = []
 		let overwriteCalled = false
 		const ctx = createMockContext({
 			controller: {
-				transition: (...args: Parameters<RestoreContext["controller"]["transition"]>) => {
-					transitionCalls.push(args)
-					return {} as ReturnType<RestoreContext["controller"]["transition"]>
+				transitionRequired: (...args: Parameters<RestoreContext["controller"]["transitionRequired"]>) => {
+					transitionRequiredCalls.push(args)
+					return {} as ReturnType<RestoreContext["controller"]["transitionRequired"]>
 				},
 				reset: () => {},
 				buildTurn: () => {},
@@ -247,8 +247,11 @@ describe("RestoreHandler", () => {
 		}
 
 		await handler.replayPendingTools(pending, { baseTs: 1000 })
-		assert.ok(transitionCalls.length >= 2, `Expected >= 2 transition calls, got ${transitionCalls.length}`)
-		assert.equal(transitionCalls[0][1].apiIndex, 2)
+		assert.ok(
+			transitionRequiredCalls.length >= 2,
+			`Expected >= 2 transitionRequired calls, got ${transitionRequiredCalls.length}`,
+		)
+		assert.equal(transitionRequiredCalls[0][1].apiIndex, 2)
 		assert.ok(overwriteCalled, "Expected overwriteApiConversationHistory to be called")
 	})
 
@@ -256,7 +259,7 @@ describe("RestoreHandler", () => {
 		let autoApproveResult: boolean | undefined
 		const ctx = createMockContext({
 			controller: {
-				transition: () => ({}) as ReturnType<RestoreContext["controller"]["transition"]>,
+				transitionRequired: () => ({}) as ReturnType<RestoreContext["controller"]["transitionRequired"]>,
 				reset: () => {},
 				buildTurn: (_blocks: ToolUse[], autoApprove: (toolName: string, callId: string) => boolean) => {
 					autoApproveResult = autoApprove("read_file", "call_1")
@@ -283,16 +286,16 @@ describe("RestoreHandler", () => {
 	})
 
 	it("replayPendingTools restores multi-tool execution context without dropping answered results", async () => {
-		const transitionCalls: Parameters<RestoreContext["controller"]["transition"]>[] = []
+		const transitionRequiredCalls: Parameters<RestoreContext["controller"]["transitionRequired"]>[] = []
 		let overwrittenHistory: ClineStorageMessage[] | undefined
 		let recursiveContent: ClineUserToolResultContentBlock[] | undefined
 		const taskState = {} as RestoreContext["taskState"]
 		const ctx = createMockContext({
 			taskState,
 			controller: {
-				transition: (...args: Parameters<RestoreContext["controller"]["transition"]>) => {
-					transitionCalls.push(args)
-					return {} as ReturnType<RestoreContext["controller"]["transition"]>
+				transitionRequired: (...args: Parameters<RestoreContext["controller"]["transitionRequired"]>) => {
+					transitionRequiredCalls.push(args)
+					return {} as ReturnType<RestoreContext["controller"]["transitionRequired"]>
 				},
 				reset: () => {},
 				buildTurn: () => {},
@@ -341,7 +344,7 @@ describe("RestoreHandler", () => {
 		assert.deepEqual(taskState.userMessageContent, [answeredToolResult])
 		assert.deepEqual(recursiveContent, [answeredToolResult])
 		assert.deepEqual(overwrittenHistory, sanitizedHistory)
-		const lastTransition = transitionCalls.at(-1)
+		const lastTransition = transitionRequiredCalls.at(-1)
 		assert.ok(lastTransition, "Expected replay to enter executing phase")
 		assert.deepEqual(lastTransition[1].execution?.executing, ["call_read", "call_write"])
 	})

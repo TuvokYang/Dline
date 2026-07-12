@@ -828,13 +828,9 @@ export class TaskCheckpointManager implements ICheckpointManager {
 				this.taskState.userMessageContent = [{ type: "text", text: formatResponse.checkpointRestore(editedText) } as any]
 				this.taskState.userMessageContentReady = true
 			} else {
-				task.ask("resume_task")
-					.then(async (result) => {
-						await task.resumeTask(result)
-					})
-					.catch((err) => {
-						Logger.debug(`[TaskCheckpointManager] resume ask dismissed: ${err?.message}`)
-					})
+				void task.resumeTask().catch((error) => {
+					Logger.debug(`[TaskCheckpointManager] resume interaction dismissed: ${error?.message}`)
+				})
 			}
 		}
 

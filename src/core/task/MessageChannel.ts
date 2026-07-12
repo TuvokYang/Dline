@@ -165,6 +165,25 @@ export class MessageChannel {
 
 	// ── ask ──
 
+	/** Persist one ask presentation without creating a legacy response waiter. */
+	async presentAsk(type: ClineAsk, text?: string, existingTs?: number): Promise<number> {
+		const askTs = existingTs ?? this.genTs()
+		this.taskState.lastMessageTs = askTs
+		const messages = this.messageStateHandler.clineMessages
+		const index = messages.findIndex((message) => message.ts === askTs)
+		if (index >= 0) {
+			await this.messageStateHandler.updateClineMessage(index, { type: "ask", ask: type, text, partial: false })
+		} else {
+			await this.messageStateHandler.addToClineMessages({ ts: askTs, type: "ask", ask: type, text })
+		}
+		await this.postStateToWebview()
+		const persisted = this.messageStateHandler.clineMessages.find((message) => message.ts === askTs)
+		if (persisted) {
+			this.pushMessage(persisted)
+		}
+		return askTs
+	}
+
 	/**
 	 * Send an "ask" message and wait for user response.
 	 * Signature matches Task.ask exactly.

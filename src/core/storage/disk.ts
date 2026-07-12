@@ -689,8 +689,8 @@ export async function readTaskHistoryJsonl(): Promise<HistoryItem[]> {
  * Full overwrite of task history JSONL. Used only for compact/reconstruct.
  */
 /** @deprecated Use TaskHistory.upsert() or clearAll() instead. */
-export async function writeTaskHistoryToState(items: HistoryItem[]): Promise<void> {
-	const fp = await getTaskHistoryFilePath()
+export async function writeTaskHistoryToState(items: HistoryItem[], targetPath?: string): Promise<void> {
+	const fp = targetPath ?? (await getTaskHistoryFilePath())
 	const dir = path.dirname(fp)
 	await fs.mkdir(dir, { recursive: true })
 	await writeJsonl(fp, items)

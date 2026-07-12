@@ -1,8 +1,6 @@
 import { strict as assert } from "node:assert"
 import * as api from "@core/api"
 import * as profileStore from "@core/controller/file/getApiProfiles"
-import { PromptRegistry } from "@core/prompts/system-prompt"
-import { ClineToolSet } from "@core/prompts/system-prompt/registry/ClineToolSet"
 import type { TaskConfig } from "@core/task/tools/types/TaskConfig"
 import { afterEach, describe, it, vi } from "vitest"
 // sinon import removed: using vitest globals
@@ -148,7 +146,7 @@ describe("SubagentBuilder", () => {
 		assert.equal((effectiveApiConfig as Record<string, unknown>).actModeProfile, "act-default-profile")
 	})
 
-	it("builds native tools by filtering allowed ids and context requirements then converting", () => {
+	it("exposes the exact configured allowlist for facade filtering", () => {
 		const agentConfig = {
 			name: "tools-agent",
 			description: "tool-limited",
@@ -158,45 +156,8 @@ describe("SubagentBuilder", () => {
 		}
 		vi.spyOn(api, "buildApiHandler").mockReturnValue({ getModel: vi.fn(), createMessage: vi.fn() } as never)
 
-		const getModelFamilyStub = vi
-			.spyOn(PromptRegistry.getInstance(), "getModelFamily")
-			.mockReturnValue("test-family" as never)
-		const getToolsStub = vi.spyOn(ClineToolSet, "getToolsForVariantWithFallback").mockReturnValue([
-			{
-				config: {
-					id: ClineDefaultTool.LIST_FILES,
-					contextRequirements: () => true,
-				},
-			},
-			{
-				config: {
-					id: ClineDefaultTool.SEARCH,
-					contextRequirements: () => true,
-				},
-			},
-			{
-				config: {
-					id: ClineDefaultTool.ATTEMPT,
-					contextRequirements: () => false,
-				},
-			},
-		] as never)
-		const converter = vi.fn().mockImplementation((tool: { id: string }) => ({ converted: tool.id }))
-		const getConverterStub = vi.spyOn(ClineToolSet, "getNativeConverter").mockReturnValue(converter as never)
-
 		const builder = new SubagentBuilder(createTaskConfig("act", "anthropic"), "tools-agent", agentConfig)
 
-		const context = {
-			providerInfo: {
-				providerId: "anthropic",
-				model: { id: "m1" },
-			},
-		} as never
-
-		const result = builder.buildNativeTools(context)
-		assert.equal(getModelFamilyStub.mock.calls.length, 1)
-		assert.equal(getToolsStub.mock.calls.length, 1)
-		assert.equal(getConverterStub.mock.calls.length, 1)
-		assert.deepEqual(result, [{ converted: ClineDefaultTool.LIST_FILES }])
+		assert.deepEqual(builder.getAllowedTools(), [ClineDefaultTool.LIST_FILES, ClineDefaultTool.ATTEMPT])
 	})
 })

@@ -6,7 +6,7 @@ import { showSystemNotification } from "@integrations/notifications"
 import { ClineDefaultTool } from "@/shared/tools"
 import type { ToolResponse } from "../../index"
 import type { IPartialBlockHandler, IToolHandler } from "../ToolExecutorCoordinator"
-import type { TaskConfig } from "../types/TaskConfig"
+import { interactionId, interactionTurnId, type TaskConfig } from "../types/TaskConfig"
 import type { StronglyTypedUIHelpers } from "../types/UIHelpers"
 import { sayFeedbackOnce } from "../utils/UserFeedbackUtils"
 
@@ -44,13 +44,16 @@ export class NewTaskHandler implements IToolHandler, IPartialBlockHandler {
 			})
 		}
 
-		// Ask user for response
-		const {
-			response: askResponse,
-			text,
-			images,
-			files: newTaskFiles,
-		} = await config.callbacks.ask(this.name, context, false, { existingTs: block.ts })
+		const outcome = await config.interactions.open({
+			turnId: interactionTurnId(block),
+			interactionId: interactionId(block),
+			kind: "new_task",
+			presentation: context,
+			existingTs: block.ts,
+		})
+		const text = outcome.draft?.text
+		const images = outcome.draft?.images
+		const newTaskFiles = outcome.draft?.files
 
 		// If the user provided a response, treat it as feedback
 		if (text || (images && images.length > 0) || (newTaskFiles && newTaskFiles.length > 0)) {
@@ -59,7 +62,7 @@ export class NewTaskHandler implements IToolHandler, IPartialBlockHandler {
 				fileContentString = await processFilesIntoText(newTaskFiles)
 			}
 
-			await sayFeedbackOnce(config, askResponse, text, images, newTaskFiles)
+			await sayFeedbackOnce(config, "noButtonClicked", text, images, newTaskFiles)
 			return formatResponse.toolResult(
 				`The user provided feedback instead of creating a new task:\n<feedback>\n${text}\n</feedback>`,
 				images,

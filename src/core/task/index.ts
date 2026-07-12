@@ -132,12 +132,7 @@ import { refreshSkills } from "../controller/file/refreshSkills"
 import { executeHook } from "../hooks/hook-executor"
 import { StateManager } from "../storage/StateManager"
 import { buildActiveTasksSection } from "./active-tasks/ActiveTaskContextProvider"
-import {
-	isTurnEndingToolName,
-	isTurnEndingToolUse,
-	orderTurnEndingContentBlocks,
-	orderTurnEndingNativeToolBlocks,
-} from "./assistant-message-order"
+import { isTurnEndingToolUse, orderTurnEndingContentBlocks, orderTurnEndingNativeToolBlocks } from "./assistant-message-order"
 import {
 	getRetryDelay,
 	getStreamRetryDecision,
@@ -147,6 +142,7 @@ import {
 } from "./auto-retry"
 import { buildTaskBackgroundResults, buildTaskBackgroundSection } from "./background/BackgroundContextInjector"
 import { FocusChainManager } from "./focus-chain"
+import { InteractionCoordinator } from "./interaction/InteractionCoordinator"
 import {
 	getPresentationCadenceMs,
 	isPresentationSchedulingDisabled,
@@ -157,16 +153,21 @@ import { MessageChannel } from "./MessageChannel"
 import { MessageStateHandler } from "./message-state"
 import { advanceLifecycle, getDeferredToolAction } from "./partial-tool-lifecycle"
 import type { PresentationPriority } from "./presentation-types"
-import { type PendingToolUseState, type ReplayOptions, RestoreHandler } from "./RestoreHandler"
-import { ResumeHandler } from "./ResumeHandler"
+import { RestoreHandler } from "./RestoreHandler"
+import { ResumeCoordinator } from "./resume/ResumeCoordinator"
+import type { ResumeEntry, ResumeInput } from "./resume/ResumeInput"
+import type { TaskEffectPorts } from "./runtime/TaskEffectRunner"
+import type { TaskEvent } from "./runtime/TaskEvent"
+import { type TaskDispatchResult, TaskRuntime } from "./runtime/TaskRuntime"
+import { createTaskRuntimeState, type TaskRuntimeState } from "./runtime/TaskRuntimeState"
 import { StreamChunkCoordinator } from "./StreamChunkCoordinator"
 import { StreamResponseHandler } from "./StreamResponseHandler"
+import { shouldRunTaskCancelHook } from "./TaskCancelPolicy"
 import { TaskController } from "./TaskController"
 import { TaskPhase } from "./TaskPhase"
 import { TaskPresentationScheduler } from "./TaskPresentationScheduler"
-import { isValidApiIndex, type TaskSnapshot } from "./TaskSnapshot"
+import { createSnapshot, hydrateSnapshot, type TaskSnapshot } from "./TaskSnapshot"
 import { TaskSnapshotPersistence } from "./TaskSnapshotPersistence"
-import { findAnchoredAsk, resolveHydratedSnapshot } from "./TaskSnapshotReplayer"
 import { TaskState } from "./TaskState"
 import { TaskStateManager } from "./TaskStateManager"
 import { withTerminateTimeout } from "./TaskTerminateTimeout"
@@ -214,15 +215,32 @@ type AskOptions = {
 	commandTs?: number
 }
 
-/**
- * Cached approval response replayed from history when resuming pending tools.
- */
-type PendingToolUseApprovalResponse = {
-	type: ClineAsk
-	response: ClineAskResponse
-	text?: string
-	images?: string[]
-	files?: string[]
+/** Fail fast if dormant runtime effects are dispatched before flow migration. */
+function unavailableRuntimePort(port: keyof TaskEffectPorts): never {
+	throw new Error(`Task runtime effect port is not active before flow migration: ${port}`)
+}
+
+/** Create explicit runtime infrastructure ports for the migrated task transactions. */
+function createInteractionPorts(
+	postView: () => Promise<void>,
+	persistSnapshot: TaskEffectPorts["persistSnapshot"],
+	cancelRuntime: TaskEffectPorts["cancelRuntime"],
+	startApi: TaskEffectPorts["startApi"],
+	appendSay: TaskEffectPorts["appendSay"],
+	appendAsk: TaskEffectPorts["appendAsk"],
+	startNewTask: TaskEffectPorts["startNewTask"],
+): TaskEffectPorts {
+	return {
+		postView,
+		persistSnapshot,
+		cancelRuntime,
+		startApi,
+		// Tool handlers remain the compatibility executor during Task 12; this effect records the committed execution checkpoint.
+		executeTool: async () => undefined,
+		appendSay,
+		appendAsk,
+		startNewTask,
+	}
 }
 
 export class Task {
@@ -235,6 +253,9 @@ export class Task {
 
 	taskState: TaskState
 	taskController: TaskController
+	private taskRuntime: TaskRuntime
+	private interactionCoordinator: InteractionCoordinator
+	private resumeCoordinator: ResumeCoordinator
 
 	// ONE mutex for ALL state modifications to prevent race conditions
 	private stateMutex = new Mutex()
@@ -348,10 +369,7 @@ export class Task {
 	private pendingBackgroundResultIds?: { subagentIds: string[]; commandIds: string[] }
 	private readonly presentationSchedulingDisabled = isPresentationSchedulingDisabled()
 	private lastLoggedPresentationTrigger = 0
-	/** @deprecated Only used by the deprecated promptAndResumePendingToolUseFromHistory path. */
-	private pendingToolUseApprovalResponse?: PendingToolUseApprovalResponse
 	restoreHandler!: RestoreHandler
-	resumeHandler!: ResumeHandler
 
 	constructor(params: TaskParams) {
 		const {
@@ -433,6 +451,59 @@ export class Task {
 		this.diffViewProvider = backgroundEditEnabled ? new FileEditProvider() : HostProvider.get().createDiffViewProvider()
 
 		this.taskId = taskId
+		this.taskRuntime = new TaskRuntime(
+			createTaskRuntimeState({ taskId: this.taskId }),
+			createInteractionPorts(
+				async () => this.postStateToWebview(),
+				async (state) => this.emitStateSnapshot(createSnapshot(state)),
+				async () => this.abortExecution(true),
+				async (effect) => {
+					const content = await buildUserFeedbackContent(effect.draft?.text, effect.draft?.images, effect.draft?.files)
+					void this.recursivelyMakeClineRequests(content)
+				},
+				async () => unavailableRuntimePort("appendSay"),
+				async (effect) => ({
+					uiMessageTs: await this.taskController.channel.presentAsk(
+						effect.taskAsk as ClineAsk,
+						effect.presentation,
+						effect.existingTs,
+					),
+				}),
+				async (effect) => {
+					await this.controller.initTask(effect.draft.text, effect.draft.images, effect.draft.files)
+				},
+			),
+		)
+		this.interactionCoordinator = new InteractionCoordinator(this.taskRuntime)
+		this.resumeCoordinator = new ResumeCoordinator({
+			load: async () => this.loadResumeInput(),
+			persist: async (result) => {
+				if (result.entry.type !== "read_only_failure") {
+					await this.writeTaskSnapshot(result.snapshot)
+				}
+			},
+			hydrate: async (result) => {
+				if (result.entry.type === "read_only_failure") {
+					this.taskRuntime.restore({
+						...createTaskRuntimeState({
+							taskId: this.taskId,
+							phase: TaskPhase.PAUSED,
+							revision: result.snapshot.revision ?? 0,
+							anchor: result.snapshot.anchor ?? { apiIndex: -1 },
+						}),
+						error: {
+							effectId: "resume_reconciliation",
+							effectType: "PERSIST_SNAPSHOT",
+							message: result.diagnostics.map((diagnostic) => diagnostic.code).join(","),
+						},
+					})
+					return
+				}
+				this.taskRuntime.restore(hydrateSnapshot(result.snapshot))
+				this.syncRetainedMachines()
+			},
+			dispatch: async (entry) => this.dispatchResumeEntry(entry),
+		})
 		this.systemPromptCacheService = new SystemPromptCacheService({ taskId: this.taskId })
 		this.snapshotPersistence = new TaskSnapshotPersistence({
 			writeSnapshot: this.writeTaskSnapshot.bind(this),
@@ -510,20 +581,6 @@ export class Task {
 			shouldAutoApproveTool: (toolName: string, _callId: string) => {
 				return this.toolExecutor?.isAutoApproved(toolName as any) ?? false
 			},
-		})
-
-		this.resumeHandler = new ResumeHandler({
-			taskState: this.taskState,
-			controller: this.taskController,
-			messageStateHandler: this.messageStateHandler,
-			restoreHandler: this.restoreHandler,
-			getLatestSnapshot: this.findLatestStateSnapshot.bind(this),
-			setPendingApprovalResponse: (resp) => {
-				this.pendingToolUseApprovalResponse = resp
-			},
-			ask: this.ask.bind(this),
-			say: this.say.bind(this),
-			postStateToWebview: this.postStateToWebview,
 		})
 
 		// Check for multiroot workspace and warn about checkpoints
@@ -777,6 +834,20 @@ export class Task {
 			this.terminalExecutionMode,
 			this.workspaceManager,
 			isMultiRootEnabled(this.stateManager),
+			{
+				open: this.interactionCoordinator.open.bind(this.interactionCoordinator),
+				complete: this.interactionCoordinator.complete.bind(this.interactionCoordinator),
+				say: async (request) => {
+					await this.say(
+						request.taskSay,
+						request.presentation,
+						request.images,
+						request.files,
+						false,
+						request.existingTs,
+					)
+				},
+			},
 			this.say.bind(this),
 			this.ask.bind(this),
 			this.saveCheckpointCallback.bind(this),
@@ -879,14 +950,6 @@ export class Task {
 	}> {
 		const askOptions = this.withApprovalVisibleCallback(type, text, partial, options)
 
-		// Handle pending approval response (replayed from history) before delegating
-		const pendingApprovalResponse = this.pendingToolUseApprovalResponse
-		if (pendingApprovalResponse && pendingApprovalResponse.type === type && partial === false) {
-			this.pendingToolUseApprovalResponse = undefined
-			const result = await this.taskController.ask(type, text, partial, askOptions)
-			return result
-		}
-
 		const result = await this.taskController.ask(type, text, partial, askOptions)
 
 		return result
@@ -969,22 +1032,8 @@ export class Task {
 		if (hasFeedback) {
 			await this.say("user_feedback", text, images, files)
 			this.taskState.ackedFeedback = { response: askResponse, text, images, files }
-			const latestSnapshot = this.findLatestStateSnapshot()
-			const isRetryFeedback = askResponse === "yesButtonClicked" && latestSnapshot?.awaiting?.kind === "error_recovery"
-			const snapshotAsk = latestSnapshot?.awaiting?.taskAsk
-			const isSnapshotConversationResponse = Boolean(
-				latestSnapshot?.awaiting?.kind === "conversation" &&
-					snapshotAsk &&
-					Task.CONVERSATIONAL_TOOL_NAMES.has(snapshotAsk),
-			)
-			const isSnapshotApprovalResponse = latestSnapshot?.awaiting?.kind === "approval"
-			if (
-				!activeBlock &&
-				!isConversationalResponse &&
-				!isSnapshotConversationResponse &&
-				!isSnapshotApprovalResponse &&
-				(askResponse === "messageResponse" || isRetryFeedback)
-			) {
+			const runtimeInteraction = this.taskRuntime.getState().interaction
+			if (!activeBlock && !isConversationalResponse && !runtimeInteraction && askResponse === "messageResponse") {
 				this.taskState.userMessageContent.push(...(await buildUserFeedbackContent(text, images, files)))
 				this.taskState.userMessageContentReady = true
 			}
@@ -1003,7 +1052,7 @@ export class Task {
 		if (askResponse === "noButtonClicked" || askResponse === "messageResponse") {
 			const rejected = this.taskController.rejectActiveBlock()
 			if (rejected) {
-				this.taskController.transition(TaskPhase.BETWEEN_TURNS, {
+				this.taskController.transitionRequired(TaskPhase.BETWEEN_TURNS, {
 					apiIndex: rejected.conversationHistoryIndex,
 					onSnapshot: this.emitStateSnapshot.bind(this),
 				})
@@ -1013,7 +1062,7 @@ export class Task {
 		} else if (askResponse === "yesButtonClicked") {
 			const executing = this.taskController.completeActiveBlock()
 			if (executing) {
-				this.taskController.transition(TaskPhase.EXECUTING, {
+				this.taskController.transitionRequired(TaskPhase.EXECUTING, {
 					apiIndex: executing.conversationHistoryIndex,
 					execution: {
 						mode: this.isParallelToolCallingEnabled() ? "parallel" : "serial",
@@ -1138,68 +1187,129 @@ export class Task {
 		}
 	}
 
-	/**
-	 * Get a valid apiIndex from a snapshot, falling back to the last index in
-	 * apiConversationHistory when the snapshot's apiIndex is invalid (negative
-	 * or out of bounds). Uses isValidApiIndex() to avoid the ?? trap where
-	 * -1 is treated as a valid number.
-	 */
-	private getValidSnapshotApiIndex(snapshot?: TaskSnapshot): number {
-		const historyLen = this.messageStateHandler.apiConversationHistory.length
-		if (snapshot && isValidApiIndex(snapshot.apiIndex, historyLen)) {
-			return snapshot.apiIndex
+	/** Synchronize retained phase machines from one already validated runtime aggregate. */
+	private syncRetainedMachines(includeTaskPhase = true): void {
+		const state = this.taskRuntime.getState()
+		if (includeTaskPhase) {
+			this.taskController.restoreFrom(createSnapshot(state))
 		}
-		return historyLen - 1
-	}
-
-	public findLatestStateSnapshot(): TaskSnapshot | undefined {
-		if (this.latestTaskSnapshot) return this.latestTaskSnapshot
-
-		let latest: { snapshot: TaskSnapshot; order: number; timestamp: number } | undefined
-		const messages = this.messageStateHandler.clineMessages
-
-		for (let i = 0; i < messages.length; i++) {
-			const message = messages[i]
-			if (message.type !== "say" || message.say !== "state_snapshot" || !message.text) {
-				continue
-			}
-			try {
-				const snapshot = JSON.parse(message.text) as TaskSnapshot
-				const timestamp = typeof snapshot.timestamp === "number" ? snapshot.timestamp : message.ts
-				if (!latest || timestamp > latest.timestamp || (timestamp === latest.timestamp && i > latest.order)) {
-					latest = { snapshot, order: i, timestamp }
-				}
-			} catch {
-				// Ignore corrupt snapshots.
-			}
-		}
-
-		return latest?.snapshot
-	}
-
-	/**
-	 * Replays UI messages after the latest snapshot to find a still-active ask.
-	 * @param snapshot Snapshot checkpoint loaded from the UI message stream.
-	 * @returns Active ask message, or undefined when tail messages consumed it.
-	 */
-	private findSnapshotAnchoredMessage(snapshot?: TaskSnapshot): ClineMessage | undefined {
-		return findAnchoredAsk(snapshot, this.messageStateHandler.clineMessages)
-	}
-
-	private findLegacyResumeAnchorMessage(): ClineMessage | undefined {
-		return this.messageStateHandler.clineMessages
-			.slice()
-			.reverse()
-			.find(
-				(m) =>
-					!(
-						m.ask === "resume_task" ||
-						m.ask === "resume_completed_task" ||
-						m.say === "partial_tool_result" ||
-						m.say === "task_progress" ||
-						m.say === "state_snapshot"
-					),
+		if (state.turn) {
+			this.taskController.restoreTurnFromSnapshot(
+				state.turn.blocks.map((block) => ({ ...block })),
+				state.turn.activeDlineTid,
 			)
+		}
+	}
+
+	/** Build strict resume input from one snapshot and only its persisted tails. */
+	private async loadResumeInput(): Promise<ResumeInput> {
+		const snapshot = this.latestTaskSnapshot ?? (await this.loadTaskSnapshot())
+		if (!snapshot) {
+			throw new Error("resume_snapshot_missing")
+		}
+		const uiTail = this.messageStateHandler.clineMessages.filter((message) => message.ts > snapshot.timestamp)
+		const apiTail = this.messageStateHandler.apiConversationHistory.slice(Math.max(0, snapshot.apiIndex + 1))
+		return {
+			taskId: this.taskId,
+			snapshot,
+			uiTail,
+			apiTail,
+			apiHistoryLength: this.messageStateHandler.apiConversationHistory.length,
+		}
+	}
+
+	/** Adapt one reconciled entry to existing execution capabilities without further inference. */
+	private async dispatchResumeEntry(entry: ResumeEntry): Promise<void> {
+		switch (entry.type) {
+			case "continue_api_turn": {
+				const continued = await this.taskRuntime.dispatch({
+					type: "RESUME_API_CONTINUATION_REQUESTED",
+					apiIndex: entry.apiIndex,
+					...(entry.draft ? { draft: entry.draft } : {}),
+				})
+				if (!continued.accepted) throw new Error("resume_api_continuation_rejected")
+				return
+			}
+			case "replay_pending_blocks": {
+				const turn = this.taskRuntime.getState().turn
+				if (!turn || turn.turnId !== entry.turnId) throw new Error("resume_turn_mismatch")
+				const normalized = await this.taskRuntime.dispatch({
+					type: "RESUME_BLOCK_REPLAY_REQUESTED",
+					turnId: entry.turnId,
+					dlineTids: entry.dlineTids,
+				})
+				if (!normalized.accepted) throw new Error("resume_block_replay_rejected")
+				this.syncRetainedMachines(false)
+				const history = this.messageStateHandler.apiConversationHistory
+				const assistant = history[turn.assistantApiIndex]
+				if (assistant?.role !== "assistant" || !Array.isArray(assistant.content)) {
+					throw new Error("resume_assistant_turn_missing")
+				}
+				const pendingDlineTids = new Set(entry.dlineTids)
+				const toolUseBlocks = assistant.content.filter(
+					(block): block is ClineAssistantToolUseBlock =>
+						block.type === "tool_use" && pendingDlineTids.has(block.dline_tid ?? ""),
+				)
+				if (toolUseBlocks.length !== entry.dlineTids.length) throw new Error("resume_pending_identity_mismatch")
+				const answeredDlineTids = new Set(entry.answeredDlineTids)
+				const answeredToolResults = history
+					.slice(turn.assistantApiIndex + 1)
+					.flatMap((message) => (message.role === "user" && Array.isArray(message.content) ? message.content : []))
+					.filter(
+						(block): block is ClineUserToolResultContentBlock =>
+							block.type === "tool_result" && answeredDlineTids.has(block.dline_tid ?? ""),
+					)
+				if (answeredToolResults.length !== entry.answeredDlineTids.length) {
+					throw new Error("resume_answered_identity_mismatch")
+				}
+				await this.restoreHandler.replayPendingTools({
+					assistantIndex: turn.assistantApiIndex,
+					toolUseBlocks,
+					answeredToolResults,
+					sanitizedHistory: history.slice(0, turn.assistantApiIndex + 1),
+				})
+				return
+			}
+			case "reopen_interaction":
+				await this.dispatchResumeEntry({
+					type: "replay_pending_blocks",
+					turnId: this.taskRuntime.getState().turn?.turnId ?? entry.turnId,
+					dlineTids: [entry.interactionId],
+					answeredDlineTids: [],
+				})
+				return
+			case "show_completion_interaction":
+				await this.interactionCoordinator.complete({
+					turnId: entry.turnId,
+					interactionId: entry.interactionId,
+					completionId: this.taskRuntime.getState().completion?.completionId ?? entry.interactionId,
+					presentation: "",
+				})
+				return
+			case "show_error_recovery":
+				await this.interactionCoordinator.recover({
+					turnId: entry.turnId,
+					interactionId: entry.interactionId,
+					apiIndex: entry.apiIndex,
+					presentation: "",
+				})
+				return
+			case "show_resume_interaction":
+				if (entry.interactionId && entry.turnId) {
+					await this.interactionCoordinator.resumeExisting(entry.interactionId)
+					return
+				}
+				await this.interactionCoordinator.resume({
+					turnId: `resume:${this.taskId}`,
+					interactionId: `resume:${this.taskId}`,
+					kind: "resume",
+					presentation: "",
+				})
+				return
+			case "read_only_failure":
+				Logger.error(`[resume] read-only failure: ${JSON.stringify(entry.diagnostics ?? [])}`)
+				await this.postStateToWebview()
+		}
 	}
 
 	private async saveCheckpointCallback(isAttemptCompletionMessage?: boolean, completionMessageTs?: number): Promise<void> {
@@ -1358,6 +1468,37 @@ export class Task {
 
 	// Task lifecycle
 
+	/** Run the complete cancellation transaction without message-derived state inference. */
+	/** Present exhausted retry recovery and commit the chosen continuation. */
+	public recoverApiFailure(input: { turnId: string; interactionId: string; apiIndex: number; presentation: string }) {
+		return this.interactionCoordinator.recover(input)
+	}
+
+	public async requestCancellation(): Promise<TaskDispatchResult> {
+		const requested = await this.dispatchRuntime({ type: "TASK_CANCEL_REQUESTED", source: "user" })
+		if (!requested.accepted) {
+			return requested
+		}
+		return this.dispatchRuntime({
+			type: "TASK_CANCELLED",
+			resume: {
+				turnId: `resume:${this.taskId}`,
+				interactionId: `resume:${this.taskId}`,
+				presentation: "",
+			},
+		})
+	}
+
+	/** Return the read-only runtime aggregate for projection and migration tests. */
+	public getRuntimeState(): Readonly<TaskRuntimeState> {
+		return this.taskRuntime.getState()
+	}
+
+	/** Dispatch one typed event through the serialized task runtime. */
+	public dispatchRuntime(event: TaskEvent): Promise<TaskDispatchResult> {
+		return this.taskRuntime.dispatch(event)
+	}
+
 	public async startTask(task?: string, images?: string[], files?: string[], context?: string[]): Promise<void> {
 		try {
 			await this.clineIgnoreController.initialize()
@@ -1374,9 +1515,10 @@ export class Task {
 
 		await this.say("task", task, images, files)
 
-		this.taskController.transition(TaskPhase.STREAMING, {
-			apiIndex: this.messageStateHandler.apiConversationHistory.length - 1,
-		})
+		const initializing = await this.dispatchRuntime({ type: "TASK_INITIALIZE_REQUESTED" })
+		if (!initializing.accepted) {
+			throw new Error(`Task initialization rejected: ${initializing.error?.code ?? "invalid_runtime_event"}`)
+		}
 
 		const imageBlocks: ClineImageContentBlock[] = formatResponse.imageBlocks(images)
 
@@ -1488,178 +1630,19 @@ export class Task {
 			Logger.error("Failed to record environment metadata:", error)
 		}
 
-		this.taskController.transition(TaskPhase.STREAMING, {
-			apiIndex: this.messageStateHandler.apiConversationHistory.length - 1,
-			onSnapshot: this.emitStateSnapshot.bind(this),
+		const initialized = await this.dispatchRuntime({
+			type: "TASK_INITIALIZED",
+			anchor: { apiIndex: this.messageStateHandler.apiConversationHistory.length - 1 },
+			hasTask: true,
 		})
+		if (!initialized.accepted) {
+			throw new Error(`Task initialization commit rejected: ${initialized.error?.code ?? "invalid_runtime_event"}`)
+		}
 
 		// Mark task as initialized so checkpoint restore can proceed
 		this.taskState.isInitialized = true
 
 		await this.initiateTaskLoop(userContent)
-	}
-
-	/**
-	 * @deprecated Use ResumeHandler.detectPendingTools() instead.
-	 * Legacy pending-tool detection — replaced by the snapshot-aware ResumeHandler.
-	 * Only kept for backward reference; new code should use ResumeHandler.
-	 */
-	private getPendingToolUseState(apiConversationHistory: ClineStorageMessage[]): PendingToolUseState | undefined {
-		// Collect partial_tool_result records, keyed by conversationHistoryIndex
-		const partialResultsByIndex = new Map<number, Map<string, string>>()
-		for (const m of this.messageStateHandler.clineMessages) {
-			if (m.say === "partial_tool_result" && m.text && m.conversationHistoryIndex !== undefined) {
-				try {
-					const parsed = JSON.parse(m.text)
-					if (parsed.tool_use_id && parsed.result) {
-						const idx = m.conversationHistoryIndex
-						if (!partialResultsByIndex.has(idx)) {
-							partialResultsByIndex.set(idx, new Map())
-						}
-						partialResultsByIndex.get(idx)?.set(parsed.tool_use_id, parsed.result)
-					}
-				} catch {
-					// Skip malformed records
-				}
-			}
-		}
-		// DEBUG: log all partial_tool_result indices and tool_use_ids
-		if (partialResultsByIndex.size > 0) {
-			const keys = [...partialResultsByIndex.keys()].join(",")
-			const details = [...partialResultsByIndex.entries()].map(([k, v]) => `${k}:[${[...v.keys()].join(",")}]`).join(" | ")
-			Logger.debug(`[resume] partialResultsByIndex keys=[${keys}] details=${details}`)
-		} else {
-			Logger.debug(`[resume] partialResultsByIndex is EMPTY`)
-		}
-
-		for (let i = apiConversationHistory.length - 1; i >= 0; i--) {
-			const message = apiConversationHistory[i]
-			if (message.role !== "assistant" || !Array.isArray(message.content)) {
-				continue
-			}
-
-			const toolUseBlocks = message.content.filter(
-				(block): block is ClineAssistantToolUseBlock =>
-					block.type === "tool_use" && typeof block.id === "string" && typeof block.name === "string",
-			)
-			if (toolUseBlocks.length === 0) {
-				continue
-			}
-
-			const nextMessage = apiConversationHistory[i + 1]
-			const answeredToolUseIds = new Set<string>()
-			const answeredToolResults: ClineUserToolResultContentBlock[] = []
-			if (nextMessage?.role === "user" && Array.isArray(nextMessage.content)) {
-				for (const block of nextMessage.content) {
-					if (block.type === "tool_result" && typeof block.tool_use_id === "string") {
-						answeredToolUseIds.add(block.tool_use_id)
-						answeredToolResults.push(block)
-					}
-				}
-			}
-
-			// Merge partial_tool_result records for this assistant turn
-			// Step 1: filter by conversationHistoryIndex
-			const turnPartialResults = partialResultsByIndex.get(i)
-			Logger.debug(
-				`[resume] assistantIndex=${i} nextMsgRole=${nextMessage?.role} nextHasToolResult=${answeredToolUseIds.size > 0} turnPartialExists=${turnPartialResults !== undefined} turnPartialSize=${turnPartialResults?.size ?? 0} blockIds=${toolUseBlocks.map((b) => b.id).join(",")}`,
-			)
-			// Step 2: match each tool_use block by tool_use_id within filtered results
-			for (const block of toolUseBlocks) {
-				if (!answeredToolUseIds.has(block.id) && turnPartialResults) {
-					const resultText = turnPartialResults.get(block.id)
-					Logger.debug(`[resume] match attempt block.id=${block.id} found=${resultText !== undefined}`)
-					if (resultText) {
-						answeredToolUseIds.add(block.id)
-						answeredToolResults.push({
-							type: "tool_result",
-							tool_use_id: block.id,
-							content: [{ type: "text", text: resultText }],
-						})
-					}
-				}
-			}
-
-			const pendingToolUseBlocks = toolUseBlocks.filter(
-				(block) => !answeredToolUseIds.has(block.id) && !isTurnEndingToolName(block.name),
-			)
-			if (pendingToolUseBlocks.length === 0) {
-				Logger.debug(`[resume] no pending tools at assistantIndex=${i}`)
-				return undefined
-			}
-			Logger.debug(
-				`[resume] assistantIndex=${i} toolUseBlocks=${toolUseBlocks.length} answered=${answeredToolUseIds.size} pending=${pendingToolUseBlocks.length} pendingNames=${pendingToolUseBlocks.map((b) => b.name).join(",")}`,
-			)
-
-			// Find existing ask ts for the first pending tool
-			let lastPendingAskTs: number | undefined
-			if (pendingToolUseBlocks.length > 0) {
-				const askType = TaskController.toolNameToAskType(pendingToolUseBlocks[0].name)
-				if (askType) {
-					const msgs = this.messageStateHandler.clineMessages
-					const existing = [...msgs].reverse().find((m) => m.type === "ask" && m.ask === askType)
-					lastPendingAskTs = existing?.ts
-				}
-			}
-
-			return {
-				assistantIndex: i,
-				toolUseBlocks: pendingToolUseBlocks,
-				answeredToolResults,
-				sanitizedHistory: apiConversationHistory.slice(0, i + 1),
-				lastPendingAskTs,
-			}
-		}
-
-		return undefined
-	}
-
-	/**
-	 * @deprecated Only called by promptAndResumePendingToolUseFromHistory (deprecated).
-	 * Stale ask cleanup for the legacy resume path.
-	 */
-	private async removeStalePendingToolResumeAsks() {
-		const pendingToolAskTypes = new Set<ClineAsk>([
-			"followup",
-			"plan_mode_respond",
-			"act_mode_respond",
-			"command",
-			"tool",
-			"browser_action_launch",
-			"use_mcp_server",
-			"new_task",
-			"condense",
-			"summarize_task",
-			"report_bug",
-			"use_subagents",
-			"spawn_task",
-		])
-		const clineMessages = this.messageStateHandler.clineMessages
-		const staleAskIndices = new Set<number>()
-		const stalePendingToolAskIndex = findLastIndex(
-			clineMessages,
-			(message) =>
-				message.type === "ask" &&
-				!!message.ask &&
-				pendingToolAskTypes.has(message.ask) &&
-				!(message as any).commandStatus,
-		)
-		if (stalePendingToolAskIndex !== -1) {
-			staleAskIndices.add(stalePendingToolAskIndex)
-		}
-
-		const staleApiFailureAskIndex = findLastIndex(
-			clineMessages,
-			(message) => message.type === "ask" && message.ask === "api_req_failed",
-		)
-		if (staleApiFailureAskIndex !== -1) {
-			staleAskIndices.add(staleApiFailureAskIndex)
-		}
-
-		if (staleAskIndices.size > 0) {
-			const staleTs = [...staleAskIndices].sort((a, b) => a - b).map((index) => clineMessages[index].ts)
-			await this.messageStateHandler.removeMessagesByTs(staleTs)
-		}
 	}
 
 	private isPendingToolApprovalAsk(ask: ClineAsk | undefined): ask is ClineAsk {
@@ -1787,7 +1770,7 @@ export class Task {
 		const expectedAsk = this.taskController.toolNameToAskType(block.toolName)
 		if (expectedAsk !== type) return
 
-		await this.taskController.transition(TaskPhase.AWAITING_APPROVAL, {
+		await this.taskController.transitionRequired(TaskPhase.AWAITING_APPROVAL, {
 			apiIndex: block.conversationHistoryIndex,
 			awaiting: {
 				kind: type === "status_acknowledgment" ? "approval" : "approval",
@@ -1819,7 +1802,7 @@ export class Task {
 	 * so the frontend hides the Cancel button and shows only the input area.
 	 */
 	private async markConversationAskVisible(type: ClineAsk, askTs: number): Promise<void> {
-		await this.taskController.transition(TaskPhase.AWAITING_APPROVAL, {
+		await this.taskController.transitionRequired(TaskPhase.AWAITING_APPROVAL, {
 			apiIndex: this.messageStateHandler.apiConversationHistory.length - 1,
 			awaiting: {
 				kind: "conversation",
@@ -1837,7 +1820,7 @@ export class Task {
 	 */
 	private async markErrorRecoveryAskVisible(type: ClineAsk, askTs: number, message?: string): Promise<void> {
 		const isApiRequestFailure = type === "api_req_failed"
-		await this.taskController.transition(TaskPhase.AWAITING_APPROVAL, {
+		await this.taskController.transitionRequired(TaskPhase.AWAITING_APPROVAL, {
 			apiIndex: this.messageStateHandler.apiConversationHistory.length - 1,
 			awaiting: {
 				kind: "error_recovery",
@@ -1863,7 +1846,7 @@ export class Task {
 	 * This ensures Resume is shown instead of Cancel while no work is active.
 	 */
 	private async markResumeAskVisible(type: ClineAsk, askTs: number): Promise<void> {
-		await this.taskController.transition(TaskPhase.PAUSED, {
+		await this.taskController.transitionRequired(TaskPhase.PAUSED, {
 			apiIndex: this.messageStateHandler.apiConversationHistory.length - 1,
 			awaiting: {
 				kind: "resume",
@@ -1880,7 +1863,7 @@ export class Task {
 	 * This keeps Start New Task visible after attempt_completion completes.
 	 */
 	private async markCompletionAskVisible(type: ClineAsk, askTs: number): Promise<void> {
-		await this.taskController.transition(TaskPhase.COMPLETED, {
+		await this.taskController.transitionRequired(TaskPhase.COMPLETED, {
 			apiIndex: this.messageStateHandler.apiConversationHistory.length - 1,
 			awaiting: {
 				kind: "completion",
@@ -1890,133 +1873,6 @@ export class Task {
 			onSnapshot: this.emitStateSnapshot.bind(this),
 		})
 		await this.postStateToWebview()
-	}
-
-	/**
-	 * @deprecated Use ResumeHandler.resumeFromHistory() instead.
-	 * Legacy prompt-and-resume flow — replaced by the snapshot-aware ResumeHandler + RestoreHandler.
-	 * Only kept for backward reference; new code should use ResumeHandler.
-	 */
-	private async promptAndResumePendingToolUseFromHistory(
-		pendingToolUse: PendingToolUseState,
-		lastClineMessage: ClineMessage | undefined,
-		options?: ResumeTaskFromHistoryOptions,
-	) {
-		let approvalAsk: ClineAsk | undefined
-		if (pendingToolUse.toolUseBlocks.length > 0) {
-			approvalAsk = TaskController.toolNameToAskType(pendingToolUse.toolUseBlocks[0].name)
-		}
-
-		// Skip focus_chain_change if already approved (plan has prefix markers [+] or [-])
-		if (approvalAsk === "focus_chain_change" && lastClineMessage?.text) {
-			try {
-				const data = JSON.parse(lastClineMessage.text)
-				if (/\[\+\]|\[-\]/.test(data.plan || "")) {
-					approvalAsk = undefined
-				}
-			} catch {}
-		}
-
-		const askType = approvalAsk ?? "resume_task"
-		const askText = approvalAsk ? lastClineMessage?.text : undefined
-
-		// Unified ts so step 1 (ask) and step 2 (tool_use block) reuse the
-		// same message, preventing duplicate UI rendering on resume.
-		// Skip lastPendingAskTs if it belongs to a message that was already
-		// rejected/skipped — reusing its ts would set commandStatus:"pending"
-		// on a previously rejected message (Bug: stale Cancel button).
-		let toolAskTs: number | undefined
-		if (approvalAsk) {
-			if (pendingToolUse.lastPendingAskTs !== undefined) {
-				const oldMsg = this.messageStateHandler.clineMessages.find((m) => m.ts === pendingToolUse.lastPendingAskTs)
-				const hasStatus = oldMsg && (oldMsg as any).commandStatus
-				toolAskTs = hasStatus ? this.genMessageTs() : pendingToolUse.lastPendingAskTs
-			} else {
-				toolAskTs = this.genMessageTs()
-			}
-		}
-		Logger.debug(
-			`[resume] promptAndResume askType=${askType} approvalAsk=${approvalAsk} lastPendingAskTs=${pendingToolUse.lastPendingAskTs} toolAskTs=${toolAskTs} lastClineMsgType=${lastClineMessage?.type} lastClineMsgAsk=${lastClineMessage?.ask}`,
-		)
-
-		this.taskController.transition(TaskPhase.STREAMING, {
-			apiIndex: this.messageStateHandler.apiConversationHistory.length - 1,
-			onSnapshot: this.emitStateSnapshot.bind(this),
-		})
-		this.taskController.transition(TaskPhase.STREAMING, {
-			apiIndex: this.messageStateHandler.apiConversationHistory.length - 1,
-			onSnapshot: this.emitStateSnapshot.bind(this),
-		})
-
-		this.taskController.transition(TaskPhase.RESUMING, {
-			apiIndex: this.messageStateHandler.apiConversationHistory.length - 1,
-			resume: pendingToolUse
-				? {
-						assistantApiIndex: pendingToolUse.assistantIndex,
-						pendingToolUseIds: pendingToolUse.toolUseBlocks.map((b) => b.id),
-						answeredToolUseIds: pendingToolUse.answeredToolResults.map((r: any) => r.tool_use_id),
-					}
-				: undefined,
-		})
-
-		const { response, text, images, files } = await this.ask(askType, askText, undefined, {
-			onAskVisible: options?.onReadyToDisplay,
-			existingTs: toolAskTs,
-		})
-
-		// If user rejected the resume prompt, skip tool execution entirely.
-		// Without this check, resumePendingToolUseFromHistory would execute
-		// all pending tools regardless of the user's choice.
-		if (response === "noButtonClicked") {
-			this.taskController.rejectActiveBlock()
-			return
-		}
-
-		if (approvalAsk) {
-			await this.removeStalePendingToolResumeAsks()
-		}
-
-		const resumeUserContent: TaskState["userMessageContent"] = []
-		if (approvalAsk) {
-			this.pendingToolUseApprovalResponse = {
-				type: approvalAsk,
-				response,
-				text,
-				images,
-				files,
-			}
-		} else if (text || (images && images.length > 0) || (files && files.length > 0)) {
-			await this.say("user_feedback", text, images, files)
-
-			if (text) {
-				resumeUserContent.push({
-					type: "text",
-					text: `<user_response>\n${text}\n</user_response>`,
-				})
-			}
-			if (images && images.length > 0) {
-				resumeUserContent.push(...formatResponse.imageBlocks(images))
-			}
-			if (files && files.length > 0) {
-				const fileContentString = await processFilesIntoText(files)
-				if (fileContentString) {
-					resumeUserContent.push({
-						type: "text",
-						text: fileContentString,
-					})
-				}
-			}
-		}
-
-		await this.resumePendingToolUseFromHistory(pendingToolUse, { resumeUserContent, baseTs: toolAskTs })
-	}
-
-	/**
-	 * @deprecated Use RestoreHandler.replayPendingTools() directly.
-	 * Thin wrapper that delegates to restoreHandler. Only kept for legacy callers.
-	 */
-	private async resumePendingToolUseFromHistory(pendingToolUse: PendingToolUseState, options?: ReplayOptions) {
-		await this.restoreHandler.replayPendingTools(pendingToolUse, options)
 	}
 
 	/**
@@ -2044,15 +1900,8 @@ export class Task {
 		await this.contextManager.initializeContextHistory(await ensureTaskDirectoryExists(this.taskId))
 		await this.loadTaskSnapshot()
 
-		// Hydrate machines from latest snapshot for accurate state restoration.
-		// Completion feedback consumes the completion ask and starts a new API turn,
-		// so restore it as resumable streaming instead of completed Start New Task.
-		const latestSnapshot = this.findLatestStateSnapshot()
-		if (latestSnapshot) {
-			this.restoreHandler.hydrateFromSnapshot(
-				resolveHydratedSnapshot(latestSnapshot, this.messageStateHandler.clineMessages),
-			)
-		}
+		// Display-only history loading never infers or mutates runtime phase from message tails.
+		// Interactive restoration is owned exclusively by ResumeCoordinator.
 
 		// Mark task as initialized so checkpoint restore can proceed
 		this.taskState.isInitialized = true
@@ -2067,161 +1916,8 @@ export class Task {
 	 * Only call this when the task lock is acquired (taskLockAcquired === true).
 	 * Readonly windows should stop after displayHistory() and show a lock banner.
 	 */
-	public async resumeFromHistory(options?: ResumeTaskFromHistoryOptions) {
-		// Clean messages that were loaded by displayHistory() in preparation
-		// for a fresh interactive resume.
-		const clineMessages = this.messageStateHandler.clineMessages
-
-		// Remove any resume messages that may have been added before
-		const lastRelevantMessageIndex = findLastIndex(
-			clineMessages,
-			(m) => !(m.ask === "resume_task" || m.ask === "resume_completed_task"),
-		)
-		if (lastRelevantMessageIndex !== -1) {
-			await this.messageStateHandler.uiMessage?.truncateByLineNum(lastRelevantMessageIndex + 1)
-		}
-
-		// Remove incomplete api_req_started (no cost, no cancelReason) —
-		// indicates an API request without any partial content streamed
-		const truncatedMsgs = this.messageStateHandler.clineMessages
-		const lastApiReqStartedIndex = findLastIndex(truncatedMsgs, (m) => m.type === "say" && m.say === "api_req_started")
-		if (lastApiReqStartedIndex !== -1) {
-			const lastApiReqStarted = truncatedMsgs[lastApiReqStartedIndex]
-			const { cost, cancelReason }: ClineApiReqInfo = JSON.parse(lastApiReqStarted.text || "{}")
-			if (cost === undefined && cancelReason === undefined) {
-				await this.messageStateHandler.uiMessage?.deleteAt(lastApiReqStartedIndex)
-			}
-		}
-
-		// Clean up any residual partial:true messages from a previously interrupted
-		// task so the frontend does not show a stale Cancel button on history load.
-		this.messageStateHandler.uiMessage?.clearPartialFlags()
-
-		// Single task history update for all above operations
-		await this.messageStateHandler.updateTaskHistory()
-
-		await this.flushTaskSnapshot()
-
-		const snapshot = this.findLatestStateSnapshot()
-		const lastClineMessage = this.findSnapshotAnchoredMessage(snapshot) ?? this.findLegacyResumeAnchorMessage()
-		const currentMessages = this.messageStateHandler.clineMessages
-
-		// Show a resume affordance for any incomplete historical task. Once a task
-		// is loaded from disk there is no live ask promise to consume responses
-		// from an old tool/followup/api state, so we create a fresh resume ask.
-		const lastApiReqMsg = findLast(currentMessages, (m) => m.say === "api_req_started")
-		let wasCancelled = false
-		if (lastApiReqMsg?.text) {
-			try {
-				const info: ClineApiReqInfo = JSON.parse(lastApiReqMsg.text)
-				wasCancelled = info.cancelReason !== undefined
-			} catch {}
-		}
-
-		// Unified resume path: ResumeHandler (phase-aware, snapshot-based)
-		// Covers both new-state-snapshot and legacy tasks (detectPendingTools falls back internally)
-		const pendingResumed = await this.resumeHandler.resumeFromHistory(lastClineMessage)
-		if (pendingResumed) return
-
-		let askType: ClineAsk | undefined
-		if (lastClineMessage?.ask === "completion_result") {
-			askType = "resume_completed_task"
-		} else if (lastClineMessage?.ask) {
-			// Preserve the original ask type so the user sees the same
-			// question/approval UI (qna_respond, followup, plan_mode_respond,
-			// tool, etc.) instead of a generic "Resume Task" button.
-			askType = lastClineMessage.ask
-		} else if (wasCancelled) {
-			askType = "resume_task"
-		} else if (lastClineMessage) {
-			askType = "resume_task"
-		} else {
-			// Historical task with only state messages — show resume affordance
-			askType = "resume_task"
-		}
-
-		if (!askType) {
-			// No ask type means the task is complete with no resume affordance needed.
-			const staleApiReqIndices: number[] = []
-			for (let i = 0; i < currentMessages.length; i++) {
-				const m = currentMessages[i]
-				if (m.type !== "say" || m.say !== "api_req_started" || !m.text) {
-					continue
-				}
-				try {
-					const info = JSON.parse(m.text)
-					if (info.cost == null && info.cancelReason == null && info.streamingFailedMessage == null) {
-						staleApiReqIndices.push(i)
-					}
-				} catch {
-					staleApiReqIndices.push(i)
-				}
-			}
-			if (staleApiReqIndices.length > 0) {
-				const staleTs = staleApiReqIndices.map((i) => currentMessages[i].ts)
-				await this.messageStateHandler.removeMessagesByTs(staleTs)
-			}
-			this.taskController.transition(TaskPhase.STREAMING, {
-				apiIndex: this.getValidSnapshotApiIndex(snapshot),
-				onSnapshot: this.emitStateSnapshot.bind(this),
-			})
-			this.taskState.abort = true
-			await this.postStateToWebview({ immediate: true })
-			await options?.onReadyToDisplay?.()
-			return
-		}
-
-		await this.taskController.transition(TaskPhase.STREAMING, {
-			apiIndex: this.getValidSnapshotApiIndex(snapshot),
-			onSnapshot: this.emitStateSnapshot.bind(this),
-		})
-
-		if (askType === "plan_mode_respond") {
-			this.taskState.isAwaitingPlanResponse = true
-		}
-
-		// Remove the old ask message of the same type to avoid duplicates
-		const isConversationalAsk = askType === "plan_mode_respond" || askType === "qna_respond" || askType === "followup"
-		if (isConversationalAsk) {
-			const msgs = this.messageStateHandler.clineMessages
-			const oldAskIndex = findLastIndex(
-				msgs,
-				(m) => m.type === "ask" && m.ask === askType && (!lastClineMessage?.ask || m.ts === lastClineMessage.ts),
-			)
-			if (oldAskIndex !== -1) {
-				await this.messageStateHandler.uiMessage?.deleteAt(oldAskIndex)
-			}
-		}
-
-		const askText = isConversationalAsk ? lastClineMessage?.text : undefined
-		const { response, text, images, files } = await this.ask(askType, askText, undefined, {
-			onAskVisible: options?.onReadyToDisplay,
-			existingTs: lastClineMessage?.ask ? lastClineMessage?.ts : undefined,
-		})
-
-		// Run UserPromptSubmit hook before delegating to resumeTask (which doesn't include it)
-		const hasUserResponse =
-			response === "messageResponse" || text || (images && images.length > 0) || (files && files.length > 0)
-		if (hasUserResponse) {
-			const userFeedbackContent = await buildUserFeedbackContent(text, images, files)
-			const userPromptHookResult = await this.runUserPromptSubmitHook(userFeedbackContent, "resume")
-			if (this.taskState.abort) return
-			if (userPromptHookResult.cancel === true) {
-				await this.cancelTask()
-				return
-			}
-		}
-
-		// PLAN_MODE_TOGGLE_RESPONSE is a technical signal — skip user_feedback and start loop directly
-		const isToggleSignal = text === "PLAN_MODE_TOGGLE_RESPONSE"
-		if (isToggleSignal) {
-			await this.messageStateHandler.overwriteApiConversationHistory(this.messageStateHandler.apiConversationHistory)
-			await this.initiateTaskLoop([])
-			return
-		}
-
-		// Delegate to resumeTask for unified post-ask processing
-		await this.resumeTask({ response, text, images, files })
+	public async resumeFromHistory(_options?: ResumeTaskFromHistoryOptions) {
+		await this.resumeCoordinator.resume(this.taskId)
 	}
 
 	/**
@@ -2229,256 +1925,14 @@ export class Task {
 	 * Used after cancellation so the message list stays in-place (no flicker)
 	 * while still showing the resume prompt and handling the user response.
 	 */
-	public async resumeTask(preObtainedResponse?: {
+	public async resumeTask(_preObtainedResponse?: {
 		response: ClineAskResponse
 		text?: string
 		images?: string[]
 		files?: string[]
-	}) {
-		await this.flushTaskSnapshot()
-
-		const snapshot = this.findLatestStateSnapshot()
-
-		// Reset abort state so ask() and subsequent operations work
+	}): Promise<void> {
 		this.taskState.abort = false
-		await this.taskController.transition(TaskPhase.STREAMING, {
-			apiIndex: this.getValidSnapshotApiIndex(snapshot),
-			onSnapshot: this.emitStateSnapshot.bind(this),
-		})
-
-		// Clean up any residual partial:true messages from a previously interrupted
-		// task so the frontend does not show a stale Cancel button.
-		this.messageStateHandler.uiMessage?.clearPartialFlags()
-
-		// Unified resume path: ResumeHandler covers both new and legacy tasks
-		const pendingResumed = await this.resumeHandler.resumeFromHistory()
-		if (pendingResumed) return
-
-		const lastClineMessage = this.findSnapshotAnchoredMessage(snapshot) ?? this.findLegacyResumeAnchorMessage()
-
-		let askType: ClineAsk
-		if (lastClineMessage?.ask === "completion_result") {
-			askType = "resume_completed_task"
-		} else if (lastClineMessage?.ask) {
-			// Preserve the original ask type so the user sees the same
-			// question/approval UI instead of a generic "Resume Task" button.
-			askType = lastClineMessage.ask
-		} else {
-			askType = "resume_task"
-		}
-
-		let response: ClineAskResponse
-		let text: string | undefined
-		let images: string[] | undefined
-		let files: string[] | undefined
-
-		if (preObtainedResponse) {
-			response = preObtainedResponse.response
-			text = preObtainedResponse.text
-			images = preObtainedResponse.images
-			files = preObtainedResponse.files
-		} else {
-			Logger.debug(`[resumeTask] askType=${askType}`)
-			const askResult = await this.ask(askType)
-			response = askResult.response
-			text = askResult.text
-			images = askResult.images
-			files = askResult.files
-		}
-
-		// --- Below is the same post-ask logic as resumeFromHistory ---
-
-		const newUserContent: ClineContent[] = []
-
-		const hooksEnabled = getHooksEnabledSafe(this.stateManager.getGlobalSettingsKey("hooksEnabled"))
-		if (hooksEnabled) {
-			const clineMessages = this.messageStateHandler.clineMessages
-			const taskResumeResult = await executeHook({
-				hookName: "TaskResume",
-				hookInput: {
-					taskResume: {
-						taskMetadata: { taskId: this.taskId, ulid: this.ulid },
-						previousState: {
-							lastMessageTs: lastClineMessage?.ts?.toString() || "",
-							messageCount: clineMessages.length.toString(),
-							conversationHistoryDeleted: (this.taskState.conversationHistoryDeletedRange !== undefined).toString(),
-						},
-					},
-				},
-				isCancellable: true,
-				say: this.say.bind(this),
-				setActiveHookExecution: this.setActiveHookExecution.bind(this),
-				clearActiveHookExecution: this.clearActiveHookExecution.bind(this),
-				messageStateHandler: this.messageStateHandler,
-				taskId: this.taskId,
-				hooksEnabled,
-				model: getHookModelContext(this.api, this.stateManager),
-			})
-
-			if (taskResumeResult.cancel === true) {
-				await this.handleHookCancellation("TaskResume", taskResumeResult.wasCancelled)
-				await this.cancelTask()
-				return
-			}
-
-			if (taskResumeResult.contextModification) {
-				newUserContent.push({
-					type: "text",
-					text: `<hook_context source="TaskResume" type="general">\n${taskResumeResult.contextModification}\n</hook_context>`,
-				})
-			}
-		}
-
-		if (this.taskState.abort) return
-
-		let responseText: string | undefined
-		let responseImages: string[] | undefined
-		let responseFiles: string[] | undefined
-		if (response === "messageResponse" || text || (images && images.length > 0) || (files && files.length > 0)) {
-			const ackedFeedback = this.taskState.ackedFeedback
-			const isAckedFeedback =
-				ackedFeedback?.response === response &&
-				ackedFeedback.text === text &&
-				ackedFeedback.images === images &&
-				ackedFeedback.files === files
-			if (!isAckedFeedback) {
-				await this.say("user_feedback", text, images, files)
-				await this.checkpointManager?.saveCheckpoint()
-			}
-			this.taskState.ackedFeedback = undefined
-			responseText = text
-			responseImages = images
-			responseFiles = files
-		}
-
-		const existingApiConversationHistory = this.messageStateHandler.apiConversationHistory
-		let modifiedOldUserContent: ClineContent[]
-		let modifiedApiConversationHistory: ClineStorageMessage[]
-		if (existingApiConversationHistory.length > 0) {
-			const lastMessage = existingApiConversationHistory[existingApiConversationHistory.length - 1]
-			if (lastMessage.role === "assistant") {
-				modifiedApiConversationHistory = [...existingApiConversationHistory]
-				modifiedOldUserContent = []
-			} else if (lastMessage.role === "user") {
-				const existingUserContent: ClineContent[] = Array.isArray(lastMessage.content)
-					? lastMessage.content
-					: [{ type: "text", text: lastMessage.content }]
-				// If the last user message contains tool_result blocks, the
-				// preceding assistant message's tool_use has already been
-				// answered. Truncating this message via .slice(0, -1) would
-				// cause getPendingToolUseState to misidentify the
-				// tool as still pending, leading to duplicate UI messages
-				// when the task is resumed.
-				const hasToolResult =
-					Array.isArray(lastMessage.content) &&
-					lastMessage.content.some((block: ClineContent) => block.type === "tool_result")
-				if (hasToolResult) {
-					modifiedApiConversationHistory = [...existingApiConversationHistory]
-				} else {
-					modifiedApiConversationHistory = existingApiConversationHistory.slice(0, -1)
-				}
-				modifiedOldUserContent = [...existingUserContent]
-			} else {
-				throw new Error("Unexpected: Last message is not a user or assistant message")
-			}
-		} else {
-			modifiedApiConversationHistory = []
-			modifiedOldUserContent = []
-		}
-
-		// Filter out tool_result blocks from previous content Ã¢â‚?		// they are already present in apiConversationHistory and
-		// re-sending them would cause the AI to re-execute tools.
-		const filteredOldContent = modifiedOldUserContent.filter((block) => (block as any).type !== "tool_result")
-		newUserContent.push(...filteredOldContent)
-
-		const agoText = (() => {
-			const timestamp = lastClineMessage?.ts ?? Date.now()
-			const now = Date.now()
-			const diff = now - timestamp
-			const minutes = Math.floor(diff / 60000)
-			const hours = Math.floor(minutes / 60)
-			const days = Math.floor(hours / 24)
-			if (days > 0) return `${days} day${days > 1 ? "s" : ""} ago`
-			if (hours > 0) return `${hours} hour${hours > 1 ? "s" : ""} ago`
-			if (minutes > 0) return `${minutes} minute${minutes > 1 ? "s" : ""} ago`
-			return "just now"
-		})()
-
-		const wasRecent = lastClineMessage?.ts && Date.now() - lastClineMessage.ts < 30_000
-
-		const pendingContextWarning = await this.fileContextTracker.retrieveAndClearPendingFileContextWarning()
-		const hasPendingFileContextWarnings = pendingContextWarning && pendingContextWarning.length > 0
-
-		const isResumption = askType === "resume_task" || askType === "resume_completed_task"
-		if (isResumption) {
-			const mode = this.taskSm.mode
-			const [taskResumptionMessage, userResponseMessage] = formatResponse.taskResumption(
-				mode === "plan" ? "plan" : "act",
-				agoText,
-				this.cwd,
-				wasRecent,
-				responseText,
-				hasPendingFileContextWarnings,
-			)
-			if (taskResumptionMessage !== "") {
-				newUserContent.push({ type: "text", text: taskResumptionMessage })
-			}
-			if (userResponseMessage !== "") {
-				newUserContent.push({ type: "text", text: userResponseMessage })
-			}
-		} else if (responseText) {
-			// Reconstruct tool_result for unanswered turn-ending tools
-			const lastApiMsg = existingApiConversationHistory[existingApiConversationHistory.length - 1]
-			const hasUnansweredToolUse =
-				lastApiMsg?.role === "assistant" &&
-				Array.isArray(lastApiMsg.content) &&
-				lastApiMsg.content.some((block: any) => block.type === "tool_use" && isTurnEndingToolName(block.name))
-			if (hasUnansweredToolUse) {
-				const apiContent = lastApiMsg.content as ClineContent[]
-				const toolUseBlocks = apiContent.filter(
-					(block: any) => block.type === "tool_use" && isTurnEndingToolName(block.name),
-				)
-				const lastToolUse = toolUseBlocks[toolUseBlocks.length - 1]
-				const toolUseId = (lastToolUse as any).id || (lastToolUse as any).call_id || ""
-				const callId = (lastToolUse as any).call_id || toolUseId
-				const resultText = `<feedback>\n${responseText}\n</feedback>`
-				newUserContent.push({
-					type: "tool_result",
-					tool_use_id: toolUseId,
-					call_id: callId,
-					content: [{ type: "text", text: resultText }],
-				} as any)
-			} else {
-				newUserContent.push({
-					type: "text",
-					text: `<user_response>\n${responseText}\n</user_response>`,
-				})
-			}
-		}
-		if (responseImages && responseImages.length > 0) {
-			newUserContent.push(...formatResponse.imageBlocks(responseImages))
-		}
-		if (responseFiles && responseFiles.length > 0) {
-			const fileContentString = await processFilesIntoText(responseFiles)
-			if (fileContentString) {
-				newUserContent.push({ type: "text", text: fileContentString })
-			}
-		}
-		if (pendingContextWarning && pendingContextWarning.length > 0) {
-			const fileContextWarning = formatResponse.fileContextWarning(pendingContextWarning)
-			if (fileContextWarning) {
-				newUserContent.push({ type: "text", text: fileContextWarning })
-			}
-		}
-
-		try {
-			await this.environmentContextTracker.recordEnvironment()
-		} catch (error) {
-			Logger.error("Failed to record environment metadata on resume:", error)
-		}
-
-		await this.messageStateHandler.overwriteApiConversationHistory(modifiedApiConversationHistory)
-		await this.initiateTaskLoop(newUserContent)
+		await this.resumeCoordinator.resume(this.taskId)
 	}
 
 	private async initiateTaskLoop(userContent: ClineContent[]): Promise<void> {
@@ -2517,49 +1971,16 @@ export class Task {
 	 * @returns true if the hook should run, false otherwise
 	 */
 	private async shouldRunTaskCancelHook(): Promise<boolean> {
-		// Atomically check for active hook execution (work happening now)
-		const activeHook = await this.getActiveHookExecution()
-		if (activeHook) {
-			return true
-		}
-
-		// Run if the API is currently streaming (work happening now)
-		if (this.taskState.isStreaming) {
-			return true
-		}
-
-		// Run if we're waiting for the first chunk (work happening now)
-		if (this.taskState.isWaitingForFirstChunk) {
-			return true
-		}
-
-		// Run if there's active background command (work happening now)
-		if (this.commandExecutor.hasActiveBackgroundCommand()) {
-			return true
-		}
-
-		// Check if we're at a button-only state (no active work, just waiting for user action)
-		const clineMessages = this.messageStateHandler.clineMessages
-		const lastMessage = clineMessages.at(-1)
-		const isAtButtonOnlyState =
-			lastMessage?.type === "ask" &&
-			(lastMessage.ask === "resume_task" ||
-				lastMessage.ask === "resume_completed_task" ||
-				lastMessage.ask === "completion_result")
-
-		if (isAtButtonOnlyState) {
-			// At button-only state - DON'T run hook because we're just waiting for user input
-			// These button states appear when:
-			// 1. Opening from history (resume_task/resume_completed_task)
-			// 2. After task completion (completion_result with "Start New Task" button)
-			// 3. After cancelling during active work (but work already stopped)
-			// In all cases, we shouldn't run TaskCancel hook
-			return false
-		}
-
-		// Not at a button-only state - we're in the middle of work or just finished something
-		// Run the hook since cancelling would interrupt actual work
-		return true
+		return shouldRunTaskCancelHook({
+			runtime: this.taskRuntime.getState(),
+			source: this.taskRuntime.getState().cancellation?.source ?? "user",
+			activity: {
+				hasActiveHook: Boolean(await this.getActiveHookExecution()),
+				isStreaming: this.taskState.isStreaming,
+				isWaitingForFirstChunk: this.taskState.isWaitingForFirstChunk,
+				hasActiveBackgroundCommand: this.commandExecutor.hasActiveBackgroundCommand(),
+			},
+		})
 	}
 
 	/**
@@ -2567,24 +1988,26 @@ export class Task {
 	 * The task can be resumed later via resume().
 	 * Called when the user clicks the cancel button.
 	 */
-	async abortExecution() {
+	async abortExecution(runtimeCommitted = false) {
 		try {
 			this.modeSwitchCompaction.abort()
 			// PHASE 1: Check if TaskCancel should run BEFORE any cleanup
 			const shouldRunTaskCancelHook = await this.shouldRunTaskCancelHook()
 
-			// PHASE 2: Transition to PAUSED (recoverable) then CANCELLING
-			await this.taskController.transition(TaskPhase.PAUSED, {
-				apiIndex: this.messageStateHandler.apiConversationHistory.length - 1,
-				onSnapshot: this.emitStateSnapshot.bind(this),
-			})
+			// Legacy callers still require the compatibility phase machine until Task 15 removes it.
+			if (!runtimeCommitted) {
+				await this.taskController.transitionRequired(TaskPhase.PAUSED, {
+					apiIndex: this.messageStateHandler.apiConversationHistory.length - 1,
+					onSnapshot: this.emitStateSnapshot.bind(this),
+				})
+				await this.taskController.transitionRequired(TaskPhase.CANCELLING, {
+					apiIndex: this.messageStateHandler.apiConversationHistory.length - 1,
+					cancel: { source: "user", fromPhase: TaskPhase.PAUSED },
+					onSnapshot: this.emitStateSnapshot.bind(this),
+				})
+			}
 
 			this.taskState.abort = true
-			await this.taskController.transition(TaskPhase.CANCELLING, {
-				apiIndex: this.messageStateHandler.apiConversationHistory.length - 1,
-				cancel: { source: "user", fromPhase: TaskPhase.PAUSED },
-				onSnapshot: this.emitStateSnapshot.bind(this),
-			})
 
 			// PHASE 3: Cancel any running hook execution
 			const activeHook = await this.getActiveHookExecution()
@@ -2675,7 +2098,7 @@ export class Task {
 
 			// PHASE 2: Set abort flag
 			this.taskState.abort = true
-			this.taskController.transition(TaskPhase.CANCELLING, {
+			this.taskController.transitionRequired(TaskPhase.CANCELLING, {
 				apiIndex: this.messageStateHandler.apiConversationHistory.length - 1,
 				cancel: { source: "user", fromPhase: this.taskController.phase },
 				onSnapshot: this.emitStateSnapshot.bind(this),
@@ -3326,7 +2749,8 @@ export class Task {
 			frozenPrompt = await this.systemPromptCacheService.getOrCreate({ promptContext })
 		}
 		const systemPrompt = frozenPrompt.text
-		const tools = this.systemPromptCacheService.getLastTools()
+		const cachedTools = this.systemPromptCacheService.getLastTools()
+		const tools = cachedTools ? [...cachedTools] : undefined
 		Logger.debug(
 			`[Task ${this.taskId}] attemptApiRequest: after systemPrompt +${Math.round(performance.now() - apiReqStart)}ms`,
 		)
@@ -3758,6 +3182,20 @@ export class Task {
 							)
 							return candidate ? this.toolExecutor.isBlockApproved(candidate) : false
 						})
+						const toolBlocks = this.taskController.getBlocks()
+						const turnId = `turn:${toolBlocks[0]?.dlineTid ?? block.dline_tid}`
+						if (this.taskRuntime.getState().turn?.turnId !== turnId) {
+							const created = await this.dispatchRuntime({
+								type: "TURN_CREATED",
+								turnId,
+								assistantApiIndex: this.messageStateHandler.apiConversationHistory.length,
+								mode: this.isParallelToolCallingEnabled() ? "parallel" : "serial",
+								blocks: toolBlocks.map(({ phase: _phase, ...candidate }) => candidate),
+							})
+							if (!created.accepted) {
+								throw new Error(`Turn creation rejected: ${created.error?.code ?? "invalid_runtime_event"}`)
+							}
+						}
 					}
 
 					// Check if this block should be skipped due to prior rejection
@@ -3765,7 +3203,77 @@ export class Task {
 						break
 					}
 
+					const runtimeTurn = this.taskRuntime.getState().turn
+					if (!runtimeTurn || !block.dline_tid) {
+						throw new Error(`Canonical runtime turn is missing for tool=${block.name}`)
+					}
+					const ready = await this.dispatchRuntime({
+						type: "BLOCK_READY",
+						turnId: runtimeTurn.turnId,
+						dlineTid: block.dline_tid,
+					})
+					if (!ready.accepted) {
+						throw new Error(`Block readiness rejected: ${ready.error?.code ?? "invalid_runtime_event"}`)
+					}
+					const runtimeBlock = this.taskRuntime
+						.getState()
+						.turn?.blocks.find((candidate) => candidate.dlineTid === block.dline_tid)
+					if (!runtimeBlock) {
+						throw new Error(`Canonical runtime block is missing for tool=${block.name}`)
+					}
+					if (runtimeBlock.requiresApproval) {
+						const approval = await this.dispatchRuntime({
+							type: "BLOCK_APPROVAL_REQUIRED",
+							turnId: runtimeTurn.turnId,
+							dlineTid: block.dline_tid,
+						})
+						if (!approval.accepted) {
+							throw new Error(
+								`Block approval checkpoint rejected: ${approval.error?.code ?? "invalid_runtime_event"}`,
+							)
+						}
+					}
+					if (!runtimeBlock.requiresApproval) {
+						const executionStarted = await this.dispatchRuntime({
+							type: "BLOCK_EXECUTION_STARTED",
+							turnId: runtimeTurn.turnId,
+							dlineTid: block.dline_tid,
+						})
+						if (!executionStarted.accepted) {
+							throw new Error(
+								`Block execution checkpoint rejected: ${executionStarted.error?.code ?? "invalid_runtime_event"}`,
+							)
+						}
+					}
 					await this.toolExecutor.executeTool(block)
+					const committedBlock = this.taskRuntime
+						.getState()
+						.turn?.blocks.find((candidate) => candidate.dlineTid === block.dline_tid)
+					if (committedBlock?.phase === "rejected") {
+						break
+					}
+					const completed = await this.dispatchRuntime({
+						type: "BLOCK_EXECUTION_COMPLETED",
+						turnId: runtimeTurn.turnId,
+						dlineTid: block.dline_tid,
+					})
+					if (!completed.accepted) {
+						throw new Error(`Block completion rejected: ${completed.error?.code ?? "invalid_runtime_event"}`)
+					}
+					const completedState = this.taskRuntime.getState()
+					const completedTurn = completedState.turn
+					if (
+						completedState.phase !== TaskPhase.COMPLETED &&
+						completedTurn &&
+						completedTurn.blocks.every((candidate) =>
+							["completed", "rejected", "skipped", "cancelled"].includes(candidate.phase),
+						)
+					) {
+						const turnCompleted = await this.dispatchRuntime({ type: "TURN_COMPLETED", turnId: completedTurn.turnId })
+						if (!turnCompleted.accepted) {
+							throw new Error(`Turn completion rejected: ${turnCompleted.error?.code ?? "invalid_runtime_event"}`)
+						}
+					}
 					// Register lifecycle so reRenderUpdatedPartialBlocks and processNativeToolCalls
 					// can skip tools that have already completed execution. Partial tools are
 					// marked "partial-shown" so they get replayed via handleCompleteBlock when the
@@ -3829,6 +3337,13 @@ export class Task {
 		// Increment API request counter for focus chain list management
 		this.taskState.apiRequestCount++
 		this.taskState.apiRequestsSinceLastTodoUpdate++
+		const apiStarted = await this.dispatchRuntime({
+			type: "API_REQUEST_STARTED",
+			apiIndex: this.messageStateHandler.apiConversationHistory.length,
+		})
+		if (!apiStarted.accepted) {
+			throw new Error(`API request start rejected: ${apiStarted.error?.code ?? "invalid_runtime_event"}`)
+		}
 
 		// Used to know what models were used in the task if user wants to export metadata for error reporting purposes
 		const { model, providerId, customPrompt, mode } = this.getCurrentProviderInfo()
@@ -4594,14 +4109,20 @@ export class Task {
 							delay,
 							isAborted: () => this.taskState.abort,
 							isCurrentTask: () => this.controller.task?.taskId === taskId,
-							resume: async () => {
+							dispatchRetry: async () => {
 								const activeTask = this.controller.task
 								if (!activeTask) {
 									return
 								}
 
 								activeTask.taskState.autoRetryAttempts = retryAttempts
-								await activeTask.handleWebviewAskResponse("yesButtonClicked", "", [])
+								const retried = await activeTask.dispatchRuntime({
+									type: "API_RETRY_SCHEDULED",
+									apiIndex: activeTask.getRuntimeState().anchor.apiIndex,
+								})
+								if (!retried.accepted) {
+									throw new Error(`Automatic retry rejected: ${retried.error?.code ?? "invalid_runtime_event"}`)
+								}
 							},
 						})
 					} else if (retryDecision.shouldPrompt) {
@@ -4616,8 +4137,14 @@ export class Task {
 								errorMessage,
 							}),
 						)
-						await this.ask("api_req_failed", errorMessage)
-						return false
+						const retryId = `retry:${this.taskId}:${this.getRuntimeState().revision}`
+						const outcome = await this.recoverApiFailure({
+							turnId: retryId,
+							interactionId: retryId,
+							apiIndex: this.getRuntimeState().anchor.apiIndex,
+							presentation: errorMessage,
+						})
+						return outcome.actionId === "start_new_task"
 					}
 
 					// needs to happen after the say, otherwise the say would fail
@@ -4789,7 +4316,7 @@ export class Task {
 				// Reset auto-retry counter for each new API request
 				this.taskState.autoRetryAttempts = 0
 
-				if (this.taskState.didConfirmCompletion) {
+				if (this.taskRuntime.getState().phase === TaskPhase.COMPLETED) {
 					return true
 				}
 

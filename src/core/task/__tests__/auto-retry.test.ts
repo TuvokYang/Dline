@@ -13,23 +13,23 @@ describe("auto retry recovery", () => {
 		assert.equal(shouldRetry, false)
 	})
 
-	it("does not resume delayed stream retry after active task changes", async () => {
-		let resumed = false
+	it("does not dispatch delayed stream retry after active task changes", async () => {
+		let dispatched = false
 		let isCurrentTask = true
 		const retryPromise = runDelayedStreamRetry({
 			delay: 1,
 			isAborted: () => false,
 			isCurrentTask: () => isCurrentTask,
-			resume: async () => {
-				resumed = true
+			dispatchRetry: async () => {
+				dispatched = true
 			},
 		})
 
 		isCurrentTask = false
-		const didResume = await retryPromise
+		const didDispatch = await retryPromise
 
-		assert.equal(didResume, false)
-		assert.equal(resumed, false)
+		assert.equal(didDispatch, false)
+		assert.equal(dispatched, false)
 	})
 
 	it("prompts api failure recovery after stream retries are exhausted", () => {

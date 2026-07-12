@@ -100,7 +100,7 @@ function createFakeTask(taskState: {
 				}
 			},
 			advanceNextPendingApproval: () => {},
-			transition: async (
+			transitionRequired: async (
 				to: string,
 				ctx: { awaiting?: { kind?: string; taskAsk?: string; messageTs?: number }; apiIndex?: number },
 			) => {
@@ -195,9 +195,9 @@ describe("Task.ask", () => {
 		let didPostState = false
 
 		const controller = fakeTask.taskController as {
-			transition: (phase: string, ctx: unknown) => Promise<void>
+			transitionRequired: (phase: string, ctx: unknown) => Promise<void>
 		}
-		controller.transition = async (phase: string, ctx: unknown) => {
+		controller.transitionRequired = async (phase: string, ctx: unknown) => {
 			capturedPhase = phase
 			capturedContext = ctx
 		}
@@ -287,7 +287,7 @@ describe("Task.ask", () => {
 		}
 		controller.toolNameToAskType = () => "tool"
 		controller.getBlocks = () => [approvalBlock]
-		controller.transition = (phase: string, ctx: any) => {
+		controller.transitionRequired = (phase: string, ctx: any) => {
 			didTransition = true
 			assert.equal(phase, "awaiting_approval")
 			assert.equal(ctx.apiIndex, 5)
@@ -346,9 +346,9 @@ describe("Task.ask", () => {
 		let didPostState = false
 
 		const controller = fakeTask.taskController as {
-			transition: (phase: string, ctx: unknown) => Promise<void>
+			transitionRequired: (phase: string, ctx: unknown) => Promise<void>
 		}
-		controller.transition = async (phase: string, ctx: unknown) => {
+		controller.transitionRequired = async (phase: string, ctx: unknown) => {
 			capturedPhase = phase
 			capturedContext = ctx
 		}

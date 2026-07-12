@@ -29,7 +29,7 @@ import type { ToolResponse } from "../../index"
 import { showNotificationForApproval } from "../../utils"
 import type { IFullyManagedTool } from "../ToolExecutorCoordinator"
 import type { ToolValidator } from "../ToolValidator"
-import type { TaskConfig } from "../types/TaskConfig"
+import { interactionId, interactionTurnId, type TaskConfig } from "../types/TaskConfig"
 import type { StronglyTypedUIHelpers } from "../types/UIHelpers"
 import { captureAccepted, captureRejected, getModelInfo } from "../utils/AiOutputTelemetry"
 import { applyModelContentFixes } from "../utils/ModelContentProcessor"
@@ -354,11 +354,18 @@ export class WriteToFileToolHandler implements IFullyManagedTool {
 
 				// Need a more customized tool response for file edits to highlight the fact that the file was not updated (particularly important for deepseek)
 
-				const { response, text, images, files } = await config.callbacks.ask("tool", completeMessage, false, {
+				const outcome = await config.interactions.open({
+					turnId: interactionTurnId(block),
+					interactionId: interactionId(block),
+					kind: "tool_approval",
+					presentation: completeMessage,
 					existingTs: block.ts,
 				})
+				const text = outcome.draft?.text
+				const images = outcome.draft?.images
+				const files = outcome.draft?.files
 
-				if (response !== "yesButtonClicked") {
+				if (outcome.actionId !== "approve") {
 					// Handle rejection with detailed messages
 					const fileDeniedNote = fileExists
 						? getPrompt("toolHandlers", "writeToFileNotUpdated")
@@ -378,7 +385,7 @@ export class WriteToFileToolHandler implements IFullyManagedTool {
 							images,
 							fileContentString,
 						)
-						await sayFeedbackOnce(config, response, text, images, files)
+						await sayFeedbackOnce(config, "noButtonClicked", text, images, files)
 					}
 
 					// // Clean up the diff view when operation is rejected
@@ -427,7 +434,7 @@ export class WriteToFileToolHandler implements IFullyManagedTool {
 						images,
 						fileContentString,
 					)
-					await sayFeedbackOnce(config, response, text, images, files)
+					await sayFeedbackOnce(config, "yesButtonClicked", text, images, files)
 				}
 
 				telemetryService.captureToolUsage(

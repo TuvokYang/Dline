@@ -6,6 +6,7 @@ import { findEnabledProfileByName, findEnabledProfiles } from "@core/controller/
 import { getHooksEnabledSafe } from "@core/hooks/hooks-utils"
 import { TaskLockService } from "@core/locks/TaskLockService"
 import * as SecretsManager from "@core/storage/secrets"
+import { projectTaskView } from "@core/task/view/TaskViewProjector"
 import { detectWorkspaceRoots } from "@core/workspace/detection"
 import { setupWorkspaceManager } from "@core/workspace/setup"
 import type { WorkspaceRootManager } from "@core/workspace/WorkspaceRootManager"
@@ -29,7 +30,6 @@ import { fileExistsAtPath } from "@utils/fs"
 import axios from "axios"
 import fs from "fs/promises"
 import open from "open"
-import pWaitFor from "p-wait-for"
 import * as path from "path"
 import { ClineEnv } from "@/config"
 import { getDlineDocumentsPath, getDlineDocumentsPathSync, getTaskHeaderText } from "@/core/storage/disk"
@@ -49,7 +49,6 @@ import { Session } from "@/shared/services/Session"
 import { getLatestAnnouncementId } from "@/utils/announcements"
 import { getCwd, getDesktopDir } from "@/utils/path"
 import { ModelRegistry } from "../model-registry/ModelRegistry"
-import { PromptRegistry } from "../prompts/system-prompt"
 import { ApiConversation } from "../storage/ApiConversation"
 import {
 	ensureCacheDirectoryExists,
@@ -167,7 +166,6 @@ export class Controller {
 
 	constructor(readonly context: ClineExtensionContext) {
 		Session.reset() // Reset session on controller initialization
-		PromptRegistry.getInstance() // Ensure prompts and tools are registered
 		this.stateManager = StateManager.get()
 		this.stateManagerCallbacksDispose = StateManager.get().registerCallbacks({
 			onPersistenceError: async ({ error }: PersistenceErrorEvent) => {
@@ -434,7 +432,7 @@ export class Controller {
 				// Readonly (taskLockAcquired === false): display-only, no interactive resume.
 				// Frontend shows a lock banner with a force-unlock button.
 			} else if (task || images || files) {
-				taskInstance.startTask(task, images, files, options?.context)
+				await taskInstance.startTask(task, images, files, options?.context)
 			}
 		} finally {
 			// Polling is started once in the constructor and is a controller-
@@ -588,108 +586,17 @@ export class Controller {
 	}
 
 	async cancelTask() {
-		// Prevent duplicate cancellations from spam clicking
-		if (this.cancelInProgress) {
-			Logger.log(`[Controller.cancelTask] Cancellation already in progress, ignoring duplicate request`)
+		if (this.cancelInProgress || !this.task) {
 			return
 		}
-
-		if (!this.task) {
-			return
-		}
-
-		// Only cancel if there is actual active work to stop.
-		// If the task is already idle (waiting for user input, completed,
-		// or paused), still clean up residual messages so the frontend
-		// doesn't show a stale Cancel button.
-		const hasActiveWork =
-			this.task.taskState.isStreaming ||
-			this.task.taskState.isWaitingForFirstChunk ||
-			this.task.taskState.isExecutingSubagent ||
-			(this.task.taskState.isInitialized && !this.task.taskState.abort)
-		if (!hasActiveWork) {
-			// Clear partial flags (preserves conversation history while removing
-			// stale Cancel button), consistent with resumeFromHistory behavior.
-			this.task.messageStateHandler.uiMessage?.clearPartialFlags()
-
-			// Remove stale api_req_started messages that lack completion markers
-			// (no cost, cancelReason, or streamingFailedMessage). These cause the
-			// frontend to show a Cancel button with no actual work to cancel.
-			const msgs = this.task.messageStateHandler.clineMessages
-			const staleApiReqTs = msgs
-				.filter((m) => {
-					if (m.type !== "say" || m.say !== "api_req_started" || !m.text) {
-						return false
-					}
-					try {
-						const info = JSON.parse(m.text)
-						return info.cost == null && info.cancelReason == null && info.streamingFailedMessage == null
-					} catch {
-						return true
-					}
-				})
-				.map((m) => m.ts)
-			if (staleApiReqTs.length > 0) {
-				await this.task.messageStateHandler.removeMessagesByTs(staleApiReqTs)
-			}
-			await this.postStateToWebview()
-			return
-		}
-
-		// Set flag to prevent concurrent cancellations
 		this.cancelInProgress = true
-
 		try {
 			this.updateBackgroundCommandState(false)
-
-			// Clear partial flags BEFORE pause so the message list is frozen
-			// after pause() and no further mutations happen before the resume
-			// ask is sent. Clearing (instead of deleting) preserves conversation
-			// history while removing the stale Cancel button from the frontend.
-			if (this.task) {
-				this.task.messageStateHandler.uiMessage?.clearPartialFlags()
+			const result = await this.task.requestCancellation()
+			if (!result.accepted) {
+				Logger.warn(`Controller.cancelTask: runtime rejected cancellation (${result.error?.code ?? "unknown"})`)
 			}
-
-			Logger.debug("[cancelTask] pausing task...")
-			try {
-				await this.task.abortExecution()
-			} catch (error) {
-				Logger.error("Failed to abort task", error)
-			}
-
-			await pWaitFor(
-				() =>
-					this.task === undefined ||
-					this.task.taskState.isStreaming === false ||
-					this.task.taskState.didFinishAbortingStream ||
-					this.task.taskState.isWaitingForFirstChunk,
-				{ timeout: 3_000 },
-			).catch(() => {
-				Logger.error("Failed to abort task")
-			})
-
-			// Fire-and-forget resume ask only after cancel cleanup is ready.
-			// Until then TaskUiState keeps Cancel disabled to show cancellation is running.
-			if (this.task) {
-				const msgs = this.task.messageStateHandler.clineMessages
-				const lastRealMessage = [...msgs]
-					.reverse()
-					.find((m) => !(m.ask === "resume_task" || m.ask === "resume_completed_task"))
-				if (lastRealMessage?.ask !== "completion_result") {
-					this.task
-						.ask("resume_task")
-						.then(async ({ response, text, images, files }) => {
-							if (response === "yesButtonClicked") {
-								await this.task?.resumeTask({ response, text, images, files })
-							}
-						})
-						.catch(() => {})
-				}
-			}
-
-			await this.postStateToWebview()
 		} finally {
-			// Always clear the flag, even if cancellation fails
 			this.cancelInProgress = false
 		}
 	}
@@ -1217,46 +1124,6 @@ export class Controller {
 		const checklistFromTaskState = this.task?.taskState.currentFocusChainChecklist || null
 		const checklistForState = checklistFromTaskState || getLastTaskProgressText(allMessages)
 
-		const runtimeWorkingForUi = (() => {
-			if (!this.task) return false
-			const ts = this.task.taskState
-			const isBackgroundCommandForTask = this.backgroundCommandRunning && this.backgroundCommandTaskId === this.task.taskId
-			return Boolean(
-				ts.isStreaming ||
-					ts.isWaitingForFirstChunk ||
-					ts.isExecutingSubagent ||
-					ts.activeHookExecution ||
-					isBackgroundCommandForTask,
-			)
-		})()
-
-		const isTaskWorkingForUi = (() => {
-			if (!this.task) return false
-			const ts = this.task.taskState
-			// Active runtime states
-			if (runtimeWorkingForUi) return true
-			// Not initialized or already aborted
-			if (!ts.isInitialized || ts.abort) return false
-			// Check for natural stop points in message history
-			const msgs = this.task.messageStateHandler.clineMessages
-			const lastMsg = msgs[msgs.length - 1]
-			if (!lastMsg) return false
-			// Turn-end or resume waiting = stopped
-			if (
-				lastMsg.ask === "completion_result" ||
-				lastMsg.ask === "resume_task" ||
-				lastMsg.ask === "resume_completed_task" ||
-				lastMsg.ask === "qna_respond" ||
-				lastMsg.ask === "followup" ||
-				lastMsg.ask === "plan_mode_respond"
-			)
-				return false
-			// Unanswered approval ask = waiting for user = stopped
-			if (lastMsg.type === "ask" && ts.askResponse === undefined) return false
-			// Otherwise: tool executing, checkpoint saving, etc. = working
-			return true
-		})()
-
 		const result: ExtensionState = {
 			stateRevision: revision,
 			modeSwitch: this.modeSwitchCoordinator.getSnapshot(),
@@ -1344,36 +1211,11 @@ export class Controller {
 			showFeatureTips,
 			showActiveTasksInEnvDetails,
 			openAiCodexIsAuthenticated,
-			/** Active approval block driving frontend button rendering.
-			 *  Only non-null when a tool is awaiting user approval. */
-			activeBlock: (() => {
-				const b = this.task?.taskController?.getActiveBlock()
-				if (!b) return undefined
-				return {
-					callId: b.callId,
-					toolName: b.toolName,
-					phase: b.phase,
-					askType: this.task?.taskController?.toolNameToAskType(b.toolName) ?? b.toolName,
-				}
-			})(),
-			/** Whether the task is actively working.
-			 *  Drives Cancel button visibility in the frontend.
-			 *  True when: streaming, waiting for first chunk, subagent, tool execution, checkpoint.
-			 *  False when: turn-end, resume waiting, approval waiting, aborted. */
-			isWorking: isTaskWorkingForUi,
 			/** Task lock status — computed on each state push so the frontend
 			 *  can show a lock banner when the task is in read-only mode. */
 			taskLockStatus: this.getTaskLockStatus(),
-			/** Unified task UI state derived from snapshot.
-			 *  Single source of truth for footer buttons and input state. */
-			taskUiState: (() => {
-				if (!this.task?.taskController) return undefined
-				const snapshot = this.task.findLatestStateSnapshot()
-				return this.task.taskController.buildTaskUiState(snapshot ?? null, {
-					isTaskWorking: isTaskWorkingForUi,
-					runtimeWorking: runtimeWorkingForUi,
-				})
-			})(),
+			/** Complete interaction view projected only from canonical runtime state. */
+			taskViewState: this.task ? projectTaskView(this.task.getRuntimeState()) : undefined,
 		}
 
 		const durationMs = Math.round(performance.now() - startTime)

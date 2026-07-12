@@ -1,8 +1,6 @@
 import { ClineMessage } from "@shared/ExtensionMessage"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { useExtensionState } from "@/context/ExtensionStateContext"
 import { ChatState } from "../types/chatTypes"
-import { findInteractionMessage } from "../utils/messageUtils"
 
 /**
  * Custom hook for managing chat state
@@ -26,21 +24,9 @@ export function useChatState(messages: ClineMessage[]): ChatState {
 	// Refs
 	const textAreaRef = useRef<HTMLTextAreaElement>(null)
 
-	// Active approval block from extension state
-	const { activeBlock, taskUiState } = useExtensionState()
-
-	// Derived state
-	const lastMessage = useMemo(() => findInteractionMessage(messages), [messages])
-	const secondLastMessage = useMemo(() => {
-		if (!lastMessage) return messages.at(-2)
-		for (let i = messages.length - 1; i >= 0; i--) {
-			if (messages[i].ts === lastMessage.ts) {
-				return i > 0 ? messages[i - 1] : undefined
-			}
-		}
-		return messages.at(-2)
-	}, [lastMessage, messages])
-	const clineAsk = useMemo(() => (lastMessage?.type === "ask" ? lastMessage.ask : undefined), [lastMessage])
+	// Message positions are presentation-only and never determine task interaction state.
+	const lastMessage = useMemo(() => messages.at(-1), [messages])
+	const secondLastMessage = useMemo(() => messages.at(-2), [messages])
 
 	// Clear expanded rows when task changes
 	const task = useMemo(() => messages.at(0), [messages])
@@ -93,11 +79,8 @@ export function useChatState(messages: ClineMessage[]): ChatState {
 		textAreaRef,
 
 		// Derived values
-		activeBlock,
-		taskUiState,
 		lastMessage,
 		secondLastMessage,
-		clineAsk,
 		task,
 
 		// Handlers

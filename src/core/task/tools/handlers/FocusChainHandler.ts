@@ -3,7 +3,7 @@ import { getPrompt } from "@core/prompts/i18n"
 import { ClineDefaultTool } from "@/shared/tools"
 import type { ToolResponse } from "../../index"
 import type { IToolHandler } from "../ToolExecutorCoordinator"
-import type { TaskConfig } from "../types/TaskConfig"
+import { interactionId, interactionTurnId, type TaskConfig } from "../types/TaskConfig"
 import { sayFeedbackOnce } from "../utils/UserFeedbackUtils"
 
 /**
@@ -40,56 +40,28 @@ export class FocusChainHandler implements IToolHandler {
 			return getPrompt("focusChain", "focusChainChangeApproved")
 		}
 
-		// Capture message ts when ask is created, so we can update it after approval
-		let askMessageTs: number | undefined
 		const askData = JSON.stringify({ plan: newPlan, reason })
-		const {
-			response,
-			text: responseText,
-			images,
-			files,
-		} = await config.callbacks.ask("focus_chain_change", askData, false, {
-			onTsCreated: (ts) => {
-				askMessageTs = ts
-			},
+		const outcome = await config.interactions.open({
+			turnId: interactionTurnId(block),
+			interactionId: interactionId(block),
+			kind: "focus_chain_change",
+			presentation: askData,
+			existingTs: block.ts,
 		})
-
-		// Only yesButtonClicked (bottom Approve button) is approval.
-		// Everything else (noButtonClicked, messageResponse, direct input, etc.) is denial.
-		const isApproved = response === "yesButtonClicked"
+		const responseText = outcome.draft?.text
+		const images = outcome.draft?.images
+		const files = outcome.draft?.files
+		const isApproved = outcome.actionId === "approve"
 
 		if (!isApproved) {
 			// Write user_feedback before denying so the AI sees the user's input
 			if (responseText || (images && images.length > 0) || (files && files.length > 0)) {
-				await sayFeedbackOnce(config, response, responseText, images, files)
-			}
-			// Deny: mark all items as [-] in message.text, do NOT touch focus chain file
-			if (askMessageTs !== undefined) {
-				const deniedPlan = this.buildRejectedMark(newPlan)
-				const messages = config.messageState.clineMessages
-				const idx = messages.findIndex((m) => m.ts === askMessageTs)
-				if (idx >= 0) {
-					const updatedText = JSON.stringify({ plan: deniedPlan, reason })
-					await config.callbacks.updateClineMessage(idx, { text: updatedText })
-					await config.messageState.updateTaskHistory()
-				}
+				await sayFeedbackOnce(config, "noButtonClicked", responseText, images, files)
 			}
 			return getPrompt("focusChain", "focusChainChangeDenied")
 		}
 
-		// Approve: use responseText (selected plan with [+]/[-] markers) or full newPlan
-		const approvedPlan = responseText && responseText !== "Approve" ? responseText : newPlan
-
-		// Persist selected plan into the ask message text (ui_message.jsonl) for readonly rendering
-		if (askMessageTs !== undefined) {
-			const messages = config.messageState.clineMessages
-			const idx = messages.findIndex((m) => m.ts === askMessageTs)
-			if (idx >= 0) {
-				const updatedText = JSON.stringify({ plan: approvedPlan, reason })
-				await config.callbacks.updateClineMessage(idx, { text: updatedText })
-				await config.messageState.updateTaskHistory()
-			}
-		}
+		const approvedPlan = this.selectPlan(newPlan, outcome.selection?.values ?? [])
 
 		// Clean approvedPlan for focus chain file:
 		// - Remove "[-] - " lines (rejected items)
@@ -103,23 +75,19 @@ export class FocusChainHandler implements IToolHandler {
 		return getPrompt("focusChain", "focusChainChangeApproved")
 	}
 
-	/**
-	 * Build a version of the plan where all pending items are marked as rejected ([-]).
-	 * Existing "- [x]" items stay as-is.
-	 */
-	private buildRejectedMark(plan: string): string {
+	/** Build the approved plan from stable pending-item indices. */
+	private selectPlan(plan: string, selection: string[]): string {
+		const selected = new Set(selection)
+		let pendingIndex = 0
 		return plan
 			.split("\n")
-			.map((line) => {
-				const trimmed = line.trim()
-				// Keep headings and title as-is
-				if (trimmed.startsWith("# ")) return trimmed
-				// Mark pending items as rejected, keep completed items as-is
-				if (trimmed.startsWith("- [ ]")) {
-					return trimmed.replace("- [ ]", "[-] - [ ]")
+			.filter((line) => {
+				if (!line.trim().startsWith("- [ ]")) {
+					return true
 				}
-				// Keep existing markers (if any) and other lines
-				return trimmed
+				const keep = selected.has(String(pendingIndex))
+				pendingIndex += 1
+				return keep
 			})
 			.join("\n")
 	}

@@ -114,10 +114,7 @@ describe("Focus Chain Prompt Snapshots", () => {
 
 	it("apiRequestCount — too many requests without checklist", async () => {
 		const count = 42
-		await assertSnapshot(
-			"apiRequestCount",
-			FocusChainPrompts.apiRequestCount.replace("{{apiRequestCount}}", count.toString()),
-		)
+		await assertSnapshot("apiRequestCount", FocusChainPrompts.apiRequestCount(count))
 	})
 
 	// ── Rejection prompts (tampering / skip-order) ──────────────────

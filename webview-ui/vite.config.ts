@@ -4,7 +4,7 @@ import { writeFileSync } from "node:fs"
 import tailwindcss from "@tailwindcss/vite"
 import react from "@vitejs/plugin-react-swc"
 import { resolve } from "path"
-import { defineConfig, type Plugin, ViteDevServer } from "vite"
+import { defineConfig, type Plugin, type ViteDevServer } from "vite"
 import checker from "vite-plugin-checker"
 
 // Custom plugin to write the server port to a file
@@ -52,12 +52,6 @@ export default defineConfig({
 		setupFiles: ["./src/setupTests.ts"],
 		pool: "vmForks",
 		maxWorkers: 2,
-		minWorkers: 1,
-		poolOptions: {
-			vmForks: {
-				memoryLimit: "768MB",
-			},
-		},
 		coverage: {
 			provider: "v8",
 			reportOnFailure: true,

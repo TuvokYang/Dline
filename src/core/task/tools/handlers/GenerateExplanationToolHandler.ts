@@ -8,7 +8,7 @@ import {
 	streamAIExplanationComments,
 	stringifyConversationHistory,
 } from "@core/controller/task/explainChangesShared"
-import { getPrompt } from "@core/prompts/i18n"
+import { getPrompt, renderPrompt } from "@core/prompts/i18n"
 import { formatResponse } from "@core/prompts/responses"
 import fs from "fs/promises"
 import path from "path"
@@ -166,7 +166,10 @@ export class GenerateExplanationToolHandler implements IToolHandler, IPartialBlo
 					block.ts,
 				)
 				return formatResponse.toolResult(
-					getPrompt("toolHandlers", "generateExplanationNoChanges", { fromRef, toRef: toRef || "working directory" }),
+					renderPrompt("toolHandlers", "generateExplanationNoChanges", {
+						FROM_REF: fromRef,
+						TO_REF: toRef || "working directory",
+					}),
 				)
 			}
 

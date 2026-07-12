@@ -1,8 +1,5 @@
 import { buildApiHandler } from "@core/api"
 import { readApiProfiles } from "@core/controller/file/getApiProfiles"
-import { PromptRegistry } from "@core/prompts/system-prompt"
-import { ClineToolSet } from "@core/prompts/system-prompt/registry/ClineToolSet"
-import type { SystemPromptContext } from "@core/prompts/system-prompt/types"
 import { ClineDefaultTool } from "@shared/tools"
 import type { TaskConfig } from "../types/TaskConfig"
 import type { AgentBaseConfig } from "./AgentConfigLoader"
@@ -71,21 +68,6 @@ export class SubagentBuilder {
 		const configuredSystemPrompt = this.agentConfig?.systemPrompt?.trim()
 		const systemPrompt = configuredSystemPrompt || generatedSystemPrompt
 		return `${systemPrompt}${this.buildAgentIdentitySystemPrefix()}${SUBAGENT_SYSTEM_SUFFIX}`
-	}
-
-	buildNativeTools(context: SystemPromptContext) {
-		const family = PromptRegistry.getInstance().getModelFamily(context)
-		const toolSets = ClineToolSet.getToolsForVariantWithFallback(family, this.allowedTools)
-		const filteredToolSpecs = toolSets
-			.map((toolSet) => toolSet.config)
-			.filter(
-				(toolSpec) =>
-					this.allowedTools.includes(toolSpec.id) &&
-					(!toolSpec.contextRequirements || toolSpec.contextRequirements(context)),
-			)
-
-		const converter = ClineToolSet.getNativeConverter(context.providerInfo.providerId, context.providerInfo.model.id)
-		return filteredToolSpecs.map((tool) => converter(tool, context))
 	}
 
 	/**

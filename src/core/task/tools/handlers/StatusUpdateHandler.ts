@@ -3,7 +3,7 @@ import { formatResponse } from "@core/prompts/responses"
 import { ClineDefaultTool } from "@shared/tools"
 import type { ToolResponse } from "../../index"
 import type { IPartialBlockHandler, IToolHandler } from "../ToolExecutorCoordinator"
-import type { TaskConfig } from "../types/TaskConfig"
+import { interactionId, interactionTurnId, type TaskConfig } from "../types/TaskConfig"
 import type { StronglyTypedUIHelpers } from "../types/UIHelpers"
 
 export class StatusUpdateHandler implements IToolHandler, IPartialBlockHandler {
@@ -63,20 +63,22 @@ export class StatusUpdateHandler implements IToolHandler, IPartialBlockHandler {
 		config.taskState.consecutiveMistakeCount = 0
 
 		if (requiresAck) {
-			// Ask path: show acknowledge/stop buttons, wait for user response.
-			const askResult = await config.callbacks.ask("status_acknowledgment" as any, response, false, {
+			const outcome = await config.interactions.open({
+				turnId: interactionTurnId(block),
+				interactionId: interactionId(block),
+				kind: "status_acknowledgment",
+				presentation: response,
 				existingTs: block.ts,
 			})
-			const feedback = this.formatFeedback(askResult.text, askResult.images, askResult.files)
-			if (askResult.response === "noButtonClicked") {
+			const feedback = this.formatFeedback(outcome.draft?.text, outcome.draft?.images, outcome.draft?.files)
+			if (outcome.actionId === "stop") {
 				return formatResponse.toolResult(`[STATUS_UPDATE] User chose to stop.${feedback} Wait for further instructions.`)
 			}
 			return formatResponse.toolResult(`[STATUS_UPDATE] User acknowledged.${feedback} Continue with your next tool call.`)
 		}
 
-		// Say path (default): display as tool message with status_update identifier
 		const toolMsg = JSON.stringify({ tool: "statusUpdate", content: response })
-		await config.callbacks.say("tool", toolMsg, undefined, undefined, false, block.ts)
+		await config.interactions.say({ taskSay: "tool", presentation: toolMsg, existingTs: block.ts })
 
 		return formatResponse.toolResult(
 			`[Message displayed. Now proceed with your next tool call - ` +

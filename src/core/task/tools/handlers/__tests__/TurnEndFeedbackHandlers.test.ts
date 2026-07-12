@@ -93,6 +93,11 @@ function createConfig(text: string): TaskConfig {
 		autoApprover: {} as TaskConfig["autoApprover"],
 		browserSettings: {} as TaskConfig["browserSettings"],
 		focusChainSettings: {} as TaskConfig["focusChainSettings"],
+		interactions: {
+			open: vi.fn(async () => ({ actionId: "reply" as const, draft: { text, images: [], files: [] } })),
+			complete: vi.fn(async () => ({ actionId: "reply" as const, draft: { text, images: [], files: [] } })),
+			say: vi.fn(async () => {}),
+		},
 		callbacks,
 		coordinator: {} as TaskConfig["coordinator"],
 		identityFactory: {

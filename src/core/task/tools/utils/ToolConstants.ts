@@ -28,6 +28,7 @@ export const TASK_CONFIG_KEYS = [
 	"autoApprover",
 	"browserSettings",
 	"focusChainSettings",
+	"interactions",
 	"callbacks",
 	"coordinator",
 ] as const

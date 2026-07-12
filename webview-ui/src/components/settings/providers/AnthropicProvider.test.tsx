@@ -104,7 +104,7 @@ describe("AnthropicProvider", () => {
 		expect(onUpdate).toHaveBeenCalledWith({
 			anthropic: {
 				...profile.anthropic,
-				capabilities: { maxTokens: 64_000, supportsPromptCache: false },
+				capabilities: { contextWindowTiers: [], maxTokens: 64_000, supportsPromptCache: false },
 			},
 		})
 	})

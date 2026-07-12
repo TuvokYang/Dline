@@ -36,7 +36,7 @@ import { AutoApprove } from "./tools/autoApprove"
 import { SubagentJobManager } from "./tools/subagent/SubagentJobManager"
 import { IPartialBlockHandler, ToolExecutorCoordinator } from "./tools/ToolExecutorCoordinator"
 import { ToolValidator } from "./tools/ToolValidator"
-import { TaskConfig, validateTaskConfig } from "./tools/types/TaskConfig"
+import { type TaskConfig, type TaskInteractionPorts, validateTaskConfig } from "./tools/types/TaskConfig"
 import { createUIHelpers } from "./tools/types/UIHelpers"
 import { ToolDisplayUtils } from "./tools/utils/ToolDisplayUtils"
 import { ToolResultUtils } from "./tools/utils/ToolResultUtils"
@@ -209,6 +209,7 @@ export class ToolExecutor {
 		// Workspace Management
 		private workspaceManager: WorkspaceRootManager | undefined,
 		private isMultiRootEnabled: boolean,
+		private interactions: TaskInteractionPorts,
 
 		// Callbacks to the Task (Entity)
 		private say: (
@@ -292,6 +293,7 @@ export class ToolExecutor {
 			autoApprover: this.autoApprover,
 			browserSettings: this.stateManager.getGlobalSettingsKey("browserSettings"),
 			focusChainSettings: this.stateManager.getGlobalSettingsKey("focusChainSettings"),
+			interactions: this.interactions,
 			services: {
 				mcpHub: this.mcpHub,
 				browserSession: this.browserSession,

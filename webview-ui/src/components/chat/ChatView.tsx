@@ -10,12 +10,12 @@ import { useApiProfiles } from "@/components/settings/providers/useApiProfiles"
 import { useProviderModels } from "@/components/settings/providers/useProviderModels"
 import { useExtensionState } from "@/context/ExtensionStateContext"
 import { useShowNavbar } from "@/context/PlatformContext"
-import { FileServiceClient, UiServiceClient } from "@/services/grpc-client"
+import { FileServiceClient, TaskServiceClient, UiServiceClient } from "@/services/grpc-client"
+import { InteractionHost } from "@/task-interaction/InteractionHost"
 import { Navbar } from "../menu/Navbar"
 import AutoApproveBar from "./auto-approve-menu/AutoApproveBar"
 // Import utilities and hooks from the new structure
 import {
-	ActionButtons,
 	CHAT_CONSTANTS,
 	ChatLayout,
 	convertHtmlToMarkdown,
@@ -59,8 +59,7 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 		hooksEnabled,
 		apiMetrics,
 		lastApiReqTotalTokens: lastApiReqTotalTokensFromState,
-		isWorking,
-		navigateToSettings,
+		taskViewState,
 	} = useExtensionState()
 	const isProdHostedApp = userInfo?.apiBaseUrl === "https://app.dline.bot"
 	const shouldShowQuickWins = isProdHostedApp && (!taskHistory || taskHistory.length < QUICK_WINS_HISTORY_THRESHOLD)
@@ -85,8 +84,6 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 		setSelectedImages,
 		selectedFiles,
 		setSelectedFiles,
-		sendingDisabled,
-		enableButtons,
 		expandedRows,
 		setExpandedRows,
 		textAreaRef,
@@ -299,11 +296,6 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 		return filterVisibleMessages(modifiedMessages)
 	}, [modifiedMessages])
 
-	const isLastMsgResume = useMemo(() => {
-		const askType = chatState.lastMessage?.ask
-		return askType === "resume_task" || askType === "resume_completed_task"
-	}, [chatState.lastMessage?.ask])
-
 	const lastProgressMessageText = useMemo(() => {
 		if (!focusChainSettings.enabled) {
 			return undefined
@@ -373,25 +365,28 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 				)}
 			</div>
 			<footer className="bg-(--vscode-sidebar-background) flex flex-col gap-[0.375rem] mt-3" style={{ gridRow: "2" }}>
-				<ActionButtons
-					chatState={chatState}
-					isLastMsgResume={isLastMsgResume}
-					isWorking={isWorking}
-					messageHandlers={messageHandlers}
-					messages={visibleMessages}
-					mode={mode}
-					task={task}
-				/>
+				{task ? (
+					taskViewState ? (
+						<InteractionHost
+							dispatch={TaskServiceClient.dispatchInteraction.bind(TaskServiceClient)}
+							messages={visibleMessages}
+							showTimeline={false}
+							view={taskViewState}
+						/>
+					) : (
+						<div role="alert">Task interaction state is unavailable</div>
+					)
+				) : (
+					<InputSection
+						chatState={chatState}
+						messageHandlers={messageHandlers}
+						placeholderText={placeholderText}
+						scrollBehavior={scrollBehavior}
+						selectFilesAndImages={selectFilesAndImages}
+						shouldDisableFilesAndImages={shouldDisableFilesAndImages}
+					/>
+				)}
 				<AutoApproveBar />
-
-				<InputSection
-					chatState={chatState}
-					messageHandlers={messageHandlers}
-					placeholderText={placeholderText}
-					scrollBehavior={scrollBehavior}
-					selectFilesAndImages={selectFilesAndImages}
-					shouldDisableFilesAndImages={shouldDisableFilesAndImages}
-				/>
 			</footer>
 		</ChatLayout>
 	)

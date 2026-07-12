@@ -4,7 +4,7 @@
 
 import { combineApiRequests } from "@shared/combineApiRequests"
 import { combineCommandSequences } from "@shared/combineCommandSequences"
-import type { ClineAsk, ClineMessage, ClineSayBrowserAction, ClineSayTool, TaskUiState } from "@shared/ExtensionMessage"
+import type { ClineMessage, ClineSayBrowserAction, ClineSayTool, TaskViewState } from "@shared/ExtensionMessage"
 import { FileIcon, FolderOpenDotIcon, FolderOpenIcon, SearchIcon, ShapesIcon, WrenchIcon } from "lucide-react"
 import React from "react"
 
@@ -49,226 +49,22 @@ export function processMessages(messages: ClineMessage[]): ClineMessage[] {
 	return combineApiRequests(combineCommandSequences(messages))
 }
 
-export type SnapshotBlock = {
-	callId: string
-	name: string
-	phase: string
-	apiIndex: number
-}
-
-export type SnapshotAwaiting = {
-	kind: string
-	taskAsk?: ClineAsk
-	messageTs?: number
-}
-
-export type StateSnapshot = {
-	phase: string
-	apiIndex: number
-	timestamp: number
-	awaiting?: SnapshotAwaiting
-	approval?: {
-		activeCallId?: string
-		blocks?: SnapshotBlock[]
-	}
-	resume?: {
-		assistantApiIndex?: number
-	}
-}
-
 interface ApiErrorMessageInput {
 	isLast: boolean
 	lastModifiedMessage?: ClineMessage
-	taskUiState?: TaskUiState
+	taskViewState?: TaskViewState
 }
 
 /**
  * Resolve the API error text for request rows.
  */
 export function resolveApiErrorMessage(input: ApiErrorMessageInput): string | undefined {
-	if (input.taskUiState?.phase === "awaiting_error_recovery" && input.taskUiState.message) {
-		return input.taskUiState.message
+	if (input.taskViewState?.activeInteraction?.taskAsk === "api_req_failed") {
+		return input.lastModifiedMessage?.text
 	}
 
 	if (input.isLast && input.lastModifiedMessage?.ask === "api_req_failed") {
 		return input.lastModifiedMessage.text
-	}
-
-	return undefined
-}
-
-function parseStateSnapshot(message: ClineMessage): StateSnapshot | undefined {
-	if (message.type !== "say" || message.say !== "state_snapshot" || !message.text) {
-		return undefined
-	}
-	try {
-		const snapshot = JSON.parse(message.text) as StateSnapshot
-		if (typeof snapshot.apiIndex !== "number" || typeof snapshot.phase !== "string") {
-			return undefined
-		}
-		return snapshot
-	} catch {
-		return undefined
-	}
-}
-
-export function findLatestStateSnapshot(messages: ClineMessage[]): StateSnapshot | undefined {
-	let latest: { snapshot: StateSnapshot; order: number; timestamp: number } | undefined
-
-	for (let i = 0; i < messages.length; i++) {
-		const snapshot = parseStateSnapshot(messages[i])
-		if (!snapshot) continue
-
-		const timestamp = typeof snapshot.timestamp === "number" ? snapshot.timestamp : messages[i].ts
-		if (!latest || timestamp > latest.timestamp || (timestamp === latest.timestamp && i > latest.order)) {
-			latest = { snapshot, order: i, timestamp }
-		}
-	}
-
-	return latest?.snapshot
-}
-
-function toolNameToAskType(toolName: string): ClineAsk {
-	switch (toolName) {
-		case "execute_command":
-			return "command"
-		case "spawn_task":
-			return "spawn_task"
-		case "write_to_file":
-		case "replace_in_file":
-			return "tool"
-		case "browser_action":
-			return "browser_action_launch"
-		case "use_mcp_tool":
-		case "access_mcp_resource":
-			return "use_mcp_server"
-		case "use_subagent":
-		case "use_subagents":
-			return "use_subagents"
-		case "focus_chain_change":
-			return "focus_chain_change"
-		default:
-			return "tool"
-	}
-}
-
-const APPROVAL_ASKS = new Set<ClineAsk>([
-	"tool",
-	"command",
-	"browser_action_launch",
-	"use_mcp_server",
-	"use_subagents",
-	"spawn_task",
-	"focus_chain_change",
-])
-
-function getSnapshotActiveBlock(snapshot: StateSnapshot): SnapshotBlock | undefined {
-	const blocks = snapshot.approval?.blocks ?? []
-	if (snapshot.approval?.activeCallId) {
-		const active = blocks.find((block) => block.callId === snapshot.approval?.activeCallId)
-		if (active) return active
-	}
-	return blocks.find((block) => block.phase === "awaiting_approval") ?? blocks.find((block) => block.phase === "executing")
-}
-
-/**
- * Determine whether messages after a snapshot prove that its awaiting ask was consumed.
- */
-function isAwaitingConsumed(messages: ClineMessage[], snapshot: StateSnapshot, awaitingAsk: ClineMessage): boolean {
-	const snapshotTs = typeof snapshot.timestamp === "number" ? snapshot.timestamp : 0
-	const anchorTs = Math.max(snapshotTs, awaitingAsk.ts)
-
-	return messages.some((message) => {
-		if (message.ts <= anchorTs) return false
-		if (message.say === "user_feedback") return true
-		if (message.say === "api_req_started" && (message.conversationHistoryIndex ?? -1) > snapshot.apiIndex) return true
-		if (message.type === "ask" && message.ts !== awaitingAsk.ts) return true
-		return false
-	})
-}
-
-export function findSnapshotAnchoredMessage(messages: ClineMessage[]): ClineMessage | undefined {
-	const snapshot = findLatestStateSnapshot(messages)
-	if (!snapshot) return undefined
-
-	if (snapshot.awaiting?.messageTs !== undefined && snapshot.awaiting.taskAsk) {
-		const awaitingAsk = messages.find(
-			(message) =>
-				message.type === "ask" &&
-				message.ts === snapshot.awaiting?.messageTs &&
-				message.ask === snapshot.awaiting?.taskAsk,
-		)
-		if (!awaitingAsk) return undefined
-		return isAwaitingConsumed(messages, snapshot, awaitingAsk) ? undefined : awaitingAsk
-	}
-
-	const activeBlock = getSnapshotActiveBlock(snapshot)
-	const anchorApiIndex = activeBlock?.apiIndex ?? snapshot.resume?.assistantApiIndex ?? snapshot.apiIndex
-	const expectedAsk = activeBlock ? toolNameToAskType(activeBlock.name) : undefined
-
-	for (let i = messages.length - 1; i >= 0; i--) {
-		const message = messages[i]
-		if (message.type !== "ask") continue
-		if (message.conversationHistoryIndex !== anchorApiIndex) continue
-		if (expectedAsk && message.ask !== expectedAsk) continue
-		return message
-	}
-
-	if (expectedAsk) {
-		for (let i = messages.length - 1; i >= 0; i--) {
-			const message = messages[i]
-			if (message.type === "ask" && message.ask === expectedAsk) {
-				return message
-			}
-		}
-	}
-
-	return undefined
-}
-
-function isApprovalAsk(message: ClineMessage): boolean {
-	return message.type === "ask" && !!message.ask && APPROVAL_ASKS.has(message.ask) && message.partial !== true
-}
-
-function isNewerThanSnapshot(message: ClineMessage, snapshot: StateSnapshot | undefined): boolean {
-	if (!snapshot) return true
-	if (typeof message.conversationHistoryIndex === "number" && message.conversationHistoryIndex > snapshot.apiIndex) {
-		return true
-	}
-	return typeof snapshot.timestamp !== "number" || message.ts >= snapshot.timestamp
-}
-
-function findTrailingApprovalAsk(messages: ClineMessage[], snapshot: StateSnapshot | undefined): ClineMessage | undefined {
-	for (let i = messages.length - 1; i >= 0; i--) {
-		const message = messages[i]
-		if (isInternalLifecycleMessage(message)) continue
-		if (isApprovalAsk(message) && isNewerThanSnapshot(message, snapshot)) {
-			return message
-		}
-		return undefined
-	}
-	return undefined
-}
-
-function isInternalLifecycleMessage(message: ClineMessage): boolean {
-	return message.say === "partial_tool_result" || message.say === "task_progress" || message.say === "state_snapshot"
-}
-
-export function findInteractionMessage(messages: ClineMessage[]): ClineMessage | undefined {
-	const snapshot = findLatestStateSnapshot(messages)
-	if (!snapshot || !getSnapshotActiveBlock(snapshot)) {
-		const trailingApprovalAsk = findTrailingApprovalAsk(messages, snapshot)
-		if (trailingApprovalAsk) return trailingApprovalAsk
-	}
-
-	const snapshotAnchored = findSnapshotAnchoredMessage(messages)
-	if (snapshotAnchored) return snapshotAnchored
-
-	for (let i = messages.length - 1; i >= 0; i--) {
-		const message = messages[i]
-		if (!isInternalLifecycleMessage(message)) {
-			return message
-		}
 	}
 
 	return undefined

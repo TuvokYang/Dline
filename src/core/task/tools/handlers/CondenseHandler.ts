@@ -1,5 +1,5 @@
 import type { ToolUse } from "@core/assistant-message"
-import { getPrompt } from "@core/prompts/i18n"
+import { getPrompt, renderPrompt } from "@core/prompts/i18n"
 import { formatResponse } from "@core/prompts/responses"
 import { ensureTaskDirectoryExists } from "@core/storage/disk"
 import { resolveWorkspacePath } from "@core/workspace"
@@ -10,7 +10,7 @@ import { ClineAsk } from "@shared/ExtensionMessage"
 import { ClineDefaultTool } from "@/shared/tools"
 import type { ToolResponse } from "../../index"
 import type { IPartialBlockHandler, IToolHandler } from "../ToolExecutorCoordinator"
-import type { TaskConfig } from "../types/TaskConfig"
+import { interactionId, interactionTurnId, type TaskConfig } from "../types/TaskConfig"
 import type { StronglyTypedUIHelpers } from "../types/UIHelpers"
 import { sayFeedbackOnce } from "../utils/UserFeedbackUtils"
 
@@ -43,17 +43,20 @@ export class CondenseHandler implements IToolHandler, IPartialBlockHandler {
 		if (config.autoApprovalSettings.enableNotifications) {
 			showSystemNotification({
 				subtitle: getPrompt("toolHandlers", "condenseNotificationSubtitle"),
-				message: getPrompt("toolHandlers", "condenseNotificationMessage", { context }),
+				message: renderPrompt("toolHandlers", "condenseNotificationMessage", { CONTEXT: context }),
 			})
 		}
 
-		// Ask user for response
-		const {
-			response: askResponse,
-			text,
-			images,
-			files: condenseFiles,
-		} = await config.callbacks.ask("condense", context, false, { existingTs: block.ts })
+		const outcome = await config.interactions.open({
+			turnId: interactionTurnId(block),
+			interactionId: interactionId(block),
+			kind: "condense",
+			presentation: context,
+			existingTs: block.ts,
+		})
+		const text = outcome.draft?.text
+		const images = outcome.draft?.images
+		const condenseFiles = outcome.draft?.files
 
 		// If the user provided a response, treat it as feedback
 		if (text || (images && images.length > 0) || (condenseFiles && condenseFiles.length > 0)) {
@@ -62,7 +65,7 @@ export class CondenseHandler implements IToolHandler, IPartialBlockHandler {
 				fileContentString = await processFilesIntoText(condenseFiles)
 			}
 
-			await sayFeedbackOnce(config, askResponse, text, images, condenseFiles)
+			await sayFeedbackOnce(config, "messageResponse", text, images, condenseFiles)
 			return formatResponse.toolResult(`<feedback>\n${text}\n</feedback>`, images, fileContentString)
 		}
 		// If no response, the user accepted the condensed version

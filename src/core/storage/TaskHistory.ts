@@ -250,12 +250,13 @@ export class TaskHistory {
 		}
 	}
 
-	/** Stop watcher and release resources. */
-	dispose(): void {
-		if (this._watcher) {
-			this._watcher.close()
-			this._watcher = null
-		}
+	/** Stop watcher and wait until all native watcher resources are released. */
+	async dispose(): Promise<void> {
+		const watcher = this._watcher
+		this._watcher = null
 		this._onChangeCallbacks = []
+		if (watcher) {
+			await watcher.close()
+		}
 	}
 }

@@ -5,6 +5,9 @@ import { defineConfig } from "vitest/config"
 export default defineConfig({
 	root: __dirname,
 	plugins: [react()],
+	define: {
+		__PLATFORM__: JSON.stringify("vscode"),
+	},
 	test: {
 		name: "webview",
 		environment: "jsdom",
@@ -16,7 +19,6 @@ export default defineConfig({
 		restoreMocks: false,
 		pool: "vmThreads",
 		maxWorkers: 2,
-		vmMemoryLimit: "768MB",
 	},
 	resolve: {
 		alias: {

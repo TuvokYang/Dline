@@ -1,7 +1,7 @@
 import * as fs from "fs/promises"
 import * as os from "os"
 import * as path from "path"
-import { afterAll, describe, it } from "vitest"
+import { afterAll, describe, expect, it } from "vitest"
 import "should"
 import { createDirectoriesForFile, fileExistsAtPath, isDirectory, readDirectory } from "./fs"
 
@@ -100,7 +100,9 @@ describe("Filesystem Utilities", () => {
 			// Get files
 			const files = await readDirectory(testDir)
 			files.length.should.equal(2)
-			files.should.containDeep([path.resolve(testDir, "file1.txt"), path.resolve(testDir, "file2.txt")])
+			expect(files).toEqual(
+				expect.arrayContaining([path.resolve(testDir, "file1.txt"), path.resolve(testDir, "file2.txt")]),
+			)
 		})
 
 		it("should exclude specified directories", async () => {
@@ -114,8 +116,8 @@ describe("Filesystem Utilities", () => {
 			// Get files, excluding the "exclude-me" directory
 			const files = await readDirectory(testDir, [["exclude-me"]])
 			files.length.should.equal(1)
-			files.should.containDeep([path.resolve(testDir, "include.txt")])
-			files.should.not.containDeep([path.resolve(excludeDir, "excluded.txt")])
+			expect(files).toContain(path.resolve(testDir, "include.txt"))
+			expect(files).not.toContain(path.resolve(excludeDir, "excluded.txt"))
 		})
 	})
 
@@ -157,7 +159,7 @@ describe("Filesystem Utilities", () => {
 
 		files.length.should.equal(expectedFiles.length)
 
-		files.sort().should.deepEqual(expectedFiles.sort())
+		expect(files.sort()).toEqual(expectedFiles.sort())
 	})
 
 	it("should correctly exclude multiple directories in complex structures", async () => {
@@ -195,7 +197,7 @@ describe("Filesystem Utilities", () => {
 
 		files.length.should.equal(expectedFiles.length)
 
-		files.sort().should.deepEqual(expectedFiles.sort())
+		expect(files.sort()).toEqual(expectedFiles.sort())
 	})
 
 	it("should exclude .clinerules/workflows directory specifically", async () => {
@@ -241,7 +243,7 @@ describe("Filesystem Utilities", () => {
 			path.resolve(otherDirPath, "util.js"),
 		]
 
-		filteredFiles.sort().should.deepEqual(expectedFiles.sort())
+		expect(filteredFiles.sort()).toEqual(expectedFiles.sort())
 
 		// Test with multiple exclusions
 		const multiExcludeFiles = await readDirectory(clinerulesDirPath, [
@@ -254,7 +256,7 @@ describe("Filesystem Utilities", () => {
 
 		const rootOnlyFiles = [path.resolve(clinerulesDirPath, "config.json"), path.resolve(clinerulesDirPath, "settings.js")]
 
-		multiExcludeFiles.sort().should.deepEqual(rootOnlyFiles.sort())
+		expect(multiExcludeFiles.sort()).toEqual(rootOnlyFiles.sort())
 	})
 
 	it("should exclude .clinerules/hooks directory specifically", async () => {
@@ -298,7 +300,7 @@ describe("Filesystem Utilities", () => {
 			path.resolve(workflowsDirPath, "workflow1.js"),
 		]
 
-		filteredFiles.sort().should.deepEqual(expectedFiles.sort())
+		expect(filteredFiles.sort()).toEqual(expectedFiles.sort())
 
 		// Test with multiple exclusions (both workflows and hooks)
 		const multiExcludeFiles = await readDirectory(clinerulesDirPath, [
@@ -311,6 +313,6 @@ describe("Filesystem Utilities", () => {
 
 		const rootOnlyFiles = [path.resolve(clinerulesDirPath, "config.json"), path.resolve(clinerulesDirPath, "settings.js")]
 
-		multiExcludeFiles.sort().should.deepEqual(rootOnlyFiles.sort())
+		expect(multiExcludeFiles.sort()).toEqual(rootOnlyFiles.sort())
 	})
 })

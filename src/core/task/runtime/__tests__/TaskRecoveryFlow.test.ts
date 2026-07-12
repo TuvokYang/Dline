@@ -1,0 +1,233 @@
+import { describe, expect, it, vi } from "vitest"
+import type { InteractionDraft } from "../../interaction/InteractionResponse"
+import { TaskPhase } from "../../TaskPhase"
+import type { TaskEffect } from "../TaskEffect"
+import type { TaskEffectPorts } from "../TaskEffectRunner"
+import type { TaskEvent } from "../TaskEvent"
+import { reduceTask } from "../TaskReducer"
+import { TaskRuntime } from "../TaskRuntime"
+import { createTaskRuntimeState, type TaskRuntimeState } from "../TaskRuntimeState"
+
+interface RecoveryPorts extends TaskEffectPorts {
+	sequence: string[]
+}
+
+/** Create effect ports that expose transaction ordering without performing infrastructure work. */
+function createPorts(): RecoveryPorts {
+	const sequence: string[] = []
+	return {
+		sequence,
+		postView: vi.fn(async () => {
+			sequence.push("POST_TASK_VIEW")
+		}),
+		persistSnapshot: vi.fn(async () => {
+			sequence.push("PERSIST_SNAPSHOT")
+		}),
+		cancelRuntime: vi.fn(async () => {
+			sequence.push("CANCEL_RUNTIME")
+		}),
+		startApi: vi.fn(async (effect) => {
+			sequence.push(`START_API:${effect.apiIndex}:${effect.draft?.text ?? ""}`)
+		}),
+		executeTool: vi.fn(async () => undefined),
+		appendSay: vi.fn(async () => undefined),
+		appendAsk: vi.fn(async (effect) => {
+			sequence.push(`APPEND_ASK:${effect.interactionId}`)
+			return { uiMessageTs: 500 }
+		}),
+		startNewTask: vi.fn(async (effect) => {
+			sequence.push(`START_NEW_TASK:${effect.draft?.text ?? ""}`)
+		}),
+	}
+}
+
+/** Create an awaiting interaction state without reading UI message history. */
+function awaitingInteraction(kind: "tool_approval" | "error_retry" | "completion"): TaskRuntimeState {
+	return {
+		...createTaskRuntimeState({
+			taskId: "task-1",
+			phase:
+				kind === "completion"
+					? TaskPhase.COMPLETED
+					: kind === "error_retry"
+						? TaskPhase.AWAITING_APPROVAL
+						: TaskPhase.STREAMING,
+			revision: 4,
+			anchor: { apiIndex: 7, turnId: "turn-1", interactionId: "interaction-1" },
+		}),
+		interaction: {
+			taskId: "task-1",
+			turnId: "turn-1",
+			interactionId: "interaction-1",
+			kind,
+			status: kind === "tool_approval" ? "awaiting" : "resolving",
+			createdRevision: 3,
+			anchor: { messageTs: 100, messageType: "ask" },
+		},
+	}
+}
+
+/** Reduce a recovery event that is intentionally specified before its production event union exists. */
+function reduceRecovery(state: TaskRuntimeState, event: object) {
+	return reduceTask(state, event as TaskEvent)
+}
+
+/** Return effect types while preserving the concrete effect payload for later assertions. */
+function effectTypes(effects: readonly TaskEffect[]): string[] {
+	return effects.map((effect) => effect.type)
+}
+
+describe("TaskRuntime recovery transactions", () => {
+	it("invalidates the active interaction before ordered cancellation effects", async () => {
+		const ports = createPorts()
+		const runtime = new TaskRuntime(awaitingInteraction("tool_approval"), ports)
+
+		const result = await runtime.dispatch({ type: "TASK_CANCEL_REQUESTED", source: "user" })
+
+		expect(result).toMatchObject({
+			accepted: true,
+			next: {
+				phase: TaskPhase.CANCELLING,
+				cancellation: { source: "user", fromPhase: TaskPhase.STREAMING },
+			},
+		})
+		expect(result.next.interaction).toBeUndefined()
+		expect(ports.sequence).toEqual(["POST_TASK_VIEW", "CANCEL_RUNTIME", "PERSIST_SNAPSHOT"])
+	})
+
+	it("opens the resume interaction only after cancellation cleanup commits", async () => {
+		const ports = createPorts()
+		const runtime = new TaskRuntime(
+			createTaskRuntimeState({ taskId: "task-1", phase: TaskPhase.CANCELLING, revision: 2, anchor: { apiIndex: 7 } }),
+			ports,
+		)
+
+		const result = await runtime.dispatch({
+			type: "TASK_CANCELLED",
+			resume: {
+				turnId: "resume-turn-1",
+				interactionId: "resume-1",
+				presentation: "",
+			},
+		} as TaskEvent)
+
+		expect(result.accepted).toBe(true)
+		expect(runtime.getState()).toMatchObject({
+			phase: TaskPhase.PAUSED,
+			interaction: {
+				turnId: "resume-turn-1",
+				interactionId: "resume-1",
+				kind: "resume",
+				status: "awaiting",
+				anchor: { messageTs: 500, messageType: "ask" },
+			},
+		})
+		expect(ports.sequence).toEqual([
+			"POST_TASK_VIEW",
+			"APPEND_ASK:resume-1",
+			"PERSIST_SNAPSHOT",
+			"POST_TASK_VIEW",
+			"PERSIST_SNAPSHOT",
+		])
+	})
+
+	it("retries from a causal error response with draft attachments in one API effect", () => {
+		const draft: InteractionDraft = { text: "retry with this context", images: ["image"], files: ["file"] }
+		const result = reduceRecovery(awaitingInteraction("error_retry"), {
+			type: "ERROR_RETRY_REQUESTED",
+			apiIndex: 7,
+			draft,
+		})
+
+		expect(result).toMatchObject({
+			accepted: true,
+			next: { phase: TaskPhase.STREAMING, interaction: undefined },
+		})
+		expect(effectTypes(result.effects)).toEqual(["POST_TASK_VIEW", "START_API", "PERSIST_SNAPSHOT"])
+		expect(result.effects[1]).toMatchObject({ type: "START_API", apiIndex: 7, draft })
+	})
+
+	it("opens one retry interaction when automatic retries are exhausted", async () => {
+		const ports = createPorts()
+		const runtime = new TaskRuntime(
+			createTaskRuntimeState({ taskId: "task-1", phase: TaskPhase.STREAMING, revision: 8, anchor: { apiIndex: 7 } }),
+			ports,
+		)
+
+		const result = await runtime.dispatch({
+			type: "API_RETRY_EXHAUSTED",
+			turnId: "retry-turn-1",
+			interactionId: "retry-1",
+			presentation: "provider unavailable",
+		} as TaskEvent)
+
+		expect(result.accepted).toBe(true)
+		expect(runtime.getState()).toMatchObject({
+			phase: TaskPhase.AWAITING_APPROVAL,
+			interaction: { kind: "error_retry", interactionId: "retry-1", status: "awaiting" },
+		})
+		expect(ports.sequence).toEqual([
+			"POST_TASK_VIEW",
+			"APPEND_ASK:retry-1",
+			"PERSIST_SNAPSHOT",
+			"POST_TASK_VIEW",
+			"PERSIST_SNAPSHOT",
+		])
+	})
+
+	it("presents completion as canonical completed state with one causal interaction", async () => {
+		const ports = createPorts()
+		const runtime = new TaskRuntime(
+			createTaskRuntimeState({ taskId: "task-1", phase: TaskPhase.EXECUTING, revision: 10, anchor: { apiIndex: 7 } }),
+			ports,
+		)
+
+		const result = await runtime.dispatch({
+			type: "ATTEMPT_COMPLETION_PRESENTED",
+			completionId: "completion-1",
+			turnId: "turn-completion-1",
+			interactionId: "completion-1",
+			presentation: "done",
+			existingTs: 200,
+		} as TaskEvent)
+
+		expect(result.accepted).toBe(true)
+		expect(runtime.getState()).toMatchObject({
+			phase: TaskPhase.COMPLETED,
+			completion: { completionId: "completion-1" },
+			interaction: { kind: "completion", interactionId: "completion-1", status: "awaiting" },
+		})
+		expect(ports.sequence).toEqual([
+			"POST_TASK_VIEW",
+			"APPEND_ASK:completion-1",
+			"PERSIST_SNAPSHOT",
+			"POST_TASK_VIEW",
+			"PERSIST_SNAPSHOT",
+		])
+	})
+
+	it("returns completion feedback to streaming without a separate completion flag", () => {
+		const draft: InteractionDraft = { text: "refine the result", images: [], files: [] }
+		const result = reduceRecovery(awaitingInteraction("completion"), {
+			type: "COMPLETION_FEEDBACK_RECEIVED",
+			draft,
+		})
+
+		expect(result).toMatchObject({ accepted: true, next: { phase: TaskPhase.STREAMING } })
+		expect(result.next.interaction).toBeUndefined()
+		expect(result.next.completion).toBeUndefined()
+		expect(effectTypes(result.effects)).toEqual(["POST_TASK_VIEW", "PERSIST_SNAPSHOT"])
+	})
+
+	it("keeps completion terminal while ordered start-new-task cleanup runs", () => {
+		const draft: InteractionDraft = { text: "", images: [], files: [] }
+		const result = reduceRecovery(awaitingInteraction("completion"), {
+			type: "TASK_CLEAR_REQUESTED",
+			draft,
+		})
+
+		expect(result).toMatchObject({ accepted: true, next: { phase: TaskPhase.COMPLETED, interaction: undefined } })
+		expect(effectTypes(result.effects)).toEqual(["POST_TASK_VIEW", "PERSIST_SNAPSHOT", "START_NEW_TASK"])
+		expect(result.effects[2]).toMatchObject({ type: "START_NEW_TASK", draft })
+	})
+})

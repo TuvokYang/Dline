@@ -28,7 +28,9 @@ vi.mock("@/config", () => ({
 
 import * as coreApi from "@core/api"
 import * as skills from "@core/context/instructions/user-instructions/skills"
-import { PromptRegistry } from "@core/prompts/system-prompt"
+import { SystemPromptGenerator } from "@core/prompts/generators/SystemPromptGenerator"
+import { PromptProfile } from "@core/prompts/profiles/types"
+import type { SystemPromptContext } from "@core/prompts/system-prompt/context"
 import type { TaskConfig } from "@core/task/tools/types/TaskConfig"
 import type { GlobalInstructionsFile } from "@shared/remote-config/schema"
 import { HostProvider } from "@/hosts/host-provider"
@@ -164,6 +166,26 @@ function createTaskConfig(nativeToolCallEnabled: boolean, options: any = {}): Ta
 	} as unknown as TaskConfig
 }
 
+/** Stubs the profile facade used by one subagent test. */
+function stubSystemPrompt(native: boolean, inspectContext?: (context: SystemPromptContext) => void): ReturnType<typeof vi.spyOn> {
+	return vi.spyOn(SystemPromptGenerator.prototype, "generate").mockImplementation(async (context) => {
+		inspectContext?.(context)
+		return {
+			systemPrompt: "system prompt",
+			tools: native
+				? [
+						{
+							type: "function",
+							function: { name: ClineDefaultTool.LIST_FILES, description: "List files" },
+						},
+					]
+				: undefined,
+			profile: PromptProfile.Native,
+			warnings: [],
+		}
+	})
+}
+
 function stubApiHandler(createMessage: any) {
 	vi.spyOn(coreApi, "buildApiHandler").mockReturnValue({
 		abort: vi.fn(),
@@ -182,10 +204,6 @@ function stubApiHandler(createMessage: any) {
 
 describe("SubagentRunner", () => {
 	afterEach(() => {
-		try {
-			const pr = PromptRegistry.getInstance()
-			if (pr) (pr as any).nativeTools = undefined
-		} catch {}
 		HostProvider.reset()
 		vi.restoreAllMocks()
 	})
@@ -235,12 +253,7 @@ describe("SubagentRunner", () => {
 				},
 			}
 		})
-		const pr = PromptRegistry.getInstance()
-		vi.spyOn(pr, "get").mockImplementation(async () => {
-			;(pr as any).nativeTools = [{ name: "list_files" }]
-			return "system prompt"
-		})
-		vi.spyOn(SubagentBuilder.prototype, "buildNativeTools").mockReturnValue([{ name: "list_files" }] as any)
+		stubSystemPrompt(true)
 		vi.spyOn(skills, "discoverSkills").mockResolvedValue([])
 		vi.spyOn(skills, "getAvailableSkills").mockReturnValue([])
 		stubApiHandler(createMessage)
@@ -285,12 +298,7 @@ describe("SubagentRunner", () => {
 				},
 			}
 		})
-		const pr = PromptRegistry.getInstance()
-		vi.spyOn(pr, "get").mockImplementation(async () => {
-			;(pr as any).nativeTools = [{ name: "list_files" }]
-			return "system prompt"
-		})
-		vi.spyOn(SubagentBuilder.prototype, "buildNativeTools").mockReturnValue([{ name: "list_files" }] as any)
+		stubSystemPrompt(true)
 		vi.spyOn(skills, "discoverSkills").mockResolvedValue([])
 		vi.spyOn(skills, "getAvailableSkills").mockReturnValue([])
 		stubApiHandler(createMessage)
@@ -336,11 +344,7 @@ describe("SubagentRunner", () => {
 				},
 			}
 		})
-		const pr = PromptRegistry.getInstance()
-		vi.spyOn(pr, "get").mockImplementation(async () => {
-			;(pr as any).nativeTools = undefined
-			return "system prompt"
-		})
+		stubSystemPrompt(false)
 		vi.spyOn(skills, "discoverSkills").mockResolvedValue([])
 		vi.spyOn(skills, "getAvailableSkills").mockReturnValue([])
 		stubApiHandler(createMessage)
@@ -374,11 +378,7 @@ describe("SubagentRunner", () => {
 				},
 			}
 		})
-		const pr = PromptRegistry.getInstance()
-		vi.spyOn(pr, "get").mockImplementation(async () => {
-			;(pr as any).nativeTools = undefined
-			return "system prompt"
-		})
+		stubSystemPrompt(false)
 		vi.spyOn(skills, "discoverSkills").mockResolvedValue([])
 		vi.spyOn(skills, "getAvailableSkills").mockReturnValue([])
 		stubApiHandler(createMessage)
@@ -405,11 +405,7 @@ describe("SubagentRunner", () => {
 			yield* []
 			throw new Error(errMsg)
 		})
-		const pr = PromptRegistry.getInstance()
-		vi.spyOn(pr, "get").mockImplementation(async () => {
-			;(pr as any).nativeTools = undefined
-			return "system prompt"
-		})
+		stubSystemPrompt(false)
 		vi.spyOn(skills, "discoverSkills").mockResolvedValue([])
 		vi.spyOn(skills, "getAvailableSkills").mockReturnValue([])
 		stubApiHandler(createMessage)
@@ -429,11 +425,7 @@ describe("SubagentRunner", () => {
 			;(e as any).status = 400
 			throw e
 		})
-		const pr = PromptRegistry.getInstance()
-		vi.spyOn(pr, "get").mockImplementation(async () => {
-			;(pr as any).nativeTools = undefined
-			return "system prompt"
-		})
+		stubSystemPrompt(false)
 		vi.spyOn(skills, "discoverSkills").mockResolvedValue([])
 		vi.spyOn(skills, "getAvailableSkills").mockReturnValue([])
 		stubApiHandler(createMessage)
@@ -458,12 +450,7 @@ describe("SubagentRunner", () => {
 				},
 			}
 		})
-		const pr = PromptRegistry.getInstance()
-		vi.spyOn(pr, "get").mockImplementation(async () => {
-			;(pr as any).nativeTools = [{ name: "list_files" }]
-			return "system prompt"
-		})
-		vi.spyOn(SubagentBuilder.prototype, "buildNativeTools").mockReturnValue([{ name: "list_files" }] as any)
+		stubSystemPrompt(true)
 		vi.spyOn(skills, "discoverSkills").mockResolvedValue([])
 		vi.spyOn(skills, "getAvailableSkills").mockReturnValue([])
 		stubApiHandler(createMessage)
@@ -487,14 +474,11 @@ describe("SubagentRunner", () => {
 				},
 			}
 		})
-		const pr = PromptRegistry.getInstance()
-		vi.spyOn(pr, "get").mockImplementation(async (ctx: any) => {
+		stubSystemPrompt(false, (context) => {
 			assert.deepEqual(
-				ctx.skills.map((s: any) => s.name),
+				context.skills?.map((skill) => skill.name),
 				["allowed-skill"],
 			)
-			;(pr as any).nativeTools = undefined
-			return "sp"
 		})
 		vi.spyOn(SubagentBuilder.prototype, "getConfiguredSkills").mockReturnValue(["allowed-skill"])
 		stubApiHandler(createMessage)
@@ -522,14 +506,11 @@ describe("SubagentRunner", () => {
 				},
 			}
 		})
-		const pr = PromptRegistry.getInstance()
-		vi.spyOn(pr, "get").mockImplementation(async (ctx: any) => {
+		stubSystemPrompt(false, (context) => {
 			assert.deepEqual(
-				ctx.skills.map((s: any) => s.name),
+				context.skills?.map((skill) => skill.name),
 				["alpha-skill", "beta-skill"],
 			)
-			;(pr as any).nativeTools = undefined
-			return "sp"
 		})
 		vi.spyOn(SubagentBuilder.prototype, "getConfiguredSkills").mockReturnValue(undefined)
 		vi.spyOn(skills, "discoverAvailableSkills").mockResolvedValue([
@@ -558,14 +539,11 @@ describe("SubagentRunner", () => {
 			}
 		})
 		const warnStub = vi.spyOn(Logger, "warn").mockImplementation(() => undefined)
-		const pr = PromptRegistry.getInstance()
-		vi.spyOn(pr, "get").mockImplementation(async (ctx: any) => {
+		stubSystemPrompt(false, (context) => {
 			assert.deepEqual(
-				ctx.skills.map((s: any) => s.name),
+				context.skills?.map((skill) => skill.name),
 				["present-skill"],
 			)
-			;(pr as any).nativeTools = undefined
-			return "sp"
 		})
 		vi.spyOn(SubagentBuilder.prototype, "getConfiguredSkills").mockReturnValue(["present-skill", "missing-skill"])
 		stubApiHandler(createMessage)
@@ -602,14 +580,11 @@ describe("SubagentRunner", () => {
 			createRemoteSkillEntry("remote-disabled", "D"),
 			createRemoteSkillEntry("remote-locked", "L", { alwaysEnabled: true }),
 		]
-		const pr = PromptRegistry.getInstance()
-		vi.spyOn(pr, "get").mockImplementation(async (ctx: any) => {
+		stubSystemPrompt(false, (context) => {
 			assert.deepEqual(
-				ctx.skills.map((s: any) => s.name),
+				context.skills?.map((skill) => skill.name),
 				["remote-enabled", "remote-locked"],
 			)
-			;(pr as any).nativeTools = undefined
-			return "sp"
 		})
 		vi.spyOn(SubagentBuilder.prototype, "getConfiguredSkills").mockReturnValue([
 			"remote-enabled",
@@ -701,12 +676,7 @@ describe("SubagentRunner", () => {
 				},
 			}
 		})
-		const pr = PromptRegistry.getInstance()
-		vi.spyOn(pr, "get").mockImplementation(async () => {
-			;(pr as any).nativeTools = [{ name: "list_files" }]
-			return "system prompt"
-		})
-		vi.spyOn(SubagentBuilder.prototype, "buildNativeTools").mockReturnValue([{ name: "list_files" }] as any)
+		stubSystemPrompt(true)
 		vi.spyOn(skills, "discoverSkills").mockResolvedValue([])
 		vi.spyOn(skills, "getAvailableSkills").mockReturnValue([])
 		stubApiHandler(createMessage)

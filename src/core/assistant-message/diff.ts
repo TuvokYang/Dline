@@ -1,4 +1,4 @@
-import { getPrompt } from "@core/prompts/i18n"
+import { renderPrompt } from "@core/prompts/i18n"
 
 const SEARCH_BLOCK_START = "------- SEARCH"
 const SEARCH_BLOCK_END = "======="
@@ -485,7 +485,7 @@ async function constructNewFileContentV1(
 			blockDelimiterCount = countSearchDelimiter(line)
 			throw new DiffError(
 				DIFF_ERROR_CODE.DELIMITER_TOO_SHORT,
-				getPrompt("responses", "diffDelimiterTooShort", { count: String(blockDelimiterCount) }),
+				renderPrompt("responses", "diffDelimiterTooShort", { COUNT: String(blockDelimiterCount) }),
 			)
 		}
 
@@ -498,7 +498,7 @@ async function constructNewFileContentV1(
 			if (blockDelimiterCount < 7) {
 				throw new DiffError(
 					DIFF_ERROR_CODE.DELIMITER_TOO_SHORT,
-					getPrompt("responses", "diffDelimiterTooShort", { count: String(blockDelimiterCount) }),
+					renderPrompt("responses", "diffDelimiterTooShort", { COUNT: String(blockDelimiterCount) }),
 				)
 			}
 			continue
@@ -509,9 +509,9 @@ async function constructNewFileContentV1(
 			if (endCount !== blockDelimiterCount) {
 				throw new DiffError(
 					DIFF_ERROR_CODE.DELIMITER_MISMATCH,
-					getPrompt("responses", "diffDelimiterMismatch", {
-						searchN: String(blockDelimiterCount),
-						closeN: String(endCount),
+					renderPrompt("responses", "diffDelimiterMismatch", {
+						SEARCH_N: String(blockDelimiterCount),
+						CLOSE_N: String(endCount),
 					}),
 				)
 			}
@@ -524,30 +524,30 @@ async function constructNewFileContentV1(
 				if (dashCount === blockDelimiterCount && /^[-]{7,} SEARCH>?$/.test(trimmed)) {
 					throw new DiffError(
 						DIFF_ERROR_CODE.DELIMITER_CONFLICT,
-						getPrompt("responses", "diffDelimiterConflict", {
-							blockType: "SEARCH",
-							count: String(dashCount),
-							char: "-",
+						renderPrompt("responses", "diffDelimiterConflict", {
+							BLOCK_TYPE: "SEARCH",
+							COUNT: String(dashCount),
+							CHAR: "-",
 						}),
 					)
 				}
 				if (eqCount === blockDelimiterCount && /^[=]{7,}$/.test(trimmed)) {
 					throw new DiffError(
 						DIFF_ERROR_CODE.DELIMITER_CONFLICT,
-						getPrompt("responses", "diffDelimiterConflict", {
-							blockType: "SEARCH",
-							count: String(eqCount),
-							char: "=",
+						renderPrompt("responses", "diffDelimiterConflict", {
+							BLOCK_TYPE: "SEARCH",
+							COUNT: String(eqCount),
+							CHAR: "=",
 						}),
 					)
 				}
 				if (plusCount === blockDelimiterCount && /^[+]{7,} REPLACE>?$/.test(trimmed)) {
 					throw new DiffError(
 						DIFF_ERROR_CODE.DELIMITER_CONFLICT,
-						getPrompt("responses", "diffDelimiterConflict", {
-							blockType: "SEARCH",
-							count: String(plusCount),
-							char: "+",
+						renderPrompt("responses", "diffDelimiterConflict", {
+							BLOCK_TYPE: "SEARCH",
+							COUNT: String(plusCount),
+							CHAR: "+",
 						}),
 					)
 				}
@@ -573,7 +573,7 @@ async function constructNewFileContentV1(
 					// Empty SEARCH with non-empty file: SEARCH content may have been consumed as delimiter
 					throw new DiffError(
 						DIFF_ERROR_CODE.EMPTY_SEARCH_CONTENT_CONFLICT,
-						getPrompt("responses", "diffEmptySearchContentConflict"),
+						renderPrompt("responses", "diffEmptySearchContentConflict"),
 					)
 				}
 			} else {
@@ -623,9 +623,9 @@ async function constructNewFileContentV1(
 							if (isOverlap) {
 								diffError = new DiffError(
 									DIFF_ERROR_CODE.BLOCK_OVERLAP,
-									getPrompt("responses", "diffBlockOverlap", {
-										blockIndex: String(currentBlockIndex),
-										prevIndex: String(1),
+									renderPrompt("responses", "diffBlockOverlap", {
+										BLOCK_INDEX: String(currentBlockIndex),
+										PREV_INDEX: String(1),
 									}),
 								)
 								result += originalContent.slice(lastProcessedIndex)
@@ -643,8 +643,8 @@ async function constructNewFileContentV1(
 							}
 							throw new DiffError(
 								DIFF_ERROR_CODE.SEARCH_NOT_FOUND,
-								getPrompt("responses", "diffSearchNotFound", {
-									lineCount: String(currentSearchContent.split("\n").filter((l) => l).length),
+								renderPrompt("responses", "diffSearchNotFound", {
+									LINE_COUNT: String(currentSearchContent.split("\n").filter((l) => l).length),
 								}),
 							)
 						}
@@ -657,7 +657,7 @@ async function constructNewFileContentV1(
 			if (searchMatchIndex < lastProcessedIndex) {
 				throw new DiffError(
 					DIFF_ERROR_CODE.BLOCK_OUT_OF_ORDER,
-					getPrompt("responses", "diffBlockOutOfOrder", { blockIndex: String(currentBlockIndex) }),
+					renderPrompt("responses", "diffBlockOutOfOrder", { BLOCK_INDEX: String(currentBlockIndex) }),
 				)
 			}
 
@@ -666,9 +666,9 @@ async function constructNewFileContentV1(
 				if (searchMatchIndex < existing.end && searchEndIndex > existing.start) {
 					diffError = new DiffError(
 						DIFF_ERROR_CODE.BLOCK_OVERLAP,
-						getPrompt("responses", "diffBlockOverlap", {
-							blockIndex: String(currentBlockIndex),
-							prevIndex: String(replacements.indexOf(existing) + 1),
+						renderPrompt("responses", "diffBlockOverlap", {
+							BLOCK_INDEX: String(currentBlockIndex),
+							PREV_INDEX: String(replacements.indexOf(existing) + 1),
 						}),
 					)
 					result += originalContent.slice(lastProcessedIndex)
@@ -696,16 +696,16 @@ async function constructNewFileContentV1(
 			if (replaceCount !== blockDelimiterCount) {
 				throw new DiffError(
 					DIFF_ERROR_CODE.DELIMITER_MISMATCH,
-					getPrompt("responses", "diffDelimiterMismatch", {
-						searchN: String(blockDelimiterCount),
-						closeN: String(replaceCount),
+					renderPrompt("responses", "diffDelimiterMismatch", {
+						SEARCH_N: String(blockDelimiterCount),
+						CLOSE_N: String(replaceCount),
 					}),
 				)
 			}
 			// Finished one replace block
 
 			if (searchMatchIndex === -1) {
-				throw new DiffError(DIFF_ERROR_CODE.UNCLOSED_SEARCH, getPrompt("responses", "diffUnclosedSearch"))
+				throw new DiffError(DIFF_ERROR_CODE.UNCLOSED_SEARCH, renderPrompt("responses", "diffUnclosedSearch"))
 			}
 
 			// Store this replacement with structured diff block info for frontend rendering
@@ -756,26 +756,30 @@ async function constructNewFileContentV1(
 			if (dashCount === blockDelimiterCount && /^[-]{7,} SEARCH>?$/.test(trimmed)) {
 				throw new DiffError(
 					DIFF_ERROR_CODE.DELIMITER_CONFLICT,
-					getPrompt("responses", "diffDelimiterConflict", {
-						blockType: "REPLACE",
-						count: String(dashCount),
-						char: "-",
+					renderPrompt("responses", "diffDelimiterConflict", {
+						BLOCK_TYPE: "REPLACE",
+						COUNT: String(dashCount),
+						CHAR: "-",
 					}),
 				)
 			}
 			if (eqCount === blockDelimiterCount && /^[=]{7,}$/.test(trimmed)) {
 				throw new DiffError(
 					DIFF_ERROR_CODE.DELIMITER_CONFLICT,
-					getPrompt("responses", "diffDelimiterConflict", { blockType: "REPLACE", count: String(eqCount), char: "=" }),
+					renderPrompt("responses", "diffDelimiterConflict", {
+						BLOCK_TYPE: "REPLACE",
+						COUNT: String(eqCount),
+						CHAR: "=",
+					}),
 				)
 			}
 			if (plusCount === blockDelimiterCount && /^[+]{7,} REPLACE>?$/.test(trimmed)) {
 				throw new DiffError(
 					DIFF_ERROR_CODE.DELIMITER_CONFLICT,
-					getPrompt("responses", "diffDelimiterConflict", {
-						blockType: "REPLACE",
-						count: String(plusCount),
-						char: "+",
+					renderPrompt("responses", "diffDelimiterConflict", {
+						BLOCK_TYPE: "REPLACE",
+						COUNT: String(plusCount),
+						CHAR: "+",
 					}),
 				)
 			}
@@ -792,10 +796,10 @@ async function constructNewFileContentV1(
 	// diff from the model and must be rejected rather than auto-closed.
 	if (isFinal) {
 		if (inSearch) {
-			throw new DiffError(DIFF_ERROR_CODE.UNCLOSED_SEARCH, getPrompt("responses", "diffUnclosedSearch"))
+			throw new DiffError(DIFF_ERROR_CODE.UNCLOSED_SEARCH, renderPrompt("responses", "diffUnclosedSearch"))
 		}
 		if (inReplace) {
-			throw new DiffError(DIFF_ERROR_CODE.UNCLOSED_REPLACE, getPrompt("responses", "diffUnclosedReplace"))
+			throw new DiffError(DIFF_ERROR_CODE.UNCLOSED_REPLACE, renderPrompt("responses", "diffUnclosedReplace"))
 		}
 
 		result += originalContent.slice(lastProcessedIndex)
@@ -870,7 +874,7 @@ class NewFileContentConstructor {
 			(this.state === ProcessingState.StateSearch && newState === ProcessingState.StateReplace)
 
 		if (!isValidTransition) {
-			throw new DiffError(DIFF_ERROR_CODE.UNCLOSED_SEARCH, getPrompt("responses", "diffUnclosedSearch"))
+			throw new DiffError(DIFF_ERROR_CODE.UNCLOSED_SEARCH, renderPrompt("responses", "diffUnclosedSearch"))
 		}
 
 		this.state |= newState
@@ -911,7 +915,7 @@ class NewFileContentConstructor {
 			this.result += this.originalContent.slice(this.lastProcessedIndex)
 		}
 		if (this.isFinal && this.state !== ProcessingState.Idle) {
-			throw new DiffError(DIFF_ERROR_CODE.UNCLOSED_SEARCH, getPrompt("responses", "diffUnclosedSearch"))
+			throw new DiffError(DIFF_ERROR_CODE.UNCLOSED_SEARCH, renderPrompt("responses", "diffUnclosedSearch"))
 		}
 		// Note: V2 implementation doesn't currently track match indices or diff blocks
 		return { newContent: this.result, matchIndices: [], blocks: [] }
@@ -927,7 +931,7 @@ class NewFileContentConstructor {
 			this.blockDelimiterCount = countSearchDelimiter(line)
 			throw new DiffError(
 				DIFF_ERROR_CODE.DELIMITER_TOO_SHORT,
-				getPrompt("responses", "diffDelimiterTooShort", { count: String(this.blockDelimiterCount) }),
+				renderPrompt("responses", "diffDelimiterTooShort", { COUNT: String(this.blockDelimiterCount) }),
 			)
 		}
 
@@ -936,7 +940,7 @@ class NewFileContentConstructor {
 			if (this.blockDelimiterCount < 7) {
 				throw new DiffError(
 					DIFF_ERROR_CODE.DELIMITER_TOO_SHORT,
-					getPrompt("responses", "diffDelimiterTooShort", { count: String(this.blockDelimiterCount) }),
+					renderPrompt("responses", "diffDelimiterTooShort", { COUNT: String(this.blockDelimiterCount) }),
 				)
 			}
 			removeLineCount = this.trimPendingNonStandardTrailingEmptyLines(pendingNonStandardLineLimit)
@@ -953,9 +957,9 @@ class NewFileContentConstructor {
 			if (endCount !== this.blockDelimiterCount) {
 				throw new DiffError(
 					DIFF_ERROR_CODE.DELIMITER_MISMATCH,
-					getPrompt("responses", "diffDelimiterMismatch", {
-						searchN: String(this.blockDelimiterCount),
-						closeN: String(endCount),
+					renderPrompt("responses", "diffDelimiterMismatch", {
+						SEARCH_N: String(this.blockDelimiterCount),
+						CLOSE_N: String(endCount),
 					}),
 				)
 			}
@@ -971,9 +975,9 @@ class NewFileContentConstructor {
 			if (replaceCount !== this.blockDelimiterCount) {
 				throw new DiffError(
 					DIFF_ERROR_CODE.DELIMITER_MISMATCH,
-					getPrompt("responses", "diffDelimiterMismatch", {
-						searchN: String(this.blockDelimiterCount),
-						closeN: String(replaceCount),
+					renderPrompt("responses", "diffDelimiterMismatch", {
+						SEARCH_N: String(this.blockDelimiterCount),
+						CLOSE_N: String(replaceCount),
 					}),
 				)
 			}
@@ -1060,8 +1064,8 @@ class NewFileContentConstructor {
 					} else {
 						throw new DiffError(
 							DIFF_ERROR_CODE.SEARCH_NOT_FOUND,
-							getPrompt("responses", "diffSearchNotFound", {
-								lineCount: String(this.currentSearchContent.split("\n").filter((l) => l).length),
+							renderPrompt("responses", "diffSearchNotFound", {
+								LINE_COUNT: String(this.currentSearchContent.split("\n").filter((l) => l).length),
 							}),
 						)
 					}
@@ -1071,7 +1075,7 @@ class NewFileContentConstructor {
 		if (this.searchMatchIndex < this.lastProcessedIndex) {
 			throw new DiffError(
 				DIFF_ERROR_CODE.BLOCK_OUT_OF_ORDER,
-				getPrompt("responses", "diffBlockOutOfOrder", { blockIndex: "?" }),
+				renderPrompt("responses", "diffBlockOutOfOrder", { BLOCK_INDEX: "?" }),
 			)
 		}
 		// Output everything up to the match location
@@ -1084,7 +1088,7 @@ class NewFileContentConstructor {
 			lineLimit = this.pendingNonStandardLines.length
 		}
 		if (!lineLimit) {
-			throw new DiffError(DIFF_ERROR_CODE.UNCLOSED_SEARCH, getPrompt("responses", "diffUnclosedSearch"))
+			throw new DiffError(DIFF_ERROR_CODE.UNCLOSED_SEARCH, renderPrompt("responses", "diffUnclosedSearch"))
 		}
 		const searchTagRegexp = /^([-]{7,}|[<]{7,}) SEARCH$/
 		const searchTagIndex = this.findLastMatchingLineIndex(searchTagRegexp, lineLimit)
@@ -1095,7 +1099,7 @@ class NewFileContentConstructor {
 				removeLineCount += this.internalProcessLine(line, false, searchTagIndex)
 			}
 		} else {
-			throw new DiffError(DIFF_ERROR_CODE.UNCLOSED_REPLACE, getPrompt("responses", "diffUnclosedReplace"))
+			throw new DiffError(DIFF_ERROR_CODE.UNCLOSED_REPLACE, renderPrompt("responses", "diffUnclosedReplace"))
 		}
 		return removeLineCount
 	}
@@ -1106,7 +1110,7 @@ class NewFileContentConstructor {
 			lineLimit = this.pendingNonStandardLines.length
 		}
 		if (!lineLimit) {
-			throw new DiffError(DIFF_ERROR_CODE.UNCLOSED_REPLACE, getPrompt("responses", "diffUnclosedReplace"))
+			throw new DiffError(DIFF_ERROR_CODE.UNCLOSED_REPLACE, renderPrompt("responses", "diffUnclosedReplace"))
 		}
 		const replaceBeginTagRegexp = /^[=]{3,}$/
 		const replaceBeginTagIndex = this.findLastMatchingLineIndex(replaceBeginTagRegexp, lineLimit)
@@ -1124,7 +1128,7 @@ class NewFileContentConstructor {
 				removeLineCount += this.internalProcessLine(line, false, replaceBeginTagIndex - removeLineCount)
 			}
 		} else {
-			throw new DiffError(DIFF_ERROR_CODE.UNCLOSED_REPLACE, getPrompt("responses", "diffUnclosedReplace"))
+			throw new DiffError(DIFF_ERROR_CODE.UNCLOSED_REPLACE, renderPrompt("responses", "diffUnclosedReplace"))
 		}
 		return removeLineCount
 	}
@@ -1135,7 +1139,7 @@ class NewFileContentConstructor {
 			lineLimit = this.pendingNonStandardLines.length
 		}
 		if (!lineLimit) {
-			throw new DiffError(DIFF_ERROR_CODE.UNCLOSED_REPLACE, getPrompt("responses", "diffUnclosedReplace"))
+			throw new DiffError(DIFF_ERROR_CODE.UNCLOSED_REPLACE, renderPrompt("responses", "diffUnclosedReplace"))
 		}
 
 		const replaceEndTagRegexp = /^([+]{3,}|[>]{3,}) REPLACE$/
@@ -1314,9 +1318,9 @@ export class DiffParser {
 				if (prev.hasError || !prev.searchText) continue
 				if (prev.searchText.includes(curr.searchText)) {
 					curr.errorCode = DIFF_ERROR_CODE.BLOCK_OVERLAP
-					curr.errorMessage = getPrompt("responses", "diffBlockOverlap", {
-						blockIndex: String(i + 1),
-						prevIndex: String(j + 1),
+					curr.errorMessage = renderPrompt("responses", "diffBlockOverlap", {
+						BLOCK_INDEX: String(i + 1),
+						PREV_INDEX: String(j + 1),
 					})
 					break
 				}
@@ -1460,7 +1464,7 @@ export class DiffParser {
 				startLine: 0,
 				hasError: true,
 				errorCode: DIFF_ERROR_CODE.SEARCH_NOT_FOUND,
-				errorMessage: getPrompt("responses", "diffSearchNotFound", { lineCount: String(this.searchLines.length) }),
+				errorMessage: renderPrompt("responses", "diffSearchNotFound", { LINE_COUNT: String(this.searchLines.length) }),
 			})
 		}
 		this.resetBlock()
@@ -1486,32 +1490,35 @@ export class DiffParser {
 		const n = this.delimiterN
 		switch (code) {
 			case DIFF_ERROR_CODE.DELIMITER_CONFLICT:
-				return getPrompt("responses", "diffDelimiterConflict", { blockType: "REPLACE", count: String(n), char: "=" })
+				return renderPrompt("responses", "diffDelimiterConflict", { BLOCK_TYPE: "REPLACE", COUNT: String(n), CHAR: "=" })
 			case DIFF_ERROR_CODE.DELIMITER_MISMATCH:
-				return getPrompt("responses", "diffDelimiterMismatch", { searchN: String(n), closeN: String(this._closeN ?? n) })
+				return renderPrompt("responses", "diffDelimiterMismatch", {
+					SEARCH_N: String(n),
+					CLOSE_N: String(this._closeN ?? n),
+				})
 			case DIFF_ERROR_CODE.DELIMITER_TOO_SHORT:
-				return getPrompt("responses", "diffDelimiterTooShort", { count: String(n) })
+				return renderPrompt("responses", "diffDelimiterTooShort", { COUNT: String(n) })
 			case DIFF_ERROR_CODE.UNCLOSED_SEARCH:
-				return getPrompt("responses", "diffUnclosedSearch")
+				return renderPrompt("responses", "diffUnclosedSearch")
 			case DIFF_ERROR_CODE.UNCLOSED_REPLACE:
-				return getPrompt("responses", "diffUnclosedReplace")
+				return renderPrompt("responses", "diffUnclosedReplace")
 			case DIFF_ERROR_CODE.BLOCK_OVERLAP:
-				return getPrompt("responses", "diffBlockOverlap", {
-					blockIndex: String(this.blockIndex + 1),
-					prevIndex: String(this.blockIndex),
+				return renderPrompt("responses", "diffBlockOverlap", {
+					BLOCK_INDEX: String(this.blockIndex + 1),
+					PREV_INDEX: String(this.blockIndex),
 				})
 			case DIFF_ERROR_CODE.BLOCK_OUT_OF_ORDER:
-				return getPrompt("responses", "diffBlockOutOfOrder", { blockIndex: String(this.blockIndex + 1) })
+				return renderPrompt("responses", "diffBlockOutOfOrder", { BLOCK_INDEX: String(this.blockIndex + 1) })
 			case DIFF_ERROR_CODE.EXTRA_CLOSE_MARKER:
-				return getPrompt("responses", "diffExtraCloseMarker")
+				return renderPrompt("responses", "diffExtraCloseMarker")
 			case DIFF_ERROR_CODE.NESTED_SEARCH_MARKER:
-				return getPrompt("responses", "diffNestedSearchMarker")
+				return renderPrompt("responses", "diffNestedSearchMarker")
 			case DIFF_ERROR_CODE.MISSING_SEPARATOR:
-				return getPrompt("responses", "diffMissingSeparator")
+				return renderPrompt("responses", "diffMissingSeparator")
 			case DIFF_ERROR_CODE.SEARCH_MARKER_IN_REPLACE:
-				return getPrompt("responses", "diffSearchMarkerInReplace")
+				return renderPrompt("responses", "diffSearchMarkerInReplace")
 			case DIFF_ERROR_CODE.EMPTY_SEARCH_CONTENT_CONFLICT:
-				return getPrompt("responses", "diffEmptySearchContentConflict")
+				return renderPrompt("responses", "diffEmptySearchContentConflict")
 			default:
 				return `SEARCH/REPLACE error: ${code}`
 		}

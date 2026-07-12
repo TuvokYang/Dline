@@ -33,6 +33,7 @@ function createMockConfig(cwd: string, overrides: Partial<TaskConfig> = {}): Tas
 		autoApprover: {} as any,
 		browserSettings: {} as any,
 		focusChainSettings: {} as any,
+		interactions: {} as any,
 		callbacks: {} as any,
 		coordinator: {} as any,
 		identityFactory: {

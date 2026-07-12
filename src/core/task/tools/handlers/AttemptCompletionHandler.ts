@@ -3,7 +3,7 @@ import type { ToolUse } from "@core/assistant-message"
 import { getHookModelContext } from "@core/hooks/hook-model-context"
 import { getHooksEnabledSafe } from "@core/hooks/hooks-utils"
 import * as NotificationHook from "@core/hooks/notification-hook"
-import { getPrompt } from "@core/prompts/i18n"
+import { getPrompt, renderPrompt } from "@core/prompts/i18n"
 import { formatResponse } from "@core/prompts/responses"
 import { processFilesIntoText } from "@integrations/misc/extract-text"
 import { showSystemNotification } from "@integrations/notifications"
@@ -16,7 +16,7 @@ import type { ToolResponse } from "../../index"
 import { showNotificationForApproval } from "../../utils"
 import { buildUserFeedbackContent } from "../../utils/buildUserFeedbackContent"
 import type { IPartialBlockHandler, IToolHandler } from "../ToolExecutorCoordinator"
-import type { TaskConfig } from "../types/TaskConfig"
+import { interactionId, interactionTurnId, type TaskConfig } from "../types/TaskConfig"
 import type { StronglyTypedUIHelpers } from "../types/UIHelpers"
 import { getTaskCompletionTelemetry } from "../utils"
 import { ToolResultUtils } from "../utils/ToolResultUtils"
@@ -75,7 +75,9 @@ export class AttemptCompletionHandler implements IToolHandler, IPartialBlockHand
 			const taskPreview = getInitialTaskPreview(config)
 			const taskSection = taskPreview ? `\n\n<initial_task>\n${taskPreview}\n</initial_task>` : ""
 
-			return formatResponse.toolError(getPrompt("toolHandlers", "doubleCheckVerification", { taskSection }))
+			return formatResponse.toolError(
+				renderPrompt("toolHandlers", "doubleCheckVerification", { TASK_SECTION: taskSection }),
+			)
 		}
 		// Reset so the next attempt_completion pair triggers double-check again
 		config.taskState.doubleCheckCompletionPending = false
@@ -233,11 +235,19 @@ export class AttemptCompletionHandler implements IToolHandler, IPartialBlockHand
 			{ message: result },
 		)
 
-		const { response, text, images, files: completionFiles } = await config.callbacks.ask("completion_result", "", false)
+		const outcome = await config.interactions.complete({
+			turnId: interactionTurnId(block),
+			interactionId: interactionId(block),
+			completionId: interactionId(block),
+			presentation: "",
+			existingTs: block.ts,
+		})
+		const text = outcome.draft?.text
+		const images = outcome.draft?.images
+		const completionFiles = outcome.draft?.files
 		const prefix = "[attempt_completion] Result: Done"
-		if (response === "yesButtonClicked") {
-			config.taskState.didConfirmCompletion = true
-			return prefix // signals to recursive loop to stop (for now this never happens since yesButtonClicked will trigger a new task)
+		if (outcome.actionId === "start_new_task") {
+			return prefix
 		}
 
 		await config.callbacks.say("user_feedback", text ?? "", images, completionFiles)

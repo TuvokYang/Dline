@@ -1,6 +1,6 @@
 import fsSync from "node:fs"
 import path from "node:path"
-import { getDlineDataDir } from "@core/storage/disk"
+import { getDlineDataDir, getDlineDocumentsPathSync } from "@core/storage/disk"
 import { ClineFileStorage } from "./ClineFileStorage"
 import { ClineMemento } from "./ClineStorage"
 
@@ -42,6 +42,9 @@ export interface StorageContext {
 
 	/** The resolved path to the workspace storage directory (contains workspaceState.json) */
 	readonly workspaceStoragePath: string
+
+	/** The task history JSONL path owned by this storage boundary. */
+	readonly taskHistoryPath: string
 }
 
 export interface StorageContextOptions {
@@ -68,6 +71,7 @@ export interface StorageContextOptions {
 }
 
 const SETTINGS_SUBFOLDER = "data"
+const TASK_HISTORY_FILENAME = "taskHistory.jsonl"
 
 /**
  * Create a short deterministic hash of a string for use in directory names.
@@ -122,6 +126,8 @@ export function createStorageContext(opts: StorageContextOptions = {}): StorageC
 	const settings = new ClineFileStorage(path.join(settingsDir, "settings.json"), "Settings")
 
 	const globalState = new ClineFileStorage(path.join(dataDir, "globalState.json"), "GlobalState")
+	const taskRoot = opts.clineDir ?? getDlineDocumentsPathSync()
+	const taskHistoryPath = path.join(taskRoot, "tasks", TASK_HISTORY_FILENAME)
 
 	return {
 		globalState,
@@ -134,5 +140,6 @@ export function createStorageContext(opts: StorageContextOptions = {}): StorageC
 		workspaceState: new ClineFileStorage(path.join(workspaceDir, "workspaceState.json"), "WorkspaceState"),
 		dataDir,
 		workspaceStoragePath: workspaceDir,
+		taskHistoryPath,
 	}
 }

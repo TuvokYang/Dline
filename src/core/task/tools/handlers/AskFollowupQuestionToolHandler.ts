@@ -1,4 +1,4 @@
-import { getPrompt } from "@core/prompts/i18n"
+import { getPrompt, renderPrompt } from "@core/prompts/i18n"
 import { processFilesIntoText } from "@integrations/misc/extract-text"
 import { showSystemNotification } from "@integrations/notifications"
 import { findLast, parsePartialArrayString } from "@shared/array"
@@ -9,7 +9,7 @@ import { ToolUse } from "../../../assistant-message"
 import { formatResponse } from "../../../prompts/responses"
 import { ToolResponse } from "../.."
 import type { IPartialBlockHandler, IToolHandler } from "../ToolExecutorCoordinator"
-import type { TaskConfig } from "../types/TaskConfig"
+import { interactionId, interactionTurnId, type TaskConfig } from "../types/TaskConfig"
 import type { StronglyTypedUIHelpers } from "../types/UIHelpers"
 import { sayFeedbackOnce } from "../utils/UserFeedbackUtils"
 
@@ -46,9 +46,9 @@ export class AskFollowupQuestionToolHandler implements IToolHandler, IPartialBlo
 		if (config.yoloModeToggled) {
 			// Log the question that was asked but auto-respond
 			const truncatedQuestion = `${question.substring(0, 100)}${question.length > 100 ? "..." : ""}`
-			await config.callbacks.say("info", getPrompt("toolHandlers", "yoloAutoRespond", { question: truncatedQuestion }))
+			await config.callbacks.say("info", renderPrompt("toolHandlers", "yoloAutoRespond", { QUESTION: truncatedQuestion }))
 
-			return formatResponse.toolResult(getPrompt("toolHandlers", "yoloToolResult", { question }))
+			return formatResponse.toolResult(renderPrompt("toolHandlers", "yoloToolResult", { QUESTION: question }))
 		}
 
 		// Show notification if enabled
@@ -66,13 +66,16 @@ export class AskFollowupQuestionToolHandler implements IToolHandler, IPartialBlo
 
 		const options = parsePartialArrayString(optionsRaw || "[]")
 
-		// Ask the question
-		const {
-			response: askResponse,
-			text,
-			images,
-			files: followupFiles,
-		} = await config.callbacks.ask("followup", JSON.stringify(sharedMessage), false, { existingTs: block.ts })
+		const outcome = await config.interactions.open({
+			turnId: interactionTurnId(block),
+			interactionId: interactionId(block),
+			kind: "followup",
+			presentation: JSON.stringify(sharedMessage),
+			existingTs: block.ts,
+		})
+		const text = outcome.draft?.text
+		const images = outcome.draft?.images
+		const followupFiles = outcome.draft?.files
 
 		// Check if options contains the text response
 		if (optionsRaw && text && options.includes(text)) {
@@ -91,7 +94,7 @@ export class AskFollowupQuestionToolHandler implements IToolHandler, IPartialBlo
 		} else {
 			// Option not selected, send user feedback
 			telemetryService.captureOptionsIgnored(config.ulid ?? "", options.length, "act")
-			await sayFeedbackOnce(config, askResponse, text, images, followupFiles)
+			await sayFeedbackOnce(config, "messageResponse", text, images, followupFiles)
 		}
 
 		// Process any attached files
