@@ -127,41 +127,26 @@ describe("reconcileResume", () => {
 		expectEntry(snapshot(), { type: "continue_api_turn", apiIndex: 1 })
 	})
 
-	it("binds an ask persisted after an opening snapshot", () => {
-		const result = reconcileResume(
-			input(snapshot({ interaction: "qna_response", interactionStatus: "opening" }), [ui(100, "ask", "qna_respond")]),
-		)
-		expect(result.entry).toEqual({ type: "reopen_interaction", interactionId: TID, turnId: TURN_ID })
-		expect(result.snapshot.interaction).toMatchObject({ status: "awaiting", anchor: { messageTs: 100 } })
-	})
-
-	it("consumes feedback persisted after an opening interaction ask", () => {
-		const feedback = ui(110, "say", "user_feedback")
-		feedback.text = "Continue"
+	it("fails read-only when an opening interaction has no causal persisted anchor", () => {
 		const result = reconcileResume(
 			input(snapshot({ interaction: "qna_response", interactionStatus: "opening" }), [
 				ui(100, "ask", "qna_respond"),
-				feedback,
+				ui(110, "say", "user_feedback"),
 			]),
 		)
-		expect(result.entry).toEqual({
-			type: "continue_api_turn",
-			apiIndex: 1,
-			draft: { text: "Continue", images: [], files: [] },
-		})
+		expect(result.entry).toEqual({ type: "read_only_failure" })
+		expect(result.diagnostics).toEqual([{ code: "missing_interaction_anchor", interactionId: TID }])
+		expect(result.snapshot.interaction).toMatchObject({ status: "opening", interactionId: TID })
 	})
 
-	it("reopens a completion interaction after binding its persisted ask", () => {
+	it("fails read-only for completion opening tails without causal identity", () => {
 		const result = reconcileResume(
 			input(snapshot({ phase: TaskPhase.COMPLETED, interaction: "completion", interactionStatus: "opening" }), [
 				ui(100, "ask", "completion_result"),
 			]),
 		)
-		expect(result.entry).toEqual({
-			type: "show_completion_interaction",
-			interactionId: TID,
-			turnId: TURN_ID,
-		})
+		expect(result.entry).toEqual({ type: "read_only_failure" })
+		expect(result.diagnostics).toEqual([{ code: "missing_interaction_anchor", interactionId: TID }])
 	})
 
 	it("reopens an existing resume interaction with its canonical identity", () => {
@@ -173,32 +158,20 @@ describe("reconcileResume", () => {
 		})
 	})
 
-	it("continues with persisted feedback draft when API has not started", () => {
-		const feedback = ui(110, "say", "user_feedback")
-		feedback.text = "Continue"
-		feedback.images = ["image-1"]
-		feedback.files = ["file-1"]
-		const result = reconcileResume(input(snapshot({ interaction: "qna_response" }), [feedback]))
-		expect(result.entry).toEqual({
-			type: "continue_api_turn",
-			apiIndex: 1,
-			draft: { text: "Continue", images: ["image-1"], files: ["file-1"] },
-		})
-		expect(result.snapshot.interaction).toBeUndefined()
-	})
-
-	it("continues when a later API request consumed an awaiting interaction", () => {
-		const result = reconcileResume(input(snapshot({ interaction: "qna_response" }), [ui(110, "say", "api_req_started", 2)]))
-		expect(result.entry).toEqual({ type: "continue_api_turn", apiIndex: 2 })
-		expect(result.snapshot.phase).toBe(TaskPhase.STREAMING)
-	})
-
-	it("continues when API history advanced without a persisted UI request marker", () => {
+	it("does not consume an awaiting interaction from unrelated UI or API tails", () => {
+		const unrelatedFeedback = ui(100, "say", "user_feedback", 9)
+		unrelatedFeedback.text = "Unrelated"
 		const result = reconcileResume(
-			input(snapshot({ interaction: "qna_response" }), [], [{ role: "user", content: "continued" }]),
+			input(
+				snapshot({ interaction: "qna_response" }),
+				[ui(100, "ask", "qna_respond", 9), unrelatedFeedback, ui(101, "say", "api_req_started", 9)],
+				[{ role: "user", content: "unrelated continuation" }],
+			),
 		)
-		expect(result.entry).toEqual({ type: "continue_api_turn", apiIndex: 2 })
-		expect(result.snapshot.interaction).toBeUndefined()
+
+		expect(result.entry).toEqual({ type: "reopen_interaction", interactionId: TID, turnId: TURN_ID })
+		expect(result.snapshot.interaction).toMatchObject({ status: "awaiting", interactionId: TID })
+		expect(result.snapshot.anchor?.apiIndex).toBe(1)
 	})
 
 	it("replays only unfinished blocks from a partially answered multi-tool turn", () => {
@@ -236,15 +209,20 @@ describe("reconcileResume", () => {
 		})
 	})
 
-	it("continues after completion feedback consumed the old completion interaction", () => {
+	it("does not consume a completion interaction from unrelated feedback or API markers", () => {
 		const result = reconcileResume(
 			input(snapshot({ phase: TaskPhase.COMPLETED, interaction: "completion" }), [
-				ui(110, "say", "user_feedback"),
-				ui(120, "say", "api_req_started", 2),
+				ui(100, "say", "user_feedback", 9),
+				ui(101, "say", "api_req_started", 9),
 			]),
 		)
-		expect(result.entry).toEqual({ type: "continue_api_turn", apiIndex: 2 })
-		expect(result.snapshot.completion).toBeUndefined()
+		expect(result.entry).toEqual({
+			type: "show_completion_interaction",
+			interactionId: TID,
+			turnId: TURN_ID,
+		})
+		expect(result.snapshot.completion).toEqual({ completionId: TID })
+		expect(result.snapshot.interaction).toMatchObject({ status: "awaiting", interactionId: TID })
 	})
 
 	it("shows resume interaction when cancel cleanup was interrupted", () => {

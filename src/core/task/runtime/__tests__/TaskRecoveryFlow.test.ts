@@ -95,6 +95,22 @@ describe("TaskRuntime recovery transactions", () => {
 		expect(ports.sequence).toEqual(["POST_TASK_VIEW", "CANCEL_RUNTIME", "PERSIST_SNAPSHOT"])
 	})
 
+	it("commits termination without running the pause cleanup effect", () => {
+		const result = reduceRecovery(awaitingInteraction("tool_approval"), {
+			type: "TASK_TERMINATE_REQUESTED",
+		})
+
+		expect(result).toMatchObject({
+			accepted: true,
+			next: {
+				phase: TaskPhase.CANCELLING,
+				cancellation: { source: "system", fromPhase: TaskPhase.STREAMING },
+			},
+		})
+		expect(result?.next.interaction).toBeUndefined()
+		expect(effectTypes(result.effects)).toEqual(["POST_TASK_VIEW", "PERSIST_SNAPSHOT"])
+	})
+
 	it("opens the resume interaction only after cancellation cleanup commits", async () => {
 		const ports = createPorts()
 		const runtime = new TaskRuntime(

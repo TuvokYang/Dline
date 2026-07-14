@@ -9,6 +9,11 @@ const LEGACY_TASK_MARKERS = [
 	"pendingToolUseApprovalResponse",
 	"block.dlineTid ?? block.callId",
 	"findLatestStateSnapshot",
+	"onSnapshot: this.emitStateSnapshot",
+	"runtimeCommitted = false",
+	"void this.recursivelyMakeClineRequests(content)",
+	"executeTool: async () => undefined",
+	"await this.toolExecutor.executeTool(block)\n\t\t\t\t\tconst committedBlock",
 ] as const
 
 /** Read all production TypeScript sources below one directory in stable path order. */

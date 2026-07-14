@@ -120,7 +120,6 @@ function createFakeTask(taskState: {
 		isResumeAsk: (Task.prototype as any).isResumeAsk,
 		isCompletionAsk: (Task.prototype as any).isCompletionAsk,
 		isParallelToolCallingEnabled: () => false,
-		emitStateSnapshot: async () => undefined,
 		postStateToWebview: async () => undefined,
 		genMessageTs: () => {
 			const maxExisting = clineMessages.reduce((max, m) => Math.max(max, m.ts), 0)
@@ -223,7 +222,7 @@ describe("Task.ask", () => {
 				apiIndex: number
 				awaiting: unknown
 				error: unknown
-				onSnapshot: unknown
+				onSnapshot?: unknown
 			}
 			assert.equal(context.apiIndex, -1)
 			assert.deepEqual(context.awaiting, {
@@ -240,7 +239,7 @@ describe("Task.ask", () => {
 				processAllowed: false,
 				messageTs: taskState.lastMessageTs,
 			})
-			assert.equal(typeof context.onSnapshot, "function")
+			assert.equal(context.onSnapshot, undefined)
 			assert.equal(didPostState, true)
 			assert.equal(taskState.askResponse, undefined)
 
@@ -368,7 +367,7 @@ describe("Task.ask", () => {
 			const context = capturedContext as {
 				apiIndex: number
 				awaiting: unknown
-				onSnapshot: unknown
+				onSnapshot?: unknown
 			}
 			assert.equal(context.apiIndex, -1)
 			assert.deepEqual(context.awaiting, {
@@ -376,7 +375,7 @@ describe("Task.ask", () => {
 				taskAsk: "resume_task",
 				messageTs: taskState.lastMessageTs,
 			})
-			assert.equal(typeof context.onSnapshot, "function")
+			assert.equal(context.onSnapshot, undefined)
 			assert.equal(didPostState, true)
 			assert.equal(taskState.askResponse, undefined)
 

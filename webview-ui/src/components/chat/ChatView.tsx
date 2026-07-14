@@ -12,6 +12,7 @@ import { useExtensionState } from "@/context/ExtensionStateContext"
 import { useShowNavbar } from "@/context/PlatformContext"
 import { FileServiceClient, TaskServiceClient, UiServiceClient } from "@/services/grpc-client"
 import { InteractionHost } from "@/task-interaction/InteractionHost"
+import { buildInteractionRequest } from "@/task-interaction/types"
 import { Navbar } from "../menu/Navbar"
 import AutoApproveBar from "./auto-approve-menu/AutoApproveBar"
 // Import utilities and hooks from the new structure
@@ -317,6 +318,20 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 
 	// Use message handlers hook (must come after scrollBehavior so we can pass disableAutoScrollRef)
 	const messageHandlers = useMessageHandlers(messages, chatState, scrollBehavior.disableAutoScrollRef)
+	const submitInteractionDraft = useCallback(
+		async (draft: { text: string; images: string[]; files: string[] }): Promise<boolean> => {
+			if (!taskViewState?.input.enterAction) {
+				return false
+			}
+			const request = buildInteractionRequest(taskViewState, taskViewState.input.enterAction, draft)
+			if (!request) {
+				return false
+			}
+			const response = await TaskServiceClient.dispatchInteraction(request)
+			return response.accepted
+		},
+		[taskViewState],
+	)
 
 	const placeholderText = useMemo(() => {
 		const text = task ? "Type a message..." : "Type your task here..."
@@ -365,28 +380,39 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 				)}
 			</div>
 			<footer className="bg-(--vscode-sidebar-background) flex flex-col gap-[0.375rem] mt-3" style={{ gridRow: "2" }}>
-				{task ? (
-					taskViewState ? (
-						<InteractionHost
-							dispatch={TaskServiceClient.dispatchInteraction.bind(TaskServiceClient)}
-							messages={visibleMessages}
-							showTimeline={false}
-							view={taskViewState}
-						/>
-					) : (
-						<div role="alert">Task interaction state is unavailable</div>
-					)
-				) : (
-					<InputSection
-						chatState={chatState}
-						messageHandlers={messageHandlers}
-						placeholderText={placeholderText}
-						scrollBehavior={scrollBehavior}
-						selectFilesAndImages={selectFilesAndImages}
-						shouldDisableFilesAndImages={shouldDisableFilesAndImages}
+				{task && taskViewState ? (
+					<InteractionHost
+						dispatch={TaskServiceClient.dispatchInteraction.bind(TaskServiceClient)}
+						draft={{
+							text: chatState.inputValue,
+							images: chatState.selectedImages,
+							files: chatState.selectedFiles,
+						}}
+						messages={modifiedMessages}
+						showTimeline={false}
+						view={taskViewState}
 					/>
-				)}
+				) : task && !taskViewState ? (
+					<div role="alert">Task interaction state is unavailable</div>
+				) : null}
 				<AutoApproveBar />
+				<InputSection
+					chatState={chatState}
+					enabled={task ? Boolean(taskViewState?.input.enabled && taskViewState.input.enterAction) : undefined}
+					messageHandlers={messageHandlers}
+					onSubmit={task ? submitInteractionDraft : undefined}
+					placeholderText={placeholderText}
+					scrollBehavior={scrollBehavior}
+					selectFilesAndImages={selectFilesAndImages}
+					shouldDisableFilesAndImages={
+						shouldDisableFilesAndImages ||
+						Boolean(
+							task &&
+								(!taskViewState?.input.enabled ||
+									(!taskViewState.input.acceptsImages && !taskViewState.input.acceptsFiles)),
+						)
+					}
+				/>
 			</footer>
 		</ChatLayout>
 	)

@@ -15,13 +15,14 @@ export interface FooterActionsProps {
 /** Render and dispatch footer actions without inspecting message history. */
 export function FooterActions({ view, draft, selection, dispatch, dispatchTaskAction }: FooterActionsProps) {
 	const [pending, setPending] = useState(false)
-	if (view.footer.actions.length === 0) {
+	const actions = view.footer.actions.filter((action) => action.type !== "reply" || view.input.enterAction !== "reply")
+	if (actions.length === 0) {
 		return null
 	}
 
 	return (
 		<div className="flex mx-3.5 border border-(--vscode-panel-border) rounded gap-1.5">
-			{view.footer.actions.map((action) => (
+			{actions.map((action) => (
 				<VSCodeButton
 					appearance={action.appearance === "primary" ? "primary" : "secondary"}
 					aria-label={action.label}

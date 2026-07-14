@@ -148,9 +148,13 @@ describe("TaskRuntime dispatch", () => {
 	})
 
 	it("returns a caller-visible failure when cancellation effects fail", async () => {
+		const postView = vi.fn(async () => {})
+		const persistSnapshot = vi.fn(async () => {})
 		const runtime = new TaskRuntime(
 			createTaskRuntimeState({ taskId: "task-1", phase: TaskPhase.STREAMING }),
 			createPorts({
+				postView,
+				persistSnapshot,
 				cancelRuntime: async () => {
 					throw new Error("cancel failed")
 				},
@@ -167,12 +171,18 @@ describe("TaskRuntime dispatch", () => {
 			phase: TaskPhase.PAUSED,
 			error: { effectType: "CANCEL_RUNTIME", message: "cancel failed" },
 		})
+		expect(postView).toHaveBeenCalledTimes(2)
+		expect(persistSnapshot).toHaveBeenCalledTimes(1)
 	})
 
 	it("returns a caller-visible failure when presenting an interaction fails", async () => {
+		const postView = vi.fn(async () => {})
+		const persistSnapshot = vi.fn(async () => {})
 		const runtime = new TaskRuntime(
 			createTaskRuntimeState({ taskId: "task-1", phase: TaskPhase.STREAMING }),
 			createPorts({
+				postView,
+				persistSnapshot,
 				appendAsk: async () => {
 					throw new Error("ask failed")
 				},
@@ -192,15 +202,18 @@ describe("TaskRuntime dispatch", () => {
 			effectError: { effectType: "APPEND_ASK", message: "ask failed" },
 		})
 		expect(runtime.getState().phase).toBe(TaskPhase.PAUSED)
+		expect(postView).toHaveBeenCalledTimes(1)
+		expect(persistSnapshot).toHaveBeenCalledTimes(1)
 	})
 
 	it("does not recurse when snapshot persistence fails", async () => {
+		const postView = vi.fn(async () => {})
 		const persistSnapshot = vi.fn(async () => {
 			throw new Error("snapshot failed")
 		})
 		const runtime = new TaskRuntime(
 			createTaskRuntimeState({ taskId: "task-1", phase: TaskPhase.STREAMING }),
-			createPorts({ persistSnapshot }),
+			createPorts({ postView, persistSnapshot }),
 		)
 
 		const result = await runtime.dispatch({ type: "TASK_CANCEL_REQUESTED", source: "user" })
@@ -210,9 +223,34 @@ describe("TaskRuntime dispatch", () => {
 			effectError: { effectType: "PERSIST_SNAPSHOT", message: "snapshot failed" },
 		})
 		expect(persistSnapshot).toHaveBeenCalledTimes(1)
+		expect(postView).toHaveBeenCalledTimes(2)
 		expect(runtime.getState()).toMatchObject({
 			phase: TaskPhase.PAUSED,
 			error: { effectType: "PERSIST_SNAPSHOT", message: "snapshot failed" },
+		})
+	})
+
+	it("persists recovery without retrying a failed view projection", async () => {
+		const postView = vi.fn(async () => {
+			throw new Error("view failed")
+		})
+		const persistSnapshot = vi.fn(async () => {})
+		const runtime = new TaskRuntime(
+			createTaskRuntimeState({ taskId: "task-1", phase: TaskPhase.STREAMING }),
+			createPorts({ postView, persistSnapshot }),
+		)
+
+		const result = await runtime.dispatch({ type: "TASK_CANCEL_REQUESTED", source: "user" })
+
+		expect(result).toMatchObject({
+			accepted: false,
+			effectError: { effectType: "POST_TASK_VIEW", message: "view failed" },
+		})
+		expect(postView).toHaveBeenCalledTimes(1)
+		expect(persistSnapshot).toHaveBeenCalledTimes(1)
+		expect(runtime.getState()).toMatchObject({
+			phase: TaskPhase.PAUSED,
+			error: { effectType: "POST_TASK_VIEW", message: "view failed" },
 		})
 	})
 

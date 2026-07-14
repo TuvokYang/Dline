@@ -1,4 +1,3 @@
-import type { ClineMessage } from "@shared/ExtensionMessage"
 import { BlockPhase } from "../BlockPhaseMachine"
 import { TaskPhase } from "../TaskPhase"
 import { hydrateSnapshot, type TaskSnapshot, TaskSnapshotIdentityError } from "../TaskSnapshot"
@@ -6,10 +5,6 @@ import type { ResumeDiagnostic, ResumeInput, ResumeResult } from "./ResumeInput"
 import { selectAwaitingResumeEntry } from "./ResumeReducer"
 
 interface TailFacts {
-	presentedAsk?: ClineMessage
-	feedback?: ClineMessage
-	interactionConsumed: boolean
-	latestApiIndex: number
 	answeredDlineTids: Set<string>
 }
 
@@ -34,30 +29,8 @@ function cloneSnapshot(snapshot: TaskSnapshot): TaskSnapshot {
 	}
 }
 
-/** Extract only facts after the snapshot anchors. */
-function extractFacts(snapshot: TaskSnapshot, input: ResumeInput): TailFacts {
-	const interaction = snapshot.interaction
-	const anchorTs = interaction?.anchor?.messageTs ?? snapshot.anchor?.uiMessageTs ?? snapshot.timestamp
-	const uiTail = input.uiTail.filter((message) => message.ts > anchorTs)
-	const presentedAsk =
-		interaction?.status === "opening"
-			? input.uiTail.find(
-					(message) =>
-						message.type === "ask" &&
-						message.ts >= snapshot.timestamp &&
-						(message.conversationHistoryIndex ?? snapshot.apiIndex) >= snapshot.apiIndex,
-				)
-			: undefined
-	const laterApi = uiTail.filter((message) => message.say === "api_req_started")
-	const latestPersistedApiIndex = input.apiTail.length > 0 ? input.apiHistoryLength - 1 : snapshot.apiIndex
-	const latestApiIndex = laterApi.reduce(
-		(maximum, message) => Math.max(maximum, message.conversationHistoryIndex ?? snapshot.apiIndex),
-		latestPersistedApiIndex,
-	)
-	const feedback = uiTail.find((message) => message.say === "user_feedback")
-	const interactionConsumed =
-		interaction?.status === "awaiting" && (feedback !== undefined || latestApiIndex > snapshot.apiIndex)
-
+/** Extract persisted facts that carry their own canonical identity. */
+function extractFacts(input: ResumeInput): TailFacts {
 	const answeredDlineTids = new Set<string>()
 	for (const message of input.apiTail) {
 		if (message.role !== "user" || !Array.isArray(message.content)) continue
@@ -67,7 +40,7 @@ function extractFacts(snapshot: TaskSnapshot, input: ResumeInput): TailFacts {
 			}
 		}
 	}
-	return { presentedAsk, feedback, interactionConsumed, latestApiIndex, answeredDlineTids }
+	return { answeredDlineTids }
 }
 
 /** Reconcile a strict snapshot with only its persisted UI/API tail. */
@@ -109,51 +82,16 @@ export function reconcileResume(input: ResumeInput): ResumeResult {
 		}
 	}
 
-	const facts = extractFacts(next, input)
+	const facts = extractFacts(input)
 	if (next.interaction?.status === "opening") {
-		if (!facts.presentedAsk) {
-			return {
-				snapshot: next,
-				entry: { type: "read_only_failure" },
-				diagnostics: [{ code: "missing_interaction_anchor", interactionId: next.interaction.interactionId }],
-			}
-		}
-		next.interaction = {
-			...next.interaction,
-			status: "awaiting",
-			anchor: { messageTs: facts.presentedAsk.ts, messageType: "ask" },
-		}
-		next.anchor = { ...next.anchor, uiMessageTs: facts.presentedAsk.ts }
-		const factsAfterPresentation = extractFacts(next, input)
-		if (!factsAfterPresentation.interactionConsumed) {
-			return { snapshot: next, entry: selectAwaitingResumeEntry(next), diagnostics: [] }
-		}
-		Object.assign(facts, factsAfterPresentation)
-	}
-
-	if (facts.interactionConsumed) {
-		const consumedKind = next.interaction?.kind
-		next.interaction = undefined
-		next.anchor = { ...next.anchor, apiIndex: facts.latestApiIndex, interactionId: undefined }
-		if (consumedKind === "completion") next.completion = undefined
-		next.phase = TaskPhase.STREAMING
-		next.apiIndex = facts.latestApiIndex
-		const draft =
-			facts.feedback && facts.latestApiIndex === input.snapshot.apiIndex
-				? {
-						text: facts.feedback.text ?? "",
-						images: facts.feedback.images ?? [],
-						files: facts.feedback.files ?? [],
-					}
-				: undefined
 		return {
 			snapshot: next,
-			entry: { type: "continue_api_turn", apiIndex: facts.latestApiIndex, ...(draft ? { draft } : {}) },
-			diagnostics: [],
+			entry: { type: "read_only_failure" },
+			diagnostics: [{ code: "missing_interaction_anchor", interactionId: next.interaction.interactionId }],
 		}
 	}
 
-	if (next.interaction?.status === "awaiting") {
+	if (next.interaction?.status === "awaiting" || next.interaction?.status === "resolving") {
 		return { snapshot: next, entry: selectAwaitingResumeEntry(next), diagnostics: [] }
 	}
 

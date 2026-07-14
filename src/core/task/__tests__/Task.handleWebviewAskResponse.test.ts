@@ -57,12 +57,11 @@ function createFakeTaskForHandleWebviewAskResponse(controller: TaskController, e
 	return {
 		taskController: controller,
 		taskState: { userMessageContent: [] },
+		taskRuntime: { getState: () => ({ interaction: undefined }) },
 		// resolveAsk is called first in handleWebviewAskResponse
 		// postStateToWebview is called after transition
-		// emitStateSnapshot is passed to transition as callback
-		// flushTaskSnapshot is called after state transitions are persisted
+		// flushTaskSnapshot waits for canonical runtime persistence.
 		postStateToWebview: vi.fn(async () => {}),
-		emitStateSnapshot: vi.fn(async () => {}),
 		flushTaskSnapshot: vi.fn(async () => {}),
 		findLatestStateSnapshot: vi.fn(() => undefined),
 		// isParallelToolCallingEnabled is used in yesButtonClicked path
@@ -186,7 +185,7 @@ describe("Task.handleWebviewAskResponse", () => {
 		assert.doesNotMatch(userMessageContent[0].text, /<feedback>/)
 	})
 
-	it("yesButtonClicked with retry feedback appends user_message for the next model turn", async () => {
+	it("yesButtonClicked with retry feedback leaves the draft to the causal continuation", async () => {
 		const channel = createMockChannel()
 		const controller = new TaskController(channel)
 		const userMessageContent: Array<{ type: "text"; text: string }> = []
@@ -195,30 +194,12 @@ describe("Task.handleWebviewAskResponse", () => {
 			say,
 			taskState: { userMessageContent },
 			checkpointManager: { saveCheckpoint: vi.fn(async () => {}) },
-			findLatestStateSnapshot: () => ({
-				phase: TaskPhase.AWAITING_APPROVAL,
-				apiIndex: 2,
-				timestamp: 300,
-				awaiting: { kind: "error_recovery", taskAsk: "api_req_failed", messageTs: 123 },
-				error: {
-					kind: "api_req_failed",
-					sourceAsk: "api_req_failed",
-					message: "network failed",
-					actions: ["retry", "start_new_task"],
-					retryable: true,
-					processAllowed: false,
-					messageTs: 123,
-				},
-			}),
 		})
 
 		await Task.prototype.handleWebviewAskResponse.call(fakeTask, "yesButtonClicked" as ClineAskResponse, "重试时请换个模型")
 
 		assert.equal(say.mock.calls[0][0], "user_feedback")
-		assert.equal(userMessageContent.length, 1)
-		assert.equal(userMessageContent[0].type, "text")
-		assert.match(userMessageContent[0].text, /<user_message>\n重试时请换个模型\n<\/user_message>/)
-		assert.doesNotMatch(userMessageContent[0].text, /<feedback>/)
+		assert.equal(userMessageContent.length, 0)
 	})
 
 	it("messageResponse for an active approval only renders feedback and lets the tool result carry it", async () => {
@@ -242,7 +223,7 @@ describe("Task.handleWebviewAskResponse", () => {
 		assert.equal(userMessageContent.length, 0)
 	})
 
-	it("messageResponse for a snapshot conversation ask only renders feedback and lets the tool result carry it", async () => {
+	it("messageResponse for a runtime conversation interaction only renders feedback", async () => {
 		const channel = createMockChannel()
 		const controller = new TaskController(channel)
 		const userMessageContent: Array<{ type: "text"; text: string }> = []
@@ -250,12 +231,9 @@ describe("Task.handleWebviewAskResponse", () => {
 		const fakeTask = createFakeTaskForHandleWebviewAskResponse(controller, {
 			say,
 			taskState: { userMessageContent },
-			findLatestStateSnapshot: () => ({
-				phase: TaskPhase.AWAITING_APPROVAL,
-				apiIndex: 7,
-				timestamp: 300,
-				awaiting: { kind: "conversation", taskAsk: "qna_respond", messageTs: 123 },
-			}),
+			taskRuntime: {
+				getState: () => ({ interaction: { kind: "qna_response", interactionId: "qna-1" } }),
+			},
 		})
 
 		await Task.prototype.handleWebviewAskResponse.call(fakeTask, "messageResponse" as ClineAskResponse, "不要重复入模")
@@ -264,7 +242,7 @@ describe("Task.handleWebviewAskResponse", () => {
 		assert.equal(userMessageContent.length, 0)
 	})
 
-	it("messageResponse for a snapshot approval ask only renders feedback and lets the tool result carry it", async () => {
+	it("messageResponse for a runtime approval interaction only renders feedback", async () => {
 		const channel = createMockChannel()
 		const controller = new TaskController(channel)
 		const userMessageContent: Array<{ type: "text"; text: string }> = []
@@ -272,12 +250,9 @@ describe("Task.handleWebviewAskResponse", () => {
 		const fakeTask = createFakeTaskForHandleWebviewAskResponse(controller, {
 			say,
 			taskState: { userMessageContent },
-			findLatestStateSnapshot: () => ({
-				phase: TaskPhase.AWAITING_APPROVAL,
-				apiIndex: 7,
-				timestamp: 300,
-				awaiting: { kind: "approval", taskAsk: "tool", activeCallId: "call_write", messageTs: 123 },
-			}),
+			taskRuntime: {
+				getState: () => ({ interaction: { kind: "tool_approval", interactionId: "approval-1" } }),
+			},
 		})
 
 		await Task.prototype.handleWebviewAskResponse.call(

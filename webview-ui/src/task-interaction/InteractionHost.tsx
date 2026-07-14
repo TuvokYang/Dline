@@ -4,7 +4,6 @@ import { useState } from "react"
 import { TaskServiceClient } from "@/services/grpc-client"
 import { FooterActions } from "./FooterActions"
 import { isPresentationKind, renderPresentation } from "./renderer-registry"
-import { TaskInput } from "./TaskInput"
 import type { DispatchInteraction, InteractionDraft } from "./types"
 
 /** Presentation-only props for a say timeline row. */
@@ -32,6 +31,7 @@ export interface InteractionHostProps {
 	messages: ClineMessage[]
 	view: TaskViewState
 	dispatch: DispatchInteraction
+	draft?: InteractionDraft
 	showTimeline?: boolean
 }
 
@@ -44,8 +44,7 @@ async function dispatchTaskAction(action: "cancel"): Promise<void> {
 }
 
 /** Bind one backend interaction projection to its exact ask presentation anchor. */
-export function InteractionHost({ messages, view, dispatch, showTimeline = true }: InteractionHostProps) {
-	const [draft, setDraft] = useState<InteractionDraft>(EMPTY_DRAFT)
+export function InteractionHost({ messages, view, dispatch, draft = EMPTY_DRAFT, showTimeline = true }: InteractionHostProps) {
 	const [selection, setSelection] = useState<string[]>([])
 	const interaction = view.activeInteraction
 	const anchor = interaction
@@ -79,7 +78,6 @@ export function InteractionHost({ messages, view, dispatch, showTimeline = true 
 						selection={{ values: selection }}
 						view={view}
 					/>
-					<TaskInput dispatch={dispatch} draft={draft} onDraftChange={setDraft} view={view} />
 				</>
 			) : (
 				<FooterActions dispatch={dispatch} dispatchTaskAction={dispatchTaskAction} draft={draft} view={view} />

@@ -226,6 +226,7 @@ function createInteractionPorts(
 	persistSnapshot: TaskEffectPorts["persistSnapshot"],
 	cancelRuntime: TaskEffectPorts["cancelRuntime"],
 	startApi: TaskEffectPorts["startApi"],
+	executeTool: TaskEffectPorts["executeTool"],
 	appendSay: TaskEffectPorts["appendSay"],
 	appendAsk: TaskEffectPorts["appendAsk"],
 	startNewTask: TaskEffectPorts["startNewTask"],
@@ -235,8 +236,7 @@ function createInteractionPorts(
 		persistSnapshot,
 		cancelRuntime,
 		startApi,
-		// Tool handlers remain the compatibility executor during Task 12; this effect records the committed execution checkpoint.
-		executeTool: async () => undefined,
+		executeTool,
 		appendSay,
 		appendAsk,
 		startNewTask,
@@ -456,10 +456,20 @@ export class Task {
 			createInteractionPorts(
 				async () => this.postStateToWebview(),
 				async (state) => this.emitStateSnapshot(createSnapshot(state)),
-				async () => this.abortExecution(true),
+				async () => this.abortExecution(),
 				async (effect) => {
 					const content = await buildUserFeedbackContent(effect.draft?.text, effect.draft?.images, effect.draft?.files)
-					void this.recursivelyMakeClineRequests(content)
+					await this.recursivelyMakeClineRequests(content)
+				},
+				async (effect) => {
+					const block = this.taskState.assistantMessageContent.find(
+						(candidate): candidate is ToolUse =>
+							candidate.type === "tool_use" && candidate.dline_tid === effect.dlineTid,
+					)
+					if (!block) {
+						throw new Error(`Canonical tool block is missing for dlineTid=${effect.dlineTid}`)
+					}
+					await this.toolExecutor.executeTool(block)
 				},
 				async () => unavailableRuntimePort("appendSay"),
 				async (effect) => ({
@@ -1054,7 +1064,6 @@ export class Task {
 			if (rejected) {
 				this.taskController.transitionRequired(TaskPhase.BETWEEN_TURNS, {
 					apiIndex: rejected.conversationHistoryIndex,
-					onSnapshot: this.emitStateSnapshot.bind(this),
 				})
 				await this.flushTaskSnapshot()
 				await this.postStateToWebview()
@@ -1069,7 +1078,6 @@ export class Task {
 						executing: [executing.callId],
 						executingDlineTids: [executing.dlineTid],
 					},
-					onSnapshot: this.emitStateSnapshot.bind(this),
 				})
 				await this.flushTaskSnapshot()
 				await this.postStateToWebview()
@@ -1131,7 +1139,7 @@ export class Task {
 
 	/**
 	 * Persist a task state snapshot to snapshot.json only.
-	 * Called via TaskController.transition() onSnapshot callback on every phase change.
+	 * Called only by the canonical runtime persistence effect.
 	 */
 	private async emitStateSnapshot(snapshot: TaskSnapshot): Promise<void> {
 		try {
@@ -1270,14 +1278,19 @@ export class Task {
 				})
 				return
 			}
-			case "reopen_interaction":
-				await this.dispatchResumeEntry({
-					type: "replay_pending_blocks",
-					turnId: this.taskRuntime.getState().turn?.turnId ?? entry.turnId,
-					dlineTids: [entry.interactionId],
-					answeredDlineTids: [],
+			case "reopen_interaction": {
+				const interaction = this.taskRuntime.getState().interaction
+				if (!interaction || interaction.interactionId !== entry.interactionId || interaction.turnId !== entry.turnId) {
+					throw new Error("resume_interaction_mismatch")
+				}
+				await this.interactionCoordinator.open({
+					turnId: entry.turnId,
+					interactionId: entry.interactionId,
+					kind: interaction.kind,
+					presentation: "",
 				})
 				return
+			}
 			case "show_completion_interaction":
 				await this.interactionCoordinator.complete({
 					turnId: entry.turnId,
@@ -1790,7 +1803,6 @@ export class Task {
 				activeCallId: block.callId,
 				activeDlineTid: block.dlineTid,
 			},
-			onSnapshot: this.emitStateSnapshot.bind(this),
 		})
 		await this.postStateToWebview()
 	}
@@ -1809,7 +1821,6 @@ export class Task {
 				taskAsk: type,
 				messageTs: askTs,
 			},
-			onSnapshot: this.emitStateSnapshot.bind(this),
 		})
 		await this.postStateToWebview()
 	}
@@ -1836,7 +1847,6 @@ export class Task {
 				processAllowed: !isApiRequestFailure,
 				messageTs: askTs,
 			},
-			onSnapshot: this.emitStateSnapshot.bind(this),
 		})
 		await this.postStateToWebview()
 	}
@@ -1853,7 +1863,6 @@ export class Task {
 				taskAsk: type,
 				messageTs: askTs,
 			},
-			onSnapshot: this.emitStateSnapshot.bind(this),
 		})
 		await this.postStateToWebview()
 	}
@@ -1870,7 +1879,6 @@ export class Task {
 				taskAsk: type,
 				messageTs: askTs,
 			},
-			onSnapshot: this.emitStateSnapshot.bind(this),
 		})
 		await this.postStateToWebview()
 	}
@@ -1988,24 +1996,11 @@ export class Task {
 	 * The task can be resumed later via resume().
 	 * Called when the user clicks the cancel button.
 	 */
-	async abortExecution(runtimeCommitted = false) {
+	async abortExecution() {
 		try {
 			this.modeSwitchCompaction.abort()
 			// PHASE 1: Check if TaskCancel should run BEFORE any cleanup
 			const shouldRunTaskCancelHook = await this.shouldRunTaskCancelHook()
-
-			// Legacy callers still require the compatibility phase machine until Task 15 removes it.
-			if (!runtimeCommitted) {
-				await this.taskController.transitionRequired(TaskPhase.PAUSED, {
-					apiIndex: this.messageStateHandler.apiConversationHistory.length - 1,
-					onSnapshot: this.emitStateSnapshot.bind(this),
-				})
-				await this.taskController.transitionRequired(TaskPhase.CANCELLING, {
-					apiIndex: this.messageStateHandler.apiConversationHistory.length - 1,
-					cancel: { source: "user", fromPhase: TaskPhase.PAUSED },
-					onSnapshot: this.emitStateSnapshot.bind(this),
-				})
-			}
 
 			this.taskState.abort = true
 
@@ -2096,15 +2091,21 @@ export class Task {
 			// PHASE 1: Check if TaskCancel should run BEFORE any cleanup
 			const shouldRunTaskCancelHook = await this.shouldRunTaskCancelHook()
 
-			// PHASE 2: Set abort flag
-			this.taskState.abort = true
-			this.taskController.transitionRequired(TaskPhase.CANCELLING, {
-				apiIndex: this.messageStateHandler.apiConversationHistory.length - 1,
-				cancel: { source: "user", fromPhase: this.taskController.phase },
-				onSnapshot: this.emitStateSnapshot.bind(this),
-			})
+			// PHASE 2: Commit the canonical terminal cleanup boundary before setting abort.
+			const runtimePhase = this.taskRuntime.getState().phase
+			if (runtimePhase !== TaskPhase.CANCELLING && runtimePhase !== TaskPhase.ABORTED) {
+				const terminating = await this.dispatchRuntime({ type: "TASK_TERMINATE_REQUESTED" })
+				if (terminating.accepted) {
+					this.syncRetainedMachines()
+				} else if (runtimePhase !== TaskPhase.IDLE) {
+					Logger.warn(`Task termination transition rejected: ${terminating.error?.code ?? "invalid_runtime_event"}`)
+				}
+			}
 
-			// PHASE 3: Cancel hooks and background commands
+			// PHASE 3: Set abort flag
+			this.taskState.abort = true
+
+			// PHASE 4: Cancel hooks and background commands
 			const activeHook = await this.getActiveHookExecution()
 			if (activeHook) {
 				try {
@@ -3245,7 +3246,6 @@ export class Task {
 							)
 						}
 					}
-					await this.toolExecutor.executeTool(block)
 					const committedBlock = this.taskRuntime
 						.getState()
 						.turn?.blocks.find((candidate) => candidate.dlineTid === block.dline_tid)

@@ -45,11 +45,50 @@ describe("InteractionHost", () => {
 		expect(screen.queryByRole("button")).toBeNull()
 	})
 
-	it("renders matching ask presentation and footer actions", () => {
+	it("renders matching ask presentation and footer actions without replacing the chat input", () => {
 		render(<InteractionHost dispatch={vi.fn()} messages={[SAY, ASK]} view={taskView()} />)
 
 		expect(screen.getByText("Approve write")).toBeVisible()
 		expect(screen.getByRole("button", { name: "Approve" })).toBeVisible()
+		expect(screen.queryByRole("textbox", { name: "Task input" })).toBeNull()
+	})
+
+	it("dispatches footer actions with the draft owned by ChatTextArea", async () => {
+		const dispatch = vi.fn(async () => ({ accepted: true, result: "accepted" }))
+		render(
+			<InteractionHost
+				dispatch={dispatch}
+				draft={{ text: "approval feedback", images: ["image"], files: ["file"] }}
+				messages={[ASK]}
+				view={taskView()}
+			/>,
+		)
+
+		fireEvent.click(screen.getByRole("button", { name: "Approve" }))
+
+		await waitFor(() => expect(dispatch).toHaveBeenCalledOnce())
+		expect(dispatch).toHaveBeenCalledWith(
+			expect.objectContaining({ draft: { text: "approval feedback", images: ["image"], files: ["file"] } }),
+		)
+	})
+
+	it("does not duplicate an Enter-owned reply action as a footer button", () => {
+		const view = taskView()
+		if (!view.activeInteraction) {
+			throw new Error("Expected active interaction")
+		}
+		view.activeInteraction = {
+			...view.activeInteraction,
+			kind: "qna_response",
+			presentationKind: "qna_response",
+			taskAsk: "qna_respond",
+		}
+		view.input.enterAction = "reply"
+		view.footer.actions = [{ type: "reply", label: "Reply", appearance: "primary", enabled: true, payloadPolicy: "draft" }]
+
+		render(<InteractionHost dispatch={vi.fn()} messages={[{ ...ASK, ask: "qna_respond" }]} view={view} />)
+
+		expect(screen.queryByRole("button", { name: "Reply" })).toBeNull()
 	})
 
 	it("keeps ask read-only without an active interaction", () => {

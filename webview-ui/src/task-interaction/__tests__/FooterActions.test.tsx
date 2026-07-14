@@ -75,4 +75,18 @@ describe("FooterActions", () => {
 
 		await waitFor(() => expect(dispatchTaskAction).toHaveBeenCalledWith("cancel"))
 	})
+
+	it("keeps the explicit Resume button when Enter can also resume", () => {
+		const view = approvalView()
+		if (!view.activeInteraction) {
+			throw new Error("Expected active interaction")
+		}
+		view.activeInteraction = { ...view.activeInteraction, kind: "resume", presentationKind: "resume", taskAsk: "resume_task" }
+		view.input.enterAction = "resume"
+		view.footer.actions = [{ type: "resume", label: "Resume", appearance: "primary", enabled: true, payloadPolicy: "draft" }]
+
+		render(<FooterActions dispatch={vi.fn()} draft={{ text: "", images: [], files: [] }} view={view} />)
+
+		expect(screen.getByRole("button", { name: "Resume" })).toBeVisible()
+	})
 })

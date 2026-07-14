@@ -560,8 +560,16 @@ function interactionEffects(
 /** Reduce one cancellation lifecycle event without performing side effects. */
 function reduceCancel(
 	state: TaskRuntimeState,
-	event: Extract<TaskEvent, { type: "TASK_CANCEL_REQUESTED" | "TASK_CANCELLED" }>,
+	event: Extract<TaskEvent, { type: "TASK_CANCEL_REQUESTED" | "TASK_TERMINATE_REQUESTED" | "TASK_CANCELLED" }>,
 ): TransitionResult {
+	if (event.type === "TASK_TERMINATE_REQUESTED") {
+		return accept(state, {
+			eventType: event.type,
+			phase: TaskPhase.CANCELLING,
+			cancellation: { source: "system", fromPhase: state.phase },
+			interaction: null,
+		})
+	}
 	if (event.type === "TASK_CANCEL_REQUESTED") {
 		if (!canTransition(state.phase, TaskPhase.CANCELLING)) {
 			return reject(state, event.type)
@@ -782,6 +790,13 @@ function reduceFailure(state: TaskRuntimeState, event: Extract<TaskEvent, { type
 		return reject(state, event.type)
 	}
 	const revision = state.revision + 1
+	const effects: TaskEffect[] = []
+	if (event.effectType !== "POST_TASK_VIEW") {
+		effects.push({ id: effectId(revision, effects.length + 1), type: "POST_TASK_VIEW" })
+	}
+	if (event.effectType !== "PERSIST_SNAPSHOT") {
+		effects.push({ id: effectId(revision, effects.length + 1), type: "PERSIST_SNAPSHOT" })
+	}
 	return {
 		accepted: true,
 		next: {
@@ -794,7 +809,7 @@ function reduceFailure(state: TaskRuntimeState, event: Extract<TaskEvent, { type
 				message: event.message,
 			},
 		},
-		effects: [],
+		effects,
 	}
 }
 
@@ -830,6 +845,7 @@ export function reduceTask(state: TaskRuntimeState, event: TaskEvent): Transitio
 		case "INTERACTION_RESOLVED":
 			return reduceInteractionResolved(state, event)
 		case "TASK_CANCEL_REQUESTED":
+		case "TASK_TERMINATE_REQUESTED":
 		case "TASK_CANCELLED":
 			return reduceCancel(state, event)
 		case "ERROR_RETRY_REQUESTED":

@@ -4,6 +4,12 @@ import type { ModeSwitchDraft } from "@/components/chat/mode-switch/useModeSwitc
 import QuotedMessagePreview from "@/components/chat/QuotedMessagePreview"
 import { ChatState, MessageHandlers, ScrollBehavior } from "../../types/chatTypes"
 
+interface InputDraft {
+	text: string
+	images: string[]
+	files: string[]
+}
+
 interface InputSectionProps {
 	chatState: ChatState
 	messageHandlers: MessageHandlers
@@ -11,6 +17,8 @@ interface InputSectionProps {
 	placeholderText: string
 	shouldDisableFilesAndImages: boolean
 	selectFilesAndImages: () => Promise<void>
+	enabled?: boolean
+	onSubmit?: (draft: InputDraft) => Promise<boolean>
 }
 
 /**
@@ -23,6 +31,8 @@ export const InputSection: React.FC<InputSectionProps> = ({
 	placeholderText,
 	shouldDisableFilesAndImages,
 	selectFilesAndImages,
+	enabled,
+	onSubmit,
 }) => {
 	const {
 		activeQuote,
@@ -40,6 +50,21 @@ export const InputSection: React.FC<InputSectionProps> = ({
 	} = chatState
 
 	const { isAtBottom, scrollToBottomAuto } = scrollBehavior
+	const submitDraft = async (capturedDraft?: ModeSwitchDraft) => {
+		const draft = {
+			text: capturedDraft?.text ?? inputValue,
+			images: capturedDraft?.images ?? selectedImages,
+			files: capturedDraft?.files ?? selectedFiles,
+		}
+		const accepted = onSubmit
+			? await onSubmit(draft)
+			: (await messageHandlers.handleSendMessage(draft.text, draft.images, draft.files), true)
+		if (accepted && onSubmit) {
+			setInputValue("")
+			setSelectedImages([])
+			setSelectedFiles([])
+		}
+	}
 
 	return (
 		<>
@@ -63,18 +88,12 @@ export const InputSection: React.FC<InputSectionProps> = ({
 					}
 				}}
 				onSelectFilesAndImages={selectFilesAndImages}
-				onSend={(capturedDraft?: ModeSwitchDraft) =>
-					messageHandlers.handleSendMessage(
-						capturedDraft?.text ?? inputValue,
-						capturedDraft?.images ?? selectedImages,
-						capturedDraft?.files ?? selectedFiles,
-					)
-				}
+				onSend={(capturedDraft?: ModeSwitchDraft) => void submitDraft(capturedDraft)}
 				placeholderText={placeholderText}
 				ref={textAreaRef}
 				selectedFiles={selectedFiles}
 				selectedImages={selectedImages}
-				sendingDisabled={sendingDisabled}
+				sendingDisabled={enabled === undefined ? sendingDisabled : !enabled}
 				setInputValue={setInputValue}
 				setSelectedFiles={setSelectedFiles}
 				setSelectedImages={setSelectedImages}

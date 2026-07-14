@@ -38,6 +38,7 @@ export type TaskEvent =
 	| { type: "INTERACTION_RESPONDED"; response: InteractionResponse }
 	| { type: "INTERACTION_RESOLVED"; interactionId: string }
 	| { type: "TASK_CANCEL_REQUESTED"; source: CancelSource }
+	| { type: "TASK_TERMINATE_REQUESTED" }
 	| {
 			type: "TASK_CANCELLED"
 			resume?: { turnId: string; interactionId: string; presentation: string }
