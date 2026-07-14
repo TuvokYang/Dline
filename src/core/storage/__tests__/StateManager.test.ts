@@ -1,7 +1,7 @@
 /**
  * Unit tests for StateManager per-task settings isolation (Map-based cache).
  */
-import { afterEach, beforeEach, describe, it } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import "should"
 import { createStorageContext } from "@shared/storage/storage-context"
 import fs from "fs/promises"
@@ -21,19 +21,18 @@ describe("StateManager — Per-Task Settings Isolation", () => {
 	let sm: StateManager
 
 	beforeEach(async () => {
-		tempDir = path.join(os.tmpdir(), `sm-test-${Date.now()}-${Math.random().toString(36).slice(2)}`)
-		await fs.mkdir(tempDir, { recursive: true })
+		tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "dline-state-manager-"))
+		vi.stubEnv("DLINE_DOCS_DIR", tempDir)
+		expect(process.env.DLINE_DOCS_DIR).toBe(tempDir)
 		const storageCtx = createStorageContext({ clineDir: tempDir })
 		sm = await StateManager.initialize(storageCtx)
 	})
 
 	afterEach(async () => {
 		await StateManager.resetForTest()
-		try {
-			await fs.rm(tempDir, { recursive: true, force: true })
-		} catch {
-			/* ignore */
-		}
+		vi.unstubAllEnvs()
+		await fs.rm(tempDir, { recursive: true, force: true })
+		await expect(fs.access(tempDir)).rejects.toMatchObject({ code: "ENOENT" })
 	})
 
 	describe("taskStateCache Map basics", () => {

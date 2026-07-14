@@ -1,5 +1,7 @@
 import * as fs from "fs/promises"
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import os from "os"
+import path from "path"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { ensureTaskDirectoryExists } from "../../../storage/disk"
 import { TaskState } from "../../TaskState"
 import { createFocusChainMarkdownContent, getFocusChainFilePath } from "../file-utils"
@@ -9,11 +11,26 @@ describe("FocusChainManager - Task Resumption", () => {
 	let taskId: string
 	let taskDir: string
 	let focusChainFilePath: string
+	let tempDocumentsDir: string
+	let manager: FocusChainManager | undefined
 
 	beforeEach(async () => {
+		tempDocumentsDir = await fs.mkdtemp(path.join(os.tmpdir(), "dline-focus-chain-resumption-"))
+		vi.stubEnv("DLINE_DOCS_DIR", tempDocumentsDir)
+		expect(process.env.DLINE_DOCS_DIR).toBe(tempDocumentsDir)
+
 		taskId = `test-${Date.now()}`
 		taskDir = await ensureTaskDirectoryExists(taskId)
+		expect(path.relative(tempDocumentsDir, taskDir)).toBe(path.join("tasks", taskId))
 		focusChainFilePath = getFocusChainFilePath(taskDir, taskId)
+	})
+
+	afterEach(async () => {
+		manager?.dispose()
+		manager = undefined
+		vi.unstubAllEnvs()
+		await fs.rm(tempDocumentsDir, { recursive: true, force: true })
+		await expect(fs.access(tempDocumentsDir)).rejects.toMatchObject({ code: "ENOENT" })
 	})
 
 	it("should load existing checklist from disk on setupFocusChainFileWatcher", async () => {
@@ -29,7 +46,7 @@ describe("FocusChainManager - Task Resumption", () => {
 		const taskState = new TaskState()
 		expect(taskState.currentFocusChainChecklist).toBeNull() // Initially null
 
-		const manager = new FocusChainManager({
+		manager = new FocusChainManager({
 			taskId,
 			taskState,
 			getMode: () => "act",
@@ -47,9 +64,6 @@ describe("FocusChainManager - Task Resumption", () => {
 		expect(taskState.currentFocusChainChecklist).toContain("# Test Task")
 		expect(taskState.currentFocusChainChecklist).toContain("- [x] Completed item")
 		expect(taskState.currentFocusChainChecklist).toContain("- [ ] Pending item")
-
-		// Cleanup
-		await manager.dispose()
 	})
 
 	it("should create focus chain file for new tasks", async () => {
@@ -61,7 +75,7 @@ describe("FocusChainManager - Task Resumption", () => {
 		}
 
 		const taskState = new TaskState()
-		const manager = new FocusChainManager({
+		manager = new FocusChainManager({
 			taskId,
 			taskState,
 			getMode: () => "act",
@@ -83,9 +97,6 @@ describe("FocusChainManager - Task Resumption", () => {
 
 		// Assert: New tasks create an accessible empty file but do not seed example checklist content
 		expect(taskState.currentFocusChainChecklist).toBeNull()
-
-		// Cleanup
-		await manager.dispose()
 	})
 
 	it("should prevent 'no task plan exists' error after resumption", async () => {
@@ -99,7 +110,7 @@ describe("FocusChainManager - Task Resumption", () => {
 
 		const taskState = new TaskState()
 		const mockSay = vi.fn()
-		const manager = new FocusChainManager({
+		manager = new FocusChainManager({
 			taskId,
 			taskState,
 			getMode: () => "act",
@@ -123,8 +134,5 @@ describe("FocusChainManager - Task Resumption", () => {
 
 		// Assert: TaskState should have updated checklist
 		expect(taskState.currentFocusChainChecklist).toContain("- [x] Step 2")
-
-		// Cleanup
-		await manager.dispose()
 	})
 })
