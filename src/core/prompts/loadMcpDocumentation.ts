@@ -1,5 +1,8 @@
 import { McpHub } from "@services/mcp/McpHub"
-import { getPrompt } from "./i18n"
+import { RuntimePromptGenerator } from "./generators/RuntimePromptGenerator"
+import { englishTemplateStore } from "./i18n/en"
+
+const runtimeGenerator = new RuntimePromptGenerator(englishTemplateStore)
 
 export async function loadMcpDocumentation(mcpHub: McpHub) {
 	const mcpServersPath = await mcpHub.getMcpServersPath()
@@ -9,7 +12,13 @@ export async function loadMcpDocumentation(mcpHub: McpHub) {
 			.getServers()
 			.filter((server) => server.status === "connected")
 			.map((server) => server.name)
-			.join(", ") || "(None running currently)"
+			.join(", ") || runtimeGenerator.generate("loadMcpDocumentation.noneRunning", {}).text
 
-	return `${getPrompt("loadMcpDocumentation", "main", { mcpServersPath, mcpSettingsFilePath, connectedServers })}\n`
+	return `${
+		runtimeGenerator.generate("loadMcpDocumentation.main", {
+			MCP_SERVERS_PATH: mcpServersPath,
+			MCP_SETTINGS_FILE_PATH: mcpSettingsFilePath,
+			CONNECTED_SERVERS: connectedServers,
+		}).text
+	}\n`
 }

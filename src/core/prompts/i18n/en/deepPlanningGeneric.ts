@@ -1,3 +1,5 @@
+export { default } from "./commands/deep-planning-generic"
+/*
 // English deep-planning generic variant prompts — key-value pairs only.
 
 const prompts: Record<string, string> = {
@@ -98,7 +100,7 @@ You must use the read_file tool to examine relevant source files, configuration 
 ### Essential Terminal Commands
 First, determine the language(s) used in the codebase, then execute these commands to build your understanding. You must tailor them to the codebase and ensure the output is not overly verbose. For example, you should exclude dependency folders such as node_modules, venv or php vendor, etc. These are only examples, the exact commands will differ depending on the codebase.
 
-{shellCommands}
+@SHELL_COMMANDS@
 
 
 ## STEP 2: Discussion and Questions
@@ -186,7 +188,7 @@ Your new task should be self-contained and reference the plan document rather th
 **Plan Document Navigation Commands:**
 The implementation agent should use these commands to read specific sections of the implementation plan. You should adapt these examples to conform to the structure of the .md file you created, and explicitly provide them when creating the new task:
 
-{navCommands}
+@NAV_COMMANDS@
 
 
 **Task Progress Format:**
@@ -205,9 +207,9 @@ You also MUST include the path to the markdown file you have created in your new
 
 Refer to @path/to/file/markdown.md for a complete breakdown of the task requirements and steps. You should periodically read this file again.
 
-{{FOCUS_CHAIN_PARAM}}
+@FOCUS_CHAIN_PARAM@
 
-{{NEW_TASK_INSTRUCTIONS}}
+@NEW_TASK_INSTRUCTIONS@
 
 ### Mode Switching
 
@@ -229,4 +231,4 @@ Below is the user's input when they indicated that they wanted to create a compr
 `,
 }
 
-export default prompts
+*/

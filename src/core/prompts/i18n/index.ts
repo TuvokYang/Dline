@@ -1,6 +1,8 @@
 import type { LanguageKey } from "@shared/Languages"
 import { Logger } from "@/shared/services/Logger"
-import { englishPrompts } from "./en"
+import { RuntimePromptGenerator } from "../generators/RuntimePromptGenerator"
+import type { PromptEnv } from "../template/types"
+import { englishPrompts, englishTemplateStore } from "./en"
 
 type PromptModule = Record<string, string>
 type LanguagePack = Record<string, PromptModule>
@@ -8,6 +10,7 @@ type LanguagePack = Record<string, PromptModule>
 const registry: Record<string, LanguagePack> = {
 	en: englishPrompts,
 }
+const runtimeGenerator = new RuntimePromptGenerator(englishTemplateStore)
 
 /**
  * Validate that a non-English language pack has all the same modules
@@ -43,8 +46,8 @@ export function registerPrompts(lang: string, moduleName: string, prompts: Promp
 	registry[lang][moduleName] = prompts
 }
 
-export function getPrompt(module: string, key: string, params?: Record<string, unknown>, lang?: LanguageKey): string {
-	const effectiveLang = lang ?? "en"
+export function getPrompt(module: string, key: string, lang: LanguageKey = "en"): string {
+	const effectiveLang = lang
 
 	// Try the requested language first, then fall back to English
 	const prompts = registry[effectiveLang]?.[module]
@@ -53,13 +56,10 @@ export function getPrompt(module: string, key: string, params?: Record<string, u
 	if (!prompts?.[key] && !enPrompts?.[key]) {
 		Logger.warn(`[i18n] Missing prompt: ${module}.${key}`)
 	}
-	let text = prompts?.[key] ?? enPrompts?.[key] ?? missingKey
+	return prompts?.[key] ?? enPrompts?.[key] ?? missingKey
+}
 
-	if (params) {
-		text = text.replace(/\{(\w+)\}/g, (_, k: string) => {
-			return params[k] !== undefined ? String(params[k]) : `{${k}}`
-		})
-	}
-
-	return text
+/** Renders one statically registered English prompt through the immutable runtime environment chain. */
+export function renderPrompt(module: string, key: string, env: PromptEnv = {}): string {
+	return runtimeGenerator.generate(`${module}.${key}`, env).text
 }

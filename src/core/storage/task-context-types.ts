@@ -1,3 +1,5 @@
+import type { ClineTool } from "@shared/tools"
+
 export type SystemPromptRefreshReason = "task_start" | "manual" | "post_compaction"
 
 /**
@@ -23,6 +25,7 @@ export interface TaskSystemPromptContext {
  */
 export interface FrozenSystemPromptCache {
 	readonly text: string
+	readonly tools?: readonly ClineTool[] | null
 	readonly capabilitiesHash: string
 	readonly createdAt: number
 	readonly refreshedAt: number

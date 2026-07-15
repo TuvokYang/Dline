@@ -1,0 +1,935 @@
+[
+  {
+    "type": "function",
+    "function": {
+      "name": "write_to_file",
+      "description": "[IMPORTANT: Always output the absolutePath first] Request to write content to a NEW file at the specified path. Use this tool ONLY for creating files that do not already exist. For editing existing files, always use replace_in_file. This tool will automatically create any directories needed to write the file.",
+      "strict": false,
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "absolutePath": {
+            "type": "string",
+            "description": "The absolute path to the file to write to."
+          },
+          "content": {
+            "type": "string",
+            "description": "The content to write to the file. ALWAYS provide the COMPLETE intended content of the file, without any truncation or omissions. You MUST include ALL parts of the file, even if they haven't been modified."
+          },
+          "task_progress": {
+            "type": "string",
+            "description": "Report task_progress as a separate parameter. Follow the UPDATING TASK PROGRESS section: use exact checklist text for completed items, and include full checklists only when starting or replacing a plan."
+          }
+        },
+        "required": [
+          "absolutePath",
+          "content"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "replace_in_file",
+      "description": "[IMPORTANT: Always output the absolutePath first] Request to edit an existing file using SEARCH/REPLACE blocks. PREFER this tool for all edits to existing files. Only use write_to_file for creating new files.",
+      "strict": false,
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "absolutePath": {
+            "type": "string",
+            "description": "The absolute path to the file to write to."
+          },
+          "diff": {
+            "type": "string",
+            "description": "One or more SEARCH/REPLACE blocks following this exact format:\n```\n------- SEARCH\n[exact content to find]\n=======\n[new content to replace with]\n+++++++ REPLACE\n```\nCritical rules:\n1. SEARCH content must match the associated file section to find EXACTLY:\n    * Match character-for-character including whitespace, indentation, line endings\n    * Include all comments, docstrings, etc.\n2. SEARCH/REPLACE blocks will ONLY replace the first match occurrence.\n    * Including multiple unique SEARCH/REPLACE blocks if you need to make multiple changes.\n    * Include *just* enough lines in each SEARCH section to uniquely match each set of lines that need to change.\n    * When using multiple SEARCH/REPLACE blocks, list them in the order they appear in the file.\n3. Keep SEARCH/REPLACE blocks concise:\n    * Break large SEARCH/REPLACE blocks into a series of smaller blocks that each change a small portion of the file.\n    * Include just the changing lines, and a few surrounding lines if needed for uniqueness.\n    * Do not include long runs of unchanging lines in SEARCH/REPLACE blocks.\n    * Each line must be complete. Never truncate lines mid-way through as this can cause matching failures.\n4. Special operations:\n    * To move code: Use two SEARCH/REPLACE blocks (one to delete from original + one to insert at new location)\n    * To delete code: Use empty REPLACE section\n5. If your source context came from read_file and includes line labels (for example, \"42 | const x = 1\"), do NOT include the \"42 | \" prefix in SEARCH or REPLACE content. Match only the raw file text.\n6. DELIMITER CONFLICT: If any line in your SEARCH content starts with 7+ dashes followed by \" SEARCH\", or is exactly 7+ \"=\" signs, or starts with 7+ \"+\" followed by \" REPLACE\", change your delimiter count to a unique value (>= 7). The count must not match any content line format. All three markers within a block must use the same count.\n7. FAILURE RECOVERY: If SEARCH block fails to match:\n    - The match text may be too short, causing multiple identical matches in the file. Read the file with read_file, select a longer unique snippet around the target lines, and retry.\n    - The match text may not exist exactly in the file due to character differences, whitespace, or indentation. Read the file and copy/paste the EXACT text you need to match.\n    - NEVER use command-line tools (sed, awk, ripgrep, etc.) to edit files. Only use replace_in_file for editing existing files.\n    - Always re-read the file before retrying after a failed match."
+          },
+          "task_progress": {
+            "type": "string",
+            "description": "Report task_progress as a separate parameter. Follow the UPDATING TASK PROGRESS section: use exact checklist text for completed items, and include full checklists only when starting or replacing a plan."
+          }
+        },
+        "required": [
+          "absolutePath",
+          "diff"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "read_file",
+      "description": "Request to read the contents of a file at the specified path. Use this when you need to examine the contents of an existing file you do not know the contents of, for example to analyze code, review text files, or extract information from configuration files. Returned text lines are prefixed with line labels (e.g. `1 |`, `2 |`). These labels are metadata, not part of the file content. For large files, output is automatically limited to 1000 lines. Use start_line and end_line to read specific sections. Automatically extracts raw text from PDF and DOCX files. May not be suitable for other types of binary files, as it returns the raw content as a string. Do NOT use this tool to list the contents of a directory. Only use this tool on files.",
+      "strict": false,
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "The path of the file to read (relative to the current working directory /workspace/project)"
+          },
+          "start_line": {
+            "type": "integer",
+            "description": "The 1-based line number to start reading from (inclusive). Defaults to 1."
+          },
+          "end_line": {
+            "type": "integer",
+            "description": "The 1-based line number to stop reading at (inclusive). Defaults to start_line + 1000. Use with start_line to read specific sections of large files."
+          },
+          "task_progress": {
+            "type": "string",
+            "description": "Report task_progress as a separate parameter. Follow the UPDATING TASK PROGRESS section: use exact checklist text for completed items, and include full checklists only when starting or replacing a plan."
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "search_files",
+      "description": "Request to perform a regex search across files in a specified directory, providing context-rich results. This tool searches for patterns or specific content across multiple files, displaying each match with encapsulating context. Each result line is prefixed with its line number (e.g., '42 | code content'), matching the read_file format.",
+      "strict": false,
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "The path of the directory to search in (relative to the current working directory /workspace/project). This directory will be recursively searched."
+          },
+          "regex": {
+            "type": "string",
+            "description": "The regular expression pattern to search for. Uses Rust regex syntax."
+          },
+          "file_pattern": {
+            "type": "string",
+            "description": "Glob pattern to filter files (e.g., '*.ts' for TypeScript files). If not provided, it will search all files (*)."
+          },
+          "task_progress": {
+            "type": "string",
+            "description": "Report task_progress as a separate parameter. Follow the UPDATING TASK PROGRESS section: use exact checklist text for completed items, and include full checklists only when starting or replacing a plan."
+          }
+        },
+        "required": [
+          "path",
+          "regex"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "list_files",
+      "description": "Request to list files and directories within the specified directory. Each entry includes file size (KB), last modification time, and line count (for non-recursive listings on text files). If recursive is true, it will list all files and directories recursively. If recursive is false or not provided, it will only list the top-level contents. Do not use this tool to confirm the existence of files you may have created, as the user will let you know if the files were created successfully or not.",
+      "strict": false,
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "The path of the directory to list contents for."
+          },
+          "recursive": {
+            "type": "boolean",
+            "description": "Whether to list files recursively. Use true for recursive listing, false or omit for top-level only."
+          },
+          "show_metadata": {
+            "type": "boolean",
+            "description": "Whether to include file size, modification time, and line count metadata in the output. Defaults to true. Set to false for lightweight listings."
+          },
+          "task_progress": {
+            "type": "string",
+            "description": "Report task_progress as a separate parameter. Follow the UPDATING TASK PROGRESS section: use exact checklist text for completed items, and include full checklists only when starting or replacing a plan."
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "list_code_definition_names",
+      "description": "Request to list definition names (classes, functions, methods, etc.) used in source code files at the top level of the specified directory. This tool provides insights into the codebase structure and important constructs, encapsulating high-level concepts and relationships that are crucial for understanding the overall architecture. Each definition is prefixed with its start-end line range (e.g., '23-45 | function foo() {').",
+      "strict": false,
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "The path of a directory (not a file) relative to the current working directory /workspace/project. Lists definitions across all source files in that directory. To inspect a single file, use read_file instead."
+          },
+          "task_progress": {
+            "type": "string",
+            "description": "Report task_progress as a separate parameter. Follow the UPDATING TASK PROGRESS section: use exact checklist text for completed items, and include full checklists only when starting or replacing a plan."
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "attempt_completion",
+      "description": "[TURN-END] After each tool use, the user will respond with the result of that tool use, including whether it succeeded or failed and any reason for failure. Once you have received those results, confirmed that all goals defined by the user are complete, and verified every item in the task_progress checklist is marked [x], use this tool to present the final result. Optionally provide an actionable CLI command that lets the user review the result.\n\nThis tool is only for completing implementation or development tasks that have a task_progress checklist. Do not use it to answer questions or chat; use qna_respond for Q&A. Do not put the checklist in the result text; provide it through the task_progress parameter.\n\nIMPORTANT NOTE: This tool cannot be used until previous tool results have been confirmed and all tasks have been completed in full. If any checklist item remains incomplete, do not call attempt_completion.",
+      "strict": false,
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "result": {
+            "type": "string",
+            "description": "A clear, specific, brief one- or two-paragraph summary of the final result, including what was completed and the relevant verification outcome."
+          },
+          "command": {
+            "type": "string",
+            "description": "An actionable terminal command that is non-verbose that allows user to review the result of your work. For example, use `start localhost:3000` to start a locally running development server. Commands like `echo` or `cat` that merely print text or open a file are not allowed. Ensure the command is properly formatted for user's OS and does not contain any harmful instructions"
+          }
+        },
+        "required": [
+          "result"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "plan_mode_respond",
+      "description": "[TURN-END] Present a COMPLETE implementation plan covering ALL user requirements. Use ONLY after thorough exploration and analysis. Your response MUST include the full plan with detailed analysis, architecture decisions, and a complete task_progress checklist organized with # Title and ## Section headings covering every step needed to fulfill ALL requirements. Do not simplify or omit parts of the plan — the user needs to see the entire plan to approve it. Do not call repeatedly — use qna_respond for questions and discussion. This tool is only available in PLAN MODE.\nHowever, if while writing your response you realize you actually need to do more exploration before providing a complete plan, you can add the optional needs_more_exploration parameter to indicate this.",
+      "strict": false,
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "response": {
+            "type": "string",
+            "description": "The response to provide to the user."
+          },
+          "task_progress": {
+            "type": "string",
+            "description": "Report task_progress as a separate parameter. Follow the UPDATING TASK PROGRESS section: use exact checklist text for completed items, and include full checklists only when starting or replacing a plan."
+          }
+        },
+        "required": [
+          "response"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "qna_respond",
+      "description": "[TURN-END] Use this tool whenever the user asks a question or requests clarification. This MUST be your first response tool for any user question — do NOT use attempt_completion or any other tool to answer questions. Do NOT use plan_mode_respond for answering questions — plan_mode_respond is ONLY for presenting and discussing implementation plans. Available in both PLAN and ACT modes.",
+      "strict": false,
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "response": {
+            "type": "string",
+            "description": "The detailed answer to the user's question. Provide a clear, thorough explanation. Use code snippets, examples, and references as needed."
+          }
+        },
+        "required": [
+          "response"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "act_mode_respond",
+      "description": "Provide a progress update or preamble to the user during ACT MODE execution. This tool allows you to communicate your thought process and planned actions without interrupting the execution flow. After displaying your message, execution automatically continues, allowing you to proceed with subsequent tool calls immediately. This tool is only available in ACT MODE. This tool may not be called immediately after a previous act_mode_respond call.\n\nIMPORTANT: Use this tool when it adds value to the user experience, but always follow it with an actual tool call - never call it twice in a row.\n\nUse this tool when:\n- After reading files and before making any edits - explain your analysis and what changes you plan to make\n- When starting a new phase of work (e.g., transitioning from backend to frontend, or from one feature to another)\n- During long sequences of operations to provide progress updates\n- When your approach or strategy changes mid-task\n- Before executing complex or potentially risky operations\n- To explain why you're choosing one approach over another\n\nDo NOT use this tool when you have completed all required actions and are ready to present the final output; in that case, use the attempt_completion tool instead.\n\nCRITICAL CONSTRAINT: You MUST NOT call this tool more than once in a row. After using act_mode_respond, your next assistant message MUST either call a different tool or perform additional work without using act_mode_respond again. If you attempt to call act_mode_respond consecutively, the tool call will fail with an explicit error.",
+      "strict": false,
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "response": {
+            "type": "string",
+            "description": "The message to provide to the user. This should explain what you're about to do, your current progress, or your reasoning. The response should be brief and conversational in tone, aiming to keep the user informed without overwhelming them with details."
+          }
+        },
+        "required": [
+          "response"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "execute_command",
+      "description": "Request to execute a CLI command on the system. Use this when you need to perform system operations or run specific commands to accomplish any step in the user's task. You must tailor your command to the user's system and provide a clear explanation of what the command does. For command chaining, use the appropriate chaining syntax for the user's shell. Prefer to execute complex CLI commands over creating executable scripts, as they are more flexible and easier to run. Commands will be executed from the current workspace.",
+      "strict": false,
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string",
+            "description": "The CLI command to execute. This should be valid for the current operating system. Ensure the command is properly formatted and does not contain any harmful instructions. Do not use the ~ character or $HOME to refer to the home directory. Always use absolute paths. The command will be executed from the current workspace, so you do not need to change to the workspace directory."
+          },
+          "requires_approval": {
+            "type": "boolean",
+            "description": "A boolean indicating whether this command requires explicit user approval before execution in case the user has auto-approve mode enabled. Set to true for potentially impactful operations like installing or uninstalling packages, deleting or overwriting files, system configuration changes, network operations, or any commands that could have unintended side effects. Set to false for safe operations like reading files or directories, running development servers, building projects, and other non-destructive operations."
+          }
+        },
+        "required": [
+          "command",
+          "requires_approval"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "browser_action",
+      "description": "Request to interact with a Puppeteer-controlled browser. Every action, except `close`, will be responded to with a screenshot of the browser's current state, along with any new console logs. You may only perform one browser action per message, and wait for the user's response including a screenshot and logs to determine the next action.\n- The sequence of actions **must always start with** launching the browser at a URL, and **must always end with** closing the browser. If you need to visit a new URL that is not possible to navigate to from the current webpage, you must first close the browser, then launch again at the new URL.\n- While the browser is active, only the `browser_action` tool can be used. No other tools should be called during this time. You may proceed to use other tools only after closing the browser. For example if you run into an error and need to fix a file, you must close the browser, then use other tools to make the necessary changes, then re-launch the browser to verify the result.\n- The browser window has a resolution of **1280x800** pixels. When performing any click actions, ensure the coordinates are within this resolution range.\n- Before clicking on any elements such as icons, links, or buttons, you must consult the provided screenshot of the page to determine the coordinates of the element. The click should be targeted at the **center of the element**, not on its edges.",
+      "strict": false,
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "description": "The action to perform. The available actions are: \n\t* launch: Launch a new Puppeteer-controlled browser instance at the specified URL. This **must always be the first action**. \n\t\t- Use with the `url` parameter to provide the URL. \n\t\t- Ensure the URL is valid and includes the appropriate protocol (e.g. http://localhost:3000/page, file:///path/to/file.html, etc.) \n\t* click: Click at a specific x,y coordinate. \n\t\t- Use with the `coordinate` parameter to specify the location. \n\t\t- Always click in the center of an element (icon, button, link, etc.) based on coordinates derived from a screenshot. \n\t* type: Type a string of text on the keyboard. You might use this after clicking on a text field to input text. \n\t\t- Use with the `text` parameter to provide the string to type. \n\t* scroll_down: Scroll down the page by one page height. \n\t* scroll_up: Scroll up the page by one page height. \n\t* close: Close the Puppeteer-controlled browser instance. This **must always be the final browser action**. \n\t    - Example: 'scroll_up'"
+          },
+          "url": {
+            "type": "string",
+            "description": "Use this for providing the URL for the `launch` action."
+          },
+          "coordinate": {
+            "type": "string",
+            "description": "x,y coordinates - The X and Y coordinates for the `click` action. Coordinates should be within the **1280x800** resolution. Example: '450,300'"
+          },
+          "text": {
+            "type": "string",
+            "description": "Use this for providing the text for the `type` action. Example: 'Hello, world!'"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "web_fetch",
+      "description": "Fetches and analyzes content from a specified URL. IMPORTANT: If an MCP-provided web fetch tool is available, prefer using that tool instead of this one, as it may have fewer restrictions.",
+      "strict": false,
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "The URL to fetch content from"
+          },
+          "prompt": {
+            "type": "string",
+            "description": "Prompt for analyzing the webpage content"
+          },
+          "task_progress": {
+            "type": "string",
+            "description": "Report task_progress as a separate parameter. Follow the UPDATING TASK PROGRESS section: use exact checklist text for completed items, and include full checklists only when starting or replacing a plan."
+          }
+        },
+        "required": [
+          "url",
+          "prompt"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "web_search",
+      "description": "Performs a web search and returns relevant results with titles and URLs. IMPORTANT: If an MCP-provided web search tool is available, prefer using that tool instead of this one, as it may have fewer restrictions.",
+      "strict": false,
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "The search query to use"
+          },
+          "allowed_domains": {
+            "type": "string",
+            "description": "JSON array of domains to restrict results to"
+          },
+          "blocked_domains": {
+            "type": "string",
+            "description": "JSON array of domains to exclude from results"
+          },
+          "task_progress": {
+            "type": "string",
+            "description": "Report task_progress as a separate parameter. Follow the UPDATING TASK PROGRESS section: use exact checklist text for completed items, and include full checklists only when starting or replacing a plan."
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "use_mcp_tool",
+      "description": "Request to use a tool provided by a connected MCP server. Each MCP server can provide multiple tools with different capabilities. Tools have defined input schemas that specify required and optional parameters.",
+      "strict": false,
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "server_name": {
+            "type": "string",
+            "description": "The name of the MCP server providing the tool"
+          },
+          "tool_name": {
+            "type": "string",
+            "description": "The name of the tool to execute"
+          },
+          "arguments": {
+            "type": "string",
+            "description": "A JSON object containing the tool's input parameters, following the tool's input schema"
+          },
+          "task_progress": {
+            "type": "string",
+            "description": "Report task_progress as a separate parameter. Follow the UPDATING TASK PROGRESS section: use exact checklist text for completed items, and include full checklists only when starting or replacing a plan."
+          }
+        },
+        "required": [
+          "server_name",
+          "tool_name",
+          "arguments"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "access_mcp_resource",
+      "description": "Request to access a resource provided by a connected MCP server. Resources represent data sources that can be used as context, such as files, API responses, or system information. You must only use this tool if you have been informed of the MCP server and the resource you are trying to access.",
+      "strict": false,
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "server_name": {
+            "type": "string",
+            "description": "The name of the MCP server providing the resource"
+          },
+          "uri": {
+            "type": "string",
+            "description": "The URI identifying the specific resource to access"
+          },
+          "task_progress": {
+            "type": "string",
+            "description": "Report task_progress as a separate parameter. Follow the UPDATING TASK PROGRESS section: use exact checklist text for completed items, and include full checklists only when starting or replacing a plan."
+          }
+        },
+        "required": [
+          "server_name",
+          "uri"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "load_mcp_documentation",
+      "description": "Load documentation about creating MCP servers. This tool should be used when the user requests to create or install an MCP server (the user may ask you something along the lines of \"add a tool\" that does some function, in other words to create an MCP server that provides tools and resources that may connect to external APIs for example. You have the ability to create an MCP server and add it to a configuration file that will then expose the tools and resources for you to use with `use_mcp_tool` and `access_mcp_resource`). The documentation provides detailed information about the MCP server creation process, including setup instructions, best practices, and examples.",
+      "strict": false,
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "use_skill",
+      "description": "Load and activate a skill by name. Skills provide specialized instructions for specific tasks. Use this tool ONCE when a user's request matches one of the available skill descriptions shown in the SKILLS section of your system prompt. After activation, follow the skill's instructions directly - do not call use_skill again.",
+      "strict": false,
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "skill_name": {
+            "type": "string",
+            "description": "The name of the skill to activate (must match exactly one of the available skill names)"
+          }
+        },
+        "required": [
+          "skill_name"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "load_mcp",
+      "description": "Load detailed read-only metadata for one named capability. The name parameter must match an advertised capability exactly. This tool does not discover capability lists, modify cached system prompts, refresh metadata, or execute the capability.",
+      "strict": false,
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The exact capability name to load."
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "load_skill",
+      "description": "Load detailed read-only metadata for one named capability. The name parameter must match an advertised capability exactly. This tool does not discover capability lists, modify cached system prompts, refresh metadata, or execute the capability.",
+      "strict": false,
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The exact capability name to load."
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "load_workflow",
+      "description": "Load detailed read-only metadata for one named capability. The name parameter must match an advertised capability exactly. This tool does not discover capability lists, modify cached system prompts, refresh metadata, or execute the capability.",
+      "strict": false,
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The exact capability name to load."
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "load_subagent",
+      "description": "Load detailed read-only metadata for one named capability. The name parameter must match an advertised capability exactly. This tool does not discover capability lists, modify cached system prompts, refresh metadata, or execute the capability.",
+      "strict": false,
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The exact capability name to load."
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "find_references",
+      "description": "Find all semantic references to a symbol at the given file position via the IDE's LSP. Returns file paths, line numbers, and context lines for each reference (definitions, imports, calls). This does NOT find occurrences in string literals, comments, or JSDoc. An empty result may mean the LSP does not support this language or file type, not that no references exist. Use this before renaming or refactoring to understand semantic impact. To search strings and comments, use search_files with regex. Only available in VSCode; other environments return an error suggesting search_files as a fallback.",
+      "strict": false,
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "file_path": {
+            "type": "string",
+            "description": "Absolute path to the file containing the symbol. Use the exact path as shown in the workspace file listing."
+          },
+          "line": {
+            "type": "integer",
+            "description": "1-based line number where the symbol appears."
+          },
+          "character": {
+            "type": "integer",
+            "description": "1-based character offset on the line where the symbol starts."
+          },
+          "task_progress": {
+            "type": "string",
+            "description": "Report task_progress as a separate parameter. Follow the UPDATING TASK PROGRESS section: use exact checklist text for completed items, and include full checklists only when starting or replacing a plan."
+          }
+        },
+        "required": [
+          "file_path",
+          "line",
+          "character"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "rename",
+      "description": "Rename a symbol at the given file position using the IDE's LSP (semantic rename). Only renames symbol references (definitions, imports, calls); skips string literals, comments, and JSDoc. Set dry_run=true to preview changes without applying them. If LSP returns no edits, the rename could not be performed (language or project may not be supported). Only available in VSCode; for text-level renaming including strings and comments, use replace_text instead.",
+      "strict": false,
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "file_path": {
+            "type": "string",
+            "description": "Absolute path to the file containing the symbol. Use the exact path as shown in the workspace file listing."
+          },
+          "line": {
+            "type": "integer",
+            "description": "1-based line number where the symbol appears."
+          },
+          "character": {
+            "type": "integer",
+            "description": "1-based character offset on the line where the symbol starts."
+          },
+          "new_name": {
+            "type": "string",
+            "description": "The new name for the symbol. Use camelCase/PascalCase/snake_case as appropriate for the language."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "description": "When true, returns a preview of all changes without actually modifying any files. Defaults to false."
+          },
+          "task_progress": {
+            "type": "string",
+            "description": "Report task_progress as a separate parameter. Follow the UPDATING TASK PROGRESS section: use exact checklist text for completed items, and include full checklists only when starting or replacing a plan."
+          }
+        },
+        "required": [
+          "file_path",
+          "line",
+          "character",
+          "new_name"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "replace_text",
+      "description": "ALWAYS run with dry_run=true FIRST to preview changes before applying. Perform a global text replacement across all files matching a glob pattern. This operates at the text level (not semantic), replacing all occurrences of a literal or regex pattern. Substrings are matched: replacing \"Hello\" also changes \"sayHello\" to \"sayHi\". String literals and comments are also affected. Set dry_run=true to preview changes without modifying files. Use this for bulk text changes like renaming strings, updating URLs, or fixing repeated typos. For single-file edits, use replace_in_file. For safe identifier-only renames that skip strings and comments, use rename (semantic, LSP-based).",
+      "strict": false,
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "find": {
+            "type": "string",
+            "description": "The text to search for. By default this is a literal string; set literal=false to use a regex pattern."
+          },
+          "replace": {
+            "type": "string",
+            "description": "The replacement text. Use an empty string to delete matches."
+          },
+          "file_pattern": {
+            "type": "string",
+            "description": "Glob pattern to filter files (e.g., '*.ts', '*.md', 'src/**/*.ts'). Only files matching this pattern in the workspace will be checked."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "description": "When true, returns a preview of all matches without modifying any files. Defaults to false."
+          },
+          "literal": {
+            "type": "boolean",
+            "description": "When true (default), 'find' is treated as a literal string. When false, 'find' is treated as a regex pattern."
+          },
+          "task_progress": {
+            "type": "string",
+            "description": "Report task_progress as a separate parameter. Follow the UPDATING TASK PROGRESS section: use exact checklist text for completed items, and include full checklists only when starting or replacing a plan."
+          }
+        },
+        "required": [
+          "find",
+          "replace",
+          "file_pattern"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "apply_patch",
+      "description": "This is a custom utility that makes it more convenient to add, remove, move, or edit code in a single file. `apply_patch` effectively allows you to execute a diff/patch against a file, but the format of the diff specification is unique to this task, so pay careful attention to these instructions. To use the `apply_patch` command, you should pass a message of the following structure as \"input\":\n\n%%bash\napply_patch <<\"EOF\"\n*** Begin Patch\n[YOUR_PATCH]\n*** End Patch\nEOF\n\nWhere [YOUR_PATCH] is the actual content of your patch, specified in the following V4A diff format.\n\n*** [ACTION] File: [path/to/file] -> ACTION can be one of Add, Update, or Delete. \n\nIn a Add File section, every line of the new file (including blank/empty lines) MUST start with a `+` prefix. Do not include any unprefixed lines inside an Add section\nIn a Update/Delete section, repeat the following for each snippet of code that needs to be changed:\n[context_before] -> See below for further instructions on context.\n- [old_code] -> Precede the old code with a minus sign.\n+ [new_code] -> Precede the new, replacement code with a plus sign.\n[context_after] -> See below for further instructions on context.\n\nFor instructions on [context_before] and [context_after]:\n- By default, show 3 lines of code immediately above and 3 lines immediately below each change. If a change is within 3 lines of a previous change, do NOT duplicate the first change's [context_after] lines in the second change's [context_before] lines.\n- If 3 lines of context is insufficient to uniquely identify the snippet of code within the file, use the @@ operator to indicate the class or function to which the snippet belongs. For instance, we might have:\n@@ class BaseClass\n[3 lines of pre-context]\n- [old_code]\n+ [new_code]\n[3 lines of post-context]\n\n- If a code block is repeated so many times in a class or function such that even a single @@ statement and 3 lines of context cannot uniquely identify the snippet of code, you can use multiple `@@` statements to jump to the right context. For instance:\n\n@@ class BaseClass\n@@ \tdef method():\n[3 lines of pre-context]\n- [old_code]\n+ [new_code]\n[3 lines of post-context]\n\nNote, then, that we do not use line numbers in this diff format, as the context is enough to uniquely identify code. An example of a message that you might pass as \"input\" to this function, in order to apply a patch, is shown below.\n\n%%bash\napply_patch <<\"EOF\"\n*** Begin Patch\n*** Update File: pygorithm/searching/binary_search.py\n@@ class BaseClass\n@@     def search():\n-          pass\n+          raise NotImplementedError()\n\n@@ class Subclass\n@@     def search():\n-          pass\n+          raise NotImplementedError()\n\n*** End Patch\nEOF",
+      "strict": false,
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "input": {
+            "type": "string",
+            "description": "The apply_patch command that you wish to execute."
+          },
+          "task_progress": {
+            "type": "string",
+            "description": "Report task_progress as a separate parameter. Follow the UPDATING TASK PROGRESS section: use exact checklist text for completed items, and include full checklists only when starting or replacing a plan."
+          }
+        },
+        "required": [
+          "input"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "spawn_task",
+      "description": "Spawn a new independent task. The spawned task has its OWN context — it does NOT inherit the parent's conversation history. Use the task parameter for goals and the context parameter for background information. The task runs autonomously in PLAN mode with auto-run enabled, inheriting the parent's API provider, MCP servers, and rules. The user must approve before creation.",
+      "strict": false,
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "task": {
+            "type": "string",
+            "description": "Describe what the spawned task should investigate or execute. Be specific about the goals and expected work to be done."
+          },
+          "context": {
+            "type": "string",
+            "description": "Provide relevant background context for the spawned task. Include: why this task is needed, relevant conversation history or prior work, key technical concepts, constraints, and configuration. The spawned task cannot access the parent's conversation history — include everything it needs to know."
+          }
+        },
+        "required": [
+          "task"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "focus_chain_change",
+      "description": "Request to override the current focus chain plan with a new plan. Each item in the new plan will have a checkbox for user approval. Only approved items will replace the current focus chain. Requires user authorization to proceed.",
+      "strict": false,
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "new_plan": {
+            "type": "string",
+            "description": "The complete new focus chain plan, organized with # Title and ## Section headings."
+          },
+          "reason": {
+            "type": "string",
+            "description": "The reason for changing the current plan."
+          }
+        },
+        "required": [
+          "new_plan"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "use_subagents",
+      "description": "Run up to five focused in-process subagents in parallel. Each subagent gets its own prompt and returns a comprehensive research result with tool and token stats. Use this for broad exploration when reading many files would consume the main agent's context window. You do not need to launch multiple subagents every time; using one subagent is valid when it avoids unnecessary context usage for light discovery work.",
+      "strict": false,
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "prompt_1": {
+            "type": "string",
+            "description": "First subagent prompt. Must include <task> and <context> sections."
+          },
+          "prompt_2": {
+            "type": "string",
+            "description": "Optional second subagent prompt. Must include <task> and <context> sections when provided."
+          },
+          "prompt_3": {
+            "type": "string",
+            "description": "Optional third subagent prompt. Must include <task> and <context> sections when provided."
+          },
+          "prompt_4": {
+            "type": "string",
+            "description": "Optional fourth subagent prompt. Must include <task> and <context> sections when provided."
+          },
+          "prompt_5": {
+            "type": "string",
+            "description": "Optional fifth subagent prompt. Must include <task> and <context> sections when provided."
+          },
+          "background": {
+            "type": "boolean",
+            "description": "Optional boolean. Set true to run the batch in background. Defaults to false."
+          },
+          "timeout": {
+            "type": "integer",
+            "description": "Optional positive integer timeout in seconds for each subagent. Defaults to 600."
+          }
+        },
+        "required": [
+          "prompt_1"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "status_update",
+      "description": "Provide a progress statement or announcement to the user during task execution. By default, execution continues immediately — you can proceed with the next tool call without waiting. Use this tool for phase transitions, milestone announcements, or when you want to inform the user of your current approach.\n\nSet requires_acknowledgment to true ONLY when you explicitly need the user to confirm before continuing — this displays \"知晓\" (acknowledge) and \"停止\" (stop) buttons. The user can stop the task or acknowledge and let you continue.\n\nIMPORTANT: Do NOT use this tool consecutively. After calling status_update, your next tool call must be a different tool performing actual work. This tool is NOT for final completion — use attempt_completion for that. Do NOT use status_update merely to update task_progress — task_progress updates are silent and should be done via the task_progress parameter on any tool call. Use status_update only for meaningful announcements that the user needs to read.",
+      "strict": false,
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "response": {
+            "type": "string",
+            "description": "The progress statement or announcement text. Be concise and informative."
+          },
+          "requires_acknowledgment": {
+            "type": "boolean",
+            "description": "Set to true if you need the user to explicitly acknowledge before continuing. Defaults to false — execution continues immediately."
+          },
+          "task_progress": {
+            "type": "string",
+            "description": "Report task_progress as a separate parameter. Follow the UPDATING TASK PROGRESS section: use exact checklist text for completed items, and include full checklists only when starting or replacing a plan."
+          }
+        },
+        "required": [
+          "response"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "generate_explanation",
+      "description": "Opens a multi-file diff view and generates AI-powered inline comments explaining the changes between two git references. Use this tool to help users understand code changes from git commits, pull requests, branches, or any git refs. The tool uses git to retrieve file contents and displays a side-by-side diff view with explanatory comments.",
+      "strict": false,
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "A descriptive title for the diff view (e.g., 'Changes in commit abc123', 'PR #42: Add authentication', 'Changes between main and feature-branch')"
+          },
+          "from_ref": {
+            "type": "string",
+            "description": "The git reference for the 'before' state. Can be a commit hash, branch name, tag, or relative reference like HEAD~1, HEAD^, origin/main, etc."
+          },
+          "to_ref": {
+            "type": "string",
+            "description": "The git reference for the 'after' state. Can be a commit hash, branch name, tag, or relative reference. If not provided, compares to the current working directory (including uncommitted changes)."
+          }
+        },
+        "required": [
+          "title",
+          "from_ref"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "generate_report",
+      "description": "[TURN-END] Generate a structured technical report for the user to review. This tool pauses execution and waits for the user to respond before you can continue. Use this when the user requests a formal report, summary of findings, or technical analysis that requires their review before proceeding to the next steps.\n\nThe report should include relevant code snippets, architectural decisions, error analysis, or performance data as appropriate. After the user reviews the report, they will provide feedback or instructions for the next steps.",
+      "strict": false,
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "A concise, descriptive title for the report."
+          },
+          "content": {
+            "type": "string",
+            "description": "The full report content. Use markdown formatting for readability. Include sections like Background, Findings, Analysis, Recommendations as appropriate."
+          },
+          "task_progress": {
+            "type": "string",
+            "description": "Report task_progress as a separate parameter. Follow the UPDATING TASK PROGRESS section: use exact checklist text for completed items, and include full checklists only when starting or replacing a plan."
+          }
+        },
+        "required": [
+          "title",
+          "content"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "snapshot-mcp0mcp0echo",
+      "description": "Snapshot MCP: Returns the complete provided text.",
+      "strict": false,
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ]
+      }
+    }
+  }
+]

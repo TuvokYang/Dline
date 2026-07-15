@@ -1,8 +1,9 @@
 import type { CollectCapabilitiesInput } from "@core/prompts/capabilities/CapabilitiesAggregator"
 import { collectCapabilities } from "@core/prompts/capabilities/CapabilitiesAggregator"
 import { renderCapabilitiesSection } from "@core/prompts/capabilities/CapabilitiesSection"
+import { selectPromptProfile } from "@core/prompts/profiles/select-profile"
 import type { SystemPromptContext } from "@core/prompts/system-prompt"
-import { getSystemPrompt, PromptRegistry } from "@core/prompts/system-prompt"
+import { getSystemPrompt } from "@core/prompts/system-prompt"
 import { getTaskContext, saveTaskContext } from "@core/storage/disk"
 import type {
 	FrozenPromptBuilderInfo,
@@ -15,7 +16,7 @@ import { hashPromptContent } from "./hash"
 
 export interface BuiltSystemPrompt {
 	readonly systemPrompt: string
-	readonly tools?: ClineTool[]
+	readonly tools?: readonly ClineTool[]
 }
 
 export interface SystemPromptCacheDeps {
@@ -23,7 +24,10 @@ export interface SystemPromptCacheDeps {
 	readonly saveContext?: (taskId: string, context: TaskContextCache) => Promise<void>
 	readonly collectCapabilities?: (input: CollectCapabilitiesInput) => Promise<Awaited<ReturnType<typeof collectCapabilities>>>
 	readonly buildSystemPrompt?: (context: SystemPromptContext) => Promise<BuiltSystemPrompt>
-	readonly getPromptBuilderInfo?: (context: SystemPromptContext, tools: ClineTool[] | undefined) => FrozenPromptBuilderInfo
+	readonly getPromptBuilderInfo?: (
+		context: SystemPromptContext,
+		tools: readonly ClineTool[] | undefined,
+	) => FrozenPromptBuilderInfo
 	readonly now?: () => number
 }
 
@@ -48,10 +52,10 @@ export class SystemPromptCacheService {
 	private readonly buildSystemPrompt: (context: SystemPromptContext) => Promise<BuiltSystemPrompt>
 	private readonly getPromptBuilderInfo: (
 		context: SystemPromptContext,
-		tools: ClineTool[] | undefined,
+		tools: readonly ClineTool[] | undefined,
 	) => FrozenPromptBuilderInfo
 	private readonly now: () => number
-	private lastTools?: ClineTool[]
+	private lastTools?: readonly ClineTool[]
 
 	/**
 	 * Create a system prompt cache service for one task.
@@ -73,7 +77,7 @@ export class SystemPromptCacheService {
 	 *
 	 * @returns Native tools produced by the last prompt build, if any.
 	 */
-	public getLastTools(): ClineTool[] | undefined {
+	public getLastTools(): readonly ClineTool[] | undefined {
 		return this.lastTools
 	}
 
@@ -117,6 +121,7 @@ export class SystemPromptCacheService {
 		const now = this.now()
 		const frozen: FrozenSystemPromptCache = {
 			text: built.systemPrompt,
+			tools: built.tools ?? null,
 			capabilitiesHash,
 			createdAt: context.systemPrompt?.frozen?.createdAt ?? now,
 			refreshedAt: now,
@@ -134,26 +139,20 @@ export class SystemPromptCacheService {
 		return frozen
 	}
 
-	/**
-	 * Rebuild native tool schemas when a cached prompt is reused.
-	 *
-	 * @param context Current prompt context used for tool gating.
-	 * @param cached Frozen prompt cache entry loaded from task context.
-	 */
-	private async restoreTools(context: SystemPromptContext, cached: FrozenSystemPromptCache): Promise<void> {
-		if (!cached.promptBuilder.nativeTools) {
-			this.lastTools = undefined
+	/** Restore the exact provider tools frozen with the cached prompt text. */
+	private async restoreTools(_context: SystemPromptContext, cached: FrozenSystemPromptCache): Promise<void> {
+		if ("tools" in cached) {
+			this.lastTools = cached.tools ?? undefined
 			return
 		}
-		if (this.lastTools !== undefined) {
-			return
+		if (cached.promptBuilder.nativeTools) {
+			throw new Error("Legacy native prompt cache is missing exact frozen tools; refresh the system prompt cache")
 		}
-		const built = await this.buildSystemPrompt(context)
-		this.lastTools = built.tools
+		this.lastTools = undefined
 	}
 
 	/**
-	 * Build a prompt through the existing system prompt registry.
+	 * Build a prompt through the explicit-profile system prompt facade.
 	 *
 	 * @param context System prompt context.
 	 * @returns Built prompt text and native tools.
@@ -166,16 +165,14 @@ export class SystemPromptCacheService {
 	 * Record stable prompt builder metadata for diagnostics.
 	 *
 	 * @param context System prompt context used for building.
-	 * @param tools Native tools produced by the prompt registry.
+	 * @param tools Native tools produced by the explicit-profile facade.
 	 * @returns Prompt builder metadata persisted in task context cache.
 	 */
-	private buildPromptInfo(context: SystemPromptContext, tools: ClineTool[] | undefined): FrozenPromptBuilderInfo {
-		const registry = PromptRegistry.getInstance()
-		const variant = registry.getVariant(context)
+	private buildPromptInfo(context: SystemPromptContext, tools: readonly ClineTool[] | undefined): FrozenPromptBuilderInfo {
 		return {
 			providerId: context.providerInfo.providerId,
 			modelId: context.providerInfo.model.id,
-			variantFamily: variant.family,
+			profile: selectPromptProfile({ customPrompt: context.providerInfo.customPrompt }),
 			nativeTools: (tools?.length ?? 0) > 0,
 		}
 	}

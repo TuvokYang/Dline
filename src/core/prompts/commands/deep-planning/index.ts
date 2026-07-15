@@ -1,87 +1,87 @@
+import { getShell } from "@utils/shell"
 import type { ApiProviderInfo } from "@/core/api"
-import type { SystemPromptContext } from "@/core/prompts/system-prompt/types"
-import { getDeepPlanningRegistry } from "./registry"
-import { generateGemini3Template } from "./variants/gemini3"
-import { generateGPT51Template } from "./variants/gpt51"
+import { CommandPromptGenerator } from "../../generators/CommandPromptGenerator"
+import { englishTemplateStore } from "../../i18n/en"
+import { selectPromptProfile } from "../../profiles/select-profile"
+import { PromptProfile } from "../../profiles/types"
+import { DEEP_PLANNING_VARIANTS } from "./variants"
 
-const focusChainIntro: string = `**Task Progress Parameter:**
-When creating the new task, you must include a task_progress parameter that breaks down the implementation into trackable steps. This parameter should be included inside the tool call, but not located inside of other content/argument blocks. This should follow the standard Markdown checklist format with "- [ ]" for incomplete items.`
+const commandGenerator = new CommandPromptGenerator(englishTemplateStore)
 
 /**
- * Generates the deep-planning slash command response with model-family-aware variant selection
+ * Generates a provider-independent deep-planning slash command response.
  * @param focusChainSettings Optional focus chain settings to include in the prompt
- * @param providerInfo Optional API provider info for model family detection
+ * @param providerInfo Retained provider input; content generation does not branch on it.
  * @param enableNativeToolCalls Optional flag to determine if native tool calling is enabled
- * @returns The deep-planning prompt string with appropriate variant and focus chain settings applied
+ * @returns The deep-planning prompt with shell, focus-chain, and transport values applied.
  */
 export function getDeepPlanningPrompt(
 	focusChainSettings?: { enabled: boolean },
 	providerInfo?: ApiProviderInfo,
 	enableNativeToolCalls?: boolean,
 ): string {
-	// Create context for variant selection
-	const context: SystemPromptContext = {
-		providerInfo: providerInfo || ({} as ApiProviderInfo),
-		ide: "vscode",
+	const profile = selectPromptProfile({ customPrompt: providerInfo?.customPrompt })
+	const variant = DEEP_PLANNING_VARIANTS.find((candidate) => candidate.id === profile)
+	if (!variant) {
+		throw new Error(`Missing deep-planning variant for profile '${profile}'`)
+	}
+	const isPowerShell = detectPowerShell(getShell())
+	if (variant.id === PromptProfile.Native) {
+		return commandGenerator.generate("deepPlanning5Step.main", {
+			FOCUS_CHAIN_NOTE: focusChainSettings?.enabled
+				? commandGenerator.generate("deepPlanning5Step.focusChainNote", {}).text
+				: "",
+			SHELL_COMMANDS: commandGenerator.generate(
+				isPowerShell ? "deepPlanning5Step.powershellCommands" : "deepPlanning5Step.bashCommands",
+				{},
+			).text,
+			FOCUS_CHAIN_TASK_PROGRESS_LINE: focusChainSettings?.enabled
+				? commandGenerator.generate("deepPlanning5Step.focusChainTaskProgressLine", {}).text
+				: "",
+			FOCUS_CHAIN_TASK_NOTE: focusChainSettings?.enabled
+				? commandGenerator.generate("deepPlanning5Step.focusChainTaskNote", {}).text
+				: "",
+			FOCUS_CHAIN_TASK_PROGRESS: focusChainSettings?.enabled
+				? commandGenerator.generate("deepPlanning5Step.focusChainTaskProgress", {}).text
+				: "",
+			TOOL_DEFINITION: commandGenerator.generate(
+				enableNativeToolCalls === true ? "deepPlanning5Step.nativeToolDef" : "deepPlanning5Step.xmlToolDef",
+				{},
+			).text,
+		}).text
 	}
 
-	// Get the appropriate variant from registry
-	const registry = getDeepPlanningRegistry()
-	const variant = registry.get(context)
-	const newTaskInstructions = generateNewTaskInstructions(enableNativeToolCalls ?? false)
-	const focusChainParam = focusChainSettings?.enabled ? focusChainIntro : ""
+	const shellCommands = commandGenerator.generate(
+		isPowerShell ? "deepPlanningGeneric.powershellCommands" : "deepPlanningGeneric.bashCommands",
+		{},
+	).text
+	const navCommands = commandGenerator.generate(
+		isPowerShell ? "deepPlanningGeneric.powershellNavCommands" : "deepPlanningGeneric.bashNavCommands",
+		{},
+	).text
 
-	// For variants with extensive focus chain prompting, generate template with focus chain flag
-	let template: string
-	if (variant.id === "gpt-5") {
-		template = generateGPT51Template(focusChainSettings?.enabled ?? false, enableNativeToolCalls ?? false)
-	} else if (variant.id === "gemini-3") {
-		template = generateGemini3Template(focusChainSettings?.enabled ?? false, enableNativeToolCalls ?? false)
-	} else {
-		template = variant.template
-		template = template.replace("{{FOCUS_CHAIN_PARAM}}", focusChainParam)
-		template = template.replace("{{NEW_TASK_INSTRUCTIONS}}", newTaskInstructions)
-	}
-
-	return template
+	return commandGenerator.generate("deepPlanningGeneric.main", {
+		SHELL_COMMANDS: shellCommands,
+		NAV_COMMANDS: navCommands,
+		FOCUS_CHAIN_PARAM: focusChainSettings?.enabled
+			? commandGenerator.generate("deepPlanningGeneric.focusChainIntro", {}).text
+			: "",
+		NEW_TASK_INSTRUCTIONS: commandGenerator.generate(
+			enableNativeToolCalls === true
+				? "deepPlanningGeneric.nativeNewTaskInstructions"
+				: "deepPlanningGeneric.xmlNewTaskInstructions",
+			{},
+		).text,
+	}).text
 }
 
 /**
- * Generates the new_task tool instructions based on whether native tool calling is enabled
- * @param enableNativeToolCalls Whether native tool calling is enabled
- * @returns The new_task tool instructions string
+ * Detects whether the current shell uses PowerShell syntax.
+ *
+ * @param shell Detected shell executable or label.
+ * @returns True when PowerShell command examples should be used.
  */
-function generateNewTaskInstructions(enableNativeToolCalls: boolean): string {
-	if (enableNativeToolCalls) {
-		return `
-**new_task Tool Definition:**
-
-When you are ready to create the implementation task, you must call the new_task tool with the following structure:
-
-\`\`\`json
-{
-  "name": "new_task",
-  "arguments": {
-    "context": "Your detailed context here following the 5-point structure..."
-  }
+function detectPowerShell(shell: string | undefined): boolean {
+	const normalized = shell?.toLowerCase() ?? ""
+	return normalized.includes("powershell") || normalized.includes("pwsh")
 }
-\`\`\`
-
-The context parameter should include all five sections as described above.`
-	}
-	return `
-**new_task Tool Definition:**
-
-When you are ready to create the implementation task, you must call the new_task tool with the following structure:
-
-\`\`\`xml
-<new_task>
-<context>Your detailed context here following the 5-point structure...</context>
-</new_task>
-\`\`\`
-
-The context parameter should include all five sections as described above.`
-}
-
-// Export types for external use
-export type { DeepPlanningRegistry, DeepPlanningVariant } from "./types"

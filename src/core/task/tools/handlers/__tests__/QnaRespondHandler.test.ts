@@ -19,8 +19,13 @@ function createConfig(overrides: Partial<TaskConfig> = {}): TaskConfig {
 		cwd: "/workspace",
 		mode: "act",
 		taskState,
+		interactions: {
+			open: vi.fn(async () => ({
+				actionId: "reply",
+				draft: { text: "你可以干什么", images: [], files: [] },
+			})),
+		},
 		callbacks: {
-			ask: vi.fn().mockResolvedValue({ response: "messageResponse", text: "你可以干什么", images: [], files: [] }),
 			say: vi.fn(async () => Date.now()),
 			saveCheckpoint: vi.fn(async () => {}),
 			sayAndCreateMissingParamError: vi.fn(async () => "missing response"),
@@ -37,6 +42,7 @@ function createBlock(): ToolUse {
 	return {
 		type: "tool_use",
 		name: "qna_respond",
+		dline_tid: "tid-qna",
 		ts: 100,
 		params: { response: "我是 Dline" },
 		partial: false,

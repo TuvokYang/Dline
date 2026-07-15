@@ -771,7 +771,7 @@ export class Controller {
 		const response = await axios.get(`${ClineEnv.config()?.mcpBaseUrl ?? ""}/marketplace`, {
 			headers: {
 				"Content-Type": "application/json",
-				"User-Agent": "cline-vscode-extension",
+				"User-Agent": "dline-vscode-extension",
 			},
 			...getAxiosSettings(),
 		})

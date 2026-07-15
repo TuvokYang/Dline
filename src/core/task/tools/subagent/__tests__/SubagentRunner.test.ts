@@ -28,8 +28,8 @@ vi.mock("@/config", () => ({
 
 import * as coreApi from "@core/api"
 import * as skills from "@core/context/instructions/user-instructions/skills"
-import { SystemPromptGenerator } from "@core/prompts/generators/SystemPromptGenerator"
 import { PromptProfile } from "@core/prompts/profiles/types"
+import * as systemPromptFacade from "@core/prompts/system-prompt"
 import type { SystemPromptContext } from "@core/prompts/system-prompt/context"
 import type { TaskConfig } from "@core/task/tools/types/TaskConfig"
 import type { GlobalInstructionsFile } from "@shared/remote-config/schema"
@@ -166,9 +166,9 @@ function createTaskConfig(nativeToolCallEnabled: boolean, options: any = {}): Ta
 	} as unknown as TaskConfig
 }
 
-/** Stubs the profile facade used by one subagent test. */
+/** Stubs the stable profile facade used by subagent tests. */
 function stubSystemPrompt(native: boolean, inspectContext?: (context: SystemPromptContext) => void): ReturnType<typeof vi.spyOn> {
-	return vi.spyOn(SystemPromptGenerator.prototype, "generate").mockImplementation(async (context) => {
+	return vi.spyOn(systemPromptFacade, "getSystemPrompt").mockImplementation(async (context) => {
 		inspectContext?.(context)
 		return {
 			systemPrompt: "system prompt",
@@ -206,6 +206,41 @@ describe("SubagentRunner", () => {
 	afterEach(() => {
 		HostProvider.reset()
 		vi.restoreAllMocks()
+	})
+
+	it("builds subagent prompts through the stable system prompt facade", async () => {
+		const createMessage = vi.fn().mockImplementation(async function* (systemPrompt: string) {
+			assert.match(systemPrompt, /^facade system prompt/)
+			yield {
+				type: "tool_calls",
+				tool_call: {
+					function: {
+						id: "facade-complete",
+						name: ClineDefaultTool.ATTEMPT,
+						arguments: JSON.stringify({ result: "done" }),
+					},
+				},
+			}
+		})
+		const facade = vi.spyOn(systemPromptFacade, "getSystemPrompt").mockImplementation(async (context) => {
+			assert.equal(context.isSubagentRun, true)
+			return {
+				systemPrompt: "facade system prompt",
+				tools: undefined,
+				profile: PromptProfile.Native,
+				warnings: [],
+			}
+		})
+		vi.spyOn(skills, "discoverSkills").mockResolvedValue([])
+		vi.spyOn(skills, "getAvailableSkills").mockReturnValue([])
+		stubApiHandler(createMessage)
+		initializeHostProvider()
+
+		const result = await new SubagentRunner(createTaskConfig(false)).run("Use facade", () => {})
+
+		assert.equal(facade.mock.calls.length, 1)
+		assert.equal(result.status, "completed")
+		assert.equal(result.result, "done")
 	})
 
 	it("emits native tool_use blocks with matching tool_result tool_use_id across turns", async () => {

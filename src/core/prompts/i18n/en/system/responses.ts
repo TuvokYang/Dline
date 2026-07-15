@@ -1,0 +1,57 @@
+// English system response prompts — key-value pairs only, no code logic.
+
+const prompts: Record<string, string> = {
+	repeatFileReadNotice:
+		"[[NOTE] This file read has been removed to save space in the context window. Refer to the latest file read for the most up to date version of this file.]",
+	duplicateFileReadNotice:
+		"[[NOTE] This file read has been removed to save space in the context window. Refer to the latest file read for the most up to date version of this file.]",
+	contextTruncationNotice:
+		"[NOTE] Some previous conversation history with the user has been removed to maintain optimal context window length. The initial user task has been retained for continuity, while intermediate conversation history has been removed. Keep this in mind as you continue assisting the user. Pay special attention to the user's latest messages.",
+	continueAssisting: "[Continue assisting the user!]",
+	condense: `The user has accepted the condensed conversation summary you generated. This summary covers important details of the historical conversation with the user which has been truncated.\n<explicit_instructions type="condense_response">It's crucial that you respond by ONLY asking the user what you should work on next. You should NOT take any initiative or make any assumptions about continuing with work. For example you should NOT suggest file changes or attempt to read any files.\nWhen asking the user what you should work on next, you can reference information in the summary which was just generated. However, you should NOT reference information outside of what's contained in the summary for this response. Keep this response CONCISE.</explicit_instructions>`,
+	fileListTruncated: "(File list truncated. Use list_files on specific subdirectories if you need to explore further.)",
+	noFilesFound: "No files found.",
+
+	planModeInstructions: `In this mode you should focus on information gathering, asking questions, and architecting a solution. Once you have a plan, use the plan_mode_respond tool to engage in a conversational back and forth with the user. Do not use the plan_mode_respond tool until you've gathered all the information you need e.g. with read_file or ask_followup_question.
+(Remember: If it seems the user wants you to use tools only available in Act Mode, you should ask the user to "toggle to Act mode" (use those words) - they will have to manually do this themselves with the Plan/Act toggle button below. You do not have the ability to switch to Act Mode yourself, and must wait for the user to do it themselves once they are satisfied with the plan. You also cannot present an option to toggle to Act mode, as this will be something you need to direct the user to do manually themselves.)`,
+
+	taskResumptionPlan:
+		"This task was interrupted @AGO_TEXT@. The conversation may have been incomplete. Be aware that the project state may have changed since then. The current working directory is now '@CWD@'.\n\nNote: If you previously attempted a tool use that the user did not provide a result for, you should assume the tool use was not successful. However you are in PLAN MODE, so rather than continuing the task, you must respond to the user's message.",
+	taskResumptionAct:
+		"This task was interrupted @AGO_TEXT@. It may or may not be complete, so please reassess the task context. Be aware that the project state may have changed since then. The current working directory is now '@CWD@'. If the task has not been completed, retry the last step before interruption and proceed with completing the task.\n\nNote: If you previously attempted a tool use that the user did not provide a result for, you should assume the tool use was not successful and assess whether you should retry. If the last tool was a browser_action, the browser has been closed and you must launch a new browser if needed.",
+	taskResumptionRecentNote:
+		"IMPORTANT: If the last tool use was a replace_in_file or write_to_file that was interrupted, the file was reverted back to its original state before the interrupted edit, and you do NOT need to re-read the file as you already have its up-to-date contents.",
+	taskResumptionResponsePlanPrefix:
+		"New message to respond to with plan_mode_respond tool (be sure to provide your response in the <response> parameter)",
+	taskResumptionResponseActPrefix: "New instructions for task continuation",
+	taskResumptionNoResponsePlan:
+		"(The user did not provide a new message. Consider asking them how they'd like you to proceed, or suggest to them to switch to Act mode to continue with the task.)",
+	taskResumptionWrapper: "[TASK RESUMPTION] @RESUME_TEXT@@RECENT_NOTE@",
+	userMessageWrapper: "@PREFIX@:\n<user_message>\n@RESPONSE_TEXT@\n</user_message>",
+	fileSizeKb: "@SIZE@ KB",
+	fileLineCount: "@COUNT@ lines",
+	ordinalSecond: "nd",
+	ordinalThird: "rd",
+	checkpointRestoreAct:
+		"The conversation was restored to a checkpoint. Files may have changed since the checkpoint was created. Continue with the user's edited input below.\n\n<user_message>\n@EDITED_TEXT@\n</user_message>",
+	checkpointRestorePlan:
+		"The conversation was restored to a checkpoint. Files may have changed since the checkpoint was created. You are in PLAN MODE — respond to the user's edited input below.\n\n<user_message>\n@EDITED_TEXT@\n</user_message>",
+	clineIgnoreInstructions:
+		"# .clineignore\n\n(The following is provided by a root-level .clineignore file where the user has specified files and directories that should not be accessed. When using list_files, you'll notice a @LOCK_SYMBOL@ next to files that are blocked. Attempting to access the file's contents e.g. through read_file will result in an error.)\n\n@CONTENT@\n.clineignore",
+	clineRulesGlobalDirInstructions:
+		"# Global User Rules\n\nThe following is provided by global user rules where the user has specified instructions for all working directories:\n\n@CONTENT@",
+	clineRulesLocalDirInstructions:
+		"# Local User Rules (.dline/rules/)\n\nThe following is provided by local user rules in @WORKSPACE_NAME@ where the user has specified instructions:\n\n@CONTENT@",
+	clineRulesLocalFileInstructions:
+		"# Local User Rules (.dline/rules)\n\nThe following is provided by local user rules in @WORKSPACE_NAME@ where the user has specified instructions:\n\n@CONTENT@",
+	windsurfRulesLocalFileInstructions:
+		"# .windsurfrules\n\nThe following is provided by a root-level .windsurfrules file where the user has specified instructions for this working directory (@CWD@)\n\n@CONTENT@",
+	cursorRulesLocalFileInstructions:
+		"# .cursorrules\n\nThe following is provided by a root-level .cursorrules file where the user has specified instructions for this working directory (@CWD@)\n\n@CONTENT@",
+	cursorRulesLocalDirInstructions:
+		"# .cursor/rules\n\nThe following is provided by a root-level .cursor/rules directory where the user has specified instructions for this working directory (@CWD@)\n\n@CONTENT@",
+	agentsRulesLocalFileInstructions:
+		"# AGENTS.md\n\nThe following is provided by AGENTS.md files found recursively throughout this working directory (@CWD@) where the user has specified instructions. Nested AGENTS.md will be combined below, and you should only apply the instructions for each AGENTS.md file that is directly applicable to the current task, i.e. if you are reading or writing to a file in that directory.\n\n@CONTENT@",
+}
+
+export default prompts

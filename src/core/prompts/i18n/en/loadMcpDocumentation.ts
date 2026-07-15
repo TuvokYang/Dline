@@ -5,7 +5,7 @@ const prompts: Record<string, string> = {
 
 When creating MCP servers, it's important to understand that they operate in a non-interactive environment. The server cannot initiate OAuth flows, open browser windows, or prompt for user input during runtime. All credentials and authentication tokens must be provided upfront through environment variables in the MCP settings configuration. For example, Spotify's API uses OAuth to get a refresh token for the user, but the MCP server cannot initiate this flow. While you can walk the user through obtaining an application client ID and secret, you may have to create a separate one-time setup script (like get-refresh-token.js) that captures and logs the final piece of the puzzle: the user's refresh token (i.e. you might run the script using execute_command which would open a browser for authentication, and then log the refresh token so that you can see it in the command output for you to use in the MCP settings configuration).
 
-Unless the user specifies otherwise, new MCP servers should be created in: {mcpServersPath}
+Unless the user specifies otherwise, new MCP servers should be created in: @MCP_SERVERS_PATH@
 
 ### Example MCP Server
 
@@ -16,7 +16,7 @@ The following example demonstrates how to build an MCP server that provides weat
 1. Use the \`create-typescript-server\` tool to bootstrap a new project in the default MCP servers directory:
 
 \`\`\`bash
-cd {mcpServersPath}
+cd @MCP_SERVERS_PATH@
 npx @modelcontextprotocol/create-server weather-server
 cd weather-server
 # Install dependencies
@@ -316,7 +316,7 @@ npm run build
 
 4. Whenever you need an environment variable such as an API key to configure the MCP server, walk the user through the process of getting the key. For example, they may need to create an account and go to a developer dashboard to generate the key. Provide step-by-step instructions and URLs to make it easy for the user to retrieve the necessary information. Then use the ask_followup_question tool to ask the user for the key, in this case the OpenWeather API key.
 
-5. Install the MCP Server by adding the MCP server configuration to the settings file located at '{mcpSettingsFilePath}'. The settings file may have other MCP servers already configured, so you would read it first and then add your new server to the existing \`mcpServers\` object.
+5. Install the MCP Server by adding the MCP server configuration to the settings file located at '@MCP_SETTINGS_FILE_PATH@'. The settings file may have other MCP servers already configured, so you would read it first and then add your new server to the existing \`mcpServers\` object.
 
 IMPORTANT: Regardless of what else you see in the MCP settings file, you must default any new MCP servers you create to disabled=false and autoApprove=[].
 
@@ -343,7 +343,7 @@ IMPORTANT: Regardless of what else you see in the MCP settings file, you must de
 
 ## Editing MCP Servers
 
-The user may ask to add tools or resources that may make sense to add to an existing MCP server (listed under 'Connected MCP Servers' below: {connectedServers}, e.g. if it would use the same API. This would be possible if you can locate the MCP server repository on the user's system by looking at the server arguments for a filepath. You might then use list_files and read_file to explore the files in the repository, and use replace_in_file to make changes to the files.
+The user may ask to add tools or resources that may make sense to add to an existing MCP server (listed under 'Connected MCP Servers' below: @CONNECTED_SERVERS@, e.g. if it would use the same API. This would be possible if you can locate the MCP server repository on the user's system by looking at the server arguments for a filepath. You might then use list_files and read_file to explore the files in the repository, and use replace_in_file to make changes to the files.
 
 However some MCP servers may be running from installed packages rather than a local repository, in which case it may make more sense to create a new MCP server.
 

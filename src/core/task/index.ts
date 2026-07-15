@@ -3161,10 +3161,9 @@ export class Task {
 					break
 				}
 				case "tool_use":
-					// Allow partial turn-ending tools (plan_mode_respond, attempt_completion, etc.)
-					// to stream content via handlePartialBlock for UI feedback.
-					// Only skip complete (non-partial) turn-ending tools when the stream hasn't finished.
-					if (!block.partial && isTurnEndingToolUse(block) && !this.taskState.didCompleteReadingStream) {
+					// Partial tools may stream UI immediately. Complete tools wait until
+					// stream finalization so the canonical turn contains every tool block.
+					if (!block.partial && !this.taskState.didCompleteReadingStream) {
 						return
 					}
 					if (this.initialCheckpointCommitPromise) {
@@ -3172,6 +3171,16 @@ export class Task {
 							await this.initialCheckpointCommitPromise
 							this.initialCheckpointCommitPromise = undefined
 						}
+					}
+
+					// Partial tools only stream UI. Canonical runtime execution starts
+					// after the complete block is available at stream finalization.
+					if (block.partial) {
+						await this.toolExecutor.executeTool(block)
+						if (block.ts !== undefined) {
+							this.taskState.partialToolLifecycleByTs.set(block.ts, "partial-shown")
+						}
+						break
 					}
 
 					// Build turn on first complete tool_use block if not already built
@@ -3274,18 +3283,10 @@ export class Task {
 							throw new Error(`Turn completion rejected: ${turnCompleted.error?.code ?? "invalid_runtime_event"}`)
 						}
 					}
-					// Register lifecycle so reRenderUpdatedPartialBlocks and processNativeToolCalls
-					// can skip tools that have already completed execution. Partial tools are
-					// marked "partial-shown" so they get replayed via handleCompleteBlock when the
-					// stream later finishes them; non-partial (directly complete) tools are marked
-					// "complete-done" immediately to prevent re-execution when the index is
-					// rewound by subsequent tool_calls chunks.
+					// Complete tools are marked done so subsequent native chunks cannot
+					// rewind the presentation index and execute them again.
 					if (block.ts !== undefined) {
-						if (block.partial) {
-							this.taskState.partialToolLifecycleByTs.set(block.ts, "partial-shown")
-						} else {
-							this.taskState.partialToolLifecycleByTs.set(block.ts, "complete-done")
-						}
+						this.taskState.partialToolLifecycleByTs.set(block.ts, "complete-done")
 					}
 
 					if (block.call_id) {

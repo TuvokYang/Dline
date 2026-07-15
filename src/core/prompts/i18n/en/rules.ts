@@ -1,3 +1,5 @@
+export { default } from "./system/rules"
+/*
 // English rules prompts — key-value pairs only, no code logic.
 
 const prompts: Record<string, string> = {
@@ -65,4 +67,4 @@ EVERY response must include at least one tool call, except when processing expli
 `,
 }
 
-export default prompts
+*/

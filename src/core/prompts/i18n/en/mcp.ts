@@ -1,3 +1,5 @@
+export { default } from "./system/mcp"
+/*
 // English MCP prompts — key-value pairs only, no code logic.
 
 const prompts: Record<string, string> = {
@@ -14,4 +16,4 @@ Servers may also provide prompts - predefined templates that can be invoked by u
 {{MCP_SERVERS_LIST}}`,
 }
 
-export default prompts
+*/

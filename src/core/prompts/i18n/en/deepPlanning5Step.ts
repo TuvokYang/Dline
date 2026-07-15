@@ -1,3 +1,5 @@
+export { default } from "./commands/deep-planning-5-step"
+/*
 // English deep-planning 5-step variant prompts — key-value pairs.
 
 const prompts: Record<string, string> = {
@@ -216,4 +218,4 @@ Below is the user's input from when they indicated that they wanted to create th
 `,
 }
 
-export default prompts
+*/

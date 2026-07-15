@@ -1,19 +1,36 @@
-import { getPrompt } from "./i18n"
+import { RuntimePromptGenerator } from "./generators/RuntimePromptGenerator"
+import { englishTemplateStore } from "./i18n/en"
+
+const runtimeGenerator = new RuntimePromptGenerator(englishTemplateStore)
 
 export const summarizeTask = (focusChainSettings?: { enabled: boolean }, cwd?: string, isMultiRootEnabled?: boolean) => {
 	const CWD = cwd ? cwd.toPosix() : ""
 
 	const MULTI_ROOT_HINT = isMultiRootEnabled
-		? " Use @workspace:path syntax (e.g., @frontend:src/index.ts) to specify a workspace."
+		? runtimeGenerator.generate("runtimeEnvironment.workspaceReferenceHint", {}).text
 		: ""
 
 	const focusChainEnabled = focusChainSettings?.enabled
-	const focusChainParam = focusChainEnabled ? getPrompt("contextManagement", "summarizeFocusChainParam") : ""
-	const focusChainUsage = focusChainEnabled ? getPrompt("contextManagement", "summarizeFocusChainUsage") : ""
-	const focusChainExample = focusChainEnabled ? getPrompt("contextManagement", "summarizeFocusChainExample") : ""
+	const focusChainParam = focusChainEnabled
+		? runtimeGenerator.generate("contextManagement.summarizeFocusChainParam", {}).text
+		: ""
+	const focusChainUsage = focusChainEnabled
+		? runtimeGenerator.generate("contextManagement.summarizeFocusChainUsage", {}).text
+		: ""
+	const focusChainExample = focusChainEnabled
+		? runtimeGenerator.generate("contextManagement.summarizeFocusChainExample", {}).text
+		: ""
 
-	return `${getPrompt("contextManagement", "autoCompactMain", { CWD, MULTI_ROOT_HINT, focusChainParam, focusChainUsage, focusChainExample })}\n`
+	return `${
+		runtimeGenerator.generate("contextManagement.summarizeMain", {
+			CWD,
+			MULTI_ROOT_HINT,
+			FOCUS_CHAIN_PARAM: focusChainParam,
+			FOCUS_CHAIN_USAGE: focusChainUsage,
+			FOCUS_CHAIN_EXAMPLE: focusChainExample,
+		}).text
+	}\n`
 }
 
 export const continuationPrompt = (summaryText: string) =>
-	`${getPrompt("contextManagement", "continuationPrompt", { summaryText })}\n`
+	`${runtimeGenerator.generate("contextManagement.continuationPrompt", { SUMMARY_TEXT: summaryText }).text}\n`

@@ -38,6 +38,7 @@ function buildContext(taskId: string): TaskContextCache {
 		systemPrompt: {
 			frozen: {
 				text: "frozen prompt\n\n# Capabilities",
+				tools: [{ type: "function", function: { name: "frozen_tool" } }],
 				capabilitiesHash: "sha256:test",
 				createdAt: 100,
 				refreshedAt: 200,
@@ -70,8 +71,32 @@ describe("task context cache", () => {
 		const actual = await getTaskContext(taskId)
 
 		expect(actual).toEqual(expected)
+		expect(actual.systemPrompt?.frozen?.tools).toEqual(expected.systemPrompt?.frozen?.tools)
 		const filePath = path.join(testDir, "tasks", taskId, GlobalFileNames.taskContext)
 		expect(await fs.readFile(filePath, "utf8")).toContain("# Capabilities")
+	})
+
+	it.each([
+		["string", "not-an-array"],
+		["empty-object", [{}]],
+		["null-entry", [null]],
+	] as const)("rejects malformed frozen provider tools: %s", async (caseId, tools) => {
+		const taskId = `task-malformed-tools-${caseId}`
+		const filePath = path.join(testDir, "tasks", taskId, GlobalFileNames.taskContext)
+		await fs.mkdir(path.dirname(filePath), { recursive: true })
+		const malformed = buildContext(taskId)
+		await fs.writeFile(
+			filePath,
+			JSON.stringify({
+				...malformed,
+				systemPrompt: { frozen: { ...malformed.systemPrompt?.frozen, tools } },
+			}),
+			"utf8",
+		)
+
+		const actual = await getTaskContext(taskId)
+
+		expect(actual.systemPrompt).toBeUndefined()
 	})
 
 	it("falls back to an empty context when context.json is invalid", async () => {

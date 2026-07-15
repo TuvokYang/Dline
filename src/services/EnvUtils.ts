@@ -17,7 +17,7 @@ export type ClineHeaderName = (typeof ClineHeaders)[keyof typeof ClineHeaders]
 
 export function buildExternalBasicHeaders(): Record<string, string> {
 	return {
-		"User-Agent": `Cline/${ExtensionRegistryInfo.version}`,
+		"User-Agent": `Dline/${ExtensionRegistryInfo.version}`,
 	}
 }
 

@@ -562,12 +562,31 @@ function createEmptyTaskContext(taskId: string): TaskContextCache {
  * @param taskId Expected task identifier.
  * @returns True when value is a supported task context cache.
  */
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+function isFrozenTool(value: unknown): boolean {
+	if (!isJsonObject(value)) return false
+	if (value.type === "function") {
+		return isJsonObject(value.function) && typeof value.function.name === "string"
+	}
+	return typeof value.name === "string"
+}
+
 function isTaskContextCache(value: unknown, taskId: string): value is TaskContextCache {
 	if (typeof value !== "object" || value === null) {
 		return false
 	}
 	const candidate = value as Partial<TaskContextCache>
-	return candidate.schemaVersion === 1 && candidate.taskId === taskId
+	if (candidate.schemaVersion !== 1 || candidate.taskId !== taskId) {
+		return false
+	}
+	const frozen = candidate.systemPrompt?.frozen
+	if (!frozen || !("tools" in frozen)) {
+		return true
+	}
+	return frozen.tools === null || (Array.isArray(frozen.tools) && frozen.tools.every(isFrozenTool))
 }
 
 /**

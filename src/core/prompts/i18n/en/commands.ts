@@ -1,4 +1,5 @@
-// English command prompts — key-value pairs only, no code logic.
+export { default } from "./commands/commands"
+/*
 
 const prompts: Record<string, string> = {
 	newTaskXmlExample: `Example:
@@ -31,7 +32,7 @@ const prompts: Record<string, string> = {
 
 	newTaskMain: `<explicit_instructions type="new_task">
 The user has explicitly asked you to help them create a new task with preloaded context, which you will generate. The user may have provided instructions or additional information for you to consider when summarizing existing work and creating the context for the new task.
-Irrespective of whether additional information or instructions are given, you are ONLY allowed to respond to this message by calling the new_task tool.{nativeToolNote}
+Irrespective of whether additional information or instructions are given, you are ONLY allowed to respond to this message by calling the new_task tool.@NATIVE_TOOL_NOTE@
 
 The new_task tool is defined below:
 
@@ -46,7 +47,7 @@ Parameters:
   3. Relevant Files and Code: If applicable, enumerate specific files and code sections examined, modified, or created for the task continuation. Pay special attention to the most recent messages and changes.
   4. Problem Solving: Document problems solved thus far and any ongoing troubleshooting efforts.
   5. Pending Tasks and Next Steps: Outline all pending tasks that you have explicitly been asked to work on, as well as list the next steps you will take for all outstanding work, if applicable. Include code snippets where they add clarity. For any next steps, include direct quotes from the most recent conversation showing exactly what task you were working on and where you left off. This should be verbatim to ensure there's no information loss in context between tasks.
-{xmlExample}
+@XML_EXAMPLE@
 Below is the the user's input when they indicated that they wanted to create a new task.
 </explicit_instructions>
 `,
@@ -88,14 +89,14 @@ Your summary should include the following sections:
 10. Required Files: List the most important files needed for continuing the work you laid out in Next Step. This is optional and if no files are required or there is no next step then simply don't include this section. List each file path on a new line starting with "- " such as: - src/main.js. List the files from most important to least important. You must list the minimum number of files necessary to continue with the task.
                      Only list files you know will for sure be necessary, rather than speculating.
 
-{focusChainParam}
+@FOCUS_CHAIN_PARAM@
 
 Usage:
 <condense>
 <context>
 Your detailed summary
 </context>
-{focusChainUsage}</condense>
+@FOCUS_CHAIN_USAGE@</condense>
 
 Example:
 <condense>
@@ -146,7 +147,7 @@ Example:
    - [file path 1]
    - [file path 2]
 </context>
-{focusChainExample}
+@FOCUS_CHAIN_EXAMPLE@
 </condense>
 
 </explicit_instructions>
@@ -329,5 +330,4 @@ Below is the user's input describing what changes they want explained. If no inp
 </explicit_instructions>
 `,
 }
-
-export default prompts
+*/

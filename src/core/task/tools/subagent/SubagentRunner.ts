@@ -5,9 +5,8 @@ import { createIdentityFactory } from "@core/api/transform/block-identity"
 import { createStreamNormalizer, normalizeApiStream } from "@core/api/transform/stream-identity-normalizer"
 import { parseAssistantMessageV2, ToolUse } from "@core/assistant-message"
 import { discoverAvailableSkills } from "@core/context/instructions/user-instructions/skills"
-import { SystemPromptGenerator } from "@core/prompts/generators/SystemPromptGenerator"
 import { formatResponse } from "@core/prompts/responses"
-import type { SystemPromptContext } from "@core/prompts/system-prompt/context"
+import { getSystemPrompt, type SystemPromptContext } from "@core/prompts/system-prompt"
 import { StreamResponseHandler } from "@core/task/StreamResponseHandler"
 import { DEFAULT_API_PROVIDER } from "@shared/api"
 import { ClineAssistantToolUseBlock, ClineStorageMessage, ClineTextContentBlock, ClineUserContent } from "@shared/messages"
@@ -371,7 +370,7 @@ export class SubagentRunner {
 				isSubagentRun: true,
 			}
 
-			const generated = await new SystemPromptGenerator().generate(context)
+			const generated = await getSystemPrompt(context)
 			const systemPrompt = this.agent.buildSystemPrompt(generated.systemPrompt)
 			const allowedTools = new Set(this.allowedTools)
 			const nativeTools = generated.tools?.filter((tool) => {

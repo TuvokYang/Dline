@@ -1,9 +1,12 @@
-/**
- * Export for all deep-planning prompt variants
- */
+import { LITE_DEEP_PLANNING_VARIANT } from "./lite"
+import { type DeepPlanningVariantDescriptor, NATIVE_DEEP_PLANNING_VARIANT } from "./native"
 
-export { createAnthropicVariant } from "./anthropic"
-export { createGeminiVariant } from "./gemini"
-export { createGemini3Variant } from "./gemini3"
-export { createGenericVariant } from "./generic"
-export { createGPT51Variant } from "./gpt51"
+export { LITE_DEEP_PLANNING_VARIANT } from "./lite"
+export type { DeepPlanningVariantDescriptor } from "./native"
+export { NATIVE_DEEP_PLANNING_VARIANT } from "./native"
+
+/** Complete provider-independent deep-planning variant set. */
+export const DEEP_PLANNING_VARIANTS: readonly DeepPlanningVariantDescriptor[] = Object.freeze([
+	NATIVE_DEEP_PLANNING_VARIANT,
+	LITE_DEEP_PLANNING_VARIANT,
+])

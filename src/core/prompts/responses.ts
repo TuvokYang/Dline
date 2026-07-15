@@ -1,41 +1,68 @@
 import { Anthropic } from "@anthropic-ai/sdk"
+import type { FileInfo } from "@services/glob/list-files"
+import type { Mode } from "@shared/storage/types"
 import * as diff from "diff"
 import * as path from "path"
-import type { Mode } from "@shared/storage/types"
-import type { FileInfo } from "@services/glob/list-files"
 import { ClineIgnoreController, LOCK_TEXT_SYMBOL } from "../ignore/ClineIgnoreController"
-import { getPrompt } from "./i18n"
+import { RuntimePromptGenerator } from "./generators/RuntimePromptGenerator"
+import { englishTemplateStore } from "./i18n/en"
+import type { PromptEnv } from "./template/types"
 
 const CONTEXT_WINDOW_WARNING_THRESHOLD_PERCENT = 50
+const runtimeGenerator = new RuntimePromptGenerator(englishTemplateStore)
+
+/**
+ * Generates one exact response prompt and returns its text.
+ *
+ * @param key Stable key in the responses namespace.
+ * @param env Declared runtime prompt values.
+ * @returns Rendered response prompt text.
+ */
+function generateResponse(key: string, env: PromptEnv = {}): string {
+	return runtimeGenerator.generate(`responses.${key}`, env).text
+}
+
+/**
+ * Generates one exact tool prompt and returns its text.
+ *
+ * @param module Stable tool prompt module name.
+ * @param key Stable key in the tool prompt module.
+ * @param env Declared runtime prompt values.
+ * @returns Rendered tool prompt text.
+ */
+function generateToolResponse(module: string, key: string, env: PromptEnv = {}): string {
+	return runtimeGenerator.generate(`${module}.${key}`, env).text
+}
 
 export const formatResponse = {
-	duplicateFileReadNotice: () => getPrompt("responses", "duplicateFileReadNotice"),
+	duplicateFileReadNotice: () => generateResponse("duplicateFileReadNotice"),
 
-	contextTruncationNotice: () => getPrompt("responses", "contextTruncationNotice"),
+	contextTruncationNotice: () => generateResponse("contextTruncationNotice"),
 
-	processFirstUserMessageForTruncation: () => getPrompt("responses", "continueAssisting"),
+	processFirstUserMessageForTruncation: () => generateResponse("continueAssisting"),
 
-	condense: () => getPrompt("responses", "condense"),
+	condense: () => generateResponse("condense"),
 
-	toolDenied: () => getPrompt("responses", "toolDenied"),
+	toolDenied: () => generateToolResponse("toolHandlers", "toolDenied"),
 
-	toolError: (error?: string) => getPrompt("responses", "toolError", { error: error ?? "" }),
+	toolError: (error?: string) => generateToolResponse("toolHandlers", "toolError", { ERROR: error ?? "" }),
 
-	clineIgnoreError: (pathStr: string) => getPrompt("responses", "clineIgnoreError", { path: pathStr }),
+	clineIgnoreError: (pathStr: string) => generateToolResponse("executeCommand", "clineIgnoreError", { PATH: pathStr }),
 
-	permissionDeniedError: (reason: string) => getPrompt("responses", "permissionDeniedError", { reason }),
+	permissionDeniedError: (reason: string) =>
+		generateToolResponse("executeCommand", "permissionDeniedError", { REASON: reason }),
 
 	noToolsUsed: (usingNativeToolCalls: boolean) =>
-		getPrompt("responses", "noToolsUsed", {
-			toolReminder: usingNativeToolCalls ? "" : getPrompt("responses", "toolUseInstructionsReminder"),
+		generateToolResponse("toolHandlers", "noToolsUsed", {
+			TOOL_REMINDER: usingNativeToolCalls ? "" : generateToolResponse("toolHandlers", "toolUseInstructionsReminder"),
 		}),
 
-	tooManyMistakes: (feedback?: string) => getPrompt("responses", "tooManyMistakes", { feedback: feedback ?? "" }),
+	tooManyMistakes: (feedback?: string) => generateToolResponse("toolHandlers", "tooManyMistakes", { FEEDBACK: feedback ?? "" }),
 
 	missingToolParameterError: (paramName: string) =>
-		getPrompt("responses", "missingToolParameterError", {
-			paramName,
-			toolReminder: getPrompt("responses", "toolUseInstructionsReminder"),
+		generateToolResponse("toolHandlers", "missingToolParameterError", {
+			PARAM_NAME: paramName,
+			TOOL_REMINDER: generateToolResponse("toolHandlers", "toolUseInstructionsReminder"),
 		}),
 
 	/**
@@ -44,35 +71,37 @@ export const formatResponse = {
 	 * and includes token budget awareness to help the model understand output constraints.
 	 */
 	writeToFileMissingContentError: (relPath: string, consecutiveFailures: number, contextUsagePercent?: number): string => {
-		const baseError = getPrompt("responses", "writeToFileBaseError", { relPath })
+		const baseError = generateToolResponse("writeToFile", "writeToFileBaseError", { REL_PATH: relPath })
 
 		const contextWarning =
 			contextUsagePercent !== undefined && contextUsagePercent > CONTEXT_WINDOW_WARNING_THRESHOLD_PERCENT
-				? `\n\n${getPrompt("responses", "writeToFileContextWarning", { contextUsagePercent })}`
+				? `\n\n${generateToolResponse("writeToFile", "writeToFileContextWarning", { CONTEXT_USAGE_PERCENT: contextUsagePercent })}`
 				: ""
 
 		if (consecutiveFailures >= 3) {
 			// After 3+ failures, be very directive — stop trying write_to_file entirely
-			return `${baseError}${contextWarning}\n\n${getPrompt("responses", "writeToFileCriticalFail", { consecutiveFailures })}`
+			return `${baseError}${contextWarning}\n\n${generateToolResponse("writeToFile", "writeToFileCriticalFail", { CONSECUTIVE_FAILURES: consecutiveFailures })}`
 		}
 		if (consecutiveFailures >= 2) {
 			// After 2 failures, strongly suggest alternative approaches
-			const ordinalSuffix = consecutiveFailures === 2 ? "nd" : "rd"
-			return `${baseError}${contextWarning}\n\n${getPrompt("responses", "writeToFileSecondFail", { consecutiveFailures, ordinalSuffix })}`
+			const ordinalSuffix = generateResponse(consecutiveFailures === 2 ? "ordinalSecond" : "ordinalThird")
+			return `${baseError}${contextWarning}\n\n${generateToolResponse("writeToFile", "writeToFileSecondFail", {
+				ATTEMPT_ORDINAL: `${consecutiveFailures}${ordinalSuffix}`,
+			})}`
 		}
 		// First failure — provide helpful guidance
-		return `${baseError}${contextWarning}\n\n${getPrompt("responses", "writeToFileFirstFail", {
-			toolReminder: getPrompt("responses", "toolUseInstructionsReminder"),
+		return `${baseError}${contextWarning}\n\n${generateToolResponse("writeToFile", "writeToFileFirstFail", {
+			TOOL_REMINDER: generateToolResponse("toolHandlers", "toolUseInstructionsReminder"),
 		})}`
 	},
 
 	replaceInFileMissingDiffError: (relPath: string): string =>
-		getPrompt("responses", "replaceInFileMissingDiffError", { relPath }),
+		generateToolResponse("replaceInFile", "replaceInFileMissingDiffError", { REL_PATH: relPath }),
 
-	executeCommandMissingCommandError: (): string => getPrompt("responses", "executeCommandMissingCommandError"),
+	executeCommandMissingCommandError: (): string => generateToolResponse("executeCommand", "executeCommandMissingCommandError"),
 
 	invalidMcpToolArgumentError: (serverName: string, toolName: string) =>
-		getPrompt("responses", "invalidMcpToolArgumentError", { serverName, toolName }),
+		generateToolResponse("useMcpTool", "invalidMcpToolArgumentError", { SERVER_NAME: serverName, TOOL_NAME: toolName }),
 
 	toolResult: (
 		text: string,
@@ -118,7 +147,7 @@ export const formatResponse = {
 				const displayPath = info.isDirectory ? `${relativePath}/` : relativePath
 
 				// Format size: KB for files, empty for directories
-				const sizeKB = info.isDirectory ? "" : `${(info.size / 1000).toFixed(1)} KB`
+				const sizeKB = info.isDirectory ? "" : generateResponse("fileSizeKb", { SIZE: (info.size / 1000).toFixed(1) })
 
 				// Format modification time: YYYY-MM-DD HH:MM
 				const mtimeStr =
@@ -127,11 +156,10 @@ export const formatResponse = {
 						: ""
 
 				// Format line count
-				const lineInfo = info.isDirectory
-					? ""
-					: info.lineCount !== undefined
-						? `${info.lineCount} lines`
-						: ""
+				const lineInfo =
+					info.isDirectory || info.lineCount === undefined
+						? ""
+						: generateResponse("fileLineCount", { COUNT: info.lineCount })
 
 				// Build metadata suffix
 				const metadataParts = [sizeKB, mtimeStr, lineInfo].filter((p) => p.length > 0)
@@ -172,10 +200,10 @@ export const formatResponse = {
 			: formatted.map(({ displayPath, metadata }) => `${displayPath}${metadata}`)
 
 		if (didHitLimit) {
-			return `${clineIgnoreParsed.join("\n")}\n\n${getPrompt("responses", "fileListTruncated")}`
+			return `${clineIgnoreParsed.join("\n")}\n\n${generateResponse("fileListTruncated")}`
 		}
 		if (clineIgnoreParsed.length === 0 || (clineIgnoreParsed.length === 1 && clineIgnoreParsed[0] === "")) {
-			return getPrompt("responses", "noFilesFound")
+			return generateResponse("noFilesFound")
 		}
 		return clineIgnoreParsed.join("\n")
 	},
@@ -196,31 +224,33 @@ export const formatResponse = {
 		responseText?: string,
 		hasPendingFileContextWarnings?: boolean,
 	): [string, string] => {
+		const resumeEnv = { AGO_TEXT: agoText, CWD: cwd.toPosix() }
 		const resumeTemplate =
-			mode === "plan"
-				? getPrompt("responses", "taskResumptionPlan", { agoText, cwd: cwd.toPosix() })
-				: getPrompt("responses", "taskResumptionAct", { agoText, cwd: cwd.toPosix() })
+			mode === "plan" ? generateResponse("taskResumptionPlan", resumeEnv) : generateResponse("taskResumptionAct", resumeEnv)
 
 		const recentNote =
-			wasRecent && !hasPendingFileContextWarnings ? `\n\n${getPrompt("responses", "taskResumptionRecentNote")}` : ""
+			wasRecent && !hasPendingFileContextWarnings ? `\n\n${generateResponse("taskResumptionRecentNote")}` : ""
 
-		const taskResumptionMessage = `[TASK RESUMPTION] ${resumeTemplate}${recentNote}`
+		const taskResumptionMessage = generateResponse("taskResumptionWrapper", {
+			RESUME_TEXT: resumeTemplate,
+			RECENT_NOTE: recentNote,
+		})
 
 		let userResponseMessage = ""
 		if (responseText) {
 			const prefix =
 				mode === "plan"
-					? getPrompt("responses", "taskResumptionResponsePlanPrefix")
-					: getPrompt("responses", "taskResumptionResponseActPrefix")
-			userResponseMessage = `${prefix}:\n<user_message>\n${responseText}\n</user_message>`
+					? generateResponse("taskResumptionResponsePlanPrefix")
+					: generateResponse("taskResumptionResponseActPrefix")
+			userResponseMessage = generateResponse("userMessageWrapper", { PREFIX: prefix, RESPONSE_TEXT: responseText })
 		} else if (mode === "plan") {
-			userResponseMessage = getPrompt("responses", "taskResumptionNoResponsePlan")
+			userResponseMessage = generateResponse("taskResumptionNoResponsePlan")
 		}
 
 		return [taskResumptionMessage, userResponseMessage]
 	},
 
-	planModeInstructions: () => getPrompt("responses", "planModeInstructions"),
+	planModeInstructions: () => generateResponse("planModeInstructions"),
 
 	/**
 	 * Build a checkpoint-restore message for resuming after edited-input restore.
@@ -228,7 +258,7 @@ export const formatResponse = {
 	 * so the model knows the conversation was rewound and project files may differ.
 	 */
 	checkpointRestore: (editedText: string): string => {
-		return getPrompt("responses", "checkpointRestoreAct", { editedText })
+		return generateResponse("checkpointRestoreAct", { EDITED_TEXT: editedText })
 	},
 
 	fileEditWithUserChanges: (
@@ -241,8 +271,8 @@ export const formatResponse = {
 		newProblemsMessage: string | undefined,
 	) => {
 		const rel = relPath.toPosix()
-		const formatterNotice = formatterChanged ? getPrompt("responses", "formatterChangedNotice", {}) : ""
-		return `${getPrompt("responses", "fileEditUserChangesHead", { userEdits })}${autoFormattingEdits ? getPrompt("responses", "fileEditAutoFormattingWithChanges", { autoFormattingEdits }) : ""}${getPrompt("responses", "fileEditUpdatedContent", { relPath: rel, wroteLines, savedLines })}${formatterNotice}${getPrompt("responses", "fileEditNotesWithChanges", { newProblemsMessage: newProblemsMessage ?? "" })}`
+		const formatterNotice = formatterChanged ? generateToolResponse("writeToFile", "formatterChangedNotice") : ""
+		return `${generateToolResponse("writeToFile", "fileEditUserChangesHead", { USER_EDITS: userEdits })}${autoFormattingEdits ? generateToolResponse("writeToFile", "fileEditAutoFormattingWithChanges", { AUTO_FORMATTING_EDITS: autoFormattingEdits }) : ""}${generateToolResponse("writeToFile", "fileEditUpdatedContent", { REL_PATH: rel, WROTE_LINES: wroteLines, SAVED_LINES: savedLines })}${formatterNotice}${generateToolResponse("writeToFile", "fileEditNotesWithChanges", { NEW_PROBLEMS_MESSAGE: newProblemsMessage ?? "" })}`
 	},
 
 	fileEditWithoutUserChanges: (
@@ -256,60 +286,71 @@ export const formatResponse = {
 		addedLines?: number,
 	) => {
 		const rel = relPath.toPosix()
-		const formatterNotice = formatterChanged ? getPrompt("responses", "formatterChangedNotice", {}) : ""
+		const formatterNotice = formatterChanged ? generateToolResponse("writeToFile", "formatterChangedNotice") : ""
 		const isReplace = deletedLines !== undefined && addedLines !== undefined
 		const successTemplate = isReplace
-			? getPrompt("responses", "replaceEditSuccessContent", { relPath: rel, deletedLines, addedLines, savedLines })
-			: getPrompt("responses", "fileEditSuccessContent", { relPath: rel, wroteLines, savedLines })
-		return `${successTemplate}${autoFormattingEdits ? getPrompt("responses", "fileEditAutoFormattingWithoutChanges", { autoFormattingEdits }) : ""}${formatterNotice}${getPrompt("responses", "fileEditNotesWithoutChanges", { newProblemsMessage: newProblemsMessage ?? "" })}`
+			? generateToolResponse("writeToFile", "replaceEditSuccessContent", {
+					REL_PATH: rel,
+					DELETED_LINES: deletedLines,
+					ADDED_LINES: addedLines,
+					SAVED_LINES: savedLines,
+				})
+			: generateToolResponse("writeToFile", "fileEditSuccessContent", {
+					REL_PATH: rel,
+					WROTE_LINES: wroteLines,
+					SAVED_LINES: savedLines,
+				})
+		return `${successTemplate}${autoFormattingEdits ? generateToolResponse("writeToFile", "fileEditAutoFormattingWithoutChanges", { AUTO_FORMATTING_EDITS: autoFormattingEdits }) : ""}${formatterNotice}${generateToolResponse("writeToFile", "fileEditNotesWithoutChanges", { NEW_PROBLEMS_MESSAGE: newProblemsMessage ?? "" })}`
 	},
 
-	diffErrorReminder: () => getPrompt("responses", "diffErrorReminder"),
+	diffErrorReminder: () => generateToolResponse("replaceInFile", "diffErrorReminder"),
 
-	toolAlreadyUsed: (toolName: string) => getPrompt("responses", "toolAlreadyUsed", { toolName }),
+	toolAlreadyUsed: (toolName: string) => generateToolResponse("toolHandlers", "toolAlreadyUsed", { TOOL_NAME: toolName }),
 
-	repeatedToolCall: (toolName: string, count: number) => getPrompt("responses", "repeatedToolCall", { toolName, count }),
+	repeatedToolCall: (toolName: string, count: number) =>
+		generateToolResponse("toolHandlers", "repeatedToolCall", { TOOL_NAME: toolName, COUNT: count }),
 
 	clineIgnoreInstructions: (content: string) =>
-		getPrompt("responses", "clineIgnoreInstructions", { lockSymbol: LOCK_TEXT_SYMBOL, content }),
+		generateResponse("clineIgnoreInstructions", { LOCK_SYMBOL: LOCK_TEXT_SYMBOL, CONTENT: content }),
 
-	clineRulesGlobalDirectoryInstructions: (globalClineRulesFilePath: string, content: string) =>
-		getPrompt("responses", "clineRulesGlobalDirInstructions", {
-			globalPath: globalClineRulesFilePath.toPosix(),
-			content,
-		}),
+	clineRulesGlobalDirectoryInstructions: (_globalClineRulesFilePath: string, content: string) =>
+		generateResponse("clineRulesGlobalDirInstructions", { CONTENT: content }),
 
 	clineRulesLocalDirectoryInstructions: (workspaceName: string, content: string) =>
-		getPrompt("responses", "clineRulesLocalDirInstructions", { workspaceName, content }),
+		generateResponse("clineRulesLocalDirInstructions", { WORKSPACE_NAME: workspaceName, CONTENT: content }),
 
 	clineRulesLocalFileInstructions: (workspaceName: string, content: string) =>
-		getPrompt("responses", "clineRulesLocalFileInstructions", { workspaceName, content }),
+		generateResponse("clineRulesLocalFileInstructions", { WORKSPACE_NAME: workspaceName, CONTENT: content }),
 
 	windsurfRulesLocalFileInstructions: (cwd: string, content: string) =>
-		getPrompt("responses", "windsurfRulesLocalFileInstructions", { cwd: cwd.toPosix(), content }),
+		generateResponse("windsurfRulesLocalFileInstructions", { CWD: cwd.toPosix(), CONTENT: content }),
 
 	cursorRulesLocalFileInstructions: (cwd: string, content: string) =>
-		getPrompt("responses", "cursorRulesLocalFileInstructions", { cwd: cwd.toPosix(), content }),
+		generateResponse("cursorRulesLocalFileInstructions", { CWD: cwd.toPosix(), CONTENT: content }),
 
 	cursorRulesLocalDirectoryInstructions: (cwd: string, content: string) =>
-		getPrompt("responses", "cursorRulesLocalDirInstructions", { cwd: cwd.toPosix(), content }),
+		generateResponse("cursorRulesLocalDirInstructions", { CWD: cwd.toPosix(), CONTENT: content }),
 
 	agentsRulesLocalFileInstructions: (cwd: string, content: string) =>
-		getPrompt("responses", "agentsRulesLocalFileInstructions", { cwd: cwd.toPosix(), content }),
+		generateResponse("agentsRulesLocalFileInstructions", { CWD: cwd.toPosix(), CONTENT: content }),
 
 	fileContextWarning: (editedFiles: string[]): string => {
 		const fileCount = editedFiles.length
-		const fileVerb = fileCount === 1 ? "file has" : "files have"
-		const fileDemonstrativePronoun = fileCount === 1 ? "this file" : "these files"
-		const filePersonalPronoun = fileCount === 1 ? "it" : "they"
+		const singular = fileCount === 1
+		const fileVerb = generateToolResponse("writeToFile", singular ? "fileVerbSingular" : "fileVerbPlural")
+		const fileDemonstrativePronoun = generateToolResponse(
+			"writeToFile",
+			singular ? "fileDemonstrativeSingular" : "fileDemonstrativePlural",
+		)
+		const filePersonalPronoun = generateToolResponse("writeToFile", singular ? "filePronounSingular" : "filePronounPlural")
 		const filesList = editedFiles.map((file) => ` ${path.resolve(file).toPosix()}`).join("\n")
 
-		return getPrompt("responses", "fileContextWarning", {
-			fileCount,
-			fileVerb,
-			fileDemonstrativePronoun,
-			filePersonalPronoun,
-			filesList,
+		return generateToolResponse("writeToFile", "fileContextWarning", {
+			FILE_COUNT: fileCount,
+			FILE_VERB: fileVerb,
+			FILE_DEMONSTRATIVE_PRONOUN: fileDemonstrativePronoun,
+			FILE_PERSONAL_PRONOUN: filePersonalPronoun,
+			FILES_LIST: filesList,
 		})
 	},
 }

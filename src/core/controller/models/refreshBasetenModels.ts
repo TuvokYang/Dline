@@ -72,7 +72,7 @@ async function fetchAndCacheModels(_controller: Controller): Promise<Record<stri
 				headers: {
 					Authorization: `Bearer ${cleanApiKey}`,
 					"Content-Type": "application/json",
-					"User-Agent": "Cline-VSCode-Extension",
+					"User-Agent": "Dline-VSCode-Extension",
 				},
 				timeout: 10000, // 10 second timeout
 				...getAxiosSettings(),

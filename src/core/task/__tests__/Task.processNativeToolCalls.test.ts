@@ -4,7 +4,7 @@ import { registerPartialMessageCallback } from "@core/controller/ui/subscribeToP
 import { Task } from "@core/task"
 import type { ClineMessage } from "@shared/ExtensionMessage"
 import { ClineDefaultTool } from "@shared/tools"
-import { describe, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 
 describe("Task.processNativeToolCalls", () => {
 	it("finalizes a partial prev text block and reuses its ts for the state text block", async () => {
@@ -186,6 +186,102 @@ describe("Task.processNativeToolCalls", () => {
 		// Should NOT have a finalize say call — no prev text block exists
 		const finalizeCalls = sayCalls.filter((c) => c.partial === false)
 		assert.equal(finalizeCalls.length, 0, "Should not finalize when there is no prev text block")
+	})
+
+	it("presents a partial native tool without requiring a canonical runtime turn", async () => {
+		const partialTool: ToolUse = {
+			type: "tool_use",
+			name: ClineDefaultTool.QNA_RESPOND,
+			params: { response: "Streaming response" },
+			partial: true,
+			isNativeToolCall: true,
+			call_id: "call-qna",
+			dline_tid: "dline-qna",
+			ts: 200,
+		}
+		const executeTool = vi.fn(async () => undefined)
+		const dispatchRuntime = vi.fn(async () => {
+			throw new Error("Partial presentation must not dispatch runtime events")
+		})
+		const fakeTask = {
+			taskId: "task-native-qna",
+			initialCheckpointCommitPromise: undefined,
+			reRenderUpdatedPartialBlocks: async () => undefined,
+			isParallelToolCallingEnabled: () => false,
+			dispatchRuntime,
+			taskController: {
+				hasAnyRejection: () => false,
+				shouldSkip: () => false,
+			},
+			toolExecutor: { executeTool },
+			taskRuntime: { getState: () => ({ turn: undefined }) },
+			taskState: {
+				abort: false,
+				assistantMessageContent: [partialTool] as AssistantMessageContent[],
+				currentStreamingContentIndex: 0,
+				didAlreadyUseTool: false,
+				didCompleteReadingStream: false,
+				lastRenderedPartialByTs: new Map<number, string>(),
+				partialToolLifecycleByTs: new Map<number, "partial-shown" | "complete-running" | "complete-done">(),
+				presentAssistantMessageHasPendingUpdates: false,
+				presentAssistantMessageLocked: false,
+				userMessageContentReady: false,
+			},
+		}
+
+		await expect(Task.prototype.presentAssistantMessage.call(fakeTask as never)).resolves.toBeUndefined()
+		expect(executeTool).toHaveBeenCalledOnce()
+		expect(executeTool).toHaveBeenCalledWith(partialTool)
+		expect(dispatchRuntime).not.toHaveBeenCalled()
+		expect(fakeTask.taskState.currentStreamingContentIndex).toBe(0)
+		expect(fakeTask.taskState.partialToolLifecycleByTs.get(200)).toBe("partial-shown")
+	})
+
+	it("defers a complete XML tool until stream finalization can build the canonical turn", async () => {
+		const completeTool: ToolUse = {
+			type: "tool_use",
+			name: ClineDefaultTool.FILE_READ,
+			params: { path: "README.md" },
+			partial: false,
+			isNativeToolCall: false,
+			call_id: "call-read",
+			dline_tid: "dline-read",
+			ts: 300,
+		}
+		const executeTool = vi.fn(async () => undefined)
+		const dispatchRuntime = vi.fn(async () => {
+			throw new Error("Complete tool must wait for stream finalization")
+		})
+		const fakeTask = {
+			taskId: "task-xml-read",
+			initialCheckpointCommitPromise: undefined,
+			reRenderUpdatedPartialBlocks: async () => undefined,
+			isParallelToolCallingEnabled: () => false,
+			dispatchRuntime,
+			taskController: {
+				hasAnyRejection: () => false,
+				shouldSkip: () => false,
+			},
+			toolExecutor: { executeTool },
+			taskRuntime: { getState: () => ({ turn: undefined }) },
+			taskState: {
+				abort: false,
+				assistantMessageContent: [completeTool] as AssistantMessageContent[],
+				currentStreamingContentIndex: 0,
+				didAlreadyUseTool: false,
+				didCompleteReadingStream: false,
+				lastRenderedPartialByTs: new Map<number, string>(),
+				partialToolLifecycleByTs: new Map<number, "partial-shown" | "complete-running" | "complete-done">(),
+				presentAssistantMessageHasPendingUpdates: false,
+				presentAssistantMessageLocked: false,
+				userMessageContentReady: false,
+			},
+		}
+
+		await expect(Task.prototype.presentAssistantMessage.call(fakeTask as never)).resolves.toBeUndefined()
+		expect(executeTool).not.toHaveBeenCalled()
+		expect(dispatchRuntime).not.toHaveBeenCalled()
+		expect(fakeTask.taskState.currentStreamingContentIndex).toBe(0)
 	})
 
 	it("moves turn-ending native tool calls after regular tool calls", async () => {

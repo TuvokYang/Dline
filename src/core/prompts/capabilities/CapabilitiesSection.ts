@@ -1,10 +1,12 @@
+import { getPrompt } from "../i18n"
+import { assemblePromptFragments } from "../system-prompt/assembly/prompt-fragment-assembler"
 import type { CapabilitiesSnapshot, CapabilityEntry } from "./types"
 
-const GROUPS: Array<{ readonly title: string; readonly key: keyof CapabilitiesSnapshot }> = [
-	{ title: "MCP", key: "mcp" },
-	{ title: "Skills", key: "skills" },
-	{ title: "Workflows", key: "workflows" },
-	{ title: "Subagents", key: "subagents" },
+const GROUPS: Array<{ readonly titleKey: string; readonly key: keyof CapabilitiesSnapshot }> = [
+	{ titleKey: "mcpTitle", key: "mcp" },
+	{ titleKey: "skillsTitle", key: "skills" },
+	{ titleKey: "workflowsTitle", key: "workflows" },
+	{ titleKey: "subagentsTitle", key: "subagents" },
 ]
 
 /**
@@ -34,7 +36,10 @@ function normalizeDescription(description: string): string {
  * @returns Markdown list item for the capability.
  */
 function renderEntry(entry: CapabilityEntry): string {
-	return `- \`${escapeName(entry.name)}\`: ${normalizeDescription(entry.description)}`
+	return assemblePromptFragments(getPrompt("capabilityCatalog", "entry"), {
+		NAME: escapeName(entry.name),
+		DESCRIPTION: normalizeDescription(entry.description),
+	})
 }
 
 /**
@@ -44,13 +49,18 @@ function renderEntry(entry: CapabilityEntry): string {
  * @returns Markdown section containing only capability names and descriptions.
  */
 export function renderCapabilitiesSection(snapshot: CapabilitiesSnapshot): string {
-	const sections = ["# Capabilities"]
+	const sections = [getPrompt("capabilityCatalog", "heading")]
 	for (const group of GROUPS) {
 		const entries = snapshot[group.key]
 		if (entries.length === 0) {
 			continue
 		}
-		sections.push(`## ${group.title}\n${entries.map(renderEntry).join("\n")}`)
+		sections.push(
+			assemblePromptFragments(getPrompt("capabilityCatalog", "group"), {
+				TITLE: getPrompt("capabilityCatalog", group.titleKey),
+				ENTRIES: entries.map(renderEntry).join("\n"),
+			}),
+		)
 	}
 	return sections.join("\n\n")
 }

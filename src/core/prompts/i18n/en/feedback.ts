@@ -1,3 +1,5 @@
+export { default } from "./system/feedback"
+/*
 // English feedback prompts — key-value pairs only, no code logic.
 
 const prompts: Record<string, string> = {
@@ -9,4 +11,4 @@ When the user directly asks about Dline (eg 'can Dline do...', 'does Dline have.
   - Example: https://docs.dline.bot/features/auto-approve`,
 }
 
-export default prompts
+*/

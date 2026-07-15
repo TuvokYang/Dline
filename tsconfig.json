@@ -20,7 +20,9 @@
 		"skipLibCheck": true,
 		"sourceMap": true,
 		"strict": true,
-		"types": ["vitest/globals"],
+		"types": [
+			"vitest/globals"
+		],
 		"target": "es2022",
 		"useDefineForClassFields": true,
 		"useUnknownInCatchVariables": false,
@@ -65,6 +67,7 @@
 		"node_modules",
 		".vscode-test",
 		"webview-ui",
+		"src/core/prompts/system-prompt-legacy/**/*",
 		"src/test/e2e/**/*",
 		"src/test/scenarios/**/*",
 		"tests/vscode/workspace*"

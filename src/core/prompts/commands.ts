@@ -1,35 +1,57 @@
 import type { ApiProviderInfo } from "@/core/api"
 import { getDeepPlanningPrompt } from "./commands/deep-planning"
-import { getPrompt } from "./i18n"
+import { CommandPromptGenerator } from "./generators/CommandPromptGenerator"
+import { englishTemplateStore } from "./i18n/en"
+import type { PromptEnv } from "./template/types"
+
+const commandGenerator = new CommandPromptGenerator(englishTemplateStore)
+
+/**
+ * Generates one exact command prompt and returns its text.
+ *
+ * @param templateId Stable command template identifier.
+ * @param env Declared runtime prompt values.
+ * @returns Rendered command prompt text.
+ */
+function generateCommand(templateId: string, env: PromptEnv = {}): string {
+	return commandGenerator.generate(templateId, env).text
+}
 
 export const newTaskToolResponse = (willUseNativeTools: boolean) => {
-	const xmlExample = getPrompt("commands", "newTaskXmlExample")
-	const nativeToolNote = willUseNativeTools ? getPrompt("commands", "newTaskNativeToolNote") : ""
+	const xmlExample = generateCommand("commands.newTaskXmlExample")
+	const nativeToolNote = willUseNativeTools ? generateCommand("commands.newTaskNativeToolNote") : ""
 
-	return `${getPrompt("commands", "newTaskMain", { nativeToolNote, xmlExample })}\n`
+	return `${generateCommand("commands.newTaskMain", {
+		NATIVE_TOOL_NOTE: nativeToolNote,
+		XML_EXAMPLE: xmlExample,
+	})}\n`
 }
 
 export const condenseToolResponse = (focusChainSettings?: { enabled: boolean }) => {
 	const focusChainEnabled = focusChainSettings?.enabled
-	const focusChainParam = focusChainEnabled ? getPrompt("commands", "condenseFocusChainParam") : ""
-	const focusChainUsage = focusChainEnabled ? getPrompt("toolUseTools", "focusChainUsage") : ""
-	const focusChainExample = focusChainEnabled ? getPrompt("commands", "condenseFocusChainExample") : ""
+	const focusChainParam = focusChainEnabled ? generateCommand("commands.condenseFocusChainParam") : ""
+	const focusChainUsage = focusChainEnabled ? generateCommand("toolUseTools.focusChainUsage") : ""
+	const focusChainExample = focusChainEnabled ? generateCommand("commands.condenseFocusChainExample") : ""
 
-	return `${getPrompt("commands", "condenseMain", { focusChainParam, focusChainUsage, focusChainExample })}\n`
+	return `${generateCommand("commands.condenseMain", {
+		FOCUS_CHAIN_PARAM: focusChainParam,
+		FOCUS_CHAIN_USAGE: focusChainUsage,
+		FOCUS_CHAIN_EXAMPLE: focusChainExample,
+	})}\n`
 }
 
-export const newRuleToolResponse = () => `${getPrompt("commands", "newRuleToolResponse")}\n`
+export const newRuleToolResponse = () => `${generateCommand("commands.newRuleToolResponse")}\n`
 
-export const reportBugToolResponse = () => `${getPrompt("commands", "reportBugToolResponse")}\n`
+export const reportBugToolResponse = () => `${generateCommand("commands.reportBugToolResponse")}\n`
 
-export const explainChangesToolResponse = () => `${getPrompt("commands", "explainChangesToolResponse")}\n`
+export const explainChangesToolResponse = () => `${generateCommand("commands.explainChangesToolResponse")}\n`
 
 /**
- * Generates the deep-planning slash command response with model-family-aware variant selection
+ * Generates the provider-independent deep-planning slash command response.
  * @param focusChainSettings Optional focus chain settings to include in the prompt
- * @param providerInfo Optional API provider info for model family detection
+ * @param providerInfo Retained API provider input; prompt content does not branch on it.
  * @param enableNativeToolCalls Optional flag to determine if native tool calling is enabled
- * @returns The deep-planning prompt string with appropriate variant and focus chain settings applied
+ * @returns The deep-planning prompt string with explicit runtime settings applied.
  */
 export const deepPlanningToolResponse = (
 	focusChainSettings?: { enabled: boolean },

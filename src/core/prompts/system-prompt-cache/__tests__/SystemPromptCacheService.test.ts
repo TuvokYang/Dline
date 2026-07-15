@@ -7,6 +7,7 @@ import { SystemPromptCacheService } from "../SystemPromptCacheService"
 const testPromptBuilderInfo = {
 	providerId: "test-provider",
 	modelId: "test-model",
+	profile: "native" as const,
 	nativeTools: false,
 }
 
@@ -66,15 +67,19 @@ describe("SystemPromptCacheService", () => {
 		expect(result.text).toContain("# Capabilities")
 		expect(result.text).toContain("mcp.tool")
 		expect(result.refreshReason).toBe("task_start")
+		expect(result.tools).toBeNull()
 		expect(saved?.systemPrompt?.frozen?.text).toBe(result.text)
+		expect(saved?.systemPrompt?.frozen?.tools).toBeNull()
 	})
 
-	it("restores native tools when reusing a frozen prompt", async () => {
+	it("restores exact persisted native tools when reusing a frozen prompt", async () => {
+		const tools: readonly ClineTool[] = [{ type: "function", function: { name: "read_file" } }]
 		const cached = {
 			...emptyContext("task-1"),
 			systemPrompt: {
 				frozen: {
 					text: "old prompt # Capabilities old",
+					tools,
 					capabilitiesHash: "sha256:old",
 					createdAt: 1,
 					refreshedAt: 1,
@@ -82,26 +87,132 @@ describe("SystemPromptCacheService", () => {
 					promptBuilder: {
 						providerId: "test-provider",
 						modelId: "test-model",
+						profile: "native" as const,
 						nativeTools: true,
 					},
 				},
 			},
 		}
-		const tools: ClineTool[] = [{ type: "function", function: { name: "read_file" } }]
 		const service = new SystemPromptCacheService({
 			taskId: "task-1",
 			deps: {
 				getContext: async () => cached,
 				saveContext: async () => undefined,
-				buildSystemPrompt: async () => ({ systemPrompt: "rebuilt prompt", tools }),
-				getPromptBuilderInfo: () => ({ ...testPromptBuilderInfo, nativeTools: true }),
+				buildSystemPrompt: async () => {
+					throw new Error("frozen tools must not be rebuilt")
+				},
 			},
 		})
 
 		const result = await service.getOrCreate({ promptContext })
 
 		expect(result.text).toBe("old prompt # Capabilities old")
-		expect(service.getLastTools()).toBe(tools)
+		expect(service.getLastTools()).toEqual(tools)
+	})
+
+	it("restores the exact frozen native tools without rebuilding from a changed current context", async () => {
+		const frozenTools: readonly ClineTool[] = [{ type: "function", function: { name: "frozen_browser_tool" } }]
+		const cached = {
+			...emptyContext("task-1"),
+			systemPrompt: {
+				frozen: {
+					text: "frozen native prompt",
+					tools: frozenTools,
+					capabilitiesHash: "sha256:frozen",
+					createdAt: 1,
+					refreshedAt: 1,
+					refreshReason: "task_start" as const,
+					promptBuilder: {
+						providerId: "test-provider",
+						modelId: "test-model",
+						profile: "native" as const,
+						nativeTools: true,
+					},
+				},
+			},
+		}
+		let buildCount = 0
+		const service = new SystemPromptCacheService({
+			taskId: "task-1",
+			deps: {
+				getContext: async () => cached,
+				saveContext: async () => undefined,
+				buildSystemPrompt: async () => {
+					buildCount += 1
+					return { systemPrompt: "current xml prompt" }
+				},
+			},
+		})
+		const currentContext: SystemPromptContext = {
+			...promptContext,
+			providerInfo: { ...promptContext.providerInfo, customPrompt: "lite" },
+			enableNativeToolCalls: false,
+			disableTools: [],
+			supportsBrowserUse: false,
+		}
+
+		const result = await service.getOrCreate({ promptContext: currentContext })
+
+		expect(result.text).toBe("frozen native prompt")
+		expect(service.getLastTools()).toEqual(frozenTools)
+		expect(buildCount).toBe(0)
+	})
+
+	it("persists the exact tools produced by the same frozen prompt build", async () => {
+		let saved: TaskContextCache | undefined
+		const builtTools: readonly ClineTool[] = [{ type: "function", function: { name: "frozen_exact_tool" } }]
+		const service = new SystemPromptCacheService({
+			taskId: "task-1",
+			deps: {
+				getContext: async () => emptyContext("task-1"),
+				saveContext: async (_taskId, context) => {
+					saved = context
+				},
+				collectCapabilities: async () => ({ mcp: [], skills: [], workflows: [], subagents: [] }),
+				buildSystemPrompt: async () => ({ systemPrompt: "frozen exact prompt", tools: builtTools }),
+				getPromptBuilderInfo: () => ({ ...testPromptBuilderInfo, nativeTools: true }),
+				now: () => 15,
+			},
+		})
+
+		const result = await service.refresh({ promptContext, reason: "manual" })
+
+		expect(result.tools).toEqual(builtTools)
+		expect(saved?.systemPrompt?.frozen?.tools).toEqual(builtTools)
+	})
+
+	it("rejects a legacy native cache that lacks exact frozen tools", async () => {
+		const cached = {
+			...emptyContext("task-1"),
+			systemPrompt: {
+				frozen: {
+					text: "legacy native prompt",
+					capabilitiesHash: "sha256:old",
+					createdAt: 1,
+					refreshedAt: 1,
+					refreshReason: "task_start" as const,
+					promptBuilder: {
+						providerId: "test-provider",
+						modelId: "test-model",
+						profile: "native" as const,
+						nativeTools: true,
+					},
+				},
+			},
+		}
+		const service = new SystemPromptCacheService({
+			taskId: "task-1",
+			deps: {
+				getContext: async () => cached,
+				saveContext: async () => undefined,
+				buildSystemPrompt: async () => ({
+					systemPrompt: "unsafe rebuilt prompt",
+					tools: [{ type: "function", function: { name: "unsafe_current_tool" } }],
+				}),
+			},
+		})
+
+		await expect(service.getOrCreate({ promptContext })).rejects.toThrow("exact frozen tools")
 	})
 
 	it("keeps ordinary requests stable when capability sources change", async () => {
@@ -117,6 +228,7 @@ describe("SystemPromptCacheService", () => {
 					promptBuilder: {
 						providerId: "test-provider",
 						modelId: "test-model",
+						profile: "native" as const,
 						nativeTools: false,
 					},
 				},
@@ -173,6 +285,35 @@ describe("SystemPromptCacheService", () => {
 		expect(result.refreshReason).toBe("manual")
 		expect(result.text).toContain("manual")
 		expect(current.systemPrompt?.frozen?.refreshReason).toBe("manual")
+	})
+
+	it.each([
+		["lite", "lite"],
+		["compact", "native"],
+	])("projects %s custom prompt to %s cache profile metadata", async (customPrompt, expectedProfile) => {
+		const service = new SystemPromptCacheService({
+			taskId: "task-1",
+			deps: {
+				getContext: async () => emptyContext("task-1"),
+				saveContext: async () => undefined,
+				collectCapabilities: async () => ({
+					mcp: [],
+					skills: [],
+					workflows: [],
+					subagents: [],
+				}),
+				buildSystemPrompt: async () => ({ systemPrompt: "profile prompt" }),
+				now: () => 25,
+			},
+		})
+		const context: SystemPromptContext = {
+			...promptContext,
+			providerInfo: { ...promptContext.providerInfo, customPrompt },
+		}
+
+		const result = await service.refresh({ promptContext: context, reason: "manual" })
+
+		expect(result.promptBuilder.profile).toBe(expectedProfile)
 	})
 
 	it("updates cache on post compaction refresh", async () => {

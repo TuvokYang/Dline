@@ -10,22 +10,22 @@ const prompts: Record<string, string> = {
 		"4. The solution matches what was asked for, not just what was convenient\n" +
 		"5. Output files contain exactly what was specified--no extra columns, fields, debug output, or commentary\n" +
 		"6. If the task specifies numerical thresholds or accuracy targets, verify your result meets the criteria. If close but not passing, iterate rather than declaring completion" +
-		"{taskSection}" +
+		"@TASK_SECTION@" +
 		"\n\nIf everything checks out, call attempt_completion again with your final result.",
 
 	attemptCompletionNotificationSubtitle: "Task Completed",
 
 	// AskFollowupQuestionToolHandler
-	yoloAutoRespond: '[YOLO MODE] Auto-responding to question: "{question}"',
+	yoloAutoRespond: '[YOLO MODE] Auto-responding to question: "@QUESTION@"',
 	yoloToolResult:
-		'[YOLO MODE: User input is not available in non-interactive mode. You must use available tools (read_file, list_files, search_files, etc.) to gather the information you need instead of asking the user. Proceed with using tools to find the answer to your question: "{question}"]',
+		'[YOLO MODE: User input is not available in non-interactive mode. You must use available tools (read_file, list_files, search_files, etc.) to gather the information you need instead of asking the user. Proceed with using tools to find the answer to your question: "@QUESTION@"]',
 	askFollowupNotificationSubtitle: "Dline has a question...",
 
 	// CondenseHandler
 	condenseMissingContext: "Missing required parameter: context",
 	condenseNotificationSubtitle: "Dline wants to condense the conversation...",
-	condenseNotificationMessage: "Dline is suggesting to condense your conversation with: {context}",
-	condenseFeedbackResult: "The user provided feedback on the condensed conversation summary:\n<feedback>\n{text}\n</feedback>",
+	condenseNotificationMessage: "Dline is suggesting to condense your conversation with: @CONTEXT@",
+	condenseFeedbackResult: "The user provided feedback on the condensed conversation summary:\n<feedback>\n@TEXT@\n</feedback>",
 
 	// PlanModeRespondHandler
 	planNeedsMoreExploration:
@@ -36,7 +36,7 @@ const prompts: Record<string, string> = {
 
 	// GenerateExplanationToolHandler
 	generateExplanationApiNotAvailable: "API configuration not available",
-	generateExplanationNoChanges: "No changes found between '{fromRef}' and '{toRef}'.",
+	generateExplanationNoChanges: "No changes found between '@FROM_REF@' and '@TO_REF@'.",
 	generateExplanationCancelled: "Explanation generation was cancelled.",
 
 	// SubagentToolHandler
@@ -52,7 +52,7 @@ const prompts: Record<string, string> = {
 	// PlanModeRespondHandler (non-yolo mode switch)
 	planSwitchToAct: "[The user has switched to ACT MODE, so you may now proceed with the task.]",
 	planSwitchToActWithMessage:
-		"[The user has switched to ACT MODE, so you may now proceed with the task.]\n\nThe user also provided the following message when switching to ACT MODE:\n<user_message>\n{text}\n</user_message>",
+		"[The user has switched to ACT MODE, so you may now proceed with the task.]\n\nThe user also provided the following message when switching to ACT MODE:\n<user_message>\n@TEXT@\n</user_message>",
 
 	// ApplyPatchHandler
 	patchDenied: "The user denied this patch operation.",
