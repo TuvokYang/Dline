@@ -59,6 +59,13 @@ function createConfig(
 				getApiConfiguration: () => ({ planModeProfile: "openai", actModeProfile: "openai" }),
 			} as unknown,
 		} as unknown as TaskConfig["services"],
+		coordinator: {} as TaskConfig["coordinator"],
+		identityFactory: {
+			/** Return a stable result item identity for this fixture. */
+			nextItemId: () => "dline_item_attempt_completion_test",
+			/** Return a stable trace identity for this fixture. */
+			nextTraceId: () => "dline_tid_attempt_completion_test",
+		},
 		callbacks: {
 			say: vi.fn(async (type: string, text?: string) => {
 				clineMessages.push({ type: "say", say: type, text, ts: Date.now() })

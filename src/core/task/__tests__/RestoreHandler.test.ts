@@ -188,16 +188,30 @@ describe("RestoreHandler", () => {
 			approval: {
 				mode: "serial",
 				activeCallId: "call_active",
+				activeDlineTid: "tid_active",
 				blocks: [
-					{ callId: "call_active", name: "write_to_file", phase: BlockPhase.AWAITING_APPROVAL, apiIndex: 4 },
-					{ callId: "call_next", name: "execute_command", phase: BlockPhase.STREAMING, apiIndex: 4 },
+					{
+						callId: "call_active",
+						dlineTid: "tid_active",
+						name: "write_to_file",
+						phase: BlockPhase.AWAITING_APPROVAL,
+						apiIndex: 4,
+					},
+					{
+						callId: "call_next",
+						dlineTid: "tid_next",
+						name: "execute_command",
+						phase: BlockPhase.STREAMING,
+						apiIndex: 4,
+					},
 				],
 			},
 		})
 
-		assert.equal(restoredActiveCallId, "call_active")
+		assert.equal(restoredActiveCallId, "tid_active")
 		assert.deepEqual(restoredBlocks, [
 			{
+				dlineTid: "tid_active",
 				callId: "call_active",
 				toolName: "write_to_file",
 				phase: "awaiting_approval",
@@ -205,6 +219,7 @@ describe("RestoreHandler", () => {
 				requiresApproval: true,
 			},
 			{
+				dlineTid: "tid_next",
 				callId: "call_next",
 				toolName: "execute_command",
 				phase: "streaming",
@@ -365,10 +380,32 @@ describe("RestoreHandler", () => {
 			approval: {
 				mode: "serial",
 				activeCallId: "call_active",
+				activeDlineTid: "tid_active",
 				blocks: [
-					{ callId: "call_done", name: "read_file", phase: BlockPhase.COMPLETED, apiIndex: 4, ts: 100 },
-					{ callId: "call_active", name: "write_to_file", phase: BlockPhase.AWAITING_APPROVAL, apiIndex: 4, ts: 200 },
-					{ callId: "call_next", name: "execute_command", phase: BlockPhase.STREAMING, apiIndex: 4, ts: 300 },
+					{
+						callId: "call_done",
+						dlineTid: "tid_done",
+						name: "read_file",
+						phase: BlockPhase.COMPLETED,
+						apiIndex: 4,
+						ts: 100,
+					},
+					{
+						callId: "call_active",
+						dlineTid: "tid_active",
+						name: "write_to_file",
+						phase: BlockPhase.AWAITING_APPROVAL,
+						apiIndex: 4,
+						ts: 200,
+					},
+					{
+						callId: "call_next",
+						dlineTid: "tid_next",
+						name: "execute_command",
+						phase: BlockPhase.STREAMING,
+						apiIndex: 4,
+						ts: 300,
+					},
 				],
 			},
 		}
@@ -377,9 +414,9 @@ describe("RestoreHandler", () => {
 		handler.hydrateFromSnapshot(snapshot)
 
 		assert.equal(controller.phase, TaskPhase.AWAITING_APPROVAL)
-		assert.equal(controller.getPhase("call_done"), BlockPhase.COMPLETED)
-		assert.equal(controller.getPhase("call_active"), BlockPhase.AWAITING_APPROVAL)
-		assert.equal(controller.getPhase("call_next"), BlockPhase.STREAMING)
-		assert.equal(controller.getActiveBlock()?.callId, "call_active")
+		assert.equal(controller.getPhase("tid_done"), BlockPhase.COMPLETED)
+		assert.equal(controller.getPhase("tid_active"), BlockPhase.AWAITING_APPROVAL)
+		assert.equal(controller.getPhase("tid_next"), BlockPhase.STREAMING)
+		assert.equal(controller.getActiveBlock()?.dlineTid, "tid_active")
 	})
 })

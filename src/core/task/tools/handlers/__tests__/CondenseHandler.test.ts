@@ -28,6 +28,11 @@ function createConfig(overrides: Partial<TaskConfig> = {}): TaskConfig {
 		autoApprover: { shouldAutoApproveTool: vi.fn().mockReturnValue(false) } as unknown as TaskConfig["autoApprover"],
 		browserSettings: {} as unknown as TaskConfig["browserSettings"],
 		focusChainSettings: { enabled: false } as unknown as TaskConfig["focusChainSettings"],
+		interactions: {
+			open: vi.fn(async () => ({ actionId: "approve" as const })),
+			complete: vi.fn(async () => ({ actionId: "approve" as const })),
+			say: vi.fn(async () => undefined),
+		},
 		services: {
 			stateManager: {
 				getGlobalSettingsKey: (key: string) => (key === "hooksEnabled" ? false : undefined),
@@ -58,6 +63,7 @@ function makeBlock(name: string, context?: string): ToolUse {
 		type: "tool_use",
 		name,
 		ts: Date.now(),
+		dline_tid: `tid-${name}`,
 		params: { context: context ?? "summary content" },
 		partial: false,
 	} as unknown as ToolUse
@@ -72,7 +78,7 @@ describe("CondenseHandler", () => {
 
 			const result = await handler.execute(config, block)
 
-			expect(config.callbacks.ask).not.toHaveBeenCalled()
+			expect(config.interactions.open).not.toHaveBeenCalled()
 			expect(config.services.contextManager.getNextTruncationRange).toHaveBeenCalled()
 			expect(config.messageState.updateTaskHistory).toHaveBeenCalled()
 			assert.ok(typeof result === "string")
@@ -91,28 +97,27 @@ describe("CondenseHandler", () => {
 	})
 
 	describe("condense mode (manual)", () => {
-		it("calls ask() for user interaction when block name is condense", async () => {
+		it("opens a typed interaction when block name is condense", async () => {
 			const config = createConfig()
 			const handler = new CondenseHandler()
 			const block = makeBlock("condense", "test summary")
 
 			await handler.execute(config, block)
 
-			expect(config.callbacks.ask).toHaveBeenCalledWith(
-				"condense",
-				"test summary",
-				false,
-				expect.objectContaining({ existingTs: block.ts }),
-			)
+			expect(config.interactions.open).toHaveBeenCalledWith({
+				turnId: "turn:tid-condense",
+				interactionId: "tid-condense",
+				kind: "condense",
+				presentation: "test summary",
+				existingTs: block.ts,
+			})
 		})
 
 		it("treats user input as feedback when text is provided in condense mode", async () => {
 			const config = createConfig()
-			;(config.callbacks.ask as ReturnType<typeof vi.fn>).mockResolvedValue({
-				response: "messageResponse",
-				text: "I want to keep chatting",
-				images: [],
-				files: [],
+			;(config.interactions.open as ReturnType<typeof vi.fn>).mockResolvedValue({
+				actionId: "reply",
+				draft: { text: "I want to keep chatting", images: [], files: [] },
 			})
 			const handler = new CondenseHandler()
 			const block = makeBlock("condense", "test summary")

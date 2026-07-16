@@ -122,6 +122,7 @@ function createBlock(name: string, params: Record<string, string>): ToolUse {
 		params,
 		partial: false,
 		ts: 100,
+		dline_tid: `tid-${name}`,
 	} as ToolUse
 }
 

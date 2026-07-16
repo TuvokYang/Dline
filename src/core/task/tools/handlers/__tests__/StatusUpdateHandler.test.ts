@@ -13,10 +13,23 @@ function createConfig(askResult: {
 	images?: string[]
 	files?: string[]
 }) {
+	const open = vi.fn(async () => ({
+		actionId: askResult.response === "noButtonClicked" ? ("stop" as const) : ("acknowledge" as const),
+		draft: {
+			text: askResult.text ?? "",
+			images: askResult.images ?? [],
+			files: askResult.files ?? [],
+		},
+	}))
 	return {
 		taskState: {
 			consecutiveMistakeCount: 0,
 			lastToolName: "read_file",
+		},
+		interactions: {
+			open,
+			complete: open,
+			say: vi.fn(async () => undefined),
 		},
 		callbacks: {
 			ask: vi.fn(async () => askResult),
@@ -34,6 +47,7 @@ describe("StatusUpdateHandler", () => {
 
 		const result = await handler.execute(config, {
 			name: ClineDefaultTool.STATUS_UPDATE,
+			dline_tid: "tid-status-stop",
 			params: { response: "请确认", requires_acknowledgment: "true" },
 		} as any)
 
@@ -51,6 +65,7 @@ describe("StatusUpdateHandler", () => {
 
 		const result = await handler.execute(config, {
 			name: ClineDefaultTool.STATUS_UPDATE,
+			dline_tid: "tid-status-acknowledge",
 			params: { response: "请确认", requires_acknowledgment: "true" },
 		} as any)
 

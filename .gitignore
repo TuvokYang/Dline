@@ -33,6 +33,7 @@ coverage-unit
 .github/act/.secrets
 
 .worktrees
+/.wt/
 
 ## Generated files ##
 src/generated/

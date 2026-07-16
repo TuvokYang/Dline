@@ -423,21 +423,16 @@ replaced`
 		}
 	})
 
-	// 	it("should NOT process incomplete replacement when isFinal is false", async () => {
-	// 		const original = "line1\nline2\nline3"
-	// 		const diff = `------- SEARCH
-	// line2
-	// =======
-	// replaced`
-	// 		// Note: missing +++++++ REPLACE marker AND isFinal = false
+	it("should expose partial replacement content without appending untouched tail content", async () => {
+		const original = "line1\nline2\nline3"
+		const diff = ["------- SEARCH", "line2", "=".repeat(7), "replaced"].join("\n")
 
-	// 		const result1 = await cnfc(diff, original, false) // isFinal = false
+		const result1 = await cnfc(diff, original, false)
+		const result2 = await cnfc2(diff, original, false)
 
-	// 		// Should not make any changes since the block is incomplete
-	// 		const expected = "line1\nline2\nline3"
-
-	// 		expect(result1).to.equal(expected)
-	// 	})
+		expect(result1.newContent).to.equal("line1\nreplaced\n")
+		expect(result2).to.equal("line1\nreplaced\n")
+	})
 })
 
 // Test cases for out-of-order search/replace blocks

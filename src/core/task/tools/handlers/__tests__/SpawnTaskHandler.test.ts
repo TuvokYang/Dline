@@ -49,6 +49,9 @@ describe("SpawnTaskHandler", () => {
 				taskId: "parent-1",
 				taskState: { consecutiveMistakeCount: 5 },
 				taskController: { rejectActiveBlock: () => {} },
+				interactions: {
+					open: async () => ({ actionId: "reject" }),
+				},
 				callbacks: {
 					ask: async () => ({ response: "noButtonClicked" }),
 					say: async () => {},
@@ -56,7 +59,11 @@ describe("SpawnTaskHandler", () => {
 				services: { stateManager: {} },
 			} as any
 
-			await handler.execute(config, { name: "spawn_task", params: { task: "Test task" } } as any)
+			await handler.execute(config, {
+				name: "spawn_task",
+				dline_tid: "tid-reset",
+				params: { task: "Test task" },
+			} as any)
 			config.taskState.consecutiveMistakeCount.should.equal(0)
 		})
 	})
@@ -67,6 +74,9 @@ describe("SpawnTaskHandler", () => {
 				taskId: "parent-1",
 				taskState: { consecutiveMistakeCount: 0 },
 				taskController: { rejectActiveBlock: () => {} },
+				interactions: {
+					open: async () => ({ actionId: "reject" }),
+				},
 				callbacks: {
 					ask: async () => ({
 						response: "noButtonClicked",
@@ -80,6 +90,7 @@ describe("SpawnTaskHandler", () => {
 
 			const result = await handler.execute(config, {
 				name: "spawn_task",
+				dline_tid: "tid-deny",
 				params: { task: "Test task" },
 			} as any)
 
@@ -91,6 +102,12 @@ describe("SpawnTaskHandler", () => {
 				taskId: "parent-1",
 				taskState: { consecutiveMistakeCount: 0 },
 				taskController: { rejectActiveBlock: () => {} },
+				interactions: {
+					open: async () => ({
+						actionId: "reject",
+						draft: { text: "I want to modify the task first", images: [], files: [] },
+					}),
+				},
 				callbacks: {
 					ask: async () => ({
 						response: "text",
@@ -104,6 +121,7 @@ describe("SpawnTaskHandler", () => {
 
 			const result = await handler.execute(config, {
 				name: "spawn_task",
+				dline_tid: "tid-feedback",
 				params: { task: "Test task", context: "some context" },
 			} as any)
 
@@ -116,6 +134,9 @@ describe("SpawnTaskHandler", () => {
 			const config = {
 				taskId: "parent-1",
 				taskState: { consecutiveMistakeCount: 0 },
+				interactions: {
+					open: async () => ({ actionId: "approve" }),
+				},
 				callbacks: {
 					ask: async () => ({ response: "yesButtonClicked" }),
 					say: async () => {},
@@ -126,6 +147,7 @@ describe("SpawnTaskHandler", () => {
 
 			const result = await handler.execute(config, {
 				name: "spawn_task",
+				dline_tid: "tid-error",
 				params: { task: "Test task" },
 			} as any)
 
