@@ -9,17 +9,17 @@ const commandGenerator = new CommandPromptGenerator(englishTemplateStore)
 
 /**
  * Generates a provider-independent deep-planning slash command response.
+ * @param promptProfile Final typed prompt profile resolved by the caller.
  * @param focusChainSettings Optional focus chain settings to include in the prompt
  * @param _providerInfo Retained provider input; content generation does not branch on it.
  * @param enableNativeToolCalls Optional flag to determine if native tool calling is enabled
- * @param promptProfile Typed prompt profile supplied by the caller.
  * @returns The deep-planning prompt with shell, focus-chain, and transport values applied.
  */
 export function getDeepPlanningPrompt(
+	promptProfile: PromptProfile,
 	focusChainSettings?: { enabled: boolean },
 	_providerInfo?: ApiProviderInfo,
 	enableNativeToolCalls?: boolean,
-	promptProfile?: PromptProfile,
 ): string {
 	const requiredProfile = requirePromptProfile(promptProfile)
 	const variant = DEEP_PLANNING_VARIANTS.find((candidate) => candidate.id === requiredProfile)

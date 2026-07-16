@@ -93,10 +93,14 @@ function createTaskConfig(nativeToolCallEnabled: boolean, options: any = {}): Ta
 			getModel: () => ({
 				id: "anthropic/claude-sonnet-4.5",
 				info: {
-					contextWindow: 200_000,
+					contextWindow: options.contextWindow ?? 200_000,
 					apiFormat: ApiFormat.ANTHROPIC_CHAT,
 					supportsPromptCache: true,
-					capabilities: { supportsImages: false, supportsPromptCache: true },
+					capabilities: {
+						contextWindow: options.contextWindow ?? 200_000,
+						supportsImages: false,
+						supportsPromptCache: true,
+					},
 				},
 			}),
 			createMessage: vi.fn().mockImplementation(async function* () {}),
@@ -186,16 +190,16 @@ function stubSystemPrompt(native: boolean, inspectContext?: (context: SystemProm
 	})
 }
 
-function stubApiHandler(createMessage: any) {
+function stubApiHandler(createMessage: any, contextWindow = 200_000) {
 	vi.spyOn(coreApi, "buildApiHandler").mockReturnValue({
 		abort: vi.fn(),
 		getModel: () => ({
 			id: "anthropic/claude-sonnet-4.5",
 			info: {
-				contextWindow: 200_000,
+				contextWindow,
 				apiFormat: ApiFormat.ANTHROPIC_CHAT,
 				supportsPromptCache: true,
-				capabilities: { supportsImages: false, supportsPromptCache: true },
+				capabilities: { contextWindow, supportsImages: false, supportsPromptCache: true },
 			},
 		}),
 		createMessage,
@@ -206,6 +210,35 @@ describe("SubagentRunner", () => {
 	afterEach(() => {
 		HostProvider.reset()
 		vi.restoreAllMocks()
+	})
+
+	it.each([
+		[63_999, PromptProfile.Lite],
+		[64_000, PromptProfile.Native],
+	] as const)("resolves context window %s to %s before building the subagent prompt", async (contextWindow, expected) => {
+		const createMessage = vi.fn().mockImplementation(async function* () {
+			yield {
+				type: "tool_calls",
+				tool_call: {
+					function: {
+						id: "profile-complete",
+						name: ClineDefaultTool.ATTEMPT,
+						arguments: JSON.stringify({ result: "done" }),
+					},
+				},
+			}
+		})
+		stubSystemPrompt(false, (context) => {
+			assert.equal(context.promptProfile, expected)
+		})
+		vi.spyOn(skills, "discoverSkills").mockResolvedValue([])
+		vi.spyOn(skills, "getAvailableSkills").mockReturnValue([])
+		stubApiHandler(createMessage, contextWindow)
+		initializeHostProvider()
+
+		const result = await new SubagentRunner(createTaskConfig(false, { contextWindow })).run("Use profile", () => {})
+
+		assert.equal(result.status, "completed")
 	})
 
 	it("builds subagent prompts through the stable system prompt facade", async () => {

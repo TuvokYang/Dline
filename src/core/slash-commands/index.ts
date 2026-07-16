@@ -1,6 +1,7 @@
 import type { ApiProviderInfo } from "@core/api"
 import { ClineRulesToggles } from "@shared/cline-rules"
 import { McpPromptResponse } from "@shared/mcp"
+import { resolvePromptProfile } from "@shared/resolve-prompt-profile"
 import { pathToCommandName } from "@shared/slashCommands"
 import { SLASH_TYPE_DESC } from "@shared/slashContext"
 import fs from "fs/promises"
@@ -55,6 +56,9 @@ export async function parseSlashCommands(
 
 	// Determine if the current provider/model/setting actually uses native tool calling
 	const willUseNativeTools = isNativeToolCallingConfig(providerInfo!, enableNativeToolCalls || false)
+	const promptProfile = resolvePromptProfile({
+		contextWindow: providerInfo?.model.info.capabilities?.contextWindow,
+	})
 
 	const commandReplacements: Record<string, string> = {
 		newtask: newTaskToolResponse(willUseNativeTools),
@@ -62,7 +66,7 @@ export async function parseSlashCommands(
 		compact: condenseToolResponse(focusChainSettings),
 		newrule: newRuleToolResponse(),
 		reportbug: reportBugToolResponse(),
-		"deep-planning": deepPlanningToolResponse(focusChainSettings, providerInfo, willUseNativeTools),
+		"deep-planning": deepPlanningToolResponse(promptProfile, focusChainSettings, providerInfo, willUseNativeTools),
 		"explain-changes": explainChangesToolResponse(),
 	}
 

@@ -1,7 +1,6 @@
 import type { CollectCapabilitiesInput } from "@core/prompts/capabilities/CapabilitiesAggregator"
 import { collectCapabilities } from "@core/prompts/capabilities/CapabilitiesAggregator"
 import { renderCapabilitiesSection } from "@core/prompts/capabilities/CapabilitiesSection"
-import { requirePromptProfile } from "@core/prompts/profiles/types"
 import type { SystemPromptContext } from "@core/prompts/system-prompt"
 import { getSystemPrompt } from "@core/prompts/system-prompt"
 import { getTaskContext, saveTaskContext } from "@core/storage/disk"
@@ -174,7 +173,7 @@ export class SystemPromptCacheService {
 		return {
 			providerId: context.providerInfo.providerId,
 			modelId: context.providerInfo.model.id,
-			profile: requirePromptProfile(context.promptProfile),
+			profile: context.promptProfile,
 			nativeTools: (tools?.length ?? 0) > 0,
 		}
 	}

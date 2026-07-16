@@ -10,6 +10,7 @@ import { getSystemPrompt, type SystemPromptContext } from "@core/prompts/system-
 import { StreamResponseHandler } from "@core/task/StreamResponseHandler"
 import { DEFAULT_API_PROVIDER } from "@shared/api"
 import { ClineAssistantToolUseBlock, ClineStorageMessage, ClineTextContentBlock, ClineUserContent } from "@shared/messages"
+import { resolvePromptProfile } from "@shared/resolve-prompt-profile"
 import { Logger } from "@shared/services/Logger"
 import { ClineDefaultTool, ClineTool } from "@shared/tools"
 import { ContextManager } from "@/core/context/context-management/ContextManager"
@@ -359,6 +360,9 @@ export class SubagentRunner {
 
 			const context: SystemPromptContext = {
 				providerInfo,
+				promptProfile: resolvePromptProfile({
+					contextWindow: providerInfo.model.info.capabilities?.contextWindow,
+				}),
 				cwd: this.baseConfig.cwd,
 				ide: host?.platform || "Unknown",
 				skills,

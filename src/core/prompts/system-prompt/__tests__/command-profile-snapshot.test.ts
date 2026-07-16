@@ -10,9 +10,10 @@ import { assertPromptContent } from "./snapshot-content"
 
 const UPDATE_NEW_SNAPSHOTS = process.env.UPDATE_NEW_PROMPT_SNAPSHOTS === "true"
 const SNAPSHOTS_DIR = path.join(__dirname, "__snapshots__", "profiles-v2", "commands")
-const PROFILES = ["native", "lite"] as const
+const PROFILES = [PromptProfile.Native, PromptProfile.Lite] as const
 const TRANSPORTS = ["native", "xml"] as const
 const FOCUS_CASES = ["focus-on", "focus-off"] as const
+const PROVIDER_INFO = createProviderInfo()
 
 interface CommandSnapshotCase {
 	readonly name: string
@@ -26,10 +27,10 @@ const COMMAND_SNAPSHOT_CASES: readonly CommandSnapshotCase[] = [
 				name: `deep-planning.${profile}.${transport}.${focusCase}.command.snap`,
 				generate: () =>
 					deepPlanningToolResponse(
+						profile,
 						{ enabled: focusCase === "focus-on" },
-						createProviderInfo(),
+						PROVIDER_INFO,
 						transport === "native",
-						profile === "lite" ? PromptProfile.Lite : PromptProfile.Native,
 					),
 			})),
 		),

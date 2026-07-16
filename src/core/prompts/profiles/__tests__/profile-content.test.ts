@@ -6,6 +6,7 @@ import { buildRuntimeEnv } from "../../system-prompt/env/runtime-env"
 import { buildSystemEnv } from "../../system-prompt/env/system-env"
 
 const TEST_CONTEXT: SystemPromptContext = {
+	promptProfile: PromptProfile.Native,
 	cwd: "/workspace/project",
 	ide: "Test IDE",
 	providerInfo: {

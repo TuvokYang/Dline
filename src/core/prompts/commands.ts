@@ -49,17 +49,17 @@ export const explainChangesToolResponse = () => `${generateCommand("commands.exp
 
 /**
  * Generates the provider-independent deep-planning slash command response.
+ * @param promptProfile Final typed prompt profile resolved by the caller.
  * @param focusChainSettings Optional focus chain settings to include in the prompt
  * @param providerInfo Retained API provider input; prompt content does not branch on it.
  * @param enableNativeToolCalls Optional flag to determine if native tool calling is enabled
- * @param promptProfile Typed prompt profile supplied by the caller.
  * @returns The deep-planning prompt string with explicit runtime settings applied.
  */
 export const deepPlanningToolResponse = (
+	promptProfile: PromptProfile,
 	focusChainSettings?: { enabled: boolean },
 	providerInfo?: ApiProviderInfo,
 	enableNativeToolCalls?: boolean,
-	promptProfile?: PromptProfile,
 ) => {
-	return getDeepPlanningPrompt(focusChainSettings, providerInfo, enableNativeToolCalls, promptProfile)
+	return getDeepPlanningPrompt(promptProfile, focusChainSettings, providerInfo, enableNativeToolCalls)
 }

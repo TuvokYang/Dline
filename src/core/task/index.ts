@@ -81,6 +81,7 @@ import { USER_CONTENT_TAGS } from "@shared/messages/constants"
 import type { ReasoningConfig } from "@shared/proto/dline/provider/common"
 import { convertClineMessageToProto } from "@shared/proto-conversions/cline-message"
 import { PROFILE_PROVIDER_KEYS } from "@shared/providers/profile-model-info"
+import { resolvePromptProfile } from "@shared/resolve-prompt-profile"
 import type { Mode } from "@shared/storage/types"
 import { ClineDefaultTool, READ_ONLY_TOOLS } from "@shared/tools"
 import { ClineAskResponse } from "@shared/WebviewMessage"
@@ -2689,6 +2690,9 @@ export class Task {
 
 		const promptContext: SystemPromptContext = {
 			taskId: this.taskId,
+			promptProfile: resolvePromptProfile({
+				contextWindow: providerInfo.model.info.capabilities?.contextWindow,
+			}),
 			cwd: this.cwd,
 			ide,
 			providerInfo,

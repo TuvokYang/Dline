@@ -55,23 +55,6 @@ function emptyContext(taskId: string): TaskContextCache {
 }
 
 describe("SystemPromptCacheService", () => {
-	it("rejects missing PromptProfile before building or saving cache metadata", async () => {
-		const { promptProfile: _promptProfile, ...contextWithoutProfile } = promptContext
-		const service = new SystemPromptCacheService({
-			taskId: "task-1",
-			deps: {
-				getContext: async () => emptyContext("task-1"),
-				saveContext: async () => undefined,
-				collectCapabilities: async () => ({ mcp: [], skills: [], workflows: [], subagents: [] }),
-				buildSystemPrompt: async () => ({ systemPrompt: "missing profile prompt" }),
-			},
-		})
-
-		await expect(
-			service.refresh({ promptContext: contextWithoutProfile as SystemPromptContext, reason: "manual" }),
-		).rejects.toThrow("PromptProfile must be supplied explicitly")
-	})
-
 	it("creates and persists a task_start frozen prompt with capabilities", async () => {
 		let saved: TaskContextCache | undefined
 		const service = new SystemPromptCacheService({

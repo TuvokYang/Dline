@@ -41,12 +41,6 @@ const BASE_CONTEXT: SystemPromptContext = {
 }
 
 describe("canonical system prompt pipeline", () => {
-	it("rejects a missing PromptProfile instead of defaulting inside the Prompt domain", () => {
-		const { promptProfile: _promptProfile, ...context } = BASE_CONTEXT
-
-		expect(() => createSystemPromptConfig(context)).toThrowError("PromptProfile must be supplied explicitly")
-	})
-
 	it("projects the complete immutable SystemPromptConfig from typed PromptProfile input", () => {
 		const context = {
 			...BASE_CONTEXT,

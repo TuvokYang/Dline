@@ -10,7 +10,7 @@ import type { ClineDefaultTool } from "@/shared/tools"
 /** Complete runtime context consumed by profile prompt generators. */
 export interface SystemPromptContext {
 	readonly taskId?: string
-	readonly promptProfile?: PromptProfile
+	readonly promptProfile: PromptProfile
 	readonly providerInfo: ApiProviderInfo
 	readonly cwd?: string
 	readonly ide: string

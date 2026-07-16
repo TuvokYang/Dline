@@ -1,6 +1,18 @@
+import type { ApiProviderInfo } from "@core/api"
 import type { McpPromptResponse } from "@shared/mcp"
 import { expect } from "chai"
 import { formatMcpPromptResponse, McpPromptFetcher, parseSlashCommands } from "../index"
+
+function createProviderInfo(contextWindow?: number): ApiProviderInfo {
+	return {
+		providerId: "openai",
+		model: {
+			id: "test-model",
+			info: { capabilities: { contextWindow } },
+		},
+		mode: "act",
+	} as ApiProviderInfo
+}
 
 describe("slash-commands", () => {
 	describe("formatMcpPromptResponse", () => {
@@ -89,6 +101,43 @@ describe("slash-commands", () => {
 			}
 			const result = formatMcpPromptResponse(response)
 			expect(result).to.equal("[User]\n[Resource: file:///binary.bin]")
+		})
+	})
+
+	describe("parseSlashCommands profile resolution", () => {
+		it("selects the Lite deep-planning contract for a context window below 64K", async () => {
+			const result = await parseSlashCommands(
+				"<task>/deep-planning</task>",
+				{},
+				{},
+				"test-ulid",
+				undefined,
+				false,
+				createProviderInfo(63_999),
+			)
+
+			expect(result.processedText).to.include("This process has four distinct steps")
+			expect(result.processedText).to.not.include("This process has five distinct steps")
+		})
+
+		it("selects Native deep-planning at the 64K boundary", async () => {
+			const result = await parseSlashCommands(
+				"<task>/deep-planning</task>",
+				{},
+				{},
+				"test-ulid",
+				undefined,
+				false,
+				createProviderInfo(64_000),
+			)
+
+			expect(result.processedText).to.include("This process has five distinct steps")
+		})
+
+		it("uses Native when provider info is absent", async () => {
+			const result = await parseSlashCommands("<task>/deep-planning</task>", {}, {}, "test-ulid")
+
+			expect(result.processedText).to.include("This process has five distinct steps")
 		})
 	})
 

@@ -4,8 +4,8 @@ export enum PromptProfile {
 	Lite = "lite",
 }
 
-/** Require one exact typed profile at the Prompt domain boundary. */
-export function requirePromptProfile(profile: PromptProfile | undefined): PromptProfile {
+/** Validate one exact profile at an untrusted runtime boundary. */
+export function requirePromptProfile(profile: PromptProfile): PromptProfile {
 	if (profile !== PromptProfile.Native && profile !== PromptProfile.Lite) {
 		throw new Error("PromptProfile must be supplied explicitly")
 	}
