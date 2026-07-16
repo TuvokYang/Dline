@@ -2797,7 +2797,7 @@ export class Task {
 		const mode = this.taskSm.mode
 		const profileName = mode === "plan" ? apiConfig.planModeProfile : apiConfig.actModeProfile
 		const thinkingSummary = this.buildThinkingSummary()
-		Logger.info(`[Task] sending API request`, {
+		Logger.info(`[Task ${this.taskId}] sending API request`, {
 			taskId: this.taskId,
 			apiRequestCount: this.taskState.apiRequestCount,
 			mode,

@@ -5,6 +5,7 @@ import { PromptProfile } from "../../profiles/types"
 import type { SystemPromptContext } from "../../system-prompt/context"
 
 const BASE_CONTEXT = {
+	promptProfile: PromptProfile.Native,
 	providerInfo: { providerId: "openai", model: { id: "model", info: {} } },
 	enableNativeToolCalls: true,
 } as SystemPromptContext

@@ -2,8 +2,7 @@ import { getShell } from "@utils/shell"
 import type { ApiProviderInfo } from "@/core/api"
 import { CommandPromptGenerator } from "../../generators/CommandPromptGenerator"
 import { englishTemplateStore } from "../../i18n/en"
-import { selectPromptProfile } from "../../profiles/select-profile"
-import { PromptProfile } from "../../profiles/types"
+import { PromptProfile, requirePromptProfile } from "../../profiles/types"
 import { DEEP_PLANNING_VARIANTS } from "./variants"
 
 const commandGenerator = new CommandPromptGenerator(englishTemplateStore)
@@ -11,19 +10,21 @@ const commandGenerator = new CommandPromptGenerator(englishTemplateStore)
 /**
  * Generates a provider-independent deep-planning slash command response.
  * @param focusChainSettings Optional focus chain settings to include in the prompt
- * @param providerInfo Retained provider input; content generation does not branch on it.
+ * @param _providerInfo Retained provider input; content generation does not branch on it.
  * @param enableNativeToolCalls Optional flag to determine if native tool calling is enabled
+ * @param promptProfile Typed prompt profile supplied by the caller.
  * @returns The deep-planning prompt with shell, focus-chain, and transport values applied.
  */
 export function getDeepPlanningPrompt(
 	focusChainSettings?: { enabled: boolean },
-	providerInfo?: ApiProviderInfo,
+	_providerInfo?: ApiProviderInfo,
 	enableNativeToolCalls?: boolean,
+	promptProfile?: PromptProfile,
 ): string {
-	const profile = selectPromptProfile({ customPrompt: providerInfo?.customPrompt })
-	const variant = DEEP_PLANNING_VARIANTS.find((candidate) => candidate.id === profile)
+	const requiredProfile = requirePromptProfile(promptProfile)
+	const variant = DEEP_PLANNING_VARIANTS.find((candidate) => candidate.id === requiredProfile)
 	if (!variant) {
-		throw new Error(`Missing deep-planning variant for profile '${profile}'`)
+		throw new Error(`Missing deep-planning variant for profile '${requiredProfile}'`)
 	}
 	const isPowerShell = detectPowerShell(getShell())
 	if (variant.id === PromptProfile.Native) {

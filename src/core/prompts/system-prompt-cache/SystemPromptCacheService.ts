@@ -1,7 +1,7 @@
 import type { CollectCapabilitiesInput } from "@core/prompts/capabilities/CapabilitiesAggregator"
 import { collectCapabilities } from "@core/prompts/capabilities/CapabilitiesAggregator"
 import { renderCapabilitiesSection } from "@core/prompts/capabilities/CapabilitiesSection"
-import { selectPromptProfile } from "@core/prompts/profiles/select-profile"
+import { requirePromptProfile } from "@core/prompts/profiles/types"
 import type { SystemPromptContext } from "@core/prompts/system-prompt"
 import { getSystemPrompt } from "@core/prompts/system-prompt"
 import { getTaskContext, saveTaskContext } from "@core/storage/disk"
@@ -56,6 +56,7 @@ export class SystemPromptCacheService {
 	) => FrozenPromptBuilderInfo
 	private readonly now: () => number
 	private lastTools?: readonly ClineTool[]
+	private pendingGetOrCreate?: Promise<FrozenSystemPromptCache>
 
 	/**
 	 * Create a system prompt cache service for one task.
@@ -87,14 +88,16 @@ export class SystemPromptCacheService {
 	 * @param input Prompt context input.
 	 * @returns Frozen system prompt cache entry.
 	 */
-	public async getOrCreate(input: GetOrCreatePromptInput): Promise<FrozenSystemPromptCache> {
-		const context = await this.getContext(this.taskId)
-		const cached = context.systemPrompt?.frozen
-		if (cached) {
-			await this.restoreTools(input.promptContext, cached)
-			return cached
+	public getOrCreate(input: GetOrCreatePromptInput): Promise<FrozenSystemPromptCache> {
+		if (this.pendingGetOrCreate) return this.pendingGetOrCreate
+
+		const pending = this.loadOrCreate(input)
+		this.pendingGetOrCreate = pending
+		const clearPending = () => {
+			if (this.pendingGetOrCreate === pending) this.pendingGetOrCreate = undefined
 		}
-		return this.refresh({ promptContext: input.promptContext, reason: "task_start" })
+		pending.then(clearPending, clearPending)
+		return pending
 	}
 
 	/**
@@ -117,7 +120,6 @@ export class SystemPromptCacheService {
 			capabilitiesSection,
 		}
 		const built = await this.buildSystemPrompt(promptContext)
-		this.lastTools = built.tools
 		const now = this.now()
 		const frozen: FrozenSystemPromptCache = {
 			text: built.systemPrompt,
@@ -136,19 +138,19 @@ export class SystemPromptCacheService {
 				frozen,
 			},
 		})
+		this.lastTools = built.tools
 		return frozen
 	}
 
-	/** Restore the exact provider tools frozen with the cached prompt text. */
-	private async restoreTools(_context: SystemPromptContext, cached: FrozenSystemPromptCache): Promise<void> {
-		if ("tools" in cached) {
+	/** Load a valid frozen pair or rebuild and persist one complete replacement. */
+	private async loadOrCreate(input: GetOrCreatePromptInput): Promise<FrozenSystemPromptCache> {
+		const context = await this.getContext(this.taskId)
+		const cached = context.systemPrompt?.frozen
+		if (cached) {
 			this.lastTools = cached.tools ?? undefined
-			return
+			return cached
 		}
-		if (cached.promptBuilder.nativeTools) {
-			throw new Error("Legacy native prompt cache is missing exact frozen tools; refresh the system prompt cache")
-		}
-		this.lastTools = undefined
+		return this.refresh({ promptContext: input.promptContext, reason: "task_start" })
 	}
 
 	/**
@@ -172,7 +174,7 @@ export class SystemPromptCacheService {
 		return {
 			providerId: context.providerInfo.providerId,
 			modelId: context.providerInfo.model.id,
-			profile: selectPromptProfile({ customPrompt: context.providerInfo.customPrompt }),
+			profile: requirePromptProfile(context.promptProfile),
 			nativeTools: (tools?.length ?? 0) > 0,
 		}
 	}

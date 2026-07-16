@@ -1,4 +1,5 @@
 import type { TaskContextCache } from "@core/storage/task-context-types"
+import type { ClineTool } from "@shared/tools"
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
@@ -29,6 +30,18 @@ afterEach(async () => {
  * @param taskId Task identifier for the fixture.
  * @returns Task context cache fixture with a frozen prompt.
  */
+function buildTool(name: string): ClineTool {
+	return {
+		type: "function",
+		function: {
+			name,
+			description: `${name} description`,
+			strict: false,
+			parameters: { type: "object", properties: {}, required: [], additionalProperties: false },
+		},
+	}
+}
+
 function buildContext(taskId: string): TaskContextCache {
 	return {
 		schemaVersion: 1,
@@ -38,7 +51,7 @@ function buildContext(taskId: string): TaskContextCache {
 		systemPrompt: {
 			frozen: {
 				text: "frozen prompt\n\n# Capabilities",
-				tools: [{ type: "function", function: { name: "frozen_tool" } }],
+				tools: [buildTool("frozen_tool")],
 				capabilitiesHash: "sha256:test",
 				createdAt: 100,
 				refreshedAt: 200,
@@ -47,7 +60,7 @@ function buildContext(taskId: string): TaskContextCache {
 					providerId: "test-provider",
 					modelId: "test-model",
 					profile: "native",
-					nativeTools: false,
+					nativeTools: true,
 				},
 			},
 		},
@@ -80,6 +93,8 @@ describe("task context cache", () => {
 		["string", "not-an-array"],
 		["empty-object", [{}]],
 		["null-entry", [null]],
+		["malformed-openai-schema", [{ type: "function", function: { name: "read_file", parameters: "invalid" } }]],
+		["malformed-anthropic-schema", [{ name: "read_file", input_schema: "invalid" }]],
 	] as const)("rejects malformed frozen provider tools: %s", async (caseId, tools) => {
 		const taskId = `task-malformed-tools-${caseId}`
 		const filePath = path.join(testDir, "tasks", taskId, GlobalFileNames.taskContext)
@@ -90,6 +105,99 @@ describe("task context cache", () => {
 			JSON.stringify({
 				...malformed,
 				systemPrompt: { frozen: { ...malformed.systemPrompt?.frozen, tools } },
+			}),
+			"utf8",
+		)
+
+		const actual = await getTaskContext(taskId)
+
+		expect(actual.systemPrompt).toBeUndefined()
+	})
+
+	it.each([
+		["tools", (frozen: Record<string, unknown>) => delete frozen.tools],
+		["text", (frozen: Record<string, unknown>) => delete frozen.text],
+		["capabilities-hash", (frozen: Record<string, unknown>) => delete frozen.capabilitiesHash],
+		["created-at", (frozen: Record<string, unknown>) => delete frozen.createdAt],
+		["refreshed-at", (frozen: Record<string, unknown>) => delete frozen.refreshedAt],
+		["refresh-reason", (frozen: Record<string, unknown>) => delete frozen.refreshReason],
+		["prompt-builder", (frozen: Record<string, unknown>) => delete frozen.promptBuilder],
+	] as const)("rejects frozen cache missing required field: %s", async (caseId, removeField) => {
+		const taskId = `task-missing-${caseId}`
+		const filePath = path.join(testDir, "tasks", taskId, GlobalFileNames.taskContext)
+		await fs.mkdir(path.dirname(filePath), { recursive: true })
+		const malformed = buildContext(taskId)
+		const frozen = { ...malformed.systemPrompt?.frozen } as Record<string, unknown>
+		removeField(frozen)
+		await fs.writeFile(filePath, JSON.stringify({ ...malformed, systemPrompt: { frozen } }), "utf8")
+
+		const actual = await getTaskContext(taskId)
+
+		expect(actual.systemPrompt).toBeUndefined()
+	})
+
+	it.each([
+		["empty-text", { text: "" }],
+		["invalid-tools", { tools: undefined }],
+		["empty-capabilities-hash", { capabilitiesHash: "" }],
+		["non-finite-created-at", { createdAt: "NaN" }],
+		["non-finite-refreshed-at", { refreshedAt: null }],
+		["invalid-refresh-reason", { refreshReason: "automatic" }],
+		[
+			"invalid-provider-id",
+			{ promptBuilder: { providerId: "", modelId: "test-model", profile: "native", nativeTools: false } },
+		],
+		[
+			"invalid-model-id",
+			{ promptBuilder: { providerId: "test-provider", modelId: "", profile: "native", nativeTools: false } },
+		],
+		[
+			"invalid-profile",
+			{ promptBuilder: { providerId: "test-provider", modelId: "test-model", profile: "compact", nativeTools: false } },
+		],
+		[
+			"invalid-native-tools",
+			{ promptBuilder: { providerId: "test-provider", modelId: "test-model", profile: "native", nativeTools: "yes" } },
+		],
+	] as const)("rejects malformed required frozen value: %s", async (caseId, override) => {
+		const taskId = `task-malformed-${caseId}`
+		const filePath = path.join(testDir, "tasks", taskId, GlobalFileNames.taskContext)
+		await fs.mkdir(path.dirname(filePath), { recursive: true })
+		const malformed = buildContext(taskId)
+		await fs.writeFile(
+			filePath,
+			JSON.stringify({
+				...malformed,
+				systemPrompt: { frozen: { ...malformed.systemPrompt?.frozen, ...override } },
+			}),
+			"utf8",
+		)
+
+		const actual = await getTaskContext(taskId)
+
+		expect(actual.systemPrompt).toBeUndefined()
+	})
+
+	it.each([
+		["native-tools-true-with-null", null, true],
+		["native-tools-true-with-empty-array", [], true],
+		["native-tools-false-with-array", [buildTool("unexpected_native_tool")], false],
+	] as const)("rejects inconsistent frozen tools metadata: %s", async (caseId, tools, nativeTools) => {
+		const taskId = `task-inconsistent-${caseId}`
+		const filePath = path.join(testDir, "tasks", taskId, GlobalFileNames.taskContext)
+		await fs.mkdir(path.dirname(filePath), { recursive: true })
+		const malformed = buildContext(taskId)
+		await fs.writeFile(
+			filePath,
+			JSON.stringify({
+				...malformed,
+				systemPrompt: {
+					frozen: {
+						...malformed.systemPrompt?.frozen,
+						tools,
+						promptBuilder: { ...malformed.systemPrompt?.frozen?.promptBuilder, nativeTools },
+					},
+				},
 			}),
 			"utf8",
 		)

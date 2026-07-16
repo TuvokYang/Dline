@@ -2,6 +2,7 @@ import type { ApiProviderInfo } from "@/core/api"
 import { getDeepPlanningPrompt } from "./commands/deep-planning"
 import { CommandPromptGenerator } from "./generators/CommandPromptGenerator"
 import { englishTemplateStore } from "./i18n/en"
+import type { PromptProfile } from "./profiles/types"
 import type { PromptEnv } from "./template/types"
 
 const commandGenerator = new CommandPromptGenerator(englishTemplateStore)
@@ -51,12 +52,14 @@ export const explainChangesToolResponse = () => `${generateCommand("commands.exp
  * @param focusChainSettings Optional focus chain settings to include in the prompt
  * @param providerInfo Retained API provider input; prompt content does not branch on it.
  * @param enableNativeToolCalls Optional flag to determine if native tool calling is enabled
+ * @param promptProfile Typed prompt profile supplied by the caller.
  * @returns The deep-planning prompt string with explicit runtime settings applied.
  */
 export const deepPlanningToolResponse = (
 	focusChainSettings?: { enabled: boolean },
 	providerInfo?: ApiProviderInfo,
 	enableNativeToolCalls?: boolean,
+	promptProfile?: PromptProfile,
 ) => {
-	return getDeepPlanningPrompt(focusChainSettings, providerInfo, enableNativeToolCalls)
+	return getDeepPlanningPrompt(focusChainSettings, providerInfo, enableNativeToolCalls, promptProfile)
 }

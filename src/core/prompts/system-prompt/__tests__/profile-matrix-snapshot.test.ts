@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest"
 
 import { renderCapabilitiesSection } from "../../capabilities/CapabilitiesSection"
 import { SystemPromptGenerator } from "../../generators/SystemPromptGenerator"
+import { PromptProfile } from "../../profiles/types"
 import type { SystemPromptContext } from "../context"
 import {
 	PROFILE_SNAPSHOT_CASES,
@@ -85,10 +86,10 @@ function createContext(
 	const context = {
 		...BASE_CONTEXT,
 		...overrides,
+		promptProfile: profile === "lite" ? PromptProfile.Lite : PromptProfile.Native,
 		providerInfo: {
 			...BASE_CONTEXT.providerInfo,
 			...overrides.providerInfo,
-			customPrompt: profile === "lite" ? "lite" : undefined,
 		},
 		enableNativeToolCalls: transport === "native",
 	} as SystemPromptContext

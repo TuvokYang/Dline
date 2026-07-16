@@ -5,6 +5,7 @@ import { beforeAll, describe, expect, it } from "vitest"
 
 import type { ApiProviderInfo } from "@/core/api"
 import { condenseToolResponse, deepPlanningToolResponse, newTaskToolResponse } from "../../commands"
+import { PromptProfile } from "../../profiles/types"
 import { assertPromptContent } from "./snapshot-content"
 
 const UPDATE_NEW_SNAPSHOTS = process.env.UPDATE_NEW_PROMPT_SNAPSHOTS === "true"
@@ -26,8 +27,9 @@ const COMMAND_SNAPSHOT_CASES: readonly CommandSnapshotCase[] = [
 				generate: () =>
 					deepPlanningToolResponse(
 						{ enabled: focusCase === "focus-on" },
-						createProviderInfo(profile),
+						createProviderInfo(),
 						transport === "native",
+						profile === "lite" ? PromptProfile.Lite : PromptProfile.Native,
 					),
 			})),
 		),
@@ -42,12 +44,11 @@ const COMMAND_SNAPSHOT_CASES: readonly CommandSnapshotCase[] = [
 	})),
 ]
 
-function createProviderInfo(profile: (typeof PROFILES)[number]): ApiProviderInfo {
+function createProviderInfo(): ApiProviderInfo {
 	return {
 		providerId: "openai",
 		model: { id: "explicit-command-snapshot", info: {} },
 		mode: "act",
-		customPrompt: profile === "lite" ? "lite" : undefined,
 	} as unknown as ApiProviderInfo
 }
 

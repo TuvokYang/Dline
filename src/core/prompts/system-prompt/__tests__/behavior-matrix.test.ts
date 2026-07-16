@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { SystemPromptGenerator } from "../../generators/SystemPromptGenerator"
 import { ToolPromptGenerator } from "../../generators/ToolPromptGenerator"
+import { PromptProfile } from "../../profiles/types"
 import type { SystemPromptContext } from "../context"
 
 const CONNECTED_MCP_HUB = {
@@ -47,14 +48,14 @@ function toolNames(tools: ReturnType<ToolPromptGenerator["generate"]>): readonly
 }
 
 /** Generates one explicit profile/transport matrix candidate. */
-async function generate(profile: "native" | "lite", transport: "native" | "xml", overrides: Partial<SystemPromptContext> = {}) {
+async function generate(profile: PromptProfile, transport: "native" | "xml", overrides: Partial<SystemPromptContext> = {}) {
 	const context = {
 		...BASE_CONTEXT,
 		...overrides,
+		promptProfile: profile,
 		providerInfo: {
 			...BASE_CONTEXT.providerInfo,
 			...overrides.providerInfo,
-			customPrompt: profile === "lite" ? "lite" : undefined,
 		},
 		enableNativeToolCalls: transport === "native",
 	} as SystemPromptContext
@@ -68,24 +69,24 @@ function exposes(result: Awaited<ReturnType<typeof generate>>, transport: "nativ
 
 describe("Native/Lite transport and capability behavior matrix", () => {
 	it.each([
-		["native", "native"],
-		["native", "xml"],
-		["lite", "native"],
-		["lite", "xml"],
+		[PromptProfile.Native, "native"],
+		[PromptProfile.Native, "xml"],
+		[PromptProfile.Lite, "native"],
+		[PromptProfile.Lite, "xml"],
 	] as const)("preserves exact profile restrictions for %s/%s", async (profile, transport) => {
 		const result = await generate(profile, transport)
 
 		expect(result.profile).toBe(profile)
 		expect(result.warnings).toEqual([])
 		expect(exposes(result, transport, "read_file")).toBe(true)
-		expect(exposes(result, transport, "browser_action")).toBe(profile === "native")
-		expect(exposes(result, transport, "use_mcp_tool")).toBe(profile === "native")
-		expect(exposes(result, transport, "web_search")).toBe(profile === "native")
+		expect(exposes(result, transport, "browser_action")).toBe(profile === PromptProfile.Native)
+		expect(exposes(result, transport, "use_mcp_tool")).toBe(profile === PromptProfile.Native)
+		expect(exposes(result, transport, "web_search")).toBe(profile === PromptProfile.Native)
 	})
 
 	it.each(["native", "xml"] as const)("applies browser support and disable gates for Native/%s", async (transport) => {
-		const unsupported = await generate("native", transport, { supportsBrowserUse: false })
-		const disabled = await generate("native", transport, {
+		const unsupported = await generate(PromptProfile.Native, transport, { supportsBrowserUse: false })
+		const disabled = await generate(PromptProfile.Native, transport, {
 			browserSettings: { viewport: { width: 1280, height: 800 }, disableToolUse: true },
 		})
 
@@ -94,7 +95,7 @@ describe("Native/Lite transport and capability behavior matrix", () => {
 	})
 
 	it.each(["native", "xml"] as const)("requires a connected enabled MCP server for Native/%s", async (transport) => {
-		const disconnected = await generate("native", transport, {
+		const disconnected = await generate(PromptProfile.Native, transport, {
 			mcpHub: {
 				getServers: () => [
 					{
@@ -107,7 +108,7 @@ describe("Native/Lite transport and capability behavior matrix", () => {
 				],
 			} as unknown as SystemPromptContext["mcpHub"],
 		})
-		const disabled = await generate("native", transport, {
+		const disabled = await generate(PromptProfile.Native, transport, {
 			mcpHub: {
 				getServers: () => [
 					{
@@ -130,7 +131,7 @@ describe("Native/Lite transport and capability behavior matrix", () => {
 		"native",
 		"xml",
 	] as const)("preserves focus, subagent, web, CLI, yolo, and parallel gates for Native/%s", async (transport) => {
-		const result = await generate("native", transport, {
+		const result = await generate(PromptProfile.Native, transport, {
 			focusChainSettings: { enabled: false, remindClineInterval: 0 },
 			subagentsEnabled: false,
 			clineWebToolsEnabled: false,

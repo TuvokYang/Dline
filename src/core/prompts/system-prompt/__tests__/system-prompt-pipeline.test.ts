@@ -9,6 +9,7 @@ import { SYSTEM_SECTION_IDS } from "../templates/system-template-registry"
 import { createNativeSystemSections } from "../variants/section-content"
 
 const BASE_CONTEXT: SystemPromptContext = {
+	promptProfile: PromptProfile.Native,
 	cwd: "/workspace/project",
 	ide: "Test IDE",
 	providerInfo: {
@@ -40,10 +41,16 @@ const BASE_CONTEXT: SystemPromptContext = {
 }
 
 describe("canonical system prompt pipeline", () => {
-	it("projects the complete immutable SystemPromptConfig from explicit context", () => {
+	it("rejects a missing PromptProfile instead of defaulting inside the Prompt domain", () => {
+		const { promptProfile: _promptProfile, ...context } = BASE_CONTEXT
+
+		expect(() => createSystemPromptConfig(context)).toThrowError("PromptProfile must be supplied explicitly")
+	})
+
+	it("projects the complete immutable SystemPromptConfig from typed PromptProfile input", () => {
 		const context = {
 			...BASE_CONTEXT,
-			providerInfo: { ...BASE_CONTEXT.providerInfo, customPrompt: "lite" },
+			promptProfile: PromptProfile.Lite,
 		}
 		const config = createSystemPromptConfig(context)
 

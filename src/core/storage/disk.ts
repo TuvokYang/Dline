@@ -1,6 +1,6 @@
 import { Anthropic } from "@anthropic-ai/sdk"
 import { EnvironmentMetadataEntry, TaskMetadata } from "@core/context/context-tracking/ContextTrackerTypes"
-import type { TaskContextCache } from "@core/storage/task-context-types"
+import type { FrozenPromptBuilderInfo, TaskContextCache } from "@core/storage/task-context-types"
 import { execa } from "@packages/execa"
 import { ClineMessage } from "@shared/ExtensionMessage"
 import { envFlagEnabled } from "@shared/env"
@@ -566,27 +566,71 @@ function isJsonObject(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value)
 }
 
+function isNonEmptyString(value: unknown): value is string {
+	return typeof value === "string" && value.length > 0
+}
+
 function isFrozenTool(value: unknown): boolean {
 	if (!isJsonObject(value)) return false
 	if (value.type === "function") {
-		return isJsonObject(value.function) && typeof value.function.name === "string"
+		return (
+			isJsonObject(value.function) &&
+			isNonEmptyString(value.function.name) &&
+			typeof value.function.description === "string" &&
+			isJsonObject(value.function.parameters) &&
+			typeof value.function.strict === "boolean"
+		)
 	}
-	return typeof value.name === "string"
+	if ("type" in value || !isNonEmptyString(value.name) || typeof value.description !== "string") return false
+	if ("input_schema" in value) return isJsonObject(value.input_schema)
+	if ("parameters" in value) return isJsonObject(value.parameters)
+	return false
+}
+
+function isPromptBuilderInfo(value: unknown): value is FrozenPromptBuilderInfo {
+	return (
+		isJsonObject(value) &&
+		isNonEmptyString(value.providerId) &&
+		isNonEmptyString(value.modelId) &&
+		(value.profile === "native" || value.profile === "lite") &&
+		typeof value.nativeTools === "boolean"
+	)
+}
+
+function isFrozenSystemPromptCache(value: unknown): boolean {
+	if (!isJsonObject(value)) return false
+	const toolsValid = value.tools === null || (Array.isArray(value.tools) && value.tools.every(isFrozenTool))
+	if (!toolsValid || !isPromptBuilderInfo(value.promptBuilder)) return false
+	const hasNativeTools = Array.isArray(value.tools) && value.tools.length > 0
+	return (
+		isNonEmptyString(value.text) &&
+		"tools" in value &&
+		value.promptBuilder.nativeTools === hasNativeTools &&
+		isNonEmptyString(value.capabilitiesHash) &&
+		typeof value.createdAt === "number" &&
+		Number.isFinite(value.createdAt) &&
+		typeof value.refreshedAt === "number" &&
+		Number.isFinite(value.refreshedAt) &&
+		(value.refreshReason === "task_start" || value.refreshReason === "manual" || value.refreshReason === "post_compaction")
+	)
 }
 
 function isTaskContextCache(value: unknown, taskId: string): value is TaskContextCache {
-	if (typeof value !== "object" || value === null) {
+	if (!isJsonObject(value)) return false
+	if (
+		value.schemaVersion !== 1 ||
+		value.taskId !== taskId ||
+		typeof value.createdAt !== "number" ||
+		!Number.isFinite(value.createdAt) ||
+		typeof value.updatedAt !== "number" ||
+		!Number.isFinite(value.updatedAt)
+	) {
 		return false
 	}
-	const candidate = value as Partial<TaskContextCache>
-	if (candidate.schemaVersion !== 1 || candidate.taskId !== taskId) {
-		return false
-	}
-	const frozen = candidate.systemPrompt?.frozen
-	if (!frozen || !("tools" in frozen)) {
-		return true
-	}
-	return frozen.tools === null || (Array.isArray(frozen.tools) && frozen.tools.every(isFrozenTool))
+	if (!("systemPrompt" in value)) return true
+	if (!isJsonObject(value.systemPrompt)) return false
+	if (!("frozen" in value.systemPrompt)) return true
+	return isFrozenSystemPromptCache(value.systemPrompt.frozen)
 }
 
 /**

@@ -43,10 +43,7 @@ const TEST_CONTEXT: SystemPromptContext = {
 async function generateProfile(profile: PromptProfile): Promise<string> {
 	const result = await new SystemPromptGenerator().generate({
 		...TEST_CONTEXT,
-		providerInfo: {
-			...TEST_CONTEXT.providerInfo,
-			customPrompt: profile === PromptProfile.Lite ? "lite" : undefined,
-		},
+		promptProfile: profile,
 	})
 
 	expect(result.profile).toBe(profile)

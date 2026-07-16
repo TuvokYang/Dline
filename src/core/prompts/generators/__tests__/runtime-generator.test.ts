@@ -79,6 +79,7 @@ describe("CommandPromptGenerator", () => {
 
 describe("ToolPromptGenerator", () => {
 	const context = {
+		promptProfile: PromptProfile.Native,
 		providerInfo: { providerId: "openai", model: { id: "model", info: {} } },
 		enableNativeToolCalls: true,
 	} as SystemPromptContext

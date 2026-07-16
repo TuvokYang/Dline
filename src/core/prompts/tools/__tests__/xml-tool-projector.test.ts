@@ -5,6 +5,7 @@ import { PromptProfile } from "../../profiles/types"
 import type { SystemPromptContext } from "../../system-prompt/context"
 
 const BASE_CONTEXT = {
+	promptProfile: PromptProfile.Native,
 	cwd: "/workspace/project",
 	ide: "Test IDE",
 	providerInfo: {

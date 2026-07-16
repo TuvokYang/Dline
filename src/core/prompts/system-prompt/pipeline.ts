@@ -1,6 +1,5 @@
 import { getPrompt } from "../i18n"
-import { selectPromptProfile } from "../profiles/select-profile"
-import { PromptProfile } from "../profiles/types"
+import { PromptProfile, requirePromptProfile } from "../profiles/types"
 import { PromptTemplate } from "../template/PromptTemplate"
 import type { EnvRule, PromptContract, PromptEnv, PromptOutput } from "../template/types"
 import { assemblePromptFragments } from "./assembly/prompt-fragment-assembler"
@@ -63,7 +62,7 @@ export function createSystemPromptConfig(context: SystemPromptContext): SystemPr
 
 	return Object.freeze({
 		templateId: "native-next-gen-compatible",
-		variant: selectPromptProfile({ customPrompt: context.providerInfo.customPrompt }),
+		variant: requirePromptProfile(context.promptProfile),
 		transport: context.enableNativeToolCalls === true ? "native" : "xml",
 		parallelTools: context.enableParallelToolCalling === true,
 		mcpEnabled: servers.some((server) => server.status === "connected" && server.disabled !== true),

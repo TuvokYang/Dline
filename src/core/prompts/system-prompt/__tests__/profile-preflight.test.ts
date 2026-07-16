@@ -7,6 +7,7 @@ import { PromptScanner } from "../../template/PromptScanner"
 import type { SystemPromptContext } from "../context"
 
 const BASE_CONTEXT: SystemPromptContext = {
+	promptProfile: PromptProfile.Native,
 	cwd: "/workspace/project",
 	ide: "Test IDE",
 	providerInfo: {
@@ -45,7 +46,7 @@ function toolNames(tools: Awaited<ReturnType<ToolPromptGenerator["generate"]>>):
 }
 
 describe("profile facade preflight", () => {
-	it("generates Native by default with the complete established section content and ordered tools", async () => {
+	it("generates explicit Native with the complete established section content and ordered tools", async () => {
 		const result = await new SystemPromptGenerator().generate(BASE_CONTEXT)
 
 		expect(result.profile).toBe(PromptProfile.Native)
@@ -85,7 +86,8 @@ describe("profile facade preflight", () => {
 	it("selects Lite only for the exact explicit value and enforces restricted tools", async () => {
 		const context: SystemPromptContext = {
 			...BASE_CONTEXT,
-			providerInfo: { ...BASE_CONTEXT.providerInfo, customPrompt: "lite" },
+			providerInfo: BASE_CONTEXT.providerInfo,
+			promptProfile: PromptProfile.Lite,
 		}
 		const result = await new SystemPromptGenerator().generate(context)
 		const names = toolNames(result.tools)
@@ -184,12 +186,14 @@ describe("profile facade preflight", () => {
 			{ ...BASE_CONTEXT, enableNativeToolCalls: false },
 			{
 				...BASE_CONTEXT,
-				providerInfo: { ...BASE_CONTEXT.providerInfo, customPrompt: "lite" },
+				providerInfo: BASE_CONTEXT.providerInfo,
+				promptProfile: PromptProfile.Lite,
 			},
 			{
 				...BASE_CONTEXT,
 				enableNativeToolCalls: false,
-				providerInfo: { ...BASE_CONTEXT.providerInfo, customPrompt: "lite" },
+				providerInfo: BASE_CONTEXT.providerInfo,
+				promptProfile: PromptProfile.Lite,
 			},
 		]
 

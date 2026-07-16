@@ -1,4 +1,5 @@
 import type { CapabilityToggleState } from "@core/prompts/capabilities/CapabilitiesAggregator"
+import type { PromptProfile } from "@core/prompts/profiles/types"
 import type { ApiProviderInfo } from "@/core/api"
 import type { McpHub } from "@/services/mcp/McpHub"
 import type { BrowserSettings } from "@/shared/BrowserSettings"
@@ -9,6 +10,7 @@ import type { ClineDefaultTool } from "@/shared/tools"
 /** Complete runtime context consumed by profile prompt generators. */
 export interface SystemPromptContext {
 	readonly taskId?: string
+	readonly promptProfile?: PromptProfile
 	readonly providerInfo: ApiProviderInfo
 	readonly cwd?: string
 	readonly ide: string

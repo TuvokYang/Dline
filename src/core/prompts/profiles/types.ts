@@ -4,7 +4,10 @@ export enum PromptProfile {
 	Lite = "lite",
 }
 
-/** Explicit inputs accepted by prompt profile selection. */
-export interface PromptProfileInput {
-	readonly customPrompt?: string
+/** Require one exact typed profile at the Prompt domain boundary. */
+export function requirePromptProfile(profile: PromptProfile | undefined): PromptProfile {
+	if (profile !== PromptProfile.Native && profile !== PromptProfile.Lite) {
+		throw new Error("PromptProfile must be supplied explicitly")
+	}
+	return profile
 }
