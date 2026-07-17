@@ -8,6 +8,26 @@ interface TailFacts {
 	answeredDlineTids: Set<string>
 }
 
+/** Repair snapshots written with history.length instead of the assistant message index. */
+function reconcileAssistantApiIndex(snapshot: TaskSnapshot, input: ResumeInput): void {
+	const turn = snapshot.turn
+	if (!turn || !snapshot.anchor) return
+
+	const turnDlineTids = new Set(turn.blocks.map((block) => block.dlineTid))
+	const tailOffset = input.apiTail.findIndex((message) => {
+		if (message.role !== "assistant" || !Array.isArray(message.content)) return false
+		const messageDlineTids = new Set(
+			message.content
+				.filter((block) => block.type === "tool_use" && typeof block.dline_tid === "string")
+				.map((block) => block.dline_tid as string),
+		)
+		return turnDlineTids.size > 0 && [...turnDlineTids].every((dlineTid) => messageDlineTids.has(dlineTid))
+	})
+	if (tailOffset >= 0) {
+		turn.assistantApiIndex = snapshot.anchor.apiIndex + 1 + tailOffset
+	}
+}
+
 /** Clone a strict snapshot through its canonical hydration boundary. */
 function cloneSnapshot(snapshot: TaskSnapshot): TaskSnapshot {
 	const state = hydrateSnapshot(snapshot)
@@ -94,6 +114,8 @@ export function reconcileResume(input: ResumeInput): ResumeResult {
 	if (next.interaction?.status === "awaiting" || next.interaction?.status === "resolving") {
 		return { snapshot: next, entry: selectAwaitingResumeEntry(next), diagnostics: [] }
 	}
+
+	reconcileAssistantApiIndex(next, input)
 
 	if (next.phase === TaskPhase.CANCELLING || next.phase === TaskPhase.PAUSED) {
 		next.phase = TaskPhase.PAUSED

@@ -192,6 +192,26 @@ describe("reconcileResume", () => {
 		expect(result.snapshot.turn?.blocks[0]?.phase).toBe(BlockPhase.COMPLETED)
 	})
 
+	it("repairs an off-by-one assistant index from a persisted tool turn", () => {
+		const taskSnapshot = snapshot({
+			blocks: [{ dlineTid: TID, phase: BlockPhase.AUTO_EXECUTING }],
+		})
+		taskSnapshot.apiIndex = 0
+		taskSnapshot.anchor = { apiIndex: 0, turnId: TURN_ID }
+		if (taskSnapshot.turn) taskSnapshot.turn.assistantApiIndex = 2
+
+		const result = reconcileResume(input(taskSnapshot, [], [assistantTool()]))
+
+		expect(result.entry).toEqual({
+			type: "replay_pending_blocks",
+			turnId: TURN_ID,
+			dlineTids: [TID],
+			answeredDlineTids: [],
+		})
+		expect(result.snapshot.turn?.assistantApiIndex).toBe(1)
+		expect(result.diagnostics).toEqual([])
+	})
+
 	it("preserves rejected and skipped blocks while replaying remaining work", () => {
 		const taskSnapshot = snapshot({
 			blocks: [

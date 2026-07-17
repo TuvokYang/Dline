@@ -284,6 +284,73 @@ describe("Task.processNativeToolCalls", () => {
 		expect(fakeTask.taskState.currentStreamingContentIndex).toBe(0)
 	})
 
+	it("records the persisted assistant message index when creating a resumable turn", async () => {
+		const completeTool: ToolUse = {
+			type: "tool_use",
+			name: ClineDefaultTool.QNA_RESPOND,
+			params: { response: "Hello" },
+			partial: false,
+			isNativeToolCall: true,
+			dline_tid: "dline-qna",
+			ts: 400,
+		}
+		let runtimeBlock = {
+			dlineTid: "dline-qna",
+			callId: "call-qna",
+			toolName: ClineDefaultTool.QNA_RESPOND,
+			requiresApproval: false,
+			conversationHistoryIndex: 1,
+			phase: "streaming",
+		}
+		let runtimeTurn: { turnId: string; blocks: (typeof runtimeBlock)[] } | undefined
+		const dispatchRuntime = vi.fn(async (event: { type: string; turnId?: string }) => {
+			if (event.type === "TURN_CREATED") {
+				runtimeTurn = { turnId: event.turnId ?? "", blocks: [runtimeBlock] }
+			}
+			if (event.type === "BLOCK_EXECUTION_STARTED") {
+				runtimeBlock = { ...runtimeBlock, phase: "auto_executing" }
+				runtimeTurn = runtimeTurn ? { ...runtimeTurn, blocks: [runtimeBlock] } : runtimeTurn
+			}
+			if (event.type === "BLOCK_EXECUTION_COMPLETED") {
+				runtimeBlock = { ...runtimeBlock, phase: "completed" }
+				runtimeTurn = runtimeTurn ? { ...runtimeTurn, blocks: [runtimeBlock] } : runtimeTurn
+			}
+			return { accepted: true }
+		})
+		const fakeTask = {
+			taskId: "task-native-qna",
+			initialCheckpointCommitPromise: undefined,
+			reRenderUpdatedPartialBlocks: async () => undefined,
+			isParallelToolCallingEnabled: () => true,
+			dispatchRuntime,
+			taskController: {
+				buildTurn: vi.fn(),
+				getBlocks: () => [runtimeBlock],
+				hasAnyRejection: () => false,
+				shouldSkip: () => false,
+			},
+			toolExecutor: { isBlockApproved: () => true },
+			taskRuntime: { getState: () => ({ phase: "streaming", turn: runtimeTurn }) },
+			messageStateHandler: { apiConversationHistory: [{ role: "user" }, { role: "assistant" }] },
+			taskState: {
+				abort: false,
+				assistantMessageContent: [completeTool] as AssistantMessageContent[],
+				currentStreamingContentIndex: 0,
+				didAlreadyUseTool: false,
+				didCompleteReadingStream: true,
+				lastRenderedPartialByTs: new Map<number, string>(),
+				partialToolLifecycleByTs: new Map<number, "partial-shown" | "complete-running" | "complete-done">(),
+				presentAssistantMessageHasPendingUpdates: false,
+				presentAssistantMessageLocked: false,
+				userMessageContentReady: false,
+			},
+		}
+
+		await expect(Task.prototype.presentAssistantMessage.call(fakeTask as never)).resolves.toBeUndefined()
+
+		expect(dispatchRuntime).toHaveBeenCalledWith(expect.objectContaining({ type: "TURN_CREATED", assistantApiIndex: 1 }))
+	})
+
 	it("moves turn-ending native tool calls after regular tool calls", async () => {
 		const clineMessages: ClineMessage[] = []
 		const toolBlocks: ToolUse[] = [

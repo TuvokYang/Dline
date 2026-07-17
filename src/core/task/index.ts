@@ -3209,7 +3209,7 @@ export class Task {
 							const created = await this.dispatchRuntime({
 								type: "TURN_CREATED",
 								turnId,
-								assistantApiIndex: this.messageStateHandler.apiConversationHistory.length,
+								assistantApiIndex: this.messageStateHandler.apiConversationHistory.length - 1,
 								mode: this.isParallelToolCallingEnabled() ? "parallel" : "serial",
 								blocks: toolBlocks.map(({ phase: _phase, ...candidate }) => candidate),
 							})
