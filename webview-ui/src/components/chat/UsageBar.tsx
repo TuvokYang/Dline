@@ -25,9 +25,10 @@ const formatCurrency = (currency: string | undefined, amount: number): string =>
 	}
 }
 
-const formatQuota = (label: string, used: number, limit: number): string => {
-	const percent = limit > 0 ? (used / limit) * 100 : used
-	return `${label} ${Math.max(0, Math.min(100, percent)).toFixed(0)}%`
+const formatQuotaRemaining = (label: string, used: number, limit: number): string => {
+	const remaining = Math.max(0, limit - used)
+	const percent = limit > 0 ? (remaining / limit) * 100 : 0
+	return `${label} ${Math.max(0, Math.min(100, percent)).toFixed(0)}% left`
 }
 
 const formatReset = (resetAt: string | undefined): string | undefined => {
@@ -63,14 +64,15 @@ export const UsageBar = () => {
 		return (
 			<span className={baseClass}>
 				<span className="font-medium text-foreground">
-					{quotas.map((quota) => formatQuota(quota.label, quota.used, quota.limit)).join(" · ")}
+					{quotas.map((quota) => formatQuotaRemaining(quota.label, quota.used, quota.limit)).join(" · ")}
 				</span>
 				<span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 hidden group-hover:inline-flex flex-col gap-0.5 bg-dropdown-background border border-editor-group-border rounded-[3px] px-2 py-1 shadow-lg z-50 text-[10px] whitespace-nowrap">
 					{quotas.map((quota) => {
 						const reset = formatReset(quota.resetAt)
 						return (
 							<span key={`${quota.type}:${quota.label}`}>
-								{formatQuota(quota.label, quota.used, quota.limit)} used{reset ? ` · resets ${reset}` : ""}
+								{formatQuotaRemaining(quota.label, quota.used, quota.limit)}
+								{reset ? ` · resets ${reset}` : ""}
 							</span>
 						)
 					})}

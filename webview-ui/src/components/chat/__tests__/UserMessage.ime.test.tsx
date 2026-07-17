@@ -56,8 +56,8 @@ describe("UsageBar", () => {
 
 		render(<UsageBar />)
 
-		expect(screen.getAllByText(/5h 25%/).length).toBeGreaterThan(0)
-		expect(screen.getAllByText(/Weekly 60%/).length).toBeGreaterThan(0)
+		expect(screen.getAllByText(/5h 75% left/).length).toBeGreaterThan(0)
+		expect(screen.getAllByText(/Weekly 40% left/).length).toBeGreaterThan(0)
 	})
 
 	it("shows an empty value when the active profile has no usage", () => {
