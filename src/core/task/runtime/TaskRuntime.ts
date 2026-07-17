@@ -1,3 +1,4 @@
+import type { TaskEffect } from "./TaskEffect"
 import type { TaskEffectPorts } from "./TaskEffectRunner"
 import { TaskEffectError, TaskEffectRunner } from "./TaskEffectRunner"
 import type { TaskEvent } from "./TaskEvent"
@@ -15,6 +16,17 @@ export type TaskDispatchResult = TransitionResult & {
 
 /** Observer notified after one event and any derived presentation event commit. */
 export type TaskRuntimeObserver = (event: TaskEvent, result: TaskDispatchResult) => void
+
+interface PreparedDispatch {
+	result: TaskDispatchResult
+	deferredEffects: TaskEffect[]
+	effectState: TaskRuntimeState
+}
+
+/** Effects whose ports can causally dispatch more events into this runtime. */
+function isReentrantEffect(effect: TaskEffect): boolean {
+	return effect.type === "EXECUTE_TOOL" || effect.type === "START_API"
+}
 
 /** Owns the task runtime aggregate and serializes all event dispatches. */
 export class TaskRuntime {
@@ -46,32 +58,43 @@ export class TaskRuntime {
 
 	/** Serialize one event transition and its ordered effects. */
 	dispatch(event: TaskEvent): Promise<TaskDispatchResult> {
-		const operation = this.queue.then(() => this.dispatchOne(event))
-		this.queue = operation.then(
+		// Commit state and all non-reentrant effects under the queue. Long-running
+		// tool/API ports are completed after releasing it, otherwise a handler that
+		// opens an interaction deadlocks waiting for its own queued dispatch.
+		const preparation = this.queue.then(() => this.prepareDispatch(event, true))
+		this.queue = preparation.then(
 			() => undefined,
 			() => undefined,
 		)
-		return operation
+		return preparation.then((prepared) => this.completeDeferredEffects(event, prepared))
 	}
 
-	/** Commit one reduced state before executing its effects. */
-	private async dispatchOne(event: TaskEvent): Promise<TaskDispatchResult> {
+	/** Commit one reduced state and run effects that cannot re-enter the runtime. */
+	private async prepareDispatch(event: TaskEvent, deferReentrantEffects: boolean): Promise<PreparedDispatch> {
 		const result = reduceTask(this.state, event)
 		if (!result.accepted) {
-			return result
+			return { result, deferredEffects: [], effectState: this.state }
 		}
 
 		this.state = result.next
+		const effectState = this.state
+		const deferredEffects = deferReentrantEffects ? result.effects.filter(isReentrantEffect) : []
+		const immediateEffects = deferReentrantEffects
+			? result.effects.filter((effect) => !isReentrantEffect(effect))
+			: result.effects
 		try {
-			const anchors = await this.runner.run(result.effects, this.state)
+			const anchors = await this.runner.run(immediateEffects, effectState)
 			for (const anchor of anchors) {
 				const interactionId = this.presentedInteractionId(event)
 				if (interactionId) {
-					await this.dispatchOne({
-						type: "INTERACTION_PRESENTED",
-						interactionId,
-						messageTs: anchor.uiMessageTs,
-					})
+					await this.prepareDispatch(
+						{
+							type: "INTERACTION_PRESENTED",
+							interactionId,
+							messageTs: anchor.uiMessageTs,
+						},
+						false,
+					)
 				}
 			}
 		} catch (error) {
@@ -81,12 +104,15 @@ export class TaskRuntime {
 			if (!(error instanceof TaskEffectError)) {
 				throw error
 			}
-			await this.dispatchOne({
-				type: "EFFECT_FAILED",
-				effectId: error.effect.id,
-				effectType: error.effect.type,
-				message: error.message,
-			})
+			await this.prepareDispatch(
+				{
+					type: "EFFECT_FAILED",
+					effectId: error.effect.id,
+					effectType: error.effect.type,
+					message: error.message,
+				},
+				false,
+			)
 			const failed: TaskDispatchResult = {
 				...result,
 				accepted: false,
@@ -99,12 +125,51 @@ export class TaskRuntime {
 			for (const observer of this.observers) {
 				observer(event, failed)
 			}
+			return { result: failed, deferredEffects: [], effectState }
+		}
+		if (deferredEffects.length === 0) {
+			this.notifyObservers(event, result)
+		}
+		return { result, deferredEffects, effectState }
+	}
+
+	/** Complete one reentrant port after the state queue has been released. */
+	private async completeDeferredEffects(event: TaskEvent, prepared: PreparedDispatch): Promise<TaskDispatchResult> {
+		if (!prepared.result.accepted || prepared.deferredEffects.length === 0) {
+			return prepared.result
+		}
+		try {
+			await this.runner.run(prepared.deferredEffects, prepared.effectState)
+			this.notifyObservers(event, prepared.result)
+			return prepared.result
+		} catch (error) {
+			if (!(error instanceof TaskEffectError)) {
+				throw error
+			}
+			await this.dispatch({
+				type: "EFFECT_FAILED",
+				effectId: error.effect.id,
+				effectType: error.effect.type,
+				message: error.message,
+			})
+			const failed: TaskDispatchResult = {
+				...prepared.result,
+				accepted: false,
+				effectError: {
+					effectId: error.effect.id,
+					effectType: error.effect.type,
+					message: error.message,
+				},
+			}
+			this.notifyObservers(event, failed)
 			return failed
 		}
+	}
+
+	private notifyObservers(event: TaskEvent, result: TaskDispatchResult): void {
 		for (const observer of this.observers) {
 			observer(event, result)
 		}
-		return result
 	}
 
 	/** Return the interaction identity presented by one direct or composite lifecycle event. */

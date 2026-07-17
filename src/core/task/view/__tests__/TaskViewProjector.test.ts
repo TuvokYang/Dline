@@ -50,6 +50,14 @@ describe("projectTaskView", () => {
 		expect(view.activeInteraction?.stateRevision).toBe(8)
 	})
 
+	it("replaces Cancel with conversational input while an executing tool awaits a reply", () => {
+		const view = projectTaskView(runtime(TaskPhase.EXECUTING, active("qna_response")))
+
+		expect(view.input).toMatchObject({ enabled: true, enterAction: "reply" })
+		expect(view.footer.actions.map((action) => action.type)).toEqual(["reply"])
+		expect(view.footer.actions.some((action) => action.type === "cancel")).toBe(false)
+	})
+
 	it("disables resolving interaction input and actions", () => {
 		const interaction = active("tool_approval")
 		interaction.status = "resolving"

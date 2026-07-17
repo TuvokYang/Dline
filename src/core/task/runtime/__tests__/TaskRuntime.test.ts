@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from "vitest"
+import { BlockPhase } from "../../BlockPhaseMachine"
+import { InteractionCoordinator, type InteractionOutcome } from "../../interaction/InteractionCoordinator"
 import { TaskPhase } from "../../TaskPhase"
 import type { TaskEffectPorts } from "../TaskEffectRunner"
 import { TaskRuntime } from "../TaskRuntime"
@@ -20,6 +22,97 @@ function createPorts(overrides: Partial<TaskEffectPorts> = {}): TaskEffectPorts 
 }
 
 describe("TaskRuntime dispatch", () => {
+	it("allows an executing tool to open a nested interaction without self-deadlocking", async () => {
+		let runtime: TaskRuntime
+		let coordinator: InteractionCoordinator
+		let outcome: InteractionOutcome | undefined
+		runtime = new TaskRuntime(
+			{
+				...createTaskRuntimeState({ taskId: "task-1", phase: TaskPhase.STREAMING }),
+				turn: {
+					turnId: "turn-1",
+					assistantApiIndex: 1,
+					mode: "parallel",
+					blocks: [
+						{
+							dlineTid: "tid-qna",
+							callId: "call-qna",
+							toolName: "qna_respond",
+							ts: 10,
+							requiresApproval: false,
+							conversationHistoryIndex: 1,
+							phase: BlockPhase.AUTO_EXECUTING,
+						},
+					],
+				},
+			},
+			createPorts({
+				executeTool: async () => {
+					outcome = await coordinator.open({
+						turnId: "turn-1",
+						interactionId: "tid-qna",
+						kind: "qna_response",
+						presentation: "Answer",
+						existingTs: 10,
+					})
+				},
+			}),
+		)
+		coordinator = new InteractionCoordinator(runtime)
+
+		const execution = runtime.dispatch({
+			type: "BLOCK_EXECUTION_STARTED",
+			turnId: "turn-1",
+			dlineTid: "tid-qna",
+		})
+		await vi.waitFor(() => expect(runtime.getState().interaction?.status).toBe("awaiting"))
+		const awaiting = runtime.getState()
+		const response = await runtime.dispatch({
+			type: "INTERACTION_RESPONDED",
+			response: {
+				taskId: "task-1",
+				turnId: "turn-1",
+				interactionId: "tid-qna",
+				actionId: "reply",
+				stateRevision: awaiting.revision,
+				draft: { text: "continue", images: [], files: [] },
+			},
+		})
+		const result = await execution
+
+		expect(result.accepted).toBe(true)
+		expect(response.accepted).toBe(true)
+		expect(outcome).toMatchObject({ actionId: "reply", draft: { text: "continue" } })
+		expect(runtime.getState()).toMatchObject({
+			phase: TaskPhase.EXECUTING,
+			interaction: undefined,
+		})
+	})
+
+	it("allows a resumed API effect to dispatch its request lifecycle without self-deadlocking", async () => {
+		let runtime: TaskRuntime
+		let nestedAccepted = false
+		runtime = new TaskRuntime(
+			createTaskRuntimeState({
+				taskId: "task-1",
+				phase: TaskPhase.STREAMING,
+				anchor: { apiIndex: 2 },
+			}),
+			createPorts({
+				startApi: async (effect) => {
+					const nested = await runtime.dispatch({ type: "API_REQUEST_STARTED", apiIndex: effect.apiIndex })
+					nestedAccepted = nested.accepted
+				},
+			}),
+		)
+
+		const result = await runtime.dispatch({ type: "RESUME_API_CONTINUATION_REQUESTED", apiIndex: 2 })
+
+		expect(result.accepted).toBe(true)
+		expect(nestedAccepted).toBe(true)
+		expect(runtime.getState()).toMatchObject({ phase: TaskPhase.STREAMING, anchor: { apiIndex: 2 } })
+	})
+
 	it("commits next state before running effects in order", async () => {
 		const order: string[] = []
 		let runtime: TaskRuntime
