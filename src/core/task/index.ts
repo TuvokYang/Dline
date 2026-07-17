@@ -83,7 +83,7 @@ import { convertClineMessageToProto } from "@shared/proto-conversions/cline-mess
 import { PROFILE_PROVIDER_KEYS } from "@shared/providers/profile-model-info"
 import { resolvePromptProfile } from "@shared/resolve-prompt-profile"
 import type { Mode } from "@shared/storage/types"
-import { ClineDefaultTool, READ_ONLY_TOOLS } from "@shared/tools"
+import { ClineDefaultTool, CONVERSATIONAL_TOOL_NAMES, READ_ONLY_TOOLS } from "@shared/tools"
 import { ClineAskResponse } from "@shared/WebviewMessage"
 import { isLocalModel, isNextGenModelFamily, isParallelToolCallingEnabled } from "@utils/model-utils"
 import { arePathsEqual, getDesktopDir } from "@utils/path"
@@ -966,20 +966,9 @@ export class Task {
 		return result
 	}
 
-	/**
-	 * Tool names for conversational ask types whose handlers internally
-	 * call ask() and expect messageResponse as a normal user response.
-	 * For these tools, messageResponse must NOT trigger rejectActiveBlock,
-	 * otherwise subsequent conversational tools in the same turn get
-	 * cascaded SKIPPED and the task loop deadlocks.
-	 */
-	private static readonly CONVERSATIONAL_TOOL_NAMES = new Set([
-		"qna_respond",
-		"plan_mode_respond",
-		"act_mode_respond",
-		"ask_followup_question",
-		"generate_report",
-	])
+	// CONVERSATIONAL_TOOL_NAMES is now imported from @shared/tools as the
+	// single source of truth shared by autoApprove, BlockPhaseMachine, and
+	// handleWebviewAskResponse.
 
 	/** Return the task-local mode without shared active-task routing. */
 	getMode(): Mode {
@@ -1038,7 +1027,9 @@ export class Task {
 	async handleWebviewAskResponse(askResponse: ClineAskResponse, text?: string, images?: string[], files?: string[]) {
 		this.taskController.resolveAsk(askResponse, text, images, files)
 		const activeBlock = this.taskController.getActiveBlock()
-		const isConversationalResponse = Boolean(activeBlock && Task.CONVERSATIONAL_TOOL_NAMES.has(activeBlock.toolName))
+		const isConversationalResponse = Boolean(
+			activeBlock && CONVERSATIONAL_TOOL_NAMES.has(activeBlock.toolName as ClineDefaultTool),
+		)
 		const hasFeedback = Boolean(text) || Boolean(images?.length) || Boolean(files?.length)
 		if (hasFeedback) {
 			await this.say("user_feedback", text, images, files)
@@ -1055,7 +1046,7 @@ export class Task {
 		// machine must NOT treat messageResponse as a rejection for these tools,
 		// otherwise subsequent conversational tools in the same turn get
 		// cascaded SKIPPED and the task loop deadlocks.
-		if (activeBlock && Task.CONVERSATIONAL_TOOL_NAMES.has(activeBlock.toolName)) {
+		if (activeBlock && CONVERSATIONAL_TOOL_NAMES.has(activeBlock.toolName as ClineDefaultTool)) {
 			return
 		}
 
@@ -3262,7 +3253,7 @@ export class Task {
 					const committedBlock = this.taskRuntime
 						.getState()
 						.turn?.blocks.find((candidate) => candidate.dlineTid === block.dline_tid)
-					if (committedBlock?.phase === "rejected") {
+					if (committedBlock?.phase === "rejected" || committedBlock?.phase === "awaiting_approval") {
 						break
 					}
 					const completed = await this.dispatchRuntime({
@@ -4343,7 +4334,7 @@ export class Task {
 				})
 
 				const baseErrorMessage =
-					"Invalid API Response: The provider returned an empty or unparsable response. This is a provider-side issue where the model failed to generate valid output or returned tool calls that Cline cannot process. Retrying the request may help resolve this issue."
+					"Invalid API Response: The provider returned an empty or unparsable response. This is a provider-side issue where the model failed to generate valid output or returned tool calls that Dline cannot process. Retrying the request may help resolve this issue."
 				const errorText = reqId ? `${baseErrorMessage} (Request ID: ${reqId})` : baseErrorMessage
 
 				await this.say("error", errorText)

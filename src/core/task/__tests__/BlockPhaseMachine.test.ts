@@ -198,3 +198,31 @@ describe("BlockPhaseMachine - rejectActiveBlock cascade", () => {
 		assert.equal(restoredMachine.shouldSkip(callIds[1]), true, "Restored: shouldSkip should work on SKIPPED block")
 	})
 })
+
+// ── toolNameToAskType — conversational tools ──
+
+describe("BlockPhaseMachine.toolNameToAskType — conversational tools", () => {
+	const CONVERSATIONAL_TOOLS = [
+		"qna_respond",
+		"plan_mode_respond",
+		"act_mode_respond",
+		"ask_followup_question",
+		"generate_report",
+	] as const
+
+	for (const toolName of CONVERSATIONAL_TOOLS) {
+		it(`RED: toolNameToAskType("${toolName}") returns "tool" instead of "${toolName}"`, () => {
+			const askType = BlockPhaseMachine.toolNameToAskType(toolName)
+			// Currently returns "tool" (default case) — this is the BUG.
+			// After fix, it should return the tool name itself as the ask type.
+			expect(askType).toBe(toolName)
+		})
+	}
+
+	it("non-conversational tool still returns expected ask types", () => {
+		expect(BlockPhaseMachine.toolNameToAskType("execute_command")).toBe("command")
+		expect(BlockPhaseMachine.toolNameToAskType("write_to_file")).toBe("tool")
+		expect(BlockPhaseMachine.toolNameToAskType("browser_action")).toBe("browser_action_launch")
+		expect(BlockPhaseMachine.toolNameToAskType("use_mcp_tool")).toBe("use_mcp_server")
+	})
+})

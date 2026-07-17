@@ -348,3 +348,65 @@ describe("reduceTask lifecycle events", () => {
 		})
 	})
 })
+
+// ── BLOCK_EXECUTION_COMPLETED — conversational tool path ──
+
+describe("BLOCK_EXECUTION_COMPLETED — conversational tool lifecycle", () => {
+	/** Create state with one turn and block in the given phase. */
+	function stateWithBlock(blockPhase: BlockPhase, requiresApproval = false) {
+		return {
+			...createTaskRuntimeState({
+				taskId: "task-1",
+				phase: TaskPhase.EXECUTING,
+				revision: 4,
+				anchor: { apiIndex: 0, turnId: "turn-1" },
+			}),
+			turn: {
+				turnId: "turn-1",
+				assistantApiIndex: 2,
+				mode: "serial" as const,
+				activeDlineTid: blockPhase === BlockPhase.AWAITING_APPROVAL ? "tid-1" : undefined,
+				blocks: [
+					{
+						dlineTid: "tid-1",
+						callId: "call-1",
+						toolName: "qna_respond",
+						phase: blockPhase,
+						ts: 100,
+						requiresApproval,
+						conversationHistoryIndex: 2,
+					},
+				],
+			},
+		}
+	}
+
+	it("RED: BLOCK_EXECUTION_COMPLETED is rejected when block is AWAITING_APPROVAL (current bug symptom)", () => {
+		const state = stateWithBlock(BlockPhase.AWAITING_APPROVAL, true)
+		const result = reduceTask(state, {
+			type: "BLOCK_EXECUTION_COMPLETED",
+			turnId: "turn-1",
+			dlineTid: "tid-1",
+		})
+
+		// This is the CORRECT behavior — reducer SHOULD reject completion for AWAITING_APPROVAL.
+		// The bug is in the caller (index.ts) dispatching COMPLETED when block is AWAITING_APPROVAL.
+		// This test documents the contract that callers must respect.
+		expect(result).toMatchObject({ accepted: false })
+		expect(result.error?.code).toBe("invalid_runtime_event")
+	})
+
+	it("BLOCK_EXECUTION_COMPLETED is accepted when block is AUTO_EXECUTING (expected path after fix)", () => {
+		// After the fix, conversational tools will be auto-approved → AUTO_EXECUTING phase.
+		// BLOCK_EXECUTION_COMPLETED should be accepted in this state.
+		const state = stateWithBlock(BlockPhase.AUTO_EXECUTING, false)
+		const result = reduceTask(state, {
+			type: "BLOCK_EXECUTION_COMPLETED",
+			turnId: "turn-1",
+			dlineTid: "tid-1",
+		})
+
+		expect(result).toMatchObject({ accepted: true })
+		expect(result.next.turn?.blocks[0]?.phase).toBe(BlockPhase.COMPLETED)
+	})
+})

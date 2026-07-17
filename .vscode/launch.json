@@ -248,6 +248,38 @@
 			}
 		},
 		{
+			"name": "Run Extension (Fresh, workspace)",
+			"type": "extensionHost",
+			"request": "launch",
+			"runtimeExecutable": "${execPath}",
+			"args": [
+				"--user-data-dir=${workspaceFolder}/tmp/user",
+				"--profile-temp",
+				"--sync=off",
+				"--disable-extension",
+				"saoudrizwan.claude-dev",
+				"--disable-extension",
+				"saoudrizwan.cline-nightly",
+				"--extensionDevelopmentPath=${workspaceFolder}",
+				"E:/dline_test"
+			],
+			"outFiles": [
+				"${workspaceFolder}/dist/**/*.js"
+			],
+			"preLaunchTask": "clean-tmp-user",
+			"internalConsoleOptions": "openOnSessionStart",
+			"envFile": "${workspaceFolder}/.env",
+			"env": {
+				"IS_DEV": "true",
+				"DEV_WORKSPACE_FOLDER": "${workspaceFolder}",
+				"DLINE_ENVIRONMENT": "production",
+				"CLINE_LOG_LEVEL": "debug",
+				"DLINE_SKIP_MIGRATION": "1",
+				"DLINE_HOME_DIR": "${workspaceFolder}/tmp/.dline",
+				"DLINE_DOCS_DIR": "${workspaceFolder}/tmp/dline"
+			}
+		},
+		{
 			"name": "Run Extension (Fresh, multi-workspace)",
 			"type": "extensionHost",
 			"request": "launch",

@@ -1,4 +1,5 @@
 import type { ClineAsk } from "@shared/ExtensionMessage"
+import { type ClineDefaultTool, CONVERSATIONAL_TOOL_NAMES } from "@shared/tools"
 
 // ── Types ──
 
@@ -392,6 +393,10 @@ export class BlockPhaseMachine {
 			case "status_update":
 				return "status_acknowledgment"
 			default:
+				// Conversational tools use their own name as the ask type
+				if (CONVERSATIONAL_TOOL_NAMES.has(toolName as ClineDefaultTool)) {
+					return toolName as ClineAsk
+				}
 				return "tool"
 		}
 	}

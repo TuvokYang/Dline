@@ -82,3 +82,16 @@ export const READ_ONLY_TOOLS = [
 	ClineDefaultTool.LOAD_SUBAGENT,
 	ClineDefaultTool.FIND_REFERENCES,
 ] as const
+
+/**
+ * Conversational / TURN-END tools whose handler.execute() presents a UI interaction
+ * and awaits user input via interactions.open(). These must be auto-approved so
+ * BLOCK_EXECUTION_STARTED → EXECUTE_TOOL → handler.execute() fires.
+ */
+export const CONVERSATIONAL_TOOL_NAMES = new Set<ClineDefaultTool>([
+	ClineDefaultTool.QNA_RESPOND,
+	ClineDefaultTool.PLAN_MODE,
+	ClineDefaultTool.ACT_MODE,
+	ClineDefaultTool.ASK,
+	ClineDefaultTool.GENERATE_REPORT,
+])

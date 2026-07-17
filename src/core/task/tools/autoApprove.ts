@@ -1,6 +1,6 @@
 import { resolveWorkspacePath } from "@core/workspace"
 import { isMultiRootEnabled } from "@core/workspace/multi-root-utils"
-import { ClineDefaultTool } from "@shared/tools"
+import { ClineDefaultTool, CONVERSATIONAL_TOOL_NAMES } from "@shared/tools"
 import { StateManager } from "@/core/storage/StateManager"
 import { HostProvider } from "@/hosts/host-provider"
 import { getCwd, getDesktopDir, isLocatedInPath, isLocatedInWorkspace } from "@/utils/path"
@@ -116,6 +116,14 @@ export class AutoApprove {
 			case ClineDefaultTool.MCP_USE:
 				return autoApprovalSettings.actions.useMcp
 		}
+
+		// Conversational / TURN-END tools present their own UI interaction
+		// and must be auto-approved so BLOCK_EXECUTION_STARTED → EXECUTE_TOOL
+		// → handler.execute() → interactions.open() fires.
+		if (CONVERSATIONAL_TOOL_NAMES.has(toolName)) {
+			return true
+		}
+
 		return false
 	}
 
