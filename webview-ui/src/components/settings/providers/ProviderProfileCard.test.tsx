@@ -47,7 +47,10 @@ describe("ProviderProfileCard", () => {
 			/>,
 		)
 
-		fireEvent.change(screen.getByDisplayValue("openai:model-a"), { target: { value: "openai:custom" } })
+		const nameInput = screen.getByDisplayValue("openai:model-a")
+		fireEvent.change(nameInput, { target: { value: "openai:custom" } })
+		expect(onUpdate).not.toHaveBeenCalled()
+		fireEvent.blur(nameInput)
 
 		expect(onUpdate).toHaveBeenCalledWith({ name: "openai:custom" })
 	})

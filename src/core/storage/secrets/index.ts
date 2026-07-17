@@ -17,6 +17,7 @@ export const setApiKey = ApiKeyStore.setApiKey
 export const deleteApiKey = ApiKeyStore.deleteApiKey
 export const getAllApiKeys = ApiKeyStore.getAllApiKeys
 export const migrateApiKey = ApiKeyStore.migrateApiKey
+export const setApiKeysBatch = ApiKeyStore.setApiKeysBatch
 
 // MCP OAuth
 export const getAllMcpOAuthSecrets = McpOAuthStore.getAllMcpOAuthSecrets

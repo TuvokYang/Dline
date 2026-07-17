@@ -7,13 +7,13 @@
 import { ModelRegistry } from "@core/model-registry/ModelRegistry"
 import { OrchestratorController } from "@core/orchestrator/OrchestratorController"
 import { getDlineDataDir } from "@core/storage/disk"
-import { deleteApiKey, migrateApiKey, setApiKey } from "@core/storage/secrets"
+import { type ApiKeyEntry, getAllApiKeys, setApiKeysBatch } from "@core/storage/secrets"
 import { Empty } from "@shared/proto/dline/common"
 import { UpdateApiProfilesRequest } from "@shared/proto/dline/profile"
 import { Logger } from "@shared/services/Logger"
 import path from "path"
 import type { Controller } from ".."
-import { normalizeApiProfile, readApiProfiles, writeApiProfilesToFile } from "./getApiProfiles"
+import { applyRegistryModelDefaults, normalizeApiProfile, readApiProfiles, writeApiProfilesToFile } from "./getApiProfiles"
 
 const API_PROFILES_FILE = "api_profiles.json"
 let updateApiProfilesQueue: Promise<Empty> = Promise.resolve(Empty.create({}))
@@ -39,43 +39,49 @@ async function updateApiProfilesImpl(controller: Controller, request: UpdateApiP
 	const filePath = path.join(settingsDir, API_PROFILES_FILE)
 
 	const oldProfiles = readApiProfiles()
-	const oldMap = new Map(oldProfiles.map((p) => [p.id, p]))
 	const profiles = (request.profiles || []).map(normalizeApiProfile)
 	const nextIds = new Set(profiles.map((p) => p.id))
 	const registry = ModelRegistry.getInstance()
 	if (!registry.isInitialized) {
 		await registry.reload()
 	}
+	applyRegistryModelDefaults(profiles)
 
+	const storedKeys = getAllApiKeys()
+	const keyChanges: Record<string, ApiKeyEntry | undefined> = {}
 	for (const oldProfile of oldProfiles) {
 		if (!nextIds.has(oldProfile.id)) {
-			deleteApiKey(oldProfile.id)
+			keyChanges[oldProfile.id] = undefined
 		}
 	}
 
 	for (const profile of profiles) {
-		const old = oldMap.get(profile.id)
-		if (old && old.name !== profile.name && profile.name) {
-			migrateApiKey(profile.id, profile.name)
-		}
-
+		const stored = storedKeys[profile.id]
 		if (profile.apiKey) {
-			setApiKey(profile.id, profile.apiKey, profile.name)
-		} else {
-			deleteApiKey(profile.id)
+			if (!stored || stored.apiKey !== profile.apiKey || stored.name !== profile.name) {
+				keyChanges[profile.id] = { apiKey: profile.apiKey, name: profile.name }
+			}
+		} else if (stored) {
+			keyChanges[profile.id] = undefined
 		}
 	}
 
 	try {
 		await writeApiProfilesToFile(filePath, profiles)
+		await setApiKeysBatch(keyChanges)
 		Logger.log(`[updateApiProfiles] Saved ${profiles.length} profile(s)`)
 
 		try {
 			await OrchestratorController.getInstance().profileChanges.publish(oldProfiles, profiles)
-		} catch {
+		} catch (error) {
 			// Standalone controller tests and hosts may not initialize the orchestrator.
-			controller.task?.rebuildApiHandler()
-			await controller.postStateToWebview?.()
+			Logger.warn("[updateApiProfiles] Profile change broadcast unavailable; updating current controller", error)
+			try {
+				controller.task?.rebuildApiHandler()
+				await controller.postStateToWebview?.()
+			} catch (notificationError) {
+				Logger.error("[updateApiProfiles] Profiles were saved but controller refresh failed", notificationError)
+			}
 		}
 
 		return Empty.create({})

@@ -8,8 +8,22 @@ import { ProfileChangeCoordinator } from "../ProfileChangeCoordinator"
 function createController(planProfile: string, actProfile: string): Controller {
 	return {
 		task: {
-			taskSm: { planModeProfile: planProfile, actModeProfile: actProfile, mode: "act" },
+			taskSm: {
+				planModeProfile: planProfile,
+				actModeProfile: actProfile,
+				mode: "act",
+				setPlanModeProfile: vi.fn(function (this: { planModeProfile: string }, value: string) {
+					this.planModeProfile = value
+				}),
+				setActModeProfile: vi.fn(function (this: { actModeProfile: string }, value: string) {
+					this.actModeProfile = value
+				}),
+			},
 			rebuildApiHandler: vi.fn(),
+		},
+		stateManager: {
+			getGlobalSettingsKey: vi.fn((key: string) => (key === "planModeProfile" ? planProfile : actProfile)),
+			setGlobalState: vi.fn(),
 		},
 		restartAccountUsagePolling: vi.fn(),
 		postStateToWebview: vi.fn().mockResolvedValue(undefined),
@@ -35,5 +49,18 @@ describe("ProfileChangeCoordinator", () => {
 		expect((second.postStateToWebview as ReturnType<typeof vi.fn>).mock.calls).to.have.length(1)
 		expect((third.postStateToWebview as ReturnType<typeof vi.fn>).mock.calls).to.have.length(1)
 		expect(coordinator.revision).to.equal(1)
+	})
+
+	it("remaps task profile names before rebuilding after a provider change", async () => {
+		const controller = createController("old-profile", "old-profile")
+		const coordinator = new ProfileChangeCoordinator(() => [controller])
+		const oldProfiles = [{ id: "profile-id", name: "old-profile", provider: "openai" }] as ApiProfile[]
+		const nextProfiles = [{ id: "profile-id", name: "deepseek:new-model", provider: "deepseek" }] as ApiProfile[]
+
+		await coordinator.publish(oldProfiles, nextProfiles)
+
+		expect(controller.task?.taskSm.planModeProfile).to.equal("deepseek:new-model")
+		expect(controller.task?.taskSm.actModeProfile).to.equal("deepseek:new-model")
+		expect((controller.task?.rebuildApiHandler as ReturnType<typeof vi.fn>).mock.calls).to.have.length(1)
 	})
 })

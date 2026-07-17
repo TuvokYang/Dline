@@ -198,12 +198,36 @@ function applyRegistryModelInfo(profiles: ApiProfile[]): boolean {
 	return changed
 }
 
+/** Fill an omitted profile modelId from the provider registry default. */
+export function applyRegistryModelDefaults(profiles: ApiProfile[]): boolean {
+	const registry = ModelRegistry.getInstance()
+	let changed = false
+	const usedNames = new Set(profiles.map((profile) => profile.name).filter(Boolean))
+	for (const profile of profiles) {
+		if (!profile.provider || profile.modelId) continue
+		const defaultModelId = registry.getProviderModels(profile.provider)?.defaultModelId
+		if (!defaultModelId) continue
+		profile.modelId = defaultModelId
+		changed = true
+		if (!profile.name || profile.name === "New Model") {
+			const baseName = `${profile.provider}:${defaultModelId}`
+			let name = baseName
+			let suffix = 2
+			while (usedNames.has(name)) name = `${baseName} (${suffix++})`
+			profile.name = name
+			usedNames.add(name)
+		}
+	}
+	return changed
+}
+
 async function hydrateModelInfoFromRegistry(profiles: ApiProfile[]): Promise<boolean> {
 	const registry = ModelRegistry.getInstance()
 	if (!registry.isInitialized) {
 		await registry.reload()
 	}
-	return applyRegistryModelInfo(profiles)
+	const defaultsChanged = applyRegistryModelDefaults(profiles)
+	return applyRegistryModelInfo(profiles) || defaultsChanged
 }
 
 export function serializeApiProfilesForStorage(profiles: ApiProfile[]): unknown[] {
@@ -315,7 +339,7 @@ export async function getApiProfiles(controller: Controller, _request: EmptyRequ
 			return ApiProfilesResponse.create({ profiles })
 		}
 		Logger.error("[getApiProfiles] Failed to read api_profiles.json:", err)
-		return ApiProfilesResponse.create({ profiles: [] })
+		throw err
 	}
 }
 
@@ -501,7 +525,8 @@ export function readApiProfiles(): ApiProfile[] {
 		const parsed = parseApiProfilesJson(raw)
 		const profiles = parsed.profiles
 		hydrateApiKeys(profiles)
-		const modelInfoChanged = applyRegistryModelInfo(profiles)
+		const defaultsChanged = applyRegistryModelDefaults(profiles)
+		const modelInfoChanged = applyRegistryModelInfo(profiles) || defaultsChanged
 		if (parsed.recovered || needsCleanRewrite) {
 			needsCleanRewrite = false
 			cleanRewriteApiProfiles(profiles)

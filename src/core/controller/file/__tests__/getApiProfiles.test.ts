@@ -409,6 +409,67 @@ describe("getApiProfiles", () => {
 		expect(raw).not.to.include("profile-39")
 	})
 
+	it("persists the provider registry default when a profile modelId is blank", async () => {
+		const providersDir = path.join(process.env.DLINE_HOME_DIR!, "providers")
+		const settingsDir = path.join(process.env.DLINE_DIR!, "data", "settings")
+		const storedProfilesPath = path.join(settingsDir, "api_profiles.json")
+		await fs.mkdir(providersDir, { recursive: true })
+		await fs.mkdir(settingsDir, { recursive: true })
+		await fs.writeFile(
+			path.join(providersDir, "openai-native.json"),
+			JSON.stringify({
+				provider: "openai-native",
+				defaultModelId: "registry-default-model",
+				models: { "registry-default-model": { id: "registry-default-model" } },
+			}),
+			"utf8",
+		)
+		await fs.writeFile(
+			storedProfilesPath,
+			JSON.stringify([
+				{
+					id: "default-profile",
+					name: "openai-native profile",
+					provider: "openai-native",
+					modelId: "",
+					usedFor: ["act", "plan"],
+					enabled: true,
+				},
+			]),
+			"utf8",
+		)
+
+		const controller = {
+			stateManager: {
+				getApiConfiguration: () => ({}),
+				setGlobalState: vi.fn(),
+				flushPendingState: vi.fn().mockResolvedValue(undefined),
+			},
+			postStateToWebview: vi.fn(),
+		} as any
+
+		const response = await getApiProfiles(controller, EmptyRequest.create({}))
+
+		expect(response.profiles[0].modelId).to.equal("registry-default-model")
+		const storedProfiles = JSON.parse(await fs.readFile(storedProfilesPath, "utf8"))
+		expect(storedProfiles[0].modelId).to.equal("registry-default-model")
+	})
+
+	it("rejects an unreadable profile file instead of returning an empty list", async () => {
+		const settingsDir = path.join(process.env.DLINE_DIR!, "data", "settings")
+		await fs.mkdir(settingsDir, { recursive: true })
+		await fs.writeFile(path.join(settingsDir, "api_profiles.json"), "not-json", "utf8")
+		const controller = {} as any
+
+		let thrown: unknown
+		try {
+			await getApiProfiles(controller, EmptyRequest.create({}))
+		} catch (error) {
+			thrown = error
+		}
+		expect(thrown).to.be.instanceOf(SyntaxError)
+	})
+
 	it("recovers api_profiles.json when a valid array has trailing broken JSON", async () => {
 		const settingsDir = path.join(process.env.DLINE_DIR!, "data", "settings")
 		const storedProfilesPath = path.join(settingsDir, "api_profiles.json")

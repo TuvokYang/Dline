@@ -36,6 +36,8 @@ export class ProfileChangeCoordinator {
 				const task = controller.task
 				const planProfile = task?.taskSm.planModeProfile
 				const actProfile = task?.taskSm.actModeProfile
+				const planChange = [...changes.values()].find((change) => planProfile === change.oldName)
+				const actChange = [...changes.values()].find((change) => actProfile === change.oldName)
 				const affected = [...changes.values()].some(
 					(change) =>
 						planProfile === change.oldName ||
@@ -44,12 +46,41 @@ export class ProfileChangeCoordinator {
 						actProfile === change.newName,
 				)
 				if (affected && task) {
+					if (planChange && planChange.oldName !== planChange.newName) {
+						const nextName = planChange.newName || this.findFallback(nextProfiles, "plan")
+						if (nextName) task.taskSm.setPlanModeProfile(nextName)
+					}
+					if (actChange && actChange.oldName !== actChange.newName) {
+						const nextName = actChange.newName || this.findFallback(nextProfiles, "act")
+						if (nextName) task.taskSm.setActModeProfile(nextName)
+					}
 					task.rebuildApiHandler()
 					controller.restartAccountUsagePolling()
+				}
+
+				const globalPlanProfile = controller.stateManager.getGlobalSettingsKey("planModeProfile")
+				const globalActProfile = controller.stateManager.getGlobalSettingsKey("actModeProfile")
+				const globalPlanChange = [...changes.values()].find(
+					(change) => globalPlanProfile === change.oldName && change.oldName !== change.newName,
+				)
+				const globalActChange = [...changes.values()].find(
+					(change) => globalActProfile === change.oldName && change.oldName !== change.newName,
+				)
+				if (globalPlanChange) {
+					const nextName = globalPlanChange.newName || this.findFallback(nextProfiles, "plan")
+					if (nextName) controller.stateManager.setGlobalState("planModeProfile", nextName)
+				}
+				if (globalActChange) {
+					const nextName = globalActChange.newName || this.findFallback(nextProfiles, "act")
+					if (nextName) controller.stateManager.setGlobalState("actModeProfile", nextName)
 				}
 				await controller.postStateToWebview()
 			}),
 		)
+	}
+
+	private findFallback(profiles: ApiProfile[], mode: "plan" | "act"): string | undefined {
+		return profiles.find((profile) => profile.enabled && profile.usedFor.includes(mode))?.name
 	}
 
 	/** Build stable-ID profile changes for added, updated, renamed, and deleted profiles. */

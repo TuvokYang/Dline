@@ -40,7 +40,6 @@ import { RequestyProvider } from "./RequestyProvider"
 import { SambanovaProvider } from "./SambanovaProvider"
 import { SapAiCoreProvider } from "./SapAiCoreProvider"
 import { TogetherProvider } from "./TogetherProvider"
-import { useApiProfiles } from "./useApiProfiles"
 import { useProviderModels } from "./useProviderModels"
 import { VercelAIGatewayProvider } from "./VercelAIGatewayProvider"
 import { VertexProvider } from "./VertexProvider"
@@ -52,6 +51,7 @@ import { ZAiProvider } from "./ZAiProvider"
 interface ApiProfileEditorProps {
 	profile: ApiProfile
 	isPopup?: boolean
+	onUpdateProfile: (updates: Partial<ApiProfile>) => void
 }
 
 /**
@@ -59,9 +59,8 @@ interface ApiProfileEditorProps {
  * based on profile.provider, passing profile + onUpdate for profile-driven API.
  * Does NOT know about profile list structure.
  */
-const ApiProfileEditor: React.FC<ApiProfileEditorProps> = ({ profile, isPopup }) => {
+const ApiProfileEditor: React.FC<ApiProfileEditorProps> = ({ profile, isPopup, onUpdateProfile }) => {
 	const showModelOptions = true
-	const { updateProfile } = useApiProfiles()
 	const { models } = useProviderModels(profile.provider || "")
 
 	const onUpdate = (updates: Partial<ApiProfile>) => {
@@ -79,7 +78,7 @@ const ApiProfileEditor: React.FC<ApiProfileEditorProps> = ({ profile, isPopup })
 					: undefined
 			}
 		}
-		updateProfile(profile.id, normalized)
+		onUpdateProfile(normalized)
 	}
 
 	switch (profile.provider) {

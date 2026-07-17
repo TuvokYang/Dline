@@ -27,24 +27,38 @@ const ApiConfigurationSection = ({ renderSectionHeader, initialModelTab }: ApiCo
 		removeProfile,
 		toggleExpand,
 		providerOptions,
+		loaded,
+		error,
+		reloadProfiles,
 	} = useApiProfiles()
 
 	return (
 		<div>
 			{renderSectionHeader?.("api-config")}
 			<Section>
-				<ProviderProfileList
-					currentMode={currentTab}
-					editMode={editMode}
-					expandedId={expandedId}
-					onAddProfile={addProfile}
-					onDeleteProfile={removeProfile}
-					onToggleEditMode={() => setEditMode(!editMode)}
-					onToggleExpand={toggleExpand}
-					onUpdateProfile={updateProfile}
-					profiles={profiles}
-					providerOptions={providerOptions}
-				/>
+				{!loaded && !error && <div className="py-3 text-sm text-description">Loading API profiles…</div>}
+				{error && (
+					<div className="py-3 text-sm text-errorForeground">
+						<div>Failed to load API profiles. Existing profiles have not been replaced.</div>
+						<button className="mt-2" onClick={() => void reloadProfiles()} type="button">
+							Retry
+						</button>
+					</div>
+				)}
+				{loaded && !error && (
+					<ProviderProfileList
+						currentMode={currentTab}
+						editMode={editMode}
+						expandedId={expandedId}
+						onAddProfile={addProfile}
+						onDeleteProfile={removeProfile}
+						onToggleEditMode={() => setEditMode(!editMode)}
+						onToggleExpand={toggleExpand}
+						onUpdateProfile={updateProfile}
+						profiles={profiles}
+						providerOptions={providerOptions}
+					/>
+				)}
 			</Section>
 		</div>
 	)

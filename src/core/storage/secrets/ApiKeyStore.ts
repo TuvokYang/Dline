@@ -53,6 +53,11 @@ export function deleteApiKey(id: string): void {
 	getStore().delete(id)
 }
 
+/** Apply multiple API key changes with a single atomic file write. */
+export function setApiKeysBatch(entries: Record<string, ApiKeyEntry | undefined>): Thenable<void> {
+	return getStore().setBatch(entries)
+}
+
 /** Get all stored API key entries. */
 export function getAllApiKeys(): Record<string, ApiKeyEntry> {
 	const store = getStore()

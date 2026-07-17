@@ -1,11 +1,9 @@
-import { EmptyRequest } from "@shared/proto/dline/common"
-import type { AvailableModelsResponse, ModelInfo } from "@shared/proto/dline/models"
+import { PROFILE_PROVIDER_KEYS } from "@shared/providers/profile-model-info"
 import type { Mode } from "@shared/storage/types"
 import { ChevronDownIcon, ChevronRightIcon } from "lucide-react"
-import { useEffect, useState } from "react"
-import { ModelsServiceClient } from "@/services/grpc-client"
 import type { ApiProfile } from "./ProviderProfile"
 import ApiProfileEditor from "./ProviderProfileEditor"
+import { getCachedProviderDefaultModelId, useProviderModels } from "./useProviderModels"
 
 interface ApiProfileCardProps {
 	profile: ApiProfile
@@ -83,40 +81,10 @@ const ApiProfileCard: React.FC<ApiProfileCardProps> = ({
 	const modelLabel = profile.modelId || (hasProvider ? "Select model..." : "")
 	const displayLine = [profile.name || providerLabel, modelLabel].filter(Boolean).join(" · ")
 
-	// Load modelInfo from RPC if missing but provider+modelId are set.
-	// We store the result in local state only (loadedModelInfo) to avoid
-	// triggering onUpdate → persist → loadProfiles → re-render cycles.
-	// The tooltip display uses loadedModelInfo as fallback; the profile's
-	// actual modelInfo is only persisted when the user explicitly selects a model.
-	const [loadedModelInfo, setLoadedModelInfo] = useState<ModelInfo | null>(profile.modelInfo || null)
-
-	useEffect(() => {
-		if (profile.modelInfo || !profile.provider || !profile.modelId) return
-		let cancelled = false
-		ModelsServiceClient.getAvailableModels({} as EmptyRequest)
-			.then((response: AvailableModelsResponse) => {
-				if (cancelled) return
-				for (const group of response.providers || []) {
-					if (group.provider === profile.provider) {
-						const found = group.models.find((m) => m.id === profile.modelId)
-						if (found) {
-							setLoadedModelInfo(found)
-						}
-						break
-					}
-				}
-			})
-			.catch(() => {})
-		return () => {
-			cancelled = true
-		}
-		// CRITICAL: Do NOT include onUpdate in deps — it changes on every
-		// useApiProfiles re-render and would cause infinite loops.
-		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [profile.provider, profile.modelId, profile.modelInfo])
+	const { models } = useProviderModels(profile.provider || "")
 
 	// Build detailed tooltip from modelInfo
-	const info = loadedModelInfo || profile.modelInfo
+	const info = profile.modelInfo || models[profile.modelId]
 	const tooltipLines: string[] = [displayLine]
 	if (info) {
 		const mi = info
@@ -153,7 +121,11 @@ const ApiProfileCard: React.FC<ApiProfileCardProps> = ({
 				<div className="flex-1 flex items-center gap-1.5 min-w-0 max-w-[60%]">
 					<input
 						className="text-sm font-medium bg-transparent border-0 outline-none truncate"
-						onChange={(e) => onUpdate({ name: e.target.value })}
+						defaultValue={profile.name}
+						key={`${profile.id}:${profile.name}`}
+						onBlur={(e) => {
+							if (e.target.value !== profile.name) onUpdate({ name: e.target.value })
+						}}
 						onClick={(e) => e.stopPropagation()}
 						placeholder={profile.provider && profile.modelId ? `${profile.provider}:${profile.modelId}` : "Name"}
 						size={Math.max(
@@ -164,7 +136,6 @@ const ApiProfileCard: React.FC<ApiProfileCardProps> = ({
 							8,
 						)}
 						style={{ color: "var(--vscode-foreground)" }}
-						value={profile.name}
 					/>
 					{hasProvider && <ThinkingBadge profile={profile} />}
 					{!editMode && hasProvider && <UsageBadges usedFor={profile.usedFor} />}
@@ -213,7 +184,20 @@ const ApiProfileCard: React.FC<ApiProfileCardProps> = ({
 						<label className="text-xs font-medium text-description block mb-0.5">Provider</label>
 						<select
 							className="w-full text-xs p-1 rounded bg-input-background border border-input-border"
-							onChange={(e) => onUpdate({ provider: e.target.value, modelId: "", modelInfo: undefined, name: "" })}
+							onChange={(e) => {
+								const updates = {
+									provider: e.target.value,
+									apiKey: "",
+									baseUrl: undefined,
+									modelId: getCachedProviderDefaultModelId(e.target.value),
+									modelInfo: undefined,
+									name: "",
+								} as Partial<ApiProfile> & Record<string, unknown>
+								for (const key of Object.values(PROFILE_PROVIDER_KEYS)) {
+									if (key) updates[key] = undefined
+								}
+								onUpdate(updates)
+							}}
 							value={profile.provider}>
 							<option value="">Select provider...</option>
 							{providerOptions.map((opt) => (
@@ -245,7 +229,7 @@ const ApiProfileCard: React.FC<ApiProfileCardProps> = ({
 					</div>
 
 					{/* Delegated provider editor */}
-					{hasProvider && <ApiProfileEditor isPopup={false} profile={profile} />}
+					{hasProvider && <ApiProfileEditor isPopup={false} onUpdateProfile={onUpdate} profile={profile} />}
 				</div>
 			)}
 		</div>
