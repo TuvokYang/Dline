@@ -24,7 +24,7 @@ By waiting for and carefully considering the user's response after each tool use
 
 ## TURN-END Tools
 
-Some tools are marked [TURN-END] in their description. These tools end the current execution turn — after calling one, you MUST wait for the user to respond before continuing. All other tools return results immediately and you proceed automatically to the next step.
+Tools marked [TURN-END] hand control back to the user. Calling one terminates the current execution turn: the runtime stops the automatic API/tool loop and opens the tool's user interaction. Do not emit additional tool calls after a TURN-END call in the same response. Execution resumes from the user's submitted feedback or selected action.
 
 ## Explicit Instructions
 

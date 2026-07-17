@@ -53,7 +53,7 @@ export const CommandOutputContent = memo(
 					}
 				}, 50)
 			}
-		}, [])
+		}, [output])
 
 		if (!isContainerExpanded) {
 			return null
@@ -220,7 +220,7 @@ export const CommandOutputRow = memo(
 
 		const requestsApproval = rawCommand.endsWith(COMMAND_REQ_APP_STRING)
 		const command = requestsApproval ? rawCommand.slice(0, -COMMAND_REQ_APP_STRING.length) : rawCommand
-		const showCancelButton = isActive && typeof onCancelCommand === "function" && isBackgroundExec
+		const showCancelButton = isActive && typeof onCancelCommand === "function"
 
 		const commandHeader = (
 			<div className="flex items-center gap-2.5 mb-3">
@@ -234,19 +234,27 @@ export const CommandOutputRow = memo(
 			return (
 				<>
 					{commandHeader}
-					<button
-						className={cn("w-full flex items-center gap-2 p-2 rounded-xs cursor-pointer transition-colors border", {
+					<div
+						className={cn("w-full flex items-center gap-2 p-2 rounded-xs transition-colors border", {
 							"bg-success/10 border-success/30": exitCode === 0,
 							"bg-error/10 border-error/30": exitCode != null && exitCode !== 0,
 							"bg-editor-warning-foreground/10 border-editor-warning-foreground/30": isCommandPending,
 							"bg-description/10 border-description/30": exitCode == null && !isCommandPending,
 							"bg-success/5 border-success/20": isCommandExecuting,
-						})}
-						onClick={onToggleCollapsed}
-						type="button">
-						<TerminalIcon className={cn("size-2 shrink-0", isActive && "animate-pulse", colors.text)} />
-						<span className="text-sm text-left truncate flex-1 opacity-70">{command}</span>
-					</button>
+						})}>
+						<button
+							className="flex min-w-0 flex-1 items-center gap-2 cursor-pointer"
+							onClick={onToggleCollapsed}
+							type="button">
+							<TerminalIcon className={cn("size-2 shrink-0", isActive && "animate-pulse", colors.text)} />
+							<span className="text-sm text-left truncate flex-1 opacity-70">{command}</span>
+						</button>
+						{showCancelButton && (
+							<Button onClick={onCancelCommand} size="sm" variant="secondary">
+								Cancel
+							</Button>
+						)}
+					</div>
 				</>
 			)
 		}
@@ -275,17 +283,11 @@ export const CommandOutputRow = memo(
 									<Button
 										onClick={(e) => {
 											e.stopPropagation()
-											if (isBackgroundExec) {
-												onCancelCommand?.()
-											} else {
-												alert(
-													"This command is running in the VSCode terminal. You can manually stop it using Ctrl+C in the terminal, or switch to Background Execution mode in settings for cancellable commands.",
-												)
-											}
+											onCancelCommand?.()
 										}}
 										size="sm"
 										variant="secondary">
-										{isBackgroundExec ? "cancel" : "stop"}
+										Cancel
 									</Button>
 								)}
 							</div>

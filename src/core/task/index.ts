@@ -143,6 +143,7 @@ import {
 } from "./auto-retry"
 import { buildTaskBackgroundResults, buildTaskBackgroundSection } from "./background/BackgroundContextInjector"
 import { FocusChainManager } from "./focus-chain"
+import type { InteractionKind } from "./interaction/Interaction"
 import { InteractionCoordinator } from "./interaction/InteractionCoordinator"
 import {
 	getPresentationCadenceMs,
@@ -978,11 +979,57 @@ export class Task {
 		files?: string[]
 		askTs?: number
 	}> {
+		const approvalKind = partial !== true ? this.getApprovalInteractionKind(type) : undefined
+		const runtime = this.taskRuntime?.getState()
+		const runtimeBlock = runtime?.turn?.blocks.find(
+			(block) =>
+				(options?.existingTs !== undefined && block.ts === options.existingTs) ||
+				block.phase === "executing" ||
+				block.phase === "auto_executing",
+		)
+		if (approvalKind && runtime?.turn && runtimeBlock) {
+			const outcome = await this.interactionCoordinator.open({
+				turnId: runtime.turn.turnId,
+				interactionId: runtimeBlock.dlineTid,
+				kind: approvalKind,
+				presentation: text ?? "",
+				existingTs: options?.existingTs,
+			})
+			return {
+				response: outcome.actionId === "approve" ? "yesButtonClicked" : "noButtonClicked",
+				text: outcome.draft?.text,
+				images: outcome.draft?.images,
+				files: outcome.draft?.files,
+			}
+		}
+
 		const askOptions = this.withApprovalVisibleCallback(type, text, partial, options)
 
 		const result = await this.taskController.ask(type, text, partial, askOptions)
 
 		return result
+	}
+
+	/** Map legacy handler approval asks onto the canonical interaction registry. */
+	private getApprovalInteractionKind(type: ClineAsk): InteractionKind | undefined {
+		switch (type) {
+			case "tool":
+				return "tool_approval"
+			case "command":
+				return "command_approval"
+			case "browser_action_launch":
+				return "browser_approval"
+			case "use_mcp_server":
+				return "mcp_approval"
+			case "use_subagents":
+				return "subagent_approval"
+			case "spawn_task":
+				return "spawn_task_approval"
+			case "focus_chain_change":
+				return "focus_chain_change"
+			default:
+				return undefined
+		}
 	}
 
 	// CONVERSATIONAL_TOOL_NAMES is now imported from @shared/tools as the

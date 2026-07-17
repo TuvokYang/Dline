@@ -151,6 +151,13 @@ export class ToolExecutor {
 
 	/** Public block-scoped accessor used by TaskController.buildTurn(). */
 	public isBlockApproved(block: ToolUse): boolean {
+		// Registered handlers own their approval transaction. The canonical runtime
+		// must start the handler so it can present the matching interaction and wait
+		// for the user's causal response; gating here would prevent that interaction
+		// from ever being rendered.
+		if (this.coordinator.has(block.name)) {
+			return true
+		}
 		const result = this.autoApprover.shouldAutoApproveTool(block.name)
 		const workspaceRoots = this.workspaceManager?.getRoots().map((root) => root.path)
 		return isBlockAutoApproved(block, {

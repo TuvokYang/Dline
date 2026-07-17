@@ -109,6 +109,7 @@ function createFakeTask(taskState: {
 			},
 		},
 		withApprovalVisibleCallback: (Task.prototype as any).withApprovalVisibleCallback,
+		getApprovalInteractionKind: (Task.prototype as any).getApprovalInteractionKind,
 		markApprovalAskVisible: (Task.prototype as any).markApprovalAskVisible,
 		markConversationAskVisible: (Task.prototype as any).markConversationAskVisible,
 		markErrorRecoveryAskVisible: (Task.prototype as any).markErrorRecoveryAskVisible,
@@ -133,6 +134,44 @@ function createFakeTask(taskState: {
 }
 
 describe("Task.ask", () => {
+	it("routes a running handler approval through the canonical interaction", async () => {
+		const open = vi.fn(async () => ({
+			actionId: "approve",
+			draft: { text: "approved with note", images: ["image"], files: ["file"] },
+		}))
+		const fakeTask = {
+			taskRuntime: {
+				getState: () => ({
+					turn: {
+						turnId: "turn-1",
+						blocks: [{ dlineTid: "tid-1", ts: 42, phase: "executing" }],
+					},
+				}),
+			},
+			interactionCoordinator: { open },
+			taskController: { ask: vi.fn(() => Promise.reject(new Error("legacy ask should not run"))) },
+			getApprovalInteractionKind: (Task.prototype as any).getApprovalInteractionKind,
+			withApprovalVisibleCallback: (Task.prototype as any).withApprovalVisibleCallback,
+		}
+
+		const result = await (Task.prototype as any).ask.call(fakeTask, "tool", "Approve write", false, { existingTs: 42 })
+
+		assert.deepEqual(result, {
+			response: "yesButtonClicked",
+			text: "approved with note",
+			images: ["image"],
+			files: ["file"],
+		})
+		const openedRequest = (open.mock.calls as unknown as Array<[unknown]>)[0]?.[0]
+		assert.deepEqual(openedRequest, {
+			turnId: "turn-1",
+			interactionId: "tid-1",
+			kind: "tool_approval",
+			presentation: "Approve write",
+			existingTs: 42,
+		})
+	})
+
 	it("notifies after a non-partial ask is visible", async () => {
 		const clock = vi.useFakeTimers()
 		const taskState = {

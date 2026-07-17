@@ -89,6 +89,7 @@ export const READ_ONLY_TOOLS = [
  * BLOCK_EXECUTION_STARTED → EXECUTE_TOOL → handler.execute() fires.
  */
 export const CONVERSATIONAL_TOOL_NAMES = new Set<ClineDefaultTool>([
+	ClineDefaultTool.ATTEMPT,
 	ClineDefaultTool.QNA_RESPOND,
 	ClineDefaultTool.PLAN_MODE,
 	ClineDefaultTool.ACT_MODE,

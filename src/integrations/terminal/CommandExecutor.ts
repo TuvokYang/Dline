@@ -185,7 +185,7 @@ export class CommandExecutor {
 		if (this.currentProcess && typeof (this.currentProcess as any).terminate === "function") {
 			// Set flag so execute() knows the command was cancelled externally
 			this.wasCancelledExternally = true
-			;(this.currentProcess as any).terminate()
+			await Promise.resolve((this.currentProcess as any).terminate())
 			this.currentProcess = null
 			cancelled = true
 			Logger.info("Cancelled foreground command")

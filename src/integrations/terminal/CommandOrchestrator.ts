@@ -166,7 +166,10 @@ export async function orchestrateCommandExecution(
 	})
 
 	let userFeedback: { text?: string; images?: string[]; files?: string[] } | undefined
-	let didContinue = false
+	// Command output is presentation state, not an interaction. Stream it from
+	// the first chunk; a blocking command_output ask has no canonical response
+	// and used to hold every later chunk until process completion.
+	let didContinue = true
 	let didCancelViaUi = false
 	let backgroundTrackingResult: OrchestrationResult | null = null // Set when background tracking returns early
 	// Track partial (incremental) say output for post-continue phase
@@ -508,15 +511,15 @@ export async function orchestrateCommandExecution(
 			}
 			// When in file mode, we've already notified the user, so don't keep buffering
 		} else {
-			// After "Proceed While Running" (without background tracking): stream output via partial updates
-			// But throttle if we're in file mode to avoid flooding UI
+			// Stream through the same bounded buffer so high-volume commands do not
+			// cause one webview update per terminal line.
 			if (!isWritingToFile) {
-				partialSayLines.push(line)
-				const combined = partialSayLines.join("\n")
-				if (partialSayOutputTs === undefined) {
-					partialSayOutputTs = await say("command_output", combined, undefined, undefined, true, undefined, cmdTs)
-				} else {
-					await say("command_output", combined, undefined, undefined, true, partialSayOutputTs)
+				outputBuffer.push(line)
+				outputBufferSize += lineBytes
+				if (outputBuffer.length >= CHUNK_LINE_COUNT || outputBufferSize >= CHUNK_BYTE_SIZE) {
+					await flushBuffer()
+				} else if (!completed) {
+					scheduleFlush()
 				}
 			}
 		}
@@ -555,7 +558,7 @@ export async function orchestrateCommandExecution(
 				clearTimeout(chunkTimer)
 				chunkTimer = null
 			}
-			if (!didContinue && outputBuffer.length > 0) {
+			if (outputBuffer.length > 0) {
 				await flushBuffer(true)
 			}
 			// Finalize any partial say output: persist the final accumulated output

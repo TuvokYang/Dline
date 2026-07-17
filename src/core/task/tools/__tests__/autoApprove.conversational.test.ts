@@ -7,6 +7,7 @@ import { AutoApprove } from "../autoApprove"
  *  handler.execute() → interactions.open() flow fires through
  *  BLOCK_EXECUTION_STARTED → EXECUTE_TOOL. */
 const CONVERSATIONAL_TOOLS = [
+	ClineDefaultTool.ATTEMPT,
 	ClineDefaultTool.QNA_RESPOND,
 	ClineDefaultTool.PLAN_MODE,
 	ClineDefaultTool.ACT_MODE,

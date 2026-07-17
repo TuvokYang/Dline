@@ -38,8 +38,10 @@ export class VscodeTerminalProcess extends EventEmitter<TerminalProcessEvents> i
 	private hotTimer: NodeJS.Timeout | null = null
 	private exitCode: number | null | undefined = undefined
 	private signal: NodeJS.Signals | null = null
+	private terminal: vscode.Terminal | null = null
 
 	async run(terminal: vscode.Terminal, command: string) {
+		this.terminal = terminal
 		this.exitCode = undefined
 		this.signal = null
 
@@ -304,6 +306,18 @@ export class VscodeTerminalProcess extends EventEmitter<TerminalProcessEvents> i
 		this.isListening = false
 		this.removeAllListeners("line")
 		this.emit("continue")
+	}
+
+	/** Interrupt the active integrated-terminal command with Ctrl+C. */
+	terminate() {
+		if (!this.terminal) return
+		this.signal = "SIGINT"
+		this.terminal.sendText("\u0003", false)
+		if (this.hotTimer) {
+			clearTimeout(this.hotTimer)
+			this.hotTimer = null
+		}
+		this.isHot = false
 	}
 
 	/**
