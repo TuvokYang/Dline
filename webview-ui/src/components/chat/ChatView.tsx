@@ -31,7 +31,7 @@ import {
 	useScrollBehavior,
 	WelcomeSection,
 } from "./chat-view"
-import { resolveActiveProfile } from "./chat-view/utils/profileUtils"
+import { resolveActiveProfile, resolveTaskCurrency } from "./chat-view/utils/profileUtils"
 
 interface ChatViewProps {
 	isHidden: boolean
@@ -192,6 +192,13 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 		}
 		return resolveProfileModelInfo(activeProfile, { models, defaultModelId })
 	}, [activeProfile, models, defaultModelId])
+	const displayedApiMetrics = useMemo(
+		() => ({
+			...(apiMetrics ?? { totalTokensIn: 0, totalTokensOut: 0, totalCost: 0 }),
+			currency: resolveTaskCurrency(apiMetrics?.currency, selectedModelInfo.pricing?.currency),
+		}),
+		[apiMetrics, selectedModelInfo.pricing?.currency],
+	)
 
 	const selectFilesAndImages = useCallback(async () => {
 		try {
@@ -344,7 +351,7 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 				{showNavbar && <Navbar />}
 				{task ? (
 					<TaskSection
-						apiMetrics={apiMetrics ?? { totalTokensIn: 0, totalTokensOut: 0, totalCost: 0 }}
+						apiMetrics={displayedApiMetrics}
 						lastApiReqTotalTokens={lastApiReqTotalTokens}
 						lastProgressMessageText={lastProgressMessageText}
 						messageHandlers={messageHandlers}

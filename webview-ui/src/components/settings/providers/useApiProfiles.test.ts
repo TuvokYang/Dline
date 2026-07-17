@@ -1,6 +1,6 @@
 import { ApiProfile } from "@shared/proto/dline/profile"
 import { describe, expect, it } from "vitest"
-import { applyProfileUpdate, buildProfileSettings } from "./useApiProfiles"
+import { applyProfileUpdate, buildProfileSettings, shouldUseTaskProfileSettings } from "./useApiProfiles"
 
 describe("applyProfileUpdate", () => {
 	it("returns unchanged profiles when an update is a no-op", () => {
@@ -64,5 +64,15 @@ describe("buildProfileSettings", () => {
 		const result = buildProfileSettings("anthropic-plan", ["plan"])
 
 		expect(result).to.deep.equal({ planModeProfile: "anthropic-plan" })
+	})
+})
+
+describe("shouldUseTaskProfileSettings", () => {
+	it("keeps profile selection task-scoped before the history item id is available", () => {
+		expect(shouldUseTaskProfileSettings(undefined, true)).to.equal(true)
+	})
+
+	it("uses global profile settings when no task exists", () => {
+		expect(shouldUseTaskProfileSettings(undefined, false)).to.equal(false)
 	})
 })

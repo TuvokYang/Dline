@@ -20,3 +20,7 @@ export function resolveActiveProfile(
 
 	return namedProfile ?? profiles.find((profile) => profile.enabled && profile.usedFor?.includes(mode)) ?? profiles[0]
 }
+
+export function resolveTaskCurrency(apiCurrency: string | undefined, profileCurrency: string | undefined): string {
+	return (apiCurrency?.trim() || profileCurrency?.trim() || "USD").toUpperCase()
+}

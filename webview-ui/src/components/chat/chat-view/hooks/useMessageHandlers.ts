@@ -6,6 +6,20 @@ import { TaskServiceClient } from "@/services/grpc-client"
 
 import type { ChatState, MessageHandlers } from "../types/chatTypes"
 
+export async function runNewTaskSubmission(
+	startTask: () => Promise<unknown>,
+	clearDraft: () => void,
+	restoreDraft: () => void,
+): Promise<void> {
+	clearDraft()
+	try {
+		await startTask()
+	} catch (error) {
+		restoreDraft()
+		throw error
+	}
+}
+
 /**
  * Custom hook for managing message handlers
  * Handles sending messages, button clicks, and task management
@@ -35,13 +49,25 @@ export function useMessageHandlers(
 			if (activeQuote) {
 				messageToSend = `[context] \n> ${activeQuote}\n[/context] \n\n${messageToSend}`
 			}
-			await TaskServiceClient.newTask(NewTaskRequest.create({ text: messageToSend, images, files }))
-			setInputValue("")
-			setActiveQuote(null)
-			setSendingDisabled(true)
-			setSelectedImages([])
-			setSelectedFiles([])
-			setEnableButtons(false)
+			await runNewTaskSubmission(
+				() => TaskServiceClient.newTask(NewTaskRequest.create({ text: messageToSend, images, files })),
+				() => {
+					setInputValue("")
+					setActiveQuote(null)
+					setSendingDisabled(true)
+					setSelectedImages([])
+					setSelectedFiles([])
+					setEnableButtons(false)
+				},
+				() => {
+					setInputValue(text)
+					setActiveQuote(activeQuote)
+					setSendingDisabled(false)
+					setSelectedImages(images)
+					setSelectedFiles(files)
+					setEnableButtons(true)
+				},
+			)
 			if (disableAutoScrollRef) {
 				disableAutoScrollRef.current = false
 			}

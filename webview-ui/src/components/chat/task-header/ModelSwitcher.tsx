@@ -1,5 +1,5 @@
 import { CheckIcon, SettingsIcon } from "lucide-react"
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { useApiProfiles } from "@/components/settings/providers/useApiProfiles"
 import { updateSetting } from "@/components/settings/utils/settingsHandlers"
 import { Switch } from "@/components/ui/switch"
@@ -18,7 +18,7 @@ type ModeTab = "act" | "plan"
  * planActSeparateModelsSetting is enabled.
  */
 const ModelSwitcher: React.FC<ModelSwitcherProps> = ({ onOpenSettings }) => {
-	const { apiConfiguration, mode, planActSeparateModelsSetting, currentTaskItem } = useExtensionState()
+	const { apiConfiguration, mode, planActSeparateModelsSetting, currentTaskItem, taskTitleMessage } = useExtensionState()
 	const { profiles, selectProfile, selectProfiles } = useApiProfiles()
 	const [open, setOpen] = useState(false)
 	const [activeTab, setActiveTab] = useState<ModeTab>(mode || "act")
@@ -26,6 +26,11 @@ const ModelSwitcher: React.FC<ModelSwitcherProps> = ({ onOpenSettings }) => {
 
 	// Get current task ID for task-level profile settings
 	const taskId = currentTaskItem?.id
+	const hasActiveTask = Boolean(taskTitleMessage)
+
+	useEffect(() => {
+		if (!open) setActiveTab(mode || "act")
+	}, [mode, open])
 
 	// Resolve currently selected profile name per mode
 	const planProfileName = apiConfiguration?.planModeProfile
@@ -58,10 +63,10 @@ const ModelSwitcher: React.FC<ModelSwitcherProps> = ({ onOpenSettings }) => {
 
 		if (planActSeparateModelsSetting) {
 			// Separated mode: write to the active tab's mode (task-level)
-			selectProfile(profile.id, activeTab, taskId)
+			void selectProfile(profile.id, activeTab, taskId, hasActiveTask)
 		} else {
 			// Unified mode: write to both plan and act in one task-level request.
-			selectProfiles(profile.id, ["plan", "act"], taskId)
+			void selectProfiles(profile.id, ["plan", "act"], taskId, hasActiveTask)
 		}
 	}
 

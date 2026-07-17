@@ -15,6 +15,7 @@ vi.mock("@/context/ExtensionStateContext", () => ({
 	useExtensionState: () => mockedContext.value,
 }))
 
+import { runNewTaskSubmission } from "../chat-view/hooks/useMessageHandlers"
 import { UsageBar } from "../UsageBar"
 import UserMessage from "../UserMessage"
 
@@ -78,5 +79,35 @@ describe("UsageBar", () => {
 		mockedContext.value = {}
 		render(<UsageBar />)
 		expect(screen.getByText("--")).toBeInTheDocument()
+	})
+})
+
+describe("new task draft submission", () => {
+	it("clears the draft before the new task request finishes", async () => {
+		let finishRequest: (() => void) | undefined
+		const request = new Promise<void>((resolve) => {
+			finishRequest = resolve
+		})
+		const clearDraft = vi.fn()
+		const restoreDraft = vi.fn()
+
+		const submission = runNewTaskSubmission(() => request, clearDraft, restoreDraft)
+
+		expect(clearDraft).toHaveBeenCalledOnce()
+		expect(restoreDraft).not.toHaveBeenCalled()
+		finishRequest?.()
+		await submission
+	})
+
+	it("restores the draft when new task creation fails", async () => {
+		const clearDraft = vi.fn()
+		const restoreDraft = vi.fn()
+
+		await expect(
+			runNewTaskSubmission(() => Promise.reject(new Error("new task failed")), clearDraft, restoreDraft),
+		).rejects.toThrow("new task failed")
+
+		expect(clearDraft).toHaveBeenCalledOnce()
+		expect(restoreDraft).toHaveBeenCalledOnce()
 	})
 })

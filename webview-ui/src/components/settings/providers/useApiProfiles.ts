@@ -19,6 +19,7 @@ let sharedLoaded = false
 let sharedLoadError: Error | undefined
 let sharedLoadPromise: Promise<ApiProfile[]> | undefined
 let sharedPersistQueue: Promise<void> = Promise.resolve()
+let sharedSelectionQueue: Promise<void> = Promise.resolve()
 const profileListeners = new Set<() => void>()
 
 function notifyProfileListeners(): void {
@@ -102,6 +103,10 @@ export function buildProfileSettings(
 	}, {})
 }
 
+export function shouldUseTaskProfileSettings(taskId: string | undefined, hasActiveTask: boolean): boolean {
+	return Boolean(taskId) || hasActiveTask
+}
+
 /**
  * Shared ApiProfile store. All hook consumers use one initial RPC and one
  * optimistic profile snapshot, avoiding stale per-component copies.
@@ -157,21 +162,27 @@ export function useApiProfiles() {
 		[persist],
 	)
 
-	const selectProfiles = useCallback((id: string, modes: ProfileMode[], taskId?: string) => {
+	const selectProfiles = useCallback((id: string, modes: ProfileMode[], taskId?: string, hasActiveTask = false) => {
 		const profile = sharedProfiles.find((item) => item.id === id)
-		if (!profile) return
+		if (!profile) return Promise.resolve()
 		const settings = buildProfileSettings(profile.name || "", modes)
-		if (taskId) {
-			updateTaskSettings(taskId, settings)
-			return
-		}
-		for (const [field, value] of Object.entries(settings)) {
-			updateSetting(field as keyof typeof settings, value)
-		}
+		sharedSelectionQueue = sharedSelectionQueue
+			.catch(() => undefined)
+			.then(async () => {
+				if (shouldUseTaskProfileSettings(taskId, hasActiveTask)) {
+					await updateTaskSettings(taskId, settings)
+					return
+				}
+				await Promise.all(
+					Object.entries(settings).map(([field, value]) => updateSetting(field as keyof typeof settings, value)),
+				)
+			})
+		return sharedSelectionQueue
 	}, [])
 
 	const selectProfile = useCallback(
-		(id: string, mode: ProfileMode, taskId?: string) => selectProfiles(id, [mode], taskId),
+		(id: string, mode: ProfileMode, taskId?: string, hasActiveTask = false) =>
+			selectProfiles(id, [mode], taskId, hasActiveTask),
 		[selectProfiles],
 	)
 

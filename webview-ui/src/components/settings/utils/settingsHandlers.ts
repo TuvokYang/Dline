@@ -36,7 +36,7 @@ export const updateSetting = (field: keyof UpdateSettingsRequest, value: any) =>
 	const convertedValue = convertToProtoValue(field, value)
 	updateRequest[field] = convertedValue
 
-	StateServiceClient.updateSettings(UpdateSettingsRequest.create(updateRequest)).catch((error) => {
+	return StateServiceClient.updateSettings(UpdateSettingsRequest.create(updateRequest)).catch((error) => {
 		console.error(`Failed to update setting ${field}:`, error)
 	})
 }
@@ -59,13 +59,13 @@ export const updateTaskSetting = (taskId: string, field: keyof Settings, value: 
  * @param taskId - The task ID to update settings for
  * @param settings - The task-level settings to update in one request
  */
-export const updateTaskSettings = (taskId: string, settings: Partial<Settings>) => {
+export const updateTaskSettings = (taskId: string | undefined, settings: Partial<Settings>) => {
 	const request = UpdateTaskSettingsRequest.create({
-		taskId,
+		taskId: taskId ?? "",
 		settings,
 	})
 
-	StateServiceClient.updateTaskSettings(request).catch((error) => {
-		console.error(`Failed to update task settings for task ${taskId}:`, error)
+	return StateServiceClient.updateTaskSettings(request).catch((error) => {
+		console.error(`Failed to update task settings for task ${taskId ?? "active"}:`, error)
 	})
 }

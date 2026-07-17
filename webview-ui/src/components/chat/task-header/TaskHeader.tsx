@@ -101,7 +101,7 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 	}, [isHighlightedTextExpanded])
 
 	const isCostAvailable = totalCost != null
-	const displayCurrency = currency || "USD"
+	const displayCurrency = (currency || "USD").toUpperCase()
 	const totalInputTokens = tokensIn + (cacheWrites ?? 0) + (cacheReads ?? 0)
 	const currentContextTokens = lastApiReqTotalTokens ?? totalInputTokens
 
