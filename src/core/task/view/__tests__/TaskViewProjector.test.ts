@@ -67,6 +67,17 @@ describe("projectTaskView", () => {
 		expect(view.footer.actions.every((action) => !action.enabled)).toBe(true)
 	})
 
+	it("restores Cancel while an approved command is running", () => {
+		const interaction = active("command_approval")
+		interaction.status = "resolving"
+		const view = projectTaskView(runtime(TaskPhase.EXECUTING, interaction))
+
+		expect(view.input.enabled).toBe(false)
+		expect(view.footer.actions).toEqual([
+			{ type: "cancel", label: "Cancel", appearance: "danger", enabled: true, payloadPolicy: "none" },
+		])
+	})
+
 	it("projects focus-chain selection requirements", () => {
 		const view = projectTaskView(runtime(TaskPhase.AWAITING_APPROVAL, active("focus_chain_change")))
 

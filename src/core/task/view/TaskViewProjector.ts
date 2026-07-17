@@ -41,7 +41,12 @@ export function projectTaskView(state: Readonly<TaskRuntimeState>): TaskViewStat
 	}
 
 	const interaction = state.interaction ? projectInteraction(state.interaction, state.revision) : undefined
-	const actions = interaction?.actions ?? (CANCELLABLE_PHASES.has(state.phase) ? [{ ...CANCEL_ACTION }] : [])
+	const isCancellable = CANCELLABLE_PHASES.has(state.phase)
+	const interactionIsBeingResolved = state.interaction?.status === "resolving"
+	const actions =
+		interactionIsBeingResolved && isCancellable
+			? [{ ...CANCEL_ACTION }]
+			: (interaction?.actions ?? (isCancellable ? [{ ...CANCEL_ACTION }] : []))
 	return {
 		taskId: state.taskId,
 		phase: state.phase,
