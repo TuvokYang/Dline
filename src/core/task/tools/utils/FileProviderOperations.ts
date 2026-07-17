@@ -15,6 +15,8 @@ export interface FileOpsResult {
  * Utility class for file operations via a DiffViewProvider
  */
 export class FileProviderOperations {
+	private preparedDeletePath?: string
+
 	constructor(private provider: DiffViewProvider) {}
 
 	async openFile(path: string): Promise<void> {
@@ -71,16 +73,26 @@ export class FileProviderOperations {
 	 * Call deleteFile() with isFinal=true after approval when isFinal is false.
 	 */
 	async deleteFile(path: string, isFinal = true): Promise<FileOpsResult | undefined> {
-		this.provider.editType = "delete"
+		if (isFinal && this.preparedDeletePath === path && this.provider.isEditing) {
+			await this.provider.deleteFile(path)
+			this.preparedDeletePath = undefined
+			return undefined
+		}
+
+		// Preview deletion as an unsaved modification of an existing document.
+		// Opening with editType="delete" makes DiffViewProvider create/truncate it.
+		this.provider.editType = "modify"
 		await this.openFile(path)
 
 		if (isFinal) {
 			await this.provider.deleteFile(path)
+			this.preparedDeletePath = undefined
 			return undefined
 		}
 		// Update with empty content to show the file will be deleted
 		// Always pass isFinal=true to update() to ensure proper document finalization
 		await this.provider.update("", true)
+		this.preparedDeletePath = path
 		return undefined
 	}
 

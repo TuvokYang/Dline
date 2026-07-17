@@ -1,3 +1,4 @@
+import * as path from "node:path"
 import { formatResponse } from "@core/prompts/responses"
 import { workspaceResolver } from "@core/workspace"
 import { createDirectoriesForFile } from "@utils/fs"
@@ -490,7 +491,17 @@ export abstract class DiffViewProvider {
 
 	async deleteFile(fileName: string) {
 		const fileLocation = this.absolutePath
-		if (!fileLocation?.endsWith(fileName) || !this.isEditing) {
+		if (!fileLocation || !this.isEditing) {
+			return
+		}
+
+		const normalizeForComparison = (value: string) => {
+			const normalized = path.normalize(value)
+			return process.platform === "win32" ? normalized.toLowerCase() : normalized
+		}
+		const normalizedLocation = normalizeForComparison(fileLocation)
+		const normalizedFileName = normalizeForComparison(fileName)
+		if (normalizedLocation !== normalizedFileName && !normalizedLocation.endsWith(`${path.sep}${normalizedFileName}`)) {
 			return
 		}
 

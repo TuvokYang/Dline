@@ -1,5 +1,8 @@
+import * as os from "node:os"
+import * as path from "node:path"
 import * as assert from "assert"
-import { describe, it } from "vitest"
+import * as fs from "fs/promises"
+import { describe, expect, it } from "vitest"
 import { DiffViewProvider } from "../DiffViewProvider"
 
 class TestBoundaryDiffViewProvider extends DiffViewProvider {
@@ -62,9 +65,31 @@ class TestBoundaryDiffViewProvider extends DiffViewProvider {
 		this.originalContent = initialContent
 		this.truncatedAt = undefined
 	}
+
+	public setupDelete(absolutePath: string) {
+		this.isEditing = true
+		this.absolutePath = absolutePath
+	}
 }
 
 describe("DiffViewProvider Boundary Validation", () => {
+	it("deletes a prepared file when the request uses different path separators", async () => {
+		const provider = new TestBoundaryDiffViewProvider()
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "dline-delete-test-"))
+		const nestedDir = path.join(tempDir, "nested")
+		const absolutePath = path.join(nestedDir, "deleted.ts")
+		await fs.mkdir(nestedDir)
+		await fs.writeFile(absolutePath, "delete me")
+
+		try {
+			provider.setupDelete(absolutePath)
+			await provider.deleteFile("nested/deleted.ts")
+			await expect(fs.access(absolutePath)).rejects.toMatchObject({ code: "ENOENT" })
+		} finally {
+			await fs.rm(tempDir, { force: true, recursive: true })
+		}
+	})
+
 	it("should replace entire document on final update to prevent concatenation", async () => {
 		const provider = new TestBoundaryDiffViewProvider()
 		// Start with multi-line content

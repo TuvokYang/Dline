@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest"
 import { ToolValidator } from "../../ToolValidator"
 import type { TaskConfig } from "../../types/TaskConfig"
 import type { StronglyTypedUIHelpers } from "../../types/UIHelpers"
+import { FileProviderOperations } from "../../utils/FileProviderOperations"
 import { ApplyPatchHandler } from "../ApplyPatchHandler"
 
 vi.mock("@utils/path", async () => {
@@ -98,5 +99,33 @@ describe("ApplyPatchHandler partial rendering", () => {
 		)
 
 		expect(ask).toHaveBeenCalledWith("tool", expect.any(String), true, { existingTs: blockTs })
+	})
+})
+
+describe("FileProviderOperations delete flow", () => {
+	it("previews an existing file without reopening it before final deletion", async () => {
+		const provider = {
+			editType: undefined,
+			isEditing: false,
+			open: vi.fn(async () => {
+				provider.isEditing = true
+			}),
+			update: vi.fn(async () => {}),
+			deleteFile: vi.fn(async () => {
+				provider.isEditing = false
+			}),
+		}
+		const operations = new FileProviderOperations(provider as never)
+
+		await operations.deleteFile("src/deleted.ts", false)
+
+		expect(provider.editType).toBe("modify")
+		expect(provider.open).toHaveBeenCalledTimes(1)
+		expect(provider.update).toHaveBeenCalledWith("", true)
+
+		await operations.deleteFile("src/deleted.ts")
+
+		expect(provider.open).toHaveBeenCalledTimes(1)
+		expect(provider.deleteFile).toHaveBeenCalledWith("src/deleted.ts")
 	})
 })
