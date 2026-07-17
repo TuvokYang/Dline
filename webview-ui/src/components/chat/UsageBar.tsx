@@ -25,6 +25,17 @@ const formatCurrency = (currency: string | undefined, amount: number): string =>
 	}
 }
 
+const formatQuota = (label: string, used: number, limit: number): string => {
+	const percent = limit > 0 ? (used / limit) * 100 : used
+	return `${label} ${Math.max(0, Math.min(100, percent)).toFixed(0)}%`
+}
+
+const formatReset = (resetAt: string | undefined): string | undefined => {
+	if (!resetAt) return undefined
+	const date = new Date(resetAt)
+	return Number.isNaN(date.getTime()) ? undefined : date.toLocaleString()
+}
+
 /**
  * Compact usage badge placed between provider name and Plan/Act toggle.
  * Hover to show detailed tooltip with balance, today in/out, cache hit rate.
@@ -47,7 +58,33 @@ export const UsageBar = () => {
 		)
 	}
 
-	const balance = accountUsage?.remainingBalance ?? 0
+	const quotas = accountUsage.quotas?.filter((quota) => quota.limit > 0) ?? []
+	if (quotas.length > 0) {
+		return (
+			<span className={baseClass}>
+				<span className="font-medium text-foreground">
+					{quotas.map((quota) => formatQuota(quota.label, quota.used, quota.limit)).join(" · ")}
+				</span>
+				<span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 hidden group-hover:inline-flex flex-col gap-0.5 bg-dropdown-background border border-editor-group-border rounded-[3px] px-2 py-1 shadow-lg z-50 text-[10px] whitespace-nowrap">
+					{quotas.map((quota) => {
+						const reset = formatReset(quota.resetAt)
+						return (
+							<span key={`${quota.type}:${quota.label}`}>
+								{formatQuota(quota.label, quota.used, quota.limit)} used{reset ? ` · resets ${reset}` : ""}
+							</span>
+						)
+					})}
+					<span>Usage for the active profile</span>
+				</span>
+			</span>
+		)
+	}
+
+	if (accountUsage.remainingBalance === undefined) {
+		return <span className={baseClass}>--</span>
+	}
+
+	const balance = accountUsage.remainingBalance
 	const dailyIn = accountUsage?.dailyInputTokens ?? 0
 	const dailyOut = accountUsage?.dailyOutputTokens ?? 0
 	const dailyCacheTotal = (accountUsage?.dailyCacheHitTokens ?? 0) + (accountUsage?.dailyCacheMissTokens ?? 0)
@@ -60,8 +97,7 @@ export const UsageBar = () => {
 				<span>Today In: {fmt(dailyIn)}</span>
 				<span>Today Out: {fmt(dailyOut)}</span>
 				{dailyCacheHitRate > 0 && <span>Cache Hit: {dailyCacheHitRate.toFixed(1)}%</span>}
-				<span>Account-level usage</span>
-				<span>Profiles sharing a key show the same balance</span>
+				<span>Usage for the active profile</span>
 			</span>
 		</span>
 	)

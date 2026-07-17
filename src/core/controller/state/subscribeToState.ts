@@ -16,11 +16,12 @@ const controllerSubscriptions = new Map<Controller, Set<StreamingResponseHandler
 // Debounce state is now per-controller so rapid-fire updates from one
 // task don't flood a different task's webview.
 type PendingUpdate = {
-	stateJson: string
+	state: ExtensionState
 	accountUsage: AccountUsage | undefined
 }
 const pendingUpdates = new Map<Controller, PendingUpdate>()
 const debounceTimers = new Map<Controller, ReturnType<typeof setTimeout>>()
+const controllerSendChains = new Map<Controller, Promise<void>>()
 
 type StateUpdateOptions = {
 	immediate?: boolean
@@ -108,15 +109,7 @@ export async function sendStateUpdate(
 	accountUsage?: AccountUsage,
 	options?: StateUpdateOptions,
 ): Promise<void> {
-	let stateJson: string
-	try {
-		stateJson = JSON.stringify(state)
-	} catch (error) {
-		Logger.error("Error serializing state update:", error)
-		return
-	}
-
-	pendingUpdates.set(controller, { stateJson, accountUsage })
+	pendingUpdates.set(controller, { state, accountUsage })
 
 	if (options?.immediate) {
 		const timer = debounceTimers.get(controller)
@@ -128,7 +121,7 @@ export async function sendStateUpdate(
 		const pending = pendingUpdates.get(controller)
 		if (pending) {
 			pendingUpdates.delete(controller)
-			await sendStateJsonToSubscribers(controller, pending.stateJson, pending.accountUsage)
+			await sendStateToSubscribers(controller, pending.state, pending.accountUsage)
 		}
 		return
 	}
@@ -144,68 +137,71 @@ export async function sendStateUpdate(
 			const pending = pendingUpdates.get(controller)
 			if (pending) {
 				pendingUpdates.delete(controller)
-				await sendStateJsonToSubscribers(controller, pending.stateJson, pending.accountUsage)
+				await sendStateToSubscribers(controller, pending.state, pending.accountUsage)
 			}
 		}, 50),
 	)
 }
 
-// Global serialization chain to prevent concurrent JSON.stringify + gRPC writes
-// from multiple controllers blocking the Node.js event loop. Each controller's
-// send is queued on this chain so only one state update is in-flight at a time.
-let gStateSendChain: Promise<void> = Promise.resolve()
+/** Send an account-usage-only event without rebuilding or serializing ExtensionState. */
+export async function sendAccountUsageUpdate(controller: Controller, accountUsage?: AccountUsage): Promise<void> {
+	await enqueueControllerSend(controller, async () => {
+		await sendPayloadToSubscribers(controller, "", accountUsage)
+	})
+}
 
-/**
- * Sends the state JSON to all subscribers of a specific controller.
- * Serialized globally to prevent multi-controller event-loop contention.
- */
-async function sendStateJsonToSubscribers(
+async function sendStateToSubscribers(
 	controller: Controller,
-	finalStateJson: string,
+	state: ExtensionState,
 	finalAccountUsage?: AccountUsage,
 ): Promise<void> {
-	// Chain onto the global serialization promise to serialize across controllers
-	const previousChain = gStateSendChain
-	let releaseChain: (() => void) | undefined
-	gStateSendChain = new Promise<void>((resolve) => {
-		releaseChain = resolve
-	})
-
 	try {
-		await previousChain
-
-		const startTime = performance.now()
-		const stateSizeBytes = Buffer.byteLength(finalStateJson, "utf8")
+		const stateJson = JSON.stringify(state)
+		const stateSizeBytes = Buffer.byteLength(stateJson, "utf8")
 		recordStateSizeTelemetry(stateSizeBytes)
+		await enqueueControllerSend(controller, async () => {
+			await sendPayloadToSubscribers(controller, stateJson, finalAccountUsage, stateSizeBytes)
+		})
+	} catch (error) {
+		Logger.error("Error serializing state update:", error)
+	}
+}
 
-		const subs = controllerSubscriptions.get(controller)
-		if (!subs || subs.size === 0) return
+function enqueueControllerSend(controller: Controller, send: () => Promise<void>): Promise<void> {
+	const previous = controllerSendChains.get(controller) ?? Promise.resolve()
+	const next = previous.then(send, send)
+	controllerSendChains.set(controller, next)
+	return next.finally(() => {
+		if (controllerSendChains.get(controller) === next) {
+			controllerSendChains.delete(controller)
+		}
+	})
+}
 
-		const promises = Array.from(subs).map(async (responseStream) => {
+async function sendPayloadToSubscribers(
+	controller: Controller,
+	stateJson: string,
+	accountUsage?: AccountUsage,
+	stateSizeBytes = 0,
+): Promise<void> {
+	const startTime = performance.now()
+	const subs = controllerSubscriptions.get(controller)
+	if (!subs || subs.size === 0) return
+
+	await Promise.all(
+		Array.from(subs).map(async (responseStream) => {
 			try {
-				await responseStream(
-					{
-						stateJson: finalStateJson,
-						accountUsage: accountUsageToProto(finalAccountUsage),
-					},
-					false, // Not the last message
-				)
+				await responseStream({ stateJson, accountUsage: accountUsageToProto(accountUsage) }, false)
 			} catch (error) {
 				Logger.error("Error sending state update:", error)
 				subs.delete(responseStream)
 			}
-		})
+		}),
+	)
 
-		await Promise.all(promises)
-
-		const durationMs = Math.round(performance.now() - startTime)
-		if (durationMs > 20) {
-			Logger.debug(
-				`[StateUpdate] sendStateJsonToSubscribers took ${durationMs}ms, size=${stateSizeBytes}B, subs=${subs?.size ?? 0}`,
-			)
-		}
-	} finally {
-		releaseChain?.()
+	const durationMs = Math.round(performance.now() - startTime)
+	if (durationMs > 20) {
+		Logger.debug(`[StateUpdate] sendPayloadToSubscribers took ${durationMs}ms, size=${stateSizeBytes}B, subs=${subs.size}`)
 	}
 }
 

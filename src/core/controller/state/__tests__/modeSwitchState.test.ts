@@ -12,7 +12,7 @@ import { describe, expect, it, vi } from "vitest"
 import type { StreamingResponseHandler } from "@/core/controller/grpc-handler"
 import { cancelModeSwitch } from "../cancelModeSwitch"
 import { confirmModeSwitch } from "../confirmModeSwitch"
-import { subscribeToState } from "../subscribeToState"
+import { sendAccountUsageUpdate, sendStateUpdate, subscribeToState } from "../subscribeToState"
 import { togglePlanActModeProto } from "../togglePlanActModeProto"
 
 /** Create the minimum serializable state needed by revision-order tests. */
@@ -133,5 +133,53 @@ describe("mode switch state integration", () => {
 		const payload = vi.mocked(responseStream).mock.calls[0]?.[0]
 		expect(JSON.parse(payload?.stateJson ?? "{}")).toMatchObject({ stateRevision: 2 })
 		expect(getState).toHaveBeenCalledTimes(3)
+	})
+
+	it("sends account usage without rebuilding or serializing extension state", async () => {
+		const controller = Object.create(Controller.prototype) as Controller
+		vi.spyOn(controller, "getStateToPostToWebview").mockResolvedValue(createState(1))
+		vi.spyOn(controller, "isStateCurrent").mockReturnValue(true)
+		vi.spyOn(controller, "getAccountUsage").mockReturnValue(undefined)
+		const responseStream: StreamingResponseHandler<State> = vi.fn(async () => undefined)
+		await subscribeToState(controller, EmptyRequest.create(), responseStream)
+		vi.mocked(responseStream).mockClear()
+
+		await sendAccountUsageUpdate(controller, { currency: "CNY", remainingBalance: 12 })
+
+		expect(responseStream).toHaveBeenCalledTimes(1)
+		const payload = vi.mocked(responseStream).mock.calls[0]?.[0]
+		expect(payload?.stateJson).toBe("")
+		expect(payload?.accountUsage?.currency).toBe("CNY")
+		expect(payload?.accountUsage?.remainingBalance).toBe(12)
+	})
+
+	it("does not let a slow controller block another controller state stream", async () => {
+		const slowController = Object.create(Controller.prototype) as Controller
+		const fastController = Object.create(Controller.prototype) as Controller
+		for (const controller of [slowController, fastController]) {
+			vi.spyOn(controller, "getStateToPostToWebview").mockResolvedValue(createState(1))
+			vi.spyOn(controller, "isStateCurrent").mockReturnValue(true)
+			vi.spyOn(controller, "getAccountUsage").mockReturnValue(undefined)
+		}
+		let slowWriteCompleted = false
+		const slowStream: StreamingResponseHandler<State> = vi.fn(async () => undefined)
+		const fastStream: StreamingResponseHandler<State> = vi.fn(async () => undefined)
+		await subscribeToState(slowController, EmptyRequest.create(), slowStream)
+		await subscribeToState(fastController, EmptyRequest.create(), fastStream)
+		vi.mocked(slowStream).mockImplementationOnce(async () => {
+			await new Promise((resolve) => setTimeout(resolve, 100))
+			slowWriteCompleted = true
+		})
+		vi.mocked(slowStream).mockClear()
+		vi.mocked(fastStream).mockClear()
+
+		const slowUpdate = sendStateUpdate(slowController, createState(2), undefined, { immediate: true })
+		await vi.waitFor(() => expect(slowStream).toHaveBeenCalledTimes(1))
+		await sendStateUpdate(fastController, createState(2), undefined, { immediate: true })
+
+		expect(fastStream).toHaveBeenCalledTimes(1)
+		expect(slowWriteCompleted).toBe(false)
+		await slowUpdate
+		expect(slowWriteCompleted).toBe(true)
 	})
 })

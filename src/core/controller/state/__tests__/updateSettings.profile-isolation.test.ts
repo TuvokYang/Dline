@@ -1,8 +1,9 @@
-import { PlanActMode, UpdateSettingsRequest } from "@shared/proto/dline/state"
+import { PlanActMode, UpdateSettingsRequest, UpdateTaskSettingsRequest } from "@shared/proto/dline/state"
 import { expect } from "chai"
 import { describe, it, vi } from "vitest"
 import type { Controller } from "../.."
 import { updateSettings } from "../updateSettings"
+import { updateTaskSettings } from "../updateTaskSettings"
 
 /** Build a controller fixture with a task-local profile binding. */
 function createController(): {
@@ -34,5 +35,29 @@ describe("updateSettings profile isolation", () => {
 
 		expect(clearTaskSetting.mock.calls).to.have.length(0)
 		expect(rebuildApiHandler.mock.calls).to.have.length(0)
+	})
+})
+
+describe("updateTaskSettings account usage", () => {
+	it("clears and refreshes usage when the active task profile changes", async () => {
+		const restartAccountUsagePolling = vi.fn()
+		const rebuildApiHandler = vi.fn()
+		const controller = {
+			stateManager: {
+				setTaskSettingsBatch: vi.fn(),
+				setTaskSettings: vi.fn(),
+			},
+			task: { taskId: "task-1", rebuildApiHandler },
+			restartAccountUsagePolling,
+			postStateToWebview: vi.fn().mockResolvedValue(undefined),
+		} as unknown as Controller
+
+		await updateTaskSettings(
+			controller,
+			UpdateTaskSettingsRequest.create({ taskId: "task-1", settings: { actModeProfile: "codex-profile" } }),
+		)
+
+		expect(rebuildApiHandler.mock.calls).to.have.length(1)
+		expect(restartAccountUsagePolling.mock.calls).to.have.length(1)
 	})
 })

@@ -1,8 +1,12 @@
 import { ApiProfile } from "@shared/proto/dline/profile"
 import { OpenAiProviderConfig } from "@shared/proto/dline/provider/openai"
+import { expect } from "chai"
 import should from "should"
 import { afterEach, describe, it, vi } from "vitest"
+import { openAiCodexOAuthManager } from "@/integrations/openai-codex/oauth"
+import { mockFetchForTesting } from "@/shared/net"
 import { OpenAiHandler } from "../openai"
+import { OpenAiCodexHandler } from "../openai-codex"
 
 /**
  * Create an async iterable for mocked streaming responses.
@@ -86,6 +90,70 @@ describe("OpenAiHandler", () => {
 			const requestBody = create.mock.calls[0]?.[0] as Record<string, unknown> | undefined
 			should(requestBody?.max_tokens).equal(12_345)
 			should(requestBody?.temperature).equal(0.7)
+		})
+	})
+})
+
+describe("OpenAiCodexHandler account usage", () => {
+	afterEach(() => {
+		vi.restoreAllMocks()
+	})
+
+	it("maps the short and weekly Codex quota windows", async () => {
+		vi.spyOn(openAiCodexOAuthManager, "getAccessToken").mockResolvedValue("access-token")
+		vi.spyOn(openAiCodexOAuthManager, "getAccountId").mockResolvedValue("account-123")
+		const request = vi.fn().mockResolvedValue({
+			ok: true,
+			status: 200,
+			json: async () => ({
+				rate_limit: {
+					primary_window: {
+						used_percent: 25,
+						limit_window_seconds: 18_000,
+						reset_at: 1_800_000_000,
+					},
+					secondary_window: {
+						used_percent: 60,
+						limit_window_seconds: 604_800,
+						reset_at: 1_800_500_000,
+					},
+				},
+				credits: { balance: "7.50" },
+			}),
+		})
+		const handler = new OpenAiCodexHandler({
+			profile: ApiProfile.create({ provider: "openai-codex", modelId: "gpt-5.6-sol" }),
+			mode: "act",
+		})
+
+		const usage = await mockFetchForTesting(request, () => handler.getAccountUsage())
+
+		expect(request.mock.calls).to.have.length(1)
+		expect(request.mock.calls[0][0]).to.equal("https://chatgpt.com/backend-api/wham/usage")
+		expect(request.mock.calls[0][1].headers).to.include({
+			Authorization: "Bearer access-token",
+			"ChatGPT-Account-Id": "account-123",
+		})
+		expect(usage).to.deep.equal({
+			currency: "USD",
+			remainingBalance: 7.5,
+			quotas: [
+				{
+					type: "5hour",
+					label: "5h",
+					used: 25,
+					limit: 100,
+					resetAt: new Date(1_800_000_000 * 1_000).toISOString(),
+				},
+				{
+					type: "weekly",
+					label: "Weekly",
+					used: 60,
+					limit: 100,
+					resetAt: new Date(1_800_500_000 * 1_000).toISOString(),
+				},
+			],
+			isAvailable: true,
 		})
 	})
 })

@@ -133,6 +133,7 @@ export async function updateApiConfigurationProto(
 				currentMode,
 			)
 		}
+		controller.restartAccountUsagePolling()
 
 		// Post updated state to webview
 		await controller.postStateToWebview()

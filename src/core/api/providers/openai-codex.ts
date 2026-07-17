@@ -13,7 +13,7 @@ import { fetch } from "@/shared/net"
 import { ApiFormat } from "@/shared/proto/dline/models"
 import { FeatureFlag } from "@/shared/services/feature-flags/feature-flags"
 import { Logger } from "@/shared/services/Logger"
-import { ApiHandler, ApiHandlerContext } from "../"
+import { AccountUsage, ApiHandler, ApiHandlerContext } from "../"
 import { convertToOpenAIResponsesInput } from "../transform/openai-response-format"
 import {
 	createResponsesRegistry,
@@ -28,6 +28,24 @@ import { ApiStream, ApiStreamUsageChunk } from "../transform/stream"
  */
 const CODEX_API_BASE_URL = "https://chatgpt.com/backend-api/codex"
 const CODEX_RESPONSES_WEBSOCKET_URL = "wss://chatgpt.com/backend-api/codex/responses"
+const CODEX_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage"
+const CODEX_USAGE_TIMEOUT_MS = 10_000
+
+interface CodexUsageWindow {
+	used_percent?: number
+	limit_window_seconds?: number
+	reset_at?: number
+}
+
+interface CodexUsageResponse {
+	rate_limit?: {
+		primary_window?: CodexUsageWindow
+		secondary_window?: CodexUsageWindow
+	}
+	credits?: {
+		balance?: string | number
+	}
+}
 
 /**
  * OpenAiCodexHandler - Uses OpenAI Responses API with OAuth authentication
@@ -47,6 +65,7 @@ export class OpenAiCodexHandler implements ApiHandler {
 	private readonly sessionId: string
 	// Abort controller for cancelling ongoing requests
 	private abortController?: AbortController
+	private accountUsageController?: AbortController
 	// Track request-local Responses item and function identities.
 	private responsesRegistry: ResponsesIdentityRegistry = createResponsesRegistry("openai-codex")
 
@@ -69,6 +88,113 @@ export class OpenAiCodexHandler implements ApiHandler {
 	}
 	private get reasoningEffort() {
 		return this.reasoningConfig?.effort
+	}
+
+	private usageQuota(window: CodexUsageWindow | undefined) {
+		if (!window || typeof window.used_percent !== "number") {
+			return undefined
+		}
+
+		const seconds = window.limit_window_seconds ?? 0
+		const type =
+			seconds >= 27 * 24 * 60 * 60
+				? "monthly"
+				: seconds >= 6 * 24 * 60 * 60
+					? "weekly"
+					: seconds >= 20 * 60 * 60
+						? "daily"
+						: seconds === 5 * 60 * 60
+							? "5hour"
+							: "custom"
+		const label =
+			type === "monthly"
+				? "Monthly"
+				: type === "weekly"
+					? "Weekly"
+					: type === "daily"
+						? "Daily"
+						: type === "5hour"
+							? "5h"
+							: seconds >= 60 * 60
+								? `${Math.round(seconds / (60 * 60))}h`
+								: `${Math.max(1, Math.round(seconds / 60))}m`
+		const resetAt =
+			typeof window.reset_at === "number" && window.reset_at > 0
+				? new Date(window.reset_at * 1_000).toISOString()
+				: undefined
+
+		return {
+			type,
+			label,
+			used: Math.max(0, Math.min(100, window.used_percent)),
+			limit: 100,
+			resetAt,
+		}
+	}
+
+	/** Fetch current ChatGPT Codex quota windows for this OAuth account. */
+	async getAccountUsage(): Promise<AccountUsage | undefined> {
+		this.accountUsageController?.abort()
+		const controller = new AbortController()
+		this.accountUsageController = controller
+		const timeout = setTimeout(() => controller.abort(), CODEX_USAGE_TIMEOUT_MS)
+
+		try {
+			let accessToken = await openAiCodexOAuthManager.getAccessToken()
+			if (!accessToken) {
+				return undefined
+			}
+
+			for (let attempt = 0; attempt < 2; attempt++) {
+				const accountId = await openAiCodexOAuthManager.getAccountId()
+				const response = await fetch(CODEX_USAGE_URL, {
+					headers: {
+						Authorization: `Bearer ${accessToken}`,
+						originator: "dline",
+						"User-Agent": `dline/${process.env.npm_package_version || "1.0.0"}`,
+						...(accountId ? { "ChatGPT-Account-Id": accountId } : {}),
+						...buildExternalBasicHeaders(),
+					},
+					signal: controller.signal,
+				})
+
+				if (response.status === 401 && attempt === 0) {
+					const refreshed = await openAiCodexOAuthManager.forceRefreshAccessToken()
+					if (!refreshed) {
+						return undefined
+					}
+					accessToken = refreshed
+					continue
+				}
+				if (!response.ok) {
+					throw new Error(`Codex usage request failed: ${response.status}`)
+				}
+
+				const payload = (await response.json()) as CodexUsageResponse
+				const quotas = [
+					this.usageQuota(payload.rate_limit?.primary_window),
+					this.usageQuota(payload.rate_limit?.secondary_window),
+				].filter((quota): quota is NonNullable<typeof quota> => quota !== undefined)
+				const balanceValue = payload.credits?.balance
+				const balance = balanceValue === undefined || balanceValue === null ? Number.NaN : Number(balanceValue)
+				if (quotas.length === 0 && !Number.isFinite(balance)) {
+					return undefined
+				}
+
+				return {
+					currency: Number.isFinite(balance) ? "USD" : "",
+					...(Number.isFinite(balance) ? { remainingBalance: balance } : {}),
+					quotas,
+					isAvailable: true,
+				}
+			}
+			return undefined
+		} finally {
+			clearTimeout(timeout)
+			if (this.accountUsageController === controller) {
+				this.accountUsageController = undefined
+			}
+		}
 	}
 
 	private normalizeUsage(usage: any, _model: { id: string; info: ModelInfo }): ApiStreamUsageChunk | undefined {
@@ -731,6 +857,7 @@ export class OpenAiCodexHandler implements ApiHandler {
 	abort(): void {
 		this.closeResponsesWebsocket()
 		this.abortController?.abort()
+		this.accountUsageController?.abort()
 	}
 
 	getModel(): { id: OpenAiCodexModelId; info: ModelInfo } {

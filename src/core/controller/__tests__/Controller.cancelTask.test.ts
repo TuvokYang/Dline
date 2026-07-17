@@ -38,3 +38,23 @@ describe("Controller.cancelTask", () => {
 		assert.deepEqual(updateBackgroundCommandState.mock.calls, [[false]])
 	})
 })
+
+describe("Controller account usage polling visibility", () => {
+	it("stops polling while hidden and refreshes immediately when visible", () => {
+		const startAccountUsagePolling = vi.fn()
+		const stopAccountUsagePolling = vi.fn()
+		const controller = {
+			accountUsagePollingEnabled: true,
+			startAccountUsagePolling,
+			stopAccountUsagePolling,
+		}
+
+		Controller.prototype.setAccountUsagePollingEnabled.call(controller, false)
+		assert.equal(controller.accountUsagePollingEnabled, false)
+		assert.equal(stopAccountUsagePolling.mock.calls.length, 1)
+
+		Controller.prototype.setAccountUsagePollingEnabled.call(controller, true)
+		assert.equal(controller.accountUsagePollingEnabled, true)
+		assert.equal(startAccountUsagePolling.mock.calls.length, 1)
+	})
+})

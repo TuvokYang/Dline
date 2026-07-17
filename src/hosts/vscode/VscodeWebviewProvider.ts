@@ -54,6 +54,8 @@ export class VscodeWebviewProvider extends WebviewProvider implements vscode.Web
 		// Restore global instance reference that may have been cleared by a previous dispose
 		this.restoreInstance()
 		this.webview = webviewView
+		const controller = await this.controllerReady
+		controller.setAccountUsagePollingEnabled(webviewView.visible)
 
 		webviewView.webview.options = {
 			// Allow scripts in the webview
@@ -81,9 +83,10 @@ export class VscodeWebviewProvider extends WebviewProvider implements vscode.Web
 		// WebviewPanel is not currently used in the extension
 		webviewView.onDidChangeVisibility(
 			async () => {
+				const controller = await this.controllerReady
+				controller.setAccountUsagePollingEnabled(this.webview?.visible ?? false)
 				if (this.webview?.visible) {
 					// View becoming visible should not steal editor focus.
-					const controller = await this.controllerReady
 					await sendShowWebviewEvent(controller, true)
 				}
 			},
@@ -96,6 +99,7 @@ export class VscodeWebviewProvider extends WebviewProvider implements vscode.Web
 		// Only clean UI bindings — the Controller and task should continue running.
 		webviewView.onDidDispose(
 			() => {
+				void this.controllerReady.then((controller) => controller.setAccountUsagePollingEnabled(false))
 				this.webview = undefined
 				while (this.disposables.length) {
 					this.disposables.pop()?.dispose()

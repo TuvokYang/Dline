@@ -147,6 +147,9 @@ export async function updateTaskSettings(controller: Controller, request: Update
 				mode: mode ?? "(unchanged)",
 			})
 			controller.task.rebuildApiHandler()
+			if (taskProfileChanged || taskModeChanged) {
+				controller.restartAccountUsagePolling()
+			}
 		}
 	}
 

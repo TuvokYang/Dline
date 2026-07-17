@@ -28,6 +28,15 @@ const API_PROFILES_FILE = "api_profiles.json"
 let needsCleanRewrite = false
 let apiProfilesWriteQueue: Promise<void> = Promise.resolve()
 let cleanRewriteInProgress = false
+let apiProfilesReadCache:
+	| {
+			filePath: string
+			mtimeMs: number
+			size: number
+			registryVersion: number
+			profiles: ApiProfile[]
+	  }
+	| undefined
 
 const ATOMIC_WRITE_RENAME_RETRY_DELAYS_MS = [20, 50, 100, 200, 500]
 
@@ -66,6 +75,7 @@ export function writeApiProfilesToFile(filePath: string, profiles: ApiProfile[])
 	const write = async () => {
 		await fs.mkdir(path.dirname(filePath), { recursive: true })
 		await atomicWriteApiProfilesFile(filePath, data)
+		apiProfilesReadCache = undefined
 	}
 	const nextWrite = apiProfilesWriteQueue.then(write, write)
 	apiProfilesWriteQueue = nextWrite.catch(() => {})
@@ -521,6 +531,16 @@ export function readApiProfiles(): ApiProfile[] {
 	const settingsDir = path.join(getDlineDataDir(), "settings")
 	const filePath = path.join(settingsDir, API_PROFILES_FILE)
 	try {
+		const stat = fsSync.statSync(filePath)
+		const registryVersion = ModelRegistry.getInstance().version
+		if (
+			apiProfilesReadCache?.filePath === filePath &&
+			apiProfilesReadCache.mtimeMs === stat.mtimeMs &&
+			apiProfilesReadCache.size === stat.size &&
+			apiProfilesReadCache.registryVersion === registryVersion
+		) {
+			return apiProfilesReadCache.profiles
+		}
 		const raw = fsSync.readFileSync(filePath, "utf8")
 		const parsed = parseApiProfilesJson(raw)
 		const profiles = parsed.profiles
@@ -533,8 +553,18 @@ export function readApiProfiles(): ApiProfile[] {
 		} else if (modelInfoChanged) {
 			cleanRewriteApiProfiles(profiles)
 		}
+		apiProfilesReadCache = {
+			filePath,
+			mtimeMs: stat.mtimeMs,
+			size: stat.size,
+			registryVersion,
+			profiles,
+		}
 		return profiles
 	} catch {
+		if (apiProfilesReadCache?.filePath === filePath) {
+			apiProfilesReadCache = undefined
+		}
 		return []
 	}
 }

@@ -124,7 +124,7 @@ export async function updateSettingsCli(controller: Controller, request: UpdateS
 			controller.task.rebuildApiHandler()
 		}
 
-		if (didChangeProfile) {
+		if (didChangeProfile || mode !== undefined) {
 			controller.restartAccountUsagePolling()
 		}
 

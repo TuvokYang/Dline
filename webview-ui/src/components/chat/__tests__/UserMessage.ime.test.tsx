@@ -5,17 +5,17 @@
  * even if you confirm the IME conversion (Enter) in message re-edit mode.
  */
 
-import { fireEvent, render } from "@testing-library/react"
+import { fireEvent, render, screen } from "@testing-library/react"
 import { describe, expect, it, vi } from "vitest"
+
+const mockedContext = vi.hoisted(() => ({ value: {} as Record<string, unknown> }))
 
 vi.mock("@/context/ExtensionStateContext", () => ({
 	__esModule: true,
-	useExtensionState: () => ({
-		state: {},
-		dispatch: vi.fn(),
-	}),
+	useExtensionState: () => mockedContext.value,
 }))
 
+import { UsageBar } from "../UsageBar"
 import UserMessage from "../UserMessage"
 
 describe("UserMessage – IME composition handling", () => {
@@ -39,5 +39,30 @@ describe("UserMessage – IME composition handling", () => {
 		fireEvent.compositionEnd(editable)
 
 		expect(sendMessageFromChatRow).not.toHaveBeenCalled()
+	})
+})
+
+describe("UsageBar", () => {
+	it("shows Codex short-window and weekly usage", () => {
+		mockedContext.value = {
+			accountUsage: {
+				currency: "",
+				quotas: [
+					{ type: "5hour", label: "5h", used: 25, limit: 100 },
+					{ type: "weekly", label: "Weekly", used: 60, limit: 100 },
+				],
+			},
+		}
+
+		render(<UsageBar />)
+
+		expect(screen.getAllByText(/5h 25%/).length).toBeGreaterThan(0)
+		expect(screen.getAllByText(/Weekly 60%/).length).toBeGreaterThan(0)
+	})
+
+	it("shows an empty value when the active profile has no usage", () => {
+		mockedContext.value = {}
+		render(<UsageBar />)
+		expect(screen.getByText("--")).toBeInTheDocument()
 	})
 })

@@ -71,7 +71,7 @@ import type { ModeSwitchOperation, ResolvedModeProfile } from "./mode-switch/typ
 import { getClineOnboardingModels } from "./models/getClineOnboardingModels"
 import { appendClineStealthModels } from "./models/refreshOpenRouterModels"
 import { checkCliInstallation } from "./state/checkCliInstallation"
-import { sendStateUpdate } from "./state/subscribeToState"
+import { sendAccountUsageUpdate, sendStateUpdate } from "./state/subscribeToState"
 import { sendChatButtonClickedEvent } from "./ui/subscribeToChatButtonClicked"
 
 type InitTaskOptions = {
@@ -118,6 +118,8 @@ export class Controller {
 	private accountUsageTimer?: NodeJS.Timeout
 	private accountUsagePollGeneration = 0
 	private accountUsagePolling = false
+	private accountUsagePollingEnabled = true
+	private disposed = false
 	// Timer for periodic lock heartbeat (keeps .lock file fresh)
 	private lockHeartbeatTimer?: NodeJS.Timeout
 	// Timer for polling lock status when task is in read-only mode
@@ -126,6 +128,7 @@ export class Controller {
 	private taskLockAcquired = false
 	// Account usage data (refreshed every 60s, zero overhead on state push)
 	private _accountUsage?: AccountUsage
+	private accountUsageProfileKey?: string
 	// Disposal function returned by StateManager.registerCallbacks().
 	// Invoked in dispose() to unregister this controller from global
 	// state-change notifications so closed windows don't keep receiving them.
@@ -220,6 +223,7 @@ export class Controller {
 	- https://github.com/microsoft/vscode-extension-samples/blob/main/webview-sample/src/extension.ts
 	*/
 	async dispose() {
+		this.disposed = true
 		// Clear the remote config timer
 		if (this.remoteConfigTimer) {
 			clearInterval(this.remoteConfigTimer)
@@ -404,6 +408,7 @@ export class Controller {
 			uiMessage,
 			apiConversation,
 		})
+		this.restartAccountUsagePolling()
 		const taskInstance = this.task
 		const initializedTaskId = taskInstance.taskId
 
@@ -500,6 +505,7 @@ export class Controller {
 					if (!this.task) throw new Error("Active task is unavailable.")
 					await this.task.commitMode(operation.target.mode, operation.chatContent)
 					telemetryService.captureModeSwitch(this.task.ulid, operation.target.mode)
+					this.restartAccountUsagePolling()
 					await this.postStateToWebview({ immediate: true })
 				},
 			},
@@ -576,6 +582,7 @@ export class Controller {
 		if (!this.task) return false
 		await this.task.commitMode("act")
 		telemetryService.captureModeSwitch(this.task.ulid, "act")
+		this.restartAccountUsagePolling()
 		await this.postStateToWebview({ immediate: true })
 		return true
 	}
@@ -1222,7 +1229,7 @@ export class Controller {
 
 	/** Poll account usage every 60 seconds and push to webview */
 	private startAccountUsagePolling() {
-		if (this.accountUsagePolling) {
+		if (this.disposed || !this.accountUsagePollingEnabled || this.accountUsagePolling) {
 			return
 		}
 		this.accountUsagePolling = true
@@ -1248,7 +1255,7 @@ export class Controller {
 				return
 			}
 			this._accountUsage = undefined
-			await this.postStateToWebview()
+			await sendAccountUsageUpdate(this, undefined)
 		}
 		try {
 			const taskId = this.task?.taskId
@@ -1260,14 +1267,20 @@ export class Controller {
 				throw new Error(`Profile "${profileName}" not found`)
 			}
 			const profileSignature = createHash("sha256").update(JSON.stringify(profile)).digest("hex")
+			const profileKey = `${profile.id}:${profileSignature}`
+			if (this.accountUsageProfileKey !== profileKey) {
+				this._accountUsage = undefined
+				this.accountUsageProfileKey = profileKey
+				await sendAccountUsageUpdate(this, undefined)
+			}
 			const handler = buildApiHandler(apiConfig, mode)
 			if (!handler.getAccountUsage) {
 				await clearStaleUsage()
 				return
 			}
 			const getAccountUsage = handler.getAccountUsage.bind(handler)
-			const usage = await accountUsageCoordinator.get(`${profile.id}:${profileSignature}`, getAccountUsage)
-			if (generation !== this.accountUsagePollGeneration) {
+			const usage = await accountUsageCoordinator.get(profileKey, getAccountUsage)
+			if (generation !== this.accountUsagePollGeneration || this.accountUsageProfileKey !== profileKey) {
 				return
 			}
 			if (!usage) {
@@ -1279,7 +1292,7 @@ export class Controller {
 			}
 			this._accountUsage = usage
 			Logger.debug("[UsagePoll] accountUsage updated")
-			await this.postStateToWebview()
+			await sendAccountUsageUpdate(this, usage)
 		} catch (e) {
 			await clearStaleUsage()
 			Logger.warn(`[UsagePoll] Failed: ${e}`)
@@ -1290,7 +1303,7 @@ export class Controller {
 		this.accountUsagePolling = false
 		this.accountUsagePollGeneration++
 		if (this.accountUsageTimer) {
-			clearInterval(this.accountUsageTimer)
+			clearTimeout(this.accountUsageTimer)
 			this.accountUsageTimer = undefined
 		}
 	}
@@ -1298,7 +1311,23 @@ export class Controller {
 	/** Restart account usage polling with current profile. Called after profile switch. */
 	public restartAccountUsagePolling() {
 		this.stopAccountUsagePolling()
+		const hadUsage = this._accountUsage !== undefined
+		this._accountUsage = undefined
+		this.accountUsageProfileKey = undefined
+		if (hadUsage) {
+			void sendAccountUsageUpdate(this, undefined)
+		}
 		this.startAccountUsagePolling()
+	}
+
+	/** Pause background balance requests while this controller's webview is hidden. */
+	public setAccountUsagePollingEnabled(enabled: boolean): void {
+		this.accountUsagePollingEnabled = enabled
+		if (enabled) {
+			this.startAccountUsagePolling()
+		} else {
+			this.stopAccountUsagePolling()
+		}
 	}
 
 	/**
@@ -1431,6 +1460,7 @@ export class Controller {
 			OrchestratorController.getInstance().unregisterController(taskId)
 		}
 		this.task = undefined // removes reference to it, so once promises end it will be garbage collected
+		this.restartAccountUsagePolling()
 		// Release file ownership in the global checkpoint registry
 		if (taskId) {
 			const { WorkspaceFileRegistry } = await import("@integrations/checkpoints/WorkspaceFileRegistry")

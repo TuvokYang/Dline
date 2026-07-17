@@ -162,6 +162,7 @@ export async function updateApiConfiguration(controller: Controller, request: Up
 			// Use rebuildApiHandler which resolves ApiProfile by name and sets task settings
 			controller.task.rebuildApiHandler()
 		}
+		controller.restartAccountUsagePolling()
 
 		// Post updated state to webview
 		await controller.postStateToWebview()

@@ -1,12 +1,14 @@
+import fsSync from "node:fs"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { ModelRegistry } from "@core/model-registry/ModelRegistry"
 import { getAllApiKeys, resetAllStores } from "@core/storage/secrets"
 import { EmptyRequest } from "@shared/proto/dline/common"
+import { ApiProfile } from "@shared/proto/dline/profile"
 import { expect } from "chai"
 import { afterEach, beforeEach, describe, it, vi } from "vitest"
-import { getApiProfiles } from "../getApiProfiles"
+import { getApiProfiles, readApiProfiles, writeApiProfilesToFile } from "../getApiProfiles"
 import { updateApiProfiles } from "../updateApiProfiles"
 
 describe("getApiProfiles", () => {
@@ -510,5 +512,32 @@ describe("getApiProfiles", () => {
 		expect(repairedProfiles[0].id).to.equal("deepseek-profile")
 		expect(repairedRaw.trim().endsWith("]")).to.equal(true)
 		expect(repairedRaw).not.to.include('"outputPrice": 0')
+	})
+
+	it("caches synchronous profile reads until the profile file changes", async () => {
+		const settingsDir = path.join(process.env.DLINE_DIR!, "data", "settings")
+		const storedProfilesPath = path.join(settingsDir, "api_profiles.json")
+		await fs.mkdir(settingsDir, { recursive: true })
+		const firstProfiles = [
+			ApiProfile.create({
+				id: "profile-1",
+				name: "deepseek profile",
+				provider: "deepseek",
+				modelId: "deepseek-v4-pro",
+				enabled: true,
+			}),
+		]
+		await writeApiProfilesToFile(storedProfilesPath, firstProfiles)
+		const readFileSpy = vi.spyOn(fsSync, "readFileSync")
+
+		expect(readApiProfiles()[0].id).to.equal("profile-1")
+		expect(readApiProfiles()[0].id).to.equal("profile-1")
+		expect(readFileSpy.mock.calls).to.have.length(1)
+
+		await writeApiProfilesToFile(storedProfilesPath, [
+			ApiProfile.create({ ...firstProfiles[0], id: "profile-2", name: "updated profile" }),
+		])
+		expect(readApiProfiles()[0].id).to.equal("profile-2")
+		expect(readFileSpy.mock.calls).to.have.length(2)
 	})
 })

@@ -44,6 +44,7 @@ export async function updateApiConfigurationPartial(
 		if (controller.task) {
 			controller.task.rebuildApiHandler()
 		}
+		controller.restartAccountUsagePolling()
 
 		// Notify webview
 		await controller.postStateToWebview()

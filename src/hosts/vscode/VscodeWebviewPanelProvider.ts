@@ -54,6 +54,7 @@ export class VscodeWebviewPanelProvider extends WebviewProvider {
 			},
 		)
 		this.panel.iconPath = iconPath
+		this.registerPanelVisibilityListener(this.panel)
 
 		// Register message listener BEFORE setting HTML to avoid missing
 		// early webviewReady messages from fast-loading webview bundles.
@@ -93,6 +94,7 @@ export class VscodeWebviewPanelProvider extends WebviewProvider {
 		Logger.debug(`[VscodeWebviewPanelProvider] restorePanel called, state=${JSON.stringify(state)}`)
 		const provider = new VscodeWebviewPanelProvider(context, { deferController: false })
 		provider.panel = panel
+		provider.registerPanelVisibilityListener(panel)
 
 		// Register listener BEFORE HTML
 		provider.setWebviewMessageListener(panel.webview)
@@ -236,6 +238,15 @@ export class VscodeWebviewPanelProvider extends WebviewProvider {
 
 	getPanel(): vscode.WebviewPanel | undefined {
 		return this.panel
+	}
+
+	private registerPanelVisibilityListener(panel: vscode.WebviewPanel): void {
+		this.controller.setAccountUsagePollingEnabled(panel.visible)
+		panel.onDidChangeViewState(
+			(event) => this.controller.setAccountUsagePollingEnabled(event.webviewPanel.visible),
+			null,
+			this.disposables,
+		)
 	}
 
 	private setWebviewMessageListener(webview: vscode.Webview) {

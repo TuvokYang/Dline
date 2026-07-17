@@ -508,6 +508,13 @@ export const ExtensionStateContextProvider: React.FC<{
 		// Set up state subscription
 		stateSubscriptionRef.current = StateServiceClient.subscribeToState(EmptyRequest.create({}), {
 			onResponse: (response) => {
+				if (!response.stateJson) {
+					setState((prevState) => ({
+						...prevState,
+						accountUsage: protoToAccountUsage(response.accountUsage),
+					}))
+					return
+				}
 				if (response.stateJson) {
 					try {
 						const stateData = JSON.parse(response.stateJson) as ExtensionState
