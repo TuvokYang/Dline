@@ -16,7 +16,8 @@ import type { StronglyTypedUIHelpers } from "../types/UIHelpers"
 import { applyModelContentFixes } from "../utils/ModelContentProcessor"
 import { ToolResultUtils } from "../utils/ToolResultUtils"
 
-// Default timeout for commands in yolo mode and background exec mode
+// Every terminal execution needs a bounded foreground wait so a stalled shell
+// cannot permanently block the task loop.
 const DEFAULT_COMMAND_TIMEOUT_SECONDS = 30
 const LONG_RUNNING_COMMAND_TIMEOUT_SECONDS = 300
 
@@ -39,15 +40,7 @@ export function isLikelyLongRunningCommand(command: string): boolean {
 	return LONG_RUNNING_COMMAND_PATTERNS.some((pattern) => pattern.test(normalized))
 }
 
-export function resolveCommandTimeoutSeconds(
-	command: string,
-	timeoutParam: string | undefined,
-	useManagedTimeout: boolean,
-): number | undefined {
-	if (!useManagedTimeout) {
-		return undefined
-	}
-
+export function resolveCommandTimeoutSeconds(command: string, timeoutParam: string | undefined): number {
 	const parsed = timeoutParam ? Number.parseInt(timeoutParam, 10) : Number.NaN
 	if (Number.isFinite(parsed) && parsed > 0) {
 		return parsed
@@ -88,7 +81,6 @@ export class ExecuteCommandToolHandler implements IFullyManagedTool {
 		const requiresApprovalRaw: string | undefined = block.params.requires_approval
 		const requiresApprovalPerLLM = requiresApprovalRaw?.toLowerCase() === "true"
 		const timeoutParam: string | undefined = block.params.timeout
-		let timeoutSeconds: number | undefined
 
 		// Extract provider using the proven pattern from ReportBugHandler
 		const apiConfig = config.services.stateManager.getApiConfiguration()
@@ -112,12 +104,9 @@ export class ExecuteCommandToolHandler implements IFullyManagedTool {
 
 		config.taskState.consecutiveMistakeCount = 0
 
-		// Handling of timeout while in yolo mode or background exec mode
-		timeoutSeconds = resolveCommandTimeoutSeconds(
-			command,
-			timeoutParam,
-			config.yoloModeToggled || config.vscodeTerminalExecutionMode === "backgroundExec",
-		)
+		// Bound the foreground wait in every terminal mode. On timeout the
+		// orchestrator releases the task loop while the command may keep running.
+		const timeoutSeconds = resolveCommandTimeoutSeconds(command, timeoutParam)
 
 		// Pre-process command for certain models
 		if (config.api.getModel().id.includes("gemini")) {

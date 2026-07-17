@@ -50,6 +50,19 @@ function createBlock(): ToolUse {
 }
 
 describe("QnaRespondHandler", () => {
+	it("clears the awaiting response flag when opening the interaction fails", async () => {
+		const config = createConfig({
+			interactions: {
+				open: vi.fn(async () => {
+					throw new Error("interaction transport failed")
+				}),
+			} as unknown as TaskConfig["interactions"],
+		})
+
+		await expect(new QnaRespondHandler().execute(config, createBlock())).rejects.toThrow("interaction transport failed")
+		expect(config.taskState.isAwaitingPlanResponse).toBe(false)
+	})
+
 	it("does not render duplicate user_feedback when response was already acked", async () => {
 		const config = createConfig()
 		config.taskState.ackedFeedback = {

@@ -13,7 +13,6 @@
  * implementations (VscodeTerminalProcess, StandaloneTerminalProcess).
  */
 
-import { setTimeout as setTimeoutPromise } from "node:timers/promises"
 import { formatResponse } from "@core/prompts/responses"
 import { processFilesIntoText } from "@integrations/misc/extract-text"
 import { TerminalHangStage, TerminalUserInterventionAction, telemetryService } from "@services/telemetry"
@@ -184,6 +183,17 @@ export async function orchestrateCommandExecution(
 	let commandOutputAskSequence = 0
 	let pendingCommandOutputAskId: number | null = null
 	let releasePendingCommandOutputAsk: (() => void) | null = null
+	let completed = false
+	let completionDetails: TerminalCompletionDetails | undefined
+	let completionTimer: NodeJS.Timeout | null = null
+	let completionWork: Promise<void> = Promise.resolve()
+	let outputWork: Promise<void> = Promise.resolve()
+
+	const enqueueOutputWork = (work: () => Promise<void>): void => {
+		outputWork = outputWork.then(work).catch((error) => {
+			Logger.error(`[CommandOrchestrator] Failed to process terminal output: ${error}`)
+		})
+	}
 
 	const clearPendingCommandOutputAsk = () => {
 		pendingCommandOutputAskId = null
@@ -204,15 +214,19 @@ export async function orchestrateCommandExecution(
 	 * This is the key mechanism for "Proceed While Running" - when user clicks the button,
 	 * the ask() returns with response "yesButtonClicked".
 	 */
-	const flushBuffer = async (force = false) => {
-		if (outputBuffer.length === 0 && !force) {
+	const flushBuffer = async (_force = false) => {
+		if (outputBuffer.length === 0) {
 			return
 		}
 		const chunk = outputBuffer.join("\n")
 		outputBuffer = []
 		outputBufferSize = 0
 
-		if (!didContinue) {
+		if (!didContinue && completed) {
+			// Completion must never create a new blocking ask. Persist trailing
+			// output as a final message while the completion path awaits this work.
+			await say("command_output", chunk)
+		} else if (!didContinue) {
 			// Start timer to detect if buffer gets stuck
 			bufferStuckTimer = setTimeout(() => {
 				telemetryService.captureTerminalHang(TerminalHangStage.BUFFER_STUCK, terminalType)
@@ -365,7 +379,10 @@ export async function orchestrateCommandExecution(
 		if (chunkTimer) {
 			clearTimeout(chunkTimer)
 		}
-		chunkTimer = setTimeout(async () => await flushBuffer(), CHUNK_DEBOUNCE_MS)
+		chunkTimer = setTimeout(() => {
+			chunkTimer = null
+			enqueueOutputWork(() => flushBuffer())
+		}, CHUNK_DEBOUNCE_MS)
 	}
 
 	// Large output file-based logging state
@@ -436,7 +453,7 @@ export async function orchestrateCommandExecution(
 	}
 
 	const outputLines: string[] = []
-	process.on("line", async (line: string) => {
+	const handleOutputLine = async (line: string): Promise<void> => {
 		if (didCancelViaUi) {
 			return
 		}
@@ -485,7 +502,7 @@ export async function orchestrateCommandExecution(
 				// Flush if buffer is large enough
 				if (outputBuffer.length >= CHUNK_LINE_COUNT || outputBufferSize >= CHUNK_BYTE_SIZE) {
 					await flushBuffer()
-				} else {
+				} else if (!completed) {
 					scheduleFlush()
 				}
 			}
@@ -503,11 +520,10 @@ export async function orchestrateCommandExecution(
 				}
 			}
 		}
+	}
+	process.on("line", (line: string) => {
+		enqueueOutputWork(() => handleOutputLine(line))
 	})
-
-	let completed = false
-	let completionDetails: TerminalCompletionDetails | undefined
-	let completionTimer: NodeJS.Timeout | null = null
 
 	// Start timer to detect if waiting for completion takes too long
 	completionTimer = setTimeout(() => {
@@ -517,7 +533,7 @@ export async function orchestrateCommandExecution(
 		}
 	}, COMPLETION_TIMEOUT_MS)
 
-	process.once("completed", async (details?: TerminalCompletionDetails) => {
+	process.once("completed", (details?: TerminalCompletionDetails) => {
 		completed = true
 		completionDetails = details
 		// If command completed while command_output ask was pending, release it.
@@ -527,19 +543,30 @@ export async function orchestrateCommandExecution(
 			clearTimeout(completionTimer)
 			completionTimer = null
 		}
-		// Flush any remaining buffered output
-		if (!didContinue && outputBuffer.length > 0) {
+		if (chunkTimer) {
+			clearTimeout(chunkTimer)
+			chunkTimer = null
+		}
+		completionWork = (async () => {
+			// EventEmitter does not await async line listeners. Drain the explicit
+			// queue before flushing/finalizing so the result cannot lose tail output.
+			await outputWork
 			if (chunkTimer) {
 				clearTimeout(chunkTimer)
 				chunkTimer = null
 			}
-			await flushBuffer(true)
-		}
-		// Finalize any partial say output: persist the final accumulated output
-		if (partialSayOutputTs !== undefined) {
-			const finalOutput = partialSayLines.join("\n")
-			await say("command_output", finalOutput, undefined, undefined, false, partialSayOutputTs)
-		}
+			if (!didContinue && outputBuffer.length > 0) {
+				await flushBuffer(true)
+			}
+			// Finalize any partial say output: persist the final accumulated output
+			if (partialSayOutputTs !== undefined) {
+				const finalOutput = partialSayLines.join("\n")
+				await say("command_output", finalOutput, undefined, undefined, false, partialSayOutputTs)
+			}
+		})()
+		void completionWork.catch((error) => {
+			Logger.error(`[CommandOrchestrator] Failed to finalize terminal output: ${error}`)
+		})
 	})
 	process.once("error", () => {
 		releaseAnyPendingCommandOutputAsk()
@@ -556,16 +583,17 @@ export async function orchestrateCommandExecution(
 	// Handle timeout if specified, or wait for process to complete
 	if (!didCancelViaUi) {
 		if (timeoutSeconds) {
+			let timeoutId: NodeJS.Timeout | undefined
 			const timeoutPromise = new Promise<never>((_, reject) => {
-				setTimeout(() => {
+				timeoutId = setTimeout(() => {
 					reject(new Error("COMMAND_TIMEOUT"))
 				}, timeoutSeconds * 1000)
 			})
 
 			try {
 				await Promise.race([process, timeoutPromise])
-			} catch (error: any) {
-				if (error.message === "COMMAND_TIMEOUT") {
+			} catch (error: unknown) {
+				if (error instanceof Error && error.message === "COMMAND_TIMEOUT") {
 					// Timeout triggers "Proceed While Running" behavior
 					didContinue = true
 					// Release any pending command_output ask before transitioning state.
@@ -580,6 +608,7 @@ export async function orchestrateCommandExecution(
 						clearTimeout(completionTimer)
 						completionTimer = null
 					}
+					await outputWork
 
 					// If background tracking is available (standalone mode only), use it
 					// This writes output to a log file and detaches the command
@@ -618,8 +647,8 @@ export async function orchestrateCommandExecution(
 					// Just continue the process and return timeout result
 					process.continue()
 
-					// Process any output we captured before timeout
-					await setTimeoutPromise(50)
+					// Drain output already emitted before returning the timeout result.
+					await outputWork
 					const result = terminalManager.processOutput(outputLines)
 
 					return {
@@ -632,11 +661,20 @@ export async function orchestrateCommandExecution(
 
 				// Re-throw other errors
 				throw error
+			} finally {
+				if (timeoutId) {
+					clearTimeout(timeoutId)
+				}
 			}
 		} else {
-			// No timeout - wait for process to complete
+			// Backward-compatible fallback for direct orchestrator callers.
 			await process
 		}
+	}
+
+	await outputWork
+	if (completed) {
+		await completionWork
 	}
 
 	// Check if we returned early due to background tracking
@@ -652,9 +690,6 @@ export async function orchestrateCommandExecution(
 		clearTimeout(completionTimer)
 		completionTimer = null
 	}
-
-	// Wait for a short delay to ensure all messages are sent to the webview
-	await setTimeoutPromise(50)
 
 	// Clean up file-based logging if active
 	cleanupFileBased()

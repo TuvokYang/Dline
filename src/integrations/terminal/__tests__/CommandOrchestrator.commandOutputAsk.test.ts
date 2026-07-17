@@ -88,6 +88,38 @@ async function waitFor(predicate: () => boolean, timeoutMs = 300): Promise<void>
 }
 
 describe("CommandOrchestrator command_output ask lifecycle", () => {
+	it("drains queued tail output and its final UI update before returning", async () => {
+		const process = new FakeTerminalProcess()
+		let releaseSay: (() => void) | undefined
+		let sayStarted = false
+		const callbacks = createCallbacks()
+		callbacks.say = async () => {
+			sayStarted = true
+			await new Promise<void>((resolve) => {
+				releaseSay = resolve
+			})
+			return 321
+		}
+
+		let settled = false
+		const orchestrationPromise = orchestrateCommandExecution(process.asResultPromise(), createTerminalManager(), callbacks, {
+			command: "echo tail",
+		}).then((result) => {
+			settled = true
+			return result
+		})
+
+		process.emit("line", "tail line")
+		process.complete({ exitCode: 0, signal: null })
+		await waitFor(() => sayStarted)
+		assert.equal(settled, false, "orchestration must wait for the final command_output update")
+
+		releaseSay?.()
+		const result = await orchestrationPromise
+		assert.deepEqual(result.outputLines, ["tail line"])
+		assert.match(result.result as string, /tail line/)
+	})
+
 	it("settles a pending command_output ask when the process completes", async () => {
 		const process = new FakeTerminalProcess()
 		let askCalls = 0

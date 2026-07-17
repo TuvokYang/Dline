@@ -45,18 +45,22 @@ export class QnaRespondHandler implements IToolHandler, IPartialBlockHandler {
 
 		config.taskState.isAwaitingPlanResponse = true
 
-		const outcome = await config.interactions.open({
-			turnId: interactionTurnId(block),
-			interactionId: interactionId(block),
-			kind: "qna_response",
-			presentation: JSON.stringify(sharedMessage),
-			existingTs: block.ts,
-		})
+		const outcome = await config.interactions
+			.open({
+				turnId: interactionTurnId(block),
+				interactionId: interactionId(block),
+				kind: "qna_response",
+				presentation: JSON.stringify(sharedMessage),
+				existingTs: block.ts,
+			})
+			.finally(() => {
+				// Never leave mode/input routing in an awaiting-QNA state when the
+				// interaction is rejected or its transport fails.
+				config.taskState.isAwaitingPlanResponse = false
+			})
 		let text = outcome.draft?.text
 		const images = outcome.draft?.images
 		const files = outcome.draft?.files
-
-		config.taskState.isAwaitingPlanResponse = false
 
 		if (isCompactSignal(text)) {
 			return formatResponse.toolResult("Mode switch context compaction requested.")
