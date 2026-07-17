@@ -70,7 +70,9 @@ export function InteractionHost({ messages, view, dispatch, draft = EMPTY_DRAFT,
 				<div role="alert">Interaction is out of sync</div>
 			) : anchor && presentationKind && isPresentationKind(presentationKind) ? (
 				<>
-					{renderPresentation(presentationKind, { message: anchor, selection, onSelectionChange: setSelection })}
+					{showTimeline
+						? renderPresentation(presentationKind, { message: anchor, selection, onSelectionChange: setSelection })
+						: null}
 					<FooterActions
 						dispatch={dispatch}
 						dispatchTaskAction={dispatchTaskAction}

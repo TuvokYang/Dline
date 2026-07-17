@@ -91,6 +91,35 @@ describe("InteractionHost", () => {
 		expect(screen.queryByRole("button", { name: "Reply" })).toBeNull()
 	})
 
+	it("does not duplicate structured ask payloads in footer-only mode", () => {
+		const view = taskView()
+		if (!view.activeInteraction) {
+			throw new Error("Expected active interaction")
+		}
+		view.activeInteraction = {
+			...view.activeInteraction,
+			kind: "qna_response",
+			presentationKind: "qna_response",
+			taskAsk: "qna_respond",
+		}
+		view.input.enterAction = "reply"
+		view.footer.actions = [{ type: "reply", label: "Reply", appearance: "primary", enabled: true, payloadPolicy: "draft" }]
+		const payload = JSON.stringify({ response: "Human-readable answer" })
+
+		render(
+			<InteractionHost
+				dispatch={vi.fn()}
+				messages={[{ ...ASK, ask: "qna_respond", text: payload }]}
+				showTimeline={false}
+				view={view}
+			/>,
+		)
+
+		expect(screen.queryByText(payload)).toBeNull()
+		expect(screen.queryByText("Human-readable answer")).toBeNull()
+		expect(screen.queryByRole("button", { name: "Reply" })).toBeNull()
+	})
+
 	it("keeps ask read-only without an active interaction", () => {
 		const view = taskView()
 		delete view.activeInteraction
