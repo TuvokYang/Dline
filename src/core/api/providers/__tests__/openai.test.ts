@@ -140,7 +140,7 @@ describe("OpenAiCodexHandler account usage", () => {
 			quotas: [
 				{
 					type: "5hour",
-					label: "5h",
+					label: "5 hour",
 					used: 25,
 					limit: 100,
 					resetAt: new Date(1_800_000_000 * 1_000).toISOString(),

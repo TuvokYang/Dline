@@ -114,7 +114,7 @@ export class OpenAiCodexHandler implements ApiHandler {
 					: type === "daily"
 						? "Daily"
 						: type === "5hour"
-							? "5h"
+							? "5 hour"
 							: seconds >= 60 * 60
 								? `${Math.round(seconds / (60 * 60))}h`
 								: `${Math.max(1, Math.round(seconds / 60))}m`

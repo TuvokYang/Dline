@@ -48,16 +48,30 @@ describe("UsageBar", () => {
 			accountUsage: {
 				currency: "",
 				quotas: [
-					{ type: "5hour", label: "5h", used: 25, limit: 100 },
+					{ type: "5hour", label: "5 hour", used: 25, limit: 100 },
 					{ type: "weekly", label: "Weekly", used: 60, limit: 100 },
 				],
 			},
 		}
 
-		render(<UsageBar />)
+		const { container } = render(<UsageBar />)
 
-		expect(screen.getAllByText(/5h 75% left/).length).toBeGreaterThan(0)
-		expect(screen.getAllByText(/Weekly 40% left/).length).toBeGreaterThan(0)
+		expect(container.querySelector(".font-medium")).toHaveTextContent("5 hour 75%")
+		expect(container).toHaveTextContent("Weekly 40%")
+		expect(container).not.toHaveTextContent("left")
+	})
+
+	it("uses weekly usage as the compact value when the 5 hour window is absent", () => {
+		mockedContext.value = {
+			accountUsage: {
+				currency: "",
+				quotas: [{ type: "weekly", label: "Weekly", used: 60, limit: 100 }],
+			},
+		}
+
+		const { container } = render(<UsageBar />)
+
+		expect(container.querySelector(".font-medium")).toHaveTextContent("Weekly 40%")
 	})
 
 	it("shows an empty value when the active profile has no usage", () => {

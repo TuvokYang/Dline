@@ -28,7 +28,7 @@ const formatCurrency = (currency: string | undefined, amount: number): string =>
 const formatQuotaRemaining = (label: string, used: number, limit: number): string => {
 	const remaining = Math.max(0, limit - used)
 	const percent = limit > 0 ? (remaining / limit) * 100 : 0
-	return `${label} ${Math.max(0, Math.min(100, percent)).toFixed(0)}% left`
+	return `${label} ${Math.max(0, Math.min(100, percent)).toFixed(0)}%`
 }
 
 const formatReset = (resetAt: string | undefined): string | undefined => {
@@ -61,10 +61,12 @@ export const UsageBar = () => {
 
 	const quotas = accountUsage.quotas?.filter((quota) => quota.limit > 0) ?? []
 	if (quotas.length > 0) {
+		const primaryQuota =
+			quotas.find((quota) => quota.type === "5hour") ?? quotas.find((quota) => quota.type === "weekly") ?? quotas[0]
 		return (
 			<span className={baseClass}>
 				<span className="font-medium text-foreground">
-					{quotas.map((quota) => formatQuotaRemaining(quota.label, quota.used, quota.limit)).join(" · ")}
+					{formatQuotaRemaining(primaryQuota.label, primaryQuota.used, primaryQuota.limit)}
 				</span>
 				<span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 hidden group-hover:inline-flex flex-col gap-0.5 bg-dropdown-background border border-editor-group-border rounded-[3px] px-2 py-1 shadow-lg z-50 text-[10px] whitespace-nowrap">
 					{quotas.map((quota) => {
