@@ -558,7 +558,7 @@ export class StateManager {
 	/**
 	 * Clear task settings cache - ensures pending changes are persisted first
 	 */
-	async clearTaskSettings(): Promise<void> {
+	async clearTaskSettings(taskId?: string): Promise<void> {
 		// If there are pending task settings, persist them first
 		if (this.pendingTaskState.size > 0) {
 			try {
@@ -571,10 +571,14 @@ export class StateManager {
 			}
 		}
 
-		// Clear only the active task's cache, not all tasks
-		if (this.activeTaskId) {
-			this.taskStateCache.delete(this.activeTaskId)
-			this.activeTaskId = undefined
+		// Clear the explicitly requested task. Legacy callers without an ID still
+		// target activeTaskId, but multi-controller callers must not depend on it.
+		const targetTaskId = taskId ?? this.activeTaskId
+		if (targetTaskId) {
+			this.taskStateCache.delete(targetTaskId)
+			if (this.activeTaskId === targetTaskId) {
+				this.activeTaskId = undefined
+			}
 		}
 		this.pendingTaskState.clear()
 	}
@@ -827,7 +831,26 @@ export class StateManager {
 		}
 
 		// Construct API configuration from cached component keys
-		return this.constructApiConfigurationFromCache()
+		return this.constructApiConfigurationFromCache(this.activeTaskId)
+	}
+
+	/**
+	 * Build API configuration for an explicit task without mutating the shared
+	 * activeTaskId routing cursor used by legacy callers.
+	 */
+	getApiConfigurationForTask(taskId?: string): ApiConfiguration {
+		if (!this.isInitialized) {
+			throw new Error(STATE_MANAGER_NOT_INITIALIZED)
+		}
+		return this.constructApiConfigurationFromCache(taskId)
+	}
+
+	/** Resolve a settings value for one explicit task without changing activeTaskId. */
+	getSettingsKeyForTask<K extends keyof Settings>(key: K, taskId?: string): Settings[K] {
+		if (!this.isInitialized) {
+			throw new Error(STATE_MANAGER_NOT_INITIALIZED)
+		}
+		return this.getSettingWithOverrideForTask(key, taskId)
 	}
 
 	/**
@@ -1159,11 +1182,8 @@ export class StateManager {
 		Object.assign(this.workspaceStateCache, workspaceState)
 	}
 
-	/**
-	 * Helper to get a setting value with override support
-	 * Precedence: remote config > session override > task settings > global settings
-	 */
-	private getSettingWithOverride<K extends keyof Settings>(key: K): Settings[K] {
+	/** Resolve a setting for one explicit task without consulting activeTaskId. */
+	private getSettingWithOverrideForTask<K extends keyof Settings>(key: K, taskId?: string): Settings[K] {
 		const remoteValue = this.remoteConfigCache[key]
 		if (remoteValue !== undefined) {
 			return remoteValue
@@ -1172,8 +1192,8 @@ export class StateManager {
 			return this.sessionOverrideCache[key]
 		}
 		// Look up the active task's cache to support per-task settings isolation
-		if (this.activeTaskId) {
-			const taskCache = this.taskStateCache.get(this.activeTaskId)
+		if (taskId) {
+			const taskCache = this.taskStateCache.get(taskId)
 			const taskValue = taskCache?.[key]
 			if (taskValue !== undefined) {
 				return taskValue
@@ -1194,7 +1214,7 @@ export class StateManager {
 	 * Additionally fills in apiKey fields from data/secrets/api_keys.json
 	 * for any enabled profiles whose keys are missing from secretsCache.
 	 */
-	private constructApiConfigurationFromCache(): ApiConfiguration {
+	private constructApiConfigurationFromCache(taskId?: string): ApiConfiguration {
 		// Build secrets object from legacy cache
 		const secrets = Object.fromEntries(SecretKeys.map((key) => [key, this.getSecret(key)])) as Secrets
 
@@ -1225,10 +1245,10 @@ export class StateManager {
 		}
 
 		return {
-			planModeProfile: this.getSettingWithOverride("planModeProfile"),
-			actModeProfile: this.getSettingWithOverride("actModeProfile"),
-			requestTimeoutMs: this.getSettingWithOverride("requestTimeoutMs"),
-			enableParallelToolCalling: this.getSettingWithOverride("enableParallelToolCalling"),
+			planModeProfile: this.getSettingWithOverrideForTask("planModeProfile", taskId),
+			actModeProfile: this.getSettingWithOverrideForTask("actModeProfile", taskId),
+			requestTimeoutMs: this.getSettingWithOverrideForTask("requestTimeoutMs", taskId),
+			enableParallelToolCalling: this.getSettingWithOverrideForTask("enableParallelToolCalling", taskId),
 		} satisfies ApiConfiguration
 	}
 

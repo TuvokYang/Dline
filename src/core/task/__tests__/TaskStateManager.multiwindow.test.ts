@@ -62,6 +62,42 @@ describe("TaskStateManager - Multi-window Profile Isolation", () => {
 		taskSm2.actModeProfile?.should.equal("openai-act")
 	})
 
+	it("builds API configuration for an explicit task without using the active task cursor", async () => {
+		await sm.loadTaskSettings("task-window-1")
+		await sm.loadTaskSettings("task-window-2")
+		sm.setTaskSettingsBatch("task-window-1", {
+			mode: "plan",
+			planModeProfile: "deepseek-plan",
+			actModeProfile: "deepseek-act",
+		})
+		sm.setTaskSettingsBatch("task-window-2", {
+			mode: "act",
+			planModeProfile: "openai-plan",
+			actModeProfile: "openai-act",
+		})
+		sm.setActiveTaskId("task-window-2")
+
+		const taskOneConfig = sm.getApiConfigurationForTask("task-window-1")
+
+		expect(taskOneConfig.planModeProfile).toBe("deepseek-plan")
+		expect(taskOneConfig.actModeProfile).toBe("deepseek-act")
+		expect(sm.getSettingsKeyForTask("mode", "task-window-1")).toBe("plan")
+		expect(sm.getSettingsKeyForTask("mode", "task-window-2")).toBe("act")
+	})
+
+	it("clears only the requested task cache when another window is active", async () => {
+		const taskSm1 = new TaskStateManager("task-window-1", sm)
+		const taskSm2 = new TaskStateManager("task-window-2", sm)
+		taskSm1.setActModeProfile("deepseek-act")
+		taskSm2.setActModeProfile("openai-act")
+		sm.setActiveTaskId("task-window-2")
+
+		await sm.clearTaskSettings("task-window-1")
+
+		expect(taskSm2.actModeProfile).toBe("openai-act")
+		expect(sm.getApiConfigurationForTask("task-window-2").actModeProfile).toBe("openai-act")
+	})
+
 	it("should return undefined for profiles when not set at task level", () => {
 		const taskSm = new TaskStateManager("task-new", sm)
 

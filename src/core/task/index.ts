@@ -363,6 +363,7 @@ export class Task {
 	private remoteWorkspaceDetectionSettled = false
 	private readonly remoteWorkspaceDetectionPromise: Promise<void>
 	private readonly presentationScheduler: TaskPresentationScheduler
+	private pendingReasoningText?: string
 	private readonly snapshotPersistence: TaskSnapshotPersistence
 	private readonly systemPromptCacheService: SystemPromptCacheService
 	private latestTaskSnapshot?: TaskSnapshot
@@ -798,6 +799,7 @@ export class Task {
 		this.presentationScheduler = new TaskPresentationScheduler({
 			flush: async () => {
 				try {
+					await this.flushPendingReasoningMessage()
 					await this.presentAssistantMessage()
 				} catch (error) {
 					if (this.taskState.abort && error instanceof Error && error.message === "Dline instance aborted") {
@@ -923,6 +925,20 @@ export class Task {
 			Logger.debug(`[Task ${this.taskId}] schedule assistant presentation (${trigger}, ${priority})`)
 		}
 		this.presentationScheduler.requestFlush(priority)
+	}
+
+	/** Publish only the latest accumulated reasoning text at the presentation cadence. */
+	private async flushPendingReasoningMessage(): Promise<void> {
+		const thinking = this.pendingReasoningText
+		if (!thinking) return
+		this.pendingReasoningText = undefined
+		if (this.taskState.abort) return
+
+		const existingTs = this.taskState.reasoningTs
+		const ts = await this.say("reasoning", thinking, undefined, undefined, true, existingTs)
+		if (ts !== undefined && existingTs === undefined) {
+			this.taskState.reasoningTs = ts
+		}
 	}
 
 	private async flushAssistantPresentationOrThrow() {
@@ -3823,6 +3839,7 @@ export class Task {
 			await this.diffViewProvider.reset()
 			this.streamHandler.reset()
 			this.presentationScheduler.reset()
+			this.pendingReasoningText = undefined
 			this.taskState.reasoningTs = undefined
 			this.taskState.parseBlockTsByKey.clear()
 			this.taskState.lastRenderedPartialByTs.clear()
@@ -3843,6 +3860,7 @@ export class Task {
 			let didScheduleAnyContent = false // Tracks whether any content chunk has been scheduled for presentation (not necessarily flushed yet)
 
 			const finalizePendingReasoningMessage = async (thinking: string): Promise<boolean> => {
+				await this.flushPendingReasoningMessage()
 				const existingTs = this.taskState.reasoningTs
 				if (existingTs === undefined) return false
 
@@ -3921,18 +3939,7 @@ export class Task {
 									assistantMessage.length === 0 &&
 									!hasPendingNativeToolUse
 								) {
-									const existingTs = this.taskState.reasoningTs
-									const ts = await this.say(
-										"reasoning",
-										thinkingBlock.thinking,
-										undefined,
-										undefined,
-										true,
-										existingTs,
-									)
-									if (ts !== undefined && existingTs === undefined) {
-										this.taskState.reasoningTs = ts
-									}
+									this.pendingReasoningText = thinkingBlock.thinking
 								}
 							}
 							await this.scheduleAssistantPresentation(

@@ -16,6 +16,8 @@ import { getOpenAIToolParams, ToolCallProcessor } from "../transform/tool-call-p
 
 export class DeepSeekHandler implements ApiHandler {
 	private client: OpenAI | undefined
+	private requestController: AbortController | undefined
+	private accountUsageController: AbortController | undefined
 
 	constructor(private ctx: ApiHandlerContext) {}
 
@@ -52,6 +54,9 @@ export class DeepSeekHandler implements ApiHandler {
 					apiKey: this.apiKey,
 					defaultHeaders: buildExternalBasicHeaders(),
 					fetch, // Use configured fetch with proxy support
+					timeout: this.ctx.requestTimeoutMs,
+					// Retry is handled by @withRetry so one logical request has one retry policy.
+					maxRetries: 0,
 				})
 			} catch (error) {
 				throw new Error(`Error creating DeepSeek client: ${error.message}`)
@@ -96,6 +101,9 @@ export class DeepSeekHandler implements ApiHandler {
 	async *createMessage(systemPrompt: string, messages: ClineStorageMessage[], tools?: OpenAITool[]): ApiStream {
 		const client = this.ensureClient()
 		const model = this.getModel()
+		this.requestController?.abort()
+		const requestController = new AbortController()
+		this.requestController = requestController
 
 		const isThinkingEnabled = this.reasoningEffort && this.reasoningEffort !== "none"
 		const reasoningEffort = isThinkingEnabled ? (this.reasoningEffort as OpenAI.ChatCompletionReasoningEffort) : undefined
@@ -108,23 +116,26 @@ export class DeepSeekHandler implements ApiHandler {
 		const openAiMessages: OpenAI.Chat.ChatCompletionMessageParam[] = isThinkingEnabled
 			? convertDeepSeekMessages(messages, systemPrompt)
 			: [{ role: "system", content: systemPrompt }, ...convertDeepseekToOpenAiMessages(messages)]
-		const stream = await client.chat.completions.create({
-			model: model.id,
-			max_completion_tokens: model.info.capabilities?.maxTokens,
-			messages: openAiMessages,
-			stream: true,
-			stream_options: { include_usage: true },
-			...(supportsReasoning ? {} : { temperature: 0 }),
-			...getOpenAIToolParams(tools),
-			...(supportsReasoning
-				? {
-						extra_body: {
-							thinking: { type: isThinkingEnabled ? "enabled" : "disabled" },
-						},
-						...(isThinkingEnabled ? { reasoning_effort: reasoningEffort } : {}),
-					}
-				: {}),
-		})
+		const stream = await client.chat.completions.create(
+			{
+				model: model.id,
+				max_completion_tokens: model.info.capabilities?.maxTokens,
+				messages: openAiMessages,
+				stream: true,
+				stream_options: { include_usage: true },
+				...(supportsReasoning ? {} : { temperature: 0 }),
+				...getOpenAIToolParams(tools),
+				...(supportsReasoning
+					? {
+							extra_body: {
+								thinking: { type: isThinkingEnabled ? "enabled" : "disabled" },
+							},
+							...(isThinkingEnabled ? { reasoning_effort: reasoningEffort } : {}),
+						}
+					: {}),
+			},
+			{ signal: requestController.signal },
+		)
 
 		const toolCallProcessor = new ToolCallProcessor()
 
@@ -163,10 +174,16 @@ export class DeepSeekHandler implements ApiHandler {
 				yield* this.yieldUsage(model.info, chunk.usage)
 			}
 		}
+		if (this.requestController === requestController) {
+			this.requestController = undefined
+		}
 	}
 
-	getModel(): { id: DeepSeekModelId; info: ModelInfo } {
+	getModel(): { id: string; info: ModelInfo } {
 		const modelId = this.modelId
+		if (modelId && this.modelInfo) {
+			return { id: modelId, info: this.modelInfo }
+		}
 		// Smooth migration from deprecated model names to v4-flash:
 		// deepseek-chat → deepseek-v4-flash (non-thinking, reasoningEffort=none by default)
 		// deepseek-reasoner → deepseek-v4-flash (thinking, existing reasoningEffort setting preserved)
@@ -191,6 +208,11 @@ export class DeepSeekHandler implements ApiHandler {
 		if (!this.apiKey) {
 			return undefined
 		}
+		this.accountUsageController?.abort()
+		const accountUsageController = new AbortController()
+		this.accountUsageController = accountUsageController
+		const timeoutMs = Math.min(this.ctx.requestTimeoutMs ?? 15_000, 15_000)
+		const timeout = setTimeout(() => accountUsageController.abort(), Math.max(1, timeoutMs))
 		try {
 			const headers = {
 				Authorization: `Bearer ${this.apiKey}`,
@@ -198,7 +220,10 @@ export class DeepSeekHandler implements ApiHandler {
 			}
 
 			// Fetch balance
-			const balanceResp = await fetch("https://api.deepseek.com/user/balance", { headers })
+			const balanceResp = await fetch("https://api.deepseek.com/user/balance", {
+				headers,
+				signal: accountUsageController.signal,
+			})
 			if (!balanceResp.ok) {
 				Logger.warn(`[DeepSeek] Balance API failed: ${balanceResp.status}`)
 				return undefined
@@ -231,6 +256,7 @@ export class DeepSeekHandler implements ApiHandler {
 			try {
 				const usageResp = await fetch(`https://platform.deepseek.com/api/v0/usage/amount?month=${month}&year=${year}`, {
 					headers,
+					signal: accountUsageController.signal,
 				})
 				if (usageResp.ok) {
 					const usageData = (await usageResp.json()) as {
@@ -291,7 +317,22 @@ export class DeepSeekHandler implements ApiHandler {
 		} catch (e) {
 			Logger.warn(`[DeepSeek] getAccountUsage error: ${e}`)
 			return undefined
+		} finally {
+			clearTimeout(timeout)
+			if (this.accountUsageController === accountUsageController) {
+				this.accountUsageController = undefined
+			}
 		}
+	}
+
+	abort(): void {
+		this.requestController?.abort()
+		this.accountUsageController?.abort()
+	}
+
+	/** Used by the shared retry decorator to make backoff cancellation-aware. */
+	getRetrySignal(): AbortSignal | undefined {
+		return this.requestController?.signal
 	}
 
 	/**

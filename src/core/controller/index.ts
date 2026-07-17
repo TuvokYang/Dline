@@ -1,4 +1,6 @@
+import { createHash } from "node:crypto"
 import type { Anthropic } from "@anthropic-ai/sdk"
+import { accountUsageCoordinator } from "@core/account-usage/AccountUsageCoordinator"
 import { AccountUsage, buildApiHandler } from "@core/api"
 import { getProfileModelInfo } from "@core/api/model-info"
 import { readContextTokens } from "@core/context/context-management/context-pressure"
@@ -115,6 +117,7 @@ export class Controller {
 	// Timer for periodic account usage polling
 	private accountUsageTimer?: NodeJS.Timeout
 	private accountUsagePollGeneration = 0
+	private accountUsagePolling = false
 	// Timer for periodic lock heartbeat (keeps .lock file fresh)
 	private lockHeartbeatTimer?: NodeJS.Timeout
 	// Timer for polling lock status when task is in read-only mode
@@ -206,7 +209,7 @@ export class Controller {
 		const tasksBasePath = path.join(getDlineDocumentsPathSync(), "tasks")
 		this.lockService = new TaskLockService(tasksBasePath, `vscode-${crypto.randomUUID()}`)
 
-		// Start account usage polling independent of tasks
+		// Start account usage polling. Network requests are deduplicated process-wide.
 		this.startAccountUsagePolling()
 		Logger.log("[Controller] ClineProvider instantiated")
 	}
@@ -232,14 +235,6 @@ export class Controller {
 
 		// Clean up lock resources
 		this.lockService.cleanupOrphaned().catch((e) => Logger.error("Lock cleanup failed:", e))
-
-		// Unregister from the orchestrator so the controller is not
-		// retained in the registry after disposal (spawn / panel tasks).
-		const taskId = this.task?.taskId
-		if (taskId) {
-			const { OrchestratorController } = await import("@/core/orchestrator/OrchestratorController")
-			OrchestratorController.getInstance().unregisterController(taskId)
-		}
 
 		// Clean up per-controller gRPC subscription sets so dead streams
 		// from MCP / model updates don't accumulate in global maps.
@@ -1227,12 +1222,27 @@ export class Controller {
 
 	/** Poll account usage every 60 seconds and push to webview */
 	private startAccountUsagePolling() {
-		// Idempotent: skip if polling is already active to prevent timer
-		// leaks when multiple windows / tasks call this repeatedly.
-		if (this.accountUsageTimer) {
+		if (this.accountUsagePolling) {
 			return
 		}
+		this.accountUsagePolling = true
 		const generation = ++this.accountUsagePollGeneration
+		this.scheduleAccountUsagePoll(generation, 0)
+	}
+
+	private scheduleAccountUsagePoll(generation: number, delayMs: number): void {
+		if (!this.accountUsagePolling || generation !== this.accountUsagePollGeneration) {
+			return
+		}
+		this.accountUsageTimer = setTimeout(() => {
+			this.accountUsageTimer = undefined
+			void this.pollAccountUsage(generation).finally(() => {
+				this.scheduleAccountUsagePoll(generation, 60_000)
+			})
+		}, delayMs)
+	}
+
+	private async pollAccountUsage(generation: number): Promise<void> {
 		const clearStaleUsage = async () => {
 			if (generation !== this.accountUsagePollGeneration || !this._accountUsage) {
 				return
@@ -1240,36 +1250,44 @@ export class Controller {
 			this._accountUsage = undefined
 			await this.postStateToWebview()
 		}
-		const poll = async () => {
-			try {
-				const apiConfig = this.stateManager.getApiConfiguration()
-				const mode = this.stateManager.getGlobalSettingsKey("mode") || "act"
-				const handler = buildApiHandler(apiConfig, mode)
-				if (!handler.getAccountUsage) {
-					await clearStaleUsage()
-					return
-				}
-				const usage = await handler.getAccountUsage()
-				if (generation !== this.accountUsagePollGeneration) {
-					return
-				}
-				if (!usage) {
-					await clearStaleUsage()
-					return
-				}
-				this._accountUsage = usage
-				Logger.debug("[UsagePoll] accountUsage updated")
-				await this.postStateToWebview()
-			} catch (e) {
-				await clearStaleUsage()
-				Logger.warn(`[UsagePoll] Failed: ${e}`)
+		try {
+			const taskId = this.task?.taskId
+			const apiConfig = this.stateManager.getApiConfigurationForTask(taskId)
+			const mode = this.stateManager.getSettingsKeyForTask("mode", taskId) || "act"
+			const profileName = mode === "plan" ? apiConfig.planModeProfile : apiConfig.actModeProfile
+			const profile = findEnabledProfileByName(profileName)
+			if (!profile) {
+				throw new Error(`Profile "${profileName}" not found`)
 			}
+			const profileSignature = createHash("sha256").update(JSON.stringify(profile)).digest("hex")
+			const handler = buildApiHandler(apiConfig, mode)
+			if (!handler.getAccountUsage) {
+				await clearStaleUsage()
+				return
+			}
+			const getAccountUsage = handler.getAccountUsage.bind(handler)
+			const usage = await accountUsageCoordinator.get(`${profile.id}:${profileSignature}`, getAccountUsage)
+			if (generation !== this.accountUsagePollGeneration) {
+				return
+			}
+			if (!usage) {
+				await clearStaleUsage()
+				return
+			}
+			if (JSON.stringify(this._accountUsage) === JSON.stringify(usage)) {
+				return
+			}
+			this._accountUsage = usage
+			Logger.debug("[UsagePoll] accountUsage updated")
+			await this.postStateToWebview()
+		} catch (e) {
+			await clearStaleUsage()
+			Logger.warn(`[UsagePoll] Failed: ${e}`)
 		}
-		poll() // immediate first call
-		this.accountUsageTimer = setInterval(poll, 60_000)
 	}
 
 	private stopAccountUsagePolling() {
+		this.accountUsagePolling = false
 		this.accountUsagePollGeneration++
 		if (this.accountUsageTimer) {
 			clearInterval(this.accountUsageTimer)
@@ -1403,12 +1421,14 @@ export class Controller {
 			// Sync task mode to global state so slider works after task closed
 			this.stateManager.setGlobalState("mode", this.task.taskSm.mode)
 			// Clear task settings cache when task ends
-			await this.stateManager.clearTaskSettings()
+			await this.stateManager.clearTaskSettings(taskId)
 		}
 		await this.task?.terminate()
 		// Release file lock so other instances can open the task
 		if (taskId) {
 			await this.lockService.releaseTaskLock(taskId).catch((e) => Logger.error("Failed to release lock:", e))
+			const { OrchestratorController } = await import("@/core/orchestrator/OrchestratorController")
+			OrchestratorController.getInstance().unregisterController(taskId)
 		}
 		this.task = undefined // removes reference to it, so once promises end it will be garbage collected
 		// Release file ownership in the global checkpoint registry

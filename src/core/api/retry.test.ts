@@ -55,6 +55,33 @@ describe("Retry Decorator", () => {
 			result.should.deepEqual(["success after retry"])
 		})
 
+		it("reports retry attempts through ApiHandlerContext", async () => {
+			let callCount = 0
+			const onRetryAttempt = vi.fn()
+			class TestClass {
+				ctx = { onRetryAttempt }
+
+				@withRetry({ maxRetries: 2, baseDelay: 1 })
+				async *failMethod() {
+					callCount++
+					if (callCount === 1) {
+						const error: any = new Error("Rate limit exceeded")
+						error.status = 429
+						throw error
+					}
+					yield "success"
+				}
+			}
+
+			for await (const _ of new TestClass().failMethod()) {
+				// consume generator
+			}
+
+			onRetryAttempt.mock.calls.length.should.equal(1)
+			onRetryAttempt.mock.calls[0][0].should.equal(1)
+			onRetryAttempt.mock.calls[0][1].should.equal(2)
+		})
+
 		it("should not retry on non-rate-limit errors", async () => {
 			let callCount = 0
 			class TestClass {

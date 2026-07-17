@@ -26,6 +26,23 @@ export class RetriableError extends Error {
 	}
 }
 
+function waitForRetry(delay: number, signal?: AbortSignal): Promise<void> {
+	if (signal?.aborted) {
+		return Promise.reject(signal.reason ?? new DOMException("The operation was aborted", "AbortError"))
+	}
+	return new Promise((resolve, reject) => {
+		const timer = setTimeout(() => {
+			signal?.removeEventListener("abort", onAbort)
+			resolve()
+		}, delay)
+		const onAbort = () => {
+			clearTimeout(timer)
+			reject(signal?.reason ?? new DOMException("The operation was aborted", "AbortError"))
+		}
+		signal?.addEventListener("abort", onAbort, { once: true })
+	})
+}
+
 export function withRetry(options: RetryOptions = {}) {
 	const { maxRetries, baseDelay, maxDelay, retryAllErrors } = { ...DEFAULT_OPTIONS, ...options }
 
@@ -70,15 +87,17 @@ export function withRetry(options: RetryOptions = {}) {
 					}
 
 					const handlerInstance = this as any
-					if (handlerInstance.options?.onRetryAttempt) {
+					const onRetryAttempt = handlerInstance.ctx?.onRetryAttempt ?? handlerInstance.options?.onRetryAttempt
+					if (onRetryAttempt) {
 						try {
-							await handlerInstance.options.onRetryAttempt(attempt + 1, maxRetries, delay, error)
+							await onRetryAttempt(attempt + 1, maxRetries, delay, error)
 						} catch (e) {
 							Logger.error("Error in onRetryAttempt callback:", e)
 						}
 					}
 
-					await new Promise((resolve) => setTimeout(resolve, delay))
+					const retrySignal = handlerInstance.getRetrySignal?.() as AbortSignal | undefined
+					await waitForRetry(delay, retrySignal)
 				}
 			}
 		}

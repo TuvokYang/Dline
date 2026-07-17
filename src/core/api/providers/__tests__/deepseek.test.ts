@@ -99,5 +99,57 @@ describe("DeepSeekHandler", () => {
 				},
 			])
 		})
+
+		it("passes an AbortSignal to the SDK and aborts an in-flight request", async () => {
+			const handler = new DeepSeekHandler({
+				profile: ApiProfile.create({ provider: "deepseek", apiKey: "test-api-key", modelId: "deepseek-v4-pro" }),
+				mode: "act",
+			})
+			let requestSignal: AbortSignal | undefined
+			const create = vi.fn().mockImplementation((_body, options) => {
+				requestSignal = options.signal
+				return new Promise((_resolve, reject) => {
+					requestSignal?.addEventListener("abort", () => reject(requestSignal?.reason), { once: true })
+				})
+			})
+			const fakeClient: FakeClient = { chat: { completions: { create } } }
+			vi.spyOn(handler as unknown as { ensureClient: () => FakeClient }, "ensureClient").mockReturnValue(fakeClient)
+
+			const request = collectChunks(handler)
+			await vi.waitFor(() => expect(create.mock.calls).to.have.length(1))
+			handler.abort()
+
+			let rejected = false
+			try {
+				await request
+			} catch {
+				rejected = true
+			}
+			expect(rejected).to.equal(true)
+			expect(requestSignal?.aborted).to.equal(true)
+		})
+	})
+
+	it("uses model metadata supplied by the profile registry", () => {
+		const modelInfo = {
+			id: "deepseek-dynamic",
+			name: "DeepSeek Dynamic",
+			capabilities: { maxTokens: 12_345, supportsReasoning: true },
+		}
+		const handler = new DeepSeekHandler({
+			profile: ApiProfile.create({
+				provider: "deepseek",
+				modelId: "deepseek-dynamic",
+				modelInfo: modelInfo as NonNullable<ApiProfile["modelInfo"]>,
+			}),
+			mode: "act",
+		})
+
+		const resolved = handler.getModel()
+		expect(resolved.id).to.equal("deepseek-dynamic")
+		expect(resolved.info.id).to.equal("deepseek-dynamic")
+		expect(resolved.info.name).to.equal("DeepSeek Dynamic")
+		expect(resolved.info.capabilities?.maxTokens).to.equal(12_345)
+		expect(resolved.info.capabilities?.supportsReasoning).to.equal(true)
 	})
 })
