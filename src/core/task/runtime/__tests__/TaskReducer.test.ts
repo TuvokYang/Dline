@@ -71,6 +71,30 @@ describe("reduceTask lifecycle events", () => {
 		})
 	})
 
+	it("rejects an API continuation while an unfinished restored turn still owns execution", () => {
+		const state = createTaskRuntimeState({ taskId: "task-1", phase: TaskPhase.STREAMING, anchor: { apiIndex: 3 } })
+		state.turn = {
+			turnId: "stale-turn",
+			assistantApiIndex: 2,
+			mode: "serial",
+			blocks: [
+				{
+					dlineTid: "stale-tid",
+					callId: "stale-call",
+					toolName: "status_update",
+					phase: BlockPhase.AWAITING_APPROVAL,
+					ts: 90,
+					requiresApproval: true,
+					conversationHistoryIndex: 2,
+				},
+			],
+		}
+
+		const result = reduceTask(state, { type: "RESUME_API_CONTINUATION_REQUESTED", apiIndex: 3 })
+
+		expect(result).toMatchObject({ accepted: false, error: { code: "invalid_runtime_event" } })
+	})
+
 	it("normalizes only reconciled pending blocks before replay", () => {
 		const result = reduceTask(
 			{
@@ -300,6 +324,53 @@ describe("reduceTask lifecycle events", () => {
 			type: "START_API",
 			apiIndex: 1,
 			draft: { text: "Continue", images: [], files: [] },
+		})
+	})
+
+	it("abandons an unfinished pre-resume turn before starting a new API turn", () => {
+		const state = {
+			...stateAt(TaskPhase.PAUSED),
+			anchor: { apiIndex: 1, turnId: "resume-turn", interactionId: "resume-1" },
+			interaction: {
+				taskId: "task-1",
+				turnId: "resume-turn",
+				interactionId: "resume-1",
+				kind: "resume" as const,
+				status: "resolving" as const,
+				createdRevision: 1,
+				anchor: { messageTs: 100, messageType: "ask" as const },
+			},
+			turn: {
+				turnId: "stale-turn",
+				assistantApiIndex: 2,
+				mode: "serial" as const,
+				activeDlineTid: "stale-tid",
+				blocks: [
+					{
+						dlineTid: "stale-tid",
+						callId: "stale-call",
+						toolName: "execute_command",
+						phase: BlockPhase.EXECUTING,
+						ts: 90,
+						requiresApproval: false,
+						conversationHistoryIndex: 2,
+					},
+				],
+			},
+		}
+
+		const result = reduceTask(state, {
+			type: "TASK_RESUME_REQUESTED",
+			interactionId: "resume-1",
+			draft: { text: "Continue", images: [], files: [] },
+		})
+
+		expect(result).toMatchObject({
+			accepted: true,
+			next: {
+				phase: TaskPhase.RESUMING,
+				turn: { activeDlineTid: undefined, blocks: [{ phase: BlockPhase.CANCELLED }] },
+			},
 		})
 	})
 

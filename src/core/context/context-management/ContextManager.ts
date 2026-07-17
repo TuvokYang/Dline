@@ -10,7 +10,6 @@ import cloneDeep from "clone-deep"
 import fs from "fs/promises"
 import * as path from "path"
 import { Logger } from "@/shared/services/Logger"
-import { getResultFunctionId, getUseFunctionId } from "../../api/transform/tool-identity-projector"
 import { isTurnEndingToolName } from "../../task/assistant-message-order"
 import { getContextTokens, readContextTokens } from "./context-pressure"
 import { computeCompactTrigger, computeSummarizeBudget, getContextWindowInfo } from "./context-window-utils"
@@ -380,7 +379,7 @@ export class ContextManager {
 	 * @returns Canonical function identity, with the legacy Anthropic id as fallback.
 	 */
 	private getToolFunctionId(block: Anthropic.Messages.ToolUseBlockParam): string {
-		return getUseFunctionId(block as ClineAssistantToolUseBlock)
+		return (block as ClineAssistantToolUseBlock).function_id || block.id
 	}
 
 	/**
@@ -390,7 +389,24 @@ export class ContextManager {
 	 * @returns Canonical function identity, with the legacy tool_use_id as fallback.
 	 */
 	private getResultFunctionId(block: Anthropic.Messages.ToolResultBlockParam): string {
-		return getResultFunctionId(block as ClineUserToolResultContentBlock)
+		return (block as ClineUserToolResultContentBlock).function_id || block.tool_use_id
+	}
+
+	/** Build a provider-projectable result for a tool call whose real result was lost. */
+	private createSyntheticToolResult(
+		functionId: string,
+		toolBlock: Anthropic.Messages.ToolUseBlockParam | undefined,
+		text: string,
+	): ClineUserToolResultContentBlock {
+		const canonicalUse = toolBlock as ClineAssistantToolUseBlock | undefined
+		return {
+			type: "tool_result",
+			tool_use_id: functionId,
+			function_id: functionId,
+			call_id: functionId,
+			...(canonicalUse?.dline_tid ? { dline_tid: canonicalUse.dline_tid } : {}),
+			content: [{ type: "text", text }],
+		}
 	}
 
 	/**
@@ -436,7 +452,7 @@ export class ContextManager {
 				}
 
 				// Build synthetic tool_results for all unpaired tool_uses
-				const syntheticResults: Anthropic.Messages.ToolResultBlockParam[] = []
+				const syntheticResults: ClineUserToolResultContentBlock[] = []
 				for (const toolUseId of unpairedIds) {
 					const toolBlock = (message.content as Anthropic.Messages.ContentBlockParam[]).find(
 						(block): block is Anthropic.Messages.ToolUseBlockParam =>
@@ -447,11 +463,7 @@ export class ContextManager {
 					const resultContent = isTurnEnding
 						? `Tool ${toolName} executed successfully.`
 						: getPrompt("contextManagement", "raceConditionToolError")
-					syntheticResults.push({
-						type: "tool_result" as const,
-						tool_use_id: toolUseId,
-						content: [{ type: "text", text: resultContent }],
-					})
+					syntheticResults.push(this.createSyntheticToolResult(toolUseId, toolBlock, resultContent))
 				}
 
 				// Insert a synthetic user message with tool_results between the two assistants
@@ -478,10 +490,31 @@ export class ContextManager {
 			// tool_calls" mismatches that DeepSeek/OpenAI-compatible APIs reject.
 			const toolResultMap = new Map<string, Anthropic.Messages.ToolResultBlockParam>()
 			let hasDuplicates = false
+			let normalizedIdentity = false
 
 			for (const block of nextMessage.content) {
 				if (block.type === "tool_result" && block.tool_use_id) {
 					const functionId = this.getResultFunctionId(block)
+					const storedResult = block as ClineUserToolResultContentBlock
+					const pairedUse = (message.content as Anthropic.Messages.ContentBlockParam[]).find(
+						(candidate): candidate is Anthropic.Messages.ToolUseBlockParam =>
+							candidate.type === "tool_use" && this.getToolFunctionId(candidate) === functionId,
+					)
+					const pairedDlineTid = (pairedUse as ClineAssistantToolUseBlock | undefined)?.dline_tid
+					const normalizedResult: ClineUserToolResultContentBlock = {
+						...storedResult,
+						tool_use_id: functionId,
+						function_id: functionId,
+						call_id: storedResult.call_id || functionId,
+						...(storedResult.dline_tid || !pairedDlineTid ? {} : { dline_tid: pairedDlineTid }),
+					}
+					if (
+						storedResult.function_id !== normalizedResult.function_id ||
+						storedResult.call_id !== normalizedResult.call_id ||
+						storedResult.dline_tid !== normalizedResult.dline_tid
+					) {
+						normalizedIdentity = true
+					}
 					if (toolResultMap.has(functionId)) {
 						hasDuplicates = true
 						const toolBlock = (message.content as Anthropic.Messages.ContentBlockParam[]).find(
@@ -493,7 +526,7 @@ export class ContextManager {
 								`tool=${toolBlock?.name ?? "unknown"} call_id=${(block as ClineUserToolResultContentBlock).call_id ?? "N/A"}`,
 						)
 					}
-					toolResultMap.set(functionId, block)
+					toolResultMap.set(functionId, normalizedResult)
 				}
 			}
 
@@ -501,7 +534,7 @@ export class ContextManager {
 			// Turn-ending tools (attempt_completion, ask_followup_question, plan_mode_respond)
 			// do not produce results, so provide a success message. Non-turn-ending
 			// synthetic results are reserved for genuinely missing history entries.
-			let needsUpdate = false
+			let needsUpdate = normalizedIdentity
 			for (const toolUseId of toolUseIds) {
 				if (!toolResultMap.has(toolUseId)) {
 					const toolBlock = (message.content as Anthropic.Messages.ContentBlockParam[]).find(
@@ -513,27 +546,24 @@ export class ContextManager {
 
 					if (isTurnEnding) {
 						// Turn-ending tools never produce a result — inject success message
-						toolResultMap.set(toolUseId, {
-							type: "tool_result",
-							tool_use_id: toolUseId,
-							content: [{ type: "text", text: `Tool ${toolName} executed successfully.` }],
-						})
+						toolResultMap.set(
+							toolUseId,
+							this.createSyntheticToolResult(toolUseId, toolBlock, `Tool ${toolName} executed successfully.`),
+						)
 						needsUpdate = true
 					} else {
 						// Missing results after truncation still require a synthetic pair
 						// so providers do not reject the repaired history. Canonical runtime
 						// results are already keyed by function_id and are never guessed here.
 						if (!toolResultMap.has(toolUseId)) {
-							toolResultMap.set(toolUseId, {
-								type: "tool_result",
-								tool_use_id: toolUseId,
-								content: [
-									{
-										type: "text",
-										text: `The result was not recorded. The tool execution may have been abnormal. When you see this message, verify the actual outcome — especially for file edits or command executions.`,
-									},
-								],
-							})
+							toolResultMap.set(
+								toolUseId,
+								this.createSyntheticToolResult(
+									toolUseId,
+									toolBlock,
+									"The result was not recorded. The tool execution may have been abnormal. Verify the actual outcome before continuing, especially for file edits or command executions.",
+								),
+							)
 							needsUpdate = true
 						}
 					}

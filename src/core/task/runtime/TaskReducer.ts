@@ -170,7 +170,11 @@ function reduceResumeApi(
 	state: TaskRuntimeState,
 	event: Extract<TaskEvent, { type: "RESUME_API_CONTINUATION_REQUESTED" }>,
 ): TransitionResult {
-	if (state.interaction || event.apiIndex !== state.anchor.apiIndex) {
+	if (
+		state.interaction ||
+		event.apiIndex !== state.anchor.apiIndex ||
+		state.turn?.blocks.some((block) => !isTerminalBlock(block.phase))
+	) {
 		return reject(state, event.type)
 	}
 	if (state.phase !== TaskPhase.STREAMING && !canTransition(state.phase, TaskPhase.STREAMING)) {
@@ -758,10 +762,20 @@ function reduceResume(state: TaskRuntimeState, event: Extract<TaskEvent, { type:
 		return reject(state, event.type)
 	}
 	const revision = state.revision + 1
+	const abandonedTurn = state.turn
+		? {
+				...state.turn,
+				activeDlineTid: undefined,
+				blocks: state.turn.blocks.map((block) =>
+					isTerminalBlock(block.phase) ? block : { ...block, phase: BlockPhase.CANCELLED },
+				),
+			}
+		: undefined
 	return accept(state, {
 		eventType: event.type,
 		phase: TaskPhase.RESUMING,
 		interaction: null,
+		...(abandonedTurn ? { turn: abandonedTurn } : {}),
 		anchor: { ...state.anchor, interactionId: undefined },
 		error: null,
 		effects: [
