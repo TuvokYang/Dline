@@ -460,6 +460,9 @@ export class Task {
 				async (state) => this.emitStateSnapshot(createSnapshot(state)),
 				async () => this.abortExecution(),
 				async (effect) => {
+					if (effect.draft) {
+						this.taskState.autoRetryAttempts = 0
+					}
 					const content = await buildUserFeedbackContent(effect.draft?.text, effect.draft?.images, effect.draft?.files)
 					await this.recursivelyMakeClineRequests(content)
 				},
@@ -2955,25 +2958,10 @@ export class Task {
 						throw new Error("Dline instance aborted")
 					}
 				} else {
-					// Show error_retry with failed flag to indicate all retries exhausted (but not for insufficient credits or spend limit)
-					const showRetry = !isInsufficientCredits && !isAuthError && !isSpendLimitError && !quotaExceeded
-					if (showRetry) {
-						await this.say(
-							"error_retry",
-							JSON.stringify({
-								attempt: 3,
-								maxAttempts: 3,
-								delaySeconds: 0,
-								failed: true, // Special flag to indicate retries exhausted
-								errorMessage: streamingFailedMessage,
-							}),
-						)
-					}
-					const askResult = await this.ask("api_req_failed", streamingFailedMessage)
-					response = askResult.response
-					if (response === "yesButtonClicked") {
-						this.taskState.autoRetryAttempts = 0
-					}
+					// The outer stream boundary owns canonical API recovery. Opening the
+					// retained Task.ask waiter here creates a second, divergent phase state.
+					this.taskState.autoRetryAttempts = MAX_AUTO_RETRY_ATTEMPTS
+					throw error
 				}
 
 				if (response !== "yesButtonClicked") {

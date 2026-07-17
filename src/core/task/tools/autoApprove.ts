@@ -117,10 +117,10 @@ export class AutoApprove {
 				return autoApprovalSettings.actions.useMcp
 		}
 
-		// Conversational / TURN-END tools present their own UI interaction
-		// and must be auto-approved so BLOCK_EXECUTION_STARTED → EXECUTE_TOOL
-		// → handler.execute() → interactions.open() fires.
-		if (CONVERSATIONAL_TOOL_NAMES.has(toolName)) {
+		// Handler-managed interactions must pass the outer approval gate so the
+		// handler can present its own UI. status_update also owns the decision to
+		// request acknowledgment or complete without blocking.
+		if (toolName === ClineDefaultTool.STATUS_UPDATE || CONVERSATIONAL_TOOL_NAMES.has(toolName)) {
 			return true
 		}
 

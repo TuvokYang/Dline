@@ -54,4 +54,10 @@ describe("AutoApprove — conversational tools must be auto-approved", () => {
 			expect(result).toBe(true)
 		}
 	})
+
+	it("routes status updates through the handler that owns acknowledgment", () => {
+		const autoApprove = new AutoApprove(createStateManager())
+
+		expect(autoApprove.shouldAutoApproveTool(ClineDefaultTool.STATUS_UPDATE)).toBe(true)
+	})
 })
