@@ -3,6 +3,7 @@ import type { Mode } from "./storage/types"
 export type HistoryItem = {
 	id: string
 	ulid?: string // ULID for better tracking and metrics
+	/** Timestamp of the latest persisted task edit/activity, in milliseconds. */
 	ts: number
 	task: string
 	tokensIn: number

@@ -15,7 +15,12 @@ export async function getTaskHistory(controller: Controller, request: GetTaskHis
 
 		// Get task history from global state
 		const taskHistory = controller.stateManager.getGlobalStateKey("taskHistory")
-		const workspacePath = await getWorkspacePath()
+		const workspaceManager = currentWorkspaceOnly ? await controller.ensureWorkspaceManager() : undefined
+		const workspacePaths = workspaceManager?.getRoots().map((root) => root.path) ?? []
+		const legacyWorkspacePath = currentWorkspaceOnly ? await getWorkspacePath() : undefined
+		if (legacyWorkspacePath && !workspacePaths.some((root) => arePathsEqual(root, legacyWorkspacePath))) {
+			workspacePaths.push(legacyWorkspacePath)
+		}
 
 		// Apply filters
 		let filteredTasks = taskHistory.filter((item) => {
@@ -36,16 +41,16 @@ export async function getTaskHistory(controller: Controller, request: GetTaskHis
 
 				// First check the cwdOnTaskInitialization property - Only present on tasks from this change forward
 				if (item.cwdOnTaskInitialization) {
-					if (arePathsEqual(item.cwdOnTaskInitialization, workspacePath)) {
-						isInWorkspace = true
-					}
+					isInWorkspace = workspacePaths.some((workspacePath) =>
+						arePathsEqual(item.cwdOnTaskInitialization, workspacePath),
+					)
 				}
 
 				// For tasks without cwdOnTaskInitialization, check the older shadowGitConfigWorkTree property
 				if (!isInWorkspace && item.shadowGitConfigWorkTree) {
-					if (arePathsEqual(item.shadowGitConfigWorkTree, workspacePath)) {
-						isInWorkspace = true
-					}
+					isInWorkspace = workspacePaths.some((workspacePath) =>
+						arePathsEqual(item.shadowGitConfigWorkTree, workspacePath),
+					)
 				}
 
 				if (!isInWorkspace) {
