@@ -51,7 +51,7 @@ describe("TaskRuntime main flow", () => {
 			blocks: [
 				{
 					dlineTid: "tid-write",
-					callId: "call-write",
+					functionId: "call-write",
 					toolName: "write_to_file",
 					ts: 10,
 					requiresApproval: true,
@@ -98,7 +98,7 @@ describe("TaskRuntime main flow", () => {
 					blocks: [
 						{
 							dlineTid: "tid-write",
-							callId: "call-write",
+							functionId: "call-write",
 							toolName: "write_to_file",
 							phase: BlockPhase.AWAITING_APPROVAL,
 							ts: 10,
@@ -154,7 +154,7 @@ describe("TaskRuntime main flow", () => {
 			blocks: [
 				{
 					dlineTid: "tid-first",
-					callId: "call-first",
+					functionId: "call-first",
 					toolName: "write_to_file",
 					ts: 20,
 					requiresApproval: true,
@@ -162,7 +162,7 @@ describe("TaskRuntime main flow", () => {
 				},
 				{
 					dlineTid: "tid-second",
-					callId: "call-second",
+					functionId: "call-second",
 					toolName: "apply_patch",
 					ts: 21,
 					requiresApproval: true,
@@ -170,7 +170,7 @@ describe("TaskRuntime main flow", () => {
 				},
 				{
 					dlineTid: "tid-read",
-					callId: "call-read",
+					functionId: "call-read",
 					toolName: "read_file",
 					ts: 22,
 					requiresApproval: false,

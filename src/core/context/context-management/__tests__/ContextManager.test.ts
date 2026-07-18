@@ -1,5 +1,5 @@
-import { Anthropic } from "@anthropic-ai/sdk"
 import { ClineMessage } from "@shared/ExtensionMessage"
+import type { ClineContent, ClineStorageMessage, ClineTextContentBlock } from "@shared/messages/content"
 import { expect } from "chai"
 import fs from "fs/promises"
 import os from "os"
@@ -28,8 +28,8 @@ function createApiReqMessage(tokens: {
 }
 
 describe("ContextManager", () => {
-	function createMessages(count: number): Anthropic.Messages.MessageParam[] {
-		const messages: Anthropic.Messages.MessageParam[] = []
+	function createMessages(count: number): ClineStorageMessage[] {
+		const messages: ClineStorageMessage[] = []
 
 		messages.push({
 			role: "user",
@@ -133,7 +133,7 @@ describe("ContextManager", () => {
 		})
 
 		it("detects duplicate file reads across write_to_file, replace_in_file, and file mentions (normal tool calling)", () => {
-			const messages: Anthropic.Messages.MessageParam[] = [
+			const messages: ClineStorageMessage[] = [
 				{ role: "user", content: "Initial task" },
 				{ role: "assistant", content: "Response" },
 				{
@@ -190,7 +190,7 @@ describe("ContextManager", () => {
 		})
 
 		it("returns false when no duplicate file reads exist", () => {
-			const messages: Anthropic.Messages.MessageParam[] = [
+			const messages: ClineStorageMessage[] = [
 				{ role: "user", content: "Initial task" },
 				{ role: "assistant", content: "Response" },
 				{
@@ -221,7 +221,7 @@ describe("ContextManager", () => {
 		})
 
 		it("returns false for empty messages beyond startFromIndex", () => {
-			const messages: Anthropic.Messages.MessageParam[] = [
+			const messages: ClineStorageMessage[] = [
 				{ role: "user", content: "Initial task" },
 				{ role: "assistant", content: "Response" },
 			]
@@ -233,15 +233,27 @@ describe("ContextManager", () => {
 		})
 
 		it("detects duplicate file reads with native tool calling format (tool_result blocks)", () => {
-			const messages: Anthropic.Messages.MessageParam[] = [
+			const messages: ClineStorageMessage[] = [
 				{ role: "user", content: "Initial task" },
-				{ role: "assistant", content: [{ type: "tool_use", id: "toolu_001", name: "plan_mode_respond", input: {} }] },
+				{
+					role: "assistant",
+					content: [
+						{
+							type: "tool_use",
+							function_id: "toolu_001",
+							dline_tid: "tid_001",
+							name: "plan_mode_respond",
+							input: {},
+						},
+					],
+				},
 				{
 					role: "user",
 					content: [
 						{
 							type: "tool_result",
-							tool_use_id: "toolu_001",
+							function_id: "toolu_001",
+							dline_tid: "tid_001",
 							content: [
 								{
 									type: "text",
@@ -251,13 +263,25 @@ describe("ContextManager", () => {
 						},
 					],
 				},
-				{ role: "assistant", content: [{ type: "tool_use", id: "toolu_002", name: "write_to_file", input: {} }] },
+				{
+					role: "assistant",
+					content: [
+						{
+							type: "tool_use",
+							function_id: "toolu_002",
+							dline_tid: "tid_002",
+							name: "write_to_file",
+							input: {},
+						},
+					],
+				},
 				{
 					role: "user",
 					content: [
 						{
 							type: "tool_result",
-							tool_use_id: "toolu_002",
+							function_id: "toolu_002",
+							dline_tid: "tid_002",
 							content: [
 								{
 									type: "text",
@@ -268,7 +292,18 @@ describe("ContextManager", () => {
 						{ type: "text", text: "<environment_details>\n# Current Mode\nACT MODE\n</environment_details>" },
 					],
 				},
-				{ role: "assistant", content: [{ type: "tool_use", id: "toolu_003", name: "text", input: {} }] },
+				{
+					role: "assistant",
+					content: [
+						{
+							type: "tool_use",
+							function_id: "toolu_003",
+							dline_tid: "tid_003",
+							name: "text",
+							input: {},
+						},
+					],
+				},
 				{
 					role: "user",
 					content: [
@@ -279,13 +314,25 @@ describe("ContextManager", () => {
 						{ type: "text", text: "New message to respond to with plan_mode_respond tool" },
 					],
 				},
-				{ role: "assistant", content: [{ type: "tool_use", id: "toolu_004", name: "replace_in_file", input: {} }] },
+				{
+					role: "assistant",
+					content: [
+						{
+							type: "tool_use",
+							function_id: "toolu_004",
+							dline_tid: "tid_004",
+							name: "replace_in_file",
+							input: {},
+						},
+					],
+				},
 				{
 					role: "user",
 					content: [
 						{
 							type: "tool_result",
-							tool_use_id: "toolu_004",
+							function_id: "toolu_004",
+							dline_tid: "tid_004",
 							content: [
 								{
 									type: "text",
@@ -372,10 +419,9 @@ describe("ContextManager", () => {
 					content: [
 						{
 							type: "tool_use",
-							id: "resp_item_1",
-							item_id: "resp_item_1",
 							function_id: "call_provider_1",
 							dline_tid: "dline_tid_1",
+							provider_metadata: { item_id: "resp_item_1" },
 							name: "write_to_file",
 							input: { path: "test.txt" },
 						},
@@ -386,8 +432,6 @@ describe("ContextManager", () => {
 					content: [
 						{
 							type: "tool_result",
-							tool_use_id: "call_provider_1",
-							item_id: "dline_item_result_1",
 							function_id: "call_provider_1",
 							dline_tid: "dline_tid_1",
 							content: [
@@ -397,22 +441,22 @@ describe("ContextManager", () => {
 						},
 					],
 				},
-			] as Anthropic.Messages.MessageParam[]
+			] as ClineStorageMessage[]
 
 			const result = contextManager.getTruncatedMessages(messages, undefined)
 			const userContent = result[3].content as unknown as Array<Record<string, unknown>>
 
 			expect(userContent).to.have.lengthOf(1)
 			expect(userContent[0].function_id).to.equal("call_provider_1")
-			expect(userContent[0].tool_use_id).to.equal("call_provider_1")
-			expect(userContent[0].item_id).to.equal("dline_item_result_1")
+			expect(userContent[0]).not.to.have.property("tool_use_id")
+			expect(userContent[0]).not.to.have.property("item_id")
 			expect(userContent[0].content as unknown[]).to.have.lengthOf(2)
 			expect(JSON.stringify(userContent)).not.to.contain("The result was not recorded")
 		})
 
 		it("removes orphaned tool_results after truncation", () => {
 			// Create messages with tool_use and tool_result blocks
-			const messages: Anthropic.Messages.MessageParam[] = [
+			const messages: ClineStorageMessage[] = [
 				{ role: "user", content: "Initial task" },
 				{ role: "assistant", content: "Response 1" },
 				// Assistant message with tool_use that will be truncated
@@ -420,14 +464,25 @@ describe("ContextManager", () => {
 					role: "assistant",
 					content: [
 						{ type: "text", text: "Using a tool" },
-						{ type: "tool_use", id: "tool_123", name: "read_file", input: { path: "test.ts" } },
+						{
+							type: "tool_use",
+							function_id: "tool_123",
+							dline_tid: "tid_123",
+							name: "read_file",
+							input: { path: "test.ts" },
+						},
 					],
 				},
 				// User message with tool_result - should have tool_result removed after truncation
 				{
 					role: "user",
 					content: [
-						{ type: "tool_result", tool_use_id: "tool_123", content: "file content here" },
+						{
+							type: "tool_result",
+							function_id: "tool_123",
+							dline_tid: "tid_123",
+							content: "file content here",
+						},
 						{ type: "text", text: "Additional user text" },
 					],
 				},
@@ -446,11 +501,11 @@ describe("ContextManager", () => {
 			expect(userMessageAfterTruncation.role).to.equal("user")
 			expect(Array.isArray(userMessageAfterTruncation.content)).to.be.true
 
-			const content = userMessageAfterTruncation.content as Anthropic.Messages.ContentBlockParam[]
+			const content = userMessageAfterTruncation.content as ClineContent[]
 			// Should only have the text block, not the tool_result
 			expect(content).to.have.lengthOf(1)
 			expect(content[0].type).to.equal("text")
-			expect((content[0] as Anthropic.Messages.TextBlockParam).text).to.equal("Additional user text")
+			expect((content[0] as ClineTextContentBlock).text).to.equal("Additional user text")
 		})
 	})
 
@@ -604,7 +659,7 @@ describe("ContextManager", () => {
 		})
 
 		it("does not rewrite history when file-read optimization cannot avoid auto compact", async () => {
-			const apiConversationHistory: Anthropic.Messages.MessageParam[] = [
+			const apiConversationHistory: ClineStorageMessage[] = [
 				{ role: "user", content: "Initial task" },
 				{ role: "assistant", content: "Initial response" },
 				{

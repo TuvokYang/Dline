@@ -62,7 +62,7 @@ describe("OpenAI native tool result pairing", () => {
 		expect(rawChunks).toHaveLength(1)
 		expect(rawChunks[0].function_id).toBe(providerFunctionId)
 
-		const factory = createIdentityFactory(createSource(["USE_ITEM", "TRACE", "RESULT_ITEM"]))
+		const factory = createIdentityFactory(createSource(["TRACE"]))
 		const canonical = createStreamNormalizer(factory).normalize(rawChunks[0])
 		expect(canonical.type).toBe("tool_calls")
 		if (canonical.type !== "tool_calls") {
@@ -74,15 +74,14 @@ describe("OpenAI native tool result pairing", () => {
 		const toolUseHandler = streamHandler.getHandlers().toolUseHandler
 		toolUseHandler.processToolUseDelta(
 			{
-				id: canonical.tool_call.function?.id,
 				type: "tool_use",
 				name: canonical.tool_call.function?.name,
 				input: canonical.tool_call.function?.arguments,
 			},
 			{
-				item_id: canonical.item_id,
 				function_id: canonical.function_id,
 				dline_tid: canonical.dline_tid,
+				provider_metadata: canonical.provider_metadata,
 			},
 		)
 
@@ -99,7 +98,6 @@ describe("OpenAI native tool result pairing", () => {
 			userContent,
 			describeTool,
 			undefined,
-			factory.nextItemId,
 		)
 
 		expect(userContent).toHaveLength(1)
@@ -109,7 +107,7 @@ describe("OpenAI native tool result pairing", () => {
 			throw new Error("Expected canonical tool result")
 		}
 		expect(storedResult.function_id).toBe(providerFunctionId)
-		expect(storedResult.tool_use_id).toBe(providerFunctionId)
+		expect(storedResult).not.toHaveProperty("tool_use_id")
 		expect(storedResult.content).toHaveLength(2)
 		expect(userContent.some((block) => block.type === "text")).toBe(false)
 

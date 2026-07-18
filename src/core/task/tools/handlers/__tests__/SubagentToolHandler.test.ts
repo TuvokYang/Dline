@@ -10,7 +10,42 @@ import * as AgentConfigModule from "../../subagent/AgentConfigLoader"
 import { SubagentRunner } from "../../subagent/SubagentRunner"
 import type { TaskConfig } from "../../types/TaskConfig"
 import { createUIHelpers } from "../../types/UIHelpers"
-import { buildStatusPayload, UseSubagentsToolHandler, UseSubagentToolHandler } from "../SubagentToolHandler"
+import {
+	buildStatusPayload,
+	UseSubagentsToolHandler as UseSubagentsToolHandlerImpl,
+	UseSubagentToolHandler as UseSubagentToolHandlerImpl,
+} from "../SubagentToolHandler"
+
+class UseSubagentsToolHandler extends UseSubagentsToolHandlerImpl {
+	override execute(config: TaskConfig, block: any) {
+		return super.execute(config, {
+			function_id: block.function_id ?? "test_subagents_function",
+			dline_tid: block.dline_tid ?? "test_subagents_tid",
+			...block,
+		})
+	}
+
+	override handlePartialBlock(block: any, uiHelpers: any) {
+		return super.handlePartialBlock(
+			{
+				function_id: block.function_id ?? "test_subagents_function",
+				dline_tid: block.dline_tid ?? "test_subagents_tid",
+				...block,
+			},
+			uiHelpers,
+		)
+	}
+}
+
+class UseSubagentToolHandler extends UseSubagentToolHandlerImpl {
+	override execute(config: TaskConfig, block: any) {
+		return super.execute(config, {
+			function_id: block.function_id ?? "test_subagent_function",
+			dline_tid: block.dline_tid ?? "test_subagent_tid",
+			...block,
+		})
+	}
+}
 
 // Mock SubagentBuilder to avoid buildApiHandler (requires API profile config)
 vi.mock("../../subagent/SubagentBuilder", () => ({

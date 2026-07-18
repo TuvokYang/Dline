@@ -1,3 +1,4 @@
+import type { ClineAssistantToolUseBlock } from "@/shared/messages/content"
 import { BlockPhase } from "../BlockPhaseMachine"
 import { TaskPhase } from "../TaskPhase"
 import { hydrateSnapshot, type TaskSnapshot, TaskSnapshotIdentityError } from "../TaskSnapshot"
@@ -18,8 +19,8 @@ function reconcileAssistantApiIndex(snapshot: TaskSnapshot, input: ResumeInput):
 		if (message.role !== "assistant" || !Array.isArray(message.content)) return false
 		const messageDlineTids = new Set(
 			message.content
-				.filter((block) => block.type === "tool_use" && typeof block.dline_tid === "string")
-				.map((block) => block.dline_tid as string),
+				.filter((block): block is ClineAssistantToolUseBlock => block.type === "tool_use")
+				.map((block) => block.dline_tid),
 		)
 		return turnDlineTids.size > 0 && [...turnDlineTids].every((dlineTid) => messageDlineTids.has(dlineTid))
 	})

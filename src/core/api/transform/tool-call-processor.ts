@@ -53,11 +53,9 @@ export class ToolCallProcessor {
 					function_id: toolCallState.id,
 					tool_index: toolCallIndex,
 					tool_call: {
-						...toolCallDelta,
 						function: {
-							...toolCallDelta.function,
-							id: toolCallState.id,
 							name: toolCallState.name,
+							arguments: toolCallDelta.function.arguments,
 						},
 					},
 				}

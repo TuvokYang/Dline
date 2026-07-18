@@ -132,6 +132,8 @@ describe("ListCodeDefinitionNamesToolHandler.execute – error recovery", () => 
 	function makeBlock(relPath?: string) {
 		return {
 			type: "tool_use" as const,
+			function_id: "test_list_code_def",
+			dline_tid: "test_tid_list_code_def",
 			name: ClineDefaultTool.LIST_CODE_DEF,
 			params: relPath !== undefined ? { path: relPath } : {},
 			partial: false,
@@ -285,6 +287,8 @@ describe("ListFilesToolHandler.execute – error recovery", () => {
 		if (recursive !== undefined) params.recursive = recursive
 		return {
 			type: "tool_use" as const,
+			function_id: "test_list_files",
+			dline_tid: "test_tid_list_files",
 			name: ClineDefaultTool.LIST_FILES,
 			params,
 			partial: false,
@@ -443,6 +447,8 @@ describe("SearchFilesToolHandler.execute – error recovery", () => {
 		if (filePattern !== undefined) params.file_pattern = filePattern
 		return {
 			type: "tool_use" as const,
+			function_id: "test_search_files",
+			dline_tid: "test_tid_search_files",
 			name: ClineDefaultTool.SEARCH,
 			params,
 			partial: false,

@@ -33,7 +33,7 @@ export async function* handleResponsesApiStreamResponse(
 			if (item.type === "reasoning" && item.encrypted_content && item.id) {
 				yield {
 					type: "reasoning",
-					id: item.id,
+					provider_metadata: { response_id: item.id },
 					reasoning: "",
 					redacted_data: item.encrypted_content,
 				} as const
@@ -52,7 +52,7 @@ export async function* handleResponsesApiStreamResponse(
 			if (item.type === "reasoning") {
 				yield {
 					type: "reasoning",
-					id: item.id,
+					provider_metadata: { response_id: item.id },
 					details: item.summary,
 					reasoning: "",
 				} as const
@@ -61,21 +61,21 @@ export async function* handleResponsesApiStreamResponse(
 		if (chunk.type === "response.reasoning_summary_part.added") {
 			yield {
 				type: "reasoning",
-				id: chunk.item_id,
+				provider_metadata: { response_id: chunk.item_id },
 				reasoning: chunk.part.text,
 			} as const
 		}
 		if (chunk.type === "response.reasoning_summary_text.delta") {
 			yield {
 				type: "reasoning",
-				id: chunk.item_id,
+				provider_metadata: { response_id: chunk.item_id },
 				reasoning: chunk.delta,
 			} as const
 		}
 		if (chunk.type === "response.reasoning_summary_part.done") {
 			yield {
 				type: "reasoning",
-				id: chunk.item_id,
+				provider_metadata: { response_id: chunk.item_id },
 				details: chunk.part,
 				reasoning: "",
 			} as const
@@ -84,8 +84,8 @@ export async function* handleResponsesApiStreamResponse(
 			// Handle text content deltas
 			if (chunk.delta) {
 				yield {
-					id: chunk.item_id,
 					type: "text",
+					provider_metadata: { response_id: chunk.item_id },
 					text: chunk.delta,
 				} as const
 			}
@@ -94,8 +94,8 @@ export async function* handleResponsesApiStreamResponse(
 			// Handle reasoning content deltas
 			if (chunk.delta) {
 				yield {
-					id: chunk.item_id,
 					type: "reasoning",
+					provider_metadata: { response_id: chunk.item_id },
 					reasoning: chunk.delta,
 				} as const
 			}
@@ -142,7 +142,7 @@ export async function* handleResponsesApiStreamResponse(
 				cacheWriteTokens: cacheWriteTokens,
 				cacheReadTokens: cacheReadTokens,
 				totalCost: totalCost,
-				id: chunk.response.id,
+				provider_metadata: { response_id: chunk.response.id },
 			} as const
 		}
 	}

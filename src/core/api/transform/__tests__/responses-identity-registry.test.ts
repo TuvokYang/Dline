@@ -43,10 +43,10 @@ describe("ResponsesIdentityRegistry", () => {
 
 		const chunk = createResponsesToolChunk(identity, "{}")
 
-		expect(chunk.item_id).toBe("fc_item_123")
+		expect(chunk.provider_metadata?.item_id).toBe("fc_item_123")
 		expect(chunk.function_id).toBe("call_123")
-		expect(chunk.tool_call.call_id).toBe("call_123")
-		expect(chunk.tool_call.function.id).toBe("call_123")
+		expect(chunk.tool_call).not.toHaveProperty("call_id")
+		expect(chunk.tool_call.function).not.toHaveProperty("id")
 		expect(chunk.tool_call.function.name).toBe("read_file")
 	})
 

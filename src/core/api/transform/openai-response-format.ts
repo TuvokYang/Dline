@@ -89,8 +89,9 @@ export function convertToOpenAIResponsesInput(
 			// Must be less than 24 hours old to be considered for chaining as the previous Id is only valid for 24 hours.
 			// Set to 23 hours to account for any potential delays in processing.
 			const isLessThan23HoursOld = msg.ts ? Date.now() - msg.ts < 23 * 60 * 60 * 1000 : false
-			if (msg.role === "assistant" && msg.id && isLessThan23HoursOld) {
-				previousResponseId = msg.id
+			const responseId = msg.provider_metadata?.response_id
+			if (msg.role === "assistant" && responseId && isLessThan23HoursOld) {
+				previousResponseId = responseId
 				messages = _messages.slice(i + 1)
 				break
 			}
@@ -112,6 +113,7 @@ export function convertToOpenAIResponsesInput(
 			const assistantItems: any[] = []
 
 			for (const part of m.content) {
+				const responseId = part.provider_metadata?.response_id
 				switch (part.type) {
 					case "thinking":
 						// Only include reasoning item if it has actual content (thinking text or summary)
@@ -119,7 +121,7 @@ export function convertToOpenAIResponsesInput(
 						const hasThinkingContent = part.thinking && part.thinking.trim().length > 0
 						const hasSummaryContent = part.summary && Array.isArray(part.summary) && part.summary.length > 0
 
-						if (part.call_id && part.call_id.length > 0 && (hasThinkingContent || hasSummaryContent)) {
+						if (responseId && (hasThinkingContent || hasSummaryContent)) {
 							// Use summary if available, otherwise use thinking text
 							let summary: any[] = []
 							if (hasSummaryContent) {
@@ -136,7 +138,7 @@ export function convertToOpenAIResponsesInput(
 							}
 
 							assistantItems.push({
-								id: part.call_id,
+								id: responseId,
 								type: "reasoning",
 								summary,
 							} as ResponseReasoningItem)
@@ -145,9 +147,9 @@ export function convertToOpenAIResponsesInput(
 					case "redacted_thinking":
 						// Include reasoning item with encrypted content if it has a call_id
 						// Even if data is missing, we need to maintain the reasoning-function_call pairing
-						if (part.call_id && part.call_id.length > 0) {
+						if (responseId) {
 							const reasoningItem: any = {
-								id: part.call_id,
+								id: responseId,
 								type: "reasoning",
 								summary: [],
 							}
@@ -167,8 +169,8 @@ export function convertToOpenAIResponsesInput(
 							content: [{ type: "output_text", text: part.text }],
 						}
 						// Set message-level id if available
-						if (part.call_id) {
-							messageItem.id = part.call_id
+						if (responseId) {
+							messageItem.id = responseId
 						}
 						assistantItems.push(messageItem)
 						break
@@ -180,17 +182,17 @@ export function convertToOpenAIResponsesInput(
 							content: [{ type: "output_text", text: `[image:${part.source.media_type}]` }],
 						}
 						// Set message-level id if available (though images typically don't have call_id)
-						if (part.call_id) {
-							imageItem.id = part.call_id
+						if (responseId) {
+							imageItem.id = responseId
 						}
 						assistantItems.push(imageItem)
 						break
 					case "tool_use": {
 						const functionId = getUseFunctionId(part)
-						if (!part.item_id) {
-							throw new ToolIdentityProjectionError("OpenAI Responses", "tool_use item")
+						if (!part.provider_metadata?.item_id) {
+							throw new ToolIdentityProjectionError("OpenAI Responses", "tool_use", "provider_metadata.item_id")
 						}
-						const itemId = part.item_id
+						const itemId = part.provider_metadata.item_id
 						assistantItems.push({
 							type: "function_call",
 							call_id: functionId,

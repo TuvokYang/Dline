@@ -38,6 +38,8 @@ function createConfig(): {
 function createBlock(name?: string): ToolUse {
 	return {
 		type: "tool_use",
+		function_id: "test_load_capability",
+		dline_tid: "test_load_capability_tid",
 		name: ClineDefaultTool.LOAD_SKILL,
 		params: name === undefined ? {} : { name },
 		partial: false,

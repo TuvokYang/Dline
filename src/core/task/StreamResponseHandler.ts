@@ -7,6 +7,7 @@ import {
 	ClineAssistantRedactedThinkingBlock,
 	ClineAssistantThinkingBlock,
 	ClineAssistantToolUseBlock,
+	ClineProviderMetadata,
 	ClineReasoningDetailParam,
 } from "@/shared/messages/content"
 import { Logger } from "@/shared/services/Logger"
@@ -14,22 +15,19 @@ import { Session } from "@/shared/services/Session"
 import { ClineDefaultTool } from "@/shared/tools"
 
 export interface PendingToolUse {
-	id: string
-	item_id: string
 	function_id: string
 	dline_tid: string
+	provider_metadata?: ClineProviderMetadata
 	name: string
 	input: string
 	parsedInput?: unknown
 	signature?: string
 	jsonParser?: JSONParser
-	call_id: string
 	/** Stable UI message ts assigned at tool call creation time. */
 	ts: number
 }
 
 interface ToolUseDeltaBlock {
-	id?: string
 	type?: string
 	name?: string
 	input?: string
@@ -37,7 +35,7 @@ interface ToolUseDeltaBlock {
 }
 
 export interface ReasoningDelta {
-	id?: string
+	provider_metadata?: ClineProviderMetadata
 	reasoning?: string
 	signature?: string
 	details?: any[]
@@ -45,7 +43,7 @@ export interface ReasoningDelta {
 }
 
 export interface PendingReasoning {
-	id?: string
+	provider_metadata?: ClineProviderMetadata
 	content: string
 	signature: string
 	redactedThinking: ClineAssistantRedactedThinkingBlock[]
@@ -113,15 +111,15 @@ class ToolUseHandler {
 
 	processToolUseDelta(
 		delta: ToolUseDeltaBlock,
-		identity: Pick<ApiStreamToolCallsChunk, "item_id" | "function_id" | "dline_tid">,
+		identity: Pick<ApiStreamToolCallsChunk, "function_id" | "dline_tid" | "provider_metadata">,
 	): void {
-		if (delta.type !== "tool_use" || !delta.id) {
+		if (delta.type !== "tool_use") {
 			return
 		}
 
 		let pending = this.pendingToolUses.get(identity.dline_tid)
 		if (!pending) {
-			pending = this.createPendingToolUse(delta.id, delta.name || "", identity)
+			pending = this.createPendingToolUse(delta.name || "", identity)
 		}
 
 		if (delta.name) {
@@ -161,16 +159,16 @@ class ToolUseHandler {
 
 		const block = {
 			type: "tool_use" as const,
-			id: pending.id,
 			name: pending.name,
 			input,
 			signature: pending.signature,
-			call_id: pending.function_id,
-			item_id: pending.item_id,
 			function_id: pending.function_id,
 			dline_tid: pending.dline_tid,
+			provider_metadata: pending.provider_metadata,
 		}
-		Logger.debug(`[ToolUseHandler] finalized ${pending.name} id=${pending.id} keys=${Object.keys(input as object).join(",")}`)
+		Logger.debug(
+			`[ToolUseHandler] finalized ${pending.name} function_id=${pending.function_id} keys=${Object.keys(input as object).join(",")}`,
+		)
 		return block
 	}
 
@@ -227,8 +225,6 @@ class ToolUseHandler {
 					ts: pending.ts,
 					isNativeToolCall: true,
 					signature: pending.signature,
-					call_id: pending.function_id,
-					item_id: pending.item_id,
 					function_id: pending.function_id,
 					dline_tid: pending.dline_tid,
 				})
@@ -247,8 +243,6 @@ class ToolUseHandler {
 					ts: pending.ts,
 					signature: pending.signature,
 					isNativeToolCall: true,
-					call_id: pending.function_id,
-					item_id: pending.item_id,
 					function_id: pending.function_id,
 					dline_tid: pending.dline_tid,
 				})
@@ -263,9 +257,8 @@ class ToolUseHandler {
 	}
 
 	private createPendingToolUse(
-		id: string,
 		name: string,
-		identity: Pick<ApiStreamToolCallsChunk, "item_id" | "function_id" | "dline_tid">,
+		identity: Pick<ApiStreamToolCallsChunk, "function_id" | "dline_tid" | "provider_metadata">,
 	): PendingToolUse {
 		const jsonParser = new JSONParser()
 		jsonParser.onValue = (info: any) => {
@@ -277,22 +270,20 @@ class ToolUseHandler {
 		jsonParser.onError = () => {}
 
 		const pending: PendingToolUse = {
-			id,
-			item_id: identity.item_id,
 			function_id: identity.function_id,
 			dline_tid: identity.dline_tid,
+			provider_metadata: identity.provider_metadata,
 			name,
 			input: "",
 			parsedInput: undefined,
 			jsonParser,
-			call_id: identity.function_id,
 			signature: undefined,
 			ts: this.tsFactory(),
 		}
 
 		this.pendingToolUses.set(identity.dline_tid, pending)
 		// Initialize tool call in session tracking
-		Session.get().updateToolCall(pending.call_id, pending.name)
+		Session.get().updateToolCall(pending.function_id, pending.name)
 
 		return pending
 	}
@@ -346,7 +337,7 @@ class ReasoningHandler {
 		// Initialize pending reasoning if we have an ID but no pending reasoning yet
 		if (!this.pendingReasoning) {
 			this.pendingReasoning = {
-				id: delta.id,
+				provider_metadata: delta.provider_metadata,
 				content: "",
 				signature: "",
 				redactedThinking: [],
@@ -376,7 +367,7 @@ class ReasoningHandler {
 			this.pendingReasoning.redactedThinking.push({
 				type: "redacted_thinking",
 				data: delta.redacted_data,
-				call_id: delta.id || this.pendingReasoning.id,
+				provider_metadata: delta.provider_metadata ?? this.pendingReasoning.provider_metadata,
 			})
 		}
 	}
@@ -410,7 +401,7 @@ class ReasoningHandler {
 			thinking: this.pendingReasoning.content,
 			signature: this.pendingReasoning.signature,
 			summary: this.pendingReasoning.summary,
-			call_id: this.pendingReasoning.id,
+			provider_metadata: this.pendingReasoning.provider_metadata,
 		}
 	}
 

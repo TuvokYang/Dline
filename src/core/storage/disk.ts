@@ -1,4 +1,3 @@
-import { Anthropic } from "@anthropic-ai/sdk"
 import { EnvironmentMetadataEntry, TaskMetadata } from "@core/context/context-tracking/ContextTrackerTypes"
 import type { FrozenPromptBuilderInfo, TaskContextCache } from "@core/storage/task-context-types"
 import { execa } from "@packages/execa"
@@ -15,6 +14,8 @@ import { HostProvider } from "@/hosts/host-provider"
 import { ExtensionRegistryInfo } from "@/registry"
 import { telemetryService } from "@/services/telemetry"
 import { McpMarketplaceCatalog } from "@/shared/mcp"
+import type { ClineStorageMessage } from "@/shared/messages/content"
+import { normalizeLegacyConversation } from "@/shared/messages/legacy-identity-migration"
 import { Logger } from "@/shared/services/Logger"
 import { appendJsonl, readJsonl, writeJsonl } from "./jsonl-utils"
 
@@ -85,7 +86,7 @@ async function cleanupStaleTmpFiles(dir: string): Promise<void> {
 }
 
 export const GlobalFileNames = {
-	apiConversionAll: "api_conversion_all.jsonl",
+	apiConversationAll: "api_conversation_all.jsonl",
 	taskSnapshot: "snapshot.json",
 	taskContext: "context.json",
 	apiConversationHistory: "api_conversation_history.jsonl",
@@ -371,27 +372,31 @@ export async function getMcpSettingsFilePath(settingsDirectoryPath: string): Pro
 	if (!(await fileExistsAtPath(p))) await fs.writeFile(p, JSON.stringify({ mcpServers: {} }, null, 2))
 	return p
 }
-export async function getSavedApiConversationHistory(taskId: string): Promise<Anthropic.MessageParam[]> {
+export async function getSavedApiConversationHistory(taskId: string): Promise<ClineStorageMessage[]> {
 	const dir = await ensureTaskDirectoryExists(taskId)
 	const p = path.join(dir, GlobalFileNames.apiConversationHistory)
 
 	// If .jsonl exists, use it exclusively — never fall back to legacy .json
 	if (await fileExistsAtPath(p)) {
-		return readJsonl<Anthropic.MessageParam>(p)
+		const stored = await readJsonl<unknown>(p)
+		const normalized = normalizeLegacyConversation(stored)
+		if (JSON.stringify(stored) !== JSON.stringify(normalized)) await writeJsonl(p, normalized)
+		return normalized
 	}
 
 	// Migrate: read legacy .json, write to .jsonl, preserve old file as backup
 	const legacyP = path.join(dir, "api_conversation_history.json")
 	if (await fileExistsAtPath(legacyP)) {
-		const legacyMsgs = await readJsonl<Anthropic.MessageParam>(legacyP)
+		const legacyMsgs = await readJsonl<unknown>(legacyP)
+		const normalized = normalizeLegacyConversation(legacyMsgs)
 		if (legacyMsgs.length > 0) {
-			await writeJsonl(p, legacyMsgs)
+			await writeJsonl(p, normalized)
 		}
-		return legacyMsgs
+		return normalized
 	}
 	return []
 }
-export async function saveApiConversationHistory(taskId: string, h: Anthropic.MessageParam[]) {
+export async function saveApiConversationHistory(taskId: string, h: ClineStorageMessage[]) {
 	if (h.length === 0) return
 	const p = path.join(await ensureTaskDirectoryExists(taskId), GlobalFileNames.apiConversationHistory)
 	await writeJsonl(p, h)
@@ -476,27 +481,27 @@ export async function appendClineMessage(taskId: string, message: ClineMessage):
  * @param taskId Task identifier
  * @param message Single message to append
  */
-export async function appendApiConversationMessage(taskId: string, message: Anthropic.MessageParam): Promise<void> {
+export async function appendApiConversationMessage(taskId: string, message: ClineStorageMessage): Promise<void> {
 	const p = path.join(await ensureTaskDirectoryExists(taskId), GlobalFileNames.apiConversationHistory)
 	await appendJsonl(p, message)
 }
 
 /**
- * Append a full API request context entry to the debug JSONL file.
+ * Append one canonical API round event to the debug JSONL file.
  * Controlled by DLINE_LOG_API_CONTEXT=1 or IS_DEV=true environment variables.
- * Each line records the complete system prompt and conversation messages
- * sent to the model for a single API request, useful for debugging and testing.
+ * Request, response chunk, and response-end events are written separately so
+ * the file reflects the actual ordering of every main-task and subagent round.
  *
  * @param taskId Task identifier
  * @param entry Full request context object to append
  */
-export async function appendDebugRequestContext(taskId: string, entry: object): Promise<void> {
+export async function appendApiConversationEvent(taskId: string, entry: object): Promise<void> {
 	if (!envFlagEnabled(process.env.IS_DEV) && !envFlagEnabled(process.env.DLINE_LOG_API_CONTEXT)) return
 	try {
-		const p = path.join(await ensureTaskDirectoryExists(taskId), GlobalFileNames.apiConversionAll)
+		const p = path.join(await ensureTaskDirectoryExists(taskId), GlobalFileNames.apiConversationAll)
 		await appendJsonl(p, entry)
 	} catch (error) {
-		Logger.error("[appendDebugRequestContext] Failed to write api_conversion_all.jsonl:", error)
+		Logger.error("[appendApiConversationEvent] Failed to write api_conversation_all.jsonl:", error)
 	}
 }
 
@@ -927,7 +932,7 @@ export async function getWorkspaceHooksDirs(): Promise<string[]> {
 	).filter((p): p is string => Boolean(p))
 }
 
-export async function writeConversationHistoryJson(taskId: string, h: Anthropic.MessageParam[], ts?: number): Promise<string> {
+export async function writeConversationHistoryJson(taskId: string, h: ClineStorageMessage[], ts?: number): Promise<string> {
 	const d = await ensureTaskDirectoryExists(taskId)
 	const p = path.join(d, `conversation_history_${ts ?? Date.now()}.jsonl`)
 	await writeJsonl(p, h)
@@ -939,7 +944,7 @@ export async function cleanupConversationHistoryFile(fp: string): Promise<void> 
 	} catch {}
 }
 
-export async function writeConversationHistoryText(taskId: string, h: Anthropic.MessageParam[], ts?: number): Promise<string> {
+export async function writeConversationHistoryText(taskId: string, h: ClineStorageMessage[], ts?: number): Promise<string> {
 	const d = await ensureTaskDirectoryExists(taskId)
 	const p = path.join(d, `conversation_history_${ts ?? Date.now()}.txt`)
 	let c = "=== CONVERSATION HISTORY ===\n\n"

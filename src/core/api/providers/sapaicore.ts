@@ -278,7 +278,7 @@ namespace Gemini {
 		return result
 	}
 
-	function convertAnthropicMessageToGemini(message: Anthropic.Messages.MessageParam) {
+	function convertAnthropicMessageToGemini(message: ClineStorageMessage) {
 		const role = message.role === "assistant" ? "model" : "user"
 		const parts = []
 

@@ -528,7 +528,7 @@ export class OpenAiNativeHandler implements ApiHandler {
 				if (item.type === "reasoning" && item.encrypted_content && item.id) {
 					yield {
 						type: "reasoning",
-						id: item.id,
+						provider_metadata: { response_id: item.id },
 						reasoning: "",
 						redacted_data: item.encrypted_content,
 					}
@@ -547,7 +547,7 @@ export class OpenAiNativeHandler implements ApiHandler {
 				if (item.type === "reasoning") {
 					yield {
 						type: "reasoning",
-						id: item.id,
+						provider_metadata: { response_id: item.id },
 						details: item.summary,
 						reasoning: "",
 					}
@@ -556,21 +556,21 @@ export class OpenAiNativeHandler implements ApiHandler {
 			if (chunk.type === "response.reasoning_summary_part.added") {
 				yield {
 					type: "reasoning",
-					id: chunk.item_id,
+					provider_metadata: { response_id: chunk.item_id },
 					reasoning: chunk.part.text,
 				}
 			}
 			if (chunk.type === "response.reasoning_summary_text.delta") {
 				yield {
 					type: "reasoning",
-					id: chunk.item_id,
+					provider_metadata: { response_id: chunk.item_id },
 					reasoning: chunk.delta,
 				}
 			}
 			if (chunk.type === "response.reasoning_summary_part.done") {
 				yield {
 					type: "reasoning",
-					id: chunk.item_id,
+					provider_metadata: { response_id: chunk.item_id },
 					details: chunk.part,
 					reasoning: "",
 				}
@@ -578,8 +578,8 @@ export class OpenAiNativeHandler implements ApiHandler {
 			if (chunk.type === "response.output_text.delta") {
 				if (chunk.delta) {
 					yield {
-						id: chunk.item_id,
 						type: "text",
+						provider_metadata: { response_id: chunk.item_id },
 						text: chunk.delta,
 					}
 				}
@@ -587,8 +587,8 @@ export class OpenAiNativeHandler implements ApiHandler {
 			if (chunk.type === "response.reasoning_text.delta") {
 				if (chunk.delta) {
 					yield {
-						id: chunk.item_id,
 						type: "reasoning",
+						provider_metadata: { response_id: chunk.item_id },
 						reasoning: chunk.delta,
 					}
 				}
@@ -641,7 +641,7 @@ export class OpenAiNativeHandler implements ApiHandler {
 					cacheReadTokens: cacheReadTokens,
 					thoughtsTokenCount: reasoningTokens,
 					totalCost: totalCost,
-					id: chunk.response.id,
+					provider_metadata: { response_id: chunk.response.id },
 				}
 			}
 		}

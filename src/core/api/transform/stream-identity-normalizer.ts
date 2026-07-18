@@ -1,7 +1,6 @@
 import type { IdentityFactory } from "./block-identity"
 import type {
 	ApiCanonicalStream,
-	ApiLegacyStreamToolCallsChunk,
 	ApiRawStreamChunk,
 	ApiRawStreamToolCallsChunk,
 	ApiStream,
@@ -11,7 +10,6 @@ import type {
 
 /** Canonical identity allocated for one response-local native tool position. */
 interface ToolIdentityState {
-	item_id: string
 	dline_tid: string
 	function_id: string
 }
@@ -46,7 +44,6 @@ export function normalizeApiStream(stream: ApiStream, normalizer: StreamIdentity
 			normalizer.endResponse()
 		}
 	})() as ApiCanonicalStream
-	normalized.id = stream.id
 	return normalized
 }
 
@@ -104,33 +101,14 @@ export function createStreamNormalizer(factory: IdentityFactory): StreamIdentity
 		const state =
 			existing ??
 			({
-				item_id: chunk.item_id ?? factory.nextItemId(),
 				dline_tid: factory.nextTraceId(),
 				function_id: chunk.function_id,
 			} satisfies ToolIdentityState)
 		toolStates.set(key, state)
 		return {
 			...chunk,
-			item_id: state.item_id,
 			dline_tid: state.dline_tid,
 			function_id: state.function_id,
-		}
-	}
-
-	/**
-	 * Convert a legacy provider tool chunk to the raw canonical ingress shape.
-	 *
-	 * @param chunk Legacy tool chunk produced by an unmigrated provider.
-	 * @returns Raw tool chunk with provider pairing identity promoted to function_id.
-	 */
-	function promoteLegacyTool(chunk: ApiLegacyStreamToolCallsChunk): ApiRawStreamToolCallsChunk {
-		const functionId = chunk.tool_call.function.id ?? chunk.tool_call.call_id
-		if (!functionId) {
-			throw new Error("Legacy native tool chunk is missing provider function identity")
-		}
-		return {
-			...chunk,
-			function_id: functionId,
 		}
 	}
 
@@ -142,10 +120,10 @@ export function createStreamNormalizer(factory: IdentityFactory): StreamIdentity
 			if (isCanonicalTool(chunk)) {
 				return chunk
 			}
-			if (isRawTool(chunk)) {
-				return normalizeTool(chunk)
+			if (!isRawTool(chunk)) {
+				throw new Error("Provider tool chunk reached runtime without function_id")
 			}
-			return normalizeTool(promoteLegacyTool(chunk))
+			return normalizeTool(chunk)
 		},
 		endResponse(): void {
 			toolStates.clear()

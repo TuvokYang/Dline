@@ -15,8 +15,6 @@ function createBlock(): ToolUse {
 		name: "write_to_file",
 		params: {},
 		partial: false,
-		call_id: "call-1",
-		item_id: "dline_item_use_1",
 		function_id: "call-1",
 		dline_tid: "dline_tid_1",
 		isNativeToolCall: true,
@@ -39,22 +37,15 @@ describe("ToolResultUtils approval feedback", () => {
 		const userMessageContent: any[] = []
 		ToolResultUtils.pushAdditionalToolFeedback(userMessageContent, "请继续，但注意边界", undefined, undefined)
 
-		ToolResultUtils.pushToolResult(
-			"File written.",
-			createBlock(),
-			userMessageContent,
-			describeTool,
-			undefined,
-			() => "dline_item_result_1",
-		)
+		ToolResultUtils.pushToolResult("File written.", createBlock(), userMessageContent, describeTool, undefined)
 
 		assert.equal(userMessageContent.length, 1)
 		const toolResult = userMessageContent[0]
 		assert.equal(toolResult.type, "tool_result")
-		assert.equal(toolResult.tool_use_id, "call-1")
-		assert.equal(toolResult.item_id, "dline_item_result_1")
 		assert.equal(toolResult.function_id, "call-1")
 		assert.equal(toolResult.dline_tid, "dline_tid_1")
+		assert.equal("tool_use_id" in toolResult, false)
+		assert.equal("item_id" in toolResult, false)
 		assert.match(toolResult.content[0].text, /\[write_to_file\] Result:\nFile written\./)
 		assert.match(toolResult.content[1].text, /<feedback>\n请继续，但注意边界\n<\/feedback>/)
 	})
@@ -66,14 +57,7 @@ describe("ToolResultUtils approval feedback", () => {
 		assert.equal(userMessageContent.length, 1)
 		assert.equal(userMessageContent[0].type, "tool_feedback")
 
-		ToolResultUtils.pushToolResult(
-			"Rejected.",
-			createBlock(),
-			userMessageContent,
-			describeTool,
-			undefined,
-			() => "dline_item_result_2",
-		)
+		ToolResultUtils.pushToolResult("Rejected.", createBlock(), userMessageContent, describeTool, undefined)
 
 		assert.equal(
 			userMessageContent.some((block) => block.type === "tool_feedback"),
@@ -115,14 +99,7 @@ describe("ToolResultUtils approval feedback", () => {
 		assert.equal(config.taskState.ackedFeedback, undefined)
 		assert.equal(userMessageContent.length, 1)
 		assert.equal(userMessageContent[0].type, "tool_feedback")
-		ToolResultUtils.pushToolResult(
-			"Approved.",
-			createBlock(),
-			userMessageContent,
-			describeTool,
-			undefined,
-			() => "dline_item_result_3",
-		)
+		ToolResultUtils.pushToolResult("Approved.", createBlock(), userMessageContent, describeTool, undefined)
 		assert.match(userMessageContent[0].content[1].text, /<feedback>\n审批补充\n<\/feedback>/)
 	})
 })

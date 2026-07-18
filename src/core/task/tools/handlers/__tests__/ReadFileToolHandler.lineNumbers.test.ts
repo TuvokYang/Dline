@@ -6,6 +6,8 @@ import { DEFAULT_MAX_LINES, formatFileContentWithLineNumbers, getReadToolDisplay
 describe("getReadToolDisplayedLineRange", () => {
 	const block = (start?: string, end?: string) => ({
 		type: "tool_use" as const,
+		function_id: "test_read_range",
+		dline_tid: "test_read_range_tid",
 		name: ClineDefaultTool.FILE_READ,
 		params: {
 			path: "f.txt",

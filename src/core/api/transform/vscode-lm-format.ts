@@ -1,5 +1,12 @@
 import { Anthropic } from "@anthropic-ai/sdk"
 import * as vscode from "vscode"
+import type {
+	ClineAssistantToolUseBlock,
+	ClineImageContentBlock,
+	ClineStorageMessage,
+	ClineTextContentBlock,
+	ClineUserToolResultContentBlock,
+} from "@/shared/messages/content"
 import { Logger } from "@/shared/services/Logger"
 
 /**
@@ -29,9 +36,7 @@ export function asObjectSafe(value: any): object {
 	}
 }
 
-export function convertToVsCodeLmMessages(
-	anthropicMessages: Anthropic.Messages.MessageParam[],
-): vscode.LanguageModelChatMessage[] {
+export function convertToVsCodeLmMessages(anthropicMessages: ClineStorageMessage[]): vscode.LanguageModelChatMessage[] {
 	const vsCodeLmMessages: vscode.LanguageModelChatMessage[] = []
 
 	for (const anthropicMessage of anthropicMessages) {
@@ -49,8 +54,8 @@ export function convertToVsCodeLmMessages(
 		switch (anthropicMessage.role) {
 			case "user": {
 				const { nonToolMessages, toolMessages } = anthropicMessage.content.reduce<{
-					nonToolMessages: (Anthropic.TextBlockParam | Anthropic.ImageBlockParam)[]
-					toolMessages: Anthropic.ToolResultBlockParam[]
+					nonToolMessages: (ClineTextContentBlock | ClineImageContentBlock)[]
+					toolMessages: ClineUserToolResultContentBlock[]
 				}>(
 					(acc, part) => {
 						if (part.type === "tool_result") {
@@ -80,7 +85,7 @@ export function convertToVsCodeLmMessages(
 										return new vscode.LanguageModelTextPart(part.text)
 									}) ?? [new vscode.LanguageModelTextPart("")])
 
-						return new vscode.LanguageModelToolResultPart(toolMessage.tool_use_id, toolContentParts)
+						return new vscode.LanguageModelToolResultPart(toolMessage.function_id, toolContentParts)
 					}),
 
 					// Convert non-tool messages to TextParts after tool messages
@@ -101,8 +106,8 @@ export function convertToVsCodeLmMessages(
 
 			case "assistant": {
 				const { nonToolMessages, toolMessages } = anthropicMessage.content.reduce<{
-					nonToolMessages: (Anthropic.TextBlockParam | Anthropic.ImageBlockParam)[]
-					toolMessages: Anthropic.ToolUseBlockParam[]
+					nonToolMessages: (ClineTextContentBlock | ClineImageContentBlock)[]
+					toolMessages: ClineAssistantToolUseBlock[]
 				}>(
 					(acc, part) => {
 						if (part.type === "tool_use") {
@@ -121,7 +126,7 @@ export function convertToVsCodeLmMessages(
 					...toolMessages.map(
 						(toolMessage) =>
 							new vscode.LanguageModelToolCallPart(
-								toolMessage.id,
+								toolMessage.function_id,
 								toolMessage.name,
 								asObjectSafe(toolMessage.input),
 							),

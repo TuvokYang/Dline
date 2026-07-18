@@ -1,6 +1,7 @@
 import * as path from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import type { ApiHandler, buildApiHandler } from "@core/api"
+import { recordProviderAdapterInput, recordProviderAdapterOutput } from "@core/api/debug/api-conversation-log"
 import { createIdentityFactory } from "@core/api/transform/block-identity"
 import { createStreamNormalizer, normalizeApiStream } from "@core/api/transform/stream-identity-normalizer"
 import { parseAssistantMessageV2, ToolUse } from "@core/assistant-message"
@@ -77,10 +78,9 @@ interface SubagentUsageState {
 }
 
 interface SubagentToolCall {
-	item_id: string
 	function_id: string
 	dline_tid: string
-	call_id: string
+	provider_metadata?: { item_id?: string }
 	signature?: string
 	name: string
 	input: unknown
@@ -175,32 +175,42 @@ function normalizeToolCallArguments(argumentsPayload: unknown): string {
 function toAssistantToolUseBlock(call: SubagentToolCall): ClineAssistantToolUseBlock {
 	return {
 		type: "tool_use",
-		id: call.item_id,
-		item_id: call.item_id,
 		function_id: call.function_id,
 		dline_tid: call.dline_tid,
+		provider_metadata: call.provider_metadata,
 		name: call.name,
 		input: call.input,
-		call_id: call.function_id,
 		signature: call.signature,
 	}
 }
 
 function parseNonNativeToolCalls(assistantText: string): SubagentToolCall[] {
 	let ephemeralTs = Date.now()
-	const registry = { getOrCreateTsForBlock: (_key: string) => ++ephemeralTs }
+	const identities = new Map<string, { function_id: string; dline_tid: string }>()
+	const registry = {
+		getOrCreateTsForBlock: (_key: string) => ++ephemeralTs,
+		getOrCreateToolIdentityForBlock: (key: string) => {
+			const existing = identities.get(key)
+			if (existing) return existing
+			const index = identities.size + 1
+			const identity = {
+				function_id: `subagent_xml_function_${index}`,
+				dline_tid: `subagent_xml_tid_${index}`,
+			}
+			identities.set(key, identity)
+			return identity
+		},
+	}
 	const parsedBlocks = parseAssistantMessageV2(assistantText, registry)
 
 	return parsedBlocks
 		.filter((block): block is ToolUse => block.type === "tool_use")
 		.filter((block) => !block.partial)
-		.map((block, index) => ({
-			item_id: `subagent_xml_item_${index + 1}`,
-			function_id: `subagent_xml_function_${index + 1}`,
-			dline_tid: `subagent_xml_tid_${index + 1}`,
+		.map((block) => ({
+			function_id: block.function_id,
+			dline_tid: block.dline_tid,
 			name: block.name,
 			input: block.params,
-			call_id: `subagent_xml_function_${index + 1}`,
 			signature: block.signature,
 			isNativeToolCall: false,
 		}))
@@ -210,9 +220,6 @@ function pushSubagentToolResultBlock(toolResultBlocks: any[], call: SubagentTool
 	if (call.isNativeToolCall) {
 		toolResultBlocks.push({
 			type: "tool_result",
-			tool_use_id: call.function_id,
-			call_id: call.function_id,
-			item_id: `${call.item_id}_result`,
 			function_id: call.function_id,
 			dline_tid: call.dline_tid,
 			content,
@@ -234,6 +241,7 @@ export class SubagentRunner {
 	private abortRequested = false
 	private activeCommandExecutions = 0
 	private abortingCommands = false
+	private apiLogRequestIndex = 0
 
 	constructor(
 		private baseConfig: TaskConfig,
@@ -478,7 +486,7 @@ export class SubagentRunner {
 				for await (const chunk of stream) {
 					switch (chunk.type) {
 						case "usage":
-							requestId = requestId ?? chunk.id
+							requestId = requestId ?? chunk.provider_metadata?.response_id
 							stats.inputTokens += chunk.inputTokens || 0
 							stats.outputTokens += chunk.outputTokens || 0
 							stats.cacheWriteTokens += chunk.cacheWriteTokens || 0
@@ -499,29 +507,28 @@ export class SubagentRunner {
 							onProgress({ stats: { ...stats } })
 							break
 						case "text":
-							requestId = requestId ?? chunk.id
+							requestId = requestId ?? chunk.provider_metadata?.response_id
 							assistantText += chunk.text || ""
 							assistantTextSignature = chunk.signature || assistantTextSignature
 							break
 						case "tool_calls":
-							requestId = requestId ?? chunk.id
+							requestId = requestId ?? chunk.provider_metadata?.response_id
 							toolUseHandler.processToolUseDelta(
 								{
-									id: chunk.tool_call.function?.id,
 									type: "tool_use",
 									name: chunk.tool_call.function?.name,
 									input: normalizeToolCallArguments(chunk.tool_call.function?.arguments),
 									signature: chunk.signature,
 								},
 								{
-									item_id: chunk.item_id,
 									function_id: chunk.function_id,
 									dline_tid: chunk.dline_tid,
+									provider_metadata: chunk.provider_metadata,
 								},
 							)
 							break
 						case "reasoning":
-							requestId = requestId ?? chunk.id
+							requestId = requestId ?? chunk.provider_metadata?.response_id
 							break
 					}
 
@@ -551,14 +558,13 @@ export class SubagentRunner {
 				usageState.lastRequest = { ...requestUsage }
 
 				const nativeFinalizedToolCalls: SubagentToolCall[] = toolUseHandler.getAllFinalizedToolUses().map((toolCall) => {
-					if (!toolCall.item_id || !toolCall.function_id || !toolCall.dline_tid) {
+					if (!toolCall.function_id || !toolCall.dline_tid) {
 						throw new Error(`Canonical subagent tool call is missing identity: tool=${toolCall.name}`)
 					}
 					return {
-						item_id: toolCall.item_id,
 						function_id: toolCall.function_id,
 						dline_tid: toolCall.dline_tid,
-						call_id: toolCall.function_id,
+						provider_metadata: toolCall.provider_metadata,
 						signature: toolCall.signature,
 						name: toolCall.name,
 						input: toolCall.input,
@@ -600,7 +606,7 @@ export class SubagentRunner {
 					conversation.push({
 						role: "assistant",
 						content: assistantContent,
-						id: requestId,
+						provider_metadata: requestId ? { response_id: requestId } : undefined,
 					})
 				}
 
@@ -623,7 +629,7 @@ export class SubagentRunner {
 									text: "Failure: I did not provide a response.",
 								},
 							],
-							id: requestId,
+							provider_metadata: requestId ? { response_id: requestId } : undefined,
 						})
 					}
 					conversation.push({
@@ -672,8 +678,6 @@ export class SubagentRunner {
 						partial: false,
 						ts: Date.now(),
 						isNativeToolCall: call.isNativeToolCall,
-						call_id: call.function_id,
-						item_id: call.item_id,
 						function_id: call.function_id,
 						dline_tid: call.dline_tid,
 						signature: call.signature,
@@ -881,7 +885,22 @@ export class SubagentRunner {
 			const truncatedConversation = contextManager
 				.getTruncatedMessages(fullConversation, contextState.conversationHistoryDeletedRange)
 				.map((message) => message as ClineStorageMessage)
-			const stream = api.createMessage(systemPrompt, truncatedConversation, nativeTools)
+			const roundContext = {
+				taskId: this.baseConfig.taskId,
+				requestIndex: ++this.apiLogRequestIndex,
+				provider: providerId,
+				model: modelId,
+				source: "subagent" as const,
+			}
+			await recordProviderAdapterInput(roundContext, {
+				systemPrompt,
+				messages: truncatedConversation,
+				tools: nativeTools,
+			})
+			const stream = recordProviderAdapterOutput(
+				roundContext,
+				api.createMessage(systemPrompt, truncatedConversation, nativeTools),
+			)
 			const iterator = stream[Symbol.asyncIterator]()
 
 			try {

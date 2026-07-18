@@ -20,7 +20,7 @@ export interface RestoreContext {
 	recursivelyMakeClineRequests: (content: ClineContent[]) => Promise<boolean>
 	postStateToWebview: () => Promise<void>
 	/** Auto-approval predicate matching Task.shouldAutoApproveTool signature */
-	shouldAutoApproveTool: (toolName: string, callId: string) => boolean
+	shouldAutoApproveTool: (toolName: string, dlineTid: string) => boolean
 }
 
 export interface PendingToolUseState {
@@ -154,7 +154,7 @@ export class RestoreHandler {
 					}
 					return {
 						dlineTid: b.dlineTid,
-						callId: b.callId,
+						functionId: b.functionId,
 						toolName: b.name,
 						phase: b.phase,
 						conversationHistoryIndex: b.apiIndex,
@@ -211,8 +211,8 @@ export class RestoreHandler {
 			apiIndex: pending.assistantIndex,
 			execution: {
 				mode: "serial",
-				executing: runtimeToolUses.map((tool) => tool.function_id || ""),
-				executingDlineTids: runtimeToolUses.map((tool) => tool.dline_tid || ""),
+				executingFunctionIds: runtimeToolUses.map((tool) => tool.function_id),
+				executingDlineTids: runtimeToolUses.map((tool) => tool.dline_tid),
 			},
 		})
 
@@ -229,7 +229,7 @@ export class RestoreHandler {
 	 * Handles MCP tool name prefixing and parameter stringification.
 	 */
 	storedToRuntime(block: ClineAssistantToolUseBlock, baseTs: number): ToolUse {
-		if (!block.item_id || !block.function_id || !block.dline_tid) {
+		if (!block.function_id || !block.dline_tid) {
 			throw new Error(`Canonical stored tool block is missing identity: tool=${block.name}`)
 		}
 		const params: Record<string, string> = {}
@@ -259,8 +259,6 @@ export class RestoreHandler {
 			partial: false,
 			ts: baseTs,
 			isNativeToolCall: true,
-			call_id: block.function_id,
-			item_id: block.item_id,
 			function_id: block.function_id,
 			dline_tid: block.dline_tid,
 		} as ToolUse
@@ -284,7 +282,7 @@ export class RestoreHandler {
 					}
 					return {
 						dlineTid: block.dlineTid,
-						callId: block.callId,
+						functionId: block.functionId,
 						toolName: block.name,
 						phase: block.phase,
 						conversationHistoryIndex: block.apiIndex,

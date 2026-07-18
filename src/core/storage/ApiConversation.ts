@@ -1,5 +1,6 @@
 import path from "path"
 import { ClineStorageMessage } from "@/shared/messages/content"
+import { normalizeLegacyConversation } from "@/shared/messages/legacy-identity-migration"
 import { ensureTaskDirectoryExists, GlobalFileNames } from "./disk"
 import { JsonlIndexedStore } from "./JsonlIndexedStore"
 
@@ -25,15 +26,30 @@ export class ApiConversation {
 		const dir = await ensureTaskDirectoryExists(taskId)
 		const filePath = path.join(dir, GlobalFileNames.apiConversationHistory)
 		const store = await JsonlIndexedStore.open<IndexedApiMessage>(filePath)
+		const stored = store.getAll()
+		const normalized = normalizeLegacyConversation(stored) as IndexedApiMessage[]
+		if (JSON.stringify(stored) !== JSON.stringify(normalized)) {
+			await store.overwrite(normalized)
+		}
 		return new ApiConversation(store)
 	}
 
 	// ── Read ──
-	getAll(): ReadonlyArray<IndexedApiMessage> { return this.store.getAll() }
-	getByTs(ts: number): IndexedApiMessage | undefined { return this.store.getByTs(ts) }
-	getAt(index: number): IndexedApiMessage | undefined { return this.store.getAt(index) }
-	findIndexByTs(ts: number): number { return this.store.findIndexByTs(ts) }
-	get count(): number { return this.store.count }
+	getAll(): ReadonlyArray<IndexedApiMessage> {
+		return this.store.getAll()
+	}
+	getByTs(ts: number): IndexedApiMessage | undefined {
+		return this.store.getByTs(ts)
+	}
+	getAt(index: number): IndexedApiMessage | undefined {
+		return this.store.getAt(index)
+	}
+	findIndexByTs(ts: number): number {
+		return this.store.findIndexByTs(ts)
+	}
+	get count(): number {
+		return this.store.count
+	}
 
 	/**
 	 * Return the last (most recent) entry, or undefined if empty.
@@ -51,7 +67,7 @@ export class ApiConversation {
 	 * If the message lacks a ts, it is assigned Date.now().
 	 */
 	async addMessage(msg: ClineStorageMessage): Promise<void> {
-		const ts = (msg.ts === undefined || msg.ts === null) ? Date.now() : msg.ts
+		const ts = msg.ts === undefined || msg.ts === null ? Date.now() : msg.ts
 		await this.store.append({ ...msg, ts } as IndexedApiMessage)
 	}
 
@@ -88,7 +104,7 @@ export class ApiConversation {
 	 */
 	async overwrite(messages: ClineStorageMessage[]): Promise<void> {
 		const indexed = messages.map((m) => {
-			const ts = (m.ts === undefined || m.ts === null) ? Date.now() : m.ts
+			const ts = m.ts === undefined || m.ts === null ? Date.now() : m.ts
 			return { ...m, ts } as IndexedApiMessage
 		})
 		await this.store.overwrite(indexed)
@@ -99,7 +115,7 @@ export class ApiConversation {
 	 */
 	async insertAt(index: number, msg: ClineStorageMessage): Promise<void> {
 		if (msg.ts === undefined || msg.ts === null) {
-			;((msg as unknown) as Record<string, unknown>).ts = Date.now()
+			;(msg as unknown as Record<string, unknown>).ts = Date.now()
 		}
 		await this.store.insertAt(index, msg as IndexedApiMessage)
 	}
@@ -109,7 +125,7 @@ export class ApiConversation {
 	 */
 	async updateAt(index: number, msg: ClineStorageMessage): Promise<void> {
 		if (msg.ts === undefined || msg.ts === null) {
-			;((msg as unknown) as Record<string, unknown>).ts = Date.now()
+			;(msg as unknown as Record<string, unknown>).ts = Date.now()
 		}
 		await this.store.updateAt(index, msg as IndexedApiMessage)
 	}

@@ -2,8 +2,8 @@
 import "../providers/vscode-lm"
 import { describe, it } from "vitest"
 import "should"
-import { Anthropic } from "@anthropic-ai/sdk"
 import * as vscode from "vscode"
+import type { ClineStorageMessage } from "@/shared/messages/content"
 import { asObjectSafe, convertToAnthropicMessage, convertToAnthropicRole, convertToVsCodeLmMessages } from "./vscode-lm-format"
 
 describe("asObjectSafe", () => {
@@ -46,7 +46,7 @@ describe("convertToAnthropicRole", () => {
 
 describe("convertToVsCodeLmMessages", () => {
 	it("should convert simple string messages", () => {
-		const anthropicMessages: Anthropic.Messages.MessageParam[] = [
+		const anthropicMessages: ClineStorageMessage[] = [
 			{ role: "user", content: "Hello" },
 			{ role: "assistant", content: "Hi there" },
 		]
@@ -66,14 +66,15 @@ describe("convertToVsCodeLmMessages", () => {
 	})
 
 	it("should convert complex user messages with tool results", () => {
-		const anthropicMessages: Anthropic.Messages.MessageParam[] = [
+		const anthropicMessages: ClineStorageMessage[] = [
 			{
 				role: "user",
 				content: [
 					{ type: "text", text: "User text" },
 					{
 						type: "tool_result",
-						tool_use_id: "tool-123",
+						function_id: "tool-123",
+						dline_tid: "tid-tool-123",
 						content: [{ type: "text", text: "Tool result" }],
 					},
 				],
@@ -101,14 +102,15 @@ describe("convertToVsCodeLmMessages", () => {
 	})
 
 	it("should convert complex assistant messages with tool calls", () => {
-		const anthropicMessages: Anthropic.Messages.MessageParam[] = [
+		const anthropicMessages: ClineStorageMessage[] = [
 			{
 				role: "assistant",
 				content: [
 					{ type: "text", text: "Assistant text" },
 					{
 						type: "tool_use",
-						id: "tool-123",
+						function_id: "tool-123",
+						dline_tid: "tid-tool-123",
 						name: "testTool",
 						input: { param: "value" },
 					},
@@ -135,7 +137,7 @@ describe("convertToVsCodeLmMessages", () => {
 	})
 
 	it("should handle image blocks with appropriate placeholders", () => {
-		const anthropicMessages: Anthropic.Messages.MessageParam[] = [
+		const anthropicMessages: ClineStorageMessage[] = [
 			{
 				role: "user",
 				content: [

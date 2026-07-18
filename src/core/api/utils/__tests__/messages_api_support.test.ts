@@ -227,12 +227,9 @@ describe("messages_api_support", () => {
 			expect(chunks).to.have.length(1)
 			expect(chunks[0]).to.deep.equal({
 				type: "tool_calls",
+				function_id: "tool_1",
 				tool_call: {
-					id: "tool_1",
-					name: "read_file",
-					arguments: "",
 					function: {
-						id: "tool_1",
 						name: "read_file",
 						arguments: '{"path":',
 					},

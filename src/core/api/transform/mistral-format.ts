@@ -1,8 +1,8 @@
-import { Anthropic } from "@anthropic-ai/sdk"
 import { AssistantMessage } from "@mistralai/mistralai/models/components/assistantmessage"
 import { SystemMessage } from "@mistralai/mistralai/models/components/systemmessage"
 import { ToolMessage } from "@mistralai/mistralai/models/components/toolmessage"
 import { UserMessage } from "@mistralai/mistralai/models/components/usermessage"
+import type { ClineStorageMessage } from "@/shared/messages/content"
 
 export type MistralMessage =
 	| (SystemMessage & { role: "system" })
@@ -10,7 +10,7 @@ export type MistralMessage =
 	| (AssistantMessage & { role: "assistant" })
 	| (ToolMessage & { role: "tool" })
 
-export function convertToMistralMessages(anthropicMessages: Anthropic.Messages.MessageParam[]): MistralMessage[] {
+export function convertToMistralMessages(anthropicMessages: ClineStorageMessage[]): MistralMessage[] {
 	const mistralMessages: MistralMessage[] = []
 	for (const anthropicMessage of anthropicMessages) {
 		if (typeof anthropicMessage.content === "string") {

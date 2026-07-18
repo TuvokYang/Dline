@@ -415,7 +415,6 @@ export class ToolExecutor {
 			this.taskState.userMessageContent,
 			(block: ToolUse) => ToolDisplayUtils.getToolDescription(block),
 			this.coordinator,
-			this.identityFactory.nextItemId,
 		)
 
 		// Mark that a tool has been used (only matters when parallel tool calling is disabled)
@@ -432,14 +431,11 @@ export class ToolExecutor {
 			throw new Error(`Canonical runtime tool block is missing identity: tool=${block.name}`)
 		}
 		const resultText = typeof content === "string" ? content : JSON.stringify(content)
-		const functionId = block.function_id
 		// Storage + push handled by say(), gated by TaskController.send()
 		await this.say(
 			"partial_tool_result",
 			JSON.stringify({
-				tool_use_id: functionId,
-				item_id: this.identityFactory.nextItemId(),
-				function_id: functionId,
+				function_id: block.function_id,
 				dline_tid: block.dline_tid,
 				result: resultText,
 			}),
@@ -586,7 +582,7 @@ export class ToolExecutor {
 	}
 
 	private pushSkippedNativeToolResult(block: ToolUse, message: string): boolean {
-		if (block.partial || !block.isNativeToolCall || !block.call_id) {
+		if (block.partial || !block.isNativeToolCall) {
 			return false
 		}
 

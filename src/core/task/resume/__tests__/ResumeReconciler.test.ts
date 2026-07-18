@@ -34,7 +34,7 @@ function snapshot(
 			mode: "serial",
 			blocks: options.blocks.map((block) => ({
 				...block,
-				callId: `call-${block.dlineTid}`,
+				functionId: `function-${block.dlineTid}`,
 				toolName: "read_file",
 				ts: 90,
 				requiresApproval: false,
@@ -78,13 +78,11 @@ function assistantTool(dlineTid = TID): ClineStorageMessage {
 		content: [
 			{
 				type: "tool_use",
-				id: `call-${dlineTid}`,
 				name: "read_file",
 				input: {},
-				call_id: `call-${dlineTid}`,
-				item_id: `item-${dlineTid}`,
-				function_id: `call-${dlineTid}`,
+				function_id: `function-${dlineTid}`,
 				dline_tid: dlineTid,
+				provider_metadata: { item_id: `item-${dlineTid}` },
 			},
 		],
 	}
@@ -97,12 +95,10 @@ function toolResult(dlineTid = TID): ClineStorageMessage {
 		content: [
 			{
 				type: "tool_result",
-				tool_use_id: `call-${dlineTid}`,
 				content: "ok",
-				call_id: `call-${dlineTid}`,
-				item_id: `result-${dlineTid}`,
-				function_id: `call-${dlineTid}`,
+				function_id: `function-${dlineTid}`,
 				dline_tid: dlineTid,
+				provider_metadata: { item_id: `result-${dlineTid}` },
 			},
 		],
 	}

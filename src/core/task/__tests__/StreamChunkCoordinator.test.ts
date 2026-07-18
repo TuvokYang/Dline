@@ -32,7 +32,6 @@ async function* createRawStream(): ApiStream {
 		tool_index: 0,
 		tool_call: {
 			function: {
-				id: "call_provider_1",
 				name: "read_file",
 				arguments: "{}",
 			},
@@ -47,7 +46,7 @@ async function* createRawStream(): ApiStream {
 
 describe("StreamChunkCoordinator", () => {
 	it("receives only canonical chunks after provider stream normalization", async () => {
-		const factory = createIdentityFactory(createSource(["ITEM", "TRACE"]))
+		const factory = createIdentityFactory(createSource(["TRACE"]))
 		const normalizer = createStreamNormalizer(factory)
 		const stream = normalizeApiStream(createRawStream(), normalizer)
 		const onUsageChunk = vi.fn()
@@ -59,8 +58,8 @@ describe("StreamChunkCoordinator", () => {
 		expect(chunk?.type).toBe("tool_calls")
 		if (chunk?.type !== "tool_calls") throw new Error("Expected canonical tool chunk")
 		expect(chunk.function_id).toBe("call_provider_1")
-		expect(chunk.item_id).toBe("dline_item_ITEM")
 		expect(chunk.dline_tid).toBe("dline_tid_TRACE")
+		expect(chunk).not.toHaveProperty("item_id")
 		expect(onUsageChunk).toHaveBeenCalledOnce()
 	})
 })

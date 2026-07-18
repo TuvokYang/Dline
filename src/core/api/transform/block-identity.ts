@@ -1,27 +1,15 @@
 import { monotonicFactory } from "ulid"
 
-/** Stable identity metadata shared by Dline logical content blocks. */
-export interface BlockIdentity {
-	/** Stable identity of one logical provider or Dline content item. */
-	item_id: string
-	/** Dline trace identity spanning stream, execution, result, and restore. */
+/** Canonical identities shared by one runtime tool use/result lifecycle. */
+export interface RuntimeToolIdentity {
+	function_id: string
 	dline_tid: string
 }
 
-/** Function pairing identity shared by native tool use and result blocks. */
-export interface FunctionIdentity extends BlockIdentity {
-	/** Provider-neutral function call and result pairing identity. */
-	function_id: string
-}
-
-/** Allocates Dline-owned item and trace identities. */
+/** Allocates Dline-owned function and trace identities. */
 export interface IdentityFactory {
-	/**
-	 * Allocate the next Dline item identity.
-	 *
-	 * @returns A prefixed item identity.
-	 */
-	nextItemId(): string
+	/** Allocate a Dline-owned function identity for non-native tool calls. */
+	nextFunctionId(): string
 	/**
 	 * Allocate the next Dline trace identity.
 	 *
@@ -65,7 +53,7 @@ export class MissingFunctionIdentityError extends Error {
  */
 export function createIdentityFactory(nextUlid: () => string = monotonicFactory()): IdentityFactory {
 	return {
-		nextItemId: () => `dline_item_${nextUlid()}`,
+		nextFunctionId: () => `dline_function_${nextUlid()}`,
 		nextTraceId: () => `dline_tid_${nextUlid()}`,
 	}
 }

@@ -14,6 +14,8 @@ import { isBlockAutoApproved, isToolUseAutoApproved } from "../ToolExecutor"
 function makeBlock(name: ClineDefaultTool, params: ToolUse["params"]): ToolUse {
 	return {
 		type: "tool_use",
+		function_id: `test_${name}`,
+		dline_tid: `test_tid_${name}`,
 		name,
 		params,
 		partial: false,

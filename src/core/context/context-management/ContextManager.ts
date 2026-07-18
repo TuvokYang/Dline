@@ -1,11 +1,15 @@
-import { Anthropic } from "@anthropic-ai/sdk"
 import { ApiHandler } from "@core/api"
 import { getPrompt } from "@core/prompts/i18n"
 import { formatResponse } from "@core/prompts/responses"
 import { GlobalFileNames } from "@core/storage/disk"
 import { readJsonl, writeJsonl } from "@core/storage/jsonl-utils"
 import { ClineApiReqInfo, ClineMessage } from "@shared/ExtensionMessage"
-import type { ClineAssistantToolUseBlock, ClineUserToolResultContentBlock } from "@shared/messages/content"
+import type {
+	ClineAssistantToolUseBlock,
+	ClineContent,
+	ClineStorageMessage,
+	ClineUserToolResultContentBlock,
+} from "@shared/messages/content"
 import cloneDeep from "clone-deep"
 import fs from "fs/promises"
 import * as path from "path"
@@ -65,7 +69,7 @@ export class ContextManager {
 	 * For tool_result blocks, extracts text from content[0] (native tool calling format).
 	 * @returns The text content, or null if no text could be extracted
 	 */
-	private getTextFromBlock(block: Anthropic.Messages.ContentBlockParam): string | null {
+	private getTextFromBlock(block: ClineContent): string | null {
 		if (block.type === "text") {
 			return block.text
 		}
@@ -83,7 +87,7 @@ export class ContextManager {
 	 * For tool_result blocks, sets text in content[0] (native tool calling format).
 	 * @returns true if text was set successfully, false otherwise
 	 */
-	private setTextInBlock(block: Anthropic.Messages.ContentBlockParam, text: string): boolean {
+	private setTextInBlock(block: ClineContent, text: string): boolean {
 		if (block.type === "text") {
 			block.text = text
 			return true
@@ -228,7 +232,7 @@ export class ContextManager {
 	 * primary entry point for getting up to date context
 	 */
 	async getNewContextMessagesAndMetadata(
-		apiConversationHistory: Anthropic.Messages.MessageParam[],
+		apiConversationHistory: ClineStorageMessage[],
 		clineMessages: ClineMessage[],
 		api: ApiHandler,
 		conversationHistoryDeletedRange: [number, number] | undefined,
@@ -301,7 +305,7 @@ export class ContextManager {
 	 * get truncation range
 	 */
 	public getNextTruncationRange(
-		apiMessages: Anthropic.Messages.MessageParam[],
+		apiMessages: ClineStorageMessage[],
 		currentDeletedRange: [number, number] | undefined,
 		keep: "none" | "lastTwo" | "half" | "quarter",
 	): [number, number] {
@@ -346,9 +350,9 @@ export class ContextManager {
 	 * external interface to support old calls
 	 */
 	public getTruncatedMessages(
-		messages: Anthropic.Messages.MessageParam[],
+		messages: ClineStorageMessage[],
 		deletedRange: [number, number] | undefined,
-	): Anthropic.Messages.MessageParam[] {
+	): ClineStorageMessage[] {
 		return this.getAndAlterTruncatedMessages(messages, deletedRange)
 	}
 
@@ -356,9 +360,9 @@ export class ContextManager {
 	 * apply all required truncation methods to the messages in context
 	 */
 	private getAndAlterTruncatedMessages(
-		messages: Anthropic.Messages.MessageParam[],
+		messages: ClineStorageMessage[],
 		deletedRange: [number, number] | undefined,
-	): Anthropic.Messages.MessageParam[] {
+	): ClineStorageMessage[] {
 		if (messages.length <= 1) {
 			return messages
 		}
@@ -378,33 +382,30 @@ export class ContextManager {
 	 * @param block Stored assistant tool-use block.
 	 * @returns Canonical function identity, with the legacy Anthropic id as fallback.
 	 */
-	private getToolFunctionId(block: Anthropic.Messages.ToolUseBlockParam): string {
-		return (block as ClineAssistantToolUseBlock).function_id || block.id
+	private getToolFunctionId(block: ClineAssistantToolUseBlock): string {
+		return block.function_id
 	}
 
 	/**
 	 * Resolve the provider-neutral pairing identity for a stored tool result.
 	 *
 	 * @param block Stored user tool-result block.
-	 * @returns Canonical function identity, with the legacy tool_use_id as fallback.
+	 * @returns Canonical function identity.
 	 */
-	private getResultFunctionId(block: Anthropic.Messages.ToolResultBlockParam): string {
-		return (block as ClineUserToolResultContentBlock).function_id || block.tool_use_id
+	private getResultFunctionId(block: ClineUserToolResultContentBlock): string {
+		return block.function_id
 	}
 
 	/** Build a provider-projectable result for a tool call whose real result was lost. */
 	private createSyntheticToolResult(
 		functionId: string,
-		toolBlock: Anthropic.Messages.ToolUseBlockParam | undefined,
+		toolBlock: ClineAssistantToolUseBlock | undefined,
 		text: string,
 	): ClineUserToolResultContentBlock {
-		const canonicalUse = toolBlock as ClineAssistantToolUseBlock | undefined
 		return {
 			type: "tool_result",
-			tool_use_id: functionId,
 			function_id: functionId,
-			call_id: functionId,
-			...(canonicalUse?.dline_tid ? { dline_tid: canonicalUse.dline_tid } : {}),
+			dline_tid: toolBlock?.dline_tid ?? `recovered:${functionId}`,
 			content: [{ type: "text", text }],
 		}
 	}
@@ -413,7 +414,7 @@ export class ContextManager {
 	 * Ensures that every tool_use block in assistant messages has a corresponding tool_result in the next user message,
 	 * and that tool_result blocks immediately follow their corresponding tool_use blocks.
 	 */
-	private ensureToolResultsFollowToolUse(messages: Anthropic.Messages.MessageParam[]): void {
+	private ensureToolResultsFollowToolUse(messages: ClineStorageMessage[]): void {
 		for (let i = 0; i < messages.length - 1; i++) {
 			const message = messages[i]
 
@@ -425,7 +426,7 @@ export class ContextManager {
 			// Extract provider-neutral function identities in order.
 			const toolUseIds: string[] = []
 			for (const block of message.content) {
-				if (block.type === "tool_use" && block.id) {
+				if (block.type === "tool_use") {
 					toolUseIds.push(this.getToolFunctionId(block))
 				}
 			}
@@ -443,7 +444,7 @@ export class ContextManager {
 				// Collect unpaired tool_use IDs for this assistant
 				const unpairedIds: string[] = []
 				for (const block of message.content) {
-					if (block.type === "tool_use" && block.id) {
+					if (block.type === "tool_use") {
 						unpairedIds.push(this.getToolFunctionId(block))
 					}
 				}
@@ -454,8 +455,8 @@ export class ContextManager {
 				// Build synthetic tool_results for all unpaired tool_uses
 				const syntheticResults: ClineUserToolResultContentBlock[] = []
 				for (const toolUseId of unpairedIds) {
-					const toolBlock = (message.content as Anthropic.Messages.ContentBlockParam[]).find(
-						(block): block is Anthropic.Messages.ToolUseBlockParam =>
+					const toolBlock = message.content.find(
+						(block): block is ClineAssistantToolUseBlock =>
 							block.type === "tool_use" && this.getToolFunctionId(block) === toolUseId,
 					)
 					const toolName = toolBlock?.name || "unknown"
@@ -467,7 +468,7 @@ export class ContextManager {
 				}
 
 				// Insert a synthetic user message with tool_results between the two assistants
-				const syntheticUserMsg: Anthropic.Messages.MessageParam = {
+				const syntheticUserMsg: ClineStorageMessage = {
 					role: "user",
 					content: syntheticResults,
 				}
@@ -488,42 +489,39 @@ export class ContextManager {
 			// Only the last occurrence is kept; dedup is always performed even when
 			// no other repair is needed, to prevent "tool messages following
 			// tool_calls" mismatches that DeepSeek/OpenAI-compatible APIs reject.
-			const toolResultMap = new Map<string, Anthropic.Messages.ToolResultBlockParam>()
+			const toolResultMap = new Map<string, ClineUserToolResultContentBlock>()
 			let hasDuplicates = false
 			let normalizedIdentity = false
 
 			for (const block of nextMessage.content) {
-				if (block.type === "tool_result" && block.tool_use_id) {
+				if (block.type === "tool_result") {
 					const functionId = this.getResultFunctionId(block)
 					const storedResult = block as ClineUserToolResultContentBlock
-					const pairedUse = (message.content as Anthropic.Messages.ContentBlockParam[]).find(
-						(candidate): candidate is Anthropic.Messages.ToolUseBlockParam =>
+					const pairedUse = message.content.find(
+						(candidate): candidate is ClineAssistantToolUseBlock =>
 							candidate.type === "tool_use" && this.getToolFunctionId(candidate) === functionId,
 					)
-					const pairedDlineTid = (pairedUse as ClineAssistantToolUseBlock | undefined)?.dline_tid
+					const pairedDlineTid = pairedUse?.dline_tid
 					const normalizedResult: ClineUserToolResultContentBlock = {
 						...storedResult,
-						tool_use_id: functionId,
 						function_id: functionId,
-						call_id: storedResult.call_id || functionId,
 						...(storedResult.dline_tid || !pairedDlineTid ? {} : { dline_tid: pairedDlineTid }),
 					}
 					if (
 						storedResult.function_id !== normalizedResult.function_id ||
-						storedResult.call_id !== normalizedResult.call_id ||
 						storedResult.dline_tid !== normalizedResult.dline_tid
 					) {
 						normalizedIdentity = true
 					}
 					if (toolResultMap.has(functionId)) {
 						hasDuplicates = true
-						const toolBlock = (message.content as Anthropic.Messages.ContentBlockParam[]).find(
-							(candidate): candidate is Anthropic.Messages.ToolUseBlockParam =>
+						const toolBlock = message.content.find(
+							(candidate): candidate is ClineAssistantToolUseBlock =>
 								candidate.type === "tool_use" && this.getToolFunctionId(candidate) === functionId,
 						)
 						Logger.warn(
 							`ContextManager: duplicate tool_result for function_id=${functionId} ` +
-								`tool=${toolBlock?.name ?? "unknown"} call_id=${(block as ClineUserToolResultContentBlock).call_id ?? "N/A"}`,
+								`tool=${toolBlock?.name ?? "unknown"}`,
 						)
 					}
 					toolResultMap.set(functionId, normalizedResult)
@@ -537,8 +535,8 @@ export class ContextManager {
 			let needsUpdate = normalizedIdentity
 			for (const toolUseId of toolUseIds) {
 				if (!toolResultMap.has(toolUseId)) {
-					const toolBlock = (message.content as Anthropic.Messages.ContentBlockParam[]).find(
-						(block): block is Anthropic.Messages.ToolUseBlockParam =>
+					const toolBlock = message.content.find(
+						(block): block is ClineAssistantToolUseBlock =>
 							block.type === "tool_use" && this.getToolFunctionId(block) === toolUseId,
 					)
 					const toolName = toolBlock?.name || "unknown"
@@ -571,7 +569,7 @@ export class ContextManager {
 			}
 
 			// Force reorder when duplicates exist, even if no repair was needed.
-			// Without this, duplicate tool_results for the same tool_use_id are
+			// Without this, duplicate tool_results for the same function_id are
 			// passed through to the API and produce "Messages with role 'tool'
 			// must be a response to a preceding message with 'tool_calls'".
 			if (!needsUpdate && !hasDuplicates) {
@@ -581,15 +579,15 @@ export class ContextManager {
 			// Reorder: tool_results first (in toolUseIds order), then other blocks.
 			// This is only done when we actually modified content, so it does not
 			// break context caching on normal (no-op) requests.
-			const newContent: Anthropic.Messages.ContentBlockParam[] = []
+			const newContent: ClineContent[] = []
 			for (const toolUseId of toolUseIds) {
 				const toolResult = toolResultMap.get(toolUseId)
 				if (toolResult) {
 					newContent.push(toolResult)
 				}
 			}
-			for (const block of nextMessage.content as Anthropic.Messages.ContentBlockParam[]) {
-				if (block.type === "tool_result" && block.tool_use_id) {
+			for (const block of nextMessage.content) {
+				if (block.type === "tool_result") {
 					// Already added above in provider-neutral function identity order.
 				} else {
 					newContent.push(block)
@@ -605,10 +603,7 @@ export class ContextManager {
 	/**
 	 * applies deletedRange truncation and other alterations based on changes in this.contextHistoryUpdates
 	 */
-	private applyContextHistoryUpdates(
-		messages: Anthropic.Messages.MessageParam[],
-		startFromIndex: number,
-	): Anthropic.Messages.MessageParam[] {
+	private applyContextHistoryUpdates(messages: ClineStorageMessage[], startFromIndex: number): ClineStorageMessage[] {
 		// runtime is linear in length of user messages, if expecting a limited number of alterations, could be more optimal to loop over alterations
 
 		const firstChunk = messages.slice(0, 2) // get first user-assistant pair
@@ -623,8 +618,8 @@ export class ContextManager {
 				if (hasToolResults) {
 					// Clone and filter out all tool_result blocks
 					messagesToUpdate[2] = cloneDeep(firstMessageAfterTruncation)
-					;(messagesToUpdate[2].content as Anthropic.Messages.ContentBlockParam[]) = (
-						firstMessageAfterTruncation.content as Anthropic.Messages.ContentBlockParam[]
+					;(messagesToUpdate[2].content as ClineContent[]) = (
+						firstMessageAfterTruncation.content as ClineContent[]
 					).filter((block) => block.type !== "tool_result")
 				}
 			}
@@ -730,7 +725,7 @@ export class ContextManager {
 	 * applies the context optimization steps and returns whether any changes were made
 	 */
 	public applyContextOptimizations(
-		apiMessages: Anthropic.Messages.MessageParam[],
+		apiMessages: ClineStorageMessage[],
 		startFromIndex: number,
 		timestamp: number,
 	): [boolean, Set<number>] {
@@ -750,7 +745,7 @@ export class ContextManager {
 	 * Private helper that attempts file read optimization and checks threshold.
 	 */
 	private attemptFileReadOptimizationCore(
-		apiConversationHistory: Anthropic.Messages.MessageParam[],
+		apiConversationHistory: ClineStorageMessage[],
 		conversationHistoryDeletedRange: [number, number] | undefined,
 		timestamp: number,
 	): {
@@ -785,7 +780,7 @@ export class ContextManager {
 	 * Public helper that attempts file read optimization and saves to disk.
 	 */
 	async attemptFileReadOptimization(
-		apiConversationHistory: Anthropic.Messages.MessageParam[],
+		apiConversationHistory: ClineStorageMessage[],
 		conversationHistoryDeletedRange: [number, number] | undefined,
 		clineMessages: ClineMessage[],
 		previousApiReqIndex: number,
@@ -826,13 +821,13 @@ export class ContextManager {
 	 * Public helper that attempts file read optimization in memory without persisting context history.
 	 */
 	public attemptFileReadOptimizationInMemory(
-		apiConversationHistory: Anthropic.Messages.MessageParam[],
+		apiConversationHistory: ClineStorageMessage[],
 		conversationHistoryDeletedRange: [number, number] | undefined,
 		timestamp: number,
 	): {
 		anyContextUpdates: boolean
 		needToTruncate: boolean
-		optimizedConversationHistory: Anthropic.Messages.MessageParam[]
+		optimizedConversationHistory: ClineStorageMessage[]
 	} {
 		const { anyContextUpdates, needToTruncate } = this.attemptFileReadOptimizationCore(
 			apiConversationHistory,
@@ -862,7 +857,7 @@ export class ContextManager {
 	async triggerApplyStandardContextTruncationNoticeChange(
 		timestamp: number,
 		taskDirectory: string,
-		apiConversationHistory: Anthropic.Messages.MessageParam[],
+		apiConversationHistory: ClineStorageMessage[],
 	) {
 		const assistantUpdated = this.applyStandardContextTruncationNoticeChange(timestamp)
 		const userUpdated = this.applyFirstUserMessageReplacement(timestamp, apiConversationHistory)
@@ -888,10 +883,7 @@ export class ContextManager {
 	/**
 	 * Replace the first user message when context window is compacted
 	 */
-	private applyFirstUserMessageReplacement(
-		timestamp: number,
-		apiConversationHistory: Anthropic.Messages.MessageParam[],
-	): boolean {
+	private applyFirstUserMessageReplacement(timestamp: number, apiConversationHistory: ClineStorageMessage[]): boolean {
 		if (!this.contextHistoryUpdates.has(0)) {
 			try {
 				// choosing to be extra careful here, but likely not required
@@ -926,7 +918,7 @@ export class ContextManager {
 	 * returns whether any updates were made (bool) and indices where updates were made
 	 */
 	private findAndPotentiallySaveFileReadContextHistoryUpdates(
-		apiMessages: Anthropic.Messages.MessageParam[],
+		apiMessages: ClineStorageMessage[],
 		startFromIndex: number,
 		timestamp: number,
 	): [boolean, Set<number>] {
@@ -939,7 +931,7 @@ export class ContextManager {
 	 * also return additional metadata to support multiple file reads in file mention text blocks
 	 */
 	private getPossibleDuplicateFileReads(
-		apiMessages: Anthropic.Messages.MessageParam[],
+		apiMessages: ClineStorageMessage[],
 		startFromIndex: number,
 	): [Map<string, [number, number, string, string, number][]>, Map<number, string[]>] {
 		// fileReadIndices: { fileName => [outerIndex, EditType, searchText, replaceText, innerIndex] }
@@ -1196,7 +1188,7 @@ export class ContextManager {
 	private applyFileReadContextHistoryUpdates(
 		fileReadIndices: Map<string, [number, number, string, string, number][]>,
 		messageFilePaths: Map<number, string[]>,
-		apiMessages: Anthropic.Messages.MessageParam[],
+		apiMessages: ClineStorageMessage[],
 		timestamp: number,
 	): [boolean, Set<number>] {
 		let didUpdate = false
@@ -1323,7 +1315,7 @@ export class ContextManager {
 	 * count total characters in messages and total savings within this range
 	 */
 	private countCharactersAndSavingsInRange(
-		apiMessages: Anthropic.Messages.MessageParam[],
+		apiMessages: ClineStorageMessage[],
 		startIndex: number,
 		endIndex: number,
 		uniqueFileReadIndices: Set<number>,
@@ -1402,7 +1394,7 @@ export class ContextManager {
 	 * count total percentage character savings across in-range conversation
 	 */
 	private calculateContextOptimizationMetrics(
-		apiMessages: Anthropic.Messages.MessageParam[],
+		apiMessages: ClineStorageMessage[],
 		conversationHistoryDeletedRange: [number, number] | undefined,
 		uniqueFileReadIndices: Set<number>,
 	): number {

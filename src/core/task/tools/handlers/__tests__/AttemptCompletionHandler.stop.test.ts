@@ -78,7 +78,7 @@ function createConfig(
 			executeCommandTool: vi.fn().mockResolvedValue([false, ""]),
 			runUserPromptSubmitHook: vi.fn().mockResolvedValue({}),
 		} as unknown as TaskConfig["callbacks"],
-	} as TaskConfig
+	} as unknown as TaskConfig
 }
 
 /**
@@ -88,6 +88,7 @@ function createConfig(
 function createBlock(): ToolUse {
 	return {
 		type: "tool_use",
+		function_id: "completion-function-1",
 		name: ClineDefaultTool.ATTEMPT,
 		params: { result: "done" },
 		partial: false,

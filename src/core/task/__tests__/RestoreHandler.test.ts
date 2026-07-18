@@ -21,11 +21,9 @@ import type { TaskSnapshot } from "../TaskSnapshot"
 function createStoredTool(id: string, name: string, input: Record<string, unknown>): ClineAssistantToolUseBlock {
 	return {
 		type: "tool_use",
-		id: `item_${id}`,
-		item_id: `item_${id}`,
 		function_id: `call_${id}`,
 		dline_tid: `tid_${id}`,
-		call_id: `call_${id}`,
+		provider_metadata: { item_id: `item_${id}` },
 		name,
 		input,
 	}
@@ -162,7 +160,7 @@ describe("RestoreHandler", () => {
 
 	it("restoreChatOnly restores approval turn state from snapshot", async () => {
 		let restoredBlocks: Parameters<RestoreContext["controller"]["restoreTurnFromSnapshot"]>[0] | undefined
-		let restoredActiveCallId: string | undefined
+		let restoredActiveDlineTid: string | undefined
 
 		const handler = new RestoreHandler(
 			createMockContext({
@@ -170,10 +168,10 @@ describe("RestoreHandler", () => {
 					restoreFrom: () => {},
 					restoreTurnFromSnapshot: (
 						blocks: Parameters<RestoreContext["controller"]["restoreTurnFromSnapshot"]>[0],
-						activeCallId?: string,
+						activeDlineTid?: string,
 					) => {
 						restoredBlocks = blocks
-						restoredActiveCallId = activeCallId
+						restoredActiveDlineTid = activeDlineTid
 					},
 					buildTurn: () => {},
 					phase: "idle",
@@ -187,18 +185,18 @@ describe("RestoreHandler", () => {
 			timestamp: Date.now(),
 			approval: {
 				mode: "serial",
-				activeCallId: "call_active",
+				activeFunctionId: "call_active",
 				activeDlineTid: "tid_active",
 				blocks: [
 					{
-						callId: "call_active",
+						functionId: "call_active",
 						dlineTid: "tid_active",
 						name: "write_to_file",
 						phase: BlockPhase.AWAITING_APPROVAL,
 						apiIndex: 4,
 					},
 					{
-						callId: "call_next",
+						functionId: "call_next",
 						dlineTid: "tid_next",
 						name: "execute_command",
 						phase: BlockPhase.STREAMING,
@@ -208,11 +206,11 @@ describe("RestoreHandler", () => {
 			},
 		})
 
-		assert.equal(restoredActiveCallId, "tid_active")
+		assert.equal(restoredActiveDlineTid, "tid_active")
 		assert.deepEqual(restoredBlocks, [
 			{
 				dlineTid: "tid_active",
-				callId: "call_active",
+				functionId: "call_active",
 				toolName: "write_to_file",
 				phase: "awaiting_approval",
 				conversationHistoryIndex: 4,
@@ -220,7 +218,7 @@ describe("RestoreHandler", () => {
 			},
 			{
 				dlineTid: "tid_next",
-				callId: "call_next",
+				functionId: "call_next",
 				toolName: "execute_command",
 				phase: "streaming",
 				conversationHistoryIndex: 4,
@@ -330,7 +328,8 @@ describe("RestoreHandler", () => {
 		})
 		const answeredToolResult: ClineUserToolResultContentBlock = {
 			type: "tool_result",
-			tool_use_id: "tool_done",
+			function_id: "tool_done",
+			dline_tid: "tid_done",
 			content: [{ type: "text", text: "done" }],
 		}
 		const sanitizedHistory = [
@@ -353,7 +352,7 @@ describe("RestoreHandler", () => {
 		)
 
 		assert.deepEqual(
-			(taskState.assistantMessageContent as ToolUse[]).map((tool) => tool.call_id),
+			(taskState.assistantMessageContent as ToolUse[]).map((tool) => tool.function_id),
 			["call_read", "call_write"],
 		)
 		assert.deepEqual(taskState.userMessageContent, [answeredToolResult])
@@ -361,7 +360,7 @@ describe("RestoreHandler", () => {
 		assert.deepEqual(overwrittenHistory, sanitizedHistory)
 		const lastTransition = transitionRequiredCalls.at(-1)
 		assert.ok(lastTransition, "Expected replay to enter executing phase")
-		assert.deepEqual(lastTransition[1].execution?.executing, ["call_read", "call_write"])
+		assert.deepEqual(lastTransition[1].execution?.executingFunctionIds, ["call_read", "call_write"])
 	})
 
 	// ── hydrateFromSnapshot ──
@@ -379,11 +378,11 @@ describe("RestoreHandler", () => {
 			timestamp: 1000,
 			approval: {
 				mode: "serial",
-				activeCallId: "call_active",
+				activeFunctionId: "call_active",
 				activeDlineTid: "tid_active",
 				blocks: [
 					{
-						callId: "call_done",
+						functionId: "call_done",
 						dlineTid: "tid_done",
 						name: "read_file",
 						phase: BlockPhase.COMPLETED,
@@ -391,7 +390,7 @@ describe("RestoreHandler", () => {
 						ts: 100,
 					},
 					{
-						callId: "call_active",
+						functionId: "call_active",
 						dlineTid: "tid_active",
 						name: "write_to_file",
 						phase: BlockPhase.AWAITING_APPROVAL,
@@ -399,7 +398,7 @@ describe("RestoreHandler", () => {
 						ts: 200,
 					},
 					{
-						callId: "call_next",
+						functionId: "call_next",
 						dlineTid: "tid_next",
 						name: "execute_command",
 						phase: BlockPhase.STREAMING,

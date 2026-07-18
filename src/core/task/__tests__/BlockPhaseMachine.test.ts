@@ -19,18 +19,18 @@ describe("BlockPhaseMachine - rejectActiveBlock cascade", () => {
 
 	function createMachineWithTwoConversationalBlocks(autoApprove = false): {
 		machine: BlockPhaseMachine
-		callIds: string[]
+		functionIds: string[]
 	} {
 		const machine = new BlockPhaseMachine()
-		const callIds = ["call_qna_0", "call_qna_1"]
+		const functionIds = ["call_qna_0", "call_qna_1"]
 
 		const blocks = [
-			{ type: "tool_use" as const, name: "qna_respond", call_id: callIds[0], dline_tid: callIds[0], ts: 100 },
-			{ type: "tool_use" as const, name: "qna_respond", call_id: callIds[1], dline_tid: callIds[1], ts: 200 },
+			{ type: "tool_use" as const, name: "qna_respond", function_id: functionIds[0], dline_tid: functionIds[0], ts: 100 },
+			{ type: "tool_use" as const, name: "qna_respond", function_id: functionIds[1], dline_tid: functionIds[1], ts: 200 },
 		]
 
-		machine.buildTurn(blocks, (_toolName, _callId) => autoApprove)
-		return { machine, callIds }
+		machine.buildTurn(blocks, (_toolName, _functionId) => autoApprove)
+		return { machine, functionIds }
 	}
 
 	it("uses dline_tid as the lifecycle key when provider call IDs are equal", () => {
@@ -40,14 +40,14 @@ describe("BlockPhaseMachine - rejectActiveBlock cascade", () => {
 				{
 					type: "tool_use",
 					name: "read_file",
-					call_id: "call_shared",
+					function_id: "call_shared",
 					dline_tid: "dline_tid_first",
 					ts: 100,
 				},
 				{
 					type: "tool_use",
 					name: "write_to_file",
-					call_id: "call_shared",
+					function_id: "call_shared",
 					dline_tid: "dline_tid_second",
 					ts: 200,
 				},
@@ -66,28 +66,28 @@ describe("BlockPhaseMachine - rejectActiveBlock cascade", () => {
 	// ── Rejection cascade ──
 
 	it("rejectActiveBlock cascades SKIPPED to subsequent approval-requiring blocks", () => {
-		const { machine, callIds } = createMachineWithTwoConversationalBlocks()
+		const { machine, functionIds } = createMachineWithTwoConversationalBlocks()
 
 		// Advance first block to AWAITING_APPROVAL
-		const event0 = machine.advance(callIds[0], true)
+		const event0 = machine.advance(functionIds[0], true)
 		assert.equal(event0.type, "awaiting-approval")
-		assert.equal(event0.callId, callIds[0])
+		assert.equal(event0.functionId, functionIds[0])
 
 		// Verify first block is awaiting approval
 		const active0 = machine.getActiveBlock()
-		assert.equal(active0?.callId, callIds[0])
+		assert.equal(active0?.functionId, functionIds[0])
 		assert.equal(active0?.phase, BlockPhase.AWAITING_APPROVAL)
 
 		// Reject active block (as handleWebviewAskResponse does for messageResponse)
 		const rejected = machine.rejectActiveBlock()
 		assert.ok(rejected, "rejectActiveBlock should return the rejected block")
-		assert.equal(rejected.callId, callIds[0])
+		assert.equal(rejected.functionId, functionIds[0])
 		assert.equal(rejected.phase, BlockPhase.REJECTED)
 
 		// Verify cascade: second block should be SKIPPED
 		const blocks = machine.getBlocks()
-		const block0 = blocks.find((b) => b.callId === callIds[0])
-		const block1 = blocks.find((b) => b.callId === callIds[1])
+		const block0 = blocks.find((b) => b.functionId === functionIds[0])
+		const block1 = blocks.find((b) => b.functionId === functionIds[1])
 
 		assert.equal(block0?.phase, BlockPhase.REJECTED, "First block should be REJECTED")
 		assert.equal(block1?.phase, BlockPhase.SKIPPED, "Second block should be cascaded SKIPPED")
@@ -96,23 +96,23 @@ describe("BlockPhaseMachine - rejectActiveBlock cascade", () => {
 	// ── shouldSkip ──
 
 	it("shouldSkip returns true for cascaded SKIPPED block", () => {
-		const { machine, callIds } = createMachineWithTwoConversationalBlocks()
+		const { machine, functionIds } = createMachineWithTwoConversationalBlocks()
 
 		// Set up: advance first → reject
-		machine.advance(callIds[0], true)
+		machine.advance(functionIds[0], true)
 		machine.rejectActiveBlock()
 
-		assert.equal(machine.shouldSkip(callIds[0]), false, "REJECTED block should NOT match shouldSkip")
-		assert.equal(machine.shouldSkip(callIds[1]), true, "SKIPPED block should match shouldSkip")
+		assert.equal(machine.shouldSkip(functionIds[0]), false, "REJECTED block should NOT match shouldSkip")
+		assert.equal(machine.shouldSkip(functionIds[1]), true, "SKIPPED block should match shouldSkip")
 	})
 
 	// ── releaseToken after cascade ──
 
 	it("releaseToken returns null when only SKIPPED/REJECTED blocks remain", () => {
-		const { machine, callIds } = createMachineWithTwoConversationalBlocks()
+		const { machine, functionIds } = createMachineWithTwoConversationalBlocks()
 
 		// Set up: advance first → reject (cascades second to SKIPPED)
-		machine.advance(callIds[0], true)
+		machine.advance(functionIds[0], true)
 		machine.rejectActiveBlock()
 
 		// Explicitly call releaseToken — should find no next approval block
@@ -123,10 +123,10 @@ describe("BlockPhaseMachine - rejectActiveBlock cascade", () => {
 	// ── isTurnComplete after cascade ──
 
 	it("isTurnComplete is true after rejectActiveBlock cascade", () => {
-		const { machine, callIds } = createMachineWithTwoConversationalBlocks()
+		const { machine, functionIds } = createMachineWithTwoConversationalBlocks()
 
 		// Set up: advance first → reject
-		machine.advance(callIds[0], true)
+		machine.advance(functionIds[0], true)
 		machine.rejectActiveBlock()
 
 		assert.equal(machine.isTurnComplete, true, "Turn should be complete when all blocks are terminal")
@@ -138,8 +138,8 @@ describe("BlockPhaseMachine - rejectActiveBlock cascade", () => {
 		const machine = new BlockPhaseMachine()
 
 		const blocks = [
-			{ type: "tool_use" as const, name: "execute_command", call_id: "ec1", dline_tid: "ec1", ts: 100 },
-			{ type: "tool_use" as const, name: "read_file", call_id: "rf1", dline_tid: "rf1", ts: 200 },
+			{ type: "tool_use" as const, name: "execute_command", function_id: "ec1", dline_tid: "ec1", ts: 100 },
+			{ type: "tool_use" as const, name: "read_file", function_id: "rf1", dline_tid: "rf1", ts: 200 },
 		]
 
 		// execute_command requires approval, read_file is auto-approved
@@ -157,8 +157,8 @@ describe("BlockPhaseMachine - rejectActiveBlock cascade", () => {
 		machine.rejectActiveBlock()
 
 		const allBlocks = machine.getBlocks()
-		const ecBlock = allBlocks.find((b) => b.callId === "ec1")
-		const rfBlock = allBlocks.find((b) => b.callId === "rf1")
+		const ecBlock = allBlocks.find((b) => b.functionId === "ec1")
+		const rfBlock = allBlocks.find((b) => b.functionId === "rf1")
 
 		assert.equal(ecBlock?.phase, BlockPhase.REJECTED, "execute_command should be REJECTED")
 		assert.equal(rfBlock?.phase, BlockPhase.AUTO_EXECUTING, "auto-approved read_file should NOT be SKIPPED")
@@ -167,10 +167,10 @@ describe("BlockPhaseMachine - rejectActiveBlock cascade", () => {
 	// ── restoreTurn preserves cascade state ──
 
 	it("restoreTurn correctly restores REJECTED/SKIPPED phases for resume", () => {
-		const { machine, callIds } = createMachineWithTwoConversationalBlocks()
+		const { machine, functionIds } = createMachineWithTwoConversationalBlocks()
 
 		// Set up: advance first → reject (cascades second to SKIPPED)
-		machine.advance(callIds[0], true)
+		machine.advance(functionIds[0], true)
 		machine.rejectActiveBlock()
 
 		// Snapshot blocks
@@ -181,7 +181,7 @@ describe("BlockPhaseMachine - rejectActiveBlock cascade", () => {
 		restoredMachine.restoreTurn(
 			blocks.map((b) => ({
 				dlineTid: b.dlineTid,
-				callId: b.callId,
+				functionId: b.functionId,
 				toolName: b.toolName,
 				phase: b.phase,
 				conversationHistoryIndex: b.conversationHistoryIndex,
@@ -189,13 +189,13 @@ describe("BlockPhaseMachine - rejectActiveBlock cascade", () => {
 		)
 
 		const restoredBlocks = restoredMachine.getBlocks()
-		const r0 = restoredBlocks.find((b) => b.callId === callIds[0])
-		const r1 = restoredBlocks.find((b) => b.callId === callIds[1])
+		const r0 = restoredBlocks.find((b) => b.functionId === functionIds[0])
+		const r1 = restoredBlocks.find((b) => b.functionId === functionIds[1])
 
 		assert.equal(r0?.phase, BlockPhase.REJECTED, "Restored: first block should be REJECTED")
 		assert.equal(r1?.phase, BlockPhase.SKIPPED, "Restored: second block should be SKIPPED")
 		assert.equal(restoredMachine.isTurnComplete, true, "Restored turn should be complete")
-		assert.equal(restoredMachine.shouldSkip(callIds[1]), true, "Restored: shouldSkip should work on SKIPPED block")
+		assert.equal(restoredMachine.shouldSkip(functionIds[1]), true, "Restored: shouldSkip should work on SKIPPED block")
 	})
 })
 

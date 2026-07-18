@@ -135,20 +135,20 @@ describe("TaskController.buildTaskUiState", () => {
 			awaiting: {
 				kind: "approval",
 				taskAsk: "tool",
-				activeCallId: "call_123",
+				activeFunctionId: "call_123",
 				messageTs: Date.now(),
 			},
 			approval: {
 				mode: "serial",
 				blocks: [
 					{
-						callId: "call_123",
+						functionId: "call_123",
 						name: "write_to_file",
 						phase: BlockPhase.AWAITING_APPROVAL,
 						apiIndex: 2,
 					},
 				],
-				activeCallId: "call_123",
+				activeFunctionId: "call_123",
 			},
 		}
 		const uiState = tc.buildTaskUiState(snapshot)
@@ -163,7 +163,7 @@ describe("TaskController.buildTaskUiState", () => {
 		assert.equal(uiState.actions[1].type, "reject")
 		assert.equal(uiState.actions[1].label, "Reject")
 		assert.equal(uiState.activeAsk, "tool")
-		assert.equal(uiState.activeCallId, "call_123")
+		assert.equal(uiState.activeFunctionId, "call_123")
 		assert.equal(uiState.reason, "approval-awaiting")
 	})
 

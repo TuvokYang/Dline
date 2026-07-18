@@ -191,7 +191,7 @@ describe("ResumeCoordinator", () => {
 				blocks: [
 					{
 						dlineTid: "",
-						callId: "call-1",
+						functionId: "function-1",
 						toolName: "read_file",
 						phase: BlockPhase.EXECUTING,
 						ts: 90,

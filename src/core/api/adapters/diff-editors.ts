@@ -6,7 +6,7 @@ const APPLY_PATCH_PATCH_REGEX = /\*\*\* Begin Patch\s+([\s\S]*?)\s+\*\*\* End Pa
  * Convert apply_patch tool calls to write_to_file and replace_in_file format
  */
 export function convertApplyPatchToolCalls(messages: Array<ClineStorageMessage>): Array<ClineStorageMessage> {
-	// Map to track tool_use_id to converted tool info and original input
+	// Map canonical function_id to converted tool info and original input.
 	const toolUseIdMap = new Map<string, { name: string; input: any; originalInput: any }>()
 
 	return messages.map((message) => {
@@ -19,7 +19,7 @@ export function convertApplyPatchToolCalls(messages: Array<ClineStorageMessage>)
 			if (block.type === "tool_use" && block.name === "apply_patch") {
 				const converted = convertApplyPatchToToolCalls(block.input)
 				// Store the conversion with original input for matching tool_result
-				toolUseIdMap.set(block.id, { ...converted, originalInput: block.input })
+				toolUseIdMap.set(block.function_id, { ...converted, originalInput: block.input })
 
 				return {
 					...block,
@@ -30,7 +30,7 @@ export function convertApplyPatchToolCalls(messages: Array<ClineStorageMessage>)
 
 			// Handle tool_result blocks
 			if (block.type === "tool_result") {
-				const conversion = toolUseIdMap.get(block.tool_use_id)
+				const conversion = toolUseIdMap.get(block.function_id)
 				if (conversion) {
 					// Reconstruct the tool_result content to match apply_patch format
 					const reconstructedContent = reconstructApplyPatchResult(
@@ -313,7 +313,7 @@ function reconstructApplyPatchResult(
  * Convert write_to_file and replace_in_file tool calls to apply_patch format
  */
 export function convertWriteToFileToolCalls(messages: Array<ClineStorageMessage>): Array<ClineStorageMessage> {
-	// Map to track tool_use_id to converted tool info and original input
+	// Map canonical function_id to converted tool info and original input.
 	const toolUseIdMap = new Map<string, { originalName: string; originalInput: any; patchInput?: string }>()
 
 	// First pass: collect tool_use blocks
@@ -323,7 +323,7 @@ export function convertWriteToFileToolCalls(messages: Array<ClineStorageMessage>
 		}
 		for (const block of message.content) {
 			if (block.type === "tool_use" && (block.name === "write_to_file" || block.name === "replace_in_file")) {
-				toolUseIdMap.set(block.id, {
+				toolUseIdMap.set(block.function_id, {
 					originalName: block.name,
 					originalInput: block.input,
 				})
@@ -338,13 +338,13 @@ export function convertWriteToFileToolCalls(messages: Array<ClineStorageMessage>
 			continue
 		}
 		for (const block of message.content) {
-			if (block.type === "tool_result" && toolUseIdMap.has(block.tool_use_id)) {
+			if (block.type === "tool_result" && toolUseIdMap.has(block.function_id)) {
 				const content = typeof block.content === "string" ? block.content : ""
 				const finalContentMatch = content.match(
 					/<final_file_content path="([^"]+)">\s*([\s\S]*?)\s*<\/final_file_content>/,
 				)
 				if (finalContentMatch) {
-					finalContentMap.set(block.tool_use_id, finalContentMatch[2])
+					finalContentMap.set(block.function_id, finalContentMatch[2])
 				}
 			}
 		}
@@ -359,11 +359,11 @@ export function convertWriteToFileToolCalls(messages: Array<ClineStorageMessage>
 		const convertedContent = message.content.map((block) => {
 			// Handle tool_use blocks for write_to_file and replace_in_file
 			if (block.type === "tool_use" && (block.name === "write_to_file" || block.name === "replace_in_file")) {
-				const finalContent = finalContentMap.get(block.id)
+				const finalContent = finalContentMap.get(block.function_id)
 				const patchInput = convertToPatchFormat(block.name, block.input, finalContent)
 
 				// Update the map with the generated patch
-				const existingEntry = toolUseIdMap.get(block.id)
+				const existingEntry = toolUseIdMap.get(block.function_id)
 				if (existingEntry) {
 					existingEntry.patchInput = patchInput
 				}
@@ -379,7 +379,7 @@ export function convertWriteToFileToolCalls(messages: Array<ClineStorageMessage>
 
 			// Handle tool_result blocks
 			if (block.type === "tool_result") {
-				const conversion = toolUseIdMap.get(block.tool_use_id)
+				const conversion = toolUseIdMap.get(block.function_id)
 				if (conversion) {
 					// Reconstruct the tool_result content to match apply_patch format
 					const reconstructedContent = reconstructWriteToFileResult(

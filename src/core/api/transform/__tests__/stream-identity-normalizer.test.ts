@@ -27,14 +27,14 @@ function createSource(values: string[]): () => string {
  * @param argumentsText Tool argument delta.
  * @returns Raw provider tool chunk.
  */
-function createToolChunk(functionId: string, index: number, argumentsText: string): ApiRawStreamToolCallsChunk {
+function createToolChunk(functionId: string, index: number, argumentsText: string, itemId?: string): ApiRawStreamToolCallsChunk {
 	return {
 		type: "tool_calls",
 		function_id: functionId,
+		provider_metadata: itemId ? { item_id: itemId } : undefined,
 		tool_index: index,
 		tool_call: {
 			function: {
-				id: functionId,
 				name: "read_file",
 				arguments: argumentsText,
 			},
@@ -44,32 +44,32 @@ function createToolChunk(functionId: string, index: number, argumentsText: strin
 
 describe("StreamIdentityNormalizer", () => {
 	it("preserves provider function identity while allocating Dline identities", () => {
-		const factory = createIdentityFactory(createSource(["ITEM", "TRACE"]))
+		const factory = createIdentityFactory(createSource(["TRACE"]))
 		const normalizer = createStreamNormalizer(factory)
 
-		const chunk = normalizer.normalize(createToolChunk("call_provider_1", 0, "{}"))
+		const chunk = normalizer.normalize(createToolChunk("call_provider_1", 0, "{}", "fc_item_1"))
 
 		expect(chunk.type).toBe("tool_calls")
 		if (chunk.type !== "tool_calls") throw new Error("Expected tool chunk")
 		expect(chunk.function_id).toBe("call_provider_1")
-		expect(chunk.item_id).toBe("dline_item_ITEM")
+		expect(chunk.provider_metadata?.item_id).toBe("fc_item_1")
 		expect(chunk.dline_tid).toBe("dline_tid_TRACE")
 	})
 
 	it("reuses identities for interleaved deltas of the same tool index", () => {
-		const factory = createIdentityFactory(createSource(["ITEM0", "TRACE0", "ITEM1", "TRACE1"]))
+		const factory = createIdentityFactory(createSource(["TRACE0", "TRACE1"]))
 		const normalizer = createStreamNormalizer(factory)
 
-		const first = normalizer.normalize(createToolChunk("call_0", 0, '{"path":'))
-		const second = normalizer.normalize(createToolChunk("call_1", 1, '{"path":"b"}'))
-		const finalFirst = normalizer.normalize(createToolChunk("call_0", 0, '"a"}'))
+		const first = normalizer.normalize(createToolChunk("call_0", 0, '{"path":', "fc_item_0"))
+		const second = normalizer.normalize(createToolChunk("call_1", 1, '{"path":"b"}', "fc_item_1"))
+		const finalFirst = normalizer.normalize(createToolChunk("call_0", 0, '"a"}', "fc_item_0"))
 
 		if (first.type !== "tool_calls" || second.type !== "tool_calls" || finalFirst.type !== "tool_calls") {
 			throw new Error("Expected tool chunks")
 		}
-		expect(finalFirst.item_id).toBe(first.item_id)
+		expect(finalFirst.provider_metadata?.item_id).toBe(first.provider_metadata?.item_id)
 		expect(finalFirst.dline_tid).toBe(first.dline_tid)
-		expect(second.item_id).not.toBe(first.item_id)
+		expect(second.provider_metadata?.item_id).not.toBe(first.provider_metadata?.item_id)
 		expect(second.dline_tid).not.toBe(first.dline_tid)
 	})
 })

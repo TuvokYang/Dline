@@ -14,8 +14,8 @@ export class ToolIdentityProjectionError extends Error {
 	 * @param protocol Target provider protocol.
 	 * @param blockType Tool block type being projected.
 	 */
-	constructor(protocol: string, blockType: string) {
-		super(`Canonical ${blockType} is missing function_id for ${protocol} projection`)
+	constructor(protocol: string, blockType: string, missingField = "function_id") {
+		super(`Canonical ${blockType} is missing ${missingField} for ${protocol} projection`)
 		this.name = "ToolIdentityProjectionError"
 	}
 }

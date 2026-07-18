@@ -1,4 +1,3 @@
-import { Anthropic } from "@anthropic-ai/sdk"
 import {
 	CLAUDE_SONNET_1M_SUFFIX,
 	ModelInfo,
@@ -13,6 +12,7 @@ import { isClaudeOpusAdaptiveThinkingModel, resolveClaudeOpusAdaptiveThinking } 
 import { shouldSkipReasoningForModel, supportsReasoningEffortForModel } from "@utils/model-utils"
 import OpenAI from "openai"
 import type { ChatCompletionTool as OpenAITool } from "openai/resources/chat/completions"
+import type { ClineStorageMessage } from "@/shared/messages/content"
 import { convertToOpenAiMessages, sanitizeGeminiMessages } from "../transform/openai-format"
 import { convertToR1Format } from "./r1-format"
 import { getOpenAIToolParams } from "./tool-call-processor"
@@ -20,7 +20,7 @@ import { getOpenAIToolParams } from "./tool-call-processor"
 export async function createVercelAIGatewayStream(
 	client: OpenAI,
 	systemPrompt: string,
-	messages: Anthropic.Messages.MessageParam[],
+	messages: ClineStorageMessage[],
 	model: { id: string; info: ModelInfo },
 	reasoningEffort?: string,
 	thinkingBudgetTokens?: number,

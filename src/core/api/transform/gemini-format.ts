@@ -41,7 +41,7 @@ export function convertAnthropicContentToGemini(content: string | ClineStorageMe
 				case "tool_result":
 					return {
 						functionResponse: {
-							name: block.tool_use_id,
+							name: block.function_id,
 							response: {
 								result: block.content,
 							},
@@ -60,7 +60,7 @@ export function convertAnthropicContentToGemini(content: string | ClineStorageMe
 		.filter((part): part is Part => part !== undefined) // Filter out unsupported blocks
 }
 
-export function convertAnthropicMessageToGemini(message: Anthropic.Messages.MessageParam): Content {
+export function convertAnthropicMessageToGemini(message: ClineStorageMessage): Content {
 	return {
 		role: message.role === "assistant" ? "model" : "user",
 		parts: convertAnthropicContentToGemini(message.content),

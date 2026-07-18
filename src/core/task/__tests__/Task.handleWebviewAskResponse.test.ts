@@ -297,7 +297,7 @@ describe("Task.handleWebviewAskResponse", () => {
 			// Verify setup: first block is AWAITING_APPROVAL
 			const activeBefore = controller.getActiveBlock()
 			assert.ok(activeBefore, "First block should be AWAITING_APPROVAL before call")
-			assert.equal(activeBefore.callId, callIds[0])
+			assert.equal(activeBefore.functionId, callIds[0])
 
 			// Create fake task and call the REAL method
 			const fakeTask = createFakeTaskForHandleWebviewAskResponse(controller)
@@ -306,8 +306,8 @@ describe("Task.handleWebviewAskResponse", () => {
 			// BUG: messageResponse triggers rejectActiveBlock()
 			// block0 → REJECTED, block1 → SKIPPED (cascade)
 			const blocks = controller.getBlocks()
-			const block0 = blocks.find((b) => b.callId === callIds[0])
-			const block1 = blocks.find((b) => b.callId === callIds[1])
+			const block0 = blocks.find((b) => b.functionId === callIds[0])
+			const block1 = blocks.find((b) => b.functionId === callIds[1])
 
 			// These assertions SHOULD FAIL with the current buggy code,
 			// because block0 becomes REJECTED instead of staying AWAITING_APPROVAL
@@ -367,7 +367,7 @@ describe("Task.handleWebviewAskResponse", () => {
 			const fakeTask = createFakeTaskForHandleWebviewAskResponse(controller)
 			await Task.prototype.handleWebviewAskResponse.call(fakeTask, "messageResponse" as ClineAskResponse)
 
-			const block = controller.getBlocks().find((b) => b.callId === callId)
+			const block = controller.getBlocks().find((b) => b.functionId === callId)
 			assert.equal(block?.phase, BlockPhase.REJECTED, "write_to_file should be REJECTED for messageResponse")
 		})
 	})
@@ -398,7 +398,7 @@ describe("Task.handleWebviewAskResponse", () => {
 				const fakeTask = createFakeTaskForHandleWebviewAskResponse(controller)
 				await Task.prototype.handleWebviewAskResponse.call(fakeTask, "messageResponse" as ClineAskResponse)
 
-				const block = controller.getBlocks().find((b) => b.callId === callId)
+				const block = controller.getBlocks().find((b) => b.functionId === callId)
 				assert.notEqual(
 					block?.phase,
 					BlockPhase.REJECTED,
@@ -420,8 +420,8 @@ describe("Task.handleWebviewAskResponse", () => {
 			await Task.prototype.handleWebviewAskResponse.call(fakeTask, "messageResponse" as ClineAskResponse)
 
 			// When resuming, the restored turn should not have SKIPPED blocks
-			const block0 = controller.getBlocks().find((b) => b.callId === callIds[0])
-			const block1 = controller.getBlocks().find((b) => b.callId === callIds[1])
+			const block0 = controller.getBlocks().find((b) => b.functionId === callIds[0])
+			const block1 = controller.getBlocks().find((b) => b.functionId === callIds[1])
 
 			assert.notEqual(block0?.phase, BlockPhase.REJECTED, "Resume: block0 should NOT be REJECTED")
 			assert.notEqual(block1?.phase, BlockPhase.SKIPPED, "Resume: block1 should NOT be SKIPPED")

@@ -80,7 +80,7 @@ describe("reduceTask lifecycle events", () => {
 			blocks: [
 				{
 					dlineTid: "stale-tid",
-					callId: "stale-call",
+					functionId: "stale-call",
 					toolName: "status_update",
 					phase: BlockPhase.AWAITING_APPROVAL,
 					ts: 90,
@@ -107,7 +107,7 @@ describe("reduceTask lifecycle events", () => {
 					blocks: [
 						{
 							dlineTid: "tid-1",
-							callId: "call-1",
+							functionId: "call-1",
 							toolName: "write_to_file",
 							phase: BlockPhase.AWAITING_APPROVAL,
 							ts: 90,
@@ -116,7 +116,7 @@ describe("reduceTask lifecycle events", () => {
 						},
 						{
 							dlineTid: "tid-2",
-							callId: "call-2",
+							functionId: "call-2",
 							toolName: "read_file",
 							phase: BlockPhase.COMPLETED,
 							ts: 91,
@@ -348,7 +348,7 @@ describe("reduceTask lifecycle events", () => {
 				blocks: [
 					{
 						dlineTid: "stale-tid",
-						callId: "stale-call",
+						functionId: "stale-call",
 						toolName: "execute_command",
 						phase: BlockPhase.EXECUTING,
 						ts: 90,
@@ -440,7 +440,7 @@ describe("BLOCK_EXECUTION_COMPLETED — conversational tool lifecycle", () => {
 				blocks: [
 					{
 						dlineTid: "tid-1",
-						callId: "call-1",
+						functionId: "call-1",
 						toolName: "qna_respond",
 						phase: blockPhase,
 						ts: 100,

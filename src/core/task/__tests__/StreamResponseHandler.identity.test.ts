@@ -6,15 +6,14 @@ describe("StreamResponseHandler identity propagation", () => {
 		const handler = new StreamResponseHandler(() => 123)
 		const toolHandler = handler.getHandlers().toolUseHandler
 		const identity = {
-			item_id: "fc_item_123",
 			function_id: "call_123",
 			dline_tid: "dline_tid_123",
+			provider_metadata: { item_id: "fc_item_123" },
 		}
 
 		toolHandler.processToolUseDelta(
 			{
 				type: "tool_use",
-				id: "call_123",
 				name: "read_file",
 				input: '{"path":"README.md"}',
 			},
@@ -25,17 +24,18 @@ describe("StreamResponseHandler identity propagation", () => {
 		const runtime = toolHandler.getPartialToolUsesAsContent()[0]
 
 		expect(stored).toMatchObject({
-			id: "call_123",
-			call_id: "call_123",
-			item_id: "fc_item_123",
 			function_id: "call_123",
 			dline_tid: "dline_tid_123",
+			provider_metadata: { item_id: "fc_item_123" },
 		})
+		expect(stored).not.toHaveProperty("id")
+		expect(stored).not.toHaveProperty("call_id")
+		expect(stored).not.toHaveProperty("item_id")
 		expect(runtime).toMatchObject({
-			call_id: "call_123",
-			item_id: "fc_item_123",
 			function_id: "call_123",
 			dline_tid: "dline_tid_123",
 		})
+		expect(runtime).not.toHaveProperty("call_id")
+		expect(runtime).not.toHaveProperty("item_id")
 	})
 })

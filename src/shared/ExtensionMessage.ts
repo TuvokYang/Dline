@@ -306,7 +306,7 @@ export interface TaskUiState {
 	showFooter: boolean
 	actions: TaskUiAction[]
 	activeAsk?: ClineAsk
-	activeCallId?: string
+	activeFunctionId?: string
 	message?: string
 	reason: string
 }

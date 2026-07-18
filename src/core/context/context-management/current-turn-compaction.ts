@@ -1,4 +1,4 @@
-import type { Anthropic } from "@anthropic-ai/sdk"
+import type { ClineContent } from "@/shared/messages/content"
 import { computeCompactTrigger, computeSummarizeBudget } from "./context-window-utils"
 
 const TOKEN_ESTIMATE_CHARS = 4
@@ -6,7 +6,7 @@ const TOKEN_ESTIMATE_CHARS = 4
 export interface CurrentTurnCompactionInput {
 	contextWindow: number
 	previousTokens: number
-	userContent: Anthropic.Messages.ContentBlockParam[]
+	userContent: ClineContent[]
 }
 
 export interface DeferredTurnRestoreInput {
@@ -20,7 +20,7 @@ export interface DeferredTurnRestoreInput {
  * @param userContent Content blocks that would be appended as the next user message.
  * @returns Conservative token estimate based on text length.
  */
-export function estimateCurrentTokens(userContent: Anthropic.Messages.ContentBlockParam[]): number {
+export function estimateCurrentTokens(userContent: ClineContent[]): number {
 	const textLength = userContent.reduce((total, block) => total + getBlockText(block).length, 0)
 	return Math.ceil(textLength / TOKEN_ESTIMATE_CHARS)
 }
@@ -31,7 +31,7 @@ export function estimateCurrentTokens(userContent: Anthropic.Messages.ContentBlo
  * @param userContent Content blocks that would be appended as the next user message.
  * @returns True when a tool_result block is present in the pending content.
  */
-export function hasToolResult(userContent: Anthropic.Messages.ContentBlockParam[]): boolean {
+export function hasToolResult(userContent: ClineContent[]): boolean {
 	return userContent.some((block) => block.type === "tool_result")
 }
 
@@ -70,7 +70,7 @@ export function shouldRestoreDeferredTurn(input: DeferredTurnRestoreInput): bool
  * @param block Content block to inspect.
  * @returns Extracted text, or an empty string for non-text blocks.
  */
-function getBlockText(block: Anthropic.Messages.ContentBlockParam): string {
+function getBlockText(block: ClineContent): string {
 	if (block.type === "text") {
 		return block.text
 	}

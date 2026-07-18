@@ -1,5 +1,6 @@
 import { setTimeout as setTimeoutPromise } from "node:timers/promises"
 import { ApiHandler, ApiProviderInfo, buildApiHandler, resolveProviderFromProfile } from "@core/api"
+import { recordProviderAdapterInput, recordProviderAdapterOutput } from "@core/api/debug/api-conversation-log"
 import { createIdentityFactory } from "@core/api/transform/block-identity"
 import { ApiStream } from "@core/api/transform/stream"
 import { createStreamNormalizer, normalizeApiStream } from "@core/api/transform/stream-identity-normalizer"
@@ -40,7 +41,6 @@ import { summarizeTask } from "@core/prompts/contextManagement"
 import { formatResponse } from "@core/prompts/responses"
 import { parseSlashCommands } from "@core/slash-commands"
 import {
-	appendDebugRequestContext,
 	ensureRulesDirectoryExists,
 	ensureTaskDirectoryExists,
 	GlobalFileNames,
@@ -168,7 +168,7 @@ import { shouldRunTaskCancelHook } from "./TaskCancelPolicy"
 import { TaskController } from "./TaskController"
 import { TaskPhase } from "./TaskPhase"
 import { TaskPresentationScheduler } from "./TaskPresentationScheduler"
-import { createSnapshot, hydrateSnapshot, type TaskSnapshot } from "./TaskSnapshot"
+import { createSnapshot, hydrateSnapshot, normalizeLegacyTaskSnapshot, type TaskSnapshot } from "./TaskSnapshot"
 import { TaskSnapshotPersistence } from "./TaskSnapshotPersistence"
 import { TaskState } from "./TaskState"
 import { TaskStateManager } from "./TaskStateManager"
@@ -594,7 +594,7 @@ export class Task {
 			presentAssistantMessage: this.presentAssistantMessage.bind(this),
 			recursivelyMakeClineRequests: this.recursivelyMakeClineRequests.bind(this),
 			postStateToWebview: this.postStateToWebview,
-			shouldAutoApproveTool: (toolName: string, _callId: string) => {
+			shouldAutoApproveTool: (toolName: string, _dlineTid: string) => {
 				return this.toolExecutor?.isAutoApproved(toolName as any) ?? false
 			},
 		})
@@ -1133,7 +1133,7 @@ export class Task {
 					apiIndex: executing.conversationHistoryIndex,
 					execution: {
 						mode: this.isParallelToolCallingEnabled() ? "parallel" : "serial",
-						executing: [executing.callId],
+						executingFunctionIds: [executing.functionId],
 						executingDlineTids: [executing.dlineTid],
 					},
 				})
@@ -1230,7 +1230,7 @@ export class Task {
 			const taskDir = await ensureTaskDirectoryExists(this.taskId)
 			const snapshotPath = path.join(taskDir, GlobalFileNames.taskSnapshot)
 			const raw = await fs.readFile(snapshotPath, "utf8")
-			const snapshot = JSON.parse(raw) as TaskSnapshot
+			const snapshot = normalizeLegacyTaskSnapshot(JSON.parse(raw))
 			this.latestTaskSnapshot = snapshot
 			return snapshot
 		} catch (error) {
@@ -1846,19 +1846,19 @@ export class Task {
 			awaiting: {
 				kind: type === "status_acknowledgment" ? "approval" : "approval",
 				taskAsk: type,
-				activeCallId: block.callId,
+				activeFunctionId: block.functionId,
 				activeDlineTid: block.dlineTid,
 			},
 			approval: {
 				mode: this.isParallelToolCallingEnabled() ? "parallel" : "serial",
 				blocks: this.taskController.getBlocks().map((candidate) => ({
-					callId: candidate.callId,
+					functionId: candidate.functionId,
 					dlineTid: candidate.dlineTid,
 					name: candidate.toolName,
 					phase: candidate.phase,
 					apiIndex: candidate.conversationHistoryIndex,
 				})),
-				activeCallId: block.callId,
+				activeFunctionId: block.functionId,
 				activeDlineTid: block.dlineTid,
 			},
 		})
@@ -2845,13 +2845,13 @@ export class Task {
 			this.messageStateHandler.apiConversationHistory,
 		)
 
-		await appendDebugRequestContext(this.taskId, {
-			ts: Date.now(),
+		const roundContext = {
+			taskId: this.taskId,
 			requestIndex: this.taskState.apiRequestCount,
-			systemPrompt,
-			messages: apiConversationMessages,
-			tools,
-		})
+			provider: providerInfo.providerId,
+			model: providerInfo.model.id,
+		}
+		await recordProviderAdapterInput(roundContext, { systemPrompt, messages: apiConversationMessages, tools })
 
 		// Log the API request context: profile, provider, model, and thinking status
 		const apiConfig = this.stateManager.getApiConfiguration()
@@ -2868,7 +2868,10 @@ export class Task {
 			thinking: thinkingSummary ?? null,
 		})
 
-		const stream = this.api.createMessage(systemPrompt, apiConversationMessages, tools)
+		const stream = recordProviderAdapterOutput(
+			roundContext,
+			this.api.createMessage(systemPrompt, apiConversationMessages, tools),
+		)
 
 		const iterator = stream[Symbol.asyncIterator]()
 
@@ -3335,9 +3338,7 @@ export class Task {
 						this.taskState.partialToolLifecycleByTs.set(block.ts, "complete-done")
 					}
 
-					if (block.call_id) {
-						Session.get().updateToolCall(block.call_id, block.name)
-					}
+					Session.get().updateToolCall(block.function_id, block.name)
 					break
 			}
 
@@ -3877,6 +3878,7 @@ export class Task {
 			this.pendingReasoningText = undefined
 			this.taskState.reasoningTs = undefined
 			this.taskState.parseBlockTsByKey.clear()
+			this.taskState.parseToolIdentityByKey.clear()
 			this.taskState.lastRenderedPartialByTs.clear()
 			this.taskState.partialToolLifecycleByTs.clear()
 
@@ -3919,7 +3921,7 @@ export class Task {
 			try {
 				streamCoordinator = new StreamChunkCoordinator(stream, {
 					onUsageChunk: (chunk) => {
-						this.streamHandler.setRequestId(chunk.id)
+						this.streamHandler.setRequestId(chunk.provider_metadata?.response_id)
 						didReceiveUsageChunk = true
 						taskMetrics.inputTokens += chunk.inputTokens
 						taskMetrics.outputTokens += chunk.outputTokens
@@ -3955,7 +3957,7 @@ export class Task {
 							// Ensure details is always an array
 							const details = chunk.details ? (Array.isArray(chunk.details) ? chunk.details : [chunk.details]) : []
 							reasonsHandler.processReasoningDelta({
-								id: chunk.id,
+								provider_metadata: chunk.provider_metadata,
 								reasoning: chunk.reasoning,
 								signature: chunk.signature,
 								details,
@@ -3989,16 +3991,15 @@ export class Task {
 							// Accumulate tool use blocks in proper Anthropic format
 							toolUseHandler.processToolUseDelta(
 								{
-									id: chunk.tool_call.function?.id,
 									type: "tool_use",
 									name: chunk.tool_call.function?.name,
 									input: chunk.tool_call.function?.arguments,
 									signature: chunk?.signature,
 								},
 								{
-									item_id: chunk.item_id,
 									function_id: chunk.function_id,
 									dline_tid: chunk.dline_tid,
+									provider_metadata: chunk.provider_metadata,
 								},
 							)
 							const currentReasoning = reasonsHandler.getCurrentReasoning()
@@ -4029,8 +4030,8 @@ export class Task {
 							if (chunk.signature) {
 								assistantTextSignature = chunk.signature
 							}
-							if (chunk.id) {
-								assistantMessageId = chunk.id
+							if (chunk.provider_metadata?.response_id) {
+								assistantMessageId = chunk.provider_metadata.response_id
 							}
 							assistantMessage += chunk.text
 							assistantTextOnly += chunk.text // Accumulate text separately
@@ -4046,6 +4047,16 @@ export class Task {
 										const ts = this.genMessageTs()
 										this.taskState.parseBlockTsByKey.set(key, ts)
 										return ts
+									},
+									getOrCreateToolIdentityForBlock: (key) => {
+										const existing = this.taskState.parseToolIdentityByKey.get(key)
+										if (existing) return existing
+										const identity = {
+											function_id: this.identityFactory.nextFunctionId(),
+											dline_tid: this.identityFactory.nextTraceId(),
+										}
+										this.taskState.parseToolIdentityByKey.set(key, identity)
+										return identity
 									},
 								}),
 							)
@@ -4273,7 +4284,7 @@ export class Task {
 						// reasoning_details only exists for cline/openrouter providers
 						reasoning_details: thinkingBlock?.summary as any[],
 						signature: assistantTextSignature,
-						call_id: assistantMessageId,
+						provider_metadata: assistantMessageId ? { response_id: assistantMessageId } : undefined,
 					})
 				}
 
@@ -4295,7 +4306,7 @@ export class Task {
 						role: "assistant",
 						content: assistantContent,
 						modelInfo,
-						id: requestId,
+						provider_metadata: requestId ? { response_id: requestId } : undefined,
 						metrics: {
 							tokens: {
 								prompt: taskMetrics.inputTokens,
@@ -4389,7 +4400,7 @@ export class Task {
 						},
 					],
 					modelInfo,
-					id: this.streamHandler.requestId,
+					provider_metadata: this.streamHandler.requestId ? { response_id: this.streamHandler.requestId } : undefined,
 					metrics: {
 						tokens: {
 							prompt: taskMetrics.inputTokens,
@@ -4618,28 +4629,28 @@ export class Task {
 			}
 		}
 
-		// Snapshot the existing tool call_ids BEFORE replacing content so we can
+		// Snapshot existing canonical function IDs before replacing content so we can
 		// detect whether the incoming chunk introduces novel tools. Using the
 		// post-replacement content for detection would always report "no new tools"
 		// since nextBlocks already contains them.
 		const prevContent = this.taskState.assistantMessageContent
-		const existingCallIds = new Set(
-			prevContent.filter((b): b is ToolUse => b.type === "tool_use" && !!b.call_id).map((b) => b.call_id),
+		const existingFunctionIds = new Set(
+			prevContent.filter((b): b is ToolUse => b.type === "tool_use").map((b) => b.function_id),
 		)
 
 		const nextBlocks = orderTurnEndingContentBlocks([...textBlocks, ...toolBlocks])
 		this.taskState.assistantMessageContent = nextBlocks
 
 		// Only reset index if there are actually new tool blocks that haven't been
-		// executed yet. Collecting call_ids from the previous content lets us detect
+		// executed yet. Collecting function IDs from the previous content lets us detect
 		// whether this chunk introduces novel tools. Without this check, every
 		// tool_calls chunk unconditionally resets currentStreamingContentIndex back
 		// to the first tool, causing already-executed tools to re-run and produce
 		// diff_error ("search patterns that don't match anything") on the second
 		// pass because the file was already modified.
 		if (toolBlocks.length > 0) {
-			// Detect whether any tool in the new set is truly novel (call_id not seen before)
-			const hasNewTools = toolBlocks.some((b) => b.call_id && !existingCallIds.has(b.call_id))
+			// Detect whether any tool in the new set is truly novel.
+			const hasNewTools = toolBlocks.some((b) => !existingFunctionIds.has(b.function_id))
 
 			if (hasNewTools || prevLength === 0) {
 				// Find the first tool block whose lifecycle is NOT "complete-done".

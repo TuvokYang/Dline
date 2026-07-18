@@ -219,9 +219,9 @@ describe("SubagentRunner", () => {
 		const createMessage = vi.fn().mockImplementation(async function* () {
 			yield {
 				type: "tool_calls",
+				function_id: "profile-complete",
 				tool_call: {
 					function: {
-						id: "profile-complete",
 						name: ClineDefaultTool.ATTEMPT,
 						arguments: JSON.stringify({ result: "done" }),
 					},
@@ -238,7 +238,7 @@ describe("SubagentRunner", () => {
 
 		const result = await new SubagentRunner(createTaskConfig(false, { contextWindow })).run("Use profile", () => {})
 
-		assert.equal(result.status, "completed")
+		assert.equal(result.status, "completed", result.error)
 	})
 
 	it("builds subagent prompts through the stable system prompt facade", async () => {
@@ -246,9 +246,9 @@ describe("SubagentRunner", () => {
 			assert.match(systemPrompt, /^facade system prompt/)
 			yield {
 				type: "tool_calls",
+				function_id: "facade-complete",
 				tool_call: {
 					function: {
-						id: "facade-complete",
 						name: ClineDefaultTool.ATTEMPT,
 						arguments: JSON.stringify({ result: "done" }),
 					},
@@ -276,7 +276,7 @@ describe("SubagentRunner", () => {
 		assert.equal(result.result, "done")
 	})
 
-	it("emits native tool_use blocks with matching tool_result tool_use_id across turns", async () => {
+	it("emits native tool blocks with matching canonical identities across turns", async () => {
 		const createMessage = vi.fn()
 		createMessage.mockImplementationOnce(async function* () {
 			yield {
@@ -285,7 +285,6 @@ describe("SubagentRunner", () => {
 				tool_index: 0,
 				tool_call: {
 					function: {
-						id: "toolu_subagent_1",
 						name: ClineDefaultTool.LIST_FILES,
 						arguments: JSON.stringify({ path: ".", recursive: false }),
 					},
@@ -298,23 +297,23 @@ describe("SubagentRunner", () => {
 			const tu = am.content.find((b: any) => b.type === "tool_use")
 			assert.ok(tu)
 			assert.equal(tu.function_id, "toolu_subagent_1")
-			assert.ok(tu.item_id)
 			assert.ok(tu.dline_tid)
+			assert.equal("id" in tu, false)
+			assert.equal("call_id" in tu, false)
 			const um = c[2] as any
 			assert.equal(um.role, "user")
 			const tr = um.content.find((b: any) => b.type === "tool_result")
 			assert.ok(tr)
-			assert.equal(tr.tool_use_id, "toolu_subagent_1")
 			assert.equal(tr.function_id, tu.function_id)
 			assert.equal(tr.dline_tid, tu.dline_tid)
-			assert.notEqual(tr.item_id, tu.item_id)
+			assert.equal("tool_use_id" in tr, false)
+			assert.equal("call_id" in tr, false)
 			yield {
 				type: "tool_calls",
 				function_id: "toolu_subagent_complete_1",
 				tool_index: 0,
 				tool_call: {
 					function: {
-						id: "toolu_subagent_complete_1",
 						name: ClineDefaultTool.ATTEMPT,
 						arguments: JSON.stringify({ result: "done" }),
 					},
@@ -328,7 +327,7 @@ describe("SubagentRunner", () => {
 		initializeHostProvider()
 		const runner = new SubagentRunner(createTaskConfig(true))
 		const result = await runner.run("List files", () => {})
-		assert.equal(result.status, "completed")
+		assert.equal(result.status, "completed", result.error)
 		assert.equal(result.result, "done")
 		assert.equal(createMessage.mock.calls.length, 2)
 	})
@@ -345,9 +344,9 @@ describe("SubagentRunner", () => {
 			}
 			yield {
 				type: "tool_calls",
+				function_id: "toolu_subagent_previous_tokens_1",
 				tool_call: {
 					function: {
-						id: "toolu_subagent_previous_tokens_1",
 						name: ClineDefaultTool.LIST_FILES,
 						arguments: JSON.stringify({ path: ".", recursive: false }),
 					},
@@ -357,9 +356,9 @@ describe("SubagentRunner", () => {
 		createMessage.mockImplementationOnce(async function* () {
 			yield {
 				type: "tool_calls",
+				function_id: "toolu_subagent_previous_tokens_complete_1",
 				tool_call: {
 					function: {
-						id: "toolu_subagent_previous_tokens_complete_1",
 						name: ClineDefaultTool.ATTEMPT,
 						arguments: JSON.stringify({ result: "done" }),
 					},
@@ -388,9 +387,9 @@ describe("SubagentRunner", () => {
 		createMessage.mockImplementationOnce(async function* () {
 			yield {
 				type: "tool_calls",
+				function_id: "toolu_subagent_2",
 				tool_call: {
 					function: {
-						id: "toolu_subagent_2",
 						name: ClineDefaultTool.LIST_FILES,
 						arguments: JSON.stringify({ path: ".", recursive: false }),
 					},
@@ -403,9 +402,9 @@ describe("SubagentRunner", () => {
 			assert.ok(lm.content.every((b: any) => b.type === "text"))
 			yield {
 				type: "tool_calls",
+				function_id: "toolu_subagent_complete_2",
 				tool_call: {
 					function: {
-						id: "toolu_subagent_complete_2",
 						name: ClineDefaultTool.ATTEMPT,
 						arguments: JSON.stringify({ result: "done" }),
 					},
@@ -437,9 +436,9 @@ describe("SubagentRunner", () => {
 			assert.match(lu.content[0]?.text || "", /You did not use a tool/)
 			yield {
 				type: "tool_calls",
+				function_id: "toolu_subagent_complete_3",
 				tool_call: {
 					function: {
-						id: "toolu_subagent_complete_3",
 						name: ClineDefaultTool.ATTEMPT,
 						arguments: JSON.stringify({ result: "done" }),
 					},
@@ -509,9 +508,9 @@ describe("SubagentRunner", () => {
 		const createMessage = vi.fn().mockImplementation(async function* () {
 			yield {
 				type: "tool_calls",
+				function_id: "t1",
 				tool_call: {
 					function: {
-						id: "t1",
 						name: ClineDefaultTool.ATTEMPT,
 						arguments: JSON.stringify({ result: "done" }),
 					},
@@ -533,9 +532,9 @@ describe("SubagentRunner", () => {
 		const createMessage = vi.fn().mockImplementation(async function* () {
 			yield {
 				type: "tool_calls",
+				function_id: "tsf1",
 				tool_call: {
 					function: {
-						id: "tsf1",
 						name: ClineDefaultTool.ATTEMPT,
 						arguments: JSON.stringify({ result: "done" }),
 					},
@@ -565,9 +564,9 @@ describe("SubagentRunner", () => {
 		const createMessage = vi.fn().mockImplementation(async function* () {
 			yield {
 				type: "tool_calls",
+				function_id: "tsu1",
 				tool_call: {
 					function: {
-						id: "tsu1",
 						name: ClineDefaultTool.ATTEMPT,
 						arguments: JSON.stringify({ result: "done" }),
 					},
@@ -597,9 +596,9 @@ describe("SubagentRunner", () => {
 		const createMessage = vi.fn().mockImplementation(async function* () {
 			yield {
 				type: "tool_calls",
+				function_id: "tsm1",
 				tool_call: {
 					function: {
-						id: "tsm1",
 						name: ClineDefaultTool.ATTEMPT,
 						arguments: JSON.stringify({ result: "done" }),
 					},
@@ -634,9 +633,9 @@ describe("SubagentRunner", () => {
 		const createMessage = vi.fn().mockImplementation(async function* () {
 			yield {
 				type: "tool_calls",
+				function_id: "trs1",
 				tool_call: {
 					function: {
-						id: "trs1",
 						name: ClineDefaultTool.ATTEMPT,
 						arguments: JSON.stringify({ result: "done" }),
 					},
@@ -713,9 +712,9 @@ describe("SubagentRunner", () => {
 			)
 			yield {
 				type: "tool_calls",
+				function_id: "tww1",
 				tool_call: {
 					function: {
-						id: "tww1",
 						name: ClineDefaultTool.LIST_FILES,
 						arguments: JSON.stringify({ path: ".", recursive: false }),
 					},
@@ -735,9 +734,9 @@ describe("SubagentRunner", () => {
 			)
 			yield {
 				type: "tool_calls",
+				function_id: "twwc1",
 				tool_call: {
 					function: {
-						id: "twwc1",
 						name: ClineDefaultTool.ATTEMPT,
 						arguments: JSON.stringify({ result: "done" }),
 					},

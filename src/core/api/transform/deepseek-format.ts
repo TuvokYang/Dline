@@ -10,28 +10,9 @@ import {
 	ClineUserToolResultContentBlock,
 } from "@/shared/messages/content"
 import { Logger } from "@/shared/services/Logger"
+import { getResultFunctionId, getUseFunctionId, projectChatFunctionId } from "./tool-identity-projector"
 
 // ---- copied from openai-format.ts ----
-
-// OpenAI API has a maximum tool call ID length of 40 characters
-const MAX_TOOL_CALL_ID_LENGTH = 40
-
-function isOpenAIResponseToolId(callId: string): boolean {
-	return callId.startsWith("fc_") && callId.length === 53
-}
-
-function transformToolCallIdForNativeApi(toolId: string, provider?: ApiProvider): string {
-	if (isOpenAIResponseToolId(toolId)) {
-		return `call_${toolId.slice(toolId.length - (MAX_TOOL_CALL_ID_LENGTH - 5))}`
-	}
-	if (provider !== "openai-native") {
-		return toolId
-	}
-	if (toolId.length > MAX_TOOL_CALL_ID_LENGTH) {
-		return toolId.slice(0, MAX_TOOL_CALL_ID_LENGTH)
-	}
-	return toolId
-}
 
 type ReasoningDetail = {
 	type: string
@@ -173,17 +154,9 @@ export function convertDeepseekToOpenAiMessages(
 					// Defensive: if tool_use_id is empty, send as user text
 					// to avoid "Messages with role 'tool' must be a response to a
 					// preceding message with 'tool_calls'" from OpenAI-compatible APIs
-					if (!toolMessage.tool_use_id) {
-						nonToolMessages.push({
-							type: "text",
-							text: `[tool_result] ${content}`,
-						} as ClineTextContentBlock)
-						return
-					}
-
 					openAiMessages.push({
 						role: "tool",
-						tool_call_id: transformToolCallIdForNativeApi(toolMessage.tool_use_id, provider),
+						tool_call_id: projectChatFunctionId(getResultFunctionId(toolMessage), provider),
 						content: content,
 					})
 				})
@@ -260,7 +233,7 @@ export function convertDeepseekToOpenAiMessages(
 
 				const tool_calls: OpenAI.Chat.ChatCompletionMessageToolCall[] = toolMessages.map((toolMessage) => {
 					const toolDetails = toolMessage.reasoning_details
-					const toolId = toolMessage.id
+					const toolId = getUseFunctionId(toolMessage)
 					if (toolDetails) {
 						if (Array.isArray(toolDetails)) {
 							const validDetails = toolDetails.filter((detail: any) => detail?.id === toolId)
@@ -276,7 +249,7 @@ export function convertDeepseekToOpenAiMessages(
 					}
 
 					return {
-						id: transformToolCallIdForNativeApi(toolId, provider),
+						id: projectChatFunctionId(toolId, provider),
 						type: "function",
 						function: {
 							name: toolMessage.name,
@@ -433,7 +406,7 @@ function buildAssistantMessage(msg: ClineStorageMessage, hasText: boolean, hasTo
 		} else if (part.type === "tool_use") {
 			const toolUse = part as ClineAssistantToolUseBlock
 			toolCalls.push({
-				id: toolUse.id,
+				id: projectChatFunctionId(getUseFunctionId(toolUse)),
 				type: "function",
 				function: {
 					name: toolUse.name,
@@ -503,20 +476,15 @@ function convertUser(msg: ClineStorageMessage): DeepSeekModelMessage[] {
 		// Defensive: if tool_use_id is empty, send as user text to avoid
 		// "Messages with role 'tool' must be a response to a preceding
 		// message with 'tool_calls'" from OpenAI-compatible APIs
-		if (!tr.tool_use_id) {
-			textParts.push(`[tool_result] ${content}`)
+		const functionId = getResultFunctionId(tr)
+		if (seenToolIds.has(functionId)) {
 			continue
 		}
-
-		// Skip duplicate: same tool_use_id already produced a tool message
-		if (seenToolIds.has(tr.tool_use_id)) {
-			continue
-		}
-		seenToolIds.add(tr.tool_use_id)
+		seenToolIds.add(functionId)
 
 		result.push({
 			role: "tool",
-			tool_call_id: tr.tool_use_id,
+			tool_call_id: projectChatFunctionId(functionId),
 			content,
 		} as DeepSeekModelMessage)
 	}

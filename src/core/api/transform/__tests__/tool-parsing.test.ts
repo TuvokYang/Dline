@@ -30,11 +30,11 @@ describe("Tool Call Parsing", () => {
 					content: [
 						{
 							type: "tool_use",
-							id: "toolu_abc123",
 							function_id: "toolu_abc123",
+							dline_tid: "tid_abc123",
 							name: "read_file",
 							input: { path: "/test/file.ts" },
-						} as ClineAssistantToolUseBlock,
+						} as unknown as ClineAssistantToolUseBlock,
 					],
 				},
 			]
@@ -58,11 +58,11 @@ describe("Tool Call Parsing", () => {
 					content: [
 						{
 							type: "tool_use",
-							id: "dline_item_long",
 							function_id: longId,
+							dline_tid: "tid_long",
 							name: "test_tool",
 							input: {},
-						} as ClineAssistantToolUseBlock,
+						} as unknown as ClineAssistantToolUseBlock,
 					],
 				},
 			]
@@ -82,11 +82,11 @@ describe("Tool Call Parsing", () => {
 					content: [
 						{
 							type: "tool_use",
-							id: "dline_item_responses",
 							function_id: responsesApiId,
+							dline_tid: "tid_responses",
 							name: "test_tool",
 							input: {},
-						} as ClineAssistantToolUseBlock,
+						} as unknown as ClineAssistantToolUseBlock,
 					],
 				},
 			]
@@ -109,7 +109,7 @@ describe("Tool Call Parsing", () => {
 							id: "legacy_only",
 							name: "read_file",
 							input: { path: "/test.ts" },
-						} as ClineAssistantToolUseBlock,
+						} as unknown as ClineAssistantToolUseBlock,
 					],
 				},
 			]
@@ -125,8 +125,6 @@ describe("Tool Call Parsing", () => {
 					content: [
 						{
 							type: "tool_use",
-							id: "legacy_use_id",
-							item_id: "dline_item_use",
 							function_id: functionId,
 							dline_tid: "dline_tid_pair",
 							name: "read_file",
@@ -139,8 +137,6 @@ describe("Tool Call Parsing", () => {
 					content: [
 						{
 							type: "tool_result",
-							tool_use_id: "legacy_result_id",
-							item_id: "dline_item_result",
 							function_id: functionId,
 							dline_tid: "dline_tid_pair",
 							content: "file contents here",
@@ -154,8 +150,7 @@ describe("Tool Call Parsing", () => {
 			const toolMsg = result[1] as OpenAI.Chat.ChatCompletionToolMessageParam
 
 			assistantMsg.tool_calls?.[0].id.should.equal(toolMsg.tool_call_id)
-			assistantMsg.tool_calls?.[0].id.should.not.equal("legacy_use_id")
-			toolMsg.tool_call_id.should.not.equal("legacy_result_id")
+			assistantMsg.tool_calls?.[0].id.should.equal(toolMsg.tool_call_id)
 			JSON.stringify(result).should.not.match(/item_id|function_id|dline_tid/)
 		})
 
@@ -167,8 +162,8 @@ describe("Tool Call Parsing", () => {
 					content: [
 						{
 							type: "tool_use",
-							id: "dline_item_use_match",
 							function_id: toolId,
+							dline_tid: "tid_match",
 							name: "read_file",
 							input: { path: "/test.ts" },
 						} as ClineAssistantToolUseBlock,
@@ -179,8 +174,8 @@ describe("Tool Call Parsing", () => {
 					content: [
 						{
 							type: "tool_result",
-							tool_use_id: toolId,
 							function_id: toolId,
+							dline_tid: "tid_match",
 							content: "file contents here",
 						} as ClineUserToolResultContentBlock,
 					],
@@ -211,15 +206,15 @@ describe("Tool Call Parsing", () => {
 						} as ClineTextContentBlock,
 						{
 							type: "tool_use",
-							id: "dline_item_tool_1",
 							function_id: "tool_1",
+							dline_tid: "tid_tool_1",
 							name: "read_file",
 							input: { path: "/file1.ts" },
 						} as ClineAssistantToolUseBlock,
 						{
 							type: "tool_use",
-							id: "dline_item_tool_2",
 							function_id: "tool_2",
+							dline_tid: "tid_tool_2",
 							name: "read_file",
 							input: { path: "/file2.ts" },
 						} as ClineAssistantToolUseBlock,
@@ -243,8 +238,8 @@ describe("Tool Call Parsing", () => {
 					content: [
 						{
 							type: "tool_result",
-							tool_use_id: "tool_123",
 							function_id: "tool_123",
+							dline_tid: "tid_tool_123",
 							content: [
 								{ type: "text", text: "Line 1" },
 								{ type: "text", text: "Line 2" },
@@ -269,11 +264,11 @@ describe("Tool Call Parsing", () => {
 					content: [
 						{
 							type: "tool_use",
-							id: "dline_item_tool_only",
 							function_id: "tool_1",
+							dline_tid: "tid_tool_only",
 							name: "test",
 							input: {},
-						} as ClineAssistantToolUseBlock,
+						} as unknown as ClineAssistantToolUseBlock,
 					],
 				},
 			]
@@ -297,7 +292,7 @@ describe("Tool Call Parsing", () => {
 							id: "legacy_only",
 							name: "read_file",
 							input: { path: "/test.ts" },
-						} as ClineAssistantToolUseBlock,
+						} as unknown as ClineAssistantToolUseBlock,
 					],
 				},
 			]
@@ -312,8 +307,6 @@ describe("Tool Call Parsing", () => {
 					content: [
 						{
 							type: "tool_use",
-							id: "legacy_use_id",
-							item_id: "dline_item_use",
 							function_id: "call_provider_1",
 							dline_tid: "dline_tid_1",
 							name: "read_file",
@@ -326,8 +319,6 @@ describe("Tool Call Parsing", () => {
 					content: [
 						{
 							type: "tool_result",
-							tool_use_id: "legacy_result_id",
-							item_id: "dline_item_result",
 							function_id: "call_provider_1",
 							dline_tid: "dline_tid_1",
 							content: "file contents",
@@ -337,8 +328,8 @@ describe("Tool Call Parsing", () => {
 			]
 
 			const result = sanitizeAnthropicMessages(messages, false)
-			const toolUse = (result[0].content as ClineAssistantToolUseBlock[])[0]
-			const toolResult = (result[1].content as ClineUserToolResultContentBlock[])[0]
+			const toolUse = (result[0].content as any[])[0]
+			const toolResult = (result[1].content as any[])[0]
 
 			toolUse.id.should.equal("call_provider_1")
 			toolResult.tool_use_id.should.equal("call_provider_1")

@@ -8,6 +8,7 @@ import { fetch } from "@/shared/net"
 import { ClineTool } from "@/shared/tools"
 import { ApiHandler, ApiHandlerContext } from "../index"
 import { withRetry } from "../retry"
+import { sanitizeAnthropicMessages } from "../transform/anthropic-format"
 import { ApiStream } from "../transform/stream"
 
 export class MinimaxHandler implements ApiHandler {
@@ -74,7 +75,7 @@ export class MinimaxHandler implements ApiHandler {
 			model: model.id,
 			max_tokens: model.info.capabilities?.maxTokens || 8192,
 			system: [{ text: systemPrompt, type: "text" }],
-			messages,
+			messages: sanitizeAnthropicMessages(messages, false),
 			stream: true,
 			tools: nativeToolsOn ? (tools as AnthropicTool[]) : undefined,
 			thinking: reasoningOn ? { type: "enabled", budget_tokens: budget_tokens } : undefined,
@@ -182,11 +183,9 @@ export class MinimaxHandler implements ApiHandler {
 								// Convert Anthropic tool_use to OpenAI-compatible format for internal processing
 								yield {
 									type: "tool_calls",
+									function_id: lastStartedToolCall.id,
 									tool_call: {
-										...lastStartedToolCall,
 										function: {
-											...lastStartedToolCall,
-											id: lastStartedToolCall.id,
 											name: lastStartedToolCall.name,
 											arguments: chunk.delta.partial_json,
 										},

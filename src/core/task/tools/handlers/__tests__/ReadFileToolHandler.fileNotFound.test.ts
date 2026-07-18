@@ -113,6 +113,8 @@ function createConfig() {
 function makeBlock(relPath?: string) {
 	return {
 		type: "tool_use" as const,
+		function_id: "test_read_file",
+		dline_tid: "test_tid_read_file",
 		name: ClineDefaultTool.FILE_READ,
 		params: relPath !== undefined ? { path: relPath } : {},
 		partial: false,
@@ -123,6 +125,8 @@ function makeBlock(relPath?: string) {
 function makeBlockWithRange(relPath: string, startLine?: string, endLine?: string) {
 	return {
 		type: "tool_use" as const,
+		function_id: "test_read_file_range",
+		dline_tid: "test_tid_read_file_range",
 		name: ClineDefaultTool.FILE_READ,
 		params: {
 			path: relPath,

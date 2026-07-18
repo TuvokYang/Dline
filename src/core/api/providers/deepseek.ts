@@ -1,6 +1,5 @@
 import { DeepSeekModelId, deepSeekDefaultModelId, deepSeekModels, ModelInfo } from "@shared/api"
 import { calculateApiCostOpenAI } from "@utils/cost"
-import { nanoid } from "nanoid"
 import OpenAI from "openai"
 import type { ChatCompletionTool as OpenAITool } from "openai/resources/chat/completions"
 import { buildExternalBasicHeaders } from "@/services/EnvUtils"
@@ -149,15 +148,7 @@ export class DeepSeekHandler implements ApiHandler {
 			}
 
 			if (delta?.tool_calls) {
-				for (const chunk of toolCallProcessor.processToolCallDeltas(delta.tool_calls)) {
-					yield {
-						...chunk,
-						tool_call: {
-							...chunk.tool_call,
-							call_id: chunk.tool_call.function?.id || `dline-${nanoid(8)}`,
-						},
-					}
-				}
+				yield* toolCallProcessor.processToolCallDeltas(delta.tool_calls)
 			}
 
 			if (delta && "reasoning_content" in delta && delta.reasoning_content) {

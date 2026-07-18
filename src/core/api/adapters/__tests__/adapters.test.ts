@@ -1,15 +1,21 @@
 import { describe, it } from "vitest"
 import "should"
-import { Anthropic } from "@anthropic-ai/sdk"
-import { ClineStorageMessage } from "@/shared/messages/content"
+import type { ClineAssistantToolUseBlock } from "@/shared/messages/content"
+import { normalizeLegacyConversation } from "@/shared/messages/legacy-identity-migration"
 import { ClineDefaultTool } from "@/shared/tools"
-import { transformToolCallMessages } from ".."
+import { transformToolCallMessages as transformCanonicalToolCallMessages } from ".."
+
+type ClineStorageMessage = any
+
+function transformToolCallMessages(messages: unknown[], tools: ClineDefaultTool[]) {
+	return transformCanonicalToolCallMessages(normalizeLegacyConversation(messages), tools)
+}
 
 describe("transformToolCallMessages", () => {
 	describe("apply_patch conversion", () => {
 		const testCases: Array<{
 			name: string
-			input: ClineStorageMessage[]
+			input: any[]
 			expected: {
 				toolName: string
 				inputPath?: string
@@ -395,7 +401,7 @@ EOF`,
 				// When native tools are FILE_EDIT/FILE_NEW and messages use apply_patch, convert FROM apply_patch
 				const result = transformToolCallMessages(testCase.input, [ClineDefaultTool.FILE_EDIT, ClineDefaultTool.FILE_NEW])
 				// Find all tool_use blocks in the result
-				const toolUseBlocks: Anthropic.ContentBlock[] = []
+				const toolUseBlocks: ClineAssistantToolUseBlock[] = []
 				for (const message of result) {
 					if (Array.isArray(message.content)) {
 						for (const block of message.content) {
@@ -482,7 +488,7 @@ EOF`,
 			for (const message of result) {
 				if (Array.isArray(message.content)) {
 					for (const block of message.content) {
-						if (block.type === "tool_result" && block.tool_use_id === "toolu_result_test") {
+						if (block.type === "tool_result" && block.function_id === "toolu_result_test") {
 							foundToolResult = true
 							block.should.have.property("content", "Success")
 						}
@@ -534,7 +540,7 @@ EOF`,
 			for (const message of result) {
 				if (Array.isArray(message.content)) {
 					for (const block of message.content) {
-						if (block.type === "tool_result" && block.tool_use_id === "toolu_write") {
+						if (block.type === "tool_result" && block.function_id === "toolu_write") {
 							reconstructedContent = typeof block.content === "string" ? block.content : ""
 						}
 					}
@@ -587,7 +593,7 @@ EOF`,
 			for (const message of result) {
 				if (Array.isArray(message.content)) {
 					for (const block of message.content) {
-						if (block.type === "tool_result" && block.tool_use_id === "toolu_replace") {
+						if (block.type === "tool_result" && block.function_id === "toolu_replace") {
 							reconstructedContent = typeof block.content === "string" ? block.content : ""
 						}
 					}
@@ -640,7 +646,7 @@ EOF`,
 			for (const message of result) {
 				if (Array.isArray(message.content)) {
 					for (const block of message.content) {
-						if (block.type === "tool_result" && block.tool_use_id === "toolu_no_content") {
+						if (block.type === "tool_result" && block.function_id === "toolu_no_content") {
 							foundContent = typeof block.content === "string" ? block.content : ""
 						}
 					}
@@ -905,7 +911,7 @@ EOF`,
 				const result = transformToolCallMessages(testCase.input, [ClineDefaultTool.APPLY_PATCH])
 
 				// Find all tool_use blocks in the result
-				const toolUseBlocks: Anthropic.ContentBlock[] = []
+				const toolUseBlocks: ClineAssistantToolUseBlock[] = []
 				for (const message of result) {
 					if (Array.isArray(message.content)) {
 						for (const block of message.content) {
@@ -1088,7 +1094,7 @@ export function bar(foo: string): Foo {
 			for (const message of result) {
 				if (Array.isArray(message.content)) {
 					for (const block of message.content) {
-						if (block.type === "tool_result" && block.tool_use_id === "toolu_no_final") {
+						if (block.type === "tool_result" && block.function_id === "toolu_no_final") {
 							foundContent = typeof block.content === "string" ? block.content : ""
 						}
 					}

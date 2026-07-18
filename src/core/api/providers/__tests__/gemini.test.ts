@@ -135,10 +135,11 @@ describe("GeminiHandler", () => {
 		}
 
 		chunks.should.have.length(2)
-		chunks[0].tool_call.function.id.should.equal("resp_1-tool-0")
-		chunks[1].tool_call.function.id.should.equal("resp_1-tool-1")
-		chunks[0].tool_call.call_id.should.equal(chunks[0].tool_call.function.id)
-		chunks[1].tool_call.call_id.should.equal(chunks[1].tool_call.function.id)
+		chunks[0].function_id.should.equal("resp_1-tool-0")
+		chunks[1].function_id.should.equal("resp_1-tool-1")
+		chunks[0].provider_metadata.response_id.should.equal("resp_1")
+		chunks[0].tool_call.should.not.have.property("call_id")
+		chunks[0].tool_call.function.should.not.have.property("id")
 		JSON.parse(chunks[0].tool_call.function.arguments).path.should.equal(".nvmrc")
 		JSON.parse(chunks[1].tool_call.function.arguments).path.should.equal(".gitattributes")
 	})
@@ -186,8 +187,10 @@ describe("GeminiHandler", () => {
 		}
 
 		chunks.should.have.length(1)
-		chunks[0].tool_call.function.id.should.equal("call_alpha")
-		chunks[0].tool_call.call_id.should.equal("call_alpha")
+		chunks[0].function_id.should.equal("call_alpha")
+		chunks[0].provider_metadata.response_id.should.equal("resp_2")
+		chunks[0].tool_call.should.not.have.property("call_id")
+		chunks[0].tool_call.function.should.not.have.property("id")
 		JSON.parse(chunks[0].tool_call.function.arguments).path.should.equal(".nvmrc")
 	})
 })

@@ -1,6 +1,5 @@
 import { Anthropic } from "@anthropic-ai/sdk"
-import { type ClineContent, ClineStorageMessage, convertClineStorageToAnthropicMessage } from "@/shared/messages/content"
-import { projectAnthropicResult, projectAnthropicUse } from "./tool-identity-projector"
+import { ClineStorageMessage, convertClineStorageToAnthropicMessage } from "@/shared/messages/content"
 
 /**
  * Converts Cline storage messages to Anthropic API format with optional cache control.
@@ -13,7 +12,7 @@ import { projectAnthropicResult, projectAnthropicUse } from "./tool-identity-pro
  * @returns Array of Anthropic-compatible messages with cache control applied
  */
 export function sanitizeAnthropicMessages(
-	clineMessages: Array<ClineStorageMessage | Anthropic.MessageParam>,
+	clineMessages: ClineStorageMessage[],
 	supportCache: boolean,
 ): Array<Anthropic.MessageParam> {
 	// The latest message will be the new user message, one before will be the assistant message from a previous request,
@@ -32,8 +31,7 @@ export function sanitizeAnthropicMessages(
 	const secondLastMsgUserIndex = userMsgIndices[indicesLength - 2]
 
 	return clineMessages.map((msg, index) => {
-		const projectedMsg = projectAnthropicMessage(msg)
-		const anthropicMsg = convertClineStorageToAnthropicMessage(projectedMsg)
+		const anthropicMsg = convertClineStorageToAnthropicMessage(msg)
 
 		// Add cache control to the last two user messages
 		if (supportCache && (index === lastUserMsgIndex || index === secondLastMsgUserIndex)) {
@@ -42,28 +40,6 @@ export function sanitizeAnthropicMessages(
 
 		return anthropicMsg
 	})
-}
-
-/**
- * Project canonical tool identities before shared metadata cleanup.
- *
- * @param message Stored Dline or Anthropic message.
- * @returns Message with Anthropic protocol pairing fields.
- */
-function projectAnthropicMessage(message: ClineStorageMessage | Anthropic.MessageParam): ClineStorageMessage {
-	if (typeof message.content === "string") {
-		return message as ClineStorageMessage
-	}
-	const content = message.content.map((block) => {
-		if (block.type === "tool_use") {
-			return projectAnthropicUse(block)
-		}
-		if (block.type === "tool_result") {
-			return projectAnthropicResult(block)
-		}
-		return block
-	}) as ClineContent[]
-	return { ...message, content } as ClineStorageMessage
 }
 
 const isThinkingBlock = (

@@ -86,16 +86,10 @@ export interface ToolUse {
 	 * Whether this tool use was initiated by a native tool call
 	 */
 	isNativeToolCall?: boolean
-	/**
-	 * The call / response ID this tool use is associated with.
-	 */
-	call_id?: string // optional provider function call ID for compatibility
-	/** Stable logical content item identity. */
-	item_id?: string
-	/** Provider-neutral native function call and result pairing identity. */
-	function_id?: string
-	/** Dline trace identity used as the runtime lifecycle key. */
-	dline_tid?: string
+	/** The only runtime tool-use/result pairing identity. */
+	function_id: string
+	/** The only runtime tool lifecycle identity. */
+	dline_tid: string
 	/**
 	 * Thought signature associated with this tool use, used by Gemini
 	 */

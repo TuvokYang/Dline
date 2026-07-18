@@ -1,0 +1,79 @@
+import { appendApiConversationEvent } from "@core/storage/disk"
+import { beforeEach, describe, expect, it, vi } from "vitest"
+import type { ApiStream } from "../../transform/stream"
+import { recordProviderAdapterInput, recordProviderAdapterOutput } from "../api-conversation-log"
+
+vi.mock("@core/storage/disk", () => ({
+	appendApiConversationEvent: vi.fn().mockResolvedValue(undefined),
+}))
+
+const round = {
+	taskId: "task-1",
+	requestIndex: 3,
+	provider: "gemini",
+	model: "gemini-test",
+	source: "task" as const,
+}
+
+describe("api_conversation_all round logging", () => {
+	beforeEach(() => {
+		vi.mocked(appendApiConversationEvent).mockClear()
+	})
+
+	it("records the canonical request without storage-only metrics", async () => {
+		await recordProviderAdapterInput(round, {
+			systemPrompt: "system",
+			messages: [
+				{
+					role: "assistant",
+					content: [
+						{
+							type: "tool_use",
+							function_id: "function-1",
+							dline_tid: "tid-1",
+							name: "read_file",
+							input: { path: "README.md" },
+						},
+					],
+					metrics: { tokens: { prompt: 1, completion: 2, cached: 0 } },
+				},
+			],
+		})
+
+		const event = vi.mocked(appendApiConversationEvent).mock.calls[0][1] as any
+		expect(event).toMatchObject({
+			requestIndex: 3,
+			direction: "request",
+			stage: "provider_adapter_input",
+			source: "task",
+		})
+		expect(event.payload.messages[0].content[0]).toMatchObject({
+			function_id: "function-1",
+			dline_tid: "tid-1",
+		})
+		expect(event.payload.messages[0]).not.toHaveProperty("metrics")
+		expect(JSON.stringify(event.payload)).not.toContain("call_id")
+		expect(JSON.stringify(event.payload)).not.toContain("tool_use_id")
+	})
+
+	it("records response chunks and a terminal event in delivery order", async () => {
+		async function* source(): ApiStream {
+			yield {
+				type: "text",
+				text: "hello",
+				provider_metadata: { response_id: "response-1" },
+			}
+		}
+
+		const received = []
+		for await (const chunk of recordProviderAdapterOutput(round, source())) {
+			received.push(chunk)
+		}
+
+		expect(received).toHaveLength(1)
+		const events = vi.mocked(appendApiConversationEvent).mock.calls.map((call) => call[1] as any)
+		expect(events.map((event) => event.direction)).toEqual(["response", "response_end"])
+		expect(events[0].payload.provider_metadata.response_id).toBe("response-1")
+		expect(events[1].status).toBe("completed")
+	})
+})

@@ -15,7 +15,7 @@ function focusChainTurn(): TurnState {
 		blocks: [
 			{
 				dlineTid: "tid-1",
-				callId: "call-1",
+				functionId: "call-1",
 				toolName: "focus_chain_change",
 				phase: BlockPhase.AWAITING_APPROVAL,
 				ts: 100,

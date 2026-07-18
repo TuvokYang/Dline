@@ -95,18 +95,14 @@ export class ToolResultUtils {
 	 *
 	 * @param content Tool result content.
 	 * @param block Native tool use carrying provider and Dline identities.
-	 * @param itemId New logical identity allocated for this result block.
 	 * @returns Canonical structured tool result.
 	 */
-	static createResult(content: ToolResponse, block: ToolUse, itemId: string): ClineUserToolResultContentBlock {
+	static createResult(content: ToolResponse, block: ToolUse): ClineUserToolResultContentBlock {
 		if (!block.function_id || !block.dline_tid) {
 			throw new Error(`Native tool result is missing canonical identity: tool=${block.name}`)
 		}
 		return {
 			type: "tool_result",
-			tool_use_id: block.function_id,
-			call_id: block.function_id,
-			item_id: itemId,
 			function_id: block.function_id,
 			dline_tid: block.dline_tid,
 			content: typeof content === "string" ? [{ type: "text", text: content }] : content,
@@ -122,7 +118,6 @@ export class ToolResultUtils {
 		userMessageContent: any[],
 		toolDescription: (block: ToolUse) => string,
 		coordinator: ToolExecutorCoordinator | undefined,
-		nextItemId: () => string,
 	): void {
 		const pendingFeedback = ToolResultUtils.drainPendingFeedback(userMessageContent)
 		if (typeof content === "string") {
@@ -136,30 +131,29 @@ export class ToolResultUtils {
 					})()
 				: toolDescription(block)
 
-			// Replace existing tool_result for the same tool_use_id with the
+			// Replace an existing tool_result for the same function_id with the
 			// latest result. When a tool is re-executed (e.g. partial→reRender
 			// lifecycle), the newer error message (e.g. "Document not initialized")
 			// replaces the older one (e.g. "SEARCH block not found"). The final
 			// result is what the AI sees, and ensureToolResultsFollowToolUse
-			// deduplicates by tool_use_id before sending to the API.
+			// deduplicates by function_id before sending to the API.
 			const existingIndex = userMessageContent.findIndex(
 				(item: any) => item.type === "tool_result" && item.function_id === block.function_id,
 			)
 			const mergedContent = ToolResultUtils.mergeTextResult(`${description} Result:\n${resultText}`, pendingFeedback)
 			if (existingIndex !== -1) {
-				const existingItemId = userMessageContent[existingIndex]?.item_id
-				const newBlock = ToolResultUtils.createResult(mergedContent, block, existingItemId ?? nextItemId())
+				const newBlock = ToolResultUtils.createResult(mergedContent, block)
 				userMessageContent[existingIndex] = newBlock
 				Logger.warn(`ToolResultUtils: Replaced existing tool_result for function_id ${block.function_id}`)
 				return
 			}
 
-			userMessageContent.push(ToolResultUtils.createResult(mergedContent, block, nextItemId()))
+			userMessageContent.push(ToolResultUtils.createResult(mergedContent, block))
 		} else {
 			// For complex content (arrays with text/image blocks), pass it through directly
 			// The content array should already be properly formatted with type, text, source, etc.
 			const mergedContent = ToolResultUtils.mergeStructuredResult(content, pendingFeedback)
-			userMessageContent.push(ToolResultUtils.createResult(mergedContent, block, nextItemId()))
+			userMessageContent.push(ToolResultUtils.createResult(mergedContent, block))
 		}
 	}
 

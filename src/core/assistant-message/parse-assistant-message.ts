@@ -1,5 +1,4 @@
 import { ClineDefaultTool, getToolUseNames } from "@shared/tools"
-import { nanoid } from "nanoid"
 import { AssistantMessageContent, TextStreamContent, ToolParamName, ToolUse, toolParamNames } from "."
 
 /**
@@ -12,6 +11,8 @@ export interface ParseTsRegistry {
 	 * First call for a key creates the ts; subsequent calls return the same ts.
 	 */
 	getOrCreateTsForBlock: (key: string) => number
+	/** Allocate stable canonical identities for a non-native tool block. */
+	getOrCreateToolIdentityForBlock: (key: string) => Pick<ToolUse, "function_id" | "dline_tid">
 }
 
 /**
@@ -140,13 +141,14 @@ export function parseAssistantMessageV2(assistantMessage: string, registry: Pars
 						}
 					}
 
+					const identity = registry.getOrCreateToolIdentityForBlock(`tool:${toolOpenTagStart}`)
 					currentToolUse = {
 						type: "tool_use",
 						name: toolName as ClineDefaultTool,
 						params: {},
 						partial: true,
 						ts: getTs(`tool:${toolOpenTagStart}`),
-						call_id: nanoid(8),
+						...identity,
 						isNativeToolCall: false,
 					}
 					currentToolUseStart = currentCharIndex + 1

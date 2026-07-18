@@ -798,7 +798,7 @@ describe("AwsBedrockHandler", () => {
 
 				results.should.have.length(2)
 				results[0].type.should.equal("tool_calls")
-				results[0].tool_call.function.id.should.equal("tool-1")
+				results[0].function_id.should.equal("tool-1")
 				results[0].tool_call.function.name.should.equal("read_file")
 				results[0].tool_call.function.arguments.should.equal('{"path":')
 				results[1].type.should.equal("tool_calls")
@@ -852,8 +852,8 @@ describe("AwsBedrockHandler", () => {
 				handler.getBedrockClient = originalGetBedrockClient
 
 				results.should.have.length(2)
-				results[0].tool_call.function.id.should.equal("tool-1")
-				results[1].tool_call.function.id.should.equal("tool-2")
+				results[0].function_id.should.equal("tool-1")
+				results[1].function_id.should.equal("tool-2")
 			})
 
 			it("should handle text and tool use interleaving", async () => {

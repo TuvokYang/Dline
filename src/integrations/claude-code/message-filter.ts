@@ -1,10 +1,10 @@
-import type { Anthropic } from "@anthropic-ai/sdk"
+import type { ClineStorageMessage } from "@/shared/messages/content"
 
 /**
  * Filters out image blocks from messages since Claude Code doesn't support images.
  * Replaces image blocks with text placeholders similar to how VSCode LM provider handles it.
  */
-export function filterMessagesForClaudeCode(messages: Anthropic.Messages.MessageParam[]): Anthropic.Messages.MessageParam[] {
+export function filterMessagesForClaudeCode(messages: ClineStorageMessage[]): ClineStorageMessage[] {
 	return messages.map((message) => {
 		// Handle simple string messages
 		if (typeof message.content === "string") {

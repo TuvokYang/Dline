@@ -193,12 +193,17 @@ export class GeminiHandler implements ApiHandler {
 					if (part.thought && part.text) {
 						yield {
 							type: "reasoning",
-							id: chunk.responseId,
+							provider_metadata: { response_id: chunk.responseId },
 							reasoning: part.text || "",
 							signature: part.thoughtSignature,
 						}
 					} else if (part.text) {
-						yield { type: "text", text: part.text, id: chunk.responseId, signature: part.thoughtSignature }
+						yield {
+							type: "text",
+							text: part.text,
+							provider_metadata: { response_id: chunk.responseId },
+							signature: part.thoughtSignature,
+						}
 					}
 					if (part.functionCall) {
 						const functionCall = part.functionCall
@@ -214,11 +219,10 @@ export class GeminiHandler implements ApiHandler {
 								})()
 							yield {
 								type: "tool_calls",
-								id: chunk.responseId,
+								function_id: toolCallId,
+								provider_metadata: { response_id: chunk.responseId },
 								tool_call: {
-									call_id: toolCallId,
 									function: {
-										id: toolCallId,
 										name: functionCall.name,
 										arguments: JSON.stringify(functionCall.args),
 									},
@@ -256,7 +260,7 @@ export class GeminiHandler implements ApiHandler {
 					cacheReadTokens,
 					cacheWriteTokens: 0,
 					totalCost,
-					id: responseId,
+					provider_metadata: responseId ? { response_id: responseId } : undefined,
 				}
 			}
 		} catch (error) {

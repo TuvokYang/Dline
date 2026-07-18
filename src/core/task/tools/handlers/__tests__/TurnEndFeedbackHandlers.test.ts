@@ -102,7 +102,7 @@ function createConfig(text: string): TaskConfig {
 		coordinator: {} as TaskConfig["coordinator"],
 		identityFactory: {
 			/** Return a stable result item identity for this fixture. */
-			nextItemId: () => "dline_item_turn_end_test",
+			nextFunctionId: () => "dline_function_turn_end_test",
 			/** Return a stable trace identity for this fixture. */
 			nextTraceId: () => "dline_tid_turn_end_test",
 		},

@@ -36,7 +36,7 @@ describe("TaskRuntime dispatch", () => {
 					blocks: [
 						{
 							dlineTid: "tid-qna",
-							callId: "call-qna",
+							functionId: "call-qna",
 							toolName: "qna_respond",
 							ts: 10,
 							requiresApproval: false,

@@ -25,23 +25,22 @@ describe("stream identity types", () => {
 		expectTypeOf<ApiRawStreamToolCallsChunk>().toHaveProperty("function_id")
 		expectTypeOf<ApiStreamToolCallsChunk>().toMatchTypeOf<{
 			function_id: string
-			item_id: string
 			dline_tid: string
 		}>()
 	})
 })
 
 describe("block identity factory", () => {
-	it("creates prefixed item and trace identities", () => {
-		const factory = createIdentityFactory(createUlidSource(["01ITEM", "01TRACE"]))
+	it("creates prefixed function and trace identities", () => {
+		const factory = createIdentityFactory(createUlidSource(["01FUNCTION", "01TRACE"]))
 
-		expect(factory.nextItemId()).toBe("dline_item_01ITEM")
+		expect(factory.nextFunctionId()).toBe("dline_function_01FUNCTION")
 		expect(factory.nextTraceId()).toBe("dline_tid_01TRACE")
 	})
 
 	it("preserves allocator order for identities created in one task", () => {
 		const factory = createIdentityFactory(createUlidSource(["01A", "01B", "01C"]))
-		const identities = [factory.nextItemId(), factory.nextItemId(), factory.nextItemId()]
+		const identities = [factory.nextFunctionId(), factory.nextFunctionId(), factory.nextFunctionId()]
 
 		expect(new Set(identities).size).toBe(3)
 		expect([...identities].sort()).toEqual(identities)

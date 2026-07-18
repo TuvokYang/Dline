@@ -52,7 +52,7 @@ describe("TaskController — phase state machine", () => {
 
 		await transition(tc, TaskPhase.EXECUTING, {
 			apiIndex: 1,
-			execution: { mode: "parallel", executing: ["c1", "c2"] },
+			execution: { mode: "parallel", executingFunctionIds: ["c1", "c2"] },
 		})
 		assert.equal(tc.phase, TaskPhase.EXECUTING)
 
@@ -94,12 +94,12 @@ describe("TaskController — phase state machine", () => {
 			apiIndex: 2,
 			approval: {
 				mode: "serial",
-				blocks: [{ callId: "c1", name: "write_to_file", phase: "awaiting_approval" as BlockPhase, apiIndex: 2 }],
-				activeCallId: "c1",
+				blocks: [{ functionId: "c1", name: "write_to_file", phase: "awaiting_approval" as BlockPhase, apiIndex: 2 }],
+				activeFunctionId: "c1",
 			},
 		})
 		assert.equal(snap.approval?.mode, "serial")
-		assert.equal(snap.approval?.activeCallId, "c1")
+		assert.equal(snap.approval?.activeFunctionId, "c1")
 	})
 
 	it("transition generates snapshot with resume context", async () => {
@@ -109,12 +109,12 @@ describe("TaskController — phase state machine", () => {
 			apiIndex: 3,
 			resume: {
 				assistantApiIndex: 1,
-				pendingToolUseIds: ["t1", "t2"],
-				answeredToolUseIds: ["t3"],
+				pendingFunctionIds: ["t1", "t2"],
+				answeredFunctionIds: ["t3"],
 			},
 		})
 		assert.equal(snap.resume?.assistantApiIndex, 1)
-		assert.deepEqual(snap.resume?.pendingToolUseIds, ["t1", "t2"])
+		assert.deepEqual(snap.resume?.pendingFunctionIds, ["t1", "t2"])
 	})
 
 	it("transitions to PAUSED before CANCELLING", async () => {
@@ -162,7 +162,7 @@ describe("TaskController — phase state machine", () => {
 		// Simulate: after API response, history has 1 entry → apiIndex = 0
 		const snap2 = await transition(tc, TaskPhase.EXECUTING, {
 			apiIndex: 0,
-			execution: { mode: "serial", executing: ["c1"] },
+			execution: { mode: "serial", executingFunctionIds: ["c1"] },
 		})
 		assert.equal(snap2.apiIndex, 0)
 		assert.equal(snap2.phase, TaskPhase.EXECUTING)
@@ -172,8 +172,8 @@ describe("TaskController — phase state machine", () => {
 			apiIndex: 2,
 			approval: {
 				mode: "serial",
-				blocks: [{ callId: "c2", name: "write_to_file", phase: "awaiting_approval" as BlockPhase, apiIndex: 2 }],
-				activeCallId: "c2",
+				blocks: [{ functionId: "c2", name: "write_to_file", phase: "awaiting_approval" as BlockPhase, apiIndex: 2 }],
+				activeFunctionId: "c2",
 			},
 		})
 		assert.equal(snap3.apiIndex, 2)

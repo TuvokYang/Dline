@@ -13,15 +13,17 @@ export interface ClineReasoningDetailParam {
 	index: number
 }
 
-interface ClineSharedMessageParam {
-	// The id of the response that the block belongs to
-	call_id?: string
-	/** Stable logical provider or Dline content item identity. */
+/** Provider-owned replay metadata that must never be used as runtime identity. */
+export interface ClineProviderMetadata {
+	/** Provider content item identity, for example an OpenAI Responses `fc_*` id. */
 	item_id?: string
-	/** Provider-neutral native function call and result pairing identity. */
-	function_id?: string
-	/** Dline trace identity spanning the complete block lifecycle. */
-	dline_tid?: string
+	/** Provider response/message/reasoning identity used only for protocol replay. */
+	response_id?: string
+}
+
+interface ClineSharedMessageParam {
+	/** Opaque provider transport metadata, isolated from Dline runtime identity. */
+	provider_metadata?: ClineProviderMetadata
 }
 
 export const REASONING_DETAILS_PROVIDERS = ["cline", "openrouter"]
@@ -42,12 +44,27 @@ export interface ClineImageContentBlock extends Anthropic.ImageBlockParam, Cline
 
 export interface ClineDocumentContentBlock extends Anthropic.DocumentBlockParam, ClineSharedMessageParam {}
 
-export interface ClineUserToolResultContentBlock extends Anthropic.ToolResultBlockParam, ClineSharedMessageParam {}
+export interface ClineUserToolResultContentBlock extends ClineSharedMessageParam {
+	type: "tool_result"
+	/** The only canonical tool-use/result pairing identity. */
+	function_id: string
+	/** The only canonical Dline runtime lifecycle identity. */
+	dline_tid: string
+	content: ClineToolResponseContent
+	is_error?: boolean
+}
 
 /**
  * Assistant only content types
  */
-export interface ClineAssistantToolUseBlock extends Anthropic.ToolUseBlockParam, ClineSharedMessageParam {
+export interface ClineAssistantToolUseBlock extends ClineSharedMessageParam {
+	type: "tool_use"
+	/** The only canonical tool-use/result pairing identity. */
+	function_id: string
+	/** The only canonical Dline runtime lifecycle identity. */
+	dline_tid: string
+	name: string
+	input: unknown
 	// reasoning_details only exists for providers listed in REASONING_DETAILS_PROVIDERS
 	reasoning_details?: unknown[] | ClineReasoningDetailParam[]
 	// Thought Signature associates with Gemini
@@ -86,13 +103,11 @@ export type ClineContent = ClineUserContent | ClineAssistantContent
  * while allowing for additional metadata specific to Cline to avoid unknown fields in Anthropic SDK
  * added by ignoring the type checking for those fields.
  */
-export interface ClineStorageMessage extends Anthropic.MessageParam {
-	/**
-	 * Response ID associated with this message
-	 */
-	id?: string
+export interface ClineStorageMessage {
 	role: ClineMessageRole
 	content: ClinePromptInputContent | ClineContent[]
+	/** Provider transport metadata, isolated from Dline runtime identity. */
+	provider_metadata?: ClineProviderMetadata
 	/**
 	 * NOTE: model information used when generating this message.
 	 * Internal use for message conversion only.
@@ -140,10 +155,34 @@ export function convertClineStorageToAnthropicMessage(
 /**
  * Clean a content block by removing Cline-specific fields and returning only Anthropic-compatible fields
  */
-export function cleanContentBlock(block: ClineContent): Anthropic.ContentBlock {
+export function cleanContentBlock(block: ClineContent): Anthropic.ContentBlockParam {
+	if (block.type === "tool_use") {
+		if (!block.function_id || !block.dline_tid) {
+			throw new Error("Canonical tool_use is missing function_id or dline_tid")
+		}
+		return {
+			type: "tool_use",
+			id: block.function_id,
+			name: block.name,
+			input: block.input,
+		} satisfies Anthropic.ToolUseBlockParam
+	}
+	if (block.type === "tool_result") {
+		if (!block.function_id || !block.dline_tid) {
+			throw new Error("Canonical tool_result is missing function_id or dline_tid")
+		}
+		return {
+			type: "tool_result",
+			tool_use_id: block.function_id,
+			content: block.content,
+			...(block.is_error === undefined ? {} : { is_error: block.is_error }),
+		} satisfies Anthropic.ToolResultBlockParam
+	}
+
 	// Fast path: if no Cline-specific fields exist, return as-is
 	const hasClineFields =
 		"reasoning_details" in block ||
+		"provider_metadata" in block ||
 		"call_id" in block ||
 		"item_id" in block ||
 		"function_id" in block ||
@@ -152,16 +191,16 @@ export function cleanContentBlock(block: ClineContent): Anthropic.ContentBlock {
 		(block.type !== "thinking" && "signature" in block)
 
 	if (!hasClineFields) {
-		return block as Anthropic.ContentBlock
+		return block as Anthropic.ContentBlockParam
 	}
 
 	// Removes Cline-specific fields & the signature field that's added for Gemini.
-	const { reasoning_details, call_id, item_id, function_id, dline_tid, summary, ...rest } = block as any
+	const { reasoning_details, provider_metadata, call_id, item_id, function_id, dline_tid, summary, ...rest } = block as any
 
 	// Remove signature from non-thinking blocks that were added for Gemini
 	if (block.type !== "thinking" && rest.signature) {
 		rest.signature = undefined
 	}
 
-	return rest satisfies Anthropic.ContentBlock
+	return rest satisfies Anthropic.ContentBlockParam
 }

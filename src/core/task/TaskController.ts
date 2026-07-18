@@ -138,7 +138,7 @@ export class TaskController {
 	restoreTurnFromSnapshot(
 		blocks: Array<{
 			dlineTid: string
-			callId: string
+			functionId: string
 			toolName: string
 			phase: BlockLifecycle["phase"]
 			conversationHistoryIndex: number
@@ -344,7 +344,7 @@ export class TaskController {
 					{ type: "secondary", label: "Stop", enabled: true },
 				],
 				activeAsk: snapshot.awaiting.taskAsk,
-				activeCallId: snapshot.awaiting.activeCallId,
+				activeFunctionId: snapshot.awaiting.activeFunctionId,
 				reason: "status-acknowledgment",
 			}
 		}
@@ -361,7 +361,7 @@ export class TaskController {
 					{ type: "reject", label: "Reject", enabled: true },
 				],
 				activeAsk: snapshot.awaiting.taskAsk,
-				activeCallId: snapshot.awaiting.activeCallId,
+				activeFunctionId: snapshot.awaiting.activeFunctionId,
 				reason: "approval-awaiting",
 			}
 		}

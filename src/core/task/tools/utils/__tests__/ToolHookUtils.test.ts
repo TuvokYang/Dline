@@ -28,6 +28,8 @@ describe("ToolHookUtils", () => {
 
 			const block: ToolUse = {
 				type: "tool_use",
+				function_id: "test_hook_disabled",
+				dline_tid: "test_hook_disabled_tid",
 				name: ClineDefaultTool.FILE_READ,
 				params: { path: "src/index.ts" },
 				partial: false,
@@ -75,6 +77,8 @@ describe("ToolHookUtils", () => {
 
 			const block: ToolUse = {
 				type: "tool_use",
+				function_id: "test_hook_enabled",
+				dline_tid: "test_hook_enabled_tid",
 				name: ClineDefaultTool.BASH,
 				params: { command: "echo hello", requires_approval: "false" },
 				partial: false,

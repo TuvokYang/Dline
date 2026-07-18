@@ -1,4 +1,3 @@
-import { Anthropic } from "@anthropic-ai/sdk"
 import {
 	CLAUDE_SONNET_1M_SUFFIX,
 	ModelInfo,
@@ -19,6 +18,7 @@ import {
 } from "@utils/model-utils"
 import OpenAI from "openai"
 import { ChatCompletionTool } from "openai/resources/chat/completions"
+import type { ClineStorageMessage } from "@/shared/messages/content"
 import { convertToOpenAiMessages, sanitizeGeminiMessages } from "./openai-format"
 import { convertToR1Format } from "./r1-format"
 import { getOpenAIToolParams } from "./tool-call-processor"
@@ -41,7 +41,7 @@ function needsExplicitCacheControl(modelId: string): boolean {
 export async function createOpenRouterStream(
 	client: OpenAI,
 	systemPrompt: string,
-	messages: Anthropic.Messages.MessageParam[],
+	messages: ClineStorageMessage[],
 	model: { id: string; info: ModelInfo },
 	reasoningEffort?: string,
 	thinkingBudgetTokens?: number,

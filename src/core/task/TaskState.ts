@@ -18,7 +18,7 @@ export class TaskState {
 	// Content processing
 	currentStreamingContentIndex = 0
 	assistantMessageContent: AssistantMessageContent[] = []
-	userMessageContent: (Anthropic.TextBlockParam | Anthropic.ImageBlockParam | Anthropic.ToolResultBlockParam)[] = []
+	userMessageContent: ClineContent[] = []
 	userMessageContentReady = false
 
 	// Presentation locks
@@ -104,6 +104,8 @@ export class TaskState {
 	// Key format: "text:<startOffset>" or "tool:<openTagStart>".
 	// Cleared at the start of each API turn to prevent cross-turn ts reuse.
 	parseBlockTsByKey: Map<string, number> = new Map()
+	/** Stable canonical identities for non-native tool blocks during one API turn. */
+	parseToolIdentityByKey: Map<string, { function_id: string; dline_tid: string }> = new Map()
 
 	// Content dedup: tracks the last rendered signature per ts to avoid
 	// re-sending identical partial events to the frontend.

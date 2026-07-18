@@ -5,6 +5,7 @@ import { ClineStorageMessage } from "@/shared/messages/content"
 import { Logger } from "@/shared/services/Logger"
 import { type ApiHandler, type ApiHandlerContext } from ".."
 import { withRetry } from "../retry"
+import { sanitizeAnthropicMessages } from "../transform/anthropic-format"
 import { type ApiStream, ApiStreamUsageChunk } from "../transform/stream"
 
 export class ClaudeCodeHandler implements ApiHandler {
@@ -39,7 +40,7 @@ export class ClaudeCodeHandler implements ApiHandler {
 	})
 	async *createMessage(systemPrompt: string, messages: ClineStorageMessage[]): ApiStream {
 		// Filter out image blocks since Claude Code doesn't support them
-		const filteredMessages = filterMessagesForClaudeCode(messages)
+		const filteredMessages = sanitizeAnthropicMessages(filterMessagesForClaudeCode(messages), false)
 
 		const claudeProcess = runClaudeCode({
 			systemPrompt,
@@ -156,10 +157,9 @@ export class ClaudeCodeHandler implements ApiHandler {
 							// Yield tool_use blocks to the streaming pipeline for proper tool execution
 							yield {
 								type: "tool_calls",
+								function_id: content.id,
 								tool_call: {
-									call_id: content.id,
 									function: {
-										id: content.id,
 										name: content.name,
 										arguments: JSON.stringify(content.input),
 									},

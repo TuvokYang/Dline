@@ -305,7 +305,8 @@ describe("Task.ask", () => {
 		}
 		const { fakeTask } = createFakeTask(taskState)
 		const approvalBlock = {
-			callId: "call_read",
+			functionId: "function_read",
+			dlineTid: "tid_read",
 			toolName: "read_file",
 			phase: "awaiting_approval",
 			ts: 123,
@@ -329,7 +330,7 @@ describe("Task.ask", () => {
 			didTransition = true
 			assert.equal(phase, "awaiting_approval")
 			assert.equal(ctx.apiIndex, 5)
-			assert.equal(ctx.approval.activeCallId, "call_read")
+			assert.equal(ctx.approval.activeFunctionId, "function_read")
 		}
 		fakeTask.postStateToWebview = async () => {
 			didPostState = true

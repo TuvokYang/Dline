@@ -7,14 +7,15 @@ const CONTEXT_WINDOW = 272_000
 /**
  * Create a tool result block with controllable payload size.
  *
- * @param toolUseId Tool use identifier for the result block.
+ * @param functionId Function identifier for the result block.
  * @param text Payload text to embed in the tool result.
  * @returns Tool result content block matching Dline's tool result format.
  */
-function createToolResult(toolUseId: string, text: string) {
+function createToolResult(functionId: string, text: string) {
 	return {
 		type: "tool_result" as const,
-		tool_use_id: toolUseId,
+		function_id: functionId,
+		dline_tid: `tid_${functionId}`,
 		content: [
 			{
 				type: "text" as const,

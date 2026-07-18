@@ -4,12 +4,13 @@ import { ClineDefaultTool } from "@shared/tools"
 import { describe, it } from "vitest"
 import { isTurnEndingToolName, orderTurnEndingContentBlocks, orderTurnEndingNativeToolBlocks } from "../assistant-message-order"
 
-const tool = (name: ClineDefaultTool, call_id?: string): ToolUse => ({
+const tool = (name: ClineDefaultTool, functionId = `function-${name}`): ToolUse => ({
 	type: "tool_use",
 	name,
 	params: {},
 	partial: false,
-	call_id,
+	function_id: functionId,
+	dline_tid: `tid-${functionId}`,
 	ts: Date.now(),
 })
 
@@ -55,26 +56,26 @@ describe("assistant message tool ordering", () => {
 		assert.equal(ordered, blocks)
 	})
 
-	it("orders native tool blocks without dropping call ids", () => {
+	it("orders native tool blocks without dropping function ids", () => {
 		const attempt = {
 			type: "tool_use",
-			id: "toolu-attempt",
+			function_id: "call-attempt",
+			dline_tid: "tid-attempt",
 			name: ClineDefaultTool.ATTEMPT,
 			input: {},
-			call_id: "call-attempt",
 		} as const
 		const write = {
 			type: "tool_use",
-			id: "toolu-write",
+			function_id: "call-write",
+			dline_tid: "tid-write",
 			name: ClineDefaultTool.FILE_NEW,
 			input: {},
-			call_id: "call-write",
 		} as const
 
 		const ordered = orderTurnEndingNativeToolBlocks([attempt, write])
 
 		assert.deepEqual(
-			ordered.map((block) => block.call_id),
+			ordered.map((block) => block.function_id),
 			["call-write", "call-attempt"],
 		)
 	})

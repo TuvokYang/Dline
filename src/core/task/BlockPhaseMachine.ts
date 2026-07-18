@@ -6,7 +6,7 @@ import { type ClineDefaultTool, CONVERSATIONAL_TOOL_NAMES } from "@shared/tools"
 /** Input block for buildTurn — minimal shape accepted from Task. */
 export interface TurnBlockInput {
 	type?: string
-	call_id?: string
+	function_id?: string
 	dline_tid?: string
 	name?: string
 	ts?: number
@@ -33,8 +33,8 @@ export enum BlockPhase {
 export interface BlockLifecycle {
 	/** Dline trace identity used as the lifecycle key. */
 	dlineTid: string
-	/** Provider function identity retained for UI and legacy snapshot compatibility. */
-	callId: string
+	/** Canonical tool-use/result pairing identity. */
+	functionId: string
 	toolName: string
 	phase: BlockPhase
 	ts: number
@@ -48,7 +48,7 @@ export interface BlockLifecycle {
 export interface BlockEvent {
 	type: "noop" | "auto-execute" | "awaiting-approval" | "waiting-for-token" | "execute" | "rejected" | "completed"
 	dlineTid: string
-	callId: string
+	functionId: string
 	toolName?: string
 	askType?: ClineAsk
 }
@@ -77,25 +77,25 @@ export class BlockPhaseMachine {
 	 * Build the turn from tool_use blocks.
 	 * Must be called once per assistant turn before any advance() calls.
 	 */
-	buildTurn(blocks: TurnBlockInput[], autoApprove: (toolName: string, callId: string) => boolean): void {
+	buildTurn(blocks: TurnBlockInput[], autoApprove: (toolName: string, dlineTid: string) => boolean): void {
 		this.turnBlocks = []
 		this.activeTokenDlineTid = null
 
 		for (const block of blocks) {
 			if (block.type !== "tool_use") continue
-			if (!block.dline_tid || !block.call_id) {
+			if (!block.dline_tid || !block.function_id) {
 				throw new Error(`Canonical runtime tool block is missing identity: tool=${block.name || "unknown"}`)
 			}
 
 			const dlineTid = block.dline_tid
-			const callId = block.call_id
+			const functionId = block.function_id
 			const toolName = block.name || ""
 			const ts = block.ts ?? Date.now()
 			const conversationHistoryIndex = block.conversationHistoryIndex ?? 0
 
 			this.turnBlocks.push({
 				dlineTid,
-				callId,
+				functionId,
 				toolName,
 				phase: BlockPhase.STREAMING,
 				ts,
@@ -175,15 +175,15 @@ export class BlockPhaseMachine {
 	 */
 	advance(dlineTid: string, blockReady: boolean): BlockEvent {
 		const block = this.findBlock(dlineTid)
-		if (!block) return { type: "noop", dlineTid, callId: dlineTid }
+		if (!block) return { type: "noop", dlineTid, functionId: dlineTid }
 
 		switch (block.phase) {
 			case BlockPhase.STREAMING: {
-				if (!blockReady) return { type: "noop", dlineTid, callId: block.callId }
+				if (!blockReady) return { type: "noop", dlineTid, functionId: block.functionId }
 
 				if (!block.requiresApproval) {
 					block.phase = BlockPhase.AUTO_EXECUTING
-					return { type: "auto-execute", dlineTid, callId: block.callId, toolName: block.toolName }
+					return { type: "auto-execute", dlineTid, functionId: block.functionId, toolName: block.toolName }
 				}
 
 				const token = this.acquireToken(dlineTid)
@@ -192,16 +192,16 @@ export class BlockPhaseMachine {
 					return {
 						type: "awaiting-approval",
 						dlineTid,
-						callId: block.callId,
+						functionId: block.functionId,
 						toolName: block.toolName,
 					}
 				}
 
-				return { type: "waiting-for-token", dlineTid, callId: block.callId, toolName: block.toolName }
+				return { type: "waiting-for-token", dlineTid, functionId: block.functionId, toolName: block.toolName }
 			}
 
 			case BlockPhase.AWAITING_APPROVAL: {
-				return { type: "noop", dlineTid, callId: block.callId }
+				return { type: "noop", dlineTid, functionId: block.functionId }
 			}
 
 			case BlockPhase.EXECUTING:
@@ -210,16 +210,16 @@ export class BlockPhaseMachine {
 				if (block.requiresApproval) {
 					this.releaseToken()
 				}
-				return { type: "completed", dlineTid, callId: block.callId, toolName: block.toolName }
+				return { type: "completed", dlineTid, functionId: block.functionId, toolName: block.toolName }
 			}
 
 			case BlockPhase.COMPLETED:
 			case BlockPhase.REJECTED:
 			case BlockPhase.SKIPPED:
-				return { type: "noop", dlineTid, callId: block.callId }
+				return { type: "noop", dlineTid, functionId: block.functionId }
 
 			default:
-				return { type: "noop", dlineTid, callId: block.callId }
+				return { type: "noop", dlineTid, functionId: block.functionId }
 		}
 	}
 
@@ -244,7 +244,7 @@ export class BlockPhaseMachine {
 		// Cascade SKIPPED
 		let found = false
 		for (const b of this.turnBlocks) {
-			if (b.callId === block.callId) {
+			if (b.functionId === block.functionId) {
 				found = true
 				continue
 			}
@@ -275,7 +275,7 @@ export class BlockPhaseMachine {
 	restoreTurn(
 		blocks: Array<{
 			dlineTid: string
-			callId: string
+			functionId: string
 			toolName: string
 			phase: BlockPhase
 			conversationHistoryIndex: number
@@ -289,7 +289,7 @@ export class BlockPhaseMachine {
 		}
 		this.turnBlocks = blocks.map((block) => ({
 			dlineTid: block.dlineTid,
-			callId: block.callId,
+			functionId: block.functionId,
 			toolName: block.toolName,
 			phase: block.phase,
 			ts: block.ts ?? Date.now(),

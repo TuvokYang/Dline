@@ -5,7 +5,7 @@ import { type BlockLifecycle, BlockPhase, BlockPhaseMachine } from "../BlockPhas
 function block(dlineTid: string, phase: BlockPhase): BlockLifecycle {
 	return {
 		dlineTid,
-		callId: `call-${dlineTid}`,
+		functionId: `call-${dlineTid}`,
 		toolName: "write_to_file",
 		phase,
 		ts: 1,

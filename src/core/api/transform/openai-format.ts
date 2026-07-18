@@ -178,8 +178,8 @@ export function convertToOpenAiMessages(
 				// Process tool use messages
 				const tool_calls: OpenAI.Chat.ChatCompletionMessageToolCall[] = toolMessages.map((toolMessage) => {
 					const toolDetails = toolMessage.reasoning_details
-					const toolId = toolMessage.id
 					const functionId = getUseFunctionId(toolMessage)
+					const toolId = functionId
 					if (toolDetails) {
 						if (Array.isArray(toolDetails)) {
 							// For Gemini: reasoning details must be linkable back to the tool call.

@@ -35,7 +35,8 @@ describe("Task.processNativeToolCalls", () => {
 				params: { question: "Need clarification" },
 				partial: true,
 				isNativeToolCall: true,
-				call_id: "call-1",
+				function_id: "call-1",
+				dline_tid: "dline-call-1",
 				ts: Date.now(),
 			},
 		]
@@ -98,7 +99,8 @@ describe("Task.processNativeToolCalls", () => {
 				params: { question: "Need clarification" },
 				partial: true,
 				isNativeToolCall: true,
-				call_id: "call-1",
+				function_id: "call-1",
+				dline_tid: "dline-call-1",
 				ts: Date.now(),
 			},
 		]
@@ -149,7 +151,8 @@ describe("Task.processNativeToolCalls", () => {
 				params: { question: "Need clarification" },
 				partial: true,
 				isNativeToolCall: true,
-				call_id: "call-1",
+				function_id: "call-1",
+				dline_tid: "dline-call-1",
 				ts: Date.now(),
 			},
 		]
@@ -195,7 +198,7 @@ describe("Task.processNativeToolCalls", () => {
 			params: { response: "Streaming response" },
 			partial: true,
 			isNativeToolCall: true,
-			call_id: "call-qna",
+			function_id: "call-qna",
 			dline_tid: "dline-qna",
 			ts: 200,
 		}
@@ -244,7 +247,7 @@ describe("Task.processNativeToolCalls", () => {
 			params: { path: "README.md" },
 			partial: false,
 			isNativeToolCall: false,
-			call_id: "call-read",
+			function_id: "call-read",
 			dline_tid: "dline-read",
 			ts: 300,
 		}
@@ -291,12 +294,13 @@ describe("Task.processNativeToolCalls", () => {
 			params: { response: "Hello" },
 			partial: false,
 			isNativeToolCall: true,
+			function_id: "call-qna",
 			dline_tid: "dline-qna",
 			ts: 400,
 		}
 		let runtimeBlock = {
 			dlineTid: "dline-qna",
-			callId: "call-qna",
+			functionId: "call-qna",
 			toolName: ClineDefaultTool.QNA_RESPOND,
 			requiresApproval: false,
 			conversationHistoryIndex: 1,
@@ -360,7 +364,8 @@ describe("Task.processNativeToolCalls", () => {
 				params: { result: "done" },
 				partial: true,
 				isNativeToolCall: true,
-				call_id: "call-attempt",
+				function_id: "call-attempt",
+				dline_tid: "dline-call-attempt",
 				ts: Date.now(),
 			},
 			{
@@ -369,7 +374,8 @@ describe("Task.processNativeToolCalls", () => {
 				params: { path: "result.txt", content: "content" },
 				partial: true,
 				isNativeToolCall: true,
-				call_id: "call-write",
+				function_id: "call-write",
+				dline_tid: "dline-call-write",
 				ts: Date.now(),
 			},
 		]
@@ -394,7 +400,7 @@ describe("Task.processNativeToolCalls", () => {
 		).processNativeToolCalls.call(fakeTask, "", toolBlocks)
 
 		assert.deepEqual(
-			fakeTask.taskState.assistantMessageContent.map((block) => (block.type === "tool_use" ? block.call_id : "")),
+			fakeTask.taskState.assistantMessageContent.map((block) => (block.type === "tool_use" ? block.function_id : "")),
 			["call-write", "call-attempt"],
 		)
 		assert.equal(fakeTask.taskState.currentStreamingContentIndex, 0)

@@ -134,13 +134,13 @@ export class Session {
 
 	/**
 	 * Update a tool call - starts tracking if new, updates lastUpdateTime if existing.
-	 * @param callId - Unique identifier for this tool call
+	 * @param functionId - Canonical function identifier for this tool call
 	 * @param toolName - The name of the tool (required when starting a new call)
 	 * @param success - Optional success status (only set when finalizing)
 	 */
-	updateToolCall(callId: string, toolName: string, success?: boolean): void {
+	updateToolCall(functionId: string, toolName: string, success?: boolean): void {
 		const now = Date.now()
-		const existing = this.inFlightToolCalls.get(callId)
+		const existing = this.inFlightToolCalls.get(functionId)
 
 		if (existing) {
 			// Update existing tool call
@@ -152,7 +152,7 @@ export class Session {
 		}
 
 		// Start tracking new tool call
-		this.inFlightToolCalls.set(callId, {
+		this.inFlightToolCalls.set(functionId, {
 			name: toolName,
 			startTime: now,
 			lastUpdateTime: now,
@@ -171,7 +171,7 @@ export class Session {
 	 * Call this when an API request completes to close out all pending tool calls.
 	 */
 	finalizeRequest(): void {
-		for (const [callId, record] of this.inFlightToolCalls) {
+		for (const [functionId, record] of this.inFlightToolCalls) {
 			const duration = record.lastUpdateTime - record.startTime
 			this.toolTimeMs += duration
 			this.toolCalls.push({
@@ -180,7 +180,7 @@ export class Session {
 				startTime: record.startTime,
 				lastUpdateTime: record.lastUpdateTime,
 			})
-			this.inFlightToolCalls.delete(callId)
+			this.inFlightToolCalls.delete(functionId)
 		}
 	}
 

@@ -99,7 +99,7 @@ describe("TaskController", () => {
 			// releaseToken should skip ec1 (now EXECUTING) and return wf1
 			const next = controller.blockPhase.releaseToken()
 			assert.notEqual(next, null)
-			assert.equal(next?.callId, "wf1")
+			assert.equal(next?.functionId, "wf1")
 		})
 
 		it("auto-approve blocks always return granted", () => {
@@ -142,7 +142,7 @@ describe("TaskController", () => {
 
 			const active = controller.getActiveBlock()
 			assert.notEqual(active, null)
-			assert.equal(active?.callId, "ec1")
+			assert.equal(active?.functionId, "ec1")
 		})
 
 		it("AUTO_EXECUTING → COMPLETED on second advance", () => {
@@ -184,7 +184,7 @@ describe("TaskController", () => {
 
 			const rejected = controller.rejectActiveBlock()
 			assert.notEqual(rejected, null)
-			assert.equal(rejected?.callId, "ec1")
+			assert.equal(rejected?.functionId, "ec1")
 
 			// wf1 should be SKIPPED (approval-requiring, after rejected)
 			assert.equal(controller.shouldSkip(traceId("wf1")), true)
@@ -267,7 +267,7 @@ describe("TaskController", () => {
 			// Now releaseToken should skip ec1 (EXECUTING = terminal) and pick wf1
 			const next = controller.blockPhase.releaseToken()
 			assert.notEqual(next, null)
-			assert.equal(next?.callId, "wf1")
+			assert.equal(next?.functionId, "wf1")
 		})
 	})
 })

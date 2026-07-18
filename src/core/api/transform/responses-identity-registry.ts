@@ -82,13 +82,10 @@ export interface ResponsesIdentityRegistry {
 export function createResponsesToolChunk(identity: ResponsesFunctionIdentity, argumentsText: string): ApiRawStreamToolCallsChunk {
 	return {
 		type: "tool_calls",
-		item_id: identity.item_id,
 		function_id: identity.function_id,
-		id: identity.item_id,
+		provider_metadata: { item_id: identity.item_id },
 		tool_call: {
-			call_id: identity.function_id,
 			function: {
-				id: identity.function_id,
 				name: identity.name,
 				arguments: argumentsText,
 			},

@@ -759,10 +759,9 @@ export class AwsBedrockHandler implements ApiHandler {
 							if (toolCall && typeof toolInput === "string") {
 								yield {
 									type: "tool_calls",
+									function_id: toolCall.toolUseId,
 									tool_call: {
-										call_id: toolCall.toolUseId,
 										function: {
-											id: toolCall.toolUseId,
 											name: toolCall.name,
 											arguments: toolInput,
 										},
@@ -992,7 +991,7 @@ export class AwsBedrockHandler implements ApiHandler {
 						if (item.type === "tool_use") {
 							return {
 								toolUse: {
-									toolUseId: item.id,
+									toolUseId: item.function_id,
 									name: item.name,
 									input: item.input,
 								},
@@ -1029,7 +1028,7 @@ export class AwsBedrockHandler implements ApiHandler {
 
 							return {
 								toolResult: {
-									toolUseId: item.tool_use_id,
+									toolUseId: item.function_id,
 									content,
 									status: item.is_error ? "error" : "success",
 								},

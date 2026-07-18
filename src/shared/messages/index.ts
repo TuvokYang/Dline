@@ -9,6 +9,7 @@ export type {
 	ClineImageContentBlock,
 	ClineMessageRole,
 	ClinePromptInputContent,
+	ClineProviderMetadata,
 	ClineReasoningDetailParam,
 	ClineStorageMessage,
 	ClineTextContentBlock,
@@ -17,4 +18,5 @@ export type {
 	ClineUserToolResultContentBlock,
 } from "./content"
 export { cleanContentBlock, convertClineStorageToAnthropicMessage, REASONING_DETAILS_PROVIDERS } from "./content"
+export { normalizeLegacyConversation } from "./legacy-identity-migration"
 export type { ClineMessageMetricsInfo, ClineMessageModelInfo } from "./metrics"

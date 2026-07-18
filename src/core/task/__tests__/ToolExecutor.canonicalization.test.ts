@@ -8,6 +8,8 @@ describe("ToolExecutor canonicalization", () => {
 	it("canonicalizes attempt_completion response into result", () => {
 		const block: ToolUse = {
 			type: "tool_use",
+			function_id: "test_attempt_response",
+			dline_tid: "test_attempt_response_tid",
 			name: ClineDefaultTool.ATTEMPT,
 			params: {
 				response: "final answer from response field",
@@ -27,6 +29,8 @@ describe("ToolExecutor canonicalization", () => {
 	it("does not canonicalize when attempt_completion already has result", () => {
 		const block: ToolUse = {
 			type: "tool_use",
+			function_id: "test_attempt_result",
+			dline_tid: "test_attempt_result_tid",
 			name: ClineDefaultTool.ATTEMPT,
 			params: {
 				result: "already canonical",
@@ -45,6 +49,8 @@ describe("ToolExecutor canonicalization", () => {
 	it("does not canonicalize non-attempt tools", () => {
 		const block: ToolUse = {
 			type: "tool_use",
+			function_id: "test_act_mode",
+			dline_tid: "test_act_mode_tid",
 			name: ClineDefaultTool.ACT_MODE,
 			params: {
 				response: "act mode response",

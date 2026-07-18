@@ -104,7 +104,7 @@ describe("handler interaction matrix", () => {
 	it("rejects interaction opening without canonical dline identity", async () => {
 		const taskConfig = config()
 		const missingIdentity = block(ClineDefaultTool.QNA_RESPOND, { response: "Answer" })
-		delete missingIdentity.dline_tid
+		delete (missingIdentity as Partial<typeof missingIdentity>).dline_tid
 
 		await expect(new QnaRespondHandler().execute(taskConfig, missingIdentity)).rejects.toThrow(
 			"Canonical tool interaction is missing dlineTid",

@@ -238,10 +238,9 @@ export class VertexHandler implements ApiHandler {
 								// 	// Convert Anthropic tool_use to OpenAI-compatible format
 								yield {
 									type: "tool_calls",
+									function_id: lastStartedToolCall.id,
 									tool_call: {
-										...lastStartedToolCall,
 										function: {
-											id: lastStartedToolCall.id,
 											name: lastStartedToolCall.name,
 											arguments: chunk.delta.partial_json,
 										},

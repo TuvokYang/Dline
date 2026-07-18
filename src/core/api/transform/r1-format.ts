@@ -1,4 +1,3 @@
-import { Anthropic } from "@anthropic-ai/sdk"
 import OpenAI from "openai"
 import { ClineAssistantThinkingBlock, ClineStorageMessage } from "@/shared/messages/content"
 
@@ -68,7 +67,7 @@ export function addReasoningContent(
  * @param messages Array of Anthropic messages
  * @returns Array of OpenAI messages where consecutive messages with the same role are merged together
  */
-export function convertToR1Format(messages: Anthropic.Messages.MessageParam[]): OpenAI.Chat.ChatCompletionMessageParam[] {
+export function convertToR1Format(messages: ClineStorageMessage[]): OpenAI.Chat.ChatCompletionMessageParam[] {
 	return messages.reduce<OpenAI.Chat.ChatCompletionMessageParam[]>((merged, message) => {
 		const lastMessage = merged[merged.length - 1]
 		let messageContent: string | (OpenAI.Chat.ChatCompletionContentPartText | OpenAI.Chat.ChatCompletionContentPartImage)[] =

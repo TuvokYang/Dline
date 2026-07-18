@@ -114,11 +114,12 @@ export class MistralHandler implements ApiHandler {
 			const delta = chunk.data.choices[0]?.delta
 			if (delta.toolCalls) {
 				for (const toolCall of delta.toolCalls) {
+					if (!toolCall.id) throw new Error("Mistral tool call is missing function identity")
 					yield {
 						type: "tool_calls",
+						function_id: toolCall.id,
 						tool_call: {
 							function: {
-								id: toolCall.id,
 								name: toolCall.function.name,
 								arguments: JSON.stringify(toolCall.function.arguments),
 							},

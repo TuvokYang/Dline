@@ -1,4 +1,3 @@
-import { Anthropic } from "@anthropic-ai/sdk"
 import fs from "fs/promises"
 import * as path from "path"
 import { ClineMessage } from "@/shared/ExtensionMessage"
@@ -178,15 +177,14 @@ function convertApiToUiMessages(apiMessages: ClineStorageMessage[]): ClineMessag
 				if (block.type === "text" && block.text) {
 					result.push({ ts: genTs(result.length), type: "say", say: "text", text: block.text } as ClineMessage)
 				} else if (block.type === "tool_use") {
-					const tool = block as Anthropic.ToolUseBlock
-					const input = (tool.input as Record<string, unknown>) || {}
+					const input = (block.input as Record<string, unknown>) || {}
 					const askType = toolToAskType(block.name)
 					if (askType) {
 						const askText = formatAskText(block.name, input)
 						result.push({ ts: genTs(result.length), type: "ask", ask: askType, text: askText } as any)
 					} else {
 						// Read-only tools: render as text
-						const toolDesc = `**Tool: ${block.name}**\n\`\`\`json\n${JSON.stringify(tool.input, null, 2)}\n\`\`\``
+						const toolDesc = `**Tool: ${block.name}**\n\`\`\`json\n${JSON.stringify(block.input, null, 2)}\n\`\`\``
 						result.push({ ts: genTs(result.length), type: "say", say: "text", text: toolDesc } as ClineMessage)
 					}
 				}

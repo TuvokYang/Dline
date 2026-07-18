@@ -330,11 +330,9 @@ export class AnthropicHandler implements ApiHandler {
 								// 	// Convert Anthropic tool_use to OpenAI-compatible format
 								yield {
 									type: "tool_calls",
+									function_id: lastStartedToolCall.id,
 									tool_call: {
-										...lastStartedToolCall,
 										function: {
-											...lastStartedToolCall,
-											id: lastStartedToolCall.id,
 											name: lastStartedToolCall.name,
 											arguments: chunk.delta.partial_json,
 										},

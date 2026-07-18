@@ -33,7 +33,7 @@ export type TaskSnapshotAwaitingKind = "none" | "conversation" | "approval" | "r
 export interface TaskSnapshotAwaiting {
 	kind: TaskSnapshotAwaitingKind
 	taskAsk?: ClineAsk
-	activeCallId?: string
+	activeFunctionId?: string
 	/** Canonical Dline trace identity for the active block. */
 	activeDlineTid?: string
 	messageTs?: number
@@ -59,7 +59,7 @@ export type TaskSnapshotBlockStatusReason =
 export interface TaskSnapshotApproval {
 	mode: "serial" | "parallel"
 	blocks: Array<{
-		callId: string
+		functionId: string
 		/** Canonical Dline trace identity for this lifecycle block. */
 		dlineTid?: string
 		name: string
@@ -71,7 +71,7 @@ export interface TaskSnapshotApproval {
 		ts?: number
 		statusReason?: TaskSnapshotBlockStatusReason
 	}>
-	activeCallId?: string
+	activeFunctionId?: string
 	/** Canonical Dline trace identity for the active approval block. */
 	activeDlineTid?: string
 }
@@ -81,8 +81,8 @@ export interface TaskSnapshotApproval {
  */
 export interface TaskSnapshotExecution {
 	mode: "serial" | "parallel"
-	/** Legacy provider call ID list of currently executing tools. */
-	executing: string[]
+	/** Canonical function identities of currently executing tools. */
+	executingFunctionIds: string[]
 	/** Canonical Dline trace identities of currently executing tools. */
 	executingDlineTids?: string[]
 }
@@ -93,8 +93,8 @@ export interface TaskSnapshotExecution {
 export interface TaskSnapshotResume {
 	/** Index of the assistant message with pending tools in apiConversationHistory */
 	assistantApiIndex: number
-	pendingToolUseIds: string[]
-	answeredToolUseIds: string[]
+	pendingFunctionIds: string[]
+	answeredFunctionIds: string[]
 }
 
 /**
@@ -155,6 +155,47 @@ export interface TaskSnapshot {
 	resume?: TaskSnapshotResume
 	cancel?: TaskSnapshotCancel
 	error?: TaskSnapshotErrorRecovery
+}
+
+/** Normalize pre-canonical snapshot identity names at the persistence ingress boundary. */
+export function normalizeLegacyTaskSnapshot(input: unknown): TaskSnapshot {
+	const raw = input as Record<string, any>
+	const awaiting = raw.awaiting
+		? {
+				...raw.awaiting,
+				activeFunctionId: raw.awaiting.activeFunctionId ?? raw.awaiting.activeCallId,
+				activeCallId: undefined,
+			}
+		: undefined
+	const approval = raw.approval
+		? {
+				...raw.approval,
+				blocks: (raw.approval.blocks ?? []).map((block: Record<string, any>) => ({
+					...block,
+					functionId: block.functionId ?? block.callId,
+					callId: undefined,
+				})),
+				activeFunctionId: raw.approval.activeFunctionId ?? raw.approval.activeCallId,
+				activeCallId: undefined,
+			}
+		: undefined
+	const execution = raw.execution
+		? {
+				...raw.execution,
+				executingFunctionIds: raw.execution.executingFunctionIds ?? raw.execution.executing ?? [],
+				executing: undefined,
+			}
+		: undefined
+	const resume = raw.resume
+		? {
+				...raw.resume,
+				pendingFunctionIds: raw.resume.pendingFunctionIds ?? raw.resume.pendingToolUseIds ?? [],
+				answeredFunctionIds: raw.resume.answeredFunctionIds ?? raw.resume.answeredToolUseIds ?? [],
+				pendingToolUseIds: undefined,
+				answeredToolUseIds: undefined,
+			}
+		: undefined
+	return { ...raw, awaiting, approval, execution, resume } as TaskSnapshot
 }
 
 /** Identity field rejected while hydrating a canonical snapshot. */

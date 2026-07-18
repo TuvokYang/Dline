@@ -96,11 +96,9 @@ export async function* handleAnthropicMessagesApiStreamResponse(
 						if (lastStartedToolCall.id && lastStartedToolCall.name && chunk.delta.partial_json) {
 							yield {
 								type: "tool_calls",
+								function_id: lastStartedToolCall.id,
 								tool_call: {
-									...lastStartedToolCall,
 									function: {
-										...lastStartedToolCall,
-										id: lastStartedToolCall.id,
 										name: lastStartedToolCall.name,
 										arguments: chunk.delta.partial_json,
 									},
