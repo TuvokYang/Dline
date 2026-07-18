@@ -16,13 +16,15 @@ import {
 	NetworkIcon,
 } from "lucide-react"
 import { useEffect, useMemo, useRef, useState } from "react"
+import { Button } from "@/components/ui/button"
+import { useExtensionState } from "@/context/ExtensionStateContext"
 import MarkdownBlock from "../common/MarkdownBlock"
+import { cancelTaskActivities, useTaskActivities } from "./activity/useTaskActivities"
 
 interface SubagentStatusRowProps {
 	message: ClineMessage
 	isLast: boolean
 	lastModifiedMessage?: ClineMessage
-	onCancelCommand?: () => void
 }
 
 type DisplayStatus = SubagentExecutionStatus
@@ -209,10 +211,51 @@ function SubagentPromptText({ prompt, isExpanded, onShowMore }: SubagentPromptTe
 	)
 }
 
-export default function SubagentStatusRow({ message, isLast, lastModifiedMessage, onCancelCommand }: SubagentStatusRowProps) {
+export default function SubagentStatusRow({ message, isLast, lastModifiedMessage }: SubagentStatusRowProps) {
 	const [expandedItems, setExpandedItems] = useState<Record<number, boolean>>({})
 	const [expandedPrompts, setExpandedPrompts] = useState<Record<number, boolean>>({})
-	const data = useMemo(() => parseSubagentRowData(message), [message])
+	const [collapsed, setCollapsed] = useState(false)
+	const { currentTaskItem } = useExtensionState()
+	const taskId = currentTaskItem?.id
+	const { getById } = useTaskActivities(taskId)
+	const parsedData = useMemo(() => parseSubagentRowData(message), [message])
+	const data = useMemo(() => {
+		if (!parsedData) return null
+		const items = parsedData.items.map((entry) => {
+			const activity = entry.jobId ? getById(entry.jobId) : undefined
+			if (!activity) return entry
+			return {
+				...entry,
+				status: activity.status === "cancelling" ? "running" : (activity.status as SubagentExecutionStatus),
+				latestToolCall: activity.latestEvent || entry.latestToolCall,
+				result: activity.result || entry.result,
+				error: activity.error || entry.error,
+				startedAt: activity.createdAt,
+				finishedAt: activity.finishedAt,
+				background: activity.executionMode === "background",
+				toolCalls: activity.metrics?.toolCalls ?? entry.toolCalls,
+				inputTokens: activity.metrics?.inputTokens ?? entry.inputTokens,
+				outputTokens: activity.metrics?.outputTokens ?? entry.outputTokens,
+				totalCost: activity.metrics?.totalCost ?? entry.totalCost,
+				currency: activity.metrics?.currency ?? entry.currency,
+				contextTokens: activity.metrics?.contextTokens ?? entry.contextTokens,
+				contextWindow: activity.metrics?.contextWindow ?? entry.contextWindow,
+			}
+		})
+		const statuses = items.map((entry) => entry.status)
+		const status = statuses.some((status) => status === "running")
+			? "running"
+			: statuses.some((status) => status === "failed")
+				? "failed"
+				: statuses.some((status) => status === "timeout")
+					? "timeout"
+					: statuses.some((status) => status === "cancelled")
+						? "cancelled"
+						: statuses.every((status) => status === "completed")
+							? "completed"
+							: parsedData.status
+		return { ...parsedData, status, items }
+	}, [getById, parsedData])
 
 	if (!data) {
 		return <div className="text-foreground opacity-80">Subagent status update unavailable.</div>
@@ -228,7 +271,10 @@ export default function SubagentStatusRow({ message, isLast, lastModifiedMessage
 			lastModifiedMessage?.ask === "resume_completed_task" ||
 			resumedBeforeNextVisibleMessage)
 
-	const showCancelButton = data.status === "running" && !wasCancelled && typeof onCancelCommand === "function"
+	const cancellableIds = data.items
+		.filter((entry) => entry.status === "running" && entry.jobId)
+		.map((entry) => entry.jobId as string)
+	const showCancelButton = Boolean(taskId && cancellableIds.length > 1 && !wasCancelled)
 
 	const singular = data.items.length === 1
 	const title = singular ? "Dline wants to use a subagent:" : "Dline wants to use subagents:"
@@ -256,91 +302,119 @@ export default function SubagentStatusRow({ message, isLast, lastModifiedMessage
 	return (
 		<div className="mb-2">
 			<div className="flex items-center gap-2.5 mb-3">
-				<NetworkIcon className="size-2 text-foreground" />
-				<span className="font-bold text-foreground">{title}</span>
+				<button
+					aria-label={collapsed ? "Expand subagent status" : "Collapse subagent status"}
+					className="flex min-w-0 items-center gap-2.5 border-0 bg-transparent p-0 text-left cursor-pointer"
+					onClick={() => setCollapsed((value) => !value)}
+					type="button">
+					{collapsed ? <ChevronRightIcon className="size-3" /> : <ChevronDownIcon className="size-3" />}
+					<NetworkIcon className="size-2 text-foreground" />
+					<span className="font-bold text-foreground">{title}</span>
+				</button>
 				{statusSummary && <span className="text-[11px] opacity-70">{statusSummary}</span>}
 				{showCancelButton && (
-					<button
-						className="ml-auto rounded-xs border border-editor-group-border px-2 py-1 text-xs text-foreground"
+					<Button
+						className="ml-auto"
 						onClick={(e) => {
 							e.stopPropagation()
-							onCancelCommand?.()
+							if (taskId) void cancelTaskActivities(taskId, cancellableIds)
 						}}
-						type="button">
-						cancel
-					</button>
+						size="sm"
+						variant="secondary">
+						Cancel all
+					</Button>
 				)}
 			</div>
-			<div className="space-y-2">
-				{data.items.map((entry, index) => {
-					const displayStatus: DisplayStatus =
-						wasCancelled && (entry.status === "running" || entry.status === "pending") ? "cancelled" : entry.status
-					const hasDetails = Boolean(
-						(entry.result && entry.status === "completed") ||
-							(entry.error && (entry.status === "failed" || entry.status === "timeout" || entry.status === "cancelled")),
-					)
-					const isExpanded = expandedItems[entry.index] === true
-					const isStreamingPromptUnderConstruction =
-						isPromptConstructionRow && message.partial === true && index === data.items.length - 1
-					const shouldShowStats = !isStreamingPromptUnderConstruction
-					const statsText = `${formatCount(entry.toolCalls)} tools called · ${formatCount(entry.contextTokens)} tokens · ${formatCost(entry.totalCost, entry.currency)}`
-					const metadataText = [
-						entry.jobId ? `job ${entry.jobId}` : undefined,
-						entry.timeoutSeconds ? `timeout ${entry.timeoutSeconds}s` : undefined,
-						entry.injectionState ? `result ${entry.injectionState}` : undefined,
-					]
-						.filter((part): part is string => Boolean(part))
-						.join(" · ")
-					const latestToolCallText = entry.latestToolCall?.trim() || ""
-					return (
-						<div
-							className="rounded-xs border border-editor-group-border px-2 py-1.5"
-							key={entry.index}
-							style={{ backgroundColor: "var(--vscode-editor-background)" }}>
-							<div className="flex items-start gap-2">
-								{statusIcon(displayStatus)}
-								<div className="min-w-0 flex-1">
-									<SubagentPromptText
-										isExpanded={expandedPrompts[entry.index] === true}
-										onShowMore={() => expandPrompt(entry.index)}
-										prompt={entry.prompt}
-									/>
-								</div>
-							</div>
-							{shouldShowStats && (
-								<div className="mt-1 text-[11px] opacity-70 min-w-0 whitespace-pre-wrap break-words">
-									<span>{metadataText ? `${metadataText} · ${statsText}` : statsText}</span>
-								</div>
-							)}
-							{shouldShowStats && hasDetails && (
-								<button
-									aria-label={isExpanded ? "Hide subagent output" : "Show subagent output"}
-									className="mt-1 text-[11px] opacity-80 flex items-center gap-1 bg-transparent border-0 p-0 cursor-pointer text-left text-foreground w-full"
-									onClick={() => toggleItem(entry.index)}
-									type="button">
-									{isExpanded ? (
-										<ChevronDownIcon className="size-2 shrink-0" />
-									) : (
-										<ChevronRightIcon className="size-2 shrink-0" />
+			{!collapsed && (
+				<div className="max-h-[40vh] space-y-2 overflow-y-auto pr-0.5">
+					{data.items.map((entry, index) => {
+						const displayStatus: DisplayStatus =
+							wasCancelled && (entry.status === "running" || entry.status === "pending")
+								? "cancelled"
+								: entry.status
+						const hasDetails = Boolean(
+							(entry.result && entry.status === "completed") ||
+								(entry.error &&
+									(entry.status === "failed" || entry.status === "timeout" || entry.status === "cancelled")),
+						)
+						const isExpanded = expandedItems[entry.index] === true
+						const isStreamingPromptUnderConstruction =
+							isPromptConstructionRow && message.partial === true && index === data.items.length - 1
+						const shouldShowStats = !isStreamingPromptUnderConstruction
+						const statsText = `${formatCount(entry.toolCalls)} tools called · ${formatCount(entry.contextTokens)} tokens · ${formatCost(entry.totalCost, entry.currency)}`
+						const metadataText = [
+							entry.background ? "Background" : "Foreground",
+							entry.jobId ? `job ${entry.jobId}` : undefined,
+							entry.timeoutSeconds ? `timeout ${entry.timeoutSeconds}s` : undefined,
+							entry.injectionState ? `result ${entry.injectionState}` : undefined,
+						]
+							.filter((part): part is string => Boolean(part))
+							.join(" · ")
+						const latestToolCallText = entry.latestToolCall?.trim() || ""
+						return (
+							<div
+								className="rounded-xs border border-editor-group-border px-2 py-1.5"
+								key={entry.index}
+								style={{ backgroundColor: "var(--vscode-editor-background)" }}>
+								<div className="flex items-start gap-2">
+									{statusIcon(displayStatus)}
+									<div className="min-w-0 flex-1">
+										<SubagentPromptText
+											isExpanded={expandedPrompts[entry.index] === true}
+											onShowMore={() => expandPrompt(entry.index)}
+											prompt={entry.prompt}
+										/>
+									</div>
+									{taskId && entry.jobId && entry.status === "running" && !wasCancelled && (
+										<Button
+											onClick={() => void cancelTaskActivities(taskId, [entry.jobId as string])}
+											size="sm"
+											variant="secondary">
+											Cancel
+										</Button>
 									)}
-									<span className="shrink-0">{isExpanded ? "Hide output" : "Show output"}</span>
-								</button>
-							)}
-							{shouldShowStats && !hasDetails && latestToolCallText && (
-								<div className="mt-1 text-[10px] opacity-70 min-w-0 truncate font-mono">{latestToolCallText}</div>
-							)}
-							{isExpanded && entry.result && entry.status === "completed" && (
-								<div className="mt-2 text-xs opacity-80 wrap-anywhere overflow-hidden">
-									<MarkdownBlock markdown={entry.result} />
 								</div>
-							)}
-							{isExpanded && entry.error && (entry.status === "failed" || entry.status === "timeout" || entry.status === "cancelled") && (
-								<div className="mt-2 text-xs text-error whitespace-pre-wrap break-words">{entry.error}</div>
-							)}
-						</div>
-					)
-				})}
-			</div>
+								{shouldShowStats && (
+									<div className="mt-1 text-[11px] opacity-70 min-w-0 whitespace-pre-wrap break-words">
+										<span>{metadataText ? `${metadataText} · ${statsText}` : statsText}</span>
+									</div>
+								)}
+								{shouldShowStats && hasDetails && (
+									<button
+										aria-label={isExpanded ? "Hide subagent output" : "Show subagent output"}
+										className="mt-1 text-[11px] opacity-80 flex items-center gap-1 bg-transparent border-0 p-0 cursor-pointer text-left text-foreground w-full"
+										onClick={() => toggleItem(entry.index)}
+										type="button">
+										{isExpanded ? (
+											<ChevronDownIcon className="size-2 shrink-0" />
+										) : (
+											<ChevronRightIcon className="size-2 shrink-0" />
+										)}
+										<span className="shrink-0">{isExpanded ? "Hide output" : "Show output"}</span>
+									</button>
+								)}
+								{shouldShowStats && !hasDetails && latestToolCallText && (
+									<div className="mt-1 text-[10px] opacity-70 min-w-0 truncate font-mono">
+										{latestToolCallText}
+									</div>
+								)}
+								{isExpanded && entry.result && entry.status === "completed" && (
+									<div className="mt-2 text-xs opacity-80 wrap-anywhere overflow-hidden">
+										<MarkdownBlock markdown={entry.result} />
+									</div>
+								)}
+								{isExpanded &&
+									entry.error &&
+									(entry.status === "failed" || entry.status === "timeout" || entry.status === "cancelled") && (
+										<div className="mt-2 text-xs text-error whitespace-pre-wrap break-words">
+											{entry.error}
+										</div>
+									)}
+							</div>
+						)
+					})}
+				</div>
+			)}
 		</div>
 	)
 }

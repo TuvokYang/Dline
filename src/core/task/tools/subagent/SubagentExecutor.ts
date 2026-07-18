@@ -16,7 +16,7 @@ export interface SubagentRunStats {
 export interface SubagentProgressUpdate {
 	stats?: SubagentRunStats
 	latestToolCall?: string
-	status?: "running" | "completed" | "failed"
+	status?: "running" | "completed" | "failed" | "cancelled"
 	result?: string
 	error?: string
 }

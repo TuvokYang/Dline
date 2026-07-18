@@ -20,6 +20,7 @@ import type { ClineAskResponse } from "@shared/WebviewMessage"
 import { WorkspaceRootManager } from "@/core/workspace"
 import type { ContextManager } from "../../../context/context-management/ContextManager"
 import type { StateManager } from "../../../storage/StateManager"
+import type { TaskActivityStore } from "../../activity/TaskActivityStore"
 import type {
 	CompleteInteractionRequest,
 	InteractionOutcome,
@@ -95,6 +96,8 @@ export interface TaskConfig {
 	coordinator: ToolExecutorCoordinator
 	/** Task-local allocator for result item identities. */
 	identityFactory: IdentityFactory
+	/** Task-local real-time activity state shared by chat and the Activity view. */
+	activityStore?: TaskActivityStore
 
 	/** VSCode extension context, required by spawn_task to create new webview panels. */
 	controllerContext?: any

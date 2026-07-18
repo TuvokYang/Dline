@@ -57,6 +57,10 @@ service TaskService {
   rpc spawnTask(SpawnTaskRequest) returns (SpawnTaskResponse);
   // Manually refreshes the frozen system prompt cache for a task
   rpc refreshPrompt(RefreshPromptRequest) returns (RefreshPromptResponse);
+  // Streams task-local subagent and command activity without rebuilding ExtensionState
+  rpc subscribeToTaskActivities(TaskActivitySubscriptionRequest) returns (stream TaskActivityUpdate);
+  // Cancels one or more task-local activities by stable activity id
+  rpc cancelTaskActivities(CancelTaskActivitiesRequest) returns (CancelTaskActivitiesResponse);
 }
 
 // Request message for creating a new task
@@ -219,6 +223,55 @@ message RefreshPromptRequest {
 // Response for manual system prompt cache refresh
 message RefreshPromptResponse {
   bool success = 1;
+}
+
+message TaskActivitySubscriptionRequest {
+  string task_id = 1;
+}
+
+message CancelTaskActivitiesRequest {
+  string task_id = 1;
+  repeated string activity_ids = 2;
+}
+
+message CancelTaskActivitiesResponse {
+  repeated string cancelled_activity_ids = 1;
+}
+
+message TaskActivityMetrics {
+  int32 tool_calls = 1;
+  int64 input_tokens = 2;
+  int64 output_tokens = 3;
+  double total_cost = 4;
+  string currency = 5;
+  int64 context_tokens = 6;
+  int64 context_window = 7;
+  int64 line_count = 8;
+}
+
+message TaskActivity {
+  string activity_id = 1;
+  string task_id = 2;
+  string kind = 3;
+  string execution_mode = 4;
+  string status = 5;
+  int64 created_at = 6;
+  int64 updated_at = 7;
+  optional int64 finished_at = 8;
+  string title = 9;
+  optional string detail = 10;
+  optional string latest_event = 11;
+  optional string output = 12;
+  optional string result = 13;
+  optional string error = 14;
+  optional string parent_activity_id = 15;
+  optional TaskActivityMetrics metrics = 16;
+}
+
+message TaskActivityUpdate {
+  int64 sequence = 1;
+  bool snapshot = 2;
+  repeated TaskActivity activities = 3;
 }
 
 // Status of a task folder lock

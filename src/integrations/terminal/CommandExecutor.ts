@@ -48,6 +48,7 @@ export class CommandExecutor {
 
 	// Flag to track if the current command was cancelled externally
 	private wasCancelledExternally = false
+	private nextActivityNumber = 1
 
 	// Track shell integration warnings to determine when to show background terminal suggestion
 	private shellIntegrationWarningTracker: ShellIntegrationWarningTracker = {
@@ -117,6 +118,14 @@ export class CommandExecutor {
 		const terminalInfo = await manager.getOrCreateTerminal(this.cwd)
 		terminalInfo.terminal.show()
 		const process = manager.runCommand(terminalInfo, command)
+		const activityId = `command_${options?.commandTs ?? Date.now()}_${this.nextActivityNumber++}`
+		let activityLineCount = 0
+		this.callbacks.createCommandActivity?.({
+			activityId,
+			command,
+			executionMode: "foreground",
+			cancel: () => Promise.resolve(process.terminate?.()),
+		})
 
 		// Reset cancellation flag and track the current process
 		this.wasCancelledExternally = false
@@ -126,6 +135,23 @@ export class CommandExecutor {
 		}
 		process.once("completed", clearCurrentProcess)
 		process.once("error", clearCurrentProcess)
+		process.once("completed", (details?: { exitCode?: number; signal?: string }) => {
+			const failed = Boolean(details?.signal) || (typeof details?.exitCode === "number" && details.exitCode !== 0)
+			this.callbacks.updateCommandActivity?.(activityId, {
+				status: failed ? "failed" : "completed",
+				latestEvent: failed ? "Command failed" : "Command completed",
+				error: details?.signal ? `Terminated by ${details.signal}` : undefined,
+				lineCount: activityLineCount,
+			})
+		})
+		process.once("error", (error: Error) => {
+			this.callbacks.updateCommandActivity?.(activityId, {
+				status: "failed",
+				latestEvent: "Command failed",
+				error: error.message,
+				lineCount: activityLineCount,
+			})
+		})
 
 		// Use shared orchestration logic
 		// The StandaloneTerminalManager handles background command tracking internally
@@ -134,12 +160,41 @@ export class CommandExecutor {
 			timeoutSeconds,
 			suppressUserInteraction: options?.suppressUserInteraction,
 			commandTs: options?.commandTs,
+			onOutputLine: (line) => {
+				activityLineCount++
+				this.callbacks.appendCommandActivityOutput?.(activityId, `${line}\n`)
+				this.callbacks.updateCommandActivity?.(activityId, {
+					latestEvent: line.trim() || "Command produced output",
+					lineCount: activityLineCount,
+				})
+			},
 			// When "Proceed While Running" is triggered, track the command in the manager
 			// Returns the log file path so the orchestrator can send it to the UI
 			// existingOutput contains all output lines captured so far
 			onProceedWhileRunning: useStandalone
 				? (existingOutput: string[]) => {
-						const backgroundCmd = this.standaloneManager.trackBackgroundCommand(process, command, existingOutput)
+						const backgroundCmd = this.standaloneManager.trackBackgroundCommand(process, command, existingOutput, {
+							onOutputLine: (line) => {
+								activityLineCount++
+								this.callbacks.appendCommandActivityOutput?.(activityId, `${line}\n`)
+								this.callbacks.updateCommandActivity?.(activityId, {
+									latestEvent: line.trim() || "Command produced output",
+									lineCount: activityLineCount,
+								})
+							},
+							onTimeout: () => {
+								this.callbacks.updateCommandActivity?.(activityId, {
+									status: "timeout",
+									latestEvent: "Background command timed out",
+									lineCount: activityLineCount,
+								})
+							},
+						})
+						this.callbacks.updateCommandActivity?.(activityId, {
+							executionMode: "background",
+							latestEvent: "Continuing in background",
+							lineCount: activityLineCount,
+						})
 						return { logFilePath: backgroundCmd.logFilePath }
 					}
 				: undefined,

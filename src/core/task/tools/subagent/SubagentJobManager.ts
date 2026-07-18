@@ -243,7 +243,14 @@ export class SubagentJobManager {
 	private finishJob(jobId: string, result: SubagentExecResult): void {
 		const job = this.jobs.get(jobId)
 		if (!job) return
-		job.status = result.status === "completed" ? "completed" : result.status === "timeout" ? "timeout" : "failed"
+		job.status =
+			result.status === "completed"
+				? "completed"
+				: result.status === "timeout"
+					? "timeout"
+					: result.status === "cancelled"
+						? "cancelled"
+						: "failed"
 		job.finishedAt = Date.now()
 		job.result = result.result
 		job.error = result.error

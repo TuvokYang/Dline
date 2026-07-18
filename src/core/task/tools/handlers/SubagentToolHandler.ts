@@ -112,6 +112,54 @@ function applyStats(entry: SubagentStatusItem, stats: SubagentRunStats): void {
 	entry.contextUsagePercentage = stats.contextUsagePercentage || 0
 }
 
+function updateActivityFromEntry(config: TaskConfig, entry: SubagentStatusItem): void {
+	if (!entry.jobId) return
+	config.activityStore?.update(entry.jobId, {
+		status: entry.status === "pending" ? "awaiting_approval" : entry.status,
+		latestEvent: entry.latestToolCall,
+		result: entry.result,
+		error: entry.error,
+		finishedAt: entry.finishedAt,
+		metrics: {
+			toolCalls: entry.toolCalls,
+			inputTokens: entry.inputTokens,
+			outputTokens: entry.outputTokens,
+			totalCost: entry.totalCost,
+			currency: entry.currency,
+			contextTokens: entry.contextTokens,
+			contextWindow: entry.contextWindow,
+		},
+	})
+}
+
+function applyProgress(config: TaskConfig, entry: SubagentStatusItem, update: SubagentProgressUpdate): void {
+	if (update.status === "running") entry.status = "running"
+	if (update.latestToolCall) entry.latestToolCall = update.latestToolCall
+	if (update.stats) applyStats(entry, update.stats)
+	if (update.result) entry.result = update.result
+	if (update.error) entry.error = update.error
+	updateActivityFromEntry(config, entry)
+}
+
+function createSubagentActivity(
+	config: TaskConfig,
+	entry: SubagentStatusItem,
+	executionMode: "foreground" | "background",
+	cancel: () => Promise<void>,
+	parentActivityId?: string,
+): void {
+	if (!entry.jobId) return
+	config.activityStore?.create({
+		activityId: entry.jobId,
+		kind: "subagent",
+		executionMode,
+		title: entry.subagentName || entry.task || `Subagent ${entry.index}`,
+		detail: entry.prompt,
+		parentActivityId,
+		cancel,
+	})
+}
+
 /**
  * Build a status payload from current entries.
  * @param kind Single or batch status kind.
@@ -351,6 +399,7 @@ export class UseSubagentToolHandler implements IFullyManagedTool {
 			...emptyStats(),
 		}
 		if (request.options.background) {
+			const runner = new SubagentRunner(config, request.subagentName, resolvedSubagent.config)
 			const job = getSubagentJobManager(config).startJob({
 				subagentName: request.subagentName,
 				task: request.task,
@@ -358,16 +407,18 @@ export class UseSubagentToolHandler implements IFullyManagedTool {
 				timeoutSeconds: request.options.timeoutSeconds,
 				runner: () =>
 					runSubagent({
-						runner: new SubagentRunner(config, request.subagentName, resolvedSubagent.config),
+						runner,
 						prompt: request.prompt,
 						timeoutSeconds: request.options.timeoutSeconds,
-						onProgress: () => undefined,
+						onProgress: (update) => applyProgress(config, entry, update),
 					}),
 				onStatusChange: async (jobRecord) => {
 					entry.status = jobRecord.status
 					entry.result = jobRecord.result
 					entry.error = jobRecord.error
 					if (jobRecord.stats) applyStats(entry, jobRecord.stats)
+					entry.finishedAt = jobRecord.finishedAt
+					updateActivityFromEntry(config, entry)
 					await config.callbacks.say(
 						"subagent",
 						JSON.stringify(
@@ -385,6 +436,8 @@ export class UseSubagentToolHandler implements IFullyManagedTool {
 				},
 			})
 			entry.jobId = job.jobId
+			entry.startedAt = job.startedAt
+			createSubagentActivity(config, entry, "background", () => runner.abort())
 			await config.callbacks.say(
 				"subagent",
 				JSON.stringify(
@@ -404,6 +457,10 @@ export class UseSubagentToolHandler implements IFullyManagedTool {
 
 		config.taskState.consecutiveMistakeCount = 0
 		config.taskState.isExecutingSubagent = true
+		const foregroundRunner = new SubagentRunner(config, request.subagentName, resolvedSubagent.config)
+		entry.jobId = `subagent_fg_${block.function_id || block.ts}`
+		entry.startedAt = Date.now()
+		createSubagentActivity(config, entry, "foreground", () => foregroundRunner.abort())
 		await config.callbacks.say(
 			"subagent",
 			JSON.stringify(
@@ -420,14 +477,10 @@ export class UseSubagentToolHandler implements IFullyManagedTool {
 		let result: SubagentExecResult
 		try {
 			result = await runSubagent({
-				runner: new SubagentRunner(config, request.subagentName, resolvedSubagent.config),
+				runner: foregroundRunner,
 				prompt: request.prompt,
 				timeoutSeconds: request.options.timeoutSeconds,
-				onProgress: (update) => {
-					if (update.status === "running") entry.status = "running"
-					if (update.latestToolCall) entry.latestToolCall = update.latestToolCall
-					if (update.stats) applyStats(entry, update.stats)
-				},
+				onProgress: (update) => applyProgress(config, entry, update),
 			})
 		} finally {
 			config.taskState.isExecutingSubagent = false
@@ -435,7 +488,9 @@ export class UseSubagentToolHandler implements IFullyManagedTool {
 		entry.status = result.status
 		entry.result = result.result
 		entry.error = result.error
+		entry.finishedAt = Date.now()
 		applyStats(entry, result.stats)
+		updateActivityFromEntry(config, entry)
 		await config.callbacks.say(
 			"subagent",
 			JSON.stringify(
@@ -543,22 +598,25 @@ export class UseSubagentsToolHandler implements IFullyManagedTool {
 			...emptyStats(),
 		}))
 		if (request.options.background) {
+			const runners = request.items.map(() => new SubagentRunner(config))
 			const batch = getSubagentJobManager(config).startBatch({
 				timeoutSeconds: request.options.timeoutSeconds,
-				items: request.items.map((item) => ({
+				items: request.items.map((item, index) => ({
 					task: item.task,
 					prompt: item.prompt,
 					runner: () =>
 						runSubagent({
-							runner: new SubagentRunner(config),
+							runner: runners[index],
 							prompt: item.prompt,
 							timeoutSeconds: request.options.timeoutSeconds,
-							onProgress: () => undefined,
+							onProgress: (update) => applyProgress(config, entries[index], update),
 						}),
 				})),
 				onCreated: (batchRecord) => {
 					entries.forEach((entry, index) => {
 						entry.jobId = batchRecord.itemJobIds[index]
+						entry.startedAt = batchRecord.startedAt
+						createSubagentActivity(config, entry, "background", () => runners[index].abort(), batchRecord.batchJobId)
 					})
 				},
 				onStatusChange: async (jobRecord, batchRecord) => {
@@ -568,6 +626,8 @@ export class UseSubagentsToolHandler implements IFullyManagedTool {
 						entry.result = jobRecord.result
 						entry.error = jobRecord.error
 						if (jobRecord.stats) applyStats(entry, jobRecord.stats)
+						entry.finishedAt = jobRecord.finishedAt
+						updateActivityFromEntry(config, entry)
 					}
 					await config.callbacks.say(
 						"subagent",
@@ -602,6 +662,13 @@ export class UseSubagentsToolHandler implements IFullyManagedTool {
 			return formatResponse.toolResult(`Started background subagent batch job: ${batch.batchJobId}`)
 		}
 		config.taskState.isExecutingSubagent = true
+		const foregroundRunners = request.items.map(() => new SubagentRunner(config))
+		const foregroundBatchId = `subagent_batch_fg_${block.function_id || block.ts}`
+		entries.forEach((entry, index) => {
+			entry.jobId = `${foregroundBatchId}_${index + 1}`
+			entry.startedAt = Date.now()
+			createSubagentActivity(config, entry, "foreground", () => foregroundRunners[index].abort(), foregroundBatchId)
+		})
 		await config.callbacks.say(
 			"subagent",
 			JSON.stringify(
@@ -620,14 +687,10 @@ export class UseSubagentsToolHandler implements IFullyManagedTool {
 			results = await Promise.all(
 				request.items.map((item, index) =>
 					runSubagent({
-						runner: new SubagentRunner(config),
+						runner: foregroundRunners[index],
 						prompt: item.prompt,
 						timeoutSeconds: request.options.timeoutSeconds,
-						onProgress: (update: SubagentProgressUpdate) => {
-							const entry = entries[index]
-							if (update.latestToolCall) entry.latestToolCall = update.latestToolCall
-							if (update.stats) applyStats(entry, update.stats)
-						},
+						onProgress: (update: SubagentProgressUpdate) => applyProgress(config, entries[index], update),
 					}),
 				),
 			)
@@ -639,7 +702,9 @@ export class UseSubagentsToolHandler implements IFullyManagedTool {
 			entry.status = result.status
 			entry.result = result.result
 			entry.error = result.error
+			entry.finishedAt = Date.now()
 			applyStats(entry, result.stats)
+			updateActivityFromEntry(config, entry)
 		})
 		const finalStatus: ClineSaySubagentStatus["status"] = entries.some((entry) => entry.status === "timeout")
 			? "timeout"

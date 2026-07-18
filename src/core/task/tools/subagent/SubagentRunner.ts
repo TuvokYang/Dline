@@ -33,7 +33,7 @@ const MAX_EMPTY_ASSISTANT_RETRIES = 3
 const MAX_INITIAL_STREAM_ATTEMPTS = 3
 const INITIAL_STREAM_RETRY_BASE_DELAY_MS = 2_000
 
-export type SubagentRunStatus = "completed" | "failed"
+export type SubagentRunStatus = "completed" | "failed" | "cancelled"
 
 export interface SubagentRunResult {
 	status: SubagentRunStatus
@@ -45,7 +45,7 @@ export interface SubagentRunResult {
 interface SubagentProgressUpdate {
 	stats?: SubagentRunStats
 	latestToolCall?: string
-	status?: "running" | "completed" | "failed"
+	status?: "running" | "completed" | "failed" | "cancelled"
 	result?: string
 	error?: string
 }
@@ -535,8 +535,8 @@ export class SubagentRunner {
 					if (this.shouldAbort()) {
 						await this.abort()
 						const error = "Subagent run cancelled."
-						onProgress({ status: "failed", error, stats: { ...stats } })
-						return { status: "failed", error, stats }
+						onProgress({ status: "cancelled", error, stats: { ...stats } })
+						return { status: "cancelled", error, stats }
 					}
 				}
 
@@ -726,8 +726,8 @@ export class SubagentRunner {
 		} catch (error) {
 			if (this.shouldAbort()) {
 				const cancelledError = "Subagent run cancelled."
-				onProgress({ status: "failed", error: cancelledError, stats: { ...stats } })
-				return { status: "failed", error: cancelledError, stats }
+				onProgress({ status: "cancelled", error: cancelledError, stats: { ...stats } })
+				return { status: "cancelled", error: cancelledError, stats }
 			}
 
 			const errorText = (error as Error).message || "Subagent execution failed."

@@ -357,6 +357,26 @@ export interface CommandExecutorCallbacks {
 	addToUserMessageContent: (content: { type: string; text: string }) => void
 	/** Mark that command execution may have modified workspace files. */
 	markWorkspaceScanRequired?: () => void
+	/** Register a command in the task-local activity monitor. */
+	createCommandActivity?: (input: {
+		activityId: string
+		command: string
+		executionMode: "foreground" | "background"
+		cancel: () => void | Promise<void>
+	}) => void
+	/** Apply a lightweight activity patch without rebuilding ExtensionState. */
+	updateCommandActivity?: (
+		activityId: string,
+		patch: {
+			status?: "running" | "cancelling" | "completed" | "failed" | "timeout" | "cancelled"
+			executionMode?: "foreground" | "background"
+			latestEvent?: string
+			error?: string
+			lineCount?: number
+		},
+	) => void
+	/** Append one bounded command output delta to the activity monitor. */
+	appendCommandActivityOutput?: (activityId: string, text: string) => void
 }
 
 /**

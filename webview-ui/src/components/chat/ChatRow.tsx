@@ -842,14 +842,7 @@ export const ChatRowContent = memo(
 		}
 
 		if (message.ask === "use_subagents" || message.say === "use_subagents") {
-			return (
-				<SubagentStatusRow
-					isLast={isLast}
-					lastModifiedMessage={lastModifiedMessage}
-					message={message}
-					onCancelCommand={onCancelCommand}
-				/>
-			)
+			return <SubagentStatusRow isLast={isLast} lastModifiedMessage={lastModifiedMessage} message={message} />
 		}
 
 		if (message.ask === "use_mcp_server" || message.say === "use_mcp_server") {
@@ -1193,14 +1186,7 @@ export const ChatRowContent = memo(
 						// hook_output_stream messages are combined with hook_status messages, so we don't render them separately
 						return <InvisibleSpacer />
 					case "subagent":
-						return (
-							<SubagentStatusRow
-								isLast={isLast}
-								lastModifiedMessage={lastModifiedMessage}
-								message={message}
-								onCancelCommand={onCancelCommand}
-							/>
-						)
+						return <SubagentStatusRow isLast={isLast} lastModifiedMessage={lastModifiedMessage} message={message} />
 					case "command_output":
 						// command_output is merged into the command message by combineCommandSequences.
 						// Orphans that leak through are suppressed to avoid standalone empty rows.

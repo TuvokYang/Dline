@@ -26,6 +26,7 @@ import { ContextManager } from "../context/context-management/ContextManager"
 import { formatResponse } from "../prompts/responses"
 import { StateManager } from "../storage/StateManager"
 import { WorkspaceRootManager } from "../workspace"
+import type { TaskActivityStore } from "./activity/TaskActivityStore"
 import { isTurnEndingToolName } from "./assistant-message-order"
 import { isAllItemsCompleted } from "./focus-chain/file-utils"
 import { checkRepeatedToolCall, LOOP_DETECTION_SOFT_THRESHOLD, toolCallSignature } from "./loop-detection"
@@ -205,6 +206,7 @@ export class ToolExecutor {
 		private stateManager: StateManager,
 		private getMode: () => Mode,
 		private identityFactory: IdentityFactory,
+		private activityStore: TaskActivityStore,
 
 		// Configuration & Settings
 
@@ -339,6 +341,7 @@ export class ToolExecutor {
 			},
 			coordinator: this.coordinator,
 			identityFactory: this.identityFactory,
+			activityStore: this.activityStore,
 			controllerContext: (this as any)._controllerContext,
 			subagentJobManager: this.subagentJobManager,
 		}

@@ -48,6 +48,7 @@ import {
 	getSavedClineMessages,
 } from "@core/storage/disk"
 import type { FrozenSystemPromptCache, SystemPromptRefreshReason } from "@core/storage/task-context-types"
+import { TaskActivityStore } from "@core/task/activity/TaskActivityStore"
 import { ensureApiMessages, ensureUserContent } from "@core/task/api-context"
 import { showContextUsage } from "@core/task/environment-context"
 import { type ModeCompactResult, ModeSwitchCompaction } from "@core/task/ModeSwitchCompaction"
@@ -321,6 +322,7 @@ export class Task {
 	private clineIgnoreController: ClineIgnoreController
 	private commandPermissionController: CommandPermissionController
 	private toolExecutor: ToolExecutor
+	readonly activityStore: TaskActivityStore
 	/**
 	 * Whether the task is using native tool calls.
 	 * This is used to determine how we would format response.
@@ -454,6 +456,7 @@ export class Task {
 		this.diffViewProvider = backgroundEditEnabled ? new FileEditProvider() : HostProvider.get().createDiffViewProvider()
 
 		this.taskId = taskId
+		this.activityStore = new TaskActivityStore(taskId)
 		this.taskRuntime = new TaskRuntime(
 			createTaskRuntimeState({ taskId: this.taskId }),
 			createInteractionPorts(
@@ -792,6 +795,24 @@ export class Task {
 				this.taskState.userMessageContent.push({ type: "text", text: content.text } as ClineTextContentBlock)
 			},
 			markWorkspaceScanRequired: () => this.taskFileTracker.markWorkspaceScanRequired(),
+			createCommandActivity: ({ activityId, command, executionMode, cancel }) => {
+				this.activityStore.create({
+					activityId,
+					kind: "command",
+					executionMode,
+					title: command.split(/\r?\n/, 1)[0].slice(0, 240) || "Command",
+					detail: command,
+					cancel,
+				})
+			},
+			updateCommandActivity: (activityId, patch) => {
+				const { lineCount, ...activityPatch } = patch
+				this.activityStore.update(activityId, {
+					...activityPatch,
+					metrics: lineCount === undefined ? undefined : { lineCount },
+				})
+			},
+			appendCommandActivityOutput: (activityId, text) => this.activityStore.appendOutput(activityId, text),
 		}
 
 		this.commandExecutor = new CommandExecutor(commandExecutorConfig, commandExecutorCallbacks)
@@ -845,6 +866,7 @@ export class Task {
 			this.stateManager,
 			() => this.getMode(),
 			this.identityFactory,
+			this.activityStore,
 			cwd,
 			this.taskId,
 			this.ulid,
@@ -2081,6 +2103,15 @@ export class Task {
 					Logger.error("Failed to cancel background command during task pause", error)
 				}
 			}
+			const activeActivityIds = this.activityStore
+				.list()
+				.filter((activity) => activity.status === "running")
+				.map((activity) => activity.activityId)
+			if (activeActivityIds.length > 0) {
+				await withTerminateTimeout(this.activityStore.cancel(activeActivityIds), 5_000, "cancelTaskActivities").catch(
+					(error) => Logger.error("Failed to cancel task activities during terminate", error),
+				)
+			}
 
 			// PHASE 4: Run TaskCancel hook (conditional)
 			const hooksEnabled = getHooksEnabledSafe(this.stateManager.getGlobalSettingsKey("hooksEnabled"))
@@ -2262,6 +2293,7 @@ export class Task {
 				() => {
 					if (this.FocusChainManager) this.FocusChainManager.dispose()
 				},
+				() => this.activityStore.dispose(),
 			]
 			const asyncCleanups: Array<Promise<void>> = [
 				withTerminateTimeout(this.browserSession.dispose(), 5_000, "browserSession.dispose"),

@@ -5,6 +5,15 @@ import { render, screen } from "@testing-library/react"
 import { describe, expect, it, vi } from "vitest"
 import SubagentStatusRow from "./SubagentStatusRow"
 
+vi.mock("@/context/ExtensionStateContext", () => ({
+	useExtensionState: () => ({ currentTaskItem: { id: "task-1" } }),
+}))
+
+vi.mock("./activity/useTaskActivities", () => ({
+	cancelTaskActivities: vi.fn(),
+	useTaskActivities: () => ({ activities: [], activeCount: 0, getById: () => undefined }),
+}))
+
 vi.mock("../common/MarkdownBlock", () => ({
 	default: ({ markdown }: { markdown: string }) => <div>{markdown}</div>,
 }))

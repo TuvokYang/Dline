@@ -5,7 +5,7 @@ import { combineHookSequences } from "@shared/combineHookSequences"
 import { BooleanRequest, StringRequest } from "@shared/proto/dline/common"
 import type { ModelInfo } from "@shared/proto/dline/models"
 import { resolveProfileModelInfo } from "@shared/providers/profile-model-info"
-import { useCallback, useEffect, useMemo } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import { useApiProfiles } from "@/components/settings/providers/useApiProfiles"
 import { useProviderModels } from "@/components/settings/providers/useProviderModels"
 import { useExtensionState } from "@/context/ExtensionStateContext"
@@ -14,6 +14,9 @@ import { FileServiceClient, TaskServiceClient, UiServiceClient } from "@/service
 import { InteractionHost } from "@/task-interaction/InteractionHost"
 import { buildInteractionRequest } from "@/task-interaction/types"
 import { Navbar } from "../menu/Navbar"
+import { TaskActivityPanel } from "./activity/TaskActivityPanel"
+import { TaskActivityTabs, type TaskContentTab } from "./activity/TaskActivityTabs"
+import { useTaskActivities } from "./activity/useTaskActivities"
 import AutoApproveBar from "./auto-approve-menu/AutoApproveBar"
 // Import utilities and hooks from the new structure
 import {
@@ -61,7 +64,12 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 		apiMetrics,
 		lastApiReqTotalTokens: lastApiReqTotalTokensFromState,
 		taskViewState,
+		currentTaskItem,
 	} = useExtensionState()
+	const [contentTab, setContentTab] = useState<TaskContentTab>("chat")
+	const taskId = currentTaskItem?.id
+	const { activeCount } = useTaskActivities(taskId)
+	useEffect(() => setContentTab("chat"), [taskId])
 	const isProdHostedApp = userInfo?.apiBaseUrl === "https://app.dline.bot"
 	const shouldShowQuickWins = isProdHostedApp && (!taskHistory || taskHistory.length < QUICK_WINS_HISTORY_THRESHOLD)
 
@@ -376,14 +384,21 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 					/>
 				)}
 				{task && (
-					<MessagesArea
-						chatState={chatState}
-						groupedMessages={groupedMessages}
-						messageHandlers={messageHandlers}
-						modifiedMessages={modifiedMessages}
-						scrollBehavior={scrollBehavior}
-						task={task}
-					/>
+					<>
+						<TaskActivityTabs activeCount={activeCount} onChange={setContentTab} value={contentTab} />
+						{contentTab === "chat" ? (
+							<MessagesArea
+								chatState={chatState}
+								groupedMessages={groupedMessages}
+								messageHandlers={messageHandlers}
+								modifiedMessages={modifiedMessages}
+								scrollBehavior={scrollBehavior}
+								task={task}
+							/>
+						) : taskId ? (
+							<TaskActivityPanel taskId={taskId} />
+						) : null}
+					</>
 				)}
 			</div>
 			<footer className="bg-(--vscode-sidebar-background) flex flex-col gap-[0.375rem] mt-3" style={{ gridRow: "2" }}>

@@ -408,6 +408,10 @@ export class StandaloneTerminalManager implements ITerminalManager {
 		process: TerminalProcessResultPromise,
 		command: string,
 		existingOutput: string[] = [],
+		callbacks?: {
+			onOutputLine?: (line: string) => void
+			onTimeout?: () => void
+		},
 	): BackgroundCommand {
 		const id = `background-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
 		// Use ClineTempManager for proper temp file management and cleanup
@@ -437,12 +441,14 @@ export class StandaloneTerminalManager implements ITerminalManager {
 		process.on("line", (line: string) => {
 			backgroundCommand.lineCount++
 			logStream.write(`${line}\n`)
+			callbacks?.onOutputLine?.(line)
 		})
 
 		// Set up 10-minute hard timeout to prevent zombie processes
 		const timeoutId = setTimeout(() => {
 			if (backgroundCommand.status === "running") {
 				backgroundCommand.status = "timed_out"
+				callbacks?.onTimeout?.()
 				logStream.write("\n[TIMEOUT] Process killed after 10 minutes\n")
 				logStream.end()
 
