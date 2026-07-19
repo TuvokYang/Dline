@@ -8,12 +8,12 @@ import { ClineIgnoreController } from "@core/ignore/ClineIgnoreController"
 import { CommandPermissionController } from "@core/permissions"
 import { TaskFileTracker } from "@integrations/checkpoints/TaskFileTracker"
 import { DiffViewProvider } from "@integrations/editor/DiffViewProvider"
-import type { CommandExecutionOptions } from "@integrations/terminal"
+import type { CommandExecutionOptions, CommandExecutionOutcome } from "@integrations/terminal"
 import { BrowserSession } from "@services/browser/BrowserSession"
 import { UrlContentFetcher } from "@services/browser/UrlContentFetcher"
 import { McpHub } from "@services/mcp/McpHub"
 import { DEFAULT_API_PROVIDER } from "@shared/api"
-import { ClineAsk, ClineSay } from "@shared/ExtensionMessage"
+import { ClineAsk, ClineSay, type CommandStatus } from "@shared/ExtensionMessage"
 import { ClineContent, type ClineToolResponseContent } from "@shared/messages/content"
 import { Logger } from "@shared/services/Logger"
 import type { Mode } from "@shared/storage/types"
@@ -250,7 +250,7 @@ export class ToolExecutor {
 			command: string,
 			timeoutSeconds: number | undefined,
 			options?: CommandExecutionOptions,
-		) => Promise<[boolean, any]>,
+		) => Promise<CommandExecutionOutcome>,
 		private cancelRunningCommandTool: () => Promise<boolean>,
 		private doesLatestTaskCompletionHaveNewChanges: () => Promise<boolean>,
 		private updateFCListFromToolResponse: (taskProgress: string | undefined) => Promise<void>,
@@ -268,7 +268,7 @@ export class ToolExecutor {
 		) => Promise<{ cancel?: boolean; wasCancelled?: boolean; contextModification?: string; errorMessage?: string }>,
 		private updateClineMessage: (
 			index: number,
-			updates: { text?: string; exitCode?: number; commandStatus?: "pending" | "running" | "completed" | "skipped" },
+			updates: { text?: string; exitCode?: number; commandStatus?: CommandStatus },
 		) => Promise<void>,
 	) {
 		this.autoApprover = new AutoApprove(this.stateManager)

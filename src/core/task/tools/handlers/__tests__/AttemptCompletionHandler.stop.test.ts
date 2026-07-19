@@ -1,4 +1,5 @@
 import { strict as assert } from "node:assert"
+import type { CommandExecutionOutcome } from "@integrations/terminal"
 import { ClineDefaultTool } from "@shared/tools"
 import { describe, it, vi } from "vitest"
 import type { ToolUse } from "../../../../assistant-message"
@@ -14,6 +15,13 @@ import { AttemptCompletionHandler } from "../AttemptCompletionHandler"
 function createConfig(
 	taskState: TaskState,
 	outcome: { actionId: "reply" | "start_new_task"; text?: string } = { actionId: "start_new_task" },
+	commandResult: CommandExecutionOutcome = {
+		userRejected: false,
+		result: "",
+		completed: true,
+		exitCode: 0,
+		signal: null,
+	},
 ): TaskConfig {
 	const clineMessages: Array<{ type: "say"; say: string; text?: string; ts: number }> = []
 	return {
@@ -75,7 +83,7 @@ function createConfig(
 			saveCheckpoint: vi.fn().mockResolvedValue(undefined),
 			doesLatestTaskCompletionHaveNewChanges: vi.fn().mockResolvedValue(false),
 			updateFCListFromToolResponse: vi.fn().mockResolvedValue(undefined),
-			executeCommandTool: vi.fn().mockResolvedValue([false, ""]),
+			executeCommandTool: vi.fn().mockResolvedValue(commandResult),
 			runUserPromptSubmitHook: vi.fn().mockResolvedValue({}),
 		} as unknown as TaskConfig["callbacks"],
 	} as unknown as TaskConfig
@@ -85,12 +93,12 @@ function createConfig(
  * Create an attempt_completion tool block for handler execution.
  * @returns Complete attempt_completion tool block.
  */
-function createBlock(): ToolUse {
+function createBlock(command?: string): ToolUse {
 	return {
 		type: "tool_use",
 		function_id: "completion-function-1",
 		name: ClineDefaultTool.ATTEMPT,
-		params: { result: "done" },
+		params: { result: "done", ...(command ? { command } : {}) },
 		partial: false,
 		ts: 123,
 		dline_tid: "completion-1",
@@ -106,6 +114,27 @@ describe("AttemptCompletionHandler stop behavior", () => {
 		const result = await handler.execute(config, createBlock())
 
 		assert.equal(result, "[attempt_completion] Result: Done")
+	})
+
+	it("does not complete the task when its approved command fails", async () => {
+		const taskState = new TaskState()
+		const config = createConfig(
+			taskState,
+			{ actionId: "start_new_task" },
+			{
+				userRejected: false,
+				result: "Command failed with exit code 2.",
+				completed: true,
+				exitCode: 2,
+				signal: null,
+			},
+		)
+		const handler = new AttemptCompletionHandler()
+
+		const result = await handler.execute(config, createBlock("false"))
+
+		assert.equal(vi.mocked(config.interactions.complete).mock.calls.length, 0)
+		assert.match(String(result), /Command failed with exit code 2/)
 	})
 
 	it("returns completion feedback when the user replies", async () => {

@@ -93,6 +93,11 @@ declare module "vscode" {
 			thisArgs?: any,
 			disposables?: vscode.Disposable[],
 		) => vscode.Disposable
+		onDidEndTerminalShellExecution?: (
+			listener: (e: { terminal: vscode.Terminal; exitCode: number | undefined }) => any,
+			thisArgs?: any,
+			disposables?: vscode.Disposable[],
+		) => vscode.Disposable
 	}
 }
 
@@ -117,6 +122,17 @@ export class VscodeTerminalManager implements ITerminalManager {
 		}
 		if (disposable) {
 			this.disposables.push(disposable)
+		}
+
+		try {
+			const completionDisposable = (vscode.window as vscode.Window).onDidEndTerminalShellExecution?.((event) => {
+				const terminalInfo = this.findTerminalInfoByTerminal(event.terminal)
+				if (!terminalInfo) return
+				this.processes.get(terminalInfo.id)?.setCompletionDetails({ exitCode: event.exitCode })
+			})
+			if (completionDisposable) this.disposables.push(completionDisposable)
+		} catch (error) {
+			Logger.error("Error setting up onDidEndTerminalShellExecution", error)
 		}
 
 		// Add a listener for terminal state changes to detect CWD updates

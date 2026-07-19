@@ -38,6 +38,10 @@ export type Platform = "aix" | "darwin" | "freebsd" | "linux" | "openbsd" | "sun
 export const DEFAULT_PLATFORM = "unknown"
 
 export const COMMAND_CANCEL_TOKEN = "__cline_command_cancel__"
+
+/** Canonical lifecycle status for a command timeline message. */
+export type CommandStatus = "pending" | "running" | "completed" | "failed" | "skipped"
+
 export interface ExtensionState {
 	/** Monotonic revision used to reject stale asynchronous state snapshots. */
 	stateRevision: number
@@ -181,7 +185,7 @@ export interface ClineMessage {
 	images?: string[]
 	files?: string[]
 	partial?: boolean
-	commandStatus?: "pending" | "running" | "completed" | "skipped"
+	commandStatus?: CommandStatus
 	/** ts of the associated command message (set on command_output messages) */
 	commandTs?: number
 	exitCode?: number

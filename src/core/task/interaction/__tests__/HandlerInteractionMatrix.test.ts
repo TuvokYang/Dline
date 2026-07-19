@@ -2,6 +2,7 @@ import type { ToolUse } from "@core/assistant-message"
 import { ClineDefaultTool } from "@shared/tools"
 import { describe, expect, it, vi } from "vitest"
 import { TaskState } from "../../TaskState"
+import { ExecuteCommandToolHandler } from "../../tools/handlers/ExecuteCommandToolHandler"
 import { FocusChainHandler } from "../../tools/handlers/FocusChainHandler"
 import { QnaRespondHandler } from "../../tools/handlers/QnaRespondHandler"
 import { SpawnTaskHandler } from "../../tools/handlers/SpawnTaskHandler"
@@ -10,6 +11,7 @@ import type { TaskConfig } from "../../tools/types/TaskConfig"
 
 vi.mock("@core/prompts/i18n", () => ({
 	getPrompt: vi.fn(() => "prompt"),
+	renderPrompt: vi.fn(() => "prompt"),
 }))
 
 vi.mock("@core/prompts/responses", () => ({
@@ -18,6 +20,15 @@ vi.mock("@core/prompts/responses", () => ({
 		toolDenied: vi.fn(() => "denied"),
 		toolError: vi.fn((text: string) => text),
 	},
+}))
+
+vi.mock("@integrations/notifications", () => ({
+	showApprovalNotification: vi.fn(async () => undefined),
+	showSystemNotification: vi.fn(),
+}))
+
+vi.mock("../../tools/utils/ToolHookUtils", () => ({
+	ToolHookUtils: { runPreToolUseIfEnabled: vi.fn(async () => undefined) },
 }))
 
 /** Create one stable tool-use block. */
@@ -99,6 +110,42 @@ describe("handler interaction matrix", () => {
 			block(ClineDefaultTool.SPAWN_TASK, { task: "Child", context: "Context" }),
 		)
 		expect(taskConfig.interactions.open).toHaveBeenCalledWith(expect.objectContaining({ kind: "spawn_task_approval" }))
+	})
+
+	it("opens manual command approval as command_approval without legacy ask", async () => {
+		const taskConfig = config({ actionId: "approve" })
+		Object.assign(taskConfig, {
+			api: { getModel: vi.fn(() => ({ id: "test-model" })) },
+			services: {
+				stateManager: {
+					getApiConfiguration: vi.fn(() => ({})),
+					getGlobalSettingsKey: vi.fn(() => "act"),
+				},
+				commandPermissionController: { validateCommand: vi.fn(() => ({ allowed: true })) },
+				clineIgnoreController: { validateCommand: vi.fn(() => undefined) },
+			},
+			autoApprover: { shouldAutoApproveTool: vi.fn(() => [false, false]) },
+			autoApprovalSettings: { enableNotifications: false },
+			isMultiRootEnabled: false,
+		})
+		taskConfig.callbacks.ask = vi.fn(async () => ({ response: "yesButtonClicked" as const }))
+		taskConfig.callbacks.executeCommandTool = vi.fn(async () => ({
+			userRejected: false,
+			result: "ok",
+			completed: true,
+			exitCode: 0,
+			signal: null,
+		}))
+
+		await new ExecuteCommandToolHandler().execute(
+			taskConfig,
+			block(ClineDefaultTool.BASH, { command: "echo ok", requires_approval: "true" }),
+		)
+
+		expect(taskConfig.interactions.open).toHaveBeenCalledWith(
+			expect.objectContaining({ kind: "command_approval", presentation: "echo ok" }),
+		)
+		expect(taskConfig.callbacks.ask).not.toHaveBeenCalled()
 	})
 
 	it("rejects interaction opening without canonical dline identity", async () => {

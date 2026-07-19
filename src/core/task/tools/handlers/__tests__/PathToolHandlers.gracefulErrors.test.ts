@@ -46,7 +46,9 @@ function createConfig() {
 		clearActiveHookExecution: vi.fn().mockResolvedValue(undefined),
 		getActiveHookExecution: vi.fn().mockResolvedValue(undefined),
 		runUserPromptSubmitHook: vi.fn().mockResolvedValue({}),
-		executeCommandTool: vi.fn().mockResolvedValue([false, "ok"]),
+		executeCommandTool: vi
+			.fn()
+			.mockResolvedValue({ userRejected: false, result: "ok", completed: true, exitCode: 0, signal: null }),
 		cancelRunningCommandTool: vi.fn().mockResolvedValue(false),
 		doesLatestTaskCompletionHaveNewChanges: vi.fn().mockResolvedValue(false),
 		updateFCListFromToolResponse: vi.fn().mockResolvedValue(undefined),

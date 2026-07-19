@@ -74,7 +74,14 @@ import { findLast, findLastIndex } from "@shared/array"
 import type { ChatContent } from "@shared/ChatContent"
 import { combineApiRequests } from "@shared/combineApiRequests"
 import { combineCommandSequences } from "@shared/combineCommandSequences"
-import { ClineApiReqCancelReason, ClineApiReqInfo, ClineAsk, ClineMessage, ClineSay } from "@shared/ExtensionMessage"
+import {
+	ClineApiReqCancelReason,
+	ClineApiReqInfo,
+	ClineAsk,
+	ClineMessage,
+	ClineSay,
+	type CommandStatus,
+} from "@shared/ExtensionMessage"
 import { isFocusChainItem } from "@shared/focus-chain-utils"
 import { HistoryItem } from "@shared/HistoryItem"
 import { DEFAULT_LANGUAGE_SETTINGS, getLanguageKey, LanguageDisplay } from "@shared/Languages"
@@ -101,6 +108,7 @@ import { HostProvider } from "@/hosts/host-provider"
 import { FileEditProvider } from "@/integrations/editor/FileEditProvider"
 import {
 	type CommandExecutionOptions,
+	type CommandExecutionOutcome,
 	CommandExecutor,
 	CommandExecutorCallbacks,
 	FullCommandExecutorConfig,
@@ -480,7 +488,9 @@ export class Task {
 					}
 					await this.toolExecutor.executeTool(block)
 				},
-				async () => unavailableRuntimePort("appendSay"),
+				async (effect) => {
+					await this.taskController.say(effect.taskSay, effect.presentation, effect.images, effect.files)
+				},
 				async (effect) => ({
 					uiMessageTs: await this.taskController.channel.presentAsk(
 						effect.taskAsk as ClineAsk,
@@ -780,7 +790,7 @@ export class Task {
 				this.controller.updateBackgroundCommandState(isRunning, this.taskId),
 			updateClineMessage: async (
 				index: number,
-				updates: { text?: string; exitCode?: number; commandStatus?: "pending" | "running" | "completed" | "skipped" },
+				updates: { text?: string; exitCode?: number; commandStatus?: CommandStatus },
 			) => {
 				await this.messageStateHandler.updateClineMessage(index, updates)
 				// Notify frontend so the sliding window reflects updated fields (e.g. commandStatus, exitCode)
@@ -2328,7 +2338,7 @@ export class Task {
 		command: string,
 		timeoutSeconds: number | undefined,
 		options?: CommandExecutionOptions,
-	): Promise<[boolean, ClineToolResponseContent]> {
+	): Promise<CommandExecutionOutcome> {
 		return this.commandExecutor.execute(command, timeoutSeconds, options)
 	}
 

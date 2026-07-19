@@ -170,6 +170,7 @@ export const CommandOutputRow = memo(
 		isCommandExecuting = false,
 		isCommandPending = false,
 		isCommandCompleted = false,
+		isCommandFailed = false,
 		isBackgroundExec = false,
 		onCancelCommand,
 		icon,
@@ -184,6 +185,7 @@ export const CommandOutputRow = memo(
 		isCommandExecuting?: boolean
 		isCommandPending?: boolean
 		isCommandCompleted?: boolean
+		isCommandFailed?: boolean
 		isBackgroundExec?: boolean
 		isLast?: boolean
 		onCancelCommand?: () => void
@@ -195,8 +197,14 @@ export const CommandOutputRow = memo(
 		onToggleCollapsed: () => void
 	}) => {
 		const exitCode = message.exitCode
-		const colors = getStatusColor(isCommandExecuting, isCommandPending, isCommandCompleted, exitCode)
-		const statusText = getCommandStatusText(isCommandExecuting, isCommandPending, isCommandCompleted, exitCode)
+		const colors = getStatusColor(isCommandExecuting, isCommandPending, isCommandCompleted, isCommandFailed, exitCode)
+		const statusText = getCommandStatusText(
+			isCommandExecuting,
+			isCommandPending,
+			isCommandCompleted,
+			isCommandFailed,
+			exitCode,
+		)
 		const isActive = isCommandExecuting || isCommandPending
 
 		const splitMessage = (text: string) => {
@@ -335,9 +343,16 @@ const CommandStatusMap = {
 	skipped: "Skipped",
 }
 
-function getCommandStatusText(isExecuting: boolean, isPending: boolean, isCompleted: boolean, exitCode?: number | null): string {
+function getCommandStatusText(
+	isExecuting: boolean,
+	isPending: boolean,
+	isCompleted: boolean,
+	isFailed: boolean,
+	exitCode?: number | null,
+): string {
 	if (isExecuting) return CommandStatusMap.running
 	if (isPending) return CommandStatusMap.pending
+	if (isFailed) return CommandStatusMap.failed
 	if (isCompleted) {
 		if (exitCode === 0) return CommandStatusMap.success
 		if (exitCode != null) return CommandStatusMap.failed
@@ -350,10 +365,12 @@ function getStatusColor(
 	isExecuting: boolean,
 	isPending: boolean,
 	isCompleted: boolean,
+	isFailed: boolean,
 	exitCode?: number | null,
 ): { dot: string; text: string } {
 	if (isExecuting) return { dot: "bg-info animate-pulse", text: "text-info" }
 	if (isPending) return { dot: "bg-editor-warning-foreground", text: "text-editor-warning-foreground" }
+	if (isFailed) return { dot: "bg-error", text: "text-error" }
 	if (isCompleted) {
 		if (exitCode === 0) return { dot: "bg-success", text: "text-success" }
 		if (exitCode != null) return { dot: "bg-error", text: "text-error" }

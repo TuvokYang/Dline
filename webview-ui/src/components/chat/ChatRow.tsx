@@ -257,6 +257,7 @@ export const ChatRowContent = memo(
 		const isCommandExecuting = isCommandMessage && message.commandStatus === "running"
 		const isCommandPending = isCommandMessage && message.commandStatus === "pending"
 		const isCommandSkipped = isCommandMessage && message.commandStatus === "skipped"
+		const isCommandFailed = isCommandMessage && message.commandStatus === "failed"
 		const isCommandCompleted =
 			isCommandMessage &&
 			(message.commandStatus === "completed" || message.commandStatus === undefined) &&
@@ -829,6 +830,7 @@ export const ChatRowContent = memo(
 					isCollapsed={isCommandCollapsed}
 					isCommandCompleted={isCommandCompleted}
 					isCommandExecuting={isCommandExecuting}
+					isCommandFailed={isCommandFailed}
 					isCommandPending={isCommandPending}
 					isLast={isLast}
 					isOutputFullyExpanded={isOutputFullyExpanded}

@@ -29,4 +29,11 @@ describe("CommandOutputRow cancellation", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Cancel" }))
 		expect(onCancelCommand).toHaveBeenCalledOnce()
 	})
+
+	it("shows Failed instead of Skipped for a failed command", () => {
+		render(<CommandOutputRow {...baseProps} isCollapsed={false} isCommandExecuting={false} isCommandFailed={true} />)
+
+		expect(screen.getByText("Failed")).toBeInTheDocument()
+		expect(screen.queryByText("Skipped")).not.toBeInTheDocument()
+	})
 })

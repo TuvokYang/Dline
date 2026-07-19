@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { EventEmitter } from "events"
-import { describe, it } from "vitest"
+import { describe, it, vi } from "vitest"
 import { orchestrateCommandExecution } from "./CommandOrchestrator"
 import type {
 	CommandExecutorCallbacks,
@@ -60,13 +60,15 @@ class FakeTerminalProcess extends EventEmitter<TerminalProcessEvents> implements
 	}
 }
 
-function createCallbacks(): CommandExecutorCallbacks {
+function createCallbacks(messages: Array<Record<string, unknown>> = []): CommandExecutorCallbacks {
 	return {
 		say: async () => undefined,
 		ask: async () => ({ response: "messageResponse" }),
 		updateBackgroundCommandState: () => {},
-		updateClineMessage: async () => {},
-		getClineMessages: () => [],
+		updateClineMessage: async (index, updates) => {
+			Object.assign(messages[index], updates)
+		},
+		getClineMessages: () => messages,
 		addToUserMessageContent: () => {},
 	}
 }
@@ -93,6 +95,67 @@ describe("CommandOrchestrator exit status messaging", () => {
 		assert.equal(result.completed, true)
 		assert.equal(result.exitCode, 2)
 		assert.match(result.result as string, /^Command failed with exit code 2\./)
+	})
+
+	it("marks an approved command with a non-zero exit code as failed", async () => {
+		const process = new FakeTerminalProcess()
+		const messages: Array<Record<string, unknown>> = [{ ask: "command", ts: 100, commandStatus: "pending" }]
+		const orchestrationPromise = orchestrateCommandExecution(
+			process.asResultPromise(),
+			createTerminalManager(),
+			createCallbacks(messages),
+			{ command: "false", commandTs: 100 },
+		)
+		await vi.waitFor(() => {
+			assert.equal(messages[0]?.commandStatus, "running")
+		})
+
+		process.complete({ exitCode: 2, signal: null })
+		await orchestrationPromise
+		await vi.waitFor(() => {
+			assert.notEqual(messages[0]?.commandStatus, "running")
+		})
+
+		assert.equal(messages[0]?.commandStatus, "failed")
+		assert.equal(messages[0]?.exitCode, 2)
+	})
+
+	it("does not report success when completion has no exit code", async () => {
+		const process = new FakeTerminalProcess()
+		const messages: Array<Record<string, unknown>> = [{ ask: "command", ts: 200, commandStatus: "pending" }]
+		const orchestrationPromise = orchestrateCommandExecution(
+			process.asResultPromise(),
+			createTerminalManager(),
+			createCallbacks(messages),
+			{ command: "unknown", commandTs: 200 },
+		)
+		await vi.waitFor(() => {
+			assert.equal(messages[0]?.commandStatus, "running")
+		})
+
+		process.complete({ exitCode: undefined, signal: null })
+		const result = await orchestrationPromise
+		await vi.waitFor(() => {
+			assert.equal(messages[0]?.commandStatus, "failed")
+		})
+
+		assert.match(result.result as string, /could not be verified/)
+	})
+
+	it("reports termination signals even when an exit code is present", async () => {
+		const process = new FakeTerminalProcess()
+		const orchestrationPromise = orchestrateCommandExecution(
+			process.asResultPromise(),
+			createTerminalManager(),
+			createCallbacks(),
+			{ command: "interrupted" },
+		)
+
+		process.complete({ exitCode: 0, signal: "SIGINT" })
+		const result: OrchestrationResult = await orchestrationPromise
+
+		assert.equal(result.signal, "SIGINT")
+		assert.match(result.result as string, /^Command terminated by signal SIGINT\./)
 	})
 
 	it("reports successful command completion with explicit exit code", async () => {

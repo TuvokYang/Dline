@@ -39,11 +39,17 @@ export class VscodeTerminalProcess extends EventEmitter<TerminalProcessEvents> i
 	private exitCode: number | null | undefined = undefined
 	private signal: NodeJS.Signals | null = null
 	private terminal: vscode.Terminal | null = null
+	private completionEmitted = false
+	private completionDetailsReceived = false
+	private completionDetailsWaiter: (() => void) | null = null
 
 	async run(terminal: vscode.Terminal, command: string) {
+		this.completionDetailsWaiter?.()
 		this.terminal = terminal
 		this.exitCode = undefined
 		this.signal = null
+		this.completionEmitted = false
+		this.completionDetailsReceived = false
 
 		// When command does not produce any output, we can assume the shell integration API failed and as a fallback return the current terminal contents
 		const returnCurrentTerminalContents = async () => {
@@ -244,8 +250,10 @@ export class VscodeTerminalProcess extends EventEmitter<TerminalProcessEvents> i
 			}
 			this.isHot = false
 
-			this.emit("completed", this.getCompletionDetails())
-			this.emit("continue")
+			// Give the authoritative terminal-end event a bounded opportunity to
+			// publish its exit code before finalizing the command lifecycle.
+			await this.waitForCompletionDetails()
+			this.complete()
 		} else {
 			// no shell integration detected, we'll fallback to running the command and capturing the terminal's output after some time
 			telemetryService.captureTerminalOutputFailure(TerminalOutputFailureReason.NO_SHELL_INTEGRATION, "vscode")
@@ -263,10 +271,9 @@ export class VscodeTerminalProcess extends EventEmitter<TerminalProcessEvents> i
 			} else {
 				telemetryService.captureTerminalExecution(false, "vscode", "none")
 			}
-			// For terminals without shell integration, we can't know when the command completes
-			// So we'll just emit the continue event after a delay
-			this.emit("completed", this.getCompletionDetails())
-			this.emit("continue")
+			// Without shell integration there is no authoritative exit code. Preserve
+			// lifecycle compatibility while leaving success unverified.
+			this.complete()
 			this.emit("no_shell_integration")
 			// setTimeout(() => {
 			// 	Logger.log(`Emitting continue after delay for terminal`)
@@ -299,6 +306,43 @@ export class VscodeTerminalProcess extends EventEmitter<TerminalProcessEvents> i
 			this.buffer = ""
 			this.lastRetrievedIndex = this.fullOutput.length
 		}
+	}
+
+	/** Record authoritative completion metadata from VS Code's terminal lifecycle event. */
+	setCompletionDetails(details: TerminalCompletionDetails): void {
+		if (details.exitCode !== undefined) this.exitCode = details.exitCode
+		if (details.signal !== undefined) this.signal = details.signal
+		this.completionDetailsReceived = true
+		this.completionDetailsWaiter?.()
+	}
+
+	private waitForCompletionDetails(timeoutMs = 100): Promise<void> {
+		if (this.completionDetailsReceived || this.exitCode !== undefined || this.signal !== null) {
+			return Promise.resolve()
+		}
+
+		return new Promise((resolve) => {
+			let settled = false
+			const finish = () => {
+				if (settled) return
+				settled = true
+				clearTimeout(timeout)
+				if (this.completionDetailsWaiter === finish) {
+					this.completionDetailsWaiter = null
+				}
+				resolve()
+			}
+			const timeout = setTimeout(finish, timeoutMs)
+			this.completionDetailsWaiter = finish
+		})
+	}
+
+	/** Finalize this command once while preserving the latest completion metadata. */
+	private complete(): void {
+		if (this.completionEmitted) return
+		this.completionEmitted = true
+		this.emit("completed", this.getCompletionDetails())
+		this.emit("continue")
 	}
 
 	continue() {

@@ -1,3 +1,4 @@
+import type { ClineSay } from "@shared/ExtensionMessage"
 import type { InteractionDraft } from "../interaction/InteractionResponse"
 
 /** Effect categories emitted by the task reducer. */
@@ -48,7 +49,10 @@ export interface ExecuteToolEffect {
 export interface AppendSayEffect {
 	id: string
 	type: "APPEND_SAY"
+	taskSay: ClineSay
 	presentation: string
+	images?: string[]
+	files?: string[]
 }
 
 /** Append an interaction presentation anchor. */

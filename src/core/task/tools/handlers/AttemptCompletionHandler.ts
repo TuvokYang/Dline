@@ -20,6 +20,7 @@ import { interactionId, interactionTurnId, type TaskConfig } from "../types/Task
 import type { StronglyTypedUIHelpers } from "../types/UIHelpers"
 import { getTaskCompletionTelemetry } from "../utils"
 import { ToolResultUtils } from "../utils/ToolResultUtils"
+import { sayFeedbackOnce } from "../utils/UserFeedbackUtils"
 
 const TASK_PREVIEW_MAX_CHARS = 8000
 
@@ -166,9 +167,28 @@ export class AttemptCompletionHandler implements IToolHandler, IPartialBlockHand
 					config.autoApprovalSettings.enableNotifications,
 				)
 
-				// Command approval is independent UI — do not bind to block.ts.
-				const didApprove = await ToolResultUtils.askApprovalAndPushFeedback("command", command, config)
-				if (!didApprove) {
+				const approval = await config.interactions.open({
+					turnId: interactionTurnId(block),
+					interactionId: interactionId(block),
+					kind: "command_approval",
+					presentation: command,
+				})
+				const text = approval.draft?.text
+				const images = approval.draft?.images
+				const files = approval.draft?.files
+				if (text || images?.length || files?.length) {
+					const fileContent = files?.length ? await processFilesIntoText(files) : ""
+					ToolResultUtils.pushAdditionalToolFeedback(config.taskState.userMessageContent, text, images, fileContent)
+					await sayFeedbackOnce(
+						config,
+						approval.actionId === "approve" ? "yesButtonClicked" : "noButtonClicked",
+						text,
+						images,
+						files,
+					)
+				}
+				if (approval.actionId !== "approve") {
+					config.taskController.rejectActiveBlock()
 					return formatResponse.toolDenied()
 				}
 			}
@@ -187,16 +207,19 @@ export class AttemptCompletionHandler implements IToolHandler, IPartialBlockHand
 			}
 
 			// Execute the command
-			const [userRejected, execCommandResult] = await config.callbacks.executeCommandTool(command!, undefined, {
+			const commandOutcome = await config.callbacks.executeCommandTool(command, undefined, {
 				commandTs: cmdMessageTs,
 			}) // no timeout for attempt_completion command
 
-			if (userRejected) {
+			if (commandOutcome.userRejected) {
 				config.taskController.rejectActiveBlock()
-				return execCommandResult
+				return commandOutcome.result
 			}
-			// user didn't reject, but the command may have output
-			commandResult = execCommandResult
+			const commandSucceeded = commandOutcome.completed && commandOutcome.exitCode === 0 && commandOutcome.signal == null
+			if (!commandSucceeded) {
+				return commandOutcome.result
+			}
+			commandResult = commandOutcome.result
 		} else {
 			// Send the complete completion_result message (partial was already removed above)
 			const completionMessageTs = await config.callbacks.say(

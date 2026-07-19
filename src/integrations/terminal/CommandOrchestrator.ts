@@ -126,7 +126,7 @@ export async function orchestrateCommandExecution(
 		await callbacks.updateClineMessage(initialCmdIndex, { commandStatus: "running" })
 	}
 
-	const clearCommandState = async (exitCode?: number | null) => {
+	const clearCommandState = async (details?: TerminalCompletionDetails, didError = false) => {
 		callbacks.updateBackgroundCommandState(false)
 
 		// Do not overwrite skipped or cancelled command state
@@ -144,9 +144,15 @@ export async function orchestrateCommandExecution(
 					return
 				}
 				try {
+					const exitCode = details?.exitCode
+					const failed =
+						didError ||
+						typeof exitCode !== "number" ||
+						Boolean(details?.signal) ||
+						(typeof exitCode === "number" && exitCode !== 0)
 					await callbacks.updateClineMessage(idx, {
-						commandStatus: "completed",
-						exitCode: exitCode ?? undefined,
+						commandStatus: failed ? "failed" : "completed",
+						exitCode: exitCode ?? (didError ? -1 : undefined),
 					})
 				} catch (e) {
 					Logger.error(`[clearCommandState] updateClineMessage failed: ${e}`)
@@ -156,13 +162,13 @@ export async function orchestrateCommandExecution(
 	}
 
 	process.once("completed", (details) => {
-		clearCommandState(details?.exitCode)
+		void clearCommandState(details)
 	})
 	process.once("error", () => {
-		clearCommandState(-1) // mark as failed
+		void clearCommandState(undefined, true)
 	})
 	process.catch(() => {
-		clearCommandState(-1)
+		void clearCommandState(undefined, true)
 	})
 
 	let userFeedback: { text?: string; images?: string[]; files?: string[] } | undefined
@@ -756,13 +762,13 @@ export async function orchestrateCommandExecution(
 		const signal = completionDetails?.signal
 		const hasExitCode = typeof exitCode === "number"
 		const logFileMsg = largeOutputLogPath ? `\nFull output saved to: ${largeOutputLogPath}` : ""
-		const statusMessage = hasExitCode
-			? exitCode === 0
-				? "Command executed successfully (exit code 0)."
-				: `Command failed with exit code ${exitCode}.`
-			: signal
-				? `Command terminated by signal ${signal}.`
-				: "Command executed."
+		const statusMessage = signal
+			? `Command terminated by signal ${signal}.`
+			: hasExitCode
+				? exitCode === 0
+					? "Command executed successfully (exit code 0)."
+					: `Command failed with exit code ${exitCode}.`
+				: "Command completion could not be verified because no exit code was reported."
 
 		return {
 			userRejected: false,

@@ -1,6 +1,7 @@
 import { deepSeekModels } from "@core/api/providers/models/deepseek"
 import { ApiProfile } from "@shared/proto/dline/profile"
 import { BaseProviderConfig } from "@shared/proto/dline/provider/common"
+import { OpenAiProviderConfig } from "@shared/proto/dline/provider/openai"
 import { expect } from "chai"
 import { describe, it } from "vitest"
 import { resolveProfileModelInfo } from "../profile-model-info"
@@ -21,6 +22,30 @@ describe("resolveProfileModelInfo", () => {
 		expect(result.id).to.equal("deepseek-v4-pro")
 		expect(result.capabilities?.contextWindow).to.equal(1_000_000)
 		expect(result.capabilities?.supportsPromptCache).to.equal(true)
+	})
+
+	it("uses the enabled prompt-cache product default when custom metadata omits the capability", () => {
+		const profile = ApiProfile.create({
+			provider: "openai",
+			modelId: "custom-model",
+			openai: OpenAiProviderConfig.create(),
+		})
+
+		const result = resolveProfileModelInfo(profile)
+
+		expect(result.capabilities?.supportsPromptCache).to.equal(true)
+	})
+
+	it("preserves an explicit prompt-cache opt-out", () => {
+		const profile = ApiProfile.create({
+			provider: "openai",
+			modelId: "custom-model",
+			openai: OpenAiProviderConfig.create({ capabilities: { supportsPromptCache: false } }),
+		})
+
+		const result = resolveProfileModelInfo(profile)
+
+		expect(result.capabilities?.supportsPromptCache).to.equal(false)
 	})
 
 	it("merges provider capability overrides into registry metadata", () => {

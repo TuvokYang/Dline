@@ -4,7 +4,7 @@
  * the StandaloneTerminalManager used in CLI/JetBrains environments.
  */
 
-import type { SubagentInjectionState } from "@shared/ExtensionMessage"
+import type { CommandStatus, SubagentInjectionState } from "@shared/ExtensionMessage"
 import type { ClineToolResponseContent } from "@shared/messages"
 import type { EventEmitter } from "events"
 
@@ -349,7 +349,7 @@ export interface CommandExecutorCallbacks {
 	 */
 	updateClineMessage: (
 		index: number,
-		updates: { text?: string; exitCode?: number; commandStatus?: "pending" | "running" | "completed" | "skipped" },
+		updates: { text?: string; exitCode?: number; commandStatus?: CommandStatus },
 	) => Promise<void>
 	/** Get cline messages array */
 	getClineMessages: () => Array<{ ask?: string; say?: string; text?: string }>
@@ -456,19 +456,22 @@ export interface OrchestrationOptions {
 /**
  * Result of command orchestration
  */
-export interface OrchestrationResult {
-	/** Whether the user rejected/cancelled the command */
+export interface CommandExecutionOutcome {
+	/** Whether execution was rejected or cancelled by the user. */
 	userRejected: boolean
-	/** The result content to return */
+	/** Tool result returned to the model. */
 	result: ClineToolResponseContent
-	/** Whether the command completed */
+	/** Whether the command reached a terminal completion event. */
 	completed: boolean
+	/** Process exit code when available. */
+	exitCode?: number | null
+	/** Process termination signal when available. */
+	signal?: NodeJS.Signals | null
+}
+
+export interface OrchestrationResult extends CommandExecutionOutcome {
 	/** All output lines captured */
 	outputLines: string[]
 	/** Path to log file if output was too large and written to file */
 	logFilePath?: string
-	/** Process exit code when available */
-	exitCode?: number | null
-	/** Process termination signal when available */
-	signal?: NodeJS.Signals | null
 }

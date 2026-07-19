@@ -2,6 +2,7 @@ import { resolveProvider } from "@core/api"
 import type { ToolUse } from "@core/assistant-message"
 import { formatResponse } from "@core/prompts/responses"
 import { WorkspacePathAdapter } from "@core/workspace/WorkspacePathAdapter"
+import { processFilesIntoText } from "@integrations/misc/extract-text"
 import { showApprovalNotification, showSystemNotification } from "@integrations/notifications"
 import { findLastIndex } from "@shared/array"
 import { COMMAND_REQ_APP_STRING } from "@shared/combineCommandSequences"
@@ -11,10 +12,11 @@ import { telemetryService } from "@/services/telemetry"
 import { ClineDefaultTool } from "@/shared/tools"
 import type { ToolResponse } from "../../index"
 import type { IFullyManagedTool } from "../ToolExecutorCoordinator"
-import type { TaskConfig } from "../types/TaskConfig"
+import { interactionId, interactionTurnId, type TaskConfig } from "../types/TaskConfig"
 import type { StronglyTypedUIHelpers } from "../types/UIHelpers"
 import { applyModelContentFixes } from "../utils/ModelContentProcessor"
 import { ToolResultUtils } from "../utils/ToolResultUtils"
+import { sayFeedbackOnce } from "../utils/UserFeedbackUtils"
 
 // Every terminal execution needs a bounded foreground wait so a stalled shell
 // cannot permanently block the task loop.
@@ -236,12 +238,28 @@ export class ExecuteCommandToolHandler implements IFullyManagedTool {
 				config.autoApprovalSettings.enableNotifications,
 			)
 
-			const didApprove = await ToolResultUtils.askApprovalAndPushFeedback(
-				"command",
-				`${actualCommand}${autoApproveSafe && requiresApprovalPerLLM ? COMMAND_REQ_APP_STRING : ""}`,
-				config,
-				block.ts,
-			)
+			const outcome = await config.interactions.open({
+				turnId: interactionTurnId(block),
+				interactionId: interactionId(block),
+				kind: "command_approval",
+				presentation: `${actualCommand}${autoApproveSafe && requiresApprovalPerLLM ? COMMAND_REQ_APP_STRING : ""}`,
+				existingTs: block.ts,
+			})
+			const text = outcome.draft?.text
+			const images = outcome.draft?.images
+			const files = outcome.draft?.files
+			if (text || images?.length || files?.length) {
+				const fileContent = files?.length ? await processFilesIntoText(files) : ""
+				ToolResultUtils.pushAdditionalToolFeedback(config.taskState.userMessageContent, text, images, fileContent)
+				await sayFeedbackOnce(
+					config,
+					outcome.actionId === "approve" ? "yesButtonClicked" : "noButtonClicked",
+					text,
+					images,
+					files,
+				)
+			}
+			const didApprove = outcome.actionId === "approve"
 			if (!didApprove) {
 				// Mark the command ask message as skipped so the UI shows the correct status
 				const msgs = config.messageState.clineMessages
@@ -305,7 +323,7 @@ export class ExecuteCommandToolHandler implements IFullyManagedTool {
 			finalCommand = `cd "${executionDir}" && ${actualCommand}`
 		}
 
-		const [userRejected, result] = await config.callbacks.executeCommandTool(finalCommand, timeoutSeconds, {
+		const outcome = await config.callbacks.executeCommandTool(finalCommand, timeoutSeconds, {
 			commandTs: block.ts,
 		})
 
@@ -319,14 +337,14 @@ export class ExecuteCommandToolHandler implements IFullyManagedTool {
 		// Invalidate the entire file read cache after any command execution.
 		// Bash commands can modify files in ways we can't predict (sed, npm install, git checkout, mv, etc.),
 		// so we must clear the cache to prevent stale reads.
-		if (!userRejected) {
+		if (!outcome.userRejected) {
 			config.taskState.fileReadCache.clear()
 		}
 
-		if (userRejected) {
+		if (outcome.userRejected) {
 			config.taskController.rejectActiveBlock()
 		}
 
-		return result
+		return outcome.result
 	}
 }

@@ -1,4 +1,9 @@
-import { ClineAsk as AppClineAsk, ClineMessage as AppClineMessage, ClineSay as AppClineSay } from "@shared/ExtensionMessage"
+import {
+	ClineAsk as AppClineAsk,
+	ClineMessage as AppClineMessage,
+	ClineSay as AppClineSay,
+	type CommandStatus,
+} from "@shared/ExtensionMessage"
 import { ClineAsk, ClineMessageType, ClineSay, ClineMessage as ProtoClineMessage } from "@shared/proto/dline/ui"
 
 // Helper function to convert ClineAsk string to enum
@@ -303,7 +308,7 @@ export function convertProtoToClineMessage(protoMessage: ProtoClineMessage): App
 
 	// Convert command state fields (commandStatus/exitCode/logPath)
 	if (protoMessage.commandStatus !== "") {
-		message.commandStatus = protoMessage.commandStatus as "pending" | "running" | "completed"
+		message.commandStatus = protoMessage.commandStatus as CommandStatus
 		// exitCode is meaningful when commandStatus is set (includes 0 for success)
 		message.exitCode = protoMessage.exitCode
 	}

@@ -319,12 +319,47 @@ describe("reduceTask lifecycle events", () => {
 			next: { phase: TaskPhase.RESUMING, anchor: { interactionId: undefined } },
 		})
 		expect(result.next.interaction).toBeUndefined()
-		expect(result.effects.map((effect) => effect.type)).toEqual(["POST_TASK_VIEW", "START_API", "PERSIST_SNAPSHOT"])
+		expect(result.effects.map((effect) => effect.type)).toEqual([
+			"POST_TASK_VIEW",
+			"APPEND_SAY",
+			"START_API",
+			"PERSIST_SNAPSHOT",
+		])
 		expect(result.effects[1]).toMatchObject({
+			type: "APPEND_SAY",
+			taskSay: "user_feedback",
+			presentation: "Continue",
+		})
+		expect(result.effects[2]).toMatchObject({
 			type: "START_API",
 			apiIndex: 1,
 			draft: { text: "Continue", images: [], files: [] },
 		})
+	})
+
+	it("does not append an empty timeline message when resume has no draft content", () => {
+		const result = reduceTask(
+			{
+				...stateAt(TaskPhase.PAUSED),
+				anchor: { apiIndex: 1, turnId: "resume-turn", interactionId: "resume-1" },
+				interaction: {
+					taskId: "task-1",
+					turnId: "resume-turn",
+					interactionId: "resume-1",
+					kind: "resume",
+					status: "resolving",
+					createdRevision: 1,
+					anchor: { messageTs: 100, messageType: "ask" },
+				},
+			},
+			{
+				type: "TASK_RESUME_REQUESTED",
+				interactionId: "resume-1",
+				draft: { text: "", images: [], files: [] },
+			},
+		)
+
+		expect(result.effects.map((effect) => effect.type)).toEqual(["POST_TASK_VIEW", "START_API", "PERSIST_SNAPSHOT"])
 	})
 
 	it("abandons an unfinished pre-resume turn before starting a new API turn", () => {

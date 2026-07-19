@@ -260,6 +260,28 @@ describe("TerminalProcess (Integration Tests)", () => {
 			expect(emitSpy).toHaveBeenCalledWith("completed", expect.any(Object))
 			expect(emitSpy).toHaveBeenCalledWith("continue")
 		})
+
+		it("should wait briefly for terminal-end completion details", async () => {
+			const terminal = TerminalRegistry.createTerminal().terminal
+			createdTerminals.push(terminal)
+			vi.spyOn(terminal, "shellIntegration", "get").mockReturnValue({
+				executeCommand: vi.fn().mockReturnValue({
+					read: () => createMockStream(["echo test", "test output"]),
+				}),
+			})
+
+			let completedDetails: unknown
+			process.once("completed", (details) => {
+				completedDetails = details
+			})
+
+			const runPromise = process.run(terminal, "echo test")
+			setTimeout(() => process.setCompletionDetails({ exitCode: 7 }), 25)
+			await vi.advanceTimersByTimeAsync(25)
+			await runPromise
+
+			expect(completedDetails).toEqual({ exitCode: 7, signal: null })
+		})
 	})
 
 	// Tests with controlled output

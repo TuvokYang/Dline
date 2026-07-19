@@ -88,9 +88,11 @@ export function buildEffectiveModelInfo(
 		? (mergeDefined(base.capabilities, overrides.capabilities) as ModelCapabilities)
 		: base.capabilities
 	const contextTier = selectContextTier(mergedCapabilities, overrides.enableLongContext)
-	const capabilities = contextTier
-		? ({ ...mergedCapabilities, contextWindow: contextTier.contextWindow } as ModelCapabilities)
-		: mergedCapabilities
+	const capabilities = {
+		...mergedCapabilities,
+		...(contextTier ? { contextWindow: contextTier.contextWindow } : {}),
+		supportsPromptCache: mergedCapabilities?.supportsPromptCache ?? true,
+	} as ModelCapabilities
 	const mergedPricing = overrides.pricing ? (mergeDefined(base.pricing, overrides.pricing) as ModelPricing) : base.pricing
 	const overrideTiers = overrides.pricing?.tiers ?? []
 	const selectedTiers = overrides.pricingTiersEnabled === true && overrideTiers.length > 0 ? overrideTiers : base.pricing?.tiers

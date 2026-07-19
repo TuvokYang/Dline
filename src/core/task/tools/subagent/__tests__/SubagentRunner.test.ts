@@ -140,7 +140,9 @@ function createTaskConfig(nativeToolCallEnabled: boolean, options: any = {}): Ta
 			saveCheckpoint: vi.fn().mockResolvedValue(undefined),
 			sayAndCreateMissingParamError: vi.fn().mockResolvedValue("missing"),
 			removeLastPartialMessageIfExistsWithType: vi.fn().mockResolvedValue(undefined),
-			executeCommandTool: vi.fn().mockResolvedValue([false, "ok"]),
+			executeCommandTool: vi
+				.fn()
+				.mockResolvedValue({ userRejected: false, result: "ok", completed: true, exitCode: 0, signal: null }),
 			cancelRunningCommandTool: vi.fn().mockResolvedValue(false),
 			doesLatestTaskCompletionHaveNewChanges: vi.fn().mockResolvedValue(false),
 			updateFCListFromToolResponse: vi.fn().mockResolvedValue(undefined),

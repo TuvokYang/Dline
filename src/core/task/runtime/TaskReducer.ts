@@ -762,6 +762,7 @@ function reduceResume(state: TaskRuntimeState, event: Extract<TaskEvent, { type:
 		return reject(state, event.type)
 	}
 	const revision = state.revision + 1
+	const hasVisibleDraft = Boolean(event.draft.text || event.draft.images.length > 0 || event.draft.files.length > 0)
 	const abandonedTurn = state.turn
 		? {
 				...state.turn,
@@ -780,8 +781,25 @@ function reduceResume(state: TaskRuntimeState, event: Extract<TaskEvent, { type:
 		error: null,
 		effects: [
 			{ id: effectId(revision, 1), type: "POST_TASK_VIEW" },
-			{ id: effectId(revision, 2), type: "START_API", apiIndex: state.anchor.apiIndex, draft: event.draft },
-			{ id: effectId(revision, 3), type: "PERSIST_SNAPSHOT" },
+			...(hasVisibleDraft
+				? [
+						{
+							id: effectId(revision, 2),
+							type: "APPEND_SAY" as const,
+							taskSay: "user_feedback" as const,
+							presentation: event.draft.text,
+							images: event.draft.images,
+							files: event.draft.files,
+						},
+					]
+				: []),
+			{
+				id: effectId(revision, hasVisibleDraft ? 3 : 2),
+				type: "START_API",
+				apiIndex: state.anchor.apiIndex,
+				draft: event.draft,
+			},
+			{ id: effectId(revision, hasVisibleDraft ? 4 : 3), type: "PERSIST_SNAPSHOT" },
 		],
 	})
 }

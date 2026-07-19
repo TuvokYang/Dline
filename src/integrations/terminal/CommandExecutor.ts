@@ -14,13 +14,13 @@
  */
 
 import { findLastIndex } from "@shared/array"
-import { ClineToolResponseContent } from "@shared/messages"
 import { Logger } from "@/shared/services/Logger"
 import { orchestrateCommandExecution } from "./CommandOrchestrator"
 import { StandaloneTerminalManager } from "./standalone/StandaloneTerminalManager"
 import type {
 	BackgroundCommand,
 	CommandExecutionOptions,
+	CommandExecutionOutcome,
 	CommandExecutorCallbacks,
 	CommandExecutorConfig,
 	ITerminalManager,
@@ -95,13 +95,13 @@ export class CommandExecutor {
 	 *
 	 * @param command The command to execute
 	 * @param timeoutSeconds Optional timeout in seconds
-	 * @returns [userRejected, result] tuple
+	 * @returns Structured execution outcome with completion metadata
 	 */
 	async execute(
 		command: string,
 		timeoutSeconds: number | undefined,
 		options?: CommandExecutionOptions,
-	): Promise<[boolean, ClineToolResponseContent]> {
+	): Promise<CommandExecutionOutcome> {
 		// Strip leading `cd` to workspace from command
 		const workspaceCdPrefix = `cd ${this.cwd} && `
 		if (command.startsWith(workspaceCdPrefix)) {
@@ -209,10 +209,16 @@ export class CommandExecutor {
 				result.outputLines.length > 0
 					? `\nOutput captured before cancellation:\n${manager.processOutput(result.outputLines)}`
 					: ""
-			return [true, `Command was cancelled by the user.${outputSoFar}`]
+			return {
+				userRejected: true,
+				result: `Command was cancelled by the user.${outputSoFar}`,
+				completed: false,
+				exitCode: result.exitCode,
+				signal: result.signal,
+			}
 		}
 
-		return [result.userRejected, result.result]
+		return result
 	}
 
 	/**

@@ -5,13 +5,13 @@ import type { ClineIgnoreController } from "@core/ignore/ClineIgnoreController"
 import type { CommandPermissionController } from "@core/permissions"
 import type { TaskFileTracker } from "@integrations/checkpoints/TaskFileTracker"
 import type { DiffViewProvider } from "@integrations/editor/DiffViewProvider"
-import type { CommandExecutionOptions } from "@integrations/terminal"
+import type { CommandExecutionOptions, CommandExecutionOutcome } from "@integrations/terminal"
 import type { BrowserSession } from "@services/browser/BrowserSession"
 import type { UrlContentFetcher } from "@services/browser/UrlContentFetcher"
 import type { McpHub } from "@services/mcp/McpHub"
 import type { AutoApprovalSettings } from "@shared/AutoApprovalSettings"
 import type { BrowserSettings } from "@shared/BrowserSettings"
-import type { ClineAsk, ClineSay } from "@shared/ExtensionMessage"
+import type { ClineAsk, ClineSay, CommandStatus } from "@shared/ExtensionMessage"
 import type { FocusChainSettings } from "@shared/FocusChainSettings"
 import type { ClineContent } from "@shared/messages/content"
 import type { Mode } from "@shared/storage/types"
@@ -165,7 +165,7 @@ export interface TaskCallbacks {
 		command: string,
 		timeoutSeconds: number | undefined,
 		options?: CommandExecutionOptions,
-	) => Promise<[boolean, any]>
+	) => Promise<CommandExecutionOutcome>
 	cancelRunningCommandTool?: () => Promise<boolean>
 
 	doesLatestTaskCompletionHaveNewChanges: () => Promise<boolean>
@@ -199,7 +199,7 @@ export interface TaskCallbacks {
 	/** Update a cline message at given index and notify frontend (used for command status updates) */
 	updateClineMessage: (
 		index: number,
-		updates: { text?: string; exitCode?: number; commandStatus?: "pending" | "running" | "completed" | "skipped" },
+		updates: { text?: string; exitCode?: number; commandStatus?: CommandStatus },
 	) => Promise<void>
 }
 
