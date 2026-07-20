@@ -24,6 +24,7 @@ function toProtoActivity(activity: TaskActivityRecord): ProtoTaskActivity {
 		output: activity.output,
 		result: activity.result,
 		error: activity.error,
+		logPath: activity.logPath,
 		parentActivityId: activity.parentActivityId,
 		metrics: activity.metrics
 			? ProtoTaskActivityMetrics.create({

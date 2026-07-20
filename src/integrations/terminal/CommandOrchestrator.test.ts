@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { EventEmitter } from "events"
-import { describe, it, vi } from "vitest"
+import { afterEach, describe, it, vi } from "vitest"
 import { orchestrateCommandExecution } from "./CommandOrchestrator"
 import type {
 	CommandExecutorCallbacks,
@@ -78,6 +78,111 @@ function createTerminalManager(): ITerminalManager {
 		processOutput: (outputLines: string[]) => outputLines.join("\n"),
 	} as ITerminalManager
 }
+
+afterEach(() => {
+	vi.useRealTimers()
+})
+
+describe("CommandOrchestrator background transitions", () => {
+	it("returns stable tracking metadata without retaining a foreground completion timer", async () => {
+		vi.useFakeTimers()
+		const process = new FakeTerminalProcess()
+		const onOutputLine = vi.fn()
+		const onProceedWhileRunning = vi.fn(() => ({
+			backgroundCommandId: "background-1",
+			logFilePath: "C:\\Temp\\background-1.log",
+		}))
+
+		const result = await orchestrateCommandExecution(process.asResultPromise(), createTerminalManager(), createCallbacks(), {
+			command: "long-running-command",
+			onOutputLine,
+			onProceedWhileRunning,
+			startInBackground: true,
+		})
+
+		assert.equal(result.completed, false)
+		assert.equal(result.backgroundCommandId, "background-1")
+		assert.equal(result.logFilePath, "C:\\Temp\\background-1.log")
+		assert.equal(onProceedWhileRunning.mock.calls.length, 1)
+		assert.equal(vi.getTimerCount(), 0)
+
+		process.emit("line", "background output")
+		await Promise.resolve()
+		await Promise.resolve()
+		assert.equal(onOutputLine.mock.calls.length, 0)
+	})
+
+	it("drains output queued while a timeout handoff is waiting on an in-flight flush", async () => {
+		vi.useFakeTimers()
+		const process = new FakeTerminalProcess()
+		const callbacks = createCallbacks()
+		let releaseOutputFlush!: () => void
+		let markOutputFlushStarted!: () => void
+		const outputFlushStarted = new Promise<void>((resolve) => {
+			markOutputFlushStarted = resolve
+		})
+		const blockedOutputFlush = new Promise<void>((resolve) => {
+			releaseOutputFlush = resolve
+		})
+		callbacks.say = vi.fn(async (type) => {
+			if (type === "command_output") {
+				markOutputFlushStarted()
+				await blockedOutputFlush
+			}
+			return undefined
+		})
+		const onProceedWhileRunning = vi.fn((_existingOutput: string[]) => ({
+			backgroundCommandId: "background-tail",
+			logFilePath: "C:\\Temp\\background-tail.log",
+		}))
+		const execution = orchestrateCommandExecution(process.asResultPromise(), createTerminalManager(), callbacks, {
+			command: "slow-output-command",
+			onProceedWhileRunning,
+			timeoutSeconds: 2,
+		})
+
+		process.emit("line", "first")
+		await vi.advanceTimersByTimeAsync(100)
+		await outputFlushStarted
+		await vi.advanceTimersByTimeAsync(1_900)
+		process.emit("line", "tail")
+		releaseOutputFlush()
+		await execution
+
+		assert.deepEqual(onProceedWhileRunning.mock.calls[0]?.[0], ["first", "tail"])
+	})
+
+	it("hands a timed out command to the background tracker without retaining output ownership", async () => {
+		vi.useFakeTimers()
+		const process = new FakeTerminalProcess()
+		const onOutputLine = vi.fn()
+		const onProceedWhileRunning = vi.fn(() => ({
+			backgroundCommandId: "background-timeout",
+			logFilePath: "C:\\Temp\\background-timeout.log",
+		}))
+		const execution = orchestrateCommandExecution(process.asResultPromise(), createTerminalManager(), createCallbacks(), {
+			command: "slow-command",
+			onOutputLine,
+			onProceedWhileRunning,
+			timeoutSeconds: 2,
+		})
+
+		await vi.advanceTimersByTimeAsync(2_000)
+		const result = await execution
+
+		assert.equal(result.completed, false)
+		assert.equal(result.backgroundCommandId, "background-timeout")
+		assert.equal(result.logFilePath, "C:\\Temp\\background-timeout.log")
+		assert.match(result.result as string, /^Command timed out after 2 seconds\. Running in background\./)
+		assert.equal(onProceedWhileRunning.mock.calls.length, 1)
+		assert.equal(vi.getTimerCount(), 0)
+
+		process.emit("line", "background output")
+		await Promise.resolve()
+		await Promise.resolve()
+		assert.equal(onOutputLine.mock.calls.length, 0)
+	})
+})
 
 describe("CommandOrchestrator exit status messaging", () => {
 	it("reports non-zero exit codes as command failures", async () => {

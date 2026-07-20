@@ -31,12 +31,20 @@ function approvalView(): TaskViewState {
 }
 
 describe("FooterActions", () => {
-	it("dispatches exact causal identity with draft and selection", async () => {
+	it("dispatches exact causal identity and settles the captured draft only when accepted", async () => {
 		const dispatch = vi.fn(async () => ({ accepted: true, result: "accepted" }))
+		const onDraftAccepted = vi.fn()
+		const draft = {
+			text: "use smaller steps",
+			images: ["image"],
+			files: ["file"],
+			activeQuote: "quoted context",
+		}
 		render(
 			<FooterActions
 				dispatch={dispatch}
-				draft={{ text: "use smaller steps", images: ["image"], files: ["file"] }}
+				draft={draft}
+				onDraftAccepted={onDraftAccepted}
 				selection={{ values: ["item-1"] }}
 				view={approvalView()}
 			/>,
@@ -54,6 +62,33 @@ describe("FooterActions", () => {
 			draft: { text: "use smaller steps", images: ["image"], files: ["file"] },
 			selection: { values: ["item-1"] },
 		})
+		await waitFor(() =>
+			expect(onDraftAccepted).toHaveBeenCalledWith({
+				taskId: "task-1",
+				turnId: "turn-1",
+				interactionId: "interaction-1",
+				stateRevision: 8,
+				draft,
+			}),
+		)
+	})
+
+	it("retains the draft when the backend rejects the interaction", async () => {
+		const dispatch = vi.fn(async () => ({ accepted: false, result: "stale interaction" }))
+		const onDraftAccepted = vi.fn()
+		render(
+			<FooterActions
+				dispatch={dispatch}
+				draft={{ text: "keep me", images: ["image"], files: ["file"] }}
+				onDraftAccepted={onDraftAccepted}
+				view={approvalView()}
+			/>,
+		)
+
+		fireEvent.click(screen.getByRole("button", { name: "Reject" }))
+
+		await waitFor(() => expect(dispatch).toHaveBeenCalledOnce())
+		expect(onDraftAccepted).not.toHaveBeenCalled()
 	})
 
 	it("dispatches projected cancel through the task command boundary", async () => {

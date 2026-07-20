@@ -1,6 +1,5 @@
 import { Anthropic } from "@anthropic-ai/sdk"
 import type { FileInfo } from "@services/glob/list-files"
-import type { Mode } from "@shared/storage/types"
 import * as diff from "diff"
 import * as path from "path"
 import { ClineIgnoreController, LOCK_TEXT_SYMBOL } from "../ignore/ClineIgnoreController"
@@ -214,40 +213,6 @@ export const formatResponse = {
 		const lines = patch.split("\n")
 		const prettyPatchLines = lines.slice(4)
 		return prettyPatchLines.join("\n")
-	},
-
-	taskResumption: (
-		mode: Mode,
-		agoText: string,
-		cwd: string,
-		wasRecent: boolean | 0 | undefined,
-		responseText?: string,
-		hasPendingFileContextWarnings?: boolean,
-	): [string, string] => {
-		const resumeEnv = { AGO_TEXT: agoText, CWD: cwd.toPosix() }
-		const resumeTemplate =
-			mode === "plan" ? generateResponse("taskResumptionPlan", resumeEnv) : generateResponse("taskResumptionAct", resumeEnv)
-
-		const recentNote =
-			wasRecent && !hasPendingFileContextWarnings ? `\n\n${generateResponse("taskResumptionRecentNote")}` : ""
-
-		const taskResumptionMessage = generateResponse("taskResumptionWrapper", {
-			RESUME_TEXT: resumeTemplate,
-			RECENT_NOTE: recentNote,
-		})
-
-		let userResponseMessage = ""
-		if (responseText) {
-			const prefix =
-				mode === "plan"
-					? generateResponse("taskResumptionResponsePlanPrefix")
-					: generateResponse("taskResumptionResponseActPrefix")
-			userResponseMessage = generateResponse("userMessageWrapper", { PREFIX: prefix, RESPONSE_TEXT: responseText })
-		} else if (mode === "plan") {
-			userResponseMessage = generateResponse("taskResumptionNoResponsePlan")
-		}
-
-		return [taskResumptionMessage, userResponseMessage]
 	},
 
 	planModeInstructions: () => generateResponse("planModeInstructions"),

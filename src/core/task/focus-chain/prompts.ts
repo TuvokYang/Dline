@@ -8,6 +8,7 @@ const listInstructionsRecommended = getPrompt("focusChain", "listInstructionsRec
 
 export const FocusChainPrompts = {
 	initial: getPrompt("focusChain", "initial"),
+	progressUpdateWhenSupported: getPrompt("focusChain", "progressUpdateWhenSupported"),
 	reminder,
 	recommended: renderPrompt("focusChain", "recommended", {
 		LIST_INSTRUCTIONS_RECOMMENDED: listInstructionsRecommended,

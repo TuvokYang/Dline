@@ -26,6 +26,15 @@ const BASE_CONTEXT = {
 } as SystemPromptContext
 
 describe("XML tool projection", () => {
+	it("documents optional execute_command background and timeout parameters", () => {
+		const xml = new ToolPromptGenerator().generateXml(PromptProfile.Native, BASE_CONTEXT)
+
+		expect(xml).toContain("<background>")
+		expect(xml).toContain("<timeout>")
+		expect(xml).toContain("background process")
+		expect(xml).toContain("foreground wait")
+	})
+
 	it("keeps canonical runtime tokens unresolved until the System facade final scan", async () => {
 		const generator = new ToolPromptGenerator()
 		const xml = generator.generateXml(PromptProfile.Native, BASE_CONTEXT)

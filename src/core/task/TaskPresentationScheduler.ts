@@ -2,23 +2,37 @@ import type { PresentationPriority } from "./presentation-types"
 
 export type { PresentationPriority }
 
+export interface PresentationFlushContext {
+	generation: number
+	isCurrent: () => boolean
+}
+
 type TaskPresentationSchedulerOptions = {
-	flush: () => Promise<void>
+	flush: (context: PresentationFlushContext) => Promise<void>
 	getDelayMs: (priority: PresentationPriority) => number
 	setTimeoutFn?: typeof setTimeout
 	clearTimeoutFn?: typeof clearTimeout
 	onFlushError?: (error: unknown) => void
 }
 
+interface PresentationLane {
+	scheduledTimer?: ReturnType<typeof setTimeout>
+	scheduledPriority?: PresentationPriority
+	pendingPriority?: PresentationPriority
+	flushInProgress: boolean
+	currentFlushCompletion?: Promise<{ error?: unknown }>
+}
+
+function createPresentationLane(): PresentationLane {
+	return { flushInProgress: false }
+}
+
 export class TaskPresentationScheduler {
-	private scheduledTimer: ReturnType<typeof setTimeout> | undefined
-	private scheduledPriority: PresentationPriority | undefined
-	private pendingPriority: PresentationPriority | undefined
-	private flushInProgress = false
-	private currentFlushCompletion: Promise<{ error?: unknown }> | undefined
+	private generation = 0
+	private lane = createPresentationLane()
 	private disposed = false
 
-	private readonly flush: () => Promise<void>
+	private readonly flush: (context: PresentationFlushContext) => Promise<void>
 	private readonly getDelayMs: (priority: PresentationPriority) => number
 	private readonly setTimeoutFn: typeof setTimeout
 	private readonly clearTimeoutFn: typeof clearTimeout
@@ -37,46 +51,46 @@ export class TaskPresentationScheduler {
 			return
 		}
 
-		this.pendingPriority = this.mergePriority(this.pendingPriority, priority)
+		const lane = this.lane
+		const generation = this.generation
+		lane.pendingPriority = this.mergePriority(lane.pendingPriority, priority)
 
-		if (this.flushInProgress) {
-			// pendingPriority is already set above; runFlushCycle's post-flush
-			// continuation will pick it up after the in-flight flush completes.
+		if (lane.flushInProgress) {
 			return
 		}
 
-		if (this.pendingPriority === "immediate") {
-			if (this.scheduledTimer) {
-				this.clearTimeoutFn(this.scheduledTimer)
-				this.scheduledTimer = undefined
-				this.scheduledPriority = undefined
+		if (lane.pendingPriority === "immediate") {
+			if (lane.scheduledTimer) {
+				this.clearTimeoutFn(lane.scheduledTimer)
+				lane.scheduledTimer = undefined
+				lane.scheduledPriority = undefined
 			}
-			void this.runFlushCycle({ rethrowErrors: false })
+			void this.runFlushCycle(lane, generation, { rethrowErrors: false })
 			return
 		}
 
-		const nextPriority = this.pendingPriority ?? "normal"
+		const nextPriority = lane.pendingPriority ?? "normal"
 
-		if (this.scheduledTimer) {
-			if (this.scheduledPriority === nextPriority) {
+		if (lane.scheduledTimer) {
+			if (lane.scheduledPriority === nextPriority) {
 				return
 			}
 
-			this.clearTimeoutFn(this.scheduledTimer)
-			this.scheduledTimer = undefined
-			this.scheduledPriority = undefined
+			this.clearTimeoutFn(lane.scheduledTimer)
+			lane.scheduledTimer = undefined
+			lane.scheduledPriority = undefined
 		}
 
-		if (!this.pendingPriority) {
+		if (!lane.pendingPriority) {
 			return
 		}
 
 		const delayMs = this.getDelayMs(nextPriority)
-		this.scheduledPriority = nextPriority
-		this.scheduledTimer = this.setTimeoutFn(() => {
-			this.scheduledTimer = undefined
-			this.scheduledPriority = undefined
-			void this.runFlushCycle({ rethrowErrors: false })
+		lane.scheduledPriority = nextPriority
+		lane.scheduledTimer = this.setTimeoutFn(() => {
+			lane.scheduledTimer = undefined
+			lane.scheduledPriority = undefined
+			void this.runFlushCycle(lane, generation, { rethrowErrors: false })
 		}, delayMs)
 	}
 
@@ -98,33 +112,27 @@ export class TaskPresentationScheduler {
 			return
 		}
 
-		if (this.scheduledTimer) {
-			this.clearTimeoutFn(this.scheduledTimer)
-			this.scheduledTimer = undefined
-			this.scheduledPriority = undefined
+		const lane = this.lane
+		const generation = this.generation
+		if (lane.scheduledTimer) {
+			this.clearTimeoutFn(lane.scheduledTimer)
+			lane.scheduledTimer = undefined
+			lane.scheduledPriority = undefined
 		}
 
-		// If a flush is already in-flight, wait for it to complete. After it
-		// finishes, the post-flush continuation in runFlushCycle may have already
-		// consumed our pendingPriority. We therefore set pendingPriority *after*
-		// the in-flight flush resolves so it cannot be stolen by the continuation.
-		if (this.flushInProgress) {
-			await (this.currentFlushCompletion ?? Promise.resolve())
-			// Another concurrent caller may have started a new flush cycle after
-			// the same in-flight flush resolved. If one is now in progress, wait
-			// for it too — we need a flush to run *after* we set pendingPriority.
-			while (this.flushInProgress) {
-				await (this.currentFlushCompletion ?? Promise.resolve())
+		if (lane.flushInProgress) {
+			await (lane.currentFlushCompletion ?? Promise.resolve())
+			while (lane.flushInProgress) {
+				await (lane.currentFlushCompletion ?? Promise.resolve())
 			}
 		}
 
-		if (this.disposed) {
+		if (this.disposed || !this.isCurrent(lane, generation)) {
 			return
 		}
 
-		// Now that no flush is in-flight, set pendingPriority and run our own cycle.
-		this.pendingPriority = this.mergePriority(this.pendingPriority, "immediate")
-		await this.runFlushCycle({ rethrowErrors: true })
+		lane.pendingPriority = this.mergePriority(lane.pendingPriority, "immediate")
+		await this.runFlushCycle(lane, generation, { rethrowErrors: true })
 	}
 
 	/**
@@ -132,35 +140,35 @@ export class TaskPresentationScheduler {
 	 * as disposed. Use this between API request retries within the same task to prevent
 	 * stale timers from firing against reset streaming state.
 	 *
-	 * Note: any flush that is already in-flight when reset() is called will complete
-	 * naturally. The flush callback (presentAssistantMessage) will operate on the
-	 * already-reset task state, but since currentStreamingContentIndex will be 0 and
-	 * assistantMessageContent will be empty, it will hit the out-of-bounds early-return
-	 * path and do nothing harmful.
+	 * Any flush already in flight remains attached to the previous generation. Its
+	 * context becomes stale immediately, so it cannot report errors for or consume
+	 * queued work from the new presentation lane.
 	 */
 	reset(): void {
 		if (this.disposed) {
 			return
 		}
-		if (this.scheduledTimer) {
-			this.clearTimeoutFn(this.scheduledTimer)
-			this.scheduledTimer = undefined
+		const staleLane = this.lane
+		if (staleLane.scheduledTimer) {
+			this.clearTimeoutFn(staleLane.scheduledTimer)
+			staleLane.scheduledTimer = undefined
 		}
-		this.scheduledPriority = undefined
-		this.pendingPriority = undefined
-		// Note: we intentionally do NOT clear flushInProgress or currentFlushCompletion
-		// here. If a flush is in-flight it will complete naturally. The reset only
-		// prevents *new* timer-driven flushes from firing on stale state.
+		staleLane.scheduledPriority = undefined
+		staleLane.pendingPriority = undefined
+		this.generation += 1
+		this.lane = createPresentationLane()
 	}
 
 	async dispose(): Promise<void> {
 		this.disposed = true
-		if (this.scheduledTimer) {
-			this.clearTimeoutFn(this.scheduledTimer)
-			this.scheduledTimer = undefined
+		const lane = this.lane
+		if (lane.scheduledTimer) {
+			this.clearTimeoutFn(lane.scheduledTimer)
+			lane.scheduledTimer = undefined
 		}
-		this.scheduledPriority = undefined
-		this.pendingPriority = undefined
+		lane.scheduledPriority = undefined
+		lane.pendingPriority = undefined
+		this.generation += 1
 
 		// Do not await in-flight flush — it will complete naturally but may be
 		// blocked on gRPC writes during multi-controller event-loop contention.
@@ -169,62 +177,62 @@ export class TaskPresentationScheduler {
 		// asynchronously without blocking dispose().
 	}
 
-	private async runFlushCycle(options: { rethrowErrors: boolean }): Promise<void> {
-		if (this.disposed) {
+	private async runFlushCycle(lane: PresentationLane, generation: number, options: { rethrowErrors: boolean }): Promise<void> {
+		if (this.disposed || !this.isCurrent(lane, generation)) {
 			return
 		}
 
 		while (true) {
-			if (this.flushInProgress) {
+			if (lane.flushInProgress) {
 				// flushNow() handles the in-flight case itself before calling runFlushCycle,
 				// so this branch is only reached from requestFlush() (which returns early when
 				// flushInProgress is true) — meaning this path should not be hit in practice.
 				// Guard it defensively anyway.
-				const inFlightResult = await this.currentFlushCompletion
-				if (options.rethrowErrors && inFlightResult?.error) {
+				const inFlightResult = await lane.currentFlushCompletion
+				if (options.rethrowErrors && inFlightResult?.error && this.isCurrent(lane, generation)) {
 					throw inFlightResult.error
 				}
-				// Re-check flushInProgress: another concurrent caller may have already
-				// started a new flush cycle after the same in-flight flush resolved.
-				// Without this guard both callers would proceed past the pendingPriority
-				// check and start concurrent flushes against the same presentation state.
-				if (this.flushInProgress || this.disposed || !this.pendingPriority) {
+				if (lane.flushInProgress || this.disposed || !this.isCurrent(lane, generation) || !lane.pendingPriority) {
 					return
 				}
 			}
 
-			if (!this.pendingPriority) {
+			if (!lane.pendingPriority || !this.isCurrent(lane, generation)) {
 				return
 			}
 
-			this.flushInProgress = true
-			this.pendingPriority = undefined
+			lane.flushInProgress = true
+			lane.pendingPriority = undefined
+			const context: PresentationFlushContext = {
+				generation,
+				isCurrent: () => this.isCurrent(lane, generation),
+			}
 
-			this.currentFlushCompletion = (async () => {
+			lane.currentFlushCompletion = (async () => {
 				try {
-					await this.flush()
+					await this.flush(context)
 					return {}
 				} catch (error) {
-					if (!this.disposed) {
+					if (!this.disposed && this.isCurrent(lane, generation)) {
 						this.onFlushError?.(error)
 					}
 					return { error }
 				} finally {
-					this.flushInProgress = false
+					lane.flushInProgress = false
 				}
 			})()
 
-			const result = await this.currentFlushCompletion
-			this.currentFlushCompletion = undefined
-			if (result.error && options.rethrowErrors) {
+			const result = await lane.currentFlushCompletion
+			lane.currentFlushCompletion = undefined
+			if (result.error && options.rethrowErrors && this.isCurrent(lane, generation)) {
 				throw result.error
 			}
 
-			if (this.disposed) {
+			if (this.disposed || !this.isCurrent(lane, generation)) {
 				return
 			}
 
-			const priorityToRun = this.pendingPriority
+			const priorityToRun = lane.pendingPriority
 			if (!priorityToRun) {
 				return
 			}
@@ -239,6 +247,10 @@ export class TaskPresentationScheduler {
 			// re-entering the loop here, no other caller can observe an interleaved
 			// "idle" state before the immediate flush is started.
 		}
+	}
+
+	private isCurrent(lane: PresentationLane, generation: number): boolean {
+		return !this.disposed && this.lane === lane && this.generation === generation
 	}
 
 	private mergePriority(current: PresentationPriority | undefined, next: PresentationPriority): PresentationPriority {

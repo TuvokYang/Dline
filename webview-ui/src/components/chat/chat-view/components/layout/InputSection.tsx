@@ -2,13 +2,8 @@ import React from "react"
 import ChatTextArea from "@/components/chat/ChatTextArea"
 import type { ModeSwitchDraft } from "@/components/chat/mode-switch/useModeSwitch"
 import QuotedMessagePreview from "@/components/chat/QuotedMessagePreview"
+import type { AcceptedInteractionSettlement, InteractionDraft } from "@/task-interaction/types"
 import { ChatState, MessageHandlers, ScrollBehavior } from "../../types/chatTypes"
-
-interface InputDraft {
-	text: string
-	images: string[]
-	files: string[]
-}
 
 interface InputSectionProps {
 	chatState: ChatState
@@ -17,8 +12,10 @@ interface InputSectionProps {
 	placeholderText: string
 	shouldDisableFilesAndImages: boolean
 	selectFilesAndImages: () => Promise<void>
+	draft: InteractionDraft
 	enabled?: boolean
-	onSubmit?: (draft: InputDraft) => Promise<boolean>
+	onSubmit?: (draft: InteractionDraft) => Promise<AcceptedInteractionSettlement | undefined>
+	onDraftAccepted: (settlement: AcceptedInteractionSettlement) => void
 }
 
 /**
@@ -31,8 +28,10 @@ export const InputSection: React.FC<InputSectionProps> = ({
 	placeholderText,
 	shouldDisableFilesAndImages,
 	selectFilesAndImages,
+	draft: currentDraft,
 	enabled,
 	onSubmit,
+	onDraftAccepted,
 }) => {
 	const {
 		activeQuote,
@@ -51,18 +50,22 @@ export const InputSection: React.FC<InputSectionProps> = ({
 
 	const { isAtBottom, scrollToBottomAuto } = scrollBehavior
 	const submitDraft = async (capturedDraft?: ModeSwitchDraft) => {
-		const draft = {
-			text: capturedDraft?.text ?? inputValue,
-			images: capturedDraft?.images ?? selectedImages,
-			files: capturedDraft?.files ?? selectedFiles,
+		const draft: InteractionDraft = capturedDraft
+			? {
+					text: capturedDraft.text,
+					images: [...capturedDraft.images],
+					files: [...capturedDraft.files],
+					activeQuote,
+					ownerRevision: currentDraft.ownerRevision,
+				}
+			: currentDraft
+		if (!onSubmit) {
+			await messageHandlers.handleSendMessage(draft.text, draft.images, draft.files)
+			return
 		}
-		const accepted = onSubmit
-			? await onSubmit(draft)
-			: (await messageHandlers.handleSendMessage(draft.text, draft.images, draft.files), true)
-		if (accepted && onSubmit) {
-			setInputValue("")
-			setSelectedImages([])
-			setSelectedFiles([])
+		const settlement = await onSubmit(draft)
+		if (settlement) {
+			onDraftAccepted(settlement)
 		}
 	}
 

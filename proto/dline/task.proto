@@ -266,6 +266,7 @@ message TaskActivity {
   optional string error = 14;
   optional string parent_activity_id = 15;
   optional TaskActivityMetrics metrics = 16;
+  optional string log_path = 17;
 }
 
 message TaskActivityUpdate {

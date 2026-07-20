@@ -239,6 +239,7 @@ export function convertClineMessageToProto(message: AppClineMessage): ProtoCline
 		exitCode: message.exitCode ?? 0,
 		logPath: message.logPath ?? "",
 		commandTs: message.commandTs ?? 0,
+		activityId: message.activityId ?? "",
 	}
 
 	return protoMessage
@@ -317,6 +318,9 @@ export function convertProtoToClineMessage(protoMessage: ProtoClineMessage): App
 	}
 	if (protoMessage.commandTs !== 0) {
 		message.commandTs = protoMessage.commandTs
+	}
+	if (protoMessage.activityId !== "") {
+		message.activityId = protoMessage.activityId
 	}
 
 	return message

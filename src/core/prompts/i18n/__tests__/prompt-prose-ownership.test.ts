@@ -73,6 +73,18 @@ describe("Prompt prose ownership", () => {
 		expect(capabilitySection).not.toContain('{ title: "Skills"')
 	})
 
+	it("owns resume prose in the i18n system domain and removes legacy top-level assets", async () => {
+		const resumeProjector = await fs.readFile(path.resolve(process.cwd(), "src/core/task/resume/ResumeProvenance.ts"), "utf8")
+		const systemResumePrompts = await read("i18n/en/system/resumeProvenance.ts")
+		const responseFacade = await read("responses.ts")
+
+		expect(resumeProjector).not.toContain("The previous task session was closed")
+		expect(resumeProjector).not.toContain("The recorded result for")
+		expect(systemResumePrompts).toContain("outcome is unknown")
+		expect(responseFacade).not.toContain("taskResumption")
+		expect(await exists("i18n/en/responses.ts")).toBe(false)
+	})
+
 	it("keeps production prompt lookup raw and structural composition non-recursive", async () => {
 		const registry = await read("i18n/index.ts")
 

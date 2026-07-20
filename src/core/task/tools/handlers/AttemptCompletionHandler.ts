@@ -12,6 +12,7 @@ import { findLastIndex } from "@shared/array"
 import { COMPLETION_RESULT_CHANGES_FLAG } from "@shared/ExtensionMessage"
 import { Logger } from "@shared/services/Logger"
 import { ClineDefaultTool } from "@shared/tools"
+import { commitCompletion } from "../../completion/CompletionCommit"
 import type { ToolResponse } from "../../index"
 import { showNotificationForApproval } from "../../utils"
 import { buildUserFeedbackContent } from "../../utils/buildUserFeedbackContent"
@@ -45,12 +46,8 @@ export class AttemptCompletionHandler implements IToolHandler, IPartialBlockHand
 	/**
 	 * Handle partial block streaming for attempt_completion
 	 */
-	async handlePartialBlock(block: ToolUse, uiHelpers: StronglyTypedUIHelpers): Promise<void> {
-		const result = uiHelpers.removeClosingTag(block, "result", block.params.result)
-		if (result) {
-			await uiHelpers.say("completion_result", result, undefined, undefined, true, block.ts)
-		}
-		// We will handle command in the final execution step
+	async handlePartialBlock(_block: ToolUse, _uiHelpers: StronglyTypedUIHelpers): Promise<void> {
+		// Completion remains provisional until optional command execution and all commit prerequisites succeed.
 	}
 
 	async execute(config: TaskConfig, block: ToolUse): Promise<ToolResponse> {
@@ -125,32 +122,8 @@ export class AttemptCompletionHandler implements IToolHandler, IPartialBlockHand
 
 		let commandResult: any
 		let cmdMessageTs: number | undefined
-		const lastMessage = config.messageState.clineMessages.at(-1)
 
 		if (command) {
-			if (lastMessage && lastMessage.ask !== "command") {
-				// haven't sent a command message yet so first send completion_result then command
-				const completionMessageTs = await config.callbacks.say(
-					"completion_result",
-					result,
-					undefined,
-					undefined,
-					false,
-					block.ts,
-				)
-				await config.callbacks.saveCheckpoint(true, completionMessageTs)
-				await addNewChangesFlagToLastCompletionResultMessage()
-				telemetryService.captureTaskCompleted(config.ulid ?? "", getTaskCompletionTelemetry(config))
-			} else {
-				// we already sent a command message, meaning the complete completion message has also been sent
-				await config.callbacks.saveCheckpoint(true)
-			}
-
-			// Attempt completion is a special tool where we want to update the focus chain list before the user provides response
-			if (!block.partial && config.focusChainSettings.enabled) {
-				await config.callbacks.updateFCListFromToolResponse(block.params.task_progress)
-			}
-
 			// Check if command should be auto-approved
 			// attempt_completion commands don't have requires_approval param, so we treat them as safe commands
 			const autoApproveResult = config.autoApprover?.shouldAutoApproveTool(ClineDefaultTool.BASH)
@@ -220,29 +193,24 @@ export class AttemptCompletionHandler implements IToolHandler, IPartialBlockHand
 				return commandOutcome.result
 			}
 			commandResult = commandOutcome.result
-		} else {
-			// Send the complete completion_result message (partial was already removed above)
-			const completionMessageTs = await config.callbacks.say(
-				"completion_result",
-				result,
-				undefined,
-				undefined,
-				false,
-				block.ts,
-			)
-			await config.callbacks.saveCheckpoint(true, completionMessageTs)
-			await addNewChangesFlagToLastCompletionResultMessage()
-			telemetryService.captureTaskCompleted(config.ulid ?? "", getTaskCompletionTelemetry(config))
 		}
+
+		await commitCompletion({
+			publishResult: () => config.callbacks.say("completion_result", result, undefined, undefined, false, block.ts),
+			saveCheckpoint: (completionMessageTs) => config.callbacks.saveCheckpoint(true, completionMessageTs),
+			markWorkspaceChanges: addNewChangesFlagToLastCompletionResultMessage,
+			captureTelemetry: () => telemetryService.captureTaskCompleted(config.ulid ?? "", getTaskCompletionTelemetry(config)),
+			updateFocusChain: async () => {
+				if (!block.partial && config.focusChainSettings.enabled) {
+					await config.callbacks.updateFCListFromToolResponse(block.params.task_progress)
+				}
+			},
+		})
 
 		// we already sent completion_result says, an empty string asks relinquishes control over button and field
 		// in case last command was interactive and in partial state, the UI is expecting an ask response. This ends the command ask response, freeing up the UI to proceed with the completion ask.
 		if (config.messageState.clineMessages.at(-1)?.ask === "command_output") {
 			await config.callbacks.say("command_output", "")
-		}
-
-		if (!block.partial && config.focusChainSettings.enabled) {
-			await config.callbacks.updateFCListFromToolResponse(block.params.task_progress)
 		}
 
 		// Run TaskComplete hook BEFORE presenting the "Start New Task" button

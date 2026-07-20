@@ -16,10 +16,11 @@
 import { formatResponse } from "@core/prompts/responses"
 import { processFilesIntoText } from "@integrations/misc/extract-text"
 import { TerminalHangStage, TerminalUserInterventionAction, telemetryService } from "@services/telemetry"
-import { ClineTempManager } from "@services/temp"
+import { DlineTempManager } from "@services/temp"
 import { COMMAND_CANCEL_TOKEN } from "@shared/ExtensionMessage"
 import * as fs from "fs"
 import { Logger } from "@/shared/services/Logger"
+import { isCommandCompletionSuccessful } from "./command-completion"
 import {
 	BUFFER_STUCK_TIMEOUT_MS,
 	CHUNK_BYTE_SIZE,
@@ -59,8 +60,10 @@ export async function orchestrateCommandExecution(
 		onOutputLine,
 		showShellIntegrationSuggestion,
 		onProceedWhileRunning,
+		startInBackground = false,
 		terminalType = "vscode",
 		suppressUserInteraction = false,
+		activityId,
 	} = options
 
 	const say = async (
@@ -145,11 +148,7 @@ export async function orchestrateCommandExecution(
 				}
 				try {
 					const exitCode = details?.exitCode
-					const failed =
-						didError ||
-						typeof exitCode !== "number" ||
-						Boolean(details?.signal) ||
-						(typeof exitCode === "number" && exitCode !== 0)
+					const failed = didError || !isCommandCompletionSuccessful(details)
 					await callbacks.updateClineMessage(idx, {
 						commandStatus: failed ? "failed" : "completed",
 						exitCode: exitCode ?? (didError ? -1 : undefined),
@@ -202,6 +201,16 @@ export async function orchestrateCommandExecution(
 		outputWork = outputWork.then(work).catch((error) => {
 			Logger.error(`[CommandOrchestrator] Failed to process terminal output: ${error}`)
 		})
+	}
+
+	const drainOutputQueue = async (): Promise<void> => {
+		while (true) {
+			const pendingWork = outputWork
+			await pendingWork
+			if (pendingWork === outputWork) {
+				return
+			}
+		}
 	}
 
 	const clearPendingCommandOutputAsk = () => {
@@ -292,43 +301,8 @@ export async function orchestrateCommandExecution(
 					}
 					didContinue = true
 
-					// Notify caller to start background command tracking
-					// Pass existing output lines so they can be written to the log file
-					// and send log file path to UI if tracking was started
 					if (onProceedWhileRunning) {
-						const trackingResult = onProceedWhileRunning(outputLines)
-
-						// Clear timers first
-						if (chunkTimer) {
-							clearTimeout(chunkTimer)
-							chunkTimer = null
-						}
-						if (completionTimer) {
-							clearTimeout(completionTimer)
-							completionTimer = null
-						}
-
-						// Set early return result BEFORE resuming the process
-						// This prevents the orchestrator's listener from processing new lines
-						const result = terminalManager.processOutput(outputLines)
-						const logMsg = trackingResult?.logFilePath ? `Log file: ${trackingResult.logFilePath}\n` : ""
-						const outputMsg = result.length > 0 ? `Output so far:\n${result}` : ""
-
-						backgroundTrackingResult = {
-							userRejected: false,
-							result: `Command is running in the background. You can proceed with other tasks.\n${logMsg}${outputMsg}`,
-							completed: false,
-							outputLines,
-						}
-
-						// Send log file message to UI BEFORE resuming the process
-						// This ensures the message appears before any new output lines
-						if (trackingResult?.logFilePath) {
-							await say("command_output", `\n📋 Output is being logged to: ${trackingResult.logFilePath}`)
-						}
-
-						// Now resume the process - any new lines will be handled by the background tracker
-						process.continue()
+						await transitionToBackground("user", false)
 						return
 					}
 
@@ -429,8 +403,8 @@ export async function orchestrateCommandExecution(
 			chunkTimer = null
 		}
 
-		// Set up file logging using ClineTempManager for proper cleanup
-		largeOutputLogPath = ClineTempManager.createTempFilePath("large-output")
+		const largeOutputStem = activityId ? `${activityId}_large-output` : `large-output-${cmdTs ?? Date.now()}`
+		largeOutputLogPath = DlineTempManager.createTempFilePath(largeOutputStem)
 		largeOutputLogStream = fs.createWriteStream(largeOutputLogPath, { flags: "a" })
 
 		// Write all existing lines to file in a single batch to reduce I/O overhead
@@ -462,6 +436,60 @@ export async function orchestrateCommandExecution(
 	}
 
 	const outputLines: string[] = []
+
+	type BackgroundTransitionReason = "explicit" | "timeout" | "user"
+	const transitionToBackground = async (
+		reason: BackgroundTransitionReason,
+		drainQueuedOutput: boolean,
+	): Promise<OrchestrationResult | undefined> => {
+		if (!onProceedWhileRunning) {
+			return undefined
+		}
+
+		didContinue = true
+		if (chunkTimer) {
+			clearTimeout(chunkTimer)
+			chunkTimer = null
+		}
+		if (completionTimer) {
+			clearTimeout(completionTimer)
+			completionTimer = null
+		}
+		if (drainQueuedOutput) {
+			await drainOutputQueue()
+		}
+
+		const trackingResult = onProceedWhileRunning(outputLines)
+		const currentOutput = terminalManager.processOutput(outputLines)
+		const logMessage = trackingResult?.logFilePath ? `Log file: ${trackingResult.logFilePath}\n` : ""
+		const outputMessage = currentOutput.length > 0 ? `Output so far:\n${currentOutput}` : ""
+		const resultPrefix =
+			reason === "timeout"
+				? `Command timed out after ${timeoutSeconds} seconds. Running in background.`
+				: "Command is running in the background. You can proceed with other tasks."
+
+		backgroundTrackingResult = {
+			userRejected: false,
+			result: `${resultPrefix}\n${logMessage}${outputMessage}`,
+			completed: false,
+			outputLines,
+			backgroundCommandId: trackingResult?.backgroundCommandId,
+			logFilePath: trackingResult?.logFilePath,
+		}
+
+		if (trackingResult?.logFilePath) {
+			const statusMessage =
+				reason === "timeout"
+					? `\n⏱️ Command timed out. Output is being logged to: ${trackingResult.logFilePath}`
+					: `\n📋 Output is being logged to: ${trackingResult.logFilePath}`
+			await say("command_output", statusMessage)
+		}
+
+		process.continue()
+		cleanupFileBased()
+		return backgroundTrackingResult
+	}
+
 	const handleOutputLine = async (line: string): Promise<void> => {
 		if (didCancelViaUi) {
 			return
@@ -589,6 +617,13 @@ export async function orchestrateCommandExecution(
 		}
 	})
 
+	if (startInBackground && onProceedWhileRunning && !didCancelViaUi) {
+		const result = await transitionToBackground("explicit", true)
+		if (result) {
+			return result
+		}
+	}
+
 	// Handle timeout if specified, or wait for process to complete
 	if (!didCancelViaUi) {
 		if (timeoutSeconds) {
@@ -608,7 +643,13 @@ export async function orchestrateCommandExecution(
 					// Release any pending command_output ask before transitioning state.
 					releaseAnyPendingCommandOutputAsk()
 
-					// Clear all our timers first
+					if (onProceedWhileRunning) {
+						const result = await transitionToBackground("timeout", true)
+						if (result) {
+							return result
+						}
+					}
+
 					if (chunkTimer) {
 						clearTimeout(chunkTimer)
 						chunkTimer = null
@@ -616,40 +657,6 @@ export async function orchestrateCommandExecution(
 					if (completionTimer) {
 						clearTimeout(completionTimer)
 						completionTimer = null
-					}
-					await outputWork
-
-					// If background tracking is available (standalone mode only), use it
-					// This writes output to a log file and detaches the command
-					if (onProceedWhileRunning) {
-						const trackingResult = onProceedWhileRunning(outputLines)
-
-						// Set early return result BEFORE resuming the process
-						// This prevents the orchestrator's listener from processing new lines
-						const result = terminalManager.processOutput(outputLines)
-						const logMsg = trackingResult?.logFilePath ? `Log file: ${trackingResult.logFilePath}\n` : ""
-						const outputMsg = result.length > 0 ? `Output so far:\n${result}` : ""
-
-						backgroundTrackingResult = {
-							userRejected: false,
-							result: `Command timed out after ${timeoutSeconds} seconds. Running in background.\n${logMsg}${outputMsg}`,
-							completed: false,
-							outputLines,
-						}
-
-						// Send log file message to UI BEFORE resuming the process
-						if (trackingResult?.logFilePath) {
-							await say(
-								"command_output",
-								`\n⏱️ Command timed out. Output is being logged to: ${trackingResult.logFilePath}`,
-							)
-						}
-
-						// Now resume the process - any new lines will be handled by the background tracker
-						process.continue()
-						// Clean up file-based logging if active before returning
-						cleanupFileBased()
-						return backgroundTrackingResult
 					}
 
 					// VSCode terminal mode: no background tracking available
@@ -762,13 +769,13 @@ export async function orchestrateCommandExecution(
 		const signal = completionDetails?.signal
 		const hasExitCode = typeof exitCode === "number"
 		const logFileMsg = largeOutputLogPath ? `\nFull output saved to: ${largeOutputLogPath}` : ""
-		const statusMessage = signal
-			? `Command terminated by signal ${signal}.`
-			: hasExitCode
-				? exitCode === 0
-					? "Command executed successfully (exit code 0)."
-					: `Command failed with exit code ${exitCode}.`
-				: "Command completion could not be verified because no exit code was reported."
+		const statusMessage = isCommandCompletionSuccessful(completionDetails)
+			? "Command executed successfully (exit code 0)."
+			: signal
+				? `Command terminated by signal ${signal}.`
+				: hasExitCode
+					? `Command failed with exit code ${exitCode}.`
+					: "Command completion could not be verified because no exit code was reported."
 
 		return {
 			userRejected: false,

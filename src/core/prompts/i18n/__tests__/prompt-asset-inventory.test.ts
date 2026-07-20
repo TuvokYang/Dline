@@ -45,6 +45,7 @@ const EXPECTED_NAMESPACES = [
 	"replaceInFile",
 	"replaceText",
 	"responses",
+	"resumeProvenance",
 	"rules",
 	"runtimeEnvironment",
 	"searchFiles",
@@ -112,13 +113,13 @@ async function collectSources(directory: string): Promise<string[]> {
 describe("prompt asset inventory", () => {
 	it("locks the final English namespace inventory", () => {
 		expect(sortValues(Object.keys(englishPrompts))).toEqual(sortValues(EXPECTED_NAMESPACES))
-		expect(EXPECTED_NAMESPACES).toHaveLength(60)
+		expect(EXPECTED_NAMESPACES).toHaveLength(61)
 	})
 
 	it("locks the static domain group order and coverage", () => {
 		expect(englishPromptGroups.map((group) => group.name)).toEqual(["system", "tools", "commands", "variants"])
-		expect(englishPromptGroups.map((group) => group.modules.length)).toEqual([22, 33, 3, 2])
-		expect(englishPromptGroups.flatMap((group) => group.modules)).toHaveLength(60)
+		expect(englishPromptGroups.map((group) => group.modules.length)).toEqual([23, 33, 3, 2])
+		expect(englishPromptGroups.flatMap((group) => group.modules)).toHaveLength(61)
 		expect(englishPromptGroups[3].modules.map((module) => module.name)).toEqual(["variants.native", "variants.lite"])
 	})
 
@@ -168,6 +169,7 @@ describe("prompt asset inventory", () => {
 			"mcp.ts",
 			"objective.ts",
 			"responses.ts",
+			"resumeProvenance.ts",
 			"rules.ts",
 			"skills.ts",
 			"systemInfo.ts",

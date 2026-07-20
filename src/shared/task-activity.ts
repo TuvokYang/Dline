@@ -30,6 +30,7 @@ export interface TaskActivityRecord {
 	output?: string
 	result?: string
 	error?: string
+	logPath?: string
 	parentActivityId?: string
 	metrics?: TaskActivityMetrics
 }

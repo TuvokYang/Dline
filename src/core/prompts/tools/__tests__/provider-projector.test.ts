@@ -58,6 +58,34 @@ describe("provider tool projector", () => {
 		expect(serialized).not.toContain("@BROWSER_VIEWPORT_HEIGHT@")
 	})
 
+	it.each([
+		["openai", "function", "boolean", "integer"],
+		["anthropic", "anthropic", "boolean", "integer"],
+		["gemini", "gemini", "BOOLEAN", "NUMBER"],
+	] as const)("projects optional execute_command background and timeout for %s", (providerId, shape, boolType, intType) => {
+		const context = { ...BASE_CONTEXT, providerInfo: { ...BASE_CONTEXT.providerInfo, providerId } }
+		const tool = findTool(new ToolPromptGenerator().generate(PromptProfile.Native, context), ClineDefaultTool.BASH)
+		const projected = tool as unknown as {
+			function?: { parameters?: unknown }
+			input_schema?: unknown
+			parameters?: unknown
+		}
+		const schema =
+			shape === "function"
+				? projected.function?.parameters
+				: shape === "anthropic"
+					? projected.input_schema
+					: projected.parameters
+
+		expect(schema).toMatchObject({
+			required: ["command", "requires_approval"],
+			properties: {
+				background: { type: boolType },
+				timeout: { type: intType },
+			},
+		})
+	})
+
 	it("projects canonical parameters to Anthropic schemas", () => {
 		const context = { ...BASE_CONTEXT, providerInfo: { ...BASE_CONTEXT.providerInfo, providerId: "anthropic" } }
 		const tool = findTool(new ToolPromptGenerator().generate(PromptProfile.Native, context), ClineDefaultTool.FILE_READ)

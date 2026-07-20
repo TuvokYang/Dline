@@ -40,7 +40,7 @@ export const DEFAULT_PLATFORM = "unknown"
 export const COMMAND_CANCEL_TOKEN = "__cline_command_cancel__"
 
 /** Canonical lifecycle status for a command timeline message. */
-export type CommandStatus = "pending" | "running" | "completed" | "failed" | "skipped"
+export type CommandStatus = "pending" | "running" | "completed" | "failed" | "cancelled" | "skipped"
 
 export interface ExtensionState {
 	/** Monotonic revision used to reject stale asynchronous state snapshots. */
@@ -186,6 +186,8 @@ export interface ClineMessage {
 	files?: string[]
 	partial?: boolean
 	commandStatus?: CommandStatus
+	/** Stable identity shared by the command message, activity, background record, and cancellation entry. */
+	activityId?: string
 	/** ts of the associated command message (set on command_output messages) */
 	commandTs?: number
 	exitCode?: number

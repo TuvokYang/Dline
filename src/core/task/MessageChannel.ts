@@ -171,10 +171,23 @@ export class MessageChannel {
 		this.taskState.lastMessageTs = askTs
 		const messages = this.messageStateHandler.clineMessages
 		const index = messages.findIndex((message) => message.ts === askTs)
+		const commandPresentation = type === "command" ? { commandStatus: "pending" as const, exitCode: undefined } : {}
 		if (index >= 0) {
-			await this.messageStateHandler.updateClineMessage(index, { type: "ask", ask: type, text, partial: false })
+			await this.messageStateHandler.updateClineMessage(index, {
+				type: "ask",
+				ask: type,
+				text,
+				partial: false,
+				...commandPresentation,
+			})
 		} else {
-			await this.messageStateHandler.addToClineMessages({ ts: askTs, type: "ask", ask: type, text })
+			await this.messageStateHandler.addToClineMessages({
+				ts: askTs,
+				type: "ask",
+				ask: type,
+				text,
+				...commandPresentation,
+			})
 		}
 		await this.postStateToWebview()
 		const persisted = this.messageStateHandler.clineMessages.find((message) => message.ts === askTs)
@@ -251,8 +264,9 @@ export class MessageChannel {
 				if (idx !== -1) {
 					// eslint-disable-next-line @typescript-eslint/no-explicit-any
 					const updates: Partial<ClineMessage> = { partial: false }
-					if (type === "command" && !msgs[idx].commandStatus) {
+					if (type === "command") {
 						updates.commandStatus = "pending"
+						updates.exitCode = undefined
 					}
 					if (text !== undefined) {
 						updates.text = text

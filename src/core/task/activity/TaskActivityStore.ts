@@ -123,8 +123,8 @@ export class TaskActivityStore {
 			this.update(activityId, { status: "cancelling", latestEvent: "Cancellation requested" })
 			try {
 				await cancel()
+				this.update(activityId, { status: "cancelled", latestEvent: "Cancelled by user" })
 				cancelled.push(activityId)
-				this.update(activityId, { status: "cancelled", latestEvent: "Cancelled" })
 			} catch (error) {
 				this.update(activityId, {
 					status: "failed",

@@ -2,6 +2,7 @@ import { appendApiConversationEvent } from "@core/storage/disk"
 import type { ClineTool } from "@shared/tools"
 import type { ClineStorageMessage } from "@/shared/messages/content"
 import type { ApiStream } from "../transform/stream"
+import { ProviderResponseAssembler } from "./ProviderResponseAssembler"
 
 export interface ApiConversationRoundContext {
 	taskId: string
@@ -37,10 +38,10 @@ export async function recordProviderAdapterInput(
 	})
 }
 
-/** Record every provider adapter output chunk without blocking stream delivery on each disk write. */
+/** Record one complete provider response without delaying stream delivery. */
 export function recordProviderAdapterOutput(context: ApiConversationRoundContext, stream: ApiStream): ApiStream {
 	const recorded = (async function* (): ApiStream {
-		let eventIndex = 0
+		const assembler = new ProviderResponseAssembler()
 		let pendingWrite = Promise.resolve()
 		const enqueue = (event: object) => {
 			pendingWrite = pendingWrite.then(() => appendApiConversationEvent(context.taskId, event))
@@ -48,19 +49,19 @@ export function recordProviderAdapterOutput(context: ApiConversationRoundContext
 
 		try {
 			for await (const chunk of stream) {
-				enqueue({
-					ts: Date.now(),
-					requestIndex: context.requestIndex,
-					direction: "response",
-					stage: "provider_adapter_output",
-					provider: context.provider,
-					model: context.model,
-					source: context.source ?? "task",
-					eventIndex: eventIndex++,
-					payload: chunk,
-				})
+				assembler.append(chunk)
 				yield chunk
 			}
+			enqueue({
+				ts: Date.now(),
+				requestIndex: context.requestIndex,
+				direction: "response",
+				stage: "provider_adapter_output",
+				provider: context.provider,
+				model: context.model,
+				source: context.source ?? "task",
+				payload: assembler.build(),
+			})
 			enqueue({
 				ts: Date.now(),
 				requestIndex: context.requestIndex,

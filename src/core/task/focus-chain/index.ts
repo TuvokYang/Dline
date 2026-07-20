@@ -24,6 +24,7 @@ import {
 	mergeCompletedItems,
 	mergeInProgressItem,
 } from "./file-utils"
+import { selectFocusChainInstructionPolicy } from "./instruction-policy"
 import { FocusChainPrompts } from "./prompts"
 import { parseFocusChainListCounts } from "./utils"
 
@@ -177,15 +178,26 @@ export class FocusChainManager {
 			const { totalItems, completedItems } = parseFocusChainListCounts(this.taskState.currentFocusChainChecklist)
 			const percentComplete = totalItems > 0 ? Math.round((completedItems / totalItems) * 100) : 0
 
-			const introUpdateRequired =
-				"# TODO LIST UPDATE REQUIRED - You MUST include the task_progress parameter in your NEXT tool call."
+			const policy = selectFocusChainInstructionPolicy(completedItems, totalItems)
 			const listCurrentProgress = `**Current Progress: ${completedItems}/${totalItems} items completed (${percentComplete}%)**`
 			const noteChecklistInEnv = "(Full checklist shown in environment_details above — only report completed items.)"
+
+			if (policy.kind === "terminal") {
+				return `\n
+				${listCurrentProgress}\n
+				${noteChecklistInEnv}\n
+				${FocusChainPrompts.completed.replace("{{totalItems}}", totalItems.toString())}\n
+				`
+			}
+
+			const progressInstruction = policy.requireTaskProgressWhenSupported
+				? FocusChainPrompts.progressUpdateWhenSupported
+				: ""
 
 			// If user has updated the list, inform the model
 			if (this.taskState.todoListWasUpdatedByUser) {
 				return `\n\n
-				${introUpdateRequired}\n
+				${progressInstruction}\n
 				${listCurrentProgress}\n
 				${noteChecklistInEnv}\n
 				**CRITICAL:** The user has modified this todo list. Review the checklist in environment_details carefully.\n
@@ -203,12 +215,10 @@ export class FocusChainManager {
 				progressBasedMessageStub = `\n\n**Note:** ${percentComplete}% of items are complete. Proceed with the task.`
 			} else if (percentComplete >= 75) {
 				progressBasedMessageStub = `\n\n**Note:** ${percentComplete}% of items are complete! Focus on finishing the remaining items.`
-			} else if (completedItems === totalItems && totalItems > 0) {
-				progressBasedMessageStub = FocusChainPrompts.completed.replace("{{totalItems}}", totalItems.toString())
 			}
 
 			return `\n
-				${introUpdateRequired}\n
+				${progressInstruction}\n
 				${listCurrentProgress}\n
 				${noteChecklistInEnv}\n
 				${FocusChainPrompts.reminder}\n

@@ -82,6 +82,37 @@ describe("MessageChannel.say", () => {
 	})
 })
 
+describe("MessageChannel.presentAsk", () => {
+	it("resets a reused command message from a terminal state to pending", async () => {
+		const { channel, clineMessages } = createMessageChannel()
+		await channel.say("command", "echo ready")
+		const commandMessage = clineMessages[0]
+		assert.ok(commandMessage)
+		commandMessage.commandStatus = "completed"
+		commandMessage.exitCode = 0
+
+		await channel.presentAsk("command", "echo ready.REQ_APP", commandMessage.ts)
+
+		assert.equal(clineMessages.length, 1)
+		assert.equal(clineMessages[0].type, "ask")
+		assert.equal(clineMessages[0].ask, "command")
+		assert.equal(clineMessages[0].text, "echo ready.REQ_APP")
+		assert.equal(clineMessages[0].partial, false)
+		assert.equal(clineMessages[0].commandStatus, "pending")
+		assert.equal(clineMessages[0].exitCode, undefined)
+	})
+
+	it("sets pending for a new command ask without assigning command status to other asks", async () => {
+		const { channel, clineMessages } = createMessageChannel()
+
+		await channel.presentAsk("command", "echo ready.REQ_APP")
+		await channel.presentAsk("qna_respond", '{"response":"ready"}')
+
+		assert.equal(clineMessages[0].commandStatus, "pending")
+		assert.equal(clineMessages[1].commandStatus, undefined)
+	})
+})
+
 describe("MessageChannel.ask", () => {
 	it("does not treat state_snapshot messages as superseding a pending ask", async () => {
 		const clock = vi.useFakeTimers()

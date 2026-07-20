@@ -49,6 +49,7 @@ import { FileServiceClient, UiServiceClient } from "@/services/grpc-client"
 import { findMatchingResourceOrTemplate, getMcpServerDisplayName } from "@/utils/mcp"
 import CodeAccordian, { cleanPathPrefix } from "../common/CodeAccordian"
 import ActModeRespondRow from "./ActModeRespondRow"
+import { cancelTaskActivities } from "./activity/useTaskActivities"
 import { CommandOutputContent, CommandOutputRow } from "./CommandOutputRow"
 import { CompletionOutputRow } from "./CompletionOutputRow"
 import { resolveApiErrorMessage } from "./chat-view/utils/messageUtils"
@@ -175,6 +176,7 @@ export const ChatRowContent = memo(
 			clineMessages,
 			showFeatureTips,
 			taskViewState,
+			currentTaskItem,
 		} = useExtensionState()
 		const [seeNewChangesDisabled, setSeeNewChangesDisabled] = useState(false)
 		const [explainChangesDisabled, setExplainChangesDisabled] = useState(false)
@@ -258,10 +260,17 @@ export const ChatRowContent = memo(
 		const isCommandPending = isCommandMessage && message.commandStatus === "pending"
 		const isCommandSkipped = isCommandMessage && message.commandStatus === "skipped"
 		const isCommandFailed = isCommandMessage && message.commandStatus === "failed"
+		const isCommandCancelled = isCommandMessage && message.commandStatus === "cancelled"
 		const isCommandCompleted =
 			isCommandMessage &&
 			(message.commandStatus === "completed" || message.commandStatus === undefined) &&
 			!isCommandSkipped
+
+		const cancelCommand =
+			onCancelCommand ??
+			(message.activityId && currentTaskItem?.id
+				? () => void cancelTaskActivities(currentTaskItem.id, [message.activityId as string])
+				: undefined)
 
 		const isMcpServerResponding = isLast && lastModifiedMessage?.say === "mcp_server_request_started"
 
@@ -828,6 +837,7 @@ export const ChatRowContent = memo(
 					icon={icon}
 					isBackgroundExec={vscodeTerminalExecutionMode === "backgroundExec"}
 					isCollapsed={isCommandCollapsed}
+					isCommandCancelled={isCommandCancelled}
 					isCommandCompleted={isCommandCompleted}
 					isCommandExecuting={isCommandExecuting}
 					isCommandFailed={isCommandFailed}
@@ -835,7 +845,7 @@ export const ChatRowContent = memo(
 					isLast={isLast}
 					isOutputFullyExpanded={isOutputFullyExpanded}
 					message={message}
-					onCancelCommand={onCancelCommand}
+					onCancelCommand={cancelCommand}
 					onToggleCollapsed={toggleCommandCollapsed}
 					setIsOutputFullyExpanded={setIsOutputFullyExpanded}
 					title={title}

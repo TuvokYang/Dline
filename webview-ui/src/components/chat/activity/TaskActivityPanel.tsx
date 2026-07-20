@@ -10,6 +10,7 @@ import {
 	TerminalIcon,
 } from "lucide-react"
 import { useMemo, useState } from "react"
+import { OpenFilePathLink } from "@/components/common/OpenFilePathLink"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { cancelTaskActivities, useTaskActivities } from "./useTaskActivities"
@@ -140,6 +141,11 @@ export function TaskActivityPanel({ taskId }: { taskId: string }) {
 								<div className="max-h-[60vh] overflow-y-auto border-t border-editor-group-border p-2.5 text-xs">
 									{activity.detail && (
 										<div className="mb-2 whitespace-pre-wrap text-description">{activity.detail}</div>
+									)}
+									{activity.logPath && (
+										<div className="mb-2 rounded-sm bg-banner-background px-2 py-1.5">
+											<OpenFilePathLink filePath={activity.logPath} label="📋 Output log:" />
+										</div>
 									)}
 									{activity.output && (
 										<pre className="m-0 whitespace-pre-wrap break-words bg-code p-2 font-mono text-[11px]">

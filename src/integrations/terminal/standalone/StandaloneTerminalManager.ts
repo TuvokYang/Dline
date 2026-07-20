@@ -12,8 +12,9 @@
  * - Provides summary for environment details
  */
 
-import { ClineTempManager } from "@services/temp"
+import { DlineTempManager } from "@services/temp"
 import * as fs from "fs"
+import { isCommandCompletionSuccessful } from "../command-completion"
 import { BACKGROUND_COMMAND_TIMEOUT_MS, DEFAULT_TERMINAL_OUTPUT_LINE_LIMIT } from "../constants"
 import type { BackgroundCommand, ITerminalManager, TerminalInfo, TerminalProcessResultPromise } from "../types"
 import { StandaloneTerminalProcess } from "./StandaloneTerminalProcess"
@@ -401,24 +402,27 @@ export class StandaloneTerminalManager implements ITerminalManager {
 	 *
 	 * @param process The terminal process to track
 	 * @param command The command string being executed
+	 * @param activityId Stable command activity identity used by storage and presentation.
 	 * @param existingOutput Output lines already captured before tracking started
 	 * @returns The background command info with log file path
 	 */
 	trackBackgroundCommand(
 		process: TerminalProcessResultPromise,
 		command: string,
+		activityId: string,
 		existingOutput: string[] = [],
 		callbacks?: {
 			onOutputLine?: (line: string) => void
 			onTimeout?: () => void
 		},
 	): BackgroundCommand {
-		const id = `background-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
-		// Use ClineTempManager for proper temp file management and cleanup
-		const logFilePath = ClineTempManager.createTempFilePath("background")
+		if (this.backgroundCommands.has(activityId)) {
+			throw new Error(`Background command is already tracked: ${activityId}`)
+		}
 
+		const logFilePath = DlineTempManager.createTempFilePath(activityId)
 		const backgroundCommand: BackgroundCommand = {
-			id,
+			id: activityId,
 			command,
 			startTime: Date.now(),
 			status: "running",
@@ -430,7 +434,7 @@ export class StandaloneTerminalManager implements ITerminalManager {
 
 		// Create write stream for log file
 		const logStream = fs.createWriteStream(logFilePath, { flags: "a" })
-		this.logStreams.set(id, logStream)
+		this.logStreams.set(activityId, logStream)
 
 		// Write existing output that was captured before tracking started
 		if (existingOutput.length > 0) {
@@ -458,7 +462,7 @@ export class StandaloneTerminalManager implements ITerminalManager {
 				}
 			}
 		}, BACKGROUND_COMMAND_TIMEOUT_MS)
-		this.backgroundTimeouts.set(id, timeoutId)
+		this.backgroundTimeouts.set(activityId, timeoutId)
 
 		// Listen for completion - clear timeout
 		process.on("completed", (details) => {
@@ -466,10 +470,10 @@ export class StandaloneTerminalManager implements ITerminalManager {
 			if (backgroundCommand.status !== "running") {
 				return
 			}
-			const timeout = this.backgroundTimeouts.get(id)
+			const timeout = this.backgroundTimeouts.get(activityId)
 			if (timeout) {
 				clearTimeout(timeout)
-				this.backgroundTimeouts.delete(id)
+				this.backgroundTimeouts.delete(activityId)
 			}
 			const exitCode = details?.exitCode
 			const signal = details?.signal
@@ -477,7 +481,9 @@ export class StandaloneTerminalManager implements ITerminalManager {
 				backgroundCommand.exitCode = exitCode
 			}
 
-			if ((typeof exitCode === "number" && exitCode !== 0) || signal) {
+			if (isCommandCompletionSuccessful(details)) {
+				backgroundCommand.status = "completed"
+			} else {
 				backgroundCommand.status = "error"
 				if (typeof exitCode === "number" && exitCode !== 0) {
 					logStream.write(`\n[EXIT_CODE] Process exited with code ${exitCode}\n`)
@@ -485,8 +491,9 @@ export class StandaloneTerminalManager implements ITerminalManager {
 				if (signal) {
 					logStream.write(`\n[SIGNAL] Process terminated by signal ${signal}\n`)
 				}
-			} else {
-				backgroundCommand.status = "completed"
+				if (typeof exitCode !== "number" && !signal) {
+					logStream.write("\n[UNKNOWN_EXIT] Process completion did not include an exit code\n")
+				}
 			}
 			logStream.end()
 		})
@@ -497,10 +504,10 @@ export class StandaloneTerminalManager implements ITerminalManager {
 			if (backgroundCommand.status !== "running") {
 				return
 			}
-			const timeout = this.backgroundTimeouts.get(id)
+			const timeout = this.backgroundTimeouts.get(activityId)
 			if (timeout) {
 				clearTimeout(timeout)
-				this.backgroundTimeouts.delete(id)
+				this.backgroundTimeouts.delete(activityId)
 			}
 			backgroundCommand.status = "error"
 			// Try to extract exit code from error message if available
@@ -511,7 +518,7 @@ export class StandaloneTerminalManager implements ITerminalManager {
 			logStream.end()
 		})
 
-		this.backgroundCommands.set(id, backgroundCommand)
+		this.backgroundCommands.set(activityId, backgroundCommand)
 		return backgroundCommand
 	}
 

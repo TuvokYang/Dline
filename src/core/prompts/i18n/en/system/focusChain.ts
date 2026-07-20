@@ -33,6 +33,9 @@ Create an initial todo list via task_progress parameter. Pass the complete list 
 - [x] Write core logic
 \`\`\``,
 
+	progressUpdateWhenSupported:
+		"# TODO LIST UPDATE: If your next tool supports the task_progress parameter, include the exact progress update in that tool call. Tools without task_progress remain valid and must not be blocked.",
+
 	reminder: `
 Update task_progress each step:
 - \`- [x]\` mark done — report COMPLETED items with EXACT text from the checklist. Do NOT send the full checklist.

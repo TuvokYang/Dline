@@ -15,19 +15,6 @@ const prompts: Record<string, string> = {
 	planModeInstructions: `In this mode you should focus on information gathering, asking questions, and architecting a solution. Once you have a plan, use the plan_mode_respond tool to engage in a conversational back and forth with the user. Do not use the plan_mode_respond tool until you've gathered all the information you need e.g. with read_file or ask_followup_question.
 (Remember: If it seems the user wants you to use tools only available in Act Mode, you should ask the user to "toggle to Act mode" (use those words) - they will have to manually do this themselves with the Plan/Act toggle button below. You do not have the ability to switch to Act Mode yourself, and must wait for the user to do it themselves once they are satisfied with the plan. You also cannot present an option to toggle to Act mode, as this will be something you need to direct the user to do manually themselves.)`,
 
-	taskResumptionPlan:
-		"This task was interrupted @AGO_TEXT@. The conversation may have been incomplete. Be aware that the project state may have changed since then. The current working directory is now '@CWD@'.\n\nNote: If you previously attempted a tool use that the user did not provide a result for, you should assume the tool use was not successful. However you are in PLAN MODE, so rather than continuing the task, you must respond to the user's message.",
-	taskResumptionAct:
-		"This task was interrupted @AGO_TEXT@. It may or may not be complete, so please reassess the task context. Be aware that the project state may have changed since then. The current working directory is now '@CWD@'. If the task has not been completed, retry the last step before interruption and proceed with completing the task.\n\nNote: If you previously attempted a tool use that the user did not provide a result for, you should assume the tool use was not successful and assess whether you should retry. If the last tool was a browser_action, the browser has been closed and you must launch a new browser if needed.",
-	taskResumptionRecentNote:
-		"IMPORTANT: If the last tool use was a replace_in_file or write_to_file that was interrupted, the file was reverted back to its original state before the interrupted edit, and you do NOT need to re-read the file as you already have its up-to-date contents.",
-	taskResumptionResponsePlanPrefix:
-		"New message to respond to with plan_mode_respond tool (be sure to provide your response in the <response> parameter)",
-	taskResumptionResponseActPrefix: "New instructions for task continuation",
-	taskResumptionNoResponsePlan:
-		"(The user did not provide a new message. Consider asking them how they'd like you to proceed, or suggest to them to switch to Act mode to continue with the task.)",
-	taskResumptionWrapper: "[TASK RESUMPTION] @RESUME_TEXT@@RECENT_NOTE@",
-	userMessageWrapper: "@PREFIX@:\n<user_message>\n@RESPONSE_TEXT@\n</user_message>",
 	fileSizeKb: "@SIZE@ KB",
 	fileLineCount: "@COUNT@ lines",
 	ordinalSecond: "nd",

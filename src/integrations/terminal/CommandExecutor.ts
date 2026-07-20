@@ -16,6 +16,7 @@
 import { findLastIndex } from "@shared/array"
 import { Logger } from "@/shared/services/Logger"
 import { orchestrateCommandExecution } from "./CommandOrchestrator"
+import { isCommandCompletionSuccessful } from "./command-completion"
 import { StandaloneTerminalManager } from "./standalone/StandaloneTerminalManager"
 import type {
 	BackgroundCommand,
@@ -45,6 +46,8 @@ export class CommandExecutor {
 
 	// Track the currently executing foreground process for cancellation
 	private currentProcess: TerminalProcessResultPromise | null = null
+	private readonly processes = new Map<string, TerminalProcessResultPromise>()
+	private readonly cancelledActivityIds = new Set<string>()
 
 	// Flag to track if the current command was cancelled externally
 	private wasCancelledExternally = false
@@ -109,40 +112,68 @@ export class CommandExecutor {
 		}
 
 		// Select the appropriate terminal manager
-		const useStandalone = options?.useBackgroundExecution || this.terminalExecutionMode === "backgroundExec"
+		const useStandalone =
+			options?.startInBackground || options?.useBackgroundExecution || this.terminalExecutionMode === "backgroundExec"
 		const manager = useStandalone ? this.standaloneManager : this.terminalManager
 		Logger.debug(`[Task ${this.taskId}] Executing command in ${useStandalone ? "standalone" : "VSCode"} terminal: ${command}`)
 		this.callbacks.markWorkspaceScanRequired?.()
 
 		// Get terminal and run command
 		const terminalInfo = await manager.getOrCreateTerminal(this.cwd)
-		terminalInfo.terminal.show()
+		if (options?.startInBackground) {
+			terminalInfo.terminal.hide()
+		} else {
+			terminalInfo.terminal.show()
+		}
 		const process = manager.runCommand(terminalInfo, command)
 		const activityId = `command_${options?.commandTs ?? Date.now()}_${this.nextActivityNumber++}`
 		let activityLineCount = 0
+		this.processes.set(activityId, process)
+		if (options?.commandTs) {
+			const messages = this.callbacks.getClineMessages() as Array<{ ts?: number }>
+			const commandIndex = messages.findIndex((message) => message.ts === options.commandTs)
+			if (commandIndex !== -1) await this.callbacks.updateClineMessage(commandIndex, { activityId })
+		}
 		this.callbacks.createCommandActivity?.({
 			activityId,
 			command,
-			executionMode: "foreground",
-			cancel: () => Promise.resolve(process.terminate?.()),
+			executionMode: options?.startInBackground ? "background" : "foreground",
+			cancel: async () => {
+				await this.cancelCommand(activityId)
+			},
 		})
 
 		// Reset cancellation flag and track the current process
 		this.wasCancelledExternally = false
 		this.currentProcess = process
 		const clearCurrentProcess = () => {
-			this.currentProcess = null
+			if (this.currentProcess === process) this.currentProcess = null
+			this.processes.delete(activityId)
 		}
 		process.once("completed", clearCurrentProcess)
 		process.once("error", clearCurrentProcess)
-		process.once("completed", (details?: { exitCode?: number; signal?: string }) => {
-			const failed = Boolean(details?.signal) || (typeof details?.exitCode === "number" && details.exitCode !== 0)
+		process.once("completed", (details) => {
+			const cancelled = this.cancelledActivityIds.has(activityId)
+			const failed = !isCommandCompletionSuccessful(details)
 			this.callbacks.updateCommandActivity?.(activityId, {
-				status: failed ? "failed" : "completed",
-				latestEvent: failed ? "Command failed" : "Command completed",
-				error: details?.signal ? `Terminated by ${details.signal}` : undefined,
+				status: cancelled ? "cancelled" : failed ? "failed" : "completed",
+				latestEvent: cancelled ? "Cancelled by user" : failed ? "Command failed" : "Command completed",
+				error: cancelled
+					? undefined
+					: details?.signal
+						? `Terminated by ${details.signal}`
+						: typeof details?.exitCode !== "number"
+							? "Command completion could not be verified because no exit code was reported"
+							: undefined,
 				lineCount: activityLineCount,
 			})
+			if (options?.commandTs && cancelled) {
+				const messages = this.callbacks.getClineMessages() as Array<{ ts?: number }>
+				const commandIndex = messages.findIndex((message) => message.ts === options.commandTs)
+				if (commandIndex !== -1) {
+					void this.callbacks.updateClineMessage(commandIndex, { commandStatus: "cancelled" })
+				}
+			}
 		})
 		process.once("error", (error: Error) => {
 			this.callbacks.updateCommandActivity?.(activityId, {
@@ -155,7 +186,9 @@ export class CommandExecutor {
 
 		// Use shared orchestration logic
 		// The StandaloneTerminalManager handles background command tracking internally
+		let backgroundCommand: BackgroundCommand | undefined
 		const result = await orchestrateCommandExecution(process, manager, this.callbacks, {
+			activityId,
 			command,
 			timeoutSeconds,
 			suppressUserInteraction: options?.suppressUserInteraction,
@@ -173,38 +206,63 @@ export class CommandExecutor {
 			// existingOutput contains all output lines captured so far
 			onProceedWhileRunning: useStandalone
 				? (existingOutput: string[]) => {
-						const backgroundCmd = this.standaloneManager.trackBackgroundCommand(process, command, existingOutput, {
-							onOutputLine: (line) => {
-								activityLineCount++
-								this.callbacks.appendCommandActivityOutput?.(activityId, `${line}\n`)
-								this.callbacks.updateCommandActivity?.(activityId, {
-									latestEvent: line.trim() || "Command produced output",
-									lineCount: activityLineCount,
-								})
+						if (backgroundCommand) {
+							return {
+								backgroundCommandId: backgroundCommand.id,
+								logFilePath: backgroundCommand.logFilePath,
+							}
+						}
+						backgroundCommand = this.standaloneManager.trackBackgroundCommand(
+							process,
+							command,
+							activityId,
+							existingOutput,
+							{
+								onOutputLine: (line) => {
+									activityLineCount++
+									this.callbacks.appendCommandActivityOutput?.(activityId, `${line}\n`)
+									this.callbacks.updateCommandActivity?.(activityId, {
+										latestEvent: line.trim() || "Command produced output",
+										lineCount: activityLineCount,
+									})
+								},
+								onTimeout: () => {
+									this.callbacks.updateCommandActivity?.(activityId, {
+										status: "timeout",
+										latestEvent: "Background command timed out",
+										lineCount: activityLineCount,
+									})
+								},
 							},
-							onTimeout: () => {
-								this.callbacks.updateCommandActivity?.(activityId, {
-									status: "timeout",
-									latestEvent: "Background command timed out",
-									lineCount: activityLineCount,
-								})
-							},
-						})
+						)
 						this.callbacks.updateCommandActivity?.(activityId, {
 							executionMode: "background",
 							latestEvent: "Continuing in background",
 							lineCount: activityLineCount,
+							logPath: backgroundCommand.logFilePath,
 						})
-						return { logFilePath: backgroundCmd.logFilePath }
+						return {
+							backgroundCommandId: backgroundCommand.id,
+							logFilePath: backgroundCommand.logFilePath,
+						}
 					}
 				: undefined,
+			startInBackground: options?.startInBackground,
 			showShellIntegrationSuggestion: this.shouldShowBackgroundTerminalSuggestion(),
 			terminalType: useStandalone ? "standalone" : "vscode",
 		})
 
+		if (result.logFilePath && options?.commandTs) {
+			const messages = this.callbacks.getClineMessages() as Array<{ ts?: number }>
+			const commandIndex = messages.findIndex((message) => message.ts === options.commandTs)
+			if (commandIndex !== -1) {
+				await this.callbacks.updateClineMessage(commandIndex, { logPath: result.logFilePath })
+			}
+		}
+
 		// If the command was cancelled externally (via cancel button), return a clear cancellation message
 		// This ensures the AI agent knows the command was cancelled by the user
-		if (this.wasCancelledExternally) {
+		if (this.wasCancelledExternally || this.cancelledActivityIds.delete(activityId)) {
 			const outputSoFar =
 				result.outputLines.length > 0
 					? `\nOutput captured before cancellation:\n${manager.processOutput(result.outputLines)}`
@@ -219,6 +277,19 @@ export class CommandExecutor {
 		}
 
 		return result
+	}
+
+	/** Cancel exactly one command by its stable activity identity. */
+	async cancelCommand(activityId: string): Promise<boolean> {
+		const process = this.processes.get(activityId)
+		if (!process?.terminate) return false
+		this.cancelledActivityIds.add(activityId)
+		this.callbacks.updateCommandActivity?.(activityId, {
+			status: "cancelling",
+			latestEvent: "Cancellation requested",
+		})
+		await Promise.resolve(process.terminate())
+		return true
 	}
 
 	/**

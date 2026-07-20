@@ -4,7 +4,7 @@ import { useState } from "react"
 import { TaskServiceClient } from "@/services/grpc-client"
 import { FooterActions } from "./FooterActions"
 import { isPresentationKind, renderPresentation } from "./renderer-registry"
-import type { DispatchInteraction, InteractionDraft } from "./types"
+import type { AcceptedInteractionSettlement, DispatchInteraction, InteractionDraft } from "./types"
 
 /** Presentation-only props for a say timeline row. */
 export interface SayViewProps {
@@ -33,9 +33,10 @@ export interface InteractionHostProps {
 	dispatch: DispatchInteraction
 	draft?: InteractionDraft
 	showTimeline?: boolean
+	onDraftAccepted?: (settlement: AcceptedInteractionSettlement) => void
 }
 
-const EMPTY_DRAFT: InteractionDraft = { text: "", images: [], files: [] }
+const EMPTY_DRAFT: InteractionDraft = { text: "", images: [], files: [], activeQuote: null }
 
 async function dispatchTaskAction(action: "cancel"): Promise<void> {
 	if (action === "cancel") {
@@ -44,7 +45,14 @@ async function dispatchTaskAction(action: "cancel"): Promise<void> {
 }
 
 /** Bind one backend interaction projection to its exact ask presentation anchor. */
-export function InteractionHost({ messages, view, dispatch, draft = EMPTY_DRAFT, showTimeline = true }: InteractionHostProps) {
+export function InteractionHost({
+	messages,
+	view,
+	dispatch,
+	draft = EMPTY_DRAFT,
+	showTimeline = true,
+	onDraftAccepted,
+}: InteractionHostProps) {
 	const [selection, setSelection] = useState<string[]>([])
 	const interaction = view.activeInteraction
 	const anchor = interaction
@@ -77,12 +85,19 @@ export function InteractionHost({ messages, view, dispatch, draft = EMPTY_DRAFT,
 						dispatch={dispatch}
 						dispatchTaskAction={dispatchTaskAction}
 						draft={draft}
+						onDraftAccepted={onDraftAccepted}
 						selection={{ values: selection }}
 						view={view}
 					/>
 				</>
 			) : (
-				<FooterActions dispatch={dispatch} dispatchTaskAction={dispatchTaskAction} draft={draft} view={view} />
+				<FooterActions
+					dispatch={dispatch}
+					dispatchTaskAction={dispatchTaskAction}
+					draft={draft}
+					onDraftAccepted={onDraftAccepted}
+					view={view}
+				/>
 			)}
 		</section>
 	)

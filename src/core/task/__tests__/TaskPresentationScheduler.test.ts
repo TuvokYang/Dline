@@ -187,6 +187,38 @@ describe("TaskPresentationScheduler", () => {
 		flushCount.should.equal(3)
 	})
 
+	it("isolates a reset in-flight flush from the next presentation generation", async () => {
+		let rejectFirstFlush: ((error: Error) => void) | undefined
+		let flushCount = 0
+		const onFlushError = vi.fn()
+
+		const scheduler = new TaskPresentationScheduler({
+			flush: async () => {
+				flushCount += 1
+				if (flushCount === 1) {
+					await new Promise<void>((_, reject) => {
+						rejectFirstFlush = reject
+					})
+				}
+			},
+			getDelayMs: () => 0,
+			onFlushError,
+		})
+
+		scheduler.requestFlush("immediate")
+		await Promise.resolve()
+		scheduler.reset()
+		scheduler.requestFlush("immediate")
+
+		rejectFirstFlush?.(new Error("Dline instance aborted"))
+		await Promise.resolve()
+		await Promise.resolve()
+		await Promise.resolve()
+
+		flushCount.should.equal(2)
+		onFlushError.mock.calls.length.should.equal(0)
+	})
+
 	it("reset() cancels pending timers without marking the scheduler as disposed", () => {
 		const clock = vi.useFakeTimers()
 		const flushSpy = vi.fn(async () => {})

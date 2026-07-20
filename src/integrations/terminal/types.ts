@@ -349,7 +349,7 @@ export interface CommandExecutorCallbacks {
 	 */
 	updateClineMessage: (
 		index: number,
-		updates: { text?: string; exitCode?: number; commandStatus?: CommandStatus },
+		updates: { text?: string; exitCode?: number; commandStatus?: CommandStatus; logPath?: string; activityId?: string },
 	) => Promise<void>
 	/** Get cline messages array */
 	getClineMessages: () => Array<{ ask?: string; say?: string; text?: string }>
@@ -373,6 +373,7 @@ export interface CommandExecutorCallbacks {
 			latestEvent?: string
 			error?: string
 			lineCount?: number
+			logPath?: string
 		},
 	) => void
 	/** Append one bounded command output delta to the activity monitor. */
@@ -388,6 +389,8 @@ export interface CommandExecutionOptions {
 	 * This is useful for subagent runs and headless-style execution flows.
 	 */
 	useBackgroundExecution?: boolean
+	/** Start the command as a Dline-owned background process and return immediately. */
+	startInBackground?: boolean
 	/**
 	 * Suppress command interaction/output UI messages (ask/say) for this command execution.
 	 * Command output is still captured and returned as the tool result.
@@ -424,6 +427,8 @@ export type FullCommandExecutorConfig = CommandExecutorConfig
  * Options for command orchestration
  */
 export interface OrchestrationOptions {
+	/** Stable identity shared by command activity and owned log files. */
+	activityId?: string
 	/** The command being executed */
 	command: string
 	/** Optional timeout in seconds */
@@ -438,7 +443,9 @@ export interface OrchestrationOptions {
 	 * @param existingOutput The output lines captured so far (to write to log file)
 	 * @returns The log file path if tracking was started, undefined otherwise
 	 */
-	onProceedWhileRunning?: (existingOutput: string[]) => { logFilePath: string } | undefined
+	onProceedWhileRunning?: (existingOutput: string[]) => { backgroundCommandId: string; logFilePath: string } | undefined
+	/** Start in background without waiting for timeout or user intervention. */
+	startInBackground?: boolean
 	/**
 	 * The type of terminal being used for telemetry tracking.
 	 * Defaults to "vscode" for backward compatibility.
@@ -467,6 +474,10 @@ export interface CommandExecutionOutcome {
 	exitCode?: number | null
 	/** Process termination signal when available. */
 	signal?: NodeJS.Signals | null
+	/** Stable background command identifier when execution was detached. */
+	backgroundCommandId?: string
+	/** Background log path when available. */
+	logFilePath?: string
 }
 
 export interface OrchestrationResult extends CommandExecutionOutcome {

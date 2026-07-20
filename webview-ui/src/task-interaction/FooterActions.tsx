@@ -1,7 +1,15 @@
 import type { TaskViewState } from "@shared/ExtensionMessage"
 import { VSCodeButton } from "@vscode/webview-ui-toolkit/react"
 import { useState } from "react"
-import { buildInteractionRequest, type DispatchInteraction, type InteractionDraft, type InteractionSelection } from "./types"
+import {
+	type AcceptedInteractionSettlement,
+	buildInteractionRequest,
+	captureInteractionDraft,
+	createAcceptedInteractionSettlement,
+	type DispatchInteraction,
+	type InteractionDraft,
+	type InteractionSelection,
+} from "./types"
 
 /** Props for the backend-projected task footer. */
 export interface FooterActionsProps {
@@ -10,10 +18,11 @@ export interface FooterActionsProps {
 	selection?: InteractionSelection
 	dispatch: DispatchInteraction
 	dispatchTaskAction?: (action: "cancel") => Promise<void>
+	onDraftAccepted?: (settlement: AcceptedInteractionSettlement) => void
 }
 
 /** Render and dispatch footer actions without inspecting message history. */
-export function FooterActions({ view, draft, selection, dispatch, dispatchTaskAction }: FooterActionsProps) {
+export function FooterActions({ view, draft, selection, dispatch, dispatchTaskAction, onDraftAccepted }: FooterActionsProps) {
 	const [pending, setPending] = useState(false)
 	const actions = view.footer.actions.filter((action) => action.type !== "reply" || view.input.enterAction !== "reply")
 	if (actions.length === 0) {
@@ -41,12 +50,19 @@ export function FooterActions({ view, draft, selection, dispatch, dispatchTaskAc
 							void dispatchTaskAction("cancel").finally(() => setPending(false))
 							return
 						}
-						const request = buildInteractionRequest(view, action.type, draft, selection)
+						const capturedDraft = captureInteractionDraft(draft)
+						const request = buildInteractionRequest(view, action.type, capturedDraft, selection)
 						if (!request) {
 							return
 						}
 						setPending(true)
-						void dispatch(request).finally(() => setPending(false))
+						void dispatch(request)
+							.then((response) => {
+								if (response.accepted) {
+									onDraftAccepted?.(createAcceptedInteractionSettlement(request, capturedDraft))
+								}
+							})
+							.finally(() => setPending(false))
 					}}
 					role="button">
 					{action.label}

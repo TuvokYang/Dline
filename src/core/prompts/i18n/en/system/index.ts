@@ -12,6 +12,7 @@ import focusChain from "./focusChain"
 import mcp from "./mcp"
 import objective from "./objective"
 import responses from "./responses"
+import resumeProvenance from "./resumeProvenance"
 import rules from "./rules"
 import runtimeEnvironment from "./runtimeEnvironment"
 import skills from "./skills"
@@ -61,10 +62,6 @@ export const systemPromptModules = [
 		connectedMcpServers: createRuntimeContract("NAMES"),
 	}),
 	defineLegacyModule("responses", "system", responses, {
-		taskResumptionPlan: createRuntimeContract("AGO_TEXT", "CWD"),
-		taskResumptionAct: createRuntimeContract("AGO_TEXT", "CWD"),
-		taskResumptionWrapper: createRuntimeContract("RESUME_TEXT", "RECENT_NOTE"),
-		userMessageWrapper: createRuntimeContract("PREFIX", "RESPONSE_TEXT"),
 		fileSizeKb: createRuntimeContract("SIZE"),
 		fileLineCount: createRuntimeContract("COUNT"),
 		checkpointRestoreAct: createRuntimeContract("EDITED_TEXT"),
@@ -77,6 +74,10 @@ export const systemPromptModules = [
 		cursorRulesLocalFileInstructions: createRuntimeContract("CWD", "CONTENT"),
 		cursorRulesLocalDirInstructions: createRuntimeContract("CWD", "CONTENT"),
 		agentsRulesLocalFileInstructions: createRuntimeContract("CWD", "CONTENT"),
+	}),
+	defineLegacyModule("resumeProvenance", "system", resumeProvenance, {
+		missingToolResult: createRuntimeContract("TOOL_NAME"),
+		continuationWithUserText: createRuntimeContract("PROVENANCE", "USER_TEXT"),
 	}),
 	defineLegacyModule("rules", "system", rules),
 	defineLegacyModule("skills", "system", skills, { main: createRuntimeContract("SKILLS_LIST") }),

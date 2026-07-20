@@ -131,6 +131,8 @@ export const NATIVE_TOOL_SPECS: readonly Omit<ProfileToolSpec, "profile">[] = [
 	spec(ClineDefaultTool.BASH, getPrompt("executeCommand", "nativeDescription"), [
 		param("command", true, getPrompt("executeCommand", "nativeCommandInstruction")),
 		param("requires_approval", true, getPrompt("executeCommand", "nativeRequiresApprovalInstruction"), "boolean"),
+		param("background", false, getPrompt("executeCommand", "nativeBackgroundInstruction"), "boolean"),
+		param("timeout", false, getPrompt("executeCommand", "nativeTimeoutInstruction"), "integer"),
 	]),
 	spec(
 		ClineDefaultTool.BROWSER,

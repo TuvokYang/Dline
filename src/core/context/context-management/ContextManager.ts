@@ -15,6 +15,7 @@ import fs from "fs/promises"
 import * as path from "path"
 import { Logger } from "@/shared/services/Logger"
 import { isTurnEndingToolName } from "../../task/assistant-message-order"
+import { createMissingToolResultMessage } from "../../task/resume/ResumeProvenance"
 import { getContextTokens, readContextTokens } from "./context-pressure"
 import { computeCompactTrigger, computeSummarizeBudget, getContextWindowInfo } from "./context-window-utils"
 
@@ -556,11 +557,7 @@ export class ContextManager {
 						if (!toolResultMap.has(toolUseId)) {
 							toolResultMap.set(
 								toolUseId,
-								this.createSyntheticToolResult(
-									toolUseId,
-									toolBlock,
-									"The result was not recorded. The tool execution may have been abnormal. Verify the actual outcome before continuing, especially for file edits or command executions.",
-								),
+								this.createSyntheticToolResult(toolUseId, toolBlock, createMissingToolResultMessage(toolName)),
 							)
 							needsUpdate = true
 						}

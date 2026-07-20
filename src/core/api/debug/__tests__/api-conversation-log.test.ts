@@ -56,12 +56,21 @@ describe("api_conversation_all round logging", () => {
 		expect(JSON.stringify(event.payload)).not.toContain("tool_use_id")
 	})
 
-	it("records response chunks and a terminal event in delivery order", async () => {
+	it("records one assembled response instead of one event per stream chunk", async () => {
 		async function* source(): ApiStream {
+			yield { type: "text", text: "hel", provider_metadata: { response_id: "response-1" } }
+			yield { type: "text", text: "lo", provider_metadata: { response_id: "response-1" } }
 			yield {
-				type: "text",
-				text: "hello",
-				provider_metadata: { response_id: "response-1" },
+				type: "tool_calls",
+				function_id: "function-1",
+				tool_index: 0,
+				tool_call: { function: { name: "read_file", arguments: '{"path":"' } },
+			}
+			yield {
+				type: "tool_calls",
+				function_id: "function-1",
+				tool_index: 0,
+				tool_call: { function: { arguments: 'README.md"}' } },
 			}
 		}
 
@@ -70,10 +79,23 @@ describe("api_conversation_all round logging", () => {
 			received.push(chunk)
 		}
 
-		expect(received).toHaveLength(1)
+		expect(received).toHaveLength(4)
 		const events = vi.mocked(appendApiConversationEvent).mock.calls.map((call) => call[1] as any)
 		expect(events.map((event) => event.direction)).toEqual(["response", "response_end"])
-		expect(events[0].payload.provider_metadata.response_id).toBe("response-1")
+		expect(events[0]).toMatchObject({
+			stage: "provider_adapter_output",
+			payload: {
+				chunks: [
+					{ type: "text", text: "hello", provider_metadata: { response_id: "response-1" } },
+					{
+						type: "tool_calls",
+						function_id: "function-1",
+						tool_index: 0,
+						tool_call: { function: { name: "read_file", arguments: '{"path":"README.md"}' } },
+					},
+				],
+			},
+		})
 		expect(events[1].status).toBe("completed")
 	})
 })

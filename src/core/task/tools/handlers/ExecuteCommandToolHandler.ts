@@ -17,39 +17,9 @@ import type { StronglyTypedUIHelpers } from "../types/UIHelpers"
 import { applyModelContentFixes } from "../utils/ModelContentProcessor"
 import { ToolResultUtils } from "../utils/ToolResultUtils"
 import { sayFeedbackOnce } from "../utils/UserFeedbackUtils"
+import { parseCommandExecutionOptions } from "./command-execution-options"
 
-// Every terminal execution needs a bounded foreground wait so a stalled shell
-// cannot permanently block the task loop.
-const DEFAULT_COMMAND_TIMEOUT_SECONDS = 30
-const LONG_RUNNING_COMMAND_TIMEOUT_SECONDS = 300
-
-const LONG_RUNNING_COMMAND_PATTERNS: RegExp[] = [
-	/\b(npm|pnpm|yarn|bun)\s+(install|ci|build|test)\b/i,
-	/\b(npm|pnpm|yarn|bun)\s+run\s+(build|test|lint|typecheck|check)\b/i,
-	/\b(pip|pip3|uv)\s+install\b/i,
-	/\b(poetry|pipenv)\s+install\b/i,
-	/\b(cargo|go|mvn|gradle|gradlew)\s+(build|test|check|install)\b/i,
-	/\b(make|cmake|ctest)\b/i,
-	/\b(pytest|tox|nox|jest|vitest|mocha)\b/i,
-	/\b(docker|podman)\s+build\b/i,
-	/\b(torchrun|deepspeed|accelerate\s+launch)\b/i,
-	/\bffmpeg\b/i,
-	/\bpython(?:\d+(?:\.\d+)?)?\s+.*\b(train|finetune)\b/i,
-]
-
-export function isLikelyLongRunningCommand(command: string): boolean {
-	const normalized = command.trim().replace(/\s+/g, " ")
-	return LONG_RUNNING_COMMAND_PATTERNS.some((pattern) => pattern.test(normalized))
-}
-
-export function resolveCommandTimeoutSeconds(command: string, timeoutParam: string | undefined): number {
-	const parsed = timeoutParam ? Number.parseInt(timeoutParam, 10) : Number.NaN
-	if (Number.isFinite(parsed) && parsed > 0) {
-		return parsed
-	}
-
-	return isLikelyLongRunningCommand(command) ? LONG_RUNNING_COMMAND_TIMEOUT_SECONDS : DEFAULT_COMMAND_TIMEOUT_SECONDS
-}
+export { isLikelyLongRunningCommand, resolveCommandTimeoutSeconds } from "./command-execution-options"
 
 export class ExecuteCommandToolHandler implements IFullyManagedTool {
 	readonly name = ClineDefaultTool.BASH
@@ -83,6 +53,7 @@ export class ExecuteCommandToolHandler implements IFullyManagedTool {
 		const requiresApprovalRaw: string | undefined = block.params.requires_approval
 		const requiresApprovalPerLLM = requiresApprovalRaw?.toLowerCase() === "true"
 		const timeoutParam: string | undefined = block.params.timeout
+		const backgroundParam: string | undefined = block.params.background
 
 		// Extract provider using the proven pattern from ReportBugHandler
 		const apiConfig = config.services.stateManager.getApiConfiguration()
@@ -108,7 +79,7 @@ export class ExecuteCommandToolHandler implements IFullyManagedTool {
 
 		// Bound the foreground wait in every terminal mode. On timeout the
 		// orchestrator releases the task loop while the command may keep running.
-		const timeoutSeconds = resolveCommandTimeoutSeconds(command, timeoutParam)
+		const executionOptions = parseCommandExecutionOptions(command, backgroundParam, timeoutParam)
 
 		// Pre-process command for certain models
 		if (config.api.getModel().id.includes("gemini")) {
@@ -323,8 +294,9 @@ export class ExecuteCommandToolHandler implements IFullyManagedTool {
 			finalCommand = `cd "${executionDir}" && ${actualCommand}`
 		}
 
-		const outcome = await config.callbacks.executeCommandTool(finalCommand, timeoutSeconds, {
+		const outcome = await config.callbacks.executeCommandTool(finalCommand, executionOptions.timeoutSeconds, {
 			commandTs: block.ts,
+			startInBackground: executionOptions.background,
 		})
 
 		if (timeoutId) {

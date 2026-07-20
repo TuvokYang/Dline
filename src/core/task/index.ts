@@ -167,6 +167,7 @@ import type { PresentationPriority } from "./presentation-types"
 import { RestoreHandler } from "./RestoreHandler"
 import { ResumeCoordinator } from "./resume/ResumeCoordinator"
 import type { ResumeEntry, ResumeInput } from "./resume/ResumeInput"
+import { createResumeContinuationText, createResumeInteractionPresentation } from "./resume/ResumeProvenance"
 import type { TaskEffectPorts } from "./runtime/TaskEffectRunner"
 import type { TaskEvent } from "./runtime/TaskEvent"
 import { type TaskDispatchResult, TaskRuntime } from "./runtime/TaskRuntime"
@@ -176,7 +177,7 @@ import { StreamResponseHandler } from "./StreamResponseHandler"
 import { shouldRunTaskCancelHook } from "./TaskCancelPolicy"
 import { TaskController } from "./TaskController"
 import { TaskPhase } from "./TaskPhase"
-import { TaskPresentationScheduler } from "./TaskPresentationScheduler"
+import { type PresentationFlushContext, TaskPresentationScheduler } from "./TaskPresentationScheduler"
 import { createSnapshot, hydrateSnapshot, normalizeLegacyTaskSnapshot, type TaskSnapshot } from "./TaskSnapshot"
 import { TaskSnapshotPersistence } from "./TaskSnapshotPersistence"
 import { TaskState } from "./TaskState"
@@ -475,7 +476,11 @@ export class Task {
 					if (effect.draft) {
 						this.taskState.autoRetryAttempts = 0
 					}
-					const content = await buildUserFeedbackContent(effect.draft?.text, effect.draft?.images, effect.draft?.files)
+					const draftText =
+						this.taskRuntime.getState().phase === TaskPhase.RESUMING
+							? createResumeContinuationText(effect.draft?.text)
+							: effect.draft?.text
+					const content = await buildUserFeedbackContent(draftText, effect.draft?.images, effect.draft?.files)
 					await this.recursivelyMakeClineRequests(content)
 				},
 				async (effect) => {
@@ -790,7 +795,13 @@ export class Task {
 				this.controller.updateBackgroundCommandState(isRunning, this.taskId),
 			updateClineMessage: async (
 				index: number,
-				updates: { text?: string; exitCode?: number; commandStatus?: CommandStatus },
+				updates: {
+					text?: string
+					exitCode?: number
+					commandStatus?: CommandStatus
+					logPath?: string
+					activityId?: string
+				},
 			) => {
 				await this.messageStateHandler.updateClineMessage(index, updates)
 				// Notify frontend so the sliding window reflects updated fields (e.g. commandStatus, exitCode)
@@ -832,10 +843,10 @@ export class Task {
 		// before streaming begins (in recursivelyMakeClineRequests) so the cadence is always
 		// correct by the time the first flush is scheduled.
 		this.presentationScheduler = new TaskPresentationScheduler({
-			flush: async () => {
+			flush: async (context) => {
 				try {
-					await this.flushPendingReasoningMessage()
-					await this.presentAssistantMessage()
+					await this.flushPendingReasoningMessage(context)
+					await this.presentAssistantMessage(context)
 				} catch (error) {
 					if (this.taskState.abort && error instanceof Error && error.message === "Dline instance aborted") {
 						Logger.debug(`[Task ${taskId}] presentAssistantMessage flush skipped after abort: ${error.message}`)
@@ -964,14 +975,16 @@ export class Task {
 	}
 
 	/** Publish only the latest accumulated reasoning text at the presentation cadence. */
-	private async flushPendingReasoningMessage(): Promise<void> {
+	private async flushPendingReasoningMessage(context?: PresentationFlushContext): Promise<void> {
+		if (context && !context.isCurrent()) return
 		const thinking = this.pendingReasoningText
 		if (!thinking) return
 		this.pendingReasoningText = undefined
-		if (this.taskState.abort) return
+		if (this.taskState.abort || (context && !context.isCurrent())) return
 
 		const existingTs = this.taskState.reasoningTs
 		const ts = await this.say("reasoning", thinking, undefined, undefined, true, existingTs)
+		if (context && !context.isCurrent()) return
 		if (ts !== undefined && existingTs === undefined) {
 			this.taskState.reasoningTs = ts
 		}
@@ -1406,7 +1419,7 @@ export class Task {
 					turnId: `resume:${this.taskId}`,
 					interactionId: `resume:${this.taskId}`,
 					kind: "resume",
-					presentation: "",
+					presentation: createResumeInteractionPresentation(),
 				})
 				return
 			case "read_only_failure":
@@ -2093,6 +2106,9 @@ export class Task {
 			const shouldRunTaskCancelHook = await this.shouldRunTaskCancelHook()
 
 			this.taskState.abort = true
+			this.api?.abort?.()
+			this.presentationScheduler.reset()
+			this.pendingReasoningText = undefined
 
 			// PHASE 3: Cancel any running hook execution
 			const activeHook = await this.getActiveHookExecution()
@@ -3167,7 +3183,8 @@ export class Task {
 		}
 	}
 
-	async presentAssistantMessage() {
+	async presentAssistantMessage(context?: PresentationFlushContext) {
+		if (context && !context.isCurrent()) return
 		if (this.taskState.abort) {
 			throw new Error("Dline instance aborted")
 		}
@@ -3187,8 +3204,10 @@ export class Task {
 		let didAdvance = false
 
 		try {
+			if (context && !context.isCurrent()) return
 			// Re-render blocks that have changed since last presentation
 			await this.reRenderUpdatedPartialBlocks(this.taskState.assistantMessageContent)
+			if (context && !context.isCurrent()) return
 
 			if (this.taskState.currentStreamingContentIndex >= this.taskState.assistantMessageContent.length) {
 				if (this.taskState.didCompleteReadingStream) {
@@ -3243,7 +3262,9 @@ export class Task {
 					// Use block.ts assigned at parse time for identity.
 					// Use block.ts assigned at parse time for identity.
 					const existingTs = (block as TextStreamContent).ts
+					if (context && !context.isCurrent()) return
 					const returnedTs = await this.say("text", content, undefined, undefined, block.partial, existingTs)
+					if (context && !context.isCurrent()) return
 					if (block.partial) {
 						if (returnedTs !== undefined) {
 							this.taskState.lastRenderedPartialByTs.set(returnedTs, this.computeBlockRenderSignature(block))
@@ -3407,10 +3428,11 @@ export class Task {
 		}
 
 		// Safe to recurse now that the lock is released.
+		if (context && !context.isCurrent()) return
 		if (shouldRecurse) {
-			await this.presentAssistantMessage()
+			await this.presentAssistantMessage(context)
 		} else if (!didAdvance && this.taskState.presentAssistantMessageHasPendingUpdates) {
-			await this.presentAssistantMessage()
+			await this.presentAssistantMessage(context)
 		}
 	}
 

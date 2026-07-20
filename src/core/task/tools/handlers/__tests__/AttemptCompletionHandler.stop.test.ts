@@ -134,7 +134,33 @@ describe("AttemptCompletionHandler stop behavior", () => {
 		const result = await handler.execute(config, createBlock("false"))
 
 		assert.equal(vi.mocked(config.interactions.complete).mock.calls.length, 0)
+		assert.equal(
+			vi.mocked(config.callbacks.say).mock.calls.some(([type]) => type === "completion_result"),
+			false,
+		)
+		assert.equal(vi.mocked(config.callbacks.saveCheckpoint).mock.calls.length, 0)
 		assert.match(String(result), /Command failed with exit code 2/)
+	})
+
+	it("does not complete the task when its command is cancelled by the user", async () => {
+		const taskState = new TaskState()
+		const config = createConfig(
+			taskState,
+			{ actionId: "start_new_task" },
+			{
+				userRejected: true,
+				result: "Command was cancelled by the user.",
+				completed: false,
+				exitCode: null,
+				signal: null,
+			},
+		)
+
+		const result = await new AttemptCompletionHandler().execute(config, createBlock("long-running"))
+
+		assert.equal(vi.mocked(config.interactions.complete).mock.calls.length, 0)
+		assert.equal(vi.mocked(config.callbacks.saveCheckpoint).mock.calls.length, 0)
+		assert.match(String(result), /cancelled by the user/)
 	})
 
 	it("returns completion feedback when the user replies", async () => {

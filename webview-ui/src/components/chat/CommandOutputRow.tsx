@@ -1,14 +1,13 @@
 import { COMMAND_OUTPUT_STRING, COMMAND_REQ_APP_STRING } from "@shared/combineCommandSequences"
 import { ClineMessage } from "@shared/ExtensionMessage"
-import { StringRequest } from "@shared/proto/dline/common"
 import AnsiUp from "ansi-to-html"
 import DOMPurify from "dompurify"
 import { TerminalIcon } from "lucide-react"
 import { memo, useEffect, useRef } from "react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
-import { FileServiceClient } from "@/services/grpc-client"
 import CodeBlock from "../common/CodeBlock"
+import { OpenFilePathLink } from "../common/OpenFilePathLink"
 import ExpandHandle from "./ExpandHandle"
 
 // ANSI color converter instance (shared across renders for performance)
@@ -31,12 +30,14 @@ export const CommandOutputContent = memo(
 		onToggle,
 		isContainerExpanded,
 		isCommandActive = false,
+		logPath,
 	}: {
 		output: string
 		isOutputFullyExpanded: boolean
 		onToggle: () => void
 		isContainerExpanded: boolean
 		isCommandActive?: boolean
+		logPath?: string
 	}) => {
 		const outputLines = output.split("\n")
 		const lineCount = outputLines.length
@@ -59,8 +60,12 @@ export const CommandOutputContent = memo(
 			return null
 		}
 
-		const logFilePathMatch = output.match(/📋 Output is being logged to: ([^\n]+)/)
-		const logFilePath = logFilePathMatch ? logFilePathMatch[1].trim() : null
+		const logPathPattern = /(?:📋 Output is being logged to:|⏱️ Command timed out\. Output is being logged to:)\s*([^\n]+)/
+		const logFilePathMatch = output.match(logPathPattern)
+		const logFilePath = logPath ?? (logFilePathMatch ? logFilePathMatch[1].trim() : null)
+		const logPathLineStart = output.search(
+			/(?:📋 Output is being logged to:|⏱️ Command timed out\. Output is being logged to:)/,
+		)
 
 		/**
 		 * Render ANSI-colored output as sanitized HTML.
@@ -88,24 +93,14 @@ export const CommandOutputContent = memo(
 					return renderAnsiOutput(output)
 				}
 				// Split around log file path and render each segment with ANSI support
-				const logPathLineStart = output.indexOf("📋 Output is being logged to:")
-				const logPathLineEnd = output.indexOf("\n", logPathLineStart)
-				const beforeLogPath = output.substring(0, logPathLineStart)
+				const logPathLineEnd = logPathLineStart >= 0 ? output.indexOf("\n", logPathLineStart) : -1
+				const beforeLogPath = logPathLineStart >= 0 ? output.substring(0, logPathLineStart) : output
 				const afterLogPath = logPathLineEnd !== -1 ? output.substring(logPathLineEnd) : ""
-				const fileName = logFilePath.split("/").pop() || logFilePath
 				return (
 					<div className="border border-editor-group-border rounded-sm">
 						{beforeLogPath && renderAnsiOutput(beforeLogPath)}
-						<div
-							className="flex flex-wrap items-center gap-1.5 px-3 py-2 mx-2 my-1.5 rounded-sm bg-banner-background cursor-pointer hover:brightness-110 transition-colors"
-							onClick={() => {
-								FileServiceClient.openFile(StringRequest.create({ value: logFilePath })).catch((err) =>
-									console.error("Failed to open log file:", err),
-								)
-							}}
-							title={`Click to open: ${logFilePath}`}>
-							<span className="shrink-0">📋 Output is being logged to:</span>
-							<span className="text-vscode-textLink-foreground underline break-all">{fileName}</span>
+						<div className="px-3 py-2 mx-2 my-1.5 rounded-sm bg-banner-background hover:brightness-110 transition-colors">
+							<OpenFilePathLink filePath={logFilePath} label="📋 Output is being logged to:" />
 						</div>
 						{afterLogPath && renderAnsiOutput(afterLogPath)}
 					</div>
@@ -116,24 +111,14 @@ export const CommandOutputContent = memo(
 			if (!logFilePath) {
 				return <CodeBlock forceWrap={true} source={`${"```"}shell\n${output}\n${"```"}`} />
 			}
-			const logPathLineStart = output.indexOf("📋 Output is being logged to:")
-			const logPathLineEnd = output.indexOf("\n", logPathLineStart)
-			const beforeLogPath = output.substring(0, logPathLineStart)
+			const logPathLineEnd = logPathLineStart >= 0 ? output.indexOf("\n", logPathLineStart) : -1
+			const beforeLogPath = logPathLineStart >= 0 ? output.substring(0, logPathLineStart) : output
 			const afterLogPath = logPathLineEnd !== -1 ? output.substring(logPathLineEnd) : ""
-			const fileName = logFilePath.split("/").pop() || logFilePath
 			return (
 				<div className="border border-editor-group-border rounded-sm">
 					{beforeLogPath && <CodeBlock forceWrap={true} source={`${"```"}shell\n${beforeLogPath}\n${"```"}`} />}
-					<div
-						className="flex flex-wrap items-center gap-1.5 px-3 py-2 mx-2 my-1.5 rounded-sm bg-banner-background cursor-pointer hover:brightness-110 transition-colors"
-						onClick={() => {
-							FileServiceClient.openFile(StringRequest.create({ value: logFilePath })).catch((err) =>
-								console.error("Failed to open log file:", err),
-							)
-						}}
-						title={`Click to open: ${logFilePath}`}>
-						<span className="shrink-0">📋 Output is being logged to:</span>
-						<span className="text-vscode-textLink-foreground underline break-all">{fileName}</span>
+					<div className="px-3 py-2 mx-2 my-1.5 rounded-sm bg-banner-background hover:brightness-110 transition-colors">
+						<OpenFilePathLink filePath={logFilePath} label="📋 Output is being logged to:" />
 					</div>
 					{afterLogPath && <CodeBlock forceWrap={true} source={`${"```"}shell\n${afterLogPath}\n${"```"}`} />}
 				</div>
@@ -171,6 +156,7 @@ export const CommandOutputRow = memo(
 		isCommandPending = false,
 		isCommandCompleted = false,
 		isCommandFailed = false,
+		isCommandCancelled = false,
 		isBackgroundExec = false,
 		onCancelCommand,
 		icon,
@@ -186,6 +172,7 @@ export const CommandOutputRow = memo(
 		isCommandPending?: boolean
 		isCommandCompleted?: boolean
 		isCommandFailed?: boolean
+		isCommandCancelled?: boolean
 		isBackgroundExec?: boolean
 		isLast?: boolean
 		onCancelCommand?: () => void
@@ -203,6 +190,7 @@ export const CommandOutputRow = memo(
 			isCommandPending,
 			isCommandCompleted,
 			isCommandFailed,
+			isCommandCancelled,
 			exitCode,
 		)
 		const isActive = isCommandExecuting || isCommandPending
@@ -311,11 +299,12 @@ export const CommandOutputRow = memo(
 						<CodeBlock forceWrap={true} source={`${"```"}shell\n${command}\n${"```"}`} />
 					</div>
 
-					{output.length > 0 && (
+					{(output.length > 0 || message.logPath) && (
 						<CommandOutputContent
 							isCommandActive={isActive}
 							isContainerExpanded={true}
 							isOutputFullyExpanded={isOutputFullyExpanded}
+							logPath={message.logPath}
 							onToggle={() => setIsOutputFullyExpanded(!isOutputFullyExpanded)}
 							output={output}
 						/>
@@ -339,6 +328,7 @@ const CommandStatusMap = {
 	pending: "Pending",
 	success: "Success",
 	failed: "Failed",
+	cancelled: "Cancelled",
 	completed: "Completed",
 	skipped: "Skipped",
 }
@@ -348,11 +338,13 @@ function getCommandStatusText(
 	isPending: boolean,
 	isCompleted: boolean,
 	isFailed: boolean,
+	isCancelled: boolean,
 	exitCode?: number | null,
 ): string {
 	if (isExecuting) return CommandStatusMap.running
 	if (isPending) return CommandStatusMap.pending
 	if (isFailed) return CommandStatusMap.failed
+	if (isCancelled) return CommandStatusMap.cancelled
 	if (isCompleted) {
 		if (exitCode === 0) return CommandStatusMap.success
 		if (exitCode != null) return CommandStatusMap.failed

@@ -5,14 +5,21 @@ import { combineHookSequences } from "@shared/combineHookSequences"
 import { BooleanRequest, StringRequest } from "@shared/proto/dline/common"
 import type { ModelInfo } from "@shared/proto/dline/models"
 import { resolveProfileModelInfo } from "@shared/providers/profile-model-info"
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useApiProfiles } from "@/components/settings/providers/useApiProfiles"
 import { useProviderModels } from "@/components/settings/providers/useProviderModels"
 import { useExtensionState } from "@/context/ExtensionStateContext"
 import { useShowNavbar } from "@/context/PlatformContext"
 import { FileServiceClient, TaskServiceClient, UiServiceClient } from "@/services/grpc-client"
 import { InteractionHost } from "@/task-interaction/InteractionHost"
-import { buildInteractionRequest } from "@/task-interaction/types"
+import {
+	type AcceptedInteractionSettlement,
+	buildInteractionRequest,
+	canApplyAcceptedInteractionSettlement,
+	captureInteractionDraft,
+	createAcceptedInteractionSettlement,
+	type InteractionDraft,
+} from "@/task-interaction/types"
 import { Navbar } from "../menu/Navbar"
 import { TaskActivityPanel } from "./activity/TaskActivityPanel"
 import { TaskActivityTabs, type TaskContentTab } from "./activity/TaskActivityTabs"
@@ -88,7 +95,10 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 	// Use custom hooks for state management
 	const chatState = useChatState(messages)
 	const {
+		inputValue,
 		setInputValue,
+		activeQuote,
+		setActiveQuote,
 		selectedImages,
 		setSelectedImages,
 		selectedFiles,
@@ -97,6 +107,41 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 		setExpandedRows,
 		textAreaRef,
 	} = chatState
+	const draftRevisionRef = useRef(0)
+	const previousDraftSourceRef = useRef({ inputValue, activeQuote, selectedImages, selectedFiles })
+	const previousDraftSource = previousDraftSourceRef.current
+	if (
+		previousDraftSource.inputValue !== inputValue ||
+		previousDraftSource.activeQuote !== activeQuote ||
+		previousDraftSource.selectedImages !== selectedImages ||
+		previousDraftSource.selectedFiles !== selectedFiles
+	) {
+		draftRevisionRef.current += 1
+		previousDraftSourceRef.current = { inputValue, activeQuote, selectedImages, selectedFiles }
+	}
+	const interactionDraft: InteractionDraft = {
+		text: inputValue,
+		images: selectedImages,
+		files: selectedFiles,
+		activeQuote,
+		ownerRevision: draftRevisionRef.current,
+	}
+	const currentTaskIdRef = useRef(taskId)
+	const currentDraftRef = useRef(interactionDraft)
+	currentTaskIdRef.current = taskId
+	currentDraftRef.current = interactionDraft
+	const settleAcceptedDraft = useCallback(
+		(settlement: AcceptedInteractionSettlement): void => {
+			if (!canApplyAcceptedInteractionSettlement(currentTaskIdRef.current, currentDraftRef.current, settlement)) {
+				return
+			}
+			setInputValue("")
+			setSelectedImages([])
+			setSelectedFiles([])
+			setActiveQuote(null)
+		},
+		[setActiveQuote, setInputValue, setSelectedFiles, setSelectedImages],
+	)
 
 	useEffect(() => {
 		const handleCopy = async (e: ClipboardEvent) => {
@@ -334,16 +379,17 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 	// Use message handlers hook (must come after scrollBehavior so we can pass disableAutoScrollRef)
 	const messageHandlers = useMessageHandlers(messages, chatState, scrollBehavior.disableAutoScrollRef)
 	const submitInteractionDraft = useCallback(
-		async (draft: { text: string; images: string[]; files: string[] }): Promise<boolean> => {
+		async (draft: InteractionDraft): Promise<AcceptedInteractionSettlement | undefined> => {
 			if (!taskViewState?.input.enterAction) {
-				return false
+				return undefined
 			}
-			const request = buildInteractionRequest(taskViewState, taskViewState.input.enterAction, draft)
+			const capturedDraft = captureInteractionDraft(draft)
+			const request = buildInteractionRequest(taskViewState, taskViewState.input.enterAction, capturedDraft)
 			if (!request) {
-				return false
+				return undefined
 			}
 			const response = await TaskServiceClient.dispatchInteraction(request)
-			return response.accepted
+			return response.accepted ? createAcceptedInteractionSettlement(request, capturedDraft) : undefined
 		},
 		[taskViewState],
 	)
@@ -405,12 +451,9 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 				{task && taskViewState ? (
 					<InteractionHost
 						dispatch={TaskServiceClient.dispatchInteraction.bind(TaskServiceClient)}
-						draft={{
-							text: chatState.inputValue,
-							images: chatState.selectedImages,
-							files: chatState.selectedFiles,
-						}}
+						draft={interactionDraft}
 						messages={modifiedMessages}
+						onDraftAccepted={settleAcceptedDraft}
 						showTimeline={false}
 						view={taskViewState}
 					/>
@@ -420,8 +463,10 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 				<AutoApproveBar />
 				<InputSection
 					chatState={chatState}
+					draft={interactionDraft}
 					enabled={task ? Boolean(taskViewState?.input.enabled && taskViewState.input.enterAction) : undefined}
 					messageHandlers={messageHandlers}
+					onDraftAccepted={settleAcceptedDraft}
 					onSubmit={task ? submitInteractionDraft : undefined}
 					placeholderText={placeholderText}
 					scrollBehavior={scrollBehavior}
