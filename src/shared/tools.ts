@@ -37,7 +37,6 @@ export enum ClineDefaultTool {
 	LOAD_MCP = "load_mcp",
 	LOAD_SKILL = "load_skill",
 	LOAD_WORKFLOW = "load_workflow",
-	LOAD_SUBAGENT = "load_subagent",
 	USE_SUBAGENT = "use_subagent",
 	USE_SUBAGENTS = "use_subagents",
 	SPAWN_TASK = "spawn_task",
@@ -79,7 +78,6 @@ export const READ_ONLY_TOOLS = [
 	ClineDefaultTool.LOAD_MCP,
 	ClineDefaultTool.LOAD_SKILL,
 	ClineDefaultTool.LOAD_WORKFLOW,
-	ClineDefaultTool.LOAD_SUBAGENT,
 	ClineDefaultTool.FIND_REFERENCES,
 ] as const
 

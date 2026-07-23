@@ -29,6 +29,7 @@ export type ResumeDiagnostic =
 	| { code: "corrupt_anchor"; field: "apiIndex" | "uiMessageTs" }
 	| { code: "missing_identity"; field: TaskSnapshotIdentityField }
 	| { code: "missing_interaction_anchor"; interactionId: string }
+	| { code: "missing_interaction_continuation"; interactionId: string }
 	| { code: "unmatched_tool_result"; dlineTid: string }
 
 /** Complete pure result consumed by the resume coordinator. */

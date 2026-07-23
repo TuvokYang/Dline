@@ -7,6 +7,7 @@ import { ClinePlanModeResponse } from "@/shared/ExtensionMessage"
 import { Logger } from "@/shared/services/Logger"
 import { ClineDefaultTool } from "@/shared/tools"
 import type { ToolResponse } from "../../index"
+import type { InteractionOutcome } from "../../interaction/InteractionCoordinator"
 import { isCompactSignal } from "../../mode-switch-signal"
 import type { IPartialBlockHandler, IToolHandler } from "../ToolExecutorCoordinator"
 import { interactionId, interactionTurnId, type TaskConfig } from "../types/TaskConfig"
@@ -99,6 +100,14 @@ export class PlanModeRespondHandler implements IToolHandler, IPartialBlockHandle
 			presentation: JSON.stringify(sharedMessage),
 			existingTs: block.ts,
 		})
+		return this.continueInteraction(config, block, outcome)
+	}
+
+	/** Consume a plan response without replaying presentation or mode-switch setup. */
+	async continueInteraction(config: TaskConfig, block: ToolUse, outcome: InteractionOutcome): Promise<ToolResponse> {
+		const optionsRaw: string | undefined = block.params.options
+		const options = parsePartialArrayString(optionsRaw || "[]")
+		const sharedMessage = { response: block.params.response || "", options }
 		let text = outcome.draft?.text
 		const images = outcome.draft?.images
 		const planResponseFiles = outcome.draft?.files

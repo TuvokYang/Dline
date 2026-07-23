@@ -3,15 +3,26 @@ import { describe, it } from "vitest"
 import { parseUseSubagentRequest, parseUseSubagentsRequest } from "../SubagentRequestParser"
 
 describe("SubagentRequestParser", () => {
+	it("defaults use_subagent to the built-in default profile when no name is provided", () => {
+		const request = parseUseSubagentRequest({
+			task: "review code",
+			context: "check quality",
+		})
+
+		assert.equal(request.agentName, "default")
+		assert.equal(request.context, "check quality")
+	})
+
 	it("parses stable use_subagent defaults", () => {
 		const request = parseUseSubagentRequest({
-			subagent_name: "reviewer",
+			agent_name: "reviewer",
 			task: "review code",
-			content: "check quality",
+			context: "check quality",
 		})
 
 		assert.equal(request.kind, "single")
-		assert.equal(request.subagentName, "reviewer")
+		assert.equal(request.agentName, "reviewer")
+		assert.equal(request.context, "check quality")
 		assert.equal(request.options.background, false)
 		assert.equal(request.options.timeoutSeconds, 600)
 		assert.match(request.prompt, /<task>\s*review code\s*<\/task>/)
@@ -19,15 +30,27 @@ describe("SubagentRequestParser", () => {
 
 	it("parses background and timeout in seconds", () => {
 		const request = parseUseSubagentRequest({
-			subagent_name: "reviewer",
+			agent_name: "reviewer",
 			task: "review code",
-			content: "check quality",
+			context: "check quality",
 			background: "true",
 			timeout: "30",
 		})
 
 		assert.equal(request.options.background, true)
 		assert.equal(request.options.timeoutSeconds, 30)
+	})
+
+	it("rejects the removed use_subagent parameter names", () => {
+		assert.throws(
+			() =>
+				parseUseSubagentRequest({
+					subagent_name: "reviewer",
+					task: "review code",
+					content: "legacy context",
+				}),
+			/Missing required parameter: context/,
+		)
 	})
 
 	it("requires batch prompts to contain task and context", () => {

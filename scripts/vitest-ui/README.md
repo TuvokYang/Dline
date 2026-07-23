@@ -10,13 +10,13 @@ npm run vitest:ui:server
 
 Defaults:
 
-- URL: `http://localhost:51204/__vitest__/`
+- URL: `http://localhost:51205/__vitest__/`
 - Config: `vitest.config.ts`
 
 Override with flags or env:
 
 ```sh
-npm run vitest:ui:server -- --host 127.0.0.1 --port 51204 --config vitest.config.ts
+npm run vitest:ui:server -- --host 127.0.0.1 --port 51205 --config vitest.config.ts
 ```
 
 ## CLI
@@ -37,7 +37,7 @@ Filters: `all`, `fail`, `pass`, `success`, `skip`, `running`.
 Set a non-default UI URL with:
 
 ```sh
-npm run vitest:ui -- status --url http://localhost:51204/__vitest__/
+npm run vitest:ui -- status --url http://localhost:51205/__vitest__/
 ```
 
 ## MCP

@@ -561,7 +561,11 @@ function interactionEffects(
 	]
 }
 
-/** Reduce one cancellation lifecycle event without performing side effects. */
+/** Preserve every causal interaction that can still accept or finish a persisted response. */
+function shouldPreserveInteractionOnTerminate(state: TaskRuntimeState): boolean {
+	return state.interaction?.status === "awaiting" || state.interaction?.status === "resolving"
+}
+
 function reduceCancel(
 	state: TaskRuntimeState,
 	event: Extract<TaskEvent, { type: "TASK_CANCEL_REQUESTED" | "TASK_TERMINATE_REQUESTED" | "TASK_CANCELLED" }>,
@@ -571,7 +575,7 @@ function reduceCancel(
 			eventType: event.type,
 			phase: TaskPhase.CANCELLING,
 			cancellation: { source: "system", fromPhase: state.phase },
-			interaction: null,
+			...(shouldPreserveInteractionOnTerminate(state) ? {} : { interaction: null }),
 		})
 	}
 	if (event.type === "TASK_CANCEL_REQUESTED") {

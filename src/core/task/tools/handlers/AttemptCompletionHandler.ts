@@ -14,6 +14,7 @@ import { Logger } from "@shared/services/Logger"
 import { ClineDefaultTool } from "@shared/tools"
 import { commitCompletion } from "../../completion/CompletionCommit"
 import type { ToolResponse } from "../../index"
+import type { InteractionOutcome } from "../../interaction/InteractionCoordinator"
 import { showNotificationForApproval } from "../../utils"
 import { buildUserFeedbackContent } from "../../utils/buildUserFeedbackContent"
 import type { IPartialBlockHandler, IToolHandler } from "../ToolExecutorCoordinator"
@@ -230,9 +231,19 @@ export class AttemptCompletionHandler implements IToolHandler, IPartialBlockHand
 			turnId: interactionTurnId(block),
 			interactionId: interactionId(block),
 			completionId: interactionId(block),
-			presentation: "",
+			presentation: result,
 			existingTs: block.ts,
 		})
+		return this.continueInteraction(config, block, outcome, commandResult)
+	}
+
+	/** Consume completion feedback without replaying command execution or completion commit. */
+	async continueInteraction(
+		config: TaskConfig,
+		_block: ToolUse,
+		outcome: InteractionOutcome,
+		commandResult?: ToolResponse,
+	): Promise<ToolResponse> {
 		const text = outcome.draft?.text
 		const images = outcome.draft?.images
 		const completionFiles = outcome.draft?.files

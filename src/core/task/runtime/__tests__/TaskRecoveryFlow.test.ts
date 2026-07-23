@@ -95,6 +95,56 @@ describe("TaskRuntime recovery transactions", () => {
 		expect(ports.sequence).toEqual(["POST_TASK_VIEW", "CANCEL_RUNTIME", "PERSIST_SNAPSHOT"])
 	})
 
+	it.each([
+		["tool_approval", "awaiting"],
+		["command_approval", "awaiting"],
+		["browser_approval", "awaiting"],
+		["mcp_approval", "awaiting"],
+		["subagent_approval", "awaiting"],
+		["spawn_task_approval", "awaiting"],
+		["resume", "awaiting"],
+		["error_retry", "awaiting"],
+		["status_acknowledgment", "awaiting"],
+		["followup", "awaiting"],
+		["qna_response", "awaiting"],
+		["plan_response", "awaiting"],
+		["generate_report", "awaiting"],
+		["completion", "awaiting"],
+		["followup", "resolving"],
+		["qna_response", "resolving"],
+		["plan_response", "resolving"],
+		["generate_report", "resolving"],
+		["completion", "resolving"],
+	] as const)("preserves a %s interaction in %s state across terminal shutdown", (kind, status) => {
+		const state = awaitingInteraction("tool_approval")
+		state.interaction = {
+			...state.interaction!,
+			kind,
+			status,
+			...(status === "resolving"
+				? {
+						acceptedResponse: {
+							actionId: "reply",
+							stateRevision: state.revision,
+							taskId: "task-1",
+							turnId: "turn-1",
+							interactionId: "interaction-1",
+						},
+					}
+				: {}),
+		}
+
+		const result = reduceRecovery(state, { type: "TASK_TERMINATE_REQUESTED" })
+
+		expect(result).toMatchObject({
+			accepted: true,
+			next: {
+				phase: TaskPhase.CANCELLING,
+				interaction: { kind, status, interactionId: "interaction-1" },
+			},
+		})
+	})
+
 	it("commits termination without running the pause cleanup effect", () => {
 		const result = reduceRecovery(awaitingInteraction("tool_approval"), {
 			type: "TASK_TERMINATE_REQUESTED",
@@ -107,7 +157,11 @@ describe("TaskRuntime recovery transactions", () => {
 				cancellation: { source: "system", fromPhase: TaskPhase.STREAMING },
 			},
 		})
-		expect(result?.next.interaction).toBeUndefined()
+		expect(result?.next.interaction).toMatchObject({
+			kind: "tool_approval",
+			status: "awaiting",
+			interactionId: "interaction-1",
+		})
 		expect(effectTypes(result.effects)).toEqual(["POST_TASK_VIEW", "PERSIST_SNAPSHOT"])
 	})
 

@@ -178,10 +178,14 @@ Description: Request to execute a CLI command on the system. Use this when you n
 Parameters:
 - command: (required) The CLI command to execute. This should be valid for the current operating system. Ensure the command is properly formatted and does not contain any harmful instructions. Do not use the ~ character or $HOME to refer to the home directory. Always use absolute paths. The command will be executed from the current workspace, so you do not need to change to the workspace directory.
 - requires_approval: (required) A boolean indicating whether this command requires explicit user approval before execution in case the user has auto-approve mode enabled. Set to true for potentially impactful operations like installing or uninstalling packages, deleting or overwriting files, system configuration changes, network operations, or any commands that could have unintended side effects. Set to false for safe operations like reading files or directories, running development servers, building projects, and other non-destructive operations.
+- background: (optional) Optional boolean. Set true to start the command as a Dline-owned background process, return control immediately, and keep its output and cancellation lifecycle tracked. Defaults to false.
+- timeout: (optional) Optional positive integer foreground wait in seconds. If the command is still running when this wait expires, Dline returns control and continues tracking the process in the background. Defaults to 30 seconds for ordinary commands and 300 seconds for recognized long-running commands.
 Usage:
 <execute_command>
 <command></command>
 <requires_approval></requires_approval>
+<background></background>
+<timeout></timeout>
 </execute_command>
 
 ## find_references
@@ -237,15 +241,32 @@ Usage:
 <task_progress></task_progress>
 </replace_text>
 
+## use_subagent
+Description: Run one focused default or named subagent. Omit agent_name or use 'default' for the built-in readonly research subagent; use an advertised YAML name for a configured agent.
+Parameters:
+- agent_name: (optional) Optional advertised subagent name. Omit or use 'default' for the built-in default profile.
+- task: (required) Focused task for the subagent.
+- context: (required) Relevant context, constraints, and expected result for the subagent.
+- background: (optional) Optional boolean. Set true to run in background. Defaults to false.
+- timeout: (optional) Optional positive integer timeout in seconds for each subagent. Defaults to 600.
+Usage:
+<use_subagent>
+<agent_name></agent_name>
+<task></task>
+<context></context>
+<background></background>
+<timeout></timeout>
+</use_subagent>
+
 ## use_subagents
-Description: Run up to five focused in-process subagents in parallel. Each subagent gets its own prompt and returns a comprehensive research result with tool and token stats. Use this for broad exploration when reading many files would consume the main agent's context window. You do not need to launch multiple subagents every time; using one subagent is valid when it avoids unnecessary context usage for light discovery work.
+Description: Run up to five built-in default subagents in parallel. Each subagent gets its own prompt and returns a comprehensive research result with tool and token stats. Use this for broad exploration when reading many files would consume the main agent's context window. Using one subagent is valid.
 Parameters:
 - prompt_1: (required) First subagent prompt. Must include <task> and <context> sections.
 - prompt_2: (optional) Optional second subagent prompt. Must include <task> and <context> sections when provided.
 - prompt_3: (optional) Optional third subagent prompt. Must include <task> and <context> sections when provided.
 - prompt_4: (optional) Optional fourth subagent prompt. Must include <task> and <context> sections when provided.
 - prompt_5: (optional) Optional fifth subagent prompt. Must include <task> and <context> sections when provided.
-- background: (optional) Optional boolean. Set true to run the batch in background. Defaults to false.
+- background: (optional) Optional boolean. Set true to run in background. Defaults to false.
 - timeout: (optional) Optional positive integer timeout in seconds for each subagent. Defaults to 600.
 Usage:
 <use_subagents>
@@ -337,6 +358,7 @@ Usage:
 
 ## Subagents
 - `reviewer`: Review implementation changes.
+Use `use_subagent` for one default or named subagent. Use `use_subagents` for one to five parallel default subtasks.
 
 # SKILLS
 

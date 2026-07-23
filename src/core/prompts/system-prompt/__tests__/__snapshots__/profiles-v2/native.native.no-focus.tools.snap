@@ -290,6 +290,14 @@
           "requires_approval": {
             "type": "boolean",
             "description": "A boolean indicating whether this command requires explicit user approval before execution in case the user has auto-approve mode enabled. Set to true for potentially impactful operations like installing or uninstalling packages, deleting or overwriting files, system configuration changes, network operations, or any commands that could have unintended side effects. Set to false for safe operations like reading files or directories, running development servers, building projects, and other non-destructive operations."
+          },
+          "background": {
+            "type": "boolean",
+            "description": "Optional boolean. Set true to start the command as a Dline-owned background process, return control immediately, and keep its output and cancellation lifecycle tracked. Defaults to false."
+          },
+          "timeout": {
+            "type": "integer",
+            "description": "Optional positive integer foreground wait in seconds. If the command is still running when this wait expires, Dline returns control and continues tracking the process in the background. Defaults to 30 seconds for ordinary commands and 300 seconds for recognized long-running commands."
           }
         },
         "required": [
@@ -546,27 +554,6 @@
   {
     "type": "function",
     "function": {
-      "name": "load_subagent",
-      "description": "Load detailed read-only metadata for one named capability. The name parameter must match an advertised capability exactly. This tool does not discover capability lists, modify cached system prompts, refresh metadata, or execute the capability.",
-      "strict": false,
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "name": {
-            "type": "string",
-            "description": "The exact capability name to load."
-          }
-        },
-        "required": [
-          "name"
-        ],
-        "additionalProperties": false
-      }
-    }
-  },
-  {
-    "type": "function",
-    "function": {
       "name": "find_references",
       "description": "Find all semantic references to a symbol at the given file position via the IDE's LSP. Returns file paths, line numbers, and context lines for each reference (definitions, imports, calls). This does NOT find occurrences in string literals, comments, or JSDoc. An empty result may mean the LSP does not support this language or file type, not that no references exist. Use this before renaming or refactoring to understand semantic impact. To search strings and comments, use search_files with regex. Only available in VSCode; other environments return an error suggesting search_files as a fallback.",
       "strict": false,
@@ -723,8 +710,46 @@
   {
     "type": "function",
     "function": {
+      "name": "use_subagent",
+      "description": "Run one focused default or named subagent. Omit agent_name or use 'default' for the built-in readonly research subagent; use an advertised YAML name for a configured agent.",
+      "strict": false,
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "agent_name": {
+            "type": "string",
+            "description": "Optional advertised subagent name. Omit or use 'default' for the built-in default profile."
+          },
+          "task": {
+            "type": "string",
+            "description": "Focused task for the subagent."
+          },
+          "context": {
+            "type": "string",
+            "description": "Relevant context, constraints, and expected result for the subagent."
+          },
+          "background": {
+            "type": "boolean",
+            "description": "Optional boolean. Set true to run in background. Defaults to false."
+          },
+          "timeout": {
+            "type": "integer",
+            "description": "Optional positive integer timeout in seconds for each subagent. Defaults to 600."
+          }
+        },
+        "required": [
+          "task",
+          "context"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
       "name": "use_subagents",
-      "description": "Run up to five focused in-process subagents in parallel. Each subagent gets its own prompt and returns a comprehensive research result with tool and token stats. Use this for broad exploration when reading many files would consume the main agent's context window. You do not need to launch multiple subagents every time; using one subagent is valid when it avoids unnecessary context usage for light discovery work.",
+      "description": "Run up to five built-in default subagents in parallel. Each subagent gets its own prompt and returns a comprehensive research result with tool and token stats. Use this for broad exploration when reading many files would consume the main agent's context window. Using one subagent is valid.",
       "strict": false,
       "parameters": {
         "type": "object",
@@ -751,7 +776,7 @@
           },
           "background": {
             "type": "boolean",
-            "description": "Optional boolean. Set true to run the batch in background. Defaults to false."
+            "description": "Optional boolean. Set true to run in background. Defaults to false."
           },
           "timeout": {
             "type": "integer",

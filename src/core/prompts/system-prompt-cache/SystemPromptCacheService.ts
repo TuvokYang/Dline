@@ -146,6 +146,15 @@ export class SystemPromptCacheService {
 		const context = await this.getContext(this.taskId)
 		const cached = context.systemPrompt?.frozen
 		if (cached) {
+			const capabilities = await this.collectCapabilitiesFn({
+				cwd: input.promptContext.cwd ?? process.cwd(),
+				mcpHub: input.promptContext.mcpHub,
+				...input.promptContext.capabilityToggleState,
+			})
+			const currentHash = hashPromptContent(renderCapabilitiesSection(capabilities))
+			if (currentHash !== cached.capabilitiesHash) {
+				return this.refresh({ promptContext: input.promptContext, reason: "capability_change" })
+			}
 			this.lastTools = cached.tools ?? undefined
 			return cached
 		}

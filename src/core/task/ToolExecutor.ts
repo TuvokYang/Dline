@@ -29,6 +29,9 @@ import { WorkspaceRootManager } from "../workspace"
 import type { TaskActivityStore } from "./activity/TaskActivityStore"
 import { isTurnEndingToolName } from "./assistant-message-order"
 import { isAllItemsCompleted } from "./focus-chain/file-utils"
+import type { InteractionKind } from "./interaction/Interaction"
+import type { InteractionOutcome } from "./interaction/InteractionCoordinator"
+import { isTurnEndContinuationHandler, requiresTurnEndContinuation } from "./interaction/TurnEndContinuationRegistry"
 import { checkRepeatedToolCall, LOOP_DETECTION_SOFT_THRESHOLD, toolCallSignature } from "./loop-detection"
 import { MessageStateHandler } from "./message-state"
 import { TaskController } from "./TaskController"
@@ -367,6 +370,22 @@ export class ToolExecutor {
 	 */
 	public async executeTool(block: ToolUse): Promise<void> {
 		await this.execute(block)
+	}
+
+	/** Consume a restored turn-end response through the original handler's post-response path. */
+	public async continueTurnEndInteraction(
+		kind: InteractionKind,
+		block: ToolUse,
+		outcome: InteractionOutcome,
+	): Promise<ToolResponse> {
+		if (!requiresTurnEndContinuation(kind)) {
+			throw new Error(`Interaction kind '${kind}' has no turn-end continuation.`)
+		}
+		const handler = this.coordinator.getHandler(block.name)
+		if (!handler || !isTurnEndContinuationHandler(handler)) {
+			throw new Error(`Tool '${block.name}' does not implement its turn-end continuation.`)
+		}
+		return handler.continueInteraction(this.asToolConfig(), block, outcome)
 	}
 
 	/**

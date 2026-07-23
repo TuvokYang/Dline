@@ -6,6 +6,7 @@ export interface ResumeCoordinatorPorts {
 	load(taskId: string): Promise<ResumeInput>
 	persist(result: ResumeResult): Promise<void>
 	hydrate(result: ResumeResult): Promise<void>
+	publishView(result: ResumeResult): Promise<void>
 	dispatch(entry: ResumeEntry): Promise<void>
 }
 
@@ -13,12 +14,13 @@ export interface ResumeCoordinatorPorts {
 export class ResumeCoordinator {
 	constructor(private readonly ports: ResumeCoordinatorPorts) {}
 
-	/** Load, reconcile, persist, hydrate and dispatch exactly one resume entry. */
+	/** Load, reconcile, persist, hydrate, publish and dispatch exactly one resume entry. */
 	async resume(taskId: string): Promise<ResumeResult> {
 		const input = await this.ports.load(taskId)
 		const result = reconcileResume(input)
 		await this.ports.persist(result)
 		await this.ports.hydrate(result)
+		await this.ports.publishView(result)
 		await this.ports.dispatch(
 			result.entry.type === "read_only_failure" ? { ...result.entry, diagnostics: result.diagnostics } : result.entry,
 		)

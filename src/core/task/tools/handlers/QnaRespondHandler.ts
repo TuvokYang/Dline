@@ -3,6 +3,7 @@ import { formatResponse } from "@core/prompts/responses"
 import type { ClineQnaResponse } from "@shared/ExtensionMessage"
 import { ClineDefaultTool } from "@shared/tools"
 import type { ToolResponse } from "../../index"
+import type { InteractionOutcome } from "../../interaction/InteractionCoordinator"
 import { isCompactSignal } from "../../mode-switch-signal"
 import type { IPartialBlockHandler, IToolHandler } from "../ToolExecutorCoordinator"
 import { interactionId, interactionTurnId, type TaskConfig } from "../types/TaskConfig"
@@ -45,19 +46,23 @@ export class QnaRespondHandler implements IToolHandler, IPartialBlockHandler {
 
 		config.taskState.isAwaitingPlanResponse = true
 
-		const outcome = await config.interactions
-			.open({
+		try {
+			const outcome = await config.interactions.open({
 				turnId: interactionTurnId(block),
 				interactionId: interactionId(block),
 				kind: "qna_response",
 				presentation: JSON.stringify(sharedMessage),
 				existingTs: block.ts,
 			})
-			.finally(() => {
-				// Never leave mode/input routing in an awaiting-QNA state when the
-				// interaction is rejected or its transport fails.
-				config.taskState.isAwaitingPlanResponse = false
-			})
+			return await this.continueInteraction(config, block, outcome)
+		} finally {
+			config.taskState.isAwaitingPlanResponse = false
+		}
+	}
+
+	/** Consume a Q&A response without replaying presentation or other pre-response work. */
+	async continueInteraction(config: TaskConfig, _block: ToolUse, outcome: InteractionOutcome): Promise<ToolResponse> {
+		config.taskState.isAwaitingPlanResponse = false
 		let text = outcome.draft?.text
 		const images = outcome.draft?.images
 		const files = outcome.draft?.files

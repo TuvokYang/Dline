@@ -34,7 +34,7 @@ export const toolParamNames = [
 	"allowed_domains",
 	"blocked_domains",
 	"prompt",
-	"subagent_name",
+	"agent_name",
 	"task",
 	"server_name",
 	"tool_name",

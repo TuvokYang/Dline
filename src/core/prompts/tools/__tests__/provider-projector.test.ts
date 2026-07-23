@@ -86,6 +86,36 @@ describe("provider tool projector", () => {
 		})
 	})
 
+	it.each([
+		PromptProfile.Native,
+		PromptProfile.Lite,
+	])("exposes singular and parallel subagent tools without load_subagent in %s", (profile) => {
+		const context = { ...BASE_CONTEXT, subagentsEnabled: true, isSubagentRun: false }
+		const tools = new ToolPromptGenerator().generate(profile, context)
+
+		expect(findTool(tools, ClineDefaultTool.USE_SUBAGENT)).toBeDefined()
+		expect(findTool(tools, ClineDefaultTool.USE_SUBAGENTS)).toBeDefined()
+		expect(findTool(tools, "load_subagent")).toBeUndefined()
+	})
+
+	it("projects use_subagent with agent_name, task, and context", () => {
+		const context = { ...BASE_CONTEXT, subagentsEnabled: true, isSubagentRun: false }
+		const tool = findTool(new ToolPromptGenerator().generate(PromptProfile.Native, context), ClineDefaultTool.USE_SUBAGENT)
+
+		expect(tool).toMatchObject({
+			function: {
+				parameters: {
+					required: ["task", "context"],
+					properties: {
+						agent_name: { type: "string" },
+						task: { type: "string" },
+						context: { type: "string" },
+					},
+				},
+			},
+		})
+	})
+
 	it("projects canonical parameters to Anthropic schemas", () => {
 		const context = { ...BASE_CONTEXT, providerInfo: { ...BASE_CONTEXT.providerInfo, providerId: "anthropic" } }
 		const tool = findTool(new ToolPromptGenerator().generate(PromptProfile.Native, context), ClineDefaultTool.FILE_READ)
@@ -163,6 +193,9 @@ describe("provider tool projector", () => {
 		const context = { ...BASE_CONTEXT, providerInfo: { ...BASE_CONTEXT.providerInfo, providerId: "gemini" } }
 		const tool = findTool(new ToolPromptGenerator().generate(PromptProfile.Native, context), ClineDefaultTool.FILE_READ)
 
-		expect(tool).toMatchObject({ name: ClineDefaultTool.FILE_READ, parameters: { required: ["path"] } })
+		expect(tool).toMatchObject({
+			name: ClineDefaultTool.FILE_READ,
+			parameters: { required: ["path"] },
+		})
 	})
 })

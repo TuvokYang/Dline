@@ -39,7 +39,7 @@ describe("projectTaskView", () => {
 		const view = projectTaskView(runtime(TaskPhase.AWAITING_APPROVAL, active("tool_approval")))
 
 		expect(view.input).toMatchObject({ enabled: true, acceptsText: true })
-		expect(view.input.enterAction).toBeUndefined()
+		expect(view.input.enterAction).toBe("reject")
 		expect(view.footer.actions.map((action) => action.type)).toEqual(["approve", "reject"])
 		expect(view.activeInteraction).toMatchObject({ askMessageTs: 100, taskAsk: "tool" })
 	})
@@ -50,12 +50,16 @@ describe("projectTaskView", () => {
 		expect(view.activeInteraction?.stateRevision).toBe(8)
 	})
 
-	it("replaces Cancel with conversational input while an executing tool awaits a reply", () => {
-		const view = projectTaskView(runtime(TaskPhase.EXECUTING, active("qna_response")))
+	it.each([
+		"followup",
+		"plan_response",
+		"qna_response",
+		"generate_report",
+	] as const)("keeps %s input enabled without footer actions", (kind) => {
+		const view = projectTaskView(runtime(TaskPhase.EXECUTING, active(kind)))
 
 		expect(view.input).toMatchObject({ enabled: true, enterAction: "reply" })
-		expect(view.footer.actions.map((action) => action.type)).toEqual(["reply"])
-		expect(view.footer.actions.some((action) => action.type === "cancel")).toBe(false)
+		expect(view.footer.actions).toEqual([])
 	})
 
 	it("disables resolving interaction input and actions", () => {
@@ -84,7 +88,7 @@ describe("projectTaskView", () => {
 		expect(view.footer.actions[0]).toMatchObject({ type: "approve", payloadPolicy: "draft_and_selection" })
 	})
 
-	it("projects resume input and Enter action", () => {
+	it("projects resume input, Enter action, and the explicit Resume footer", () => {
 		const view = projectTaskView(runtime(TaskPhase.PAUSED, active("resume")))
 
 		expect(view.input).toMatchObject({ enabled: true, enterAction: "resume" })
@@ -97,11 +101,11 @@ describe("projectTaskView", () => {
 		expect(view.footer.actions.map((action) => action.type)).toEqual(["retry", "start_new_task"])
 	})
 
-	it("projects completion feedback input and actions", () => {
+	it("projects only Start New Task for completion", () => {
 		const view = projectTaskView(runtime(TaskPhase.COMPLETED, active("completion")))
 
 		expect(view.input).toMatchObject({ enabled: true, enterAction: "reply" })
-		expect(view.footer.actions.map((action) => action.type)).toEqual(["reply", "start_new_task"])
+		expect(view.footer.actions.map((action) => action.type)).toEqual(["start_new_task"])
 	})
 
 	it("projects cancelling with a disabled cancel action", () => {

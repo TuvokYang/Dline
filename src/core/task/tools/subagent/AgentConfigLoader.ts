@@ -140,9 +140,26 @@ export async function readAgentConfigsFromDisk(dirPath: string): Promise<Map<str
  * Resolve a subagent config from project and global scan directories.
  *
  * @param cwd Workspace root used for project subagent lookup.
- * @param subagentName Name requested by load_subagent or use_subagent.
+ * @param subagentName Name requested by use_subagent.
  * @returns Matching agent config with source, or undefined.
  */
+export async function listEnabledAgentConfigs(cwd: string, options?: ResolveAgentConfigOptions): Promise<ResolvedAgentConfig[]> {
+	const resolved: ResolvedAgentConfig[] = []
+	const seen = new Set<string>()
+	for (const directory of getSubagentsScanDirectories(cwd)) {
+		const configs = await readAgentConfigsFromDisk(directory.path)
+		for (const config of configs.values()) {
+			const normalized = normalizeAgentName(config.name)
+			if (seen.has(normalized)) continue
+			const filePath = await findAgentConfigPath(directory.path, config.name)
+			if (!filePath || !isEnabledPath(filePath, directory.source, options)) continue
+			seen.add(normalized)
+			resolved.push({ config, source: directory.source, path: filePath })
+		}
+	}
+	return resolved
+}
+
 export async function resolveAgentConfig(
 	cwd: string,
 	subagentName?: string,

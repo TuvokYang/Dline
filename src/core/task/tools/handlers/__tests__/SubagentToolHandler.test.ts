@@ -472,6 +472,63 @@ describe("SubagentToolHandler", () => {
 		assert.ok((result as string).includes("boom"))
 	})
 
+	it("runs stable use_subagent with the built-in default when no YAML exists", async () => {
+		const { config } = createConfig({ autoApproveSafe: true, autoApproveAll: true })
+		const handler = new UseSubagentToolHandler()
+		vi.spyOn(AgentConfigModule, "resolveAgentConfig").mockResolvedValue(undefined)
+		const runStub = vi.spyOn(SubagentRunner.prototype, "run").mockResolvedValue({
+			status: "completed",
+			result: "default done",
+			stats: {
+				toolCalls: 1,
+				inputTokens: 2,
+				outputTokens: 3,
+				cacheWriteTokens: 0,
+				cacheReadTokens: 0,
+				totalCost: 0.1,
+				currency: "USD",
+				contextTokens: 100,
+				contextWindow: 200000,
+				contextUsagePercentage: 0.05,
+			},
+		})
+
+		const result = await handler.execute(config, {
+			type: "tool_use",
+			name: ClineDefaultTool.USE_SUBAGENT,
+			params: { task: "review this PR", context: "check quality" },
+			partial: false,
+			ts: Date.now(),
+		})
+
+		assert.match(String(result), /default done/)
+		assert.equal(runStub.mock.calls.length, 1)
+	})
+
+	it("lists default and bounded configured names for an unknown stable subagent", async () => {
+		const { config } = createConfig({ autoApproveSafe: true, autoApproveAll: true })
+		const handler = new UseSubagentToolHandler()
+		vi.spyOn(AgentConfigModule, "resolveAgentConfig").mockResolvedValue(undefined)
+		vi.spyOn(AgentConfigModule, "listEnabledAgentConfigs").mockResolvedValue([
+			{
+				config: { name: "reviewer", description: "reviewer", tools: [], systemPrompt: "Prompt" },
+				source: "project",
+				path: "/workspace/.agents/subagents/reviewer.yml",
+			},
+		])
+
+		const result = await handler.execute(config, {
+			type: "tool_use",
+			name: ClineDefaultTool.USE_SUBAGENT,
+			params: { agent_name: "missing", task: "review", context: "ctx" },
+			partial: false,
+			ts: Date.now(),
+		})
+
+		assert.match(String(result), /Unknown or disabled subagent 'missing'/)
+		assert.match(String(result), /Available subagents: default, reviewer/)
+	})
+
 	it("runs stable use_subagent with selected YAML subagent", async () => {
 		const { config } = createConfig({ autoApproveSafe: true, autoApproveAll: true })
 		const handler = new UseSubagentToolHandler()
@@ -502,7 +559,7 @@ describe("SubagentToolHandler", () => {
 		const result = await handler.execute(config, {
 			type: "tool_use",
 			name: ClineDefaultTool.USE_SUBAGENT,
-			params: { subagent_name: "code-reviewer", task: "review this PR", content: "check quality" },
+			params: { agent_name: "code-reviewer", task: "review this PR", context: "check quality" },
 			partial: false,
 			ts: Date.now(),
 		})
@@ -510,6 +567,8 @@ describe("SubagentToolHandler", () => {
 		assert.match(String(result), /stable done/)
 		expect(runStub)
 		assert.match(runStub.mock.calls[0][0], /<task>\s*review this PR\s*<\/task>/)
+		assert.match(runStub.mock.calls[0][0], /<context>\s*check quality\s*<\/context>/)
+		vitestExpect(AgentConfigModule.resolveAgentConfig).toHaveBeenCalledWith("/tmp", "code-reviewer", vitestExpect.any(Object))
 	})
 
 	it("starts stable use_subagent background job", async () => {
@@ -541,7 +600,7 @@ describe("SubagentToolHandler", () => {
 		const result = await handler.execute(config, {
 			type: "tool_use",
 			name: ClineDefaultTool.USE_SUBAGENT,
-			params: { subagent_name: "code-reviewer", task: "review", content: "ctx", background: "true" },
+			params: { agent_name: "code-reviewer", task: "review", context: "ctx", background: "true" },
 			partial: false,
 			ts: Date.now(),
 		})

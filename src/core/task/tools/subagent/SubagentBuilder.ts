@@ -3,18 +3,11 @@ import { readApiProfiles } from "@core/controller/file/getApiProfiles"
 import { ClineDefaultTool } from "@shared/tools"
 import type { TaskConfig } from "../types/TaskConfig"
 import type { AgentBaseConfig } from "./AgentConfigLoader"
+import { DEFAULT_SUBAGENT_ALLOWED_TOOLS } from "./DefaultSubagentConfig"
 
 export type AgentConfig = Partial<AgentBaseConfig>
 
-export const SUBAGENT_DEFAULT_ALLOWED_TOOLS: ClineDefaultTool[] = [
-	ClineDefaultTool.FILE_READ,
-	ClineDefaultTool.LIST_FILES,
-	ClineDefaultTool.SEARCH,
-	ClineDefaultTool.LIST_CODE_DEF,
-	ClineDefaultTool.BASH,
-	ClineDefaultTool.USE_SKILL,
-	ClineDefaultTool.ATTEMPT,
-]
+export const SUBAGENT_DEFAULT_ALLOWED_TOOLS = DEFAULT_SUBAGENT_ALLOWED_TOOLS
 
 export const SUBAGENT_SYSTEM_SUFFIX = `\n\n# Subagent Execution Mode
 You are running as a research subagent. Your job is to explore the codebase and gather information to answer the question.

@@ -627,32 +627,9 @@ export function getToolsNotInCurrentActivities(toolGroupMessages: ClineMessage[]
 			return true
 		})
 	}
-	// CASE B: Most recent api_req is COMPLETE (has cost)
-	// Tools that appear AFTER this completed api_req are "in flight" (just arrived)
-	// Filter them out so they appear in currentActivities instead
-
-	return toolGroupMessages.filter((msg) => {
-		// Keep non-low-stakes tools
-		if (!isLowStakesTool(msg)) {
-			return true
-		}
-
-		// Filter out only tools awaiting approval (ask === 'tool')
-		// Completed tools (say === 'tool') should still be shown
-		if (msg.ask === "tool") {
-			const toolIndex = tsToIndex.get(msg.ts)
-			if (toolIndex === undefined) {
-				return true
-			}
-			// Tool is in "current activities" if it appears AFTER the most recent api_req
-			const isInCurrentActivitiesRange = toolIndex > mostRecentApiReqIndex
-			// Filter out if in current activities range
-			return !isInCurrentActivitiesRange
-		}
-
-		// Keep completed tools (say === 'tool')
-		return true
-	})
+	// A completed request has no current-activity projection. Keep later asks in
+	// the timeline so rejected or otherwise settled tools retain their card.
+	return toolGroupMessages
 }
 
 /**

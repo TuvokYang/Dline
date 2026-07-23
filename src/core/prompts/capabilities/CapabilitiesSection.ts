@@ -55,11 +55,14 @@ export function renderCapabilitiesSection(snapshot: CapabilitiesSnapshot): strin
 		if (entries.length === 0) {
 			continue
 		}
+		const renderedGroup = assemblePromptFragments(getPrompt("capabilityCatalog", "group"), {
+			TITLE: getPrompt("capabilityCatalog", group.titleKey),
+			ENTRIES: entries.map(renderEntry).join("\n"),
+		})
 		sections.push(
-			assemblePromptFragments(getPrompt("capabilityCatalog", "group"), {
-				TITLE: getPrompt("capabilityCatalog", group.titleKey),
-				ENTRIES: entries.map(renderEntry).join("\n"),
-			}),
+			group.key === "subagents"
+				? `${renderedGroup}\n${getPrompt("capabilityCatalog", "subagentsGuidance")}`
+				: renderedGroup,
 		)
 	}
 	return sections.join("\n\n")

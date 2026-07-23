@@ -1,7 +1,7 @@
 import path from "node:path"
 import { createBirpcClient } from "./rpc.mjs"
 
-export const DEFAULT_PORT = 51204
+export const DEFAULT_PORT = 51205
 export const DEFAULT_HOST = "localhost"
 export const DEFAULT_BASE_URL = `http://${DEFAULT_HOST}:${DEFAULT_PORT}/__vitest__/`
 
@@ -138,10 +138,10 @@ export async function connectVitestUi(options = {}) {
 			return rpc.call("getUnhandledErrors")
 		},
 		async rerun(filepaths, resetTestNamePattern = true) {
-			return rpc.call("rerun", filepaths, resetTestNamePattern)
+			rpc.notify("rerun", filepaths, resetTestNamePattern)
 		},
 		async rerunTask(taskId) {
-			return rpc.call("rerunTask", taskId)
+			rpc.notify("rerunTask", taskId)
 		},
 		close() {
 			rpc.close()
@@ -227,14 +227,23 @@ export function filterFiles(files, filter = "all") {
 	return files.filter((file) => classifyFile(file) === normalized)
 }
 
+const MAX_ERROR_FIELD_CHARS = 4_000
+const MAX_FAILURES = 50
+
+function boundedText(value) {
+	if (value === undefined || value === null) return undefined
+	const text = typeof value === "string" ? value : String(value)
+	return text.length <= MAX_ERROR_FIELD_CHARS ? text : `${text.slice(0, MAX_ERROR_FIELD_CHARS)}\n…[truncated]`
+}
+
 function simplifyError(error) {
 	return {
-		name: error?.name,
-		message: error?.message || String(error),
-		stack: error?.stack,
-		diff: error?.diff,
-		actual: error?.actual,
-		expected: error?.expected,
+		name: boundedText(error?.name),
+		message: boundedText(error?.message || String(error)),
+		stack: boundedText(error?.stack),
+		diff: boundedText(error?.diff),
+		actual: boundedText(error?.actual),
+		expected: boundedText(error?.expected),
 	}
 }
 
@@ -250,7 +259,7 @@ export function collectFailures(files, { includeContainers = false } = {}) {
 	const failures = []
 	for (const file of files) {
 		walkTasks(file, (task, ancestors) => {
-			if (!FAILED_STATES.has(getTaskState(task))) {
+			if (failures.length >= MAX_FAILURES || !FAILED_STATES.has(getTaskState(task))) {
 				return
 			}
 			if (!includeContainers && task.type !== "test") {

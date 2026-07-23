@@ -116,6 +116,22 @@ describe("AttemptCompletionHandler stop behavior", () => {
 		assert.equal(result, "[attempt_completion] Result: Done")
 	})
 
+	it("keeps the command card separate and presents the non-empty completion result", async () => {
+		const taskState = new TaskState()
+		const config = createConfig(taskState)
+
+		await new AttemptCompletionHandler().execute(config, createBlock("echo done"))
+
+		expect(config.callbacks.say).toHaveBeenCalledWith("command", "echo done", undefined, undefined, false)
+		expect(config.interactions.complete).toHaveBeenCalledWith({
+			turnId: "turn:completion-1",
+			interactionId: "completion-1",
+			completionId: "completion-1",
+			presentation: "done",
+			existingTs: 123,
+		})
+	})
+
 	it("does not complete the task when its approved command fails", async () => {
 		const taskState = new TaskState()
 		const config = createConfig(

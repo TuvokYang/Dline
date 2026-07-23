@@ -1,4 +1,4 @@
-import { act, fireEvent, render } from "@testing-library/react"
+import { act, fireEvent, render, screen } from "@testing-library/react"
 import { describe, expect, it, vi } from "vitest"
 
 import { DiffEditRow } from "./DiffEditRow"
@@ -87,5 +87,27 @@ describe("DiffEditRow", () => {
 		})
 
 		expect(scrollBox.scrollTop).toBe(100)
+	})
+
+	it("renders every file from one multi-file Add patch", () => {
+		const patch = [
+			"*** Begin Patch",
+			"*** Add File: first.txt",
+			"+alpha",
+			"*** Add File: second.txt",
+			"+beta",
+			"+gamma",
+			"*** End Patch",
+		].join("\n")
+
+		render(<DiffEditRow fileAction="Add" patch={patch} path="first.txt" />)
+
+		expect(screen.getByText("first.txt")).toBeInTheDocument()
+		expect(screen.getByText("second.txt")).toBeInTheDocument()
+		fireEvent.click(screen.getByRole("button", { name: /first\.txt/ }))
+		fireEvent.click(screen.getByRole("button", { name: /second\.txt/ }))
+		expect(screen.getByText("alpha")).toHaveClass("text-green-400")
+		expect(screen.getByText("beta")).toHaveClass("text-green-400")
+		expect(screen.getByText("gamma")).toHaveClass("text-green-400")
 	})
 })

@@ -322,6 +322,14 @@
           "requires_approval": {
             "type": "boolean",
             "description": "A boolean indicating whether this command requires explicit user approval before execution in case the user has auto-approve mode enabled. Set to true for potentially impactful operations like installing or uninstalling packages, deleting or overwriting files, system configuration changes, network operations, or any commands that could have unintended side effects. Set to false for safe operations like reading files or directories, running development servers, building projects, and other non-destructive operations."
+          },
+          "background": {
+            "type": "boolean",
+            "description": "Optional boolean. Set true to start the command as a Dline-owned background process, return control immediately, and keep its output and cancellation lifecycle tracked. Defaults to false."
+          },
+          "timeout": {
+            "type": "integer",
+            "description": "Optional positive integer foreground wait in seconds. If the command is still running when this wait expires, Dline returns control and continues tracking the process in the background. Defaults to 30 seconds for ordinary commands and 300 seconds for recognized long-running commands."
           }
         },
         "required": [

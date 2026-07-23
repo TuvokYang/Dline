@@ -8,9 +8,9 @@ export interface SubagentToolOptions {
 
 export interface SubagentRunRequest {
 	kind: "single"
-	subagentName: string
+	agentName: string
 	task: string
-	content: string
+	context: string
 	prompt: string
 	options: SubagentToolOptions
 }
@@ -118,15 +118,15 @@ function extractSection(prompt: string, tag: "task" | "context"): string {
  * @returns Normalized single-subagent request.
  */
 export function parseUseSubagentRequest(params: Record<string, unknown>): SubagentRunRequest {
-	const subagentName = requireText(params, "subagent_name")
+	const agentName = readText(params, "agent_name") ?? "default"
 	const task = requireText(params, "task")
-	const content = requireText(params, "content")
+	const context = requireText(params, "context")
 	return {
 		kind: "single",
-		subagentName,
+		agentName,
 		task,
-		content,
-		prompt: `<task>\n${task}\n</task>\n<context>\n${content}\n</context>`,
+		context,
+		prompt: `<task>\n${task}\n</task>\n<context>\n${context}\n</context>`,
 		options: parseOptions(params),
 	}
 }

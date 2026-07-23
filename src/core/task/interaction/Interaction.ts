@@ -75,10 +75,13 @@ export interface InteractionActionDefinition {
 }
 
 /** One complete interaction definition. */
+export type InteractionContinuation = "handler" | "resume" | "completion" | "recovery" | "none"
+
 export interface InteractionDefinition {
 	kind: InteractionKind
 	taskAsk: ClineAsk
 	presentationKind: InteractionKind
 	input: InputPolicy
 	actions: readonly InteractionActionDefinition[]
+	continuation: InteractionContinuation
 }

@@ -27,6 +27,40 @@ describe("reduceInteraction", () => {
 		expect(result).toMatchObject({ accepted: true, next: { status: "resolving" } })
 	})
 
+	it.each([
+		["followup", "reply"],
+		["plan_response", "reply"],
+		["qna_response", "reply"],
+		["generate_report", "reply"],
+		["completion", "reply"],
+		["resume", "resume"],
+		["tool_approval", "reject"],
+	] as const)("accepts the %s Enter action with a draft", (kind, actionId) => {
+		const result = reduceInteraction(awaiting(kind), {
+			taskId: "task-1",
+			turnId: "turn-1",
+			interactionId: "interaction-1",
+			actionId,
+			stateRevision: 4,
+			draft: { text: "Continue", images: [], files: [] },
+		})
+
+		expect(result).toMatchObject({ accepted: true, next: { status: "resolving" } })
+	})
+
+	it("rejects an Enter action without its draft payload", () => {
+		const state = awaiting("qna_response")
+		const result = reduceInteraction(state, {
+			taskId: "task-1",
+			turnId: "turn-1",
+			interactionId: "interaction-1",
+			actionId: "reply",
+			stateRevision: 4,
+		})
+
+		expect(result).toEqual({ accepted: false, next: state, error: { code: "invalid_interaction_payload" } })
+	})
+
 	it("rejects stale identity without mutation", () => {
 		const state = awaiting()
 		const result = reduceInteraction(state, {

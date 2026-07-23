@@ -8,6 +8,7 @@ import { telemetryService } from "@/services/telemetry"
 import { ToolUse } from "../../../assistant-message"
 import { formatResponse } from "../../../prompts/responses"
 import { ToolResponse } from "../.."
+import type { InteractionOutcome } from "../../interaction/InteractionCoordinator"
 import type { IPartialBlockHandler, IToolHandler } from "../ToolExecutorCoordinator"
 import { interactionId, interactionTurnId, type TaskConfig } from "../types/TaskConfig"
 import type { StronglyTypedUIHelpers } from "../types/UIHelpers"
@@ -73,6 +74,14 @@ export class AskFollowupQuestionToolHandler implements IToolHandler, IPartialBlo
 			presentation: JSON.stringify(sharedMessage),
 			existingTs: block.ts,
 		})
+		return this.continueInteraction(config, block, outcome)
+	}
+
+	/** Consume a follow-up response without replaying notification or presentation setup. */
+	async continueInteraction(config: TaskConfig, block: ToolUse, outcome: InteractionOutcome): Promise<ToolResponse> {
+		const optionsRaw: string | undefined = block.params.options
+		const options = parsePartialArrayString(optionsRaw || "[]")
+		const sharedMessage = { question: block.params.question || "", options } satisfies ClineAskQuestion
 		const text = outcome.draft?.text
 		const images = outcome.draft?.images
 		const followupFiles = outcome.draft?.files

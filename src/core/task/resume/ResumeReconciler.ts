@@ -9,6 +9,31 @@ interface TailFacts {
 	answeredDlineTids: Set<string>
 }
 
+/** Repair only the synthetic resume anchor written one slot beyond the persisted history. */
+function repairSyntheticResumeAnchor(snapshot: TaskSnapshot, input: ResumeInput): boolean {
+	const syntheticIdentity = `resume:${input.taskId}`
+	if (
+		snapshot.phase !== TaskPhase.CANCELLING ||
+		snapshot.cancellation?.fromPhase !== TaskPhase.PAUSED ||
+		snapshot.turn ||
+		snapshot.interaction ||
+		snapshot.anchor?.turnId !== syntheticIdentity ||
+		snapshot.anchor.interactionId !== syntheticIdentity ||
+		snapshot.anchor.apiIndex !== input.apiHistoryLength + 1 ||
+		snapshot.apiIndex !== snapshot.anchor.apiIndex ||
+		input.apiHistoryLength < 1
+	) {
+		return false
+	}
+	const lastPersistedApiIndex = input.apiHistoryLength - 1
+	snapshot.apiIndex = lastPersistedApiIndex
+	snapshot.anchor = { apiIndex: lastPersistedApiIndex }
+	if (snapshot.runtimeError?.message === "corrupt_anchor") {
+		snapshot.runtimeError = undefined
+	}
+	return true
+}
+
 /** Repair snapshots written with history.length instead of the assistant message index. */
 function reconcileAssistantApiIndex(snapshot: TaskSnapshot, input: ResumeInput): void {
 	const turn = snapshot.turn
@@ -50,6 +75,61 @@ function cloneSnapshot(snapshot: TaskSnapshot): TaskSnapshot {
 	}
 }
 
+/** Rebuild completion state cleared by older termination logic when every persisted identity agrees. */
+function restoreLegacyCompletionInteraction(snapshot: TaskSnapshot): void {
+	if (
+		snapshot.phase !== TaskPhase.CANCELLING ||
+		snapshot.cancellation?.fromPhase !== TaskPhase.COMPLETED ||
+		snapshot.interaction ||
+		!snapshot.taskId ||
+		snapshot.revision === undefined ||
+		!snapshot.completion ||
+		!snapshot.anchor?.turnId ||
+		!snapshot.anchor.interactionId ||
+		snapshot.anchor.uiMessageTs === undefined ||
+		!snapshot.turn ||
+		snapshot.turn.turnId !== snapshot.anchor.turnId ||
+		snapshot.completion.completionId !== snapshot.anchor.interactionId
+	) {
+		return
+	}
+	const completionId = snapshot.completion.completionId
+	const completionBlocks = snapshot.turn.blocks.filter(
+		(block) =>
+			block.dlineTid === completionId &&
+			block.toolName === "attempt_completion" &&
+			Boolean(block.functionId) &&
+			block.ts === snapshot.anchor?.uiMessageTs,
+	)
+	if (completionBlocks.length !== 1) return
+
+	snapshot.phase = TaskPhase.COMPLETED
+	snapshot.cancellation = undefined
+	snapshot.interaction = {
+		taskId: snapshot.taskId,
+		turnId: snapshot.turn.turnId,
+		interactionId: completionId,
+		kind: "completion",
+		status: "awaiting",
+		createdRevision: snapshot.revision,
+		anchor: { messageTs: snapshot.anchor.uiMessageTs, messageType: "ask" },
+	}
+}
+
+/** Restore the lifecycle phase hidden by interrupted termination cleanup. */
+function restorePreservedInteractionPhase(snapshot: TaskSnapshot): void {
+	if (
+		snapshot.phase !== TaskPhase.CANCELLING ||
+		!snapshot.cancellation ||
+		(snapshot.interaction?.status !== "awaiting" && snapshot.interaction?.status !== "resolving")
+	) {
+		return
+	}
+	const fromPhase = snapshot.cancellation.fromPhase
+	snapshot.phase = fromPhase === TaskPhase.CANCELLING ? TaskPhase.PAUSED : fromPhase
+	snapshot.cancellation = undefined
+}
+
 /** Extract persisted facts that carry their own canonical identity. */
 function extractFacts(input: ResumeInput): TailFacts {
 	const answeredDlineTids = new Set<string>()
@@ -83,6 +163,7 @@ export function reconcileResume(input: ResumeInput): ResumeResult {
 			diagnostics: [{ code: "task_mismatch", expected: input.taskId, actual: next.taskId }],
 		}
 	}
+	repairSyntheticResumeAnchor(next, input)
 	if (
 		!next.anchor ||
 		next.anchor.apiIndex < -1 ||
@@ -104,6 +185,8 @@ export function reconcileResume(input: ResumeInput): ResumeResult {
 	}
 
 	const facts = extractFacts(input)
+	restoreLegacyCompletionInteraction(next)
+	restorePreservedInteractionPhase(next)
 	if (next.interaction?.status === "opening") {
 		return {
 			snapshot: next,

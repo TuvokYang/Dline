@@ -291,7 +291,7 @@ describe("disk - JSONL task history", () => {
 
 	describe("basic write/read round-trip", () => {
 		it("should write and read task history (JSONL)", async () => {
-			const items = [item("t1", "Build a todo app"), item("t2", "Fix a bug")]
+			const items = [item("t1", "Build a todo app", { ts: 2 }), item("t2", "Fix a bug", { ts: 1 })]
 
 			await writeTaskHistoryToState(items)
 			const result = await readTaskHistoryFromState()

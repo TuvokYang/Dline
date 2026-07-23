@@ -152,20 +152,22 @@ describe("TaskInput", () => {
 		expect(screen.queryByRole("button", { name: "Add attachments" })).toBeNull()
 	})
 
-	it("does not approve on Enter when approval has no enter action", () => {
-		const dispatch = vi.fn()
+	it("defaults Enter to Reject for approval while preserving the draft", () => {
+		const dispatch = vi.fn(async () => ({ accepted: true, result: "accepted" }))
 		const view = resumeView()
 		if (!view.activeInteraction) {
 			throw new Error("Expected active interaction")
 		}
 		view.activeInteraction = { ...view.activeInteraction, kind: "tool_approval", taskAsk: "tool" }
-		delete view.input.enterAction
+		view.input.enterAction = "reject"
 
 		render(
 			<TaskInput dispatch={dispatch} draft={{ text: "note", images: [], files: [] }} onDraftChange={vi.fn()} view={view} />,
 		)
 		fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter", code: "Enter" })
 
-		expect(dispatch).not.toHaveBeenCalled()
+		expect(dispatch).toHaveBeenCalledWith(
+			expect.objectContaining({ actionId: "reject", draft: { text: "note", images: [], files: [] } }),
+		)
 	})
 })

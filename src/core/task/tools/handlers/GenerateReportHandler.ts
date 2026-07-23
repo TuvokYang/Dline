@@ -3,6 +3,7 @@ import { getPrompt, renderPrompt } from "@core/prompts/i18n"
 import { formatResponse } from "@core/prompts/responses"
 import { ClineDefaultTool } from "@shared/tools"
 import type { ToolResponse } from "../../index"
+import type { InteractionOutcome } from "../../interaction/InteractionCoordinator"
 import { isCompactSignal } from "../../mode-switch-signal"
 import type { IPartialBlockHandler, IToolHandler } from "../ToolExecutorCoordinator"
 import { interactionId, interactionTurnId, type TaskConfig } from "../types/TaskConfig"
@@ -50,6 +51,11 @@ export class GenerateReportHandler implements IToolHandler, IPartialBlockHandler
 			presentation: sharedMessage,
 			existingTs: block.ts,
 		})
+		return this.continueInteraction(config, block, outcome)
+	}
+
+	/** Consume a report response without replaying report presentation. */
+	async continueInteraction(config: TaskConfig, _block: ToolUse, outcome: InteractionOutcome): Promise<ToolResponse> {
 		const text = outcome.draft?.text
 		const images = outcome.draft?.images
 		const files = outcome.draft?.files

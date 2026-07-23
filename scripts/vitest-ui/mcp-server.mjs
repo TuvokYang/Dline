@@ -3,6 +3,7 @@ import { spawn } from "node:child_process"
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod/v4"
+import { boundStructuredPayload, stringifyBoundedPayload } from "./lib/bounded-payload.mjs"
 import {
 	collectFailures,
 	connectVitestUi,
@@ -72,14 +73,15 @@ async function ensureVitestUiServer() {
 }
 
 function textResult(structuredContent) {
+	const bounded = boundStructuredPayload(structuredContent)
 	return {
 		content: [
 			{
 				type: "text",
-				text: JSON.stringify(structuredContent, null, 2),
+				text: stringifyBoundedPayload(structuredContent),
 			},
 		],
-		structuredContent,
+		structuredContent: bounded,
 	}
 }
 

@@ -51,4 +51,6 @@ export const LITE_TOOLS_XML = `TOOLS
 
 export const LITE_SUBAGENTS_GUIDANCE = `
 
-**use_subagents** — Run up to 5 focused in-process subagents in parallel for broad exploration. Each subagent gets its own prompt and returns a comprehensive research result. Use this when reading many files would consume the main agent's context window. Using a single subagent is also valid for light discovery work.`
+**use_subagent** — Run one focused built-in default or advertised named YAML subagent. Supply task and context separately; omit agent_name to use default.
+
+**use_subagents** — Run one to five built-in default subagents in parallel for independent subtasks. Each prompt must contain task and context sections.`

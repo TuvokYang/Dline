@@ -121,16 +121,16 @@
 				{
 					"pattern": [
 						{
-							"regexp": ".",
+							"regexp": "^(?!)((?:.*))$",
+							"kind": "file",
 							"file": 1,
-							"location": 2,
-							"message": 3
+							"message": 1
 						}
 					],
 					"background": {
 						"activeOnStart": true,
-						"beginsPattern": ".",
-						"endsPattern": "."
+						"beginsPattern": "^Building webview for",
+						"endsPattern": "^\\[TypeScript\\] Found \\d+ errors?\\. Watching for file changes\\."
 					}
 				}
 			],

@@ -129,6 +129,13 @@ export function createBirpcClient({ socket, handlers = {}, timeoutMs = DEFAULT_T
 		})
 	}
 
+	function notify(method, ...args) {
+		if (closed) {
+			throw new Error(`[vitest-ui-rpc] connection is closed, cannot notify "${method}"`)
+		}
+		send({ m: method, a: args, t: QUERY })
+	}
+
 	async function handleMessage(raw) {
 		const message = deserialize(raw)
 		if (message.t === QUERY) {
@@ -183,6 +190,7 @@ export function createBirpcClient({ socket, handlers = {}, timeoutMs = DEFAULT_T
 
 	return {
 		call,
+		notify,
 		close,
 	}
 }

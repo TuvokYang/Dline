@@ -455,7 +455,7 @@ export interface ClineSayTool {
 	count?: number
 	/** Whether the operation is a dry-run preview. */
 	dryRun?: boolean
-	/** Structured payload for load_mcp/load_skill/load_workflow/load_subagent rendering. */
+	/** Structured payload for load_mcp/load_skill/load_workflow rendering. */
 	loadCapability?: LoadCapabilityPayload
 }
 

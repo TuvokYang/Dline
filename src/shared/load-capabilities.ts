@@ -1,4 +1,4 @@
-export type LoadCapabilityKind = "mcp" | "skill" | "workflow" | "subagent"
+export type LoadCapabilityKind = "mcp" | "skill" | "workflow"
 
 export type LoadCapabilityStatus = "loading" | "completed" | "failed"
 

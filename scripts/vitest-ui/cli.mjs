@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { stringifyBoundedPayload } from "./lib/bounded-payload.mjs"
 import {
 	collectFailures,
 	connectVitestUi,
@@ -48,7 +49,7 @@ Usage:
   npm run vitest:ui -- rerun task --task-id "<vitest task id>" [--wait]
 
 Options:
-  --url <url>         Vitest UI URL, default VITEST_UI_URL or http://localhost:51204/__vitest__/
+  --url <url>         Vitest UI URL, default VITEST_UI_URL or http://localhost:51205/__vitest__/
   --timeout <ms>     Connect/wait timeout, default 180000 for wait operations
   --json             Print machine-readable JSON
   --details          Include flattened task details for listed files
@@ -68,8 +69,10 @@ function numberOption(value, fallback) {
 }
 
 function printJson(value) {
-	console.log(JSON.stringify(value, null, 2))
+	console.log(stringifyBoundedPayload(value))
 }
+
+const MAX_PRINTED_FAILURES = 10
 
 function printStatus(result, { details = false } = {}) {
 	const { summary, files, failures } = result
@@ -78,9 +81,12 @@ function printStatus(result, { details = false } = {}) {
 	)
 	if (failures?.length) {
 		console.log(`failedTests=${failures.length}`)
-		for (const failure of failures) {
+		for (const failure of failures.slice(0, MAX_PRINTED_FAILURES)) {
 			const message = failure.errors[0]?.message ? ` ${failure.errors[0].message.replace(/\s+/g, " ").slice(0, 200)}` : ""
 			console.log(`FAIL ${failure.file} :: ${failure.fullName}${message}`)
+		}
+		if (failures.length > MAX_PRINTED_FAILURES) {
+			console.log(`... ${failures.length - MAX_PRINTED_FAILURES} additional failures omitted`)
 		}
 	}
 	if (details) {
@@ -119,7 +125,7 @@ async function main() {
 	const client = await connectVitestUi({
 		url: options.url,
 		connectTimeoutMs: numberOption(options.timeout, 15_000),
-		rpcTimeoutMs: numberOption(options.rpcTimeout, 60_000),
+		rpcTimeoutMs: numberOption(options.rpcTimeout, 180_000),
 	})
 
 	try {

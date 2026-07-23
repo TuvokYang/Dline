@@ -123,8 +123,8 @@ const FileBlock = memo<{
 			let oldLine = startLineNumber
 			let newLine = startLineNumber
 			return file.lines.map((line) => {
-				const isAddition = line.startsWith("+ ")
-				const isDeletion = line.startsWith("- ")
+				const isAddition = line.startsWith("+")
+				const isDeletion = line.startsWith("-")
 				const isContext = !isAddition && !isDeletion
 				if (isDeletion) {
 					const d = oldLine
@@ -234,10 +234,10 @@ const DiffStats = memo<{ additions: number; deletions: number }>(({ additions, d
 
 const DiffLine = memo<{ line: string; lineNumber?: number; showLineNumberColumn?: boolean }>(
 	({ line, lineNumber, showLineNumberColumn = true }) => {
-		const isAddition = line.startsWith("+ ")
-		const isDeletion = line.startsWith("- ")
-		const hasSpacePrefix = isAddition || isDeletion
-		const code = isAddition || isDeletion ? line.slice(hasSpacePrefix ? 2 : 1) : line
+		const isAddition = line.startsWith("+")
+		const isDeletion = line.startsWith("-")
+		const markerWidth = line[1] === " " ? 2 : 1
+		const code = isAddition || isDeletion ? line.slice(markerWidth) : line
 		const prefix = isAddition ? "+" : isDeletion ? "-" : " "
 		return (
 			<div
@@ -361,7 +361,7 @@ function parseNewFormat(content: string): Patch[] {
 			push()
 			currentFile = { action: fm[1], path: fm[2].trim() }
 			currentChunk = null
-		} else if (line.trim() === "@@") {
+		} else if (line.trim().startsWith("@@")) {
 			startChunk()
 		} else if (currentFile && line.trim()) {
 			if (!currentChunk)

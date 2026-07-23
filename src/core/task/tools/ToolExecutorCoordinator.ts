@@ -102,8 +102,6 @@ export class ToolExecutorCoordinator {
 		[ClineDefaultTool.LOAD_SKILL]: (_v: ToolValidator) => new LoadCapabilityHandler(ClineDefaultTool.LOAD_SKILL, "skill"),
 		[ClineDefaultTool.LOAD_WORKFLOW]: (_v: ToolValidator) =>
 			new LoadCapabilityHandler(ClineDefaultTool.LOAD_WORKFLOW, "workflow"),
-		[ClineDefaultTool.LOAD_SUBAGENT]: (_v: ToolValidator) =>
-			new LoadCapabilityHandler(ClineDefaultTool.LOAD_SUBAGENT, "subagent"),
 		[ClineDefaultTool.NEW_TASK]: (_v: ToolValidator) => new NewTaskHandler(),
 		[ClineDefaultTool.PLAN_MODE]: (_v: ToolValidator) => new PlanModeRespondHandler(),
 		[ClineDefaultTool.ACT_MODE]: (_v: ToolValidator) => new ActModeRespondHandler(),

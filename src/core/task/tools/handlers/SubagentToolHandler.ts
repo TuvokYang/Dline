@@ -12,7 +12,8 @@ import { telemetryService } from "@/services/telemetry"
 import { ClineDefaultTool } from "@/shared/tools"
 import type { ToolResponse } from "../../index"
 import { showNotificationForApproval } from "../../utils"
-import { type ResolveAgentConfigOptions, resolveAgentConfig } from "../subagent/AgentConfigLoader"
+import { listEnabledAgentConfigs, type ResolveAgentConfigOptions, resolveAgentConfig } from "../subagent/AgentConfigLoader"
+import { DEFAULT_SUBAGENT_NAME, isDefaultSubagentName } from "../subagent/DefaultSubagentConfig"
 import {
 	runSubagent,
 	type SubagentExecResult,
@@ -54,6 +55,16 @@ function getResolveOptions(config: TaskConfig): ResolveAgentConfigOptions {
 		globalSubagentToggles:
 			(stateManager.getGlobalSettingsKey?.("globalSubagentsToggles") as Record<string, boolean> | undefined) ?? {},
 	}
+}
+
+/** Build the bounded diagnostic list for unknown named subagents. */
+async function getAvailableSubagentNames(config: TaskConfig): Promise<string[]> {
+	const configuredNames = (await listEnabledAgentConfigs(config.cwd, getResolveOptions(config))).map(
+		(entry) => entry.config.name,
+	)
+	return Array.from(new Set([DEFAULT_SUBAGENT_NAME, ...configuredNames]))
+		.sort((left, right) => left.localeCompare(right))
+		.slice(0, 20)
 }
 
 /**
@@ -327,9 +338,9 @@ export class UseSubagentToolHandler implements IFullyManagedTool {
 	 * @param uiHelpers UI helper methods.
 	 */
 	async handlePartialBlock(block: ToolUse, uiHelpers: StronglyTypedUIHelpers): Promise<void> {
-		const subagentName = readParam(block.params.subagent_name)
+		const subagentName = readParam(block.params.agent_name) ?? DEFAULT_SUBAGENT_NAME
 		const task = readParam(block.params.task)
-		const content = readParam(block.params.content)
+		const content = readParam(block.params.context)
 		if (!subagentName && !task && !content) return
 		const payload: ClineAskUseSubagents = {
 			kind: "single",
@@ -364,16 +375,23 @@ export class UseSubagentToolHandler implements IFullyManagedTool {
 			config.taskState.consecutiveMistakeCount++
 			return formatResponse.toolError(error instanceof Error ? error.message : String(error))
 		}
-		const resolvedSubagent = await resolveAgentConfig(config.cwd, request.subagentName, getResolveOptions(config))
-		if (!resolvedSubagent) {
-			return formatResponse.toolError(`Unknown or disabled subagent '${request.subagentName}'.`)
+		const usesDefault = isDefaultSubagentName(request.agentName)
+		const resolvedSubagent = usesDefault
+			? undefined
+			: await resolveAgentConfig(config.cwd, request.agentName, getResolveOptions(config))
+		if (!usesDefault && !resolvedSubagent) {
+			const available = await getAvailableSubagentNames(config)
+			return formatResponse.toolError(
+				`Unknown or disabled subagent '${request.agentName}'. Available subagents: ${available.join(", ")}.`,
+			)
 		}
+		const effectiveSubagentName = resolvedSubagent?.config.name ?? DEFAULT_SUBAGENT_NAME
 		const approvalBody = JSON.stringify({
 			kind: "single",
 			prompts: [request.task],
-			subagentName: request.subagentName,
+			subagentName: effectiveSubagentName,
 			task: request.task,
-			content: request.content,
+			content: request.context,
 			background: request.options.background,
 			timeoutSeconds: request.options.timeoutSeconds,
 		} satisfies ClineAskUseSubagents)
@@ -383,14 +401,14 @@ export class UseSubagentToolHandler implements IFullyManagedTool {
 			this.name,
 			"use_subagents",
 			approvalBody,
-			`Dline wants to use the '${request.subagentName}' subagent`,
+			`Dline wants to use the '${effectiveSubagentName}' subagent`,
 		)
 		if (!approved) return formatResponse.toolDenied()
 
 		const entry: SubagentStatusItem = {
 			index: 1,
 			prompt: request.prompt,
-			subagentName: request.subagentName,
+			subagentName: effectiveSubagentName,
 			task: request.task,
 			background: request.options.background,
 			timeoutSeconds: request.options.timeoutSeconds,
@@ -399,9 +417,9 @@ export class UseSubagentToolHandler implements IFullyManagedTool {
 			...emptyStats(),
 		}
 		if (request.options.background) {
-			const runner = new SubagentRunner(config, request.subagentName, resolvedSubagent.config)
+			const runner = new SubagentRunner(config, effectiveSubagentName, resolvedSubagent?.config)
 			const job = getSubagentJobManager(config).startJob({
-				subagentName: request.subagentName,
+				subagentName: effectiveSubagentName,
 				task: request.task,
 				prompt: request.prompt,
 				timeoutSeconds: request.options.timeoutSeconds,
@@ -457,7 +475,7 @@ export class UseSubagentToolHandler implements IFullyManagedTool {
 
 		config.taskState.consecutiveMistakeCount = 0
 		config.taskState.isExecutingSubagent = true
-		const foregroundRunner = new SubagentRunner(config, request.subagentName, resolvedSubagent.config)
+		const foregroundRunner = new SubagentRunner(config, effectiveSubagentName, resolvedSubagent?.config)
 		entry.jobId = `subagent_fg_${block.function_id || block.ts}`
 		entry.startedAt = Date.now()
 		createSubagentActivity(config, entry, "foreground", () => foregroundRunner.abort())

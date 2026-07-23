@@ -44,16 +44,18 @@ export function reduceInteraction(state: ActiveInteraction, response: Interactio
 		return reject(state, "duplicate_response")
 	}
 
-	const action = getInteraction(state.kind).actions.find((candidate) => candidate.type === response.actionId)
-	if (!action) {
+	const definition = getInteraction(state.kind)
+	const action = definition.actions.find((candidate) => candidate.type === response.actionId)
+	const isEnterAction = definition.input.enterAction === response.actionId
+	if (!action && !isEnterAction) {
 		return reject(state, "invalid_action")
 	}
 	const hasDraft = response.draft !== undefined
 	const hasSelection = response.selection !== undefined && response.selection.values.length > 0
 	if (
-		(action.payloadPolicy === "draft" && !hasDraft) ||
-		(action.payloadPolicy === "selection" && !hasSelection) ||
-		(action.payloadPolicy === "draft_and_selection" && (!hasDraft || !hasSelection))
+		((action?.payloadPolicy === "draft" || isEnterAction) && !hasDraft) ||
+		(action?.payloadPolicy === "selection" && !hasSelection) ||
+		(action?.payloadPolicy === "draft_and_selection" && (!hasDraft || !hasSelection))
 	) {
 		return reject(state, "invalid_interaction_payload")
 	}

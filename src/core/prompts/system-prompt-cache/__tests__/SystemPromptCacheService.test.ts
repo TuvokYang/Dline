@@ -1,9 +1,20 @@
+import { renderCapabilitiesSection } from "@core/prompts/capabilities/CapabilitiesSection"
 import { PromptProfile } from "@core/prompts/profiles/types"
 import type { SystemPromptContext } from "@core/prompts/system-prompt"
 import type { TaskContextCache } from "@core/storage/task-context-types"
 import type { ClineTool } from "@shared/tools"
 import { describe, expect, it } from "vitest"
+import { hashPromptContent } from "../hash"
 import { SystemPromptCacheService } from "../SystemPromptCacheService"
+
+const EMPTY_CAPABILITIES = {
+	mcp: [],
+	skills: [],
+	workflows: [],
+	subagents: [],
+}
+
+const EMPTY_CAPABILITIES_HASH = hashPromptContent(renderCapabilitiesSection(EMPTY_CAPABILITIES))
 
 const testPromptBuilderInfo = {
 	providerId: "test-provider",
@@ -94,7 +105,7 @@ describe("SystemPromptCacheService", () => {
 				frozen: {
 					text: "old prompt # Capabilities old",
 					tools,
-					capabilitiesHash: "sha256:old",
+					capabilitiesHash: EMPTY_CAPABILITIES_HASH,
 					createdAt: 1,
 					refreshedAt: 1,
 					refreshReason: "task_start" as const,
@@ -112,6 +123,7 @@ describe("SystemPromptCacheService", () => {
 			deps: {
 				getContext: async () => cached,
 				saveContext: async () => undefined,
+				collectCapabilities: async () => EMPTY_CAPABILITIES,
 				buildSystemPrompt: async () => {
 					throw new Error("frozen tools must not be rebuilt")
 				},
@@ -132,7 +144,7 @@ describe("SystemPromptCacheService", () => {
 				frozen: {
 					text: "frozen native prompt",
 					tools: frozenTools,
-					capabilitiesHash: "sha256:frozen",
+					capabilitiesHash: EMPTY_CAPABILITIES_HASH,
 					createdAt: 1,
 					refreshedAt: 1,
 					refreshReason: "task_start" as const,
@@ -151,6 +163,7 @@ describe("SystemPromptCacheService", () => {
 			deps: {
 				getContext: async () => cached,
 				saveContext: async () => undefined,
+				collectCapabilities: async () => EMPTY_CAPABILITIES,
 				buildSystemPrompt: async () => {
 					buildCount += 1
 					return { systemPrompt: "current xml prompt" }
@@ -223,7 +236,7 @@ describe("SystemPromptCacheService", () => {
 		expect(service.getLastTools()).toEqual(rebuiltTools)
 	})
 
-	it("keeps ordinary requests stable when capability sources change", async () => {
+	it("refreshes the frozen prompt when canonical capabilities change", async () => {
 		const cached = {
 			...emptyContext("task-1"),
 			systemPrompt: {
@@ -252,10 +265,10 @@ describe("SystemPromptCacheService", () => {
 					saveCount += 1
 				},
 				collectCapabilities: async () => ({
-					mcp: [{ name: "new.tool", description: "New" }],
+					mcp: [],
 					skills: [],
 					workflows: [],
-					subagents: [],
+					subagents: [{ name: "reviewer", description: "Review code" }],
 				}),
 				buildSystemPrompt: async (context) => ({ systemPrompt: `new ${context.capabilitiesSection}` }),
 				getPromptBuilderInfo: () => testPromptBuilderInfo,
@@ -264,9 +277,9 @@ describe("SystemPromptCacheService", () => {
 
 		const result = await service.getOrCreate({ promptContext })
 
-		expect(result.text).toBe("old prompt # Capabilities old")
-		expect(service.getLastTools()).toBeUndefined()
-		expect(saveCount).toBe(0)
+		expect(result.text).toContain("reviewer")
+		expect(result.refreshReason).toBe("capability_change")
+		expect(saveCount).toBe(1)
 	})
 
 	it("shares one in-flight rebuild and save across concurrent getOrCreate calls", async () => {

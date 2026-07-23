@@ -102,6 +102,22 @@ describe("MessageChannel.presentAsk", () => {
 		assert.equal(clineMessages[0].exitCode, undefined)
 	})
 
+	it("keeps a rejected tool ask as a persisted timeline presentation", async () => {
+		const { channel, clineMessages } = createMessageChannel()
+		const presentation = JSON.stringify({ tool: "editedExistingFile", path: "src/example.ts" })
+
+		const messageTs = await channel.presentAsk("tool", presentation)
+		channel.resolve("noButtonClicked", "not now")
+
+		assert.equal(clineMessages.length, 1)
+		assert.deepEqual(clineMessages[0], {
+			ts: messageTs,
+			type: "ask",
+			ask: "tool",
+			text: presentation,
+		})
+	})
+
 	it("sets pending for a new command ask without assigning command status to other asks", async () => {
 		const { channel, clineMessages } = createMessageChannel()
 

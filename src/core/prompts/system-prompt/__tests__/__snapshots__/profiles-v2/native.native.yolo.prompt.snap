@@ -145,6 +145,7 @@ In each user message, the environment_details will specify the current mode. The
 
 ## Subagents
 - `reviewer`: Review implementation changes.
+Use `use_subagent` for one default or named subagent. Use `use_subagents` for one to five parallel default subtasks.
 
 # SKILLS
 

@@ -39,6 +39,22 @@ interface Commit {
 	changes: Record<string, FileChange>
 }
 
+export interface ApplyPatchFileOutcome {
+	path: string
+	status: "added" | "updated" | "deleted"
+	result: FileOpsResult
+}
+
+/** Format per-file apply_patch outcomes with stable path and operation mapping. */
+export function formatApplyPatchOutcomes(outcomes: readonly ApplyPatchFileOutcome[]): string[] {
+	return outcomes.map(({ path, status, result }) => {
+		if (status === "deleted" || result.deleted) {
+			return `${path}: [deleted]`
+		}
+		return `${path}: [${status}] (wrote ${result.wroteLines ?? 0} lines, saved ${result.savedLines ?? 0} lines)`
+	})
+}
+
 export const PatchClineSayMap = {
 	[PatchActionType.ADD]: "newFileCreated",
 	[PatchActionType.DELETE]: "fileDeleted",
@@ -266,6 +282,7 @@ export class ApplyPatchHandler implements IFullyManagedTool {
 
 			const finalResponses = []
 			const applyResults: Record<string, FileOpsResult> = {}
+			const fileOutcomes: ApplyPatchFileOutcome[] = []
 
 			// Create a mapping from message path to original commit change key
 			// (needed because for move operations, message.path is the new path, but commit.changes key is the old path)
@@ -319,11 +336,18 @@ export class ApplyPatchHandler implements IFullyManagedTool {
 					// For move operations, we need to handle both old and new paths
 					if (change.type === PatchActionType.UPDATE && change.movePath) {
 						applyResults[change.movePath] = fileResult
+						fileOutcomes.push({ path: change.movePath, status: "added", result: fileResult })
 						// Delete the old file after saving the new one
 						await this.providerOps?.deleteFile(originalPath)
 						applyResults[originalPath] = { deleted: true }
+						fileOutcomes.push({ path: originalPath, status: "deleted", result: { deleted: true } })
 					} else {
 						applyResults[originalPath] = fileResult
+						fileOutcomes.push({
+							path: originalPath,
+							status: change.type === PatchActionType.ADD ? "added" : "updated",
+							result: fileResult,
+						})
 					}
 				}
 
@@ -374,11 +398,12 @@ export class ApplyPatchHandler implements IFullyManagedTool {
 			// Build response with file contents and diagnostics
 			const responseLines = [getPrompt("toolHandlers", "patchSuccess")]
 
+			responseLines.push(...formatApplyPatchOutcomes(fileOutcomes).map((line) => `\n${line}`))
+
 			for (const [path, result] of Object.entries(applyResults)) {
 				if (result.deleted) {
 					config.taskState.didEditFile = true
 					// Note: cache invalidation for deleted files is already handled in the changedFiles loop above
-					responseLines.push(`\n${path}: [deleted]`)
 				} else {
 					// Format response similar to WriteToFileToolHandler
 					if (result.userEdits) {
@@ -410,7 +435,6 @@ export class ApplyPatchHandler implements IFullyManagedTool {
 					if (result.autoFormattingEdits) {
 						responseLines.push(`\nAuto-formatting was applied to ${path}:\n${result.autoFormattingEdits}\n`)
 					}
-					responseLines.push(`\n(wrote ${result.wroteLines} lines, saved ${result.savedLines} lines)`)
 					if (result.formatterChanged) {
 						responseLines.push(
 							`\nNote: The file was modified by formatter after saving. Re-read before replace_in_file.`,

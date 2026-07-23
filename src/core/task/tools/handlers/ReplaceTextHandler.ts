@@ -58,17 +58,23 @@ export class ReplaceTextHandler implements IFullyManagedTool {
 		const find = typeof params?.find === "string" ? params.find : ""
 		const replace = typeof params?.replace === "string" ? params.replace : ""
 		const filePattern = typeof params?.file_pattern === "string" ? params.file_pattern : "*"
-		const dryRun = params?.dry_run === true || params?.dry_run === "true"
-		const literal = params?.literal !== false
+		const dryRun = parseBooleanParam(params?.dry_run, false)
+		const literal = parseBooleanParam(params?.literal, true)
 
-		if (!find) return getPrompt("replaceText", "missingFind")
+		if (!find) {
+			const result = getPrompt("replaceText", "missingFind")
+			await settleReplaceTextUi(config, block, filePattern, find, result)
+			return result
+		}
 
 		try {
 			const searchRegex = literal ? buildLiteralRegex(find) : buildRegex(find)
 			const files = await findFiles(config.cwd, filePattern)
 
 			if (!files.length) {
-				return getPrompt("replaceText", "noFilesMatched").replace("{pattern}", filePattern)
+				const result = getPrompt("replaceText", "noFilesMatched").replace("{pattern}", filePattern)
+				await settleReplaceTextUi(config, block, filePattern, find, result)
+				return result
 			}
 
 			const allMatches: MatchRecord[] = []
@@ -102,10 +108,12 @@ export class ReplaceTextHandler implements IFullyManagedTool {
 			}
 
 			if (!allMatches.length) {
-				return getPrompt("replaceText", "noOccurrences")
+				const result = getPrompt("replaceText", "noOccurrences")
 					.replace("{find}", find)
 					.replace("{count}", String(files.length))
 					.replace("{pattern}", filePattern)
+				await settleReplaceTextUi(config, block, filePattern, find, result)
+				return result
 			}
 
 			const uniqueFiles = new Set(allMatches.map((m) => m.filePath)).size
@@ -162,7 +170,9 @@ export class ReplaceTextHandler implements IFullyManagedTool {
 			return result
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error)
-			return `${getPrompt("replaceText", "errorPrefix")} ${message}`
+			const result = `${getPrompt("replaceText", "errorPrefix")} ${message}`
+			await settleReplaceTextUi(config, block, filePattern, find, result)
+			return result
 		}
 	}
 }
@@ -179,18 +189,52 @@ async function findFiles(cwd: string, filePattern: string): Promise<string[]> {
 	})
 }
 
+function parseBooleanParam(value: unknown, defaultValue: boolean): boolean {
+	if (value === true || value === "true") return true
+	if (value === false || value === "false") return false
+	return defaultValue
+}
+
+async function settleReplaceTextUi(
+	config: TaskConfig,
+	block: ToolUse,
+	filePattern: string,
+	find: string,
+	content: string,
+): Promise<void> {
+	if (config.isSubagentExecution) return
+	await config.callbacks.say(
+		"tool",
+		JSON.stringify({
+			tool: "replaceText",
+			path: filePattern,
+			regex: find,
+			content,
+			operationIsLocatedInWorkspace: true,
+		}),
+		undefined,
+		undefined,
+		false,
+		block.ts,
+	)
+}
+
 function buildLiteralRegex(text: string): RegExp {
 	const escaped = text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
 	return new RegExp(escaped, "g")
 }
 
 function buildRegex(pattern: string): RegExp {
+	const match = pattern.match(/^\/(.+)\/([gimsuy]*)$/)
 	try {
-		const match = pattern.match(/^\/(.+)\/([gimsuy]*)$/)
-		if (match) return new RegExp(match[1], match[2] || "g")
+		if (match) {
+			const flags = match[2].includes("g") ? match[2] : `${match[2]}g`
+			return new RegExp(match[1], flags)
+		}
 		return new RegExp(pattern, "g")
-	} catch {
-		return buildLiteralRegex(pattern)
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error)
+		throw new Error(`Invalid regular expression: ${message}`, { cause: error })
 	}
 }
 

@@ -50,7 +50,10 @@ describe("collectCapabilities", () => {
 			const snapshot = await collectCapabilities({ cwd })
 
 			expect(snapshot.workflows).toEqual([{ name: "release", description: "Release flow" }])
-			expect(snapshot.subagents).toEqual([{ name: "reviewer", description: "Review code" }])
+			expect(snapshot.subagents).toEqual([
+				{ name: "default", description: "Built-in readonly research subagent" },
+				{ name: "reviewer", description: "Review code" },
+			])
 			expect(JSON.stringify(snapshot)).not.toContain("systemPrompt")
 		} finally {
 			await fs.rm(cwd, { recursive: true, force: true })
@@ -70,7 +73,7 @@ describe("collectCapabilities", () => {
 
 			const snapshot = await collectCapabilities({ cwd })
 
-			expect(snapshot.subagents).toEqual([])
+			expect(snapshot.subagents).toEqual([{ name: "default", description: "Built-in readonly research subagent" }])
 		} finally {
 			await fs.rm(cwd, { recursive: true, force: true })
 		}

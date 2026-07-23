@@ -61,6 +61,13 @@ function spec(
 }
 
 const LOAD_PARAMS = [param("name", true, getPrompt("loadCapability", "nameInstruction"))]
+const SINGLE_SUBAGENT_PARAMS = [
+	param("agent_name", false, getPrompt("subagent", "agentNameInstruction")),
+	param("task", true, getPrompt("subagent", "taskInstruction")),
+	param("context", true, getPrompt("subagent", "contextInstruction")),
+	param("background", false, getPrompt("subagent", "backgroundInstruction"), "boolean"),
+	param("timeout", false, getPrompt("subagent", "timeoutInstruction"), "integer"),
+]
 const SUBAGENT_PARAMS = [
 	param("prompt_1", true, getPrompt("subagent", "prompt1Instruction")),
 	param("prompt_2", false, getPrompt("subagent", "prompt2Instruction")),
@@ -197,7 +204,6 @@ export const NATIVE_TOOL_SPECS: readonly Omit<ProfileToolSpec, "profile">[] = [
 	spec(ClineDefaultTool.LOAD_MCP, getPrompt("loadCapability", "nativeDescription"), LOAD_PARAMS, hasMcp),
 	spec(ClineDefaultTool.LOAD_SKILL, getPrompt("loadCapability", "nativeDescription"), LOAD_PARAMS),
 	spec(ClineDefaultTool.LOAD_WORKFLOW, getPrompt("loadCapability", "nativeDescription"), LOAD_PARAMS),
-	spec(ClineDefaultTool.LOAD_SUBAGENT, getPrompt("loadCapability", "nativeDescription"), LOAD_PARAMS),
 	spec(ClineDefaultTool.FIND_REFERENCES, getPrompt("findReferences", "nativeDescription"), [
 		param("file_path", true, getPrompt("findReferences", "filePathInstruction")),
 		param("line", true, getPrompt("findReferences", "lineInstruction"), "integer"),
@@ -237,6 +243,7 @@ export const NATIVE_TOOL_SPECS: readonly Omit<ProfileToolSpec, "profile">[] = [
 		],
 		(context) => context.focusChainSettings?.enabled === true,
 	),
+	spec(ClineDefaultTool.USE_SUBAGENT, getPrompt("subagent", "singleDescription"), SINGLE_SUBAGENT_PARAMS, hasSubagents),
 	spec(ClineDefaultTool.USE_SUBAGENTS, getPrompt("subagent", "description"), SUBAGENT_PARAMS, hasSubagents),
 	spec(ClineDefaultTool.STATUS_UPDATE, getPrompt("statusUpdate", "nativeDescription"), [
 		param("response", true, getPrompt("statusUpdate", "responseInstruction")),

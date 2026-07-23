@@ -16,8 +16,9 @@ const TID = "tid-1"
 function snapshot(
 	options: {
 		phase?: TaskPhase
-		interaction?: "qna_response" | "completion" | "resume"
-		interactionStatus?: "opening" | "awaiting"
+		interaction?: "tool_approval" | "status_acknowledgment" | "qna_response" | "mistake_limit" | "completion" | "resume"
+		interactionStatus?: "opening" | "awaiting" | "resolving"
+		cancellationFromPhase?: TaskPhase
 		blocks?: Array<{ dlineTid: string; phase: BlockPhase }>
 	} = {},
 ): TaskSnapshot {
@@ -52,7 +53,21 @@ function snapshot(
 			status: options.interactionStatus ?? "awaiting",
 			createdRevision: 3,
 			anchor: options.interactionStatus === "opening" ? undefined : { messageTs: 100, messageType: "ask" },
+			...(options.interactionStatus === "resolving"
+				? {
+						acceptedResponse: {
+							taskId: TASK_ID,
+							turnId: TURN_ID,
+							interactionId: TID,
+							actionId: "approve" as const,
+							stateRevision: 4,
+						},
+					}
+				: {}),
 		}
+	}
+	if (options.cancellationFromPhase) {
+		state.cancellation = { source: "system", fromPhase: options.cancellationFromPhase }
 	}
 	if (options.phase === TaskPhase.COMPLETED) {
 		state.completion = { completionId: TID }
@@ -170,6 +185,62 @@ describe("reconcileResume", () => {
 		expect(result.snapshot.anchor?.apiIndex).toBe(1)
 	})
 
+	it.each([
+		"awaiting",
+		"resolving",
+	] as const)("replays the original tool block for a %s approval interaction", (interactionStatus) => {
+		const taskSnapshot = snapshot({
+			phase: TaskPhase.AWAITING_APPROVAL,
+			interaction: "tool_approval",
+			interactionStatus,
+			blocks: [{ dlineTid: TID, phase: BlockPhase.AWAITING_APPROVAL }],
+		})
+
+		const result = reconcileResume(input(taskSnapshot, [], [assistantTool()]))
+
+		expect(result.entry).toEqual({
+			type: "replay_pending_blocks",
+			turnId: TURN_ID,
+			dlineTids: [TID],
+			answeredDlineTids: [],
+		})
+		expect(result.snapshot.interaction).toMatchObject({
+			kind: "tool_approval",
+			status: interactionStatus,
+			interactionId: TID,
+		})
+	})
+
+	it("replays the original tool block for utility interactions that finish inside their handlers", () => {
+		const taskSnapshot = snapshot({
+			phase: TaskPhase.AWAITING_APPROVAL,
+			interaction: "status_acknowledgment",
+			blocks: [{ dlineTid: TID, phase: BlockPhase.AWAITING_APPROVAL }],
+		})
+
+		const result = reconcileResume(input(taskSnapshot, [], [assistantTool()]))
+
+		expect(result.entry).toEqual({
+			type: "replay_pending_blocks",
+			turnId: TURN_ID,
+			dlineTids: [TID],
+			answeredDlineTids: [],
+		})
+	})
+
+	it("fails read-only instead of consuming an interaction without a typed continuation or original block", () => {
+		const result = reconcileResume(input(snapshot({ phase: TaskPhase.AWAITING_APPROVAL, interaction: "mistake_limit" })))
+
+		expect(result.entry).toEqual({
+			type: "read_only_failure",
+			diagnostics: [{ code: "missing_interaction_continuation", interactionId: TID }],
+		})
+		expect(result.snapshot.interaction).toMatchObject({
+			kind: "mistake_limit",
+			status: "awaiting",
+		})
+	})
+
 	it("replays only unfinished blocks from a partially answered multi-tool turn", () => {
 		const taskSnapshot = snapshot({
 			phase: TaskPhase.EXECUTING,
@@ -242,7 +313,147 @@ describe("reconcileResume", () => {
 	})
 
 	it("shows resume interaction when cancel cleanup was interrupted", () => {
-		expectEntry(snapshot({ phase: TaskPhase.CANCELLING }), { type: "show_resume_interaction" })
+		const result = reconcileResume(input(snapshot({ phase: TaskPhase.CANCELLING })))
+
+		expect(result.entry).toEqual({ type: "show_resume_interaction" })
+		expect(result.snapshot.phase).toBe(TaskPhase.PAUSED)
+		expect(result.snapshot.cancellation).toBeUndefined()
+	})
+
+	it("restores a legacy completed interaction cleared by interrupted cancellation", () => {
+		const legacyCompleted = snapshot({
+			phase: TaskPhase.COMPLETED,
+			blocks: [{ dlineTid: TID, phase: BlockPhase.AUTO_EXECUTING }],
+		})
+		legacyCompleted.phase = TaskPhase.CANCELLING
+		legacyCompleted.anchor = {
+			apiIndex: 1,
+			turnId: TURN_ID,
+			uiMessageTs: 100,
+			interactionId: TID,
+		}
+		legacyCompleted.turn = {
+			turnId: TURN_ID,
+			assistantApiIndex: 2,
+			mode: "parallel",
+			blocks: [
+				{
+					dlineTid: TID,
+					functionId: `function-${TID}`,
+					toolName: "attempt_completion",
+					ts: 100,
+					requiresApproval: false,
+					conversationHistoryIndex: 1,
+					phase: BlockPhase.AUTO_EXECUTING,
+				},
+			],
+		}
+		legacyCompleted.cancellation = { source: "system", fromPhase: TaskPhase.COMPLETED }
+		legacyCompleted.interaction = undefined
+
+		const result = reconcileResume(input(legacyCompleted))
+
+		expect(result.entry).toEqual({
+			type: "show_completion_interaction",
+			interactionId: TID,
+			turnId: TURN_ID,
+		})
+		expect(result.snapshot.phase).toBe(TaskPhase.COMPLETED)
+		expect(result.snapshot.cancellation).toBeUndefined()
+		expect(result.snapshot.interaction).toEqual({
+			taskId: TASK_ID,
+			turnId: TURN_ID,
+			interactionId: TID,
+			kind: "completion",
+			status: "awaiting",
+			createdRevision: 4,
+			anchor: { messageTs: 100, messageType: "ask" },
+		})
+	})
+
+	it("does not infer legacy completion when the completion block identity disagrees", () => {
+		const mismatched = snapshot({
+			phase: TaskPhase.COMPLETED,
+			blocks: [{ dlineTid: "other-tid", phase: BlockPhase.AUTO_EXECUTING }],
+		})
+		mismatched.phase = TaskPhase.CANCELLING
+		mismatched.anchor = {
+			apiIndex: 1,
+			turnId: TURN_ID,
+			uiMessageTs: 100,
+			interactionId: TID,
+		}
+		mismatched.turn = {
+			turnId: TURN_ID,
+			assistantApiIndex: 2,
+			mode: "parallel",
+			blocks: [
+				{
+					dlineTid: "other-tid",
+					functionId: "function-other-tid",
+					toolName: "attempt_completion",
+					ts: 100,
+					requiresApproval: false,
+					conversationHistoryIndex: 1,
+					phase: BlockPhase.AUTO_EXECUTING,
+				},
+			],
+		}
+		mismatched.cancellation = { source: "system", fromPhase: TaskPhase.COMPLETED }
+		mismatched.interaction = undefined
+
+		const result = reconcileResume(input(mismatched))
+
+		expect(result.entry).toEqual({ type: "show_resume_interaction" })
+		expect(result.snapshot.phase).toBe(TaskPhase.PAUSED)
+		expect(result.snapshot.interaction).toBeUndefined()
+	})
+
+	it("restores cancellation provenance before reopening a preserved interaction", () => {
+		const result = reconcileResume(
+			input(
+				snapshot({
+					phase: TaskPhase.CANCELLING,
+					interaction: "qna_response",
+					cancellationFromPhase: TaskPhase.AWAITING_APPROVAL,
+				}),
+			),
+		)
+
+		expect(result.entry).toEqual({ type: "reopen_interaction", interactionId: TID, turnId: TURN_ID })
+		expect(result.snapshot.phase).toBe(TaskPhase.AWAITING_APPROVAL)
+		expect(result.snapshot.cancellation).toBeUndefined()
+	})
+
+	it("repairs only the synthetic resume anchor written one past persisted history", () => {
+		const taskSnapshot = snapshot({ phase: TaskPhase.CANCELLING })
+		taskSnapshot.apiIndex = 145
+		taskSnapshot.anchor = {
+			apiIndex: 145,
+			turnId: `resume:${TASK_ID}`,
+			interactionId: `resume:${TASK_ID}`,
+			uiMessageTs: 1784731755250,
+		}
+		taskSnapshot.turn = undefined
+		taskSnapshot.interaction = undefined
+		taskSnapshot.cancellation = { source: "system", fromPhase: TaskPhase.PAUSED }
+		taskSnapshot.runtimeError = {
+			effectId: "resume_reconciliation",
+			effectType: "PERSIST_SNAPSHOT",
+			message: "corrupt_anchor",
+		}
+
+		const result = reconcileResume({
+			...input(taskSnapshot),
+			apiHistoryLength: 144,
+		})
+
+		expect(result.entry).toEqual({ type: "show_resume_interaction" })
+		expect(result.snapshot.phase).toBe(TaskPhase.PAUSED)
+		expect(result.snapshot.apiIndex).toBe(143)
+		expect(result.snapshot.anchor).toEqual({ apiIndex: 143 })
+		expect(result.snapshot.runtimeError).toBeUndefined()
+		expect(result.diagnostics).toEqual([])
 	})
 
 	it("returns read-only failure for an API anchor beyond persisted history", () => {

@@ -2,6 +2,7 @@ import type {
 	InputPolicy,
 	InteractionActionDefinition,
 	InteractionActionType,
+	InteractionContinuation,
 	InteractionDefinition,
 	InteractionKind,
 	PayloadPolicy,
@@ -52,32 +53,36 @@ function define(
 	taskAsk: InteractionDefinition["taskAsk"],
 	actions: readonly InteractionActionDefinition[],
 	input: InputPolicy = DRAFT_INPUT,
+	continuation: InteractionContinuation = "none",
 ): InteractionDefinition {
-	return { kind, taskAsk, presentationKind: kind, input, actions }
+	return { kind, taskAsk, presentationKind: kind, input, actions, continuation }
 }
 
 const REPLY_INPUT: InputPolicy = { ...DRAFT_INPUT, enterAction: "reply" }
 const RESUME_INPUT: InputPolicy = { ...DRAFT_INPUT, enterAction: "resume" }
+const APPROVAL_INPUT: InputPolicy = { ...DRAFT_INPUT, enterAction: "reject" }
 const APPROVAL_ACTIONS = [action("approve", "Approve", "draft"), action("reject", "Reject", "draft", "danger")]
 
 const DEFINITIONS: Readonly<Record<InteractionKind, InteractionDefinition>> = {
-	tool_approval: define("tool_approval", "tool", APPROVAL_ACTIONS),
-	command_approval: define("command_approval", "command", APPROVAL_ACTIONS),
-	browser_approval: define("browser_approval", "browser_action_launch", APPROVAL_ACTIONS),
-	mcp_approval: define("mcp_approval", "use_mcp_server", APPROVAL_ACTIONS),
-	subagent_approval: define("subagent_approval", "use_subagents", APPROVAL_ACTIONS),
-	spawn_task_approval: define("spawn_task_approval", "spawn_task", APPROVAL_ACTIONS),
-	focus_chain_change: define("focus_chain_change", "focus_chain_change", [
-		action("approve", "Approve", "draft_and_selection"),
-		action("reject", "Reject", "draft", "danger"),
-	]),
+	tool_approval: define("tool_approval", "tool", APPROVAL_ACTIONS, APPROVAL_INPUT),
+	command_approval: define("command_approval", "command", APPROVAL_ACTIONS, APPROVAL_INPUT),
+	browser_approval: define("browser_approval", "browser_action_launch", APPROVAL_ACTIONS, APPROVAL_INPUT),
+	mcp_approval: define("mcp_approval", "use_mcp_server", APPROVAL_ACTIONS, APPROVAL_INPUT),
+	subagent_approval: define("subagent_approval", "use_subagents", APPROVAL_ACTIONS, APPROVAL_INPUT),
+	spawn_task_approval: define("spawn_task_approval", "spawn_task", APPROVAL_ACTIONS, APPROVAL_INPUT),
+	focus_chain_change: define(
+		"focus_chain_change",
+		"focus_chain_change",
+		[action("approve", "Approve", "draft_and_selection"), action("reject", "Reject", "draft", "danger")],
+		APPROVAL_INPUT,
+	),
 	new_task: define("new_task", "new_task", [action("approve", "Start New Task", "draft"), action("reject", "Reject", "draft")]),
 	report_bug: define("report_bug", "report_bug", [action("confirm_utility", "Report Bug", "draft")]),
 	condense: define("condense", "condense", [action("confirm_utility", "Condense Conversation", "draft")]),
-	followup: define("followup", "followup", [action("reply", "Reply", "draft")], REPLY_INPUT),
-	plan_response: define("plan_response", "plan_mode_respond", [action("reply", "Reply", "draft")], REPLY_INPUT),
-	qna_response: define("qna_response", "qna_respond", [action("reply", "Reply", "draft")], REPLY_INPUT),
-	generate_report: define("generate_report", "generate_report", [action("reply", "Reply", "draft")], REPLY_INPUT),
+	followup: define("followup", "followup", [], REPLY_INPUT, "handler"),
+	plan_response: define("plan_response", "plan_mode_respond", [], REPLY_INPUT, "handler"),
+	qna_response: define("qna_response", "qna_respond", [], REPLY_INPUT, "handler"),
+	generate_report: define("generate_report", "generate_report", [], REPLY_INPUT, "handler"),
 	status_acknowledgment: define("status_acknowledgment", "status_acknowledgment", [
 		action("acknowledge", "Acknowledge", "draft"),
 		action("stop", "Stop", "draft", "danger"),
@@ -93,10 +98,11 @@ const DEFINITIONS: Readonly<Record<InteractionKind, InteractionDefinition>> = {
 	completion: define(
 		"completion",
 		"completion_result",
-		[action("reply", "Reply", "draft"), action("start_new_task", "Start New Task", "draft")],
+		[action("start_new_task", "Start New Task", "draft")],
 		REPLY_INPUT,
+		"completion",
 	),
-	resume: define("resume", "resume_task", [action("resume", "Resume", "draft")], RESUME_INPUT),
+	resume: define("resume", "resume_task", [action("resume", "Resume", "draft")], RESUME_INPUT, "resume"),
 }
 
 /** Return the immutable definition for one interaction kind. */

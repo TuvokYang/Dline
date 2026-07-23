@@ -7,32 +7,37 @@ interface InteractionCase {
 	taskAsk: string
 	actions: string[]
 	enterAction?: string
+	continuation?: string
 }
 
 const CASES: InteractionCase[] = [
-	{ kind: "tool_approval", taskAsk: "tool", actions: ["approve", "reject"] },
-	{ kind: "command_approval", taskAsk: "command", actions: ["approve", "reject"] },
-	{ kind: "focus_chain_change", taskAsk: "focus_chain_change", actions: ["approve", "reject"] },
-	{ kind: "followup", taskAsk: "followup", actions: ["reply"], enterAction: "reply" },
-	{ kind: "qna_response", taskAsk: "qna_respond", actions: ["reply"], enterAction: "reply" },
-	{ kind: "resume", taskAsk: "resume_task", actions: ["resume"], enterAction: "resume" },
+	{ kind: "tool_approval", taskAsk: "tool", actions: ["approve", "reject"], enterAction: "reject" },
+	{ kind: "command_approval", taskAsk: "command", actions: ["approve", "reject"], enterAction: "reject" },
+	{ kind: "focus_chain_change", taskAsk: "focus_chain_change", actions: ["approve", "reject"], enterAction: "reject" },
+	{ kind: "followup", taskAsk: "followup", actions: [], enterAction: "reply", continuation: "handler" },
+	{ kind: "plan_response", taskAsk: "plan_mode_respond", actions: [], enterAction: "reply", continuation: "handler" },
+	{ kind: "qna_response", taskAsk: "qna_respond", actions: [], enterAction: "reply", continuation: "handler" },
+	{ kind: "generate_report", taskAsk: "generate_report", actions: [], enterAction: "reply", continuation: "handler" },
+	{ kind: "resume", taskAsk: "resume_task", actions: ["resume"], enterAction: "resume", continuation: "resume" },
 	{ kind: "error_retry", taskAsk: "api_req_failed", actions: ["retry", "start_new_task"] },
 	{
 		kind: "completion",
 		taskAsk: "completion_result",
-		actions: ["reply", "start_new_task"],
+		actions: ["start_new_task"],
 		enterAction: "reply",
+		continuation: "completion",
 	},
 	{ kind: "status_acknowledgment", taskAsk: "status_acknowledgment", actions: ["acknowledge", "stop"] },
 ]
 
 describe("InteractionRegistry", () => {
-	it.each(CASES)("defines $kind", ({ kind, taskAsk, actions, enterAction }) => {
+	it.each(CASES)("defines $kind", ({ kind, taskAsk, actions, enterAction, continuation = "none" }) => {
 		const definition = getInteraction(kind)
 
 		expect(definition.taskAsk).toBe(taskAsk)
 		expect(definition.actions.map((action) => action.type)).toEqual(actions)
 		expect(definition.input.enterAction).toBe(enterAction)
+		expect(definition.continuation).toBe(continuation)
 	})
 
 	it("registers every interaction kind exactly once", () => {
@@ -42,11 +47,10 @@ describe("InteractionRegistry", () => {
 		}
 	})
 
-	it("keeps tool approval draft-capable without Enter approval", () => {
+	it("keeps tool approval draft-capable and defaults Enter to Reject", () => {
 		const definition = getInteraction("tool_approval")
 
-		expect(definition.input).toMatchObject({ enabled: true, acceptsText: true })
-		expect(definition.input.enterAction).toBeUndefined()
+		expect(definition.input).toMatchObject({ enabled: true, acceptsText: true, enterAction: "reject" })
 		expect(definition.actions[0].payloadPolicy).toBe("draft")
 	})
 

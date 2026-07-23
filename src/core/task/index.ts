@@ -153,7 +153,8 @@ import {
 import { buildTaskBackgroundResults, buildTaskBackgroundSection } from "./background/BackgroundContextInjector"
 import { FocusChainManager } from "./focus-chain"
 import type { InteractionKind } from "./interaction/Interaction"
-import { InteractionCoordinator } from "./interaction/InteractionCoordinator"
+import { InteractionCoordinator, type InteractionOutcome } from "./interaction/InteractionCoordinator"
+import { getInteraction } from "./interaction/InteractionRegistry"
 import {
 	getPresentationCadenceMs,
 	isPresentationSchedulingDisabled,
@@ -184,6 +185,7 @@ import { TaskState } from "./TaskState"
 import { TaskStateManager } from "./TaskStateManager"
 import { withTerminateTimeout } from "./TaskTerminateTimeout"
 import { ToolExecutor } from "./ToolExecutor"
+import { ToolResultUtils } from "./tools/utils/ToolResultUtils"
 import { detectAvailableCliTools, updateApiReqMsg } from "./utils"
 import { buildUserFeedbackContent } from "./utils/buildUserFeedbackContent"
 
@@ -535,6 +537,9 @@ export class Task {
 				}
 				this.taskRuntime.restore(hydrateSnapshot(result.snapshot))
 				this.syncRetainedMachines()
+			},
+			publishView: async () => {
+				await this.postStateToWebview({ immediate: true })
 			},
 			dispatch: async (entry) => this.dispatchResumeEntry(entry),
 		})
@@ -1329,6 +1334,38 @@ export class Task {
 		}
 	}
 
+	/** Locate the original turn-end block from runtime memory or canonical persisted assistant history. */
+	private findRestoredTurnEndBlock(interactionId: string, messageTs: number): ToolUse {
+		const runtimeBlock = this.taskState.assistantMessageContent.find(
+			(candidate): candidate is ToolUse => candidate.type === "tool_use" && candidate.dline_tid === interactionId,
+		)
+		if (runtimeBlock) return runtimeBlock
+
+		const storedBlock = this.messageStateHandler.apiConversationHistory
+			.flatMap((message) => (message.role === "assistant" && Array.isArray(message.content) ? message.content : []))
+			.find(
+				(candidate): candidate is ClineAssistantToolUseBlock =>
+					candidate.type === "tool_use" && candidate.dline_tid === interactionId,
+			)
+		if (!storedBlock) throw new Error("resume_turn_end_block_missing")
+		return this.restoreHandler.storedToRuntime(storedBlock, messageTs)
+	}
+
+	/** Continue one restored turn-end response exactly once and start the next provider request. */
+	private async continueRestoredTurnEnd(
+		kind: InteractionKind,
+		interactionId: string,
+		messageTs: number,
+		outcome: InteractionOutcome,
+	): Promise<void> {
+		const block = this.findRestoredTurnEndBlock(interactionId, messageTs)
+		const toolResult = await this.toolExecutor.continueTurnEndInteraction(kind, block, outcome)
+		const content: ClineContent[] = [ToolResultUtils.createResult(toolResult, block)]
+		content.push({ type: "text", text: createResumeContinuationText() })
+		this.taskState.userMessageContent = content
+		await this.recursivelyMakeClineRequests(content)
+	}
+
 	/** Adapt one reconciled entry to existing execution capabilities without further inference. */
 	private async dispatchResumeEntry(entry: ResumeEntry): Promise<void> {
 		switch (entry.type) {
@@ -1386,22 +1423,41 @@ export class Task {
 				if (!interaction || interaction.interactionId !== entry.interactionId || interaction.turnId !== entry.turnId) {
 					throw new Error("resume_interaction_mismatch")
 				}
-				await this.interactionCoordinator.open({
+				const messageTs = interaction.anchor?.messageTs
+				if (messageTs === undefined) throw new Error("resume_interaction_anchor_missing")
+				const outcome = await this.interactionCoordinator.open({
 					turnId: entry.turnId,
 					interactionId: entry.interactionId,
 					kind: interaction.kind,
 					presentation: "",
 				})
+				if (getInteraction(interaction.kind).continuation !== "handler") return
+				await this.continueRestoredTurnEnd(interaction.kind, entry.interactionId, messageTs, outcome)
 				return
 			}
-			case "show_completion_interaction":
-				await this.interactionCoordinator.complete({
+			case "show_completion_interaction": {
+				const interaction = this.taskRuntime.getState().interaction
+				if (
+					!interaction ||
+					interaction.kind !== "completion" ||
+					interaction.interactionId !== entry.interactionId ||
+					interaction.turnId !== entry.turnId
+				) {
+					throw new Error("resume_completion_interaction_mismatch")
+				}
+				const messageTs = interaction.anchor?.messageTs
+				if (messageTs === undefined) throw new Error("resume_interaction_anchor_missing")
+				const outcome = await this.interactionCoordinator.complete({
 					turnId: entry.turnId,
 					interactionId: entry.interactionId,
 					completionId: this.taskRuntime.getState().completion?.completionId ?? entry.interactionId,
 					presentation: "",
 				})
+				if (outcome.actionId !== "start_new_task") {
+					await this.continueRestoredTurnEnd("completion", entry.interactionId, messageTs, outcome)
+				}
 				return
+			}
 			case "show_error_recovery":
 				await this.interactionCoordinator.recover({
 					turnId: entry.turnId,

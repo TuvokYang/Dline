@@ -166,6 +166,17 @@ describe("ReadFileToolHandler.execute – file not found", () => {
 		assert.equal(taskState.consecutiveMistakeCount, 0)
 	})
 
+	it("returns an empty string for an existing empty file", async () => {
+		const { config, validator } = createConfig()
+		const handler = new ReadFileToolHandler(validator)
+		const emptyFile = "empty.txt"
+		await fs.writeFile(path.join(tmpDir, emptyFile), "")
+
+		const result = await handler.execute(config, makeBlock(emptyFile))
+
+		assert.equal(result, "")
+	})
+
 	it("does NOT increment consecutiveMistakeCount for file-not-found (exploratory)", async () => {
 		const { config, taskState, validator } = createConfig()
 		const handler = new ReadFileToolHandler(validator)

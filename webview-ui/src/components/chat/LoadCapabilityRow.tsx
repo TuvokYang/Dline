@@ -12,7 +12,6 @@ const KIND_LABELS: Record<LoadCapabilityPayload["kind"], string> = {
 	mcp: "MCP",
 	skill: "Skill",
 	workflow: "Workflow",
-	subagent: "Subagent",
 }
 
 /**

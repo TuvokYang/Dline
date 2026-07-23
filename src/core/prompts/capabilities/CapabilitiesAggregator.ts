@@ -3,6 +3,7 @@ import type { SkillToggleState } from "@core/context/instructions/user-instructi
 import { discoverAvailableSkills } from "@core/context/instructions/user-instructions/skills"
 import { getSubagentsScanDirectories, getWorkflowsScanDirectories } from "@core/storage/disk"
 import { parseAgentConfigFromYaml } from "@core/task/tools/subagent/AgentConfigLoader"
+import { DEFAULT_SUBAGENT_CONFIG } from "@core/task/tools/subagent/DefaultSubagentConfig"
 import type { McpServer } from "@shared/mcp"
 import { fileExistsAtPath, isDirectory } from "@utils/fs"
 import fs from "fs/promises"
@@ -166,7 +167,7 @@ async function collectWorkflows(input: CollectCapabilitiesInput): Promise<Capabi
  * @returns Subagent capability entries containing only name and description.
  */
 async function collectSubagents(input: CollectCapabilitiesInput): Promise<CapabilityEntry[]> {
-	const entries: CapabilityEntry[] = []
+	const entries: CapabilityEntry[] = [{ name: DEFAULT_SUBAGENT_CONFIG.name, description: DEFAULT_SUBAGENT_CONFIG.description }]
 	for (const dir of getSubagentsScanDirectories(input.cwd)) {
 		if (!(await fileExistsAtPath(dir.path)) || !(await isDirectory(dir.path))) {
 			continue
