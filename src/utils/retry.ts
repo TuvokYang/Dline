@@ -40,8 +40,10 @@ export async function retryWithBackoff<T>(operation: () => Promise<T>, options: 
 	} = options
 
 	let lastError: unknown
+	let attemptsMade = 0
 
 	for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+		attemptsMade = attempt
 		try {
 			return await operation()
 		} catch (error) {
@@ -57,8 +59,9 @@ export async function retryWithBackoff<T>(operation: () => Promise<T>, options: 
 		}
 	}
 
+	const attemptLabel = attemptsMade === 1 ? "attempt" : "attempts"
 	throw new Error(
-		`${operationName} failed after ${maxAttempts} attempts: ${
+		`${operationName} failed after ${attemptsMade} ${attemptLabel}: ${
 			lastError instanceof Error ? lastError.message : String(lastError)
 		}`,
 	)

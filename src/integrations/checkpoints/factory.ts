@@ -45,6 +45,7 @@ type BuildArgs = {
 	updateTaskHistory: (historyItem: any) => Promise<any[]>
 	say: (...args: any[]) => Promise<number | undefined>
 	cancelTask: () => Promise<void>
+	restoreChatRuntime: (input: { apiIndex: number; editedText?: string }) => Promise<void>
 	postStateToWebview: () => Promise<void>
 
 	// initial state for single-root
@@ -60,18 +61,19 @@ type BuildArgs = {
  * - TaskCheckpointManager for single-root tasks
  */
 export function buildCheckpointManager(args: BuildArgs): ICheckpointManager {
-		const {
+	const {
 		taskId,
 		controller,
 		messageStateHandler,
-			fileContextTracker,
-			diffViewProvider,
-			taskState,
-			taskFileTracker,
+		fileContextTracker,
+		diffViewProvider,
+		taskState,
+		taskFileTracker,
 		workspaceManager,
 		updateTaskHistory,
 		say,
 		cancelTask,
+		restoreChatRuntime,
 		postStateToWebview,
 		initialConversationHistoryDeletedRange,
 		initialCheckpointManagerErrorMessage,
@@ -101,6 +103,7 @@ export function buildCheckpointManager(args: BuildArgs): ICheckpointManager {
 			updateTaskHistory,
 			say,
 			cancelTask,
+			restoreChatRuntime,
 			postStateToWebview,
 		},
 		{

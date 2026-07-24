@@ -201,6 +201,36 @@ describe("TaskRuntime recovery transactions", () => {
 		])
 	})
 
+	it("projects a safe paused gate after chat restore without starting the provider", () => {
+		const state = awaitingInteraction("tool_approval")
+
+		const result = reduceRecovery(state, { type: "CHECKPOINT_CHAT_RESTORED", apiIndex: 2 })
+
+		expect(result).toMatchObject({
+			accepted: true,
+			next: { phase: TaskPhase.PAUSED, anchor: { apiIndex: 2 } },
+		})
+		expect(result.next.interaction).toBeUndefined()
+		expect(result.next.turn).toBeUndefined()
+		expect(effectTypes(result.effects)).toEqual(["POST_TASK_VIEW", "PERSIST_SNAPSHOT"])
+	})
+
+	it("continues edited chat restore through exactly one provider effect", () => {
+		const state = awaitingInteraction("tool_approval")
+		const draft: InteractionDraft = { text: "edited input", images: [], files: [] }
+
+		const result = reduceRecovery(state, { type: "CHECKPOINT_CHAT_RESTORED", apiIndex: 2, draft })
+
+		expect(result).toMatchObject({
+			accepted: true,
+			next: { phase: TaskPhase.RESUMING, anchor: { apiIndex: 2 } },
+		})
+		expect(result.next.interaction).toBeUndefined()
+		expect(effectTypes(result.effects)).toEqual(["POST_TASK_VIEW", "START_API", "PERSIST_SNAPSHOT"])
+		expect(result.effects.filter((effect) => effect.type === "START_API")).toHaveLength(1)
+		expect(result.effects[1]).toMatchObject({ type: "START_API", apiIndex: 2, draft })
+	})
+
 	it("retries from a causal error response with draft attachments in one API effect", () => {
 		const draft: InteractionDraft = { text: "retry with this context", images: ["image"], files: ["file"] }
 		const result = reduceRecovery(awaitingInteraction("error_retry"), {

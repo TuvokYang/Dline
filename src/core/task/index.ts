@@ -54,6 +54,7 @@ import { ensureApiMessages, ensureUserContent } from "@core/task/api-context"
 import { showContextUsage } from "@core/task/environment-context"
 import { type ModeCompactResult, ModeSwitchCompaction } from "@core/task/ModeSwitchCompaction"
 import { MODE_SWITCH_COMPACT_SIGNAL } from "@core/task/mode-switch-signal"
+import { createRequestApiScope, type RequestApiScope } from "@core/task/RequestApiScope"
 import { isMultiRootEnabled } from "@core/workspace/multi-root-utils"
 import { WorkspaceRootManager } from "@core/workspace/WorkspaceRootManager"
 import { buildCheckpointManager, shouldUseMultiRoot } from "@integrations/checkpoints/factory"
@@ -650,6 +651,7 @@ export class Task {
 					updateTaskHistory: this.updateTaskHistory,
 					say: this.say.bind(this),
 					cancelTask: this.cancelTask,
+					restoreChatRuntime: (input) => this.restoreCheckpointChatRuntime(input),
 					postStateToWebview: this.postStateToWebview,
 					initialConversationHistoryDeletedRange: this.taskState.conversationHistoryDeletedRange,
 					initialCheckpointManagerErrorMessage: this.taskState.checkpointManagerErrorMessage,
@@ -1509,9 +1511,8 @@ export class Task {
 	 * 1. User has enabled it in settings, OR
 	 * 2. The current model/provider supports native tool calling and handles parallel tools well
 	 */
-	private isParallelToolCallingEnabled(): boolean {
+	private isParallelToolCallingEnabled(providerInfo = this.getCurrentProviderInfo()): boolean {
 		const enableParallelSetting = this.stateManager.getGlobalSettingsKey("enableParallelToolCalling")
-		const providerInfo = this.getCurrentProviderInfo()
 		return isParallelToolCallingEnabled(enableParallelSetting, providerInfo)
 	}
 
@@ -1674,6 +1675,19 @@ export class Task {
 				presentation: "",
 			},
 		})
+	}
+
+	/** Commit a checkpoint chat rewind and optionally continue edited input exactly once. */
+	private async restoreCheckpointChatRuntime(input: { apiIndex: number; editedText?: string }): Promise<void> {
+		const restored = await this.dispatchRuntime({
+			type: "CHECKPOINT_CHAT_RESTORED",
+			apiIndex: input.apiIndex,
+			...(input.editedText === undefined ? {} : { draft: { text: input.editedText, images: [], files: [] } }),
+		})
+		if (!restored.accepted) {
+			throw new Error(`Checkpoint chat restore rejected: ${restored.error?.code ?? "invalid_runtime_event"}`)
+		}
+		this.syncRetainedMachines()
 	}
 
 	/** Return the read-only runtime aggregate for projection and migration tests. */
@@ -2566,7 +2580,7 @@ export class Task {
 		}
 	}
 
-	private async writePromptMetadataArtifacts(params: { systemPrompt: string; providerInfo: ApiProviderInfo }): Promise<void> {
+	private async writePromptMetadataArtifacts(params: { systemPrompt: string; requestScope: RequestApiScope }): Promise<void> {
 		const enabledFlag = process.env.CLINE_WRITE_PROMPT_ARTIFACTS?.toLowerCase()
 		const enabled = enabledFlag === "1" || enabledFlag === "true" || enabledFlag === "yes"
 		if (!enabled) {
@@ -2595,10 +2609,10 @@ export class Task {
 				apiRequestCount: this.taskState.apiRequestCount,
 				ts,
 				cwd: this.cwd,
-				mode: params.providerInfo.mode,
-				provider: params.providerInfo.providerId,
-				model: params.providerInfo.model.id,
-				apiRequestId: this.getApiRequestIdSafe(),
+				mode: params.requestScope.providerInfo.mode,
+				provider: params.requestScope.providerInfo.providerId,
+				model: params.requestScope.providerInfo.model.id,
+				apiRequestId: this.getApiRequestIdSafe(params.requestScope.api),
 				systemPromptPath: promptPath,
 			}
 
@@ -2611,8 +2625,8 @@ export class Task {
 		}
 	}
 
-	private getApiRequestIdSafe(): string | undefined {
-		const apiLike = this.api as Partial<{
+	private getApiRequestIdSafe(api: ApiHandler = this.api): string | undefined {
+		const apiLike = api as Partial<{
 			getLastRequestId: () => string | undefined
 			lastGenerationId?: string
 		}>
@@ -2691,7 +2705,7 @@ export class Task {
 		return deferredTurn.userContent
 	}
 
-	private async handleContextWindowExceededError(): Promise<void> {
+	private async handleContextWindowExceededError(api: ApiHandler): Promise<void> {
 		const apiConversationHistory = this.messageStateHandler.apiConversationHistory
 
 		// Run PreCompact hook before truncation
@@ -2705,7 +2719,7 @@ export class Task {
 				await executePreCompactHookWithCleanup({
 					taskId: this.taskId,
 					ulid: this.ulid,
-					modelContext: getHookModelContext(this.api, this.stateManager),
+					modelContext: getHookModelContext(api, this.stateManager),
 					apiConversationHistory,
 					conversationHistoryDeletedRange: this.taskState.conversationHistoryDeletedRange,
 					contextManager: this.contextManager,
@@ -2759,14 +2773,13 @@ export class Task {
 	 * Build the current system prompt context for cache creation or refresh.
 	 * @returns Prompt context containing current rules, tools, model, and workspace state.
 	 */
-	private async buildPromptContext(): Promise<SystemPromptContext> {
+	private async buildPromptContext(providerInfo = this.getCurrentProviderInfo()): Promise<SystemPromptContext> {
 		await pWaitFor(() => this.mcpHub.isConnecting !== true, {
 			timeout: 10_000,
 		}).catch(() => {
 			Logger.error("MCP servers failed to connect in time")
 		})
 
-		const providerInfo = this.getCurrentProviderInfo()
 		const host = await HostProvider.env.getHostVersion({})
 		const ide = host?.platform || "Unknown"
 		const isCliEnvironment = host.clineType === ClineClient.Cli
@@ -2904,7 +2917,7 @@ export class Task {
 			enableNativeToolCalls:
 				(providerInfo.model.info as { apiFormat?: ApiFormat }).apiFormat === ApiFormat.OPENAI_RESPONSES ||
 				this.stateManager.getGlobalStateKey("nativeToolCallEnabled"),
-			enableParallelToolCalling: this.isParallelToolCallingEnabled(),
+			enableParallelToolCalling: this.isParallelToolCallingEnabled(providerInfo),
 			terminalExecutionMode: this.terminalExecutionMode,
 			disableTools,
 			capabilityToggleState,
@@ -2913,11 +2926,11 @@ export class Task {
 		return promptContext
 	}
 
-	async *attemptApiRequest(previousApiReqIndex: number): ApiStream {
+	async *attemptApiRequest(previousApiReqIndex: number, requestScope: RequestApiScope): ApiStream {
 		const apiReqStart = performance.now()
+		const { api, providerInfo } = requestScope
 		Logger.debug(`[Task ${this.taskId}] attemptApiRequest: start (req #${this.taskState.apiRequestCount})`)
-		const promptContext = await this.buildPromptContext()
-		const providerInfo = promptContext.providerInfo
+		const promptContext = await this.buildPromptContext(providerInfo)
 
 		Logger.debug(
 			`[Task ${this.taskId}] attemptApiRequest: before systemPrompt +${Math.round(performance.now() - apiReqStart)}ms`,
@@ -2943,16 +2956,16 @@ export class Task {
 			`[Task ${this.taskId}] attemptApiRequest: after systemPrompt +${Math.round(performance.now() - apiReqStart)}ms`,
 		)
 		this.useNativeToolCalls = !!tools?.length
-		await this.writePromptMetadataArtifacts({ systemPrompt, providerInfo })
+		await this.writePromptMetadataArtifacts({ systemPrompt, requestScope })
 
 		const contextManagementMetadata = await this.contextManager.getNewContextMessagesAndMetadata(
 			this.messageStateHandler.apiConversationHistory,
 			this.messageStateHandler.clineMessages,
-			this.api,
+			api,
 			this.taskState.conversationHistoryDeletedRange,
 			previousApiReqIndex,
 			await ensureTaskDirectoryExists(this.taskId),
-			this.stateManager.getGlobalSettingsKey("useAutoCondense") && isNextGenModelFamily(this.api.getModel().id),
+			this.stateManager.getGlobalSettingsKey("useAutoCondense") && isNextGenModelFamily(providerInfo.model.id),
 		)
 
 		if (contextManagementMetadata.updatedConversationHistoryDeletedRange) {
@@ -2981,7 +2994,7 @@ export class Task {
 
 		// Log the API request context: profile, provider, model, and thinking status
 		const apiConfig = this.stateManager.getApiConfiguration()
-		const mode = this.taskSm.mode
+		const mode = providerInfo.mode
 		const profileName = mode === "plan" ? apiConfig.planModeProfile : apiConfig.actModeProfile
 		const thinkingSummary = this.buildThinkingSummary()
 		Logger.info(`[Task ${this.taskId}] sending API request`, {
@@ -2994,10 +3007,7 @@ export class Task {
 			thinking: thinkingSummary ?? null,
 		})
 
-		const stream = recordProviderAdapterOutput(
-			roundContext,
-			this.api.createMessage(systemPrompt, apiConversationMessages, tools),
-		)
+		const stream = recordProviderAdapterOutput(roundContext, api.createMessage(systemPrompt, apiConversationMessages, tools))
 
 		const iterator = stream[Symbol.asyncIterator]()
 
@@ -3012,12 +3022,11 @@ export class Task {
 			Logger.debug(`[Task ${this.taskId}] attemptApiRequest: TTFB +${Math.round(performance.now() - apiReqStart)}ms`)
 		} catch (error) {
 			const isContextWindowExceededError = checkContextWindowExceededError(error)
-			const { model, providerId } = this.getCurrentProviderInfo()
+			const { model, providerId } = providerInfo
 			// Use provider-specific parseError if available, otherwise fall back to generic classification.
 			// Telemetry: toClineError logs internally; parseError must log manually when used.
-			const clineError =
-				this.api.parseError?.(error, model.id) ?? ErrorService.get().toClineError(error, model.id, providerId)
-			if (this.api.parseError) {
+			const clineError = api.parseError?.(error, model.id) ?? ErrorService.get().toClineError(error, model.id, providerId)
+			if (api.parseError) {
 				ErrorService.get().logException(clineError, { modelId: model.id, providerId })
 			}
 
@@ -3025,7 +3034,7 @@ export class Task {
 			ErrorService.get().logMessage(clineError.message)
 
 			if (isContextWindowExceededError && !this.taskState.didAutomaticallyRetryFailedApiRequest) {
-				await this.handleContextWindowExceededError()
+				await this.handleContextWindowExceededError(api)
 			} else {
 				// request failed after retrying automatically once, ask user if they want to retry again
 				// note that this api_req_failed ask is unique in that we only present this option if the api hasn't streamed any content yet (ie it fails on the first chunk due), as it would allow them to hit a retry button. However if the api failed mid-stream, it could be in any arbitrary state where some tools may have executed, so that error is handled differently and requires cancelling the task entirely.
@@ -3097,7 +3106,7 @@ export class Task {
 						cacheReadTokens: 0,
 						contextTokens: 0,
 						totalCost: undefined,
-						api: this.api,
+						api,
 						cancelReason: "streaming_failed",
 						streamingFailedMessage,
 					})
@@ -3165,7 +3174,7 @@ export class Task {
 				this.taskState.didAutomaticallyRetryFailedApiRequest = false
 			}
 			// delegate generator output from the recursive call
-			yield* this.attemptApiRequest(previousApiReqIndex)
+			yield* this.attemptApiRequest(previousApiReqIndex, requestScope)
 			return
 		}
 
@@ -3510,6 +3519,14 @@ export class Task {
 			throw new Error("Task instance aborted")
 		}
 
+		// Profile changes can occur while request setup awaits workspace/runtime work.
+		// Capture the request boundary first so every adapter and parser below stays consistent.
+		const requestScope = createRequestApiScope(
+			this.api,
+			this.taskSm.mode,
+			this.stateManager.getGlobalSettingsKey("customPrompt"),
+		)
+
 		// Ensure remote workspace detection completes before streaming begins so
 		// the presentation scheduler uses the correct cadence from the first flush.
 		await this.remoteWorkspaceDetectionPromise
@@ -3526,7 +3543,7 @@ export class Task {
 		}
 
 		// Used to know what models were used in the task if user wants to export metadata for error reporting purposes
-		const { model, providerId, customPrompt, mode } = this.getCurrentProviderInfo()
+		const { model, providerId, customPrompt, mode } = requestScope.providerInfo
 		if (providerId && model.id) {
 			try {
 				await this.modelContextTracker.recordModelUsage(providerId, model.id, mode)
@@ -3559,7 +3576,7 @@ export class Task {
 			}
 			const { response, text, images, files } = await this.ask(
 				"mistake_limit_reached",
-				this.api.getModel().id.includes("claude")
+				model.id.includes("claude")
 					? `This may indicate a failure in Dline's thought process or inability to use a tool properly, which can be mitigated with some user guidance (e.g. "Try breaking down the task into smaller steps").`
 					: "Dline uses complex prompts and iterative task execution. Verify your chosen model supports advanced agentic coding and complex prompt following.",
 			)
@@ -3669,13 +3686,13 @@ export class Task {
 
 		// Determine if we should compact context window
 		// Note: We delay context loading until we know if we're compacting (performance optimization)
-		const useCompactPrompt = customPrompt === "compact" && isLocalModel(this.getCurrentProviderInfo())
+		const useCompactPrompt = customPrompt === "compact" && isLocalModel(requestScope.providerInfo)
 		let shouldCompact = false
 		const useAutoCondense = this.stateManager.getGlobalSettingsKey("useAutoCondense")
 		const forceModeCompact = this.modeSwitchCompaction.shouldForce()
 
 		const didCompleteSummarization = this.taskState.currentlySummarizing
-		if (forceModeCompact || (useAutoCondense && isNextGenModelFamily(this.api.getModel().id))) {
+		if (forceModeCompact || (useAutoCondense && isNextGenModelFamily(model.id))) {
 			// When we initially trigger context cleanup, we increase the context window size, so we need state `currentlySummarizing`
 			// to track if we've already started the context summarization flow. After summarizing, we increment
 			// conversationHistoryDeletedRange to mask out the summarization-trigger user & assistant response messages
@@ -3699,14 +3716,14 @@ export class Task {
 					forceModeCompact ||
 					this.contextManager.shouldCompactContextWindow(
 						this.messageStateHandler.clineMessages,
-						this.api,
+						requestScope.api,
 						previousApiReqIndex,
 					)
 
 				const previousTokens = this.parsePreviousTokens(previousApiReqIndex)
 				const hasCurrentToolResult = hasToolResult(userContent)
 				if (hasCurrentToolResult) {
-					const { contextWindow } = getContextWindowInfo(this.api)
+					const { contextWindow } = getContextWindowInfo(requestScope.api)
 					const shouldDeferTurn =
 						shouldCompact ||
 						(previousTokens !== undefined &&
@@ -3889,7 +3906,7 @@ export class Task {
 					cacheWriteTokens: taskMetrics.cacheWriteTokens,
 					cacheReadTokens: taskMetrics.cacheReadTokens,
 					contextTokens,
-					api: this.api,
+					api: requestScope.api,
 					totalCost: taskMetrics.totalCost,
 					cancelReason,
 					streamingFailedMessage,
@@ -4015,7 +4032,7 @@ export class Task {
 			this.taskState.partialToolLifecycleByTs.clear()
 
 			const { toolUseHandler, reasonsHandler } = this.streamHandler.getHandlers()
-			const providerStream = this.attemptApiRequest(previousApiReqIndex) // yields only if the first chunk is successful, otherwise will allow the user to retry the request (most likely due to rate limit error, which gets thrown on the first chunk)
+			const providerStream = this.attemptApiRequest(previousApiReqIndex, requestScope) // yields only if the first chunk is successful, otherwise will allow the user to retry the request (most likely due to rate limit error, which gets thrown on the first chunk)
 			const stream = normalizeApiStream(providerStream, createStreamNormalizer(this.identityFactory))
 
 			let assistantMessageId = ""
@@ -4207,7 +4224,7 @@ export class Task {
 					}
 
 					if (this.taskState.abort) {
-						this.api.abort?.()
+						requestScope.api.abort?.()
 						if (!this.taskState.abandoned) {
 							// only need to gracefully abort if this instance isn't abandoned (sometimes openrouter stream hangs, in which case this would affect future instances of cline)
 							await abortStream("user_cancelled")
@@ -4254,10 +4271,10 @@ export class Task {
 				if (!this.taskState.abandoned) {
 					// Use provider-specific parseError if available, otherwise fall back to generic classification
 					const clineError =
-						this.api.parseError?.(error, this.api.getModel().id) ??
-						ErrorService.get().toClineError(error, this.api.getModel().id)
-					if (this.api.parseError) {
-						ErrorService.get().logException(clineError, { modelId: this.api.getModel().id })
+						requestScope.api.parseError?.(error, model.id) ??
+						ErrorService.get().toClineError(error, model.id, providerId)
+					if (requestScope.api.parseError) {
+						ErrorService.get().logException(clineError, { modelId: model.id, providerId })
 					}
 					const errorMessage = clineError.serialize()
 					const isStreamingSpendLimitError = clineError.isErrorType(ClineErrorType.SpendLimit)
@@ -4345,7 +4362,7 @@ export class Task {
 			// OpenRouter/Cline may not return token usage as part of the stream (since it may abort early), so we fetch after the stream is finished
 			// (updateApiReq below will update the api_req_started message with the usage details. we do this async so it updates the api_req_started message in the background)
 			if (!didReceiveUsageChunk) {
-				const apiStreamUsage = await this.api.getApiStreamUsage?.()
+				const apiStreamUsage = await requestScope.api.getApiStreamUsage?.()
 				if (apiStreamUsage) {
 					taskMetrics.inputTokens += apiStreamUsage.inputTokens
 					taskMetrics.outputTokens += apiStreamUsage.outputTokens
@@ -4505,8 +4522,7 @@ export class Task {
 				didEndLoop = recDidEndLoop
 			} else {
 				// if there's no assistant_responses, that means we got no text or tool_use content blocks from API which we should assume is an error
-				const { model, providerId } = this.getCurrentProviderInfo()
-				const reqId = this.getApiRequestIdSafe()
+				const reqId = this.getApiRequestIdSafe(requestScope.api)
 
 				// Minimal diagnostics: structured log and telemetry
 				telemetryService.captureProviderApiError({

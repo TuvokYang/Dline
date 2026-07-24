@@ -300,6 +300,46 @@ describe("Tool Call Parsing", () => {
 			;(() => sanitizeAnthropicMessages(messages, false)).should.throw(/missing function_id/)
 		})
 
+		it("should preserve OpenAI-produced canonical tool pairing when the next request uses Anthropic", () => {
+			const functionId = "call_openai_compatible_1"
+			const dlineTid = "dline_runtime_1"
+			const messages: ClineStorageMessage[] = [
+				{
+					role: "assistant",
+					content: [
+						{
+							type: "tool_use",
+							function_id: functionId,
+							dline_tid: dlineTid,
+							name: "read_file",
+							input: { path: "/test.ts" },
+						} satisfies ClineAssistantToolUseBlock,
+					],
+				},
+				{
+					role: "user",
+					content: [
+						{
+							type: "tool_result",
+							function_id: functionId,
+							dline_tid: dlineTid,
+							content: "file contents",
+						} satisfies ClineUserToolResultContentBlock,
+					],
+				},
+			]
+
+			const canonicalBeforeSwitch = JSON.stringify(messages)
+			const result = sanitizeAnthropicMessages(messages, false)
+			const toolUse = Array.isArray(result[0].content) ? result[0].content[0] : undefined
+			const toolResult = Array.isArray(result[1].content) ? result[1].content[0] : undefined
+
+			expect(toolUse).toMatchObject({ type: "tool_use", id: functionId })
+			expect(toolResult).toMatchObject({ type: "tool_result", tool_use_id: functionId })
+			expect(JSON.stringify(result)).not.toMatch(/function_id|dline_tid/)
+			expect(JSON.stringify(messages)).toBe(canonicalBeforeSwitch)
+		})
+
 		it("should project function_id to Anthropic pairing fields and remove Dline metadata", () => {
 			const messages: ClineStorageMessage[] = [
 				{

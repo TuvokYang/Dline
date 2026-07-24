@@ -21,13 +21,14 @@ export async function checkpointRestore(controller: Controller, request: Checkpo
 			throw error
 		})
 
-		// Interrupt the active task loop before restoring the checkpoint.
-		// This ensures the old stream is terminated and uncommitted edits are
-		// reverted before we reset the conversation to the checkpoint state.
-		try {
-			await controller.task?.interrupt()
-		} catch (error) {
-			Logger.error("[checkpointRestore] interrupt failed (non-fatal):", error)
+		// File-only restore must not alter the active conversation runtime.
+		// Chat restore owns stream termination because it rewinds persisted conversation state.
+		if (request.restoreType !== "workspace") {
+			try {
+				await controller.task?.interrupt()
+			} catch (error) {
+				Logger.error("[checkpointRestore] interrupt failed (non-fatal):", error)
+			}
 		}
 
 		await controller.task?.checkpointManager?.restoreCheckpoint(

@@ -3,10 +3,7 @@ import fs from "fs/promises"
 import { join } from "path"
 import { Logger } from "@/shared/services/Logger"
 
-/**
- * Suffix appended to nested .git directories to temporarily disable them
- * during checkpoint operations. Must be kept in sync with Git's exclude rules.
- */
+/** Legacy suffix retained to exclude metadata left by earlier checkpoint versions. */
 export const GIT_DISABLED_SUFFIX = "_disabled"
 
 /**
@@ -380,7 +377,7 @@ export async function loadWorkspaceIgnoreContent(workspacePath: string): Promise
  * Converts gitignore-format content into globby-compatible ignore patterns.
  * Mirrors the logic in list-files.ts:readGitignorePatterns so that the same
  * directories excluded from shadow git info/exclude are also skipped during
- * the nested-git filesystem scan in renameNestedGitRepos.
+ * repository-boundary discovery.
  *
  * @param content - Raw gitignore / .dlineignore content (one pattern per line)
  * @returns Array of globby-compatible ignore patterns (e.g. "** /tmp/**")
@@ -413,16 +410,19 @@ export function parseGitignoreToGlobs(content: string): string[] {
  * @param lfsPatterns - Optional array of Git LFS patterns to include
  * @param workspaceIgnoreContent - Optional gitignore-format content from
  *   workspace .gitignore / .dlineignore to append after the built-in patterns
+ * @param boundaryPatterns - Root-relative nested repository paths owned outside
+ *   the root shadow checkpoint
  */
 export const writeExcludesFile = async (
 	gitPath: string,
 	lfsPatterns: string[] = [],
 	workspaceIgnoreContent?: string,
+	boundaryPatterns: string[] = [],
 ): Promise<void> => {
 	const excludesPath = join(gitPath, "info", "exclude")
 	await fs.mkdir(join(gitPath, "info"), { recursive: true })
 
-	const patterns = getDefaultExclusions(lfsPatterns)
+	const patterns = [...getDefaultExclusions(lfsPatterns), ...boundaryPatterns]
 	if (workspaceIgnoreContent) {
 		patterns.push(workspaceIgnoreContent)
 	}

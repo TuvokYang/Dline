@@ -752,6 +752,39 @@ function reduceRecovery(
 	}
 }
 
+/** Commit a checkpoint chat rewind as one canonical runtime boundary. */
+function reduceCheckpointRestore(
+	state: TaskRuntimeState,
+	event: Extract<TaskEvent, { type: "CHECKPOINT_CHAT_RESTORED" }>,
+): TransitionResult {
+	if (event.apiIndex < -1 || !Number.isInteger(event.apiIndex)) {
+		return reject(state, event.type)
+	}
+	const revision = state.revision + 1
+	const baseState: TaskRuntimeState = {
+		...state,
+		phase: event.draft ? TaskPhase.RESUMING : TaskPhase.PAUSED,
+		revision,
+		anchor: { apiIndex: event.apiIndex },
+	}
+	delete baseState.turn
+	delete baseState.interaction
+	delete baseState.cancellation
+	delete baseState.error
+	delete baseState.completion
+	return {
+		accepted: true,
+		next: baseState,
+		effects: event.draft
+			? [
+					{ id: effectId(revision, 1), type: "POST_TASK_VIEW" },
+					{ id: effectId(revision, 2), type: "START_API", apiIndex: event.apiIndex, draft: event.draft },
+					{ id: effectId(revision, 3), type: "PERSIST_SNAPSHOT" },
+				]
+			: stateEffects(revision),
+	}
+}
+
 /** Reduce one resume request without performing side effects. */
 function reduceResume(state: TaskRuntimeState, event: Extract<TaskEvent, { type: "TASK_RESUME_REQUESTED" }>): TransitionResult {
 	if (state.phase !== TaskPhase.PAUSED) {
@@ -891,6 +924,8 @@ export function reduceTask(state: TaskRuntimeState, event: TaskEvent): Transitio
 		case "COMPLETION_FEEDBACK_RECEIVED":
 		case "TASK_CLEAR_REQUESTED":
 			return reduceRecovery(state, event)
+		case "CHECKPOINT_CHAT_RESTORED":
+			return reduceCheckpointRestore(state, event)
 		case "TASK_RESUME_REQUESTED":
 			return reduceResume(state, event)
 		case "TASK_COMPLETED":

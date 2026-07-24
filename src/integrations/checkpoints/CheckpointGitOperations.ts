@@ -1,20 +1,12 @@
 import { fileExistsAtPath } from "@utils/fs"
-import { retryWithBackoff } from "@utils/retry"
 import fs from "fs/promises"
-import { globby } from "globby"
 import * as path from "path"
 import simpleGit, { type SimpleGit } from "simple-git"
 import { getDlineCheckpointsDir } from "@/core/storage/disk"
 import { telemetryService } from "@/services/telemetry"
 import { Logger } from "@/shared/services/Logger"
-import {
-	GIT_DISABLED_SUFFIX,
-	getExcludedDirectoryGlobs,
-	getLfsPatterns,
-	loadWorkspaceIgnoreContent,
-	parseGitignoreToGlobs,
-	writeExcludesFile,
-} from "./CheckpointExclusions"
+import { getLfsPatterns, loadWorkspaceIgnoreContent, writeExcludesFile } from "./CheckpointExclusions"
+import { type CheckpointRepositoryBoundary, detectCheckpointWorkspaceTopology } from "./CheckpointWorkspaceTopology"
 
 interface CheckpointAddResult {
 	success: boolean
@@ -36,14 +28,14 @@ interface AddCheckpointFilesOptions {
  * - Git repository initialization and configuration
  * - Git settings management (user, LFS, etc.)
  * - Worktree configuration and management
- * - Managing nested git repositories during checkpoint operations
+ * - Excluding nested repository ownership boundaries
  * - File staging and checkpoint creation
  * - Shadow git repository maintenance and cleanup
  */
 export class GitOperations {
 	private cwd: string
-	/** Cached globby-compatible ignore patterns parsed from workspace .gitignore / .dlineignore */
-	private workspaceGlobIgnorePatterns: string[] = []
+	/** Nested repository boundaries excluded from the root shadow repository. */
+	private repositoryBoundaries: CheckpointRepositoryBoundary[] = []
 
 	/**
 	 * Creates a new GitOperations instance.
@@ -83,13 +75,12 @@ export class GitOperations {
 			Logger.warn("CheckpointTracker failed to load workspace ignore files:", error)
 			return ""
 		})
-		this.workspaceGlobIgnorePatterns = workspaceIgnoreContent ? parseGitignoreToGlobs(workspaceIgnoreContent) : []
-
-		// Clean up any leftover .git_disabled directories from a previous crash/interruption.
-		// If addCheckpointFiles() was interrupted mid disable/enable cycle, nested repos may still be disabled.
-		await this.renameNestedGitRepos(false, [], taskId).catch((error) => {
-			Logger.warn("CheckpointTracker failed best-effort nested git cleanup during shadow git init:", error)
-		})
+		const topology = await detectCheckpointWorkspaceTopology(cwd)
+		this.repositoryBoundaries = topology.boundaries
+		Logger.info(
+			`[Task ${taskId}] Checkpoint workspace topology: relation=${topology.repository.relation}, ` +
+				`head=${topology.repository.head}, boundaries=${topology.boundaries.length}`,
+		)
 
 		// If repo exists, verify it is a shadow git and self-heal config
 		if (await fileExistsAtPath(gitPath)) {
@@ -142,7 +133,12 @@ export class GitOperations {
 				Logger.warn(`Using existing shadow git at ${gitPath}`)
 
 				// shadow git repo already exists, but update the excludes just in case
-				await writeExcludesFile(gitPath, await getLfsPatterns(this.cwd), workspaceIgnoreContent || undefined)
+				await writeExcludesFile(
+					gitPath,
+					await getLfsPatterns(this.cwd),
+					workspaceIgnoreContent || undefined,
+					topology.exclusionPatterns,
+				)
 
 				return gitPath
 			}
@@ -164,7 +160,7 @@ export class GitOperations {
 
 		// Set up LFS patterns
 		const lfsPatterns = await getLfsPatterns(cwd)
-		await writeExcludesFile(gitPath, lfsPatterns, workspaceIgnoreContent || undefined)
+		await writeExcludesFile(gitPath, lfsPatterns, workspaceIgnoreContent || undefined, topology.exclusionPatterns)
 
 		const addFilesResult = await this.addCheckpointFiles({ git, mode: "baseline", taskId })
 		if (!addFilesResult.success) {
@@ -225,79 +221,14 @@ export class GitOperations {
 	}
 
 	/**
-	 * Since we use git to track checkpoints, we need to temporarily disable nested git repos to work around git's
-	 * requirement of using submodules for nested repos.
-	 *
-	 * This method renames nested .git directories by adding/removing a suffix to temporarily disable/enable them.
-	 * The root .git directory is preserved. Uses VS Code's workspace API to find nested .git directories and
-	 * only processes actual directories (not files named .git).
-	 *
-	 * @param disable - If true, adds suffix to disable nested git repos. If false, removes suffix to re-enable them.
-	 * @param excludeDirs - Additional directories to exclude from the search
-	 * @param taskId - Optional task ID for logging purposes
-	 * @throws Error if renaming any .git directory fails
-	 */
-	public async renameNestedGitRepos(disable: boolean, excludeDirs: string[] = [], taskId?: string) {
-		// Build ignore list: root .git, excluded directories from shadow git's
-		// info/exclude rules, workspace .gitignore/.dlineignore globs, and any
-		// caller-supplied ignore patterns.
-		const ignorePatterns = [".git", ...getExcludedDirectoryGlobs(this.workspaceGlobIgnorePatterns), ...excludeDirs]
-
-		const gitPaths = await globby(`**/.git${disable ? "" : GIT_DISABLED_SUFFIX}`, {
-			cwd: this.cwd,
-			onlyDirectories: true,
-			ignore: ignorePatterns,
-			dot: true,
-			markDirectories: false,
-			suppressErrors: true,
-		})
-
-		// For each nested .git directory, rename it based on operation
-		for (const gitPath of gitPaths) {
-			const fullPath = path.join(this.cwd, gitPath)
-			let newPath: string
-			if (disable) {
-				newPath = fullPath + GIT_DISABLED_SUFFIX
-			} else {
-				newPath = fullPath.endsWith(GIT_DISABLED_SUFFIX) ? fullPath.slice(0, -GIT_DISABLED_SUFFIX.length) : fullPath
-			}
-
-			try {
-				await fs.rename(fullPath, newPath)
-				Logger.log(`[Task ${taskId}] CheckpointTracker ${disable ? "disabled" : "enabled"} nested git repo ${gitPath}`)
-			} catch (error) {
-				const errCode = (error as NodeJS.ErrnoException)?.code
-				// EPERM / EBUSY on Windows means another process holds the directory.
-				// Skip this entry so one stuck directory does not block all others.
-				if (errCode === "EPERM" || errCode === "EBUSY") {
-					Logger.warn(
-						`[Task ${taskId}] CheckpointTracker cannot ${disable ? "disable" : "enable"} nested git repo ${gitPath}: ${errCode} (skipped)`,
-					)
-					continue
-				}
-				Logger.error(
-					`[Task ${taskId}] CheckpointTracker failed to ${disable ? "disable" : "enable"} nested git repo ${gitPath}:`,
-					error,
-				)
-				throw new Error(
-					`Failed to ${disable ? "disable" : "enable"} nested git repo ${gitPath}: ${
-						error instanceof Error ? error.message : String(error)
-					}`,
-				)
-			}
-		}
-	}
-
-	/**
 	 * Adds files to the shadow git repository while handling nested git repos.
 	 * Uses git commands to list files and stages them for commit.
 	 * Respects .gitignore and handles LFS patterns.
 	 *
 	 * Process:
-	 * 1. Updates exclude patterns from LFS config
-	 * 2. Temporarily disables nested git repos
-	 * 3. Stages files for commit (specific files or all files)
-	 * 4. Re-enables nested git repos
+	 * 1. Uses shadow-repository exclusions for workspace scans
+	 * 2. Filters tracked files owned by nested repository boundaries
+	 * 3. Stages the remaining explicit files or the root workspace
 	 *
 	 * @param git - SimpleGit instance configured for the shadow git repo
 	 * @param fileList - Optional list of file paths to add. When provided, only
@@ -305,11 +236,7 @@ export class GitOperations {
 	 *                   via `git add .` (backward compatible).
 	 * @param taskId - Optional task ID for logging purposes
 	 * @returns Promise<CheckpointAddResult> Object containing success status
-	 * @throws Error if:
-	 *  - File operations fail
-	 *  - Git commands error
-	 *  - LFS pattern updates fail
-	 *  - Nested git repo handling fails
+	 * @throws Error if file staging cannot be attempted
 	 */
 	public async addCheckpointFiles(options: AddCheckpointFilesOptions): Promise<CheckpointAddResult> {
 		const { git, mode, fileList, taskId } = options
@@ -322,46 +249,43 @@ export class GitOperations {
 			Logger.error(`[Task ${taskId}] ${mode} checkpoint add must not receive explicit fileList`)
 			return { success: false }
 		}
+		Logger.info(`[Task ${taskId}] Starting checkpoint add operation (${mode})...`)
 		try {
-			// Update exclude patterns before each commit
-			await this.renameNestedGitRepos(true, [], taskId)
-			Logger.info(`[Task ${taskId}] Starting checkpoint add operation (${mode})...`)
-
-			try {
-				if (mode === "tracked") {
-					// Stage only specified files for per-file checkpointing.
-					// Use -f to force-add files that match info/exclude rules.
-					await git.add(["-f", ...fileList!])
-					Logger.debug(`[Task ${taskId}] Checkpoint add operation: staged ${fileList!.length} tracked file(s) with -f`)
-				} else {
-					// Baseline and guarded workspace-scan modes intentionally stage the workspace.
-					await git.add([".", "--ignore-errors"])
-					Logger.debug(`[Task ${taskId}] Checkpoint add operation: staged workspace via ${mode}`)
-				}
-				const durationMs = Math.round(performance.now() - startTime)
-				Logger.debug(`Checkpoint add operation completed in ${durationMs}ms`)
-				return { success: true }
-			} catch (error) {
-				Logger.error(`[Task ${taskId}] Checkpoint add operation failed (${mode}):`, error)
-				return { success: false }
-			}
-		} catch (error) {
-			Logger.error(`[Task ${taskId}] Checkpoint add setup failed (${mode}):`, error)
-			return { success: false }
-		} finally {
-			await retryWithBackoff(() => this.renameNestedGitRepos(false, [], taskId), {
-				operationName: "CheckpointTracker re-enable nested git repos",
-				maxAttempts: 3,
-				baseDelayMs: 50,
-				onRetry: (_error, attempt, maxAttempts, delayMs) => {
+			if (mode === "tracked") {
+				const safeFiles = fileList!.filter((file) => !this.isRepositoryBoundaryFile(file))
+				if (safeFiles.length === 0) {
 					Logger.warn(
-						`[Task ${taskId}] CheckpointTracker re-enable nested git repos failed on attempt ${attempt}/${maxAttempts}. Retrying in ${delayMs}ms`,
+						`[Task ${taskId}] Checkpoint add skipped: all tracked files belong to nested repository boundaries`,
 					)
-				},
-			}).catch((error) => {
-				Logger.error(`[Task ${taskId}] CheckpointTracker failed to re-enable nested git repos after retries:`, error)
-			})
+					return { success: false }
+				}
+				if (safeFiles.length !== fileList!.length) {
+					Logger.warn(
+						`[Task ${taskId}] Checkpoint add excluded ${fileList!.length - safeFiles.length} nested repository file(s)`,
+					)
+				}
+				await git.add(["-f", ...safeFiles])
+				Logger.debug(`[Task ${taskId}] Checkpoint add operation: staged ${safeFiles.length} tracked file(s) with -f`)
+			} else {
+				await git.add([".", "--ignore-errors"])
+				Logger.debug(`[Task ${taskId}] Checkpoint add operation: staged workspace via ${mode}`)
+			}
+			const durationMs = Math.round(performance.now() - startTime)
+			Logger.debug(`Checkpoint add operation completed in ${durationMs}ms`)
+			return { success: true }
+		} catch (error) {
+			Logger.error(`[Task ${taskId}] Checkpoint add operation failed (${mode}):`, error)
+			return { success: false }
 		}
+	}
+
+	private isRepositoryBoundaryFile(filePath: string): boolean {
+		const absolutePath = path.resolve(filePath)
+		return this.repositoryBoundaries.some((boundary) => {
+			const boundaryPath = path.resolve(this.cwd, boundary.relativePath)
+			const relative = path.relative(boundaryPath, absolutePath)
+			return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative))
+		})
 	}
 
 	/**

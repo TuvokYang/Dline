@@ -44,6 +44,7 @@ export type TaskEvent =
 			resume?: { turnId: string; interactionId: string; presentation: string }
 	  }
 	| { type: "TASK_RESUME_REQUESTED"; interactionId: string; draft: InteractionDraft }
+	| { type: "CHECKPOINT_CHAT_RESTORED"; apiIndex: number; draft?: InteractionDraft }
 	| { type: "ERROR_RETRY_REQUESTED"; apiIndex: number; draft: InteractionDraft }
 	| { type: "API_RETRY_SCHEDULED"; apiIndex: number }
 	| {

@@ -97,3 +97,4 @@ storybook-static
 .codex/
 .claude/
 .agents/
+.wt/

@@ -2,7 +2,6 @@ import { ContextManager } from "@core/context/context-management/ContextManager"
 import { FileContextTracker } from "@core/context/context-tracking/FileContextTracker"
 import type { Controller } from "@core/controller/index"
 import { sendRelinquishControlEvent } from "@core/controller/ui/subscribeToRelinquishControl"
-import { formatResponse } from "@core/prompts/responses"
 import { ensureTaskDirectoryExists } from "@core/storage/disk"
 import { WorkspaceRootManager } from "@core/workspace/WorkspaceRootManager"
 import CheckpointTracker from "@integrations/checkpoints/CheckpointTracker"
@@ -18,6 +17,7 @@ import pTimeout from "p-timeout"
 import { HostProvider } from "@/hosts/host-provider"
 import { ShowMessageType } from "@/shared/proto/dline/host/window"
 import { Logger } from "@/shared/services/Logger"
+import { retryWithBackoff } from "@/utils/retry"
 import { MessageStateHandler } from "../../core/task/message-state"
 import { TaskState } from "../../core/task/TaskState"
 import { ICheckpointManager } from "./types"
@@ -38,6 +38,11 @@ interface CheckpointManagerTask {
 }
 interface CheckpointManagerConfig {
 	readonly enableCheckpoints: boolean
+	readonly createCheckpointTracker?: (
+		taskId: string,
+		enableCheckpoints: boolean,
+		workspacePath: string,
+	) => Promise<CheckpointTracker | undefined>
 }
 interface CheckpointManagerServices {
 	readonly fileContextTracker: FileContextTracker
@@ -50,6 +55,7 @@ interface CheckpointManagerServices {
 interface CheckpointManagerCallbacks {
 	readonly updateTaskHistory: UpdateTaskHistoryFunction
 	readonly cancelTask: () => Promise<void>
+	readonly restoreChatRuntime: (input: { apiIndex: number; editedText?: string }) => Promise<void>
 	readonly say: SayFunction
 	readonly postStateToWebview: () => Promise<void>
 }
@@ -288,28 +294,8 @@ export class TaskCheckpointManager implements ICheckpointManager {
 						break
 					}
 
-					if (!this.state.checkpointTracker && !this.state.checkpointManagerErrorMessage) {
-						try {
-							const workspacePath = await this.getWorkspacePath()
-							this.state.checkpointTracker = await CheckpointTracker.create(
-								this.task.taskId,
-								this.config.enableCheckpoints,
-								workspacePath,
-							)
-							this.services.messageStateHandler.setCheckpointTracker(this.state.checkpointTracker)
-						} catch (error) {
-							const errorMessage = error instanceof Error ? error.message : "Unknown error"
-							Logger.error(
-								`[TaskCheckpointManager] Failed to initialize checkpoint tracker for task ${this.task.taskId}:`,
-								errorMessage,
-							)
-							this.state.checkpointManagerErrorMessage = errorMessage
-							HostProvider.window.showMessage({
-								type: ShowMessageType.ERROR,
-								message: errorMessage,
-							})
-							didWorkspaceRestoreFail = true
-						}
+					if (!this.state.checkpointTracker) {
+						this.state.checkpointTracker = await this.checkpointTrackerCheckAndInit()
 					}
 					if (message.lastCheckpointHash && this.state.checkpointTracker) {
 						try {
@@ -374,10 +360,9 @@ export class TaskCheckpointManager implements ICheckpointManager {
 
 			const checkpointManagerStateUpdate: CheckpointRestoreStateUpdate = {}
 
-			// Always clean up runtime state before mutating the conversation,
-			// regardless of whether workspace restore succeeded.  This replaces
-			// the old implicit dependency on Controller.cancelTask().
-			this.abortAndClearState()
+			if (!didWorkspaceRestoreFail && restoreType !== "workspace") {
+				this.abortAndClearState()
+			}
 
 			if (!didWorkspaceRestoreFail) {
 				await this.handleSuccessfulRestore(restoreType, message, messageIndex, messageTs, editedText)
@@ -445,30 +430,9 @@ export class TaskCheckpointManager implements ICheckpointManager {
 				return
 			}
 
-			// Initialize checkpoint tracker if needed
-			if (!this.state.checkpointTracker && this.config.enableCheckpoints && !this.state.checkpointManagerErrorMessage) {
-				try {
-					const workspacePath = await this.getWorkspacePath()
-					this.state.checkpointTracker = await CheckpointTracker.create(
-						this.task.taskId,
-						this.config.enableCheckpoints,
-						workspacePath,
-					)
-					this.services.messageStateHandler.setCheckpointTracker(this.state.checkpointTracker)
-				} catch (error) {
-					const errorMessage = error instanceof Error ? error.message : "Unknown error"
-					Logger.error(
-						`[TaskCheckpointManager] Failed to initialize checkpoint tracker for task ${this.task.taskId}:`,
-						errorMessage,
-					)
-					this.state.checkpointManagerErrorMessage = errorMessage
-					HostProvider.window.showMessage({
-						type: ShowMessageType.ERROR,
-						message: errorMessage,
-					})
-					relinquishButton()
-					return
-				}
+			// Initialize checkpoint tracker if needed.
+			if (!this.state.checkpointTracker && this.config.enableCheckpoints) {
+				this.state.checkpointTracker = await this.checkpointTrackerCheckAndInit()
 			}
 
 			if (!this.state.checkpointTracker) {
@@ -611,24 +575,8 @@ export class TaskCheckpointManager implements ICheckpointManager {
 				return false
 			}
 
-			if (this.config.enableCheckpoints && !this.state.checkpointTracker && !this.state.checkpointManagerErrorMessage) {
-				try {
-					const workspacePath = await this.getWorkspacePath()
-					this.state.checkpointTracker = await CheckpointTracker.create(
-						this.task.taskId,
-						this.config.enableCheckpoints,
-						workspacePath,
-					)
-					this.services.messageStateHandler.setCheckpointTracker(this.state.checkpointTracker)
-				} catch (error) {
-					const errorMessage = error instanceof Error ? error.message : "Unknown error"
-					Logger.error(
-						`[TaskCheckpointManager] Failed to initialize checkpoint tracker for task ${this.task.taskId}:`,
-						errorMessage,
-					)
-					await this.setcheckpointManagerErrorMessage(errorMessage)
-					return false
-				}
+			if (this.config.enableCheckpoints && !this.state.checkpointTracker) {
+				this.state.checkpointTracker = await this.checkpointTrackerCheckAndInit()
 			}
 
 			if (!this.state.checkpointTracker) {
@@ -814,24 +762,11 @@ export class TaskCheckpointManager implements ICheckpointManager {
 
 		await this.services.messageStateHandler.updateTaskHistory()
 
-		// ── Resume:
-		//   Edited path: loop was kept alive by abortAndClearState.
-		//     Set userMessageContentReady to wake the waiting loop.
-		//   Normal path: terminate any remaining activity via abort,
-		//     then send a resume_task ask and handle the user response
-		//     via resumeTask to properly restart the task loop.
-		const task = this.task.controller.task
-		if (task && restoreType !== "workspace") {
-			if (editedText !== undefined) {
-				this.taskState.userMessageContent = []
-				this.taskState.assistantMessageContent = [{ type: "tool_use", name: "qna_respond" } as any]
-				this.taskState.userMessageContent = [{ type: "text", text: formatResponse.checkpointRestore(editedText) } as any]
-				this.taskState.userMessageContentReady = true
-			} else {
-				void task.resumeTask().catch((error) => {
-					Logger.debug(`[TaskCheckpointManager] resume interaction dismissed: ${error?.message}`)
-				})
-			}
+		if (restoreType !== "workspace") {
+			await this.callbacks.restoreChatRuntime({
+				apiIndex: Math.max(-1, this.services.messageStateHandler.apiConversationHistory.length - 1),
+				...(editedText === undefined ? {} : { editedText }),
+			})
 		}
 
 		await this.callbacks.postStateToWebview()
@@ -845,10 +780,27 @@ export class TaskCheckpointManager implements ICheckpointManager {
 	 * Checks for an active checkpoint tracker instance, creates if needed
 	 * Uses promise-based synchronization to prevent race conditions when called concurrently
 	 */
-	async checkpointTrackerCheckAndInit(): Promise<CheckpointTracker | undefined> {
+	async retryCheckpointInitialization(): Promise<boolean> {
+		if (!this.config.enableCheckpoints) {
+			await this.setcheckpointManagerErrorMessage("Checkpoints are disabled in settings.")
+			return false
+		}
+
+		this.state.checkpointTracker = undefined
+		this.services.messageStateHandler.setCheckpointTracker(undefined)
+		const tracker = await this.checkpointTrackerCheckAndInit(true)
+		return tracker !== undefined
+	}
+
+	async checkpointTrackerCheckAndInit(forceRetry = false): Promise<CheckpointTracker | undefined> {
 		// If tracker already exists or there was an error, return immediately
 		if (this.state.checkpointTracker) {
 			return this.state.checkpointTracker
+		}
+		if (forceRetry) {
+			await this.setcheckpointManagerErrorMessage(undefined)
+		} else if (this.state.checkpointManagerErrorMessage) {
+			return undefined
 		}
 
 		// If initialization is already in progress, wait for it to complete
@@ -888,12 +840,25 @@ export class TaskCheckpointManager implements ICheckpointManager {
 
 			// Timeout - If checkpoints take too long to initialize, warn user and disable checkpoints for the task
 			const workspacePath = await this.getWorkspacePath()
-			const tracker = await pTimeout(
-				CheckpointTracker.create(this.task.taskId, this.config.enableCheckpoints, workspacePath),
+			const createTracker = this.config.createCheckpointTracker ?? CheckpointTracker.create
+			const tracker = await retryWithBackoff(
+				() =>
+					pTimeout(createTracker(this.task.taskId, this.config.enableCheckpoints, workspacePath), {
+						milliseconds: 30_000,
+						message:
+							"Checkpoints taking too long to initialize. Consider re-opening Dline in a project that uses git, or disabling checkpoints.",
+					}),
 				{
-					milliseconds: 30_000,
-					message:
-						"Checkpoints taking too long to initialize. Consider re-opening Dline in a project that uses git, or disabling checkpoints.",
+					operationName: "Checkpoint shadow initialization",
+					maxAttempts: 2,
+					baseDelayMs: 50,
+					shouldRetry: (error) => !this.isPermanentCheckpointCapabilityError(error),
+					onRetry: (error, attempt, maxAttempts, delayMs) => {
+						Logger.warn(
+							`Checkpoint shadow initialization failed on attempt ${attempt}/${maxAttempts}; retrying in ${delayMs}ms:`,
+							error,
+						)
+					},
 				},
 			)
 
@@ -906,6 +871,8 @@ export class TaskCheckpointManager implements ICheckpointManager {
 
 			// Update the state with the created tracker
 			this.state.checkpointTracker = tracker
+			this.services.messageStateHandler.setCheckpointTracker(tracker)
+			await this.setcheckpointManagerErrorMessage(undefined)
 			return tracker
 		} catch (error) {
 			const errorMessage = error instanceof Error ? error.message : "Unknown error"
@@ -927,6 +894,17 @@ export class TaskCheckpointManager implements ICheckpointManager {
 				checkpointsWarningTimer = null
 			}
 		}
+	}
+
+	private isPermanentCheckpointCapabilityError(error: unknown): boolean {
+		const message = error instanceof Error ? error.message : String(error)
+		return (
+			message.includes("Git must be installed to use checkpoints") ||
+			message.includes("Cannot access workspace directory") ||
+			message.includes("Cannot use checkpoints in") ||
+			message.includes("No workspace detected") ||
+			message.includes("Checkpoints are disabled in settings")
+		)
 	}
 
 	/**

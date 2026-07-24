@@ -181,7 +181,13 @@ function convertApiToUiMessages(apiMessages: ClineStorageMessage[]): ClineMessag
 					const askType = toolToAskType(block.name)
 					if (askType) {
 						const askText = formatAskText(block.name, input)
-						result.push({ ts: genTs(result.length), type: "ask", ask: askType, text: askText } as any)
+						result.push({
+							ts: genTs(result.length),
+							type: "ask",
+							ask: askType,
+							text: askText,
+							interactionId: block.dline_tid,
+						} as ClineMessage)
 					} else {
 						// Read-only tools: render as text
 						const toolDesc = `**Tool: ${block.name}**\n\`\`\`json\n${JSON.stringify(block.input, null, 2)}\n\`\`\``
@@ -237,7 +243,6 @@ export async function recoverUiMessages(controller: Controller, taskId?: string)
 	if (controller?.task?.taskId === id) {
 		try {
 			await controller.task.displayHistory()
-			await controller.task.resumeFromHistory()
 			// Reload focus chain checklist from disk so TODOs reflect recovered state
 			const fcPath = path.join(taskDir, `focus_chain_taskid_${id}.md`)
 			try {

@@ -81,7 +81,7 @@ describe("retryWithBackoff", () => {
 
 		operation.mock.calls.length.should.equal(1)
 		shouldRetry.mock.calls.length.should.equal(1)
-		errorMessage.should.containEql("Should retry gate failed after 5 attempts")
+		errorMessage.should.containEql("Should retry gate failed after 1 attempt")
 		errorMessage.should.containEql("stop")
 	})
 

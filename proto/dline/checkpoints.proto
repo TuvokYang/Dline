@@ -12,6 +12,7 @@ option java_package = "bot.dline.proto";
 service CheckpointsService {
   rpc checkpointDiff(Int64Request) returns (Empty);
   rpc checkpointRestore(CheckpointRestoreRequest) returns (Empty);
+  rpc retryCheckpointInitialization(EmptyRequest) returns (Boolean);
   rpc subscribeToCheckpoints(CheckpointSubscriptionRequest) returns (stream CheckpointEvent);
   rpc getCwdHash(StringArrayRequest) returns (PathHashMap);
 }
