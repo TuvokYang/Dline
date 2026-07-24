@@ -183,6 +183,72 @@ describe("ResumeCoordinator", () => {
 		expect(order).toEqual(["load", "persist", "hydrate:paused", "publishView", "dispatch:show_resume_interaction"])
 	})
 
+	it("coalesces concurrent resume attempts into one transaction", async () => {
+		const order: string[] = []
+		const coordinatorPorts = ports(order)
+		let releaseDispatch: (() => void) | undefined
+		let signalDispatchEntered: (() => void) | undefined
+		const dispatchBlocked = new Promise<void>((resolve) => {
+			releaseDispatch = resolve
+		})
+		const dispatchEntered = new Promise<void>((resolve) => {
+			signalDispatchEntered = resolve
+		})
+		coordinatorPorts.dispatch = vi.fn(async (entry: ResumeEntry) => {
+			order.push(`dispatch:${entry.type}`)
+			signalDispatchEntered?.()
+			await dispatchBlocked
+		})
+		const coordinator = new ResumeCoordinator(coordinatorPorts)
+
+		const first = coordinator.resume("task-1")
+		const second = coordinator.resume("task-1")
+		await dispatchEntered
+		releaseDispatch?.()
+		const [firstResult, secondResult] = await Promise.all([first, second])
+
+		expect(firstResult).toBe(secondResult)
+		expect(coordinatorPorts.load).toHaveBeenCalledOnce()
+		expect(coordinatorPorts.persist).toHaveBeenCalledOnce()
+		expect(coordinatorPorts.hydrate).toHaveBeenCalledOnce()
+		expect(coordinatorPorts.publishView).toHaveBeenCalledOnce()
+		expect(coordinatorPorts.dispatch).toHaveBeenCalledOnce()
+	})
+
+	it("does not coalesce resume transactions for different task identities", async () => {
+		const coordinatorPorts = ports([])
+		coordinatorPorts.load = vi.fn(async (taskId: string) => {
+			const value = input()
+			value.taskId = taskId
+			value.snapshot.taskId = taskId
+			return value
+		})
+		const coordinator = new ResumeCoordinator(coordinatorPorts)
+
+		await Promise.all([coordinator.resume("task-1"), coordinator.resume("task-2")])
+
+		expect(coordinatorPorts.load).toHaveBeenCalledTimes(2)
+		expect(coordinatorPorts.load).toHaveBeenNthCalledWith(1, "task-1")
+		expect(coordinatorPorts.load).toHaveBeenNthCalledWith(2, "task-2")
+		expect(coordinatorPorts.dispatch).toHaveBeenCalledTimes(2)
+	})
+
+	it("clears a failed transaction so the same task can retry", async () => {
+		const coordinatorPorts = ports([])
+		coordinatorPorts.persist = vi
+			.fn<ResumeCoordinatorPorts["persist"]>()
+			.mockRejectedValueOnce(new Error("persist failed"))
+			.mockResolvedValueOnce(undefined)
+		const coordinator = new ResumeCoordinator(coordinatorPorts)
+
+		await expect(coordinator.resume("task-1")).rejects.toThrow("persist failed")
+		await expect(coordinator.resume("task-1")).resolves.toMatchObject({ entry: { type: "show_resume_interaction" } })
+
+		expect(coordinatorPorts.load).toHaveBeenCalledTimes(2)
+		expect(coordinatorPorts.persist).toHaveBeenCalledTimes(2)
+		expect(coordinatorPorts.dispatch).toHaveBeenCalledOnce()
+	})
+
 	it("dispatches missing-identity diagnostics even when the snapshot cannot hydrate", async () => {
 		const order: string[] = []
 		const coordinatorPorts = ports(order)
