@@ -90,6 +90,7 @@ function parseSubagentRowData(message: ClineMessage): SubagentRowData | null {
 				return null
 			}
 			const prompts = parsed.prompts.map((prompt) => prompt?.trim()).filter((prompt): prompt is string => !!prompt)
+			const structuredItems = parsed.items?.filter((item) => item.task.trim() && item.context.trim())
 			// Error payload with message: show failed row with error text
 			if (parsed.error && parsed.message) {
 				return {
@@ -125,6 +126,9 @@ function parseSubagentRowData(message: ClineMessage): SubagentRowData | null {
 				items: prompts.map((prompt, index) => ({
 					index: index + 1,
 					prompt,
+					subagentName: parsed.subagentName ?? structuredItems?.[index]?.subagentName,
+					task: parsed.task ?? structuredItems?.[index]?.task,
+					context: parsed.context ?? parsed.content ?? structuredItems?.[index]?.context,
 					status: rowStatus,
 					error: errorText,
 					toolCalls: 0,
@@ -211,13 +215,13 @@ function SubagentPromptText({ prompt, isExpanded, onShowMore }: SubagentPromptTe
 	)
 }
 
-export default function SubagentStatusRow({ message, isLast, lastModifiedMessage }: SubagentStatusRowProps) {
+export default function SubagentStatusRow({ message }: SubagentStatusRowProps) {
 	const [expandedItems, setExpandedItems] = useState<Record<number, boolean>>({})
 	const [expandedPrompts, setExpandedPrompts] = useState<Record<number, boolean>>({})
 	const [collapsed, setCollapsed] = useState(false)
 	const { currentTaskItem } = useExtensionState()
 	const taskId = currentTaskItem?.id
-	const { getById } = useTaskActivities(taskId)
+	const { activities, getById } = useTaskActivities(taskId)
 	const parsedData = useMemo(() => parseSubagentRowData(message), [message])
 	const data = useMemo(() => {
 		if (!parsedData) return null
@@ -261,20 +265,15 @@ export default function SubagentStatusRow({ message, isLast, lastModifiedMessage
 		return <div className="text-foreground opacity-80">Subagent status update unavailable.</div>
 	}
 
-	const resumedBeforeNextVisibleMessage =
-		isLast && lastModifiedMessage?.say === "api_req_started" && (lastModifiedMessage.ts ?? 0) > message.ts
-
-	const wasCancelled =
-		data.status === "running" &&
-		(!isLast ||
-			lastModifiedMessage?.ask === "resume_task" ||
-			lastModifiedMessage?.ask === "resume_completed_task" ||
-			resumedBeforeNextVisibleMessage)
-
+	const liveCancellableIds = new Set(
+		activities
+			.filter((activity) => activity.kind === "subagent" && activity.status === "running" && activity.cancellable)
+			.map((activity) => activity.activityId),
+	)
 	const cancellableIds = data.items
-		.filter((entry) => entry.status === "running" && entry.jobId)
+		.filter((entry) => entry.jobId && liveCancellableIds.has(entry.jobId))
 		.map((entry) => entry.jobId as string)
-	const showCancelButton = Boolean(taskId && cancellableIds.length > 1 && !wasCancelled)
+	const showCancelButton = Boolean(taskId && cancellableIds.length > 1)
 
 	const singular = data.items.length === 1
 	const title = singular ? "Dline wants to use a subagent:" : "Dline wants to use subagents:"
@@ -328,16 +327,14 @@ export default function SubagentStatusRow({ message, isLast, lastModifiedMessage
 			{!collapsed && (
 				<div className="max-h-[40vh] space-y-2 overflow-y-auto pr-0.5">
 					{data.items.map((entry, index) => {
-						const displayStatus: DisplayStatus =
-							wasCancelled && (entry.status === "running" || entry.status === "pending")
-								? "cancelled"
-								: entry.status
+						const displayStatus: DisplayStatus = entry.status
 						const hasDetails = Boolean(
 							(entry.result && entry.status === "completed") ||
 								(entry.error &&
 									(entry.status === "failed" || entry.status === "timeout" || entry.status === "cancelled")),
 						)
 						const isExpanded = expandedItems[entry.index] === true
+						const hasStructuredPrompt = Boolean(entry.task || entry.context || entry.subagentName)
 						const isStreamingPromptUnderConstruction =
 							isPromptConstructionRow && message.partial === true && index === data.items.length - 1
 						const shouldShowStats = !isStreamingPromptUnderConstruction
@@ -358,14 +355,35 @@ export default function SubagentStatusRow({ message, isLast, lastModifiedMessage
 								style={{ backgroundColor: "var(--vscode-editor-background)" }}>
 								<div className="flex items-start gap-2">
 									{statusIcon(displayStatus)}
-									<div className="min-w-0 flex-1">
-										<SubagentPromptText
-											isExpanded={expandedPrompts[entry.index] === true}
-											onShowMore={() => expandPrompt(entry.index)}
-											prompt={entry.prompt}
-										/>
+									<div className="min-w-0 flex-1 space-y-1.5">
+										{hasStructuredPrompt ? (
+											<>
+												{entry.subagentName && (
+													<div className="text-[11px] font-semibold uppercase tracking-wide opacity-70">
+														{entry.subagentName}
+													</div>
+												)}
+												{entry.task && (
+													<div className="text-xs font-medium text-foreground wrap-anywhere">
+														<MarkdownBlock markdown={entry.task} />
+													</div>
+												)}
+												{entry.context && (
+													<div className="rounded-xs border border-editor-group-border px-2 py-1 text-[11px] opacity-80 wrap-anywhere">
+														<div className="mb-0.5 font-semibold">Context</div>
+														<MarkdownBlock markdown={entry.context} />
+													</div>
+												)}
+											</>
+										) : (
+											<SubagentPromptText
+												isExpanded={expandedPrompts[entry.index] === true}
+												onShowMore={() => expandPrompt(entry.index)}
+												prompt={entry.prompt}
+											/>
+										)}
 									</div>
-									{taskId && entry.jobId && entry.status === "running" && !wasCancelled && (
+									{taskId && entry.jobId && liveCancellableIds.has(entry.jobId) && (
 										<Button
 											onClick={() => void cancelTaskActivities(taskId, [entry.jobId as string])}
 											size="sm"

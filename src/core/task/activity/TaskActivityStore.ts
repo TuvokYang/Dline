@@ -1,4 +1,7 @@
 import type {
+	TaskActivityCancellationOwner,
+	TaskActivityEvent,
+	TaskActivityEventInput,
 	TaskActivityExecutionMode,
 	TaskActivityKind,
 	TaskActivityMetrics,
@@ -10,14 +13,35 @@ import { Logger } from "@/shared/services/Logger"
 
 const FLUSH_DELAY_MS = 75
 const MAX_OUTPUT_CHARS = 64 * 1024
+const MAX_EVENT_TEXT_CHARS = 16 * 1024
+const MAX_EVENTS_PER_ACTIVITY = 500
+const AUTHORIZATION_VALUE_PATTERN = /(\bauthorization\s*[:=]\s*)(?:(?:bearer|basic)\s+)?([^\s,;]+)/gi
+const BEARER_TOKEN_PATTERN = /(\bbearer\s+)([A-Za-z0-9._~+/=-]{8,})/gi
+const SENSITIVE_VALUE_PATTERN = /(api[_-]?key|access[_-]?token|password|secret)(\s*[:=]\s*)([^\s,;]+)/gi
+const KNOWN_SECRET_TOKEN_PATTERN =
+	/\b(?:github_pat_[A-Za-z0-9_]{12,}|gh[pousr]_[A-Za-z0-9]{12,}|sk-[A-Za-z0-9_-]{12,}|xox[baprs]-[A-Za-z0-9-]{10,})\b/g
+
+function redactSensitiveText(text: string): string {
+	return text
+		.replace(AUTHORIZATION_VALUE_PATTERN, "$1[REDACTED]")
+		.replace(BEARER_TOKEN_PATTERN, "$1[REDACTED]")
+		.replace(SENSITIVE_VALUE_PATTERN, "$1$2[REDACTED]")
+		.replace(KNOWN_SECRET_TOKEN_PATTERN, "[REDACTED]")
+}
 
 type ActivityListener = (update: TaskActivityUpdate) => void | Promise<void>
 type CancelActivity = () => void | Promise<void>
+
+export interface TaskActivityPersistencePort {
+	load(): Promise<TaskActivityRecord[]>
+	save(activities: TaskActivityRecord[]): Promise<void>
+}
 
 export interface CreateTaskActivityInput {
 	activityId: string
 	kind: TaskActivityKind
 	executionMode: TaskActivityExecutionMode
+	cancellationOwner?: TaskActivityCancellationOwner
 	title: string
 	detail?: string
 	parentActivityId?: string
@@ -33,36 +57,59 @@ export class TaskActivityStore {
 	private readonly dirtyIds = new Set<string>()
 	private flushTimer?: NodeJS.Timeout
 	private sequence = 0
+	private persistenceSequence = Promise.resolve()
+	private hydratePromise?: Promise<void>
 
-	constructor(readonly taskId: string) {}
+	constructor(
+		readonly taskId: string,
+		private readonly persistence?: TaskActivityPersistencePort,
+	) {}
+
+	async hydrate(): Promise<void> {
+		if (!this.persistence) return
+		for (const activity of await this.persistence.load()) {
+			if (!this.activities.has(activity.activityId)) {
+				this.activities.set(activity.activityId, this.clone(activity))
+			}
+			for (const event of activity.events) this.sequence = Math.max(this.sequence, event.sequence)
+		}
+	}
 
 	create(input: CreateTaskActivityInput): TaskActivityRecord {
 		const existing = this.activities.get(input.activityId)
 		if (existing) {
 			if (input.cancel) this.cancellers.set(input.activityId, input.cancel)
-			return { ...existing, metrics: existing.metrics ? { ...existing.metrics } : undefined }
+			return this.clone(existing)
 		}
 		const now = Date.now()
 		const activity: TaskActivityRecord = {
+			schemaVersion: 1,
 			activityId: input.activityId,
 			taskId: this.taskId,
 			kind: input.kind,
 			executionMode: input.executionMode,
+			cancellationOwner: input.cancellationOwner ?? "task",
 			status: input.status ?? "running",
 			createdAt: now,
 			updatedAt: now,
-			title: input.title,
-			detail: input.detail,
+			title: redactSensitiveText(input.title),
+			detail: input.detail === undefined ? undefined : redactSensitiveText(input.detail),
 			parentActivityId: input.parentActivityId,
+			events: [],
 		}
 		this.activities.set(activity.activityId, activity)
 		if (input.cancel) this.cancellers.set(activity.activityId, input.cancel)
-		this.markDirty(activity.activityId, true)
-		return { ...activity }
+		this.appendEvent(input.activityId, { kind: "status", status: activity.status, text: "Activity started" }, true)
+		return this.clone(activity)
 	}
 
 	setCancel(activityId: string, cancel: CancelActivity): void {
 		if (this.activities.has(activityId)) this.cancellers.set(activityId, cancel)
+	}
+
+	isCancellable(activityId: string): boolean {
+		const activity = this.activities.get(activityId)
+		return activity?.status === "running" && this.cancellers.has(activityId)
 	}
 
 	update(
@@ -79,8 +126,22 @@ export class TaskActivityStore {
 		if (activity.status === "cancelled" && patch.status && patch.status !== "cancelled") return
 		const previousStatus = activity.status
 		const { metrics, ...activityPatch } = patch
-		Object.assign(activity, activityPatch, { updatedAt: Date.now() })
-		if (metrics) activity.metrics = { ...activity.metrics, ...metrics }
+		const sanitizedPatch = {
+			...activityPatch,
+			...(activityPatch.title === undefined ? {} : { title: redactSensitiveText(activityPatch.title) }),
+			...(activityPatch.detail === undefined ? {} : { detail: redactSensitiveText(activityPatch.detail) }),
+			...(activityPatch.latestEvent === undefined ? {} : { latestEvent: redactSensitiveText(activityPatch.latestEvent) }),
+			...(activityPatch.result === undefined ? {} : { result: redactSensitiveText(activityPatch.result) }),
+			...(activityPatch.error === undefined ? {} : { error: redactSensitiveText(activityPatch.error) }),
+		}
+		Object.assign(activity, sanitizedPatch, { updatedAt: Date.now() })
+		if (metrics) {
+			activity.metrics = { ...activity.metrics, ...metrics }
+			this.appendEvent(activityId, { kind: "metrics", metrics: { ...activity.metrics } }, false)
+		}
+		if (previousStatus !== activity.status) {
+			this.appendEvent(activityId, { kind: "status", status: activity.status, text: activity.latestEvent }, false)
+		}
 		if (this.isTerminal(activity.status) && !activity.finishedAt) activity.finishedAt = activity.updatedAt
 		if (this.isTerminal(activity.status)) this.cancellers.delete(activityId)
 		const priority = previousStatus !== activity.status || this.isTerminal(activity.status)
@@ -91,26 +152,52 @@ export class TaskActivityStore {
 		if (!text) return
 		const activity = this.activities.get(activityId)
 		if (!activity) return
-		const combined = `${activity.output ?? ""}${text}`
+		const safeText = redactSensitiveText(text)
+		const combined = `${activity.output ?? ""}${safeText}`
 		activity.output = combined.length > MAX_OUTPUT_CHARS ? combined.slice(-MAX_OUTPUT_CHARS) : combined
 		activity.updatedAt = Date.now()
-		this.markDirty(activityId, false)
+		this.appendEvent(activityId, { kind: "output", text: safeText }, false)
+	}
+
+	appendEvent(activityId: string, input: TaskActivityEventInput, priority = false): TaskActivityEvent | undefined {
+		const activity = this.activities.get(activityId)
+		if (!activity) return undefined
+		const event = this.createEvent(input)
+		activity.events.push(event)
+		if (activity.events.length > MAX_EVENTS_PER_ACTIVITY) {
+			activity.events.splice(0, activity.events.length - MAX_EVENTS_PER_ACTIVITY)
+		}
+		activity.updatedAt = event.timestamp
+		this.markDirty(activityId, priority)
+		return event
 	}
 
 	get(activityId: string): TaskActivityRecord | undefined {
 		const activity = this.activities.get(activityId)
-		return activity ? { ...activity, metrics: activity.metrics ? { ...activity.metrics } : undefined } : undefined
+		return activity ? this.clone(activity) : undefined
 	}
 
 	list(): TaskActivityRecord[] {
 		return Array.from(this.activities.values())
-			.map((activity) => ({ ...activity, metrics: activity.metrics ? { ...activity.metrics } : undefined }))
+			.map((activity) => this.clone(activity))
 			.sort((a, b) => b.createdAt - a.createdAt || a.activityId.localeCompare(b.activityId))
+	}
+
+	listRunning(cancellationOwner?: TaskActivityCancellationOwner): TaskActivityRecord[] {
+		return this.list().filter(
+			(activity) =>
+				activity.status === "running" && (!cancellationOwner || activity.cancellationOwner === cancellationOwner),
+		)
 	}
 
 	subscribe(listener: ActivityListener): () => void {
 		this.listeners.set(listener, Promise.resolve())
-		this.enqueue(listener, { sequence: ++this.sequence, snapshot: true, activities: this.list() })
+		this.hydratePromise ??= this.hydrate()
+		void this.hydratePromise.then(() => {
+			if (this.listeners.has(listener)) {
+				this.enqueue(listener, { sequence: ++this.sequence, snapshot: true, activities: this.list() })
+			}
+		})
 		return () => this.listeners.delete(listener)
 	}
 
@@ -142,6 +229,11 @@ export class TaskActivityStore {
 		this.cancellers.clear()
 	}
 
+	async waitForPersistence(): Promise<void> {
+		this.flush()
+		await this.persistenceSequence
+	}
+
 	private markDirty(activityId: string, priority: boolean): void {
 		this.dirtyIds.add(activityId)
 		if (priority) {
@@ -155,14 +247,12 @@ export class TaskActivityStore {
 		if (this.flushTimer) clearTimeout(this.flushTimer)
 		this.flushTimer = undefined
 		if (this.dirtyIds.size === 0) return
-		if (this.listeners.size === 0) {
-			this.dirtyIds.clear()
-			return
-		}
 		const activities = Array.from(this.dirtyIds)
 			.map((id) => this.get(id))
 			.filter((activity): activity is TaskActivityRecord => Boolean(activity))
 		this.dirtyIds.clear()
+		this.persist()
+		if (this.listeners.size === 0) return
 		const update: TaskActivityUpdate = { sequence: ++this.sequence, snapshot: false, activities }
 		for (const listener of this.listeners.keys()) this.enqueue(listener, update)
 	}
@@ -175,6 +265,49 @@ export class TaskActivityStore {
 			.then(() => listener(update))
 			.catch((error) => Logger.warn("[TaskActivityStore] Activity delivery failed", error))
 		this.listeners.set(listener, delivery)
+	}
+
+	private createEvent(input: TaskActivityEventInput): TaskActivityEvent {
+		return this.redactEvent({
+			...input,
+			sequence: ++this.sequence,
+			timestamp: Date.now(),
+		} as TaskActivityEvent)
+	}
+
+	private clone(activity: TaskActivityRecord): TaskActivityRecord {
+		return {
+			...activity,
+			title: redactSensitiveText(activity.title),
+			detail: activity.detail === undefined ? undefined : redactSensitiveText(activity.detail),
+			latestEvent: activity.latestEvent === undefined ? undefined : redactSensitiveText(activity.latestEvent),
+			output: activity.output === undefined ? undefined : redactSensitiveText(activity.output),
+			result: activity.result === undefined ? undefined : redactSensitiveText(activity.result),
+			error: activity.error === undefined ? undefined : redactSensitiveText(activity.error),
+			metrics: activity.metrics ? { ...activity.metrics } : undefined,
+			events: activity.events.map((event) => this.redactEvent({ ...event })),
+		}
+	}
+
+	private redactEvent(event: TaskActivityEvent): TaskActivityEvent {
+		if ("text" in event && typeof event.text === "string") {
+			event.text = redactSensitiveText(event.text)
+			if (event.text.length > MAX_EVENT_TEXT_CHARS) event.text = event.text.slice(-MAX_EVENT_TEXT_CHARS)
+		}
+		if ("summary" in event && typeof event.summary === "string") event.summary = redactSensitiveText(event.summary)
+		if ("error" in event && typeof event.error === "string") event.error = redactSensitiveText(event.error)
+		return event
+	}
+
+	private persist(): void {
+		const persistence = this.persistence
+		if (!persistence) return
+		this.hydratePromise ??= this.hydrate()
+		this.persistenceSequence = this.persistenceSequence
+			.catch(() => undefined)
+			.then(() => this.hydratePromise)
+			.then(() => persistence.save(this.list()))
+			.catch((error) => Logger.warn("[TaskActivityStore] Failed to persist activity history", error))
 	}
 
 	private isTerminal(status: TaskActivityStatus): boolean {

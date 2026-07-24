@@ -186,6 +186,8 @@ export interface ClineMessage {
 	files?: string[]
 	partial?: boolean
 	commandStatus?: CommandStatus
+	/** Stable identity of the interaction that owns this ask presentation. */
+	interactionId?: string
 	/** Stable identity shared by the command message, activity, background record, and cancellation entry. */
 	activityId?: string
 	/** ts of the associated command message (set on command_output messages) */
@@ -356,6 +358,7 @@ export interface TaskViewAction {
 	appearance: "primary" | "secondary" | "danger"
 	enabled: boolean
 	payloadPolicy: TaskViewPayloadPolicy
+	dispatchTarget?: "interaction" | "task"
 }
 
 /** Input capabilities projected for the current active interaction. */
@@ -531,6 +534,7 @@ export interface SubagentStatusItem {
 	jobId?: string
 	subagentName?: string
 	task?: string
+	context?: string
 	background?: boolean
 	timeoutSeconds?: number
 	startedAt?: number
@@ -579,9 +583,12 @@ export interface ClineAskUseMcpServer {
 
 export interface ClineAskUseSubagents {
 	prompts: string[]
+	items?: Array<{ task: string; context: string; subagentName?: string }>
 	kind?: "single" | "batch"
 	subagentName?: string
 	task?: string
+	context?: string
+	/** @deprecated Use context. */
 	content?: string
 	background?: boolean
 	timeoutSeconds?: number

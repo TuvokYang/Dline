@@ -1,5 +1,6 @@
 import {
 	TaskActivity as ProtoTaskActivity,
+	TaskActivityEvent as ProtoTaskActivityEvent,
 	TaskActivityMetrics as ProtoTaskActivityMetrics,
 	TaskActivityUpdate as ProtoTaskActivityUpdate,
 	TaskActivitySubscriptionRequest,
@@ -8,7 +9,22 @@ import type { TaskActivityRecord, TaskActivityUpdate } from "@shared/task-activi
 import type { Controller } from ".."
 import { getRequestRegistry, type StreamingResponseHandler } from "../grpc-handler"
 
-function toProtoActivity(activity: TaskActivityRecord): ProtoTaskActivity {
+function toProtoMetrics(metrics: TaskActivityRecord["metrics"]): ProtoTaskActivityMetrics | undefined {
+	return metrics
+		? ProtoTaskActivityMetrics.create({
+				toolCalls: metrics.toolCalls ?? 0,
+				inputTokens: metrics.inputTokens ?? 0,
+				outputTokens: metrics.outputTokens ?? 0,
+				totalCost: metrics.totalCost ?? 0,
+				currency: metrics.currency ?? "",
+				contextTokens: metrics.contextTokens ?? 0,
+				contextWindow: metrics.contextWindow ?? 0,
+				lineCount: metrics.lineCount ?? 0,
+			})
+		: undefined
+}
+
+function toProtoActivity(activity: TaskActivityRecord, cancellable: boolean): ProtoTaskActivity {
 	return ProtoTaskActivity.create({
 		activityId: activity.activityId,
 		taskId: activity.taskId,
@@ -26,26 +42,34 @@ function toProtoActivity(activity: TaskActivityRecord): ProtoTaskActivity {
 		error: activity.error,
 		logPath: activity.logPath,
 		parentActivityId: activity.parentActivityId,
-		metrics: activity.metrics
-			? ProtoTaskActivityMetrics.create({
-					toolCalls: activity.metrics.toolCalls ?? 0,
-					inputTokens: activity.metrics.inputTokens ?? 0,
-					outputTokens: activity.metrics.outputTokens ?? 0,
-					totalCost: activity.metrics.totalCost ?? 0,
-					currency: activity.metrics.currency ?? "",
-					contextTokens: activity.metrics.contextTokens ?? 0,
-					contextWindow: activity.metrics.contextWindow ?? 0,
-					lineCount: activity.metrics.lineCount ?? 0,
-				})
-			: undefined,
+		cancellable,
+		schemaVersion: activity.schemaVersion,
+		metrics: toProtoMetrics(activity.metrics),
+		events: activity.events.map((event) =>
+			ProtoTaskActivityEvent.create({
+				sequence: event.sequence,
+				timestamp: event.timestamp,
+				kind: event.kind,
+				phase: "phase" in event ? event.phase : undefined,
+				text: "text" in event ? event.text : undefined,
+				toolCallId: "toolCallId" in event ? event.toolCallId : undefined,
+				toolName: "toolName" in event ? event.toolName : undefined,
+				toolStatus: "toolStatus" in event ? event.toolStatus : undefined,
+				summary: "summary" in event ? event.summary : undefined,
+				durationMs: "durationMs" in event ? event.durationMs : undefined,
+				error: "error" in event ? event.error : undefined,
+				status: "status" in event ? event.status : undefined,
+				metrics: "metrics" in event ? toProtoMetrics(event.metrics) : undefined,
+			}),
+		),
 	})
 }
 
-function toProtoUpdate(update: TaskActivityUpdate): ProtoTaskActivityUpdate {
+function toProtoUpdate(update: TaskActivityUpdate, isCancellable: (activityId: string) => boolean): ProtoTaskActivityUpdate {
 	return ProtoTaskActivityUpdate.create({
 		sequence: update.sequence,
 		snapshot: update.snapshot,
-		activities: update.activities.map(toProtoActivity),
+		activities: update.activities.map((activity) => toProtoActivity(activity, isCancellable(activity.activityId))),
 	})
 }
 
@@ -63,7 +87,11 @@ export async function subscribeToTaskActivities(
 	}
 
 	const unsubscribe = task.activityStore.subscribe(async (update) => {
-		await responseStream(toProtoUpdate(update), false, update.sequence)
+		await responseStream(
+			toProtoUpdate(update, (activityId) => task.activityStore.isCancellable(activityId)),
+			false,
+			update.sequence,
+		)
 	})
 	if (requestId) {
 		getRequestRegistry().registerRequest(

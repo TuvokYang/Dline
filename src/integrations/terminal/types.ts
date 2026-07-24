@@ -259,6 +259,10 @@ export interface StandaloneTerminalOptions {
  * Represents a command running in the background after user clicked "Proceed While Running".
  * Used by StandaloneTerminalManager to track background commands.
  */
+export type CommandOrigin = "explicit_background" | "foreground"
+
+export type CommandCancellationOwner = "explicit" | "task"
+
 export interface BackgroundCommand {
 	/** Unique identifier for the background command */
 	id: string
@@ -267,7 +271,11 @@ export interface BackgroundCommand {
 	/** Timestamp when the command started */
 	startTime: number
 	/** Current status of the command */
-	status: "running" | "completed" | "error" | "timed_out"
+	status: "running" | "completed" | "error" | "timed_out" | "cancelled"
+	/** How the command entered background execution. */
+	origin: CommandOrigin
+	/** Lifecycle boundary allowed to cancel this command. */
+	cancellationOwner: CommandCancellationOwner
 	/** Path to the log file where output is being written */
 	logFilePath: string
 	/** Number of lines written to the log file */
@@ -362,6 +370,7 @@ export interface CommandExecutorCallbacks {
 		activityId: string
 		command: string
 		executionMode: "foreground" | "background"
+		cancellationOwner: CommandCancellationOwner
 		cancel: () => void | Promise<void>
 	}) => void
 	/** Apply a lightweight activity patch without rebuilding ExtensionState. */
@@ -429,6 +438,8 @@ export type FullCommandExecutorConfig = CommandExecutorConfig
 export interface OrchestrationOptions {
 	/** Stable identity shared by command activity and owned log files. */
 	activityId?: string
+	/** Return whether this command is in the canonical cancellation transaction. */
+	isCancellationRequested?: () => boolean
 	/** The command being executed */
 	command: string
 	/** Optional timeout in seconds */

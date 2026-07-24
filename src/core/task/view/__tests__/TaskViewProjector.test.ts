@@ -95,6 +95,22 @@ describe("projectTaskView", () => {
 		expect(view.footer.actions.map((action) => action.type)).toEqual(["resume"])
 	})
 
+	it("projects an actionable task-level Resume fallback when PAUSED has no interaction", () => {
+		const view = projectTaskView(runtime(TaskPhase.PAUSED))
+
+		expect(view.input.enabled).toBe(false)
+		expect(view.footer.actions).toEqual([
+			{
+				type: "resume",
+				label: "Resume",
+				appearance: "primary",
+				enabled: true,
+				payloadPolicy: "none",
+				dispatchTarget: "task",
+			},
+		])
+	})
+
 	it("projects error recovery actions", () => {
 		const view = projectTaskView(runtime(TaskPhase.PAUSED, active("error_retry")))
 

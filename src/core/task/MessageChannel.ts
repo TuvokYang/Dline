@@ -166,18 +166,20 @@ export class MessageChannel {
 	// ── ask ──
 
 	/** Persist one ask presentation without creating a legacy response waiter. */
-	async presentAsk(type: ClineAsk, text?: string, existingTs?: number): Promise<number> {
+	async presentAsk(type: ClineAsk, text?: string, existingTs?: number, interactionId?: string): Promise<number> {
 		const askTs = existingTs ?? this.genTs()
 		this.taskState.lastMessageTs = askTs
 		const messages = this.messageStateHandler.clineMessages
 		const index = messages.findIndex((message) => message.ts === askTs)
 		const commandPresentation = type === "command" ? { commandStatus: "pending" as const, exitCode: undefined } : {}
+		const interactionIdentity = interactionId ? { interactionId } : {}
 		if (index >= 0) {
 			await this.messageStateHandler.updateClineMessage(index, {
 				type: "ask",
 				ask: type,
 				text,
 				partial: false,
+				...interactionIdentity,
 				...commandPresentation,
 			})
 		} else {
@@ -186,6 +188,7 @@ export class MessageChannel {
 				type: "ask",
 				ask: type,
 				text,
+				...interactionIdentity,
 				...commandPresentation,
 			})
 		}

@@ -149,6 +149,36 @@ function applyProgress(config: TaskConfig, entry: SubagentStatusItem, update: Su
 	if (update.stats) applyStats(entry, update.stats)
 	if (update.result) entry.result = update.result
 	if (update.error) entry.error = update.error
+	if (entry.jobId && update.event) {
+		const event = update.event
+		if (event.kind === "thinking" || event.kind === "assistant_message") {
+			if (event.text) {
+				config.activityStore?.appendEvent(entry.jobId, {
+					kind: event.kind,
+					phase: event.phase ?? "delta",
+					text: event.text,
+				})
+			}
+		} else if (event.kind === "tool_call" && event.toolCallId && event.toolName && event.toolStatus) {
+			config.activityStore?.appendEvent(entry.jobId, {
+				kind: "tool_call",
+				toolCallId: event.toolCallId,
+				toolName: event.toolName,
+				toolStatus: event.toolStatus,
+				summary: event.summary,
+				durationMs: event.durationMs,
+				error: event.error,
+			})
+		} else if (event.kind === "tool_result" && event.toolCallId && event.toolName) {
+			config.activityStore?.appendEvent(entry.jobId, {
+				kind: "tool_result",
+				toolCallId: event.toolCallId,
+				toolName: event.toolName,
+				text: event.text,
+				error: event.error,
+			})
+		}
+	}
 	updateActivityFromEntry(config, entry)
 }
 
@@ -340,14 +370,14 @@ export class UseSubagentToolHandler implements IFullyManagedTool {
 	async handlePartialBlock(block: ToolUse, uiHelpers: StronglyTypedUIHelpers): Promise<void> {
 		const subagentName = readParam(block.params.agent_name) ?? DEFAULT_SUBAGENT_NAME
 		const task = readParam(block.params.task)
-		const content = readParam(block.params.context)
-		if (!subagentName && !task && !content) return
+		const context = readParam(block.params.context)
+		if (!subagentName && !task && !context) return
 		const payload: ClineAskUseSubagents = {
 			kind: "single",
 			prompts: task ? [task] : [],
 			subagentName,
 			task,
-			content,
+			context,
 		}
 		const autoApproveResult = uiHelpers.shouldAutoApproveTool(this.name)
 		const [shouldAutoApprove] = Array.isArray(autoApproveResult) ? autoApproveResult : [autoApproveResult, false]
@@ -391,7 +421,7 @@ export class UseSubagentToolHandler implements IFullyManagedTool {
 			prompts: [request.task],
 			subagentName: effectiveSubagentName,
 			task: request.task,
-			content: request.context,
+			context: request.context,
 			background: request.options.background,
 			timeoutSeconds: request.options.timeoutSeconds,
 		} satisfies ClineAskUseSubagents)
@@ -410,6 +440,7 @@ export class UseSubagentToolHandler implements IFullyManagedTool {
 			prompt: request.prompt,
 			subagentName: effectiveSubagentName,
 			task: request.task,
+			context: request.context,
 			background: request.options.background,
 			timeoutSeconds: request.options.timeoutSeconds,
 			injectionState: "pending",
@@ -592,6 +623,7 @@ export class UseSubagentsToolHandler implements IFullyManagedTool {
 		const approvalBody = JSON.stringify({
 			kind: "batch",
 			prompts,
+			items: request.items.map((item) => ({ task: item.task, context: item.context })),
 			background: request.options.background,
 			timeoutSeconds: request.options.timeoutSeconds,
 		} satisfies ClineAskUseSubagents)
@@ -609,6 +641,7 @@ export class UseSubagentsToolHandler implements IFullyManagedTool {
 			index: item.index,
 			prompt: item.prompt,
 			task: item.task,
+			context: item.context,
 			background: request.options.background,
 			timeoutSeconds: request.options.timeoutSeconds,
 			injectionState: "pending",

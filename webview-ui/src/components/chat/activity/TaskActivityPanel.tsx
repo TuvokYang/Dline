@@ -1,4 +1,4 @@
-import type { TaskActivity } from "@shared/proto/dline/task"
+import type { TaskActivity, TaskActivityEvent, TaskActivityMetrics } from "@shared/proto/dline/task"
 import {
 	BotIcon,
 	CheckIcon,
@@ -33,6 +33,55 @@ function StatusIcon({ status }: { status: string }) {
 	if (status === "cancelled") return <CircleSlashIcon className="size-3.5 text-description" />
 	if (status === "failed" || status === "timeout") return <CircleXIcon className="size-3.5 text-error" />
 	return <BotIcon className="size-3.5 text-description" />
+}
+
+function formatMetrics(metrics: TaskActivityMetrics | undefined): string {
+	if (!metrics) return "Metrics unavailable"
+	const tokens = metrics.inputTokens + metrics.outputTokens
+	const cost = metrics.currency && metrics.totalCost > 0 ? ` · ${metrics.totalCost.toFixed(4)} ${metrics.currency}` : ""
+	return `${metrics.toolCalls} tools · ${tokens} tokens${cost}`
+}
+
+function eventLabel(event: TaskActivityEvent): string {
+	if (event.kind === "thinking") return "Thinking"
+	if (event.kind === "assistant_message") return "Assistant"
+	if (event.kind === "tool_call") return event.toolStatus ? `Tool ${event.toolStatus}` : "Tool call"
+	if (event.kind === "tool_result") return "Tool result"
+	if (event.kind === "metrics") return "Metrics"
+	if (event.kind === "status") return "Status"
+	return "Output"
+}
+
+function eventBody(event: TaskActivityEvent): string {
+	if (event.kind === "tool_call") {
+		const duration = event.durationMs !== undefined ? ` · ${event.durationMs}ms` : ""
+		return `${event.toolName ?? "tool"}${duration}${event.summary ? `\n${event.summary}` : ""}`
+	}
+	if (event.kind === "tool_result") return `${event.toolName ?? "tool"}\n${event.text ?? event.error ?? ""}`
+	if (event.kind === "metrics") return formatMetrics(event.metrics)
+	if (event.kind === "status") return event.text ?? event.status ?? ""
+	return event.text ?? event.error ?? ""
+}
+
+function ActivityTimeline({ events }: { events: TaskActivityEvent[] }) {
+	const ordered = [...events].sort((left, right) => left.sequence - right.sequence || left.timestamp - right.timestamp)
+	if (ordered.length === 0) return null
+	return (
+		<div className="space-y-1.5" data-testid="activity-timeline">
+			{ordered.map((event) => (
+				<div
+					className="rounded-xs border border-editor-group-border px-2 py-1.5"
+					data-testid="activity-event"
+					key={`${event.sequence}:${event.kind}`}>
+					<div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wide text-description">
+						<span>{eventLabel(event)}</span>
+						<span className="ml-auto font-normal normal-case">#{event.sequence}</span>
+					</div>
+					<div className="mt-1 whitespace-pre-wrap break-words text-[11px] text-foreground">{eventBody(event)}</div>
+				</div>
+			))}
+		</div>
+	)
 }
 
 export function TaskActivityPanel({ taskId }: { taskId: string }) {
@@ -127,7 +176,7 @@ export function TaskActivityPanel({ taskId }: { taskId: string }) {
 										<ChevronRightIcon className="size-3.5" />
 									)}
 								</button>
-								{isActive && activity.status !== "awaiting_approval" && (
+								{activity.cancellable && isActive && activity.status !== "awaiting_approval" && (
 									<Button
 										disabled={activity.status === "cancelling"}
 										onClick={() => void cancelTaskActivities(taskId, [activity.activityId])}
@@ -157,6 +206,11 @@ export function TaskActivityPanel({ taskId }: { taskId: string }) {
 									)}
 									{activity.error && (
 										<div className="mt-2 whitespace-pre-wrap break-words text-error">{activity.error}</div>
+									)}
+									{activity.events.length > 0 && (
+										<div className="mt-2">
+											<ActivityTimeline events={activity.events} />
+										</div>
 									)}
 								</div>
 							)}

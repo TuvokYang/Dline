@@ -16,7 +16,14 @@ import { DlineTempManager } from "@services/temp"
 import * as fs from "fs"
 import { isCommandCompletionSuccessful } from "../command-completion"
 import { BACKGROUND_COMMAND_TIMEOUT_MS, DEFAULT_TERMINAL_OUTPUT_LINE_LIMIT } from "../constants"
-import type { BackgroundCommand, ITerminalManager, TerminalInfo, TerminalProcessResultPromise } from "../types"
+import type {
+	BackgroundCommand,
+	CommandCancellationOwner,
+	CommandOrigin,
+	ITerminalManager,
+	TerminalInfo,
+	TerminalProcessResultPromise,
+} from "../types"
 import { StandaloneTerminalProcess } from "./StandaloneTerminalProcess"
 import { StandaloneTerminalRegistry } from "./StandaloneTerminalRegistry"
 
@@ -411,6 +418,10 @@ export class StandaloneTerminalManager implements ITerminalManager {
 		command: string,
 		activityId: string,
 		existingOutput: string[] = [],
+		ownership: { origin: CommandOrigin; cancellationOwner: CommandCancellationOwner } = {
+			origin: "foreground",
+			cancellationOwner: "task",
+		},
 		callbacks?: {
 			onOutputLine?: (line: string) => void
 			onTimeout?: () => void
@@ -426,6 +437,8 @@ export class StandaloneTerminalManager implements ITerminalManager {
 			command,
 			startTime: Date.now(),
 			status: "running",
+			origin: ownership.origin,
+			cancellationOwner: ownership.cancellationOwner,
 			logFilePath,
 			lineCount: existingOutput.length,
 			injectionState: "pending",
@@ -583,8 +596,10 @@ export class StandaloneTerminalManager implements ITerminalManager {
 	/**
 	 * Get only running background commands.
 	 */
-	getRunningBackgroundCommands(): BackgroundCommand[] {
-		return this.getAllBackgroundCommands().filter((c) => c.status === "running")
+	getRunningBackgroundCommands(cancellationOwner?: CommandCancellationOwner): BackgroundCommand[] {
+		return this.getAllBackgroundCommands().filter(
+			(command) => command.status === "running" && (!cancellationOwner || command.cancellationOwner === cancellationOwner),
+		)
 	}
 
 	/**
@@ -625,7 +640,7 @@ export class StandaloneTerminalManager implements ITerminalManager {
 			;(command.process as any).terminate()
 		}
 
-		command.status = "error"
+		command.status = "cancelled"
 		return true
 	}
 

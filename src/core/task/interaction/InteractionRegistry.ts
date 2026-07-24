@@ -61,6 +61,8 @@ function define(
 const REPLY_INPUT: InputPolicy = { ...DRAFT_INPUT, enterAction: "reply" }
 const RESUME_INPUT: InputPolicy = { ...DRAFT_INPUT, enterAction: "resume" }
 const APPROVAL_INPUT: InputPolicy = { ...DRAFT_INPUT, enterAction: "reject" }
+const RETRY_INPUT: InputPolicy = { ...DRAFT_INPUT, enterAction: "retry" }
+const ACKNOWLEDGE_INPUT: InputPolicy = { ...DRAFT_INPUT, enterAction: "acknowledge" }
 const APPROVAL_ACTIONS = [action("approve", "Approve", "draft"), action("reject", "Reject", "draft", "danger")]
 
 const DEFINITIONS: Readonly<Record<InteractionKind, InteractionDefinition>> = {
@@ -83,14 +85,18 @@ const DEFINITIONS: Readonly<Record<InteractionKind, InteractionDefinition>> = {
 	plan_response: define("plan_response", "plan_mode_respond", [], REPLY_INPUT, "handler"),
 	qna_response: define("qna_response", "qna_respond", [], REPLY_INPUT, "handler"),
 	generate_report: define("generate_report", "generate_report", [], REPLY_INPUT, "handler"),
-	status_acknowledgment: define("status_acknowledgment", "status_acknowledgment", [
-		action("acknowledge", "Acknowledge", "draft"),
-		action("stop", "Stop", "draft", "danger"),
-	]),
-	error_retry: define("error_retry", "api_req_failed", [
-		action("retry", "Retry", "draft"),
-		action("start_new_task", "Start New Task", "draft"),
-	]),
+	status_acknowledgment: define(
+		"status_acknowledgment",
+		"status_acknowledgment",
+		[action("acknowledge", "Acknowledge", "draft"), action("stop", "Stop", "draft", "danger")],
+		ACKNOWLEDGE_INPUT,
+	),
+	error_retry: define(
+		"error_retry",
+		"api_req_failed",
+		[action("retry", "Retry", "draft"), action("start_new_task", "Start New Task", "draft")],
+		RETRY_INPUT,
+	),
 	mistake_limit: define("mistake_limit", "mistake_limit_reached", [
 		action("process_anyway", "Process Anyway", "draft"),
 		action("start_new_task", "Start New Task", "draft"),

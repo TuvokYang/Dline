@@ -48,6 +48,7 @@ import {
 	getSavedClineMessages,
 } from "@core/storage/disk"
 import type { FrozenSystemPromptCache, SystemPromptRefreshReason } from "@core/storage/task-context-types"
+import { TaskActivityPersistence } from "@core/task/activity/TaskActivityPersistence"
 import { TaskActivityStore } from "@core/task/activity/TaskActivityStore"
 import { ensureApiMessages, ensureUserContent } from "@core/task/api-context"
 import { showContextUsage } from "@core/task/environment-context"
@@ -141,6 +142,7 @@ import { Controller } from "../controller"
 import { refreshSkills } from "../controller/file/refreshSkills"
 import { executeHook } from "../hooks/hook-executor"
 import { StateManager } from "../storage/StateManager"
+import { createUnavailableApiHandler, resolveTaskApiProfile } from "./ApiProfileRecovery"
 import { buildActiveTasksSection } from "./active-tasks/ActiveTaskContextProvider"
 import { isTurnEndingToolUse, orderTurnEndingContentBlocks, orderTurnEndingNativeToolBlocks } from "./assistant-message-order"
 import {
@@ -167,7 +169,7 @@ import { advanceLifecycle, getDeferredToolAction } from "./partial-tool-lifecycl
 import type { PresentationPriority } from "./presentation-types"
 import { RestoreHandler } from "./RestoreHandler"
 import { ResumeCoordinator } from "./resume/ResumeCoordinator"
-import type { ResumeEntry, ResumeInput } from "./resume/ResumeInput"
+import { type ResumeEntry, type ResumeInput, selectResumeUiTail } from "./resume/ResumeInput"
 import { createResumeContinuationText, createResumeInteractionPresentation } from "./resume/ResumeProvenance"
 import type { TaskEffectPorts } from "./runtime/TaskEffectRunner"
 import type { TaskEvent } from "./runtime/TaskEvent"
@@ -467,7 +469,7 @@ export class Task {
 		this.diffViewProvider = backgroundEditEnabled ? new FileEditProvider() : HostProvider.get().createDiffViewProvider()
 
 		this.taskId = taskId
-		this.activityStore = new TaskActivityStore(taskId)
+		this.activityStore = new TaskActivityStore(taskId, new TaskActivityPersistence(taskId))
 		this.taskRuntime = new TaskRuntime(
 			createTaskRuntimeState({ taskId: this.taskId }),
 			createInteractionPorts(
@@ -475,6 +477,7 @@ export class Task {
 				async (state) => this.emitStateSnapshot(createSnapshot(state)),
 				async () => this.abortExecution(),
 				async (effect) => {
+					this.taskState.abort = false
 					if (effect.draft) {
 						this.taskState.autoRetryAttempts = 0
 					}
@@ -503,6 +506,7 @@ export class Task {
 						effect.taskAsk as ClineAsk,
 						effect.presentation,
 						effect.existingTs,
+						effect.interactionId,
 					),
 				}),
 				async (effect) => {
@@ -725,12 +729,21 @@ export class Task {
 				}
 			},
 		}
+		const profileResolution = resolveTaskApiProfile(effectiveApiConfiguration, mode, historyItem?.providerId)
 		const currentProfile =
-			mode === "plan" ? effectiveApiConfiguration.planModeProfile : effectiveApiConfiguration.actModeProfile
-		const currentProvider = resolveProviderFromProfile(currentProfile) || DEFAULT_API_PROVIDER
+			mode === "plan" ? profileResolution.configuration.planModeProfile : profileResolution.configuration.actModeProfile
+		const currentProvider = resolveProviderFromProfile(currentProfile) || historyItem?.providerId || DEFAULT_API_PROVIDER
+		if (profileResolution.usedFallback) {
+			Logger.warn(
+				`[Task ${this.taskId}] Task API profile is unavailable; using session fallback "${profileResolution.resolvedProfile}" without changing the persisted binding.`,
+			)
+		}
 
-		// Now that ulid is initialized, we can build the API handler
-		this.api = buildApiHandler(effectiveApiConfiguration, mode)
+		// Keep history readable even when no profile can be resolved. Continuing the task
+		// fails at the provider boundary with an actionable diagnostic.
+		this.api = profileResolution.error
+			? createUnavailableApiHandler(profileResolution.error)
+			: buildApiHandler(profileResolution.configuration, mode)
 
 		// Set ulid on browserSession for telemetry tracking
 		this.browserSession.setUlid(this.ulid)
@@ -821,11 +834,12 @@ export class Task {
 				this.taskState.userMessageContent.push({ type: "text", text: content.text } as ClineTextContentBlock)
 			},
 			markWorkspaceScanRequired: () => this.taskFileTracker.markWorkspaceScanRequired(),
-			createCommandActivity: ({ activityId, command, executionMode, cancel }) => {
+			createCommandActivity: ({ activityId, command, executionMode, cancellationOwner, cancel }) => {
 				this.activityStore.create({
 					activityId,
 					kind: "command",
 					executionMode,
+					cancellationOwner,
 					title: command.split(/\r?\n/, 1)[0].slice(0, 240) || "Command",
 					detail: command,
 					cancel,
@@ -1323,13 +1337,14 @@ export class Task {
 		if (!snapshot) {
 			throw new Error("resume_snapshot_missing")
 		}
-		const uiTail = this.messageStateHandler.clineMessages.filter((message) => message.ts > snapshot.timestamp)
+		const uiTail = selectResumeUiTail(snapshot, this.messageStateHandler.clineMessages)
 		const apiTail = this.messageStateHandler.apiConversationHistory.slice(Math.max(0, snapshot.apiIndex + 1))
 		return {
 			taskId: this.taskId,
 			snapshot,
 			uiTail,
 			apiTail,
+			apiTailStartIndex: Math.max(0, snapshot.apiIndex + 1),
 			apiHistoryLength: this.messageStateHandler.apiConversationHistory.length,
 		}
 	}
@@ -1668,6 +1683,9 @@ export class Task {
 
 	/** Dispatch one typed event through the serialized task runtime. */
 	public dispatchRuntime(event: TaskEvent): Promise<TaskDispatchResult> {
+		if (event.type === "INTERACTION_RESPONDED") {
+			return this.interactionCoordinator.respond(event.response)
+		}
 		return this.taskRuntime.dispatch(event)
 	}
 
@@ -2145,7 +2163,7 @@ export class Task {
 				hasActiveHook: Boolean(await this.getActiveHookExecution()),
 				isStreaming: this.taskState.isStreaming,
 				isWaitingForFirstChunk: this.taskState.isWaitingForFirstChunk,
-				hasActiveBackgroundCommand: this.commandExecutor.hasActiveBackgroundCommand(),
+				hasTaskOwnedCommand: this.commandExecutor.hasTaskOwnedCommand(),
 			},
 		})
 	}
@@ -2178,17 +2196,12 @@ export class Task {
 				}
 			}
 
-			if (this.commandExecutor.hasActiveBackgroundCommand()) {
-				try {
-					await this.commandExecutor.cancelBackgroundCommand()
-				} catch (error) {
-					Logger.error("Failed to cancel background command during task pause", error)
-				}
+			try {
+				await this.commandExecutor.cancelTaskOwnedCommands()
+			} catch (error) {
+				Logger.error("Failed to cancel Task-owned command during task pause", error)
 			}
-			const activeActivityIds = this.activityStore
-				.list()
-				.filter((activity) => activity.status === "running")
-				.map((activity) => activity.activityId)
+			const activeActivityIds = this.activityStore.listRunning("task").map((activity) => activity.activityId)
 			if (activeActivityIds.length > 0) {
 				await withTerminateTimeout(this.activityStore.cancel(activeActivityIds), 5_000, "cancelTaskActivities").catch(
 					(error) => Logger.error("Failed to cancel task activities during terminate", error),
@@ -2288,12 +2301,10 @@ export class Task {
 				}
 			}
 
-			if (this.commandExecutor.hasActiveBackgroundCommand()) {
-				try {
-					await withTerminateTimeout(this.commandExecutor.cancelBackgroundCommand(), 5_000, "cancelBackgroundCommand")
-				} catch (error) {
-					Logger.error("Failed to cancel background command during task terminate", error)
-				}
+			try {
+				await withTerminateTimeout(this.commandExecutor.cancelTaskOwnedCommands(), 5_000, "cancelTaskOwnedCommands")
+			} catch (error) {
+				Logger.error("Failed to cancel Task-owned command during task terminate", error)
 			}
 
 			// PHASE 4: Run TaskCancel hook as fire-and-forget. It must not
@@ -2378,6 +2389,7 @@ export class Task {
 				() => this.activityStore.dispose(),
 			]
 			const asyncCleanups: Array<Promise<void>> = [
+				withTerminateTimeout(this.activityStore.waitForPersistence(), 5_000, "activityStore.waitForPersistence"),
 				withTerminateTimeout(this.browserSession.dispose(), 5_000, "browserSession.dispose"),
 				withTerminateTimeout(this.diffViewProvider.revertChanges(), 5_000, "diffViewProvider.revertChanges"),
 				withTerminateTimeout(this.presentationScheduler.dispose(), 3_000, "presentationScheduler.dispose"),

@@ -17,7 +17,7 @@ export interface FooterActionsProps {
 	draft: InteractionDraft
 	selection?: InteractionSelection
 	dispatch: DispatchInteraction
-	dispatchTaskAction?: (action: "cancel") => Promise<void>
+	dispatchTaskAction?: (action: "cancel" | "resume") => Promise<void>
 	onDraftAccepted?: (settlement: AcceptedInteractionSettlement) => void
 }
 
@@ -31,43 +31,49 @@ export function FooterActions({ view, draft, selection, dispatch, dispatchTaskAc
 
 	return (
 		<div className="flex mx-3.5 border border-(--vscode-panel-border) rounded gap-1.5">
-			{actions.map((action) => (
-				<VSCodeButton
-					appearance={action.appearance === "primary" ? "primary" : "secondary"}
-					aria-label={action.label}
-					className="flex-1 focus:ring-2 focus:ring-[--vscode-focusBorder] rounded"
-					disabled={!action.enabled || pending}
-					key={action.type}
-					onClick={() => {
-						if (pending) {
-							return
-						}
-						if (action.type === "cancel") {
-							if (!dispatchTaskAction) {
+			{actions.map((action) => {
+				const targetsTask = action.dispatchTarget === "task" || action.type === "cancel"
+				const dispatcherAvailable = targetsTask ? Boolean(dispatchTaskAction) : Boolean(view.activeInteraction)
+				const buttonDisabled = !action.enabled || pending || !dispatcherAvailable
+				return (
+					<VSCodeButton
+						appearance={action.appearance === "primary" ? "primary" : "secondary"}
+						aria-disabled={buttonDisabled}
+						aria-label={action.label}
+						className="flex-1 focus:ring-2 focus:ring-[--vscode-focusBorder] rounded"
+						disabled={buttonDisabled}
+						key={action.type}
+						onClick={() => {
+							if (pending) {
+								return
+							}
+							if (targetsTask) {
+								if (!dispatchTaskAction || (action.type !== "cancel" && action.type !== "resume")) {
+									return
+								}
+								setPending(true)
+								void dispatchTaskAction(action.type).finally(() => setPending(false))
+								return
+							}
+							const capturedDraft = captureInteractionDraft(draft)
+							const request = buildInteractionRequest(view, action.type, capturedDraft, selection)
+							if (!request) {
 								return
 							}
 							setPending(true)
-							void dispatchTaskAction("cancel").finally(() => setPending(false))
-							return
-						}
-						const capturedDraft = captureInteractionDraft(draft)
-						const request = buildInteractionRequest(view, action.type, capturedDraft, selection)
-						if (!request) {
-							return
-						}
-						setPending(true)
-						void dispatch(request)
-							.then((response) => {
-								if (response.accepted) {
-									onDraftAccepted?.(createAcceptedInteractionSettlement(request, capturedDraft))
-								}
-							})
-							.finally(() => setPending(false))
-					}}
-					role="button">
-					{action.label}
-				</VSCodeButton>
-			))}
+							void dispatch(request)
+								.then((response) => {
+									if (response.accepted) {
+										onDraftAccepted?.(createAcceptedInteractionSettlement(request, capturedDraft))
+									}
+								})
+								.finally(() => setPending(false))
+						}}
+						role="button">
+						{action.label}
+					</VSCodeButton>
+				)
+			})}
 		</div>
 	)
 }

@@ -173,14 +173,14 @@ async function runResolvingTransaction(resumeInput: ResumeInput, effectPorts: Ta
 }
 
 describe("ResumeCoordinator", () => {
-	it("runs the exact load-reconcile-persist-hydrate-dispatch order", async () => {
+	it("publishes an explicit history resume gate without starting API work", async () => {
 		const order: string[] = []
 		const coordinator = new ResumeCoordinator(ports(order))
 
 		const result = await coordinator.resume("task-1")
 
-		expect(result.entry).toEqual({ type: "continue_api_turn", apiIndex: 2 })
-		expect(order).toEqual(["load", "persist", "hydrate:streaming", "publishView", "dispatch:continue_api_turn"])
+		expect(result.entry).toEqual({ type: "show_resume_interaction" })
+		expect(order).toEqual(["load", "persist", "hydrate:paused", "publishView", "dispatch:show_resume_interaction"])
 	})
 
 	it("dispatches missing-identity diagnostics even when the snapshot cannot hydrate", async () => {

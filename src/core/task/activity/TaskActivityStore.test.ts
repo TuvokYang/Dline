@@ -45,6 +45,171 @@ describe("TaskActivityStore", () => {
 		expect(output?.endsWith("tail")).toBe(true)
 	})
 
+	it("filters task-owned activities without treating explicit background work as Task lifecycle work", () => {
+		const store = new TaskActivityStore("task-1")
+		store.create({
+			activityId: "foreground-command",
+			kind: "command",
+			executionMode: "foreground",
+			cancellationOwner: "task",
+			title: "npm test",
+		})
+		store.create({
+			activityId: "background-command",
+			kind: "command",
+			executionMode: "background",
+			cancellationOwner: "explicit",
+			title: "npm run dev",
+		})
+
+		expect(store.listRunning("task").map((activity) => activity.activityId)).toEqual(["foreground-command"])
+	})
+
+	it("exposes cancellation only while a live canceller is bound", () => {
+		const store = new TaskActivityStore("task-1")
+		store.create({
+			activityId: "subagent-1",
+			kind: "subagent",
+			executionMode: "background",
+			title: "research",
+		})
+
+		expect(store.isCancellable("subagent-1")).toBe(false)
+		store.setCancel("subagent-1", async () => undefined)
+		expect(store.isCancellable("subagent-1")).toBe(true)
+		store.update("subagent-1", { status: "completed" })
+		expect(store.isCancellable("subagent-1")).toBe(false)
+	})
+
+	it("keeps ordered typed events and persists history for reopen", async () => {
+		const persisted: Array<ReturnType<TaskActivityStore["list"]>> = []
+		const persistence = {
+			load: vi.fn(async () => persisted.at(-1) ?? []),
+			save: vi.fn(async (activities: ReturnType<TaskActivityStore["list"]>) => {
+				persisted.push(activities)
+			}),
+		}
+		const store = new TaskActivityStore("task-1", persistence)
+		store.create({
+			activityId: "subagent-1",
+			kind: "subagent",
+			executionMode: "background",
+			title: "research",
+		})
+		store.appendEvent("subagent-1", { kind: "thinking", phase: "delta", text: "considering" })
+		store.appendEvent("subagent-1", {
+			kind: "assistant_message",
+			phase: "final",
+			text: "I will inspect it. api_key=private-value",
+		})
+		store.appendEvent("subagent-1", {
+			kind: "tool_call",
+			toolCallId: "tid-1",
+			toolName: "read_file",
+			toolStatus: "started",
+			summary: "read target",
+		})
+		store.appendEvent("subagent-1", {
+			kind: "tool_result",
+			toolCallId: "tid-1",
+			toolName: "read_file",
+			text: "file content",
+		})
+		store.update("subagent-1", { metrics: { toolCalls: 1, inputTokens: 10 } })
+		await store.waitForPersistence()
+
+		const events = store.get("subagent-1")?.events ?? []
+		expect(events.map((event) => event.kind)).toEqual([
+			"status",
+			"thinking",
+			"assistant_message",
+			"tool_call",
+			"tool_result",
+			"metrics",
+		])
+		expect(events.map((event) => event.sequence)).toEqual([...events.map((event) => event.sequence)].sort((a, b) => a - b))
+		expect(events.find((event) => event.kind === "assistant_message")).toMatchObject({
+			text: "I will inspect it. api_key=[REDACTED]",
+		})
+
+		const reopened = new TaskActivityStore("task-1", persistence)
+		await reopened.hydrate()
+		expect(reopened.get("subagent-1")?.events).toEqual(events)
+		expect(reopened.isCancellable("subagent-1")).toBe(false)
+	})
+
+	it("merges hydrated history before persisting an opening live activity", async () => {
+		let resolveLoad!: (activities: ReturnType<TaskActivityStore["list"]>) => void
+		const load = vi.fn(
+			async () =>
+				new Promise<ReturnType<TaskActivityStore["list"]>>((resolve) => {
+					resolveLoad = resolve
+				}),
+		)
+		const save = vi.fn(async (_activities: ReturnType<TaskActivityStore["list"]>) => undefined)
+		const historicalStore = new TaskActivityStore("task-1")
+		historicalStore.create({
+			activityId: "historical-command",
+			kind: "command",
+			executionMode: "background",
+			title: "historical",
+		})
+		const store = new TaskActivityStore("task-1", { load, save })
+		const unsubscribe = store.subscribe(vi.fn())
+		store.create({
+			activityId: "live-command",
+			kind: "command",
+			executionMode: "foreground",
+			title: "live",
+		})
+		resolveLoad(historicalStore.list())
+		await store.waitForPersistence()
+		unsubscribe()
+
+		expect(
+			save.mock.calls
+				.at(-1)?.[0]
+				.map((activity) => activity.activityId)
+				.sort(),
+		).toEqual(["historical-command", "live-command"])
+	})
+
+	it("redacts obvious secrets from every persisted activity text field", async () => {
+		const save = vi.fn(async (_activities: ReturnType<TaskActivityStore["list"]>) => undefined)
+		const store = new TaskActivityStore("task-1", {
+			load: vi.fn(async () => []),
+			save,
+		})
+		store.create({
+			activityId: "command-1",
+			kind: "command",
+			executionMode: "background",
+			title: "serve --api_key=title-secret",
+			detail: "Authorization: Bearer detail-secret-token",
+		})
+		store.appendOutput("command-1", "access_token=output-secret\n")
+		store.update("command-1", {
+			status: "completed",
+			latestEvent: "password=event-secret",
+			result: "github_pat_1234567890abcdef",
+			error: "secret=error-secret",
+		})
+		await store.waitForPersistence()
+
+		const serialized = JSON.stringify(save.mock.calls.at(-1)?.[0])
+		expect(serialized).toContain("[REDACTED]")
+		for (const secret of [
+			"title-secret",
+			"detail-secret-token",
+			"output-secret",
+			"event-secret",
+			"github_pat_1234567890abcdef",
+			"error-secret",
+		]) {
+			expect(serialized).not.toContain(secret)
+		}
+	})
+
 	it("cancels an exact activity and suppresses late completion", async () => {
 		const cancel = vi.fn(async () => undefined)
 		const store = new TaskActivityStore("task-1")

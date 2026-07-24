@@ -23,10 +23,12 @@ vi.mock("./useTaskActivities", () => ({
 				kind: "command",
 				executionMode: "background",
 				status: "running",
+				cancellable: true,
 				createdAt: 200,
 				updatedAt: 200,
 				title: "new command",
 				logPath: "C:\\Temp\\activity.log",
+				events: [],
 			},
 			{
 				activityId: "old-agent",
@@ -37,6 +39,46 @@ vi.mock("./useTaskActivities", () => ({
 				createdAt: 100,
 				updatedAt: 150,
 				title: "old agent",
+				events: [
+					{
+						sequence: 1,
+						timestamp: 101,
+						kind: "thinking",
+						phase: "final",
+						text: "Inspect the cancellation path.",
+					},
+					{
+						sequence: 2,
+						timestamp: 110,
+						kind: "assistant_message",
+						phase: "final",
+						text: "I will read the executor.",
+					},
+					{
+						sequence: 3,
+						timestamp: 120,
+						kind: "tool_call",
+						toolCallId: "tid-1",
+						toolName: "read_file",
+						toolStatus: "completed",
+						summary: "read executor",
+						durationMs: 8,
+					},
+					{
+						sequence: 4,
+						timestamp: 121,
+						kind: "tool_result",
+						toolCallId: "tid-1",
+						toolName: "read_file",
+						text: "executor content",
+					},
+					{
+						sequence: 5,
+						timestamp: 140,
+						kind: "metrics",
+						metrics: { toolCalls: 1, inputTokens: 10, outputTokens: 5, totalCost: 0.01, currency: "USD" },
+					},
+				],
 			},
 		],
 	}),
@@ -68,6 +110,24 @@ describe("TaskActivityPanel", () => {
 		fireEvent.click(within(item).getByRole("button", { name: "Open log file activity.log" }))
 
 		expect(FileServiceClient.openFile).toHaveBeenCalledWith(expect.objectContaining({ value: "C:\\Temp\\activity.log" }))
+	})
+
+	it("renders an ordered typed timeline with thinking, conversation, tools, results, and metrics", () => {
+		render(<TaskActivityPanel taskId="task-1" />)
+		fireEvent.click(screen.getAllByRole("button", { name: "All" })[0])
+		const oldAgent = screen.getAllByTestId("activity-item").find((item) => item.textContent?.includes("old agent"))
+		expect(oldAgent).toBeDefined()
+		fireEvent.click(within(oldAgent as HTMLElement).getByRole("button", { name: /old agent/i }))
+
+		const timeline = within(oldAgent as HTMLElement).getByTestId("activity-timeline")
+		const events = within(timeline).getAllByTestId("activity-event")
+		expect(events.map((event) => event.textContent)).toEqual([
+			expect.stringContaining("Thinking"),
+			expect.stringContaining("Assistant"),
+			expect.stringContaining("read_file"),
+			expect.stringContaining("executor content"),
+			expect.stringContaining("1 tools"),
+		])
 	})
 
 	it("shows all activities and filters the vertical list by type", () => {

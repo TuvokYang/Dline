@@ -88,6 +88,7 @@ async function cleanupStaleTmpFiles(dir: string): Promise<void> {
 export const GlobalFileNames = {
 	apiConversationAll: "api_conversation_all.jsonl",
 	taskSnapshot: "snapshot.json",
+	taskActivities: "activities.json",
 	taskContext: "context.json",
 	apiConversationHistory: "api_conversation_history.jsonl",
 	contextHistory: "context_history.jsonl",

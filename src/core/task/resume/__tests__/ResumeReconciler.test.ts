@@ -5,7 +5,7 @@ import { BlockPhase } from "../../BlockPhaseMachine"
 import { createTaskRuntimeState } from "../../runtime/TaskRuntimeState"
 import { TaskPhase } from "../../TaskPhase"
 import { createSnapshot, type TaskSnapshot } from "../../TaskSnapshot"
-import type { ResumeEntry, ResumeInput } from "../ResumeInput"
+import { type ResumeEntry, type ResumeInput, selectResumeUiTail } from "../ResumeInput"
 import { reconcileResume } from "../ResumeReconciler"
 
 const TASK_ID = "task-1"
@@ -134,30 +134,124 @@ function expectEntry(taskSnapshot: TaskSnapshot, entry: ResumeEntry): void {
 }
 
 describe("reconcileResume", () => {
-	it("continues an unblocked snapshot with no tail", () => {
-		expectEntry(snapshot(), { type: "continue_api_turn", apiIndex: 1 })
+	it("gates an unblocked historical snapshot behind an explicit resume interaction", () => {
+		const result = reconcileResume(input(snapshot()))
+
+		expect(result.entry).toEqual({ type: "show_resume_interaction" })
+		expect(result.snapshot.phase).toBe(TaskPhase.PAUSED)
+		expect(result.diagnostics).toEqual([])
 	})
 
-	it("fails read-only when an opening interaction has no causal persisted anchor", () => {
+	it("selects an opening ask by canonical identity even when its timestamp equals the snapshot", () => {
+		const opening = snapshot()
+		opening.interaction = {
+			taskId: TASK_ID,
+			turnId: "resume-turn",
+			interactionId: "resume-opening",
+			kind: "resume",
+			status: "opening",
+			createdRevision: 3,
+		}
+		opening.anchor = { apiIndex: 1, turnId: "resume-turn", interactionId: "resume-opening" }
+		const sameTimestampAsk: ClineMessage = {
+			ts: opening.timestamp,
+			type: "ask",
+			ask: "resume_task",
+			text: "Resume",
+			interactionId: "resume-opening",
+		}
+
+		expect(
+			selectResumeUiTail(opening, [
+				{ ...sameTimestampAsk, ts: opening.timestamp + 1, interactionId: "other-interaction" },
+				sameTimestampAsk,
+			]),
+		).toEqual([sameTimestampAsk])
+	})
+
+	it("rebinds an opening interaction only to its exact persisted ask identity", () => {
+		const opening = snapshot()
+		opening.phase = TaskPhase.PAUSED
+		opening.interaction = {
+			taskId: "task-1",
+			turnId: "resume-turn",
+			interactionId: "resume-opening",
+			kind: "resume",
+			status: "opening",
+			createdRevision: 3,
+		}
+		opening.anchor = { apiIndex: 1, turnId: "resume-turn", interactionId: "resume-opening" }
+		const resumeInput = input(opening)
+		resumeInput.uiTail = [
+			{
+				ts: 110,
+				type: "ask",
+				ask: "resume_task",
+				text: "Resume",
+				interactionId: "resume-opening",
+			},
+		]
+
+		const result = reconcileResume(resumeInput)
+
+		expect(result.entry).toEqual({
+			type: "show_resume_interaction",
+			interactionId: "resume-opening",
+			turnId: "resume-turn",
+		})
+		expect(result.snapshot.interaction).toMatchObject({
+			interactionId: "resume-opening",
+			status: "awaiting",
+			anchor: { messageTs: 110, messageType: "ask" },
+		})
+	})
+
+	it("falls back to a safe Resume gate when an opening interaction has no provable ask identity", () => {
+		const opening = snapshot()
+		opening.phase = TaskPhase.PAUSED
+		opening.interaction = {
+			taskId: "task-1",
+			turnId: "resume-turn",
+			interactionId: "resume-opening",
+			kind: "resume",
+			status: "opening",
+			createdRevision: 3,
+		}
+		opening.anchor = { apiIndex: 1, turnId: "resume-turn", interactionId: "resume-opening" }
+		const resumeInput = input(opening)
+		resumeInput.uiTail = [{ ts: 110, type: "ask", ask: "resume_task", text: "Legacy ask without identity" }]
+
+		const result = reconcileResume(resumeInput)
+
+		expect(result.entry).toEqual({ type: "show_resume_interaction" })
+		expect(result.snapshot.phase).toBe(TaskPhase.PAUSED)
+		expect(result.snapshot.interaction).toBeUndefined()
+		expect(result.diagnostics).toEqual([{ code: "missing_interaction_anchor", interactionId: "resume-opening" }])
+	})
+
+	it("falls back safely when an opening interaction has no causal persisted anchor", () => {
 		const result = reconcileResume(
 			input(snapshot({ interaction: "qna_response", interactionStatus: "opening" }), [
 				ui(100, "ask", "qna_respond"),
 				ui(110, "say", "user_feedback"),
 			]),
 		)
-		expect(result.entry).toEqual({ type: "read_only_failure" })
+		expect(result.entry).toEqual({ type: "show_resume_interaction" })
 		expect(result.diagnostics).toEqual([{ code: "missing_interaction_anchor", interactionId: TID }])
-		expect(result.snapshot.interaction).toMatchObject({ status: "opening", interactionId: TID })
+		expect(result.snapshot.phase).toBe(TaskPhase.PAUSED)
+		expect(result.snapshot.interaction).toBeUndefined()
 	})
 
-	it("fails read-only for completion opening tails without causal identity", () => {
+	it("falls back safely for completion opening tails without causal identity", () => {
 		const result = reconcileResume(
 			input(snapshot({ phase: TaskPhase.COMPLETED, interaction: "completion", interactionStatus: "opening" }), [
 				ui(100, "ask", "completion_result"),
 			]),
 		)
-		expect(result.entry).toEqual({ type: "read_only_failure" })
+		expect(result.entry).toEqual({ type: "show_resume_interaction" })
 		expect(result.diagnostics).toEqual([{ code: "missing_interaction_anchor", interactionId: TID }])
+		expect(result.snapshot.phase).toBe(TaskPhase.PAUSED)
+		expect(result.snapshot.interaction).toBeUndefined()
 	})
 
 	it("reopens an existing resume interaction with its canonical identity", () => {

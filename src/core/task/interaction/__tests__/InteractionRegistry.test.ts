@@ -19,7 +19,7 @@ const CASES: InteractionCase[] = [
 	{ kind: "qna_response", taskAsk: "qna_respond", actions: [], enterAction: "reply", continuation: "handler" },
 	{ kind: "generate_report", taskAsk: "generate_report", actions: [], enterAction: "reply", continuation: "handler" },
 	{ kind: "resume", taskAsk: "resume_task", actions: ["resume"], enterAction: "resume", continuation: "resume" },
-	{ kind: "error_retry", taskAsk: "api_req_failed", actions: ["retry", "start_new_task"] },
+	{ kind: "error_retry", taskAsk: "api_req_failed", actions: ["retry", "start_new_task"], enterAction: "retry" },
 	{
 		kind: "completion",
 		taskAsk: "completion_result",
@@ -27,7 +27,12 @@ const CASES: InteractionCase[] = [
 		enterAction: "reply",
 		continuation: "completion",
 	},
-	{ kind: "status_acknowledgment", taskAsk: "status_acknowledgment", actions: ["acknowledge", "stop"] },
+	{
+		kind: "status_acknowledgment",
+		taskAsk: "status_acknowledgment",
+		actions: ["acknowledge", "stop"],
+		enterAction: "acknowledge",
+	},
 ]
 
 describe("InteractionRegistry", () => {

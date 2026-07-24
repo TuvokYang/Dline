@@ -7,7 +7,7 @@ export interface TaskCancelActivity {
 	hasActiveHook: boolean
 	isStreaming: boolean
 	isWaitingForFirstChunk: boolean
-	hasActiveBackgroundCommand: boolean
+	hasTaskOwnedCommand: boolean
 }
 
 /** Inputs for the runtime-owned TaskCancel hook policy. */
@@ -35,7 +35,7 @@ export function shouldRunTaskCancelHook(input: TaskCancelPolicyInput): boolean {
 		input.activity.hasActiveHook ||
 		input.activity.isStreaming ||
 		input.activity.isWaitingForFirstChunk ||
-		input.activity.hasActiveBackgroundCommand
+		input.activity.hasTaskOwnedCommand
 	) {
 		return true
 	}

@@ -132,8 +132,8 @@ export async function orchestrateCommandExecution(
 	const clearCommandState = async (details?: TerminalCompletionDetails, didError = false) => {
 		callbacks.updateBackgroundCommandState(false)
 
-		// Do not overwrite skipped or cancelled command state
-		if (didCancelViaUi) {
+		// Do not overwrite any canonical cancellation terminal state.
+		if (didCancelViaUi || options.isCancellationRequested?.()) {
 			return
 		}
 

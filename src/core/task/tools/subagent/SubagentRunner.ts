@@ -48,6 +48,17 @@ interface SubagentProgressUpdate {
 	status?: "running" | "completed" | "failed" | "cancelled"
 	result?: string
 	error?: string
+	event?: {
+		kind: "thinking" | "assistant_message" | "tool_call" | "tool_result"
+		phase?: "delta" | "final"
+		text?: string
+		toolCallId?: string
+		toolName?: string
+		toolStatus?: "started" | "completed" | "failed"
+		summary?: string
+		durationMs?: number
+		error?: string
+	}
 }
 
 interface SubagentRunStats {
@@ -510,6 +521,9 @@ export class SubagentRunner {
 							requestId = requestId ?? chunk.provider_metadata?.response_id
 							assistantText += chunk.text || ""
 							assistantTextSignature = chunk.signature || assistantTextSignature
+							if (chunk.text) {
+								onProgress({ event: { kind: "assistant_message", phase: "delta", text: chunk.text } })
+							}
 							break
 						case "tool_calls":
 							requestId = requestId ?? chunk.provider_metadata?.response_id
@@ -529,6 +543,9 @@ export class SubagentRunner {
 							break
 						case "reasoning":
 							requestId = requestId ?? chunk.provider_metadata?.response_id
+							if (chunk.reasoning) {
+								onProgress({ event: { kind: "thinking", phase: "delta", text: chunk.reasoning } })
+							}
 							break
 					}
 
@@ -592,6 +609,7 @@ export class SubagentRunner {
 				}
 				const assistantContent = [] as any[]
 				if (assistantText.trim().length > 0) {
+					onProgress({ event: { kind: "assistant_message", phase: "final", text: assistantText } })
 					assistantContent.push({
 						type: "text",
 						text: assistantText,
@@ -684,19 +702,32 @@ export class SubagentRunner {
 					}
 
 					const latestToolCall = formatToolCallPreview(toolName, toolCallParams)
-					onProgress({ latestToolCall })
+					const toolStartedAt = Date.now()
+					onProgress({
+						latestToolCall,
+						event: {
+							kind: "tool_call",
+							toolCallId: call.dline_tid,
+							toolName,
+							toolStatus: "started",
+							summary: latestToolCall,
+						},
+					})
 
 					const subagentConfig = this.createSubagentTaskConfig(state)
 					const handler = this.baseConfig.coordinator.getHandler(toolName)
 					let toolResult: unknown
+					let toolError: string | undefined
 
 					if (!handler) {
-						toolResult = formatResponse.toolError(`No handler registered for tool '${toolName}'.`)
+						toolError = `No handler registered for tool '${toolName}'.`
+						toolResult = formatResponse.toolError(toolError)
 					} else {
 						try {
 							toolResult = await handler.execute(subagentConfig, toolCallBlock)
 						} catch (error) {
-							toolResult = formatResponse.toolError((error as Error).message)
+							toolError = error instanceof Error ? error.message : String(error)
+							toolResult = formatResponse.toolError(toolError)
 						}
 					}
 
@@ -704,6 +735,26 @@ export class SubagentRunner {
 					onProgress({ stats: { ...stats } })
 
 					const serializedToolResult = serializeToolResult(toolResult)
+					onProgress({
+						event: {
+							kind: "tool_call",
+							toolCallId: call.dline_tid,
+							toolName,
+							toolStatus: toolError ? "failed" : "completed",
+							summary: latestToolCall,
+							durationMs: Date.now() - toolStartedAt,
+							error: toolError,
+						},
+					})
+					onProgress({
+						event: {
+							kind: "tool_result",
+							toolCallId: call.dline_tid,
+							toolName,
+							text: toolError ? undefined : serializedToolResult,
+							error: toolError,
+						},
+					})
 					const toolDescription = handler?.getDescription(toolCallBlock) || `[${toolName}]`
 					pushSubagentToolResultBlock(toolResultBlocks, call, toolDescription, serializedToolResult)
 

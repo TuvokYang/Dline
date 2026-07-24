@@ -16,6 +16,7 @@ import type {
 class FakeTerminalProcess extends EventEmitter<TerminalProcessEvents> {
 	isHot = false
 	waitForShellIntegration = false
+	readonly terminate = vi.fn()
 	private readonly resultPromise: Promise<void>
 	private resolveResult!: () => void
 
@@ -65,6 +66,17 @@ function createTerminalManager(): ITerminalManager {
 		setShellIntegrationTimeout: vi.fn(),
 		setTerminalOutputLineLimit: vi.fn(),
 		setTerminalReuseEnabled: vi.fn(),
+	}
+}
+
+function createCallbacks(): CommandExecutorCallbacks {
+	return {
+		addToUserMessageContent: vi.fn(),
+		ask: vi.fn(async () => ({ response: "messageResponse" })),
+		getClineMessages: () => [],
+		say: vi.fn(async () => undefined),
+		updateBackgroundCommandState: vi.fn(),
+		updateClineMessage: vi.fn(async () => undefined),
 	}
 }
 
@@ -129,6 +141,8 @@ describe("CommandExecutor explicit background execution", () => {
 		const backgroundCommand: BackgroundCommand = {
 			command: "serve",
 			id: "command_101_1",
+			origin: "explicit_background",
+			cancellationOwner: "explicit",
 			injectionState: "pending",
 			lineCount: 0,
 			logFilePath: "C:\\Temp\\command_101_1.log",
@@ -147,6 +161,10 @@ describe("CommandExecutor explicit background execution", () => {
 		assert.equal(show.mock.calls.length, 0)
 		assert.equal(trackBackgroundCommand.mock.calls.length, 1)
 		assert.equal(trackBackgroundCommand.mock.calls[0]?.[2], "command_101_1")
+		assert.deepEqual(trackBackgroundCommand.mock.calls[0]?.[4], {
+			origin: "explicit_background",
+			cancellationOwner: "explicit",
+		})
 		assert.equal(result.completed, false)
 		assert.equal(result.backgroundCommandId, "command_101_1")
 		assert.equal(result.logFilePath, "C:\\Temp\\command_101_1.log")
@@ -162,5 +180,135 @@ describe("CommandExecutor explicit background execution", () => {
 		await vi.waitFor(() => {
 			assert.ok(updateCommandActivity.mock.calls.some(([, patch]) => patch.status === expectedStatus))
 		})
+	})
+
+	it("keeps explicit background work alive during Task cancellation and cancels it only explicitly", async () => {
+		const process = new FakeTerminalProcess()
+		const processPromise = process.asResultPromise()
+		const executor = new CommandExecutor(
+			{
+				cwd: "C:\\workspace",
+				taskId: "task-1",
+				terminalExecutionMode: "vscodeTerminal",
+				terminalManager: createTerminalManager(),
+				ulid: "task-ulid",
+			},
+			createCallbacks(),
+		)
+		const internals = executor as unknown as {
+			currentProcess: TerminalProcessResultPromise | null
+			processes: Map<string, TerminalProcessResultPromise>
+			cancellationOwners: Map<string, "explicit" | "task">
+		}
+		internals.currentProcess = processPromise
+		internals.processes.set("explicit-1", processPromise)
+		internals.cancellationOwners.set("explicit-1", "explicit")
+
+		assert.equal(executor.hasTaskOwnedCommand(), false)
+		assert.equal(await executor.cancelTaskOwnedCommands(), false)
+		assert.equal(process.terminate.mock.calls.length, 0)
+		assert.equal(await executor.cancelBackgroundCommand(), true)
+		assert.equal(process.terminate.mock.calls.length, 1)
+	})
+
+	it("terminates task-owned detached foreground work exactly once", async () => {
+		const process = new FakeTerminalProcess()
+		const processPromise = process.asResultPromise()
+		const executor = new CommandExecutor(
+			{
+				cwd: "C:\\workspace",
+				taskId: "task-1",
+				terminalExecutionMode: "vscodeTerminal",
+				terminalManager: createTerminalManager(),
+				ulid: "task-ulid",
+			},
+			createCallbacks(),
+		)
+		const standalone = (executor as unknown as { standaloneManager: StandaloneTerminalManager }).standaloneManager
+		const command: BackgroundCommand = {
+			id: "detached-1",
+			command: "watch",
+			startTime: Date.now(),
+			status: "running",
+			origin: "foreground",
+			cancellationOwner: "task",
+			logFilePath: "C:\\Temp\\detached-1.log",
+			lineCount: 0,
+			process: processPromise,
+		}
+		vi.spyOn(standalone, "getRunningBackgroundCommands").mockImplementation((owner) =>
+			command.status === "running" && (!owner || owner === command.cancellationOwner) ? [command] : [],
+		)
+		vi.spyOn(standalone, "cancelBackgroundCommand").mockImplementation(() => {
+			if (command.status !== "running") return false
+			command.status = "cancelled"
+			process.terminate()
+			return true
+		})
+		const internals = executor as unknown as {
+			currentProcess: TerminalProcessResultPromise | null
+			processes: Map<string, TerminalProcessResultPromise>
+			cancellationOwners: Map<string, "explicit" | "task">
+		}
+		internals.currentProcess = processPromise
+		internals.processes.set(command.id, processPromise)
+		internals.cancellationOwners.set(command.id, "task")
+
+		assert.equal(executor.hasTaskOwnedCommand(), true)
+		assert.equal(await executor.cancelTaskOwnedCommands(), true)
+		assert.equal(command.status, "cancelled")
+		assert.equal(process.terminate.mock.calls.length, 1)
+		assert.equal(await executor.cancelTaskOwnedCommands(), false)
+		assert.equal(process.terminate.mock.calls.length, 1)
+	})
+
+	it("keeps cancellation terminal when the process reports an error", async () => {
+		const process = new FakeTerminalProcess()
+		const processPromise = process.asResultPromise()
+		const terminalManager = createTerminalManager()
+		vi.mocked(terminalManager.getOrCreateTerminal).mockResolvedValue({
+			id: 1,
+			terminal: {
+				dispose: vi.fn(),
+				hide: vi.fn(),
+				name: "Foreground terminal",
+				processId: Promise.resolve(1),
+				sendText: vi.fn(),
+				show: vi.fn(),
+			},
+			busy: false,
+			lastActive: Date.now(),
+			lastCommand: "",
+		})
+		vi.mocked(terminalManager.runCommand).mockReturnValue(processPromise)
+		const updateCommandActivity = vi.fn()
+		const updateClineMessage = vi.fn(async () => undefined)
+		const executor = new CommandExecutor(
+			{
+				cwd: "C:\\workspace",
+				taskId: "task-1",
+				terminalExecutionMode: "vscodeTerminal",
+				terminalManager,
+				ulid: "task-ulid",
+			},
+			{
+				...createCallbacks(),
+				getClineMessages: () => [{ ask: "command", text: "watch", ts: 77 }],
+				updateClineMessage,
+				updateCommandActivity,
+			},
+		)
+
+		const execution = executor.execute("watch", undefined, { commandTs: 77 })
+		await vi.waitFor(() => expect(executor.hasTaskOwnedCommand()).toBe(true))
+		expect(await executor.cancelCommand("command_77_1")).toBe(true)
+		process.emit("error", new Error("terminated"))
+		process.continue()
+		await execution
+
+		expect(updateCommandActivity).toHaveBeenCalledWith("command_77_1", expect.objectContaining({ status: "cancelled" }))
+		expect(updateCommandActivity).not.toHaveBeenCalledWith("command_77_1", expect.objectContaining({ status: "failed" }))
+		expect(updateClineMessage).toHaveBeenCalledWith(0, { commandStatus: "cancelled" })
+		expect(updateClineMessage).not.toHaveBeenCalledWith(0, expect.objectContaining({ commandStatus: "failed" }))
 	})
 })

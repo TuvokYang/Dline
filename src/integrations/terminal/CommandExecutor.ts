@@ -20,6 +20,7 @@ import { isCommandCompletionSuccessful } from "./command-completion"
 import { StandaloneTerminalManager } from "./standalone/StandaloneTerminalManager"
 import type {
 	BackgroundCommand,
+	CommandCancellationOwner,
 	CommandExecutionOptions,
 	CommandExecutionOutcome,
 	CommandExecutorCallbacks,
@@ -47,10 +48,9 @@ export class CommandExecutor {
 	// Track the currently executing foreground process for cancellation
 	private currentProcess: TerminalProcessResultPromise | null = null
 	private readonly processes = new Map<string, TerminalProcessResultPromise>()
+	private readonly cancellationOwners = new Map<string, CommandCancellationOwner>()
 	private readonly cancelledActivityIds = new Set<string>()
 
-	// Flag to track if the current command was cancelled externally
-	private wasCancelledExternally = false
 	private nextActivityNumber = 1
 
 	// Track shell integration warnings to determine when to show background terminal suggestion
@@ -127,8 +127,10 @@ export class CommandExecutor {
 		}
 		const process = manager.runCommand(terminalInfo, command)
 		const activityId = `command_${options?.commandTs ?? Date.now()}_${this.nextActivityNumber++}`
+		const cancellationOwner: CommandCancellationOwner = options?.startInBackground ? "explicit" : "task"
 		let activityLineCount = 0
 		this.processes.set(activityId, process)
+		this.cancellationOwners.set(activityId, cancellationOwner)
 		if (options?.commandTs) {
 			const messages = this.callbacks.getClineMessages() as Array<{ ts?: number }>
 			const commandIndex = messages.findIndex((message) => message.ts === options.commandTs)
@@ -138,17 +140,27 @@ export class CommandExecutor {
 			activityId,
 			command,
 			executionMode: options?.startInBackground ? "background" : "foreground",
+			cancellationOwner,
 			cancel: async () => {
 				await this.cancelCommand(activityId)
 			},
 		})
 
-		// Reset cancellation flag and track the current process
-		this.wasCancelledExternally = false
+		const markCommandMessageCancelled = (): void => {
+			if (!options?.commandTs) return
+			const messages = this.callbacks.getClineMessages() as Array<{ ts?: number }>
+			const commandIndex = messages.findIndex((message) => message.ts === options.commandTs)
+			if (commandIndex !== -1) {
+				void this.callbacks.updateClineMessage(commandIndex, { commandStatus: "cancelled" })
+			}
+		}
+
+		// Track the current foreground process until completion or background handoff.
 		this.currentProcess = process
 		const clearCurrentProcess = () => {
 			if (this.currentProcess === process) this.currentProcess = null
 			this.processes.delete(activityId)
+			this.cancellationOwners.delete(activityId)
 		}
 		process.once("completed", clearCurrentProcess)
 		process.once("error", clearCurrentProcess)
@@ -167,21 +179,17 @@ export class CommandExecutor {
 							: undefined,
 				lineCount: activityLineCount,
 			})
-			if (options?.commandTs && cancelled) {
-				const messages = this.callbacks.getClineMessages() as Array<{ ts?: number }>
-				const commandIndex = messages.findIndex((message) => message.ts === options.commandTs)
-				if (commandIndex !== -1) {
-					void this.callbacks.updateClineMessage(commandIndex, { commandStatus: "cancelled" })
-				}
-			}
+			if (cancelled) markCommandMessageCancelled()
 		})
 		process.once("error", (error: Error) => {
+			const cancelled = this.cancelledActivityIds.has(activityId)
 			this.callbacks.updateCommandActivity?.(activityId, {
-				status: "failed",
-				latestEvent: "Command failed",
-				error: error.message,
+				status: cancelled ? "cancelled" : "failed",
+				latestEvent: cancelled ? "Cancelled by user" : "Command failed",
+				error: cancelled ? undefined : error.message,
 				lineCount: activityLineCount,
 			})
+			if (cancelled) markCommandMessageCancelled()
 		})
 
 		// Use shared orchestration logic
@@ -189,6 +197,7 @@ export class CommandExecutor {
 		let backgroundCommand: BackgroundCommand | undefined
 		const result = await orchestrateCommandExecution(process, manager, this.callbacks, {
 			activityId,
+			isCancellationRequested: () => this.cancelledActivityIds.has(activityId),
 			command,
 			timeoutSeconds,
 			suppressUserInteraction: options?.suppressUserInteraction,
@@ -217,6 +226,10 @@ export class CommandExecutor {
 							command,
 							activityId,
 							existingOutput,
+							{
+								origin: options?.startInBackground ? "explicit_background" : "foreground",
+								cancellationOwner,
+							},
 							{
 								onOutputLine: (line) => {
 									activityLineCount++
@@ -262,7 +275,7 @@ export class CommandExecutor {
 
 		// If the command was cancelled externally (via cancel button), return a clear cancellation message
 		// This ensures the AI agent knows the command was cancelled by the user
-		if (this.wasCancelledExternally || this.cancelledActivityIds.delete(activityId)) {
+		if (this.cancelledActivityIds.delete(activityId)) {
 			const outputSoFar =
 				result.outputLines.length > 0
 					? `\nOutput captured before cancellation:\n${manager.processOutput(result.outputLines)}`
@@ -282,13 +295,25 @@ export class CommandExecutor {
 	/** Cancel exactly one command by its stable activity identity. */
 	async cancelCommand(activityId: string): Promise<boolean> {
 		const process = this.processes.get(activityId)
-		if (!process?.terminate) return false
+		if (!process?.terminate || !this.markCancellationRequested(activityId)) return false
+		const background = this.standaloneManager.getBackgroundCommand(activityId)
+		if (background?.status === "running") {
+			if (this.standaloneManager.cancelBackgroundCommand(activityId)) return true
+			this.cancelledActivityIds.delete(activityId)
+			return false
+		}
+		await Promise.resolve(process.terminate())
+		return true
+	}
+
+	/** Mark one cancellation request exactly once across every command control surface. */
+	private markCancellationRequested(activityId: string): boolean {
+		if (this.cancelledActivityIds.has(activityId)) return false
 		this.cancelledActivityIds.add(activityId)
 		this.callbacks.updateCommandActivity?.(activityId, {
 			status: "cancelling",
 			latestEvent: "Cancellation requested",
 		})
-		await Promise.resolve(process.terminate())
 		return true
 	}
 
@@ -302,25 +327,43 @@ export class CommandExecutor {
 	 * @returns true if any commands were cancelled, false otherwise
 	 */
 	async cancelBackgroundCommand(): Promise<boolean> {
+		return this.cancelCommands()
+	}
+
+	/** Cancel only foreground work owned by the Task lifecycle. */
+	async cancelTaskOwnedCommands(): Promise<boolean> {
+		return this.cancelCommands("task")
+	}
+
+	/** Cancel commands matching one lifecycle owner, or all commands for explicit user cancellation. */
+	private async cancelCommands(cancellationOwner?: CommandCancellationOwner): Promise<boolean> {
 		let cancelled = false
 
-		// 1. Cancel all detached background commands
-		const runningCommands = this.standaloneManager.getRunningBackgroundCommands()
+		// 1. Cancel detached background commands owned by this lifecycle.
+		const runningCommands = this.standaloneManager.getRunningBackgroundCommands(cancellationOwner)
+		const detachedActivityIds = new Set<string>()
 		for (const cmd of runningCommands) {
+			if (!this.markCancellationRequested(cmd.id)) continue
 			if (this.standaloneManager.cancelBackgroundCommand(cmd.id)) {
+				detachedActivityIds.add(cmd.id)
 				cancelled = true
 				Logger.info(`Cancelled background command: ${cmd.command}`)
+			} else {
+				this.cancelledActivityIds.delete(cmd.id)
 			}
 		}
 
-		// 2. Cancel the current foreground process (if any)
-		if (this.currentProcess && typeof (this.currentProcess as any).terminate === "function") {
-			// Set flag so execute() knows the command was cancelled externally
-			this.wasCancelledExternally = true
-			await Promise.resolve((this.currentProcess as any).terminate())
+		// 2. Cancel the current foreground process when it was not already terminated as detached work.
+		const currentActivity = [...this.processes.entries()].find(([, process]) => process === this.currentProcess)
+		const currentOwner = currentActivity ? this.cancellationOwners.get(currentActivity[0]) : undefined
+		if (currentActivity && detachedActivityIds.has(currentActivity[0])) {
 			this.currentProcess = null
-			cancelled = true
-			Logger.info("Cancelled foreground command")
+		} else if (currentActivity && (!cancellationOwner || currentOwner === cancellationOwner)) {
+			if (await this.cancelCommand(currentActivity[0])) {
+				this.currentProcess = null
+				cancelled = true
+				Logger.info("Cancelled foreground command")
+			}
 		}
 
 		// 3. Update UI state and notify user by modifying existing message
@@ -347,6 +390,13 @@ export class CommandExecutor {
 		}
 
 		return cancelled
+	}
+
+	/** Return whether any active command is owned by the Task lifecycle. */
+	hasTaskOwnedCommand(): boolean {
+		if (this.standaloneManager.getRunningBackgroundCommands("task").length > 0) return true
+		const currentActivity = [...this.processes.entries()].find(([, process]) => process === this.currentProcess)
+		return Boolean(currentActivity && this.cancellationOwners.get(currentActivity[0]) === "task")
 	}
 
 	/**

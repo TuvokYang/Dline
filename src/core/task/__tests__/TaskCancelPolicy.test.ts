@@ -7,7 +7,7 @@ const IDLE_ACTIVITY: TaskCancelActivity = {
 	hasActiveHook: false,
 	isStreaming: false,
 	isWaitingForFirstChunk: false,
-	hasActiveBackgroundCommand: false,
+	hasTaskOwnedCommand: false,
 }
 
 /** Create one runtime aggregate with an optional active interaction. */
@@ -57,7 +57,7 @@ describe("TaskCancelPolicy", () => {
 			shouldRunTaskCancelHook({
 				runtime: runtime(TaskPhase.PAUSED, "resume"),
 				source: "user",
-				activity: { ...IDLE_ACTIVITY, hasActiveBackgroundCommand: true },
+				activity: { ...IDLE_ACTIVITY, hasTaskOwnedCommand: true },
 			}),
 		).toBe(true)
 	})

@@ -1,13 +1,11 @@
 import type { ClineAssistantToolUseBlock } from "@/shared/messages/content"
 import { BlockPhase } from "../BlockPhaseMachine"
+import { getInteraction } from "../interaction/InteractionRegistry"
 import { TaskPhase } from "../TaskPhase"
 import { hydrateSnapshot, type TaskSnapshot, TaskSnapshotIdentityError } from "../TaskSnapshot"
 import type { ResumeDiagnostic, ResumeInput, ResumeResult } from "./ResumeInput"
 import { selectAwaitingResumeEntry } from "./ResumeReducer"
-
-interface TailFacts {
-	answeredDlineTids: Set<string>
-}
+import { foldResumeTail } from "./ResumeTailFold"
 
 /** Repair only the synthetic resume anchor written one slot beyond the persisted history. */
 function repairSyntheticResumeAnchor(snapshot: TaskSnapshot, input: ResumeInput): boolean {
@@ -130,18 +128,44 @@ function restorePreservedInteractionPhase(snapshot: TaskSnapshot): void {
 	snapshot.cancellation = undefined
 }
 
-/** Extract persisted facts that carry their own canonical identity. */
-function extractFacts(input: ResumeInput): TailFacts {
-	const answeredDlineTids = new Set<string>()
-	for (const message of input.apiTail) {
-		if (message.role !== "user" || !Array.isArray(message.content)) continue
-		for (const block of message.content) {
-			if (block.type === "tool_result" && typeof block.dline_tid === "string" && block.dline_tid) {
-				answeredDlineTids.add(block.dline_tid)
-			}
+/** Rebind one interrupted opening interaction only when its persisted ask carries exact causal identity. */
+function reconcileOpeningInteraction(snapshot: TaskSnapshot, input: ResumeInput): ResumeDiagnostic | undefined {
+	const interaction = snapshot.interaction
+	if (!interaction || interaction.status !== "opening" || !snapshot.anchor) return undefined
+
+	const expectedAsk = getInteraction(interaction.kind).taskAsk
+	const matchingAsks = input.uiTail.filter(
+		(message) => message.type === "ask" && message.ask === expectedAsk && message.interactionId === interaction.interactionId,
+	)
+	if (matchingAsks.length === 1) {
+		const messageTs = matchingAsks[0]?.ts
+		if (messageTs === undefined) return undefined
+		snapshot.interaction = {
+			...interaction,
+			status: "awaiting",
+			anchor: { messageTs, messageType: "ask" },
 		}
+		snapshot.anchor = {
+			...snapshot.anchor,
+			uiMessageTs: messageTs,
+			turnId: interaction.turnId,
+			interactionId: interaction.interactionId,
+		}
+		return undefined
 	}
-	return { answeredDlineTids }
+
+	const diagnostic: ResumeDiagnostic = {
+		code: "missing_interaction_anchor",
+		interactionId: interaction.interactionId,
+	}
+	snapshot.phase = TaskPhase.PAUSED
+	snapshot.interaction = undefined
+	snapshot.cancellation = undefined
+	snapshot.anchor = {
+		apiIndex: snapshot.anchor.apiIndex,
+		...(snapshot.anchor.turnId ? { turnId: snapshot.anchor.turnId } : {}),
+	}
+	return diagnostic
 }
 
 /** Reconcile a strict snapshot with only its persisted UI/API tail. */
@@ -184,14 +208,14 @@ export function reconcileResume(input: ResumeInput): ResumeResult {
 		}
 	}
 
-	const facts = extractFacts(input)
 	restoreLegacyCompletionInteraction(next)
 	restorePreservedInteractionPhase(next)
-	if (next.interaction?.status === "opening") {
+	const openingDiagnostic = reconcileOpeningInteraction(next, input)
+	if (openingDiagnostic) {
 		return {
 			snapshot: next,
-			entry: { type: "read_only_failure" },
-			diagnostics: [{ code: "missing_interaction_anchor", interactionId: next.interaction.interactionId }],
+			entry: { type: "show_resume_interaction" },
+			diagnostics: [openingDiagnostic],
 		}
 	}
 
@@ -200,6 +224,16 @@ export function reconcileResume(input: ResumeInput): ResumeResult {
 	}
 
 	reconcileAssistantApiIndex(next, input)
+	const folded = foldResumeTail({
+		snapshot: next,
+		apiTail: input.apiTail,
+		apiTailStartIndex: input.apiTailStartIndex ?? input.snapshot.apiIndex + 1,
+	})
+	if (folded.diagnostics.length > 0) {
+		return { snapshot: folded.snapshot, entry: { type: "read_only_failure" }, diagnostics: folded.diagnostics }
+	}
+	next = folded.snapshot
+	const facts = { answeredDlineTids: folded.answeredDlineTids }
 
 	if (next.phase === TaskPhase.CANCELLING || next.phase === TaskPhase.PAUSED) {
 		next.phase = TaskPhase.PAUSED
@@ -242,5 +276,7 @@ export function reconcileResume(input: ResumeInput): ResumeResult {
 		}
 	}
 
-	return { snapshot: next, entry: { type: "continue_api_turn", apiIndex: next.anchor.apiIndex }, diagnostics: [] }
+	next.phase = TaskPhase.PAUSED
+	next.cancellation = undefined
+	return { snapshot: next, entry: { type: "show_resume_interaction" }, diagnostics: [] }
 }

@@ -3,12 +3,20 @@ import type { ClineStorageMessage } from "@shared/messages"
 import type { InteractionDraft } from "../interaction/InteractionResponse"
 import type { TaskSnapshot, TaskSnapshotIdentityField } from "../TaskSnapshot"
 
+/** Select only UI messages carrying the snapshot's canonical interaction identity. */
+export function selectResumeUiTail(snapshot: TaskSnapshot, messages: readonly ClineMessage[]): ClineMessage[] {
+	const interactionId = snapshot.interaction?.interactionId ?? snapshot.anchor?.interactionId
+	if (!interactionId) return []
+	return messages.filter((message) => message.interactionId === interactionId)
+}
+
 /** Immutable inputs used by the only message-derived resume boundary. */
 export interface ResumeInput {
 	taskId: string
 	snapshot: TaskSnapshot
 	uiTail: readonly ClineMessage[]
 	apiTail: readonly ClineStorageMessage[]
+	apiTailStartIndex?: number
 	apiHistoryLength: number
 }
 
@@ -31,6 +39,12 @@ export type ResumeDiagnostic =
 	| { code: "missing_interaction_anchor"; interactionId: string }
 	| { code: "missing_interaction_continuation"; interactionId: string }
 	| { code: "unmatched_tool_result"; dlineTid: string }
+	| {
+			code: "tool_result_identity_mismatch"
+			dlineTid: string
+			expectedFunctionId: string
+			actualFunctionId: string
+	  }
 
 /** Complete pure result consumed by the resume coordinator. */
 export interface ResumeResult {

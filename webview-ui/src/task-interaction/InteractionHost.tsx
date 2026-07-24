@@ -1,5 +1,5 @@
 import type { ClineMessage, TaskViewState } from "@shared/ExtensionMessage"
-import { EmptyRequest } from "@shared/proto/dline/common"
+import { EmptyRequest, StringRequest } from "@shared/proto/dline/common"
 import { useState } from "react"
 import { TaskServiceClient } from "@/services/grpc-client"
 import { FooterActions } from "./FooterActions"
@@ -38,10 +38,12 @@ export interface InteractionHostProps {
 
 const EMPTY_DRAFT: InteractionDraft = { text: "", images: [], files: [], activeQuote: null }
 
-async function dispatchTaskAction(action: "cancel"): Promise<void> {
+async function dispatchTaskAction(action: "cancel" | "resume", taskId: string): Promise<void> {
 	if (action === "cancel") {
 		await TaskServiceClient.cancelTask(EmptyRequest.create({}))
+		return
 	}
+	await TaskServiceClient.showTaskWithId(StringRequest.create({ value: taskId }))
 }
 
 /** Bind one backend interaction projection to its exact ask presentation anchor. */
@@ -60,6 +62,7 @@ export function InteractionHost({
 		: undefined
 	const presentationKind = interaction?.presentationKind
 	const supported = presentationKind ? isPresentationKind(presentationKind) : false
+	const taskActionDispatcher = (action: "cancel" | "resume") => dispatchTaskAction(action, view.taskId)
 
 	return (
 		<section>
@@ -75,7 +78,16 @@ export function InteractionHost({
 					)
 				})}
 			{interaction && (!anchor || !supported) ? (
-				<div role="alert">Interaction is out of sync</div>
+				<>
+					<div role="alert">Interaction is out of sync</div>
+					<FooterActions
+						dispatch={dispatch}
+						dispatchTaskAction={taskActionDispatcher}
+						draft={draft}
+						onDraftAccepted={onDraftAccepted}
+						view={view}
+					/>
+				</>
 			) : anchor && presentationKind && isPresentationKind(presentationKind) ? (
 				<>
 					{showTimeline
@@ -83,7 +95,7 @@ export function InteractionHost({
 						: null}
 					<FooterActions
 						dispatch={dispatch}
-						dispatchTaskAction={dispatchTaskAction}
+						dispatchTaskAction={taskActionDispatcher}
 						draft={draft}
 						onDraftAccepted={onDraftAccepted}
 						selection={{ values: selection }}
@@ -93,7 +105,7 @@ export function InteractionHost({
 			) : (
 				<FooterActions
 					dispatch={dispatch}
-					dispatchTaskAction={dispatchTaskAction}
+					dispatchTaskAction={taskActionDispatcher}
 					draft={draft}
 					onDraftAccepted={onDraftAccepted}
 					view={view}

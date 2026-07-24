@@ -202,6 +202,45 @@ describe("InteractionCoordinator", () => {
 		expect(runtime.getState()).toMatchObject({ phase: TaskPhase.STREAMING, interaction: undefined })
 	})
 
+	it("commits a live resume response even when no waiter owns the interaction", async () => {
+		const startApi = vi.fn(async () => undefined)
+		const runtime = new TaskRuntime(
+			{
+				...createTaskRuntimeState({
+					taskId: "task-1",
+					phase: TaskPhase.PAUSED,
+					revision: 4,
+					anchor: { apiIndex: 2, turnId: "resume-turn", interactionId: "resume-1" },
+				}),
+				interaction: {
+					taskId: "task-1",
+					turnId: "resume-turn",
+					interactionId: "resume-1",
+					kind: "resume",
+					status: "awaiting",
+					createdRevision: 3,
+					anchor: { messageTs: 100, messageType: "ask" },
+				},
+			},
+			createPorts({ startApi }),
+		)
+		const coordinator = new InteractionCoordinator(runtime)
+
+		await coordinator.respond({
+			taskId: "task-1",
+			turnId: "resume-turn",
+			interactionId: "resume-1",
+			actionId: "resume",
+			stateRevision: runtime.getState().revision,
+			draft: { text: "Continue", images: [], files: [] },
+		})
+		await vi.waitFor(() => {
+			expect(runtime.getState().phase).toBe(TaskPhase.RESUMING)
+			expect(runtime.getState().interaction).toBeUndefined()
+			expect(startApi).toHaveBeenCalledOnce()
+		})
+	})
+
 	it("takes over one hydrated resume interaction and commits its causal response", async () => {
 		const runtime = new TaskRuntime(
 			{

@@ -16,6 +16,8 @@ function createCommand(id: string): BackgroundCommand {
 		command: "npm test",
 		startTime: Date.now(),
 		status: "completed",
+		origin: "explicit_background",
+		cancellationOwner: "explicit",
 		logFilePath: "logs/command.log",
 		lineCount: 1,
 		injectionState: "pending",

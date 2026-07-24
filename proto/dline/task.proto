@@ -249,6 +249,22 @@ message TaskActivityMetrics {
   int64 line_count = 8;
 }
 
+message TaskActivityEvent {
+  int64 sequence = 1;
+  int64 timestamp = 2;
+  string kind = 3;
+  optional string phase = 4;
+  optional string text = 5;
+  optional string tool_call_id = 6;
+  optional string tool_name = 7;
+  optional string tool_status = 8;
+  optional string summary = 9;
+  optional int64 duration_ms = 10;
+  optional string error = 11;
+  optional string status = 12;
+  optional TaskActivityMetrics metrics = 13;
+}
+
 message TaskActivity {
   string activity_id = 1;
   string task_id = 2;
@@ -267,6 +283,9 @@ message TaskActivity {
   optional string parent_activity_id = 15;
   optional TaskActivityMetrics metrics = 16;
   optional string log_path = 17;
+  bool cancellable = 18;
+  int32 schema_version = 19;
+  repeated TaskActivityEvent events = 20;
 }
 
 message TaskActivityUpdate {

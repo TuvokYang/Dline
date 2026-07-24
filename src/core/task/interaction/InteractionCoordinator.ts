@@ -38,7 +38,20 @@ export interface InteractionOutcome {
 
 /** Coordinates one active interaction between runtime events and a handler waiter. */
 export class InteractionCoordinator {
+	private readonly waitingInteractionIds = new Set<string>()
+
 	constructor(private readonly runtime: TaskRuntime) {}
+
+	/** Dispatch one response and synchronously consume live resume continuation when no waiter owns it. */
+	async respond(response: InteractionResponse): Promise<TaskDispatchResult> {
+		const result = await this.runtime.dispatch({ type: "INTERACTION_RESPONDED", response })
+		if (!result.accepted || this.waitingInteractionIds.has(response.interactionId)) return result
+		const interaction = result.next.interaction
+		if (interaction?.kind === "resume" && interaction.status === "resolving") {
+			await this.commitResume(interaction.interactionId, response)
+		}
+		return result
+	}
 
 	/** Open or strictly take over one interaction and wait for its causal response. */
 	async open(request: OpenInteractionRequest): Promise<InteractionOutcome> {
@@ -178,6 +191,7 @@ export class InteractionCoordinator {
 		if (interaction.status !== "awaiting") {
 			throw new Error("Hydrated interaction is not awaiting the requested continuation")
 		}
+		this.waitingInteractionIds.add(interactionId)
 		let resolveResponse: ((response: InteractionResponse) => void) | undefined
 		const responsePromise = new Promise<InteractionResponse>((resolve) => {
 			resolveResponse = resolve
@@ -188,12 +202,14 @@ export class InteractionCoordinator {
 		try {
 			return await responsePromise
 		} finally {
+			this.waitingInteractionIds.delete(interactionId)
 			unsubscribe()
 		}
 	}
 
 	/** Dispatch an opening event and wait for its causally matching accepted response. */
 	private async waitForResponse(interactionId: string, openingEvent: TaskEvent): Promise<InteractionResponse> {
+		this.waitingInteractionIds.add(interactionId)
 		let resolveResponse: ((response: InteractionResponse) => void) | undefined
 		const responsePromise = new Promise<InteractionResponse>((resolve) => {
 			resolveResponse = resolve
@@ -208,6 +224,7 @@ export class InteractionCoordinator {
 			}
 			return await responsePromise
 		} finally {
+			this.waitingInteractionIds.delete(interactionId)
 			unsubscribe()
 		}
 	}

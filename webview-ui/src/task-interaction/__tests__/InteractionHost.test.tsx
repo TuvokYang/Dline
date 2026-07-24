@@ -158,10 +158,42 @@ describe("InteractionHost", () => {
 		expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({ selection: { values: ["1"] } }))
 	})
 
-	it("reports synchronization failure when the ask anchor is missing", () => {
-		render(<InteractionHost dispatch={vi.fn()} messages={[SAY]} view={taskView()} />)
+	it("reports synchronization failure while retaining backend recovery actions when the ask anchor is missing", () => {
+		const view = taskView()
+		view.footer.actions = [
+			{
+				type: "resume",
+				label: "Resume",
+				appearance: "primary",
+				enabled: true,
+				payloadPolicy: "none",
+				dispatchTarget: "task",
+			},
+		]
+		render(<InteractionHost dispatch={vi.fn()} messages={[SAY]} view={view} />)
 
 		expect(screen.getByRole("alert")).toHaveTextContent("Interaction is out of sync")
-		expect(screen.queryByRole("button")).toBeNull()
+		expect(screen.getByRole("button", { name: "Resume" })).toBeVisible()
+	})
+
+	it("retains safe footer recovery when the presentation renderer is unsupported", () => {
+		const view = taskView()
+		if (!view.activeInteraction) throw new Error("Expected active interaction")
+		view.activeInteraction.presentationKind = "unsupported"
+		view.footer.actions = [
+			{
+				type: "resume",
+				label: "Resume",
+				appearance: "primary",
+				enabled: true,
+				payloadPolicy: "none",
+				dispatchTarget: "task",
+			},
+		]
+
+		render(<InteractionHost dispatch={vi.fn()} messages={[ASK]} view={view} />)
+
+		expect(screen.getByRole("alert")).toHaveTextContent("Interaction is out of sync")
+		expect(screen.getByRole("button", { name: "Resume" })).toBeVisible()
 	})
 })

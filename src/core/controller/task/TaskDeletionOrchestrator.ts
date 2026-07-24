@@ -1,6 +1,7 @@
+import path from "node:path"
 import fs from "fs/promises"
 import { OrchestratorController } from "@/core/orchestrator/OrchestratorController"
-import { getDlineCheckpointsDir, getDlineTasksDir } from "@/core/storage/disk"
+import { GlobalFileNames, getDlineCheckpointsDir, getDlineTasksDir } from "@/core/storage/disk"
 import { WebviewProviderRegistry } from "@/core/webview/WebviewProviderRegistry"
 import { Logger } from "@/shared/services/Logger"
 import { fileExistsAtPath } from "../../../utils/fs"
@@ -122,6 +123,7 @@ export class TaskDeletionOrchestrator {
 				taskPaths.uiMessagesFilePath,
 				taskPaths.contextHistoryFilePath,
 				taskPaths.taskMetadataFilePath,
+				path.join(taskPaths.taskDirPath, GlobalFileNames.taskActivities),
 			]
 			for (const fp of filePaths) {
 				try {

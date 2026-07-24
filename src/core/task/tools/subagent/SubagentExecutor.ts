@@ -13,12 +13,25 @@ export interface SubagentRunStats {
 	contextUsagePercentage: number
 }
 
+export interface SubagentProgressEvent {
+	kind: "thinking" | "assistant_message" | "tool_call" | "tool_result"
+	phase?: "delta" | "final"
+	text?: string
+	toolCallId?: string
+	toolName?: string
+	toolStatus?: "started" | "completed" | "failed"
+	summary?: string
+	durationMs?: number
+	error?: string
+}
+
 export interface SubagentProgressUpdate {
 	stats?: SubagentRunStats
 	latestToolCall?: string
 	status?: "running" | "completed" | "failed" | "cancelled"
 	result?: string
 	error?: string
+	event?: SubagentProgressEvent
 }
 
 export interface SubagentExecResult {
