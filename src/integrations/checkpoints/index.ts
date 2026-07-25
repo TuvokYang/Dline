@@ -20,6 +20,7 @@ import { Logger } from "@/shared/services/Logger"
 import { retryWithBackoff } from "@/utils/retry"
 import { MessageStateHandler } from "../../core/task/message-state"
 import { TaskState } from "../../core/task/TaskState"
+import type { ClineContent } from "../../shared/messages/content"
 import { ICheckpointManager } from "./types"
 
 // Type definitions for better code organization
@@ -70,6 +71,10 @@ interface CheckpointRestoreStateUpdate {
 	conversationHistoryDeletedRange?: [number, number]
 	checkpointManagerErrorMessage?: string
 }
+
+type WorkspaceRestoreResult =
+	| { readonly status: "restored"; readonly checkpointHash: string }
+	| { readonly status: "failed"; readonly error: string }
 
 /**
  * TaskCheckpointManager
@@ -269,114 +274,57 @@ export class TaskCheckpointManager implements ICheckpointManager {
 			// Find the last message before messageIndex that has a lastCheckpointHash
 			const lastHashIndex = findLastIndex(clineMessages.slice(0, messageIndex), (m) => m.lastCheckpointHash !== undefined)
 			const message = clineMessages[messageIndex]
-			const lastMessageWithHash = clineMessages[lastHashIndex]
+			const lastMessageWithHash = lastHashIndex >= 0 ? clineMessages[lastHashIndex] : undefined
 
 			if (!message) {
 				Logger.error(`[TaskCheckpointManager] Message not found for timestamp ${messageTs} in task ${this.task.taskId}`)
 				return {}
 			}
 
-			let didWorkspaceRestoreFail = false
-
-			switch (restoreType) {
-				case "task":
-					break
-				case "taskAndWorkspace":
-				case "workspace":
-					if (!this.config.enableCheckpoints) {
-						const errorMessage = "Checkpoints are disabled in settings."
-						Logger.error(`[TaskCheckpointManager] ${errorMessage} for task ${this.task.taskId}`)
-						HostProvider.window.showMessage({
-							type: ShowMessageType.ERROR,
-							message: errorMessage,
-						})
-						didWorkspaceRestoreFail = true
-						break
-					}
-
-					if (!this.state.checkpointTracker) {
-						this.state.checkpointTracker = await this.checkpointTrackerCheckAndInit()
-					}
-					if (message.lastCheckpointHash && this.state.checkpointTracker) {
-						try {
-							await this.state.checkpointTracker.resetHead(message.lastCheckpointHash)
-						} catch (error) {
-							const errorMessage = error instanceof Error ? error.message : "Unknown error"
-							Logger.error(
-								`[TaskCheckpointManager] Failed to restore checkpoint for task ${this.task.taskId}:`,
-								errorMessage,
-							)
-							HostProvider.window.showMessage({
-								type: ShowMessageType.ERROR,
-								message: `Failed to restore checkpoint: ${errorMessage}`,
-							})
-							didWorkspaceRestoreFail = true
-						}
-					} else if (offset && lastMessageWithHash.lastCheckpointHash && this.state.checkpointTracker) {
-						try {
-							await this.state.checkpointTracker.resetHead(lastMessageWithHash.lastCheckpointHash)
-						} catch (error) {
-							const errorMessage = error instanceof Error ? error.message : "Unknown error"
-							Logger.error(
-								`[TaskCheckpointManager] Failed to restore offset checkpoint for task ${this.task.taskId}:`,
-								errorMessage,
-							)
-							HostProvider.window.showMessage({
-								type: ShowMessageType.ERROR,
-								message: `Failed to restore offset checkpoint: ${errorMessage}`,
-							})
-							didWorkspaceRestoreFail = true
-						}
-					} else if (!offset && lastMessageWithHash.lastCheckpointHash && this.state.checkpointTracker) {
-						// Fallback: restore to most recent checkpoint when target message has no checkpoint hash
-						Logger.warn(
-							`[TaskCheckpointManager] Message ${messageTs} has no checkpoint hash, falling back to previous checkpoint for task ${this.task.taskId}`,
-						)
-						try {
-							await this.state.checkpointTracker.resetHead(lastMessageWithHash.lastCheckpointHash)
-						} catch (error) {
-							const errorMessage = error instanceof Error ? error.message : "Unknown error"
-							Logger.error(
-								`[TaskCheckpointManager] Failed to restore fallback checkpoint for task ${this.task.taskId}:`,
-								errorMessage,
-							)
-							HostProvider.window.showMessage({
-								type: ShowMessageType.ERROR,
-								message: `Failed to restore checkpoint: ${errorMessage}`,
-							})
-							didWorkspaceRestoreFail = true
-						}
-					} else {
-						const errorMessage = "Failed to restore checkpoint: No valid checkpoint hash found"
-						Logger.error(`[TaskCheckpointManager] ${errorMessage} for task ${this.task.taskId}`)
-						HostProvider.window.showMessage({
-							type: ShowMessageType.ERROR,
-							message: errorMessage,
-						})
-						didWorkspaceRestoreFail = true
-					}
-					break
-			}
+			const workspaceRestoreResult =
+				restoreType === "task"
+					? undefined
+					: await this.restoreWorkspaceCheckpoint(message, lastMessageWithHash, messageTs, offset)
+			const workspaceRestoreError = workspaceRestoreResult?.status === "failed" ? workspaceRestoreResult.error : undefined
 
 			const checkpointManagerStateUpdate: CheckpointRestoreStateUpdate = {}
 
-			if (!didWorkspaceRestoreFail && restoreType !== "workspace") {
-				this.abortAndClearState()
-			}
+			const successfulRestoreType: ClineCheckpointRestore | undefined =
+				restoreType === "taskAndWorkspace"
+					? workspaceRestoreError
+						? "task"
+						: "taskAndWorkspace"
+					: restoreType === "workspace" && workspaceRestoreError
+						? undefined
+						: restoreType
 
-			if (!didWorkspaceRestoreFail) {
-				await this.handleSuccessfulRestore(restoreType, message, messageIndex, messageTs, editedText)
-
-				// Collect state updates
+			if (successfulRestoreType) {
+				if (successfulRestoreType !== "workspace") {
+					await this.restoreChatCheckpoint(
+						message,
+						messageIndex,
+						messageTs,
+						editedText,
+						successfulRestoreType === "taskAndWorkspace",
+					)
+				}
+				await this.finalizeSuccessfulRestore(
+					successfulRestoreType,
+					messageTs,
+					editedText,
+					workspaceRestoreResult?.status === "restored" ? workspaceRestoreResult.checkpointHash : undefined,
+				)
 				if (this.state.conversationHistoryDeletedRange !== undefined) {
 					checkpointManagerStateUpdate.conversationHistoryDeletedRange = this.state.conversationHistoryDeletedRange
 				}
 			} else {
 				sendRelinquishControlEvent(this.task.controller)
+			}
 
-				if (this.state.checkpointManagerErrorMessage !== undefined) {
-					checkpointManagerStateUpdate.checkpointManagerErrorMessage = this.state.checkpointManagerErrorMessage
-				}
+			if (workspaceRestoreError) {
+				checkpointManagerStateUpdate.checkpointManagerErrorMessage = workspaceRestoreError
+			} else if (this.state.checkpointManagerErrorMessage !== undefined) {
+				checkpointManagerStateUpdate.checkpointManagerErrorMessage = this.state.checkpointManagerErrorMessage
 			}
 
 			return checkpointManagerStateUpdate
@@ -615,6 +563,52 @@ export class TaskCheckpointManager implements ICheckpointManager {
 		}
 	}
 
+	private async restoreWorkspaceCheckpoint(
+		message: ClineMessage,
+		lastMessageWithHash: ClineMessage | undefined,
+		messageTs: number,
+		offset?: number,
+	): Promise<WorkspaceRestoreResult> {
+		if (!this.config.enableCheckpoints) {
+			const errorMessage = "Checkpoints are disabled in settings."
+			Logger.error(`[TaskCheckpointManager] ${errorMessage} for task ${this.task.taskId}`)
+			HostProvider.window.showMessage({ type: ShowMessageType.ERROR, message: errorMessage })
+			return { status: "failed", error: errorMessage }
+		}
+
+		if (!this.state.checkpointTracker) {
+			this.state.checkpointTracker = await this.checkpointTrackerCheckAndInit()
+		}
+
+		const checkpointHash = message.lastCheckpointHash ?? lastMessageWithHash?.lastCheckpointHash
+		if (!checkpointHash || !this.state.checkpointTracker) {
+			const errorMessage = "Failed to restore checkpoint: No valid checkpoint hash found"
+			Logger.error(`[TaskCheckpointManager] ${errorMessage} for task ${this.task.taskId}`)
+			HostProvider.window.showMessage({ type: ShowMessageType.ERROR, message: errorMessage })
+			return { status: "failed", error: errorMessage }
+		}
+
+		const usesFallback = message.lastCheckpointHash === undefined
+		if (usesFallback && !offset) {
+			Logger.warn(
+				`[TaskCheckpointManager] Message ${messageTs} has no checkpoint hash, falling back to previous checkpoint for task ${this.task.taskId}`,
+			)
+		}
+
+		try {
+			await this.state.checkpointTracker.resetHead(checkpointHash)
+			return { status: "restored", checkpointHash }
+		} catch (error) {
+			const errorMessage = error instanceof Error ? error.message : "Unknown error"
+			const isOffsetFallback = usesFallback && Boolean(offset)
+			const diagnosticPrefix = isOffsetFallback ? "Failed to restore offset checkpoint" : "Failed to restore checkpoint"
+			Logger.error(`[TaskCheckpointManager] ${diagnosticPrefix} for task ${this.task.taskId}:`, errorMessage)
+			const restoreError = `${diagnosticPrefix}: ${errorMessage}`
+			HostProvider.window.showMessage({ type: ShowMessageType.ERROR, message: restoreError })
+			return { status: "failed", error: restoreError }
+		}
+	}
+
 	/**
 	 * Synchronously abort all active operations and reset runtime state.
 	 *
@@ -637,98 +631,87 @@ export class TaskCheckpointManager implements ICheckpointManager {
 		this.taskState.didRespondToPlanAskBySwitchingMode = false
 	}
 
-	/**
-	 * Handles the successful restoration logic for different restore types
-	 */
-	private async handleSuccessfulRestore(
-		restoreType: ClineCheckpointRestore,
+	private async restoreChatCheckpoint(
 		message: ClineMessage,
 		messageIndex: number,
 		messageTs: number,
-		editedText?: string,
+		editedText: string | undefined,
+		workspaceRestored: boolean,
 	): Promise<void> {
-		// abortAndClearState() was already called by restoreCheckpoint.
-		// Runtime state is clean.  abort is still false so the task loop
-		// stays alive for the edited path.
+		this.abortAndClearState()
+		this.state.conversationHistoryDeletedRange = message.conversationHistoryDeletedRange
+		this.taskState.conversationHistoryDeletedRange = message.conversationHistoryDeletedRange
 
-		switch (restoreType) {
-			case "task":
-			case "taskAndWorkspace":
-				this.state.conversationHistoryDeletedRange = message.conversationHistoryDeletedRange
-				this.taskState.conversationHistoryDeletedRange = message.conversationHistoryDeletedRange
+		const apiConversation = this.services.messageStateHandler.apiConversation
+		const userMsgIdx = (message.conversationHistoryIndex ?? -1) + 1
 
-				const apiConversation = this.services.messageStateHandler.apiConversation
-				const userMsgIdx = (message.conversationHistoryIndex ?? -1) + 1
+		const keepCount = userMsgIdx + 1 // convIdx + 2 — keeps through the user message
+		await apiConversation?.truncateByLineNum(keepCount)
 
-				const keepCount = userMsgIdx + 1 // convIdx + 2 — keeps through the user message
-				await apiConversation?.truncateByLineNum(keepCount)
-
-				// Modify the user message text in-place when editing input,
-				// preserving tool_result blocks so the preceding assistant's
-				// tool_use stays paired.
-				if (editedText !== undefined && userMsgIdx >= 0 && apiConversation && userMsgIdx < apiConversation.count) {
-					const userMsg = apiConversation.getAt(userMsgIdx)
-					if (userMsg && userMsg.role === "user" && Array.isArray(userMsg.content)) {
-						const replaceInBlocks = (blocks: any[]) => {
-							for (const block of blocks) {
-								if (block.type === "text" && typeof block.text === "string") {
-									block.text = block.text.replace(
-										/<user_message>\n[\s\S]*?\n<\/user_message>/,
-										`<user_message>\n${editedText}\n</user_message>`,
-									)
-								}
-								if (block.type === "tool_result" && Array.isArray(block.content)) {
-									replaceInBlocks(block.content)
-								}
-							}
+		// Modify the user message text in-place when editing input,
+		// preserving tool_result blocks so the preceding assistant's
+		// tool_use stays paired.
+		if (editedText !== undefined && userMsgIdx >= 0 && apiConversation && userMsgIdx < apiConversation.count) {
+			const userMsg = apiConversation.getAt(userMsgIdx)
+			if (userMsg && userMsg.role === "user" && Array.isArray(userMsg.content)) {
+				const replaceInBlocks = (blocks: ClineContent[]): void => {
+					for (const block of blocks) {
+						if (block.type === "text") {
+							block.text = block.text.replace(
+								/<user_message>\n[\s\S]*?\n<\/user_message>/,
+								`<user_message>\n${editedText}\n</user_message>`,
+							)
 						}
-						replaceInBlocks(userMsg.content)
+						if (block.type === "tool_result" && Array.isArray(block.content)) {
+							replaceInBlocks(block.content)
+						}
 					}
 				}
-
-				// ── UI messages: truncate to the checkpoint position.
-				await this.services.messageStateHandler.uiMessage?.truncateByLineNum(messageIndex + 1)
-
-				// ── context history
-				const contextManager = new ContextManager()
-				await contextManager.truncateContextHistory(message.ts, await ensureTaskDirectoryExists(this.task.taskId))
-
-				// ── deleted api reqs metrics
-				const clineMessages = this.services.messageStateHandler.clineMessages
-				const deletedMessages = clineMessages.slice(messageIndex + 1)
-				const deletedApiReqsMetrics = getApiMetrics(combineApiRequests(combineCommandSequences(deletedMessages)))
-
-				if (restoreType === "task") {
-					const filesEditedAfterMessage = await this.services.fileContextTracker.detectFilesEditedAfterMessage(
-						messageTs,
-						deletedMessages,
-					)
-					if (filesEditedAfterMessage.length > 0) {
-						await this.services.fileContextTracker.storePendingFileContextWarning(filesEditedAfterMessage)
-					}
-				}
-
-				await this.callbacks.say(
-					"deleted_api_reqs",
-					JSON.stringify({
-						tokensIn: deletedApiReqsMetrics.totalTokensIn,
-						tokensOut: deletedApiReqsMetrics.totalTokensOut,
-						cacheWrites: deletedApiReqsMetrics.totalCacheWrites,
-						cacheReads: deletedApiReqsMetrics.totalCacheReads,
-						cost: deletedApiReqsMetrics.totalCost,
-					} satisfies ClineApiReqInfo),
-				)
-
-				// ── edited path: show user_feedback so the edited text
-				//     appears in the UI, then wake the task loop.
-				if (editedText !== undefined) {
-					await this.callbacks.say("user_feedback", editedText)
-				}
-				break
-			case "workspace":
-				break
+				replaceInBlocks(userMsg.content)
+			}
 		}
 
+		await this.services.messageStateHandler.uiMessage?.truncateByLineNum(messageIndex + 1)
+
+		const contextManager = new ContextManager()
+		await contextManager.truncateContextHistory(message.ts, await ensureTaskDirectoryExists(this.task.taskId))
+
+		const clineMessages = this.services.messageStateHandler.clineMessages
+		const deletedMessages = clineMessages.slice(messageIndex + 1)
+		const deletedApiReqsMetrics = getApiMetrics(combineApiRequests(combineCommandSequences(deletedMessages)))
+
+		if (!workspaceRestored) {
+			const filesEditedAfterMessage = await this.services.fileContextTracker.detectFilesEditedAfterMessage(
+				messageTs,
+				deletedMessages,
+			)
+			if (filesEditedAfterMessage.length > 0) {
+				await this.services.fileContextTracker.storePendingFileContextWarning(filesEditedAfterMessage)
+			}
+		}
+
+		await this.callbacks.say(
+			"deleted_api_reqs",
+			JSON.stringify({
+				tokensIn: deletedApiReqsMetrics.totalTokensIn,
+				tokensOut: deletedApiReqsMetrics.totalTokensOut,
+				cacheWrites: deletedApiReqsMetrics.totalCacheWrites,
+				cacheReads: deletedApiReqsMetrics.totalCacheReads,
+				cost: deletedApiReqsMetrics.totalCost,
+			} satisfies ClineApiReqInfo),
+		)
+
+		if (editedText !== undefined) {
+			await this.callbacks.say("user_feedback", editedText)
+		}
+	}
+
+	private async finalizeSuccessfulRestore(
+		restoreType: ClineCheckpointRestore,
+		messageTs: number,
+		editedText: string | undefined,
+		workspaceCheckpointHash: string | undefined,
+	): Promise<void> {
 		switch (restoreType) {
 			case "task":
 				HostProvider.window.showMessage({
@@ -750,13 +733,12 @@ export class TaskCheckpointManager implements ICheckpointManager {
 				break
 		}
 
-		if (restoreType !== "task") {
+		if (workspaceCheckpointHash !== undefined) {
 			const checkpointMessages = this.services.messageStateHandler.clineMessages.filter(
 				(m) => m.say === "checkpoint_created",
 			)
-			const currentMessageIndex = checkpointMessages.findIndex((m) => m.ts === messageTs)
-			checkpointMessages.forEach((m, i) => {
-				m.isCheckpointCheckedOut = i === currentMessageIndex
+			checkpointMessages.forEach((checkpointMessage) => {
+				checkpointMessage.isCheckpointCheckedOut = checkpointMessage.lastCheckpointHash === workspaceCheckpointHash
 			})
 		}
 

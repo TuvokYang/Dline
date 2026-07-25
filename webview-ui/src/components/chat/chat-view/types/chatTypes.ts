@@ -47,7 +47,6 @@ export interface ChatState {
 	// Derived presentation values
 	lastMessage: ClineMessage | undefined
 	secondLastMessage: ClineMessage | undefined
-	task: ClineMessage | undefined
 
 	// Handlers
 	handleFocusChange: (isFocused: boolean) => void

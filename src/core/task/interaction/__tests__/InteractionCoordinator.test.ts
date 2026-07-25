@@ -241,6 +241,48 @@ describe("InteractionCoordinator", () => {
 		})
 	})
 
+	it("commits one hydrated resume response exactly once without rejecting the waiter continuation", async () => {
+		const startApi = vi.fn(async () => undefined)
+		const runtime = new TaskRuntime(
+			{
+				...createTaskRuntimeState({
+					taskId: "task-1",
+					phase: TaskPhase.PAUSED,
+					revision: 4,
+					anchor: { apiIndex: 2, turnId: "resume-turn", interactionId: "resume-1" },
+				}),
+				interaction: {
+					taskId: "task-1",
+					turnId: "resume-turn",
+					interactionId: "resume-1",
+					kind: "resume",
+					status: "awaiting",
+					createdRevision: 3,
+					anchor: { messageTs: 100, messageType: "ask" },
+				},
+			},
+			createPorts({ startApi }),
+		)
+		const coordinator = new InteractionCoordinator(runtime)
+		const resumePromise = coordinator.resumeExisting("resume-1")
+		await vi.waitFor(() => expect(runtime.getState().interaction?.status).toBe("awaiting"))
+
+		const responseResult = await coordinator.respond({
+			taskId: "task-1",
+			turnId: "resume-turn",
+			interactionId: "resume-1",
+			actionId: "resume",
+			stateRevision: runtime.getState().revision,
+			draft: { text: "Continue", images: [], files: [] },
+		})
+		await expect(resumePromise).resolves.toMatchObject({ actionId: "resume" })
+
+		expect(responseResult.accepted).toBe(true)
+		expect(responseResult.effectError).toBeUndefined()
+		expect(startApi).toHaveBeenCalledOnce()
+		expect(runtime.getState()).toMatchObject({ phase: TaskPhase.RESUMING, interaction: undefined })
+	})
+
 	it("takes over one hydrated resume interaction and commits its causal response", async () => {
 		const runtime = new TaskRuntime(
 			{

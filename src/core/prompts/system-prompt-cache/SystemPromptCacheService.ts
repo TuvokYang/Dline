@@ -152,7 +152,14 @@ export class SystemPromptCacheService {
 				...input.promptContext.capabilityToggleState,
 			})
 			const currentHash = hashPromptContent(renderCapabilitiesSection(capabilities))
-			if (currentHash !== cached.capabilitiesHash) {
+			const currentBuilder = this.getPromptBuilderInfo(input.promptContext, undefined)
+			const cachedBuilder = cached.promptBuilder
+			const providerProjectionChanged =
+				cachedBuilder.providerId !== currentBuilder.providerId ||
+				cachedBuilder.modelId !== currentBuilder.modelId ||
+				cachedBuilder.profile !== currentBuilder.profile ||
+				cachedBuilder.nativeTools !== Boolean(input.promptContext.enableNativeToolCalls)
+			if (currentHash !== cached.capabilitiesHash || providerProjectionChanged) {
 				return this.refresh({ promptContext: input.promptContext, reason: "capability_change" })
 			}
 			this.lastTools = cached.tools ?? undefined

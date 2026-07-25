@@ -6,7 +6,7 @@ import { ChatState } from "../types/chatTypes"
  * Custom hook for managing chat state
  * Handles input values, selection states, and UI state
  */
-export function useChatState(messages: ClineMessage[]): ChatState {
+export function useChatState(messages: ClineMessage[], taskId?: string): ChatState {
 	// Input and selection state
 	const [inputValue, setInputValue] = useState("")
 	const [activeQuote, setActiveQuote] = useState<string | null>(null)
@@ -23,13 +23,12 @@ export function useChatState(messages: ClineMessage[]): ChatState {
 
 	// Refs
 	const textAreaRef = useRef<HTMLTextAreaElement>(null)
+	const draftOwnerTaskIdRef = useRef(taskId)
 
 	// Message positions are presentation-only and never determine task interaction state.
 	const lastMessage = useMemo(() => messages.at(-1), [messages])
 	const secondLastMessage = useMemo(() => messages.at(-2), [messages])
 
-	// Clear expanded rows when task changes
-	const task = useMemo(() => messages.at(0), [messages])
 	const clearExpandedRows = useCallback(() => {
 		setExpandedRows({})
 	}, [])
@@ -47,10 +46,16 @@ export function useChatState(messages: ClineMessage[]): ChatState {
 		setIsTextAreaFocused(isFocused)
 	}, [])
 
-	// Auto-expand last message row when task or messages first changed.
+	useEffect(() => {
+		if (draftOwnerTaskIdRef.current !== taskId) {
+			draftOwnerTaskIdRef.current = taskId
+			resetState()
+		}
+	}, [resetState, taskId])
+
 	useEffect(() => {
 		clearExpandedRows()
-	}, [clearExpandedRows])
+	}, [clearExpandedRows, taskId])
 
 	return {
 		// State values
@@ -81,7 +86,6 @@ export function useChatState(messages: ClineMessage[]): ChatState {
 		// Derived values
 		lastMessage,
 		secondLastMessage,
-		task,
 
 		// Handlers
 		handleFocusChange,

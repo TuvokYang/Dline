@@ -97,6 +97,74 @@ describe("SystemPromptCacheService", () => {
 		expect(saved?.systemPrompt?.frozen?.tools).toBeNull()
 	})
 
+	it("rebuilds provider-shaped tools when the active provider changes", async () => {
+		const openAiTools: readonly ClineTool[] = [buildTool("read_file")]
+		const anthropicTools: readonly ClineTool[] = [
+			{
+				name: "read_file",
+				description: "read_file description",
+				input_schema: { type: "object", properties: {}, required: [], additionalProperties: false },
+			},
+		]
+		let current: TaskContextCache = {
+			...emptyContext("task-1"),
+			systemPrompt: {
+				frozen: {
+					text: "openai native prompt",
+					tools: openAiTools,
+					capabilitiesHash: EMPTY_CAPABILITIES_HASH,
+					createdAt: 1,
+					refreshedAt: 1,
+					refreshReason: "task_start" as const,
+					promptBuilder: {
+						providerId: "openai",
+						modelId: "gpt-5.6-sol",
+						profile: "native" as const,
+						nativeTools: true,
+					},
+				},
+			},
+		}
+		let buildCount = 0
+		const service = new SystemPromptCacheService({
+			taskId: "task-1",
+			deps: {
+				getContext: async () => current,
+				saveContext: async (_taskId, context) => {
+					current = context
+				},
+				collectCapabilities: async () => EMPTY_CAPABILITIES,
+				buildSystemPrompt: async () => {
+					buildCount += 1
+					return { systemPrompt: "anthropic native prompt", tools: anthropicTools }
+				},
+				now: () => 2,
+			},
+		})
+		const anthropicContext: SystemPromptContext = {
+			...promptContext,
+			providerInfo: {
+				providerId: "anthropic",
+				model: { id: "deepseek-v4-pro", info: { id: "deepseek-v4-pro" } },
+				mode: "act",
+			},
+			enableNativeToolCalls: true,
+		}
+
+		const result = await service.getOrCreate({ promptContext: anthropicContext })
+
+		expect(buildCount).toBe(1)
+		expect(result.text).toBe("anthropic native prompt")
+		expect(result.promptBuilder).toEqual({
+			providerId: "anthropic",
+			modelId: "deepseek-v4-pro",
+			profile: "native",
+			nativeTools: true,
+		})
+		expect(service.getLastTools()).toEqual(anthropicTools)
+		expect(service.getLastTools()).not.toEqual(openAiTools)
+	})
+
 	it("restores exact persisted native tools when reusing a frozen prompt", async () => {
 		const tools: readonly ClineTool[] = [buildTool("read_file")]
 		const cached = {
@@ -130,13 +198,15 @@ describe("SystemPromptCacheService", () => {
 			},
 		})
 
-		const result = await service.getOrCreate({ promptContext })
+		const result = await service.getOrCreate({
+			promptContext: { ...promptContext, enableNativeToolCalls: true },
+		})
 
 		expect(result.text).toBe("old prompt # Capabilities old")
 		expect(service.getLastTools()).toEqual(tools)
 	})
 
-	it("restores the exact frozen native tools without rebuilding from a changed current context", async () => {
+	it("rebuilds the frozen pair when the prompt profile or native transport changes", async () => {
 		const frozenTools: readonly ClineTool[] = [buildTool("frozen_browser_tool")]
 		const cached = {
 			...emptyContext("task-1"),
@@ -180,9 +250,9 @@ describe("SystemPromptCacheService", () => {
 
 		const result = await service.getOrCreate({ promptContext: currentContext })
 
-		expect(result.text).toBe("frozen native prompt")
-		expect(service.getLastTools()).toEqual(frozenTools)
-		expect(buildCount).toBe(0)
+		expect(result.text).toBe("current xml prompt")
+		expect(service.getLastTools()).toBeUndefined()
+		expect(buildCount).toBe(1)
 	})
 
 	it("persists the exact tools produced by the same frozen prompt build", async () => {

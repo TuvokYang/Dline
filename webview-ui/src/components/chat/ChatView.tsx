@@ -93,7 +93,7 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 	const lastApiReqTotalTokens = lastApiReqTotalTokensFromState
 
 	// Use custom hooks for state management
-	const chatState = useChatState(messages)
+	const chatState = useChatState(messages, taskId)
 	const {
 		inputValue,
 		setInputValue,

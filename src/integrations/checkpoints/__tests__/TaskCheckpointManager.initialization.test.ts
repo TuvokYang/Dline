@@ -1,5 +1,6 @@
 import type CheckpointTracker from "@integrations/checkpoints/CheckpointTracker"
 import { beforeEach, describe, expect, it, vi } from "vitest"
+import type { ClineMessage } from "@/shared/ExtensionMessage"
 
 vi.unmock("@integrations/checkpoints")
 
@@ -11,20 +12,33 @@ type CreateCheckpointTracker = (
 	workspacePath: string,
 ) => Promise<CheckpointTracker | undefined>
 
-function createManager(createCheckpointTracker: CreateCheckpointTracker, initialError?: string) {
+function createManager(
+	createCheckpointTracker: CreateCheckpointTracker,
+	initialError?: string,
+	options?: { messages?: ClineMessage[]; tracker?: CheckpointTracker },
+) {
 	const taskState: { taskId: string; checkpointManagerErrorMessage?: string } = {
 		taskId: "task-1",
 		...(initialError === undefined ? {} : { checkpointManagerErrorMessage: initialError }),
 	}
 	const setCheckpointTracker = vi.fn()
 	const postStateToWebview = vi.fn().mockResolvedValue(undefined)
+	const say = vi.fn(async () => {
+		const message: ClineMessage = { ts: 42, type: "say", say: "checkpoint_created" }
+		options?.messages?.push(message)
+		return message.ts
+	})
 	const manager = createTaskCheckpointManager(
 		{ taskId: "task-1", controller: {} } as never,
 		{ enableCheckpoints: true, createCheckpointTracker },
 		{
 			fileContextTracker: {},
 			diffViewProvider: {},
-			messageStateHandler: { setCheckpointTracker },
+			messageStateHandler: {
+				clineMessages: options?.messages ?? [],
+				setCheckpointTracker,
+				updateTaskHistory: vi.fn().mockResolvedValue(undefined),
+			},
 			taskState,
 			workspaceManager: { getPrimaryRoot: () => ({ path: "C:/workspace" }) },
 		} as never,
@@ -32,10 +46,13 @@ function createManager(createCheckpointTracker: CreateCheckpointTracker, initial
 			updateTaskHistory: vi.fn(),
 			cancelTask: vi.fn(),
 			restoreChatRuntime: vi.fn(),
-			say: vi.fn(),
+			say,
 			postStateToWebview,
 		} as never,
-		{ checkpointManagerErrorMessage: initialError },
+		{
+			checkpointManagerErrorMessage: initialError,
+			...(options?.tracker ? { checkpointTracker: options.tracker } : {}),
+		},
 	)
 	return { manager, taskState, setCheckpointTracker, postStateToWebview }
 }
@@ -60,6 +77,27 @@ describe("TaskCheckpointManager checkpoint initialization", () => {
 		expect(harness.setCheckpointTracker).toHaveBeenCalledWith(tracker)
 		expect(harness.taskState.checkpointManagerErrorMessage).toBeUndefined()
 		expect(harness.postStateToWebview).toHaveBeenCalled()
+	})
+
+	it("binds the first chat checkpoint to the initialized shadow baseline when no files were tracked", async () => {
+		const messages: ClineMessage[] = []
+		const baselineHash = "shadow-baseline-hash"
+		const tracker = {
+			setTaskFileTracker: vi.fn(),
+			commit: vi.fn().mockResolvedValue(baselineHash),
+		} as unknown as CheckpointTracker
+		const create = vi.fn<CreateCheckpointTracker>().mockResolvedValue(tracker)
+		const harness = createManager(create, undefined, { messages, tracker })
+
+		await harness.manager.saveCheckpoint()
+
+		expect(tracker.commit).toHaveBeenCalledOnce()
+		expect(messages).toEqual([
+			expect.objectContaining({
+				say: "checkpoint_created",
+				lastCheckpointHash: baselineHash,
+			}),
+		])
 	})
 
 	it("does not retry a permanent missing Git capability error", async () => {

@@ -1,7 +1,12 @@
+import fs from "fs/promises"
+import * as os from "os"
 import * as path from "path"
-import type { SimpleGit } from "simple-git"
+import simpleGit, { type SimpleGit } from "simple-git"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { GitOperations } from "../CheckpointGitOperations"
+import CheckpointTracker from "../CheckpointTracker"
+import { getShadowGitPath, hashWorkingDir } from "../CheckpointUtils"
+import { TaskFileTracker } from "../TaskFileTracker"
 
 function createGitHarness(): { git: SimpleGit; add: ReturnType<typeof vi.fn> } {
 	const add = vi.fn().mockResolvedValue(undefined)
@@ -23,6 +28,38 @@ function configureNestedRepositoryBoundary(operations: GitOperations, relativePa
 		],
 	})
 }
+
+describe("CheckpointTracker baseline checkpoints", () => {
+	it("returns a restorable shadow hash for an unborn user repository before any task files are tracked", async () => {
+		const sandbox = await fs.mkdtemp(path.join(os.tmpdir(), "dline-unborn-checkpoint-"))
+		const workspacePath = path.join(sandbox, "workspace")
+		const documentsPath = path.join(sandbox, "documents")
+		const previousDocumentsPath = process.env.DLINE_DOCS_DIR
+		process.env.DLINE_DOCS_DIR = documentsPath
+		await fs.mkdir(workspacePath, { recursive: true })
+		await fs.writeFile(path.join(workspacePath, "initial.txt"), "baseline")
+		await simpleGit(workspacePath).init()
+
+		try {
+			const tracker = await CheckpointTracker.create("task-unborn", true, workspacePath)
+			if (!tracker) throw new Error("checkpoint_tracker_missing")
+			tracker.setTaskFileTracker(new TaskFileTracker("task-unborn"))
+
+			const checkpointHash = await tracker.commit()
+			const shadowGitPath = await getShadowGitPath(hashWorkingDir(workspacePath))
+			const shadowGit = simpleGit(path.dirname(shadowGitPath))
+			const shadowHead = await shadowGit.revparse(["HEAD"])
+			const userBranch = await simpleGit(workspacePath).branchLocal()
+
+			expect(checkpointHash).toBe(shadowHead.trim())
+			expect(userBranch.current).toBe("")
+		} finally {
+			if (previousDocumentsPath === undefined) delete process.env.DLINE_DOCS_DIR
+			else process.env.DLINE_DOCS_DIR = previousDocumentsPath
+			await fs.rm(sandbox, { recursive: true, force: true })
+		}
+	})
+})
 
 describe("GitOperations repository boundaries", () => {
 	afterEach(() => {

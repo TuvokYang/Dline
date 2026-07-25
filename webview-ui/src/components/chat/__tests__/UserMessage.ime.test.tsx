@@ -5,7 +5,7 @@
  * even if you confirm the IME conversion (Enter) in message re-edit mode.
  */
 
-import { fireEvent, render, screen } from "@testing-library/react"
+import { act, fireEvent, render, renderHook, screen } from "@testing-library/react"
 import { describe, expect, it, vi } from "vitest"
 
 const mockedContext = vi.hoisted(() => ({ value: {} as Record<string, unknown> }))
@@ -15,6 +15,7 @@ vi.mock("@/context/ExtensionStateContext", () => ({
 	useExtensionState: () => mockedContext.value,
 }))
 
+import { useChatState } from "../chat-view/hooks/useChatState"
 import { runNewTaskSubmission } from "../chat-view/hooks/useMessageHandlers"
 import { UsageBar } from "../UsageBar"
 import UserMessage from "../UserMessage"
@@ -79,6 +80,38 @@ describe("UsageBar", () => {
 		mockedContext.value = {}
 		render(<UsageBar />)
 		expect(screen.getByText("--")).toBeInTheDocument()
+	})
+})
+
+describe("task-owned chat drafts", () => {
+	it("clears a submitted welcome draft when the created task becomes active", () => {
+		const { result, rerender } = renderHook(({ taskId }: { taskId: string | undefined }) => useChatState([], taskId), {
+			initialProps: { taskId: undefined },
+		})
+
+		act(() => {
+			result.current.setInputValue("submitted task")
+			result.current.setSelectedFiles(["file.txt"])
+		})
+		rerender({ taskId: "task-1" })
+
+		expect(result.current.inputValue).toBe("")
+		expect(result.current.selectedFiles).toEqual([])
+	})
+
+	it("does not carry a draft from one active task into another", () => {
+		const { result, rerender } = renderHook(({ taskId }: { taskId: string | undefined }) => useChatState([], taskId), {
+			initialProps: { taskId: "task-1" as string | undefined },
+		})
+
+		act(() => {
+			result.current.setInputValue("task one draft")
+			result.current.setSelectedImages(["image.png"])
+		})
+		rerender({ taskId: "task-2" })
+
+		expect(result.current.inputValue).toBe("")
+		expect(result.current.selectedImages).toEqual([])
 	})
 })
 
