@@ -17,4 +17,6 @@ message BaseProviderConfig {
   dline.models.ModelPricing pricing = 4;
   optional bool enable_long_context = 5;
   optional bool pricing_tiers_enabled = 6;
+  // OpenAI request processing tier. Used only by OpenAI-native profiles.
+  optional string service_tier = 7;
 }

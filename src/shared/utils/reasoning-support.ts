@@ -1,8 +1,19 @@
 import { normalizeOpenaiReasoningEffort, type OpenaiReasoningEffort } from "../storage/types"
 
+export type ClaudeAdaptiveThinkingEffort = "low" | "medium" | "high" | "xhigh" | "max"
+
 export interface ClaudeOpusAdaptiveThinkingSettings {
 	enabled: boolean
-	effort?: OpenaiReasoningEffort
+	effort?: ClaudeAdaptiveThinkingEffort
+}
+
+export const DEEPSEEK_REASONING_EFFORT_OPTIONS = ["high", "max"] as const
+
+export type DeepSeekReasoningEffort = (typeof DEEPSEEK_REASONING_EFFORT_OPTIONS)[number]
+
+export interface DeepSeekAdaptiveThinkingSettings {
+	enabled: boolean
+	effort?: DeepSeekReasoningEffort
 }
 
 export function isClaudeOpusAdaptiveThinkingModel(modelId?: string): boolean {
@@ -25,7 +36,16 @@ export function resolveClaudeOpusAdaptiveThinking(
 ): ClaudeOpusAdaptiveThinkingSettings {
 	if (reasoningEffort) {
 		const effort = normalizeOpenaiReasoningEffort(reasoningEffort)
-		return effort === "none" ? { enabled: false } : { enabled: true, effort }
+		if (effort === "none") {
+			return { enabled: false }
+		}
+		if (effort === "minimal") {
+			return { enabled: true, effort: "low" }
+		}
+		if (effort === "ultra") {
+			return { enabled: true, effort: "max" }
+		}
+		return { enabled: true, effort }
 	}
 
 	return legacyThinkingBudgetTokens && legacyThinkingBudgetTokens > 0 ? { enabled: true, effort: "high" } : { enabled: false }
@@ -41,15 +61,21 @@ export function resolveClaudeOpusAdaptiveThinking(
  * 1. Default thinking is enabled.
  * 2. Default effort is "high" for standard requests; for complex agent-style
  *    requests (e.g., Claude Code, OpenCode), effort is automatically set to "max".
- * 3. For compatibility: "low" and "medium" are mapped to "high";
- *    "xhigh" is mapped to "max".
+ * 3. For compatibility, old lower efforts map to "high" and old higher
+ *    efforts map to "max".
  */
-export function resolveDeepSeekAdaptiveThinking(reasoningEffort?: string): ClaudeOpusAdaptiveThinkingSettings {
-	if (reasoningEffort) {
-		const effort = normalizeOpenaiReasoningEffort(reasoningEffort)
-		return effort === "none" ? { enabled: false } : { enabled: true, effort }
+export function resolveDeepSeekAdaptiveThinking(reasoningEffort?: string): DeepSeekAdaptiveThinkingSettings {
+	if (!reasoningEffort) {
+		return { enabled: true, effort: "high" }
 	}
-	// Default to high for DeepSeek V4
+
+	const effort = reasoningEffort.toLowerCase() as OpenaiReasoningEffort
+	if (effort === "none") {
+		return { enabled: false }
+	}
+	if (effort === "max" || effort === "xhigh" || effort === "ultra") {
+		return { enabled: true, effort: "max" }
+	}
 	return { enabled: true, effort: "high" }
 }
 

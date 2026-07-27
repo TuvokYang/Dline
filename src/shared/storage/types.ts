@@ -1,14 +1,32 @@
-export const OPENAI_REASONING_EFFORT_OPTIONS = ["none", "low", "medium", "high", "xhigh"] as const
+export const GENERIC_REASONING_EFFORT_OPTIONS = ["none", "low", "medium", "high", "xhigh"] as const
 
-export type OpenaiReasoningEffort = (typeof OPENAI_REASONING_EFFORT_OPTIONS)[number]
+/** Efforts currently typed by the official OpenAI SDK. */
+export const OPENAI_REASONING_EFFORT_OPTIONS = ["none", "minimal", "low", "medium", "high", "xhigh", "max"] as const
+
+/** OpenAI-compatible endpoints may expose an additional ultra tier. */
+export const OPENAI_COMPATIBLE_REASONING_EFFORT_OPTIONS = [...OPENAI_REASONING_EFFORT_OPTIONS, "ultra"] as const
+
+export type OpenaiReasoningEffort = (typeof OPENAI_COMPATIBLE_REASONING_EFFORT_OPTIONS)[number]
 
 export function isOpenaiReasoningEffort(value: unknown): value is OpenaiReasoningEffort {
-	return typeof value === "string" && OPENAI_REASONING_EFFORT_OPTIONS.includes(value as OpenaiReasoningEffort)
+	return typeof value === "string" && OPENAI_COMPATIBLE_REASONING_EFFORT_OPTIONS.includes(value as OpenaiReasoningEffort)
 }
 
 export function normalizeOpenaiReasoningEffort(effort?: string): OpenaiReasoningEffort {
 	const value = (effort || "medium").toLowerCase()
 	return isOpenaiReasoningEffort(value) ? value : "medium"
+}
+
+export const OPENAI_SERVICE_TIER_OPTIONS = ["auto", "default", "flex", "scale", "priority"] as const
+
+export type OpenAiServiceTier = (typeof OPENAI_SERVICE_TIER_OPTIONS)[number]
+
+export function isOpenAiServiceTier(value: unknown): value is OpenAiServiceTier {
+	return typeof value === "string" && OPENAI_SERVICE_TIER_OPTIONS.includes(value as OpenAiServiceTier)
+}
+
+export function normalizeOpenAiServiceTier(value?: string): OpenAiServiceTier | undefined {
+	return isOpenAiServiceTier(value) ? value : undefined
 }
 
 export type Mode = "plan" | "act"

@@ -53,7 +53,18 @@ vi.mock("../common/ModelInfoView", () => ({
 vi.mock("../common/ApiKeyField", () => ({ ApiKeyField: () => <div /> }))
 vi.mock("../common/BaseUrlField", () => ({ BaseUrlField: () => <div /> }))
 vi.mock("../common/DebouncedTextField", () => ({ DebouncedTextField: () => <div /> }))
-vi.mock("../ThinkingControl", () => ({ default: () => <div /> }))
+vi.mock("../ThinkingControl", () => ({
+	default: ({ effortOptions }: { effortOptions?: readonly string[] }) => (
+		<div data-testid="thinking-efforts">{effortOptions?.join(",")}</div>
+	),
+}))
+vi.mock("../OpenAIServiceTierSelector", () => ({
+	default: ({ onServiceTierChange }: { onServiceTierChange: (value: string) => void }) => (
+		<button onClick={() => onServiceTierChange("priority")} type="button">
+			Set Priority Tier
+		</button>
+	),
+}))
 vi.mock("@vscode/webview-ui-toolkit/react", () => ({
 	VSCodeButton: ({ children }: { children: React.ReactNode }) => <button type="button">{children}</button>,
 	VSCodeCheckbox: ({ children }: { children: React.ReactNode }) => <label>{children}</label>,
@@ -83,6 +94,27 @@ describe("OpenAICompatibleProvider", () => {
 			openai: {
 				...profile.openai,
 				capabilities: { contextWindowTiers: [], maxTokens: 64_000, supportsImages: true },
+			},
+		})
+	})
+
+	it("offers the complete compatible effort set and persists service tier", () => {
+		const onUpdate = vi.fn()
+		const profile = {
+			id: "profile-1",
+			provider: "openai",
+			modelId: "gpt-custom",
+			openai: OpenAiProviderConfig.create({ serviceTier: "auto" }),
+		} as unknown as ApiProfile
+
+		render(<OpenAICompatibleProvider onUpdate={onUpdate} profile={profile} showModelOptions={true} />)
+
+		expect(screen.getByTestId("thinking-efforts")).toHaveTextContent("none,minimal,low,medium,high,xhigh,max,ultra")
+		fireEvent.click(screen.getByRole("button", { name: "Set Priority Tier" }))
+		expect(onUpdate).toHaveBeenCalledWith({
+			openai: {
+				...profile.openai,
+				serviceTier: "priority",
 			},
 		})
 	})

@@ -1,9 +1,11 @@
 import { BaseProviderConfig } from "@shared/proto/dline/provider/common"
 import { buildEffectiveModelInfo } from "@shared/providers/effective-model-info"
+import { OPENAI_REASONING_EFFORT_OPTIONS } from "@shared/storage/types"
 import { VSCodeCheckbox } from "@vscode/webview-ui-toolkit/react"
 import { ApiKeyField } from "../common/ApiKeyField"
 import { ModelInfoView } from "../common/ModelInfoView"
 import { ModelSelector } from "../common/ModelSelector"
+import OpenAIServiceTierSelector from "../OpenAIServiceTierSelector"
 import ReasoningEffortSelector from "../ReasoningEffortSelector"
 import { supportsReasoningEffortForModelId } from "../utils/providerUtils"
 import type { ApiProfile } from "./ProviderProfile"
@@ -72,7 +74,28 @@ export const OpenAINativeProvider = ({ showModelOptions, isPopup, profile, onUpd
 							Enable Long Context
 						</VSCodeCheckbox>
 					) : null}
-					{showReasoningEffort && <ReasoningEffortSelector />}
+					{showReasoningEffort && (
+						<ReasoningEffortSelector
+							allowedEfforts={OPENAI_REASONING_EFFORT_OPTIONS}
+							onReasoningEffortChange={(effort) =>
+								onUpdate({
+									openaiNative: {
+										...pc,
+										reasoning: {
+											...pc.reasoning,
+											enableThinking: effort !== "none",
+											effort,
+										},
+									},
+								})
+							}
+							reasoningEffort={pc.reasoning?.effort}
+						/>
+					)}
+					<OpenAIServiceTierSelector
+						onServiceTierChange={(serviceTier) => onUpdate({ openaiNative: { ...pc, serviceTier } })}
+						serviceTier={pc.serviceTier}
+					/>
 
 					<ModelInfoView isPopup={isPopup} modelInfo={modelInfo} selectedModelId={modelId} />
 				</>

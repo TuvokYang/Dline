@@ -7,6 +7,7 @@ import { ClineError } from "@/services/error"
 import { ClineStorageMessage } from "@/shared/messages/content"
 import { fetch } from "@/shared/net"
 import { Logger } from "@/shared/services/Logger"
+import { resolveDeepSeekAdaptiveThinking } from "@/shared/utils/reasoning-support"
 import { AccountUsage, ApiHandler, ApiHandlerContext } from "../"
 import { withRetry } from "../retry"
 import { convertDeepSeekMessages, convertDeepseekToOpenAiMessages } from "../transform/deepseek-format"
@@ -104,8 +105,9 @@ export class DeepSeekHandler implements ApiHandler {
 		const requestController = new AbortController()
 		this.requestController = requestController
 
-		const isThinkingEnabled = this.reasoningEffort && this.reasoningEffort !== "none"
-		const reasoningEffort = isThinkingEnabled ? (this.reasoningEffort as OpenAI.ChatCompletionReasoningEffort) : undefined
+		const isThinkingEnabled = !!this.reasoningEffort && this.reasoningEffort !== "none"
+		const adaptiveThinking = resolveDeepSeekAdaptiveThinking(this.reasoningEffort)
+		const reasoningEffort = isThinkingEnabled ? (adaptiveThinking.effort as OpenAI.ChatCompletionReasoningEffort) : undefined
 		const supportsReasoning = model.info.capabilities?.supportsReasoning ?? false
 
 		// All deepseek models now use the same message conversion: V4-native format when thinking is on,

@@ -1,4 +1,4 @@
-import type { ClineStorageMessage } from "@/shared/messages/content"
+import { type ClineStorageMessage, imageSourceMediaType } from "@/shared/messages/content"
 
 /**
  * Filters out image blocks from messages since Claude Code doesn't support images.
@@ -15,8 +15,8 @@ export function filterMessagesForClaudeCode(messages: ClineStorageMessage[]): Cl
 		const filteredContent = message.content.map((block) => {
 			if (block.type === "image") {
 				// Replace image blocks with text placeholders
-				const sourceType = block.source?.type || "unknown"
-				const mediaType = block.source?.media_type || "unknown"
+				const sourceType = block.source.type
+				const mediaType = imageSourceMediaType(block.source)
 				return {
 					type: "text" as const,
 					text: `[Image (${sourceType}): ${mediaType} not supported by Claude Code]`,

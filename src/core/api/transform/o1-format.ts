@@ -373,6 +373,7 @@ export function convertO1ResponseToAnthropicMessage(
 		id: completion.id,
 		type: "message",
 		role: openAiMessage.role, // always "assistant"
+		container: null,
 		content: [
 			{
 				type: "text",
@@ -381,6 +382,7 @@ export function convertO1ResponseToAnthropicMessage(
 			},
 		],
 		model: completion.model,
+		stop_details: null,
 		stop_reason: (() => {
 			switch (completion.choices[0].finish_reason) {
 				case "stop":
@@ -397,8 +399,13 @@ export function convertO1ResponseToAnthropicMessage(
 		usage: {
 			input_tokens: completion.usage?.prompt_tokens || 0,
 			output_tokens: completion.usage?.completion_tokens || 0,
+			cache_creation: null,
 			cache_creation_input_tokens: null,
 			cache_read_input_tokens: null,
+			inference_geo: null,
+			output_tokens_details: null,
+			server_tool_use: null,
+			service_tier: null,
 		},
 	}
 
@@ -408,6 +415,7 @@ export function convertO1ResponseToAnthropicMessage(
 				return {
 					type: "tool_use",
 					id: `call_${index}_${Date.now()}`, // Generate a unique ID for each tool call
+					caller: { type: "direct" },
 					name: toolCall.tool,
 					input: toolCall.tool_input,
 				}

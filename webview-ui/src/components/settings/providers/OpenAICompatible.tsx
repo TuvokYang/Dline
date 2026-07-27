@@ -2,6 +2,7 @@ import type { ModelInfo } from "@shared/proto/dline/models"
 import type { ModelCapabilities, ModelPricing } from "@shared/proto/dline/models/metadata"
 import { OpenAiProviderConfig } from "@shared/proto/dline/provider/openai"
 import { buildEffectiveModelInfo, mergeCapabilities, mergePricing } from "@shared/providers/effective-model-info"
+import { OPENAI_COMPATIBLE_REASONING_EFFORT_OPTIONS } from "@shared/storage/types"
 import { VSCodeButton, VSCodeCheckbox } from "@vscode/webview-ui-toolkit/react"
 import { useCallback } from "react"
 import { ApiKeyField } from "../common/ApiKeyField"
@@ -9,6 +10,7 @@ import { BaseUrlField } from "../common/BaseUrlField"
 import { DebouncedTextField } from "../common/DebouncedTextField"
 import { ModelConfiguration } from "../common/ModelConfiguration"
 import { ModelInfoView } from "../common/ModelInfoView"
+import OpenAIServiceTierSelector from "../OpenAIServiceTierSelector"
 import ThinkingControl from "../ThinkingControl"
 import type { ApiProfile } from "./ProviderProfile"
 import { useProviderModels } from "./useProviderModels"
@@ -127,6 +129,7 @@ export const OpenAICompatibleProvider = ({ showModelOptions, isPopup, profile, o
 
 			{/* ThinkingControl - placed after Model ID */}
 			<ThinkingControl
+				effortOptions={OPENAI_COMPATIBLE_REASONING_EFFORT_OPTIONS}
 				maxBudget={modelInfo?.capabilities?.thinking?.maxBudget}
 				mode="both"
 				modeSelectorLabel="Thinking Mode"
@@ -139,6 +142,11 @@ export const OpenAICompatibleProvider = ({ showModelOptions, isPopup, profile, o
 				}}
 				reasoningConfig={pc.reasoning}
 				showModeSelector={true}
+			/>
+
+			<OpenAIServiceTierSelector
+				onServiceTierChange={(serviceTier) => onUpdate({ openai: { ...pc, serviceTier } })}
+				serviceTier={pc.serviceTier}
 			/>
 
 			{/* ModelConfiguration component */}

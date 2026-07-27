@@ -1,4 +1,4 @@
-import { isOpenaiReasoningEffort, OPENAI_REASONING_EFFORT_OPTIONS, OpenaiReasoningEffort } from "@shared/storage/types"
+import { GENERIC_REASONING_EFFORT_OPTIONS, isOpenaiReasoningEffort, type OpenaiReasoningEffort } from "@shared/storage/types"
 import { memo } from "react"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -26,7 +26,7 @@ interface ReasoningEffortSelectorProps {
 const ReasoningEffortSelector = ({
 	label = "Reasoning Effort",
 	description = "Higher effort improves depth, but uses more tokens.",
-	allowedEfforts = OPENAI_REASONING_EFFORT_OPTIONS,
+	allowedEfforts = GENERIC_REASONING_EFFORT_OPTIONS,
 	defaultEffort = "medium",
 	reasoningEffort,
 	onReasoningEffortChange,

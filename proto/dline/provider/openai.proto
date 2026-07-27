@@ -20,4 +20,6 @@ message OpenAiProviderConfig {
   optional double temperature = 8;
   // Whether to include usage stats in stream responses
   bool stream_include_usage = 9;
+  // OpenAI request processing tier (auto/default/flex/scale/priority)
+  optional string service_tier = 10;
 }

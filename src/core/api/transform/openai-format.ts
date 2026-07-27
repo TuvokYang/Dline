@@ -9,6 +9,7 @@ import {
 	ClineStorageMessage,
 	ClineTextContentBlock,
 	ClineUserToolResultContentBlock,
+	imageSourceToUrl,
 } from "@/shared/messages/content"
 import { Logger } from "@/shared/services/Logger"
 import { getResultFunctionId, getUseFunctionId, projectChatFunctionId } from "./tool-identity-projector"
@@ -103,7 +104,7 @@ export function convertToOpenAiMessages(
 						role: "user",
 						content: toolResultImages.map((part) => ({
 							type: "image_url",
-							image_url: { url: `data:${part.source.media_type};base64,${part.source.data}` },
+							image_url: { url: imageSourceToUrl(part.source) },
 						})),
 					})
 				}
@@ -117,7 +118,7 @@ export function convertToOpenAiMessages(
 								return {
 									type: "image_url",
 									image_url: {
-										url: `data:${part.source.media_type};base64,${part.source.data}`,
+										url: imageSourceToUrl(part.source),
 									},
 								}
 							}
@@ -362,6 +363,7 @@ export function convertToAnthropicMessage(completion: OpenAI.Chat.Completions.Ch
 		id: completion.id,
 		type: "message",
 		role: openAiMessage.role, // always "assistant"
+		container: null,
 		content: [
 			{
 				type: "text",
@@ -370,6 +372,7 @@ export function convertToAnthropicMessage(completion: OpenAI.Chat.Completions.Ch
 			},
 		],
 		model: completion.model,
+		stop_details: null,
 		stop_reason: (() => {
 			switch (completion.choices[0].finish_reason) {
 				case "stop":
@@ -386,8 +389,13 @@ export function convertToAnthropicMessage(completion: OpenAI.Chat.Completions.Ch
 		usage: {
 			input_tokens: completion.usage?.prompt_tokens || 0,
 			output_tokens: completion.usage?.completion_tokens || 0,
+			cache_creation: null,
 			cache_creation_input_tokens: null,
 			cache_read_input_tokens: null,
+			inference_geo: null,
+			output_tokens_details: null,
+			server_tool_use: null,
+			service_tier: null,
 		},
 	}
 	try {
@@ -405,6 +413,7 @@ export function convertToAnthropicMessage(completion: OpenAI.Chat.Completions.Ch
 						return {
 							type: "tool_use",
 							id: toolCall.id,
+							caller: { type: "direct" },
 							name: toolCall.function?.name || UNIQUE_ERROR_TOOL_NAME,
 							input: parsedInput,
 						}

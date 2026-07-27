@@ -1,5 +1,5 @@
 import OpenAI from "openai"
-import { ClineAssistantThinkingBlock, ClineStorageMessage } from "@/shared/messages/content"
+import { ClineAssistantThinkingBlock, ClineStorageMessage, imageSourceToUrl } from "@/shared/messages/content"
 
 /**
  * DeepSeek Reasoner message format with reasoning_content support.
@@ -86,7 +86,7 @@ export function convertToR1Format(messages: ClineStorageMessage[]): OpenAI.Chat.
 					hasImages = true
 					imageParts.push({
 						type: "image_url",
-						image_url: { url: `data:${part.source.media_type};base64,${part.source.data}` },
+						image_url: { url: imageSourceToUrl(part.source) },
 					})
 				}
 			})

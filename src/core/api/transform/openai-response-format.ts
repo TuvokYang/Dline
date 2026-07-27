@@ -1,5 +1,5 @@
 import { ResponseInput, ResponseInputMessageContentList, ResponseReasoningItem } from "openai/resources/responses/responses"
-import { ClineStorageMessage } from "@/shared/messages/content"
+import { ClineStorageMessage, imageSourceMediaType, imageSourceToUrl } from "@/shared/messages/content"
 import { getResultFunctionId, getUseFunctionId, ToolIdentityProjectionError } from "./tool-identity-projector"
 
 /**
@@ -179,7 +179,7 @@ export function convertToOpenAIResponsesInput(
 						const imageItem: any = {
 							type: "message",
 							role: "assistant",
-							content: [{ type: "output_text", text: `[image:${part.source.media_type}]` }],
+							content: [{ type: "output_text", text: `[image:${imageSourceMediaType(part.source)}]` }],
 						}
 						// Set message-level id if available (though images typically don't have call_id)
 						if (responseId) {
@@ -219,7 +219,7 @@ export function convertToOpenAIResponsesInput(
 						messageContent.push({
 							type: "input_image",
 							detail: "auto",
-							image_url: `data:${part.source.media_type};base64,${part.source.data}`,
+							image_url: imageSourceToUrl(part.source),
 						})
 						break
 					case "tool_result": {

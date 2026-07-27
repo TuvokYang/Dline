@@ -535,8 +535,8 @@
 		"vitest": "^4.1.10"
 	},
 	"dependencies": {
-		"@anthropic-ai/sdk": "^0.37.0",
-		"@anthropic-ai/vertex-sdk": "^0.6.4",
+		"@anthropic-ai/sdk": "^0.115.0",
+		"@anthropic-ai/vertex-sdk": "^0.19.0",
 		"@aws-sdk/client-bedrock-runtime": "^3.922.0",
 		"@aws-sdk/credential-providers": "^3.922.0",
 		"@azure/identity": "^4.13.0",
@@ -605,7 +605,7 @@
 		"ollama": "^0.5.13",
 		"open": "^10.1.2",
 		"open-graph-scraper": "^6.9.0",
-		"openai": "^6.21.0",
+		"openai": "^6.49.0",
 		"os-name": "^6.0.0",
 		"p-mutex": "^1.0.0",
 		"p-timeout": "^6.1.4",

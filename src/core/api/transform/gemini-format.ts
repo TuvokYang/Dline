@@ -104,15 +104,22 @@ export function convertGeminiResponseToAnthropic(response: GenerateContentRespon
 		id: `msg_${Date.now()}`,
 		type: "message",
 		role: "assistant",
+		container: null,
 		content,
 		model: "",
+		stop_details: null,
 		stop_reason,
 		stop_sequence: null, // Gemini doesn't provide this information
 		usage: {
 			input_tokens: response.usageMetadata?.promptTokenCount ?? 0,
 			output_tokens: response.usageMetadata?.candidatesTokenCount ?? 0,
+			cache_creation: null,
 			cache_creation_input_tokens: null,
 			cache_read_input_tokens: null,
+			inference_geo: null,
+			output_tokens_details: null,
+			server_tool_use: null,
+			service_tier: null,
 		},
 	}
 }

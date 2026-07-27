@@ -1,5 +1,5 @@
 import { ModelInfo, OpenAiCodexModelId, openAiCodexDefaultModelId, openAiCodexModels } from "@shared/api"
-import { normalizeOpenaiReasoningEffort } from "@shared/storage/types"
+import { normalizeOpenAiServiceTier, normalizeOpenaiReasoningEffort } from "@shared/storage/types"
 import OpenAI from "openai"
 import type { ChatCompletionTool } from "openai/resources/chat/completions"
 import * as os from "os"
@@ -88,6 +88,9 @@ export class OpenAiCodexHandler implements ApiHandler {
 	}
 	private get reasoningEffort() {
 		return this.reasoningConfig?.effort
+	}
+	private get serviceTier() {
+		return normalizeOpenAiServiceTier(this.config?.serviceTier)
 	}
 
 	private usageQuota(window: CodexUsageWindow | undefined) {
@@ -309,6 +312,7 @@ export class OpenAiCodexHandler implements ApiHandler {
 			stream: true,
 			store: false,
 			instructions: systemPrompt,
+			...(this.serviceTier ? { service_tier: this.serviceTier } : {}),
 			...(previousResponseId ? { previous_response_id: previousResponseId } : {}),
 			...(includeReasoning ? { include: ["reasoning.encrypted_content"] } : {}),
 			...(includeReasoning

@@ -10,4 +10,6 @@ message OpenAiCodexProviderConfig {
   bool custom_model_enabled = 2;
   dline.models.ModelCapabilities capabilities = 3;
   dline.models.ModelPricing pricing = 4;
+  // OpenAI request processing tier (auto/default/flex/scale/priority)
+  optional string service_tier = 5;
 }

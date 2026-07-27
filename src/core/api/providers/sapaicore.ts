@@ -289,12 +289,16 @@ namespace Gemini {
 				if (block.type === "text") {
 					parts.push({ text: block.text })
 				} else if (block.type === "image") {
-					parts.push({
-						inlineData: {
-							mimeType: block.source.media_type,
-							data: block.source.data,
-						},
-					})
+					if (block.source.type === "base64") {
+						parts.push({
+							inlineData: {
+								mimeType: block.source.media_type,
+								data: block.source.data,
+							},
+						})
+					} else {
+						parts.push({ text: `[Image URL: ${block.source.url}]` })
+					}
 				}
 			}
 		}

@@ -1,5 +1,7 @@
 import { ApiProfile } from "@shared/proto/dline/profile"
+import { BaseProviderConfig } from "@shared/proto/dline/provider/common"
 import { OpenAiProviderConfig } from "@shared/proto/dline/provider/openai"
+import { OpenAiCodexProviderConfig } from "@shared/proto/dline/provider/openai_codex"
 import { expect } from "chai"
 import should from "should"
 import { afterEach, describe, it, vi } from "vitest"
@@ -7,6 +9,7 @@ import { openAiCodexOAuthManager } from "@/integrations/openai-codex/oauth"
 import { mockFetchForTesting } from "@/shared/net"
 import { OpenAiHandler } from "../openai"
 import { OpenAiCodexHandler } from "../openai-codex"
+import { OpenAiNativeHandler } from "../openai-native"
 
 /**
  * Create an async iterable for mocked streaming responses.
@@ -91,6 +94,74 @@ describe("OpenAiHandler", () => {
 			should(requestBody?.max_tokens).equal(12_345)
 			should(requestBody?.temperature).equal(0.7)
 		})
+
+		it("passes configured service tier and ultra effort to an OpenAI-compatible endpoint", async () => {
+			const handler = new OpenAiHandler({
+				profile: ApiProfile.create({
+					provider: "openai",
+					apiKey: "test-api-key",
+					modelId: "gpt-5.6-compatible",
+					openai: OpenAiProviderConfig.create({
+						serviceTier: "priority",
+						reasoning: { enableThinking: true, effort: "ultra" },
+					}),
+				}),
+				mode: "act",
+			})
+			const create = vi.fn().mockResolvedValue(createAsyncIterable())
+			vi.spyOn(handler as unknown as { ensureClient: () => unknown }, "ensureClient").mockReturnValue({
+				chat: { completions: { create } },
+			})
+
+			for await (const _chunk of handler.createMessage("system prompt", [{ role: "user", content: "Hello" }])) {
+			}
+
+			const requestBody = create.mock.calls[0]?.[0] as Record<string, unknown>
+			expect(requestBody.service_tier).to.equal("priority")
+			expect(requestBody.reasoning_effort).to.equal("ultra")
+		})
+	})
+})
+
+describe("OpenAiNativeHandler", () => {
+	it("adds service tier to Responses request parameters", () => {
+		const handler = new OpenAiNativeHandler({
+			profile: ApiProfile.create({
+				provider: "openai-native",
+				modelId: "gpt-5.6-sol",
+				openaiNative: BaseProviderConfig.create({ serviceTier: "flex" }),
+			}),
+			mode: "act",
+		})
+
+		const params = (
+			handler as unknown as {
+				buildResponseCreateParams: (args: Record<string, unknown>) => Record<string, unknown>
+			}
+		).buildResponseCreateParams({ modelId: "gpt-5.6-sol", systemPrompt: "system", input: [], tools: [] })
+
+		expect(params.service_tier).to.equal("flex")
+	})
+})
+
+describe("OpenAiCodexHandler request configuration", () => {
+	it("adds service tier to the shared SDK and fallback request body", () => {
+		const handler = new OpenAiCodexHandler({
+			profile: ApiProfile.create({
+				provider: "openai-codex",
+				modelId: "gpt-5.6-sol",
+				openaiCodex: OpenAiCodexProviderConfig.create({ serviceTier: "scale" }),
+			}),
+			mode: "act",
+		})
+
+		const body = (
+			handler as unknown as {
+				buildRequestBody: (...args: unknown[]) => Record<string, unknown>
+			}
+		).buildRequestBody({ id: "gpt-5.6-sol", info: {} }, [], "system")
+
+		expect(body.service_tier).to.equal("scale")
 	})
 })
 

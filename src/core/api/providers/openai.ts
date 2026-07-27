@@ -1,7 +1,7 @@
 import { DefaultAzureCredential, getBearerTokenProvider } from "@azure/identity"
 import { azureOpenAiDefaultApiVersion, ModelInfo, openAiModelInfoSaneDefaults } from "@shared/api"
 import { buildEffectiveModelInfo } from "@shared/providers/effective-model-info"
-import { normalizeOpenaiReasoningEffort } from "@shared/storage/types"
+import { normalizeOpenAiServiceTier, normalizeOpenaiReasoningEffort } from "@shared/storage/types"
 import { calculateApiCostOpenAI } from "@utils/cost"
 import OpenAI, { AzureOpenAI } from "openai"
 import type { ChatCompletionReasoningEffort, ChatCompletionTool } from "openai/resources/chat/completions"
@@ -107,6 +107,9 @@ export class OpenAiHandler implements ApiHandler {
 	}
 	private get reasoningEffort() {
 		return this.config?.reasoning?.effort
+	}
+	private get serviceTier() {
+		return normalizeOpenAiServiceTier(this.config?.serviceTier)
 	}
 	private get azureApiVersion() {
 		return this.config?.azureApiVersion
@@ -264,6 +267,7 @@ export class OpenAiHandler implements ApiHandler {
 			temperature,
 			max_tokens: maxTokens,
 			stream: true,
+			...(this.serviceTier ? { service_tier: this.serviceTier } : {}),
 		}
 		// Always pass enable_thinking so explicit false from ThinkingControl disables provider reasoning.
 		requestParams.enable_thinking = enableThinking

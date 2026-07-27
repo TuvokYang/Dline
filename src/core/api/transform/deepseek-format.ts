@@ -8,6 +8,7 @@ import {
 	ClineStorageMessage,
 	ClineTextContentBlock,
 	ClineUserToolResultContentBlock,
+	imageSourceToUrl,
 } from "@/shared/messages/content"
 import { Logger } from "@/shared/services/Logger"
 import { getResultFunctionId, getUseFunctionId, projectChatFunctionId } from "./tool-identity-projector"
@@ -166,7 +167,7 @@ export function convertDeepseekToOpenAiMessages(
 						role: "user",
 						content: toolResultImages.map((part) => ({
 							type: "image_url",
-							image_url: { url: `data:${part.source.media_type};base64,${part.source.data}` },
+							image_url: { url: imageSourceToUrl(part.source) },
 						})),
 					})
 				}
@@ -179,7 +180,7 @@ export function convertDeepseekToOpenAiMessages(
 								return {
 									type: "image_url",
 									image_url: {
-										url: `data:${part.source.media_type};base64,${part.source.data}`,
+										url: imageSourceToUrl(part.source),
 									},
 								}
 							}
@@ -505,7 +506,7 @@ function convertUser(msg: ClineStorageMessage): DeepSeekModelMessage[] {
 				parts.push({
 					type: "image_url",
 					image_url: {
-						url: `data:${img.source.media_type};base64,${img.source.data}`,
+						url: imageSourceToUrl(img.source),
 					},
 				})
 			}

@@ -1,5 +1,5 @@
 import { ModelInfo, OpenAiNativeModelId, openAiNativeDefaultModelId, openAiNativeModels } from "@shared/api"
-import { normalizeOpenaiReasoningEffort } from "@shared/storage/types"
+import { normalizeOpenAiServiceTier, normalizeOpenaiReasoningEffort } from "@shared/storage/types"
 import { calculateApiCostOpenAI } from "@utils/cost"
 import OpenAI from "openai"
 import type {
@@ -50,6 +50,9 @@ export class OpenAiNativeHandler implements ApiHandler {
 	}
 	private get reasoningEffort() {
 		return this.config?.reasoning?.effort
+	}
+	private get serviceTier() {
+		return normalizeOpenAiServiceTier(this.config?.serviceTier)
 	}
 	private get thinkingBudgetTokens() {
 		return this.config?.reasoning?.thinkingBudget ?? 0
@@ -121,6 +124,7 @@ export class OpenAiNativeHandler implements ApiHandler {
 				{
 					model: model.id,
 					messages: [{ role: "user", content: systemPrompt }, ...convertToOpenAiMessages(messages, "openai-native")],
+					...(this.serviceTier ? { service_tier: this.serviceTier } : {}),
 				},
 				{ signal: this.abortController?.signal },
 			)
@@ -144,6 +148,7 @@ export class OpenAiNativeHandler implements ApiHandler {
 			messages: [{ role: systemRole, content: systemPrompt }, ...convertToOpenAiMessages(messages, "openai-native")],
 			stream: true,
 			stream_options: { include_usage: true },
+			...(this.serviceTier ? { service_tier: this.serviceTier } : {}),
 			reasoning_effort: reasoningEffort,
 			...((model.info?.temperature as any) !== undefined ? { temperature: model.info?.temperature as any } : {}),
 			...(includeTools ? getOpenAIToolParams(tools, isGPT5ModelFamily(model.id)) : {}),
@@ -256,7 +261,7 @@ export class OpenAiNativeHandler implements ApiHandler {
 			requestedEffort === "none"
 				? undefined
 				: {
-						effort: requestedEffort,
+						effort: requestedEffort === "ultra" ? "max" : requestedEffort,
 						summary: "auto",
 					}
 
@@ -267,6 +272,7 @@ export class OpenAiNativeHandler implements ApiHandler {
 			stream: true,
 			tools: args.tools,
 			store: !args.previousResponseId, // Do not use store when websocket mode is enabled.
+			...(this.serviceTier ? { service_tier: this.serviceTier } : {}),
 			...(args.previousResponseId ? { previous_response_id: args.previousResponseId } : {}),
 			...(reasoning ? { reasoning } : {}),
 		}

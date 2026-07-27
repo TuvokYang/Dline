@@ -1,4 +1,5 @@
 import { ApiProfile } from "@shared/proto/dline/profile"
+import { BaseProviderConfig } from "@shared/proto/dline/provider/common"
 import { expect } from "chai"
 import { afterEach, describe, it, vi } from "vitest"
 import { DeepSeekHandler } from "../deepseek"
@@ -56,6 +57,32 @@ describe("DeepSeekHandler", () => {
 	})
 
 	describe("createMessage", () => {
+		for (const [configuredEffort, expectedEffort] of [
+			["high", "high"],
+			["max", "max"],
+			["xhigh", "max"],
+		] as const) {
+			it(`normalizes ${configuredEffort} thinking effort to ${expectedEffort}`, async () => {
+				const handler = new DeepSeekHandler({
+					profile: ApiProfile.create({
+						provider: "deepseek",
+						apiKey: "test-api-key",
+						modelId: "deepseek-v4-pro",
+						deepseek: BaseProviderConfig.create({ reasoning: { effort: configuredEffort } }),
+					}),
+					mode: "act",
+				})
+				const create = vi.fn().mockResolvedValue(createStream())
+				vi.spyOn(handler as unknown as { ensureClient: () => FakeClient }, "ensureClient").mockReturnValue({
+					chat: { completions: { create } },
+				})
+
+				await collectChunks(handler)
+
+				expect(create.mock.calls[0]?.[0]?.reasoning_effort).to.equal(expectedEffort)
+			})
+		}
+
 		it("reports non-cached input tokens separately from DeepSeek cache tokens", async () => {
 			const handler = new DeepSeekHandler({
 				profile: ApiProfile.create({

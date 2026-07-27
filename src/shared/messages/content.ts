@@ -42,6 +42,14 @@ export interface ClineTextContentBlock extends Anthropic.TextBlockParam, ClineSh
 
 export interface ClineImageContentBlock extends Anthropic.ImageBlockParam, ClineSharedMessageParam {}
 
+export function imageSourceToUrl(source: ClineImageContentBlock["source"]): string {
+	return source.type === "url" ? source.url : `data:${source.media_type};base64,${source.data}`
+}
+
+export function imageSourceMediaType(source: ClineImageContentBlock["source"]): string {
+	return source.type === "base64" ? source.media_type : "remote URL"
+}
+
 export interface ClineDocumentContentBlock extends Anthropic.DocumentBlockParam, ClineSharedMessageParam {}
 
 export interface ClineUserToolResultContentBlock extends ClineSharedMessageParam {

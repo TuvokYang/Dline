@@ -142,22 +142,19 @@ export class OpenRouterHandler implements ApiHandler {
 
 			// OpenRouter passes reasoning details that we can pass back unmodified in api requests to preserve reasoning traces for model
 			// See: https://openrouter.ai/docs/use-cases/reasoning-tokens#preserving-reasoning-blocks
-			if (
-				delta &&
-				"reasoning_details" in delta &&
-				// @ts-expect-error-next-line
-				delta.reasoning_details?.length && // exists and non-0
-				!shouldSkipReasoningForModel(this.modelId)
-			) {
+			const reasoningDetails =
+				delta && "reasoning_details" in delta && Array.isArray(delta.reasoning_details)
+					? delta.reasoning_details
+					: undefined
+			if (reasoningDetails?.length && !shouldSkipReasoningForModel(this.modelId)) {
 				yield {
 					type: "reasoning",
 					reasoning: "",
-					details: delta.reasoning_details,
+					details: reasoningDetails,
 				}
 			}
 
 			if (!didOutputUsage && chunk.usage) {
-				// @ts-expect-error-next-line -- OpenRouter returns cache_write_tokens for Anthropic models
 				const cacheWriteTokens = chunk.usage.prompt_tokens_details?.cache_write_tokens || 0
 				yield {
 					type: "usage",

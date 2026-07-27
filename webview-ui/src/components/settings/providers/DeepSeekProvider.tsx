@@ -1,6 +1,6 @@
 import type { ModelInfo } from "@shared/proto/dline/models"
 import { BaseProviderConfig } from "@shared/proto/dline/provider/common"
-import { resolveDeepSeekAdaptiveThinking } from "@shared/utils/reasoning-support"
+import { DEEPSEEK_REASONING_EFFORT_OPTIONS, resolveDeepSeekAdaptiveThinking } from "@shared/utils/reasoning-support"
 import { VSCodeCheckbox } from "@vscode/webview-ui-toolkit/react"
 import { useEffect, useRef, useState } from "react"
 import { ApiKeyField } from "../common/ApiKeyField"
@@ -97,9 +97,9 @@ export const DeepSeekProvider = ({ showModelOptions, isPopup, profile, onUpdate 
 							</div>
 							{enableThinking && (
 								<ReasoningEffortSelector
-									allowedEfforts={["high", "xhigh"] as const}
+									allowedEfforts={DEEPSEEK_REASONING_EFFORT_OPTIONS}
 									defaultEffort={adaptiveThinking.effort ?? "high"}
-									description="Toggle above to enable thinking. 'high' is the standard reasoning level; 'xhigh' enables max-effort reasoning for complex tasks."
+									description="Toggle above to enable thinking. High is the standard level; Max is for complex tasks."
 									label="Thinking Level"
 									onReasoningEffortChange={persistEffort}
 									reasoningEffort={profileEffort}

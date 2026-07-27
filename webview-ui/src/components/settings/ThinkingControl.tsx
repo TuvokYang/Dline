@@ -1,6 +1,6 @@
 import { ANTHROPIC_MAX_THINKING_BUDGET, ANTHROPIC_MIN_THINKING_BUDGET } from "@shared/api"
 import type { ReasoningConfig } from "@shared/proto/dline/provider/common"
-import { isOpenaiReasoningEffort, OPENAI_REASONING_EFFORT_OPTIONS } from "@shared/storage/types"
+import { GENERIC_REASONING_EFFORT_OPTIONS, isOpenaiReasoningEffort } from "@shared/storage/types"
 import { VSCodeCheckbox } from "@vscode/webview-ui-toolkit/react"
 import { memo, useCallback, useEffect, useMemo, useState } from "react"
 import styled from "styled-components"
@@ -90,7 +90,7 @@ const ThinkingControl = ({
 	reasoningConfig,
 	onReasoningConfigUpdate,
 	mode,
-	effortOptions = OPENAI_REASONING_EFFORT_OPTIONS as readonly string[],
+	effortOptions = GENERIC_REASONING_EFFORT_OPTIONS as readonly string[],
 	effortLabel = "Reasoning Effort",
 	effortDescription = "Higher effort improves depth, but uses more tokens.",
 	budgetLabel = "Thinking Budget",

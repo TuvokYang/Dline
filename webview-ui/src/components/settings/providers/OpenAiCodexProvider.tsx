@@ -1,8 +1,10 @@
 import { OpenAiCodexProviderConfig } from "@shared/proto/dline/provider/openai_codex"
 import { buildEffectiveModelInfo } from "@shared/providers/effective-model-info"
+import { OPENAI_REASONING_EFFORT_OPTIONS } from "@shared/storage/types"
 import { ApiKeyField } from "../common/ApiKeyField"
 import { ModelInfoView } from "../common/ModelInfoView"
 import { ModelSelector } from "../common/ModelSelector"
+import OpenAIServiceTierSelector from "../OpenAIServiceTierSelector"
 import ThinkingControl from "../ThinkingControl"
 import type { ApiProfile } from "./ProviderProfile"
 import { useProviderModels } from "./useProviderModels"
@@ -51,6 +53,7 @@ export const OpenAiCodexProvider = ({ showModelOptions, isPopup, profile, onUpda
 					/>
 					{/* Store reasoning under the existing proto-generated openaiCodex field. */}
 					<ThinkingControl
+						effortOptions={OPENAI_REASONING_EFFORT_OPTIONS}
 						mode="both"
 						modeSelectorLabel="Thinking Mode"
 						modeSelectorOptions={[
@@ -62,6 +65,10 @@ export const OpenAiCodexProvider = ({ showModelOptions, isPopup, profile, onUpda
 						}}
 						reasoningConfig={pc.reasoning}
 						showModeSelector={true}
+					/>
+					<OpenAIServiceTierSelector
+						onServiceTierChange={(serviceTier) => onUpdate({ openaiCodex: { ...pc, serviceTier } })}
+						serviceTier={pc.serviceTier}
 					/>
 					<ModelInfoView isPopup={isPopup} modelInfo={modelInfo} selectedModelId={modelId} />
 				</>

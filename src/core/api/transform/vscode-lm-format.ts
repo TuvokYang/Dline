@@ -1,11 +1,12 @@
 import { Anthropic } from "@anthropic-ai/sdk"
 import * as vscode from "vscode"
-import type {
-	ClineAssistantToolUseBlock,
-	ClineImageContentBlock,
-	ClineStorageMessage,
-	ClineTextContentBlock,
-	ClineUserToolResultContentBlock,
+import {
+	type ClineAssistantToolUseBlock,
+	type ClineImageContentBlock,
+	type ClineStorageMessage,
+	type ClineTextContentBlock,
+	type ClineUserToolResultContentBlock,
+	imageSourceMediaType,
 } from "@/shared/messages/content"
 import { Logger } from "@/shared/services/Logger"
 
@@ -79,7 +80,7 @@ export function convertToVsCodeLmMessages(anthropicMessages: ClineStorageMessage
 								: (toolMessage.content?.map((part) => {
 										if (part.type === "image") {
 											return new vscode.LanguageModelTextPart(
-												`[Image (${part.source?.type || "Unknown source-type"}): ${part.source?.media_type || "unknown media-type"} not supported by VSCode LM API]`,
+												`[Image (${part.source.type}): ${imageSourceMediaType(part.source)} not supported by VSCode LM API]`,
 											)
 										}
 										return new vscode.LanguageModelTextPart(part.text)
@@ -92,7 +93,7 @@ export function convertToVsCodeLmMessages(anthropicMessages: ClineStorageMessage
 					...nonToolMessages.map((part) => {
 						if (part.type === "image") {
 							return new vscode.LanguageModelTextPart(
-								`[Image (${part.source?.type || "Unknown source-type"}): ${part.source?.media_type || "unknown media-type"} not supported by VSCode LM API]`,
+								`[Image (${part.source.type}): ${imageSourceMediaType(part.source)} not supported by VSCode LM API]`,
 							)
 						}
 						return new vscode.LanguageModelTextPart(part.text)
@@ -175,6 +176,7 @@ export function convertToAnthropicMessage(vsCodeLmMessage: vscode.LanguageModelC
 		type: "message",
 		model: "vscode-lm",
 		role: anthropicRole,
+		container: null,
 		content: vsCodeLmMessage.content
 			.map((part): Anthropic.ContentBlock | null => {
 				if (part instanceof vscode.LanguageModelTextPart) {
@@ -189,6 +191,7 @@ export function convertToAnthropicMessage(vsCodeLmMessage: vscode.LanguageModelC
 					return {
 						type: "tool_use",
 						id: part.callId || crypto.randomUUID(),
+						caller: { type: "direct" },
 						name: part.name,
 						input: asObjectSafe(part.input),
 					}
@@ -197,13 +200,19 @@ export function convertToAnthropicMessage(vsCodeLmMessage: vscode.LanguageModelC
 				return null
 			})
 			.filter((part): part is Anthropic.ContentBlock => part !== null),
+		stop_details: null,
 		stop_reason: null,
 		stop_sequence: null,
 		usage: {
 			input_tokens: 0,
 			output_tokens: 0,
+			cache_creation: null,
 			cache_creation_input_tokens: null,
 			cache_read_input_tokens: null,
+			inference_geo: null,
+			output_tokens_details: null,
+			server_tool_use: null,
+			service_tier: null,
 		},
 	}
 }
