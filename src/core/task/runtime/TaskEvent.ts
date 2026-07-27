@@ -1,5 +1,6 @@
 import type { BlockLifecycle } from "../BlockPhaseMachine"
 import type { InteractionKind } from "../interaction/Interaction"
+import type { ActiveInteraction } from "../interaction/InteractionReducer"
 import type { InteractionDraft, InteractionResponse } from "../interaction/InteractionResponse"
 import type { TaskEffectType } from "./TaskEffect"
 import type { CancelSource, TaskAnchor } from "./TaskRuntimeState"
@@ -23,6 +24,7 @@ export type TaskEvent =
 	| { type: "BLOCK_APPROVED"; turnId: string; dlineTid: string }
 	| { type: "BLOCK_REJECTED"; turnId: string; dlineTid: string }
 	| { type: "BLOCK_EXECUTION_STARTED"; turnId: string; dlineTid: string }
+	| { type: "BLOCK_EXECUTION_REJECTED"; turnId: string; dlineTid: string }
 	| { type: "BLOCK_EXECUTION_COMPLETED"; turnId: string; dlineTid: string }
 	| { type: "TURN_COMPLETED"; turnId: string }
 	| { type: "APPROVAL_REQUIRED"; turnId: string; interactionId: string }
@@ -44,7 +46,12 @@ export type TaskEvent =
 			resume?: { turnId: string; interactionId: string; presentation: string }
 	  }
 	| { type: "TASK_RESUME_REQUESTED"; interactionId: string; draft: InteractionDraft }
-	| { type: "CHECKPOINT_CHAT_RESTORED"; apiIndex: number; draft?: InteractionDraft }
+	| {
+			type: "CHECKPOINT_CHAT_RESTORED"
+			apiIndex: number
+			draft?: InteractionDraft
+			resume?: { turnId: string; interactionId: string; presentation: string }
+	  }
 	| { type: "ERROR_RETRY_REQUESTED"; apiIndex: number; draft: InteractionDraft }
 	| { type: "API_RETRY_SCHEDULED"; apiIndex: number }
 	| {
@@ -64,4 +71,11 @@ export type TaskEvent =
 	| { type: "COMPLETION_FEEDBACK_RECEIVED"; draft: InteractionDraft }
 	| { type: "TASK_CLEAR_REQUESTED"; draft: InteractionDraft }
 	| { type: "TASK_COMPLETED"; completionId: string }
-	| { type: "EFFECT_FAILED"; effectId: string; effectType: TaskEffectType; message: string }
+	| {
+			type: "EFFECT_FAILED"
+			effectId: string
+			effectType: TaskEffectType
+			originRevision: number
+			originInteraction?: ActiveInteraction
+			message: string
+	  }

@@ -1,594 +1,260 @@
+import type { ClineStorageMessage } from "@shared/messages"
 import { describe, expect, it, vi } from "vitest"
 import { BlockPhase } from "../../BlockPhaseMachine"
-import { Task } from "../../index"
-import type { InteractionKind } from "../../interaction/Interaction"
-import { InteractionCoordinator, type InteractionOutcome } from "../../interaction/InteractionCoordinator"
-import type { InteractionResponse } from "../../interaction/InteractionResponse"
-import type { TaskEffectPorts } from "../../runtime/TaskEffectRunner"
-import { TaskRuntime } from "../../runtime/TaskRuntime"
 import { createTaskRuntimeState } from "../../runtime/TaskRuntimeState"
 import { TaskPhase } from "../../TaskPhase"
 import { createSnapshot, hydrateSnapshot } from "../../TaskSnapshot"
 import { projectTaskView } from "../../view/TaskViewProjector"
 import { ResumeCoordinator, type ResumeCoordinatorPorts } from "../ResumeCoordinator"
-import type { ResumeEntry, ResumeInput, ResumeResult } from "../ResumeInput"
+import type { ResumeInput } from "../ResumeInput"
 
-/** Build a strict resumable input without any post-snapshot tail. */
-function input(): ResumeInput {
+function input(taskId = "task-1"): ResumeInput {
+	const apiHistory: ClineStorageMessage[] = [{ role: "user", content: "task" }]
 	return {
-		taskId: "task-1",
+		taskId,
 		snapshot: createSnapshot(
-			createTaskRuntimeState({ taskId: "task-1", phase: TaskPhase.STREAMING, revision: 3, anchor: { apiIndex: 2 } }),
+			createTaskRuntimeState({
+				taskId,
+				phase: TaskPhase.STREAMING,
+				revision: 2,
+				anchor: { apiIndex: 0 },
+			}),
 			100,
 		),
-		uiTail: [],
+		apiHistory,
+		uiHistory: [],
 		apiTail: [],
-		apiHistoryLength: 3,
+		uiTail: [],
+		apiTailStartIndex: 1,
+		apiHistoryLength: 1,
 	}
 }
 
-/** Create observable coordinator ports. */
-function ports(order: string[]): ResumeCoordinatorPorts {
-	return {
-		load: vi.fn(async () => {
-			order.push("load")
-			return input()
-		}),
-		persist: vi.fn(async () => {
-			order.push("persist")
-		}),
-		hydrate: vi.fn(async (result) => {
-			order.push(
-				result.entry.type === "read_only_failure"
-					? "hydrate:read_only"
-					: `hydrate:${hydrateSnapshot(result.snapshot).phase}`,
-			)
-		}),
-		publishView: vi.fn(async () => {
-			order.push("publishView")
-		}),
-		dispatch: vi.fn(async (entry: ResumeEntry) => {
-			order.push(`dispatch:${entry.type}`)
-		}),
+function resolvingCompletionInput(taskId = "task-1"): ResumeInput {
+	const interactionId = "completion-1"
+	const turnId = "turn:completion-1"
+	const apiHistory: ClineStorageMessage[] = [
+		{ role: "user", content: "task" },
+		{
+			role: "assistant",
+			content: [
+				{
+					type: "tool_use",
+					name: "attempt_completion",
+					input: { result: "done" },
+					function_id: "fn-completion-1",
+					dline_tid: interactionId,
+				},
+			],
+		},
+	]
+	const state = createTaskRuntimeState({
+		taskId,
+		phase: TaskPhase.COMPLETED,
+		revision: 5,
+		anchor: { apiIndex: 1, turnId, interactionId, uiMessageTs: 205 },
+	})
+	state.turn = {
+		turnId,
+		assistantApiIndex: 1,
+		mode: "serial",
+		blocks: [
+			{
+				dlineTid: interactionId,
+				functionId: "fn-completion-1",
+				toolName: "attempt_completion",
+				phase: BlockPhase.COMPLETED,
+				ts: 200,
+				requiresApproval: true,
+				conversationHistoryIndex: 1,
+			},
+		],
 	}
-}
-
-/** Create one strict crash-window snapshot after response persistence and before continuation commit. */
-function resolvingInput(input: {
-	kind: InteractionKind
-	phase: TaskPhase
-	actionId: InteractionResponse["actionId"]
-	apiIndex?: number
-}): ResumeInput {
-	const turnId = `${input.kind}-turn`
-	const interactionId = `${input.kind}-interaction`
-	const response: InteractionResponse = {
-		taskId: "task-1",
+	state.interaction = {
+		taskId,
 		turnId,
 		interactionId,
-		actionId: input.actionId,
-		stateRevision: 4,
-		draft: { text: `${input.kind} continuation`, images: [], files: [] },
-	}
-	const state = {
-		...createTaskRuntimeState({
-			taskId: "task-1",
-			phase: input.phase,
-			revision: 5,
-			anchor: { apiIndex: input.apiIndex ?? 2, turnId, interactionId },
-		}),
-		interaction: {
-			taskId: "task-1",
+		kind: "completion",
+		status: "resolving",
+		createdRevision: 4,
+		anchor: { messageTs: 205, messageType: "ask" },
+		acceptedResponse: {
+			taskId,
 			turnId,
 			interactionId,
-			kind: input.kind,
-			status: "resolving" as const,
-			createdRevision: 3,
-			anchor: { messageTs: 100, messageType: "ask" as const },
-			acceptedResponse: response,
+			actionId: "reply",
+			stateRevision: 5,
+			draft: { text: "one more change", images: [], files: [] },
 		},
-		...(input.kind === "completion" ? { completion: { completionId: interactionId } } : {}),
 	}
+	state.completion = { completionId: interactionId }
+
 	return {
-		taskId: "task-1",
-		snapshot: createSnapshot(state, 100),
-		uiTail: [],
+		taskId,
+		snapshot: createSnapshot(state, 206),
+		apiHistory,
+		uiHistory: [
+			{
+				ts: 205,
+				type: "ask",
+				ask: "completion_result",
+				text: "{}",
+				interactionId,
+				conversationHistoryIndex: 1,
+			},
+		],
 		apiTail: [],
-		apiHistoryLength: (input.apiIndex ?? 2) + 1,
+		uiTail: [],
+		apiTailStartIndex: 2,
+		apiHistoryLength: 2,
 	}
 }
 
-/** Create observable runtime ports for exact-once continuation assertions. */
-function runtimePorts(overrides: Partial<TaskEffectPorts> = {}): TaskEffectPorts {
+function ports(
+	order: string[],
+	load: ResumeCoordinatorPorts["load"] = vi.fn(async (taskId: string) => input(taskId)),
+): ResumeCoordinatorPorts {
 	return {
-		postView: async () => {},
-		persistSnapshot: async () => {},
-		cancelRuntime: async () => {},
-		startApi: async () => {},
-		executeTool: async () => {},
-		appendSay: async () => {},
-		appendAsk: async () => ({ uiMessageTs: 100 }),
-		startNewTask: async () => {},
-		...overrides,
-	}
-}
-
-/** Run the production resume transaction shape with real runtime continuation dispatch. */
-async function runResolvingTransaction(resumeInput: ResumeInput, effectPorts: TaskEffectPorts = runtimePorts()) {
-	const runtime = new TaskRuntime(createTaskRuntimeState({ taskId: "task-1" }), effectPorts)
-	const interactions = new InteractionCoordinator(runtime)
-	const persisted: ResumeResult[] = []
-	const dispatched: ResumeEntry[] = []
-	const coordinator = new ResumeCoordinator({
-		load: async () => resumeInput,
+		load: async (taskId) => {
+			order.push(`load:${taskId}`)
+			return load(taskId)
+		},
+		presentInteraction: async (result) => {
+			order.push(`present:${result.entry.type}`)
+		},
 		persist: async (result) => {
-			persisted.push(result)
+			order.push(`persist:${result.snapshot.phase}`)
 		},
 		hydrate: async (result) => {
-			runtime.restore(hydrateSnapshot(result.snapshot))
+			order.push(`hydrate:${result.snapshot.phase}`)
 		},
-		publishView: async () => undefined,
-		dispatch: async (entry) => {
-			dispatched.push(entry)
-			switch (entry.type) {
-				case "reopen_interaction": {
-					const interaction = runtime.getState().interaction
-					if (!interaction) throw new Error("hydrated_interaction_missing")
-					await interactions.open({
-						turnId: entry.turnId,
-						interactionId: entry.interactionId,
-						kind: interaction.kind,
-						presentation: "",
-					})
-					return
-				}
-				case "show_completion_interaction":
-					await interactions.complete({
-						turnId: entry.turnId,
-						interactionId: entry.interactionId,
-						completionId: entry.interactionId,
-						presentation: "",
-					})
-					return
-				case "show_error_recovery":
-					await interactions.recover({
-						turnId: entry.turnId,
-						interactionId: entry.interactionId,
-						apiIndex: entry.apiIndex,
-						presentation: "",
-					})
-					return
-				case "show_resume_interaction":
-					if (!entry.interactionId) throw new Error("resume_interaction_identity_missing")
-					await interactions.resumeExisting(entry.interactionId)
-					return
-				default:
-					throw new Error(`unexpected_resume_entry:${entry.type}`)
-			}
+		publishView: async (result) => {
+			order.push(`publish:${result.entry.type}`)
 		},
-	})
-
-	const result = await coordinator.resume("task-1")
-	return { result, runtime, persisted, dispatched }
+	}
 }
 
 describe("ResumeCoordinator", () => {
-	it("publishes an explicit history resume gate without starting API work", async () => {
+	it("only reconciles, persists, hydrates and publishes a stopped task", async () => {
 		const order: string[] = []
-		const coordinator = new ResumeCoordinator(ports(order))
+		const result = await new ResumeCoordinator(ports(order)).prepare("task-1")
 
-		const result = await coordinator.resume("task-1")
-
-		expect(result.entry).toEqual({ type: "show_resume_interaction" })
-		expect(order).toEqual(["load", "persist", "hydrate:paused", "publishView", "dispatch:show_resume_interaction"])
-	})
-
-	it("coalesces concurrent resume attempts into one transaction", async () => {
-		const order: string[] = []
-		const coordinatorPorts = ports(order)
-		let releaseDispatch: (() => void) | undefined
-		let signalDispatchEntered: (() => void) | undefined
-		const dispatchBlocked = new Promise<void>((resolve) => {
-			releaseDispatch = resolve
-		})
-		const dispatchEntered = new Promise<void>((resolve) => {
-			signalDispatchEntered = resolve
-		})
-		coordinatorPorts.dispatch = vi.fn(async (entry: ResumeEntry) => {
-			order.push(`dispatch:${entry.type}`)
-			signalDispatchEntered?.()
-			await dispatchBlocked
-		})
-		const coordinator = new ResumeCoordinator(coordinatorPorts)
-
-		const first = coordinator.resume("task-1")
-		const second = coordinator.resume("task-1")
-		await dispatchEntered
-		releaseDispatch?.()
-		const [firstResult, secondResult] = await Promise.all([first, second])
-
-		expect(firstResult).toBe(secondResult)
-		expect(coordinatorPorts.load).toHaveBeenCalledOnce()
-		expect(coordinatorPorts.persist).toHaveBeenCalledOnce()
-		expect(coordinatorPorts.hydrate).toHaveBeenCalledOnce()
-		expect(coordinatorPorts.publishView).toHaveBeenCalledOnce()
-		expect(coordinatorPorts.dispatch).toHaveBeenCalledOnce()
-	})
-
-	it("does not coalesce resume transactions for different task identities", async () => {
-		const coordinatorPorts = ports([])
-		coordinatorPorts.load = vi.fn(async (taskId: string) => {
-			const value = input()
-			value.taskId = taskId
-			value.snapshot.taskId = taskId
-			return value
-		})
-		const coordinator = new ResumeCoordinator(coordinatorPorts)
-
-		await Promise.all([coordinator.resume("task-1"), coordinator.resume("task-2")])
-
-		expect(coordinatorPorts.load).toHaveBeenCalledTimes(2)
-		expect(coordinatorPorts.load).toHaveBeenNthCalledWith(1, "task-1")
-		expect(coordinatorPorts.load).toHaveBeenNthCalledWith(2, "task-2")
-		expect(coordinatorPorts.dispatch).toHaveBeenCalledTimes(2)
-	})
-
-	it("clears a failed transaction so the same task can retry", async () => {
-		const coordinatorPorts = ports([])
-		coordinatorPorts.persist = vi
-			.fn<ResumeCoordinatorPorts["persist"]>()
-			.mockRejectedValueOnce(new Error("persist failed"))
-			.mockResolvedValueOnce(undefined)
-		const coordinator = new ResumeCoordinator(coordinatorPorts)
-
-		await expect(coordinator.resume("task-1")).rejects.toThrow("persist failed")
-		await expect(coordinator.resume("task-1")).resolves.toMatchObject({ entry: { type: "show_resume_interaction" } })
-
-		expect(coordinatorPorts.load).toHaveBeenCalledTimes(2)
-		expect(coordinatorPorts.persist).toHaveBeenCalledTimes(2)
-		expect(coordinatorPorts.dispatch).toHaveBeenCalledOnce()
-	})
-
-	it("dispatches missing-identity diagnostics even when the snapshot cannot hydrate", async () => {
-		const order: string[] = []
-		const coordinatorPorts = ports(order)
-		coordinatorPorts.load = vi.fn(async () => {
-			order.push("load")
-			const value = input()
-			value.snapshot.turn = {
-				turnId: "turn-1",
-				assistantApiIndex: 2,
-				mode: "serial",
-				blocks: [
-					{
-						dlineTid: "",
-						functionId: "function-1",
-						toolName: "read_file",
-						phase: BlockPhase.EXECUTING,
-						ts: 90,
-						requiresApproval: false,
-						conversationHistoryIndex: 2,
-					},
-				],
-			}
-			return value
-		})
-		const coordinator = new ResumeCoordinator(coordinatorPorts)
-
-		const result = await coordinator.resume("task-1")
-
-		expect(result.diagnostics).toEqual([{ code: "missing_identity", field: "dlineTid" }])
-		expect(coordinatorPorts.persist).toHaveBeenCalledWith(expect.objectContaining({ entry: { type: "read_only_failure" } }))
-		expect(coordinatorPorts.dispatch).toHaveBeenCalledWith({
-			type: "read_only_failure",
-			diagnostics: [{ code: "missing_identity", field: "dlineTid" }],
-		})
-	})
-
-	it("persists and dispatches read-only failure diagnostics without guessing", async () => {
-		const order: string[] = []
-		const coordinatorPorts = ports(order)
-		coordinatorPorts.load = vi.fn(async () => {
-			order.push("load")
-			const value = input()
-			value.snapshot.anchor = { apiIndex: -2 }
-			return value
-		})
-		const coordinator = new ResumeCoordinator(coordinatorPorts)
-
-		const result = await coordinator.resume("task-1")
-
-		expect(result.entry).toEqual({ type: "read_only_failure" })
-		expect(result.diagnostics).toEqual([{ code: "corrupt_anchor", field: "apiIndex" }])
-		expect(order).toEqual(["load", "persist", "hydrate:read_only", "publishView", "dispatch:read_only_failure"])
-		expect(coordinatorPorts.dispatch).toHaveBeenCalledWith({
-			type: "read_only_failure",
-			diagnostics: [{ code: "corrupt_anchor", field: "apiIndex" }],
-		})
-	})
-
-	it("continues a persisted resolving handler response exactly once", async () => {
-		const transaction = await runResolvingTransaction(
-			resolvingInput({ kind: "qna_response", phase: TaskPhase.STREAMING, actionId: "reply" }),
-		)
-
-		expect(transaction.result.entry).toEqual({
-			type: "reopen_interaction",
-			interactionId: "qna_response-interaction",
-			turnId: "qna_response-turn",
-		})
-		expect(transaction.persisted).toHaveLength(1)
-		expect(transaction.persisted[0]?.snapshot.interaction?.status).toBe("resolving")
-		expect(transaction.dispatched).toEqual([transaction.result.entry])
-		expect(transaction.runtime.getState().interaction).toBeUndefined()
-	})
-
-	it("publishes a legacy completed interaction as Start New Task instead of Resume", async () => {
-		const taskId = "1784572948814"
-		const turnId = "turn:dline_tid_01KY27BMZJ3NK3WF475VNJEJXB"
-		const completionId = "dline_tid_01KY27BMZJ3NK3WF475VNJEJXB"
-		const messageTs = 1784633742323
-		const legacyState = createTaskRuntimeState({
-			taskId,
-			phase: TaskPhase.COMPLETED,
-			revision: 214,
-			anchor: { apiIndex: 143, turnId, uiMessageTs: messageTs, interactionId: completionId },
-		})
-		legacyState.turn = {
-			turnId,
-			assistantApiIndex: 144,
-			mode: "parallel",
-			blocks: [
-				{
-					dlineTid: completionId,
-					functionId: "call_ntLbQcg5Bgc8HsOQggBTYT2W",
-					toolName: "attempt_completion",
-					ts: messageTs,
-					requiresApproval: false,
-					conversationHistoryIndex: 0,
-					phase: BlockPhase.AUTO_EXECUTING,
-				},
-			],
-		}
-		legacyState.completion = { completionId }
-		const legacySnapshot = createSnapshot(legacyState, 1784633974188)
-		legacySnapshot.phase = TaskPhase.CANCELLING
-		legacySnapshot.cancellation = { source: "system", fromPhase: TaskPhase.COMPLETED }
-		legacySnapshot.interaction = undefined
-		const resumeInput: ResumeInput = {
-			taskId,
-			snapshot: legacySnapshot,
-			uiTail: [],
-			apiTail: [],
-			apiHistoryLength: 145,
-		}
-		const publishedViews: ReturnType<typeof projectTaskView>[] = []
-		const runtime = new TaskRuntime(createTaskRuntimeState({ taskId }), runtimePorts())
-		const coordinator = new ResumeCoordinator({
-			load: async () => resumeInput,
-			persist: async () => undefined,
-			hydrate: async (result) => runtime.restore(hydrateSnapshot(result.snapshot)),
-			publishView: async () => {
-				publishedViews.push(projectTaskView(runtime.getState()))
-			},
-			dispatch: async () => undefined,
-		})
-
-		const result = await coordinator.resume(taskId)
-
-		expect(result.entry).toEqual({ type: "show_completion_interaction", interactionId: completionId, turnId })
-		expect(publishedViews[0]?.input).toMatchObject({ enabled: true, enterAction: "reply" })
-		expect(publishedViews[0]?.footer.actions.map((action) => action.type)).toEqual(["start_new_task"])
-	})
-
-	it("publishes the hydrated completed interaction before waiting for input", async () => {
-		const resumeInput = resolvingInput({ kind: "completion", phase: TaskPhase.COMPLETED, actionId: "reply" })
-		if (!resumeInput.snapshot.interaction) throw new Error("completion_interaction_missing")
-		resumeInput.snapshot.interaction = {
-			...resumeInput.snapshot.interaction,
-			status: "awaiting",
-			acceptedResponse: undefined,
-		}
-		const publishedViews: ReturnType<typeof projectTaskView>[] = []
-		const postView = vi.fn(async () => undefined)
-		const runtime = new TaskRuntime(createTaskRuntimeState({ taskId: "task-1" }), runtimePorts({ postView }))
-		const coordinator = new ResumeCoordinator({
-			load: async () => resumeInput,
-			persist: async () => undefined,
-			hydrate: async (result) => runtime.restore(hydrateSnapshot(result.snapshot)),
-			publishView: async () => {
-				publishedViews.push(projectTaskView(runtime.getState()))
-				await postView()
-			},
-			dispatch: async () => undefined,
-		})
-
-		await coordinator.resume("task-1")
-
-		expect(runtime.getState()).toMatchObject({
-			phase: TaskPhase.COMPLETED,
-			interaction: { kind: "completion", status: "awaiting" },
-		})
-		expect(postView).toHaveBeenCalledOnce()
-		expect(publishedViews[0]?.footer.actions.map((action) => action.type)).toEqual(["start_new_task"])
-	})
-
-	it("continues a persisted resolving completion response exactly once", async () => {
-		const transaction = await runResolvingTransaction(
-			resolvingInput({ kind: "completion", phase: TaskPhase.COMPLETED, actionId: "reply" }),
-		)
-
-		expect(transaction.result.entry).toEqual({
-			type: "show_completion_interaction",
-			interactionId: "completion-interaction",
-			turnId: "completion-turn",
-		})
-		expect(transaction.dispatched).toHaveLength(1)
-		expect(transaction.runtime.getState().phase).toBe(TaskPhase.STREAMING)
-		expect(transaction.runtime.getState().interaction).toBeUndefined()
-	})
-
-	it("continues a persisted resolving retry response through one API start", async () => {
-		const startApi = vi.fn(async () => undefined)
-		const transaction = await runResolvingTransaction(
-			resolvingInput({ kind: "error_retry", phase: TaskPhase.AWAITING_APPROVAL, actionId: "retry", apiIndex: 7 }),
-			runtimePorts({ startApi }),
-		)
-
-		expect(transaction.result.entry).toEqual({
-			type: "show_error_recovery",
-			interactionId: "error_retry-interaction",
-			turnId: "error_retry-turn",
-			apiIndex: 7,
-		})
-		expect(startApi).toHaveBeenCalledOnce()
-		expect(transaction.dispatched).toHaveLength(1)
-		expect(transaction.runtime.getState().interaction).toBeUndefined()
-	})
-
-	it("continues a persisted resolving resume response through one API start", async () => {
-		const startApi = vi.fn(async () => undefined)
-		const transaction = await runResolvingTransaction(
-			resolvingInput({ kind: "resume", phase: TaskPhase.PAUSED, actionId: "resume", apiIndex: 4 }),
-			runtimePorts({ startApi }),
-		)
-
-		expect(transaction.result.entry).toEqual({
-			type: "show_resume_interaction",
-			interactionId: "resume-interaction",
-			turnId: "resume-turn",
-		})
-		expect(startApi).toHaveBeenCalledOnce()
-		expect(transaction.dispatched).toHaveLength(1)
-		expect(transaction.runtime.getState().phase).toBe(TaskPhase.RESUMING)
-		expect(transaction.runtime.getState().interaction).toBeUndefined()
-	})
-
-	it("routes production reopen_interaction through one handler continuation and provider request", async () => {
-		const outcome = {
-			actionId: "reply" as const,
-			draft: { text: "continue", images: [], files: [] },
-		}
-		const open = vi.fn(async () => outcome)
-		const continueTurnEndInteraction = vi.fn(async () => "continued tool result")
-		const recursivelyMakeClineRequests = vi.fn(async () => false)
-		const block = {
-			type: "tool_use" as const,
-			name: "qna_respond",
-			params: { response: "answer" },
-			partial: false,
-			ts: 100,
-			function_id: "function-handler",
-			dline_tid: "handler-interaction",
-		}
-		const route = (Task.prototype as unknown as { dispatchResumeEntry(entry: ResumeEntry): Promise<void> })
-			.dispatchResumeEntry
-		const fakeTask = {
-			taskRuntime: {
-				getState: () => ({
-					interaction: {
-						interactionId: "handler-interaction",
-						turnId: "handler-turn",
-						kind: "qna_response" as const,
-						status: "resolving" as const,
-						anchor: { messageTs: 100, messageType: "ask" as const },
-					},
-				}),
-			},
-			interactionCoordinator: { open },
-			toolExecutor: { continueTurnEndInteraction },
-			taskState: { assistantMessageContent: [block], userMessageContent: [] },
-			messageStateHandler: { apiConversationHistory: [] },
-			restoreHandler: { storedToRuntime: vi.fn() },
-			recursivelyMakeClineRequests,
-			findRestoredTurnEndBlock: (
-				Task.prototype as unknown as { findRestoredTurnEndBlock(interactionId: string, messageTs: number): typeof block }
-			).findRestoredTurnEndBlock,
-			continueRestoredTurnEnd: (
-				Task.prototype as unknown as {
-					continueRestoredTurnEnd(
-						kind: InteractionKind,
-						interactionId: string,
-						messageTs: number,
-						outcome: InteractionOutcome,
-					): Promise<void>
-				}
-			).continueRestoredTurnEnd,
-			dispatchResumeEntry: route,
-		} as unknown as Task
-
-		await route.call(fakeTask, {
-			type: "reopen_interaction",
-			interactionId: "handler-interaction",
-			turnId: "handler-turn",
-		})
-
-		expect(open).toHaveBeenCalledOnce()
-		expect(open).toHaveBeenCalledWith({
-			turnId: "handler-turn",
-			interactionId: "handler-interaction",
-			kind: "qna_response",
-			presentation: "",
-		})
-		expect(continueTurnEndInteraction).toHaveBeenCalledOnce()
-		expect(continueTurnEndInteraction).toHaveBeenCalledWith("qna_response", block, outcome)
-		expect(recursivelyMakeClineRequests).toHaveBeenCalledOnce()
-		expect(recursivelyMakeClineRequests).toHaveBeenCalledWith([
-			expect.objectContaining({
-				type: "tool_result",
-				function_id: "function-handler",
-				dline_tid: "handler-interaction",
-			}),
-			expect.objectContaining({
-				type: "text",
-				text: expect.stringContaining("session was closed"),
-			}),
+		expect(result.snapshot.phase).toBe(TaskPhase.PAUSED)
+		expect(result.entry).toMatchObject({ type: "show_resume_interaction" })
+		expect(order).toEqual([
+			"load:task-1",
+			"present:show_resume_interaction",
+			"persist:paused",
+			"hydrate:paused",
+			"publish:show_resume_interaction",
 		])
 	})
 
-	it.each([
-		["reply", 1],
-		["start_new_task", 0],
-	] as const)("routes restored completion %s without replaying command side effects", async (actionId, continuationCount) => {
-		const outcome = {
-			actionId,
-			draft: { text: actionId === "reply" ? "continue" : "", images: [], files: [] },
-		}
-		const complete = vi.fn(async () => outcome)
-		const continueRestoredTurnEnd = vi.fn(async () => undefined)
-		const commandExecutor = { execute: vi.fn() }
-		const route = (Task.prototype as unknown as { dispatchResumeEntry(entry: ResumeEntry): Promise<void> })
-			.dispatchResumeEntry
-		const fakeTask = {
-			taskRuntime: {
-				getState: () => ({
-					completion: { completionId: "completion-interaction" },
-					interaction: {
-						interactionId: "completion-interaction",
-						turnId: "completion-turn",
-						kind: "completion" as const,
-						status: "resolving" as const,
-						anchor: { messageTs: 100, messageType: "ask" as const },
-					},
-				}),
-			},
-			interactionCoordinator: { complete },
-			continueRestoredTurnEnd,
-			commandExecutor,
-			dispatchResumeEntry: route,
-		} as unknown as Task
-
-		await route.call(fakeTask, {
-			type: "show_completion_interaction",
-			interactionId: "completion-interaction",
-			turnId: "completion-turn",
+	it("coalesces concurrent preparation for the same task", async () => {
+		const order: string[] = []
+		let release!: () => void
+		const gate = new Promise<void>((resolve) => {
+			release = resolve
 		})
+		const load = vi.fn(async (taskId: string) => {
+			await gate
+			return input(taskId)
+		})
+		const coordinator = new ResumeCoordinator(ports(order, load))
 
-		expect(complete).toHaveBeenCalledOnce()
-		expect(continueRestoredTurnEnd).toHaveBeenCalledTimes(continuationCount)
-		if (actionId === "reply") {
-			expect(continueRestoredTurnEnd).toHaveBeenCalledWith("completion", "completion-interaction", 100, outcome)
+		const first = coordinator.prepare("task-1")
+		const second = coordinator.prepare("task-1")
+		release()
+		const [firstResult, secondResult] = await Promise.all([first, second])
+
+		expect(firstResult).toBe(secondResult)
+		expect(load).toHaveBeenCalledTimes(1)
+	})
+
+	it("keeps preparation transactions separate for different tasks", async () => {
+		const order: string[] = []
+		const load = vi.fn(async (taskId: string) => input(taskId))
+		const coordinator = new ResumeCoordinator(ports(order, load))
+
+		await Promise.all([coordinator.prepare("task-1"), coordinator.prepare("task-2")])
+
+		expect(load).toHaveBeenCalledTimes(2)
+		expect(order).toContain("load:task-1")
+		expect(order).toContain("load:task-2")
+	})
+
+	it("clears a failed preparation so the task can be opened again", async () => {
+		const order: string[] = []
+		const load = vi
+			.fn<ResumeCoordinatorPorts["load"]>()
+			.mockRejectedValueOnce(new Error("transient read failure"))
+			.mockResolvedValueOnce(input())
+		const coordinator = new ResumeCoordinator(ports(order, load))
+
+		await expect(coordinator.prepare("task-1")).rejects.toThrow("transient read failure")
+		await expect(coordinator.prepare("task-1")).resolves.toMatchObject({
+			snapshot: { phase: TaskPhase.PAUSED },
+		})
+		expect(load).toHaveBeenCalledTimes(2)
+	})
+
+	it("rebuilds a missing snapshot while remaining stopped", async () => {
+		const order: string[] = []
+		const missingSnapshot: ResumeInput = {
+			taskId: "task-1",
+			apiHistory: [{ role: "user", content: "task" }],
+			uiHistory: [],
+			apiTail: [{ role: "user", content: "task" }],
+			uiTail: [],
+			apiTailStartIndex: 0,
+			apiHistoryLength: 1,
 		}
-		expect(commandExecutor.execute).not.toHaveBeenCalled()
+		const result = await new ResumeCoordinator(
+			ports(
+				order,
+				vi.fn(async () => missingSnapshot),
+			),
+		).prepare("task-1")
+
+		expect(result.snapshot.phase).toBe(TaskPhase.PAUSED)
+		expect(result.diagnostics).toContainEqual({ code: "snapshot_rebuilt", reason: "missing" })
+		expect(order).toEqual([
+			"load:task-1",
+			"present:show_resume_interaction",
+			"persist:paused",
+			"hydrate:paused",
+			"publish:show_resume_interaction",
+		])
+	})
+
+	it("reopens a resolving completion as feedback and Start New Task without executing", async () => {
+		const order: string[] = []
+		const result = await new ResumeCoordinator(
+			ports(
+				order,
+				vi.fn(async () => resolvingCompletionInput()),
+			),
+		).prepare("task-1")
+		const view = projectTaskView(hydrateSnapshot(result.snapshot))
+
+		expect(result.entry).toEqual({
+			type: "show_completion_interaction",
+			turnId: "turn:completion-1",
+			interactionId: "completion-1",
+		})
+		expect(result.snapshot).toMatchObject({
+			phase: TaskPhase.COMPLETED,
+			interaction: { kind: "completion", status: "awaiting" },
+			completion: { completionId: "completion-1" },
+		})
+		expect(view.input).toMatchObject({ enabled: true, acceptsText: true, enterAction: "reply" })
+		expect(view.footer.actions).toMatchObject([{ type: "start_new_task", label: "Start New Task" }])
+		expect(order).toEqual([
+			"load:task-1",
+			"present:show_completion_interaction",
+			"persist:completed",
+			"hydrate:completed",
+			"publish:show_completion_interaction",
+		])
 	})
 })

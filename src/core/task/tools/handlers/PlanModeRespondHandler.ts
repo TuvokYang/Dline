@@ -1,7 +1,7 @@
 import type { ToolUse } from "@core/assistant-message"
 import { getPrompt, renderPrompt } from "@core/prompts/i18n"
 import { formatResponse } from "@core/prompts/responses"
-import { findLast, parsePartialArrayString } from "@shared/array"
+import { findLast, findLastIndex, parsePartialArrayString } from "@shared/array"
 import { telemetryService } from "@/services/telemetry"
 import { ClinePlanModeResponse } from "@/shared/ExtensionMessage"
 import { Logger } from "@/shared/services/Logger"
@@ -128,13 +128,14 @@ export class PlanModeRespondHandler implements IToolHandler, IPartialBlockHandle
 			telemetryService.captureOptionSelected(config.ulid ?? "", options.length, "plan")
 			// Valid option selected, don't show user message in UI
 			// Update last plan message with selected option
-			const lastPlanMessage = findLast(config.messageState.clineMessages, (m: any) => m.ask === this.name)
-			if (lastPlanMessage) {
-				lastPlanMessage.text = JSON.stringify({
+			const lastPlanMessageIndex = findLastIndex(config.messageState.clineMessages, (message) => message.ask === this.name)
+			if (lastPlanMessageIndex !== -1) {
+				const updatedText = JSON.stringify({
 					...sharedMessage,
 					selected: text,
 				} satisfies ClinePlanModeResponse)
-				await config.messageState.updateTaskHistory()
+				await config.messageState.updateClineMessage(lastPlanMessageIndex, { text: updatedText })
+				await config.messageState.flushMessageUpdate(lastPlanMessageIndex)
 			}
 		} else {
 			// Option not selected, send user feedback

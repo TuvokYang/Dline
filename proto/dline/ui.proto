@@ -272,6 +272,7 @@ message ClineMessage {
   ClineAskSpawnTask ask_spawn_task = 27;
   int64 command_ts = 28;
   string activity_id = 29;
+  string interaction_id = 30;
 }
 
 message ShowWebviewEvent {

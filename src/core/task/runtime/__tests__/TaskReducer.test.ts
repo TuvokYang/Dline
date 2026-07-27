@@ -292,7 +292,49 @@ describe("reduceTask lifecycle events", () => {
 		expect(result.effects.map((effect) => effect.type)).toEqual(["POST_TASK_VIEW", "PERSIST_SNAPSHOT"])
 	})
 
+	it("keeps cancellation causal when an effect from an older revision fails late", () => {
+		const state = {
+			...createTaskRuntimeState({ taskId: "task-1", phase: TaskPhase.CANCELLING, revision: 6 }),
+			cancellation: { source: "user" as const, fromPhase: TaskPhase.EXECUTING },
+			supersededEffectRevision: 5,
+		}
+
+		const failure = reduceTask(state, {
+			type: "EFFECT_FAILED",
+			effectId: "task-effect-5-2",
+			effectType: "EXECUTE_TOOL",
+			originRevision: 5,
+			message: "Dline instance aborted",
+		})
+		const cancelled = reduceTask(failure.next, { type: "TASK_CANCELLED" })
+
+		expect(failure).toEqual({ accepted: true, next: state, effects: [] })
+		expect(cancelled).toMatchObject({ accepted: true, next: { phase: TaskPhase.PAUSED } })
+	})
+
+	it("still surfaces a failure owned by the current cancellation revision", () => {
+		const state = {
+			...createTaskRuntimeState({ taskId: "task-1", phase: TaskPhase.CANCELLING, revision: 6 }),
+			cancellation: { source: "user" as const, fromPhase: TaskPhase.EXECUTING },
+			supersededEffectRevision: 5,
+		}
+
+		const result = reduceTask(state, {
+			type: "EFFECT_FAILED",
+			effectId: "task-effect-6-2",
+			effectType: "CANCEL_RUNTIME",
+			originRevision: 6,
+			message: "cancel failed",
+		})
+
+		expect(result).toMatchObject({
+			accepted: true,
+			next: { phase: TaskPhase.PAUSED, error: { effectType: "CANCEL_RUNTIME", message: "cancel failed" } },
+		})
+	})
+
 	it("starts resume only from a causal resolving resume interaction", () => {
+		const draft = { text: "Continue", images: [], files: [] }
 		const result = reduceTask(
 			{
 				...stateAt(TaskPhase.PAUSED),
@@ -305,36 +347,59 @@ describe("reduceTask lifecycle events", () => {
 					status: "resolving",
 					createdRevision: 1,
 					anchor: { messageTs: 100, messageType: "ask" },
+					acceptedResponse: {
+						taskId: "task-1",
+						turnId: "resume-turn",
+						interactionId: "resume-1",
+						actionId: "resume",
+						stateRevision: 1,
+						draft,
+					},
 				},
 			},
 			{
 				type: "TASK_RESUME_REQUESTED",
 				interactionId: "resume-1",
-				draft: { text: "Continue", images: [], files: [] },
+				draft,
 			},
 		)
 
 		expect(result).toMatchObject({
 			accepted: true,
-			next: { phase: TaskPhase.RESUMING, anchor: { interactionId: undefined } },
+			next: {
+				phase: TaskPhase.RESUMING,
+				anchor: { interactionId: "resume-1" },
+				interaction: {
+					kind: "resume",
+					status: "resolving",
+					acceptedResponse: { actionId: "resume", draft },
+				},
+			},
 		})
-		expect(result.next.interaction).toBeUndefined()
 		expect(result.effects.map((effect) => effect.type)).toEqual([
 			"POST_TASK_VIEW",
+			"PREPARE_RESUME",
 			"APPEND_SAY",
 			"START_API",
 			"PERSIST_SNAPSHOT",
 		])
-		expect(result.effects[1]).toMatchObject({
+		expect(result.effects[2]).toMatchObject({
 			type: "APPEND_SAY",
 			taskSay: "user_feedback",
 			presentation: "Continue",
 		})
-		expect(result.effects[2]).toMatchObject({
+		expect(result.effects[3]).toMatchObject({
 			type: "START_API",
 			apiIndex: 1,
-			draft: { text: "Continue", images: [], files: [] },
+			draft,
 		})
+
+		const admitted = reduceTask(result.next, { type: "API_REQUEST_STARTED", apiIndex: 1 })
+		expect(admitted).toMatchObject({
+			accepted: true,
+			next: { phase: TaskPhase.STREAMING, anchor: { interactionId: undefined } },
+		})
+		expect(admitted.next.interaction).toBeUndefined()
 	})
 
 	it("does not append an empty timeline message when resume has no draft content", () => {
@@ -359,7 +424,12 @@ describe("reduceTask lifecycle events", () => {
 			},
 		)
 
-		expect(result.effects.map((effect) => effect.type)).toEqual(["POST_TASK_VIEW", "START_API", "PERSIST_SNAPSHOT"])
+		expect(result.effects.map((effect) => effect.type)).toEqual([
+			"POST_TASK_VIEW",
+			"PREPARE_RESUME",
+			"START_API",
+			"PERSIST_SNAPSHOT",
+		])
 	})
 
 	it("abandons an unfinished pre-resume turn before starting a new API turn", () => {
@@ -426,6 +496,7 @@ describe("reduceTask lifecycle events", () => {
 			type: "EFFECT_FAILED",
 			effectId: "effect-1",
 			effectType: "START_API",
+			originRevision: 0,
 			message: "provider unavailable",
 		})
 
@@ -434,6 +505,66 @@ describe("reduceTask lifecycle events", () => {
 			next: {
 				phase: TaskPhase.PAUSED,
 				error: { effectId: "effect-1", effectType: "START_API", message: "provider unavailable" },
+			},
+		})
+	})
+
+	it.each([
+		{
+			kind: "resume" as const,
+			actionId: "resume" as const,
+			phase: TaskPhase.RESUMING,
+			failedPhase: TaskPhase.PAUSED,
+		},
+		{
+			kind: "error_retry" as const,
+			actionId: "retry" as const,
+			phase: TaskPhase.STREAMING,
+			failedPhase: TaskPhase.AWAITING_APPROVAL,
+		},
+	])("reopens $kind after its admitted START_API effect fails", ({ kind, actionId, phase, failedPhase }) => {
+		const draft = { text: "keep this draft", images: ["image"], files: ["file"] }
+		const state = {
+			...stateAt(phase),
+			revision: 6,
+			interaction: {
+				taskId: "task-1",
+				turnId: "continuation-turn",
+				interactionId: "continuation-1",
+				kind,
+				status: "resolving" as const,
+				createdRevision: 4,
+				anchor: { messageTs: 100, messageType: "ask" as const },
+				acceptedResponse: {
+					taskId: "task-1",
+					turnId: "continuation-turn",
+					interactionId: "continuation-1",
+					actionId,
+					stateRevision: 5,
+					draft,
+				},
+			},
+		}
+
+		const result = reduceTask(state, {
+			type: "EFFECT_FAILED",
+			effectId: "effect-1",
+			effectType: "START_API",
+			originRevision: 6,
+			message: "provider unavailable",
+		})
+
+		expect(result).toMatchObject({
+			accepted: true,
+			next: {
+				phase: failedPhase,
+				interaction: {
+					kind,
+					status: "awaiting",
+					createdRevision: 7,
+					acceptedResponse: { actionId, draft },
+				},
+				error: { effectType: "START_API", message: "provider unavailable" },
 			},
 		})
 	})

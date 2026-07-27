@@ -12,6 +12,7 @@ function createPorts(sequence: string[]): TaskEffectPorts {
 		postView: vi.fn(async () => undefined),
 		persistSnapshot: vi.fn(async () => undefined),
 		cancelRuntime: vi.fn(async () => undefined),
+		prepareResume: vi.fn(async () => undefined),
 		startApi: vi.fn(async (effect) => {
 			sequence.push(`effect:${effect.type}:${effect.apiIndex}`)
 		}),
@@ -186,16 +187,14 @@ describe("TaskRuntime main flow", () => {
 		expect(runtime.getState().turn?.blocks[1]?.phase).toBe(BlockPhase.STREAMING)
 
 		await dispatch(runtime, sequence, { type: "BLOCK_REJECTED", turnId: "turn-2", dlineTid: "tid-first" })
-		await dispatch(runtime, sequence, { type: "BLOCK_READY", turnId: "turn-2", dlineTid: "tid-read" })
-		await dispatch(runtime, sequence, { type: "BLOCK_EXECUTION_STARTED", turnId: "turn-2", dlineTid: "tid-read" })
-		await dispatch(runtime, sequence, { type: "BLOCK_EXECUTION_COMPLETED", turnId: "turn-2", dlineTid: "tid-read" })
 		await dispatch(runtime, sequence, { type: "TURN_COMPLETED", turnId: "turn-2" })
 
 		expect(runtime.getState().turn?.blocks.map((block) => block.phase)).toEqual([
 			BlockPhase.REJECTED,
 			BlockPhase.SKIPPED,
-			BlockPhase.COMPLETED,
+			BlockPhase.SKIPPED,
 		])
 		expect(sequence).not.toContain("effect:EXECUTE_TOOL:tid-second")
+		expect(sequence).not.toContain("effect:EXECUTE_TOOL:tid-read")
 	})
 })

@@ -2,11 +2,11 @@ import { sendCheckpointEvent } from "@core/controller/checkpoints/subscribeToChe
 import fs from "fs/promises"
 import { isBinaryFile } from "isbinaryfile"
 import * as path from "path"
-import simpleGit from "simple-git"
+import simpleGit, { type SimpleGit } from "simple-git"
 import type { FolderLockWithRetryResult } from "@/core/locks/types"
 import { telemetryService } from "@/services/telemetry"
 import { Logger } from "@/shared/services/Logger"
-import { GitOperations } from "./CheckpointGitOperations"
+import { GitOperations, resolveCheckpointWorktreePath, toLiteralGitPathspec } from "./CheckpointGitOperations"
 import { releaseCheckpointLock, tryAcquireCheckpointLockWithRetry } from "./CheckpointLockUtils"
 import { CheckpointMutexRegistry } from "./CheckpointMutexRegistry"
 import { getShadowGitPath, hashWorkingDir } from "./CheckpointUtils"
@@ -185,21 +185,23 @@ class CheckpointTracker {
 
 			const newTracker = new CheckpointTracker(taskId, workingDir, cwdHash)
 			await newTracker.sendCheckpointSubscriptionEvent("CHECKPOINT_INIT", true)
+			try {
+				const gitPath = await getShadowGitPath(newTracker.cwdHash)
+				// Serialize shadow git initialization with other concurrent tasks
+				// targeting the same workspace to prevent race conditions during
+				// repository creation (VS Code: process-level mutex;
+				// Standalone/CLI: cross-process SqliteLockManager).
+				await CheckpointMutexRegistry.getInstance().runExclusive(newTracker.cwdHash, async () => {
+					await newTracker.gitOperations.initShadowGit(gitPath, workingDir, taskId)
+				})
 
-			const gitPath = await getShadowGitPath(newTracker.cwdHash)
-			// Serialize shadow git initialization with other concurrent tasks
-			// targeting the same workspace to prevent race conditions during
-			// repository creation (VS Code: process-level mutex;
-			// Standalone/CLI: cross-process SqliteLockManager).
-			await CheckpointMutexRegistry.getInstance().runExclusive(newTracker.cwdHash, async () => {
-				await newTracker.gitOperations.initShadowGit(gitPath, workingDir, taskId)
-			})
-			await newTracker.sendCheckpointSubscriptionEvent("CHECKPOINT_INIT", false)
+				const durationMs = Math.round(performance.now() - startTime)
+				telemetryService.captureCheckpointUsage(taskId, "shadow_git_initialized", durationMs)
 
-			const durationMs = Math.round(performance.now() - startTime)
-			telemetryService.captureCheckpointUsage(taskId, "shadow_git_initialized", durationMs)
-
-			return newTracker
+				return newTracker
+			} finally {
+				await newTracker.sendCheckpointSubscriptionEvent("CHECKPOINT_INIT", false)
+			}
 		} catch (error) {
 			Logger.error("Failed to create CheckpointTracker:", error)
 			throw error
@@ -214,8 +216,8 @@ class CheckpointTracker {
 	 * set or no files have been tracked, falls back to full workspace staging
 	 * via git add . (backward compatible).
 	 *
-	 * @returns Promise<string | undefined> The created commit hash
-	 * @throws Error if commit creation fails
+	 * @returns Promise<string | undefined> A restorable shadow revision, whether newly committed or already current
+	 * @throws Error if the restore point cannot be produced
 	 */
 	public async commit(): Promise<string | undefined> {
 		// Use tracked files for incremental checkpoint when available
@@ -239,11 +241,11 @@ class CheckpointTracker {
 	 *
 	 * Commit structure:
 	 * - Commit message: "checkpoint-{cwdHash}-{taskId}"
-	 * - Always allows empty commits
+	 * - Reuses the current shadow revision when staging is unchanged
 	 *
 	 * @param files - List of file paths to include in this checkpoint.
 	 *                When empty or omitted, all files are staged (full workspace).
-	 * @returns Promise<string | undefined> The created commit hash, or undefined if:
+	 * @returns Promise<string | undefined> A restorable shadow revision, or undefined if:
 	 * - Folder lock acquisition fails or times out
 	 * - Shadow git access fails
 	 * - Staging files fails
@@ -265,12 +267,6 @@ class CheckpointTracker {
 				`[CheckpointTracker] commitForFiles: resolved ${filesToCommit.length} file(s) from TaskFileTracker for task ${this.taskId}`,
 			)
 		}
-		const requiresWorkspaceScan = this.taskFileTracker?.isWorkspaceScanRequired() ?? false
-		if (filesToCommit.length === 0 && !requiresWorkspaceScan) {
-			Logger.debug(`[CheckpointTracker] No tracked files for task ${this.taskId}; skipping checkpoint lock and git commit`)
-			return undefined
-		}
-
 		try {
 			await this.sendCheckpointSubscriptionEvent("CHECKPOINT_COMMIT", true)
 			Logger.info(`Creating new checkpoint commit for task ${this.taskId}`)
@@ -334,10 +330,12 @@ class CheckpointTracker {
 	 * - When files are provided: incremental git add <files>.
 	 * - When files are empty and command execution may have modified files:
 	 *   run a guarded workspace scan after a readonly change preflight.
-	 * - When files are empty and no workspace scan is required: skip git.
+	 * - When files are empty and no workspace scan is required: reuse the validated shadow HEAD.
 	 *
-	 * After a successful commit the TaskFileTracker's modified-file cache
-	 * is cleared so the next checkpoint only captures newly modified files.
+	 * When staging produces no changes, the current valid shadow HEAD remains the
+	 * restore point. After a successful new commit the TaskFileTracker's
+	 * modified-file cache is cleared so the next checkpoint only captures newly
+	 * modified files.
 	 */
 	private async doCommitFiles(files: string[]): Promise<string | undefined> {
 		const gitPath = await getShadowGitPath(this.cwdHash)
@@ -366,9 +364,9 @@ class CheckpointTracker {
 			if (!hasWorkspaceChanges) {
 				this.taskFileTracker?.clearWorkspaceScanRequired()
 				Logger.debug(
-					`[CheckpointTracker] No workspace changes after command for task ${this.taskId}; skipping git checkpoint`,
+					`[CheckpointTracker] No workspace changes after command for task ${this.taskId}; reusing shadow HEAD`,
 				)
-				return undefined
+				return this.getCurrentRestorePoint(git)
 			}
 			const addFilesResult = await this.gitOperations.addCheckpointFiles({
 				git,
@@ -380,15 +378,16 @@ class CheckpointTracker {
 				return undefined
 			}
 		} else {
-			Logger.debug(`[CheckpointTracker] No tracked files for task ${this.taskId}; skipping git checkpoint`)
-			return undefined
+			Logger.debug(`[CheckpointTracker] No tracked files for task ${this.taskId}; reusing shadow HEAD`)
+			return this.getCurrentRestorePoint(git)
 		}
 
 		const hasStagedChanges = await this.gitOperations.hasStagedChanges(git, this.taskId)
 		if (!hasStagedChanges) {
+			this.taskFileTracker?.clearModifiedFiles()
 			this.taskFileTracker?.clearWorkspaceScanRequired()
-			Logger.debug(`[CheckpointTracker] No staged changes for task ${this.taskId}; skipping empty checkpoint commit`)
-			return undefined
+			Logger.debug(`[CheckpointTracker] No staged changes for task ${this.taskId}; reusing shadow HEAD`)
+			return this.getCurrentRestorePoint(git)
 		}
 
 		const commitMessage = `checkpoint-${this.cwdHash}-${this.taskId}`
@@ -413,6 +412,15 @@ class CheckpointTracker {
 		}
 
 		return commitHash
+	}
+
+	/** Return the current validated shadow revision without creating an empty commit. */
+	private async getCurrentRestorePoint(git: SimpleGit): Promise<string> {
+		const revision = (await git.revparse(["HEAD"])).trim()
+		if (!revision) {
+			throw new Error("Checkpoint shadow repository has no valid HEAD revision")
+		}
+		return this.cleanCommitHash(revision)
 	}
 
 	/**
@@ -539,8 +547,8 @@ class CheckpointTracker {
 
 	/**
 	 * Restores only the specified files to a previous checkpoint commit.
-	 * Unlike resetHead which does a full `git reset --hard`, this uses
-	 * `git checkout <hash> -- <files>` to restore only the given files,
+	 * Unlike resetHead which does a full `git reset --hard`, this restores only
+	 * the working-tree copies of the given files from the selected revision,
 	 * leaving all other files untouched.
 	 *
 	 * Key behaviors:
@@ -622,13 +630,37 @@ class CheckpointTracker {
 
 		// Convert absolute paths to workspace-relative paths for git checkout.
 		// git checkout requires paths relative to the worktree root (this.cwd).
-		const relativeFiles = files.map((f) => path.relative(this.cwd, f))
+		const resolvedFiles = await Promise.all(files.map((file) => resolveCheckpointWorktreePath(this.cwd, file)))
+		if (resolvedFiles.some((file) => file === undefined)) {
+			throw new Error("Checkpoint restore path is outside the worktree")
+		}
+		const ownedFiles = resolvedFiles as Array<{ absolute: string; relative: string }>
+		const relativeFiles = ownedFiles.map((file) => file.relative)
 		Logger.debug(
 			`[CheckpointTracker] doRestoreFiles: restoring ${files.length} file(s) to commit ${cleanHash} for task ${this.taskId}` +
 				`\n  shadow git: ${gitPath}` +
 				`\n  files: ${relativeFiles.join(", ")}`,
 		)
-		await git.raw(["checkout", cleanHash, "--", ...relativeFiles])
+		const literalPathspecs = relativeFiles.map(toLiteralGitPathspec)
+		const treeOutput = await git.raw(["ls-tree", "-r", "--name-only", "-z", cleanHash, "--", ...literalPathspecs])
+		const normalizeGitPath = (file: string) => {
+			const normalized = file.replaceAll("\\", "/")
+			return process.platform === "win32" ? normalized.toLowerCase() : normalized
+		}
+		const filesInCheckpoint = new Set(treeOutput.split("\0").filter(Boolean).map(normalizeGitPath))
+		const presentFiles = relativeFiles.filter((file) => filesInCheckpoint.has(normalizeGitPath(file)))
+		const deletedFiles = relativeFiles.filter((file) => !filesInCheckpoint.has(normalizeGitPath(file)))
+		if (presentFiles.length > 0) {
+			await git.raw(["restore", `--source=${cleanHash}`, "--worktree", "--", ...presentFiles.map(toLiteralGitPathspec)])
+		}
+		if (deletedFiles.length > 0) {
+			const deletedPaths = new Set(deletedFiles.map(normalizeGitPath))
+			await Promise.all(
+				ownedFiles
+					.filter((file) => deletedPaths.has(normalizeGitPath(file.relative)))
+					.map((file) => fs.rm(file.absolute, { force: true })),
+			)
+		}
 		Logger.debug(`[CheckpointTracker] Successfully restored ${files.length} file(s) to checkpoint: ${cleanHash}`)
 	}
 

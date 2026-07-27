@@ -18,6 +18,7 @@ export interface TaskEffectPorts {
 	postView(): Promise<void>
 	persistSnapshot(state: Readonly<TaskRuntimeState>): Promise<void>
 	cancelRuntime(): Promise<void>
+	prepareResume(): Promise<void>
 	startApi(effect: StartApiEffect): Promise<void>
 	executeTool(effect: ExecuteToolEffect): Promise<void>
 	appendSay(effect: AppendSayEffect): Promise<void>
@@ -68,6 +69,9 @@ export class TaskEffectRunner {
 				return
 			case "CANCEL_RUNTIME":
 				await this.ports.cancelRuntime()
+				return
+			case "PREPARE_RESUME":
+				await this.ports.prepareResume()
 				return
 			case "START_API":
 				await this.ports.startApi(effect)

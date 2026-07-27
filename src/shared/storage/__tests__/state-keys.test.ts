@@ -282,6 +282,10 @@ describe("State Keys Type Safety", () => {
 		/**
 		 * Tests for the getDefaultValue utility function.
 		 */
+		it("should enable subagent features by default", () => {
+			expect(SETTINGS_DEFAULTS.subagentsEnabled).to.equal(true)
+			expect(getDefaultValue("subagentsEnabled")).to.equal(true)
+		})
 
 		it("should return correct default values for known keys", () => {
 			// Test a few known defaults

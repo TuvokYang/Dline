@@ -1,0 +1,132 @@
+import { describe, expect, it, vi } from "vitest"
+import { BlockPhase } from "../../BlockPhaseMachine"
+import type { TaskEffectPorts } from "../../runtime/TaskEffectRunner"
+import type { TaskEvent } from "../../runtime/TaskEvent"
+import { TaskRuntime } from "../../runtime/TaskRuntime"
+import { createTaskRuntimeState } from "../../runtime/TaskRuntimeState"
+import { TaskPhase } from "../../TaskPhase"
+import { InteractionCoordinator } from "../InteractionCoordinator"
+
+function createPorts(): TaskEffectPorts {
+	return {
+		postView: async () => {},
+		persistSnapshot: async () => {},
+		cancelRuntime: async () => {},
+		prepareResume: async () => {},
+		startApi: async () => {},
+		executeTool: async () => {},
+		appendSay: async () => {},
+		appendAsk: async () => ({ uiMessageTs: 100 }),
+		startNewTask: async () => {},
+	}
+}
+
+describe("InteractionCoordinator cancellation fence", () => {
+	it("does not claim an old-generation detached continuation after cancellation starts", async () => {
+		const interactionId = "qna-cancel-race"
+		const turnId = `turn:${interactionId}`
+		const runtime = new TaskRuntime(
+			{
+				...createTaskRuntimeState({
+					taskId: "task-1",
+					phase: TaskPhase.EXECUTING,
+					revision: 7,
+					anchor: { apiIndex: 1, uiMessageTs: 100, turnId, interactionId },
+				}),
+				turn: {
+					turnId,
+					assistantApiIndex: 1,
+					mode: "serial",
+					blocks: [
+						{
+							dlineTid: interactionId,
+							functionId: "function-qna",
+							toolName: "qna_respond",
+							phase: BlockPhase.AUTO_EXECUTING,
+							ts: 100,
+							requiresApproval: false,
+							conversationHistoryIndex: 1,
+						},
+					],
+				},
+				interaction: {
+					taskId: "task-1",
+					turnId,
+					interactionId,
+					kind: "qna_response",
+					status: "awaiting",
+					createdRevision: 6,
+					anchor: { messageTs: 100, messageType: "ask" },
+				},
+			},
+			createPorts(),
+		)
+		const dispatch = runtime.dispatch.bind(runtime)
+		let releaseRespond: (() => void) | undefined
+		let responseCommitted: (() => void) | undefined
+		const responseCommit = new Promise<void>((resolve) => {
+			responseCommitted = resolve
+		})
+		const respondGate = new Promise<void>((resolve) => {
+			releaseRespond = resolve
+		})
+		vi.spyOn(runtime, "dispatch").mockImplementation(async (event: TaskEvent) => {
+			const result = await dispatch(event)
+			if (event.type === "INTERACTION_RESPONDED") {
+				responseCommitted?.()
+				await respondGate
+			}
+			return result
+		})
+		const coordinator = new InteractionCoordinator(runtime)
+		const continuation = vi.fn(async () => undefined)
+		coordinator.registerDetachedContinuation(continuation)
+
+		const responding = coordinator.respond({
+			taskId: "task-1",
+			turnId,
+			interactionId,
+			actionId: "reply",
+			stateRevision: 7,
+			draft: { text: "answer", images: [], files: [] },
+		})
+		await responseCommit
+
+		coordinator.cancelPending()
+		const cancel = await dispatch({ type: "TASK_CANCEL_REQUESTED", source: "user" })
+		expect(cancel.accepted).toBe(true)
+		await coordinator.waitForClaimedContinuations()
+		releaseRespond?.()
+		const result = await responding
+
+		expect(result).toMatchObject({
+			accepted: false,
+			error: { code: "stale_interaction", eventType: "INTERACTION_RESPONDED", phase: TaskPhase.CANCELLING },
+		})
+		expect(continuation).not.toHaveBeenCalled()
+		expect(runtime.getState().phase).toBe(TaskPhase.CANCELLING)
+	})
+
+	it("rejects a response submitted after cancellation intent without mutating the replacement interaction", async () => {
+		const runtime = new TaskRuntime(
+			createTaskRuntimeState({ taskId: "task-1", phase: TaskPhase.STREAMING, anchor: { apiIndex: 1 } }),
+			createPorts(),
+		)
+		const coordinator = new InteractionCoordinator(runtime)
+		const cancellationGeneration = coordinator.cancelPending()
+
+		const result = await coordinator.respond({
+			taskId: "task-1",
+			turnId: "old-turn",
+			interactionId: "old-interaction",
+			actionId: "reply",
+			stateRevision: runtime.getState().revision,
+			draft: { text: "keep this draft", images: [], files: [] },
+		})
+
+		expect(result).toMatchObject({ accepted: false, error: { code: "stale_interaction" } })
+		expect(runtime.getState()).toMatchObject({ phase: TaskPhase.STREAMING, revision: 0 })
+		expect(runtime.getState().interaction).toBeUndefined()
+		coordinator.completeCancellation(cancellationGeneration)
+	})
+})

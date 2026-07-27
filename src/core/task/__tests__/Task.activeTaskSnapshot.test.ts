@@ -1,29 +1,25 @@
 import { describe, expect, it } from "vitest"
-import { BlockPhase } from "../BlockPhaseMachine"
 import { Task } from "../index"
+import { TaskPhase } from "../TaskPhase"
 
 describe("Task active task snapshot accessors", () => {
-	it("returns buildTurn phase from the first non-completed block", () => {
+	it("returns the canonical runtime phase instead of the retained controller phase", () => {
 		const fakeTask = {
+			taskRuntime: { getState: () => ({ phase: TaskPhase.AWAITING_APPROVAL }) },
 			taskController: {
-				getBlocks: () => [
-					{ callId: "done", toolName: "read_file", phase: BlockPhase.COMPLETED },
-					{ callId: "active", toolName: "write_to_file", phase: BlockPhase.AWAITING_APPROVAL },
-				],
+				getBlocks: () => [{ phase: "completed" }],
 			},
 		} as unknown as Task
 
-		expect(Task.prototype.getActiveTaskPhase.call(fakeTask)).toBe(BlockPhase.AWAITING_APPROVAL)
+		expect(Task.prototype.getActiveTaskPhase.call(fakeTask)).toBe(TaskPhase.AWAITING_APPROVAL)
 	})
 
-	it("returns completed when all buildTurn blocks are completed", () => {
+	it("returns between-turns from the runtime after a turn finishes", () => {
 		const fakeTask = {
-			taskController: {
-				getBlocks: () => [{ callId: "done", toolName: "read_file", phase: BlockPhase.COMPLETED }],
-			},
+			taskRuntime: { getState: () => ({ phase: TaskPhase.BETWEEN_TURNS }) },
 		} as unknown as Task
 
-		expect(Task.prototype.getActiveTaskPhase.call(fakeTask)).toBe(BlockPhase.COMPLETED)
+		expect(Task.prototype.getActiveTaskPhase.call(fakeTask)).toBe(TaskPhase.BETWEEN_TURNS)
 	})
 
 	it("returns edited files from lifetime tracker", () => {

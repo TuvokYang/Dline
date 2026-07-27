@@ -3,6 +3,7 @@ import type { CommandExecutionOutcome } from "@integrations/terminal"
 import { ClineDefaultTool } from "@shared/tools"
 import { describe, it, vi } from "vitest"
 import type { ToolUse } from "../../../../assistant-message"
+import type { InteractionOutcome } from "../../../interaction/InteractionCoordinator"
 import { TaskState } from "../../../TaskState"
 import type { TaskConfig } from "../../types/TaskConfig"
 import { AttemptCompletionHandler } from "../AttemptCompletionHandler"
@@ -105,7 +106,37 @@ function createBlock(command?: string): ToolUse {
 	} as ToolUse
 }
 
+type CommandApprovalContinuation = {
+	continueCommandApproval(config: TaskConfig, block: ToolUse, outcome: InteractionOutcome): Promise<unknown>
+}
+
 describe("AttemptCompletionHandler stop behavior", () => {
+	it("continues a restored command approval from the post-approval boundary", async () => {
+		const taskState = new TaskState()
+		const config = createConfig(taskState)
+		const handler = new AttemptCompletionHandler() as AttemptCompletionHandler & CommandApprovalContinuation
+
+		await handler.continueCommandApproval(config, createBlock("echo restored"), { actionId: "approve" })
+
+		expect(config.interactions.open).not.toHaveBeenCalled()
+		expect(config.callbacks.executeCommandTool).toHaveBeenCalledWith("echo restored", undefined, {
+			commandTs: undefined,
+		})
+		expect(config.interactions.complete).toHaveBeenCalledOnce()
+	})
+
+	it("consumes a restored command rejection without executing or completing", async () => {
+		const taskState = new TaskState()
+		const config = createConfig(taskState)
+		const handler = new AttemptCompletionHandler() as AttemptCompletionHandler & CommandApprovalContinuation
+
+		await handler.continueCommandApproval(config, createBlock("echo rejected"), { actionId: "reject" })
+
+		expect(config.taskController.rejectActiveBlock).toHaveBeenCalledOnce()
+		expect(config.callbacks.executeCommandTool).not.toHaveBeenCalled()
+		expect(config.interactions.complete).not.toHaveBeenCalled()
+	})
+
 	it("returns terminal completion when the runtime starts a new task", async () => {
 		const taskState = new TaskState()
 		const config = createConfig(taskState)

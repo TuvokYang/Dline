@@ -313,10 +313,6 @@ export class ExecuteCommandToolHandler implements IFullyManagedTool {
 			config.taskState.fileReadCache.clear()
 		}
 
-		if (outcome.userRejected) {
-			config.taskController.rejectActiveBlock()
-		}
-
 		return outcome.result
 	}
 }

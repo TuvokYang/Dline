@@ -166,6 +166,52 @@ export class MessageChannel {
 	// ── ask ──
 
 	/** Persist one ask presentation without creating a legacy response waiter. */
+	/** Persist one causally identified say row exactly once. */
+	async presentSay(
+		type: ClineSay,
+		text: string | undefined,
+		images: string[] | undefined,
+		files: string[] | undefined,
+		interactionId: string,
+	): Promise<number> {
+		const messages = this.messageStateHandler.clineMessages
+		const matches = messages
+			.map((message, index) => ({ message, index }))
+			.filter(({ message }) => message.type === "say" && message.say === type && message.interactionId === interactionId)
+		if (matches.length > 1) {
+			throw new Error(`Duplicate causal say rows for interactionId=${interactionId}`)
+		}
+
+		const existing = matches[0]
+		const ts = existing?.message.ts ?? this.genTs()
+		const message = {
+			type: "say" as const,
+			say: type,
+			text,
+			images,
+			files,
+			partial: false,
+			interactionId,
+			modelInfo: this.getProviderInfo(),
+		}
+		if (existing) {
+			await this.messageStateHandler.updateClineMessage(existing.index, message)
+			await this.messageStateHandler.flushMessageUpdate(existing.index)
+		} else {
+			await this.messageStateHandler.addToClineMessages({ ts, ...message })
+			await this.messageStateHandler.flushUiMessages()
+		}
+
+		this.taskState.lastMessageTs = ts
+		await this.postStateToWebview()
+		const persisted = this.messageStateHandler.clineMessages.find(
+			(candidate) => candidate.ts === ts && candidate.interactionId === interactionId,
+		)
+		if (!persisted) throw new Error(`Causal say row disappeared for interactionId=${interactionId}`)
+		this.pushMessage(persisted)
+		return ts
+	}
+
 	async presentAsk(type: ClineAsk, text?: string, existingTs?: number, interactionId?: string): Promise<number> {
 		const askTs = existingTs ?? this.genTs()
 		this.taskState.lastMessageTs = askTs
@@ -192,6 +238,7 @@ export class MessageChannel {
 				...commandPresentation,
 			})
 		}
+		await this.messageStateHandler.flushUiMessages()
 		await this.postStateToWebview()
 		const persisted = this.messageStateHandler.clineMessages.find((message) => message.ts === askTs)
 		if (persisted) {

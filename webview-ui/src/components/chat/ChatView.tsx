@@ -12,6 +12,7 @@ import { useExtensionState } from "@/context/ExtensionStateContext"
 import { useShowNavbar } from "@/context/PlatformContext"
 import { FileServiceClient, TaskServiceClient, UiServiceClient } from "@/services/grpc-client"
 import { InteractionHost } from "@/task-interaction/InteractionHost"
+import { isPresentationKind } from "@/task-interaction/renderer-registry"
 import {
 	type AcceptedInteractionSettlement,
 	buildInteractionRequest,
@@ -19,6 +20,7 @@ import {
 	captureInteractionDraft,
 	createAcceptedInteractionSettlement,
 	type InteractionDraft,
+	isActiveInteractionSynchronized,
 } from "@/task-interaction/types"
 import { Navbar } from "../menu/Navbar"
 import { TaskActivityPanel } from "./activity/TaskActivityPanel"
@@ -88,6 +90,10 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 		const withHooks = hooksEnabled ? combineHookSequences(messages) : messages
 		return combineErrorRetryMessages(combineApiRequests(combineCommandSequences(withHooks)))
 	}, [messages, hooksEnabled])
+	const interactionSynchronized = taskViewState
+		? isActiveInteractionSynchronized(modifiedMessages, taskViewState) &&
+			(!taskViewState.activeInteraction || isPresentationKind(taskViewState.activeInteraction.presentationKind))
+		: true
 	// apiMetrics and lastApiReqTotalTokens are computed by the backend
 	// and delivered via subscribeToState, independent of the message window.
 	const lastApiReqTotalTokens = lastApiReqTotalTokensFromState
@@ -380,7 +386,7 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 	const messageHandlers = useMessageHandlers(messages, chatState, scrollBehavior.disableAutoScrollRef)
 	const submitInteractionDraft = useCallback(
 		async (draft: InteractionDraft): Promise<AcceptedInteractionSettlement | undefined> => {
-			if (!taskViewState?.input.enterAction) {
+			if (!taskViewState?.input.enterAction || !interactionSynchronized) {
 				return undefined
 			}
 			const capturedDraft = captureInteractionDraft(draft)
@@ -391,7 +397,7 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 			const response = await TaskServiceClient.dispatchInteraction(request)
 			return response.accepted ? createAcceptedInteractionSettlement(request, capturedDraft) : undefined
 		},
-		[taskViewState],
+		[interactionSynchronized, taskViewState],
 	)
 
 	const placeholderText = useMemo(() => {
@@ -464,7 +470,11 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 				<InputSection
 					chatState={chatState}
 					draft={interactionDraft}
-					enabled={task ? Boolean(taskViewState?.input.enabled && taskViewState.input.enterAction) : undefined}
+					enabled={
+						task
+							? Boolean(taskViewState?.input.enabled && taskViewState.input.enterAction && interactionSynchronized)
+							: undefined
+					}
 					messageHandlers={messageHandlers}
 					onDraftAccepted={settleAcceptedDraft}
 					onSubmit={task ? submitInteractionDraft : undefined}
@@ -475,7 +485,8 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 						shouldDisableFilesAndImages ||
 						Boolean(
 							task &&
-								(!taskViewState?.input.enabled ||
+								(!interactionSynchronized ||
+									!taskViewState?.input.enabled ||
 									(!taskViewState.input.acceptsImages && !taskViewState.input.acceptsFiles)),
 						)
 					}

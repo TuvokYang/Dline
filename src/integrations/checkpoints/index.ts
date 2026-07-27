@@ -121,6 +121,14 @@ export class TaskCheckpointManager implements ICheckpointManager {
 		this.state = { ...initialState }
 	}
 
+	private async persistCheckpointHash(messageIndex: number, commitHash: string): Promise<void> {
+		await this.services.messageStateHandler.updateClineMessage(messageIndex, {
+			lastCheckpointHash: commitHash,
+		})
+		await this.services.messageStateHandler.flushMessageUpdate(messageIndex)
+		await this.callbacks.postStateToWebview()
+	}
+
 	// ============================================================================
 	// Public API - Core checkpoints operations
 	// ============================================================================
@@ -183,20 +191,13 @@ export class TaskCheckpointManager implements ICheckpointManager {
 				const messageTs = await this.callbacks.say("checkpoint_created")
 				if (messageTs) {
 					const messages = this.services.messageStateHandler.clineMessages
-					const targetMessage = messages.find((m) => m.ts === messageTs)
+					const targetMessageIndex = messages.findIndex((m) => m.ts === messageTs)
 
-					if (targetMessage && this.state.checkpointTracker) {
+					if (targetMessageIndex !== -1 && this.state.checkpointTracker) {
 						try {
 							const commitHash = await this.state.checkpointTracker.commit()
 							if (commitHash) {
-								targetMessage.lastCheckpointHash = commitHash
-								// updateTaskHistory is deferred to not block the main loop
-								this.services.messageStateHandler.updateTaskHistory().catch((error) => {
-									Logger.error(
-										`[TaskCheckpointManager] Failed to update task history for checkpoint commit in task ${this.task.taskId}:`,
-										error,
-									)
-								})
+								await this.persistCheckpointHash(targetMessageIndex, commitHash)
 							}
 						} catch (error) {
 							Logger.error(
@@ -229,18 +230,21 @@ export class TaskCheckpointManager implements ICheckpointManager {
 
 					// If a completionMessageTs is provided, update that specific message with the checkpoint hash
 					if (completionMessageTs) {
-						const targetMessage = this.services.messageStateHandler.clineMessages.find(
+						const targetMessageIndex = this.services.messageStateHandler.clineMessages.findIndex(
 							(m) => m.ts === completionMessageTs,
 						)
-						if (targetMessage) {
-							targetMessage.lastCheckpointHash = commitHash
-							await this.services.messageStateHandler.updateTaskHistory()
+						if (targetMessageIndex !== -1) {
+							await this.persistCheckpointHash(targetMessageIndex, commitHash)
 						}
 					} else {
 						// Fallback to findLast if no timestamp provided - update the last completion_result message
 						if (lastCompletionResultMessage) {
-							lastCompletionResultMessage.lastCheckpointHash = commitHash
-							await this.services.messageStateHandler.updateTaskHistory()
+							const targetMessageIndex = this.services.messageStateHandler.clineMessages.findIndex(
+								(message) => message === lastCompletionResultMessage,
+							)
+							if (targetMessageIndex !== -1) {
+								await this.persistCheckpointHash(targetMessageIndex, commitHash)
+							}
 						}
 					}
 				} else {

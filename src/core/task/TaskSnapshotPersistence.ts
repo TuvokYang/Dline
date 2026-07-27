@@ -1,6 +1,61 @@
+import fs from "node:fs/promises"
+import { Logger } from "@/shared/services/Logger"
 import type { TaskSnapshot } from "./TaskSnapshot"
 
 const DEFAULT_FLUSH_INTERVAL_MS = 100
+const SNAPSHOT_RENAME_MAX_ATTEMPTS = 3
+const SNAPSHOT_RENAME_RETRY_DELAYS_MS = [10, 25] as const
+const RETRYABLE_SNAPSHOT_RENAME_CODES = new Set(["EPERM", "EACCES", "EBUSY"])
+
+type RenameFile = (sourcePath: string, destinationPath: string) => Promise<void>
+
+interface SnapshotRenameError extends NodeJS.ErrnoException {
+	dest?: string
+}
+
+export interface RenameTaskSnapshotOptions {
+	renameFile?: RenameFile
+	sleep?: (delayMs: number) => Promise<void>
+}
+
+function snapshotRenameErrorDetails(error: unknown, sourcePath: string, destinationPath: string, attempt: number) {
+	const nodeError = error as SnapshotRenameError | undefined
+	return {
+		code: nodeError?.code ?? "UNKNOWN",
+		syscall: nodeError?.syscall ?? "rename",
+		path: nodeError?.path ?? sourcePath,
+		dest: nodeError?.dest ?? destinationPath,
+		attempt,
+	}
+}
+
+/**
+ * Rename a completed task snapshot temp file into place.
+ * Windows file locks can transiently reject replacement, so only the known
+ * lock-related error codes are retried and the destination is never removed.
+ */
+export async function renameTaskSnapshotWithRetry(
+	sourcePath: string,
+	destinationPath: string,
+	options: RenameTaskSnapshotOptions = {},
+): Promise<void> {
+	const renameFile = options.renameFile ?? fs.rename
+	const sleep = options.sleep ?? ((delayMs: number) => new Promise<void>((resolve) => setTimeout(resolve, delayMs)))
+
+	for (let attempt = 1; attempt <= SNAPSHOT_RENAME_MAX_ATTEMPTS; attempt++) {
+		try {
+			await renameFile(sourcePath, destinationPath)
+			return
+		} catch (error) {
+			const details = snapshotRenameErrorDetails(error, sourcePath, destinationPath, attempt)
+			Logger.warn("[TaskSnapshotPersistence] Failed to rename task snapshot", details)
+			if (!RETRYABLE_SNAPSHOT_RENAME_CODES.has(details.code) || attempt === SNAPSHOT_RENAME_MAX_ATTEMPTS) {
+				throw error
+			}
+			await sleep(SNAPSHOT_RENAME_RETRY_DELAYS_MS[attempt - 1] ?? 0)
+		}
+	}
+}
 
 export interface TaskSnapshotPersistenceOptions {
 	writeSnapshot: (snapshot: TaskSnapshot) => Promise<void>
@@ -51,13 +106,18 @@ export class TaskSnapshotPersistence {
 			this.clearTimeoutFn(this.flushTimer)
 			this.flushTimer = undefined
 		}
-		const snapshot = this.pendingSnapshot
-		if (!snapshot) {
-			await this.writeChain
-			return
-		}
-		this.pendingSnapshot = undefined
-		this.writeChain = this.writeChain.then(() => this.writeSnapshot(snapshot))
-		await this.writeChain
+		const attempt = this.writeChain.then(async () => {
+			const snapshot = this.pendingSnapshot
+			if (!snapshot) return
+
+			await this.writeSnapshot(snapshot)
+			if (this.pendingSnapshot === snapshot) {
+				this.pendingSnapshot = undefined
+			}
+		})
+		// The caller still observes this attempt's failure, while the internal tail
+		// remains usable so a later flush can retry the retained snapshot.
+		this.writeChain = attempt.catch(() => undefined)
+		await attempt
 	}
 }

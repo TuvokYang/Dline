@@ -1,7 +1,21 @@
-import type { ClineMessage, TaskViewState } from "@shared/ExtensionMessage"
+import type { ClineAsk, ClineMessage, TaskViewActionType, TaskViewState } from "@shared/ExtensionMessage"
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
-import { describe, expect, it, vi } from "vitest"
+import { beforeEach, describe, expect, it, vi } from "vitest"
+import { TaskServiceClient } from "@/services/grpc-client"
 import { InteractionHost } from "../InteractionHost"
+
+vi.mock("@/services/grpc-client", () => ({
+	TaskServiceClient: { cancelTask: vi.fn(async () => undefined) },
+}))
+
+const ASK: ClineMessage = {
+	ts: 100,
+	type: "ask",
+	ask: "tool",
+	text: "Approve write",
+	interactionId: "interaction-1",
+}
+const SAY: ClineMessage = { ts: 90, type: "say", say: "text", text: "status text" }
 
 /** Create one active interaction view anchored to timestamp 100. */
 function taskView(): TaskViewState {
@@ -30,10 +44,37 @@ function taskView(): TaskViewState {
 	}
 }
 
-const ASK: ClineMessage = { ts: 100, type: "ask", ask: "tool", text: "Approve write" }
-const SAY: ClineMessage = { ts: 90, type: "say", say: "text", text: "status text" }
+function configureInteraction(
+	view: TaskViewState,
+	input: {
+		kind: string
+		taskAsk: ClineAsk
+		presentationKind: string
+		action: TaskViewActionType
+		label: string
+		enterAction?: TaskViewActionType
+	},
+): ClineMessage {
+	if (!view.activeInteraction) throw new Error("Expected active interaction")
+	view.phase = input.kind === "completion" ? "completed" : "paused"
+	view.activeInteraction = {
+		...view.activeInteraction,
+		kind: input.kind,
+		taskAsk: input.taskAsk,
+		presentationKind: input.presentationKind,
+	}
+	view.input.enterAction = input.enterAction
+	view.footer.actions = [
+		{ type: input.action, label: input.label, appearance: "primary", enabled: true, payloadPolicy: "draft" },
+	]
+	return { ...ASK, ask: input.taskAsk, text: input.label }
+}
 
 describe("InteractionHost", () => {
+	beforeEach(() => {
+		vi.mocked(TaskServiceClient.cancelTask).mockClear()
+	})
+
 	it("renders say content without actions when no interaction exists", () => {
 		const view = taskView()
 		delete view.activeInteraction
@@ -45,15 +86,15 @@ describe("InteractionHost", () => {
 		expect(screen.queryByRole("button")).toBeNull()
 	})
 
-	it("renders matching ask presentation and footer actions without replacing the chat input", () => {
+	it("renders matching ask presentation and exact approval actions", () => {
 		render(<InteractionHost dispatch={vi.fn()} messages={[SAY, ASK]} view={taskView()} />)
 
 		expect(screen.getByText("Approve write")).toBeVisible()
 		expect(screen.getByRole("button", { name: "Approve" })).toBeVisible()
-		expect(screen.queryByRole("textbox", { name: "Task input" })).toBeNull()
+		expect(screen.getByRole("button", { name: "Reject" })).toBeVisible()
 	})
 
-	it("dispatches footer actions with the draft owned by ChatTextArea", async () => {
+	it("dispatches approval with exact identity and the owned draft", async () => {
 		const dispatch = vi.fn(async () => ({ accepted: true, result: "accepted" }))
 		render(
 			<InteractionHost
@@ -67,76 +108,37 @@ describe("InteractionHost", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Approve" }))
 
 		await waitFor(() => expect(dispatch).toHaveBeenCalledOnce())
-		expect(dispatch).toHaveBeenCalledWith(
-			expect.objectContaining({ draft: { text: "approval feedback", images: ["image"], files: ["file"] } }),
-		)
+		expect(dispatch).toHaveBeenCalledWith({
+			taskId: "task-1",
+			turnId: "turn-1",
+			interactionId: "interaction-1",
+			actionId: "approve",
+			stateRevision: 8,
+			draft: { text: "approval feedback", images: ["image"], files: ["file"] },
+			selection: { values: [] },
+		})
 	})
 
 	it("does not duplicate an Enter-owned reply action as a footer button", () => {
 		const view = taskView()
-		if (!view.activeInteraction) {
-			throw new Error("Expected active interaction")
-		}
-		view.activeInteraction = {
-			...view.activeInteraction,
+		const message = configureInteraction(view, {
 			kind: "qna_response",
-			presentationKind: "qna_response",
 			taskAsk: "qna_respond",
-		}
-		view.input.enterAction = "reply"
-		view.footer.actions = [{ type: "reply", label: "Reply", appearance: "primary", enabled: true, payloadPolicy: "draft" }]
+			presentationKind: "qna_response",
+			action: "reply",
+			label: "Reply",
+			enterAction: "reply",
+		})
 
-		render(<InteractionHost dispatch={vi.fn()} messages={[{ ...ASK, ask: "qna_respond" }]} view={view} />)
+		render(<InteractionHost dispatch={vi.fn()} messages={[message]} view={view} />)
 
 		expect(screen.queryByRole("button", { name: "Reply" })).toBeNull()
-	})
-
-	it("does not duplicate structured ask payloads in footer-only mode", () => {
-		const view = taskView()
-		if (!view.activeInteraction) {
-			throw new Error("Expected active interaction")
-		}
-		view.activeInteraction = {
-			...view.activeInteraction,
-			kind: "qna_response",
-			presentationKind: "qna_response",
-			taskAsk: "qna_respond",
-		}
-		view.input.enterAction = "reply"
-		view.footer.actions = [{ type: "reply", label: "Reply", appearance: "primary", enabled: true, payloadPolicy: "draft" }]
-		const payload = JSON.stringify({ response: "Human-readable answer" })
-
-		render(
-			<InteractionHost
-				dispatch={vi.fn()}
-				messages={[{ ...ASK, ask: "qna_respond", text: payload }]}
-				showTimeline={false}
-				view={view}
-			/>,
-		)
-
-		expect(screen.queryByText(payload)).toBeNull()
-		expect(screen.queryByText("Human-readable answer")).toBeNull()
-		expect(screen.queryByRole("button", { name: "Reply" })).toBeNull()
-	})
-
-	it("keeps ask read-only without an active interaction", () => {
-		const view = taskView()
-		delete view.activeInteraction
-		view.footer.actions = []
-
-		render(<InteractionHost dispatch={vi.fn()} messages={[ASK]} view={view} />)
-
-		expect(screen.getByText("Approve write")).toBeVisible()
-		expect(screen.queryByRole("button")).toBeNull()
 	})
 
 	it("dispatches host-owned focus-chain selection with approve", async () => {
 		const dispatch = vi.fn(async () => ({ accepted: true, result: "accepted" }))
 		const view = taskView()
-		if (!view.activeInteraction) {
-			throw new Error("Expected active interaction")
-		}
+		if (!view.activeInteraction) throw new Error("Expected active interaction")
 		view.activeInteraction = {
 			...view.activeInteraction,
 			kind: "focus_chain_change",
@@ -144,8 +146,7 @@ describe("InteractionHost", () => {
 			taskAsk: "focus_chain_change",
 		}
 		const message: ClineMessage = {
-			ts: 100,
-			type: "ask",
+			...ASK,
 			ask: "focus_chain_change",
 			text: JSON.stringify({ plan: "# Plan\n- [ ] First item\n- [ ] Second item", reason: "Review" }),
 		}
@@ -158,42 +159,89 @@ describe("InteractionHost", () => {
 		expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({ selection: { values: ["1"] } }))
 	})
 
-	it("reports synchronization failure while retaining backend recovery actions when the ask anchor is missing", () => {
-		const view = taskView()
-		view.footer.actions = [
-			{
-				type: "resume",
-				label: "Resume",
-				appearance: "primary",
-				enabled: true,
-				payloadPolicy: "none",
-				dispatchTarget: "task",
-			},
-		]
-		render(<InteractionHost dispatch={vi.fn()} messages={[SAY]} view={view} />)
+	it.each([
+		["timestamp", { ...ASK, ts: 101 }],
+		["missing interaction identity", { ...ASK, interactionId: undefined }],
+		["interaction identity", { ...ASK, interactionId: "interaction-2" }],
+		["task ask", { ...ASK, ask: "command" as const }],
+	])("withholds controls for a mismatched %s anchor without offering manual reload", (_field, message) => {
+		render(<InteractionHost dispatch={vi.fn()} messages={[SAY, message]} view={taskView()} />)
 
-		expect(screen.getByRole("alert")).toHaveTextContent("Interaction is out of sync")
-		expect(screen.getByRole("button", { name: "Resume" })).toBeVisible()
+		expect(screen.getByText("status text")).toBeVisible()
+		expect(screen.queryByRole("button", { name: "Approve" })).toBeNull()
 	})
 
-	it("retains safe footer recovery when the presentation renderer is unsupported", () => {
+	it("withholds controls when the exact anchor identity is duplicated", () => {
+		render(<InteractionHost dispatch={vi.fn()} messages={[ASK, { ...ASK, text: "Duplicate ask" }]} view={taskView()} />)
+
+		expect(screen.queryByRole("button", { name: "Approve" })).toBeNull()
+	})
+
+	it("keeps task cancellation available while interaction controls wait for their exact anchor", async () => {
+		const view = taskView()
+		view.phase = "executing"
+		view.footer.actions = [{ type: "cancel", label: "Cancel", appearance: "danger", enabled: true, payloadPolicy: "none" }]
+		render(<InteractionHost dispatch={vi.fn()} messages={[SAY]} view={view} />)
+
+		fireEvent.click(screen.getByRole("button", { name: "Cancel" }))
+
+		await waitFor(() => expect(TaskServiceClient.cancelTask).toHaveBeenCalledOnce())
+		expect(screen.queryByRole("button", { name: "Approve" })).toBeNull()
+	})
+
+	it.each([
+		{
+			name: "Resume",
+			kind: "resume",
+			taskAsk: "resume_task" as const,
+			presentationKind: "resume",
+			action: "resume" as const,
+			enterAction: "resume" as const,
+		},
+		{
+			name: "Retry",
+			kind: "error_retry",
+			taskAsk: "api_req_failed" as const,
+			presentationKind: "error_retry",
+			action: "retry" as const,
+			enterAction: "retry" as const,
+		},
+		{
+			name: "Start New Task",
+			kind: "completion",
+			taskAsk: "completion_result" as const,
+			presentationKind: "completion",
+			action: "start_new_task" as const,
+			enterAction: "reply" as const,
+		},
+	])("dispatches $name through the exact anchored interaction", async (interaction) => {
+		const dispatch = vi.fn(async () => ({ accepted: true, result: "accepted" }))
+		const view = taskView()
+		const message = configureInteraction(view, { ...interaction, label: interaction.name })
+		render(<InteractionHost dispatch={dispatch} messages={[message]} view={view} />)
+
+		fireEvent.click(screen.getByRole("button", { name: interaction.name }))
+
+		await waitFor(() => expect(dispatch).toHaveBeenCalledOnce())
+		expect(dispatch).toHaveBeenCalledWith(
+			expect.objectContaining({
+				taskId: "task-1",
+				turnId: "turn-1",
+				interactionId: "interaction-1",
+				actionId: interaction.action,
+				stateRevision: 8,
+			}),
+		)
+	})
+
+	it("renders an unsupported interaction ask as read-only without fallback controls", () => {
 		const view = taskView()
 		if (!view.activeInteraction) throw new Error("Expected active interaction")
 		view.activeInteraction.presentationKind = "unsupported"
-		view.footer.actions = [
-			{
-				type: "resume",
-				label: "Resume",
-				appearance: "primary",
-				enabled: true,
-				payloadPolicy: "none",
-				dispatchTarget: "task",
-			},
-		]
 
 		render(<InteractionHost dispatch={vi.fn()} messages={[ASK]} view={view} />)
 
-		expect(screen.getByRole("alert")).toHaveTextContent("Interaction is out of sync")
-		expect(screen.getByRole("button", { name: "Resume" })).toBeVisible()
+		expect(screen.getByText("Approve write")).toBeVisible()
+		expect(screen.queryByRole("button")).toBeNull()
 	})
 })

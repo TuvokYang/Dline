@@ -12,6 +12,7 @@ function createPorts(overrides: Partial<TaskEffectPorts> = {}): TaskEffectPorts 
 		postView: async () => {},
 		persistSnapshot: async () => {},
 		cancelRuntime: async () => {},
+		prepareResume: async () => {},
 		startApi: async () => {},
 		executeTool: async () => {},
 		appendSay: async () => {},
@@ -111,6 +112,64 @@ describe("TaskRuntime dispatch", () => {
 		expect(result.accepted).toBe(true)
 		expect(nestedAccepted).toBe(true)
 		expect(runtime.getState()).toMatchObject({ phase: TaskPhase.STREAMING, anchor: { apiIndex: 2 } })
+	})
+
+	it("releases START_NEW_TASK admission before the new task terminates the current runtime", async () => {
+		let runtime: TaskRuntime
+		let signalStartNewTask: (() => void) | undefined
+		const startNewTaskEntered = new Promise<void>((resolve) => {
+			signalStartNewTask = resolve
+		})
+		let nestedTerminationAccepted = false
+		runtime = new TaskRuntime(
+			{
+				...createTaskRuntimeState({ taskId: "task-1", phase: TaskPhase.COMPLETED, revision: 5 }),
+				completion: { completionId: "completion-1" },
+				interaction: {
+					taskId: "task-1",
+					turnId: "turn-completion",
+					interactionId: "completion-1",
+					kind: "completion",
+					status: "resolving",
+					createdRevision: 4,
+					anchor: { messageTs: 100, messageType: "ask" },
+					acceptedResponse: {
+						taskId: "task-1",
+						turnId: "turn-completion",
+						interactionId: "completion-1",
+						actionId: "start_new_task",
+						stateRevision: 5,
+						draft: { text: "Next task", images: [], files: [] },
+					},
+				},
+			},
+			createPorts({
+				startNewTask: async () => {
+					signalStartNewTask?.()
+					const terminated = await runtime.dispatch({ type: "TASK_TERMINATE_REQUESTED" })
+					nestedTerminationAccepted = terminated.accepted
+				},
+			}),
+		)
+
+		let admitted: Awaited<ReturnType<TaskRuntime["dispatchAtAdmission"]>> | undefined
+		const admission = runtime
+			.dispatchAtAdmission({
+				type: "TASK_CLEAR_REQUESTED",
+				draft: { text: "Next task", images: [], files: [] },
+			})
+			.then((result) => {
+				admitted = result
+				return result
+			})
+		await startNewTaskEntered
+		await Promise.resolve()
+		await Promise.resolve()
+
+		expect(admitted).toMatchObject({ accepted: true })
+		await admission
+		await vi.waitFor(() => expect(nestedTerminationAccepted).toBe(true))
+		expect(runtime.getState().phase).toBe(TaskPhase.CANCELLING)
 	})
 
 	it("commits next state before running effects in order", async () => {
@@ -240,6 +299,90 @@ describe("TaskRuntime dispatch", () => {
 		expect(observed).toEqual(["approve"])
 	})
 
+	it("does not release an approved interaction until its resolving snapshot is durable", async () => {
+		let releasePersistence: (() => void) | undefined
+		const persistenceGate = new Promise<void>((resolve) => {
+			releasePersistence = resolve
+		})
+		const persistSnapshot = vi.fn(async () => {
+			await persistenceGate
+		})
+		const runtime = new TaskRuntime(
+			{
+				...createTaskRuntimeState({
+					taskId: "task-1",
+					phase: TaskPhase.AWAITING_APPROVAL,
+					revision: 4,
+					anchor: { apiIndex: 1, uiMessageTs: 100, turnId: "turn-1", interactionId: "interaction-1" },
+				}),
+				turn: {
+					turnId: "turn-1",
+					assistantApiIndex: 1,
+					mode: "serial",
+					activeDlineTid: "interaction-1",
+					blocks: [
+						{
+							dlineTid: "interaction-1",
+							functionId: "function-1",
+							toolName: "read_file",
+							ts: 100,
+							requiresApproval: false,
+							conversationHistoryIndex: 1,
+							phase: BlockPhase.AWAITING_APPROVAL,
+						},
+					],
+				},
+				interaction: {
+					taskId: "task-1",
+					turnId: "turn-1",
+					interactionId: "interaction-1",
+					kind: "tool_approval",
+					status: "awaiting",
+					createdRevision: 4,
+					anchor: { messageTs: 100, messageType: "ask" },
+				},
+			},
+			createPorts({ persistSnapshot }),
+		)
+		const coordinator = new InteractionCoordinator(runtime)
+		let continuationReleased = false
+		const continuation = coordinator
+			.open({
+				turnId: "turn-1",
+				interactionId: "interaction-1",
+				kind: "tool_approval",
+				presentation: "Read file?",
+				existingTs: 100,
+			})
+			.then((outcome) => {
+				continuationReleased = true
+				return outcome
+			})
+		const response = runtime.dispatch({
+			type: "INTERACTION_RESPONDED",
+			response: {
+				taskId: "task-1",
+				turnId: "turn-1",
+				interactionId: "interaction-1",
+				actionId: "approve",
+				stateRevision: 4,
+				draft: { text: "", images: [], files: [] },
+			},
+		})
+
+		await vi.waitFor(() => expect(persistSnapshot).toHaveBeenCalledOnce())
+		expect(runtime.getState()).toMatchObject({
+			phase: TaskPhase.EXECUTING,
+			interaction: { interactionId: "interaction-1", status: "resolving" },
+		})
+		expect(continuationReleased).toBe(false)
+
+		releasePersistence?.()
+		expect((await response).accepted).toBe(true)
+		expect(await continuation).toMatchObject({ actionId: "approve" })
+		expect(continuationReleased).toBe(true)
+	})
+
 	it("returns a caller-visible failure when cancellation effects fail", async () => {
 		const postView = vi.fn(async () => {})
 		const persistSnapshot = vi.fn(async () => {})
@@ -297,6 +440,58 @@ describe("TaskRuntime dispatch", () => {
 		expect(runtime.getState().phase).toBe(TaskPhase.PAUSED)
 		expect(postView).toHaveBeenCalledTimes(1)
 		expect(persistSnapshot).toHaveBeenCalledTimes(1)
+	})
+
+	it("retains an accepted Resume response when feedback presentation fails before API admission", async () => {
+		const draft = { text: "continue after cancel", images: [], files: [] }
+		const startApi = vi.fn(async () => undefined)
+		const runtime = new TaskRuntime(
+			{
+				...createTaskRuntimeState({
+					taskId: "task-1",
+					phase: TaskPhase.PAUSED,
+					revision: 5,
+					anchor: { apiIndex: 2, uiMessageTs: 100, turnId: "resume-turn", interactionId: "resume-1" },
+				}),
+				interaction: {
+					taskId: "task-1",
+					turnId: "resume-turn",
+					interactionId: "resume-1",
+					kind: "resume",
+					status: "resolving",
+					createdRevision: 4,
+					anchor: { messageTs: 100, messageType: "ask" },
+					acceptedResponse: {
+						taskId: "task-1",
+						turnId: "resume-turn",
+						interactionId: "resume-1",
+						actionId: "resume",
+						stateRevision: 5,
+						draft,
+					},
+				},
+			},
+			createPorts({
+				appendSay: async () => {
+					throw new Error("feedback flush failed")
+				},
+				startApi,
+			}),
+		)
+		const coordinator = new InteractionCoordinator(runtime)
+
+		await expect(coordinator.resumeExisting("resume-1")).rejects.toThrow("Resume continuation rejected")
+
+		expect(startApi).not.toHaveBeenCalled()
+		expect(runtime.getState()).toMatchObject({
+			phase: TaskPhase.PAUSED,
+			error: { effectType: "APPEND_SAY", message: "feedback flush failed" },
+			interaction: {
+				interactionId: "resume-1",
+				status: "resolving",
+				acceptedResponse: { actionId: "resume", draft },
+			},
+		})
 	})
 
 	it("does not recurse when snapshot persistence fails", async () => {

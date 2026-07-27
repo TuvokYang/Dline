@@ -19,6 +19,52 @@ interface AddCheckpointFilesOptions {
 	taskId?: string
 }
 
+export interface CheckpointWorktreePath {
+	absolute: string
+	relative: string
+}
+
+function isOutsideDirectory(relativePath: string): boolean {
+	return relativePath === ".." || relativePath.startsWith(`..${path.sep}`) || path.isAbsolute(relativePath)
+}
+
+/** Prevent Git from interpreting a validated relative file name as a pathspec pattern. */
+export function toLiteralGitPathspec(relativePath: string): string {
+	return `:(literal)${relativePath}`
+}
+
+async function canonicalizeDirectory(directoryPath: string): Promise<string> {
+	const absolute = path.resolve(directoryPath)
+	let cursor = absolute
+	const missingSegments: string[] = []
+	while (true) {
+		try {
+			return path.resolve(await fs.realpath(cursor), ...missingSegments.reverse())
+		} catch (error) {
+			const code = (error as NodeJS.ErrnoException).code
+			if (code !== "ENOENT" && code !== "ENOTDIR") throw error
+			const parent = path.dirname(cursor)
+			if (parent === cursor) throw error
+			missingSegments.push(path.basename(cursor))
+			cursor = parent
+		}
+	}
+}
+
+/** Resolve one file against the canonical worktree, including symlinked parent directories. */
+export async function resolveCheckpointWorktreePath(
+	worktree: string,
+	filePath: string,
+): Promise<CheckpointWorktreePath | undefined> {
+	const canonicalWorktree = await canonicalizeDirectory(worktree)
+	const absoluteInput = path.resolve(filePath)
+	const canonicalParent = await canonicalizeDirectory(path.dirname(absoluteInput))
+	const absolute = path.resolve(canonicalParent, path.basename(absoluteInput))
+	const relative = path.relative(canonicalWorktree, absolute)
+	if (!relative || isOutsideDirectory(relative)) return undefined
+	return { absolute, relative: relative.split(path.sep).join("/") }
+}
+
 /**
  * GitOperations Class
  *
@@ -139,6 +185,7 @@ export class GitOperations {
 					workspaceIgnoreContent || undefined,
 					topology.exclusionPatterns,
 				)
+				await this.refreshExistingShadowBaseline(git, taskId)
 
 				return gitPath
 			}
@@ -177,6 +224,29 @@ export class GitOperations {
 		Logger.warn(`Shadow git initialization completed`)
 
 		return gitPath
+	}
+
+	/** Rebuild an existing baseline from current exclusions, resetting its index to HEAD on failure. */
+	private async refreshExistingShadowBaseline(git: SimpleGit, taskId: string): Promise<void> {
+		try {
+			const baselineResult = await this.addCheckpointFiles({ git, mode: "baseline", taskId })
+			if (!baselineResult.success) {
+				throw new Error("Failed to refresh the existing checkpoints shadow baseline")
+			}
+			if (await this.hasStagedChanges(git, taskId)) {
+				await git.commit(`workspace baseline-${taskId}`, { "--no-verify": null })
+				Logger.info(`[Task ${taskId}] Refreshed existing checkpoints shadow baseline`)
+			}
+		} catch (error) {
+			try {
+				// Initialization never owns staged user work: discard both this
+				// attempt and residue left by an older interrupted refresh.
+				await git.raw(["read-tree", "--reset", "HEAD"])
+			} catch (rollbackError) {
+				Logger.error(`[Task ${taskId}] Failed to restore shadow index after baseline refresh failure:`, rollbackError)
+			}
+			throw error
+		}
 	}
 
 	/**
@@ -240,33 +310,75 @@ export class GitOperations {
 	 */
 	public async addCheckpointFiles(options: AddCheckpointFilesOptions): Promise<CheckpointAddResult> {
 		const { git, mode, fileList, taskId } = options
+		const explicitFiles = fileList ?? []
 		const startTime = performance.now()
-		if (mode === "tracked" && (!fileList || fileList.length === 0)) {
+		if (mode === "tracked" && explicitFiles.length === 0) {
 			Logger.error(`[Task ${taskId}] tracked checkpoint add requires explicit files`)
 			return { success: false }
 		}
-		if ((mode === "baseline" || mode === "workspace-scan") && fileList && fileList.length > 0) {
+		if ((mode === "baseline" || mode === "workspace-scan") && explicitFiles.length > 0) {
 			Logger.error(`[Task ${taskId}] ${mode} checkpoint add must not receive explicit fileList`)
 			return { success: false }
 		}
 		Logger.info(`[Task ${taskId}] Starting checkpoint add operation (${mode})...`)
 		try {
 			if (mode === "tracked") {
-				const safeFiles = fileList!.filter((file) => !this.isRepositoryBoundaryFile(file))
+				const resolvedFiles = await Promise.all(
+					explicitFiles.map((file) => resolveCheckpointWorktreePath(this.cwd, file)),
+				)
+				if (resolvedFiles.some((file) => file === undefined)) {
+					Logger.error(`[Task ${taskId}] Checkpoint add rejected a tracked path outside ${this.cwd}`)
+					return { success: false }
+				}
+				const ownedFiles = resolvedFiles as CheckpointWorktreePath[]
+				const safeFiles = ownedFiles.filter((file) => !this.isRepositoryBoundaryFile(file.absolute)) as Array<{
+					absolute: string
+					relative: string
+				}>
 				if (safeFiles.length === 0) {
 					Logger.warn(
 						`[Task ${taskId}] Checkpoint add skipped: all tracked files belong to nested repository boundaries`,
 					)
 					return { success: false }
 				}
-				if (safeFiles.length !== fileList!.length) {
+				if (safeFiles.length !== ownedFiles.length) {
 					Logger.warn(
-						`[Task ${taskId}] Checkpoint add excluded ${fileList!.length - safeFiles.length} nested repository file(s)`,
+						`[Task ${taskId}] Checkpoint add excluded ${ownedFiles.length - safeFiles.length} nested repository file(s)`,
 					)
 				}
-				await git.add(["-f", ...safeFiles])
-				Logger.debug(`[Task ${taskId}] Checkpoint add operation: staged ${safeFiles.length} tracked file(s) with -f`)
+
+				const existence = await Promise.all(safeFiles.map((file) => fileExistsAtPath(file.absolute)))
+				const missingFiles = safeFiles.filter((_file, index) => !existence[index])
+				let indexedPaths = new Set<string>()
+				if (missingFiles.length > 0) {
+					const output = await git.raw(["ls-files", "-z"])
+					indexedPaths = new Set(
+						output
+							.split("\0")
+							.filter(Boolean)
+							.map((file) => this.normalizeGitPath(file)),
+					)
+				}
+				const stageFiles = safeFiles.filter(
+					(file, index) => existence[index] || indexedPaths.has(this.normalizeGitPath(file.relative)),
+				)
+				if (stageFiles.length === 0) {
+					Logger.warn(`[Task ${taskId}] Checkpoint add skipped: no tracked path exists in the worktree or shadow index`)
+					return { success: true }
+				}
+				if (stageFiles.length !== safeFiles.length) {
+					Logger.warn(
+						`[Task ${taskId}] Checkpoint add ignored ${safeFiles.length - stageFiles.length} path(s) absent from both worktree and shadow index`,
+					)
+				}
+				await git.add(["-A", "-f", "--", ...stageFiles.map((file) => toLiteralGitPathspec(file.relative))])
+				Logger.debug(`[Task ${taskId}] Checkpoint add operation: staged ${stageFiles.length} tracked file(s)`)
 			} else {
+				if (mode === "baseline") {
+					// Rebuild the complete index so newly ignored or newly excluded files
+					// are removed from the current baseline as well as omitted from additions.
+					await git.raw(["read-tree", "--empty"])
+				}
 				await git.add([".", "--ignore-errors"])
 				Logger.debug(`[Task ${taskId}] Checkpoint add operation: staged workspace via ${mode}`)
 			}
@@ -284,8 +396,13 @@ export class GitOperations {
 		return this.repositoryBoundaries.some((boundary) => {
 			const boundaryPath = path.resolve(this.cwd, boundary.relativePath)
 			const relative = path.relative(boundaryPath, absolutePath)
-			return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative))
+			return relative === "" || !isOutsideDirectory(relative)
 		})
+	}
+
+	private normalizeGitPath(filePath: string): string {
+		const normalized = filePath.replaceAll("\\", "/")
+		return process.platform === "win32" ? normalized.toLowerCase() : normalized
 	}
 
 	/**
@@ -316,11 +433,14 @@ export class GitOperations {
 	 */
 	public async hasStagedChanges(git: SimpleGit, taskId?: string): Promise<boolean> {
 		try {
-			await git.raw(["diff", "--cached", "--quiet"])
-			Logger.debug(`[Task ${taskId}] No staged checkpoint changes detected`)
-			return false
-		} catch {
-			Logger.debug(`[Task ${taskId}] Staged checkpoint changes detected`)
+			const output = await git.raw(["diff", "--cached", "--name-only"])
+			const hasChanges = output.trim().length > 0
+			Logger.debug(
+				`[Task ${taskId}] ${hasChanges ? "Staged checkpoint changes detected" : "No staged checkpoint changes detected"}`,
+			)
+			return hasChanges
+		} catch (error) {
+			Logger.warn(`[Task ${taskId}] Failed to inspect staged checkpoint changes:`, error)
 			return true
 		}
 	}

@@ -62,13 +62,21 @@ describe("projectTaskView", () => {
 		expect(view.footer.actions).toEqual([])
 	})
 
-	it("disables resolving interaction input and actions", () => {
+	it("removes approval actions once the approval response is resolving", () => {
 		const interaction = active("tool_approval")
 		interaction.status = "resolving"
+		interaction.acceptedResponse = {
+			taskId: "task-1",
+			turnId: "turn-1",
+			interactionId: "interaction-1",
+			actionId: "approve",
+			stateRevision: 8,
+			draft: { text: "approved", images: [], files: [] },
+		}
 		const view = projectTaskView(runtime(TaskPhase.AWAITING_APPROVAL, interaction))
 
 		expect(view.input.enabled).toBe(false)
-		expect(view.footer.actions.every((action) => !action.enabled)).toBe(true)
+		expect(view.footer.actions.map((action) => action.type)).toEqual([])
 	})
 
 	it("restores Cancel while an approved command is running", () => {
@@ -88,27 +96,50 @@ describe("projectTaskView", () => {
 		expect(view.footer.actions[0]).toMatchObject({ type: "approve", payloadPolicy: "draft_and_selection" })
 	})
 
-	it("projects resume input, Enter action, and the explicit Resume footer", () => {
+	it("projects Resume for a paused synthesized anchored resume interaction", () => {
 		const view = projectTaskView(runtime(TaskPhase.PAUSED, active("resume")))
 
+		expect(view.activeInteraction).toMatchObject({ kind: "resume", interactionId: "interaction-1" })
 		expect(view.input).toMatchObject({ enabled: true, enterAction: "resume" })
 		expect(view.footer.actions.map((action) => action.type)).toEqual(["resume"])
 	})
 
-	it("projects an actionable task-level Resume fallback when PAUSED has no interaction", () => {
+	it("does not invent task-level Resume when PAUSED has no interaction", () => {
 		const view = projectTaskView(runtime(TaskPhase.PAUSED))
 
 		expect(view.input.enabled).toBe(false)
-		expect(view.footer.actions).toEqual([
-			{
-				type: "resume",
-				label: "Resume",
-				appearance: "primary",
-				enabled: true,
-				payloadPolicy: "none",
-				dispatchTarget: "task",
-			},
-		])
+		expect(view.footer.actions).toEqual([])
+	})
+
+	it("keeps reply input without Resume for a paused anchored followup", () => {
+		const view = projectTaskView(runtime(TaskPhase.PAUSED, active("followup")))
+
+		expect(view.activeInteraction).toMatchObject({ kind: "followup", interactionId: "interaction-1" })
+		expect(view.input).toMatchObject({ enabled: true, enterAction: "reply" })
+		expect(view.footer.actions).toEqual([])
+	})
+
+	it("keeps Approve and Reject for a paused anchored tool approval", () => {
+		const view = projectTaskView(runtime(TaskPhase.PAUSED, active("tool_approval")))
+
+		expect(view.activeInteraction).toMatchObject({ kind: "tool_approval", interactionId: "interaction-1" })
+		expect(view.input).toMatchObject({ enabled: true, enterAction: "reject" })
+		expect(view.footer.actions.map((action) => action.type)).toEqual(["approve", "reject"])
+	})
+
+	it.each([
+		"tool_approval",
+		"followup",
+		"completion",
+		"resume",
+	] as const)("exposes no action buttons while an anchored %s interaction is resolving", (kind) => {
+		const interaction = active(kind)
+		interaction.status = "resolving"
+
+		const view = projectTaskView(runtime(TaskPhase.PAUSED, interaction))
+
+		expect(view.input.enabled).toBe(false)
+		expect(view.footer.actions).toEqual([])
 	})
 
 	it("projects error recovery actions", () => {
@@ -117,9 +148,10 @@ describe("projectTaskView", () => {
 		expect(view.footer.actions.map((action) => action.type)).toEqual(["retry", "start_new_task"])
 	})
 
-	it("projects only Start New Task for completion", () => {
+	it("projects feedback input and only Start New Task for a completed anchored completion", () => {
 		const view = projectTaskView(runtime(TaskPhase.COMPLETED, active("completion")))
 
+		expect(view.activeInteraction).toMatchObject({ kind: "completion", interactionId: "interaction-1" })
 		expect(view.input).toMatchObject({ enabled: true, enterAction: "reply" })
 		expect(view.footer.actions.map((action) => action.type)).toEqual(["start_new_task"])
 	})

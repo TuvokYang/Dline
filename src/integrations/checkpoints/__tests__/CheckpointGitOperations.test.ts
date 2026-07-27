@@ -67,23 +67,32 @@ describe("GitOperations repository boundaries", () => {
 	})
 
 	it("stages root files while excluding tracked files owned by a nested repository", async () => {
-		const workspacePath = path.resolve("checkpoint-test-workspace")
-		const operations = new GitOperations(workspacePath)
-		configureNestedRepositoryBoundary(operations, "packages/nested")
-		const harness = createGitHarness()
+		const sandbox = await fs.mkdtemp(path.join(os.tmpdir(), "dline-checkpoint-boundary-"))
+		const workspacePath = path.join(sandbox, "workspace")
 		const rootFile = path.join(workspacePath, "src", "root.ts")
 		const nestedFile = path.join(workspacePath, "packages", "nested", "src", "owned.ts")
+		await fs.mkdir(path.dirname(rootFile), { recursive: true })
+		await fs.mkdir(path.dirname(nestedFile), { recursive: true })
+		await fs.writeFile(rootFile, "root")
+		await fs.writeFile(nestedFile, "nested")
+		try {
+			const operations = new GitOperations(workspacePath)
+			configureNestedRepositoryBoundary(operations, "packages/nested")
+			const harness = createGitHarness()
 
-		const result = await operations.addCheckpointFiles({
-			git: harness.git,
-			mode: "tracked",
-			fileList: [rootFile, nestedFile],
-			taskId: "task-1",
-		})
+			const result = await operations.addCheckpointFiles({
+				git: harness.git,
+				mode: "tracked",
+				fileList: [rootFile, nestedFile],
+				taskId: "task-1",
+			})
 
-		expect(result).toEqual({ success: true })
-		expect(harness.add).toHaveBeenCalledOnce()
-		expect(harness.add).toHaveBeenCalledWith(["-f", rootFile])
+			expect(result).toEqual({ success: true })
+			expect(harness.add).toHaveBeenCalledOnce()
+			expect(harness.add).toHaveBeenCalledWith(["-A", "-f", "--", ":(literal)src/root.ts"])
+		} finally {
+			await fs.rm(sandbox, { recursive: true, force: true })
+		}
 	})
 
 	it("does not stage or mutate metadata when every tracked file belongs to a repository boundary", async () => {
@@ -102,6 +111,83 @@ describe("GitOperations repository boundaries", () => {
 
 		expect(result).toEqual({ success: false })
 		expect(harness.add).not.toHaveBeenCalled()
+	})
+
+	it("rejects a worktree path whose parent symlink resolves outside the worktree", async () => {
+		const sandbox = await fs.mkdtemp(path.join(os.tmpdir(), "dline-checkpoint-symlink-"))
+		const workspacePath = path.join(sandbox, "workspace")
+		const outsidePath = path.join(sandbox, "outside")
+		const linkedPath = path.join(workspacePath, "linked-outside")
+		await fs.mkdir(workspacePath, { recursive: true })
+		await fs.mkdir(outsidePath, { recursive: true })
+		await fs.writeFile(path.join(outsidePath, "owned.ts"), "outside")
+		await fs.symlink(outsidePath, linkedPath, process.platform === "win32" ? "junction" : "dir")
+		try {
+			const operations = new GitOperations(workspacePath)
+			const harness = createGitHarness()
+
+			const result = await operations.addCheckpointFiles({
+				git: harness.git,
+				mode: "tracked",
+				fileList: [path.join(linkedPath, "owned.ts")],
+				taskId: "task-symlink",
+			})
+
+			expect(result).toEqual({ success: false })
+			expect(harness.add).not.toHaveBeenCalled()
+		} finally {
+			await fs.rm(sandbox, { recursive: true, force: true })
+		}
+	})
+
+	it("accepts a legal worktree child whose first segment starts with two dots", async () => {
+		const sandbox = await fs.mkdtemp(path.join(os.tmpdir(), "dline-checkpoint-dot-segment-"))
+		const workspacePath = path.join(sandbox, "workspace")
+		const trackedFile = path.join(workspacePath, "..cache", "tracked.ts")
+		await fs.mkdir(path.dirname(trackedFile), { recursive: true })
+		await fs.writeFile(trackedFile, "tracked")
+		try {
+			const operations = new GitOperations(workspacePath)
+			const harness = createGitHarness()
+
+			const result = await operations.addCheckpointFiles({
+				git: harness.git,
+				mode: "tracked",
+				fileList: [trackedFile],
+				taskId: "task-dot-segment",
+			})
+
+			expect(result).toEqual({ success: true })
+			expect(harness.add).toHaveBeenCalledOnce()
+			expect(harness.add).toHaveBeenCalledWith(["-A", "-f", "--", ":(literal)..cache/tracked.ts"])
+		} finally {
+			await fs.rm(sandbox, { recursive: true, force: true })
+		}
+	})
+
+	it.each(["EACCES", "ELOOP"])("fails closed when canonical path resolution returns %s", async (code) => {
+		const sandbox = await fs.mkdtemp(path.join(os.tmpdir(), "dline-checkpoint-realpath-error-"))
+		const workspacePath = path.join(sandbox, "workspace")
+		const trackedFile = path.join(workspacePath, "tracked.ts")
+		await fs.mkdir(workspacePath, { recursive: true })
+		await fs.writeFile(trackedFile, "tracked")
+		vi.spyOn(fs, "realpath").mockRejectedValue(Object.assign(new Error(code), { code }))
+		try {
+			const operations = new GitOperations(workspacePath)
+			const harness = createGitHarness()
+
+			const result = await operations.addCheckpointFiles({
+				git: harness.git,
+				mode: "tracked",
+				fileList: [trackedFile],
+				taskId: `task-realpath-${code.toLowerCase()}`,
+			})
+
+			expect(result).toEqual({ success: false })
+			expect(harness.add).not.toHaveBeenCalled()
+		} finally {
+			await fs.rm(sandbox, { recursive: true, force: true })
+		}
 	})
 
 	it("uses shadow exclude rules for workspace scans instead of per-boundary staging", async () => {

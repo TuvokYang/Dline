@@ -101,29 +101,6 @@ export class AttemptCompletionHandler implements IToolHandler, IPartialBlockHand
 			})
 		}
 
-		const addNewChangesFlagToLastCompletionResultMessage = async () => {
-			// Add newchanges flag if there are new changes to the workspace
-			const hasNewChanges = await config.callbacks.doesLatestTaskCompletionHaveNewChanges()
-			const clineMessages = config.messageState.clineMessages
-
-			const lastCompletionResultMessageIndex = findLastIndex(clineMessages, (m: any) => m.say === "completion_result")
-			const lastCompletionResultMessage =
-				lastCompletionResultMessageIndex !== -1 ? clineMessages[lastCompletionResultMessageIndex] : undefined
-			if (
-				lastCompletionResultMessage &&
-				lastCompletionResultMessageIndex !== -1 &&
-				hasNewChanges &&
-				!lastCompletionResultMessage.text?.endsWith(COMPLETION_RESULT_CHANGES_FLAG)
-			) {
-				await config.messageState.updateClineMessage(lastCompletionResultMessageIndex, {
-					text: lastCompletionResultMessage.text + COMPLETION_RESULT_CHANGES_FLAG,
-				})
-			}
-		}
-
-		let commandResult: any
-		let cmdMessageTs: number | undefined
-
 		if (command) {
 			// Check if command should be auto-approved
 			// attempt_completion commands don't have requires_approval param, so we treat them as safe commands
@@ -133,73 +110,107 @@ export class AttemptCompletionHandler implements IToolHandler, IPartialBlockHand
 			if (autoApproveSafe) {
 				// Auto-approve flow - show command as 'say' instead of 'ask'
 				// Command is a separate UI message from completion_result; do NOT reuse block.ts.
-				cmdMessageTs = await config.callbacks.say("command", command, undefined, undefined, false)
-			} else {
-				// Manual approval flow - need to ask for approval
-				showNotificationForApproval(
-					`Dline wants to execute a command: ${command}`,
-					config.autoApprovalSettings.enableNotifications,
-				)
-
-				const approval = await config.interactions.open({
-					turnId: interactionTurnId(block),
-					interactionId: interactionId(block),
-					kind: "command_approval",
-					presentation: command,
-				})
-				const text = approval.draft?.text
-				const images = approval.draft?.images
-				const files = approval.draft?.files
-				if (text || images?.length || files?.length) {
-					const fileContent = files?.length ? await processFilesIntoText(files) : ""
-					ToolResultUtils.pushAdditionalToolFeedback(config.taskState.userMessageContent, text, images, fileContent)
-					await sayFeedbackOnce(
-						config,
-						approval.actionId === "approve" ? "yesButtonClicked" : "noButtonClicked",
-						text,
-						images,
-						files,
-					)
-				}
-				if (approval.actionId !== "approve") {
-					config.taskController.rejectActiveBlock()
-					return formatResponse.toolDenied()
-				}
+				const commandTs = await config.callbacks.say("command", command, undefined, undefined, false)
+				return this.executeApprovedCommandAndComplete(config, block, command, commandTs)
 			}
 
-			// Manual approval path doesn't return the command message ts.
-			// Fall back to finding the last non-skipped command message.
-			if (cmdMessageTs === undefined) {
-				const msgs = config.messageState.clineMessages
-				for (let i = msgs.length - 1; i >= 0; i--) {
-					const m = msgs[i] as any
-					if ((m.ask === "command" || m.say === "command") && m.commandStatus !== "skipped") {
-						cmdMessageTs = m.ts
-						break
-					}
-				}
-			}
+			// Manual approval flow - need to ask for approval
+			showNotificationForApproval(
+				`Dline wants to execute a command: ${command}`,
+				config.autoApprovalSettings.enableNotifications,
+			)
 
-			// Execute the command
-			const commandOutcome = await config.callbacks.executeCommandTool(command, undefined, {
-				commandTs: cmdMessageTs,
-			}) // no timeout for attempt_completion command
-
-			if (commandOutcome.userRejected) {
-				config.taskController.rejectActiveBlock()
-				return commandOutcome.result
-			}
-			const commandSucceeded = commandOutcome.completed && commandOutcome.exitCode === 0 && commandOutcome.signal == null
-			if (!commandSucceeded) {
-				return commandOutcome.result
-			}
-			commandResult = commandOutcome.result
+			const approval = await config.interactions.open({
+				turnId: interactionTurnId(block),
+				interactionId: interactionId(block),
+				kind: "command_approval",
+				presentation: command,
+			})
+			return this.continueCommandApproval(config, block, approval)
 		}
+
+		return this.commitAndPresentCompletion(config, block)
+	}
+
+	/** Continue only the side effects after an exact attempt_completion command decision. */
+	async continueCommandApproval(
+		config: TaskConfig,
+		block: ToolUse,
+		approval: InteractionOutcome,
+		commandTs?: number,
+	): Promise<ToolResponse> {
+		const result = block.params.result
+		const command = block.params.command
+		if (!result || !command || (approval.actionId !== "approve" && approval.actionId !== "reject")) {
+			throw new Error("Invalid attempt_completion command approval continuation")
+		}
+
+		const text = approval.draft?.text
+		const images = approval.draft?.images
+		const files = approval.draft?.files
+		if (text || images?.length || files?.length) {
+			const fileContent = files?.length ? await processFilesIntoText(files) : ""
+			ToolResultUtils.pushAdditionalToolFeedback(config.taskState.userMessageContent, text, images, fileContent)
+			await sayFeedbackOnce(
+				config,
+				approval.actionId === "approve" ? "yesButtonClicked" : "noButtonClicked",
+				text,
+				images,
+				files,
+			)
+		}
+		if (approval.actionId === "reject") {
+			config.taskController.rejectActiveBlock()
+			return formatResponse.toolDenied()
+		}
+
+		return this.executeApprovedCommandAndComplete(config, block, command, commandTs)
+	}
+
+	private findCommandMessageTs(config: TaskConfig): number | undefined {
+		for (let i = config.messageState.clineMessages.length - 1; i >= 0; i--) {
+			const message = config.messageState.clineMessages[i] as any
+			if ((message.ask === "command" || message.say === "command") && message.commandStatus !== "skipped") {
+				return message.ts
+			}
+		}
+		return undefined
+	}
+
+	private async executeApprovedCommandAndComplete(
+		config: TaskConfig,
+		block: ToolUse,
+		command: string,
+		commandTs?: number,
+	): Promise<ToolResponse> {
+		const exactCommandTs = commandTs ?? this.findCommandMessageTs(config)
+		const commandOutcome = await config.callbacks.executeCommandTool(command, undefined, {
+			commandTs: exactCommandTs,
+		})
+
+		if (commandOutcome.userRejected) {
+			config.taskController.rejectActiveBlock()
+			return commandOutcome.result
+		}
+		const commandSucceeded = commandOutcome.completed && commandOutcome.exitCode === 0 && commandOutcome.signal == null
+		if (!commandSucceeded) {
+			return commandOutcome.result
+		}
+		return this.commitAndPresentCompletion(config, block, commandOutcome.result)
+	}
+
+	private async commitAndPresentCompletion(
+		config: TaskConfig,
+		block: ToolUse,
+		commandResult?: ToolResponse,
+	): Promise<ToolResponse> {
+		const result = block.params.result
+		if (!result) throw new Error("Invalid attempt_completion continuation result")
 
 		await commitCompletion({
 			publishResult: () => config.callbacks.say("completion_result", result, undefined, undefined, false, block.ts),
 			saveCheckpoint: (completionMessageTs) => config.callbacks.saveCheckpoint(true, completionMessageTs),
-			markWorkspaceChanges: addNewChangesFlagToLastCompletionResultMessage,
+			markWorkspaceChanges: () => this.addNewChangesFlagToLastCompletionResultMessage(config),
 			captureTelemetry: () => telemetryService.captureTaskCompleted(config.ulid ?? "", getTaskCompletionTelemetry(config)),
 			updateFocusChain: async () => {
 				if (!block.partial && config.focusChainSettings.enabled) {
@@ -235,6 +246,27 @@ export class AttemptCompletionHandler implements IToolHandler, IPartialBlockHand
 			existingTs: block.ts,
 		})
 		return this.continueInteraction(config, block, outcome, commandResult)
+	}
+
+	private async addNewChangesFlagToLastCompletionResultMessage(config: TaskConfig): Promise<void> {
+		const hasNewChanges = await config.callbacks.doesLatestTaskCompletionHaveNewChanges()
+		const clineMessages = config.messageState.clineMessages
+		const lastCompletionResultMessageIndex = findLastIndex(
+			clineMessages,
+			(message: any) => message.say === "completion_result",
+		)
+		const lastCompletionResultMessage =
+			lastCompletionResultMessageIndex !== -1 ? clineMessages[lastCompletionResultMessageIndex] : undefined
+		if (
+			lastCompletionResultMessage &&
+			lastCompletionResultMessageIndex !== -1 &&
+			hasNewChanges &&
+			!lastCompletionResultMessage.text?.endsWith(COMPLETION_RESULT_CHANGES_FLAG)
+		) {
+			await config.messageState.updateClineMessage(lastCompletionResultMessageIndex, {
+				text: lastCompletionResultMessage.text + COMPLETION_RESULT_CHANGES_FLAG,
+			})
+		}
 	}
 
 	/** Consume completion feedback without replaying command execution or completion commit. */

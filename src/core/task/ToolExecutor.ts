@@ -14,7 +14,7 @@ import { UrlContentFetcher } from "@services/browser/UrlContentFetcher"
 import { McpHub } from "@services/mcp/McpHub"
 import { DEFAULT_API_PROVIDER } from "@shared/api"
 import { ClineAsk, ClineSay, type CommandStatus } from "@shared/ExtensionMessage"
-import { ClineContent, type ClineToolResponseContent } from "@shared/messages/content"
+import { ClineContent, type ClineToolResponseContent, type ClineUserToolResultContentBlock } from "@shared/messages/content"
 import { Logger } from "@shared/services/Logger"
 import type { Mode } from "@shared/storage/types"
 import { ClineDefaultTool, toolUseNames } from "@shared/tools"
@@ -28,6 +28,7 @@ import { StateManager } from "../storage/StateManager"
 import { WorkspaceRootManager } from "../workspace"
 import type { TaskActivityStore } from "./activity/TaskActivityStore"
 import { isTurnEndingToolName } from "./assistant-message-order"
+import { serializeDurableToolResult } from "./DurableToolResult"
 import { isAllItemsCompleted } from "./focus-chain/file-utils"
 import type { InteractionKind } from "./interaction/Interaction"
 import type { InteractionOutcome } from "./interaction/InteractionCoordinator"
@@ -38,7 +39,7 @@ import { TaskController } from "./TaskController"
 import { TaskState } from "./TaskState"
 import { AutoApprove } from "./tools/autoApprove"
 import { SubagentJobManager } from "./tools/subagent/SubagentJobManager"
-import { IPartialBlockHandler, ToolExecutorCoordinator } from "./tools/ToolExecutorCoordinator"
+import { type IPartialBlockHandler, ToolExecutorCoordinator } from "./tools/ToolExecutorCoordinator"
 import { ToolValidator } from "./tools/ToolValidator"
 import { type TaskConfig, type TaskInteractionPorts, validateTaskConfig } from "./tools/types/TaskConfig"
 import { createUIHelpers } from "./tools/types/UIHelpers"
@@ -325,7 +326,7 @@ export class ToolExecutor {
 				saveCheckpoint: this.saveCheckpoint,
 				postStateToWebview: async () => {},
 				reinitExistingTaskFromId: async () => {},
-				cancelTask: this.cancelTask,
+				cancelTask: () => this.requestCancellationFromToolEffect(),
 				updateTaskHistory: async () => [],
 				executeCommandTool: this.executeCommandTool,
 				cancelRunningCommandTool: this.cancelRunningCommandTool,
@@ -352,6 +353,16 @@ export class ToolExecutor {
 		// Validate the config at runtime to catch any missing properties
 		validateTaskConfig(config)
 		return config
+	}
+
+	/** Submit cancellation without making the current EXECUTE_TOOL effect wait for its own drain. */
+	private requestCancellationFromToolEffect(): Promise<void> {
+		queueMicrotask(() => {
+			void this.cancelTask().catch((error: unknown) => {
+				Logger.error("[ToolExecutor] Tool hook cancellation failed:", error)
+			})
+		})
+		return Promise.resolve()
 	}
 
 	/**
@@ -388,6 +399,16 @@ export class ToolExecutor {
 		return handler.continueInteraction(this.asToolConfig(), block, outcome)
 	}
 
+	/** Commit a restored handler result to both the next API turn and the durable UI result ledger. */
+	public async commitRestoredToolResult(content: ToolResponse, block: ToolUse): Promise<void> {
+		await this.commitToolResult(content, block)
+	}
+
+	/** Close an interrupted tool pairing without replaying an unknown side effect. */
+	public async commitInterruptedToolResult(block: ToolUse, reason: string): Promise<void> {
+		await this.commitToolResult(formatResponse.toolError(reason), block, true)
+	}
+
 	/**
 	 * Updates the browser settings
 	 */
@@ -415,7 +436,7 @@ export class ToolExecutor {
 
 		// Create error response for the tool
 		const errorResponse = formatResponse.toolError(errorString)
-		this.pushToolResult(errorResponse, block)
+		await this.commitToolResult(errorResponse, block, true)
 	}
 
 	/**
@@ -429,39 +450,36 @@ export class ToolExecutor {
 	 * @param content The tool response content to add
 	 * @param block The tool use block that generated this result
 	 */
-	private pushToolResult = (content: ToolResponse, block: ToolUse) => {
+	private pushToolResult = (content: ToolResponse, block: ToolUse, isError?: boolean) => {
 		// Use the ToolResultUtils to properly format and push the tool result
-		ToolResultUtils.pushToolResult(
+		const result = ToolResultUtils.pushToolResult(
 			content,
 			block,
 			this.taskState.userMessageContent,
 			(block: ToolUse) => ToolDisplayUtils.getToolDescription(block),
 			this.coordinator,
+			isError,
 		)
 
 		// Mark that a tool has been used (only matters when parallel tool calling is disabled)
 		if (!this.isParallelToolCallingEnabled()) {
 			this.taskState.didAlreadyUseTool = true
 		}
+		return result
+	}
+
+	/** Commit one canonical result to both pending API content and durable storage. */
+	private async commitToolResult(content: ToolResponse, block: ToolUse, isError?: boolean): Promise<void> {
+		const result = this.pushToolResult(content, block, isError)
+		await this.recordPartialToolResult(result)
 	}
 
 	// Record a partial_tool_result for resume. Must be awaited so the
 	// webview message order is deterministic — fire-and-forget would let
 	// auto-approved tool results race ahead of a subsequent ask.
-	private async recordPartialToolResult(content: ToolResponse, block: ToolUse): Promise<void> {
-		if (!block.function_id || !block.dline_tid) {
-			throw new Error(`Canonical runtime tool block is missing identity: tool=${block.name}`)
-		}
-		const resultText = typeof content === "string" ? content : JSON.stringify(content)
+	private async recordPartialToolResult(result: ClineUserToolResultContentBlock): Promise<void> {
 		// Storage + push handled by say(), gated by TaskController.send()
-		await this.say(
-			"partial_tool_result",
-			JSON.stringify({
-				function_id: block.function_id,
-				dline_tid: block.dline_tid,
-				result: resultText,
-			}),
-		)
+		await this.say("partial_tool_result", serializeDurableToolResult(result))
 	}
 
 	/**
@@ -504,13 +522,11 @@ export class ToolExecutor {
 	 * @param block The tool use block to execute
 	 * @returns true if the tool was handled (even if execution failed), false if not registered
 	 */
-	private async execute(block: ToolUse): Promise<boolean> {
+	private async execute(block: ToolUse, config: TaskConfig = this.asToolConfig()): Promise<boolean> {
 		if (!this.coordinator.has(block.name)) {
 			return false // Tool not handled by coordinator
 		}
 		canonicalizeAttemptCompletionParams(block)
-
-		const config = this.asToolConfig()
 
 		try {
 			// Check if user rejected a previous tool
@@ -519,7 +535,7 @@ export class ToolExecutor {
 					? "Tool was interrupted and not executed due to user rejecting a previous tool."
 					: "Skipping tool due to user rejecting a previous tool."
 				const message = `${reason} ${ToolDisplayUtils.getToolDescription(block, this.coordinator)}`
-				if (!this.pushSkippedNativeToolResult(block, message)) {
+				if (!(await this.pushSkippedNativeToolResult(block, message))) {
 					this.createToolRejectionMessage(block, reason)
 				}
 				return true
@@ -528,7 +544,7 @@ export class ToolExecutor {
 			// Check if a tool has already been used in this message (only enforced when parallel tool calling is disabled)
 			if (!this.isParallelToolCallingEnabled() && this.taskState.didAlreadyUseTool && !isTurnEndingToolName(block.name)) {
 				const message = formatResponse.toolAlreadyUsed(block.name)
-				if (!this.pushSkippedNativeToolResult(block, message)) {
+				if (!(await this.pushSkippedNativeToolResult(block, message))) {
 					this.taskState.userMessageContent.push({
 						type: "text",
 						text: message,
@@ -548,7 +564,7 @@ export class ToolExecutor {
 				await this.say("error", errorMessage)
 				// Only push the final error message when the streaming is done.
 				if (!block.partial) {
-					this.pushToolResult(formatResponse.toolError(errorMessage), block)
+					await this.commitToolResult(formatResponse.toolError(errorMessage), block, true)
 				}
 				return true
 			}
@@ -568,6 +584,9 @@ export class ToolExecutor {
 			await this.handleCompleteBlock(block, config)
 			return true
 		} catch (error) {
+			if (this.taskState.abort) {
+				return true
+			}
 			await this.handleError(`executing ${block.name}`, error as Error, block)
 			return true
 		}
@@ -603,12 +622,12 @@ export class ToolExecutor {
 		})
 	}
 
-	private pushSkippedNativeToolResult(block: ToolUse, message: string): boolean {
+	private async pushSkippedNativeToolResult(block: ToolUse, message: string): Promise<boolean> {
 		if (block.partial || !block.isNativeToolCall) {
 			return false
 		}
 
-		this.pushToolResult(formatResponse.toolError(message), block)
+		await this.commitToolResult(formatResponse.toolError(message), block, true)
 		return true
 	}
 
@@ -818,8 +837,7 @@ export class ToolExecutor {
 				toolResult = await this.coordinator.execute(config, block)
 			}
 			toolWasExecuted = true
-			this.pushToolResult(toolResult, block)
-			await this.recordPartialToolResult(toolResult, block)
+			await this.commitToolResult(toolResult, block)
 
 			// --- Repeated tool call loop detection ---
 			// Must run BEFORE updating lastToolName/lastToolParams so we compare
@@ -858,7 +876,9 @@ export class ToolExecutor {
 					hooksEnabled, // always true here - already checked by caller
 				)
 				if (hookRequestedCancel) {
-					await config.callbacks.cancelTask()
+					void config.callbacks.cancelTask().catch((error: unknown) => {
+						Logger.error("[ToolExecutor] PostToolUse cancellation failed:", error)
+					})
 					shouldCancelAfterHook = true
 				}
 			}
@@ -882,7 +902,9 @@ export class ToolExecutor {
 					hooksEnabled, // always true here - already checked by caller
 				)
 				if (hookRequestedCancel) {
-					await config.callbacks.cancelTask()
+					void config.callbacks.cancelTask().catch((cancelError: unknown) => {
+						Logger.error("[ToolExecutor] PostToolUse cancellation failed:", cancelError)
+					})
 					shouldCancelAfterHook = true
 				}
 			}

@@ -1,6 +1,6 @@
 import { DEFAULT_AUTO_APPROVAL_SETTINGS } from "@shared/AutoApprovalSettings"
 import { DEFAULT_BROWSER_SETTINGS } from "@shared/BrowserSettings"
-import { type ClineMessage, DEFAULT_PLATFORM, type ExtensionState } from "@shared/ExtensionMessage"
+import { type ActiveInteractionView, type ClineMessage, DEFAULT_PLATFORM, type ExtensionState } from "@shared/ExtensionMessage"
 import { DEFAULT_FOCUS_CHAIN_SETTINGS } from "@shared/FocusChainSettings"
 import { DEFAULT_MCP_DISPLAY_MODE } from "@shared/McpDisplayMode"
 import type { UserInfo } from "@shared/proto/dline/account"
@@ -54,6 +54,10 @@ const mergeClineMessagesByTs = (existing: ClineMessage[], incoming: ClineMessage
 			merged.push(message)
 			return
 		}
+		const current = merged[existingIndex]
+		if (current.partial !== true && message.partial === true) {
+			return
+		}
 		merged[existingIndex] = message
 	}
 
@@ -63,8 +67,20 @@ const mergeClineMessagesByTs = (existing: ClineMessage[], incoming: ClineMessage
 	for (const message of incoming) {
 		appendOrReplace(message)
 	}
-	return merged
+	return merged.sort((left, right) => left.ts - right.ts)
 }
+
+const hasExactInteractionAnchor = (messages: readonly ClineMessage[], interaction: ActiveInteractionView): boolean =>
+	messages.some(
+		(message) =>
+			message.type === "ask" &&
+			message.ts === interaction.askMessageTs &&
+			message.interactionId === interaction.interactionId &&
+			message.ask === interaction.taskAsk,
+	)
+
+const interactionFetchKey = (taskViewKey: string | undefined, interaction: ActiveInteractionView): string =>
+	`${taskViewKey ?? ""}:${interaction.stateRevision}:${interaction.interactionId}:${interaction.askMessageTs}`
 
 export interface ExtensionStateContextType extends ExtensionState {
 	clineMessages: ClineMessage[]
@@ -303,7 +319,7 @@ export const ExtensionStateContextProvider: React.FC<{
 		yoloModeToggled: false,
 		customPrompt: undefined,
 		useAutoCondense: false,
-		subagentsEnabled: false,
+		subagentsEnabled: true,
 		clineWebToolsEnabled: { user: true, featureFlag: false },
 		worktreesEnabled: { user: true, featureFlag: false },
 		favoritedModelIds: [],
@@ -347,26 +363,45 @@ export const ExtensionStateContextProvider: React.FC<{
 	const currentTaskViewKeyRef = useRef<string | undefined>(initialTaskViewKey)
 	const prevRefetchTaskViewKeyRef = useRef<string | undefined>(initialTaskViewKey)
 	const prevHistoryTaskViewKeyRef = useRef<string | undefined>(initialTaskViewKey)
+	const lastInteractionFetchKeyRef = useRef<string | undefined>(undefined)
+	const projectedInteraction = state.taskViewState?.activeInteraction
+	const projectedInteractionAnchorPresent = projectedInteraction
+		? hasExactInteractionAnchor(clineMessages, projectedInteraction)
+		: true
 
-	// Reset when task is cleared; bootstrap initial fetch on task switch.
-	// New messages arrive through subscribeToPartialMessage; refetching the
-	// latest window on every total increase fights Virtuoso's scroll anchor.
-	// We only refetch when the total shrinks, which happens after cancel/cleanup.
+	// Reset when task is cleared, bootstrap on task switch, and reconcile gaps
+	// when a durable tail message arrives without its realtime event.
 	useEffect(() => {
 		const currentTaskViewKey = getTaskViewKey(state.currentTaskItem?.id, state.taskTitleMessage?.ts)
 		const total = state.totalMessageCount ?? 0
 
-		const fetchLatestWindow = (scheduledTaskViewKey: string | undefined) => {
-			TaskServiceClient.fetchMessage(FetchMessageRequest.create({ referenceIndex: -1, count: 200 }))
-				.then((resp) => {
+		const fetchLatestWindow = (scheduledTaskViewKey: string | undefined, expectedInteraction?: ActiveInteractionView) => {
+			if (expectedInteraction) {
+				lastInteractionFetchKeyRef.current = interactionFetchKey(scheduledTaskViewKey, expectedInteraction)
+			}
+			const fetchAttempt = async (remainingAnchorRetries: number): Promise<void> => {
+				try {
+					const resp = await TaskServiceClient.fetchMessage(
+						FetchMessageRequest.create({ referenceIndex: -1, count: 200 }),
+					)
 					if (currentTaskViewKeyRef.current !== scheduledTaskViewKey) {
 						return
 					}
-					const converted = resp.messages.map((m) => convertProtoToClineMessage(m))
+					const converted = resp.messages.map((message) => convertProtoToClineMessage(message))
 					setClineMessages((prev) => mergeClineMessagesByTs(prev, converted))
 					setFirstItemIndex(Math.max(0, resp.startIndex))
-				})
-				.catch(() => {})
+					if (
+						expectedInteraction &&
+						!hasExactInteractionAnchor(converted, expectedInteraction) &&
+						remainingAnchorRetries > 0
+					) {
+						await fetchAttempt(remainingAnchorRetries - 1)
+					}
+				} catch {
+					// State-stream updates can schedule another bounded reconciliation attempt.
+				}
+			}
+			void fetchAttempt(expectedInteraction ? 1 : 0)
 		}
 
 		if (currentTaskViewKey !== prevRefetchTaskViewKeyRef.current) {
@@ -377,11 +412,12 @@ export const ExtensionStateContextProvider: React.FC<{
 				cancelStabilizeTimerRef.current = null
 			}
 			refetchLockRef.current = false
+			lastInteractionFetchKeyRef.current = undefined
 			setClineMessages([])
 			setFirstItemIndex(0)
 			prevTotalRef.current = total
 			if (total > 0) {
-				fetchLatestWindow(currentTaskViewKey)
+				fetchLatestWindow(currentTaskViewKey, projectedInteraction)
 			}
 			return
 		}
@@ -395,12 +431,30 @@ export const ExtensionStateContextProvider: React.FC<{
 			setClineMessages([])
 			setFirstItemIndex(0)
 			prevTotalRef.current = 0
+			lastInteractionFetchKeyRef.current = undefined
 			return
 		}
 		if (prevTotalRef.current === 0 && total > 0 && clineMessages.length === 0) {
-			fetchLatestWindow(currentTaskViewKeyRef.current)
+			fetchLatestWindow(currentTaskViewKeyRef.current, projectedInteraction)
 			prevTotalRef.current = total
 			return
+		}
+		const knownEndIndex = firstItemIndex + clineMessages.length
+		if (knownEndIndex < total && !refetchLockRef.current) {
+			const scheduledTaskViewKey = currentTaskViewKeyRef.current
+			refetchLockRef.current = true
+			TaskServiceClient.fetchMessage(FetchMessageRequest.create({ referenceIndex: -1, count: 200 }))
+				.then((resp) => {
+					if (currentTaskViewKeyRef.current !== scheduledTaskViewKey) {
+						return
+					}
+					const converted = resp.messages.map((message) => convertProtoToClineMessage(message))
+					setClineMessages((prev) => mergeClineMessagesByTs(prev, converted))
+				})
+				.catch(() => {})
+				.finally(() => {
+					refetchLockRef.current = false
+				})
 		}
 		// Refetch when totalMessageCount shrinks and we already have messages.
 		// This syncs the sliding window after cancel removes partial messages.
@@ -434,8 +488,24 @@ export const ExtensionStateContextProvider: React.FC<{
 			}, 200)
 		}
 
+		const activeInteraction = projectedInteraction
+		if (activeInteraction && !projectedInteractionAnchorPresent && !refetchLockRef.current) {
+			const expectedFetchKey = interactionFetchKey(currentTaskViewKeyRef.current, activeInteraction)
+			if (lastInteractionFetchKeyRef.current !== expectedFetchKey) {
+				fetchLatestWindow(currentTaskViewKeyRef.current, activeInteraction)
+			}
+		}
+
 		prevTotalRef.current = total
-	}, [state.currentTaskItem?.id, state.taskTitleMessage?.ts, state.totalMessageCount, clineMessages.length])
+	}, [
+		state.currentTaskItem?.id,
+		state.taskTitleMessage?.ts,
+		state.totalMessageCount,
+		projectedInteraction,
+		projectedInteractionAnchorPresent,
+		clineMessages.length,
+		firstItemIndex,
+	])
 
 	useEffect(() => {
 		return () => {
@@ -673,12 +743,10 @@ export const ExtensionStateContextProvider: React.FC<{
 					const partialMessage = convertProtoToClineMessage(protoMessage)
 					setClineMessages((prev) => {
 						const existingIndex = prev.findIndex((msg) => msg.ts === partialMessage.ts)
-						if (existingIndex >= 0) {
-							const next = [...prev]
-							next[existingIndex] = partialMessage
-							return next
+						if (existingIndex >= 0 && prev[existingIndex].partial !== true && partialMessage.partial === true) {
+							return prev
 						}
-						return [...prev, partialMessage]
+						return mergeClineMessagesByTs(prev, [partialMessage])
 					})
 				} catch (error) {
 					console.error("Failed to process partial message:", error, protoMessage)

@@ -1,4 +1,4 @@
-import type { TaskViewActionType, TaskViewState } from "@shared/ExtensionMessage"
+import type { ClineMessage, TaskViewActionType, TaskViewState } from "@shared/ExtensionMessage"
 import type { DispatchInteractionRequest, DispatchInteractionResponse } from "@shared/proto/dline/task"
 
 /** Complete Webview draft snapshot owned by the chat composition root. */
@@ -73,6 +73,27 @@ export function canApplyAcceptedInteractionSettlement(
 
 /** Injectable causal protocol boundary used by interaction components. */
 export type DispatchInteraction = (request: DispatchInteractionRequest) => Promise<DispatchInteractionResponse>
+
+/** Resolve the exact ask row owned by the projected active interaction. */
+export function findActiveInteractionAnchor(messages: readonly ClineMessage[], view: TaskViewState): ClineMessage | undefined {
+	const interaction = view.activeInteraction
+	if (!interaction) {
+		return undefined
+	}
+	const matches = messages.filter(
+		(message) =>
+			message.type === "ask" &&
+			message.ts === interaction.askMessageTs &&
+			message.interactionId === interaction.interactionId &&
+			message.ask === interaction.taskAsk,
+	)
+	return matches.length === 1 ? matches[0] : undefined
+}
+
+/** A view without an active interaction needs no ask anchor; active interactions must match exactly. */
+export function isActiveInteractionSynchronized(messages: readonly ClineMessage[], view: TaskViewState): boolean {
+	return !view.activeInteraction || Boolean(findActiveInteractionAnchor(messages, view))
+}
 
 /** Build one causal request from the current backend projection. */
 export function buildInteractionRequest(

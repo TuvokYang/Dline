@@ -25,7 +25,7 @@ interface PreparedDispatch {
 
 /** Effects whose ports can causally dispatch more events into this runtime. */
 function isReentrantEffect(effect: TaskEffect): boolean {
-	return effect.type === "EXECUTE_TOOL" || effect.type === "START_API"
+	return effect.type === "EXECUTE_TOOL" || effect.type === "START_API" || effect.type === "START_NEW_TASK"
 }
 
 /** Owns the task runtime aggregate and serializes all event dispatches. */
@@ -33,6 +33,7 @@ export class TaskRuntime {
 	private state: TaskRuntimeState
 	private readonly runner: TaskEffectRunner
 	private readonly observers = new Set<TaskRuntimeObserver>()
+	private readonly deferredEffects = new Map<Promise<TaskDispatchResult>, number>()
 	private queue: Promise<void> = Promise.resolve()
 
 	constructor(initialState: TaskRuntimeState, ports: TaskEffectPorts) {
@@ -59,14 +60,50 @@ export class TaskRuntime {
 	/** Serialize one event transition and its ordered effects. */
 	dispatch(event: TaskEvent): Promise<TaskDispatchResult> {
 		// Commit state and all non-reentrant effects under the queue. Long-running
-		// tool/API ports are completed after releasing it, otherwise a handler that
-		// opens an interaction deadlocks waiting for its own queued dispatch.
+		// tool/API/task-lifecycle ports are completed after releasing it, otherwise
+		// a port that dispatches back into this runtime waits on its own queue entry.
 		const preparation = this.queue.then(() => this.prepareDispatch(event, true))
 		this.queue = preparation.then(
 			() => undefined,
 			() => undefined,
 		)
-		return preparation.then((prepared) => this.completeDeferredEffects(event, prepared))
+		return preparation.then((prepared) => this.trackDeferredEffects(this.completeDeferredEffects(event, prepared), prepared))
+	}
+
+	/** Return after state admission and immediate effects while long-running effects finish in the background. */
+	dispatchAtAdmission(event: TaskEvent): Promise<TaskDispatchResult> {
+		const preparation = this.queue.then(() => this.prepareDispatch(event, true))
+		this.queue = preparation.then(
+			() => undefined,
+			() => undefined,
+		)
+		return preparation.then((prepared) => {
+			if (prepared.result.accepted && prepared.deferredEffects.length > 0) {
+				void this.trackDeferredEffects(this.completeDeferredEffects(event, prepared), prepared).catch(() => undefined)
+			}
+			return prepared.result
+		})
+	}
+
+	/** Wait until every deferred reentrant effect admitted through the supplied revision has exited. */
+	async waitForDeferredEffectsThrough(revision: number): Promise<void> {
+		while (true) {
+			const pending = [...this.deferredEffects.entries()]
+				.filter(([, originRevision]) => originRevision <= revision)
+				.map(([promise]) => promise)
+			if (pending.length === 0) return
+			await Promise.allSettled(pending)
+		}
+	}
+
+	/** Track deferred work by the state revision that admitted it. */
+	private trackDeferredEffects(promise: Promise<TaskDispatchResult>, prepared: PreparedDispatch): Promise<TaskDispatchResult> {
+		if (!prepared.result.accepted || prepared.deferredEffects.length === 0) return promise
+		this.deferredEffects.set(promise, prepared.effectState.revision)
+		void promise.finally(() => {
+			this.deferredEffects.delete(promise)
+		})
+		return promise
 	}
 
 	/** Commit one reduced state and run effects that cannot re-enter the runtime. */
@@ -109,6 +146,7 @@ export class TaskRuntime {
 					type: "EFFECT_FAILED",
 					effectId: error.effect.id,
 					effectType: error.effect.type,
+					originRevision: effectState.revision,
 					message: error.message,
 				},
 				false,
@@ -150,6 +188,10 @@ export class TaskRuntime {
 				type: "EFFECT_FAILED",
 				effectId: error.effect.id,
 				effectType: error.effect.type,
+				originRevision: prepared.effectState.revision,
+				...(error.effect.type === "START_API" && prepared.effectState.interaction
+					? { originInteraction: prepared.effectState.interaction }
+					: {}),
 				message: error.message,
 			})
 			const failed: TaskDispatchResult = {
@@ -181,6 +223,10 @@ export class TaskRuntime {
 				return event.interactionId
 			case "TASK_CANCELLED":
 				return event.resume?.interactionId
+			case "CHECKPOINT_CHAT_RESTORED": {
+				const interaction = this.state.interaction
+				return interaction?.kind === "resume" && interaction.status === "opening" ? interaction.interactionId : undefined
+			}
 			default:
 				return undefined
 		}

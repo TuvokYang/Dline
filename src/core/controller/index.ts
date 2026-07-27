@@ -32,6 +32,7 @@ import { fileExistsAtPath } from "@utils/fs"
 import axios from "axios"
 import fs from "fs/promises"
 import open from "open"
+import Mutex from "p-mutex"
 import * as path from "path"
 import { ClineEnv } from "@/config"
 import { getDlineDocumentsPath, getDlineDocumentsPathSync, getTaskHeaderText } from "@/core/storage/disk"
@@ -84,6 +85,11 @@ type PostStateOptions = {
 	immediate?: boolean
 }
 
+export type TaskLifecycleScope = {
+	/** Clear the active task while already holding the controller lifecycle lock. */
+	clearTask(options?: { clearPanelState?: boolean }): Promise<void>
+}
+
 /*
 https://github.com/microsoft/vscode-webview-ui-toolkit-samples/blob/main/default/weather-webview/src/providers/WeatherViewProvider.ts
 
@@ -107,6 +113,7 @@ export class Controller {
 
 	// Flag to prevent duplicate cancellations from spam clicking
 	private cancelInProgress = false
+	private readonly taskLifecycleMutex = new Mutex()
 
 	private readonly modeSwitchCoordinator: ModeSwitchCoordinator
 	private nextStateRevision = 0
@@ -425,11 +432,11 @@ export class Controller {
 					return initializedTaskId
 				}
 				if (this.taskLockAcquired) {
-					await taskInstance.resumeFromHistory({
+					await taskInstance.prepareFromHistory({
 						onReadyToDisplay: options?.onHistoryTaskReadyToDisplay,
 					})
 				}
-				// Readonly (taskLockAcquired === false): display-only, no interactive resume.
+				// Readonly (taskLockAcquired === false): display-only, no recovery actions.
 				// Frontend shows a lock banner with a force-unlock button.
 			} else if (task || images || files) {
 				await taskInstance.startTask(task, images, files, options?.context)
@@ -1353,9 +1360,9 @@ export class Controller {
 						this.lockHeartbeatTimer = setInterval(() => {
 							this.lockService.touchTaskLock(taskId).catch(() => {})
 						}, 60000)
-						// Activate the task from read-only to interactive mode
+						// Publish the stopped interaction state after the task becomes writable.
 						if (this.task) {
-							await this.task.resumeFromHistory()
+							await this.task.prepareFromHistory()
 						}
 						await this.postStateToWebview()
 					}
@@ -1392,12 +1399,12 @@ export class Controller {
 			this.lockService.touchTaskLock(taskId).catch(() => {})
 		}, 60000)
 
-		// Activate the task from read-only to interactive mode
+		// Publish the stopped interaction state after the task becomes writable.
 		if (this.task) {
 			try {
-				await this.task.resumeFromHistory()
+				await this.task.prepareFromHistory()
 			} catch (error) {
-				Logger.error(`[Lock] Failed to resume task ${taskId} after unlock:`, error)
+				Logger.error(`[Lock] Failed to prepare task ${taskId} after unlock:`, error)
 			}
 		}
 
@@ -1432,7 +1439,20 @@ export class Controller {
 		} as TaskLockStatus
 	}
 
+	/** Serialize operations that may resume or remove the active Task instance. */
+	async runTaskLifecycleOperation<T>(operation: (scope: TaskLifecycleScope) => Promise<T>): Promise<T> {
+		return this.taskLifecycleMutex.withLock(() =>
+			operation({
+				clearTask: (options) => this.clearTaskWithinLifecycle(options),
+			}),
+		)
+	}
+
 	async clearTask(options?: { clearPanelState?: boolean }) {
+		return this.runTaskLifecycleOperation((scope) => scope.clearTask(options))
+	}
+
+	private async clearTaskWithinLifecycle(options?: { clearPanelState?: boolean }) {
 		// Stop lock heartbeat
 		if (this.lockHeartbeatTimer) {
 			clearInterval(this.lockHeartbeatTimer)

@@ -6,6 +6,7 @@ export type TaskEffectType =
 	| "POST_TASK_VIEW"
 	| "PERSIST_SNAPSHOT"
 	| "CANCEL_RUNTIME"
+	| "PREPARE_RESUME"
 	| "START_API"
 	| "EXECUTE_TOOL"
 	| "APPEND_SAY"
@@ -30,6 +31,12 @@ export interface CancelRuntimeEffect {
 	type: "CANCEL_RUNTIME"
 }
 
+/** Reset cancellation-only infrastructure before any resume side effect. */
+export interface PrepareResumeEffect {
+	id: string
+	type: "PREPARE_RESUME"
+}
+
 /** Start an API request for a known history index. */
 export interface StartApiEffect {
 	id: string
@@ -49,6 +56,8 @@ export interface ExecuteToolEffect {
 export interface AppendSayEffect {
 	id: string
 	type: "APPEND_SAY"
+	/** Stable causal identity used to make continuation feedback idempotent. */
+	interactionId?: string
 	taskSay: ClineSay
 	presentation: string
 	images?: string[]
@@ -77,6 +86,7 @@ export type TaskEffect =
 	| PostTaskViewEffect
 	| PersistSnapshotEffect
 	| CancelRuntimeEffect
+	| PrepareResumeEffect
 	| StartApiEffect
 	| ExecuteToolEffect
 	| AppendSayEffect

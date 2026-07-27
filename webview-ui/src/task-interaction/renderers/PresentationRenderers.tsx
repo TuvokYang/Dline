@@ -37,7 +37,7 @@ export function CompletionRenderer(props: PresentationProps) {
 	return shell(props.message)
 }
 
-/** Render recovery interaction content. */
+/** Render API error interaction content. */
 export function ErrorRenderer(props: PresentationProps) {
 	return shell(props.message)
 }

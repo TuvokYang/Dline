@@ -97,7 +97,7 @@ export class ToolResultUtils {
 	 * @param block Native tool use carrying provider and Dline identities.
 	 * @returns Canonical structured tool result.
 	 */
-	static createResult(content: ToolResponse, block: ToolUse): ClineUserToolResultContentBlock {
+	static createResult(content: ToolResponse, block: ToolUse, isError?: boolean): ClineUserToolResultContentBlock {
 		if (!block.function_id || !block.dline_tid) {
 			throw new Error(`Native tool result is missing canonical identity: tool=${block.name}`)
 		}
@@ -106,6 +106,7 @@ export class ToolResultUtils {
 			function_id: block.function_id,
 			dline_tid: block.dline_tid,
 			content: typeof content === "string" ? [{ type: "text", text: content }] : content,
+			...(isError === undefined ? {} : { is_error: isError }),
 		}
 	}
 
@@ -118,7 +119,8 @@ export class ToolResultUtils {
 		userMessageContent: any[],
 		toolDescription: (block: ToolUse) => string,
 		coordinator: ToolExecutorCoordinator | undefined,
-	): void {
+		isError?: boolean,
+	): ClineUserToolResultContentBlock {
 		const pendingFeedback = ToolResultUtils.drainPendingFeedback(userMessageContent)
 		if (typeof content === "string") {
 			const resultText = content || "(tool did not return anything)"
@@ -142,19 +144,22 @@ export class ToolResultUtils {
 			)
 			const mergedContent = ToolResultUtils.mergeTextResult(`${description} Result:\n${resultText}`, pendingFeedback)
 			if (existingIndex !== -1) {
-				const newBlock = ToolResultUtils.createResult(mergedContent, block)
+				const newBlock = ToolResultUtils.createResult(mergedContent, block, isError)
 				userMessageContent[existingIndex] = newBlock
 				Logger.warn(`ToolResultUtils: Replaced existing tool_result for function_id ${block.function_id}`)
-				return
+				return newBlock
 			}
 
-			userMessageContent.push(ToolResultUtils.createResult(mergedContent, block))
-		} else {
-			// For complex content (arrays with text/image blocks), pass it through directly
-			// The content array should already be properly formatted with type, text, source, etc.
-			const mergedContent = ToolResultUtils.mergeStructuredResult(content, pendingFeedback)
-			userMessageContent.push(ToolResultUtils.createResult(mergedContent, block))
+			const result = ToolResultUtils.createResult(mergedContent, block, isError)
+			userMessageContent.push(result)
+			return result
 		}
+		// For complex content (arrays with text/image blocks), pass it through directly
+		// The content array should already be properly formatted with type, text, source, etc.
+		const mergedContent = ToolResultUtils.mergeStructuredResult(content, pendingFeedback)
+		const result = ToolResultUtils.createResult(mergedContent, block, isError)
+		userMessageContent.push(result)
+		return result
 	}
 
 	/**

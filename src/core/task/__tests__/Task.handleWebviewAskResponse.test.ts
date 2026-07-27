@@ -102,15 +102,20 @@ describe("Task.handleWebviewAskResponse", () => {
 		vi.restoreAllMocks()
 	})
 
-	it("emitStateSnapshot schedules snapshot json without writing state_snapshot ui messages", async () => {
+	it("emitStateSnapshot durably flushes snapshot json without writing state_snapshot ui messages", async () => {
 		const scheduledSnapshots: TaskSnapshot[] = []
+		const persistenceOrder: string[] = []
 		const say = vi.fn(async () => 123)
 		const fakeTask = {
 			say,
 			snapshotPersistence: {
 				schedule: (snapshot: TaskSnapshot) => {
+					persistenceOrder.push("schedule")
 					scheduledSnapshots.push(snapshot)
 				},
+				flushNow: vi.fn(async () => {
+					persistenceOrder.push("flush")
+				}),
 			},
 		}
 		const snapshot: TaskSnapshot = { phase: TaskPhase.STREAMING, apiIndex: 2, timestamp: 300 }
@@ -119,16 +124,26 @@ describe("Task.handleWebviewAskResponse", () => {
 
 		assert.equal(scheduledSnapshots.length, 1)
 		assert.deepEqual(scheduledSnapshots[0], snapshot)
+		assert.deepEqual(persistenceOrder, ["schedule", "flush"])
 		assert.equal(say.mock.calls.length, 0)
 	})
 
-	it("emitStateSnapshot immediately exposes OpenAI auth api_req_failed Retry button before deferred snapshot json write", async () => {
+	it("emitStateSnapshot exposes its in-memory state while durable snapshot persistence is pending", async () => {
 		const scheduledSnapshots: TaskSnapshot[] = []
+		let releaseFlush: (() => void) | undefined
+		const flushGate = new Promise<void>((resolve) => {
+			releaseFlush = resolve
+		})
+		let flushStarted = false
 		const fakeTask = {
 			snapshotPersistence: {
 				schedule: (snapshot: TaskSnapshot) => {
 					scheduledSnapshots.push(snapshot)
 				},
+				flushNow: vi.fn(async () => {
+					flushStarted = true
+					await flushGate
+				}),
 			},
 		}
 		const snapshot: TaskSnapshot = {
@@ -147,18 +162,21 @@ describe("Task.handleWebviewAskResponse", () => {
 			},
 		}
 
-		await (Task.prototype as unknown as TaskSnapshotEmitter).emitStateSnapshot.call(fakeTask, snapshot)
-		const uiState = new TaskController(createMockChannel()).buildTaskUiState(
-			(fakeTask as { latestTaskSnapshot?: TaskSnapshot }).latestTaskSnapshot ?? null,
-		)
+		let persistenceSettled = false
+		const persistence = (Task.prototype as unknown as TaskSnapshotEmitter).emitStateSnapshot
+			.call(fakeTask, snapshot)
+			.then(() => {
+				persistenceSettled = true
+			})
+		await vi.waitFor(() => assert.equal(flushStarted, true))
 
 		assert.deepEqual((fakeTask as { latestTaskSnapshot?: TaskSnapshot }).latestTaskSnapshot, snapshot)
 		assert.equal(scheduledSnapshots.length, 1)
-		assert.equal(uiState.phase, "awaiting_error_recovery")
-		assert.equal(uiState.activeAsk, "api_req_failed")
-		assert.equal(uiState.message, snapshot.error?.message)
-		assert.equal(uiState.actions[0].type, "retry")
-		assert.equal(uiState.actions[0].label, "Retry")
+		assert.equal(persistenceSettled, false)
+
+		releaseFlush?.()
+		await persistence
+		assert.equal(persistenceSettled, true)
 	})
 
 	it("messageResponse with running feedback appends content for the next model turn", async () => {

@@ -75,7 +75,7 @@ export interface InteractionActionDefinition {
 }
 
 /** One complete interaction definition. */
-export type InteractionContinuation = "handler" | "resume" | "completion" | "recovery" | "none"
+export type InteractionContinuation = "handler" | "resume" | "completion" | "none"
 
 export interface InteractionDefinition {
 	kind: InteractionKind

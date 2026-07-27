@@ -1,3 +1,4 @@
+import type { ClineMessage } from "@shared/ExtensionMessage"
 import type { ClineStorageMessage } from "@shared/messages"
 import { describe, expect, it } from "vitest"
 import { BlockPhase } from "../../BlockPhaseMachine"
@@ -51,11 +52,11 @@ function toolResult(dlineTid: string, functionId: string): ClineStorageMessage {
 	}
 }
 
-function input(apiTail: ClineStorageMessage[]): ResumeInput {
+function input(apiTail: ClineStorageMessage[], uiTail: ClineMessage[] = []): ResumeInput {
 	return {
 		taskId: TASK_ID,
 		snapshot: baseSnapshot(),
-		uiTail: [],
+		uiTail,
 		apiTail,
 		apiTailStartIndex: 2,
 		apiHistoryLength: 2 + apiTail.length,
@@ -66,12 +67,7 @@ describe("resume API tail fold", () => {
 	it("rebuilds a pending turn from an assistant tool use after the snapshot anchor", () => {
 		const result = reconcileResume(input([assistantTool("tid-new", "function-new")]))
 
-		expect(result.entry).toEqual({
-			type: "replay_pending_blocks",
-			turnId: "turn:tid-new",
-			dlineTids: ["tid-new"],
-			answeredDlineTids: [],
-		})
+		expect(result.entry).toMatchObject({ type: "show_resume_interaction" })
 		expect(result.snapshot.anchor).toMatchObject({ apiIndex: 2, turnId: "turn:tid-new" })
 		expect(result.snapshot.turn).toMatchObject({
 			turnId: "turn:tid-new",
@@ -88,12 +84,12 @@ describe("resume API tail fold", () => {
 		})
 	})
 
-	it("fails closed when a tool result matches dline_tid but not function_id", () => {
+	it("falls back to normal Resume when a result identity is inconsistent", () => {
 		const result = reconcileResume(
 			input([assistantTool("tid-mismatch", "function-expected"), toolResult("tid-mismatch", "function-other")]),
 		)
 
-		expect(result.entry).toEqual({ type: "read_only_failure" })
+		expect(result.entry).toMatchObject({ type: "show_resume_interaction" })
 		expect(result.diagnostics).toEqual([
 			{
 				code: "tool_result_identity_mismatch",
@@ -113,12 +109,7 @@ describe("resume API tail fold", () => {
 			]),
 		)
 
-		expect(result.entry).toEqual({
-			type: "replay_pending_blocks",
-			turnId: "turn:tid-second",
-			dlineTids: ["tid-second"],
-			answeredDlineTids: [],
-		})
+		expect(result.entry).toMatchObject({ type: "show_resume_interaction" })
 		expect(result.snapshot.apiIndex).toBe(4)
 		expect(result.snapshot.anchor).toMatchObject({ apiIndex: 4, turnId: "turn:tid-second" })
 		expect(result.snapshot.turn?.assistantApiIndex).toBe(4)
@@ -127,12 +118,7 @@ describe("resume API tail fold", () => {
 	it("restores attempt_completion as pending work without completing the task", () => {
 		const result = reconcileResume(input([assistantTool("tid-completion", "function-completion", "attempt_completion")]))
 
-		expect(result.entry).toEqual({
-			type: "replay_pending_blocks",
-			turnId: "turn:tid-completion",
-			dlineTids: ["tid-completion"],
-			answeredDlineTids: [],
-		})
+		expect(result.entry).toMatchObject({ type: "show_resume_interaction" })
 		expect(result.snapshot.phase).not.toBe(TaskPhase.COMPLETED)
 		expect(result.snapshot.completion).toBeUndefined()
 	})
@@ -142,9 +128,35 @@ describe("resume API tail fold", () => {
 			input([assistantTool("tid-done", "function-done"), toolResult("tid-done", "function-done")]),
 		)
 
-		expect(result.entry).toEqual({ type: "show_resume_interaction" })
+		expect(result.entry).toMatchObject({ type: "show_resume_interaction" })
 		expect(result.snapshot.phase).toBe(TaskPhase.PAUSED)
 		expect(result.snapshot.apiIndex).toBe(3)
 		expect(result.snapshot.turn?.blocks).toMatchObject([{ dlineTid: "tid-done", phase: BlockPhase.COMPLETED }])
+	})
+
+	it("treats a durable partial_tool_result as the final result for replay", () => {
+		const result = reconcileResume(
+			input(
+				[assistantTool("tid-partial", "function-partial")],
+				[
+					{
+						ts: 210,
+						type: "say",
+						say: "partial_tool_result",
+						conversationHistoryIndex: 2,
+						text: JSON.stringify({
+							function_id: "function-partial",
+							dline_tid: "tid-partial",
+							result: "durable result",
+						}),
+					},
+				],
+			),
+		)
+
+		expect(result.entry).toMatchObject({ type: "show_resume_interaction" })
+		expect(result.snapshot.turn?.blocks).toMatchObject([
+			{ dlineTid: "tid-partial", functionId: "function-partial", phase: BlockPhase.COMPLETED },
+		])
 	})
 })

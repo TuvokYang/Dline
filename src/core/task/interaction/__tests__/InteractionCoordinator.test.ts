@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest"
+import { BlockPhase } from "../../BlockPhaseMachine"
 import type { TaskEffectPorts } from "../../runtime/TaskEffectRunner"
 import { TaskRuntime } from "../../runtime/TaskRuntime"
-import { createTaskRuntimeState } from "../../runtime/TaskRuntimeState"
+import { createTaskRuntimeState, type TurnState } from "../../runtime/TaskRuntimeState"
 import { TaskPhase } from "../../TaskPhase"
 import { createSnapshot, hydrateSnapshot } from "../../TaskSnapshot"
 import type { InteractionKind } from "../Interaction"
@@ -14,6 +15,7 @@ function createPorts(overrides: Partial<TaskEffectPorts> = {}): TaskEffectPorts 
 		postView: async () => {},
 		persistSnapshot: async () => {},
 		cancelRuntime: async () => {},
+		prepareResume: async () => {},
 		startApi: async () => {},
 		executeTool: async () => {},
 		appendSay: async () => {},
@@ -48,6 +50,42 @@ function hydrateResolvingInteraction(input: {
 			createdRevision: input.response.stateRevision,
 			anchor: { messageTs: 100, messageType: "ask" as const },
 			acceptedResponse: input.response,
+		},
+	}
+	return hydrateSnapshot(createSnapshot(state))
+}
+
+/** Recreate a stopped historical interaction before the user clicks its original action. */
+function hydrateAwaitingInteraction(input: {
+	kind: InteractionKind
+	phase: TaskPhase
+	turnId: string
+	interactionId: string
+	apiIndex?: number
+	turn?: TurnState
+}) {
+	const state = {
+		...createTaskRuntimeState({
+			taskId: "task-1",
+			phase: input.phase,
+			revision: 5,
+			anchor: {
+				apiIndex: input.apiIndex ?? 2,
+				uiMessageTs: 100,
+				turnId: input.turnId,
+				interactionId: input.interactionId,
+			},
+		}),
+		...(input.turn ? { turn: input.turn } : {}),
+		...(input.kind === "completion" ? { completion: { completionId: input.interactionId } } : {}),
+		interaction: {
+			taskId: "task-1",
+			turnId: input.turnId,
+			interactionId: input.interactionId,
+			kind: input.kind,
+			status: "awaiting" as const,
+			createdRevision: 4,
+			anchor: { messageTs: 100, messageType: "ask" as const },
 		},
 	}
 	return hydrateSnapshot(createSnapshot(state))
@@ -115,6 +153,327 @@ describe("InteractionCoordinator", () => {
 		expect(runtime.getState().interaction).toBeUndefined()
 	})
 
+	it("does not consume a detached handler response before Task registers its continuation", async () => {
+		const runtime = new TaskRuntime(
+			hydrateAwaitingInteraction({
+				kind: "qna_response",
+				phase: TaskPhase.EXECUTING,
+				turnId: "turn-qna",
+				interactionId: "qna-1",
+			}),
+			createPorts(),
+		)
+		const coordinator = new InteractionCoordinator(runtime)
+		const revision = runtime.getState().revision
+
+		await expect(
+			coordinator.respond({
+				taskId: "task-1",
+				turnId: "turn-qna",
+				interactionId: "qna-1",
+				actionId: "reply",
+				stateRevision: revision,
+				draft: { text: "Answer", images: [], files: [] },
+			}),
+		).rejects.toThrow("Detached continuation is not registered")
+		expect(runtime.getState()).toMatchObject({
+			revision,
+			interaction: { interactionId: "qna-1", kind: "qna_response", status: "awaiting" },
+		})
+	})
+
+	it("continues and resolves the original detached conversation interaction after its click", async () => {
+		const runtime = new TaskRuntime(
+			hydrateAwaitingInteraction({
+				kind: "qna_response",
+				phase: TaskPhase.EXECUTING,
+				turnId: "turn-qna",
+				interactionId: "qna-1",
+			}),
+			createPorts(),
+		)
+		const coordinator = new InteractionCoordinator(runtime)
+		const continuation = vi.fn(async () => undefined)
+		coordinator.registerDetachedContinuation(continuation)
+
+		const result = await coordinator.respond({
+			taskId: "task-1",
+			turnId: "turn-qna",
+			interactionId: "qna-1",
+			actionId: "reply",
+			stateRevision: runtime.getState().revision,
+			draft: { text: "Answer", images: ["image"], files: ["file"] },
+		})
+
+		expect(result.accepted).toBe(true)
+		await coordinator.waitForClaimedContinuations()
+		expect(continuation).toHaveBeenCalledOnce()
+		expect(continuation).toHaveBeenCalledWith(
+			expect.objectContaining({
+				interaction: expect.objectContaining({
+					kind: "qna_response",
+					turnId: "turn-qna",
+					interactionId: "qna-1",
+					status: "resolving",
+				}),
+				outcome: {
+					actionId: "reply",
+					draft: { text: "Answer", images: ["image"], files: ["file"] },
+					selection: undefined,
+				},
+				resolve: expect.any(Function),
+			}),
+		)
+		expect(runtime.getState().interaction).toBeUndefined()
+	})
+
+	it.each([
+		{ actionId: "approve" as const, expectedPhase: BlockPhase.EXECUTING, siblingPhase: BlockPhase.STREAMING },
+		{ actionId: "reject" as const, expectedPhase: BlockPhase.REJECTED, siblingPhase: BlockPhase.SKIPPED },
+	])("propagates detached approval action $actionId into the canonical runtime block", async (testCase) => {
+		const turnId = "turn-tools"
+		const interactionId = "tid-write"
+		const turn: TurnState = {
+			turnId,
+			assistantApiIndex: 2,
+			mode: "serial",
+			activeDlineTid: interactionId,
+			blocks: [
+				{
+					dlineTid: interactionId,
+					functionId: "function-write",
+					toolName: "write_to_file",
+					phase: BlockPhase.AWAITING_APPROVAL,
+					ts: 100,
+					requiresApproval: true,
+					conversationHistoryIndex: 2,
+				},
+				{
+					dlineTid: "tid-second",
+					functionId: "function-second",
+					toolName: "execute_command",
+					phase: BlockPhase.STREAMING,
+					ts: 101,
+					requiresApproval: true,
+					conversationHistoryIndex: 2,
+				},
+			],
+		}
+		const runtime = new TaskRuntime(
+			hydrateAwaitingInteraction({
+				kind: "tool_approval",
+				phase: TaskPhase.AWAITING_APPROVAL,
+				turnId,
+				interactionId,
+				turn,
+			}),
+			createPorts(),
+		)
+		const coordinator = new InteractionCoordinator(runtime)
+		const continuation = vi.fn(async () => undefined)
+		coordinator.registerDetachedContinuation(continuation)
+
+		const result = await coordinator.respond({
+			taskId: "task-1",
+			turnId,
+			interactionId,
+			actionId: testCase.actionId,
+			stateRevision: runtime.getState().revision,
+			draft: { text: "", images: [], files: [] },
+		})
+
+		expect(result.accepted).toBe(true)
+		await coordinator.waitForClaimedContinuations()
+		expect(continuation).toHaveBeenCalledWith(
+			expect.objectContaining({
+				interaction: expect.objectContaining({ interactionId, kind: "tool_approval" }),
+				outcome: expect.objectContaining({ actionId: testCase.actionId }),
+			}),
+		)
+		expect(runtime.getState().turn?.blocks).toMatchObject([
+			{ dlineTid: interactionId, phase: testCase.expectedPhase },
+			{ dlineTid: "tid-second", phase: testCase.siblingPhase },
+		])
+		expect(runtime.getState().interaction).toBeUndefined()
+	})
+
+	it("commits detached completion feedback through the completion event", async () => {
+		const runtime = new TaskRuntime(
+			hydrateAwaitingInteraction({
+				kind: "completion",
+				phase: TaskPhase.COMPLETED,
+				turnId: "turn-completion",
+				interactionId: "completion-1",
+			}),
+			createPorts(),
+		)
+		const coordinator = new InteractionCoordinator(runtime)
+
+		const result = await coordinator.respond({
+			taskId: "task-1",
+			turnId: "turn-completion",
+			interactionId: "completion-1",
+			actionId: "reply",
+			stateRevision: runtime.getState().revision,
+			draft: { text: "Refine", images: [], files: [] },
+		})
+
+		expect(result.accepted).toBe(true)
+		expect(runtime.getState()).toMatchObject({ phase: TaskPhase.STREAMING })
+		expect(runtime.getState().interaction).toBeUndefined()
+		expect(runtime.getState().completion).toBeUndefined()
+	})
+
+	it("commits detached completion Start New Task without exposing Resume", async () => {
+		let releaseStartNewTask: (() => void) | undefined
+		const startNewTaskLifecycle = new Promise<void>((resolve) => {
+			releaseStartNewTask = resolve
+		})
+		let signalStartNewTask: (() => void) | undefined
+		const startNewTaskEntered = new Promise<void>((resolve) => {
+			signalStartNewTask = resolve
+		})
+		const startNewTask = vi.fn(async () => {
+			signalStartNewTask?.()
+			await startNewTaskLifecycle
+		})
+		const runtime = new TaskRuntime(
+			hydrateAwaitingInteraction({
+				kind: "completion",
+				phase: TaskPhase.COMPLETED,
+				turnId: "turn-completion",
+				interactionId: "completion-1",
+			}),
+			createPorts({ startNewTask }),
+		)
+		const coordinator = new InteractionCoordinator(runtime)
+		const draft = { text: "Next", images: [], files: [] }
+
+		let result: Awaited<ReturnType<InteractionCoordinator["respond"]>> | undefined
+		const response = coordinator
+			.respond({
+				taskId: "task-1",
+				turnId: "turn-completion",
+				interactionId: "completion-1",
+				actionId: "start_new_task",
+				stateRevision: runtime.getState().revision,
+				draft,
+			})
+			.then((value) => {
+				result = value
+				return value
+			})
+		await startNewTaskEntered
+
+		try {
+			await vi.waitFor(() => expect(result).toMatchObject({ accepted: true }), { timeout: 250 })
+			expect(startNewTask).toHaveBeenCalledWith(expect.objectContaining({ type: "START_NEW_TASK", draft }))
+			expect(runtime.getState().phase).toBe(TaskPhase.COMPLETED)
+			expect(runtime.getState().interaction).toBeUndefined()
+		} finally {
+			releaseStartNewTask?.()
+			await response
+		}
+	})
+
+	it("returns an admitted retry and reopens Retry when START_API fails asynchronously", async () => {
+		let runtime: TaskRuntime
+		let attempts = 0
+		const startApi = vi.fn(async () => {
+			attempts++
+			const started = await runtime.dispatch({ type: "API_REQUEST_STARTED", apiIndex: 7 })
+			expect(started.accepted).toBe(true)
+			if (attempts === 1) {
+				throw new Error("provider failed after retry admission")
+			}
+		})
+		runtime = new TaskRuntime(
+			hydrateAwaitingInteraction({
+				kind: "error_retry",
+				phase: TaskPhase.AWAITING_APPROVAL,
+				turnId: "turn-retry",
+				interactionId: "retry-1",
+				apiIndex: 7,
+			}),
+			createPorts({ startApi }),
+		)
+		const coordinator = new InteractionCoordinator(runtime)
+		const draft = { text: "Retry context", images: [], files: [] }
+
+		await expect(
+			coordinator.respond({
+				taskId: "task-1",
+				turnId: "turn-retry",
+				interactionId: "retry-1",
+				actionId: "retry",
+				stateRevision: runtime.getState().revision,
+				draft,
+			}),
+		).resolves.toMatchObject({ accepted: true })
+		await vi.waitFor(() => expect(runtime.getState().error?.effectType).toBe("START_API"))
+
+		expect(runtime.getState()).toMatchObject({
+			phase: TaskPhase.AWAITING_APPROVAL,
+			interaction: {
+				kind: "error_retry",
+				status: "awaiting",
+				interactionId: "retry-1",
+				acceptedResponse: { actionId: "retry", draft },
+			},
+			error: { effectType: "START_API", message: "provider failed after retry admission" },
+		})
+
+		await expect(
+			coordinator.respond({
+				taskId: "task-1",
+				turnId: "turn-retry",
+				interactionId: "retry-1",
+				actionId: "retry",
+				stateRevision: runtime.getState().revision,
+				draft: { text: "Retry again", images: [], files: [] },
+			}),
+		).resolves.toMatchObject({ accepted: true })
+		await vi.waitFor(() => expect(startApi).toHaveBeenCalledTimes(2))
+		expect(runtime.getState()).toMatchObject({ phase: TaskPhase.STREAMING, interaction: undefined })
+		expect(runtime.getState().error).toBeUndefined()
+	})
+
+	it("commits detached error retry from the historical API index and retains identity until admission", async () => {
+		const startApi = vi.fn(async () => undefined)
+		const runtime = new TaskRuntime(
+			hydrateAwaitingInteraction({
+				kind: "error_retry",
+				phase: TaskPhase.AWAITING_APPROVAL,
+				turnId: "turn-retry",
+				interactionId: "retry-1",
+				apiIndex: 7,
+			}),
+			createPorts({ startApi }),
+		)
+		const coordinator = new InteractionCoordinator(runtime)
+
+		const result = await coordinator.respond({
+			taskId: "task-1",
+			turnId: "turn-retry",
+			interactionId: "retry-1",
+			actionId: "retry",
+			stateRevision: runtime.getState().revision,
+			draft: { text: "Retry context", images: [], files: [] },
+		})
+
+		expect(result.accepted).toBe(true)
+		expect(startApi).toHaveBeenCalledWith(expect.objectContaining({ type: "START_API", apiIndex: 7 }))
+		expect(runtime.getState().interaction).toMatchObject({
+			kind: "error_retry",
+			status: "resolving",
+			interactionId: "retry-1",
+		})
+
+		const admitted = await runtime.dispatch({ type: "API_REQUEST_STARTED", apiIndex: 7 })
+		expect(admitted.accepted).toBe(true)
+		expect(runtime.getState().interaction).toBeUndefined()
+	})
+
 	it("continues resume from a hydrated resolving response without duplicate user input", async () => {
 		const interactionId = "resume-crash"
 		const turnId = "resume-turn"
@@ -127,7 +486,14 @@ describe("InteractionCoordinator", () => {
 			draft: { text: "Continue", images: [], files: [] },
 		}
 		const runtime = new TaskRuntime(
-			hydrateResolvingInteraction({ kind: "resume", phase: TaskPhase.PAUSED, turnId, interactionId, response }),
+			hydrateResolvingInteraction({
+				kind: "resume",
+				phase: TaskPhase.PAUSED,
+				turnId,
+				interactionId,
+				response,
+				apiIndex: 2,
+			}),
 			createPorts(),
 		)
 
@@ -135,6 +501,19 @@ describe("InteractionCoordinator", () => {
 			actionId: "resume",
 		})
 		expect(runtime.getState().phase).toBe(TaskPhase.RESUMING)
+		expect(runtime.getState().interaction).toMatchObject({
+			kind: "resume",
+			status: "resolving",
+			interactionId,
+			acceptedResponse: { actionId: "resume", draft: response.draft },
+		})
+
+		const admitted = await runtime.dispatch({ type: "API_REQUEST_STARTED", apiIndex: 2 })
+		expect(admitted.accepted).toBe(true)
+		expect(runtime.getState()).toMatchObject({
+			phase: TaskPhase.STREAMING,
+			anchor: { apiIndex: 2, interactionId: undefined },
+		})
 		expect(runtime.getState().interaction).toBeUndefined()
 	})
 
@@ -199,7 +578,23 @@ describe("InteractionCoordinator", () => {
 			new InteractionCoordinator(runtime).recover({ turnId, interactionId, apiIndex: 7, presentation: "Failed" }),
 		).resolves.toMatchObject({ actionId: "retry", draft: response.draft })
 		expect(startApi).toHaveBeenCalledOnce()
-		expect(runtime.getState()).toMatchObject({ phase: TaskPhase.STREAMING, interaction: undefined })
+		expect(runtime.getState()).toMatchObject({
+			phase: TaskPhase.STREAMING,
+			interaction: {
+				kind: "error_retry",
+				status: "resolving",
+				interactionId,
+				acceptedResponse: { actionId: "retry", draft: response.draft },
+			},
+		})
+
+		const admitted = await runtime.dispatch({ type: "API_REQUEST_STARTED", apiIndex: 7 })
+		expect(admitted.accepted).toBe(true)
+		expect(runtime.getState()).toMatchObject({
+			phase: TaskPhase.STREAMING,
+			anchor: { apiIndex: 7, interactionId: undefined },
+			interaction: undefined,
+		})
 	})
 
 	it("commits a live resume response even when no waiter owns the interaction", async () => {
@@ -236,9 +631,22 @@ describe("InteractionCoordinator", () => {
 		})
 		await vi.waitFor(() => {
 			expect(runtime.getState().phase).toBe(TaskPhase.RESUMING)
-			expect(runtime.getState().interaction).toBeUndefined()
+			expect(runtime.getState().interaction).toMatchObject({
+				kind: "resume",
+				status: "resolving",
+				interactionId: "resume-1",
+				acceptedResponse: { actionId: "resume", draft: { text: "Continue", images: [], files: [] } },
+			})
 			expect(startApi).toHaveBeenCalledOnce()
 		})
+
+		const admitted = await runtime.dispatch({ type: "API_REQUEST_STARTED", apiIndex: 2 })
+		expect(admitted.accepted).toBe(true)
+		expect(runtime.getState()).toMatchObject({
+			phase: TaskPhase.STREAMING,
+			anchor: { apiIndex: 2, interactionId: undefined },
+		})
+		expect(runtime.getState().interaction).toBeUndefined()
 	})
 
 	it("commits one hydrated resume response exactly once without rejecting the waiter continuation", async () => {
@@ -280,7 +688,23 @@ describe("InteractionCoordinator", () => {
 		expect(responseResult.accepted).toBe(true)
 		expect(responseResult.effectError).toBeUndefined()
 		expect(startApi).toHaveBeenCalledOnce()
-		expect(runtime.getState()).toMatchObject({ phase: TaskPhase.RESUMING, interaction: undefined })
+		expect(runtime.getState()).toMatchObject({
+			phase: TaskPhase.RESUMING,
+			interaction: {
+				kind: "resume",
+				status: "resolving",
+				interactionId: "resume-1",
+				acceptedResponse: { actionId: "resume", draft: { text: "Continue", images: [], files: [] } },
+			},
+		})
+
+		const admitted = await runtime.dispatch({ type: "API_REQUEST_STARTED", apiIndex: 2 })
+		expect(admitted.accepted).toBe(true)
+		expect(runtime.getState()).toMatchObject({
+			phase: TaskPhase.STREAMING,
+			anchor: { apiIndex: 2, interactionId: undefined },
+		})
+		expect(runtime.getState().interaction).toBeUndefined()
 	})
 
 	it("takes over one hydrated resume interaction and commits its causal response", async () => {
@@ -320,9 +744,24 @@ describe("InteractionCoordinator", () => {
 		})
 
 		await expect(outcomePromise).resolves.toMatchObject({ actionId: "resume" })
-		expect(runtime.getState()).toMatchObject({ phase: TaskPhase.RESUMING })
+		expect(runtime.getState()).toMatchObject({
+			phase: TaskPhase.RESUMING,
+			anchor: { apiIndex: 2, interactionId: "resume-1" },
+			interaction: {
+				kind: "resume",
+				status: "resolving",
+				interactionId: "resume-1",
+				acceptedResponse: { actionId: "resume", draft: { text: "Continue", images: [], files: [] } },
+			},
+		})
+
+		const admitted = await runtime.dispatch({ type: "API_REQUEST_STARTED", apiIndex: 2 })
+		expect(admitted.accepted).toBe(true)
+		expect(runtime.getState()).toMatchObject({
+			phase: TaskPhase.STREAMING,
+			anchor: { apiIndex: 2, interactionId: undefined },
+		})
 		expect(runtime.getState().interaction).toBeUndefined()
-		expect(runtime.getState().anchor.interactionId).toBeUndefined()
 	})
 
 	it("commits completion feedback before returning it to the handler", async () => {
@@ -426,7 +865,23 @@ describe("InteractionCoordinator", () => {
 			}),
 		)
 		expect(runtime.getState().phase).toBe(TaskPhase.STREAMING)
-		expect(runtime.getState().interaction).toBeUndefined()
+		expect(runtime.getState().interaction).toMatchObject({
+			kind: "error_retry",
+			status: "resolving",
+			interactionId: "retry-1",
+			acceptedResponse: {
+				actionId: "retry",
+				draft: { text: "context", images: ["image"], files: ["file"] },
+			},
+		})
+
+		const admitted = await runtime.dispatch({ type: "API_REQUEST_STARTED", apiIndex: 7 })
+		expect(admitted.accepted).toBe(true)
+		expect(runtime.getState()).toMatchObject({
+			phase: TaskPhase.STREAMING,
+			anchor: { apiIndex: 7, interactionId: undefined },
+			interaction: undefined,
+		})
 	})
 
 	it("rejects a second primary interaction while one is active", async () => {

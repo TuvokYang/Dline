@@ -1,6 +1,11 @@
 import type { ToolUse } from "@core/assistant-message"
 import { Task } from "@core/task"
-import type { InteractionOutcome } from "@core/task/interaction/InteractionCoordinator"
+import {
+	type DetachedInteractionContinuationContext,
+	InteractionCoordinator,
+} from "@core/task/interaction/InteractionCoordinator"
+import type { InteractionResponse } from "@core/task/interaction/InteractionResponse"
+import type { TaskEffectPorts } from "@core/task/runtime/TaskEffectRunner"
 import { TaskRuntime } from "@core/task/runtime/TaskRuntime"
 import { createTaskRuntimeState } from "@core/task/runtime/TaskRuntimeState"
 import { TaskPhase } from "@core/task/TaskPhase"
@@ -8,140 +13,476 @@ import { ClineDefaultTool } from "@shared/tools"
 import { describe, expect, it, vi } from "vitest"
 import { BlockPhase } from "../BlockPhaseMachine"
 
-/** Exercise the restored handler boundary through the real turn reducer and presentation path. */
+function runtimePorts(): TaskEffectPorts {
+	return {
+		postView: async () => {},
+		persistSnapshot: async () => {},
+		cancelRuntime: async () => {},
+		prepareResume: async () => {},
+		startApi: async () => {},
+		executeTool: async () => {},
+		appendSay: async () => {},
+		appendAsk: async () => ({ uiMessageTs: 100 }),
+		startNewTask: async () => {},
+	}
+}
+
 describe("Task restored turn-end continuation", () => {
-	it("accepts the next assistant turn after a restored handler response", async () => {
-		const restoredTurnId = "restored-turn"
-		const restoredInteractionId = "restored-interaction"
-		const restoredBlock: ToolUse = {
+	it("loads a restored interaction block only from its exact assistant API index", () => {
+		const interactionId = "approval-history-interaction"
+		const staleBlock = {
+			type: "tool_use" as const,
+			name: ClineDefaultTool.FILE_EDIT,
+			input: { path: "stale.ts" },
+			function_id: "stale-function",
+			dline_tid: interactionId,
+		}
+		const exactBlock = {
+			...staleBlock,
+			name: ClineDefaultTool.FILE_READ,
+			input: { path: "exact.ts" },
+			function_id: "exact-function",
+		}
+		const storedToRuntime = vi.fn((block, ts) => ({
 			type: "tool_use",
+			name: block.name,
+			params: block.input,
+			partial: false,
+			function_id: block.function_id,
+			dline_tid: block.dline_tid,
+			ts,
+		}))
+		const fakeTask = {
+			taskState: { assistantMessageContent: [] },
+			messageStateHandler: {
+				apiConversationHistory: [
+					{ role: "assistant", content: [staleBlock] },
+					{ role: "user", content: "unrelated" },
+					{ role: "assistant", content: [exactBlock] },
+				],
+			},
+			restoreHandler: { storedToRuntime },
+		} as unknown as Task
+		const findRestoredTurnEndBlock = (
+			Task.prototype as unknown as {
+				findRestoredTurnEndBlock(interactionId: string, messageTs: number, assistantApiIndex?: number): ToolUse
+			}
+		).findRestoredTurnEndBlock
+
+		const restored = findRestoredTurnEndBlock.call(fakeTask, interactionId, 101, 2)
+
+		expect(restored).toMatchObject({
+			name: ClineDefaultTool.FILE_READ,
+			function_id: "exact-function",
+			dline_tid: interactionId,
+			ts: 101,
+		})
+		expect(storedToRuntime).toHaveBeenCalledWith(exactBlock, 101)
+	})
+
+	it("commits a restored approval before invoking its detached continuation", async () => {
+		const interactionId = "approval-history-interaction"
+		const turnId = `turn:${interactionId}`
+		const runtime = new TaskRuntime(
+			{
+				...createTaskRuntimeState({
+					taskId: "task-1",
+					phase: TaskPhase.AWAITING_APPROVAL,
+					revision: 8,
+					anchor: { apiIndex: 4, uiMessageTs: 100, turnId, interactionId },
+				}),
+				turn: {
+					turnId,
+					assistantApiIndex: 4,
+					mode: "serial",
+					activeDlineTid: interactionId,
+					blocks: [
+						{
+							dlineTid: interactionId,
+							functionId: "approval-history-function",
+							toolName: ClineDefaultTool.FILE_READ,
+							phase: BlockPhase.AWAITING_APPROVAL,
+							ts: 100,
+							requiresApproval: true,
+							conversationHistoryIndex: 4,
+						},
+					],
+				},
+				interaction: {
+					taskId: "task-1",
+					turnId,
+					interactionId,
+					kind: "tool_approval",
+					status: "awaiting",
+					createdRevision: 7,
+					anchor: { messageTs: 100, messageType: "ask" },
+				},
+			},
+			runtimePorts(),
+		)
+		const coordinator = new InteractionCoordinator(runtime)
+		const continuation = vi.fn(async (context: DetachedInteractionContinuationContext) => {
+			expect(runtime.getState()).toMatchObject({
+				phase: TaskPhase.EXECUTING,
+				interaction: {
+					interactionId,
+					status: "resolving",
+					acceptedResponse: { actionId: "approve" },
+				},
+				turn: { blocks: [{ dlineTid: interactionId, phase: BlockPhase.EXECUTING }] },
+			})
+			await context.resolve()
+		})
+		coordinator.registerDetachedContinuation(continuation)
+		const response: InteractionResponse = {
+			taskId: "task-1",
+			turnId,
+			interactionId,
+			actionId: "approve",
+			stateRevision: 8,
+			draft: { text: "approved", images: [], files: [] },
+		}
+
+		const accepted = await coordinator.respond(response)
+
+		expect(accepted.accepted).toBe(true)
+		await vi.waitFor(() => expect(continuation).toHaveBeenCalledOnce())
+		await vi.waitFor(() => expect(runtime.getState().interaction).toBeUndefined())
+		expect(runtime.getState().turn?.blocks[0]?.phase).toBe(BlockPhase.EXECUTING)
+		const duplicate = await coordinator.respond(response)
+		expect(duplicate).toMatchObject({ accepted: false, error: { code: "stale_interaction" } })
+		expect(continuation).toHaveBeenCalledOnce()
+	})
+
+	it("commits a restored turn-end result before resolving and starting the next request", async () => {
+		const interactionId = "qna-history-interaction"
+		const turnId = `turn:${interactionId}`
+		const functionId = "qna-history-function"
+		const storedBlock = {
+			type: "tool_use" as const,
 			name: ClineDefaultTool.QNA_RESPOND,
-			params: { response: "Restored answer" },
-			partial: false,
-			function_id: "function-restored",
-			dline_tid: restoredInteractionId,
-			ts: 100,
-		}
-		const nextBlock: ToolUse = {
-			type: "tool_use",
-			name: ClineDefaultTool.ACT_MODE,
-			params: { response: "Continue work" },
-			partial: false,
-			function_id: "function-next",
-			dline_tid: "next-interaction",
-			ts: 200,
-		}
-		const nextRuntimeBlock = {
-			dlineTid: nextBlock.dline_tid,
-			functionId: nextBlock.function_id,
-			toolName: nextBlock.name,
-			ts: nextBlock.ts,
-			requiresApproval: true,
-			conversationHistoryIndex: 7,
+			input: { response: "Restored question" },
+			function_id: functionId,
+			dline_tid: interactionId,
 		}
 		const runtime = new TaskRuntime(
 			{
 				...createTaskRuntimeState({
 					taskId: "task-1",
-					phase: TaskPhase.STREAMING,
-					revision: 5,
-					anchor: { apiIndex: 4, turnId: restoredTurnId },
+					phase: TaskPhase.EXECUTING,
+					revision: 9,
+					anchor: { apiIndex: 1, uiMessageTs: 100, turnId, interactionId },
 				}),
 				turn: {
-					turnId: restoredTurnId,
-					assistantApiIndex: 4,
+					turnId,
+					assistantApiIndex: 1,
 					mode: "serial",
 					blocks: [
 						{
-							dlineTid: restoredInteractionId,
-							functionId: restoredBlock.function_id,
-							toolName: restoredBlock.name,
+							dlineTid: interactionId,
+							functionId,
+							toolName: ClineDefaultTool.QNA_RESPOND,
 							phase: BlockPhase.AUTO_EXECUTING,
-							ts: restoredBlock.ts,
+							ts: 100,
 							requiresApproval: false,
-							conversationHistoryIndex: 4,
+							conversationHistoryIndex: 1,
 						},
 					],
 				},
-			},
-			{
-				postView: async () => {},
-				persistSnapshot: async () => {},
-				cancelRuntime: async () => {},
-				startApi: async () => {},
-				executeTool: async () => {},
-				appendSay: async () => {},
-				appendAsk: async () => ({ uiMessageTs: 100 }),
-				startNewTask: async () => {},
-			},
-		)
-		const outcome: InteractionOutcome = {
-			actionId: "reply",
-			draft: { text: "write a file", images: [], files: [] },
-		}
-		const taskState = {
-			abort: false,
-			assistantMessageContent: [restoredBlock],
-			currentStreamingContentIndex: 0,
-			didAlreadyUseTool: false,
-			didCompleteReadingStream: true,
-			lastRenderedPartialByTs: new Map<number, string>(),
-			partialToolLifecycleByTs: new Map<number, "partial-shown" | "complete-running" | "complete-done">(),
-			presentAssistantMessageHasPendingUpdates: false,
-			presentAssistantMessageLocked: false,
-			userMessageContent: [],
-			userMessageContentReady: false,
-		}
-		const presentAssistantMessage = Task.prototype.presentAssistantMessage
-		const continueRestoredTurnEnd = (
-			Task.prototype as unknown as {
-				continueRestoredTurnEnd(
+				interaction: {
+					taskId: "task-1",
+					turnId,
+					interactionId,
 					kind: "qna_response",
-					interactionId: string,
-					messageTs: number,
-					outcome: InteractionOutcome,
-				): Promise<void>
-			}
-		).continueRestoredTurnEnd
+					status: "resolving",
+					createdRevision: 8,
+					anchor: { messageTs: 100, messageType: "ask" },
+					acceptedResponse: {
+						taskId: "task-1",
+						turnId,
+						interactionId,
+						actionId: "reply",
+						stateRevision: 9,
+						draft: { text: "continue", images: [], files: [] },
+					},
+				},
+			},
+			runtimePorts(),
+		)
+		const sequence: string[] = []
+		const taskState = {
+			abort: true,
+			userMessageContent: [] as Array<Record<string, unknown>>,
+			assistantMessageContent: [] as ToolUse[],
+			didCompleteReadingStream: false,
+		}
+		const apiConversationHistory = [
+			{ role: "user" as const, content: "task" },
+			{ role: "assistant" as const, content: [storedBlock] },
+		]
 		const fakeTask = {
+			taskId: "task-1",
 			taskRuntime: runtime,
-			dispatchRuntime: runtime.dispatch.bind(runtime),
 			taskState,
-			initialCheckpointCommitPromise: undefined,
-			messageStateHandler: { apiConversationHistory: new Array(8).fill({ role: "assistant" }) },
+			messageStateHandler: { apiConversationHistory, clineMessages: [] },
+			restoreHandler: {
+				storedToRuntime: (block: typeof storedBlock, ts: number): ToolUse => ({
+					type: "tool_use",
+					name: block.name,
+					params: block.input,
+					partial: false,
+					function_id: block.function_id,
+					dline_tid: block.dline_tid,
+					ts,
+				}),
+			},
+			restoredTurnToolBlocks: (Task.prototype as unknown as { restoredTurnToolBlocks(turn: unknown): ToolUse[] })
+				.restoredTurnToolBlocks,
+			hasPendingToolResult: (
+				Task.prototype as unknown as { hasPendingToolResult(dlineTid: string, functionId: string): boolean }
+			).hasPendingToolResult,
+			dispatchRuntime: runtime.dispatch.bind(runtime),
 			toolExecutor: {
-				continueTurnEndInteraction: vi.fn(async () => "continued tool result"),
-				isBlockApproved: () => false,
+				continueTurnEndInteraction: vi.fn(async () => {
+					sequence.push("handler-continuation")
+					return "continued tool result"
+				}),
+				commitRestoredToolResult: vi.fn(async (_result: unknown, block: ToolUse) => {
+					sequence.push("result-committed")
+					taskState.userMessageContent.push({
+						type: "tool_result",
+						content: "continued tool result",
+						function_id: block.function_id,
+						dline_tid: block.dline_tid,
+					})
+				}),
+				commitInterruptedToolResult: vi.fn(async () => {}),
+				executeTool: vi.fn(async () => {}),
 			},
-			taskController: {
-				buildTurn: vi.fn(),
-				getBlocks: () => [nextRuntimeBlock],
-				hasAnyRejection: () => false,
-				shouldSkip: () => false,
+			isTerminalRuntimeBlock: (phase: BlockPhase) =>
+				[BlockPhase.COMPLETED, BlockPhase.REJECTED, BlockPhase.SKIPPED, BlockPhase.CANCELLED].includes(phase),
+			syncRetainedMachines: () => sequence.push("machines-synced"),
+			executeFinalizedAssistantTurn: async () => {
+				sequence.push("turn-finalized")
 			},
-			isParallelToolCallingEnabled: () => false,
-			reRenderUpdatedPartialBlocks: async () => undefined,
-			findRestoredTurnEndBlock: () => restoredBlock,
 			recursivelyMakeClineRequests: async () => {
-				const started = await runtime.dispatch({ type: "API_REQUEST_STARTED", apiIndex: 6 })
-				expect(started.accepted).toBe(true)
-				taskState.assistantMessageContent = [nextBlock]
-				taskState.currentStreamingContentIndex = 0
-				taskState.didCompleteReadingStream = true
-				await presentAssistantMessage.call(fakeTask as never)
+				sequence.push("next-api")
 				return false
 			},
+			requestCancellation: vi.fn(async () => ({ accepted: true })),
+		} as unknown as Task
+		const continueRestoredInteraction = (
+			Task.prototype as unknown as {
+				continueRestoredInteraction(context: DetachedInteractionContinuationContext): Promise<void>
+			}
+		).continueRestoredInteraction
+		const interaction = runtime.getState().interaction
+		if (!interaction) throw new Error("test interaction missing")
+		const context: DetachedInteractionContinuationContext = {
+			interaction,
+			outcome: { actionId: "reply", draft: { text: "continue", images: [], files: [] } },
+			isCurrent: () => true,
+			resolve: async () => {
+				sequence.push("interaction-resolved")
+				const resolved = await runtime.dispatch({ type: "INTERACTION_RESOLVED", interactionId })
+				expect(resolved.accepted).toBe(true)
+			},
+		}
+
+		await continueRestoredInteraction.call(fakeTask, context)
+
+		expect(sequence).toEqual([
+			"handler-continuation",
+			"result-committed",
+			"interaction-resolved",
+			"machines-synced",
+			"turn-finalized",
+			"next-api",
+		])
+		expect(runtime.getState().interaction).toBeUndefined()
+		expect(runtime.getState().turn?.blocks[0]?.phase).toBe(BlockPhase.COMPLETED)
+		expect(taskState.abort).toBe(false)
+	})
+
+	it("stops a detached continuation at the cancellation generation boundary", async () => {
+		const interactionId = "qna-cancelled-continuation"
+		const turnId = `turn:${interactionId}`
+		const functionId = "qna-cancelled-function"
+		const storedBlock = {
+			type: "tool_use" as const,
+			name: ClineDefaultTool.QNA_RESPOND,
+			input: { response: "Restored question" },
+			function_id: functionId,
+			dline_tid: interactionId,
+		}
+		const taskState = {
+			abort: true,
+			userMessageContent: [] as Array<Record<string, unknown>>,
+			assistantMessageContent: [] as ToolUse[],
+			didCompleteReadingStream: false,
+		}
+		let releaseHandler: (() => void) | undefined
+		let handlerStarted: (() => void) | undefined
+		const handlerGate = new Promise<void>((resolve) => {
+			releaseHandler = resolve
+		})
+		const handlerStart = new Promise<void>((resolve) => {
+			handlerStarted = resolve
+		})
+		const runtime = new TaskRuntime(
+			{
+				...createTaskRuntimeState({
+					taskId: "task-1",
+					phase: TaskPhase.EXECUTING,
+					revision: 9,
+					anchor: { apiIndex: 1, uiMessageTs: 100, turnId, interactionId },
+				}),
+				turn: {
+					turnId,
+					assistantApiIndex: 1,
+					mode: "serial",
+					blocks: [
+						{
+							dlineTid: interactionId,
+							functionId,
+							toolName: ClineDefaultTool.QNA_RESPOND,
+							phase: BlockPhase.AUTO_EXECUTING,
+							ts: 100,
+							requiresApproval: false,
+							conversationHistoryIndex: 1,
+						},
+					],
+				},
+				interaction: {
+					taskId: "task-1",
+					turnId,
+					interactionId,
+					kind: "qna_response",
+					status: "awaiting",
+					createdRevision: 8,
+					anchor: { messageTs: 100, messageType: "ask" },
+				},
+			},
+			{
+				...runtimePorts(),
+				cancelRuntime: async () => {
+					taskState.abort = true
+				},
+			},
+		)
+		const commitRestoredToolResult = vi.fn(async () => undefined)
+		const executeFinalizedAssistantTurn = vi.fn(async () => undefined)
+		const recursivelyMakeClineRequests = vi.fn(async () => false)
+		const fakeTask = {
+			taskId: "task-1",
+			taskRuntime: runtime,
+			taskState,
+			messageStateHandler: {
+				apiConversationHistory: [
+					{ role: "user" as const, content: "task" },
+					{ role: "assistant" as const, content: [storedBlock] },
+				],
+				clineMessages: [],
+			},
+			restoreHandler: {
+				storedToRuntime: (block: typeof storedBlock, ts: number): ToolUse => ({
+					type: "tool_use",
+					name: block.name,
+					params: block.input,
+					partial: false,
+					function_id: block.function_id,
+					dline_tid: block.dline_tid,
+					ts,
+				}),
+			},
+			restoredTurnToolBlocks: (Task.prototype as unknown as { restoredTurnToolBlocks(turn: unknown): ToolUse[] })
+				.restoredTurnToolBlocks,
+			hasPendingToolResult: (
+				Task.prototype as unknown as { hasPendingToolResult(dlineTid: string, functionId: string): boolean }
+			).hasPendingToolResult,
+			dispatchRuntime: runtime.dispatch.bind(runtime),
+			toolExecutor: {
+				continueTurnEndInteraction: vi.fn(async () => {
+					handlerStarted?.()
+					await handlerGate
+					return "continued tool result"
+				}),
+				commitRestoredToolResult,
+				commitInterruptedToolResult: vi.fn(async () => undefined),
+				executeTool: vi.fn(async () => undefined),
+			},
+			isTerminalRuntimeBlock: (phase: BlockPhase) =>
+				[BlockPhase.COMPLETED, BlockPhase.REJECTED, BlockPhase.SKIPPED, BlockPhase.CANCELLED].includes(phase),
+			syncRetainedMachines: vi.fn(),
+			executeFinalizedAssistantTurn,
+			recursivelyMakeClineRequests,
+		} as unknown as Task
+		const coordinator = new InteractionCoordinator(runtime)
+		;(fakeTask as unknown as { interactionCoordinator: InteractionCoordinator }).interactionCoordinator = coordinator
+		const continueRestoredInteraction = (
+			Task.prototype as unknown as {
+				continueRestoredInteraction(context: DetachedInteractionContinuationContext): Promise<void>
+			}
+		).continueRestoredInteraction
+		coordinator.registerDetachedContinuation((context) => continueRestoredInteraction.call(fakeTask, context))
+
+		const response = await coordinator.respond({
+			taskId: "task-1",
+			turnId,
+			interactionId,
+			actionId: "reply",
+			stateRevision: 9,
+			draft: { text: "continue", images: [], files: [] },
+		})
+		expect(response.accepted).toBe(true)
+		await handlerStart
+		const cancelling = Task.prototype.requestCancellation.call(fakeTask)
+		await vi.waitFor(() => expect(runtime.getState().phase).toBe(TaskPhase.CANCELLING))
+		releaseHandler?.()
+		await cancelling
+
+		expect(commitRestoredToolResult).not.toHaveBeenCalled()
+		expect(executeFinalizedAssistantTurn).not.toHaveBeenCalled()
+		expect(recursivelyMakeClineRequests).not.toHaveBeenCalled()
+		expect(taskState.abort).toBe(true)
+		expect(runtime.getState()).toMatchObject({ phase: TaskPhase.PAUSED, interaction: { kind: "resume" } })
+	})
+
+	it("flushes the restored tool result before closing the previous turn and admitting the next request", async () => {
+		const sequence: string[] = []
+		const persistApiRequestUserMessage = (
+			Task.prototype as unknown as {
+				persistApiRequestUserMessage(
+					content: unknown[],
+					apiIndex: number,
+					beforeApiRequestStarted: () => Promise<void>,
+				): Promise<void>
+			}
+		).persistApiRequestUserMessage
+		const content = [{ type: "tool_result", function_id: "function-restored", dline_tid: "restored-interaction" }]
+		const fakeTask = {
+			messageStateHandler: {
+				addToApiConversationHistory: vi.fn(async () => {
+					sequence.push("user-message-appended")
+				}),
+				flushApiConversationHistory: vi.fn(async () => {
+					sequence.push("user-message-flushed")
+				}),
+			},
+			admitApiRequest: vi.fn(async () => {
+				sequence.push("api-request-started")
+			}),
 		} as unknown as Task
 
-		await expect(
-			continueRestoredTurnEnd.call(fakeTask, "qna_response", restoredInteractionId, 100, outcome),
-		).resolves.toBeUndefined()
-		expect(runtime.getState()).toMatchObject({
-			phase: TaskPhase.AWAITING_APPROVAL,
-			turn: {
-				turnId: "turn:next-interaction",
-				blocks: [{ dlineTid: "next-interaction", phase: BlockPhase.AWAITING_APPROVAL }],
-			},
+		await persistApiRequestUserMessage.call(fakeTask, content, 6, async () => {
+			sequence.push("previous-turn-completed")
 		})
+
+		expect(sequence).toEqual([
+			"user-message-appended",
+			"user-message-flushed",
+			"previous-turn-completed",
+			"api-request-started",
+		])
 	})
 })

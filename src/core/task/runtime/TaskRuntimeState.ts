@@ -21,6 +21,8 @@ export interface TaskCancellationState {
 export interface TaskRuntimeError {
 	effectId: string
 	effectType: TaskEffectType
+	/** Revision that emitted the failed effect. */
+	originRevision?: number
 	message: string
 }
 
@@ -49,6 +51,8 @@ export interface TaskRuntimeState {
 	cancellation?: TaskCancellationState
 	error?: TaskRuntimeError
 	completion?: TaskCompletionState
+	/** Highest effect-origin revision invalidated by a cancellation transaction. */
+	supersededEffectRevision?: number
 }
 
 /** Supported sources for task cancellation. */

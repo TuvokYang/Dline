@@ -32,6 +32,7 @@ interface AcceptedChange {
 	completion?: TaskRuntimeState["completion"] | null
 	turn?: TaskRuntimeState["turn"] | null
 	interaction?: TaskRuntimeState["interaction"] | null
+	supersededEffectRevision?: number
 	effects?: TaskEffect[]
 }
 
@@ -94,6 +95,9 @@ function accept(state: TaskRuntimeState, change: AcceptedChange): TransitionResu
 	} else if (change.interaction !== undefined) {
 		next.interaction = change.interaction
 	}
+	if (change.supersededEffectRevision !== undefined) {
+		next.supersededEffectRevision = change.supersededEffectRevision
+	}
 
 	return {
 		accepted: true,
@@ -147,11 +151,21 @@ function reduceInitialize(state: TaskRuntimeState, event: TaskEvent): Transition
 
 /** Reduce one API lifecycle event without performing side effects. */
 function reduceApi(state: TaskRuntimeState, event: Extract<TaskEvent, { type: "API_REQUEST_STARTED" }>): TransitionResult {
+	const continuationInteraction =
+		state.interaction?.status === "resolving" &&
+		((state.interaction.kind === "resume" && state.interaction.acceptedResponse?.actionId === "resume") ||
+			(state.interaction.kind === "error_retry" && state.interaction.acceptedResponse?.actionId === "retry"))
+	const interaction = continuationInteraction ? undefined : state.interaction
+	const anchor = {
+		...state.anchor,
+		apiIndex: event.apiIndex,
+		...(continuationInteraction ? { interactionId: undefined } : {}),
+	}
 	if (state.phase === TaskPhase.STREAMING) {
 		const revision = state.revision + 1
 		return {
 			accepted: true,
-			next: { ...state, revision, anchor: { ...state.anchor, apiIndex: event.apiIndex } },
+			next: { ...state, revision, anchor, interaction },
 			effects: stateEffects(revision),
 		}
 	}
@@ -161,7 +175,8 @@ function reduceApi(state: TaskRuntimeState, event: Extract<TaskEvent, { type: "A
 	return accept(state, {
 		eventType: event.type,
 		phase: TaskPhase.STREAMING,
-		anchor: { ...state.anchor, apiIndex: event.apiIndex },
+		anchor,
+		interaction: interaction ?? null,
 	})
 }
 
@@ -278,6 +293,7 @@ function reduceTurn(
 				| "BLOCK_APPROVED"
 				| "BLOCK_REJECTED"
 				| "BLOCK_EXECUTION_STARTED"
+				| "BLOCK_EXECUTION_REJECTED"
 				| "BLOCK_EXECUTION_COMPLETED"
 				| "TURN_COMPLETED"
 		}
@@ -346,7 +362,7 @@ function reduceTurn(
 					afterRejected = true
 					return { ...candidate, phase: BlockPhase.REJECTED }
 				}
-				if (afterRejected && candidate.requiresApproval && candidate.phase === BlockPhase.STREAMING) {
+				if (afterRejected && candidate.phase === BlockPhase.STREAMING) {
 					return { ...candidate, phase: BlockPhase.SKIPPED }
 				}
 				return candidate
@@ -361,9 +377,30 @@ function reduceTurn(
 		const revision = state.revision + 1
 		return acceptTurn(state, event.type, state.turn, TaskPhase.EXECUTING, [
 			{ id: effectId(revision, 1), type: "POST_TASK_VIEW" },
-			{ id: effectId(revision, 2), type: "EXECUTE_TOOL", dlineTid: block.dlineTid },
-			{ id: effectId(revision, 3), type: "PERSIST_SNAPSHOT" },
+			{ id: effectId(revision, 2), type: "PERSIST_SNAPSHOT" },
+			{ id: effectId(revision, 3), type: "EXECUTE_TOOL", dlineTid: block.dlineTid },
 		])
+	}
+	if (event.type === "BLOCK_EXECUTION_REJECTED") {
+		if (block.phase !== BlockPhase.EXECUTING && block.phase !== BlockPhase.AUTO_EXECUTING) {
+			return reject(state, event.type)
+		}
+		let afterRejected = false
+		const turn = {
+			...state.turn,
+			activeDlineTid: undefined,
+			blocks: state.turn.blocks.map((candidate) => {
+				if (candidate.dlineTid === block.dlineTid) {
+					afterRejected = true
+					return { ...candidate, phase: BlockPhase.REJECTED }
+				}
+				if (afterRejected && candidate.phase === BlockPhase.STREAMING) {
+					return { ...candidate, phase: BlockPhase.SKIPPED }
+				}
+				return candidate
+			}),
+		}
+		return acceptTurn(state, event.type, turn, TaskPhase.BETWEEN_TURNS)
 	}
 	if (block.phase !== BlockPhase.EXECUTING && block.phase !== BlockPhase.AUTO_EXECUTING) {
 		return reject(state, event.type)
@@ -402,12 +439,36 @@ function reduceInteractionOpen(
 	if (state.interaction) {
 		return reject(state, event.type)
 	}
+	const approvalKinds = new Set([
+		"tool_approval",
+		"command_approval",
+		"browser_approval",
+		"mcp_approval",
+		"subagent_approval",
+		"spawn_task_approval",
+		"focus_chain_change",
+		"new_task",
+	])
+	const approvalBlock = approvalKinds.has(event.kind)
+		? state.turn?.blocks.find((block) => block.dlineTid === event.interactionId)
+		: undefined
+	if (approvalBlock && approvalBlock.phase !== BlockPhase.AUTO_EXECUTING && approvalBlock.phase !== BlockPhase.EXECUTING) {
+		return reject(state, event.type)
+	}
+	if (approvalBlock && state.turn?.activeDlineTid && state.turn.activeDlineTid !== approvalBlock.dlineTid) {
+		return reject(state, event.type)
+	}
+	const turn = approvalBlock
+		? replaceTurnBlock(state, approvalBlock.dlineTid, BlockPhase.AWAITING_APPROVAL, approvalBlock.dlineTid)
+		: state.turn
 	const revision = state.revision + 1
 	const definition = getInteraction(event.kind)
 	return {
 		accepted: true,
 		next: {
 			...state,
+			...(turn ? { turn } : {}),
+			...(approvalBlock ? { phase: TaskPhase.AWAITING_APPROVAL } : {}),
 			revision,
 			anchor: { ...state.anchor, turnId: event.turnId, interactionId: event.interactionId },
 			interaction: {
@@ -510,7 +571,7 @@ function reduceInteractionResponse(
 					afterRejected = true
 					return { ...candidate, phase: BlockPhase.REJECTED }
 				}
-				if (afterRejected && candidate.requiresApproval && candidate.phase === BlockPhase.STREAMING) {
+				if (afterRejected && candidate.phase === BlockPhase.STREAMING) {
 					return { ...candidate, phase: BlockPhase.SKIPPED }
 				}
 				return candidate
@@ -548,16 +609,14 @@ function interactionEffects(
 	input: { interactionId: string; taskAsk: string; presentation: string; existingTs?: number },
 ): TaskEffect[] {
 	return [
-		{ id: effectId(revision, 1), type: "POST_TASK_VIEW" },
 		{
-			id: effectId(revision, 2),
+			id: effectId(revision, 1),
 			type: "APPEND_ASK",
 			interactionId: input.interactionId,
 			taskAsk: input.taskAsk,
 			presentation: input.presentation,
 			existingTs: input.existingTs,
 		},
-		{ id: effectId(revision, 3), type: "PERSIST_SNAPSHOT" },
 	]
 }
 
@@ -587,6 +646,7 @@ function reduceCancel(
 			eventType: event.type,
 			phase: TaskPhase.CANCELLING,
 			cancellation: { source: event.source, fromPhase: state.phase },
+			supersededEffectRevision: Math.max(state.supersededEffectRevision ?? -1, state.revision),
 			interaction: null,
 			effects: [
 				{ id: effectId(revision, 1), type: "POST_TASK_VIEW" },
@@ -666,9 +726,8 @@ function reduceRecovery(
 				...state,
 				phase: TaskPhase.STREAMING,
 				revision,
-				interaction: undefined,
 				error: undefined,
-				anchor: { ...state.anchor, apiIndex: event.apiIndex, interactionId: undefined },
+				anchor: { ...state.anchor, apiIndex: event.apiIndex },
 			},
 			effects: [
 				{ id: effectId(revision, 1), type: "POST_TASK_VIEW" },
@@ -761,17 +820,30 @@ function reduceCheckpointRestore(
 		return reject(state, event.type)
 	}
 	const revision = state.revision + 1
+	const resume = event.draft
+		? undefined
+		: (event.resume ?? {
+				turnId: `checkpoint-resume:${state.taskId}:${revision}`,
+				interactionId: `checkpoint-resume:${state.taskId}:${revision}`,
+				presentation: "",
+			})
 	const baseState: TaskRuntimeState = {
 		...state,
 		phase: event.draft ? TaskPhase.RESUMING : TaskPhase.PAUSED,
 		revision,
-		anchor: { apiIndex: event.apiIndex },
+		supersededEffectRevision: Math.max(state.supersededEffectRevision ?? -1, state.revision),
+		anchor: resume
+			? { apiIndex: event.apiIndex, turnId: resume.turnId, interactionId: resume.interactionId }
+			: { apiIndex: event.apiIndex },
 	}
 	delete baseState.turn
 	delete baseState.interaction
 	delete baseState.cancellation
 	delete baseState.error
 	delete baseState.completion
+	if (resume) {
+		baseState.interaction = openingInteraction(state, revision, { ...resume, kind: "resume" })
+	}
 	return {
 		accepted: true,
 		next: baseState,
@@ -781,7 +853,11 @@ function reduceCheckpointRestore(
 					{ id: effectId(revision, 2), type: "START_API", apiIndex: event.apiIndex, draft: event.draft },
 					{ id: effectId(revision, 3), type: "PERSIST_SNAPSHOT" },
 				]
-			: stateEffects(revision),
+			: interactionEffects(revision, {
+					interactionId: resume!.interactionId,
+					taskAsk: "resume_task",
+					presentation: resume!.presentation,
+				}),
 	}
 }
 
@@ -812,31 +888,32 @@ function reduceResume(state: TaskRuntimeState, event: Extract<TaskEvent, { type:
 	return accept(state, {
 		eventType: event.type,
 		phase: TaskPhase.RESUMING,
-		interaction: null,
 		...(abandonedTurn ? { turn: abandonedTurn } : {}),
-		anchor: { ...state.anchor, interactionId: undefined },
+		anchor: { ...state.anchor },
 		error: null,
 		effects: [
 			{ id: effectId(revision, 1), type: "POST_TASK_VIEW" },
+			{ id: effectId(revision, 2), type: "PREPARE_RESUME" },
 			...(hasVisibleDraft
 				? [
 						{
-							id: effectId(revision, 2),
+							id: effectId(revision, 3),
 							type: "APPEND_SAY" as const,
 							taskSay: "user_feedback" as const,
 							presentation: event.draft.text,
 							images: event.draft.images,
 							files: event.draft.files,
+							interactionId: state.interaction.interactionId,
 						},
 					]
 				: []),
 			{
-				id: effectId(revision, hasVisibleDraft ? 3 : 2),
+				id: effectId(revision, hasVisibleDraft ? 4 : 3),
 				type: "START_API",
 				apiIndex: state.anchor.apiIndex,
 				draft: event.draft,
 			},
-			{ id: effectId(revision, hasVisibleDraft ? 4 : 3), type: "PERSIST_SNAPSHOT" },
+			{ id: effectId(revision, hasVisibleDraft ? 5 : 4), type: "PERSIST_SNAPSHOT" },
 		],
 	})
 }
@@ -855,7 +932,27 @@ function reduceCompletion(state: TaskRuntimeState, event: Extract<TaskEvent, { t
 
 /** Reduce one effect failure into an explicit paused recovery state. */
 function reduceFailure(state: TaskRuntimeState, event: Extract<TaskEvent, { type: "EFFECT_FAILED" }>): TransitionResult {
-	if (!canTransition(state.phase, TaskPhase.PAUSED)) {
+	// A cancelled API/tool can reject after cancellation has completed and even
+	// after the next input was admitted. Its failure cannot supersede newer work.
+	if (event.originRevision <= (state.supersededEffectRevision ?? -1)) {
+		return { accepted: true, next: state, effects: [] }
+	}
+	const originInteraction = event.originInteraction
+	const currentInteraction = state.interaction
+	const failedContinuation =
+		event.effectType === "START_API" &&
+		(!originInteraction || !currentInteraction || currentInteraction.interactionId === originInteraction.interactionId) &&
+		(currentInteraction ?? originInteraction)?.status === "resolving"
+			? (currentInteraction ?? originInteraction)
+			: undefined
+	const retryableInteraction =
+		failedContinuation?.kind === "resume" && failedContinuation.acceptedResponse?.actionId === "resume"
+			? failedContinuation
+			: failedContinuation?.kind === "error_retry" && failedContinuation.acceptedResponse?.actionId === "retry"
+				? failedContinuation
+				: undefined
+	const failedPhase = retryableInteraction?.kind === "error_retry" ? TaskPhase.AWAITING_APPROVAL : TaskPhase.PAUSED
+	if (!canTransition(state.phase, failedPhase)) {
 		return reject(state, event.type)
 	}
 	const revision = state.revision + 1
@@ -870,11 +967,23 @@ function reduceFailure(state: TaskRuntimeState, event: Extract<TaskEvent, { type
 		accepted: true,
 		next: {
 			...state,
-			phase: TaskPhase.PAUSED,
+			phase: failedPhase,
 			revision,
+			...(retryableInteraction
+				? {
+						interaction: { ...retryableInteraction, status: "awaiting" as const, createdRevision: revision },
+						anchor: {
+							...state.anchor,
+							turnId: retryableInteraction.turnId,
+							interactionId: retryableInteraction.interactionId,
+							...(retryableInteraction.anchor ? { uiMessageTs: retryableInteraction.anchor.messageTs } : {}),
+						},
+					}
+				: {}),
 			error: {
 				effectId: event.effectId,
 				effectType: event.effectType,
+				originRevision: event.originRevision,
 				message: event.message,
 			},
 		},
@@ -900,6 +1009,7 @@ export function reduceTask(state: TaskRuntimeState, event: TaskEvent): Transitio
 		case "BLOCK_APPROVED":
 		case "BLOCK_REJECTED":
 		case "BLOCK_EXECUTION_STARTED":
+		case "BLOCK_EXECUTION_REJECTED":
 		case "BLOCK_EXECUTION_COMPLETED":
 		case "TURN_COMPLETED":
 			return reduceTurn(state, event)

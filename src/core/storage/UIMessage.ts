@@ -27,23 +27,51 @@ export class UIMessage {
 	}
 
 	// ── Read ──
-	getAll(): ReadonlyArray<ClineMessage> { return this.store.getAll() }
-	getByTs(ts: number): ClineMessage | undefined { return this.store.getByTs(ts) }
-	getAt(index: number): ClineMessage | undefined { return this.store.getAt(index) }
-	findIndexByTs(ts: number): number { return this.store.findIndexByTs(ts) }
-	get count(): number { return this.store.count }
+	getAll(): ReadonlyArray<ClineMessage> {
+		return this.store.getAll()
+	}
+	getByTs(ts: number): ClineMessage | undefined {
+		return this.store.getByTs(ts)
+	}
+	getAt(index: number): ClineMessage | undefined {
+		return this.store.getAt(index)
+	}
+	findIndexByTs(ts: number): number {
+		return this.store.findIndexByTs(ts)
+	}
+	get count(): number {
+		return this.store.count
+	}
 
 	// ── Low-level Write (delegated) ──
-	async append(msg: ClineMessage): Promise<void> { await this.store.append(msg) }
-	async truncate(beforeTs: number): Promise<void> { await this.store.truncate(beforeTs) }
-	async overwrite(items: ClineMessage[]): Promise<void> { await this.store.overwrite(items) }
-	async insertAt(index: number, msg: ClineMessage): Promise<void> { await this.store.insertAt(index, msg) }
-	async updateAt(index: number, msg: ClineMessage): Promise<void> { await this.store.updateAt(index, msg) }
-	async deleteAt(index: number): Promise<void> { await this.store.deleteAt(index) }
-	async clear(): Promise<void> { await this.store.clear() }
-	async truncateByLineNum(count: number): Promise<void> { await this.store.truncateByLineNum(count) }
+	async append(msg: ClineMessage): Promise<void> {
+		await this.store.append(msg)
+	}
+	async truncate(beforeTs: number): Promise<void> {
+		await this.store.truncate(beforeTs)
+	}
+	async overwrite(items: ClineMessage[]): Promise<void> {
+		await this.store.overwrite(items)
+	}
+	async insertAt(index: number, msg: ClineMessage): Promise<void> {
+		await this.store.insertAt(index, msg)
+	}
+	async updateAt(index: number, msg: ClineMessage): Promise<void> {
+		await this.store.updateAt(index, msg)
+	}
+	async deleteAt(index: number): Promise<void> {
+		await this.store.deleteAt(index)
+	}
+	async clear(): Promise<void> {
+		await this.store.clear()
+	}
+	async truncateByLineNum(count: number): Promise<void> {
+		await this.store.truncateByLineNum(count)
+	}
 	/** Force flush any pending dirty data to disk (cross-process safe). */
-	async flush(): Promise<void> { await this.store.flush() }
+	async flush(): Promise<void> {
+		await this.store.flush()
+	}
 
 	// ── Business-level methods ──
 
@@ -150,6 +178,7 @@ export class UIMessage {
 		const msg = this.store.getAt(index)
 		if (!msg || msg.partial) return
 		await this.store.upsertByTs(msg)
+		await this.store.flush()
 	}
 
 	/**

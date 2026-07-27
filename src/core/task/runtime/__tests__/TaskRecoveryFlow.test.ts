@@ -26,6 +26,9 @@ function createPorts(): RecoveryPorts {
 		cancelRuntime: vi.fn(async () => {
 			sequence.push("CANCEL_RUNTIME")
 		}),
+		prepareResume: vi.fn(async () => {
+			sequence.push("PREPARE_RESUME")
+		}),
 		startApi: vi.fn(async (effect) => {
 			sequence.push(`START_API:${effect.apiIndex}:${effect.draft?.text ?? ""}`)
 		}),
@@ -192,27 +195,32 @@ describe("TaskRuntime recovery transactions", () => {
 				anchor: { messageTs: 500, messageType: "ask" },
 			},
 		})
-		expect(ports.sequence).toEqual([
-			"POST_TASK_VIEW",
-			"APPEND_ASK:resume-1",
-			"PERSIST_SNAPSHOT",
-			"POST_TASK_VIEW",
-			"PERSIST_SNAPSHOT",
-		])
+		expect(ports.sequence).toEqual(["APPEND_ASK:resume-1", "POST_TASK_VIEW", "PERSIST_SNAPSHOT"])
 	})
 
-	it("projects a safe paused gate after chat restore without starting the provider", () => {
+	it("projects a canonical Resume interaction after chat restore without starting the provider", () => {
 		const state = awaitingInteraction("tool_approval")
 
 		const result = reduceRecovery(state, { type: "CHECKPOINT_CHAT_RESTORED", apiIndex: 2 })
 
 		expect(result).toMatchObject({
 			accepted: true,
-			next: { phase: TaskPhase.PAUSED, anchor: { apiIndex: 2 } },
+			next: {
+				phase: TaskPhase.PAUSED,
+				anchor: {
+					apiIndex: 2,
+					turnId: "checkpoint-resume:task-1:5",
+					interactionId: "checkpoint-resume:task-1:5",
+				},
+				interaction: {
+					kind: "resume",
+					status: "opening",
+					interactionId: "checkpoint-resume:task-1:5",
+				},
+			},
 		})
-		expect(result.next.interaction).toBeUndefined()
 		expect(result.next.turn).toBeUndefined()
-		expect(effectTypes(result.effects)).toEqual(["POST_TASK_VIEW", "PERSIST_SNAPSHOT"])
+		expect(effectTypes(result.effects)).toEqual(["APPEND_ASK"])
 	})
 
 	it("continues edited chat restore through exactly one provider effect", () => {
@@ -231,9 +239,78 @@ describe("TaskRuntime recovery transactions", () => {
 		expect(result.effects[1]).toMatchObject({ type: "START_API", apiIndex: 2, draft })
 	})
 
+	it("keeps an edited chat restore active when the superseded provider fails late", async () => {
+		let signalOldApiStarted: (() => void) | undefined
+		const oldApiStarted = new Promise<void>((resolve) => {
+			signalOldApiStarted = resolve
+		})
+		let rejectOldApi: ((error: Error) => void) | undefined
+		const oldApi = new Promise<void>((_resolve, reject) => {
+			rejectOldApi = reject
+		})
+		let signalRestoredApiStarted: (() => void) | undefined
+		const restoredApiStarted = new Promise<void>((resolve) => {
+			signalRestoredApiStarted = resolve
+		})
+		let releaseRestoredApi: (() => void) | undefined
+		const restoredApi = new Promise<void>((resolve) => {
+			releaseRestoredApi = resolve
+		})
+		const ports = createPorts()
+		vi.mocked(ports.startApi).mockImplementation(async (effect) => {
+			if (effect.apiIndex === 8) {
+				signalOldApiStarted?.()
+				await oldApi
+				return
+			}
+			signalRestoredApiStarted?.()
+			await restoredApi
+		})
+		const runtime = new TaskRuntime(
+			createTaskRuntimeState({
+				taskId: "task-1",
+				phase: TaskPhase.STREAMING,
+				revision: 4,
+				anchor: { apiIndex: 7 },
+			}),
+			ports,
+		)
+
+		const oldRequest = runtime.dispatch({ type: "API_RETRY_SCHEDULED", apiIndex: 8 })
+		await oldApiStarted
+		const restoredRequest = runtime.dispatch({
+			type: "CHECKPOINT_CHAT_RESTORED",
+			apiIndex: 2,
+			draft: { text: "edited input", images: [], files: [] },
+		})
+		await restoredApiStarted
+
+		rejectOldApi?.(new Error("superseded provider failed late"))
+		await oldRequest
+
+		expect(runtime.getState()).toMatchObject({
+			phase: TaskPhase.RESUMING,
+			anchor: { apiIndex: 2 },
+		})
+		expect(runtime.getState().error).toBeUndefined()
+
+		releaseRestoredApi?.()
+		await restoredRequest
+	})
+
 	it("retries from a causal error response with draft attachments in one API effect", () => {
 		const draft: InteractionDraft = { text: "retry with this context", images: ["image"], files: ["file"] }
-		const result = reduceRecovery(awaitingInteraction("error_retry"), {
+		const state = awaitingInteraction("error_retry")
+		if (!state.interaction) throw new Error("test interaction missing")
+		state.interaction.acceptedResponse = {
+			taskId: "task-1",
+			turnId: "turn-1",
+			interactionId: "interaction-1",
+			actionId: "retry",
+			stateRevision: state.revision,
+			draft,
+		}
+		const result = reduceRecovery(state, {
 			type: "ERROR_RETRY_REQUESTED",
 			apiIndex: 7,
 			draft,
@@ -241,10 +318,17 @@ describe("TaskRuntime recovery transactions", () => {
 
 		expect(result).toMatchObject({
 			accepted: true,
-			next: { phase: TaskPhase.STREAMING, interaction: undefined },
+			next: {
+				phase: TaskPhase.STREAMING,
+				interaction: { kind: "error_retry", status: "resolving", acceptedResponse: { draft } },
+			},
 		})
 		expect(effectTypes(result.effects)).toEqual(["POST_TASK_VIEW", "START_API", "PERSIST_SNAPSHOT"])
 		expect(result.effects[1]).toMatchObject({ type: "START_API", apiIndex: 7, draft })
+
+		const admitted = reduceRecovery(result.next, { type: "API_REQUEST_STARTED", apiIndex: 7 })
+		expect(admitted).toMatchObject({ accepted: true, next: { phase: TaskPhase.STREAMING } })
+		expect(admitted.next.interaction).toBeUndefined()
 	})
 
 	it("opens one retry interaction when automatic retries are exhausted", async () => {
@@ -266,13 +350,7 @@ describe("TaskRuntime recovery transactions", () => {
 			phase: TaskPhase.AWAITING_APPROVAL,
 			interaction: { kind: "error_retry", interactionId: "retry-1", status: "awaiting" },
 		})
-		expect(ports.sequence).toEqual([
-			"POST_TASK_VIEW",
-			"APPEND_ASK:retry-1",
-			"PERSIST_SNAPSHOT",
-			"POST_TASK_VIEW",
-			"PERSIST_SNAPSHOT",
-		])
+		expect(ports.sequence).toEqual(["APPEND_ASK:retry-1", "POST_TASK_VIEW", "PERSIST_SNAPSHOT"])
 	})
 
 	it("presents completion as canonical completed state with one causal interaction", async () => {
@@ -297,13 +375,7 @@ describe("TaskRuntime recovery transactions", () => {
 			completion: { completionId: "completion-1" },
 			interaction: { kind: "completion", interactionId: "completion-1", status: "awaiting" },
 		})
-		expect(ports.sequence).toEqual([
-			"POST_TASK_VIEW",
-			"APPEND_ASK:completion-1",
-			"PERSIST_SNAPSHOT",
-			"POST_TASK_VIEW",
-			"PERSIST_SNAPSHOT",
-		])
+		expect(ports.sequence).toEqual(["APPEND_ASK:completion-1", "POST_TASK_VIEW", "PERSIST_SNAPSHOT"])
 	})
 
 	it("returns completion feedback to streaming without a separate completion flag", () => {

@@ -2,11 +2,213 @@ import { strict as assert } from "node:assert"
 import type { AssistantMessageContent, TextStreamContent, ToolUse } from "@core/assistant-message"
 import { registerPartialMessageCallback } from "@core/controller/ui/subscribeToPartialMessage"
 import { Task } from "@core/task"
+import { BlockPhase } from "@core/task/BlockPhaseMachine"
+import type { TaskEffectPorts } from "@core/task/runtime/TaskEffectRunner"
+import type { TaskEvent } from "@core/task/runtime/TaskEvent"
+import { TaskRuntime } from "@core/task/runtime/TaskRuntime"
+import { createTaskRuntimeState } from "@core/task/runtime/TaskRuntimeState"
+import { TaskPhase } from "@core/task/TaskPhase"
 import type { ClineMessage } from "@shared/ExtensionMessage"
 import { ClineDefaultTool } from "@shared/tools"
 import { describe, expect, it, vi } from "vitest"
 
+function createParallelReadPresentation(failingDlineTid?: string) {
+	const toolBlocks: ToolUse[] = Array.from({ length: 4 }, (_, index) => ({
+		type: "tool_use",
+		name: ClineDefaultTool.FILE_READ,
+		params: { path: `file-${index + 1}.txt` },
+		partial: false,
+		isNativeToolCall: true,
+		function_id: `call-read-${index + 1}`,
+		dline_tid: `dline-read-${index + 1}`,
+		ts: 500 + index,
+	}))
+	const runtimeBlocks = toolBlocks.map((block, index) => ({
+		dlineTid: `dline-read-${index + 1}`,
+		functionId: block.function_id,
+		toolName: block.name,
+		phase: BlockPhase.STREAMING,
+		ts: 500 + index,
+		requiresApproval: false,
+		conversationHistoryIndex: 1,
+	}))
+	const executeTool = vi.fn(async (effect: { dlineTid: string }) => {
+		if (effect.dlineTid === failingDlineTid) {
+			throw new Error("read_file result persistence failed")
+		}
+	})
+	const postView = vi.fn(async () => undefined)
+	const ports: TaskEffectPorts = {
+		postView,
+		persistSnapshot: vi.fn(async () => undefined),
+		cancelRuntime: vi.fn(async () => undefined),
+		prepareResume: vi.fn(async () => undefined),
+		startApi: vi.fn(async () => undefined),
+		executeTool,
+		appendSay: vi.fn(async () => undefined),
+		appendAsk: vi.fn(async () => ({ uiMessageTs: 1 })),
+		startNewTask: vi.fn(async () => undefined),
+	}
+	const runtime = new TaskRuntime(
+		createTaskRuntimeState({
+			taskId: "task-parallel-read",
+			phase: TaskPhase.STREAMING,
+			anchor: { apiIndex: 1 },
+		}),
+		ports,
+	)
+	const fakeTask = Object.assign(Object.create(Task.prototype), {
+		taskId: "task-parallel-read",
+		controller: { task: { taskId: "task-parallel-read" } },
+		initialCheckpointCommitPromise: undefined,
+		reRenderUpdatedPartialBlocks: async () => undefined,
+		isParallelToolCallingEnabled: () => true,
+		dispatchRuntime: runtime.dispatch.bind(runtime),
+		taskController: {
+			buildTurn: vi.fn(),
+			getBlocks: () => runtimeBlocks,
+			hasAnyRejection: () => false,
+			shouldSkip: () => false,
+		},
+		toolExecutor: {
+			isBlockApproved: () => true,
+			executeTool: vi.fn(async () => undefined),
+		},
+		taskRuntime: runtime,
+		messageStateHandler: { apiConversationHistory: [{ role: "user" }, { role: "assistant" }] },
+		taskState: {
+			abort: false,
+			assistantMessageContent: toolBlocks as AssistantMessageContent[],
+			currentStreamingContentIndex: 0,
+			didAlreadyUseTool: false,
+			didCompleteReadingStream: true,
+			lastRenderedPartialByTs: new Map<number, string>(),
+			partialToolLifecycleByTs: new Map<number, "partial-shown" | "complete-running" | "complete-done">(),
+			presentAssistantMessageHasPendingUpdates: false,
+			presentAssistantMessageLocked: false,
+			userMessageContentReady: false,
+		},
+		markFinalizedToolPresented: vi.fn(),
+	})
+
+	return { executeTool, fakeTask, postView, runtime }
+}
+
 describe("Task.processNativeToolCalls", () => {
+	it("rejects the active runtime block and skips later tools when command execution is rejected", async () => {
+		const toolBlocks: ToolUse[] = [
+			{
+				type: "tool_use",
+				name: ClineDefaultTool.BASH,
+				params: { command: "echo first", requires_approval: "false" },
+				partial: false,
+				isNativeToolCall: true,
+				function_id: "call-command",
+				dline_tid: "dline-command",
+				ts: 601,
+			},
+			{
+				type: "tool_use",
+				name: ClineDefaultTool.FILE_READ,
+				params: { path: "must-not-run.txt" },
+				partial: false,
+				isNativeToolCall: true,
+				function_id: "call-later",
+				dline_tid: "dline-later",
+				ts: 602,
+			},
+		]
+		const runtimeBlocks = toolBlocks.map((block) => ({
+			dlineTid: block.dline_tid!,
+			functionId: block.function_id,
+			toolName: block.name,
+			phase: BlockPhase.STREAMING,
+			ts: block.ts!,
+			requiresApproval: false,
+			conversationHistoryIndex: 1,
+		}))
+		const commandExecutor = {
+			execute: vi.fn(async () => ({
+				userRejected: true,
+				result: "Command was cancelled by the user.",
+				completed: false,
+				exitCode: 1,
+				signal: null,
+			})),
+		}
+		let fakeTask: Task
+		const executeTool = vi.fn(async (block: ToolUse) => {
+			if (block.dline_tid === "dline-command") {
+				await Task.prototype.executeCommandTool.call(fakeTask, "echo first", undefined, { commandTs: block.ts })
+			}
+		})
+		const runtime = new TaskRuntime(
+			createTaskRuntimeState({
+				taskId: "task-command-rejection",
+				phase: TaskPhase.STREAMING,
+				anchor: { apiIndex: 1 },
+			}),
+			{
+				postView: vi.fn(async () => undefined),
+				persistSnapshot: vi.fn(async () => undefined),
+				cancelRuntime: vi.fn(async () => undefined),
+				prepareResume: vi.fn(async () => undefined),
+				startApi: vi.fn(async () => undefined),
+				executeTool: async (effect) => {
+					const block = toolBlocks.find((candidate) => candidate.dline_tid === effect.dlineTid)
+					if (!block) throw new Error(`Missing test block ${effect.dlineTid}`)
+					await executeTool(block)
+				},
+				appendSay: vi.fn(async () => undefined),
+				appendAsk: vi.fn(async () => ({ uiMessageTs: 1 })),
+				startNewTask: vi.fn(async () => undefined),
+			},
+		)
+		const runtimeEvents: TaskEvent["type"][] = []
+		runtime.subscribe((event) => runtimeEvents.push(event.type))
+		fakeTask = Object.assign(Object.create(Task.prototype), {
+			taskId: "task-command-rejection",
+			controller: { task: { taskId: "task-command-rejection" } },
+			commandExecutor,
+			initialCheckpointCommitPromise: undefined,
+			isParallelToolCallingEnabled: () => false,
+			dispatchRuntime: runtime.dispatch.bind(runtime),
+			taskRuntime: runtime,
+			taskController: {
+				buildTurn: vi.fn(),
+				getBlocks: () => runtimeBlocks,
+			},
+			toolExecutor: {
+				isBlockApproved: () => true,
+				executeTool,
+			},
+			messageStateHandler: { apiConversationHistory: [{ role: "user" }, { role: "assistant" }] },
+			taskState: {
+				abort: false,
+				assistantMessageContent: toolBlocks as AssistantMessageContent[],
+				userMessageContentReady: false,
+			},
+			markFinalizedToolPresented: vi.fn(),
+		})
+
+		await (
+			Task.prototype as unknown as { executeFinalizedAssistantTurn: () => Promise<void> }
+		).executeFinalizedAssistantTurn.call(fakeTask)
+
+		expect(commandExecutor.execute).toHaveBeenCalledOnce()
+		expect(executeTool).toHaveBeenCalledTimes(1)
+		expect(runtimeEvents).toContain("BLOCK_EXECUTION_REJECTED")
+		expect(runtime.getState()).toMatchObject({
+			phase: TaskPhase.BETWEEN_TURNS,
+			turn: {
+				blocks: [
+					{ dlineTid: "dline-command", phase: BlockPhase.REJECTED },
+					{ dlineTid: "dline-later", phase: BlockPhase.SKIPPED },
+				],
+			},
+		})
+	})
+
 	it("finalizes a partial prev text block and reuses its ts for the state text block", async () => {
 		const prevTextTs = 100
 		const clineMessages: ClineMessage[] = [
@@ -287,7 +489,7 @@ describe("Task.processNativeToolCalls", () => {
 		expect(fakeTask.taskState.currentStreamingContentIndex).toBe(0)
 	})
 
-	it("records the persisted assistant message index when creating a resumable turn", async () => {
+	it("does not execute a finalized tool from repeated presentation flushes", async () => {
 		const completeTool: ToolUse = {
 			type: "tool_use",
 			name: ClineDefaultTool.QNA_RESPOND,
@@ -298,44 +500,19 @@ describe("Task.processNativeToolCalls", () => {
 			dline_tid: "dline-qna",
 			ts: 400,
 		}
-		let runtimeBlock = {
-			dlineTid: "dline-qna",
-			functionId: "call-qna",
-			toolName: ClineDefaultTool.QNA_RESPOND,
-			requiresApproval: false,
-			conversationHistoryIndex: 1,
-			phase: "streaming",
-		}
-		let runtimeTurn: { turnId: string; blocks: (typeof runtimeBlock)[] } | undefined
-		const dispatchRuntime = vi.fn(async (event: { type: string; turnId?: string }) => {
-			if (event.type === "TURN_CREATED") {
-				runtimeTurn = { turnId: event.turnId ?? "", blocks: [runtimeBlock] }
-			}
-			if (event.type === "BLOCK_EXECUTION_STARTED") {
-				runtimeBlock = { ...runtimeBlock, phase: "auto_executing" }
-				runtimeTurn = runtimeTurn ? { ...runtimeTurn, blocks: [runtimeBlock] } : runtimeTurn
-			}
-			if (event.type === "BLOCK_EXECUTION_COMPLETED") {
-				runtimeBlock = { ...runtimeBlock, phase: "completed" }
-				runtimeTurn = runtimeTurn ? { ...runtimeTurn, blocks: [runtimeBlock] } : runtimeTurn
-			}
-			return { accepted: true }
+		const dispatchRuntime = vi.fn(async () => {
+			throw new Error("Presentation must not own finalized tool execution")
 		})
+		const executeTool = vi.fn(async () => undefined)
 		const fakeTask = {
 			taskId: "task-native-qna",
-			initialCheckpointCommitPromise: undefined,
 			reRenderUpdatedPartialBlocks: async () => undefined,
 			isParallelToolCallingEnabled: () => true,
 			dispatchRuntime,
 			taskController: {
-				buildTurn: vi.fn(),
-				getBlocks: () => [runtimeBlock],
 				hasAnyRejection: () => false,
-				shouldSkip: () => false,
 			},
-			toolExecutor: { isBlockApproved: () => true },
-			taskRuntime: { getState: () => ({ phase: "streaming", turn: runtimeTurn }) },
-			messageStateHandler: { apiConversationHistory: [{ role: "user" }, { role: "assistant" }] },
+			toolExecutor: { executeTool },
 			taskState: {
 				abort: false,
 				assistantMessageContent: [completeTool] as AssistantMessageContent[],
@@ -351,8 +528,58 @@ describe("Task.processNativeToolCalls", () => {
 		}
 
 		await expect(Task.prototype.presentAssistantMessage.call(fakeTask as never)).resolves.toBeUndefined()
+		await expect(Task.prototype.presentAssistantMessage.call(fakeTask as never)).resolves.toBeUndefined()
 
-		expect(dispatchRuntime).toHaveBeenCalledWith(expect.objectContaining({ type: "TURN_CREATED", assistantApiIndex: 1 }))
+		expect(dispatchRuntime).not.toHaveBeenCalled()
+		expect(executeTool).not.toHaveBeenCalled()
+		expect(fakeTask.taskState.currentStreamingContentIndex).toBe(1)
+		expect(fakeTask.taskState.userMessageContentReady).toBe(false)
+	})
+
+	it("preserves the real execute-tool failure for the fourth parallel read block", async () => {
+		const { executeTool, fakeTask, postView, runtime } = createParallelReadPresentation("dline-read-4")
+
+		await expect(
+			(
+				Task.prototype as unknown as { executeFinalizedAssistantTurn: () => Promise<void> }
+			).executeFinalizedAssistantTurn.call(fakeTask),
+		).rejects.toThrow("read_file result persistence failed")
+		expect(executeTool).toHaveBeenCalledTimes(4)
+		expect(runtime.getState().phase).toBe(TaskPhase.PAUSED)
+		// TURN_CREATED + three completed blocks + fourth READY/STARTED + EFFECT_FAILED.
+		expect(postView).toHaveBeenCalledTimes(13)
+	})
+
+	it("completes four auto-approved parallel read blocks in one canonical turn", async () => {
+		const { executeTool, fakeTask, postView, runtime } = createParallelReadPresentation()
+
+		await expect(
+			(
+				Task.prototype as unknown as { executeFinalizedAssistantTurn: () => Promise<void> }
+			).executeFinalizedAssistantTurn.call(fakeTask),
+		).resolves.toBeUndefined()
+
+		expect(executeTool.mock.calls.map(([effect]) => effect.dlineTid)).toEqual([
+			"dline-read-1",
+			"dline-read-2",
+			"dline-read-3",
+			"dline-read-4",
+		])
+		expect(runtime.getState()).toMatchObject({
+			phase: TaskPhase.BETWEEN_TURNS,
+			turn: {
+				turnId: "turn:dline-read-1",
+				assistantApiIndex: 1,
+				blocks: [
+					{ dlineTid: "dline-read-1", phase: BlockPhase.COMPLETED },
+					{ dlineTid: "dline-read-2", phase: BlockPhase.COMPLETED },
+					{ dlineTid: "dline-read-3", phase: BlockPhase.COMPLETED },
+					{ dlineTid: "dline-read-4", phase: BlockPhase.COMPLETED },
+				],
+			},
+		})
+		// TURN_CREATED + three block events per tool + TURN_COMPLETED.
+		expect(postView).toHaveBeenCalledTimes(14)
 	})
 
 	it("moves turn-ending native tool calls after regular tool calls", async () => {

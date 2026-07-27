@@ -76,6 +76,8 @@ function createConfig(text: string): TaskConfig {
 		messageState: Object.assign(Object.create(null), {
 			clineMessages: [],
 			updateTaskHistory: vi.fn(async () => []),
+			updateClineMessage: vi.fn(async () => {}),
+			flushMessageUpdate: vi.fn(async () => {}),
 		}) as TaskConfig["messageState"],
 		api: Object.assign(Object.create(null), {
 			getModel: vi.fn(() => ({ id: "model", info: {} })),
@@ -115,6 +117,14 @@ function createConfig(text: string): TaskConfig {
 	}
 }
 
+function createDeferred(): { promise: Promise<void>; resolve: () => void } {
+	let resolve!: () => void
+	const promise = new Promise<void>((release) => {
+		resolve = release
+	})
+	return { promise, resolve }
+}
+
 /**
  * Create a tool-use block for a turn-end handler.
  * @param name Tool name.
@@ -133,6 +143,99 @@ function createBlock(name: string, params: Record<string, string>): ToolUse {
 }
 
 describe("turn-ending feedback handlers", () => {
+	it("durably persists a restored follow-up option before continuation resolves", async () => {
+		const selected = "Use the second option"
+		const config = createConfig(selected)
+		const handler = new AskFollowupQuestionToolHandler()
+		const originalText = JSON.stringify({ question: "Which option?", options: ["Use the first option", selected] })
+		config.messageState.clineMessages.push(
+			{ ts: 1, type: "ask", ask: "followup", text: "older follow-up" },
+			{ ts: 2, type: "say", say: "text", text: "between asks" },
+			{ ts: 3, type: "ask", ask: "followup", text: originalText },
+		)
+		const flush = createDeferred()
+		const updateClineMessage = vi.mocked(config.messageState.updateClineMessage)
+		const flushMessageUpdate = vi.mocked(config.messageState.flushMessageUpdate).mockImplementation(() => flush.promise)
+		let resolved = false
+
+		const continuation = handler
+			.continueInteraction(
+				config,
+				createBlock(ClineDefaultTool.ASK, {
+					question: "Which option?",
+					options: JSON.stringify(["Use the first option", selected]),
+				}),
+				{ actionId: "reply", draft: { text: selected, images: [], files: [] } },
+			)
+			.then((result) => {
+				resolved = true
+				return result
+			})
+
+		await vi.waitFor(() => expect(flushMessageUpdate).toHaveBeenCalledOnce())
+		expect(updateClineMessage).toHaveBeenCalledWith(2, {
+			text: JSON.stringify({
+				question: "Which option?",
+				options: ["Use the first option", selected],
+				selected,
+			}),
+		})
+		expect(updateClineMessage.mock.invocationCallOrder[0]).toBeLessThan(flushMessageUpdate.mock.invocationCallOrder[0])
+		expect(config.messageState.clineMessages[2].text).toBe(originalText)
+		expect(resolved).toBe(false)
+
+		flush.resolve()
+		await continuation
+		expect(resolved).toBe(true)
+		expect(config.messageState.updateTaskHistory).not.toHaveBeenCalled()
+	})
+
+	it("durably persists a restored plan option before continuation resolves", async () => {
+		const selected = "Implement the safer plan"
+		const config = createConfig(selected)
+		const handler = new PlanModeRespondHandler()
+		const originalText = JSON.stringify({ response: "Choose a plan", options: [selected, "Implement the faster plan"] })
+		config.messageState.clineMessages.push(
+			{ ts: 1, type: "ask", ask: "plan_mode_respond", text: originalText },
+			{ ts: 2, type: "say", say: "text", text: "latest non-plan message" },
+		)
+		const flush = createDeferred()
+		const updateClineMessage = vi.mocked(config.messageState.updateClineMessage)
+		const flushMessageUpdate = vi.mocked(config.messageState.flushMessageUpdate).mockImplementation(() => flush.promise)
+		let resolved = false
+
+		const continuation = handler
+			.continueInteraction(
+				config,
+				createBlock(ClineDefaultTool.PLAN_MODE, {
+					response: "Choose a plan",
+					options: JSON.stringify([selected, "Implement the faster plan"]),
+				}),
+				{ actionId: "reply", draft: { text: selected, images: [], files: [] } },
+			)
+			.then((result) => {
+				resolved = true
+				return result
+			})
+
+		await vi.waitFor(() => expect(flushMessageUpdate).toHaveBeenCalledOnce())
+		expect(updateClineMessage).toHaveBeenCalledWith(0, {
+			text: JSON.stringify({
+				response: "Choose a plan",
+				options: [selected, "Implement the faster plan"],
+				selected,
+			}),
+		})
+		expect(updateClineMessage.mock.invocationCallOrder[0]).toBeLessThan(flushMessageUpdate.mock.invocationCallOrder[0])
+		expect(config.messageState.clineMessages[0].text).toBe(originalText)
+		expect(resolved).toBe(false)
+
+		flush.resolve()
+		await continuation
+		expect(resolved).toBe(true)
+		expect(config.messageState.updateTaskHistory).not.toHaveBeenCalled()
+	})
+
 	it("plan_mode_respond returns feedback wrapper and avoids duplicate UI feedback", async () => {
 		const config = createConfig("请按方案二调整")
 		const handler = new PlanModeRespondHandler()

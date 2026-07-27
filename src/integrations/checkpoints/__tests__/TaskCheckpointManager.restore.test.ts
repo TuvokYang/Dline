@@ -108,6 +108,7 @@ describe("TaskCheckpointManager restore isolation", () => {
 			postView: async () => {},
 			persistSnapshot: async () => {},
 			cancelRuntime: async () => {},
+			prepareResume: async () => {},
 			startApi: async () => {},
 			executeTool: async () => {},
 			appendSay: async () => {},

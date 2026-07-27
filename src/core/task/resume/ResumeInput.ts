@@ -1,40 +1,53 @@
 import type { ClineMessage } from "@shared/ExtensionMessage"
 import type { ClineStorageMessage } from "@shared/messages"
-import type { InteractionDraft } from "../interaction/InteractionResponse"
+import type { TaskEffectType } from "../runtime/TaskEffect"
 import type { TaskSnapshot, TaskSnapshotIdentityField } from "../TaskSnapshot"
 
-/** Select only UI messages carrying the snapshot's canonical interaction identity. */
+/**
+ * Select the persisted UI suffix that can change a snapshot.
+ *
+ * A result written after the snapshot usually carries the same API index as
+ * the assistant tool-use, so selecting only `apiIndex + 1` would lose it.
+ * Timestamp and interaction identity keep that same-index suffix available.
+ */
 export function selectResumeUiTail(snapshot: TaskSnapshot, messages: readonly ClineMessage[]): ClineMessage[] {
 	const interactionId = snapshot.interaction?.interactionId ?? snapshot.anchor?.interactionId
-	if (!interactionId) return []
-	return messages.filter((message) => message.interactionId === interactionId)
+	return messages.filter(
+		(message) =>
+			(interactionId !== undefined && message.interactionId === interactionId) ||
+			(message.conversationHistoryIndex !== undefined && message.conversationHistoryIndex > snapshot.apiIndex) ||
+			message.ts >= snapshot.timestamp,
+	)
 }
 
 /** Immutable inputs used by the only message-derived resume boundary. */
 export interface ResumeInput {
 	taskId: string
-	snapshot: TaskSnapshot
+	/** Missing or invalid snapshots are rebuilt from the complete histories. */
+	snapshot?: TaskSnapshot
 	uiTail: readonly ClineMessage[]
 	apiTail: readonly ClineStorageMessage[]
 	apiTailStartIndex?: number
 	apiHistoryLength: number
+	/** Complete persisted histories, required when no usable snapshot exists. */
+	uiHistory?: readonly ClineMessage[]
+	apiHistory?: readonly ClineStorageMessage[]
 }
 
 /** Allowed post-reconciliation entry selected without service calls. */
 export type ResumeEntry =
-	| { type: "continue_api_turn"; apiIndex: number; draft?: InteractionDraft }
 	| { type: "reopen_interaction"; interactionId: string; turnId: string }
-	| { type: "replay_pending_blocks"; turnId: string; dlineTids: string[]; answeredDlineTids: string[] }
 	| { type: "show_resume_interaction"; interactionId?: string; turnId?: string }
 	| { type: "show_completion_interaction"; interactionId: string; turnId: string }
 	| { type: "show_error_recovery"; interactionId: string; turnId: string; apiIndex: number }
-	| { type: "read_only_failure"; diagnostics?: ResumeDiagnostic[] }
 
 /** Typed reconciliation diagnostic that never guesses missing identity or anchors. */
 export type ResumeDiagnostic =
+	| { code: "snapshot_rebuilt"; reason: "missing" | "invalid" | "task_mismatch" | "corrupt_anchor" }
 	| { code: "invalid_snapshot_version" }
 	| { code: "task_mismatch"; expected: string; actual?: string }
 	| { code: "corrupt_anchor"; field: "apiIndex" | "uiMessageTs" }
+	| { code: "unsafe_runtime_error"; effectType: TaskEffectType }
 	| { code: "missing_identity"; field: TaskSnapshotIdentityField }
 	| { code: "missing_interaction_anchor"; interactionId: string }
 	| { code: "missing_interaction_continuation"; interactionId: string }

@@ -17,7 +17,7 @@ export interface FooterActionsProps {
 	draft: InteractionDraft
 	selection?: InteractionSelection
 	dispatch: DispatchInteraction
-	dispatchTaskAction?: (action: "cancel" | "resume") => Promise<void>
+	dispatchTaskAction?: (action: "cancel") => Promise<void>
 	onDraftAccepted?: (settlement: AcceptedInteractionSettlement) => void
 }
 
@@ -32,7 +32,7 @@ export function FooterActions({ view, draft, selection, dispatch, dispatchTaskAc
 	return (
 		<div className="flex mx-3.5 border border-(--vscode-panel-border) rounded gap-1.5">
 			{actions.map((action) => {
-				const targetsTask = action.dispatchTarget === "task" || action.type === "cancel"
+				const targetsTask = action.type === "cancel"
 				const dispatcherAvailable = targetsTask ? Boolean(dispatchTaskAction) : Boolean(view.activeInteraction)
 				const buttonDisabled = !action.enabled || pending || !dispatcherAvailable
 				return (
@@ -48,7 +48,7 @@ export function FooterActions({ view, draft, selection, dispatch, dispatchTaskAc
 								return
 							}
 							if (targetsTask) {
-								if (!dispatchTaskAction || (action.type !== "cancel" && action.type !== "resume")) {
+								if (!dispatchTaskAction || action.type !== "cancel") {
 									return
 								}
 								setPending(true)

@@ -1,6 +1,7 @@
 import type { TaskEvent } from "../runtime/TaskEvent"
 import type { TaskDispatchResult, TaskRuntime } from "../runtime/TaskRuntime"
 import type { InteractionKind } from "./Interaction"
+import type { ActiveInteraction } from "./InteractionReducer"
 import type { InteractionDraft, InteractionResponse, InteractionSelection } from "./InteractionResponse"
 
 /** Request used to open one primary interaction. */
@@ -36,19 +37,119 @@ export interface InteractionOutcome {
 	selection?: InteractionSelection
 }
 
+/** Context passed to the Task-owned continuation for a restored handler interaction. */
+export interface DetachedInteractionContinuationContext {
+	interaction: Readonly<ActiveInteraction>
+	outcome: InteractionOutcome
+	/** Return whether this continuation still belongs to the active cancellation generation. */
+	isCurrent(): boolean
+	/** Resolve the original interaction before opening a causally subsequent interaction. */
+	resolve(): Promise<void>
+}
+
+/** Continue one accepted interaction when no live handler waiter survived restoration. */
+export type DetachedInteractionContinuation = (context: DetachedInteractionContinuationContext) => Promise<void>
+
+type RuntimeOwnedInteractionKind = "resume" | "completion" | "error_retry"
+
+function isRuntimeOwnedInteraction(kind: InteractionKind): kind is RuntimeOwnedInteractionKind {
+	return kind === "resume" || kind === "completion" || kind === "error_retry"
+}
+
+function outcomeFrom(response: InteractionResponse): InteractionOutcome {
+	return { actionId: response.actionId, draft: response.draft, selection: response.selection }
+}
+
 /** Coordinates one active interaction between runtime events and a handler waiter. */
 export class InteractionCoordinator {
 	private readonly waitingInteractionIds = new Set<string>()
+	private readonly waitingInteractionRejectors = new Map<string, (error: Error) => void>()
+	private readonly claimedContinuations = new Map<string, Promise<InteractionOutcome>>()
+	private detachedContinuation?: DetachedInteractionContinuation
+	private continuationGeneration = 0
+	private readonly activeCancellationGenerations = new Set<number>()
 
 	constructor(private readonly runtime: TaskRuntime) {}
 
-	/** Dispatch one response and synchronously consume live resume continuation when no waiter owns it. */
+	/** Register the sole Task-owned continuation for restored handler interactions. */
+	registerDetachedContinuation(continuation: DetachedInteractionContinuation): () => void {
+		if (this.detachedContinuation && this.detachedContinuation !== continuation) {
+			throw new Error("Detached interaction continuation is already registered")
+		}
+		this.detachedContinuation = continuation
+		return () => {
+			if (this.detachedContinuation === continuation) {
+				this.detachedContinuation = undefined
+			}
+		}
+	}
+
+	/** Fence old continuations and reject live waiters as soon as cancellation is requested. */
+	cancelPending(reason = "task_cancelled"): number {
+		const generation = ++this.continuationGeneration
+		this.activeCancellationGenerations.add(generation)
+		for (const reject of this.waitingInteractionRejectors.values()) {
+			reject(new Error(reason))
+		}
+		this.waitingInteractionRejectors.clear()
+		return generation
+	}
+
+	/** Release one cancellation transaction without making its old continuations current again. */
+	completeCancellation(generation: number): void {
+		this.activeCancellationGenerations.delete(generation)
+	}
+
+	/** Wait until every continuation already admitted by an interaction response has exited. */
+	async waitForClaimedContinuations(): Promise<void> {
+		while (true) {
+			const pending = [...this.claimedContinuations.values()]
+			if (pending.length === 0) return
+			await Promise.allSettled(pending)
+		}
+	}
+
+	/** Dispatch one response and synchronously consume resume continuation only when no waiter owns it. */
 	async respond(response: InteractionResponse): Promise<TaskDispatchResult> {
+		const generation = this.continuationGeneration
+		if (!this.isCurrentGeneration(generation)) return this.staleResponseResult()
+		const waiterOwnsContinuation = this.waitingInteractionIds.has(response.interactionId)
+		const current = this.runtime.getState()
+		const currentInteraction = current.interaction
+		const targetsCurrentAwaitingInteraction =
+			currentInteraction?.status === "awaiting" &&
+			currentInteraction.taskId === response.taskId &&
+			currentInteraction.turnId === response.turnId &&
+			currentInteraction.interactionId === response.interactionId &&
+			response.stateRevision === current.revision
+		const detachedContinuation = this.detachedContinuation
+		if (
+			!waiterOwnsContinuation &&
+			targetsCurrentAwaitingInteraction &&
+			currentInteraction &&
+			!isRuntimeOwnedInteraction(currentInteraction.kind) &&
+			!detachedContinuation
+		) {
+			throw new Error(`Detached continuation is not registered for interaction kind=${currentInteraction.kind}`)
+		}
+
 		const result = await this.runtime.dispatch({ type: "INTERACTION_RESPONDED", response })
-		if (!result.accepted || this.waitingInteractionIds.has(response.interactionId)) return result
+		if (!result.accepted) return result
+		if (!this.isCurrentGeneration(generation)) return this.staleResponseResult()
+		if (waiterOwnsContinuation) return result
 		const interaction = result.next.interaction
-		if (interaction?.kind === "resume" && interaction.status === "resolving") {
-			await this.commitResume(interaction.interactionId, response)
+		if (interaction?.status === "resolving") {
+			const continuation = this.claimContinuation(interaction.interactionId, generation, () =>
+				this.commitDetachedInteraction(interaction, response, generation, detachedContinuation),
+			)
+			const continuesInBackground =
+				!isRuntimeOwnedInteraction(interaction.kind) ||
+				(interaction.kind === "completion" && response.actionId !== "start_new_task")
+			if (continuesInBackground) {
+				void continuation.catch(() => undefined)
+			} else {
+				await continuation
+			}
 		}
 		return result
 	}
@@ -86,9 +187,67 @@ export class InteractionCoordinator {
 		return this.commitResume(interactionId, response)
 	}
 
-	/** Commit one accepted resume response through its typed continuation event. */
-	private async commitResume(interactionId: string, response: InteractionResponse): Promise<InteractionOutcome> {
-		const committed = await this.runtime.dispatch({
+	/** Claim and commit one accepted resume continuation exactly once per interaction identity. */
+	private commitResume(interactionId: string, response: InteractionResponse): Promise<InteractionOutcome> {
+		const generation = this.continuationGeneration
+		return this.claimContinuation(interactionId, generation, () => this.commitClaimedResume(interactionId, response))
+	}
+
+	/** Claim one continuation while concurrent callers still reference the same interaction. */
+	private claimContinuation(
+		interactionId: string,
+		generation: number,
+		commit: () => Promise<InteractionOutcome>,
+	): Promise<InteractionOutcome> {
+		const existing = this.claimedContinuations.get(interactionId)
+		if (existing) return existing
+		if (!this.isCurrentGeneration(generation)) {
+			return Promise.reject(new Error("task_cancelled"))
+		}
+		const continuation = commit()
+		this.claimedContinuations.set(interactionId, continuation)
+		const clear = () => {
+			if (this.claimedContinuations.get(interactionId) === continuation) {
+				this.claimedContinuations.delete(interactionId)
+			}
+		}
+		void continuation.then(clear, clear)
+		return continuation
+	}
+
+	/** Commit the typed continuation selected by one accepted detached response. */
+	private async commitDetachedInteraction(
+		interaction: ActiveInteraction,
+		response: InteractionResponse,
+		generation: number,
+		detachedContinuation?: DetachedInteractionContinuation,
+	): Promise<InteractionOutcome> {
+		switch (interaction.kind) {
+			case "resume":
+				return this.commitClaimedResume(interaction.interactionId, response)
+			case "completion":
+				if (response.actionId === "start_new_task") {
+					return this.commitCompletionResponse(response)
+				}
+				await this.commitCompletionResponse(response)
+				if (!this.isCurrentGeneration(generation)) return outcomeFrom(response)
+				if (!detachedContinuation) {
+					throw new Error("Detached continuation is not registered for completion feedback")
+				}
+				return this.commitHandlerResponse(interaction, response, generation, detachedContinuation)
+			case "error_retry":
+				return this.commitErrorRetryResponse(response, this.runtime.getState().anchor.apiIndex)
+			default:
+				if (!detachedContinuation) {
+					throw new Error(`Detached continuation is not registered for interaction kind=${interaction.kind}`)
+				}
+				return this.commitHandlerResponse(interaction, response, generation, detachedContinuation)
+		}
+	}
+
+	/** Commit the already claimed resume continuation through its typed runtime event. */
+	private async commitClaimedResume(interactionId: string, response: InteractionResponse): Promise<InteractionOutcome> {
+		const committed = await this.runtime.dispatchAtAdmission({
 			type: "TASK_RESUME_REQUESTED",
 			interactionId,
 			draft: response.draft ?? { text: "", images: [], files: [] },
@@ -96,7 +255,106 @@ export class InteractionCoordinator {
 		if (!committed.accepted) {
 			throw new Error(`Resume continuation rejected: ${committed.error?.code ?? "invalid_runtime_event"}`)
 		}
-		return { actionId: response.actionId, draft: response.draft, selection: response.selection }
+		return outcomeFrom(response)
+	}
+
+	/** Let the Task continue one restored handler, then resolve its original interaction. */
+	private async commitHandlerResponse(
+		interaction: ActiveInteraction,
+		response: InteractionResponse,
+		generation: number,
+		continuation: DetachedInteractionContinuation,
+	): Promise<InteractionOutcome> {
+		const outcome = outcomeFrom(response)
+		let resolvePromise: Promise<void> | undefined
+		const resolve = () => {
+			if (!resolvePromise) {
+				resolvePromise = this.resolveInteraction(interaction.interactionId)
+			}
+			return resolvePromise
+		}
+		await continuation({
+			interaction,
+			outcome,
+			isCurrent: () => this.isCurrentGeneration(generation),
+			resolve,
+		})
+		if (!this.isCurrentGeneration(generation)) return outcome
+		await resolve()
+		return outcome
+	}
+
+	/** Return whether asynchronous work still belongs to the latest non-cancelling generation. */
+	private isCurrentGeneration(generation: number): boolean {
+		return generation === this.continuationGeneration && this.activeCancellationGenerations.size === 0
+	}
+
+	/** Reject a response whose continuation lost admission to a newer cancellation transaction. */
+	private staleResponseResult(): TaskDispatchResult {
+		const current = this.runtime.getState()
+		return {
+			accepted: false,
+			next: { ...current },
+			effects: [],
+			error: {
+				code: "stale_interaction",
+				eventType: "INTERACTION_RESPONDED",
+				phase: current.phase,
+			},
+		}
+	}
+
+	/** Resolve exactly the original accepted interaction. */
+	private async resolveInteraction(interactionId: string): Promise<void> {
+		const active = this.runtime.getState().interaction
+		if (!active || active.interactionId !== interactionId) {
+			return
+		}
+		const resolved = await this.runtime.dispatch({ type: "INTERACTION_RESOLVED", interactionId })
+		if (!resolved.accepted) {
+			throw new Error(`Interaction resolve rejected: ${resolved.error?.code ?? "invalid_runtime_event"}`)
+		}
+	}
+
+	/** Commit one accepted completion response through its typed lifecycle event. */
+	private async commitCompletionResponse(response: InteractionResponse): Promise<InteractionOutcome> {
+		const continuation: TaskEvent =
+			response.actionId === "start_new_task"
+				? {
+						type: "TASK_CLEAR_REQUESTED",
+						draft: response.draft ?? { text: "", images: [], files: [] },
+					}
+				: {
+						type: "COMPLETION_FEEDBACK_RECEIVED",
+						draft: response.draft ?? { text: "", images: [], files: [] },
+					}
+		const committed = await (response.actionId === "start_new_task"
+			? this.runtime.dispatchAtAdmission(continuation)
+			: this.runtime.dispatch(continuation))
+		if (!committed.accepted) {
+			throw new Error(`Completion continuation rejected: ${committed.error?.code ?? "invalid_runtime_event"}`)
+		}
+		return outcomeFrom(response)
+	}
+
+	/** Commit one accepted API-error response through its typed lifecycle event. */
+	private async commitErrorRetryResponse(response: InteractionResponse, apiIndex: number): Promise<InteractionOutcome> {
+		const continuation: TaskEvent =
+			response.actionId === "start_new_task"
+				? {
+						type: "TASK_CLEAR_REQUESTED",
+						draft: response.draft ?? { text: "", images: [], files: [] },
+					}
+				: {
+						type: "ERROR_RETRY_REQUESTED",
+						apiIndex,
+						draft: response.draft ?? { text: "", images: [], files: [] },
+					}
+		const committed = await this.runtime.dispatchAtAdmission(continuation)
+		if (!committed.accepted) {
+			throw new Error(`Retry continuation rejected: ${committed.error?.code ?? "invalid_runtime_event"}`)
+		}
+		return outcomeFrom(response)
 	}
 
 	/** Present completion and commit the selected continuation as one backend transaction. */
@@ -108,21 +366,7 @@ export class InteractionCoordinator {
 				...request,
 			},
 		)
-		const continuation: TaskEvent =
-			response.actionId === "start_new_task"
-				? {
-						type: "TASK_CLEAR_REQUESTED",
-						draft: response.draft ?? { text: "", images: [], files: [] },
-					}
-				: {
-						type: "COMPLETION_FEEDBACK_RECEIVED",
-						draft: response.draft ?? { text: "", images: [], files: [] },
-					}
-		const committed = await this.runtime.dispatch(continuation)
-		if (!committed.accepted) {
-			throw new Error(`Completion continuation rejected: ${committed.error?.code ?? "invalid_runtime_event"}`)
-		}
-		return { actionId: response.actionId, draft: response.draft, selection: response.selection }
+		return this.commitCompletionResponse(response)
 	}
 
 	/** Present exhausted retry recovery and commit the selected continuation. */
@@ -134,22 +378,7 @@ export class InteractionCoordinator {
 				...request,
 			},
 		)
-		const continuation: TaskEvent =
-			response.actionId === "start_new_task"
-				? {
-						type: "TASK_CLEAR_REQUESTED",
-						draft: response.draft ?? { text: "", images: [], files: [] },
-					}
-				: {
-						type: "ERROR_RETRY_REQUESTED",
-						apiIndex: request.apiIndex,
-						draft: response.draft ?? { text: "", images: [], files: [] },
-					}
-		const committed = await this.runtime.dispatch(continuation)
-		if (!committed.accepted) {
-			throw new Error(`Retry continuation rejected: ${committed.error?.code ?? "invalid_runtime_event"}`)
-		}
-		return { actionId: response.actionId, draft: response.draft, selection: response.selection }
+		return this.commitErrorRetryResponse(response, request.apiIndex)
 	}
 
 	/** Use an exact hydrated interaction when present, otherwise present a new one. */
@@ -173,6 +402,8 @@ export class InteractionCoordinator {
 		turnId: string,
 		kind: InteractionKind,
 	): Promise<InteractionResponse> {
+		const generation = this.continuationGeneration
+		if (!this.isCurrentGeneration(generation)) throw new Error("task_cancelled")
 		const interaction = this.runtime.getState().interaction
 		if (
 			!interaction ||
@@ -193,38 +424,48 @@ export class InteractionCoordinator {
 		}
 		this.waitingInteractionIds.add(interactionId)
 		let resolveResponse: ((response: InteractionResponse) => void) | undefined
-		const responsePromise = new Promise<InteractionResponse>((resolve) => {
+		const responsePromise = new Promise<InteractionResponse>((resolve, reject) => {
 			resolveResponse = resolve
+			this.waitingInteractionRejectors.set(interactionId, reject)
 		})
 		const unsubscribe = this.runtime.subscribe((event, result) => {
-			this.captureResponse(interactionId, event, result, resolveResponse)
+			this.captureResponse(interactionId, generation, event, result, resolveResponse)
 		})
 		try {
-			return await responsePromise
+			const response = await responsePromise
+			if (!this.isCurrentGeneration(generation)) throw new Error("task_cancelled")
+			return response
 		} finally {
 			this.waitingInteractionIds.delete(interactionId)
+			this.waitingInteractionRejectors.delete(interactionId)
 			unsubscribe()
 		}
 	}
 
 	/** Dispatch an opening event and wait for its causally matching accepted response. */
 	private async waitForResponse(interactionId: string, openingEvent: TaskEvent): Promise<InteractionResponse> {
+		const generation = this.continuationGeneration
+		if (!this.isCurrentGeneration(generation)) throw new Error("task_cancelled")
 		this.waitingInteractionIds.add(interactionId)
 		let resolveResponse: ((response: InteractionResponse) => void) | undefined
-		const responsePromise = new Promise<InteractionResponse>((resolve) => {
+		const responsePromise = new Promise<InteractionResponse>((resolve, reject) => {
 			resolveResponse = resolve
+			this.waitingInteractionRejectors.set(interactionId, reject)
 		})
 		const unsubscribe = this.runtime.subscribe((event, result) => {
-			this.captureResponse(interactionId, event, result, resolveResponse)
+			this.captureResponse(interactionId, generation, event, result, resolveResponse)
 		})
 		try {
 			const opened = await this.runtime.dispatch(openingEvent)
 			if (!opened.accepted) {
 				throw new Error(`Interaction open rejected: ${opened.error?.code ?? "invalid_runtime_event"}`)
 			}
-			return await responsePromise
+			const response = await responsePromise
+			if (!this.isCurrentGeneration(generation)) throw new Error("task_cancelled")
+			return response
 		} finally {
 			this.waitingInteractionIds.delete(interactionId)
+			this.waitingInteractionRejectors.delete(interactionId)
 			unsubscribe()
 		}
 	}
@@ -232,11 +473,17 @@ export class InteractionCoordinator {
 	/** Capture only an accepted response for the interaction owned by this waiter. */
 	private captureResponse(
 		interactionId: string,
+		generation: number,
 		event: TaskEvent,
 		result: TaskDispatchResult,
 		resolveResponse: ((response: InteractionResponse) => void) | undefined,
 	): void {
-		if (event.type === "INTERACTION_RESPONDED" && result.accepted && event.response.interactionId === interactionId) {
+		if (
+			this.isCurrentGeneration(generation) &&
+			event.type === "INTERACTION_RESPONDED" &&
+			result.accepted &&
+			event.response.interactionId === interactionId
+		) {
 			resolveResponse?.(event.response)
 		}
 	}

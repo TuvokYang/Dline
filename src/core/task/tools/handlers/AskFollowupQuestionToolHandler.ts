@@ -1,7 +1,7 @@
 import { getPrompt, renderPrompt } from "@core/prompts/i18n"
 import { processFilesIntoText } from "@integrations/misc/extract-text"
 import { showSystemNotification } from "@integrations/notifications"
-import { findLast, parsePartialArrayString } from "@shared/array"
+import { findLastIndex, parsePartialArrayString } from "@shared/array"
 import { ClineAsk, ClineAskQuestion } from "@shared/ExtensionMessage"
 import { ClineDefaultTool } from "@shared/tools"
 import { telemetryService } from "@/services/telemetry"
@@ -92,13 +92,14 @@ export class AskFollowupQuestionToolHandler implements IToolHandler, IPartialBlo
 
 			// Valid option selected, update last followup message with selected option
 			const clineMessages = config.messageState.clineMessages
-			const lastFollowupMessage = findLast(clineMessages, (m: any) => m.ask === "followup")
-			if (lastFollowupMessage) {
-				lastFollowupMessage.text = JSON.stringify({
+			const lastFollowupMessageIndex = findLastIndex(clineMessages, (message) => message.ask === "followup")
+			if (lastFollowupMessageIndex !== -1) {
+				const updatedText = JSON.stringify({
 					...sharedMessage,
 					selected: text,
 				} satisfies ClineAskQuestion)
-				await config.messageState.updateTaskHistory()
+				await config.messageState.updateClineMessage(lastFollowupMessageIndex, { text: updatedText })
+				await config.messageState.flushMessageUpdate(lastFollowupMessageIndex)
 			}
 		} else {
 			// Option not selected, send user feedback

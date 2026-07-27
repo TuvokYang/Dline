@@ -1,10 +1,15 @@
 import type { ClineMessage, TaskViewState } from "@shared/ExtensionMessage"
-import { EmptyRequest, StringRequest } from "@shared/proto/dline/common"
+import { EmptyRequest } from "@shared/proto/dline/common"
 import { useState } from "react"
 import { TaskServiceClient } from "@/services/grpc-client"
 import { FooterActions } from "./FooterActions"
 import { isPresentationKind, renderPresentation } from "./renderer-registry"
-import type { AcceptedInteractionSettlement, DispatchInteraction, InteractionDraft } from "./types"
+import {
+	type AcceptedInteractionSettlement,
+	type DispatchInteraction,
+	findActiveInteractionAnchor,
+	type InteractionDraft,
+} from "./types"
 
 /** Presentation-only props for a say timeline row. */
 export interface SayViewProps {
@@ -38,12 +43,10 @@ export interface InteractionHostProps {
 
 const EMPTY_DRAFT: InteractionDraft = { text: "", images: [], files: [], activeQuote: null }
 
-async function dispatchTaskAction(action: "cancel" | "resume", taskId: string): Promise<void> {
-	if (action === "cancel") {
-		await TaskServiceClient.cancelTask(EmptyRequest.create({}))
-		return
-	}
-	await TaskServiceClient.showTaskWithId(StringRequest.create({ value: taskId }))
+type TaskLevelAction = "cancel"
+
+async function dispatchTaskAction(_action: TaskLevelAction): Promise<void> {
+	await TaskServiceClient.cancelTask(EmptyRequest.create({}))
 }
 
 /** Bind one backend interaction projection to its exact ask presentation anchor. */
@@ -57,37 +60,38 @@ export function InteractionHost({
 }: InteractionHostProps) {
 	const [selection, setSelection] = useState<string[]>([])
 	const interaction = view.activeInteraction
-	const anchor = interaction
-		? messages.find((message) => message.ts === interaction.askMessageTs && message.type === "ask")
-		: undefined
+	const anchor = findActiveInteractionAnchor(messages, view)
 	const presentationKind = interaction?.presentationKind
 	const supported = presentationKind ? isPresentationKind(presentationKind) : false
-	const taskActionDispatcher = (action: "cancel" | "resume") => dispatchTaskAction(action, view.taskId)
+	const taskActionDispatcher = (action: TaskLevelAction) => dispatchTaskAction(action)
+	const taskOnlyView: TaskViewState = {
+		...view,
+		activeInteraction: undefined,
+		input: { enabled: false, acceptsText: false, acceptsImages: false, acceptsFiles: false },
+		footer: { actions: view.footer.actions.filter((action) => action.type === "cancel") },
+	}
 
 	return (
 		<section>
 			{showTimeline &&
-				messages.map((message) => {
-					if (interaction && message.ts === interaction.askMessageTs) {
+				messages.map((message, index) => {
+					if (message === anchor && supported) {
 						return null
 					}
 					return message.type === "say" ? (
-						<SayView key={message.ts} message={message} />
+						<SayView key={`${message.ts}:${message.interactionId ?? ""}:${index}`} message={message} />
 					) : (
-						<AskView key={message.ts} message={message} />
+						<AskView key={`${message.ts}:${message.interactionId ?? ""}:${index}`} message={message} />
 					)
 				})}
 			{interaction && (!anchor || !supported) ? (
-				<>
-					<div role="alert">Interaction is out of sync</div>
-					<FooterActions
-						dispatch={dispatch}
-						dispatchTaskAction={taskActionDispatcher}
-						draft={draft}
-						onDraftAccepted={onDraftAccepted}
-						view={view}
-					/>
-				</>
+				<FooterActions
+					dispatch={dispatch}
+					dispatchTaskAction={taskActionDispatcher}
+					draft={draft}
+					onDraftAccepted={onDraftAccepted}
+					view={taskOnlyView}
+				/>
 			) : anchor && presentationKind && isPresentationKind(presentationKind) ? (
 				<>
 					{showTimeline

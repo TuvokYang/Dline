@@ -145,7 +145,7 @@ import { executeHook } from "../hooks/hook-executor"
 import { StateManager } from "../storage/StateManager"
 import { createUnavailableApiHandler, resolveTaskApiProfile } from "./ApiProfileRecovery"
 import { buildActiveTasksSection } from "./active-tasks/ActiveTaskContextProvider"
-import { isTurnEndingToolUse, orderTurnEndingContentBlocks, orderTurnEndingNativeToolBlocks } from "./assistant-message-order"
+import { orderTurnEndingContentBlocks, orderTurnEndingNativeToolBlocks } from "./assistant-message-order"
 import {
 	getRetryDelay,
 	getStreamRetryDecision,
@@ -153,10 +153,11 @@ import {
 	runDelayedStreamRetry,
 	waitRetryDelay,
 } from "./auto-retry"
+import { BlockPhase } from "./BlockPhaseMachine"
 import { buildTaskBackgroundResults, buildTaskBackgroundSection } from "./background/BackgroundContextInjector"
 import { FocusChainManager } from "./focus-chain"
 import type { InteractionKind } from "./interaction/Interaction"
-import { InteractionCoordinator, type InteractionOutcome } from "./interaction/InteractionCoordinator"
+import { type DetachedInteractionContinuationContext, InteractionCoordinator } from "./interaction/InteractionCoordinator"
 import { getInteraction } from "./interaction/InteractionRegistry"
 import {
 	getPresentationCadenceMs,
@@ -166,12 +167,12 @@ import {
 } from "./latency"
 import { MessageChannel } from "./MessageChannel"
 import { MessageStateHandler } from "./message-state"
-import { advanceLifecycle, getDeferredToolAction } from "./partial-tool-lifecycle"
 import type { PresentationPriority } from "./presentation-types"
 import { RestoreHandler } from "./RestoreHandler"
 import { ResumeCoordinator } from "./resume/ResumeCoordinator"
-import { type ResumeEntry, type ResumeInput, selectResumeUiTail } from "./resume/ResumeInput"
-import { createResumeContinuationText, createResumeInteractionPresentation } from "./resume/ResumeProvenance"
+import { type ResumeInput, selectResumeUiTail } from "./resume/ResumeInput"
+import { createResumeContinuationText } from "./resume/ResumeProvenance"
+import { collectResumeTurnContent } from "./resume/ResumeToolResult"
 import type { TaskEffectPorts } from "./runtime/TaskEffectRunner"
 import type { TaskEvent } from "./runtime/TaskEvent"
 import { type TaskDispatchResult, TaskRuntime } from "./runtime/TaskRuntime"
@@ -183,12 +184,11 @@ import { TaskController } from "./TaskController"
 import { TaskPhase } from "./TaskPhase"
 import { type PresentationFlushContext, TaskPresentationScheduler } from "./TaskPresentationScheduler"
 import { createSnapshot, hydrateSnapshot, normalizeLegacyTaskSnapshot, type TaskSnapshot } from "./TaskSnapshot"
-import { TaskSnapshotPersistence } from "./TaskSnapshotPersistence"
+import { renameTaskSnapshotWithRetry, TaskSnapshotPersistence } from "./TaskSnapshotPersistence"
 import { TaskState } from "./TaskState"
 import { TaskStateManager } from "./TaskStateManager"
 import { withTerminateTimeout } from "./TaskTerminateTimeout"
 import { ToolExecutor } from "./ToolExecutor"
-import { ToolResultUtils } from "./tools/utils/ToolResultUtils"
 import { detectAvailableCliTools, updateApiReqMsg } from "./utils"
 import { buildUserFeedbackContent } from "./utils/buildUserFeedbackContent"
 
@@ -232,6 +232,11 @@ type AskOptions = {
 	commandTs?: number
 }
 
+type ApiRequestTransactionOptions = {
+	/** Runs after the user message is durable and before canonical API admission. */
+	beforeApiRequestStarted?: () => Promise<void>
+}
+
 /** Fail fast if dormant runtime effects are dispatched before flow migration. */
 function unavailableRuntimePort(port: keyof TaskEffectPorts): never {
 	throw new Error(`Task runtime effect port is not active before flow migration: ${port}`)
@@ -242,6 +247,7 @@ function createInteractionPorts(
 	postView: () => Promise<void>,
 	persistSnapshot: TaskEffectPorts["persistSnapshot"],
 	cancelRuntime: TaskEffectPorts["cancelRuntime"],
+	prepareResume: TaskEffectPorts["prepareResume"],
 	startApi: TaskEffectPorts["startApi"],
 	executeTool: TaskEffectPorts["executeTool"],
 	appendSay: TaskEffectPorts["appendSay"],
@@ -252,6 +258,7 @@ function createInteractionPorts(
 		postView,
 		persistSnapshot,
 		cancelRuntime,
+		prepareResume,
 		startApi,
 		executeTool,
 		appendSay,
@@ -477,6 +484,10 @@ export class Task {
 				async () => this.postStateToWebview(),
 				async (state) => this.emitStateSnapshot(createSnapshot(state)),
 				async () => this.abortExecution(),
+				async () => {
+					this.taskState.abort = false
+					this.taskState.autoRetryAttempts = 0
+				},
 				async (effect) => {
 					this.taskState.abort = false
 					if (effect.draft) {
@@ -486,7 +497,20 @@ export class Task {
 						this.taskRuntime.getState().phase === TaskPhase.RESUMING
 							? createResumeContinuationText(effect.draft?.text)
 							: effect.draft?.text
-					const content = await buildUserFeedbackContent(draftText, effect.draft?.images, effect.draft?.files)
+					const feedbackContent = await buildUserFeedbackContent(draftText, effect.draft?.images, effect.draft?.files)
+					const runtimeState = this.taskRuntime.getState()
+					const restoredToolContent =
+						runtimeState.phase === TaskPhase.RESUMING && runtimeState.turn
+							? collectResumeTurnContent({
+									blocks: runtimeState.turn.blocks,
+									assistantApiIndex: runtimeState.turn.assistantApiIndex,
+									apiHistory: this.messageStateHandler.apiConversationHistory,
+									uiHistory: this.messageStateHandler.clineMessages,
+									pendingContent: this.taskState.userMessageContent,
+									synthesizeMissing: "all",
+								})
+							: []
+					const content = [...restoredToolContent, ...feedbackContent]
 					await this.recursivelyMakeClineRequests(content)
 				},
 				async (effect) => {
@@ -500,6 +524,16 @@ export class Task {
 					await this.toolExecutor.executeTool(block)
 				},
 				async (effect) => {
+					if (effect.interactionId) {
+						await this.taskController.channel.presentSay(
+							effect.taskSay,
+							effect.presentation,
+							effect.images,
+							effect.files,
+							effect.interactionId,
+						)
+						return
+					}
 					await this.taskController.say(effect.taskSay, effect.presentation, effect.images, effect.files)
 				},
 				async (effect) => ({
@@ -516,37 +550,18 @@ export class Task {
 			),
 		)
 		this.interactionCoordinator = new InteractionCoordinator(this.taskRuntime)
+		this.interactionCoordinator.registerDetachedContinuation((context) => this.continueRestoredInteraction(context))
 		this.resumeCoordinator = new ResumeCoordinator({
 			load: async () => this.loadResumeInput(),
-			persist: async (result) => {
-				if (result.entry.type !== "read_only_failure") {
-					await this.writeTaskSnapshot(result.snapshot)
-				}
-			},
+			presentInteraction: async (result) => this.presentSynthesizedHistoryInteraction(result.snapshot),
+			persist: async (result) => this.writeTaskSnapshot(result.snapshot),
 			hydrate: async (result) => {
-				if (result.entry.type === "read_only_failure") {
-					this.taskRuntime.restore({
-						...createTaskRuntimeState({
-							taskId: this.taskId,
-							phase: TaskPhase.PAUSED,
-							revision: result.snapshot.revision ?? 0,
-							anchor: result.snapshot.anchor ?? { apiIndex: -1 },
-						}),
-						error: {
-							effectId: "resume_reconciliation",
-							effectType: "PERSIST_SNAPSHOT",
-							message: result.diagnostics.map((diagnostic) => diagnostic.code).join(","),
-						},
-					})
-					return
-				}
 				this.taskRuntime.restore(hydrateSnapshot(result.snapshot))
 				this.syncRetainedMachines()
 			},
 			publishView: async () => {
 				await this.postStateToWebview({ immediate: true })
 			},
-			dispatch: async (entry) => this.dispatchResumeEntry(entry),
 		})
 		this.systemPromptCacheService = new SystemPromptCacheService({ taskId: this.taskId })
 		this.snapshotPersistence = new TaskSnapshotPersistence({
@@ -872,7 +887,8 @@ export class Task {
 					if (this.taskState.abort && error instanceof Error && error.message === "Dline instance aborted") {
 						Logger.debug(`[Task ${taskId}] presentAssistantMessage flush skipped after abort: ${error.message}`)
 					} else {
-						Logger.error(`[Task ${taskId}] presentAssistantMessage flush failed:`, error)
+						const detail = error instanceof Error ? (error.stack ?? error.message) : String(error)
+						Logger.error(`[Task ${taskId}] presentAssistantMessage flush failed: ${detail}`)
 					}
 					throw error
 				}
@@ -916,8 +932,16 @@ export class Task {
 			this.workspaceManager,
 			isMultiRootEnabled(this.stateManager),
 			{
-				open: this.interactionCoordinator.open.bind(this.interactionCoordinator),
-				complete: this.interactionCoordinator.complete.bind(this.interactionCoordinator),
+				open: (request) =>
+					this.interactionCoordinator.open({
+						...request,
+						turnId: this.taskRuntime.getState().turn?.turnId ?? request.turnId,
+					}),
+				complete: (request) =>
+					this.interactionCoordinator.complete({
+						...request,
+						turnId: this.taskRuntime.getState().turn?.turnId ?? request.turnId,
+					}),
 				say: async (request) => {
 					await this.say(
 						request.taskSay,
@@ -1266,12 +1290,9 @@ export class Task {
 	 * Called only by the canonical runtime persistence effect.
 	 */
 	private async emitStateSnapshot(snapshot: TaskSnapshot): Promise<void> {
-		try {
-			this.latestTaskSnapshot = snapshot
-			this.snapshotPersistence.schedule(snapshot)
-		} catch (error) {
-			Logger.error("[emitStateSnapshot] Failed to persist state snapshot:", error)
-		}
+		this.latestTaskSnapshot = snapshot
+		this.snapshotPersistence.schedule(snapshot)
+		await this.snapshotPersistence.flushNow()
 	}
 
 	/**
@@ -1284,7 +1305,7 @@ export class Task {
 		const snapshotPath = path.join(taskDir, GlobalFileNames.taskSnapshot)
 		const tmpPath = `${snapshotPath}.tmp.${Date.now()}`
 		await fs.writeFile(tmpPath, JSON.stringify(snapshot, null, 2), "utf8")
-		await fs.rename(tmpPath, snapshotPath)
+		await renameTaskSnapshotWithRetry(tmpPath, snapshotPath)
 	}
 
 	/**
@@ -1333,26 +1354,79 @@ export class Task {
 		}
 	}
 
-	/** Build strict resume input from one snapshot and only its persisted tails. */
+	/** Build resume input from a usable snapshot plus the complete persisted histories. */
 	private async loadResumeInput(): Promise<ResumeInput> {
-		const snapshot = this.latestTaskSnapshot ?? (await this.loadTaskSnapshot())
-		if (!snapshot) {
-			throw new Error("resume_snapshot_missing")
-		}
-		const uiTail = selectResumeUiTail(snapshot, this.messageStateHandler.clineMessages)
-		const apiTail = this.messageStateHandler.apiConversationHistory.slice(Math.max(0, snapshot.apiIndex + 1))
+		await this.snapshotPersistence.flushNow()
+		const snapshot = await this.loadTaskSnapshot()
+		const uiHistory = this.messageStateHandler.clineMessages
+		const apiHistory = this.messageStateHandler.apiConversationHistory
+		const apiTailStartIndex = snapshot ? Math.max(0, snapshot.apiIndex + 1) : 0
 		return {
 			taskId: this.taskId,
 			snapshot,
-			uiTail,
-			apiTail,
-			apiTailStartIndex: Math.max(0, snapshot.apiIndex + 1),
-			apiHistoryLength: this.messageStateHandler.apiConversationHistory.length,
+			uiTail: snapshot ? selectResumeUiTail(snapshot, uiHistory) : uiHistory,
+			apiTail: apiHistory.slice(apiTailStartIndex),
+			apiTailStartIndex,
+			apiHistoryLength: apiHistory.length,
+			uiHistory,
+			apiHistory,
 		}
 	}
 
+	/** Attach a durable ask row to a Resume/Completion interaction synthesized from history. */
+	private async presentSynthesizedHistoryInteraction(snapshot: TaskSnapshot): Promise<void> {
+		const interaction = snapshot.interaction
+		if (!interaction || interaction.anchor || interaction.status !== "opening") return
+
+		let presentation = ""
+		let existingTs: number | undefined
+		if (interaction.kind === "completion") {
+			const lifecycle = snapshot.turn?.blocks.find((block) => block.dlineTid === interaction.interactionId)
+			if (lifecycle) {
+				const block = this.findRestoredTurnEndBlock(
+					interaction.interactionId,
+					lifecycle.ts,
+					snapshot.turn?.assistantApiIndex,
+				)
+				presentation = block.params.result ?? ""
+				existingTs = lifecycle.ts
+			}
+		}
+
+		const messageTs = await this.taskController.channel.presentAsk(
+			getInteraction(interaction.kind).taskAsk,
+			presentation,
+			existingTs,
+			interaction.interactionId,
+		)
+		interaction.status = "awaiting"
+		interaction.anchor = { messageTs, messageType: "ask" }
+		snapshot.anchor = {
+			...(snapshot.anchor ?? { apiIndex: snapshot.apiIndex }),
+			uiMessageTs: messageTs,
+			turnId: interaction.turnId,
+			interactionId: interaction.interactionId,
+		}
+		snapshot.timestamp = Date.now()
+	}
+
 	/** Locate the original turn-end block from runtime memory or canonical persisted assistant history. */
-	private findRestoredTurnEndBlock(interactionId: string, messageTs: number): ToolUse {
+	private findRestoredTurnEndBlock(interactionId: string, messageTs: number, assistantApiIndex?: number): ToolUse {
+		if (assistantApiIndex !== undefined) {
+			const message = this.messageStateHandler.apiConversationHistory[assistantApiIndex]
+			const matchingBlocks =
+				message?.role === "assistant" && Array.isArray(message.content)
+					? message.content.filter(
+							(candidate): candidate is ClineAssistantToolUseBlock =>
+								candidate.type === "tool_use" && candidate.dline_tid === interactionId,
+						)
+					: []
+			if (matchingBlocks.length !== 1) {
+				throw new Error(matchingBlocks.length === 0 ? "resume_turn_end_block_missing" : "resume_turn_end_block_ambiguous")
+			}
+			return this.restoreHandler.storedToRuntime(matchingBlocks[0], messageTs)
+		}
+
 		const runtimeBlock = this.taskState.assistantMessageContent.find(
 			(candidate): candidate is ToolUse => candidate.type === "tool_use" && candidate.dline_tid === interactionId,
 		)
@@ -1368,141 +1442,150 @@ export class Task {
 		return this.restoreHandler.storedToRuntime(storedBlock, messageTs)
 	}
 
-	/** Continue one restored turn-end response exactly once and start the next provider request. */
-	private async continueRestoredTurnEnd(
-		kind: InteractionKind,
-		interactionId: string,
-		messageTs: number,
-		outcome: InteractionOutcome,
-	): Promise<void> {
-		const block = this.findRestoredTurnEndBlock(interactionId, messageTs)
-		const toolResult = await this.toolExecutor.continueTurnEndInteraction(kind, block, outcome)
-		const content: ClineContent[] = [ToolResultUtils.createResult(toolResult, block)]
-		content.push({ type: "text", text: createResumeContinuationText() })
-		this.taskState.userMessageContent = content
-		await this.recursivelyMakeClineRequests(content)
+	/** Rebuild every tool block from the exact assistant message owned by a restored runtime turn. */
+	private restoredTurnToolBlocks(turn: NonNullable<TaskRuntimeState["turn"]>): ToolUse[] {
+		const message = this.messageStateHandler.apiConversationHistory[turn.assistantApiIndex]
+		if (message?.role !== "assistant" || !Array.isArray(message.content)) {
+			throw new Error("resume_assistant_turn_missing")
+		}
+		const stored = message.content.filter(
+			(candidate): candidate is ClineAssistantToolUseBlock => candidate.type === "tool_use",
+		)
+		if (stored.length !== turn.blocks.length) throw new Error("resume_turn_tool_count_mismatch")
+		return turn.blocks.map((lifecycle) => {
+			const matches = stored.filter(
+				(candidate) => candidate.dline_tid === lifecycle.dlineTid && candidate.function_id === lifecycle.functionId,
+			)
+			if (matches.length !== 1) throw new Error("resume_turn_tool_identity_mismatch")
+			return this.restoreHandler.storedToRuntime(matches[0]!, lifecycle.ts)
+		})
 	}
 
-	/** Adapt one reconciled entry to existing execution capabilities without further inference. */
-	private async dispatchResumeEntry(entry: ResumeEntry): Promise<void> {
-		switch (entry.type) {
-			case "continue_api_turn": {
-				const continued = await this.taskRuntime.dispatch({
-					type: "RESUME_API_CONTINUATION_REQUESTED",
-					apiIndex: entry.apiIndex,
-					...(entry.draft ? { draft: entry.draft } : {}),
+	/** Return whether the pending next-turn content already contains one exact tool result. */
+	private hasPendingToolResult(dlineTid: string, functionId: string): boolean {
+		return this.taskState.userMessageContent.some(
+			(content): content is ClineUserToolResultContentBlock =>
+				content.type === "tool_result" && content.dline_tid === dlineTid && content.function_id === functionId,
+		)
+	}
+
+	/** Consume one history-only interaction after its causal response has been durably accepted. */
+	private async continueRestoredInteraction(context: DetachedInteractionContinuationContext): Promise<void> {
+		try {
+			if (!context.isCurrent()) return
+			const state = this.taskRuntime.getState()
+			const turn = state.turn
+			if (!turn || turn.turnId !== context.interaction.turnId) throw new Error("resume_turn_identity_mismatch")
+			let lifecycle = turn.blocks.find((candidate) => candidate.dlineTid === context.interaction.interactionId)
+			if (!lifecycle) throw new Error("resume_interaction_block_missing")
+			const blocks = this.restoredTurnToolBlocks(turn)
+			const block = blocks.find((candidate) => candidate.dline_tid === lifecycle?.dlineTid)
+			if (!block || block.function_id !== lifecycle.functionId) throw new Error("resume_interaction_block_mismatch")
+
+			this.taskState.abort = false
+			this.taskState.userMessageContent = collectResumeTurnContent({
+				blocks: turn.blocks,
+				assistantApiIndex: turn.assistantApiIndex,
+				apiHistory: this.messageStateHandler.apiConversationHistory,
+				uiHistory: this.messageStateHandler.clineMessages,
+				pendingContent: [],
+				synthesizeMissing: "terminal_only",
+				deferMissingDlineTids: [context.interaction.interactionId],
+			})
+			this.taskState.assistantMessageContent = blocks
+			this.taskState.didCompleteReadingStream = true
+
+			if (lifecycle.phase === BlockPhase.AWAITING_APPROVAL) {
+				const started = await this.dispatchRuntime({
+					type: "BLOCK_APPROVED",
+					turnId: turn.turnId,
+					dlineTid: lifecycle.dlineTid,
 				})
-				if (!continued.accepted) throw new Error("resume_api_continuation_rejected")
-				return
+				if (!context.isCurrent()) return
+				if (!started.accepted) throw new Error("resume_interaction_start_rejected")
+				lifecycle = started.next.turn?.blocks.find((candidate) => candidate.dlineTid === lifecycle?.dlineTid)
+				if (!lifecycle) throw new Error("resume_interaction_block_missing_after_start")
 			}
-			case "replay_pending_blocks": {
-				const turn = this.taskRuntime.getState().turn
-				if (!turn || turn.turnId !== entry.turnId) throw new Error("resume_turn_mismatch")
-				const normalized = await this.taskRuntime.dispatch({
-					type: "RESUME_BLOCK_REPLAY_REQUESTED",
-					turnId: entry.turnId,
-					dlineTids: entry.dlineTids,
-				})
-				if (!normalized.accepted) throw new Error("resume_block_replay_rejected")
-				this.syncRetainedMachines(false)
-				const history = this.messageStateHandler.apiConversationHistory
-				const assistant = history[turn.assistantApiIndex]
-				if (assistant?.role !== "assistant" || !Array.isArray(assistant.content)) {
-					throw new Error("resume_assistant_turn_missing")
-				}
-				const pendingDlineTids = new Set(entry.dlineTids)
-				const toolUseBlocks = assistant.content.filter(
-					(block): block is ClineAssistantToolUseBlock =>
-						block.type === "tool_use" && pendingDlineTids.has(block.dline_tid ?? ""),
+
+			const continuation = getInteraction(context.interaction.kind).continuation
+			if (continuation === "handler" || continuation === "completion") {
+				const toolResult = await this.toolExecutor.continueTurnEndInteraction(
+					context.interaction.kind,
+					block,
+					context.outcome,
 				)
-				if (toolUseBlocks.length !== entry.dlineTids.length) throw new Error("resume_pending_identity_mismatch")
-				const answeredDlineTids = new Set(entry.answeredDlineTids)
-				const answeredToolResults = history
-					.slice(turn.assistantApiIndex + 1)
-					.flatMap((message) => (message.role === "user" && Array.isArray(message.content) ? message.content : []))
-					.filter(
-						(block): block is ClineUserToolResultContentBlock =>
-							block.type === "tool_result" && answeredDlineTids.has(block.dline_tid ?? ""),
-					)
-				if (answeredToolResults.length !== entry.answeredDlineTids.length) {
-					throw new Error("resume_answered_identity_mismatch")
-				}
-				await this.restoreHandler.replayPendingTools({
-					assistantIndex: turn.assistantApiIndex,
-					toolUseBlocks,
-					answeredToolResults,
-					sanitizedHistory: history.slice(0, turn.assistantApiIndex + 1),
-				})
-				return
+				if (!context.isCurrent()) return
+				await this.toolExecutor.commitRestoredToolResult(toolResult, block)
+				if (!context.isCurrent()) return
+			} else {
+				await this.toolExecutor.executeTool(block)
+				if (!context.isCurrent()) return
 			}
-			case "reopen_interaction": {
-				const interaction = this.taskRuntime.getState().interaction
-				if (!interaction || interaction.interactionId !== entry.interactionId || interaction.turnId !== entry.turnId) {
-					throw new Error("resume_interaction_mismatch")
-				}
-				const messageTs = interaction.anchor?.messageTs
-				if (messageTs === undefined) throw new Error("resume_interaction_anchor_missing")
-				const outcome = await this.interactionCoordinator.open({
-					turnId: entry.turnId,
-					interactionId: entry.interactionId,
-					kind: interaction.kind,
-					presentation: "",
-				})
-				if (getInteraction(interaction.kind).continuation !== "handler") return
-				await this.continueRestoredTurnEnd(interaction.kind, entry.interactionId, messageTs, outcome)
-				return
+
+			if (!this.hasPendingToolResult(lifecycle.dlineTid, lifecycle.functionId)) {
+				await this.toolExecutor.commitInterruptedToolResult(
+					block,
+					"The tool continuation ended without a durable result. Its side effect was not replayed.",
+				)
+				if (!context.isCurrent()) return
 			}
-			case "show_completion_interaction": {
-				const interaction = this.taskRuntime.getState().interaction
+			for (const candidate of this.taskRuntime.getState().turn?.blocks ?? []) {
 				if (
-					!interaction ||
-					interaction.kind !== "completion" ||
-					interaction.interactionId !== entry.interactionId ||
-					interaction.turnId !== entry.turnId
+					(candidate.phase !== BlockPhase.SKIPPED && candidate.phase !== BlockPhase.CANCELLED) ||
+					this.hasPendingToolResult(candidate.dlineTid, candidate.functionId)
 				) {
-					throw new Error("resume_completion_interaction_mismatch")
+					continue
 				}
-				const messageTs = interaction.anchor?.messageTs
-				if (messageTs === undefined) throw new Error("resume_interaction_anchor_missing")
-				const outcome = await this.interactionCoordinator.complete({
-					turnId: entry.turnId,
-					interactionId: entry.interactionId,
-					completionId: this.taskRuntime.getState().completion?.completionId ?? entry.interactionId,
-					presentation: "",
-				})
-				if (outcome.actionId !== "start_new_task") {
-					await this.continueRestoredTurnEnd("completion", entry.interactionId, messageTs, outcome)
-				}
-				return
+				const skippedBlock = blocks.find((item) => item.dline_tid === candidate.dlineTid)
+				if (!skippedBlock) throw new Error("resume_skipped_block_missing")
+				await this.toolExecutor.commitInterruptedToolResult(
+					skippedBlock,
+					candidate.phase === BlockPhase.SKIPPED
+						? "The tool was skipped after an earlier interaction was rejected."
+						: "The tool was cancelled before a durable result was recorded.",
+				)
+				if (!context.isCurrent()) return
 			}
-			case "show_error_recovery":
-				await this.interactionCoordinator.recover({
-					turnId: entry.turnId,
-					interactionId: entry.interactionId,
-					apiIndex: entry.apiIndex,
-					presentation: "",
+
+			const currentBlock = this.taskRuntime
+				.getState()
+				.turn?.blocks.find((candidate) => candidate.dlineTid === lifecycle?.dlineTid)
+			if (currentBlock && !this.isTerminalRuntimeBlock(currentBlock.phase)) {
+				const completed = await this.dispatchRuntime({
+					type: "BLOCK_EXECUTION_COMPLETED",
+					turnId: turn.turnId,
+					dlineTid: currentBlock.dlineTid,
 				})
-				return
-			case "show_resume_interaction":
-				if (entry.interactionId && entry.turnId) {
-					await this.interactionCoordinator.resumeExisting(entry.interactionId)
-					return
-				}
-				await this.interactionCoordinator.resume({
-					turnId: `resume:${this.taskId}`,
-					interactionId: `resume:${this.taskId}`,
-					kind: "resume",
-					presentation: createResumeInteractionPresentation(),
-				})
-				return
-			case "read_only_failure":
-				Logger.error(`[resume] read-only failure: ${JSON.stringify(entry.diagnostics ?? [])}`)
-				await this.postStateToWebview()
+				if (!context.isCurrent()) return
+				if (!completed.accepted) throw new Error("resume_interaction_completion_rejected")
+			}
+
+			await context.resolve()
+			if (!context.isCurrent()) return
+			this.syncRetainedMachines(false)
+			await this.executeFinalizedAssistantTurn()
+			if (!context.isCurrent()) return
+			this.taskState.userMessageContent.push({ type: "text", text: createResumeContinuationText() })
+			await this.recursivelyMakeClineRequests(this.taskState.userMessageContent)
+		} catch (error) {
+			const detail = error instanceof Error ? (error.stack ?? error.message) : String(error)
+			Logger.error(`[Task ${this.taskId}] restored interaction continuation failed: ${detail}`)
+			this.taskState.abort = true
+			void this.requestCancellation()
+			throw error
 		}
 	}
 
 	private async saveCheckpointCallback(isAttemptCompletionMessage?: boolean, completionMessageTs?: number): Promise<void> {
 		return this.checkpointManager?.saveCheckpoint(isAttemptCompletionMessage, completionMessageTs) ?? Promise.resolve()
+	}
+
+	private async persistCheckpointHashToMessage(messageIndex: number, commitHash: string): Promise<void> {
+		await this.messageStateHandler.updateClineMessage(messageIndex, {
+			lastCheckpointHash: commitHash,
+		})
+		await this.messageStateHandler.flushMessageUpdate(messageIndex)
+		await this.postStateToWebview()
 	}
 
 	/**
@@ -1663,18 +1746,29 @@ export class Task {
 	}
 
 	public async requestCancellation(): Promise<TaskDispatchResult> {
-		const requested = await this.dispatchRuntime({ type: "TASK_CANCEL_REQUESTED", source: "user" })
-		if (!requested.accepted) {
-			return requested
+		const cancellationGeneration = this.interactionCoordinator.cancelPending()
+		try {
+			const requested = await this.dispatchRuntime({ type: "TASK_CANCEL_REQUESTED", source: "user" })
+			if (!requested.accepted) {
+				return requested
+			}
+			const cutoffRevision = requested.next.supersededEffectRevision ?? requested.next.revision - 1
+			await Promise.all([
+				this.taskRuntime.waitForDeferredEffectsThrough(cutoffRevision),
+				this.interactionCoordinator.waitForClaimedContinuations(),
+			])
+			const resumeInteractionId = `resume:${this.taskId}:${requested.next.revision}`
+			return await this.dispatchRuntime({
+				type: "TASK_CANCELLED",
+				resume: {
+					turnId: resumeInteractionId,
+					interactionId: resumeInteractionId,
+					presentation: "",
+				},
+			})
+		} finally {
+			this.interactionCoordinator.completeCancellation(cancellationGeneration)
 		}
-		return this.dispatchRuntime({
-			type: "TASK_CANCELLED",
-			resume: {
-				turnId: `resume:${this.taskId}`,
-				interactionId: `resume:${this.taskId}`,
-				presentation: "",
-			},
-		})
 	}
 
 	/** Commit a checkpoint chat rewind and optionally continue edited input exactly once. */
@@ -2076,8 +2170,8 @@ export class Task {
 
 	/**
 	 * Load and display historical task messages without waiting for user interaction.
-	 * Does NOT clean old resume messages or api_req_started â€?those are handled by
-	 * resumeFromHistory() when the task is interactively resumed.
+	 * Does not execute or replay persisted work; prepareFromHistory() reconciles
+	 * the persisted runtime into a stopped interaction state.
 	 *
 	 * Used for both readonly (locked task) and interactive resume scenarios.
 	 */
@@ -2107,16 +2201,20 @@ export class Task {
 	}
 
 	/**
-	 * Interactively resume a task after displayHistory() has loaded messages.
-	 * Cleans stale resume/partial messages, determines the appropriate ask type,
-	 * waits for user interaction via this.ask(), executes hooks, and starts the
-	 * task loop.
+	 * Reconcile a historical task into an inert interaction state after its messages
+	 * have loaded. No API, tool, interaction waiter, or prior draft is dispatched.
 	 *
 	 * Only call this when the task lock is acquired (taskLockAcquired === true).
 	 * Readonly windows should stop after displayHistory() and show a lock banner.
 	 */
-	public async resumeFromHistory(_options?: ResumeTaskFromHistoryOptions) {
-		await this.resumeCoordinator.resume(this.taskId)
+	public async prepareFromHistory(_options?: ResumeTaskFromHistoryOptions) {
+		this.taskState.abort = true
+		await this.resumeCoordinator.prepare(this.taskId)
+	}
+
+	/** @deprecated Historical opening is preparation only; use prepareFromHistory(). */
+	public async resumeFromHistory(options?: ResumeTaskFromHistoryOptions) {
+		await this.prepareFromHistory(options)
 	}
 
 	/**
@@ -2124,16 +2222,6 @@ export class Task {
 	 * Used after cancellation so the message list stays in-place (no flicker)
 	 * while still showing the resume prompt and handling the user response.
 	 */
-	public async resumeTask(_preObtainedResponse?: {
-		response: ClineAskResponse
-		text?: string
-		images?: string[]
-		files?: string[]
-	}): Promise<void> {
-		this.taskState.abort = false
-		await this.resumeCoordinator.resume(this.taskId)
-	}
-
 	private async initiateTaskLoop(userContent: ClineContent[]): Promise<void> {
 		let nextUserContent = userContent
 		let includeFileDetails = true
@@ -2437,7 +2525,36 @@ export class Task {
 		timeoutSeconds: number | undefined,
 		options?: CommandExecutionOptions,
 	): Promise<CommandExecutionOutcome> {
-		return this.commandExecutor.execute(command, timeoutSeconds, options)
+		const outcome = await this.commandExecutor.execute(command, timeoutSeconds, options)
+		if (outcome.userRejected) {
+			await this.rejectCommandExecution(options?.commandTs)
+		}
+		return outcome
+	}
+
+	/** Route an in-terminal command rejection through the canonical turn reducer. */
+	private async rejectCommandExecution(commandTs: number | undefined): Promise<void> {
+		if (commandTs === undefined) return
+		const commandBlock = this.taskState.assistantMessageContent.find(
+			(block): block is ToolUse =>
+				block.type === "tool_use" && block.name === ClineDefaultTool.BASH && block.ts === commandTs,
+		)
+		if (!commandBlock?.dline_tid) return
+
+		const state = this.taskRuntime.getState()
+		const runtimeBlock = state.turn?.blocks.find((block) => block.dlineTid === commandBlock.dline_tid)
+		if (!state.turn || !runtimeBlock || this.isTerminalRuntimeBlock(runtimeBlock.phase)) return
+
+		const rejected = await this.dispatchRuntime({
+			type: "BLOCK_EXECUTION_REJECTED",
+			turnId: state.turn.turnId,
+			dlineTid: runtimeBlock.dlineTid,
+		})
+		if (!rejected.accepted) {
+			const current = this.taskRuntime.getState()
+			if (this.taskState.abort || current.phase === TaskPhase.CANCELLING) return
+			throw new Error(`Command rejection rejected: ${rejected.error?.code ?? "invalid_runtime_event"}`)
+		}
 	}
 
 	/**
@@ -3217,32 +3334,7 @@ export class Task {
 			if (blockTs === undefined) continue
 
 			// ── Non-partial: tool lifecycle complete execution ──
-			if (!(block as TextStreamContent | ToolUse).partial) {
-				if (block.type === "tool_use") {
-					const lifecycle = this.taskState.partialToolLifecycleByTs.get(blockTs)
-					const action = getDeferredToolAction(
-						lifecycle,
-						isTurnEndingToolUse(block),
-						this.taskState.didCompleteReadingStream,
-					)
-
-					if (action === "defer" || action === "skip") {
-						continue // defer keeps partial-shown; skip for done/absent
-					}
-
-					// action === "execute"
-					advanceLifecycle(this.taskState.partialToolLifecycleByTs, blockTs, "start-execute")
-					try {
-						await this.toolExecutor.executeTool(block as ToolUse)
-						advanceLifecycle(this.taskState.partialToolLifecycleByTs, blockTs, "execution-success")
-					} catch (error) {
-						Logger.error(`[Task ${this.taskId}] Failed to complete deferred partial tool ts=${blockTs}`, error)
-						advanceLifecycle(this.taskState.partialToolLifecycleByTs, blockTs, "execution-failed")
-						throw error
-					}
-				}
-				continue
-			}
+			if (!(block as TextStreamContent | ToolUse).partial) continue
 
 			// ── Partial: existing content-change rerender ──
 			const newSig = this.computeBlockRenderSignature(block as TextStreamContent | ToolUse)
@@ -3287,9 +3379,6 @@ export class Task {
 			if (context && !context.isCurrent()) return
 
 			if (this.taskState.currentStreamingContentIndex >= this.taskState.assistantMessageContent.length) {
-				if (this.taskState.didCompleteReadingStream) {
-					this.taskState.userMessageContentReady = true
-				}
 				return
 			}
 
@@ -3351,134 +3440,17 @@ export class Task {
 				}
 				case "tool_use":
 					// Partial tools may stream UI immediately. Complete tools wait until
-					// stream finalization so the canonical turn contains every tool block.
+					// stream finalization and are executed by executeFinalizedAssistantTurn().
 					if (!block.partial && !this.taskState.didCompleteReadingStream) {
 						return
 					}
-					if (this.initialCheckpointCommitPromise) {
-						if (!READ_ONLY_TOOLS.includes(block.name as any)) {
-							await this.initialCheckpointCommitPromise
-							this.initialCheckpointCommitPromise = undefined
-						}
-					}
 
-					// Partial tools only stream UI. Canonical runtime execution starts
-					// after the complete block is available at stream finalization.
 					if (block.partial) {
 						await this.toolExecutor.executeTool(block)
 						if (block.ts !== undefined) {
 							this.taskState.partialToolLifecycleByTs.set(block.ts, "partial-shown")
 						}
-						break
 					}
-
-					// Build turn on first complete tool_use block if not already built
-					if (!block.partial && this.taskState.didCompleteReadingStream) {
-						const allBlocks = this.taskState.assistantMessageContent
-						this.taskController.buildTurn(allBlocks, (_toolName, dlineTid) => {
-							const candidate = allBlocks.find(
-								(item): item is ToolUse => item.type === "tool_use" && item.dline_tid === dlineTid,
-							)
-							return candidate ? this.toolExecutor.isBlockApproved(candidate) : false
-						})
-						const toolBlocks = this.taskController.getBlocks()
-						const turnId = `turn:${toolBlocks[0]?.dlineTid ?? block.dline_tid}`
-						if (this.taskRuntime.getState().turn?.turnId !== turnId) {
-							const created = await this.dispatchRuntime({
-								type: "TURN_CREATED",
-								turnId,
-								assistantApiIndex: this.messageStateHandler.apiConversationHistory.length - 1,
-								mode: this.isParallelToolCallingEnabled() ? "parallel" : "serial",
-								blocks: toolBlocks.map(({ phase: _phase, ...candidate }) => candidate),
-							})
-							if (!created.accepted) {
-								throw new Error(`Turn creation rejected: ${created.error?.code ?? "invalid_runtime_event"}`)
-							}
-						}
-					}
-
-					// Check if this block should be skipped due to prior rejection
-					if (this.taskController.shouldSkip((block as ToolUse).dline_tid || "")) {
-						break
-					}
-
-					const runtimeTurn = this.taskRuntime.getState().turn
-					if (!runtimeTurn || !block.dline_tid) {
-						throw new Error(`Canonical runtime turn is missing for tool=${block.name}`)
-					}
-					const ready = await this.dispatchRuntime({
-						type: "BLOCK_READY",
-						turnId: runtimeTurn.turnId,
-						dlineTid: block.dline_tid,
-					})
-					if (!ready.accepted) {
-						throw new Error(`Block readiness rejected: ${ready.error?.code ?? "invalid_runtime_event"}`)
-					}
-					const runtimeBlock = this.taskRuntime
-						.getState()
-						.turn?.blocks.find((candidate) => candidate.dlineTid === block.dline_tid)
-					if (!runtimeBlock) {
-						throw new Error(`Canonical runtime block is missing for tool=${block.name}`)
-					}
-					if (runtimeBlock.requiresApproval) {
-						const approval = await this.dispatchRuntime({
-							type: "BLOCK_APPROVAL_REQUIRED",
-							turnId: runtimeTurn.turnId,
-							dlineTid: block.dline_tid,
-						})
-						if (!approval.accepted) {
-							throw new Error(
-								`Block approval checkpoint rejected: ${approval.error?.code ?? "invalid_runtime_event"}`,
-							)
-						}
-					}
-					if (!runtimeBlock.requiresApproval) {
-						const executionStarted = await this.dispatchRuntime({
-							type: "BLOCK_EXECUTION_STARTED",
-							turnId: runtimeTurn.turnId,
-							dlineTid: block.dline_tid,
-						})
-						if (!executionStarted.accepted) {
-							throw new Error(
-								`Block execution checkpoint rejected: ${executionStarted.error?.code ?? "invalid_runtime_event"}`,
-							)
-						}
-					}
-					const committedBlock = this.taskRuntime
-						.getState()
-						.turn?.blocks.find((candidate) => candidate.dlineTid === block.dline_tid)
-					if (committedBlock?.phase === "rejected" || committedBlock?.phase === "awaiting_approval") {
-						break
-					}
-					const completed = await this.dispatchRuntime({
-						type: "BLOCK_EXECUTION_COMPLETED",
-						turnId: runtimeTurn.turnId,
-						dlineTid: block.dline_tid,
-					})
-					if (!completed.accepted) {
-						throw new Error(`Block completion rejected: ${completed.error?.code ?? "invalid_runtime_event"}`)
-					}
-					const completedState = this.taskRuntime.getState()
-					const completedTurn = completedState.turn
-					if (
-						completedState.phase !== TaskPhase.COMPLETED &&
-						completedTurn &&
-						completedTurn.blocks.every((candidate) =>
-							["completed", "rejected", "skipped", "cancelled"].includes(candidate.phase),
-						)
-					) {
-						const turnCompleted = await this.dispatchRuntime({ type: "TURN_COMPLETED", turnId: completedTurn.turnId })
-						if (!turnCompleted.accepted) {
-							throw new Error(`Turn completion rejected: ${turnCompleted.error?.code ?? "invalid_runtime_event"}`)
-						}
-					}
-					// Complete tools are marked done so subsequent native chunks cannot
-					// rewind the presentation index and execute them again.
-					if (block.ts !== undefined) {
-						this.taskState.partialToolLifecycleByTs.set(block.ts, "complete-done")
-					}
-
-					Session.get().updateToolCall(block.function_id, block.name)
 					break
 			}
 
@@ -3490,9 +3462,6 @@ export class Task {
 				this.taskController.hasAnyRejection() ||
 				(!this.isParallelToolCallingEnabled() && this.taskState.didAlreadyUseTool)
 			) {
-				if (this.taskState.currentStreamingContentIndex === this.taskState.assistantMessageContent.length - 1) {
-					this.taskState.userMessageContentReady = true
-				}
 				this.taskState.currentStreamingContentIndex++
 				didAdvance = true
 				if (this.taskState.currentStreamingContentIndex < this.taskState.assistantMessageContent.length) {
@@ -3513,7 +3482,203 @@ export class Task {
 		}
 	}
 
-	async recursivelyMakeClineRequests(userContent: ClineContent[], includeFileDetails = false): Promise<boolean> {
+	/** Execute one fully persisted assistant tool turn exactly once. */
+	private async executeFinalizedAssistantTurn(): Promise<void> {
+		const toolUses = this.taskState.assistantMessageContent.filter(
+			(block): block is ToolUse => block.type === "tool_use" && !block.partial,
+		)
+		if (toolUses.length === 0) {
+			this.taskState.userMessageContentReady = true
+			return
+		}
+
+		const firstDlineTid = toolUses[0]?.dline_tid
+		if (!firstDlineTid || toolUses.some((block) => !block.dline_tid || !block.function_id)) {
+			throw new Error("Finalized assistant turn contains a tool without canonical identity")
+		}
+
+		const turnId = `turn:${firstDlineTid}`
+		let runtimeTurn = this.taskRuntime.getState().turn
+		if (!runtimeTurn || runtimeTurn.turnId !== turnId) {
+			const assistantApiIndex = this.messageStateHandler.apiConversationHistory.length - 1
+			this.taskController.buildTurn(
+				this.taskState.assistantMessageContent.map((block) => ({
+					...block,
+					conversationHistoryIndex: assistantApiIndex,
+				})),
+				(_toolName, dlineTid) => {
+					const candidate = toolUses.find((block) => block.dline_tid === dlineTid)
+					return candidate ? this.toolExecutor.isBlockApproved(candidate) : false
+				},
+			)
+			const blocks = this.taskController.getBlocks()
+			const created = await this.dispatchRuntime({
+				type: "TURN_CREATED",
+				turnId,
+				assistantApiIndex,
+				mode: this.isParallelToolCallingEnabled() ? "parallel" : "serial",
+				blocks: blocks.map(({ phase: _phase, ...block }) => block),
+			})
+			if (!created.accepted) {
+				const state = this.taskRuntime.getState()
+				if (this.taskState.abort || state.phase === TaskPhase.CANCELLING) return
+				throw new Error(`Turn creation rejected: ${created.error?.code ?? "invalid_runtime_event"}`)
+			}
+			runtimeTurn = created.next.turn
+		}
+
+		if (
+			!runtimeTurn ||
+			toolUses.some((tool) => {
+				const runtimeBlock = runtimeTurn?.blocks.find((block) => block.dlineTid === tool.dline_tid)
+				return !runtimeBlock || runtimeBlock.functionId !== tool.function_id
+			})
+		) {
+			throw new Error("Finalized assistant turn does not match the canonical runtime turn")
+		}
+
+		for (const tool of toolUses) {
+			if (this.taskState.abort || this.controller.task?.taskId !== this.taskId) return
+			const dlineTid = tool.dline_tid
+			if (!dlineTid) continue
+
+			let runtimeBlock = this.taskRuntime.getState().turn?.blocks.find((block) => block.dlineTid === dlineTid)
+			if (!runtimeBlock) {
+				throw new Error(`Canonical runtime block is missing for tool=${tool.name}`)
+			}
+			if (this.isTerminalRuntimeBlock(runtimeBlock.phase)) {
+				this.markFinalizedToolPresented(tool)
+				continue
+			}
+
+			if (runtimeBlock.phase === BlockPhase.STREAMING) {
+				const ready = await this.dispatchRuntime({ type: "BLOCK_READY", turnId, dlineTid })
+				if (!ready.accepted) {
+					const state = this.taskRuntime.getState()
+					if (this.taskState.abort || state.phase === TaskPhase.CANCELLING) return
+					throw new Error(`Block readiness rejected: ${ready.error?.code ?? "invalid_runtime_event"}`)
+				}
+				runtimeBlock = ready.next.turn?.blocks.find((block) => block.dlineTid === dlineTid)
+			}
+
+			if (!runtimeBlock) {
+				throw new Error(`Canonical runtime block disappeared for tool=${tool.name}`)
+			}
+			if (runtimeBlock.requiresApproval && runtimeBlock.phase === BlockPhase.STREAMING) {
+				throw new Error(`Tool handler cannot start its approval interaction: tool=${tool.name}`)
+			}
+			if (this.isTerminalRuntimeBlock(runtimeBlock.phase)) {
+				this.markFinalizedToolPresented(tool)
+				continue
+			}
+
+			if (this.initialCheckpointCommitPromise && !READ_ONLY_TOOLS.includes(tool.name as any)) {
+				await this.initialCheckpointCommitPromise
+				this.initialCheckpointCommitPromise = undefined
+			}
+
+			const execution = await this.dispatchRuntime({ type: "BLOCK_EXECUTION_STARTED", turnId, dlineTid })
+			if (!execution.accepted) {
+				const state = this.taskRuntime.getState()
+				const currentBlock = state.turn?.blocks.find((block) => block.dlineTid === dlineTid)
+				if (
+					this.taskState.abort ||
+					state.phase === TaskPhase.CANCELLING ||
+					(currentBlock && this.isTerminalRuntimeBlock(currentBlock.phase))
+				) {
+					return
+				}
+				if (execution.effectError) {
+					throw new Error(
+						`Block execution effect failed (${execution.effectError.effectType}, ${execution.effectError.effectId}): ${execution.effectError.message}`,
+					)
+				}
+				throw new Error(`Block execution rejected: ${execution.error?.code ?? "invalid_runtime_event"}`)
+			}
+
+			if (this.controller.task?.taskId !== this.taskId) return
+			runtimeBlock = this.taskRuntime.getState().turn?.blocks.find((block) => block.dlineTid === dlineTid)
+			if (!runtimeBlock || this.isTerminalRuntimeBlock(runtimeBlock.phase)) {
+				this.markFinalizedToolPresented(tool)
+				continue
+			}
+			if (this.taskRuntime.getState().phase === TaskPhase.COMPLETED) {
+				this.markFinalizedToolPresented(tool)
+				continue
+			}
+
+			const completed = await this.dispatchRuntime({ type: "BLOCK_EXECUTION_COMPLETED", turnId, dlineTid })
+			if (!completed.accepted) {
+				const state = this.taskRuntime.getState()
+				if (this.taskState.abort || state.phase === TaskPhase.CANCELLING) return
+				throw new Error(`Block completion rejected: ${completed.error?.code ?? "invalid_runtime_event"}`)
+			}
+			this.markFinalizedToolPresented(tool)
+		}
+
+		const finalState = this.taskRuntime.getState()
+		const finalTurn = finalState.turn
+		if (
+			finalState.phase !== TaskPhase.COMPLETED &&
+			finalTurn?.turnId === turnId &&
+			finalTurn.blocks.every((block) => this.isTerminalRuntimeBlock(block.phase))
+		) {
+			const completed = await this.dispatchRuntime({ type: "TURN_COMPLETED", turnId })
+			if (!completed.accepted) {
+				const state = this.taskRuntime.getState()
+				if (this.taskState.abort || state.phase === TaskPhase.CANCELLING) return
+				throw new Error(`Turn completion rejected: ${completed.error?.code ?? "invalid_runtime_event"}`)
+			}
+		}
+		this.taskState.userMessageContentReady = true
+	}
+
+	private isTerminalRuntimeBlock(phase: BlockPhase): boolean {
+		return (
+			phase === BlockPhase.COMPLETED ||
+			phase === BlockPhase.REJECTED ||
+			phase === BlockPhase.SKIPPED ||
+			phase === BlockPhase.CANCELLED
+		)
+	}
+
+	private markFinalizedToolPresented(tool: ToolUse): void {
+		if (tool.ts !== undefined) {
+			this.taskState.partialToolLifecycleByTs.set(tool.ts, "complete-done")
+		}
+		Session.get().updateToolCall(tool.function_id, tool.name)
+	}
+
+	/** Admit one provider request through the canonical runtime gate. */
+	private async admitApiRequest(apiIndex: number): Promise<void> {
+		const apiStarted = await this.dispatchRuntime({ type: "API_REQUEST_STARTED", apiIndex })
+		if (!apiStarted.accepted) {
+			throw new Error(`API request start rejected: ${apiStarted.error?.code ?? "invalid_runtime_event"}`)
+		}
+	}
+
+	/** Persist the request user message and finish any write-ahead transaction before API admission. */
+	private async persistApiRequestUserMessage(
+		userContent: ClineContent[],
+		apiIndex: number,
+		beforeApiRequestStarted?: () => Promise<void>,
+	): Promise<void> {
+		await this.messageStateHandler.addToApiConversationHistory({
+			role: "user",
+			content: userContent,
+			ts: Date.now(),
+		})
+		if (!beforeApiRequestStarted) return
+		await this.messageStateHandler.flushApiConversationHistory()
+		await beforeApiRequestStarted()
+		await this.admitApiRequest(apiIndex)
+	}
+
+	async recursivelyMakeClineRequests(
+		userContent: ClineContent[],
+		includeFileDetails = false,
+		transaction: ApiRequestTransactionOptions = {},
+	): Promise<boolean> {
 		// Check abort flag at the very start to prevent any execution after cancellation
 		if (this.taskState.abort) {
 			throw new Error("Task instance aborted")
@@ -3534,12 +3699,9 @@ export class Task {
 		// Increment API request counter for focus chain list management
 		this.taskState.apiRequestCount++
 		this.taskState.apiRequestsSinceLastTodoUpdate++
-		const apiStarted = await this.dispatchRuntime({
-			type: "API_REQUEST_STARTED",
-			apiIndex: this.messageStateHandler.apiConversationHistory.length,
-		})
-		if (!apiStarted.accepted) {
-			throw new Error(`API request start rejected: ${apiStarted.error?.code ?? "invalid_runtime_event"}`)
+		const apiIndex = this.messageStateHandler.apiConversationHistory.length
+		if (!transaction.beforeApiRequestStarted) {
+			await this.admitApiRequest(apiIndex)
 		}
 
 		// Used to know what models were used in the task if user wants to export metadata for error reporting purposes
@@ -3657,21 +3819,16 @@ export class Task {
 			)
 			if (lastCheckpointMessageIndex !== -1) {
 				const commitPromise = this.checkpointManager?.commit()
-				this.initialCheckpointCommitPromise = commitPromise
-				commitPromise
-					?.then(async (commitHash) => {
-						if (commitHash) {
-							await this.messageStateHandler.updateClineMessage(lastCheckpointMessageIndex, {
-								lastCheckpointHash: commitHash,
-							})
-							// updateTaskHistory will be called later after API response,
-							// so no need to call it here unless this is the only modification to this message.
-							// For now, assuming it's handled later.
-						}
-					})
-					.catch((error) => {
-						Logger.error(`[TaskCheckpointManager] Failed to create checkpoint commit for task ${this.taskId}:`, error)
-					})
+				const persistCommitPromise = commitPromise?.then(async (commitHash) => {
+					if (commitHash) {
+						await this.persistCheckpointHashToMessage(lastCheckpointMessageIndex, commitHash)
+					}
+					return commitHash
+				})
+				this.initialCheckpointCommitPromise = persistCommitPromise
+				persistCommitPromise.catch((error) => {
+					Logger.error(`[TaskCheckpointManager] Failed to create checkpoint commit for task ${this.taskId}:`, error)
+				})
 			}
 		} else if (
 			isFirstRequest &&
@@ -3690,9 +3847,10 @@ export class Task {
 		let shouldCompact = false
 		const useAutoCondense = this.stateManager.getGlobalSettingsKey("useAutoCondense")
 		const forceModeCompact = this.modeSwitchCompaction.shouldForce()
+		const canCompactBeforeAdmission = transaction.beforeApiRequestStarted === undefined
 
 		const didCompleteSummarization = this.taskState.currentlySummarizing
-		if (forceModeCompact || (useAutoCondense && isNextGenModelFamily(model.id))) {
+		if (canCompactBeforeAdmission && (forceModeCompact || (useAutoCondense && isNextGenModelFamily(model.id)))) {
 			// When we initially trigger context cleanup, we increase the context window size, so we need state `currentlySummarizing`
 			// to track if we've already started the context summarization flow. After summarizing, we increment
 			// conversationHistoryDeletedRange to mask out the summarization-trigger user & assistant response messages
@@ -3776,7 +3934,7 @@ export class Task {
 		) {
 			const deferredUserContent = await this.restoreDeferredTurn(userContent)
 			if (deferredUserContent !== userContent) {
-				return this.recursivelyMakeClineRequests(deferredUserContent, includeFileDetails)
+				return this.recursivelyMakeClineRequests(deferredUserContent, includeFileDetails, transaction)
 			}
 		}
 
@@ -3844,11 +4002,7 @@ export class Task {
 			}),
 		)
 
-		await this.messageStateHandler.addToApiConversationHistory({
-			role: "user",
-			content: userContent,
-			ts: Date.now(),
-		})
+		await this.persistApiRequestUserMessage(userContent, apiIndex, transaction.beforeApiRequestStarted)
 
 		telemetryService.captureConversationTurnEvent(this.ulid, providerId, model.id, "user", modelInfo.mode)
 
@@ -4323,7 +4477,11 @@ export class Task {
 								}
 							},
 						})
-					} else if (retryDecision.shouldPrompt) {
+						// The scheduled retry is now the sole continuation. End this failed
+						// request chain without cancelling or reopening the task.
+						return true
+					}
+					if (retryDecision.shouldPrompt) {
 						// Show error_retry with failed flag to indicate all retries exhausted
 						await this.say(
 							"error_retry",
@@ -4336,13 +4494,13 @@ export class Task {
 							}),
 						)
 						const retryId = `retry:${this.taskId}:${this.getRuntimeState().revision}`
-						const outcome = await this.recoverApiFailure({
+						await this.recoverApiFailure({
 							turnId: retryId,
 							interactionId: retryId,
 							apiIndex: this.getRuntimeState().anchor.apiIndex,
 							presentation: errorMessage,
 						})
-						return outcome.actionId === "start_new_task"
+						return true
 					}
 
 					// needs to happen after the say, otherwise the say would fail
@@ -4481,6 +4639,7 @@ export class Task {
 			const partialToolBlocks = toolUseHandler.getPartialToolUsesAsContent()?.map((block) => ({ ...block, partial: false }))
 			await this.processNativeToolCalls(assistantTextOnly, partialToolBlocks)
 			await this.flushAssistantPresentationOrThrow() // finalization is immediate so no coalesced content remains pending
+			await this.executeFinalizedAssistantTurn()
 
 			// now add to apiconversationhistory
 			// need to save assistant responses to file before proceeding to tool use since user can exit at any moment and we wouldn't be able to save the assistant's response
@@ -4493,8 +4652,6 @@ export class Task {
 				// if (this.currentStreamingContentIndex >= completeBlocks.length) {
 				// 	this.userMessageContentReady = true
 				// }
-
-				await pWaitFor(() => this.taskState.userMessageContentReady)
 
 				// Save checkpoint after all tools in this response have finished executing
 				await this.checkpointManager?.saveCheckpoint()
@@ -4886,17 +5043,9 @@ export class Task {
 		return taskMessage?.text ?? ""
 	}
 
-	/**
-	 * Return the current buildTurn block phase for Active Tasks environment details.
-	 * @returns The first non-completed block phase, completed when all blocks are complete, or idle when no turn exists.
-	 */
+	/** Return the canonical runtime phase for Active Tasks environment details. */
 	getActiveTaskPhase(): string {
-		const blocks = this.taskController.getBlocks()
-		if (blocks.length === 0) {
-			return "idle"
-		}
-		const activeBlock = blocks.find((block) => block.phase !== "completed")
-		return activeBlock?.phase ?? "completed"
+		return this.taskRuntime.getState().phase
 	}
 
 	/**

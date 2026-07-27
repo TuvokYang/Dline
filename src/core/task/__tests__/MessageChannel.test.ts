@@ -17,6 +17,8 @@ function createMessageChannel() {
 	} as TaskState
 
 	let lastTs = 0
+	const flushUiMessages = vi.fn(async () => {})
+	const flushMessageUpdate = vi.fn(async () => {})
 	const channel = new MessageChannel({
 		pushMessage: () => {},
 		syncState: async () => {},
@@ -30,6 +32,8 @@ function createMessageChannel() {
 			updateClineMessage: async (index: number, updates: Partial<ClineMessage>) => {
 				Object.assign(clineMessages[index], updates)
 			},
+			flushUiMessages,
+			flushMessageUpdate,
 			upsertClineMessageInMemory: async (message: ClineMessage) => {
 				const index = clineMessages.findIndex((candidate) => candidate.ts === message.ts)
 				if (index >= 0) {
@@ -54,7 +58,7 @@ function createMessageChannel() {
 		genTs: () => ++lastTs,
 	})
 
-	return { channel, clineMessages, taskState }
+	return { channel, clineMessages, taskState, flushUiMessages, flushMessageUpdate }
 }
 
 async function flushMicrotasks(iterations = 5) {
@@ -126,6 +130,31 @@ describe("MessageChannel.presentAsk", () => {
 
 		assert.equal(clineMessages[0].commandStatus, "pending")
 		assert.equal(clineMessages[1].commandStatus, undefined)
+	})
+})
+
+describe("MessageChannel.presentSay", () => {
+	it("upserts one durable user feedback row by interaction identity", async () => {
+		const { channel, clineMessages, flushMessageUpdate, flushUiMessages } = createMessageChannel()
+
+		const firstTs = await channel.presentSay("user_feedback", "continue after cancel", ["image"], ["file"], "resume-1")
+		const retryTs = await channel.presentSay("user_feedback", "continue after cancel", ["image"], ["file"], "resume-1")
+
+		assert.equal(retryTs, firstTs)
+		assert.equal(clineMessages.length, 1)
+		assert.deepEqual(clineMessages[0], {
+			ts: firstTs,
+			type: "say",
+			say: "user_feedback",
+			text: "continue after cancel",
+			images: ["image"],
+			files: ["file"],
+			partial: false,
+			interactionId: "resume-1",
+			modelInfo: { providerId: "test", modelId: "test-model", mode: "act" },
+		})
+		assert.equal(flushUiMessages.mock.calls.length, 1)
+		assert.deepEqual(flushMessageUpdate.mock.calls, [[0]])
 	})
 })
 
