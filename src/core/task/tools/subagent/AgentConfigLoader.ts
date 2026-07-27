@@ -209,6 +209,7 @@ export class AgentConfigLoader {
 	private readonly directoryPath: string
 	private readonly initialLoadPromise: Promise<void>
 	private watcher?: FSWatcher
+	private disposed = false
 	private cachedConfigs = new Map<string, AgentBaseConfig>()
 	private listeners = new Set<AgentConfigChangeListener>()
 
@@ -217,9 +218,10 @@ export class AgentConfigLoader {
 		this.initialLoadPromise = this.load()
 			.then(() => undefined)
 			.catch((e) => Logger.error("[AgentConfigLoader] Failed to load initial agent configs", e))
-			.finally(() =>
-				this.watch().catch((e) => Logger.error("[AgentConfigLoader] Failed to start watching agent configs", e)),
-			)
+			.finally(() => {
+				if (this.disposed) return
+				return this.watch().catch((e) => Logger.error("[AgentConfigLoader] Failed to start watching agent configs", e))
+			})
 	}
 
 	public static getInstance(dirPath?: string): AgentConfigLoader {
@@ -297,6 +299,7 @@ export class AgentConfigLoader {
 	}
 
 	public async watch(listener?: AgentConfigChangeListener): Promise<void> {
+		if (this.disposed) return
 		if (listener) this.listeners.add(listener)
 		if (this.watcher) return
 		this.watcher = chokidar.watch(this.directoryPath, {
@@ -326,9 +329,14 @@ export class AgentConfigLoader {
 	}
 
 	public async dispose(): Promise<void> {
-		if (!this.watcher) return
-		await this.watcher.close()
+		this.disposed = true
+		await this.initialLoadPromise
+		const watcher = this.watcher
 		this.watcher = undefined
+		this.listeners.clear()
+		if (watcher) {
+			await watcher.close()
+		}
 	}
 
 	private async reloadAndNotify(): Promise<void> {

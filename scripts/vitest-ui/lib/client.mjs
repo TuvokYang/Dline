@@ -138,10 +138,10 @@ export async function connectVitestUi(options = {}) {
 			return rpc.call("getUnhandledErrors")
 		},
 		async rerun(filepaths, resetTestNamePattern = true) {
-			rpc.notify("rerun", filepaths, resetTestNamePattern)
+			return rpc.call("rerun", filepaths, resetTestNamePattern)
 		},
 		async rerunTask(taskId) {
-			rpc.notify("rerunTask", taskId)
+			return rpc.call("rerunTask", taskId)
 		},
 		close() {
 			rpc.close()

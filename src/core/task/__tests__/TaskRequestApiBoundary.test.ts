@@ -53,7 +53,7 @@ describe("Task request API boundary", () => {
 		const source = await readFile(taskSourcePath, "utf8")
 		const method = extractMethod(source, "async recursivelyMakeClineRequests(", "async loadContext(")
 		const retryBranchStart = method.indexOf("if (retryDecision.shouldRetry) {")
-		const retryBranchEnd = method.indexOf("} else if (retryDecision.shouldPrompt) {", retryBranchStart)
+		const retryBranchEnd = method.indexOf("if (retryDecision.shouldPrompt) {", retryBranchStart)
 		const retryBranch = method.slice(retryBranchStart, retryBranchEnd)
 
 		expect(retryBranchStart).toBeGreaterThanOrEqual(0)
@@ -67,7 +67,7 @@ describe("Task request API boundary", () => {
 	it("does not start a second request chain after a manual retry continuation is accepted", async () => {
 		const source = await readFile(taskSourcePath, "utf8")
 		const method = extractMethod(source, "async recursivelyMakeClineRequests(", "async loadContext(")
-		const promptBranchStart = method.indexOf("} else if (retryDecision.shouldPrompt) {")
+		const promptBranchStart = method.indexOf("if (retryDecision.shouldPrompt) {")
 		const promptBranchEnd = method.indexOf("// needs to happen after the say", promptBranchStart)
 		const promptBranch = method.slice(promptBranchStart, promptBranchEnd)
 

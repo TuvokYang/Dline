@@ -13,16 +13,21 @@ const LEGACY_WEBVIEW_MARKERS = [
 	"findLatestStateSnapshot",
 ] as const
 
+interface SourceText {
+	filepath: string
+	content: string
+}
+
 /** Read Webview production TypeScript sources in stable path order. */
-async function readSources(directory: string): Promise<string> {
+async function readSources(directory: string): Promise<SourceText[]> {
 	const entries = await readdir(directory, { withFileTypes: true })
-	const contents: string[] = []
+	const sources: SourceText[] = []
 
 	for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
 		const entryPath = path.join(directory, entry.name)
 		if (entry.isDirectory()) {
 			if (entry.name !== "__tests__") {
-				contents.push(await readSources(entryPath))
+				sources.push(...(await readSources(entryPath)))
 			}
 			continue
 		}
@@ -34,21 +39,28 @@ async function readSources(directory: string): Promise<string> {
 			!entry.name.endsWith(".spec.ts") &&
 			!entry.name.endsWith(".spec.tsx")
 		) {
-			contents.push(await readFile(entryPath, "utf8"))
+			sources.push({ filepath: entryPath, content: await readFile(entryPath, "utf8") })
 		}
 	}
 
-	return contents.join("\n")
+	return sources
 }
 
 describe("final Webview interaction architecture gate", () => {
 	it("removes all legacy button and message inference markers", async () => {
-		const sources = await readSources(WEBVIEW_SOURCE_ROOT)
+		const sourceFiles = await readSources(WEBVIEW_SOURCE_ROOT)
+		const sources = sourceFiles.map(({ content }) => content).join("\n")
 
 		for (const marker of LEGACY_WEBVIEW_MARKERS) {
 			expect(sources).not.toContain(marker)
 		}
-		expect(sources).toContain("interface SayView")
-		expect(sources).not.toMatch(/interface SayView[\s\S]*?actions\s*:/)
+
+		const sayViewDeclarations = sourceFiles.flatMap(({ content }) =>
+			Array.from(content.matchAll(/interface SayView\w*\s*\{[^}]*\}/g), (match) => match[0]),
+		)
+		expect(sayViewDeclarations.length).toBeGreaterThan(0)
+		for (const declaration of sayViewDeclarations) {
+			expect(declaration).not.toMatch(/\bactions\s*:/)
+		}
 	})
 })

@@ -303,7 +303,7 @@ export class StateManager {
 		const taskHistory = instance._taskHistory
 		instance._taskHistory = null
 		instance.dispose()
-		await taskHistory?.dispose()
+		await Promise.all([taskHistory?.dispose(), AgentConfigLoader.resetInstanceForTests()])
 	}
 
 	/**

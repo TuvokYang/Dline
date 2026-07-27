@@ -2,7 +2,6 @@ import type { ToolUse } from "@core/assistant-message"
 import { getPrompt } from "@core/prompts/i18n"
 import { formatResponse } from "@core/prompts/responses"
 
-import { OrchestratorController } from "@/core/orchestrator/OrchestratorController"
 import { ClineDefaultTool } from "@/shared/tools"
 import type { ToolResponse } from "../../index"
 import type { IToolHandler } from "../ToolExecutorCoordinator"
@@ -136,6 +135,7 @@ export class SpawnTaskHandler implements IToolHandler {
 			}
 
 			// Register with orchestrator
+			const { OrchestratorController } = await import("@/core/orchestrator/OrchestratorController")
 			OrchestratorController.getInstance().spawnTask(childTaskId, childController, parentTaskId)
 
 			// Return success with task ID
