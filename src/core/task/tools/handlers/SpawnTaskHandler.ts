@@ -71,6 +71,13 @@ export class SpawnTaskHandler implements IToolHandler {
 
 		let panelProvider: any = null
 		try {
+			// VscodeWebviewPanelProvider is expensive to load and cannot be constructed
+			// without the extension context, so reject incomplete task configs first.
+			const controllerContext = config.controllerContext
+			if (!controllerContext) {
+				return formatResponse.toolError(getPrompt("toolHandlers", "spawnTaskFailed"))
+			}
+
 			// Dynamically import to avoid circular deps at module load time
 			const { VscodeWebviewPanelProvider } = await import("@/hosts/vscode/VscodeWebviewPanelProvider")
 
@@ -86,12 +93,6 @@ export class SpawnTaskHandler implements IToolHandler {
 			const currentProfile = mode === "plan" ? apiConfiguration.planModeProfile : apiConfiguration.actModeProfile
 			if (!currentProfile) {
 				return formatResponse.toolError(`No profile configured for ${mode} mode`)
-			}
-
-			// Create the panel - VscodeWebviewPanelProvider needs ClineExtensionContext.
-			const controllerContext = config.controllerContext
-			if (!controllerContext) {
-				return formatResponse.toolError(getPrompt("toolHandlers", "spawnTaskFailed"))
 			}
 
 			panelProvider = new VscodeWebviewPanelProvider(controllerContext, { deferController: false })

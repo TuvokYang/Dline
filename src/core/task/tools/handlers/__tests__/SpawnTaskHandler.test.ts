@@ -142,7 +142,7 @@ describe("SpawnTaskHandler", () => {
 					say: async () => {},
 				},
 				services: { stateManager: {} },
-				controller: undefined, // Will cause error due to missing context
+				controllerContext: undefined,
 			} as any
 
 			const result = await handler.execute(config, {
@@ -151,7 +151,7 @@ describe("SpawnTaskHandler", () => {
 				params: { task: "Test task" },
 			} as any)
 
-			result.should.match(/Failed to spawn task/)
+			result.should.match(/spawn task failed/i)
 		})
 	})
 })
