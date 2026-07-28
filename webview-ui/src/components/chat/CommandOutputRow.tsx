@@ -246,7 +246,7 @@ export const CommandOutputRow = memo(
 							<span className="text-sm text-left truncate flex-1 opacity-70">{command}</span>
 						</button>
 						{showCancelButton && (
-							<Button onClick={onCancelCommand} size="sm" variant="secondary">
+							<Button className="border" onClick={onCancelCommand} size="sm" variant="danger">
 								Cancel
 							</Button>
 						)}
@@ -277,12 +277,13 @@ export const CommandOutputRow = memo(
 							<div className="flex items-center gap-2 shrink-0">
 								{showCancelButton && (
 									<Button
+										className="border"
 										onClick={(e) => {
 											e.stopPropagation()
 											onCancelCommand?.()
 										}}
 										size="sm"
-										variant="secondary">
+										variant="danger">
 										Cancel
 									</Button>
 								)}

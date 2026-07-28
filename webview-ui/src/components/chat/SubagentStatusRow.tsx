@@ -313,13 +313,13 @@ export default function SubagentStatusRow({ message }: SubagentStatusRowProps) {
 				{statusSummary && <span className="text-[11px] opacity-70">{statusSummary}</span>}
 				{showCancelButton && (
 					<Button
-						className="ml-auto"
+						className="ml-auto border"
 						onClick={(e) => {
 							e.stopPropagation()
 							if (taskId) void cancelTaskActivities(taskId, cancellableIds)
 						}}
 						size="sm"
-						variant="secondary">
+						variant="danger">
 						Cancel all
 					</Button>
 				)}
@@ -385,9 +385,10 @@ export default function SubagentStatusRow({ message }: SubagentStatusRowProps) {
 									</div>
 									{taskId && entry.jobId && liveCancellableIds.has(entry.jobId) && (
 										<Button
+											className="border"
 											onClick={() => void cancelTaskActivities(taskId, [entry.jobId as string])}
 											size="sm"
-											variant="secondary">
+											variant="danger">
 											Cancel
 										</Button>
 									)}
