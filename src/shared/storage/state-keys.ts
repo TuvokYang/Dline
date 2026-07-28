@@ -1,6 +1,7 @@
 import { AutoApprovalSettings, DEFAULT_AUTO_APPROVAL_SETTINGS } from "@shared/AutoApprovalSettings"
 import { ApiProvider, ModelInfo, type OcaModelInfo } from "@shared/api"
 import { BrowserSettings, DEFAULT_BROWSER_SETTINGS } from "@shared/BrowserSettings"
+import { type ChatInputSendShortcut, DEFAULT_CHAT_INPUT_SEND_SHORTCUT } from "@shared/ChatInputSendShortcut"
 import { ClineRulesToggles } from "@shared/cline-rules"
 import { DEFAULT_FOCUS_CHAIN_SETTINGS, FocusChainSettings } from "@shared/FocusChainSettings"
 import { HistoryItem } from "@shared/HistoryItem"
@@ -123,6 +124,7 @@ const USER_SETTINGS_FIELDS = {
 	clineWebToolsEnabled: { default: true as boolean },
 	worktreesEnabled: { default: false as boolean },
 	preferredLanguage: { default: "English" as string },
+	chatInputSendShortcut: { default: DEFAULT_CHAT_INPUT_SEND_SHORTCUT as ChatInputSendShortcut },
 	mode: { default: "act" as Mode },
 	focusChainSettings: { default: DEFAULT_FOCUS_CHAIN_SETTINGS as FocusChainSettings },
 	customPrompt: { default: undefined as "compact" | undefined },

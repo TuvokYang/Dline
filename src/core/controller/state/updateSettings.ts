@@ -7,6 +7,7 @@ import { ClineEnv } from "@/config"
 import { fetchRemoteConfig } from "@/core/storage/remote-config/fetch"
 import { clearRemoteConfig } from "@/core/storage/remote-config/utils"
 import { HostProvider } from "@/hosts/host-provider"
+import { isChatInputSendShortcut } from "@/shared/ChatInputSendShortcut"
 import { McpDisplayMode } from "@/shared/McpDisplayMode"
 import { ShowMessageType } from "@/shared/proto/dline/host/window"
 import { Logger } from "@/shared/services/Logger"
@@ -118,6 +119,13 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 
 		if (request.preferredLanguage !== undefined) {
 			controller.stateManager.setGlobalState("preferredLanguage", request.preferredLanguage)
+		}
+
+		if (request.chatInputSendShortcut !== undefined) {
+			if (!isChatInputSendShortcut(request.chatInputSendShortcut)) {
+				throw new Error(`Invalid chat input send shortcut: ${request.chatInputSendShortcut}`)
+			}
+			controller.stateManager.setGlobalState("chatInputSendShortcut", request.chatInputSendShortcut)
 		}
 
 		// Update terminal timeout setting

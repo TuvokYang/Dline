@@ -37,6 +37,7 @@
 
 import { expect } from "chai"
 import { describe, it } from "vitest"
+import { DEFAULT_CHAT_INPUT_SEND_SHORTCUT } from "../../ChatInputSendShortcut"
 
 import {
 	applyTransform,
@@ -285,6 +286,11 @@ describe("State Keys Type Safety", () => {
 		it("should enable subagent features by default", () => {
 			expect(SETTINGS_DEFAULTS.subagentsEnabled).to.equal(true)
 			expect(getDefaultValue("subagentsEnabled")).to.equal(true)
+		})
+
+		it("should send chat input with Enter by default", () => {
+			expect(SETTINGS_DEFAULTS.chatInputSendShortcut).to.equal(DEFAULT_CHAT_INPUT_SEND_SHORTCUT)
+			expect(getDefaultValue("chatInputSendShortcut")).to.equal(DEFAULT_CHAT_INPUT_SEND_SHORTCUT)
 		})
 
 		it("should return correct default values for known keys", () => {

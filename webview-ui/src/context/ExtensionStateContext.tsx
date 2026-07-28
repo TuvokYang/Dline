@@ -1,5 +1,6 @@
 import { DEFAULT_AUTO_APPROVAL_SETTINGS } from "@shared/AutoApprovalSettings"
 import { DEFAULT_BROWSER_SETTINGS } from "@shared/BrowserSettings"
+import { DEFAULT_CHAT_INPUT_SEND_SHORTCUT } from "@shared/ChatInputSendShortcut"
 import { type ActiveInteractionView, type ClineMessage, DEFAULT_PLATFORM, type ExtensionState } from "@shared/ExtensionMessage"
 import { DEFAULT_FOCUS_CHAIN_SETTINGS } from "@shared/FocusChainSettings"
 import { DEFAULT_MCP_DISPLAY_MODE } from "@shared/McpDisplayMode"
@@ -290,6 +291,7 @@ export const ExtensionStateContextProvider: React.FC<{
 		browserSettings: DEFAULT_BROWSER_SETTINGS,
 		focusChainSettings: DEFAULT_FOCUS_CHAIN_SETTINGS,
 		preferredLanguage: "English",
+		chatInputSendShortcut: DEFAULT_CHAT_INPUT_SEND_SHORTCUT,
 		mode: "act",
 		platform: DEFAULT_PLATFORM,
 		environment: Environment.production,

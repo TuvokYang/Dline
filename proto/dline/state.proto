@@ -174,6 +174,7 @@ message Settings {
   optional string plan_mode_profile = 190;
   optional string act_mode_profile = 191;
   optional string global_subagents_toggles = 192;
+  optional string chat_input_send_shortcut = 193;
 }
 
 // Account usage quota for rate-limited providers (e.g., Codex, Copilot)
@@ -366,6 +367,7 @@ message UpdateSettingsRequest {
   optional string plan_mode_profile = 44;
   optional string act_mode_profile = 45;
   optional bool show_active_tasks_in_env_details = 46;
+  optional string chat_input_send_shortcut = 47;
 }
 
 message UpdateTerminalConnectionTimeoutRequest {

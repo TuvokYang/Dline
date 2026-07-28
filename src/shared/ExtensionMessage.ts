@@ -6,6 +6,7 @@ import type { Environment } from "../config"
 import { AutoApprovalSettings } from "./AutoApprovalSettings"
 import { ApiConfiguration } from "./api"
 import { BrowserSettings } from "./BrowserSettings"
+import type { ChatInputSendShortcut } from "./ChatInputSendShortcut"
 import { ClineFeatureSetting } from "./ClineFeatureSetting"
 import { ClineRulesToggles } from "./cline-rules"
 import { FocusChainSettings } from "./FocusChainSettings"
@@ -55,6 +56,7 @@ export interface ExtensionState {
 	browserSettings: BrowserSettings
 	remoteBrowserHost?: string
 	preferredLanguage?: string
+	chatInputSendShortcut: ChatInputSendShortcut
 	mode: Mode
 	checkpointManagerErrorMessage?: string
 	/** Task description displayed in fixed header; sent once, never repeated */

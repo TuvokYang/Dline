@@ -1043,6 +1043,7 @@ export class Controller {
 		const browserSettings = this.stateManager.getGlobalSettingsKey("browserSettings")
 		const focusChainSettings = this.stateManager.getGlobalSettingsKey("focusChainSettings")
 		const preferredLanguage = this.stateManager.getGlobalSettingsKey("preferredLanguage")
+		const chatInputSendShortcut = this.stateManager.getGlobalSettingsKey("chatInputSendShortcut")
 		const mode = this.task?.taskSm?.mode ?? this.stateManager.getGlobalSettingsKey("mode")
 		const strictPlanModeEnabled = this.stateManager.getGlobalSettingsKey("strictPlanModeEnabled")
 		const yoloModeToggled = this.stateManager.getGlobalSettingsKey("yoloModeToggled")
@@ -1151,6 +1152,7 @@ export class Controller {
 			browserSettings,
 			focusChainSettings,
 			preferredLanguage,
+			chatInputSendShortcut,
 			mode,
 			strictPlanModeEnabled,
 			yoloModeToggled,

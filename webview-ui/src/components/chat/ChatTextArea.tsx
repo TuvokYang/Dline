@@ -1,3 +1,4 @@
+import { DEFAULT_CHAT_INPUT_SEND_SHORTCUT } from "@shared/ChatInputSendShortcut"
 import { mentionRegex, mentionRegexGlobal } from "@shared/context-mentions"
 import type { ClineAsk } from "@shared/ExtensionMessage"
 import { EmptyRequest, StringRequest } from "@shared/proto/dline/common"
@@ -23,6 +24,7 @@ import { useExtensionState } from "@/context/ExtensionStateContext"
 import { usePlatform } from "@/context/PlatformContext"
 import { cn } from "@/lib/utils"
 import { FileServiceClient, SlashServiceClient } from "@/services/grpc-client"
+import { shouldSendChatInput } from "@/utils/chat-input-shortcut"
 import {
 	ContextMenuOptionType,
 	getContextMenuOptionIndex,
@@ -226,6 +228,7 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 			apiConfiguration,
 			openRouterModels,
 			platform,
+			chatInputSendShortcut,
 			localWorkflowToggles,
 			globalWorkflowToggles,
 			remoteWorkflowToggles,
@@ -646,7 +649,7 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 
 				// Safari does not support InputEvent.isComposing (always false), so we need to fallback to keyCode === 229 for it
 				const isComposing = isSafari ? event.nativeEvent.keyCode === 229 : (event.nativeEvent?.isComposing ?? false)
-				if (event.key === "Enter" && !event.shiftKey && !isComposing) {
+				if (shouldSendChatInput(event, chatInputSendShortcut ?? DEFAULT_CHAT_INPUT_SEND_SHORTCUT, isComposing)) {
 					event.preventDefault()
 
 					if (!sendingDisabled) {
@@ -737,6 +740,7 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 				slashCommandsQuery,
 				handleSlashCommandsSelect,
 				sendingDisabled,
+				chatInputSendShortcut,
 				mcpServers,
 				remoteConfigSettings?.remoteGlobalSkills,
 				remoteWorkflowToggles,
