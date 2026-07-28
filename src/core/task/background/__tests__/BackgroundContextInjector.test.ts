@@ -1,4 +1,5 @@
 import { strict as assert } from "node:assert"
+import { EventEmitter } from "node:events"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -146,6 +147,31 @@ describe("BackgroundContextInjector", () => {
 		assert.match(result.text, /command ok/)
 		assert.deepEqual(result.subagentIds, [job.jobId])
 		assert.deepEqual(result.commandIds, [command.id])
+	})
+
+	it("injects completed background output that stayed below the spill limit", async () => {
+		const subagentJobManager = new SubagentJobManager()
+		const manager = new StandaloneTerminalManager()
+		const process = new EventEmitter() as BackgroundCommand["process"]
+		const command = manager.trackBackgroundCommand(process, "npm test", "command_small")
+		process.emit("line", "small output")
+		process.emit("completed", { exitCode: 0, signal: null })
+
+		try {
+			const injector = new BackgroundContextInjector({
+				subagentJobManager,
+				commandProvider: {
+					listBackgroundCommands: () => manager.getAllBackgroundCommands(),
+					readBackgroundCommandOutput: (record) => manager.readBackgroundCommandOutput(record.id),
+				},
+			})
+			const result = await injector.buildResultSection()
+
+			assert.match(result.text, /small output/)
+			assert.equal(command.logFilePath, undefined)
+		} finally {
+			manager.disposeBackgroundCommands()
+		}
 	})
 
 	it("omits consumed task-local background state from environment details", async () => {

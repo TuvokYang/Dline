@@ -9,6 +9,7 @@ export interface InjectableBackgroundCommand extends BackgroundCommand {
 
 export interface BackgroundCommandProvider {
 	listBackgroundCommands(): InjectableBackgroundCommand[]
+	readBackgroundCommandOutput?(command: InjectableBackgroundCommand): Promise<string>
 }
 
 export interface BackgroundContextInjectorOptions {
@@ -216,7 +217,11 @@ export class BackgroundContextInjector {
 	 */
 	private async readCommandLog(command: InjectableBackgroundCommand): Promise<string> {
 		try {
-			const content = await fs.readFile(command.logFilePath, "utf8")
+			const content = this.commandProvider?.readBackgroundCommandOutput
+				? await this.commandProvider.readBackgroundCommandOutput(command)
+				: command.logFilePath
+					? await fs.readFile(command.logFilePath, "utf8")
+					: ""
 			return content.trim() || "No command output."
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error)

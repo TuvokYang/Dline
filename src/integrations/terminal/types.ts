@@ -276,9 +276,9 @@ export interface BackgroundCommand {
 	origin: CommandOrigin
 	/** Lifecycle boundary allowed to cancel this command. */
 	cancellationOwner: CommandCancellationOwner
-	/** Path to the log file where output is being written */
-	logFilePath: string
-	/** Number of lines written to the log file */
+	/** Path to the log file after buffered output has crossed the spill limit. */
+	logFilePath?: string
+	/** Number of output lines captured in memory or on disk */
 	lineCount: number
 	/** Exit code if the command completed or errored */
 	exitCode?: number
@@ -454,7 +454,7 @@ export interface OrchestrationOptions {
 	 * @param existingOutput The output lines captured so far (to write to log file)
 	 * @returns The log file path if tracking was started, undefined otherwise
 	 */
-	onProceedWhileRunning?: (existingOutput: string[]) => { backgroundCommandId: string; logFilePath: string } | undefined
+	onProceedWhileRunning?: (existingOutput: string[]) => { backgroundCommandId: string; logFilePath?: string } | undefined
 	/** Start in background without waiting for timeout or user intervention. */
 	startInBackground?: boolean
 	/**

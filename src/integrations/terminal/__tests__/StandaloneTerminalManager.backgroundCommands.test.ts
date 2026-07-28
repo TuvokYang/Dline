@@ -1,6 +1,8 @@
 import { strict as assert } from "node:assert"
 import { EventEmitter } from "node:events"
+import fs from "node:fs/promises"
 import * as path from "node:path"
+import { DlineTempManager } from "@services/temp"
 import { describe, it } from "vitest"
 import { StandaloneTerminalManager } from "../standalone/StandaloneTerminalManager"
 import type { BackgroundCommand } from "../types"
@@ -26,15 +28,47 @@ function createCommand(id: string): BackgroundCommand {
 }
 
 describe("StandaloneTerminalManager background command injection state", () => {
-	it("uses the command activity identity for the background record and log stem", () => {
+	it("creates the activity-owned log only after output exceeds the configured line limit", async () => {
+		const manager = new StandaloneTerminalManager()
+		const process = new EventEmitter() as BackgroundCommand["process"]
+		let logFilePath: string | undefined
+		const expectedLogPath = path.join(DlineTempManager.getTempDir(), "command_100_1.log")
+		manager.setTerminalOutputLineLimit(2)
+		await fs.rm(expectedLogPath, { force: true })
+
+		try {
+			const command = manager.trackBackgroundCommand(process, "npm test", "command_100_1", [], undefined, {
+				onLogFileCreated: (createdPath) => {
+					logFilePath = createdPath
+				},
+			})
+
+			process.emit("line", "one")
+			process.emit("line", "two")
+			assert.equal(command.logFilePath, undefined)
+			process.emit("line", "three")
+			process.emit("completed", { exitCode: 0, signal: null })
+
+			assert.equal(path.basename(command.logFilePath ?? ""), "command_100_1.log")
+			assert.equal(logFilePath, command.logFilePath)
+			assert.equal(await manager.readBackgroundCommandOutput(command.id), "one\ntwo\nthree\n")
+		} finally {
+			manager.disposeBackgroundCommands()
+			await fs.rm(expectedLogPath, { force: true })
+		}
+	})
+
+	it("keeps small completed background output in memory", async () => {
 		const manager = new StandaloneTerminalManager()
 		const process = new EventEmitter() as BackgroundCommand["process"]
 
 		try {
-			const command = manager.trackBackgroundCommand(process, "npm test", "command_100_1")
+			const command = manager.trackBackgroundCommand(process, "npm test", "command_100_small")
+			process.emit("line", "small output")
+			process.emit("completed", { exitCode: 0, signal: null })
 
-			assert.equal(command.id, "command_100_1")
-			assert.equal(path.basename(command.logFilePath), "command_100_1.log")
+			assert.equal(command.logFilePath, undefined)
+			assert.equal(await manager.readBackgroundCommandOutput(command.id), "small output")
 		} finally {
 			manager.disposeBackgroundCommands()
 		}

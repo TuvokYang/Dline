@@ -246,6 +246,15 @@ export class CommandExecutor {
 										lineCount: activityLineCount,
 									})
 								},
+								onLogFileCreated: (logFilePath) => {
+									this.callbacks.updateCommandActivity?.(activityId, { logPath: logFilePath })
+									if (!options?.commandTs) return
+									const messages = this.callbacks.getClineMessages() as Array<{ ts?: number }>
+									const commandIndex = messages.findIndex((message) => message.ts === options.commandTs)
+									if (commandIndex !== -1) {
+										void this.callbacks.updateClineMessage(commandIndex, { logPath: logFilePath })
+									}
+								},
 							},
 						)
 						this.callbacks.updateCommandActivity?.(activityId, {
@@ -422,6 +431,11 @@ export class CommandExecutor {
 	 */
 	listBackgroundCommands(): BackgroundCommand[] {
 		return this.standaloneManager.getAllBackgroundCommands()
+	}
+
+	/** Read output retained in memory or in the lazily-created background log. */
+	readBackgroundCommandOutput(command: BackgroundCommand): Promise<string> {
+		return this.standaloneManager.readBackgroundCommandOutput(command.id)
 	}
 
 	/**
