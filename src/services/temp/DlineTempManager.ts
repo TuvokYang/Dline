@@ -29,6 +29,19 @@ class DlineTempManagerImpl {
 		return this.tempDir
 	}
 
+	/** Return whether a path is owned by Dline's system-temp directory. */
+	isManagedPath(filePath: string): boolean {
+		if (!filePath) {
+			return false
+		}
+
+		const relativePath = path.relative(path.resolve(this.tempDir), path.resolve(filePath))
+		return (
+			relativePath === "" ||
+			(!relativePath.startsWith(`..${path.sep}`) && relativePath !== ".." && !path.isAbsolute(relativePath))
+		)
+	}
+
 	/**
 	 * Resolve a deterministic log path from a stable domain identity.
 	 * The caller owns uniqueness; this service never replaces the supplied identity.

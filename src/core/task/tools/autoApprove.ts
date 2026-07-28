@@ -3,7 +3,8 @@ import { isMultiRootEnabled } from "@core/workspace/multi-root-utils"
 import { ClineDefaultTool, CONVERSATIONAL_TOOL_NAMES } from "@shared/tools"
 import { StateManager } from "@/core/storage/StateManager"
 import { HostProvider } from "@/hosts/host-provider"
-import { getCwd, getDesktopDir, isLocatedInPath, isLocatedInWorkspace } from "@/utils/path"
+import { DlineTempManager } from "@/services/temp/DlineTempManager"
+import { getDesktopDir, isLocatedInPath, isLocatedInWorkspace } from "@/utils/path"
 
 export class AutoApprove {
 	private stateManager: StateManager
@@ -144,20 +145,21 @@ export class AutoApprove {
 		let isLocalRead = false
 		if (autoApproveActionpath) {
 			// Use cached workspace info instead of fetching every time
-			const { isMultiRootScenario } = await this.getWorkspaceInfo()
+			const { isMultiRootScenario, workspacePaths } = await this.getWorkspaceInfo()
+			const cwd = workspacePaths.paths[0] || getDesktopDir()
+			const absolutePath = resolveWorkspacePath(
+				cwd,
+				autoApproveActionpath,
+				"AutoApprove.shouldAutoApproveToolWithPath",
+			) as string
 
-			if (isMultiRootScenario) {
+			if (DlineTempManager.isManagedPath(absolutePath)) {
+				isLocalRead = true
+			} else if (isMultiRootScenario) {
 				// Multi-root: check if file is in ANY workspace
 				isLocalRead = await isLocatedInWorkspace(autoApproveActionpath)
 			} else {
 				// Single-root: use existing logic
-				const cwd = await getCwd(getDesktopDir())
-				// When called with a string cwd, resolveWorkspacePath returns a string
-				const absolutePath = resolveWorkspacePath(
-					cwd,
-					autoApproveActionpath,
-					"AutoApprove.shouldAutoApproveToolWithPath",
-				) as string
 				isLocalRead = isLocatedInPath(cwd, absolutePath)
 			}
 		} else {

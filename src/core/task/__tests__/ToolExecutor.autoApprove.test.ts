@@ -1,4 +1,5 @@
 import { strict as assert } from "node:assert"
+import os from "node:os"
 import path from "node:path"
 import { ClineDefaultTool } from "@shared/tools"
 import { describe, it } from "vitest"
@@ -85,5 +86,33 @@ describe("isToolUseAutoApproved", () => {
 			assert.equal(externalApproved, true, `${toolName} external path should honor external auto-approval`)
 			assert.equal(missingPathDenied, false, `${toolName} missing path should require approval`)
 		}
+	})
+
+	it("treats only Dline-owned temp paths as project-scoped file access", () => {
+		const cwd = path.resolve(os.tmpdir(), "workspace", "project")
+		const dlineTempFile = path.resolve(os.tmpdir(), "dline", "command_1.log")
+		const siblingTempFile = path.resolve(os.tmpdir(), "dline-other", "command_1.log")
+
+		assert.equal(
+			isBlockAutoApproved(makeBlock(ClineDefaultTool.FILE_READ, { path: dlineTempFile }), {
+				cwd,
+				autoApproveResult: [true, false],
+			}),
+			true,
+		)
+		assert.equal(
+			isBlockAutoApproved(makeBlock(ClineDefaultTool.FILE_READ, { path: dlineTempFile }), {
+				cwd,
+				autoApproveResult: [false, true],
+			}),
+			false,
+		)
+		assert.equal(
+			isBlockAutoApproved(makeBlock(ClineDefaultTool.FILE_READ, { path: siblingTempFile }), {
+				cwd,
+				autoApproveResult: [true, false],
+			}),
+			false,
+		)
 	})
 })

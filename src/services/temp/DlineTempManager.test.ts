@@ -14,4 +14,14 @@ describe("DlineTempManager", () => {
 		assert.equal(path.dirname(filePath), DlineTempManager.getTempDir())
 		assert.equal(path.basename(filePath), "command_100_1.log")
 	})
+
+	it("recognizes only the Dline temp directory and its descendants", () => {
+		const tempDir = DlineTempManager.getTempDir()
+
+		assert.equal(DlineTempManager.isManagedPath(tempDir), true)
+		assert.equal(DlineTempManager.isManagedPath(path.join(tempDir, "nested", "output.log")), true)
+		assert.equal(DlineTempManager.isManagedPath(path.join(tempDir, "..", "cline", "output.log")), false)
+		assert.equal(DlineTempManager.isManagedPath(`${tempDir}-other`), false)
+		assert.equal(DlineTempManager.isManagedPath(path.dirname(tempDir)), false)
+	})
 })
