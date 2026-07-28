@@ -2,7 +2,7 @@ import { parseYamlFrontmatter } from "@core/context/instructions/user-instructio
 import { EmptyRequest } from "@shared/proto/dline/common"
 import { SlashCommandInfo, SlashCommandsResponse } from "@shared/proto/dline/slash"
 import fs from "fs/promises"
-import { BASE_SLASH_COMMANDS, extractNameFromMdFile } from "@/shared/slashCommands"
+import { extractNameFromMdFile, getBuiltInSlashCommands } from "@/shared/slashCommands"
 import { Controller } from ".."
 
 const MAX_DESCRIPTION_LENGTH = 80
@@ -40,8 +40,8 @@ async function extractWorkflowDescription(filePath: string): Promise<string | un
 export async function getAvailableSlashCommands(controller: Controller, _request: EmptyRequest): Promise<SlashCommandsResponse> {
 	const commands: SlashCommandInfo[] = []
 
-	// Add built-in commands
-	for (const cmd of [...BASE_SLASH_COMMANDS]) {
+	// Return the full catalog; CLI consumers filter VS Code-only entries via cliCompatible.
+	for (const cmd of getBuiltInSlashCommands("vscode")) {
 		commands.push(
 			SlashCommandInfo.create({
 				name: cmd.name,

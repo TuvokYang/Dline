@@ -88,6 +88,17 @@ export const VSCODE_ONLY_COMMANDS: SlashCommand[] = [
 	},
 ]
 
+export type SlashCommandPlatform = "vscode" | "standalone"
+
+export function getBuiltInSlashCommands(platform: SlashCommandPlatform): SlashCommand[] {
+	if (platform === "standalone") {
+		return [...BASE_SLASH_COMMANDS]
+	}
+
+	// Preserve the existing default selection while keeping platform commands above the menu fold.
+	return [BASE_SLASH_COMMANDS[0], ...VSCODE_ONLY_COMMANDS, ...BASE_SLASH_COMMANDS.slice(1)]
+}
+
 // CLI-only slash commands (handled locally, not sent to backend)
 export const CLI_ONLY_COMMANDS: SlashCommand[] = [
 	{

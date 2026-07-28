@@ -4,7 +4,7 @@ import "should"
 import { Controller } from "../core/controller"
 import { getAvailableSlashCommands } from "../core/controller/slash/getAvailableSlashCommands"
 import { EmptyRequest } from "../shared/proto/dline/common"
-import { BASE_SLASH_COMMANDS } from "../shared/slashCommands"
+import { BASE_SLASH_COMMANDS, VSCODE_ONLY_COMMANDS } from "../shared/slashCommands"
 
 /**
  * Unit tests for getAvailableSlashCommands RPC endpoint
@@ -43,6 +43,18 @@ describe("getAvailableSlashCommands", () => {
 	})
 
 	describe("Base Slash Commands", () => {
+		it("should return VS Code-only slash commands", async () => {
+			const response = await getAvailableSlashCommands(mockController as Controller, EmptyRequest.create())
+
+			for (const vscodeCommand of VSCODE_ONLY_COMMANDS) {
+				const found = response.commands.find((command) => command.name === vscodeCommand.name)
+				;(found === undefined).should.be.false()
+				found!.description.should.equal(vscodeCommand.description)
+				found!.section.should.equal("default")
+				found!.cliCompatible.should.equal(false)
+			}
+		})
+
 		it("should return all base slash commands", async () => {
 			const response = await getAvailableSlashCommands(mockController as Controller, EmptyRequest.create())
 
@@ -307,8 +319,8 @@ describe("getAvailableSlashCommands", () => {
 
 			const response = await getAvailableSlashCommands(mockController as Controller, EmptyRequest.create())
 
-			// Should only have base commands
-			response.commands.length.should.equal(BASE_SLASH_COMMANDS.length)
+			// Should only have built-in VS Code commands
+			response.commands.length.should.equal(BASE_SLASH_COMMANDS.length + VSCODE_ONLY_COMMANDS.length)
 		})
 
 		it("should handle remote config with no remoteGlobalWorkflows property", async () => {

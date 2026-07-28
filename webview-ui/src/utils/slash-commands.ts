@@ -1,11 +1,6 @@
 import type { McpServer } from "@shared/mcp"
 import { PLATFORM_CONFIG, PlatformType } from "@/config/platform.config"
-import {
-	BASE_SLASH_COMMANDS,
-	pathToCommandName,
-	type SlashCommand,
-	VSCODE_ONLY_COMMANDS,
-} from "../../../src/shared/slashCommands.ts"
+import { getBuiltInSlashCommands, pathToCommandName, type SlashCommand } from "../../../src/shared/slashCommands.ts"
 
 export type { SlashCommand }
 
@@ -28,8 +23,9 @@ export function sectionToPrefix(section?: string): string {
 	}
 }
 
-export const DEFAULT_SLASH_COMMANDS: SlashCommand[] =
-	PLATFORM_CONFIG.type === PlatformType.VSCODE ? [...BASE_SLASH_COMMANDS, ...VSCODE_ONLY_COMMANDS] : BASE_SLASH_COMMANDS
+export const DEFAULT_SLASH_COMMANDS: SlashCommand[] = getBuiltInSlashCommands(
+	PLATFORM_CONFIG.type === PlatformType.VSCODE ? "vscode" : "standalone",
+)
 
 /**
  * Get workflow slash commands from enabled toggles.

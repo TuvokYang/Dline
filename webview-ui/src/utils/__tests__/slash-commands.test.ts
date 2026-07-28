@@ -1,4 +1,5 @@
 import type { McpServer } from "@shared/mcp"
+import { getBuiltInSlashCommands } from "@shared/slashCommands"
 import { describe, expect, it } from "vitest"
 import { getMatchingSlashCommands, getMcpPromptCommands, slashCommandRegex, validateSlashCommand } from "../slash-commands"
 
@@ -17,6 +18,26 @@ function createMockMcpServer(overrides: Partial<McpServer> = {}): McpServer {
 }
 
 describe("slash-commands", () => {
+	describe("built-in command visibility", () => {
+		it("shows the VS Code-only command above the fold without changing the default selection", () => {
+			const result = getMatchingSlashCommands("")
+
+			expect(result.slice(0, 2).map((command) => command.name)).toEqual(["newtask", "explain-changes"])
+		})
+
+		it("matches the VS Code-only command by prefix", () => {
+			const result = getMatchingSlashCommands("explain")
+
+			expect(result.map((command) => command.name)).toEqual(["explain-changes"])
+		})
+
+		it("does not expose VS Code-only commands on standalone", () => {
+			const result = getBuiltInSlashCommands("standalone")
+
+			expect(result.map((command) => command.name)).not.toContain("explain-changes")
+		})
+	})
+
 	describe("getMcpPromptCommands", () => {
 		it("should return empty array when no servers provided", () => {
 			const result = getMcpPromptCommands([])
