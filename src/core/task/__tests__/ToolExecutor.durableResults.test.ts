@@ -5,11 +5,14 @@ import { describe, expect, it, vi } from "vitest"
 import { ToolExecutor } from "../ToolExecutor"
 import { ToolResultUtils } from "../tools/utils/ToolResultUtils"
 
-function createBlock(name: ClineDefaultTool = ClineDefaultTool.FILE_READ): ToolUse {
+function createBlock(
+	name: string = ClineDefaultTool.FILE_READ,
+	params: ToolUse["params"] = name === ClineDefaultTool.FILE_READ ? { path: "src/index.ts" } : { path: "src/new.ts" },
+): ToolUse {
 	return {
 		type: "tool_use",
-		name,
-		params: name === ClineDefaultTool.FILE_READ ? { path: "src/index.ts" } : { path: "src/new.ts" },
+		name: name as ClineDefaultTool,
+		params,
 		partial: false,
 		function_id: `fn-${name}`,
 		dline_tid: `tid-${name}`,
@@ -22,13 +25,17 @@ interface HarnessOptions {
 	rejected?: boolean
 	strictPlan?: boolean
 	throwFromTool?: boolean
+	coordinatorHas?: boolean
+	allowedNativeToolNames?: string[]
+	focusChainEnabled?: boolean
 }
 
 function createHarness(options: HarnessOptions = {}) {
 	const userMessageContent: any[] = []
 	const say = vi.fn(async () => 1)
+	const updateFCListFromToolResponse = vi.fn(async () => undefined)
 	const coordinator = {
-		has: vi.fn(() => true),
+		has: vi.fn(() => options.coordinatorHas ?? true),
 		getHandler: vi.fn(() => ({ getDescription: (block: ToolUse) => `[${block.name}]` })),
 		execute: vi.fn(async () => {
 			if (options.throwFromTool) throw new Error("handler exploded")
@@ -49,15 +56,18 @@ function createHarness(options: HarnessOptions = {}) {
 		stateManager: {
 			getGlobalSettingsKey: vi.fn((key: string) => {
 				if (key === "strictPlanModeEnabled") return options.strictPlan === true
-				if (key === "focusChainSettings") return { enabled: false }
+				if (key === "focusChainSettings") return { enabled: options.focusChainEnabled === true }
 				if (key === "hooksEnabled") return false
 				return false
 			}),
 		},
+		autoApprover: { shouldAutoApproveTool: vi.fn(() => false) },
 		getMode: () => (options.strictPlan ? "plan" : "act"),
 		browserSession: { closeBrowser: vi.fn(async () => undefined) },
 		coordinator,
 		say,
+		updateFCListFromToolResponse,
+		allowedNativeToolNames: new Set(options.allowedNativeToolNames ?? []),
 		isParallelToolCallingEnabled: () => true,
 	})
 
@@ -73,7 +83,7 @@ function createHarness(options: HarnessOptions = {}) {
 			isError,
 		)
 
-	return { executor, say, userMessageContent }
+	return { coordinator, executor, say, updateFCListFromToolResponse, userMessageContent }
 }
 
 function partialResultRows(say: ReturnType<typeof vi.fn>): string[] {
@@ -84,6 +94,68 @@ function partialResultRows(say: ReturnType<typeof vi.fn>): string[] {
 }
 
 describe("ToolExecutor durable tool results", () => {
+	it("keeps an advertised read_file on its registered execution path", async () => {
+		const { coordinator, executor, say } = createHarness({
+			allowedNativeToolNames: [ClineDefaultTool.FILE_READ],
+		})
+
+		await executor.execute(createBlock(), {})
+
+		expect(coordinator.execute).toHaveBeenCalledOnce()
+		expect(JSON.parse(partialResultRows(say)[0])).toMatchObject({ is_error: null })
+	})
+
+	it("auto-executes task_progress as an internal tool without an approval gate", async () => {
+		const { coordinator, executor, say, updateFCListFromToolResponse } = createHarness({
+			allowedNativeToolNames: [],
+			coordinatorHas: false,
+			focusChainEnabled: true,
+		})
+		const block = createBlock("task_progress", { task_progress: "- [x] Inspect runtime state" })
+
+		expect(executor.isBlockApproved(block)).toBe(true)
+		await executor.execute(block, {})
+
+		expect(coordinator.execute).not.toHaveBeenCalled()
+		expect(updateFCListFromToolResponse).toHaveBeenCalledWith("- [x] Inspect runtime state")
+		expect(JSON.parse(partialResultRows(say)[0])).toMatchObject({
+			function_id: "fn-task_progress",
+			dline_tid: "tid-task_progress",
+			is_error: null,
+		})
+	})
+
+	it("rejects an unadvertised native function non-fatally instead of invoking its registered handler", async () => {
+		const { coordinator, executor, say } = createHarness({ allowedNativeToolNames: [] })
+		const block = createBlock(ClineDefaultTool.FILE_READ)
+
+		expect(executor.isBlockApproved(block)).toBe(true)
+		const handled = await executor.execute(block, {})
+
+		expect(handled).toBe(true)
+		expect(coordinator.execute).not.toHaveBeenCalled()
+		expect(JSON.parse(partialResultRows(say)[0])).toMatchObject({
+			function_id: "fn-read_file",
+			dline_tid: "tid-read_file",
+			is_error: true,
+		})
+	})
+
+	it("closes an unregistered native function with a durable error result", async () => {
+		const { coordinator, executor, say } = createHarness({
+			allowedNativeToolNames: [],
+			coordinatorHas: false,
+		})
+		const block = createBlock("not_registered", {})
+
+		expect(executor.isBlockApproved(block)).toBe(true)
+		const handled = await executor.execute(block, {})
+
+		expect(handled).toBe(true)
+		expect(coordinator.execute).not.toHaveBeenCalled()
+		expect(JSON.parse(partialResultRows(say)[0])).toMatchObject({ is_error: true })
+	})
+
 	it("persists the exact canonical block pushed to the model, including description and approval feedback", async () => {
 		const { executor, say, userMessageContent } = createHarness()
 		const block = createBlock(ClineDefaultTool.FILE_NEW)
@@ -111,7 +183,10 @@ describe("ToolExecutor durable tool results", () => {
 		["a strict-plan rejection", { strictPlan: true }, ClineDefaultTool.FILE_NEW],
 		["a handler error", { throwFromTool: true }, ClineDefaultTool.FILE_READ],
 	] as const)("records a durable error result for %s", async (_label, options, toolName) => {
-		const { executor, say, userMessageContent } = createHarness(options)
+		const { executor, say, userMessageContent } = createHarness({
+			...options,
+			allowedNativeToolNames: [toolName],
+		})
 
 		await executor.execute(createBlock(toolName), {})
 

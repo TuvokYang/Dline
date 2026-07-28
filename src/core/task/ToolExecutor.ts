@@ -38,6 +38,7 @@ import { MessageStateHandler } from "./message-state"
 import { TaskController } from "./TaskController"
 import { TaskState } from "./TaskState"
 import { AutoApprove } from "./tools/autoApprove"
+import { isInternalNativeToolName, normalizeNativeToolName } from "./tools/NativeToolAdmission"
 import { SubagentJobManager } from "./tools/subagent/SubagentJobManager"
 import { type IPartialBlockHandler, ToolExecutorCoordinator } from "./tools/ToolExecutorCoordinator"
 import { ToolValidator } from "./tools/ToolValidator"
@@ -147,6 +148,7 @@ export class ToolExecutor {
 	private autoApprover: AutoApprove
 	private coordinator: ToolExecutorCoordinator
 	private subagentJobManager = new SubagentJobManager()
+	private allowedNativeToolNames: ReadonlySet<string> | undefined
 
 	/** Public accessor for auto-approve logic used by TaskController.buildTurn(). */
 	public isAutoApproved(toolName: ClineDefaultTool, params?: ToolUse["params"]): boolean {
@@ -156,6 +158,14 @@ export class ToolExecutor {
 
 	/** Public block-scoped accessor used by TaskController.buildTurn(). */
 	public isBlockApproved(block: ToolUse): boolean {
+		// Invalid and internal native calls must enter execution so they can be
+		// closed with a paired result instead of becoming orphan approval blocks.
+		if (
+			block.isNativeToolCall &&
+			(isInternalNativeToolName(block.name) || !this.isNativeToolAdmitted(block.name) || !this.coordinator.has(block.name))
+		) {
+			return true
+		}
 		// Registered handlers own their approval transaction. The canonical runtime
 		// must start the handler so it can present the matching interaction and wait
 		// for the user's causal response; gating here would prevent that interaction
@@ -178,6 +188,17 @@ export class ToolExecutor {
 	 */
 	public getSubagentJobManager(): SubagentJobManager {
 		return this.subagentJobManager
+	}
+
+	/** Freeze the ordinary native functions exposed in the current API request. */
+	public setAllowedNativeToolNames(toolNames: ReadonlySet<string>): void {
+		this.allowedNativeToolNames = new Set(Array.from(toolNames, normalizeNativeToolName))
+	}
+
+	private isNativeToolAdmitted(toolName: string): boolean {
+		// A reopened task has no live request scope. Its persisted approval
+		// interaction remains executable so an explicit Approve action still works.
+		return this.allowedNativeToolNames === undefined || this.allowedNativeToolNames.has(normalizeNativeToolName(toolName))
 	}
 
 	// Auto-approval methods using the AutoApprove class
@@ -523,12 +544,38 @@ export class ToolExecutor {
 	 * @returns true if the tool was handled (even if execution failed), false if not registered
 	 */
 	private async execute(block: ToolUse, config: TaskConfig = this.asToolConfig()): Promise<boolean> {
-		if (!this.coordinator.has(block.name)) {
-			return false // Tool not handled by coordinator
-		}
 		canonicalizeAttemptCompletionParams(block)
 
 		try {
+			if (block.isNativeToolCall && isInternalNativeToolName(block.name)) {
+				if (!block.partial) {
+					const taskProgress = block.params?.task_progress
+					const focusChainEnabled = this.stateManager.getGlobalSettingsKey("focusChainSettings")?.enabled === true
+					if (focusChainEnabled && typeof taskProgress === "string" && taskProgress.trim().length > 0) {
+						await this.updateFCListFromToolResponse(taskProgress)
+					}
+					await this.commitToolResult("Task progress accepted.", block)
+				}
+				return true
+			}
+
+			if (block.isNativeToolCall && !this.isNativeToolAdmitted(block.name)) {
+				if (!block.partial) {
+					const message = `Native tool '${block.name}' was not available in this API request. The call was ignored.`
+					await this.commitToolResult(formatResponse.toolError(message), block, true)
+				}
+				return true
+			}
+
+			if (!this.coordinator.has(block.name)) {
+				if (block.isNativeToolCall && !block.partial) {
+					const message = `Native tool '${block.name}' has no registered handler. The call was ignored.`
+					await this.commitToolResult(formatResponse.toolError(message), block, true)
+					return true
+				}
+				return false
+			}
+
 			// Check if user rejected a previous tool
 			if (this.taskController.wasRejected(block.dline_tid || "")) {
 				const reason = block.partial

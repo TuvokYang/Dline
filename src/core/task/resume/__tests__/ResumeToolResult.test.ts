@@ -44,6 +44,65 @@ function result(dlineTid: string, functionId: string, text: string): ClineUserTo
 }
 
 describe("collectResumeTurnContent", () => {
+	it("reuses four durable read results and closes a trailing task_progress block on Resume", () => {
+		const restoredBlocks: BlockLifecycle[] = [
+			...[0, 1, 2, 3].map((index) => ({
+				dlineTid: `tid-read-${index}`,
+				functionId: `fn-read-${index}`,
+				toolName: "read_file",
+				phase: BlockPhase.COMPLETED,
+				ts: 20 + index,
+				requiresApproval: false,
+				conversationHistoryIndex: 13,
+			})),
+			{
+				dlineTid: "tid-progress",
+				functionId: "fn-progress",
+				toolName: "task_progress",
+				phase: BlockPhase.STREAMING,
+				ts: 24,
+				requiresApproval: true,
+				conversationHistoryIndex: 13,
+			},
+		]
+		const uiHistory: ClineMessage[] = restoredBlocks.slice(0, 4).map((block, index) => ({
+			ts: 30 + index,
+			type: "say",
+			say: "partial_tool_result",
+			text: JSON.stringify({
+				version: 1,
+				function_id: block.functionId,
+				dline_tid: block.dlineTid,
+				content: [{ type: "text", text: `read-${index}` }],
+				is_error: null,
+			}),
+		}))
+
+		const content = collectResumeTurnContent({
+			blocks: restoredBlocks,
+			assistantApiIndex: 13,
+			apiHistory: [{ role: "assistant", content: [], ts: 1 }],
+			uiHistory,
+			pendingContent: [],
+			synthesizeMissing: "all",
+		})
+		const results = content.filter((item): item is ClineUserToolResultContentBlock => item.type === "tool_result")
+
+		expect(results.map((item) => item.dline_tid)).toEqual([
+			"tid-read-0",
+			"tid-read-1",
+			"tid-read-2",
+			"tid-read-3",
+			"tid-progress",
+		])
+		expect(results.slice(0, 4).every((item) => item.is_error !== true)).toBe(true)
+		expect(results[4]).toMatchObject({
+			function_id: "fn-progress",
+			dline_tid: "tid-progress",
+			is_error: true,
+		})
+	})
+
 	it("does not duplicate API results, restores durable UI results, and closes missing pairs", () => {
 		const apiHistory: ClineStorageMessage[] = [
 			{ role: "assistant", content: [], ts: 1 },

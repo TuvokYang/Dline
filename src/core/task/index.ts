@@ -189,6 +189,7 @@ import { TaskState } from "./TaskState"
 import { TaskStateManager } from "./TaskStateManager"
 import { withTerminateTimeout } from "./TaskTerminateTimeout"
 import { ToolExecutor } from "./ToolExecutor"
+import { getAdvertisedNativeToolNames } from "./tools/NativeToolAdmission"
 import { detectAvailableCliTools, updateApiReqMsg } from "./utils"
 import { buildUserFeedbackContent } from "./utils/buildUserFeedbackContent"
 
@@ -3069,6 +3070,7 @@ export class Task {
 		const systemPrompt = frozenPrompt.text
 		const cachedTools = this.systemPromptCacheService.getLastTools()
 		const tools = cachedTools ? [...cachedTools] : undefined
+		this.toolExecutor.setAllowedNativeToolNames(getAdvertisedNativeToolNames(tools))
 		Logger.debug(
 			`[Task ${this.taskId}] attemptApiRequest: after systemPrompt +${Math.round(performance.now() - apiReqStart)}ms`,
 		)
