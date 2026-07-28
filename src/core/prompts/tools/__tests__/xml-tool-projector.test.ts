@@ -26,11 +26,13 @@ const BASE_CONTEXT = {
 } as SystemPromptContext
 
 describe("XML tool projection", () => {
-	it("documents optional execute_command background and timeout parameters", () => {
+	it("documents optional execute_command workdirectory, background, and timeout parameters", () => {
 		const xml = new ToolPromptGenerator().generateXml(PromptProfile.Native, BASE_CONTEXT)
 
+		expect(xml).toContain("<workdirectory>")
 		expect(xml).toContain("<background>")
 		expect(xml).toContain("<timeout>")
+		expect(xml).toContain("outside every project root requires user approval")
 		expect(xml).toContain("background process")
 		expect(xml).toContain("foreground wait")
 	})

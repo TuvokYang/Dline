@@ -18,6 +18,7 @@ import { applyModelContentFixes } from "../utils/ModelContentProcessor"
 import { ToolResultUtils } from "../utils/ToolResultUtils"
 import { sayFeedbackOnce } from "../utils/UserFeedbackUtils"
 import { parseCommandExecutionOptions } from "./command-execution-options"
+import { resolveCommandWorkdirectory } from "./command-workdirectory"
 
 export { isLikelyLongRunningCommand, resolveCommandTimeoutSeconds } from "./command-execution-options"
 
@@ -25,7 +26,8 @@ export class ExecuteCommandToolHandler implements IFullyManagedTool {
 	readonly name = ClineDefaultTool.BASH
 
 	getDescription(block: ToolUse): string {
-		return `[${block.name} for '${block.params.command}']`
+		const workdirectory = block.params.workdirectory ? ` in '${block.params.workdirectory}'` : ""
+		return `[${block.name} for '${block.params.command}'${workdirectory}]`
 	}
 
 	async handlePartialBlock(block: ToolUse, uiHelpers: StronglyTypedUIHelpers): Promise<void> {
@@ -54,6 +56,7 @@ export class ExecuteCommandToolHandler implements IFullyManagedTool {
 		const requiresApprovalPerLLM = requiresApprovalRaw?.toLowerCase() === "true"
 		const timeoutParam: string | undefined = block.params.timeout
 		const backgroundParam: string | undefined = block.params.background
+		const workdirectoryParam: string | undefined = block.params.workdirectory
 
 		// Extract provider using the proven pattern from ReportBugHandler
 		const apiConfig = config.services.stateManager.getApiConfiguration()
@@ -87,11 +90,17 @@ export class ExecuteCommandToolHandler implements IFullyManagedTool {
 		}
 
 		// Handle multi-workspace command execution
-		let executionDir: string = config.cwd
 		let actualCommand: string = command
 
 		let workspaceHintUsed = false
 		let workspaceHint: string | undefined
+
+		let requestedWorkdirectory = workdirectoryParam
+		const adapter = new WorkspacePathAdapter({
+			cwd: config.cwd,
+			isMultiRootEnabled: config.isMultiRootEnabled,
+			workspaceManager: config.workspaceManager,
+		})
 
 		if (config.isMultiRootEnabled && config.workspaceManager) {
 			// Check if command has a workspace hint prefix
@@ -103,21 +112,42 @@ export class ExecuteCommandToolHandler implements IFullyManagedTool {
 				workspaceHint = commandMatch[1]
 				actualCommand = commandMatch[2].trim()
 
-				// Find the workspace root for this hint
-				const adapter = new WorkspacePathAdapter({
-					cwd: config.cwd,
-					isMultiRootEnabled: true,
-					workspaceManager: config.workspaceManager,
-				})
-
 				// Resolve to get the workspace directory
-				executionDir = adapter.resolvePath(".", workspaceHint)
+				if (!requestedWorkdirectory) {
+					requestedWorkdirectory = adapter.resolvePath(".", workspaceHint)
+				}
 
 				// Update command to remove the workspace prefix for display
 				command = actualCommand
 			}
 			// If no hint, use primary workspace (cwd)
 		}
+
+		const workdirectoryHintMatch = requestedWorkdirectory?.match(/^@([^:]+):(.*)$/)
+		if (workdirectoryHintMatch && config.isMultiRootEnabled && config.workspaceManager) {
+			workspaceHintUsed = true
+			workspaceHint = workdirectoryHintMatch[1]
+			requestedWorkdirectory = adapter.resolvePath(workdirectoryHintMatch[2] || ".", workspaceHint)
+		} else if (requestedWorkdirectory) {
+			requestedWorkdirectory = adapter.resolvePath(requestedWorkdirectory)
+		}
+
+		let resolvedWorkdirectory: Awaited<ReturnType<typeof resolveCommandWorkdirectory>>
+		try {
+			resolvedWorkdirectory = await resolveCommandWorkdirectory({
+				cwd: config.cwd,
+				requestedPath: requestedWorkdirectory,
+				workspaceRoots: config.workspaceManager?.getRoots().map((root) => root.path),
+			})
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error)
+			if (!config.isSubagentExecution) {
+				await config.callbacks.say("error", message)
+			}
+			return formatResponse.toolError(message)
+		}
+		const executionDir = resolvedWorkdirectory.path
+		const requiresExternalWorkdirectoryApproval = !resolvedWorkdirectory.isWithinWorkspace
 
 		// Check command permission validation (CLINE_COMMAND_PERMISSIONS env var)
 		const permissionResult = config.services.commandPermissionController.validateCommand(actualCommand)
@@ -142,7 +172,14 @@ export class ExecuteCommandToolHandler implements IFullyManagedTool {
 		}
 
 		// Check clineignore validation for command
-		const ignoredFileAttemptedToAccess = config.services.clineIgnoreController.validateCommand(actualCommand)
+		if (!config.services.clineIgnoreController.validateDirectoryAccess(executionDir)) {
+			if (!config.isSubagentExecution) {
+				await config.callbacks.say("clineignore_error", executionDir)
+			}
+			return formatResponse.toolError(formatResponse.clineIgnoreError(executionDir))
+		}
+
+		const ignoredFileAttemptedToAccess = config.services.clineIgnoreController.validateCommand(actualCommand, executionDir)
 		if (ignoredFileAttemptedToAccess) {
 			if (!config.isSubagentExecution) {
 				await config.callbacks.say("clineignore_error", ignoredFileAttemptedToAccess)
@@ -160,12 +197,18 @@ export class ExecuteCommandToolHandler implements IFullyManagedTool {
 			: [autoApproveResult, false]
 
 		// Determine workspace context for telemetry
-		const resolvedToNonPrimary = !arePathsEqual(executionDir, config.cwd)
+		const resolvedRoot = config.workspaceManager?.resolvePathToRoot(executionDir)
+		const primaryRoot = config.workspaceManager?.getPrimaryRoot()?.path ?? config.cwd
+		const resolvedToNonPrimary = resolvedRoot ? !arePathsEqual(resolvedRoot.path, primaryRoot) : false
 		const workspaceContext = {
 			isMultiRootEnabled: config.isMultiRootEnabled || false,
 			usedWorkspaceHint: workspaceHintUsed,
 			resolvedToNonPrimary,
-			resolutionMethod: (workspaceHintUsed ? "hint" : "primary_fallback") as "hint" | "primary_fallback",
+			resolutionMethod: workdirectoryParam
+				? ("path_detection" as const)
+				: workspaceHintUsed
+					? ("hint" as const)
+					: ("primary_fallback" as const),
 		}
 
 		// Capture workspace path resolution telemetry
@@ -182,9 +225,10 @@ export class ExecuteCommandToolHandler implements IFullyManagedTool {
 		}
 
 		if (
-			config.isSubagentExecution ||
-			(!requiresApprovalPerLLM && autoApproveSafe) ||
-			(requiresApprovalPerLLM && autoApproveSafe && autoApproveAll)
+			!requiresExternalWorkdirectoryApproval &&
+			(config.isSubagentExecution ||
+				(!requiresApprovalPerLLM && autoApproveSafe) ||
+				(requiresApprovalPerLLM && autoApproveSafe && autoApproveAll))
 		) {
 			// Auto-approve flow
 			if (!config.isSubagentExecution) {
@@ -203,9 +247,11 @@ export class ExecuteCommandToolHandler implements IFullyManagedTool {
 				block.isNativeToolCall,
 			)
 		} else {
+			const approvalPresentation = `${actualCommand}\n\nWorking directory: ${executionDir}`
+			const requiresExplicitApproval = requiresExternalWorkdirectoryApproval || (autoApproveSafe && requiresApprovalPerLLM)
 			// Manual approval flow
 			void showApprovalNotification(
-				{ message: actualCommand, requiresExplicitApproval: autoApproveSafe && requiresApprovalPerLLM },
+				{ message: approvalPresentation, requiresExplicitApproval },
 				config.autoApprovalSettings.enableNotifications,
 			)
 
@@ -213,7 +259,7 @@ export class ExecuteCommandToolHandler implements IFullyManagedTool {
 				turnId: interactionTurnId(block),
 				interactionId: interactionId(block),
 				kind: "command_approval",
-				presentation: `${actualCommand}${autoApproveSafe && requiresApprovalPerLLM ? COMMAND_REQ_APP_STRING : ""}`,
+				presentation: `${approvalPresentation}${requiresExplicitApproval ? COMMAND_REQ_APP_STRING : ""}`,
 				existingTs: block.ts,
 			})
 			const text = outcome.draft?.text
@@ -286,17 +332,10 @@ export class ExecuteCommandToolHandler implements IFullyManagedTool {
 			}, 30_000)
 		}
 
-		// Execute the command in the correct directory
-		// If executionDir is different from cwd, prepend cd command
-		let finalCommand: string = actualCommand
-		if (executionDir !== config.cwd) {
-			// Use && to chain commands so they run in sequence
-			finalCommand = `cd "${executionDir}" && ${actualCommand}`
-		}
-
-		const outcome = await config.callbacks.executeCommandTool(finalCommand, executionOptions.timeoutSeconds, {
+		const outcome = await config.callbacks.executeCommandTool(actualCommand, executionOptions.timeoutSeconds, {
 			commandTs: block.ts,
 			startInBackground: executionOptions.background,
+			workdirectory: executionDir,
 		})
 
 		if (timeoutId) {

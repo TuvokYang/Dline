@@ -393,6 +393,8 @@ export interface CommandExecutorCallbacks {
  * Optional per-command execution behavior overrides.
  */
 export interface CommandExecutionOptions {
+	/** Canonical directory in which the command must execute. */
+	workdirectory?: string
 	/**
 	 * Force command execution in standalone/background terminal mode for this command.
 	 * This is useful for subagent runs and headless-style execution flows.

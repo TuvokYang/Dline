@@ -1,3 +1,6 @@
+import fs from "node:fs/promises"
+import os from "node:os"
+import path from "node:path"
 import type { ToolUse } from "@core/assistant-message"
 import { ClineDefaultTool } from "@shared/tools"
 import { describe, expect, it, vi } from "vitest"
@@ -48,7 +51,7 @@ function config(
 	return {
 		taskId: "task-1",
 		ulid: "ulid-1",
-		cwd: "/workspace",
+		cwd: process.cwd(),
 		mode: "act",
 		isSubagentExecution: false,
 		taskState: Object.assign(new TaskState(), { lastToolName: "read_file" }),
@@ -122,7 +125,7 @@ describe("handler interaction matrix", () => {
 					getGlobalSettingsKey: vi.fn(() => "act"),
 				},
 				commandPermissionController: { validateCommand: vi.fn(() => ({ allowed: true })) },
-				clineIgnoreController: { validateCommand: vi.fn(() => undefined) },
+				clineIgnoreController: { validateDirectoryAccess: vi.fn(() => true), validateCommand: vi.fn(() => undefined) },
 			},
 			autoApprover: { shouldAutoApproveTool: vi.fn(() => [false, false]) },
 			autoApprovalSettings: { enableNotifications: false },
@@ -143,9 +146,67 @@ describe("handler interaction matrix", () => {
 		)
 
 		expect(taskConfig.interactions.open).toHaveBeenCalledWith(
-			expect.objectContaining({ kind: "command_approval", presentation: "echo ok" }),
+			expect.objectContaining({
+				kind: "command_approval",
+				presentation: expect.stringContaining(`echo ok\n\nWorking directory: ${await fs.realpath(process.cwd())}`),
+			}),
 		)
 		expect(taskConfig.callbacks.ask).not.toHaveBeenCalled()
+	})
+
+	it("forces external workdirectories through approval and executes without a cd prefix", async () => {
+		const externalDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "dline-command-external-"))
+		try {
+			const taskConfig = config({ actionId: "approve" })
+			Object.assign(taskConfig, {
+				api: { getModel: vi.fn(() => ({ id: "test-model" })) },
+				services: {
+					stateManager: {
+						getApiConfiguration: vi.fn(() => ({})),
+						getGlobalSettingsKey: vi.fn(() => "act"),
+					},
+					commandPermissionController: { validateCommand: vi.fn(() => ({ allowed: true })) },
+					clineIgnoreController: {
+						validateDirectoryAccess: vi.fn(() => true),
+						validateCommand: vi.fn(() => undefined),
+					},
+				},
+				autoApprover: { shouldAutoApproveTool: vi.fn(() => [true, true]) },
+				autoApprovalSettings: { enableNotifications: false },
+				isMultiRootEnabled: false,
+			})
+			taskConfig.callbacks.executeCommandTool = vi.fn(async () => ({
+				userRejected: false,
+				result: "ok",
+				completed: true,
+				exitCode: 0,
+				signal: null,
+			}))
+
+			await new ExecuteCommandToolHandler().execute(
+				taskConfig,
+				block(ClineDefaultTool.BASH, {
+					command: "echo ok",
+					requires_approval: "false",
+					workdirectory: externalDirectory,
+				}),
+			)
+
+			const canonicalDirectory = await fs.realpath(externalDirectory)
+			expect(taskConfig.interactions.open).toHaveBeenCalledWith(
+				expect.objectContaining({
+					kind: "command_approval",
+					presentation: expect.stringContaining(`Working directory: ${canonicalDirectory}`),
+				}),
+			)
+			expect(taskConfig.callbacks.executeCommandTool).toHaveBeenCalledWith(
+				"echo ok",
+				expect.any(Number),
+				expect.objectContaining({ workdirectory: canonicalDirectory }),
+			)
+		} finally {
+			await fs.rm(externalDirectory, { recursive: true, force: true })
+		}
 	})
 
 	it("rejects interaction opening without canonical dline identity", async () => {

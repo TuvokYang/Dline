@@ -1,7 +1,7 @@
 import fs from "fs/promises"
-import { afterAll, beforeEach, describe, it } from "vitest"
 import os from "os"
 import path from "path"
+import { afterAll, beforeEach, describe, it } from "vitest"
 import { ClineIgnoreController } from "./ClineIgnoreController"
 import "should"
 
@@ -164,6 +164,19 @@ describe("ClineIgnoreController", () => {
 	})
 
 	describe("Path Handling", () => {
+		it("resolves command arguments from the explicit workdirectory", async () => {
+			const nestedDirectory = path.join(tempDir, "src")
+			await fs.mkdir(nestedDirectory)
+
+			const ignoredPath = controller.validateCommand("type ../config.secret", nestedDirectory)
+			if (!ignoredPath) throw new Error("Expected command path to be blocked by .clineignore")
+			ignoredPath.should.equal("../config.secret")
+		})
+
+		it("blocks a workdirectory matched by a directory-only ignore pattern", () => {
+			controller.validateDirectoryAccess(path.join(tempDir, "private")).should.be.false()
+		})
+
 		it("should handle absolute paths and match ignore patterns", async () => {
 			// Test absolute path that should be allowed
 			const allowedPath = path.join(tempDir, "src/file.ts")

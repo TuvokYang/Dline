@@ -150,10 +150,11 @@ export class ClineIgnoreController {
 
 	/**
 	 * Check if a file should be accessible to the LLM
-	 * @param filePath - Path to check (relative to cwd)
+	 * @param filePath - Path to check (relative to baseDir)
+	 * @param baseDir - Directory used to resolve relative paths
 	 * @returns true if file is accessible, false if ignored
 	 */
-	validateAccess(filePath: string): boolean {
+	validateAccess(filePath: string, baseDir: string = this.cwd): boolean {
 		// Always allow access if .clineignore does not exist
 		if (!this.clineIgnoreContent) {
 			return true
@@ -163,7 +164,7 @@ export class ClineIgnoreController {
 			// Also strip a leading "/" on Windows to prevent path.resolve from
 			// treating it as a drive-relative absolute path.
 			const normalized = normalizeWorkspaceRelativeInputPath(filePath)
-			const absolutePath = path.resolve(this.cwd, normalized)
+			const absolutePath = path.resolve(baseDir, normalized)
 			const relativePath = path.relative(this.cwd, absolutePath).toPosix()
 
 			// Ignore expects paths to be path.relative()'d
@@ -175,12 +176,29 @@ export class ClineIgnoreController {
 		}
 	}
 
+	/** Check whether a directory itself is allowed, including directory-only ignore patterns. */
+	validateDirectoryAccess(directoryPath: string, baseDir: string = this.cwd): boolean {
+		if (!this.clineIgnoreContent) {
+			return true
+		}
+		try {
+			const normalized = normalizeWorkspaceRelativeInputPath(directoryPath)
+			const absolutePath = path.resolve(baseDir, normalized)
+			const relativePath = path.relative(this.cwd, absolutePath).toPosix()
+			const ignorePath = relativePath && !relativePath.endsWith("/") ? `${relativePath}/` : relativePath
+			return !this.ignoreInstance.ignores(ignorePath)
+		} catch {
+			return true
+		}
+	}
+
 	/**
 	 * Check if a terminal command should be allowed to execute based on file access patterns
 	 * @param command - Terminal command to validate
+	 * @param workdirectory - Directory used to resolve relative command paths
 	 * @returns path of file that is being accessed if it is being accessed, undefined if command is allowed
 	 */
-	validateCommand(command: string): string | undefined {
+	validateCommand(command: string, workdirectory: string = this.cwd): string | undefined {
 		// Always allow if no .clineignore exists
 		if (!this.clineIgnoreContent) {
 			return undefined
@@ -222,7 +240,7 @@ export class ClineIgnoreController {
 					continue
 				}
 				// Validate file access
-				if (!this.validateAccess(arg)) {
+				if (!this.validateAccess(arg, workdirectory)) {
 					return arg
 				}
 			}

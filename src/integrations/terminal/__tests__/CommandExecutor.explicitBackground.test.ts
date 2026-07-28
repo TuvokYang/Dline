@@ -152,10 +152,15 @@ describe("CommandExecutor explicit background execution", () => {
 		}
 		const trackBackgroundCommand = vi.spyOn(standaloneManager, "trackBackgroundCommand").mockReturnValue(backgroundCommand)
 
-		const result = await executor.execute("serve", 30, { commandTs: 101, startInBackground: true })
+		const result = await executor.execute("serve", 30, {
+			commandTs: 101,
+			startInBackground: true,
+			workdirectory: "C:\\workspace\\service",
+		})
 
 		assert.equal(vi.mocked(primaryManager.getOrCreateTerminal).mock.calls.length, 0)
 		assert.equal(getOrCreateTerminal.mock.calls.length, 1)
+		assert.equal(getOrCreateTerminal.mock.calls[0]?.[0], "C:\\workspace\\service")
 		assert.equal(runCommand.mock.calls.length, 1)
 		assert.equal(hide.mock.calls.length, 1)
 		assert.equal(show.mock.calls.length, 0)

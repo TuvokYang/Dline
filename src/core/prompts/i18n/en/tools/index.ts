@@ -47,6 +47,7 @@ export const toolPromptModules = [
 		nativeCoordinateInstruction: createRuntimeContract("BROWSER_VIEWPORT_WIDTH", "BROWSER_VIEWPORT_HEIGHT"),
 	}),
 	defineLegacyModule("executeCommand", "tools", executeCommand, {
+		nativeWorkdirectoryInstruction: createRuntimeContract("CWD"),
 		clineIgnoreError: createRuntimeContract("PATH"),
 		permissionDeniedError: createRuntimeContract("REASON"),
 	}),

@@ -27,7 +27,7 @@ export const LITE_CAPABILITIES = `CURIOSITY & FIRST CONTACT
 export const LITE_RULES = `GLOBAL RULES
 - One tool per message; wait for result. Never assume outcomes.
 - Exact XML tags for tool + params.
-- CWD fixed: @CWD@; to run elsewhere: cd /path && cmd in **one** command; no ~ or $HOME.
+- CWD fixed: @CWD@; to run elsewhere, set execute_command.workdirectory; no ~ or $HOME.
 - Impactful/network/delete/overwrite/config ops → requires_approval=true.
 - Environment details are context; check Actively Running Terminals before starting servers.
 - Prefer list/search/read tools over asking; if anything is unclear, use <ask_followup_question>.

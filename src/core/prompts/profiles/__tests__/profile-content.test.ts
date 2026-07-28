@@ -94,6 +94,8 @@ describe("native and lite profile content", () => {
 		expect(text).toContain("You are Dline, a senior software engineer")
 		expect(text).toContain("FILE EDITING RULES")
 		expect(text).toContain("CWD fixed: /workspace/project")
+		expect(text).toContain("execute_command.workdirectory")
+		expect(text).not.toContain("cd /path && cmd")
 		expect(text.length).toBeLessThan((await generateProfile(PromptProfile.Native)).length)
 		expect(text).not.toMatch(/\b(?:XS|compact|native-next-gen)\b/i)
 	})

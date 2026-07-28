@@ -105,8 +105,9 @@ export class CommandExecutor {
 		timeoutSeconds: number | undefined,
 		options?: CommandExecutionOptions,
 	): Promise<CommandExecutionOutcome> {
+		const workdirectory = options?.workdirectory ?? this.cwd
 		// Strip leading `cd` to workspace from command
-		const workspaceCdPrefix = `cd ${this.cwd} && `
+		const workspaceCdPrefix = `cd ${workdirectory} && `
 		if (command.startsWith(workspaceCdPrefix)) {
 			command = command.substring(workspaceCdPrefix.length)
 		}
@@ -115,11 +116,13 @@ export class CommandExecutor {
 		const useStandalone =
 			options?.startInBackground || options?.useBackgroundExecution || this.terminalExecutionMode === "backgroundExec"
 		const manager = useStandalone ? this.standaloneManager : this.terminalManager
-		Logger.debug(`[Task ${this.taskId}] Executing command in ${useStandalone ? "standalone" : "VSCode"} terminal: ${command}`)
+		Logger.debug(
+			`[Task ${this.taskId}] Executing command in ${useStandalone ? "standalone" : "VSCode"} terminal (cwd: ${workdirectory}): ${command}`,
+		)
 		this.callbacks.markWorkspaceScanRequired?.()
 
 		// Get terminal and run command
-		const terminalInfo = await manager.getOrCreateTerminal(this.cwd)
+		const terminalInfo = await manager.getOrCreateTerminal(workdirectory)
 		if (options?.startInBackground) {
 			terminalInfo.terminal.hide()
 		} else {
