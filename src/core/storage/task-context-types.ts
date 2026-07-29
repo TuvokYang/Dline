@@ -37,8 +37,12 @@ export interface FrozenSystemPromptCache {
  * Records the prompt builder inputs that produced the frozen prompt.
  */
 export interface FrozenPromptBuilderInfo {
+	/** Optional so task caches written before prompt contract versioning remain readable. */
+	readonly contractVersion?: number
 	readonly providerId: string
 	readonly modelId: string
 	readonly profile: "native" | "lite"
 	readonly nativeTools: boolean
+	/** Optional for backward compatibility with caches written before focus-aware prompts. */
+	readonly focusChainEnabled?: boolean
 }

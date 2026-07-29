@@ -596,6 +596,8 @@ function isFrozenTool(value: unknown): boolean {
 function isPromptBuilderInfo(value: unknown): value is FrozenPromptBuilderInfo {
 	return (
 		isJsonObject(value) &&
+		(value.contractVersion === undefined ||
+			(typeof value.contractVersion === "number" && Number.isInteger(value.contractVersion))) &&
 		isNonEmptyString(value.providerId) &&
 		isNonEmptyString(value.modelId) &&
 		(value.profile === "native" || value.profile === "lite") &&
