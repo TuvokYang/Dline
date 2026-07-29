@@ -129,45 +129,53 @@ Choose one action:
 
 ### Initial creation
 
-Set \`task_progress\` to a complete Markdown checklist:
+Use this XML parameter form, with the complete Markdown checklist as its value:
 
-\`\`\`markdown
+\`\`\`xml
+<task_progress>
 # Build React Application
 
 ## Set up project
 
 - [ ] Set up project structure
 - [ ] Install dependencies
+</task_progress>
 \`\`\`
 
 ### Report completed items
 
-Set \`task_progress\` to the exact completed items:
+Use this XML parameter form with the exact completed items:
 
-\`\`\`markdown
+\`\`\`xml
+<task_progress>
 - [x] Set up project structure
 - [x] Install dependencies
+</task_progress>
 \`\`\`
 
 ### Report completed items and the current item
 
-Set \`task_progress\` to the exact completed items followed by one unchanged current item:
+Use this XML parameter form with the exact completed items followed by one unchanged current item:
 
-\`\`\`markdown
+\`\`\`xml
+<task_progress>
 - [x] Set up project structure
 - [x] Install dependencies
 - [ ] Create components
+</task_progress>
 \`\`\`
 
 ### Start the next checklist
 
-When all current items are complete and work continues, set \`task_progress\` to the next complete Markdown checklist:
+When all current items are complete and work continues, use this XML parameter form for the next complete Markdown checklist:
 
-\`\`\`markdown
+\`\`\`xml
+<task_progress>
 # Add Features
 
 - [ ] Add login page
 - [ ] Add signup page
+</task_progress>
 \`\`\``,
 
 	nativeGpt5: `UPDATING TASK PROGRESS
