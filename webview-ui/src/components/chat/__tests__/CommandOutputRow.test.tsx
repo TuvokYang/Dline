@@ -1,5 +1,5 @@
-import { COMMAND_OUTPUT_STRING } from "@shared/combineCommandSequences"
-import { fireEvent, render, screen } from "@testing-library/react"
+import { COMMAND_OUTPUT_STRING, COMMAND_REQ_APP_STRING } from "@shared/combineCommandSequences"
+import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import React from "react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { FileServiceClient } from "@/services/grpc-client"
@@ -24,6 +24,33 @@ const baseProps = {
 describe("CommandOutputRow cancellation", () => {
 	beforeEach(() => {
 		vi.mocked(FileServiceClient.openFile).mockClear()
+		Object.defineProperty(navigator, "clipboard", {
+			configurable: true,
+			value: { writeText: vi.fn(async () => undefined) },
+		})
+	})
+
+	it("copies only the executable command from the top-right action", async () => {
+		render(
+			<CommandOutputRow
+				{...baseProps}
+				isCollapsed={false}
+				message={{
+					...baseProps.message,
+					text: `echo ready${COMMAND_REQ_APP_STRING}\n${COMMAND_OUTPUT_STRING}\nready`,
+				}}
+			/>,
+		)
+
+		fireEvent.click(screen.getByRole("button", { name: "Copy command" }))
+
+		await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith("echo ready"))
+	})
+
+	it("keeps command copy available when the row is collapsed", () => {
+		render(<CommandOutputRow {...baseProps} isCollapsed={true} />)
+
+		expect(screen.getByRole("button", { name: "Copy command" })).toBeVisible()
 	})
 	it("shows Cancel for a running VS Code terminal command", () => {
 		const onCancelCommand = vi.fn()

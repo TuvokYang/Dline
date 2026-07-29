@@ -10,6 +10,7 @@ import {
 	TerminalIcon,
 } from "lucide-react"
 import { useMemo, useState } from "react"
+import { CopyButton } from "@/components/common/CopyButton"
 import { OpenFilePathLink } from "@/components/common/OpenFilePathLink"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
@@ -176,6 +177,9 @@ export function TaskActivityPanel({ taskId }: { taskId: string }) {
 										<ChevronRightIcon className="size-3.5" />
 									)}
 								</button>
+								{activity.kind === "command" && (
+									<CopyButton ariaLabel="Copy command" textToCopy={activity.detail ?? activity.title} />
+								)}
 								{activity.cancellable && isActive && activity.status !== "awaiting_approval" && (
 									<Button
 										disabled={activity.status === "cancelling"}

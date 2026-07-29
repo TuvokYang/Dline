@@ -7,6 +7,7 @@ import { memo, useEffect, useRef } from "react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import CodeBlock from "../common/CodeBlock"
+import { CopyButton } from "../common/CopyButton"
 import { OpenFilePathLink } from "../common/OpenFilePathLink"
 import ExpandHandle from "./ExpandHandle"
 
@@ -245,6 +246,7 @@ export const CommandOutputRow = memo(
 							<TerminalIcon className={cn("size-2 shrink-0", isActive && "animate-pulse", colors.text)} />
 							<span className="text-sm text-left truncate flex-1 opacity-70">{command}</span>
 						</button>
+						<CopyButton ariaLabel="Copy command" textToCopy={command} />
 						{showCancelButton && (
 							<Button className="border" onClick={onCancelCommand} size="sm" variant="danger">
 								Cancel
@@ -275,6 +277,9 @@ export const CommandOutputRow = memo(
 								<span className={cn("font-medium text-base shrink-0", colors.text)}>{statusText}</span>
 							</div>
 							<div className="flex items-center gap-2 shrink-0">
+								<div onClick={(event) => event.stopPropagation()}>
+									<CopyButton ariaLabel="Copy command" textToCopy={command} />
+								</div>
 								{showCancelButton && (
 									<Button
 										className="border"

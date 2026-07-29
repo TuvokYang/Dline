@@ -1,4 +1,5 @@
 import type { ClineMessage } from "@shared/ExtensionMessage"
+import { CopyButton } from "@/components/common/CopyButton"
 
 /** Props shared by pure interaction presentation renderers. */
 export interface PresentationProps {
@@ -19,7 +20,14 @@ export function ApprovalRenderer(props: PresentationProps) {
 
 /** Render command-oriented interaction content. */
 export function CommandRenderer(props: PresentationProps) {
-	return shell(props.message)
+	return (
+		<div className="relative rounded-sm border border-editor-group-border bg-code p-3 pr-10">
+			<div className="absolute right-1 top-1">
+				<CopyButton ariaLabel="Copy command" textToCopy={props.message.text} />
+			</div>
+			<pre className="m-0 whitespace-pre-wrap break-words font-mono text-xs">{props.message.text}</pre>
+		</div>
+	)
 }
 
 /** Render conversation interaction content. */

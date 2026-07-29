@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { fireEvent, render, screen, within } from "@testing-library/react"
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { FileServiceClient } from "@/services/grpc-client"
 import { TaskActivityPanel } from "./TaskActivityPanel"
@@ -27,6 +27,7 @@ vi.mock("./useTaskActivities", () => ({
 				createdAt: 200,
 				updatedAt: 200,
 				title: "new command",
+				detail: "npm run test:run -- src/example.test.ts",
 				logPath: "C:\\Temp\\activity.log",
 				events: [],
 			},
@@ -88,6 +89,10 @@ describe("TaskActivityPanel", () => {
 	beforeEach(() => {
 		cancelTaskActivities.mockClear()
 		vi.mocked(FileServiceClient.openFile).mockClear()
+		Object.defineProperty(navigator, "clipboard", {
+			configurable: true,
+			value: { writeText: vi.fn(async () => undefined) },
+		})
 	})
 
 	it("defaults to active activities in creation order and exposes exact cancellation", () => {
@@ -110,6 +115,14 @@ describe("TaskActivityPanel", () => {
 		fireEvent.click(within(item).getByRole("button", { name: "Open log file activity.log" }))
 
 		expect(FileServiceClient.openFile).toHaveBeenCalledWith(expect.objectContaining({ value: "C:\\Temp\\activity.log" }))
+	})
+
+	it("copies the full command from a command activity", async () => {
+		render(<TaskActivityPanel taskId="task-1" />)
+
+		fireEvent.click(screen.getByRole("button", { name: "Copy command" }))
+
+		await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith("npm run test:run -- src/example.test.ts"))
 	})
 
 	it("renders an ordered typed timeline with thinking, conversation, tools, results, and metrics", () => {
