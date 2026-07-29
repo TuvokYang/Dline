@@ -8,8 +8,10 @@ import type { ChatCompletionReasoningEffort, ChatCompletionTool } from "openai/r
 import { buildExternalBasicHeaders } from "@/services/EnvUtils"
 import { ClineStorageMessage } from "@/shared/messages/content"
 import { createOpenAIClient, fetch } from "@/shared/net"
+import { isO1Model } from "@/shared/resolve-prompt-profile"
 import { ApiHandler, ApiHandlerContext } from "../index"
 import { withRetry } from "../retry"
+import { convertToO1Messages } from "../transform/o1-format"
 import { convertToOpenAiMessages } from "../transform/openai-format"
 import { convertToR1Format } from "../transform/r1-format"
 import { ApiStream } from "../transform/stream"
@@ -196,6 +198,7 @@ export class OpenAiHandler implements ApiHandler {
 	async *createMessage(systemPrompt: string, messages: ClineStorageMessage[], tools?: ChatCompletionTool[]): ApiStream {
 		const client = this.ensureClient()
 		const modelId = this.modelId
+		const isO1 = isO1Model(modelId)
 		const isDeepseekReasoner = modelId.includes("deepseek-reasoner")
 		const isReasoningModelFamily =
 			["o1", "o3", "o4", "gpt-5"].some((prefix) => modelId.includes(prefix)) && !modelId.includes("chat")
@@ -250,8 +253,11 @@ export class OpenAiHandler implements ApiHandler {
 			reasoningEffort = undefined
 		}
 
-		// o-series model-specific handling: developer role + no temperature
-		if (isReasoningModelFamily) {
+		// o1 accepts the Lite XML contract in user messages and cannot replay native tool roles.
+		if (isO1) {
+			openAiMessages = convertToO1Messages(convertToOpenAiMessages(messages), systemPrompt)
+			temperature = undefined
+		} else if (isReasoningModelFamily) {
 			openAiMessages = [{ role: "developer", content: systemPrompt }, ...convertToOpenAiMessages(messages)]
 			temperature = undefined // does not support temperature
 		}
@@ -279,7 +285,9 @@ export class OpenAiHandler implements ApiHandler {
 		if (this.config?.streamIncludeUsage !== false) {
 			requestParams.stream_options = { include_usage: true }
 		}
-		Object.assign(requestParams, getOpenAIToolParams(tools))
+		if (!isO1) {
+			Object.assign(requestParams, getOpenAIToolParams(tools))
+		}
 
 		const stream = await (client.chat.completions as any).create(requestParams)
 

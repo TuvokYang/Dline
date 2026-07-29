@@ -3,9 +3,11 @@ import { BaseProviderConfig } from "@shared/proto/dline/provider/common"
 import { OpenAiProviderConfig } from "@shared/proto/dline/provider/openai"
 import { OpenAiCodexProviderConfig } from "@shared/proto/dline/provider/openai_codex"
 import { expect } from "chai"
+import OpenAI from "openai"
 import should from "should"
 import { afterEach, describe, it, vi } from "vitest"
 import { openAiCodexOAuthManager } from "@/integrations/openai-codex/oauth"
+import type { ClineAssistantToolUseBlock, ClineStorageMessage, ClineUserToolResultContentBlock } from "@/shared/messages/content"
 import { mockFetchForTesting } from "@/shared/net"
 import { OpenAiHandler } from "../openai"
 import { OpenAiCodexHandler } from "../openai-codex"
@@ -119,6 +121,66 @@ describe("OpenAiHandler", () => {
 			const requestBody = create.mock.calls[0]?.[0] as Record<string, unknown>
 			expect(requestBody.service_tier).to.equal("priority")
 			expect(requestBody.reasoning_effort).to.equal("ultra")
+		})
+
+		it("uses the Lite o1 message transform and suppresses native tool schemas", async () => {
+			const handler = new OpenAiHandler({
+				profile: ApiProfile.create({
+					provider: "openai",
+					apiKey: "test-api-key",
+					modelId: "openai/o1-preview",
+				}),
+				mode: "act",
+			})
+			const create = vi.fn().mockResolvedValue(createAsyncIterable())
+			vi.spyOn(handler as unknown as { ensureClient: () => unknown }, "ensureClient").mockReturnValue({
+				chat: { completions: { create } },
+			})
+
+			const messages: ClineStorageMessage[] = [
+				{
+					role: "assistant",
+					content: [
+						{
+							type: "tool_use",
+							function_id: "call_read",
+							dline_tid: "tid_read",
+							name: "read_file",
+							input: { path: "README.md" },
+						} as ClineAssistantToolUseBlock,
+					],
+				},
+				{
+					role: "user",
+					content: [
+						{
+							type: "tool_result",
+							function_id: "call_read",
+							dline_tid: "tid_read",
+							content: "file contents",
+						} as ClineUserToolResultContentBlock,
+					],
+				},
+			]
+			const tools: OpenAI.Chat.ChatCompletionTool[] = [
+				{
+					type: "function",
+					function: { name: "read_file", description: "Read a file", parameters: { type: "object" } },
+				},
+			]
+
+			for await (const _chunk of handler.createMessage("LITE PROFILE PROMPT", messages, tools)) {
+			}
+
+			const requestBody = create.mock.calls[0]?.[0] as OpenAI.Chat.ChatCompletionCreateParams
+			const assistantMessage = requestBody.messages[1] as OpenAI.Chat.ChatCompletionAssistantMessageParam
+			expect(requestBody.messages[0]).to.deep.equal({ role: "user", content: "LITE PROFILE PROMPT" })
+			expect(assistantMessage.role).to.equal("assistant")
+			expect(assistantMessage.content).to.contain("Tool Call: read_file")
+			expect(assistantMessage).not.to.have.property("tool_calls")
+			expect(requestBody.messages[2]).to.deep.equal({ role: "user", content: "file contents" })
+			expect(requestBody).not.to.have.property("tools")
+			expect(JSON.stringify(requestBody)).not.to.contain("Instructions for Formulating Your Response")
 		})
 	})
 })
