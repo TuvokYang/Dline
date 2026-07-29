@@ -9,7 +9,7 @@ export const STANDARD_TOOL_USE_SUFFIX = ` You will receive the results of all to
 
 ## Tool-Calling Convention and Preambles
 
-When switching domains or task_progress steps, you may want to provide a brief preamble explaining:
+When switching domains or task_progress steps, you need to provide a brief preamble explaining:
 
 - **What tool** you are about to use
 - **Why** you are using it (what problem it solves or what information it will provide)
