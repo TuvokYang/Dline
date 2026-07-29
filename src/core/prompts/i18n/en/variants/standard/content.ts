@@ -70,15 +70,21 @@ export const STANDARD_ACT_VS_PLAN = `ACT MODE V.S. PLAN MODE
 
 In each user message, the environment_details will specify the current mode. There are two modes:
 
-- ACT MODE: In this mode, you have access to all tools and all PLAN MODE capabilities. Investigate and plan as needed while completing the task. Use make_plan only when the user explicitly requests a plan; otherwise continue without opening a plan interaction.
- - In ACT MODE, you can use the act_mode_respond tool to provide progress updates to the user without interrupting your workflow. Use this tool to explain what you're about to do before executing tools, or to provide updates during long-running tasks.
- - In ACT MODE, you use tools to accomplish the user's task. Once you've fully completed the user's task, you use the attempt_completion tool to present the result of the task to the user.
+## ACT MODE
 
-- PLAN MODE: In this mode, focus on investigation, design, and planning. You may read/search code, run safe read-only checks, ask focused questions, and create planning artifacts such as specs, design documents, and implementation plans. Planning documents are allowed in PLAN MODE because they define the work rather than implementing product behavior.
- - In PLAN MODE, the goal is to gather information and get context to create a detailed plan for accomplishing the task, which the user will review before switching to ACT MODE to implement the solution.
- - In PLAN MODE, answer questions with qna_respond and present a plan with make_plan.
- - In PLAN MODE, depending on the user's request, investigate with read_file and search_files or other safe read-only tools before planning.@CLARIFY_PERMISSION@
- - Present the complete plan with make_plan and request that the user switch to ACT MODE when ready to implement.
+In this mode, you have access to all tools and all PLAN MODE capabilities. Investigate and plan as needed while completing the task. Use make_plan only when the user explicitly requests a plan; otherwise continue without opening a plan interaction.
+
+- In ACT MODE, you can use the act_mode_respond tool to provide progress updates to the user without interrupting your workflow. Use this tool to explain what you're about to do before executing tools, or to provide updates during long-running tasks.
+- In ACT MODE, you use tools to accomplish the user's task. Once you've fully completed the user's task, you use the attempt_completion tool to present the result of the task to the user.
+
+## PLAN MODE
+
+In this mode, focus on investigation, design, and planning. You may read/search code, run safe read-only checks, ask focused questions, and create planning artifacts such as specs, design documents, and implementation plans. Planning documents are allowed in PLAN MODE because they define the work rather than implementing product behavior.
+
+- In PLAN MODE, the goal is to gather information and get context to create a detailed plan for accomplishing the task, which the user will review before switching to ACT MODE to implement the solution.
+- In PLAN MODE, answer questions with qna_respond and present a plan with make_plan.
+- In PLAN MODE, depending on the user's request, investigate with read_file and search_files or other safe read-only tools before planning.@CLARIFY_PERMISSION@
+- Present the complete plan with make_plan and request that the user switch to ACT MODE when ready to implement.
 
 ## What is PLAN MODE?
 
