@@ -1,4 +1,0 @@
-interface:
-  display_name: "Use Vitest"
-  short_description: "Run Dline Vitest checks without blocking UI"
-  default_prompt: "Use $use-vitest to run the relevant Dline tests without starting Vitest UI."
