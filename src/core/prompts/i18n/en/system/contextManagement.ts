@@ -5,7 +5,7 @@ const prompts: Record<string, string> = {
 The current conversation is rapidly running out of context. Now, your urgent task is to create a comprehensive detailed summary of the conversation so far, paying close attention to the user's explicit requests and your previous actions.
 This summary should be thorough in capturing technical details, code patterns, and architectural decisions that would be essential for continuing development work without losing context.
 
-You have only two options: If you are immediately prepared to call the attempt_completion tool, and have completed all items in your task_progress list, you may call attempt_completion at this time. If you are not prepared to call the attempt_completion tool, and have not completed all items in your task_progress list, you must call the summarize_task tool - in this case you must call the summarize_task tool whether you are in PLAN or ACT mode.
+@SUMMARY_DECISION@
 
 You MUST ONLY respond to this message by using either the attempt_completion tool or the summarize_task tool call. When using the summarize_task tool call, you must include ALL information in the summary required for continuing with the task at hand. This is because you will lose access to all messages other than this summary.
 
@@ -41,10 +41,10 @@ Your summary should include the following sections:
 @FOCUS_CHAIN_PARAM@
 
 Usage:
-<auto-condense>
+<summarize_task>
 <context>Your detailed summary</context>
 @FOCUS_CHAIN_USAGE@
-</auto-condense>
+</summarize_task>
 
 Here's an example of how your output should be structured:
 
@@ -52,7 +52,7 @@ Here's an example of how your output should be structured:
 <thinking>
 [Your thought process, ensuring all points are covered thoroughly and accurately]
 </thinking>
-<auto-condense>
+<summarize_task>
 <context>
 1. Previous Conversation:
    [High level overview of the entire conversation flow]
@@ -92,7 +92,7 @@ Here's an example of how your output should be structured:
    - [file path 2]
 </context>
 @FOCUS_CHAIN_EXAMPLE@
-</auto-condense>
+</summarize_task>
 </example>
 
 </explicit_instructions>
@@ -109,6 +109,18 @@ There is an optional task_progress parameter. Only report COMPLETED items (\`- [
 - [ ] Remaining task example
 - [ ] Remaining task example
 </task_progress>`,
+
+	summarizeDecisionWithFocus:
+		"You have only two options: If you are immediately prepared to call the attempt_completion tool, and have completed all items in your task_progress list, you may call attempt_completion at this time. If you are not prepared to call the attempt_completion tool, and have not completed all items in your task_progress list, you must call the summarize_task tool - in this case you must call the summarize_task tool whether you are in PLAN or ACT mode.",
+
+	summarizeDecisionWithoutFocus:
+		"You have only two options: If you are immediately prepared to call the attempt_completion tool, you may call attempt_completion at this time. If you are not prepared to call the attempt_completion tool, you must call the summarize_task tool - in this case you must call the summarize_task tool whether you are in PLAN or ACT mode.",
+
+	summarizeToolDescription:
+		"The current conversation is rapidly running out of context. Now, your urgent task is to create a comprehensive detailed summary of the conversation so far, paying close attention to the user's explicit requests and your previous actions.",
+
+	summarizeContextInstruction:
+		"This summary should be thorough in capturing technical details, code patterns, and architectural decisions that would be essential for continuing development work without losing context.",
 
 	continuationPrompt: `This session is being continued from a previous conversation that ran out of context. The conversation is summarized below:
 @SUMMARY_TEXT@.

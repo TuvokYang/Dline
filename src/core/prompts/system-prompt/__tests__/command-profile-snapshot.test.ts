@@ -4,7 +4,14 @@ import * as path from "node:path"
 import { beforeAll, describe, expect, it } from "vitest"
 
 import type { ApiProviderInfo } from "@/core/api"
-import { condenseToolResponse, deepPlanningToolResponse, newTaskToolResponse } from "../../commands"
+import {
+	condenseToolResponse,
+	deepPlanningToolResponse,
+	explainChangesToolResponse,
+	newRuleToolResponse,
+	newTaskToolResponse,
+	reportBugToolResponse,
+} from "../../commands"
 import { PromptProfile } from "../../profiles/types"
 import { assertPromptContent } from "./snapshot-content"
 
@@ -39,10 +46,22 @@ const COMMAND_SNAPSHOT_CASES: readonly CommandSnapshotCase[] = [
 		name: `compact.${focusCase}.command.snap`,
 		generate: () => condenseToolResponse({ enabled: focusCase === "focus-on" }),
 	})),
-	...TRANSPORTS.map((transport) => ({
-		name: `new-task.${transport}.command.snap`,
-		generate: () => newTaskToolResponse(transport === "native"),
-	})),
+	{
+		name: "new-task.xml.command.snap",
+		generate: newTaskToolResponse,
+	},
+	{
+		name: "new-rule.xml.command.snap",
+		generate: newRuleToolResponse,
+	},
+	{
+		name: "report-bug.xml.command.snap",
+		generate: reportBugToolResponse,
+	},
+	{
+		name: "explain-changes.xml.command.snap",
+		generate: explainChangesToolResponse,
+	},
 ]
 
 function createProviderInfo(): ApiProviderInfo {

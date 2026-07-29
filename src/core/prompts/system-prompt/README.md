@@ -454,7 +454,7 @@ export const config = createVariant(ModelFamily.GENERIC)
     ClineDefaultTool.ASK,
     ClineDefaultTool.ATTEMPT,
     ClineDefaultTool.NEW_TASK,
-    ClineDefaultTool.PLAN_MODE,
+    ClineDefaultTool.MAKE_PLAN,
     ClineDefaultTool.MCP_DOCS,
     ClineDefaultTool.TODO,
   )
@@ -526,7 +526,7 @@ export const config = createVariant(ModelFamily.NEXT_GEN)
     ClineDefaultTool.ASK,
     ClineDefaultTool.ATTEMPT,
     ClineDefaultTool.NEW_TASK,
-    ClineDefaultTool.PLAN_MODE,
+    ClineDefaultTool.MAKE_PLAN,
     ClineDefaultTool.MCP_DOCS,
     ClineDefaultTool.TODO,
   )
@@ -594,7 +594,7 @@ export const config = createVariant(ModelFamily.XS)
     ClineDefaultTool.ASK,
     ClineDefaultTool.ATTEMPT,
     ClineDefaultTool.NEW_TASK,
-    ClineDefaultTool.PLAN_MODE,
+    ClineDefaultTool.MAKE_PLAN,
     ClineDefaultTool.MCP_USE,
     ClineDefaultTool.MCP_ACCESS,
     ClineDefaultTool.MCP_DOCS,
@@ -766,7 +766,7 @@ The system supports the following tools (mapped to `ClineDefaultTool` enum):
 - `ASK`: Ask follow-up questions
 - `ATTEMPT`: Attempt task completion
 - `NEW_TASK`: Create new tasks
-- `PLAN_MODE`: Plan mode responses
+- `MAKE_PLAN`: Implementation and design plans
 - `MCP_DOCS`: Load MCP documentation
 - `TODO`: Todo management
 

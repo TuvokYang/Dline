@@ -8,7 +8,7 @@ export function defineLegacyModule<Name extends string, Entries extends PromptEn
 	domain: PromptDomain,
 	prompts: Entries,
 	contracts: Readonly<Record<string, PromptContract | undefined>> = {},
-	source = `i18n/en/${name}.ts`,
+	source = `i18n/en/${domain}/${name}.ts`,
 ): PromptDescriptor<Name, Entries> {
 	const allowEmptyKeys = Object.entries(prompts)
 		.filter(([, value]) => value.length === 0)

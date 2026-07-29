@@ -10,10 +10,9 @@ const prompts: Record<string, string> = {
 	lineInstruction: "1-based line number where the symbol appears.",
 	characterInstruction: "1-based character offset on the line where the symbol starts.",
 	// Handler messages
-	noLspSupport:
-		"LSP support is not available in this environment.\nPlease use search_files with a regex pattern to find references instead. For example: search_files with regex matching the symbol name across the relevant file types.",
-	noReferences: "No references found for the symbol.",
+	noLspSupport: "Error: LSP not available. Use search_files instead.",
+	noReferences: "Error: no references found for the symbol.",
 	foundReferences: "Found {count} references in the workspace:",
-	errorPrefix: "find_references error:",
+	errorPrefix: "Error: @ERROR@",
 }
 export default prompts

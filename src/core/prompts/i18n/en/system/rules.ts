@@ -36,7 +36,7 @@ const prompts: Record<string, string> = {
 - When passing untrusted or variable text as positional command arguments, insert \`--\` before the positional values if they may begin with \`-\` (for example \`my-cli -- "$value"\`). This prevents the values from being parsed as options.
 - The user may provide a file's contents directly in their message, in which case you shouldn't use the read_file tool to get the file contents again since you already have it.
 - Answer user questions directly when asked. Avoid unnecessary conversational filler, but always respond to explicit questions before continuing work.
-- EVERY response must include at least one tool call, except explicit_instructions. Pure text replies without a tool call will be rejected — this is enforced automatically. Use attempt_completion for final results, ask_followup_question for questions, or plan_mode_respond in PLAN MODE. Never end a response with plain text alone.
+- EVERY response must include at least one tool call, except explicit_instructions. Pure text replies without a tool call will be rejected — this is enforced automatically. Use attempt_completion for final results, qna_respond for questions, or make_plan for presenting implementation and design plans (in ACT MODE, only when explicitly requested by the user). Never end a response with plain text alone.
 - Your goal is to accomplish the user's task efficiently and effectively.
 - When writing output files, produce exactly what the task specifies—no extra columns, fields, debug output, or commentary. Match the requested format precisely.
 - When the task specifies numerical thresholds or accuracy targets, verify your result meets the criteria before completing. If close but not passing, iterate rather than declaring completion.
@@ -52,7 +52,7 @@ const prompts: Record<string, string> = {
 
 EVERY response must include at least one tool call, except when processing explicit_instructions. Choose the proper tool for each situation:
 - General conversation or questions: qna_respond
-- Presenting a plan or discussing architecture: plan_mode_respond
+- Presenting a complete implementation or design plan: make_plan (in ACT MODE, only when explicitly requested by the user)
 - Technical report or structured analysis: generate_report
 - Final task completion: attempt_completion
 - Progress announcement during execution: status_update or act_mode_respond

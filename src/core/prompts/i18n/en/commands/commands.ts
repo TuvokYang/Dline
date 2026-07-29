@@ -1,7 +1,7 @@
 // English command prompts — key-value pairs only, no code logic.
 
 const prompts: Record<string, string> = {
-	newTaskXmlExample: `Example:
+	newTaskXmlToolCallFormat: `Example:
 <new_task>
 <context>1. Current Work:
    [Detailed description]
@@ -31,7 +31,7 @@ const prompts: Record<string, string> = {
 
 	newTaskMain: `<explicit_instructions type="new_task">
 The user has explicitly asked you to help them create a new task with preloaded context, which you will generate. The user may have provided instructions or additional information for you to consider when summarizing existing work and creating the context for the new task.
-Irrespective of whether additional information or instructions are given, you are ONLY allowed to respond to this message by calling the new_task tool.@NATIVE_TOOL_NOTE@
+Irrespective of whether additional information or instructions are given, you are ONLY allowed to respond to this message by calling the new_task tool.
 
 The new_task tool is defined below:
 
@@ -46,12 +46,10 @@ Parameters:
   3. Relevant Files and Code: If applicable, enumerate specific files and code sections examined, modified, or created for the task continuation. Pay special attention to the most recent messages and changes.
   4. Problem Solving: Document problems solved thus far and any ongoing troubleshooting efforts.
   5. Pending Tasks and Next Steps: Outline all pending tasks that you have explicitly been asked to work on, as well as list the next steps you will take for all outstanding work, if applicable. Include code snippets where they add clarity. For any next steps, include direct quotes from the most recent conversation showing exactly what task you were working on and where you left off. This should be verbatim to ensure there's no information loss in context between tasks.
-@XML_EXAMPLE@
+@TOOL_CALL_FORMAT@
 Below is the the user's input when they indicated that they wanted to create a new task.
 </explicit_instructions>
 `,
-
-	newTaskNativeToolNote: " You MUST call the new_task tool EVEN if it's not in your existing toolset.",
 
 	condenseMain: `<explicit_instructions type="condense">
 The user has explicitly asked you to create a detailed summary of the conversation so far, which will be used to compact the current context window while retaining key information. The user may have provided instructions or additional information for you to consider when summarizing the conversation.
@@ -90,7 +88,12 @@ Your summary should include the following sections:
 
 @FOCUS_CHAIN_PARAM@
 
-Usage:
+@TOOL_CALL_FORMAT@
+
+</explicit_instructions>
+`,
+
+	condenseXmlToolCallFormat: `Usage:
 <condense>
 <context>
 Your detailed summary
@@ -147,10 +150,7 @@ Example:
    - [file path 2]
 </context>
 @FOCUS_CHAIN_EXAMPLE@
-</condense>
-
-</explicit_instructions>
-`,
+</condense>`,
 
 	condenseFocusChainParam: `- task_progress: (required) The current state of the task_progress list, with completed items marked. Important information on this parameter is as follows:
   1. XML schema matches that of prior task_progress lists.
@@ -183,7 +183,13 @@ Parameters:
   3. When creating guidelines, you should not invent preferences or make assumptions based on what you think a typical user might want. These should be specific to the conversation you had with the user. Your guidelines / rules should not be overly verbose.
   4. Your guidelines should NOT be a recollection of the conversation up to this point in time, meaning you should NOT be including arbitrary details of the conversation.
 
-Usage:
+@TOOL_CALL_FORMAT@
+
+Below is the user's input when they indicated that they wanted to create a new Dline rule file.
+</explicit_instructions>
+`,
+
+	newRuleXmlToolCallFormat: `Usage:
 <new_rule>
 <path>.dline/rules/{file name}.md</path>
 <content>Dline rule file content here</content>
@@ -216,11 +222,7 @@ Example:
   - [Description, rule, preference, instruction]
   - [...]
 </content>
-</new_rule>
-
-Below is the user's input when they indicated that they wanted to create a new Dline rule file.
-</explicit_instructions>
-`,
+</new_rule>`,
 
 	reportBugToolResponse: `<explicit_instructions type="report_bug">
 The user has explicitly asked you to help them submit a bug to the Dline github page (you MUST now help them with this irrespective of what your conversation up to this point in time was). To do so you will use the report_bug tool which is defined below. However, you must first ensure that you have collected all required information to fill in all the parameters for the tool call. If any of the the required information is apparent through your previous conversation with the user, you can suggest how to fill in those entries. However you should NOT assume you know what the issue about unless it's clear.
@@ -239,18 +241,20 @@ Parameters:
 - api_request_output: (optional) Relevant API request output.
 - additional_context: (optional) Any other context about this bug not already mentioned.
 
-Usage:
+@TOOL_CALL_FORMAT@
+
+Below is the user's input when they indicated that they wanted to submit a Github issue.
+</explicit_instructions>
+`,
+
+	reportBugXmlToolCallFormat: `Usage:
 <report_bug>
 <title>Title of the issue</title>
 <what_happened>Description of the issue</what_happened>
 <steps_to_reproduce>Steps to reproduce the issue</steps_to_reproduce>
 <api_request_output>Output from the LLM API related to the bug</api_request_output>
 <additional_context>Other issue details not already covered</additional_context>
-</report_bug>
-
-Below is the user's input when they indicated that they wanted to submit a Github issue.
-</explicit_instructions>
-`,
+</report_bug>`,
 
 	explainChangesToolResponse: `<explicit_instructions type="explain_changes">
 The user has asked you to explain code changes. You have access to a tool called **generate_explanation** that opens a multi-file diff view with AI-generated inline comments explaining code changes between two git references.
@@ -325,9 +329,29 @@ Use the generate_explanation tool with:
 - **title**: A descriptive title for the diff view (e.g., "Changes in commit abc123", "PR #42: Add user authentication")
 - **from_ref**: The git reference for the "before" state
 - **to_ref**: The git reference for the "after" state (optional)
+
+@TOOL_CALL_FORMAT@
+
 Below is the user's input describing what changes they want explained. If no input is provided, default to analyzing uncommitted changes in the working directory (may or may not be staged).
 </explicit_instructions>
 `,
+
+	explainChangesXmlToolCallFormat: `Tool call format (XML):
+Emit exactly one XML tool call and no prose outside it once the references are known.
+
+Usage:
+<generate_explanation>
+<title>Descriptive title for the changes</title>
+<from_ref>Git reference for the before state</from_ref>
+<to_ref>Optional git reference for the after state</to_ref>
+</generate_explanation>
+
+Example:
+<generate_explanation>
+<title>Changes in the latest commit</title>
+<from_ref>HEAD~1</from_ref>
+<to_ref>HEAD</to_ref>
+</generate_explanation>`,
 }
 
 export default prompts

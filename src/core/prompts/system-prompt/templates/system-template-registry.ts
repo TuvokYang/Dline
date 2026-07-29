@@ -21,18 +21,9 @@ export interface SystemTemplateDefinition {
 	readonly sectionIds: readonly SystemSectionId[]
 }
 
-export interface SystemVariantDefinition {
-	readonly id: string
-	readonly compatibleTemplateIds: readonly string[]
-}
-
-export const NATIVE_NEXT_GEN_COMPATIBLE_TEMPLATE: SystemTemplateDefinition = {
-	id: "native-next-gen-compatible",
+export const INTEGRATED_SYSTEM_TEMPLATE: SystemTemplateDefinition = {
+	id: "integrated",
 	sectionIds: SYSTEM_SECTION_IDS,
-}
-
-export function defineSystemVariant(definition: SystemVariantDefinition): SystemVariantDefinition {
-	return definition
 }
 
 export class SystemTemplateRegistry {
@@ -48,13 +39,6 @@ export class SystemTemplateRegistry {
 			throw new Error(`Unknown system template: ${templateId}`)
 		}
 		return template
-	}
-
-	public requireCompatibleVariant(templateId: string, variant: SystemVariantDefinition): SystemVariantDefinition {
-		if (!variant.compatibleTemplateIds.includes(templateId)) {
-			throw new Error(`Variant ${variant.id} is not compatible with system template ${templateId}`)
-		}
-		return variant
 	}
 }
 

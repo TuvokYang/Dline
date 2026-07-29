@@ -447,7 +447,7 @@
 		"vitest:ui:status": "node scripts/vitest-ui/cli.mjs status",
 		"vitest:ui:errors": "node scripts/vitest-ui/cli.mjs errors --filter fail",
 		"vitest:ui:mcp": "node scripts/vitest-ui/mcp-server.mjs",
-		"test:snapshot": "cross-env UPDATE_NEW_PROMPT_SNAPSHOTS=true vitest run src/core/prompts/system-prompt/__tests__/profile-matrix-snapshot.test.ts src/core/prompts/system-prompt/__tests__/command-profile-snapshot.test.ts",
+		"test:snapshot": "cross-env UPDATE_NEW_PROMPT_SNAPSHOTS=true UPDATE_SNAPSHOTS=true vitest run src/core/prompts/system-prompt/__tests__/profile-matrix-snapshot.test.ts src/core/prompts/system-prompt/__tests__/command-profile-snapshot.test.ts src/core/task/focus-chain/__tests__/prompts-snapshot.test.ts",
 		"test:integration": "vscode-test",
 		"test:unit": "vitest run --config vitest.config.ts",
 		"test:coverage": "vscode-test --coverage",

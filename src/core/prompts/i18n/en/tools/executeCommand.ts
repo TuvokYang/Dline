@@ -39,7 +39,8 @@ const prompts: Record<string, string> = {
 
 Example:
 <execute_command>
-<command>cd /path && python -m pytest tests/</command>
+<command>python -m pytest tests/</command>
+<workdirectory>/path</workdirectory>
 <requires_approval>false</requires_approval>
 </execute_command>`,
 }

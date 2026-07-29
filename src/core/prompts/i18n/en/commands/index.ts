@@ -6,8 +6,12 @@ import deepPlanningGeneric from "./deep-planning-generic"
 
 export const commandPromptModules = [
 	defineLegacyModule("commands", "commands", commands, {
-		newTaskMain: createRuntimeContract("NATIVE_TOOL_NOTE", "XML_EXAMPLE"),
-		condenseMain: createRuntimeContract("FOCUS_CHAIN_PARAM", "FOCUS_CHAIN_USAGE", "FOCUS_CHAIN_EXAMPLE"),
+		newTaskMain: createRuntimeContract("TOOL_CALL_FORMAT"),
+		condenseMain: createRuntimeContract("FOCUS_CHAIN_PARAM", "TOOL_CALL_FORMAT"),
+		condenseXmlToolCallFormat: createRuntimeContract("FOCUS_CHAIN_USAGE", "FOCUS_CHAIN_EXAMPLE"),
+		newRuleToolResponse: createRuntimeContract("TOOL_CALL_FORMAT"),
+		reportBugToolResponse: createRuntimeContract("TOOL_CALL_FORMAT"),
+		explainChangesToolResponse: createRuntimeContract("TOOL_CALL_FORMAT"),
 	}),
 	defineLegacyModule("deepPlanning5Step", "commands", deepPlanning5Step, {
 		main: createRuntimeContract(

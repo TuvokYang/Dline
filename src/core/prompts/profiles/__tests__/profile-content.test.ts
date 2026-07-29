@@ -2,8 +2,6 @@ import { describe, expect, it } from "vitest"
 import { SystemPromptGenerator } from "../../generators/SystemPromptGenerator"
 import { PromptProfile } from "../../profiles/types"
 import type { SystemPromptContext } from "../../system-prompt/context"
-import { buildRuntimeEnv } from "../../system-prompt/env/runtime-env"
-import { buildSystemEnv } from "../../system-prompt/env/system-env"
 
 const TEST_CONTEXT: SystemPromptContext = {
 	promptProfile: PromptProfile.Native,
@@ -41,10 +39,11 @@ const TEST_CONTEXT: SystemPromptContext = {
 }
 
 /** Generates one profile candidate through the stable production facade implementation. */
-async function generateProfile(profile: PromptProfile): Promise<string> {
+async function generateProfile(profile: PromptProfile, overrides: Partial<SystemPromptContext> = {}): Promise<string> {
 	const result = await new SystemPromptGenerator().generate({
 		...TEST_CONTEXT,
 		promptProfile: profile,
+		...overrides,
 	})
 
 	expect(result.profile).toBe(profile)
@@ -53,31 +52,6 @@ async function generateProfile(profile: PromptProfile): Promise<string> {
 }
 
 describe("native and lite profile content", () => {
-	it("projects stable system and dynamic runtime environment values", () => {
-		expect(buildSystemEnv(TEST_CONTEXT)).toMatchObject({
-			CWD: "/workspace/project",
-			IDE_NAME: "Test IDE",
-			COMMAND_ENV: "backgroundExec",
-			MULTI_ROOT_HINT: " Use @workspace:path syntax (e.g., @frontend:src/index.ts) to specify a workspace.",
-		})
-		expect(buildSystemEnv(TEST_CONTEXT).WORKSPACE_ROOTS).toContain("frontend: /workspace/frontend (git)")
-		expect(buildRuntimeEnv(TEST_CONTEXT)).toMatchObject({
-			TOOL_TRANSPORT: "native",
-			NATIVE_TOOLS_ENABLED: true,
-			PARALLEL_TOOLS_ENABLED: true,
-			BROWSER_ENABLED: true,
-			BROWSER_VIEWPORT_WIDTH: 1280,
-			BROWSER_VIEWPORT_HEIGHT: 800,
-			SUBAGENTS_ENABLED: true,
-			FOCUS_CHAIN_ENABLED: true,
-			YOLO_MODE_ENABLED: false,
-		})
-		expect(buildRuntimeEnv(TEST_CONTEXT).USER_INSTRUCTIONS_SECTION).toBe(
-			"Preferred language: zh-CN.\n\nGlobal project rules.",
-		)
-		expect(buildRuntimeEnv(TEST_CONTEXT).SKILLS_SECTION).toContain('"review": Review code changes.')
-	})
-
 	it("generates the full Native candidate without legacy profile identity", async () => {
 		const text = await generateProfile(PromptProfile.Native)
 
@@ -96,7 +70,34 @@ describe("native and lite profile content", () => {
 		expect(text).toContain("CWD fixed: /workspace/project")
 		expect(text).toContain("execute_command.workdirectory")
 		expect(text).not.toContain("cd /path && cmd")
+		expect(text).not.toContain("load_skill")
+		expect(text).not.toContain("Review code changes.")
 		expect(text.length).toBeLessThan((await generateProfile(PromptProfile.Native)).length)
 		expect(text).not.toMatch(/\b(?:XS|compact|native-next-gen)\b/i)
+	})
+
+	it("includes Native focus-chain contracts only when enabled", async () => {
+		const enabled = await generateProfile(PromptProfile.Native)
+		const disabled = await generateProfile(PromptProfile.Native, {
+			focusChainSettings: { enabled: false, remindClineInterval: 6 },
+		})
+
+		expect(enabled).toContain("task_progress")
+		expect(enabled).toContain("focus_chain_change")
+		expect(disabled).not.toContain("task_progress")
+		expect(disabled).not.toContain("focus_chain_change")
+	})
+
+	it("keeps Lite free of focus-chain contracts", async () => {
+		const text = await generateProfile(PromptProfile.Lite)
+
+		expect(text).not.toContain("task_progress")
+		expect(text).not.toContain("focus_chain_change")
+	})
+
+	it("does not name ask_followup_question in Lite YOLO mode", async () => {
+		const text = await generateProfile(PromptProfile.Lite, { yoloModeToggled: true })
+
+		expect(text).not.toContain("ask_followup_question")
 	})
 })

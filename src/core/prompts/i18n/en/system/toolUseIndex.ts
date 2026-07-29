@@ -12,7 +12,7 @@ If you cannot accomplish a file operation through the provided tool calling mech
 
 EVERY response must include at least one tool call, except when processing explicit_instructions. Choose the proper tool for each situation:
 - General conversation or questions: qna_respond
-- Presenting a plan or discussing architecture: plan_mode_respond
+- Presenting a complete implementation or design plan: make_plan (in ACT MODE, only when explicitly requested by the user)
 - Technical report or structured analysis: generate_report
 - Final task completion: attempt_completion
 - Progress announcement during execution: status_update or act_mode_respond

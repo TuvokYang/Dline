@@ -62,7 +62,7 @@ Always adhere to this format for all tool uses to ensure proper parsing and exec
 	condenseNotificationMessage: "Dline is suggesting to condense your conversation with: @CONTEXT@",
 	condenseFeedbackResult: "The user provided feedback on the condensed conversation summary:\n<feedback>\n@TEXT@\n</feedback>",
 
-	// PlanModeRespondHandler
+	// MakePlanHandler
 	planNeedsMoreExploration:
 		"[You have indicated that you need more exploration. Proceed with calling tools to continue the planning process.]",
 	planYoloAutoExecute: "[Go ahead and execute.]",
@@ -84,7 +84,7 @@ Always adhere to this format for all tool uses to ensure proper parsing and exec
 	webSearchDisabled: "Dline web tools are currently disabled.",
 	webSearchDomainConflict: "Cannot specify both allowed_domains and blocked_domains",
 
-	// PlanModeRespondHandler (non-yolo mode switch)
+	// MakePlanHandler (non-yolo mode switch)
 	planSwitchToAct: "[The user has switched to ACT MODE, so you may now proceed with the task.]",
 	planSwitchToActWithMessage:
 		"[The user has switched to ACT MODE, so you may now proceed with the task.]\n\nThe user also provided the following message when switching to ACT MODE:\n<user_message>\n@TEXT@\n</user_message>",

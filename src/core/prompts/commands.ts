@@ -18,13 +18,9 @@ function generateCommand(templateId: string, env: PromptEnv = {}): string {
 	return commandGenerator.generate(templateId, env).text
 }
 
-export const newTaskToolResponse = (willUseNativeTools: boolean) => {
-	const xmlExample = generateCommand("commands.newTaskXmlExample")
-	const nativeToolNote = willUseNativeTools ? generateCommand("commands.newTaskNativeToolNote") : ""
-
+export const newTaskToolResponse = () => {
 	return `${generateCommand("commands.newTaskMain", {
-		NATIVE_TOOL_NOTE: nativeToolNote,
-		XML_EXAMPLE: xmlExample,
+		TOOL_CALL_FORMAT: generateCommand("commands.newTaskXmlToolCallFormat"),
 	})}\n`
 }
 
@@ -33,19 +29,31 @@ export const condenseToolResponse = (focusChainSettings?: { enabled: boolean }) 
 	const focusChainParam = focusChainEnabled ? generateCommand("commands.condenseFocusChainParam") : ""
 	const focusChainUsage = focusChainEnabled ? generateCommand("toolUseTools.focusChainUsage") : ""
 	const focusChainExample = focusChainEnabled ? generateCommand("commands.condenseFocusChainExample") : ""
+	const toolCallFormat = generateCommand("commands.condenseXmlToolCallFormat", {
+		FOCUS_CHAIN_USAGE: focusChainUsage,
+		FOCUS_CHAIN_EXAMPLE: focusChainExample,
+	})
 
 	return `${generateCommand("commands.condenseMain", {
 		FOCUS_CHAIN_PARAM: focusChainParam,
-		FOCUS_CHAIN_USAGE: focusChainUsage,
-		FOCUS_CHAIN_EXAMPLE: focusChainExample,
+		TOOL_CALL_FORMAT: toolCallFormat,
 	})}\n`
 }
 
-export const newRuleToolResponse = () => `${generateCommand("commands.newRuleToolResponse")}\n`
+export const newRuleToolResponse = () =>
+	`${generateCommand("commands.newRuleToolResponse", {
+		TOOL_CALL_FORMAT: generateCommand("commands.newRuleXmlToolCallFormat"),
+	})}\n`
 
-export const reportBugToolResponse = () => `${generateCommand("commands.reportBugToolResponse")}\n`
+export const reportBugToolResponse = () =>
+	`${generateCommand("commands.reportBugToolResponse", {
+		TOOL_CALL_FORMAT: generateCommand("commands.reportBugXmlToolCallFormat"),
+	})}\n`
 
-export const explainChangesToolResponse = () => `${generateCommand("commands.explainChangesToolResponse")}\n`
+export const explainChangesToolResponse = () =>
+	`${generateCommand("commands.explainChangesToolResponse", {
+		TOOL_CALL_FORMAT: generateCommand("commands.explainChangesXmlToolCallFormat"),
+	})}\n`
 
 /**
  * Generates the provider-independent deep-planning slash command response.

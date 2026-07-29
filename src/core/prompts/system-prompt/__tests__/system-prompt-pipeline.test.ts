@@ -49,19 +49,19 @@ describe("canonical system prompt pipeline", () => {
 		const config = createSystemPromptConfig(context)
 
 		expect(config).toEqual({
-			templateId: "native-next-gen-compatible",
+			templateId: "integrated",
 			variant: PromptProfile.Lite,
 			transport: "xml",
 			parallelTools: true,
 			mcpEnabled: false,
 			browserEnabled: true,
-			focusChainEnabled: true,
+			focusChainEnabled: false,
 			subagentsEnabled: true,
 			subagentRun: false,
 			yoloModeEnabled: false,
 			cliEnvironment: true,
 			webToolsEnabled: true,
-			skillsEnabled: true,
+			skillsEnabled: false,
 			userInstructionsEnabled: true,
 		})
 		expect(Object.isFrozen(config)).toBe(true)

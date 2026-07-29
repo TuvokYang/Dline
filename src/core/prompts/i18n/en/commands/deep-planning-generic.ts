@@ -1,6 +1,20 @@
 // English deep-planning generic variant prompts — key-value pairs only.
 
 const prompts: Record<string, string> = {
+	liteTaskProgressTaskLine:
+		" The task must include a <task_progress> list that breaks down the implementation into trackable steps.",
+	liteTaskProgressHeading: "**Task Progress Format:**\n",
+	liteTaskProgressContext: `You absolutely must include the task_progress contents in context when creating the new task. When providing it, do not wrap it in XML tags- instead provide it like this:
+
+
+task_progress Items:
+- [ ] Step 1: Brief description of first implementation step
+- [ ] Step 2: Brief description of second implementation step\u0020\u0020
+- [ ] Step 3: Brief description of third implementation step
+- [ ] Step N: Brief description of final implementation step
+
+
+`,
 	powershellCommands: `# Discover project structure and file types
 Get-ChildItem -Recurse -Include "*.py","*.js","*.ts","*.java","*.cpp","*.go" | Select-Object -First 30 | Select-Object FullName
 

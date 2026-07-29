@@ -16,13 +16,13 @@ const prompts: Record<string, string> = {
 		"When true (default), 'find' is treated as a literal string. When false, 'find' is treated as a regex pattern.",
 	// Handler messages
 	missingFind: "replace_text: missing required parameter 'find'.",
-	noFilesMatched: 'No files matched pattern "{pattern}" in the workspace.',
-	noOccurrences: 'No occurrences of "{find}" found in {count} files matching "{pattern}".',
-	dryRunHeader: '[DRY RUN] Found "{find}" → "{replace}" in {files} files, {matches} occurrences:',
+	noFilesMatched: 'No files matched pattern "@PATTERN@" in the workspace.',
+	noOccurrences: 'No occurrences of "@FIND@" found in @COUNT@ files matching "@PATTERN@".',
+	dryRunHeader: "Replace: @FIND@ -> @REPLACE@ (@FILES@ files, @MATCHES@ changes)@PREVIEW@\n",
 	dryRunFooter: "No files were modified. Remove dry_run to apply changes.",
 	dryRunMore: "... and {count} more occurrences.",
-	successOutput: 'Replaced "{find}" → "{replace}" in {files} files, {matches} occurrences.',
-	writeErrors: "({count} files failed to write.)",
-	errorPrefix: "replace_text failed:",
+	successOutput: 'Replaced "@FIND@" → "@REPLACE@" in @FILES@ files, @MATCHES@ occurrences.',
+	writeErrors: "(@COUNT@ files failed to write.)",
+	errorPrefix: "replace_text failed: @ERROR@",
 }
 export default prompts

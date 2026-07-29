@@ -20,8 +20,6 @@ describe("Prompt prose ownership", () => {
 	it("keeps model-facing prose out of production assembly and projector modules", async () => {
 		const [
 			pipeline,
-			runtimeEnv,
-			systemEnv,
 			commandPrompt,
 			contextManagement,
 			mcpDocumentation,
@@ -32,8 +30,6 @@ describe("Prompt prose ownership", () => {
 			capabilitySection,
 		] = await Promise.all([
 			read("system-prompt/pipeline.ts"),
-			read("system-prompt/env/runtime-env.ts"),
-			read("system-prompt/env/system-env.ts"),
 			read("commands/deep-planning/index.ts"),
 			read("contextManagement.ts"),
 			read("loadMcpDocumentation.ts"),
@@ -48,9 +44,6 @@ describe("Prompt prose ownership", () => {
 		expect(pipeline).not.toContain("When the task requires or could benefit from getting up to date information")
 		expect(pipeline).not.toContain("You may use multiple tools in a single response")
 		expect(pipeline).not.toContain("ask a focused clarifying question rather than making risky assumptions")
-		expect(runtimeEnv).not.toContain("Connected MCP servers:")
-		expect(runtimeEnv).not.toContain('`- "${skill.name}": ${skill.description}`')
-		expect(systemEnv).not.toContain('from "../constants"')
 		expect(contextManagement).not.toContain("Use @workspace:path syntax")
 		expect(mcpDocumentation).not.toContain('|| "(None running currently)"')
 		expect(responses).not.toContain("`[TASK RESUMPTION] ${resumeTemplate}${recentNote}`")
@@ -96,11 +89,18 @@ describe("Prompt prose ownership", () => {
 	it("removes invalid complete-profile rendering assets from the new architecture", async () => {
 		const invalidAssets = [
 			"generators/SystemSectionRenderer.ts",
+			"i18n/legacy.ts",
 			"i18n/en/variants/profile-contract.ts",
+			"i18n/en/variants/sections.ts",
 			"i18n/en/variants/native/layout.ts",
 			"i18n/en/variants/native/contract.ts",
+			"i18n/en/variants/native/sections.ts",
 			"i18n/en/variants/lite/layout.ts",
 			"i18n/en/variants/lite/contract.ts",
+			"i18n/en/variants/lite/sections.ts",
+			"profiles/select-profile.ts",
+			"system-prompt/env/runtime-env.ts",
+			"system-prompt/env/system-env.ts",
 		]
 
 		for (const asset of invalidAssets) {

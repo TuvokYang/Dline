@@ -13,16 +13,15 @@ const prompts: Record<string, string> = {
 	newNameUsage: "newSymbolName",
 	dryRunInstruction: "When true, returns a preview of all changes without actually modifying any files. Defaults to false.",
 	// Handler messages
-	noLspSupport:
-		"LSP support is not available in this environment.\nPlease use replace_text with a text pattern to perform the rename instead. For example: replace_text(find='oldName', replace='newName', file_pattern='*.ts')",
-	missingParams: "rename: missing required parameters (file_path, line, character, new_name).",
-	noEdits: "rename: LSP returned no edits for this rename.",
+	noLspSupport: "Error: LSP not available. Use replace_text instead.",
+	missingParams: "Error: missing required parameters.",
+	noEdits: "Error: rename failed. No edits returned by LSP.",
 	failedApply: "rename: VSCode failed to apply the rename edit.",
-	errorPrefix: "rename error:",
-	dryRunHeader: '[RENAME PREVIEW] → "{newName}"\nWould modify {files} files, {changes} occurrences:\n',
+	errorPrefix: "Error: @ERROR@",
+	dryRunHeader: "Rename: @OLD_NAME@ -> @NEW_NAME@ (@FILES@ files, @CHANGES@ changes) (preview)\n",
 	dryRunFooter: "No files were modified. Remove dry_run to apply changes.",
-	successOutput: 'Renamed symbol to "{newName}".\nModified {files} files, {changes} changes total.',
-	fileEditLine: "  L{line}: {original} → {new}",
+	successOutput: "Rename: @OLD_NAME@ -> @NEW_NAME@ (@FILES@ files, @CHANGES@ changes)\n",
+	fileEditLine: "\n@FILE@ L@LINE@:@CHARACTER@\n  @ORIGINAL@\n  @NEW@\n",
 	fileEditLineApplied: "  L{line}: → {new}",
 }
 export default prompts

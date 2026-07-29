@@ -11,6 +11,6 @@ export function createNativeSectionSet(bodies: SystemSectionBodies): SystemSecti
 	return createSectionSet(bodies)
 }
 
-export function createXsSectionSet(overrides: SystemSectionBodies): SystemSectionSet {
+export function createLiteSectionSet(overrides: SystemSectionBodies): SystemSectionSet {
 	return createSectionSet(overrides)
 }

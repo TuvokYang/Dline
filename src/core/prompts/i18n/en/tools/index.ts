@@ -16,8 +16,8 @@ import listFiles from "./listFiles"
 import loadCapability from "./loadCapability"
 import loadMcpDocumentation from "./loadMcpDocumentation"
 import loadMcpDocumentationTool from "./loadMcpDocumentationTool"
+import makePlan from "./makePlan"
 import newTask from "./newTask"
-import planModeRespond from "./planModeRespond"
 import qnaRespond from "./qnaRespond"
 import readFile from "./readFile"
 import rename from "./rename"
@@ -51,7 +51,9 @@ export const toolPromptModules = [
 		clineIgnoreError: createRuntimeContract("PATH"),
 		permissionDeniedError: createRuntimeContract("REASON"),
 	}),
-	defineLegacyModule("findReferences", "tools", findReferences),
+	defineLegacyModule("findReferences", "tools", findReferences, {
+		errorPrefix: createRuntimeContract("ERROR"),
+	}),
 	defineLegacyModule("generateExplanation", "tools", generateExplanation),
 	defineLegacyModule("generateReport", "tools", generateReport),
 	defineLegacyModule("listCodeDefinitionNames", "tools", listCodeDefinitionNames, {
@@ -63,13 +65,18 @@ export const toolPromptModules = [
 		main: createRuntimeContract("MCP_SERVERS_PATH", "MCP_SETTINGS_FILE_PATH", "CONNECTED_SERVERS"),
 	}),
 	defineLegacyModule("loadMcpDocumentationTool", "tools", loadMcpDocumentationTool),
+	defineLegacyModule("makePlan", "tools", makePlan),
 	defineLegacyModule("newTask", "tools", newTask),
-	defineLegacyModule("planModeRespond", "tools", planModeRespond),
 	defineLegacyModule("qnaRespond", "tools", qnaRespond),
 	defineLegacyModule("readFile", "tools", readFile, {
 		pathInstruction: createRuntimeContract("CWD", "MULTI_ROOT_HINT"),
 	}),
-	defineLegacyModule("rename", "tools", rename),
+	defineLegacyModule("rename", "tools", rename, {
+		errorPrefix: createRuntimeContract("ERROR"),
+		dryRunHeader: createRuntimeContract("OLD_NAME", "NEW_NAME", "FILES", "CHANGES"),
+		successOutput: createRuntimeContract("OLD_NAME", "NEW_NAME", "FILES", "CHANGES"),
+		fileEditLine: createRuntimeContract("FILE", "LINE", "CHARACTER", "ORIGINAL", "NEW"),
+	}),
 	defineLegacyModule("replaceInFile", "tools", replaceInFile, {
 		replaceInFileMissingDiffError: createRuntimeContract("REL_PATH"),
 		diffSearchNotFound: createRuntimeContract("LINE_COUNT"),
@@ -79,7 +86,14 @@ export const toolPromptModules = [
 		diffBlockOverlap: createRuntimeContract("BLOCK_INDEX", "PREV_INDEX"),
 		diffBlockOutOfOrder: createRuntimeContract("BLOCK_INDEX"),
 	}),
-	defineLegacyModule("replaceText", "tools", replaceText),
+	defineLegacyModule("replaceText", "tools", replaceText, {
+		noFilesMatched: createRuntimeContract("PATTERN"),
+		noOccurrences: createRuntimeContract("FIND", "COUNT", "PATTERN"),
+		dryRunHeader: createRuntimeContract("FIND", "REPLACE", "FILES", "MATCHES", "PREVIEW"),
+		successOutput: createRuntimeContract("FIND", "REPLACE", "FILES", "MATCHES"),
+		writeErrors: createRuntimeContract("COUNT"),
+		errorPrefix: createRuntimeContract("ERROR"),
+	}),
 	defineLegacyModule("searchFiles", "tools", searchFiles, {
 		pathInstruction: createRuntimeContract("CWD", "MULTI_ROOT_HINT"),
 	}),

@@ -5,8 +5,6 @@ import { describe, expect, it } from "vitest"
 
 import { RuntimePromptGenerator } from "../../generators/RuntimePromptGenerator"
 import { englishPromptGroups, englishPrompts, englishTemplateStore } from "../en"
-import commandDeepPlanning5Step from "../en/commands/deep-planning-5-step"
-import legacyDeepPlanning5Step from "../en/deepPlanning5Step"
 
 const EXPECTED_NAMESPACES = [
 	"accessMcpResource",
@@ -35,10 +33,10 @@ const EXPECTED_NAMESPACES = [
 	"loadCapability",
 	"loadMcpDocumentation",
 	"loadMcpDocumentationTool",
+	"makePlan",
 	"mcp",
 	"newTask",
 	"objective",
-	"planModeRespond",
 	"qnaRespond",
 	"readFile",
 	"rename",
@@ -121,6 +119,11 @@ describe("prompt asset inventory", () => {
 		expect(englishPromptGroups.map((group) => group.modules.length)).toEqual([23, 33, 3, 2])
 		expect(englishPromptGroups.flatMap((group) => group.modules)).toHaveLength(61)
 		expect(englishPromptGroups[3].modules.map((module) => module.name)).toEqual(["variants.native", "variants.lite"])
+		for (const group of englishPromptGroups) {
+			for (const module of group.modules) {
+				expect(module.source).toContain(`/en/${group.name}/`)
+			}
+		}
 	})
 
 	it("renders declared parameters through the immutable runtime generator", () => {
@@ -132,29 +135,6 @@ describe("prompt asset inventory", () => {
 		expect(prompt).toContain("command")
 		expect(prompt).toContain("Use the tool schema.")
 		expect(prompt).not.toContain("[MISSING:")
-	})
-
-	it("preserves command prompt content while moving ownership into the commands domain", () => {
-		expect(commandDeepPlanning5Step).toEqual(legacyDeepPlanning5Step)
-	})
-
-	it("owns command prompt content in the commands domain while preserving legacy entry points", async () => {
-		const commandEntries = [
-			["commands.ts", "commands.ts"],
-			["deep-planning-5-step.ts", "deepPlanning5Step.ts"],
-			["deep-planning-generic.ts", "deepPlanningGeneric.ts"],
-		] as const
-
-		await Promise.all(
-			commandEntries.flatMap(([domainEntry, legacyEntry]) => [
-				expect(fs.readFile(path.resolve(__dirname, "../en/commands", domainEntry), "utf-8")).resolves.toContain(
-					"const prompts",
-				),
-				expect(fs.readFile(path.resolve(__dirname, "../en", legacyEntry), "utf-8")).resolves.toContain(
-					`export { default } from "./commands/${domainEntry.slice(0, -3)}"`,
-				),
-			]),
-		)
 	})
 
 	it("provides system prompt modules from the system domain", async () => {
@@ -187,23 +167,11 @@ describe("prompt asset inventory", () => {
 		)
 	})
 
-	it("owns selected system prompt content in the system domain while preserving legacy entry points", async () => {
-		const systemEntries = [
-			["feedback.ts", "feedback.ts"],
-			["mcp.ts", "mcp.ts"],
-			["rules.ts", "rules.ts"],
-		] as const
+	it("keeps the English root free of legacy prompt sources", async () => {
+		const rootEntries = await fs.readdir(path.resolve(__dirname, "../en"), { withFileTypes: true })
+		const rootSources = rootEntries.filter((entry) => entry.isFile() && entry.name.endsWith(".ts")).map((entry) => entry.name)
 
-		await Promise.all(
-			systemEntries.flatMap(([domainEntry, legacyEntry]) => [
-				expect(fs.readFile(path.resolve(__dirname, "../en/system", domainEntry), "utf-8")).resolves.toContain(
-					"const prompts",
-				),
-				expect(fs.readFile(path.resolve(__dirname, "../en", legacyEntry), "utf-8")).resolves.toContain(
-					`export { default } from "./system/${domainEntry.slice(0, -3)}"`,
-				),
-			]),
-		)
+		expect(rootSources).toEqual(["index.ts"])
 	})
 
 	it("keeps physical ownership in all four domains", async () => {
@@ -246,8 +214,8 @@ describe("prompt asset inventory", () => {
 			"loadCapability.ts",
 			"loadMcpDocumentation.ts",
 			"loadMcpDocumentationTool.ts",
+			"makePlan.ts",
 			"newTask.ts",
-			"planModeRespond.ts",
 			"qnaRespond.ts",
 			"readFile.ts",
 			"rename.ts",

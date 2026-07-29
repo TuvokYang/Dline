@@ -13,7 +13,7 @@ Use the task_progress parameter to report progress. Three modes:
    - Pass a NEW full checklist to continue with the next phase of work.
    - Call attempt_completion with a summary covering: what was accomplished, methods used, and test/verification results.
    - Call generate_report with findings, analysis, and recommendations.
-   - Call plan_mode_respond with the complete plan (PLAN MODE only).
+   - Call make_plan with the complete plan (in ACT MODE, only when the user explicitly requested a plan).
 
 Updates should be silent — do not announce them. Keep items focused on meaningful milestones. Do not deviate from the plan without user approval.
 The task_progress parameter MUST be a separate parameter, not inside other content or argument blocks.
@@ -62,7 +62,7 @@ Use the task_progress parameter to report progress. Three modes:
    - Pass a NEW full checklist to continue with the next phase.
    - Call attempt_completion with a summary.
    - Call generate_report with findings and analysis.
-   - Call plan_mode_respond with the complete plan (PLAN MODE only).
+   - Call make_plan with the complete plan (in ACT MODE, only when the user explicitly requested a plan).
 
 Updates should be silent. Keep items focused on milestones. Do not deviate from the plan without user approval.
 The task_progress parameter MUST be a separate parameter, not inside other content or argument blocks.
@@ -107,7 +107,7 @@ Use the task_progress parameter to report progress. Three modes:
    - Pass a NEW full checklist to continue with the next phase.
    - Call attempt_completion with a summary covering: what was accomplished, methods used, and test/verification results.
    - Call generate_report with findings and analysis.
-   - Call plan_mode_respond with the complete plan (PLAN MODE only).
+   - Call make_plan with the complete plan (in ACT MODE, only when the user explicitly requested a plan).
 
 Updates should be silent. Keep items focused on milestones. Do not deviate from the plan without user approval.
 The task_progress parameter MUST be a separate parameter, NOT inside other content or argument blocks.

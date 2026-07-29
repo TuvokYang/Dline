@@ -1,4 +1,5 @@
 import type { CapabilityToggleState } from "@core/prompts/capabilities/CapabilitiesAggregator"
+import type { CapabilitiesSnapshot } from "@core/prompts/capabilities/types"
 import type { PromptProfile } from "@core/prompts/profiles/types"
 import type { ApiProviderInfo } from "@/core/api"
 import type { McpHub } from "@/services/mcp/McpHub"
@@ -14,13 +15,10 @@ export interface SystemPromptContext {
 	readonly providerInfo: ApiProviderInfo
 	readonly cwd?: string
 	readonly ide: string
-	readonly editorTabs?: {
-		readonly open?: readonly string[]
-		readonly visible?: readonly string[]
-	}
 	readonly supportsBrowserUse?: boolean
 	readonly mcpHub?: McpHub
 	readonly skills?: SkillMetadata[]
+	readonly capabilities?: CapabilitiesSnapshot
 	readonly capabilitiesSection?: string
 	readonly capabilityToggleState?: CapabilityToggleState
 	readonly focusChainSettings?: FocusChainSettings

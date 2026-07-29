@@ -8,7 +8,7 @@ import { assembleSystemSections } from "./templates/system-template-registry"
 import type { SystemSectionContentConfig } from "./variants/section-content-config"
 
 export interface SystemPromptConfig extends SystemSectionContentConfig {
-	readonly templateId: "native-next-gen-compatible"
+	readonly templateId: "integrated"
 	readonly variant: PromptProfile
 	readonly browserEnabled: boolean
 	readonly cliEnvironment: boolean
@@ -49,6 +49,7 @@ const COMPLETE_TEMPLATE_CONTRACT: PromptContract = {
 
 export function createSystemPromptConfig(context: SystemPromptContext): SystemPromptConfig {
 	const servers = context.mcpHub?.getServers() ?? []
+	const variant = requirePromptProfile(context.promptProfile)
 	const userInstructionsEnabled = [
 		context.preferredLanguageInstructions,
 		context.globalClineRulesFileInstructions,
@@ -61,19 +62,19 @@ export function createSystemPromptConfig(context: SystemPromptContext): SystemPr
 	].some(Boolean)
 
 	return Object.freeze({
-		templateId: "native-next-gen-compatible",
-		variant: requirePromptProfile(context.promptProfile),
+		templateId: "integrated",
+		variant,
 		transport: context.enableNativeToolCalls === true ? "native" : "xml",
 		parallelTools: context.enableParallelToolCalling === true,
 		mcpEnabled: servers.some((server) => server.status === "connected" && server.disabled !== true),
 		browserEnabled: context.supportsBrowserUse === true && context.browserSettings?.disableToolUse !== true,
-		focusChainEnabled: context.focusChainSettings?.enabled === true,
+		focusChainEnabled: variant === PromptProfile.Native && context.focusChainSettings?.enabled === true,
 		subagentsEnabled: context.subagentsEnabled === true,
 		subagentRun: context.isSubagentRun === true,
 		yoloModeEnabled: context.yoloModeToggled === true,
 		cliEnvironment: context.isCliEnvironment === true,
 		webToolsEnabled: context.providerInfo.providerId === "cline" && context.clineWebToolsEnabled === true,
-		skillsEnabled: (context.skills?.length ?? 0) > 0,
+		skillsEnabled: variant === PromptProfile.Native && (context.skills?.length ?? 0) > 0,
 		userInstructionsEnabled,
 	})
 }

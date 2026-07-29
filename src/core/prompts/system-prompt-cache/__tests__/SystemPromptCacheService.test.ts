@@ -5,7 +5,7 @@ import type { TaskContextCache } from "@core/storage/task-context-types"
 import type { ClineTool } from "@shared/tools"
 import { describe, expect, it } from "vitest"
 import { hashPromptContent } from "../hash"
-import { SystemPromptCacheService } from "../SystemPromptCacheService"
+import { SYSTEM_PROMPT_CONTRACT_VERSION, SystemPromptCacheService } from "../SystemPromptCacheService"
 
 const EMPTY_CAPABILITIES = {
 	mcp: [],
@@ -17,10 +17,12 @@ const EMPTY_CAPABILITIES = {
 const EMPTY_CAPABILITIES_HASH = hashPromptContent(renderCapabilitiesSection(EMPTY_CAPABILITIES))
 
 const testPromptBuilderInfo = {
+	contractVersion: SYSTEM_PROMPT_CONTRACT_VERSION,
 	providerId: "test-provider",
 	modelId: "test-model",
 	profile: "native" as const,
 	nativeTools: false,
+	focusChainEnabled: false,
 }
 
 const promptContext = {
@@ -117,10 +119,12 @@ describe("SystemPromptCacheService", () => {
 					refreshedAt: 1,
 					refreshReason: "task_start" as const,
 					promptBuilder: {
+						contractVersion: SYSTEM_PROMPT_CONTRACT_VERSION,
 						providerId: "openai",
 						modelId: "gpt-5.6-sol",
 						profile: "native" as const,
 						nativeTools: true,
+						focusChainEnabled: false,
 					},
 				},
 			},
@@ -156,10 +160,12 @@ describe("SystemPromptCacheService", () => {
 		expect(buildCount).toBe(1)
 		expect(result.text).toBe("anthropic native prompt")
 		expect(result.promptBuilder).toEqual({
+			contractVersion: SYSTEM_PROMPT_CONTRACT_VERSION,
 			providerId: "anthropic",
 			modelId: "deepseek-v4-pro",
 			profile: "native",
 			nativeTools: true,
+			focusChainEnabled: false,
 		})
 		expect(service.getLastTools()).toEqual(anthropicTools)
 		expect(service.getLastTools()).not.toEqual(openAiTools)
@@ -178,10 +184,12 @@ describe("SystemPromptCacheService", () => {
 					refreshedAt: 1,
 					refreshReason: "task_start" as const,
 					promptBuilder: {
+						contractVersion: SYSTEM_PROMPT_CONTRACT_VERSION,
 						providerId: "test-provider",
 						modelId: "test-model",
 						profile: "native" as const,
 						nativeTools: true,
+						focusChainEnabled: false,
 					},
 				},
 			},
@@ -206,6 +214,43 @@ describe("SystemPromptCacheService", () => {
 		expect(service.getLastTools()).toEqual(tools)
 	})
 
+	it("rebuilds a frozen prompt written before prompt contract versioning", async () => {
+		const { contractVersion: _legacyVersion, ...legacyBuilder } = testPromptBuilderInfo
+		const cached: TaskContextCache = {
+			...emptyContext("task-1"),
+			systemPrompt: {
+				frozen: {
+					text: "legacy prompt",
+					tools: null,
+					capabilitiesHash: EMPTY_CAPABILITIES_HASH,
+					createdAt: 1,
+					refreshedAt: 1,
+					refreshReason: "task_start",
+					promptBuilder: legacyBuilder,
+				},
+			},
+		}
+		let buildCount = 0
+		const service = new SystemPromptCacheService({
+			taskId: "task-1",
+			deps: {
+				getContext: async () => cached,
+				saveContext: async () => undefined,
+				collectCapabilities: async () => EMPTY_CAPABILITIES,
+				buildSystemPrompt: async () => {
+					buildCount += 1
+					return { systemPrompt: "current prompt" }
+				},
+			},
+		})
+
+		const result = await service.getOrCreate({ promptContext })
+
+		expect(buildCount).toBe(1)
+		expect(result.text).toBe("current prompt")
+		expect(result.promptBuilder.contractVersion).toBe(SYSTEM_PROMPT_CONTRACT_VERSION)
+	})
+
 	it("rebuilds the frozen pair when the prompt profile or native transport changes", async () => {
 		const frozenTools: readonly ClineTool[] = [buildTool("frozen_browser_tool")]
 		const cached = {
@@ -219,10 +264,12 @@ describe("SystemPromptCacheService", () => {
 					refreshedAt: 1,
 					refreshReason: "task_start" as const,
 					promptBuilder: {
+						contractVersion: SYSTEM_PROMPT_CONTRACT_VERSION,
 						providerId: "test-provider",
 						modelId: "test-model",
 						profile: "native" as const,
 						nativeTools: true,
+						focusChainEnabled: false,
 					},
 				},
 			},
@@ -252,6 +299,47 @@ describe("SystemPromptCacheService", () => {
 
 		expect(result.text).toBe("current xml prompt")
 		expect(service.getLastTools()).toBeUndefined()
+		expect(buildCount).toBe(1)
+	})
+
+	it("rebuilds the frozen pair when focus-chain injection changes", async () => {
+		const cached = {
+			...emptyContext("task-1"),
+			systemPrompt: {
+				frozen: {
+					text: "no-focus prompt",
+					tools: null,
+					capabilitiesHash: EMPTY_CAPABILITIES_HASH,
+					createdAt: 1,
+					refreshedAt: 1,
+					refreshReason: "task_start" as const,
+					promptBuilder: { ...testPromptBuilderInfo, focusChainEnabled: false },
+				},
+			},
+		}
+		let buildCount = 0
+		const service = new SystemPromptCacheService({
+			taskId: "task-1",
+			deps: {
+				getContext: async () => cached,
+				saveContext: async () => undefined,
+				collectCapabilities: async () => EMPTY_CAPABILITIES,
+				buildSystemPrompt: async () => {
+					buildCount += 1
+					return { systemPrompt: "focus prompt" }
+				},
+			},
+		})
+
+		const result = await service.getOrCreate({
+			promptContext: {
+				...promptContext,
+				focusChainSettings: { enabled: true, remindClineInterval: 6 },
+			},
+		})
+
+		expect(result.text).toBe("focus prompt")
+		expect(result.promptBuilder.focusChainEnabled).toBe(true)
 		expect(buildCount).toBe(1)
 	})
 
@@ -318,10 +406,12 @@ describe("SystemPromptCacheService", () => {
 					refreshedAt: 1,
 					refreshReason: "task_start" as const,
 					promptBuilder: {
+						contractVersion: SYSTEM_PROMPT_CONTRACT_VERSION,
 						providerId: "test-provider",
 						modelId: "test-model",
 						profile: "native" as const,
 						nativeTools: false,
+						focusChainEnabled: false,
 					},
 				},
 			},

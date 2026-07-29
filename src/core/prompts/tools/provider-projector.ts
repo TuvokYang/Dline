@@ -6,7 +6,7 @@ import type {
 } from "openai/resources/chat/completions"
 import type { ClineDefaultTool, ClineTool } from "../../../shared/tools"
 import type { SystemPromptContext } from "../system-prompt/context"
-import type { ProfileToolParam, ProfileToolSpec, ToolParamType } from "./profile-tool-set"
+import { type ProfileToolParam, type ProfileToolSpec, resolveProfilePromptText, type ToolParamType } from "./profile-tool-set"
 
 type JsonSchemaValue = string | number | boolean | null | readonly JsonSchemaValue[] | JsonSchemaObject
 
@@ -68,7 +68,7 @@ function toOpenAI(
 		type: "function",
 		function: {
 			name: spec.name,
-			description: spec.description,
+			description: resolveProfilePromptText(spec.description, spec.descriptionFragments, context),
 			strict: false,
 			parameters,
 		},
@@ -82,7 +82,11 @@ function toAnthropic(
 	enabledToolIds: ReadonlySet<ClineDefaultTool>,
 ): AnthropicTool {
 	const inputSchema = buildSchema(spec, context, enabledToolIds) as AnthropicTool["input_schema"]
-	return { name: spec.name, description: spec.description, input_schema: inputSchema }
+	return {
+		name: spec.name,
+		description: resolveProfilePromptText(spec.description, spec.descriptionFragments, context),
+		input_schema: inputSchema,
+	}
 }
 
 /** Recursively converts JSON Schema type strings to Gemini schema enums. */
@@ -111,7 +115,11 @@ function toGoogle(
 	enabledToolIds: ReadonlySet<ClineDefaultTool>,
 ): GoogleTool {
 	const parameters = toGoogleSchema(buildSchema(spec, context, enabledToolIds)) as NonNullable<GoogleTool["parameters"]>
-	return { name: spec.name, description: spec.description, parameters }
+	return {
+		name: spec.name,
+		description: resolveProfilePromptText(spec.description, spec.descriptionFragments, context),
+		parameters,
+	}
 }
 
 /** Projects one canonical profile spec to the active provider schema. */

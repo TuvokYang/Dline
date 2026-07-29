@@ -82,6 +82,19 @@ describe("Native/Lite transport and capability behavior matrix", () => {
 		expect(exposes(result, transport, "browser_action")).toBe(profile === PromptProfile.Native)
 		expect(exposes(result, transport, "use_mcp_tool")).toBe(profile === PromptProfile.Native)
 		expect(exposes(result, transport, "web_search")).toBe(profile === PromptProfile.Native)
+		expect(exposes(result, transport, "generate_explanation")).toBe(false)
+		expect(exposes(result, transport, "make_plan")).toBe(true)
+		expect(result.systemPrompt).toContain("status_update / act_mode_respond: progress-only")
+		expect(result.systemPrompt).toContain("qna_respond:")
+		expect(result.systemPrompt).toContain("generate_report:")
+	})
+
+	it.each(["act", "plan"] as const)("keeps make_plan available in %s mode", async (mode) => {
+		const result = await generate(PromptProfile.Native, "native", {
+			providerInfo: { ...BASE_CONTEXT.providerInfo, mode },
+		})
+
+		expect(exposes(result, "native", "make_plan")).toBe(true)
 	})
 
 	it.each(["native", "xml"] as const)("applies browser support and disable gates for Native/%s", async (transport) => {
@@ -146,5 +159,55 @@ describe("Native/Lite transport and capability behavior matrix", () => {
 		expect(exposes(result, transport, "generate_explanation")).toBe(false)
 		expect(exposes(result, transport, "ask_followup_question")).toBe(false)
 		expect(result.systemPrompt).not.toContain("You may use multiple tools in a single response")
+	})
+
+	it.each([
+		[PromptProfile.Native, "native"],
+		[PromptProfile.Native, "xml"],
+	] as const)("gates the complete focus contract for %s/%s", async (profile, transport) => {
+		const enabled = await generate(profile, transport)
+		const disabled = await generate(profile, transport, {
+			focusChainSettings: { enabled: false, remindClineInterval: 0 },
+		})
+
+		expect(exposes(enabled, transport, "focus_chain_change")).toBe(true)
+		expect(enabled.systemPrompt).toContain("task_progress")
+		expect(enabled.systemPrompt).toContain("## TURN-END Tools")
+		expect(enabled.systemPrompt).toContain("## Task Closure Contract")
+		expect(enabled.systemPrompt).toContain("affected modules, and current task_progress step")
+		expect(enabled.systemPrompt).toContain("Except for attempt_completion, these tools may be called while work remains.")
+		expect(enabled.systemPrompt).toContain(
+			"status_update / act_mode_respond: progress-only, MUST be followed by actual work tool. NOT for completion.",
+		)
+		expect(enabled.systemPrompt).toContain("attempt_completion: FORBIDDEN while any focus chain items remain [ ]")
+		expect(enabled.systemPrompt).not.toContain(
+			"TURN-END TOOLS (attempt_completion, ask_followup_question, make_plan, qna_respond, generate_report): FORBIDDEN",
+		)
+		expect(exposes(disabled, transport, "focus_chain_change")).toBe(false)
+		expect(disabled.systemPrompt).not.toContain("task_progress")
+		expect(disabled.systemPrompt).toContain("## TURN-END Tools")
+		expect(disabled.systemPrompt).toContain("## Task Closure Contract")
+		expect(disabled.systemPrompt).toContain("affected modules. Use these as the completion contract.")
+		expect(disabled.systemPrompt).toContain("Except for attempt_completion, these tools may be called while work remains.")
+		expect(disabled.systemPrompt).toContain(
+			"status_update / act_mode_respond: progress-only, MUST be followed by actual work tool. NOT for completion.",
+		)
+		expect(disabled.systemPrompt).not.toContain("attempt_completion: FORBIDDEN while any focus chain items remain [ ]")
+		for (const toolName of ["ask_followup_question", "make_plan", "qna_respond", "generate_report"]) {
+			expect(exposes(enabled, transport, toolName)).toBe(true)
+		}
+	})
+
+	it.each([
+		[PromptProfile.Lite, "native"],
+		[PromptProfile.Lite, "xml"],
+	] as const)("keeps the complete focus contract disabled for %s/%s", async (profile, transport) => {
+		const result = await generate(profile, transport, {
+			focusChainSettings: { enabled: true, remindClineInterval: 6 },
+		})
+
+		expect(exposes(result, transport, "focus_chain_change")).toBe(false)
+		expect(result.systemPrompt).not.toContain("task_progress")
+		expect(JSON.stringify(result.tools ?? [])).not.toContain("task_progress")
 	})
 })

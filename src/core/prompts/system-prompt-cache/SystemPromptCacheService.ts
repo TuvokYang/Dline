@@ -1,6 +1,8 @@
 import type { CollectCapabilitiesInput } from "@core/prompts/capabilities/CapabilitiesAggregator"
 import { collectCapabilities } from "@core/prompts/capabilities/CapabilitiesAggregator"
 import { renderCapabilitiesSection } from "@core/prompts/capabilities/CapabilitiesSection"
+import type { CapabilitiesSnapshot } from "@core/prompts/capabilities/types"
+import { PromptProfile } from "@core/prompts/profiles/types"
 import type { SystemPromptContext } from "@core/prompts/system-prompt"
 import { getSystemPrompt } from "@core/prompts/system-prompt"
 import { getTaskContext, saveTaskContext } from "@core/storage/disk"
@@ -12,6 +14,8 @@ import type {
 } from "@core/storage/task-context-types"
 import type { ClineTool } from "@shared/tools"
 import { hashPromptContent } from "./hash"
+
+export const SYSTEM_PROMPT_CONTRACT_VERSION = 1
 
 export interface BuiltSystemPrompt {
 	readonly systemPrompt: string
@@ -36,6 +40,12 @@ export interface GetOrCreatePromptInput {
 
 export interface RefreshSystemPromptInput extends GetOrCreatePromptInput {
 	readonly reason: SystemPromptRefreshReason
+}
+
+function renderCapabilitiesForProfile(capabilities: CapabilitiesSnapshot, profile: PromptProfile): string {
+	return renderCapabilitiesSection(capabilities, {
+		exclude: profile === PromptProfile.Lite ? ["skills"] : [],
+	})
 }
 
 /**
@@ -112,10 +122,11 @@ export class SystemPromptCacheService {
 			mcpHub: input.promptContext.mcpHub,
 			...input.promptContext.capabilityToggleState,
 		})
-		const capabilitiesSection = renderCapabilitiesSection(capabilities)
+		const capabilitiesSection = renderCapabilitiesForProfile(capabilities, input.promptContext.promptProfile)
 		const capabilitiesHash = hashPromptContent(capabilitiesSection)
 		const promptContext: SystemPromptContext = {
 			...input.promptContext,
+			capabilities,
 			capabilitiesSection,
 		}
 		const built = await this.buildSystemPrompt(promptContext)
@@ -127,7 +138,10 @@ export class SystemPromptCacheService {
 			createdAt: context.systemPrompt?.frozen?.createdAt ?? now,
 			refreshedAt: now,
 			refreshReason: input.reason,
-			promptBuilder: this.getPromptBuilderInfo(promptContext, built.tools),
+			promptBuilder: {
+				...this.getPromptBuilderInfo(promptContext, built.tools),
+				contractVersion: SYSTEM_PROMPT_CONTRACT_VERSION,
+			},
 		}
 		await this.saveContext(this.taskId, {
 			...context,
@@ -151,14 +165,19 @@ export class SystemPromptCacheService {
 				mcpHub: input.promptContext.mcpHub,
 				...input.promptContext.capabilityToggleState,
 			})
-			const currentHash = hashPromptContent(renderCapabilitiesSection(capabilities))
-			const currentBuilder = this.getPromptBuilderInfo(input.promptContext, undefined)
+			const currentHash = hashPromptContent(renderCapabilitiesForProfile(capabilities, input.promptContext.promptProfile))
+			const currentBuilder = {
+				...this.getPromptBuilderInfo(input.promptContext, undefined),
+				contractVersion: SYSTEM_PROMPT_CONTRACT_VERSION,
+			}
 			const cachedBuilder = cached.promptBuilder
 			const providerProjectionChanged =
+				cachedBuilder.contractVersion !== currentBuilder.contractVersion ||
 				cachedBuilder.providerId !== currentBuilder.providerId ||
 				cachedBuilder.modelId !== currentBuilder.modelId ||
 				cachedBuilder.profile !== currentBuilder.profile ||
-				cachedBuilder.nativeTools !== Boolean(input.promptContext.enableNativeToolCalls)
+				cachedBuilder.nativeTools !== Boolean(input.promptContext.enableNativeToolCalls) ||
+				cachedBuilder.focusChainEnabled !== currentBuilder.focusChainEnabled
 			if (currentHash !== cached.capabilitiesHash || providerProjectionChanged) {
 				return this.refresh({ promptContext: input.promptContext, reason: "capability_change" })
 			}
@@ -187,10 +206,12 @@ export class SystemPromptCacheService {
 	 */
 	private buildPromptInfo(context: SystemPromptContext, tools: readonly ClineTool[] | undefined): FrozenPromptBuilderInfo {
 		return {
+			contractVersion: SYSTEM_PROMPT_CONTRACT_VERSION,
 			providerId: context.providerInfo.providerId,
 			modelId: context.providerInfo.model.id,
 			profile: context.promptProfile,
 			nativeTools: (tools?.length ?? 0) > 0,
+			focusChainEnabled: context.focusChainSettings?.enabled === true,
 		}
 	}
 }

@@ -1,6 +1,6 @@
 import { getPrompt } from "../i18n"
 import { assemblePromptFragments } from "../system-prompt/assembly/prompt-fragment-assembler"
-import type { CapabilitiesSnapshot, CapabilityEntry } from "./types"
+import type { CapabilitiesSnapshot, CapabilityEntry, CapabilitySource } from "./types"
 
 const GROUPS: Array<{ readonly titleKey: string; readonly key: keyof CapabilitiesSnapshot }> = [
 	{ titleKey: "mcpTitle", key: "mcp" },
@@ -48,9 +48,16 @@ function renderEntry(entry: CapabilityEntry): string {
  * @param snapshot Prompt-safe capabilities snapshot.
  * @returns Markdown section containing only capability names and descriptions.
  */
-export function renderCapabilitiesSection(snapshot: CapabilitiesSnapshot): string {
+export function renderCapabilitiesSection(
+	snapshot: CapabilitiesSnapshot,
+	options: { readonly exclude?: readonly CapabilitySource[] } = {},
+): string {
 	const sections = [getPrompt("capabilityCatalog", "heading")]
+	const excluded = new Set(options.exclude ?? [])
 	for (const group of GROUPS) {
+		if (excluded.has(group.key)) {
+			continue
+		}
 		const entries = snapshot[group.key]
 		if (entries.length === 0) {
 			continue

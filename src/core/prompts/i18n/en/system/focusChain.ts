@@ -45,7 +45,7 @@ Update task_progress each step:
 
 	planModeReminder: `# task_progress List (Recommended - Plan Mode)
 
-In PLAN MODE, create a task_progress list when presenting a finalized plan via plan_mode_respond.
+Create a task_progress list when presenting a finalized plan via make_plan.
 Append items as analysis progresses; rewriting the plan requires focus_chain_change tool.
 Use \`# Title\` and \`## Section\` so user can verify your approach.
 
@@ -71,7 +71,7 @@ All {{totalItems}} items completed.
 - **Continue work:** Pass a NEW full checklist via task_progress (with \`# Title\`, \`## Section\`, \`- [ ]\` items) to start the next phase.
 - **Finish task:** Call attempt_completion. Summarize what was accomplished, methods used, and test/verification results.
 - **Deliver report:** Call generate_report with findings, analysis, and recommendations.
-- **Present plan:** Call plan_mode_respond with the complete plan (PLAN MODE only).`,
+- **Present plan:** Call make_plan with the complete plan (in ACT MODE, only when the user explicitly requested a plan).`,
 
 	tamperingRejected: `Focus chain update rejected. The task_progress checklist (called the "focus chain") tracks your assigned work. Your job: complete items one by one and honestly toggle checkmarks (\`[ ]\` <-> \`[x]\`). Do NOT modify the plan content (title, sections, items) -- you may ONLY toggle checkmarks. Any change to the text of items or headings is forbidden. If the plan genuinely needs to change, use focus_chain_change to request user approval. If all items are \`[x]\`, you may create a new checklist. Continue from where you left off — you MUST keep reporting progress via task_progress parameter.`,
 	skipOrderRejected: `Focus chain update rejected. Items must be completed in STRICT order. You skipped unchecked items (\`[ ]\`) and marked a later item as done (\`[x]\`). This is your SECOND skip-order violation — the first was accepted with a warning, this one is REJECTED.

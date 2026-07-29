@@ -93,18 +93,19 @@ function createContext(
 		},
 		enableNativeToolCalls: transport === "native",
 	} as SystemPromptContext
+	const capabilities = {
+		mcp:
+			context.mcpHub?.getServers().some((server) => server.status === "connected" && server.disabled !== true) === true
+				? [{ name: "Snapshot MCP.echo", description: "Returns the complete provided text." }]
+				: [],
+		skills: [{ name: "review", description: "Review complete Prompt differences." }],
+		workflows: [{ name: "release", description: "Run the release workflow." }],
+		subagents: context.subagentsEnabled === true ? [{ name: "reviewer", description: "Review implementation changes." }] : [],
+	}
 	return {
 		...context,
-		capabilitiesSection: renderCapabilitiesSection({
-			mcp:
-				context.mcpHub?.getServers().some((server) => server.status === "connected" && server.disabled !== true) === true
-					? [{ name: "Snapshot MCP.echo", description: "Returns the complete provided text." }]
-					: [],
-			skills: [{ name: "review", description: "Review complete Prompt differences." }],
-			workflows: [{ name: "release", description: "Run the release workflow." }],
-			subagents:
-				context.subagentsEnabled === true ? [{ name: "reviewer", description: "Review implementation changes." }] : [],
-		}),
+		capabilities,
+		capabilitiesSection: renderCapabilitiesSection(capabilities),
 	}
 }
 

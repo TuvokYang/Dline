@@ -57,8 +57,9 @@ describe("profile facade preflight", () => {
 		expect(result.systemPrompt).toContain("## Task Closure Contract")
 		expect(result.systemPrompt).toContain("The current working directory is `/workspace/project`")
 		expect(result.systemPrompt).not.toContain("[MISSING:")
-		expect(toolNames(result.tools)).toHaveLength(26)
+		expect(toolNames(result.tools)).toHaveLength(25)
 		expect(toolNames(result.tools).slice(0, 3)).toEqual(["write_to_file", "replace_in_file", "read_file"])
+		expect(toolNames(result.tools)).not.toContain("generate_explanation")
 	})
 
 	it("preserves the established Native section order", async () => {

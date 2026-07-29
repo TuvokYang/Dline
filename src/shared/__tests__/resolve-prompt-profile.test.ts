@@ -18,6 +18,10 @@ describe("resolvePromptProfile", () => {
 		expect(resolvePromptProfile({ contextWindow })).toBe(expected)
 	})
 
+	it.each(["o1", "o1-preview", "openai/o1-mini"])("uses the Lite profile for %s", (modelId) => {
+		expect(resolvePromptProfile({ modelId, contextWindow: 128_000 })).toBe(PromptProfile.Lite)
+	})
+
 	it.each([
 		undefined,
 		0,

@@ -2,7 +2,7 @@ import type { ClineDefaultTool } from "../../../shared/tools"
 import { getPrompt } from "../i18n"
 import { assemblePromptFragments } from "../system-prompt/assembly/prompt-fragment-assembler"
 import type { SystemPromptContext } from "../system-prompt/context"
-import type { ProfileToolParam, ProfileToolSpec } from "./profile-tool-set"
+import { type ProfileToolParam, type ProfileToolSpec, resolveProfilePromptText } from "./profile-tool-set"
 
 /** Filters parameters using the same exact-tool and runtime gates as provider projection. */
 function enabledParams(
@@ -54,7 +54,9 @@ export function projectXmlTool(
 	const params = enabledParams(spec, context, enabledToolIds)
 	return [
 		assemblePromptFragments(getPrompt("xmlProjection", "toolHeading"), { NAME: spec.name }),
-		assemblePromptFragments(getPrompt("xmlProjection", "descriptionLine"), { DESCRIPTION: spec.description }),
+		assemblePromptFragments(getPrompt("xmlProjection", "descriptionLine"), {
+			DESCRIPTION: resolveProfilePromptText(spec.description, spec.descriptionFragments, context),
+		}),
 		parametersSection(params),
 		usageSection(spec.name, params),
 	].join("\n")

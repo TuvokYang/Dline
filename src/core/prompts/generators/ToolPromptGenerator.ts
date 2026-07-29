@@ -7,6 +7,7 @@ import type { PromptContract, PromptEnv } from "../template/types"
 import { createMcpToolSpecs } from "../tools/mcp-tool-adapter"
 import type { ProfileToolSet } from "../tools/profile-tool-set"
 import { projectTool } from "../tools/provider-projector"
+import { isRequestScopedToolId, REQUEST_SCOPED_TOOL_IDS } from "../tools/tool-ids"
 import { createToolSet, LITE_TOOL_IDS, NATIVE_TOOL_IDS } from "../tools/tool-profile"
 import { projectXmlTool } from "../tools/xml-tool-projector"
 
@@ -55,6 +56,15 @@ function createFrameDelimiter(values: readonly string[]): string {
 	}
 }
 
+/** Reads a provider-native function name from any supported schema shape. */
+function projectedToolName(tool: ClineTool): string | undefined {
+	return "function" in tool && typeof tool.function?.name === "string"
+		? tool.function.name
+		: "name" in tool && typeof tool.name === "string"
+			? tool.name
+			: undefined
+}
+
 /** Generates ordered provider-native schemas from exact profile tool descriptors. */
 export class ToolPromptGenerator {
 	/** Creates a tool generator over an injected exact-profile set. */
@@ -71,27 +81,83 @@ export class ToolPromptGenerator {
 		if (!context.enableNativeToolCalls) {
 			return undefined
 		}
-		const enabledSpecs = this.listEnabled(profile, context)
+		const projectionContext = this.resolveProfileContext(profile, context)
+		const enabledSpecs = this.listEnabled(profile, projectionContext)
 		const enabledToolIds = new Set(enabledSpecs.map((spec) => spec.id))
 		const builtInTools = this.resolveNativeProjection(
-			enabledSpecs.map((spec) => projectTool(spec, context, enabledToolIds)),
-			context,
+			enabledSpecs.map((spec) => projectTool(spec, projectionContext, enabledToolIds)),
+			projectionContext,
 		)
-		if (profile === "lite" || context.disableTools?.includes(ClineDefaultTool.MCP_USE)) {
+		if (profile === "lite" || projectionContext.disableTools?.includes(ClineDefaultTool.MCP_USE)) {
 			return builtInTools
 		}
-		const mcpTools = (context.mcpHub?.getServers() ?? [])
+		const mcpTools = (projectionContext.mcpHub?.getServers() ?? [])
 			.filter((server) => server.status === "connected" && server.disabled !== true)
 			.flatMap((server) => createMcpToolSpecs(profile, server))
-			.map((spec) => projectTool(spec, context, enabledToolIds))
+			.map((spec) => projectTool(spec, projectionContext, enabledToolIds))
 		return [...builtInTools, ...mcpTools]
+	}
+
+	/** Removes request-only schemas from a frozen default projection loaded from an older task cache. */
+	public filterCachedDefaultTools(tools: readonly ClineTool[] | undefined): readonly ClineTool[] | undefined {
+		return tools?.filter((tool) => {
+			const name = projectedToolName(tool)
+			return name === undefined || !isRequestScopedToolId(name)
+		})
+	}
+
+	/** Generates only the internal tools explicitly activated for one API request. */
+	public generateSelectedRequestTools(
+		profile: PromptProfile,
+		context: SystemPromptContext,
+		requestToolIds: readonly ClineDefaultTool[],
+	): readonly ClineTool[] | undefined {
+		if (!context.enableNativeToolCalls || requestToolIds.length === 0) {
+			return undefined
+		}
+
+		const projectionContext = this.resolveProfileContext(profile, context)
+		const selectedIds = [...new Set(requestToolIds.filter(isRequestScopedToolId))]
+		if (selectedIds.length === 0) {
+			return undefined
+		}
+
+		const disabled = new Set(projectionContext.disableTools ?? [])
+		const selectedSpecs = this.toolSet
+			.list(profile, selectedIds)
+			.filter((spec) => !disabled.has(spec.id))
+			.filter((spec) => !spec.contextRequirements || spec.contextRequirements(projectionContext))
+		if (selectedSpecs.length === 0) {
+			return undefined
+		}
+
+		const enabledToolIds = new Set([
+			...this.listEnabled(profile, projectionContext).map((spec) => spec.id),
+			...REQUEST_SCOPED_TOOL_IDS,
+		])
+		return this.resolveNativeProjection(
+			selectedSpecs.map((spec) => projectTool(spec, projectionContext, enabledToolIds)),
+			projectionContext,
+		)
 	}
 
 	/** Generates complete XML documentation from the exact-profile descriptors. */
 	public generateXml(profile: PromptProfile, context: SystemPromptContext): string {
-		const enabledSpecs = this.listEnabled(profile, context).filter((spec) => spec.transport !== "native")
+		const projectionContext = this.resolveProfileContext(profile, context)
+		const enabledSpecs = this.listEnabled(profile, projectionContext).filter((spec) => spec.transport !== "native")
 		const enabledToolIds = new Set(enabledSpecs.map((spec) => spec.id))
-		return enabledSpecs.map((spec) => projectXmlTool(spec, context, enabledToolIds)).join("\n\n")
+		return enabledSpecs.map((spec) => projectXmlTool(spec, projectionContext, enabledToolIds)).join("\n\n")
+	}
+
+	/** Applies profile-owned gates before projecting tool descriptions and parameters. */
+	private resolveProfileContext(profile: PromptProfile, context: SystemPromptContext): SystemPromptContext {
+		if (profile !== "lite" || context.focusChainSettings?.enabled !== true) {
+			return context
+		}
+		return {
+			...context,
+			focusChainSettings: { ...context.focusChainSettings, enabled: false },
+		}
 	}
 
 	/** Resolves runtime tokens once across the complete provider-native projection. */

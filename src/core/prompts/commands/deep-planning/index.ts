@@ -3,9 +3,15 @@ import type { ApiProviderInfo } from "@/core/api"
 import { CommandPromptGenerator } from "../../generators/CommandPromptGenerator"
 import { englishTemplateStore } from "../../i18n/en"
 import { PromptProfile, requirePromptProfile } from "../../profiles/types"
+import { withoutPromptFragments } from "../../system-prompt/variants/conditional-content"
 import { DEEP_PLANNING_VARIANTS } from "./variants"
 
 const commandGenerator = new CommandPromptGenerator(englishTemplateStore)
+const LITE_TASK_PROGRESS_FRAGMENTS = [
+	commandGenerator.generate("deepPlanningGeneric.liteTaskProgressTaskLine", {}).text,
+	commandGenerator.generate("deepPlanningGeneric.liteTaskProgressHeading", {}).text,
+	commandGenerator.generate("deepPlanningGeneric.liteTaskProgressContext", {}).text,
+] as const
 
 /**
  * Generates a provider-independent deep-planning slash command response.
@@ -19,7 +25,7 @@ export function getDeepPlanningPrompt(
 	promptProfile: PromptProfile,
 	focusChainSettings?: { enabled: boolean },
 	_providerInfo?: ApiProviderInfo,
-	enableNativeToolCalls?: boolean,
+	_enableNativeToolCalls?: boolean,
 ): string {
 	const requiredProfile = requirePromptProfile(promptProfile)
 	const variant = DEEP_PLANNING_VARIANTS.find((candidate) => candidate.id === requiredProfile)
@@ -45,10 +51,7 @@ export function getDeepPlanningPrompt(
 			FOCUS_CHAIN_TASK_PROGRESS: focusChainSettings?.enabled
 				? commandGenerator.generate("deepPlanning5Step.focusChainTaskProgress", {}).text
 				: "",
-			TOOL_DEFINITION: commandGenerator.generate(
-				enableNativeToolCalls === true ? "deepPlanning5Step.nativeToolDef" : "deepPlanning5Step.xmlToolDef",
-				{},
-			).text,
+			TOOL_DEFINITION: commandGenerator.generate("deepPlanning5Step.xmlToolDef", {}).text,
 		}).text
 	}
 
@@ -61,19 +64,13 @@ export function getDeepPlanningPrompt(
 		{},
 	).text
 
-	return commandGenerator.generate("deepPlanningGeneric.main", {
+	const rendered = commandGenerator.generate("deepPlanningGeneric.main", {
 		SHELL_COMMANDS: shellCommands,
 		NAV_COMMANDS: navCommands,
-		FOCUS_CHAIN_PARAM: focusChainSettings?.enabled
-			? commandGenerator.generate("deepPlanningGeneric.focusChainIntro", {}).text
-			: "",
-		NEW_TASK_INSTRUCTIONS: commandGenerator.generate(
-			enableNativeToolCalls === true
-				? "deepPlanningGeneric.nativeNewTaskInstructions"
-				: "deepPlanningGeneric.xmlNewTaskInstructions",
-			{},
-		).text,
+		FOCUS_CHAIN_PARAM: "",
+		NEW_TASK_INSTRUCTIONS: commandGenerator.generate("deepPlanningGeneric.xmlNewTaskInstructions", {}).text,
 	}).text
+	return withoutPromptFragments(rendered, LITE_TASK_PROGRESS_FRAGMENTS)
 }
 
 /**

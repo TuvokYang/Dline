@@ -5,6 +5,12 @@ import type { SystemPromptContext } from "../system-prompt/context"
 export type ToolTransport = "native" | "xml" | "both"
 export type ToolParamType = "string" | "boolean" | "integer" | "array" | "object"
 
+/** Declarative prompt text enabled only when its runtime requirement matches. */
+export interface ProfilePromptFragment {
+	readonly text: string
+	readonly contextRequirements?: (context: SystemPromptContext) => boolean
+}
+
 export interface ProfileToolParam {
 	readonly name: string
 	readonly required: boolean
@@ -20,10 +26,25 @@ export interface ProfileToolSpec {
 	readonly id: ClineDefaultTool
 	readonly name: string
 	readonly description: string
+	readonly descriptionFragments?: readonly ProfilePromptFragment[]
 	readonly instruction?: string
 	readonly contextRequirements?: (context: SystemPromptContext) => boolean
 	readonly parameters?: readonly ProfileToolParam[]
 	readonly inputSchema?: object
+}
+
+/** Resolves declarative prompt fragments without mutating the canonical spec. */
+export function resolveProfilePromptText(
+	base: string,
+	fragments: readonly ProfilePromptFragment[] | undefined,
+	context: SystemPromptContext,
+): string {
+	let resolved = base
+	for (const fragment of fragments ?? []) {
+		if (fragment.contextRequirements && !fragment.contextRequirements(context)) continue
+		resolved = resolved.replace(fragment.text, "")
+	}
+	return resolved
 }
 
 export type ProfileToolErrorReason = "missing-tool" | "duplicate-tool"

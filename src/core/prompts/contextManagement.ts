@@ -20,6 +20,10 @@ export const summarizeTask = (focusChainSettings?: { enabled: boolean }, cwd?: s
 	const focusChainExample = focusChainEnabled
 		? runtimeGenerator.generate("contextManagement.summarizeFocusChainExample", {}).text
 		: ""
+	const summaryDecision = runtimeGenerator.generate(
+		focusChainEnabled ? "contextManagement.summarizeDecisionWithFocus" : "contextManagement.summarizeDecisionWithoutFocus",
+		{},
+	).text
 
 	return `${
 		runtimeGenerator.generate("contextManagement.summarizeMain", {
@@ -28,6 +32,7 @@ export const summarizeTask = (focusChainSettings?: { enabled: boolean }, cwd?: s
 			FOCUS_CHAIN_PARAM: focusChainParam,
 			FOCUS_CHAIN_USAGE: focusChainUsage,
 			FOCUS_CHAIN_EXAMPLE: focusChainExample,
+			SUMMARY_DECISION: summaryDecision,
 		}).text
 	}\n`
 }
