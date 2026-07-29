@@ -33,7 +33,7 @@ export function useIdleIndicator(scrollContainerRef: React.RefObject<HTMLDivElem
 
 		// Check if task is complete
 		const isTaskComplete = clineMessages.some(
-			(msg) => msg.ask === "completion_result" || msg.say === "completion_result" || msg.ask === "plan_mode_respond",
+			(msg) => msg.ask === "completion_result" || msg.say === "completion_result" || msg.ask === "make_plan",
 		)
 
 		if (isTaskComplete) {

@@ -52,7 +52,7 @@ describe("projectTaskView", () => {
 
 	it.each([
 		"followup",
-		"plan_response",
+		"make_plan",
 		"qna_response",
 		"generate_report",
 	] as const)("keeps %s input enabled without footer actions", (kind) => {

@@ -13,7 +13,7 @@ export type InteractionKind =
 	| "report_bug"
 	| "condense"
 	| "followup"
-	| "plan_response"
+	| "make_plan"
 	| "qna_response"
 	| "generate_report"
 	| "status_acknowledgment"

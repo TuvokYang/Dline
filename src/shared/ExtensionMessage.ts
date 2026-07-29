@@ -206,7 +206,7 @@ export interface ClineMessage {
 
 export type ClineAsk =
 	| "followup"
-	| "plan_mode_respond"
+	| "make_plan"
 	| "act_mode_respond"
 	| "command"
 	| "command_output"
@@ -598,10 +598,8 @@ export interface ClineAskUseSubagents {
 	message?: string
 }
 
-export interface ClinePlanModeResponse {
+export interface ClineMakePlanResponse {
 	response: string
-	options?: string[]
-	selected?: string
 }
 
 export interface ClineQnaResponse {

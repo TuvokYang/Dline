@@ -17,7 +17,7 @@ enum ClineMessageType {
 // Enum for ClineAsk types
 enum ClineAsk {
   FOLLOWUP = 0;
-  PLAN_MODE_RESPOND = 1;
+  MAKE_PLAN = 1;
   COMMAND = 2;
   COMMAND_OUTPUT = 3;
   COMPLETION_RESULT = 4;
@@ -188,11 +188,9 @@ message ClineAskUseMcpServer {
   string uri = 5;
 }
 
-// Message for ClinePlanModeResponse
-message ClinePlanModeResponse {
+// Message for ClineMakePlanResponse
+message ClineMakePlanResponse {
   string response = 1;
-  repeated string options = 2;
-  string selected = 3;
 }
 
 // Message for ClineAskQuestion
@@ -261,7 +259,7 @@ message ClineMessage {
   ClineSayBrowserAction say_browser_action = 16;
   BrowserActionResult browser_action_result = 17;
   ClineAskUseMcpServer ask_use_mcp_server = 18;
-  ClinePlanModeResponse plan_mode_response = 19;
+  ClineMakePlanResponse make_plan_response = 19;
   ClineAskQuestion ask_question = 20;
   ClineAskNewTask ask_new_task = 21;
   ClineApiReqInfo api_req_info = 22;

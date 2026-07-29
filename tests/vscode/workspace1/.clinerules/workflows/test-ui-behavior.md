@@ -80,7 +80,7 @@ globs: []
 
 **操作流程**：
 1. 用户切换到 Plan 模式。
-2. AI 检测到 Plan 模式后调用 `plan_mode_respond` 响应。
+2. AI 检测到 Plan 模式后调用 `make_plan` 响应。
 3. 用户在输入框中输入任意文本（如「测试切换」）。
 4. 用户按快捷键切换 Plan→Act。
 5. 观察：
@@ -92,7 +92,7 @@ globs: []
 - ✅ AI 收到的 user_feedback 与输入文本一致。
 
 **⚠️ 已知陷阱**：
-- Plan→Act 切换后，系统环境检测可能有短暂延迟（仍显示 ACT MODE，但 `plan_mode_respond` 仍可正常工作）。
+- Plan→Act 切换后，系统环境检测可能有短暂延迟（仍显示 ACT MODE，但 `make_plan` 仍可正常工作）。
 - 可追加多次测试以验证一致性。
 
 **预期系统消息**（切换后）：
@@ -203,7 +203,7 @@ The user also provided the following message when switching to ACT MODE:
 
 ### 📋 模式切换观察
 
-- Plan 模式下 `plan_mode_respond` 可正常调用，环境检测有 1-2 秒延迟。
+- Plan 模式下 `make_plan` 可正常调用，环境检测有 1-2 秒延迟。
 - Plan→Act 切换后，输入框文本自动转为 `<user_message>` 发送给 AI。
 </detailed_sequence_steps>
 

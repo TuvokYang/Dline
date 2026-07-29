@@ -21,7 +21,7 @@ import { HostRegistryInfo } from "@/registry"
 import { ClineError, ClineErrorType } from "@/services/error"
 import { ApiFormat } from "@/shared/proto/dline/models"
 import { calculateApiCostAnthropic } from "@/utils/cost"
-import { isNextGenModelFamily } from "@/utils/model-utils"
+import { isNativeToolCallingConfig, isNextGenModelFamily } from "@/utils/model-utils"
 import { TaskState } from "../../TaskState"
 import { ToolExecutorCoordinator } from "../ToolExecutorCoordinator"
 import { ToolValidator } from "../ToolValidator"
@@ -351,9 +351,12 @@ export class SubagentRunner {
 			}
 			stats.contextWindow = providerInfo.model.info.capabilities?.contextWindow || 0
 			stats.currency = providerInfo.model.info.pricing?.currency || "USD"
+			const apiFormat = (providerInfo.model.info as { apiFormat?: ApiFormat }).apiFormat
 			const nativeToolCallsRequested =
-				(providerInfo.model.info as any).apiFormat === ApiFormat.OPENAI_RESPONSES ||
+				apiFormat === ApiFormat.OPENAI_RESPONSES ||
+				apiFormat === ApiFormat.OPENAI_RESPONSES_WEBSOCKET_MODE ||
 				!!this.baseConfig.services.stateManager.getGlobalStateKey("nativeToolCallEnabled")
+			const useNativeToolCalls = isNativeToolCallingConfig(providerInfo, nativeToolCallsRequested)
 
 			const host = HostRegistryInfo.get()
 			const remoteSkillEntries = this.baseConfig.services.stateManager.getRemoteConfigSettings().remoteGlobalSkills || []
@@ -380,6 +383,7 @@ export class SubagentRunner {
 			const context: SystemPromptContext = {
 				providerInfo,
 				promptProfile: resolvePromptProfile({
+					modelId: providerInfo.model.id,
 					contextWindow: providerInfo.model.info.capabilities?.contextWindow,
 				}),
 				cwd: this.baseConfig.cwd,
@@ -388,7 +392,7 @@ export class SubagentRunner {
 				focusChainSettings: this.baseConfig.focusChainSettings,
 				browserSettings: this.baseConfig.browserSettings,
 				yoloModeToggled: false,
-				enableNativeToolCalls: nativeToolCallsRequested,
+				enableNativeToolCalls: useNativeToolCalls,
 				enableParallelToolCalling: false,
 				isSubagentRun: true,
 			}
@@ -405,7 +409,6 @@ export class SubagentRunner {
 				}
 				return false
 			})
-			const useNativeToolCalls = nativeToolCallsRequested
 			const workspaceMetadataEnvironmentBlock = await this.getWorkspaceMetadataEnvironmentBlock()
 
 			if (useNativeToolCalls && (!nativeTools || nativeTools.length === 0)) {

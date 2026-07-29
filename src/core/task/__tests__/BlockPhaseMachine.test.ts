@@ -204,7 +204,7 @@ describe("BlockPhaseMachine - rejectActiveBlock cascade", () => {
 describe("BlockPhaseMachine.toolNameToAskType — conversational tools", () => {
 	const CONVERSATIONAL_TOOLS = [
 		"qna_respond",
-		"plan_mode_respond",
+		"make_plan",
 		"act_mode_respond",
 		"ask_followup_question",
 		"generate_report",

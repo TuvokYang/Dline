@@ -293,7 +293,7 @@ export class TaskController {
 			return runtimeState
 		}
 
-		// Conversation awaiting (plan_mode_respond, qna_respond, etc.)
+		// Conversation awaiting (make_plan, qna_respond, etc.)
 		// This explicit checkpoint takes precedence over stale message-derived
 		// working inference, but not over an actually running runtime task.
 		if (snapshot.awaiting?.kind === "conversation" && !runtimeWorking) {

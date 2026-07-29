@@ -234,7 +234,7 @@ describe("reconcileResume", () => {
 
 	it.each([
 		["followup", "followup"],
-		["plan_mode_respond", "plan_response"],
+		["make_plan", "make_plan"],
 		["qna_respond", "qna_response"],
 		["generate_report", "generate_report"],
 	] as const)("keeps awaiting %s as its original reply interaction", (ask, kind) => {

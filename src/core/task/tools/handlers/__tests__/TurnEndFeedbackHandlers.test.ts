@@ -6,7 +6,7 @@ import { TaskState } from "../../../TaskState"
 import type { TaskConfig } from "../../types/TaskConfig"
 import { AskFollowupQuestionToolHandler } from "../AskFollowupQuestionToolHandler"
 import { GenerateReportHandler } from "../GenerateReportHandler"
-import { PlanModeRespondHandler } from "../PlanModeRespondHandler"
+import { MakePlanHandler } from "../MakePlanHandler"
 
 vi.mock("@/services/telemetry", () => ({
 	telemetryService: {
@@ -190,57 +190,26 @@ describe("turn-ending feedback handlers", () => {
 		expect(config.messageState.updateTaskHistory).not.toHaveBeenCalled()
 	})
 
-	it("durably persists a restored plan option before continuation resolves", async () => {
-		const selected = "Implement the safer plan"
-		const config = createConfig(selected)
-		const handler = new PlanModeRespondHandler()
-		const originalText = JSON.stringify({ response: "Choose a plan", options: [selected, "Implement the faster plan"] })
-		config.messageState.clineMessages.push(
-			{ ts: 1, type: "ask", ask: "plan_mode_respond", text: originalText },
-			{ ts: 2, type: "say", say: "text", text: "latest non-plan message" },
-		)
-		const flush = createDeferred()
-		const updateClineMessage = vi.mocked(config.messageState.updateClineMessage)
-		const flushMessageUpdate = vi.mocked(config.messageState.flushMessageUpdate).mockImplementation(() => flush.promise)
-		let resolved = false
+	it("opens the canonical make_plan interaction without legacy options", async () => {
+		const config = createConfig("Adjust the plan")
+		const handler = new MakePlanHandler()
 
-		const continuation = handler
-			.continueInteraction(
-				config,
-				createBlock(ClineDefaultTool.PLAN_MODE, {
-					response: "Choose a plan",
-					options: JSON.stringify([selected, "Implement the faster plan"]),
-				}),
-				{ actionId: "reply", draft: { text: selected, images: [], files: [] } },
-			)
-			.then((result) => {
-				resolved = true
-				return result
-			})
+		await handler.execute(config, createBlock(ClineDefaultTool.MAKE_PLAN, { response: "Choose a plan" }))
 
-		await vi.waitFor(() => expect(flushMessageUpdate).toHaveBeenCalledOnce())
-		expect(updateClineMessage).toHaveBeenCalledWith(0, {
-			text: JSON.stringify({
-				response: "Choose a plan",
-				options: [selected, "Implement the faster plan"],
-				selected,
-			}),
+		expect(config.interactions.open).toHaveBeenCalledWith({
+			turnId: "turn:tid-make_plan",
+			interactionId: "tid-make_plan",
+			kind: "make_plan",
+			presentation: JSON.stringify({ response: "Choose a plan" }),
+			existingTs: 100,
 		})
-		expect(updateClineMessage.mock.invocationCallOrder[0]).toBeLessThan(flushMessageUpdate.mock.invocationCallOrder[0])
-		expect(config.messageState.clineMessages[0].text).toBe(originalText)
-		expect(resolved).toBe(false)
-
-		flush.resolve()
-		await continuation
-		expect(resolved).toBe(true)
-		expect(config.messageState.updateTaskHistory).not.toHaveBeenCalled()
 	})
 
-	it("plan_mode_respond returns feedback wrapper and avoids duplicate UI feedback", async () => {
+	it("make_plan returns feedback wrapper and avoids duplicate UI feedback", async () => {
 		const config = createConfig("请按方案二调整")
-		const handler = new PlanModeRespondHandler()
+		const handler = new MakePlanHandler()
 
-		const result = await handler.execute(config, createBlock(ClineDefaultTool.PLAN_MODE, { response: "方案", options: "[]" }))
+		const result = await handler.execute(config, createBlock(ClineDefaultTool.MAKE_PLAN, { response: "方案" }))
 
 		expect(config.callbacks.say).not.toHaveBeenCalledWith("user_feedback", "请按方案二调整", [], [])
 		assert.ok(typeof result === "string")

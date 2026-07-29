@@ -1094,7 +1094,7 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 			[updateCursorPosition],
 		)
 
-		const attachDraft = mode === "plan" && (clineAsk === "plan_mode_respond" || clineAsk === "qna_respond")
+		const attachDraft = clineAsk === "make_plan" || (mode === "plan" && clineAsk === "qna_respond")
 		const modeSwitchFlow = useModeSwitch({
 			mode,
 			stateRevision,

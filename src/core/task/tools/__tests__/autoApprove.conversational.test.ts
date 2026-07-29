@@ -9,7 +9,7 @@ import { AutoApprove } from "../autoApprove"
 const CONVERSATIONAL_TOOLS = [
 	ClineDefaultTool.ATTEMPT,
 	ClineDefaultTool.QNA_RESPOND,
-	ClineDefaultTool.PLAN_MODE,
+	ClineDefaultTool.MAKE_PLAN,
 	ClineDefaultTool.ACT_MODE,
 	ClineDefaultTool.ASK,
 	ClineDefaultTool.GENERATE_REPORT,

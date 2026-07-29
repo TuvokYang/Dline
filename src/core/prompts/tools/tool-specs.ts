@@ -1,13 +1,23 @@
 import { ClineDefaultTool } from "../../../shared/tools"
 import { getPrompt } from "../i18n"
+import { PromptProfile } from "../profiles/types"
 import type { SystemPromptContext } from "../system-prompt/context"
-import type { ProfileToolParam, ProfileToolSpec } from "./profile-tool-set"
+import type { ProfilePromptFragment, ProfileToolParam, ProfileToolSpec } from "./profile-tool-set"
+
+const whenFocusTracking = (context: SystemPromptContext): boolean =>
+	context.promptProfile !== PromptProfile.Lite && context.focusChainSettings?.enabled === true
+const whenFocusTrackingDisabled = (context: SystemPromptContext): boolean => !whenFocusTracking(context)
+
+/** Creates one conditional canonical prompt fragment. */
+function fragment(text: string, contextRequirements: (context: SystemPromptContext) => boolean): ProfilePromptFragment {
+	return { text, contextRequirements }
+}
 
 const taskProgress: ProfileToolParam = {
 	name: "task_progress",
 	required: false,
 	instruction: getPrompt("taskProgress", "paramInstruction"),
-	contextRequirements: (context) => context.focusChainSettings?.enabled === true,
+	contextRequirements: whenFocusTracking,
 }
 
 /** Creates one immutable tool parameter descriptor. */
@@ -56,8 +66,19 @@ function spec(
 	description: string,
 	parameters: readonly ProfileToolParam[] = [],
 	contextRequirements?: (context: SystemPromptContext) => boolean,
+	descriptionFragments?: readonly ProfilePromptFragment[],
 ): Omit<ProfileToolSpec, "profile"> {
-	return { transport: "both", id, name: id, description, parameters, contextRequirements }
+	return { transport: "both", id, name: id, description, descriptionFragments, parameters, contextRequirements }
+}
+
+/** Creates a descriptor that can only be projected into a provider-native request. */
+function nativeRequestSpec(
+	id: ClineDefaultTool,
+	description: string,
+	parameters: readonly ProfileToolParam[] = [],
+	contextRequirements?: (context: SystemPromptContext) => boolean,
+): Omit<ProfileToolSpec, "profile"> {
+	return { ...spec(id, description, parameters, contextRequirements), transport: "native" }
 }
 
 const LOAD_PARAMS = [param("name", true, getPrompt("loadCapability", "nameInstruction"))]
@@ -121,19 +142,33 @@ export const NATIVE_TOOL_SPECS: readonly Omit<ProfileToolSpec, "profile">[] = [
 		],
 		isInteractive,
 	),
-	spec(ClineDefaultTool.ATTEMPT, getPrompt("attemptCompletion", "nativeDescription"), [
-		param("result", true, getPrompt("attemptCompletion", "nativeResultInstruction")),
-		param("command", false, getPrompt("attemptCompletion", "nativeCommandInstruction")),
-	]),
-	spec(ClineDefaultTool.PLAN_MODE, getPrompt("planModeRespond", "description"), [
-		param("response", true, getPrompt("planModeRespond", "nativeResponseInstruction")),
-		taskProgress,
-	]),
+	spec(
+		ClineDefaultTool.ATTEMPT,
+		getPrompt("attemptCompletion", "nativeDescription"),
+		[
+			param("result", true, getPrompt("attemptCompletion", "nativeResultInstruction")),
+			param("command", false, getPrompt("attemptCompletion", "nativeCommandInstruction")),
+		],
+		undefined,
+		[fragment(getPrompt("attemptCompletion", "focusOmissionChecklistSentence"), whenFocusTrackingDisabled)],
+	),
+	spec(
+		ClineDefaultTool.MAKE_PLAN,
+		getPrompt("makePlan", "description"),
+		[
+			param("response", true, getPrompt("makePlan", "nativeResponseInstruction")),
+			param("needs_more_exploration", false, getPrompt("makePlan", "needsMoreExplorationInstruction"), "boolean"),
+			taskProgress,
+		],
+		undefined,
+		[fragment(getPrompt("makePlan", "focusOmissionDescriptionClause"), whenFocusTrackingDisabled)],
+	),
 	spec(ClineDefaultTool.QNA_RESPOND, getPrompt("qnaRespond", "nativeDescription"), [
 		param("response", true, getPrompt("qnaRespond", "nativeResponseInstruction")),
 	]),
 	spec(ClineDefaultTool.ACT_MODE, getPrompt("actModeRespond", "description"), [
 		param("response", true, getPrompt("actModeRespond", "responseInstruction")),
+		taskProgress,
 	]),
 	spec(ClineDefaultTool.BASH, getPrompt("executeCommand", "nativeDescription"), [
 		param("command", true, getPrompt("executeCommand", "nativeCommandInstruction")),
@@ -231,10 +266,15 @@ export const NATIVE_TOOL_SPECS: readonly Omit<ProfileToolSpec, "profile">[] = [
 		param("input", true, getPrompt("applyPatch", "inputInstruction")),
 		taskProgress,
 	]),
-	spec(ClineDefaultTool.SPAWN_TASK, getPrompt("spawnTask", "description"), [
-		param("task", true, getPrompt("spawnTask", "taskInstruction")),
-		param("context", false, getPrompt("spawnTask", "contextInstruction")),
-	]),
+	spec(
+		ClineDefaultTool.SPAWN_TASK,
+		getPrompt("spawnTask", "description"),
+		[
+			param("task", true, getPrompt("spawnTask", "taskInstruction")),
+			param("context", false, getPrompt("spawnTask", "contextInstruction")),
+		],
+		hasSubagents,
+	),
 	spec(
 		ClineDefaultTool.FOCUS_CHAIN_CHANGE,
 		getPrompt("focusChain", "focusChainChangeToolDescription"),
@@ -242,15 +282,21 @@ export const NATIVE_TOOL_SPECS: readonly Omit<ProfileToolSpec, "profile">[] = [
 			param("new_plan", true, getPrompt("focusChain", "focusChainChangeNewPlanNativeInstruction")),
 			param("reason", false, getPrompt("focusChain", "focusChainChangeReasonNativeInstruction")),
 		],
-		(context) => context.focusChainSettings?.enabled === true,
+		whenFocusTracking,
 	),
 	spec(ClineDefaultTool.USE_SUBAGENT, getPrompt("subagent", "singleDescription"), SINGLE_SUBAGENT_PARAMS, hasSubagents),
 	spec(ClineDefaultTool.USE_SUBAGENTS, getPrompt("subagent", "description"), SUBAGENT_PARAMS, hasSubagents),
-	spec(ClineDefaultTool.STATUS_UPDATE, getPrompt("statusUpdate", "nativeDescription"), [
-		param("response", true, getPrompt("statusUpdate", "responseInstruction")),
-		param("requires_acknowledgment", false, getPrompt("statusUpdate", "requiresAcknowledgmentInstruction"), "boolean"),
-		taskProgress,
-	]),
+	spec(
+		ClineDefaultTool.STATUS_UPDATE,
+		getPrompt("statusUpdate", "nativeDescription"),
+		[
+			param("response", true, getPrompt("statusUpdate", "responseInstruction")),
+			param("requires_acknowledgment", false, getPrompt("statusUpdate", "requiresAcknowledgmentInstruction"), "boolean"),
+			taskProgress,
+		],
+		undefined,
+		[fragment(getPrompt("statusUpdate", "focusOmissionDescriptionSentence"), whenFocusTrackingDisabled)],
+	),
 	spec(
 		ClineDefaultTool.GENERATE_EXPLANATION,
 		getPrompt("generateExplanation", "description"),
@@ -261,6 +307,10 @@ export const NATIVE_TOOL_SPECS: readonly Omit<ProfileToolSpec, "profile">[] = [
 		],
 		(context) => context.isCliEnvironment !== true,
 	),
+	nativeRequestSpec(ClineDefaultTool.SUMMARIZE_TASK, getPrompt("contextManagement", "summarizeToolDescription"), [
+		param("context", true, getPrompt("contextManagement", "summarizeContextInstruction")),
+		taskProgress,
+	]),
 	spec(ClineDefaultTool.GENERATE_REPORT, getPrompt("generateReport", "nativeDescription"), [
 		param("title", true, getPrompt("generateReport", "titleInstruction")),
 		param("content", true, getPrompt("generateReport", "contentInstruction")),

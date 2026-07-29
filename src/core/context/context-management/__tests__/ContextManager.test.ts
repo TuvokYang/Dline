@@ -242,7 +242,7 @@ describe("ContextManager", () => {
 							type: "tool_use",
 							function_id: "toolu_001",
 							dline_tid: "tid_001",
-							name: "plan_mode_respond",
+							name: "make_plan",
 							input: {},
 						},
 					],
@@ -257,7 +257,7 @@ describe("ContextManager", () => {
 							content: [
 								{
 									type: "text",
-									text: "[plan_mode_respond] Result:\n<user_message>\n'test2.txt' (see below for file content)\n</user_message>\n\n<file_content path=\"/Users/toshi/Desktop/cline_testing_repo/test2.txt\">\ntest\n\n</file_content>",
+									text: "[make_plan] Result:\n<user_message>\n'test2.txt' (see below for file content)\n</user_message>\n\n<file_content path=\"/Users/toshi/Desktop/cline_testing_repo/test2.txt\">\ntest\n\n</file_content>",
 								},
 							],
 						},
@@ -311,7 +311,7 @@ describe("ContextManager", () => {
 							type: "text",
 							text: "[TASK RESUMPTION] This task was interrupted just now. The conversation may have been incomplete.",
 						},
-						{ type: "text", text: "New message to respond to with plan_mode_respond tool" },
+						{ type: "text", text: "New message to respond to with make_plan tool" },
 					],
 				},
 				{

@@ -4,8 +4,8 @@ import {
 	ClineAskQuestion,
 	ClineAskSpawnTask,
 	ClineAskUseMcpServer,
+	ClineMakePlanResponse,
 	ClineMessage,
-	ClinePlanModeResponse,
 	ClineSayGenerateExplanation,
 	ClineSayTool,
 	COMPLETION_RESULT_CHANGES_FLAG,
@@ -1396,39 +1396,15 @@ export const ChatRowContent = memo(
 								<ReportBugPreview data={message.text || ""} />
 							</div>
 						)
-					case "plan_mode_respond": {
-						let response: string | undefined
-						let options: string[] | undefined
-						let selected: string | undefined
+					case "make_plan": {
+						let response = message.text || ""
 						try {
-							const parsedMessage = JSON.parse(message.text || "{}") as ClinePlanModeResponse
-							response = parsedMessage.response
-							options = parsedMessage.options
-							selected = parsedMessage.selected
+							const parsedMessage = JSON.parse(message.text || "{}") as ClineMakePlanResponse
+							response = parsedMessage.response || response
 						} catch (_e) {
-							// legacy messages would pass response directly
-							response = message.text
+							// Keep malformed current records readable instead of failing the row.
 						}
-						return (
-							<div>
-								<PlanCompletionOutputRow
-									headClassNames={HEADER_CLASSNAMES}
-									text={response || message.text || ""}
-								/>
-								<OptionsButtons
-									files={selectedFiles}
-									images={selectedImages}
-									inputValue={inputValue}
-									isActive={
-										(isLast && lastModifiedMessage?.ask === "plan_mode_respond") ||
-										(!selected && options && options.length > 0)
-									}
-									onInputConsumed={onInputConsumed}
-									options={options}
-									selected={selected}
-								/>
-							</div>
-						)
+						return <PlanCompletionOutputRow headClassNames={HEADER_CLASSNAMES} text={response} />
 					}
 					case "command_output":
 						return (

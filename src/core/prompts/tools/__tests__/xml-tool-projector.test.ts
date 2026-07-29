@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest"
+import { toolParamNames } from "../../../assistant-message"
 import { SystemPromptGenerator } from "../../generators/SystemPromptGenerator"
 import { ToolPromptGenerator } from "../../generators/ToolPromptGenerator"
 import { PromptProfile } from "../../profiles/types"
 import type { SystemPromptContext } from "../../system-prompt/context"
+import { NATIVE_TOOL_SPECS } from "../tool-specs"
 
 const BASE_CONTEXT = {
 	promptProfile: PromptProfile.Native,
@@ -26,6 +28,15 @@ const BASE_CONTEXT = {
 } as SystemPromptContext
 
 describe("XML tool projection", () => {
+	it("keeps every canonical parameter recognizable by the XML parser", () => {
+		const parserParams = new Set<string>(toolParamNames)
+		const missingParams = [
+			...new Set(NATIVE_TOOL_SPECS.flatMap((tool) => tool.parameters?.map((parameter) => parameter.name) ?? [])),
+		].filter((name) => !parserParams.has(name))
+
+		expect(missingParams).toEqual([])
+	})
+
 	it("documents optional execute_command workdirectory, background, and timeout parameters", () => {
 		const xml = new ToolPromptGenerator().generateXml(PromptProfile.Native, BASE_CONTEXT)
 
@@ -57,5 +68,38 @@ describe("XML tool projection", () => {
 		expect(output.systemPrompt).not.toContain("@BROWSER_VIEWPORT_WIDTH@")
 		expect(output.systemPrompt).not.toContain("@BROWSER_VIEWPORT_HEIGHT@")
 		expect(output.systemPrompt).not.toContain("{{")
+	})
+
+	it("uses the same focus fragment gates as provider-native projection", () => {
+		const generator = new ToolPromptGenerator()
+		const enabled = generator.generateXml(PromptProfile.Native, {
+			...BASE_CONTEXT,
+			focusChainSettings: { enabled: true, remindClineInterval: 6 },
+		})
+		const disabled = generator.generateXml(PromptProfile.Native, BASE_CONTEXT)
+
+		expect(enabled).toContain("task_progress checklist")
+		expect(enabled).toContain("current task is fully complete")
+		expect(enabled).toContain("- task_progress: (optional)")
+		expect(enabled).not.toContain("After each tool use")
+		expect(disabled).not.toContain("task_progress checklist")
+		expect(disabled).toContain("current task is fully complete")
+		expect(disabled).not.toContain("- task_progress: (optional)")
+	})
+
+	it.each([
+		PromptProfile.Native,
+		PromptProfile.Lite,
+	])("does not document recursive task or subagent tools during a %s subagent run", (profile) => {
+		const xml = new ToolPromptGenerator().generateXml(profile, {
+			...BASE_CONTEXT,
+			promptProfile: profile,
+			subagentsEnabled: true,
+			isSubagentRun: true,
+		})
+
+		expect(xml).not.toContain("## spawn_task")
+		expect(xml).not.toContain("## use_subagent")
+		expect(xml).not.toContain("## use_subagents")
 	})
 })

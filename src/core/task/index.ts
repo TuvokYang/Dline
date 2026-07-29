@@ -38,7 +38,10 @@ import { ClineIgnoreController } from "@core/ignore/ClineIgnoreController"
 import { parseMentions } from "@core/mentions"
 import { CommandPermissionController } from "@core/permissions"
 import { summarizeTask } from "@core/prompts/contextManagement"
+import { ToolPromptGenerator } from "@core/prompts/generators/ToolPromptGenerator"
+import { PromptProfile } from "@core/prompts/profiles/types"
 import { formatResponse } from "@core/prompts/responses"
+import type { RequestScopedToolId } from "@core/prompts/tools/tool-ids"
 import { parseSlashCommands } from "@core/slash-commands"
 import {
 	ensureRulesDirectoryExists,
@@ -54,7 +57,7 @@ import { ensureApiMessages, ensureUserContent } from "@core/task/api-context"
 import { showContextUsage } from "@core/task/environment-context"
 import { type ModeCompactResult, ModeSwitchCompaction } from "@core/task/ModeSwitchCompaction"
 import { MODE_SWITCH_COMPACT_SIGNAL } from "@core/task/mode-switch-signal"
-import { createRequestApiScope, type RequestApiScope } from "@core/task/RequestApiScope"
+import { createRequestApiScope, type RequestApiScope, withRequestToolIds } from "@core/task/RequestApiScope"
 import { isMultiRootEnabled } from "@core/workspace/multi-root-utils"
 import { WorkspaceRootManager } from "@core/workspace/WorkspaceRootManager"
 import { buildCheckpointManager, shouldUseMultiRoot } from "@integrations/checkpoints/factory"
@@ -95,7 +98,7 @@ import { resolvePromptProfile } from "@shared/resolve-prompt-profile"
 import type { Mode } from "@shared/storage/types"
 import { ClineDefaultTool, CONVERSATIONAL_TOOL_NAMES, READ_ONLY_TOOLS } from "@shared/tools"
 import { ClineAskResponse } from "@shared/WebviewMessage"
-import { isLocalModel, isNextGenModelFamily, isParallelToolCallingEnabled } from "@utils/model-utils"
+import { isLocalModel, isNativeToolCallingConfig, isNextGenModelFamily, isParallelToolCallingEnabled } from "@utils/model-utils"
 import { arePathsEqual, getDesktopDir } from "@utils/path"
 import { filterExistingFiles } from "@utils/tabFiltering"
 import cloneDeep from "clone-deep"
@@ -1198,7 +1201,7 @@ export class Task {
 			}
 		}
 
-		// Conversational tools (qna_respond, plan_mode_respond, etc.) handle
+		// Conversational tools (qna_respond, make_plan, etc.) handle
 		// user responses internally via their handler's ask(). The block phase
 		// machine must NOT treat messageResponse as a rejection for these tools,
 		// otherwise subsequent conversational tools in the same turn get
@@ -1965,7 +1968,7 @@ export class Task {
 	 */
 	private isConversationalAsk(ask: ClineAsk | undefined): ask is ClineAsk {
 		return (
-			ask === "plan_mode_respond" ||
+			ask === "make_plan" ||
 			ask === "qna_respond" ||
 			ask === "followup" ||
 			ask === "generate_report" ||
@@ -2094,7 +2097,7 @@ export class Task {
 	}
 
 	/**
-	 * Create a conversation-awaiting snapshot for Q&A tools (plan_mode_respond,
+	 * Create a conversation-awaiting snapshot for Q&A tools (make_plan,
 	 * qna_respond, followup, generate_report, act_mode_respond).
 	 * This ensures buildTaskUiState returns cancelEnabled=false and empty actions,
 	 * so the frontend hides the Cancel button and shows only the input area.
@@ -2447,7 +2450,12 @@ export class Task {
 			await this.postStateToWebview()
 
 			// PHASE 6: Check for incomplete progress (focus chain)
-			if (this.FocusChainManager) {
+			const currentProviderInfo = this.getCurrentProviderInfo()
+			const currentPromptProfile = resolvePromptProfile({
+				modelId: currentProviderInfo.model.id,
+				contextWindow: currentProviderInfo.model.info.capabilities?.contextWindow,
+			})
+			if (this.FocusChainManager && currentPromptProfile === PromptProfile.Native) {
 				const apiConfig = this.stateManager.getApiConfiguration()
 				const currentMode = this.taskSm.mode
 				const currentProfile = currentMode === "plan" ? apiConfig.planModeProfile : apiConfig.actModeProfile
@@ -2891,6 +2899,15 @@ export class Task {
 	 * Build the current system prompt context for cache creation or refresh.
 	 * @returns Prompt context containing current rules, tools, model, and workspace state.
 	 */
+	private shouldUseNativeToolCalls(providerInfo: Readonly<ApiProviderInfo>): boolean {
+		const apiFormat = (providerInfo.model.info as { apiFormat?: ApiFormat }).apiFormat
+		const requested =
+			apiFormat === ApiFormat.OPENAI_RESPONSES ||
+			apiFormat === ApiFormat.OPENAI_RESPONSES_WEBSOCKET_MODE ||
+			this.stateManager.getGlobalStateKey("nativeToolCallEnabled")
+		return isNativeToolCallingConfig(providerInfo, requested)
+	}
+
 	private async buildPromptContext(providerInfo = this.getCurrentProviderInfo()): Promise<SystemPromptContext> {
 		await pWaitFor(() => this.mcpHub.isConnecting !== true, {
 			timeout: 10_000,
@@ -2982,16 +2999,6 @@ export class Task {
 		}
 		const availableSkills = await discoverAvailableSkills(this.cwd, capabilityToggleState)
 
-		// Snapshot editor tabs so prompt tools can decide whether to include
-		// filetype-specific instructions (e.g. notebooks) without adding bespoke flags.
-		const openTabPaths = (await HostProvider.window.getOpenTabs({})).paths || []
-		const visibleTabPaths = (await HostProvider.window.getVisibleTabs({})).paths || []
-		const cap = 50
-		const editorTabs = {
-			open: openTabPaths.slice(0, cap),
-			visible: visibleTabPaths.slice(0, cap),
-		}
-
 		// Disable spawn_task for child tasks to prevent recursive spawn explosion.
 		// A spawned task inherits the parent's provider and should focus on its
 		// assigned sub-problem without spawning further tasks.
@@ -3005,12 +3012,12 @@ export class Task {
 		const promptContext: SystemPromptContext = {
 			taskId: this.taskId,
 			promptProfile: resolvePromptProfile({
+				modelId: providerInfo.model.id,
 				contextWindow: providerInfo.model.info.capabilities?.contextWindow,
 			}),
 			cwd: this.cwd,
 			ide,
 			providerInfo,
-			editorTabs,
 			supportsBrowserUse,
 			mcpHub: this.mcpHub,
 			skills: availableSkills,
@@ -3032,9 +3039,7 @@ export class Task {
 			workspaceRoots,
 			isSubagentRun: false,
 			isCliEnvironment,
-			enableNativeToolCalls:
-				(providerInfo.model.info as { apiFormat?: ApiFormat }).apiFormat === ApiFormat.OPENAI_RESPONSES ||
-				this.stateManager.getGlobalStateKey("nativeToolCallEnabled"),
+			enableNativeToolCalls: this.shouldUseNativeToolCalls(providerInfo),
 			enableParallelToolCalling: this.isParallelToolCallingEnabled(providerInfo),
 			terminalExecutionMode: this.terminalExecutionMode,
 			disableTools,
@@ -3068,8 +3073,14 @@ export class Task {
 			frozenPrompt = await this.systemPromptCacheService.getOrCreate({ promptContext })
 		}
 		const systemPrompt = frozenPrompt.text
-		const cachedTools = this.systemPromptCacheService.getLastTools()
-		const tools = cachedTools ? [...cachedTools] : undefined
+		const toolPromptGenerator = new ToolPromptGenerator()
+		const cachedTools = toolPromptGenerator.filterCachedDefaultTools(this.systemPromptCacheService.getLastTools())
+		const requestTools = toolPromptGenerator.generateSelectedRequestTools(
+			promptContext.promptProfile,
+			promptContext,
+			requestScope.requestToolIds,
+		)
+		const tools = cachedTools || requestTools ? [...(cachedTools ?? []), ...(requestTools ?? [])] : undefined
 		this.toolExecutor.setAllowedNativeToolNames(getAdvertisedNativeToolNames(tools))
 		Logger.debug(
 			`[Task ${this.taskId}] attemptApiRequest: after systemPrompt +${Math.round(performance.now() - apiReqStart)}ms`,
@@ -3945,6 +3956,7 @@ export class Task {
 		let parsedUserContent: ClineContent[]
 		let environmentDetails: string
 		let clinerulesError: boolean
+		const requestToolIds: readonly RequestScopedToolId[] = shouldCompact ? [ClineDefaultTool.SUMMARIZE_TASK] : []
 
 		if (shouldCompact) {
 			// When compacting, skip full context loading (use summarize_task instead)
@@ -3958,8 +3970,10 @@ export class Task {
 				userContent,
 				includeFileDetails,
 				useCompactPrompt,
+				requestScope.providerInfo,
 			)
 		}
+		const requestScopeWithTools = withRequestToolIds(requestScope, requestToolIds)
 
 		// error handling if the user uses the /newrule command & their .clinerules is a file, for file read operations didnt work properly
 		if (clinerulesError === true) {
@@ -3983,10 +3997,16 @@ export class Task {
 		}
 
 		if (shouldCompact) {
+			const promptProfile = resolvePromptProfile({
+				modelId: requestScope.providerInfo.model.id,
+				contextWindow: requestScope.providerInfo.model.info.capabilities?.contextWindow,
+			})
 			userContent.push({
 				type: "text",
 				text: summarizeTask(
-					this.stateManager.getGlobalSettingsKey("focusChainSettings"),
+					promptProfile === PromptProfile.Native
+						? this.stateManager.getGlobalSettingsKey("focusChainSettings")
+						: undefined,
 					this.cwd,
 					isMultiRootEnabled(this.stateManager),
 				),
@@ -4188,7 +4208,7 @@ export class Task {
 			this.taskState.partialToolLifecycleByTs.clear()
 
 			const { toolUseHandler, reasonsHandler } = this.streamHandler.getHandlers()
-			const providerStream = this.attemptApiRequest(previousApiReqIndex, requestScope) // yields only if the first chunk is successful, otherwise will allow the user to retry the request (most likely due to rate limit error, which gets thrown on the first chunk)
+			const providerStream = this.attemptApiRequest(previousApiReqIndex, requestScopeWithTools) // yields only if the first chunk is successful, otherwise will allow the user to retry the request (most likely due to rate limit error, which gets thrown on the first chunk)
 			const stream = normalizeApiStream(providerStream, createStreamNormalizer(this.identityFactory))
 
 			let assistantMessageId = ""
@@ -4782,14 +4802,19 @@ export class Task {
 		userContent: ClineContent[],
 		includeFileDetails = false,
 		useCompactPrompt = false,
+		providerInfo: Readonly<ApiProviderInfo> = this.getCurrentProviderInfo(),
 	): Promise<[ClineContent[], string, boolean]> {
 		let needsClinerulesFileCheck = false
 
 		// Pre-fetch necessary data to avoid redundant calls within loops
 		const ulid = this.ulid
-		const focusChainSettings = this.stateManager.getGlobalSettingsKey("focusChainSettings")
-		const useNativeToolCalls = this.stateManager.getGlobalStateKey("nativeToolCallEnabled")
-		const providerInfo = this.getCurrentProviderInfo()
+		const promptProfile = resolvePromptProfile({
+			modelId: providerInfo.model.id,
+			contextWindow: providerInfo.model.info.capabilities?.contextWindow,
+		})
+		const focusChainSettings =
+			promptProfile === PromptProfile.Native ? this.stateManager.getGlobalSettingsKey("focusChainSettings") : undefined
+		const useNativeToolCalls = this.shouldUseNativeToolCalls(providerInfo)
 		const cwd = this.cwd
 		const { localWorkflowToggles, globalWorkflowToggles } = await refreshWorkflowToggles(this.controller, cwd)
 
@@ -4833,7 +4858,6 @@ export class Task {
 			if (needsCheck) {
 				needsClinerulesFileCheck = true
 			}
-
 			return processedText
 		}
 
@@ -4883,7 +4907,7 @@ export class Task {
 		// (Note: this caused the @/ import alias bug where file contents were being parsed as well, since v2 converted tool results to text blocks)
 		const [processedUserContent, environmentDetails] = await Promise.all([
 			Promise.all(userContent.map(processContentBlock)),
-			this.getEnvironmentDetails(includeFileDetails),
+			this.getEnvironmentDetails(includeFileDetails, promptProfile),
 		])
 
 		// Check clinerulesData if needed
@@ -4892,7 +4916,11 @@ export class Task {
 			: false
 
 		// Add focus chain instructions if needed
-		if (!useCompactPrompt && this.FocusChainManager?.shouldIncludeFocusChainInstructions()) {
+		if (
+			promptProfile === PromptProfile.Native &&
+			!useCompactPrompt &&
+			this.FocusChainManager?.shouldIncludeFocusChainInstructions()
+		) {
 			const focusChainInstructions = this.FocusChainManager.generateFocusChainInstructions()
 			if (focusChainInstructions.trim()) {
 				processedUserContent.push({
@@ -5058,7 +5086,7 @@ export class Task {
 		return this.taskFileTracker.getAllModifiedFiles()
 	}
 
-	async getEnvironmentDetails(includeFileDetails = false) {
+	async getEnvironmentDetails(includeFileDetails = false, requestPromptProfile?: PromptProfile) {
 		const host = await HostProvider.env.getHostVersion({})
 		let details = ""
 
@@ -5275,7 +5303,14 @@ export class Task {
 
 		// Add focus chain task_progress status if enabled and checklist exists
 		const focusChainSettings = this.stateManager.getGlobalSettingsKey("focusChainSettings")
-		if (focusChainSettings?.enabled && this.taskState.currentFocusChainChecklist) {
+		const providerInfo = requestPromptProfile ? undefined : this.getCurrentProviderInfo()
+		const promptProfile =
+			requestPromptProfile ??
+			resolvePromptProfile({
+				modelId: providerInfo?.model.id,
+				contextWindow: providerInfo?.model.info.capabilities?.contextWindow,
+			})
+		if (promptProfile === PromptProfile.Native && focusChainSettings?.enabled && this.taskState.currentFocusChainChecklist) {
 			const checklist = this.taskState.currentFocusChainChecklist
 			const inProgressIdx = this.taskState.currentInProgressItemIndex
 			let renderedChecklist = checklist

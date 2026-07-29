@@ -69,7 +69,7 @@ export class ActModeRespondHandler implements IToolHandler, IPartialBlockHandler
 		// Note: lastToolName is tracked centrally by ToolExecutor after tool execution
 
 		// Return success immediately to allow LLM to continue execution
-		// The key difference from plan_mode_respond: no blocking for user input
+		// The key difference from make_plan: no blocking for user input
 		// NOTE: We explicitly tell the model to use a different tool next to prevent narration loops
 		return formatResponse.toolResult(
 			`[Message displayed. Now proceed with your next tool call - ` +

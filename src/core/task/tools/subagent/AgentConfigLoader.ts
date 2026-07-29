@@ -379,7 +379,7 @@ Read-only:
   read_file, search_files, list_files, list_code_definition_names
   browser_action, ask_followup_question, web_fetch, web_search
   use_skill, load_mcp_documentation, access_mcp_resource
-  use_mcp_tool, plan_mode_respond, generate_explanation, focus_chain
+  use_mcp_tool, make_plan, generate_explanation, focus_chain
 
 Write (⚠️ use with caution — subagent can modify files):
   write_to_file, replace_in_file, execute_command

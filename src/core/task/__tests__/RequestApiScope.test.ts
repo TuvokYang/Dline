@@ -1,6 +1,7 @@
 import type { ApiHandler } from "@core/api"
+import { ClineDefaultTool } from "@shared/tools"
 import { describe, expect, it, vi } from "vitest"
-import { createRequestApiScope } from "../RequestApiScope"
+import { createRequestApiScope, withRequestToolIds } from "../RequestApiScope"
 
 function createHandler(providerId: string, modelId: string): ApiHandler {
 	return {
@@ -50,5 +51,14 @@ describe("createRequestApiScope", () => {
 		delete handler.getProviderId
 
 		expect(() => createRequestApiScope(handler, "act")).toThrow("API handler is missing its provider identity")
+	})
+
+	it("accepts the automatic compaction tool only on the selected request", () => {
+		const handler = createHandler("openai", "openai-model")
+		const baseScope = createRequestApiScope(handler, "act")
+		const compactScope = withRequestToolIds(baseScope, [ClineDefaultTool.SUMMARIZE_TASK])
+
+		expect(baseScope.requestToolIds).toEqual([])
+		expect(compactScope.requestToolIds).toEqual([ClineDefaultTool.SUMMARIZE_TASK])
 	})
 })

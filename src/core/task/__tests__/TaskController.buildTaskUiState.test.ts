@@ -359,7 +359,7 @@ describe("TaskController.buildTaskUiState", () => {
 		assert.equal(uiState.reason, "working:runtime")
 	})
 
-	it("returns conversation awaiting state for plan_mode_respond", () => {
+	it("returns conversation awaiting state for make_plan", () => {
 		const tc = new TaskController(mockChannel)
 		const snapshot: TaskSnapshot = {
 			phase: TaskPhase.BETWEEN_TURNS,
@@ -367,7 +367,7 @@ describe("TaskController.buildTaskUiState", () => {
 			timestamp: Date.now(),
 			awaiting: {
 				kind: "conversation",
-				taskAsk: "plan_mode_respond",
+				taskAsk: "make_plan",
 				messageTs: Date.now(),
 			},
 		}
@@ -378,7 +378,7 @@ describe("TaskController.buildTaskUiState", () => {
 		assert.equal(uiState.cancelEnabled, false)
 		assert.equal(uiState.showFooter, false)
 		assert.equal(uiState.actions.length, 0)
-		assert.equal(uiState.activeAsk, "plan_mode_respond")
+		assert.equal(uiState.activeAsk, "make_plan")
 		assert.equal(uiState.reason, "conversation-awaiting")
 	})
 

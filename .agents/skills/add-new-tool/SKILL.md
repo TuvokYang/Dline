@@ -38,7 +38,7 @@ Tools that MODIFY files. Examples: `editedExistingFile`, `rename`, `replaceText`
 **Rendering**: Standalone component in ChatRow. For edit results, use `EditResultRow` (collapsible with red/green line diffs).
 
 ### Ask Tools (interactive)
-Tools that ASK the user a question. Examples: `ask_followup_question`, `plan_mode_respond`, `qna_respond`.
+Tools that ASK the user a question. Examples: `ask_followup_question`, `make_plan`, `qna_respond`.
 
 **Rendering**: `message.ask` triggers question UI with option buttons. The handler returns a `ToolResponse` string that the ToolExecutor pushes as a tool_result.
 
@@ -418,7 +418,7 @@ const { response, text } = await config.callbacks.ask("followup", questionText)
 
 The webview renders these via ChatRow's `message.ask` branch:
 - `"followup"` → OptionsButtons with question text
-- `"plan_mode_respond"` → PlanCompletionOutputRow
+- `"make_plan"` → PlanCompletionOutputRow
 - `"qna_respond"` → QnaOutputRow
 
 ### 8C-1. Proto ClineAsk Enum (for ask tools)
@@ -458,7 +458,7 @@ File: `src/core/task/assistant-message-order.ts`
 const TURN_ENDING_TOOL_NAMES = new Set<string>([
     ClineDefaultTool.ATTEMPT,
     ClineDefaultTool.ASK,
-    ClineDefaultTool.PLAN_MODE,
+    ClineDefaultTool.MAKE_PLAN,
     ClineDefaultTool.QNA_RESPOND,
     ClineDefaultTool.MY_NEW_TOOL,  // ← ADD if turn-end
 ])

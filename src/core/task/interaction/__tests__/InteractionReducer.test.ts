@@ -29,7 +29,7 @@ describe("reduceInteraction", () => {
 
 	it.each([
 		["followup", "reply"],
-		["plan_response", "reply"],
+		["make_plan", "reply"],
 		["qna_response", "reply"],
 		["generate_report", "reply"],
 		["completion", "reply"],

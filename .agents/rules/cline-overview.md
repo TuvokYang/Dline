@@ -536,7 +536,7 @@ Plan mode is designed for:
 - Creating detailed execution plans
 - Discussing approaches with the user
 
-In Plan mode, the AI uses the `plan_mode_respond` tool to engage in conversational planning without executing actions.
+In Plan mode, the AI uses the `make_plan` tool to engage in conversational planning without executing actions.
 
 ### Act Mode
 
@@ -546,7 +546,7 @@ Act mode is designed for:
 - Implementing the solution
 - Providing results and completion feedback
 
-In Act mode, the AI has access to all tools except `plan_mode_respond` and focuses on implementation rather than discussion.
+In Act mode, the AI has access to all Plan mode capabilities and uses `make_plan` only when the user explicitly requests a plan.
 
 ## Data Flow & State Management
 

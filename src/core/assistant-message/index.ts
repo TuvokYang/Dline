@@ -26,7 +26,15 @@ export const toolParamNames = [
 	"diff",
 	"regex",
 	"file_pattern",
+	"file_path",
 	"recursive",
+	"line",
+	"character",
+	"new_name",
+	"dry_run",
+	"find",
+	"replace",
+	"literal",
 	"action",
 	"url",
 	"coordinate",
@@ -52,6 +60,9 @@ export const toolParamNames = [
 	"api_request_output",
 	"additional_context",
 	"needs_more_exploration",
+	"new_plan",
+	"reason",
+	"requires_acknowledgment",
 	"task_progress",
 	"background",
 	"timeout",
@@ -67,6 +78,7 @@ export const toolParamNames = [
 	"prompt_5",
 	"start_line",
 	"end_line",
+	"show_metadata",
 ] as const
 
 export type ToolParamName = (typeof toolParamNames)[number]

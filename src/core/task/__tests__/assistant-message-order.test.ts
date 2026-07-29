@@ -33,9 +33,9 @@ describe("assistant message tool ordering", () => {
 		assert.deepEqual(ordered, [read, ask])
 	})
 
-	it("moves plan_mode_respond with needs_more_exploration after regular tool uses", () => {
+	it("moves make_plan with needs_more_exploration after regular tool uses", () => {
 		const plan = {
-			...tool(ClineDefaultTool.PLAN_MODE),
+			...tool(ClineDefaultTool.MAKE_PLAN),
 			params: { needs_more_exploration: "true" },
 		} satisfies ToolUse
 		const search = tool(ClineDefaultTool.SEARCH)
@@ -83,7 +83,7 @@ describe("assistant message tool ordering", () => {
 	it("recognizes all turn-ending tool names", () => {
 		assert.equal(isTurnEndingToolName(ClineDefaultTool.ATTEMPT), true)
 		assert.equal(isTurnEndingToolName(ClineDefaultTool.ASK), true)
-		assert.equal(isTurnEndingToolName(ClineDefaultTool.PLAN_MODE), true)
+		assert.equal(isTurnEndingToolName(ClineDefaultTool.MAKE_PLAN), true)
 		assert.equal(isTurnEndingToolName(ClineDefaultTool.FILE_READ), false)
 	})
 })

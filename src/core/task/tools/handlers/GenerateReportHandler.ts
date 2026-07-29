@@ -66,7 +66,7 @@ export class GenerateReportHandler implements IToolHandler, IPartialBlockHandler
 			return formatResponse.toolResult("Mode switch context compaction requested.")
 		}
 
-		// Handle mode switching response (same as PlanModeRespondHandler)
+		// Handle mode switching response (same as MakePlanHandler)
 		if (config.taskState.didRespondToPlanAskBySwitchingMode) {
 			config.taskState.didRespondToPlanAskBySwitchingMode = false
 			const switchMsg = text

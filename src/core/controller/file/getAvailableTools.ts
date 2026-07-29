@@ -19,7 +19,7 @@ const TOOL_DESCRIPTIONS: Record<string, { description: string; isReadOnly: boole
 	[ClineDefaultTool.MCP_USE]: { description: "Use an MCP tool", isReadOnly: true },
 	[ClineDefaultTool.MCP_ACCESS]: { description: "Access an MCP resource", isReadOnly: true },
 	[ClineDefaultTool.MCP_DOCS]: { description: "Load MCP documentation", isReadOnly: true },
-	[ClineDefaultTool.PLAN_MODE]: { description: "Respond in plan mode", isReadOnly: true },
+	[ClineDefaultTool.MAKE_PLAN]: { description: "Present an implementation plan", isReadOnly: true },
 	[ClineDefaultTool.GENERATE_EXPLANATION]: { description: "Generate diff explanation", isReadOnly: true },
 	[ClineDefaultTool.FIND_REFERENCES]: { description: "Find symbol references", isReadOnly: true },
 	[ClineDefaultTool.FILE_NEW]: { description: "Write a new file", isReadOnly: false },

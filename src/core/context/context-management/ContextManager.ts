@@ -530,7 +530,7 @@ export class ContextManager {
 			}
 
 			// Add missing tool_results.
-			// Turn-ending tools (attempt_completion, ask_followup_question, plan_mode_respond)
+			// Turn-ending tools (attempt_completion, ask_followup_question, make_plan)
 			// do not produce results, so provide a success message. Non-turn-ending
 			// synthetic results are reserved for genuinely missing history entries.
 			let needsUpdate = normalizedIdentity

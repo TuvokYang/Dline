@@ -46,7 +46,7 @@ function stripXml(text: string, tag: string): string {
 function toolToAskType(name: string): string | undefined {
 	const map: Record<string, string> = {
 		ask_followup_question: "followup",
-		plan_mode_respond: "plan_mode_respond",
+		make_plan: "make_plan",
 		qna_respond: "qna_respond",
 		attempt_completion: "completion_result",
 		write_to_file: "tool",

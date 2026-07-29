@@ -157,7 +157,7 @@ export const RequestStartRow: React.FC<RequestStartRowProps> = ({
 	const hasCost = cost != null
 	const hasReasoning = !!reasoningContent
 	const _hasCompletionResult = clineMessages.some(
-		(msg) => msg.ask === "completion_result" || msg.say === "completion_result" || msg.ask === "plan_mode_respond",
+		(msg) => msg.ask === "completion_result" || msg.say === "completion_result" || msg.ask === "make_plan",
 	)
 
 	const apiReqState: ApiReqState = hasError ? "error" : hasCost ? "final" : hasReasoning ? "thinking" : "pre"

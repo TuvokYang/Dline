@@ -20,7 +20,7 @@ export const INTERACTION_KINDS = [
 	"report_bug",
 	"condense",
 	"followup",
-	"plan_response",
+	"make_plan",
 	"qna_response",
 	"generate_report",
 	"status_acknowledgment",
@@ -82,7 +82,7 @@ const DEFINITIONS: Readonly<Record<InteractionKind, InteractionDefinition>> = {
 	report_bug: define("report_bug", "report_bug", [action("confirm_utility", "Report Bug", "draft")]),
 	condense: define("condense", "condense", [action("confirm_utility", "Condense Conversation", "draft")]),
 	followup: define("followup", "followup", [], REPLY_INPUT, "handler"),
-	plan_response: define("plan_response", "plan_mode_respond", [], REPLY_INPUT, "handler"),
+	make_plan: define("make_plan", "make_plan", [], REPLY_INPUT, "handler"),
 	qna_response: define("qna_response", "qna_respond", [], REPLY_INPUT, "handler"),
 	generate_report: define("generate_report", "generate_report", [], REPLY_INPUT, "handler"),
 	status_acknowledgment: define(

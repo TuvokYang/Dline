@@ -10,7 +10,7 @@ import type { TaskSnapshot } from "../TaskSnapshot"
 
 /**
  * Tests for Task.handleWebviewAskResponse — validates that conversational ask
- * types (qna_respond, plan_mode_respond, etc.) are NOT treated as rejections
+ * types (qna_respond, make_plan, etc.) are NOT treated as rejections
  * when the user responds with messageResponse.
  *
  * Bug: handleWebviewAskResponse unconditionally calls rejectActiveBlock()
@@ -394,13 +394,7 @@ describe("Task.handleWebviewAskResponse", () => {
 	// ALL CONVERSATIONAL TOOL NAMES — Regression coverage
 	// =====================================================================
 
-	const CONVERSATIONAL_TOOL_NAMES = [
-		"qna_respond",
-		"plan_mode_respond",
-		"act_mode_respond",
-		"ask_followup_question",
-		"generate_report",
-	]
+	const CONVERSATIONAL_TOOL_NAMES = ["qna_respond", "make_plan", "act_mode_respond", "ask_followup_question", "generate_report"]
 
 	for (const toolName of CONVERSATIONAL_TOOL_NAMES) {
 		describe(`conversational tool "${toolName}"`, () => {

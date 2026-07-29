@@ -5,7 +5,7 @@ import { ClineDefaultTool } from "@/shared/tools"
 const TURN_ENDING_TOOL_NAMES = new Set<string>([
 	ClineDefaultTool.ATTEMPT,
 	ClineDefaultTool.ASK,
-	ClineDefaultTool.PLAN_MODE,
+	ClineDefaultTool.MAKE_PLAN,
 	ClineDefaultTool.QNA_RESPOND,
 	ClineDefaultTool.GENERATE_REPORT,
 ])

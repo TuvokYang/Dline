@@ -18,8 +18,8 @@ import { ListCodeDefinitionNamesToolHandler } from "./handlers/ListCodeDefinitio
 import { ListFilesToolHandler } from "./handlers/ListFilesToolHandler"
 import { LoadCapabilityHandler } from "./handlers/LoadCapabilityHandler"
 import { LoadMcpDocumentationHandler } from "./handlers/LoadMcpDocumentationHandler"
+import { MakePlanHandler } from "./handlers/MakePlanHandler"
 import { NewTaskHandler } from "./handlers/NewTaskHandler"
-import { PlanModeRespondHandler } from "./handlers/PlanModeRespondHandler"
 import { QnaRespondHandler } from "./handlers/QnaRespondHandler"
 import { ReadFileToolHandler } from "./handlers/ReadFileToolHandler"
 import { RenameSymbolHandler } from "./handlers/RenameSymbolHandler"
@@ -103,7 +103,7 @@ export class ToolExecutorCoordinator {
 		[ClineDefaultTool.LOAD_WORKFLOW]: (_v: ToolValidator) =>
 			new LoadCapabilityHandler(ClineDefaultTool.LOAD_WORKFLOW, "workflow"),
 		[ClineDefaultTool.NEW_TASK]: (_v: ToolValidator) => new NewTaskHandler(),
-		[ClineDefaultTool.PLAN_MODE]: (_v: ToolValidator) => new PlanModeRespondHandler(),
+		[ClineDefaultTool.MAKE_PLAN]: (_v: ToolValidator) => new MakePlanHandler(),
 		[ClineDefaultTool.ACT_MODE]: (_v: ToolValidator) => new ActModeRespondHandler(),
 		[ClineDefaultTool.QNA_RESPOND]: (_v: ToolValidator) => new QnaRespondHandler(),
 		[ClineDefaultTool.TODO]: (_v: ToolValidator) => undefined,

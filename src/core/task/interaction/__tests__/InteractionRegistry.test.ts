@@ -15,7 +15,7 @@ const CASES: InteractionCase[] = [
 	{ kind: "command_approval", taskAsk: "command", actions: ["approve", "reject"], enterAction: "reject" },
 	{ kind: "focus_chain_change", taskAsk: "focus_chain_change", actions: ["approve", "reject"], enterAction: "reject" },
 	{ kind: "followup", taskAsk: "followup", actions: [], enterAction: "reply", continuation: "handler" },
-	{ kind: "plan_response", taskAsk: "plan_mode_respond", actions: [], enterAction: "reply", continuation: "handler" },
+	{ kind: "make_plan", taskAsk: "make_plan", actions: [], enterAction: "reply", continuation: "handler" },
 	{ kind: "qna_response", taskAsk: "qna_respond", actions: [], enterAction: "reply", continuation: "handler" },
 	{ kind: "generate_report", taskAsk: "generate_report", actions: [], enterAction: "reply", continuation: "handler" },
 	{ kind: "resume", taskAsk: "resume_task", actions: ["resume"], enterAction: "resume", continuation: "resume" },

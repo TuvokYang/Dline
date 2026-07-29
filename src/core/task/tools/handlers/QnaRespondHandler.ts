@@ -13,7 +13,7 @@ import { sayFeedbackOnce } from "../utils/UserFeedbackUtils"
 /**
  * QnaRespondHandler — handles the qna_respond tool.
  *
- * Mirrors PlanModeRespondHandler exactly:
+ * Mirrors MakePlanHandler exactly:
  * handlePartialBlock uses ask() so content streams into the Q&A component,
  * execute uses ask() to finalize content, save checkpoint, and block for user input.
  */

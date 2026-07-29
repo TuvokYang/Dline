@@ -20,7 +20,7 @@ export enum ClineDefaultTool {
 	MCP_ACCESS = "access_mcp_resource",
 	MCP_DOCS = "load_mcp_documentation",
 	NEW_TASK = "new_task",
-	PLAN_MODE = "plan_mode_respond",
+	MAKE_PLAN = "make_plan",
 	ACT_MODE = "act_mode_respond",
 	QNA_RESPOND = "qna_respond",
 	GENERATE_REPORT = "generate_report",
@@ -89,7 +89,7 @@ export const READ_ONLY_TOOLS = [
 export const CONVERSATIONAL_TOOL_NAMES = new Set<ClineDefaultTool>([
 	ClineDefaultTool.ATTEMPT,
 	ClineDefaultTool.QNA_RESPOND,
-	ClineDefaultTool.PLAN_MODE,
+	ClineDefaultTool.MAKE_PLAN,
 	ClineDefaultTool.ACT_MODE,
 	ClineDefaultTool.ASK,
 	ClineDefaultTool.GENERATE_REPORT,

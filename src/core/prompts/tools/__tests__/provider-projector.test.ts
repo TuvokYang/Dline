@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { ClineDefaultTool } from "../../../../shared/tools"
 import { ToolPromptGenerator } from "../../generators/ToolPromptGenerator"
+import { getPrompt } from "../../i18n"
 import { PromptProfile } from "../../profiles/types"
 import type { SystemPromptContext } from "../../system-prompt/context"
 
@@ -16,6 +17,13 @@ function findTool(tools: ReturnType<ToolPromptGenerator["generate"]>, name: stri
 		if ("function" in tool) return tool.function.name === name
 		return "name" in tool && tool.name === name
 	})
+}
+
+/** Reads the provider-neutral description from any projected tool shape. */
+function toolDescription(tool: ReturnType<typeof findTool>): string | undefined {
+	if (!tool) return undefined
+	if ("function" in tool) return tool.function.description
+	return "description" in tool ? tool.description : undefined
 }
 
 describe("provider tool projector", () => {
@@ -117,6 +125,18 @@ describe("provider tool projector", () => {
 		})
 	})
 
+	it.each([
+		PromptProfile.Native,
+		PromptProfile.Lite,
+	])("does not expose recursive task or subagent tools during a %s subagent run", (profile) => {
+		const context = { ...BASE_CONTEXT, subagentsEnabled: true, isSubagentRun: true }
+		const tools = new ToolPromptGenerator().generate(profile, context)
+
+		expect(findTool(tools, ClineDefaultTool.SPAWN_TASK)).toBeUndefined()
+		expect(findTool(tools, ClineDefaultTool.USE_SUBAGENT)).toBeUndefined()
+		expect(findTool(tools, ClineDefaultTool.USE_SUBAGENTS)).toBeUndefined()
+	})
+
 	it("projects canonical parameters to Anthropic schemas", () => {
 		const context = { ...BASE_CONTEXT, providerInfo: { ...BASE_CONTEXT.providerInfo, providerId: "anthropic" } }
 		const tool = findTool(new ToolPromptGenerator().generate(PromptProfile.Native, context), ClineDefaultTool.FILE_READ)
@@ -139,6 +159,95 @@ describe("provider tool projector", () => {
 
 		expect(enabledTool).toMatchObject({ function: { parameters: { properties: { task_progress: {} } } } })
 		expect(disabledTool).not.toMatchObject({ function: { parameters: { properties: { task_progress: {} } } } })
+	})
+
+	it("projects the original Native focus guidance and task_progress only when enabled", () => {
+		const profile = PromptProfile.Native
+		const enabledContext = {
+			...BASE_CONTEXT,
+			promptProfile: profile,
+			focusChainSettings: { enabled: true, remindClineInterval: 6 },
+		}
+		const disabledContext = {
+			...enabledContext,
+			focusChainSettings: { enabled: false, remindClineInterval: 6 },
+		}
+		const generator = new ToolPromptGenerator()
+		const enabledAttempt = findTool(generator.generate(profile, enabledContext), ClineDefaultTool.ATTEMPT)
+		const disabledAttempt = findTool(generator.generate(profile, disabledContext), ClineDefaultTool.ATTEMPT)
+
+		expect(toolDescription(enabledAttempt)).toBe(getPrompt("attemptCompletion", "nativeDescription"))
+		expect(toolDescription(enabledAttempt)).toContain("[TURN-END]")
+		expect(toolDescription(enabledAttempt)).toContain("current task is fully complete")
+		expect(toolDescription(enabledAttempt)).toContain("every checklist item must already be marked [x]")
+		expect(toolDescription(enabledAttempt)).not.toContain("After each tool use")
+		expect(toolDescription(enabledAttempt)).not.toContain("only for completing implementation or development tasks")
+		expect(toolDescription(disabledAttempt)).toContain("[TURN-END]")
+		expect(toolDescription(disabledAttempt)).toContain("current task is fully complete")
+		expect(toolDescription(disabledAttempt)).not.toContain("task_progress")
+		expect(enabledAttempt).not.toMatchObject({ function: { parameters: { properties: { task_progress: {} } } } })
+		expect(disabledAttempt).not.toMatchObject({ function: { parameters: { properties: { task_progress: {} } } } })
+
+		const expectedDescriptions = [
+			[ClineDefaultTool.MAKE_PLAN, getPrompt("makePlan", "description")],
+			[ClineDefaultTool.STATUS_UPDATE, getPrompt("statusUpdate", "nativeDescription")],
+		] as const
+
+		for (const [toolId, expectedDescription] of expectedDescriptions) {
+			const enabled = findTool(generator.generate(profile, enabledContext), toolId)
+			const disabled = findTool(generator.generate(profile, disabledContext), toolId)
+
+			expect(toolDescription(enabled)).toBe(expectedDescription)
+			expect(enabled).toMatchObject({ function: { parameters: { properties: { task_progress: {} } } } })
+			expect(JSON.stringify(enabled)).toContain("task_progress")
+			expect(JSON.stringify(disabled)).not.toContain("task_progress")
+			expect(disabled).not.toMatchObject({ function: { parameters: { properties: { task_progress: {} } } } })
+		}
+
+		const enabledPlan = findTool(generator.generate(profile, enabledContext), ClineDefaultTool.MAKE_PLAN)
+		expect(enabledPlan).toMatchObject({
+			function: {
+				name: "make_plan",
+				parameters: {
+					properties: { needs_more_exploration: { type: "boolean" } },
+				},
+			},
+		})
+	})
+
+	it("keeps Lite free of focus guidance and task_progress even when the caller enables focus", () => {
+		const context = {
+			...BASE_CONTEXT,
+			promptProfile: PromptProfile.Lite,
+			focusChainSettings: { enabled: true, remindClineInterval: 6 },
+		}
+		const tools = new ToolPromptGenerator().generate(PromptProfile.Lite, context)
+
+		expect(JSON.stringify(tools)).not.toContain("task_progress")
+		expect(JSON.stringify(tools)).not.toContain("focus_chain_change")
+	})
+
+	it("keeps the active Native web descriptions and prompt parameter text", () => {
+		const context = {
+			...BASE_CONTEXT,
+			providerInfo: { ...BASE_CONTEXT.providerInfo, providerId: "cline" },
+			clineWebToolsEnabled: true,
+		}
+		const tools = new ToolPromptGenerator().generate(PromptProfile.Native, context)
+		const fetchTool = findTool(tools, ClineDefaultTool.WEB_FETCH)
+		const searchTool = findTool(tools, ClineDefaultTool.WEB_SEARCH)
+
+		expect(toolDescription(fetchTool)).toBe(getPrompt("webFetch", "nativeDescription"))
+		expect(toolDescription(searchTool)).toBe(getPrompt("webSearch", "nativeDescription"))
+		expect(fetchTool).toMatchObject({
+			function: {
+				parameters: {
+					properties: {
+						prompt: { description: getPrompt("webFetch", "nativePromptInstruction") },
+					},
+				},
+			},
+		})
 	})
 
 	it("appends enabled MCP schemas only to Native", () => {

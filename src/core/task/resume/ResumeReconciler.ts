@@ -23,7 +23,7 @@ const ASK_INTERACTIONS: Partial<Record<ClineAsk, InteractionKind>> = {
 	report_bug: "report_bug",
 	condense: "condense",
 	followup: "followup",
-	plan_mode_respond: "plan_response",
+	make_plan: "make_plan",
 	qna_respond: "qna_response",
 	generate_report: "generate_report",
 	status_acknowledgment: "status_acknowledgment",

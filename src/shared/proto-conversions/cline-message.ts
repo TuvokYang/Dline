@@ -14,7 +14,7 @@ function convertClineAskToProtoEnum(ask: AppClineAsk | undefined): ClineAsk | un
 
 	const mapping: Record<AppClineAsk, ClineAsk> = {
 		followup: ClineAsk.FOLLOWUP,
-		plan_mode_respond: ClineAsk.PLAN_MODE_RESPOND,
+		make_plan: ClineAsk.MAKE_PLAN,
 		act_mode_respond: ClineAsk.ACT_MODE_RESPOND,
 		command: ClineAsk.COMMAND,
 		command_output: ClineAsk.COMMAND_OUTPUT,
@@ -52,7 +52,7 @@ function convertProtoEnumToClineAsk(ask: ClineAsk): AppClineAsk | undefined {
 
 	const mapping: Record<Exclude<ClineAsk, ClineAsk.UNRECOGNIZED>, AppClineAsk> = {
 		[ClineAsk.FOLLOWUP]: "followup",
-		[ClineAsk.PLAN_MODE_RESPOND]: "plan_mode_respond",
+		[ClineAsk.MAKE_PLAN]: "make_plan",
 		[ClineAsk.ACT_MODE_RESPOND]: "act_mode_respond",
 		[ClineAsk.COMMAND]: "command",
 		[ClineAsk.COMMAND_OUTPUT]: "command_output",
@@ -229,7 +229,7 @@ export function convertClineMessageToProto(message: AppClineMessage): ProtoCline
 		sayBrowserAction: undefined,
 		browserActionResult: undefined,
 		askUseMcpServer: undefined,
-		planModeResponse: undefined,
+		makePlanResponse: undefined,
 		askQuestion: undefined,
 		askNewTask: undefined,
 		askSpawnTask: undefined,
