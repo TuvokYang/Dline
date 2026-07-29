@@ -3,11 +3,11 @@ import type { McpPromptResponse } from "@shared/mcp"
 import { expect } from "chai"
 import { formatMcpPromptResponse, McpPromptFetcher, parseSlashCommands } from "../index"
 
-function createProviderInfo(contextWindow?: number): ApiProviderInfo {
+function createProviderInfo(contextWindow?: number, modelId = "test-model"): ApiProviderInfo {
 	return {
 		providerId: "openai",
 		model: {
-			id: "test-model",
+			id: modelId,
 			info: { capabilities: { contextWindow } },
 		},
 		mode: "act",
@@ -138,6 +138,93 @@ describe("slash-commands", () => {
 			const result = await parseSlashCommands("<task>/deep-planning</task>", {}, {}, "test-ulid")
 
 			expect(result.processedText).to.include("This process has five distinct steps")
+		})
+	})
+
+	describe("parseSlashCommands explicit instruction injection", () => {
+		const cases = [
+			["newtask", "new_task"],
+			["compact", "condense"],
+			["smol", "condense"],
+			["newrule", "new_rule"],
+			["reportbug", "report_bug"],
+		] as const
+
+		it.each([
+			["deep-planning", "new_task"],
+			["explain-changes", "generate_explanation"],
+		] as const)("injects the multi-turn /%s XML instruction", async (command, finalTool) => {
+			const result = await parseSlashCommands(
+				`<task>/${command}</task>`,
+				{},
+				{},
+				"test-ulid",
+				undefined,
+				true,
+				createProviderInfo(128_000, "gpt-5"),
+			)
+
+			expect(result.processedText).to.include(`<${finalTool}>`)
+			expect(result.processedText).to.not.include("request-scoped native")
+			expect(result).to.not.have.property("requestToolIds")
+		})
+
+		for (const [command, toolName] of cases) {
+			it(`keeps /${command} as explicit XML instructions with native tool calling enabled`, async () => {
+				const result = await parseSlashCommands(
+					`<task>/${command}</task>`,
+					{},
+					{},
+					"test-ulid",
+					undefined,
+					true,
+					createProviderInfo(128_000, "gpt-5"),
+				)
+
+				expect(result.processedText).to.include(`<${toolName}>`)
+				expect(result.processedText).to.include(`</${toolName}>`)
+				expect(result.processedText).to.not.include("request-scoped native")
+				expect(result).to.not.have.property("requestToolIds")
+			})
+		}
+
+		for (const [command, toolName] of cases) {
+			it(`injects a complete XML format for /${command}`, async () => {
+				const result = await parseSlashCommands(`<task>/${command}</task>`, {}, {}, "test-ulid")
+
+				expect(result.processedText).to.include(`<${toolName}>`)
+				expect(result.processedText).to.include(`</${toolName}>`)
+				expect(result.processedText).to.not.include("request-scoped native")
+			})
+		}
+
+		it("injects task_progress only for focus-enabled condense instructions", async () => {
+			const withoutFocus = await parseSlashCommands("<task>/compact</task>", {}, {}, "test-ulid", {
+				enabled: false,
+			})
+			const withFocus = await parseSlashCommands("<task>/compact</task>", {}, {}, "test-ulid", {
+				enabled: true,
+			})
+
+			expect(withoutFocus.processedText).to.not.include("task_progress")
+			expect(withoutFocus.processedText).to.not.include("<task_progress>")
+			expect(withFocus.processedText).to.include("task_progress")
+			expect(withFocus.processedText).to.include("<task_progress>")
+		})
+
+		it("does not inject task_progress into Lite condense instructions", async () => {
+			const result = await parseSlashCommands(
+				"<task>/compact</task>",
+				{},
+				{},
+				"test-ulid",
+				{ enabled: true },
+				true,
+				createProviderInfo(63_999),
+			)
+
+			expect(result.processedText).to.not.include("task_progress")
+			expect(result.processedText).to.not.include("<task_progress>")
 		})
 	})
 

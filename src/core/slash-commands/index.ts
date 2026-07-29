@@ -7,7 +7,6 @@ import { SLASH_TYPE_DESC } from "@shared/slashContext"
 import fs from "fs/promises"
 import { telemetryService } from "@/services/telemetry"
 import { Logger } from "@/shared/services/Logger"
-import { isNativeToolCallingConfig } from "@/utils/model-utils"
 import {
 	condenseToolResponse,
 	deepPlanningToolResponse,
@@ -49,24 +48,23 @@ export async function parseSlashCommands(
 	ulid: string,
 	focusChainSettings?: { enabled: boolean },
 	enableNativeToolCalls?: boolean,
-	providerInfo?: ApiProviderInfo,
+	providerInfo?: Readonly<ApiProviderInfo>,
 	mcpPromptFetcher?: McpPromptFetcher,
 ): Promise<{ processedText: string; needsClinerulesFileCheck: boolean }> {
 	const SUPPORTED_DEFAULT_COMMANDS = ["newtask", "smol", "compact", "newrule", "reportbug", "deep-planning", "explain-changes"]
-
-	// Determine if the current provider/model/setting actually uses native tool calling
-	const willUseNativeTools = isNativeToolCallingConfig(providerInfo!, enableNativeToolCalls || false)
 	const promptProfile = resolvePromptProfile({
+		modelId: providerInfo?.model.id,
 		contextWindow: providerInfo?.model.info.capabilities?.contextWindow,
 	})
+	const commandFocusChainSettings = promptProfile === "native" ? focusChainSettings : undefined
 
 	const commandReplacements: Record<string, string> = {
-		newtask: newTaskToolResponse(willUseNativeTools),
-		smol: condenseToolResponse(focusChainSettings),
-		compact: condenseToolResponse(focusChainSettings),
+		newtask: newTaskToolResponse(),
+		smol: condenseToolResponse(commandFocusChainSettings),
+		compact: condenseToolResponse(commandFocusChainSettings),
 		newrule: newRuleToolResponse(),
 		reportbug: reportBugToolResponse(),
-		"deep-planning": deepPlanningToolResponse(promptProfile, focusChainSettings, providerInfo, willUseNativeTools),
+		"deep-planning": deepPlanningToolResponse(promptProfile, commandFocusChainSettings, providerInfo, enableNativeToolCalls),
 		"explain-changes": explainChangesToolResponse(),
 	}
 
@@ -164,7 +162,10 @@ export async function parseSlashCommands(
 
 					telemetryService.captureSlashCommandUsed(ulid, cmdName, "builtin")
 
-					return { processedText: processedText, needsClinerulesFileCheck: cmdName === "newrule" }
+					return {
+						processedText,
+						needsClinerulesFileCheck: cmdName === "newrule",
+					}
 				}
 			}
 
