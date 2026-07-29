@@ -218,7 +218,7 @@
     "type": "function",
     "function": {
       "name": "attempt_completion",
-      "description": "[TURN-END] After each tool use, the user will respond with the result of that tool use, including whether it succeeded or failed and any reason for failure. Once you have received those results, confirmed that all goals defined by the user are complete, and verified every item in the task_progress checklist is marked [x], use this tool to present the final result. Optionally provide an actionable CLI command that lets the user review the result.\n\nThis tool is only for completing implementation or development tasks that have a task_progress checklist. Do not use it to answer questions or chat; use qna_respond for Q&A. Do not put the checklist in the result text; provide it through the task_progress parameter.\n\nIMPORTANT NOTE: This tool cannot be used until previous tool results have been confirmed and all tasks have been completed in full. If any checklist item remains incomplete, do not call attempt_completion.",
+      "description": "[TURN-END] Use this tool only when the user's current task is fully complete. It presents the final result and marks the task completed; it is not a progress update, partial result, plan, report, question, or ordinary conversation.\n\nBefore calling it, finish and verify all requested work. If task_progress tracking is active, every checklist item must already be marked [x]. Summarize what was completed and the verification outcome. Optionally provide an actionable CLI command that lets the user review the result.",
       "strict": false,
       "parameters": {
         "type": "object",
@@ -242,15 +242,19 @@
   {
     "type": "function",
     "function": {
-      "name": "plan_mode_respond",
-      "description": "[TURN-END] Present a COMPLETE implementation plan covering ALL user requirements. Use ONLY after thorough exploration and analysis. Your response MUST include the full plan with detailed analysis, architecture decisions, and a complete task_progress checklist organized with # Title and ## Section headings covering every step needed to fulfill ALL requirements. Do not simplify or omit parts of the plan — the user needs to see the entire plan to approve it. Do not call repeatedly — use qna_respond for questions and discussion. This tool is only available in PLAN MODE.\nHowever, if while writing your response you realize you actually need to do more exploration before providing a complete plan, you can add the optional needs_more_exploration parameter to indicate this.",
+      "name": "make_plan",
+      "description": "[TURN-END] Present a COMPLETE implementation or design plan covering ALL user requirements. Available in both ACT and PLAN modes. In ACT MODE, use this tool only when the user explicitly requests a plan. In PLAN MODE, use it after thorough exploration and analysis when ready to present the plan. Your response MUST include the full plan with detailed analysis, architecture decisions, and a complete task_progress checklist organized with # Title and ## Section headings covering every step needed to fulfill ALL requirements. Do not simplify or omit parts of the plan - the user needs to see the entire plan to review it. Do not call repeatedly - use qna_respond for questions and discussion.\nHowever, if while writing your response you realize you need more exploration before providing a complete plan, set the optional needs_more_exploration parameter.",
       "strict": false,
       "parameters": {
         "type": "object",
         "properties": {
           "response": {
             "type": "string",
-            "description": "The response to provide to the user."
+            "description": "The complete implementation or design plan to provide to the user."
+          },
+          "needs_more_exploration": {
+            "type": "boolean",
+            "description": "Set to true if formulating the plan reveals that more exploration with read/search tools is required. Defaults to false."
           },
           "task_progress": {
             "type": "string",
@@ -268,7 +272,7 @@
     "type": "function",
     "function": {
       "name": "qna_respond",
-      "description": "[TURN-END] Use this tool whenever the user asks a question or requests clarification. This MUST be your first response tool for any user question — do NOT use attempt_completion or any other tool to answer questions. Do NOT use plan_mode_respond for answering questions — plan_mode_respond is ONLY for presenting and discussing implementation plans. Available in both PLAN and ACT modes.",
+      "description": "[TURN-END] Use this tool whenever the user asks a question or requests clarification. This MUST be your first response tool for any user question. Do NOT use attempt_completion or make_plan to answer questions; make_plan is for presenting implementation or design plans and, in ACT MODE, only when the user explicitly requests one. Available in both PLAN and ACT modes.",
       "strict": false,
       "parameters": {
         "type": "object",
@@ -297,6 +301,10 @@
           "response": {
             "type": "string",
             "description": "The message to provide to the user. This should explain what you're about to do, your current progress, or your reasoning. The response should be brief and conversational in tone, aiming to keep the user informed without overwhelming them with details."
+          },
+          "task_progress": {
+            "type": "string",
+            "description": "Report task_progress as a separate parameter. Follow the UPDATING TASK PROGRESS section: use exact checklist text for completed items, and include full checklists only when starting or replacing a plan."
           }
         },
         "required": [
@@ -310,14 +318,18 @@
     "type": "function",
     "function": {
       "name": "execute_command",
-      "description": "Request to execute a CLI command on the system. Use this when you need to perform system operations or run specific commands to accomplish any step in the user's task. You must tailor your command to the user's system and provide a clear explanation of what the command does. For command chaining, use the appropriate chaining syntax for the user's shell. Prefer to execute complex CLI commands over creating executable scripts, as they are more flexible and easier to run. Commands will be executed from the current workspace.",
+      "description": "Request to execute a CLI command on the system. Use this when you need to perform system operations or run specific commands to accomplish any step in the user's task. You must tailor your command to the user's system and provide a clear explanation of what the command does. For command chaining, use the appropriate chaining syntax for the user's shell. Prefer to execute complex CLI commands over creating executable scripts, as they are more flexible and easier to run. Commands default to the current workspace; set workdirectory when a command must run elsewhere.",
       "strict": false,
       "parameters": {
         "type": "object",
         "properties": {
           "command": {
             "type": "string",
-            "description": "The CLI command to execute. This should be valid for the current operating system. Ensure the command is properly formatted and does not contain any harmful instructions. Do not use the ~ character or $HOME to refer to the home directory. Always use absolute paths. The command will be executed from the current workspace, so you do not need to change to the workspace directory."
+            "description": "The CLI command to execute. This should be valid for the current operating system. Ensure the command is properly formatted and does not contain any harmful instructions. Do not use the ~ character or $HOME to refer to the home directory. Do not prepend cd solely to select the execution directory; use workdirectory instead."
+          },
+          "workdirectory": {
+            "type": "string",
+            "description": "Optional directory in which to execute the command. Relative paths are resolved from /workspace/project. The directory must already exist. A directory outside every project root requires user approval."
           },
           "requires_approval": {
             "type": "boolean",
@@ -351,7 +363,7 @@
         "properties": {
           "action": {
             "type": "string",
-            "description": "The action to perform. The available actions are: \n\t* launch: Launch a new Puppeteer-controlled browser instance at the specified URL. This **must always be the first action**. \n\t\t- Use with the `url` parameter to provide the URL. \n\t\t- Ensure the URL is valid and includes the appropriate protocol (e.g. http://localhost:3000/page, file:///path/to/file.html, etc.) \n\t* click: Click at a specific x,y coordinate. \n\t\t- Use with the `coordinate` parameter to specify the location. \n\t\t- Always click in the center of an element (icon, button, link, etc.) based on coordinates derived from a screenshot. \n\t* type: Type a string of text on the keyboard. You might use this after clicking on a text field to input text. \n\t\t- Use with the `text` parameter to provide the string to type. \n\t* scroll_down: Scroll down the page by one page height. \n\t* scroll_up: Scroll up the page by one page height. \n\t* close: Close the Puppeteer-controlled browser instance. This **must always be the final browser action**. \n\t    - Example: 'scroll_up'"
+            "description": "The action to perform. The available actions are:\n\t* launch: Launch a new Puppeteer-controlled browser instance at the specified URL. This **must always be the first action**. \n\t\t- Use with the `url` parameter to provide the URL. \n\t\t- Ensure the URL is valid and includes the appropriate protocol (e.g. http://localhost:3000/page, file:///path/to/file.html, etc.) \n\t* click: Click at a specific x,y coordinate. \n\t\t- Use with the `coordinate` parameter to specify the location. \n\t\t- Always click in the center of an element (icon, button, link, etc.) based on coordinates derived from a screenshot. \n\t* type: Type a string of text on the keyboard. You might use this after clicking on a text field to input text. \n\t\t- Use with the `text` parameter to provide the string to type. \n\t* scroll_down: Scroll down the page by one page height. \n\t* scroll_up: Scroll up the page by one page height. \n\t* close: Close the Puppeteer-controlled browser instance. This **must always be the final browser action**. \n\t    - Example: 'scroll_up'"
           },
           "url": {
             "type": "string",

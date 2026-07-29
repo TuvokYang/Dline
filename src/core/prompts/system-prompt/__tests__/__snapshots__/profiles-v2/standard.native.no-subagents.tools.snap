@@ -218,7 +218,7 @@
     "type": "function",
     "function": {
       "name": "attempt_completion",
-      "description": "[TURN-END] After each tool use, the user will respond with the result of that tool use, including whether it succeeded or failed and any reason for failure. Once you have received those results, confirmed that all goals defined by the user are complete, and verified every item in the task_progress checklist is marked [x], use this tool to present the final result. Optionally provide an actionable CLI command that lets the user review the result.\n\nThis tool is only for completing implementation or development tasks that have a task_progress checklist. Do not use it to answer questions or chat; use qna_respond for Q&A. Do not put the checklist in the result text; provide it through the task_progress parameter.\n\nIMPORTANT NOTE: This tool cannot be used until previous tool results have been confirmed and all tasks have been completed in full. If any checklist item remains incomplete, do not call attempt_completion.",
+      "description": "[TURN-END] Use this tool only when the user's current task is fully complete. It presents the final result and marks the task completed; it is not a progress update, partial result, plan, report, question, or ordinary conversation.\n\nBefore calling it, finish and verify all requested work. If task_progress tracking is active, every checklist item must already be marked [x]. Summarize what was completed and the verification outcome. Optionally provide an actionable CLI command that lets the user review the result.",
       "strict": false,
       "parameters": {
         "type": "object",
@@ -242,15 +242,19 @@
   {
     "type": "function",
     "function": {
-      "name": "plan_mode_respond",
-      "description": "[TURN-END] Present a COMPLETE implementation plan covering ALL user requirements. Use ONLY after thorough exploration and analysis. Your response MUST include the full plan with detailed analysis, architecture decisions, and a complete task_progress checklist organized with # Title and ## Section headings covering every step needed to fulfill ALL requirements. Do not simplify or omit parts of the plan — the user needs to see the entire plan to approve it. Do not call repeatedly — use qna_respond for questions and discussion. This tool is only available in PLAN MODE.\nHowever, if while writing your response you realize you actually need to do more exploration before providing a complete plan, you can add the optional needs_more_exploration parameter to indicate this.",
+      "name": "make_plan",
+      "description": "[TURN-END] Present a COMPLETE implementation or design plan covering ALL user requirements. Available in both ACT and PLAN modes. In ACT MODE, use this tool only when the user explicitly requests a plan. In PLAN MODE, use it after thorough exploration and analysis when ready to present the plan. Your response MUST include the full plan with detailed analysis, architecture decisions, and a complete task_progress checklist organized with # Title and ## Section headings covering every step needed to fulfill ALL requirements. Do not simplify or omit parts of the plan - the user needs to see the entire plan to review it. Do not call repeatedly - use qna_respond for questions and discussion.\nHowever, if while writing your response you realize you need more exploration before providing a complete plan, set the optional needs_more_exploration parameter.",
       "strict": false,
       "parameters": {
         "type": "object",
         "properties": {
           "response": {
             "type": "string",
-            "description": "The response to provide to the user."
+            "description": "The complete implementation or design plan to provide to the user."
+          },
+          "needs_more_exploration": {
+            "type": "boolean",
+            "description": "Set to true if formulating the plan reveals that more exploration with read/search tools is required. Defaults to false."
           },
           "task_progress": {
             "type": "string",
@@ -268,7 +272,7 @@
     "type": "function",
     "function": {
       "name": "qna_respond",
-      "description": "[TURN-END] Use this tool whenever the user asks a question or requests clarification. This MUST be your first response tool for any user question — do NOT use attempt_completion or any other tool to answer questions. Do NOT use plan_mode_respond for answering questions — plan_mode_respond is ONLY for presenting and discussing implementation plans. Available in both PLAN and ACT modes.",
+      "description": "[TURN-END] Use this tool whenever the user asks a question or requests clarification. This MUST be your first response tool for any user question. Do NOT use attempt_completion or make_plan to answer questions; make_plan is for presenting implementation or design plans and, in ACT MODE, only when the user explicitly requests one. Available in both PLAN and ACT modes.",
       "strict": false,
       "parameters": {
         "type": "object",
@@ -297,6 +301,10 @@
           "response": {
             "type": "string",
             "description": "The message to provide to the user. This should explain what you're about to do, your current progress, or your reasoning. The response should be brief and conversational in tone, aiming to keep the user informed without overwhelming them with details."
+          },
+          "task_progress": {
+            "type": "string",
+            "description": "Report task_progress as a separate parameter. Follow the UPDATING TASK PROGRESS section: use exact checklist text for completed items, and include full checklists only when starting or replacing a plan."
           }
         },
         "required": [
@@ -310,14 +318,18 @@
     "type": "function",
     "function": {
       "name": "execute_command",
-      "description": "Request to execute a CLI command on the system. Use this when you need to perform system operations or run specific commands to accomplish any step in the user's task. You must tailor your command to the user's system and provide a clear explanation of what the command does. For command chaining, use the appropriate chaining syntax for the user's shell. Prefer to execute complex CLI commands over creating executable scripts, as they are more flexible and easier to run. Commands will be executed from the current workspace.",
+      "description": "Request to execute a CLI command on the system. Use this when you need to perform system operations or run specific commands to accomplish any step in the user's task. You must tailor your command to the user's system and provide a clear explanation of what the command does. For command chaining, use the appropriate chaining syntax for the user's shell. Prefer to execute complex CLI commands over creating executable scripts, as they are more flexible and easier to run. Commands default to the current workspace; set workdirectory when a command must run elsewhere.",
       "strict": false,
       "parameters": {
         "type": "object",
         "properties": {
           "command": {
             "type": "string",
-            "description": "The CLI command to execute. This should be valid for the current operating system. Ensure the command is properly formatted and does not contain any harmful instructions. Do not use the ~ character or $HOME to refer to the home directory. Always use absolute paths. The command will be executed from the current workspace, so you do not need to change to the workspace directory."
+            "description": "The CLI command to execute. This should be valid for the current operating system. Ensure the command is properly formatted and does not contain any harmful instructions. Do not use the ~ character or $HOME to refer to the home directory. Do not prepend cd solely to select the execution directory; use workdirectory instead."
+          },
+          "workdirectory": {
+            "type": "string",
+            "description": "Optional directory in which to execute the command. Relative paths are resolved from /workspace/project. The directory must already exist. A directory outside every project root requires user approval."
           },
           "requires_approval": {
             "type": "boolean",
@@ -335,6 +347,265 @@
         "required": [
           "command",
           "requires_approval"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "browser_action",
+      "description": "Request to interact with a Puppeteer-controlled browser. Every action, except `close`, will be responded to with a screenshot of the browser's current state, along with any new console logs. You may only perform one browser action per message, and wait for the user's response including a screenshot and logs to determine the next action.\n- The sequence of actions **must always start with** launching the browser at a URL, and **must always end with** closing the browser. If you need to visit a new URL that is not possible to navigate to from the current webpage, you must first close the browser, then launch again at the new URL.\n- While the browser is active, only the `browser_action` tool can be used. No other tools should be called during this time. You may proceed to use other tools only after closing the browser. For example if you run into an error and need to fix a file, you must close the browser, then use other tools to make the necessary changes, then re-launch the browser to verify the result.\n- The browser window has a resolution of **1280x800** pixels. When performing any click actions, ensure the coordinates are within this resolution range.\n- Before clicking on any elements such as icons, links, or buttons, you must consult the provided screenshot of the page to determine the coordinates of the element. The click should be targeted at the **center of the element**, not on its edges.",
+      "strict": false,
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "description": "The action to perform. The available actions are:\n\t* launch: Launch a new Puppeteer-controlled browser instance at the specified URL. This **must always be the first action**. \n\t\t- Use with the `url` parameter to provide the URL. \n\t\t- Ensure the URL is valid and includes the appropriate protocol (e.g. http://localhost:3000/page, file:///path/to/file.html, etc.) \n\t* click: Click at a specific x,y coordinate. \n\t\t- Use with the `coordinate` parameter to specify the location. \n\t\t- Always click in the center of an element (icon, button, link, etc.) based on coordinates derived from a screenshot. \n\t* type: Type a string of text on the keyboard. You might use this after clicking on a text field to input text. \n\t\t- Use with the `text` parameter to provide the string to type. \n\t* scroll_down: Scroll down the page by one page height. \n\t* scroll_up: Scroll up the page by one page height. \n\t* close: Close the Puppeteer-controlled browser instance. This **must always be the final browser action**. \n\t    - Example: 'scroll_up'"
+          },
+          "url": {
+            "type": "string",
+            "description": "Use this for providing the URL for the `launch` action."
+          },
+          "coordinate": {
+            "type": "string",
+            "description": "x,y coordinates - The X and Y coordinates for the `click` action. Coordinates should be within the **1280x800** resolution. Example: '450,300'"
+          },
+          "text": {
+            "type": "string",
+            "description": "Use this for providing the text for the `type` action. Example: 'Hello, world!'"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "web_fetch",
+      "description": "Fetches and analyzes content from a specified URL. IMPORTANT: If an MCP-provided web fetch tool is available, prefer using that tool instead of this one, as it may have fewer restrictions.",
+      "strict": false,
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "The URL to fetch content from"
+          },
+          "prompt": {
+            "type": "string",
+            "description": "Prompt for analyzing the webpage content"
+          },
+          "task_progress": {
+            "type": "string",
+            "description": "Report task_progress as a separate parameter. Follow the UPDATING TASK PROGRESS section: use exact checklist text for completed items, and include full checklists only when starting or replacing a plan."
+          }
+        },
+        "required": [
+          "url",
+          "prompt"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "web_search",
+      "description": "Performs a web search and returns relevant results with titles and URLs. IMPORTANT: If an MCP-provided web search tool is available, prefer using that tool instead of this one, as it may have fewer restrictions.",
+      "strict": false,
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "The search query to use"
+          },
+          "allowed_domains": {
+            "type": "string",
+            "description": "JSON array of domains to restrict results to"
+          },
+          "blocked_domains": {
+            "type": "string",
+            "description": "JSON array of domains to exclude from results"
+          },
+          "task_progress": {
+            "type": "string",
+            "description": "Report task_progress as a separate parameter. Follow the UPDATING TASK PROGRESS section: use exact checklist text for completed items, and include full checklists only when starting or replacing a plan."
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "use_mcp_tool",
+      "description": "Request to use a tool provided by a connected MCP server. Each MCP server can provide multiple tools with different capabilities. Tools have defined input schemas that specify required and optional parameters.",
+      "strict": false,
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "server_name": {
+            "type": "string",
+            "description": "The name of the MCP server providing the tool"
+          },
+          "tool_name": {
+            "type": "string",
+            "description": "The name of the tool to execute"
+          },
+          "arguments": {
+            "type": "string",
+            "description": "A JSON object containing the tool's input parameters, following the tool's input schema"
+          },
+          "task_progress": {
+            "type": "string",
+            "description": "Report task_progress as a separate parameter. Follow the UPDATING TASK PROGRESS section: use exact checklist text for completed items, and include full checklists only when starting or replacing a plan."
+          }
+        },
+        "required": [
+          "server_name",
+          "tool_name",
+          "arguments"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "access_mcp_resource",
+      "description": "Request to access a resource provided by a connected MCP server. Resources represent data sources that can be used as context, such as files, API responses, or system information. You must only use this tool if you have been informed of the MCP server and the resource you are trying to access.",
+      "strict": false,
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "server_name": {
+            "type": "string",
+            "description": "The name of the MCP server providing the resource"
+          },
+          "uri": {
+            "type": "string",
+            "description": "The URI identifying the specific resource to access"
+          },
+          "task_progress": {
+            "type": "string",
+            "description": "Report task_progress as a separate parameter. Follow the UPDATING TASK PROGRESS section: use exact checklist text for completed items, and include full checklists only when starting or replacing a plan."
+          }
+        },
+        "required": [
+          "server_name",
+          "uri"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "load_mcp_documentation",
+      "description": "Load documentation about creating MCP servers. This tool should be used when the user requests to create or install an MCP server (the user may ask you something along the lines of \"add a tool\" that does some function, in other words to create an MCP server that provides tools and resources that may connect to external APIs for example. You have the ability to create an MCP server and add it to a configuration file that will then expose the tools and resources for you to use with `use_mcp_tool` and `access_mcp_resource`). The documentation provides detailed information about the MCP server creation process, including setup instructions, best practices, and examples.",
+      "strict": false,
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "use_skill",
+      "description": "Load and activate a skill by name. Skills provide specialized instructions for specific tasks. Use this tool ONCE when a user's request matches one of the available skill descriptions shown in the SKILLS section of your system prompt. After activation, follow the skill's instructions directly - do not call use_skill again.",
+      "strict": false,
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "skill_name": {
+            "type": "string",
+            "description": "The name of the skill to activate (must match exactly one of the available skill names)"
+          }
+        },
+        "required": [
+          "skill_name"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "load_mcp",
+      "description": "Load detailed read-only metadata for one named capability. The name parameter must match an advertised capability exactly. This tool does not discover capability lists, modify cached system prompts, refresh metadata, or execute the capability.",
+      "strict": false,
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The exact capability name to load."
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "load_skill",
+      "description": "Load detailed read-only metadata for one named capability. The name parameter must match an advertised capability exactly. This tool does not discover capability lists, modify cached system prompts, refresh metadata, or execute the capability.",
+      "strict": false,
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The exact capability name to load."
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "load_workflow",
+      "description": "Load detailed read-only metadata for one named capability. The name parameter must match an advertised capability exactly. This tool does not discover capability lists, modify cached system prompts, refresh metadata, or execute the capability.",
+      "strict": false,
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The exact capability name to load."
+          }
+        },
+        "required": [
+          "name"
         ],
         "additionalProperties": false
       }
@@ -465,36 +736,23 @@
   {
     "type": "function",
     "function": {
-      "name": "use_subagent",
-      "description": "Run one focused default or named subagent. Omit agent_name or use 'default' for the built-in readonly research subagent; use an advertised YAML name for a configured agent.",
+      "name": "apply_patch",
+      "description": "This is a custom utility that makes it more convenient to add, remove, move, or edit code in a single file. `apply_patch` effectively allows you to execute a diff/patch against a file, but the format of the diff specification is unique to this task, so pay careful attention to these instructions. To use the `apply_patch` command, you should pass a message of the following structure as \"input\":\n\n%%bash\napply_patch <<\"EOF\"\n*** Begin Patch\n[YOUR_PATCH]\n*** End Patch\nEOF\n\nWhere [YOUR_PATCH] is the actual content of your patch, specified in the following V4A diff format.\n\n*** [ACTION] File: [path/to/file] -> ACTION can be one of Add, Update, or Delete. \n\nIn a Add File section, every line of the new file (including blank/empty lines) MUST start with a `+` prefix. Do not include any unprefixed lines inside an Add section\nIn a Update/Delete section, repeat the following for each snippet of code that needs to be changed:\n[context_before] -> See below for further instructions on context.\n- [old_code] -> Precede the old code with a minus sign.\n+ [new_code] -> Precede the new, replacement code with a plus sign.\n[context_after] -> See below for further instructions on context.\n\nFor instructions on [context_before] and [context_after]:\n- By default, show 3 lines of code immediately above and 3 lines immediately below each change. If a change is within 3 lines of a previous change, do NOT duplicate the first change's [context_after] lines in the second change's [context_before] lines.\n- If 3 lines of context is insufficient to uniquely identify the snippet of code within the file, use the @@ operator to indicate the class or function to which the snippet belongs. For instance, we might have:\n@@ class BaseClass\n[3 lines of pre-context]\n- [old_code]\n+ [new_code]\n[3 lines of post-context]\n\n- If a code block is repeated so many times in a class or function such that even a single @@ statement and 3 lines of context cannot uniquely identify the snippet of code, you can use multiple `@@` statements to jump to the right context. For instance:\n\n@@ class BaseClass\n@@ \tdef method():\n[3 lines of pre-context]\n- [old_code]\n+ [new_code]\n[3 lines of post-context]\n\nNote, then, that we do not use line numbers in this diff format, as the context is enough to uniquely identify code. An example of a message that you might pass as \"input\" to this function, in order to apply a patch, is shown below.\n\n%%bash\napply_patch <<\"EOF\"\n*** Begin Patch\n*** Update File: pygorithm/searching/binary_search.py\n@@ class BaseClass\n@@     def search():\n-          pass\n+          raise NotImplementedError()\n\n@@ class Subclass\n@@     def search():\n-          pass\n+          raise NotImplementedError()\n\n*** End Patch\nEOF",
       "strict": false,
       "parameters": {
         "type": "object",
         "properties": {
-          "agent_name": {
+          "input": {
             "type": "string",
-            "description": "Optional advertised subagent name. Omit or use 'default' for the built-in default profile."
+            "description": "The apply_patch command that you wish to execute."
           },
-          "task": {
+          "task_progress": {
             "type": "string",
-            "description": "Focused task for the subagent."
-          },
-          "context": {
-            "type": "string",
-            "description": "Relevant context, constraints, and expected result for the subagent."
-          },
-          "background": {
-            "type": "boolean",
-            "description": "Optional boolean. Set true to run in background. Defaults to false."
-          },
-          "timeout": {
-            "type": "integer",
-            "description": "Optional positive integer timeout in seconds for each subagent. Defaults to 600."
+            "description": "Report task_progress as a separate parameter. Follow the UPDATING TASK PROGRESS section: use exact checklist text for completed items, and include full checklists only when starting or replacing a plan."
           }
         },
         "required": [
-          "task",
-          "context"
+          "input"
         ],
         "additionalProperties": false
       }
@@ -503,68 +761,23 @@
   {
     "type": "function",
     "function": {
-      "name": "use_subagents",
-      "description": "Run up to five built-in default subagents in parallel. Each subagent gets its own prompt and returns a comprehensive research result with tool and token stats. Use this for broad exploration when reading many files would consume the main agent's context window. Using one subagent is valid.",
+      "name": "focus_chain_change",
+      "description": "Request to override the current focus chain plan with a new plan. Each item in the new plan will have a checkbox for user approval. Only approved items will replace the current focus chain. Requires user authorization to proceed.",
       "strict": false,
       "parameters": {
         "type": "object",
         "properties": {
-          "prompt_1": {
+          "new_plan": {
             "type": "string",
-            "description": "First subagent prompt. Must include <task> and <context> sections."
+            "description": "The complete new focus chain plan, organized with # Title and ## Section headings."
           },
-          "prompt_2": {
+          "reason": {
             "type": "string",
-            "description": "Optional second subagent prompt. Must include <task> and <context> sections when provided."
-          },
-          "prompt_3": {
-            "type": "string",
-            "description": "Optional third subagent prompt. Must include <task> and <context> sections when provided."
-          },
-          "prompt_4": {
-            "type": "string",
-            "description": "Optional fourth subagent prompt. Must include <task> and <context> sections when provided."
-          },
-          "prompt_5": {
-            "type": "string",
-            "description": "Optional fifth subagent prompt. Must include <task> and <context> sections when provided."
-          },
-          "background": {
-            "type": "boolean",
-            "description": "Optional boolean. Set true to run in background. Defaults to false."
-          },
-          "timeout": {
-            "type": "integer",
-            "description": "Optional positive integer timeout in seconds for each subagent. Defaults to 600."
+            "description": "The reason for changing the current plan."
           }
         },
         "required": [
-          "prompt_1"
-        ],
-        "additionalProperties": false
-      }
-    }
-  },
-  {
-    "type": "function",
-    "function": {
-      "name": "spawn_task",
-      "description": "Spawn a new independent task. The spawned task has its OWN context — it does NOT inherit the parent's conversation history. Use the task parameter for goals and the context parameter for background information. The task runs autonomously in PLAN mode with auto-run enabled, inheriting the parent's API provider, MCP servers, and rules. The user must approve before creation.",
-      "strict": false,
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "task": {
-            "type": "string",
-            "description": "Describe what the spawned task should investigate or execute. Be specific about the goals and expected work to be done."
-          },
-          "context": {
-            "type": "string",
-            "description": "Provide relevant background context for the spawned task. Include: why this task is needed, relevant conversation history or prior work, key technical concepts, constraints, and configuration. The spawned task cannot access the parent's conversation history — include everything it needs to know."
-          }
-        },
-        "required": [
-          "task"
+          "new_plan"
         ],
         "additionalProperties": false
       }
@@ -626,6 +839,25 @@
           "content"
         ],
         "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "snapshot-mcp0mcp0echo",
+      "description": "Snapshot MCP: Returns the complete provided text.",
+      "strict": false,
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ]
       }
     }
   }

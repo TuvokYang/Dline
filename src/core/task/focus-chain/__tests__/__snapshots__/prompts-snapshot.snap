@@ -1,3 +1,6 @@
+### allCompletedAlready
+Focus chain update rejected. All items are already completed. Create a NEW checklist (with `# Title`, `## Section`, `- [ ]` items) or call attempt_completion. If plan must change, use focus_chain_change.
+
 ### apiRequestCount
 # task_progress
 
@@ -9,9 +12,6 @@ Update task_progress each step:
 - `- [ ]` mark in-progress — signal your current step. Only ONE in-progress item per update; pass it alongside completed items.
 - Copy the EXACT item text from the checklist shown in environment_details — character-for-character, no rephrasing.
 - Complete items in strict order FIRST. If plan must change, use focus_chain_change to get user authorization.
-
-### allCompletedAlready
-Focus chain update rejected. All items are already completed. Create a NEW checklist (with `# Title`, `## Section`, `- [ ]` items) or call attempt_completion. If plan must change, use focus_chain_change.
 
 ### attemptCompletionBlocked
 ATTEMPT_COMPLETION BLOCKED — Focus chain has unchecked items remaining. You attempted to call attempt_completion before all items are finished. Do not try to shortcut or pretend the task is complete.
@@ -33,7 +33,7 @@ All 6 items completed.
 - **Continue work:** Pass a NEW full checklist via task_progress (with `# Title`, `## Section`, `- [ ]` items) to start the next phase.
 - **Finish task:** Call attempt_completion. Summarize what was accomplished, methods used, and test/verification results.
 - **Deliver report:** Call generate_report with findings, analysis, and recommendations.
-- **Present plan:** Call plan_mode_respond with the complete plan (PLAN MODE only).
+- **Present plan:** Call make_plan with the complete plan (in ACT MODE, only when the user explicitly requested a plan).
 
 ### inProgressMismatchRejected
 Focus chain update rejected. The in-progress item you reported (`- [ ]`) does NOT match the plan. Use EXACT item text from the checklist.
@@ -72,7 +72,7 @@ Complete items in strict order FIRST. If plan must change, use focus_chain_chang
 ### planModeReminder
 # task_progress List (Recommended - Plan Mode)
 
-In PLAN MODE, create a task_progress list when presenting a finalized plan via plan_mode_respond.
+Create a task_progress list when presenting a finalized plan via make_plan.
 Append items as analysis progresses; rewriting the plan requires focus_chain_change tool.
 Use `# Title` and `## Section` so user can verify your approach.
 
