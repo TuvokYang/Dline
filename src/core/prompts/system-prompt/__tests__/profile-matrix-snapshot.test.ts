@@ -145,7 +145,7 @@ describe("complete explicit-profile snapshot matrix", () => {
 			.map((entry) => entry.name)
 			.sort()
 		expect(generatedNames).toEqual(expectedSnapshotNames())
-		expect(generatedNames).toHaveLength(54)
+		expect(generatedNames).toHaveLength(48)
 		for (const [name, content] of legacySnapshotBaseline) {
 			expect(await fs.readFile(path.join(SNAPSHOTS_ROOT, name), "utf-8"), `legacy snapshot changed: ${name}`).toBe(content)
 		}

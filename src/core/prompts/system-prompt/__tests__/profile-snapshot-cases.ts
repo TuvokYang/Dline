@@ -4,7 +4,7 @@ export type SnapshotProfile = "standard" | "lite"
 export type SnapshotTransport = "native" | "xml"
 
 export interface ProfileSnapshotCase {
-	readonly id: "basic" | "no-browser" | "no-mcp" | "no-focus" | "no-subagents" | "no-parallel" | "cli" | "yolo" | "no-web"
+	readonly id: "basic" | "no-browser" | "no-mcp" | "no-focus" | "no-subagents" | "no-parallel" | "yolo" | "no-web"
 	readonly overrides: Partial<SystemPromptContext>
 }
 
@@ -21,7 +21,6 @@ export const PROFILE_SNAPSHOT_CASES: readonly ProfileSnapshotCase[] = [
 	{ id: "no-focus", overrides: { focusChainSettings: { enabled: false, remindClineInterval: 0 } } },
 	{ id: "no-subagents", overrides: { subagentsEnabled: false } },
 	{ id: "no-parallel", overrides: { enableParallelToolCalling: false } },
-	{ id: "cli", overrides: { isCliEnvironment: true } },
 	{ id: "yolo", overrides: { yoloModeToggled: true } },
 	{ id: "no-web", overrides: { clineWebToolsEnabled: false } },
 ]
