@@ -1,4 +1,5 @@
 import type { ToolUse } from "@core/assistant-message"
+import { getPrompt, renderPrompt } from "@core/prompts/i18n"
 import { getReadablePath } from "@utils/path"
 import { HostProvider } from "@/hosts/host-provider"
 import { ClineDefaultTool } from "@/shared/tools"
@@ -69,9 +70,11 @@ export class FindReferencesHandler implements IFullyManagedTool {
 
 		try {
 			const r = await HostProvider.language.findReferences({ filePath, line, character })
-			if (!r.hasLspSupport) return errMsg("Error: LSP not available. Use search_files instead.")
-			if (r.errorMessage) return errMsg(`Error: ${r.errorMessage}`)
-			if (!r.references?.length) return errMsg("Error: no references found for the symbol.")
+			if (!r.hasLspSupport) return errMsg(getPrompt("findReferences", "noLspSupport"))
+			if (r.errorMessage) {
+				return errMsg(renderPrompt("findReferences", "errorPrefix", { ERROR: r.errorMessage }))
+			}
+			if (!r.references?.length) return errMsg(getPrompt("findReferences", "noReferences"))
 
 			// Build structured references array
 			const refs: RefEntry[] = r.references.map((ref: any) => ({
@@ -117,7 +120,7 @@ export class FindReferencesHandler implements IFullyManagedTool {
 				.catch(() => {})
 			return content
 		} catch (e) {
-			return errMsg(`Error: ${e}`)
+			return errMsg(renderPrompt("findReferences", "errorPrefix", { ERROR: String(e) }))
 		}
 	}
 }

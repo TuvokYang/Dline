@@ -38,7 +38,7 @@ function block(find: string, replace: string, literal: boolean | string = "false
 			replace,
 			file_pattern: "fixture-*.txt",
 			dry_run: "true",
-			literal,
+			literal: String(literal),
 		},
 	}
 }
@@ -109,7 +109,7 @@ describe("ReplaceTextHandler", () => {
 		const { config, say } = createConfig()
 		const result = await new ReplaceTextHandler().execute(config, block("missing-[0-9]+", "record"))
 
-		assert.match(String(result), /No occurrences/)
+		assert.equal(result, 'No occurrences of "missing-[0-9]+" found in 2 files matching "fixture-*.txt".')
 		assert.equal(say.mock.calls.length, 1)
 		const payload = JSON.parse(String(say.mock.calls[0][1])) as { content?: string }
 		assert.equal(payload.content, result)

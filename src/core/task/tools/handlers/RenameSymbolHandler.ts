@@ -1,5 +1,6 @@
 import * as path from "node:path"
 import type { ToolUse } from "@core/assistant-message"
+import { getPrompt, renderPrompt } from "@core/prompts/i18n"
 import { getReadablePath } from "@utils/path"
 import { HostProvider } from "@/hosts/host-provider"
 import { ClineDefaultTool } from "@/shared/tools"
@@ -61,13 +62,13 @@ export class RenameSymbolHandler implements IFullyManagedTool {
 				.catch(() => {})
 			return msg
 		}
-		if (!filePath || !line || !character || !newName) return errMsg("Error: missing required parameters.")
+		if (!filePath || !line || !character || !newName) return errMsg(getPrompt("rename", "missingParams"))
 
 		try {
 			const r = await HostProvider.language.renameSymbol({ filePath, line, character, newName, dryRun })
-			if (!r.hasLspSupport) return errMsg("Error: LSP not available. Use replace_text instead.")
-			if (r.errorMessage) return errMsg(`Error: ${r.errorMessage}`)
-			if (!r.success) return errMsg("Error: rename failed. No edits returned by LSP.")
+			if (!r.hasLspSupport) return errMsg(getPrompt("rename", "noLspSupport"))
+			if (r.errorMessage) return errMsg(renderPrompt("rename", "errorPrefix", { ERROR: r.errorMessage }))
+			if (!r.success) return errMsg(getPrompt("rename", "noEdits"))
 
 			// Track all modified files for per-file checkpointing (non-dry-run only)
 			if (!dryRun) {
@@ -127,7 +128,7 @@ export class RenameSymbolHandler implements IFullyManagedTool {
 				.catch(() => {})
 			return content
 		} catch (e) {
-			return errMsg(`Error: ${e}`)
+			return errMsg(renderPrompt("rename", "errorPrefix", { ERROR: String(e) }))
 		}
 	}
 }
@@ -144,14 +145,32 @@ function buildContent(
 		edits: Array<{ startLine: number; startCharacter: number; newText: string; originalText: string }>
 	}>,
 ): string {
-	let out = `Rename: ${oldName} -> ${newName} (${filesChanged} files, ${totalChanges} changes)${dryRun ? " (preview)" : ""}\n`
+	let out = dryRun
+		? renderPrompt("rename", "dryRunHeader", {
+				OLD_NAME: oldName,
+				NEW_NAME: newName,
+				FILES: filesChanged,
+				CHANGES: totalChanges,
+			})
+		: renderPrompt("rename", "successOutput", {
+				OLD_NAME: oldName,
+				NEW_NAME: newName,
+				FILES: filesChanged,
+				CHANGES: totalChanges,
+			})
 	if (!preview) return out
 	for (const file of preview) {
 		const rel = getReadablePath(cwd, file.filePath)
 		for (const edit of file.edits) {
-			out += `\n${rel} L${edit.startLine}:${edit.startCharacter}\n  ${edit.originalText || oldName}\n  ${edit.newText}\n`
+			out += `${renderPrompt("rename", "fileEditLine", {
+				FILE: rel,
+				LINE: edit.startLine,
+				CHARACTER: edit.startCharacter,
+				ORIGINAL: edit.originalText || oldName,
+				NEW: edit.newText,
+			})}`
 		}
 	}
-	if (dryRun) out += `\nNo files were modified. Remove dry_run to apply changes.`
+	if (dryRun) out += `\n${getPrompt("rename", "dryRunFooter")}`
 	return out
 }

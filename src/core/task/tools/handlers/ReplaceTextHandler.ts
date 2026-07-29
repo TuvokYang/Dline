@@ -1,6 +1,6 @@
 import * as fs from "node:fs"
 import type { ToolUse } from "@core/assistant-message"
-import { getPrompt } from "@core/prompts/i18n"
+import { getPrompt, renderPrompt } from "@core/prompts/i18n"
 import { getReadablePath } from "@utils/path"
 import { glob } from "fast-glob"
 import { ClineDefaultTool } from "@/shared/tools"
@@ -72,7 +72,7 @@ export class ReplaceTextHandler implements IFullyManagedTool {
 			const files = await findFiles(config.cwd, filePattern)
 
 			if (!files.length) {
-				const result = getPrompt("replaceText", "noFilesMatched").replace("{pattern}", filePattern)
+				const result = renderPrompt("replaceText", "noFilesMatched", { PATTERN: filePattern })
 				await settleReplaceTextUi(config, block, filePattern, find, result)
 				return result
 			}
@@ -108,10 +108,11 @@ export class ReplaceTextHandler implements IFullyManagedTool {
 			}
 
 			if (!allMatches.length) {
-				const result = getPrompt("replaceText", "noOccurrences")
-					.replace("{find}", find)
-					.replace("{count}", String(files.length))
-					.replace("{pattern}", filePattern)
+				const result = renderPrompt("replaceText", "noOccurrences", {
+					FIND: find,
+					COUNT: files.length,
+					PATTERN: filePattern,
+				})
 				await settleReplaceTextUi(config, block, filePattern, find, result)
 				return result
 			}
@@ -161,16 +162,19 @@ export class ReplaceTextHandler implements IFullyManagedTool {
 				}
 			}
 
-			let result = getPrompt("replaceText", "successOutput")
-				.replace("{find}", find)
-				.replace("{replace}", replace)
-				.replace("{files}", String(uniqueFiles))
-				.replace("{matches}", String(allMatches.length))
-			if (writeErrors > 0) result += `\n${getPrompt("replaceText", "writeErrors").replace("{count}", String(writeErrors))}`
+			let result = renderPrompt("replaceText", "successOutput", {
+				FIND: find,
+				REPLACE: replace,
+				FILES: uniqueFiles,
+				MATCHES: allMatches.length,
+			})
+			if (writeErrors > 0) {
+				result += `\n${renderPrompt("replaceText", "writeErrors", { COUNT: writeErrors })}`
+			}
 			return result
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error)
-			const result = `${getPrompt("replaceText", "errorPrefix")} ${message}`
+			const result = renderPrompt("replaceText", "errorPrefix", { ERROR: message })
 			await settleReplaceTextUi(config, block, filePattern, find, result)
 			return result
 		}
@@ -249,11 +253,17 @@ function buildContent(
 	matches: MatchRecord[],
 	dryRun: boolean,
 ): string {
-	let out = `Replace: ${find} -> ${replace} (${fileCount} files, ${matches.length} changes)${dryRun ? " (preview)" : ""}\n`
+	let out = renderPrompt("replaceText", "dryRunHeader", {
+		FIND: find,
+		REPLACE: replace,
+		FILES: fileCount,
+		MATCHES: matches.length,
+		PREVIEW: dryRun ? " (preview)" : "",
+	})
 	for (const m of matches) {
 		const rel = getReadablePath(cwd, m.filePath)
 		out += `\n${rel} L${m.line}:${m.column}\n  ${m.before}\n  ${m.after}\n`
 	}
-	if (dryRun) out += `\nNo files were modified. Remove dry_run to apply changes.`
+	if (dryRun) out += `\n${getPrompt("replaceText", "dryRunFooter")}`
 	return out
 }
