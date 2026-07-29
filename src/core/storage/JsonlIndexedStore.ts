@@ -515,6 +515,7 @@ export class JsonlIndexedStore<T extends { ts: number }> {
 		const { fileExistsAtPath } = await import("@/utils/fs")
 		if (!(await fileExistsAtPath(this._filePath))) {
 			this._loaded = true
+			this._fullyLoaded = true
 			this._firstDirtyIndex = 0
 			return
 		}
@@ -522,6 +523,7 @@ export class JsonlIndexedStore<T extends { ts: number }> {
 		const content = await fs.readFile(this._filePath, "utf8")
 		if (!content.trim()) {
 			this._loaded = true
+			this._fullyLoaded = true
 			this._firstDirtyIndex = 0
 			return
 		}
@@ -559,6 +561,7 @@ export class JsonlIndexedStore<T extends { ts: number }> {
 		this._items = entries
 		this._firstDirtyIndex = this._items.length
 		this._loaded = true
+		this._fullyLoaded = true
 	}
 
 	private async _loadEntryFromDisk(ts: number): Promise<T | undefined> {

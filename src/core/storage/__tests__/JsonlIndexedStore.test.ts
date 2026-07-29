@@ -444,6 +444,22 @@ describe("JsonlIndexedStore", () => {
 	})
 
 	describe("upsertByTs with _fullyLoaded check", () => {
+		it("should preserve earlier unflushed rows when a later row is upserted", async () => {
+			const store = await openStore("upsert-after-appends")
+			await store.append({ ts: 100, text: "initial task" })
+			await store.append({ ts: 200, text: "checkpoint pending" })
+
+			await store.upsertByTs({ ts: 200, text: "checkpoint committed" })
+			await store.flush()
+
+			const fp = (store as any)._filePath as string
+			const reopened = await JsonlIndexedStore.open<TestEntry>(fp)
+			reopened.getAll().should.deepEqual([
+				{ ts: 100, text: "initial task" },
+				{ ts: 200, text: "checkpoint committed" },
+			])
+		})
+
 		it("should update existing entry by ts", async () => {
 			const store = await openStore("upsert-exists", [{ ts: 100, text: "old" }])
 			await store.upsertByTs({ ts: 100, text: "new" })
@@ -519,7 +535,7 @@ describe("JsonlIndexedStore", () => {
 	describe("loadAll with force parameter", () => {
 		it("should re-read from disk when force=true even if fully loaded", async () => {
 			const store = await openStore("force-reload", [{ ts: 100, text: "initial" }])
-			store.isFullyLoaded.should.be.false()
+			store.isFullyLoaded.should.be.true()
 			await store.loadAll()
 			store.isFullyLoaded.should.be.true()
 
