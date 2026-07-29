@@ -383,7 +383,7 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 	const scrollBehavior = useScrollBehavior(messages, visibleMessages, groupedMessages, expandedRows, setExpandedRows)
 
 	// Use message handlers hook (must come after scrollBehavior so we can pass disableAutoScrollRef)
-	const messageHandlers = useMessageHandlers(messages, chatState, scrollBehavior.disableAutoScrollRef)
+	const messageHandlers = useMessageHandlers(messages, chatState, scrollBehavior.disableAutoScrollRef, taskId)
 	const submitInteractionDraft = useCallback(
 		async (draft: InteractionDraft): Promise<AcceptedInteractionSettlement | undefined> => {
 			if (!taskViewState?.input.enterAction || !interactionSynchronized) {

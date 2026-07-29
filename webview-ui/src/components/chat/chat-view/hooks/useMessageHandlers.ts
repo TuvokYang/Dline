@@ -1,7 +1,7 @@
 import type { ClineMessage } from "@shared/ExtensionMessage"
 import { EmptyRequest } from "@shared/proto/dline/common"
 import { NewTaskRequest } from "@shared/proto/dline/task"
-import { useCallback } from "react"
+import { useCallback, useRef } from "react"
 import { TaskServiceClient } from "@/services/grpc-client"
 
 import type { ChatState, MessageHandlers } from "../types/chatTypes"
@@ -10,12 +10,15 @@ export async function runNewTaskSubmission(
 	startTask: () => Promise<unknown>,
 	clearDraft: () => void,
 	restoreDraft: () => void,
+	shouldRestoreDraft: () => boolean = () => true,
 ): Promise<void> {
 	clearDraft()
 	try {
 		await startTask()
 	} catch (error) {
-		restoreDraft()
+		if (shouldRestoreDraft()) {
+			restoreDraft()
+		}
 		throw error
 	}
 }
@@ -28,6 +31,7 @@ export function useMessageHandlers(
 	messages: ClineMessage[],
 	chatState: ChatState,
 	disableAutoScrollRef?: React.MutableRefObject<boolean>,
+	taskId?: string,
 ): MessageHandlers {
 	const {
 		activeQuote,
@@ -38,6 +42,15 @@ export function useMessageHandlers(
 		setSelectedImages,
 		setSendingDisabled,
 	} = chatState
+	const taskOwnershipRef = useRef({ taskId, revision: 0 })
+	const latestMessagesRef = useRef(messages)
+	if (taskOwnershipRef.current.taskId !== taskId) {
+		taskOwnershipRef.current = {
+			taskId,
+			revision: taskOwnershipRef.current.revision + 1,
+		}
+	}
+	latestMessagesRef.current = messages
 
 	const handleSendMessage = useCallback(
 		async (text: string, images: string[], files: string[]) => {
@@ -49,6 +62,7 @@ export function useMessageHandlers(
 			if (activeQuote) {
 				messageToSend = `[context] \n> ${activeQuote}\n[/context] \n\n${messageToSend}`
 			}
+			const submissionOwnerRevision = taskOwnershipRef.current.revision
 			await runNewTaskSubmission(
 				() => TaskServiceClient.newTask(NewTaskRequest.create({ text: messageToSend, images, files })),
 				() => {
@@ -67,6 +81,7 @@ export function useMessageHandlers(
 					setSelectedFiles(files)
 					setEnableButtons(true)
 				},
+				() => taskOwnershipRef.current.revision === submissionOwnerRevision && latestMessagesRef.current.length === 0,
 			)
 			if (disableAutoScrollRef) {
 				disableAutoScrollRef.current = false
