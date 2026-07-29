@@ -67,10 +67,10 @@ function exposes(result: Awaited<ReturnType<typeof generate>>, transport: "nativ
 	return transport === "native" ? toolNames(result.tools).includes(name) : result.systemPrompt.includes(`## ${name}`)
 }
 
-describe("Native/Lite transport and capability behavior matrix", () => {
+describe("Standard/Lite transport and capability behavior matrix", () => {
 	it.each([
-		[PromptProfile.Native, "native"],
-		[PromptProfile.Native, "xml"],
+		[PromptProfile.Standard, "native"],
+		[PromptProfile.Standard, "xml"],
 		[PromptProfile.Lite, "native"],
 		[PromptProfile.Lite, "xml"],
 	] as const)("preserves exact profile restrictions for %s/%s", async (profile, transport) => {
@@ -79,9 +79,9 @@ describe("Native/Lite transport and capability behavior matrix", () => {
 		expect(result.profile).toBe(profile)
 		expect(result.warnings).toEqual([])
 		expect(exposes(result, transport, "read_file")).toBe(true)
-		expect(exposes(result, transport, "browser_action")).toBe(profile === PromptProfile.Native)
-		expect(exposes(result, transport, "use_mcp_tool")).toBe(profile === PromptProfile.Native)
-		expect(exposes(result, transport, "web_search")).toBe(profile === PromptProfile.Native)
+		expect(exposes(result, transport, "browser_action")).toBe(profile === PromptProfile.Standard)
+		expect(exposes(result, transport, "use_mcp_tool")).toBe(profile === PromptProfile.Standard)
+		expect(exposes(result, transport, "web_search")).toBe(profile === PromptProfile.Standard)
 		expect(exposes(result, transport, "generate_explanation")).toBe(false)
 		expect(exposes(result, transport, "make_plan")).toBe(true)
 		expect(result.systemPrompt).toContain("status_update / act_mode_respond: progress-only")
@@ -90,16 +90,16 @@ describe("Native/Lite transport and capability behavior matrix", () => {
 	})
 
 	it.each(["act", "plan"] as const)("keeps make_plan available in %s mode", async (mode) => {
-		const result = await generate(PromptProfile.Native, "native", {
+		const result = await generate(PromptProfile.Standard, "native", {
 			providerInfo: { ...BASE_CONTEXT.providerInfo, mode },
 		})
 
 		expect(exposes(result, "native", "make_plan")).toBe(true)
 	})
 
-	it.each(["native", "xml"] as const)("applies browser support and disable gates for Native/%s", async (transport) => {
-		const unsupported = await generate(PromptProfile.Native, transport, { supportsBrowserUse: false })
-		const disabled = await generate(PromptProfile.Native, transport, {
+	it.each(["native", "xml"] as const)("applies browser support and disable gates for Standard/%s", async (transport) => {
+		const unsupported = await generate(PromptProfile.Standard, transport, { supportsBrowserUse: false })
+		const disabled = await generate(PromptProfile.Standard, transport, {
 			browserSettings: { viewport: { width: 1280, height: 800 }, disableToolUse: true },
 		})
 
@@ -107,8 +107,8 @@ describe("Native/Lite transport and capability behavior matrix", () => {
 		expect(exposes(disabled, transport, "browser_action")).toBe(false)
 	})
 
-	it.each(["native", "xml"] as const)("requires a connected enabled MCP server for Native/%s", async (transport) => {
-		const disconnected = await generate(PromptProfile.Native, transport, {
+	it.each(["native", "xml"] as const)("requires a connected enabled MCP server for Standard/%s", async (transport) => {
+		const disconnected = await generate(PromptProfile.Standard, transport, {
 			mcpHub: {
 				getServers: () => [
 					{
@@ -121,7 +121,7 @@ describe("Native/Lite transport and capability behavior matrix", () => {
 				],
 			} as unknown as SystemPromptContext["mcpHub"],
 		})
-		const disabled = await generate(PromptProfile.Native, transport, {
+		const disabled = await generate(PromptProfile.Standard, transport, {
 			mcpHub: {
 				getServers: () => [
 					{
@@ -143,8 +143,8 @@ describe("Native/Lite transport and capability behavior matrix", () => {
 	it.each([
 		"native",
 		"xml",
-	] as const)("preserves focus, subagent, web, CLI, yolo, and parallel gates for Native/%s", async (transport) => {
-		const result = await generate(PromptProfile.Native, transport, {
+	] as const)("preserves focus, subagent, web, CLI, yolo, and parallel gates for Standard/%s", async (transport) => {
+		const result = await generate(PromptProfile.Standard, transport, {
 			focusChainSettings: { enabled: false, remindClineInterval: 0 },
 			subagentsEnabled: false,
 			clineWebToolsEnabled: false,
@@ -162,8 +162,8 @@ describe("Native/Lite transport and capability behavior matrix", () => {
 	})
 
 	it.each([
-		[PromptProfile.Native, "native"],
-		[PromptProfile.Native, "xml"],
+		[PromptProfile.Standard, "native"],
+		[PromptProfile.Standard, "xml"],
 	] as const)("gates the complete focus contract for %s/%s", async (profile, transport) => {
 		const enabled = await generate(profile, transport)
 		const disabled = await generate(profile, transport, {

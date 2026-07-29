@@ -600,9 +600,22 @@ function isPromptBuilderInfo(value: unknown): value is FrozenPromptBuilderInfo {
 			(typeof value.contractVersion === "number" && Number.isInteger(value.contractVersion))) &&
 		isNonEmptyString(value.providerId) &&
 		isNonEmptyString(value.modelId) &&
-		(value.profile === "native" || value.profile === "lite") &&
+		(value.profile === "standard" || value.profile === "lite") &&
 		typeof value.nativeTools === "boolean"
 	)
+}
+
+/** Normalize the legacy prompt profile name before validating a persisted cache. */
+function migrateLegacyPromptProfile(value: unknown): void {
+	if (!isJsonObject(value)) return
+	const systemPrompt = value.systemPrompt
+	if (!isJsonObject(systemPrompt)) return
+	const frozen = systemPrompt.frozen
+	if (!isJsonObject(frozen)) return
+	const promptBuilder = frozen.promptBuilder
+	if (isJsonObject(promptBuilder) && promptBuilder.profile === "native") {
+		promptBuilder.profile = "standard"
+	}
 }
 
 function isFrozenSystemPromptCache(value: unknown): boolean {
@@ -654,6 +667,7 @@ export async function getTaskContext(taskId: string): Promise<TaskContextCache> 
 			return createEmptyTaskContext(taskId)
 		}
 		const parsed = JSON.parse(await fs.readFile(p, "utf8")) as unknown
+		migrateLegacyPromptProfile(parsed)
 		if (!isTaskContextCache(parsed, taskId)) {
 			Logger.warn(`[getTaskContext] Invalid task context cache shape for task ${taskId}`)
 			return createEmptyTaskContext(taskId)

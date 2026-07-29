@@ -5,7 +5,7 @@ const prompts: Record<string, string> = {
 	pathInstruction:
 		"The path of the directory to list contents for (relative to the current working directory {{CWD}}){{MULTI_ROOT_HINT}}",
 	pathUsage: "Directory path here",
-	nativePathInstruction: "The path of the directory to list contents for.",
+	standardPathInstruction: "The path of the directory to list contents for.",
 	recursiveInstruction: "Whether to list files recursively. Use true for recursive listing, false or omit for top-level only.",
 	recursiveUsage: "true or false (optional)",
 	showMetadataInstruction:

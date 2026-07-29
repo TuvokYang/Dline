@@ -2455,7 +2455,7 @@ export class Task {
 				modelId: currentProviderInfo.model.id,
 				contextWindow: currentProviderInfo.model.info.capabilities?.contextWindow,
 			})
-			if (this.FocusChainManager && currentPromptProfile === PromptProfile.Native) {
+			if (this.FocusChainManager && currentPromptProfile === PromptProfile.Standard) {
 				const apiConfig = this.stateManager.getApiConfiguration()
 				const currentMode = this.taskSm.mode
 				const currentProfile = currentMode === "plan" ? apiConfig.planModeProfile : apiConfig.actModeProfile
@@ -4004,7 +4004,7 @@ export class Task {
 			userContent.push({
 				type: "text",
 				text: summarizeTask(
-					promptProfile === PromptProfile.Native
+					promptProfile === PromptProfile.Standard
 						? this.stateManager.getGlobalSettingsKey("focusChainSettings")
 						: undefined,
 					this.cwd,
@@ -4813,7 +4813,7 @@ export class Task {
 			contextWindow: providerInfo.model.info.capabilities?.contextWindow,
 		})
 		const focusChainSettings =
-			promptProfile === PromptProfile.Native ? this.stateManager.getGlobalSettingsKey("focusChainSettings") : undefined
+			promptProfile === PromptProfile.Standard ? this.stateManager.getGlobalSettingsKey("focusChainSettings") : undefined
 		const useNativeToolCalls = this.shouldUseNativeToolCalls(providerInfo)
 		const cwd = this.cwd
 		const { localWorkflowToggles, globalWorkflowToggles } = await refreshWorkflowToggles(this.controller, cwd)
@@ -4917,7 +4917,7 @@ export class Task {
 
 		// Add focus chain instructions if needed
 		if (
-			promptProfile === PromptProfile.Native &&
+			promptProfile === PromptProfile.Standard &&
 			!useCompactPrompt &&
 			this.FocusChainManager?.shouldIncludeFocusChainInstructions()
 		) {
@@ -5310,7 +5310,11 @@ export class Task {
 				modelId: providerInfo?.model.id,
 				contextWindow: providerInfo?.model.info.capabilities?.contextWindow,
 			})
-		if (promptProfile === PromptProfile.Native && focusChainSettings?.enabled && this.taskState.currentFocusChainChecklist) {
+		if (
+			promptProfile === PromptProfile.Standard &&
+			focusChainSettings?.enabled &&
+			this.taskState.currentFocusChainChecklist
+		) {
 			const checklist = this.taskState.currentFocusChainChecklist
 			const inProgressIdx = this.taskState.currentInProgressItemIndex
 			let renderedChecklist = checklist

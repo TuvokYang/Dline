@@ -2,7 +2,7 @@
 const prompts: Record<string, string> = {
 	description:
 		'ALWAYS run with dry_run=true FIRST to preview changes before applying. Perform a global text replacement across multiple files matching a glob pattern. This operates at the text level (not semantic), replacing all occurrences of a literal or regex pattern. Substrings are matched: replacing "Hello" also changes "sayHello" to "sayHi". Set dry_run=true to preview changes without modifying files. Use this for bulk text changes like renaming strings, updating URLs, or fixing repeated typos. For single-file edits, use replace_in_file. For safe identifier-only renames that skip strings and comments, use rename (semantic).',
-	nativeDescription:
+	standardDescription:
 		'ALWAYS run with dry_run=true FIRST to preview changes before applying. Perform a global text replacement across all files matching a glob pattern. This operates at the text level (not semantic), replacing all occurrences of a literal or regex pattern. Substrings are matched: replacing "Hello" also changes "sayHello" to "sayHi". String literals and comments are also affected. Set dry_run=true to preview changes without modifying files. Use this for bulk text changes like renaming strings, updating URLs, or fixing repeated typos. For single-file edits, use replace_in_file. For safe identifier-only renames that skip strings and comments, use rename (semantic, LSP-based).',
 	findInstruction: "The text to search for. By default this is a literal string; set literal=false to use a regex pattern.",
 	findUsage: "old_text",

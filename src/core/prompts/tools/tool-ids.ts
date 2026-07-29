@@ -1,6 +1,6 @@
 import { ClineDefaultTool } from "../../../shared/tools"
 
-export const NATIVE_TOOL_IDS = [
+export const STANDARD_TOOL_IDS = [
 	ClineDefaultTool.FILE_NEW,
 	ClineDefaultTool.FILE_EDIT,
 	ClineDefaultTool.FILE_READ,

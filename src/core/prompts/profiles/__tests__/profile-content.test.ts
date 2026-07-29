@@ -4,7 +4,7 @@ import { PromptProfile } from "../../profiles/types"
 import type { SystemPromptContext } from "../../system-prompt/context"
 
 const TEST_CONTEXT: SystemPromptContext = {
-	promptProfile: PromptProfile.Native,
+	promptProfile: PromptProfile.Standard,
 	cwd: "/workspace/project",
 	ide: "Test IDE",
 	providerInfo: {
@@ -51,9 +51,9 @@ async function generateProfile(profile: PromptProfile, overrides: Partial<System
 	return result.systemPrompt
 }
 
-describe("native and lite profile content", () => {
+describe("standard and lite profile content", () => {
 	it("generates the full Native candidate without legacy profile identity", async () => {
-		const text = await generateProfile(PromptProfile.Native)
+		const text = await generateProfile(PromptProfile.Standard)
 
 		expect(text).toContain("## Deliverables and Success Criteria")
 		expect(text).toContain("## Tool-Calling Convention and Preambles")
@@ -72,13 +72,13 @@ describe("native and lite profile content", () => {
 		expect(text).not.toContain("cd /path && cmd")
 		expect(text).not.toContain("load_skill")
 		expect(text).not.toContain("Review code changes.")
-		expect(text.length).toBeLessThan((await generateProfile(PromptProfile.Native)).length)
+		expect(text.length).toBeLessThan((await generateProfile(PromptProfile.Standard)).length)
 		expect(text).not.toMatch(/\b(?:XS|compact|native-next-gen)\b/i)
 	})
 
 	it("includes Native focus-chain contracts only when enabled", async () => {
-		const enabled = await generateProfile(PromptProfile.Native)
-		const disabled = await generateProfile(PromptProfile.Native, {
+		const enabled = await generateProfile(PromptProfile.Standard)
+		const disabled = await generateProfile(PromptProfile.Standard, {
 			focusChainSettings: { enabled: false, remindClineInterval: 6 },
 		})
 

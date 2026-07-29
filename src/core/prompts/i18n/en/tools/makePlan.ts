@@ -8,7 +8,7 @@ Set needs_more_exploration to true if further read/search work is required befor
 	responseInstruction:
 		"The response to provide to the user. Do not call tools inside this parameter. You MUST use the response parameter rather than placing response text directly inside <make_plan>.",
 	responseUsage: "Your response here",
-	nativeResponseInstruction: "The complete implementation or design plan to provide to the user.",
+	standardResponseInstruction: "The complete implementation or design plan to provide to the user.",
 	gemini3ResponseInstruction: "The complete implementation or design plan to provide to the user.",
 	needsMoreExplorationInstruction:
 		"Set to true if formulating the plan reveals that more exploration with read/search tools is required. Defaults to false.",
@@ -19,7 +19,7 @@ Set needs_more_exploration to true if further read/search work is required befor
 		"A checklist showing task progress after this tool use is completed. (See 'Updating Task Progress' for details.)",
 	taskProgressUsage:
 		"Checklist here (When presenting an implementation plan, include the complete checklist for its implementation steps.)",
-	nativeTaskProgressInstruction: "A checklist showing the latest status of all previously introduced subtasks.",
+	standardTaskProgressInstruction: "A checklist showing the latest status of all previously introduced subtasks.",
 	gemini3TaskProgressInstruction:
 		"When presenting a final implementation plan with needs_more_exploration false, include the checklist to execute in ACT MODE.",
 }

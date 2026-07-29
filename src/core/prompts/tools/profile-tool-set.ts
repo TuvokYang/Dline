@@ -62,7 +62,7 @@ export class ProfileToolError extends Error {
 	}
 }
 
-/** Stores tool descriptors under exact Native/Lite profile keys. */
+/** Stores tool descriptors under exact Standard/Lite profile keys. */
 export class ProfileToolSet {
 	private readonly profiles = new Map<PromptProfile, Map<ClineDefaultTool, ProfileToolSpec>>()
 

@@ -7,7 +7,7 @@ function createSectionSet(bodies: SystemSectionBodies): SystemSectionSet {
 	return new Map(SYSTEM_SECTION_IDS.map((sectionId) => [sectionId, bodies[sectionId] ?? ""]))
 }
 
-export function createNativeSectionSet(bodies: SystemSectionBodies): SystemSectionSet {
+export function createStandardSectionSet(bodies: SystemSectionBodies): SystemSectionSet {
 	return createSectionSet(bodies)
 }
 

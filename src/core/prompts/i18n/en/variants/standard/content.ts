@@ -1,11 +1,11 @@
-export const NATIVE_TOOL_USE_PREFIX = `TOOL USE
+export const STANDARD_TOOL_USE_PREFIX = `TOOL USE
 
 You have access to a set of tools that are executed upon the user's approval.`
 
-export const NATIVE_PARALLEL_TOOL_USE =
+export const STANDARD_PARALLEL_TOOL_USE =
 	" You may use multiple tools in a single response when the operations are independent (e.g., reading several files, searching in parallel). For dependent operations where one result informs the next, use tools sequentially."
 
-export const NATIVE_TOOL_USE_SUFFIX = ` You will receive the results of all tool uses in the user's response.
+export const STANDARD_TOOL_USE_SUFFIX = ` You will receive the results of all tool uses in the user's response.
 
 ## Tool-Calling Convention and Preambles
 
@@ -34,13 +34,13 @@ Tools marked [TURN-END] hand control back to the user. Calling one terminates th
 ## Explicit Instructions
 When you see \`<explicit_instructions type="tool_name">\` in the conversation, call the <tool_name> tool using the example XML format provided inside the instructions. Do NOT look for this tool in the standard tool list. Output the XML directly as defined, without wrapping it inside attempt_completion or any other tool.`
 
-export const NATIVE_TOOL_USE_FOCUS_STAGE = " or task_progress steps"
+export const STANDARD_TOOL_USE_FOCUS_STAGE = " or task_progress steps"
 
-export const NATIVE_TOOL_USE_FOCUS_FORMAT = `
+export const STANDARD_TOOL_USE_FOCUS_FORMAT = `
 
 Format: "Now that we have [very brief summary of last task_progress items that was completed], I will use [ToolName] to [specific action/goal]"`
 
-export const NATIVE_RULES = `RULES
+export const STANDARD_RULES = `RULES
 
 - The current working directory is \`@CWD@\` - this is the directory where all the tools will be executed from.@PARALLEL_TOOLS_RULE@@BROWSER_WAIT_RULES@@MCP_RULE@
 - When creating a new application from scratch, you must implement it locally and not use global packages or tools that are not part of the local project dependencies. For example, if npm couldn't create the Vite app because the global npm cache is owned by root, create the project using a local cache in the repo (no sudo required)
@@ -62,11 +62,11 @@ export const NATIVE_RULES = `RULES
 - USER'S CUSTOM INSTRUCTIONS below (global rules and project rules) define additional binding constraints — project operation rules, coding style, and tool execution policies. These user rules carry the same weight as the system rules above. Check both before any state-modifying action.
 `
 
-export const NATIVE_RULES_FOCUS_CONTRACT = `- FOCUS CHAIN: Follow it exactly. Never fabricate plans without real project knowledge. Never skip, reorder, or modify items — ONLY toggle [ ] <-> [x]. To change structure, use focus_chain_change (user approval required). Complete items in order.
+export const STANDARD_RULES_FOCUS_CONTRACT = `- FOCUS CHAIN: Follow it exactly. Never fabricate plans without real project knowledge. Never skip, reorder, or modify items — ONLY toggle [ ] <-> [x]. To change structure, use focus_chain_change (user approval required). Complete items in order.
   * attempt_completion: FORBIDDEN while any focus chain items remain [ ]. Call it ONLY when ALL focus chain items are marked [x] AND verified.
 `
 
-export const NATIVE_ACT_VS_PLAN = `ACT MODE V.S. PLAN MODE
+export const STANDARD_ACT_VS_PLAN = `ACT MODE V.S. PLAN MODE
 
 In each user message, the environment_details will specify the current mode. There are two modes:
 
@@ -88,7 +88,7 @@ In each user message, the environment_details will specify the current mode. The
 - Present the design or implementation plan using make_plan.
 - When the plan is confirmed and the user is ready to execute, they will switch you back to ACT MODE.`
 
-export const NATIVE_OBJECTIVE = `OBJECTIVE
+export const STANDARD_OBJECTIVE = `OBJECTIVE
 
 You accomplish a given task under the RULES defined in this prompt — both the system rules and the user rules in USER'S CUSTOM INSTRUCTIONS. Task execution must comply with all applicable constraints from both sources.
 
@@ -153,11 +153,11 @@ Professional implementation includes targeted architecture adjustments when need
 
 Use act_mode_respond for small ACT MODE step transitions or brief local preambles. Use status_update for major phases, cross-domain milestones, risk updates, or review checkpoints. Use generate_report when the task cannot be executed safely, requirements conflict, or findings need structured review.`
 
-export const NATIVE_OBJECTIVE_FOCUS_PROGRESS =
+export const STANDARD_OBJECTIVE_FOCUS_PROGRESS =
 	"Report progress via task_progress parameter throughout the task to maintain visibility into what's been accomplished and what remains.\n\n"
 
-export const NATIVE_OBJECTIVE_FOCUS_CLOSURE_STEP = ", and current task_progress step"
+export const STANDARD_OBJECTIVE_FOCUS_CLOSURE_STEP = ", and current task_progress step"
 
-export const NATIVE_FEEDBACK = `FEEDBACK
+export const STANDARD_FEEDBACK = `FEEDBACK
 
 When user is providing you with feedback on how you could improve, you can let the user know to report new issue using the '/reportbug' slash command.`

@@ -4,10 +4,10 @@ import { SystemPromptGenerator } from "../../generators/SystemPromptGenerator"
 import { ToolPromptGenerator } from "../../generators/ToolPromptGenerator"
 import { PromptProfile } from "../../profiles/types"
 import type { SystemPromptContext } from "../../system-prompt/context"
-import { NATIVE_TOOL_SPECS } from "../tool-specs"
+import { STANDARD_TOOL_SPECS } from "../tool-specs"
 
 const BASE_CONTEXT = {
-	promptProfile: PromptProfile.Native,
+	promptProfile: PromptProfile.Standard,
 	cwd: "/workspace/project",
 	ide: "Test IDE",
 	providerInfo: {
@@ -31,14 +31,14 @@ describe("XML tool projection", () => {
 	it("keeps every canonical parameter recognizable by the XML parser", () => {
 		const parserParams = new Set<string>(toolParamNames)
 		const missingParams = [
-			...new Set(NATIVE_TOOL_SPECS.flatMap((tool) => tool.parameters?.map((parameter) => parameter.name) ?? [])),
+			...new Set(STANDARD_TOOL_SPECS.flatMap((tool) => tool.parameters?.map((parameter) => parameter.name) ?? [])),
 		].filter((name) => !parserParams.has(name))
 
 		expect(missingParams).toEqual([])
 	})
 
 	it("documents optional execute_command workdirectory, background, and timeout parameters", () => {
-		const xml = new ToolPromptGenerator().generateXml(PromptProfile.Native, BASE_CONTEXT)
+		const xml = new ToolPromptGenerator().generateXml(PromptProfile.Standard, BASE_CONTEXT)
 
 		expect(xml).toContain("<workdirectory>")
 		expect(xml).toContain("<background>")
@@ -50,7 +50,7 @@ describe("XML tool projection", () => {
 
 	it("keeps canonical runtime tokens unresolved until the System facade final scan", async () => {
 		const generator = new ToolPromptGenerator()
-		const xml = generator.generateXml(PromptProfile.Native, BASE_CONTEXT)
+		const xml = generator.generateXml(PromptProfile.Standard, BASE_CONTEXT)
 
 		expect(xml).toContain("@CWD@")
 		expect(xml).toContain("@MULTI_ROOT_HINT@")
@@ -72,11 +72,11 @@ describe("XML tool projection", () => {
 
 	it("uses the same focus fragment gates as provider-native projection", () => {
 		const generator = new ToolPromptGenerator()
-		const enabled = generator.generateXml(PromptProfile.Native, {
+		const enabled = generator.generateXml(PromptProfile.Standard, {
 			...BASE_CONTEXT,
 			focusChainSettings: { enabled: true, remindClineInterval: 6 },
 		})
-		const disabled = generator.generateXml(PromptProfile.Native, BASE_CONTEXT)
+		const disabled = generator.generateXml(PromptProfile.Standard, BASE_CONTEXT)
 
 		expect(enabled).toContain("task_progress checklist")
 		expect(enabled).toContain("current task is fully complete")
@@ -88,7 +88,7 @@ describe("XML tool projection", () => {
 	})
 
 	it.each([
-		PromptProfile.Native,
+		PromptProfile.Standard,
 		PromptProfile.Lite,
 	])("does not document recursive task or subagent tools during a %s subagent run", (profile) => {
 		const xml = new ToolPromptGenerator().generateXml(profile, {

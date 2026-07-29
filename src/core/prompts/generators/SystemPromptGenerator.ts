@@ -8,14 +8,14 @@ import {
 	prepareToolUseSection,
 } from "../system-prompt/pipeline"
 import { INTEGRATED_SYSTEM_TEMPLATE, SystemTemplateRegistry } from "../system-prompt/templates/system-template-registry"
-import { createLiteSystemSections, createNativeSystemSections } from "../system-prompt/variants/section-content"
+import { createLiteSystemSections, createStandardSystemSections } from "../system-prompt/variants/section-content"
 import { ToolPromptGenerator } from "./ToolPromptGenerator"
 import type { GeneratedSystemPrompt } from "./types"
 
 const TEMPLATE_REGISTRY = new SystemTemplateRegistry([INTEGRATED_SYSTEM_TEMPLATE])
 const MARKDOWN_SECTION_SEPARATOR = "\n\n"
 
-/** Generates complete Native/Lite system prompt candidates without legacy registries. */
+/** Generates complete Standard/Lite system prompt candidates without legacy registries. */
 export class SystemPromptGenerator {
 	/** Creates a profile system generator with an injectable tool facade. */
 	public constructor(private readonly toolGenerator: ToolPromptGenerator = new ToolPromptGenerator()) {}
@@ -31,7 +31,7 @@ export class SystemPromptGenerator {
 		const template = TEMPLATE_REGISTRY.get(config.templateId)
 		const env = prepareSystemRuntimeEnv(context, config)
 		const sections = new Map(
-			config.variant === "lite" ? createLiteSystemSections(config) : createNativeSystemSections(config),
+			config.variant === "lite" ? createLiteSystemSections(config) : createStandardSystemSections(config),
 		)
 		const capabilitiesSection = context.capabilities
 			? renderCapabilitiesSection(context.capabilities, {

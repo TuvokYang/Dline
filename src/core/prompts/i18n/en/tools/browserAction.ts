@@ -19,7 +19,7 @@ const prompts: Record<string, string> = {
 	* close: Close the Puppeteer-controlled browser instance. This **must always be the final browser action**. 
 	    - Example: \`<action>close</action>\``,
 	actionUsage: "Action to perform (e.g., launch, click, type, scroll_down, scroll_up, close)",
-	nativeActionInstruction: `The action to perform. The available actions are: 
+	standardActionInstruction: `The action to perform. The available actions are:
 	* launch: Launch a new Puppeteer-controlled browser instance at the specified URL. This **must always be the first action**. 
 		- Use with the \`url\` parameter to provide the URL. 
 		- Ensure the URL is valid and includes the appropriate protocol (e.g. http://localhost:3000/page, file:///path/to/file.html, etc.) 
@@ -35,15 +35,15 @@ const prompts: Record<string, string> = {
 	urlInstruction: `Use this for providing the URL for the \`launch\` action. 
 	* Example: <url>https://example.com</url>`,
 	urlUsage: "URL to launch the browser at (optional)",
-	nativeUrlInstruction: "Use this for providing the URL for the `launch` action.",
+	standardUrlInstruction: "Use this for providing the URL for the `launch` action.",
 	coordinateInstruction: `The X and Y coordinates for the \`click\` action. Coordinates should be within the **@BROWSER_VIEWPORT_WIDTH@x@BROWSER_VIEWPORT_HEIGHT@** resolution. 
 	* Example: <coordinate>450,300</coordinate>`,
 	coordinateUsage: "x,y coordinates (optional)",
-	nativeCoordinateInstruction:
+	standardCoordinateInstruction:
 		"x,y coordinates - The X and Y coordinates for the `click` action. Coordinates should be within the **@BROWSER_VIEWPORT_WIDTH@x@BROWSER_VIEWPORT_HEIGHT@** resolution. Example: '450,300'",
 	textInstruction: `Use this for providing the text for the \`type\` action. 
 	* Example: <text>Hello, world!</text>`,
 	textUsage: "Text to type (optional)",
-	nativeTextInstruction: "Use this for providing the text for the `type` action. Example: 'Hello, world!'",
+	standardTextInstruction: "Use this for providing the text for the `type` action. Example: 'Hello, world!'",
 }
 export default prompts

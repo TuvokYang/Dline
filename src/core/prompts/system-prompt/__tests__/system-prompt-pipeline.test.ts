@@ -6,10 +6,10 @@ import { assemblePromptFragments } from "../assembly/prompt-fragment-assembler"
 import type { SystemPromptContext } from "../context"
 import { assembleSystemPrompt, createSystemPromptConfig, prepareSystemRuntimeEnv, prepareToolUseSection } from "../pipeline"
 import { SYSTEM_SECTION_IDS } from "../templates/system-template-registry"
-import { createNativeSystemSections } from "../variants/section-content"
+import { createStandardSystemSections } from "../variants/section-content"
 
 const BASE_CONTEXT: SystemPromptContext = {
-	promptProfile: PromptProfile.Native,
+	promptProfile: PromptProfile.Standard,
 	cwd: "/workspace/project",
 	ide: "Test IDE",
 	providerInfo: {
@@ -88,7 +88,7 @@ describe("canonical system prompt pipeline", () => {
 		expect(env).not.toHaveProperty("SUBAGENTS_GUIDANCE")
 		expect(env).not.toHaveProperty("FOCUS_CHAIN_EXAMPLE_BASH")
 
-		const sections = createNativeSystemSections(config)
+		const sections = createStandardSystemSections(config)
 		expect(sections.get("rules")).toContain("@CWD@")
 		expect(sections.get("objective")).toContain("@PARALLEL_TOOL_POLICY@")
 		expect(env.CWD).toBe("/workspace/project")

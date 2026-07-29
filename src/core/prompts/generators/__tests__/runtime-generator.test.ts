@@ -82,7 +82,7 @@ describe("CommandPromptGenerator", () => {
 
 describe("ToolPromptGenerator", () => {
 	const context = {
-		promptProfile: PromptProfile.Native,
+		promptProfile: PromptProfile.Standard,
 		providerInfo: { providerId: "openai", model: { id: "model", info: {} } },
 		enableNativeToolCalls: true,
 	} as SystemPromptContext
@@ -91,7 +91,7 @@ describe("ToolPromptGenerator", () => {
 		const renderSpy = vi.spyOn(PromptScanner.prototype, "render")
 
 		try {
-			new ToolPromptGenerator().generate(PromptProfile.Native, context)
+			new ToolPromptGenerator().generate(PromptProfile.Standard, context)
 			expect(renderSpy).toHaveBeenCalledTimes(1)
 		} finally {
 			renderSpy.mockRestore()
@@ -102,14 +102,17 @@ describe("ToolPromptGenerator", () => {
 		const renderSpy = vi.spyOn(PromptScanner.prototype, "render")
 
 		try {
-			new ToolPromptGenerator().generateXml(PromptProfile.Native, { ...context, enableNativeToolCalls: false })
+			new ToolPromptGenerator().generateXml(PromptProfile.Standard, { ...context, enableNativeToolCalls: false })
 			expect(renderSpy).not.toHaveBeenCalled()
 		} finally {
 			renderSpy.mockRestore()
 		}
 	})
 
-	it.each([PromptProfile.Native, PromptProfile.Lite])("does not leak request-scoped tools into the %s defaults", (profile) => {
+	it.each([
+		PromptProfile.Standard,
+		PromptProfile.Lite,
+	])("does not leak request-scoped tools into the %s defaults", (profile) => {
 		const tools = new ToolPromptGenerator().generate(profile, { ...context, promptProfile: profile }) ?? []
 		const names = tools.flatMap((tool) =>
 			"function" in tool && tool.function?.name
@@ -126,7 +129,7 @@ describe("ToolPromptGenerator", () => {
 
 	it("rejects ordinary tools from request-only projection", () => {
 		expect(
-			new ToolPromptGenerator().generateSelectedRequestTools(PromptProfile.Native, context, [ClineDefaultTool.FILE_READ]),
+			new ToolPromptGenerator().generateSelectedRequestTools(PromptProfile.Standard, context, [ClineDefaultTool.FILE_READ]),
 		).toBeUndefined()
 	})
 
@@ -137,14 +140,14 @@ describe("ToolPromptGenerator", () => {
 		ClineDefaultTool.REPORT_BUG,
 		ClineDefaultTool.GENERATE_EXPLANATION,
 	])("does not project slash command %s as a request-scoped function", (toolId) => {
-		expect(new ToolPromptGenerator().generateSelectedRequestTools(PromptProfile.Native, context, [toolId])).toBeUndefined()
+		expect(new ToolPromptGenerator().generateSelectedRequestTools(PromptProfile.Standard, context, [toolId])).toBeUndefined()
 	})
 
 	it("projects summarize_task only for the active automatic compaction request", () => {
 		expect(REQUEST_SCOPED_TOOL_IDS).toEqual([ClineDefaultTool.SUMMARIZE_TASK])
-		const defaultTools = new ToolPromptGenerator().generate(PromptProfile.Native, context) ?? []
+		const defaultTools = new ToolPromptGenerator().generate(PromptProfile.Standard, context) ?? []
 		const requestTools =
-			new ToolPromptGenerator().generateSelectedRequestTools(PromptProfile.Native, context, [
+			new ToolPromptGenerator().generateSelectedRequestTools(PromptProfile.Standard, context, [
 				ClineDefaultTool.SUMMARIZE_TASK,
 			]) ?? []
 

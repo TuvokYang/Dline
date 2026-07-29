@@ -2,15 +2,15 @@ import { getPrompt } from "../../i18n"
 import { withoutPromptFragments } from "./conditional-content"
 import type { SystemSectionContentConfig } from "./section-content-config"
 
-const NATIVE_OBJECTIVE = getPrompt("variants.native", "objective")
-const NATIVE_OBJECTIVE_FOCUS_PROGRESS = getPrompt("variants.native", "objectiveFocusProgress")
-const NATIVE_OBJECTIVE_FOCUS_CLOSURE_STEP = getPrompt("variants.native", "objectiveFocusClosureStep")
+const STANDARD_OBJECTIVE = getPrompt("variants.standard", "objective")
+const STANDARD_OBJECTIVE_FOCUS_PROGRESS = getPrompt("variants.standard", "objectiveFocusProgress")
+const STANDARD_OBJECTIVE_FOCUS_CLOSURE_STEP = getPrompt("variants.standard", "objectiveFocusClosureStep")
 const LITE_OBJECTIVE = getPrompt("variants.lite", "objective")
 
-export function createNativeObjective(config: SystemSectionContentConfig): string {
+export function createStandardObjective(config: SystemSectionContentConfig): string {
 	return config.focusChainEnabled
-		? NATIVE_OBJECTIVE
-		: withoutPromptFragments(NATIVE_OBJECTIVE, [NATIVE_OBJECTIVE_FOCUS_PROGRESS, NATIVE_OBJECTIVE_FOCUS_CLOSURE_STEP])
+		? STANDARD_OBJECTIVE
+		: withoutPromptFragments(STANDARD_OBJECTIVE, [STANDARD_OBJECTIVE_FOCUS_PROGRESS, STANDARD_OBJECTIVE_FOCUS_CLOSURE_STEP])
 }
 
 export function createLiteObjective(): string {

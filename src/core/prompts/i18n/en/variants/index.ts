@@ -1,4 +1,4 @@
 import { litePromptModule } from "./lite"
-import { nativePromptModule } from "./native"
+import { standardPromptModule } from "./standard"
 
-export const variantPromptModules = [nativePromptModule, litePromptModule] as const
+export const variantPromptModules = [standardPromptModule, litePromptModule] as const

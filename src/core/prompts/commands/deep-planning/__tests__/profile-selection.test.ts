@@ -13,18 +13,23 @@ function createProviderInfo(modelId: string): ApiProviderInfo {
 }
 
 describe("deep-planning explicit profile selection", () => {
-	it("exposes exactly Native and Lite variants without model metadata", () => {
-		expect(DEEP_PLANNING_VARIANTS.map((variant) => variant.id)).toEqual(["native", "lite"])
+	it("exposes exactly Standard and Lite variants without model metadata", () => {
+		expect(DEEP_PLANNING_VARIANTS.map((variant) => variant.id)).toEqual(["standard", "lite"])
 		for (const variant of DEEP_PLANNING_VARIANTS) {
 			expect(variant).not.toHaveProperty("family")
 			expect(variant).not.toHaveProperty("matcher")
 		}
 	})
 
-	it("selects distinct Native and Lite command contracts without model inference", () => {
-		const nativeFromGpt = getDeepPlanningPrompt(PromptProfile.Native, { enabled: true }, createProviderInfo("gpt-5.1"), false)
-		const nativeFromOtherModel = getDeepPlanningPrompt(
-			PromptProfile.Native,
+	it("selects distinct Standard and Lite command contracts without model inference", () => {
+		const standardFromGpt = getDeepPlanningPrompt(
+			PromptProfile.Standard,
+			{ enabled: true },
+			createProviderInfo("gpt-5.1"),
+			false,
+		)
+		const standardFromOtherModel = getDeepPlanningPrompt(
+			PromptProfile.Standard,
 			{ enabled: true },
 			createProviderInfo("unrelated-model"),
 			false,
@@ -37,9 +42,9 @@ describe("deep-planning explicit profile selection", () => {
 			false,
 		)
 
-		expect(nativeFromGpt).toBe(nativeFromOtherModel)
+		expect(standardFromGpt).toBe(standardFromOtherModel)
 		expect(liteFromGpt).toBe(liteFromOtherModel)
-		expect(nativeFromGpt).not.toBe(liteFromGpt)
+		expect(standardFromGpt).not.toBe(liteFromGpt)
 	})
 
 	it("never injects task-progress instructions into Lite", () => {
@@ -54,7 +59,7 @@ describe("deep-planning explicit profile selection", () => {
 		expect(disabled.match(/<\/IMPORTANT>/g)).toHaveLength(1)
 	})
 
-	it.each([PromptProfile.Native, PromptProfile.Lite])("keeps the multi-turn XML new_task boundary for %s", (profile) => {
+	it.each([PromptProfile.Standard, PromptProfile.Lite])("keeps the multi-turn XML new_task boundary for %s", (profile) => {
 		const prompt = getDeepPlanningPrompt(profile, { enabled: true }, createProviderInfo("gpt-5.1"), true)
 
 		expect(prompt).toContain("<new_task>")

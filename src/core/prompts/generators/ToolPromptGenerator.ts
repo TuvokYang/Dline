@@ -8,7 +8,7 @@ import { createMcpToolSpecs } from "../tools/mcp-tool-adapter"
 import type { ProfileToolSet } from "../tools/profile-tool-set"
 import { projectTool } from "../tools/provider-projector"
 import { isRequestScopedToolId, REQUEST_SCOPED_TOOL_IDS } from "../tools/tool-ids"
-import { createToolSet, LITE_TOOL_IDS, NATIVE_TOOL_IDS } from "../tools/tool-profile"
+import { createToolSet, LITE_TOOL_IDS, STANDARD_TOOL_IDS } from "../tools/tool-profile"
 import { projectXmlTool } from "../tools/xml-tool-projector"
 
 const TOOL_RUNTIME_KEYS = ["CWD", "MULTI_ROOT_HINT", "BROWSER_VIEWPORT_WIDTH", "BROWSER_VIEWPORT_HEIGHT"] as const
@@ -73,7 +73,7 @@ export class ToolPromptGenerator {
 	/**
 	 * Generates ordered tools for one profile and runtime context.
 	 *
-	 * @param profile Exact Native/Lite prompt profile.
+	 * @param profile Exact Standard/Lite prompt profile.
 	 * @param context Runtime context used for native-tool and feature gating.
 	 * @returns Provider tools, or undefined when native tools are disabled.
 	 */
@@ -178,7 +178,7 @@ export class ToolPromptGenerator {
 
 	/** Resolves the ordered built-in descriptors that pass profile and runtime gates. */
 	private listEnabled(profile: PromptProfile, context: SystemPromptContext) {
-		const ids = profile === "lite" ? LITE_TOOL_IDS : NATIVE_TOOL_IDS
+		const ids = profile === "lite" ? LITE_TOOL_IDS : STANDARD_TOOL_IDS
 		const disabled = new Set(context.disableTools ?? [])
 		return this.toolSet
 			.list(profile, ids)

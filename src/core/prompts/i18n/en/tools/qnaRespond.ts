@@ -8,8 +8,8 @@ const prompts: Record<string, string> = {
 
 	taskProgressInstruction: `Optionally update the task progress checklist after answering.`,
 
-	nativeDescription: `[TURN-END] Use this tool whenever the user asks a question or requests clarification. This MUST be your first response tool for any user question. Do NOT use attempt_completion or make_plan to answer questions; make_plan is for presenting implementation or design plans and, in ACT MODE, only when the user explicitly requests one. Available in both PLAN and ACT modes.`,
+	standardDescription: `[TURN-END] Use this tool whenever the user asks a question or requests clarification. This MUST be your first response tool for any user question. Do NOT use attempt_completion or make_plan to answer questions; make_plan is for presenting implementation or design plans and, in ACT MODE, only when the user explicitly requests one. Available in both PLAN and ACT modes.`,
 
-	nativeResponseInstruction: `The detailed answer to the user's question. Provide a clear, thorough explanation. Use code snippets, examples, and references as needed.`,
+	standardResponseInstruction: `The detailed answer to the user's question. Provide a clear, thorough explanation. Use code snippets, examples, and references as needed.`,
 }
 export default prompts

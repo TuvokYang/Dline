@@ -60,7 +60,7 @@ function hasSubagents(context: SystemPromptContext): boolean {
 	return context.subagentsEnabled === true && context.isSubagentRun !== true
 }
 
-/** Creates the canonical Native descriptor for one built-in tool. */
+/** Creates the canonical Standard descriptor for one built-in tool. */
 function spec(
 	id: ClineDefaultTool,
 	description: string,
@@ -99,14 +99,14 @@ const SUBAGENT_PARAMS = [
 	param("timeout", false, getPrompt("subagent", "timeoutInstruction"), "integer"),
 ]
 
-export const NATIVE_TOOL_SPECS: readonly Omit<ProfileToolSpec, "profile">[] = [
-	spec(ClineDefaultTool.FILE_NEW, getPrompt("writeToFile", "nativeDescription"), [
-		param("absolutePath", true, getPrompt("writeToFile", "nativePathInstruction")),
-		param("content", true, getPrompt("writeToFile", "nativeContentInstruction")),
+export const STANDARD_TOOL_SPECS: readonly Omit<ProfileToolSpec, "profile">[] = [
+	spec(ClineDefaultTool.FILE_NEW, getPrompt("writeToFile", "standardDescription"), [
+		param("absolutePath", true, getPrompt("writeToFile", "standardPathInstruction")),
+		param("content", true, getPrompt("writeToFile", "standardContentInstruction")),
 		taskProgress,
 	]),
-	spec(ClineDefaultTool.FILE_EDIT, getPrompt("replaceInFile", "nativeDescription"), [
-		param("absolutePath", true, getPrompt("replaceInFile", "nativePathInstruction")),
+	spec(ClineDefaultTool.FILE_EDIT, getPrompt("replaceInFile", "standardDescription"), [
+		param("absolutePath", true, getPrompt("replaceInFile", "standardPathInstruction")),
 		param("diff", true, getPrompt("replaceInFile", "baseDiffInstructions")),
 		taskProgress,
 	]),
@@ -123,7 +123,7 @@ export const NATIVE_TOOL_SPECS: readonly Omit<ProfileToolSpec, "profile">[] = [
 		taskProgress,
 	]),
 	spec(ClineDefaultTool.LIST_FILES, getPrompt("listFiles", "description"), [
-		param("path", true, getPrompt("listFiles", "nativePathInstruction")),
+		param("path", true, getPrompt("listFiles", "standardPathInstruction")),
 		param("recursive", false, getPrompt("listFiles", "recursiveInstruction"), "boolean"),
 		param("show_metadata", false, getPrompt("listFiles", "showMetadataInstruction"), "boolean"),
 		taskProgress,
@@ -134,20 +134,20 @@ export const NATIVE_TOOL_SPECS: readonly Omit<ProfileToolSpec, "profile">[] = [
 	]),
 	spec(
 		ClineDefaultTool.ASK,
-		getPrompt("askFollowupQuestion", "nativeDescription"),
+		getPrompt("askFollowupQuestion", "standardDescription"),
 		[
-			param("question", true, getPrompt("askFollowupQuestion", "nativeQuestionInstruction")),
-			param("options", true, getPrompt("askFollowupQuestion", "nativeOptionsInstruction")),
+			param("question", true, getPrompt("askFollowupQuestion", "standardQuestionInstruction")),
+			param("options", true, getPrompt("askFollowupQuestion", "standardOptionsInstruction")),
 			taskProgress,
 		],
 		isInteractive,
 	),
 	spec(
 		ClineDefaultTool.ATTEMPT,
-		getPrompt("attemptCompletion", "nativeDescription"),
+		getPrompt("attemptCompletion", "standardDescription"),
 		[
-			param("result", true, getPrompt("attemptCompletion", "nativeResultInstruction")),
-			param("command", false, getPrompt("attemptCompletion", "nativeCommandInstruction")),
+			param("result", true, getPrompt("attemptCompletion", "standardResultInstruction")),
+			param("command", false, getPrompt("attemptCompletion", "standardCommandInstruction")),
 		],
 		undefined,
 		[fragment(getPrompt("attemptCompletion", "focusOmissionChecklistSentence"), whenFocusTrackingDisabled)],
@@ -156,51 +156,51 @@ export const NATIVE_TOOL_SPECS: readonly Omit<ProfileToolSpec, "profile">[] = [
 		ClineDefaultTool.MAKE_PLAN,
 		getPrompt("makePlan", "description"),
 		[
-			param("response", true, getPrompt("makePlan", "nativeResponseInstruction")),
+			param("response", true, getPrompt("makePlan", "standardResponseInstruction")),
 			param("needs_more_exploration", false, getPrompt("makePlan", "needsMoreExplorationInstruction"), "boolean"),
 			taskProgress,
 		],
 		undefined,
 		[fragment(getPrompt("makePlan", "focusOmissionDescriptionClause"), whenFocusTrackingDisabled)],
 	),
-	spec(ClineDefaultTool.QNA_RESPOND, getPrompt("qnaRespond", "nativeDescription"), [
-		param("response", true, getPrompt("qnaRespond", "nativeResponseInstruction")),
+	spec(ClineDefaultTool.QNA_RESPOND, getPrompt("qnaRespond", "standardDescription"), [
+		param("response", true, getPrompt("qnaRespond", "standardResponseInstruction")),
 	]),
 	spec(ClineDefaultTool.ACT_MODE, getPrompt("actModeRespond", "description"), [
 		param("response", true, getPrompt("actModeRespond", "responseInstruction")),
 		taskProgress,
 	]),
-	spec(ClineDefaultTool.BASH, getPrompt("executeCommand", "nativeDescription"), [
-		param("command", true, getPrompt("executeCommand", "nativeCommandInstruction")),
-		param("workdirectory", false, getPrompt("executeCommand", "nativeWorkdirectoryInstruction")),
-		param("requires_approval", true, getPrompt("executeCommand", "nativeRequiresApprovalInstruction"), "boolean"),
-		param("background", false, getPrompt("executeCommand", "nativeBackgroundInstruction"), "boolean"),
-		param("timeout", false, getPrompt("executeCommand", "nativeTimeoutInstruction"), "integer"),
+	spec(ClineDefaultTool.BASH, getPrompt("executeCommand", "standardDescription"), [
+		param("command", true, getPrompt("executeCommand", "standardCommandInstruction")),
+		param("workdirectory", false, getPrompt("executeCommand", "standardWorkdirectoryInstruction")),
+		param("requires_approval", true, getPrompt("executeCommand", "standardRequiresApprovalInstruction"), "boolean"),
+		param("background", false, getPrompt("executeCommand", "standardBackgroundInstruction"), "boolean"),
+		param("timeout", false, getPrompt("executeCommand", "standardTimeoutInstruction"), "integer"),
 	]),
 	spec(
 		ClineDefaultTool.BROWSER,
 		getPrompt("browserAction", "description"),
 		[
-			param("action", true, getPrompt("browserAction", "nativeActionInstruction")),
-			param("url", false, getPrompt("browserAction", "nativeUrlInstruction")),
-			param("coordinate", false, getPrompt("browserAction", "nativeCoordinateInstruction")),
-			param("text", false, getPrompt("browserAction", "nativeTextInstruction")),
+			param("action", true, getPrompt("browserAction", "standardActionInstruction")),
+			param("url", false, getPrompt("browserAction", "standardUrlInstruction")),
+			param("coordinate", false, getPrompt("browserAction", "standardCoordinateInstruction")),
+			param("text", false, getPrompt("browserAction", "standardTextInstruction")),
 		],
 		hasBrowser,
 	),
 	spec(
 		ClineDefaultTool.WEB_FETCH,
-		getPrompt("webFetch", "nativeDescription"),
+		getPrompt("webFetch", "standardDescription"),
 		[
 			param("url", true, getPrompt("webFetch", "urlInstruction")),
-			param("prompt", true, getPrompt("webFetch", "nativePromptInstruction")),
+			param("prompt", true, getPrompt("webFetch", "standardPromptInstruction")),
 			taskProgress,
 		],
 		hasWebTools,
 	),
 	spec(
 		ClineDefaultTool.WEB_SEARCH,
-		getPrompt("webSearch", "nativeDescription"),
+		getPrompt("webSearch", "standardDescription"),
 		[
 			param("query", true, getPrompt("webSearch", "queryInstruction")),
 			param("allowed_domains", false, getPrompt("webSearch", "allowedDomainsInstruction")),
@@ -222,7 +222,7 @@ export const NATIVE_TOOL_SPECS: readonly Omit<ProfileToolSpec, "profile">[] = [
 	),
 	spec(
 		ClineDefaultTool.MCP_ACCESS,
-		getPrompt("accessMcpResource", "nativeDescription"),
+		getPrompt("accessMcpResource", "standardDescription"),
 		[
 			param("server_name", true, getPrompt("accessMcpResource", "serverNameInstruction")),
 			param("uri", true, getPrompt("accessMcpResource", "uriInstruction")),
@@ -237,16 +237,16 @@ export const NATIVE_TOOL_SPECS: readonly Omit<ProfileToolSpec, "profile">[] = [
 		[param("skill_name", true, getPrompt("useSkill", "skillNameInstruction"))],
 		hasSkills,
 	),
-	spec(ClineDefaultTool.LOAD_MCP, getPrompt("loadCapability", "nativeDescription"), LOAD_PARAMS, hasMcp),
-	spec(ClineDefaultTool.LOAD_SKILL, getPrompt("loadCapability", "nativeDescription"), LOAD_PARAMS),
-	spec(ClineDefaultTool.LOAD_WORKFLOW, getPrompt("loadCapability", "nativeDescription"), LOAD_PARAMS),
-	spec(ClineDefaultTool.FIND_REFERENCES, getPrompt("findReferences", "nativeDescription"), [
+	spec(ClineDefaultTool.LOAD_MCP, getPrompt("loadCapability", "standardDescription"), LOAD_PARAMS, hasMcp),
+	spec(ClineDefaultTool.LOAD_SKILL, getPrompt("loadCapability", "standardDescription"), LOAD_PARAMS),
+	spec(ClineDefaultTool.LOAD_WORKFLOW, getPrompt("loadCapability", "standardDescription"), LOAD_PARAMS),
+	spec(ClineDefaultTool.FIND_REFERENCES, getPrompt("findReferences", "standardDescription"), [
 		param("file_path", true, getPrompt("findReferences", "filePathInstruction")),
 		param("line", true, getPrompt("findReferences", "lineInstruction"), "integer"),
 		param("character", true, getPrompt("findReferences", "characterInstruction"), "integer"),
 		taskProgress,
 	]),
-	spec(ClineDefaultTool.RENAME, getPrompt("rename", "nativeDescription"), [
+	spec(ClineDefaultTool.RENAME, getPrompt("rename", "standardDescription"), [
 		param("file_path", true, getPrompt("rename", "filePathInstruction")),
 		param("line", true, getPrompt("rename", "lineInstruction"), "integer"),
 		param("character", true, getPrompt("rename", "characterInstruction"), "integer"),
@@ -254,7 +254,7 @@ export const NATIVE_TOOL_SPECS: readonly Omit<ProfileToolSpec, "profile">[] = [
 		param("dry_run", false, getPrompt("rename", "dryRunInstruction"), "boolean"),
 		taskProgress,
 	]),
-	spec(ClineDefaultTool.REPLACE_TEXT, getPrompt("replaceText", "nativeDescription"), [
+	spec(ClineDefaultTool.REPLACE_TEXT, getPrompt("replaceText", "standardDescription"), [
 		param("find", true, getPrompt("replaceText", "findInstruction")),
 		param("replace", true, getPrompt("replaceText", "replaceInstruction")),
 		param("file_pattern", true, getPrompt("replaceText", "filePatternInstruction")),
@@ -288,7 +288,7 @@ export const NATIVE_TOOL_SPECS: readonly Omit<ProfileToolSpec, "profile">[] = [
 	spec(ClineDefaultTool.USE_SUBAGENTS, getPrompt("subagent", "description"), SUBAGENT_PARAMS, hasSubagents),
 	spec(
 		ClineDefaultTool.STATUS_UPDATE,
-		getPrompt("statusUpdate", "nativeDescription"),
+		getPrompt("statusUpdate", "standardDescription"),
 		[
 			param("response", true, getPrompt("statusUpdate", "responseInstruction")),
 			param("requires_acknowledgment", false, getPrompt("statusUpdate", "requiresAcknowledgmentInstruction"), "boolean"),
@@ -311,7 +311,7 @@ export const NATIVE_TOOL_SPECS: readonly Omit<ProfileToolSpec, "profile">[] = [
 		param("context", true, getPrompt("contextManagement", "summarizeContextInstruction")),
 		taskProgress,
 	]),
-	spec(ClineDefaultTool.GENERATE_REPORT, getPrompt("generateReport", "nativeDescription"), [
+	spec(ClineDefaultTool.GENERATE_REPORT, getPrompt("generateReport", "standardDescription"), [
 		param("title", true, getPrompt("generateReport", "titleInstruction")),
 		param("content", true, getPrompt("generateReport", "contentInstruction")),
 		taskProgress,

@@ -17,7 +17,7 @@ export function isO1Model(modelId: string | undefined): boolean {
 /** Resolve one final profile before entering the Prompt domain. */
 export function resolvePromptProfile({ explicitProfile, contextWindow, modelId }: ResolvePromptProfileInput): PromptProfile {
 	if (explicitProfile !== undefined) {
-		if (explicitProfile !== PromptProfile.Native && explicitProfile !== PromptProfile.Lite) {
+		if (explicitProfile !== PromptProfile.Standard && explicitProfile !== PromptProfile.Lite) {
 			throw new Error("Invalid explicit PromptProfile")
 		}
 		return explicitProfile
@@ -32,5 +32,5 @@ export function resolvePromptProfile({ explicitProfile, contextWindow, modelId }
 			? contextWindow
 			: DEFAULT_PROMPT_CONTEXT_WINDOW
 
-	return effectiveContextWindow < LITE_PROMPT_CONTEXT_WINDOW_LIMIT ? PromptProfile.Lite : PromptProfile.Native
+	return effectiveContextWindow < LITE_PROMPT_CONTEXT_WINDOW_LIMIT ? PromptProfile.Lite : PromptProfile.Standard
 }

@@ -44,10 +44,10 @@ export const toolPromptModules = [
 	defineLegacyModule("browserAction", "tools", browserAction, {
 		description: createRuntimeContract("BROWSER_VIEWPORT_WIDTH", "BROWSER_VIEWPORT_HEIGHT"),
 		coordinateInstruction: createRuntimeContract("BROWSER_VIEWPORT_WIDTH", "BROWSER_VIEWPORT_HEIGHT"),
-		nativeCoordinateInstruction: createRuntimeContract("BROWSER_VIEWPORT_WIDTH", "BROWSER_VIEWPORT_HEIGHT"),
+		standardCoordinateInstruction: createRuntimeContract("BROWSER_VIEWPORT_WIDTH", "BROWSER_VIEWPORT_HEIGHT"),
 	}),
 	defineLegacyModule("executeCommand", "tools", executeCommand, {
-		nativeWorkdirectoryInstruction: createRuntimeContract("CWD"),
+		standardWorkdirectoryInstruction: createRuntimeContract("CWD"),
 		clineIgnoreError: createRuntimeContract("PATH"),
 		permissionDeniedError: createRuntimeContract("REASON"),
 	}),

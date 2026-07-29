@@ -186,7 +186,7 @@ function stubSystemPrompt(native: boolean, inspectContext?: (context: SystemProm
 						},
 					]
 				: undefined,
-			profile: PromptProfile.Native,
+			profile: PromptProfile.Standard,
 			warnings: [],
 		}
 	})
@@ -216,7 +216,7 @@ describe("SubagentRunner", () => {
 
 	it.each([
 		[63_999, PromptProfile.Lite],
-		[64_000, PromptProfile.Native],
+		[64_000, PromptProfile.Standard],
 	] as const)("resolves context window %s to %s before building the subagent prompt", async (contextWindow, expected) => {
 		const createMessage = vi.fn().mockImplementation(async function* () {
 			yield {
@@ -262,7 +262,7 @@ describe("SubagentRunner", () => {
 			return {
 				systemPrompt: "facade system prompt",
 				tools: undefined,
-				profile: PromptProfile.Native,
+				profile: PromptProfile.Standard,
 				warnings: [],
 			}
 		})

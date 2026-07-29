@@ -6,7 +6,7 @@ import { PromptProfile } from "../../profiles/types"
 import type { SystemPromptContext } from "../../system-prompt/context"
 
 const BASE_CONTEXT = {
-	promptProfile: PromptProfile.Native,
+	promptProfile: PromptProfile.Standard,
 	providerInfo: { providerId: "openai", model: { id: "model", info: {} } },
 	enableNativeToolCalls: true,
 } as SystemPromptContext
@@ -28,7 +28,7 @@ function toolDescription(tool: ReturnType<typeof findTool>): string | undefined 
 
 describe("provider tool projector", () => {
 	it("projects canonical parameters to OpenAI schemas", () => {
-		const tools = new ToolPromptGenerator().generate(PromptProfile.Native, BASE_CONTEXT)
+		const tools = new ToolPromptGenerator().generate(PromptProfile.Standard, BASE_CONTEXT)
 		const tool = findTool(tools, ClineDefaultTool.FILE_READ)
 
 		expect(tool).toMatchObject({
@@ -53,7 +53,7 @@ describe("provider tool projector", () => {
 			],
 		} as SystemPromptContext
 
-		const tools = new ToolPromptGenerator().generate(PromptProfile.Native, context)
+		const tools = new ToolPromptGenerator().generate(PromptProfile.Standard, context)
 		const fileTool = findTool(tools, ClineDefaultTool.FILE_READ)
 		const browserTool = findTool(tools, ClineDefaultTool.BROWSER)
 		const serialized = JSON.stringify([fileTool, browserTool])
@@ -72,7 +72,7 @@ describe("provider tool projector", () => {
 		["gemini", "gemini", "BOOLEAN", "NUMBER"],
 	] as const)("projects optional execute_command workdirectory, background, and timeout for %s", (providerId, shape, boolType, intType) => {
 		const context = { ...BASE_CONTEXT, providerInfo: { ...BASE_CONTEXT.providerInfo, providerId } }
-		const tool = findTool(new ToolPromptGenerator().generate(PromptProfile.Native, context), ClineDefaultTool.BASH)
+		const tool = findTool(new ToolPromptGenerator().generate(PromptProfile.Standard, context), ClineDefaultTool.BASH)
 		const projected = tool as unknown as {
 			function?: { parameters?: unknown }
 			input_schema?: unknown
@@ -96,7 +96,7 @@ describe("provider tool projector", () => {
 	})
 
 	it.each([
-		PromptProfile.Native,
+		PromptProfile.Standard,
 		PromptProfile.Lite,
 	])("exposes singular and parallel subagent tools without load_subagent in %s", (profile) => {
 		const context = { ...BASE_CONTEXT, subagentsEnabled: true, isSubagentRun: false }
@@ -109,7 +109,7 @@ describe("provider tool projector", () => {
 
 	it("projects use_subagent with agent_name, task, and context", () => {
 		const context = { ...BASE_CONTEXT, subagentsEnabled: true, isSubagentRun: false }
-		const tool = findTool(new ToolPromptGenerator().generate(PromptProfile.Native, context), ClineDefaultTool.USE_SUBAGENT)
+		const tool = findTool(new ToolPromptGenerator().generate(PromptProfile.Standard, context), ClineDefaultTool.USE_SUBAGENT)
 
 		expect(tool).toMatchObject({
 			function: {
@@ -126,7 +126,7 @@ describe("provider tool projector", () => {
 	})
 
 	it.each([
-		PromptProfile.Native,
+		PromptProfile.Standard,
 		PromptProfile.Lite,
 	])("does not expose recursive task or subagent tools during a %s subagent run", (profile) => {
 		const context = { ...BASE_CONTEXT, subagentsEnabled: true, isSubagentRun: true }
@@ -139,7 +139,7 @@ describe("provider tool projector", () => {
 
 	it("projects canonical parameters to Anthropic schemas", () => {
 		const context = { ...BASE_CONTEXT, providerInfo: { ...BASE_CONTEXT.providerInfo, providerId: "anthropic" } }
-		const tool = findTool(new ToolPromptGenerator().generate(PromptProfile.Native, context), ClineDefaultTool.FILE_READ)
+		const tool = findTool(new ToolPromptGenerator().generate(PromptProfile.Standard, context), ClineDefaultTool.FILE_READ)
 
 		expect(tool).toMatchObject({ name: ClineDefaultTool.FILE_READ, input_schema: { required: ["path"] } })
 	})
@@ -149,11 +149,11 @@ describe("provider tool projector", () => {
 		const disabledContext = { ...BASE_CONTEXT, focusChainSettings: { enabled: false, remindClineInterval: 6 } }
 
 		const enabledTool = findTool(
-			new ToolPromptGenerator().generate(PromptProfile.Native, enabledContext),
+			new ToolPromptGenerator().generate(PromptProfile.Standard, enabledContext),
 			ClineDefaultTool.FILE_READ,
 		)
 		const disabledTool = findTool(
-			new ToolPromptGenerator().generate(PromptProfile.Native, disabledContext),
+			new ToolPromptGenerator().generate(PromptProfile.Standard, disabledContext),
 			ClineDefaultTool.FILE_READ,
 		)
 
@@ -162,7 +162,7 @@ describe("provider tool projector", () => {
 	})
 
 	it("projects the original Native focus guidance and task_progress only when enabled", () => {
-		const profile = PromptProfile.Native
+		const profile = PromptProfile.Standard
 		const enabledContext = {
 			...BASE_CONTEXT,
 			promptProfile: profile,
@@ -176,7 +176,7 @@ describe("provider tool projector", () => {
 		const enabledAttempt = findTool(generator.generate(profile, enabledContext), ClineDefaultTool.ATTEMPT)
 		const disabledAttempt = findTool(generator.generate(profile, disabledContext), ClineDefaultTool.ATTEMPT)
 
-		expect(toolDescription(enabledAttempt)).toBe(getPrompt("attemptCompletion", "nativeDescription"))
+		expect(toolDescription(enabledAttempt)).toBe(getPrompt("attemptCompletion", "standardDescription"))
 		expect(toolDescription(enabledAttempt)).toContain("[TURN-END]")
 		expect(toolDescription(enabledAttempt)).toContain("current task is fully complete")
 		expect(toolDescription(enabledAttempt)).toContain("every checklist item must already be marked [x]")
@@ -190,7 +190,7 @@ describe("provider tool projector", () => {
 
 		const expectedDescriptions = [
 			[ClineDefaultTool.MAKE_PLAN, getPrompt("makePlan", "description")],
-			[ClineDefaultTool.STATUS_UPDATE, getPrompt("statusUpdate", "nativeDescription")],
+			[ClineDefaultTool.STATUS_UPDATE, getPrompt("statusUpdate", "standardDescription")],
 		] as const
 
 		for (const [toolId, expectedDescription] of expectedDescriptions) {
@@ -233,17 +233,17 @@ describe("provider tool projector", () => {
 			providerInfo: { ...BASE_CONTEXT.providerInfo, providerId: "cline" },
 			clineWebToolsEnabled: true,
 		}
-		const tools = new ToolPromptGenerator().generate(PromptProfile.Native, context)
+		const tools = new ToolPromptGenerator().generate(PromptProfile.Standard, context)
 		const fetchTool = findTool(tools, ClineDefaultTool.WEB_FETCH)
 		const searchTool = findTool(tools, ClineDefaultTool.WEB_SEARCH)
 
-		expect(toolDescription(fetchTool)).toBe(getPrompt("webFetch", "nativeDescription"))
-		expect(toolDescription(searchTool)).toBe(getPrompt("webSearch", "nativeDescription"))
+		expect(toolDescription(fetchTool)).toBe(getPrompt("webFetch", "standardDescription"))
+		expect(toolDescription(searchTool)).toBe(getPrompt("webSearch", "standardDescription"))
 		expect(fetchTool).toMatchObject({
 			function: {
 				parameters: {
 					properties: {
-						prompt: { description: getPrompt("webFetch", "nativePromptInstruction") },
+						prompt: { description: getPrompt("webFetch", "standardPromptInstruction") },
 					},
 				},
 			},
@@ -282,7 +282,7 @@ describe("provider tool projector", () => {
 			},
 		} as SystemPromptContext
 
-		const nativeTools = new ToolPromptGenerator().generate(PromptProfile.Native, context)
+		const nativeTools = new ToolPromptGenerator().generate(PromptProfile.Standard, context)
 		const liteTools = new ToolPromptGenerator().generate(PromptProfile.Lite, context)
 
 		expect(findTool(nativeTools, "srv0mcp0weather")).toMatchObject({
@@ -301,7 +301,7 @@ describe("provider tool projector", () => {
 
 	it("projects canonical parameters to Gemini declarations", () => {
 		const context = { ...BASE_CONTEXT, providerInfo: { ...BASE_CONTEXT.providerInfo, providerId: "gemini" } }
-		const tool = findTool(new ToolPromptGenerator().generate(PromptProfile.Native, context), ClineDefaultTool.FILE_READ)
+		const tool = findTool(new ToolPromptGenerator().generate(PromptProfile.Standard, context), ClineDefaultTool.FILE_READ)
 
 		expect(tool).toMatchObject({
 			name: ClineDefaultTool.FILE_READ,

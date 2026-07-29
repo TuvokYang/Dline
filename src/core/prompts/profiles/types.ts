@@ -1,12 +1,12 @@
 /** Supported prompt architecture profiles. */
 export enum PromptProfile {
-	Native = "native",
+	Standard = "standard",
 	Lite = "lite",
 }
 
 /** Validate one exact profile at an untrusted runtime boundary. */
 export function requirePromptProfile(profile: PromptProfile): PromptProfile {
-	if (profile !== PromptProfile.Native && profile !== PromptProfile.Lite) {
+	if (profile !== PromptProfile.Standard && profile !== PromptProfile.Lite) {
 		throw new Error("PromptProfile must be supplied explicitly")
 	}
 	return profile

@@ -2,7 +2,7 @@
 const prompts: Record<string, string> = {
 	description:
 		"Load detailed read-only metadata for one named capability. The name parameter must match an advertised capability exactly. This tool does not discover capability lists, modify cached system prompts, refresh metadata, or execute the capability.",
-	nativeDescription:
+	standardDescription:
 		"Load detailed read-only metadata for one named capability. The name parameter must match an advertised capability exactly. This tool does not discover capability lists, modify cached system prompts, refresh metadata, or execute the capability.",
 	nameInstruction: "The exact capability name to load.",
 	nameUsage: "capability-name",

@@ -5,8 +5,8 @@ export interface DeepPlanningVariantDescriptor {
 	readonly templateId: string
 }
 
-/** Native deep-planning contract selected only by the explicit Prompt profile. */
-export const NATIVE_DEEP_PLANNING_VARIANT: DeepPlanningVariantDescriptor = Object.freeze({
-	id: PromptProfile.Native,
+/** Standard deep-planning contract selected only by the explicit Prompt profile. */
+export const STANDARD_DEEP_PLANNING_VARIANT: DeepPlanningVariantDescriptor = Object.freeze({
+	id: PromptProfile.Standard,
 	templateId: "deepPlanning5Step.main",
 })

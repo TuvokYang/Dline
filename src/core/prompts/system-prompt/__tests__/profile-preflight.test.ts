@@ -7,7 +7,7 @@ import { PromptScanner } from "../../template/PromptScanner"
 import type { SystemPromptContext } from "../context"
 
 const BASE_CONTEXT: SystemPromptContext = {
-	promptProfile: PromptProfile.Native,
+	promptProfile: PromptProfile.Standard,
 	cwd: "/workspace/project",
 	ide: "Test IDE",
 	providerInfo: {
@@ -49,7 +49,7 @@ describe("profile facade preflight", () => {
 	it("generates explicit Native with the complete established section content and ordered tools", async () => {
 		const result = await new SystemPromptGenerator().generate(BASE_CONTEXT)
 
-		expect(result.profile).toBe(PromptProfile.Native)
+		expect(result.profile).toBe(PromptProfile.Standard)
 		expect(result.warnings).toEqual([])
 		expect(result.systemPrompt).toContain("You prioritize modular, decoupled solutions over monolithic code")
 		expect(result.systemPrompt).toContain("## TURN-END Tools")
@@ -119,7 +119,7 @@ describe("profile facade preflight", () => {
 			},
 		}
 
-		expect((await new SystemPromptGenerator().generate(context)).profile).toBe(PromptProfile.Native)
+		expect((await new SystemPromptGenerator().generate(context)).profile).toBe(PromptProfile.Standard)
 	})
 
 	it("projects the complete XML tool documentation into the system prompt", async () => {

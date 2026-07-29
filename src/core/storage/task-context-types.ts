@@ -41,7 +41,7 @@ export interface FrozenPromptBuilderInfo {
 	readonly contractVersion?: number
 	readonly providerId: string
 	readonly modelId: string
-	readonly profile: "native" | "lite"
+	readonly profile: "standard" | "lite"
 	readonly nativeTools: boolean
 	/** Optional for backward compatibility with caches written before focus-aware prompts. */
 	readonly focusChainEnabled?: boolean

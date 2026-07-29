@@ -95,7 +95,7 @@ The task_progress parameter MUST be a separate parameter, not inside other conte
 - [ ] Add signup page
 </task_progress>`,
 
-	nativeFused: `UPDATING TASK PROGRESS
+	standardFused: `UPDATING TASK PROGRESS
 
 Use the task_progress parameter to report progress. Three modes:
 

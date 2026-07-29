@@ -4,7 +4,7 @@ import { resolvePromptProfile } from "../resolve-prompt-profile"
 
 describe("resolvePromptProfile", () => {
 	it.each([
-		[PromptProfile.Native, 8_000, PromptProfile.Native],
+		[PromptProfile.Standard, 8_000, PromptProfile.Standard],
 		[PromptProfile.Lite, 1_000_000, PromptProfile.Lite],
 	] as const)("prefers explicit %s over context window %s", (explicitProfile, contextWindow, expected) => {
 		expect(resolvePromptProfile({ explicitProfile, contextWindow })).toBe(expected)
@@ -12,8 +12,8 @@ describe("resolvePromptProfile", () => {
 
 	it.each([
 		[63_999, PromptProfile.Lite],
-		[64_000, PromptProfile.Native],
-		[128_000, PromptProfile.Native],
+		[64_000, PromptProfile.Standard],
+		[128_000, PromptProfile.Standard],
 	] as const)("resolves context window %s to %s", (contextWindow, expected) => {
 		expect(resolvePromptProfile({ contextWindow })).toBe(expected)
 	})
@@ -29,8 +29,8 @@ describe("resolvePromptProfile", () => {
 		Number.NaN,
 		Number.POSITIVE_INFINITY,
 		Number.NEGATIVE_INFINITY,
-	])("treats invalid context window %s as the 128K Native default", (contextWindow) => {
-		expect(resolvePromptProfile({ contextWindow })).toBe(PromptProfile.Native)
+	])("treats invalid context window %s as the 128K Standard default", (contextWindow) => {
+		expect(resolvePromptProfile({ contextWindow })).toBe(PromptProfile.Standard)
 	})
 
 	it("rejects an invalid explicit runtime profile instead of silently defaulting", () => {

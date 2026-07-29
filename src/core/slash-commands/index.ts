@@ -56,7 +56,7 @@ export async function parseSlashCommands(
 		modelId: providerInfo?.model.id,
 		contextWindow: providerInfo?.model.info.capabilities?.contextWindow,
 	})
-	const commandFocusChainSettings = promptProfile === "native" ? focusChainSettings : undefined
+	const commandFocusChainSettings = promptProfile === "standard" ? focusChainSettings : undefined
 
 	const commandReplacements: Record<string, string> = {
 		newtask: newTaskToolResponse(),

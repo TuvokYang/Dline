@@ -4,7 +4,7 @@ const prompts: Record<string, string> = {
 
 The report should include relevant code snippets, architectural decisions, error analysis, or performance data as appropriate. After the user reviews the report, they will provide feedback or instructions for the next steps.`,
 
-	nativeDescription: `[TURN-END] Generate a structured technical report for the user to review. This tool pauses execution and waits for the user to respond before you can continue. Use this when the user requests a formal report, summary of findings, or technical analysis that requires their review before proceeding to the next steps.
+	standardDescription: `[TURN-END] Generate a structured technical report for the user to review. This tool pauses execution and waits for the user to respond before you can continue. Use this when the user requests a formal report, summary of findings, or technical analysis that requires their review before proceeding to the next steps.
 
 The report should include relevant code snippets, architectural decisions, error analysis, or performance data as appropriate. After the user reviews the report, they will provide feedback or instructions for the next steps.`,
 

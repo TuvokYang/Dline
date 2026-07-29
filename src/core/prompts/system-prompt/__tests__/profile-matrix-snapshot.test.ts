@@ -86,7 +86,7 @@ function createContext(
 	const context = {
 		...BASE_CONTEXT,
 		...overrides,
-		promptProfile: profile === "lite" ? PromptProfile.Lite : PromptProfile.Native,
+		promptProfile: profile === "lite" ? PromptProfile.Lite : PromptProfile.Standard,
 		providerInfo: {
 			...BASE_CONTEXT.providerInfo,
 			...overrides.providerInfo,
@@ -162,7 +162,7 @@ describe("complete explicit-profile snapshot matrix", () => {
 					expect(generated.profile).toBe(profile)
 					expect(generated.warnings).toEqual([])
 					expect(generated.systemPrompt).not.toContain("\n====\n")
-					expect(generated.systemPrompt).toContain(profile === "native" ? "# TOOL USE" : "# TOOLS")
+					expect(generated.systemPrompt).toContain(profile === "standard" ? "# TOOL USE" : "# TOOLS")
 					expect(generated.systemPrompt).toContain("# CAPABILITIES")
 					expect(generated.systemPrompt).toContain("# USER'S CUSTOM INSTRUCTIONS")
 					expect(generated.systemPrompt).toContain("## Workflows\n- `release`: Run the release workflow.")

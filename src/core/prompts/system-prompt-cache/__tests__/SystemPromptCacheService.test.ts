@@ -20,14 +20,14 @@ const testPromptBuilderInfo = {
 	contractVersion: SYSTEM_PROMPT_CONTRACT_VERSION,
 	providerId: "test-provider",
 	modelId: "test-model",
-	profile: "native" as const,
+	profile: "standard" as const,
 	nativeTools: false,
 	focusChainEnabled: false,
 }
 
 const promptContext = {
 	taskId: "task-1",
-	promptProfile: PromptProfile.Native,
+	promptProfile: PromptProfile.Standard,
 	cwd: "e:/workspace/project",
 	ide: "vscode",
 	providerInfo: {
@@ -122,7 +122,7 @@ describe("SystemPromptCacheService", () => {
 						contractVersion: SYSTEM_PROMPT_CONTRACT_VERSION,
 						providerId: "openai",
 						modelId: "gpt-5.6-sol",
-						profile: "native" as const,
+						profile: "standard" as const,
 						nativeTools: true,
 						focusChainEnabled: false,
 					},
@@ -163,7 +163,7 @@ describe("SystemPromptCacheService", () => {
 			contractVersion: SYSTEM_PROMPT_CONTRACT_VERSION,
 			providerId: "anthropic",
 			modelId: "deepseek-v4-pro",
-			profile: "native",
+			profile: "standard",
 			nativeTools: true,
 			focusChainEnabled: false,
 		})
@@ -187,7 +187,7 @@ describe("SystemPromptCacheService", () => {
 						contractVersion: SYSTEM_PROMPT_CONTRACT_VERSION,
 						providerId: "test-provider",
 						modelId: "test-model",
-						profile: "native" as const,
+						profile: "standard" as const,
 						nativeTools: true,
 						focusChainEnabled: false,
 					},
@@ -267,7 +267,7 @@ describe("SystemPromptCacheService", () => {
 						contractVersion: SYSTEM_PROMPT_CONTRACT_VERSION,
 						providerId: "test-provider",
 						modelId: "test-model",
-						profile: "native" as const,
+						profile: "standard" as const,
 						nativeTools: true,
 						focusChainEnabled: false,
 					},
@@ -409,7 +409,7 @@ describe("SystemPromptCacheService", () => {
 						contractVersion: SYSTEM_PROMPT_CONTRACT_VERSION,
 						providerId: "test-provider",
 						modelId: "test-model",
-						profile: "native" as const,
+						profile: "standard" as const,
 						nativeTools: false,
 						focusChainEnabled: false,
 					},
@@ -545,7 +545,7 @@ describe("SystemPromptCacheService", () => {
 	})
 
 	it.each([
-		PromptProfile.Native,
+		PromptProfile.Standard,
 		PromptProfile.Lite,
 	])("projects typed %s input to cache profile metadata", async (promptProfile) => {
 		const service = new SystemPromptCacheService({

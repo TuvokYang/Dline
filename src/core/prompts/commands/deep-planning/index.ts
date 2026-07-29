@@ -33,7 +33,7 @@ export function getDeepPlanningPrompt(
 		throw new Error(`Missing deep-planning variant for profile '${requiredProfile}'`)
 	}
 	const isPowerShell = detectPowerShell(getShell())
-	if (variant.id === PromptProfile.Native) {
+	if (variant.id === PromptProfile.Standard) {
 		return commandGenerator.generate("deepPlanning5Step.main", {
 			FOCUS_CHAIN_NOTE: focusChainSettings?.enabled
 				? commandGenerator.generate("deepPlanning5Step.focusChainNote", {}).text

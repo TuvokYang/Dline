@@ -92,9 +92,9 @@ describe("Prompt prose ownership", () => {
 			"i18n/legacy.ts",
 			"i18n/en/variants/profile-contract.ts",
 			"i18n/en/variants/sections.ts",
-			"i18n/en/variants/native/layout.ts",
-			"i18n/en/variants/native/contract.ts",
-			"i18n/en/variants/native/sections.ts",
+			"i18n/en/variants/standard/layout.ts",
+			"i18n/en/variants/standard/contract.ts",
+			"i18n/en/variants/standard/sections.ts",
 			"i18n/en/variants/lite/layout.ts",
 			"i18n/en/variants/lite/contract.ts",
 			"i18n/en/variants/lite/sections.ts",
@@ -111,8 +111,8 @@ describe("Prompt prose ownership", () => {
 	it("keeps Native tool-use fragments in the i18n variant domain", async () => {
 		const source = await read("system-prompt/variants/tool-use-content.ts")
 
-		expect(source).toContain('getPrompt("variants.native", "toolUsePrefix")')
-		expect(source).toContain('getPrompt("variants.native", "toolUseSuffix")')
-		expect(source).toContain('getPrompt("variants.native", "parallelToolUse")')
+		expect(source).toContain('getPrompt("variants.standard", "toolUsePrefix")')
+		expect(source).toContain('getPrompt("variants.standard", "toolUseSuffix")')
+		expect(source).toContain('getPrompt("variants.standard", "parallelToolUse")')
 	})
 })

@@ -16,16 +16,16 @@ const prompts: Record<string, string> = {
 	timeoutInstruction:
 		"Optional positive integer foreground wait in seconds. If the command is still running when this wait expires, Dline returns control and continues tracking the process in the background. Defaults to 30 seconds for ordinary commands and 300 seconds for recognized long-running commands.",
 	timeoutUsage: "30",
-	nativeDescription: `Request to execute a CLI command on the system. Use this when you need to perform system operations or run specific commands to accomplish any step in the user's task. You must tailor your command to the user's system and provide a clear explanation of what the command does. For command chaining, use the appropriate chaining syntax for the user's shell. Prefer to execute complex CLI commands over creating executable scripts, as they are more flexible and easier to run. Commands default to the current workspace; set workdirectory when a command must run elsewhere.`,
-	nativeCommandInstruction:
+	standardDescription: `Request to execute a CLI command on the system. Use this when you need to perform system operations or run specific commands to accomplish any step in the user's task. You must tailor your command to the user's system and provide a clear explanation of what the command does. For command chaining, use the appropriate chaining syntax for the user's shell. Prefer to execute complex CLI commands over creating executable scripts, as they are more flexible and easier to run. Commands default to the current workspace; set workdirectory when a command must run elsewhere.`,
+	standardCommandInstruction:
 		"The CLI command to execute. This should be valid for the current operating system. Ensure the command is properly formatted and does not contain any harmful instructions. Do not use the ~ character or $HOME to refer to the home directory. Do not prepend cd solely to select the execution directory; use workdirectory instead.",
-	nativeWorkdirectoryInstruction:
+	standardWorkdirectoryInstruction:
 		"Optional directory in which to execute the command. Relative paths are resolved from @CWD@. The directory must already exist. A directory outside every project root requires user approval.",
-	nativeRequiresApprovalInstruction:
+	standardRequiresApprovalInstruction:
 		"A boolean indicating whether this command requires explicit user approval before execution in case the user has auto-approve mode enabled. Set to true for potentially impactful operations like installing or uninstalling packages, deleting or overwriting files, system configuration changes, network operations, or any commands that could have unintended side effects. Set to false for safe operations like reading files or directories, running development servers, building projects, and other non-destructive operations.",
-	nativeBackgroundInstruction:
+	standardBackgroundInstruction:
 		"Optional boolean. Set true to start the command as a Dline-owned background process, return control immediately, and keep its output and cancellation lifecycle tracked. Defaults to false.",
-	nativeTimeoutInstruction:
+	standardTimeoutInstruction:
 		"Optional positive integer foreground wait in seconds. If the command is still running when this wait expires, Dline returns control and continues tracking the process in the background. Defaults to 30 seconds for ordinary commands and 300 seconds for recognized long-running commands.",
 	gemini3Description:
 		"Request to execute a CLI command on the system. Use this when you need to perform system operations or run specific commands to accomplish any step in the user's task. When chaining commands, use the shell operator && (not the HTML entity &&). If using search/grep commands, be careful to not use vague search terms that may return thousands of results. When in PLAN MODE, you may use the execute_command tool, but only in a non-destructive manner and in a way that does not alter any files.",

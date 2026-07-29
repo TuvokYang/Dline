@@ -63,7 +63,7 @@ const EXPECTED_NAMESPACES = [
 	"userInstructions",
 	"useSkill",
 	"variants.lite",
-	"variants.native",
+	"variants.standard",
 	"webFetch",
 	"webSearch",
 	"writeToFile",
@@ -118,7 +118,7 @@ describe("prompt asset inventory", () => {
 		expect(englishPromptGroups.map((group) => group.name)).toEqual(["system", "tools", "commands", "variants"])
 		expect(englishPromptGroups.map((group) => group.modules.length)).toEqual([23, 33, 3, 2])
 		expect(englishPromptGroups.flatMap((group) => group.modules)).toHaveLength(61)
-		expect(englishPromptGroups[3].modules.map((module) => module.name)).toEqual(["variants.native", "variants.lite"])
+		expect(englishPromptGroups[3].modules.map((module) => module.name)).toEqual(["variants.standard", "variants.lite"])
 		for (const group of englishPromptGroups) {
 			for (const module of group.modules) {
 				expect(module.source).toContain(`/en/${group.name}/`)

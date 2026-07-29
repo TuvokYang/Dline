@@ -59,7 +59,7 @@ function buildContext(taskId: string): TaskContextCache {
 				promptBuilder: {
 					providerId: "test-provider",
 					modelId: "test-model",
-					profile: "native",
+					profile: "standard",
 					nativeTools: true,
 				},
 			},
@@ -87,6 +87,30 @@ describe("task context cache", () => {
 		expect(actual.systemPrompt?.frozen?.tools).toEqual(expected.systemPrompt?.frozen?.tools)
 		const filePath = path.join(testDir, "tasks", taskId, GlobalFileNames.taskContext)
 		expect(await fs.readFile(filePath, "utf8")).toContain("# Capabilities")
+	})
+
+	it("migrates the legacy native prompt profile at the read boundary", async () => {
+		const taskId = "task-legacy-native-profile"
+		const filePath = path.join(testDir, "tasks", taskId, GlobalFileNames.taskContext)
+		await fs.mkdir(path.dirname(filePath), { recursive: true })
+		const legacy = buildContext(taskId)
+		await fs.writeFile(
+			filePath,
+			JSON.stringify({
+				...legacy,
+				systemPrompt: {
+					frozen: {
+						...legacy.systemPrompt?.frozen,
+						promptBuilder: { ...legacy.systemPrompt?.frozen?.promptBuilder, profile: "native" },
+					},
+				},
+			}),
+			"utf8",
+		)
+
+		const actual = await getTaskContext(taskId)
+
+		expect(actual.systemPrompt?.frozen?.promptBuilder.profile).toBe("standard")
 	})
 
 	it.each([
@@ -145,11 +169,11 @@ describe("task context cache", () => {
 		["invalid-refresh-reason", { refreshReason: "automatic" }],
 		[
 			"invalid-provider-id",
-			{ promptBuilder: { providerId: "", modelId: "test-model", profile: "native", nativeTools: false } },
+			{ promptBuilder: { providerId: "", modelId: "test-model", profile: "standard", nativeTools: false } },
 		],
 		[
 			"invalid-model-id",
-			{ promptBuilder: { providerId: "test-provider", modelId: "", profile: "native", nativeTools: false } },
+			{ promptBuilder: { providerId: "test-provider", modelId: "", profile: "standard", nativeTools: false } },
 		],
 		[
 			"invalid-profile",
@@ -157,7 +181,7 @@ describe("task context cache", () => {
 		],
 		[
 			"invalid-native-tools",
-			{ promptBuilder: { providerId: "test-provider", modelId: "test-model", profile: "native", nativeTools: "yes" } },
+			{ promptBuilder: { providerId: "test-provider", modelId: "test-model", profile: "standard", nativeTools: "yes" } },
 		],
 	] as const)("rejects malformed required frozen value: %s", async (caseId, override) => {
 		const taskId = `task-malformed-${caseId}`

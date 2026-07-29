@@ -2,13 +2,13 @@ import { getPrompt } from "../../i18n"
 import { withoutPromptFragments } from "./conditional-content"
 import type { SystemSectionContentConfig } from "./section-content-config"
 
-const NATIVE_RULES = getPrompt("variants.native", "rules")
-const NATIVE_RULES_FOCUS_CONTRACT = getPrompt("variants.native", "rulesFocusContract")
+const STANDARD_RULES = getPrompt("variants.standard", "rules")
+const STANDARD_RULES_FOCUS_CONTRACT = getPrompt("variants.standard", "rulesFocusContract")
 const LITE_RULES = getPrompt("variants.lite", "rules")
 const LITE_RULES_YOLO_ASK_CLAUSE = getPrompt("variants.lite", "rulesYoloAskClause")
 
-export function createNativeRules(config: SystemSectionContentConfig): string {
-	return config.focusChainEnabled ? NATIVE_RULES : withoutPromptFragments(NATIVE_RULES, [NATIVE_RULES_FOCUS_CONTRACT])
+export function createStandardRules(config: SystemSectionContentConfig): string {
+	return config.focusChainEnabled ? STANDARD_RULES : withoutPromptFragments(STANDARD_RULES, [STANDARD_RULES_FOCUS_CONTRACT])
 }
 
 export function createLiteRules(config: SystemSectionContentConfig): string {

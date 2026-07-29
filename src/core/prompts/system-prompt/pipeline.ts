@@ -68,13 +68,13 @@ export function createSystemPromptConfig(context: SystemPromptContext): SystemPr
 		parallelTools: context.enableParallelToolCalling === true,
 		mcpEnabled: servers.some((server) => server.status === "connected" && server.disabled !== true),
 		browserEnabled: context.supportsBrowserUse === true && context.browserSettings?.disableToolUse !== true,
-		focusChainEnabled: variant === PromptProfile.Native && context.focusChainSettings?.enabled === true,
+		focusChainEnabled: variant === PromptProfile.Standard && context.focusChainSettings?.enabled === true,
 		subagentsEnabled: context.subagentsEnabled === true,
 		subagentRun: context.isSubagentRun === true,
 		yoloModeEnabled: context.yoloModeToggled === true,
 		cliEnvironment: context.isCliEnvironment === true,
 		webToolsEnabled: context.providerInfo.providerId === "cline" && context.clineWebToolsEnabled === true,
-		skillsEnabled: variant === PromptProfile.Native && (context.skills?.length ?? 0) > 0,
+		skillsEnabled: variant === PromptProfile.Standard && (context.skills?.length ?? 0) > 0,
 		userInstructionsEnabled,
 	})
 }

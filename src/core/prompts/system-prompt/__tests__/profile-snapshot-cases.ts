@@ -1,6 +1,6 @@
 import type { SystemPromptContext } from "../context"
 
-export type SnapshotProfile = "native" | "lite"
+export type SnapshotProfile = "standard" | "lite"
 export type SnapshotTransport = "native" | "xml"
 
 export interface ProfileSnapshotCase {
@@ -26,7 +26,7 @@ export const PROFILE_SNAPSHOT_CASES: readonly ProfileSnapshotCase[] = [
 	{ id: "no-web", overrides: { clineWebToolsEnabled: false } },
 ]
 
-export const SNAPSHOT_PROFILES: readonly SnapshotProfile[] = ["native", "lite"]
+export const SNAPSHOT_PROFILES: readonly SnapshotProfile[] = ["standard", "lite"]
 export const SNAPSHOT_TRANSPORTS: readonly SnapshotTransport[] = ["native", "xml"]
 
 export function profileSnapshotName(
