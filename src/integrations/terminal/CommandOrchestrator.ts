@@ -31,12 +31,15 @@ import {
 	MAX_LINES_BEFORE_FILE,
 	SUMMARY_LINES_TO_KEEP,
 } from "./constants"
+import { formatTerminalOutput, formatTerminalOutputLogLine, splitTerminalOutput } from "./output-stream"
 import type {
 	CommandExecutorCallbacks,
 	ITerminalManager,
 	OrchestrationOptions,
 	OrchestrationResult,
 	TerminalCompletionDetails,
+	TerminalOutputLine,
+	TerminalOutputStream,
 	TerminalProcessResultPromise,
 } from "./types"
 
@@ -374,8 +377,8 @@ export async function orchestrateCommandExecution(
 	let largeOutputLogStream: fs.WriteStream | null = null
 	let totalOutputBytes = 0
 	let totalLineCount = 0
-	let firstLines: string[] = [] // Keep first N lines for summary
-	let lastLines: string[] = [] // Keep last N lines for summary (circular buffer)
+	let firstLines: TerminalOutputLine[] = [] // Keep first N lines for summary
+	let lastLines: TerminalOutputLine[] = [] // Keep last N lines for summary (circular buffer)
 
 	/**
 	 * Switch to file-based logging when output is too large.
@@ -408,15 +411,15 @@ export async function orchestrateCommandExecution(
 		largeOutputLogStream = fs.createWriteStream(largeOutputLogPath, { flags: "a" })
 
 		// Write all existing lines to file in a single batch to reduce I/O overhead
-		if (outputLines.length > 0) {
-			largeOutputLogStream.write(`${outputLines.join("\n")}\n`)
+		if (output.length > 0) {
+			largeOutputLogStream.write(`${output.map(formatTerminalOutputLogLine).join("\n")}\n`)
 		}
 
 		// Keep first N lines for summary
-		firstLines = outputLines.slice(0, SUMMARY_LINES_TO_KEEP)
+		firstLines = output.slice(0, SUMMARY_LINES_TO_KEEP)
 
 		// Keep last N lines for summary (will be updated as more lines come in)
-		lastLines = outputLines.slice(-SUMMARY_LINES_TO_KEEP)
+		lastLines = output.slice(-SUMMARY_LINES_TO_KEEP)
 
 		// FINALLY: Notify user (now this will appear at the end after all buffered output)
 		await say(
@@ -436,6 +439,9 @@ export async function orchestrateCommandExecution(
 	}
 
 	const outputLines: string[] = []
+	const output: TerminalOutputLine[] = []
+	const formatOutput = (entries: readonly TerminalOutputLine[]): string =>
+		formatTerminalOutput(entries, (lines) => terminalManager.processOutput(lines))
 
 	type BackgroundTransitionReason = "explicit" | "timeout" | "user"
 	const transitionToBackground = async (
@@ -459,8 +465,8 @@ export async function orchestrateCommandExecution(
 			await drainOutputQueue()
 		}
 
-		const trackingResult = onProceedWhileRunning(outputLines)
-		const currentOutput = terminalManager.processOutput(outputLines)
+		const trackingResult = onProceedWhileRunning(output)
+		const currentOutput = formatOutput(output)
 		const logMessage = trackingResult?.logFilePath ? `Log file: ${trackingResult.logFilePath}\n` : ""
 		const outputMessage = currentOutput.length > 0 ? `Output so far:\n${currentOutput}` : ""
 		const resultPrefix =
@@ -472,7 +478,7 @@ export async function orchestrateCommandExecution(
 			userRejected: false,
 			result: `${resultPrefix}\n${logMessage}${outputMessage}`,
 			completed: false,
-			outputLines,
+			...splitTerminalOutput(output),
 			backgroundCommandId: trackingResult?.backgroundCommandId,
 			logFilePath: trackingResult?.logFilePath,
 		}
@@ -490,7 +496,7 @@ export async function orchestrateCommandExecution(
 		return backgroundTrackingResult
 	}
 
-	const handleOutputLine = async (line: string): Promise<void> => {
+	const handleOutputLine = async (line: string, stream: TerminalOutputStream): Promise<void> => {
 		if (didCancelViaUi) {
 			return
 		}
@@ -513,22 +519,23 @@ export async function orchestrateCommandExecution(
 		if (isWritingToFile) {
 			// Write to file instead of keeping in memory
 			if (largeOutputLogStream) {
-				largeOutputLogStream.write(`${line}\n`)
+				largeOutputLogStream.write(`${formatTerminalOutputLogLine({ line, stream })}\n`)
 			}
 
 			// Update last lines circular buffer for summary
-			lastLines.push(line)
+			lastLines.push({ line, stream })
 			if (lastLines.length > SUMMARY_LINES_TO_KEEP) {
 				lastLines.shift()
 			}
 		} else {
 			// Normal behavior - keep in memory
 			outputLines.push(line)
+			output.push({ line, stream })
 		}
 
 		// Notify caller about output line (for background command tracking)
 		if (onOutputLine) {
-			onOutputLine(line)
+			onOutputLine(line, stream)
 		}
 
 		// Apply buffered streaming (only if not in file mode or still showing initial output)
@@ -558,8 +565,8 @@ export async function orchestrateCommandExecution(
 			}
 		}
 	}
-	process.on("line", (line: string) => {
-		enqueueOutputWork(() => handleOutputLine(line))
+	process.on("line", (line: string, stream: TerminalOutputStream = "combined") => {
+		enqueueOutputWork(() => handleOutputLine(line, stream))
 	})
 
 	// Start timer to detect if waiting for completion takes too long
@@ -665,13 +672,13 @@ export async function orchestrateCommandExecution(
 
 					// Drain output already emitted before returning the timeout result.
 					await outputWork
-					const result = terminalManager.processOutput(outputLines)
+					const result = formatOutput(output)
 
 					return {
 						userRejected: false,
 						result: `Command execution timed out after ${timeoutSeconds} seconds. ${result.length > 0 ? `\nOutput so far:\n${result}` : ""}`,
 						completed: false,
-						outputLines,
+						...splitTerminalOutput(output),
 					}
 				}
 
@@ -712,18 +719,19 @@ export async function orchestrateCommandExecution(
 
 	// Build result based on whether we used file-based logging
 	let result: string
-	let resultOutputLines: string[]
+	let resultOutput: TerminalOutputLine[]
 
 	if (isWritingToFile) {
 		// Build summary from first and last lines
 		const skippedLines = totalLineCount - firstLines.length - lastLines.length
-		const summaryLines = [...firstLines, `\n... (${skippedLines} lines written to ${largeOutputLogPath}) ...\n`, ...lastLines]
-		result = terminalManager.processOutput(summaryLines)
-		resultOutputLines = summaryLines
+		resultOutput = [...firstLines, ...lastLines]
+		const summaryNotice = `... (${skippedLines} lines written to ${largeOutputLogPath}) ...`
+		result = [formatOutput(resultOutput), summaryNotice].filter(Boolean).join("\n\n")
 	} else {
-		result = terminalManager.processOutput(outputLines)
-		resultOutputLines = outputLines
+		result = formatOutput(output)
+		resultOutput = output
 	}
+	const resultLines = splitTerminalOutput(resultOutput)
 
 	if (didCancelViaUi) {
 		return {
@@ -732,7 +740,7 @@ export async function orchestrateCommandExecution(
 				`Command cancelled. ${result.length > 0 ? `\nOutput captured before cancellation:\n${result}` : ""}`,
 			),
 			completed: false,
-			outputLines: resultOutputLines,
+			...resultLines,
 			logFilePath: largeOutputLogPath || undefined,
 			exitCode: completionDetails?.exitCode,
 			signal: completionDetails?.signal,
@@ -757,7 +765,7 @@ export async function orchestrateCommandExecution(
 				fileContentString,
 			),
 			completed: false,
-			outputLines: resultOutputLines,
+			...resultLines,
 			logFilePath: largeOutputLogPath || undefined,
 			exitCode: completionDetails?.exitCode,
 			signal: completionDetails?.signal,
@@ -779,9 +787,9 @@ export async function orchestrateCommandExecution(
 
 		return {
 			userRejected: false,
-			result: `${statusMessage}${result.length > 0 ? `\nOutput:\n${result}` : ""}${logFileMsg}`,
+			result: `${statusMessage}${result.length > 0 ? `\n${result}` : ""}${logFileMsg}`,
 			completed: true,
-			outputLines: resultOutputLines,
+			...resultLines,
 			logFilePath: largeOutputLogPath || undefined,
 			exitCode,
 			signal,
@@ -794,7 +802,7 @@ export async function orchestrateCommandExecution(
 			result.length > 0 ? `\nHere's the output so far:\n${result}` : ""
 		}${logFileMsg}\n\nYou will be updated on the terminal status and new output in the future.`,
 		completed: false,
-		outputLines: resultOutputLines,
+		...resultLines,
 		logFilePath: largeOutputLogPath || undefined,
 		exitCode: completionDetails?.exitCode,
 		signal: completionDetails?.signal,

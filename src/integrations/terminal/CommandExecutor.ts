@@ -17,6 +17,7 @@ import { findLastIndex } from "@shared/array"
 import { Logger } from "@/shared/services/Logger"
 import { orchestrateCommandExecution } from "./CommandOrchestrator"
 import { isCommandCompletionSuccessful } from "./command-completion"
+import { formatTerminalOutput } from "./output-stream"
 import { StandaloneTerminalManager } from "./standalone/StandaloneTerminalManager"
 import type {
 	BackgroundCommand,
@@ -27,6 +28,7 @@ import type {
 	CommandExecutorConfig,
 	ITerminalManager,
 	ShellIntegrationWarningTracker,
+	TerminalOutputLine,
 	TerminalProcessResultPromise,
 } from "./types"
 
@@ -217,7 +219,7 @@ export class CommandExecutor {
 			// Returns the log file path so the orchestrator can send it to the UI
 			// existingOutput contains all output lines captured so far
 			onProceedWhileRunning: useStandalone
-				? (existingOutput: string[]) => {
+				? (existingOutput: TerminalOutputLine[]) => {
 						if (backgroundCommand) {
 							return {
 								backgroundCommandId: backgroundCommand.id,
@@ -288,10 +290,8 @@ export class CommandExecutor {
 		// If the command was cancelled externally (via cancel button), return a clear cancellation message
 		// This ensures the AI agent knows the command was cancelled by the user
 		if (this.cancelledActivityIds.delete(activityId)) {
-			const outputSoFar =
-				result.outputLines.length > 0
-					? `\nOutput captured before cancellation:\n${manager.processOutput(result.outputLines)}`
-					: ""
+			const separatedOutput = formatTerminalOutput(result.outputEntries, (lines) => manager.processOutput(lines))
+			const outputSoFar = separatedOutput ? `\nOutput captured before cancellation:\n${separatedOutput}` : ""
 			return {
 				userRejected: true,
 				result: `Command was cancelled by the user.${outputSoFar}`,

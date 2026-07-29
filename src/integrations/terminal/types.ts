@@ -22,8 +22,15 @@ export interface TerminalCompletionDetails {
 	signal?: NodeJS.Signals | null
 }
 
+export type TerminalOutputStream = "stdout" | "stderr" | "combined"
+
+export interface TerminalOutputLine {
+	line: string
+	stream: TerminalOutputStream
+}
+
 export interface TerminalProcessEvents {
-	line: [line: string]
+	line: [line: string, stream: TerminalOutputStream]
 	continue: []
 	completed: [details?: TerminalCompletionDetails]
 	error: [error: Error]
@@ -447,7 +454,7 @@ export interface OrchestrationOptions {
 	/** Optional timeout in seconds */
 	timeoutSeconds?: number
 	/** Callback to track output lines for background command tracking */
-	onOutputLine?: (line: string) => void
+	onOutputLine?: (line: string, stream: TerminalOutputStream) => void
 	/** Whether to show shell integration warning with suggestion */
 	showShellIntegrationSuggestion?: boolean
 	/**
@@ -456,7 +463,9 @@ export interface OrchestrationOptions {
 	 * @param existingOutput The output lines captured so far (to write to log file)
 	 * @returns The log file path if tracking was started, undefined otherwise
 	 */
-	onProceedWhileRunning?: (existingOutput: string[]) => { backgroundCommandId: string; logFilePath?: string } | undefined
+	onProceedWhileRunning?: (
+		existingOutput: TerminalOutputLine[],
+	) => { backgroundCommandId: string; logFilePath?: string } | undefined
 	/** Start in background without waiting for timeout or user intervention. */
 	startInBackground?: boolean
 	/**
@@ -494,8 +503,16 @@ export interface CommandExecutionOutcome {
 }
 
 export interface OrchestrationResult extends CommandExecutionOutcome {
-	/** All output lines captured */
+	/** Captured output with stream identity in observable arrival order. */
+	outputEntries: TerminalOutputLine[]
+	/** All output lines captured in display order. */
 	outputLines: string[]
+	/** Output captured from the child process stdout pipe. */
+	stdoutLines: string[]
+	/** Output captured from the child process stderr pipe. */
+	stderrLines: string[]
+	/** Output whose source cannot be separated by the terminal API. */
+	combinedOutputLines: string[]
 	/** Path to log file if output was too large and written to file */
 	logFilePath?: string
 }

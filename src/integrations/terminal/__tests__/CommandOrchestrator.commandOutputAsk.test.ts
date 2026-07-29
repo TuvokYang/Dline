@@ -87,7 +87,7 @@ describe("CommandOrchestrator live command output", () => {
 			return result
 		})
 
-		process.emit("line", "first line")
+		process.emit("line", "first line", "combined")
 		await waitFor(() => say.mock.calls.length > 0)
 		assert.equal(settled, false)
 		assert.equal(ask.mock.calls.length, 0)
@@ -101,9 +101,9 @@ describe("CommandOrchestrator live command output", () => {
 		const { callbacks, say } = createCallbacks()
 		const execution = orchestrateCommandExecution(process.asResultPromise(), manager, callbacks, { command: "stream" })
 
-		process.emit("line", "one")
+		process.emit("line", "one", "combined")
 		await waitFor(() => say.mock.calls.length >= 1)
-		process.emit("line", "two")
+		process.emit("line", "two", "combined")
 		await waitFor(() => say.mock.calls.length >= 2)
 		const calls = say.mock.calls as unknown as unknown[][]
 		assert.equal(calls[1]?.[1], "one\ntwo")
@@ -122,7 +122,7 @@ describe("CommandOrchestrator live command output", () => {
 		const { callbacks } = createCallbacks()
 		const execution = orchestrateCommandExecution(process.asResultPromise(), manager, callbacks, { command: "tail" })
 
-		process.emit("line", "tail line")
+		process.emit("line", "tail line", "combined")
 		process.complete({ exitCode: 0, signal: null })
 		const result = await execution
 		assert.deepEqual(result.outputLines, ["tail line"])

@@ -22,7 +22,15 @@ import {
 	PROCESS_HOT_TIMEOUT_NORMAL,
 	TRUNCATE_KEEP_LINES,
 } from "../constants"
-import type { ITerminal, ITerminalProcess, TerminalCompletionDetails, TerminalProcessEvents } from "../types"
+import type {
+	ITerminal,
+	ITerminalProcess,
+	TerminalCompletionDetails,
+	TerminalOutputStream,
+	TerminalProcessEvents,
+} from "../types"
+
+type StandaloneOutputStream = Exclude<TerminalOutputStream, "combined">
 
 /**
  * Manages the execution of a command in a standalone terminal environment.
@@ -47,8 +55,11 @@ export class StandaloneTerminalProcess extends EventEmitter<TerminalProcessEvent
 	/** Detected system encoding for the terminal */
 	private systemEncoding: string | null = null
 
-	/** Buffer for incomplete lines */
-	private buffer = ""
+	/** Per-stream buffers for incomplete lines. */
+	private buffers: Record<StandaloneOutputStream, string> = {
+		stdout: "",
+		stderr: "",
+	}
 
 	/** Full output captured from the process */
 	private fullOutput = ""
@@ -187,9 +198,9 @@ export class StandaloneTerminalProcess extends EventEmitter<TerminalProcessEvent
 			// Handle stdout
 			this.childProcess.stdout?.on("data", (data: Buffer) => {
 				const output = this.decodeBuffer(data)
-				this.handleOutput(output, didEmitEmptyLine)
+				this.handleOutput(output, "stdout")
 				if (!didEmitEmptyLine && output) {
-					this.emit("line", "") // Signal start of output
+					this.emit("line", "", "stdout") // Signal start of output
 					didEmitEmptyLine = true
 				}
 			})
@@ -197,9 +208,9 @@ export class StandaloneTerminalProcess extends EventEmitter<TerminalProcessEvent
 			// Handle stderr
 			this.childProcess.stderr?.on("data", (data: Buffer) => {
 				const output = this.decodeBuffer(data)
-				this.handleOutput(output, didEmitEmptyLine)
+				this.handleOutput(output, "stderr")
 				if (!didEmitEmptyLine && output) {
-					this.emit("line", "")
+					this.emit("line", "", "stderr")
 					didEmitEmptyLine = true
 				}
 			})
@@ -209,7 +220,7 @@ export class StandaloneTerminalProcess extends EventEmitter<TerminalProcessEvent
 				this.exitCode = code
 				this.signal = signal
 				this.isCompleted = true
-				this.emitRemainingBuffer()
+				this.emitRemainingBuffers()
 
 				// Clear hot timer
 				if (this.hotTimer) {
@@ -244,9 +255,9 @@ export class StandaloneTerminalProcess extends EventEmitter<TerminalProcessEvent
 	/**
 	 * Handle output from the process.
 	 * @param data The output data
-	 * @param _didEmitEmptyLine Whether we've already emitted an empty line
+	 * @param stream The child process pipe that produced the data.
 	 */
-	private handleOutput(data: string, _didEmitEmptyLine: boolean): void {
+	private handleOutput(data: string, stream: StandaloneOutputStream): void {
 		// Set process as hot (actively outputting)
 		this.isHot = true
 		if (this.hotTimer) {
@@ -272,7 +283,7 @@ export class StandaloneTerminalProcess extends EventEmitter<TerminalProcessEvent
 		}
 
 		if (this.isListening) {
-			this.emitLines(data)
+			this.emitLines(data, stream)
 		}
 	}
 
@@ -280,28 +291,30 @@ export class StandaloneTerminalProcess extends EventEmitter<TerminalProcessEvent
 	 * Emit lines from the buffer.
 	 * @param chunk The chunk of data to process
 	 */
-	private emitLines(chunk: string): void {
-		this.buffer += chunk
+	private emitLines(chunk: string, stream: StandaloneOutputStream): void {
+		this.buffers[stream] += chunk
 		let lineEndIndex: number
-		while ((lineEndIndex = this.buffer.indexOf("\n")) !== -1) {
-			const line = this.buffer.slice(0, lineEndIndex).trimEnd()
-			this.emit("line", line)
-			this.buffer = this.buffer.slice(lineEndIndex + 1)
+		while ((lineEndIndex = this.buffers[stream].indexOf("\n")) !== -1) {
+			const line = this.buffers[stream].slice(0, lineEndIndex).trimEnd()
+			this.emit("line", line, stream)
+			this.buffers[stream] = this.buffers[stream].slice(lineEndIndex + 1)
 		}
 	}
 
 	/**
-	 * Emit any remaining content in the buffer.
+	 * Emit any remaining content in both stream buffers.
 	 */
-	private emitRemainingBuffer(): void {
-		if (this.buffer && this.isListening) {
-			const remainingBuffer = this.removeLastLineArtifacts(this.buffer)
-			if (remainingBuffer) {
-				this.emit("line", remainingBuffer)
+	private emitRemainingBuffers(): void {
+		for (const stream of ["stdout", "stderr"] as const) {
+			if (this.buffers[stream] && this.isListening) {
+				const remainingBuffer = this.removeLastLineArtifacts(this.buffers[stream])
+				if (remainingBuffer) {
+					this.emit("line", remainingBuffer, stream)
+				}
+				this.buffers[stream] = ""
 			}
-			this.buffer = ""
-			this.lastRetrievedIndex = this.fullOutput.length
 		}
+		this.lastRetrievedIndex = this.fullOutput.length
 	}
 
 	/**
@@ -313,7 +326,7 @@ export class StandaloneTerminalProcess extends EventEmitter<TerminalProcessEvent
 	 * after the user clicks "Proceed While Running".
 	 */
 	continue(): void {
-		this.emitRemainingBuffer()
+		this.emitRemainingBuffers()
 		// Keep isListening = true so we continue emitting "line" events
 		// This is needed for background command tracking to log output to file
 		this.emit("continue")

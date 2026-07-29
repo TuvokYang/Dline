@@ -16,12 +16,15 @@ import { DlineTempManager } from "@services/temp"
 import * as fs from "fs"
 import { isCommandCompletionSuccessful } from "../command-completion"
 import { BACKGROUND_COMMAND_TIMEOUT_MS, DEFAULT_TERMINAL_OUTPUT_LINE_LIMIT, MAX_BYTES_BEFORE_FILE } from "../constants"
+import { formatTerminalOutputLogLine } from "../output-stream"
 import type {
 	BackgroundCommand,
 	CommandCancellationOwner,
 	CommandOrigin,
 	ITerminalManager,
 	TerminalInfo,
+	TerminalOutputLine,
+	TerminalOutputStream,
 	TerminalProcessResultPromise,
 } from "../types"
 import { StandaloneTerminalProcess } from "./StandaloneTerminalProcess"
@@ -423,13 +426,13 @@ export class StandaloneTerminalManager implements ITerminalManager {
 		process: TerminalProcessResultPromise,
 		command: string,
 		activityId: string,
-		existingOutput: string[] = [],
+		existingOutput: TerminalOutputLine[] = [],
 		ownership: { origin: CommandOrigin; cancellationOwner: CommandCancellationOwner } = {
 			origin: "foreground",
 			cancellationOwner: "task",
 		},
 		callbacks?: {
-			onOutputLine?: (line: string) => void
+			onOutputLine?: (line: string, stream: TerminalOutputStream) => void
 			onTimeout?: () => void
 			onLogFileCreated?: (logFilePath: string) => void
 		},
@@ -450,15 +453,16 @@ export class StandaloneTerminalManager implements ITerminalManager {
 			process,
 		}
 
-		const existingBytes = existingOutput.reduce((total, line) => total + Buffer.byteLength(line, "utf8") + 1, 0)
-		this.backgroundOutputBuffers.set(activityId, { lines: [...existingOutput], bytes: existingBytes })
+		const formattedExistingOutput = existingOutput.map(formatTerminalOutputLogLine)
+		const existingBytes = formattedExistingOutput.reduce((total, line) => total + Buffer.byteLength(line, "utf8") + 1, 0)
+		this.backgroundOutputBuffers.set(activityId, { lines: formattedExistingOutput, bytes: existingBytes })
 		this.spillBackgroundOutputIfNeeded(backgroundCommand, callbacks)
 
 		// Pipe future process output to log file
-		process.on("line", (line: string) => {
+		process.on("line", (line: string, stream: TerminalOutputStream = "combined") => {
 			backgroundCommand.lineCount++
-			this.appendBackgroundOutput(backgroundCommand, line, callbacks)
-			callbacks?.onOutputLine?.(line)
+			this.appendBackgroundOutput(backgroundCommand, { line, stream }, callbacks)
+			callbacks?.onOutputLine?.(line, stream)
 		})
 
 		// Set up 10-minute hard timeout to prevent zombie processes
@@ -558,9 +562,10 @@ export class StandaloneTerminalManager implements ITerminalManager {
 
 	private appendBackgroundOutput(
 		command: BackgroundCommand,
-		line: string,
+		output: TerminalOutputLine,
 		callbacks?: { onLogFileCreated?: (logFilePath: string) => void },
 	): void {
+		const line = formatTerminalOutputLogLine(output)
 		const logStream = this.logStreams.get(command.id)
 		if (logStream) {
 			logStream.write(`${line}\n`)

@@ -306,9 +306,9 @@ describe("TerminalProcess (Integration Tests)", () => {
 			await process.run(terminal, "test-command")
 
 			// Check that line events were emitted for each line
-			expect(emitSpy).toHaveBeenCalledWith("line", "line1")
-			expect(emitSpy).toHaveBeenCalledWith("line", "line2")
-			expect(emitSpy).toHaveBeenCalledWith("line", "line3")
+			expect(emitSpy).toHaveBeenCalledWith("line", "line1", "combined")
+			expect(emitSpy).toHaveBeenCalledWith("line", "line2", "combined")
+			expect(emitSpy).toHaveBeenCalledWith("line", "line3", "combined")
 		})
 
 		it("should properly handle process hot state (e.g. compiling)", async () => {
@@ -394,10 +394,10 @@ describe("TerminalProcess (Integration Tests)", () => {
 			await process.run(terminal, "test-command")
 
 			// Check that "test-command" was filtered out but "test command" was not
-			expect(emitSpy).toHaveBeenCalledWith("line", "test command")
-			expect(emitSpy).toHaveBeenCalledWith("line", "other output")
+			expect(emitSpy).toHaveBeenCalledWith("line", "test command", "combined")
+			expect(emitSpy).toHaveBeenCalledWith("line", "other output", "combined")
 			// This should never be called because it should be filtered
-			expect(emitSpy).not.toHaveBeenCalledWith("line", "test-command")
+			expect(emitSpy).not.toHaveBeenCalledWith("line", "test-command", "combined")
 		})
 
 		it("should handle npm run commands", async () => {
@@ -420,9 +420,9 @@ describe("TerminalProcess (Integration Tests)", () => {
 			await process.run(terminal, "npm run build")
 
 			// The "npm run build" line should be filtered, but the rest should be emitted
-			expect(emitSpy).toHaveBeenCalledWith("line", "> project@1.0.0 build")
-			expect(emitSpy).toHaveBeenCalledWith("line", "> tsc")
-			expect(emitSpy).toHaveBeenCalledWith("line", "files built successfully")
+			expect(emitSpy).toHaveBeenCalledWith("line", "> project@1.0.0 build", "combined")
+			expect(emitSpy).toHaveBeenCalledWith("line", "> tsc", "combined")
+			expect(emitSpy).toHaveBeenCalledWith("line", "files built successfully", "combined")
 		})
 	})
 
@@ -435,7 +435,7 @@ describe("TerminalProcess (Integration Tests)", () => {
 
 		const emitSpy = vi.spyOn(process, "emit")
 		processAny.emitRemainingBufferIfListening()
-		expect(emitSpy).toHaveBeenCalledWith("line", "test buffer content")
+		expect(emitSpy).toHaveBeenCalledWith("line", "test buffer content", "combined")
 		processAny.buffer.should.equal("")
 	})
 
@@ -453,12 +453,12 @@ describe("TerminalProcess (Integration Tests)", () => {
 		const emitSpy = vi.spyOn(process, "emit")
 
 		processAny.emitIfEol("line 1\nline 2\nline 3")
-		expect(emitSpy).toHaveBeenCalledWith("line", "line 1")
-		expect(emitSpy).toHaveBeenCalledWith("line", "line 2")
+		expect(emitSpy).toHaveBeenCalledWith("line", "line 1", "combined")
+		expect(emitSpy).toHaveBeenCalledWith("line", "line 2", "combined")
 		processAny.buffer.should.equal("line 3")
 
 		processAny.emitIfEol(" continued\n")
-		expect(emitSpy).toHaveBeenCalledWith("line", "line 3 continued")
+		expect(emitSpy).toHaveBeenCalledWith("line", "line 3 continued", "combined")
 		processAny.buffer.should.equal("")
 	})
 
@@ -490,8 +490,8 @@ describe("TerminalProcess (Integration Tests)", () => {
 			processAny.buffer = ""
 
 			processAny.emitIfEol("中文测试\n日本語テスト\n")
-			expect(emitSpy).toHaveBeenCalledWith("line", "中文测试")
-			expect(emitSpy).toHaveBeenCalledWith("line", "日本語テスト")
+			expect(emitSpy).toHaveBeenCalledWith("line", "中文测试", "combined")
+			expect(emitSpy).toHaveBeenCalledWith("line", "日本語テスト", "combined")
 		})
 
 		it("should preserve ANSI escape sequences in emitIfEol", () => {
@@ -501,7 +501,7 @@ describe("TerminalProcess (Integration Tests)", () => {
 
 			const lineWithAnsi = "\x1b[32mGREEN\x1b[0m text"
 			processAny.emitIfEol(`${lineWithAnsi}\n`)
-			expect(emitSpy).toHaveBeenCalledWith("line", lineWithAnsi)
+			expect(emitSpy).toHaveBeenCalledWith("line", lineWithAnsi, "combined")
 		})
 
 		it("should preserve mixed ANSI + CJK in emitIfEol", () => {
@@ -511,7 +511,7 @@ describe("TerminalProcess (Integration Tests)", () => {
 
 			const line = "\x1b[32m✓ 成功\x1b[0m \x1b[31m✗ 失败\x1b[0m"
 			processAny.emitIfEol(`${line}\n`)
-			expect(emitSpy).toHaveBeenCalledWith("line", line)
+			expect(emitSpy).toHaveBeenCalledWith("line", line, "combined")
 		})
 	})
 })

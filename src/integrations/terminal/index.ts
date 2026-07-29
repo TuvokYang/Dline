@@ -52,6 +52,8 @@ export type {
 	OrchestrationResult,
 	StandaloneTerminalOptions,
 	TerminalInfo,
+	TerminalOutputLine,
+	TerminalOutputStream,
 	TerminalProcessEvents,
 	TerminalProcessResultPromise,
 } from "./types"

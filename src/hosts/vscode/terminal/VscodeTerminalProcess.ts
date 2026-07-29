@@ -57,7 +57,7 @@ export class VscodeTerminalProcess extends EventEmitter<TerminalProcessEvents> i
 				const terminalSnapshot = await getLatestTerminalOutput()
 				if (terminalSnapshot?.trim()) {
 					const fallbackMessage = `The command's output could not be captured due to some technical issue, however it has been executed successfully. Here's the current terminal's content to help you get the command's output:\n\n${terminalSnapshot}`
-					this.emit("line", fallbackMessage)
+					this.emit("line", fallbackMessage, "combined")
 				}
 			} catch (error) {
 				Logger.error("Error capturing terminal output:", error)
@@ -204,7 +204,7 @@ export class VscodeTerminalProcess extends EventEmitter<TerminalProcessEvents> i
 				// For non-immediately returning commands we want to show loading spinner right away but this wouldn't happen until it emits a line break, so as soon as we get any output we emit "" to let webview know to show spinner
 				// This is only done for the sake of unblocking the UI, in case there may be some time before the command emits a full line
 				if (!didEmitEmptyLine && !this.fullOutput && data) {
-					this.emit("line", "") // empty line to indicate start of command output stream
+					this.emit("line", "", "combined") // empty line to indicate start of command output stream
 					didEmitEmptyLine = true
 				}
 
@@ -292,7 +292,7 @@ export class VscodeTerminalProcess extends EventEmitter<TerminalProcessEvents> i
 			// if (line.endsWith("\r")) {
 			// 	line = line.slice(0, -1)
 			// }
-			this.emit("line", line)
+			this.emit("line", line, "combined")
 			this.buffer = this.buffer.slice(lineEndIndex + 1)
 		}
 	}
@@ -301,7 +301,7 @@ export class VscodeTerminalProcess extends EventEmitter<TerminalProcessEvents> i
 		if (this.buffer && this.isListening) {
 			const remainingBuffer = this.removeLastLineArtifacts(this.buffer)
 			if (remainingBuffer) {
-				this.emit("line", remainingBuffer)
+				this.emit("line", remainingBuffer, "combined")
 			}
 			this.buffer = ""
 			this.lastRetrievedIndex = this.fullOutput.length

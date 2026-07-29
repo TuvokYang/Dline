@@ -43,15 +43,15 @@ describe("StandaloneTerminalManager background command injection state", () => {
 				},
 			})
 
-			process.emit("line", "one")
-			process.emit("line", "two")
+			process.emit("line", "one", "stdout")
+			process.emit("line", "two", "stderr")
 			assert.equal(command.logFilePath, undefined)
-			process.emit("line", "three")
+			process.emit("line", "three", "stdout")
 			process.emit("completed", { exitCode: 0, signal: null })
 
 			assert.equal(path.basename(command.logFilePath ?? ""), "command_100_1.log")
 			assert.equal(logFilePath, command.logFilePath)
-			assert.equal(await manager.readBackgroundCommandOutput(command.id), "one\ntwo\nthree\n")
+			assert.equal(await manager.readBackgroundCommandOutput(command.id), "[O] one\n[E] two\n[O] three\n")
 		} finally {
 			manager.disposeBackgroundCommands()
 			await fs.rm(expectedLogPath, { force: true })
@@ -64,11 +64,11 @@ describe("StandaloneTerminalManager background command injection state", () => {
 
 		try {
 			const command = manager.trackBackgroundCommand(process, "npm test", "command_100_small")
-			process.emit("line", "small output")
+			process.emit("line", "small output", "stdout")
 			process.emit("completed", { exitCode: 0, signal: null })
 
 			assert.equal(command.logFilePath, undefined)
-			assert.equal(await manager.readBackgroundCommandOutput(command.id), "small output")
+			assert.equal(await manager.readBackgroundCommandOutput(command.id), "[O] small output")
 		} finally {
 			manager.disposeBackgroundCommands()
 		}

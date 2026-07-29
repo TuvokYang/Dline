@@ -154,7 +154,7 @@ describe("BackgroundContextInjector", () => {
 		const manager = new StandaloneTerminalManager()
 		const process = new EventEmitter() as BackgroundCommand["process"]
 		const command = manager.trackBackgroundCommand(process, "npm test", "command_small")
-		process.emit("line", "small output")
+		process.emit("line", "small output", "stdout")
 		process.emit("completed", { exitCode: 0, signal: null })
 
 		try {

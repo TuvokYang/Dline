@@ -8,6 +8,7 @@ import type {
 	ITerminalProcess,
 	OrchestrationResult,
 	TerminalCompletionDetails,
+	TerminalOutputLine,
 	TerminalProcessEvents,
 	TerminalProcessResultPromise,
 } from "./types"
@@ -38,6 +39,10 @@ class FakeTerminalProcess extends EventEmitter<TerminalProcessEvents> implements
 
 	getCompletionDetails(): TerminalCompletionDetails {
 		return {}
+	}
+
+	emitOutput(line: string, stream: "stdout" | "stderr" | "combined"): void {
+		this.emit("line", line, stream)
 	}
 
 	complete(details?: TerminalCompletionDetails): void {
@@ -106,7 +111,7 @@ describe("CommandOrchestrator background transitions", () => {
 		assert.equal(onProceedWhileRunning.mock.calls.length, 1)
 		assert.equal(vi.getTimerCount(), 0)
 
-		process.emit("line", "background output")
+		process.emit("line", "background output", "combined")
 		await Promise.resolve()
 		await Promise.resolve()
 		assert.equal(onOutputLine.mock.calls.length, 0)
@@ -131,7 +136,7 @@ describe("CommandOrchestrator background transitions", () => {
 			}
 			return undefined
 		})
-		const onProceedWhileRunning = vi.fn((_existingOutput: string[]) => ({
+		const onProceedWhileRunning = vi.fn((_existingOutput: TerminalOutputLine[]) => ({
 			backgroundCommandId: "background-tail",
 			logFilePath: "C:\\Temp\\background-tail.log",
 		}))
@@ -141,15 +146,18 @@ describe("CommandOrchestrator background transitions", () => {
 			timeoutSeconds: 2,
 		})
 
-		process.emit("line", "first")
+		process.emit("line", "first", "combined")
 		await vi.advanceTimersByTimeAsync(100)
 		await outputFlushStarted
 		await vi.advanceTimersByTimeAsync(1_900)
-		process.emit("line", "tail")
+		process.emit("line", "tail", "combined")
 		releaseOutputFlush()
 		await execution
 
-		assert.deepEqual(onProceedWhileRunning.mock.calls[0]?.[0], ["first", "tail"])
+		assert.deepEqual(onProceedWhileRunning.mock.calls[0]?.[0], [
+			{ line: "first", stream: "combined" },
+			{ line: "tail", stream: "combined" },
+		])
 	})
 
 	it("hands a timed out command to the background tracker without retaining output ownership", async () => {
@@ -177,7 +185,7 @@ describe("CommandOrchestrator background transitions", () => {
 		assert.equal(onProceedWhileRunning.mock.calls.length, 1)
 		assert.equal(vi.getTimerCount(), 0)
 
-		process.emit("line", "background output")
+		process.emit("line", "background output", "combined")
 		await Promise.resolve()
 		await Promise.resolve()
 		assert.equal(onOutputLine.mock.calls.length, 0)
@@ -185,6 +193,27 @@ describe("CommandOrchestrator background transitions", () => {
 })
 
 describe("CommandOrchestrator exit status messaging", () => {
+	it("collects stdout and stderr separately in the final tool result", async () => {
+		const process = new FakeTerminalProcess()
+		const orchestrationPromise = orchestrateCommandExecution(
+			process.asResultPromise(),
+			createTerminalManager(),
+			createCallbacks(),
+			{ command: "mixed-output" },
+		)
+
+		process.emitOutput("normal output", "stdout")
+		process.emitOutput("error output", "stderr")
+		process.complete({ exitCode: 1, signal: null })
+		const result = await orchestrationPromise
+
+		assert.deepEqual(result.stdoutLines, ["normal output"])
+		assert.deepEqual(result.stderrLines, ["error output"])
+		assert.deepEqual(result.outputLines, ["normal output", "error output"])
+		assert.match(result.result as string, /\[O\] normal output\n\[E\] error output/)
+		assert.doesNotMatch(result.result as string, /\nOutput:\n/)
+	})
+
 	it("reports non-zero exit codes as command failures", async () => {
 		const process = new FakeTerminalProcess()
 		const orchestrationPromise = orchestrateCommandExecution(
