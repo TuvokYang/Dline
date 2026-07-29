@@ -66,7 +66,7 @@ describe("profile facade preflight", () => {
 		const prompt = (await new SystemPromptGenerator().generate(BASE_CONTEXT)).systemPrompt
 		const sectionMarkers = [
 			"\n\n# TOOL USE\n",
-			"\n\n# UPDATING TASK PROGRESS\n",
+			"\n\n# Updating Task Progress\n",
 			"\n\n# ACT MODE V.S. PLAN MODE\n",
 			"\n\n# CAPABILITIES\n",
 			"\n\n# FEEDBACK\n",
