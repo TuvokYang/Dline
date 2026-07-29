@@ -35,7 +35,7 @@ export interface AskResult {
 }
 
 export interface MessageChannelConfig {
-	pushMessage: (msg: ClineMessage) => void
+	pushMessage: (msg: ClineMessage) => void | Promise<void>
 	syncState: () => Promise<void>
 	messageStateHandler: MessageStateHandler
 	taskState: TaskState
@@ -53,7 +53,7 @@ export interface MessageChannelConfig {
  * Does NOT depend on Task or Controller — only on injected config.
  */
 export class MessageChannel {
-	private pushMessage: (msg: ClineMessage) => void
+	private pushMessage: (msg: ClineMessage) => void | Promise<void>
 	private syncState: () => Promise<void>
 	private messageStateHandler: MessageStateHandler
 	private taskState: TaskState
@@ -143,7 +143,7 @@ export class MessageChannel {
 				msg.commandStatus = existingStatus || "pending"
 			}
 			const finalized = await this.messageStateHandler.finalizeClineMessage(msg)
-			this.pushMessage(finalized)
+			await this.pushMessage(finalized)
 			await this.postStateToWebview()
 			this.taskState.lastMessageTs = ts
 			return ts
@@ -242,7 +242,7 @@ export class MessageChannel {
 		await this.postStateToWebview()
 		const persisted = this.messageStateHandler.clineMessages.find((message) => message.ts === askTs)
 		if (persisted) {
-			this.pushMessage(persisted)
+			await this.pushMessage(persisted)
 		}
 		return askTs
 	}

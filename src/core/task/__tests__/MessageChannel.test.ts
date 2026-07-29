@@ -5,7 +5,9 @@ import { MessageChannel } from "../MessageChannel"
 import type { MessageStateHandler } from "../message-state"
 import type { TaskState } from "../TaskState"
 
-function createMessageChannel() {
+function createMessageChannel(
+	options: { pushMessage?: (message: ClineMessage) => void | Promise<void>; syncState?: () => Promise<void> } = {},
+) {
 	const clineMessages: ClineMessage[] = []
 	const taskState = {
 		abort: false,
@@ -20,8 +22,8 @@ function createMessageChannel() {
 	const flushUiMessages = vi.fn(async () => {})
 	const flushMessageUpdate = vi.fn(async () => {})
 	const channel = new MessageChannel({
-		pushMessage: () => {},
-		syncState: async () => {},
+		pushMessage: options.pushMessage ?? (() => {}),
+		syncState: options.syncState ?? (async () => {}),
 		messageStateHandler: {
 			get clineMessages() {
 				return clineMessages
@@ -87,6 +89,63 @@ describe("MessageChannel.say", () => {
 })
 
 describe("MessageChannel.presentAsk", () => {
+	it("waits for realtime ask delivery before exposing the awaiting interaction", async () => {
+		let releaseDelivery: (() => void) | undefined
+		const delivery = new Promise<void>((resolve) => {
+			releaseDelivery = resolve
+		})
+		const pushMessage = vi.fn(async () => delivery)
+		const { channel } = createMessageChannel({ pushMessage })
+		let settled = false
+
+		const presentation = channel.presentAsk("qna_respond", '{"response":"ready"}', 100, "qna-1")
+		void presentation.then(() => {
+			settled = true
+		})
+		await flushMicrotasks()
+
+		expect(pushMessage).toHaveBeenCalledOnce()
+		expect(settled).toBe(false)
+
+		releaseDelivery?.()
+		await expect(presentation).resolves.toBe(100)
+	})
+
+	it("delivers a completion say before upgrading the same row to its ask anchor", async () => {
+		let releaseCompletionSay: (() => void) | undefined
+		const completionSayDelivery = new Promise<void>((resolve) => {
+			releaseCompletionSay = resolve
+		})
+		const delivered: string[] = []
+		const pushMessage = vi.fn(async (message: ClineMessage) => {
+			const identity = `${message.type}:${message.ask ?? message.say}`
+			if (message.type === "say" && message.say === "completion_result") {
+				await completionSayDelivery
+			}
+			delivered.push(identity)
+		})
+		const { channel, clineMessages } = createMessageChannel({ pushMessage })
+
+		const completionFlow = (async () => {
+			await channel.say("completion_result", "done", undefined, undefined, false, 100)
+			await channel.presentAsk("completion_result", "done", 100, "completion-1")
+		})()
+		await flushMicrotasks()
+
+		expect(pushMessage).toHaveBeenCalledOnce()
+		releaseCompletionSay?.()
+		await completionFlow
+
+		expect(delivered).toEqual(["say:completion_result", "ask:completion_result"])
+		expect(clineMessages).toHaveLength(1)
+		expect(clineMessages[0]).toMatchObject({
+			ts: 100,
+			type: "ask",
+			ask: "completion_result",
+			interactionId: "completion-1",
+		})
+	})
+
 	it("resets a reused command message from a terminal state to pending", async () => {
 		const { channel, clineMessages } = createMessageChannel()
 		await channel.say("command", "echo ready")
