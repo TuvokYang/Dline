@@ -24,6 +24,7 @@ const BASE_CONTEXT = {
 		{ name: "opaque", path: "literal @CWD@" },
 	],
 	focusChainSettings: { enabled: false, remindClineInterval: 0 },
+	terminalCommandTimeoutSeconds: 1800,
 	isTesting: true,
 } as SystemPromptContext
 
@@ -37,15 +38,19 @@ describe("XML tool projection", () => {
 		expect(missingParams).toEqual([])
 	})
 
-	it("documents optional execute_command workdirectory, background, and timeout parameters", () => {
+	it("documents the complete execute_command directory and lifecycle contract", () => {
 		const xml = new ToolPromptGenerator().generateXml(PromptProfile.Standard, BASE_CONTEXT)
 
 		expect(xml).toContain("<workdirectory>")
 		expect(xml).toContain("<background>")
+		expect(xml).toContain("<synchronous>")
 		expect(xml).toContain("<timeout>")
 		expect(xml).toContain("outside every project root requires user approval")
 		expect(xml).toContain("background process")
-		expect(xml).toContain("foreground wait")
+		expect(xml).toContain("absolute maximum runtime")
+		expect(xml).toContain("default is @TERMINAL_COMMAND_TIMEOUT_SECONDS@ seconds")
+		expect(xml).toContain("10-second background handoff")
+		expect(xml).not.toContain("foreground wait")
 	})
 
 	it("keeps canonical runtime tokens unresolved until the System facade final scan", async () => {
@@ -67,6 +72,8 @@ describe("XML tool projection", () => {
 		expect(output.systemPrompt).not.toContain("@MULTI_ROOT_HINT@")
 		expect(output.systemPrompt).not.toContain("@BROWSER_VIEWPORT_WIDTH@")
 		expect(output.systemPrompt).not.toContain("@BROWSER_VIEWPORT_HEIGHT@")
+		expect(output.systemPrompt).toContain("default is 1800 seconds")
+		expect(output.systemPrompt).not.toContain("@TERMINAL_COMMAND_TIMEOUT_SECONDS@")
 		expect(output.systemPrompt).not.toContain("{{")
 	})
 

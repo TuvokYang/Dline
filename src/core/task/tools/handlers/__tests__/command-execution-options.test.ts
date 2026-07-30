@@ -3,35 +3,52 @@ import { describe, it } from "vitest"
 import { parseCommandExecutionOptions } from "../command-execution-options"
 
 describe("parseCommandExecutionOptions", () => {
-	it("defaults short commands to foreground with a bounded wait", () => {
+	it("leaves timeout unset so execution can use the current terminal setting", () => {
 		assert.deepEqual(parseCommandExecutionOptions("echo ready", undefined, undefined), {
 			background: false,
-			timeoutSeconds: 30,
+			synchronous: false,
+			timeoutSeconds: undefined,
 		})
 	})
 
-	it("uses the extended timeout policy for recognized long-running commands", () => {
+	it("does not infer a different timeout for recognized long-running commands", () => {
 		assert.deepEqual(parseCommandExecutionOptions("npm test", undefined, undefined), {
 			background: false,
-			timeoutSeconds: 300,
+			synchronous: false,
+			timeoutSeconds: undefined,
 		})
 	})
 
 	it("parses explicit background and positive integer timeout values", () => {
 		assert.deepEqual(parseCommandExecutionOptions("npm test", "true", "45"), {
 			background: true,
+			synchronous: false,
 			timeoutSeconds: 45,
 		})
 		assert.deepEqual(parseCommandExecutionOptions("npm test", "false", "15"), {
 			background: false,
+			synchronous: false,
 			timeoutSeconds: 15,
 		})
 	})
 
-	it("falls back for invalid, zero, negative, and fractional timeout values", () => {
+	it("leaves invalid, zero, negative, and fractional timeout values unset", () => {
 		for (const timeout of ["invalid", "0", "-2", "2.5"]) {
-			assert.equal(parseCommandExecutionOptions("echo ready", undefined, timeout).timeoutSeconds, 30)
+			assert.equal(parseCommandExecutionOptions("echo ready", undefined, timeout).timeoutSeconds, undefined)
 		}
+	})
+
+	it("parses synchronous mode and lets explicit background take precedence", () => {
+		assert.deepEqual(parseCommandExecutionOptions("npm test", "false", "120", "true"), {
+			background: false,
+			synchronous: true,
+			timeoutSeconds: 120,
+		})
+		assert.deepEqual(parseCommandExecutionOptions("npm test", "true", "120", "true"), {
+			background: true,
+			synchronous: false,
+			timeoutSeconds: 120,
+		})
 	})
 
 	it("treats every non-true background value as false", () => {

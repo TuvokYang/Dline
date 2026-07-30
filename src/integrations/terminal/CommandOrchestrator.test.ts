@@ -16,6 +16,7 @@ import type {
 class FakeTerminalProcess extends EventEmitter<TerminalProcessEvents> implements ITerminalProcess {
 	isHot = false
 	waitForShellIntegration = false
+	readonly terminate = vi.fn(async () => undefined)
 	private readonly promise: Promise<void>
 	private resolvePromise!: () => void
 	private rejectPromise!: (error: Error) => void
@@ -117,50 +118,36 @@ describe("CommandOrchestrator background transitions", () => {
 		assert.equal(onOutputLine.mock.calls.length, 0)
 	})
 
-	it("drains output queued while a timeout handoff is waiting on an in-flight flush", async () => {
+	it("includes output emitted immediately before the automatic handoff", async () => {
 		vi.useFakeTimers()
 		const process = new FakeTerminalProcess()
-		const callbacks = createCallbacks()
-		let releaseOutputFlush!: () => void
-		let markOutputFlushStarted!: () => void
-		const outputFlushStarted = new Promise<void>((resolve) => {
-			markOutputFlushStarted = resolve
-		})
-		const blockedOutputFlush = new Promise<void>((resolve) => {
-			releaseOutputFlush = resolve
-		})
-		callbacks.say = vi.fn(async (type) => {
-			if (type === "command_output") {
-				markOutputFlushStarted()
-				await blockedOutputFlush
-			}
-			return undefined
-		})
 		const onProceedWhileRunning = vi.fn((_existingOutput: TerminalOutputLine[]) => ({
 			backgroundCommandId: "background-tail",
 			logFilePath: "C:\\Temp\\background-tail.log",
 		}))
-		const execution = orchestrateCommandExecution(process.asResultPromise(), createTerminalManager(), callbacks, {
+		const execution = orchestrateCommandExecution(process.asResultPromise(), createTerminalManager(), createCallbacks(), {
 			command: "slow-output-command",
 			onProceedWhileRunning,
-			timeoutSeconds: 2,
+			timeoutSeconds: 60,
 		})
 
 		process.emit("line", "first", "combined")
-		await vi.advanceTimersByTimeAsync(100)
-		await outputFlushStarted
-		await vi.advanceTimersByTimeAsync(1_900)
+		await vi.advanceTimersByTimeAsync(9_999)
 		process.emit("line", "tail", "combined")
-		releaseOutputFlush()
+		await vi.advanceTimersByTimeAsync(1)
+		if (onProceedWhileRunning.mock.calls.length === 0) {
+			process.complete({ exitCode: 0, signal: null })
+		}
 		await execution
 
+		assert.equal(onProceedWhileRunning.mock.calls.length, 1)
 		assert.deepEqual(onProceedWhileRunning.mock.calls[0]?.[0], [
 			{ line: "first", stream: "combined" },
 			{ line: "tail", stream: "combined" },
 		])
 	})
 
-	it("hands a timed out command to the background tracker without retaining output ownership", async () => {
+	it("hands a still-running command to the background tracker after 10 seconds without reporting a timeout", async () => {
 		vi.useFakeTimers()
 		const process = new FakeTerminalProcess()
 		const onOutputLine = vi.fn()
@@ -172,23 +159,73 @@ describe("CommandOrchestrator background transitions", () => {
 			command: "slow-command",
 			onOutputLine,
 			onProceedWhileRunning,
-			timeoutSeconds: 2,
+			timeoutSeconds: 60,
 		})
 
-		await vi.advanceTimersByTimeAsync(2_000)
+		await vi.advanceTimersByTimeAsync(10_000)
+		const handedOffAtTenSeconds = onProceedWhileRunning.mock.calls.length
+		if (handedOffAtTenSeconds === 0) {
+			process.complete({ exitCode: 0, signal: null })
+		}
 		const result = await execution
 
 		assert.equal(result.completed, false)
 		assert.equal(result.backgroundCommandId, "background-timeout")
 		assert.equal(result.logFilePath, "C:\\Temp\\background-timeout.log")
-		assert.match(result.result as string, /^Command timed out after 2 seconds\. Running in background\./)
-		assert.equal(onProceedWhileRunning.mock.calls.length, 1)
+		assert.match(result.result as string, /still running after 10 seconds/i)
+		assert.doesNotMatch(result.result as string, /timed out/i)
+		assert.equal(handedOffAtTenSeconds, 1)
 		assert.equal(vi.getTimerCount(), 0)
 
 		process.emit("line", "background output", "combined")
 		await Promise.resolve()
 		await Promise.resolve()
 		assert.equal(onOutputLine.mock.calls.length, 0)
+	})
+
+	it("kills a synchronous command at its absolute timeout without handing it to the background tracker", async () => {
+		vi.useFakeTimers()
+		const process = new FakeTerminalProcess()
+		const onProceedWhileRunning = vi.fn(() => ({ backgroundCommandId: "unexpected-background" }))
+		const onTimeout = vi.fn()
+		const execution = orchestrateCommandExecution(process.asResultPromise(), createTerminalManager(), createCallbacks(), {
+			command: "blocking-command",
+			onProceedWhileRunning,
+			onTimeout,
+			synchronous: true,
+			timeoutSeconds: 60,
+		})
+
+		await vi.advanceTimersByTimeAsync(10_000)
+		assert.equal(onProceedWhileRunning.mock.calls.length, 0)
+		assert.equal(process.terminate.mock.calls.length, 0)
+
+		await vi.advanceTimersByTimeAsync(50_000)
+		const result = await execution
+
+		assert.equal(onProceedWhileRunning.mock.calls.length, 0)
+		assert.equal(onTimeout.mock.calls.length, 1)
+		assert.equal(process.terminate.mock.calls.length, 1)
+		assert.equal(result.timedOut, true)
+		assert.match(result.result as string, /60-second timeout/i)
+	})
+
+	it("kills a default command when its timeout is shorter than the 10-second handoff", async () => {
+		vi.useFakeTimers()
+		const process = new FakeTerminalProcess()
+		const onProceedWhileRunning = vi.fn(() => ({ backgroundCommandId: "unexpected-background" }))
+		const execution = orchestrateCommandExecution(process.asResultPromise(), createTerminalManager(), createCallbacks(), {
+			command: "short-deadline-command",
+			onProceedWhileRunning,
+			timeoutSeconds: 5,
+		})
+
+		await vi.advanceTimersByTimeAsync(5_000)
+		const result = await execution
+
+		assert.equal(onProceedWhileRunning.mock.calls.length, 0)
+		assert.equal(process.terminate.mock.calls.length, 1)
+		assert.equal(result.timedOut, true)
 	})
 })
 

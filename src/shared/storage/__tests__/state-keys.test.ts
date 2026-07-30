@@ -293,6 +293,10 @@ describe("State Keys Type Safety", () => {
 			expect(getDefaultValue("chatInputSendShortcut")).to.equal(DEFAULT_CHAT_INPUT_SEND_SHORTCUT)
 		})
 
+		it("should default terminal command kill timeout to 1800 seconds", () => {
+			expect(getDefaultValue("terminalCommandTimeoutSeconds" as GlobalStateAndSettingsKey)).to.equal(1800)
+		})
+
 		it("should return correct default values for known keys", () => {
 			// Test a few known defaults
 			const testCases: Array<{ key: GlobalStateAndSettingsKey; expectedType: string }> = [

@@ -9,6 +9,7 @@ const BASE_CONTEXT = {
 	promptProfile: PromptProfile.Standard,
 	providerInfo: { providerId: "openai", model: { id: "model", info: {} } },
 	enableNativeToolCalls: true,
+	terminalCommandTimeoutSeconds: 1800,
 } as SystemPromptContext
 
 /** Finds one projected tool by stable provider name. */
@@ -78,7 +79,7 @@ describe("provider tool projector", () => {
 		["openai", "function", "boolean", "integer"],
 		["anthropic", "anthropic", "boolean", "integer"],
 		["gemini", "gemini", "BOOLEAN", "NUMBER"],
-	] as const)("projects optional execute_command workdirectory, background, and timeout for %s", (providerId, shape, boolType, intType) => {
+	] as const)("projects optional execute_command workdirectory, background, synchronous, and timeout for %s", (providerId, shape, boolType, intType) => {
 		const context = { ...BASE_CONTEXT, providerInfo: { ...BASE_CONTEXT.providerInfo, providerId } }
 		const tool = findTool(new ToolPromptGenerator().generate(PromptProfile.Standard, context), ClineDefaultTool.BASH)
 		const projected = tool as unknown as {
@@ -98,9 +99,22 @@ describe("provider tool projector", () => {
 			properties: {
 				workdirectory: { type: shape === "gemini" ? "STRING" : "string" },
 				background: { type: boolType },
+				synchronous: { type: boolType },
 				timeout: { type: intType },
 			},
 		})
+		expect(JSON.stringify(schema)).toContain("default is 1800 seconds")
+		expect(JSON.stringify(schema)).toContain("absolute maximum runtime")
+		expect(JSON.stringify(schema)).toContain("10-second background handoff")
+		expect(JSON.stringify(schema)).not.toContain("foreground wait")
+	})
+
+	it("injects the configured timeout default into a newly generated tool schema", () => {
+		const context = { ...BASE_CONTEXT, terminalCommandTimeoutSeconds: 3600 }
+		const tool = findTool(new ToolPromptGenerator().generate(PromptProfile.Standard, context), ClineDefaultTool.BASH)
+
+		expect(JSON.stringify(tool)).toContain("default is 3600 seconds")
+		expect(JSON.stringify(tool)).not.toContain("default is 1800 seconds")
 	})
 
 	it.each([

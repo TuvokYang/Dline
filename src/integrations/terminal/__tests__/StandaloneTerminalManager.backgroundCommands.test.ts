@@ -3,7 +3,7 @@ import { EventEmitter } from "node:events"
 import fs from "node:fs/promises"
 import * as path from "node:path"
 import { DlineTempManager } from "@services/temp"
-import { describe, it } from "vitest"
+import { afterEach, describe, it, vi } from "vitest"
 import { StandaloneTerminalManager } from "../standalone/StandaloneTerminalManager"
 import type { BackgroundCommand } from "../types"
 
@@ -28,6 +28,37 @@ function createCommand(id: string): BackgroundCommand {
 }
 
 describe("StandaloneTerminalManager background command injection state", () => {
+	afterEach(() => {
+		vi.useRealTimers()
+	})
+
+	it("uses the original command deadline instead of restarting a fixed timeout at handoff", async () => {
+		vi.useFakeTimers()
+		vi.setSystemTime(10_000)
+		const manager = new StandaloneTerminalManager()
+		const process = new EventEmitter() as BackgroundCommand["process"] & { terminate: ReturnType<typeof vi.fn> }
+		process.terminate = vi.fn()
+
+		try {
+			const command = manager.trackBackgroundCommand(process, "npm test", "command_deadline", [], {
+				origin: "foreground",
+				cancellationOwner: "task",
+				startedAt: 0,
+				deadlineAt: 60_000,
+			})
+
+			await vi.advanceTimersByTimeAsync(49_999)
+			assert.equal(command.status, "running")
+			assert.equal(process.terminate.mock.calls.length, 0)
+
+			await vi.advanceTimersByTimeAsync(1)
+			assert.equal(command.status, "timed_out")
+			assert.equal(process.terminate.mock.calls.length, 1)
+		} finally {
+			manager.disposeBackgroundCommands()
+		}
+	})
+
 	it("creates the activity-owned log only after output exceeds the configured line limit", async () => {
 		const manager = new StandaloneTerminalManager()
 		const process = new EventEmitter() as BackgroundCommand["process"]

@@ -439,6 +439,17 @@ describe("TerminalProcess (Integration Tests)", () => {
 		processAny.buffer.should.equal("")
 	})
 
+	it("should keep emitting output after foreground waiting is released", () => {
+		const processAny = process as any
+		const lineListener = vi.fn()
+		process.on("line", lineListener)
+
+		process.continue()
+		processAny.emitIfEol("background output\n")
+
+		expect(lineListener).toHaveBeenCalledWith("background output", "combined")
+	})
+
 	it("should remove prompt characters from the last line of output", () => {
 		const processAny = process as any
 
