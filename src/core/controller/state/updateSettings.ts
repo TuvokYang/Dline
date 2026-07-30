@@ -11,6 +11,7 @@ import { isChatInputSendShortcut } from "@/shared/ChatInputSendShortcut"
 import { McpDisplayMode } from "@/shared/McpDisplayMode"
 import { ShowMessageType } from "@/shared/proto/dline/host/window"
 import { Logger } from "@/shared/services/Logger"
+import { MIN_TERMINAL_COMMAND_TIMEOUT_SECONDS } from "@/shared/terminal-settings"
 import { telemetryService } from "../../../services/telemetry"
 import { BrowserSettings as SharedBrowserSettings } from "../../../shared/BrowserSettings"
 import { Controller } from ".."
@@ -141,6 +142,14 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 		// Update terminal output line limit
 		if (request.terminalOutputLineLimit !== undefined) {
 			controller.stateManager.setGlobalState("terminalOutputLineLimit", Number(request.terminalOutputLineLimit))
+		}
+
+		if (request.terminalCommandTimeoutSeconds !== undefined) {
+			const timeoutSeconds = Number(request.terminalCommandTimeoutSeconds)
+			if (!Number.isSafeInteger(timeoutSeconds) || timeoutSeconds < MIN_TERMINAL_COMMAND_TIMEOUT_SECONDS) {
+				throw new Error(`Terminal command timeout must be at least ${MIN_TERMINAL_COMMAND_TIMEOUT_SECONDS} seconds`)
+			}
+			controller.stateManager.setGlobalState("terminalCommandTimeoutSeconds", timeoutSeconds)
 		}
 
 		if (request.vscodeTerminalExecutionMode !== undefined && request.vscodeTerminalExecutionMode !== "") {

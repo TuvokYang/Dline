@@ -82,6 +82,7 @@ export interface ExtensionState {
 	shellIntegrationTimeout: number
 	terminalReuseEnabled?: boolean
 	terminalOutputLineLimit: number
+	terminalCommandTimeoutSeconds: number
 	maxConsecutiveMistakes: number
 	defaultTerminalProfile?: string
 	vscodeTerminalExecutionMode: string

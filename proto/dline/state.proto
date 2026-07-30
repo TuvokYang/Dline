@@ -369,6 +369,7 @@ message UpdateSettingsRequest {
   optional string act_mode_profile = 45;
   optional bool show_active_tasks_in_env_details = 46;
   optional string chat_input_send_shortcut = 47;
+  optional int32 terminal_command_timeout_seconds = 48;
 }
 
 message UpdateTerminalConnectionTimeoutRequest {

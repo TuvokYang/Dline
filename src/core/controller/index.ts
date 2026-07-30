@@ -1072,6 +1072,7 @@ export class Controller {
 		const customPrompt = this.stateManager.getGlobalSettingsKey("customPrompt")
 		const mcpResponsesCollapsed = this.stateManager.getGlobalStateKey("mcpResponsesCollapsed")
 		const terminalOutputLineLimit = this.stateManager.getGlobalSettingsKey("terminalOutputLineLimit")
+		const terminalCommandTimeoutSeconds = this.stateManager.getGlobalSettingsKey("terminalCommandTimeoutSeconds")
 		const maxConsecutiveMistakes = this.stateManager.getGlobalSettingsKey("maxConsecutiveMistakes")
 		const favoritedModelIds = this.stateManager.getGlobalStateKey("favoritedModelIds")
 		const doubleCheckCompletionEnabled = this.stateManager.getGlobalSettingsKey("doubleCheckCompletionEnabled")
@@ -1187,6 +1188,7 @@ export class Controller {
 			onboardingModels,
 			mcpResponsesCollapsed,
 			terminalOutputLineLimit,
+			terminalCommandTimeoutSeconds,
 			maxConsecutiveMistakes,
 			customPrompt,
 			taskHistory: processedTaskHistory,
