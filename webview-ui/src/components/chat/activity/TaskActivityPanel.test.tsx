@@ -29,7 +29,37 @@ vi.mock("./useTaskActivities", () => ({
 				title: "new command",
 				detail: "npm run test:run -- src/example.test.ts",
 				logPath: "C:\\Temp\\activity.log",
-				events: [],
+				output: "actual stdout\n",
+				events: [
+					{
+						sequence: 1,
+						timestamp: 200,
+						kind: "status",
+						status: "running",
+						text: "Activity started",
+					},
+					{
+						sequence: 2,
+						timestamp: 201,
+						kind: "output",
+						text: "actual stdout\n",
+					},
+					{
+						sequence: 3,
+						timestamp: 202,
+						kind: "metrics",
+						metrics: {
+							toolCalls: 0,
+							inputTokens: 0,
+							outputTokens: 0,
+							totalCost: 0,
+							currency: "",
+							contextTokens: 0,
+							contextWindow: 0,
+							lineCount: 1,
+						},
+					},
+				],
 			},
 			{
 				activityId: "old-agent",
@@ -123,6 +153,18 @@ describe("TaskActivityPanel", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Copy command" }))
 
 		await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith("npm run test:run -- src/example.test.ts"))
+	})
+
+	it("renders command output once without a synthetic event timeline or token metrics", () => {
+		render(<TaskActivityPanel taskId="task-1" />)
+
+		const item = screen.getByTestId("activity-item")
+		fireEvent.click(within(item).getByRole("button", { name: /new command/i }))
+
+		expect(item.textContent?.match(/actual stdout/g)).toHaveLength(1)
+		expect(within(item).queryByTestId("activity-timeline")).not.toBeInTheDocument()
+		expect(item).not.toHaveTextContent(/\d+ tools/)
+		expect(item).not.toHaveTextContent(/\d+ tokens/)
 	})
 
 	it("renders an ordered typed timeline with thinking, conversation, tools, results, and metrics", () => {

@@ -135,7 +135,7 @@ export class TaskActivityStore {
 			...(activityPatch.error === undefined ? {} : { error: redactSensitiveText(activityPatch.error) }),
 		}
 		Object.assign(activity, sanitizedPatch, { updatedAt: Date.now() })
-		if (metrics) {
+		if (metrics && activity.kind === "subagent") {
 			activity.metrics = { ...activity.metrics, ...metrics }
 			this.appendEvent(activityId, { kind: "metrics", metrics: { ...activity.metrics } }, false)
 		}
@@ -156,7 +156,11 @@ export class TaskActivityStore {
 		const combined = `${activity.output ?? ""}${safeText}`
 		activity.output = combined.length > MAX_OUTPUT_CHARS ? combined.slice(-MAX_OUTPUT_CHARS) : combined
 		activity.updatedAt = Date.now()
-		this.appendEvent(activityId, { kind: "output", text: safeText }, false)
+		if (activity.kind === "command") {
+			this.markDirty(activityId, false)
+		} else {
+			this.appendEvent(activityId, { kind: "output", text: safeText }, false)
+		}
 	}
 
 	appendEvent(activityId: string, input: TaskActivityEventInput, priority = false): TaskActivityEvent | undefined {

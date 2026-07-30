@@ -249,7 +249,7 @@ function replaceTurnBlock(
 	state: TaskRuntimeState,
 	dlineTid: string,
 	phase: BlockPhase,
-	activeDlineTid: string | undefined = state.turn?.activeDlineTid,
+	activeDlineTid: string | undefined,
 ): TaskRuntimeState["turn"] {
 	if (!state.turn) {
 		return undefined
@@ -332,7 +332,7 @@ function reduceTurn(
 		if (block.requiresApproval) {
 			return acceptTurn(state, event.type, state.turn)
 		}
-		const turn = replaceTurnBlock(state, block.dlineTid, BlockPhase.AUTO_EXECUTING)
+		const turn = replaceTurnBlock(state, block.dlineTid, BlockPhase.AUTO_EXECUTING, state.turn.activeDlineTid)
 		return turn ? acceptTurn(state, event.type, turn) : reject(state, event.type)
 	}
 	if (event.type === "BLOCK_APPROVAL_REQUIRED") {
@@ -405,7 +405,8 @@ function reduceTurn(
 	if (block.phase !== BlockPhase.EXECUTING && block.phase !== BlockPhase.AUTO_EXECUTING) {
 		return reject(state, event.type)
 	}
-	const turn = replaceTurnBlock(state, block.dlineTid, BlockPhase.COMPLETED, undefined)
+	const activeDlineTid = state.turn.activeDlineTid === block.dlineTid ? undefined : state.turn.activeDlineTid
+	const turn = replaceTurnBlock(state, block.dlineTid, BlockPhase.COMPLETED, activeDlineTid)
 	return turn ? acceptTurn(state, event.type, turn, TaskPhase.EXECUTING) : reject(state, event.type)
 }
 

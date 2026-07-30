@@ -340,6 +340,26 @@ describe("reconcileResume", () => {
 		expect(result.snapshot.turn?.blocks[0]?.phase).toBe(BlockPhase.COMPLETED)
 	})
 
+	it("clears a stale approval owner from a terminal restored turn", () => {
+		const snapshot = snapshotWithTurn("tid-report", "fn-report", {
+			toolName: "generate_report",
+			blockPhase: BlockPhase.COMPLETED,
+		})
+		if (!snapshot.turn) throw new Error("expected restored turn")
+		snapshot.phase = TaskPhase.PAUSED
+		snapshot.turn.activeDlineTid = "tid-report"
+
+		const result = reconcileResume(
+			fullInput([apiUser(), assistantTool("tid-report", "fn-report", "generate_report")], [], snapshot),
+		)
+
+		expect(result.entry).toMatchObject({ type: "show_resume_interaction" })
+		expect(result.snapshot.turn).toMatchObject({
+			activeDlineTid: undefined,
+			blocks: [{ dlineTid: "tid-report", phase: BlockPhase.COMPLETED }],
+		})
+	})
+
 	it("does not offer Approve again after an accepted response with unknown outcome", () => {
 		const snapshot = snapshotWithTurn("tid-accepted", "fn-accepted", {
 			interaction: "tool_approval",

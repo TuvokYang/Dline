@@ -646,4 +646,51 @@ describe("BLOCK_EXECUTION_COMPLETED — conversational tool lifecycle", () => {
 		expect(result).toMatchObject({ accepted: true })
 		expect(result.next.turn?.blocks[0]?.phase).toBe(BlockPhase.COMPLETED)
 	})
+
+	it("clears the approval owner when an approved block completes", () => {
+		const state = stateWithBlock(BlockPhase.EXECUTING, true)
+		state.turn.activeDlineTid = "tid-1"
+
+		const result = reduceTask(state, {
+			type: "BLOCK_EXECUTION_COMPLETED",
+			turnId: "turn-1",
+			dlineTid: "tid-1",
+		})
+
+		expect(result).toMatchObject({ accepted: true })
+		expect(result.next.turn).toMatchObject({
+			activeDlineTid: undefined,
+			blocks: [{ dlineTid: "tid-1", phase: BlockPhase.COMPLETED }],
+		})
+	})
+
+	it("preserves another block's approval owner when an automatic block completes", () => {
+		const state = stateWithBlock(BlockPhase.AWAITING_APPROVAL, true)
+		state.phase = TaskPhase.AWAITING_APPROVAL
+		state.turn.activeDlineTid = "tid-1"
+		state.turn.blocks.push({
+			dlineTid: "tid-2",
+			functionId: "fn-2",
+			toolName: "read_file",
+			phase: BlockPhase.AUTO_EXECUTING,
+			ts: 2,
+			requiresApproval: false,
+			conversationHistoryIndex: 1,
+		})
+
+		const result = reduceTask(state, {
+			type: "BLOCK_EXECUTION_COMPLETED",
+			turnId: "turn-1",
+			dlineTid: "tid-2",
+		})
+
+		expect(result).toMatchObject({ accepted: true })
+		expect(result.next.turn).toMatchObject({
+			activeDlineTid: "tid-1",
+			blocks: [
+				{ dlineTid: "tid-1", phase: BlockPhase.AWAITING_APPROVAL },
+				{ dlineTid: "tid-2", phase: BlockPhase.COMPLETED },
+			],
+		})
+	})
 })

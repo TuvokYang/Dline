@@ -124,7 +124,7 @@ describe("MessageChannel.presentAsk", () => {
 			}
 			delivered.push(identity)
 		})
-		const { channel, clineMessages } = createMessageChannel({ pushMessage })
+		const { channel, clineMessages, flushMessageUpdate } = createMessageChannel({ pushMessage })
 
 		const completionFlow = (async () => {
 			await channel.say("completion_result", "done", undefined, undefined, false, 100)
@@ -144,6 +144,8 @@ describe("MessageChannel.presentAsk", () => {
 			ask: "completion_result",
 			interactionId: "completion-1",
 		})
+		assert.equal(clineMessages[0].say, undefined)
+		assert.deepEqual(flushMessageUpdate.mock.calls, [[0]])
 	})
 
 	it("resets a reused command message from a terminal state to pending", async () => {

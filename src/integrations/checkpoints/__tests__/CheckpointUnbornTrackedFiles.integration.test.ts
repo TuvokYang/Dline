@@ -333,6 +333,32 @@ describe("CheckpointTracker with tracked files in an unborn user repository", ()
 		}
 	})
 
+	it("keeps using the shadow repository bound during tracker creation", async () => {
+		const sandbox = await createUnbornSandbox()
+		const taskId = "task-bound-shadow-path"
+		const alternateDocumentsPath = path.join(sandbox.sandbox, "alternate-documents")
+		try {
+			const tracker = await CheckpointTracker.create(taskId, true, sandbox.workspacePath)
+			if (!tracker) throw new Error("checkpoint_tracker_missing")
+			const taskFiles = new TaskFileTracker(taskId)
+			taskFiles.trackModification(sandbox.trackedFile)
+			tracker.setTaskFileTracker(taskFiles)
+
+			await fs.writeFile(sandbox.trackedFile, "checkpoint content")
+			process.env.DLINE_DOCS_DIR = alternateDocumentsPath
+			const checkpointHash = await tracker.commit()
+			expectCheckpointHash(checkpointHash)
+
+			await fs.writeFile(sandbox.trackedFile, "after checkpoint")
+			await tracker.restoreFiles(checkpointHash, [sandbox.trackedFile])
+
+			expect(await fs.readFile(sandbox.trackedFile, "utf8")).toBe("checkpoint content")
+		} finally {
+			WorkspaceFileRegistry.getInstance().releaseTask(taskId)
+			await disposeSandbox(sandbox)
+		}
+	})
+
 	it("binds and restores a valid file when stale and missing paths are tracked", async () => {
 		const sandbox = await createUnbornSandbox()
 		const taskId = "task-unborn-manager"

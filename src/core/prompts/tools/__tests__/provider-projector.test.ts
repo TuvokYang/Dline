@@ -40,6 +40,14 @@ describe("provider tool projector", () => {
 		})
 	})
 
+	it("keeps the interactive blocking policy in the canonical ask tool description", () => {
+		const tools = new ToolPromptGenerator().generate(PromptProfile.Standard, BASE_CONTEXT)
+		const description = toolDescription(findTool(tools, ClineDefaultTool.ASK))
+
+		expect(description).toBe(getPrompt("askFollowupQuestion", "standardDescription"))
+		expect(description).toContain("when at least two failed approaches leave the task genuinely blocked")
+	})
+
 	it("resolves canonical runtime tokens at the native transport boundary without recursive insertion", () => {
 		const context = {
 			...BASE_CONTEXT,

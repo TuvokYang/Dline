@@ -6,13 +6,13 @@ import {
 } from "../ResumeProvenance"
 
 describe("ResumeProvenance", () => {
-	it("presents session restoration and an unknown prior tool outcome without inferring failure", () => {
+	it("presents session restoration without inventing a missing prior tool result", () => {
 		const presentation = createResumeInteractionPresentation()
 
 		expect(presentation).toContain("session was closed")
 		expect(presentation).toContain("has now been restored")
-		expect(presentation).toContain("previous tool call result is missing")
-		expect(presentation).toContain("outcome is unknown")
+		expect(presentation).not.toContain("tool call result is missing")
+		expect(presentation).not.toContain("outcome is unknown")
 		expect(presentation).not.toContain("abnormal")
 		expect(presentation).not.toContain("assume the tool use was not successful")
 	})
@@ -32,7 +32,8 @@ describe("ResumeProvenance", () => {
 		const continuation = createResumeContinuationText("Continue with the focused test.")
 
 		expect(continuation).toContain("session was closed")
-		expect(continuation).toContain("outcome is unknown")
+		expect(continuation).not.toContain("tool call result is missing")
+		expect(continuation).not.toContain("outcome is unknown")
 		expect(continuation).toContain("Continue with the focused test.")
 	})
 })

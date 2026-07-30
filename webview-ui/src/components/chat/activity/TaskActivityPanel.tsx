@@ -211,7 +211,7 @@ export function TaskActivityPanel({ taskId }: { taskId: string }) {
 									{activity.error && (
 										<div className="mt-2 whitespace-pre-wrap break-words text-error">{activity.error}</div>
 									)}
-									{activity.events.length > 0 && (
+									{activity.kind === "subagent" && activity.events.length > 0 && (
 										<div className="mt-2">
 											<ActivityTimeline events={activity.events} />
 										</div>

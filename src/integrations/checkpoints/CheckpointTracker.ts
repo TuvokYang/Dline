@@ -53,6 +53,7 @@ class CheckpointTracker {
 	private taskId: string
 	private cwd: string
 	private cwdHash: string
+	private shadowGitPath: string
 	private lastRetrievedShadowGitConfigWorkTree?: string
 	private gitOperations: GitOperations
 	/** Optional reference to the per-task file tracker for incremental checkpoint staging */
@@ -114,10 +115,11 @@ class CheckpointTracker {
 	 * @param cwd - The current working directory to track files in
 	 * @param cwdHash - Hash of the working directory path for shadow git organization
 	 */
-	private constructor(taskId: string, cwd: string, cwdHash: string) {
+	private constructor(taskId: string, cwd: string, cwdHash: string, shadowGitPath: string) {
 		this.taskId = taskId
 		this.cwd = cwd
 		this.cwdHash = cwdHash
+		this.shadowGitPath = shadowGitPath
 		this.gitOperations = new GitOperations(cwd)
 	}
 
@@ -183,10 +185,10 @@ class CheckpointTracker {
 			const cwdHash = hashWorkingDir(workingDir)
 			Logger.debug(`Repository ID (cwdHash): ${cwdHash}`)
 
-			const newTracker = new CheckpointTracker(taskId, workingDir, cwdHash)
+			const gitPath = await getShadowGitPath(cwdHash)
+			const newTracker = new CheckpointTracker(taskId, workingDir, cwdHash, gitPath)
 			await newTracker.sendCheckpointSubscriptionEvent("CHECKPOINT_INIT", true)
 			try {
-				const gitPath = await getShadowGitPath(newTracker.cwdHash)
 				// Serialize shadow git initialization with other concurrent tasks
 				// targeting the same workspace to prevent race conditions during
 				// repository creation (VS Code: process-level mutex;
@@ -338,7 +340,7 @@ class CheckpointTracker {
 	 * modified files.
 	 */
 	private async doCommitFiles(files: string[]): Promise<string | undefined> {
-		const gitPath = await getShadowGitPath(this.cwdHash)
+		const gitPath = this.shadowGitPath
 		const git = simpleGit(path.dirname(gitPath))
 		const requiresWorkspaceScan = this.taskFileTracker?.isWorkspaceScanRequired() ?? false
 
@@ -451,7 +453,7 @@ class CheckpointTracker {
 			return this.lastRetrievedShadowGitConfigWorkTree
 		}
 		try {
-			const gitPath = await getShadowGitPath(this.cwdHash)
+			const gitPath = this.shadowGitPath
 			this.lastRetrievedShadowGitConfigWorkTree = await this.gitOperations.getShadowGitConfigWorkTree(gitPath)
 			return this.lastRetrievedShadowGitConfigWorkTree
 		} catch (error) {
@@ -535,7 +537,7 @@ class CheckpointTracker {
 	 * Extracted as a private helper for use under different locking strategies.
 	 */
 	private async doResetHead(commitHash: string): Promise<void> {
-		const gitPath = await getShadowGitPath(this.cwdHash)
+		const gitPath = this.shadowGitPath
 		const git = simpleGit(path.dirname(gitPath))
 		const cleanHash = this.cleanCommitHash(commitHash)
 		Logger.debug(
@@ -625,7 +627,7 @@ class CheckpointTracker {
 	 * Extracted as a private helper for use under different locking strategies.
 	 */
 	private async doRestoreFiles(cleanHash: string, files: string[]): Promise<void> {
-		const gitPath = await getShadowGitPath(this.cwdHash)
+		const gitPath = this.shadowGitPath
 		const git = simpleGit(path.dirname(gitPath))
 
 		// Convert absolute paths to workspace-relative paths for git checkout.
@@ -693,7 +695,7 @@ class CheckpointTracker {
 		Logger.info(`Getting diff between commits: ${lhsHash || "initial"} -> ${rhsHash || "working directory"}`)
 		Logger.info(`[Task ${this.taskId}] Diff range: ${diffRange}`)
 
-		const gitPath = await getShadowGitPath(this.cwdHash)
+		const gitPath = this.shadowGitPath
 		const git = simpleGit(path.dirname(gitPath))
 
 		// When comparing two commits, use read-only `git diff --name-only`
@@ -798,7 +800,7 @@ class CheckpointTracker {
 
 		Logger.info(`Getting diff count between commits: ${lhsHash || "initial"} -> ${rhsHash || "working directory"}`)
 
-		const gitPath = await getShadowGitPath(this.cwdHash)
+		const gitPath = this.shadowGitPath
 		const git = simpleGit(path.dirname(gitPath))
 
 		let changedFileCount: number

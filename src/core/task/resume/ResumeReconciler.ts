@@ -240,6 +240,16 @@ function stopWithoutChangingInteraction(snapshot: TaskSnapshot): void {
 	snapshot.phase = TaskPhase.PAUSED
 }
 
+/** Remove an approval owner that an older snapshot retained after its block became terminal. */
+function clearTerminalApprovalOwner(snapshot: TaskSnapshot): void {
+	const turn = snapshot.turn
+	if (!turn?.activeDlineTid) return
+	const activeBlock = turn.blocks.find((block) => block.dlineTid === turn.activeDlineTid)
+	if (activeBlock && TERMINAL_BLOCK_PHASES.has(activeBlock.phase)) {
+		turn.activeDlineTid = undefined
+	}
+}
+
 /** Materialize an inert Resume interaction for a stopped state with no original interaction. */
 function ensureResumeInteraction(snapshot: TaskSnapshot): ResumeEntry {
 	const taskId = snapshot.taskId
@@ -317,6 +327,7 @@ export function reconcileResume(input: ResumeInput): ResumeResult {
 	}
 
 	reconcilePersistedInteraction(next, prepared.uiTail, folded.answeredDlineTids, diagnostics)
+	clearTerminalApprovalOwner(next)
 	stopWithoutChangingInteraction(next)
 
 	if (next.interaction) {

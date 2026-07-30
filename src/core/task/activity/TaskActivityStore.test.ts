@@ -45,6 +45,24 @@ describe("TaskActivityStore", () => {
 		expect(output?.endsWith("tail")).toBe(true)
 	})
 
+	it("keeps command output raw without synthetic output or metrics events", () => {
+		const store = new TaskActivityStore("task-1")
+		store.create({
+			activityId: "command-1",
+			kind: "command",
+			executionMode: "foreground",
+			title: "npm test",
+		})
+
+		store.appendOutput("command-1", "actual stdout\n")
+		store.update("command-1", { metrics: { lineCount: 1 } })
+
+		const activity = store.get("command-1")
+		expect(activity?.output).toBe("actual stdout\n")
+		expect(activity?.metrics).toBeUndefined()
+		expect(activity?.events.map((event) => event.kind)).toEqual(["status"])
+	})
+
 	it("filters task-owned activities without treating explicit background work as Task lifecycle work", () => {
 		const store = new TaskActivityStore("task-1")
 		store.create({

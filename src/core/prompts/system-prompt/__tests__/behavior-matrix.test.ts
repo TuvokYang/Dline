@@ -85,8 +85,8 @@ describe("Standard/Lite transport and capability behavior matrix", () => {
 		expect(exposes(result, transport, "generate_explanation")).toBe(false)
 		expect(exposes(result, transport, "make_plan")).toBe(true)
 		expect(result.systemPrompt).toContain("status_update / act_mode_respond: progress-only")
-		expect(result.systemPrompt).toContain("qna_respond:")
-		expect(result.systemPrompt).toContain("generate_report:")
+		expect(exposes(result, transport, "qna_respond")).toBe(true)
+		expect(exposes(result, transport, "generate_report")).toBe(true)
 	})
 
 	it.each(["act", "plan"] as const)("keeps make_plan available in %s mode", async (mode) => {
@@ -175,20 +175,21 @@ describe("Standard/Lite transport and capability behavior matrix", () => {
 		expect(enabled.systemPrompt).toContain("## TURN-END Tools")
 		expect(enabled.systemPrompt).toContain("## Task Closure Contract")
 		expect(enabled.systemPrompt).toContain("affected modules, and current task_progress step")
-		expect(enabled.systemPrompt).toContain("Except for attempt_completion, these tools may be called while work remains.")
+		expect(enabled.systemPrompt).not.toContain("TURN-END TOOLS (")
+		expect(enabled.systemPrompt).not.toContain("  * ask_followup_question:")
+		expect(enabled.systemPrompt).not.toContain("  * make_plan:")
+		expect(enabled.systemPrompt).not.toContain("  * qna_respond:")
+		expect(enabled.systemPrompt).not.toContain("  * generate_report:")
 		expect(enabled.systemPrompt).toContain(
 			"status_update / act_mode_respond: progress-only, MUST be followed by actual work tool. NOT for completion.",
 		)
 		expect(enabled.systemPrompt).toContain("attempt_completion: FORBIDDEN while any focus chain items remain [ ]")
-		expect(enabled.systemPrompt).not.toContain(
-			"TURN-END TOOLS (attempt_completion, ask_followup_question, make_plan, qna_respond, generate_report): FORBIDDEN",
-		)
 		expect(exposes(disabled, transport, "focus_chain_change")).toBe(false)
 		expect(disabled.systemPrompt).not.toContain("task_progress")
 		expect(disabled.systemPrompt).toContain("## TURN-END Tools")
 		expect(disabled.systemPrompt).toContain("## Task Closure Contract")
 		expect(disabled.systemPrompt).toContain("affected modules. Use these as the completion contract.")
-		expect(disabled.systemPrompt).toContain("Except for attempt_completion, these tools may be called while work remains.")
+		expect(disabled.systemPrompt).not.toContain("TURN-END TOOLS (")
 		expect(disabled.systemPrompt).toContain(
 			"status_update / act_mode_respond: progress-only, MUST be followed by actual work tool. NOT for completion.",
 		)

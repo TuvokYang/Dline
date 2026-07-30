@@ -59,7 +59,6 @@ describe("standard and lite profile content", () => {
 		expect(text).toContain("## Tool-Calling Convention and Preambles")
 		expect(text).toContain("Use qna_respond when the user asks a direct question")
 		expect(text).toContain("Use ask_followup_question for user interaction")
-		expect(text).toContain("or when >=2 failed approaches leave the task genuinely blocked")
 		expect(text).toContain("Use generate_report only when the user requests a formal report")
 		expect(text).toContain("and must be followed to the best of your ability")
 		expect(text).not.toContain("and should be followed to the best of your ability")

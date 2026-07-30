@@ -222,12 +222,14 @@ export class MessageChannel {
 		if (index >= 0) {
 			await this.messageStateHandler.updateClineMessage(index, {
 				type: "ask",
+				say: undefined,
 				ask: type,
 				text,
 				partial: false,
 				...interactionIdentity,
 				...commandPresentation,
 			})
+			await this.messageStateHandler.flushMessageUpdate(index)
 		} else {
 			await this.messageStateHandler.addToClineMessages({
 				ts: askTs,

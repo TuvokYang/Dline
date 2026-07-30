@@ -3,7 +3,7 @@ const prompts: Record<string, string> = {
 	description:
 		"[TURN-END] Ask the user a question to gather additional information needed to complete the task. This tool should be used when you encounter ambiguities, need clarification, or require more details to proceed effectively. It allows for interactive problem-solving by enabling direct communication with the user. Use this tool judiciously to maintain a balance between gathering necessary information and avoiding excessive back-and-forth.",
 	standardDescription:
-		"[TURN-END] Ask the user a question to gather additional information needed to complete the task. This tool should be used when you encounter ambiguities, need clarification, or require more details to proceed effectively. It allows for interactive problem-solving by enabling direct communication with the user. Use this tool judiciously to maintain a balance between gathering necessary information and avoiding excessive back-and-forth. You should only ask one question.",
+		"[TURN-END] Ask one focused question only when continuing requires a user-provided detail or decision that available tools cannot determine, or when at least two failed approaches leave the task genuinely blocked. Avoid unnecessary back-and-forth.",
 	questionInstruction:
 		"The question to ask the user. This should be a clear, specific question that addresses the information you need.",
 	questionUsage: "Your question here",
