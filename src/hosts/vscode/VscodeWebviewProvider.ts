@@ -4,6 +4,7 @@ import * as vscode from "vscode"
 import { handleGrpcRequest, handleGrpcRequestCancel } from "@/core/controller/grpc-handler"
 import { HostProvider } from "@/hosts/host-provider"
 import { ExtensionRegistryInfo } from "@/registry"
+import type { ClineExtensionContext } from "@/shared/cline"
 import type { ExtensionMessage } from "@/shared/ExtensionMessage"
 import { Logger } from "@/shared/services/Logger"
 import { WebviewMessage } from "@/shared/WebviewMessage"
@@ -20,6 +21,10 @@ export class VscodeWebviewProvider extends WebviewProvider implements vscode.Web
 
 	private webview?: vscode.WebviewView
 	private disposables: vscode.Disposable[] = []
+
+	constructor(context: ClineExtensionContext, options?: { deferController?: boolean }) {
+		super(context, { ...options, isSidebar: true })
+	}
 
 	override getWebviewUrl(path: string) {
 		if (!this.webview) {

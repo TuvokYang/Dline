@@ -21,9 +21,9 @@ export abstract class WebviewProvider {
 
 	constructor(
 		readonly context: ClineExtensionContext,
-		options?: { deferController?: boolean },
+		options?: { deferController?: boolean; isSidebar?: boolean },
 	) {
-		this._registryId = WebviewProviderRegistry.register(this)
+		this._registryId = WebviewProviderRegistry.register(this, options?.isSidebar)
 		this.controllerReady = new Promise((resolve) => {
 			this.controllerReadyResolve = resolve
 		})
