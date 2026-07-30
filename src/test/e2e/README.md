@@ -260,3 +260,19 @@ The test environment includes:
 - `CLINE_E2E_TESTS_VERBOSE=true` - Enable verbose logging
 - `CI=true` - Adjusts timeouts and reporting for CI environments
 - `GRPC_RECORDER_ENABLED=true` - Enable gRPC recording for debugging
+- `DLINE_E2E_PROFILE` - Select `auto`, `mock-openai`, `deepseek`, `openai-codex`, or `openai-compatible`
+
+Each test uses a temporary `DLINE_DIR`. When `~/.dline/data` exists, preprocessing copies only `secrets.json`,
+`secrets/**`, and `settings/api_profiles.json` into that directory. The source settings file is read only to retain the
+active profile name. The temporary directory is deleted after the test, so profile edits never write back to the user's
+default data directory.
+
+Generated live profiles use `high` reasoning effort. GitHub Actions creates only profiles whose corresponding credential
+is configured:
+
+- DeepSeek secret: `DLINE_E2E_DEEPSEEK_API_KEY`; optional vars: `DLINE_E2E_DEEPSEEK_BASE_URL`, `DLINE_E2E_DEEPSEEK_MODEL_ID`
+- OpenAI Codex secret: `DLINE_E2E_OPENAI_CODEX_CREDENTIALS_JSON`; optional var: `DLINE_E2E_OPENAI_CODEX_MODEL_ID`
+- OpenAI-compatible secret: `DLINE_E2E_OPENAI_COMPATIBLE_API_KEY`; optional vars: `DLINE_E2E_OPENAI_COMPATIBLE_BASE_URL`, `DLINE_E2E_OPENAI_COMPATIBLE_MODEL_ID`
+
+Pull requests and the regular three-platform smoke job use the local mock OpenAI-compatible profile. Live provider tests
+run only on trusted push or manual workflow events and are skipped when their credential is absent.

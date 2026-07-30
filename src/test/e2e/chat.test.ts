@@ -11,7 +11,6 @@ e2e("Chat - can send messages and switch between modes", async ({ helper, sideba
 	const actButton = sidebar.getByRole("switch", { name: "Act" })
 	const planButton = sidebar.getByRole("switch", { name: "Plan" })
 
-	await actButton.click()
 	await expect(actButton).toHaveAttribute("aria-checked", "true")
 	await expect(planButton).not.toHaveAttribute("aria-checked", "true")
 

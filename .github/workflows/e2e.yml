@@ -27,6 +27,8 @@ jobs:
                 runner: [ubuntu, windows, macos]
         runs-on: ${{ matrix.runner }}-latest
         timeout-minutes: 20
+        env:
+            DLINE_E2E_PROFILE: mock-openai
         steps:
             - uses: actions/checkout@v6
             - name: Setup Node.js environment
@@ -87,3 +89,89 @@ jobs:
                   name: playwright-recordings-${{ matrix.runner }}
                   path: |
                       test-results/playwright/
+
+    live-provider-matrix:
+        if: github.event_name != 'pull_request'
+        runs-on: ubuntu-latest
+        outputs:
+            enabled: ${{ steps.detect.outputs.enabled }}
+            providers: ${{ steps.detect.outputs.providers }}
+        steps:
+            - name: Detect configured live providers
+              id: detect
+              env:
+                  DLINE_E2E_DEEPSEEK_API_KEY: ${{ secrets.DLINE_E2E_DEEPSEEK_API_KEY }}
+                  DLINE_E2E_OPENAI_CODEX_CREDENTIALS_JSON: ${{ secrets.DLINE_E2E_OPENAI_CODEX_CREDENTIALS_JSON }}
+                  DLINE_E2E_OPENAI_COMPATIBLE_API_KEY: ${{ secrets.DLINE_E2E_OPENAI_COMPATIBLE_API_KEY }}
+              run: >-
+                  node -e "const fs=require('node:fs'); const p=[];
+                  if(process.env.DLINE_E2E_DEEPSEEK_API_KEY)p.push('deepseek');
+                  if(process.env.DLINE_E2E_OPENAI_CODEX_CREDENTIALS_JSON)p.push('openai-codex');
+                  if(process.env.DLINE_E2E_OPENAI_COMPATIBLE_API_KEY)p.push('openai-compatible');
+                  fs.appendFileSync(process.env.GITHUB_OUTPUT,'enabled='+(p.length>0)+'\nproviders='+JSON.stringify(p)+'\n')"
+
+    live-provider-e2e:
+        needs: live-provider-matrix
+        if: needs.live-provider-matrix.outputs.enabled == 'true'
+        strategy:
+            fail-fast: false
+            matrix:
+                provider: ${{ fromJSON(needs.live-provider-matrix.outputs.providers) }}
+        runs-on: ubuntu-latest
+        timeout-minutes: 20
+        env:
+            DLINE_E2E_PROFILE: ${{ matrix.provider }}
+            DLINE_E2E_DEEPSEEK_API_KEY: ${{ secrets.DLINE_E2E_DEEPSEEK_API_KEY }}
+            DLINE_E2E_DEEPSEEK_BASE_URL: ${{ vars.DLINE_E2E_DEEPSEEK_BASE_URL }}
+            DLINE_E2E_DEEPSEEK_MODEL_ID: ${{ vars.DLINE_E2E_DEEPSEEK_MODEL_ID }}
+            DLINE_E2E_OPENAI_CODEX_CREDENTIALS_JSON: ${{ secrets.DLINE_E2E_OPENAI_CODEX_CREDENTIALS_JSON }}
+            DLINE_E2E_OPENAI_CODEX_MODEL_ID: ${{ vars.DLINE_E2E_OPENAI_CODEX_MODEL_ID }}
+            DLINE_E2E_OPENAI_COMPATIBLE_API_KEY: ${{ secrets.DLINE_E2E_OPENAI_COMPATIBLE_API_KEY }}
+            DLINE_E2E_OPENAI_COMPATIBLE_BASE_URL: ${{ vars.DLINE_E2E_OPENAI_COMPATIBLE_BASE_URL }}
+            DLINE_E2E_OPENAI_COMPATIBLE_MODEL_ID: ${{ vars.DLINE_E2E_OPENAI_COMPATIBLE_MODEL_ID }}
+        steps:
+            - uses: actions/checkout@v6
+            - name: Setup Node.js environment
+              uses: actions/setup-node@v6
+              with:
+                  node-version: 22
+                  cache: npm
+                  cache-dependency-path: |
+                      package-lock.json
+                      webview-ui/package-lock.json
+
+            - name: Cache VS Code
+              uses: actions/cache@v5
+              with:
+                  path: .vscode-test
+                  key: vscode-${{ runner.os }}-stable-${{ hashFiles('.vscode-test.mjs', 'package.json') }}
+                  restore-keys: |
+                      vscode-${{ runner.os }}-stable-
+
+            - name: Cache Playwright browsers
+              uses: actions/cache@v5
+              with:
+                  path: ~/.cache/ms-playwright
+                  key: playwright-browsers-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+                  restore-keys: |
+                      playwright-browsers-${{ runner.os }}-
+
+            - name: Install root dependencies
+              run: npm ci
+              env:
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+            - name: Install webview-ui dependencies
+              run: cd webview-ui && npm ci
+
+            - name: Install xvfb
+              run: sudo apt-get update && sudo apt-get install -y xvfb
+
+            - name: Run live provider E2E
+              run: xvfb-run -a npm run test:e2e:optimal -- provider-live.test.ts
+
+            - uses: actions/upload-artifact@v5
+              if: ${{ failure() }}
+              with:
+                  name: playwright-live-${{ matrix.provider }}
+                  path: test-results/playwright/
