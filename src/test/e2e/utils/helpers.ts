@@ -5,11 +5,13 @@ import { type ElectronApplication, expect, type Frame, type Page, test } from "@
 import { downloadAndUnzipVSCode, SilentReporter } from "@vscode/test-electron"
 import { _electron } from "playwright"
 import { ClineApiServerMock } from "../fixtures/server"
+import { prepareE2EState } from "./api-profile"
 
 interface E2ETestDirectories {
 	workspaceDir: string
 	multiRootWorkspaceDir: string
 	userDataDir: string
+	dlineDir: string
 }
 
 export interface E2ETestConfigs {
@@ -238,7 +240,21 @@ export const e2e = test
 			await use(path.join(E2ETestHelper.E2E_TESTS_DIR, "fixtures", "multiroots.code-workspace"))
 		},
 		userDataDir: async ({}, use) => {
-			await use(mkdtempSync(path.join(os.tmpdir(), "dline-e2e-user-data-")))
+			const userDataDir = mkdtempSync(path.join(os.tmpdir(), "dline-e2e-user-data-"))
+			try {
+				await use(userDataDir)
+			} finally {
+				await E2ETestHelper.rmForRetries(userDataDir, { recursive: true, force: true })
+			}
+		},
+		dlineDir: async ({ server }, use) => {
+			const dlineDir = mkdtempSync(path.join(os.tmpdir(), "dline-e2e-state-"))
+			try {
+				await prepareE2EState({ dlineDir, mockBaseUrl: server.baseUrl })
+				await use(dlineDir)
+			} finally {
+				await E2ETestHelper.rmForRetries(dlineDir, { recursive: true, force: true })
+			}
 		},
 	})
 	.extend<E2ETestConfigs>({
@@ -246,7 +262,7 @@ export const e2e = test
 		channel: "stable",
 	})
 	.extend<{ openVSCode: (workspacePath: string) => Promise<ElectronApplication> }>({
-		openVSCode: async ({ userDataDir, channel, server }, use, testInfo) => {
+		openVSCode: async ({ userDataDir, dlineDir, channel, server }, use, testInfo) => {
 			const executablePath = await downloadAndUnzipVSCode(channel, undefined, new SilentReporter())
 			const electronEnvironment = { ...process.env }
 			delete electronEnvironment.ELECTRON_RUN_AS_NODE
@@ -258,6 +274,7 @@ export const e2e = test
 						...electronEnvironment,
 						E2E_TEST: "true",
 						DLINE_ENVIRONMENT: "local",
+						DLINE_DIR: dlineDir,
 						DLINE_E2E_API_BASE_URL: server.baseUrl,
 						DLINE_SKIP_MIGRATION: "1",
 						DLINE_DOCS_DIR: path.join(E2ETestHelper.CODEBASE_ROOT_DIR, "dist", "tmp", "Dline"),
@@ -289,7 +306,7 @@ export const e2e = test
 		},
 	})
 	.extend<{ app: ElectronApplication }>({
-		app: async ({ openVSCode, userDataDir, workspaceType, workspaceDir, multiRootWorkspaceDir }, use) => {
+		app: async ({ openVSCode, workspaceType, workspaceDir, multiRootWorkspaceDir }, use) => {
 			const workspacePath = workspaceType === "single" ? workspaceDir : multiRootWorkspaceDir
 			const app = await openVSCode(workspacePath)
 
@@ -297,7 +314,6 @@ export const e2e = test
 				await use(app)
 			} finally {
 				await app.close()
-				await E2ETestHelper.rmForRetries(userDataDir, { recursive: true, force: true })
 			}
 		},
 	})
