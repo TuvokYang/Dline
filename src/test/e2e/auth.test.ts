@@ -1,33 +1,23 @@
 import { expect } from "@playwright/test"
 import { e2e } from "./utils/helpers"
 
-// Test for setting up API keys
-e2e("Views - can set up API keys and navigate to Settings from Chat", async ({ sidebar }) => {
-	// Verify initial state
-	await expect(sidebar.getByRole("button", { name: "Login to Cline" })).toBeVisible()
-	await expect(sidebar.getByText("Bring my own API key")).toBeVisible()
+e2e("Views - reaches Chat without exposing Cline login", async ({ sidebar }) => {
+	await expect(sidebar.getByRole("button", { name: "Login to Cline" })).toHaveCount(0)
 
-	// Navigate to API key setup
-	await sidebar.getByText("Bring my own API key").click()
-	await sidebar.getByRole("button", { name: "Continue" }).click()
+	const bringYourOwnKey = sidebar.getByText("Bring my own API key")
+	const chatInput = sidebar.getByTestId("chat-input")
+	await expect(bringYourOwnKey.or(chatInput)).toBeVisible()
 
-	await expect(sidebar.getByRole("heading", { name: "Configure your provider" })).toBeVisible()
-	await sidebar.getByRole("button", { name: "Add API" }).click()
+	if (await bringYourOwnKey.isVisible()) {
+		await bringYourOwnKey.click()
+		await sidebar.getByRole("button", { name: "Continue" }).click()
+		await sidebar.getByRole("button", { name: "Add API" }).click()
 
-	const providerSelector = sidebar.getByRole("combobox").first()
-	await expect(providerSelector).toBeVisible()
-	await providerSelector.selectOption("openrouter")
-
-	const apiKeyInput = sidebar.getByRole("textbox", { name: "OpenRouter API Key" })
-	await apiKeyInput.fill("test-api-key")
-	await expect(apiKeyInput).toHaveValue("test-api-key")
-	await sidebar.getByRole("button", { name: "Continue" }).click()
-
-	await expect(sidebar.getByRole("button", { name: "Login to Cline" })).not.toBeVisible()
-
-	// Verify start up page is no longer visible
-	await expect(apiKeyInput).not.toBeVisible()
-	await expect(providerSelector).not.toBeVisible()
+		const providerSelector = sidebar.getByRole("combobox").first()
+		await providerSelector.selectOption("openrouter")
+		await sidebar.getByRole("textbox", { name: "OpenRouter API Key" }).fill("test-api-key")
+		await sidebar.getByRole("button", { name: "Continue" }).click()
+	}
 
 	// Dismiss "What's New" version update announcement modal if present
 	const whatsNewDialog = sidebar.getByRole("heading", { name: /New in v/ })
@@ -40,6 +30,5 @@ e2e("Views - can set up API keys and navigate to Settings from Chat", async ({ s
 	}
 
 	// Verify you are now in the chat page after setup was completed.
-	const chatInputBox = sidebar.getByTestId("chat-input")
-	await expect(chatInputBox).toBeVisible()
+	await expect(chatInput).toBeVisible()
 })

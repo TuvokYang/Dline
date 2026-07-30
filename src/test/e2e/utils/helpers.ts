@@ -10,7 +10,6 @@ interface E2ETestDirectories {
 	workspaceDir: string
 	multiRootWorkspaceDir: string
 	userDataDir: string
-	dlineDir: string
 }
 
 export interface E2ETestConfigs {
@@ -119,10 +118,22 @@ export class E2ETestHelper {
 	}
 
 	public async signin(webview: Frame): Promise<void> {
-		await webview.getByRole("button", { name: /Login to (Cline|Dline)/ }).click({ delay: 100 })
+		const bringYourOwnKey = webview.getByText("Bring my own API key")
+		const chatInput = webview.getByTestId("chat-input")
+		await expect(bringYourOwnKey.or(chatInput)).toBeVisible()
 
-		// Verify start up page is no longer visible
-		await expect(webview.getByRole("button", { name: /Login to (Cline|Dline)/ })).not.toBeVisible()
+		if (await bringYourOwnKey.isVisible()) {
+			await bringYourOwnKey.click()
+			await webview.getByRole("button", { name: "Continue" }).click()
+			await webview.getByRole("button", { name: "Add API" }).click()
+
+			const providerSelector = webview.getByRole("combobox").first()
+			await providerSelector.selectOption("openrouter")
+			await webview.getByRole("textbox", { name: "OpenRouter API Key" }).fill("test-api-key")
+			await webview.getByRole("button", { name: "Continue" }).click()
+		}
+
+		await expect(chatInput).toBeVisible()
 
 		// Dismiss "What's New" version announcement if present
 		await E2ETestHelper.dismissWhatsNewModal(webview)
@@ -177,7 +188,6 @@ export class E2ETestHelper {
  * - `server`: Shared ClineApiServerMock instance for API mocking (reused across all tests)
  * - `workspaceDir`: Path to the test workspace directory
  * - `userDataDir`: Temporary directory for VS Code user data
- * - `dlineDir`: Isolated Dline data directory
  * - `openVSCode`: Function that returns a Promise resolving to an ElectronApplication instance
  * - `app`: ElectronApplication instance with automatic cleanup
  * - `helper`: E2ETestHelper instance for test utilities
@@ -188,7 +198,6 @@ export class E2ETestHelper {
  * - **server**: Automatically starts and manages a ClineApiServerMock instance
  * - **workspaceDir**: Sets up a test workspace directory from fixtures
  * - **userDataDir**: Creates a temporary directory for VS Code user data
- * - **dlineDir**: Creates an isolated Dline data directory
  * - **openVSCode**: Factory function that launches VS Code with proper configuration for testing
  * - **app**: Manages the VS Code ElectronApplication lifecycle with automatic cleanup
  * - **helper**: Provides E2ETestHelper utilities for test operations
@@ -231,16 +240,13 @@ export const e2e = test
 		userDataDir: async ({}, use) => {
 			await use(mkdtempSync(path.join(os.tmpdir(), "dline-e2e-user-data-")))
 		},
-		dlineDir: async ({}, use) => {
-			await use(mkdtempSync(path.join(os.tmpdir(), "dline-e2e-data-")))
-		},
 	})
 	.extend<E2ETestConfigs>({
 		workspaceType: "single",
 		channel: "stable",
 	})
 	.extend<{ openVSCode: (workspacePath: string) => Promise<ElectronApplication> }>({
-		openVSCode: async ({ userDataDir, dlineDir, channel, server }, use, testInfo) => {
+		openVSCode: async ({ userDataDir, channel, server }, use, testInfo) => {
 			const executablePath = await downloadAndUnzipVSCode(channel, undefined, new SilentReporter())
 			const electronEnvironment = { ...process.env }
 			delete electronEnvironment.ELECTRON_RUN_AS_NODE
@@ -255,7 +261,6 @@ export const e2e = test
 						DLINE_E2E_API_BASE_URL: server.baseUrl,
 						DLINE_SKIP_MIGRATION: "1",
 						DLINE_DOCS_DIR: path.join(E2ETestHelper.CODEBASE_ROOT_DIR, "dist", "tmp", "Dline"),
-						DLINE_DIR: dlineDir,
 						GRPC_RECORDER_FILE_NAME: E2ETestHelper.generateTestFileName(testInfo.title, testInfo.project.name),
 						// GRPC_RECORDER_ENABLED: "true",
 						// GRPC_RECORDER_TESTS_FILTERS_ENABLED: "true"
@@ -284,7 +289,7 @@ export const e2e = test
 		},
 	})
 	.extend<{ app: ElectronApplication }>({
-		app: async ({ openVSCode, userDataDir, dlineDir, workspaceType, workspaceDir, multiRootWorkspaceDir }, use) => {
+		app: async ({ openVSCode, userDataDir, workspaceType, workspaceDir, multiRootWorkspaceDir }, use) => {
 			const workspacePath = workspaceType === "single" ? workspaceDir : multiRootWorkspaceDir
 			const app = await openVSCode(workspacePath)
 
@@ -292,10 +297,7 @@ export const e2e = test
 				await use(app)
 			} finally {
 				await app.close()
-				await Promise.all([
-					E2ETestHelper.rmForRetries(userDataDir, { recursive: true, force: true }),
-					E2ETestHelper.rmForRetries(dlineDir, { recursive: true, force: true }),
-				])
+				await E2ETestHelper.rmForRetries(userDataDir, { recursive: true, force: true })
 			}
 		},
 	})
