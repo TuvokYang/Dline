@@ -8,10 +8,9 @@ interface PreparedProfile {
 	name: string
 	deepseek?: { reasoning?: { effort?: string } }
 	openai?: { reasoning?: { effort?: string } }
-	openaiCodex?: { reasoning?: { effort?: string } }
 }
 
-test("E2E profile preprocessing copies only auth/profile state and creates high-effort profiles", async () => {
+test("E2E profile preprocessing copies only api_profiles.json and secrets/**", async () => {
 	const root = await mkdtemp(path.join(os.tmpdir(), "dline-e2e-profile-preprocess-"))
 	const sourceDataDir = path.join(root, "source", "data")
 	const dlineDir = path.join(root, "isolated")
@@ -31,6 +30,7 @@ test("E2E profile preprocessing copies only auth/profile state and creates high-
 			writeJson(path.join(sourceDataDir, "settings", "settings.json"), {
 				actModeProfile: "Local Profile",
 				planModeProfile: "Local Profile",
+				mustNotCopy: true,
 			}),
 			writeJson(path.join(sourceDataDir, "secrets", "api_keys.json"), {
 				"local-profile": { apiKey: "local-secret", name: "Local Profile" },
@@ -45,12 +45,6 @@ test("E2E profile preprocessing copies only auth/profile state and creates high-
 			sourceDataDir,
 			env: {
 				DLINE_E2E_DEEPSEEK_API_KEY: "ci-deepseek-key",
-				DLINE_E2E_OPENAI_CODEX_CREDENTIALS_JSON: JSON.stringify({
-					type: "openai-codex",
-					access_token: "codex-access-token",
-					refresh_token: "codex-refresh-token",
-					expires: 4_102_444_800_000,
-				}),
 				DLINE_E2E_OPENAI_COMPATIBLE_API_KEY: "ci-compatible-key",
 				DLINE_E2E_OPENAI_COMPATIBLE_BASE_URL: "https://compatible.example.test/v1",
 				DLINE_E2E_PROFILE: "deepseek",
@@ -60,10 +54,8 @@ test("E2E profile preprocessing copies only auth/profile state and creates high-
 		expect(result.selectedProfileName).toBe(E2E_PROFILE_NAMES.deepseek)
 		const profiles = await readJson<PreparedProfile[]>(path.join(dlineDir, "data", "settings", "api_profiles.json"))
 		const deepseek = profiles.find((profile) => profile.name === E2E_PROFILE_NAMES.deepseek)
-		const codex = profiles.find((profile) => profile.name === E2E_PROFILE_NAMES.openAiCodex)
 		const compatible = profiles.find((profile) => profile.name === E2E_PROFILE_NAMES.openAiCompatible)
 		expect(deepseek?.deepseek?.reasoning?.effort).toBe("high")
-		expect(codex?.openaiCodex?.reasoning?.effort).toBe("high")
 		expect(compatible?.openai?.reasoning?.effort).toBe("high")
 		expect(profiles.some((profile) => profile.name === "Local Profile")).toBe(true)
 
@@ -74,10 +66,14 @@ test("E2E profile preprocessing copies only auth/profile state and creates high-
 		expect(apiKeys["dline-e2e-deepseek"].apiKey).toBe("ci-deepseek-key")
 		expect(apiKeys["dline-e2e-openai-compatible"].apiKey).toBe("ci-compatible-key")
 
-		const secrets = await readJson<Record<string, string>>(path.join(dlineDir, "data", "secrets.json"))
-		expect(JSON.parse(secrets["openai-codex-oauth-credentials"])).toMatchObject({
-			type: "openai-codex",
-			access_token: "codex-access-token",
+		await expect(readFile(path.join(dlineDir, "data", "secrets.json"), "utf8")).rejects.toMatchObject({ code: "ENOENT" })
+
+		const settings = await readJson<Record<string, unknown>>(path.join(dlineDir, "data", "settings", "settings.json"))
+		expect(settings).toEqual({
+			__settingsMigrationVersion: 1,
+			actModeProfile: E2E_PROFILE_NAMES.deepseek,
+			planModeProfile: E2E_PROFILE_NAMES.deepseek,
+			enableParallelToolCalling: true,
 		})
 
 		const globalState = await readJson<Record<string, unknown>>(path.join(dlineDir, "data", "globalState.json"))

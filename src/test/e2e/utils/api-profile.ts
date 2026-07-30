@@ -2,7 +2,7 @@ import { cp, mkdir, readFile, stat, writeFile } from "node:fs/promises"
 import * as os from "node:os"
 import * as path from "node:path"
 
-export type E2EProfileTarget = "auto" | "mock-openai" | "deepseek" | "openai-codex" | "openai-compatible"
+export type E2EProfileTarget = "auto" | "mock-openai" | "deepseek" | "openai-compatible"
 
 export const E2E_PROFILE_NAMES = {
 	mockOpenAi: "E2E OpenAI Compatible Mock",
@@ -40,13 +40,11 @@ const PROFILE_IDS = {
 	mockOpenAi: "dline-e2e-mock-openai",
 	persistence: "dline-e2e-profile-persistence",
 	deepseek: "dline-e2e-deepseek",
-	openAiCodex: "dline-e2e-openai-codex",
 	openAiCompatible: "dline-e2e-openai-compatible",
 } as const
 
 const DEFAULT_MODELS = {
 	deepseek: "deepseek-v4-flash",
-	openAiCodex: "gpt-5.6-sol",
 	openAiCompatible: "gpt-5.6-sol",
 } as const
 
@@ -119,7 +117,7 @@ function setApiKey(apiKeys: Record<string, { apiKey: string; name: string }>, pr
 
 function parseProfileTarget(env: NodeJS.ProcessEnv): E2EProfileTarget {
 	const target = value(env, "DLINE_E2E_PROFILE") ?? "auto"
-	if (["auto", "mock-openai", "deepseek", "openai-codex", "openai-compatible"].includes(target)) {
+	if (["auto", "mock-openai", "deepseek", "openai-compatible"].includes(target)) {
 		return target as E2EProfileTarget
 	}
 	throw new Error(`Unsupported DLINE_E2E_PROFILE: ${target}`)
@@ -129,8 +127,6 @@ export function hasLiveProfileCredentials(target: E2EProfileTarget, env: NodeJS.
 	switch (target) {
 		case "deepseek":
 			return Boolean(value(env, "DLINE_E2E_DEEPSEEK_API_KEY"))
-		case "openai-codex":
-			return Boolean(value(env, "DLINE_E2E_OPENAI_CODEX_CREDENTIALS_JSON"))
 		case "openai-compatible":
 			return Boolean(value(env, "DLINE_E2E_OPENAI_COMPATIBLE_API_KEY"))
 		default:
@@ -150,21 +146,16 @@ export async function prepareE2EState(options: PrepareE2EStateOptions): Promise<
 	const secretsDir = path.join(destinationDataDir, "secrets")
 
 	await mkdir(destinationDataDir, { recursive: true })
-	await copyFileIfPresent(path.join(sourceDataDir, "secrets.json"), path.join(destinationDataDir, "secrets.json"))
 	await copyDirectoryIfPresent(path.join(sourceDataDir, "secrets"), secretsDir)
 	await copyFileIfPresent(
 		path.join(sourceDataDir, "settings", "api_profiles.json"),
 		path.join(settingsDir, "api_profiles.json"),
 	)
 
-	const sourceSettings = await readJson<Record<string, unknown>>(path.join(sourceDataDir, "settings", "settings.json"), {})
 	const profilesPath = path.join(settingsDir, "api_profiles.json")
 	const profiles = await readJson<StoredApiProfile[]>(profilesPath, [])
-	const sourceProfileNames = new Set(profiles.map((profile) => profile.name))
 	const apiKeysPath = path.join(secretsDir, "api_keys.json")
 	const apiKeys = await readJson<Record<string, { apiKey: string; name: string }>>(apiKeysPath, {})
-	const legacySecretsPath = path.join(destinationDataDir, "secrets.json")
-	const legacySecrets = await readJson<Record<string, string>>(legacySecretsPath, {})
 
 	const mockProfile = openAiProfile(
 		PROFILE_IDS.mockOpenAi,
@@ -213,40 +204,19 @@ export async function prepareE2EState(options: PrepareE2EStateOptions): Promise<
 		setApiKey(apiKeys, profile, openAiCompatibleApiKey)
 	}
 
-	const codexCredentials = value(env, "DLINE_E2E_OPENAI_CODEX_CREDENTIALS_JSON")
-	if (codexCredentials) {
-		JSON.parse(codexCredentials)
-		upsertProfile(profiles, {
-			id: PROFILE_IDS.openAiCodex,
-			name: E2E_PROFILE_NAMES.openAiCodex,
-			provider: "openai-codex",
-			modelId: value(env, "DLINE_E2E_OPENAI_CODEX_MODEL_ID") ?? DEFAULT_MODELS.openAiCodex,
-			usedFor: ["act", "plan", "subagents"],
-			enabled: true,
-			openaiCodex: { reasoning: highReasoning() },
-		})
-		legacySecrets["openai-codex-oauth-credentials"] = codexCredentials
-	}
-
 	const profileTarget = parseProfileTarget(env)
 	const targetNames: Record<Exclude<E2EProfileTarget, "auto">, string> = {
 		"mock-openai": E2E_PROFILE_NAMES.mockOpenAi,
 		deepseek: E2E_PROFILE_NAMES.deepseek,
-		"openai-codex": E2E_PROFILE_NAMES.openAiCodex,
 		"openai-compatible": E2E_PROFILE_NAMES.openAiCompatible,
 	}
-	const sourceSelection = [sourceSettings.actModeProfile, sourceSettings.planModeProfile].find(
-		(candidate): candidate is string => typeof candidate === "string" && sourceProfileNames.has(candidate),
-	)
-	const selectedProfileName =
-		profileTarget === "auto" ? (sourceSelection ?? E2E_PROFILE_NAMES.mockOpenAi) : targetNames[profileTarget]
+	const selectedProfileName = profileTarget === "auto" ? E2E_PROFILE_NAMES.mockOpenAi : targetNames[profileTarget]
 	if (!profiles.some((profile) => profile.name === selectedProfileName && profile.enabled)) {
 		throw new Error(`Requested E2E profile is unavailable: ${selectedProfileName}`)
 	}
 
 	await writeJson(profilesPath, profiles)
 	await writeJson(apiKeysPath, apiKeys, 0o600)
-	await writeJson(legacySecretsPath, legacySecrets, 0o600)
 	await writeJson(path.join(settingsDir, "settings.json"), {
 		__settingsMigrationVersion: 1,
 		actModeProfile: selectedProfileName,

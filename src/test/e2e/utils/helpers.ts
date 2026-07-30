@@ -12,11 +12,13 @@ interface E2ETestDirectories {
 	multiRootWorkspaceDir: string
 	userDataDir: string
 	dlineDir: string
+	dlineHomeDir: string
+	dlineDocsDir: string
 }
 
 interface E2EWorkerFixtures {
 	server: ClineApiServerMock
-	dlineStateRootDir: string
+	dlineStateTemplateDir: string
 }
 
 export interface E2ETestConfigs {
@@ -28,6 +30,9 @@ export class E2ETestHelper {
 	// Constants
 	public static readonly CODEBASE_ROOT_DIR = path.resolve(__dirname, "..", "..", "..", "..")
 	public static readonly E2E_TESTS_DIR = path.join(E2ETestHelper.CODEBASE_ROOT_DIR, "src", "test", "e2e")
+	public static readonly DLINE_DIR = path.join(os.tmpdir(), ".dline-e2e")
+	public static readonly DLINE_DOCS_DIR = path.join(os.tmpdir(), "dline-e2e")
+	public static readonly DLINE_STATE_TEMPLATE_DIR = path.join(os.tmpdir(), ".dline-e2e-template")
 
 	// Instance properties for caching
 	private cachedFrame: Frame | null = null
@@ -238,17 +243,26 @@ export const e2e = test
 			},
 			{ scope: "worker" },
 		],
-		dlineStateRootDir: [
+		dlineStateTemplateDir: [
 			async ({ server }, use) => {
-				const rootDir = mkdtempSync(path.join(os.tmpdir(), "dline-e2e-state-"))
+				const templateDir = E2ETestHelper.DLINE_STATE_TEMPLATE_DIR
+				await Promise.all([
+					E2ETestHelper.rmForRetries(templateDir, { recursive: true, force: true }),
+					E2ETestHelper.rmForRetries(E2ETestHelper.DLINE_DIR, { recursive: true, force: true }),
+					E2ETestHelper.rmForRetries(E2ETestHelper.DLINE_DOCS_DIR, { recursive: true, force: true }),
+				])
 				try {
 					await prepareE2EState({
-						dlineDir: path.join(rootDir, "template"),
+						dlineDir: templateDir,
 						mockBaseUrl: server.baseUrl,
 					})
-					await use(rootDir)
+					await use(templateDir)
 				} finally {
-					await E2ETestHelper.rmForRetries(rootDir, { recursive: true, force: true })
+					await Promise.all([
+						E2ETestHelper.rmForRetries(templateDir, { recursive: true, force: true }),
+						E2ETestHelper.rmForRetries(E2ETestHelper.DLINE_DIR, { recursive: true, force: true }),
+						E2ETestHelper.rmForRetries(E2ETestHelper.DLINE_DOCS_DIR, { recursive: true, force: true }),
+					])
 				}
 			},
 			{ scope: "worker" },
@@ -268,15 +282,28 @@ export const e2e = test
 				await E2ETestHelper.rmForRetries(userDataDir, { recursive: true, force: true })
 			}
 		},
-		dlineDir: async ({ dlineStateRootDir }, use) => {
-			const dlineDir = path.join(dlineStateRootDir, "active")
-			await E2ETestHelper.rmForRetries(dlineDir, { recursive: true, force: true })
-			cpSync(path.join(dlineStateRootDir, "template"), dlineDir, { recursive: true })
+		dlineDir: async ({ dlineStateTemplateDir }, use) => {
+			const dlineDir = E2ETestHelper.DLINE_DIR
+			await Promise.all([
+				E2ETestHelper.rmForRetries(dlineDir, { recursive: true, force: true }),
+				E2ETestHelper.rmForRetries(E2ETestHelper.DLINE_DOCS_DIR, { recursive: true, force: true }),
+			])
+			cpSync(dlineStateTemplateDir, dlineDir, { recursive: true })
 			try {
 				await use(dlineDir)
 			} finally {
-				await E2ETestHelper.rmForRetries(dlineDir, { recursive: true, force: true })
+				await Promise.all([
+					E2ETestHelper.rmForRetries(dlineDir, { recursive: true, force: true }),
+					E2ETestHelper.rmForRetries(E2ETestHelper.DLINE_DOCS_DIR, { recursive: true, force: true }),
+				])
 			}
+		},
+		dlineHomeDir: async ({ dlineDir }, use) => {
+			await use(dlineDir)
+		},
+		dlineDocsDir: async ({ dlineDir }, use) => {
+			void dlineDir
+			await use(E2ETestHelper.DLINE_DOCS_DIR)
 		},
 	})
 	.extend<E2ETestConfigs>({
@@ -284,7 +311,7 @@ export const e2e = test
 		channel: "stable",
 	})
 	.extend<{ openVSCode: (workspacePath: string) => Promise<ElectronApplication> }>({
-		openVSCode: async ({ userDataDir, dlineDir, channel, server }, use, testInfo) => {
+		openVSCode: async ({ userDataDir, dlineDir, dlineHomeDir, dlineDocsDir, channel, server }, use, testInfo) => {
 			const executablePath = await downloadAndUnzipVSCode(channel, undefined, new SilentReporter())
 			const electronEnvironment = { ...process.env }
 			delete electronEnvironment.ELECTRON_RUN_AS_NODE
@@ -297,9 +324,10 @@ export const e2e = test
 						E2E_TEST: "true",
 						DLINE_ENVIRONMENT: "local",
 						DLINE_DIR: dlineDir,
+						DLINE_HOME_DIR: dlineHomeDir,
 						DLINE_E2E_API_BASE_URL: server.baseUrl,
 						DLINE_SKIP_MIGRATION: "1",
-						DLINE_DOCS_DIR: path.join(dlineDir, "documents"),
+						DLINE_DOCS_DIR: dlineDocsDir,
 						GRPC_RECORDER_FILE_NAME: E2ETestHelper.generateTestFileName(testInfo.title, testInfo.project.name),
 						// GRPC_RECORDER_ENABLED: "true",
 						// GRPC_RECORDER_TESTS_FILTERS_ENABLED: "true"

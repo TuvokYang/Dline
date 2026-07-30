@@ -260,19 +260,18 @@ The test environment includes:
 - `CLINE_E2E_TESTS_VERBOSE=true` - Enable verbose logging
 - `CI=true` - Adjusts timeouts and reporting for CI environments
 - `GRPC_RECORDER_ENABLED=true` - Enable gRPC recording for debugging
-- `DLINE_E2E_PROFILE` - Select `auto`, `mock-openai`, `deepseek`, `openai-codex`, or `openai-compatible`
+- `DLINE_E2E_PROFILE` - Select `auto`, `mock-openai`, `deepseek`, or `openai-compatible`
 
-Each Playwright worker creates one temporary `DLINE_DIR` root. When `~/.dline/data` exists, preprocessing reads it once
-per worker and copies only `secrets.json`, `secrets/**`, and `settings/api_profiles.json` into a reusable template. The
-source settings file is read only to retain the active profile name. Before each test, the template is copied to a fixed
-`active` directory, which is reset again before the next test. The worker root is deleted during teardown, so profile
-edits never write back to the user's default data directory or leak into another test.
+Each Playwright worker prepares one reusable state template. When `~/.dline/data` exists, preprocessing reads it once per
+worker and copies only `secrets/**` and `settings/api_profiles.json`. It never copies `secrets.json`, user settings,
+provider registry files, task history, or other user state. Before each test, the template is copied to the fixed
+`%TEMP%/.dline-e2e` `DLINE_DIR`; `DLINE_HOME_DIR` uses the same path and `DLINE_DOCS_DIR` uses
+`%TEMP%/dline-e2e`. All three temporary locations are reset between tests and removed during worker teardown.
 
 Generated live profiles use `high` reasoning effort. GitHub Actions creates only profiles whose corresponding credential
 is configured:
 
 - DeepSeek secret: `DLINE_E2E_DEEPSEEK_API_KEY`; optional vars: `DLINE_E2E_DEEPSEEK_BASE_URL`, `DLINE_E2E_DEEPSEEK_MODEL_ID`
-- OpenAI Codex secret: `DLINE_E2E_OPENAI_CODEX_CREDENTIALS_JSON`; optional var: `DLINE_E2E_OPENAI_CODEX_MODEL_ID`
 - OpenAI-compatible secret: `DLINE_E2E_OPENAI_COMPATIBLE_API_KEY`; optional vars: `DLINE_E2E_OPENAI_COMPATIBLE_BASE_URL`, `DLINE_E2E_OPENAI_COMPATIBLE_MODEL_ID`
 
 Pull requests and the regular three-platform smoke job use the local mock OpenAI-compatible profile. Live provider tests
