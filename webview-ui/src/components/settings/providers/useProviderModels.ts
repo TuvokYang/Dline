@@ -1,6 +1,7 @@
 import { EmptyRequest } from "@shared/proto/dline/common"
 import type { AvailableModelsResponse, ModelInfo, ProviderModelGroup } from "@shared/proto/dline/models"
-import { useEffect, useState } from "react"
+import { useContext, useEffect, useState } from "react"
+import { ExtensionStateContext } from "@/context/ExtensionStateContext"
 import { ModelsServiceClient } from "@/services/grpc-client"
 
 export interface ProviderModelsResult {
@@ -15,20 +16,24 @@ let sharedCatalog: ProviderModelGroup[] = []
 let sharedCatalogLoaded = false
 let sharedCatalogError: Error | undefined
 let sharedCatalogPromise: Promise<void> | undefined
+let sharedCatalogVersion = -1
 const catalogListeners = new Set<() => void>()
 
 function notifyCatalogListeners(): void {
 	for (const listener of catalogListeners) listener()
 }
 
-function loadModelCatalog(): Promise<void> {
-	if (sharedCatalogLoaded) return Promise.resolve()
-	if (sharedCatalogPromise) return sharedCatalogPromise
+function loadModelCatalog(providersVersion: number): Promise<void> {
+	if (sharedCatalogLoaded && sharedCatalogVersion === providersVersion) return Promise.resolve()
+	if (sharedCatalogPromise) {
+		return sharedCatalogPromise.then(() => loadModelCatalog(providersVersion))
+	}
 
 	const request = ModelsServiceClient.getAvailableModels({} as EmptyRequest)
 		.then((response: AvailableModelsResponse) => {
 			sharedCatalog = response.providers || []
 			sharedCatalogLoaded = true
+			sharedCatalogVersion = providersVersion
 			sharedCatalogError = undefined
 			notifyCatalogListeners()
 		})
@@ -52,15 +57,16 @@ export function getCachedProviderDefaultModelId(providerId: string): string {
 /** All consumers share one registry catalog RPC instead of loading all models per card/editor. */
 export function useProviderModels(providerId: string): ProviderModelsResult {
 	const [, forceRender] = useState(0)
+	const providersVersion = useContext(ExtensionStateContext)?.providersVersion ?? 0
 
 	useEffect(() => {
 		const listener = () => forceRender((value) => value + 1)
 		catalogListeners.add(listener)
-		void loadModelCatalog()
+		void loadModelCatalog(providersVersion)
 		return () => {
 			catalogListeners.delete(listener)
 		}
-	}, [])
+	}, [providersVersion])
 
 	const group = sharedCatalog.find((item) => item.provider === providerId)
 	const models: Record<string, ModelInfo> = {}

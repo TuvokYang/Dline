@@ -101,7 +101,9 @@ const ApiProfileCard: React.FC<ApiProfileCardProps> = ({
 	const cardTooltip = tooltipLines.join("\n")
 
 	return (
-		<div className="mb-2 rounded border border-editor-widget-border/40 bg-(--vscode-editor-background)">
+		<div
+			className="mb-2 rounded border border-editor-widget-border/40 bg-(--vscode-editor-background)"
+			data-testid="api-profile-card">
 			{/* Collapsed header */}
 			<div
 				className="flex cursor-pointer items-center px-3 py-2 hover:bg-(--vscode-list-hoverBackground)"
@@ -183,6 +185,7 @@ const ApiProfileCard: React.FC<ApiProfileCardProps> = ({
 					<div className="mb-2">
 						<label className="text-xs font-medium text-description block mb-0.5">Provider</label>
 						<select
+							aria-label="Provider"
 							className="w-full text-xs p-1 rounded bg-input-background border border-input-border"
 							onChange={(e) => {
 								const updates = {

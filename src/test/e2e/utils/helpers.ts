@@ -81,6 +81,15 @@ export class E2ETestHelper {
 		}
 	}
 
+	public static async waitForValue<T>(predicate: () => T | undefined | Promise<T | undefined>, maxDelay = 10000): Promise<T> {
+		let value: T | undefined
+		await E2ETestHelper.waitUntil(async () => {
+			value = await predicate()
+			return value !== undefined
+		}, maxDelay)
+		return value as T
+	}
+
 	public async getSidebar(page: Page): Promise<Frame> {
 		const findSidebarFrame = async (): Promise<Frame | null> => {
 			// Check cached frame first
