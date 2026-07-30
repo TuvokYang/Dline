@@ -6,6 +6,7 @@ import { ModelRegistry } from "@core/model-registry/ModelRegistry"
 import { getAllApiKeys, resetAllStores } from "@core/storage/secrets"
 import { EmptyRequest } from "@shared/proto/dline/common"
 import { ApiProfile } from "@shared/proto/dline/profile"
+import PROVIDERS from "@shared/providers/providers.json"
 import { expect } from "chai"
 import { afterEach, beforeEach, describe, it, vi } from "vitest"
 import { getApiProfiles, readApiProfiles, writeApiProfilesToFile } from "../getApiProfiles"
@@ -84,6 +85,171 @@ describe("getApiProfiles", () => {
 		const keyEntries = Object.values(getAllApiKeys())
 		expect(keyEntries).to.have.length(1)
 		expect(keyEntries[0].apiKey).to.equal("sk-ant-test")
+	})
+
+	it("stores API keys for every registered provider only in secrets storage", async () => {
+		const profiles = PROVIDERS.list.map(({ value: provider }, index) =>
+			ApiProfile.create({
+				id: `all-provider-${index}`,
+				name: `E2E ${provider}`,
+				provider,
+				apiKey: `secret-${provider}`,
+				modelId: `model-${provider}`,
+				usedFor: ["act", "plan", "subagents"],
+				enabled: true,
+			}),
+		)
+
+		await updateApiProfiles({} as any, { profiles })
+
+		const profilesPath = path.join(process.env.DLINE_DIR!, "data", "settings", "api_profiles.json")
+		const raw = await fs.readFile(profilesPath, "utf8")
+		for (const { value: provider } of PROVIDERS.list) {
+			expect(raw).not.to.include(`secret-${provider}`)
+		}
+
+		const storedKeys = getAllApiKeys()
+		expect(Object.keys(storedKeys)).to.have.length(PROVIDERS.list.length)
+		for (const profile of profiles) {
+			expect(storedKeys[profile.id]).to.deep.equal({ apiKey: profile.apiKey, name: profile.name })
+		}
+
+		const restored = readApiProfiles()
+		for (const profile of profiles) {
+			expect(restored.find((candidate) => candidate.id === profile.id)?.apiKey).to.equal(profile.apiKey)
+		}
+	})
+
+	it("moves nested provider credentials to provider_secrets.json while preserving non-secret options", async () => {
+		const profiles = [
+			ApiProfile.create({
+				id: "bedrock-secrets",
+				name: "Bedrock secrets",
+				provider: "bedrock",
+				modelId: "bedrock-model",
+				usedFor: ["act"],
+				enabled: true,
+				bedrock: {
+					awsRegion: "us-west-2",
+					awsAuthentication: "credentials",
+					awsAccessKey: "bedrock-access-key",
+					awsSecretKey: "bedrock-secret-key",
+					awsSessionToken: "bedrock-session-token",
+					awsBedrockApiKey: "bedrock-api-key",
+				},
+			}),
+			ApiProfile.create({
+				id: "sapaicore-secrets",
+				name: "SAP AI Core secrets",
+				provider: "sapaicore",
+				modelId: "sap-model",
+				usedFor: ["plan"],
+				enabled: true,
+				sapaicore: {
+					clientId: "sap-client-id",
+					clientSecret: "sap-client-secret",
+					resourceGroup: "sap-resource-group",
+					tokenUrl: "https://sap.example.test/token",
+					useOrchestrationMode: true,
+				},
+			}),
+		]
+
+		await updateApiProfiles({} as any, { profiles })
+
+		const profilesPath = path.join(process.env.DLINE_DIR!, "data", "settings", "api_profiles.json")
+		const raw = await fs.readFile(profilesPath, "utf8")
+		expect(raw).not.to.include("bedrock-access-key")
+		expect(raw).not.to.include("bedrock-secret-key")
+		expect(raw).not.to.include("bedrock-session-token")
+		expect(raw).not.to.include("bedrock-api-key")
+		expect(raw).not.to.include("sap-client-secret")
+		expect(raw).to.include("us-west-2")
+		expect(raw).to.include("sap-client-id")
+		expect(raw).to.include("sap-resource-group")
+
+		const providerSecretsPath = path.join(process.env.DLINE_DIR!, "data", "secrets", "provider_secrets.json")
+		const providerSecrets = JSON.parse(await fs.readFile(providerSecretsPath, "utf8"))
+		expect(providerSecrets["bedrock-secrets"].secrets).to.deep.equal({
+			awsAccessKey: "bedrock-access-key",
+			awsSecretKey: "bedrock-secret-key",
+			awsSessionToken: "bedrock-session-token",
+			awsBedrockApiKey: "bedrock-api-key",
+		})
+		expect(providerSecrets["sapaicore-secrets"].secrets).to.deep.equal({ clientSecret: "sap-client-secret" })
+
+		resetAllStores()
+		const restored = readApiProfiles()
+		const bedrock = restored.find((profile) => profile.id === "bedrock-secrets")
+		const sapaicore = restored.find((profile) => profile.id === "sapaicore-secrets")
+		expect(bedrock?.bedrock?.awsAccessKey).to.equal("bedrock-access-key")
+		expect(bedrock?.bedrock?.awsSecretKey).to.equal("bedrock-secret-key")
+		expect(bedrock?.bedrock?.awsSessionToken).to.equal("bedrock-session-token")
+		expect(bedrock?.bedrock?.awsBedrockApiKey).to.equal("bedrock-api-key")
+		expect(sapaicore?.sapaicore?.clientSecret).to.equal("sap-client-secret")
+	})
+
+	it("migrates embedded provider credentials from an existing api_profiles.json", async () => {
+		const settingsDir = path.join(process.env.DLINE_DIR!, "data", "settings")
+		const profilesPath = path.join(settingsDir, "api_profiles.json")
+		await fs.mkdir(settingsDir, { recursive: true })
+		await fs.writeFile(
+			profilesPath,
+			JSON.stringify([
+				{
+					id: "legacy-bedrock",
+					name: "Legacy Bedrock",
+					provider: "bedrock",
+					modelId: "legacy-bedrock-model",
+					usedFor: ["act"],
+					enabled: true,
+					bedrock: {
+						awsRegion: "us-east-1",
+						awsAccessKey: "legacy-access-key",
+						awsSecretKey: "legacy-secret-key",
+					},
+				},
+				{
+					id: "legacy-sap",
+					name: "Legacy SAP",
+					provider: "sapaicore",
+					modelId: "legacy-sap-model",
+					usedFor: ["plan"],
+					enabled: true,
+					sapaicore: { clientId: "legacy-client-id", clientSecret: "legacy-client-secret" },
+				},
+			]),
+			"utf8",
+		)
+		const controller = {
+			stateManager: {
+				getApiConfiguration: () => ({}),
+				setGlobalState: vi.fn(),
+				flushPendingState: vi.fn().mockResolvedValue(undefined),
+			},
+			postStateToWebview: vi.fn(),
+		} as any
+
+		const response = await getApiProfiles(controller, EmptyRequest.create({}))
+
+		expect(response.profiles.find((profile) => profile.id === "legacy-bedrock")?.bedrock?.awsAccessKey).to.equal(
+			"legacy-access-key",
+		)
+		expect(response.profiles.find((profile) => profile.id === "legacy-sap")?.sapaicore?.clientSecret).to.equal(
+			"legacy-client-secret",
+		)
+		const rewritten = await fs.readFile(profilesPath, "utf8")
+		expect(rewritten).not.to.include("legacy-access-key")
+		expect(rewritten).not.to.include("legacy-secret-key")
+		expect(rewritten).not.to.include("legacy-client-secret")
+		const providerSecrets = JSON.parse(
+			await fs.readFile(path.join(process.env.DLINE_DIR!, "data", "secrets", "provider_secrets.json"), "utf8"),
+		)
+		expect(providerSecrets["legacy-bedrock"].secrets).to.deep.equal({
+			awsAccessKey: "legacy-access-key",
+			awsSecretKey: "legacy-secret-key",
+		})
+		expect(providerSecrets["legacy-sap"].secrets).to.deep.equal({ clientSecret: "legacy-client-secret" })
 	})
 
 	it("hydrates official modelInfo from providers json and strips stored profile snapshots", async () => {

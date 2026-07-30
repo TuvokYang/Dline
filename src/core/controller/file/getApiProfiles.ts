@@ -6,9 +6,18 @@
 
 import { ModelRegistry } from "@core/model-registry/ModelRegistry"
 import { getDlineDataDir, getDlineHomePath } from "@core/storage/disk"
-import { getApiKey, setApiKey } from "@core/storage/secrets"
+import {
+	getAllProviderSecrets,
+	getApiKey,
+	getProviderSecret,
+	type ProviderSecretEntry,
+	setApiKey,
+	setProviderSecretsBatch,
+} from "@core/storage/secrets"
 import { EmptyRequest } from "@shared/proto/dline/common"
 import { ApiProfile, ApiProfilesResponse } from "@shared/proto/dline/profile"
+import { BedrockProviderConfig } from "@shared/proto/dline/provider/bedrock"
+import { SapAiCoreProviderConfig } from "@shared/proto/dline/provider/sapaicore"
 import {
 	canStoreRegistryModelInfoOverrides,
 	getModelInfoOverrideFields,
@@ -71,8 +80,9 @@ async function atomicWriteApiProfilesFile(filePath: string, data: string): Promi
 }
 
 export function writeApiProfilesToFile(filePath: string, profiles: ApiProfile[]): Promise<void> {
-	const data = JSON.stringify(serializeApiProfilesForStorage(profiles), null, "\t")
 	const write = async () => {
+		await persistProviderSecrets(profiles)
+		const data = JSON.stringify(serializeApiProfilesForStorage(profiles), null, "\t")
 		await fs.mkdir(path.dirname(filePath), { recursive: true })
 		await atomicWriteApiProfilesFile(filePath, data)
 		apiProfilesReadCache = undefined
@@ -243,7 +253,8 @@ async function hydrateModelInfoFromRegistry(profiles: ApiProfile[]): Promise<boo
 export function serializeApiProfilesForStorage(profiles: ApiProfile[]): unknown[] {
 	return profiles.map((profile) => {
 		const modelInfo = getProfileModelInfoOverride(profile)
-		const serialized = ApiProfile.toJSON({ ...profile, apiKey: "", modelInfo: undefined }) as Record<string, unknown>
+		const sanitized = stripEmbeddedProviderSecrets(profile)
+		const serialized = ApiProfile.toJSON({ ...sanitized, apiKey: "", modelInfo: undefined }) as Record<string, unknown>
 		delete serialized.apiKey
 		delete serialized.api_key
 		delete serialized.model_info
@@ -255,6 +266,76 @@ export function serializeApiProfilesForStorage(profiles: ApiProfile[]): unknown[
 		}
 		return serialized
 	})
+}
+
+function collectProviderSecrets(profile: ApiProfile): ProviderSecretEntry | undefined {
+	const secrets: Record<string, string> = {}
+	if (profile.bedrock) {
+		for (const field of ["awsAccessKey", "awsSecretKey", "awsSessionToken", "awsBedrockApiKey"] as const) {
+			const value = profile.bedrock[field]
+			if (value) secrets[field] = value
+		}
+	}
+	if (profile.sapaicore?.clientSecret) secrets.clientSecret = profile.sapaicore.clientSecret
+	if (Object.keys(secrets).length === 0) return undefined
+	return { name: profile.name, provider: profile.provider, secrets }
+}
+
+function stripEmbeddedProviderSecrets(profile: ApiProfile): ApiProfile {
+	return {
+		...profile,
+		bedrock: profile.bedrock
+			? {
+					...profile.bedrock,
+					awsAccessKey: "",
+					awsSecretKey: "",
+					awsSessionToken: "",
+					awsBedrockApiKey: "",
+				}
+			: undefined,
+		sapaicore: profile.sapaicore ? { ...profile.sapaicore, clientSecret: "" } : undefined,
+	}
+}
+
+async function persistProviderSecrets(profiles: ApiProfile[]): Promise<void> {
+	const changes: Record<string, ProviderSecretEntry | undefined> = {}
+	const profileIds = new Set(profiles.map((profile) => profile.id))
+	for (const id of Object.keys(getAllProviderSecrets())) {
+		if (!profileIds.has(id)) changes[id] = undefined
+	}
+	for (const profile of profiles) changes[profile.id] = collectProviderSecrets(profile)
+	await setProviderSecretsBatch(changes)
+}
+
+function hydrateProviderSecrets(profiles: ApiProfile[]): void {
+	for (const profile of profiles) {
+		const embedded = collectProviderSecrets(profile)
+		const stored = getProviderSecret(profile.id)
+		const secrets = { ...stored?.secrets, ...embedded?.secrets }
+		if (Object.keys(secrets).length === 0) continue
+
+		if (profile.provider === "bedrock" || profile.bedrock) {
+			const bedrock = profile.bedrock ?? BedrockProviderConfig.create()
+			profile.bedrock = {
+				...bedrock,
+				awsAccessKey: secrets.awsAccessKey ?? bedrock.awsAccessKey,
+				awsSecretKey: secrets.awsSecretKey ?? bedrock.awsSecretKey,
+				awsSessionToken: secrets.awsSessionToken ?? bedrock.awsSessionToken,
+				awsBedrockApiKey: secrets.awsBedrockApiKey ?? bedrock.awsBedrockApiKey,
+			}
+		}
+		if (profile.provider === "sapaicore" || profile.sapaicore) {
+			const sapaicore = profile.sapaicore ?? SapAiCoreProviderConfig.create()
+			profile.sapaicore = { ...sapaicore, clientSecret: secrets.clientSecret ?? sapaicore.clientSecret }
+		}
+
+		if (embedded) {
+			void setProviderSecretsBatch({
+				[profile.id]: { name: profile.name, provider: profile.provider, secrets },
+			})
+			needsCleanRewrite = true
+		}
+	}
 }
 
 function hydrateApiKeys(profiles: ApiProfile[]): void {
@@ -308,6 +389,7 @@ export async function getApiProfiles(controller: Controller, _request: EmptyRequ
 		const parsed = parseApiProfilesJson(raw)
 		const profiles = parsed.profiles
 		hydrateApiKeys(profiles)
+		hydrateProviderSecrets(profiles)
 		const modelInfoChanged = await hydrateModelInfoFromRegistry(profiles)
 		if (parsed.recovered) {
 			needsCleanRewrite = false
@@ -545,6 +627,7 @@ export function readApiProfiles(): ApiProfile[] {
 		const parsed = parseApiProfilesJson(raw)
 		const profiles = parsed.profiles
 		hydrateApiKeys(profiles)
+		hydrateProviderSecrets(profiles)
 		const defaultsChanged = applyRegistryModelDefaults(profiles)
 		const modelInfoChanged = applyRegistryModelInfo(profiles) || defaultsChanged
 		if (parsed.recovered || needsCleanRewrite) {

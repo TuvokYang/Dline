@@ -3,6 +3,7 @@ import * as http from "http"
 import { URL } from "url"
 import { z } from "zod"
 import { StateManager } from "@/core/storage/StateManager"
+import { clearOpenAiCodexAuth, getOpenAiCodexAuth, saveOpenAiCodexAuth } from "@/core/storage/secrets"
 import { fetch } from "@/shared/net"
 import { Logger } from "@/shared/services/Logger"
 
@@ -378,10 +379,17 @@ export class OpenAiCodexOAuthManager {
 	}
 
 	/**
-	 * Load credentials from storage via StateManager.
+	 * Load credentials from split secret storage. A legacy secrets.json value is
+	 * migrated once for existing installations.
 	 */
 	async loadCredentials(): Promise<OpenAiCodexCredentials | null> {
 		try {
+			const storedCredentials = getOpenAiCodexAuth()
+			if (storedCredentials) {
+				this.credentials = openAiCodexCredentialsSchema.parse(storedCredentials)
+				return this.credentials
+			}
+
 			const stateManager = StateManager.get()
 			const credentialsJson = stateManager.getSecretKey("openai-codex-oauth-credentials")
 
@@ -389,8 +397,10 @@ export class OpenAiCodexOAuthManager {
 				return null
 			}
 
-			const parsed = JSON.parse(credentialsJson)
-			this.credentials = openAiCodexCredentialsSchema.parse(parsed)
+			this.credentials = openAiCodexCredentialsSchema.parse(JSON.parse(credentialsJson))
+			await saveOpenAiCodexAuth(this.credentials)
+			stateManager.setSecret("openai-codex-oauth-credentials", undefined)
+			await stateManager.flushPendingState()
 			return this.credentials
 		} catch (error) {
 			Logger.error("[openai-codex-oauth] Failed to load credentials:", error)
@@ -399,12 +409,10 @@ export class OpenAiCodexOAuthManager {
 	}
 
 	/**
-	 * Save credentials to storage via StateManager
+	 * Save credentials to split secret storage.
 	 */
 	async saveCredentials(credentials: OpenAiCodexCredentials): Promise<void> {
-		const stateManager = StateManager.get()
-		stateManager.setSecret("openai-codex-oauth-credentials", JSON.stringify(credentials))
-		await stateManager.flushPendingState()
+		await saveOpenAiCodexAuth(credentials)
 		this.credentials = credentials
 	}
 
@@ -412,9 +420,16 @@ export class OpenAiCodexOAuthManager {
 	 * Clear credentials from storage
 	 */
 	async clearCredentials(): Promise<void> {
-		const stateManager = StateManager.get()
-		stateManager.setSecret("openai-codex-oauth-credentials", undefined)
-		await stateManager.flushPendingState()
+		await clearOpenAiCodexAuth()
+		try {
+			const stateManager = StateManager.get()
+			if (stateManager.getSecretKey("openai-codex-oauth-credentials")) {
+				stateManager.setSecret("openai-codex-oauth-credentials", undefined)
+				await stateManager.flushPendingState()
+			}
+		} catch {
+			// Split storage can be cleared before StateManager initialization.
+		}
 		this.credentials = null
 	}
 

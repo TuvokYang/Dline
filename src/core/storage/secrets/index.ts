@@ -5,11 +5,15 @@ import * as AccountStore from "./AccountStore"
 import * as ApiKeyStore from "./ApiKeyStore"
 import * as McpOAuthStore from "./McpOAuthStore"
 import * as OcaTokenStore from "./OcaTokenStore"
+import * as OpenAiCodexAuthStore from "./OpenAiCodexAuthStore"
+import * as ProviderSecretStore from "./ProviderSecretStore"
 import * as WandbStore from "./WandbStore"
 
 export type { ApiKeyEntry } from "./ApiKeyStore"
 export type { McpOAuthServerData } from "./McpOAuthStore"
 export type { OcaTokenData } from "./OcaTokenStore"
+export type { OpenAiCodexAuthData } from "./OpenAiCodexAuthStore"
+export type { ProviderSecretEntry } from "./ProviderSecretStore"
 
 // API Keys — keyed by profile.id (uuid)
 export const getApiKey = ApiKeyStore.getApiKey
@@ -18,6 +22,16 @@ export const deleteApiKey = ApiKeyStore.deleteApiKey
 export const getAllApiKeys = ApiKeyStore.getAllApiKeys
 export const migrateApiKey = ApiKeyStore.migrateApiKey
 export const setApiKeysBatch = ApiKeyStore.setApiKeysBatch
+
+// Provider-specific credentials that do not fit the single ApiProfile.apiKey field
+export const getProviderSecret = ProviderSecretStore.getProviderSecret
+export const getAllProviderSecrets = ProviderSecretStore.getAllProviderSecrets
+export const setProviderSecretsBatch = ProviderSecretStore.setProviderSecretsBatch
+
+// OpenAI Codex OAuth
+export const getOpenAiCodexAuth = OpenAiCodexAuthStore.getOpenAiCodexAuth
+export const saveOpenAiCodexAuth = OpenAiCodexAuthStore.saveOpenAiCodexAuth
+export const clearOpenAiCodexAuth = OpenAiCodexAuthStore.clearOpenAiCodexAuth
 
 // MCP OAuth
 export const getAllMcpOAuthSecrets = McpOAuthStore.getAllMcpOAuthSecrets
@@ -53,5 +67,7 @@ export function resetAllStores(): void {
 	ApiKeyStore.resetApiKeyStore()
 	McpOAuthStore.resetMcpOAuthStore()
 	OcaTokenStore.resetOcaTokenStore()
+	OpenAiCodexAuthStore.resetOpenAiCodexAuthStore()
+	ProviderSecretStore.resetProviderSecretStore()
 	WandbStore.resetWandbStore()
 }

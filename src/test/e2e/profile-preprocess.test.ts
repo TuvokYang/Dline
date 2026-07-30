@@ -35,6 +35,15 @@ test("E2E profile preprocessing copies only api_profiles.json and secrets/**", a
 			writeJson(path.join(sourceDataDir, "secrets", "api_keys.json"), {
 				"local-profile": { apiKey: "local-secret", name: "Local Profile" },
 			}),
+			writeJson(path.join(sourceDataDir, "secrets", "openai_codex_oauth.json"), {
+				type: "openai-codex",
+				access_token: "codex-access-token",
+				refresh_token: "codex-refresh-token",
+				expires: 1_900_000_000_000,
+			}),
+			writeJson(path.join(sourceDataDir, "secrets", "provider_secrets.json"), {
+				"local-profile": { name: "Local Profile", provider: "deepseek", secrets: { custom: "provider-secret" } },
+			}),
 			writeJson(path.join(sourceDataDir, "secrets.json"), { "openai-codex-oauth-credentials": "local-oauth" }),
 			writeJson(path.join(sourceDataDir, "globalState.json"), { taskHistory: ["must-not-copy"] }),
 		])
@@ -65,6 +74,13 @@ test("E2E profile preprocessing copies only api_profiles.json and secrets/**", a
 		expect(apiKeys["local-profile"].apiKey).toBe("local-secret")
 		expect(apiKeys["dline-e2e-deepseek"].apiKey).toBe("ci-deepseek-key")
 		expect(apiKeys["dline-e2e-openai-compatible"].apiKey).toBe("ci-compatible-key")
+		expect(await readJson(path.join(dlineDir, "data", "secrets", "openai_codex_oauth.json"))).toMatchObject({
+			access_token: "codex-access-token",
+			refresh_token: "codex-refresh-token",
+		})
+		expect(await readJson(path.join(dlineDir, "data", "secrets", "provider_secrets.json"))).toMatchObject({
+			"local-profile": { secrets: { custom: "provider-secret" } },
+		})
 
 		await expect(readFile(path.join(dlineDir, "data", "secrets.json"), "utf8")).rejects.toMatchObject({ code: "ENOENT" })
 
