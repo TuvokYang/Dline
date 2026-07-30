@@ -7,6 +7,7 @@ import { showApprovalNotification, showSystemNotification } from "@integrations/
 import { findLastIndex } from "@shared/array"
 import { COMMAND_REQ_APP_STRING } from "@shared/combineCommandSequences"
 import { ClineAsk } from "@shared/ExtensionMessage"
+import { DEFAULT_TERMINAL_COMMAND_TIMEOUT_SECONDS, MIN_TERMINAL_COMMAND_TIMEOUT_SECONDS } from "@shared/terminal-settings"
 import { arePathsEqual } from "@utils/path"
 import { telemetryService } from "@/services/telemetry"
 import { ClineDefaultTool } from "@/shared/tools"
@@ -20,7 +21,7 @@ import { sayFeedbackOnce } from "../utils/UserFeedbackUtils"
 import { parseCommandExecutionOptions } from "./command-execution-options"
 import { resolveCommandWorkdirectory } from "./command-workdirectory"
 
-export { isLikelyLongRunningCommand, resolveCommandTimeoutSeconds } from "./command-execution-options"
+export { resolveCommandTimeoutSeconds } from "./command-execution-options"
 
 export class ExecuteCommandToolHandler implements IFullyManagedTool {
 	readonly name = ClineDefaultTool.BASH
@@ -56,6 +57,7 @@ export class ExecuteCommandToolHandler implements IFullyManagedTool {
 		const requiresApprovalPerLLM = requiresApprovalRaw?.toLowerCase() === "true"
 		const timeoutParam: string | undefined = block.params.timeout
 		const backgroundParam: string | undefined = block.params.background
+		const synchronousParam: string | undefined = block.params.synchronous
 		const workdirectoryParam: string | undefined = block.params.workdirectory
 
 		// Extract provider using the proven pattern from ReportBugHandler
@@ -80,9 +82,8 @@ export class ExecuteCommandToolHandler implements IFullyManagedTool {
 
 		config.taskState.consecutiveMistakeCount = 0
 
-		// Bound the foreground wait in every terminal mode. On timeout the
-		// orchestrator releases the task loop while the command may keep running.
-		const executionOptions = parseCommandExecutionOptions(command, backgroundParam, timeoutParam)
+		// Parse only explicit tool overrides. The current Settings default is read at launch.
+		const executionOptions = parseCommandExecutionOptions(command, backgroundParam, timeoutParam, synchronousParam)
 
 		// Pre-process command for certain models
 		if (config.api.getModel().id.includes("gemini")) {
@@ -332,9 +333,19 @@ export class ExecuteCommandToolHandler implements IFullyManagedTool {
 			}, 30_000)
 		}
 
-		const outcome = await config.callbacks.executeCommandTool(actualCommand, executionOptions.timeoutSeconds, {
+		const configuredTimeout = config.services.stateManager.getGlobalSettingsKey("terminalCommandTimeoutSeconds")
+		const defaultTimeout =
+			typeof configuredTimeout === "number" &&
+			Number.isSafeInteger(configuredTimeout) &&
+			configuredTimeout >= MIN_TERMINAL_COMMAND_TIMEOUT_SECONDS
+				? configuredTimeout
+				: DEFAULT_TERMINAL_COMMAND_TIMEOUT_SECONDS
+		const timeoutSeconds = executionOptions.timeoutSeconds ?? defaultTimeout
+
+		const outcome = await config.callbacks.executeCommandTool(actualCommand, timeoutSeconds, {
 			commandTs: block.ts,
 			startInBackground: executionOptions.background,
+			synchronous: executionOptions.synchronous,
 			workdirectory: executionDir,
 		})
 

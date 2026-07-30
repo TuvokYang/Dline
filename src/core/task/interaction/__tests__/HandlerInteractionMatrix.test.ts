@@ -209,6 +209,57 @@ describe("handler interaction matrix", () => {
 		}
 	})
 
+	it("reads the latest command timeout setting for each launch in the current task", async () => {
+		let configuredTimeout = 1800
+		const taskConfig = config({ actionId: "approve" })
+		Object.assign(taskConfig, {
+			api: { getModel: vi.fn(() => ({ id: "test-model" })) },
+			services: {
+				stateManager: {
+					getApiConfiguration: vi.fn(() => ({})),
+					getGlobalSettingsKey: vi.fn((key: string) =>
+						key === "mode" ? "act" : key === "terminalCommandTimeoutSeconds" ? configuredTimeout : undefined,
+					),
+				},
+				commandPermissionController: { validateCommand: vi.fn(() => ({ allowed: true })) },
+				clineIgnoreController: { validateDirectoryAccess: vi.fn(() => true), validateCommand: vi.fn(() => undefined) },
+			},
+			autoApprover: { shouldAutoApproveTool: vi.fn(() => [true, true]) },
+			autoApprovalSettings: { enableNotifications: false },
+			isMultiRootEnabled: false,
+		})
+		taskConfig.callbacks.executeCommandTool = vi.fn(async () => ({
+			userRejected: false,
+			result: "ok",
+			completed: true,
+			exitCode: 0,
+			signal: null,
+		}))
+
+		await new ExecuteCommandToolHandler().execute(
+			taskConfig,
+			block(ClineDefaultTool.BASH, { command: "echo first", requires_approval: "false" }),
+		)
+		configuredTimeout = 3600
+		await new ExecuteCommandToolHandler().execute(
+			taskConfig,
+			block(ClineDefaultTool.BASH, { command: "echo second", requires_approval: "false", synchronous: "true" }),
+		)
+
+		expect(taskConfig.callbacks.executeCommandTool).toHaveBeenNthCalledWith(
+			1,
+			"echo first",
+			1800,
+			expect.objectContaining({ synchronous: false }),
+		)
+		expect(taskConfig.callbacks.executeCommandTool).toHaveBeenNthCalledWith(
+			2,
+			"echo second",
+			3600,
+			expect.objectContaining({ synchronous: true }),
+		)
+	})
+
 	it("rejects interaction opening without canonical dline identity", async () => {
 		const taskConfig = config()
 		const missingIdentity = block(ClineDefaultTool.QNA_RESPOND, { response: "Answer" })

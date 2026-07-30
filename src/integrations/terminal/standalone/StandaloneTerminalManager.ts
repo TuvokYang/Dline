@@ -15,7 +15,7 @@
 import { DlineTempManager } from "@services/temp"
 import * as fs from "fs"
 import { isCommandCompletionSuccessful } from "../command-completion"
-import { BACKGROUND_COMMAND_TIMEOUT_MS, DEFAULT_TERMINAL_OUTPUT_LINE_LIMIT, MAX_BYTES_BEFORE_FILE } from "../constants"
+import { DEFAULT_TERMINAL_OUTPUT_LINE_LIMIT, MAX_BYTES_BEFORE_FILE } from "../constants"
 import { formatTerminalOutputLogLine } from "../output-stream"
 import type {
 	BackgroundCommand,
@@ -414,7 +414,7 @@ export class StandaloneTerminalManager implements ITerminalManager {
 	 * Track a command that will continue running in the background.
 	 * Called when user clicks "Proceed While Running".
 	 * Buffers output until the configured line or byte limit is exceeded, then lazily creates a log file.
-	 * Sets up a 10-minute hard timeout to prevent zombie processes.
+	 * Retains the command's original absolute deadline across the handoff.
 	 *
 	 * @param process The terminal process to track
 	 * @param command The command string being executed
@@ -427,7 +427,12 @@ export class StandaloneTerminalManager implements ITerminalManager {
 		command: string,
 		activityId: string,
 		existingOutput: TerminalOutputLine[] = [],
-		ownership: { origin: CommandOrigin; cancellationOwner: CommandCancellationOwner } = {
+		ownership: {
+			origin: CommandOrigin
+			cancellationOwner: CommandCancellationOwner
+			startedAt?: number
+			deadlineAt?: number
+		} = {
 			origin: "foreground",
 			cancellationOwner: "task",
 		},
@@ -444,7 +449,8 @@ export class StandaloneTerminalManager implements ITerminalManager {
 		const backgroundCommand: BackgroundCommand = {
 			id: activityId,
 			command,
-			startTime: Date.now(),
+			startTime: ownership.startedAt ?? Date.now(),
+			deadlineAt: ownership.deadlineAt,
 			status: "running",
 			origin: ownership.origin,
 			cancellationOwner: ownership.cancellationOwner,
@@ -465,21 +471,22 @@ export class StandaloneTerminalManager implements ITerminalManager {
 			callbacks?.onOutputLine?.(line, stream)
 		})
 
-		// Set up 10-minute hard timeout to prevent zombie processes
-		const timeoutId = setTimeout(() => {
-			if (backgroundCommand.status === "running") {
-				backgroundCommand.status = "timed_out"
-				callbacks?.onTimeout?.()
-				this.appendBackgroundNote(backgroundCommand, "[TIMEOUT] Process killed after 10 minutes", callbacks)
-				this.finishBackgroundLog(activityId)
+		if (ownership.deadlineAt !== undefined) {
+			const remainingMs = Math.max(0, ownership.deadlineAt - Date.now())
+			const timeoutId = setTimeout(() => {
+				if (backgroundCommand.status === "running") {
+					backgroundCommand.status = "timed_out"
+					callbacks?.onTimeout?.()
+					this.appendBackgroundNote(backgroundCommand, "[TIMEOUT] Process reached its command deadline", callbacks)
+					this.finishBackgroundLog(activityId)
 
-				// Terminate the process if it has a terminate method
-				if (process && typeof (process as any).terminate === "function") {
-					;(process as any).terminate()
+					if (process.terminate) {
+						void Promise.resolve(process.terminate())
+					}
 				}
-			}
-		}, BACKGROUND_COMMAND_TIMEOUT_MS)
-		this.backgroundTimeouts.set(activityId, timeoutId)
+			}, remainingMs)
+			this.backgroundTimeouts.set(activityId, timeoutId)
+		}
 
 		// Listen for completion - clear timeout
 		process.on("completed", (details) => {

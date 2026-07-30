@@ -10,7 +10,7 @@ const BASE_CONTEXT = {
 	providerInfo: { providerId: "openai", model: { id: "model", info: {} } },
 	enableNativeToolCalls: true,
 	terminalCommandTimeoutSeconds: 1800,
-} as SystemPromptContext
+} as unknown as SystemPromptContext
 
 /** Finds one projected tool by stable provider name. */
 function findTool(tools: ReturnType<ToolPromptGenerator["generate"]>, name: string) {

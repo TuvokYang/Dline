@@ -17,16 +17,26 @@ class FakeTerminalProcess extends EventEmitter<TerminalProcessEvents> implements
 	isHot = false
 	waitForShellIntegration = false
 	readonly terminate = vi.fn(async () => undefined)
+	readonly started: Promise<number>
 	private readonly promise: Promise<void>
 	private resolvePromise!: () => void
 	private rejectPromise!: (error: Error) => void
+	private resolveStarted!: (startedAt: number) => void
 
-	constructor() {
+	constructor(deferStart = false) {
 		super()
+		this.started = new Promise<number>((resolve) => {
+			this.resolveStarted = resolve
+		})
 		this.promise = new Promise<void>((resolve, reject) => {
 			this.resolvePromise = resolve
 			this.rejectPromise = reject
 		})
+		if (!deferStart) this.markStarted()
+	}
+
+	markStarted(): void {
+		this.resolveStarted(Date.now())
 	}
 
 	continue(): void {
@@ -208,6 +218,29 @@ describe("CommandOrchestrator background transitions", () => {
 		assert.equal(process.terminate.mock.calls.length, 1)
 		assert.equal(result.timedOut, true)
 		assert.match(result.result as string, /60-second timeout/i)
+	})
+
+	it("starts the absolute timeout only after the process launch signal", async () => {
+		vi.useFakeTimers()
+		vi.setSystemTime(0)
+		const process = new FakeTerminalProcess(true)
+		const execution = orchestrateCommandExecution(process.asResultPromise(), createTerminalManager(), createCallbacks(), {
+			command: "delayed-launch-command",
+			synchronous: true,
+			timeoutSeconds: 60,
+		})
+
+		await vi.advanceTimersByTimeAsync(60_000)
+		assert.equal(process.terminate.mock.calls.length, 0)
+
+		process.markStarted()
+		await vi.advanceTimersByTimeAsync(59_999)
+		assert.equal(process.terminate.mock.calls.length, 0)
+
+		await vi.advanceTimersByTimeAsync(1)
+		const result = await execution
+		assert.equal(process.terminate.mock.calls.length, 1)
+		assert.equal(result.timedOut, true)
 	})
 
 	it("kills a default command when its timeout is shorter than the 10-second handoff", async () => {

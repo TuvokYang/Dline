@@ -134,6 +134,7 @@ export class CommandExecutor {
 		const activityId = `command_${options?.commandTs ?? Date.now()}_${this.nextActivityNumber++}`
 		const cancellationOwner: CommandCancellationOwner = options?.startInBackground ? "explicit" : "task"
 		let activityLineCount = 0
+		let timedOut = false
 		this.processes.set(activityId, process)
 		this.cancellationOwners.set(activityId, cancellationOwner)
 		if (options?.commandTs) {
@@ -173,8 +174,14 @@ export class CommandExecutor {
 			const cancelled = this.cancelledActivityIds.has(activityId)
 			const failed = !isCommandCompletionSuccessful(details)
 			this.callbacks.updateCommandActivity?.(activityId, {
-				status: cancelled ? "cancelled" : failed ? "failed" : "completed",
-				latestEvent: cancelled ? "Cancelled by user" : failed ? "Command failed" : "Command completed",
+				status: cancelled ? "cancelled" : timedOut ? "timeout" : failed ? "failed" : "completed",
+				latestEvent: cancelled
+					? "Cancelled by user"
+					: timedOut
+						? "Command timed out"
+						: failed
+							? "Command failed"
+							: "Command completed",
 				error: cancelled
 					? undefined
 					: details?.signal
@@ -189,8 +196,8 @@ export class CommandExecutor {
 		process.once("error", (error: Error) => {
 			const cancelled = this.cancelledActivityIds.has(activityId)
 			this.callbacks.updateCommandActivity?.(activityId, {
-				status: cancelled ? "cancelled" : "failed",
-				latestEvent: cancelled ? "Cancelled by user" : "Command failed",
+				status: cancelled ? "cancelled" : timedOut ? "timeout" : "failed",
+				latestEvent: cancelled ? "Cancelled by user" : timedOut ? "Command timed out" : "Command failed",
 				error: cancelled ? undefined : error.message,
 				lineCount: activityLineCount,
 			})
@@ -200,11 +207,21 @@ export class CommandExecutor {
 		// Use shared orchestration logic
 		// The StandaloneTerminalManager handles background command tracking internally
 		let backgroundCommand: BackgroundCommand | undefined
+		const markTimedOut = () => {
+			timedOut = true
+			this.callbacks.updateCommandActivity?.(activityId, {
+				status: "timeout",
+				latestEvent: "Command timed out",
+				lineCount: activityLineCount,
+			})
+		}
 		const result = await orchestrateCommandExecution(process, manager, this.callbacks, {
 			activityId,
 			isCancellationRequested: () => this.cancelledActivityIds.has(activityId),
 			command,
 			timeoutSeconds,
+			synchronous: options?.synchronous,
+			onTimeout: markTimedOut,
 			suppressUserInteraction: options?.suppressUserInteraction,
 			commandTs: options?.commandTs,
 			onOutputLine: (line) => {
@@ -218,62 +235,57 @@ export class CommandExecutor {
 			// When "Proceed While Running" is triggered, track the command in the manager
 			// Returns the log file path so the orchestrator can send it to the UI
 			// existingOutput contains all output lines captured so far
-			onProceedWhileRunning: useStandalone
-				? (existingOutput: TerminalOutputLine[]) => {
-						if (backgroundCommand) {
-							return {
-								backgroundCommandId: backgroundCommand.id,
-								logFilePath: backgroundCommand.logFilePath,
-							}
-						}
-						backgroundCommand = this.standaloneManager.trackBackgroundCommand(
-							process,
-							command,
-							activityId,
-							existingOutput,
-							{
-								origin: options?.startInBackground ? "explicit_background" : "foreground",
-								cancellationOwner,
-							},
-							{
-								onOutputLine: (line) => {
-									activityLineCount++
-									this.callbacks.appendCommandActivityOutput?.(activityId, `${line}\n`)
-									this.callbacks.updateCommandActivity?.(activityId, {
-										latestEvent: line.trim() || "Command produced output",
-										lineCount: activityLineCount,
-									})
-								},
-								onTimeout: () => {
-									this.callbacks.updateCommandActivity?.(activityId, {
-										status: "timeout",
-										latestEvent: "Background command timed out",
-										lineCount: activityLineCount,
-									})
-								},
-								onLogFileCreated: (logFilePath) => {
-									this.callbacks.updateCommandActivity?.(activityId, { logPath: logFilePath })
-									if (!options?.commandTs) return
-									const messages = this.callbacks.getClineMessages() as Array<{ ts?: number }>
-									const commandIndex = messages.findIndex((message) => message.ts === options.commandTs)
-									if (commandIndex !== -1) {
-										void this.callbacks.updateClineMessage(commandIndex, { logPath: logFilePath })
-									}
-								},
-							},
-						)
-						this.callbacks.updateCommandActivity?.(activityId, {
-							executionMode: "background",
-							latestEvent: "Continuing in background",
-							lineCount: activityLineCount,
-							logPath: backgroundCommand.logFilePath,
-						})
-						return {
-							backgroundCommandId: backgroundCommand.id,
-							logFilePath: backgroundCommand.logFilePath,
-						}
+			onProceedWhileRunning: (existingOutput: TerminalOutputLine[], timing: { startedAt: number; deadlineAt?: number }) => {
+				if (backgroundCommand) {
+					return {
+						backgroundCommandId: backgroundCommand.id,
+						logFilePath: backgroundCommand.logFilePath,
 					}
-				: undefined,
+				}
+				backgroundCommand = this.standaloneManager.trackBackgroundCommand(
+					process,
+					command,
+					activityId,
+					existingOutput,
+					{
+						origin: options?.startInBackground ? "explicit_background" : "foreground",
+						cancellationOwner,
+						...timing,
+					},
+					{
+						onOutputLine: (line) => {
+							activityLineCount++
+							this.callbacks.appendCommandActivityOutput?.(activityId, `${line}\n`)
+							this.callbacks.updateCommandActivity?.(activityId, {
+								latestEvent: line.trim() || "Command produced output",
+								lineCount: activityLineCount,
+							})
+						},
+						onTimeout: () => {
+							markTimedOut()
+						},
+						onLogFileCreated: (logFilePath) => {
+							this.callbacks.updateCommandActivity?.(activityId, { logPath: logFilePath })
+							if (!options?.commandTs) return
+							const messages = this.callbacks.getClineMessages() as Array<{ ts?: number }>
+							const commandIndex = messages.findIndex((message) => message.ts === options.commandTs)
+							if (commandIndex !== -1) {
+								void this.callbacks.updateClineMessage(commandIndex, { logPath: logFilePath })
+							}
+						},
+					},
+				)
+				this.callbacks.updateCommandActivity?.(activityId, {
+					executionMode: "background",
+					latestEvent: "Continuing in background",
+					lineCount: activityLineCount,
+					logPath: backgroundCommand.logFilePath,
+				})
+				return {
+					backgroundCommandId: backgroundCommand.id,
+					logFilePath: backgroundCommand.logFilePath,
+				}
+			},
 			startInBackground: options?.startInBackground,
 			showShellIntegrationSuggestion: this.shouldShowBackgroundTerminalSuggestion(),
 			terminalType: useStandalone ? "standalone" : "vscode",

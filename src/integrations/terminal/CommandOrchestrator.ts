@@ -26,6 +26,7 @@ import {
 	CHUNK_BYTE_SIZE,
 	CHUNK_DEBOUNCE_MS,
 	CHUNK_LINE_COUNT,
+	COMMAND_BACKGROUND_HANDOFF_MS,
 	COMPLETION_TIMEOUT_MS,
 	MAX_BYTES_BEFORE_FILE,
 	MAX_LINES_BEFORE_FILE,
@@ -60,6 +61,10 @@ export async function orchestrateCommandExecution(
 ): Promise<OrchestrationResult> {
 	const {
 		timeoutSeconds,
+		startedAt: configuredStartedAt,
+		deadlineAt: configuredDeadlineAt,
+		synchronous = false,
+		onTimeout,
 		onOutputLine,
 		showShellIntegrationSuggestion,
 		onProceedWhileRunning,
@@ -443,7 +448,8 @@ export async function orchestrateCommandExecution(
 	const formatOutput = (entries: readonly TerminalOutputLine[]): string =>
 		formatTerminalOutput(entries, (lines) => terminalManager.processOutput(lines))
 
-	type BackgroundTransitionReason = "explicit" | "timeout" | "user"
+	let commandTiming: { startedAt: number; deadlineAt?: number } | undefined
+	type BackgroundTransitionReason = "explicit" | "automatic" | "user"
 	const transitionToBackground = async (
 		reason: BackgroundTransitionReason,
 		drainQueuedOutput: boolean,
@@ -465,13 +471,14 @@ export async function orchestrateCommandExecution(
 			await drainOutputQueue()
 		}
 
-		const trackingResult = onProceedWhileRunning(output)
+		const timing = commandTiming ?? { startedAt: Date.now(), deadlineAt: configuredDeadlineAt }
+		const trackingResult = onProceedWhileRunning(output, timing)
 		const currentOutput = formatOutput(output)
 		const logMessage = trackingResult?.logFilePath ? `Log file: ${trackingResult.logFilePath}\n` : ""
 		const outputMessage = currentOutput.length > 0 ? `Output so far:\n${currentOutput}` : ""
 		const resultPrefix =
-			reason === "timeout"
-				? `Command timed out after ${timeoutSeconds} seconds. Running in background.`
+			reason === "automatic"
+				? "Command is still running after 10 seconds and is now tracked in the background."
 				: "Command is running in the background. You can proceed with other tasks."
 
 		backgroundTrackingResult = {
@@ -484,11 +491,7 @@ export async function orchestrateCommandExecution(
 		}
 
 		if (trackingResult?.logFilePath) {
-			const statusMessage =
-				reason === "timeout"
-					? `\n⏱️ Command timed out. Output is being logged to: ${trackingResult.logFilePath}`
-					: `\n📋 Output is being logged to: ${trackingResult.logFilePath}`
-			await say("command_output", statusMessage)
+			await say("command_output", `\n📋 Output is being logged to: ${trackingResult.logFilePath}`)
 		}
 
 		process.continue()
@@ -624,6 +627,10 @@ export async function orchestrateCommandExecution(
 		}
 	})
 
+	const startedAt = configuredStartedAt ?? (process.started ? await process.started : Date.now())
+	const deadlineAt = configuredDeadlineAt ?? (timeoutSeconds ? startedAt + timeoutSeconds * 1000 : undefined)
+	commandTiming = { startedAt, deadlineAt }
+
 	if (startInBackground && onProceedWhileRunning && !didCancelViaUi) {
 		const result = await transitionToBackground("explicit", true)
 		if (result) {
@@ -631,32 +638,45 @@ export async function orchestrateCommandExecution(
 		}
 	}
 
-	// Handle timeout if specified, or wait for process to complete
+	// Wait for completion, the automatic handoff, or the one absolute kill deadline.
 	if (!didCancelViaUi) {
-		if (timeoutSeconds) {
-			let timeoutId: NodeJS.Timeout | undefined
-			const timeoutPromise = new Promise<never>((_, reject) => {
-				timeoutId = setTimeout(() => {
-					reject(new Error("COMMAND_TIMEOUT"))
-				}, timeoutSeconds * 1000)
-			})
+		if (!timeoutSeconds && (synchronous || !onProceedWhileRunning)) {
+			// Backward-compatible fallback for direct orchestrator callers.
+			await process
+		} else {
+			type ExecutionBoundary = "completed" | "handoff" | "timeout"
+			let handoffTimer: NodeJS.Timeout | undefined
+			let deadlineTimer: NodeJS.Timeout | undefined
+			const boundaries: Promise<ExecutionBoundary>[] = [process.then(() => "completed" as const)]
+
+			if (!synchronous && onProceedWhileRunning) {
+				boundaries.push(
+					new Promise((resolve) => {
+						handoffTimer = setTimeout(
+							() => resolve("handoff"),
+							Math.max(0, startedAt + COMMAND_BACKGROUND_HANDOFF_MS - Date.now()),
+						)
+					}),
+				)
+			}
+			if (deadlineAt !== undefined) {
+				boundaries.push(
+					new Promise((resolve) => {
+						deadlineTimer = setTimeout(() => resolve("timeout"), Math.max(0, deadlineAt - Date.now()))
+					}),
+				)
+			}
 
 			try {
-				await Promise.race([process, timeoutPromise])
-			} catch (error: unknown) {
-				if (error instanceof Error && error.message === "COMMAND_TIMEOUT") {
-					// Timeout triggers "Proceed While Running" behavior
+				const boundary = await Promise.race(boundaries)
+				if (boundary === "handoff") {
+					const result = await transitionToBackground("automatic", true)
+					if (result) return result
+				}
+
+				if (boundary === "timeout") {
 					didContinue = true
-					// Release any pending command_output ask before transitioning state.
 					releaseAnyPendingCommandOutputAsk()
-
-					if (onProceedWhileRunning) {
-						const result = await transitionToBackground("timeout", true)
-						if (result) {
-							return result
-						}
-					}
-
 					if (chunkTimer) {
 						clearTimeout(chunkTimer)
 						chunkTimer = null
@@ -665,33 +685,29 @@ export async function orchestrateCommandExecution(
 						clearTimeout(completionTimer)
 						completionTimer = null
 					}
-
-					// VSCode terminal mode: no background tracking available
-					// Just continue the process and return timeout result
-					process.continue()
-
-					// Drain output already emitted before returning the timeout result.
-					await outputWork
-					const result = formatOutput(output)
-
+					onTimeout?.()
+					if (process.terminate) {
+						await Promise.resolve(process.terminate())
+					}
+					await drainOutputQueue()
+					await clearCommandState(process.getCompletionDetails?.(), true)
+					cleanupFileBased()
+					const currentOutput = formatOutput(output)
 					return {
 						userRejected: false,
-						result: `Command execution timed out after ${timeoutSeconds} seconds. ${result.length > 0 ? `\nOutput so far:\n${result}` : ""}`,
+						result: `Command reached its ${timeoutSeconds}-second timeout and was terminated.${
+							currentOutput.length > 0 ? `\nOutput captured before termination:\n${currentOutput}` : ""
+						}`,
 						completed: false,
+						timedOut: true,
 						...splitTerminalOutput(output),
+						...process.getCompletionDetails?.(),
 					}
 				}
-
-				// Re-throw other errors
-				throw error
 			} finally {
-				if (timeoutId) {
-					clearTimeout(timeoutId)
-				}
+				if (handoffTimer) clearTimeout(handoffTimer)
+				if (deadlineTimer) clearTimeout(deadlineTimer)
 			}
-		} else {
-			// Backward-compatible fallback for direct orchestrator callers.
-			await process
 		}
 	}
 

@@ -175,6 +175,7 @@ message Settings {
   optional string act_mode_profile = 191;
   optional string global_subagents_toggles = 192;
   optional string chat_input_send_shortcut = 193;
+  optional int32 terminal_command_timeout_seconds = 194;
 }
 
 // Account usage quota for rate-limited providers (e.g., Codex, Copilot)

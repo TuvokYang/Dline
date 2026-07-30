@@ -73,8 +73,8 @@ export const DEFAULT_TERMINAL_OUTPUT_LINE_LIMIT = 500
 // =============================================================================
 // Controls background command behavior for "Proceed While Running"
 
-/** Hard timeout for background commands to prevent zombie processes (10 minutes) */
-export const BACKGROUND_COMMAND_TIMEOUT_MS = 10 * 60 * 1000
+/** Foreground grace period before a non-synchronous command is handed to background tracking. */
+export const COMMAND_BACKGROUND_HANDOFF_MS = 10_000
 
 // =============================================================================
 // Compilation Detection Markers

@@ -166,10 +166,16 @@ describe("CommandExecutor explicit background execution", () => {
 		assert.equal(show.mock.calls.length, 0)
 		assert.equal(trackBackgroundCommand.mock.calls.length, 1)
 		assert.equal(trackBackgroundCommand.mock.calls[0]?.[2], "command_101_1")
-		assert.deepEqual(trackBackgroundCommand.mock.calls[0]?.[4], {
-			origin: "explicit_background",
-			cancellationOwner: "explicit",
-		})
+		const ownership = trackBackgroundCommand.mock.calls[0]?.[4]
+		assert.deepEqual(
+			{ origin: ownership?.origin, cancellationOwner: ownership?.cancellationOwner },
+			{
+				origin: "explicit_background",
+				cancellationOwner: "explicit",
+			},
+		)
+		assert.equal(typeof ownership?.startedAt, "number")
+		assert.equal(typeof ownership?.deadlineAt, "number")
 		assert.equal(result.completed, false)
 		assert.equal(result.backgroundCommandId, "command_101_1")
 		assert.equal(result.logFilePath, "C:\\Temp\\command_101_1.log")

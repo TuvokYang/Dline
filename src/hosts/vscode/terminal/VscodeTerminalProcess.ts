@@ -29,6 +29,8 @@ import { Logger } from "@/shared/services/Logger"
  * - 'no_shell_integration': Emitted when shell integration is not available
  */
 export class VscodeTerminalProcess extends EventEmitter<TerminalProcessEvents> implements ITerminalProcess {
+	readonly started: Promise<number>
+	private resolveStarted: ((startedAt: number) => void) | undefined
 	waitForShellIntegration = true
 	private isListening = true
 	private buffer = ""
@@ -42,14 +44,25 @@ export class VscodeTerminalProcess extends EventEmitter<TerminalProcessEvents> i
 	private completionEmitted = false
 	private completionDetailsReceived = false
 	private completionDetailsWaiter: (() => void) | null = null
+	private terminationPromise: Promise<void> | null = null
+
+	constructor() {
+		super()
+		this.started = new Promise<number>((resolve) => {
+			this.resolveStarted = resolve
+		})
+	}
 
 	async run(terminal: vscode.Terminal, command: string) {
+		this.resolveStarted?.(Date.now())
+		this.resolveStarted = undefined
 		this.completionDetailsWaiter?.()
 		this.terminal = terminal
 		this.exitCode = undefined
 		this.signal = null
 		this.completionEmitted = false
 		this.completionDetailsReceived = false
+		this.terminationPromise = null
 
 		// When command does not produce any output, we can assume the shell integration API failed and as a fallback return the current terminal contents
 		const returnCurrentTerminalContents = async () => {
@@ -347,21 +360,43 @@ export class VscodeTerminalProcess extends EventEmitter<TerminalProcessEvents> i
 
 	continue() {
 		this.emitRemainingBufferIfListening()
-		this.isListening = false
-		this.removeAllListeners("line")
 		this.emit("continue")
 	}
 
-	/** Interrupt the active integrated-terminal command with Ctrl+C. */
-	terminate() {
-		if (!this.terminal) return
+	/** Interrupt the active command, then dispose its terminal if it does not stop promptly. */
+	async terminate(): Promise<void> {
+		if (!this.terminal || this.completionEmitted) return
+		if (this.terminationPromise) return this.terminationPromise
+
+		const terminal = this.terminal
 		this.signal = "SIGINT"
-		this.terminal.sendText("\u0003", false)
+		terminal.sendText("\u0003", false)
 		if (this.hotTimer) {
 			clearTimeout(this.hotTimer)
 			this.hotTimer = null
 		}
 		this.isHot = false
+
+		this.terminationPromise = new Promise<void>((resolve) => {
+			let settled = false
+			const finish = () => {
+				if (settled) return
+				settled = true
+				clearTimeout(fallbackTimer)
+				this.off("completed", finish)
+				resolve()
+			}
+			const fallbackTimer = setTimeout(() => {
+				if (!this.completionEmitted) {
+					terminal.dispose()
+					this.complete()
+				}
+				finish()
+			}, 1000)
+			this.once("completed", finish)
+		})
+
+		return this.terminationPromise
 	}
 
 	/**

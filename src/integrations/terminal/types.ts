@@ -49,6 +49,9 @@ export interface TerminalProcessEvents {
  * - 'no_shell_integration': Emitted when shell integration is not available (VSCode only)
  */
 export interface ITerminalProcess extends EventEmitter<TerminalProcessEvents> {
+	/** Resolves with the wall-clock time at which the command process was actually launched. */
+	readonly started?: Promise<number>
+
 	/**
 	 * Whether the process is actively outputting (used to stall API requests)
 	 */
@@ -277,6 +280,8 @@ export interface BackgroundCommand {
 	command: string
 	/** Timestamp when the command started */
 	startTime: number
+	/** Absolute command kill deadline retained across foreground/background handoff. */
+	deadlineAt?: number
 	/** Current status of the command */
 	status: "running" | "completed" | "error" | "timed_out" | "cancelled"
 	/** How the command entered background execution. */
@@ -409,6 +414,8 @@ export interface CommandExecutionOptions {
 	useBackgroundExecution?: boolean
 	/** Start the command as a Dline-owned background process and return immediately. */
 	startInBackground?: boolean
+	/** Wait synchronously until completion or the absolute command timeout. */
+	synchronous?: boolean
 	/**
 	 * Suppress command interaction/output UI messages (ask/say) for this command execution.
 	 * Command output is still captured and returned as the tool result.
@@ -453,6 +460,14 @@ export interface OrchestrationOptions {
 	command: string
 	/** Optional timeout in seconds */
 	timeoutSeconds?: number
+	/** Actual process start time used to calculate one absolute deadline. */
+	startedAt?: number
+	/** Absolute deadline retained when foreground work is handed to the background tracker. */
+	deadlineAt?: number
+	/** Disable the automatic foreground-to-background handoff. */
+	synchronous?: boolean
+	/** Called once when the absolute command deadline is reached. */
+	onTimeout?: () => void
 	/** Callback to track output lines for background command tracking */
 	onOutputLine?: (line: string, stream: TerminalOutputStream) => void
 	/** Whether to show shell integration warning with suggestion */
@@ -465,6 +480,7 @@ export interface OrchestrationOptions {
 	 */
 	onProceedWhileRunning?: (
 		existingOutput: TerminalOutputLine[],
+		timing: { startedAt: number; deadlineAt?: number },
 	) => { backgroundCommandId: string; logFilePath?: string } | undefined
 	/** Start in background without waiting for timeout or user intervention. */
 	startInBackground?: boolean
@@ -492,6 +508,8 @@ export interface CommandExecutionOutcome {
 	result: ClineToolResponseContent
 	/** Whether the command reached a terminal completion event. */
 	completed: boolean
+	/** Whether execution ended because the absolute command deadline was reached. */
+	timedOut?: boolean
 	/** Process exit code when available. */
 	exitCode?: number | null
 	/** Process termination signal when available. */

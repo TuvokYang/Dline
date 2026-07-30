@@ -65,6 +65,7 @@ export const toolParamNames = [
 	"requires_acknowledgment",
 	"task_progress",
 	"background",
+	"synchronous",
 	"timeout",
 	"input",
 	"from_ref",

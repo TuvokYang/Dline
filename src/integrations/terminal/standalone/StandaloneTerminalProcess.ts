@@ -46,6 +46,9 @@ type StandaloneOutputStream = Exclude<TerminalOutputStream, "combined">
  * - 'no_shell_integration': Emitted for compatibility (never actually emitted in standalone)
  */
 export class StandaloneTerminalProcess extends EventEmitter<TerminalProcessEvents> implements ITerminalProcess {
+	readonly started: Promise<number>
+	private resolveStarted: ((startedAt: number) => void) | undefined
+
 	/** We don't need to wait since we control the process directly */
 	waitForShellIntegration = false
 
@@ -87,6 +90,9 @@ export class StandaloneTerminalProcess extends EventEmitter<TerminalProcessEvent
 
 	constructor() {
 		super()
+		this.started = new Promise<number>((resolve) => {
+			this.resolveStarted = resolve
+		})
 		this.detectSystemEncoding()
 	}
 
@@ -191,6 +197,8 @@ export class StandaloneTerminalProcess extends EventEmitter<TerminalProcessEvent
 					detached: true,
 				})
 			}
+			this.resolveStarted?.(Date.now())
+			this.resolveStarted = undefined
 
 			// Track process state
 			let didEmitEmptyLine = false

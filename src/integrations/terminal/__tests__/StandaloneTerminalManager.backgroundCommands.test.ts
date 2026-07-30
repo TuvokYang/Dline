@@ -36,8 +36,8 @@ describe("StandaloneTerminalManager background command injection state", () => {
 		vi.useFakeTimers()
 		vi.setSystemTime(10_000)
 		const manager = new StandaloneTerminalManager()
-		const process = new EventEmitter() as BackgroundCommand["process"] & { terminate: ReturnType<typeof vi.fn> }
-		process.terminate = vi.fn()
+		const terminate = vi.fn()
+		const process = Object.assign(new EventEmitter(), { terminate }) as unknown as BackgroundCommand["process"]
 
 		try {
 			const command = manager.trackBackgroundCommand(process, "npm test", "command_deadline", [], {
@@ -49,11 +49,11 @@ describe("StandaloneTerminalManager background command injection state", () => {
 
 			await vi.advanceTimersByTimeAsync(49_999)
 			assert.equal(command.status, "running")
-			assert.equal(process.terminate.mock.calls.length, 0)
+			assert.equal(terminate.mock.calls.length, 0)
 
 			await vi.advanceTimersByTimeAsync(1)
 			assert.equal(command.status, "timed_out")
-			assert.equal(process.terminate.mock.calls.length, 1)
+			assert.equal(terminate.mock.calls.length, 1)
 		} finally {
 			manager.disposeBackgroundCommands()
 		}

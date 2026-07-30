@@ -450,6 +450,24 @@ describe("TerminalProcess (Integration Tests)", () => {
 		expect(lineListener).toHaveBeenCalledWith("background output", "combined")
 	})
 
+	it("should dispose the integrated terminal when Ctrl+C does not complete the command", async () => {
+		const terminal = TerminalRegistry.createTerminal().terminal
+		createdTerminals.push(terminal)
+		const sendText = vi.spyOn(terminal, "sendText")
+		const dispose = vi.spyOn(terminal, "dispose")
+		;(process as any).terminal = terminal
+
+		const termination = process.terminate()
+		expect(sendText).toHaveBeenCalledWith("\u0003", false)
+		expect(dispose).not.toHaveBeenCalled()
+
+		await vi.advanceTimersByTimeAsync(1000)
+		await termination
+
+		expect(dispose).toHaveBeenCalledTimes(1)
+		expect(process.getCompletionDetails().signal).toBe("SIGINT")
+	})
+
 	it("should remove prompt characters from the last line of output", () => {
 		const processAny = process as any
 
