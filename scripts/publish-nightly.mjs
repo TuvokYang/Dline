@@ -11,9 +11,8 @@
  *    - Changes name to "cline-nightly"
  *    - Changes displayName to "Cline (Nightly)"
  * 3. Packages the extension as a .vsix file
- * 4. Publishes to VS Code Marketplace (if VSCE_PAT is set)
- * 5. Publishes to OpenVSX Registry (if OVSX_PAT is set)
- * 6. Restores the original package.json
+ * 4. Publishes to OpenVSX Registry (if OVSX_PAT is set)
+ * 5. Restores the original package.json
  *
  * Channels:
  *   By default, the extension is published to the RELEASE channel of
@@ -40,7 +39,6 @@
  *   npm run publish:marketplace:nightly -- --dry-run       # package only
  *
  * Environment variables:
- *   VSCE_PAT  - Personal Access Token for VS Code Marketplace
  *   OVSX_PAT  - Personal Access Token for OpenVSX Registry
  *
  * Dependencies:
@@ -408,40 +406,6 @@ class NightlyPublisher {
 	}
 
 	/**
-	 * Publish to VS Code Marketplace
-	 */
-	publishToVSCodeMarketplace(isPreRelease = false) {
-		const token = process.env.VSCE_PAT
-
-		if (!token) {
-			log.warn("VSCE_PAT not set, skipping VS Code Marketplace publish")
-			return false
-		}
-
-		log.info(`Publishing to VS Code Marketplace${isPreRelease ? " (pre-release channel)" : ""}`)
-
-		const args = [
-			"publish",
-			...(isPreRelease ? ["--pre-release"] : []),
-			"--no-git-tag-version",
-			"--packagePath",
-			config.vsixPath,
-		]
-
-		try {
-			execFileSync("vsce", args, {
-				env: { ...process.env, VSCE_PAT: token },
-				stdio: "inherit",
-				cwd: config.projectRoot,
-			})
-			log.info("Successfully published to VS Code Marketplace")
-			return true
-		} catch (error) {
-			throw new Error(`Failed to publish to VS Code Marketplace: ${error.message}`)
-		}
-	}
-
-	/**
 	 * Publish to OpenVSX Registry
 	 */
 	publishToOpenVSX(isPreRelease = false) {
@@ -503,13 +467,11 @@ class NightlyPublisher {
 			this.packageExtension(isPreRelease)
 
 			// Step 5: Publish to marketplaces (skip if dry run)
-			let vsCodePublished = false
 			let openVSXPublished = false
 
 			if (isDryRun) {
 				log.info("Dry run mode: Skipping marketplace publishing")
 			} else {
-				vsCodePublished = this.publishToVSCodeMarketplace(isPreRelease)
 				openVSXPublished = this.publishToOpenVSX(isPreRelease)
 			}
 
@@ -517,9 +479,9 @@ class NightlyPublisher {
 			log.info(`Nightly publish process completed successfully${isDryRun ? " (dry run)" : ""}`)
 			log.info(`Package created for v${newVersion}: ${config.vsixPath}`)
 
-			if (!isDryRun && !vsCodePublished && !openVSXPublished) {
-				log.warn("Extension was packaged but not published to any marketplace")
-				log.warn("Set VSCE_PAT and/or OVSX_PAT environment variables to enable publishing")
+			if (!isDryRun && !openVSXPublished) {
+				log.warn("Extension was packaged but not published to Open VSX")
+				log.warn("Set OVSX_PAT to enable Open VSX publishing")
 			}
 		} catch (error) {
 			log.error(`Publish failed: ${error.message}`)
@@ -589,14 +551,13 @@ Options:
   --help, -h       Show this help message
 
 Environment variables:
-  VSCE_PAT         Personal Access Token for VS Code Marketplace
   OVSX_PAT         Personal Access Token for OpenVSX Registry
 
 Examples:
   npm run publish:marketplace:nightly                      # Release channel publish
   npm run publish:marketplace:nightly -- --pre-release     # Pre-release channel publish
   npm run publish:marketplace:nightly -- --dry-run         # Package only
-  VSCE_PAT="token" npm run publish:marketplace:nightly     # Publish to VS Code only
+  OVSX_PAT="token" npm run publish:marketplace:nightly     # Publish to Open VSX
 `)
 	process.exit(0)
 }

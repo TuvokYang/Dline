@@ -22,7 +22,7 @@ permissions: {}
 
 jobs:
   test:
-    if: github.repository == 'TuvokYang/Dline' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dpc/sdk-migration-simpler-login')
+    if: github.repository == 'TuvokYang/Dline' && github.ref == 'refs/heads/main'
     permissions:
       contents: read
     uses: ./.github/workflows/test.yml
@@ -32,13 +32,13 @@ jobs:
     permissions:
       contents: write
     name: Publish Dline (Nightly) Extension
-    if: github.repository == 'TuvokYang/Dline' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dpc/sdk-migration-simpler-login')
+    if: github.repository == 'TuvokYang/Dline' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: PublishNightly
 
     steps:
       - name: Checkout selected branch
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: ${{ github.sha }}
           lfs: true
@@ -51,7 +51,7 @@ jobs:
           git --no-pager log -1 --oneline
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           # Keep publish environment aligned with test workflow/tooling lockfile expectations.
           # Newer LTS (Node 24 / npm 11) can make `npm list` fail with ELSPROBLEMS during vsce packaging.
@@ -77,7 +77,6 @@ jobs:
 
       - name: Publish Nightly Extension
         env:
-          VSCE_PAT: ${{ secrets.VSCE_PAT }}
           OVSX_PAT: ${{ secrets.OVSX_PAT }}
           TELEMETRY_SERVICE_API_KEY: ${{ secrets.TELEMETRY_SERVICE_API_KEY }}
           ERROR_SERVICE_API_KEY: ${{ secrets.ERROR_SERVICE_API_KEY }}

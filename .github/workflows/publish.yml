@@ -26,9 +26,6 @@ env:
 
 permissions:
     contents: write
-    packages: write
-    checks: write
-    pull-requests: write
 
 jobs:
     test:
@@ -41,7 +38,7 @@ jobs:
         environment: publish
 
         steps:
-            - uses: actions/checkout@v4
+            - uses: actions/checkout@v6
               with:
                   ref: main
                   fetch-depth: 0
@@ -109,7 +106,7 @@ jobs:
                   echo "resolved_sha=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
 
             - name: Setup Node.js
-              uses: actions/setup-node@v4
+              uses: actions/setup-node@v6
               with:
                   node-version: 22
 
@@ -149,7 +146,6 @@ jobs:
 
             - name: Package and Publish Extension
               env:
-                  VSCE_PAT: ${{ secrets.VSCE_PAT }}
                   OVSX_PAT: ${{ secrets.OVSX_PAT }}
                   DLINE_ENVIRONMENT: production
                   TELEMETRY_SERVICE_API_KEY: ${{ secrets.TELEMETRY_SERVICE_API_KEY }}
@@ -175,10 +171,10 @@ jobs:
 
                   if [ "$RELEASE_TYPE" = "pre-release" ]; then
                     npm run publish:marketplace:prerelease
-                    echo "Successfully published pre-release version ${{ steps.get_version.outputs.version }} to VS Code Marketplace and Open VSX Registry"
+                    echo "Successfully published pre-release version ${{ steps.get_version.outputs.version }} to Open VSX Registry"
                   else
                     npm run publish:marketplace
-                    echo "Successfully published release version ${{ steps.get_version.outputs.version }} to VS Code Marketplace and Open VSX Registry"
+                    echo "Successfully published release version ${{ steps.get_version.outputs.version }} to Open VSX Registry"
                   fi
 
             - name: Get Previous Tag
@@ -198,7 +194,7 @@ jobs:
                   echo "EOF" >> $GITHUB_OUTPUT
 
             - name: Create GitHub Release
-              uses: softprops/action-gh-release@v1
+              uses: softprops/action-gh-release@v2
               with:
                   tag_name: ${{ steps.resolve_tag.outputs.tag }}
                   files: "*.vsix"

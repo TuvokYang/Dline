@@ -17,9 +17,6 @@ env:
 
 permissions:
   contents: write
-  packages: write
-  checks: write
-  pull-requests: write
 
 jobs:
   test:
@@ -32,7 +29,7 @@ jobs:
     environment: publish
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
           fetch-tags: true
@@ -76,7 +73,7 @@ jobs:
           echo "release_type=draft" >> $GITHUB_OUTPUT
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 22
 
@@ -86,8 +83,8 @@ jobs:
       - name: Install webview-ui dependencies
         run: cd webview-ui && npm ci
 
-      - name: Install Publishing Tools
-        run: npm install -g @vscode/vsce ovsx
+      - name: Install Packaging Tool
+        run: npm install -g @vscode/vsce
 
       - name: Get Version
         id: get_version
@@ -116,8 +113,6 @@ jobs:
 
       - name: Build Package
         env:
-          VSCE_PAT: ${{ secrets.VSCE_PAT }}
-          OVSX_PAT: ${{ secrets.OVSX_PAT }}
           DLINE_ENVIRONMENT: production
           RELEASE_TYPE: ${{ steps.resolve_tag.outputs.release_type }}
           TELEMETRY_SERVICE_API_KEY: ${{ secrets.TELEMETRY_SERVICE_API_KEY }}
@@ -159,7 +154,7 @@ jobs:
           echo "${DELIM}" >> $GITHUB_OUTPUT
 
       - name: Create GitHub Draft Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.resolve_tag.outputs.tag }}
           files: "*.vsix"
