@@ -22,13 +22,10 @@ service StateService {
   rpc cancelModeSwitch(ModeSwitchOperationRequest) returns (ModeSwitchResponse);
   rpc updateAutoApprovalSettings(AutoApprovalSettingsRequest) returns (Empty);
   rpc updateSettings(UpdateSettingsRequest) returns (Empty);
-  rpc updateSettingsCli(UpdateSettingsRequestCli) returns (Empty);
   rpc updateTaskSettings(UpdateTaskSettingsRequest) returns (Empty);
   rpc updateTelemetrySetting(TelemetrySettingRequest) returns (Empty);
   rpc captureOnboardingProgress(OnboardingProgressRequest) returns (Empty);
   rpc setWelcomeViewCompleted(BooleanRequest) returns (Empty);
-  rpc installClineCli(EmptyRequest) returns (Empty);
-  rpc checkCliInstallation(EmptyRequest) returns (Boolean);
   rpc getProcessInfo(EmptyRequest) returns (ProcessInfo);
   rpc flushPendingState(EmptyRequest) returns (Empty);
   rpc refreshRemoteConfig(EmptyRequest) returns (Empty);
@@ -304,13 +301,6 @@ message BrowserSettingsUpdate {
   optional string chrome_executable_path = 4;
   optional bool disable_tool_use = 5;
   optional string custom_args = 6;
-}
-
-message UpdateSettingsRequestCli {
-  Metadata metadata = 1;
-  optional Settings settings = 2;
-  optional Secrets secrets = 3;
-  optional string environment = 4;
 }
 
 message UpdateTaskSettingsRequest {
