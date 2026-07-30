@@ -10,7 +10,7 @@ import { E2ETestHelper, e2e } from "./utils/helpers"
  * 3. Child tasks inherit parent provider
  * 4. Spawn relationship tracking works
  */
-e2e("Spawn Task - UI renders approval card with correct text", async ({ helper, sidebar, page }) => {
+e2e("Spawn Task - UI renders approval card with correct text", async ({ helper, sidebar }) => {
 	await helper.signin(sidebar)
 
 	// Start a new task
@@ -28,11 +28,9 @@ e2e("Spawn Task - UI renders approval card with correct text", async ({ helper, 
 	// We verify that the chat input area is functional and the task header is present.
 	const taskHeader = sidebar.getByText("Test spawn task UI")
 	await expect(taskHeader.first()).toBeVisible({ timeout: 10000 })
-
-	await page.close()
 })
 
-e2e("Spawn Task - New Task button creates task and clears input", async ({ helper, sidebar, page }) => {
+e2e("Spawn Task - New Task button creates task and clears input", async ({ helper, sidebar }) => {
 	await helper.signin(sidebar)
 
 	// Dismiss "What's New" modal before interacting
@@ -47,11 +45,9 @@ e2e("Spawn Task - New Task button creates task and clears input", async ({ helpe
 	// Input should be visible after signin
 	const inputbox = sidebar.getByTestId("chat-input")
 	await expect(inputbox).toBeVisible()
-
-	await page.close()
 })
 
-e2e("Spawn Task - Ask response round-trip via gRPC", async ({ helper, sidebar, page }) => {
+e2e("Spawn Task - Ask response round-trip via gRPC", async ({ helper, sidebar }) => {
 	await helper.signin(sidebar)
 
 	// Start a new task
@@ -70,11 +66,9 @@ e2e("Spawn Task - Ask response round-trip via gRPC", async ({ helper, sidebar, p
 	if (await closeTaskButton.isVisible()) {
 		await closeTaskButton.click()
 	}
-
-	await page.close()
 })
 
-e2e("Spawn Task - Plan/Act mode toggle persists and does not affect spawn", async ({ helper, sidebar, page }) => {
+e2e("Spawn Task - Plan/Act mode toggle persists and does not affect spawn", async ({ helper, sidebar }) => {
 	await helper.signin(sidebar)
 
 	// Toggle to Plan mode
@@ -86,6 +80,4 @@ e2e("Spawn Task - Plan/Act mode toggle persists and does not affect spawn", asyn
 	const actButton = sidebar.getByRole("switch", { name: "Act" })
 	await actButton.click()
 	await expect(actButton).toHaveAttribute("aria-checked", "true")
-
-	await page.close()
 })

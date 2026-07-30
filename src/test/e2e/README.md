@@ -17,7 +17,7 @@ The E2E test suite consists of several key components:
 
 - **`utils/helpers.ts`** - Core test utilities and fixtures including:
   - `e2e` - Main test fixture for single-root workspace tests
-  - `e2eMultiRoot` - Test fixture for multi-root workspace tests
+  - `E2E_WORKSPACE_TYPES` - Workspace variants for tests that cover both single-root and multi-root workspaces
   - `E2ETestHelper` - Helper class with utilities for VS Code interaction
 - **`utils/common.ts`** - Common utility functions for UI interactions
 - **`utils/global.setup.ts`** - Global test setup and cleanup
@@ -103,13 +103,15 @@ e2e("Test description", async ({ sidebar, helper, page }) => {
 })
 ```
 
-For multi-root workspace tests, use `e2eMultiRoot`:
+For tests that must cover both workspace layouts, iterate over `E2E_WORKSPACE_TYPES`:
 
 ```typescript
-import { e2eMultiRoot } from "./utils/helpers"
+import { E2E_WORKSPACE_TYPES, e2e } from "./utils/helpers"
 
-e2eMultiRoot("[Multi-roots] Test description", async ({ sidebar, helper }) => {
-  // Test implementation
+E2E_WORKSPACE_TYPES.forEach(({ title, workspaceType }) => {
+  e2e.extend({ workspaceType })(title, async ({ sidebar, helper }) => {
+    // Test implementation
+  })
 })
 ```
 
@@ -195,7 +197,7 @@ The test environment includes:
   - Temporary user data and extensions directories
 
 - **Mock API Server:**
-  - Runs on `http://localhost:7777`
+  - Binds to an available loopback port for each test
   - Provides mock responses for Cline API calls
   - Supports authentication, chat completions, and user management
 

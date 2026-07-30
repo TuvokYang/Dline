@@ -11,35 +11,23 @@ e2e("Views - can set up API keys and navigate to Settings from Chat", async ({ s
 	await sidebar.getByText("Bring my own API key").click()
 	await sidebar.getByRole("button", { name: "Continue" }).click()
 
-	const providerSelectorInput = sidebar.getByTestId("provider-selector-input")
+	await expect(sidebar.getByRole("heading", { name: "Configure your provider" })).toBeVisible()
+	await sidebar.getByRole("button", { name: "Add API" }).click()
 
-	// Verify provider selector is visible
-	await expect(providerSelectorInput).toBeVisible()
+	const providerSelector = sidebar.getByRole("combobox").first()
+	await expect(providerSelector).toBeVisible()
+	await providerSelector.selectOption("openrouter")
 
-	// Test Cline provider option
-	await providerSelectorInput.click({ delay: 100 })
-	// Wait for dropdown to appear and find Cline option
-	await expect(sidebar.getByTestId("provider-option-cline")).toBeVisible()
-	await sidebar.getByTestId("provider-option-cline").click({ delay: 100 })
-	await expect(sidebar.getByRole("button", { name: "Sign Up with Cline" })).toBeVisible()
-
-	// Switch to OpenRouter and complete setup
-	await providerSelectorInput.click({ delay: 100 })
-	await sidebar.getByTestId("provider-option-openrouter").click({ delay: 100 })
-
-	const apiKeyInput = sidebar.getByRole("textbox", {
-		name: "OpenRouter API Key",
-	})
+	const apiKeyInput = sidebar.getByRole("textbox", { name: "OpenRouter API Key" })
 	await apiKeyInput.fill("test-api-key")
 	await expect(apiKeyInput).toHaveValue("test-api-key")
-	await apiKeyInput.click({ delay: 100 })
 	await sidebar.getByRole("button", { name: "Continue" }).click()
 
 	await expect(sidebar.getByRole("button", { name: "Login to Cline" })).not.toBeVisible()
 
 	// Verify start up page is no longer visible
 	await expect(apiKeyInput).not.toBeVisible()
-	await expect(providerSelectorInput).not.toBeVisible()
+	await expect(providerSelector).not.toBeVisible()
 
 	// Dismiss "What's New" version update announcement modal if present
 	const whatsNewDialog = sidebar.getByRole("heading", { name: /New in v/ })
@@ -52,9 +40,6 @@ e2e("Views - can set up API keys and navigate to Settings from Chat", async ({ s
 	}
 
 	// Verify you are now in the chat page after setup was completed.
-	// cline logo container
-	const clineLogo = sidebar.locator(".size-20")
-	await expect(clineLogo).toBeVisible()
 	const chatInputBox = sidebar.getByTestId("chat-input")
 	await expect(chatInputBox).toBeVisible()
 })

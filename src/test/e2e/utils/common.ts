@@ -28,7 +28,7 @@ export const toggleNotifications = async (_page: Page) => {
 	await _page.waitForLoadState("domcontentloaded")
 	await _page.keyboard.press("ControlOrMeta+Shift+p")
 	const editorSearchBar = _page.getByRole("textbox")
-	if (!editorSearchBar.isVisible()) {
+	if (!(await editorSearchBar.isVisible())) {
 		await _page.keyboard.press("ControlOrMeta+Shift+p")
 	}
 	await editorSearchBar.click({ delay: 100 }) // Ensure focus

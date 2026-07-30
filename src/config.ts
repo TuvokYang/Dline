@@ -312,6 +312,7 @@ class ClineEndpoint {
 		}
 
 		// Standard mode: use built-in environment URLs
+		const e2eApiBaseUrl = process.env.E2E_TEST === "true" ? process.env.DLINE_E2E_API_BASE_URL : undefined
 		switch (this.environment) {
 			case Environment.staging:
 				return {
@@ -324,7 +325,7 @@ class ClineEndpoint {
 				return {
 					environment: Environment.local,
 					appBaseUrl: "http://localhost:3000",
-					apiBaseUrl: "http://localhost:7777",
+					apiBaseUrl: e2eApiBaseUrl ?? "http://localhost:7777",
 					mcpBaseUrl: "https://api.cline.bot/v1/mcp",
 				}
 			default:

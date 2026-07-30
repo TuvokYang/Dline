@@ -1,13 +1,11 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http"
-import type { Socket } from "node:net"
+import type { AddressInfo, Socket } from "node:net"
 import { v4 as uuidv4 } from "uuid"
 import type { BalanceResponse, OrganizationBalanceResponse, UserResponse } from "../../../../shared/ClineAccount"
 import { E2E_MOCK_API_RESPONSES, E2E_REGISTERED_MOCK_ENDPOINTS } from "./api"
 import { ClineDataMock } from "./data"
 
-const E2E_API_SERVER_PORT = 7777
-
-export const MOCK_CLINE_API_SERVER_URL = `http://localhost:${E2E_API_SERVER_PORT}`
+const E2E_API_SERVER_HOST = "127.0.0.1"
 
 const useVerboseLogging = process.env.CLINE_E2E_TESTS_VERBOSE === "true"
 function log(...args: unknown[]) {
@@ -29,7 +27,10 @@ export class ClineApiServerMock {
 
 	public readonly API_USER = new ClineDataMock("personal")
 
-	constructor(public readonly server: Server) {}
+	constructor(
+		public readonly server: Server,
+		public readonly baseUrl: string,
+	) {}
 
 	// Test helper methods
 	public setUserBalance(balance: number) {
@@ -132,7 +133,7 @@ export class ClineApiServerMock {
 		log("Starting global server...")
 		const server = createServer((req: IncomingMessage, res: ServerResponse) => {
 			// Parse URL and method
-			const parsedUrl = new URL(req.url || "/", MOCK_CLINE_API_SERVER_URL)
+			const parsedUrl = new URL(req.url || "/", `http://${req.headers.host ?? E2E_API_SERVER_HOST}`)
 			const path = parsedUrl.pathname
 			const query = Object.fromEntries(parsedUrl.searchParams.entries())
 			const method = req.method || "GET"
@@ -598,10 +599,6 @@ export class ClineApiServerMock {
 			})
 		})
 
-		// Initialize the controller after the server is created
-		const controller = new ClineApiServerMock(server)
-		ClineApiServerMock.globalSharedServer = controller
-
 		// Track connections for proper cleanup
 		server.on("connection", (socket) => {
 			ClineApiServerMock.globalSockets.add(socket)
@@ -611,16 +608,24 @@ export class ClineApiServerMock {
 		})
 
 		await new Promise<void>((resolve, reject) => {
-			server.listen(E2E_API_SERVER_PORT, (error?: Error) => {
-				if (error) {
-					console.error(`Failed to start server on port ${E2E_API_SERVER_PORT}:`, error)
-					reject(error)
-				} else {
-					log(`ClineApiServerMock listening on port ${E2E_API_SERVER_PORT}`)
-					resolve()
-				}
+			const onError = (error: Error) => reject(error)
+			server.once("error", onError)
+			server.listen(0, E2E_API_SERVER_HOST, () => {
+				server.off("error", onError)
+				resolve()
 			})
 		})
+
+		const address = server.address() as AddressInfo | null
+		if (!address) {
+			server.close()
+			throw new Error("Mock API server started without a network address")
+		}
+
+		const baseUrl = `http://${E2E_API_SERVER_HOST}:${address.port}`
+		const controller = new ClineApiServerMock(server, baseUrl)
+		ClineApiServerMock.globalSharedServer = controller
+		log(`ClineApiServerMock listening at ${baseUrl}`)
 
 		return controller
 	}

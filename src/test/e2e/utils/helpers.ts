@@ -10,7 +10,7 @@ interface E2ETestDirectories {
 	workspaceDir: string
 	multiRootWorkspaceDir: string
 	userDataDir: string
-	extensionsDir: string
+	dlineDir: string
 }
 
 export interface E2ETestConfigs {
@@ -169,7 +169,7 @@ export class E2ETestHelper {
  * This test configuration provides a comprehensive setup for end-to-end testing of the Cline VS Code extension,
  * including server mocking, temporary directories, VS Code instance management, and helper utilities.
  *
- * NOTE: Default to run in single-root workspace; use `e2eMultiRoot` for multi-root workspace tests.
+ * NOTE: Tests select single-root or multi-root workspaces through the `workspaceType` fixture.
  *
  * @extends test - Base Playwright test with multiple fixture extensions
  *
@@ -177,7 +177,7 @@ export class E2ETestHelper {
  * - `server`: Shared ClineApiServerMock instance for API mocking (reused across all tests)
  * - `workspaceDir`: Path to the test workspace directory
  * - `userDataDir`: Temporary directory for VS Code user data
- * - `extensionsDir`: Temporary directory for VS Code extensions
+ * - `dlineDir`: Isolated Dline data directory
  * - `openVSCode`: Function that returns a Promise resolving to an ElectronApplication instance
  * - `app`: ElectronApplication instance with automatic cleanup
  * - `helper`: E2ETestHelper instance for test utilities
@@ -188,7 +188,7 @@ export class E2ETestHelper {
  * - **server**: Automatically starts and manages a ClineApiServerMock instance
  * - **workspaceDir**: Sets up a test workspace directory from fixtures
  * - **userDataDir**: Creates a temporary directory for VS Code user data
- * - **extensionsDir**: Creates a temporary directory for VS Code extensions
+ * - **dlineDir**: Creates an isolated Dline data directory
  * - **openVSCode**: Factory function that launches VS Code with proper configuration for testing
  * - **app**: Manages the VS Code ElectronApplication lifecycle with automatic cleanup
  * - **helper**: Provides E2ETestHelper utilities for test operations
@@ -210,13 +210,14 @@ export class E2ETestHelper {
  * - Configures VS Code with disabled updates, workspace trust, and welcome screens
  */
 export const e2e = test
-	.extend<{ server: ClineApiServerMock | null }>({
+	.extend<{ server: ClineApiServerMock }>({
 		server: async ({}, use) => {
-			// Start server if it doesn't exist
-			if (!ClineApiServerMock.globalSharedServer) {
-				await ClineApiServerMock.startGlobalServer()
+			const server = await ClineApiServerMock.startGlobalServer()
+			try {
+				await use(server)
+			} finally {
+				await ClineApiServerMock.stopGlobalServer()
 			}
-			await use(ClineApiServerMock.globalSharedServer)
 		},
 	})
 	.extend<E2ETestDirectories>({
@@ -228,10 +229,10 @@ export const e2e = test
 			await use(path.join(E2ETestHelper.E2E_TESTS_DIR, "fixtures", "multiroots.code-workspace"))
 		},
 		userDataDir: async ({}, use) => {
-			await use(mkdtempSync(path.join(os.tmpdir(), "vsce")))
+			await use(mkdtempSync(path.join(os.tmpdir(), "dline-e2e-user-data-")))
 		},
-		extensionsDir: async ({}, use) => {
-			await use(mkdtempSync(path.join(os.tmpdir(), "vsce")))
+		dlineDir: async ({}, use) => {
+			await use(mkdtempSync(path.join(os.tmpdir(), "dline-e2e-data-")))
 		},
 	})
 	.extend<E2ETestConfigs>({
@@ -239,22 +240,22 @@ export const e2e = test
 		channel: "stable",
 	})
 	.extend<{ openVSCode: (workspacePath: string) => Promise<ElectronApplication> }>({
-		openVSCode: async ({ userDataDir, channel }, use, testInfo) => {
+		openVSCode: async ({ userDataDir, dlineDir, channel, server }, use, testInfo) => {
 			const executablePath = await downloadAndUnzipVSCode(channel, undefined, new SilentReporter())
+			const electronEnvironment = { ...process.env }
+			delete electronEnvironment.ELECTRON_RUN_AS_NODE
 
 			await use(async (workspacePath: string) => {
-				// Create isolated Cline data directory for this test
-				const clineTestDir = mkdtempSync(path.join(os.tmpdir(), "cline-e2e-"))
-
 				const app = await _electron.launch({
 					executablePath,
 					env: {
-						...process.env,
+						...electronEnvironment,
 						E2E_TEST: "true",
 						DLINE_ENVIRONMENT: "local",
+						DLINE_E2E_API_BASE_URL: server.baseUrl,
 						DLINE_SKIP_MIGRATION: "1",
 						DLINE_DOCS_DIR: path.join(E2ETestHelper.CODEBASE_ROOT_DIR, "dist", "tmp", "Dline"),
-						DLINE_DIR: clineTestDir,
+						DLINE_DIR: dlineDir,
 						GRPC_RECORDER_FILE_NAME: E2ETestHelper.generateTestFileName(testInfo.title, testInfo.project.name),
 						// GRPC_RECORDER_ENABLED: "true",
 						// GRPC_RECORDER_TESTS_FILTERS_ENABLED: "true"
@@ -282,52 +283,20 @@ export const e2e = test
 			})
 		},
 	})
-	.extend<{ app: ElectronApplication; clineTestDir: string }>({
-		app: async ({ openVSCode, userDataDir, extensionsDir, workspaceType, workspaceDir, multiRootWorkspaceDir }, use) => {
+	.extend<{ app: ElectronApplication }>({
+		app: async ({ openVSCode, userDataDir, dlineDir, workspaceType, workspaceDir, multiRootWorkspaceDir }, use) => {
 			const workspacePath = workspaceType === "single" ? workspaceDir : multiRootWorkspaceDir
-
-			// Track the clineTestDir created in openVSCode
-			let _clineTestDir: string | undefined
-			const originalOpenVSCode = openVSCode
-			const _wrappedOpenVSCode = async (wp: string) => {
-				const app = await originalOpenVSCode(wp)
-				// Extract CLINE_DIR from the launched app's environment
-				// We'll need to pass it through the fixture chain
-				return app
-			}
-
 			const app = await openVSCode(workspacePath)
 
 			try {
 				await use(app)
 			} finally {
 				await app.close()
-				// Cleanup in parallel - include clineTestDir if it was created
-				const cleanupTasks = [
-					E2ETestHelper.rmForRetries(userDataDir, { recursive: true }),
-					E2ETestHelper.rmForRetries(extensionsDir, { recursive: true }),
-				]
-
-				// Clean up the isolated Cline data directory
-				// Find all temp directories matching our pattern
-				const tmpDir = os.tmpdir()
-				try {
-					const entries = require("node:fs").readdirSync(tmpDir)
-					for (const entry of entries) {
-						if (entry.startsWith("cline-e2e-")) {
-							cleanupTasks.push(E2ETestHelper.rmForRetries(path.join(tmpDir, entry), { recursive: true }))
-						}
-					}
-				} catch (_error) {
-					// Ignore cleanup errors
-				}
-
-				await Promise.allSettled(cleanupTasks)
+				await Promise.all([
+					E2ETestHelper.rmForRetries(userDataDir, { recursive: true, force: true }),
+					E2ETestHelper.rmForRetries(dlineDir, { recursive: true, force: true }),
+				])
 			}
-		},
-		clineTestDir: async ({}, use) => {
-			// This will be set by the openVSCode fixture
-			await use("")
 		},
 	})
 	.extend<{ helper: E2ETestHelper }>({
@@ -339,15 +308,7 @@ export const e2e = test
 	.extend({
 		page: async ({ app }, use) => {
 			const page = await app.firstWindow()
-			try {
-				await use(page)
-			} finally {
-				// Ensure proper cleanup: Close the page if it's still open and not already closed by app.close()
-				// This provides a common teardown mechanism for all e2e tests without requiring explicit page.close() calls
-				if (!page.isClosed()) {
-					await page.close()
-				}
-			}
+			await use(page)
 		},
 	})
 	.extend<{ sidebar: Frame }>({

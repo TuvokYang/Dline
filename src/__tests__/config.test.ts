@@ -40,6 +40,7 @@ describe("ClineEndpoint configuration", () => {
 	})
 
 	afterEach(async () => {
+		vi.unstubAllEnvs()
 		// Reset singleton state
 		;(ClineEndpoint as any)._instance = null
 		;(ClineEndpoint as any)._initialized = false
@@ -51,6 +52,26 @@ describe("ClineEndpoint configuration", () => {
 	})
 
 	describe("valid config parsing", () => {
+		it("uses the dynamic mock API URL only during E2E tests", async () => {
+			vi.stubEnv("DLINE_ENVIRONMENT", "local")
+			vi.stubEnv("E2E_TEST", "true")
+			vi.stubEnv("DLINE_E2E_API_BASE_URL", "http://127.0.0.1:54321")
+
+			await ClineEndpoint.initialize(tempDir)
+
+			ClineEndpoint.config!.apiBaseUrl.should.equal("http://127.0.0.1:54321")
+		})
+
+		it("ignores the E2E mock API URL outside E2E tests", async () => {
+			vi.stubEnv("DLINE_ENVIRONMENT", "local")
+			vi.stubEnv("E2E_TEST", "false")
+			vi.stubEnv("DLINE_E2E_API_BASE_URL", "http://127.0.0.1:54321")
+
+			await ClineEndpoint.initialize(tempDir)
+
+			ClineEndpoint.config!.apiBaseUrl.should.equal("http://localhost:7777")
+		})
+
 		it("should parse valid endpoints.json with all required fields", async () => {
 			const validConfig = {
 				appBaseUrl: "https://app.enterprise.com",

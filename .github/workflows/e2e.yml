@@ -48,7 +48,7 @@ jobs:
                   restore-keys: |
                       vscode-${{ runner.os }}-stable-
 
-            # Cache Playwright browsers
+            # Playwright uses its bundled FFmpeg for retained failure videos.
             - name: Cache Playwright browsers
               uses: actions/cache@v5
               id: playwright-cache
@@ -73,7 +73,6 @@ jobs:
               if: matrix.runner == 'ubuntu'
               run: sudo apt-get update && sudo apt-get install -y xvfb
 
-            # Run optimized E2E tests (eliminates redundant builds)
             - name: Run E2E tests - Linux
               if: matrix.runner == 'ubuntu'
               run: xvfb-run -a npm run test:e2e:optimal
