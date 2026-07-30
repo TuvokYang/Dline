@@ -1,4 +1,4 @@
-import { mkdtempSync, type PathLike, type RmOptions, rmSync } from "node:fs"
+import { cpSync, mkdtempSync, type PathLike, type RmOptions, rmSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { type ElectronApplication, expect, type Frame, type Page, test } from "@playwright/test"
@@ -12,6 +12,11 @@ interface E2ETestDirectories {
 	multiRootWorkspaceDir: string
 	userDataDir: string
 	dlineDir: string
+}
+
+interface E2EWorkerFixtures {
+	server: ClineApiServerMock
+	dlineStateRootDir: string
 }
 
 export interface E2ETestConfigs {
@@ -221,17 +226,33 @@ export class E2ETestHelper {
  * - Configures VS Code with disabled updates, workspace trust, and welcome screens
  */
 export const e2e = test
-	.extend<{ server: ClineApiServerMock }>({
-		server: async ({}, use) => {
-			const server = await ClineApiServerMock.startGlobalServer()
-			try {
-				await use(server)
-			} finally {
-				await ClineApiServerMock.stopGlobalServer()
-			}
-		},
-	})
-	.extend<E2ETestDirectories>({
+	.extend<E2ETestDirectories, E2EWorkerFixtures>({
+		server: [
+			async ({}, use) => {
+				const server = await ClineApiServerMock.startGlobalServer()
+				try {
+					await use(server)
+				} finally {
+					await ClineApiServerMock.stopGlobalServer()
+				}
+			},
+			{ scope: "worker" },
+		],
+		dlineStateRootDir: [
+			async ({ server }, use) => {
+				const rootDir = mkdtempSync(path.join(os.tmpdir(), "dline-e2e-state-"))
+				try {
+					await prepareE2EState({
+						dlineDir: path.join(rootDir, "template"),
+						mockBaseUrl: server.baseUrl,
+					})
+					await use(rootDir)
+				} finally {
+					await E2ETestHelper.rmForRetries(rootDir, { recursive: true, force: true })
+				}
+			},
+			{ scope: "worker" },
+		],
 		workspaceDir: async ({}, use) => {
 			await use(path.join(E2ETestHelper.E2E_TESTS_DIR, "fixtures", "workspace"))
 		},
@@ -247,10 +268,11 @@ export const e2e = test
 				await E2ETestHelper.rmForRetries(userDataDir, { recursive: true, force: true })
 			}
 		},
-		dlineDir: async ({ server }, use) => {
-			const dlineDir = mkdtempSync(path.join(os.tmpdir(), "dline-e2e-state-"))
+		dlineDir: async ({ dlineStateRootDir }, use) => {
+			const dlineDir = path.join(dlineStateRootDir, "active")
+			await E2ETestHelper.rmForRetries(dlineDir, { recursive: true, force: true })
+			cpSync(path.join(dlineStateRootDir, "template"), dlineDir, { recursive: true })
 			try {
-				await prepareE2EState({ dlineDir, mockBaseUrl: server.baseUrl })
 				await use(dlineDir)
 			} finally {
 				await E2ETestHelper.rmForRetries(dlineDir, { recursive: true, force: true })

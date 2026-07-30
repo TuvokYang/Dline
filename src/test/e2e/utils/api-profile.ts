@@ -139,7 +139,7 @@ export function hasLiveProfileCredentials(target: E2EProfileTarget, env: NodeJS.
 }
 
 /**
- * Build an isolated DLINE_DIR for one Playwright test.
+ * Build an isolated DLINE_DIR template for one Playwright worker or preprocessing test.
  * Only authentication/profile files are copied from the user's default data directory.
  */
 export async function prepareE2EState(options: PrepareE2EStateOptions): Promise<PreparedE2EState> {

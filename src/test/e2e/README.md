@@ -262,10 +262,11 @@ The test environment includes:
 - `GRPC_RECORDER_ENABLED=true` - Enable gRPC recording for debugging
 - `DLINE_E2E_PROFILE` - Select `auto`, `mock-openai`, `deepseek`, `openai-codex`, or `openai-compatible`
 
-Each test uses a temporary `DLINE_DIR`. When `~/.dline/data` exists, preprocessing copies only `secrets.json`,
-`secrets/**`, and `settings/api_profiles.json` into that directory. The source settings file is read only to retain the
-active profile name. The temporary directory is deleted after the test, so profile edits never write back to the user's
-default data directory.
+Each Playwright worker creates one temporary `DLINE_DIR` root. When `~/.dline/data` exists, preprocessing reads it once
+per worker and copies only `secrets.json`, `secrets/**`, and `settings/api_profiles.json` into a reusable template. The
+source settings file is read only to retain the active profile name. Before each test, the template is copied to a fixed
+`active` directory, which is reset again before the next test. The worker root is deleted during teardown, so profile
+edits never write back to the user's default data directory or leak into another test.
 
 Generated live profiles use `high` reasoning effort. GitHub Actions creates only profiles whose corresponding credential
 is configured:
