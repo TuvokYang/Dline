@@ -94,9 +94,9 @@ function hashString(str: string): string {
  * construct paths to these storage files themselves.
  *
  * File layout:
- *   ~/.cline/data/globalState.json    — global state
- *   ~/.cline/data/secrets.json        — secrets (mode 0o600)
- *   ~/.cline/data/workspaces/<hash>/workspaceState.json — per-workspace state
+ *   ~/.dline/data/globalState.json    — global state
+ *   ~/.dline/data/secrets.json        — secrets (mode 0o600)
+ *   ~/.dline/data/workspaces/<hash>/workspaceState.json — per-workspace state
  *
  * @param opts Configuration options for path resolution
  * @returns A StorageContext ready for use by StateManager
