@@ -21,7 +21,7 @@ jobs:
             issues: write
             pull-requests: write
         steps:
-            - uses: actions/stale@v9
+            - uses: actions/stale@v10
               with:
                   days-before-issue-stale: ${{ github.event.inputs.days-before-stale }}
                   days-before-issue-close: ${{ github.event.inputs.days-before-close }}

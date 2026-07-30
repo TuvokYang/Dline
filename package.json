@@ -431,6 +431,7 @@
 		"compile-tests": "node ./scripts/build-tests.js",
 		"watch-tests": "tsc -p . -w --outDir out",
 		"test:run": "vitest run",
+		"test:smoke": "vitest run --config vitest.config.ts --project backend src/__tests__/smoke.test.ts",
 		"check-types": "npm run protos && npx tsc --noEmit && npx tsc --noEmit -p webview-ui/tsconfig.app.json",
 		"lint": "biome lint --no-errors-on-unmatched --files-ignore-unknown=true --diagnostic-level=error && npm run lint:proto",
 		"lint:proto": "node scripts/proto-lint.mjs",
