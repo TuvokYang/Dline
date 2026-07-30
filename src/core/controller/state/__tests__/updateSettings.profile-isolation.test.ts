@@ -9,11 +9,14 @@ import { updateTaskSettings } from "../updateTaskSettings"
 function createController(): {
 	controller: Controller
 	clearTaskSetting: ReturnType<typeof vi.fn>
+	configureGlobalComponents: ReturnType<typeof vi.fn>
 	rebuildApiHandler: ReturnType<typeof vi.fn>
 } {
 	const clearTaskSetting = vi.fn()
+	const configureGlobalComponents = vi.fn().mockResolvedValue({ components: [], durationMs: 0 })
 	const rebuildApiHandler = vi.fn()
 	const controller = {
+		configureGlobalComponents,
 		stateManager: {
 			setGlobalState: vi.fn(),
 			getGlobalSettingsKey: vi.fn((key: string) => (key === "planActSeparateModelsSetting" ? true : undefined)),
@@ -23,18 +26,19 @@ function createController(): {
 		restartAccountUsagePolling: vi.fn(),
 		postStateToWebview: vi.fn().mockResolvedValue(undefined),
 	} as unknown as Controller
-	return { controller, clearTaskSetting, rebuildApiHandler }
+	return { controller, clearTaskSetting, configureGlobalComponents, rebuildApiHandler }
 }
 
 /** Verify global welcome defaults do not replace an active history task binding. */
 describe("updateSettings profile isolation", () => {
 	it("keeps task-local profiles when global defaults change", async () => {
-		const { controller, clearTaskSetting, rebuildApiHandler } = createController()
+		const { controller, clearTaskSetting, configureGlobalComponents, rebuildApiHandler } = createController()
 
 		await updateSettings(controller, UpdateSettingsRequest.create({ planModeProfile: "global-plan", mode: PlanActMode.PLAN }))
 
 		expect(clearTaskSetting.mock.calls).to.have.length(0)
 		expect(rebuildApiHandler.mock.calls).to.have.length(0)
+		expect(configureGlobalComponents.mock.calls).to.have.length(1)
 	})
 })
 

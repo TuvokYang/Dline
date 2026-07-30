@@ -24,7 +24,7 @@ describe("ChatInputSendShortcutSetting", () => {
 		const dropdown = container.querySelector("#chat-input-send-shortcut")
 
 		expect(dropdown).not.toBeNull()
-		Object.defineProperty(dropdown!, "value", { configurable: true, value: "ctrlEnter" })
+		Object.defineProperty(dropdown!, "value", { configurable: true, value: "ctrlEnter", writable: true })
 		fireEvent.change(dropdown!)
 
 		expect(mocks.updateSetting).toHaveBeenCalledWith("chatInputSendShortcut", "ctrlEnter")
