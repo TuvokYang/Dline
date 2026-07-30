@@ -6,10 +6,8 @@ import { TelemetrySetting } from "@shared/TelemetrySetting"
 import { ClineEnv } from "@/config"
 import { fetchRemoteConfig } from "@/core/storage/remote-config/fetch"
 import { clearRemoteConfig } from "@/core/storage/remote-config/utils"
-import { HostProvider } from "@/hosts/host-provider"
 import { isChatInputSendShortcut } from "@/shared/ChatInputSendShortcut"
 import { McpDisplayMode } from "@/shared/McpDisplayMode"
-import { ShowMessageType } from "@/shared/proto/dline/host/window"
 import { Logger } from "@/shared/services/Logger"
 import { MIN_TERMINAL_COMMAND_TIMEOUT_SECONDS } from "@/shared/terminal-settings"
 import { telemetryService } from "../../../services/telemetry"
@@ -288,44 +286,9 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 			controller.stateManager.setGlobalState("browserSettings", newBrowserSettings)
 		}
 
-		// Update default terminal profile
+		// Update default terminal profile. Runtime components are configured once after all settings are persisted.
 		if (request.defaultTerminalProfile !== undefined) {
-			const profileId = request.defaultTerminalProfile
-
-			// Update the terminal profile in the state
-			controller.stateManager.setGlobalState("defaultTerminalProfile", profileId)
-
-			let closedCount = 0
-			let busyTerminalsCount = 0
-
-			// Update the terminal manager of the current task if it exists
-			if (controller.task) {
-				// Call the updated setDefaultTerminalProfile method that returns closed terminal info
-				// Use `as any` to handle type incompatibility between VSCode's TerminalInfo and standalone TerminalInfo
-				const result = controller.task.terminalManager.setDefaultTerminalProfile(profileId) as any
-				closedCount = result.closedCount
-				busyTerminalsCount = result.busyTerminals?.length ?? 0
-
-				// Show information message if terminals were closed
-				if (closedCount > 0) {
-					const message = `Closed ${closedCount} ${closedCount === 1 ? "terminal" : "terminals"} with different profile.`
-					HostProvider.window.showMessage({
-						type: ShowMessageType.INFORMATION,
-						message,
-					})
-				}
-
-				// Show warning if there are busy terminals that couldn't be closed
-				if (busyTerminalsCount > 0) {
-					const message =
-						`${busyTerminalsCount} busy ${busyTerminalsCount === 1 ? "terminal has" : "terminals have"} a different profile. ` +
-						`Close ${busyTerminalsCount === 1 ? "it" : "them"} to use the new profile for all commands.`
-					HostProvider.window.showMessage({
-						type: ShowMessageType.WARNING,
-						message,
-					})
-				}
-			}
+			controller.stateManager.setGlobalState("defaultTerminalProfile", request.defaultTerminalProfile)
 		}
 
 		if (request.backgroundEditEnabled !== undefined) {
@@ -418,6 +381,8 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 			// Global profile changes are welcome/new-task defaults only. Existing
 			// tasks retain their task-local bindings and handlers unchanged.
 		}
+
+		await controller.configureGlobalComponents()
 
 		// Post updated state to webview
 		await controller.postStateToWebview()

@@ -3,6 +3,8 @@ import type { Anthropic } from "@anthropic-ai/sdk"
 import { accountUsageCoordinator } from "@core/account-usage/AccountUsageCoordinator"
 import { AccountUsage, buildApiHandler } from "@core/api"
 import { getProfileModelInfo } from "@core/api/model-info"
+import { createGlobalConfigurationSnapshot, type GlobalConfigurationSnapshot } from "@core/configuration/GlobalConfiguration"
+import { GlobalConfigurationManager, type GlobalConfigurationResult } from "@core/configuration/GlobalConfigurationManager"
 import { readContextTokens } from "@core/context/context-management/context-pressure"
 import { findEnabledProfileByName, findEnabledProfiles } from "@core/controller/file/getApiProfiles"
 import { getHooksEnabledSafe } from "@core/hooks/hooks-utils"
@@ -71,7 +73,6 @@ import { ModeSwitchCoordinator } from "./mode-switch/ModeSwitchCoordinator"
 import type { ModeSwitchOperation, ResolvedModeProfile } from "./mode-switch/types"
 import { getClineOnboardingModels } from "./models/getClineOnboardingModels"
 import { appendClineStealthModels } from "./models/refreshOpenRouterModels"
-import { checkCliInstallation } from "./state/checkCliInstallation"
 import { sendAccountUsageUpdate, sendStateUpdate } from "./state/subscribeToState"
 import { sendChatButtonClickedEvent } from "./ui/subscribeToChatButtonClicked"
 
@@ -105,6 +106,7 @@ export class Controller {
 	ocaAuthService: OcaAuthService
 	readonly stateManager: StateManager
 	readonly lockService: TaskLockService
+	readonly globalConfigurationManager: GlobalConfigurationManager<GlobalConfigurationSnapshot>
 
 	// NEW: Add workspace manager (optional initially)
 	private workspaceManager?: WorkspaceRootManager
@@ -180,6 +182,13 @@ export class Controller {
 	constructor(readonly context: ClineExtensionContext) {
 		Session.reset() // Reset session on controller initialization
 		this.stateManager = StateManager.get()
+		this.globalConfigurationManager = new GlobalConfigurationManager(() =>
+			createGlobalConfigurationSnapshot(this.stateManager),
+		)
+		this.globalConfigurationManager.register({
+			id: "terminal",
+			configure: (snapshot) => this.configureTerminal(snapshot),
+		})
 		this.stateManagerCallbacksDispose = StateManager.get().registerCallbacks({
 			onPersistenceError: async ({ error }: PersistenceErrorEvent) => {
 				// Just log - don't call reInitialize() (that sets isInitialized=false which
@@ -188,6 +197,7 @@ export class Controller {
 				Logger.error("[Controller] Storage persistence failed (will retry):", error)
 			},
 			onSyncExternalChange: async () => {
+				await this.configureGlobalComponents()
 				await this.postStateToWebview()
 			},
 		})
@@ -212,9 +222,6 @@ export class Controller {
 			Logger.error("Failed to cleanup legacy checkpoints:", error)
 		})
 
-		// Check CLI installation status once on startup
-		checkCliInstallation(this)
-
 		// Initialize lock service with file-based locks under the tasks directory
 		const tasksBasePath = path.join(getDlineDocumentsPathSync(), "tasks")
 		this.lockService = new TaskLockService(tasksBasePath, `vscode-${crypto.randomUUID()}`)
@@ -222,6 +229,35 @@ export class Controller {
 		// Start account usage polling. Network requests are deduplicated process-wide.
 		this.startAccountUsagePolling()
 		Logger.log("[Controller] ClineProvider instantiated")
+	}
+
+	/** Apply the latest global configuration snapshot to every registered runtime component. */
+	async configureGlobalComponents(): Promise<GlobalConfigurationResult> {
+		const result = await this.globalConfigurationManager.configureAll()
+		Logger.debug(
+			`[GlobalConfiguration] configured ${result.components.length} component(s) in ${result.durationMs.toFixed(2)}ms`,
+		)
+		return result
+	}
+
+	private configureTerminal(snapshot: GlobalConfigurationSnapshot): void {
+		if (!this.task) return
+		const result = this.task.configureTerminal(snapshot.terminal)
+		if (result.closedCount > 0) {
+			HostProvider.window.showMessage({
+				type: ShowMessageType.INFORMATION,
+				message: `Closed ${result.closedCount} ${result.closedCount === 1 ? "terminal" : "terminals"} with different profile.`,
+			})
+		}
+		if (result.busyTerminals.length > 0) {
+			const count = result.busyTerminals.length
+			HostProvider.window.showMessage({
+				type: ShowMessageType.WARNING,
+				message:
+					`${count} busy ${count === 1 ? "terminal has" : "terminals have"} a different profile. ` +
+					`Close ${count === 1 ? "it" : "them"} to use the new profile for all commands.`,
+			})
+		}
 	}
 
 	/*

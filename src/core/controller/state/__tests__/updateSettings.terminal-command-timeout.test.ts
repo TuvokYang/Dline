@@ -6,21 +6,24 @@ import { updateSettings } from "../updateSettings"
 function createController() {
 	const setGlobalState = vi.fn()
 	const postStateToWebview = vi.fn().mockResolvedValue(undefined)
+	const configureGlobalComponents = vi.fn().mockResolvedValue({ components: [], durationMs: 0 })
 	const controller = {
+		configureGlobalComponents,
 		stateManager: { setGlobalState },
 		postStateToWebview,
 	} as unknown as Controller
 
-	return { controller, postStateToWebview, setGlobalState }
+	return { configureGlobalComponents, controller, postStateToWebview, setGlobalState }
 }
 
 describe("updateSettings terminal command timeout", () => {
 	it.each([60, 1800, 3600])("persists a valid %s-second deadline", async (timeoutSeconds) => {
-		const { controller, postStateToWebview, setGlobalState } = createController()
+		const { configureGlobalComponents, controller, postStateToWebview, setGlobalState } = createController()
 
 		await updateSettings(controller, UpdateSettingsRequest.create({ terminalCommandTimeoutSeconds: timeoutSeconds }))
 
 		expect(setGlobalState).toHaveBeenCalledWith("terminalCommandTimeoutSeconds", timeoutSeconds)
+		expect(configureGlobalComponents).toHaveBeenCalledOnce()
 		expect(postStateToWebview).toHaveBeenCalledOnce()
 	})
 
