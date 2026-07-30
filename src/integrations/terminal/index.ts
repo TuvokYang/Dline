@@ -52,6 +52,8 @@ export type {
 	OrchestrationResult,
 	StandaloneTerminalOptions,
 	TerminalInfo,
+	TerminalManagerConfiguration,
+	TerminalManagerConfigurationResult,
 	TerminalOutputLine,
 	TerminalOutputStream,
 	TerminalProcessEvents,

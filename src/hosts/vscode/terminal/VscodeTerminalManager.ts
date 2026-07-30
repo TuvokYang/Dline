@@ -6,6 +6,8 @@ import {
 	TerminalInfo as ITerminalInfo,
 	ITerminalManager,
 	TerminalProcessResultPromise as ITerminalProcessResultPromise,
+	TerminalManagerConfiguration,
+	TerminalManagerConfigurationResult,
 } from "@/integrations/terminal/types"
 import { Logger } from "@/shared/services/Logger"
 import { mergePromise, VscodeTerminalProcess } from "./VscodeTerminalProcess"
@@ -367,16 +369,20 @@ export class VscodeTerminalManager implements ITerminalManager {
 		this.disposables = []
 	}
 
-	setShellIntegrationTimeout(timeout: number): void {
-		this.shellIntegrationTimeout = timeout
+	configure(configuration: TerminalManagerConfiguration): TerminalManagerConfigurationResult {
+		this.shellIntegrationTimeout = configuration.shellIntegrationTimeout
+		this.terminalReuseEnabled = configuration.terminalReuseEnabled
+		this.terminalOutputLineLimit = configuration.terminalOutputLineLimit
+		return this.configureDefaultTerminalProfile(configuration.defaultTerminalProfile)
 	}
 
-	setTerminalReuseEnabled(enabled: boolean): void {
-		this.terminalReuseEnabled = enabled
-	}
-
-	setTerminalOutputLineLimit(limit: number): void {
-		this.terminalOutputLineLimit = limit
+	getConfiguration(): TerminalManagerConfiguration {
+		return Object.freeze({
+			shellIntegrationTimeout: this.shellIntegrationTimeout,
+			terminalReuseEnabled: this.terminalReuseEnabled,
+			terminalOutputLineLimit: this.terminalOutputLineLimit,
+			defaultTerminalProfile: this.defaultTerminalProfile,
+		})
 	}
 
 	public processOutput(outputLines: string[], overrideLimit?: number): string {
@@ -390,7 +396,7 @@ export class VscodeTerminalManager implements ITerminalManager {
 		return outputLines.join("\n").trim()
 	}
 
-	setDefaultTerminalProfile(profileId: string): { closedCount: number; busyTerminals: TerminalInfo[] } {
+	private configureDefaultTerminalProfile(profileId: string): TerminalManagerConfigurationResult {
 		// Only handle terminal change if profile actually changed
 		if (this.defaultTerminalProfile === profileId) {
 			return { closedCount: 0, busyTerminals: [] }

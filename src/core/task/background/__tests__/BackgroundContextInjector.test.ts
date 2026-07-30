@@ -1,8 +1,5 @@
 import { strict as assert } from "node:assert"
 import { EventEmitter } from "node:events"
-import fs from "node:fs/promises"
-import os from "node:os"
-import path from "node:path"
 import { type BackgroundCommand, CommandExecutor, StandaloneTerminalManager } from "@integrations/terminal"
 import { describe, it } from "vitest"
 import { ToolExecutor } from "../../ToolExecutor"
@@ -117,7 +114,8 @@ describe("BackgroundContextInjector", () => {
 		)
 
 		assert.match(details, new RegExp(`${job.jobId}: completed — review state`))
-		assert.match(details, /command_2: running — npm run build/)
+		assert.match(details, /command_2: running - npm run build/)
+		assert.match(details, /log: logs\/command_2\.log/)
 	})
 
 	it("builds injectable background results and pending ids", async () => {
@@ -129,10 +127,10 @@ describe("BackgroundContextInjector", () => {
 			runner: async () => ({ status: "completed", result: "subagent ok", stats: createStats() }),
 		})
 		await flushJobs()
-		const logPath = path.join(await fs.mkdtemp(path.join(os.tmpdir(), "background-result-")), "command.log")
-		await fs.writeFile(logPath, "command ok\n", "utf8")
+		const logPath = "logs/command_4.log"
 		const command = createCommand("command_4", "npm test")
 		command.logFilePath = logPath
+		command.exitCode = 0
 
 		const injector = new BackgroundContextInjector({
 			subagentJobManager,
@@ -143,13 +141,15 @@ describe("BackgroundContextInjector", () => {
 		assert.match(result.text, /# Background Results/)
 		assert.match(result.text, new RegExp(`${job.jobId}: completed — review result state`))
 		assert.match(result.text, /subagent ok/)
-		assert.match(result.text, /command_4: completed — npm test/)
-		assert.match(result.text, /command ok/)
+		assert.match(result.text, /command_4: completed - npm test/)
+		assert.match(result.text, new RegExp(logPath.replaceAll("\\", "\\\\")))
+		assert.match(result.text, /1 output line/)
+		assert.doesNotMatch(result.text, /command ok/)
 		assert.deepEqual(result.subagentIds, [job.jobId])
 		assert.deepEqual(result.commandIds, [command.id])
 	})
 
-	it("injects completed background output that stayed below the spill limit", async () => {
+	it("injects only metadata and a log path for small completed background output", async () => {
 		const subagentJobManager = new SubagentJobManager()
 		const manager = new StandaloneTerminalManager()
 		const process = new EventEmitter() as BackgroundCommand["process"]
@@ -162,13 +162,14 @@ describe("BackgroundContextInjector", () => {
 				subagentJobManager,
 				commandProvider: {
 					listBackgroundCommands: () => manager.getAllBackgroundCommands(),
-					readBackgroundCommandOutput: (record) => manager.readBackgroundCommandOutput(record.id),
 				},
 			})
 			const result = await injector.buildResultSection()
 
-			assert.match(result.text, /small output/)
-			assert.equal(command.logFilePath, undefined)
+			assert.doesNotMatch(result.text, /small output/)
+			assert.match(result.text, /command_small\.log/)
+			assert.match(result.text, /1 output line/)
+			assert.notEqual(command.logFilePath, undefined)
 		} finally {
 			manager.disposeBackgroundCommands()
 		}
@@ -249,6 +250,7 @@ describe("BackgroundContextInjector", () => {
 		assert.match(details, /# Background Subagents/)
 		assert.match(details, new RegExp(`${job.jobId}: completed — review api`))
 		assert.match(details, /# Background Commands/)
-		assert.match(details, /command_1: completed — npm test/)
+		assert.match(details, /command_1: completed - npm test/)
+		assert.match(details, /log: logs\/command_1\.log/)
 	})
 })

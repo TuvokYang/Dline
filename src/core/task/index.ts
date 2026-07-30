@@ -1,4 +1,3 @@
-import { setTimeout as setTimeoutPromise } from "node:timers/promises"
 import { ApiHandler, ApiProviderInfo, buildApiHandler, resolveProviderFromProfile } from "@core/api"
 import { recordProviderAdapterInput, recordProviderAdapterOutput } from "@core/api/debug/api-conversation-log"
 import { createIdentityFactory } from "@core/api/transform/block-identity"
@@ -68,7 +67,11 @@ import { DiffViewProvider } from "@integrations/editor/DiffViewProvider"
 import { formatContentBlockToMarkdown } from "@integrations/misc/export-markdown"
 import { processFilesIntoText } from "@integrations/misc/extract-text"
 import { showSystemNotification } from "@integrations/notifications"
-import { ITerminalManager } from "@integrations/terminal/types"
+import type {
+	ITerminalManager,
+	TerminalManagerConfiguration,
+	TerminalManagerConfigurationResult,
+} from "@integrations/terminal/types"
 import { BrowserSession } from "@services/browser/BrowserSession"
 import { UrlContentFetcher } from "@services/browser/UrlContentFetcher"
 import { featureFlagsService } from "@services/feature-flags"
@@ -462,10 +465,12 @@ export class Task {
 			this.terminalManager = HostProvider.get().createTerminalManager()
 			Logger.info(`[Task ${taskId}] Using HostProvider terminal manager for vscodeTerminal mode`)
 		}
-		this.terminalManager.setShellIntegrationTimeout(shellIntegrationTimeout)
-		this.terminalManager.setTerminalReuseEnabled(terminalReuseEnabled ?? true)
-		this.terminalManager.setTerminalOutputLineLimit(terminalOutputLineLimit)
-		this.terminalManager.setDefaultTerminalProfile(defaultTerminalProfile)
+		const terminalConfiguration: TerminalManagerConfiguration = {
+			shellIntegrationTimeout,
+			terminalReuseEnabled: terminalReuseEnabled ?? true,
+			terminalOutputLineLimit,
+			defaultTerminalProfile,
+		}
 
 		this.urlContentFetcher = new UrlContentFetcher()
 		this.browserSession = new BrowserSession(stateManager)
@@ -811,6 +816,7 @@ export class Task {
 		// Initialize command executor with config and callbacks
 		const commandExecutorConfig: FullCommandExecutorConfig = {
 			cwd: this.cwd,
+			terminalConfiguration,
 			terminalExecutionMode: this.terminalExecutionMode,
 			terminalManager: this.terminalManager,
 			taskId: this.taskId,
@@ -2573,6 +2579,11 @@ export class Task {
 	 */
 	public async cancelBackgroundCommand(): Promise<boolean> {
 		return this.commandExecutor.cancelBackgroundCommand()
+	}
+
+	/** Apply one complete terminal configuration to all task-owned terminal managers. */
+	configureTerminal(configuration: TerminalManagerConfiguration): TerminalManagerConfigurationResult {
+		return this.commandExecutor.configure(configuration)
 	}
 
 	/**
@@ -5148,58 +5159,14 @@ export class Task {
 		}
 
 		const busyTerminals = this.terminalManager.getTerminals(true)
-		const inactiveTerminals = this.terminalManager.getTerminals(false)
-		// const allTerminals = [...busyTerminals, ...inactiveTerminals]
 
-		if (busyTerminals.length > 0 && this.taskState.didEditFile) {
-			//  || this.didEditFile
-			await setTimeoutPromise(300) // delay after saving file to let terminals catch up
-		}
-		// let terminalWasBusy = false
-		if (busyTerminals.length > 0) {
-			// wait for terminals to cool down
-			// terminalWasBusy = allTerminals.some((t) => this.terminalManager.isProcessHot(t.id))
-			await pWaitFor(() => busyTerminals.every((t) => !this.terminalManager.isProcessHot(t.id)), {
-				interval: 100,
-				timeout: 15_000,
-			}).catch(() => {})
-		}
+		this.taskState.didEditFile = false
 
-		this.taskState.didEditFile = false // reset, this lets us know when to wait for saved files to update terminals
-
-		// waiting for updated diagnostics lets terminal output be the most up-to-date possible
 		let terminalDetails = ""
 		if (busyTerminals.length > 0) {
-			// terminals are cool, let's retrieve their output
 			terminalDetails += "\n\n# Actively Running Terminals"
 			for (const busyTerminal of busyTerminals) {
-				terminalDetails += `\n## Original command: \`${busyTerminal.lastCommand}\``
-				const newOutput = this.terminalManager.getUnretrievedOutput(busyTerminal.id)
-				if (newOutput) {
-					terminalDetails += `\n### New Output\n${newOutput}`
-				} else {
-					// details += `\n(Still running, no new output)` // don't want to show this right after running the command
-				}
-			}
-		}
-		// only show inactive terminals if there's output to show
-		if (inactiveTerminals.length > 0) {
-			const inactiveTerminalOutputs = new Map<number, string>()
-			for (const inactiveTerminal of inactiveTerminals) {
-				const newOutput = this.terminalManager.getUnretrievedOutput(inactiveTerminal.id)
-				if (newOutput) {
-					inactiveTerminalOutputs.set(inactiveTerminal.id, newOutput)
-				}
-			}
-			if (inactiveTerminalOutputs.size > 0) {
-				terminalDetails += "\n\n# Inactive Terminals"
-				for (const [terminalId, newOutput] of inactiveTerminalOutputs) {
-					const inactiveTerminal = inactiveTerminals.find((t) => t.id === terminalId)
-					if (inactiveTerminal) {
-						terminalDetails += `\n## ${inactiveTerminal.lastCommand}`
-						terminalDetails += `\n### New Output\n${newOutput}`
-					}
-				}
+				terminalDetails += `\n- ${busyTerminal.id}: running - \`${busyTerminal.lastCommand}\``
 			}
 		}
 

@@ -28,9 +28,8 @@ import {
 	CHUNK_LINE_COUNT,
 	COMMAND_BACKGROUND_HANDOFF_MS,
 	COMPLETION_TIMEOUT_MS,
+	DEFAULT_TERMINAL_OUTPUT_LINE_LIMIT,
 	MAX_BYTES_BEFORE_FILE,
-	MAX_LINES_BEFORE_FILE,
-	SUMMARY_LINES_TO_KEEP,
 } from "./constants"
 import { formatTerminalOutput, formatTerminalOutputLogLine, splitTerminalOutput } from "./output-stream"
 import type {
@@ -380,8 +379,15 @@ export async function orchestrateCommandExecution(
 	let isWritingToFile = false
 	let largeOutputLogPath: string | null = null
 	let largeOutputLogStream: fs.WriteStream | null = null
+	let largeOutputLogCompletion: Promise<void> | null = null
 	let totalOutputBytes = 0
 	let totalLineCount = 0
+	const outputLineLimit = Math.max(
+		1,
+		terminalManager.getConfiguration?.().terminalOutputLineLimit ?? DEFAULT_TERMINAL_OUTPUT_LINE_LIMIT,
+	)
+	const firstLineLimit = Math.floor(outputLineLimit / 2)
+	const lastLineLimit = outputLineLimit - firstLineLimit
 	let firstLines: TerminalOutputLine[] = [] // Keep first N lines for summary
 	let lastLines: TerminalOutputLine[] = [] // Keep last N lines for summary (circular buffer)
 
@@ -411,9 +417,14 @@ export async function orchestrateCommandExecution(
 			chunkTimer = null
 		}
 
-		const largeOutputStem = activityId ? `${activityId}_large-output` : `large-output-${cmdTs ?? Date.now()}`
+		const largeOutputStem = activityId ?? `large-output-${cmdTs ?? Date.now()}`
 		largeOutputLogPath = DlineTempManager.createTempFilePath(largeOutputStem)
-		largeOutputLogStream = fs.createWriteStream(largeOutputLogPath, { flags: "a" })
+		const logFd = fs.openSync(largeOutputLogPath, "w")
+		largeOutputLogStream = fs.createWriteStream(largeOutputLogPath, { fd: logFd, flags: "w", autoClose: true })
+		largeOutputLogCompletion = new Promise<void>((resolve) => {
+			largeOutputLogStream?.once("finish", resolve)
+			largeOutputLogStream?.once("error", () => resolve())
+		})
 
 		// Write all existing lines to file in a single batch to reduce I/O overhead
 		if (output.length > 0) {
@@ -421,29 +432,29 @@ export async function orchestrateCommandExecution(
 		}
 
 		// Keep first N lines for summary
-		firstLines = output.slice(0, SUMMARY_LINES_TO_KEEP)
+		firstLines = output.slice(0, firstLineLimit)
 
 		// Keep last N lines for summary (will be updated as more lines come in)
-		lastLines = output.slice(-SUMMARY_LINES_TO_KEEP)
+		lastLines = lastLineLimit > 0 ? output.slice(-lastLineLimit) : []
 
 		// FINALLY: Notify user (now this will appear at the end after all buffered output)
 		await say(
 			"command_output",
-			`\n📋 Output is large (${outputLines.length} lines, ${Math.round(totalOutputBytes / 1024)}KB). Writing to: ${largeOutputLogPath}`,
+			`\n📋 Output is large (${totalLineCount} lines, ${Math.round(totalOutputBytes / 1024)}KB). Writing to: ${largeOutputLogPath}`,
 		)
 	}
 
 	/**
 	 * Clean up file-based logging resources.
 	 */
-	const cleanupFileBased = () => {
-		if (largeOutputLogStream) {
-			largeOutputLogStream.end()
-			largeOutputLogStream = null
-		}
+	const finishFileBased = async (): Promise<void> => {
+		const stream = largeOutputLogStream
+		if (!stream) return
+		largeOutputLogStream = null
+		stream.end()
+		await largeOutputLogCompletion
 	}
 
-	const outputLines: string[] = []
 	const output: TerminalOutputLine[] = []
 	const formatOutput = (entries: readonly TerminalOutputLine[]): string =>
 		formatTerminalOutput(entries, (lines) => terminalManager.processOutput(lines))
@@ -471,11 +482,14 @@ export async function orchestrateCommandExecution(
 			await drainOutputQueue()
 		}
 
+		await finishFileBased()
 		const timing = commandTiming ?? { startedAt: Date.now(), deadlineAt: configuredDeadlineAt }
-		const trackingResult = onProceedWhileRunning(output, timing)
-		const currentOutput = formatOutput(output)
+		const trackingResult = await onProceedWhileRunning(isWritingToFile ? [] : output, {
+			...timing,
+			existingLogFilePath: largeOutputLogPath ?? undefined,
+			existingLineCount: totalLineCount,
+		})
 		const logMessage = trackingResult?.logFilePath ? `Log file: ${trackingResult.logFilePath}\n` : ""
-		const outputMessage = currentOutput.length > 0 ? `Output so far:\n${currentOutput}` : ""
 		const resultPrefix =
 			reason === "automatic"
 				? "Command is still running after 10 seconds and is now tracked in the background."
@@ -483,9 +497,9 @@ export async function orchestrateCommandExecution(
 
 		backgroundTrackingResult = {
 			userRejected: false,
-			result: `${resultPrefix}\n${logMessage}${outputMessage}`,
+			result: `${resultPrefix}\n${logMessage}`.trimEnd(),
 			completed: false,
-			...splitTerminalOutput(output),
+			...splitTerminalOutput([]),
 			backgroundCommandId: trackingResult?.backgroundCommandId,
 			logFilePath: trackingResult?.logFilePath,
 		}
@@ -495,7 +509,6 @@ export async function orchestrateCommandExecution(
 		}
 
 		process.continue()
-		cleanupFileBased()
 		return backgroundTrackingResult
 	}
 
@@ -515,7 +528,7 @@ export async function orchestrateCommandExecution(
 		totalLineCount++
 
 		// Check if we should switch to file-based logging
-		if (!isWritingToFile && (outputLines.length >= MAX_LINES_BEFORE_FILE || totalOutputBytes >= MAX_BYTES_BEFORE_FILE)) {
+		if (!isWritingToFile && (output.length >= outputLineLimit || totalOutputBytes >= MAX_BYTES_BEFORE_FILE)) {
 			await switchToFileBased()
 		}
 
@@ -527,12 +540,11 @@ export async function orchestrateCommandExecution(
 
 			// Update last lines circular buffer for summary
 			lastLines.push({ line, stream })
-			if (lastLines.length > SUMMARY_LINES_TO_KEEP) {
+			if (lastLines.length > lastLineLimit) {
 				lastLines.shift()
 			}
 		} else {
 			// Normal behavior - keep in memory
-			outputLines.push(line)
 			output.push({ line, stream })
 		}
 
@@ -691,7 +703,7 @@ export async function orchestrateCommandExecution(
 					}
 					await drainOutputQueue()
 					await clearCommandState(process.getCompletionDetails?.(), true)
-					cleanupFileBased()
+					await finishFileBased()
 					const currentOutput = formatOutput(output)
 					return {
 						userRejected: false,
@@ -720,7 +732,7 @@ export async function orchestrateCommandExecution(
 	// This happens when user clicks "Proceed While Running" with background tracking enabled
 	if (backgroundTrackingResult) {
 		// Clean up file-based logging if active before returning
-		cleanupFileBased()
+		await finishFileBased()
 		return backgroundTrackingResult
 	}
 
@@ -731,7 +743,7 @@ export async function orchestrateCommandExecution(
 	}
 
 	// Clean up file-based logging if active
-	cleanupFileBased()
+	await finishFileBased()
 
 	// Build result based on whether we used file-based logging
 	let result: string
@@ -739,7 +751,7 @@ export async function orchestrateCommandExecution(
 
 	if (isWritingToFile) {
 		// Build summary from first and last lines
-		const skippedLines = totalLineCount - firstLines.length - lastLines.length
+		const skippedLines = Math.max(0, totalLineCount - firstLines.length - lastLines.length)
 		resultOutput = [...firstLines, ...lastLines]
 		const summaryNotice = `... (${skippedLines} lines written to ${largeOutputLogPath}) ...`
 		result = [formatOutput(resultOutput), summaryNotice].filter(Boolean).join("\n\n")

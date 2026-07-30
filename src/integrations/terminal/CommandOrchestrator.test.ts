@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import fs from "node:fs/promises"
 import { EventEmitter } from "events"
 import { afterEach, describe, it, vi } from "vitest"
 import { orchestrateCommandExecution } from "./CommandOrchestrator"
@@ -89,8 +90,14 @@ function createCallbacks(messages: Array<Record<string, unknown>> = []): Command
 	}
 }
 
-function createTerminalManager(): ITerminalManager {
+function createTerminalManager(outputLineLimit = 500): ITerminalManager {
 	return {
+		getConfiguration: () => ({
+			shellIntegrationTimeout: 4000,
+			terminalReuseEnabled: true,
+			terminalOutputLineLimit: outputLineLimit,
+			defaultTerminalProfile: "default",
+		}),
 		processOutput: (outputLines: string[]) => outputLines.join("\n"),
 	} as ITerminalManager
 }
@@ -148,13 +155,15 @@ describe("CommandOrchestrator background transitions", () => {
 		if (onProceedWhileRunning.mock.calls.length === 0) {
 			process.complete({ exitCode: 0, signal: null })
 		}
-		await execution
+		const result = await execution
 
 		assert.equal(onProceedWhileRunning.mock.calls.length, 1)
 		assert.deepEqual(onProceedWhileRunning.mock.calls[0]?.[0], [
 			{ line: "first", stream: "combined" },
 			{ line: "tail", stream: "combined" },
 		])
+		assert.match(result.result as string, /C:\\Temp\\background-tail\.log/)
+		assert.doesNotMatch(result.result as string, /Output so far|\[C\] first|\[C\] tail/)
 	})
 
 	it("hands a still-running command to the background tracker after 10 seconds without reporting a timeout", async () => {
@@ -263,6 +272,37 @@ describe("CommandOrchestrator background transitions", () => {
 })
 
 describe("CommandOrchestrator exit status messaging", () => {
+	it("limits foreground results and saves the complete ordered output", async () => {
+		const process = new FakeTerminalProcess()
+		const orchestrationPromise = orchestrateCommandExecution(
+			process.asResultPromise(),
+			createTerminalManager(4),
+			createCallbacks(),
+			{ command: "mixed-output", activityId: "command_limit" },
+		)
+
+		process.emitOutput("one", "stdout")
+		process.emitOutput("two", "stderr")
+		process.emitOutput("three", "stdout")
+		process.emitOutput("four", "stderr")
+		process.emitOutput("five", "stdout")
+		process.emitOutput("six", "stderr")
+		process.complete({ exitCode: 0, signal: null })
+		const result = await orchestrationPromise
+
+		try {
+			assert.equal(result.outputEntries.length, 4)
+			assert.match(result.result as string, /2 lines written to/)
+			assert.ok(result.logFilePath)
+			assert.equal(
+				await fs.readFile(result.logFilePath, "utf8"),
+				"[O] one\n[E] two\n[O] three\n[E] four\n[O] five\n[E] six\n",
+			)
+		} finally {
+			if (result.logFilePath) await fs.rm(result.logFilePath, { force: true })
+		}
+	})
+
 	it("collects stdout and stderr separately in the final tool result", async () => {
 		const process = new FakeTerminalProcess()
 		const orchestrationPromise = orchestrateCommandExecution(

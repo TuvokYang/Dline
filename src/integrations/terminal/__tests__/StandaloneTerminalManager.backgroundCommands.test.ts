@@ -59,12 +59,11 @@ describe("StandaloneTerminalManager background command injection state", () => {
 		}
 	})
 
-	it("creates the activity-owned log only after output exceeds the configured line limit", async () => {
+	it("creates the activity-owned log when background tracking starts", async () => {
 		const manager = new StandaloneTerminalManager()
 		const process = new EventEmitter() as BackgroundCommand["process"]
 		let logFilePath: string | undefined
 		const expectedLogPath = path.join(DlineTempManager.getTempDir(), "command_100_1.log")
-		manager.setTerminalOutputLineLimit(2)
 		await fs.rm(expectedLogPath, { force: true })
 
 		try {
@@ -74,14 +73,13 @@ describe("StandaloneTerminalManager background command injection state", () => {
 				},
 			})
 
+			assert.equal(path.basename(command.logFilePath ?? ""), "command_100_1.log")
+			assert.equal(logFilePath, command.logFilePath)
 			process.emit("line", "one", "stdout")
 			process.emit("line", "two", "stderr")
-			assert.equal(command.logFilePath, undefined)
 			process.emit("line", "three", "stdout")
 			process.emit("completed", { exitCode: 0, signal: null })
 
-			assert.equal(path.basename(command.logFilePath ?? ""), "command_100_1.log")
-			assert.equal(logFilePath, command.logFilePath)
 			assert.equal(await manager.readBackgroundCommandOutput(command.id), "[O] one\n[E] two\n[O] three\n")
 		} finally {
 			manager.disposeBackgroundCommands()
@@ -89,19 +87,22 @@ describe("StandaloneTerminalManager background command injection state", () => {
 		}
 	})
 
-	it("keeps small completed background output in memory", async () => {
+	it("persists small completed background output to its activity-owned log", async () => {
 		const manager = new StandaloneTerminalManager()
 		const process = new EventEmitter() as BackgroundCommand["process"]
+		const expectedLogPath = path.join(DlineTempManager.getTempDir(), "command_100_small.log")
+		await fs.rm(expectedLogPath, { force: true })
 
 		try {
 			const command = manager.trackBackgroundCommand(process, "npm test", "command_100_small")
 			process.emit("line", "small output", "stdout")
 			process.emit("completed", { exitCode: 0, signal: null })
 
-			assert.equal(command.logFilePath, undefined)
-			assert.equal(await manager.readBackgroundCommandOutput(command.id), "[O] small output")
+			assert.equal(command.logFilePath, expectedLogPath)
+			assert.equal(await manager.readBackgroundCommandOutput(command.id), "[O] small output\n")
 		} finally {
 			manager.disposeBackgroundCommands()
+			await fs.rm(expectedLogPath, { force: true })
 		}
 	})
 

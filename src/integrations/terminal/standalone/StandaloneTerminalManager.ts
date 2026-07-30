@@ -15,7 +15,7 @@
 import { DlineTempManager } from "@services/temp"
 import * as fs from "fs"
 import { isCommandCompletionSuccessful } from "../command-completion"
-import { DEFAULT_TERMINAL_OUTPUT_LINE_LIMIT, MAX_BYTES_BEFORE_FILE } from "../constants"
+import { DEFAULT_TERMINAL_OUTPUT_LINE_LIMIT } from "../constants"
 import { formatTerminalOutputLogLine } from "../output-stream"
 import type {
 	BackgroundCommand,
@@ -23,6 +23,8 @@ import type {
 	CommandOrigin,
 	ITerminalManager,
 	TerminalInfo,
+	TerminalManagerConfiguration,
+	TerminalManagerConfigurationResult,
 	TerminalOutputLine,
 	TerminalOutputStream,
 	TerminalProcessResultPromise,
@@ -100,9 +102,6 @@ export class StandaloneTerminalManager implements ITerminalManager {
 
 	/** Map of background command ID to log file write stream */
 	private logStreams: Map<string, fs.WriteStream> = new Map()
-
-	/** Output retained before a background command crosses the configured spill limit. */
-	private backgroundOutputBuffers: Map<string, { lines: string[]; bytes: number }> = new Map()
 
 	/** Completion signal for asynchronously flushed log streams. */
 	private logStreamCompletions: Map<string, Promise<void>> = new Map()
@@ -276,28 +275,20 @@ export class StandaloneTerminalManager implements ITerminalManager {
 		this.registry.clear()
 	}
 
-	/**
-	 * Set the timeout for waiting for shell integration.
-	 * @param timeout Timeout in milliseconds
-	 */
-	setShellIntegrationTimeout(timeout: number): void {
-		this.shellIntegrationTimeout = timeout
+	configure(configuration: TerminalManagerConfiguration): TerminalManagerConfigurationResult {
+		this.shellIntegrationTimeout = configuration.shellIntegrationTimeout
+		this.terminalReuseEnabled = configuration.terminalReuseEnabled
+		this.terminalOutputLineLimit = configuration.terminalOutputLineLimit
+		return this.configureDefaultTerminalProfile(configuration.defaultTerminalProfile)
 	}
 
-	/**
-	 * Enable or disable terminal reuse.
-	 * @param enabled Whether to enable terminal reuse
-	 */
-	setTerminalReuseEnabled(enabled: boolean): void {
-		this.terminalReuseEnabled = enabled
-	}
-
-	/**
-	 * Set the maximum number of output lines to keep.
-	 * @param limit Maximum number of lines
-	 */
-	setTerminalOutputLineLimit(limit: number): void {
-		this.terminalOutputLineLimit = limit
+	getConfiguration(): TerminalManagerConfiguration {
+		return Object.freeze({
+			shellIntegrationTimeout: this.shellIntegrationTimeout,
+			terminalReuseEnabled: this.terminalReuseEnabled,
+			terminalOutputLineLimit: this.terminalOutputLineLimit,
+			defaultTerminalProfile: this.defaultTerminalProfile,
+		})
 	}
 
 	/**
@@ -305,7 +296,7 @@ export class StandaloneTerminalManager implements ITerminalManager {
 	 * @param profile The profile identifier
 	 * @returns Object with information about closed terminals and remaining busy terminals
 	 */
-	setDefaultTerminalProfile(profile: string): { closedCount: number; busyTerminals: TerminalInfo[] } {
+	private configureDefaultTerminalProfile(profile: string): TerminalManagerConfigurationResult {
 		const previousProfile = this.defaultTerminalProfile
 		this.defaultTerminalProfile = profile
 
@@ -413,14 +404,14 @@ export class StandaloneTerminalManager implements ITerminalManager {
 	/**
 	 * Track a command that will continue running in the background.
 	 * Called when user clicks "Proceed While Running".
-	 * Buffers output until the configured line or byte limit is exceeded, then lazily creates a log file.
+	 * Creates an activity-owned log immediately and appends all output in event order.
 	 * Retains the command's original absolute deadline across the handoff.
 	 *
 	 * @param process The terminal process to track
 	 * @param command The command string being executed
 	 * @param activityId Stable command activity identity used by storage and presentation.
 	 * @param existingOutput Output lines already captured before tracking started
-	 * @returns The background command info. The log path is absent until output spills to disk.
+	 * @returns The background command info with its durable log path.
 	 */
 	trackBackgroundCommand(
 		process: TerminalProcessResultPromise,
@@ -432,6 +423,8 @@ export class StandaloneTerminalManager implements ITerminalManager {
 			cancellationOwner: CommandCancellationOwner
 			startedAt?: number
 			deadlineAt?: number
+			existingLogFilePath?: string
+			existingLineCount?: number
 		} = {
 			origin: "foreground",
 			cancellationOwner: "task",
@@ -446,6 +439,17 @@ export class StandaloneTerminalManager implements ITerminalManager {
 			throw new Error(`Background command is already tracked: ${activityId}`)
 		}
 
+		const logFilePath = ownership.existingLogFilePath ?? DlineTempManager.createTempFilePath(activityId)
+		const logFlags = ownership.existingLogFilePath ? "a" : "w"
+		const logFd = fs.openSync(logFilePath, logFlags)
+		const logStream = fs.createWriteStream(logFilePath, { fd: logFd, flags: logFlags, autoClose: true })
+		const logCompletion = new Promise<void>((resolve) => {
+			logStream.once("finish", resolve)
+			logStream.once("error", () => resolve())
+		})
+		this.logStreams.set(activityId, logStream)
+		this.logStreamCompletions.set(activityId, logCompletion)
+
 		const backgroundCommand: BackgroundCommand = {
 			id: activityId,
 			command,
@@ -454,20 +458,21 @@ export class StandaloneTerminalManager implements ITerminalManager {
 			status: "running",
 			origin: ownership.origin,
 			cancellationOwner: ownership.cancellationOwner,
-			lineCount: existingOutput.length,
+			logFilePath,
+			lineCount: ownership.existingLineCount ?? existingOutput.length,
 			injectionState: "pending",
 			process,
 		}
 
-		const formattedExistingOutput = existingOutput.map(formatTerminalOutputLogLine)
-		const existingBytes = formattedExistingOutput.reduce((total, line) => total + Buffer.byteLength(line, "utf8") + 1, 0)
-		this.backgroundOutputBuffers.set(activityId, { lines: formattedExistingOutput, bytes: existingBytes })
-		this.spillBackgroundOutputIfNeeded(backgroundCommand, callbacks)
+		if (existingOutput.length > 0) {
+			logStream.write(`${existingOutput.map(formatTerminalOutputLogLine).join("\n")}\n`)
+		}
+		callbacks?.onLogFileCreated?.(logFilePath)
 
 		// Pipe future process output to log file
 		process.on("line", (line: string, stream: TerminalOutputStream = "combined") => {
 			backgroundCommand.lineCount++
-			this.appendBackgroundOutput(backgroundCommand, { line, stream }, callbacks)
+			this.appendBackgroundOutput(backgroundCommand, { line, stream })
 			callbacks?.onOutputLine?.(line, stream)
 		})
 
@@ -477,7 +482,7 @@ export class StandaloneTerminalManager implements ITerminalManager {
 				if (backgroundCommand.status === "running") {
 					backgroundCommand.status = "timed_out"
 					callbacks?.onTimeout?.()
-					this.appendBackgroundNote(backgroundCommand, "[TIMEOUT] Process reached its command deadline", callbacks)
+					this.appendBackgroundNote(backgroundCommand, "[TIMEOUT] Process reached its command deadline")
 					this.finishBackgroundLog(activityId)
 
 					if (process.terminate) {
@@ -510,17 +515,13 @@ export class StandaloneTerminalManager implements ITerminalManager {
 			} else {
 				backgroundCommand.status = "error"
 				if (typeof exitCode === "number" && exitCode !== 0) {
-					this.appendBackgroundNote(backgroundCommand, `[EXIT_CODE] Process exited with code ${exitCode}`, callbacks)
+					this.appendBackgroundNote(backgroundCommand, `[EXIT_CODE] Process exited with code ${exitCode}`)
 				}
 				if (signal) {
-					this.appendBackgroundNote(backgroundCommand, `[SIGNAL] Process terminated by signal ${signal}`, callbacks)
+					this.appendBackgroundNote(backgroundCommand, `[SIGNAL] Process terminated by signal ${signal}`)
 				}
 				if (typeof exitCode !== "number" && !signal) {
-					this.appendBackgroundNote(
-						backgroundCommand,
-						"[UNKNOWN_EXIT] Process completion did not include an exit code",
-						callbacks,
-					)
+					this.appendBackgroundNote(backgroundCommand, "[UNKNOWN_EXIT] Process completion did not include an exit code")
 				}
 			}
 			this.finishBackgroundLog(activityId)
@@ -550,92 +551,29 @@ export class StandaloneTerminalManager implements ITerminalManager {
 		return backgroundCommand
 	}
 
-	/** Read complete output regardless of whether it remains buffered or has spilled to disk. */
+	/** Read output from the activity-owned log after flushing all preceding writes. */
 	async readBackgroundCommandOutput(id: string): Promise<string> {
 		const command = this.backgroundCommands.get(id)
 		if (!command) {
 			return ""
 		}
 
-		if (!command.logFilePath) {
-			return this.backgroundOutputBuffers.get(id)?.lines.join("\n") ?? ""
-		}
-
-		if (command.status !== "running") {
+		const activeStream = this.logStreams.get(id)
+		if (command.status === "running" && activeStream) {
+			await new Promise<void>((resolve) => activeStream.write("", () => resolve()))
+		} else {
 			await this.logStreamCompletions.get(id)
 		}
-		return fs.promises.readFile(command.logFilePath, "utf8")
+		return command.logFilePath ? fs.promises.readFile(command.logFilePath, "utf8") : ""
 	}
 
-	private appendBackgroundOutput(
-		command: BackgroundCommand,
-		output: TerminalOutputLine,
-		callbacks?: { onLogFileCreated?: (logFilePath: string) => void },
-	): void {
+	private appendBackgroundOutput(command: BackgroundCommand, output: TerminalOutputLine): void {
 		const line = formatTerminalOutputLogLine(output)
-		const logStream = this.logStreams.get(command.id)
-		if (logStream) {
-			logStream.write(`${line}\n`)
-			return
-		}
-
-		const buffer = this.backgroundOutputBuffers.get(command.id)
-		if (!buffer) {
-			return
-		}
-		buffer.lines.push(line)
-		buffer.bytes += Buffer.byteLength(line, "utf8") + 1
-		this.spillBackgroundOutputIfNeeded(command, callbacks)
+		this.logStreams.get(command.id)?.write(`${line}\n`)
 	}
 
-	private appendBackgroundNote(
-		command: BackgroundCommand,
-		note: string,
-		callbacks?: { onLogFileCreated?: (logFilePath: string) => void },
-	): void {
-		const logStream = this.logStreams.get(command.id)
-		if (logStream) {
-			logStream.write(`\n${note}\n`)
-			return
-		}
-
-		const buffer = this.backgroundOutputBuffers.get(command.id)
-		if (!buffer) {
-			return
-		}
-		buffer.lines.push("", note)
-		buffer.bytes += Buffer.byteLength(note, "utf8") + 2
-		this.spillBackgroundOutputIfNeeded(command, callbacks)
-	}
-
-	private spillBackgroundOutputIfNeeded(
-		command: BackgroundCommand,
-		callbacks?: { onLogFileCreated?: (logFilePath: string) => void },
-	): void {
-		const buffer = this.backgroundOutputBuffers.get(command.id)
-		if (
-			!buffer ||
-			command.logFilePath ||
-			(command.lineCount <= this.terminalOutputLineLimit && buffer.bytes <= MAX_BYTES_BEFORE_FILE)
-		) {
-			return
-		}
-
-		const logFilePath = DlineTempManager.createTempFilePath(command.id)
-		const logStream = fs.createWriteStream(logFilePath, { flags: "a" })
-		const completion = new Promise<void>((resolve) => {
-			logStream.once("finish", resolve)
-			logStream.once("error", () => resolve())
-		})
-		this.logStreams.set(command.id, logStream)
-		this.logStreamCompletions.set(command.id, completion)
-		command.logFilePath = logFilePath
-		if (buffer.lines.length > 0) {
-			logStream.write(`${buffer.lines.join("\n")}\n`)
-		}
-		buffer.lines.length = 0
-		buffer.bytes = 0
-		callbacks?.onLogFileCreated?.(logFilePath)
+	private appendBackgroundNote(command: BackgroundCommand, note: string): void {
+		this.logStreams.get(command.id)?.write(`\n${note}\n`)
 	}
 
 	private finishBackgroundLog(id: string): void {
@@ -764,7 +702,7 @@ export class StandaloneTerminalManager implements ITerminalManager {
 		const lines = [`# Background Commands (${running.length} running)`]
 		for (const c of running) {
 			const duration = Math.round((Date.now() - c.startTime) / 1000 / 60)
-			const outputLocation = c.logFilePath ? `log: ${c.logFilePath}` : "output buffered in memory"
+			const outputLocation = c.logFilePath ? `log: ${c.logFilePath}` : "log unavailable"
 			lines.push(`- ${c.command} (running ${duration}m, ${c.lineCount} lines, ${outputLocation})`)
 		}
 		return lines.join("\n")
@@ -791,7 +729,6 @@ export class StandaloneTerminalManager implements ITerminalManager {
 		}
 		this.logStreams.clear()
 		this.logStreamCompletions.clear()
-		this.backgroundOutputBuffers.clear()
 
 		// Clear command tracking
 		this.backgroundCommands.clear()

@@ -117,6 +117,20 @@ export interface TerminalInfo {
 	cwdResolved?: { resolve: () => void; reject: (err: Error) => void }
 }
 
+/** Complete runtime configuration applied atomically to a terminal manager. */
+export interface TerminalManagerConfiguration {
+	readonly shellIntegrationTimeout: number
+	readonly terminalReuseEnabled: boolean
+	readonly terminalOutputLineLimit: number
+	readonly defaultTerminalProfile: string
+}
+
+/** Observable effects caused by applying terminal configuration. */
+export interface TerminalManagerConfigurationResult {
+	closedCount: number
+	busyTerminals: Array<Pick<TerminalInfo, "id" | "lastCommand">>
+}
+
 /**
  * Minimal terminal interface that both VSCode terminals and standalone terminals implement.
  */
@@ -216,29 +230,11 @@ export interface ITerminalManager {
 	 */
 	disposeAll(): void
 
-	/**
-	 * Set the timeout for waiting for shell integration.
-	 * @param timeout Timeout in milliseconds
-	 */
-	setShellIntegrationTimeout(timeout: number): void
+	/** Apply one complete runtime configuration snapshot. */
+	configure(configuration: TerminalManagerConfiguration): TerminalManagerConfigurationResult
 
-	/**
-	 * Enable or disable terminal reuse.
-	 * @param enabled Whether to enable terminal reuse
-	 */
-	setTerminalReuseEnabled(enabled: boolean): void
-
-	/**
-	 * Set the maximum number of output lines to keep.
-	 * @param limit Maximum number of lines
-	 */
-	setTerminalOutputLineLimit(limit: number): void
-
-	/**
-	 * Set the default terminal profile.
-	 * @param profile The profile identifier
-	 */
-	setDefaultTerminalProfile(profile: string): void
+	/** Return the currently applied immutable configuration snapshot. */
+	getConfiguration(): TerminalManagerConfiguration
 
 	/**
 	 * Process output lines, potentially truncating if over limit.
@@ -288,9 +284,9 @@ export interface BackgroundCommand {
 	origin: CommandOrigin
 	/** Lifecycle boundary allowed to cancel this command. */
 	cancellationOwner: CommandCancellationOwner
-	/** Path to the log file after buffered output has crossed the spill limit. */
+	/** Path to the activity-owned log file. Always present for tracked background commands. */
 	logFilePath?: string
-	/** Number of output lines captured in memory or on disk */
+	/** Number of output lines captured in the log. */
 	lineCount: number
 	/** Exit code if the command completed or errored */
 	exitCode?: number
@@ -439,6 +435,8 @@ export interface CommandExecutorConfig {
 	terminalExecutionMode: "vscodeTerminal" | "backgroundExec"
 	/** The primary terminal manager (VSCode or Standalone) */
 	terminalManager: ITerminalManager
+	/** Terminal configuration shared by foreground and background managers. */
+	terminalConfiguration: TerminalManagerConfiguration
 }
 
 /** Alias for backwards compatibility */
@@ -480,8 +478,16 @@ export interface OrchestrationOptions {
 	 */
 	onProceedWhileRunning?: (
 		existingOutput: TerminalOutputLine[],
-		timing: { startedAt: number; deadlineAt?: number },
-	) => { backgroundCommandId: string; logFilePath?: string } | undefined
+		context: {
+			startedAt: number
+			deadlineAt?: number
+			existingLogFilePath?: string
+			existingLineCount?: number
+		},
+	) =>
+		| { backgroundCommandId: string; logFilePath?: string }
+		| undefined
+		| Promise<{ backgroundCommandId: string; logFilePath?: string } | undefined>
 	/** Start in background without waiting for timeout or user intervention. */
 	startInBackground?: boolean
 	/**

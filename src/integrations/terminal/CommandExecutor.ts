@@ -28,6 +28,8 @@ import type {
 	CommandExecutorConfig,
 	ITerminalManager,
 	ShellIntegrationWarningTracker,
+	TerminalManagerConfiguration,
+	TerminalManagerConfigurationResult,
 	TerminalOutputLine,
 	TerminalProcessResultPromise,
 } from "./types"
@@ -80,15 +82,20 @@ export class CommandExecutor {
 			// Create a standalone manager for background execution support.
 			this.standaloneManager = new StandaloneTerminalManager()
 			Logger.info(`[CommandExecutor] Created new StandaloneTerminalManager`)
-
-			// Copy settings from the provided terminalManager to ensure consistency
-			if ("shellIntegrationTimeout" in config.terminalManager) {
-				const tm = config.terminalManager as any
-				this.standaloneManager.setShellIntegrationTimeout(tm.shellIntegrationTimeout || 4000)
-				this.standaloneManager.setTerminalReuseEnabled(tm.terminalReuseEnabled ?? true)
-				this.standaloneManager.setTerminalOutputLineLimit(tm.terminalOutputLineLimit || 500)
-			}
 		}
+		this.configure(config.terminalConfiguration)
+	}
+
+	/** Apply one complete configuration to every unique terminal manager owned by this executor. */
+	configure(configuration: TerminalManagerConfiguration): TerminalManagerConfigurationResult {
+		let closedCount = 0
+		const busyTerminals = []
+		for (const manager of new Set<ITerminalManager>([this.terminalManager, this.standaloneManager])) {
+			const result = manager.configure(configuration)
+			closedCount += result.closedCount
+			busyTerminals.push(...result.busyTerminals)
+		}
+		return { closedCount, busyTerminals }
 	}
 
 	/**

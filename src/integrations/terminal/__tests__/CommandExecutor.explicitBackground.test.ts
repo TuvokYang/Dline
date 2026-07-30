@@ -9,9 +9,17 @@ import type {
 	ITerminalManager,
 	TerminalCompletionDetails,
 	TerminalInfo,
+	TerminalManagerConfiguration,
 	TerminalProcessEvents,
 	TerminalProcessResultPromise,
 } from "../types"
+
+const terminalConfiguration: TerminalManagerConfiguration = {
+	shellIntegrationTimeout: 4000,
+	terminalReuseEnabled: true,
+	terminalOutputLineLimit: 500,
+	defaultTerminalProfile: "default",
+}
 
 class FakeTerminalProcess extends EventEmitter<TerminalProcessEvents> {
 	isHot = false
@@ -55,17 +63,15 @@ class FakeTerminalProcess extends EventEmitter<TerminalProcessEvents> {
 
 function createTerminalManager(): ITerminalManager {
 	return {
+		configure: vi.fn(() => ({ closedCount: 0, busyTerminals: [] })),
 		disposeAll: vi.fn(),
+		getConfiguration: vi.fn(() => terminalConfiguration),
 		getOrCreateTerminal: vi.fn(),
 		getTerminals: vi.fn(() => []),
 		getUnretrievedOutput: vi.fn(() => ""),
 		isProcessHot: vi.fn(() => false),
 		processOutput: vi.fn((lines: string[]) => lines.join("\n")),
 		runCommand: vi.fn(),
-		setDefaultTerminalProfile: vi.fn(),
-		setShellIntegrationTimeout: vi.fn(),
-		setTerminalOutputLineLimit: vi.fn(),
-		setTerminalReuseEnabled: vi.fn(),
 	}
 }
 
@@ -81,6 +87,29 @@ function createCallbacks(): CommandExecutorCallbacks {
 }
 
 describe("CommandExecutor explicit background execution", () => {
+	it("applies one configuration to both primary and background terminal managers", () => {
+		const primaryManager = createTerminalManager()
+		const standaloneConfigure = vi.spyOn(StandaloneTerminalManager.prototype, "configure")
+		try {
+			new CommandExecutor(
+				{
+					cwd: "C:\\workspace",
+					taskId: "task-1",
+					terminalExecutionMode: "vscodeTerminal",
+					terminalManager: primaryManager,
+					terminalConfiguration,
+					ulid: "task-ulid",
+				},
+				createCallbacks(),
+			)
+
+			assert.deepEqual(vi.mocked(primaryManager.configure).mock.calls, [[terminalConfiguration]])
+			assert.deepEqual(standaloneConfigure.mock.calls, [[terminalConfiguration]])
+		} finally {
+			standaloneConfigure.mockRestore()
+		}
+	})
+
 	it.each<readonly [string, TerminalCompletionDetails, "completed" | "failed"]>([
 		["explicit zero exit", { exitCode: 0, signal: null }, "completed"],
 		["unknown exit code", { exitCode: undefined, signal: null }, "failed"],
@@ -131,6 +160,7 @@ describe("CommandExecutor explicit background execution", () => {
 				taskId: "task-1",
 				terminalExecutionMode: "vscodeTerminal",
 				terminalManager: primaryManager,
+				terminalConfiguration,
 				ulid: "task-ulid",
 			},
 			callbacks,
@@ -202,6 +232,7 @@ describe("CommandExecutor explicit background execution", () => {
 				taskId: "task-1",
 				terminalExecutionMode: "vscodeTerminal",
 				terminalManager: createTerminalManager(),
+				terminalConfiguration,
 				ulid: "task-ulid",
 			},
 			createCallbacks(),
@@ -231,6 +262,7 @@ describe("CommandExecutor explicit background execution", () => {
 				taskId: "task-1",
 				terminalExecutionMode: "vscodeTerminal",
 				terminalManager: createTerminalManager(),
+				terminalConfiguration,
 				ulid: "task-ulid",
 			},
 			createCallbacks(),
@@ -300,6 +332,7 @@ describe("CommandExecutor explicit background execution", () => {
 				taskId: "task-1",
 				terminalExecutionMode: "vscodeTerminal",
 				terminalManager,
+				terminalConfiguration,
 				ulid: "task-ulid",
 			},
 			{

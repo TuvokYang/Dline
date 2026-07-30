@@ -1,4 +1,3 @@
-import fs from "node:fs/promises"
 import type { BackgroundCommand } from "@integrations/terminal"
 import type { SubagentInjectionState } from "@shared/ExtensionMessage"
 import type { SubagentJobManager, SubagentJobRecord } from "../tools/subagent/SubagentJobManager"
@@ -9,7 +8,6 @@ export interface InjectableBackgroundCommand extends BackgroundCommand {
 
 export interface BackgroundCommandProvider {
 	listBackgroundCommands(): InjectableBackgroundCommand[]
-	readBackgroundCommandOutput?(command: InjectableBackgroundCommand): Promise<string>
 }
 
 export interface BackgroundContextInjectorOptions {
@@ -178,7 +176,8 @@ export class BackgroundContextInjector {
 	 * @returns One markdown list item.
 	 */
 	private formatCommand(command: InjectableBackgroundCommand): string {
-		return `- ${command.id}: ${command.status} — ${command.command}`
+		const log = command.logFilePath ? ` (log: ${command.logFilePath})` : ""
+		return `- ${command.id}: ${command.status} - ${command.command}${log}`
 	}
 
 	/**
@@ -195,7 +194,7 @@ export class BackgroundContextInjector {
 		const ids: string[] = []
 		for (const command of commands) {
 			ids.push(command.id)
-			lines.push(await this.formatCommandResult(command))
+			lines.push(this.formatCommandResult(command))
 		}
 		return { text: lines.join("\n"), ids }
 	}
@@ -203,29 +202,12 @@ export class BackgroundContextInjector {
 	/**
 	 * Format one completed background command result for model context.
 	 * @param command Background command to format.
-	 * @returns Markdown list item with command log output.
+	 * @returns Markdown list item with completion metadata and the durable log path.
 	 */
-	private async formatCommandResult(command: InjectableBackgroundCommand): Promise<string> {
-		const output = await this.readCommandLog(command)
-		return `- ${command.id}: ${command.status} — ${command.command}\n  ${output}`
-	}
-
-	/**
-	 * Read background command output from its log file.
-	 * @param command Background command whose log should be read.
-	 * @returns Log text or a fallback message.
-	 */
-	private async readCommandLog(command: InjectableBackgroundCommand): Promise<string> {
-		try {
-			const content = this.commandProvider?.readBackgroundCommandOutput
-				? await this.commandProvider.readBackgroundCommandOutput(command)
-				: command.logFilePath
-					? await fs.readFile(command.logFilePath, "utf8")
-					: ""
-			return content.trim() || "No command output."
-		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error)
-			return `Unable to read command log: ${message}`
-		}
+	private formatCommandResult(command: InjectableBackgroundCommand): string {
+		const exitCode = command.exitCode ?? "unavailable"
+		const lineLabel = command.lineCount === 1 ? "output line" : "output lines"
+		const logFilePath = command.logFilePath ?? "unavailable"
+		return `- ${command.id}: ${command.status} - ${command.command}\n  Exit code: ${exitCode}; ${command.lineCount} ${lineLabel}; log: ${logFilePath}`
 	}
 }
