@@ -316,17 +316,10 @@ const OnboardingViewContent = ({ onboardingModels }: { onboardingModels: Onboard
 	)
 
 	const handleFooterAction = useCallback(
-		async (action: "signin" | "next" | "back" | "done" | "signup") => {
+		async (action: "next" | "back" | "done" | "signup") => {
 			switch (action) {
 				case "signup":
 					setStepNumber(stepNumber + 1)
-					setIsActionLoading(true)
-					await AccountServiceClient.accountLoginClicked({})
-						.catch(() => {})
-						.finally(() => setIsActionLoading(false))
-					await finishOnboarding(true, stepNumber + 1)
-					break
-				case "signin":
 					setIsActionLoading(true)
 					await AccountServiceClient.accountLoginClicked({})
 						.catch(() => {})

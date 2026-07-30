@@ -14,10 +14,7 @@ export const STEP_CONFIG = {
 	0: {
 		title: "How will you use Cline?",
 		description: "Select an option below to get started.",
-		buttons: [
-			{ text: "Continue", action: "next", variant: "default" },
-			{ text: "Login to Cline", action: "signin", variant: "secondary" },
-		],
+		buttons: [{ text: "Continue", action: "next", variant: "default" }],
 	},
 	[NEW_USER_TYPE.FREE]: {
 		title: "Select a free model",
