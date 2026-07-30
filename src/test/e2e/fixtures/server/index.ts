@@ -176,7 +176,7 @@ export class ClineApiServerMock {
 			const authToken = authHeader?.substring(7) // Remove "Bearer " prefix
 
 			// Authenticate the token and set current user
-			if (isAuthRequired && authToken) {
+			if (path.startsWith("/api/v1") && isAuthRequired && authToken) {
 				log(`Authenticating token: ${authToken}`)
 				const user = ClineApiServerMock.globalSharedServer?.API_USER.getUserByToken(authToken)
 				if (!user) {
@@ -203,6 +203,53 @@ export class ClineApiServerMock {
 
 				const { baseRoute, endpoint, params = {} } = routeMatch
 				const controller = ClineApiServerMock.globalSharedServer!
+
+				// OpenAI-compatible endpoint used by the isolated E2E mock profile.
+				if (baseRoute === "/v1" && endpoint === "/chat/completions" && method === "POST") {
+					const body = await readBody()
+					const parsed = JSON.parse(body) as { model?: string; stream?: boolean }
+					const model = parsed.model ?? "dline-e2e-model"
+					const responseText = "Dline E2E mock response"
+					const generationId = `e2e_${++controller.generationCounter}_${Date.now()}`
+
+					if (parsed.stream !== false) {
+						res.writeHead(200, {
+							"Content-Type": "text/event-stream",
+							"Cache-Control": "no-cache",
+							Connection: "keep-alive",
+						})
+						res.write(
+							`data: ${JSON.stringify({
+								id: generationId,
+								object: "chat.completion.chunk",
+								created: Math.floor(Date.now() / 1000),
+								model,
+								choices: [{ index: 0, delta: { role: "assistant", content: responseText }, finish_reason: null }],
+							})}\n\n`,
+						)
+						res.write(
+							`data: ${JSON.stringify({
+								id: generationId,
+								object: "chat.completion.chunk",
+								created: Math.floor(Date.now() / 1000),
+								model,
+								choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+								usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+							})}\n\n`,
+						)
+						res.end("data: [DONE]\n\n")
+						return
+					}
+
+					return sendJson({
+						id: generationId,
+						object: "chat.completion",
+						created: Math.floor(Date.now() / 1000),
+						model,
+						choices: [{ index: 0, message: { role: "assistant", content: responseText }, finish_reason: "stop" }],
+						usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+					})
+				}
 
 				// Health check endpoints
 				if (baseRoute === "/health") {

@@ -277,7 +277,7 @@ export const e2e = test
 						DLINE_DIR: dlineDir,
 						DLINE_E2E_API_BASE_URL: server.baseUrl,
 						DLINE_SKIP_MIGRATION: "1",
-						DLINE_DOCS_DIR: path.join(E2ETestHelper.CODEBASE_ROOT_DIR, "dist", "tmp", "Dline"),
+						DLINE_DOCS_DIR: path.join(dlineDir, "documents"),
 						GRPC_RECORDER_FILE_NAME: E2ETestHelper.generateTestFileName(testInfo.title, testInfo.project.name),
 						// GRPC_RECORDER_ENABLED: "true",
 						// GRPC_RECORDER_TESTS_FILTERS_ENABLED: "true"

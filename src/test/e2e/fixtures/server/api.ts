@@ -1,4 +1,9 @@
 export const E2E_REGISTERED_MOCK_ENDPOINTS = {
+	"/v1": {
+		GET: [],
+		POST: ["/chat/completions"],
+		PUT: [],
+	},
 	"/api/v1": {
 		GET: [
 			"/generation",

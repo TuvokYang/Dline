@@ -28,7 +28,9 @@ e2e("Chat - can send messages and switch between modes", async ({ helper, sideba
 	await sidebar.getByText("newtask", { exact: false }).first().click()
 	await expect(inputbox).toHaveValue("/cmd:newtask ")
 
-	await inputbox.pressSequentially("following text should be preserved")
+	await inputbox.focus()
+	await inputbox.press("End")
+	await inputbox.pressSequentially("following text should be preserved", { delay: 10 })
 	await expect(inputbox).toHaveValue("/cmd:newtask following text should be preserved")
 
 	await inputbox.fill("")
@@ -39,7 +41,9 @@ e2e("Chat - can send messages and switch between modes", async ({ helper, sideba
 	await sidebar.getByText("Problems", { exact: false }).first().click()
 	await expect(inputbox).toHaveValue("@problems ")
 
-	await inputbox.pressSequentially("following text should be preserved")
+	await inputbox.focus()
+	await inputbox.press("End")
+	await inputbox.pressSequentially("following text should be preserved", { delay: 10 })
 	await expect(inputbox).toHaveValue("@problems following text should be preserved")
 
 	await inputbox.fill("E2E chat message")
