@@ -46,6 +46,15 @@ Do not infer a command from memory when one of these files has changed.
 
 Prefer `test:run`. It expands to `vitest run` and does not invoke the `pretest` lifecycle hook.
 
+Escalate test scope deliberately:
+
+1. Reproduce and diagnose with one named test or one test file whenever possible.
+2. After the fix, rerun the original focused scope first.
+3. Then run the owning Vitest project when the changed boundary warrants broader confidence.
+4. Run all projects only when the change has repository-wide impact or the user explicitly requests a full rerun.
+
+A full Dline rerun normally takes about 7-8 minutes. Give it a command timeout of at least 10 minutes, keep collecting the same process until it exits, and do not start another full run because output is temporarily quiet. Prefer separate project runs over a full run so failures are available sooner and unrelated projects do not extend the feedback loop.
+
 Run focused root tests:
 
 ```powershell
@@ -99,19 +108,36 @@ The root config assigns tests by path:
 
 Start with the changed module's focused test. Then run adjacent tests for shared contracts, and broaden only in proportion to the change's blast radius.
 
+When broader validation is appropriate, run the owning project before considering all projects. Do not use a full rerun merely to validate a local test or fixture change.
+
 ## Use An Existing Vitest UI Server
 
 The CLI in `scripts/vitest-ui/cli.mjs` only connects to an existing server; it does not start one. Use it only when the user says a Vitest UI server is already running or explicitly asks to inspect that server.
 
-Before connecting, perform a bounded reachability probe. A failed probe must never trigger server startup:
+Before connecting, probe at most five consecutive ports. Start at the default port `51205`, then increment by one through `51209`; the default port counts as the first attempt. Stop at the first reachable Vitest UI and use that exact URL for subsequent CLI commands:
 
 ```powershell
-node -e "const u=process.env.VITEST_UI_URL||'http://localhost:51205/__vitest__/';fetch(u,{signal:AbortSignal.timeout(3000)}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+$vitestUiUrl = $null
+for ($vitestUiOffset = 0; $vitestUiOffset -lt 5; $vitestUiOffset++) {
+	$vitestUiCandidate = "http://localhost:$((51205 + $vitestUiOffset))/__vitest__/"
+	try {
+		$vitestUiResponse = Invoke-WebRequest -Uri $vitestUiCandidate -UseBasicParsing -TimeoutSec 3
+		if ($vitestUiResponse.StatusCode -ge 200 -and $vitestUiResponse.StatusCode -lt 400) {
+			$vitestUiUrl = $vitestUiCandidate
+			break
+		}
+	} catch {}
+}
+if ($null -eq $vitestUiUrl) { exit 1 }
+$vitestUiUrl
 ```
 
-If the probe fails:
+Pass the discovered URL through `--url`; do not keep assuming port `51205` after a later port succeeds.
 
-- Use a one-shot `test:run` command when the goal is to execute tests.
+Only after all five probes fail may you conclude that the Vitest UI server is not running. If no server is reachable:
+
+- Use a one-shot `test:run` command instead of starting a server.
+- Prefer one named test or one file; use the owning `--project` only when the focused scope is insufficient.
 - Report that the existing UI server is unavailable when the goal is to inspect its retained state.
 - Never fall back to `vitest:ui:server` or `vitest:ui:mcp` automatically.
 
@@ -120,6 +146,8 @@ Read current failures:
 ```powershell
 npm run vitest:ui -- errors --json --timeout 10000 --rpc-timeout 15000
 ```
+
+Add `--url <discovered-url>` to each Vitest UI CLI command when the reachable server is not at the default URL.
 
 Read status without waiting:
 
