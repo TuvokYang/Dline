@@ -96,6 +96,7 @@ import { convertClineMessageToProto } from "@shared/proto-conversions/cline-mess
 import { PROFILE_PROVIDER_KEYS } from "@shared/providers/profile-model-info"
 import { resolvePromptProfile } from "@shared/resolve-prompt-profile"
 import type { Mode } from "@shared/storage/types"
+import { DEFAULT_TERMINAL_COMMAND_TIMEOUT_SECONDS } from "@shared/terminal-settings"
 import { ClineDefaultTool, CONVERSATIONAL_TOOL_NAMES, READ_ONLY_TOOLS } from "@shared/tools"
 import { ClineAskResponse } from "@shared/WebviewMessage"
 import { isLocalModel, isNativeToolCallingConfig, isNextGenModelFamily, isParallelToolCallingEnabled } from "@utils/model-utils"
@@ -3042,6 +3043,9 @@ export class Task {
 			enableNativeToolCalls: this.shouldUseNativeToolCalls(providerInfo),
 			enableParallelToolCalling: this.isParallelToolCallingEnabled(providerInfo),
 			terminalExecutionMode: this.terminalExecutionMode,
+			terminalCommandTimeoutSeconds:
+				this.stateManager.getGlobalSettingsKey("terminalCommandTimeoutSeconds") ??
+				DEFAULT_TERMINAL_COMMAND_TIMEOUT_SECONDS,
 			disableTools,
 			capabilityToggleState,
 		}

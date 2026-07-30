@@ -1,3 +1,4 @@
+import { DEFAULT_TERMINAL_COMMAND_TIMEOUT_SECONDS } from "@shared/terminal-settings"
 import { getPrompt } from "../i18n"
 import { PromptProfile, requirePromptProfile } from "../profiles/types"
 import { PromptTemplate } from "../template/PromptTemplate"
@@ -40,6 +41,7 @@ const COMPLETE_TEMPLATE_ENV_KEYS = [
 	"MULTI_ROOT_HINT",
 	"BROWSER_VIEWPORT_WIDTH",
 	"BROWSER_VIEWPORT_HEIGHT",
+	"TERMINAL_COMMAND_TIMEOUT_SECONDS",
 ] as const
 
 const RUNTIME_RULE: EnvRule = { stages: ["runtime"], required: true }
@@ -188,6 +190,9 @@ export function prepareSystemRuntimeEnv(context: SystemPromptContext, config: Sy
 		MULTI_ROOT_HINT: multiRootHint,
 		BROWSER_VIEWPORT_WIDTH: String(context.browserSettings?.viewport.width ?? 0),
 		BROWSER_VIEWPORT_HEIGHT: String(context.browserSettings?.viewport.height ?? 0),
+		TERMINAL_COMMAND_TIMEOUT_SECONDS: String(
+			context.terminalCommandTimeoutSeconds ?? DEFAULT_TERMINAL_COMMAND_TIMEOUT_SECONDS,
+		),
 	})
 }
 

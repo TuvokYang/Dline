@@ -337,11 +337,15 @@
           },
           "background": {
             "type": "boolean",
-            "description": "Optional boolean. Set true to start the command as a Dline-owned background process, return control immediately, and keep its output and cancellation lifecycle tracked. Defaults to false."
+            "description": "Optional boolean. Set true to start the command immediately as a Dline-owned background process, return control immediately, and keep its output and cancellation lifecycle tracked. This takes precedence over synchronous. Defaults to false."
+          },
+          "synchronous": {
+            "type": "boolean",
+            "description": "Optional boolean. Set true to keep the command in the foreground beyond the default 10-second background handoff, waiting until the process exits or its timeout terminates it. Defaults to false. Ignored when background is true."
           },
           "timeout": {
             "type": "integer",
-            "description": "Optional positive integer foreground wait in seconds. If the command is still running when this wait expires, Dline returns control and continues tracking the process in the background. Defaults to 30 seconds for ordinary commands and 300 seconds for recognized long-running commands."
+            "description": "Optional positive integer timeout in seconds. This is the command's absolute maximum runtime from actual process start; reaching it terminates the process. If omitted, default is 1800 seconds. By default, a command still running at the 10-second background handoff continues as the same tracked background process without resetting this timeout."
           }
         },
         "required": [

@@ -48,6 +48,7 @@ export const toolPromptModules = [
 	}),
 	defineLegacyModule("executeCommand", "tools", executeCommand, {
 		standardWorkdirectoryInstruction: createRuntimeContract("CWD"),
+		standardTimeoutInstruction: createRuntimeContract("TERMINAL_COMMAND_TIMEOUT_SECONDS"),
 		clineIgnoreError: createRuntimeContract("PATH"),
 		permissionDeniedError: createRuntimeContract("REASON"),
 	}),

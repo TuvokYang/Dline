@@ -231,14 +231,16 @@ Parameters:
 - command: (required) The CLI command to execute. This should be valid for the current operating system. Ensure the command is properly formatted and does not contain any harmful instructions. Do not use the ~ character or $HOME to refer to the home directory. Do not prepend cd solely to select the execution directory; use workdirectory instead.
 - workdirectory: (optional) Optional directory in which to execute the command. Relative paths are resolved from /workspace/project. The directory must already exist. A directory outside every project root requires user approval.
 - requires_approval: (required) A boolean indicating whether this command requires explicit user approval before execution in case the user has auto-approve mode enabled. Set to true for potentially impactful operations like installing or uninstalling packages, deleting or overwriting files, system configuration changes, network operations, or any commands that could have unintended side effects. Set to false for safe operations like reading files or directories, running development servers, building projects, and other non-destructive operations.
-- background: (optional) Optional boolean. Set true to start the command as a Dline-owned background process, return control immediately, and keep its output and cancellation lifecycle tracked. Defaults to false.
-- timeout: (optional) Optional positive integer foreground wait in seconds. If the command is still running when this wait expires, Dline returns control and continues tracking the process in the background. Defaults to 30 seconds for ordinary commands and 300 seconds for recognized long-running commands.
+- background: (optional) Optional boolean. Set true to start the command immediately as a Dline-owned background process, return control immediately, and keep its output and cancellation lifecycle tracked. This takes precedence over synchronous. Defaults to false.
+- synchronous: (optional) Optional boolean. Set true to keep the command in the foreground beyond the default 10-second background handoff, waiting until the process exits or its timeout terminates it. Defaults to false. Ignored when background is true.
+- timeout: (optional) Optional positive integer timeout in seconds. This is the command's absolute maximum runtime from actual process start; reaching it terminates the process. If omitted, default is 1800 seconds. By default, a command still running at the 10-second background handoff continues as the same tracked background process without resetting this timeout.
 Usage:
 <execute_command>
 <command></command>
 <workdirectory></workdirectory>
 <requires_approval></requires_approval>
 <background></background>
+<synchronous></synchronous>
 <timeout></timeout>
 </execute_command>
 

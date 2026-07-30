@@ -11,7 +11,13 @@ import { isRequestScopedToolId, REQUEST_SCOPED_TOOL_IDS } from "../tools/tool-id
 import { createToolSet, LITE_TOOL_IDS, STANDARD_TOOL_IDS } from "../tools/tool-profile"
 import { projectXmlTool } from "../tools/xml-tool-projector"
 
-const TOOL_RUNTIME_KEYS = ["CWD", "MULTI_ROOT_HINT", "BROWSER_VIEWPORT_WIDTH", "BROWSER_VIEWPORT_HEIGHT"] as const
+const TOOL_RUNTIME_KEYS = [
+	"CWD",
+	"MULTI_ROOT_HINT",
+	"BROWSER_VIEWPORT_WIDTH",
+	"BROWSER_VIEWPORT_HEIGHT",
+	"TERMINAL_COMMAND_TIMEOUT_SECONDS",
+] as const
 const TOOL_RUNTIME_RULE = { stages: ["runtime"] as const, required: true }
 const TOOL_PROJECTION_CONTRACT: PromptContract = {
 	variables: Object.fromEntries(TOOL_RUNTIME_KEYS.map((key) => [key, TOOL_RUNTIME_RULE])),

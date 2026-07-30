@@ -175,6 +175,7 @@ export const STANDARD_TOOL_SPECS: readonly Omit<ProfileToolSpec, "profile">[] = 
 		param("workdirectory", false, getPrompt("executeCommand", "standardWorkdirectoryInstruction")),
 		param("requires_approval", true, getPrompt("executeCommand", "standardRequiresApprovalInstruction"), "boolean"),
 		param("background", false, getPrompt("executeCommand", "standardBackgroundInstruction"), "boolean"),
+		param("synchronous", false, getPrompt("executeCommand", "standardSynchronousInstruction"), "boolean"),
 		param("timeout", false, getPrompt("executeCommand", "standardTimeoutInstruction"), "integer"),
 	]),
 	spec(
