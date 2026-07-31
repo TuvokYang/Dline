@@ -604,6 +604,76 @@ e2e(
 )
 
 e2e(
+	"History - closing a running command restores one interrupted result without rerunning it",
+	async ({ helper, page, server, sidebar, userDataDir, workspaceDir }) => {
+		e2e.setTimeout(240_000)
+		await helper.signin(sidebar)
+		await setAutoApproveAction(sidebar, "Execute safe commands", false)
+		const markerPath = path.join(workspaceDir, "e2e-running-command-should-not-finish.txt")
+		const command = `node -e "const fs=require('fs'); console.log(['E2E','RUNNING','COMMAND','STARTED'].join('_')); setTimeout(()=>fs.writeFileSync('e2e-running-command-should-not-finish.txt','unexpected'),8000)"`
+		server.resetOpenAiMock()
+		server.enqueueOpenAiResponses(
+			{
+				type: "tool",
+				id: "call_history_running_command",
+				name: "execute_command",
+				arguments: {
+					command,
+					workdirectory: ".",
+					requires_approval: true,
+					synchronous: true,
+					timeout: 60,
+				},
+			},
+			{
+				type: "tool",
+				id: "call_history_running_command_resumed_completion",
+				name: "attempt_completion",
+				arguments: { result: "E2E_HISTORY_RUNNING_COMMAND_RESUME_OK" },
+				expectedRequestIncludes: [
+					"The previous task session was closed and has now been restored.",
+					"E2E_HISTORY_RUNNING_COMMAND_RESUME_DRAFT",
+				],
+			},
+		)
+
+		const taskText = "E2E_RUNNING_COMMAND_CLOSE_HISTORY_TASK"
+		await sendTask(sidebar, taskText)
+		await sidebar.getByText("Approve", { exact: true }).click()
+		await expect(sidebar.getByText("E2E_RUNNING_COMMAND_STARTED", { exact: true }).last()).toBeVisible({ timeout: 60_000 })
+		await expect(sidebar.getByRole("contentinfo").getByText("Approve", { exact: true })).toHaveCount(0)
+		await expect.poll(() => server.openAiRequestCount).toBe(1)
+		await closeCurrentTask(sidebar)
+		await reopenTask(sidebar, taskText)
+
+		const taskFooter = sidebar.getByRole("contentinfo")
+		const resumeButton = taskFooter.getByText("Resume", { exact: true })
+		await expect(resumeButton).toBeVisible({ timeout: 30_000 })
+		await expect(taskFooter.getByText("Approve", { exact: true })).toHaveCount(0)
+		await expect(taskFooter.getByText("Reject", { exact: true })).toHaveCount(0)
+		await expect(sidebar.getByRole("button", { name: "Copy command" }).last()).toBeVisible()
+		await page.waitForTimeout(9_000)
+		expect(await pathExists(markerPath)).toBe(false)
+		expect(server.openAiRequestCount).toBe(1)
+
+		const input = sidebar.getByTestId("chat-input")
+		await input.fill("E2E_HISTORY_RUNNING_COMMAND_RESUME_DRAFT")
+		await resumeButton.click()
+		await expect(sidebar.getByText("E2E_HISTORY_RUNNING_COMMAND_RESUME_OK", { exact: false }).last()).toBeVisible({
+			timeout: 60_000,
+		})
+		await expect.poll(() => server.openAiRequestCount).toBe(2)
+		const continuation = server.getMockConsumptions("openai-compatible-chat")[1]
+		expect(continuation.contractError).toBeUndefined()
+		const results = continuation.requestToolResults.filter((result) => result.callId === "call_history_running_command")
+		expect(results).toHaveLength(1)
+		expect(results[0].content).toMatch(/interrupted|cancelled|terminated/i)
+		expect(await pathExists(markerPath)).toBe(false)
+		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+	},
+)
+
+e2e(
 	"Task deletion - header delete removes the active task directory",
 	async ({ dlineDocsDir, helper, server, sidebar, userDataDir }) => {
 		e2e.setTimeout(120_000)

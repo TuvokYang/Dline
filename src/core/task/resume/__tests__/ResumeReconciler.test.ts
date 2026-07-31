@@ -568,6 +568,34 @@ describe("reconcileResume", () => {
 		)
 	})
 
+	it("clears a stale active owner after an approved command was cancelled without an interaction", () => {
+		const interactionId = "tid-cancelled-command"
+		const functionId = "fn-cancelled-command"
+		const snapshot = snapshotWithTurn(interactionId, functionId, {
+			toolName: "execute_command",
+			blockPhase: BlockPhase.EXECUTING,
+		})
+		if (!snapshot.turn) throw new Error("expected restored command turn")
+		snapshot.turn.blocks[0].requiresApproval = false
+		snapshot.turn.activeDlineTid = interactionId
+
+		const result = reconcileResume(
+			fullInput(
+				[apiUser(), assistantTool(interactionId, functionId, "execute_command")],
+				[{ ...interactionAsk("command", interactionId), commandStatus: "cancelled" }],
+				snapshot,
+			),
+		)
+
+		expect(result.entry).toMatchObject({ type: "show_resume_interaction" })
+		expect(result.snapshot.phase).toBe(TaskPhase.PAUSED)
+		expect(result.snapshot.interaction).toMatchObject({ kind: "resume", status: "opening" })
+		expect(result.snapshot.turn).toMatchObject({
+			activeDlineTid: undefined,
+			blocks: [{ dlineTid: interactionId, phase: BlockPhase.EXECUTING, requiresApproval: false }],
+		})
+	})
+
 	it("does not reopen command approval after its response was durably accepted", () => {
 		const interactionId = "tid-accepted-command"
 		const functionId = "fn-accepted-command"

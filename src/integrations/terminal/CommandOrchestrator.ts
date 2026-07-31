@@ -624,6 +624,10 @@ export async function orchestrateCommandExecution(
 			}
 		})()
 		void completionWork.catch((error) => {
+			if (error instanceof Error && error.message === "Dline instance aborted") {
+				Logger.debug(`[CommandOrchestrator] Terminal output finalization stopped after task abort: ${error.message}`)
+				return
+			}
 			Logger.error(`[CommandOrchestrator] Failed to finalize terminal output: ${error}`)
 		})
 	})

@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import fs from "node:fs/promises"
 import { EventEmitter } from "events"
 import { afterEach, describe, it, vi } from "vitest"
+import { Logger } from "@/shared/services/Logger"
 import { orchestrateCommandExecution } from "./CommandOrchestrator"
 import type {
 	CommandExecutorCallbacks,
@@ -104,6 +105,7 @@ function createTerminalManager(outputLineLimit = 500): ITerminalManager {
 
 afterEach(() => {
 	vi.useRealTimers()
+	vi.restoreAllMocks()
 })
 
 describe("CommandOrchestrator background transitions", () => {
@@ -272,6 +274,28 @@ describe("CommandOrchestrator background transitions", () => {
 })
 
 describe("CommandOrchestrator exit status messaging", () => {
+	it("does not report expected task abort as a terminal finalization error", async () => {
+		const process = new FakeTerminalProcess()
+		const callbacks = createCallbacks()
+		callbacks.say = vi.fn(async (_type, _text, _images, _files, partial) => {
+			if (partial === false) throw new Error("Dline instance aborted")
+			return 321
+		})
+		const errorSpy = vi.spyOn(Logger, "error").mockImplementation(() => undefined)
+		const execution = orchestrateCommandExecution(process.asResultPromise(), createTerminalManager(), callbacks, {
+			command: "cancelled-during-finalization",
+		})
+
+		process.emitOutput("visible partial", "stdout")
+		process.complete({ exitCode: undefined, signal: null })
+
+		await assert.rejects(execution, /Dline instance aborted/)
+		assert.equal(
+			errorSpy.mock.calls.filter(([message]) => String(message).includes("Failed to finalize terminal output")).length,
+			0,
+		)
+	})
+
 	it("limits foreground results and saves the complete ordered output", async () => {
 		const process = new FakeTerminalProcess()
 		const orchestrationPromise = orchestrateCommandExecution(

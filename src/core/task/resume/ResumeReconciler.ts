@@ -385,12 +385,12 @@ function stopWithoutChangingInteraction(snapshot: TaskSnapshot): void {
 	snapshot.phase = TaskPhase.PAUSED
 }
 
-/** Remove an approval owner that an older snapshot retained after its block became terminal. */
-function clearTerminalApprovalOwner(snapshot: TaskSnapshot): void {
+/** Remove an approval owner that no longer identifies an awaiting approval block. */
+function clearStaleApprovalOwner(snapshot: TaskSnapshot): void {
 	const turn = snapshot.turn
 	if (!turn?.activeDlineTid) return
 	const activeBlock = turn.blocks.find((block) => block.dlineTid === turn.activeDlineTid)
-	if (activeBlock && TERMINAL_BLOCK_PHASES.has(activeBlock.phase)) {
+	if (!activeBlock || activeBlock.phase !== BlockPhase.AWAITING_APPROVAL) {
 		turn.activeDlineTid = undefined
 	}
 }
@@ -472,7 +472,7 @@ export function reconcileResume(input: ResumeInput): ResumeResult {
 	}
 
 	reconcilePersistedInteraction(next, prepared.uiTail, folded.answeredDlineTids, prepared.apiHistory, diagnostics)
-	clearTerminalApprovalOwner(next)
+	clearStaleApprovalOwner(next)
 	stopWithoutChangingInteraction(next)
 
 	if (next.interaction) {
