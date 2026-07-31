@@ -16,8 +16,8 @@ export function TaskActivityTabs({
 		<div className="flex items-center gap-1 border-b border-editor-group-border px-4" role="tablist">
 			{(
 				[
-					["chat", "Chat", MessagesSquareIcon],
-					["activity", "Activity", ActivityIcon],
+					["chat", "Work", MessagesSquareIcon],
+					["activity", "Activities", ActivityIcon],
 				] as const
 			).map(([id, label, Icon]) => (
 				<button
