@@ -2401,9 +2401,7 @@ export class Task {
 			const runtimePhase = this.taskRuntime.getState().phase
 			if (runtimePhase !== TaskPhase.CANCELLING && runtimePhase !== TaskPhase.ABORTED) {
 				const terminating = await this.dispatchRuntime({ type: "TASK_TERMINATE_REQUESTED" })
-				if (terminating.accepted) {
-					this.syncRetainedMachines()
-				} else if (runtimePhase !== TaskPhase.IDLE) {
+				if (!terminating.accepted && runtimePhase !== TaskPhase.IDLE) {
 					Logger.warn(`Task termination transition rejected: ${terminating.error?.code ?? "invalid_runtime_event"}`)
 				}
 			}

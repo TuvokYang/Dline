@@ -64,4 +64,57 @@ describe("Task termination persistence", () => {
 		await termination
 		expect(updateTaskHistory).toHaveBeenCalled()
 	})
+
+	it("does not restore a retained approval machine while terminating an executing turn", async () => {
+		const dispatchRuntime = vi.fn(async () => ({ accepted: true }))
+		const cancelTaskOwnedCommands = vi.fn(async () => true)
+		const flushTaskSnapshot = vi.fn(async () => {})
+		const flushApiConversationHistory = vi.fn(async () => {})
+		const flushUiMessages = vi.fn(async () => {})
+		const fakeTask = {
+			modeSwitchCompaction: { abort: vi.fn() },
+			shouldRunTaskCancelHook: vi.fn(async () => false),
+			taskRuntime: { getState: () => ({ phase: TaskPhase.EXECUTING }) },
+			dispatchRuntime,
+			syncRetainedMachines: vi.fn(() => {
+				throw new Error("Canonical activeDlineTid has no awaiting approval block")
+			}),
+			taskState: { abort: false, abandoned: false },
+			getActiveHookExecution: vi.fn(async () => undefined),
+			commandExecutor: { cancelTaskOwnedCommands },
+			stateManager: { getGlobalSettingsKey: vi.fn(() => false) },
+			flushTaskSnapshot,
+			messageStateHandler: {
+				flushApiConversationHistory,
+				flushUiMessages,
+				updateTaskHistory: vi.fn(async () => {}),
+			},
+			postStateToWebview: vi.fn(async () => {}),
+			getCurrentProviderInfo: () => ({
+				providerId: "openai",
+				mode: "act",
+				model: { id: "test-model", info: { capabilities: { contextWindow: 128_000 } } },
+			}),
+			FocusChainManager: undefined,
+			terminalManager: { disposeAll: vi.fn() },
+			urlContentFetcher: { closeBrowser: vi.fn() },
+			clineIgnoreController: { dispose: vi.fn() },
+			taskFileTracker: { dispose: vi.fn() },
+			fileContextTracker: { dispose: vi.fn() },
+			mcpHub: { removeNotificationCallback: vi.fn() },
+			_mcpNotificationCb: undefined,
+			activityStore: { dispose: vi.fn(), waitForPersistence: vi.fn(async () => {}) },
+			browserSession: { dispose: vi.fn(async () => {}) },
+			diffViewProvider: { revertChanges: vi.fn(async () => {}) },
+			presentationScheduler: { dispose: vi.fn(async () => {}) },
+		} as unknown as Task
+
+		await expect(Task.prototype.terminate.call(fakeTask)).resolves.toBeUndefined()
+
+		expect(dispatchRuntime).toHaveBeenCalledWith({ type: "TASK_TERMINATE_REQUESTED" })
+		expect(cancelTaskOwnedCommands).toHaveBeenCalledOnce()
+		expect(flushTaskSnapshot).toHaveBeenCalled()
+		expect(flushApiConversationHistory).toHaveBeenCalled()
+		expect(flushUiMessages).toHaveBeenCalled()
+	})
 })
