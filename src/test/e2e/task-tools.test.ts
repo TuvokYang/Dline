@@ -58,6 +58,95 @@ e2e("Tools - auto-approves a project read and continues with its result", async 
 })
 
 e2e(
+	"Tools - parallel read, write, replace, and command return one complete result batch",
+	async ({ helper, server, sidebar, userDataDir, workspaceDir }) => {
+		e2e.setTimeout(180_000)
+		await helper.signin(sidebar)
+		await setAutoApproveAction(sidebar, "Read project files", true)
+		await setAutoApproveAction(sidebar, "Edit project files", true)
+		await setAutoApproveAction(sidebar, "Execute safe commands", true)
+
+		const writtenRelativePath = "e2e-parallel-written.txt"
+		const writtenPath = path.join(workspaceDir, writtenRelativePath)
+		const replacedRelativePath = "e2e-parallel-replaced.txt"
+		const replacedPath = path.join(workspaceDir, replacedRelativePath)
+		await writeFile(replacedPath, "before\n", "utf8")
+		const toolCalls = [
+			{ id: "call_parallel_read", name: "read_file", arguments: { path: "README.md" } },
+			{
+				id: "call_parallel_write",
+				name: "write_to_file",
+				arguments: { path: writtenRelativePath, content: "parallel write persisted\n" },
+			},
+			{
+				id: "call_parallel_replace",
+				name: "replace_in_file",
+				arguments: {
+					path: replacedRelativePath,
+					diff: "------- SEARCH\nbefore\n=======\nafter\n+++++++ REPLACE",
+				},
+			},
+			{
+				id: "call_parallel_command",
+				name: "execute_command",
+				arguments: {
+					command: `node -e "process.stdout.write('E2E_PARALLEL_COMMAND_STDOUT')"`,
+					workdirectory: ".",
+					requires_approval: false,
+					synchronous: true,
+					timeout: 60,
+				},
+			},
+		] as const
+
+		server.resetOpenAiMock()
+		server.enqueueOpenAiResponses(
+			{ type: "tools", tools: toolCalls },
+			{
+				type: "tool",
+				id: "call_parallel_completion",
+				name: "attempt_completion",
+				arguments: { result: "E2E_PARALLEL_TOOL_RESULTS_OK" },
+				expectedToolResultCount: 4,
+				expectedToolResults: [
+					{ callId: "call_parallel_read", contentIncludes: "# Test Workspace" },
+					{ callId: "call_parallel_write", contentIncludes: "successfully saved" },
+					{ callId: "call_parallel_replace", contentIncludes: "successfully replaced" },
+					{
+						callId: "call_parallel_command",
+						contentIncludes: ["Command executed successfully (exit code 0).", "E2E_PARALLEL_COMMAND_STDOUT"],
+					},
+				],
+			},
+			{
+				type: "error",
+				status: 500,
+				code: "unexpected_additional_request",
+				message: "Unexpected request after parallel tools completed",
+			},
+		)
+
+		await sendTask(sidebar, "Run four independent tools in one parallel response.")
+		await expect(sidebar.getByText("E2E_PARALLEL_TOOL_RESULTS_OK", { exact: false }).last()).toBeVisible({
+			timeout: 90_000,
+		})
+		expect((await readFile(writtenPath, "utf8")).replaceAll("\r\n", "\n")).toBe("parallel write persisted\n")
+		expect((await readFile(replacedPath, "utf8")).replaceAll("\r\n", "\n")).toBe("after\n")
+
+		const consumptions = server.getMockConsumptions("openai-compatible-chat")
+		expect(consumptions).toHaveLength(2)
+		expect(consumptions[0]).toMatchObject({ responseType: "tools", responseToolCalls: toolCalls })
+		expect(consumptions[1].contractError).toBeUndefined()
+		expect(consumptions[1].requestToolResults).toHaveLength(4)
+		for (const tool of toolCalls) {
+			expect(consumptions[1].requestToolResults.filter((result) => result.callId === tool.id)).toHaveLength(1)
+		}
+		await expect(sidebar.getByRole("button", { name: "Copy command" }).last()).toBeVisible()
+		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+	},
+)
+
+e2e(
 	"Tools - project read approval carries the input draft into the continuation",
 	async ({ helper, server, sidebar, userDataDir }) => {
 		e2e.setTimeout(120_000)
