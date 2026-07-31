@@ -110,9 +110,9 @@ function InteractionProbe({ observedTaskIds }: { observedTaskIds: Array<string |
 	)
 }
 
-function outOfSyncInteractionState(revision: number): ExtensionState {
+function outOfSyncInteractionState(revision: number, total = 1): ExtensionState {
 	return {
-		...stateSnapshot({ revision, total: 1 }),
+		...stateSnapshot({ revision, total }),
 		taskViewState: {
 			taskId: "task-1",
 			phase: "awaiting_approval",
@@ -172,6 +172,7 @@ function resumeInteractionState(revision: number): ExtensionState {
 						appearance: "primary",
 						enabled: true,
 						payloadPolicy: "draft",
+						dispatchTarget: "interaction",
 					},
 				],
 			},
@@ -206,6 +207,7 @@ function completionInteractionState(revision: number): ExtensionState {
 						appearance: "primary",
 						enabled: true,
 						payloadPolicy: "draft",
+						dispatchTarget: "interaction",
 					},
 				],
 			},
@@ -291,6 +293,34 @@ describe("ExtensionStateContext persisted message reconciliation", () => {
 		expect(screen.getByLabelText("Interaction draft")).toHaveValue("keep unsent draft")
 		expect(TaskServiceClient.fetchMessage).toHaveBeenCalledTimes(2)
 		expect(TaskServiceClient.fetchMessage).toHaveBeenCalledWith({ referenceIndex: -1, count: 200 })
+	})
+
+	it("walks backward through persisted windows until it finds an older interaction anchor", async () => {
+		const tail = convertClineMessageToProto({ ts: 400, type: "say", say: "text", text: "Latest message" })
+		const ask = convertClineMessageToProto({
+			ts: 100,
+			type: "ask",
+			ask: "qna_respond",
+			text: "Older question",
+			interactionId: "interaction-1",
+		})
+		vi.mocked(TaskServiceClient.fetchMessage)
+			.mockResolvedValueOnce({ messages: [tail], startIndex: 201 })
+			.mockResolvedValueOnce({ messages: [ask], startIndex: 1 })
+		render(
+			<ExtensionStateContextProvider>
+				<InteractionProbe observedTaskIds={[]} />
+			</ExtensionStateContextProvider>,
+		)
+		await waitFor(() => expect(subscriptions.state).toBeDefined())
+
+		act(() => {
+			subscriptions.state?.onResponse({ stateJson: JSON.stringify(outOfSyncInteractionState(1, 401)) })
+		})
+
+		await waitFor(() => expect(screen.getByText("Older question")).toBeVisible())
+		expect(TaskServiceClient.fetchMessage).toHaveBeenNthCalledWith(1, { referenceIndex: -1, count: 200 })
+		expect(TaskServiceClient.fetchMessage).toHaveBeenNthCalledWith(2, { referenceIndex: 1, count: 200 })
 	})
 
 	it("does not let a stale completion say downgrade a realtime completion ask anchor", async () => {

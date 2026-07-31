@@ -393,29 +393,28 @@ export const ExtensionStateContextProvider: React.FC<{
 			if (expectedInteraction) {
 				lastInteractionFetchKeyRef.current = interactionFetchKey(scheduledTaskViewKey, expectedInteraction)
 			}
-			const fetchAttempt = async (remainingAnchorRetries: number): Promise<void> => {
+			const fetchAttempt = async (referenceIndex: number, retryLatestAtStart: boolean): Promise<void> => {
 				try {
-					const resp = await TaskServiceClient.fetchMessage(
-						FetchMessageRequest.create({ referenceIndex: -1, count: 200 }),
-					)
+					const resp = await TaskServiceClient.fetchMessage(FetchMessageRequest.create({ referenceIndex, count: 200 }))
 					if (currentTaskViewKeyRef.current !== scheduledTaskViewKey) {
 						return
 					}
 					const converted = resp.messages.map((message) => convertProtoToClineMessage(message))
 					setClineMessages((prev) => mergeFetchedClineMessagesByTs(prev, converted))
-					setFirstItemIndex(Math.max(0, resp.startIndex))
-					if (
-						expectedInteraction &&
-						!hasExactInteractionAnchor(converted, expectedInteraction) &&
-						remainingAnchorRetries > 0
-					) {
-						await fetchAttempt(remainingAnchorRetries - 1)
+					const startIndex = Math.max(0, resp.startIndex)
+					setFirstItemIndex((current) => (referenceIndex === -1 ? startIndex : Math.min(current, startIndex)))
+					if (expectedInteraction && !hasExactInteractionAnchor(converted, expectedInteraction)) {
+						if (startIndex > 0) {
+							await fetchAttempt(Math.max(0, startIndex - 200), false)
+						} else if (retryLatestAtStart) {
+							await fetchAttempt(-1, false)
+						}
 					}
 				} catch {
 					// State-stream updates can schedule another bounded reconciliation attempt.
 				}
 			}
-			void fetchAttempt(expectedInteraction ? 1 : 0)
+			void fetchAttempt(-1, Boolean(expectedInteraction))
 		}
 
 		if (currentTaskViewKey !== prevRefetchTaskViewKeyRef.current) {

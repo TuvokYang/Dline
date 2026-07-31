@@ -41,6 +41,7 @@ describe("projectTaskView", () => {
 		expect(view.input).toMatchObject({ enabled: true, acceptsText: true })
 		expect(view.input.enterAction).toBe("reject")
 		expect(view.footer.actions.map((action) => action.type)).toEqual(["approve", "reject"])
+		expect(view.footer.actions.every((action) => action.dispatchTarget === "interaction")).toBe(true)
 		expect(view.activeInteraction).toMatchObject({ askMessageTs: 100, taskAsk: "tool" })
 	})
 
@@ -86,7 +87,14 @@ describe("projectTaskView", () => {
 
 		expect(view.input.enabled).toBe(false)
 		expect(view.footer.actions).toEqual([
-			{ type: "cancel", label: "Cancel", appearance: "danger", enabled: true, payloadPolicy: "none" },
+			{
+				type: "cancel",
+				label: "Cancel",
+				appearance: "danger",
+				enabled: true,
+				payloadPolicy: "none",
+				dispatchTarget: "task",
+			},
 		])
 	})
 
@@ -163,7 +171,14 @@ describe("projectTaskView", () => {
 				payloadPolicy: "none",
 				dispatchTarget: "task",
 			},
-			{ type: "cancel", label: "Cancel", appearance: "danger", enabled: true, payloadPolicy: "none" },
+			{
+				type: "cancel",
+				label: "Cancel",
+				appearance: "danger",
+				enabled: true,
+				payloadPolicy: "none",
+				dispatchTarget: "task",
+			},
 		])
 	})
 
@@ -191,7 +206,14 @@ describe("projectTaskView", () => {
 		expect(view.input.enabled).toBe(false)
 		expect(view.activeInteraction).toBeUndefined()
 		expect(view.footer.actions).toEqual([
-			{ type: "cancel", label: "Cancel", appearance: "danger", enabled: false, payloadPolicy: "none" },
+			{
+				type: "cancel",
+				label: "Cancel",
+				appearance: "danger",
+				enabled: false,
+				payloadPolicy: "none",
+				dispatchTarget: "task",
+			},
 		])
 	})
 
@@ -201,7 +223,14 @@ describe("projectTaskView", () => {
 		expect(view.activeInteraction).toBeUndefined()
 		expect(view.input.enabled).toBe(false)
 		expect(view.footer.actions).toEqual([
-			{ type: "cancel", label: "Cancel", appearance: "danger", enabled: true, payloadPolicy: "none" },
+			{
+				type: "cancel",
+				label: "Cancel",
+				appearance: "danger",
+				enabled: true,
+				payloadPolicy: "none",
+				dispatchTarget: "task",
+			},
 		])
 	})
 })
@@ -212,5 +241,13 @@ describe("projectInteraction", () => {
 
 		expect(result.view).toBeUndefined()
 		expect(result.diagnostic?.code).toBe("interaction_anchor_is_say")
+	})
+
+	it("carries an invalid anchor diagnostic into the complete task view", () => {
+		const view = projectTaskView(runtime(TaskPhase.PAUSED, active("tool_approval", "say")))
+
+		expect(view.activeInteraction).toBeUndefined()
+		expect(view.footer.actions).toEqual([])
+		expect(view.diagnostic).toEqual({ code: "interaction_anchor_is_say", interactionId: "interaction-1" })
 	})
 })

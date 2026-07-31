@@ -361,7 +361,13 @@ export interface TaskViewAction {
 	appearance: "primary" | "secondary" | "danger"
 	enabled: boolean
 	payloadPolicy: TaskViewPayloadPolicy
-	dispatchTarget?: "interaction" | "task"
+	dispatchTarget: "interaction" | "task"
+}
+
+/** Diagnostic for an interaction that cannot be projected to its persisted ask anchor. */
+export interface TaskViewDiagnostic {
+	code: "interaction_anchor_missing" | "interaction_anchor_is_say"
+	interactionId: string
 }
 
 /** Input capabilities projected for the current active interaction. */
@@ -397,6 +403,7 @@ export interface TaskViewState {
 	phase: TaskViewPhase
 	stateRevision: number
 	activeInteraction?: ActiveInteractionView
+	diagnostic?: TaskViewDiagnostic
 	input: TaskInputViewState
 	footer: TaskFooterViewState
 }

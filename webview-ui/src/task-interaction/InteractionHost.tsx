@@ -44,6 +44,11 @@ export interface InteractionHostProps {
 
 const EMPTY_DRAFT: InteractionDraft = { text: "", images: [], files: [], activeQuote: null }
 
+const DIAGNOSTIC_MESSAGES = {
+	interaction_anchor_missing: "Dline could not restore the saved interaction message. The task remains saved for recovery.",
+	interaction_anchor_is_say: "Dline found an invalid saved interaction message. The task remains saved for recovery.",
+} as const
+
 type TaskLevelAction = "cancel" | "retry"
 
 async function dispatchTaskAction(action: TaskLevelAction): Promise<void> {
@@ -73,11 +78,16 @@ export function InteractionHost({
 		...view,
 		activeInteraction: undefined,
 		input: { enabled: false, acceptsText: false, acceptsImages: false, acceptsFiles: false },
-		footer: { actions: view.footer.actions.filter((action) => action.type === "cancel" || action.dispatchTarget === "task") },
+		footer: { actions: view.footer.actions.filter((action) => action.dispatchTarget === "task") },
 	}
 
 	return (
 		<section>
+			{view.diagnostic ? (
+				<div className="mx-3.5 mb-1 text-xs text-(--vscode-errorForeground)" role="alert">
+					{DIAGNOSTIC_MESSAGES[view.diagnostic.code]}
+				</div>
+			) : null}
 			{showTimeline &&
 				messages.map((message, index) => {
 					if (message === anchor && supported) {

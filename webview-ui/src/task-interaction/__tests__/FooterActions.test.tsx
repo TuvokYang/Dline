@@ -23,8 +23,22 @@ function approvalView(): TaskViewState {
 		input: { enabled: true, acceptsText: true, acceptsImages: true, acceptsFiles: true },
 		footer: {
 			actions: [
-				{ type: "approve", label: "Approve", appearance: "primary", enabled: true, payloadPolicy: "draft" },
-				{ type: "reject", label: "Reject", appearance: "danger", enabled: true, payloadPolicy: "draft" },
+				{
+					type: "approve",
+					label: "Approve",
+					appearance: "primary",
+					enabled: true,
+					payloadPolicy: "draft",
+					dispatchTarget: "interaction",
+				},
+				{
+					type: "reject",
+					label: "Reject",
+					appearance: "danger",
+					enabled: true,
+					payloadPolicy: "draft",
+					dispatchTarget: "interaction",
+				},
 			],
 		},
 	}
@@ -89,13 +103,36 @@ describe("FooterActions", () => {
 
 		await waitFor(() => expect(dispatch).toHaveBeenCalledOnce())
 		expect(onDraftAccepted).not.toHaveBeenCalled()
+		expect(await screen.findByRole("alert")).toHaveTextContent("Interaction was not accepted: stale interaction")
+		expect(screen.getByRole("button", { name: "Reject" })).toBeEnabled()
+	})
+
+	it("shows an interaction dispatch failure and restores the action", async () => {
+		const dispatch = vi.fn(async () => {
+			throw new Error("dispatch unavailable")
+		})
+		render(<FooterActions dispatch={dispatch} draft={{ text: "keep me", images: [], files: [] }} view={approvalView()} />)
+
+		fireEvent.click(screen.getByRole("button", { name: "Approve" }))
+
+		expect(await screen.findByRole("alert")).toHaveTextContent("dispatch unavailable")
+		await waitFor(() => expect(screen.getByRole("button", { name: "Approve" })).toBeEnabled())
 	})
 
 	it("dispatches projected cancel through the task command boundary", async () => {
 		const view = approvalView()
 		delete view.activeInteraction
 		view.phase = "streaming"
-		view.footer.actions = [{ type: "cancel", label: "Cancel", appearance: "danger", enabled: true, payloadPolicy: "none" }]
+		view.footer.actions = [
+			{
+				type: "cancel",
+				label: "Cancel",
+				appearance: "danger",
+				enabled: true,
+				payloadPolicy: "none",
+				dispatchTarget: "task",
+			},
+		]
 		const dispatchTaskAction = vi.fn(async () => undefined)
 
 		render(
@@ -111,6 +148,38 @@ describe("FooterActions", () => {
 		await waitFor(() => expect(dispatchTaskAction).toHaveBeenCalledWith("cancel"))
 	})
 
+	it("shows a task action dispatch failure and restores the action", async () => {
+		const view = approvalView()
+		delete view.activeInteraction
+		view.phase = "streaming"
+		view.footer.actions = [
+			{
+				type: "cancel",
+				label: "Cancel",
+				appearance: "danger",
+				enabled: true,
+				payloadPolicy: "none",
+				dispatchTarget: "task",
+			},
+		]
+		const dispatchTaskAction = vi.fn(async () => {
+			throw new Error("cancel unavailable")
+		})
+
+		render(
+			<FooterActions
+				dispatch={vi.fn()}
+				dispatchTaskAction={dispatchTaskAction}
+				draft={{ text: "", images: [], files: [] }}
+				view={view}
+			/>,
+		)
+		fireEvent.click(screen.getByRole("button", { name: "Cancel" }))
+
+		expect(await screen.findByRole("alert")).toHaveTextContent("cancel unavailable")
+		await waitFor(() => expect(screen.getByRole("button", { name: "Cancel" })).toBeEnabled())
+	})
+
 	it("keeps the explicit Resume button when Enter can also resume", () => {
 		const view = approvalView()
 		if (!view.activeInteraction) {
@@ -118,7 +187,16 @@ describe("FooterActions", () => {
 		}
 		view.activeInteraction = { ...view.activeInteraction, kind: "resume", presentationKind: "resume", taskAsk: "resume_task" }
 		view.input.enterAction = "resume"
-		view.footer.actions = [{ type: "resume", label: "Resume", appearance: "primary", enabled: true, payloadPolicy: "draft" }]
+		view.footer.actions = [
+			{
+				type: "resume",
+				label: "Resume",
+				appearance: "primary",
+				enabled: true,
+				payloadPolicy: "draft",
+				dispatchTarget: "interaction",
+			},
+		]
 
 		render(<FooterActions dispatch={vi.fn()} draft={{ text: "", images: [], files: [] }} view={view} />)
 

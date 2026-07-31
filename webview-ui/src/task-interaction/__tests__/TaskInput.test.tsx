@@ -33,7 +33,16 @@ function resumeView(): TaskViewState {
 			enterAction: "resume",
 		},
 		footer: {
-			actions: [{ type: "resume", label: "Resume", appearance: "primary", enabled: true, payloadPolicy: "draft" }],
+			actions: [
+				{
+					type: "resume",
+					label: "Resume",
+					appearance: "primary",
+					enabled: true,
+					payloadPolicy: "draft",
+					dispatchTarget: "interaction",
+				},
+			],
 		},
 	}
 }
@@ -80,13 +89,21 @@ describe("TaskInput", () => {
 		}
 		view.input.enterAction = "reply"
 		view.footer.actions = [
-			{ type: "reply", label: "Reply", appearance: "primary", enabled: true, payloadPolicy: "draft" },
+			{
+				type: "reply",
+				label: "Reply",
+				appearance: "primary",
+				enabled: true,
+				payloadPolicy: "draft",
+				dispatchTarget: "interaction",
+			},
 			{
 				type: "start_new_task",
 				label: "Start New Task",
 				appearance: "primary",
 				enabled: true,
 				payloadPolicy: "draft",
+				dispatchTarget: "interaction",
 			},
 		]
 

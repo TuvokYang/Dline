@@ -4,6 +4,7 @@ export type {
 	TaskInputViewState,
 	TaskViewAction,
 	TaskViewActionType,
+	TaskViewDiagnostic,
 	TaskViewPayloadPolicy,
 	TaskViewPhase,
 	TaskViewState,

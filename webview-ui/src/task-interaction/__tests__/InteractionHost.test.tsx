@@ -37,8 +37,22 @@ function taskView(): TaskViewState {
 		input: { enabled: true, acceptsText: true, acceptsImages: true, acceptsFiles: true },
 		footer: {
 			actions: [
-				{ type: "approve", label: "Approve", appearance: "primary", enabled: true, payloadPolicy: "draft" },
-				{ type: "reject", label: "Reject", appearance: "danger", enabled: true, payloadPolicy: "draft" },
+				{
+					type: "approve",
+					label: "Approve",
+					appearance: "primary",
+					enabled: true,
+					payloadPolicy: "draft",
+					dispatchTarget: "interaction",
+				},
+				{
+					type: "reject",
+					label: "Reject",
+					appearance: "danger",
+					enabled: true,
+					payloadPolicy: "draft",
+					dispatchTarget: "interaction",
+				},
 			],
 		},
 	}
@@ -65,7 +79,14 @@ function configureInteraction(
 	}
 	view.input.enterAction = input.enterAction
 	view.footer.actions = [
-		{ type: input.action, label: input.label, appearance: "primary", enabled: true, payloadPolicy: "draft" },
+		{
+			type: input.action,
+			label: input.label,
+			appearance: "primary",
+			enabled: true,
+			payloadPolicy: "draft",
+			dispatchTarget: "interaction",
+		},
 	]
 	return { ...ASK, ask: input.taskAsk, text: input.label }
 }
@@ -177,10 +198,32 @@ describe("InteractionHost", () => {
 		expect(screen.queryByRole("button", { name: "Approve" })).toBeNull()
 	})
 
+	it("renders a backend interaction diagnostic without inventing an action", () => {
+		const view = taskView()
+		delete view.activeInteraction
+		view.input = { enabled: false, acceptsText: false, acceptsImages: false, acceptsFiles: false }
+		view.footer.actions = []
+		view.diagnostic = { code: "interaction_anchor_missing", interactionId: "interaction-1" }
+
+		render(<InteractionHost dispatch={vi.fn()} messages={[SAY]} view={view} />)
+
+		expect(screen.getByRole("alert")).toHaveTextContent("saved interaction message")
+		expect(screen.queryByRole("button")).toBeNull()
+	})
+
 	it("keeps task cancellation available while interaction controls wait for their exact anchor", async () => {
 		const view = taskView()
 		view.phase = "executing"
-		view.footer.actions = [{ type: "cancel", label: "Cancel", appearance: "danger", enabled: true, payloadPolicy: "none" }]
+		view.footer.actions = [
+			{
+				type: "cancel",
+				label: "Cancel",
+				appearance: "danger",
+				enabled: true,
+				payloadPolicy: "none",
+				dispatchTarget: "task",
+			},
+		]
 		render(<InteractionHost dispatch={vi.fn()} messages={[SAY]} view={view} />)
 
 		fireEvent.click(screen.getByRole("button", { name: "Cancel" }))

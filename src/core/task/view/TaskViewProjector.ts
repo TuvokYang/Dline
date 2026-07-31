@@ -16,6 +16,7 @@ const CANCELLING_ACTION: TaskViewAction = {
 	appearance: "danger",
 	enabled: false,
 	payloadPolicy: "none",
+	dispatchTarget: "task",
 }
 
 const CANCEL_ACTION: TaskViewAction = { ...CANCELLING_ACTION, enabled: true }
@@ -57,6 +58,7 @@ export function projectTaskView(
 	}
 
 	const interaction = state.interaction ? projectInteraction(state.interaction, state.revision) : undefined
+	const diagnostic = state.interaction?.status === "opening" ? undefined : interaction?.diagnostic
 	const isCancellable = CANCELLABLE_PHASES.has(state.phase)
 	const interactionIsBeingResolved = state.interaction?.status === "resolving"
 	const actions =
@@ -75,6 +77,7 @@ export function projectTaskView(
 		phase: state.phase,
 		stateRevision: state.revision,
 		activeInteraction: interaction?.view,
+		...(diagnostic ? { diagnostic } : {}),
 		input: interaction?.input ?? { ...DISABLED_INPUT },
 		footer: { actions },
 	}

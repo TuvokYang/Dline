@@ -37,6 +37,7 @@ export function projectInteraction(interaction: Readonly<ActiveInteraction>, sta
 	const actions: TaskViewAction[] = definition.actions.map((action) => ({
 		...action,
 		enabled: interaction.status === "awaiting",
+		dispatchTarget: "interaction",
 	}))
 	return {
 		view: {
