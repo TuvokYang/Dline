@@ -1,4 +1,4 @@
-import { access, readdir, readFile, writeFile } from "node:fs/promises"
+import { access, appendFile, readdir, readFile, writeFile } from "node:fs/promises"
 import * as path from "node:path"
 import { expect, type Frame } from "@playwright/test"
 import { E2ETestHelper, e2e } from "./utils/helpers"
@@ -63,6 +63,27 @@ async function readTaskSnapshot(
 	turn?: { turnId: string; blocks: Array<{ dlineTid: string }> }
 }> {
 	return JSON.parse(await readFile(path.join(dlineDocsDir, "tasks", taskId, "snapshot.json"), "utf8"))
+}
+
+async function appendPersistedTimelineTail(dlineDocsDir: string, taskId: string, count: number): Promise<void> {
+	const messagesPath = path.join(dlineDocsDir, "tasks", taskId, "ui_messages.jsonl")
+	const persisted = await readFile(messagesPath, "utf8")
+	let maxTs = 0
+	for (const line of persisted.split(/\r?\n/)) {
+		if (!line.trim()) continue
+		const message = JSON.parse(line) as { ts?: unknown }
+		if (typeof message.ts === "number") maxTs = Math.max(maxTs, message.ts)
+	}
+	const tail = Array.from({ length: count }, (_, index) =>
+		JSON.stringify({
+			ts: maxTs + index + 1,
+			type: "say",
+			say: "text",
+			text: `E2E_MESSAGE_WINDOW_FILLER_${index + 1}`,
+		}),
+	)
+	const separator = persisted.length > 0 && !persisted.endsWith("\n") ? "\n" : ""
+	await appendFile(messagesPath, `${separator}${tail.join("\n")}\n`, "utf8")
 }
 
 e2e(
@@ -274,6 +295,65 @@ e2e(
 		const continuation = JSON.stringify(server.getOpenAiRequestBodies()[1])
 		expect(continuation).toContain("# Test Workspace")
 		expect(continuation).toContain("E2E_RESTORED_APPROVAL_DRAFT")
+		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+	},
+)
+
+e2e(
+	"History - an approval anchor older than the latest message window remains actionable",
+	async ({ dlineDocsDir, helper, page, server, sidebar, userDataDir }) => {
+		e2e.setTimeout(180_000)
+		await helper.signin(sidebar)
+		await setAutoApproveAction(sidebar, "Read project files", false)
+		server.resetOpenAiMock()
+		server.enqueueOpenAiResponses(
+			{ type: "tool", id: "call_history_older_anchor", name: "read_file", arguments: { path: "README.md" } },
+			{
+				type: "tool",
+				id: "call_history_older_anchor_completion",
+				name: "attempt_completion",
+				arguments: { result: "E2E_OLDER_ANCHOR_APPROVAL_OK" },
+				expectedToolResults: [{ callId: "call_history_older_anchor", contentIncludes: "# Test Workspace" }],
+				expectedRequestIncludes: ["E2E_OLDER_ANCHOR_APPROVAL_DRAFT"],
+			},
+		)
+
+		const taskText = "E2E_OLDER_INTERACTION_ANCHOR_HISTORY_TASK"
+		await sendTask(sidebar, taskText)
+		await expect(sidebar.getByText("Approve", { exact: true })).toBeVisible({ timeout: 60_000 })
+		const [taskId] = await E2ETestHelper.waitForValue(async () => {
+			const ids = await taskDirectoryIds(dlineDocsDir)
+			return ids.length === 1 ? ids : undefined
+		})
+
+		await closeCurrentTask(sidebar)
+		await appendPersistedTimelineTail(dlineDocsDir, taskId, 220)
+		await reopenTask(sidebar, taskText)
+
+		const taskFooter = sidebar.getByRole("contentinfo")
+		const approveButton = taskFooter.getByText("Approve", { exact: true })
+		await expect(approveButton).toBeVisible({ timeout: 30_000 })
+		await expect(taskFooter.getByText("Reject", { exact: true })).toBeVisible()
+		await expect(taskFooter.getByText("Resume", { exact: true })).toHaveCount(0)
+		await page.waitForTimeout(500)
+		expect(server.openAiRequestCount).toBe(1)
+
+		const input = sidebar.getByTestId("chat-input")
+		await expect(input).toBeEnabled()
+		await input.fill("E2E_OLDER_ANCHOR_APPROVAL_DRAFT")
+		await approveButton.click()
+		await expect(sidebar.getByText("E2E_OLDER_ANCHOR_APPROVAL_OK", { exact: false }).last()).toBeVisible({
+			timeout: 60_000,
+		})
+		await expect.poll(() => server.openAiRequestCount).toBe(2)
+		const continuation = server.getMockConsumptions("openai-compatible-chat")[1]
+		expect(continuation.contractError).toBeUndefined()
+		expect(continuation.requestToolResults).toContainEqual(
+			expect.objectContaining({
+				callId: "call_history_older_anchor",
+				content: expect.stringContaining("# Test Workspace"),
+			}),
+		)
 		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
 	},
 )
