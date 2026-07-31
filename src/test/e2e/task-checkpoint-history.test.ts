@@ -1,4 +1,4 @@
-import { access, readdir, readFile } from "node:fs/promises"
+import { access, readdir, readFile, writeFile } from "node:fs/promises"
 import * as path from "node:path"
 import { expect, type Frame } from "@playwright/test"
 import { E2ETestHelper, e2e } from "./utils/helpers"
@@ -599,6 +599,88 @@ e2e(
 				content: expect.stringContaining("successfully saved"),
 			}),
 		)
+		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+	},
+)
+
+e2e(
+	"History - replace survives both pending approval and completed-result Close boundaries",
+	async ({ helper, page, server, sidebar, userDataDir, workspaceDir }) => {
+		e2e.setTimeout(240_000)
+		await helper.signin(sidebar)
+		await setAutoApproveAction(sidebar, "Edit project files", false)
+		const relativePath = "e2e-replace-history.txt"
+		const filePath = path.join(workspaceDir, relativePath)
+		await writeFile(filePath, "before\n", "utf8")
+		server.resetOpenAiMock()
+		server.enqueueOpenAiResponses(
+			{
+				type: "tool",
+				id: "call_history_replace",
+				name: "replace_in_file",
+				arguments: {
+					path: relativePath,
+					diff: "------- SEARCH\nbefore\n=======\nafter\n+++++++ REPLACE",
+				},
+			},
+			{
+				type: "tool",
+				id: "call_history_replace_interrupted_completion",
+				name: "attempt_completion",
+				arguments: { result: "E2E_HISTORY_REPLACE_CLOSED_MUST_NOT_RENDER" },
+				delayMs: 30_000,
+				expectedToolResults: [{ callId: "call_history_replace", contentIncludes: "successfully replaced" }],
+			},
+			{
+				type: "tool",
+				id: "call_history_replace_resumed_completion",
+				name: "attempt_completion",
+				arguments: { result: "E2E_HISTORY_REPLACE_RESUME_OK" },
+				expectedToolResults: [{ callId: "call_history_replace", contentIncludes: "successfully replaced" }],
+				expectedRequestIncludes: [
+					"The previous task session was closed and has now been restored.",
+					"E2E_HISTORY_REPLACE_RESUME_DRAFT",
+				],
+			},
+		)
+
+		const taskText = "E2E_REPLACE_HISTORY_TASK"
+		await sendTask(sidebar, taskText)
+		await expect(sidebar.getByText("Approve", { exact: true })).toBeVisible({ timeout: 60_000 })
+		expect((await readFile(filePath, "utf8")).replaceAll("\r\n", "\n")).toBe("before\n")
+
+		await closeCurrentTask(sidebar)
+		await reopenTask(sidebar, taskText)
+		const taskFooter = sidebar.getByRole("contentinfo")
+		const restoredApprove = taskFooter.getByText("Approve", { exact: true })
+		await expect(restoredApprove).toBeVisible({ timeout: 30_000 })
+		await expect(taskFooter.getByText("Reject", { exact: true })).toBeVisible()
+		await expect(taskFooter.getByText("Resume", { exact: true })).toHaveCount(0)
+		await page.waitForTimeout(500)
+		expect(server.openAiRequestCount).toBe(1)
+
+		await restoredApprove.click()
+		await expect.poll(async () => (await readFile(filePath, "utf8")).replaceAll("\r\n", "\n")).toBe("after\n")
+		await expect.poll(() => server.openAiRequestCount, { timeout: 60_000 }).toBe(2)
+		await closeCurrentTask(sidebar)
+		await reopenTask(sidebar, taskText)
+
+		const resumeButton = taskFooter.getByText("Resume", { exact: true })
+		await expect(resumeButton).toBeVisible({ timeout: 30_000 })
+		await expect(taskFooter.getByText("Approve", { exact: true })).toHaveCount(0)
+		await expect(taskFooter.getByText("Reject", { exact: true })).toHaveCount(0)
+		await expect(sidebar.getByText("E2E_HISTORY_REPLACE_CLOSED_MUST_NOT_RENDER", { exact: false })).toHaveCount(0)
+		const input = sidebar.getByTestId("chat-input")
+		await input.fill("E2E_HISTORY_REPLACE_RESUME_DRAFT")
+		await resumeButton.click()
+		await expect(sidebar.getByText("E2E_HISTORY_REPLACE_RESUME_OK", { exact: false }).last()).toBeVisible({
+			timeout: 60_000,
+		})
+		await expect.poll(() => server.openAiRequestCount).toBe(3)
+		const continuation = server.getMockConsumptions("openai-compatible-chat")[2]
+		expect(continuation.contractError).toBeUndefined()
+		expect(continuation.requestToolResults.filter((result) => result.callId === "call_history_replace")).toHaveLength(1)
+		expect((await readFile(filePath, "utf8")).replaceAll("\r\n", "\n")).toBe("after\n")
 		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
 	},
 )
