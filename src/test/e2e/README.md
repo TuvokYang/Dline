@@ -306,7 +306,7 @@ isolated harness but do not count as product E2E coverage.
 
 ### Task And Model Synchronization
 
-- [ ] Send a chat message through the Webview and assert the mock API response is rendered.
+- [x] Send a chat message through the Webview and assert the mock API response is rendered.
 - [ ] Apply profile context/pricing changes to the active Task immediately.
 - [ ] Rename the active Task profile and verify the Task model display follows the stable profile ID.
 - [ ] Switch a Task-local profile and verify both the displayed profile and context limit change together.
@@ -314,8 +314,8 @@ isolated harness but do not count as product E2E coverage.
 
 ### Tools, Approval, And Continuation
 
-- [ ] Exercise `read_file` with auto-approve and with explicit Approve/Reject interaction.
-- [ ] Exercise `write_to_file` and `replace_in_file` through real tool calls and verify workspace files.
-- [ ] Exercise `execute_command` through real approval, verify command output, and verify completion state.
-- [ ] Cancel a running Task from the Webview and verify the Task can resume from the visible Resume interaction.
-- [ ] Verify approval, retry, cancel, and resume buttons perform their named action instead of only changing UI state.
+- [x] Exercise `read_file` with auto-approve and with explicit Approve/Reject interaction.
+- [x] Exercise `write_to_file` and `replace_in_file` through real tool calls and verify workspace files.
+- [x] Exercise `execute_command` through real approval, verify command output, and verify completion state.
+- [x] Cancel a running Task from the Webview and verify the Task can resume from the visible Resume interaction.
+- [x] Verify approval, retry, cancel, and resume buttons perform their named action instead of only changing UI state.
