@@ -1,4 +1,5 @@
 import { expect, type Frame } from "@playwright/test"
+import { E2E_PROFILE_NAMES } from "./utils/api-profile"
 import { E2ETestHelper, e2e } from "./utils/helpers"
 
 async function sendTask(sidebar: Frame, text: string): Promise<void> {
@@ -37,6 +38,18 @@ async function expectNoDecisionButtons(sidebar: Frame): Promise<void> {
 	for (const label of ["Resume", "Start New Task", "Approve", "Reject", "Acknowledge", "Stop"]) {
 		await expect(taskFooter.getByText(label, { exact: true })).toHaveCount(0)
 	}
+}
+
+async function selectProfile(sidebar: Frame, profileName: string): Promise<void> {
+	const modelSwitcher = sidebar.getByRole("button", { name: "Select model" })
+	if ((await modelSwitcher.innerText()).trim() === profileName) return
+	await modelSwitcher.click()
+	await expect(sidebar.getByText("Available Models", { exact: true })).toBeVisible()
+	const profileOption = sidebar.getByRole("option").filter({ has: sidebar.getByText(profileName, { exact: true }) })
+	await expect(profileOption).toHaveCount(1)
+	await profileOption.click()
+	await expect(modelSwitcher).toHaveText(profileName)
+	await expect(sidebar.getByText("Available Models", { exact: true })).not.toBeVisible()
 }
 
 e2e(
@@ -105,6 +118,66 @@ e2e(
 		await expect(sidebar.getByTestId("chat-input")).toBeEnabled()
 		await page.waitForTimeout(500)
 		expect(server.openAiRequestCount).toBe(3)
+		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+	},
+)
+
+e2e(
+	"Task lifecycle - Cancel after a visible partial stream stops it and resumes exactly once",
+	async ({ helper, server, sidebar, userDataDir }) => {
+		e2e.setTimeout(180_000)
+		await helper.signin(sidebar)
+		await selectProfile(sidebar, E2E_PROFILE_NAMES.mockDeepSeek)
+		server.resetOpenAiMock()
+		server.enqueueResponses(
+			"deepseek-chat",
+			{
+				type: "tool",
+				id: "call_stream_cancelled_before_delivery",
+				name: "attempt_completion",
+				arguments: { result: "E2E_STREAM_CANCELLED_TOOL_MUST_NOT_RENDER" },
+				reasoning: "E2E_STREAM_PARTIAL_BEFORE_CANCEL",
+				afterReasoningDelayMs: 30_000,
+			},
+			{
+				type: "tool",
+				id: "call_stream_cancel_resumed_completion",
+				name: "attempt_completion",
+				arguments: { result: "E2E_STREAM_CANCEL_RESUME_OK" },
+				expectedRequestIncludes: ["E2E_STREAM_CANCEL_RESUME_DRAFT"],
+				expectedRequestExcludes: ["E2E_STREAM_CANCELLED_TOOL_MUST_NOT_RENDER"],
+			},
+		)
+
+		await sendTask(sidebar, "E2E_STREAM_CANCEL_TASK")
+		const partial = sidebar.getByText("E2E_STREAM_PARTIAL_BEFORE_CANCEL", { exact: false })
+		await expect(partial).toHaveCount(1, { timeout: 60_000 })
+		await expect.poll(() => server.getRequestCount("deepseek-chat")).toBe(1)
+
+		const taskFooter = sidebar.getByRole("contentinfo")
+		const cancelButton = taskFooter.getByText("Cancel", { exact: true })
+		await expect(cancelButton).toBeVisible({ timeout: 30_000 })
+		await cancelButton.click()
+
+		const resumeButton = taskFooter.getByText("Resume", { exact: true })
+		await expect(resumeButton).toBeVisible({ timeout: 30_000 })
+		await expect(cancelButton).toHaveCount(0)
+		await expect(sidebar.getByText("E2E_STREAM_CANCELLED_TOOL_MUST_NOT_RENDER", { exact: false })).toHaveCount(0)
+		await expect(partial).toHaveCount(1)
+		expect(server.getRequestCount("deepseek-chat")).toBe(1)
+
+		const input = sidebar.getByTestId("chat-input")
+		await expect(input).toBeEnabled()
+		await input.fill("E2E_STREAM_CANCEL_RESUME_DRAFT")
+		await resumeButton.click()
+		await expect(input).toHaveValue("")
+		await expect(sidebar.getByText("E2E_STREAM_CANCEL_RESUME_DRAFT", { exact: true }).last()).toBeVisible()
+		await expect(sidebar.getByText("E2E_STREAM_CANCEL_RESUME_OK", { exact: false }).last()).toBeVisible({
+			timeout: 60_000,
+		})
+		await expect.poll(() => server.getRequestCount("deepseek-chat")).toBe(2)
+		expect(server.getMockConsumptions("deepseek-chat")[1].contractError).toBeUndefined()
+		await expect(partial).toHaveCount(1)
 		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
 	},
 )
