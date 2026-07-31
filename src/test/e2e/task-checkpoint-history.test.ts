@@ -756,6 +756,88 @@ e2e(
 )
 
 e2e(
+	"History - subagent approval and running execution each restore to an explicit continuation",
+	async ({ helper, page, server, sidebar, userDataDir }) => {
+		e2e.setTimeout(240_000)
+		await helper.signin(sidebar)
+		await setAutoApproveAction(sidebar, "Read project files", false)
+		server.resetOpenAiMock()
+		server.enqueueOpenAiResponses(
+			{
+				type: "tool",
+				id: "call_history_running_subagent",
+				name: "use_subagent",
+				arguments: {
+					agent_name: "default",
+					task: "E2E_RUNNING_SUBAGENT_CLOSE_TASK",
+					context: "Remain active until the parent task is closed.",
+					timeout: 60,
+				},
+			},
+			{
+				type: "tool",
+				id: "call_history_subagent_delayed_completion",
+				name: "attempt_completion",
+				arguments: { result: "E2E_CLOSED_SUBAGENT_MUST_NOT_COMPLETE" },
+				delayMs: 30_000,
+			},
+			{
+				type: "tool",
+				id: "call_history_subagent_resumed_completion",
+				name: "attempt_completion",
+				arguments: { result: "E2E_HISTORY_SUBAGENT_RESUME_OK" },
+				expectedRequestIncludes: [
+					"The previous task session was closed and has now been restored.",
+					"E2E_HISTORY_SUBAGENT_RESUME_DRAFT",
+				],
+			},
+		)
+
+		const taskText = "E2E_SUBAGENT_CLOSE_HISTORY_TASK"
+		await sendTask(sidebar, taskText)
+		await expect(sidebar.getByText("Approve", { exact: true })).toBeVisible({ timeout: 60_000 })
+		await closeCurrentTask(sidebar)
+		await reopenTask(sidebar, taskText)
+		const taskFooter = sidebar.getByRole("contentinfo")
+		const restoredApprove = taskFooter.getByText("Approve", { exact: true })
+		await expect(restoredApprove).toBeVisible({ timeout: 30_000 })
+		await expect(taskFooter.getByText("Resume", { exact: true })).toHaveCount(0)
+		await page.waitForTimeout(500)
+		expect(server.openAiRequestCount).toBe(1)
+
+		await restoredApprove.click()
+		await expect(sidebar.getByText("E2E_RUNNING_SUBAGENT_CLOSE_TASK", { exact: true }).last()).toBeVisible({
+			timeout: 60_000,
+		})
+		await expect.poll(() => server.openAiRequestCount).toBe(2)
+		await closeCurrentTask(sidebar)
+		await reopenTask(sidebar, taskText)
+
+		const resumeButton = taskFooter.getByText("Resume", { exact: true })
+		await expect(resumeButton).toBeVisible({ timeout: 30_000 })
+		await expect(taskFooter.getByText("Approve", { exact: true })).toHaveCount(0)
+		await expect(taskFooter.getByText("Reject", { exact: true })).toHaveCount(0)
+		await expect(sidebar.getByText("E2E_CLOSED_SUBAGENT_MUST_NOT_COMPLETE", { exact: false })).toHaveCount(0)
+		await page.waitForTimeout(750)
+		expect(server.openAiRequestCount).toBe(2)
+
+		const input = sidebar.getByTestId("chat-input")
+		await input.fill("E2E_HISTORY_SUBAGENT_RESUME_DRAFT")
+		await resumeButton.click()
+		await expect(sidebar.getByText("E2E_HISTORY_SUBAGENT_RESUME_OK", { exact: false }).last()).toBeVisible({
+			timeout: 60_000,
+		})
+		await expect.poll(() => server.openAiRequestCount).toBe(3)
+		const continuation = server.getMockConsumptions("openai-compatible-chat")[2]
+		expect(continuation.contractError).toBeUndefined()
+		const results = continuation.requestToolResults.filter((result) => result.callId === "call_history_running_subagent")
+		expect(results).toHaveLength(1)
+		expect(results[0].content).toMatch(/interrupted|cancelled/i)
+		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+	},
+)
+
+e2e(
 	"Task deletion - header delete removes the active task directory",
 	async ({ dlineDocsDir, helper, server, sidebar, userDataDir }) => {
 		e2e.setTimeout(120_000)
