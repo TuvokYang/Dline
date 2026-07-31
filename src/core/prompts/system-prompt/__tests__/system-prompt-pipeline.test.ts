@@ -1,5 +1,5 @@
+import { WINDOWS_POWERSHELL_LEGACY_PATH } from "@utils/shell"
 import { describe, expect, it, vi } from "vitest"
-
 import { PromptProfile } from "../../profiles/types"
 import { PromptScanner } from "../../template/PromptScanner"
 import { assemblePromptFragments } from "../assembly/prompt-fragment-assembler"
@@ -92,6 +92,25 @@ describe("canonical system prompt pipeline", () => {
 		expect(sections.get("rules")).toContain("@CWD@")
 		expect(sections.get("objective")).toContain("@PARALLEL_TOOL_POLICY@")
 		expect(env.CWD).toBe("/workspace/project")
+	})
+
+	it("reports PowerShell as the Windows default terminal shell", () => {
+		const originalPlatform = process.platform
+		try {
+			Object.defineProperty(process, "platform", { value: "win32" })
+			const context = {
+				...BASE_CONTEXT,
+				defaultTerminalProfile: "default",
+				isTesting: false,
+			}
+			const config = createSystemPromptConfig(context)
+
+			const env = prepareSystemRuntimeEnv(context, config)
+
+			expect(env.SHELL).toBe(WINDOWS_POWERSHELL_LEGACY_PATH)
+		} finally {
+			Object.defineProperty(process, "platform", { value: originalPlatform })
+		}
 	})
 
 	it("assembles the stable unresolved template with exact-empty omission and no trimming", () => {
