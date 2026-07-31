@@ -10,7 +10,11 @@ describe("DeepSeek model metadata", () => {
 			ApiFormat.OPENAI_RESPONSES,
 			ApiFormat.ANTHROPIC_CHAT,
 		])
-		expect(deepSeekModels["deepseek-v4-pro"].apiFormats).toEqual([ApiFormat.OPENAI_CHAT, ApiFormat.ANTHROPIC_CHAT])
+		expect(deepSeekModels["deepseek-v4-pro"].apiFormats).toEqual([
+			ApiFormat.OPENAI_CHAT,
+			ApiFormat.OPENAI_RESPONSES,
+			ApiFormat.ANTHROPIC_CHAT,
+		])
 		expect(deepSeekModels["deepseek-v4-flash"].capabilities?.tools).toEqual([ServerTool.WEB_SEARCH])
 	})
 })

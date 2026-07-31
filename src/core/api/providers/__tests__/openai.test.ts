@@ -1,3 +1,4 @@
+import { ApiFormat } from "@shared/proto/dline/models/metadata"
 import { ApiProfile } from "@shared/proto/dline/profile"
 import { BaseProviderConfig } from "@shared/proto/dline/provider/common"
 import { OpenAiProviderConfig } from "@shared/proto/dline/provider/openai"
@@ -187,6 +188,35 @@ describe("OpenAiHandler", () => {
 			expect(requestBody.service_tier).to.equal("priority")
 			expect(requestBody.max_output_tokens).to.equal(16_384)
 			expect(requestBody.reasoning).to.deep.equal({ effort: "high", summary: "auto" })
+		})
+
+		it("routes the unified OpenAI profile from its typed API format", async () => {
+			const config = OpenAiProviderConfig.create({ apiFormat: ApiFormat.OPENAI_RESPONSES })
+			const handler = new OpenAiHandler({
+				profile: ApiProfile.create({
+					provider: "openai",
+					apiKey: "test-api-key",
+					modelId: "gpt-5.6-sol",
+					modelInfo: {
+						id: "gpt-5.6-sol",
+						apiFormats: [ApiFormat.OPENAI_RESPONSES, ApiFormat.OPENAI_CHAT],
+					},
+					openai: config,
+				}),
+				mode: "act",
+			})
+			const chatCreate = vi.fn()
+			const responsesCreate = vi.fn().mockResolvedValue(createAsyncIterable())
+			vi.spyOn(handler as unknown as { ensureClient: () => unknown }, "ensureClient").mockReturnValue({
+				chat: { completions: { create: chatCreate } },
+				responses: { create: responsesCreate },
+			})
+
+			for await (const _chunk of handler.createMessage("system prompt", [{ role: "user", content: "Hello" }])) {
+			}
+
+			expect(chatCreate.mock.calls).to.have.length(0)
+			expect(responsesCreate.mock.calls).to.have.length(1)
 		})
 
 		it.each([

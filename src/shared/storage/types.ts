@@ -29,18 +29,6 @@ export function normalizeOpenAiServiceTier(value?: string): OpenAiServiceTier | 
 	return isOpenAiServiceTier(value) ? value : undefined
 }
 
-export const OPENAI_API_ENDPOINT_OPTIONS = ["chat_completions", "responses"] as const
-
-export type OpenAiApiEndpoint = (typeof OPENAI_API_ENDPOINT_OPTIONS)[number]
-
-export function isOpenAiApiEndpoint(value: unknown): value is OpenAiApiEndpoint {
-	return typeof value === "string" && OPENAI_API_ENDPOINT_OPTIONS.includes(value as OpenAiApiEndpoint)
-}
-
-export function normalizeOpenAiApiEndpoint(value?: string): OpenAiApiEndpoint {
-	return isOpenAiApiEndpoint(value) ? value : "chat_completions"
-}
-
 export type Mode = "plan" | "act"
 
 export interface BlobStoreSettings {

@@ -2,6 +2,7 @@ import { readFile, writeFile } from "node:fs/promises"
 import * as path from "node:path"
 import { expect } from "@playwright/test"
 import type { ElectronApplication } from "playwright"
+import { ApiFormat } from "../../shared/proto/dline/models/metadata"
 import PROVIDERS from "../../shared/providers/providers.json"
 import { E2E_PROFILE_NAMES } from "./utils/api-profile"
 import { E2ETestHelper, e2e } from "./utils/helpers"
@@ -12,6 +13,7 @@ interface StoredProfile {
 	provider: string
 	modelId?: string
 	baseUrl?: string
+	deepseek?: { apiFormat?: string }
 	bedrock?: Record<string, unknown>
 	sapaicore?: Record<string, unknown>
 }
@@ -60,8 +62,7 @@ const API_KEY_LABELS: Partial<Record<string, string>> = {
 	nousResearch: "Nous Research API Key",
 	ollama: "Ollama API Key",
 	"openai-codex": "OpenAI Codex API Key",
-	"openai-native": "OpenAI API Key",
-	openai: "OpenAI Compatible API Key",
+	openai: "OpenAI API Key",
 	openrouter: "OpenRouter API Key",
 	qwen: "Qwen API Key",
 	requesty: "Requesty API Key",
@@ -275,6 +276,20 @@ e2e(
 			return profiles.find((profile) => !existingProfileIds.has(profile.id))?.id
 		})
 		await profileCard.getByRole("combobox", { name: "Provider" }).selectOption("deepseek")
+		await E2ETestHelper.waitUntil(async () => {
+			const profiles = await readJson<StoredProfile[]>(profilesPath)
+			return profiles.find((profile) => profile.id === profileId)?.modelId === "deepseek-v4-pro"
+		})
+
+		const apiFormatSelector = profileCard.getByRole("combobox", { name: "API Format" })
+		await expect(apiFormatSelector).toHaveValue(String(ApiFormat.OPENAI_CHAT))
+		await expect(apiFormatSelector.getByRole("option", { name: "OpenAI Responses" })).toHaveCount(1)
+		await apiFormatSelector.selectOption(String(ApiFormat.OPENAI_RESPONSES))
+		await E2ETestHelper.waitUntil(async () => {
+			const profiles = await readJson<StoredProfile[]>(profilesPath)
+			return profiles.find((profile) => profile.id === profileId)?.deepseek?.apiFormat === "OPENAI_RESPONSES"
+		})
+		await apiFormatSelector.selectOption(String(ApiFormat.OPENAI_CHAT))
 
 		const providerPath = path.join(dlineHomeDir, "providers", "deepseek.json")
 		const catalog = await readJson<ProviderCatalog>(providerPath)

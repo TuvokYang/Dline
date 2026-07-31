@@ -1,15 +1,17 @@
+import { ApiFormat } from "@shared/proto/dline/models/metadata"
 import { describe, expect, it } from "vitest"
 import { anthropicModels } from "./anthropic"
+import { openAiModels } from "./openai"
 import { openAiCodexModels } from "./openai-codex"
-import { openAiNativeModels } from "./openai-native"
 
 describe("provider model tiers", () => {
-	it("defines OpenAI Native 5.6 context and pricing tiers", () => {
+	it("defines OpenAI 5.6 context, pricing tiers, and selectable API formats", () => {
 		for (const modelId of ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]) {
-			const model = openAiNativeModels[modelId]
+			const model = openAiModels[modelId]
 			expect(model?.capabilities?.contextWindow).toBe(272_000)
 			expect(model?.capabilities?.contextWindowTiers?.map((tier) => tier.contextWindow)).toEqual([272_000, 1_050_000])
 			expect(model?.pricing?.tiers).toHaveLength(2)
+			expect(model?.apiFormats).toEqual([ApiFormat.OPENAI_RESPONSES, ApiFormat.OPENAI_CHAT])
 		}
 	})
 

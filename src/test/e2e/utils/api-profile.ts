@@ -6,9 +6,9 @@ import { allProviderModels } from "../../../core/api/providers/models"
 import { getE2EMockProviderBaseUrl } from "../fixtures/server/api"
 
 export const E2E_PROFILE_NAMES = {
-	mockOpenAi: "E2E OpenAI Compatible Chat Mock",
-	mockOpenAiResponses: "E2E OpenAI Compatible Responses Mock",
-	mockOpenAiNative: "E2E OpenAI Native Responses Mock",
+	mockOpenAi: "E2E OpenAI Custom Chat Mock",
+	mockOpenAiResponses: "E2E OpenAI Custom Responses Mock",
+	mockOpenAiOfficialResponses: "E2E OpenAI Official Responses Mock",
 	mockDeepSeek: "E2E DeepSeek Thinking Mock",
 	mockAnthropic: "E2E Anthropic Mock",
 	persistence: "E2E Profile Persistence",
@@ -78,7 +78,7 @@ interface LocalProfileSource {
 const PROFILE_IDS = {
 	mockOpenAi: "dline-e2e-mock-openai",
 	mockOpenAiResponses: "dline-e2e-mock-openai-responses",
-	mockOpenAiNative: "dline-e2e-mock-openai-native",
+	mockOpenAiOfficialResponses: "dline-e2e-mock-openai-official-responses",
 	mockDeepSeek: "dline-e2e-mock-deepseek",
 	mockAnthropic: "dline-e2e-mock-anthropic",
 	persistence: "dline-e2e-profile-persistence",
@@ -124,7 +124,6 @@ const PROVIDER_CONFIG_FIELDS: Record<string, string> = {
 	requesty: "requesty",
 	hicap: "hicap",
 	"openai-codex": "openaiCodex",
-	"openai-native": "openaiNative",
 	gemini: "gemini",
 	nousResearch: "nousResearch",
 	wandb: "wandb",
@@ -138,6 +137,8 @@ function highReasoning() {
 function budgetReasoning(thinkingBudget: number) {
 	return { enableThinking: true, effort: "", thinkingBudget }
 }
+
+type StoredApiFormat = "OPENAI_CHAT" | "OPENAI_RESPONSES" | "ANTHROPIC_CHAT"
 
 function value(env: NodeJS.ProcessEnv, key: string): string | undefined {
 	const candidate = env[key]?.trim()
@@ -156,6 +157,9 @@ function resolveEnvironmentModelId(provider: string, modelToken: string): string
 	const models = allProviderModels[provider]?.models ?? {}
 	const registered = Object.keys(models).find((modelId) => environmentToken(modelId) === modelToken)
 	if (registered) return registered
+	// The unified OpenAI provider retains the former Compatible provider's
+	// free-form model IDs alongside its official catalog.
+	if (provider === "openai") return modelToken.toLowerCase().replaceAll("_", "-")
 	if (Object.keys(models).length > 0) {
 		throw new Error(`No registered ${provider} model matches environment token ${modelToken}`)
 	}
@@ -296,7 +300,8 @@ function openAiProfile(
 	name: string,
 	baseUrl: string,
 	modelId: string,
-	apiEndpoint: "chat_completions" | "responses",
+	apiFormat: Extract<StoredApiFormat, "OPENAI_CHAT" | "OPENAI_RESPONSES">,
+	customModelEnabled = true,
 ): StoredApiProfile {
 	return {
 		id,
@@ -307,7 +312,8 @@ function openAiProfile(
 		usedFor: ["act", "plan", "subagents"],
 		enabled: true,
 		openai: {
-			apiEndpoint,
+			apiFormat,
+			customModelEnabled,
 			reasoning: highReasoning(),
 			streamIncludeUsage: true,
 			capabilities: {
@@ -327,21 +333,6 @@ function openAiProfile(
 	}
 }
 
-function openAiNativeProfile(id: string, name: string, baseUrl: string): StoredApiProfile {
-	return {
-		id,
-		name,
-		provider: "openai-native",
-		baseUrl,
-		modelId: "gpt-5.4-mini",
-		usedFor: ["act", "plan", "subagents"],
-		enabled: true,
-		openaiNative: {
-			reasoning: highReasoning(),
-		},
-	}
-}
-
 function deepSeekProfile(id: string, name: string, baseUrl: string): StoredApiProfile {
 	return {
 		id,
@@ -352,6 +343,7 @@ function deepSeekProfile(id: string, name: string, baseUrl: string): StoredApiPr
 		usedFor: ["act", "plan", "subagents"],
 		enabled: true,
 		deepseek: {
+			apiFormat: "OPENAI_CHAT" satisfies StoredApiFormat,
 			reasoning: highReasoning(),
 		},
 	}
@@ -375,6 +367,16 @@ function anthropicProfile(id: string, name: string, baseUrl: string): StoredApiP
 function liveProfile(configuration: LiveE2EProfile): StoredApiProfile {
 	const providerConfig = allProviderModels[configuration.provider]
 	const providerConfigField = PROVIDER_CONFIG_FIELDS[configuration.provider]
+	const providerSettings = providerConfigField
+		? {
+				[providerConfigField]: {
+					reasoning: highReasoning(),
+					...(configuration.provider === "openai"
+						? { customModelEnabled: providerConfig?.models[configuration.modelId] === undefined }
+						: {}),
+				},
+			}
+		: {}
 	return {
 		id: configuration.profileId,
 		name: configuration.profileName,
@@ -383,7 +385,7 @@ function liveProfile(configuration: LiveE2EProfile): StoredApiProfile {
 		modelId: configuration.modelId,
 		usedFor: ["act", "plan", "subagents"],
 		enabled: true,
-		...(providerConfigField ? { [providerConfigField]: { reasoning: highReasoning() } } : {}),
+		...providerSettings,
 	}
 }
 
@@ -433,7 +435,7 @@ export async function prepareE2EState(options: PrepareE2EStateOptions): Promise<
 		E2E_PROFILE_NAMES.mockOpenAi,
 		getE2EMockProviderBaseUrl(options.mockBaseUrl, "openai-compatible-chat"),
 		"dline-e2e-model",
-		"chat_completions",
+		"OPENAI_CHAT",
 	)
 	upsertProfile(profiles, mockProfile)
 	setApiKey(apiKeys, mockProfile, "dline-e2e-api-key")
@@ -443,18 +445,21 @@ export async function prepareE2EState(options: PrepareE2EStateOptions): Promise<
 		E2E_PROFILE_NAMES.mockOpenAiResponses,
 		getE2EMockProviderBaseUrl(options.mockBaseUrl, "openai-compatible-responses"),
 		"dline-e2e-model",
-		"responses",
+		"OPENAI_RESPONSES",
 	)
 	upsertProfile(profiles, mockResponsesProfile)
 	setApiKey(apiKeys, mockResponsesProfile, "dline-e2e-api-key")
 
-	const mockNativeProfile = openAiNativeProfile(
-		PROFILE_IDS.mockOpenAiNative,
-		E2E_PROFILE_NAMES.mockOpenAiNative,
-		getE2EMockProviderBaseUrl(options.mockBaseUrl, "openai-native-responses"),
+	const mockOfficialResponsesProfile = openAiProfile(
+		PROFILE_IDS.mockOpenAiOfficialResponses,
+		E2E_PROFILE_NAMES.mockOpenAiOfficialResponses,
+		getE2EMockProviderBaseUrl(options.mockBaseUrl, "openai-official-responses"),
+		"gpt-5.4-mini",
+		"OPENAI_RESPONSES",
+		false,
 	)
-	upsertProfile(profiles, mockNativeProfile)
-	setApiKey(apiKeys, mockNativeProfile, "dline-e2e-api-key")
+	upsertProfile(profiles, mockOfficialResponsesProfile)
+	setApiKey(apiKeys, mockOfficialResponsesProfile, "dline-e2e-api-key")
 
 	const mockDeepSeekProfile = deepSeekProfile(
 		PROFILE_IDS.mockDeepSeek,
@@ -477,7 +482,7 @@ export async function prepareE2EState(options: PrepareE2EStateOptions): Promise<
 		E2E_PROFILE_NAMES.persistence,
 		getE2EMockProviderBaseUrl(options.mockBaseUrl, "openai-compatible-chat"),
 		"dline-e2e-model",
-		"chat_completions",
+		"OPENAI_CHAT",
 	)
 	upsertProfile(profiles, persistenceProfile)
 	setApiKey(apiKeys, persistenceProfile, "dline-e2e-api-key")

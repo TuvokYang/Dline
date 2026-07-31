@@ -23,8 +23,8 @@ import { mistralModels } from "./mistral"
 import { moonshotModels } from "./moonshot"
 import { nebiusModels } from "./nebius"
 import { nousResearchModels } from "./nousresearch"
+import { openAiDefaultModelId, openAiModels } from "./openai"
 import { openAiCodexModels } from "./openai-codex"
-import { openAiNativeModels } from "./openai-native"
 import { mainlandQwenModels } from "./qwen-cn"
 import { qwenCodeModels } from "./qwen-code"
 import { internationalQwenModels } from "./qwen-intl"
@@ -78,14 +78,6 @@ export const allProviderModels: Record<string, ProviderModelsConfig> = {
 		billingMode: "token",
 		models: geminiModels,
 		defaultModelId: firstKey(geminiModels),
-	},
-	"openai-native": {
-		provider: "openai-native",
-		providerName: "OpenAI Native",
-		baseUrl: "https://api.openai.com/v1",
-		billingMode: "token",
-		models: openAiNativeModels,
-		defaultModelId: firstKey(openAiNativeModels),
 	},
 	"openai-codex": {
 		provider: "openai-codex",
@@ -286,10 +278,11 @@ export const allProviderModels: Record<string, ProviderModelsConfig> = {
 	},
 	openai: {
 		provider: "openai",
-		providerName: "OpenAI Compatible",
+		providerName: "OpenAI",
 		baseUrl: "https://api.openai.com/v1",
 		billingMode: "token",
-		models: emptyModels,
+		models: openAiModels,
+		defaultModelId: openAiDefaultModelId,
 	},
 	ollama: {
 		provider: "ollama",

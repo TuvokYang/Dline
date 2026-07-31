@@ -209,6 +209,36 @@ describe("ModelRegistry", () => {
 	})
 
 	describe("getProviderModels", () => {
+		it("merges legacy OpenAI native models into the unified OpenAI catalog without exposing a duplicate group", async () => {
+			await fsPromises.writeFile(
+				path.join(tempDir, "openai.json"),
+				JSON.stringify({
+					provider: "openai",
+					providerName: "OpenAI Compatible",
+					billingMode: "token",
+					models: { "custom-model": { id: "custom-model" } },
+				}),
+			)
+			await fsPromises.writeFile(
+				path.join(tempDir, "openai-native.json"),
+				JSON.stringify({
+					provider: "openai-native",
+					providerName: "OpenAI Native",
+					billingMode: "token",
+					defaultModelId: "gpt-5.6-sol",
+					models: { "gpt-5.6-sol": { id: "gpt-5.6-sol" } },
+				}),
+			)
+
+			await registry.initialize()
+
+			const openai = registry.getProviderModels("openai")
+			expect(Object.keys(openai?.models ?? {})).to.include.members(["gpt-5.6-sol", "custom-model"])
+			expect(openai?.provider).to.equal("openai")
+			expect(openai?.providerName).to.equal("OpenAI")
+			expect(registry.getAllModels().filter(({ provider }) => provider.includes("openai"))).to.have.lengthOf(1)
+		})
+
 		it("fills only missing native-tool capability from built-in seed metadata in memory", async () => {
 			const filePath = path.join(tempDir, "anthropic.json")
 			const config = {

@@ -1,4 +1,5 @@
 import type { ModelInfo } from "@shared/api"
+import { ServerTool } from "@shared/proto/dline/models/metadata"
 
 /**
  * Formats a price as a currency string
@@ -38,7 +39,9 @@ export const supportsImages = (modelInfo: ModelInfo): boolean => {
  * Helper function to check if a model supports browser use
  */
 export const supportsBrowserUse = (modelInfo: ModelInfo): boolean => {
-	return !!modelInfo.capabilities?.supportsImages // browser tool uses image recognition
+	const tools = modelInfo.capabilities?.tools as Array<ServerTool | string> | undefined
+	const supportsWebSearch = tools?.some((tool) => tool === ServerTool.WEB_SEARCH || String(tool).toUpperCase() === "WEB_SEARCH")
+	return !!modelInfo.capabilities?.supportsImages || supportsWebSearch === true
 }
 
 /**

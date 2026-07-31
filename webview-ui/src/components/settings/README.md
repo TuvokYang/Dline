@@ -20,7 +20,7 @@ settings/
 │   ├── GeminiProvider.tsx      # Google Gemini configuration
 │   ├── MistralProvider.tsx     # Mistral configuration
 │   ├── OllamaProvider.tsx      # Ollama configuration
-│   ├── OpenAICompatibleProvider.tsx  # OpenAI compatible API configuration
+│   ├── OpenAIProvider.tsx            # Unified OpenAI official/custom API configuration
 │   ├── OpenRouterProvider.tsx  # OpenRouter configuration
 │   └── ...
 └── utils/                       # Utility functions

@@ -111,7 +111,7 @@ e2e("Mock API - emits parallel tool calls with stable identities for every proto
 	const targets = [
 		"openai-compatible-chat",
 		"openai-compatible-responses",
-		"openai-native-responses",
+		"openai-official-responses",
 		"deepseek-chat",
 		"anthropic-messages",
 	] as const
@@ -129,7 +129,7 @@ e2e("Mock API - emits parallel tool calls with stable identities for every proto
 			stream: true,
 			input: "parallel tools",
 		}),
-		post(getE2EMockProviderUrl(server.baseUrl, "openai-native-responses"), {
+		post(getE2EMockProviderUrl(server.baseUrl, "openai-official-responses"), {
 			model: "gpt-5.4-mini",
 			stream: true,
 			input: "parallel tools",
@@ -187,7 +187,7 @@ e2e("Mock API - isolates provider endpoints and emits protocol-native usage", as
 		type: "message",
 		...responses.compatible,
 	})
-	server.enqueueResponses("openai-native-responses", {
+	server.enqueueResponses("openai-official-responses", {
 		type: "message",
 		...responses.native,
 	})
@@ -224,16 +224,16 @@ e2e("Mock API - isolates provider endpoints and emits protocol-native usage", as
 	expect(compatibleResponsesBody).toContain(responses.compatible.text)
 	expect(compatibleResponsesBody).toContain(responses.compatible.reasoning)
 
-	const nativeResponses = await post(getE2EMockProviderUrl(server.baseUrl, "openai-native-responses"), {
+	const officialResponses = await post(getE2EMockProviderUrl(server.baseUrl, "openai-official-responses"), {
 		model: "gpt-5.4-mini",
 		stream: true,
 		reasoning: { effort: "high", summary: "auto" },
 		input: "responses",
 	})
-	expect(nativeResponses.status).toBe(200)
-	const nativeResponsesBody = await nativeResponses.text()
-	expect(nativeResponsesBody).toContain(responses.native.text)
-	expect(nativeResponsesBody).toContain(responses.native.reasoning)
+	expect(officialResponses.status).toBe(200)
+	const officialResponsesBody = await officialResponses.text()
+	expect(officialResponsesBody).toContain(responses.native.text)
+	expect(officialResponsesBody).toContain(responses.native.reasoning)
 
 	const deepseek = await post(getE2EMockProviderUrl(server.baseUrl, "deepseek-chat"), {
 		model: "deepseek-v4-flash",
@@ -266,14 +266,14 @@ e2e("Mock API - isolates provider endpoints and emits protocol-native usage", as
 
 	expect(server.getRequestCount("openai-compatible-chat")).toBe(1)
 	expect(server.getRequestCount("openai-compatible-responses")).toBe(1)
-	expect(server.getRequestCount("openai-native-responses")).toBe(1)
+	expect(server.getRequestCount("openai-official-responses")).toBe(1)
 	expect(server.getRequestCount("deepseek-chat")).toBe(1)
 	expect(server.getRequestCount("anthropic-messages")).toBe(1)
 	const consumptions = server.getMockConsumptions()
 	expect(consumptions.map(({ target, thinking }) => ({ target, thinking }))).toEqual([
 		{ target: "openai-compatible-chat", thinking: { mode: "effort", effort: "high" } },
 		{ target: "openai-compatible-responses", thinking: { mode: "effort", effort: "high" } },
-		{ target: "openai-native-responses", thinking: { mode: "effort", effort: "high" } },
+		{ target: "openai-official-responses", thinking: { mode: "effort", effort: "high" } },
 		{ target: "deepseek-chat", thinking: { mode: "effort", effort: "high" } },
 		{ target: "anthropic-messages", thinking: { mode: "budget", budget: 2048 } },
 	])
@@ -286,7 +286,7 @@ e2e("Mock API - isolates provider endpoints and emits protocol-native usage", as
 	for (const [body, usage, inputKey] of [
 		[chatBody, chatUsage, "prompt_tokens"],
 		[compatibleResponsesBody, compatibleUsage, "input_tokens"],
-		[nativeResponsesBody, nativeUsage, "input_tokens"],
+		[officialResponsesBody, nativeUsage, "input_tokens"],
 		[deepseekBody, deepseekUsage, "prompt_tokens"],
 	] as const) {
 		expect(body).toContain(`"${inputKey}":${totalInputTokens(usage)}`)
@@ -296,7 +296,7 @@ e2e("Mock API - isolates provider endpoints and emits protocol-native usage", as
 	expect(chatBody).toContain(`"completion_tokens":${chatUsage.outputTokens}`)
 	expect(chatBody).toContain(`"reasoning_tokens":${chatUsage.reasoningTokens}`)
 	expect(compatibleResponsesBody).toContain(`"output_tokens":${compatibleUsage.outputTokens}`)
-	expect(nativeResponsesBody).toContain(`"output_tokens":${nativeUsage.outputTokens}`)
+	expect(officialResponsesBody).toContain(`"output_tokens":${nativeUsage.outputTokens}`)
 	expect(deepseekBody).toContain(`"completion_tokens":${deepseekUsage.outputTokens}`)
 	expect(deepseekBody).toContain(`"prompt_cache_hit_tokens":${deepseekUsage.cacheReadTokens ?? 0}`)
 	expect(deepseekBody).toContain(`"prompt_cache_miss_tokens":${deepseekUsage.cacheWriteTokens ?? 0}`)

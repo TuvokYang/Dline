@@ -3,10 +3,12 @@
  */
 
 import type { ModelInfo } from "@shared/api"
+import { ApiFormat } from "@shared/proto/dline/models/metadata"
 
 /** Default ModelInfo for OpenAI-compatible provider */
 export const openAiModelInfoSaneDefaults: ModelInfo = {
 	id: "",
+	apiFormats: [ApiFormat.OPENAI_CHAT, ApiFormat.OPENAI_RESPONSES],
 	capabilities: {
 		supportsImages: true,
 		supportsPromptCache: false,

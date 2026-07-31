@@ -22,6 +22,12 @@ message OpenAiProviderConfig {
   bool stream_include_usage = 9;
   // OpenAI request processing tier (auto/default/flex/scale/priority)
   optional string service_tier = 10;
-  // API endpoint used by OpenAI-compatible providers (chat_completions/responses)
+  // Deprecated compatibility field. New profiles use api_format.
   optional string api_endpoint = 11;
+  // Request protocol selected for this profile.
+  optional dline.models.ApiFormat api_format = 12;
+  // Select the model's long-context tier when available.
+  optional bool enable_long_context = 13;
+  // Apply editable pricing tiers when configured.
+  optional bool pricing_tiers_enabled = 14;
 }

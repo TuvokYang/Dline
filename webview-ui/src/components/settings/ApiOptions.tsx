@@ -38,8 +38,7 @@ import { NebiusProvider } from "./providers/NebiusProvider"
 import { NousResearchProvider } from "./providers/NousresearchProvider"
 import { OcaProvider } from "./providers/OcaProvider"
 import { OllamaProvider } from "./providers/OllamaProvider"
-import { OpenAICompatibleProvider } from "./providers/OpenAICompatible"
-import { OpenAINativeProvider } from "./providers/OpenAINative"
+import { OpenAIProvider } from "./providers/OpenAIProvider"
 import { OpenAiCodexProvider } from "./providers/OpenAiCodexProvider"
 import { OpenRouterProvider } from "./providers/OpenRouterProvider"
 import type { ApiProfile } from "./providers/ProviderProfile"
@@ -420,15 +419,6 @@ const ApiOptions = ({
 				/>
 			)}
 
-			{currentProfile && selectedProvider === "openai-native" && (
-				<OpenAINativeProvider
-					isPopup={isPopup}
-					onUpdate={handleProfileUpdate}
-					profile={currentProfile}
-					showModelOptions={showModelOptions}
-				/>
-			)}
-
 			{currentProfile && selectedProvider === "openai-codex" && (
 				<OpenAiCodexProvider
 					isPopup={isPopup}
@@ -502,7 +492,7 @@ const ApiOptions = ({
 			)}
 
 			{currentProfile && selectedProvider === "openai" && (
-				<OpenAICompatibleProvider
+				<OpenAIProvider
 					isPopup={isPopup}
 					onUpdate={handleProfileUpdate}
 					profile={currentProfile}

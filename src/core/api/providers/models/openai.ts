@@ -1,16 +1,16 @@
 /**
- * OpenAI Native provider model definitions.
+ * OpenAI provider model definitions.
  * Updated from official OpenAI docs (2026-07-05).
  */
 
 import type { ModelInfo } from "@shared/api"
 import { ApiFormat } from "@shared/proto/dline/models/metadata"
 
-export const openAiNativeModels: Record<string, ModelInfo> = {
+export const openAiModels: Record<string, ModelInfo> = {
 	// === Frontier Models ===
 	"gpt-5.6-sol": {
 		id: "gpt-5.6-sol",
-		apiFormats: [ApiFormat.OPENAI_RESPONSES],
+		apiFormats: [ApiFormat.OPENAI_RESPONSES, ApiFormat.OPENAI_CHAT],
 		temperature: 1,
 		capabilities: {
 			supportsTools: true,
@@ -38,7 +38,7 @@ export const openAiNativeModels: Record<string, ModelInfo> = {
 	},
 	"gpt-5.6-terra": {
 		id: "gpt-5.6-terra",
-		apiFormats: [ApiFormat.OPENAI_RESPONSES],
+		apiFormats: [ApiFormat.OPENAI_RESPONSES, ApiFormat.OPENAI_CHAT],
 		temperature: 1,
 		capabilities: {
 			supportsTools: true,
@@ -66,7 +66,7 @@ export const openAiNativeModels: Record<string, ModelInfo> = {
 	},
 	"gpt-5.6-luna": {
 		id: "gpt-5.6-luna",
-		apiFormats: [ApiFormat.OPENAI_RESPONSES],
+		apiFormats: [ApiFormat.OPENAI_RESPONSES, ApiFormat.OPENAI_CHAT],
 		temperature: 1,
 		capabilities: {
 			supportsTools: true,
@@ -94,7 +94,7 @@ export const openAiNativeModels: Record<string, ModelInfo> = {
 	},
 	"gpt-5.5": {
 		id: "gpt-5.5",
-		apiFormats: [ApiFormat.OPENAI_RESPONSES],
+		apiFormats: [ApiFormat.OPENAI_RESPONSES, ApiFormat.OPENAI_CHAT],
 		temperature: 1,
 		capabilities: {
 			supportsTools: true,
@@ -109,7 +109,7 @@ export const openAiNativeModels: Record<string, ModelInfo> = {
 	},
 	"gpt-5.5-pro": {
 		id: "gpt-5.5-pro",
-		apiFormats: [ApiFormat.OPENAI_RESPONSES],
+		apiFormats: [ApiFormat.OPENAI_RESPONSES, ApiFormat.OPENAI_CHAT],
 		temperature: 1,
 		capabilities: {
 			supportsTools: true,
@@ -124,7 +124,7 @@ export const openAiNativeModels: Record<string, ModelInfo> = {
 	},
 	"gpt-5.4": {
 		id: "gpt-5.4",
-		apiFormats: [ApiFormat.OPENAI_RESPONSES],
+		apiFormats: [ApiFormat.OPENAI_RESPONSES, ApiFormat.OPENAI_CHAT],
 		temperature: 1,
 		capabilities: {
 			supportsTools: true,
@@ -139,7 +139,7 @@ export const openAiNativeModels: Record<string, ModelInfo> = {
 	},
 	"gpt-5.4-pro": {
 		id: "gpt-5.4-pro",
-		apiFormats: [ApiFormat.OPENAI_RESPONSES],
+		apiFormats: [ApiFormat.OPENAI_RESPONSES, ApiFormat.OPENAI_CHAT],
 		temperature: 1,
 		capabilities: {
 			supportsTools: true,
@@ -154,7 +154,7 @@ export const openAiNativeModels: Record<string, ModelInfo> = {
 	},
 	"gpt-5.4-mini": {
 		id: "gpt-5.4-mini",
-		apiFormats: [ApiFormat.OPENAI_RESPONSES],
+		apiFormats: [ApiFormat.OPENAI_RESPONSES, ApiFormat.OPENAI_CHAT],
 		temperature: 1,
 		capabilities: {
 			supportsTools: true,
@@ -169,7 +169,7 @@ export const openAiNativeModels: Record<string, ModelInfo> = {
 	},
 	"gpt-5.4-nano": {
 		id: "gpt-5.4-nano",
-		apiFormats: [ApiFormat.OPENAI_RESPONSES],
+		apiFormats: [ApiFormat.OPENAI_RESPONSES, ApiFormat.OPENAI_CHAT],
 		temperature: 1,
 		capabilities: {
 			supportsTools: true,
@@ -184,5 +184,11 @@ export const openAiNativeModels: Record<string, ModelInfo> = {
 	},
 }
 
-/** Default model ID for OpenAI Native provider */
-export const openAiNativeDefaultModelId = "gpt-5.6-sol"
+/** Default model ID for the OpenAI API-key provider. */
+export const openAiDefaultModelId = "gpt-5.6-sol"
+
+/** @deprecated Use openAiModels. Retained for legacy runtime compatibility. */
+export const openAiNativeModels = openAiModels
+
+/** @deprecated Use openAiDefaultModelId. Retained for legacy runtime compatibility. */
+export const openAiNativeDefaultModelId = openAiDefaultModelId

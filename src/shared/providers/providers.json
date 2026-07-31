@@ -14,7 +14,7 @@
 		},
 		{
 			"value": "openai",
-			"label": "OpenAI Compatible"
+			"label": "OpenAI"
 		},
 		{
 			"value": "anthropic",
@@ -31,10 +31,6 @@
 		{
 			"value": "deepseek",
 			"label": "DeepSeek"
-		},
-		{
-			"value": "openai-native",
-			"label": "OpenAI"
 		},
 		{
 			"value": "openrouter",

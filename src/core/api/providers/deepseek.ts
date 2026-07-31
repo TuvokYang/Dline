@@ -8,6 +8,7 @@ import { ClineError } from "@/services/error"
 import { ClineStorageMessage } from "@/shared/messages/content"
 import { fetch } from "@/shared/net"
 import { ApiFormat } from "@/shared/proto/dline/models/metadata"
+import { prioritizeApiFormat, resolveApiFormat } from "@/shared/providers/api-format"
 import { Logger } from "@/shared/services/Logger"
 import { resolveDeepSeekAdaptiveThinking } from "@/shared/utils/reasoning-support"
 import { AccountUsage, ApiHandler, ApiHandlerContext } from "../"
@@ -92,12 +93,7 @@ export class DeepSeekHandler implements ApiHandler {
 	}
 
 	private getSelectedApiFormat(): ApiFormat {
-		const modelFormats = this.getModel().info.apiFormats
-		const selected = this.config?.apiFormat
-		if (selected !== undefined && (!modelFormats?.length || modelFormats.includes(selected))) {
-			return selected
-		}
-		return modelFormats?.[0] ?? ApiFormat.OPENAI_CHAT
+		return resolveApiFormat(this.config?.apiFormat, this.getBaseModel().info, ApiFormat.OPENAI_CHAT)
 	}
 
 	private getThinkingSettings(model: { info: ModelInfo }) {
@@ -298,7 +294,7 @@ export class DeepSeekHandler implements ApiHandler {
 		yield* handleAnthropicMessagesApiStreamResponse(stream)
 	}
 
-	getModel(): { id: string; info: ModelInfo } {
+	private getBaseModel(): { id: string; info: ModelInfo } {
 		const modelId = this.modelId
 		if (modelId && this.modelInfo) {
 			return { id: modelId, info: this.modelInfo }
@@ -314,6 +310,14 @@ export class DeepSeekHandler implements ApiHandler {
 		return {
 			id: deepSeekDefaultModelId,
 			info: deepSeekModels[deepSeekDefaultModelId],
+		}
+	}
+
+	getModel(): { id: string; info: ModelInfo } {
+		const model = this.getBaseModel()
+		return {
+			...model,
+			info: prioritizeApiFormat(model.info, this.getSelectedApiFormat()),
 		}
 	}
 

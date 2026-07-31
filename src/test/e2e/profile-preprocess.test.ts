@@ -8,8 +8,8 @@ interface PreparedProfile {
 	name: string
 	provider?: string
 	baseUrl?: string
-	deepseek?: { reasoning?: { effort?: string } }
-	openai?: { apiEndpoint?: string; reasoning?: { effort?: string } }
+	deepseek?: { apiFormat?: string; reasoning?: { effort?: string } }
+	openai?: { apiFormat?: string; customModelEnabled?: boolean; reasoning?: { effort?: string } }
 }
 
 test("mock E2E profile preprocessing ignores local profiles, secrets, and live environment keys", async () => {
@@ -98,7 +98,7 @@ test("mock E2E profile preprocessing ignores local profiles, secrets, and live e
 			code: "ENOENT",
 		})
 	} finally {
-		await rm(root, { recursive: true, force: true })
+		await rm(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 })
 	}
 })
 
@@ -184,20 +184,23 @@ test("live E2E profile preprocessing copies only api_profiles.json and secrets/*
 		const compatible = profiles.find((profile) => profile.name === "openai:custom-model")
 		expect(deepseek?.deepseek?.reasoning?.effort).toBe("high")
 		expect(compatible?.openai?.reasoning?.effort).toBe("high")
+		expect(compatible?.openai?.customModelEnabled).toBe(true)
 		expect(profiles.some((profile) => profile.name === "Local Profile")).toBe(true)
 		expect(profiles.find((profile) => profile.name === E2E_PROFILE_NAMES.mockOpenAi)).toMatchObject({
 			provider: "openai",
 			baseUrl: "http://127.0.0.1:43210/mock/openai-compatible/chat/v1",
-			openai: { apiEndpoint: "chat_completions" },
+			openai: { apiFormat: "OPENAI_CHAT", customModelEnabled: true },
 		})
 		expect(profiles.find((profile) => profile.name === E2E_PROFILE_NAMES.mockOpenAiResponses)).toMatchObject({
 			provider: "openai",
 			baseUrl: "http://127.0.0.1:43210/mock/openai-compatible/responses/v1",
-			openai: { apiEndpoint: "responses" },
+			openai: { apiFormat: "OPENAI_RESPONSES", customModelEnabled: true },
 		})
-		expect(profiles.find((profile) => profile.name === E2E_PROFILE_NAMES.mockOpenAiNative)).toMatchObject({
-			provider: "openai-native",
-			baseUrl: "http://127.0.0.1:43210/mock/openai-native/v1",
+		expect(profiles.find((profile) => profile.name === E2E_PROFILE_NAMES.mockOpenAiOfficialResponses)).toMatchObject({
+			provider: "openai",
+			baseUrl: "http://127.0.0.1:43210/mock/openai/official/v1",
+			modelId: "gpt-5.4-mini",
+			openai: { apiFormat: "OPENAI_RESPONSES", customModelEnabled: false },
 		})
 		expect(profiles.find((profile) => profile.name === E2E_PROFILE_NAMES.mockAnthropic)).toMatchObject({
 			provider: "anthropic",
@@ -242,7 +245,7 @@ test("live E2E profile preprocessing copies only api_profiles.json and secrets/*
 			welcomeViewCompleted: true,
 		})
 	} finally {
-		await rm(root, { recursive: true, force: true })
+		await rm(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 })
 	}
 })
 

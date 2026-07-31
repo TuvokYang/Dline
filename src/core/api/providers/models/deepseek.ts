@@ -18,7 +18,7 @@ export const deepSeekModels: Record<string, ModelInfo> = {
 			supportsReasoning: true,
 			tools: [ServerTool.WEB_SEARCH],
 		},
-		apiFormats: [ApiFormat.OPENAI_CHAT, ApiFormat.ANTHROPIC_CHAT],
+		apiFormats: [ApiFormat.OPENAI_CHAT, ApiFormat.OPENAI_RESPONSES, ApiFormat.ANTHROPIC_CHAT],
 		pricing: {
 			inputPrice: 3,
 			outputPrice: 6,

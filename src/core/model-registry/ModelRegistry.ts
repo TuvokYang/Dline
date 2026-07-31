@@ -209,14 +209,47 @@ export class ModelRegistry {
 	 * Get models for a specific provider.
 	 */
 	getProviderModels(providerId: string): ProviderModelsConfig | undefined {
+		if (providerId === "openai") {
+			return this.getUnifiedOpenAiConfig()
+		}
 		return this.cache.get(providerId)
+	}
+
+	/** Merge the retired OpenAI Native catalog into the canonical OpenAI provider in memory. */
+	private getUnifiedOpenAiConfig(): ProviderModelsConfig | undefined {
+		const configured = this.cache.get("openai")
+		const legacy = this.cache.get("openai-native")
+		if (!configured && !legacy) {
+			return undefined
+		}
+
+		const seed = getProviderSeedConfig("openai")
+		return {
+			...(seed ?? legacy ?? configured),
+			...legacy,
+			...configured,
+			provider: "openai",
+			providerName: "OpenAI",
+			billingMode: configured?.billingMode ?? seed?.billingMode ?? legacy?.billingMode ?? "token",
+			models: {
+				...(legacy?.models ?? {}),
+				...(seed?.models ?? {}),
+				...(configured?.models ?? {}),
+			},
+			defaultModelId: configured?.defaultModelId ?? legacy?.defaultModelId ?? seed?.defaultModelId,
+		}
 	}
 
 	/**
 	 * Get all loaded provider model configurations.
 	 */
 	getAllProviders(): ProviderModelsConfig[] {
-		return Array.from(this.cache.values())
+		const providers = Array.from(this.cache.entries())
+			.filter(([providerId]) => providerId !== "openai" && providerId !== "openai-native")
+			.map(([, config]) => config)
+		const openai = this.getUnifiedOpenAiConfig()
+		if (openai) providers.push(openai)
+		return providers
 	}
 
 	/**
@@ -235,7 +268,7 @@ export class ModelRegistry {
 			defaultModelId?: string
 		}> = []
 
-		for (const [, config] of this.cache) {
+		for (const config of this.getAllProviders()) {
 			result.push({
 				provider: config.provider,
 				providerName: config.providerName,
@@ -251,6 +284,6 @@ export class ModelRegistry {
 	 * Check if a provider has any models configured.
 	 */
 	hasProvider(providerId: string): boolean {
-		return this.cache.has(providerId) && Object.keys(this.cache.get(providerId)?.models ?? {}).length > 0
+		return Object.keys(this.getProviderModels(providerId)?.models ?? {}).length > 0
 	}
 }

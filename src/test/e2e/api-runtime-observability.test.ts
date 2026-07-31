@@ -243,8 +243,8 @@ const protocolCases = [
 		replaysReasoningInRequestBody: true,
 	},
 	{
-		target: "openai-native-responses" as const,
-		profileName: E2E_PROFILE_NAMES.mockOpenAiNative,
+		target: "openai-official-responses" as const,
+		profileName: E2E_PROFILE_NAMES.mockOpenAiOfficialResponses,
 		contextWindow: 272_000,
 		responseText: "E2E_NATIVE_RESPONSES_USAGE_OK",
 		thinking: { mode: "effort" as const, effort: "high" },

@@ -1,7 +1,9 @@
 import { DefaultAzureCredential, getBearerTokenProvider } from "@azure/identity"
-import { azureOpenAiDefaultApiVersion, ModelInfo, openAiModelInfoSaneDefaults } from "@shared/api"
+import { azureOpenAiDefaultApiVersion, ModelInfo, openAiModelInfoSaneDefaults, openAiModels } from "@shared/api"
+import { ApiFormat } from "@shared/proto/dline/models/metadata"
+import { openAiEndpointToApiFormat, prioritizeApiFormat, resolveApiFormat } from "@shared/providers/api-format"
 import { buildEffectiveModelInfo } from "@shared/providers/effective-model-info"
-import { normalizeOpenAiApiEndpoint, normalizeOpenAiServiceTier, normalizeOpenaiReasoningEffort } from "@shared/storage/types"
+import { normalizeOpenAiServiceTier, normalizeOpenaiReasoningEffort } from "@shared/storage/types"
 import { calculateApiCostOpenAI } from "@utils/cost"
 import OpenAI, { AzureOpenAI } from "openai"
 import type {
@@ -120,8 +122,9 @@ export class OpenAiHandler implements ApiHandler {
 	private get serviceTier() {
 		return normalizeOpenAiServiceTier(this.config?.serviceTier)
 	}
-	private get apiEndpoint() {
-		return normalizeOpenAiApiEndpoint(this.config?.apiEndpoint)
+	private get apiFormat() {
+		const selected = this.config?.apiFormat ?? openAiEndpointToApiFormat(this.config?.apiEndpoint)
+		return resolveApiFormat(selected, this.buildModelInfo(), ApiFormat.OPENAI_CHAT)
 	}
 	private get azureApiVersion() {
 		return this.config?.azureApiVersion
@@ -139,10 +142,16 @@ export class OpenAiHandler implements ApiHandler {
 	 * @returns Effective model metadata for requests and cost calculation.
 	 */
 	private buildModelInfo(): ModelInfo {
-		return buildEffectiveModelInfo(this.modelId, this.modelInfo ?? openAiModelInfoSaneDefaults, {
-			capabilities: this.config?.capabilities,
-			pricing: this.config?.pricing,
-		})
+		return buildEffectiveModelInfo(
+			this.modelId,
+			this.modelInfo ?? openAiModels[this.modelId] ?? openAiModelInfoSaneDefaults,
+			{
+				capabilities: this.config?.capabilities,
+				pricing: this.config?.pricing,
+				enableLongContext: this.config?.enableLongContext,
+				pricingTiersEnabled: this.config?.pricingTiersEnabled,
+			},
+		)
 	}
 
 	private getAzureAudienceScope(baseUrl?: string): string {
@@ -211,7 +220,7 @@ export class OpenAiHandler implements ApiHandler {
 		this.requestController?.abort()
 		const requestController = new AbortController()
 		this.requestController = requestController
-		if (this.apiEndpoint === "responses") {
+		if (this.apiFormat === ApiFormat.OPENAI_RESPONSES || this.apiFormat === ApiFormat.OPENAI_RESPONSES_WEBSOCKET_MODE) {
 			yield* this.createResponsesMessage(systemPrompt, messages, tools, requestController.signal)
 			if (this.requestController === requestController) this.requestController = undefined
 			return
@@ -435,9 +444,10 @@ export class OpenAiHandler implements ApiHandler {
 	}
 
 	getModel(): { id: string; info: ModelInfo } {
+		const info = this.buildModelInfo()
 		return {
 			id: this.modelId,
-			info: this.buildModelInfo(),
+			info: prioritizeApiFormat(info, this.apiFormat),
 		}
 	}
 }

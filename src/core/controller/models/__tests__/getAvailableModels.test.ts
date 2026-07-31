@@ -4,6 +4,7 @@
 
 // sinon import removed: using vitest globals
 import { ModelRegistry } from "@core/model-registry/ModelRegistry"
+import { ApiFormat, ServerTool } from "@shared/proto/dline/models/metadata"
 import { expect } from "chai"
 import { afterEach, beforeEach, describe, it, vi } from "vitest"
 import { getAvailableModels } from "../getAvailableModels"
@@ -198,6 +199,38 @@ describe("getAvailableModels handler", () => {
 		expect(model.capabilities?.supportsPromptCache).to.be.true
 		expect(model.description).to.equal("A model for testing")
 		expect(model.pricing?.currency).to.equal("USD")
+	})
+
+	it("preserves API formats and server-tool capabilities for the Webview catalog", async () => {
+		const mockRegistry = {
+			isInitialized: true,
+			getAllModels: vi.fn().mockReturnValue([
+				{
+					provider: "deepseek",
+					providerName: "DeepSeek",
+					models: [
+						{
+							id: "deepseek-v4-pro",
+							apiFormats: [ApiFormat.OPENAI_CHAT, ApiFormat.OPENAI_RESPONSES, ApiFormat.ANTHROPIC_CHAT],
+							capabilities: {
+								supportsTools: true,
+								supportsStreaming: true,
+								tools: [ServerTool.WEB_SEARCH],
+							},
+						},
+					],
+				},
+			]),
+		}
+		vi.spyOn(ModelRegistry, "getInstance").mockReturnValue(mockRegistry as any)
+
+		const response = await getAvailableModels({} as any)
+		const model = response.providers[0]?.models[0]
+
+		expect(model?.apiFormats).to.deep.equal([ApiFormat.OPENAI_CHAT, ApiFormat.OPENAI_RESPONSES, ApiFormat.ANTHROPIC_CHAT])
+		expect(model?.capabilities?.supportsTools).to.equal(true)
+		expect(model?.capabilities?.supportsStreaming).to.equal(true)
+		expect(model?.capabilities?.tools).to.deep.equal([ServerTool.WEB_SEARCH])
 	})
 
 	it("should handle empty model list gracefully", async () => {

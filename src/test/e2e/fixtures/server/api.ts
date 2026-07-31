@@ -13,10 +13,10 @@ export const E2E_MOCK_PROVIDER_ROUTES = {
 		endpoint: "/responses",
 		auth: "bearer",
 	},
-	"openai-native-responses": {
-		provider: "openai-native",
+	"openai-official-responses": {
+		provider: "openai",
 		protocol: "openai-responses",
-		basePath: "/mock/openai-native/v1",
+		basePath: "/mock/openai/official/v1",
 		endpoint: "/responses",
 		auth: "bearer",
 	},

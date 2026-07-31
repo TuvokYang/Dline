@@ -17,7 +17,9 @@ import {
 import { EmptyRequest } from "@shared/proto/dline/common"
 import { ApiProfile, ApiProfilesResponse } from "@shared/proto/dline/profile"
 import { BedrockProviderConfig } from "@shared/proto/dline/provider/bedrock"
+import { OpenAiProviderConfig } from "@shared/proto/dline/provider/openai"
 import { SapAiCoreProviderConfig } from "@shared/proto/dline/provider/sapaicore"
+import { openAiEndpointToApiFormat } from "@shared/providers/api-format"
 import {
 	canStoreRegistryModelInfoOverrides,
 	getModelInfoOverrideFields,
@@ -163,6 +165,42 @@ export function normalizeApiProfile(profile: unknown): ApiProfile {
 		if (rawModelInfo && typeof rawModelInfo === "object") {
 			normalized.modelInfo = rawModelInfo as ApiProfile["modelInfo"]
 		}
+	}
+
+	let migrated = false
+	if (normalized.provider === "openai-native") {
+		const legacy = normalized.openaiNative
+		normalized.provider = "openai"
+		normalized.openai = OpenAiProviderConfig.create({
+			reasoning: legacy?.reasoning,
+			customModelEnabled: legacy?.customModelEnabled,
+			capabilities: legacy?.capabilities,
+			pricing: legacy?.pricing,
+			streamIncludeUsage: true,
+			serviceTier: legacy?.serviceTier,
+			apiFormat: legacy?.apiFormat,
+			enableLongContext: legacy?.enableLongContext,
+			pricingTiersEnabled: legacy?.pricingTiersEnabled,
+		})
+		normalized.openaiNative = undefined
+		migrated = true
+	}
+
+	const openai = normalized.openai
+	if (openai && openai.apiFormat === undefined) {
+		const legacyApiFormat = openAiEndpointToApiFormat(openai.apiEndpoint)
+		if (legacyApiFormat !== undefined) {
+			normalized.openai = OpenAiProviderConfig.create({
+				...openai,
+				apiEndpoint: undefined,
+				apiFormat: legacyApiFormat,
+			})
+			migrated = true
+		}
+	}
+
+	if (migrated) {
+		needsCleanRewrite = true
 	}
 	return normalized
 }
@@ -522,10 +560,11 @@ async function migrateFromProviders(controller: Controller): Promise<ApiProfile[
 
 		if (!config.models || typeof config.models !== "object" || Object.keys(config.models).length === 0) continue
 
-		const providerName = config.provider || providerId
+		const legacyProviderName = config.provider || providerId
+		const providerName = legacyProviderName === "openai-native" ? "openai" : legacyProviderName
 
 		// Only migrate providers that have an API key in legacy flat secrets
-		const secretFields = ProviderToApiKeyMap[providerName as keyof typeof ProviderToApiKeyMap]
+		const secretFields = ProviderToApiKeyMap[legacyProviderName as keyof typeof ProviderToApiKeyMap]
 		if (!secretFields) continue
 
 		const fields = Array.isArray(secretFields) ? secretFields : [secretFields]

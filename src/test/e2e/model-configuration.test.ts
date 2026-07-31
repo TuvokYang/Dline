@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises"
 import * as path from "node:path"
 import { expect, type Frame, type Locator, type Page } from "@playwright/test"
 import type { ElectronApplication } from "playwright"
+import { ApiFormat } from "../../shared/proto/dline/models/metadata"
 import { E2E_PROFILE_NAMES } from "./utils/api-profile"
 import { E2ETestHelper, e2e } from "./utils/helpers"
 import { startSettingControlStabilityObserver, stopSettingControlStabilityObserver } from "./utils/ui-stability"
@@ -13,7 +14,8 @@ interface StoredProfile {
 	modelId: string
 	baseUrl?: string
 	openai?: {
-		apiEndpoint?: string
+		apiFormat?: string
+		customModelEnabled?: boolean
 		serviceTier?: string
 		azureApiVersion?: string
 		azureIdentity?: boolean
@@ -148,15 +150,31 @@ e2e(
 			await helper.signin(firstSidebar)
 			await openApiSettings(firstPage, firstSidebar)
 
+			const officialCard = await openModelConfiguration(firstSidebar, E2E_PROFILE_NAMES.mockOpenAiOfficialResponses)
+			await expect(officialCard.locator("vscode-dropdown#model-id")).toContainText("gpt-5.4-mini")
+			const officialApiFormat = officialCard.getByRole("combobox", { name: "API Format" })
+			await expect(officialApiFormat).toHaveValue(String(ApiFormat.OPENAI_RESPONSES))
+			await officialApiFormat.selectOption(String(ApiFormat.OPENAI_CHAT))
+			await waitForProfile(
+				dlineDir,
+				E2E_PROFILE_NAMES.mockOpenAiOfficialResponses,
+				(profile) => profile.openai?.apiFormat === "OPENAI_CHAT",
+			)
+			await officialApiFormat.selectOption(String(ApiFormat.OPENAI_RESPONSES))
+			await waitForProfile(
+				dlineDir,
+				E2E_PROFILE_NAMES.mockOpenAiOfficialResponses,
+				(profile) => profile.openai?.apiFormat === "OPENAI_RESPONSES",
+			)
+
 			const card = await openModelConfiguration(firstSidebar, profileName)
 			await setPlaceholderField(card, "Enter base URL...", "https://compatible.example.test/v1")
 			await setPlaceholderField(card, "Enter Model ID...", "e2e-compatible-custom")
-			const endpointSelector = card.getByRole("combobox", { name: "API Endpoint" })
-			await expect(endpointSelector).toContainText("Chat Completions")
-			await endpointSelector.click()
-			await firstSidebar.getByRole("option", { name: "Responses", exact: true }).click()
-			await expect(endpointSelector).toContainText("Responses")
-			await waitForProfile(dlineDir, profileName, (profile) => profile.openai?.apiEndpoint === "responses")
+			const apiFormatSelector = card.getByRole("combobox", { name: "API Format" })
+			await expect(apiFormatSelector).toHaveValue(String(ApiFormat.OPENAI_CHAT))
+			await apiFormatSelector.selectOption(String(ApiFormat.OPENAI_RESPONSES))
+			await expect(apiFormatSelector).toHaveValue(String(ApiFormat.OPENAI_RESPONSES))
+			await waitForProfile(dlineDir, profileName, (profile) => profile.openai?.apiFormat === "OPENAI_RESPONSES")
 
 			await startSettingControlStabilityObserver(
 				firstSidebar,
@@ -194,6 +212,7 @@ e2e(
 				(profile) =>
 					profile.baseUrl === "https://compatible.example.test/v1" &&
 					profile.modelId === "e2e-compatible-custom" &&
+					profile.openai?.customModelEnabled === true &&
 					profile.openai?.capabilities?.contextWindow === 234_567 &&
 					profile.openai.capabilities.maxTokens === 32_768 &&
 					profile.openai.capabilities.supportsPromptCache === true &&
@@ -260,7 +279,9 @@ e2e(
 			await expect(reopenedCard.locator('vscode-text-field[placeholder="Enter Model ID..."] input')).toHaveValue(
 				"e2e-compatible-custom",
 			)
-			await expect(reopenedCard.getByRole("combobox", { name: "API Endpoint" })).toContainText("Responses")
+			await expect(reopenedCard.getByRole("combobox", { name: "API Format" })).toHaveValue(
+				String(ApiFormat.OPENAI_RESPONSES),
+			)
 			await expect(reopenedCard.getByRole("textbox", { name: "Context Window Size" })).toHaveValue("234567")
 			await expect(reopenedCard.getByRole("textbox", { name: "Max Output Tokens" })).toHaveValue("32768")
 			await expect(reopenedCard.getByRole("textbox", { name: "Input Price ($/1M tokens)" })).toHaveValue("1.25")

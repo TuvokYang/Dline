@@ -29,8 +29,7 @@ import { NebiusProvider } from "./NebiusProvider"
 import { NousResearchProvider } from "./NousresearchProvider"
 import { OcaProvider } from "./OcaProvider"
 import { OllamaProvider } from "./OllamaProvider"
-import { OpenAICompatibleProvider } from "./OpenAICompatible"
-import { OpenAINativeProvider } from "./OpenAINative"
+import { OpenAIProvider } from "./OpenAIProvider"
 import { OpenAiCodexProvider } from "./OpenAiCodexProvider"
 import { OpenRouterProvider } from "./OpenRouterProvider"
 import type { ApiProfile } from "./ProviderProfile"
@@ -96,14 +95,7 @@ const ApiProfileEditor: React.FC<ApiProfileEditorProps> = ({ profile, isPopup, o
 		case "gemini":
 			return <GeminiProvider isPopup={isPopup} onUpdate={onUpdate} profile={profile} showModelOptions={showModelOptions} />
 		case "openai":
-			return (
-				<OpenAICompatibleProvider
-					isPopup={isPopup}
-					onUpdate={onUpdate}
-					profile={profile}
-					showModelOptions={showModelOptions}
-				/>
-			)
+			return <OpenAIProvider isPopup={isPopup} onUpdate={onUpdate} profile={profile} showModelOptions={showModelOptions} />
 		case "anthropic":
 			return (
 				<AnthropicProvider isPopup={isPopup} onUpdate={onUpdate} profile={profile} showModelOptions={showModelOptions} />
@@ -115,15 +107,6 @@ const ApiProfileEditor: React.FC<ApiProfileEditorProps> = ({ profile, isPopup, o
 		case "deepseek":
 			return (
 				<DeepSeekProvider isPopup={isPopup} onUpdate={onUpdate} profile={profile} showModelOptions={showModelOptions} />
-			)
-		case "openai-native":
-			return (
-				<OpenAINativeProvider
-					isPopup={isPopup}
-					onUpdate={onUpdate}
-					profile={profile}
-					showModelOptions={showModelOptions}
-				/>
 			)
 		case "openrouter":
 			return (
