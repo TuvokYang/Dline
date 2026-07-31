@@ -63,7 +63,8 @@ export function combineErrorRetryMessages(messages: ClineMessage[]): ClineMessag
 				}
 				if (laterMessage.say === "api_req_started") {
 					hasApiReqStartedBefore = true
-					break
+					hasRetryStarted = true
+					continue
 				}
 				if (hasRetryStarted && (laterMessage.conversationHistoryIndex ?? 0) > conversationHistoryIndex) {
 					hasRecoveredConversation = true
