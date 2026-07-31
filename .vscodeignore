@@ -29,6 +29,17 @@ biome.jsonc
 knip.json
 .gitmodules
 .env.example
+esbuild.mjs
+go.work.sum
+tsconfig.tsbuildinfo
+.worktreeinclude
+CHANGELOG_OLD.md
+README_en.md
+SECURITY.md
+implementation_plan.md
+
+# proto
+proto/
 
 # cli
 cli/**
@@ -65,6 +76,11 @@ webview-ui/README.md
 webview-ui/package.json
 webview-ui/package-lock.json
 webview-ui/node_modules/**
+webview-ui/.vite-port
+webview-ui/.storybook/**
+webview-ui/components.json
+webview-ui/tailwind.config.mjs
+webview-ui/tsconfig*.json
 **/.gitignore
 
 # Ignore docs
@@ -79,7 +95,10 @@ old_docs/**
 !src/integrations/theme/default-themes/**
 
 # Include icons
-!assets/icons/**
+assets/icons/**
+!assets/icons/icon.png
+!assets/icons/icon.svg
+!assets/icons/cline-bot.woff
 
 # Ignore E2E build files
 e2e-build.mjs
@@ -89,6 +108,7 @@ test-results/
 # Ignore SDK and temp files
 tmp_sdk_check/
 tmp/
+dist/tmp/
 # Ignore tests
 tests/
 
