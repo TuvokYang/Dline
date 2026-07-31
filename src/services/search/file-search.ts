@@ -48,11 +48,10 @@ export async function executeRipgrepForFiles(
 			"--hidden",
 			"-g",
 			"!**/{node_modules,.git,.github,out,dist,__pycache__,.venv,.env,venv,env,.cache,tmp,temp}/**",
-			workspacePath,
 		]
 
 		// Spawn the ripgrep process with the specified arguments
-		const rgProcess = getSpawnFunction()(rgPath, args)
+		const rgProcess = getSpawnFunction()(rgPath, args, { cwd: workspacePath })
 		const rl = readline.createInterface({ input: rgProcess.stdout })
 
 		// Array to store file results and Set to track unique directories
@@ -69,8 +68,9 @@ export async function executeRipgrepForFiles(
 				return
 			}
 
-			// Convert absolute path to a relative path from workspace root
-			const relativePath = path.relative(workspacePath, line)
+			// Ripgrep normally emits paths relative to cwd. Keep compatibility with
+			// hosts that return an absolute path.
+			const relativePath = path.isAbsolute(line) ? path.relative(workspacePath, line) : path.normalize(line)
 
 			// Add file result to array
 			fileResults.push({

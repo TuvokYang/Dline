@@ -3,6 +3,10 @@ import * as path from "node:path"
 import { Logger } from "../services/Logger"
 import { ClineSyncStorage } from "./ClineStorage"
 
+const ATOMIC_RENAME_MAX_ATTEMPTS = 3
+const ATOMIC_RENAME_RETRY_DELAYS_MS = [10, 25] as const
+const RETRYABLE_ATOMIC_RENAME_CODES = new Set(["EPERM", "EACCES", "EBUSY"])
+
 export interface ClineFileStorageOptions {
 	/**
 	 * File permissions mode (e.g., 0o600 for owner read/write only).
@@ -49,20 +53,22 @@ export class ClineFileStorage<T = any> extends ClineSyncStorage<T> {
 	 * since it only writes to disk once.
 	 */
 	public setBatch(entries: Record<string, T | undefined>): Thenable<void> {
+		const nextData = { ...this.data }
 		const changedKeys: string[] = []
 		for (const [key, value] of Object.entries(entries)) {
 			if (value === undefined) {
-				if (key in this.data) {
-					delete this.data[key]
+				if (key in nextData) {
+					delete nextData[key]
 					changedKeys.push(key)
 				}
 			} else {
-				this.data[key] = value
+				nextData[key] = value
 				changedKeys.push(key)
 			}
 		}
 		if (changedKeys.length > 0) {
-			this.writeToDisk()
+			this.writeToDisk(nextData)
+			this.data = nextData
 			for (const key of changedKeys) {
 				this.fireChange(key)
 			}
@@ -85,13 +91,33 @@ export class ClineFileStorage<T = any> extends ClineSyncStorage<T> {
 		return {}
 	}
 
-	private writeToDisk(): void {
+	private writeToDisk(data: Record<string, T>): void {
 		try {
 			const dir = path.dirname(this.fsPath)
 			fs.mkdirSync(dir, { recursive: true })
-			atomicWriteFileSync(this.fsPath, JSON.stringify(this.data, null, 2), this.fileMode)
+			atomicWriteFileSync(this.fsPath, JSON.stringify(data, null, 2), this.fileMode)
 		} catch (error) {
 			Logger.error(`[${this.name}] failed to write to ${this.fsPath}:`, error)
+			throw error
+		}
+	}
+}
+
+function waitForAtomicRenameRetry(delayMs: number): void {
+	Atomics.wait(new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT)), 0, 0, delayMs)
+}
+
+function renameAtomicFileSync(sourcePath: string, destinationPath: string): void {
+	for (let attempt = 1; attempt <= ATOMIC_RENAME_MAX_ATTEMPTS; attempt++) {
+		try {
+			fs.renameSync(sourcePath, destinationPath)
+			return
+		} catch (error) {
+			const code = (error as NodeJS.ErrnoException).code
+			if (!code || !RETRYABLE_ATOMIC_RENAME_CODES.has(code) || attempt === ATOMIC_RENAME_MAX_ATTEMPTS) {
+				throw error
+			}
+			waitForAtomicRenameRetry(ATOMIC_RENAME_RETRY_DELAYS_MS[attempt - 1] ?? 0)
 		}
 	}
 }
@@ -108,8 +134,7 @@ function atomicWriteFileSync(filePath: string, data: string, mode?: fs.Mode | un
 			encoding: "utf-8",
 			mode,
 		})
-		// Rename temp file to target (atomic in most cases)
-		fs.renameSync(tmpPath, filePath)
+		renameAtomicFileSync(tmpPath, filePath)
 	} catch (error) {
 		// Clean up temp file if it exists
 		try {
