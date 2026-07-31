@@ -6,6 +6,7 @@ import { E2ETestHelper, e2e } from "./utils/helpers"
 
 interface StoredSettings {
 	chatInputSendShortcut?: string
+	defaultTerminalProfile?: string
 	terminalCommandTimeoutSeconds?: number
 	terminalOutputLineLimit?: number
 	vscodeTerminalExecutionMode?: string
@@ -198,5 +199,81 @@ e2e(
 			await reopenedApp?.close()
 			await firstApp?.close()
 		}
+	},
+)
+
+e2e(
+	"Terminal - foreground VS Code terminal executes with the configured Windows shell",
+	async ({ dlineDir, helper, page, server, sidebar, userDataDir }) => {
+		e2e.skip(process.platform !== "win32", "Configured Windows shell execution requires Windows")
+		e2e.setTimeout(180_000)
+		await helper.signin(sidebar)
+		await openSettings(page, sidebar)
+		await sidebar.getByTestId("tab-terminal").click()
+		await setDropdownValue(sidebar, sidebar.locator("#terminal-execution-mode"), "backgroundExec", "Background Exec")
+		await setDropdownValue(sidebar, sidebar.locator("#terminal-execution-mode"), "vscodeTerminal", "VS Code Terminal")
+		await setDropdownValue(sidebar, sidebar.locator("#default-terminal-profile"), "powershell-legacy", "Windows PowerShell")
+		await expect
+			.poll(async () => await readGlobalState(dlineDir))
+			.toMatchObject({
+				defaultTerminalProfile: "powershell-legacy",
+				vscodeTerminalExecutionMode: "vscodeTerminal",
+			})
+
+		server.resetOpenAiMock()
+		server.enqueueOpenAiResponses(
+			{
+				type: "tool",
+				id: "call_vscode_powershell",
+				name: "execute_command",
+				arguments: {
+					command:
+						'Write-Output "E2E_VSCODE_POWERSHELL_OK"; Write-Output "E2E_PS_EDITION=$($PSVersionTable.PSEdition)"',
+					workdirectory: ".",
+					requires_approval: true,
+					synchronous: true,
+					timeout: 60,
+				},
+			},
+			{
+				type: "tool",
+				id: "call_vscode_powershell_completion",
+				name: "attempt_completion",
+				arguments: { result: "E2E_VSCODE_POWERSHELL_COMPLETE" },
+				expectedToolResults: [
+					{
+						callId: "call_vscode_powershell",
+						contentIncludes: [
+							"Command executed successfully (exit code 0).",
+							"E2E_VSCODE_POWERSHELL_OK",
+							"E2E_PS_EDITION=Desktop",
+						],
+					},
+				],
+			},
+		)
+
+		await returnToChat(sidebar)
+		const input = sidebar.getByTestId("chat-input")
+		await input.fill("Run the configured foreground PowerShell command.")
+		await sidebar.getByTestId("send-button").click()
+		const approveButton = sidebar.getByText("Approve", { exact: true })
+		await expect(approveButton).toBeVisible({ timeout: 60_000 })
+		await approveButton.click()
+
+		await expect(sidebar.getByText("E2E_VSCODE_POWERSHELL_COMPLETE", { exact: false }).last()).toBeVisible({
+			timeout: 60_000,
+		})
+		await expect.poll(() => server.openAiRequestCount).toBe(2)
+		const continuation = server.getMockConsumptions("openai-compatible-chat")[1]
+		expect(continuation.requestToolResults).toContainEqual(
+			expect.objectContaining({
+				callId: "call_vscode_powershell",
+				content: expect.stringContaining("E2E_PS_EDITION=Desktop"),
+			}),
+		)
+		const output = await E2ETestHelper.readDlineOutput(userDataDir)
+		expect(output).toContain("[TerminalManager] Running command")
+		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
 	},
 )
