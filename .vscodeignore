@@ -22,6 +22,14 @@ eslint-rules/**
 .husky/**
 .env
 
+# Development, build, and test tooling
+scripts/**
+testing-platform/**
+biome.jsonc
+knip.json
+.gitmodules
+.env.example
+
 # cli
 cli/**
 
