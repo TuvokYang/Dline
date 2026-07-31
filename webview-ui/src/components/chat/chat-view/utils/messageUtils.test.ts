@@ -56,6 +56,26 @@ describe("resolveApiErrorMessage", () => {
 		expect(resolved).toBe("API request failed")
 	})
 
+	it("does not attach the projected error interaction to an earlier request row", () => {
+		const resolved = resolveApiErrorMessage({
+			isLast: false,
+			lastModifiedMessage: { type: "ask", ask: "api_req_failed", text: "API request failed", ts: 2 },
+			taskViewState: createErrorTaskViewState(),
+		})
+
+		expect(resolved).toBeUndefined()
+	})
+
+	it("does not attach a projected error before its presentation message is synchronized", () => {
+		const resolved = resolveApiErrorMessage({
+			isLast: true,
+			lastModifiedMessage: { type: "ask", ask: "api_req_failed", text: "Previous API error", ts: 1 },
+			taskViewState: createErrorTaskViewState(),
+		})
+
+		expect(resolved).toBeUndefined()
+	})
+
 	it("keeps legacy api_req_failed message when snapshot-first message is unavailable", () => {
 		const resolved = resolveApiErrorMessage({
 			isLast: true,

@@ -59,11 +59,20 @@ interface ApiErrorMessageInput {
  * Resolve the API error text for request rows.
  */
 export function resolveApiErrorMessage(input: ApiErrorMessageInput): string | undefined {
-	if (input.taskViewState?.activeInteraction?.taskAsk === "api_req_failed") {
-		return input.lastModifiedMessage?.text
+	if (!input.isLast) {
+		return undefined
 	}
 
-	if (input.isLast && input.lastModifiedMessage?.ask === "api_req_failed") {
+	const activeInteraction = input.taskViewState?.activeInteraction
+	if (
+		activeInteraction?.taskAsk === "api_req_failed" &&
+		input.lastModifiedMessage?.ask === "api_req_failed" &&
+		activeInteraction.askMessageTs === input.lastModifiedMessage.ts
+	) {
+		return input.lastModifiedMessage.text
+	}
+
+	if (!activeInteraction && input.lastModifiedMessage?.ask === "api_req_failed") {
 		return input.lastModifiedMessage.text
 	}
 

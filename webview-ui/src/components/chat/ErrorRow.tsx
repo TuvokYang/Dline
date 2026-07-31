@@ -5,8 +5,7 @@ import SpendLimitError from "@/components/chat/SpendLimitError"
 import { Button } from "@/components/ui/button"
 import { useClineAuth, useClineSignIn } from "@/context/ClineAuthContext"
 import { ClineError, ClineErrorType } from "../../../../src/services/error/ClineError"
-
-const _errorColor = "var(--vscode-errorForeground)"
+import { ApiErrorBox } from "./ApiErrorBox"
 
 interface ErrorRowProps {
 	message: ClineMessage
@@ -25,15 +24,11 @@ const ErrorRow = memo(({ message, errorType, apiRequestFailedMessage, apiReqStre
 		switch (errorType) {
 			case "error":
 			case "mistake_limit_reached":
-				// Handle API request errors with special error parsing
 				if (rawApiError) {
-					// FIXME: ClineError parsing should not be applied to non-Cline providers, but it seems we're using clineErrorMessage below in the default error display
 					const clineError = ClineError.parse(rawApiError)
 					const errorMessage = clineError?._error?.message || clineError?.message || rawApiError
-					const requestId = clineError?._error?.request_id
 					const providerId = clineError?.providerId || clineError?._error?.providerId
 					const isClineProvider = providerId === "cline"
-					const errorCode = clineError?._error?.code
 
 					if (clineError?.isErrorType(ClineErrorType.Balance)) {
 						const errorDetails = clineError._error?.details
@@ -62,22 +57,8 @@ const ErrorRow = memo(({ message, errorType, apiRequestFailedMessage, apiReqStre
 						)
 					}
 
-					if (clineError?.isErrorType(ClineErrorType.RateLimit)) {
+					if (clineError?.isErrorType(ClineErrorType.Auth) && isClineProvider && !clineUser) {
 						return (
-							<p className="m-0 whitespace-pre-wrap text-error wrap-anywhere">
-								{errorMessage}
-								{requestId && <div>Request ID: {requestId}</div>}
-							</p>
-						)
-					}
-
-					if (clineError?.isErrorType(ClineErrorType.QuotaExceeded)) {
-						const detailMessage = clineError?._error?.details?.message || errorMessage
-						return <p className="m-0 whitespace-pre-wrap text-error wrap-anywhere">{detailMessage}</p>
-					}
-
-					if (clineError?.isErrorType(ClineErrorType.Auth) && isClineProvider) {
-						return !clineUser ? (
 							// User is using Cline provider and is not logged in
 							<div className="flex flex-col gap-3">
 								<div className="flex items-center justify-center rounded border border-neutral-500/30 bg-vscode-editor-background p-6 text-center text-vscode-foreground">
@@ -92,50 +73,19 @@ const ErrorRow = memo(({ message, errorType, apiRequestFailedMessage, apiReqStre
 									)}
 								</Button>
 							</div>
-						) : (
-							// Don't show sign in button after the user has logged in, just ask them to retry
-							<div className="mt-4">
-								<span className="text-description">(Click "Retry" below)</span>
-							</div>
 						)
 					}
 
-					return (
-						<p className="m-0 whitespace-pre-wrap text-error wrap-anywhere flex flex-col gap-3">
-							{/* Display the well-formatted error extracted from the ClineError instance */}
-
-							<header>
-								{providerId && <span className="uppercase">[{providerId}] </span>}
-								{errorCode && <span>{errorCode}</span>}
-								{errorMessage}
-								{requestId && <div>Request ID: {requestId}</div>}
-							</header>
-
-							{/* Windows Powershell Issue */}
-							{errorMessage?.toLowerCase()?.includes("powershell") && (
-								<div>
-									It seems like you're having Windows PowerShell issues, please see this{" "}
-									<a
-										className="underline text-inherit"
-										href="https://github.com/cline/cline/wiki/TroubleShooting-%E2%80%90-%22PowerShell-is-not-recognized-as-an-internal-or-external-command%22">
-										troubleshooting guide
-									</a>
-									.
-								</div>
-							)}
-
-							{/* Display raw API error if different from parsed error message */}
-							{errorMessage !== rawApiError && <div>{rawApiError}</div>}
-
-							<div className="mt-4">
-								<span className="text-description">(Click "Retry" below)</span>
-							</div>
-						</p>
-					)
+					return <ApiErrorBox error={rawApiError} />
 				}
 
-				// Regular error message
-				return <p className="m-0 mt-0 whitespace-pre-wrap text-error wrap-anywhere">{message.text}</p>
+				return (
+					<ApiErrorBox
+						error={message.text}
+						testId="error-message-box"
+						title={errorType === "mistake_limit_reached" ? "Task Needs Attention" : "Error"}
+					/>
+				)
 
 			case "diff_error":
 				return (

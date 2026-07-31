@@ -46,6 +46,7 @@ describe("ErrorRow", () => {
 	it("renders basic error message", () => {
 		render(<ErrorRow errorType="error" message={mockMessage} />)
 
+		expect(screen.getByTestId("error-message-box")).toBeInTheDocument()
 		expect(screen.getByText("Test error message")).toBeInTheDocument()
 	})
 
@@ -112,7 +113,8 @@ describe("ErrorRow", () => {
 			render(<ErrorRow apiRequestFailedMessage="Rate limit exceeded" errorType="error" message={mockMessage} />)
 
 			expect(screen.getByText("Rate limit exceeded")).toBeInTheDocument()
-			expect(screen.getByText("Request ID: req_123456")).toBeInTheDocument()
+			expect(screen.getByText("Request ID")).toBeInTheDocument()
+			expect(screen.getByTestId("api-error-box-request-id")).toHaveTextContent("req_123456")
 		})
 
 		it("renders quota exceeded error", async () => {
@@ -146,7 +148,7 @@ describe("ErrorRow", () => {
 			expect(screen.getByText("Sign in to Cline")).toBeInTheDocument()
 		})
 
-		it("renders PowerShell troubleshooting link when error mentions PowerShell", async () => {
+		it("renders a PowerShell API failure without adding unrelated legacy content", async () => {
 			const mockClineError = {
 				message: "PowerShell is not recognized as an internal or external command",
 				isErrorType: vi.fn(() => false),
@@ -165,11 +167,51 @@ describe("ErrorRow", () => {
 			)
 
 			expect(screen.getByText(/PowerShell is not recognized/)).toBeInTheDocument()
-			expect(screen.getByText("troubleshooting guide")).toBeInTheDocument()
-			expect(screen.getByRole("link", { name: "troubleshooting guide" })).toHaveAttribute(
-				"href",
-				"https://github.com/cline/cline/wiki/TroubleShooting-%E2%80%90-%22PowerShell-is-not-recognized-as-an-internal-or-external-command%22",
+			expect(screen.getByTestId("api-error-box")).toBeInTheDocument()
+			expect(screen.queryByText("troubleshooting guide")).not.toBeInTheDocument()
+			expect(screen.queryByText('(Click "Retry" below)')).not.toBeInTheDocument()
+		})
+
+		it("renders serialized provider failures once without raw JSON or retry instructions", async () => {
+			const rawError = JSON.stringify({
+				message: "500 No scripted E2E response remains for openai-compatible-chat",
+				status: 500,
+				code: "e2e_mock_queue_exhausted",
+				modelId: "dline-e2e-model",
+				providerId: "openai",
+				details: {
+					message: "No scripted E2E response remains for openai-compatible-chat",
+					type: "e2e_mock_error",
+					code: "e2e_mock_queue_exhausted",
+				},
+			})
+			const mockClineError = {
+				message: "500 No scripted E2E response remains for openai-compatible-chat",
+				modelId: "dline-e2e-model",
+				providerId: "openai",
+				isErrorType: vi.fn(() => false),
+				_error: {
+					status: 500,
+					code: "e2e_mock_queue_exhausted",
+					message: "500 No scripted E2E response remains for openai-compatible-chat",
+					details: {
+						message: "No scripted E2E response remains for openai-compatible-chat",
+						type: "e2e_mock_error",
+						code: "e2e_mock_queue_exhausted",
+					},
+				},
+			}
+			const { ClineError } = await import("../../../../src/services/error/ClineError")
+			vi.mocked(ClineError.parse).mockReturnValue(mockClineError as any)
+
+			const { container } = render(<ErrorRow apiRequestFailedMessage={rawError} errorType="error" message={mockMessage} />)
+
+			expect(screen.getByTestId("api-error-box")).toBeInTheDocument()
+			expect(screen.getByTestId("api-error-box-message")).toHaveTextContent(
+				"No scripted E2E response remains for openai-compatible-chat",
 			)
+			expect(screen.queryByText('(Click "Retry" below)')).not.toBeInTheDocument()
+			expect(container).not.toHaveTextContent(rawError)
 		})
 
 		it("handles apiReqStreamingFailedMessage instead of apiRequestFailedMessage", async () => {
