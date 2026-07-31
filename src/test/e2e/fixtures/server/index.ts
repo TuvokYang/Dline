@@ -2,7 +2,13 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo, Socket } from "node:net"
 import { v4 as uuidv4 } from "uuid"
 import type { BalanceResponse, OrganizationBalanceResponse, UserResponse } from "../../../../shared/ClineAccount"
-import { E2E_MOCK_API_RESPONSES, E2E_REGISTERED_MOCK_ENDPOINTS } from "./api"
+import {
+	E2E_MOCK_API_RESPONSES,
+	E2E_MOCK_PROVIDER_ROUTES,
+	E2E_REGISTERED_MOCK_ENDPOINTS,
+	type E2EMockApiProtocol,
+	type E2EMockProviderTarget,
+} from "./api"
 import { ClineDataMock } from "./data"
 
 const E2E_API_SERVER_HOST = "127.0.0.1"
@@ -11,6 +17,224 @@ const useVerboseLogging = process.env.CLINE_E2E_TESTS_VERBOSE === "true"
 function log(...args: unknown[]) {
 	if (useVerboseLogging) {
 		console.log("[ClineApiServerMock]", ...args)
+	}
+}
+
+export type MockApiProtocol = E2EMockApiProtocol
+export type MockApiTarget = E2EMockProviderTarget
+
+export interface MockTokenUsage {
+	/** Input tokens excluding cache reads and writes. */
+	inputTokens: number
+	outputTokens: number
+	cacheReadTokens?: number
+	cacheWriteTokens?: number
+	reasoningTokens?: number
+}
+
+export interface MockToolResultExpectation {
+	callId?: string
+	contentIncludes: string | readonly string[]
+}
+
+export interface MockObservedToolResult {
+	callId?: string
+	content: string
+}
+
+interface MockResponseOptions {
+	reasoning?: string
+	hiddenReasoning?: string
+	delayMs?: number
+	usage?: MockTokenUsage
+	expectedToolResults?: readonly MockToolResultExpectation[]
+	expectedRequestIncludes?: readonly string[]
+}
+
+export type OpenAiMockResponse =
+	| ({ type: "message"; text: string } & MockResponseOptions)
+	| ({ type: "tool"; name: string; arguments: Record<string, unknown>; id?: string } & MockResponseOptions)
+	| { type: "error"; status: number; message: string; code?: string; delayMs?: number }
+
+export type MockThinkingConfig = { mode: "effort"; effort: string } | { mode: "budget"; budget: number }
+
+export interface MockApiConsumption {
+	target: MockApiTarget
+	provider: string
+	protocol: MockApiProtocol
+	path: string
+	requestBody: unknown
+	requestToolResults: MockObservedToolResult[]
+	responseType: OpenAiMockResponse["type"]
+	toolName?: string
+	toolCallId?: string
+	toolArguments?: Record<string, unknown>
+	status?: number
+	contractError?: string
+	thinking?: MockThinkingConfig
+	responseReasoning?: string
+	usage?: MockTokenUsage
+}
+
+function createResponseQueues(): Record<MockApiTarget, OpenAiMockResponse[]> {
+	return Object.fromEntries(Object.keys(E2E_MOCK_PROVIDER_ROUTES).map((target) => [target, []])) as Record<
+		MockApiTarget,
+		OpenAiMockResponse[]
+	>
+}
+
+function estimateTokens(text: string): number {
+	return Math.max(1, Math.ceil(Buffer.byteLength(text, "utf8") / 4))
+}
+
+function commonPrefixLength(left: string, right: string): number {
+	const limit = Math.min(left.length, right.length)
+	let index = 0
+	while (index < limit && left[index] === right[index]) index++
+	return index
+}
+
+function getResponseUsage(
+	response: Exclude<OpenAiMockResponse, { type: "error" }>,
+	requestText: string,
+	previousRequestText?: string,
+): MockTokenUsage {
+	if (response.usage) return response.usage
+
+	const totalInputTokens = estimateTokens(requestText)
+	const sharedPrefix = previousRequestText ? requestText.slice(0, commonPrefixLength(previousRequestText, requestText)) : ""
+	const cacheReadTokens = sharedPrefix ? Math.min(Math.max(0, totalInputTokens - 2), estimateTokens(sharedPrefix)) : 0
+	const uncachedTokens = totalInputTokens - cacheReadTokens
+	const cacheWriteTokens = uncachedTokens > 2 ? Math.max(1, Math.floor(uncachedTokens * 0.4)) : 0
+	const inputTokens = Math.max(1, totalInputTokens - cacheReadTokens - cacheWriteTokens)
+	const reasoningText = response.reasoning ?? response.hiddenReasoning ?? ""
+	const reasoningTokens = reasoningText ? estimateTokens(reasoningText) : 0
+	const responseText = response.type === "message" ? response.text : `${response.name}\n${JSON.stringify(response.arguments)}`
+	const outputTokens = estimateTokens(`${reasoningText}\n${responseText}`)
+
+	return { inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, reasoningTokens }
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+	return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined
+}
+
+function stringifyToolResultContent(value: unknown): string {
+	if (typeof value === "string") return value
+	if (Array.isArray(value)) {
+		return value
+			.map((item) => {
+				const record = asRecord(item)
+				return typeof record?.text === "string" ? record.text : JSON.stringify(item)
+			})
+			.join("\n")
+	}
+	return value === undefined ? "" : JSON.stringify(value)
+}
+
+function extractRequestToolResults(requestBody: unknown): MockObservedToolResult[] {
+	const body = asRecord(requestBody)
+	if (!body) return []
+	const results: MockObservedToolResult[] = []
+
+	for (const value of Array.isArray(body.messages) ? body.messages : []) {
+		const message = asRecord(value)
+		if (!message) continue
+		if (message.role === "tool") {
+			results.push({
+				...(typeof message.tool_call_id === "string" ? { callId: message.tool_call_id } : {}),
+				content: stringifyToolResultContent(message.content),
+			})
+		}
+		for (const contentValue of Array.isArray(message.content) ? message.content : []) {
+			const content = asRecord(contentValue)
+			if (content?.type !== "tool_result") continue
+			results.push({
+				...(typeof content.tool_use_id === "string" ? { callId: content.tool_use_id } : {}),
+				content: stringifyToolResultContent(content.content),
+			})
+		}
+	}
+
+	for (const value of Array.isArray(body.input) ? body.input : []) {
+		const item = asRecord(value)
+		if (item?.type !== "function_call_output") continue
+		results.push({
+			...(typeof item.call_id === "string" ? { callId: item.call_id } : {}),
+			content: stringifyToolResultContent(item.output),
+		})
+	}
+
+	return results
+}
+
+function validateMockRequestContract(
+	response: Exclude<OpenAiMockResponse, { type: "error" }>,
+	requestText: string,
+	toolResults: readonly MockObservedToolResult[],
+): string | undefined {
+	for (const marker of response.expectedRequestIncludes ?? []) {
+		if (!requestText.includes(marker)) return `Request is missing required text: ${marker}`
+	}
+
+	for (const expectation of response.expectedToolResults ?? []) {
+		const markers = Array.isArray(expectation.contentIncludes) ? expectation.contentIncludes : [expectation.contentIncludes]
+		const candidates = expectation.callId ? toolResults.filter((result) => result.callId === expectation.callId) : toolResults
+		if (candidates.length === 0) {
+			const observedIds = toolResults.map((result) => result.callId ?? "<missing>").join(", ") || "<none>"
+			return `Tool result ${expectation.callId ?? "<any>"} was not observed; observed call IDs: ${observedIds}`
+		}
+		for (const marker of markers) {
+			if (!candidates.some((candidate) => candidate.content.includes(marker))) {
+				return `Tool result ${expectation.callId ?? "<any>"} is missing required text: ${marker}`
+			}
+		}
+	}
+	return undefined
+}
+
+function getRequestThinking(requestBody: unknown): MockThinkingConfig | undefined {
+	const body = asRecord(requestBody)
+	if (!body) return undefined
+
+	const anthropicThinking = asRecord(body.thinking)
+	if (typeof anthropicThinking?.budget_tokens === "number") {
+		return { mode: "budget", budget: anthropicThinking.budget_tokens }
+	}
+	if (typeof body.thinking_budget === "number") {
+		return { mode: "budget", budget: body.thinking_budget }
+	}
+
+	const responsesReasoning = asRecord(body.reasoning)
+	if (typeof responsesReasoning?.effort === "string") {
+		return { mode: "effort", effort: responsesReasoning.effort }
+	}
+	if (typeof body.reasoning_effort === "string") {
+		return { mode: "effort", effort: body.reasoning_effort }
+	}
+
+	const outputConfig = asRecord(body.output_config)
+	if (typeof outputConfig?.effort === "string") {
+		return { mode: "effort", effort: outputConfig.effort }
+	}
+	return undefined
+}
+
+function toOpenAiUsage(usage: MockTokenUsage) {
+	const cacheReadTokens = usage.cacheReadTokens ?? 0
+	const cacheWriteTokens = usage.cacheWriteTokens ?? 0
+	const promptTokens = usage.inputTokens + cacheReadTokens + cacheWriteTokens
+	return {
+		prompt_tokens: promptTokens,
+		completion_tokens: usage.outputTokens,
+		total_tokens: promptTokens + usage.outputTokens,
+		prompt_tokens_details: {
+			cached_tokens: cacheReadTokens,
+			cache_miss_tokens: cacheWriteTokens,
+		},
+		completion_tokens_details: {
+			reasoning_tokens: usage.reasoningTokens ?? 0,
+		},
 	}
 }
 
@@ -23,6 +247,9 @@ export class ClineApiServerMock {
 	private orgBalance = 500.0
 	private userHasOrganization = false
 	private spendLimitExceeded = false
+	private mockResponses = createResponseQueues()
+	private mockConsumptions: MockApiConsumption[] = []
+	private previousSuccessfulRequestText = new Map<MockApiTarget, string>()
 	public generationCounter = 0
 
 	public readonly API_USER = new ClineDataMock("personal")
@@ -61,9 +288,95 @@ export class ClineApiServerMock {
 		this.spendLimitExceeded = exceeded
 	}
 
+	public enqueueOpenAiResponses(...responses: OpenAiMockResponse[]): void {
+		this.enqueueResponses("openai-compatible-chat", ...responses)
+	}
+
+	public enqueueResponses(target: MockApiTarget, ...responses: OpenAiMockResponse[]): void {
+		this.mockResponses[target].push(...responses)
+	}
+
+	public clearPendingResponses(target: MockApiTarget): void {
+		this.mockResponses[target] = []
+	}
+
+	public resetOpenAiMock(): void {
+		this.mockResponses = createResponseQueues()
+		this.mockConsumptions = []
+		this.previousSuccessfulRequestText.clear()
+	}
+
+	public get openAiRequestCount(): number {
+		return this.getRequestCount("openai-compatible-chat")
+	}
+
+	public getOpenAiRequestBodies(): readonly unknown[] {
+		return this.mockConsumptions
+			.filter((consumption) => consumption.target === "openai-compatible-chat")
+			.map((consumption) => consumption.requestBody)
+	}
+
+	public getRequestCount(target: MockApiTarget): number {
+		return this.mockConsumptions.filter((consumption) => consumption.target === target).length
+	}
+
+	public getMockConsumptions(target?: MockApiTarget): readonly MockApiConsumption[] {
+		return target ? this.mockConsumptions.filter((consumption) => consumption.target === target) : this.mockConsumptions
+	}
+
 	public setCurrentUser(user: UserResponse | null) {
 		this.API_USER.setCurrentUser(user)
 		this.currentUser = user
+	}
+
+	private consumeMockResponse(target: MockApiTarget, path: string, requestBody: unknown) {
+		const route = E2E_MOCK_PROVIDER_ROUTES[target]
+		const scriptedResponse = this.mockResponses[target].shift() ?? {
+			type: "error",
+			status: 500,
+			code: "e2e_mock_queue_exhausted",
+			message: `No scripted E2E response remains for ${target}`,
+		}
+		const thinking = getRequestThinking(requestBody)
+		const requestText = JSON.stringify(requestBody)
+		const requestToolResults = extractRequestToolResults(requestBody)
+		const contractError =
+			scriptedResponse.type === "error"
+				? undefined
+				: validateMockRequestContract(scriptedResponse, requestText, requestToolResults)
+		const response: OpenAiMockResponse = contractError
+			? {
+					type: "error",
+					status: 500,
+					code: "e2e_tool_result_contract_failed",
+					message: contractError,
+				}
+			: scriptedResponse
+		const usage =
+			response.type === "error"
+				? undefined
+				: getResponseUsage(response, requestText, this.previousSuccessfulRequestText.get(target))
+		if (response.type !== "error") this.previousSuccessfulRequestText.set(target, requestText)
+		this.mockConsumptions.push({
+			target,
+			provider: route.provider,
+			protocol: route.protocol,
+			path,
+			requestBody,
+			requestToolResults,
+			responseType: response.type,
+			...(response.type === "tool" ? { toolName: response.name } : {}),
+			...(response.type === "tool" && response.id ? { toolCallId: response.id } : {}),
+			...(response.type === "tool" ? { toolArguments: response.arguments } : {}),
+			...(response.type === "error" ? { status: response.status } : {}),
+			...(contractError ? { contractError } : {}),
+			...(thinking ? { thinking } : {}),
+			...(route.protocol !== "openai-chat" && response.type !== "error" && response.reasoning
+				? { responseReasoning: response.reasoning }
+				: {}),
+			...(usage ? { usage } : {}),
+		})
+		return { response, usage }
 	}
 
 	// Helper to match routes against registered endpoints and extract parameters
@@ -122,6 +435,15 @@ export class ClineApiServerMock {
 		return { matched: false }
 	}
 
+	private static matchMockProviderRoute(path: string, method: string) {
+		if (method !== "POST") return undefined
+		for (const target of Object.keys(E2E_MOCK_PROVIDER_ROUTES) as MockApiTarget[]) {
+			const route = E2E_MOCK_PROVIDER_ROUTES[target]
+			if (path === `${route.basePath}${route.endpoint}`) return { target, route }
+		}
+		return undefined
+	}
+
 	// Starts the global shared server
 	public static async startGlobalServer(): Promise<ClineApiServerMock> {
 		log("=== SERVER FIXTURE CALLED ===")
@@ -150,8 +472,8 @@ export class ClineApiServerMock {
 			}
 
 			// Helper to send JSON response
-			const sendJson = (data: unknown, status = 200) => {
-				res.writeHead(status, { "Content-Type": "application/json" })
+			const sendJson = (data: unknown, status = 200, headers: Record<string, string> = {}) => {
+				res.writeHead(status, { "Content-Type": "application/json", ...headers })
 				res.end(JSON.stringify(data))
 			}
 
@@ -167,9 +489,10 @@ export class ClineApiServerMock {
 
 			// Authentication middleware
 			const authHeader = req.headers.authorization
+			const hasApiCredential = authHeader?.startsWith("Bearer ") || typeof req.headers["x-api-key"] === "string"
 			const isAuthRequired = !path.startsWith("/.test/") && path !== "/health" && path !== "/api/v1/auth/token"
 
-			if (isAuthRequired && !authHeader?.startsWith("Bearer ")) {
+			if (isAuthRequired && !hasApiCredential) {
 				return sendApiError("Unauthorized", 401)
 			}
 
@@ -194,61 +517,420 @@ export class ClineApiServerMock {
 
 			// Route handling
 			const handleRequest = async () => {
-				// Try to match the route using registered endpoints
+				const mockProviderRoute = ClineApiServerMock.matchMockProviderRoute(path, method)
 				const routeMatch = ClineApiServerMock.matchRoute(path, method)
 
-				if (!routeMatch.matched) {
+				if (!mockProviderRoute && !routeMatch.matched) {
 					return sendJson({ error: "Not found" }, 404)
 				}
 
 				const { baseRoute, endpoint, params = {} } = routeMatch
 				const controller = ClineApiServerMock.globalSharedServer!
 
-				// OpenAI-compatible endpoint used by the isolated E2E mock profile.
-				if (baseRoute === "/v1" && endpoint === "/chat/completions" && method === "POST") {
+				if (mockProviderRoute) {
+					const { target, route } = mockProviderRoute
+					const protocol = route.protocol
+					if (route.auth === "bearer" && !authHeader?.startsWith("Bearer ")) {
+						return sendJson({ error: { message: "Bearer authentication required" } }, 401)
+					}
+					if (route.auth === "x-api-key") {
+						if (typeof req.headers["x-api-key"] !== "string") {
+							return sendJson(
+								{ type: "error", error: { type: "authentication_error", message: "x-api-key required" } },
+								401,
+							)
+						}
+						if (typeof req.headers["anthropic-version"] !== "string") {
+							return sendJson(
+								{
+									type: "error",
+									error: { type: "invalid_request_error", message: "anthropic-version required" },
+								},
+								400,
+							)
+						}
+					}
 					const body = await readBody()
-					const parsed = JSON.parse(body) as { model?: string; stream?: boolean }
-					const model = parsed.model ?? "dline-e2e-model"
-					const responseText = "Dline E2E mock response"
+					const parsed = JSON.parse(body) as Record<string, unknown> & { model?: string; stream?: boolean }
+					const hasMessages = Array.isArray(parsed.messages)
+					const hasResponsesInput = typeof parsed.input === "string" || Array.isArray(parsed.input)
+					const validRequest =
+						((protocol === "openai-chat" || protocol === "deepseek-chat") && hasMessages) ||
+						(protocol === "openai-responses" && hasResponsesInput) ||
+						(protocol === "anthropic-messages" && hasMessages && typeof parsed.max_tokens === "number")
+					if (!validRequest) {
+						return sendJson({ error: { message: `Invalid ${target} request shape` } }, 400)
+					}
+					const { response: scriptedResponse, usage } = controller.consumeMockResponse(target, path, parsed)
 					const generationId = `e2e_${++controller.generationCounter}_${Date.now()}`
+					const model = parsed.model ?? "dline-e2e-model"
 
-					if (parsed.stream !== false) {
+					if (scriptedResponse.delayMs) {
+						await new Promise<void>((resolve) => {
+							const timer = setTimeout(resolve, scriptedResponse.delayMs)
+							res.once("close", () => {
+								clearTimeout(timer)
+								resolve()
+							})
+						})
+						if (res.destroyed || res.writableEnded) return
+					}
+					if (res.destroyed || res.writableEnded) return
+
+					if (scriptedResponse.type === "error") {
+						const code = scriptedResponse.code ?? `http_${scriptedResponse.status}`
+						return sendJson(
+							protocol === "anthropic-messages"
+								? { type: "error", error: { type: code, message: scriptedResponse.message } }
+								: { error: { message: scriptedResponse.message, type: "e2e_mock_error", code } },
+							scriptedResponse.status,
+							scriptedResponse.status === 429 ? { "Retry-After": "0" } : undefined,
+						)
+					}
+
+					if (!usage) throw new Error(`Successful ${target} response is missing usage`)
+					const openAiUsage = toOpenAiUsage(usage)
+					const chatUsage =
+						protocol === "deepseek-chat"
+							? {
+									...openAiUsage,
+									prompt_cache_hit_tokens: usage.cacheReadTokens ?? 0,
+									prompt_cache_miss_tokens: usage.cacheWriteTokens ?? 0,
+								}
+							: openAiUsage
+					const messageText = scriptedResponse.type === "message" ? scriptedResponse.text : ""
+					const writeSse = (data: unknown, event?: string) => {
+						if (res.destroyed || res.writableEnded) return
+						res.write(`${event ? `event: ${event}\n` : ""}data: ${JSON.stringify(data)}\n\n`)
+					}
+
+					if (protocol === "openai-chat" || protocol === "deepseek-chat") {
+						const toolCall =
+							scriptedResponse.type === "tool"
+								? {
+										id: scriptedResponse.id ?? `call_${generationId}`,
+										type: "function",
+										function: {
+											name: scriptedResponse.name,
+											arguments: JSON.stringify(scriptedResponse.arguments),
+										},
+									}
+								: undefined
+						const reasoningContent = protocol === "deepseek-chat" ? scriptedResponse.reasoning : undefined
+						const assistantDelta = {
+							role: "assistant",
+							...(reasoningContent ? { reasoning_content: reasoningContent } : {}),
+							...(toolCall ? { tool_calls: [{ index: 0, ...toolCall }] } : { content: messageText }),
+						}
+						if (parsed.stream !== false) {
+							res.writeHead(200, {
+								"Content-Type": "text/event-stream",
+								"Cache-Control": "no-cache",
+								Connection: "keep-alive",
+							})
+							const writeChunk = (choices: unknown, chunkUsage?: unknown) =>
+								writeSse({
+									id: generationId,
+									object: "chat.completion.chunk",
+									created: Math.floor(Date.now() / 1000),
+									model,
+									choices,
+									...(chunkUsage ? { usage: chunkUsage } : {}),
+								})
+							writeChunk([
+								{
+									index: 0,
+									delta: assistantDelta,
+									finish_reason: null,
+								},
+							])
+							writeChunk(
+								[
+									{
+										index: 0,
+										delta: {},
+										finish_reason: toolCall ? "tool_calls" : "stop",
+									},
+								],
+								chatUsage,
+							)
+							res.end("data: [DONE]\n\n")
+							return
+						}
+
+						return sendJson({
+							id: generationId,
+							object: "chat.completion",
+							created: Math.floor(Date.now() / 1000),
+							model,
+							choices: [
+								{
+									index: 0,
+									message: {
+										role: "assistant",
+										content: toolCall ? null : messageText,
+										...(reasoningContent ? { reasoning_content: reasoningContent } : {}),
+										...(toolCall ? { tool_calls: [toolCall] } : {}),
+									},
+									finish_reason: toolCall ? "tool_calls" : "stop",
+								},
+							],
+							usage: chatUsage,
+						})
+					}
+
+					if (protocol === "openai-responses") {
+						const itemId = `item_${generationId}`
+						const reasoningItemId = `reasoning_${generationId}`
+						const reasoningItem = scriptedResponse.reasoning
+							? {
+									id: reasoningItemId,
+									type: "reasoning",
+									status: "completed",
+									summary: [{ type: "summary_text", text: scriptedResponse.reasoning }],
+								}
+							: undefined
+						const outputIndex = reasoningItem ? 1 : 0
+						const callId =
+							scriptedResponse.type === "tool" ? (scriptedResponse.id ?? `call_${generationId}`) : undefined
+						const outputItem =
+							scriptedResponse.type === "tool"
+								? {
+										id: itemId,
+										type: "function_call",
+										status: "completed",
+										call_id: callId,
+										name: scriptedResponse.name,
+										arguments: JSON.stringify(scriptedResponse.arguments),
+									}
+								: {
+										id: itemId,
+										type: "message",
+										status: "completed",
+										role: "assistant",
+										content: [{ type: "output_text", text: scriptedResponse.text, annotations: [] }],
+									}
+						const response = {
+							id: generationId,
+							object: "response",
+							created_at: Math.floor(Date.now() / 1000),
+							status: "completed",
+							model,
+							output: reasoningItem ? [reasoningItem, outputItem] : [outputItem],
+							output_text: scriptedResponse.type === "message" ? scriptedResponse.text : "",
+							usage: {
+								input_tokens: openAiUsage.prompt_tokens,
+								input_tokens_details: openAiUsage.prompt_tokens_details,
+								output_tokens: usage.outputTokens,
+								output_tokens_details: openAiUsage.completion_tokens_details,
+								total_tokens: openAiUsage.total_tokens,
+							},
+						}
+						if (parsed.stream === false) return sendJson(response)
+
 						res.writeHead(200, {
 							"Content-Type": "text/event-stream",
 							"Cache-Control": "no-cache",
 							Connection: "keep-alive",
 						})
-						res.write(
-							`data: ${JSON.stringify({
-								id: generationId,
-								object: "chat.completion.chunk",
-								created: Math.floor(Date.now() / 1000),
-								model,
-								choices: [{ index: 0, delta: { role: "assistant", content: responseText }, finish_reason: null }],
-							})}\n\n`,
+						if (reasoningItem) {
+							writeSse(
+								{
+									type: "response.output_item.added",
+									output_index: 0,
+									item: { ...reasoningItem, status: "in_progress", summary: [] },
+								},
+								"response.output_item.added",
+							)
+							writeSse(
+								{
+									type: "response.reasoning_summary_part.added",
+									item_id: reasoningItemId,
+									output_index: 0,
+									summary_index: 0,
+									part: { type: "summary_text", text: "" },
+								},
+								"response.reasoning_summary_part.added",
+							)
+							writeSse(
+								{
+									type: "response.reasoning_summary_text.delta",
+									item_id: reasoningItemId,
+									output_index: 0,
+									summary_index: 0,
+									delta: scriptedResponse.reasoning,
+								},
+								"response.reasoning_summary_text.delta",
+							)
+							writeSse(
+								{
+									type: "response.reasoning_summary_part.done",
+									item_id: reasoningItemId,
+									output_index: 0,
+									summary_index: 0,
+									part: reasoningItem.summary[0],
+								},
+								"response.reasoning_summary_part.done",
+							)
+							writeSse(
+								{ type: "response.output_item.done", output_index: 0, item: reasoningItem },
+								"response.output_item.done",
+							)
+						}
+						writeSse(
+							{
+								type: "response.output_item.added",
+								output_index: outputIndex,
+								item: scriptedResponse.type === "tool" ? { ...outputItem, arguments: "" } : outputItem,
+							},
+							"response.output_item.added",
 						)
-						res.write(
-							`data: ${JSON.stringify({
-								id: generationId,
-								object: "chat.completion.chunk",
-								created: Math.floor(Date.now() / 1000),
-								model,
-								choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
-								usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
-							})}\n\n`,
-						)
-						res.end("data: [DONE]\n\n")
+						if (scriptedResponse.type === "tool") {
+							writeSse(
+								{
+									type: "response.function_call_arguments.delta",
+									item_id: itemId,
+									output_index: outputIndex,
+									delta: JSON.stringify(scriptedResponse.arguments),
+								},
+								"response.function_call_arguments.delta",
+							)
+						} else {
+							writeSse(
+								{
+									type: "response.output_text.delta",
+									item_id: itemId,
+									output_index: outputIndex,
+									content_index: 0,
+									delta: scriptedResponse.text,
+								},
+								"response.output_text.delta",
+							)
+						}
+						writeSse({ type: "response.completed", response }, "response.completed")
+						res.end()
 						return
 					}
 
-					return sendJson({
-						id: generationId,
-						object: "chat.completion",
-						created: Math.floor(Date.now() / 1000),
-						model,
-						choices: [{ index: 0, message: { role: "assistant", content: responseText }, finish_reason: "stop" }],
-						usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+					const messageUsage = {
+						input_tokens: usage.inputTokens,
+						output_tokens: 0,
+						cache_creation_input_tokens: usage.cacheWriteTokens ?? 0,
+						cache_read_input_tokens: usage.cacheReadTokens ?? 0,
+					}
+					const contentBlock =
+						scriptedResponse.type === "tool"
+							? {
+									id: scriptedResponse.id ?? `toolu_${generationId}`,
+									type: "tool_use",
+									name: scriptedResponse.name,
+									input: scriptedResponse.arguments,
+								}
+							: { type: "text", text: scriptedResponse.text }
+					const thinkingBlock = scriptedResponse.reasoning
+						? {
+								type: "thinking",
+								thinking: scriptedResponse.reasoning,
+								signature: `e2e_signature_${generationId}`,
+							}
+						: undefined
+					if (parsed.stream === false) {
+						return sendJson({
+							id: generationId,
+							type: "message",
+							role: "assistant",
+							model,
+							content: thinkingBlock ? [thinkingBlock, contentBlock] : [contentBlock],
+							stop_reason: scriptedResponse.type === "tool" ? "tool_use" : "end_turn",
+							stop_sequence: null,
+							usage: { ...messageUsage, output_tokens: usage.outputTokens },
+						})
+					}
+
+					res.writeHead(200, {
+						"Content-Type": "text/event-stream",
+						"Cache-Control": "no-cache",
+						Connection: "keep-alive",
 					})
+					writeSse(
+						{
+							type: "message_start",
+							message: {
+								id: generationId,
+								type: "message",
+								role: "assistant",
+								model,
+								content: [],
+								stop_reason: null,
+								stop_sequence: null,
+								usage: messageUsage,
+							},
+						},
+						"message_start",
+					)
+					if (thinkingBlock) {
+						writeSse(
+							{
+								type: "content_block_start",
+								index: 0,
+								content_block: { type: "thinking", thinking: "", signature: "" },
+							},
+							"content_block_start",
+						)
+						writeSse(
+							{
+								type: "content_block_delta",
+								index: 0,
+								delta: { type: "thinking_delta", thinking: thinkingBlock.thinking },
+							},
+							"content_block_delta",
+						)
+						writeSse(
+							{
+								type: "content_block_delta",
+								index: 0,
+								delta: { type: "signature_delta", signature: thinkingBlock.signature },
+							},
+							"content_block_delta",
+						)
+						writeSse({ type: "content_block_stop", index: 0 }, "content_block_stop")
+					}
+					const contentBlockIndex = thinkingBlock ? 1 : 0
+					writeSse(
+						{
+							type: "content_block_start",
+							index: contentBlockIndex,
+							content_block:
+								scriptedResponse.type === "tool" ? { ...contentBlock, input: {} } : { type: "text", text: "" },
+						},
+						"content_block_start",
+					)
+					writeSse(
+						{
+							type: "content_block_delta",
+							index: contentBlockIndex,
+							delta:
+								scriptedResponse.type === "tool"
+									? { type: "input_json_delta", partial_json: JSON.stringify(scriptedResponse.arguments) }
+									: { type: "text_delta", text: scriptedResponse.text },
+						},
+						"content_block_delta",
+					)
+					writeSse({ type: "content_block_stop", index: contentBlockIndex }, "content_block_stop")
+					writeSse(
+						{
+							type: "message_delta",
+							delta: {
+								stop_reason: scriptedResponse.type === "tool" ? "tool_use" : "end_turn",
+								stop_sequence: null,
+							},
+							usage: { output_tokens: usage.outputTokens },
+						},
+						"message_delta",
+					)
+					writeSse({ type: "message_stop" }, "message_stop")
+					res.end()
+					return
 				}
 
 				// Health check endpoints

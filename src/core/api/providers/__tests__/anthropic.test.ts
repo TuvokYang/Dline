@@ -17,6 +17,25 @@ describe("AnthropicHandler", () => {
 	})
 
 	describe("getModel", () => {
+		it("should preserve resolved profile model metadata", () => {
+			const handler = new AnthropicHandler({
+				profile: ApiProfile.create({
+					provider: "anthropic",
+					apiKey: "test-api-key",
+					modelId: "claude-sonnet-4-6",
+					modelInfo: anthropicModels["claude-sonnet-4-6"],
+					anthropic: { reasoning: { enableThinking: true, thinkingBudget: 2_048 } },
+				}),
+				mode: "act",
+			})
+
+			const result = handler.getModel()
+
+			result.id.should.equal("claude-sonnet-4-6")
+			should(result.info.capabilities?.supportsTools).equal(true)
+			should(result.info.capabilities?.contextWindow).equal(200_000)
+		})
+
 		it("should merge provider overrides into registry model metadata", () => {
 			const handler = new AnthropicHandler({
 				profile: ApiProfile.create({

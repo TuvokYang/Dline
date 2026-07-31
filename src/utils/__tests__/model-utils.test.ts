@@ -1,6 +1,6 @@
 import { describe, it } from "vitest"
 import "should"
-import type { ApiHandlerModel } from "@core/api"
+import type { ApiHandlerModel, ApiProviderInfo } from "@core/api"
 import {
 	GEMINI_FLASH_MAX_OUTPUT_TOKENS,
 	isClaude4PlusModelFamily,
@@ -8,12 +8,47 @@ import {
 	isGLMModelFamily,
 	isGPT5ModelFamily,
 	isGptOssModelFamily,
+	isNativeToolCallingConfig,
+	isParallelToolCallingEnabled,
 	modelDoesntSupportWebp,
 	shouldSkipReasoningForModel,
 } from "../model-utils"
 
 // Minimal helper — modelDoesntSupportWebp only reads apiHandlerModel.id
 const m = (id: string): ApiHandlerModel => ({ id, info: {} as any })
+
+const providerInfo = (supportsTools: boolean | undefined, providerId = "custom-provider", modelId = "custom-model") =>
+	({
+		providerId,
+		mode: "act",
+		model: {
+			id: modelId,
+			info: {
+				id: modelId,
+				capabilities: { supportsTools },
+			},
+		},
+	}) as ApiProviderInfo
+
+describe("native tool capability", () => {
+	it("uses explicit model capability without provider or model-name allowlists", () => {
+		isNativeToolCallingConfig(providerInfo(true), true).should.equal(true)
+	})
+
+	it("does not infer native tool support from a GPT-5 model name", () => {
+		isNativeToolCallingConfig(providerInfo(false, "openai", "gpt-5.4"), true).should.equal(false)
+		isNativeToolCallingConfig(providerInfo(undefined, "openai", "gpt-5.4"), true).should.equal(false)
+	})
+
+	it("requires both the global request and explicit model capability", () => {
+		isNativeToolCallingConfig(providerInfo(true), false).should.equal(false)
+	})
+
+	it("derives automatic parallel tool calling from the same explicit capability", () => {
+		isParallelToolCallingEnabled(false, providerInfo(true)).should.equal(true)
+		isParallelToolCallingEnabled(false, providerInfo(false, "openai", "gpt-5.4")).should.equal(false)
+	})
+})
 
 describe("shouldSkipReasoningForModel", () => {
 	it("should return true for grok-4 models", () => {

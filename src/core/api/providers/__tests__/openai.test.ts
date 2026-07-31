@@ -64,6 +64,38 @@ describe("OpenAiHandler", () => {
 	})
 
 	describe("createMessage", () => {
+		it("disables SDK retries so Dline owns the retry policy", () => {
+			const handler = new OpenAiHandler({
+				profile: ApiProfile.create({
+					provider: "openai",
+					apiKey: "test-api-key",
+					modelId: "custom-openai-compatible-model",
+				}),
+				mode: "act",
+			})
+
+			const client = (handler as unknown as { ensureClient: () => OpenAI }).ensureClient()
+
+			expect(client.maxRetries).to.equal(0)
+		})
+
+		it("disables Azure SDK retries so Dline owns the retry policy", () => {
+			const handler = new OpenAiHandler({
+				profile: ApiProfile.create({
+					provider: "openai",
+					apiKey: "test-api-key",
+					baseUrl: "https://dline-e2e.openai.azure.com/openai",
+					modelId: "azure-model",
+					openai: OpenAiProviderConfig.create({ azureApiVersion: "2025-04-01-preview" }),
+				}),
+				mode: "act",
+			})
+
+			const client = (handler as unknown as { ensureClient: () => OpenAI }).ensureClient()
+
+			expect(client.maxRetries).to.equal(0)
+		})
+
 		it("should use provider capabilities for request max tokens and temperature", async () => {
 			const handler = new OpenAiHandler({
 				profile: ApiProfile.create({
@@ -121,6 +153,85 @@ describe("OpenAiHandler", () => {
 			const requestBody = create.mock.calls[0]?.[0] as Record<string, unknown>
 			expect(requestBody.service_tier).to.equal("priority")
 			expect(requestBody.reasoning_effort).to.equal("ultra")
+		})
+
+		it("routes an OpenAI-compatible profile to the Responses endpoint", async () => {
+			const handler = new OpenAiHandler({
+				profile: ApiProfile.create({
+					provider: "openai",
+					apiKey: "test-api-key",
+					modelId: "gpt-compatible-responses",
+					openai: OpenAiProviderConfig.create({
+						apiEndpoint: "responses",
+						serviceTier: "priority",
+						reasoning: { enableThinking: true, effort: "high" },
+						capabilities: { maxTokens: 16_384 },
+					}),
+				}),
+				mode: "act",
+			})
+			const chatCreate = vi.fn()
+			const responsesCreate = vi.fn().mockResolvedValue(createAsyncIterable())
+			vi.spyOn(handler as unknown as { ensureClient: () => unknown }, "ensureClient").mockReturnValue({
+				chat: { completions: { create: chatCreate } },
+				responses: { create: responsesCreate },
+			})
+
+			for await (const _chunk of handler.createMessage("system prompt", [{ role: "user", content: "Hello" }])) {
+			}
+
+			expect(chatCreate.mock.calls).to.have.length(0)
+			expect(responsesCreate.mock.calls).to.have.length(1)
+			const requestBody = responsesCreate.mock.calls[0]?.[0] as Record<string, unknown>
+			expect(requestBody.instructions).to.equal("system prompt")
+			expect(requestBody.service_tier).to.equal("priority")
+			expect(requestBody.max_output_tokens).to.equal(16_384)
+			expect(requestBody.reasoning).to.deep.equal({ effort: "high", summary: "auto" })
+		})
+
+		it.each([
+			"chat_completions",
+			"responses",
+		] as const)("aborts an in-flight OpenAI-compatible %s request", async (apiEndpoint) => {
+			const handler = new OpenAiHandler({
+				profile: ApiProfile.create({
+					provider: "openai",
+					apiKey: "test-api-key",
+					modelId: "gpt-compatible-abort",
+					openai: OpenAiProviderConfig.create({ apiEndpoint }),
+				}),
+				mode: "act",
+			})
+			let releaseStream: (() => void) | undefined
+			const streamGate = new Promise<void>((resolve) => {
+				releaseStream = resolve
+			})
+			const stream = {
+				[Symbol.asyncIterator]: async function* () {
+					await streamGate
+				},
+			}
+			let requestSignal: AbortSignal | undefined
+			const create = vi.fn().mockImplementation((_body, options) => {
+				requestSignal = options?.signal
+				return Promise.resolve(stream)
+			})
+			vi.spyOn(handler as unknown as { ensureClient: () => unknown }, "ensureClient").mockReturnValue({
+				chat: { completions: { create } },
+				responses: { create },
+			})
+			const request = (async () => {
+				for await (const _chunk of handler.createMessage("system prompt", [{ role: "user", content: "Hello" }])) {
+				}
+			})()
+			await vi.waitFor(() => expect(create.mock.calls).to.have.length(1))
+
+			;(handler as unknown as { abort?: () => void }).abort?.()
+			releaseStream?.()
+			await request
+
+			expect(requestSignal).not.to.equal(undefined)
+			expect(requestSignal?.aborted).to.equal(true)
 		})
 
 		it("uses the Lite o1 message transform and suppresses native tool schemas", async () => {

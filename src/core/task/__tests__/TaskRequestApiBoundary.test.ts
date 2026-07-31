@@ -88,4 +88,31 @@ describe("Task request API boundary", () => {
 		expect(method).not.toMatch(/\bthis\.api\b/)
 		expect(method).not.toContain("this.getCurrentProviderInfo()")
 	})
+
+	it("classifies user cancellation before reporting either API request failure boundary", async () => {
+		const source = await readFile(taskSourcePath, "utf8")
+		const firstChunkBoundary = extractMethod(source, "async *attemptApiRequest(", "// Block identity is now assigned")
+		const iteratorStart = firstChunkBoundary.indexOf("const iterator = stream[Symbol.asyncIterator]()")
+		const firstChunkCatchStart = firstChunkBoundary.indexOf("} catch (error) {", iteratorStart)
+		const firstChunkCatch = firstChunkBoundary.slice(
+			firstChunkCatchStart,
+			firstChunkBoundary.indexOf("const isContextWindowExceededError", firstChunkCatchStart),
+		)
+		const streamingBoundary = extractMethod(source, "async recursivelyMakeClineRequests(", "async loadContext(")
+		const streamingStop = streamingBoundary.indexOf("await streamCoordinator?.stop()")
+		const streamingCatchStart = streamingBoundary.lastIndexOf("} catch (error) {", streamingStop)
+		const streamingCatch = streamingBoundary.slice(
+			streamingCatchStart,
+			streamingBoundary.indexOf("if (!this.taskState.abandoned)", streamingCatchStart),
+		)
+
+		expect(iteratorStart).toBeGreaterThanOrEqual(0)
+		expect(firstChunkCatchStart).toBeGreaterThan(iteratorStart)
+		expect(firstChunkCatch).toContain("if (this.taskState.abort)")
+		expect(firstChunkCatch.indexOf("if (this.taskState.abort)")).toBeLessThan(
+			firstChunkBoundary.indexOf("ErrorService.get()", firstChunkCatchStart),
+		)
+		expect(streamingCatchStart).toBeGreaterThanOrEqual(0)
+		expect(streamingCatch).toContain("if (this.taskState.abort)")
+	})
 })

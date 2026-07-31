@@ -165,6 +165,24 @@ describe("ModelConfiguration", () => {
 		expect(onCapabilitiesUpdate).toHaveBeenCalledWith({ supportsImages: true })
 	})
 
+	it("writes native tool support changes to provider capabilities", () => {
+		const onCapabilitiesUpdate = vi.fn()
+
+		render(
+			<ModelConfiguration
+				capabilities={{ supportsTools: false } as ModelCapabilities}
+				fields={{ capabilities: ["supportsTools"] }}
+				onCapabilitiesUpdate={onCapabilitiesUpdate}
+				onPricingUpdate={vi.fn()}
+			/>,
+		)
+
+		fireEvent.click(screen.getByRole("button", { name: /Model Configuration/i }))
+		fireEvent.click(screen.getByLabelText("Supports Native Tool Calls"))
+
+		expect(onCapabilitiesUpdate).toHaveBeenCalledWith({ supportsTools: true })
+	})
+
 	it("writes temperature changes to provider capabilities", () => {
 		const onCapabilitiesUpdate = vi.fn()
 

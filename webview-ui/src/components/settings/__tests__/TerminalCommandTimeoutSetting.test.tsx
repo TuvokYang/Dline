@@ -29,7 +29,7 @@ describe("TerminalCommandTimeoutSetting", () => {
 		const input = screen.getByLabelText("Terminal command timeout (minutes)") as HTMLInputElement
 
 		expect(input.value).toBe("30")
-		fireEvent.change(input, { target: { value: "45" } })
+		fireEvent.input(input, { target: { value: "45" } })
 
 		expect(mocks.updateSetting).toHaveBeenCalledWith("terminalCommandTimeoutSeconds", 2700)
 	})
@@ -38,7 +38,7 @@ describe("TerminalCommandTimeoutSetting", () => {
 		render(<TerminalCommandTimeoutSetting />)
 		const input = screen.getByLabelText("Terminal command timeout (minutes)")
 
-		fireEvent.change(input, { target: { value: "0.5" } })
+		fireEvent.input(input, { target: { value: "0.5" } })
 
 		expect(mocks.updateSetting).not.toHaveBeenCalled()
 		expect(screen.getByText("Enter at least 1 minute")).toBeInTheDocument()

@@ -223,4 +223,39 @@ describe("SubagentJobManager", () => {
 		assert.equal(createdBeforeRun, true)
 		assert.deepEqual(createdJobIds, ["subagent_1"])
 	})
+
+	it("marks an all-cancelled background batch as cancelled", async () => {
+		const manager = new SubagentJobManager()
+		const batch = manager.startBatch({
+			timeoutSeconds: 30,
+			items: ["one", "two", "three"].map((task) => ({
+				task,
+				prompt: `<task>${task}</task><context>ctx</context>`,
+				runner: async () => ({
+					status: "cancelled" as const,
+					error: "Subagent run cancelled.",
+					stats: {
+						toolCalls: 0,
+						inputTokens: 0,
+						outputTokens: 0,
+						cacheWriteTokens: 0,
+						cacheReadTokens: 0,
+						totalCost: 0,
+						currency: "USD",
+						contextTokens: 0,
+						contextWindow: 1000,
+						contextUsagePercentage: 0,
+					},
+				}),
+			})),
+		})
+
+		await flushJobs()
+
+		assert.equal(manager.getBatch(batch.batchJobId)?.status, "cancelled")
+		const [injectable] = manager.listInjectableResults()
+		assert.equal(injectable?.kind, "batch")
+		if (injectable?.kind !== "batch") assert.fail("cancelled batch should remain injectable")
+		assert.equal(injectable.batch.status, "cancelled")
+	})
 })

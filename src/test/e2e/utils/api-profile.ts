@@ -1,16 +1,32 @@
-import { cp, mkdir, readFile, stat, writeFile } from "node:fs/promises"
+import { createHash } from "node:crypto"
+import { cp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises"
 import * as os from "node:os"
 import * as path from "node:path"
-
-export type E2EProfileTarget = "auto" | "mock-openai" | "deepseek" | "openai-compatible"
+import { allProviderModels } from "../../../core/api/providers/models"
+import { getE2EMockProviderBaseUrl } from "../fixtures/server/api"
 
 export const E2E_PROFILE_NAMES = {
-	mockOpenAi: "E2E OpenAI Compatible Mock",
+	mockOpenAi: "E2E OpenAI Compatible Chat Mock",
+	mockOpenAiResponses: "E2E OpenAI Compatible Responses Mock",
+	mockOpenAiNative: "E2E OpenAI Native Responses Mock",
+	mockDeepSeek: "E2E DeepSeek Thinking Mock",
+	mockAnthropic: "E2E Anthropic Mock",
 	persistence: "E2E Profile Persistence",
-	deepseek: "E2E DeepSeek",
-	openAiCodex: "E2E OpenAI Codex",
-	openAiCompatible: "E2E OpenAI Compatible",
 } as const
+
+export interface LiveE2EProfile {
+	credentialSource: "environment" | "local"
+	environmentVariable?: string
+	profileId: string
+	profileName: string
+	provider: string
+	modelId: string
+}
+
+export interface EnvironmentE2EProfile extends LiveE2EProfile {
+	credentialSource: "environment"
+	environmentVariable: string
+}
 
 interface StoredApiProfile {
 	id: string
@@ -28,33 +44,152 @@ interface PrepareE2EStateOptions {
 	mockBaseUrl: string
 	sourceDataDir?: string
 	env?: NodeJS.ProcessEnv
+	profileMode?: E2EProfileMode
 }
+
+export type E2EProfileMode = "mock" | "live"
 
 export interface PreparedE2EState {
 	dlineDir: string
 	selectedProfileName: string
 	profileNames: string[]
+	liveProfiles: LiveE2EProfile[]
+	localProfileNames: string[]
+}
+
+interface ApiKeyEntry {
+	apiKey: string
+	name: string
+}
+
+interface ProviderSecretEntry {
+	name: string
+	provider: string
+	secrets: Record<string, string>
+}
+
+interface LocalProfileSource {
+	profiles: StoredApiProfile[]
+	apiKeys: Record<string, ApiKeyEntry>
+	providerSecrets: Record<string, ProviderSecretEntry>
+	hasOpenAiCodexAuth: boolean
 }
 
 const PROFILE_IDS = {
 	mockOpenAi: "dline-e2e-mock-openai",
+	mockOpenAiResponses: "dline-e2e-mock-openai-responses",
+	mockOpenAiNative: "dline-e2e-mock-openai-native",
+	mockDeepSeek: "dline-e2e-mock-deepseek",
+	mockAnthropic: "dline-e2e-mock-anthropic",
 	persistence: "dline-e2e-profile-persistence",
-	deepseek: "dline-e2e-deepseek",
-	openAiCompatible: "dline-e2e-openai-compatible",
 } as const
 
-const DEFAULT_MODELS = {
-	deepseek: "deepseek-v4-flash",
-	openAiCompatible: "gpt-5.6-sol",
-} as const
+const PROVIDER_CONFIG_FIELDS: Record<string, string> = {
+	anthropic: "anthropic",
+	bedrock: "bedrock",
+	vertex: "vertex",
+	sapaicore: "sapaicore",
+	"claude-code": "claudeCode",
+	openrouter: "openrouter",
+	openai: "openai",
+	ollama: "ollama",
+	lmstudio: "lmstudio",
+	qwen: "qwen",
+	"qwen-cn": "qwen",
+	"qwen-code": "qwenCode",
+	litellm: "litellm",
+	moonshot: "moonshot",
+	asksage: "asksage",
+	cline: "clineProvider",
+	"zai-intl": "zai",
+	"zai-cn": "zai",
+	oca: "oca",
+	aihubmix: "aihubmix",
+	minimax: "minimax",
+	deepseek: "deepseek",
+	doubao: "doubao",
+	mistral: "mistral",
+	"vscode-lm": "vscodeLm",
+	nebius: "nebius",
+	fireworks: "fireworks",
+	xai: "xai",
+	sambanova: "sambanova",
+	cerebras: "cerebras",
+	groq: "groq",
+	huggingface: "huggingface",
+	"huawei-cloud-maas": "huaweiCloudMaas",
+	baseten: "baseten",
+	"vercel-ai-gateway": "vercelAiGateway",
+	together: "together",
+	requesty: "requesty",
+	hicap: "hicap",
+	"openai-codex": "openaiCodex",
+	"openai-native": "openaiNative",
+	gemini: "gemini",
+	nousResearch: "nousResearch",
+	wandb: "wandb",
+	dify: "dify",
+}
 
 function highReasoning() {
 	return { enableThinking: true, effort: "high", thinkingBudget: 0 }
 }
 
+function budgetReasoning(thinkingBudget: number) {
+	return { enableThinking: true, effort: "", thinkingBudget }
+}
+
 function value(env: NodeJS.ProcessEnv, key: string): string | undefined {
 	const candidate = env[key]?.trim()
 	return candidate ? candidate : undefined
+}
+
+function environmentToken(value: string): string {
+	return value
+		.replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+		.replace(/[^a-zA-Z0-9]+/g, "_")
+		.replace(/^_+|_+$/g, "")
+		.toUpperCase()
+}
+
+function resolveEnvironmentModelId(provider: string, modelToken: string): string {
+	const models = allProviderModels[provider]?.models ?? {}
+	const registered = Object.keys(models).find((modelId) => environmentToken(modelId) === modelToken)
+	if (registered) return registered
+	if (Object.keys(models).length > 0) {
+		throw new Error(`No registered ${provider} model matches environment token ${modelToken}`)
+	}
+	return modelToken.toLowerCase().replaceAll("_", "-")
+}
+
+export function discoverEnvironmentE2EProfiles(env: NodeJS.ProcessEnv = process.env): EnvironmentE2EProfile[] {
+	const providers = Object.keys(allProviderModels)
+		.map((provider) => ({ provider, token: environmentToken(provider) }))
+		.sort((left, right) => right.token.length - left.token.length)
+	const discovered: EnvironmentE2EProfile[] = []
+
+	for (const [environmentVariable, apiKey] of Object.entries(env)) {
+		if (!environmentVariable.startsWith("API_KEY_") || !apiKey?.trim()) continue
+		const remainder = environmentVariable.slice("API_KEY_".length).toUpperCase()
+		const matchedProvider = providers.find(({ token }) => remainder.startsWith(`${token}_`))
+		if (!matchedProvider) {
+			throw new Error(`No registered provider matches environment variable ${environmentVariable}`)
+		}
+		const modelToken = remainder.slice(matchedProvider.token.length + 1)
+		if (!modelToken) throw new Error(`Missing model ID in environment variable ${environmentVariable}`)
+		const modelId = resolveEnvironmentModelId(matchedProvider.provider, modelToken)
+		const profileId = `dline-e2e-live-${createHash("sha256").update(environmentVariable).digest("hex").slice(0, 12)}`
+		discovered.push({
+			credentialSource: "environment",
+			environmentVariable,
+			profileId,
+			profileName: `${matchedProvider.provider}:${modelId}`,
+			provider: matchedProvider.provider,
+			modelId,
+		})
+	}
+
+	return discovered.sort((left, right) => left.environmentVariable.localeCompare(right.environmentVariable))
 }
 
 async function pathExists(filePath: string): Promise<boolean> {
@@ -89,13 +224,80 @@ async function writeJson(filePath: string, data: unknown, mode?: number): Promis
 	await writeFile(filePath, `${JSON.stringify(data, null, 2)}\n`, { encoding: "utf8", mode })
 }
 
+function hasNonEmptyValues(values: Record<string, string> | undefined): boolean {
+	return Boolean(values && Object.values(values).some((entry) => entry.trim().length > 0))
+}
+
+function localLiveProfiles(source: LocalProfileSource): LiveE2EProfile[] {
+	return source.profiles
+		.filter((profile) => {
+			if (!profile.enabled || !profile.provider || !profile.modelId) return false
+			if (source.apiKeys[profile.id]?.apiKey.trim()) return true
+			if (hasNonEmptyValues(source.providerSecrets[profile.id]?.secrets)) return true
+			return profile.provider === "openai-codex" && source.hasOpenAiCodexAuth
+		})
+		.map((profile) => ({
+			credentialSource: "local" as const,
+			profileId: profile.id,
+			profileName: profile.name,
+			provider: profile.provider,
+			modelId: profile.modelId,
+		}))
+}
+
+function mergeLiveProfiles(...sources: readonly LiveE2EProfile[][]): LiveE2EProfile[] {
+	const profiles = new Map<string, LiveE2EProfile>()
+	for (const source of sources) {
+		for (const profile of source) profiles.set(profile.profileId, profile)
+	}
+	return [...profiles.values()]
+}
+
+async function loadLocalProfileSource(sourceDataDir: string, destinationDataDir: string): Promise<LocalProfileSource> {
+	const settingsDir = path.join(destinationDataDir, "settings")
+	const secretsDir = path.join(destinationDataDir, "secrets")
+	await Promise.all([
+		copyDirectoryIfPresent(path.join(sourceDataDir, "secrets"), secretsDir),
+		copyFileIfPresent(path.join(sourceDataDir, "settings", "api_profiles.json"), path.join(settingsDir, "api_profiles.json")),
+	])
+
+	const [storedProfiles, apiKeys, providerSecrets, openAiCodexAuth] = await Promise.all([
+		readJson<StoredApiProfile[]>(path.join(settingsDir, "api_profiles.json"), []),
+		readJson<Record<string, ApiKeyEntry>>(path.join(secretsDir, "api_keys.json"), {}),
+		readJson<Record<string, ProviderSecretEntry>>(path.join(secretsDir, "provider_secrets.json"), {}),
+		readJson<Record<string, unknown>>(path.join(secretsDir, "openai_codex_oauth.json"), {}),
+	])
+	const profiles: StoredApiProfile[] = []
+	for (const profile of storedProfiles) upsertProfile(profiles, profile)
+
+	return {
+		profiles,
+		apiKeys,
+		providerSecrets,
+		hasOpenAiCodexAuth:
+			openAiCodexAuth.type === "openai-codex" &&
+			typeof openAiCodexAuth.access_token === "string" &&
+			openAiCodexAuth.access_token.length > 0,
+	}
+}
+
+async function loadEnvironmentProfileSource(env: NodeJS.ProcessEnv): Promise<EnvironmentE2EProfile[]> {
+	return discoverEnvironmentE2EProfiles(env)
+}
+
 function upsertProfile(profiles: StoredApiProfile[], profile: StoredApiProfile): void {
 	const index = profiles.findIndex((candidate) => candidate.id === profile.id)
 	if (index === -1) profiles.push(profile)
 	else profiles[index] = profile
 }
 
-function openAiProfile(id: string, name: string, baseUrl: string, modelId: string): StoredApiProfile {
+function openAiProfile(
+	id: string,
+	name: string,
+	baseUrl: string,
+	modelId: string,
+	apiEndpoint: "chat_completions" | "responses",
+): StoredApiProfile {
 	return {
 		id,
 		name,
@@ -105,33 +307,88 @@ function openAiProfile(id: string, name: string, baseUrl: string, modelId: strin
 		usedFor: ["act", "plan", "subagents"],
 		enabled: true,
 		openai: {
+			apiEndpoint,
 			reasoning: highReasoning(),
 			streamIncludeUsage: true,
+			capabilities: {
+				maxTokens: 8_192,
+				contextWindow: 131_072,
+				supportsImages: true,
+				supportsPromptCache: true,
+				supportsTools: true,
+			},
+			pricing: {
+				inputPrice: 1,
+				outputPrice: 2,
+				cacheReadsPrice: 0.1,
+				cacheWritesPrice: 1.25,
+			},
 		},
+	}
+}
+
+function openAiNativeProfile(id: string, name: string, baseUrl: string): StoredApiProfile {
+	return {
+		id,
+		name,
+		provider: "openai-native",
+		baseUrl,
+		modelId: "gpt-5.4-mini",
+		usedFor: ["act", "plan", "subagents"],
+		enabled: true,
+		openaiNative: {
+			reasoning: highReasoning(),
+		},
+	}
+}
+
+function deepSeekProfile(id: string, name: string, baseUrl: string): StoredApiProfile {
+	return {
+		id,
+		name,
+		provider: "deepseek",
+		baseUrl,
+		modelId: "deepseek-v4-flash",
+		usedFor: ["act", "plan", "subagents"],
+		enabled: true,
+		deepseek: {
+			reasoning: highReasoning(),
+		},
+	}
+}
+
+function anthropicProfile(id: string, name: string, baseUrl: string): StoredApiProfile {
+	return {
+		id,
+		name,
+		provider: "anthropic",
+		baseUrl,
+		modelId: "claude-sonnet-4-6",
+		usedFor: ["act", "plan", "subagents"],
+		enabled: true,
+		anthropic: {
+			reasoning: budgetReasoning(2_048),
+		},
+	}
+}
+
+function liveProfile(configuration: LiveE2EProfile): StoredApiProfile {
+	const providerConfig = allProviderModels[configuration.provider]
+	const providerConfigField = PROVIDER_CONFIG_FIELDS[configuration.provider]
+	return {
+		id: configuration.profileId,
+		name: configuration.profileName,
+		provider: configuration.provider,
+		...(providerConfig?.baseUrl ? { baseUrl: providerConfig.baseUrl } : {}),
+		modelId: configuration.modelId,
+		usedFor: ["act", "plan", "subagents"],
+		enabled: true,
+		...(providerConfigField ? { [providerConfigField]: { reasoning: highReasoning() } } : {}),
 	}
 }
 
 function setApiKey(apiKeys: Record<string, { apiKey: string; name: string }>, profile: StoredApiProfile, apiKey: string): void {
 	apiKeys[profile.id] = { apiKey, name: profile.name }
-}
-
-function parseProfileTarget(env: NodeJS.ProcessEnv): E2EProfileTarget {
-	const target = value(env, "DLINE_E2E_PROFILE") ?? "auto"
-	if (["auto", "mock-openai", "deepseek", "openai-compatible"].includes(target)) {
-		return target as E2EProfileTarget
-	}
-	throw new Error(`Unsupported DLINE_E2E_PROFILE: ${target}`)
-}
-
-export function hasLiveProfileCredentials(target: E2EProfileTarget, env: NodeJS.ProcessEnv = process.env): boolean {
-	switch (target) {
-		case "deepseek":
-			return Boolean(value(env, "DLINE_E2E_DEEPSEEK_API_KEY"))
-		case "openai-compatible":
-			return Boolean(value(env, "DLINE_E2E_OPENAI_COMPATIBLE_API_KEY"))
-		default:
-			return false
-	}
 }
 
 /**
@@ -141,79 +398,98 @@ export function hasLiveProfileCredentials(target: E2EProfileTarget, env: NodeJS.
 export async function prepareE2EState(options: PrepareE2EStateOptions): Promise<PreparedE2EState> {
 	const env = options.env ?? process.env
 	const sourceDataDir = options.sourceDataDir ?? path.join(os.homedir(), ".dline", "data")
+	const profileMode = options.profileMode ?? "mock"
 	const destinationDataDir = path.join(options.dlineDir, "data")
 	const settingsDir = path.join(destinationDataDir, "settings")
 	const secretsDir = path.join(destinationDataDir, "secrets")
-
-	await mkdir(destinationDataDir, { recursive: true })
-	await copyDirectoryIfPresent(path.join(sourceDataDir, "secrets"), secretsDir)
-	await copyFileIfPresent(
-		path.join(sourceDataDir, "settings", "api_profiles.json"),
-		path.join(settingsDir, "api_profiles.json"),
-	)
-
 	const profilesPath = path.join(settingsDir, "api_profiles.json")
-	const profiles = await readJson<StoredApiProfile[]>(profilesPath, [])
+	if (path.resolve(sourceDataDir) === path.resolve(destinationDataDir)) {
+		throw new Error("E2E profile source and isolated destination must be different directories")
+	}
+
+	await Promise.all([rm(profilesPath, { force: true }), rm(secretsDir, { recursive: true, force: true })])
+	await mkdir(destinationDataDir, { recursive: true })
+	const [localSource, environmentProfiles] =
+		profileMode === "live"
+			? await Promise.all([loadLocalProfileSource(sourceDataDir, destinationDataDir), loadEnvironmentProfileSource(env)])
+			: [
+					{
+						profiles: [],
+						apiKeys: {},
+						providerSecrets: {},
+						hasOpenAiCodexAuth: false,
+					} satisfies LocalProfileSource,
+					[],
+				]
+	const localProfiles = localLiveProfiles(localSource)
+
+	const profiles = localSource.profiles
+	const localProfileNames = profiles.map((profile) => profile.name)
 	const apiKeysPath = path.join(secretsDir, "api_keys.json")
-	const apiKeys = await readJson<Record<string, { apiKey: string; name: string }>>(apiKeysPath, {})
+	const apiKeys = localSource.apiKeys
 
 	const mockProfile = openAiProfile(
 		PROFILE_IDS.mockOpenAi,
 		E2E_PROFILE_NAMES.mockOpenAi,
-		`${options.mockBaseUrl}/v1`,
+		getE2EMockProviderBaseUrl(options.mockBaseUrl, "openai-compatible-chat"),
 		"dline-e2e-model",
+		"chat_completions",
 	)
 	upsertProfile(profiles, mockProfile)
 	setApiKey(apiKeys, mockProfile, "dline-e2e-api-key")
 
+	const mockResponsesProfile = openAiProfile(
+		PROFILE_IDS.mockOpenAiResponses,
+		E2E_PROFILE_NAMES.mockOpenAiResponses,
+		getE2EMockProviderBaseUrl(options.mockBaseUrl, "openai-compatible-responses"),
+		"dline-e2e-model",
+		"responses",
+	)
+	upsertProfile(profiles, mockResponsesProfile)
+	setApiKey(apiKeys, mockResponsesProfile, "dline-e2e-api-key")
+
+	const mockNativeProfile = openAiNativeProfile(
+		PROFILE_IDS.mockOpenAiNative,
+		E2E_PROFILE_NAMES.mockOpenAiNative,
+		getE2EMockProviderBaseUrl(options.mockBaseUrl, "openai-native-responses"),
+	)
+	upsertProfile(profiles, mockNativeProfile)
+	setApiKey(apiKeys, mockNativeProfile, "dline-e2e-api-key")
+
+	const mockDeepSeekProfile = deepSeekProfile(
+		PROFILE_IDS.mockDeepSeek,
+		E2E_PROFILE_NAMES.mockDeepSeek,
+		getE2EMockProviderBaseUrl(options.mockBaseUrl, "deepseek-chat"),
+	)
+	upsertProfile(profiles, mockDeepSeekProfile)
+	setApiKey(apiKeys, mockDeepSeekProfile, "dline-e2e-api-key")
+
+	const mockAnthropicProfile = anthropicProfile(
+		PROFILE_IDS.mockAnthropic,
+		E2E_PROFILE_NAMES.mockAnthropic,
+		getE2EMockProviderBaseUrl(options.mockBaseUrl, "anthropic-messages"),
+	)
+	upsertProfile(profiles, mockAnthropicProfile)
+	setApiKey(apiKeys, mockAnthropicProfile, "dline-e2e-api-key")
+
 	const persistenceProfile = openAiProfile(
 		PROFILE_IDS.persistence,
 		E2E_PROFILE_NAMES.persistence,
-		`${options.mockBaseUrl}/v1`,
+		getE2EMockProviderBaseUrl(options.mockBaseUrl, "openai-compatible-chat"),
 		"dline-e2e-model",
+		"chat_completions",
 	)
 	upsertProfile(profiles, persistenceProfile)
 	setApiKey(apiKeys, persistenceProfile, "dline-e2e-api-key")
 
-	const deepseekApiKey = value(env, "DLINE_E2E_DEEPSEEK_API_KEY")
-	if (deepseekApiKey) {
-		const profile: StoredApiProfile = {
-			id: PROFILE_IDS.deepseek,
-			name: E2E_PROFILE_NAMES.deepseek,
-			provider: "deepseek",
-			modelId: value(env, "DLINE_E2E_DEEPSEEK_MODEL_ID") ?? DEFAULT_MODELS.deepseek,
-			usedFor: ["act", "plan", "subagents"],
-			enabled: true,
-			deepseek: { reasoning: highReasoning() },
-		}
-		const baseUrl = value(env, "DLINE_E2E_DEEPSEEK_BASE_URL")
-		if (baseUrl) profile.baseUrl = baseUrl
+	for (const configuration of environmentProfiles) {
+		const profile = liveProfile(configuration)
 		upsertProfile(profiles, profile)
-		setApiKey(apiKeys, profile, deepseekApiKey)
+		setApiKey(apiKeys, profile, value(env, configuration.environmentVariable)!)
 	}
+	const liveProfiles = mergeLiveProfiles(localProfiles, environmentProfiles)
 
-	const openAiCompatibleApiKey = value(env, "DLINE_E2E_OPENAI_COMPATIBLE_API_KEY")
-	if (openAiCompatibleApiKey) {
-		const profile = openAiProfile(
-			PROFILE_IDS.openAiCompatible,
-			E2E_PROFILE_NAMES.openAiCompatible,
-			value(env, "DLINE_E2E_OPENAI_COMPATIBLE_BASE_URL") ?? "https://api.openai.com/v1",
-			value(env, "DLINE_E2E_OPENAI_COMPATIBLE_MODEL_ID") ?? DEFAULT_MODELS.openAiCompatible,
-		)
-		upsertProfile(profiles, profile)
-		setApiKey(apiKeys, profile, openAiCompatibleApiKey)
-	}
-
-	const profileTarget = parseProfileTarget(env)
-	const targetNames: Record<Exclude<E2EProfileTarget, "auto">, string> = {
-		"mock-openai": E2E_PROFILE_NAMES.mockOpenAi,
-		deepseek: E2E_PROFILE_NAMES.deepseek,
-		"openai-compatible": E2E_PROFILE_NAMES.openAiCompatible,
-	}
-	const selectedProfileName = profileTarget === "auto" ? E2E_PROFILE_NAMES.mockOpenAi : targetNames[profileTarget]
-	if (!profiles.some((profile) => profile.name === selectedProfileName && profile.enabled)) {
-		throw new Error(`Requested E2E profile is unavailable: ${selectedProfileName}`)
-	}
+	const selectedProfileName = E2E_PROFILE_NAMES.mockOpenAi
 
 	await writeJson(profilesPath, profiles)
 	await writeJson(apiKeysPath, apiKeys, 0o600)
@@ -234,5 +510,7 @@ export async function prepareE2EState(options: PrepareE2EStateOptions): Promise<
 		dlineDir: options.dlineDir,
 		selectedProfileName,
 		profileNames: profiles.map((profile) => profile.name),
+		liveProfiles,
+		localProfileNames,
 	}
 }

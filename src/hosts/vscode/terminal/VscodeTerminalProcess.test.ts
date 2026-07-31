@@ -468,6 +468,35 @@ describe("TerminalProcess (Integration Tests)", () => {
 		expect(process.getCompletionDetails().signal).toBe("SIGINT")
 	})
 
+	it("should latch cancellation while waiting for shell integration and never start later", async () => {
+		const terminal = TerminalRegistry.createTerminal().terminal
+		createdTerminals.push(terminal)
+		const executeCommand = vi.fn().mockReturnValue({ read: () => createMockStream([]) })
+		vi.spyOn(terminal, "shellIntegration", "get").mockReturnValue({ executeCommand })
+		const completed = vi.fn()
+		const continued = vi.fn()
+		process.on("completed", completed)
+		process.on("continue", continued)
+		let startedAt: number | undefined
+		void process.started.then((value) => {
+			startedAt = value
+		})
+
+		await process.terminate()
+		await Promise.resolve()
+		expect(completed).toHaveBeenCalledTimes(1)
+		expect(continued).toHaveBeenCalledTimes(1)
+		expect(startedAt).toEqual(expect.any(Number))
+		expect(process.waitForShellIntegration).toBe(false)
+		expect(process.getCompletionDetails().signal).toBe("SIGINT")
+
+		await process.run(terminal, "must-not-run")
+
+		expect(completed).toHaveBeenCalledTimes(1)
+		expect(continued).toHaveBeenCalledTimes(1)
+		expect(executeCommand).not.toHaveBeenCalled()
+	})
+
 	it("should remove prompt characters from the last line of output", () => {
 		const processAny = process as any
 

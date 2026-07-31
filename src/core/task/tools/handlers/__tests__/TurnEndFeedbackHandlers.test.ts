@@ -154,7 +154,7 @@ describe("turn-ending feedback handlers", () => {
 			{ ts: 3, type: "ask", ask: "followup", text: originalText },
 		)
 		const flush = createDeferred()
-		const updateClineMessage = vi.mocked(config.messageState.updateClineMessage)
+		const updateClineMessage = vi.mocked(config.callbacks.updateClineMessage)
 		const flushMessageUpdate = vi.mocked(config.messageState.flushMessageUpdate).mockImplementation(() => flush.promise)
 		let resolved = false
 
@@ -188,6 +188,37 @@ describe("turn-ending feedback handlers", () => {
 		await continuation
 		expect(resolved).toBe(true)
 		expect(config.messageState.updateTaskHistory).not.toHaveBeenCalled()
+	})
+
+	it("persists the selected follow-up option while preserving its attached draft in the tool result", async () => {
+		const selected = "Use the second option"
+		const response = `${selected}: Keep the compatibility layer`
+		const config = createConfig(response)
+		const handler = new AskFollowupQuestionToolHandler()
+		config.messageState.clineMessages.push({
+			ts: 3,
+			type: "ask",
+			ask: "followup",
+			text: JSON.stringify({ question: "Which option?", options: ["Use the first option", selected] }),
+		})
+
+		const result = await handler.continueInteraction(
+			config,
+			createBlock(ClineDefaultTool.ASK, {
+				question: "Which option?",
+				options: JSON.stringify(["Use the first option", selected]),
+			}),
+			{ actionId: "reply", draft: { text: response, images: [], files: [] } },
+		)
+
+		expect(config.callbacks.updateClineMessage).toHaveBeenCalledWith(0, {
+			text: JSON.stringify({
+				question: "Which option?",
+				options: ["Use the first option", selected],
+				selected,
+			}),
+		})
+		expect(result).toContain(`<feedback>\n${response}\n</feedback>`)
 	})
 
 	it("opens the canonical make_plan interaction without legacy options", async () => {

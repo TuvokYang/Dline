@@ -155,10 +155,14 @@ describe("handler interaction matrix", () => {
 	})
 
 	it("forces external workdirectories through approval and executes without a cd prefix", async () => {
-		const externalDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "dline-command-external-"))
+		const boundaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "dline-command-boundary-"))
+		const workspaceDirectory = path.join(boundaryRoot, "workspace")
+		const externalDirectory = path.join(boundaryRoot, "external")
+		await Promise.all([fs.mkdir(workspaceDirectory), fs.mkdir(externalDirectory)])
 		try {
 			const taskConfig = config({ actionId: "approve" })
 			Object.assign(taskConfig, {
+				cwd: workspaceDirectory,
 				api: { getModel: vi.fn(() => ({ id: "test-model" })) },
 				services: {
 					stateManager: {
@@ -205,7 +209,7 @@ describe("handler interaction matrix", () => {
 				expect.objectContaining({ workdirectory: canonicalDirectory }),
 			)
 		} finally {
-			await fs.rm(externalDirectory, { recursive: true, force: true })
+			await fs.rm(boundaryRoot, { recursive: true, force: true })
 		}
 	})
 

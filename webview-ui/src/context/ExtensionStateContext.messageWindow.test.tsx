@@ -178,6 +178,41 @@ function resumeInteractionState(revision: number): ExtensionState {
 		},
 	} as ExtensionState
 }
+
+function completionInteractionState(revision: number): ExtensionState {
+	return {
+		...stateSnapshot({ revision, total: 1 }),
+		taskViewState: {
+			taskId: "task-1",
+			phase: "completed",
+			stateRevision: revision,
+			activeInteraction: {
+				taskId: "task-1",
+				turnId: "turn-1",
+				interactionId: "completion-1",
+				kind: "completion",
+				status: "awaiting",
+				stateRevision: revision,
+				taskAsk: "completion_result",
+				presentationKind: "completion",
+				askMessageTs: 100,
+			},
+			input: { enabled: true, acceptsText: true, acceptsImages: true, acceptsFiles: true, enterAction: "reply" },
+			footer: {
+				actions: [
+					{
+						type: "start_new_task",
+						label: "Start New Task",
+						appearance: "primary",
+						enabled: true,
+						payloadPolicy: "draft",
+					},
+				],
+			},
+		},
+	} as ExtensionState
+}
+
 describe("ExtensionStateContext persisted message reconciliation", () => {
 	beforeEach(() => {
 		vi.mocked(TaskServiceClient.fetchMessage).mockReset().mockResolvedValue({ messages: [], startIndex: 0 })
@@ -256,6 +291,53 @@ describe("ExtensionStateContext persisted message reconciliation", () => {
 		expect(screen.getByLabelText("Interaction draft")).toHaveValue("keep unsent draft")
 		expect(TaskServiceClient.fetchMessage).toHaveBeenCalledTimes(2)
 		expect(TaskServiceClient.fetchMessage).toHaveBeenCalledWith({ referenceIndex: -1, count: 200 })
+	})
+
+	it("does not let a stale completion say downgrade a realtime completion ask anchor", async () => {
+		const staleSay = convertClineMessageToProto({
+			ts: 100,
+			type: "say",
+			say: "completion_result",
+			text: "Completed",
+		})
+		const completionAsk = convertClineMessageToProto({
+			ts: 100,
+			type: "ask",
+			ask: "completion_result",
+			text: "Completed",
+			interactionId: "completion-1",
+		})
+		let resolveStaleFetch: ((value: { messages: [typeof staleSay]; startIndex: number }) => void) | undefined
+		const staleFetch = new Promise<{ messages: [typeof staleSay]; startIndex: number }>((resolve) => {
+			resolveStaleFetch = resolve
+		})
+		vi.mocked(TaskServiceClient.fetchMessage)
+			.mockReturnValueOnce(staleFetch)
+			.mockResolvedValue({ messages: [staleSay], startIndex: 0 })
+
+		render(
+			<ExtensionStateContextProvider>
+				<InteractionProbe observedTaskIds={[]} />
+			</ExtensionStateContextProvider>,
+		)
+		await waitFor(() => expect(subscriptions.state).toBeDefined())
+		act(() => {
+			subscriptions.state?.onResponse({ stateJson: JSON.stringify(completionInteractionState(1)) })
+		})
+		await waitFor(() => expect(TaskServiceClient.fetchMessage).toHaveBeenCalledOnce())
+
+		act(() => {
+			subscriptions.partial?.onResponse(completionAsk)
+		})
+		await waitFor(() => expect(screen.getByRole("button", { name: "Start New Task" })).toBeVisible())
+
+		await act(async () => {
+			resolveStaleFetch?.({ messages: [staleSay], startIndex: 0 })
+			await staleFetch
+		})
+
+		await waitFor(() => expect(TaskServiceClient.fetchMessage).toHaveBeenCalledTimes(2))
+		expect(screen.getByRole("button", { name: "Start New Task" })).toBeVisible()
 	})
 
 	it("renders partial user_feedback through ChatRow when the realtime event arrives normally", async () => {

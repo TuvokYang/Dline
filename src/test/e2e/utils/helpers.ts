@@ -1,11 +1,21 @@
-import { cpSync, mkdtempSync, type PathLike, type RmOptions, rmSync } from "node:fs"
+import {
+	cpSync,
+	existsSync,
+	mkdtempSync,
+	type PathLike,
+	type RmOptions,
+	readdirSync,
+	readFileSync,
+	rmSync,
+	statSync,
+} from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { type ElectronApplication, expect, type Frame, type Page, test } from "@playwright/test"
 import { downloadAndUnzipVSCode, SilentReporter } from "@vscode/test-electron"
 import { _electron } from "playwright"
 import { ClineApiServerMock } from "../fixtures/server"
-import { prepareE2EState } from "./api-profile"
+import { type E2EProfileMode, type PreparedE2EState, prepareE2EState } from "./api-profile"
 
 interface E2ETestDirectories {
 	workspaceDir: string
@@ -19,6 +29,8 @@ interface E2ETestDirectories {
 interface E2EWorkerFixtures {
 	server: ClineApiServerMock
 	dlineStateTemplateDir: string
+	preparedE2EState: PreparedE2EState
+	profileMode: E2EProfileMode
 }
 
 export interface E2ETestConfigs {
@@ -91,6 +103,15 @@ export class E2ETestHelper {
 	}
 
 	public async getSidebar(page: Page): Promise<Frame> {
+		const consoleErrors: string[] = []
+		const pageErrors: string[] = []
+		const onConsole = (message: { type(): string; text(): string }) => {
+			if (message.type() === "error") consoleErrors.push(message.text())
+		}
+		const onPageError = (error: Error) => pageErrors.push(error.stack ?? error.message)
+		page.on("console", onConsole)
+		page.on("pageerror", onPageError)
+
 		const findSidebarFrame = async (): Promise<Frame | null> => {
 			// Check cached frame first
 			if (this.cachedFrame && !this.cachedFrame.isDetached()) {
@@ -104,7 +125,12 @@ export class E2ETestHelper {
 
 				try {
 					const title = await frame.title()
-					if (title.startsWith("Cline") || title.startsWith("Dline")) {
+					const isNamedDlineFrame = title.startsWith("Cline") || title.startsWith("Dline")
+					const isVsCodeWebviewFrame =
+						frame !== page.mainFrame() &&
+						frame.url().startsWith("vscode-webview://") &&
+						(await frame.locator("#root").count()) > 0
+					if (isNamedDlineFrame || isVsCodeWebviewFrame) {
 						this.cachedFrame = frame
 						return frame
 					}
@@ -118,7 +144,47 @@ export class E2ETestHelper {
 		}
 
 		// Use longer timeout (30s) for sidebar - macOS CI runners can be slow
-		await E2ETestHelper.waitUntil(async () => (await findSidebarFrame()) !== null, 30000)
+		try {
+			await E2ETestHelper.waitUntil(async () => (await findSidebarFrame()) !== null, 30000)
+		} catch (error) {
+			const observedFrames: Array<{ title?: string; url: string; rootCount?: number; error?: string }> = []
+			for (const frame of page.frames()) {
+				try {
+					observedFrames.push({
+						title: await frame.title(),
+						url: frame.url(),
+						rootCount: await frame.locator("#root").count(),
+					})
+				} catch (frameError) {
+					observedFrames.push({
+						url: frame.url(),
+						error: frameError instanceof Error ? frameError.message : String(frameError),
+					})
+				}
+			}
+			const dlineTabs = await page.getByRole("tab", { name: /Dline/ }).evaluateAll((elements) =>
+				elements.map((element) => ({
+					ariaExpanded: element.getAttribute("aria-expanded"),
+					ariaSelected: element.getAttribute("aria-selected"),
+					className: element.className,
+					outerHtml: element.outerHTML.slice(0, 1_000),
+				})),
+			)
+			const webviewHosts = await page.locator("iframe, webview").evaluateAll((elements) =>
+				elements.map((element) => ({
+					className: element.className,
+					hidden: element.hasAttribute("hidden"),
+					outerHtml: element.outerHTML.slice(0, 1_000),
+				})),
+			)
+			throw new Error(
+				`Dline sidebar frame unavailable; observed=${JSON.stringify({ observedFrames, dlineTabs, webviewHosts, consoleErrors, pageErrors })}`,
+				{ cause: error },
+			)
+		} finally {
+			page.off("console", onConsole)
+			page.off("pageerror", onPageError)
+		}
 		return (await findSidebarFrame()) || page.mainFrame()
 	}
 
@@ -161,18 +227,50 @@ export class E2ETestHelper {
 	}
 
 	public static async openClineSidebar(page: Page): Promise<void> {
-		await page.getByRole("tab", { name: /Dline/ }).locator("a").click()
+		const dlineTab = page.getByRole("tab", { name: /Dline/ })
+		await expect(dlineTab).toBeVisible()
+		if ((await dlineTab.getAttribute("aria-expanded")) !== "true") {
+			await dlineTab.locator("a").click()
+		}
+		await expect(dlineTab).toHaveAttribute("aria-expanded", "true")
 	}
 
 	public static async runCommandPalette(page: Page, command: string): Promise<void> {
-		const editorMenu = page.locator("li").filter({ hasText: "[Extension Development Host]" }).first()
-		await editorMenu.click({ delay: 100 })
-		const editorSearchBar = page.getByRole("textbox", {
-			name: "Search files by name (append",
-		})
-		await editorSearchBar.click({ delay: 100 }) // Ensure focus
-		await editorSearchBar.fill(`>${command}`)
-		await page.keyboard.press("Enter")
+		await page.keyboard.press("F1")
+		const commandInput = page.locator(".quick-input-widget input").last()
+		await expect(commandInput).toBeVisible()
+		await commandInput.fill(command)
+		await commandInput.press("Enter")
+	}
+
+	private static findDlineOutputLogs(directory: string): string[] {
+		if (!existsSync(directory)) return []
+		const result: string[] = []
+		for (const entry of readdirSync(directory, { withFileTypes: true })) {
+			const entryPath = path.join(directory, entry.name)
+			if (entry.isDirectory()) result.push(...E2ETestHelper.findDlineOutputLogs(entryPath))
+			else if (/^\d+-Dline\.log$/i.test(entry.name)) result.push(entryPath)
+		}
+		return result
+	}
+
+	/** Read the backing log for the live Dline VS Code Output channel. */
+	public static async readDlineOutput(userDataDir: string): Promise<string> {
+		const outputPath = await E2ETestHelper.waitForValue(() => {
+			const candidates = E2ETestHelper.findDlineOutputLogs(path.join(userDataDir, "logs"))
+			return candidates.sort((left, right) => statSync(right).mtimeMs - statSync(left).mtimeMs)[0]
+		}, 10_000)
+		return readFileSync(outputPath, "utf8")
+	}
+
+	/** Fail when the Dline output channel contains an unexpected internal error. */
+	public static async expectNoUnexpectedDlineErrors(userDataDir: string, allowed: RegExp[] = []): Promise<void> {
+		const output = await E2ETestHelper.readDlineOutput(userDataDir)
+		const suspiciousLines = output
+			.split(/\r?\n/)
+			.filter((line) => /\[error\]|uncaught|unhandled|TypeError|ReferenceError|invalid_runtime_event/i.test(line))
+		const unexpected = suspiciousLines.filter((line) => !allowed.some((pattern) => pattern.test(line)))
+		expect(unexpected, `Unexpected Dline output errors:\n${unexpected.join("\n")}`).toEqual([])
 	}
 
 	// Clear cached frame when needed
@@ -240,7 +338,12 @@ export class E2ETestHelper {
  * - Configures VS Code with disabled updates, workspace trust, and welcome screens
  */
 export const e2e = test
+	.extend<E2ETestConfigs>({
+		workspaceType: "single",
+		channel: "stable",
+	})
 	.extend<E2ETestDirectories, E2EWorkerFixtures>({
+		profileMode: ["mock", { scope: "worker", option: true }],
 		server: [
 			async ({}, use) => {
 				const server = await ClineApiServerMock.startGlobalServer()
@@ -252,8 +355,8 @@ export const e2e = test
 			},
 			{ scope: "worker" },
 		],
-		dlineStateTemplateDir: [
-			async ({ server }, use) => {
+		preparedE2EState: [
+			async ({ server, profileMode }, use) => {
 				const templateDir = E2ETestHelper.DLINE_STATE_TEMPLATE_DIR
 				await Promise.all([
 					E2ETestHelper.rmForRetries(templateDir, { recursive: true, force: true }),
@@ -261,11 +364,12 @@ export const e2e = test
 					E2ETestHelper.rmForRetries(E2ETestHelper.DLINE_DOCS_DIR, { recursive: true, force: true }),
 				])
 				try {
-					await prepareE2EState({
+					const preparedState = await prepareE2EState({
 						dlineDir: templateDir,
 						mockBaseUrl: server.baseUrl,
+						profileMode,
 					})
-					await use(templateDir)
+					await use(preparedState)
 				} finally {
 					await Promise.all([
 						E2ETestHelper.rmForRetries(templateDir, { recursive: true, force: true }),
@@ -276,23 +380,52 @@ export const e2e = test
 			},
 			{ scope: "worker" },
 		],
+		dlineStateTemplateDir: [
+			async ({ preparedE2EState }, use) => {
+				await use(preparedE2EState.dlineDir)
+			},
+			{ scope: "worker" },
+		],
 		workspaceDir: async ({}, use) => {
-			await use(path.join(E2ETestHelper.E2E_TESTS_DIR, "fixtures", "workspace"))
+			const fixtureRoot = path.join(E2ETestHelper.E2E_TESTS_DIR, "fixtures")
+			const temporaryRoot = mkdtempSync(path.join(os.tmpdir(), "dline-e2e-workspace-"))
+			const workspaceDir = path.join(temporaryRoot, "workspace")
+			cpSync(path.join(fixtureRoot, "workspace"), workspaceDir, { recursive: true })
+			try {
+				await use(workspaceDir)
+			} finally {
+				await E2ETestHelper.rmForRetries(temporaryRoot, { recursive: true, force: true })
+			}
 		},
 		multiRootWorkspaceDir: async ({}, use) => {
 			// DOCS: https://code.visualstudio.com/docs/editing/workspaces/multi-root-workspaces
-			await use(path.join(E2ETestHelper.E2E_TESTS_DIR, "fixtures", "multiroots.code-workspace"))
+			const fixtureRoot = path.join(E2ETestHelper.E2E_TESTS_DIR, "fixtures")
+			const temporaryRoot = mkdtempSync(path.join(os.tmpdir(), "dline-e2e-multiroot-"))
+			cpSync(path.join(fixtureRoot, "workspace"), path.join(temporaryRoot, "workspace"), { recursive: true })
+			cpSync(path.join(fixtureRoot, "workspace_2"), path.join(temporaryRoot, "workspace_2"), { recursive: true })
+			const workspaceFile = path.join(temporaryRoot, "multiroots.code-workspace")
+			cpSync(path.join(fixtureRoot, "multiroots.code-workspace"), workspaceFile)
+			try {
+				await use(workspaceFile)
+			} finally {
+				await E2ETestHelper.rmForRetries(temporaryRoot, { recursive: true, force: true })
+			}
 		},
-		userDataDir: async ({}, use) => {
+		userDataDir: async ({}, use, testInfo) => {
 			const userDataDir = mkdtempSync(path.join(os.tmpdir(), "dline-e2e-user-data-"))
 			try {
 				await use(userDataDir)
 			} finally {
+				const logsDir = path.join(userDataDir, "logs")
+				if (testInfo.status !== testInfo.expectedStatus && existsSync(logsDir)) {
+					cpSync(logsDir, testInfo.outputPath("vscode-logs"), { recursive: true })
+				}
 				await E2ETestHelper.rmForRetries(userDataDir, { recursive: true, force: true })
 			}
 		},
-		dlineDir: async ({ dlineStateTemplateDir }, use) => {
+		dlineDir: async ({ dlineStateTemplateDir, server }, use, testInfo) => {
 			const dlineDir = E2ETestHelper.DLINE_DIR
+			server.resetOpenAiMock()
 			await Promise.all([
 				E2ETestHelper.rmForRetries(dlineDir, { recursive: true, force: true }),
 				E2ETestHelper.rmForRetries(E2ETestHelper.DLINE_DOCS_DIR, { recursive: true, force: true }),
@@ -301,6 +434,10 @@ export const e2e = test
 			try {
 				await use(dlineDir)
 			} finally {
+				const taskStateDir = path.join(E2ETestHelper.DLINE_DOCS_DIR, "tasks")
+				if (testInfo.status !== testInfo.expectedStatus && existsSync(taskStateDir)) {
+					cpSync(taskStateDir, testInfo.outputPath("dline-task-state"), { recursive: true })
+				}
 				await Promise.all([
 					E2ETestHelper.rmForRetries(dlineDir, { recursive: true, force: true }),
 					E2ETestHelper.rmForRetries(E2ETestHelper.DLINE_DOCS_DIR, { recursive: true, force: true }),
@@ -314,10 +451,6 @@ export const e2e = test
 			void dlineDir
 			await use(E2ETestHelper.DLINE_DOCS_DIR)
 		},
-	})
-	.extend<E2ETestConfigs>({
-		workspaceType: "single",
-		channel: "stable",
 	})
 	.extend<{ openVSCode: (workspacePath: string) => Promise<ElectronApplication> }>({
 		openVSCode: async ({ userDataDir, dlineDir, dlineHomeDir, dlineDocsDir, channel, server }, use, testInfo) => {
@@ -341,7 +474,7 @@ export const e2e = test
 						// GRPC_RECORDER_ENABLED: "true",
 						// GRPC_RECORDER_TESTS_FILTERS_ENABLED: "true"
 						// IS_DEV: "true",
-						// DEV_WORKSPACE_FOLDER: E2ETestHelper.CODEBASE_ROOT_DIR,
+						DEV_WORKSPACE_FOLDER: E2ETestHelper.CODEBASE_ROOT_DIR,
 					},
 					recordVideo: {
 						dir: E2ETestHelper.getResultsDir(testInfo.title, "recordings"),

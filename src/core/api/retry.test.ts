@@ -6,6 +6,7 @@ import { withRetry } from "./retry"
 
 describe("Retry Decorator", () => {
 	afterEach(() => {
+		vi.useRealTimers()
 		vi.restoreAllMocks()
 	})
 
@@ -129,8 +130,8 @@ describe("Retry Decorator", () => {
 				result.push(value)
 			}
 
-			if (callCount !== 2)
-				throw new Error(`Expected callCount 2, got ${callCount}`)(setTimeoutSpy.mock.calls.length === 1).should.be.true
+			;(callCount as any).should.equal(2)
+			setTimeoutSpy.mock.calls.length.should.equal(1)
 			const [_, delay] = setTimeoutSpy.mock.calls[0]
 			delay?.should.equal(0)
 
@@ -138,10 +139,14 @@ describe("Retry Decorator", () => {
 		})
 
 		it("should respect retry-after header with Unix timestamp", async () => {
-			const setTimeoutSpy = vi.spyOn(global, "setTimeout")
-			let callCount = 0
 			const fixedDate = new Date("2010-01-01T00:00:00.000Z")
-			const retryTimestamp = Math.floor(fixedDate.getTime() / 1000) + 0.01 // 10ms in the future
+			vi.spyOn(Date, "now").mockReturnValue(fixedDate.getTime())
+			const setTimeoutSpy = vi.spyOn(global, "setTimeout").mockImplementation(((callback: (...args: any[]) => void) => {
+				queueMicrotask(callback)
+				return {} as NodeJS.Timeout
+			}) as typeof setTimeout)
+			let callCount = 0
+			const retryTimestamp = Math.floor(fixedDate.getTime() / 1000) + 1
 			const baseDelay = 1000
 
 			class TestClass {
@@ -158,16 +163,13 @@ describe("Retry Decorator", () => {
 				}
 			}
 
-			const test = new TestClass()
 			const result = []
-			for await (const value of test.failMethod()) {
-				result.push(value)
-			}
+			for await (const value of new TestClass().failMethod()) result.push(value)
 
-			if (callCount !== 2)
-				throw new Error(`Expected callCount 2, got ${callCount}`)(setTimeoutSpy.mock.calls.length === 1).should.be.true
+			;(callCount as any).should.equal(2)
+			setTimeoutSpy.mock.calls.length.should.equal(1)
 			const [_, delay] = setTimeoutSpy.mock.calls[0]
-			delay?.should.equal(fixedDate.getTime())
+			delay?.should.equal(1_000)
 
 			result.should.deepEqual(["success after retry"])
 		})
@@ -196,8 +198,8 @@ describe("Retry Decorator", () => {
 				result.push(value)
 			}
 
-			if (callCount !== 2)
-				throw new Error(`Expected callCount 2, got ${callCount}`)(setTimeoutSpy.mock.calls.length === 1).should.be.true
+			;(callCount as any).should.equal(2)
+			setTimeoutSpy.mock.calls.length.should.equal(1)
 			const [_, delay] = setTimeoutSpy.mock.calls[0]
 			delay?.should.equal(baseDelay)
 
@@ -229,10 +231,9 @@ describe("Retry Decorator", () => {
 				result.push(value)
 			}
 
-			if (callCount !== 3)
-				throw new Error(`Expected callCount 3, got ${callCount}`)(setTimeoutSpy.mock.calls.length === 1).should.be.true
-			const [_, delay] = setTimeoutSpy.mock.calls[0]
-			delay?.should.equal(maxDelay)
+			;(callCount as any).should.equal(3)
+			setTimeoutSpy.mock.calls.length.should.equal(2)
+			setTimeoutSpy.mock.calls.map(([, delay]) => delay).should.deepEqual([maxDelay, maxDelay])
 
 			result.should.deepEqual(["success after retries"])
 		})

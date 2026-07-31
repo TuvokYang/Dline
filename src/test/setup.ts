@@ -1,4 +1,22 @@
-import { vi } from "vitest"
+import type { EventEmitter } from "node:events"
+import { afterAll, vi } from "vitest"
+
+const processListenerEvents = ["exit", "uncaughtException"] as const
+const processEventEmitter = process as unknown as EventEmitter
+const baselineProcessListeners = new Map(
+	processListenerEvents.map((event) => [event, new Set(processEventEmitter.listeners(event))] as const),
+)
+
+afterAll(() => {
+	for (const event of processListenerEvents) {
+		const baseline = baselineProcessListeners.get(event)
+		for (const listener of processEventEmitter.listeners(event)) {
+			if (!baseline?.has(listener)) {
+				processEventEmitter.removeListener(event, listener as (...args: unknown[]) => void)
+			}
+		}
+	}
+})
 
 // sinon sandbox removed — use vi.mock / vi.spyOn / vi.fn() directly
 ;(() => {})()

@@ -232,6 +232,112 @@ describe("reconcileResume", () => {
 		})
 	})
 
+	it("keeps a pending command ask as command approval", () => {
+		const interactionId = "tid-pending-command"
+		const functionId = "fn-pending-command"
+		const snapshot = snapshotWithTurn(interactionId, functionId, {
+			toolName: "execute_command",
+			blockPhase: BlockPhase.AWAITING_APPROVAL,
+			interaction: "command_approval",
+		})
+		const result = reconcileResume(
+			fullInput(
+				[apiUser(), assistantTool(interactionId, functionId, "execute_command")],
+				[{ ...interactionAsk("command", interactionId), commandStatus: "pending" }],
+				snapshot,
+			),
+		)
+
+		expect(result.entry).toEqual({
+			type: "reopen_interaction",
+			turnId: `turn:${interactionId}`,
+			interactionId,
+		})
+		expect(result.snapshot.interaction).toMatchObject({ kind: "command_approval", status: "awaiting" })
+	})
+
+	it("keeps handler-owned command approval while its outer block is already executing", () => {
+		const interactionId = "tid-handler-command"
+		const functionId = "fn-handler-command"
+		const snapshot = snapshotWithTurn(interactionId, functionId, {
+			toolName: "execute_command",
+			blockPhase: BlockPhase.EXECUTING,
+			interaction: "command_approval",
+		})
+		if (!snapshot.turn) throw new Error("expected restored command turn")
+		snapshot.turn.blocks[0].requiresApproval = false
+
+		const result = reconcileResume(
+			fullInput(
+				[apiUser(), assistantTool(interactionId, functionId, "execute_command")],
+				[{ ...interactionAsk("command", interactionId), commandStatus: "pending" }],
+				snapshot,
+			),
+		)
+
+		expect(result.entry).toEqual({
+			type: "reopen_interaction",
+			turnId: `turn:${interactionId}`,
+			interactionId,
+		})
+		expect(result.snapshot.turn).toMatchObject({
+			activeDlineTid: interactionId,
+			blocks: [{ dlineTid: interactionId, phase: BlockPhase.AWAITING_APPROVAL, requiresApproval: true }],
+		})
+	})
+
+	it("rebuilds the exact anchored tool turn when a valid stale snapshot has no turn", () => {
+		const interactionId = "tid-anchored"
+		const apiHistory: ClineStorageMessage[] = [
+			apiUser(),
+			{
+				role: "assistant",
+				ts: 200,
+				content: [
+					{
+						type: "tool_use",
+						name: "write_to_file",
+						input: {},
+						function_id: "fn-anchored",
+						dline_tid: interactionId,
+					},
+					{
+						type: "tool_use",
+						name: "read_file",
+						input: {},
+						function_id: "fn-sibling",
+						dline_tid: "tid-sibling",
+					},
+				],
+			},
+		]
+		const result = reconcileResume(fullInput(apiHistory, [interactionAsk("tool", interactionId)], baseline(1)))
+
+		expect(result.entry).toEqual({
+			type: "reopen_interaction",
+			turnId: `turn:${interactionId}`,
+			interactionId,
+		})
+		expect(result.snapshot.turn).toMatchObject({
+			turnId: `turn:${interactionId}`,
+			assistantApiIndex: 1,
+			activeDlineTid: interactionId,
+			blocks: [
+				{
+					dlineTid: interactionId,
+					functionId: "fn-anchored",
+					phase: BlockPhase.AWAITING_APPROVAL,
+				},
+				{
+					dlineTid: "tid-sibling",
+					functionId: "fn-sibling",
+					phase: BlockPhase.STREAMING,
+				},
+			],
+		})
+		expect(result.snapshot.interaction?.turnId).toBe(result.snapshot.turn?.turnId)
+	})
+
 	it.each([
 		["followup", "followup"],
 		["make_plan", "make_plan"],
@@ -340,6 +446,38 @@ describe("reconcileResume", () => {
 		expect(result.snapshot.turn?.blocks[0]?.phase).toBe(BlockPhase.COMPLETED)
 	})
 
+	it("does not reopen terminal tool approval when its result predates the snapshot tail", () => {
+		const interactionId = "tid-terminal-write"
+		const functionId = "fn-terminal-write"
+		const snapshot = snapshotWithTurn(interactionId, functionId, {
+			toolName: "write_to_file",
+			interaction: "tool_approval",
+			blockPhase: BlockPhase.COMPLETED,
+		})
+		snapshot.apiIndex = 2
+		snapshot.anchor = { ...snapshot.anchor, apiIndex: 2 }
+		if (!snapshot.turn) throw new Error("expected restored write turn")
+		snapshot.turn.activeDlineTid = interactionId
+
+		const result = reconcileResume(
+			fullInput(
+				[apiUser(), assistantTool(interactionId, functionId, "write_to_file"), toolResult(interactionId, functionId)],
+				[interactionAsk("tool", interactionId)],
+				snapshot,
+			),
+		)
+
+		expect(result.entry).toMatchObject({ type: "show_resume_interaction" })
+		expect(result.snapshot.interaction).toMatchObject({ kind: "resume", status: "opening" })
+		expect(result.snapshot.turn).toMatchObject({
+			activeDlineTid: undefined,
+			blocks: [{ dlineTid: interactionId, phase: BlockPhase.COMPLETED }],
+		})
+		expect(result.diagnostics).not.toContainEqual(
+			expect.objectContaining({ code: "missing_interaction_anchor", interactionId }),
+		)
+	})
+
 	it("clears a stale approval owner from a terminal restored turn", () => {
 		const snapshot = snapshotWithTurn("tid-report", "fn-report", {
 			toolName: "generate_report",
@@ -357,6 +495,104 @@ describe("reconcileResume", () => {
 		expect(result.snapshot.turn).toMatchObject({
 			activeDlineTid: undefined,
 			blocks: [{ dlineTid: "tid-report", phase: BlockPhase.COMPLETED }],
+		})
+	})
+
+	it("does not reopen a completed command ask as command approval", () => {
+		const interactionId = "tid-completed-command"
+		const functionId = "fn-completed-command"
+		const snapshot = snapshotWithTurn(interactionId, functionId, {
+			toolName: "execute_command",
+			blockPhase: BlockPhase.COMPLETED,
+			interaction: "command_approval",
+		})
+		snapshot.apiIndex = 2
+		snapshot.anchor = { ...snapshot.anchor, apiIndex: 2 }
+		if (!snapshot.turn) throw new Error("expected restored command turn")
+		snapshot.turn.blocks[0].requiresApproval = false
+		snapshot.turn.activeDlineTid = interactionId
+
+		const result = reconcileResume(
+			fullInput(
+				[apiUser(), assistantTool(interactionId, functionId, "execute_command"), toolResult(interactionId, functionId)],
+				[
+					{
+						...interactionAsk("command", interactionId),
+						commandStatus: "completed",
+					},
+				],
+				snapshot,
+			),
+		)
+
+		expect(result.entry).toMatchObject({ type: "show_resume_interaction" })
+		expect(result.snapshot.phase).toBe(TaskPhase.PAUSED)
+		expect(result.snapshot.interaction).toMatchObject({ kind: "resume", status: "opening" })
+		expect(result.snapshot.interaction?.interactionId).not.toBe(interactionId)
+		expect(result.snapshot.turn?.blocks).toMatchObject([
+			{ dlineTid: interactionId, phase: BlockPhase.COMPLETED, requiresApproval: false },
+		])
+		expect(result.snapshot.turn?.activeDlineTid).toBeUndefined()
+		expect(result.diagnostics).not.toContainEqual(
+			expect.objectContaining({ code: "missing_interaction_anchor", interactionId }),
+		)
+	})
+
+	it("does not reopen an already approved running command as command approval", () => {
+		const interactionId = "tid-running-command"
+		const functionId = "fn-running-command"
+		const snapshot = snapshotWithTurn(interactionId, functionId, {
+			toolName: "execute_command",
+			blockPhase: BlockPhase.EXECUTING,
+			interaction: "command_approval",
+		})
+		if (!snapshot.turn) throw new Error("expected restored command turn")
+		snapshot.turn.blocks[0].requiresApproval = false
+		snapshot.turn.activeDlineTid = interactionId
+
+		const result = reconcileResume(
+			fullInput(
+				[apiUser(), assistantTool(interactionId, functionId, "execute_command")],
+				[{ ...interactionAsk("command", interactionId), commandStatus: "running" }],
+				snapshot,
+			),
+		)
+
+		expect(result.entry).toMatchObject({ type: "show_resume_interaction" })
+		expect(result.snapshot.phase).toBe(TaskPhase.PAUSED)
+		expect(result.snapshot.interaction).toMatchObject({ kind: "resume", status: "opening" })
+		expect(result.snapshot.interaction?.interactionId).not.toBe(interactionId)
+		expect(result.snapshot.turn?.activeDlineTid).toBeUndefined()
+		expect(result.diagnostics).not.toContainEqual(
+			expect.objectContaining({ code: "missing_interaction_anchor", interactionId }),
+		)
+	})
+
+	it("does not reopen command approval after its response was durably accepted", () => {
+		const interactionId = "tid-accepted-command"
+		const functionId = "fn-accepted-command"
+		const snapshot = snapshotWithTurn(interactionId, functionId, {
+			toolName: "execute_command",
+			blockPhase: BlockPhase.AWAITING_APPROVAL,
+			interaction: "command_approval",
+			interactionStatus: "resolving",
+		})
+		if (!snapshot.turn) throw new Error("expected restored command turn")
+		snapshot.turn.activeDlineTid = interactionId
+
+		const result = reconcileResume(
+			fullInput(
+				[apiUser(), assistantTool(interactionId, functionId, "execute_command")],
+				[{ ...interactionAsk("command", interactionId), commandStatus: "pending" }],
+				snapshot,
+			),
+		)
+
+		expect(result.entry).toMatchObject({ type: "show_resume_interaction" })
+		expect(result.snapshot.interaction).toMatchObject({ kind: "resume", status: "opening" })
+		expect(result.snapshot.turn).toMatchObject({
+			activeDlineTid: undefined,
+			blocks: [{ dlineTid: interactionId, phase: BlockPhase.EXECUTING, requiresApproval: false }],
 		})
 	})
 

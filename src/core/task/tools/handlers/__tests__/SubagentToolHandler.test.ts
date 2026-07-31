@@ -400,6 +400,9 @@ describe("SubagentToolHandler", () => {
 
 		const subagentStatusCalls = callbacks.say.mock.calls.filter((call) => call[0] === "subagent")
 		assert.ok(subagentStatusCalls.length >= 2)
+		const runningCall = subagentStatusCalls.find((call) => JSON.parse(call[1]).status === "running")
+		assert.ok(runningCall, "should emit the foreground running status")
+		assert.equal(runningCall[4], false, "foreground running status must be published to the Webview")
 		const finalCall = subagentStatusCalls[subagentStatusCalls.length - 1]
 		assert.equal(finalCall[4], false)
 
@@ -472,8 +475,53 @@ describe("SubagentToolHandler", () => {
 		assert.ok((result as string).includes("boom"))
 	})
 
+	it("reports cancelled batch entries without counting them as successes", async () => {
+		const { config, callbacks } = createConfig({ autoApproveSafe: true, autoApproveAll: true })
+
+		vi.spyOn(SubagentRunner.prototype, "run").mockResolvedValue({
+			status: "cancelled",
+			error: "Subagent run cancelled.",
+			stats: {
+				toolCalls: 0,
+				inputTokens: 0,
+				outputTokens: 0,
+				cacheWriteTokens: 0,
+				cacheReadTokens: 0,
+				totalCost: 0,
+				currency: "USD",
+				contextTokens: 0,
+				contextWindow: 200000,
+				contextUsagePercentage: 0,
+			},
+		})
+
+		const handler = new UseSubagentsToolHandler()
+		const result = await handler.execute(config, {
+			type: "tool_use",
+			name: ClineDefaultTool.USE_SUBAGENTS,
+			params: {
+				prompt_1: "<task>one</task><context>ctx one</context>",
+				prompt_2: "<task>two</task><context>ctx two</context>",
+				prompt_3: "<task>three</task><context>ctx three</context>",
+			},
+			partial: false,
+			ts: Date.now(),
+		})
+
+		assert.equal(typeof result, "string")
+		assert.ok((result as string).includes("Succeeded: 0"))
+		assert.ok((result as string).includes("Failed: 0"))
+		assert.ok((result as string).includes("Cancelled: 3"))
+
+		const subagentStatusCalls = callbacks.say.mock.calls.filter((call) => call[0] === "subagent")
+		const finalPayload = JSON.parse(subagentStatusCalls.at(-1)?.[1])
+		assert.equal(finalPayload.status, "cancelled")
+		assert.equal(finalPayload.successes, 0)
+		assert.equal(finalPayload.failures, 0)
+	})
+
 	it("runs stable use_subagent with the built-in default when no YAML exists", async () => {
-		const { config } = createConfig({ autoApproveSafe: true, autoApproveAll: true })
+		const { config, callbacks } = createConfig({ autoApproveSafe: true, autoApproveAll: true })
 		const handler = new UseSubagentToolHandler()
 		vi.spyOn(AgentConfigModule, "resolveAgentConfig").mockResolvedValue(undefined)
 		const runStub = vi.spyOn(SubagentRunner.prototype, "run").mockResolvedValue({
@@ -503,6 +551,11 @@ describe("SubagentToolHandler", () => {
 
 		assert.match(String(result), /default done/)
 		assert.equal(runStub.mock.calls.length, 1)
+		const runningCall = callbacks.say.mock.calls.find(
+			(call) => call[0] === "subagent" && JSON.parse(call[1]).status === "running",
+		)
+		assert.ok(runningCall, "should emit the foreground running status")
+		assert.equal(runningCall[4], false, "foreground running status must be published to the Webview")
 	})
 
 	it("lists default and bounded configured names for an unknown stable subagent", async () => {

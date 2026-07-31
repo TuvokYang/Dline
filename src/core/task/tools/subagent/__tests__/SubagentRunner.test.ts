@@ -201,7 +201,7 @@ function stubApiHandler(createMessage: any, contextWindow = 200_000) {
 				contextWindow,
 				apiFormat: ApiFormat.ANTHROPIC_CHAT,
 				supportsPromptCache: true,
-				capabilities: { contextWindow, supportsImages: false, supportsPromptCache: true },
+				capabilities: { contextWindow, supportsImages: false, supportsPromptCache: true, supportsTools: true },
 			},
 		}),
 		createMessage,
@@ -241,6 +241,81 @@ describe("SubagentRunner", () => {
 		const result = await new SubagentRunner(createTaskConfig(false, { contextWindow })).run("Use profile", () => {})
 
 		assert.equal(result.status, "completed", result.error)
+	})
+
+	it("reports cancellation before the first API request as cancelled", async () => {
+		const createMessage = vi.fn().mockImplementation(async function* () {})
+		stubSystemPrompt(false)
+		vi.spyOn(skills, "discoverSkills").mockResolvedValue([])
+		vi.spyOn(skills, "getAvailableSkills").mockReturnValue([])
+		stubApiHandler(createMessage)
+		initializeHostProvider()
+		const config = createTaskConfig(false)
+		config.taskState.abort = true
+		const progress = vi.fn()
+
+		const result = await new SubagentRunner(config).run("Cancel before request", progress)
+
+		assert.equal(result.status, "cancelled")
+		assert.equal(result.error, "Subagent run cancelled.")
+		assert.equal(createMessage.mock.calls.length, 0)
+		assert.equal(progress.mock.calls.at(-1)?.[0].status, "cancelled")
+	})
+
+	it("reports cancellation between API turns as cancelled", async () => {
+		const config = createTaskConfig(false)
+		const createMessage = vi.fn().mockImplementation(async function* () {
+			config.taskState.abort = true
+		})
+		stubSystemPrompt(false)
+		vi.spyOn(skills, "discoverSkills").mockResolvedValue([])
+		vi.spyOn(skills, "getAvailableSkills").mockReturnValue([])
+		stubApiHandler(createMessage)
+		initializeHostProvider()
+		const progress = vi.fn()
+
+		const result = await new SubagentRunner(config).run("Cancel between turns", progress)
+
+		assert.equal(result.status, "cancelled")
+		assert.equal(result.error, "Subagent run cancelled.")
+		assert.equal(createMessage.mock.calls.length, 1)
+		assert.equal(progress.mock.calls.at(-1)?.[0].status, "cancelled")
+	})
+
+	it("reports cancellation after a tool result as cancelled", async () => {
+		const config = createTaskConfig(true)
+		config.coordinator.getHandler = vi.fn().mockReturnValue({
+			execute: vi.fn().mockImplementation(async () => {
+				config.taskState.abort = true
+				return "ok"
+			}),
+			getDescription: vi.fn().mockReturnValue("list_files"),
+		})
+		const createMessage = vi.fn().mockImplementation(async function* () {
+			yield {
+				type: "tool_calls",
+				function_id: "toolu_cancel_after_result",
+				tool_call: {
+					function: {
+						name: ClineDefaultTool.LIST_FILES,
+						arguments: JSON.stringify({ path: ".", recursive: false }),
+					},
+				},
+			}
+		})
+		stubSystemPrompt(true)
+		vi.spyOn(skills, "discoverSkills").mockResolvedValue([])
+		vi.spyOn(skills, "getAvailableSkills").mockReturnValue([])
+		stubApiHandler(createMessage)
+		initializeHostProvider()
+		const progress = vi.fn()
+
+		const result = await new SubagentRunner(config).run("Cancel after tool", progress)
+
+		assert.equal(result.status, "cancelled")
+		assert.equal(result.error, "Subagent run cancelled.")
+		assert.equal(createMessage.mock.calls.length, 1)
+		assert.equal(progress.mock.calls.at(-1)?.[0].status, "cancelled")
 	})
 
 	it("builds subagent prompts through the stable system prompt facade", async () => {

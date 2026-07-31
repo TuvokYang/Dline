@@ -209,6 +209,40 @@ describe("ModelRegistry", () => {
 	})
 
 	describe("getProviderModels", () => {
+		it("fills only missing native-tool capability from built-in seed metadata in memory", async () => {
+			const filePath = path.join(tempDir, "anthropic.json")
+			const config = {
+				provider: "anthropic",
+				providerName: "Anthropic",
+				defaultModelId: "claude-sonnet-4-6",
+				models: {
+					"claude-sonnet-4-6": {
+						id: "claude-sonnet-4-6",
+						capabilities: { contextWindow: 200_000 },
+					},
+					"claude-opus-4-6": {
+						id: "claude-opus-4-6",
+						capabilities: { contextWindow: 200_000, supportsTools: false },
+					},
+					"private-model": {
+						id: "private-model",
+						capabilities: { contextWindow: 64_000 },
+					},
+				},
+			}
+			await fsPromises.writeFile(filePath, JSON.stringify(config))
+
+			await registry.initialize()
+
+			const result = registry.getProviderModels("anthropic")
+			expect(result?.models["claude-sonnet-4-6"].capabilities?.supportsTools).to.equal(true)
+			expect(result?.models["claude-opus-4-6"].capabilities?.supportsTools).to.equal(false)
+			expect(result?.models["private-model"].capabilities?.supportsTools).to.equal(undefined)
+
+			const persisted = JSON.parse(await fsPromises.readFile(filePath, "utf8"))
+			expect(persisted.models["claude-sonnet-4-6"].capabilities).not.to.have.property("supportsTools")
+		})
+
 		it("should return config for existing provider", async () => {
 			const config = {
 				provider: "anthropic",

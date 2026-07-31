@@ -8,9 +8,9 @@ The E2E test suite consists of several key components:
 
 ### Test Files
 
-- **`auth.test.ts`** - Tests API key setup, provider selection, and navigation to settings
-- **`chat.test.ts`** - Tests chat functionality including message sending, mode switching (Plan/Act), slash commands, and @ mentions
-- **`editor.test.ts`** - Tests code actions, editor panel integration, and code selection features
+- **`api-runtime-observability.test.ts`** - Runs each mock provider through multi-turn API, chat composer, and editor integration coverage
+- **`settings-api-profiles.test.ts`** - Covers provider/profile configuration and persistence through the Webview
+- **`task-*.test.ts`** - Covers task tools, lifecycle, checkpoint history, and prompt refresh behavior
 
 ### Test Infrastructure
 
@@ -65,7 +65,7 @@ In debug mode, Playwright will:
 
 Run specific test files:
 ```bash
-npm run e2e -- auth.test.ts
+npm run e2e -- api-runtime-observability.test.ts
 ```
 
 Run tests with specific tags or patterns:
@@ -262,9 +262,10 @@ The test environment includes:
 - `GRPC_RECORDER_ENABLED=true` - Enable gRPC recording for debugging
 - `DLINE_E2E_PROFILE` - Select `auto`, `mock-openai`, `deepseek`, or `openai-compatible`
 
-Each Playwright worker prepares one reusable state template. When `~/.dline/data` exists, preprocessing reads it once per
-worker and copies only `secrets/**` and `settings/api_profiles.json`. It never copies `secrets.json`, user settings,
-provider registry files, task history, or other user state. Before each test, the template is copied to the fixed
+Each Playwright worker prepares one reusable state template. Mock tests use only generated mock profiles and never read
+`~/.dline/data` or live credential environment variables. `provider-live.test.ts` explicitly enables live preprocessing;
+only that mode may copy `secrets/**` and `settings/api_profiles.json`. It never copies `secrets.json`, user settings,
+provider registry files, task history, or other user state. Before each test, the selected template is copied to the fixed
 `%TEMP%/.dline-e2e` `DLINE_DIR`; `DLINE_HOME_DIR` uses the same path and `DLINE_DOCS_DIR` uses
 `%TEMP%/dline-e2e`. All three temporary locations are reset between tests and removed during worker teardown.
 
@@ -276,3 +277,45 @@ is configured:
 
 Pull requests and the regular three-platform smoke job use the local mock OpenAI-compatible profile. Live provider tests
 run only on trusted push or manual workflow events and are skipped when their credential is absent.
+
+## Required Coverage Matrix
+
+Only tests that launch VS Code and operate the Dline Webview count as product E2E. Preprocessing tests validate the
+isolated harness but do not count as product E2E coverage.
+
+### Isolated State And Profiles
+
+- [x] Use `%TEMP%/.dline-e2e` for `DLINE_DIR` and `DLINE_HOME_DIR`, and `%TEMP%/dline-e2e` for `DLINE_DOCS_DIR`.
+- [x] Copy only `settings/api_profiles.json` and `secrets/**`; never copy root `secrets.json` or task/user state.
+- [x] Remove the isolated state after each worker and test.
+- [x] Seed mock, DeepSeek, and OpenAI-compatible profiles with `high` effort when credentials are available.
+- [x] Launch VS Code with the isolated state and show the prepared profiles in Settings.
+
+### Settings And Provider Profiles
+
+- [x] Rename a profile through the Webview, verify `api_profiles.json`, reopen VS Code, and verify the renamed profile.
+- [x] Modify `providers/deepseek.json` while VS Code is running, observe the new model in the provider selector, select it,
+  and verify the selected model ID in `api_profiles.json`.
+- [ ] Select every registered provider through the Webview and verify the provider/profile write.
+- [ ] Persist each provider's API key through the Webview into `secrets/api_keys.json`, without embedding it in
+  `api_profiles.json`.
+- [ ] Persist structured Bedrock and SAP credentials into `secrets/provider_secrets.json` and verify them after reopen.
+- [ ] Cover OpenAI-compatible custom base URL, model ID, API endpoint, service tier, thinking, prompt cache, context,
+  output limit, pricing, custom headers, Azure options, and streaming usage settings.
+- [ ] Verify each edited Settings value immediately, on disk, and after reopening VS Code.
+
+### Task And Model Synchronization
+
+- [ ] Send a chat message through the Webview and assert the mock API response is rendered.
+- [ ] Apply profile context/pricing changes to the active Task immediately.
+- [ ] Rename the active Task profile and verify the Task model display follows the stable profile ID.
+- [ ] Switch a Task-local profile and verify both the displayed profile and context limit change together.
+- [x] Run an optional live minimal turn for a configured DeepSeek or OpenAI-compatible profile.
+
+### Tools, Approval, And Continuation
+
+- [ ] Exercise `read_file` with auto-approve and with explicit Approve/Reject interaction.
+- [ ] Exercise `write_to_file` and `replace_in_file` through real tool calls and verify workspace files.
+- [ ] Exercise `execute_command` through real approval, verify command output, and verify completion state.
+- [ ] Cancel a running Task from the Webview and verify the Task can resume from the visible Resume interaction.
+- [ ] Verify approval, retry, cancel, and resume buttons perform their named action instead of only changing UI state.

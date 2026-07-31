@@ -173,6 +173,38 @@ describe("SubagentStatusRow", () => {
 		expect(screen.queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument()
 	})
 
+	it("shows the cancelled terminal state for a background subagent", () => {
+		const msg = makeMsg({
+			say: "subagent",
+			text: JSON.stringify({
+				status: "cancelled",
+				items: [
+					{
+						index: 1,
+						jobId: "job-cancelled",
+						prompt: "review",
+						status: "cancelled",
+						background: true,
+						error: "Subagent run cancelled.",
+						toolCalls: 0,
+						inputTokens: 0,
+						outputTokens: 0,
+						totalCost: 0,
+						currency: "USD",
+						contextTokens: 0,
+						contextWindow: 0,
+						contextUsagePercentage: 0,
+					},
+				],
+			}),
+		})
+
+		render(<SubagentStatusRow isLast={true} message={msg} />)
+
+		expect(screen.getByText("Cancelled", { exact: true })).toBeInTheDocument()
+		expect(screen.queryByText("Running in background", { exact: true })).not.toBeInTheDocument()
+	})
+
 	it("cancels only canonical cancellable activities in a batch", () => {
 		taskActivities.push(
 			{

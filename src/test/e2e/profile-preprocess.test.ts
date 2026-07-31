@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises"
 import * as os from "node:os"
 import * as path from "node:path"
 import { expect, test } from "@playwright/test"
@@ -6,11 +6,103 @@ import { E2E_PROFILE_NAMES, prepareE2EState } from "./utils/api-profile"
 
 interface PreparedProfile {
 	name: string
+	provider?: string
+	baseUrl?: string
 	deepseek?: { reasoning?: { effort?: string } }
-	openai?: { reasoning?: { effort?: string } }
+	openai?: { apiEndpoint?: string; reasoning?: { effort?: string } }
 }
 
-test("E2E profile preprocessing copies only api_profiles.json and secrets/**", async () => {
+test("mock E2E profile preprocessing ignores local profiles, secrets, and live environment keys", async () => {
+	const root = await mkdtemp(path.join(os.tmpdir(), "dline-e2e-mock-profile-preprocess-"))
+	const sourceDataDir = path.join(root, "source", "data")
+	const dlineDir = path.join(root, "isolated")
+
+	try {
+		await Promise.all([
+			writeJson(path.join(dlineDir, "data", "settings", "api_profiles.json"), [
+				{
+					id: "stale-real-profile",
+					name: "Stale Real Profile",
+					provider: "deepseek",
+					modelId: "stale-real-model",
+					usedFor: ["act"],
+					enabled: true,
+				},
+			]),
+			writeJson(path.join(dlineDir, "data", "secrets", "api_keys.json"), {
+				"stale-real-profile": { apiKey: "stale-real-secret", name: "Stale Real Profile" },
+			}),
+			writeJson(path.join(dlineDir, "data", "secrets", "provider_secrets.json"), {
+				"stale-real-profile": {
+					name: "Stale Real Profile",
+					provider: "deepseek",
+					secrets: { token: "stale-provider-secret" },
+				},
+			}),
+			writeJson(path.join(dlineDir, "data", "secrets", "openai_codex_oauth.json"), {
+				type: "openai-codex",
+				access_token: "stale-oauth-token",
+			}),
+			writeJson(path.join(sourceDataDir, "settings", "api_profiles.json"), [
+				{
+					id: "must-not-copy-profile",
+					name: "Must Not Copy Profile",
+					provider: "deepseek",
+					modelId: "must-not-copy-model",
+					usedFor: ["act"],
+					enabled: true,
+				},
+			]),
+			writeJson(path.join(sourceDataDir, "secrets", "api_keys.json"), {
+				"must-not-copy-profile": { apiKey: "must-not-copy-secret", name: "Must Not Copy Profile" },
+			}),
+			writeJson(path.join(sourceDataDir, "secrets", "openai_codex_oauth.json"), {
+				type: "openai-codex",
+				access_token: "must-not-copy-oauth",
+			}),
+			writeJson(path.join(sourceDataDir, "secrets", "provider_secrets.json"), {
+				"must-not-copy-profile": {
+					name: "Must Not Copy Profile",
+					provider: "deepseek",
+					secrets: { token: "must-not-copy-provider-secret" },
+				},
+			}),
+		])
+
+		const result = await prepareE2EState({
+			dlineDir,
+			mockBaseUrl: "http://127.0.0.1:43210",
+			sourceDataDir,
+			env: { API_KEY_DEEPSEEK_DEEPSEEK_V4_PRO: "must-not-copy-environment-key" },
+		})
+
+		expect(result.selectedProfileName).toBe(E2E_PROFILE_NAMES.mockOpenAi)
+		expect(result.localProfileNames).toEqual([])
+		expect(result.liveProfiles).toEqual([])
+		expect(result.profileNames).toEqual(expect.arrayContaining(Object.values(E2E_PROFILE_NAMES)))
+		expect(result.profileNames).not.toContain("Must Not Copy Profile")
+		expect(result.profileNames).not.toContain("Stale Real Profile")
+		expect(result.profileNames).not.toContain("deepseek:deepseek-v4-pro")
+
+		const apiKeys = await readJson<Record<string, { apiKey: string; name: string }>>(
+			path.join(dlineDir, "data", "secrets", "api_keys.json"),
+		)
+		expect(Object.values(apiKeys)).toHaveLength(Object.values(E2E_PROFILE_NAMES).length)
+		expect(Object.values(apiKeys).every(({ apiKey }) => apiKey === "dline-e2e-api-key")).toBe(true)
+		expect(Object.values(apiKeys).map(({ name }) => name)).toEqual(expect.arrayContaining(Object.values(E2E_PROFILE_NAMES)))
+		expect(await readdir(path.join(dlineDir, "data", "secrets"))).toEqual(["api_keys.json"])
+		await expect(readFile(path.join(dlineDir, "data", "secrets", "openai_codex_oauth.json"), "utf8")).rejects.toMatchObject({
+			code: "ENOENT",
+		})
+		await expect(readFile(path.join(dlineDir, "data", "secrets", "provider_secrets.json"), "utf8")).rejects.toMatchObject({
+			code: "ENOENT",
+		})
+	} finally {
+		await rm(root, { recursive: true, force: true })
+	}
+})
+
+test("live E2E profile preprocessing copies only api_profiles.json and secrets/**", async () => {
 	const root = await mkdtemp(path.join(os.tmpdir(), "dline-e2e-profile-preprocess-"))
 	const sourceDataDir = path.join(root, "source", "data")
 	const dlineDir = path.join(root, "isolated")
@@ -52,28 +144,78 @@ test("E2E profile preprocessing copies only api_profiles.json and secrets/**", a
 			dlineDir,
 			mockBaseUrl: "http://127.0.0.1:43210",
 			sourceDataDir,
+			profileMode: "live",
 			env: {
-				DLINE_E2E_DEEPSEEK_API_KEY: "ci-deepseek-key",
-				DLINE_E2E_OPENAI_COMPATIBLE_API_KEY: "ci-compatible-key",
-				DLINE_E2E_OPENAI_COMPATIBLE_BASE_URL: "https://compatible.example.test/v1",
-				DLINE_E2E_PROFILE: "deepseek",
+				API_KEY_DEEPSEEK_DEEPSEEK_V4_PRO: "ci-deepseek-key",
+				API_KEY_OPENAI_CUSTOM_MODEL: "ci-compatible-key",
 			},
 		})
 
-		expect(result.selectedProfileName).toBe(E2E_PROFILE_NAMES.deepseek)
+		expect(result.selectedProfileName).toBe(E2E_PROFILE_NAMES.mockOpenAi)
+		expect(result.localProfileNames).toEqual(["Local Profile"])
+		expect(result.liveProfiles).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					credentialSource: "local",
+					profileId: "local-profile",
+					profileName: "Local Profile",
+					provider: "deepseek",
+					modelId: "local-model",
+				}),
+				expect.objectContaining({
+					credentialSource: "environment",
+					environmentVariable: "API_KEY_DEEPSEEK_DEEPSEEK_V4_PRO",
+					profileName: "deepseek:deepseek-v4-pro",
+					provider: "deepseek",
+					modelId: "deepseek-v4-pro",
+				}),
+				expect.objectContaining({
+					credentialSource: "environment",
+					environmentVariable: "API_KEY_OPENAI_CUSTOM_MODEL",
+					profileName: "openai:custom-model",
+					provider: "openai",
+					modelId: "custom-model",
+				}),
+			]),
+		)
+		expect(result.liveProfiles).toHaveLength(3)
 		const profiles = await readJson<PreparedProfile[]>(path.join(dlineDir, "data", "settings", "api_profiles.json"))
-		const deepseek = profiles.find((profile) => profile.name === E2E_PROFILE_NAMES.deepseek)
-		const compatible = profiles.find((profile) => profile.name === E2E_PROFILE_NAMES.openAiCompatible)
+		const deepseek = profiles.find((profile) => profile.name === "deepseek:deepseek-v4-pro")
+		const compatible = profiles.find((profile) => profile.name === "openai:custom-model")
 		expect(deepseek?.deepseek?.reasoning?.effort).toBe("high")
 		expect(compatible?.openai?.reasoning?.effort).toBe("high")
 		expect(profiles.some((profile) => profile.name === "Local Profile")).toBe(true)
+		expect(profiles.find((profile) => profile.name === E2E_PROFILE_NAMES.mockOpenAi)).toMatchObject({
+			provider: "openai",
+			baseUrl: "http://127.0.0.1:43210/mock/openai-compatible/chat/v1",
+			openai: { apiEndpoint: "chat_completions" },
+		})
+		expect(profiles.find((profile) => profile.name === E2E_PROFILE_NAMES.mockOpenAiResponses)).toMatchObject({
+			provider: "openai",
+			baseUrl: "http://127.0.0.1:43210/mock/openai-compatible/responses/v1",
+			openai: { apiEndpoint: "responses" },
+		})
+		expect(profiles.find((profile) => profile.name === E2E_PROFILE_NAMES.mockOpenAiNative)).toMatchObject({
+			provider: "openai-native",
+			baseUrl: "http://127.0.0.1:43210/mock/openai-native/v1",
+		})
+		expect(profiles.find((profile) => profile.name === E2E_PROFILE_NAMES.mockAnthropic)).toMatchObject({
+			provider: "anthropic",
+			baseUrl: "http://127.0.0.1:43210/mock/anthropic",
+		})
 
 		const apiKeys = await readJson<Record<string, { apiKey: string }>>(
 			path.join(dlineDir, "data", "secrets", "api_keys.json"),
 		)
 		expect(apiKeys["local-profile"].apiKey).toBe("local-secret")
-		expect(apiKeys["dline-e2e-deepseek"].apiKey).toBe("ci-deepseek-key")
-		expect(apiKeys["dline-e2e-openai-compatible"].apiKey).toBe("ci-compatible-key")
+		const deepseekLive = result.liveProfiles.find(
+			(profile) => profile.credentialSource === "environment" && profile.provider === "deepseek",
+		)
+		const compatibleLive = result.liveProfiles.find(
+			(profile) => profile.credentialSource === "environment" && profile.provider === "openai",
+		)
+		expect(apiKeys[deepseekLive!.profileId].apiKey).toBe("ci-deepseek-key")
+		expect(apiKeys[compatibleLive!.profileId].apiKey).toBe("ci-compatible-key")
 		expect(await readJson(path.join(dlineDir, "data", "secrets", "openai_codex_oauth.json"))).toMatchObject({
 			access_token: "codex-access-token",
 			refresh_token: "codex-refresh-token",
@@ -87,8 +229,8 @@ test("E2E profile preprocessing copies only api_profiles.json and secrets/**", a
 		const settings = await readJson<Record<string, unknown>>(path.join(dlineDir, "data", "settings", "settings.json"))
 		expect(settings).toEqual({
 			__settingsMigrationVersion: 1,
-			actModeProfile: E2E_PROFILE_NAMES.deepseek,
-			planModeProfile: E2E_PROFILE_NAMES.deepseek,
+			actModeProfile: E2E_PROFILE_NAMES.mockOpenAi,
+			planModeProfile: E2E_PROFILE_NAMES.mockOpenAi,
 			enableParallelToolCalling: true,
 		})
 

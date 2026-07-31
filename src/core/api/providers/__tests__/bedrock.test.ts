@@ -1196,10 +1196,7 @@ describe("AwsBedrockHandler", () => {
 	})
 
 	describe("native tool calling integration", () => {
-		it("should be recognized as a next-gen provider eligible for native tool calling", () => {
-			// This is the integration gap: if Bedrock is removed from isNextGenModelProvider(),
-			// native tool calling silently stops working and falls back to XML tools.
-			// Note: requires a Claude 4+ model — Claude 3.x is NOT in the next-gen model family.
+		it("should enable native tool calling when the selected model explicitly supports tools", () => {
 			const handler = new AwsBedrockHandler(
 				createMockContext({
 					profile: { modelId: "anthropic.claude-sonnet-4-5-20250929-v1:0" },
@@ -1212,11 +1209,10 @@ describe("AwsBedrockHandler", () => {
 			}
 
 			const result = isNativeToolCallingConfig(providerInfo, true)
-			result.should.be.true("Bedrock + Claude 4 should qualify for native tool calling")
+			result.should.be.true("Bedrock model metadata should enable native tool calling")
 		})
 
-		it("should not use native tool calling for pre-4.0 Claude models", () => {
-			// Claude 3.x models are NOT in the next-gen family and should use XML tools
+		it("should not use native tool calling when model metadata does not support tools", () => {
 			const handler = new AwsBedrockHandler(mockContext) // uses Claude 3.7
 			const model = handler.getModel()
 			const providerInfo = {
@@ -1225,7 +1221,7 @@ describe("AwsBedrockHandler", () => {
 			}
 
 			const result = isNativeToolCallingConfig(providerInfo, true)
-			result.should.be.false("Bedrock + Claude 3.x should NOT use native tool calling")
+			result.should.be.false("Bedrock model metadata should keep native tool calling disabled")
 		})
 
 		it("should not use native tool calling when the setting is disabled", () => {

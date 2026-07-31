@@ -34,10 +34,23 @@ vi.mock("./useProviderModels", () => ({
 }))
 
 vi.mock("../common/ModelConfiguration", () => ({
-	ModelConfiguration: ({ onCapabilitiesUpdate }: { onCapabilitiesUpdate: (updates: Partial<ModelCapabilities>) => void }) => (
-		<button onClick={() => onCapabilitiesUpdate({ supportsImages: true })} type="button">
-			Update Images
-		</button>
+	ModelConfiguration: ({
+		fields,
+		onCapabilitiesUpdate,
+	}: {
+		fields: { capabilities?: string[] }
+		onCapabilitiesUpdate: (updates: Partial<ModelCapabilities>) => void
+	}) => (
+		<>
+			<button onClick={() => onCapabilitiesUpdate({ supportsImages: true })} type="button">
+				Update Images
+			</button>
+			{fields.capabilities?.includes("supportsTools") && (
+				<button onClick={() => onCapabilitiesUpdate({ supportsTools: true })} type="button">
+					Enable Native Tools
+				</button>
+			)}
+		</>
 	),
 }))
 
@@ -62,6 +75,13 @@ vi.mock("../OpenAIServiceTierSelector", () => ({
 	default: ({ onServiceTierChange }: { onServiceTierChange: (value: string) => void }) => (
 		<button onClick={() => onServiceTierChange("priority")} type="button">
 			Set Priority Tier
+		</button>
+	),
+}))
+vi.mock("../OpenAIApiEndpointSelector", () => ({
+	default: ({ onApiEndpointChange }: { onApiEndpointChange: (value: string) => void }) => (
+		<button onClick={() => onApiEndpointChange("responses")} type="button">
+			Use Responses Endpoint
 		</button>
 	),
 }))
@@ -96,9 +116,17 @@ describe("OpenAICompatibleProvider", () => {
 				capabilities: { contextWindowTiers: [], maxTokens: 64_000, supportsImages: true },
 			},
 		})
+
+		fireEvent.click(screen.getByRole("button", { name: "Enable Native Tools" }))
+		expect(onUpdate).toHaveBeenCalledWith({
+			openai: {
+				...profile.openai,
+				capabilities: { contextWindowTiers: [], maxTokens: 64_000, supportsTools: true },
+			},
+		})
 	})
 
-	it("offers the complete compatible effort set and persists service tier", () => {
+	it("offers the complete compatible effort set and persists OpenAI request options", () => {
 		const onUpdate = vi.fn()
 		const profile = {
 			id: "profile-1",
@@ -115,6 +143,14 @@ describe("OpenAICompatibleProvider", () => {
 			openai: {
 				...profile.openai,
 				serviceTier: "priority",
+			},
+		})
+
+		fireEvent.click(screen.getByRole("button", { name: "Use Responses Endpoint" }))
+		expect(onUpdate).toHaveBeenCalledWith({
+			openai: {
+				...profile.openai,
+				apiEndpoint: "responses",
 			},
 		})
 	})

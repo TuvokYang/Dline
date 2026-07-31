@@ -1,9 +1,54 @@
-export const E2E_REGISTERED_MOCK_ENDPOINTS = {
-	"/v1": {
-		GET: [],
-		POST: ["/chat/completions"],
-		PUT: [],
+export const E2E_MOCK_PROVIDER_ROUTES = {
+	"openai-compatible-chat": {
+		provider: "openai",
+		protocol: "openai-chat",
+		basePath: "/mock/openai-compatible/chat/v1",
+		endpoint: "/chat/completions",
+		auth: "bearer",
 	},
+	"openai-compatible-responses": {
+		provider: "openai",
+		protocol: "openai-responses",
+		basePath: "/mock/openai-compatible/responses/v1",
+		endpoint: "/responses",
+		auth: "bearer",
+	},
+	"openai-native-responses": {
+		provider: "openai-native",
+		protocol: "openai-responses",
+		basePath: "/mock/openai-native/v1",
+		endpoint: "/responses",
+		auth: "bearer",
+	},
+	"deepseek-chat": {
+		provider: "deepseek",
+		protocol: "deepseek-chat",
+		basePath: "/mock/deepseek/v1",
+		endpoint: "/chat/completions",
+		auth: "bearer",
+	},
+	"anthropic-messages": {
+		provider: "anthropic",
+		protocol: "anthropic-messages",
+		basePath: "/mock/anthropic",
+		endpoint: "/v1/messages",
+		auth: "x-api-key",
+	},
+} as const
+
+export type E2EMockProviderTarget = keyof typeof E2E_MOCK_PROVIDER_ROUTES
+export type E2EMockApiProtocol = (typeof E2E_MOCK_PROVIDER_ROUTES)[E2EMockProviderTarget]["protocol"]
+
+export function getE2EMockProviderBaseUrl(baseUrl: string, target: E2EMockProviderTarget): string {
+	return `${baseUrl}${E2E_MOCK_PROVIDER_ROUTES[target].basePath}`
+}
+
+export function getE2EMockProviderUrl(baseUrl: string, target: E2EMockProviderTarget): string {
+	const route = E2E_MOCK_PROVIDER_ROUTES[target]
+	return `${getE2EMockProviderBaseUrl(baseUrl, target)}${route.endpoint}`
+}
+
+export const E2E_REGISTERED_MOCK_ENDPOINTS = {
 	"/api/v1": {
 		GET: [
 			"/generation",

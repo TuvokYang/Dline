@@ -4,7 +4,7 @@ import * as fs from "fs"
 import type { FzfResultItem } from "fzf"
 import should from "should"
 // sinon import removed: using vitest globals
-import { Readable } from "stream"
+import { EventEmitter, Readable } from "stream"
 import { afterEach, beforeEach, describe, it, vi } from "vitest"
 import { HostProvider } from "@/hosts/host-provider"
 import { SearchWorkspaceItemsRequest_SearchItemType, SearchWorkspaceItemsResponse } from "@/shared/proto/dline/host/workspace"
@@ -46,6 +46,36 @@ describe("File Search", () => {
 	})
 
 	describe("executeRipgrepForFiles", () => {
+		it("scopes ripgrep to the workspace so temp ancestors are not excluded", async () => {
+			const workspacePath = "E:\\repo\\tmp\\e2e-workspace"
+			const mockStdout = new Readable({ read() {} })
+			const mockStderr = new Readable({ read() {} })
+			const mockProcess = Object.assign(new EventEmitter(), {
+				stdout: mockStdout,
+				stderr: mockStderr,
+				kill: vi.fn(),
+			}) as unknown as childProcess.ChildProcess
+
+			spawnStub.mockImplementation(() => {
+				setImmediate(() => {
+					mockStdout.push("README.md\n")
+					mockStdout.push(null)
+					mockStderr.push(null)
+					mockProcess.emit("exit", 0)
+				})
+				return mockProcess
+			})
+
+			const result = await fileSearch.executeRipgrepForFiles(workspacePath, 5000)
+
+			expect(spawnStub).toHaveBeenCalledWith(
+				expect.any(String),
+				expect.not.arrayContaining([workspacePath]),
+				expect.objectContaining({ cwd: workspacePath }),
+			)
+			expect(result).toContainEqual({ path: "README.md", type: "file", label: "README.md" })
+		})
+
 		it("should correctly process and return file and folder results", async () => {
 			const mockFiles = ["file1.txt", "folder1/file2.js", "folder1/subfolder/file3.py"]
 
