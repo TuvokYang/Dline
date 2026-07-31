@@ -56,7 +56,7 @@ export function useMessageHandlers(
 		async (text: string, images: string[], files: string[]) => {
 			let messageToSend = text.trim()
 			const hasContent = messageToSend.length > 0 || images.length > 0 || files.length > 0
-			if (!hasContent || messages.length > 0) {
+			if (!hasContent || taskId !== undefined) {
 				return
 			}
 			if (activeQuote) {
@@ -90,13 +90,13 @@ export function useMessageHandlers(
 		[
 			activeQuote,
 			disableAutoScrollRef,
-			messages.length,
 			setActiveQuote,
 			setEnableButtons,
 			setInputValue,
 			setSelectedFiles,
 			setSelectedImages,
 			setSendingDisabled,
+			taskId,
 		],
 	)
 

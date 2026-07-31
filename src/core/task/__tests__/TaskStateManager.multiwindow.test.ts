@@ -85,6 +85,21 @@ describe("TaskStateManager - Multi-window Profile Isolation", () => {
 		expect(sm.getSettingsKeyForTask("mode", "task-window-2")).toBe("act")
 	})
 
+	it("uses global profiles for a new task while another task is the active cursor", () => {
+		sm.setGlobalState("planModeProfile", "global-chat")
+		sm.setGlobalState("actModeProfile", "global-chat")
+		sm.setTaskSettingsBatch("task-window-1", {
+			planModeProfile: "panel-responses",
+			actModeProfile: "panel-responses",
+		})
+		sm.setActiveTaskId("task-window-1")
+
+		const newTaskConfig = sm.getApiConfigurationForTask("task-window-2")
+
+		expect(newTaskConfig.planModeProfile).toBe("global-chat")
+		expect(newTaskConfig.actModeProfile).toBe("global-chat")
+	})
+
 	it("clears only the requested task cache when another window is active", async () => {
 		const taskSm1 = new TaskStateManager("task-window-1", sm)
 		const taskSm2 = new TaskStateManager("task-window-2", sm)

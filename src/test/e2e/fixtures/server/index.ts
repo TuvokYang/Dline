@@ -69,6 +69,7 @@ export type OpenAiMockResponse =
 export type MockThinkingConfig = { mode: "effort"; effort: string } | { mode: "budget"; budget: number }
 
 export interface MockApiConsumption {
+	receivedAtMs: number
 	target: MockApiTarget
 	provider: string
 	protocol: MockApiProtocol
@@ -358,6 +359,7 @@ export class ClineApiServerMock {
 	}
 
 	private consumeMockResponse(target: MockApiTarget, path: string, requestBody: unknown) {
+		const receivedAtMs = Date.now()
 		const route = E2E_MOCK_PROVIDER_ROUTES[target]
 		const scriptedResponse = this.mockResponses[target].shift() ?? {
 			type: "error",
@@ -387,6 +389,7 @@ export class ClineApiServerMock {
 		if (response.type !== "error") this.previousSuccessfulRequestText.set(target, requestText)
 		const responseToolCalls = response.type === "error" ? [] : getResponseToolCalls(response)
 		this.mockConsumptions.push({
+			receivedAtMs,
 			target,
 			provider: route.provider,
 			protocol: route.protocol,

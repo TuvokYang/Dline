@@ -39,6 +39,7 @@ export function useChatState(messages: ClineMessage[], taskId?: string): ChatSta
 		setActiveQuote(null)
 		setSelectedImages([])
 		setSelectedFiles([])
+		setSendingDisabled(false)
 	}, [])
 
 	// Handle focus change

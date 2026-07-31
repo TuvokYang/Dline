@@ -710,7 +710,7 @@ export class Task {
 		}
 
 		// Prepare effective API configuration
-		const apiConfiguration = this.stateManager.getApiConfiguration()
+		const apiConfiguration = this.stateManager.getApiConfigurationForTask(taskId)
 		const mode = this.taskSm.mode
 
 		// Existing history bindings always win; global profiles initialize only

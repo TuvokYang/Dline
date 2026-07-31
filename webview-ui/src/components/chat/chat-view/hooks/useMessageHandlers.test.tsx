@@ -73,6 +73,17 @@ describe("useMessageHandlers new task submission", () => {
 		expect(chatState.setInputValue).toHaveBeenNthCalledWith(2, "你好")
 	})
 
+	it("starts a Welcome task while messages from the closed task are still being cleared", async () => {
+		const chatState = createChatState()
+		mocks.newTask.mockResolvedValueOnce(undefined)
+		const { result } = renderHook(() => useMessageHandlers([TASK_MESSAGE], chatState, undefined, undefined))
+
+		await result.current.handleSendMessage("next task", [], [])
+
+		expect(mocks.newTask).toHaveBeenCalledOnce()
+		expect(chatState.setInputValue).toHaveBeenCalledWith("")
+	})
+
 	it("does not restore the Welcome draft after the new task message appears", async () => {
 		let rejectNewTask!: (error: Error) => void
 		mocks.newTask.mockReturnValueOnce(
