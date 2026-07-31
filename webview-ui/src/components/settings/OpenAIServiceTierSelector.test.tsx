@@ -29,8 +29,8 @@ vi.mock("@/components/ui/select", () => ({
 		</div>
 	),
 	SelectContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-	SelectItem: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-	SelectTrigger: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+	SelectItem: ({ children, title }: { children: React.ReactNode; title?: string }) => <div title={title}>{children}</div>,
+	SelectTrigger: ({ children, title }: { children: React.ReactNode; title?: string }) => <div title={title}>{children}</div>,
 	SelectValue: () => <span />,
 }))
 
@@ -40,11 +40,17 @@ describe("OpenAIServiceTierSelector", () => {
 		const { rerender } = render(<OpenAIServiceTierSelector onServiceTierChange={onServiceTierChange} />)
 
 		expect(screen.getByTestId("service-tier")).toHaveAttribute("data-value", "provider-default")
+		expect(screen.getAllByTitle("Do not send service_tier; let the provider choose.")).toHaveLength(2)
+		expect(screen.getByText("Priority")).toHaveAttribute(
+			"title",
+			'Send service_tier: "priority", the API tier used by Codex Fast.',
+		)
 		fireEvent.click(screen.getByRole("button", { name: "Choose Priority" }))
 		expect(onServiceTierChange).toHaveBeenLastCalledWith("priority")
 
 		rerender(<OpenAIServiceTierSelector onServiceTierChange={onServiceTierChange} serviceTier="priority" />)
 		expect(screen.getByTestId("service-tier")).toHaveAttribute("data-value", "priority")
+		expect(screen.getAllByTitle('Send service_tier: "priority", the API tier used by Codex Fast.')).toHaveLength(2)
 		fireEvent.click(screen.getByRole("button", { name: "Choose Provider Default" }))
 		expect(onServiceTierChange).toHaveBeenLastCalledWith(undefined)
 	})
