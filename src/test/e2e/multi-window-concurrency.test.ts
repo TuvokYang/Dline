@@ -35,6 +35,86 @@ async function findAdditionalDlineFrame(page: Page, existingFrames: ReadonlySet<
 	return resolved
 }
 
+async function createDlinePanelFromTitleAction(page: Page): Promise<Frame> {
+	const existingFrames = new Set(page.frames())
+	await page.getByRole("button", { name: "New Task", exact: true }).click()
+	return findAdditionalDlineFrame(page, existingFrames)
+}
+
+async function dismissExtensionsDisabledNotification(page: Page): Promise<void> {
+	const notification = page.getByRole("dialog").filter({ hasText: "All installed extensions are temporarily disabled." })
+	const clearButton = notification.getByRole("button", { name: "Clear Notification (Del)", exact: true })
+	if (await clearButton.isVisible()) await clearButton.click()
+}
+
+function dlineEditorGroups(page: Page) {
+	return page.locator(".editor-group-container").filter({
+		has: page.locator('.tabs-container > .tab[aria-label*="Dline"]'),
+	})
+}
+
+e2e("Dline task panels share one locked editor group", async ({ helper, page, server, sidebar, userDataDir }) => {
+	e2e.setTimeout(180_000)
+	await helper.signin(sidebar)
+
+	const firstTask = "E2E_PANEL_ONE_GROUP"
+	server.resetOpenAiMock()
+	server.enqueueResponses("openai-compatible-chat", {
+		type: "tool",
+		id: "call_dline_group_panel_one_completion",
+		name: "attempt_completion",
+		arguments: { result: "E2E_DLINE_GROUP_PANEL_ONE_DONE" },
+		expectedRequestIncludes: [firstTask],
+	})
+
+	const firstPanel = await createDlinePanelFromTitleAction(page)
+	await E2ETestHelper.dismissWhatsNewModal(firstPanel)
+	await dismissExtensionsDisabledNotification(page)
+	await firstPanel.getByTestId("chat-input").fill(firstTask)
+	await firstPanel.getByTestId("send-button").click()
+	await expect(firstPanel.getByText("E2E_DLINE_GROUP_PANEL_ONE_DONE", { exact: false }).last()).toBeVisible({
+		timeout: 60_000,
+	})
+
+	const secondPanel = await createDlinePanelFromTitleAction(page)
+	await E2ETestHelper.dismissWhatsNewModal(secondPanel)
+	const dlineGroups = dlineEditorGroups(page)
+	await expect(dlineGroups).toHaveCount(1)
+	const dlineGroupIndex = await dlineGroups
+		.first()
+		.evaluate((element) => Array.from(document.querySelectorAll(".editor-group-container")).indexOf(element))
+	const dlineGroup = page.locator(".editor-group-container").nth(dlineGroupIndex)
+	await expect(dlineGroup).toHaveClass(/\blocked\b/)
+	await expect(dlineGroup.locator(".tabs-container > .tab")).toHaveCount(2)
+
+	const secondTask = "E2E_PANEL_TWO_GROUP"
+	server.resetOpenAiMock()
+	server.enqueueResponses("openai-compatible-chat", {
+		type: "tool",
+		id: "call_dline_group_panel_two_completion",
+		name: "attempt_completion",
+		arguments: { result: "E2E_DLINE_GROUP_PANEL_TWO_DONE" },
+		expectedRequestIncludes: [secondTask],
+	})
+	await secondPanel.getByTestId("chat-input").fill(secondTask)
+	await secondPanel.getByTestId("send-button").click()
+	await expect(secondPanel.getByText("E2E_DLINE_GROUP_PANEL_TWO_DONE", { exact: false }).last()).toBeVisible({
+		timeout: 60_000,
+	})
+
+	const editorFrameCount = page
+		.frames()
+		.filter((frame) => frame.url().startsWith("vscode-webview://") && frame !== sidebar).length
+	await dlineGroup.locator(`.tab[aria-label*="${firstTask.slice(0, 16)}"]`).click()
+	await firstPanel.locator('vscode-button[aria-label="Start New Task"]').click()
+	await expect(firstPanel.getByTestId("chat-input")).toBeEnabled()
+	await expect(dlineGroup.locator(".tabs-container > .tab")).toHaveCount(2)
+	await expect
+		.poll(() => page.frames().filter((frame) => frame.url().startsWith("vscode-webview://") && frame !== sidebar).length)
+		.toBe(editorFrameCount)
+	await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+})
+
 e2e(
 	"Multi-window tasks - sidebar and restored panel run independent conversations concurrently",
 	async ({ helper, page, server, sidebar, userDataDir }) => {
@@ -123,8 +203,7 @@ e2e(
 		await panelInput.fill(panelTurn)
 		await expect(concurrentSidebarInput).toHaveValue(sidebarTurn)
 		await expect(panelInput).toHaveValue(panelTurn)
-		const clearNotification = page.getByRole("button", { name: "Clear Notification (Del)", exact: true }).first()
-		if (await clearNotification.isVisible()) await clearNotification.click()
+		await dismissExtensionsDisabledNotification(page)
 		const submittedAtMs = Date.now()
 		await sidebar.locator('[data-testid="send-button"]:visible').click()
 		await expect(concurrentSidebarInput).toHaveValue("")

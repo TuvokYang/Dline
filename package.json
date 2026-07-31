@@ -122,14 +122,6 @@
 				]
 			}
 		],
-		"editors": [
-			{
-				"viewType": "dlineTask",
-				"displayName": "Dline Task",
-				"selector": [],
-				"priority": "default"
-			}
-		],
 		"viewsContainers": {
 			"activitybar": [
 				{

@@ -7,6 +7,7 @@ import type { ClineExtensionContext } from "@/shared/cline"
 import type { ExtensionMessage } from "@/shared/ExtensionMessage"
 import { Logger } from "@/shared/services/Logger"
 import type { WebviewMessage } from "@/shared/WebviewMessage"
+import { dlineEditorGroup } from "./DlineEditorGroup"
 
 /**
  * Shape of the state persisted via acquireVsCodeApi().setState() inside the webview.
@@ -43,33 +44,36 @@ export class VscodeWebviewPanelProvider extends WebviewProvider {
 		// Truncate title to 16 characters for display
 		const truncatedTitle = title.length > 16 ? title.substring(0, 16) : title
 
-		this.panel = vscode.window.createWebviewPanel(
+		const panel = vscode.window.createWebviewPanel(
 			"dlineTask",
 			truncatedTitle,
-			{ viewColumn: vscode.ViewColumn.Beside, preserveFocus: true },
+			{ viewColumn: dlineEditorGroup.getCreateViewColumn(), preserveFocus: true },
 			{
 				enableScripts: true,
 				retainContextWhenHidden: true,
 				localResourceRoots: [extUri],
 			},
 		)
-		this.panel.iconPath = iconPath
-		this.registerPanelVisibilityListener(this.panel)
+		this.panel = panel
+		panel.iconPath = iconPath
+		dlineEditorGroup.register(panel)
+		this.registerPanelVisibilityListener(panel)
 
 		// Register message listener BEFORE setting HTML to avoid missing
 		// early webviewReady messages from fast-loading webview bundles.
-		this.setWebviewMessageListener(this.panel.webview)
+		this.setWebviewMessageListener(panel.webview)
 
 		// Determine if running in dev mode (ExtensionMode.Development = 2)
 		const isDev = this.context.extensionMode === 2
-		this.panel.webview.html = isDev ? await this.getHMRHtmlContent() : this.getHtmlContent()
+		panel.webview.html = isDev ? await this.getHMRHtmlContent() : this.getHtmlContent()
 
 		// Notify orchestrator of new panel
 		OrchestratorController.getInstance().onPanelCreated()
 
 		// Dispose self when panel is closed
-		this.panel.onDidDispose(
+		panel.onDidDispose(
 			() => {
+				dlineEditorGroup.unregister(panel)
 				this.isWebviewReady = false
 				this.pendingTaskId = undefined
 				this.panel = undefined
@@ -94,6 +98,7 @@ export class VscodeWebviewPanelProvider extends WebviewProvider {
 		Logger.debug(`[VscodeWebviewPanelProvider] restorePanel called, state=${JSON.stringify(state)}`)
 		const provider = new VscodeWebviewPanelProvider(context, { deferController: false })
 		provider.panel = panel
+		dlineEditorGroup.register(panel)
 		provider.registerPanelVisibilityListener(panel)
 
 		// Register listener BEFORE HTML
@@ -108,6 +113,7 @@ export class VscodeWebviewPanelProvider extends WebviewProvider {
 
 		panel.onDidDispose(
 			() => {
+				dlineEditorGroup.unregister(panel)
 				provider.isWebviewReady = false
 				provider.pendingTaskId = undefined
 				provider.panel = undefined
@@ -243,7 +249,10 @@ export class VscodeWebviewPanelProvider extends WebviewProvider {
 	private registerPanelVisibilityListener(panel: vscode.WebviewPanel): void {
 		this.controller.setAccountUsagePollingEnabled(panel.visible)
 		panel.onDidChangeViewState(
-			(event) => this.controller.setAccountUsagePollingEnabled(event.webviewPanel.visible),
+			(event) => {
+				dlineEditorGroup.synchronize(event.webviewPanel)
+				this.controller.setAccountUsagePollingEnabled(event.webviewPanel.visible)
+			},
 			null,
 			this.disposables,
 		)
@@ -293,7 +302,10 @@ export class VscodeWebviewPanelProvider extends WebviewProvider {
 		while (this.disposables.length) {
 			this.disposables.pop()?.dispose()
 		}
-		this.panel?.dispose()
+		if (this.panel) {
+			dlineEditorGroup.unregister(this.panel)
+			this.panel.dispose()
+		}
 		this.panel = undefined
 		await super.dispose()
 	}
