@@ -28,9 +28,10 @@ describe("VscodeTerminalManager Windows shell selection", () => {
 		const manager = new VscodeTerminalManager()
 
 		const terminal = await manager.getOrCreateTerminal("C:\\workspace")
+		const vscodeTerminal = terminal.terminal as unknown as vscode.Terminal
 
 		expect(terminal.shellPath).toBe(WINDOWS_POWERSHELL_LEGACY_PATH)
-		expect((terminal.terminal.creationOptions as vscode.TerminalOptions).shellPath).toBe(WINDOWS_POWERSHELL_LEGACY_PATH)
+		expect((vscodeTerminal.creationOptions as vscode.TerminalOptions).shellPath).toBe(WINDOWS_POWERSHELL_LEGACY_PATH)
 		manager.disposeAll()
 	})
 
