@@ -1264,7 +1264,12 @@ export class Controller {
 			 *  can show a lock banner when the task is in read-only mode. */
 			taskLockStatus: this.getTaskLockStatus(),
 			/** Complete interaction view projected only from canonical runtime state. */
-			taskViewState: this.task ? projectTaskView(this.task.getRuntimeState()) : undefined,
+			taskViewState: this.task
+				? projectTaskView(this.task.getRuntimeState(), {
+						autoRetryActive: this.task.hasAutoRetrySequence(),
+						autoRetryPending: this.task.hasPendingAutoRetry(),
+					})
+				: undefined,
 		}
 
 		const durationMs = Math.round(performance.now() - startTime)

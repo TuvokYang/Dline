@@ -4,6 +4,7 @@ import { expect, type Frame, type Locator, type Page } from "@playwright/test"
 import type { ElectronApplication } from "playwright"
 import { E2E_PROFILE_NAMES } from "./utils/api-profile"
 import { E2ETestHelper, e2e } from "./utils/helpers"
+import { startSettingControlStabilityObserver, stopSettingControlStabilityObserver } from "./utils/ui-stability"
 
 interface StoredProfile {
 	id: string
@@ -157,8 +158,19 @@ e2e(
 			await expect(endpointSelector).toContainText("Responses")
 			await waitForProfile(dlineDir, profileName, (profile) => profile.openai?.apiEndpoint === "responses")
 
+			await startSettingControlStabilityObserver(
+				firstSidebar,
+				{
+					label: "Supports Prompt Cache",
+				},
+				"checked",
+			)
 			await setCapability(card, "Supports Prompt Cache", false)
 			await expectAdvancedValue(card, "Prompt Caching", "No")
+			const promptCacheSamples = await stopSettingControlStabilityObserver(firstSidebar)
+			const firstUncheckedSample = promptCacheSamples.indexOf("false")
+			expect(firstUncheckedSample).toBeGreaterThanOrEqual(0)
+			expect(promptCacheSamples.slice(firstUncheckedSample)).not.toContain("true")
 			await setCapability(card, "Supports Prompt Cache", true)
 			await expectAdvancedValue(card, "Prompt Caching", "Yes")
 			await setCapability(card, "Supports Native Tool Calls", false)

@@ -148,6 +148,35 @@ describe("projectTaskView", () => {
 		expect(view.footer.actions.map((action) => action.type)).toEqual(["retry", "start_new_task"])
 	})
 
+	it("keeps Retry mounted but disabled while an automatic retry request is in flight", () => {
+		const view = projectTaskView(runtime(TaskPhase.STREAMING), {
+			autoRetryActive: true,
+			autoRetryPending: false,
+		})
+
+		expect(view.footer.actions).toEqual([
+			{
+				type: "retry",
+				label: "Retry",
+				appearance: "primary",
+				enabled: false,
+				payloadPolicy: "none",
+				dispatchTarget: "task",
+			},
+			{ type: "cancel", label: "Cancel", appearance: "danger", enabled: true, payloadPolicy: "none" },
+		])
+	})
+
+	it("projects Retry and Cancel during an automatic retry countdown", () => {
+		const view = projectTaskView(runtime(TaskPhase.STREAMING), {
+			autoRetryActive: true,
+			autoRetryPending: true,
+		})
+
+		expect(view.footer.actions.map((action) => action.type)).toEqual(["retry", "cancel"])
+		expect(view.footer.actions[0].enabled).toBe(true)
+	})
+
 	it("projects feedback input and only Start New Task for a completed anchored completion", () => {
 		const view = projectTaskView(runtime(TaskPhase.COMPLETED, active("completion")))
 

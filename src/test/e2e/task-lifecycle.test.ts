@@ -1,6 +1,7 @@
 import { expect, type Frame } from "@playwright/test"
 import { E2E_PROFILE_NAMES } from "./utils/api-profile"
 import { E2ETestHelper, e2e } from "./utils/helpers"
+import { startFooterActionStabilityObserver, stopFooterActionStabilityObserver } from "./utils/ui-stability"
 
 async function sendTask(sidebar: Frame, text: string): Promise<void> {
 	const input = sidebar.getByTestId("chat-input")
@@ -157,6 +158,10 @@ e2e(
 		const taskFooter = sidebar.getByRole("contentinfo")
 		const cancelButton = taskFooter.getByText("Cancel", { exact: true })
 		await expect(cancelButton).toBeVisible({ timeout: 30_000 })
+		await startFooterActionStabilityObserver(sidebar, ["Cancel"])
+		await sidebar.page().waitForTimeout(1_000)
+		const footerStabilityEvents = await stopFooterActionStabilityObserver(sidebar)
+		expect(footerStabilityEvents).toEqual([])
 		await cancelButton.click()
 
 		const resumeButton = taskFooter.getByText("Resume", { exact: true })

@@ -2,6 +2,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises"
 import * as path from "node:path"
 import { expect, type Frame } from "@playwright/test"
 import { E2ETestHelper, e2e } from "./utils/helpers"
+import { startFooterActionStabilityObserver, stopFooterActionStabilityObserver } from "./utils/ui-stability"
 
 async function setAutoApproveAction(sidebar: Frame, label: string, enabled: boolean): Promise<void> {
 	await sidebar.getByLabel("Open auto-approve settings").click()
@@ -168,6 +169,10 @@ e2e(
 		await sendTask(sidebar, "Request an explicitly approved project read.")
 		const approveButton = sidebar.getByText("Approve", { exact: true })
 		await expect(approveButton).toBeVisible({ timeout: 60_000 })
+		await startFooterActionStabilityObserver(sidebar, ["Approve"])
+		await sidebar.page().waitForTimeout(750)
+		const approvalStabilityEvents = await stopFooterActionStabilityObserver(sidebar)
+		expect(approvalStabilityEvents).toEqual([])
 		const input = sidebar.getByTestId("chat-input")
 		await input.fill("E2E_READ_APPROVAL_NOTE")
 		await approveButton.click()
@@ -579,6 +584,10 @@ e2e(
 		await sendTask(sidebar, "Run a foreground command with explicit approval.")
 		const approveButton = sidebar.getByText("Approve", { exact: true })
 		await expect(approveButton).toBeVisible({ timeout: 60_000 })
+		await startFooterActionStabilityObserver(sidebar, ["Approve"])
+		await sidebar.page().waitForTimeout(750)
+		const approvalStabilityEvents = await stopFooterActionStabilityObserver(sidebar)
+		expect(approvalStabilityEvents).toEqual([])
 		const input = sidebar.getByTestId("chat-input")
 		await input.fill("E2E_COMMAND_APPROVAL_NOTE")
 		await approveButton.click()
@@ -638,6 +647,11 @@ e2e(
 		const commandActions = copyCommandButton.locator("xpath=ancestor::div[.//button[normalize-space()='Cancel']][1]")
 		const commandCancelButton = commandActions.getByRole("button", { name: "Cancel", exact: true })
 		await expect(commandCancelButton).toBeVisible({ timeout: 60_000 })
+		await commandCancelButton.evaluate((element) => element.setAttribute("data-e2e-footer-stability", "command-cancel"))
+		await startFooterActionStabilityObserver(sidebar, ["Cancel"], '[data-e2e-footer-stability="command-cancel"]')
+		await sidebar.page().waitForTimeout(750)
+		const commandCancelStabilityEvents = await stopFooterActionStabilityObserver(sidebar)
+		expect(commandCancelStabilityEvents).toEqual([])
 		await commandCancelButton.click()
 
 		await expect(sidebar.getByText("E2E_COMMAND_CANCEL_OK", { exact: false }).last()).toBeVisible({ timeout: 60_000 })
@@ -785,6 +799,11 @@ e2e(
 		const subagentCard = subagentTask.locator("xpath=ancestor::div[.//button[normalize-space()='Cancel']][1]")
 		const cancelButton = subagentCard.getByRole("button", { name: "Cancel", exact: true })
 		await expect(cancelButton).toBeVisible()
+		await cancelButton.evaluate((element) => element.setAttribute("data-e2e-footer-stability", "subagent-cancel"))
+		await startFooterActionStabilityObserver(sidebar, ["Cancel"], '[data-e2e-footer-stability="subagent-cancel"]')
+		await sidebar.page().waitForTimeout(750)
+		const subagentCancelStabilityEvents = await stopFooterActionStabilityObserver(sidebar)
+		expect(subagentCancelStabilityEvents).toEqual([])
 		await cancelButton.click()
 
 		await expect(sidebar.getByText("Cancelled", { exact: true }).last()).toBeVisible({ timeout: 30_000 })

@@ -3,6 +3,7 @@ import path from "node:path"
 import { expect, type Frame, type Locator, type Page } from "@playwright/test"
 import type { ElectronApplication } from "playwright"
 import { E2ETestHelper, e2e } from "./utils/helpers"
+import { startSettingControlStabilityObserver, stopSettingControlStabilityObserver } from "./utils/ui-stability"
 
 interface StoredSettings {
 	chatInputSendShortcut?: string
@@ -119,11 +120,18 @@ e2e(
 			await selectSendShortcut(firstSidebar, "ctrlEnter")
 			await firstSidebar.getByTestId("tab-terminal").click()
 			const timeout = firstSidebar.locator("#terminal-command-timeout input")
+			await startSettingControlStabilityObserver(firstSidebar, { selector: "#terminal-command-timeout input" }, "value")
 			await timeout.fill("0.5")
 			await expect(firstSidebar.getByText("Enter at least 1 minute", { exact: true })).toBeVisible()
 			await timeout.fill("42")
 			await timeout.press("Tab")
 			await expect(timeout).toHaveValue("42")
+			await expect.poll(async () => (await readSettings(dlineDir)).terminalCommandTimeoutSeconds).toBe(2_520)
+			await firstSidebar.page().waitForTimeout(300)
+			const timeoutSamples = await stopSettingControlStabilityObserver(firstSidebar)
+			const firstValidTimeoutSample = timeoutSamples.indexOf("42")
+			expect(firstValidTimeoutSample).toBeGreaterThanOrEqual(0)
+			expect(timeoutSamples.slice(firstValidTimeoutSample)).not.toContain("30")
 			await setDropdownValue(
 				firstSidebar,
 				firstSidebar.locator("#terminal-execution-mode"),

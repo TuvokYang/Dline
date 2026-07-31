@@ -1,4 +1,5 @@
 import type { ClineMessage } from "@shared/ExtensionMessage"
+import { ApiErrorBox } from "@/components/chat/ApiErrorBox"
 import { CopyButton } from "@/components/common/CopyButton"
 
 /** Props shared by pure interaction presentation renderers. */
@@ -47,7 +48,7 @@ export function CompletionRenderer(props: PresentationProps) {
 
 /** Render API error interaction content. */
 export function ErrorRenderer(props: PresentationProps) {
-	return shell(props.message)
+	return <ApiErrorBox error={props.message.text} testId="error-presentation-box" />
 }
 
 /** Render resume interaction content. */

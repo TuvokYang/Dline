@@ -3,6 +3,7 @@ import type { MockApiConsumption, MockTokenUsage } from "./fixtures/server"
 import { E2E_PROFILE_NAMES } from "./utils/api-profile"
 import { addSelectedCodeToDline, openTab, toggleNotifications } from "./utils/common"
 import { E2ETestHelper, e2e } from "./utils/helpers"
+import { startFooterActionStabilityObserver, stopFooterActionStabilityObserver } from "./utils/ui-stability"
 
 const CHECKLIST_ITEMS = [
 	"Read the workspace README",
@@ -511,10 +512,16 @@ for (const status of [403, 429, 502] as const) {
 
 			await helper.signin(sidebar)
 			await sendTask(sidebar, `Exercise HTTP ${status} recovery.`)
-			await expect(sidebar.getByText(marker, { exact: false }).last()).toBeVisible({ timeout: 90_000 })
+			const errorBox = sidebar.getByTestId("error-retry-box")
+			await expect(errorBox).toContainText("Automatic retry stopped", { timeout: 90_000 })
+			await expect(errorBox.getByTestId("error-retry-box-status")).toHaveText(String(status))
+			await expect(errorBox.getByTestId("error-retry-box-code")).toHaveText(`e2e_http_${status}`)
+			await expect(errorBox.getByTestId("error-retry-box-message")).toHaveText(marker)
+			await expect(errorBox.getByRole("button")).toHaveCount(0)
 
 			const retryButton = sidebar.locator('vscode-button[aria-label="Retry"]')
 			await expect(retryButton).toBeVisible({ timeout: 90_000 })
+			await expect(sidebar.locator('vscode-button[aria-label="Start New Task"]')).toBeVisible()
 			const failures = server.getMockConsumptions("openai-compatible-chat")
 			expect(failures.length).toBeGreaterThan(0)
 			expect(failures.every((entry) => entry.status === status)).toBe(true)
@@ -546,3 +553,62 @@ for (const status of [403, 429, 502] as const) {
 		},
 	)
 }
+
+e2e(
+	"API recovery - countdown Retry overrides the pending automatic retry and clears the error box",
+	async ({ helper, page, server, sidebar, userDataDir }) => {
+		e2e.setTimeout(180_000)
+		const firstError = "E2E_RETRY_OVERRIDE_ERROR_1"
+		const secondError = "E2E_RETRY_OVERRIDE_ERROR_2"
+		const completion = "E2E_RETRY_OVERRIDE_OK"
+		server.enqueueResponses(
+			"openai-compatible-chat",
+			{ type: "error", status: 502, code: "e2e_retry_override_1", message: firstError },
+			{ type: "error", status: 502, code: "e2e_retry_override_2", message: secondError },
+			{ type: "tool", name: "attempt_completion", arguments: { result: completion } },
+			{
+				type: "error",
+				status: 500,
+				code: "duplicate_retry_after_override",
+				message: "Automatic retry was not cancelled after manual Retry",
+			},
+		)
+
+		await helper.signin(sidebar)
+		await sendTask(sidebar, "Exercise the automatic retry override countdown.")
+
+		const errorBox = sidebar.getByTestId("error-retry-box")
+		await expect(errorBox).toContainText("Attempt 1 of 3", { timeout: 90_000 })
+		await expect(errorBox.getByTestId("error-retry-box-status")).toHaveText("502")
+		await expect(errorBox.getByTestId("error-retry-box-code")).toHaveText("e2e_retry_override_1")
+		await expect(errorBox.getByTestId("error-retry-box-message")).toHaveText(firstError)
+		await expect(errorBox.getByRole("button")).toHaveCount(0)
+
+		const retryButton = sidebar.locator('vscode-button[aria-label="Retry"]')
+		await expect(retryButton).toBeVisible()
+		await expect(sidebar.locator('vscode-button[aria-label="Cancel"]')).toBeVisible()
+		await startFooterActionStabilityObserver(sidebar, ["Retry", "Cancel"])
+		await expect(errorBox).toContainText("Attempt 2 of 3", { timeout: 90_000 })
+		await expect(errorBox.getByTestId("error-retry-box-code")).toHaveText("e2e_retry_override_2")
+		await expect(errorBox.getByTestId("error-retry-box-message")).toHaveText(secondError)
+		const footerStabilityEvents = await stopFooterActionStabilityObserver(sidebar)
+		expect(footerStabilityEvents).toEqual([])
+		const countdown = errorBox.getByTestId("error-retry-countdown")
+		const initialCountdown = await countdown.innerText()
+		await expect.poll(() => countdown.innerText(), { timeout: 3_000 }).not.toBe(initialCountdown)
+		const requestsBeforeManualRetry = server.getMockConsumptions("openai-compatible-chat").length
+		expect(requestsBeforeManualRetry).toBe(2)
+		await retryButton.click()
+
+		await expect(sidebar.getByText(completion, { exact: false }).last()).toBeVisible({ timeout: 60_000 })
+		await expect(sidebar.getByTestId("error-retry-box")).toHaveCount(0)
+		await expect.poll(() => server.getMockConsumptions("openai-compatible-chat").length).toBe(requestsBeforeManualRetry + 1)
+		await page.waitForTimeout(5_000)
+		expect(server.getMockConsumptions("openai-compatible-chat")).toHaveLength(requestsBeforeManualRetry + 1)
+		expect(server.getMockConsumptions("openai-compatible-chat").at(-1)).toMatchObject({
+			responseType: "tool",
+			toolName: "attempt_completion",
+		})
+		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir, [/E2E_RETRY_OVERRIDE_ERROR_/])
+	},
+)

@@ -8,8 +8,9 @@ import { ClineMessage } from "./ExtensionMessage"
  * (e.g., "Attempt 1 of 3", "Attempt 2 of 3", "Attempt 3 of 3"), interleaved with api_req_retried
  * messages. This function:
  * 1. Filters out earlier retry messages, showing only the most recent one
- * 2. Removes error_retry messages entirely when followed by a successful api_req_started
- *    (indicating the retry succeeded)
+ * 2. Removes error_retry messages entirely when a later durable conversation entry
+ *    proves that the retried request produced a model response
+ * 3. Preserves the legacy api_req_started boundary for non-final retries
  *
  * @param messages - An array of ClineMessage objects to process.
  * @returns A new array of ClineMessage objects with error_retry sequences consolidated.
@@ -46,21 +47,39 @@ export function combineErrorRetryMessages(messages: ClineMessage[]): ClineMessag
 			// Look ahead to find if there's another error_retry before the next api_req_started
 			let hasLaterErrorRetry = false
 			let hasApiReqStartedBefore = false
+			let hasRecoveredConversation = false
+			let hasRetryStarted = false
+			const conversationHistoryIndex = message.conversationHistoryIndex ?? 0
 
 			for (let j = i + 1; j < messages.length; j++) {
 				const laterMessage = messages[j]
+				if (laterMessage.say === "error_retry") {
+					hasLaterErrorRetry = true
+					break
+				}
+				if (laterMessage.say === "api_req_retried") {
+					hasRetryStarted = true
+					continue
+				}
 				if (laterMessage.say === "api_req_started") {
 					hasApiReqStartedBefore = true
 					break
 				}
-				if (laterMessage.say === "error_retry") {
-					hasLaterErrorRetry = true
+				if (hasRetryStarted && (laterMessage.conversationHistoryIndex ?? 0) > conversationHistoryIndex) {
+					hasRecoveredConversation = true
 					break
 				}
 			}
 
 			// Case 1: Another error_retry follows before api_req_started - skip this one
 			if (hasLaterErrorRetry) {
+				continue
+			}
+
+			// A later durable model response retires both automatic and exhausted
+			// retry errors. This also covers first-chunk retries, which reuse the
+			// original api_req_started message instead of appending another one.
+			if (hasRecoveredConversation) {
 				continue
 			}
 

@@ -153,13 +153,7 @@ import { StateManager } from "../storage/StateManager"
 import { createUnavailableApiHandler, resolveTaskApiProfile } from "./ApiProfileRecovery"
 import { buildActiveTasksSection } from "./active-tasks/ActiveTaskContextProvider"
 import { orderTurnEndingContentBlocks, orderTurnEndingNativeToolBlocks } from "./assistant-message-order"
-import {
-	getRetryDelay,
-	getStreamRetryDecision,
-	MAX_AUTO_RETRY_ATTEMPTS,
-	runDelayedStreamRetry,
-	waitRetryDelay,
-} from "./auto-retry"
+import { getRetryDelay, getStreamRetryDecision, MAX_AUTO_RETRY_ATTEMPTS } from "./auto-retry"
 import { BlockPhase } from "./BlockPhaseMachine"
 import { buildTaskBackgroundResults, buildTaskBackgroundSection } from "./background/BackgroundContextInjector"
 import { FocusChainManager } from "./focus-chain"
@@ -401,6 +395,12 @@ export class Task {
 	private latestTaskSnapshot?: TaskSnapshot
 	private pendingSystemPromptRefreshReason?: SystemPromptRefreshReason
 	private pendingBackgroundResultIds?: { subagentIds: string[]; commandIds: string[] }
+	/** One cancellable automatic-retry wait, exposed to the Webview Retry action. */
+	private pendingAutoRetry?: {
+		settle: (allowed: boolean, publish?: boolean) => void
+	}
+	/** Remains true across the timer and every request in one automatic retry sequence. */
+	private autoRetrySequenceActive = false
 	private readonly presentationSchedulingDisabled = isPresentationSchedulingDisabled()
 	private lastLoggedPresentationTrigger = 0
 	restoreHandler!: RestoreHandler
@@ -1189,6 +1189,97 @@ export class Task {
 		if (this.taskState.isAwaitingPlanResponse) {
 			this.taskController.resolveAsk("messageResponse", MODE_SWITCH_COMPACT_SIGNAL)
 		}
+	}
+
+	/**
+	 * Wait for an automatic retry delay while allowing the Webview to trigger it
+	 * immediately. The same primitive is used by first-chunk and no-response
+	 * retries so manual Retry cannot race a second timer.
+	 */
+	private waitForAutoRetry(delay: number): Promise<boolean> {
+		// A new wait replaces only an obsolete timer. Do not publish the transient
+		// empty state: the retry sequence must remain represented in the footer.
+		this.cancelPendingAutoRetry(false)
+		this.autoRetrySequenceActive = true
+		return new Promise<boolean>((resolve) => {
+			let settled = false
+			let timer: NodeJS.Timeout
+			const settle = (allowed: boolean, publish = true): void => {
+				if (settled) return
+				settled = true
+				clearTimeout(timer)
+				if (!allowed) {
+					this.autoRetrySequenceActive = false
+				}
+				if (this.pendingAutoRetry?.settle === settle) {
+					this.pendingAutoRetry = undefined
+					if (publish) this.postAutoRetryViewState()
+				}
+				resolve(allowed)
+			}
+			timer = setTimeout(() => settle(!this.taskState.abort), Math.max(0, delay))
+			this.pendingAutoRetry = { settle }
+			this.postAutoRetryViewState()
+		})
+	}
+
+	/** Publish only the footer state change owned by the retry timer. */
+	private postAutoRetryViewState(): void {
+		void this.postStateToWebview().catch((error) => {
+			Logger.error(`[Task ${this.taskId}] Failed to publish automatic retry state:`, error)
+		})
+	}
+
+	/** End the whole automatic-retry sequence and optionally publish its footer state. */
+	private endAutoRetrySequence(publish = true): void {
+		const pending = this.pendingAutoRetry
+		const wasActive = this.autoRetrySequenceActive || pending !== undefined
+		this.autoRetrySequenceActive = false
+		if (pending) {
+			pending.settle(false, publish)
+		} else if (wasActive && publish) {
+			this.postAutoRetryViewState()
+		}
+	}
+
+	/** Cancel a delayed retry as part of task cancellation or termination. */
+	private cancelPendingAutoRetry(publish = true): void {
+		this.endAutoRetrySequence(publish)
+	}
+
+	/** Return whether the live task footer can override a scheduled retry. */
+	public hasPendingAutoRetry(): boolean {
+		return this.pendingAutoRetry !== undefined && !this.taskState.abort
+	}
+
+	/** Return whether the complete automatic retry sequence still owns the footer. */
+	public hasAutoRetrySequence(): boolean {
+		return this.autoRetrySequenceActive && !this.taskState.abort
+	}
+
+	/** Trigger the pending automatic retry immediately from the Webview. */
+	public overridePendingAutoRetry(): boolean {
+		const pending = this.pendingAutoRetry
+		if (!pending || this.taskState.abort) return false
+		pending.settle(true)
+		return true
+	}
+
+	/** Schedule a retry that can be superseded by the explicit Retry action. */
+	private scheduleAutoRetry(delay: number, isCurrentTask: () => boolean, dispatchRetry: () => Promise<void>): void {
+		void this.waitForAutoRetry(delay).then(async (allowed) => {
+			if (!allowed || this.taskState.abort) return
+			if (!isCurrentTask()) {
+				this.endAutoRetrySequence()
+				return
+			}
+			try {
+				await dispatchRetry()
+			} catch (error) {
+				this.endAutoRetrySequence()
+				Logger.error(`[Task ${this.taskId}] Automatic retry dispatch failed:`, error)
+			}
+		})
 	}
 
 	async handleWebviewAskResponse(askResponse: ClineAskResponse, text?: string, images?: string[], files?: string[]) {
@@ -2293,6 +2384,7 @@ export class Task {
 	 */
 	async abortExecution() {
 		try {
+			this.cancelPendingAutoRetry()
 			this.modeSwitchCompaction.abort()
 			// PHASE 1: Check if TaskCancel should run BEFORE any cleanup
 			const shouldRunTaskCancelHook = await this.shouldRunTaskCancelHook()
@@ -2379,6 +2471,7 @@ export class Task {
 	 * No resume ask is sent because the task is being destroyed.
 	 */
 	async interrupt(): Promise<void> {
+		this.cancelPendingAutoRetry()
 		this.modeSwitchCompaction.abort()
 		this.taskState.abort = true
 		this.api?.abort?.()
@@ -2393,6 +2486,7 @@ export class Task {
 
 	async terminate() {
 		try {
+			this.cancelPendingAutoRetry()
 			this.modeSwitchCompaction.abort()
 			// PHASE 1: Check if TaskCancel should run BEFORE any cleanup
 			const shouldRunTaskCancelHook = await this.shouldRunTaskCancelHook()
@@ -3172,6 +3266,12 @@ export class Task {
 			// awaiting first chunk to see if it will throw an error
 			this.taskState.isWaitingForFirstChunk = true
 			const firstChunk = await iterator.next()
+			// A first chunk proves that the request in the active retry sequence
+			// reached the provider. Keep Cancel for the live stream, but release
+			// the retry-sequence-owned Retry action.
+			if (!firstChunk.done) {
+				this.endAutoRetrySequence()
+			}
 			yield firstChunk.value
 			this.markBackgroundResultsInjected()
 			this.markBackgroundResultsConsumed()
@@ -3301,10 +3401,11 @@ export class Task {
 						})
 					}
 
-					if (!(await waitRetryDelay(delay, () => this.taskState.abort))) {
+					if (!(await this.waitForAutoRetry(delay))) {
 						throw new Error("Dline instance aborted")
 					}
 				} else {
+					this.endAutoRetrySequence(false)
 					// The outer stream boundary owns canonical API recovery. Opening the
 					// retained Task.ask waiter here creates a second, divergent phase state.
 					this.taskState.autoRetryAttempts = MAX_AUTO_RETRY_ATTEMPTS
@@ -4513,11 +4614,10 @@ export class Task {
 						const taskId = this.taskId
 						const retryAttempts = this.taskState.autoRetryAttempts
 
-						void runDelayedStreamRetry({
+						this.scheduleAutoRetry(
 							delay,
-							isAborted: () => this.taskState.abort,
-							isCurrentTask: () => this.controller.task?.taskId === taskId,
-							dispatchRetry: async () => {
+							() => this.controller.task?.taskId === taskId,
+							async () => {
 								const activeTask = this.controller.task
 								if (!activeTask) {
 									return
@@ -4532,12 +4632,13 @@ export class Task {
 									throw new Error(`Automatic retry rejected: ${retried.error?.code ?? "invalid_runtime_event"}`)
 								}
 							},
-						})
+						)
 						// The scheduled retry is now the sole continuation. End this failed
 						// request chain without cancelling or reopening the task.
 						return true
 					}
 					if (retryDecision.shouldPrompt) {
+						this.endAutoRetrySequence(false)
 						// Show error_retry with failed flag to indicate all retries exhausted
 						await this.say(
 							"error_retry",
@@ -4736,6 +4837,7 @@ export class Task {
 
 				// Reset auto-retry counter for each new API request
 				this.taskState.autoRetryAttempts = 0
+				this.endAutoRetrySequence()
 
 				if (this.taskRuntime.getState().phase === TaskPhase.COMPLETED) {
 					return true
@@ -4803,10 +4905,11 @@ export class Task {
 							errorMessage: noResponseErrorMessage,
 						}),
 					)
-					if (!(await waitRetryDelay(delay, () => this.taskState.abort))) {
+					if (!(await this.waitForAutoRetry(delay))) {
 						throw new Error("Dline instance aborted")
 					}
 				} else {
+					this.endAutoRetrySequence(false)
 					// Max retries exhausted (>= 3 attempts), ask user
 					await this.say(
 						"error_retry",

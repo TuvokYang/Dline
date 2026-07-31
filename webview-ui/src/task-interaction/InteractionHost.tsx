@@ -1,5 +1,6 @@
 import type { ClineMessage, TaskViewState } from "@shared/ExtensionMessage"
 import { EmptyRequest } from "@shared/proto/dline/common"
+import { AskResponseRequest } from "@shared/proto/dline/task"
 import { useState } from "react"
 import { TaskServiceClient } from "@/services/grpc-client"
 import { FooterActions } from "./FooterActions"
@@ -43,9 +44,13 @@ export interface InteractionHostProps {
 
 const EMPTY_DRAFT: InteractionDraft = { text: "", images: [], files: [], activeQuote: null }
 
-type TaskLevelAction = "cancel"
+type TaskLevelAction = "cancel" | "retry"
 
-async function dispatchTaskAction(_action: TaskLevelAction): Promise<void> {
+async function dispatchTaskAction(action: TaskLevelAction): Promise<void> {
+	if (action === "retry") {
+		await TaskServiceClient.askResponse(AskResponseRequest.create({ responseType: "retry" }))
+		return
+	}
 	await TaskServiceClient.cancelTask(EmptyRequest.create({}))
 }
 
@@ -68,7 +73,7 @@ export function InteractionHost({
 		...view,
 		activeInteraction: undefined,
 		input: { enabled: false, acceptsText: false, acceptsImages: false, acceptsFiles: false },
-		footer: { actions: view.footer.actions.filter((action) => action.type === "cancel") },
+		footer: { actions: view.footer.actions.filter((action) => action.type === "cancel" || action.dispatchTarget === "task") },
 	}
 
 	return (

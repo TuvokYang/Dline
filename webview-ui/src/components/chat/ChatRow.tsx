@@ -49,6 +49,7 @@ import { FileServiceClient, UiServiceClient } from "@/services/grpc-client"
 import { findMatchingResourceOrTemplate, getMcpServerDisplayName } from "@/utils/mcp"
 import CodeAccordian, { cleanPathPrefix } from "../common/CodeAccordian"
 import ActModeRespondRow from "./ActModeRespondRow"
+import { ApiErrorBox } from "./ApiErrorBox"
 import { cancelTaskActivities } from "./activity/useTaskActivities"
 import { CommandOutputContent, CommandOutputRow } from "./CommandOutputRow"
 import { CompletionOutputRow } from "./CompletionOutputRow"
@@ -109,6 +110,58 @@ interface ChatRowContentProps extends Omit<ChatRowProps, "onHeightChange"> {}
 
 export const ProgressIndicator = () => <LoaderCircleIcon className="size-2 mr-2 animate-spin" />
 const InvisibleSpacer = () => <div aria-hidden className="h-px" />
+
+interface AutoRetryInfo {
+	attempt?: number
+	maxAttempts?: number
+	delaySeconds?: number
+	failed?: boolean
+	errorMessage?: string
+}
+
+function AutoRetryErrorBox({ info, startedAt }: { info: AutoRetryInfo; startedAt: number }) {
+	const delayMs = Math.max(0, Number(info.delaySeconds ?? 0) * 1000)
+	const [remainingMs, setRemainingMs] = useState(() => Math.max(0, startedAt + delayMs - Date.now()))
+
+	useEffect(() => {
+		const deadline = startedAt + delayMs
+		const updateRemaining = () => setRemainingMs(Math.max(0, deadline - Date.now()))
+		updateRemaining()
+		if (info.failed || delayMs <= 0) return
+		const timer = setInterval(updateRemaining, 100)
+		return () => clearInterval(timer)
+	}, [delayMs, info.failed, startedAt])
+
+	const remainingSeconds = Math.ceil(remainingMs / 1000)
+	const isFailed = info.failed === true
+
+	return (
+		<ApiErrorBox error={info.errorMessage} testId="error-retry-box">
+			<div className="flex items-start gap-2 text-xs">
+				<RefreshCwIcon className={cn("mt-0.5 size-3 shrink-0 text-link", !isFailed && "animate-spin")} />
+				<div className="min-w-0 flex-1">
+					<div className="font-medium text-foreground">
+						{isFailed ? "Automatic retry stopped" : "Automatic retry scheduled"}
+					</div>
+					<div className="mt-1 text-description" data-testid="error-retry-countdown">
+						{isFailed ? (
+							<span>All {info.maxAttempts} automatic attempts were used.</span>
+						) : (
+							<div className="flex flex-wrap gap-x-3 gap-y-1">
+								<span>
+									Attempt <strong>{info.attempt}</strong> of <strong>{info.maxAttempts}</strong>
+								</span>
+								<span>
+									Next retry in <strong>{remainingSeconds}s</strong>
+								</span>
+							</div>
+						)}
+					</div>
+				</div>
+			</div>
+		</ApiErrorBox>
+	)
+}
 
 const ChatRow = memo(
 	(props: ChatRowProps) => {
@@ -1142,49 +1195,10 @@ export const ChatRowContent = memo(
 						)
 					case "error_retry":
 						try {
-							const retryInfo = JSON.parse(message.text || "{}")
-							const { attempt, maxAttempts, delaySeconds, failed, errorMessage } = retryInfo
-							const isFailed = failed === true
-
-							return (
-								<div className="flex flex-col gap-2">
-									{errorMessage && (
-										<p className="m-0 whitespace-pre-wrap text-error wrap-anywhere text-xs">{errorMessage}</p>
-									)}
-									<div className="flex flex-col bg-quote p-0 rounded-[3px] text-[12px] p-3">
-										<div className="flex items-center mb-1">
-											{isFailed && !isRequestInProgress ? (
-												<TriangleAlertIcon className="mr-2 size-2" />
-											) : (
-												<RefreshCwIcon className="mr-2 size-2 animate-spin" />
-											)}
-											<span className="font-medium text-foreground">
-												{isFailed ? "Auto-Retry Failed" : "Auto-Retry in Progress"}
-											</span>
-										</div>
-										<div className="text-foreground opacity-80">
-											{isFailed ? (
-												<span>
-													Auto-retry failed after <strong>{maxAttempts}</strong> attempts. Manual
-													intervention required.
-												</span>
-											) : (
-												<span>
-													Attempt <strong>{attempt}</strong> of <strong>{maxAttempts}</strong> -
-													Retrying in {delaySeconds} seconds...
-												</span>
-											)}
-										</div>
-									</div>
-								</div>
-							)
+							return <AutoRetryErrorBox info={JSON.parse(message.text || "{}")} startedAt={message.ts} />
 						} catch (_e) {
 							// Fallback if JSON parsing fails
-							return (
-								<div className="text-foreground">
-									<MarkdownRow markdown={message.text} />
-								</div>
-							)
+							return <ApiErrorBox error={message.text} testId="error-retry-box" />
 						}
 					case "hook_status":
 						return <HookMessage CommandOutput={CommandOutputContent} message={message} />

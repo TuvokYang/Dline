@@ -18,6 +18,14 @@ export async function askResponse(controller: Controller, request: AskResponseRe
 			return Empty.create()
 		}
 
+		// Automatic API retry waits have no active interaction identity yet. Keep
+		// their explicit override on the legacy transport so the Webview can
+		// trigger the pending retry without resolving an unrelated tool ask.
+		if (request.responseType === "retry") {
+			controller.task.overridePendingAutoRetry()
+			return Empty.create()
+		}
+
 		// Map the string responseType to the ClineAskResponse enum
 		let responseType: ClineAskResponse
 		switch (request.responseType) {
