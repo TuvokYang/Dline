@@ -1,4 +1,5 @@
 import OpenAI from "openai"
+import type { ResponseInput, ResponseInputMessageContentList } from "openai/resources/responses/responses"
 import { ApiProvider } from "@/shared/api"
 import {
 	ClineAssistantRedactedThinkingBlock,
@@ -12,6 +13,85 @@ import {
 } from "@/shared/messages/content"
 import { Logger } from "@/shared/services/Logger"
 import { getResultFunctionId, getUseFunctionId, projectChatFunctionId } from "./tool-identity-projector"
+
+/**
+ * Project canonical history into DeepSeek Responses input without provider-owned replay IDs.
+ */
+export function convertDeepSeekResponsesInput(messages: ClineStorageMessage[]): ResponseInput {
+	const input: ResponseInput = []
+
+	for (const message of messages) {
+		if (typeof message.content === "string") {
+			input.push({ role: message.role, content: [{ type: "input_text", text: message.content }] })
+			continue
+		}
+
+		if (message.role === "assistant") {
+			let content: string[] = []
+			const flushContent = () => {
+				if (content.length === 0) return
+				input.push({ type: "message", role: "assistant", content: content.join("\n") })
+				content = []
+			}
+
+			for (const part of message.content) {
+				if (part.type === "text") {
+					content.push(part.text)
+				} else if (part.type === "image") {
+					content.push(`[image:${part.source.type === "base64" ? part.source.media_type : "remote URL"}]`)
+				} else if (part.type === "tool_use") {
+					flushContent()
+					input.push({
+						type: "function_call",
+						call_id: getUseFunctionId(part),
+						name: part.name,
+						arguments: JSON.stringify(part.input ?? {}),
+					})
+				}
+			}
+			flushContent()
+			continue
+		}
+
+		let content: ResponseInputMessageContentList = []
+		const flushContent = () => {
+			if (content.length === 0) return
+			input.push({ role: "user", content })
+			content = []
+		}
+
+		for (const part of message.content) {
+			if (part.type === "text") {
+				content.push({ type: "input_text", text: part.text })
+			} else if (part.type === "image") {
+				content.push({ type: "input_image", detail: "auto", image_url: imageSourceToUrl(part.source) })
+			} else if (part.type === "tool_result") {
+				flushContent()
+				input.push({
+					type: "function_call_output",
+					call_id: getResultFunctionId(part),
+					output: typeof part.content === "string" ? part.content : JSON.stringify(part.content),
+				})
+			}
+		}
+		flushContent()
+	}
+
+	return input
+}
+
+/** Convert local function declarations to the DeepSeek Responses tool shape. */
+export function convertDeepSeekResponsesTools(tools?: OpenAI.Chat.ChatCompletionTool[]) {
+	return tools
+		?.filter((tool): tool is OpenAI.Chat.ChatCompletionFunctionTool => tool.type === "function")
+		.map((tool) => ({
+			type: "function" as const,
+			name: tool.function.name,
+			description: tool.function.description,
+			parameters: tool.function.parameters ?? null,
+			strict: tool.function.strict ?? false,
+		}))
+}
 
 // ---- copied from openai-format.ts ----
 

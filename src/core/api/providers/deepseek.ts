@@ -1,3 +1,4 @@
+import { Anthropic } from "@anthropic-ai/sdk"
 import { DeepSeekModelId, deepSeekDefaultModelId, deepSeekModels, ModelInfo } from "@shared/api"
 import { calculateApiCostOpenAI } from "@utils/cost"
 import OpenAI from "openai"
@@ -6,16 +7,26 @@ import { buildExternalBasicHeaders } from "@/services/EnvUtils"
 import { ClineError } from "@/services/error"
 import { ClineStorageMessage } from "@/shared/messages/content"
 import { fetch } from "@/shared/net"
+import { ApiFormat } from "@/shared/proto/dline/models/metadata"
 import { Logger } from "@/shared/services/Logger"
 import { resolveDeepSeekAdaptiveThinking } from "@/shared/utils/reasoning-support"
 import { AccountUsage, ApiHandler, ApiHandlerContext } from "../"
 import { withRetry } from "../retry"
-import { convertDeepSeekMessages, convertDeepseekToOpenAiMessages } from "../transform/deepseek-format"
+import { sanitizeAnthropicMessages } from "../transform/anthropic-format"
+import {
+	convertDeepSeekMessages,
+	convertDeepSeekResponsesInput,
+	convertDeepSeekResponsesTools,
+	convertDeepseekToOpenAiMessages,
+} from "../transform/deepseek-format"
 import { ApiStream } from "../transform/stream"
 import { getOpenAIToolParams, ToolCallProcessor } from "../transform/tool-call-processor"
+import { convertOpenAIToolsToAnthropicTools, handleAnthropicMessagesApiStreamResponse } from "../utils/messages_api_support"
+import { handleResponsesApiStreamResponse } from "../utils/responses_api_support"
 
 export class DeepSeekHandler implements ApiHandler {
 	private client: OpenAI | undefined
+	private anthropicClient: Anthropic | undefined
 	private requestController: AbortController | undefined
 	private accountUsageController: AbortController | undefined
 
@@ -36,13 +47,6 @@ export class DeepSeekHandler implements ApiHandler {
 	private get baseUrl() {
 		return this.ctx.profile.baseUrl
 	}
-	private get reasoningEffort() {
-		return this.config?.reasoning?.effort
-	}
-	private get thinkingBudgetTokens() {
-		return this.config?.reasoning?.thinkingBudget ?? 0
-	}
-
 	private ensureClient(): OpenAI {
 		if (!this.client) {
 			if (!this.apiKey) {
@@ -63,6 +67,47 @@ export class DeepSeekHandler implements ApiHandler {
 			}
 		}
 		return this.client
+	}
+
+	private getAnthropicBaseUrl(): string {
+		const baseUrl = (this.baseUrl || "https://api.deepseek.com").replace(/\/+$/, "")
+		return baseUrl.endsWith("/anthropic") ? baseUrl : `${baseUrl}/anthropic`
+	}
+
+	private ensureAnthropicClient(): Anthropic {
+		if (!this.anthropicClient) {
+			if (!this.apiKey) {
+				throw new Error("DeepSeek API key is required")
+			}
+			this.anthropicClient = new Anthropic({
+				baseURL: this.getAnthropicBaseUrl(),
+				apiKey: this.apiKey,
+				defaultHeaders: buildExternalBasicHeaders(),
+				fetch,
+				timeout: this.ctx.requestTimeoutMs,
+				maxRetries: 0,
+			})
+		}
+		return this.anthropicClient
+	}
+
+	private getSelectedApiFormat(): ApiFormat {
+		const modelFormats = this.getModel().info.apiFormats
+		const selected = this.config?.apiFormat
+		if (selected !== undefined && (!modelFormats?.length || modelFormats.includes(selected))) {
+			return selected
+		}
+		return modelFormats?.[0] ?? ApiFormat.OPENAI_CHAT
+	}
+
+	private getThinkingSettings(model: { info: ModelInfo }) {
+		const reasoning = this.config?.reasoning
+		const adaptive = resolveDeepSeekAdaptiveThinking(reasoning?.effort)
+		const configuredEnabled = reasoning?.enableThinking ?? (reasoning ? !!reasoning.effort : adaptive.enabled)
+		return {
+			enabled: (model.info.capabilities?.supportsReasoning ?? false) && configuredEnabled && adaptive.enabled,
+			effort: adaptive.effort ?? "high",
+		}
 	}
 
 	private async *yieldUsage(info: ModelInfo, usage: OpenAI.Completions.CompletionUsage | undefined): ApiStream {
@@ -99,22 +144,44 @@ export class DeepSeekHandler implements ApiHandler {
 
 	@withRetry()
 	async *createMessage(systemPrompt: string, messages: ClineStorageMessage[], tools?: OpenAITool[]): ApiStream {
-		const client = this.ensureClient()
-		const model = this.getModel()
 		this.requestController?.abort()
 		const requestController = new AbortController()
 		this.requestController = requestController
+		try {
+			switch (this.getSelectedApiFormat()) {
+				case ApiFormat.OPENAI_RESPONSES:
+					yield* this.createResponsesMessage(systemPrompt, messages, tools, requestController.signal)
+					break
+				case ApiFormat.ANTHROPIC_CHAT:
+					yield* this.createAnthropicMessage(systemPrompt, messages, tools, requestController.signal)
+					break
+				default:
+					yield* this.createChatMessage(systemPrompt, messages, tools, requestController.signal)
+			}
+		} finally {
+			if (this.requestController === requestController) {
+				this.requestController = undefined
+			}
+		}
+	}
 
-		const isThinkingEnabled = !!this.reasoningEffort && this.reasoningEffort !== "none"
-		const adaptiveThinking = resolveDeepSeekAdaptiveThinking(this.reasoningEffort)
-		const reasoningEffort = isThinkingEnabled ? (adaptiveThinking.effort as OpenAI.ChatCompletionReasoningEffort) : undefined
+	private async *createChatMessage(
+		systemPrompt: string,
+		messages: ClineStorageMessage[],
+		tools: OpenAITool[] | undefined,
+		signal: AbortSignal,
+	): ApiStream {
+		const client = this.ensureClient()
+		const model = this.getModel()
+		const thinking = this.getThinkingSettings(model)
+
 		const supportsReasoning = model.info.capabilities?.supportsReasoning ?? false
 
 		// All deepseek models now use the same message conversion: V4-native format when thinking is on,
 		// plain OpenAI format otherwise. deepseek-chat and deepseek-reasoner are deprecated as of 2026-07-24.
 		// Only call the appropriate converter to avoid unnecessary warnings from skipping
 		// pure-thinking messages in the non-thinking converter when thinking is actually enabled.
-		const openAiMessages: OpenAI.Chat.ChatCompletionMessageParam[] = isThinkingEnabled
+		const openAiMessages: OpenAI.Chat.ChatCompletionMessageParam[] = thinking.enabled
 			? convertDeepSeekMessages(messages, systemPrompt)
 			: [{ role: "system", content: systemPrompt }, ...convertDeepseekToOpenAiMessages(messages)]
 		const stream = await client.chat.completions.create(
@@ -129,13 +196,13 @@ export class DeepSeekHandler implements ApiHandler {
 				...(supportsReasoning
 					? {
 							extra_body: {
-								thinking: { type: isThinkingEnabled ? "enabled" : "disabled" },
+								thinking: { type: thinking.enabled ? "enabled" : "disabled" },
 							},
-							...(isThinkingEnabled ? { reasoning_effort: reasoningEffort } : {}),
+							...(thinking.enabled ? { reasoning_effort: thinking.effort } : {}),
 						}
 					: {}),
 			},
-			{ signal: requestController.signal },
+			{ signal },
 		)
 
 		const toolCallProcessor = new ToolCallProcessor()
@@ -154,8 +221,7 @@ export class DeepSeekHandler implements ApiHandler {
 			}
 
 			if (delta && "reasoning_content" in delta && delta.reasoning_content) {
-				const shouldYieldReasoning = this.reasoningEffort && this.reasoningEffort !== "none"
-				if (shouldYieldReasoning) {
+				if (thinking.enabled) {
 					yield {
 						type: "reasoning",
 						reasoning: (delta.reasoning_content as string | undefined) || "",
@@ -167,9 +233,69 @@ export class DeepSeekHandler implements ApiHandler {
 				yield* this.yieldUsage(model.info, chunk.usage)
 			}
 		}
-		if (this.requestController === requestController) {
-			this.requestController = undefined
+	}
+
+	private async *createResponsesMessage(
+		systemPrompt: string,
+		messages: ClineStorageMessage[],
+		tools: OpenAITool[] | undefined,
+		signal: AbortSignal,
+	): ApiStream {
+		const client = this.ensureClient()
+		const model = this.getModel()
+		const thinking = this.getThinkingSettings(model)
+		const responseTools = convertDeepSeekResponsesTools(tools)
+		const maxOutputTokens = model.info.capabilities?.maxTokens
+		const params: OpenAI.Responses.ResponseCreateParamsStreaming = {
+			model: model.id,
+			instructions: systemPrompt,
+			input: convertDeepSeekResponsesInput(messages),
+			stream: true,
+			...(responseTools?.length ? { tools: responseTools } : {}),
+			...(thinking.enabled ? { reasoning: { effort: thinking.effort, summary: "auto" } } : {}),
+			...(typeof maxOutputTokens === "number" && maxOutputTokens > 0 ? { max_output_tokens: maxOutputTokens } : {}),
 		}
+		const stream = await client.responses.create(params, { signal })
+		yield* handleResponsesApiStreamResponse(
+			stream,
+			model.info,
+			async (info, inputTokens, outputTokens, cacheWriteTokens, cacheReadTokens) =>
+				calculateApiCostOpenAI(info, inputTokens, outputTokens, cacheWriteTokens, cacheReadTokens),
+		)
+	}
+
+	private async *createAnthropicMessage(
+		systemPrompt: string,
+		messages: ClineStorageMessage[],
+		tools: OpenAITool[] | undefined,
+		signal: AbortSignal,
+	): ApiStream {
+		const client = this.ensureAnthropicClient()
+		const model = this.getModel()
+		const thinking = this.getThinkingSettings(model)
+		const supportsPromptCache = model.info.capabilities?.supportsPromptCache ?? false
+		const request = {
+			model: model.id,
+			max_tokens: model.info.capabilities?.maxTokens || 8192,
+			system: [
+				{
+					type: "text" as const,
+					text: systemPrompt,
+					...(supportsPromptCache ? { cache_control: { type: "ephemeral" as const } } : {}),
+				},
+			],
+			messages: sanitizeAnthropicMessages(messages, supportsPromptCache),
+			tools: convertOpenAIToolsToAnthropicTools(tools),
+			stream: true as const,
+			...(thinking.enabled
+				? {
+						thinking: { type: "adaptive" as const },
+						output_config: { effort: thinking.effort },
+					}
+				: { temperature: 0 }),
+		}
+		const stream = await client.messages.create(request as Anthropic.MessageCreateParamsStreaming, { signal })
+		yield* handleAnthropicMessagesApiStreamResponse(stream)
 	}
 
 	getModel(): { id: string; info: ModelInfo } {

@@ -1,7 +1,9 @@
+import { ApiFormat } from "@shared/proto/dline/models/metadata"
 import { ApiProfile } from "@shared/proto/dline/profile"
 import { BaseProviderConfig } from "@shared/proto/dline/provider/common"
 import { expect } from "chai"
 import { afterEach, describe, it, vi } from "vitest"
+import type { ClineStorageMessage } from "@/shared/messages/content"
 import { DeepSeekHandler } from "../deepseek"
 
 interface StreamChunk {
@@ -57,6 +59,119 @@ describe("DeepSeekHandler", () => {
 	})
 
 	describe("createMessage", () => {
+		it("routes a profile-selected Responses request through the DeepSeek Responses client", async () => {
+			const profile = ApiProfile.create({
+				provider: "deepseek",
+				apiKey: "test-api-key",
+				modelId: "deepseek-v4-flash",
+				deepseek: BaseProviderConfig.create({ apiFormat: ApiFormat.OPENAI_RESPONSES }),
+			})
+			const handler = new DeepSeekHandler({ profile, mode: "act" })
+			const chatCreate = vi.fn().mockResolvedValue(createStream())
+			const responsesCreate = vi.fn().mockResolvedValue(createStream())
+			vi.spyOn(handler as unknown as { ensureClient: () => unknown }, "ensureClient").mockReturnValue({
+				chat: { completions: { create: chatCreate } },
+				responses: { create: responsesCreate },
+			})
+
+			await collectChunks(handler)
+
+			expect(responsesCreate.mock.calls).to.have.length(1)
+			expect(chatCreate.mock.calls).to.have.length(0)
+			const request = responsesCreate.mock.calls[0]?.[0]
+			expect(request).to.deep.include({ model: "deepseek-v4-flash", stream: true, instructions: "system" })
+			expect(request).not.to.have.property("previous_response_id")
+			expect(request).not.to.have.property("store")
+		})
+
+		it("projects canonical function identities into DeepSeek Responses history without provider IDs", async () => {
+			const profile = ApiProfile.create({
+				provider: "deepseek",
+				apiKey: "test-api-key",
+				modelId: "deepseek-v4-flash",
+				deepseek: BaseProviderConfig.create({ apiFormat: ApiFormat.OPENAI_RESPONSES }),
+			})
+			const handler = new DeepSeekHandler({ profile, mode: "act" })
+			const responsesCreate = vi.fn().mockResolvedValue(createStream())
+			vi.spyOn(handler as unknown as { ensureClient: () => unknown }, "ensureClient").mockReturnValue({
+				responses: { create: responsesCreate },
+			})
+			const history: ClineStorageMessage[] = [
+				{
+					role: "assistant",
+					content: [
+						{
+							type: "tool_use",
+							function_id: "call_read_1",
+							dline_tid: "dline_tid_read_1",
+							name: "read_file",
+							input: { path: "README.md" },
+						},
+					],
+				},
+				{
+					role: "user",
+					content: [
+						{
+							type: "tool_result",
+							function_id: "call_read_1",
+							dline_tid: "dline_tid_read_1",
+							content: "file contents",
+						},
+					],
+				},
+			]
+
+			for await (const _chunk of handler.createMessage("system", history)) {
+				// Empty mocked stream.
+			}
+
+			const input = responsesCreate.mock.calls[0]?.[0]?.input
+			expect(input).to.deep.equal([
+				{
+					type: "function_call",
+					call_id: "call_read_1",
+					name: "read_file",
+					arguments: '{"path":"README.md"}',
+				},
+				{ type: "function_call_output", call_id: "call_read_1", output: "file contents" },
+			])
+			expect(JSON.stringify(input)).not.to.match(/dline_tid|item_id|tool_use_id/)
+		})
+
+		it("routes a profile-selected Anthropic request through /anthropic with effort output_config", async () => {
+			const profile = ApiProfile.create({
+				provider: "deepseek",
+				apiKey: "test-api-key",
+				baseUrl: "https://api.deepseek.com/",
+				modelId: "deepseek-v4-pro",
+				deepseek: BaseProviderConfig.create({
+					apiFormat: ApiFormat.ANTHROPIC_CHAT,
+					reasoning: { effort: "max" },
+				}),
+			})
+			const handler = new DeepSeekHandler({ profile, mode: "act" })
+			const messagesCreate = vi.fn().mockResolvedValue(createStream())
+			;(handler as unknown as { anthropicClient?: unknown }).anthropicClient = {
+				messages: { create: messagesCreate },
+			}
+			vi.spyOn(handler as unknown as { ensureClient: () => FakeClient }, "ensureClient").mockReturnValue({
+				chat: { completions: { create: vi.fn().mockResolvedValue(createStream()) } },
+			})
+
+			await collectChunks(handler)
+
+			expect(messagesCreate.mock.calls).to.have.length(1)
+			expect(messagesCreate.mock.calls[0]?.[0]).to.deep.include({
+				model: "deepseek-v4-pro",
+				stream: true,
+				output_config: { effort: "max" },
+			})
+			expect((handler as unknown as { getAnthropicBaseUrl: () => string }).getAnthropicBaseUrl()).to.equal(
+				"https://api.deepseek.com/anthropic",
+			)
+		})
+
 		for (const [configuredEffort, expectedEffort] of [
 			["high", "high"],
 			["max", "max"],

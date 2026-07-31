@@ -1,11 +1,10 @@
 import { Anthropic } from "@anthropic-ai/sdk"
 import { Tool as AnthropicTool } from "@anthropic-ai/sdk/resources/index"
-import { Stream as AnthropicStream } from "@anthropic-ai/sdk/streaming"
 import type { ChatCompletionTool as OpenAITool } from "openai/resources/chat/completions"
 import { ApiStream } from "../transform/stream"
 
 export async function* handleAnthropicMessagesApiStreamResponse(
-	stream: AnthropicStream<Anthropic.RawMessageStreamEvent>,
+	stream: AsyncIterable<Anthropic.RawMessageStreamEvent>,
 ): ApiStream {
 	const lastStartedToolCall = { id: "", name: "", arguments: "" }
 
