@@ -220,6 +220,17 @@ describe("MessageChannel.presentSay", () => {
 })
 
 describe("MessageChannel.ask", () => {
+	it("uses the canonical ignored-promise diagnostic for a partial ask", async () => {
+		const { channel, clineMessages } = createMessageChannel()
+
+		await assert.rejects(channel.ask("qna_respond", '{"response":"partial"}', true), {
+			message: "Current ask promise was ignored",
+		})
+
+		assert.equal(clineMessages.length, 1)
+		assert.equal(clineMessages[0].partial, true)
+	})
+
 	it("does not treat state_snapshot messages as superseding a pending ask", async () => {
 		const clock = vi.useFakeTimers()
 		const { channel } = createMessageChannel()
@@ -301,7 +312,7 @@ describe("MessageChannel.ask", () => {
 
 		try {
 			const askPromise = channel.ask("resume_task")
-			const rejection = assert.rejects(askPromise, /Current ask promise was ignored/)
+			const rejection = assert.rejects(askPromise, { message: "Current ask promise was ignored" })
 
 			await flushMicrotasks()
 			await channel.say("text", "new visible message")

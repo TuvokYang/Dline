@@ -287,7 +287,7 @@ export class MessageChannel {
 				this.taskState.lastMessageTs = askTs
 				options?.onTsCreated?.(askTs)
 				await notifyAskVisible(askTs)
-				throw new Error("Current ask promise was ignored 1")
+				throw new Error("Current ask promise was ignored")
 			}
 
 			// partial=false: finalize
