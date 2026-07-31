@@ -13,6 +13,7 @@ import { ChildProcess, execSync, spawn } from "child_process"
 import { EventEmitter } from "events"
 import * as iconv from "iconv-lite"
 import { terminateProcessTree } from "@/utils/process-termination"
+import { WINDOWS_POWERSHELL_LEGACY_PATH } from "@/utils/shell"
 
 import {
 	isCompilingOutput,
@@ -388,7 +389,7 @@ export class StandaloneTerminalProcess extends EventEmitter<TerminalProcessEvent
 	 */
 	private getDefaultShell(): string {
 		if (process.platform === "win32") {
-			return process.env.COMSPEC || "cmd.exe"
+			return WINDOWS_POWERSHELL_LEGACY_PATH
 		}
 		return process.env.SHELL || "/bin/bash"
 	}

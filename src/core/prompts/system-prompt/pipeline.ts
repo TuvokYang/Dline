@@ -1,4 +1,5 @@
 import { DEFAULT_TERMINAL_COMMAND_TIMEOUT_SECONDS } from "@shared/terminal-settings"
+import { getShellForProfile } from "@utils/shell"
 import { getPrompt } from "../i18n"
 import { PromptProfile, requirePromptProfile } from "../profiles/types"
 import { PromptTemplate } from "../template/PromptTemplate"
@@ -168,7 +169,7 @@ export function prepareSystemRuntimeEnv(context: SystemPromptContext, config: Sy
 		SHELL: context.isTesting
 			? "/bin/zsh"
 			: process.platform === "win32"
-				? process.env.COMSPEC || "cmd.exe"
+				? getShellForProfile(context.defaultTerminalProfile ?? "default")
 				: process.env.SHELL || "/bin/bash",
 		HOME_DIR: context.isTesting ? "/Users/tester" : process.env.HOME || process.env.USERPROFILE || "",
 		WORKSPACE_TITLE: getPrompt("runtimeEnvironment", multiRoot ? "workspaceRootsTitle" : "currentWorkingDirectoryTitle"),

@@ -3067,6 +3067,7 @@ export class Task {
 			enableNativeToolCalls: this.shouldUseNativeToolCalls(providerInfo),
 			enableParallelToolCalling: this.isParallelToolCallingEnabled(providerInfo),
 			terminalExecutionMode: this.terminalExecutionMode,
+			defaultTerminalProfile: this.stateManager.getGlobalSettingsKey("defaultTerminalProfile") ?? "default",
 			terminalCommandTimeoutSeconds:
 				this.stateManager.getGlobalSettingsKey("terminalCommandTimeoutSeconds") ??
 				DEFAULT_TERMINAL_COMMAND_TIMEOUT_SECONDS,

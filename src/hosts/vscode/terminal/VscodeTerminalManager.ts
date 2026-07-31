@@ -252,8 +252,7 @@ export class VscodeTerminalManager implements ITerminalManager {
 
 	async getOrCreateTerminal(cwd: string): Promise<ITerminalInfo> {
 		const terminals = TerminalRegistry.getAllTerminals()
-		const expectedShellPath =
-			this.defaultTerminalProfile !== "default" ? getShellForProfile(this.defaultTerminalProfile) : undefined
+		const expectedShellPath = this.getConfiguredShellPath(this.defaultTerminalProfile)
 
 		// Find available terminal from our pool first (created for this task)
 		Logger.log(`[TerminalManager] Looking for terminal in cwd: ${cwd}`)
@@ -406,7 +405,7 @@ export class VscodeTerminalManager implements ITerminalManager {
 		this.defaultTerminalProfile = profileId
 
 		// Get the shell path for the new profile
-		const newShellPath = profileId !== "default" ? getShellForProfile(profileId) : undefined
+		const newShellPath = this.getConfiguredShellPath(profileId)
 
 		// Handle terminal management for the profile change
 		const result = this.handleTerminalProfileChange(newShellPath)
@@ -420,6 +419,11 @@ export class VscodeTerminalManager implements ITerminalManager {
 		})
 
 		return result
+	}
+
+	/** Resolve the shell path Dline owns for a profile without changing non-Windows default behavior. */
+	private getConfiguredShellPath(profileId: string): string | undefined {
+		return profileId === "default" && process.platform !== "win32" ? undefined : getShellForProfile(profileId)
 	}
 
 	/**

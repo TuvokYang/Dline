@@ -195,7 +195,7 @@ export function getAvailableTerminalProfiles(): TerminalProfile[] {
 		{
 			id: "default",
 			name: "Default",
-			description: "Use VSCode's default terminal configuration",
+			description: process.platform === "win32" ? "Use Windows PowerShell" : "Use VSCode's default terminal configuration",
 		},
 	]
 
@@ -278,9 +278,10 @@ export function getAvailableTerminalProfiles(): TerminalProfile[] {
 
 /** Gets the shell path for a specific terminal profile */
 export function getShellForProfile(profileId: string): string {
-	// If it's the default profile, use the existing getShell() logic
+	// Dline's Windows default is PowerShell. Command Prompt remains available
+	// through the explicit "cmd" profile.
 	if (profileId === "default") {
-		return getShell()
+		return process.platform === "win32" ? SHELL_PATHS.POWERSHELL_LEGACY : getShell()
 	}
 
 	// Find the profile

@@ -108,7 +108,8 @@ export const TerminalSettingsSection: React.FC<TerminalSettingsSectionProps> = (
 							))}
 						</VSCodeDropdown>
 						<p className="text-xs text-(--vscode-descriptionForeground) mt-1">
-							Select the default terminal Cline will use. 'Default' uses your VSCode global setting.
+							Select the default terminal Dline will use. On Windows, 'Default' uses Windows PowerShell; on other
+							platforms it uses your VS Code global setting.
 						</p>
 					</div>
 					<TerminalCommandTimeoutSetting />
