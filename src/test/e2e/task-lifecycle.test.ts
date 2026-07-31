@@ -393,3 +393,63 @@ e2e(
 		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
 	},
 )
+
+e2e(
+	"Thinking restore - Close stops the partial stream and History Resume starts only after explicit input",
+	async ({ helper, page, server, sidebar, userDataDir }) => {
+		e2e.setTimeout(180_000)
+		await helper.signin(sidebar)
+		await selectProfile(sidebar, E2E_PROFILE_NAMES.mockDeepSeek)
+		server.resetOpenAiMock()
+		server.enqueueResponses(
+			"deepseek-chat",
+			{
+				type: "tool",
+				id: "call_thinking_closed_completion",
+				name: "attempt_completion",
+				arguments: { result: "E2E_THINKING_CLOSED_RESPONSE_MUST_NOT_RENDER" },
+				reasoning: "E2E_THINKING_STREAM_BEFORE_CLOSE",
+				afterReasoningDelayMs: 30_000,
+			},
+			{
+				type: "tool",
+				id: "call_thinking_restored_completion",
+				name: "attempt_completion",
+				arguments: { result: "E2E_THINKING_HISTORY_RESUME_OK" },
+				expectedRequestIncludes: [
+					"The previous task session was closed and has now been restored.",
+					"E2E_THINKING_RESUME_DRAFT",
+				],
+			},
+		)
+
+		const taskText = "E2E_THINKING_CLOSE_HISTORY_TASK"
+		await sendTask(sidebar, taskText)
+		await expect(sidebar.getByText("E2E_THINKING_STREAM_BEFORE_CLOSE", { exact: false }).last()).toBeVisible({
+			timeout: 60_000,
+		})
+		await expect.poll(() => server.getRequestCount("deepseek-chat")).toBe(1)
+
+		await closeCurrentTask(sidebar)
+		await reopenTask(sidebar, taskText)
+		const taskFooter = sidebar.getByRole("contentinfo")
+		const resumeButton = taskFooter.getByText("Resume", { exact: true })
+		await expect(resumeButton).toBeVisible({ timeout: 30_000 })
+		await expect(taskFooter.getByText("Start New Task", { exact: true })).toHaveCount(0)
+		await expect(sidebar.getByText("E2E_THINKING_CLOSED_RESPONSE_MUST_NOT_RENDER", { exact: false })).toHaveCount(0)
+		await page.waitForTimeout(750)
+		expect(server.getRequestCount("deepseek-chat")).toBe(1)
+
+		const input = sidebar.getByTestId("chat-input")
+		await expect(input).toBeEnabled()
+		await input.fill("E2E_THINKING_RESUME_DRAFT")
+		await resumeButton.click()
+		await expect(input).toHaveValue("")
+		await expect(sidebar.getByText("E2E_THINKING_HISTORY_RESUME_OK", { exact: false }).last()).toBeVisible({
+			timeout: 60_000,
+		})
+		await expect.poll(() => server.getRequestCount("deepseek-chat")).toBe(2)
+		expect(server.getMockConsumptions("deepseek-chat")[1].contractError).toBeUndefined()
+		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+	},
+)
