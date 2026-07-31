@@ -60,6 +60,7 @@ const ModelSwitcher: React.FC<ModelSwitcherProps> = ({ onOpenSettings }) => {
 	const handleSelect = (profileName: string) => {
 		const profile = profiles.find((p) => p.name === profileName || `${p.provider}:${p.modelId}` === profileName)
 		if (!profile) return
+		setOpen(false)
 
 		if (planActSeparateModelsSetting) {
 			// Separated mode: write to the active tab's mode (task-level)

@@ -1,13 +1,17 @@
 import React from "react"
 import { useExtensionState } from "@/context/ExtensionStateContext"
 import { updateSetting } from "./utils/settingsHandlers"
+import { useDebouncedInput } from "./utils/useDebouncedInput"
 
 const TerminalOutputLineLimitSlider: React.FC = () => {
 	const { terminalOutputLineLimit } = useExtensionState()
+	const [localValue, setLocalValue] = useDebouncedInput(terminalOutputLineLimit ?? 500, (value) => {
+		void updateSetting("terminalOutputLineLimit", value)
+	})
 
 	const handleSliderChange = (event: React.ChangeEvent<HTMLInputElement>) => {
 		const value = Number.parseInt(event.target.value, 10)
-		updateSetting("terminalOutputLineLimit", value)
+		setLocalValue(value)
 	}
 
 	return (
@@ -24,9 +28,9 @@ const TerminalOutputLineLimitSlider: React.FC = () => {
 					step="100"
 					style={{ flexGrow: 1, marginRight: "1rem" }}
 					type="range"
-					value={terminalOutputLineLimit ?? 500}
+					value={localValue}
 				/>
-				<span>{terminalOutputLineLimit ?? 500}</span>
+				<span>{localValue}</span>
 			</div>
 			<p style={{ fontSize: "12px", color: "var(--vscode-descriptionForeground)", margin: "5px 0 0 0" }}>
 				Maximum number of lines to include in terminal output when executing commands. When exceeded, lines will be

@@ -1199,6 +1199,9 @@ export class StateManager {
 				return taskValue
 			}
 		}
+		if (this.settingsCache[key] !== undefined) {
+			return this.settingsCache[key]
+		}
 		return this.globalStateCache[key]
 	}
 

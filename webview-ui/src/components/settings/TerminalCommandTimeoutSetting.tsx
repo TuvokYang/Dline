@@ -42,7 +42,7 @@ const TerminalCommandTimeoutSetting = () => {
 						setInputError(null)
 					}
 				}}
-				onChange={(event) => handleChange(event as Event)}
+				onInput={(event) => handleChange(event as unknown as Event)}
 				value={inputValue}
 			/>
 			{inputError && <div className="text-(--vscode-errorForeground) text-xs mt-1">{inputError}</div>}

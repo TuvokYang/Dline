@@ -12,7 +12,7 @@ import { useExtensionState } from "./context/ExtensionStateContext"
 import { Providers } from "./Providers"
 import { UiServiceClient } from "./services/grpc-client"
 
-const AppContent = () => {
+export const AppContent = () => {
 	const {
 		didHydrateState,
 		showWelcome,
@@ -39,6 +39,7 @@ const AppContent = () => {
 	const { clineUser, organizations, activeOrganization } = useClineAuth()
 
 	const showUpdateAnnouncementModal = useCallback(() => {
+		setShouldShowAnnouncement(false)
 		setShowAnnouncement(true)
 		UiServiceClient.onDidShowAnnouncement({} as EmptyRequest)
 			.then((response: Boolean) => {
