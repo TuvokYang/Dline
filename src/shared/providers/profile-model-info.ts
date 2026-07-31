@@ -128,7 +128,7 @@ export function resolveProfileModelInfo(
 
 	const defaultModel = providerModels?.defaultModelId ? providerModels.models[providerModels.defaultModelId] : undefined
 
-	const baseModel = registryModel ?? profile.modelInfo ?? defaultModel
+	const baseModel = registryModel ?? profile.modelInfo ?? (profile.modelId ? undefined : defaultModel)
 
 	return buildEffectiveModelInfo(modelId || baseModel?.id, baseModel, resolveProfileOverrides(profile))
 }

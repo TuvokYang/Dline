@@ -36,6 +36,41 @@ describe("resolveProfileModelInfo", () => {
 		expect(result.capabilities?.supportsPromptCache).to.equal(true)
 	})
 
+	it("does not inherit the provider default model metadata for an explicit custom model id", () => {
+		const profile = ApiProfile.create({
+			provider: "openai",
+			modelId: "custom-model",
+			openai: OpenAiProviderConfig.create({
+				customModelEnabled: true,
+				capabilities: {
+					contextWindow: 131_072,
+					maxTokens: 8_192,
+				},
+			}),
+		})
+
+		const result = resolveProfileModelInfo(profile, {
+			models: {
+				"default-model": {
+					id: "default-model",
+					name: "Provider Default",
+					capabilities: {
+						contextWindow: 272_000,
+						contextWindowTiers: [
+							{ id: "standard", contextWindow: 272_000, label: "272K" },
+							{ id: "long", contextWindow: 1_050_000, label: "1.05M" },
+						],
+					},
+				},
+			},
+			defaultModelId: "default-model",
+		})
+
+		expect(result.id).to.equal("custom-model")
+		expect(result.name).to.equal(undefined)
+		expect(result.capabilities?.contextWindow).to.equal(131_072)
+	})
+
 	it("preserves an explicit prompt-cache opt-out", () => {
 		const profile = ApiProfile.create({
 			provider: "openai",

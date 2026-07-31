@@ -327,39 +327,87 @@ e2e(
 )
 
 e2e(
-	"Task model configuration - follows active profile rename and task-local profile switch",
-	async ({ dlineDir, helper, page, sidebar }) => {
+	"OpenAI task profiles - selection, rename, and task-local switch route subsequent turns",
+	async ({ dlineDir, helper, page, server, sidebar, userDataDir }) => {
 		e2e.setTimeout(180_000)
 		await helper.signin(sidebar)
 		await openApiSettings(page, sidebar)
 
 		const mockCard = await openModelConfiguration(sidebar, E2E_PROFILE_NAMES.mockOpenAi)
 		await setTextField(mockCard, "Context Window Size", "131072")
+		await selectLabeledOption(mockCard, sidebar, "Service Tier", "Priority")
 		await waitForProfile(
 			dlineDir,
 			E2E_PROFILE_NAMES.mockOpenAi,
-			(profile) => profile.openai?.capabilities?.contextWindow === 131_072,
+			(profile) =>
+				profile.openai?.apiFormat === "OPENAI_CHAT" &&
+				profile.openai.capabilities?.contextWindow === 131_072 &&
+				profile.openai.serviceTier === "priority",
 		)
 
-		const persistenceCard = await openModelConfiguration(sidebar, E2E_PROFILE_NAMES.persistence)
-		await setTextField(persistenceCard, "Context Window Size", "262144")
+		const responsesCard = await openModelConfiguration(sidebar, E2E_PROFILE_NAMES.mockOpenAiResponses)
+		await setTextField(responsesCard, "Context Window Size", "262144")
+		await setCapability(responsesCard, "Enable Thinking", true)
+		await selectLabeledOption(responsesCard, sidebar, "Thinking Mode", "Reasoning Effort")
+		await selectLabeledOption(responsesCard, sidebar, "Reasoning Effort", "Ultra")
+		await selectLabeledOption(responsesCard, sidebar, "Service Tier", "Flex")
 		await waitForProfile(
 			dlineDir,
-			E2E_PROFILE_NAMES.persistence,
-			(profile) => profile.openai?.capabilities?.contextWindow === 262_144,
+			E2E_PROFILE_NAMES.mockOpenAiResponses,
+			(profile) =>
+				profile.openai?.apiFormat === "OPENAI_RESPONSES" &&
+				profile.openai.capabilities?.contextWindow === 262_144 &&
+				profile.openai.reasoning?.effort === "ultra" &&
+				profile.openai.serviceTier === "flex",
 		)
 
 		await sidebar.getByRole("button", { name: "Done" }).click()
+		const modelSwitcher = sidebar.getByRole("button", { name: "Select model" })
+		await modelSwitcher.click()
+		await sidebar.getByRole("option").filter({ hasText: E2E_PROFILE_NAMES.mockOpenAiResponses }).click()
+		await expect(modelSwitcher).toHaveText(E2E_PROFILE_NAMES.mockOpenAiResponses)
+		await modelSwitcher.click()
+		await sidebar.getByRole("option").filter({ hasText: E2E_PROFILE_NAMES.mockOpenAi }).click()
+		await expect(modelSwitcher).toHaveText(E2E_PROFILE_NAMES.mockOpenAi)
+
+		server.resetOpenAiMock()
+		server.enqueueResponses("openai-compatible-chat", {
+			type: "tool",
+			id: "call_openai_chat_profile_completion",
+			name: "attempt_completion",
+			arguments: { result: "E2E_OPENAI_CHAT_PROFILE_OK" },
+			expectedRequestIncludes: ["E2E_OPENAI_CHAT_PROFILE_TURN"],
+		})
+		server.enqueueResponses("openai-compatible-responses", {
+			type: "tool",
+			id: "call_openai_responses_profile_completion",
+			name: "attempt_completion",
+			arguments: { result: "E2E_OPENAI_RESPONSES_PROFILE_OK" },
+			expectedRequestIncludes: ["E2E_OPENAI_RESPONSES_PROFILE_TURN"],
+		})
+
 		const input = sidebar.getByTestId("chat-input")
-		await input.fill("E2E task profile synchronization")
+		await input.fill("E2E_OPENAI_CHAT_PROFILE_TURN")
 		await sidebar.getByTestId("send-button").click()
-		await expect(sidebar.getByText("E2E task profile synchronization").first()).toBeVisible()
+		await expect(sidebar.getByText("E2E_OPENAI_CHAT_PROFILE_OK", { exact: false }).last()).toBeVisible({
+			timeout: 60_000,
+		})
+		await expect.poll(() => server.getRequestCount("openai-compatible-chat")).toBe(1)
+		const chatRequest = server.getMockConsumptions("openai-compatible-chat")[0]
+		expect(chatRequest).toMatchObject({
+			protocol: "openai-chat",
+			thinking: { mode: "effort", effort: "high" },
+		})
+		expect(chatRequest.requestBody).toMatchObject({
+			model: "dline-e2e-model",
+			service_tier: "priority",
+			reasoning_effort: "high",
+		})
 
 		const expandTaskHeader = sidebar.getByLabel("Expand task header")
 		if (await expandTaskHeader.isVisible()) {
 			await expandTaskHeader.click()
 		}
-		const modelSwitcher = sidebar.getByRole("button", { name: "Select model" })
 		await expect(modelSwitcher).toHaveText(E2E_PROFILE_NAMES.mockOpenAi)
 		const contextMaximum = sidebar.locator('[title="Maximum context window size for this model"]')
 		await expect(contextMaximum).toHaveText("131.1k")
@@ -376,8 +424,27 @@ e2e(
 		await expect(contextMaximum).toHaveText("131.1k")
 
 		await modelSwitcher.click()
-		await sidebar.getByRole("option").filter({ hasText: E2E_PROFILE_NAMES.persistence }).click()
-		await expect(modelSwitcher).toHaveText(E2E_PROFILE_NAMES.persistence)
+		await sidebar.getByRole("option").filter({ hasText: E2E_PROFILE_NAMES.mockOpenAiResponses }).click()
+		await expect(modelSwitcher).toHaveText(E2E_PROFILE_NAMES.mockOpenAiResponses)
 		await expect(contextMaximum).toHaveText("262.1k")
+
+		await expect(input).toBeEnabled()
+		await input.fill("E2E_OPENAI_RESPONSES_PROFILE_TURN")
+		await input.press("Enter")
+		await expect(sidebar.getByText("E2E_OPENAI_RESPONSES_PROFILE_OK", { exact: false }).last()).toBeVisible({
+			timeout: 60_000,
+		})
+		await expect.poll(() => server.getRequestCount("openai-compatible-responses")).toBe(1)
+		const responsesRequest = server.getMockConsumptions("openai-compatible-responses")[0]
+		expect(responsesRequest).toMatchObject({
+			protocol: "openai-responses",
+			thinking: { mode: "effort", effort: "ultra" },
+		})
+		expect(responsesRequest.requestBody).toMatchObject({
+			model: "dline-e2e-model",
+			service_tier: "flex",
+			reasoning: { effort: "ultra" },
+		})
+		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
 	},
 )
