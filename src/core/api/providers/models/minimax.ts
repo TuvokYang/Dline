@@ -10,6 +10,7 @@ export const minimaxModels: Record<string, ModelInfo> = {
 		name: "MiniMax-M2.7",
 		description: "Latest flagship model with enhanced reasoning and coding",
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 128_000,
 			contextWindow: 192_000,
 			supportsImages: false,
@@ -28,6 +29,7 @@ export const minimaxModels: Record<string, ModelInfo> = {
 		name: "MiniMax-M2.7-highspeed",
 		description: "High-speed version of M2.7 for low-latency scenarios",
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 128_000,
 			contextWindow: 192_000,
 			supportsImages: false,
@@ -45,6 +47,7 @@ export const minimaxModels: Record<string, ModelInfo> = {
 		id: "MiniMax-M2.5",
 		name: "MiniMax-M2.5",
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 128_000,
 			contextWindow: 192_000,
 			supportsImages: false,
@@ -62,6 +65,7 @@ export const minimaxModels: Record<string, ModelInfo> = {
 		id: "MiniMax-M2.5-highspeed",
 		name: "MiniMax-M2.5-highspeed",
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 128_000,
 			contextWindow: 192_000,
 			supportsImages: false,
@@ -79,6 +83,7 @@ export const minimaxModels: Record<string, ModelInfo> = {
 		id: "MiniMax-M2.1",
 		name: "MiniMax-M2.1",
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 128_000,
 			contextWindow: 192_000,
 			supportsImages: false,
@@ -95,6 +100,7 @@ export const minimaxModels: Record<string, ModelInfo> = {
 		id: "MiniMax-M2.1-lightning",
 		name: "MiniMax-M2.1-lightning",
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 128_000,
 			contextWindow: 192_000,
 			supportsImages: false,
@@ -111,6 +117,7 @@ export const minimaxModels: Record<string, ModelInfo> = {
 		id: "MiniMax-M2",
 		name: "MiniMax-M2",
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 128_000,
 			contextWindow: 192_000,
 			supportsImages: false,

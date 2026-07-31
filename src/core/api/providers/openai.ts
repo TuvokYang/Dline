@@ -1,10 +1,14 @@
 import { DefaultAzureCredential, getBearerTokenProvider } from "@azure/identity"
 import { azureOpenAiDefaultApiVersion, ModelInfo, openAiModelInfoSaneDefaults } from "@shared/api"
 import { buildEffectiveModelInfo } from "@shared/providers/effective-model-info"
-import { normalizeOpenAiServiceTier, normalizeOpenaiReasoningEffort } from "@shared/storage/types"
+import { normalizeOpenAiApiEndpoint, normalizeOpenAiServiceTier, normalizeOpenaiReasoningEffort } from "@shared/storage/types"
 import { calculateApiCostOpenAI } from "@utils/cost"
 import OpenAI, { AzureOpenAI } from "openai"
-import type { ChatCompletionReasoningEffort, ChatCompletionTool } from "openai/resources/chat/completions"
+import type {
+	ChatCompletionFunctionTool,
+	ChatCompletionReasoningEffort,
+	ChatCompletionTool,
+} from "openai/resources/chat/completions"
 import { buildExternalBasicHeaders } from "@/services/EnvUtils"
 import { ClineStorageMessage } from "@/shared/messages/content"
 import { createOpenAIClient, fetch } from "@/shared/net"
@@ -13,9 +17,11 @@ import { ApiHandler, ApiHandlerContext } from "../index"
 import { withRetry } from "../retry"
 import { convertToO1Messages } from "../transform/o1-format"
 import { convertToOpenAiMessages } from "../transform/openai-format"
+import { convertToOpenAIResponsesInput } from "../transform/openai-response-format"
 import { convertToR1Format } from "../transform/r1-format"
 import { ApiStream } from "../transform/stream"
 import { getOpenAIToolParams, ToolCallProcessor } from "../transform/tool-call-processor"
+import { handleResponsesApiStreamResponse } from "../utils/responses_api_support"
 
 /**
  * Applies prompt cache control to messages at the content-block level.
@@ -89,6 +95,7 @@ function applyCacheControlToMessages(
 
 export class OpenAiHandler implements ApiHandler {
 	private client: OpenAI | undefined
+	private requestController: AbortController | undefined
 
 	constructor(private ctx: ApiHandlerContext) {}
 
@@ -112,6 +119,9 @@ export class OpenAiHandler implements ApiHandler {
 	}
 	private get serviceTier() {
 		return normalizeOpenAiServiceTier(this.config?.serviceTier)
+	}
+	private get apiEndpoint() {
+		return normalizeOpenAiApiEndpoint(this.config?.apiEndpoint)
 	}
 	private get azureApiVersion() {
 		return this.config?.azureApiVersion
@@ -161,6 +171,7 @@ export class OpenAiHandler implements ApiHandler {
 								this.getAzureAudienceScope(this.baseUrl),
 							),
 							apiVersion: this.azureApiVersion || azureOpenAiDefaultApiVersion,
+							maxRetries: 0,
 							defaultHeaders: {
 								...externalHeaders,
 								...this.openAiHeaders,
@@ -172,6 +183,7 @@ export class OpenAiHandler implements ApiHandler {
 							baseURL: this.baseUrl,
 							apiKey: this.apiKey,
 							apiVersion: this.azureApiVersion || azureOpenAiDefaultApiVersion,
+							maxRetries: 0,
 							defaultHeaders: {
 								...externalHeaders,
 								...this.openAiHeaders,
@@ -196,6 +208,15 @@ export class OpenAiHandler implements ApiHandler {
 
 	@withRetry()
 	async *createMessage(systemPrompt: string, messages: ClineStorageMessage[], tools?: ChatCompletionTool[]): ApiStream {
+		this.requestController?.abort()
+		const requestController = new AbortController()
+		this.requestController = requestController
+		if (this.apiEndpoint === "responses") {
+			yield* this.createResponsesMessage(systemPrompt, messages, tools, requestController.signal)
+			if (this.requestController === requestController) this.requestController = undefined
+			return
+		}
+
 		const client = this.ensureClient()
 		const modelId = this.modelId
 		const isO1 = isO1Model(modelId)
@@ -289,7 +310,7 @@ export class OpenAiHandler implements ApiHandler {
 			Object.assign(requestParams, getOpenAIToolParams(tools))
 		}
 
-		const stream = await (client.chat.completions as any).create(requestParams)
+		const stream = await (client.chat.completions as any).create(requestParams, { signal: requestController.signal })
 
 		const toolCallProcessor = new ToolCallProcessor()
 
@@ -355,6 +376,62 @@ export class OpenAiHandler implements ApiHandler {
 				}
 			}
 		}
+		if (this.requestController === requestController) this.requestController = undefined
+	}
+
+	private async *createResponsesMessage(
+		systemPrompt: string,
+		messages: ClineStorageMessage[],
+		tools?: ChatCompletionTool[],
+		signal?: AbortSignal,
+	): ApiStream {
+		const client = this.ensureClient()
+		const model = this.getModel()
+		const { input } = convertToOpenAIResponsesInput(messages, { usePreviousResponseId: false })
+		const responseTools = tools
+			?.filter((tool): tool is ChatCompletionFunctionTool => tool.type === "function")
+			.map((tool) => ({
+				type: "function" as const,
+				name: tool.function.name,
+				description: tool.function.description,
+				parameters: tool.function.parameters ?? null,
+				strict: tool.function.strict ?? true,
+			}))
+		const enableThinking = this.config?.reasoning?.enableThinking ?? true
+		const reasoningEffort = normalizeOpenaiReasoningEffort(this.reasoningEffort)
+		const temperature = model.info.capabilities?.temperature ?? this.config?.temperature
+		const maxOutputTokens = model.info.capabilities?.maxTokens
+		const params: OpenAI.Responses.ResponseCreateParamsStreaming = {
+			model: model.id,
+			instructions: systemPrompt,
+			input,
+			stream: true,
+			store: false,
+			...(responseTools?.length ? { tools: responseTools } : {}),
+			...(this.serviceTier ? { service_tier: this.serviceTier } : {}),
+			...(enableThinking && reasoningEffort !== "none"
+				? { reasoning: { effort: reasoningEffort as ChatCompletionReasoningEffort, summary: "auto" } }
+				: {}),
+			...(!enableThinking && typeof temperature === "number" ? { temperature } : {}),
+			...(typeof maxOutputTokens === "number" && maxOutputTokens > 0 ? { max_output_tokens: maxOutputTokens } : {}),
+		}
+
+		const stream = await client.responses.create(params, { signal })
+		yield* handleResponsesApiStreamResponse(
+			stream,
+			model.info,
+			async (info, inputTokens, outputTokens, cacheWrite, cacheRead) =>
+				calculateApiCostOpenAI(info, inputTokens, outputTokens, cacheWrite, cacheRead),
+		)
+	}
+
+	abort(): void {
+		this.requestController?.abort()
+	}
+
+	/** Used by the shared retry decorator to make backoff cancellation-aware. */
+	getRetrySignal(): AbortSignal | undefined {
+		return this.requestController?.signal
 	}
 
 	getModel(): { id: string; info: ModelInfo } {

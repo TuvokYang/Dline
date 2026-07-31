@@ -16,6 +16,17 @@ import { Controller } from ".."
 // Track pending refresh promise to prevent duplicate concurrent fetches
 let pendingRefresh: Promise<Record<string, ModelInfo>> | null = null
 
+export function resolveGroqSupportsTools(rawModel: any, staticModelInfo?: ModelInfo): boolean | undefined {
+	const supportedFeatures = rawModel?.supportedFeatures ?? rawModel?.supported_features
+	if (Array.isArray(supportedFeatures)) {
+		return supportedFeatures.includes("tools")
+	}
+	if (supportedFeatures && typeof supportedFeatures.tools === "boolean") {
+		return supportedFeatures.tools
+	}
+	return staticModelInfo?.capabilities?.supportsTools
+}
+
 /**
  * Core function: Refreshes the Groq models and returns application types
  * @param controller The controller instance
@@ -71,6 +82,7 @@ async function fetchAndCacheModels(controller: Controller): Promise<Record<strin
 						contextWindow: modelInfo.capabilities?.contextWindow,
 						supportsImages: modelInfo.capabilities?.supportsImages ?? false,
 						supportsPromptCache: modelInfo.capabilities?.supportsPromptCache ?? false,
+						supportsTools: modelInfo.capabilities?.supportsTools,
 					},
 					pricing: {
 						inputPrice: modelInfo.pricing?.inputPrice,
@@ -118,6 +130,7 @@ async function fetchAndCacheModels(controller: Controller): Promise<Record<strin
 							contextWindow: rawModel.context_window || staticModelInfo?.capabilities?.contextWindow || 8192,
 							supportsImages: detectImageSupport(rawModel, staticModelInfo),
 							supportsPromptCache: staticModelInfo?.capabilities?.supportsPromptCache || false,
+							supportsTools: resolveGroqSupportsTools(rawModel, staticModelInfo),
 						},
 						pricing: {
 							inputPrice: staticModelInfo?.pricing?.inputPrice || 0,
@@ -180,6 +193,7 @@ async function fetchAndCacheModels(controller: Controller): Promise<Record<strin
 						contextWindow: modelInfo.capabilities?.contextWindow,
 						supportsImages: modelInfo.capabilities?.supportsImages ?? false,
 						supportsPromptCache: modelInfo.capabilities?.supportsPromptCache ?? false,
+						supportsTools: modelInfo.capabilities?.supportsTools,
 					},
 					pricing: {
 						inputPrice: modelInfo.pricing?.inputPrice,
@@ -204,6 +218,7 @@ async function fetchAndCacheModels(controller: Controller): Promise<Record<strin
 				contextWindow: model.capabilities?.contextWindow ?? 8192,
 				supportsImages: model.capabilities?.supportsImages ?? false,
 				supportsPromptCache: model.capabilities?.supportsPromptCache ?? false,
+				supportsTools: model.capabilities?.supportsTools,
 			},
 			pricing: {
 				inputPrice: model.pricing?.inputPrice ?? 0,

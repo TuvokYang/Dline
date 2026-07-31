@@ -220,10 +220,9 @@ export function convertToOpenAiMessages(
 				const consolidatedReasoningDetails =
 					reasoningDetails.length > 0 ? consolidateReasoningDetails(reasoningDetails as any) : []
 
-				// If the assistant message has no text content and no tool calls, its reasoning
-				// content is already included via the separate `reasoning_content` field by
-				// addReasoningContent().  Sending a message with both content and tool_calls
-				// unset violates the Chat Completions schema, so we skip it.
+				// Chat Completions has no standard field for replaying an internal thinking-only
+				// block. Sending a message with both content and tool_calls unset violates the
+				// schema, so skip it.
 				if (finalContent === undefined && !hasToolCalls) {
 					continue
 				}

@@ -11,6 +11,7 @@ export const openAiCodexModels: Record<string, ModelInfo> = {
 		id: "gpt-5.6-sol",
 		apiFormat: ApiFormat.OPENAI_RESPONSES,
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 128_000,
 			contextWindow: 353_000,
 			supportsImages: true,
@@ -24,6 +25,7 @@ export const openAiCodexModels: Record<string, ModelInfo> = {
 		id: "gpt-5.6-terra",
 		apiFormat: ApiFormat.OPENAI_RESPONSES,
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 128_000,
 			contextWindow: 353_000,
 			supportsImages: true,
@@ -37,6 +39,7 @@ export const openAiCodexModels: Record<string, ModelInfo> = {
 		id: "gpt-5.6-luna",
 		apiFormat: ApiFormat.OPENAI_RESPONSES,
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 128_000,
 			contextWindow: 353_000,
 			supportsImages: true,
@@ -50,6 +53,7 @@ export const openAiCodexModels: Record<string, ModelInfo> = {
 		id: "gpt-5.5",
 		apiFormat: ApiFormat.OPENAI_RESPONSES,
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 128_000,
 			contextWindow: 272_000,
 			supportsImages: true,
@@ -63,6 +67,7 @@ export const openAiCodexModels: Record<string, ModelInfo> = {
 		id: "gpt-5.4",
 		apiFormat: ApiFormat.OPENAI_RESPONSES,
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 128_000,
 			contextWindow: 272_000,
 			supportsImages: true,
@@ -76,6 +81,7 @@ export const openAiCodexModels: Record<string, ModelInfo> = {
 		id: "gpt-5.4-mini",
 		apiFormat: ApiFormat.OPENAI_RESPONSES,
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 128_000,
 			contextWindow: 272_000,
 			supportsImages: true,

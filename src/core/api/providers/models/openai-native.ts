@@ -13,6 +13,7 @@ export const openAiNativeModels: Record<string, ModelInfo> = {
 		apiFormat: ApiFormat.OPENAI_RESPONSES,
 		temperature: 1,
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 128_000,
 			contextWindow: 272_000,
 			contextWindowTiers: [
@@ -40,6 +41,7 @@ export const openAiNativeModels: Record<string, ModelInfo> = {
 		apiFormat: ApiFormat.OPENAI_RESPONSES,
 		temperature: 1,
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 128_000,
 			contextWindow: 272_000,
 			contextWindowTiers: [
@@ -67,6 +69,7 @@ export const openAiNativeModels: Record<string, ModelInfo> = {
 		apiFormat: ApiFormat.OPENAI_RESPONSES,
 		temperature: 1,
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 128_000,
 			contextWindow: 272_000,
 			contextWindowTiers: [
@@ -94,6 +97,7 @@ export const openAiNativeModels: Record<string, ModelInfo> = {
 		apiFormat: ApiFormat.OPENAI_RESPONSES,
 		temperature: 1,
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 128_000,
 			contextWindow: 1_050_000,
 			supportsImages: true,
@@ -108,6 +112,7 @@ export const openAiNativeModels: Record<string, ModelInfo> = {
 		apiFormat: ApiFormat.OPENAI_RESPONSES,
 		temperature: 1,
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 128_000,
 			contextWindow: 1_050_000,
 			supportsImages: true,
@@ -122,6 +127,7 @@ export const openAiNativeModels: Record<string, ModelInfo> = {
 		apiFormat: ApiFormat.OPENAI_RESPONSES,
 		temperature: 1,
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 128_000,
 			contextWindow: 1_050_000,
 			supportsImages: true,
@@ -136,6 +142,7 @@ export const openAiNativeModels: Record<string, ModelInfo> = {
 		apiFormat: ApiFormat.OPENAI_RESPONSES,
 		temperature: 1,
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 128_000,
 			contextWindow: 1_050_000,
 			supportsImages: true,
@@ -150,6 +157,7 @@ export const openAiNativeModels: Record<string, ModelInfo> = {
 		apiFormat: ApiFormat.OPENAI_RESPONSES,
 		temperature: 1,
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 128_000,
 			contextWindow: 272_000,
 			supportsImages: true,
@@ -164,6 +172,7 @@ export const openAiNativeModels: Record<string, ModelInfo> = {
 		apiFormat: ApiFormat.OPENAI_RESPONSES,
 		temperature: 1,
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 128_000,
 			contextWindow: 272_000,
 			supportsImages: true,

@@ -82,7 +82,7 @@ export const LiteLlmProvider = ({ showModelOptions, isPopup, profile, onUpdate }
 						)}
 					</VSCodeButton>
 					{modelInfo?.capabilities?.supportsReasoning && <></>}
-					<ModelInfoView isPopup={isPopup} modelInfo={modelInfo} selectedModelId={modelId} />
+					{modelInfo && <ModelInfoView isPopup={isPopup} modelInfo={modelInfo} selectedModelId={modelId} />}
 				</>
 			)}
 			<p style={{ fontSize: "12px", marginTop: "5px", color: "var(--vscode-descriptionForeground)" }}>

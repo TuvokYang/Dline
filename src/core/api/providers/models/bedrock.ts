@@ -44,6 +44,7 @@ export const bedrockModels: Record<string, ModelInfo> = {
 	"anthropic.claude-sonnet-4-6": {
 		id: "anthropic.claude-sonnet-4-6",
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 64_000,
 			contextWindow: 200_000,
 			supportsImages: true,
@@ -60,6 +61,7 @@ export const bedrockModels: Record<string, ModelInfo> = {
 	"anthropic.claude-sonnet-4-6:1m": {
 		id: "anthropic.claude-sonnet-4-6:1m",
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 64_000,
 			contextWindow: 1_000_000,
 			supportsImages: true,
@@ -77,6 +79,7 @@ export const bedrockModels: Record<string, ModelInfo> = {
 	"anthropic.claude-sonnet-4-5-20250929-v1:0": {
 		id: "anthropic.claude-sonnet-4-5-20250929-v1:0",
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 64_000,
 			contextWindow: 200_000,
 			supportsImages: true,
@@ -93,6 +96,7 @@ export const bedrockModels: Record<string, ModelInfo> = {
 	"anthropic.claude-sonnet-4-5-20250929-v1:0:1m": {
 		id: "anthropic.claude-sonnet-4-5-20250929-v1:0:1m",
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 64_000,
 			contextWindow: 1_000_000,
 			supportsImages: true,
@@ -110,6 +114,7 @@ export const bedrockModels: Record<string, ModelInfo> = {
 	"anthropic.claude-haiku-4-5-20251001-v1:0": {
 		id: "anthropic.claude-haiku-4-5-20251001-v1:0",
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 64_000,
 			contextWindow: 200_000,
 			supportsImages: true,
@@ -126,6 +131,7 @@ export const bedrockModels: Record<string, ModelInfo> = {
 	"anthropic.claude-sonnet-4-20250514-v1:0": {
 		id: "anthropic.claude-sonnet-4-20250514-v1:0",
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 64_000,
 			contextWindow: 200_000,
 			supportsImages: true,
@@ -142,6 +148,7 @@ export const bedrockModels: Record<string, ModelInfo> = {
 	"anthropic.claude-sonnet-4-20250514-v1:0:1m": {
 		id: "anthropic.claude-sonnet-4-20250514-v1:0:1m",
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 64_000,
 			contextWindow: 1_000_000,
 			supportsImages: true,
@@ -159,6 +166,7 @@ export const bedrockModels: Record<string, ModelInfo> = {
 	"anthropic.claude-opus-4-6-v1": {
 		id: "anthropic.claude-opus-4-6-v1",
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 128_000,
 			contextWindow: 200_000,
 			supportsImages: true,
@@ -175,6 +183,7 @@ export const bedrockModels: Record<string, ModelInfo> = {
 	"anthropic.claude-opus-4-6-v1:1m": {
 		id: "anthropic.claude-opus-4-6-v1:1m",
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 128_000,
 			contextWindow: 1_000_000,
 			supportsImages: true,
@@ -192,6 +201,7 @@ export const bedrockModels: Record<string, ModelInfo> = {
 	"anthropic.claude-opus-4-7": {
 		id: "anthropic.claude-opus-4-7",
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 128_000,
 			contextWindow: 200_000,
 			supportsImages: true,
@@ -209,6 +219,7 @@ export const bedrockModels: Record<string, ModelInfo> = {
 	"anthropic.claude-opus-4-7:1m": {
 		id: "anthropic.claude-opus-4-7:1m",
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 128_000,
 			contextWindow: 1_000_000,
 			supportsImages: true,
@@ -227,6 +238,7 @@ export const bedrockModels: Record<string, ModelInfo> = {
 	"anthropic.claude-opus-4-5-20251101-v1:0": {
 		id: "anthropic.claude-opus-4-5-20251101-v1:0",
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 64_000,
 			contextWindow: 200_000,
 			supportsImages: true,
@@ -243,6 +255,7 @@ export const bedrockModels: Record<string, ModelInfo> = {
 	"anthropic.claude-opus-4-20250514-v1:0": {
 		id: "anthropic.claude-opus-4-20250514-v1:0",
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 32_000,
 			contextWindow: 200_000,
 			supportsImages: true,
@@ -259,6 +272,7 @@ export const bedrockModels: Record<string, ModelInfo> = {
 	"anthropic.claude-opus-4-1-20250805-v1:0": {
 		id: "anthropic.claude-opus-4-1-20250805-v1:0",
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 32_000,
 			contextWindow: 200_000,
 			supportsImages: true,
@@ -458,6 +472,7 @@ export const bedrockModels: Record<string, ModelInfo> = {
 		description:
 			"A state-of-the-art 120B open-weight Mixture-of-Experts language model optimized for strong reasoning, tool use, and efficient deployment on large GPUs",
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 8192,
 			contextWindow: 128_000,
 			supportsImages: false,
@@ -474,6 +489,7 @@ export const bedrockModels: Record<string, ModelInfo> = {
 		description:
 			"A compact 20B open-weight Mixture-of-Experts language model designed for strong reasoning and tool use, ideal for edge devices and local inference.",
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 8192,
 			contextWindow: 128_000,
 			supportsImages: false,

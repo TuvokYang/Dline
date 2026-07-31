@@ -63,6 +63,7 @@ export const anthropicModels: Record<string, ModelInfo> = {
 		id: "claude-fable-5",
 		name: "claude-fable-5",
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 128_000,
 			contextWindow: 200_000,
 			contextWindowTiers: [
@@ -85,6 +86,7 @@ export const anthropicModels: Record<string, ModelInfo> = {
 		id: "claude-opus-4-8",
 		name: "claude-opus-4-8",
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 128_000,
 			contextWindow: 200_000,
 			contextWindowTiers: [
@@ -107,6 +109,7 @@ export const anthropicModels: Record<string, ModelInfo> = {
 		id: "claude-sonnet-5",
 		name: "claude-sonnet-5",
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 128_000,
 			contextWindow: 200_000,
 			contextWindowTiers: [
@@ -129,6 +132,7 @@ export const anthropicModels: Record<string, ModelInfo> = {
 		id: "claude-sonnet-4-6",
 		name: "claude-sonnet-4-6",
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 64_000,
 			contextWindow: 200_000,
 			contextWindowTiers: [
@@ -151,6 +155,7 @@ export const anthropicModels: Record<string, ModelInfo> = {
 		id: "claude-opus-4-6",
 		name: "claude-opus-4-6",
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 128_000,
 			contextWindow: 200_000,
 			contextWindowTiers: [
@@ -175,6 +180,7 @@ export const anthropicModels: Record<string, ModelInfo> = {
 		description:
 			"Anthropic fast mode preview for Claude Opus 4.6. Same model and capabilities with higher output token speed at premium pricing. Requires fast mode access on your Anthropic account.",
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 128_000,
 			contextWindow: 200_000,
 			contextWindowTiers: [
@@ -196,6 +202,7 @@ export const anthropicModels: Record<string, ModelInfo> = {
 		id: "claude-opus-4-7",
 		name: "claude-opus-4-7",
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 128_000,
 			contextWindow: 200_000,
 			contextWindowTiers: [
@@ -230,6 +237,7 @@ export const anthropicModelInfoSaneDefaults: ModelInfo = {
 		supportsImages: false,
 		supportsPromptCache: true,
 		supportsReasoning: true,
+		supportsTools: false,
 		maxTokens: 384000,
 		contextWindow: 1_000_000,
 		thinking: {

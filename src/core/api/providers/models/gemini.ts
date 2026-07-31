@@ -10,6 +10,7 @@ export const geminiModels: Record<string, ModelInfo> = {
 		id: "gemini-3.1-pro-preview",
 		name: "gemini-3.1-pro-preview",
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 65536,
 			contextWindow: 1_048_576,
 			supportsImages: true,
@@ -40,6 +41,7 @@ export const geminiModels: Record<string, ModelInfo> = {
 		id: "gemini-3-pro-preview",
 		name: "gemini-3-pro-preview",
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 65536,
 			contextWindow: 1_048_576,
 			supportsImages: true,
@@ -70,6 +72,7 @@ export const geminiModels: Record<string, ModelInfo> = {
 		id: "gemini-3-flash-preview",
 		name: "gemini-3-flash-preview",
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 65536,
 			contextWindow: 1_048_576,
 			supportsImages: true,
@@ -101,6 +104,7 @@ export const geminiModels: Record<string, ModelInfo> = {
 		id: "gemini-2.5-pro",
 		name: "gemini-2.5-pro",
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 65536,
 			contextWindow: 1_048_576,
 			supportsImages: true,
@@ -132,6 +136,7 @@ export const geminiModels: Record<string, ModelInfo> = {
 		name: "gemini-2.5-flash-lite-preview-06-17",
 		description: "Preview version - may not be available in all regions",
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 64000,
 			contextWindow: 1_000_000,
 			supportsImages: true,
@@ -148,6 +153,7 @@ export const geminiModels: Record<string, ModelInfo> = {
 		id: "gemini-2.5-flash",
 		name: "gemini-2.5-flash",
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 65536,
 			contextWindow: 1_048_576,
 			supportsImages: true,

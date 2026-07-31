@@ -265,7 +265,14 @@ const CustomModelConfig = ({
 				capabilities={capabilities}
 				defaults={defaults}
 				fields={{
-					capabilities: ["maxTokens", "contextWindow", "contextWindowTiers", "supportsImages", "supportsPromptCache"],
+					capabilities: [
+						"maxTokens",
+						"contextWindow",
+						"contextWindowTiers",
+						"supportsImages",
+						"supportsPromptCache",
+						"supportsTools",
+					],
 					pricing: ["inputPrice", "outputPrice", "cacheWritesPrice", "cacheReadsPrice", "pricingTiers"],
 				}}
 				onCapabilitiesUpdate={onCapabilitiesUpdate}

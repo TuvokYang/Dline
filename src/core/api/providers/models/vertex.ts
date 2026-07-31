@@ -43,6 +43,7 @@ export const vertexModels: Record<string, ModelInfo> = {
 		id: "gemini-3.1-pro-preview",
 
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 8192,
 			contextWindow: 1_048_576,
 			supportsImages: true,
@@ -59,6 +60,7 @@ export const vertexModels: Record<string, ModelInfo> = {
 		id: "gemini-3-pro-preview",
 
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 8192,
 			contextWindow: 1_048_576,
 			supportsImages: true,
@@ -75,6 +77,7 @@ export const vertexModels: Record<string, ModelInfo> = {
 		id: "gemini-3-flash-preview",
 
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 65536,
 			contextWindow: 1_048_576,
 			supportsImages: true,
@@ -91,6 +94,7 @@ export const vertexModels: Record<string, ModelInfo> = {
 	"claude-sonnet-4-6": {
 		id: "claude-sonnet-4-6",
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 64_000,
 			contextWindow: 200_000,
 			supportsImages: true,
@@ -107,6 +111,7 @@ export const vertexModels: Record<string, ModelInfo> = {
 	"claude-sonnet-4-6:1m": {
 		id: "claude-sonnet-4-6:1m",
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 64_000,
 			contextWindow: 1_000_000,
 			supportsImages: true,
@@ -124,6 +129,7 @@ export const vertexModels: Record<string, ModelInfo> = {
 	"claude-sonnet-4-5@20250929": {
 		id: "claude-sonnet-4-5@20250929",
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 64_000,
 			contextWindow: 200_000,
 			supportsImages: true,
@@ -140,6 +146,7 @@ export const vertexModels: Record<string, ModelInfo> = {
 	"claude-sonnet-4@20250514": {
 		id: "claude-sonnet-4@20250514",
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 64_000,
 			contextWindow: 200_000,
 			supportsImages: true,
@@ -156,6 +163,7 @@ export const vertexModels: Record<string, ModelInfo> = {
 	"claude-haiku-4-5@20251001": {
 		id: "claude-haiku-4-5@20251001",
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 64_000,
 			contextWindow: 200_000,
 			supportsImages: false,
@@ -172,6 +180,7 @@ export const vertexModels: Record<string, ModelInfo> = {
 	"claude-opus-4-6": {
 		id: "claude-opus-4-6",
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 128_000,
 			contextWindow: 200_000,
 			supportsImages: true,
@@ -188,6 +197,7 @@ export const vertexModels: Record<string, ModelInfo> = {
 	"claude-opus-4-6:1m": {
 		id: "claude-opus-4-6:1m",
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 128_000,
 			contextWindow: 1_000_000,
 			supportsImages: true,
@@ -205,6 +215,7 @@ export const vertexModels: Record<string, ModelInfo> = {
 	"claude-opus-4-7": {
 		id: "claude-opus-4-7",
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 128_000,
 			contextWindow: 200_000,
 			supportsImages: true,
@@ -222,6 +233,7 @@ export const vertexModels: Record<string, ModelInfo> = {
 	"claude-opus-4-7:1m": {
 		id: "claude-opus-4-7:1m",
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 128_000,
 			contextWindow: 1_000_000,
 			supportsImages: true,
@@ -240,6 +252,7 @@ export const vertexModels: Record<string, ModelInfo> = {
 	"claude-opus-4-5@20251101": {
 		id: "claude-opus-4-5@20251101",
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 64_000,
 			contextWindow: 200_000,
 			supportsImages: true,
@@ -256,6 +269,7 @@ export const vertexModels: Record<string, ModelInfo> = {
 	"claude-opus-4-1@20250805": {
 		id: "claude-opus-4-1@20250805",
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 32_000,
 			contextWindow: 200_000,
 			supportsImages: true,
@@ -272,6 +286,7 @@ export const vertexModels: Record<string, ModelInfo> = {
 	"claude-opus-4@20250514": {
 		id: "claude-opus-4@20250514",
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 32_000,
 			contextWindow: 200_000,
 			supportsImages: true,
@@ -485,6 +500,7 @@ export const vertexModels: Record<string, ModelInfo> = {
 	"gemini-2.5-pro-exp-03-25": {
 		id: "gemini-2.5-pro-exp-03-25",
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 65536,
 			contextWindow: 1_048_576,
 			supportsImages: true,
@@ -498,6 +514,7 @@ export const vertexModels: Record<string, ModelInfo> = {
 	"gemini-2.5-pro": {
 		id: "gemini-2.5-pro",
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 65536,
 			contextWindow: 1_048_576,
 			supportsImages: true,
@@ -527,6 +544,7 @@ export const vertexModels: Record<string, ModelInfo> = {
 	"gemini-2.5-flash": {
 		id: "gemini-2.5-flash",
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 65536,
 			contextWindow: 1_048_576,
 			supportsImages: true,
@@ -543,6 +561,7 @@ export const vertexModels: Record<string, ModelInfo> = {
 		id: "gemini-2.5-flash-lite-preview-06-17",
 		description: "Preview version - may not be available in all regions",
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 64000,
 			contextWindow: 1_000_000,
 			supportsImages: true,

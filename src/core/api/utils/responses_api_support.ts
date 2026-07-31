@@ -129,10 +129,17 @@ export async function* handleResponsesApiStreamResponse(
 			const usage = chunk.response.usage
 			const inputTokens = usage.input_tokens || 0
 			const outputTokens = usage.output_tokens || 0
-			const cacheReadTokens = usage.output_tokens_details?.reasoning_tokens || 0
-			const cacheWriteTokens = usage.input_tokens_details?.cached_tokens || 0
+			const cacheReadTokens = usage.input_tokens_details?.cached_tokens || 0
+			const cacheWriteTokens = (usage.input_tokens_details as { cache_miss_tokens?: number })?.cache_miss_tokens || 0
+			const reasoningTokens = usage.output_tokens_details?.reasoning_tokens || 0
 			const totalTokens = usage.total_tokens || 0
-			const totalCost = await calculateCost(modelInfo, inputTokens, outputTokens, cacheWriteTokens, cacheReadTokens)
+			const totalCost = await calculateCost(
+				modelInfo,
+				inputTokens,
+				outputTokens + reasoningTokens,
+				cacheWriteTokens,
+				cacheReadTokens,
+			)
 			Logger.log(`Total tokens from Responses API usage: ${totalTokens}`)
 			const nonCachedInputTokens = Math.max(0, inputTokens - cacheReadTokens - cacheWriteTokens)
 			yield {
@@ -141,6 +148,7 @@ export async function* handleResponsesApiStreamResponse(
 				outputTokens: outputTokens,
 				cacheWriteTokens: cacheWriteTokens,
 				cacheReadTokens: cacheReadTokens,
+				thoughtsTokenCount: reasoningTokens,
 				totalCost: totalCost,
 				provider_metadata: { response_id: chunk.response.id },
 			} as const

@@ -9,6 +9,7 @@ export const deepSeekModels: Record<string, ModelInfo> = {
 		id: "deepseek-v4-pro",
 		name: "deepseek-v4-pro",
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 384_000,
 			contextWindow: 1_000_000,
 			supportsImages: false,
@@ -27,6 +28,7 @@ export const deepSeekModels: Record<string, ModelInfo> = {
 		id: "deepseek-v4-flash",
 		name: "deepseek-v4-flash",
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 384_000,
 			contextWindow: 1_000_000,
 			supportsImages: false,

@@ -5,6 +5,7 @@
  * caches them in memory, and watches for file changes.
  */
 import { getDlineHomePath } from "@core/storage/disk"
+import { getProviderSeedConfig } from "@shared/providers/model-infos"
 import type { ModelInfo, ProviderModelsConfig } from "@shared/providers/types"
 import { Logger } from "@shared/services/Logger"
 import chokidar, { type FSWatcher } from "chokidar"
@@ -12,6 +13,35 @@ import fs from "fs/promises"
 import * as path from "path"
 
 const PROVIDERS_DIR_NAME = "providers"
+
+function enrichMissingSeedCapabilities(providerId: string, config: ProviderModelsConfig): ProviderModelsConfig {
+	const seedConfig = getProviderSeedConfig(providerId)
+	if (!seedConfig) {
+		return config
+	}
+
+	let models = config.models
+	for (const [modelId, model] of Object.entries(config.models)) {
+		if (model.capabilities?.supportsTools !== undefined) {
+			continue
+		}
+
+		const seedSupportsTools = seedConfig.models[modelId]?.capabilities?.supportsTools
+		if (seedSupportsTools === undefined) {
+			continue
+		}
+
+		if (models === config.models) {
+			models = { ...config.models }
+		}
+		models[modelId] = {
+			...model,
+			capabilities: { ...model.capabilities, supportsTools: seedSupportsTools },
+		}
+	}
+
+	return models === config.models ? config : { ...config, models }
+}
 
 function parseProviderModelsConfig(providerId: string, raw: string): ProviderModelsConfig {
 	const config = JSON.parse(raw) as ProviderModelsConfig
@@ -21,7 +51,7 @@ function parseProviderModelsConfig(providerId: string, raw: string): ProviderMod
 	if (!config.models || typeof config.models !== "object" || Array.isArray(config.models)) {
 		throw new Error(`Provider config "${providerId}" must define models as a keyed object`)
 	}
-	return config
+	return enrichMissingSeedCapabilities(providerId, config)
 }
 
 export class ModelRegistry {

@@ -186,6 +186,7 @@ export function createOpenAIClient(options: OpenAIClientOptions): OpenAI {
 	const externalHeaders = buildExternalBasicHeaders()
 	return new OpenAI({
 		...options,
+		maxRetries: options.maxRetries ?? 0,
 		defaultHeaders: {
 			...externalHeaders,
 			...options.defaultHeaders,

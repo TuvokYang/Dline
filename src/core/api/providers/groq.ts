@@ -283,9 +283,7 @@ export class GroqHandler implements ApiHandler {
 	 * Checks if the current model supports tools
 	 */
 	supportsTools(): boolean {
-		const model = this.getModel()
-		const modelFamily = this.detectModelFamily(model.id)
-		return modelFamily.supportedFeatures.tools
+		return this.getModel().info.capabilities?.supportsTools === true
 	}
 
 	/**

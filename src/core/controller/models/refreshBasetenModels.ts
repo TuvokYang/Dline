@@ -16,6 +16,11 @@ import { Controller } from ".."
 // Track pending refresh promise to prevent duplicate concurrent fetches
 let pendingRefresh: Promise<Record<string, ModelInfo>> | null = null
 
+export function resolveBasetenSupportsTools(rawModel: any, staticModelInfo?: ModelInfo): boolean | undefined {
+	const supportedFeatures = rawModel?.supported_features
+	return Array.isArray(supportedFeatures) ? supportedFeatures.includes("tools") : staticModelInfo?.capabilities?.supportsTools
+}
+
 /**
  * Core function: Refreshes the Baseten models and returns application types
  * @param controller The controller instance
@@ -59,7 +64,7 @@ async function fetchAndCacheModels(_controller: Controller): Promise<Record<stri
 		}
 	}
 
-	const models: Record<string, Partial<ModelInfo> & { supportedFeatures?: string[] }> = {}
+	const models: Record<string, Partial<ModelInfo>> = {}
 	try {
 		if (basetenApiKey) {
 			// Ensure the API key is properly formatted
@@ -93,13 +98,14 @@ async function fetchAndCacheModels(_controller: Controller): Promise<Record<stri
 						(p: string) => p === "reasoning_effort" || p === "reasoning",
 					)
 
-					const modelInfo: Partial<ModelInfo> & { supportedFeatures?: string[] } = {
+					const modelInfo: Partial<ModelInfo> = {
 						capabilities: {
 							maxTokens: rawModel.max_completion_tokens || staticModelInfo?.capabilities?.maxTokens,
 							contextWindow: rawModel.context_length || staticModelInfo?.capabilities?.contextWindow,
 							supportsImages: false,
 							supportsPromptCache: staticModelInfo?.capabilities?.supportsPromptCache || false,
 							supportsReasoning: supportThinking || false,
+							supportsTools: resolveBasetenSupportsTools(rawModel, staticModelInfo),
 							thinking: supportThinking
 								? { supported: true, mode: "budget" as const, maxBudget: ANTHROPIC_MAX_THINKING_BUDGET }
 								: undefined,
@@ -111,7 +117,6 @@ async function fetchAndCacheModels(_controller: Controller): Promise<Record<stri
 							cacheReadsPrice: staticModelInfo?.pricing?.cacheReadsPrice || 0,
 						},
 						description: generateModelDescription(rawModel, staticModelInfo),
-						supportedFeatures: rawModel.supported_features || [],
 					}
 
 					models[rawModel.id] = modelInfo
@@ -165,6 +170,7 @@ async function fetchAndCacheModels(_controller: Controller): Promise<Record<stri
 						supportsImages: modelInfo.capabilities?.supportsImages ?? false,
 						supportsPromptCache: modelInfo.capabilities?.supportsPromptCache ?? false,
 						supportsReasoning: modelInfo.capabilities?.supportsReasoning || false,
+						supportsTools: modelInfo.capabilities?.supportsTools,
 						thinking: modelInfo.capabilities?.supportsReasoning
 							? { supported: true, mode: "budget" as const, maxBudget: ANTHROPIC_MAX_THINKING_BUDGET }
 							: undefined,
@@ -193,6 +199,7 @@ async function fetchAndCacheModels(_controller: Controller): Promise<Record<stri
 				supportsImages: model.capabilities?.supportsImages ?? false,
 				supportsPromptCache: model.capabilities?.supportsPromptCache ?? false,
 				supportsReasoning: model.capabilities?.supportsReasoning || false,
+				supportsTools: model.capabilities?.supportsTools,
 				thinking: model.capabilities?.supportsReasoning
 					? { supported: true, mode: "budget" as const, maxBudget: ANTHROPIC_MAX_THINKING_BUDGET }
 					: undefined,

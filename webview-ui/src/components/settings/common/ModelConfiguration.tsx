@@ -44,7 +44,13 @@ interface ModelConfigurationProps {
 	fields: {
 		// Capabilities related fields
 		capabilities?: Array<
-			"maxTokens" | "contextWindow" | "contextWindowTiers" | "supportsImages" | "supportsPromptCache" | "temperature"
+			| "maxTokens"
+			| "contextWindow"
+			| "contextWindowTiers"
+			| "supportsImages"
+			| "supportsPromptCache"
+			| "supportsTools"
+			| "temperature"
 		>
 		// Pricing related fields (currency automatically shown first)
 		pricing?: Array<"inputPrice" | "outputPrice" | "cacheWritesPrice" | "cacheReadsPrice" | "pricingTiers">
@@ -87,7 +93,7 @@ export const ModelConfiguration = ({
 			const nextPending = { ...pending }
 			const nextDraft = { ...draftChecks }
 			let changed = false
-			for (const field of ["supportsImages", "supportsPromptCache"] as const) {
+			for (const field of ["supportsImages", "supportsPromptCache", "supportsTools"] as const) {
 				const expected = pending[field]
 				if (expected !== undefined && capabilities[field] === expected) {
 					delete nextPending[field]
@@ -100,7 +106,7 @@ export const ModelConfiguration = ({
 			}
 			return changed ? nextPending : pending
 		})
-	}, [capabilities.supportsImages, capabilities.supportsPromptCache, draftChecks])
+	}, [capabilities.supportsImages, capabilities.supportsPromptCache, capabilities.supportsTools, draftChecks])
 
 	useEffect(() => {
 		setDraftContextTiers(capabilityOverrides?.contextWindowTiers ?? [])
@@ -128,7 +134,7 @@ export const ModelConfiguration = ({
 	}
 
 	/** Optimistically update a capability checkbox until its persisted echo arrives. */
-	const updateCheck = (field: "supportsImages" | "supportsPromptCache", value: boolean) => {
+	const updateCheck = (field: "supportsImages" | "supportsPromptCache" | "supportsTools", value: boolean) => {
 		setDraftChecks((draft) => ({ ...draft, [field]: value }))
 		setPendingChecks((pending) => ({ ...pending, [field]: value }))
 		updateCapability(field, value)
@@ -173,9 +179,11 @@ export const ModelConfiguration = ({
 	const pricingFields = fields.pricing ?? []
 	const supportsImages = draftChecks.supportsImages ?? capabilities.supportsImages ?? false
 	const supportsPromptCache = draftChecks.supportsPromptCache ?? capabilities.supportsPromptCache ?? true
+	const supportsTools = draftChecks.supportsTools ?? capabilities.supportsTools ?? false
 	const hasOptionsFields =
 		capabilityFields.includes("supportsImages") ||
 		capabilityFields.includes("supportsPromptCache") ||
+		capabilityFields.includes("supportsTools") ||
 		capabilityFields.includes("temperature")
 	const hasCapabilityFields =
 		capabilityFields.includes("contextWindow") ||
@@ -244,6 +252,15 @@ export const ModelConfiguration = ({
 										)
 									}>
 									Supports Prompt Cache
+								</VSCodeCheckbox>
+							)}
+							{capabilityFields.includes("supportsTools") && (
+								<VSCodeCheckbox
+									checked={supportsTools}
+									onChange={(e: Event | React.FormEvent<HTMLElement>) =>
+										updateCheck("supportsTools", (e.target as HTMLInputElement | null)?.checked === true)
+									}>
+									Supports Native Tool Calls
 								</VSCodeCheckbox>
 							)}
 							{capabilityFields.includes("temperature") && (

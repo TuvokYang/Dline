@@ -147,6 +147,7 @@ async function fetchAndCacheClineModels(): Promise<Record<string, ModelInfo>> {
 		}
 		for (const rawModel of rawModels) {
 			const supportThinking = rawModel.supported_parameters?.some((p) => p === "include_reasoning" || p === "reasoning")
+			const supportsTools = rawModel.supported_parameters?.includes("tools") ?? false
 
 			// Handle modality which can be a string or array
 			const modality = rawModel.architecture?.modality
@@ -163,6 +164,7 @@ async function fetchAndCacheClineModels(): Promise<Record<string, ModelInfo>> {
 					contextWindow: rawModel.context_length ?? 0,
 					supportsImages,
 					supportsPromptCache: false,
+					supportsTools,
 					thinking: supportThinking
 						? { supported: true, mode: "budget" as const, maxBudget: ANTHROPIC_MAX_THINKING_BUDGET }
 						: undefined,

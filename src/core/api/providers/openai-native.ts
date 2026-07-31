@@ -65,6 +65,7 @@ export class OpenAiNativeHandler implements ApiHandler {
 			}
 			try {
 				this.client = createOpenAIClient({
+					baseURL: this.baseUrl || undefined,
 					apiKey: this.apiKey,
 				})
 			} catch (error) {

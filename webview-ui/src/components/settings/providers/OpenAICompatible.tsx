@@ -10,6 +10,7 @@ import { BaseUrlField } from "../common/BaseUrlField"
 import { DebouncedTextField } from "../common/DebouncedTextField"
 import { ModelConfiguration } from "../common/ModelConfiguration"
 import { ModelInfoView } from "../common/ModelInfoView"
+import OpenAIApiEndpointSelector from "../OpenAIApiEndpointSelector"
 import OpenAIServiceTierSelector from "../OpenAIServiceTierSelector"
 import ThinkingControl from "../ThinkingControl"
 import type { ApiProfile } from "./ProviderProfile"
@@ -110,6 +111,11 @@ export const OpenAICompatibleProvider = ({ showModelOptions, isPopup, profile, o
 				placeholder="Enter base URL..."
 			/>
 
+			<OpenAIApiEndpointSelector
+				apiEndpoint={pc.apiEndpoint}
+				onApiEndpointChange={(apiEndpoint) => onUpdate({ openai: { ...pc, apiEndpoint } })}
+			/>
+
 			{/* API Key */}
 			<ApiKeyField
 				initialValue={profile.apiKey}
@@ -154,7 +160,14 @@ export const OpenAICompatibleProvider = ({ showModelOptions, isPopup, profile, o
 				capabilities={pc.capabilities}
 				defaults={registryModel}
 				fields={{
-					capabilities: ["maxTokens", "contextWindow", "supportsImages", "supportsPromptCache", "temperature"],
+					capabilities: [
+						"maxTokens",
+						"contextWindow",
+						"supportsImages",
+						"supportsPromptCache",
+						"supportsTools",
+						"temperature",
+					],
 					pricing: ["inputPrice", "outputPrice", "cacheWritesPrice", "cacheReadsPrice"],
 				}}
 				onCapabilitiesUpdate={handleCapabilitiesUpdate}

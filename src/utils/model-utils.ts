@@ -6,27 +6,6 @@ export { supportsReasoningEffortForModel } from "@shared/utils/reasoning-support
 const CLAUDE_VERSION_MATCH_REGEX = /[-_ ]([\d](?:\.[05])?)[-_ ]?/
 export const GEMINI_FLASH_MAX_OUTPUT_TOKENS = 8_192
 
-export function isNextGenModelProvider(providerInfo: ApiProviderInfo): boolean {
-	const providerId = normalize(providerInfo.providerId)
-	return [
-		"cline",
-		"anthropic",
-		"bedrock",
-		"gemini",
-		"vertex",
-		"openrouter",
-		"openai",
-		"minimax",
-		"openai-native",
-		"openai-compatible",
-		"openai-codex",
-		"baseten",
-		"vercel-ai-gateway",
-		"deepseek",
-		"oca",
-	].some((id) => providerId === id)
-}
-
 export function modelDoesntSupportWebp(apiHandlerModel: ApiHandlerModel): boolean {
 	const modelId = apiHandlerModel.id.toLowerCase()
 	// Grok doesn't support WebP via its API.
@@ -229,21 +208,13 @@ export function parsePrice(priceString: string | undefined): number {
 }
 
 /**
- * Determines if the given provider and model combination will use native tool calling.
- * Helpful if we need to quickly check this for prompts or other logic.
+ * Determines whether the selected model will use API-native tool calling.
  * @param providerInfo The provider and model information
- * @param enableNativeToolCalls Whether the native tool calls setting is enabled
- * @returns true if the model will use native tool calling, false otherwise
+ * @param enableNativeToolCalls Whether native tool calling was requested
+ * @returns True only when native calling is requested and explicitly supported by ModelInfo
  */
 export function isNativeToolCallingConfig(providerInfo: ApiProviderInfo, enableNativeToolCalls: boolean): boolean {
-	if (!enableNativeToolCalls) {
-		return false
-	}
-	if (!isNextGenModelProvider(providerInfo)) {
-		return false
-	}
-	const modelId = providerInfo.model.id.toLowerCase()
-	return isNextGenModelFamily(modelId)
+	return enableNativeToolCalls && providerInfo.model.info.capabilities?.supportsTools === true
 }
 
 /**
@@ -256,10 +227,7 @@ export function isParallelToolCallingEnabled(enableParallelSetting: boolean, pro
 	if (enableParallelSetting) {
 		return true
 	}
-	if (!providerInfo.providerId) {
-		return false
-	}
-	return isNativeToolCallingConfig(providerInfo, true) || isGPT5ModelFamily(providerInfo.model.id)
+	return providerInfo.model.info.capabilities?.supportsTools === true
 }
 
 function normalize(text: string): string {

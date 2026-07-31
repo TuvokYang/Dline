@@ -362,7 +362,12 @@ export class AnthropicHandler implements ApiHandler {
 		if (mid && this.modelInfo) {
 			return {
 				id: mid as AnthropicModelId,
-				info: this.buildCustomModelInfo(mid),
+				info: buildEffectiveModelInfo(mid, this.modelInfo, {
+					capabilities: this.config?.capabilities,
+					pricing: this.config?.pricing,
+					enableLongContext: this.config?.enableLongContext,
+					pricingTiersEnabled: this.config?.pricingTiersEnabled,
+				}),
 			}
 		}
 		if (mid && anthropicModels[mid]) {

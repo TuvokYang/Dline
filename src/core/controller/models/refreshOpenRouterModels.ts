@@ -127,6 +127,7 @@ async function fetchAndCacheModels(controller: Controller): Promise<Record<strin
 			}
 			for (const rawModel of rawModels as OpenRouterRawModelInfo[]) {
 				const supportThinking = rawModel.supported_parameters?.some((p) => p === "include_reasoning" || p === "reasoning")
+				const supportsTools = rawModel.supported_parameters?.includes("tools") ?? false
 
 				const modelInfo: ModelInfo = {
 					id: rawModel.id ?? rawModel.name ?? "",
@@ -137,6 +138,7 @@ async function fetchAndCacheModels(controller: Controller): Promise<Record<strin
 						contextWindow: rawModel.context_length ?? 0,
 						supportsImages: rawModel.architecture?.modality?.includes("image") ?? false,
 						supportsPromptCache: false,
+						supportsTools,
 						// If thinking is supported, set maxBudget with a default value as a placeholder
 						thinking: supportThinking
 							? { supported: true, mode: "budget" as const, maxBudget: ANTHROPIC_MAX_THINKING_BUDGET }

@@ -20,6 +20,7 @@ export const openRouterDefaultModelInfo: ModelInfo = {
 		supportsImages: true,
 		supportsPromptCache: true,
 		supportsReasoning: true,
+		supportsTools: true,
 		maxTokens: 64_000,
 		contextWindow: 200_000,
 	},

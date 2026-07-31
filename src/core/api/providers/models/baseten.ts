@@ -10,6 +10,7 @@ export const basetenModels: Record<string, ModelInfo> = {
 		name: "moonshotai/Kimi-K2-Thinking",
 		description: "Kimi K2 Thinking - A model with enhanced reasoning capabilities from Kimi K2",
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 163_800,
 			contextWindow: 262_000,
 			supportsImages: false,
@@ -118,6 +119,7 @@ export const basetenModels: Record<string, ModelInfo> = {
 		name: "deepseek-ai/DeepSeek-V3.2",
 		description: "DeepSeek's hybrid reasoning model with efficient long context scaling with GPT-5 level performance",
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 131_072,
 			contextWindow: 163_840,
 			supportsImages: false,
@@ -172,6 +174,7 @@ export const basetenModels: Record<string, ModelInfo> = {
 		name: "openai/gpt-oss-120b",
 		description: "Extremely capable general-purpose LLM with strong, controllable reasoning capabilities",
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 128_072,
 			contextWindow: 128_072,
 			supportsImages: false,
@@ -190,6 +193,7 @@ export const basetenModels: Record<string, ModelInfo> = {
 		name: "moonshotai/Kimi-K2-Instruct-0905",
 		description: "State of the art language model for agentic and coding tasks. September Update.",
 		capabilities: {
+			supportsTools: true,
 			maxTokens: 168_000,
 			contextWindow: 262_000,
 			supportsImages: false,
