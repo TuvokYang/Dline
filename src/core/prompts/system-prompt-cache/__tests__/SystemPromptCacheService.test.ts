@@ -394,7 +394,7 @@ describe("SystemPromptCacheService", () => {
 		expect(service.getLastTools()).toEqual(rebuiltTools)
 	})
 
-	it("refreshes the frozen prompt when canonical capabilities change", async () => {
+	it("keeps the frozen prompt until an explicit refresh when canonical capabilities change", async () => {
 		const cached = {
 			...emptyContext("task-1"),
 			systemPrompt: {
@@ -437,9 +437,9 @@ describe("SystemPromptCacheService", () => {
 
 		const result = await service.getOrCreate({ promptContext })
 
-		expect(result.text).toContain("reviewer")
-		expect(result.refreshReason).toBe("capability_change")
-		expect(saveCount).toBe(1)
+		expect(result.text).toBe("old prompt # Capabilities old")
+		expect(result.refreshReason).toBe("task_start")
+		expect(saveCount).toBe(0)
 	})
 
 	it("shares one in-flight rebuild and save across concurrent getOrCreate calls", async () => {

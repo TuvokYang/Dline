@@ -160,12 +160,6 @@ export class SystemPromptCacheService {
 		const context = await this.getContext(this.taskId)
 		const cached = context.systemPrompt?.frozen
 		if (cached) {
-			const capabilities = await this.collectCapabilitiesFn({
-				cwd: input.promptContext.cwd ?? process.cwd(),
-				mcpHub: input.promptContext.mcpHub,
-				...input.promptContext.capabilityToggleState,
-			})
-			const currentHash = hashPromptContent(renderCapabilitiesForProfile(capabilities, input.promptContext.promptProfile))
 			const currentBuilder = {
 				...this.getPromptBuilderInfo(input.promptContext, undefined),
 				contractVersion: SYSTEM_PROMPT_CONTRACT_VERSION,
@@ -178,7 +172,7 @@ export class SystemPromptCacheService {
 				cachedBuilder.profile !== currentBuilder.profile ||
 				cachedBuilder.nativeTools !== Boolean(input.promptContext.enableNativeToolCalls) ||
 				cachedBuilder.focusChainEnabled !== currentBuilder.focusChainEnabled
-			if (currentHash !== cached.capabilitiesHash || providerProjectionChanged) {
+			if (providerProjectionChanged) {
 				return this.refresh({ promptContext: input.promptContext, reason: "capability_change" })
 			}
 			this.lastTools = cached.tools ?? undefined

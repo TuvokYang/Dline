@@ -89,6 +89,28 @@ describe("task context cache", () => {
 		expect(await fs.readFile(filePath, "utf8")).toContain("# Capabilities")
 	})
 
+	it.each([
+		"task_start",
+		"manual",
+		"post_compaction",
+		"capability_change",
+	] as const)("accepts the persisted prompt refresh reason %s", async (refreshReason) => {
+		const taskId = `task-refresh-reason-${refreshReason}`
+		const context = buildContext(taskId)
+		const frozen = context.systemPrompt?.frozen
+		if (!frozen) throw new Error("Task context fixture is missing its frozen prompt")
+		await saveTaskContext(taskId, {
+			...context,
+			systemPrompt: {
+				frozen: { ...frozen, refreshReason },
+			},
+		})
+
+		const actual = await getTaskContext(taskId)
+
+		expect(actual.systemPrompt?.frozen?.refreshReason).toBe(refreshReason)
+	})
+
 	it("migrates the legacy native prompt profile at the read boundary", async () => {
 		const taskId = "task-legacy-native-profile"
 		const filePath = path.join(testDir, "tasks", taskId, GlobalFileNames.taskContext)

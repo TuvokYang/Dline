@@ -632,7 +632,10 @@ function isFrozenSystemPromptCache(value: unknown): boolean {
 		Number.isFinite(value.createdAt) &&
 		typeof value.refreshedAt === "number" &&
 		Number.isFinite(value.refreshedAt) &&
-		(value.refreshReason === "task_start" || value.refreshReason === "manual" || value.refreshReason === "post_compaction")
+		(value.refreshReason === "task_start" ||
+			value.refreshReason === "manual" ||
+			value.refreshReason === "post_compaction" ||
+			value.refreshReason === "capability_change")
 	)
 }
 
