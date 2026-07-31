@@ -60,6 +60,42 @@ async function sendTask(sidebar: Frame, text: string): Promise<void> {
 	await expect(sidebar.getByText(text).first()).toBeVisible()
 }
 
+interface StructuredApiErrorExpectation {
+	message: string
+	provider: string
+	model: string
+	status?: number
+	code?: string
+	requestId?: string
+	details?: Readonly<Record<string, string>>
+}
+
+async function expectSingleStructuredApiError(
+	sidebar: Frame,
+	{ message, provider, model, status, code, requestId, details = {} }: StructuredApiErrorExpectation,
+): Promise<void> {
+	const cards = sidebar.locator(
+		'[data-testid="api-error-box"], [data-testid="error-message-box"], [data-testid="error-presentation-box"], [data-testid="error-retry-box"]',
+	)
+	await expect(cards).toHaveCount(1)
+	const card = cards.first()
+	await expect(card).toBeVisible()
+	await expect(card.locator('[data-testid$="-message"]')).toHaveText(message)
+	await expect(card.locator('[data-testid$="-provider"]')).toHaveText(provider)
+	await expect(card.locator('[data-testid$="-model"]')).toHaveText(model)
+	if (status !== undefined) await expect(card.locator('[data-testid$="-status"]')).toHaveText(String(status))
+	if (code !== undefined) await expect(card.locator('[data-testid$="-code"]')).toHaveText(code)
+	if (requestId !== undefined) await expect(card.locator('[data-testid$="-request-id"]')).toHaveText(requestId)
+	for (const [key, value] of Object.entries(details)) {
+		await expect(card.locator(`[data-testid$="-detail-${key}"]`)).toHaveText(value)
+	}
+
+	await expect(sidebar.getByText(message, { exact: true })).toHaveCount(1)
+	await expect(sidebar.getByText(/^\s*\{"message":.*"providerId":.*\}\s*$/)).toHaveCount(0)
+	await expect(sidebar.getByText(/^\s*\[[A-Z0-9_-]+\]/)).toHaveCount(0)
+	await expect(sidebar.getByText('(Click "Retry" below)', { exact: true })).toHaveCount(0)
+}
+
 async function submitInteractionFeedback(sidebar: Frame, text: string): Promise<void> {
 	const input = sidebar.getByTestId("chat-input")
 	await expect(input).toBeEnabled()
@@ -553,6 +589,85 @@ for (const status of [403, 429, 502] as const) {
 		},
 	)
 }
+
+e2e(
+	"API recovery - OpenAI queue exhaustion renders one structured error and Retry recovers",
+	async ({ helper, server, sidebar, userDataDir }) => {
+		e2e.setTimeout(180_000)
+		const message = "No scripted E2E response remains for openai-compatible-chat"
+		const requestId = "req_queue_openai_compatible_chat"
+		await helper.signin(sidebar)
+		await sendTask(sidebar, "Exercise an exhausted OpenAI mock response queue.")
+
+		await expect(sidebar.getByText("Automatic retry stopped", { exact: true })).toBeVisible({ timeout: 90_000 })
+		await expectSingleStructuredApiError(sidebar, {
+			message,
+			provider: "openai",
+			model: "dline-e2e-model",
+			status: 500,
+			code: "e2e_mock_queue_exhausted",
+			requestId,
+			details: { type: "e2e_mock_error", target: "openai-compatible-chat", retryable: "true" },
+		})
+
+		server.enqueueResponses("openai-compatible-chat", {
+			type: "tool",
+			name: "attempt_completion",
+			arguments: { result: "E2E_OPENAI_QUEUE_RETRY_OK" },
+		})
+		await sidebar.locator('vscode-button[aria-label="Retry"]').click()
+		await expect(sidebar.getByText("E2E_OPENAI_QUEUE_RETRY_OK", { exact: false }).last()).toBeVisible({ timeout: 60_000 })
+		await expect(
+			sidebar.locator(
+				'[data-testid="api-error-box"], [data-testid="error-message-box"], [data-testid="error-presentation-box"], [data-testid="error-retry-box"]',
+			),
+		).toHaveCount(0)
+		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir, [new RegExp(message)])
+	},
+)
+
+e2e(
+	"API recovery - Anthropic connection failure renders one structured error and Retry recovers",
+	async ({ helper, server, sidebar, userDataDir }) => {
+		e2e.setTimeout(180_000)
+		await helper.signin(sidebar)
+		await selectProfile(sidebar, E2E_PROFILE_NAMES.mockAnthropic)
+		server.enqueueResponses(
+			"anthropic-messages",
+			...Array.from({ length: 24 }, () => ({
+				type: "error" as const,
+				status: 0,
+				message: "Force an Anthropic connection failure",
+				disconnect: true,
+			})),
+		)
+		await sendTask(sidebar, "Exercise an Anthropic connection failure.")
+
+		await expect(sidebar.getByText("Automatic retry stopped", { exact: true })).toBeVisible({ timeout: 90_000 })
+		await expectSingleStructuredApiError(sidebar, {
+			message: "Connection error.",
+			provider: "anthropic",
+			model: "claude-sonnet-4-6",
+		})
+
+		server.clearPendingResponses("anthropic-messages")
+		server.enqueueResponses("anthropic-messages", {
+			type: "tool",
+			name: "attempt_completion",
+			arguments: { result: "E2E_ANTHROPIC_CONNECTION_RETRY_OK" },
+		})
+		await sidebar.locator('vscode-button[aria-label="Retry"]').click()
+		await expect(sidebar.getByText("E2E_ANTHROPIC_CONNECTION_RETRY_OK", { exact: false }).last()).toBeVisible({
+			timeout: 60_000,
+		})
+		await expect(
+			sidebar.locator(
+				'[data-testid="api-error-box"], [data-testid="error-message-box"], [data-testid="error-presentation-box"], [data-testid="error-retry-box"]',
+			),
+		).toHaveCount(0)
+		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir, [/Connection error|ECONNRESET|fetch failed/])
+	},
+)
 
 e2e(
 	"API recovery - countdown Retry overrides the pending automatic retry and clears the error box",

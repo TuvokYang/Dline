@@ -64,7 +64,16 @@ export type OpenAiMockResponse =
 	| ({ type: "message"; text: string } & MockResponseOptions)
 	| ({ type: "tool" } & MockToolCall & MockResponseOptions)
 	| ({ type: "tools"; tools: readonly MockToolCall[] } & MockResponseOptions)
-	| { type: "error"; status: number; message: string; code?: string; delayMs?: number }
+	| {
+			type: "error"
+			status: number
+			message: string
+			code?: string
+			delayMs?: number
+			disconnect?: boolean
+			requestId?: string
+			details?: Readonly<Record<string, string | number | boolean>>
+	  }
 
 export type MockThinkingConfig = { mode: "effort"; effort: string } | { mode: "budget"; budget: number }
 
@@ -366,6 +375,8 @@ export class ClineApiServerMock {
 			status: 500,
 			code: "e2e_mock_queue_exhausted",
 			message: `No scripted E2E response remains for ${target}`,
+			requestId: `req_queue_${target.replaceAll("-", "_")}`,
+			details: { target, retryable: true },
 		}
 		const thinking = getRequestThinking(requestBody)
 		const requestText = JSON.stringify(requestBody)
@@ -619,13 +630,36 @@ export class ClineApiServerMock {
 					if (res.destroyed || res.writableEnded) return
 
 					if (scriptedResponse.type === "error") {
+						if (scriptedResponse.disconnect) {
+							res.destroy()
+							return
+						}
 						const code = scriptedResponse.code ?? `http_${scriptedResponse.status}`
+						const requestMetadata = scriptedResponse.requestId
+							? { request_id: scriptedResponse.requestId }
+							: undefined
+						const headers = {
+							...(scriptedResponse.status === 429 ? { "Retry-After": "0" } : {}),
+							...(scriptedResponse.requestId ? { "x-request-id": scriptedResponse.requestId } : {}),
+						}
 						return sendJson(
 							protocol === "anthropic-messages"
-								? { type: "error", error: { type: code, message: scriptedResponse.message } }
-								: { error: { message: scriptedResponse.message, type: "e2e_mock_error", code } },
+								? {
+										type: "error",
+										error: { type: code, message: scriptedResponse.message, ...scriptedResponse.details },
+										...requestMetadata,
+									}
+								: {
+										error: {
+											message: scriptedResponse.message,
+											type: "e2e_mock_error",
+											code,
+											...scriptedResponse.details,
+										},
+										...requestMetadata,
+									},
 							scriptedResponse.status,
-							scriptedResponse.status === 429 ? { "Retry-After": "0" } : undefined,
+							Object.keys(headers).length > 0 ? headers : undefined,
 						)
 					}
 
