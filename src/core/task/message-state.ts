@@ -402,7 +402,7 @@ export class MessageStateHandler extends EventEmitter<MessageStateHandlerEvents>
 	}
 
 	/**
-	 * Update a specific message in the clineMessages array (in-memory only).
+	 * Update a specific message in the clineMessages array and mark it for persistence.
 	 */
 	async updateClineMessage(index: number, updates: Partial<ClineMessage>): Promise<void> {
 		const all = this.clineMessages
@@ -410,7 +410,7 @@ export class MessageStateHandler extends EventEmitter<MessageStateHandlerEvents>
 			throw new Error(`Invalid message index: ${index}`)
 		}
 		const previousMessage = { ...all[index] }
-		this.uiMessage?.updateMessage(index, updates)
+		await this.uiMessage?.updateMessage(index, updates)
 
 		const freshAll = this.clineMessages
 		this.emitClineMessagesChanged({

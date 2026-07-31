@@ -231,6 +231,27 @@ export class JsonlIndexedStore<T extends { ts: number }> {
 	}
 
 	/**
+	 * Merge fields into an entry at a virtual row index and mark that row dirty.
+	 * The read and write happen under the same mutex so concurrent field updates
+	 * cannot replace one another with stale copies.
+	 */
+	async patchAt(index: number, updates: Partial<T>): Promise<T> {
+		return await this._mutex.withLock(async () => {
+			await this._ensureFullyLoaded()
+			if (index < 0 || index >= this._items.length) {
+				throw new Error(`JsonlIndexedStore.patchAt: index ${index} out of range [0, ${this._items.length})`)
+			}
+			const item = { ...this._items[index], ...updates }
+			this._items[index] = item
+			this._l1Index.set(item.ts)
+			this._rebuildTsIndex()
+			this._addToL2(item.ts, item)
+			this._markDirty(index)
+			return item
+		})
+	}
+
+	/**
 	 * Upsert by ts — memory only (content modification, structure unchanged).
 	 * Ensures _fullyLoaded before upserting so ts-based lookup is accurate.
 	 */

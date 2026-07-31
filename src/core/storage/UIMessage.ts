@@ -136,20 +136,15 @@ export class UIMessage {
 	}
 
 	/**
-	 * Update a message at the given index (in-memory only, no disk write).
+	 * Update a message at the given index and mark it for the next flush.
 	 * For streaming chunk updates — disk persistence happens at key lifecycle points.
 	 *
 	 * @param index Zero-based index in the message array
 	 * @param updates Partial fields to merge into the existing message
 	 * @returns The updated message
 	 */
-	updateMessage(index: number, updates: Partial<ClineMessage>): ClineMessage {
-		const all = this.store.getAll() as ClineMessage[]
-		if (index < 0 || index >= all.length) {
-			throw new Error(`UIMessage.updateMessage: index ${index} out of range [0, ${all.length})`)
-		}
-		Object.assign(all[index], updates)
-		return all[index]
+	async updateMessage(index: number, updates: Partial<ClineMessage>): Promise<ClineMessage> {
+		return await this.store.patchAt(index, updates)
 	}
 
 	/**
