@@ -86,6 +86,86 @@ e2e("Mock API - OpenAI SDK and Dline parser preserve standard streamed function 
 	})
 })
 
+e2e("Mock API - emits parallel tool calls with stable identities for every protocol", async ({ server }) => {
+	const tools = [
+		{ id: "call_parallel_read", name: "read_file", arguments: { path: "README.md" } },
+		{
+			id: "call_parallel_write",
+			name: "write_to_file",
+			arguments: { path: "parallel-write.txt", content: "parallel write\n" },
+		},
+		{
+			id: "call_parallel_replace",
+			name: "replace_in_file",
+			arguments: {
+				path: "parallel-replace.txt",
+				diff: "------- SEARCH\nbefore\n=======\nafter\n+++++++ REPLACE",
+			},
+		},
+		{
+			id: "call_parallel_command",
+			name: "execute_command",
+			arguments: { command: "echo parallel", workdirectory: ".", requires_approval: false },
+		},
+	] as const
+	const targets = [
+		"openai-compatible-chat",
+		"openai-compatible-responses",
+		"openai-native-responses",
+		"deepseek-chat",
+		"anthropic-messages",
+	] as const
+	server.resetOpenAiMock()
+	for (const target of targets) server.enqueueResponses(target, { type: "tools", tools })
+
+	const requests = [
+		post(getE2EMockProviderUrl(server.baseUrl, "openai-compatible-chat"), {
+			model: "dline-e2e-model",
+			stream: true,
+			messages: [{ role: "user", content: "parallel tools" }],
+		}),
+		post(getE2EMockProviderUrl(server.baseUrl, "openai-compatible-responses"), {
+			model: "dline-e2e-model",
+			stream: true,
+			input: "parallel tools",
+		}),
+		post(getE2EMockProviderUrl(server.baseUrl, "openai-native-responses"), {
+			model: "gpt-5.4-mini",
+			stream: true,
+			input: "parallel tools",
+		}),
+		post(getE2EMockProviderUrl(server.baseUrl, "deepseek-chat"), {
+			model: "deepseek-v4-flash",
+			stream: true,
+			messages: [{ role: "user", content: "parallel tools" }],
+		}),
+		post(
+			getE2EMockProviderUrl(server.baseUrl, "anthropic-messages"),
+			{
+				model: "claude-sonnet-4-6",
+				max_tokens: 8192,
+				stream: true,
+				messages: [{ role: "user", content: "parallel tools" }],
+			},
+			true,
+		),
+	]
+	const responses = await Promise.all(requests)
+
+	for (const response of responses) {
+		expect(response.status).toBe(200)
+		const body = await response.text()
+		for (const tool of tools) {
+			expect(body).toContain(tool.id)
+			expect(body).toContain(tool.name)
+		}
+	}
+	for (const target of targets) {
+		const [consumption] = server.getMockConsumptions(target)
+		expect(consumption).toMatchObject({ responseType: "tools", responseToolCalls: tools })
+	}
+})
+
 e2e("Mock API - isolates provider endpoints and emits protocol-native usage", async ({ server }) => {
 	const responses = {
 		chat: { text: "chat protocol response", hiddenReasoning: "chat protocol hidden reasoning" },

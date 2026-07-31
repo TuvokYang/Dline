@@ -42,18 +42,28 @@ export interface MockObservedToolResult {
 	content: string
 }
 
+export interface MockToolCall {
+	id?: string
+	name: string
+	arguments: Record<string, unknown>
+}
+
 interface MockResponseOptions {
 	reasoning?: string
 	hiddenReasoning?: string
 	delayMs?: number
+	afterReasoningDelayMs?: number
 	usage?: MockTokenUsage
 	expectedToolResults?: readonly MockToolResultExpectation[]
+	expectedToolResultCount?: number
 	expectedRequestIncludes?: readonly string[]
+	expectedRequestExcludes?: readonly string[]
 }
 
 export type OpenAiMockResponse =
 	| ({ type: "message"; text: string } & MockResponseOptions)
-	| ({ type: "tool"; name: string; arguments: Record<string, unknown>; id?: string } & MockResponseOptions)
+	| ({ type: "tool" } & MockToolCall & MockResponseOptions)
+	| ({ type: "tools"; tools: readonly MockToolCall[] } & MockResponseOptions)
 	| { type: "error"; status: number; message: string; code?: string; delayMs?: number }
 
 export type MockThinkingConfig = { mode: "effort"; effort: string } | { mode: "budget"; budget: number }
@@ -69,6 +79,7 @@ export interface MockApiConsumption {
 	toolName?: string
 	toolCallId?: string
 	toolArguments?: Record<string, unknown>
+	responseToolCalls?: readonly MockToolCall[]
 	status?: number
 	contractError?: string
 	thinking?: MockThinkingConfig
@@ -109,10 +120,21 @@ function getResponseUsage(
 	const inputTokens = Math.max(1, totalInputTokens - cacheReadTokens - cacheWriteTokens)
 	const reasoningText = response.reasoning ?? response.hiddenReasoning ?? ""
 	const reasoningTokens = reasoningText ? estimateTokens(reasoningText) : 0
-	const responseText = response.type === "message" ? response.text : `${response.name}\n${JSON.stringify(response.arguments)}`
+	const responseText =
+		response.type === "message"
+			? response.text
+			: getResponseToolCalls(response)
+					.map((tool) => `${tool.name}\n${JSON.stringify(tool.arguments)}`)
+					.join("\n")
 	const outputTokens = estimateTokens(`${reasoningText}\n${responseText}`)
 
 	return { inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, reasoningTokens }
+}
+
+function getResponseToolCalls(response: Exclude<OpenAiMockResponse, { type: "error" }>): readonly MockToolCall[] {
+	if (response.type === "tool") return [response]
+	if (response.type === "tools") return response.tools
+	return []
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -175,6 +197,12 @@ function validateMockRequestContract(
 ): string | undefined {
 	for (const marker of response.expectedRequestIncludes ?? []) {
 		if (!requestText.includes(marker)) return `Request is missing required text: ${marker}`
+	}
+	for (const marker of response.expectedRequestExcludes ?? []) {
+		if (requestText.includes(marker)) return `Request contains forbidden text: ${marker}`
+	}
+	if (response.expectedToolResultCount !== undefined && toolResults.length !== response.expectedToolResultCount) {
+		return `Expected ${response.expectedToolResultCount} tool results, observed ${toolResults.length}`
 	}
 
 	for (const expectation of response.expectedToolResults ?? []) {
@@ -357,6 +385,7 @@ export class ClineApiServerMock {
 				? undefined
 				: getResponseUsage(response, requestText, this.previousSuccessfulRequestText.get(target))
 		if (response.type !== "error") this.previousSuccessfulRequestText.set(target, requestText)
+		const responseToolCalls = response.type === "error" ? [] : getResponseToolCalls(response)
 		this.mockConsumptions.push({
 			target,
 			provider: route.provider,
@@ -368,6 +397,15 @@ export class ClineApiServerMock {
 			...(response.type === "tool" ? { toolName: response.name } : {}),
 			...(response.type === "tool" && response.id ? { toolCallId: response.id } : {}),
 			...(response.type === "tool" ? { toolArguments: response.arguments } : {}),
+			...(responseToolCalls.length > 0
+				? {
+						responseToolCalls: responseToolCalls.map((tool) => ({
+							...(tool.id ? { id: tool.id } : {}),
+							name: tool.name,
+							arguments: tool.arguments,
+						})),
+					}
+				: {}),
 			...(response.type === "error" ? { status: response.status } : {}),
 			...(contractError ? { contractError } : {}),
 			...(thinking ? { thinking } : {}),
@@ -599,28 +637,42 @@ export class ClineApiServerMock {
 								}
 							: openAiUsage
 					const messageText = scriptedResponse.type === "message" ? scriptedResponse.text : ""
+					const responseToolCalls = getResponseToolCalls(scriptedResponse)
 					const writeSse = (data: unknown, event?: string) => {
 						if (res.destroyed || res.writableEnded) return
 						res.write(`${event ? `event: ${event}\n` : ""}data: ${JSON.stringify(data)}\n\n`)
 					}
+					const waitAfterReasoning = async (): Promise<boolean> => {
+						const delayMs = scriptedResponse.afterReasoningDelayMs
+						if (!delayMs) return !(res.destroyed || res.writableEnded)
+						await new Promise<void>((resolve) => {
+							const onClose = () => {
+								clearTimeout(timer)
+								resolve()
+							}
+							const timer = setTimeout(() => {
+								res.off("close", onClose)
+								resolve()
+							}, delayMs)
+							res.once("close", onClose)
+						})
+						return !(res.destroyed || res.writableEnded)
+					}
 
 					if (protocol === "openai-chat" || protocol === "deepseek-chat") {
-						const toolCall =
-							scriptedResponse.type === "tool"
-								? {
-										id: scriptedResponse.id ?? `call_${generationId}`,
-										type: "function",
-										function: {
-											name: scriptedResponse.name,
-											arguments: JSON.stringify(scriptedResponse.arguments),
-										},
-									}
-								: undefined
+						const toolCalls = responseToolCalls.map((tool, index) => ({
+							index,
+							id: tool.id ?? `call_${generationId}_${index}`,
+							type: "function",
+							function: {
+								name: tool.name,
+								arguments: JSON.stringify(tool.arguments),
+							},
+						}))
 						const reasoningContent = protocol === "deepseek-chat" ? scriptedResponse.reasoning : undefined
-						const assistantDelta = {
+						const responseDelta = {
 							role: "assistant",
-							...(reasoningContent ? { reasoning_content: reasoningContent } : {}),
-							...(toolCall ? { tool_calls: [{ index: 0, ...toolCall }] } : { content: messageText }),
+							...(toolCalls.length > 0 ? { tool_calls: toolCalls } : { content: messageText }),
 						}
 						if (parsed.stream !== false) {
 							res.writeHead(200, {
@@ -637,19 +689,34 @@ export class ClineApiServerMock {
 									choices,
 									...(chunkUsage ? { usage: chunkUsage } : {}),
 								})
-							writeChunk([
-								{
-									index: 0,
-									delta: assistantDelta,
-									finish_reason: null,
-								},
-							])
+							if (reasoningContent && scriptedResponse.afterReasoningDelayMs) {
+								writeChunk([
+									{
+										index: 0,
+										delta: { role: "assistant", reasoning_content: reasoningContent },
+										finish_reason: null,
+									},
+								])
+								if (!(await waitAfterReasoning())) return
+								writeChunk([{ index: 0, delta: responseDelta, finish_reason: null }])
+							} else {
+								writeChunk([
+									{
+										index: 0,
+										delta: {
+											...responseDelta,
+											...(reasoningContent ? { reasoning_content: reasoningContent } : {}),
+										},
+										finish_reason: null,
+									},
+								])
+							}
 							writeChunk(
 								[
 									{
 										index: 0,
 										delta: {},
-										finish_reason: toolCall ? "tool_calls" : "stop",
+										finish_reason: toolCalls.length > 0 ? "tool_calls" : "stop",
 									},
 								],
 								chatUsage,
@@ -668,11 +735,13 @@ export class ClineApiServerMock {
 									index: 0,
 									message: {
 										role: "assistant",
-										content: toolCall ? null : messageText,
+										content: toolCalls.length > 0 ? null : messageText,
 										...(reasoningContent ? { reasoning_content: reasoningContent } : {}),
-										...(toolCall ? { tool_calls: [toolCall] } : {}),
+										...(toolCalls.length > 0
+											? { tool_calls: toolCalls.map(({ index: _, ...tool }) => tool) }
+											: {}),
 									},
-									finish_reason: toolCall ? "tool_calls" : "stop",
+									finish_reason: toolCalls.length > 0 ? "tool_calls" : "stop",
 								},
 							],
 							usage: chatUsage,
@@ -680,7 +749,6 @@ export class ClineApiServerMock {
 					}
 
 					if (protocol === "openai-responses") {
-						const itemId = `item_${generationId}`
 						const reasoningItemId = `reasoning_${generationId}`
 						const reasoningItem = scriptedResponse.reasoning
 							? {
@@ -690,33 +758,30 @@ export class ClineApiServerMock {
 									summary: [{ type: "summary_text", text: scriptedResponse.reasoning }],
 								}
 							: undefined
-						const outputIndex = reasoningItem ? 1 : 0
-						const callId =
-							scriptedResponse.type === "tool" ? (scriptedResponse.id ?? `call_${generationId}`) : undefined
-						const outputItem =
-							scriptedResponse.type === "tool"
-								? {
-										id: itemId,
-										type: "function_call",
-										status: "completed",
-										call_id: callId,
-										name: scriptedResponse.name,
-										arguments: JSON.stringify(scriptedResponse.arguments),
-									}
-								: {
-										id: itemId,
-										type: "message",
-										status: "completed",
-										role: "assistant",
-										content: [{ type: "output_text", text: scriptedResponse.text, annotations: [] }],
-									}
+						const outputOffset = reasoningItem ? 1 : 0
+						const toolOutputItems = responseToolCalls.map((tool, index) => ({
+							id: `item_${generationId}_${index}`,
+							type: "function_call",
+							status: "completed",
+							call_id: tool.id ?? `call_${generationId}_${index}`,
+							name: tool.name,
+							arguments: JSON.stringify(tool.arguments),
+						}))
+						const messageOutputItem = {
+							id: `item_${generationId}`,
+							type: "message",
+							status: "completed",
+							role: "assistant",
+							content: [{ type: "output_text", text: messageText, annotations: [] }],
+						}
+						const outputItems = toolOutputItems.length > 0 ? toolOutputItems : [messageOutputItem]
 						const response = {
 							id: generationId,
 							object: "response",
 							created_at: Math.floor(Date.now() / 1000),
 							status: "completed",
 							model,
-							output: reasoningItem ? [reasoningItem, outputItem] : [outputItem],
+							output: reasoningItem ? [reasoningItem, ...outputItems] : outputItems,
 							output_text: scriptedResponse.type === "message" ? scriptedResponse.text : "",
 							usage: {
 								input_tokens: openAiUsage.prompt_tokens,
@@ -776,33 +841,46 @@ export class ClineApiServerMock {
 								{ type: "response.output_item.done", output_index: 0, item: reasoningItem },
 								"response.output_item.done",
 							)
+							if (!(await waitAfterReasoning())) return
 						}
-						writeSse(
-							{
-								type: "response.output_item.added",
-								output_index: outputIndex,
-								item: scriptedResponse.type === "tool" ? { ...outputItem, arguments: "" } : outputItem,
-							},
-							"response.output_item.added",
-						)
-						if (scriptedResponse.type === "tool") {
+						if (toolOutputItems.length > 0) {
+							for (const [index, outputItem] of toolOutputItems.entries()) {
+								const outputIndex = outputOffset + index
+								writeSse(
+									{
+										type: "response.output_item.added",
+										output_index: outputIndex,
+										item: { ...outputItem, arguments: "" },
+									},
+									"response.output_item.added",
+								)
+								writeSse(
+									{
+										type: "response.function_call_arguments.delta",
+										item_id: outputItem.id,
+										output_index: outputIndex,
+										delta: outputItem.arguments,
+									},
+									"response.function_call_arguments.delta",
+								)
+							}
+						} else {
+							const outputIndex = outputOffset
 							writeSse(
 								{
-									type: "response.function_call_arguments.delta",
-									item_id: itemId,
+									type: "response.output_item.added",
 									output_index: outputIndex,
-									delta: JSON.stringify(scriptedResponse.arguments),
+									item: messageOutputItem,
 								},
-								"response.function_call_arguments.delta",
+								"response.output_item.added",
 							)
-						} else {
 							writeSse(
 								{
 									type: "response.output_text.delta",
-									item_id: itemId,
+									item_id: messageOutputItem.id,
 									output_index: outputIndex,
 									content_index: 0,
-									delta: scriptedResponse.text,
+									delta: messageText,
 								},
 								"response.output_text.delta",
 							)
@@ -818,15 +896,15 @@ export class ClineApiServerMock {
 						cache_creation_input_tokens: usage.cacheWriteTokens ?? 0,
 						cache_read_input_tokens: usage.cacheReadTokens ?? 0,
 					}
-					const contentBlock =
-						scriptedResponse.type === "tool"
-							? {
-									id: scriptedResponse.id ?? `toolu_${generationId}`,
+					const contentBlocks =
+						responseToolCalls.length > 0
+							? responseToolCalls.map((tool, index) => ({
+									id: tool.id ?? `toolu_${generationId}_${index}`,
 									type: "tool_use",
-									name: scriptedResponse.name,
-									input: scriptedResponse.arguments,
-								}
-							: { type: "text", text: scriptedResponse.text }
+									name: tool.name,
+									input: tool.arguments,
+								}))
+							: [{ type: "text", text: messageText }]
 					const thinkingBlock = scriptedResponse.reasoning
 						? {
 								type: "thinking",
@@ -840,8 +918,8 @@ export class ClineApiServerMock {
 							type: "message",
 							role: "assistant",
 							model,
-							content: thinkingBlock ? [thinkingBlock, contentBlock] : [contentBlock],
-							stop_reason: scriptedResponse.type === "tool" ? "tool_use" : "end_turn",
+							content: thinkingBlock ? [thinkingBlock, ...contentBlocks] : contentBlocks,
+							stop_reason: responseToolCalls.length > 0 ? "tool_use" : "end_turn",
 							stop_sequence: null,
 							usage: { ...messageUsage, output_tokens: usage.outputTokens },
 						})
@@ -894,34 +972,60 @@ export class ClineApiServerMock {
 							"content_block_delta",
 						)
 						writeSse({ type: "content_block_stop", index: 0 }, "content_block_stop")
+						if (!(await waitAfterReasoning())) return
 					}
-					const contentBlockIndex = thinkingBlock ? 1 : 0
-					writeSse(
-						{
-							type: "content_block_start",
-							index: contentBlockIndex,
-							content_block:
-								scriptedResponse.type === "tool" ? { ...contentBlock, input: {} } : { type: "text", text: "" },
-						},
-						"content_block_start",
-					)
-					writeSse(
-						{
-							type: "content_block_delta",
-							index: contentBlockIndex,
-							delta:
-								scriptedResponse.type === "tool"
-									? { type: "input_json_delta", partial_json: JSON.stringify(scriptedResponse.arguments) }
-									: { type: "text_delta", text: scriptedResponse.text },
-						},
-						"content_block_delta",
-					)
-					writeSse({ type: "content_block_stop", index: contentBlockIndex }, "content_block_stop")
+					const contentBlockOffset = thinkingBlock ? 1 : 0
+					if (responseToolCalls.length > 0) {
+						for (const [index, tool] of responseToolCalls.entries()) {
+							const contentBlockIndex = contentBlockOffset + index
+							writeSse(
+								{
+									type: "content_block_start",
+									index: contentBlockIndex,
+									content_block: {
+										id: tool.id ?? `toolu_${generationId}_${index}`,
+										type: "tool_use",
+										name: tool.name,
+										input: {},
+									},
+								},
+								"content_block_start",
+							)
+							writeSse(
+								{
+									type: "content_block_delta",
+									index: contentBlockIndex,
+									delta: { type: "input_json_delta", partial_json: JSON.stringify(tool.arguments) },
+								},
+								"content_block_delta",
+							)
+							writeSse({ type: "content_block_stop", index: contentBlockIndex }, "content_block_stop")
+						}
+					} else {
+						const contentBlockIndex = contentBlockOffset
+						writeSse(
+							{
+								type: "content_block_start",
+								index: contentBlockIndex,
+								content_block: { type: "text", text: "" },
+							},
+							"content_block_start",
+						)
+						writeSse(
+							{
+								type: "content_block_delta",
+								index: contentBlockIndex,
+								delta: { type: "text_delta", text: messageText },
+							},
+							"content_block_delta",
+						)
+						writeSse({ type: "content_block_stop", index: contentBlockIndex }, "content_block_stop")
+					}
 					writeSse(
 						{
 							type: "message_delta",
 							delta: {
-								stop_reason: scriptedResponse.type === "tool" ? "tool_use" : "end_turn",
+								stop_reason: responseToolCalls.length > 0 ? "tool_use" : "end_turn",
 								stop_sequence: null,
 							},
 							usage: { output_tokens: usage.outputTokens },
