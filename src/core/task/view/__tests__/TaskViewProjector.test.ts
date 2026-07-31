@@ -250,4 +250,23 @@ describe("projectInteraction", () => {
 		expect(view.footer.actions).toEqual([])
 		expect(view.diagnostic).toEqual({ code: "interaction_anchor_is_say", interactionId: "interaction-1" })
 	})
+
+	it("surfaces a failed opening recovery interaction without projecting controls", () => {
+		const interaction = active("resume")
+		interaction.status = "opening"
+		delete interaction.anchor
+		const state = runtime(TaskPhase.PAUSED, interaction)
+		state.error = {
+			effectId: "effect-ask",
+			effectType: "APPEND_ASK",
+			originRevision: 7,
+			message: "ask persistence failed",
+		}
+
+		const view = projectTaskView(state)
+
+		expect(view.activeInteraction).toBeUndefined()
+		expect(view.footer.actions).toEqual([])
+		expect(view.diagnostic).toEqual({ code: "interaction_anchor_missing", interactionId: "interaction-1" })
+	})
 })

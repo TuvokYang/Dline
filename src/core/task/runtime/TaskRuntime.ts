@@ -227,6 +227,10 @@ export class TaskRuntime {
 				const interaction = this.state.interaction
 				return interaction?.kind === "resume" && interaction.status === "opening" ? interaction.interactionId : undefined
 			}
+			case "EFFECT_FAILED": {
+				const interaction = this.state.interaction
+				return interaction?.kind === "resume" && interaction.status === "opening" ? interaction.interactionId : undefined
+			}
 			default:
 				return undefined
 		}

@@ -58,7 +58,7 @@ export function projectTaskView(
 	}
 
 	const interaction = state.interaction ? projectInteraction(state.interaction, state.revision) : undefined
-	const diagnostic = state.interaction?.status === "opening" ? undefined : interaction?.diagnostic
+	const diagnostic = state.interaction?.status === "opening" && !state.error ? undefined : interaction?.diagnostic
 	const isCancellable = CANCELLABLE_PHASES.has(state.phase)
 	const interactionIsBeingResolved = state.interaction?.status === "resolving"
 	const actions =

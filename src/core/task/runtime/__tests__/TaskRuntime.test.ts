@@ -386,6 +386,7 @@ describe("TaskRuntime dispatch", () => {
 	it("returns a caller-visible failure when cancellation effects fail", async () => {
 		const postView = vi.fn(async () => {})
 		const persistSnapshot = vi.fn(async () => {})
+		const appendAsk = vi.fn(async () => ({ uiMessageTs: 101 }))
 		const runtime = new TaskRuntime(
 			createTaskRuntimeState({ taskId: "task-1", phase: TaskPhase.STREAMING }),
 			createPorts({
@@ -394,6 +395,7 @@ describe("TaskRuntime dispatch", () => {
 				cancelRuntime: async () => {
 					throw new Error("cancel failed")
 				},
+				appendAsk,
 			}),
 		)
 
@@ -406,9 +408,9 @@ describe("TaskRuntime dispatch", () => {
 		expect(runtime.getState()).toMatchObject({
 			phase: TaskPhase.PAUSED,
 			error: { effectType: "CANCEL_RUNTIME", message: "cancel failed" },
+			interaction: { kind: "resume", status: "awaiting", anchor: { messageTs: 101, messageType: "ask" } },
 		})
-		expect(postView).toHaveBeenCalledTimes(2)
-		expect(persistSnapshot).toHaveBeenCalledTimes(1)
+		expect(appendAsk).toHaveBeenCalledOnce()
 	})
 
 	it("returns a caller-visible failure when presenting an interaction fails", async () => {
@@ -438,6 +440,7 @@ describe("TaskRuntime dispatch", () => {
 			effectError: { effectType: "APPEND_ASK", message: "ask failed" },
 		})
 		expect(runtime.getState().phase).toBe(TaskPhase.PAUSED)
+		expect(runtime.getState().interaction).toMatchObject({ kind: "resume", status: "opening" })
 		expect(postView).toHaveBeenCalledTimes(1)
 		expect(persistSnapshot).toHaveBeenCalledTimes(1)
 	})
@@ -488,7 +491,7 @@ describe("TaskRuntime dispatch", () => {
 			error: { effectType: "APPEND_SAY", message: "feedback flush failed" },
 			interaction: {
 				interactionId: "resume-1",
-				status: "resolving",
+				status: "awaiting",
 				acceptedResponse: { actionId: "resume", draft },
 			},
 		})
@@ -535,7 +538,7 @@ describe("TaskRuntime dispatch", () => {
 			effectError: { effectType: "POST_TASK_VIEW", message: "view failed" },
 		})
 		expect(postView).toHaveBeenCalledTimes(1)
-		expect(persistSnapshot).toHaveBeenCalledTimes(1)
+		expect(persistSnapshot).toHaveBeenCalledTimes(2)
 		expect(runtime.getState()).toMatchObject({
 			phase: TaskPhase.PAUSED,
 			error: { effectType: "POST_TASK_VIEW", message: "view failed" },

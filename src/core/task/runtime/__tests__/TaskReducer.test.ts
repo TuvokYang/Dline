@@ -504,9 +504,62 @@ describe("reduceTask lifecycle events", () => {
 			accepted: true,
 			next: {
 				phase: TaskPhase.PAUSED,
+				interaction: {
+					kind: "resume",
+					status: "opening",
+				},
 				error: { effectId: "effect-1", effectType: "START_API", message: "provider unavailable" },
 			},
 		})
+		expect(result.effects.map((effect) => effect.type)).toEqual(["PERSIST_SNAPSHOT", "APPEND_ASK"])
+	})
+
+	it("persists an opening Resume without retrying a failed ask presentation", () => {
+		const state = {
+			...stateAt(TaskPhase.STREAMING),
+			interaction: {
+				taskId: "task-1",
+				turnId: "turn-1",
+				interactionId: "question-1",
+				kind: "qna_response" as const,
+				status: "opening" as const,
+				createdRevision: 1,
+			},
+		}
+
+		const result = reduceTask(state, {
+			type: "EFFECT_FAILED",
+			effectId: "effect-ask",
+			effectType: "APPEND_ASK",
+			originRevision: 1,
+			message: "ask persistence failed",
+		})
+
+		expect(result).toMatchObject({
+			accepted: true,
+			next: { phase: TaskPhase.PAUSED, interaction: { kind: "resume", status: "opening" } },
+		})
+		expect(result.effects.map((effect) => effect.type)).toEqual(["PERSIST_SNAPSHOT", "POST_TASK_VIEW"])
+	})
+
+	it("keeps an anchored approval actionable when only snapshot persistence fails", () => {
+		const state = awaitingInteraction()
+		const result = reduceTask(state, {
+			type: "EFFECT_FAILED",
+			effectId: "effect-snapshot",
+			effectType: "PERSIST_SNAPSHOT",
+			originRevision: state.revision,
+			message: "snapshot unavailable",
+		})
+
+		expect(result).toMatchObject({
+			accepted: true,
+			next: {
+				phase: TaskPhase.AWAITING_APPROVAL,
+				interaction: { kind: "tool_approval", status: "awaiting", anchor: { messageType: "ask" } },
+			},
+		})
+		expect(result.effects.map((effect) => effect.type)).toEqual(["POST_TASK_VIEW"])
 	})
 
 	it.each([

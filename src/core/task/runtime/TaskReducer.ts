@@ -125,12 +125,13 @@ function acceptInteraction(
 	state: TaskRuntimeState,
 	interaction: TaskRuntimeState["interaction"],
 	anchor: TaskRuntimeState["anchor"] = state.anchor,
+	effects?: TaskEffect[],
 ): TransitionResult {
 	const revision = state.revision + 1
 	return {
 		accepted: true,
 		next: { ...state, revision, anchor, interaction },
-		effects: stateEffects(revision),
+		effects: effects ?? stateEffects(revision),
 	}
 }
 
@@ -503,6 +504,11 @@ function reduceInteractionPresented(
 	if (!interaction || interaction.status !== "opening" || interaction.interactionId !== event.interactionId) {
 		return reject(state, event.type)
 	}
+	const revision = state.revision + 1
+	const effects =
+		state.error && interaction.kind === "resume"
+			? stateEffects(revision).filter((effect) => effect.type !== state.error?.effectType)
+			: undefined
 	return acceptInteraction(
 		state,
 		{ ...interaction, status: "awaiting", anchor: { messageTs: event.messageTs, messageType: "ask" } },
@@ -512,6 +518,7 @@ function reduceInteractionPresented(
 			turnId: interaction.turnId,
 			interactionId: interaction.interactionId,
 		},
+		effects,
 	)
 }
 
@@ -941,53 +948,99 @@ function reduceFailure(state: TaskRuntimeState, event: Extract<TaskEvent, { type
 	const originInteraction = event.originInteraction
 	const currentInteraction = state.interaction
 	const failedContinuation =
-		event.effectType === "START_API" &&
 		(!originInteraction || !currentInteraction || currentInteraction.interactionId === originInteraction.interactionId) &&
 		(currentInteraction ?? originInteraction)?.status === "resolving"
 			? (currentInteraction ?? originInteraction)
 			: undefined
 	const retryableInteraction =
-		failedContinuation?.kind === "resume" && failedContinuation.acceptedResponse?.actionId === "resume"
+		failedContinuation?.anchor?.messageType === "ask" &&
+		failedContinuation.kind === "resume" &&
+		failedContinuation.acceptedResponse?.actionId === "resume"
 			? failedContinuation
-			: failedContinuation?.kind === "error_retry" && failedContinuation.acceptedResponse?.actionId === "retry"
+			: failedContinuation?.anchor?.messageType === "ask" &&
+					failedContinuation.kind === "error_retry" &&
+					failedContinuation.acceptedResponse?.actionId === "retry"
 				? failedContinuation
 				: undefined
-	const failedPhase = retryableInteraction?.kind === "error_retry" ? TaskPhase.AWAITING_APPROVAL : TaskPhase.PAUSED
-	if (!canTransition(state.phase, failedPhase)) {
+	const awaitingAnchoredInteraction =
+		(event.effectType === "POST_TASK_VIEW" || event.effectType === "PERSIST_SNAPSHOT") &&
+		currentInteraction?.status === "awaiting" &&
+		currentInteraction.anchor?.messageType === "ask"
+			? currentInteraction
+			: undefined
+	const preservedInteraction = retryableInteraction ?? awaitingAnchoredInteraction
+	const canPause = state.phase === TaskPhase.PAUSED || canTransition(state.phase, TaskPhase.PAUSED)
+	const shouldCreateResume = !preservedInteraction && state.phase !== TaskPhase.COMPLETED && canPause
+	const failedPhase = retryableInteraction
+		? retryableInteraction.kind === "error_retry"
+			? TaskPhase.AWAITING_APPROVAL
+			: TaskPhase.PAUSED
+		: awaitingAnchoredInteraction
+			? state.phase
+			: shouldCreateResume
+				? TaskPhase.PAUSED
+				: state.phase
+	if (failedPhase !== state.phase && !canTransition(state.phase, failedPhase)) {
 		return reject(state, event.type)
 	}
 	const revision = state.revision + 1
+	const resumeInteractionId = `resume:${state.taskId}:effect:${event.originRevision}:${revision}`
+	const recoveryInteraction = shouldCreateResume
+		? openingInteraction(state, revision, {
+				turnId: state.turn?.turnId ?? resumeInteractionId,
+				interactionId: resumeInteractionId,
+				kind: "resume",
+			})
+		: undefined
+	const nextInteraction = preservedInteraction
+		? { ...preservedInteraction, status: "awaiting" as const, createdRevision: revision }
+		: recoveryInteraction
 	const effects: TaskEffect[] = []
-	if (event.effectType !== "POST_TASK_VIEW") {
-		effects.push({ id: effectId(revision, effects.length + 1), type: "POST_TASK_VIEW" })
-	}
 	if (event.effectType !== "PERSIST_SNAPSHOT") {
 		effects.push({ id: effectId(revision, effects.length + 1), type: "PERSIST_SNAPSHOT" })
 	}
+	if (recoveryInteraction && event.effectType !== "APPEND_ASK") {
+		effects.push({
+			id: effectId(revision, effects.length + 1),
+			type: "APPEND_ASK",
+			interactionId: recoveryInteraction.interactionId,
+			taskAsk: "resume_task",
+			presentation: "",
+		})
+	} else if (event.effectType !== "POST_TASK_VIEW") {
+		effects.push({ id: effectId(revision, effects.length + 1), type: "POST_TASK_VIEW" })
+	}
+	const next: TaskRuntimeState = {
+		...state,
+		phase: failedPhase,
+		revision,
+		...(nextInteraction ? { interaction: nextInteraction } : {}),
+		...(nextInteraction
+			? {
+					anchor: {
+						apiIndex: state.anchor.apiIndex,
+						turnId: nextInteraction.turnId,
+						interactionId: nextInteraction.interactionId,
+						...(nextInteraction.anchor ? { uiMessageTs: nextInteraction.anchor.messageTs } : {}),
+					},
+				}
+			: {}),
+		error: {
+			effectId: event.effectId,
+			effectType: event.effectType,
+			originRevision: event.originRevision,
+			message: event.message,
+		},
+	}
+	if (!nextInteraction) {
+		delete next.interaction
+	}
+	if (failedPhase === TaskPhase.PAUSED) {
+		delete next.cancellation
+	}
 	return {
 		accepted: true,
-		next: {
-			...state,
-			phase: failedPhase,
-			revision,
-			...(retryableInteraction
-				? {
-						interaction: { ...retryableInteraction, status: "awaiting" as const, createdRevision: revision },
-						anchor: {
-							...state.anchor,
-							turnId: retryableInteraction.turnId,
-							interactionId: retryableInteraction.interactionId,
-							...(retryableInteraction.anchor ? { uiMessageTs: retryableInteraction.anchor.messageTs } : {}),
-						},
-					}
-				: {}),
-			error: {
-				effectId: event.effectId,
-				effectType: event.effectType,
-				originRevision: event.originRevision,
-				message: event.message,
-			},
-		},
+		next,
 		effects,
 	}
 }
