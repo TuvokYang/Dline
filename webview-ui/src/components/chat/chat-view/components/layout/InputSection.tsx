@@ -1,4 +1,4 @@
-import React from "react"
+import React, { useEffect, useRef } from "react"
 import ChatTextArea from "@/components/chat/ChatTextArea"
 import type { ModeSwitchDraft } from "@/components/chat/mode-switch/useModeSwitch"
 import QuotedMessagePreview from "@/components/chat/QuotedMessagePreview"
@@ -16,6 +16,7 @@ interface InputSectionProps {
 	enabled?: boolean
 	onSubmit?: (draft: InteractionDraft) => Promise<AcceptedInteractionSettlement | undefined>
 	onDraftAccepted: (settlement: AcceptedInteractionSettlement) => void
+	submissionScope?: string
 }
 
 /**
@@ -32,6 +33,7 @@ export const InputSection: React.FC<InputSectionProps> = ({
 	enabled,
 	onSubmit,
 	onDraftAccepted,
+	submissionScope,
 }) => {
 	const {
 		activeQuote,
@@ -49,6 +51,7 @@ export const InputSection: React.FC<InputSectionProps> = ({
 	} = chatState
 
 	const { isAtBottom, scrollToBottomAuto } = scrollBehavior
+	const deferredSubmitRef = useRef<{ scope: string | undefined; draft: ModeSwitchDraft }>()
 	const submitDraft = async (capturedDraft?: ModeSwitchDraft) => {
 		const draft: InteractionDraft = capturedDraft
 			? {
@@ -68,6 +71,20 @@ export const InputSection: React.FC<InputSectionProps> = ({
 			onDraftAccepted(settlement)
 		}
 	}
+	const submitDraftRef = useRef(submitDraft)
+	submitDraftRef.current = submitDraft
+
+	useEffect(() => {
+		const deferred = deferredSubmitRef.current
+		if (!deferred) return
+		if (deferred.scope !== submissionScope) {
+			deferredSubmitRef.current = undefined
+			return
+		}
+		if (!enabled) return
+		deferredSubmitRef.current = undefined
+		void submitDraftRef.current(deferred.draft)
+	}, [enabled, submissionScope])
 
 	return (
 		<>
@@ -92,6 +109,13 @@ export const InputSection: React.FC<InputSectionProps> = ({
 				}}
 				onSelectFilesAndImages={selectFilesAndImages}
 				onSend={(capturedDraft?: ModeSwitchDraft) => void submitDraft(capturedDraft)}
+				onSendBlocked={
+					onSubmit
+						? (capturedDraft) => {
+								deferredSubmitRef.current = { scope: submissionScope, draft: capturedDraft }
+							}
+						: undefined
+				}
 				placeholderText={placeholderText}
 				ref={textAreaRef}
 				selectedFiles={selectedFiles}

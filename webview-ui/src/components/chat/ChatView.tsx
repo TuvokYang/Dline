@@ -2,6 +2,7 @@ import { combineApiRequests } from "@shared/combineApiRequests"
 import { combineCommandSequences } from "@shared/combineCommandSequences"
 import { combineErrorRetryMessages } from "@shared/combineErrorRetryMessages"
 import { combineHookSequences } from "@shared/combineHookSequences"
+import type { ClineMessage } from "@shared/ExtensionMessage"
 import { BooleanRequest, StringRequest } from "@shared/proto/dline/common"
 import type { ModelInfo } from "@shared/proto/dline/models"
 import { resolveProfileModelInfo } from "@shared/providers/profile-model-info"
@@ -399,6 +400,36 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 		},
 		[interactionSynchronized, taskViewState],
 	)
+	const submitFollowupOption = useCallback(
+		async (message: ClineMessage, option: string): Promise<void> => {
+			const view = taskViewState
+			const interaction = view?.activeInteraction
+			if (
+				!view ||
+				!interactionSynchronized ||
+				interaction?.kind !== "followup" ||
+				interaction.taskAsk !== "followup" ||
+				interaction.askMessageTs !== message.ts ||
+				interaction.interactionId !== message.interactionId ||
+				view.input.enterAction !== "reply"
+			) {
+				return
+			}
+			const capturedDraft = captureInteractionDraft(currentDraftRef.current)
+			const trimmedText = capturedDraft.text.trim()
+			const responseDraft = {
+				...capturedDraft,
+				text: option + (trimmedText ? `: ${trimmedText}` : ""),
+			}
+			const request = buildInteractionRequest(view, "reply", responseDraft)
+			if (!request) return
+			const response = await TaskServiceClient.dispatchInteraction(request)
+			if (response.accepted) {
+				settleAcceptedDraft(createAcceptedInteractionSettlement(request, capturedDraft))
+			}
+		},
+		[interactionSynchronized, settleAcceptedDraft, taskViewState],
+	)
 
 	const placeholderText = useMemo(() => {
 		const text = task ? "Type a message..." : "Type your task here..."
@@ -444,6 +475,7 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 								groupedMessages={groupedMessages}
 								messageHandlers={messageHandlers}
 								modifiedMessages={modifiedMessages}
+								onFollowupOptionSelect={submitFollowupOption}
 								scrollBehavior={scrollBehavior}
 								task={task}
 							/>
@@ -490,6 +522,7 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 									(!taskViewState.input.acceptsImages && !taskViewState.input.acceptsFiles)),
 						)
 					}
+					submissionScope={taskId}
 				/>
 			</footer>
 		</ChatLayout>

@@ -3,7 +3,7 @@ import { CheckpointRestoreRequest } from "@shared/proto/dline/checkpoints"
 import { Int64Request } from "@shared/proto/dline/common"
 import { ClineCheckpointRestore } from "@shared/WebviewMessage"
 import { BookmarkIcon } from "lucide-react"
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useEffect, useState } from "react"
 import { createPortal } from "react-dom"
 import styled from "styled-components"
 import { CODE_BLOCK_BG_COLOR } from "@/components/common/CodeBlock"
@@ -25,34 +25,6 @@ export const CheckmarkControl = ({ messageTs, isCheckpointCheckedOut }: Checkmar
 	const [showRestoreConfirm, setShowRestoreConfirm] = useState(false)
 	const [showMoreOptions, setShowMoreOptions] = useState(false)
 	const { onRelinquishControl } = useExtensionState()
-
-	// Debounce
-	const closeMenuTimeoutRef = useRef<NodeJS.Timeout | null>(null)
-	const scheduleCloseRestore = useCallback(() => {
-		if (closeMenuTimeoutRef.current) {
-			clearTimeout(closeMenuTimeoutRef.current)
-		}
-		closeMenuTimeoutRef.current = setTimeout(() => {
-			setShowRestoreConfirm(false)
-		}, 350)
-	}, [])
-
-	const cancelCloseRestore = useCallback(() => {
-		if (closeMenuTimeoutRef.current) {
-			clearTimeout(closeMenuTimeoutRef.current)
-			closeMenuTimeoutRef.current = null
-		}
-	}, [])
-
-	// Debounce cleanup
-	useEffect(() => {
-		return () => {
-			if (closeMenuTimeoutRef.current) {
-				clearTimeout(closeMenuTimeoutRef.current)
-				closeMenuTimeoutRef.current = null
-			}
-		}
-	}, [])
 
 	// Clear "Restore Files" button when checkpoint is no longer checked out
 	useEffect(() => {
@@ -87,6 +59,35 @@ export const CheckmarkControl = ({ messageTs, isCheckpointCheckedOut }: Checkmar
 		}
 	}, [showRestoreConfirm, update])
 
+	useEffect(() => {
+		if (!showRestoreConfirm) return
+
+		const handlePointerDown = (event: PointerEvent) => {
+			const target = event.target as Node | null
+			const reference = refs.reference.current
+			if (
+				target &&
+				((reference instanceof Node && reference.contains(target)) || refs.floating.current?.contains(target))
+			) {
+				return
+			}
+			setShowRestoreConfirm(false)
+			setShowMoreOptions(false)
+		}
+		const handleKeyDown = (event: KeyboardEvent) => {
+			if (event.key !== "Escape") return
+			setShowRestoreConfirm(false)
+			setShowMoreOptions(false)
+		}
+
+		document.addEventListener("pointerdown", handlePointerDown)
+		document.addEventListener("keydown", handleKeyDown)
+		return () => {
+			document.removeEventListener("pointerdown", handlePointerDown)
+			document.removeEventListener("keydown", handleKeyDown)
+		}
+	}, [refs.floating, refs.reference, showRestoreConfirm])
+
 	// Use the onRelinquishControl hook instead of message event
 	useEffect(() => {
 		return onRelinquishControl(() => {
@@ -113,6 +114,8 @@ export const CheckmarkControl = ({ messageTs, isCheckpointCheckedOut }: Checkmar
 			console.error("Checkpoint restore task error:", err)
 		} finally {
 			setRestoreTaskDisabled(false)
+			setShowRestoreConfirm(false)
+			setShowMoreOptions(false)
 		}
 	}
 
@@ -130,6 +133,8 @@ export const CheckmarkControl = ({ messageTs, isCheckpointCheckedOut }: Checkmar
 			console.error("Checkpoint restore workspace error:", err)
 		} finally {
 			setRestoreWorkspaceDisabled(false)
+			setShowRestoreConfirm(false)
+			setShowMoreOptions(false)
 		}
 	}
 
@@ -147,31 +152,13 @@ export const CheckmarkControl = ({ messageTs, isCheckpointCheckedOut }: Checkmar
 			console.error("Checkpoint restore both error:", err)
 		} finally {
 			setRestoreBothDisabled(false)
+			setShowRestoreConfirm(false)
+			setShowMoreOptions(false)
 		}
 	}
 
-	const handleMouseEnter = () => {
-		cancelCloseRestore()
-	}
-
-	const handleMouseLeave = () => {
-		scheduleCloseRestore()
-	}
-
-	const handleControlsMouseEnter = () => {
-		cancelCloseRestore()
-	}
-
-	const handleControlsMouseLeave = () => {
-		scheduleCloseRestore()
-	}
-
 	return (
-		<Container
-			$isCheckedOut={isCheckpointCheckedOut}
-			$isMenuOpen={showRestoreConfirm}
-			onMouseEnter={handleControlsMouseEnter}
-			onMouseLeave={handleControlsMouseLeave}>
+		<Container $isCheckedOut={isCheckpointCheckedOut} $isMenuOpen={showRestoreConfirm}>
 			<BookmarkIcon
 				className={cn("text-xs text-description shrink-0 size-2", {
 					"text-link": isCheckpointCheckedOut,
@@ -212,17 +199,12 @@ export const CheckmarkControl = ({ messageTs, isCheckpointCheckedOut }: Checkmar
 						<CustomButton
 							$isActive={showRestoreConfirm}
 							$isCheckedOut={isCheckpointCheckedOut}
-							onClick={() => setShowRestoreConfirm(true)}>
+							onClick={() => setShowRestoreConfirm((visible) => !visible)}>
 							Restore
 						</CustomButton>
 						{showRestoreConfirm &&
 							createPortal(
-								<RestoreConfirmTooltip
-									data-placement={placement}
-									onMouseEnter={handleMouseEnter}
-									onMouseLeave={handleMouseLeave}
-									ref={refs.setFloating}
-									style={floatingStyles}>
+								<RestoreConfirmTooltip data-placement={placement} ref={refs.setFloating} style={floatingStyles}>
 									<PrimaryRestoreOption>
 										<Button
 											disabled={restoreBothDisabled}
@@ -230,7 +212,11 @@ export const CheckmarkControl = ({ messageTs, isCheckpointCheckedOut }: Checkmar
 											style={{
 												cursor: restoreBothDisabled ? "wait" : "pointer",
 											}}>
-											<i className="codicon codicon-debug-restart" style={{ marginRight: "6px" }} />
+											<i
+												aria-hidden="true"
+												className="codicon codicon-debug-restart"
+												style={{ marginRight: "6px" }}
+											/>
 											Restore Files & Task
 										</Button>
 										<p>Revert files and clear messages after this point</p>
@@ -239,6 +225,7 @@ export const CheckmarkControl = ({ messageTs, isCheckpointCheckedOut }: Checkmar
 									<MoreOptionsToggle onClick={() => setShowMoreOptions(!showMoreOptions)}>
 										More options
 										<i
+											aria-hidden="true"
 											className={`codicon codicon-chevron-${showMoreOptions ? "up" : "down"}`}
 											style={{ marginLeft: "4px", fontSize: "10px" }}
 										/>
@@ -259,6 +246,7 @@ export const CheckmarkControl = ({ messageTs, isCheckpointCheckedOut }: Checkmar
 													}}
 													variant="secondary">
 													<i
+														aria-hidden="true"
 														className="codicon codicon-file-symlink-directory"
 														style={{ marginRight: "6px" }}
 													/>
@@ -275,6 +263,7 @@ export const CheckmarkControl = ({ messageTs, isCheckpointCheckedOut }: Checkmar
 													}}
 													variant="secondary">
 													<i
+														aria-hidden="true"
 														className="codicon codicon-comment-discussion"
 														style={{ marginRight: "6px" }}
 													/>

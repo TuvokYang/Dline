@@ -85,6 +85,7 @@ interface ChatTextAreaProps {
 	setSelectedImages: React.Dispatch<React.SetStateAction<string[]>>
 	setSelectedFiles: React.Dispatch<React.SetStateAction<string[]>>
 	onSend: (draft?: ModeSwitchDraft) => void
+	onSendBlocked?: (draft: ModeSwitchDraft) => void
 	onSelectFilesAndImages: () => void
 	shouldDisableFilesAndImages: boolean
 	clineAsk?: ClineAsk
@@ -213,6 +214,7 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 			setSelectedImages,
 			setSelectedFiles,
 			onSend,
+			onSendBlocked,
 			onSelectFilesAndImages,
 			shouldDisableFilesAndImages,
 			clineAsk,
@@ -472,14 +474,6 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 					const newCursorPosition = newValue.indexOf(" ", mentionIndex + insertValue.length) + 1
 					setCursorPosition(newCursorPosition)
 					setIntendedCursorPosition(newCursorPosition)
-
-					// Scroll to cursor position without losing focus
-					setTimeout(() => {
-						if (textAreaRef.current) {
-							textAreaRef.current.setSelectionRange(newCursorPosition, newCursorPosition)
-							textAreaRef.current.scrollTop = textAreaRef.current.scrollHeight
-						}
-					}, 0)
 				}
 			},
 			[setInputValue, cursorPosition, searchQuery],
@@ -655,6 +649,8 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 					if (!sendingDisabled) {
 						setIsTextAreaFocused(false)
 						onSend()
+					} else {
+						onSendBlocked?.({ text: inputValue, images: [...selectedImages], files: [...selectedFiles] })
 					}
 				}
 
@@ -724,6 +720,7 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 			},
 			[
 				onSend,
+				onSendBlocked,
 				showContextMenu,
 				searchQuery,
 				selectedMenuIndex,
@@ -740,6 +737,8 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 				slashCommandsQuery,
 				handleSlashCommandsSelect,
 				sendingDisabled,
+				selectedImages,
+				selectedFiles,
 				chatInputSendShortcut,
 				mcpServers,
 				remoteConfigSettings?.remoteGlobalSkills,
@@ -1620,6 +1619,12 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 									if (!sendingDisabled) {
 										setIsTextAreaFocused(false)
 										onSend()
+									} else {
+										onSendBlocked?.({
+											text: inputValue,
+											images: [...selectedImages],
+											files: [...selectedFiles],
+										})
 									}
 								}}
 							/>

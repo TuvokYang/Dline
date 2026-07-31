@@ -71,6 +71,17 @@ const mergeClineMessagesByTs = (existing: ClineMessage[], incoming: ClineMessage
 	return merged.sort((left, right) => left.ts - right.ts)
 }
 
+const mergeFetchedClineMessagesByTs = (existing: ClineMessage[], fetched: ClineMessage[]): ClineMessage[] => {
+	const fetchedByTs = new Map(fetched.map((message) => [message.ts, message]))
+	for (const message of existing) {
+		const fetchedMessage = fetchedByTs.get(message.ts)
+		if (message.partial !== true && fetchedMessage?.partial !== true) {
+			fetchedByTs.set(message.ts, message)
+		}
+	}
+	return mergeClineMessagesByTs(existing, [...fetchedByTs.values()])
+}
+
 const hasExactInteractionAnchor = (messages: readonly ClineMessage[], interaction: ActiveInteractionView): boolean =>
 	messages.some(
 		(message) =>
@@ -391,7 +402,7 @@ export const ExtensionStateContextProvider: React.FC<{
 						return
 					}
 					const converted = resp.messages.map((message) => convertProtoToClineMessage(message))
-					setClineMessages((prev) => mergeClineMessagesByTs(prev, converted))
+					setClineMessages((prev) => mergeFetchedClineMessagesByTs(prev, converted))
 					setFirstItemIndex(Math.max(0, resp.startIndex))
 					if (
 						expectedInteraction &&
@@ -452,7 +463,7 @@ export const ExtensionStateContextProvider: React.FC<{
 						return
 					}
 					const converted = resp.messages.map((message) => convertProtoToClineMessage(message))
-					setClineMessages((prev) => mergeClineMessagesByTs(prev, converted))
+					setClineMessages((prev) => mergeFetchedClineMessagesByTs(prev, converted))
 				})
 				.catch(() => {})
 				.finally(() => {

@@ -85,9 +85,12 @@ export class AskFollowupQuestionToolHandler implements IToolHandler, IPartialBlo
 		const text = outcome.draft?.text
 		const images = outcome.draft?.images
 		const followupFiles = outcome.draft?.files
+		const selectedOption =
+			options.find((option) => text === option) ??
+			options.filter((option) => text?.startsWith(`${option}: `)).sort((left, right) => right.length - left.length)[0]
 
 		// Check if options contains the text response
-		if (optionsRaw && text && options.includes(text)) {
+		if (optionsRaw && selectedOption) {
 			telemetryService.captureOptionSelected(config.ulid ?? "", options.length, "act")
 
 			// Valid option selected, update last followup message with selected option
@@ -96,9 +99,9 @@ export class AskFollowupQuestionToolHandler implements IToolHandler, IPartialBlo
 			if (lastFollowupMessageIndex !== -1) {
 				const updatedText = JSON.stringify({
 					...sharedMessage,
-					selected: text,
+					selected: selectedOption,
 				} satisfies ClineAskQuestion)
-				await config.messageState.updateClineMessage(lastFollowupMessageIndex, { text: updatedText })
+				await config.callbacks.updateClineMessage(lastFollowupMessageIndex, { text: updatedText })
 				await config.messageState.flushMessageUpdate(lastFollowupMessageIndex)
 			}
 		} else {

@@ -38,6 +38,7 @@ interface MessagesAreaProps {
 	scrollBehavior: ScrollBehavior
 	chatState: ChatState
 	messageHandlers: MessageHandlers
+	onFollowupOptionSelect: (message: ClineMessage, option: string) => Promise<void>
 }
 
 type RenderRow = {
@@ -62,6 +63,7 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 	scrollBehavior,
 	chatState,
 	messageHandlers,
+	onFollowupOptionSelect,
 }) => {
 	const { clineMessages, setClineMessages, totalMessageCount, firstItemIndex, setFirstItemIndex } = useExtensionState()
 
@@ -364,23 +366,7 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 		}
 	}, [scrolledPastUserMessageRowOffset, scrollToRowOffset])
 
-	const {
-		expandedRows,
-		inputValue,
-		selectedImages,
-		selectedFiles,
-		setActiveQuote,
-		setInputValue,
-		setSelectedImages,
-		setSelectedFiles,
-	} = chatState
-
-	const handleInputConsumed = useCallback(() => {
-		setInputValue("")
-		setActiveQuote(null)
-		setSelectedImages([])
-		setSelectedFiles([])
-	}, [setInputValue, setActiveQuote, setSelectedImages, setSelectedFiles])
+	const { expandedRows, setActiveQuote } = chatState
 
 	const lastVisibleRow = useMemo(() => visibleGroupedMessages.at(-1), [visibleGroupedMessages])
 
@@ -437,10 +423,7 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 			toggleRowExpansion,
 			handleRowHeightChange,
 			setActiveQuote,
-			inputValue,
-			selectedImages,
-			selectedFiles,
-			handleInputConsumed,
+			onFollowupOptionSelect,
 			messageHandlers,
 			false,
 		)
@@ -460,10 +443,7 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 		toggleRowExpansion,
 		handleRowHeightChange,
 		setActiveQuote,
-		inputValue,
-		selectedImages,
-		selectedFiles,
-		handleInputConsumed,
+		onFollowupOptionSelect,
 		messageHandlers,
 	])
 

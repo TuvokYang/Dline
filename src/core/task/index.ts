@@ -1486,7 +1486,12 @@ export class Task {
 			if (!context.isCurrent()) return
 			const state = this.taskRuntime.getState()
 			const turn = state.turn
-			if (!turn || turn.turnId !== context.interaction.turnId) throw new Error("resume_turn_identity_mismatch")
+			if (!turn) throw new Error(`resume_turn_missing: interaction=${context.interaction.turnId}`)
+			if (turn.turnId !== context.interaction.turnId) {
+				throw new Error(
+					`resume_turn_identity_mismatch: runtime=${turn.turnId}, interaction=${context.interaction.turnId}`,
+				)
+			}
 			let lifecycle = turn.blocks.find((candidate) => candidate.dlineTid === context.interaction.interactionId)
 			if (!lifecycle) throw new Error("resume_interaction_block_missing")
 			const blocks = this.restoredTurnToolBlocks(turn)
@@ -2198,7 +2203,7 @@ export class Task {
 		await this.messageStateHandler.updateTaskHistory()
 
 		const savedApiConversationHistory = await getSavedApiConversationHistory(this.taskId)
-		this.messageStateHandler.apiConversationHistory = savedApiConversationHistory
+		await this.messageStateHandler.overwriteApiConversationHistory(savedApiConversationHistory)
 
 		await ensureTaskDirectoryExists(this.taskId)
 		await this.contextManager.initializeContextHistory(await ensureTaskDirectoryExists(this.taskId))
@@ -2352,7 +2357,11 @@ export class Task {
 			await this.diffViewProvider.revertChanges()
 
 			// Save state and update UI so the frontend reflects the pause
-			await this.flushTaskSnapshot()
+			await Promise.all([
+				this.flushTaskSnapshot(),
+				this.messageStateHandler.flushApiConversationHistory(),
+				this.messageStateHandler.flushUiMessages(),
+			])
 			await this.messageStateHandler.updateTaskHistory()
 			await this.postStateToWebview()
 
@@ -2527,7 +2536,11 @@ export class Task {
 		} finally {
 			// Final state update
 			try {
-				await this.flushTaskSnapshot()
+				await Promise.all([
+					this.flushTaskSnapshot(),
+					this.messageStateHandler.flushApiConversationHistory(),
+					this.messageStateHandler.flushUiMessages(),
+				])
 				await this.postStateToWebview()
 			} catch (error) {
 				Logger.error("Failed to post final state after terminate", error)
@@ -3166,6 +3179,11 @@ export class Task {
 			this.taskState.isWaitingForFirstChunk = false
 			Logger.debug(`[Task ${this.taskId}] attemptApiRequest: TTFB +${Math.round(performance.now() - apiReqStart)}ms`)
 		} catch (error) {
+			if (this.taskState.abort) {
+				this.taskState.isWaitingForFirstChunk = false
+				Logger.debug(`[Task ${this.taskId}] API request stopped after task cancellation`)
+				throw new Error("Dline instance aborted")
+			}
 			const isContextWindowExceededError = checkContextWindowExceededError(error)
 			const { model, providerId } = providerInfo
 			// Use provider-specific parseError if available, otherwise fall back to generic classification.
@@ -4459,7 +4477,9 @@ export class Task {
 			} catch (error) {
 				await streamCoordinator?.stop()
 				// abandoned happens when extension is no longer waiting for the cline instance to finish aborting (error is thrown here when any function in the for loop throws due to this.abort)
-				if (!this.taskState.abandoned) {
+				if (this.taskState.abort) {
+					Logger.debug(`[Task ${this.taskId}] API stream stopped after task cancellation`)
+				} else if (!this.taskState.abandoned) {
 					// Use provider-specific parseError if available, otherwise fall back to generic classification
 					const clineError =
 						requestScope.api.parseError?.(error, model.id) ??
@@ -4677,6 +4697,16 @@ export class Task {
 			await this.processNativeToolCalls(assistantTextOnly, partialToolBlocks)
 			await this.flushAssistantPresentationOrThrow() // finalization is immediate so no coalesced content remains pending
 			await this.executeFinalizedAssistantTurn()
+
+			const phaseAfterAssistantTurn = this.taskRuntime.getState().phase
+			if (
+				this.taskState.abort ||
+				phaseAfterAssistantTurn === TaskPhase.CANCELLING ||
+				phaseAfterAssistantTurn === TaskPhase.ABORTED ||
+				phaseAfterAssistantTurn === TaskPhase.COMPLETED
+			) {
+				return true
+			}
 
 			// now add to apiconversationhistory
 			// need to save assistant responses to file before proceeding to tool use since user can exit at any moment and we wouldn't be able to save the assistant's response

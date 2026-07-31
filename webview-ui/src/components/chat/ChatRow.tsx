@@ -88,10 +88,7 @@ interface ChatRowProps {
 	lastModifiedMessage?: ClineMessage
 	isLast: boolean
 	onHeightChange: (isTaller: boolean) => void
-	inputValue?: string
-	selectedImages?: string[]
-	selectedFiles?: string[]
-	onInputConsumed?: () => void
+	onFollowupOptionSelect?: (message: ClineMessage, option: string) => Promise<void>
 	sendMessageFromChatRow?: (text: string, images: string[], files: string[]) => void
 	onSetQuote: (text: string) => void
 	onCancelCommand?: () => void
@@ -155,10 +152,7 @@ export const ChatRowContent = memo(
 		onToggleExpand,
 		lastModifiedMessage,
 		isLast,
-		inputValue,
-		selectedImages,
-		selectedFiles,
-		onInputConsumed,
+		onFollowupOptionSelect,
 		sendMessageFromChatRow,
 		onSetQuote,
 		onCancelCommand,
@@ -1329,14 +1323,17 @@ export const ChatRowContent = memo(
 								</WithCopyButton>
 								<div className="pt-3">
 									<OptionsButtons
-										files={selectedFiles}
-										images={selectedImages}
-										inputValue={inputValue}
 										isActive={
-											(isLast && lastModifiedMessage?.ask === "followup") ||
-											(!selected && options && options.length > 0)
+											message.type === "ask" &&
+											message.ask === "followup" &&
+											taskViewState?.activeInteraction?.kind === "followup" &&
+											taskViewState.activeInteraction.askMessageTs === message.ts &&
+											taskViewState.activeInteraction.interactionId === message.interactionId &&
+											taskViewState.input.enabled === true
 										}
-										onInputConsumed={onInputConsumed}
+										onSelect={(option) =>
+											onFollowupOptionSelect ? onFollowupOptionSelect(message, option) : Promise.resolve()
+										}
 										options={options}
 										selected={selected}
 									/>

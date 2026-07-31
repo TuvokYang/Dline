@@ -18,10 +18,7 @@ interface MessageRendererProps {
 	onToggleExpand: (ts: number) => void
 	onHeightChange: (isTaller: boolean) => void
 	onSetQuote: (quote: string | null) => void
-	inputValue: string
-	selectedImages: string[]
-	selectedFiles: string[]
-	onInputConsumed: () => void
+	onFollowupOptionSelect: (message: ClineMessage, option: string) => Promise<void>
 	messageHandlers: MessageHandlers
 	footerActive: boolean
 }
@@ -39,10 +36,7 @@ export const MessageRenderer: React.FC<MessageRendererProps> = ({
 	onToggleExpand,
 	onHeightChange,
 	onSetQuote,
-	inputValue,
-	selectedImages,
-	selectedFiles,
-	onInputConsumed,
+	onFollowupOptionSelect,
 	messageHandlers,
 	footerActive,
 }) => {
@@ -111,7 +105,6 @@ export const MessageRenderer: React.FC<MessageRendererProps> = ({
 			})}
 			data-message-ts={messageOrGroup.ts}>
 			<ChatRow
-				inputValue={inputValue}
 				isExpanded={expandedRows[messageOrGroup.ts] || false}
 				isLast={isLastMessage}
 				isRequestInProgress={isRequestInProgress}
@@ -119,14 +112,12 @@ export const MessageRenderer: React.FC<MessageRendererProps> = ({
 				lastModifiedMessage={modifiedMessages.at(-1)}
 				message={messageOrGroup}
 				mode={mode}
+				onFollowupOptionSelect={onFollowupOptionSelect}
 				onHeightChange={onHeightChange}
-				onInputConsumed={onInputConsumed}
 				onSetQuote={onSetQuote}
 				onToggleExpand={onToggleExpand}
 				reasoningContent={reasoningData.reasoning}
 				responseStarted={reasoningData.responseStarted}
-				selectedFiles={selectedFiles}
-				selectedImages={selectedImages}
 				sendMessageFromChatRow={messageHandlers.handleSendMessage}
 			/>
 		</div>
@@ -144,10 +135,7 @@ export const createMessageRenderer = (
 	onToggleExpand: (ts: number) => void,
 	onHeightChange: (isTaller: boolean) => void,
 	onSetQuote: (quote: string | null) => void,
-	inputValue: string,
-	selectedImages: string[],
-	selectedFiles: string[],
-	onInputConsumed: () => void,
+	onFollowupOptionSelect: (message: ClineMessage, option: string) => Promise<void>,
 	messageHandlers: MessageHandlers,
 	footerActive: boolean,
 ) => {
@@ -157,16 +145,13 @@ export const createMessageRenderer = (
 			footerActive={footerActive}
 			groupedMessages={groupedMessages}
 			index={index}
-			inputValue={inputValue}
 			messageHandlers={messageHandlers}
 			messageOrGroup={messageOrGroup}
 			modifiedMessages={modifiedMessages}
+			onFollowupOptionSelect={onFollowupOptionSelect}
 			onHeightChange={onHeightChange}
-			onInputConsumed={onInputConsumed}
 			onSetQuote={onSetQuote}
 			onToggleExpand={onToggleExpand}
-			selectedFiles={selectedFiles}
-			selectedImages={selectedImages}
 		/>
 	)
 }

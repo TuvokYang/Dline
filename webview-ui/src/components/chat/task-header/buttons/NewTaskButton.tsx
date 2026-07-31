@@ -9,8 +9,9 @@ const NewTaskButton: React.FC<{
 }> = ({ className, onClick }) => {
 	return (
 		<Tooltip>
-			<TooltipContent side="left">Start a New Task</TooltipContent>
+			<TooltipContent side="left">Close Task</TooltipContent>
 			<TooltipTrigger
+				aria-label="Close Task"
 				className={cn(buttonVariants({ variant: "icon", size: "icon" }), "!overflow-visible !min-h-6", className)}
 				onClick={(e) => {
 					e.preventDefault()

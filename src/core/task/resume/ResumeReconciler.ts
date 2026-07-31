@@ -35,6 +35,15 @@ const ASK_INTERACTIONS: Partial<Record<ClineAsk, InteractionKind>> = {
 }
 
 const TERMINAL_BLOCK_PHASES = new Set([BlockPhase.COMPLETED, BlockPhase.REJECTED, BlockPhase.SKIPPED, BlockPhase.CANCELLED])
+const BLOCK_APPROVAL_INTERACTIONS = new Set<InteractionKind>([
+	"tool_approval",
+	"command_approval",
+	"browser_approval",
+	"mcp_approval",
+	"subagent_approval",
+	"spawn_task_approval",
+	"focus_chain_change",
+])
 
 function cloneSnapshot(snapshot: TaskSnapshot): TaskSnapshot {
 	const state = hydrateSnapshot(snapshot)
@@ -80,6 +89,7 @@ function rebuildReason(error: unknown, snapshot: TaskSnapshot | undefined, taskI
 interface PreparedResumeInput {
 	snapshot: TaskSnapshot
 	apiTail: readonly ClineStorageMessage[]
+	apiHistory?: readonly ClineStorageMessage[]
 	uiTail: readonly ClineMessage[]
 	apiTailStartIndex: number
 	diagnostics: ResumeDiagnostic[]
@@ -97,6 +107,7 @@ function prepareInput(input: ResumeInput): PreparedResumeInput {
 		return {
 			snapshot,
 			apiTail: input.apiHistory ? input.apiHistory.slice(snapshot.apiIndex + 1) : input.apiTail,
+			apiHistory: input.apiHistory,
 			uiTail: input.uiHistory ? selectResumeUiTail(snapshot, input.uiHistory) : input.uiTail,
 			apiTailStartIndex: input.apiHistory ? snapshot.apiIndex + 1 : (input.apiTailStartIndex ?? snapshot.apiIndex + 1),
 			diagnostics: [],
@@ -110,6 +121,7 @@ function prepareInput(input: ResumeInput): PreparedResumeInput {
 		return {
 			snapshot,
 			apiTail: apiHistory.slice(built.apiTailStartIndex),
+			apiHistory,
 			uiTail: built.apiTailStartIndex === 0 ? fullUiHistory : selectResumeUiTail(snapshot, fullUiHistory),
 			apiTailStartIndex: built.apiTailStartIndex,
 			diagnostics: [{ code: "snapshot_rebuilt", reason }],
@@ -117,8 +129,125 @@ function prepareInput(input: ResumeInput): PreparedResumeInput {
 	}
 }
 
-function interactionKind(message: ClineMessage): InteractionKind | undefined {
-	return message.type === "ask" && message.ask ? ASK_INTERACTIONS[message.ask] : undefined
+function isPendingCommandApproval(snapshot: TaskSnapshot, message: ClineMessage): boolean {
+	if (message.type !== "ask" || message.ask !== "command") return false
+	if (message.commandStatus !== undefined && message.commandStatus !== "pending") return false
+	const block = snapshot.turn?.blocks.find((candidate) => candidate.dlineTid === message.interactionId)
+	return !block || !TERMINAL_BLOCK_PHASES.has(block.phase)
+}
+
+function interactionKind(snapshot: TaskSnapshot, message: ClineMessage): InteractionKind | undefined {
+	if (message.type !== "ask" || !message.ask) return undefined
+	if (message.ask === "command" && !isPendingCommandApproval(snapshot, message)) return undefined
+	const kind = ASK_INTERACTIONS[message.ask]
+	if (!kind || !BLOCK_APPROVAL_INTERACTIONS.has(kind)) return kind
+	const block = snapshot.turn?.blocks.find((candidate) => candidate.dlineTid === message.interactionId)
+	return block && TERMINAL_BLOCK_PHASES.has(block.phase) ? undefined : kind
+}
+
+function clearInteractionOwnership(snapshot: TaskSnapshot, interactionId: string): void {
+	snapshot.interaction = undefined
+	snapshot.completion = undefined
+	if (snapshot.anchor?.interactionId === interactionId) {
+		snapshot.anchor = { ...snapshot.anchor, interactionId: undefined, uiMessageTs: undefined }
+	}
+	if (snapshot.turn?.activeDlineTid === interactionId) snapshot.turn.activeDlineTid = undefined
+}
+
+function retireTerminalBlockApproval(snapshot: TaskSnapshot): string | undefined {
+	const interaction = snapshot.interaction
+	if (!interaction || !BLOCK_APPROVAL_INTERACTIONS.has(interaction.kind)) return undefined
+	const block = snapshot.turn?.blocks.find((candidate) => candidate.dlineTid === interaction.interactionId)
+	if (!block || !TERMINAL_BLOCK_PHASES.has(block.phase)) return undefined
+	clearInteractionOwnership(snapshot, interaction.interactionId)
+	return interaction.interactionId
+}
+
+function retireAcceptedBlockApproval(snapshot: TaskSnapshot): string | undefined {
+	const interaction = snapshot.interaction
+	if (
+		!interaction ||
+		interaction.kind === "command_approval" ||
+		!BLOCK_APPROVAL_INTERACTIONS.has(interaction.kind) ||
+		interaction.status !== "resolving"
+	) {
+		return undefined
+	}
+	const block = snapshot.turn?.blocks.find((candidate) => candidate.dlineTid === interaction.interactionId)
+	if (block && !TERMINAL_BLOCK_PHASES.has(block.phase)) {
+		block.phase = BlockPhase.EXECUTING
+		block.requiresApproval = false
+	}
+	clearInteractionOwnership(snapshot, interaction.interactionId)
+	return interaction.interactionId
+}
+
+function retireCommandApproval(snapshot: TaskSnapshot, uiMessages: readonly ClineMessage[]): string | undefined {
+	const interaction = snapshot.interaction
+	if (interaction?.kind !== "command_approval") return undefined
+	let commandMessage: ClineMessage | undefined
+	for (let index = uiMessages.length - 1; index >= 0; index--) {
+		const candidate = uiMessages[index]
+		if (candidate?.type === "ask" && candidate.ask === "command" && candidate.interactionId === interaction.interactionId) {
+			commandMessage = candidate
+			break
+		}
+	}
+	const block = snapshot.turn?.blocks.find((candidate) => candidate.dlineTid === interaction.interactionId)
+	const responseAccepted = interaction.status === "resolving"
+	const blockPassedApproval = block !== undefined && TERMINAL_BLOCK_PHASES.has(block.phase)
+	const messagePassedApproval =
+		commandMessage !== undefined && commandMessage.commandStatus !== undefined && commandMessage.commandStatus !== "pending"
+	if (!responseAccepted && !blockPassedApproval && !messagePassedApproval) return undefined
+
+	clearInteractionOwnership(snapshot, interaction.interactionId)
+	if (!block) return interaction.interactionId
+
+	block.requiresApproval = false
+	switch (commandMessage?.commandStatus) {
+		case "completed":
+		case "failed":
+			block.phase = BlockPhase.COMPLETED
+			break
+		case "cancelled":
+			block.phase = BlockPhase.CANCELLED
+			break
+		case "skipped":
+			block.phase = BlockPhase.SKIPPED
+			break
+		default:
+			if (!TERMINAL_BLOCK_PHASES.has(block.phase)) block.phase = BlockPhase.EXECUTING
+	}
+	return interaction.interactionId
+}
+
+/** Rebuild a stale snapshot's complete tool turn from one exact persisted ask anchor. */
+function restoreAnchoredInteractionTurn(
+	snapshot: TaskSnapshot,
+	message: ClineMessage,
+	uiMessages: readonly ClineMessage[],
+	apiHistory: readonly ClineStorageMessage[] | undefined,
+	diagnostics: ResumeDiagnostic[],
+): Set<string> {
+	const interactionId = message.interactionId
+	if (!interactionId || snapshot.turn?.blocks.some((block) => block.dlineTid === interactionId)) return new Set()
+	const apiIndex = message.conversationHistoryIndex
+	if (!apiHistory || apiIndex === undefined || !Number.isInteger(apiIndex) || apiIndex < 0) return new Set()
+	const anchored = apiHistory[apiIndex]
+	const matchingBlocks =
+		anchored?.role === "assistant" && Array.isArray(anchored.content)
+			? anchored.content.filter((block) => block.type === "tool_use" && block.dline_tid === interactionId)
+			: []
+	if (matchingBlocks.length !== 1 || !anchored) return new Set()
+
+	const restored = foldResumeTail({
+		snapshot,
+		apiTail: [anchored],
+		uiTail: uiMessages,
+		apiTailStartIndex: apiIndex,
+	})
+	diagnostics.push(...restored.diagnostics)
+	return restored.answeredDlineTids
 }
 
 function bindPersistedInteraction(snapshot: TaskSnapshot, message: ClineMessage, kind: InteractionKind): void {
@@ -170,19 +299,28 @@ function bindPersistedInteraction(snapshot: TaskSnapshot, message: ClineMessage,
 function reconcilePersistedInteraction(
 	snapshot: TaskSnapshot,
 	uiMessages: readonly ClineMessage[],
-	answeredDlineTids: ReadonlySet<string>,
+	initialAnsweredDlineTids: ReadonlySet<string>,
+	apiHistory: readonly ClineStorageMessage[] | undefined,
 	diagnostics: ResumeDiagnostic[],
 ): void {
+	const answeredDlineTids = new Set(initialAnsweredDlineTids)
 	const current = snapshot.interaction
 	if (current && answeredDlineTids.has(current.interactionId)) {
 		snapshot.interaction = undefined
 		snapshot.completion = undefined
 	}
+	for (const retiredInteractionId of [
+		retireTerminalBlockApproval(snapshot),
+		retireCommandApproval(snapshot, uiMessages),
+		retireAcceptedBlockApproval(snapshot),
+	]) {
+		if (retiredInteractionId) answeredDlineTids.add(retiredInteractionId)
+	}
 
 	const currentTurnIndex = snapshot.turn?.assistantApiIndex ?? snapshot.apiIndex
 	let latest: { message: ClineMessage; kind: InteractionKind } | undefined
 	for (const message of uiMessages) {
-		const kind = interactionKind(message)
+		const kind = interactionKind(snapshot, message)
 		if (!kind || !message.interactionId || answeredDlineTids.has(message.interactionId)) continue
 		const preservesKnownIdentity =
 			message.interactionId === snapshot.interaction?.interactionId ||
@@ -217,7 +355,8 @@ function reconcilePersistedInteraction(
 				(message) =>
 					message.type === "ask" &&
 					message.ask === expectedAsk &&
-					message.interactionId === snapshot.interaction?.interactionId,
+					message.interactionId === snapshot.interaction?.interactionId &&
+					interactionKind(snapshot, message) === snapshot.interaction?.kind,
 			)
 			if (anchored) {
 				bindPersistedInteraction(snapshot, anchored, snapshot.interaction.kind)
@@ -230,6 +369,12 @@ function reconcilePersistedInteraction(
 		return
 	}
 
+	const interactionId = latest.message.interactionId
+	if (!interactionId) return
+	for (const dlineTid of restoreAnchoredInteractionTurn(snapshot, latest.message, uiMessages, apiHistory, diagnostics)) {
+		answeredDlineTids.add(dlineTid)
+	}
+	if (answeredDlineTids.has(interactionId)) return
 	bindPersistedInteraction(snapshot, latest.message, latest.kind)
 }
 
@@ -326,7 +471,7 @@ export function reconcileResume(input: ResumeInput): ResumeResult {
 		next.runtimeError = undefined
 	}
 
-	reconcilePersistedInteraction(next, prepared.uiTail, folded.answeredDlineTids, diagnostics)
+	reconcilePersistedInteraction(next, prepared.uiTail, folded.answeredDlineTids, prepared.apiHistory, diagnostics)
 	clearTerminalApprovalOwner(next)
 	stopWithoutChangingInteraction(next)
 

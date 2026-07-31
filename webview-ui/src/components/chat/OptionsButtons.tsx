@@ -1,7 +1,6 @@
-import { AskResponseRequest } from "@shared/proto/dline/task"
+import { useState } from "react"
 import styled from "styled-components"
 import { CODE_BLOCK_BG_COLOR } from "@/components/common/CodeBlock"
-import { TaskServiceClient } from "@/services/grpc-client"
 
 const OptionButton = styled.button<{ isSelected?: boolean; isNotSelectable?: boolean }>`
 	padding: 8px 12px;
@@ -27,27 +26,19 @@ export const OptionsButtons = ({
 	options,
 	selected,
 	isActive,
-	inputValue,
-	images,
-	files,
-	onInputConsumed,
-	onBeforeApprove,
+	onSelect,
 }: {
 	options?: string[]
 	selected?: string
 	isActive?: boolean
-	inputValue?: string
-	images?: string[]
-	files?: string[]
-	onInputConsumed?: () => void
-	onBeforeApprove?: (option: string, inputValue?: string) => string
+	onSelect?: (option: string) => Promise<void>
 }) => {
+	const [pending, setPending] = useState(false)
 	if (!options?.length) {
 		return null
 	}
 
 	const hasSelected = selected !== undefined && options.includes(selected)
-	const trimmedInput = inputValue?.trim()
 
 	return (
 		<div
@@ -61,32 +52,27 @@ export const OptionsButtons = ({
 			</div> */}
 			{options.map((option, index) => (
 				<OptionButton
+					aria-pressed={option === selected}
 					className="options-button"
+					disabled={hasSelected || !isActive || pending || !onSelect}
 					id={`options-button-${index}`}
-					isNotSelectable={hasSelected || !isActive}
+					isNotSelectable={hasSelected || !isActive || pending || !onSelect}
 					isSelected={option === selected}
 					key={index}
 					onClick={async () => {
-						if (hasSelected || !isActive) {
+						if (hasSelected || !isActive || pending || !onSelect) {
 							return
 						}
+						setPending(true)
 						try {
-							const responseText = onBeforeApprove
-								? onBeforeApprove(option, trimmedInput)
-								: option + (trimmedInput ? `: ${trimmedInput}` : "")
-							await TaskServiceClient.askResponse(
-								AskResponseRequest.create({
-									responseType: "messageResponse",
-									text: responseText,
-									images: images ?? [],
-									files: files ?? [],
-								}),
-							)
-							onInputConsumed?.()
+							await onSelect(option)
 						} catch (error) {
 							console.error("Error sending option response:", error)
+						} finally {
+							setPending(false)
 						}
-					}}>
+					}}
+					type="button">
 					<span className="ph-no-capture">{option}</span>
 				</OptionButton>
 			))}
