@@ -70,6 +70,16 @@ async function returnToChat(sidebar: Frame): Promise<void> {
 	await expect(sidebar.getByTestId("chat-input")).toBeVisible()
 }
 
+async function setAutoApproveAction(sidebar: Frame, label: string, enabled: boolean): Promise<void> {
+	await sidebar.getByLabel("Open auto-approve settings").click()
+	const checkbox = sidebar.locator("vscode-checkbox").filter({ hasText: label })
+	await expect(checkbox).toHaveCount(1)
+	const isChecked = () => checkbox.evaluate((element) => Boolean((element as HTMLInputElement).checked))
+	if ((await isChecked()) !== enabled) await sidebar.getByText(label, { exact: true }).click()
+	await expect.poll(isChecked).toBe(enabled)
+	await sidebar.getByLabel("Close auto-approve settings").click()
+}
+
 async function expectShortcutTurn(
 	sidebar: Frame,
 	server: { openAiRequestCount: number },
@@ -274,6 +284,187 @@ e2e(
 		)
 		const output = await E2ETestHelper.readDlineOutput(userDataDir)
 		expect(output).toContain("[TerminalManager] Running command")
+		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+	},
+)
+
+e2e(
+	"Terminal - configured output limit bounds the final tool result and preserves the full log",
+	async ({ dlineDir, helper, page, server, sidebar, userDataDir }) => {
+		e2e.setTimeout(240_000)
+		await helper.signin(sidebar)
+		await openSettings(page, sidebar)
+		await sidebar.getByTestId("tab-terminal").click()
+		await setRangeValue(sidebar.locator("#terminal-output-limit"), "100")
+		await expect.poll(async () => (await readSettings(dlineDir)).terminalOutputLineLimit).toBe(100)
+		await returnToChat(sidebar)
+		await setAutoApproveAction(sidebar, "Execute safe commands", false)
+
+		const outputPrefix = "E2E_TERMINAL_LIMIT_LINE_"
+		const prefixCodePoints = [...outputPrefix].map((character) => character.codePointAt(0)).join(",")
+		const command = `node -e "const p=String.fromCodePoint(${prefixCodePoints}); for(let i=0;i<220;i++) console.log(p+i)"`
+		server.resetOpenAiMock()
+		server.enqueueOpenAiResponses(
+			{
+				type: "tool",
+				id: "call_terminal_output_limit",
+				name: "execute_command",
+				arguments: {
+					command,
+					workdirectory: ".",
+					requires_approval: true,
+					synchronous: true,
+					timeout: 60,
+				},
+			},
+			{
+				type: "tool",
+				id: "call_terminal_output_limit_completion",
+				name: "attempt_completion",
+				arguments: { result: "E2E_TERMINAL_OUTPUT_LIMIT_OK" },
+				expectedToolResultCount: 1,
+				expectedToolResults: [
+					{
+						callId: "call_terminal_output_limit",
+						contentIncludes: [
+							"Command executed successfully (exit code 0).",
+							`${outputPrefix}0`,
+							`${outputPrefix}219`,
+							"lines written to",
+							"Full output saved to:",
+						],
+					},
+				],
+			},
+		)
+
+		const input = sidebar.getByTestId("chat-input")
+		await input.fill("Run a bounded foreground output command.")
+		await sidebar.getByTestId("send-button").click()
+		await expect(sidebar.getByText("Approve", { exact: true })).toBeVisible({ timeout: 60_000 })
+		await sidebar.getByText("Approve", { exact: true }).click()
+		await expect(sidebar.getByText("E2E_TERMINAL_OUTPUT_LIMIT_OK", { exact: false }).last()).toBeVisible({
+			timeout: 90_000,
+		})
+
+		const continuation = server.getMockConsumptions("openai-compatible-chat")[1]
+		expect(continuation.contractError).toBeUndefined()
+		const [toolResult] = continuation.requestToolResults.filter((result) => result.callId === "call_terminal_output_limit")
+		expect(toolResult).toBeDefined()
+		expect(toolResult.content).toContain(`${outputPrefix}0`)
+		expect(toolResult.content).toContain(`${outputPrefix}219`)
+		expect(toolResult.content).not.toContain(`${outputPrefix}100\n`)
+		const visibleMarkers = toolResult.content.match(new RegExp(outputPrefix, "g")) ?? []
+		expect(visibleMarkers.length).toBeGreaterThan(0)
+		expect(visibleMarkers.length).toBeLessThanOrEqual(100)
+		const logPath = toolResult.content.match(/Full output saved to:\s*([^\r\n]+)/)?.[1]?.trim()
+		if (!logPath) throw new Error("Bounded command result did not include its full-output log path")
+		const log = await readFile(logPath, "utf8")
+		expect(log).toContain(`${outputPrefix}0`)
+		expect(log).toContain(`${outputPrefix}219`)
+		expect(log.match(new RegExp(outputPrefix, "g"))).toHaveLength(220)
+		await expect(sidebar.getByRole("button", { name: "Copy command" }).last()).toBeVisible()
+		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+	},
+)
+
+e2e(
+	"Terminal - automatic handoff exposes a background Activity and injects only status plus log metadata",
+	async ({ helper, server, sidebar, userDataDir }) => {
+		e2e.setTimeout(240_000)
+		await helper.signin(sidebar)
+		await setAutoApproveAction(sidebar, "Execute safe commands", false)
+		const startedMarker = "E2E_AUTO_BACKGROUND_OUTPUT_STARTED"
+		const finishedMarker = "E2E_AUTO_BACKGROUND_OUTPUT_FINISHED"
+		const startedCodePoints = [...startedMarker].map((character) => character.codePointAt(0)).join(",")
+		const finishedCodePoints = [...finishedMarker].map((character) => character.codePointAt(0)).join(",")
+		const command = `node -e "const s=String.fromCodePoint(${startedCodePoints}); const f=String.fromCodePoint(${finishedCodePoints}); console.log(s); setTimeout(()=>console.log(f),30000)"`
+		server.resetOpenAiMock()
+		server.enqueueOpenAiResponses(
+			{
+				type: "tool",
+				id: "call_terminal_automatic_background",
+				name: "execute_command",
+				arguments: {
+					command,
+					workdirectory: ".",
+					requires_approval: true,
+					timeout: 60,
+				},
+			},
+			{
+				type: "tool",
+				id: "call_terminal_automatic_background_qna",
+				name: "qna_respond",
+				arguments: { response: "E2E_AUTO_BACKGROUND_HANDOFF_READY" },
+				expectedToolResults: [
+					{
+						callId: "call_terminal_automatic_background",
+						contentIncludes: [
+							"Command is still running after 10 seconds and is now tracked in the background.",
+							"Log file:",
+						],
+					},
+				],
+				expectedRequestIncludes: ["# Background Commands", "running", "log:"],
+				expectedRequestExcludes: [startedMarker, finishedMarker],
+			},
+			{
+				type: "tool",
+				id: "call_terminal_automatic_background_completion",
+				name: "attempt_completion",
+				arguments: { result: "E2E_AUTO_BACKGROUND_RESULT_OK" },
+				expectedRequestIncludes: [
+					"E2E_AUTO_BACKGROUND_FEEDBACK",
+					"# Background Results",
+					"## Background Command Results",
+					"completed",
+					"log:",
+				],
+				expectedRequestExcludes: [startedMarker, finishedMarker],
+			},
+		)
+
+		const input = sidebar.getByTestId("chat-input")
+		await input.fill("Run a command that should hand off automatically after ten seconds.")
+		await sidebar.getByTestId("send-button").click()
+		await expect(sidebar.getByText("Approve", { exact: true })).toBeVisible({ timeout: 60_000 })
+		await sidebar.getByText("Approve", { exact: true }).click()
+
+		await sidebar.getByRole("tab", { name: /Activity/ }).click()
+		await sidebar.getByRole("button", { name: "All", exact: true }).first().click()
+		const activity = sidebar.getByTestId("activity-item").filter({ hasText: "Background Command" })
+		await expect(activity).toHaveCount(1, { timeout: 30_000 })
+		await expect(activity).toContainText("running", { timeout: 30_000 })
+		await activity.locator("button").first().click()
+		const logLink = activity.getByRole("button", { name: /Open log file/ })
+		await expect(logLink).toBeVisible()
+		const logPath = (await logLink.getAttribute("title"))?.replace(/^Click to open:\s*/, "")
+		if (!logPath) throw new Error("Background Activity did not expose its log path")
+
+		await sidebar.getByRole("tab", { name: "Chat", exact: true }).click()
+		await expect(sidebar.getByText("E2E_AUTO_BACKGROUND_HANDOFF_READY", { exact: true })).toBeVisible({
+			timeout: 60_000,
+		})
+		const handoff = server.getMockConsumptions("openai-compatible-chat")[1]
+		expect(handoff.contractError).toBeUndefined()
+
+		await sidebar.getByRole("tab", { name: /Activity/ }).click()
+		await sidebar.getByRole("button", { name: "All", exact: true }).first().click()
+		await expect(activity).toContainText("completed", { timeout: 90_000 })
+		await expect.poll(async () => readFile(logPath, "utf8").catch(() => ""), { timeout: 90_000 }).toContain(finishedMarker)
+		await sidebar.getByRole("tab", { name: "Chat", exact: true }).click()
+		await expect(input).toBeEnabled()
+		await input.fill("E2E_AUTO_BACKGROUND_FEEDBACK")
+		await input.press("Enter")
+		await expect(sidebar.getByText("E2E_AUTO_BACKGROUND_RESULT_OK", { exact: false }).last()).toBeVisible({
+			timeout: 60_000,
+		})
+		const completion = server.getMockConsumptions("openai-compatible-chat")[2]
+		expect(completion.contractError).toBeUndefined()
+		const persistedLog = await readFile(logPath, "utf8")
+		expect(persistedLog).toContain(startedMarker)
+		expect(persistedLog).toContain(finishedMarker)
 		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
 	},
 )
