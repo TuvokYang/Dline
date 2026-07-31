@@ -420,8 +420,8 @@ export class SubagentRunner {
 			if (this.shouldAbort()) {
 				await this.abort()
 				const error = "Subagent run cancelled."
-				onProgress({ status: "failed", error, stats: { ...stats } })
-				return { status: "failed", error, stats }
+				onProgress({ status: "cancelled", error, stats: { ...stats } })
+				return { status: "cancelled", error, stats }
 			}
 
 			const conversation: ClineStorageMessage[] = [
@@ -450,8 +450,8 @@ export class SubagentRunner {
 				if (this.shouldAbort()) {
 					await this.abort()
 					const error = "Subagent run cancelled."
-					onProgress({ status: "failed", error, stats: { ...stats } })
-					return { status: "failed", error, stats }
+					onProgress({ status: "cancelled", error, stats: { ...stats } })
+					return { status: "cancelled", error, stats }
 				}
 
 				if (
@@ -765,8 +765,8 @@ export class SubagentRunner {
 					if (this.shouldAbort()) {
 						await this.abort()
 						const error = "Subagent run cancelled."
-						onProgress({ status: "failed", error, stats: { ...stats } })
-						return { status: "failed", error, stats }
+						onProgress({ status: "cancelled", error, stats: { ...stats } })
+						return { status: "cancelled", error, stats }
 					}
 				}
 

@@ -285,6 +285,7 @@ export class SubagentJobManager {
 		batch.finishedAt = Date.now()
 		if (jobs.some((job) => job.status === "timeout")) batch.status = "timeout"
 		else if (jobs.some((job) => job.status === "failed")) batch.status = "failed"
+		else if (jobs.some((job) => job.status === "cancelled")) batch.status = "cancelled"
 		else batch.status = "completed"
 	}
 

@@ -278,13 +278,14 @@ export default function SubagentStatusRow({ message }: SubagentStatusRowProps) {
 	const singular = data.items.length === 1
 	const title = singular ? "Dline wants to use a subagent:" : "Dline wants to use subagents:"
 	const isPromptConstructionRow = message.ask === "use_subagents" || message.say === "use_subagents"
-	const statusSummary = data.items.some((entry) => entry.background)
-		? "Running in background"
-		: data.status === "timeout"
+	const statusSummary =
+		data.status === "timeout"
 			? "Timed out"
 			: data.status === "cancelled"
 				? "Cancelled"
-				: undefined
+				: data.status === "running" && data.items.some((entry) => entry.background)
+					? "Running in background"
+					: undefined
 	const toggleItem = (index: number) => {
 		setExpandedItems((prev) => ({
 			...prev,

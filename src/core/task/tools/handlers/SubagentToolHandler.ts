@@ -250,7 +250,8 @@ export function buildStatusPayload(
  */
 function formatSummary(entries: SubagentStatusItem[]): string {
 	const failures = entries.filter((entry) => entry.status === "failed" || entry.status === "timeout").length
-	const successCount = entries.length - failures
+	const successCount = entries.filter((entry) => entry.status === "completed").length
+	const cancellations = entries.filter((entry) => entry.status === "cancelled").length
 	const totalToolCalls = entries.reduce((acc, entry) => acc + (entry.toolCalls || 0), 0)
 	const maxContextUsagePercentage = entries.reduce((acc, entry) => Math.max(acc, entry.contextUsagePercentage || 0), 0)
 	const maxContextTokens = entries.reduce((acc, entry) => Math.max(acc, entry.contextTokens || 0), 0)
@@ -260,6 +261,7 @@ function formatSummary(entries: SubagentStatusItem[]): string {
 		`Total: ${entries.length}`,
 		`Succeeded: ${successCount}`,
 		`Failed: ${failures}`,
+		`Cancelled: ${cancellations}`,
 		`Tool calls: ${totalToolCalls}`,
 		`Peak context usage: ${maxContextTokens.toLocaleString()} / ${contextWindow.toLocaleString()} (${maxContextUsagePercentage.toFixed(1)}%)`,
 		"",
@@ -520,7 +522,7 @@ export class UseSubagentToolHandler implements IFullyManagedTool {
 			),
 			undefined,
 			undefined,
-			true,
+			false,
 			block.ts,
 		)
 		let result: SubagentExecResult
@@ -730,7 +732,7 @@ export class UseSubagentsToolHandler implements IFullyManagedTool {
 			),
 			undefined,
 			undefined,
-			true,
+			false,
 			block.ts,
 		)
 		let results: SubagentExecResult[]
@@ -761,7 +763,9 @@ export class UseSubagentsToolHandler implements IFullyManagedTool {
 			? "timeout"
 			: entries.some((entry) => entry.status === "failed")
 				? "failed"
-				: "completed"
+				: entries.some((entry) => entry.status === "cancelled")
+					? "cancelled"
+					: "completed"
 		await config.callbacks.say(
 			"subagent",
 			JSON.stringify(
