@@ -17,7 +17,7 @@ export function getTaskCompletionTelemetry(config: TaskConfig) {
 	return {
 		provider,
 		modelId: model.id,
-		apiFormat: (model.info as any).apiFormat,
+		apiFormat: model.info.apiFormats?.[0],
 		timeToFirstTokenMs: config.taskState.taskFirstTokenTimeMs,
 		durationMs,
 		mode: currentMode,

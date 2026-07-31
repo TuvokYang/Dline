@@ -136,6 +136,49 @@ function tsProtoc(outDir, protoFiles, protoOptions) {
 	}
 }
 
+const OPTIONAL_REPEATED_MODEL_FIELDS = [
+	{ interfaceName: "ThinkingConfig", fieldName: "effortLevels" },
+	{ interfaceName: "ModelCapabilities", fieldName: "contextWindowTiers" },
+	{ interfaceName: "ModelCapabilities", fieldName: "tools" },
+	{ interfaceName: "ModelPricing", fieldName: "tiers" },
+	{ interfaceName: "ModelPricing", fieldName: "thinkingOutputPriceTiers" },
+	{ interfaceName: "ModelInfo", fieldName: "apiFormats" },
+]
+
+function makeOptionalRepeatedField(content, { interfaceName, fieldName }) {
+	let changed = false
+	const interfacePattern = new RegExp(`(export interface ${interfaceName} \\{[^}]*?)${fieldName}: ([A-Za-z0-9_.]+)\\[\\];`, "s")
+	if (interfacePattern.test(content)) {
+		content = content.replace(interfacePattern, `$1${fieldName}?: $2[];`)
+		changed = true
+	}
+
+	const blockStart = content.indexOf(`function createBase${interfaceName}()`)
+	if (blockStart < 0) return { content, changed }
+	const nextBlockStart = content.indexOf("\nfunction createBase", blockStart + 1)
+	const blockEnd = nextBlockStart < 0 ? content.length : nextBlockStart
+	let block = content.slice(blockStart, blockEnd)
+	const originalBlock = block
+
+	block = block.replaceAll(`${fieldName}: [],`, `${fieldName}: undefined,`)
+	block = block.replaceAll(`for (const v of message.${fieldName}) {`, `for (const v of message.${fieldName} ?? []) {`)
+	block = block.replace(new RegExp(`message\\.${fieldName}!?\\.push\\(`, "g"), `(message.${fieldName} ??= []).push(`)
+	block = block.replace(
+		new RegExp(`(${fieldName}:\\s*globalThis\\.Array\\.isArray\\([\\s\\S]*?)\\s*:\\s*\\[\\](,)`, "g"),
+		"$1 : undefined$2",
+	)
+	block = block.replace(
+		new RegExp(`(message\\.${fieldName}\\s*=\\s*object\\.${fieldName}\\?\\.map\\([\\s\\S]*?\\))\\s*\\|\\|\\s*\\[\\];`, "g"),
+		"$1 || undefined;",
+	)
+
+	if (block !== originalBlock) {
+		content = `${content.slice(0, blockStart)}${block}${content.slice(blockEnd)}`
+		changed = true
+	}
+	return { content, changed }
+}
+
 /**
  * Post-process generated model metadata to make selected repeated array fields optional (?).
  * Proto3 repeated fields cannot be marked optional, so we fix the TS output.
@@ -158,6 +201,11 @@ async function postProcessModels() {
 		}
 		let content = await fs.readFile(filePath, "utf-8")
 		let changed = false
+		for (const field of OPTIONAL_REPEATED_MODEL_FIELDS) {
+			const result = makeOptionalRepeatedField(content, field)
+			content = result.content
+			changed ||= result.changed
+		}
 
 		// 1. Make effortLevels optional in ThinkingConfig interface
 		if (content.includes("  effortLevels: string[];")) {

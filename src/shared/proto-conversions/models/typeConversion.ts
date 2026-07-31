@@ -156,7 +156,7 @@ export function fromProtobufOcaModelInfo(protoInfo: ProtoOcaModelInfo): OcaModel
 		},
 		description: protoInfo.description,
 		temperature: protoInfo.temperature,
-		apiFormat: protoInfo.apiFormat,
+		apiFormats: protoInfo.apiFormat !== undefined ? [protoInfo.apiFormat] : undefined,
 		modelName: protoInfo.modelName,
 		surveyId: protoInfo.surveyId,
 		banner: protoInfo.banner,

@@ -13,7 +13,7 @@ import { buildExternalBasicHeaders } from "@/services/EnvUtils"
 import { OcaModelInfo } from "@/shared/api"
 import { ClineStorageMessage } from "@/shared/messages/content"
 import { fetch } from "@/shared/net"
-import { ApiFormat } from "@/shared/proto/dline/models"
+import { ApiFormat } from "@/shared/proto/dline/models/metadata"
 import { Logger } from "@/shared/services/Logger"
 import { ApiHandler, type ApiHandlerContext } from ".."
 import { withRetry } from "../retry"
@@ -241,9 +241,10 @@ export class OcaHandler implements ApiHandler {
 
 	@withRetry()
 	async *createMessage(systemPrompt: string, messages: ClineStorageMessage[], tools?: OpenAITool[]): ApiStream {
-		if (this.modelInfo?.apiFormat === ApiFormat.OPENAI_RESPONSES) {
+		const apiFormat = this.modelInfo?.apiFormats?.[0]
+		if (apiFormat === ApiFormat.OPENAI_RESPONSES) {
 			yield* this.createMessageResponsesApi(systemPrompt, messages, tools)
-		} else if (this.modelInfo?.apiFormat === ApiFormat.ANTHROPIC_CHAT) {
+		} else if (apiFormat === ApiFormat.ANTHROPIC_CHAT) {
 			yield* this.createMessageMessagesApi(systemPrompt, messages, tools)
 		} else {
 			yield* this.createMessageChatApi(systemPrompt, messages, tools)

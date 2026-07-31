@@ -139,7 +139,7 @@ import {
 	ClineUserToolResultContentBlock,
 } from "@/shared/messages"
 import { ShowMessageType } from "@/shared/proto/dline/host"
-import { ApiFormat } from "@/shared/proto/dline/models"
+import { ApiFormat } from "@/shared/proto/dline/models/metadata"
 import { Logger } from "@/shared/services/Logger"
 import { Session } from "@/shared/services/Session"
 import { RuleContextBuilder } from "../context/instructions/user-instructions/RuleContextBuilder"
@@ -3017,7 +3017,7 @@ export class Task {
 	 * @returns Prompt context containing current rules, tools, model, and workspace state.
 	 */
 	private shouldUseNativeToolCalls(providerInfo: Readonly<ApiProviderInfo>): boolean {
-		const apiFormat = (providerInfo.model.info as { apiFormat?: ApiFormat }).apiFormat
+		const apiFormat = providerInfo.model.info.apiFormats?.[0]
 		const requested =
 			apiFormat === ApiFormat.OPENAI_RESPONSES ||
 			apiFormat === ApiFormat.OPENAI_RESPONSES_WEBSOCKET_MODE ||

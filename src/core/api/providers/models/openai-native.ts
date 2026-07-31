@@ -4,13 +4,13 @@
  */
 
 import type { ModelInfo } from "@shared/api"
-import { ApiFormat } from "@shared/proto/dline/models"
+import { ApiFormat } from "@shared/proto/dline/models/metadata"
 
 export const openAiNativeModels: Record<string, ModelInfo> = {
 	// === Frontier Models ===
 	"gpt-5.6-sol": {
 		id: "gpt-5.6-sol",
-		apiFormat: ApiFormat.OPENAI_RESPONSES,
+		apiFormats: [ApiFormat.OPENAI_RESPONSES],
 		temperature: 1,
 		capabilities: {
 			supportsTools: true,
@@ -38,7 +38,7 @@ export const openAiNativeModels: Record<string, ModelInfo> = {
 	},
 	"gpt-5.6-terra": {
 		id: "gpt-5.6-terra",
-		apiFormat: ApiFormat.OPENAI_RESPONSES,
+		apiFormats: [ApiFormat.OPENAI_RESPONSES],
 		temperature: 1,
 		capabilities: {
 			supportsTools: true,
@@ -66,7 +66,7 @@ export const openAiNativeModels: Record<string, ModelInfo> = {
 	},
 	"gpt-5.6-luna": {
 		id: "gpt-5.6-luna",
-		apiFormat: ApiFormat.OPENAI_RESPONSES,
+		apiFormats: [ApiFormat.OPENAI_RESPONSES],
 		temperature: 1,
 		capabilities: {
 			supportsTools: true,
@@ -94,7 +94,7 @@ export const openAiNativeModels: Record<string, ModelInfo> = {
 	},
 	"gpt-5.5": {
 		id: "gpt-5.5",
-		apiFormat: ApiFormat.OPENAI_RESPONSES,
+		apiFormats: [ApiFormat.OPENAI_RESPONSES],
 		temperature: 1,
 		capabilities: {
 			supportsTools: true,
@@ -109,7 +109,7 @@ export const openAiNativeModels: Record<string, ModelInfo> = {
 	},
 	"gpt-5.5-pro": {
 		id: "gpt-5.5-pro",
-		apiFormat: ApiFormat.OPENAI_RESPONSES,
+		apiFormats: [ApiFormat.OPENAI_RESPONSES],
 		temperature: 1,
 		capabilities: {
 			supportsTools: true,
@@ -124,7 +124,7 @@ export const openAiNativeModels: Record<string, ModelInfo> = {
 	},
 	"gpt-5.4": {
 		id: "gpt-5.4",
-		apiFormat: ApiFormat.OPENAI_RESPONSES,
+		apiFormats: [ApiFormat.OPENAI_RESPONSES],
 		temperature: 1,
 		capabilities: {
 			supportsTools: true,
@@ -139,7 +139,7 @@ export const openAiNativeModels: Record<string, ModelInfo> = {
 	},
 	"gpt-5.4-pro": {
 		id: "gpt-5.4-pro",
-		apiFormat: ApiFormat.OPENAI_RESPONSES,
+		apiFormats: [ApiFormat.OPENAI_RESPONSES],
 		temperature: 1,
 		capabilities: {
 			supportsTools: true,
@@ -154,7 +154,7 @@ export const openAiNativeModels: Record<string, ModelInfo> = {
 	},
 	"gpt-5.4-mini": {
 		id: "gpt-5.4-mini",
-		apiFormat: ApiFormat.OPENAI_RESPONSES,
+		apiFormats: [ApiFormat.OPENAI_RESPONSES],
 		temperature: 1,
 		capabilities: {
 			supportsTools: true,
@@ -169,7 +169,7 @@ export const openAiNativeModels: Record<string, ModelInfo> = {
 	},
 	"gpt-5.4-nano": {
 		id: "gpt-5.4-nano",
-		apiFormat: ApiFormat.OPENAI_RESPONSES,
+		apiFormats: [ApiFormat.OPENAI_RESPONSES],
 		temperature: 1,
 		capabilities: {
 			supportsTools: true,

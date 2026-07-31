@@ -1,6 +1,7 @@
 import { OcaModelInfo } from "@shared/api"
 import { StringRequest } from "@shared/proto/dline/common"
-import { ApiFormat, OcaCompatibleModelInfo, OcaModelInfo as ProtoOcaModelInfo } from "@shared/proto/dline/models"
+import { OcaCompatibleModelInfo, OcaModelInfo as ProtoOcaModelInfo } from "@shared/proto/dline/models"
+import { ApiFormat } from "@shared/proto/dline/models/metadata"
 import axios from "axios"
 import { HostProvider } from "@/hosts/host-provider"
 import { OcaAuthService } from "@/services/auth/oca/OcaAuthService"
@@ -31,7 +32,7 @@ function toAppOcaModelInfo(protoModel: ProtoOcaModelInfo, modelId: string): OcaM
 		id: modelId,
 		description: protoModel.description,
 		modelName: protoModel.modelName,
-		apiFormat: protoModel.apiFormat,
+		apiFormats: protoModel.apiFormat !== undefined ? [protoModel.apiFormat] : undefined,
 		surveyId: protoModel.surveyId,
 		surveyContent: protoModel.surveyContent,
 		banner: protoModel.banner,

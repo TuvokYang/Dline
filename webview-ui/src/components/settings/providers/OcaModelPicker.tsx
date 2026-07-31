@@ -16,7 +16,7 @@ function protoToAppOcaModelInfo(proto: ProtoOcaModelInfo, modelId: string): OcaM
 		id: modelId,
 		description: proto.description,
 		modelName: proto.modelName ?? modelId,
-		apiFormat: proto.apiFormat,
+		apiFormats: proto.apiFormat !== undefined ? [proto.apiFormat] : undefined,
 		surveyId: proto.surveyId,
 		surveyContent: proto.surveyContent,
 		banner: proto.banner,
@@ -53,6 +53,7 @@ function ocaToModelInfo(oca: OcaModelInfo, modelId: string): ModelInfo {
 		capabilities: oca.capabilities,
 		pricing: oca.pricing,
 		description: oca.description,
+		apiFormats: oca.apiFormats,
 	}
 }
 

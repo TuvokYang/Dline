@@ -83,23 +83,13 @@ message PriceTier {
 // ---- Layered Model Info types (new) ----
 
 
-/** Canonical per-model metadata (layered). */
-enum ApiFormat {
-  ANTHROPIC_CHAT = 0;
-  GEMINI_CHAT = 1;
-  OPENAI_CHAT = 2;
-  R1_CHAT = 3;
-  OPENAI_RESPONSES = 4;
-  OPENAI_RESPONSES_WEBSOCKET_MODE = 5;
-}
-
 message ModelInfo {
   string id = 1;
   optional string name = 2;
   optional string description = 3;
   optional dline.models.ModelCapabilities capabilities = 4;
   optional dline.models.ModelPricing pricing = 5;
-  optional ApiFormat api_format = 6;
+  repeated dline.models.ApiFormat api_formats = 6;
   optional double temperature = 7;
   optional string system_role = 8;
 }
@@ -167,7 +157,7 @@ message OpenRouterModelInfo {
   optional string name = 13;
   optional double temperature = 14;
   optional bool supports_reasoning = 15;
-  optional ApiFormat api_format = 16;
+  optional dline.models.ApiFormat api_format = 16;
   optional string currency = 17;
 }
 
@@ -461,7 +451,7 @@ message OcaModelInfo {
   // Canonical model identifier as reported by OCA
   string model_name = 17;
   // The API format used by this model
-  optional ApiFormat api_format = 18;
+  optional dline.models.ApiFormat api_format = 18;
   // Supports reasoning
   optional bool supports_reasoning = 19;
   // reasoning effort options
@@ -538,7 +528,7 @@ message OpenAiCompatibleModelInfo {
   repeated ModelTier tiers = 12;
   optional double temperature = 13;
   optional bool is_r1_format_required = 14;
-  optional ApiFormat api_format = 15;
+  optional dline.models.ApiFormat api_format = 15;
 }
 
 // Model info for LiteLLM models
@@ -556,7 +546,7 @@ message LiteLLMModelInfo {
   optional string description = 11;
   repeated ModelTier tiers = 12;
   optional double temperature = 13;
-  optional ApiFormat api_format = 14;
+  optional dline.models.ApiFormat api_format = 14;
   optional bool supports_reasoning = 15;
 }
 

@@ -34,7 +34,7 @@ import type { SystemPromptContext } from "@core/prompts/system-prompt/context"
 import type { TaskConfig } from "@core/task/tools/types/TaskConfig"
 import type { GlobalInstructionsFile } from "@shared/remote-config/schema"
 import { HostProvider } from "@/hosts/host-provider"
-import { ApiFormat } from "@/shared/proto/dline/models"
+import { ApiFormat } from "@/shared/proto/dline/models/metadata"
 import { Logger } from "@/shared/services/Logger"
 import { ClineDefaultTool } from "@/shared/tools"
 import { TaskState } from "../../../TaskState"
@@ -94,7 +94,7 @@ function createTaskConfig(nativeToolCallEnabled: boolean, options: any = {}): Ta
 				id: "anthropic/claude-sonnet-4.5",
 				info: {
 					contextWindow: options.contextWindow ?? 200_000,
-					apiFormat: ApiFormat.ANTHROPIC_CHAT,
+					apiFormats: [ApiFormat.ANTHROPIC_CHAT],
 					supportsPromptCache: true,
 					capabilities: {
 						contextWindow: options.contextWindow ?? 200_000,
@@ -199,7 +199,7 @@ function stubApiHandler(createMessage: any, contextWindow = 200_000) {
 			id: "anthropic/claude-sonnet-4.5",
 			info: {
 				contextWindow,
-				apiFormat: ApiFormat.ANTHROPIC_CHAT,
+				apiFormats: [ApiFormat.ANTHROPIC_CHAT],
 				supportsPromptCache: true,
 				capabilities: { contextWindow, supportsImages: false, supportsPromptCache: true, supportsTools: true },
 			},

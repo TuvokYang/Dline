@@ -3,6 +3,7 @@
  * Extracted from api.ts deepSeekModels (lines 2213-2238).
  */
 import type { ModelInfo } from "@shared/api"
+import { ApiFormat, ServerTool } from "@shared/proto/dline/models/metadata"
 
 export const deepSeekModels: Record<string, ModelInfo> = {
 	"deepseek-v4-pro": {
@@ -15,7 +16,9 @@ export const deepSeekModels: Record<string, ModelInfo> = {
 			supportsImages: false,
 			supportsPromptCache: true,
 			supportsReasoning: true,
+			tools: [ServerTool.WEB_SEARCH],
 		},
+		apiFormats: [ApiFormat.OPENAI_CHAT, ApiFormat.ANTHROPIC_CHAT],
 		pricing: {
 			inputPrice: 3,
 			outputPrice: 6,
@@ -34,7 +37,9 @@ export const deepSeekModels: Record<string, ModelInfo> = {
 			supportsImages: false,
 			supportsPromptCache: true,
 			supportsReasoning: true,
+			tools: [ServerTool.WEB_SEARCH],
 		},
+		apiFormats: [ApiFormat.OPENAI_CHAT, ApiFormat.OPENAI_RESPONSES, ApiFormat.ANTHROPIC_CHAT],
 		pricing: {
 			inputPrice: 1,
 			outputPrice: 2,

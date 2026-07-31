@@ -19,4 +19,6 @@ message BaseProviderConfig {
   optional bool pricing_tiers_enabled = 6;
   // OpenAI request processing tier. Used only by OpenAI-native profiles.
   optional string service_tier = 7;
+  // Provider request protocol selected for this profile.
+  optional dline.models.ApiFormat api_format = 8;
 }

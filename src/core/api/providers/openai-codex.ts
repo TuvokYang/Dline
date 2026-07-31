@@ -10,7 +10,7 @@ import { buildExternalBasicHeaders } from "@/services/EnvUtils"
 import { featureFlagsService } from "@/services/feature-flags"
 import { ClineStorageMessage } from "@/shared/messages/content"
 import { fetch } from "@/shared/net"
-import { ApiFormat } from "@/shared/proto/dline/models"
+import { ApiFormat } from "@/shared/proto/dline/models/metadata"
 import { FeatureFlag } from "@/shared/services/feature-flags/feature-flags"
 import { Logger } from "@/shared/services/Logger"
 import { AccountUsage, ApiHandler, ApiHandlerContext } from "../"
@@ -254,7 +254,7 @@ export class OpenAiCodexHandler implements ApiHandler {
 		if (!accessToken) {
 			throw new Error("Not authenticated with OpenAI Codex. Please sign in using the OpenAI Codex OAuth flow in settings.")
 		}
-		const useWebsocketMode = this.useWebsocketMode((model.info as any).apiFormat)
+		const useWebsocketMode = this.useWebsocketMode(model.info.apiFormats?.[0])
 		const { input, previousResponseId } = convertToOpenAIResponsesInput(messages, { usePreviousResponseId: useWebsocketMode })
 		const usePreviousResponseId = useWebsocketMode && !!previousResponseId
 

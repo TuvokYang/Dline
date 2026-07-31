@@ -111,7 +111,7 @@ function _convertOcaModelInfoToProtoOcaModelInfo(info: OcaModelInfo | undefined)
 		description: info.description,
 		thinkingConfig: convertThinkingConfigToProto(info.capabilities?.thinking),
 		supportsReasoning: info.capabilities?.supportsReasoning,
-		apiFormat: info.apiFormat,
+		apiFormat: info.apiFormats?.[0],
 		modelName: info.modelName,
 		surveyContent: info.surveyContent,
 		surveyId: info.surveyId,
@@ -145,7 +145,7 @@ function _convertProtoOcaModelInfoToOcaModelInfo(info: ProtoOcaModelInfo | undef
 		surveyId: info.surveyId,
 		banner: info.banner,
 		modelName: info.modelName,
-		apiFormat: info.apiFormat,
+		apiFormats: info.apiFormat !== undefined ? [info.apiFormat] : undefined,
 		supportsReasoning: info.supportsReasoning,
 		reasoningEffortOptions: info.reasoningEffortOptions,
 	}
@@ -205,9 +205,7 @@ function _convertProtoToLiteLLMModelInfo(info: LiteLLMModelInfo | undefined): Ap
 }
 
 // Convert application OpenAiCompatibleModelInfo to proto OpenAiCompatibleModelInfo
-function _convertOpenAiCompatibleModelInfoToProto(
-	info: AppModelInfo | undefined,
-): OpenAiCompatibleModelInfo | undefined {
+function _convertOpenAiCompatibleModelInfoToProto(info: AppModelInfo | undefined): OpenAiCompatibleModelInfo | undefined {
 	if (!info) {
 		return undefined
 	}
@@ -230,9 +228,7 @@ function _convertOpenAiCompatibleModelInfoToProto(
 }
 
 // Convert proto OpenAiCompatibleModelInfo to application OpenAiCompatibleModelInfo
-function _convertProtoToOpenAiCompatibleModelInfo(
-	info: OpenAiCompatibleModelInfo | undefined,
-): AppModelInfo | undefined {
+function _convertProtoToOpenAiCompatibleModelInfo(info: OpenAiCompatibleModelInfo | undefined): AppModelInfo | undefined {
 	if (!info) {
 		return undefined
 	}

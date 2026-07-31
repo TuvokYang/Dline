@@ -1,7 +1,7 @@
 import { HostProvider } from "@hosts/host-provider"
 import type { BrowserSettings } from "@shared/BrowserSettings"
 import { ShowMessageType } from "@shared/proto/dline/host/window"
-import { ApiFormat, apiFormatToJSON } from "@shared/proto/dline/models"
+import { ApiFormat, apiFormatToJSON } from "@shared/proto/dline/models/metadata"
 import type { TaskFeedbackType } from "@shared/WebviewMessage"
 import * as os from "os"
 import { ClineAccountUserInfo } from "@/services/auth/AuthService"

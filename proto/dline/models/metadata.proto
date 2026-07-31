@@ -4,6 +4,16 @@ package dline.models;
 
 option go_package = "github.com/dline/grpc-go/dline/models";
 
+/** API protocols supported by a model or selected by a provider profile. */
+enum ApiFormat {
+  ANTHROPIC_CHAT = 0;
+  GEMINI_CHAT = 1;
+  OPENAI_CHAT = 2;
+  R1_CHAT = 3;
+  OPENAI_RESPONSES = 4;
+  OPENAI_RESPONSES_WEBSOCKET_MODE = 5;
+}
+
 /** Thinking configuration for models that support thinking/reasoning. */
 message ThinkingConfig {
   optional bool supported = 1;
@@ -20,6 +30,12 @@ message ContextWindowTier {
   optional string api_model_suffix = 4;
 }
 
+/** Provider-hosted tools that execute outside Dline's local ToolExecutor. */
+enum ServerTool {
+  SERVER_TOOL_UNSPECIFIED = 0;
+  WEB_SEARCH = 1;
+}
+
 /** Model capability flags and limits. */
 message ModelCapabilities {
   optional bool supports_images = 1;
@@ -33,6 +49,7 @@ message ModelCapabilities {
   optional bool supports_tools = 9; // Supports API-native function/tool calling.
   optional double temperature = 10;
   repeated ContextWindowTier context_window_tiers = 11;
+  repeated ServerTool tools = 12;
 }
 
 /** Pricing tier for context-window-based tiered models. */

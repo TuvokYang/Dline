@@ -1,4 +1,4 @@
-import { ApiFormat } from "@shared/proto/dline/models"
+import { ApiFormat } from "@shared/proto/dline/models/metadata"
 import * as assert from "assert"
 import type { ITelemetryProvider, TelemetryProperties, TelemetrySettings } from "../providers/ITelemetryProvider"
 import { TelemetryMetadata, TelemetryService } from "../TelemetryService"

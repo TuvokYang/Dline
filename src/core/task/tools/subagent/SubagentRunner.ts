@@ -19,7 +19,7 @@ import { checkContextWindowExceededError } from "@/core/context/context-manageme
 import { getContextWindowInfo } from "@/core/context/context-management/context-window-utils"
 import { HostRegistryInfo } from "@/registry"
 import { ClineError, ClineErrorType } from "@/services/error"
-import { ApiFormat } from "@/shared/proto/dline/models"
+import { ApiFormat } from "@/shared/proto/dline/models/metadata"
 import { calculateApiCostAnthropic } from "@/utils/cost"
 import { isNativeToolCallingConfig, isNextGenModelFamily } from "@/utils/model-utils"
 import { TaskState } from "../../TaskState"
@@ -351,7 +351,7 @@ export class SubagentRunner {
 			}
 			stats.contextWindow = providerInfo.model.info.capabilities?.contextWindow || 0
 			stats.currency = providerInfo.model.info.pricing?.currency || "USD"
-			const apiFormat = (providerInfo.model.info as { apiFormat?: ApiFormat }).apiFormat
+			const apiFormat = providerInfo.model.info.apiFormats?.[0]
 			const nativeToolCallsRequested =
 				apiFormat === ApiFormat.OPENAI_RESPONSES ||
 				apiFormat === ApiFormat.OPENAI_RESPONSES_WEBSOCKET_MODE ||

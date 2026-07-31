@@ -2,7 +2,7 @@ import { ApiProfile } from "@shared/proto/dline/profile"
 import { expect } from "chai"
 import { afterEach, describe, it, vi } from "vitest"
 import { ClineStorageMessage } from "@/shared/messages/content"
-import { ApiFormat } from "@/shared/proto/dline"
+import { ApiFormat } from "@/shared/proto/dline/models/metadata"
 import { OcaHandler } from "../oca"
 
 const messages: ClineStorageMessage[] = [{ role: "user", content: "Hello" }]
@@ -22,7 +22,7 @@ describe("OcaHandler.createMessage", () => {
 
 	it("routes OPENAI_RESPONSES models to createMessageResponsesApi", async () => {
 		const handler = new OcaHandler({
-			profile: ApiProfile.create({ provider: "oca", modelInfo: { apiFormat: ApiFormat.OPENAI_RESPONSES } as any }),
+			profile: ApiProfile.create({ provider: "oca", modelInfo: { apiFormats: [ApiFormat.OPENAI_RESPONSES] } as any }),
 			mode: "act",
 		})
 
@@ -46,7 +46,7 @@ describe("OcaHandler.createMessage", () => {
 
 	it("routes ANTHROPIC_CHAT models to createMessageMessagesApi", async () => {
 		const handler = new OcaHandler({
-			profile: ApiProfile.create({ provider: "oca", modelInfo: { apiFormat: ApiFormat.ANTHROPIC_CHAT } as any }),
+			profile: ApiProfile.create({ provider: "oca", modelInfo: { apiFormats: [ApiFormat.ANTHROPIC_CHAT] } as any }),
 			mode: "act",
 		})
 
@@ -71,7 +71,10 @@ describe("OcaHandler.createMessage", () => {
 	it("defaults to createMessageChatApi for OPENAI_CHAT and undefined apiFormat", async () => {
 		for (const apiFormat of [ApiFormat.OPENAI_CHAT, undefined]) {
 			const handler = new OcaHandler({
-				profile: ApiProfile.create({ provider: "oca", modelInfo: { apiFormat } as any }),
+				profile: ApiProfile.create({
+					provider: "oca",
+					modelInfo: { apiFormats: apiFormat === undefined ? undefined : [apiFormat] } as any,
+				}),
 				mode: "act",
 			})
 
