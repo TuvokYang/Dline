@@ -77,6 +77,7 @@ export class ClineError extends Error {
 			request_id:
 				error.error?.request_id ||
 				error.request_id ||
+				error.requestID ||
 				error.response?.request_id ||
 				error.response?.headers?.["x-request-id"],
 			code: error.code || error?.cause?.code,
