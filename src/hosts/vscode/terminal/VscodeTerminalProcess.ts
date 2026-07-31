@@ -45,6 +45,7 @@ export class VscodeTerminalProcess extends EventEmitter<TerminalProcessEvents> i
 	private completionDetailsReceived = false
 	private completionDetailsWaiter: (() => void) | null = null
 	private terminationPromise: Promise<void> | null = null
+	private cancelledBeforeRun = false
 
 	constructor() {
 		super()
@@ -54,6 +55,7 @@ export class VscodeTerminalProcess extends EventEmitter<TerminalProcessEvents> i
 	}
 
 	async run(terminal: vscode.Terminal, command: string) {
+		if (this.cancelledBeforeRun) return
 		this.resolveStarted?.(Date.now())
 		this.resolveStarted = undefined
 		this.completionDetailsWaiter?.()
@@ -365,11 +367,20 @@ export class VscodeTerminalProcess extends EventEmitter<TerminalProcessEvents> i
 
 	/** Interrupt the active command, then dispose its terminal if it does not stop promptly. */
 	async terminate(): Promise<void> {
-		if (!this.terminal || this.completionEmitted) return
+		if (this.completionEmitted) return
 		if (this.terminationPromise) return this.terminationPromise
 
-		const terminal = this.terminal
 		this.signal = "SIGINT"
+		if (!this.terminal) {
+			this.cancelledBeforeRun = true
+			this.waitForShellIntegration = false
+			this.resolveStarted?.(Date.now())
+			this.resolveStarted = undefined
+			this.complete()
+			return
+		}
+
+		const terminal = this.terminal
 		terminal.sendText("\u0003", false)
 		if (this.hotTimer) {
 			clearTimeout(this.hotTimer)
