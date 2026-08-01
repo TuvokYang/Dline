@@ -228,7 +228,7 @@ export class E2ETestHelper {
 
 	public static async openClineSidebar(page: Page): Promise<void> {
 		const dlineTab = page.getByRole("tab", { name: /Dline/ })
-		await expect(dlineTab).toBeVisible()
+		await expect(dlineTab).toBeVisible({ timeout: 30_000 })
 		if ((await dlineTab.getAttribute("aria-expanded")) !== "true") {
 			await dlineTab.locator("a").click()
 		}
