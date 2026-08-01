@@ -1,4 +1,4 @@
-import { getTaskMetadata, readTaskHistoryFromState, saveTaskMetadata } from "@core/storage/disk"
+import { getTaskMetadata, saveTaskMetadata } from "@core/storage/disk"
 import type { ClineMessage } from "@shared/ExtensionMessage"
 import chokidar, { FSWatcher } from "chokidar"
 import * as path from "path"
@@ -285,7 +285,7 @@ export class FileContextTracker {
 	static async cleanupOrphanedWarnings(stateManager: StateManager): Promise<void> {
 		const startTime = Date.now()
 		try {
-			const taskHistory = await readTaskHistoryFromState()
+			const taskHistory = await stateManager.taskHistory.getDeduplicated()
 			const existingTaskIds = new Set(taskHistory.map((task) => task.id))
 			const allStateKeys = Object.keys(stateManager.getAllWorkspaceStateEntries())
 			const pendingWarningKeys = allStateKeys.filter((key) => key.startsWith("pendingFileContextWarning_"))

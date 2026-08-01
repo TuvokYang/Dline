@@ -812,7 +812,9 @@ export async function readTaskHistoryRecent(limit = 5): Promise<HistoryItem[]> {
  * Priority:
  *  1. taskHistory.jsonl exists → read JSONL, deduplicate
  *  2. taskHistory.json  exists → migrate to JSONL
- *  3. Neither exists         → attempt reconstruction from task folders
+ *  3. Neither exists         → return an empty history
+ *
+ * Reconstruction is an explicit user command and must never be triggered by a read.
  */
 /** @deprecated Use TaskHistory.getDeduplicated() instead. */
 export async function readTaskHistoryFromState(): Promise<HistoryItem[]> {
@@ -839,27 +841,13 @@ export async function readTaskHistoryFromState(): Promise<HistoryItem[]> {
 						return items
 					}
 				} catch {
-					// Corrupted JSON — attempt reconstruction
-					telemetryService.captureExtensionStorageError(
-						"Corrupted taskHistory.json",
-						"parseError_attemptingReconstruction",
-					)
-					const { reconstructTaskHistory } = await import("../commands/reconstructTaskHistory")
-					const r = await reconstructTaskHistory(false)
-					if (r && r.reconstructedTasks > 0) {
-						return readTaskHistoryJsonl()
-					}
+					telemetryService.captureExtensionStorageError("Corrupted taskHistory.json", "parseError")
 					return []
 				}
 			}
 		}
 
-		// Priority 3: Neither exists — attempt reconstruction
-		const { reconstructTaskHistory } = await import("../commands/reconstructTaskHistory")
-		const r = await reconstructTaskHistory(false)
-		if (r && r.reconstructedTasks > 0) {
-			return readTaskHistoryJsonl()
-		}
+		// Priority 3: Missing history is a valid empty state.
 		return []
 	} catch (e) {
 		telemetryService.captureExtensionStorageError(e, "readTaskHistoryFromState")

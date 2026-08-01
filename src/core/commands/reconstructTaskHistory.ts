@@ -2,7 +2,7 @@ import {
 	getDlineDocumentsPath,
 	getSavedClineMessages,
 	getTaskMetadata,
-	readTaskHistoryFromState,
+	readTaskHistoryJsonl,
 	writeTaskHistoryToState,
 } from "@core/storage/disk"
 import { HostProvider } from "@hosts/host-provider"
@@ -23,10 +23,9 @@ interface TaskReconstructionResult {
 
 /**
  * Reconstructs task history from existing task folders
- * @param showNotifications Whether to show user-facing notifications and dialogs
  * @returns Reconstruction result or null if cancelled
  */
-export async function reconstructTaskHistory(showNotifications = true): Promise<TaskReconstructionResult | null> {
+export async function reconstructTaskHistory(): Promise<TaskReconstructionResult | null> {
 	try {
 		// Show confirmation dialog using HostProvider
 		const proceed = await HostProvider.window.showMessage({
@@ -42,42 +41,35 @@ export async function reconstructTaskHistory(showNotifications = true): Promise<
 			return null
 		}
 
-		if (showNotifications) {
-			// Show initial progress message
-			HostProvider.window.showMessage({
-				type: ShowMessageType.INFORMATION,
-				message: "Reconstructing task history...",
-			})
-		}
+		HostProvider.window.showMessage({
+			type: ShowMessageType.INFORMATION,
+			message: "Reconstructing task history...",
+		})
 
 		const result = await performTaskHistoryReconstruction()
 
 		// Show results
-		if (showNotifications) {
-			if (result.errors.length > 0) {
-				const errorMessage = `Reconstruction completed with warnings:\n- Reconstructed: ${result.reconstructedTasks} tasks\n- Skipped: ${result.skippedTasks} tasks\n- Errors: ${result.errors.length}\n\nFirst few errors:\n${result.errors.slice(0, 3).join("\n")}`
+		if (result.errors.length > 0) {
+			const errorMessage = `Reconstruction completed with warnings:\n- Reconstructed: ${result.reconstructedTasks} tasks\n- Skipped: ${result.skippedTasks} tasks\n- Errors: ${result.errors.length}\n\nFirst few errors:\n${result.errors.slice(0, 3).join("\n")}`
 
-				HostProvider.window.showMessage({
-					type: ShowMessageType.WARNING,
-					message: errorMessage,
-				})
-			} else {
-				HostProvider.window.showMessage({
-					type: ShowMessageType.INFORMATION,
-					message: `Task history successfully reconstructed! Found and restored ${result.reconstructedTasks} tasks.`,
-				})
-			}
+			HostProvider.window.showMessage({
+				type: ShowMessageType.WARNING,
+				message: errorMessage,
+			})
+		} else {
+			HostProvider.window.showMessage({
+				type: ShowMessageType.INFORMATION,
+				message: `Task history successfully reconstructed! Found and restored ${result.reconstructedTasks} tasks.`,
+			})
 		}
 
 		return result
 	} catch (error) {
 		const errorMessage = error instanceof Error ? error.message : String(error)
-		if (showNotifications) {
-			HostProvider.window.showMessage({
-				type: ShowMessageType.ERROR,
-				message: `Failed to reconstruct task history: ${errorMessage}`,
-			})
-		}
+		HostProvider.window.showMessage({
+			type: ShowMessageType.ERROR,
+			message: `Failed to reconstruct task history: ${errorMessage}`,
+		})
 		return null
 	}
 }
@@ -139,7 +131,7 @@ async function performTaskHistoryReconstruction(): Promise<TaskReconstructionRes
 
 async function backupExistingTaskHistory(): Promise<void> {
 	try {
-		const existingHistory = await readTaskHistoryFromState()
+		const existingHistory = await readTaskHistoryJsonl()
 		if (existingHistory.length > 0) {
 			const backupPath = path.join(await getDlineDocumentsPath(), "tasks", `taskHistory.backup.${Date.now()}.json`)
 

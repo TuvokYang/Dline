@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect as vitestExpect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, it, vi, expect as vitestExpect } from "vitest"
 
 const { mockGetTask, mockSaveTask, mockGetCwd } = vi.hoisted(() => ({
 	mockGetTask: vi.fn(),
@@ -262,5 +262,25 @@ describe("FileContextTracker", () => {
 
 		// Verify the watcher was closed
 		expect(mockFileSystemWatcher.close.mock.calls.length > 0).to.be.true
+	})
+
+	it("should clean orphaned warnings from the initialized task history", async () => {
+		const getDeduplicated = vi.fn().mockResolvedValue([{ id: "existing-task" }])
+		const setWorkspaceState = vi.fn()
+		const stateManager = {
+			taskHistory: { getDeduplicated },
+			getAllWorkspaceStateEntries: () => ({
+				"pendingFileContextWarning_existing-task": { files: [] },
+				"pendingFileContextWarning_orphaned-task": { files: [] },
+				unrelatedWorkspaceState: true,
+			}),
+			setWorkspaceState,
+		}
+
+		await FileContextTracker.cleanupOrphanedWarnings(stateManager as any)
+
+		vitestExpect(getDeduplicated).toHaveBeenCalledOnce()
+		vitestExpect(setWorkspaceState).toHaveBeenCalledOnce()
+		vitestExpect(setWorkspaceState).toHaveBeenCalledWith("pendingFileContextWarning_orphaned-task", undefined)
 	})
 })
