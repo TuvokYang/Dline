@@ -39,12 +39,24 @@ interface StoredProfile {
 			cacheReadsPrice?: number
 		}
 	}
+	anthropic?: {
+		reasoning?: {
+			enableThinking?: boolean
+			effort?: string
+			thinkingBudget?: number
+		}
+	}
 }
 
 const profilesPath = (dlineDir: string) => path.join(dlineDir, "data", "settings", "api_profiles.json")
+const settingsPath = (dlineDir: string) => path.join(dlineDir, "data", "settings", "settings.json")
 
 async function readProfiles(dlineDir: string): Promise<StoredProfile[]> {
 	return JSON.parse(await readFile(profilesPath(dlineDir), "utf8")) as StoredProfile[]
+}
+
+async function readSettings(dlineDir: string): Promise<Record<string, unknown>> {
+	return JSON.parse(await readFile(settingsPath(dlineDir), "utf8")) as Record<string, unknown>
 }
 
 async function waitForProfile(
@@ -65,6 +77,17 @@ async function openApiSettings(page: Page, sidebar: Frame): Promise<void> {
 
 function getProfileCard(sidebar: Frame, profileName: string): Locator {
 	return sidebar.getByTestId("api-profile-card").filter({ has: sidebar.locator(`input[value=${JSON.stringify(profileName)}]`) })
+}
+
+async function openProfileEditor(sidebar: Frame, profileName: string): Promise<Locator> {
+	const card = getProfileCard(sidebar, profileName)
+	await expect(card).toHaveCount(1)
+	const providerSelector = card.getByRole("combobox", { name: "Provider" })
+	if (!(await providerSelector.isVisible())) {
+		await card.getByRole("button").first().press("Enter")
+	}
+	await expect(providerSelector).toBeVisible()
+	return card
 }
 
 async function openModelConfiguration(sidebar: Frame, profileName: string): Promise<Locator> {
@@ -444,6 +467,144 @@ e2e(
 			model: "dline-e2e-model",
 			service_tier: "flex",
 			reasoning: { effort: "ultra" },
+		})
+		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+	},
+)
+
+e2e(
+	"Mode-specific profiles - Plan uses OpenAI Max and Act uses Anthropic High",
+	async ({ dlineDir, helper, page, server, sidebar, userDataDir }) => {
+		e2e.setTimeout(210_000)
+		await helper.signin(sidebar)
+		await openApiSettings(page, sidebar)
+
+		const openAiCard = await openModelConfiguration(sidebar, E2E_PROFILE_NAMES.mockOpenAi)
+		await setCapability(openAiCard, "Enable Thinking", true)
+		await selectLabeledOption(openAiCard, sidebar, "Thinking Mode", "Reasoning Effort")
+		await selectLabeledOption(openAiCard, sidebar, "Reasoning Effort", "Max")
+		await waitForProfile(
+			dlineDir,
+			E2E_PROFILE_NAMES.mockOpenAi,
+			(profile) =>
+				profile.provider === "openai" &&
+				profile.openai?.reasoning?.enableThinking === true &&
+				profile.openai.reasoning.effort === "max",
+		)
+
+		const anthropicCard = await openProfileEditor(sidebar, E2E_PROFILE_NAMES.mockAnthropic)
+		const anthropicModel = anthropicCard.locator("vscode-dropdown#model-id")
+		await expect(anthropicModel.locator('vscode-option[value="claude-opus-4-8"]')).toHaveCount(1)
+		await anthropicModel.evaluate((element, value) => {
+			;(element as HTMLInputElement).value = value
+			element.dispatchEvent(new Event("change", { bubbles: true }))
+		}, "claude-opus-4-8")
+		await waitForProfile(
+			dlineDir,
+			E2E_PROFILE_NAMES.mockAnthropic,
+			(profile) => profile.provider === "anthropic" && profile.modelId === "claude-opus-4-8",
+		)
+		await setCapability(anthropicCard, "Enable Thinking", true)
+		await selectLabeledOption(anthropicCard, sidebar, "Adaptive Thinking", "High")
+		await waitForProfile(
+			dlineDir,
+			E2E_PROFILE_NAMES.mockAnthropic,
+			(profile) =>
+				profile.modelId === "claude-opus-4-8" &&
+				profile.anthropic?.reasoning?.enableThinking === true &&
+				profile.anthropic.reasoning.effort === "high" &&
+				!profile.anthropic.reasoning.thinkingBudget,
+		)
+
+		await sidebar.getByRole("button", { name: "Done" }).click()
+		const modelSwitcher = sidebar.getByRole("button", { name: "Select model" })
+		await modelSwitcher.click()
+		const enableSplitModels = sidebar.getByTitle("Use different models per mode")
+		if (await enableSplitModels.isVisible()) {
+			await enableSplitModels.click()
+		}
+		await sidebar.getByRole("button", { name: "Act", exact: true }).click()
+		await sidebar
+			.getByRole("option")
+			.filter({ has: sidebar.getByText(E2E_PROFILE_NAMES.mockAnthropic, { exact: true }) })
+			.click()
+		await expect(modelSwitcher).toHaveText(E2E_PROFILE_NAMES.mockAnthropic)
+
+		await modelSwitcher.click()
+		await sidebar.getByRole("button", { name: "Plan", exact: true }).click()
+		await sidebar
+			.getByRole("option")
+			.filter({ has: sidebar.getByText(E2E_PROFILE_NAMES.mockOpenAi, { exact: true }) })
+			.click()
+		await E2ETestHelper.waitForValue(async () => {
+			const settings = await readSettings(dlineDir)
+			return settings.planActSeparateModelsSetting === true &&
+				settings.planModeProfile === E2E_PROFILE_NAMES.mockOpenAi &&
+				settings.actModeProfile === E2E_PROFILE_NAMES.mockAnthropic
+				? settings
+				: undefined
+		})
+
+		const planMode = sidebar.getByRole("switch", { name: "Plan" })
+		const actMode = sidebar.getByRole("switch", { name: "Act" })
+		await expect(actMode).toHaveAttribute("aria-checked", "true")
+		await expect(modelSwitcher).toHaveText(E2E_PROFILE_NAMES.mockAnthropic)
+		await planMode.click()
+		await expect(planMode).toHaveAttribute("aria-checked", "true")
+		await expect(modelSwitcher).toHaveText(E2E_PROFILE_NAMES.mockOpenAi)
+
+		server.resetOpenAiMock()
+		server.enqueueResponses("openai-compatible-chat", {
+			type: "tool",
+			id: "call_mode_profile_plan_qna",
+			name: "qna_respond",
+			arguments: { response: "E2E_MODE_PROFILE_PLAN_OPENAI_OK" },
+			expectedRequestIncludes: ["E2E_MODE_PROFILE_PLAN_TURN"],
+		})
+		server.enqueueResponses("anthropic-messages", {
+			type: "tool",
+			id: "call_mode_profile_act_completion",
+			name: "attempt_completion",
+			arguments: { result: "E2E_MODE_PROFILE_ACT_ANTHROPIC_OK" },
+			expectedRequestIncludes: ["E2E_MODE_PROFILE_ACT_TURN"],
+		})
+
+		const input = sidebar.getByTestId("chat-input")
+		await input.fill("E2E_MODE_PROFILE_PLAN_TURN")
+		await sidebar.getByTestId("send-button").click()
+		await expect(sidebar.getByText("E2E_MODE_PROFILE_PLAN_OPENAI_OK", { exact: true })).toBeVisible({
+			timeout: 60_000,
+		})
+		await expect.poll(() => server.getRequestCount("openai-compatible-chat")).toBe(1)
+		const planRequest = server.getMockConsumptions("openai-compatible-chat")[0]
+		expect(planRequest).toMatchObject({
+			protocol: "openai-chat",
+			thinking: { mode: "effort", effort: "max" },
+		})
+		expect(planRequest.requestBody).toMatchObject({
+			model: "dline-e2e-model",
+			reasoning_effort: "max",
+		})
+
+		await actMode.click()
+		await expect(actMode).toHaveAttribute("aria-checked", "true")
+		await expect(modelSwitcher).toHaveText(E2E_PROFILE_NAMES.mockAnthropic)
+		await expect(input).toBeEnabled()
+		await input.fill("E2E_MODE_PROFILE_ACT_TURN")
+		await input.press("Enter")
+		await expect(sidebar.getByText("E2E_MODE_PROFILE_ACT_ANTHROPIC_OK", { exact: false }).last()).toBeVisible({
+			timeout: 60_000,
+		})
+		await expect.poll(() => server.getRequestCount("anthropic-messages")).toBe(1)
+		const actRequest = server.getMockConsumptions("anthropic-messages")[0]
+		expect(actRequest).toMatchObject({
+			protocol: "anthropic-messages",
+			thinking: { mode: "effort", effort: "high" },
+		})
+		expect(actRequest.requestBody).toMatchObject({
+			model: "claude-opus-4-8",
+			thinking: { type: "adaptive" },
+			output_config: { effort: "high" },
 		})
 		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
 	},
