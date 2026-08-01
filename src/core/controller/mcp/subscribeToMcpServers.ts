@@ -49,7 +49,8 @@ export async function subscribeToMcpServers(
 
 	// Send initial state if available
 	if (controller.mcpHub) {
-		const mcpServers = controller.mcpHub.getServers()
+		await controller.ensureWorkspaceMcpDescriptors()
+		const mcpServers = await controller.mcpHub.getLatestMcpServersRPC(controller.mcpOwnerId)
 		if (mcpServers.length > 0) {
 			try {
 				const protoServers = McpServers.create({
@@ -75,10 +76,13 @@ export async function subscribeToMcpServers(
  * Send an MCP servers update to all active subscribers
  * @param mcpServers The MCP servers to send
  */
-export async function sendMcpServersUpdate(mcpServers: McpServers): Promise<void> {
-	// Send the event to all active subscribers across every controller
+export async function sendMcpServersUpdate(): Promise<void> {
+	// Build an owner-scoped payload for each controller so workspace descriptors do not leak across panels.
 	const promises: Promise<void>[] = []
-	for (const [, subs] of controllerSubscriptions) {
+	for (const [controller, subs] of controllerSubscriptions) {
+		const mcpServers = McpServers.create({
+			mcpServers: convertMcpServersToProtoMcpServers(await controller.mcpHub.getLatestMcpServersRPC(controller.mcpOwnerId)),
+		})
 		for (const responseStream of subs) {
 			promises.push(
 				responseStream(mcpServers, false).catch((error) => {

@@ -28,7 +28,6 @@ import {
 	McpToolCallResponse,
 	MIN_MCP_TIMEOUT_SECONDS,
 } from "@shared/mcp"
-import { convertMcpServersToProtoMcpServers } from "@shared/proto-conversions/mcp/mcp-server-conversion"
 import { secondsToMs } from "@utils/time"
 import chokidar, { FSWatcher } from "chokidar"
 import deepEqual from "fast-deep-equal"
@@ -48,6 +47,14 @@ import { McpOAuthManager } from "./McpOAuthManager"
 import { StreamableHttpReconnectHandler } from "./StreamableHttpReconnectHandler"
 import { BaseConfigSchema, McpSettingsSchema, ServerConfigSchema } from "./schemas"
 import { McpConnection, McpServerConfig, Transport } from "./types"
+import { WorkspaceMcpRegistry } from "./WorkspaceMcpRegistry"
+
+type McpConnectionMetadata = {
+	displayName?: string
+	description?: string
+	source: NonNullable<McpServer["source"]>
+}
+
 export class McpHub {
 	getMcpServersPath: () => Promise<string>
 	private getSettingsDirectoryPath: () => Promise<string>
@@ -57,6 +64,9 @@ export class McpHub {
 
 	private settingsWatcher?: FSWatcher
 	private fileWatchers: Map<string, FSWatcher> = new Map()
+	private settingsServerConfigs: Record<string, McpServerConfig> = {}
+	private readonly workspaceMcpRegistry: WorkspaceMcpRegistry
+	private workspaceConnectionRefresh: Promise<void> = Promise.resolve()
 	connections: McpConnection[] = []
 	isConnecting = false
 	/**
@@ -132,6 +142,7 @@ export class McpHub {
 		this.clientVersion = clientVersion
 		this.telemetryService = telemetryService
 		this.mcpOAuthManager = new McpOAuthManager()
+		this.workspaceMcpRegistry = new WorkspaceMcpRegistry(() => this.refreshWorkspaceConnections())
 		this.watchMcpSettingsFile()
 		this.initializeMcpServers()
 	}
@@ -140,6 +151,64 @@ export class McpHub {
 		// Only return enabled servers
 
 		return this.connections.filter((conn) => !conn.server.disabled).map((conn) => conn.server)
+	}
+
+	getServersForOwner(ownerId: string): McpServer[] {
+		const workspaceServerNames = new Set(
+			this.workspaceMcpRegistry.getDescriptorsForOwner(ownerId).map((descriptor) => descriptor.internalName),
+		)
+		return this.connections
+			.filter((connection) => !connection.server.disabled)
+			.filter((connection) => connection.server.source !== "workspace" || workspaceServerNames.has(connection.server.name))
+			.map((connection) => connection.server)
+	}
+
+	async registerWorkspaceOwner(ownerId: string, workspaceRoots: readonly string[]): Promise<void> {
+		await this.workspaceMcpRegistry.registerOwner(ownerId, workspaceRoots)
+	}
+
+	async refreshWorkspaceOwner(ownerId: string): Promise<void> {
+		await this.workspaceMcpRegistry.refreshOwner(ownerId)
+	}
+
+	async unregisterWorkspaceOwner(ownerId: string): Promise<void> {
+		await this.workspaceMcpRegistry.unregisterOwner(ownerId)
+	}
+
+	private getEffectiveServerConfigs(): Record<string, McpServerConfig> {
+		const workspaceConfigs = Object.fromEntries(
+			this.workspaceMcpRegistry
+				.getAllDescriptors()
+				.map((descriptor) => [descriptor.internalName, descriptor.config] as const),
+		)
+		// A settings entry wins the unlikely case where its name matches an internal workspace name.
+		return { ...workspaceConfigs, ...this.settingsServerConfigs }
+	}
+
+	private getConnectionMetadata(serverName: string): McpConnectionMetadata | undefined {
+		if (this.settingsServerConfigs[serverName]) return { source: "settings" }
+		const descriptor = this.workspaceMcpRegistry
+			.getAllDescriptors()
+			.find((candidate) => candidate.internalName === serverName)
+		return descriptor
+			? {
+					displayName: descriptor.displayName,
+					description: descriptor.description,
+					source: descriptor.source,
+				}
+			: undefined
+	}
+
+	private refreshWorkspaceConnections(): Promise<void> {
+		const refresh = this.workspaceConnectionRefresh.then(async () => {
+			const settings = await this.readAndValidateMcpSettingsFile()
+			if (settings) this.settingsServerConfigs = { ...settings.mcpServers }
+			await this.reconcileServerConnections("internal")
+		})
+		this.workspaceConnectionRefresh = refresh.catch((error) => {
+			Logger.error("[McpHub] Failed to refresh workspace MCP connections:", error)
+		})
+		return refresh
 	}
 
 	/**
@@ -314,6 +383,7 @@ export class McpHub {
 		name: string,
 		config: z.infer<typeof ServerConfigSchema>,
 		source: "rpc" | "internal",
+		metadata: McpConnectionMetadata | undefined = this.getConnectionMetadata(name),
 	): Promise<void> {
 		// Remove existing connection if it exists (should never happen, the connection should be deleted beforehand)
 		this.connections = this.connections.filter((conn) => conn.server.name !== name)
@@ -369,6 +439,7 @@ export class McpHub {
 			const disabledConnection: McpConnection = {
 				server: {
 					name,
+					...metadata,
 					config: JSON.stringify(config),
 					status: "disconnected",
 					disabled: true,
@@ -553,7 +624,7 @@ export class McpHub {
 					const reconnectHandler = new StreamableHttpReconnectHandler(name, {
 						findConnection: () => this.findConnection(name, source),
 						deleteConnection: () => this.deleteConnection(name),
-						connectToServer: () => this.connectToServer(name, config, source),
+						connectToServer: () => this.connectToServer(name, config, source, metadata),
 						notifyWebviewOfServerChanges: () => this.notifyWebviewOfServerChanges(),
 						appendErrorMessage: (conn, msg) => this.appendErrorMessage(conn as McpConnection, msg),
 						deleteServerKey: (uid) => McpHub.mcpServerKeys.delete(uid),
@@ -570,6 +641,7 @@ export class McpHub {
 			const connection: McpConnection = {
 				server: {
 					name,
+					...metadata,
 					config: configForStorage,
 					status: "connecting",
 					disabled: config.disabled,
@@ -593,6 +665,7 @@ export class McpHub {
 					const unauthConnection: McpConnection = {
 						server: {
 							name,
+							...metadata,
 							config: JSON.stringify(config),
 							status: "disconnected",
 							disabled: false,
@@ -854,145 +927,86 @@ export class McpHub {
 	}
 
 	async updateServerConnectionsRPC(newServers: Record<string, McpServerConfig>): Promise<void> {
-		this.isConnecting = true
-		this.removeAllFileWatchers()
-		const currentNames = new Set(this.connections.map((conn) => conn.server.name))
-		const newNames = new Set(Object.keys(newServers))
-
-		// Delete removed servers
-		for (const name of currentNames) {
-			if (!newNames.has(name)) {
-				await this.deleteConnection(name)
-				Logger.log(`Deleted MCP server: ${name}`)
-			}
-		}
-
-		// Update or add servers
-		for (const [name, config] of Object.entries(newServers)) {
-			const currentConnection = this.connections.find((conn) => conn.server.name === name)
-
-			if (!currentConnection) {
-				// New server
-				try {
-					if (config.type === "stdio") {
-						this.setupFileWatcher(name, config)
-					}
-					await this.connectToServer(name, config, "rpc")
-				} catch (error) {
-					Logger.error(`Failed to connect to new MCP server ${name}:`, error)
-				}
-			} else if (this.configsRequireRestart(JSON.parse(currentConnection.server.config), config)) {
-				// Existing server with changed connection config (excludes Cline-specific settings)
-				try {
-					if (config.type === "stdio") {
-						this.setupFileWatcher(name, config)
-					}
-					await this.deleteConnection(name) // Don't clear OAuth - just reconnecting with new config
-					await this.connectToServer(name, config, "rpc")
-					Logger.log(`Reconnected MCP server with updated config: ${name}`)
-				} catch (error) {
-					Logger.error(`Failed to reconnect MCP server ${name}:`, error)
-				}
-			} else {
-				// Only Cline-specific settings changed - update in-memory state without restart
-				const autoApprove = config.autoApprove || []
-				if (currentConnection.server.tools) {
-					currentConnection.server.tools = currentConnection.server.tools.map((tool) => ({
-						...tool,
-						autoApprove: autoApprove.includes(tool.name),
-					}))
-				}
-				// Also update Cline-specific settings in the stored config.
-				// This handles the case where someone manually edits the MCP settings file -
-				// the file watcher triggers this code path, and we need to sync the in-memory
-				// config with the file without restarting the server.
-				const currentConfig = JSON.parse(currentConnection.server.config)
-				currentConfig.autoApprove = config.autoApprove
-				currentConfig.timeout = config.timeout
-				currentConnection.server.config = JSON.stringify(currentConfig)
-			}
-		}
-
-		this.isConnecting = false
+		this.settingsServerConfigs = { ...newServers }
+		await this.reconcileServerConnections("rpc")
 	}
 
 	async updateServerConnections(newServers: Record<string, McpServerConfig>): Promise<void> {
+		this.settingsServerConfigs = { ...newServers }
+		await this.reconcileServerConnections("internal")
+	}
+
+	private async reconcileServerConnections(source: "rpc" | "internal"): Promise<void> {
 		this.isConnecting = true
 		this.removeAllFileWatchers()
+		const newServers = this.getEffectiveServerConfigs()
 		const currentNames = new Set(this.connections.map((conn) => conn.server.name))
 		const newNames = new Set(Object.keys(newServers))
 
 		// Track if any connection-level changes occurred (excludes Cline-specific settings)
 		let connectionChangesOccurred = false
 
-		// Delete removed servers
-		for (const name of currentNames) {
-			if (!newNames.has(name)) {
-				await this.clearOAuthForConnection(name) // Clear OAuth data first
-				await this.deleteConnection(name) // Then delete connection
-				Logger.log(`Deleted MCP server: ${name}`)
-				connectionChangesOccurred = true
-			}
-		}
-
-		// Update or add servers
-		for (const [name, config] of Object.entries(newServers)) {
-			const currentConnection = this.connections.find((conn) => conn.server.name === name)
-
-			if (!currentConnection) {
-				// New server
-				try {
-					if (config.type === "stdio") {
-						this.setupFileWatcher(name, config)
-					}
-					await this.connectToServer(name, config, "internal")
-					connectionChangesOccurred = true
-				} catch (error) {
-					Logger.error(`Failed to connect to new MCP server ${name}:`, error)
-				}
-			} else if (this.configsRequireRestart(JSON.parse(currentConnection.server.config), config)) {
-				// Existing server with changed connection config (excludes Cline-specific settings)
-				try {
-					// Set status to "connecting" and notify webview before restart (same pattern as restartConnection)
-					currentConnection.server.status = "connecting"
-					currentConnection.server.error = ""
-					await this.notifyWebviewOfServerChanges()
-
-					if (config.type === "stdio") {
-						this.setupFileWatcher(name, config)
-					}
+		try {
+			// Delete removed servers. Workspace descriptor removal must not erase local OAuth state.
+			for (const name of currentNames) {
+				if (!newNames.has(name)) {
+					const connection = this.connections.find((candidate) => candidate.server.name === name)
+					if (connection?.server.source !== "workspace") await this.clearOAuthForConnection(name)
 					await this.deleteConnection(name)
-					await this.connectToServer(name, config, "internal")
-					Logger.log(`Reconnected MCP server with updated config: ${name}`)
+					Logger.log(`Deleted MCP server: ${name}`)
 					connectionChangesOccurred = true
-				} catch (error) {
-					Logger.error(`Failed to reconnect MCP server ${name}:`, error)
 				}
-			} else {
-				// Only Cline-specific settings changed - update in-memory state without restart
-				// Don't set connectionChangesOccurred since the RPC already returned the updated state
-				const autoApprove = config.autoApprove || []
-				if (currentConnection.server.tools) {
-					currentConnection.server.tools = currentConnection.server.tools.map((tool) => ({
-						...tool,
-						autoApprove: autoApprove.includes(tool.name),
-					}))
-				}
-				// Also update Cline-specific settings in the stored config
-				const currentConfig = JSON.parse(currentConnection.server.config)
-				currentConfig.autoApprove = config.autoApprove
-				currentConfig.timeout = config.timeout
-				currentConnection.server.config = JSON.stringify(currentConfig)
 			}
-		}
 
-		// Only notify webview if actual connection changes occurred.
-		// For Cline-specific settings changes, the RPC response already updated the webview,
-		// so we skip notification to avoid race conditions.
-		if (connectionChangesOccurred) {
-			await this.notifyWebviewOfServerChanges()
+			// Update or add the effective settings + workspace server set.
+			for (const [name, config] of Object.entries(newServers)) {
+				if (config.type === "stdio") this.setupFileWatcher(name, config)
+				const metadata = this.getConnectionMetadata(name)
+				const currentConnection = this.connections.find((conn) => conn.server.name === name)
+
+				if (!currentConnection) {
+					try {
+						await this.connectToServer(name, config, source, metadata)
+						connectionChangesOccurred = true
+					} catch (error) {
+						Logger.error(`Failed to connect to new MCP server ${name}:`, error)
+					}
+				} else if (this.configsRequireRestart(JSON.parse(currentConnection.server.config), config)) {
+					try {
+						currentConnection.server.status = "connecting"
+						currentConnection.server.error = ""
+						if (source === "internal") await this.notifyWebviewOfServerChanges()
+						await this.deleteConnection(name)
+						await this.connectToServer(name, config, source, metadata)
+						Logger.log(`Reconnected MCP server with updated config: ${name}`)
+						connectionChangesOccurred = true
+					} catch (error) {
+						Logger.error(`Failed to reconnect MCP server ${name}:`, error)
+					}
+				} else {
+					const autoApprove = config.autoApprove || []
+					if (currentConnection.server.tools) {
+						currentConnection.server.tools = currentConnection.server.tools.map((tool) => ({
+							...tool,
+							autoApprove: autoApprove.includes(tool.name),
+						}))
+					}
+					const currentConfig = JSON.parse(currentConnection.server.config)
+					currentConfig.autoApprove = config.autoApprove
+					currentConfig.timeout = config.timeout
+					currentConnection.server.config = JSON.stringify(currentConfig)
+					currentConnection.server.source = metadata?.source
+					currentConnection.server.displayName = metadata?.displayName
+					currentConnection.server.description = metadata?.description
+				}
+			}
+
+			if (connectionChangesOccurred && source === "internal") {
+				await this.notifyWebviewOfServerChanges()
+			}
+		} finally {
+			this.isConnecting = false
 		}
-		this.isConnecting = false
 	}
 
 	/**
@@ -1075,13 +1089,7 @@ export class McpHub {
 
 		this.isConnecting = false
 
-		const config = await this.readAndValidateMcpSettingsFile()
-		if (!config) {
-			throw new Error("Failed to read or validate MCP settings")
-		}
-
-		const serverOrder = Object.keys(config.mcpServers || {})
-		return this.getSortedMcpServers(serverOrder)
+		return this.getLatestMcpServersRPC()
 	}
 
 	async restartConnection(serverName: string): Promise<void> {
@@ -1130,40 +1138,39 @@ export class McpHub {
 			.sort((a, b) => {
 				const indexA = serverOrder.indexOf(a.server.name)
 				const indexB = serverOrder.indexOf(b.server.name)
+				if (indexA === indexB) return a.server.name.localeCompare(b.server.name)
+				if (indexA < 0) return 1
+				if (indexB < 0) return -1
 				return indexA - indexB
 			})
 			.map((connection) => connection.server)
 	}
 
+	private getEffectiveServerOrder(): string[] {
+		return [
+			...Object.keys(this.settingsServerConfigs),
+			...this.workspaceMcpRegistry.getAllDescriptors().map((descriptor) => descriptor.internalName),
+		]
+	}
+
+	private isServerVisibleToOwner(server: McpServer, ownerId: string): boolean {
+		if (server.source !== "workspace") return true
+		return this.workspaceMcpRegistry
+			.getDescriptorsForOwner(ownerId)
+			.some((descriptor) => descriptor.internalName === server.name)
+	}
+
 	private async notifyWebviewOfServerChanges(): Promise<void> {
-		// servers should always be sorted in the order they are defined in the settings file
-		const settingsPath = await getMcpSettingsFilePathHelper(await this.getSettingsDirectoryPath())
-		const content = await fs.readFile(settingsPath, "utf-8")
-		const config = JSON.parse(content)
-		const serverOrder = Object.keys(config.mcpServers || {})
-
-		// Get sorted servers
-		const sortedServers = this.getSortedMcpServers(serverOrder)
-
-		// Send update using gRPC stream
-		await sendMcpServersUpdate({
-			mcpServers: convertMcpServersToProtoMcpServers(sortedServers),
-		})
+		await sendMcpServersUpdate()
 	}
 
 	async sendLatestMcpServers() {
 		await this.notifyWebviewOfServerChanges()
 	}
 
-	async getLatestMcpServersRPC(): Promise<McpServer[]> {
-		const settings = await this.readAndValidateMcpSettingsFile()
-		if (!settings) {
-			// Return empty array if settings can't be read or validated
-			return []
-		}
-
-		const serverOrder = Object.keys(settings.mcpServers || {})
-		return this.getSortedMcpServers(serverOrder)
+	async getLatestMcpServersRPC(ownerId?: string): Promise<McpServer[]> {
+		const sortedServers = this.getSortedMcpServers(this.getEffectiveServerOrder())
+		return ownerId ? sortedServers.filter((server) => this.isServerVisibleToOwner(server, ownerId)) : sortedServers
 	}
 
 	// Using server
@@ -1716,5 +1723,6 @@ export class McpHub {
 		if (this.settingsWatcher) {
 			await this.settingsWatcher.close()
 		}
+		await this.workspaceMcpRegistry.dispose()
 	}
 }

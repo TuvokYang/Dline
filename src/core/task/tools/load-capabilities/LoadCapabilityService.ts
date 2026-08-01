@@ -59,7 +59,7 @@ export class LoadCapabilityService {
 	private loadMcp(name: string, config: TaskConfig): LoadCapabilityPayload {
 		const servers = config.services.mcpHub
 			.getServers()
-			.filter((server) => server.disabled !== true && config.capabilityToggles.mcpServers[server.name] !== false)
+			.filter((server) => server.disabled !== true && config.capabilityToggles.mcpServers[server.name] === true)
 		const match = servers
 			.flatMap((server) => (server.tools ?? []).map((tool) => ({ server, tool })))
 			.find(({ server, tool }) => `${server.name}.${tool.name}` === name || tool.name === name)

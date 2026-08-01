@@ -258,7 +258,7 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 		const effectiveMcpServers = useMemo(
 			() =>
 				scopedCapabilityToggles
-					? mcpServers.filter((server) => scopedCapabilityToggles.mcpServers[server.name] !== false)
+					? mcpServers.filter((server) => scopedCapabilityToggles.mcpServers[server.name] === true)
 					: mcpServers,
 			[mcpServers, scopedCapabilityToggles],
 		)

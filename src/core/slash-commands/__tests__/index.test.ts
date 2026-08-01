@@ -2,6 +2,7 @@ import type { ApiProviderInfo } from "@core/api"
 import type { McpPromptResponse } from "@shared/mcp"
 import { createTaskCapabilityToggles } from "@shared/TaskCapabilityToggles"
 import { expect } from "chai"
+import { vi } from "vitest"
 import { formatMcpPromptResponse, McpPromptFetcher, parseSlashCommands } from "../index"
 
 function createProviderInfo(contextWindow?: number, modelId = "test-model"): ApiProviderInfo {
@@ -230,6 +231,13 @@ describe("slash-commands", () => {
 	})
 
 	describe("parseSlashCommands MCP handling", () => {
+		const enabledMcpContext = (serverName: string) => ({
+			cwd: "",
+			capabilityToggles: createTaskCapabilityToggles({ mcpServers: { [serverName]: true } }),
+			remoteSkills: [],
+			remoteWorkflows: [],
+		})
+
 		const mockMcpPromptFetcher: McpPromptFetcher = async (serverName, promptName) => {
 			if (serverName === "test-server" && promptName === "greet") {
 				return {
@@ -242,7 +250,17 @@ describe("slash-commands", () => {
 
 		it("should process MCP prompt command in task tag", async () => {
 			const text = "<task>/mcp:test-server:greet</task>"
-			const result = await parseSlashCommands(text, {}, {}, "test-ulid", undefined, false, undefined, mockMcpPromptFetcher)
+			const result = await parseSlashCommands(
+				text,
+				{},
+				{},
+				"test-ulid",
+				undefined,
+				false,
+				undefined,
+				mockMcpPromptFetcher,
+				enabledMcpContext("test-server"),
+			)
 
 			expect(result.processedText).to.include('<mcp_prompt server="test-server" prompt="greet">')
 			expect(result.processedText).to.include("Hello from MCP!")
@@ -251,7 +269,17 @@ describe("slash-commands", () => {
 
 		it("should process MCP prompt with additional text", async () => {
 			const text = "<task>/mcp:test-server:greet Please expand on this</task>"
-			const result = await parseSlashCommands(text, {}, {}, "test-ulid", undefined, false, undefined, mockMcpPromptFetcher)
+			const result = await parseSlashCommands(
+				text,
+				{},
+				{},
+				"test-ulid",
+				undefined,
+				false,
+				undefined,
+				mockMcpPromptFetcher,
+				enabledMcpContext("test-server"),
+			)
 
 			expect(result.processedText).to.include('<mcp_prompt server="test-server" prompt="greet">')
 			expect(result.processedText).to.include("Please expand on this")
@@ -285,6 +313,20 @@ describe("slash-commands", () => {
 			expect(result.processedText).to.equal(text)
 		})
 
+		it("does not fetch an MCP prompt absent from the current task snapshot", async () => {
+			const fetcher = vi.fn(mockMcpPromptFetcher)
+			const text = "<task>/mcp:test-server:greet</task>"
+			const result = await parseSlashCommands(text, {}, {}, "test-ulid", undefined, false, undefined, fetcher, {
+				cwd: "",
+				capabilityToggles: createTaskCapabilityToggles({ mcpServers: {} }),
+				remoteSkills: [],
+				remoteWorkflows: [],
+			})
+
+			expect(fetcher.mock.calls).to.have.length(0)
+			expect(result.processedText).to.equal(text)
+		})
+
 		it("should handle MCP prompt with colons in prompt name", async () => {
 			const fetcherWithColons: McpPromptFetcher = async (serverName, promptName) => {
 				if (serverName === "server" && promptName === "prompt:with:colons") {
@@ -296,7 +338,17 @@ describe("slash-commands", () => {
 			}
 
 			const text = "<task>/mcp:server:prompt:with:colons</task>"
-			const result = await parseSlashCommands(text, {}, {}, "test-ulid", undefined, false, undefined, fetcherWithColons)
+			const result = await parseSlashCommands(
+				text,
+				{},
+				{},
+				"test-ulid",
+				undefined,
+				false,
+				undefined,
+				fetcherWithColons,
+				enabledMcpContext("server"),
+			)
 
 			expect(result.processedText).to.include('prompt="prompt:with:colons"')
 			expect(result.processedText).to.include("Colon prompt")

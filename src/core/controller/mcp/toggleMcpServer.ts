@@ -12,7 +12,8 @@ import type { Controller } from "../index"
  */
 export async function toggleMcpServer(controller: Controller, request: ToggleMcpServerRequest): Promise<McpServers> {
 	try {
-		const mcpServers = await controller.mcpHub?.toggleServerDisabledRPC(request.serverName, request.disabled)
+		await controller.mcpHub?.toggleServerDisabledRPC(request.serverName, request.disabled)
+		const mcpServers = await controller.mcpHub.getLatestMcpServersRPC(controller.mcpOwnerId)
 
 		// Convert from McpServer[] to ProtoMcpServer[] ensuring all required fields are set
 		const protoServers = convertMcpServersToProtoMcpServers(mcpServers)

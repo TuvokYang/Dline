@@ -12,7 +12,8 @@ import { Controller } from ".."
 export async function updateMcpTimeout(controller: Controller, request: UpdateMcpTimeoutRequest): Promise<McpServers> {
 	try {
 		if (request.serverName && typeof request.serverName === "string" && typeof request.timeout === "number") {
-			const mcpServers = await controller.mcpHub?.updateServerTimeoutRPC(request.serverName, request.timeout)
+			await controller.mcpHub?.updateServerTimeoutRPC(request.serverName, request.timeout)
+			const mcpServers = await controller.mcpHub.getLatestMcpServersRPC(controller.mcpOwnerId)
 			const convertedMcpServers = convertMcpServersToProtoMcpServers(mcpServers)
 			Logger.log("convertedMcpServers", convertedMcpServers)
 			return McpServers.create({ mcpServers: convertedMcpServers })

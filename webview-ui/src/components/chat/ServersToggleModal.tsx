@@ -94,7 +94,7 @@ const ServersToggleModal: React.FC<{ hasTaskDraft?: boolean }> = ({ hasTaskDraft
 						<ServersToggleList
 							getServerEnabled={
 								capabilityScope.isTaskScoped
-									? (server) => capabilityScope.snapshot?.mcpServers[server.name] ?? server.disabled !== true
+									? (server) => capabilityScope.snapshot?.mcpServers[server.name] === true
 									: undefined
 							}
 							hasTrashIcon={false}

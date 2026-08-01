@@ -68,6 +68,11 @@ export class UseMcpToolHandler implements IFullyManagedTool {
 			return await config.callbacks.sayAndCreateMissingParamError(block.name, "tool_name", undefined, block.ts)
 		}
 
+		if (config.capabilityToggles.mcpServers[server_name] !== true) {
+			config.taskState.consecutiveMistakeCount++
+			return formatResponse.toolError(`MCP server '${server_name}' is not enabled for this task.`)
+		}
+
 		// Parse and validate arguments if provided
 		let parsedArguments: Record<string, unknown> | undefined
 		if (mcp_arguments) {

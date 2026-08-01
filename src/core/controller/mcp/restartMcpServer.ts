@@ -12,7 +12,8 @@ import type { Controller } from "../index"
  */
 export async function restartMcpServer(controller: Controller, request: StringRequest): Promise<McpServers> {
 	try {
-		const mcpServers = await controller.mcpHub?.restartConnectionRPC(request.value)
+		await controller.mcpHub?.restartConnectionRPC(request.value)
+		const mcpServers = await controller.mcpHub.getLatestMcpServersRPC(controller.mcpOwnerId)
 
 		// Convert from McpServer[] to ProtoMcpServer[] ensuring all required fields are set
 		const protoServers = convertMcpServersToProtoMcpServers(mcpServers)

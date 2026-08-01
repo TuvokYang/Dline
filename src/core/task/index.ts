@@ -3169,7 +3169,11 @@ export class Task {
 			localSubagentsToggles: Object.fromEntries(
 				refreshedSubagents.localSubagents.map((agent) => [agent.path, agent.enabled]),
 			),
-			mcpServers: Object.fromEntries(this.mcpHub.getServers().map((server) => [server.name, server.disabled !== true])),
+			mcpServers: Object.fromEntries(
+				this.mcpHub
+					.getServersForOwner(this.controller.mcpOwnerId)
+					.map((server) => [server.name, server.disabled !== true]),
+			),
 		})
 		const taskCapabilityToggles = reconcileTaskCapabilityToggles(currentTaskToggles, discoveredTaskToggles)
 		const serializedTaskToggles = serializeTaskCapabilityToggles(taskCapabilityToggles)
@@ -3275,7 +3279,9 @@ export class Task {
 			supportsBrowserUse,
 			mcpHub: {
 				getServers: () =>
-					this.mcpHub.getServers().filter((server) => taskCapabilityToggles.mcpServers[server.name] !== false),
+					this.mcpHub
+						.getServersForOwner(this.controller.mcpOwnerId)
+						.filter((server) => taskCapabilityToggles.mcpServers[server.name] === true),
 			},
 			skills: availableSkills,
 			focusChainSettings: this.stateManager.getGlobalSettingsKey("focusChainSettings"),
@@ -5137,7 +5143,7 @@ export class Task {
 
 			// Create MCP prompt fetcher callback that wraps mcpHub.getPrompt
 			const mcpPromptFetcher = async (serverName: string, promptName: string) => {
-				if (taskCapabilityToggles.mcpServers[serverName] === false) {
+				if (taskCapabilityToggles.mcpServers[serverName] !== true) {
 					return null
 				}
 				try {

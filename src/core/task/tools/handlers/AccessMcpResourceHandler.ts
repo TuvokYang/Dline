@@ -71,6 +71,11 @@ export class AccessMcpResourceHandler implements IFullyManagedTool {
 			return await config.callbacks.sayAndCreateMissingParamError(ClineDefaultTool.MCP_ACCESS, "uri", undefined, block.ts)
 		}
 
+		if (config.capabilityToggles.mcpServers[server_name] !== true) {
+			config.taskState.consecutiveMistakeCount++
+			return formatResponse.toolError(`MCP server '${server_name}' is not enabled for this task.`)
+		}
+
 		config.taskState.consecutiveMistakeCount = 0
 
 		// Handle approval flow

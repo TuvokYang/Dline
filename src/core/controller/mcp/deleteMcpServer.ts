@@ -13,7 +13,8 @@ import type { Controller } from "../index"
 export async function deleteMcpServer(controller: Controller, request: StringRequest): Promise<McpServers> {
 	try {
 		// Call the RPC variant to delete the server and get updated server list
-		const mcpServers = (await controller.mcpHub?.deleteServerRPC(request.value)) || []
+		await controller.mcpHub?.deleteServerRPC(request.value)
+		const mcpServers = await controller.mcpHub.getLatestMcpServersRPC(controller.mcpOwnerId)
 
 		// Convert application types to protobuf types
 		const protoServers = convertMcpServersToProtoMcpServers(mcpServers)

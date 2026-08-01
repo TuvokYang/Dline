@@ -186,7 +186,7 @@ export async function parseSlashCommands(
 				if (mcpParts.length >= 2) {
 					const serverName = mcpParts[0]
 					const promptName = mcpParts.slice(1).join(":")
-					if (capabilityContext?.capabilityToggles.mcpServers[serverName] === false) {
+					if (capabilityContext?.capabilityToggles.mcpServers[serverName] !== true) {
 						return { processedText: text, needsClinerulesFileCheck: false }
 					}
 

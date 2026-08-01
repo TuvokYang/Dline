@@ -13,8 +13,8 @@ import type { Controller } from "../index"
 export async function toggleToolAutoApprove(controller: Controller, request: ToggleToolAutoApproveRequest): Promise<McpServers> {
 	try {
 		// Call the RPC variant that returns the servers directly
-		const mcpServers =
-			(await controller.mcpHub?.toggleToolAutoApproveRPC(request.serverName, request.toolNames, request.autoApprove)) || []
+		await controller.mcpHub?.toggleToolAutoApproveRPC(request.serverName, request.toolNames, request.autoApprove)
+		const mcpServers = await controller.mcpHub.getLatestMcpServersRPC(controller.mcpOwnerId)
 
 		// Convert application types to proto types
 		return McpServers.create({ mcpServers: convertMcpServersToProtoMcpServers(mcpServers) })

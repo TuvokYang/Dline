@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import type { Anthropic } from "@anthropic-ai/sdk"
 import { accountUsageCoordinator } from "@core/account-usage/AccountUsageCoordinator"
 import { AccountUsage, buildApiHandler } from "@core/api"
@@ -107,6 +107,7 @@ export class Controller {
 	task?: Task
 
 	mcpHub: McpHub
+	readonly mcpOwnerId = randomUUID()
 	accountService: ClineAccountService
 	authService: AuthService
 	ocaAuthService: OcaAuthService
@@ -144,8 +145,27 @@ export class Controller {
 			remoteWorkflowToggles: this.stateManager.getGlobalStateKey("remoteWorkflowToggles") || {},
 			globalSubagentsToggles: this.stateManager.getGlobalSettingsKey("globalSubagentsToggles") || {},
 			localSubagentsToggles: this.stateManager.getWorkspaceStateKey("localSubagentsToggles") || {},
-			mcpServers: Object.fromEntries(this.mcpHub.getServers().map((server) => [server.name, server.disabled !== true])),
+			mcpServers: Object.fromEntries(
+				this.mcpHub.getServersForOwner(this.mcpOwnerId).map((server) => [server.name, server.disabled !== true]),
+			),
 		})
+	}
+
+	private updateWorkspaceMcpRegistration(workspaceRoots?: readonly string[]): Promise<void> {
+		const generation = ++this.workspaceMcpRegistrationGeneration
+		const registration = (async () => {
+			const roots = workspaceRoots ?? (await HostProvider.workspace.getWorkspacePaths({})).paths
+			if (this.disposed || generation !== this.workspaceMcpRegistrationGeneration) return
+			await this.mcpHub.registerWorkspaceOwner(this.mcpOwnerId, roots)
+		})().catch((error) => {
+			Logger.error("[Controller] Failed to register workspace MCP descriptors:", error)
+		})
+		this.workspaceMcpRegistration = registration
+		return registration
+	}
+
+	async ensureWorkspaceMcpDescriptors(): Promise<void> {
+		await this.workspaceMcpRegistration
 	}
 
 	// Timer for periodic remote config fetching
@@ -156,6 +176,8 @@ export class Controller {
 	private accountUsagePolling = false
 	private accountUsagePollingEnabled = true
 	private disposed = false
+	private workspaceMcpRegistration: Promise<void> = Promise.resolve()
+	private workspaceMcpRegistrationGeneration = 0
 	// Timer for periodic lock heartbeat (keeps .lock file fresh)
 	private lockHeartbeatTimer?: NodeJS.Timeout
 	// Timer for polling lock status when task is in read-only mode
@@ -183,6 +205,7 @@ export class Controller {
 					stateManager: this.stateManager,
 					detectRoots: detectWorkspaceRoots,
 				})
+				await this.updateWorkspaceMcpRegistration(this.workspaceManager?.getRoots().map((root) => root.path))
 			} catch (error) {
 				Logger.error("[Controller] Failed to initialize workspace manager:", error)
 			}
@@ -243,6 +266,7 @@ export class Controller {
 			ExtensionRegistryInfo.version,
 			telemetryService,
 		)
+		void this.updateWorkspaceMcpRegistration()
 
 		// Clean up legacy checkpoints
 		cleanupLegacyCheckpoints().catch((error) => {
@@ -305,7 +329,9 @@ export class Controller {
 		this.stopAccountUsagePolling()
 
 		await this.clearTask()
-		this.mcpHub.dispose()
+		await this.workspaceMcpRegistration
+		await this.mcpHub.unregisterWorkspaceOwner(this.mcpOwnerId)
+		await this.mcpHub.dispose()
 
 		// Clean up lock resources
 		this.lockService.cleanupOrphaned().catch((e) => Logger.error("Lock cleanup failed:", e))
@@ -416,6 +442,7 @@ export class Controller {
 			stateManager: this.stateManager,
 			detectRoots: detectWorkspaceRoots,
 		})
+		await this.updateWorkspaceMcpRegistration(this.workspaceManager?.getRoots().map((root) => root.path))
 
 		const cwd = this.workspaceManager?.getPrimaryRoot()?.path || (await getCwd(getDesktopDir()))
 
