@@ -600,7 +600,15 @@ export class TaskCheckpointManager implements ICheckpointManager {
 		}
 
 		try {
-			await this.state.checkpointTracker.resetHead(checkpointHash)
+			const taskFiles = this.services.taskFileTracker?.getAllModifiedFiles() ?? []
+			if (taskFiles.length > 0) {
+				Logger.debug(
+					`[TaskCheckpointManager] Restoring ${taskFiles.length} task-owned file(s) for task ${this.task.taskId}`,
+				)
+				await this.state.checkpointTracker.restoreFiles(checkpointHash, taskFiles)
+			} else {
+				await this.state.checkpointTracker.resetHead(checkpointHash)
+			}
 			return { status: "restored", checkpointHash }
 		} catch (error) {
 			const errorMessage = error instanceof Error ? error.message : "Unknown error"

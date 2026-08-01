@@ -19,13 +19,14 @@ interface RestoreHarness {
 		askId: string
 	}
 	resetHead: ReturnType<typeof vi.fn>
+	restoreFiles: ReturnType<typeof vi.fn>
 	restoreChatRuntime: ReturnType<typeof vi.fn>
 	resumeTask: ReturnType<typeof vi.fn>
 	persistTaskHistory: ReturnType<typeof vi.fn>
 	postStateToWebview: ReturnType<typeof vi.fn>
 }
 
-function createHarness(messages: ClineMessage[]): RestoreHarness {
+function createHarness(messages: ClineMessage[], trackedFiles?: string[]): RestoreHarness {
 	const taskState = {
 		taskId: "task-1",
 		userMessageContent: [{ type: "text", text: "active user content" }],
@@ -35,6 +36,7 @@ function createHarness(messages: ClineMessage[]): RestoreHarness {
 		askId: "task-1",
 	}
 	const resetHead = vi.fn().mockResolvedValue(undefined)
+	const restoreFiles = vi.fn().mockResolvedValue(undefined)
 	const restoreChatRuntime = vi.fn().mockResolvedValue(undefined)
 	const resumeTask = vi.fn().mockResolvedValue(undefined)
 	const apiConversation = {
@@ -67,6 +69,9 @@ function createHarness(messages: ClineMessage[]): RestoreHarness {
 			diffViewProvider: {},
 			messageStateHandler,
 			taskState,
+			...(trackedFiles === undefined
+				? {}
+				: { taskFileTracker: { getAllModifiedFiles: vi.fn().mockReturnValue(trackedFiles) } }),
 		} as never,
 		{
 			updateTaskHistory: vi.fn().mockResolvedValue([]),
@@ -76,10 +81,19 @@ function createHarness(messages: ClineMessage[]): RestoreHarness {
 			postStateToWebview,
 		} as never,
 		{
-			checkpointTracker: { resetHead } as never,
+			checkpointTracker: { resetHead, restoreFiles } as never,
 		},
 	)
-	return { manager, taskState, resetHead, restoreChatRuntime, resumeTask, persistTaskHistory, postStateToWebview }
+	return {
+		manager,
+		taskState,
+		resetHead,
+		restoreFiles,
+		restoreChatRuntime,
+		resumeTask,
+		persistTaskHistory,
+		postStateToWebview,
+	}
 }
 
 describe("TaskCheckpointManager restore isolation", () => {
@@ -97,6 +111,19 @@ describe("TaskCheckpointManager restore isolation", () => {
 		})
 		expect(harness.restoreChatRuntime).not.toHaveBeenCalled()
 		expect(harness.resumeTask).not.toHaveBeenCalled()
+	})
+
+	it("restores only files owned by the active task when file tracking is available", async () => {
+		const taskFiles = ["e:/workspace/panel-a-checkpoint.txt"]
+		const harness = createHarness(
+			[{ ts: 42, type: "say", say: "checkpoint_created", lastCheckpointHash: "hash-1" }],
+			taskFiles,
+		)
+
+		await harness.manager.restoreCheckpoint(42, "workspace")
+
+		expect(harness.restoreFiles).toHaveBeenCalledWith("hash-1", taskFiles)
+		expect(harness.resetHead).not.toHaveBeenCalled()
 	})
 
 	it("projects the restored chat Resume as an interaction continuation instead of a task reload", async () => {
