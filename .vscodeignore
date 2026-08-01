@@ -104,6 +104,7 @@ assets/icons/**
 e2e-build.mjs
 e2e.vsix
 test-results/
+.playwright-mcp/
 
 # Ignore SDK and temp files
 tmp_sdk_check/
