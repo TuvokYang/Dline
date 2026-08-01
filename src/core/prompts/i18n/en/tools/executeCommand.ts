@@ -24,7 +24,7 @@ const prompts: Record<string, string> = {
 	standardRequiresApprovalInstruction:
 		"A boolean indicating whether this command requires explicit user approval before execution in case the user has auto-approve mode enabled. Set to true for potentially impactful operations like installing or uninstalling packages, deleting or overwriting files, system configuration changes, network operations, or any commands that could have unintended side effects. Set to false for safe operations like reading files or directories, running development servers, building projects, and other non-destructive operations.",
 	standardBackgroundInstruction:
-		"Optional boolean. Set true to start the command immediately as a Dline-owned background process, return control immediately, and keep its output and cancellation lifecycle tracked. This takes precedence over synchronous. Defaults to false.",
+		"Optional boolean. Set true to start the command immediately as a Dline-owned background process, return control immediately, and keep its output and cancellation lifecycle tracked. The result includes the function_id required to terminate that process later with kill_command. This takes precedence over synchronous. Defaults to false.",
 	standardSynchronousInstruction:
 		"Optional boolean. Set true to keep the command in the foreground beyond the default 10-second background handoff, waiting until the process exits or its timeout terminates it. Defaults to false. Ignored when background is true.",
 	standardTimeoutInstruction:

@@ -301,7 +301,7 @@
           },
           "background": {
             "type": "boolean",
-            "description": "Optional boolean. Set true to start the command immediately as a Dline-owned background process, return control immediately, and keep its output and cancellation lifecycle tracked. This takes precedence over synchronous. Defaults to false."
+            "description": "Optional boolean. Set true to start the command immediately as a Dline-owned background process, return control immediately, and keep its output and cancellation lifecycle tracked. The result includes the function_id required to terminate that process later with kill_command. This takes precedence over synchronous. Defaults to false."
           },
           "synchronous": {
             "type": "boolean",
@@ -315,6 +315,27 @@
         "required": [
           "command",
           "requires_approval"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "kill_command",
+      "description": "Terminate one currently running command started by execute_command. Use the exact function_id reported by the running execute_command result. This only targets the command owned by that tool call and does not cancel the task or other commands.",
+      "strict": false,
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "function_id": {
+            "type": "string",
+            "description": "The exact function_id reported by the still-running execute_command result. Do not pass a command activity ID, terminal ID, shell process ID, or the function_id of the kill_command call itself."
+          }
+        },
+        "required": [
+          "function_id"
         ],
         "additionalProperties": false
       }

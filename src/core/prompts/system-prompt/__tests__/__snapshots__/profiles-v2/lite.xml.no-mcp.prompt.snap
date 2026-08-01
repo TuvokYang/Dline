@@ -176,7 +176,7 @@ Parameters:
 - command: (required) The CLI command to execute. This should be valid for the current operating system. Ensure the command is properly formatted and does not contain any harmful instructions. Do not use the ~ character or $HOME to refer to the home directory. Do not prepend cd solely to select the execution directory; use workdirectory instead.
 - workdirectory: (optional) Optional directory in which to execute the command. Relative paths are resolved from /workspace/project. The directory must already exist. A directory outside every project root requires user approval.
 - requires_approval: (required) A boolean indicating whether this command requires explicit user approval before execution in case the user has auto-approve mode enabled. Set to true for potentially impactful operations like installing or uninstalling packages, deleting or overwriting files, system configuration changes, network operations, or any commands that could have unintended side effects. Set to false for safe operations like reading files or directories, running development servers, building projects, and other non-destructive operations.
-- background: (optional) Optional boolean. Set true to start the command immediately as a Dline-owned background process, return control immediately, and keep its output and cancellation lifecycle tracked. This takes precedence over synchronous. Defaults to false.
+- background: (optional) Optional boolean. Set true to start the command immediately as a Dline-owned background process, return control immediately, and keep its output and cancellation lifecycle tracked. The result includes the function_id required to terminate that process later with kill_command. This takes precedence over synchronous. Defaults to false.
 - synchronous: (optional) Optional boolean. Set true to keep the command in the foreground beyond the default 10-second background handoff, waiting until the process exits or its timeout terminates it. Defaults to false. Ignored when background is true.
 - timeout: (optional) Optional positive integer timeout in seconds. This is the command's absolute maximum runtime from actual process start; reaching it terminates the process. If omitted, default is 1800 seconds. By default, a command still running at the 10-second background handoff continues as the same tracked background process without resetting this timeout.
 Usage:
@@ -188,6 +188,15 @@ Usage:
 <synchronous></synchronous>
 <timeout></timeout>
 </execute_command>
+
+## kill_command
+Description: Terminate one currently running command started by execute_command. Use the exact function_id reported by the running execute_command result. This only targets the command owned by that tool call and does not cancel the task or other commands.
+Parameters:
+- function_id: (required) The exact function_id reported by the still-running execute_command result. Do not pass a command activity ID, terminal ID, shell process ID, or the function_id of the kill_command call itself.
+Usage:
+<kill_command>
+<function_id></function_id>
+</kill_command>
 
 ## find_references
 Description: Find all semantic references to a symbol at the given file position via the IDE's LSP. Returns file paths, line numbers, and context lines for each reference (definitions, imports, calls). This does NOT find occurrences in string literals, comments, or JSDoc. An empty result may mean the LSP does not support this language or file type, not that no references exist. Use this before renaming or refactoring to understand semantic impact. To search strings and comments, use search_files with regex. Only available in VSCode; other environments return an error suggesting search_files as a fallback.

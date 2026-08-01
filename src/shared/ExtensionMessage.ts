@@ -429,6 +429,7 @@ export interface ClineSayTool {
 		| "focusChainChanged"
 		| "statusUpdate"
 		| "actModeRespond"
+		| "killCommand"
 	path?: string
 	diff?: string
 	content?: string | string[]

@@ -754,6 +754,77 @@ e2e(
 )
 
 e2e(
+	"Tools - kill_command terminates the exact background execute_command by function_id",
+	async ({ helper, server, sidebar, userDataDir }) => {
+		e2e.setTimeout(180_000)
+		await helper.signin(sidebar)
+		await setAutoApproveAction(sidebar, "Execute safe commands", false)
+		server.resetOpenAiMock()
+		const executeFunctionId = "call_ai_kill_background_command"
+		const killFunctionId = "call_ai_kill_command"
+		server.enqueueOpenAiResponses(
+			{
+				type: "tool",
+				id: executeFunctionId,
+				name: "execute_command",
+				arguments: {
+					command: `node -e "console.log('E2E_AI_KILL_STARTED'); setInterval(() => {}, 1000)"`,
+					workdirectory: ".",
+					requires_approval: true,
+					background: true,
+					timeout: 60,
+				},
+			},
+			{
+				type: "tool",
+				id: killFunctionId,
+				name: "kill_command",
+				arguments: { function_id: executeFunctionId },
+				expectedToolResults: [
+					{
+						callId: executeFunctionId,
+						contentIncludes: ["Command is running in the background.", `function_id: ${executeFunctionId}`],
+					},
+				],
+			},
+			{
+				type: "tool",
+				id: "call_ai_kill_completion",
+				name: "attempt_completion",
+				arguments: { result: "E2E_AI_KILL_COMMAND_OK" },
+				expectedToolResults: [
+					{ callId: killFunctionId, contentIncludes: "Termination was requested for the running command." },
+				],
+			},
+		)
+
+		await sendTask(sidebar, "Start a background command, then terminate it with kill_command.")
+		const approveButton = sidebar.getByText("Approve", { exact: true })
+		await expect(approveButton).toBeVisible({ timeout: 60_000 })
+		await approveButton.click()
+
+		await expect(sidebar.getByText("Dline requested command termination:", { exact: true })).toBeVisible({
+			timeout: 60_000,
+		})
+		await expect(sidebar.getByText(executeFunctionId, { exact: true })).toBeVisible()
+		await expect(sidebar.getByText("Termination was requested for the running command.", { exact: true })).toBeVisible()
+		await expect(sidebar.getByText("E2E_AI_KILL_COMMAND_OK", { exact: false }).last()).toBeVisible({ timeout: 60_000 })
+
+		await expect.poll(() => server.openAiRequestCount).toBe(3)
+		const consumptions = server.getMockConsumptions("openai-compatible-chat")
+		expect(consumptions.map((entry) => entry.toolName)).toEqual(["execute_command", "kill_command", "attempt_completion"])
+		expect(consumptions[2].contractError).toBeUndefined()
+		expect(consumptions[2].requestToolResults).toContainEqual(
+			expect.objectContaining({
+				callId: killFunctionId,
+				content: expect.stringContaining("Termination was requested for the running command."),
+			}),
+		)
+		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+	},
+)
+
+e2e(
 	"Tools - subagent-row Cancel stops a foreground subagent and returns its tool result",
 	async ({ helper, server, sidebar, userDataDir }) => {
 		e2e.setTimeout(180_000)

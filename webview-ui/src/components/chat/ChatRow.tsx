@@ -61,6 +61,7 @@ import { FeatureTip } from "./FeatureTip"
 import { FocusChainChangeRow } from "./FocusChainChangeRow"
 import GenerateReportRow from "./GenerateReportRow"
 import HookMessage from "./HookMessage"
+import { KillCommandRow } from "./KillCommandRow"
 import LoadCapabilityRow from "./LoadCapabilityRow"
 import { MarkdownRow } from "./MarkdownRow"
 import NewTaskPreview from "./NewTaskPreview"
@@ -872,6 +873,13 @@ export const ChatRowContent = memo(
 					return <StatusUpdateRow text={Array.isArray(tool.content) ? tool.content.join("\n") : tool.content || ""} />
 				case "actModeRespond":
 					return <ActModeRespondRow text={Array.isArray(tool.content) ? tool.content.join("\n") : tool.content || ""} />
+				case "killCommand":
+					return (
+						<KillCommandRow
+							functionId={tool.path || ""}
+							result={Array.isArray(tool.content) ? tool.content.join("\n") : tool.content || ""}
+						/>
+					)
 				default:
 					return <InvisibleSpacer />
 			}

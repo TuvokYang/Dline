@@ -305,7 +305,7 @@ describe("CommandExecutor explicit background execution", () => {
 		assert.equal(process.terminate.mock.calls.length, 1)
 	})
 
-	it("keeps cancellation terminal when the process reports an error", async () => {
+	it("cancels by canonical function identity and keeps cancellation terminal when the process reports an error", async () => {
 		const process = new FakeTerminalProcess()
 		const processPromise = process.asResultPromise()
 		const terminalManager = createTerminalManager()
@@ -343,13 +343,16 @@ describe("CommandExecutor explicit background execution", () => {
 			},
 		)
 
-		const execution = executor.execute("watch", undefined, { commandTs: 77 })
+		const execution = executor.execute("watch", undefined, { commandTs: 77, functionId: "call-watch" })
 		await vi.waitFor(() => expect(executor.hasTaskOwnedCommand()).toBe(true))
-		expect(await executor.cancelCommand("command_77_1")).toBe(true)
+		expect(await executor.cancelCommandByFunctionId("call-unknown")).toBe(false)
+		expect(await executor.cancelCommandByFunctionId("call-watch")).toBe(true)
 		process.emit("error", new Error("terminated"))
 		process.continue()
 		await execution
 
+		expect(await executor.cancelCommandByFunctionId("call-watch")).toBe(false)
+		expect(process.terminate).toHaveBeenCalledTimes(1)
 		expect(updateCommandActivity).toHaveBeenCalledWith("command_77_1", expect.objectContaining({ status: "cancelled" }))
 		expect(updateCommandActivity).not.toHaveBeenCalledWith("command_77_1", expect.objectContaining({ status: "failed" }))
 		expect(updateClineMessage).toHaveBeenCalledWith(0, { commandStatus: "cancelled" })

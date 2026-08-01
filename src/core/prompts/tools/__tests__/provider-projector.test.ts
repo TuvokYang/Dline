@@ -120,6 +120,25 @@ describe("provider tool projector", () => {
 	it.each([
 		PromptProfile.Standard,
 		PromptProfile.Lite,
+	])("projects kill_command as a separate function_id-targeted tool in %s", (profile) => {
+		const tool = findTool(new ToolPromptGenerator().generate(profile, BASE_CONTEXT), ClineDefaultTool.KILL_COMMAND)
+
+		expect(tool).toMatchObject({
+			type: "function",
+			function: {
+				name: ClineDefaultTool.KILL_COMMAND,
+				parameters: {
+					required: ["function_id"],
+					properties: { function_id: { type: "string" } },
+				},
+			},
+		})
+		expect(JSON.stringify(tool)).toContain("does not cancel the task or other commands")
+	})
+
+	it.each([
+		PromptProfile.Standard,
+		PromptProfile.Lite,
 	])("exposes singular and parallel subagent tools without load_subagent in %s", (profile) => {
 		const context = { ...BASE_CONTEXT, subagentsEnabled: true, isSubagentRun: false }
 		const tools = new ToolPromptGenerator().generate(profile, context)

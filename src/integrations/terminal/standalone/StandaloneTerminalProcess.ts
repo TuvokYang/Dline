@@ -191,11 +191,12 @@ export class StandaloneTerminalProcess extends EventEmitter<TerminalProcessEvent
 				// Spawn the process with special handling for "cmd.exe"
 				this.childProcess = spawn("cmd.exe", shellArgs, shellOptions)
 			} else {
-				// Spawn the process with detached: true to create a process group
-				// This allows us to kill the entire process tree when terminating
+				// POSIX uses a detached process group. On Windows, detached PowerShell
+				// can exit successfully before executing the supplied command; tree-kill
+				// already terminates the full Windows process tree via taskkill /T /F.
 				this.childProcess = spawn(shell, shellArgs, {
 					...shellOptions,
-					detached: true,
+					detached: process.platform !== "win32",
 				})
 			}
 			this.resolveStarted?.(Date.now())

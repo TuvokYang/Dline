@@ -401,6 +401,8 @@ export interface CommandExecutorCallbacks {
  * Optional per-command execution behavior overrides.
  */
 export interface CommandExecutionOptions {
+	/** Canonical function identity of the execute_command tool call. */
+	functionId?: string
 	/** Canonical directory in which the command must execute. */
 	workdirectory?: string
 	/**

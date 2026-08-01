@@ -9,6 +9,7 @@ export enum ClineDefaultTool {
 	ASK = "ask_followup_question",
 	ATTEMPT = "attempt_completion",
 	BASH = "execute_command",
+	KILL_COMMAND = "kill_command",
 	FILE_EDIT = "replace_in_file",
 	FILE_READ = "read_file",
 	FILE_NEW = "write_to_file",

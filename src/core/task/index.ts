@@ -969,6 +969,7 @@ export class Task {
 			this.saveCheckpointCallback.bind(this),
 			this.sayAndCreateMissingParamError.bind(this),
 			this.executeCommandTool.bind(this),
+			this.killCommandTool.bind(this),
 			this.cancelBackgroundCommand.bind(this),
 			() => this.checkpointManager?.doesLatestTaskCompletionHaveNewChanges() ?? Promise.resolve(false),
 			this.createWrappedFCUpdateCallback(),
@@ -2651,6 +2652,11 @@ export class Task {
 			await this.rejectCommandExecution(options?.commandTs)
 		}
 		return outcome
+	}
+
+	/** Terminate one running command by its canonical execute_command function identity. */
+	private async killCommandTool(functionId: string): Promise<boolean> {
+		return this.commandExecutor.cancelCommandByFunctionId(functionId)
 	}
 
 	/** Route an in-terminal command rejection through the canonical turn reducer. */

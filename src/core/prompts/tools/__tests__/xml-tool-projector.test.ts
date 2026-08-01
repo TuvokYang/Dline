@@ -53,6 +53,14 @@ describe("XML tool projection", () => {
 		expect(xml).not.toContain("foreground wait")
 	})
 
+	it("documents kill_command separately with its exact function identity", () => {
+		const xml = new ToolPromptGenerator().generateXml(PromptProfile.Standard, BASE_CONTEXT)
+
+		expect(xml).toContain("## kill_command")
+		expect(xml).toContain("- function_id: (required)")
+		expect(xml).toContain("does not cancel the task or other commands")
+	})
+
 	it("keeps canonical runtime tokens unresolved until the System facade final scan", async () => {
 		const generator = new ToolPromptGenerator()
 		const xml = generator.generateXml(PromptProfile.Standard, BASE_CONTEXT)

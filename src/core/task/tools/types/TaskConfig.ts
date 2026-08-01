@@ -166,6 +166,7 @@ export interface TaskCallbacks {
 		timeoutSeconds: number | undefined,
 		options?: CommandExecutionOptions,
 	) => Promise<CommandExecutionOutcome>
+	killCommandTool?: (functionId: string) => Promise<boolean>
 	cancelRunningCommandTool?: () => Promise<boolean>
 
 	doesLatestTaskCompletionHaveNewChanges: () => Promise<boolean>

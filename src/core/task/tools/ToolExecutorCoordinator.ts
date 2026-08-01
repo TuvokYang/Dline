@@ -87,6 +87,7 @@ export class ToolExecutorCoordinator {
 		[ClineDefaultTool.ASK]: (_v: ToolValidator) => new AskFollowupQuestionToolHandler(),
 		[ClineDefaultTool.ATTEMPT]: (_v: ToolValidator) => new AttemptCompletionHandler(),
 		[ClineDefaultTool.BASH]: (_v: ToolValidator) => new ExecuteCommandToolHandler(),
+		[ClineDefaultTool.KILL_COMMAND]: (_v: ToolValidator) => new ExecuteCommandToolHandler(ClineDefaultTool.KILL_COMMAND),
 		[ClineDefaultTool.FILE_EDIT]: (v: ToolValidator) =>
 			new SharedToolHandler(ClineDefaultTool.FILE_EDIT, new WriteToFileToolHandler(v)),
 		[ClineDefaultTool.FILE_READ]: (v: ToolValidator) => new ReadFileToolHandler(v),

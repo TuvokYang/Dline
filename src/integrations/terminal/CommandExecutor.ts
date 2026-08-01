@@ -52,6 +52,8 @@ export class CommandExecutor {
 	// Track the currently executing foreground process for cancellation
 	private currentProcess: TerminalProcessResultPromise | null = null
 	private readonly processes = new Map<string, TerminalProcessResultPromise>()
+	private readonly activityIdsByFunctionId = new Map<string, string>()
+	private readonly functionIdsByActivityId = new Map<string, string>()
 	private readonly cancellationOwners = new Map<string, CommandCancellationOwner>()
 	private readonly cancelledActivityIds = new Set<string>()
 
@@ -143,6 +145,10 @@ export class CommandExecutor {
 		let activityLineCount = 0
 		let timedOut = false
 		this.processes.set(activityId, process)
+		if (options?.functionId) {
+			this.activityIdsByFunctionId.set(options.functionId, activityId)
+			this.functionIdsByActivityId.set(activityId, options.functionId)
+		}
 		this.cancellationOwners.set(activityId, cancellationOwner)
 		if (options?.commandTs) {
 			const messages = this.callbacks.getClineMessages() as Array<{ ts?: number }>
@@ -173,6 +179,11 @@ export class CommandExecutor {
 		const clearCurrentProcess = () => {
 			if (this.currentProcess === process) this.currentProcess = null
 			this.processes.delete(activityId)
+			const functionId = this.functionIdsByActivityId.get(activityId)
+			if (functionId) {
+				this.functionIdsByActivityId.delete(activityId)
+				this.activityIdsByFunctionId.delete(functionId)
+			}
 			this.cancellationOwners.delete(activityId)
 		}
 		process.once("completed", clearCurrentProcess)
@@ -335,6 +346,12 @@ export class CommandExecutor {
 		}
 		await Promise.resolve(process.terminate())
 		return true
+	}
+
+	/** Cancel one running command by the canonical execute_command function identity. */
+	async cancelCommandByFunctionId(functionId: string): Promise<boolean> {
+		const activityId = this.activityIdsByFunctionId.get(functionId)
+		return activityId ? this.cancelCommand(activityId) : false
 	}
 
 	/** Mark one cancellation request exactly once across every command control surface. */

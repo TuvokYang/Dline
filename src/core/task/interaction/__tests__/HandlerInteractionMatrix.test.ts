@@ -36,7 +36,15 @@ vi.mock("../../tools/utils/ToolHookUtils", () => ({
 
 /** Create one stable tool-use block. */
 function block(name: ClineDefaultTool, params: Record<string, string>): ToolUse {
-	return { type: "tool_use", name, params, partial: false, ts: 100, dline_tid: `tid-${name}` } as ToolUse
+	return {
+		type: "tool_use",
+		name,
+		params,
+		partial: false,
+		ts: 100,
+		function_id: `function-${name}`,
+		dline_tid: `tid-${name}`,
+	} as ToolUse
 }
 
 /** Create a focused handler configuration with typed interaction ports. */
@@ -261,6 +269,26 @@ describe("handler interaction matrix", () => {
 			"echo second",
 			3600,
 			expect.objectContaining({ synchronous: true }),
+		)
+	})
+
+	it("terminates only the execute_command identified by function_id", async () => {
+		const taskConfig = config()
+		taskConfig.callbacks.killCommandTool = vi.fn(async () => true)
+
+		await new ExecuteCommandToolHandler(ClineDefaultTool.KILL_COMMAND).execute(
+			taskConfig,
+			block(ClineDefaultTool.KILL_COMMAND, { function_id: "function-execute-command" }),
+		)
+
+		expect(taskConfig.callbacks.killCommandTool).toHaveBeenCalledWith("function-execute-command")
+		expect(taskConfig.callbacks.say).toHaveBeenCalledWith(
+			"tool",
+			JSON.stringify({ tool: "killCommand", path: "function-execute-command", content: "prompt" }),
+			undefined,
+			undefined,
+			false,
+			100,
 		)
 	})
 

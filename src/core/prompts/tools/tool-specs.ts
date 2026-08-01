@@ -178,6 +178,9 @@ export const STANDARD_TOOL_SPECS: readonly Omit<ProfileToolSpec, "profile">[] = 
 		param("synchronous", false, getPrompt("executeCommand", "standardSynchronousInstruction"), "boolean"),
 		param("timeout", false, getPrompt("executeCommand", "standardTimeoutInstruction"), "integer"),
 	]),
+	spec(ClineDefaultTool.KILL_COMMAND, getPrompt("killCommand", "standardDescription"), [
+		param("function_id", true, getPrompt("killCommand", "standardFunctionIdInstruction")),
+	]),
 	spec(
 		ClineDefaultTool.BROWSER,
 		getPrompt("browserAction", "description"),

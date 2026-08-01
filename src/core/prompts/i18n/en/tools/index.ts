@@ -11,6 +11,7 @@ import executeCommand from "./executeCommand"
 import findReferences from "./findReferences"
 import generateExplanation from "./generateExplanation"
 import generateReport from "./generateReport"
+import killCommand from "./killCommand"
 import listCodeDefinitionNames from "./listCodeDefinitionNames"
 import listFiles from "./listFiles"
 import loadCapability from "./loadCapability"
@@ -52,6 +53,7 @@ export const toolPromptModules = [
 		clineIgnoreError: createRuntimeContract("PATH"),
 		permissionDeniedError: createRuntimeContract("REASON"),
 	}),
+	defineLegacyModule("killCommand", "tools", killCommand),
 	defineLegacyModule("findReferences", "tools", findReferences, {
 		errorPrefix: createRuntimeContract("ERROR"),
 	}),

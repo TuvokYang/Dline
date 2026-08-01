@@ -1,5 +1,6 @@
 import { resolveProvider } from "@core/api"
 import type { ToolUse } from "@core/assistant-message"
+import { getPrompt } from "@core/prompts/i18n"
 import { formatResponse } from "@core/prompts/responses"
 import { WorkspacePathAdapter } from "@core/workspace/WorkspacePathAdapter"
 import { processFilesIntoText } from "@integrations/misc/extract-text"
@@ -24,14 +25,18 @@ import { resolveCommandWorkdirectory } from "./command-workdirectory"
 export { resolveCommandTimeoutSeconds } from "./command-execution-options"
 
 export class ExecuteCommandToolHandler implements IFullyManagedTool {
-	readonly name = ClineDefaultTool.BASH
+	constructor(readonly name: ClineDefaultTool.BASH | ClineDefaultTool.KILL_COMMAND = ClineDefaultTool.BASH) {}
 
 	getDescription(block: ToolUse): string {
+		if (block.name === ClineDefaultTool.KILL_COMMAND) {
+			return `[${block.name} for '${block.params.function_id}']`
+		}
 		const workdirectory = block.params.workdirectory ? ` in '${block.params.workdirectory}'` : ""
 		return `[${block.name} for '${block.params.command}'${workdirectory}]`
 	}
 
 	async handlePartialBlock(block: ToolUse, uiHelpers: StronglyTypedUIHelpers): Promise<void> {
+		if (block.name === ClineDefaultTool.KILL_COMMAND) return
 		const command = block.params.command
 		if (uiHelpers.getConfig().isSubagentExecution) {
 			return
@@ -52,6 +57,10 @@ export class ExecuteCommandToolHandler implements IFullyManagedTool {
 	}
 
 	async execute(config: TaskConfig, block: ToolUse): Promise<ToolResponse> {
+		if (block.name === ClineDefaultTool.KILL_COMMAND) {
+			return this.executeKillCommand(config, block)
+		}
+
 		let command: string | undefined = block.params.command
 		const requiresApprovalRaw: string | undefined = block.params.requires_approval
 		const requiresApprovalPerLLM = requiresApprovalRaw?.toLowerCase() === "true"
@@ -344,6 +353,7 @@ export class ExecuteCommandToolHandler implements IFullyManagedTool {
 
 		const outcome = await config.callbacks.executeCommandTool(actualCommand, timeoutSeconds, {
 			commandTs: block.ts,
+			functionId: block.function_id,
 			startInBackground: executionOptions.background,
 			synchronous: executionOptions.synchronous,
 			workdirectory: executionDir,
@@ -363,6 +373,37 @@ export class ExecuteCommandToolHandler implements IFullyManagedTool {
 			config.taskState.fileReadCache.clear()
 		}
 
+		if (outcome.backgroundCommandId && typeof outcome.result === "string") {
+			return `${outcome.result}\nfunction_id: ${block.function_id}`
+		}
 		return outcome.result
+	}
+
+	private async executeKillCommand(config: TaskConfig, block: ToolUse): Promise<ToolResponse> {
+		const functionId = block.params.function_id?.trim()
+		if (!functionId) {
+			config.taskState.consecutiveMistakeCount++
+			return config.callbacks.sayAndCreateMissingParamError(this.name, "function_id", undefined, block.ts)
+		}
+
+		const killCommand = config.callbacks.killCommandTool
+		if (!killCommand) {
+			return formatResponse.toolError(getPrompt("killCommand", "unavailableError"))
+		}
+
+		config.taskState.consecutiveMistakeCount = 0
+		const cancelled = await killCommand(functionId)
+		const result = getPrompt("killCommand", cancelled ? "terminationRequested" : "notRunning")
+		if (!config.isSubagentExecution) {
+			await config.callbacks.say(
+				"tool",
+				JSON.stringify({ tool: "killCommand", path: functionId, content: result }),
+				undefined,
+				undefined,
+				false,
+				block.ts,
+			)
+		}
+		return formatResponse.toolResult(result)
 	}
 }
