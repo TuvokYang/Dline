@@ -552,7 +552,7 @@ e2e(
 		await expect(sidebar.getByText("Approve", { exact: true })).toBeVisible({ timeout: 60_000 })
 		await sidebar.getByText("Approve", { exact: true }).click()
 
-		await sidebar.getByRole("tab", { name: /Activity/ }).click()
+		await sidebar.getByRole("tab", { name: /^Activities(?: \d+)?$/ }).click()
 		await sidebar.getByRole("button", { name: "All", exact: true }).first().click()
 		const activity = sidebar.getByTestId("activity-item").filter({ hasText: "Background Command" })
 		await expect(activity).toHaveCount(1, { timeout: 30_000 })
@@ -570,7 +570,7 @@ e2e(
 		const handoff = server.getMockConsumptions("openai-compatible-chat")[1]
 		expect(handoff.contractError).toBeUndefined()
 
-		await sidebar.getByRole("tab", { name: /Activity/ }).click()
+		await sidebar.getByRole("tab", { name: /^Activities(?: \d+)?$/ }).click()
 		await sidebar.getByRole("button", { name: "All", exact: true }).first().click()
 		await expect(activity).toContainText("completed", { timeout: 90_000 })
 		await expect.poll(async () => readFile(logPath, "utf8").catch(() => ""), { timeout: 90_000 }).toContain(finishedMarker)
