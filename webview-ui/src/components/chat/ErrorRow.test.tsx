@@ -145,7 +145,7 @@ describe("ErrorRow", () => {
 
 			expect(screen.queryByText("Authentication failed")).not.toBeInTheDocument()
 			expect(screen.getByText(/Whoops looks like you're logged out/)).toBeInTheDocument()
-			expect(screen.getByText("Sign in to Cline")).toBeInTheDocument()
+			expect(screen.getByText("Sign in to Dline")).toBeInTheDocument()
 		})
 
 		it("renders a PowerShell API failure without adding unrelated legacy content", async () => {

@@ -139,6 +139,20 @@ e2e(
 
 			await selectSendShortcut(firstSidebar, "ctrlEnter")
 			await firstSidebar.getByTestId("tab-terminal").click()
+			await expect(
+				firstSidebar.getByText("Set how long Dline waits for shell integration to activate before executing commands.", {
+					exact: false,
+				}),
+			).toBeVisible()
+			await expect(
+				firstSidebar.getByText("When enabled, Dline will reuse existing terminal windows", { exact: false }),
+			).toBeVisible()
+			await expect(
+				firstSidebar.getByText("Choose whether Dline runs commands in the VS Code terminal or a background process.", {
+					exact: true,
+				}),
+			).toBeVisible()
+			await expect(firstSidebar.getByText(/Cline/)).toHaveCount(0)
 			const timeout = firstSidebar.locator("#terminal-command-timeout input")
 			await startSettingControlStabilityObserver(firstSidebar, { selector: "#terminal-command-timeout input" }, "value")
 			await timeout.fill("0.5")

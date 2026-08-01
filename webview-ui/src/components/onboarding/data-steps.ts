@@ -12,7 +12,7 @@ type UserTypeSelection = {
 
 export const STEP_CONFIG = {
 	0: {
-		title: "How will you use Cline?",
+		title: "How will you use Dline?",
 		description: "Select an option below to get started.",
 		buttons: [{ text: "Continue", action: "next", variant: "default" }],
 	},
@@ -47,5 +47,5 @@ export const STEP_CONFIG = {
 export const USER_TYPE_SELECTIONS: UserTypeSelection[] = [
 	{ title: "Absolutely Free", description: "Get started at no cost", type: NEW_USER_TYPE.FREE },
 	{ title: "Frontier Model", description: "Claude, GPT Codex, Gemini, etc.", type: NEW_USER_TYPE.POWER },
-	{ title: "Bring my own API key", description: "Use Cline with your provider of choice", type: NEW_USER_TYPE.BYOK },
+	{ title: "Bring my own API key", description: "Use Dline with your provider of choice", type: NEW_USER_TYPE.BYOK },
 ]
