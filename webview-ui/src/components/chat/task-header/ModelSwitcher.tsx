@@ -98,7 +98,7 @@ const ModelSwitcher: React.FC<ModelSwitcherProps> = ({ onOpenSettings }) => {
 	}, [profiles, planActSeparateModelsSetting, activeTab])
 
 	return (
-		<div style={{ position: "relative" }}>
+		<div style={{ flex: "1 1 auto", minWidth: 0, position: "relative" }}>
 			<button
 				aria-label="Select model"
 				className="bg-transparent border-0 cursor-pointer p-0 text-xs text-description w-full text-left truncate"

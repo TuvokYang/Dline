@@ -1692,7 +1692,7 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 					<ButtonGroup className="ease-in-out h-5 z-10 flex items-center min-w-0 max-w-[60%]">
 						<Tooltip>
 							<TooltipContent>Add Context</TooltipContent>
-							<TooltipTrigger>
+							<TooltipTrigger asChild>
 								<VSCodeButton
 									appearance="icon"
 									aria-label="Add Context"
@@ -1708,7 +1708,7 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 
 						<Tooltip>
 							<TooltipContent>Add Files & Images</TooltipContent>
-							<TooltipTrigger>
+							<TooltipTrigger asChild>
 								<VSCodeButton
 									appearance="icon"
 									aria-label="Add Files & Images"

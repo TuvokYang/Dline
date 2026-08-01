@@ -447,7 +447,7 @@ const ClineRulesToggleModal: React.FC<{ hasTaskDraft?: boolean }> = ({ hasTaskDr
 	// Toggle hook handler
 	const toggleHook = (isGlobal: boolean, hookName: string, enabled: boolean, workspaceName?: string) => {
 		FileServiceClient.toggleHook({
-			metadata: {} as any,
+			metadata: {},
 			hookName,
 			isGlobal,
 			enabled,
@@ -613,11 +613,11 @@ const ClineRulesToggleModal: React.FC<{ hasTaskDraft?: boolean }> = ({ hasTaskDr
 	}, [isVisible])
 
 	return (
-		<div className="inline-flex min-w-0 max-w-full items-center" ref={modalRef}>
+		<div className="inline-flex min-w-0 max-w-full shrink-0 items-center" ref={modalRef}>
 			<div className="inline-flex w-full items-center" ref={buttonRef}>
 				<Tooltip>
 					{!isVisible && <TooltipContent>Manage Dline Rules & Workflows</TooltipContent>}
-					<TooltipTrigger>
+					<TooltipTrigger asChild>
 						<VSCodeButton
 							appearance="icon"
 							aria-label={isVisible ? "Hide Dline Rules & Workflows" : "Show Dline Rules & Workflows"}

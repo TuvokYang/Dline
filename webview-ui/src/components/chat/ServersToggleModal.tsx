@@ -57,11 +57,11 @@ const ServersToggleModal: React.FC<{ hasTaskDraft?: boolean }> = ({ hasTaskDraft
 	}, [isVisible])
 
 	return (
-		<div className="inline-flex min-w-0 max-w-full items-center" ref={modalRef}>
+		<div className="inline-flex min-w-0 max-w-full shrink-0 items-center" ref={modalRef}>
 			<div className="inline-flex w-full items-center" ref={buttonRef}>
 				<Tooltip>
 					{!isVisible && <TooltipContent>Manage MCP Servers</TooltipContent>}
-					<TooltipTrigger>
+					<TooltipTrigger asChild>
 						<VSCodeButton
 							appearance="icon"
 							aria-label={isVisible ? "Hide MCP Servers" : "Show MCP Servers"}
