@@ -4,6 +4,7 @@ import { formatResponse } from "@core/prompts/responses"
 import { GlobalFileNames } from "@core/storage/disk"
 import { readJsonl, writeJsonl } from "@core/storage/jsonl-utils"
 import { ClineApiReqInfo, ClineMessage } from "@shared/ExtensionMessage"
+import { USER_CONTENT_TAGS } from "@shared/messages/constants"
 import type {
 	ClineAssistantToolUseBlock,
 	ClineContent,
@@ -16,6 +17,7 @@ import * as path from "path"
 import { Logger } from "@/shared/services/Logger"
 import { isTurnEndingToolName } from "../../task/assistant-message-order"
 import { createMissingToolResultMessage } from "../../task/resume/ResumeProvenance"
+import { extractUserPromptFromContent } from "../../task/utils/extractUserPromptFromContent"
 import { getContextTokens, readContextTokens } from "./context-pressure"
 import { computeCompactTrigger, computeSummarizeBudget, getContextWindowInfo } from "./context-window-utils"
 
@@ -49,6 +51,30 @@ type SerializedContextHistory = Array<
 		],
 	]
 >
+
+/** Keep the original task while dropping injected metadata from the first request. */
+function extractInitialTaskBlock(text: string): string | undefined {
+	const normalized = text.toLowerCase()
+	const start = normalized.indexOf("<task>")
+	if (start < 0) return undefined
+	const closingTag = "</task>"
+	const end = normalized.indexOf(closingTag, start + "<task>".length)
+	if (end < 0) return undefined
+	return text.slice(start, end + closingTag.length).trim()
+}
+
+/** Recover only explicitly tagged user input before discarding an orphaned result. */
+function extractTaggedUserPrompt(block: ClineUserToolResultContentBlock): string | undefined {
+	const resultContent =
+		typeof block.content === "string" ? ([{ type: "text", text: block.content }] satisfies ClineContent[]) : block.content
+	const taggedText = resultContent.filter(
+		(candidate) =>
+			candidate.type === "text" &&
+			USER_CONTENT_TAGS.some((tag) => candidate.text.toLowerCase().includes(tag.toLowerCase())),
+	) as ClineContent[]
+	const prompt = extractUserPromptFromContent(taggedText)
+	return prompt || undefined
+}
 
 export class ContextManager {
 	// mapping from the apiMessages outer index to the inner message index to a list of actual changes, ordered by timestamp
@@ -613,11 +639,19 @@ export class ContextManager {
 			if (firstMessageAfterTruncation.role === "user" && Array.isArray(firstMessageAfterTruncation.content)) {
 				const hasToolResults = firstMessageAfterTruncation.content.some((block) => block.type === "tool_result")
 				if (hasToolResults) {
-					// Clone and filter out all tool_result blocks
+					const preservedUserPrompts = firstMessageAfterTruncation.content
+						.filter((block): block is ClineUserToolResultContentBlock => block.type === "tool_result")
+						.map(extractTaggedUserPrompt)
+						.filter((prompt): prompt is string => prompt !== undefined)
+					const retainedContent = (firstMessageAfterTruncation.content as ClineContent[]).filter(
+						(block) => block.type !== "tool_result",
+					)
+					if (preservedUserPrompts.length > 0) {
+						retainedContent.unshift({ type: "text", text: preservedUserPrompts.join("\n\n") })
+					}
+
 					messagesToUpdate[2] = cloneDeep(firstMessageAfterTruncation)
-					;(messagesToUpdate[2].content as ClineContent[]) = (
-						firstMessageAfterTruncation.content as ClineContent[]
-					).filter((block) => block.type !== "tool_result")
+					;(messagesToUpdate[2].content as ClineContent[]) = retainedContent
 				}
 			}
 		}
@@ -895,7 +929,8 @@ export class ContextManager {
 				}
 
 				if (firstUserMessage) {
-					const processedFirstUserMessage = formatResponse.processFirstUserMessageForTruncation()
+					const processedFirstUserMessage =
+						extractInitialTaskBlock(firstUserMessage) ?? formatResponse.processFirstUserMessageForTruncation()
 
 					const innerMap = new Map<number, ContextUpdate[]>()
 					innerMap.set(0, [[timestamp, "text", [processedFirstUserMessage], []]])

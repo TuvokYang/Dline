@@ -109,6 +109,15 @@ describe("ContextManager", () => {
 			expect(result).to.deep.equal([2, 1])
 		})
 
+		it("drops completed middle turns while retaining the latest unpaired user turn", () => {
+			const messages = createMessages(7)
+			const result = contextManager.getNextTruncationRange(messages, undefined, "none")
+			const effectiveMessages = [...messages.slice(0, result[0]), ...messages.slice(result[1] + 1)]
+
+			expect(result).to.deep.equal([2, 5])
+			expect(effectiveMessages).to.deep.equal([messages[0], messages[1], messages[6]])
+		})
+
 		it("preserves the message structure when truncating", () => {
 			const messages = createMessages(20)
 			const result = contextManager.getNextTruncationRange(messages, undefined, "half")
@@ -121,6 +130,38 @@ describe("ContextManager", () => {
 			for (let i = 1; i < effectiveMessages.length; i++) {
 				const expectedRole = i % 2 === 1 ? "assistant" : "user"
 				expect(effectiveMessages[i].role).to.equal(expectedRole)
+			}
+		})
+
+		it("retains the original task while dropping injected first-request metadata", async () => {
+			const taskDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "dline-context-task-"))
+			const messages: ClineStorageMessage[] = [
+				{
+					role: "user",
+					content: [
+						{
+							type: "text",
+							text: "<task>\nKeep this task\n</task>\n\n# task_progress RECOMMENDED\n<environment_details>large metadata</environment_details>",
+						},
+					],
+				},
+				{ role: "assistant", content: [{ type: "text", text: "Initial response" }] },
+				{ role: "user", content: [{ type: "text", text: "Middle turn" }] },
+				{ role: "assistant", content: [{ type: "text", text: "Middle response" }] },
+				{ role: "user", content: [{ type: "text", text: "Latest turn" }] },
+			]
+
+			try {
+				await contextManager.triggerApplyStandardContextTruncationNoticeChange(Date.now(), taskDirectory, messages)
+				const truncated = contextManager.getTruncatedMessages(messages, [2, 3])
+				const firstBlock = (truncated[0].content as ClineTextContentBlock[])[0]
+
+				expect(firstBlock.text).to.equal("<task>\nKeep this task\n</task>")
+				expect(firstBlock.text).not.to.contain("task_progress")
+				expect(firstBlock.text).not.to.contain("environment_details")
+				expect((truncated[2].content as ClineTextContentBlock[])[0].text).to.equal("Latest turn")
+			} finally {
+				await fs.rm(taskDirectory, { recursive: true, force: true })
 			}
 		})
 	})
@@ -507,6 +548,49 @@ describe("ContextManager", () => {
 			expect(content[0].type).to.equal("text")
 			expect((content[0] as ClineTextContentBlock).text).to.equal("Additional user text")
 		})
+
+		it("preserves tagged user feedback from an orphaned tool_result", () => {
+			const messages: ClineStorageMessage[] = [
+				{ role: "user", content: "Initial task" },
+				{ role: "assistant", content: "Response 1" },
+				{
+					role: "assistant",
+					content: [
+						{
+							type: "tool_use",
+							function_id: "qna_1",
+							dline_tid: "tid_qna_1",
+							name: "qna_respond",
+							input: { response: "Old response that will be truncated" },
+						},
+					],
+				},
+				{
+					role: "user",
+					content: [
+						{
+							type: "tool_result",
+							function_id: "qna_1",
+							dline_tid: "tid_qna_1",
+							content: [
+								{
+									type: "text",
+									text: "[qna_respond] Result:\n<feedback>\nKeep this latest instruction\n</feedback>",
+								},
+							],
+						},
+						{ type: "text", text: "<environment_details>generated metadata</environment_details>" },
+					],
+				},
+			]
+
+			const result = contextManager.getTruncatedMessages(messages, [2, 2])
+			const content = result[2].content as ClineContent[]
+
+			expect(content.some((block) => block.type === "tool_result")).to.equal(false)
+			expect(content[0]).to.deep.equal({ type: "text", text: "Keep this latest instruction" })
+			expect(JSON.stringify(content)).not.to.contain("Old response that will be truncated")
+		})
 	})
 
 	describe("shouldCompactContextWindow", () => {
@@ -656,6 +740,30 @@ describe("ContextManager", () => {
 			expect(result.updatedConversationHistoryDeletedRange).to.equal(false)
 			expect(result.conversationHistoryDeletedRange).to.equal(undefined)
 			expect(result.truncatedConversationHistory).to.deep.equal(apiConversationHistory)
+		})
+
+		it("does not advance a pairing-safe range for an internal compaction request", async () => {
+			const api = createMockApi(272_000)
+			const apiConversationHistory = createMessages(8)
+			const clineMessages: ClineMessage[] = [createApiReqMessage({ tokensIn: 299_000, tokensOut: 1_000 })]
+			const taskDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "dline-context-test-"))
+
+			const result = await contextManager.getNewContextMessagesAndMetadata(
+				apiConversationHistory,
+				clineMessages,
+				api,
+				[2, 3],
+				0,
+				taskDirectory,
+				true,
+			)
+
+			expect(result.updatedConversationHistoryDeletedRange).to.equal(false)
+			expect(result.conversationHistoryDeletedRange).to.deep.equal([2, 3])
+			expect(result.truncatedConversationHistory).to.deep.equal([
+				...apiConversationHistory.slice(0, 2),
+				...apiConversationHistory.slice(4),
+			])
 		})
 
 		it("does not rewrite history when file-read optimization cannot avoid auto compact", async () => {
