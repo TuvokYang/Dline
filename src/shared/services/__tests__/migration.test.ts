@@ -81,7 +81,7 @@ describe("Cline to Dline migration", () => {
 		fs.existsSync(path.join(dlineTasksDir, "task-1")).should.be.false()
 	})
 
-	it("migrates legacy VSCode task data when the Dline tasks directory is empty", async () => {
+	it("does not migrate legacy VSCode task data when the Dline tasks directory is empty", async () => {
 		const legacyStorageDir = path.join(tempDir, "legacy-storage", "saoudrizwan.claude-dev")
 		const legacyTaskHistory = path.join(legacyStorageDir, "state", "taskHistory.json")
 		const legacyTaskDir = path.join(legacyStorageDir, "tasks", "task-1")
@@ -92,19 +92,24 @@ describe("Cline to Dline migration", () => {
 		fs.mkdirSync(legacyTaskDir, { recursive: true })
 		fs.writeFileSync(path.join(legacyTaskDir, "ui_messages.json"), "[]")
 
-		const result = await migrateFromClineToDline({
+		const options = {
 			homeDir,
 			documentsDir,
 			dlineDocumentsDir,
 			legacyVscodeGlobalStoragePaths: [legacyStorageDir],
-		})
+		}
+		const hasCandidates = await hasClineToDlineMigrationCandidates(options)
+		const result = await migrateFromClineToDline(options)
 
-		result.migrated.should.be.true()
-		fs.existsSync(path.join(dlineTasksDir, "taskHistory.json")).should.be.true()
-		fs.existsSync(path.join(dlineTasksDir, "task-1", "ui_messages.json")).should.be.true()
+		hasCandidates.should.be.false()
+		result.migrated.should.be.false()
+		fs.existsSync(path.join(dlineTasksDir, "taskHistory.json")).should.be.false()
+		fs.existsSync(path.join(dlineTasksDir, "task-1", "ui_messages.json")).should.be.false()
+		fs.existsSync(legacyTaskHistory).should.be.true()
+		fs.existsSync(path.join(legacyTaskDir, "ui_messages.json")).should.be.true()
 	})
 
-	it("can migrate Documents/Cline and legacy VSCode tasks into separate empty targets", async () => {
+	it("migrates non-task Documents/Cline data without migrating legacy VSCode tasks", async () => {
 		const legacyStorageDir = path.join(tempDir, "legacy-storage", "saoudrizwan.claude-dev")
 		const legacyTaskDir = path.join(legacyStorageDir, "tasks", "task-1")
 		const oldDocumentsRulesDir = path.join(documentsDir, "Cline", "Rules")
@@ -123,6 +128,7 @@ describe("Cline to Dline migration", () => {
 
 		result.migrated.should.be.true()
 		fs.existsSync(path.join(dlineDocumentsDir, "Rules", "rule.md")).should.be.true()
-		fs.existsSync(path.join(dlineDocumentsDir, "tasks", "task-1", "ui_messages.json")).should.be.true()
+		fs.existsSync(path.join(dlineDocumentsDir, "tasks", "task-1", "ui_messages.json")).should.be.false()
+		fs.existsSync(path.join(legacyTaskDir, "ui_messages.json")).should.be.true()
 	})
 })

@@ -37,7 +37,6 @@ import {
 	cleanupMcpMarketplaceCatalogFromGlobalState,
 	cleanupOldApiKey,
 	migrateCustomInstructionsToGlobalRules,
-	migrateTaskHistoryToFile,
 	migrateWelcomeViewCompleted,
 	migrateWorkspaceToGlobalStorage,
 } from "./core/storage/state-migrations"
@@ -948,9 +947,6 @@ async function cleanupLegacyVSCodeStorage(context: ExtensionContext): Promise<vo
 
 		// Migrate workspace storage values back to global storage (reverting previous migration)
 		await migrateWorkspaceToGlobalStorage(context)
-
-		// Ensure taskHistory.json exists and migrate legacy state (runs once)
-		await migrateTaskHistoryToFile(context)
 
 		// Clean up MCP marketplace catalog from global state (moved to disk cache)
 		await cleanupMcpMarketplaceCatalogFromGlobalState(context)

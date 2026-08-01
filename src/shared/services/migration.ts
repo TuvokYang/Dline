@@ -41,20 +41,6 @@ async function directoryHasContent(dir: string): Promise<boolean> {
 	return false
 }
 
-async function directoryHasChildDirectory(dir: string): Promise<boolean> {
-	if (!(await isDirectory(dir))) {
-		return false
-	}
-
-	for (const entry of await fs.readdir(dir, { withFileTypes: true })) {
-		if (entry.isDirectory() && !IGNORED_EMPTY_DIR_ENTRIES.has(entry.name)) {
-			return true
-		}
-	}
-
-	return false
-}
-
 async function isEmptyDirectoryTarget(dir: string): Promise<boolean> {
 	if (!(await fileExistsAtPath(dir))) {
 		return true
@@ -146,85 +132,12 @@ async function getMigrationPaths(options: ClineToDlineMigrationOptions) {
 		newEndpoints: path.join(homeDir, ".dline", "endpoints.json"),
 		oldDocuments: path.join(documentsDir, "Cline"),
 		newDocuments: dlineDocumentsDir,
-		newTasksDir: path.join(dlineDocumentsDir, "tasks"),
 		newCheckpointsDir: path.join(dlineDocumentsDir, "checkpoints"),
 		newPuppeteerDir: path.join(homeDir, ".dline", "puppeteer"),
 		newCacheDir: path.join(homeDir, ".dline", "cache"),
 		oldMcpSettings: path.join(documentsDir, "Cline", "settings", "cline_mcp_settings.json"),
 		newMcpSettings: path.join(dlineDocumentsDir, "settings", "mcp_settings.json"),
 		legacyVscodeGlobalStoragePaths: uniquePaths(options.legacyVscodeGlobalStoragePaths),
-	}
-}
-
-async function createTaskMigrationStep(
-	legacyVscodeGlobalStoragePaths: string[],
-	newTasksDir: string,
-): Promise<MigrationStep | undefined> {
-	if (!(await isEmptyDirectoryTarget(newTasksDir))) {
-		return undefined
-	}
-
-	const legacyTaskSources: Array<{
-		globalStoragePath: string
-		taskHistoryPath: string
-		tasksDir: string
-		hasTaskHistory: boolean
-		hasTaskDirs: boolean
-	}> = []
-
-	for (const globalStoragePath of legacyVscodeGlobalStoragePaths) {
-		const taskHistoryPath = path.join(globalStoragePath, "state", "taskHistory.json")
-		const tasksDir = path.join(globalStoragePath, "tasks")
-		const hasTaskHistory = await fileExistsAtPath(taskHistoryPath)
-		const hasTaskDirs = await directoryHasChildDirectory(tasksDir)
-
-		if (hasTaskHistory || hasTaskDirs) {
-			legacyTaskSources.push({ globalStoragePath, taskHistoryPath, tasksDir, hasTaskHistory, hasTaskDirs })
-		}
-	}
-
-	if (legacyTaskSources.length === 0) {
-		return undefined
-	}
-
-	if (legacyTaskSources.length > 1) {
-		Logger.warn(
-			`[Migration] Multiple legacy Cline VSCode storage paths contain task data; using the first path only: ${legacyTaskSources
-				.map((source) => source.globalStoragePath)
-				.join(", ")}`,
-		)
-	}
-
-	const source = legacyTaskSources[0]
-	return {
-		detail: "legacy VSCode task data -> Documents/Dline/tasks/",
-		run: async () => {
-			if (!(await isEmptyDirectoryTarget(newTasksDir))) {
-				Logger.log(`[Migration] Skipped legacy VSCode task data: destination is not empty: ${newTasksDir}`)
-				return false
-			}
-
-			await fs.mkdir(newTasksDir, { recursive: true })
-			let copied = false
-
-			if (source.hasTaskHistory) {
-				await copyFileIntoEmptyTarget(source.taskHistoryPath, path.join(newTasksDir, "taskHistory.json"))
-				copied = true
-			}
-
-			if (source.hasTaskDirs) {
-				for (const entry of await fs.readdir(source.tasksDir, { withFileTypes: true })) {
-					if (!entry.isDirectory() || IGNORED_EMPTY_DIR_ENTRIES.has(entry.name)) {
-						continue
-					}
-
-					await copyDirContents(path.join(source.tasksDir, entry.name), path.join(newTasksDir, entry.name))
-					copied = true
-				}
-			}
-
-			return copied
-		},
 	}
 }
 
@@ -374,11 +287,6 @@ async function buildMigrationPlan(options: ClineToDlineMigrationOptions = {}): P
 				return true
 			},
 		})
-	}
-
-	const taskStep = await createTaskMigrationStep(paths.legacyVscodeGlobalStoragePaths, paths.newTasksDir)
-	if (taskStep) {
-		steps.push(taskStep)
 	}
 
 	const checkpointsStep = await createCheckpointsMigrationStep(paths.legacyVscodeGlobalStoragePaths, paths.newCheckpointsDir)

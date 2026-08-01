@@ -1,10 +1,9 @@
 import fs from "fs/promises"
 import path from "path"
 import * as vscode from "vscode"
-import { HistoryItem } from "@/shared/HistoryItem"
 import { Logger } from "@/shared/services/Logger"
 import { fileExistsAtPath } from "@/utils/fs"
-import { ensureRulesDirectoryExists, getTaskHistoryStateFilePath, writeTaskHistoryToState } from "./disk"
+import { ensureRulesDirectoryExists } from "./disk"
 
 export async function migrateWorkspaceToGlobalStorage(context: vscode.ExtensionContext) {
 	// Keys to migrate from workspace storage back to global storage
@@ -65,37 +64,6 @@ export async function migrateWorkspaceToGlobalStorage(context: vscode.ExtensionC
 
 			Logger.log(`[Storage Migration] migrated key: ${key} to global storage. Current value: ${newWorkspaceValue}`)
 		}
-	}
-}
-
-export async function migrateTaskHistoryToFile(context: vscode.ExtensionContext) {
-	try {
-		// Get data from old location
-		const vscodeGlobalStateTaskHistory = context.globalState.get<HistoryItem[] | undefined>("taskHistory")
-
-		// Normalize old location data to array (empty array if undefined/null/not-array)
-		const oldLocationData = Array.isArray(vscodeGlobalStateTaskHistory) ? vscodeGlobalStateTaskHistory : []
-
-		// Early return if no migration needed
-		if (oldLocationData.length === 0) {
-			Logger.log("[Storage Migration] No task history to migrate")
-			return
-		}
-
-		const targetPath = await getTaskHistoryStateFilePath()
-		if (await fileExistsAtPath(targetPath)) {
-			Logger.log("[Storage Migration] Task history target already exists; skipping legacy migration")
-			return
-		}
-
-		await fs.mkdir(path.dirname(targetPath), { recursive: true })
-		await writeTaskHistoryToState(oldLocationData)
-
-		await context.globalState.update("taskHistory", undefined)
-
-		Logger.log("[Storage Migration] Migrated task history from old location to new location")
-	} catch (error) {
-		Logger.error("[Storage Migration] Failed to migrate task history to file:", error)
 	}
 }
 
