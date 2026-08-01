@@ -16,7 +16,7 @@ import {
 	VSCodePanelView,
 } from "@vscode/webview-ui-toolkit/react"
 import { RefreshCcwIcon, Trash2Icon } from "lucide-react"
-import { useState } from "react"
+import { type FormEvent, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
@@ -61,6 +61,9 @@ const ServerRow = ({
 	const [isDeleting, setIsDeleting] = useState(false)
 	const [isRestarting, setIsRestarting] = useState(false)
 	const isServerEnabled = enabled ?? !server.disabled
+	const isWorkspaceServer = server.source === "workspace"
+	const serverDisplayName = server.displayName ?? getMcpServerDisplayName(server.name, mcpMarketplaceCatalog)
+	const canToggleServer = !isWorkspaceServer || onToggleEnabled !== undefined
 
 	// Check if user is managed by remote config and if this server is remote-managed.
 	// Remote MCP servers from enterprise config are always URL-based (SSE/HTTP).
@@ -95,8 +98,8 @@ const ServerRow = ({
 		}
 	})
 
-	const handleTimeoutChange = (e: any) => {
-		const select = e.target as HTMLSelectElement
+	const handleTimeoutChange = (event: Event | FormEvent<HTMLElement>) => {
+		const select = event.target as HTMLSelectElement
 		const value = select.value
 		const num = Number.parseInt(value, 10)
 		setTimeoutValue(value)
@@ -227,9 +230,7 @@ const ServerRow = ({
 						})}
 					/>
 				)}
-				<span className="flex-1 overflow-hidden break-all whitespace-normal flex items-center">
-					{getMcpServerDisplayName(server.name, mcpMarketplaceCatalog)}
-				</span>
+				<span className="flex-1 overflow-hidden break-all whitespace-normal flex items-center">{serverDisplayName}</span>
 				{/* Collapsed view controls */}
 				{!server.error && (
 					<Button
@@ -244,7 +245,7 @@ const ServerRow = ({
 						<RefreshCcwIcon />
 					</Button>
 				)}
-				{!server.error && hasTrashIcon && (
+				{!server.error && hasTrashIcon && !isWorkspaceServer && (
 					<Button
 						disabled={isDeleting}
 						onClick={(e) => {
@@ -258,25 +259,27 @@ const ServerRow = ({
 					</Button>
 				)}
 				{/* Toggle Switch */}
-				<Tooltip>
-					<TooltipTrigger asChild>
-						<div className="flex items-center gap-2">
-							<Switch
-								checked={isServerEnabled}
-								disabled={isAlwaysEnabled}
-								key={server.name}
-								onClick={(e) => {
-									e.stopPropagation()
-									handleToggleMcpServer()
-								}}
-							/>
-							{isAlwaysEnabled && <i className="codicon codicon-lock text-description text-sm" />}
-						</div>
-					</TooltipTrigger>
-					<TooltipContent className="max-w-xs" hidden={!isAlwaysEnabled} side="top">
-						This server can't be disabled because it is enabled by your organization
-					</TooltipContent>
-				</Tooltip>
+				{canToggleServer && (
+					<Tooltip>
+						<TooltipTrigger asChild>
+							<div className="flex items-center gap-2">
+								<Switch
+									checked={isServerEnabled}
+									disabled={isAlwaysEnabled}
+									key={server.name}
+									onClick={(e) => {
+										e.stopPropagation()
+										handleToggleMcpServer()
+									}}
+								/>
+								{isAlwaysEnabled && <i className="codicon codicon-lock text-description text-sm" />}
+							</div>
+						</TooltipTrigger>
+						<TooltipContent className="max-w-xs" hidden={!isAlwaysEnabled} side="top">
+							This server can't be disabled because it is enabled by your organization
+						</TooltipContent>
+					</Tooltip>
+				)}
 				<div
 					className={cn("h-2 w-2 ml-0.5 rounded-full", {
 						"bg-success": server.status === "connected",
@@ -309,7 +312,7 @@ const ServerRow = ({
 						</Button>
 					)}
 
-					{!isRemoteManagedServer && (
+					{!isRemoteManagedServer && !isWorkspaceServer && (
 						<Button
 							className="m-2.5 mt-0 max-w-[calc(100%-20px)]"
 							disabled={isDeleting}
@@ -332,7 +335,7 @@ const ServerRow = ({
 							<VSCodePanelView id="tools-view">
 								{server.tools && server.tools.length > 0 ? (
 									<div className="flex flex-col gap-2 w-full pt-2">
-										{server.name && autoApprovalSettings.actions.useMcp && (
+										{!isWorkspaceServer && server.name && autoApprovalSettings.actions.useMcp && (
 											<VSCodeCheckbox
 												checked={server.tools.every((tool) => tool.autoApprove)}
 												className="mb-1 text-xs"
@@ -342,7 +345,12 @@ const ServerRow = ({
 											</VSCodeCheckbox>
 										)}
 										{server.tools.map((tool) => (
-											<McpToolRow key={tool.name} serverName={server.name} tool={tool} />
+											<McpToolRow
+												key={tool.name}
+												serverName={server.name}
+												showAutoApprove={!isWorkspaceServer}
+												tool={tool}
+											/>
 										))}
 									</div>
 								) : (
@@ -392,12 +400,14 @@ const ServerRow = ({
 							</VSCodePanelView>
 						</VSCodePanels>
 
-						<div className="my-2.5 mx-1.5">
-							<label className="block mb-1 text-[13px]">Request Timeout</label>
-							<VSCodeDropdown className="w-full" onChange={handleTimeoutChange} value={timeoutValue}>
-								{TimeoutOptions}
-							</VSCodeDropdown>
-						</div>
+						{!isWorkspaceServer && (
+							<div className="my-2.5 mx-1.5">
+								<label className="block mb-1 text-[13px]">Request Timeout</label>
+								<VSCodeDropdown className="w-full" onChange={handleTimeoutChange} value={timeoutValue}>
+									{TimeoutOptions}
+								</VSCodeDropdown>
+							</div>
+						)}
 						<Button
 							className="w-[calc(100%-14px)] mt-1 mx-1.5 mb-3"
 							disabled={server.status === "connecting" || isRestarting}
@@ -406,7 +416,7 @@ const ServerRow = ({
 							{server.status === "connecting" || isRestarting ? "Restarting..." : "Restart Server"}
 						</Button>
 
-						{!isRemoteManagedServer && (
+						{!isRemoteManagedServer && !isWorkspaceServer && (
 							<Button
 								className="w-[calc(100%-14px)] mt-1 mx-1.5 mb-3"
 								disabled={isDeleting}

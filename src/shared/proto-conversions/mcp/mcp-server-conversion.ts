@@ -1,4 +1,5 @@
 import {
+	McpServerSource,
 	McpServerStatus,
 	McpPrompt as ProtoMcpPrompt,
 	McpPromptArgument as ProtoMcpPromptArgument,
@@ -21,9 +22,16 @@ function convertMcpStatusToProto(status: McpServer["status"]): McpServerStatus {
 	}
 }
 
+function convertMcpSourceToProto(source: McpServer["source"]): McpServerSource {
+	return source === "workspace" ? McpServerSource.MCP_SERVER_SOURCE_WORKSPACE : McpServerSource.MCP_SERVER_SOURCE_SETTINGS
+}
+
 export function convertMcpServersToProtoMcpServers(mcpServers: McpServer[]): ProtoMcpServer[] {
 	const protoServers: ProtoMcpServer[] = mcpServers.map((server) => ({
 		name: server.name,
+		displayName: server.displayName,
+		description: server.description,
+		source: convertMcpSourceToProto(server.source),
 		config: server.config,
 		status: convertMcpStatusToProto(server.status),
 		error: server.error,
@@ -119,10 +127,17 @@ function convertProtoStatusToMcp(status: McpServerStatus): McpServer["status"] {
 	}
 }
 
+function convertProtoSourceToMcp(source: McpServerSource): NonNullable<McpServer["source"]> {
+	return source === McpServerSource.MCP_SERVER_SOURCE_WORKSPACE ? "workspace" : "settings"
+}
+
 export function convertProtoMcpServersToMcpServers(protoServers: ProtoMcpServer[]): McpServer[] {
 	const mcpServers: McpServer[] = protoServers.map((protoServer) => {
 		return {
 			name: protoServer.name,
+			displayName: protoServer.displayName || undefined,
+			description: protoServer.description || undefined,
+			source: convertProtoSourceToMcp(protoServer.source),
 			config: protoServer.config,
 			status: convertProtoStatusToMcp(protoServer.status),
 			error: protoServer.error === "" ? undefined : protoServer.error,

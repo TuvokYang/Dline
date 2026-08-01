@@ -96,6 +96,11 @@ enum McpServerStatus {
   MCP_SERVER_STATUS_CONNECTING = 2;
 }
 
+enum McpServerSource {
+  MCP_SERVER_SOURCE_SETTINGS = 0;
+  MCP_SERVER_SOURCE_WORKSPACE = 1;
+}
+
 message McpServer {
   string name = 1;
   string config = 2;
@@ -109,6 +114,9 @@ message McpServer {
   optional bool oauth_required = 10;
   optional string oauth_auth_status = 11;
   repeated McpPrompt prompts = 12;
+  optional string display_name = 13;
+  optional string description = 14;
+  McpServerSource source = 15;
 }
 
 message McpServers {
