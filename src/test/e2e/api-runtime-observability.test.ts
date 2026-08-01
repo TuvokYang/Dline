@@ -553,7 +553,8 @@ for (const status of [403, 429, 502] as const) {
 			await expect(errorBox.getByTestId("error-retry-box-status")).toHaveText(String(status))
 			await expect(errorBox.getByTestId("error-retry-box-code")).toHaveText(`e2e_http_${status}`)
 			await expect(errorBox.getByTestId("error-retry-box-message")).toHaveText(marker)
-			await expect(errorBox.getByRole("button")).toHaveCount(0)
+			await expect(errorBox.getByRole("button", { name: "Copy error" })).toBeVisible()
+			await expect(errorBox.getByRole("button", { name: /^(Retry|Cancel)$/ })).toHaveCount(0)
 
 			const retryButton = sidebar.locator('vscode-button[aria-label="Retry"]')
 			await expect(retryButton).toBeVisible({ timeout: 90_000 })
@@ -721,7 +722,8 @@ e2e(
 		await expect(errorBox.getByTestId("error-retry-box-status")).toHaveText("502")
 		await expect(errorBox.getByTestId("error-retry-box-code")).toHaveText("e2e_retry_override_1")
 		await expect(errorBox.getByTestId("error-retry-box-message")).toHaveText(firstError)
-		await expect(errorBox.getByRole("button")).toHaveCount(0)
+		await expect(errorBox.getByRole("button", { name: "Copy error" })).toBeVisible()
+		await expect(errorBox.getByRole("button", { name: /^(Retry|Cancel)$/ })).toHaveCount(0)
 
 		const retryButton = sidebar.locator('vscode-button[aria-label="Retry"]')
 		await expect(retryButton).toBeVisible()
