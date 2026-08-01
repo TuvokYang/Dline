@@ -1,3 +1,4 @@
+import type { ModelPricing } from "@shared/api"
 import { ClineMessage } from "@shared/ExtensionMessage"
 import { ChevronDownIcon, ChevronRightIcon } from "lucide-react"
 import React, { useCallback, useLayoutEffect, useMemo, useState } from "react"
@@ -16,6 +17,7 @@ import { FocusChain } from "./FocusChain"
 import { highlightText } from "./Highlights"
 import SpawnedTasksBar from "./SpawnedTasksBar"
 import { TaskLockBanner } from "./TaskLockBanner"
+import { hasNonZeroModelPricing } from "./util"
 
 const IS_DEV = process.env.IS_DEV === '"true"'
 interface TaskHeaderProps {
@@ -32,7 +34,7 @@ interface TaskHeaderProps {
 	lastApiReqTotalTokens?: number
 	lastProgressMessageText?: string
 	showFocusChainPlaceholder?: boolean
-	inputPrice?: number
+	pricing?: ModelPricing
 	onClose: () => void
 	onSendMessage?: (command: string, files: string[], images: string[]) => void
 }
@@ -52,7 +54,7 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 	lastApiReqTotalTokens,
 	lastProgressMessageText,
 	showFocusChainPlaceholder,
-	inputPrice,
+	pricing,
 	onClose,
 	onSendMessage,
 }) => {
@@ -100,10 +102,11 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 		return () => document.removeEventListener("mousedown", handleClickOutside)
 	}, [isHighlightedTextExpanded])
 
-	const isCostAvailable = totalCost != null
 	const displayCurrency = (currency || "USD").toUpperCase()
 	const totalInputTokens = tokensIn + (cacheWrites ?? 0) + (cacheReads ?? 0)
 	const currentContextTokens = lastApiReqTotalTokens ?? totalInputTokens
+	const isCostAvailable = totalCost != null && hasNonZeroModelPricing(pricing)
+	const hasMetrics = isCostAvailable || totalInputTokens > 0 || tokensOut > 0 || (cacheHitRate ?? 0) > 0
 
 	// Event handlers
 	const toggleTaskExpanded = useCallback(() => setIsTaskExpanded(!isTaskExpanded), [setIsTaskExpanded, isTaskExpanded])
@@ -156,7 +159,7 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 									className={BUTTON_CLASS}
 									currency={displayCurrency}
 									estimatedInputTokens={currentContextTokens}
-									inputPrice={inputPrice}
+									inputPrice={pricing?.inputPrice}
 									taskId={currentTaskItem?.id}
 								/>
 								<DeleteTaskButton
@@ -179,7 +182,7 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 						)}
 					</div>
 					<div className="inline-flex items-center justify-end select-none shrink-0">
-						{isCostAvailable && (
+						{hasMetrics && (
 							<div
 								className="mx-1 px-1.5 py-0.25 rounded-full inline-flex shrink-0 text-badge-background bg-badge-foreground/80 items-center gap-1.5"
 								id="price-tag"
@@ -209,10 +212,12 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 										Hit:{cacheHitRate.toFixed(1)}%
 									</span>
 								)}
-								<span className="text-xs sm:text-sm font-medium">
-									{{ USD: "$", CNY: "¥", EUR: "€", GBP: "£" }[displayCurrency] || "$"}
-									{totalCost?.toFixed(3)}
-								</span>
+								{isCostAvailable && (
+									<span className="text-xs sm:text-sm font-medium">
+										{{ USD: "$", CNY: "¥", EUR: "€", GBP: "£" }[displayCurrency] || "$"}
+										{totalCost?.toFixed(3)}
+									</span>
+								)}
 							</div>
 						)}
 						<NewTaskButton className={BUTTON_CLASS} onClick={onClose} />
