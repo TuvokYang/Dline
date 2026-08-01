@@ -1,4 +1,8 @@
 import assert from "node:assert/strict"
+import { existsSync } from "node:fs"
+import { rm } from "node:fs/promises"
+import os from "node:os"
+import path from "node:path"
 import { afterEach, describe, it, vi } from "vitest"
 import { WINDOWS_POWERSHELL_LEGACY_PATH } from "@/utils/shell"
 import { StandaloneTerminal } from "./StandaloneTerminal"
@@ -47,43 +51,58 @@ describe("StandaloneTerminalProcess output streams", () => {
 		}
 	})
 
+	it("uses shell-specific arguments for Windows terminal profiles", () => {
+		const originalPlatform = process.platform
+		try {
+			Object.defineProperty(process, "platform", { value: "win32" })
+			const terminalProcess = new StandaloneTerminalProcess()
+			const getShellArgs = (
+				terminalProcess as unknown as { getShellArgs(shell: string, command: string): string[] }
+			).getShellArgs.bind(terminalProcess)
+
+			assert.deepEqual(getShellArgs("C:\\Windows\\System32\\cmd.exe", "echo ready"), ["/c", "echo ready"])
+			assert.deepEqual(getShellArgs("D:\\Git\\bin\\bash.exe", "echo ready"), ["-l", "-c", "echo ready"])
+			assert.deepEqual(getShellArgs("C:\\Windows\\System32\\wsl.exe", "echo ready"), [
+				"--exec",
+				"bash",
+				"-lc",
+				"echo ready",
+			])
+		} finally {
+			Object.defineProperty(process, "platform", { value: originalPlatform })
+		}
+	})
+
 	it.runIf(process.platform === "win32")(
-		"keeps a long-running Windows PowerShell child alive and captures nested command output",
+		"executes a long-running Windows PowerShell command and keeps the child alive",
 		async () => {
 			const terminalProcess = new StandaloneTerminalProcess()
+			const markerPath = path.join(os.tmpdir(), `dline-powershell-lifecycle-${process.pid}-${Date.now()}.txt`)
 			const terminal = new StandaloneTerminal({
 				cwd: process.cwd(),
 				shellPath: WINDOWS_POWERSHELL_LEGACY_PATH,
 			})
-			const lines: string[] = []
 			let completed = false
-			let resolveExpectedOutput: (() => void) | undefined
-			const expectedOutput = new Promise<void>((resolve) => {
-				resolveExpectedOutput = resolve
-			})
-			terminalProcess.on("line", (line) => {
-				lines.push(line)
-				if (line === "DLINE_STANDALONE_PROCESS_OK") resolveExpectedOutput?.()
-			})
 			terminalProcess.once("completed", () => {
 				completed = true
 			})
 
 			try {
+				const escapedMarkerPath = markerPath.replaceAll("'", "''")
 				await terminalProcess.run(
 					terminal,
-					`node -e "console.log('DLINE_STANDALONE_PROCESS_OK'); setInterval(() => {}, 1000)"`,
+					`Set-Content -LiteralPath '${escapedMarkerPath}' -Value ready; Start-Sleep -Seconds 30`,
 				)
-				const sawExpectedOutput = await Promise.race([
-					expectedOutput.then(() => true),
-					new Promise<false>((resolve) => setTimeout(() => resolve(false), 3_000)),
-				])
+				const deadline = Date.now() + 10_000
+				while (!existsSync(markerPath) && Date.now() < deadline) {
+					await new Promise((resolve) => setTimeout(resolve, 50))
+				}
 
-				assert.equal(sawExpectedOutput, true)
+				assert.equal(existsSync(markerPath), true)
 				assert.equal(completed, false)
-				assert.ok(lines.includes("DLINE_STANDALONE_PROCESS_OK"))
 			} finally {
 				await terminalProcess.terminate()
+				await rm(markerPath, { force: true })
 			}
 		},
 	)

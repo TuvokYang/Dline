@@ -49,4 +49,23 @@ describe("VscodeTerminalManager Windows shell selection", () => {
 		expect(terminal.shellPath).toBe("C:\\Windows\\System32\\cmd.exe")
 		manager.disposeAll()
 	})
+
+	it("passes project environment overrides to a configuration-owned terminal", async () => {
+		const manager = new VscodeTerminalManager()
+
+		const terminal = await manager.getOrCreateTerminal("C:\\workspace", {
+			configurationId: "workspace-environment-v1",
+			environment: { DLINE_E2E_ENV: "configured", REMOVE_ME: null },
+		})
+		const vscodeTerminal = terminal.terminal as unknown as vscode.Terminal
+		const creationOptions = vscodeTerminal.creationOptions as vscode.TerminalOptions
+
+		expect(terminal.configurationId).toBe("workspace-environment-v1")
+		expect(creationOptions.env).toMatchObject({
+			DLINE_ACTIVE: "true",
+			DLINE_E2E_ENV: "configured",
+			REMOVE_ME: null,
+		})
+		manager.disposeAll()
+	})
 })

@@ -9,7 +9,7 @@ const SHELL_PATHS = {
 	POWERSHELL_7: WINDOWS_POWERSHELL_7_PATH,
 	POWERSHELL_LEGACY: WINDOWS_POWERSHELL_LEGACY_PATH,
 	CMD: "C:\\Windows\\System32\\cmd.exe",
-	WSL_BASH: "/bin/bash",
+	WSL_BASH: "C:\\Windows\\System32\\wsl.exe",
 	GIT_BASH: "C:\\Program Files\\Git\\bin\\bash.exe",
 	// Unix paths
 	MAC_DEFAULT: "/bin/zsh",

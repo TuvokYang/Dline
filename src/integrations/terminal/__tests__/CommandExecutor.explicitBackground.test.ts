@@ -1,4 +1,7 @@
 import assert from "node:assert/strict"
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
+import os from "node:os"
+import path from "node:path"
 import { EventEmitter } from "events"
 import { describe, it, vi } from "vitest"
 import { CommandExecutor } from "../CommandExecutor"
@@ -87,6 +90,70 @@ function createCallbacks(): CommandExecutorCallbacks {
 }
 
 describe("CommandExecutor explicit background execution", () => {
+	it("applies the owning workspace shell environment without replacing the displayed command", async () => {
+		const workspace = await mkdtemp(path.join(os.tmpdir(), "dline-command-environment-"))
+		const platform = process.platform
+		const profile = platform === "win32" ? "powershell-legacy" : "bash"
+		const configuredTerminal = { ...terminalConfiguration, defaultTerminalProfile: profile }
+		const processResult = new FakeTerminalProcess()
+		const terminalInfo: TerminalInfo = {
+			id: 1,
+			terminal: {
+				dispose: vi.fn(),
+				hide: vi.fn(),
+				name: "Configured terminal",
+				processId: Promise.resolve(1),
+				sendText: vi.fn(),
+				show: vi.fn(),
+			},
+			busy: false,
+			lastActive: Date.now(),
+			lastCommand: "",
+		}
+		try {
+			await mkdir(path.join(workspace, ".agents"), { recursive: true })
+			await writeFile(
+				path.join(workspace, ".agents", "bashrc.yml"),
+				`version: 1\nplatforms:\n  ${platform}:\n    profiles:\n      ${profile}:\n        environment:\n          DLINE_TEST_ENV: configured\n        commands:\n          - Initialize-DlineShell\n`,
+				"utf8",
+			)
+			const terminalManager = createTerminalManager()
+			vi.mocked(terminalManager.getOrCreateTerminal).mockResolvedValue(terminalInfo)
+			vi.mocked(terminalManager.runCommand).mockReturnValue(processResult.asResultPromise())
+			const executor = new CommandExecutor(
+				{
+					cwd: workspace,
+					workspaceRoots: [workspace],
+					taskId: "task-environment",
+					terminalExecutionMode: "vscodeTerminal",
+					terminalManager,
+					terminalConfiguration: configuredTerminal,
+					ulid: "task-environment-ulid",
+				},
+				createCallbacks(),
+			)
+
+			const execution = executor.execute("Run-Configured-Command", 30, { synchronous: true, workdirectory: workspace })
+			await vi.waitFor(() => assert.equal(vi.mocked(terminalManager.runCommand).mock.calls.length, 1))
+			processResult.complete({ exitCode: 0, signal: null })
+			processResult.continue()
+			await execution
+
+			const launchConfiguration = vi.mocked(terminalManager.getOrCreateTerminal).mock.calls[0]?.[1]
+			assert.equal(launchConfiguration?.environment?.DLINE_TEST_ENV, "configured")
+			assert.equal(typeof launchConfiguration?.configurationId, "string")
+			assert.equal(
+				vi.mocked(terminalManager.runCommand).mock.calls[0]?.[1],
+				platform === "win32"
+					? "& { Initialize-DlineShell; if (-not $?) { exit 1 }; Run-Configured-Command }"
+					: "Initialize-DlineShell && Run-Configured-Command",
+			)
+			assert.equal(terminalInfo.lastCommand, "Run-Configured-Command")
+		} finally {
+			await rm(workspace, { recursive: true, force: true })
+		}
+	})
+
 	it("applies one configuration to both primary and background terminal managers", () => {
 		const primaryManager = createTerminalManager()
 		const standaloneConfigure = vi.spyOn(StandaloneTerminalManager.prototype, "configure")

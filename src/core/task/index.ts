@@ -816,6 +816,7 @@ export class Task {
 		// Initialize command executor with config and callbacks
 		const commandExecutorConfig: FullCommandExecutorConfig = {
 			cwd: this.cwd,
+			workspaceRoots: this.workspaceManager?.getRoots().map((root) => root.path) ?? [this.cwd],
 			terminalConfiguration,
 			terminalExecutionMode: this.terminalExecutionMode,
 			terminalManager: this.terminalManager,

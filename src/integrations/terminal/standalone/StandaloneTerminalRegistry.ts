@@ -35,6 +35,7 @@ export class StandaloneTerminalRegistry {
 			busy: false,
 			lastCommand: "",
 			shellPath: options.shellPath,
+			configurationId: options.configurationId,
 			lastActive: Date.now(),
 			pendingCwdChange: undefined,
 			cwdResolved: undefined,

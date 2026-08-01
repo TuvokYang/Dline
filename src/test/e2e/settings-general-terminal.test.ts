@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises"
+import { mkdir, readFile, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { expect, type Frame, type Locator, type Page } from "@playwright/test"
 import type { ElectronApplication } from "playwright"
@@ -8,6 +8,7 @@ import { startSettingControlStabilityObserver, stopSettingControlStabilityObserv
 interface StoredSettings {
 	chatInputSendShortcut?: string
 	defaultTerminalProfile?: string
+	shellIntegrationTimeout?: number
 	terminalCommandTimeoutSeconds?: number
 	terminalOutputLineLimit?: number
 	vscodeTerminalExecutionMode?: string
@@ -19,6 +20,25 @@ async function readSettings(dlineDir: string): Promise<StoredSettings> {
 
 async function readGlobalState(dlineDir: string): Promise<StoredSettings> {
 	return JSON.parse(await readFile(path.join(dlineDir, "data", "globalState.json"), "utf8"))
+}
+
+async function writeShellEnvironmentConfig(workspaceDir: string, scope: string): Promise<void> {
+	const agentsDirectory = path.join(workspaceDir, ".agents")
+	await mkdir(agentsDirectory, { recursive: true })
+	await writeFile(
+		path.join(agentsDirectory, "bashrc.yml"),
+		`version: 1
+environment:
+  DLINE_E2E_BASHRC_ENV: ${scope}
+platforms:
+  win32:
+    profiles:
+      powershell-legacy:
+        commands:
+          - $env:DLINE_E2E_BASHRC_INIT = '${scope}-initialized'
+`,
+		"utf8",
+	)
 }
 
 async function openSettings(page: Page, sidebar: Frame): Promise<void> {
@@ -222,19 +242,29 @@ e2e(
 
 e2e(
 	"Terminal - foreground VS Code terminal executes with the configured Windows shell",
-	async ({ dlineDir, helper, page, server, sidebar, userDataDir }) => {
+	async ({ dlineDir, helper, page, server, sidebar, userDataDir, workspaceDir }) => {
 		e2e.skip(process.platform !== "win32", "Configured Windows shell execution requires Windows")
 		e2e.setTimeout(180_000)
+		await writeShellEnvironmentConfig(workspaceDir, "foreground")
 		await helper.signin(sidebar)
 		await openSettings(page, sidebar)
 		await sidebar.getByTestId("tab-terminal").click()
 		await setDropdownValue(sidebar, sidebar.locator("#terminal-execution-mode"), "backgroundExec", "Background Exec")
 		await setDropdownValue(sidebar, sidebar.locator("#terminal-execution-mode"), "vscodeTerminal", "VS Code Terminal")
 		await setDropdownValue(sidebar, sidebar.locator("#default-terminal-profile"), "powershell-legacy", "Windows PowerShell")
+		const shellIntegrationTimeout = sidebar
+			.getByText("Shell integration timeout (seconds)", { exact: true })
+			.locator("..")
+			.locator("vscode-text-field")
+		await shellIntegrationTimeout.evaluate((element) => {
+			;(element as HTMLInputElement).value = "15"
+			element.dispatchEvent(new Event("change", { bubbles: true }))
+		})
 		await expect
 			.poll(async () => await readGlobalState(dlineDir))
 			.toMatchObject({
 				defaultTerminalProfile: "powershell-legacy",
+				shellIntegrationTimeout: 15_000,
 				vscodeTerminalExecutionMode: "vscodeTerminal",
 			})
 
@@ -246,7 +276,7 @@ e2e(
 				name: "execute_command",
 				arguments: {
 					command:
-						'Write-Output "E2E_VSCODE_POWERSHELL_OK"; Write-Output "E2E_PS_EDITION=$($PSVersionTable.PSEdition)"',
+						'Write-Output "E2E_VSCODE_POWERSHELL_OK"; Write-Output "E2E_PS_EDITION=$($PSVersionTable.PSEdition)"; Write-Output "E2E_BASHRC_ENV=$env:DLINE_E2E_BASHRC_ENV"; Write-Output "E2E_BASHRC_INIT=$env:DLINE_E2E_BASHRC_INIT"',
 					workdirectory: ".",
 					requires_approval: true,
 					synchronous: true,
@@ -265,6 +295,8 @@ e2e(
 							"Command executed successfully (exit code 0).",
 							"E2E_VSCODE_POWERSHELL_OK",
 							"E2E_PS_EDITION=Desktop",
+							"E2E_BASHRC_ENV=foreground",
+							"E2E_BASHRC_INIT=foreground-initialized",
 						],
 					},
 				],
@@ -292,6 +324,73 @@ e2e(
 		)
 		const output = await E2ETestHelper.readDlineOutput(userDataDir)
 		expect(output).toContain("[TerminalManager] Running command")
+		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+	},
+)
+
+e2e(
+	"Terminal - background Exec applies the configured PowerShell project environment",
+	async ({ dlineDir, helper, page, server, sidebar, userDataDir, workspaceDir }) => {
+		e2e.skip(process.platform !== "win32", "Configured Windows shell execution requires Windows")
+		e2e.setTimeout(180_000)
+		await writeShellEnvironmentConfig(workspaceDir, "background")
+		await helper.signin(sidebar)
+		await openSettings(page, sidebar)
+		await sidebar.getByTestId("tab-terminal").click()
+		await setDropdownValue(sidebar, sidebar.locator("#terminal-execution-mode"), "backgroundExec", "Background Exec")
+		await setDropdownValue(sidebar, sidebar.locator("#default-terminal-profile"), "powershell-legacy", "Windows PowerShell")
+		await expect
+			.poll(async () => await readGlobalState(dlineDir))
+			.toMatchObject({
+				defaultTerminalProfile: "powershell-legacy",
+				vscodeTerminalExecutionMode: "backgroundExec",
+			})
+
+		server.resetOpenAiMock()
+		server.enqueueOpenAiResponses(
+			{
+				type: "tool",
+				id: "call_background_shell_environment",
+				name: "execute_command",
+				arguments: {
+					command:
+						'Write-Output "E2E_BACKGROUND_BASHRC_ENV=$env:DLINE_E2E_BASHRC_ENV"; Write-Output "E2E_BACKGROUND_BASHRC_INIT=$env:DLINE_E2E_BASHRC_INIT"',
+					workdirectory: ".",
+					requires_approval: true,
+					synchronous: true,
+					timeout: 60,
+				},
+			},
+			{
+				type: "tool",
+				id: "call_background_shell_environment_completion",
+				name: "attempt_completion",
+				arguments: { result: "E2E_BACKGROUND_BASHRC_COMPLETE" },
+				expectedToolResults: [
+					{
+						callId: "call_background_shell_environment",
+						contentIncludes: [
+							"Command executed successfully (exit code 0).",
+							"E2E_BACKGROUND_BASHRC_ENV=background",
+							"E2E_BACKGROUND_BASHRC_INIT=background-initialized",
+						],
+					},
+				],
+			},
+		)
+
+		await returnToChat(sidebar)
+		const input = sidebar.getByTestId("chat-input")
+		await input.fill("Run a background terminal command with the project shell environment.")
+		await sidebar.getByTestId("send-button").click()
+		await expect(sidebar.getByText("Approve", { exact: true })).toBeVisible({ timeout: 60_000 })
+		await sidebar.getByText("Approve", { exact: true }).click()
+		await expect(sidebar.getByText("E2E_BACKGROUND_BASHRC_COMPLETE", { exact: false }).last()).toBeVisible({
+			timeout: 60_000,
+		})
+		await expect.poll(() => server.openAiRequestCount).toBe(2)
+		const continuation = server.getMockConsumptions("openai-compatible-chat")[1]
+		expect(continuation.contractError).toBeUndefined()
 		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
 	},
 )

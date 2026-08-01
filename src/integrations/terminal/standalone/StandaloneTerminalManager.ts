@@ -13,6 +13,7 @@
  */
 
 import { DlineTempManager } from "@services/temp"
+import { getShellForProfile } from "@utils/shell"
 import * as fs from "fs"
 import { isCommandCompletionSuccessful } from "../command-completion"
 import { DEFAULT_TERMINAL_OUTPUT_LINE_LIMIT } from "../constants"
@@ -23,6 +24,7 @@ import type {
 	CommandOrigin,
 	ITerminalManager,
 	TerminalInfo,
+	TerminalLaunchConfiguration,
 	TerminalManagerConfiguration,
 	TerminalManagerConfigurationResult,
 	TerminalOutputLine,
@@ -148,15 +150,21 @@ export class StandaloneTerminalManager implements ITerminalManager {
 	 * @param cwd The working directory for the terminal
 	 * @returns The terminal info for an available terminal
 	 */
-	async getOrCreateTerminal(cwd: string): Promise<TerminalInfo> {
+	async getOrCreateTerminal(cwd: string, launchConfiguration?: TerminalLaunchConfiguration): Promise<TerminalInfo> {
 		const terminals = this.registry.getAllTerminals()
+		const expectedShellPath = this.getConfiguredShellPath(this.defaultTerminalProfile)
+		const expectedConfigurationId = launchConfiguration?.configurationId
 
 		// Find available terminal with matching CWD
 		const matchingTerminal = terminals.find((t) => {
 			if (t.busy) {
 				return false
 			}
-			return (t.terminal as any)._cwd === cwd
+			return (
+				(t.terminal as any)._cwd === cwd &&
+				t.shellPath === expectedShellPath &&
+				t.configurationId === expectedConfigurationId
+			)
 		})
 
 		if (matchingTerminal) {
@@ -166,7 +174,9 @@ export class StandaloneTerminalManager implements ITerminalManager {
 
 		// Find any available terminal if reuse is enabled
 		if (this.terminalReuseEnabled) {
-			const availableTerminal = terminals.find((t) => !t.busy)
+			const availableTerminal = terminals.find(
+				(t) => !t.busy && t.shellPath === expectedShellPath && t.configurationId === expectedConfigurationId,
+			)
 			if (availableTerminal) {
 				// Change directory
 				await this.runCommand(availableTerminal, `cd "${cwd}"`)
@@ -183,6 +193,9 @@ export class StandaloneTerminalManager implements ITerminalManager {
 		const newTerminalInfo = this.registry.createTerminal({
 			cwd: cwd,
 			name: `Dline Terminal ${this.registry.size + 1}`,
+			shellPath: expectedShellPath,
+			environment: launchConfiguration?.environment,
+			configurationId: expectedConfigurationId,
 		})
 		this.terminalIds.add(newTerminalInfo.id)
 		return newTerminalInfo
@@ -302,10 +315,14 @@ export class StandaloneTerminalManager implements ITerminalManager {
 
 		// If profile changed, handle terminal cleanup like TerminalManager does
 		if (previousProfile !== profile) {
-			return this.handleTerminalProfileChange(profile)
+			return this.handleTerminalProfileChange(this.getConfiguredShellPath(profile))
 		}
 
 		return { closedCount: 0, busyTerminals: [] }
+	}
+
+	private getConfiguredShellPath(profileId: string): string | undefined {
+		return profileId === "default" && process.platform !== "win32" ? undefined : getShellForProfile(profileId)
 	}
 
 	// Additional methods required for TerminalManager compatibility

@@ -18,6 +18,7 @@ import { Logger } from "@/shared/services/Logger"
 import { orchestrateCommandExecution } from "./CommandOrchestrator"
 import { isCommandCompletionSuccessful } from "./command-completion"
 import { formatTerminalOutput } from "./output-stream"
+import { buildPreloadedCommand, ShellEnvironmentConfigLoader } from "./shell-environment"
 import { StandaloneTerminalManager } from "./standalone/StandaloneTerminalManager"
 import type {
 	BackgroundCommand,
@@ -48,6 +49,8 @@ export class CommandExecutor {
 	private terminalManager: ITerminalManager
 	private standaloneManager: StandaloneTerminalManager
 	private callbacks: CommandExecutorCallbacks
+	private terminalConfiguration: TerminalManagerConfiguration
+	private readonly shellEnvironmentLoader: ShellEnvironmentConfigLoader
 
 	// Track the currently executing foreground process for cancellation
 	private currentProcess: TerminalProcessResultPromise | null = null
@@ -72,6 +75,10 @@ export class CommandExecutor {
 		this.terminalExecutionMode = config.terminalExecutionMode
 		this.terminalManager = config.terminalManager
 		this.callbacks = callbacks
+		this.terminalConfiguration = config.terminalConfiguration
+		this.shellEnvironmentLoader = new ShellEnvironmentConfigLoader({
+			workspaceRoots: config.workspaceRoots ?? [config.cwd],
+		})
 
 		// When in backgroundExec mode, the terminalManager is already a StandaloneTerminalManager
 		// created by Task. We should reuse it so that Task.getEnvironmentDetails() can see
@@ -90,6 +97,7 @@ export class CommandExecutor {
 
 	/** Apply one complete configuration to every unique terminal manager owned by this executor. */
 	configure(configuration: TerminalManagerConfiguration): TerminalManagerConfigurationResult {
+		this.terminalConfiguration = configuration
 		let closedCount = 0
 		const busyTerminals = []
 		for (const manager of new Set<ITerminalManager>([this.terminalManager, this.standaloneManager])) {
@@ -133,13 +141,28 @@ export class CommandExecutor {
 		this.callbacks.markWorkspaceScanRequired?.()
 
 		// Get terminal and run command
-		const terminalInfo = await manager.getOrCreateTerminal(workdirectory)
+		const shellEnvironment = await this.shellEnvironmentLoader.resolve(
+			workdirectory,
+			this.terminalConfiguration.defaultTerminalProfile,
+		)
+		const executionCommand = buildPreloadedCommand(
+			command,
+			shellEnvironment?.initializationCommands ?? [],
+			this.terminalConfiguration.defaultTerminalProfile,
+		)
+		const terminalInfo = await manager.getOrCreateTerminal(
+			workdirectory,
+			shellEnvironment
+				? { environment: shellEnvironment.environment, configurationId: shellEnvironment.configurationId }
+				: undefined,
+		)
 		if (options?.startInBackground) {
 			terminalInfo.terminal.hide()
 		} else {
 			terminalInfo.terminal.show()
 		}
-		const process = manager.runCommand(terminalInfo, command)
+		const process = manager.runCommand(terminalInfo, executionCommand)
+		terminalInfo.lastCommand = command
 		const activityId = `command_${options?.commandTs ?? Date.now()}_${this.nextActivityNumber++}`
 		const cancellationOwner: CommandCancellationOwner = options?.startInBackground ? "explicit" : "task"
 		let activityLineCount = 0

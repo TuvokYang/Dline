@@ -6,6 +6,7 @@ import {
 	TerminalInfo as ITerminalInfo,
 	ITerminalManager,
 	TerminalProcessResultPromise as ITerminalProcessResultPromise,
+	TerminalLaunchConfiguration,
 	TerminalManagerConfiguration,
 	TerminalManagerConfigurationResult,
 } from "@/integrations/terminal/types"
@@ -250,9 +251,10 @@ export class VscodeTerminalManager implements ITerminalManager {
 		return mergePromise(process, promise)
 	}
 
-	async getOrCreateTerminal(cwd: string): Promise<ITerminalInfo> {
+	async getOrCreateTerminal(cwd: string, launchConfiguration?: TerminalLaunchConfiguration): Promise<ITerminalInfo> {
 		const terminals = TerminalRegistry.getAllTerminals()
 		const expectedShellPath = this.getConfiguredShellPath(this.defaultTerminalProfile)
+		const expectedConfigurationId = launchConfiguration?.configurationId
 
 		// Find available terminal from our pool first (created for this task)
 		Logger.log(`[TerminalManager] Looking for terminal in cwd: ${cwd}`)
@@ -267,6 +269,7 @@ export class VscodeTerminalManager implements ITerminalManager {
 			if (t.shellPath !== expectedShellPath) {
 				return false
 			}
+			if (t.configurationId !== expectedConfigurationId) return false
 			const terminalCwd = t.terminal.shellIntegration?.cwd // one of cline's commands could have changed the cwd of the terminal
 			if (!terminalCwd) {
 				Logger.log(`[TerminalManager] Terminal ${t.id} has no cwd, skipping`)
@@ -285,7 +288,9 @@ export class VscodeTerminalManager implements ITerminalManager {
 
 		// If no non-busy terminal in the current working dir exists and terminal reuse is enabled, try to find any non-busy terminal regardless of CWD
 		if (this.terminalReuseEnabled) {
-			const availableTerminal = terminals.find((t) => !t.busy && t.shellPath === expectedShellPath)
+			const availableTerminal = terminals.find(
+				(t) => !t.busy && t.shellPath === expectedShellPath && t.configurationId === expectedConfigurationId,
+			)
 			if (availableTerminal) {
 				// Set up promise and tracking for CWD change
 				const cwdPromise = new Promise<void>((resolve, reject) => {
@@ -332,7 +337,7 @@ export class VscodeTerminalManager implements ITerminalManager {
 		}
 
 		// If all terminals are busy or don't match shell profile, create a new one with the configured shell
-		const newTerminalInfo = TerminalRegistry.createTerminal(cwd, expectedShellPath)
+		const newTerminalInfo = TerminalRegistry.createTerminal(cwd, expectedShellPath, launchConfiguration)
 		this.terminalIds.add(newTerminalInfo.id)
 		// Cast to ITerminalInfo for interface compatibility
 		return newTerminalInfo as unknown as ITerminalInfo

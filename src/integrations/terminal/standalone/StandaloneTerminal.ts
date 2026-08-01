@@ -35,6 +35,9 @@ export class StandaloneTerminal implements ITerminal {
 	/** Shell path */
 	_shellPath: string | undefined
 
+	/** Environment overrides for child processes created by this terminal. */
+	_environment: Readonly<Record<string, string | null>>
+
 	/** Active child process */
 	_process: ChildProcess | null = null
 
@@ -57,6 +60,7 @@ export class StandaloneTerminal implements ITerminal {
 		this.state = { isInteractedWith: false }
 		this._cwd = options.cwd || process.cwd()
 		this._shellPath = options.shellPath
+		this._environment = options.environment ?? {}
 
 		// Mock shell integration for compatibility
 		this.shellIntegration = {

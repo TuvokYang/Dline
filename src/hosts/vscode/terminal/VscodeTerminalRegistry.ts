@@ -1,4 +1,5 @@
 import * as vscode from "vscode"
+import type { TerminalLaunchConfiguration } from "@/integrations/terminal/types"
 
 export interface TerminalInfo {
 	terminal: vscode.Terminal
@@ -6,6 +7,7 @@ export interface TerminalInfo {
 	lastCommand: string
 	id: number
 	shellPath?: string
+	configurationId?: string
 	lastActive: number
 	pendingCwdChange?: string
 	cwdResolved?: {
@@ -20,12 +22,17 @@ export class TerminalRegistry {
 	private static terminals: TerminalInfo[] = []
 	private static nextTerminalId = 1
 
-	static createTerminal(cwd?: string | vscode.Uri | undefined, shellPath?: string): TerminalInfo {
+	static createTerminal(
+		cwd?: string | vscode.Uri | undefined,
+		shellPath?: string,
+		launchConfiguration?: TerminalLaunchConfiguration,
+	): TerminalInfo {
 		const terminalOptions: vscode.TerminalOptions = {
 			cwd,
 			name: "Dline",
 			iconPath: new vscode.ThemeIcon("dline-icon"),
 			env: {
+				...launchConfiguration?.environment,
 				DLINE_ACTIVE: "true",
 				CLINE_ACTIVE: "true",
 			},
@@ -44,6 +51,7 @@ export class TerminalRegistry {
 			lastCommand: "",
 			id: TerminalRegistry.nextTerminalId,
 			shellPath,
+			configurationId: launchConfiguration?.configurationId,
 			lastActive: Date.now(),
 		}
 		TerminalRegistry.terminals.push(newInfo)

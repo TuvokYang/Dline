@@ -159,12 +159,18 @@ export class StandaloneTerminalProcess extends EventEmitter<TerminalProcessEvent
 		// Get shell and working directory from terminal
 		const shell = (terminal as any)._shellPath || this.getDefaultShell()
 		const cwd = (terminal as any)._cwd || process.cwd()
+		const environmentOverrides = ((terminal as any)._environment ?? {}) as Readonly<Record<string, string | null>>
 
 		// Prepare command for execution
 		const shellArgs = this.getShellArgs(shell, command)
 
 		try {
 			// Create shell options
+			const childEnvironment: NodeJS.ProcessEnv = { ...process.env }
+			for (const [name, value] of Object.entries(environmentOverrides)) {
+				if (value === null) delete childEnvironment[name]
+				else childEnvironment[name] = value
+			}
 			const shellOptions: {
 				cwd: string
 				stdio: ["ignore", "pipe", "pipe"]
@@ -174,7 +180,7 @@ export class StandaloneTerminalProcess extends EventEmitter<TerminalProcessEvent
 				cwd: cwd,
 				stdio: ["ignore", "pipe", "pipe"], // Disable STDIN to prevent interactivity
 				env: {
-					...process.env,
+					...childEnvironment,
 					TERM: "xterm-256color",
 					PAGER: "cat", // Prevent less from being used, reducing interactivity
 					EDITOR: process.env.EDITOR || "cat", // Set EDITOR if not already set
@@ -403,9 +409,12 @@ export class StandaloneTerminalProcess extends EventEmitter<TerminalProcessEvent
 	 */
 	private getShellArgs(shell: string, command: string): string[] {
 		if (process.platform === "win32") {
-			if (shell.toLowerCase().includes("powershell") || shell.toLowerCase().includes("pwsh")) {
+			const normalizedShell = shell.toLowerCase()
+			if (normalizedShell.includes("powershell") || normalizedShell.includes("pwsh")) {
 				return ["-Command", command]
 			}
+			if (normalizedShell.includes("wsl")) return ["--exec", "bash", "-lc", command]
+			if (normalizedShell.includes("bash")) return ["-l", "-c", command]
 			return ["/c", command]
 		}
 		// Use -l for login shell, -c for command

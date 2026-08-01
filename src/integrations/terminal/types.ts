@@ -109,6 +109,8 @@ export interface TerminalInfo {
 	lastCommand: string
 	/** The shell path used by this terminal (e.g., /bin/bash, /bin/zsh) */
 	shellPath?: string
+	/** Identity of the project shell environment used when this terminal was created. */
+	configurationId?: string
 	/** Timestamp of last activity */
 	lastActive: number
 	/** Pending CWD change path (used for tracking directory changes) */
@@ -202,7 +204,7 @@ export interface ITerminalManager {
 	 * @param cwd The working directory for the terminal
 	 * @returns The terminal info for an available terminal
 	 */
-	getOrCreateTerminal(cwd: string): Promise<TerminalInfo>
+	getOrCreateTerminal(cwd: string, launchConfiguration?: TerminalLaunchConfiguration): Promise<TerminalInfo>
 
 	/**
 	 * Get terminals filtered by busy state.
@@ -255,6 +257,15 @@ export interface StandaloneTerminalOptions {
 	cwd?: string
 	/** Shell path to use */
 	shellPath?: string
+	/** Environment overrides applied to every child process created for this terminal. */
+	environment?: Readonly<Record<string, string | null>>
+	/** Identity of the project shell environment used by this terminal. */
+	configurationId?: string
+}
+
+export interface TerminalLaunchConfiguration {
+	readonly environment?: Readonly<Record<string, string | null>>
+	readonly configurationId?: string
 }
 
 // =============================================================================
@@ -437,6 +448,8 @@ export interface CommandExecutorConfig {
 	terminalExecutionMode: "vscodeTerminal" | "backgroundExec"
 	/** The primary terminal manager (VSCode or Standalone) */
 	terminalManager: ITerminalManager
+	/** Workspace roots allowed to contribute project shell environment configuration. */
+	workspaceRoots?: readonly string[]
 	/** Terminal configuration shared by foreground and background managers. */
 	terminalConfiguration: TerminalManagerConfiguration
 }
