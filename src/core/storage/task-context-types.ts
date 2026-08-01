@@ -1,6 +1,6 @@
 import type { ClineTool } from "@shared/tools"
 
-export type SystemPromptRefreshReason = "task_start" | "manual" | "post_compaction" | "capability_change"
+export type SystemPromptRefreshReason = "task_start" | "manual" | "post_compaction" | "capability_change" | "mode_switch"
 
 /**
  * Stores task-level cached context data for a single task directory.

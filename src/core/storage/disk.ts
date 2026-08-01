@@ -635,7 +635,8 @@ function isFrozenSystemPromptCache(value: unknown): boolean {
 		(value.refreshReason === "task_start" ||
 			value.refreshReason === "manual" ||
 			value.refreshReason === "post_compaction" ||
-			value.refreshReason === "capability_change")
+			value.refreshReason === "capability_change" ||
+			value.refreshReason === "mode_switch")
 	)
 }
 

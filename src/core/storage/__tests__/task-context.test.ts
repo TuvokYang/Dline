@@ -94,6 +94,7 @@ describe("task context cache", () => {
 		"manual",
 		"post_compaction",
 		"capability_change",
+		"mode_switch",
 	] as const)("accepts the persisted prompt refresh reason %s", async (refreshReason) => {
 		const taskId = `task-refresh-reason-${refreshReason}`
 		const context = buildContext(taskId)
