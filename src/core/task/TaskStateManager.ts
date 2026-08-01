@@ -87,4 +87,13 @@ export class TaskStateManager {
 		this.cache.actModeProfile = profile
 		this.globalSm.markTaskSettingDirty(this.taskId, "actModeProfile")
 	}
+
+	get taskCapabilityToggles(): string | undefined {
+		return this.cache.taskCapabilityToggles as string | undefined
+	}
+
+	setTaskCapabilityToggles(toggles: string): void {
+		this.cache.taskCapabilityToggles = toggles
+		this.globalSm.markTaskSettingDirty(this.taskId, "taskCapabilityToggles")
+	}
 }

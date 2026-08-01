@@ -92,17 +92,17 @@ export async function refreshSkills(controller: Controller): Promise<RefreshedSk
 		}
 	}
 
-	// Get global toggles and apply them
+	// Reconcile disk-backed toggle maps with the current filesystem snapshot.
+	// Remote entries use a separate name-keyed map and are handled below.
 	const globalToggles = controller.stateManager.getGlobalSettingsKey("globalSkillsToggles") || {}
-	for (const skill of globalSkills) {
-		skill.enabled = globalToggles[skill.path] !== false
+	const globalPaths = new Set(globalSkills.map((skill) => skill.path).filter((skillPath) => !skillPath.startsWith("remote:")))
+	for (const togglePath of Object.keys(globalToggles)) {
+		if (!globalPaths.has(togglePath)) delete globalToggles[togglePath]
 	}
-
-	// Sync toggles: add newly discovered skills (default enabled), keep existing
 	for (const skill of globalSkills) {
-		if (!(skill.path in globalToggles)) {
-			globalToggles[skill.path] = true
-		}
+		if (skill.path.startsWith("remote:")) continue
+		if (!(skill.path in globalToggles)) globalToggles[skill.path] = true
+		skill.enabled = globalToggles[skill.path] !== false
 	}
 
 	// Add remote skills from remote config.
@@ -129,15 +129,13 @@ export async function refreshSkills(controller: Controller): Promise<RefreshedSk
 
 	// Get local toggles and apply them
 	const localToggles = controller.stateManager.getWorkspaceStateKey("localSkillsToggles") || {}
-	for (const skill of localSkills) {
-		skill.enabled = localToggles[skill.path] !== false
+	const localPaths = new Set(localSkills.map((skill) => skill.path))
+	for (const togglePath of Object.keys(localToggles)) {
+		if (!localPaths.has(togglePath)) delete localToggles[togglePath]
 	}
-
-	// Sync toggles: add newly discovered skills (default enabled), keep existing
 	for (const skill of localSkills) {
-		if (!(skill.path in localToggles)) {
-			localToggles[skill.path] = true
-		}
+		if (!(skill.path in localToggles)) localToggles[skill.path] = true
+		skill.enabled = localToggles[skill.path] !== false
 	}
 
 	// Persist updated toggles to StateManager

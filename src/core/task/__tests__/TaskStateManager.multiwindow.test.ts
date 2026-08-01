@@ -62,6 +62,18 @@ describe("TaskStateManager - Multi-window Profile Isolation", () => {
 		taskSm2.actModeProfile?.should.equal("openai-act")
 	})
 
+	it("isolates capability snapshots between task windows", () => {
+		const taskSm1 = new TaskStateManager("task-window-1", sm)
+		const taskSm2 = new TaskStateManager("task-window-2", sm)
+		taskSm1.setTaskCapabilityToggles('{"mcpServers":{"docs":true}}')
+		taskSm2.setTaskCapabilityToggles('{"mcpServers":{"docs":false}}')
+
+		sm.setActiveTaskId("task-window-2")
+		expect(taskSm1.taskCapabilityToggles).toBe('{"mcpServers":{"docs":true}}')
+		sm.setActiveTaskId("task-window-1")
+		expect(taskSm2.taskCapabilityToggles).toBe('{"mcpServers":{"docs":false}}')
+	})
+
 	it("builds API configuration for an explicit task without using the active task cursor", async () => {
 		await sm.loadTaskSettings("task-window-1")
 		await sm.loadTaskSettings("task-window-2")

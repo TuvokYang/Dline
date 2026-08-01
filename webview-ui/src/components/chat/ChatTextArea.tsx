@@ -1670,9 +1670,9 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 							</TooltipTrigger>
 						</Tooltip>
 
-						<ServersToggleModal />
+						<ServersToggleModal hasTaskDraft={inputValue.trim().length > 0} />
 
-						<ClineRulesToggleModal />
+						<ClineRulesToggleModal hasTaskDraft={inputValue.trim().length > 0} />
 
 						<ModelSwitcher onOpenSettings={handleModelButtonClick} />
 					</ButtonGroup>

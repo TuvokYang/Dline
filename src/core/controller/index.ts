@@ -28,6 +28,12 @@ import type { ModeSwitchRequestResult } from "@shared/mode-switch"
 import type { TaskLockStatus } from "@shared/proto/dline/task"
 import { type Settings } from "@shared/storage/state-keys"
 import type { Mode } from "@shared/storage/types"
+import {
+	createTaskCapabilityToggles,
+	parseTaskCapabilityToggles,
+	serializeTaskCapabilityToggles,
+	type TaskCapabilityToggles,
+} from "@shared/TaskCapabilityToggles"
 import type { TelemetrySetting } from "@shared/TelemetrySetting"
 import type { UserInfo } from "@shared/UserInfo"
 import { fileExistsAtPath } from "@utils/fs"
@@ -120,6 +126,27 @@ export class Controller {
 	private readonly modeSwitchCoordinator: ModeSwitchCoordinator
 	private nextStateRevision = 0
 	private latestStateRevision = 0
+
+	/** Snapshot the currently effective resource toggles for a newly created task. */
+	private getInheritedTaskCapabilityToggles(): TaskCapabilityToggles {
+		return createTaskCapabilityToggles({
+			globalClineRulesToggles: this.stateManager.getGlobalSettingsKey("globalClineRulesToggles") || {},
+			localClineRulesToggles: this.stateManager.getWorkspaceStateKey("localClineRulesToggles") || {},
+			localCursorRulesToggles: this.stateManager.getWorkspaceStateKey("localCursorRulesToggles") || {},
+			localWindsurfRulesToggles: this.stateManager.getWorkspaceStateKey("localWindsurfRulesToggles") || {},
+			localAgentsRulesToggles: this.stateManager.getWorkspaceStateKey("localAgentsRulesToggles") || {},
+			globalWorkflowToggles: this.stateManager.getGlobalSettingsKey("globalWorkflowToggles") || {},
+			localWorkflowToggles: this.stateManager.getWorkspaceStateKey("workflowToggles") || {},
+			globalSkillsToggles: this.stateManager.getGlobalSettingsKey("globalSkillsToggles") || {},
+			localSkillsToggles: this.stateManager.getWorkspaceStateKey("localSkillsToggles") || {},
+			remoteSkillsToggles: this.stateManager.getGlobalStateKey("remoteSkillsToggles") || {},
+			remoteRulesToggles: this.stateManager.getGlobalStateKey("remoteRulesToggles") || {},
+			remoteWorkflowToggles: this.stateManager.getGlobalStateKey("remoteWorkflowToggles") || {},
+			globalSubagentsToggles: this.stateManager.getGlobalSettingsKey("globalSubagentsToggles") || {},
+			localSubagentsToggles: this.stateManager.getWorkspaceStateKey("localSubagentsToggles") || {},
+			mcpServers: Object.fromEntries(this.mcpHub.getServers().map((server) => [server.name, server.disabled !== true])),
+		})
+	}
 
 	// Timer for periodic remote config fetching
 	private remoteConfigTimer?: NodeJS.Timeout
@@ -410,6 +437,17 @@ export class Controller {
 		await this.stateManager.loadTaskSettings(taskId)
 		if (taskSettings) {
 			this.stateManager.setTaskSettingsBatch(taskId, taskSettings)
+		}
+
+		// Freeze resource enablement at task creation. Resumed tasks keep their
+		// persisted snapshot; only legacy tasks without one inherit current state.
+		const initialTaskCache = this.stateManager.getTaskCacheRef(taskId)
+		if (typeof initialTaskCache.taskCapabilityToggles !== "string") {
+			this.stateManager.setTaskSettings(
+				taskId,
+				"taskCapabilityToggles",
+				serializeTaskCapabilityToggles(this.getInheritedTaskCapabilityToggles()),
+			)
 		}
 
 		// New task: inherit mode from the welcome-screen global setting.
@@ -1095,7 +1133,9 @@ export class Controller {
 		const globalClineRulesToggles = this.stateManager.getGlobalSettingsKey("globalClineRulesToggles")
 		const globalWorkflowToggles = this.stateManager.getGlobalSettingsKey("globalWorkflowToggles")
 		const globalSkillsToggles = this.stateManager.getGlobalSettingsKey("globalSkillsToggles")
+		const taskCapabilityToggles = parseTaskCapabilityToggles(this.task?.taskSm.taskCapabilityToggles)
 		const localSkillsToggles = this.stateManager.getWorkspaceStateKey("localSkillsToggles")
+		const remoteSkillsToggles = this.stateManager.getGlobalStateKey("remoteSkillsToggles")
 		const remoteRulesToggles = this.stateManager.getGlobalStateKey("remoteRulesToggles")
 		const remoteWorkflowToggles = this.stateManager.getGlobalStateKey("remoteWorkflowToggles")
 		const shellIntegrationTimeout = this.stateManager.getGlobalSettingsKey("shellIntegrationTimeout")
@@ -1213,7 +1253,9 @@ export class Controller {
 			localWorkflowToggles: workflowToggles || {},
 			globalWorkflowToggles: globalWorkflowToggles || {},
 			globalSkillsToggles: globalSkillsToggles || {},
+			taskCapabilityToggles,
 			localSkillsToggles: localSkillsToggles || {},
+			remoteSkillsToggles: remoteSkillsToggles || {},
 			remoteRulesToggles: remoteRulesToggles,
 			remoteWorkflowToggles: remoteWorkflowToggles,
 			shellIntegrationTimeout,

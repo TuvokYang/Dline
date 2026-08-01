@@ -1,8 +1,8 @@
 import type { CapabilityToggleState } from "@core/prompts/capabilities/CapabilitiesAggregator"
 import type { CapabilitiesSnapshot } from "@core/prompts/capabilities/types"
 import type { PromptProfile } from "@core/prompts/profiles/types"
+import type { McpServer } from "@shared/mcp"
 import type { ApiProviderInfo } from "@/core/api"
-import type { McpHub } from "@/services/mcp/McpHub"
 import type { BrowserSettings } from "@/shared/BrowserSettings"
 import type { FocusChainSettings } from "@/shared/FocusChainSettings"
 import type { SkillMetadata } from "@/shared/skills"
@@ -16,7 +16,8 @@ export interface SystemPromptContext {
 	readonly cwd?: string
 	readonly ide: string
 	readonly supportsBrowserUse?: boolean
-	readonly mcpHub?: McpHub
+	/** Prompt-visible MCP projection. Execution still uses the real McpHub. */
+	readonly mcpHub?: { getServers(): McpServer[] }
 	readonly skills?: SkillMetadata[]
 	readonly capabilities?: CapabilitiesSnapshot
 	readonly capabilitiesSection?: string

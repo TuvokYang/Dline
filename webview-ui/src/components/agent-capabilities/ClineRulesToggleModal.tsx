@@ -21,6 +21,7 @@ import styled from "styled-components"
 import PopupModalContainer from "@/components/common/PopupModalContainer"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { useExtensionState } from "@/context/ExtensionStateContext"
+import { useTaskCapabilityToggles } from "@/hooks/useTaskCapabilityToggles"
 import { FileServiceClient } from "@/services/grpc-client"
 import { isMacOSOrLinux } from "@/utils/platformUtils"
 import HookRow from "./HookRow"
@@ -29,19 +30,19 @@ import RuleRow from "./RuleRow"
 import RulesToggleList from "./RulesToggleList"
 import SubagentRow from "./SubagentRow"
 
-const ClineRulesToggleModal: React.FC = () => {
+const ClineRulesToggleModal: React.FC<{ hasTaskDraft?: boolean }> = ({ hasTaskDraft = false }) => {
 	const {
-		globalClineRulesToggles = {},
-		localClineRulesToggles = {},
-		localCursorRulesToggles = {},
-		localWindsurfRulesToggles = {},
-		localAgentsRulesToggles = {},
-		localWorkflowToggles = {},
-		globalWorkflowToggles = {},
-		globalSkillsToggles = {},
-		localSkillsToggles = {},
-		remoteRulesToggles = {},
-		remoteWorkflowToggles = {},
+		globalClineRulesToggles: globalClineRulesTogglesState = {},
+		localClineRulesToggles: localClineRulesTogglesState = {},
+		localCursorRulesToggles: localCursorRulesTogglesState = {},
+		localWindsurfRulesToggles: localWindsurfRulesTogglesState = {},
+		localAgentsRulesToggles: localAgentsRulesTogglesState = {},
+		localWorkflowToggles: localWorkflowTogglesState = {},
+		globalWorkflowToggles: globalWorkflowTogglesState = {},
+		globalSkillsToggles: globalSkillsTogglesState = {},
+		localSkillsToggles: localSkillsTogglesState = {},
+		remoteRulesToggles: remoteRulesTogglesState = {},
+		remoteWorkflowToggles: remoteWorkflowTogglesState = {},
 		remoteConfigSettings = {},
 		hooksEnabled,
 		setGlobalClineRulesToggles,
@@ -53,9 +54,22 @@ const ClineRulesToggleModal: React.FC = () => {
 		setGlobalWorkflowToggles,
 		setGlobalSkillsToggles,
 		setLocalSkillsToggles,
+		setRemoteSkillsToggles,
 		setRemoteRulesToggles,
 		setRemoteWorkflowToggles,
 	} = useExtensionState()
+	const capabilityScope = useTaskCapabilityToggles(hasTaskDraft)
+	const globalClineRulesToggles = capabilityScope.snapshot?.globalClineRulesToggles ?? globalClineRulesTogglesState
+	const localClineRulesToggles = capabilityScope.snapshot?.localClineRulesToggles ?? localClineRulesTogglesState
+	const localCursorRulesToggles = capabilityScope.snapshot?.localCursorRulesToggles ?? localCursorRulesTogglesState
+	const localWindsurfRulesToggles = capabilityScope.snapshot?.localWindsurfRulesToggles ?? localWindsurfRulesTogglesState
+	const localAgentsRulesToggles = capabilityScope.snapshot?.localAgentsRulesToggles ?? localAgentsRulesTogglesState
+	const localWorkflowToggles = capabilityScope.snapshot?.localWorkflowToggles ?? localWorkflowTogglesState
+	const globalWorkflowToggles = capabilityScope.snapshot?.globalWorkflowToggles ?? globalWorkflowTogglesState
+	const globalSkillsToggles = capabilityScope.snapshot?.globalSkillsToggles ?? globalSkillsTogglesState
+	const localSkillsToggles = capabilityScope.snapshot?.localSkillsToggles ?? localSkillsTogglesState
+	const remoteRulesToggles = capabilityScope.snapshot?.remoteRulesToggles ?? remoteRulesTogglesState
+	const remoteWorkflowToggles = capabilityScope.snapshot?.remoteWorkflowToggles ?? remoteWorkflowTogglesState
 	const [globalHooks, setGlobalHooks] = useState<Array<{ name: string; enabled: boolean; absolutePath: string }>>([])
 	const [workspaceHooks, setWorkspaceHooks] = useState<
 		Array<{ workspaceName: string; hooks: Array<{ name: string; enabled: boolean; absolutePath: string }> }>
@@ -82,41 +96,50 @@ const ClineRulesToggleModal: React.FC = () => {
 	}, [currentView, hooksEnabled])
 
 	useEffect(() => {
-		if (isVisible) {
+		if (!isVisible) return
+
+		let isCancelled = false
+		const refreshAllToggles = () => {
+			if (isCancelled) return
 			FileServiceClient.refreshRules({} as EmptyRequest)
 				.then((response: RefreshedDlineToggles) => {
-					// Update state with the response data using all available setters
-					if (response.globalClineRulesToggles?.toggles) {
+					if (isCancelled) return
+					if (response.globalClineRulesToggles?.toggles)
 						setGlobalClineRulesToggles(response.globalClineRulesToggles.toggles)
-					}
-					if (response.localClineRulesToggles?.toggles) {
+					if (response.localClineRulesToggles?.toggles)
 						setLocalClineRulesToggles(response.localClineRulesToggles.toggles)
-					}
-					if (response.localCursorRulesToggles?.toggles) {
+					if (response.localCursorRulesToggles?.toggles)
 						setLocalCursorRulesToggles(response.localCursorRulesToggles.toggles)
-					}
-					if (response.localWindsurfRulesToggles?.toggles) {
+					if (response.localWindsurfRulesToggles?.toggles)
 						setLocalWindsurfRulesToggles(response.localWindsurfRulesToggles.toggles)
-					}
-					if (response.localAgentsRulesToggles?.toggles) {
+					if (response.localAgentsRulesToggles?.toggles)
 						setLocalAgentsRulesToggles(response.localAgentsRulesToggles.toggles)
-					}
-					if (response.localWorkflowToggles?.toggles) {
-						setLocalWorkflowToggles(response.localWorkflowToggles.toggles)
-					}
-					if (response.globalWorkflowToggles?.toggles) {
-						setGlobalWorkflowToggles(response.globalWorkflowToggles.toggles)
-					}
-					if (response.localSkillsToggles?.toggles) {
-						setLocalSkillsToggles(response.localSkillsToggles.toggles)
-					}
-					if (response.globalSkillsToggles?.toggles) {
-						setGlobalSkillsToggles(response.globalSkillsToggles.toggles)
-					}
+					if (response.localWorkflowToggles?.toggles) setLocalWorkflowToggles(response.localWorkflowToggles.toggles)
+					if (response.globalWorkflowToggles?.toggles) setGlobalWorkflowToggles(response.globalWorkflowToggles.toggles)
+					if (response.localSkillsToggles?.toggles) setLocalSkillsToggles(response.localSkillsToggles.toggles)
+					if (response.globalSkillsToggles?.toggles) setGlobalSkillsToggles(response.globalSkillsToggles.toggles)
+					void capabilityScope.reconcile({
+						globalClineRulesToggles: response.globalClineRulesToggles?.toggles ?? {},
+						localClineRulesToggles: response.localClineRulesToggles?.toggles ?? {},
+						localCursorRulesToggles: response.localCursorRulesToggles?.toggles ?? {},
+						localWindsurfRulesToggles: response.localWindsurfRulesToggles?.toggles ?? {},
+						localAgentsRulesToggles: response.localAgentsRulesToggles?.toggles ?? {},
+						localWorkflowToggles: response.localWorkflowToggles?.toggles ?? {},
+						globalWorkflowToggles: response.globalWorkflowToggles?.toggles ?? {},
+						localSkillsToggles: response.localSkillsToggles?.toggles ?? {},
+						globalSkillsToggles: response.globalSkillsToggles?.toggles ?? {},
+					})
 				})
 				.catch((error) => {
-					console.error("Failed to refresh rules:", error)
+					if (!isCancelled) console.error("Failed to refresh rules:", error)
 				})
+		}
+
+		refreshAllToggles()
+		const pollInterval = setInterval(refreshAllToggles, 1000)
+		return () => {
+			isCancelled = true
+			clearInterval(pollInterval)
 		}
 	}, [
 		isVisible,
@@ -127,6 +150,9 @@ const ClineRulesToggleModal: React.FC = () => {
 		setLocalCursorRulesToggles,
 		setLocalWindsurfRulesToggles,
 		setLocalWorkflowToggles,
+		setLocalSkillsToggles,
+		setGlobalSkillsToggles,
+		capabilityScope.reconcile,
 	])
 
 	// Refresh hooks when hooks tab becomes visible
@@ -183,6 +209,21 @@ const ClineRulesToggleModal: React.FC = () => {
 					if (!isCancelled) {
 						setGlobalSkills(response.globalSkills || [])
 						setLocalSkills(response.localSkills || [])
+						void capabilityScope.reconcile({
+							globalSkillsToggles: Object.fromEntries(
+								(response.globalSkills || [])
+									.filter((skill) => !skill.path.startsWith("remote:"))
+									.map((skill) => [skill.path, skill.enabled]),
+							),
+							localSkillsToggles: Object.fromEntries(
+								(response.localSkills || []).map((skill) => [skill.path, skill.enabled]),
+							),
+							remoteSkillsToggles: Object.fromEntries(
+								(response.globalSkills || [])
+									.filter((skill) => skill.path.startsWith("remote:"))
+									.map((skill) => [skill.name, skill.enabled]),
+							),
+						})
 					}
 				})
 				.catch((error) => {
@@ -202,7 +243,7 @@ const ClineRulesToggleModal: React.FC = () => {
 			isCancelled = true
 			clearInterval(pollInterval)
 		}
-	}, [isVisible, currentView])
+	}, [isVisible, currentView, capabilityScope.reconcile])
 
 	// Refresh subagents when subagents tab becomes visible
 	useEffect(() => {
@@ -220,6 +261,14 @@ const ClineRulesToggleModal: React.FC = () => {
 					if (!isCancelled) {
 						setGlobalSubagents(response.globalSubagents || [])
 						setLocalSubagents(response.localSubagents || [])
+						void capabilityScope.reconcile({
+							globalSubagentsToggles: Object.fromEntries(
+								(response.globalSubagents || []).map((agent) => [agent.path, agent.enabled]),
+							),
+							localSubagentsToggles: Object.fromEntries(
+								(response.localSubagents || []).map((agent) => [agent.path, agent.enabled]),
+							),
+						})
 					}
 				})
 				.catch((error) => {
@@ -239,7 +288,7 @@ const ClineRulesToggleModal: React.FC = () => {
 			isCancelled = true
 			clearInterval(pollInterval)
 		}
-	}, [isVisible, currentView])
+	}, [isVisible, currentView, capabilityScope.reconcile])
 
 	// Format global rules for display with proper typing
 	const globalRules = Object.entries(globalClineRulesToggles || {})
@@ -279,8 +328,34 @@ const ClineRulesToggleModal: React.FC = () => {
 	const hasRemoteRules = remoteGlobalRules.length > 0
 	const hasRemoteWorkflows = remoteGlobalWorkflows.length > 0
 
+	useEffect(() => {
+		if (!isVisible) return
+		void capabilityScope.reconcile({
+			remoteRulesToggles: Object.fromEntries(
+				remoteGlobalRules.map((rule) => [rule.name, rule.alwaysEnabled || remoteRulesTogglesState[rule.name] !== false]),
+			),
+			remoteWorkflowToggles: Object.fromEntries(
+				remoteGlobalWorkflows.map((workflow) => [
+					workflow.name,
+					workflow.alwaysEnabled || remoteWorkflowTogglesState[workflow.name] !== false,
+				]),
+			),
+		})
+	}, [
+		isVisible,
+		remoteGlobalRules,
+		remoteGlobalWorkflows,
+		remoteRulesTogglesState,
+		remoteWorkflowTogglesState,
+		capabilityScope.reconcile,
+	])
+
 	// Handle toggle rule using gRPC
 	const toggleRule = (isGlobal: boolean, rulePath: string, enabled: boolean) => {
+		if (capabilityScope.isTaskScoped) {
+			void capabilityScope.updateToggle(isGlobal ? "globalClineRulesToggles" : "localClineRulesToggles", rulePath, enabled)
+			return
+		}
 		FileServiceClient.toggleClineRule(
 			ToggleClineRuleRequest.create({
 				scope: isGlobal ? RuleScope.GLOBAL : RuleScope.LOCAL,
@@ -306,6 +381,10 @@ const ClineRulesToggleModal: React.FC = () => {
 	}
 
 	const toggleCursorRule = (rulePath: string, enabled: boolean) => {
+		if (capabilityScope.isTaskScoped) {
+			void capabilityScope.updateToggle("localCursorRulesToggles", rulePath, enabled)
+			return
+		}
 		FileServiceClient.toggleCursorRule(
 			ToggleCursorRuleRequest.create({
 				rulePath,
@@ -324,6 +403,10 @@ const ClineRulesToggleModal: React.FC = () => {
 	}
 
 	const toggleWindsurfRule = (rulePath: string, enabled: boolean) => {
+		if (capabilityScope.isTaskScoped) {
+			void capabilityScope.updateToggle("localWindsurfRulesToggles", rulePath, enabled)
+			return
+		}
 		FileServiceClient.toggleWindsurfRule(
 			ToggleWindsurfRuleRequest.create({
 				rulePath,
@@ -341,6 +424,10 @@ const ClineRulesToggleModal: React.FC = () => {
 	}
 
 	const toggleAgentsRule = (rulePath: string, enabled: boolean) => {
+		if (capabilityScope.isTaskScoped) {
+			void capabilityScope.updateToggle("localAgentsRulesToggles", rulePath, enabled)
+			return
+		}
 		FileServiceClient.toggleAgentsRule(
 			ToggleAgentsRuleRequest.create({
 				rulePath,
@@ -376,6 +463,10 @@ const ClineRulesToggleModal: React.FC = () => {
 	}
 
 	const toggleWorkflow = (isGlobal: boolean, workflowPath: string, enabled: boolean) => {
+		if (capabilityScope.isTaskScoped) {
+			void capabilityScope.updateToggle(isGlobal ? "globalWorkflowToggles" : "localWorkflowToggles", workflowPath, enabled)
+			return
+		}
 		FileServiceClient.toggleWorkflow(
 			ToggleWorkflowRequest.create({
 				workflowPath,
@@ -399,6 +490,10 @@ const ClineRulesToggleModal: React.FC = () => {
 
 	// Handle toggle for remote rules
 	const toggleRemoteRule = (ruleName: string, enabled: boolean) => {
+		if (capabilityScope.isTaskScoped) {
+			void capabilityScope.updateToggle("remoteRulesToggles", ruleName, enabled)
+			return
+		}
 		FileServiceClient.toggleClineRule(
 			ToggleClineRuleRequest.create({
 				scope: RuleScope.REMOTE,
@@ -419,6 +514,10 @@ const ClineRulesToggleModal: React.FC = () => {
 
 	// Handle toggle for remote workflows
 	const toggleRemoteWorkflow = (workflowName: string, enabled: boolean) => {
+		if (capabilityScope.isTaskScoped) {
+			void capabilityScope.updateToggle("remoteWorkflowToggles", workflowName, enabled)
+			return
+		}
 		FileServiceClient.toggleWorkflow(
 			ToggleWorkflowRequest.create({
 				workflowPath: workflowName,
@@ -438,6 +537,15 @@ const ClineRulesToggleModal: React.FC = () => {
 
 	// Handle toggle for skills
 	const toggleSkill = (isGlobal: boolean, skillPath: string, enabled: boolean) => {
+		if (capabilityScope.isTaskScoped) {
+			const isRemote = skillPath.startsWith("remote:")
+			void capabilityScope.updateToggle(
+				isRemote ? "remoteSkillsToggles" : isGlobal ? "globalSkillsToggles" : "localSkillsToggles",
+				isRemote ? skillPath.slice("remote:".length) : skillPath,
+				enabled,
+			)
+			return
+		}
 		FileServiceClient.toggleSkill(
 			ToggleSkillRequest.create({
 				skillPath,
@@ -452,6 +560,9 @@ const ClineRulesToggleModal: React.FC = () => {
 				if (response.localSkillsToggles) {
 					setLocalSkillsToggles(response.localSkillsToggles)
 				}
+				if (response.remoteSkillsToggles) {
+					setRemoteSkillsToggles(response.remoteSkillsToggles)
+				}
 				// Update local skills state
 				if (skillPath.startsWith("remote:")) {
 					setGlobalSkills((prev) => prev.map((s) => (s.path === skillPath ? { ...s, enabled } : s)))
@@ -464,6 +575,24 @@ const ClineRulesToggleModal: React.FC = () => {
 			.catch((error) => {
 				console.error("Error toggling skill:", error)
 			})
+	}
+
+	const toggleSubagent = (isGlobal: boolean, subagentPath: string, enabled: boolean) => {
+		if (capabilityScope.isTaskScoped) {
+			void capabilityScope.updateToggle(
+				isGlobal ? "globalSubagentsToggles" : "localSubagentsToggles",
+				subagentPath,
+				enabled,
+			)
+			return
+		}
+		FileServiceClient.toggleSubagent(
+			ToggleSubagentRequest.create({
+				subagentPath,
+				isGlobal,
+				enabled,
+			}),
+		).catch(console.error)
 	}
 
 	// Close modal when clicking outside
@@ -605,7 +734,9 @@ const ClineRulesToggleModal: React.FC = () => {
 										<div className="text-sm font-normal mb-2">Enterprise Rules</div>
 										<div className="flex flex-col gap-0">
 											{remoteGlobalRules.map((rule) => {
-												const enabled = rule.alwaysEnabled || remoteRulesToggles[rule.name] === true
+												const enabled =
+													rule.alwaysEnabled ||
+													(remoteRulesToggles[rule.name] ?? remoteRulesTogglesState[rule.name] ?? true)
 												return (
 													<RuleRow
 														alwaysEnabled={rule.alwaysEnabled}
@@ -690,7 +821,10 @@ const ClineRulesToggleModal: React.FC = () => {
 										<div className="flex flex-col gap-0">
 											{remoteGlobalWorkflows.map((workflow) => {
 												const enabled =
-													workflow.alwaysEnabled || remoteWorkflowToggles[workflow.name] === true
+													workflow.alwaysEnabled ||
+													(remoteWorkflowToggles[workflow.name] ??
+														remoteWorkflowTogglesState[workflow.name] ??
+														true)
 												return (
 													<RuleRow
 														alwaysEnabled={workflow.alwaysEnabled}
@@ -851,7 +985,11 @@ const ClineRulesToggleModal: React.FC = () => {
 												.map((skill) => (
 													<RuleRow
 														alwaysEnabled={skill.alwaysEnabled}
-														enabled={skill.enabled}
+														enabled={
+															skill.alwaysEnabled ||
+															(capabilityScope.snapshot?.remoteSkillsToggles[skill.name] ??
+																skill.enabled)
+														}
 														isGlobal={true}
 														isRemote={true}
 														key={skill.path}
@@ -873,7 +1011,9 @@ const ClineRulesToggleModal: React.FC = () => {
 											.sort((a, b) => a.name.localeCompare(b.name))
 											.map((skill) => (
 												<RuleRow
-													enabled={skill.enabled}
+													enabled={
+														capabilityScope.snapshot?.globalSkillsToggles[skill.path] ?? skill.enabled
+													}
 													isGlobal={true}
 													key={skill.path}
 													rulePath={skill.path}
@@ -893,7 +1033,9 @@ const ClineRulesToggleModal: React.FC = () => {
 											.sort((a, b) => a.name.localeCompare(b.name))
 											.map((skill) => (
 												<RuleRow
-													enabled={skill.enabled}
+													enabled={
+														capabilityScope.snapshot?.localSkillsToggles[skill.path] ?? skill.enabled
+													}
 													isGlobal={false}
 													key={skill.path}
 													rulePath={skill.path}
@@ -915,7 +1057,12 @@ const ClineRulesToggleModal: React.FC = () => {
 											.sort((a, b) => a.name.localeCompare(b.name))
 											.map((agent) => (
 												<SubagentRow
-													agent={agent}
+													agent={{
+														...agent,
+														enabled:
+															capabilityScope.snapshot?.globalSubagentsToggles[agent.path] ??
+															agent.enabled,
+													}}
 													isGlobal={true}
 													key={agent.path}
 													onDelete={() => {
@@ -927,15 +1074,7 @@ const ClineRulesToggleModal: React.FC = () => {
 															})
 															.catch(console.error)
 													}}
-													onToggle={(_path, enabled) => {
-														FileServiceClient.toggleSubagent(
-															ToggleSubagentRequest.create({
-																subagentPath: agent.path,
-																isGlobal: true,
-																enabled,
-															}),
-														).catch(console.error)
-													}}
+													onToggle={(_path, enabled) => toggleSubagent(true, agent.path, enabled)}
 												/>
 											))}
 										<NewRuleRow isGlobal={true} ruleType="subagent" />
@@ -950,7 +1089,12 @@ const ClineRulesToggleModal: React.FC = () => {
 											.sort((a, b) => a.name.localeCompare(b.name))
 											.map((agent) => (
 												<SubagentRow
-													agent={agent}
+													agent={{
+														...agent,
+														enabled:
+															capabilityScope.snapshot?.localSubagentsToggles[agent.path] ??
+															agent.enabled,
+													}}
 													isGlobal={false}
 													key={agent.path}
 													onDelete={() => {
@@ -961,15 +1105,7 @@ const ClineRulesToggleModal: React.FC = () => {
 															})
 															.catch(console.error)
 													}}
-													onToggle={(_path, enabled) => {
-														FileServiceClient.toggleSubagent(
-															ToggleSubagentRequest.create({
-																subagentPath: agent.path,
-																isGlobal: false,
-																enabled,
-															}),
-														).catch(console.error)
-													}}
+													onToggle={(_path, enabled) => toggleSubagent(false, agent.path, enabled)}
 												/>
 											))}
 										<NewRuleRow isGlobal={false} ruleType="subagent" />

@@ -8,10 +8,12 @@ import PopupModalContainer from "@/components/common/PopupModalContainer"
 import ServersToggleList from "@/components/mcp/configuration/tabs/installed/ServersToggleList"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { useExtensionState } from "@/context/ExtensionStateContext"
+import { useTaskCapabilityToggles } from "@/hooks/useTaskCapabilityToggles"
 import { McpServiceClient } from "@/services/grpc-client"
 
-const ServersToggleModal: React.FC = () => {
+const ServersToggleModal: React.FC<{ hasTaskDraft?: boolean }> = ({ hasTaskDraft = false }) => {
 	const { mcpServers, navigateToMcp, setMcpServers } = useExtensionState()
+	const capabilityScope = useTaskCapabilityToggles(hasTaskDraft)
 	const [isVisible, setIsVisible] = useState(false)
 	const buttonRef = useRef<HTMLDivElement>(null)
 	const modalRef = useRef<HTMLDivElement>(null)
@@ -26,13 +28,16 @@ const ServersToggleModal: React.FC = () => {
 					if (response.mcpServers) {
 						const mcpServers = convertProtoMcpServersToMcpServers(response.mcpServers)
 						setMcpServers(mcpServers)
+						void capabilityScope.reconcile({
+							mcpServers: Object.fromEntries(mcpServers.map((server) => [server.name, server.disabled !== true])),
+						})
 					}
 				})
 				.catch((error) => {
 					console.error("Failed to fetch MCP servers:", error)
 				})
 		}
-	}, [isVisible, setMcpServers])
+	}, [isVisible, setMcpServers, capabilityScope.reconcile])
 
 	// Close modal when clicking outside
 	useClickAway(modalRef, () => {
@@ -86,7 +91,24 @@ const ServersToggleModal: React.FC = () => {
 					</div>
 
 					<div className="flex-1 overflow-y-auto px-3 pb-3" style={{ minHeight: 0 }}>
-						<ServersToggleList hasTrashIcon={false} isExpandable={false} listGap="small" servers={mcpServers} />
+						<ServersToggleList
+							getServerEnabled={
+								capabilityScope.isTaskScoped
+									? (server) => capabilityScope.snapshot?.mcpServers[server.name] ?? server.disabled !== true
+									: undefined
+							}
+							hasTrashIcon={false}
+							isExpandable={false}
+							listGap="small"
+							onToggleServer={
+								capabilityScope.isTaskScoped
+									? (server, enabled) => {
+											void capabilityScope.updateToggle("mcpServers", server.name, enabled)
+										}
+									: undefined
+							}
+							servers={mcpServers}
+						/>
 					</div>
 				</PopupModalContainer>
 			)}

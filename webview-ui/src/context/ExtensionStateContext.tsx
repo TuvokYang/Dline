@@ -28,6 +28,7 @@ import {
 } from "../../../src/shared/api"
 import { Environment } from "../../../src/shared/config-types"
 import type { McpMarketplaceCatalog, McpServer, McpViewTab } from "../../../src/shared/mcp"
+import type { TaskCapabilityToggles } from "../../../src/shared/TaskCapabilityToggles"
 import {
 	McpServiceClient,
 	ModelsServiceClient,
@@ -145,6 +146,10 @@ export interface ExtensionStateContextType extends ExtensionState {
 	setGlobalWorkflowToggles: (toggles: Record<string, boolean>) => void
 	setGlobalSkillsToggles: (toggles: Record<string, boolean>) => void
 	setLocalSkillsToggles: (toggles: Record<string, boolean>) => void
+	setRemoteSkillsToggles: (toggles: Record<string, boolean>) => void
+	setTaskCapabilityToggles: (toggles: TaskCapabilityToggles | undefined) => void
+	draftTaskCapabilityToggles: TaskCapabilityToggles | undefined
+	setDraftTaskCapabilityToggles: (toggles: TaskCapabilityToggles | undefined) => void
 	setRemoteRulesToggles: (toggles: Record<string, boolean>) => void
 	setRemoteWorkflowToggles: (toggles: Record<string, boolean>) => void
 	setMcpMarketplaceCatalog: (value: McpMarketplaceCatalog) => void
@@ -205,6 +210,7 @@ export const ExtensionStateContextProvider: React.FC<{
 	const [showAccount, setShowAccount] = useState(false)
 	const [showWorktrees, setShowWorktrees] = useState(false)
 	const [showAnnouncement, setShowAnnouncement] = useState(false)
+	const [draftTaskCapabilityToggles, setDraftTaskCapabilityToggles] = useState<TaskCapabilityToggles | undefined>()
 
 	// Helper for MCP view
 	const closeMcpView = useCallback(() => {
@@ -348,6 +354,8 @@ export const ExtensionStateContextProvider: React.FC<{
 		showActiveTasksInEnvDetails: true,
 		globalSkillsToggles: {},
 		localSkillsToggles: {},
+		remoteSkillsToggles: {},
+		taskCapabilityToggles: undefined,
 
 		// NEW: Add workspace information with defaults
 		workspaceRoots: [],
@@ -1095,6 +1103,8 @@ export const ExtensionStateContextProvider: React.FC<{
 		mcpServers,
 		mcpMarketplaceCatalog,
 		totalTasksSize,
+		draftTaskCapabilityToggles,
+		setDraftTaskCapabilityToggles,
 		availableTerminalProfiles,
 		showMcp,
 		mcpTab,
@@ -1195,6 +1205,16 @@ export const ExtensionStateContextProvider: React.FC<{
 			setState((prevState) => ({
 				...prevState,
 				localSkillsToggles: toggles,
+			})),
+		setRemoteSkillsToggles: (toggles) =>
+			setState((prevState) => ({
+				...prevState,
+				remoteSkillsToggles: toggles,
+			})),
+		setTaskCapabilityToggles: (toggles) =>
+			setState((prevState) => ({
+				...prevState,
+				taskCapabilityToggles: toggles,
 			})),
 		setRemoteRulesToggles: (toggles) =>
 			setState((prevState) => ({

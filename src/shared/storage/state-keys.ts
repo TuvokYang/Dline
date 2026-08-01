@@ -105,6 +105,8 @@ const USER_SETTINGS_FIELDS = {
 	globalWorkflowToggles: { default: {} as ClineRulesToggles },
 	globalSkillsToggles: { default: {} as Record<string, boolean> },
 	globalSubagentsToggles: { default: {} as Record<string, boolean> },
+	/** Serialized TaskCapabilityToggles snapshot. Only task settings use this field. */
+	taskCapabilityToggles: { default: undefined as string | undefined },
 	browserSettings: {
 		default: DEFAULT_BROWSER_SETTINGS as BrowserSettings,
 		transform: (v: any) => ({ ...DEFAULT_BROWSER_SETTINGS, ...v }),

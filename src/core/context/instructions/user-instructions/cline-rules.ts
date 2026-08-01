@@ -21,7 +21,7 @@ import { evaluateRuleConditionals, type RuleEvaluationContext } from "./rule-con
 export const getGlobalClineRules = async (
 	globalClineRulesFilePath: string,
 	toggles: ClineRulesToggles,
-	opts?: { evaluationContext?: RuleEvaluationContext },
+	opts?: { evaluationContext?: RuleEvaluationContext; remoteToggles?: ClineRulesToggles },
 ): Promise<RuleLoadResultWithInstructions> => {
 	let combinedContent = ""
 	const activatedConditionalRules: ActivatedConditionalRule[] = []
@@ -57,7 +57,7 @@ export const getGlobalClineRules = async (
 	const stateManager = StateManager.get()
 	const remoteConfigSettings = stateManager.getRemoteConfigSettings()
 	const remoteRules = remoteConfigSettings.remoteGlobalRules || []
-	const remoteToggles = stateManager.getGlobalStateKey("remoteRulesToggles") || {}
+	const remoteToggles = opts?.remoteToggles ?? stateManager.getGlobalStateKey("remoteRulesToggles") ?? {}
 	const remoteResult = getRemoteRulesTotalContentWithMetadata(remoteRules, remoteToggles, {
 		evaluationContext: opts?.evaluationContext,
 	})

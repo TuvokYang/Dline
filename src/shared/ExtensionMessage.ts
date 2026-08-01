@@ -18,6 +18,7 @@ import type { ModeSwitchSnapshot } from "./mode-switch"
 import { OnboardingModelGroup } from "./proto/dline/state"
 import type { TaskLockStatus } from "./proto/dline/task"
 import { Mode } from "./storage/types"
+import type { TaskCapabilityToggles } from "./TaskCapabilityToggles"
 import { TelemetrySetting } from "./TelemetrySetting"
 import { UserInfo } from "./UserInfo"
 // webview will hold state
@@ -122,6 +123,9 @@ export interface ExtensionState {
 	remoteConfigSettings?: Partial<RemoteConfigFields>
 	globalSkillsToggles?: Record<string, boolean>
 	localSkillsToggles?: Record<string, boolean>
+	remoteSkillsToggles?: Record<string, boolean>
+	/** Task-local capability snapshot used for prompt construction and refresh. */
+	taskCapabilityToggles?: TaskCapabilityToggles
 	nativeToolCallSetting?: boolean
 	enableParallelToolCalling?: boolean
 	backgroundEditEnabled?: boolean

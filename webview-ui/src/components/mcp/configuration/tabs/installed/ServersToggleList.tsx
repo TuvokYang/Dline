@@ -6,11 +6,15 @@ const ServersToggleList = ({
 	isExpandable,
 	hasTrashIcon,
 	listGap = "medium",
+	getServerEnabled,
+	onToggleServer,
 }: {
 	servers: McpServer[]
 	isExpandable: boolean
 	hasTrashIcon: boolean
 	listGap?: "small" | "medium" | "large"
+	getServerEnabled?: (server: McpServer) => boolean
+	onToggleServer?: (server: McpServer, enabled: boolean) => void
 }) => {
 	const gapClasses = {
 		small: "gap-0",
@@ -23,7 +27,14 @@ const ServersToggleList = ({
 	return servers.length > 0 ? (
 		<div className={`flex flex-col ${gapClass}`}>
 			{servers.map((server) => (
-				<ServerRow hasTrashIcon={hasTrashIcon} isExpandable={isExpandable} key={server.name} server={server} />
+				<ServerRow
+					enabled={getServerEnabled?.(server)}
+					hasTrashIcon={hasTrashIcon}
+					isExpandable={isExpandable}
+					key={server.name}
+					onToggleEnabled={onToggleServer ? (enabled) => onToggleServer(server, enabled) : undefined}
+					server={server}
+				/>
 			))}
 		</div>
 	) : (

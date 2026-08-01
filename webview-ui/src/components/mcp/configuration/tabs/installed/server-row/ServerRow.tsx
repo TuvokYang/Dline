@@ -46,16 +46,21 @@ const ServerRow = ({
 	server,
 	isExpandable = true,
 	hasTrashIcon = true,
+	enabled,
+	onToggleEnabled,
 }: {
 	server: McpServer
 	isExpandable?: boolean
 	hasTrashIcon?: boolean
+	enabled?: boolean
+	onToggleEnabled?: (enabled: boolean) => void
 }) => {
 	const { mcpMarketplaceCatalog, autoApprovalSettings, setMcpServers, remoteConfigSettings } = useExtensionState()
 
 	const [isExpanded, setIsExpanded] = useState(false)
 	const [isDeleting, setIsDeleting] = useState(false)
 	const [isRestarting, setIsRestarting] = useState(false)
+	const isServerEnabled = enabled ?? !server.disabled
 
 	// Check if user is managed by remote config and if this server is remote-managed.
 	// Remote MCP servers from enterprise config are always URL-based (SSE/HTTP).
@@ -168,6 +173,10 @@ const ServerRow = ({
 	}
 
 	const handleToggleMcpServer = () => {
+		if (onToggleEnabled) {
+			onToggleEnabled(!isServerEnabled)
+			return
+		}
 		McpServiceClient.toggleMcpServer(
 			ToggleMcpServerRequest.create({
 				serverName: server.name,
@@ -224,7 +233,7 @@ const ServerRow = ({
 				{/* Collapsed view controls */}
 				{!server.error && (
 					<Button
-						disabled={server.status === "connecting" || isRestarting || server.disabled}
+						disabled={server.status === "connecting" || isRestarting || !isServerEnabled}
 						onClick={(e) => {
 							e.stopPropagation()
 							handleRestart()
@@ -253,7 +262,7 @@ const ServerRow = ({
 					<TooltipTrigger asChild>
 						<div className="flex items-center gap-2">
 							<Switch
-								checked={!server.disabled}
+								checked={isServerEnabled}
 								disabled={isAlwaysEnabled}
 								key={server.name}
 								onClick={(e) => {

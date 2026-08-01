@@ -49,7 +49,7 @@ export async function refreshRules(controller: Controller, _request: EmptyReques
 function buildSkillToggles(skills: { name: string; path: string; enabled: boolean }[]): Record<string, boolean> {
 	const toggles: Record<string, boolean> = {}
 	for (const skill of skills) {
-		toggles[skill.name] = skill.enabled
+		if (!skill.path.startsWith("remote:")) toggles[skill.path] = skill.enabled
 	}
 	return toggles
 }

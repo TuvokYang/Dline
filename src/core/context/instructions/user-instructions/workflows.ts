@@ -1,4 +1,4 @@
-import { combineRuleToggles, synchronizeRuleToggles } from "@core/context/instructions/user-instructions/rule-helpers"
+import { synchronizeRuleToggles } from "@core/context/instructions/user-instructions/rule-helpers"
 import { getWorkflowsScanDirectories } from "@core/storage/disk"
 import { ClineRulesToggles } from "@shared/cline-rules"
 import { Controller } from "@/core/controller"
@@ -18,16 +18,27 @@ export async function refreshWorkflowToggles(
 }> {
 	const scanDirs = getWorkflowsScanDirectories(workingDirectory)
 
-	let globalToggles: ClineRulesToggles = controller.stateManager.getGlobalSettingsKey("globalWorkflowToggles") || {}
-	let localToggles: ClineRulesToggles = controller.stateManager.getWorkspaceStateKey("workflowToggles") || {}
+	const currentGlobal = controller.stateManager.getGlobalSettingsKey("globalWorkflowToggles") || {}
+	const currentLocal = controller.stateManager.getWorkspaceStateKey("workflowToggles") || {}
+	const discoveredGlobal: ClineRulesToggles = {}
+	const discoveredLocal: ClineRulesToggles = {}
 
+	// Synchronize each directory independently, then merge the discovered paths.
+	// Calling synchronizeRuleToggles with an empty map avoids one directory
+	// deleting entries discovered from a sibling directory.
 	for (const dir of scanDirs) {
-		const updatedToggles = await synchronizeRuleToggles(dir.path, dir.source === "global" ? globalToggles : localToggles)
-		if (dir.source === "global") {
-			globalToggles = combineRuleToggles(globalToggles, updatedToggles)
-		} else {
-			localToggles = combineRuleToggles(localToggles, updatedToggles)
-		}
+		const discovered = await synchronizeRuleToggles(dir.path, {})
+		if (dir.source === "global") Object.assign(discoveredGlobal, discovered)
+		else Object.assign(discoveredLocal, discovered)
+	}
+
+	const globalToggles: ClineRulesToggles = {}
+	for (const [workflowPath, defaultEnabled] of Object.entries(discoveredGlobal)) {
+		globalToggles[workflowPath] = currentGlobal[workflowPath] ?? defaultEnabled
+	}
+	const localToggles: ClineRulesToggles = {}
+	for (const [workflowPath, defaultEnabled] of Object.entries(discoveredLocal)) {
+		localToggles[workflowPath] = currentLocal[workflowPath] ?? defaultEnabled
 	}
 
 	controller.stateManager.setGlobalState("globalWorkflowToggles", globalToggles)

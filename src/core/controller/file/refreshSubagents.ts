@@ -97,19 +97,33 @@ export async function refreshSubagents(controller: Controller): Promise<Refreshe
 			}
 		}
 
-		// Apply global toggles, excluding names shadowed by local subagents.
+		// Reconcile toggle maps with the current filesystem snapshot. This keeps
+		// deleted files from leaving inert entries in settings and gives newly
+		// discovered files the same default as the existing capability pickers.
 		const localNames = new Set(localSubagents.map((agent) => agent.name))
 		const visibleGlobalSubagents = globalSubagents.filter((agent) => !localNames.has(agent.name))
 		const globalToggles = controller.stateManager.getGlobalSettingsKey("globalSubagentsToggles") || {}
+		const globalPaths = new Set(globalSubagents.map((agent) => agent.path))
+		for (const togglePath of Object.keys(globalToggles)) {
+			if (!globalPaths.has(togglePath)) delete globalToggles[togglePath]
+		}
 		for (const agent of visibleGlobalSubagents) {
+			if (!(agent.path in globalToggles)) globalToggles[agent.path] = true
 			agent.enabled = globalToggles[agent.path] !== false
 		}
 
-		// Apply local toggles
 		const localToggles = controller.stateManager.getWorkspaceStateKey("localSubagentsToggles") || {}
+		const localPaths = new Set(localSubagents.map((agent) => agent.path))
+		for (const togglePath of Object.keys(localToggles)) {
+			if (!localPaths.has(togglePath)) delete localToggles[togglePath]
+		}
 		for (const agent of localSubagents) {
+			if (!(agent.path in localToggles)) localToggles[agent.path] = true
 			agent.enabled = localToggles[agent.path] !== false
 		}
+
+		controller.stateManager.setGlobalState("globalSubagentsToggles", globalToggles)
+		controller.stateManager.setWorkspaceState("localSubagentsToggles", localToggles)
 
 		return RefreshedSubagents.create({
 			globalSubagents: visibleGlobalSubagents,

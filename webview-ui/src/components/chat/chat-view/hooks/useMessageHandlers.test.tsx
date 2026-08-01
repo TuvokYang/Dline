@@ -1,4 +1,5 @@
 import type { ClineMessage } from "@shared/ExtensionMessage"
+import { createTaskCapabilityToggles, parseTaskCapabilityToggles } from "@shared/TaskCapabilityToggles"
 import { act, renderHook } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
@@ -108,5 +109,37 @@ describe("useMessageHandlers new task submission", () => {
 		await expect(submission).rejects.toThrow("late RPC failure")
 		expect(chatState.setInputValue).toHaveBeenCalledWith("")
 		expect(chatState.setInputValue).not.toHaveBeenCalledWith("你好")
+	})
+
+	it("passes the Welcome capability draft into the new task and clears it only after success", async () => {
+		const chatState = createChatState()
+		const setDraft = vi.fn()
+		const draft = createTaskCapabilityToggles({ localSkillsToggles: { "skill.md": false } })
+		mocks.newTask.mockResolvedValueOnce(undefined)
+		const { result } = renderHook(() =>
+			useMessageHandlers([], chatState, undefined, undefined, { task: undefined, draft, setDraft }),
+		)
+
+		await result.current.handleSendMessage("new task", [], [])
+
+		const request = mocks.newTask.mock.calls[0][0]
+		expect(parseTaskCapabilityToggles(request.taskSettings.taskCapabilityToggles)?.localSkillsToggles).toEqual({
+			"skill.md": false,
+		})
+		expect(setDraft).toHaveBeenCalledWith(undefined)
+	})
+
+	it("copies the active task capability snapshot before clearing the task", async () => {
+		const chatState = createChatState()
+		const setDraft = vi.fn()
+		const task = createTaskCapabilityToggles({ localSubagentsToggles: { "agent.yml": false } })
+		const { result } = renderHook(() =>
+			useMessageHandlers([], chatState, undefined, "task-1", { task, draft: undefined, setDraft }),
+		)
+
+		await result.current.startNewTask()
+
+		expect(setDraft).toHaveBeenCalledWith(task)
+		expect(mocks.clearTask).toHaveBeenCalledOnce()
 	})
 })

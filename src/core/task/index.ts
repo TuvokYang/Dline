@@ -146,12 +146,21 @@ import { ShowMessageType } from "@/shared/proto/dline/host"
 import { ApiFormat } from "@/shared/proto/dline/models/metadata"
 import { Logger } from "@/shared/services/Logger"
 import { Session } from "@/shared/services/Session"
+import {
+	createTaskCapabilityToggles,
+	emptyTaskCapabilityToggles,
+	parseTaskCapabilityToggles,
+	reconcileTaskCapabilityToggles,
+	serializeTaskCapabilityToggles,
+	type TaskCapabilityToggles,
+} from "@/shared/TaskCapabilityToggles"
 import { RuleContextBuilder } from "../context/instructions/user-instructions/RuleContextBuilder"
 import { ensureLocalClineDirExists } from "../context/instructions/user-instructions/rule-helpers"
 import { discoverAvailableSkills } from "../context/instructions/user-instructions/skills"
 import { refreshWorkflowToggles } from "../context/instructions/user-instructions/workflows"
 import { Controller } from "../controller"
 import { refreshSkills } from "../controller/file/refreshSkills"
+import { refreshSubagents } from "../controller/file/refreshSubagents"
 import { executeHook } from "../hooks/hook-executor"
 import { StateManager } from "../storage/StateManager"
 import { createUnavailableApiHandler, resolveTaskApiProfile } from "./ApiProfileRecovery"
@@ -559,7 +568,14 @@ export class Task {
 					),
 				}),
 				async (effect) => {
-					await this.controller.initTask(effect.draft.text, effect.draft.images, effect.draft.files)
+					const taskCapabilityToggles = this.taskSm.taskCapabilityToggles
+					await this.controller.initTask(
+						effect.draft.text,
+						effect.draft.images,
+						effect.draft.files,
+						undefined,
+						taskCapabilityToggles ? { taskCapabilityToggles } : undefined,
+					)
 				},
 			),
 		)
@@ -3076,6 +3092,10 @@ export class Task {
 		return isNativeToolCallingConfig(providerInfo, requested)
 	}
 
+	private getTaskCapabilityToggles(): TaskCapabilityToggles {
+		return parseTaskCapabilityToggles(this.taskSm.taskCapabilityToggles) ?? emptyTaskCapabilityToggles()
+	}
+
 	private async buildPromptContext(providerInfo = this.getCurrentProviderInfo()): Promise<SystemPromptContext> {
 		await pWaitFor(() => this.mcpHub.isConnecting !== true, {
 			timeout: 10_000,
@@ -3104,6 +3124,57 @@ export class Task {
 			this.controller,
 			this.cwd,
 		)
+		const { globalWorkflowToggles, localWorkflowToggles } = await refreshWorkflowToggles(this.controller, this.cwd)
+		const refreshedSkills = await refreshSkills(this.controller)
+		const refreshedSubagents = await refreshSubagents(this.controller)
+		const remoteConfigSettings = this.stateManager.getRemoteConfigSettings()
+		const remoteRulesToggles = this.stateManager.getGlobalStateKey("remoteRulesToggles") ?? {}
+		const remoteWorkflowToggles = this.stateManager.getGlobalStateKey("remoteWorkflowToggles") ?? {}
+		const currentTaskToggles = this.getTaskCapabilityToggles()
+		const discoveredTaskToggles = createTaskCapabilityToggles({
+			globalClineRulesToggles: globalToggles,
+			localClineRulesToggles: localToggles,
+			localCursorRulesToggles: cursorLocalToggles,
+			localWindsurfRulesToggles: windsurfLocalToggles,
+			localAgentsRulesToggles: agentsLocalToggles,
+			globalWorkflowToggles,
+			localWorkflowToggles,
+			globalSkillsToggles: Object.fromEntries(
+				refreshedSkills.globalSkills
+					.filter((skill) => !skill.path.startsWith("remote:"))
+					.map((skill) => [skill.path, skill.enabled]),
+			),
+			localSkillsToggles: Object.fromEntries(refreshedSkills.localSkills.map((skill) => [skill.path, skill.enabled])),
+			remoteSkillsToggles: Object.fromEntries(
+				refreshedSkills.globalSkills
+					.filter((skill) => skill.path.startsWith("remote:"))
+					.map((skill) => [skill.name, skill.enabled]),
+			),
+			remoteRulesToggles: Object.fromEntries(
+				(remoteConfigSettings.remoteGlobalRules ?? []).map((rule) => [
+					rule.name,
+					rule.alwaysEnabled || remoteRulesToggles[rule.name] !== false,
+				]),
+			),
+			remoteWorkflowToggles: Object.fromEntries(
+				(remoteConfigSettings.remoteGlobalWorkflows ?? []).map((workflow) => [
+					workflow.name,
+					workflow.alwaysEnabled || remoteWorkflowToggles[workflow.name] !== false,
+				]),
+			),
+			globalSubagentsToggles: Object.fromEntries(
+				refreshedSubagents.globalSubagents.map((agent) => [agent.path, agent.enabled]),
+			),
+			localSubagentsToggles: Object.fromEntries(
+				refreshedSubagents.localSubagents.map((agent) => [agent.path, agent.enabled]),
+			),
+			mcpServers: Object.fromEntries(this.mcpHub.getServers().map((server) => [server.name, server.disabled !== true])),
+		})
+		const taskCapabilityToggles = reconcileTaskCapabilityToggles(currentTaskToggles, discoveredTaskToggles)
+		const serializedTaskToggles = serializeTaskCapabilityToggles(taskCapabilityToggles)
+		if (serializedTaskToggles !== this.taskSm.taskCapabilityToggles) {
+			this.taskSm.setTaskCapabilityToggles(serializedTaskToggles)
+		}
 
 		const evaluationContext = await RuleContextBuilder.buildEvaluationContext({
 			cwd: this.cwd,
@@ -3112,7 +3183,10 @@ export class Task {
 		})
 
 		const globalClineRulesFilePath = await ensureRulesDirectoryExists()
-		const globalRules = await getGlobalClineRules(globalClineRulesFilePath, globalToggles, { evaluationContext })
+		const globalRules = await getGlobalClineRules(globalClineRulesFilePath, taskCapabilityToggles.globalClineRulesToggles, {
+			evaluationContext,
+			remoteToggles: taskCapabilityToggles.remoteRulesToggles,
+		})
 		let globalClineRulesFileInstructions = globalRules.instructions
 
 		// Inject Lazy Teammate Mode rules if enabled
@@ -3126,15 +3200,23 @@ export class Task {
 
 		const primaryRoot = this.workspaceManager?.getPrimaryRoot()
 		const workspaceName = this.getPrimaryWorkspaceName(primaryRoot)
-		const localRules = await getLocalClineRules(this.cwd, localToggles, workspaceName, { evaluationContext })
+		const localRules = await getLocalClineRules(this.cwd, taskCapabilityToggles.localClineRulesToggles, workspaceName, {
+			evaluationContext,
+		})
 		const localClineRulesFileInstructions = localRules.instructions
 		const [localCursorRulesFileInstructions, localCursorRulesDirInstructions] = await getLocalCursorRules(
 			this.cwd,
-			cursorLocalToggles,
+			taskCapabilityToggles.localCursorRulesToggles,
 		)
-		const localWindsurfRulesFileInstructions = await getLocalWindsurfRules(this.cwd, windsurfLocalToggles)
+		const localWindsurfRulesFileInstructions = await getLocalWindsurfRules(
+			this.cwd,
+			taskCapabilityToggles.localWindsurfRulesToggles,
+		)
 
-		const localAgentsRulesFileInstructions = await getLocalAgentsRules(this.cwd, agentsLocalToggles)
+		const localAgentsRulesFileInstructions = await getLocalAgentsRules(
+			this.cwd,
+			taskCapabilityToggles.localAgentsRulesToggles,
+		)
 
 		const clineIgnoreContent = this.clineIgnoreController.clineIgnoreContent
 		let clineIgnoreInstructions: string | undefined
@@ -3157,13 +3239,13 @@ export class Task {
 		const remoteSkillEntries = this.stateManager.getRemoteConfigSettings().remoteGlobalSkills || []
 		const capabilityToggleState = {
 			remoteSkillEntries,
-			globalSkillsToggles: this.stateManager.getGlobalSettingsKey("globalSkillsToggles") ?? {},
-			localSkillsToggles: this.stateManager.getWorkspaceStateKey("localSkillsToggles") ?? {},
-			remoteSkillsToggles: this.stateManager.getGlobalStateKey("remoteSkillsToggles") ?? {},
-			workflowToggles: this.stateManager.getWorkspaceStateKey("workflowToggles") ?? {},
-			globalWorkflowToggles: this.stateManager.getGlobalSettingsKey("globalWorkflowToggles") ?? {},
-			subagentToggles: this.stateManager.getWorkspaceStateKey("localSubagentsToggles") ?? {},
-			globalSubagentToggles: this.stateManager.getGlobalSettingsKey("globalSubagentsToggles") ?? {},
+			globalSkillsToggles: taskCapabilityToggles.globalSkillsToggles,
+			localSkillsToggles: taskCapabilityToggles.localSkillsToggles,
+			remoteSkillsToggles: taskCapabilityToggles.remoteSkillsToggles,
+			workflowToggles: taskCapabilityToggles.localWorkflowToggles,
+			globalWorkflowToggles: taskCapabilityToggles.globalWorkflowToggles,
+			subagentToggles: taskCapabilityToggles.localSubagentsToggles,
+			globalSubagentToggles: taskCapabilityToggles.globalSubagentsToggles,
 		}
 		const availableSkills = await discoverAvailableSkills(this.cwd, capabilityToggleState)
 
@@ -3190,7 +3272,10 @@ export class Task {
 			ide,
 			providerInfo,
 			supportsBrowserUse,
-			mcpHub: this.mcpHub,
+			mcpHub: {
+				getServers: () =>
+					this.mcpHub.getServers().filter((server) => taskCapabilityToggles.mcpServers[server.name] !== false),
+			},
 			skills: availableSkills,
 			focusChainSettings: this.stateManager.getGlobalSettingsKey("focusChainSettings"),
 			globalClineRulesFileInstructions,

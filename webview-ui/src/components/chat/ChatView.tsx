@@ -75,6 +75,9 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 		lastApiReqTotalTokens: lastApiReqTotalTokensFromState,
 		taskViewState,
 		currentTaskItem,
+		taskCapabilityToggles,
+		draftTaskCapabilityToggles,
+		setDraftTaskCapabilityToggles,
 	} = useExtensionState()
 	const [contentTab, setContentTab] = useState<TaskContentTab>("chat")
 	const taskId = currentTaskItem?.id
@@ -384,7 +387,11 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 	const scrollBehavior = useScrollBehavior(messages, visibleMessages, groupedMessages, expandedRows, setExpandedRows)
 
 	// Use message handlers hook (must come after scrollBehavior so we can pass disableAutoScrollRef)
-	const messageHandlers = useMessageHandlers(messages, chatState, scrollBehavior.disableAutoScrollRef, taskId)
+	const messageHandlers = useMessageHandlers(messages, chatState, scrollBehavior.disableAutoScrollRef, taskId, {
+		task: taskCapabilityToggles,
+		draft: draftTaskCapabilityToggles,
+		setDraft: setDraftTaskCapabilityToggles,
+	})
 	const submitInteractionDraft = useCallback(
 		async (draft: InteractionDraft): Promise<AcceptedInteractionSettlement | undefined> => {
 			if (!taskViewState?.input.enterAction || !interactionSynchronized) {

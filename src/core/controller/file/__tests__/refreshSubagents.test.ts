@@ -55,6 +55,8 @@ describe("refreshSubagents", () => {
 					key === "globalSubagentsToggles" ? { [path.join(globalDir, "code-reviewer.yaml")]: false } : undefined,
 				getWorkspaceStateKey: (key: string) =>
 					key === "localSubagentsToggles" ? { [path.join(localDir, "code-reviewer.yaml")]: true } : undefined,
+				setGlobalState: vi.fn(),
+				setWorkspaceState: vi.fn(),
 			},
 		} as any
 
