@@ -38,11 +38,12 @@ export class UseSkillToolHandler implements IToolHandler, IPartialBlockHandler {
 		// Discover skills on-demand (lazy loading)
 		const remoteSkillEntries = config.services.stateManager.getRemoteConfigSettings().remoteGlobalSkills || []
 		const stateManager = config.services.stateManager
+		const toggles = config.capabilityToggles
 		const availableSkills = await discoverAvailableSkills(config.cwd, {
 			remoteSkillEntries,
-			globalSkillsToggles: stateManager.getGlobalSettingsKey("globalSkillsToggles") ?? {},
-			localSkillsToggles: stateManager.getWorkspaceStateKey("localSkillsToggles") ?? {},
-			remoteSkillsToggles: stateManager.getGlobalStateKey("remoteSkillsToggles") ?? {},
+			globalSkillsToggles: toggles.globalSkillsToggles,
+			localSkillsToggles: toggles.localSkillsToggles,
+			remoteSkillsToggles: toggles.remoteSkillsToggles,
 		})
 
 		if (availableSkills.length === 0) {

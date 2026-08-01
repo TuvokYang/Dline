@@ -5,6 +5,7 @@
  * - relative paths should resolve against cwd
  */
 import { strict as assert } from "node:assert"
+import { createTaskCapabilityToggles } from "@shared/TaskCapabilityToggles"
 import * as path from "path"
 import { describe, it } from "vitest"
 import type { TaskConfig } from "../../types/TaskConfig"
@@ -43,6 +44,7 @@ function createMockConfig(cwd: string, overrides: Partial<TaskConfig> = {}): Tas
 			nextTraceId: () => "dline_tid_search_test",
 		},
 		...overrides,
+		capabilityToggles: overrides.capabilityToggles ?? createTaskCapabilityToggles({}),
 	}
 }
 

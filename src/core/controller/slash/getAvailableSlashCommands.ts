@@ -1,6 +1,7 @@
 import { parseYamlFrontmatter } from "@core/context/instructions/user-instructions/frontmatter"
 import { EmptyRequest } from "@shared/proto/dline/common"
 import { SlashCommandInfo, SlashCommandsResponse } from "@shared/proto/dline/slash"
+import { parseTaskCapabilityToggles } from "@shared/TaskCapabilityToggles"
 import fs from "fs/promises"
 import { extractNameFromMdFile, getBuiltInSlashCommands } from "@/shared/slashCommands"
 import { Controller } from ".."
@@ -53,9 +54,13 @@ export async function getAvailableSlashCommands(controller: Controller, _request
 	}
 
 	// Get workflow toggles from state
-	const localWorkflowToggles = controller.stateManager.getWorkspaceStateKey("workflowToggles") ?? {}
-	const globalWorkflowToggles = controller.stateManager.getGlobalSettingsKey("globalWorkflowToggles") ?? {}
-	const remoteWorkflowToggles = controller.stateManager.getGlobalStateKey("remoteWorkflowToggles") ?? {}
+	const taskToggles = parseTaskCapabilityToggles(controller.task?.taskSm.taskCapabilityToggles)
+	const localWorkflowToggles =
+		taskToggles?.localWorkflowToggles ?? controller.stateManager.getWorkspaceStateKey("workflowToggles") ?? {}
+	const globalWorkflowToggles =
+		taskToggles?.globalWorkflowToggles ?? controller.stateManager.getGlobalSettingsKey("globalWorkflowToggles") ?? {}
+	const remoteWorkflowToggles =
+		taskToggles?.remoteWorkflowToggles ?? controller.stateManager.getGlobalStateKey("remoteWorkflowToggles") ?? {}
 	const remoteConfigSettings = controller.stateManager.getRemoteConfigSettings()
 	const remoteWorkflows = remoteConfigSettings?.remoteGlobalWorkflows ?? []
 
@@ -122,9 +127,12 @@ export async function getAvailableSlashCommands(controller: Controller, _request
 	}
 
 	// Add skills (section="skill", name="xxx")
-	const localSkillsToggles = controller.stateManager.getWorkspaceStateKey("localSkillsToggles") ?? {}
-	const globalSkillsToggles = controller.stateManager.getGlobalSettingsKey("globalSkillsToggles") ?? {}
-	const remoteSkillsToggles = controller.stateManager.getGlobalStateKey("remoteSkillsToggles") ?? {}
+	const localSkillsToggles =
+		taskToggles?.localSkillsToggles ?? controller.stateManager.getWorkspaceStateKey("localSkillsToggles") ?? {}
+	const globalSkillsToggles =
+		taskToggles?.globalSkillsToggles ?? controller.stateManager.getGlobalSettingsKey("globalSkillsToggles") ?? {}
+	const remoteSkillsToggles =
+		taskToggles?.remoteSkillsToggles ?? controller.stateManager.getGlobalStateKey("remoteSkillsToggles") ?? {}
 	const remoteGlobalSkills = remoteConfigSettings?.remoteGlobalSkills ?? []
 
 	const skillNames = new Set<string>()

@@ -5,6 +5,7 @@ import { Controller } from "../core/controller"
 import { getAvailableSlashCommands } from "../core/controller/slash/getAvailableSlashCommands"
 import { EmptyRequest } from "../shared/proto/dline/common"
 import { BASE_SLASH_COMMANDS, VSCODE_ONLY_COMMANDS } from "../shared/slashCommands"
+import { createTaskCapabilityToggles, serializeTaskCapabilityToggles } from "../shared/TaskCapabilityToggles"
 
 /**
  * Unit tests for getAvailableSlashCommands RPC endpoint
@@ -206,6 +207,29 @@ describe("getAvailableSlashCommands", () => {
 	})
 
 	describe("Remote Workflows", () => {
+		it("uses the active task snapshot instead of the global remote workflow toggle", async () => {
+			mockStateManager.getRemoteConfigSettings.mockReturnValue({
+				remoteGlobalWorkflows: [{ name: "task-disabled-workflow", alwaysEnabled: false }],
+			})
+			mockStateManager.getGlobalStateKey.mockReturnValue({
+				"task-disabled-workflow": true,
+			})
+			mockController.task = {
+				taskSm: {
+					taskCapabilityToggles: serializeTaskCapabilityToggles(
+						createTaskCapabilityToggles({
+							remoteWorkflowToggles: { "task-disabled-workflow": false },
+						}),
+					),
+				},
+			} as Controller["task"]
+
+			const response = await getAvailableSlashCommands(mockController as Controller, EmptyRequest.create())
+
+			const workflow = response.commands.find((cmd) => cmd.name === "task-disabled-workflow")
+			;(workflow === undefined).should.be.true()
+		})
+
 		it("should include alwaysEnabled remote workflows", async () => {
 			mockStateManager.getRemoteConfigSettings.mockReturnValue({
 				remoteGlobalWorkflows: [{ name: "always-on-workflow", alwaysEnabled: true }],

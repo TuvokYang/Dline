@@ -1,5 +1,6 @@
 import type { ApiProviderInfo } from "@core/api"
 import type { McpPromptResponse } from "@shared/mcp"
+import { createTaskCapabilityToggles } from "@shared/TaskCapabilityToggles"
 import { expect } from "chai"
 import { formatMcpPromptResponse, McpPromptFetcher, parseSlashCommands } from "../index"
 
@@ -256,6 +257,34 @@ describe("slash-commands", () => {
 			expect(result.processedText).to.include("Please expand on this")
 		})
 
+		it("does not fetch an MCP prompt disabled in the current task", async () => {
+			let fetchCount = 0
+			const fetcher: McpPromptFetcher = async () => {
+				fetchCount++
+				return {
+					messages: [{ role: "user", content: { type: "text", text: "Must stay hidden" } }],
+				}
+			}
+			const text = "<task>/mcp:test-server:greet</task>"
+			const result = await Reflect.apply(parseSlashCommands, undefined, [
+				text,
+				{},
+				{},
+				"test-ulid",
+				undefined,
+				false,
+				undefined,
+				fetcher,
+				{
+					cwd: "",
+					capabilityToggles: createTaskCapabilityToggles({ mcpServers: { "test-server": false } }),
+				},
+			])
+
+			expect(fetchCount).to.equal(0)
+			expect(result.processedText).to.equal(text)
+		})
+
 		it("should handle MCP prompt with colons in prompt name", async () => {
 			const fetcherWithColons: McpPromptFetcher = async (serverName, promptName) => {
 				if (serverName === "server" && promptName === "prompt:with:colons") {
@@ -276,5 +305,57 @@ describe("slash-commands", () => {
 		// Note: Tests for "unknown MCP server", "no fetcher", and "fetcher errors"
 		// are skipped because they require StateManager initialization when falling
 		// through to workflow checking. The core MCP functionality is covered above.
+	})
+
+	describe("parseSlashCommands task workflow scope", () => {
+		it("injects an enabled remote workflow from the current task context", async () => {
+			const result = await parseSlashCommands(
+				"<task>/workflow:review-release</task>",
+				{},
+				{},
+				"test-ulid",
+				undefined,
+				false,
+				undefined,
+				undefined,
+				{
+					cwd: "",
+					capabilityToggles: createTaskCapabilityToggles({
+						remoteWorkflowToggles: { "review-release": true },
+					}),
+					remoteSkills: [],
+					remoteWorkflows: [
+						{
+							name: "review-release",
+							alwaysEnabled: false,
+							contents: "Review the release marker.",
+						},
+					],
+				},
+			)
+
+			expect(result.processedText).to.include('<explicit_instructions type="workflow" name="review-release"')
+			expect(result.processedText).to.include("Review the release marker.")
+		})
+
+		it("does not inject a remote workflow disabled in the current task context", async () => {
+			const text = "<task>/workflow:review-release</task>"
+			const result = await parseSlashCommands(text, {}, {}, "test-ulid", undefined, false, undefined, undefined, {
+				cwd: "",
+				capabilityToggles: createTaskCapabilityToggles({
+					remoteWorkflowToggles: { "review-release": false },
+				}),
+				remoteSkills: [],
+				remoteWorkflows: [
+					{
+						name: "review-release",
+						alwaysEnabled: false,
+						contents: "Must stay hidden.",
+					},
+				],
+			})
+
+			expect(result.processedText).to.equal(text)
+		})
 	})
 })

@@ -1,6 +1,7 @@
 import { strict as assert } from "node:assert"
 import { setTimeout as delay } from "node:timers/promises"
 import { ClineSubagentUsageInfo } from "@shared/ExtensionMessage"
+import { createTaskCapabilityToggles } from "@shared/TaskCapabilityToggles"
 import { ClineDefaultTool } from "@shared/tools"
 import { expect } from "chai"
 import { afterEach, describe, it, vi, expect as vitestExpect } from "vitest"
@@ -119,6 +120,7 @@ function createConfig(options?: {
 		},
 		browserSettings: {},
 		focusChainSettings: {},
+		capabilityToggles: createTaskCapabilityToggles({}),
 		services: {
 			stateManager: {
 				getGlobalStateKey: (key: string) => (key === "nativeToolCallEnabled" ? true : undefined),
@@ -584,6 +586,8 @@ describe("SubagentToolHandler", () => {
 
 	it("runs stable use_subagent with selected YAML subagent", async () => {
 		const { config } = createConfig({ autoApproveSafe: true, autoApproveAll: true })
+		config.capabilityToggles.localSubagentsToggles = { "/workspace/.agents/subagents/code-reviewer.md": true }
+		config.capabilityToggles.globalSubagentsToggles = { "/global/subagents/reviewer.yml": false }
 		const handler = new UseSubagentToolHandler()
 		const resolvedConfig = { name: "code-reviewer", description: "reviewer", tools: [], systemPrompt: "Prompt" }
 		vi.spyOn(AgentConfigModule, "resolveAgentConfig").mockResolvedValue({
@@ -621,7 +625,10 @@ describe("SubagentToolHandler", () => {
 		expect(runStub)
 		assert.match(runStub.mock.calls[0][0], /<task>\s*review this PR\s*<\/task>/)
 		assert.match(runStub.mock.calls[0][0], /<context>\s*check quality\s*<\/context>/)
-		vitestExpect(AgentConfigModule.resolveAgentConfig).toHaveBeenCalledWith("/tmp", "code-reviewer", vitestExpect.any(Object))
+		vitestExpect(AgentConfigModule.resolveAgentConfig).toHaveBeenCalledWith("/tmp", "code-reviewer", {
+			subagentToggles: { "/workspace/.agents/subagents/code-reviewer.md": true },
+			globalSubagentToggles: { "/global/subagents/reviewer.yml": false },
+		})
 	})
 
 	it("starts stable use_subagent background job", async () => {

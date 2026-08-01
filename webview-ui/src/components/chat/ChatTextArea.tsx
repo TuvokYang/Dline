@@ -22,6 +22,7 @@ import { getModeSpecificFields, normalizeApiConfiguration } from "@/components/s
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { useExtensionState } from "@/context/ExtensionStateContext"
 import { usePlatform } from "@/context/PlatformContext"
+import { useTaskCapabilityToggles } from "@/hooks/useTaskCapabilityToggles"
 import { cn } from "@/lib/utils"
 import { FileServiceClient, SlashServiceClient } from "@/services/grpc-client"
 import { shouldSendChatInput } from "@/utils/chat-input-shortcut"
@@ -239,11 +240,28 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 			mcpServers,
 			localSkillsToggles,
 			globalSkillsToggles,
+			remoteSkillsToggles,
 			setLocalWorkflowToggles,
 			setGlobalWorkflowToggles,
 			setLocalSkillsToggles,
 			setGlobalSkillsToggles,
 		} = useExtensionState()
+		const { snapshot: scopedCapabilityToggles, reconcile: reconcileCapabilityToggles } = useTaskCapabilityToggles(
+			inputValue.trim().length > 0,
+		)
+		const effectiveLocalWorkflowToggles = scopedCapabilityToggles?.localWorkflowToggles ?? localWorkflowToggles
+		const effectiveGlobalWorkflowToggles = scopedCapabilityToggles?.globalWorkflowToggles ?? globalWorkflowToggles
+		const effectiveRemoteWorkflowToggles = scopedCapabilityToggles?.remoteWorkflowToggles ?? remoteWorkflowToggles
+		const effectiveLocalSkillsToggles = scopedCapabilityToggles?.localSkillsToggles ?? localSkillsToggles
+		const effectiveGlobalSkillsToggles = scopedCapabilityToggles?.globalSkillsToggles ?? globalSkillsToggles
+		const effectiveRemoteSkillsToggles = scopedCapabilityToggles?.remoteSkillsToggles ?? remoteSkillsToggles
+		const effectiveMcpServers = useMemo(
+			() =>
+				scopedCapabilityToggles
+					? mcpServers.filter((server) => scopedCapabilityToggles.mcpServers[server.name] !== false)
+					: mcpServers,
+			[mcpServers, scopedCapabilityToggles],
+		)
 		const [isTextAreaFocused, setIsTextAreaFocused] = useState(false)
 		const [isDraggingOver, setIsDraggingOver] = useState(false)
 		const [gitCommits, setGitCommits] = useState<GitCommit[]>([])
@@ -278,6 +296,20 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 
 			FileServiceClient.refreshRules({} as EmptyRequest)
 				.then((response: RefreshedDlineToggles) => {
+					void reconcileCapabilityToggles({
+						...(response.localWorkflowToggles?.toggles && {
+							localWorkflowToggles: response.localWorkflowToggles.toggles,
+						}),
+						...(response.globalWorkflowToggles?.toggles && {
+							globalWorkflowToggles: response.globalWorkflowToggles.toggles,
+						}),
+						...(response.localSkillsToggles?.toggles && {
+							localSkillsToggles: response.localSkillsToggles.toggles,
+						}),
+						...(response.globalSkillsToggles?.toggles && {
+							globalSkillsToggles: response.globalSkillsToggles.toggles,
+						}),
+					})
 					if (response.localWorkflowToggles?.toggles) {
 						setLocalWorkflowToggles(response.localWorkflowToggles.toggles)
 					}
@@ -292,7 +324,14 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 					}
 				})
 				.catch(() => {})
-		}, [showSlashCommandsMenu, setLocalWorkflowToggles, setGlobalWorkflowToggles])
+		}, [
+			showSlashCommandsMenu,
+			setLocalWorkflowToggles,
+			setGlobalWorkflowToggles,
+			setLocalSkillsToggles,
+			setGlobalSkillsToggles,
+			reconcileCapabilityToggles,
+		])
 
 		const [thumbnailsHeight, setThumbnailsHeight] = useState(0)
 		const [textAreaBaseHeight, setTextAreaBaseHeight] = useState<number | undefined>(undefined)
@@ -539,14 +578,15 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 							// Get commands with workflow toggles
 							const allCommands = getMatchingSlashCommands(
 								slashCommandsQuery,
-								localWorkflowToggles,
-								globalWorkflowToggles,
-								remoteWorkflowToggles,
+								effectiveLocalWorkflowToggles,
+								effectiveGlobalWorkflowToggles,
+								effectiveRemoteWorkflowToggles,
 								remoteConfigSettings?.remoteGlobalWorkflows,
-								mcpServers,
-								localSkillsToggles,
-								globalSkillsToggles,
+								effectiveMcpServers,
+								effectiveLocalSkillsToggles,
+								effectiveGlobalSkillsToggles,
 								remoteConfigSettings?.remoteGlobalSkills,
+								effectiveRemoteSkillsToggles,
 							)
 
 							if (allCommands.length === 0) {
@@ -567,14 +607,15 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 						event.preventDefault()
 						const commands = getMatchingSlashCommands(
 							slashCommandsQuery,
-							localWorkflowToggles,
-							globalWorkflowToggles,
-							remoteWorkflowToggles,
+							effectiveLocalWorkflowToggles,
+							effectiveGlobalWorkflowToggles,
+							effectiveRemoteWorkflowToggles,
 							remoteConfigSettings?.remoteGlobalWorkflows,
-							mcpServers,
-							localSkillsToggles,
-							globalSkillsToggles,
+							effectiveMcpServers,
+							effectiveLocalSkillsToggles,
+							effectiveGlobalSkillsToggles,
 							remoteConfigSettings?.remoteGlobalSkills,
+							effectiveRemoteSkillsToggles,
 						)
 						if (commands.length > 0) {
 							handleSlashCommandsSelect(commands[selectedSlashCommandsIndex])
@@ -740,15 +781,16 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 				selectedImages,
 				selectedFiles,
 				chatInputSendShortcut,
-				mcpServers,
+				effectiveMcpServers,
 				remoteConfigSettings?.remoteGlobalSkills,
-				remoteWorkflowToggles,
-				localWorkflowToggles,
-				globalWorkflowToggles,
+				effectiveRemoteSkillsToggles,
+				effectiveRemoteWorkflowToggles,
+				effectiveLocalWorkflowToggles,
+				effectiveGlobalWorkflowToggles,
 				remoteConfigSettings?.remoteGlobalWorkflows,
-				localSkillsToggles,
+				effectiveLocalSkillsToggles,
 				justDeletedSpaceAfterSlashCommand,
-				globalSkillsToggles,
+				effectiveGlobalSkillsToggles,
 			],
 		)
 
@@ -1055,10 +1097,15 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 				const commandName = command.substring(1)
 				const isValidCommand = validateSlashCommand(
 					commandName,
-					localWorkflowToggles,
-					globalWorkflowToggles,
-					remoteWorkflowToggles,
+					effectiveLocalWorkflowToggles,
+					effectiveGlobalWorkflowToggles,
+					effectiveRemoteWorkflowToggles,
 					remoteConfigSettings?.remoteGlobalWorkflows,
+					effectiveMcpServers,
+					effectiveLocalSkillsToggles,
+					effectiveGlobalSkillsToggles,
+					remoteConfigSettings?.remoteGlobalSkills,
+					effectiveRemoteSkillsToggles,
 				)
 
 				if (isValidCommand) {
@@ -1072,7 +1119,16 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 			highlightLayerRef.current.innerHTML = processedText
 			highlightLayerRef.current.scrollTop = textAreaRef.current.scrollTop
 			highlightLayerRef.current.scrollLeft = textAreaRef.current.scrollLeft
-		}, [localWorkflowToggles, globalWorkflowToggles, remoteWorkflowToggles, remoteConfigSettings])
+		}, [
+			effectiveLocalWorkflowToggles,
+			effectiveGlobalWorkflowToggles,
+			effectiveRemoteWorkflowToggles,
+			effectiveMcpServers,
+			effectiveLocalSkillsToggles,
+			effectiveGlobalSkillsToggles,
+			effectiveRemoteSkillsToggles,
+			remoteConfigSettings,
+		])
 
 		useLayoutEffect(() => {
 			updateHighlights()
@@ -1456,17 +1512,18 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 					{showSlashCommandsMenu && (
 						<div ref={slashCommandsMenuContainerRef}>
 							<SlashCommandMenu
-								globalSkillsToggles={globalSkillsToggles}
-								globalWorkflowToggles={globalWorkflowToggles}
-								localSkillsToggles={localSkillsToggles}
-								localWorkflowToggles={localWorkflowToggles}
-								mcpServers={mcpServers}
+								globalSkillsToggles={effectiveGlobalSkillsToggles}
+								globalWorkflowToggles={effectiveGlobalWorkflowToggles}
+								localSkillsToggles={effectiveLocalSkillsToggles}
+								localWorkflowToggles={effectiveLocalWorkflowToggles}
+								mcpServers={effectiveMcpServers}
 								onMouseDown={handleMenuMouseDown}
 								onSelect={handleSlashCommandsSelect}
 								query={slashCommandsQuery}
 								remoteSkills={remoteConfigSettings?.remoteGlobalSkills}
+								remoteSkillsToggles={effectiveRemoteSkillsToggles}
 								remoteWorkflows={remoteConfigSettings?.remoteGlobalWorkflows}
-								remoteWorkflowToggles={remoteWorkflowToggles}
+								remoteWorkflowToggles={effectiveRemoteWorkflowToggles}
 								selectedIndex={selectedSlashCommandsIndex}
 								setSelectedIndex={setSelectedSlashCommandsIndex}
 								workflowDescriptions={workflowDescriptions}

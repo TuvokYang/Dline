@@ -1,5 +1,6 @@
 import { strict as assert } from "node:assert"
 import type { ToolUse } from "@core/assistant-message"
+import { createTaskCapabilityToggles } from "@shared/TaskCapabilityToggles"
 import { ClineDefaultTool } from "@shared/tools"
 import { describe, expect, it, vi } from "vitest"
 import { TaskState } from "../../../TaskState"
@@ -101,6 +102,7 @@ function createConfig(text: string): TaskConfig {
 		autoApprover: {} as TaskConfig["autoApprover"],
 		browserSettings: {} as TaskConfig["browserSettings"],
 		focusChainSettings: {} as TaskConfig["focusChainSettings"],
+		capabilityToggles: createTaskCapabilityToggles({}),
 		interactions: {
 			open: vi.fn(async () => ({ actionId: "reply" as const, draft: { text, images: [], files: [] } })),
 			complete: vi.fn(async () => ({ actionId: "reply" as const, draft: { text, images: [], files: [] } })),

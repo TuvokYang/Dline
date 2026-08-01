@@ -57,7 +57,9 @@ export class LoadCapabilityService {
 	 * @returns MCP load payload.
 	 */
 	private loadMcp(name: string, config: TaskConfig): LoadCapabilityPayload {
-		const servers = config.services.mcpHub.getServers().filter((server) => server.disabled !== true)
+		const servers = config.services.mcpHub
+			.getServers()
+			.filter((server) => server.disabled !== true && config.capabilityToggles.mcpServers[server.name] !== false)
 		const match = servers
 			.flatMap((server) => (server.tools ?? []).map((tool) => ({ server, tool })))
 			.find(({ server, tool }) => `${server.name}.${tool.name}` === name || tool.name === name)
@@ -99,12 +101,13 @@ export class LoadCapabilityService {
 	 */
 	private async loadSkill(name: string, config: TaskConfig): Promise<LoadCapabilityPayload> {
 		const stateManager = config.services.stateManager
+		const toggles = config.capabilityToggles
 		const remoteSkillEntries = stateManager.getRemoteConfigSettings().remoteGlobalSkills || []
 		const skills = await discoverAvailableSkills(config.cwd, {
 			remoteSkillEntries,
-			globalSkillsToggles: stateManager.getGlobalSettingsKey("globalSkillsToggles") ?? {},
-			localSkillsToggles: stateManager.getWorkspaceStateKey("localSkillsToggles") ?? {},
-			remoteSkillsToggles: stateManager.getGlobalStateKey("remoteSkillsToggles") ?? {},
+			globalSkillsToggles: toggles.globalSkillsToggles,
+			localSkillsToggles: toggles.localSkillsToggles,
+			remoteSkillsToggles: toggles.remoteSkillsToggles,
 		})
 		const content = await getSkillContent(name, skills, remoteSkillEntries)
 		if (!content) {
@@ -171,13 +174,10 @@ export class LoadCapabilityService {
 	 * @returns Workflow entries from disk and remote settings.
 	 */
 	private async collectWorkflows(config: TaskConfig): Promise<WorkflowEntry[]> {
-		const stateManager = config.services.stateManager
+		const taskToggles = config.capabilityToggles
 		const entries: WorkflowEntry[] = []
 		for (const directory of getWorkflowsScanDirectories(config.cwd)) {
-			const toggles =
-				directory.source === "global"
-					? stateManager.getGlobalSettingsKey("globalWorkflowToggles") || {}
-					: stateManager.getWorkspaceStateKey("workflowToggles") || {}
+			const toggles = directory.source === "global" ? taskToggles.globalWorkflowToggles : taskToggles.localWorkflowToggles
 			const filePaths = await this.readWorkflowFiles(directory.path)
 			for (const filePath of filePaths) {
 				const content = await fs.readFile(filePath, "utf8")
@@ -205,7 +205,7 @@ export class LoadCapabilityService {
 	 */
 	private collectRemoteWorkflows(config: TaskConfig): WorkflowEntry[] {
 		const remoteWorkflows = config.services.stateManager.getRemoteConfigSettings().remoteGlobalWorkflows || []
-		const toggles = config.services.stateManager.getGlobalStateKey("remoteWorkflowToggles") || {}
+		const toggles = config.capabilityToggles.remoteWorkflowToggles
 		return remoteWorkflows.map((entry: GlobalInstructionsFile) => {
 			const parsed = parseYamlFrontmatter(entry.contents)
 			return {

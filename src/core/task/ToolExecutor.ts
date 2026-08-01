@@ -18,6 +18,7 @@ import { ClineAsk, ClineSay, type CommandStatus } from "@shared/ExtensionMessage
 import { ClineContent, type ClineToolResponseContent, type ClineUserToolResultContentBlock } from "@shared/messages/content"
 import { Logger } from "@shared/services/Logger"
 import type { Mode } from "@shared/storage/types"
+import type { TaskCapabilityToggles } from "@shared/TaskCapabilityToggles"
 import { ClineDefaultTool, toolUseNames } from "@shared/tools"
 import { ClineAskResponse } from "@shared/WebviewMessage"
 import { isParallelToolCallingEnabled, modelDoesntSupportWebp } from "@/utils/model-utils"
@@ -231,6 +232,7 @@ export class ToolExecutor {
 		private contextManager: ContextManager,
 		private stateManager: StateManager,
 		private getMode: () => Mode,
+		private getTaskCapabilityToggles: () => TaskCapabilityToggles,
 		private identityFactory: IdentityFactory,
 		private activityStore: TaskActivityStore,
 
@@ -329,6 +331,7 @@ export class ToolExecutor {
 			autoApprover: this.autoApprover,
 			browserSettings: this.stateManager.getGlobalSettingsKey("browserSettings"),
 			focusChainSettings: this.stateManager.getGlobalSettingsKey("focusChainSettings"),
+			capabilityToggles: this.getTaskCapabilityToggles(),
 			interactions: this.interactions,
 			services: {
 				mcpHub: this.mcpHub,

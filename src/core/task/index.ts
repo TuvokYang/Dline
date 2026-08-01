@@ -955,6 +955,7 @@ export class Task {
 			this.contextManager,
 			this.stateManager,
 			() => this.getMode(),
+			() => this.getTaskCapabilityToggles(),
 			this.identityFactory,
 			this.activityStore,
 			cwd,
@@ -5111,11 +5112,15 @@ export class Task {
 			promptProfile === PromptProfile.Standard ? this.stateManager.getGlobalSettingsKey("focusChainSettings") : undefined
 		const useNativeToolCalls = this.shouldUseNativeToolCalls(providerInfo)
 		const cwd = this.cwd
-		const { localWorkflowToggles, globalWorkflowToggles } = await refreshWorkflowToggles(this.controller, cwd)
+		await refreshWorkflowToggles(this.controller, cwd)
 
 		// Refresh skill toggles so slash commands and the frontend pick up newly added skills.
 		// This mirrors the workflow toggle refresh pattern.
 		await refreshSkills(this.controller)
+		const taskCapabilityToggles = this.getTaskCapabilityToggles()
+		const localWorkflowToggles = taskCapabilityToggles.localWorkflowToggles
+		const globalWorkflowToggles = taskCapabilityToggles.globalWorkflowToggles
+		const remoteConfigSettings = this.stateManager.getRemoteConfigSettings()
 
 		const hasUserContentTag = (text: string): boolean => {
 			return USER_CONTENT_TAGS.some((tag) => text.includes(tag))
@@ -5132,6 +5137,9 @@ export class Task {
 
 			// Create MCP prompt fetcher callback that wraps mcpHub.getPrompt
 			const mcpPromptFetcher = async (serverName: string, promptName: string) => {
+				if (taskCapabilityToggles.mcpServers[serverName] === false) {
+					return null
+				}
 				try {
 					return await this.mcpHub.getPrompt(serverName, promptName)
 				} catch {
@@ -5148,6 +5156,12 @@ export class Task {
 				useNativeToolCalls,
 				providerInfo,
 				mcpPromptFetcher,
+				{
+					cwd,
+					capabilityToggles: taskCapabilityToggles,
+					remoteSkills: remoteConfigSettings.remoteGlobalSkills ?? [],
+					remoteWorkflows: remoteConfigSettings.remoteGlobalWorkflows ?? [],
+				},
 			)
 
 			if (needsCheck) {

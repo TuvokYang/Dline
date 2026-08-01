@@ -46,14 +46,9 @@ export function getSubagentJobManager(config: TaskConfig): SubagentJobManager {
  * @returns Local and global subagent toggle maps.
  */
 function getResolveOptions(config: TaskConfig): ResolveAgentConfigOptions {
-	const stateManager = config.services.stateManager as unknown as {
-		getWorkspaceStateKey?: (key: string) => Record<string, boolean> | undefined
-		getGlobalSettingsKey?: (key: string) => Record<string, boolean> | boolean | string | undefined
-	}
 	return {
-		subagentToggles: stateManager.getWorkspaceStateKey?.("localSubagentsToggles") ?? {},
-		globalSubagentToggles:
-			(stateManager.getGlobalSettingsKey?.("globalSubagentsToggles") as Record<string, boolean> | undefined) ?? {},
+		subagentToggles: config.capabilityToggles.localSubagentsToggles,
+		globalSubagentToggles: config.capabilityToggles.globalSubagentsToggles,
 	}
 }
 

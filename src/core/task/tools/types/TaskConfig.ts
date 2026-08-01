@@ -15,6 +15,7 @@ import type { ClineAsk, ClineSay, CommandStatus } from "@shared/ExtensionMessage
 import type { FocusChainSettings } from "@shared/FocusChainSettings"
 import type { ClineContent } from "@shared/messages/content"
 import type { Mode } from "@shared/storage/types"
+import type { TaskCapabilityToggles } from "@shared/TaskCapabilityToggles"
 import type { ClineDefaultTool } from "@shared/tools"
 import type { ClineAskResponse } from "@shared/WebviewMessage"
 import { WorkspaceRootManager } from "@/core/workspace"
@@ -85,6 +86,7 @@ export interface TaskConfig {
 	autoApprover: AutoApprove
 	browserSettings: BrowserSettings
 	focusChainSettings: FocusChainSettings
+	capabilityToggles: TaskCapabilityToggles
 
 	// Typed interaction boundary
 	interactions: TaskInteractionPorts

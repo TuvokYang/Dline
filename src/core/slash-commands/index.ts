@@ -1,9 +1,11 @@
 import type { ApiProviderInfo } from "@core/api"
 import { ClineRulesToggles } from "@shared/cline-rules"
 import { McpPromptResponse } from "@shared/mcp"
+import type { GlobalInstructionsFile } from "@shared/remote-config/schema"
 import { resolvePromptProfile } from "@shared/resolve-prompt-profile"
 import { pathToCommandName } from "@shared/slashCommands"
 import { SLASH_TYPE_DESC } from "@shared/slashContext"
+import type { TaskCapabilityToggles } from "@shared/TaskCapabilityToggles"
 import fs from "fs/promises"
 import { telemetryService } from "@/services/telemetry"
 import { Logger } from "@/shared/services/Logger"
@@ -37,6 +39,13 @@ type RemoteWorkflow = {
 
 type Workflow = FileBasedWorkflow | RemoteWorkflow
 
+export interface SlashCommandCapabilityContext {
+	cwd: string
+	capabilityToggles: TaskCapabilityToggles
+	remoteSkills: GlobalInstructionsFile[]
+	remoteWorkflows: GlobalInstructionsFile[]
+}
+
 /**
  * Processes text for slash commands and transforms them with appropriate instructions
  * This is called after parseMentions() to process any slash commands in the user's message
@@ -50,6 +59,7 @@ export async function parseSlashCommands(
 	enableNativeToolCalls?: boolean,
 	providerInfo?: Readonly<ApiProviderInfo>,
 	mcpPromptFetcher?: McpPromptFetcher,
+	capabilityContext?: SlashCommandCapabilityContext,
 ): Promise<{ processedText: string; needsClinerulesFileCheck: boolean }> {
 	const SUPPORTED_DEFAULT_COMMANDS = ["newtask", "smol", "compact", "newrule", "reportbug", "deep-planning", "explain-changes"]
 	const promptProfile = resolvePromptProfile({
@@ -176,6 +186,9 @@ export async function parseSlashCommands(
 				if (mcpParts.length >= 2) {
 					const serverName = mcpParts[0]
 					const promptName = mcpParts.slice(1).join(":")
+					if (capabilityContext?.capabilityToggles.mcpServers[serverName] === false) {
+						return { processedText: text, needsClinerulesFileCheck: false }
+					}
 
 					try {
 						const promptResponse = await mcpPromptFetcher(serverName, promptName)
@@ -206,14 +219,23 @@ export async function parseSlashCommands(
 					const { discoverAvailableSkills, getSkillContent } = await import(
 						"@core/context/instructions/user-instructions/skills"
 					)
-					const stateManager = StateManager.get()
-					const remoteConfigSettings = stateManager.getRemoteConfigSettings()
-					const remoteSkillEntries = remoteConfigSettings?.remoteGlobalSkills ?? []
-					const availableSkills = await discoverAvailableSkills("", {
+					const stateManager = capabilityContext ? undefined : StateManager.get()
+					const remoteSkillEntries =
+						capabilityContext?.remoteSkills ?? stateManager?.getRemoteConfigSettings().remoteGlobalSkills ?? []
+					const availableSkills = await discoverAvailableSkills(capabilityContext?.cwd ?? "", {
 						remoteSkillEntries,
-						globalSkillsToggles: stateManager.getGlobalSettingsKey("globalSkillsToggles") ?? {},
-						localSkillsToggles: stateManager.getWorkspaceStateKey("localSkillsToggles") ?? {},
-						remoteSkillsToggles: stateManager.getGlobalStateKey("remoteSkillsToggles") ?? {},
+						globalSkillsToggles:
+							capabilityContext?.capabilityToggles.globalSkillsToggles ??
+							stateManager?.getGlobalSettingsKey("globalSkillsToggles") ??
+							{},
+						localSkillsToggles:
+							capabilityContext?.capabilityToggles.localSkillsToggles ??
+							stateManager?.getWorkspaceStateKey("localSkillsToggles") ??
+							{},
+						remoteSkillsToggles:
+							capabilityContext?.capabilityToggles.remoteSkillsToggles ??
+							stateManager?.getGlobalStateKey("remoteSkillsToggles") ??
+							{},
 					})
 
 					const skillContent = await getSkillContent(skillName, availableSkills, remoteSkillEntries)
@@ -248,10 +270,13 @@ export async function parseSlashCommands(
 					isRemote: false,
 				}))
 
-			const stateManager = StateManager.get()
-			const remoteConfigSettings = stateManager.getRemoteConfigSettings()
-			const remoteWorkflows = remoteConfigSettings.remoteGlobalWorkflows || []
-			const remoteWorkflowToggles = stateManager.getGlobalStateKey("remoteWorkflowToggles") || {}
+			const stateManager = capabilityContext ? undefined : StateManager.get()
+			const remoteWorkflows =
+				capabilityContext?.remoteWorkflows ?? stateManager?.getRemoteConfigSettings().remoteGlobalWorkflows ?? []
+			const remoteWorkflowToggles =
+				capabilityContext?.capabilityToggles.remoteWorkflowToggles ??
+				stateManager?.getGlobalStateKey("remoteWorkflowToggles") ??
+				{}
 
 			const enabledRemoteWorkflows: Workflow[] = remoteWorkflows
 				.filter((workflow) => {
