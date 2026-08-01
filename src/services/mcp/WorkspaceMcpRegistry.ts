@@ -157,6 +157,23 @@ function isDescriptorFile(filePath: string): boolean {
 	return /\.(?:ya?ml|json)$/i.test(filePath)
 }
 
+function isWithinDirectory(parentDirectory: string, candidatePath: string): boolean {
+	const relativePath = path.relative(parentDirectory, candidatePath)
+	return (
+		relativePath === "" ||
+		(!relativePath.startsWith(`..${path.sep}`) && relativePath !== ".." && !path.isAbsolute(relativePath))
+	)
+}
+
+function shouldIgnoreWorkspacePath(workspaceRoot: string, candidatePath: string, isFile: boolean): boolean {
+	const resolvedPath = path.resolve(candidatePath)
+	const agentsDirectory = path.join(workspaceRoot, ".agents")
+	const descriptorDirectory = path.join(agentsDirectory, "mcp")
+	if (resolvedPath === workspaceRoot || resolvedPath === agentsDirectory) return false
+	if (!isWithinDirectory(descriptorDirectory, resolvedPath)) return true
+	return isFile && !isDescriptorFile(resolvedPath)
+}
+
 async function readDescriptorFiles(directoryPath: string): Promise<string[]> {
 	try {
 		const entries = await fs.readdir(directoryPath, { withFileTypes: true })
@@ -266,11 +283,13 @@ export class WorkspaceMcpRegistry {
 
 		const registration: RootRegistration = {
 			owners: new Set([ownerId]),
-			descriptors: await scanWorkspaceRoot(workspaceRoot),
+			descriptors: [],
 			refreshQueue: Promise.resolve(),
 		}
 		this.roots.set(workspaceRoot, registration)
 		registration.watcher = this.watchRoot(workspaceRoot)
+		await new Promise<void>((resolve) => registration.watcher?.once("ready", resolve))
+		registration.descriptors = await scanWorkspaceRoot(workspaceRoot)
 	}
 
 	private async releaseRoot(ownerId: string, workspaceRoot: string): Promise<void> {
@@ -284,9 +303,10 @@ export class WorkspaceMcpRegistry {
 
 	private watchRoot(workspaceRoot: string): FSWatcher {
 		const descriptorDirectory = path.join(workspaceRoot, MCP_DESCRIPTOR_DIRECTORY)
-		const watcher = chokidar.watch(descriptorDirectory, {
+		const watcher = chokidar.watch(workspaceRoot, {
 			persistent: true,
 			ignoreInitial: true,
+			ignored: (candidatePath, stats) => shouldIgnoreWorkspacePath(workspaceRoot, candidatePath, stats?.isFile() === true),
 			awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
 		})
 		const refresh = (filePath: string) => {
@@ -296,6 +316,7 @@ export class WorkspaceMcpRegistry {
 			.on("add", refresh)
 			.on("change", refresh)
 			.on("unlink", refresh)
+			.on("unlinkDir", () => void this.refreshRoot(workspaceRoot))
 			.on("error", (error) => {
 				Logger.error(`[WorkspaceMcpRegistry] Failed to watch '${descriptorDirectory}':`, error)
 			})

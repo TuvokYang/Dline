@@ -7,11 +7,11 @@ import { parseWorkspaceMcpDescriptor, WorkspaceMcpRegistry } from "../WorkspaceM
 const registries: WorkspaceMcpRegistry[] = []
 const temporaryDirectories: string[] = []
 
-async function createWorkspace(name: string): Promise<string> {
+async function createWorkspace(name: string, createDescriptorDirectory = true): Promise<string> {
 	const parent = await fs.mkdtemp(path.join(os.tmpdir(), "dline-workspace-mcp-"))
 	temporaryDirectories.push(parent)
 	const workspace = path.join(parent, name)
-	await fs.mkdir(path.join(workspace, ".agents", "mcp"), { recursive: true })
+	await fs.mkdir(createDescriptorDirectory ? path.join(workspace, ".agents", "mcp") : workspace, { recursive: true })
 	return workspace
 }
 
@@ -156,5 +156,24 @@ describe("WorkspaceMcpRegistry", () => {
 		await fs.rm(descriptorPath)
 		await registry.refreshOwner("panel")
 		expect(registry.getDescriptorsForOwner("panel")).toEqual([])
+	})
+
+	it("watches descriptors created after the descriptor directory", async () => {
+		const workspace = await createWorkspace("late-directory", false)
+		const registry = new WorkspaceMcpRegistry()
+		registries.push(registry)
+		await registry.registerOwner("panel", [workspace])
+		expect(registry.getDescriptorsForOwner("panel")).toEqual([])
+
+		await fs.mkdir(path.join(workspace, ".agents", "mcp"), { recursive: true })
+		const descriptorPath = await writeDescriptor(
+			workspace,
+			"docs.yml",
+			["name: docs", "type: stdio", "command: node"].join("\n"),
+		)
+		await expect.poll(() => registry.getDescriptorsForOwner("panel"), { timeout: 10_000 }).toHaveLength(1)
+
+		await fs.rm(descriptorPath)
+		await expect.poll(() => registry.getDescriptorsForOwner("panel"), { timeout: 10_000 }).toEqual([])
 	})
 })
