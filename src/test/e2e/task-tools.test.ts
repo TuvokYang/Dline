@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises"
 import * as path from "node:path"
 import { expect, type Frame } from "@playwright/test"
+import { E2E_PROFILE_NAMES } from "./utils/api-profile"
 import { E2ETestHelper, e2e } from "./utils/helpers"
 import { startFooterActionStabilityObserver, stopFooterActionStabilityObserver } from "./utils/ui-stability"
 
@@ -223,10 +224,14 @@ e2e(
 		})
 		await expect.poll(() => server.openAiRequestCount).toBe(2)
 		const continuation = server.getMockConsumptions("openai-compatible-chat")[1]
-		expect(continuation.requestToolResults).toContainEqual({
-			callId: "call_rejected_read",
-			content: "The user denied this operation.",
-		})
+		expect(continuation.requestToolResults).toContainEqual(
+			expect.objectContaining({
+				callId: "call_rejected_read",
+				content: expect.stringContaining("The user denied this operation."),
+			}),
+		)
+		const rejectedReadResult = continuation.requestToolResults.find(({ callId }) => callId === "call_rejected_read")
+		expect(rejectedReadResult?.content).toContain("E2E_READ_REJECT_FEEDBACK")
 		expect(JSON.stringify(continuation.requestBody)).not.toContain("This workspace is used for testing the extension")
 		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
 	},
@@ -951,7 +956,7 @@ e2e(
 name: e2e-background
 description: E2E background cancellation agent
 tools: read_file
-profile: E2E OpenAI Compatible Responses Mock
+profile: ${E2E_PROFILE_NAMES.mockOpenAiResponses}
 ---
 
 Remain active until cancelled.`,

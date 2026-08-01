@@ -316,19 +316,23 @@ function openAiProfile(
 			customModelEnabled,
 			reasoning: highReasoning(),
 			streamIncludeUsage: true,
-			capabilities: {
-				maxTokens: 8_192,
-				contextWindow: 131_072,
-				supportsImages: true,
-				supportsPromptCache: true,
-				supportsTools: true,
-			},
-			pricing: {
-				inputPrice: 1,
-				outputPrice: 2,
-				cacheReadsPrice: 0.1,
-				cacheWritesPrice: 1.25,
-			},
+			...(customModelEnabled
+				? {
+						capabilities: {
+							maxTokens: 8_192,
+							contextWindow: 131_072,
+							supportsImages: true,
+							supportsPromptCache: true,
+							supportsTools: true,
+						},
+						pricing: {
+							inputPrice: 1,
+							outputPrice: 2,
+							cacheReadsPrice: 0.1,
+							cacheWritesPrice: 1.25,
+						},
+					}
+				: {}),
 		},
 	}
 }

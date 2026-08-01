@@ -163,7 +163,7 @@ e2e(
 					const profiles = await readJson<StoredProfile[]>(profilesPath)
 					return profiles.find((profile) => !existingIds.has(profile.id))?.id
 				})
-				await card.getByRole("combobox", { name: "Provider" }).selectOption(provider)
+				await card.getByRole("combobox", { name: "Provider", exact: true }).selectOption(provider)
 				const stored = await E2ETestHelper.waitForValue(async () => {
 					const profile = (await readJson<StoredProfile[]>(profilesPath)).find((candidate) => candidate.id === id)
 					return profile?.provider === provider ? profile : undefined
@@ -332,7 +332,7 @@ e2e(
 			const profiles = await readJson<StoredProfile[]>(profilesPath)
 			return profiles.find((profile) => !existingProfileIds.has(profile.id))?.id
 		})
-		const providerSelector = profileCard.getByRole("combobox", { name: "Provider" })
+		const providerSelector = profileCard.getByRole("combobox", { name: "Provider", exact: true })
 
 		for (const { value: provider } of PROVIDERS.list) {
 			await providerSelector.selectOption(provider)

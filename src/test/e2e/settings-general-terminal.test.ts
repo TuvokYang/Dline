@@ -450,7 +450,7 @@ e2e(
 		const logPath = (await logLink.getAttribute("title"))?.replace(/^Click to open:\s*/, "")
 		if (!logPath) throw new Error("Background Activity did not expose its log path")
 
-		await sidebar.getByRole("tab", { name: "Chat", exact: true }).click()
+		await sidebar.getByRole("tab", { name: "Work", exact: true }).click()
 		await expect(sidebar.getByText("E2E_AUTO_BACKGROUND_HANDOFF_READY", { exact: true })).toBeVisible({
 			timeout: 60_000,
 		})
@@ -461,7 +461,7 @@ e2e(
 		await sidebar.getByRole("button", { name: "All", exact: true }).first().click()
 		await expect(activity).toContainText("completed", { timeout: 90_000 })
 		await expect.poll(async () => readFile(logPath, "utf8").catch(() => ""), { timeout: 90_000 }).toContain(finishedMarker)
-		await sidebar.getByRole("tab", { name: "Chat", exact: true }).click()
+		await sidebar.getByRole("tab", { name: "Work", exact: true }).click()
 		await expect(input).toBeEnabled()
 		await input.fill("E2E_AUTO_BACKGROUND_FEEDBACK")
 		await input.press("Enter")
