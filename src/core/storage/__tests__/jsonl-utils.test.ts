@@ -1,15 +1,31 @@
 /**
  * Unit tests for JSONL utilities (readJsonl, appendJsonl, writeJsonl, migration).
  */
-import { afterEach, describe, it } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import "should"
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
 import { appendJsonl, readJsonl, writeJsonl } from "../jsonl-utils"
 
+const fsMock = vi.hoisted(() => ({
+	rename: vi.fn<typeof import("fs/promises").rename>(),
+	actualRename: undefined as typeof import("fs/promises").rename | undefined,
+}))
+
+vi.mock("fs/promises", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("fs/promises")>()
+	fsMock.actualRename = actual.rename
+	return { ...actual, default: { ...actual, rename: fsMock.rename } }
+})
+
 describe("jsonl-utils", () => {
 	let tmpDir: string
+
+	beforeEach(() => {
+		fsMock.rename.mockReset()
+		fsMock.rename.mockImplementation((sourcePath, destinationPath) => fsMock.actualRename!(sourcePath, destinationPath))
+	})
 
 	afterEach(async () => {
 		if (tmpDir) {
@@ -152,6 +168,31 @@ describe("jsonl-utils", () => {
 			await writeJsonl(fp, [])
 			const result = await readJsonl(fp)
 			result.should.deepEqual([])
+		})
+
+		it("retries a transient Windows rename before replacing the JSONL file", async () => {
+			tmpDir = path.join(os.tmpdir(), `jsonl-test-${Date.now()}-${Math.random().toString(36).slice(2)}`)
+			await fs.mkdir(tmpDir, { recursive: true })
+			const fp = path.join(tmpDir, "retry-write.jsonl")
+			let attempts = 0
+			fsMock.rename.mockImplementation((sourcePath, destinationPath) => {
+				attempts++
+				if (attempts === 1) {
+					return Promise.reject(
+						Object.assign(new Error("file is temporarily locked"), {
+							code: "EPERM",
+							syscall: "rename",
+							path: sourcePath,
+							dest: destinationPath,
+						}),
+					)
+				}
+				return fsMock.actualRename!(sourcePath, destinationPath)
+			})
+
+			await expect(writeJsonl(fp, [{ ts: 1, text: "persisted" }])).resolves.toBeUndefined()
+			expect(attempts).toBe(2)
+			expect(await readJsonl(fp)).toEqual([{ ts: 1, text: "persisted" }])
 		})
 	})
 

@@ -14,6 +14,24 @@ import { fileExistsAtPath } from "@/utils/fs"
  */
 
 const TRIM_START_REGEX = /^\s+/
+const ATOMIC_RENAME_MAX_ATTEMPTS = 3
+const ATOMIC_RENAME_RETRY_DELAYS_MS = [10, 25] as const
+const RETRYABLE_ATOMIC_RENAME_CODES = new Set(["EPERM", "EACCES", "EBUSY"])
+
+async function renameAtomicFile(sourcePath: string, destinationPath: string): Promise<void> {
+	for (let attempt = 1; attempt <= ATOMIC_RENAME_MAX_ATTEMPTS; attempt++) {
+		try {
+			await fs.rename(sourcePath, destinationPath)
+			return
+		} catch (error) {
+			const code = (error as NodeJS.ErrnoException).code
+			if (!code || !RETRYABLE_ATOMIC_RENAME_CODES.has(code) || attempt === ATOMIC_RENAME_MAX_ATTEMPTS) {
+				throw error
+			}
+			await new Promise<void>((resolve) => setTimeout(resolve, ATOMIC_RENAME_RETRY_DELAYS_MS[attempt - 1] ?? 0))
+		}
+	}
+}
 
 /** Check whether file content is a JSON array (starts with '[' after whitespace). */
 function isJsonArray(content: string): boolean {
@@ -83,7 +101,7 @@ export async function writeJsonl<T>(filePath: string, entries: T[]): Promise<voi
 	const tmpPath = `${filePath}.tmp.${crypto.randomUUID()}`
 	await fs.writeFile(tmpPath, content, "utf8")
 	try {
-		await fs.rename(tmpPath, filePath)
+		await renameAtomicFile(tmpPath, filePath)
 	} catch (renameErr) {
 		// Best-effort cleanup: if rename fails, remove the orphaned temp file
 		try {
