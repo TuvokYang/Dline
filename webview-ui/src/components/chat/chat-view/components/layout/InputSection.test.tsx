@@ -6,19 +6,26 @@ import { InputSection } from "./InputSection"
 
 vi.mock("@/components/chat/ChatTextArea", () => ({
 	default: (props: {
-		onSend: () => void
+		onSend: (draft?: { text: string; images: string[]; files: string[] }) => void
 		onSendBlocked?: (draft: { text: string; images: string[]; files: string[] }) => void
 		sendingDisabled: boolean
 	}) => (
-		<button
-			onClick={() =>
-				props.sendingDisabled
-					? props.onSendBlocked?.({ text: "captured", images: ["image"], files: ["file"] })
-					: props.onSend()
-			}
-			type="button">
-			Submit
-		</button>
+		<>
+			<button
+				onClick={() =>
+					props.sendingDisabled
+						? props.onSendBlocked?.({ text: "captured", images: ["image"], files: ["file"] })
+						: props.onSend()
+				}
+				type="button">
+				Submit
+			</button>
+			<button
+				onClick={() => props.onSend({ text: "mode switch", images: ["mode-image"], files: ["mode-file"] })}
+				type="button">
+				Complete Mode Switch
+			</button>
+		</>
 	),
 }))
 vi.mock("@/components/chat/QuotedMessagePreview", () => ({ default: ({ children }: { children?: ReactNode }) => children }))
@@ -84,5 +91,26 @@ describe("InputSection deferred task submission", () => {
 
 		await Promise.resolve()
 		expect(onSubmit).not.toHaveBeenCalled()
+	})
+
+	it("defers a mode-switch draft until the same task interaction becomes enabled", async () => {
+		const onSubmit = vi.fn(async () => undefined)
+		const initial = props(draft("initial"))
+		const { rerender } = render(<InputSection {...initial} enabled={false} onSubmit={onSubmit} submissionScope="task-1" />)
+
+		fireEvent.click(screen.getByRole("button", { name: "Complete Mode Switch" }))
+		expect(onSubmit).not.toHaveBeenCalled()
+
+		const updated = props(draft("changed after switch"))
+		rerender(<InputSection {...updated} enabled={true} onSubmit={onSubmit} submissionScope="task-1" />)
+
+		await waitFor(() => expect(onSubmit).toHaveBeenCalledOnce())
+		expect(onSubmit).toHaveBeenCalledWith({
+			text: "mode switch",
+			images: ["mode-image"],
+			files: ["mode-file"],
+			activeQuote: null,
+			ownerRevision: 1,
+		})
 	})
 })

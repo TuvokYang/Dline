@@ -73,6 +73,16 @@ export const InputSection: React.FC<InputSectionProps> = ({
 	}
 	const submitDraftRef = useRef(submitDraft)
 	submitDraftRef.current = submitDraft
+	const deferDraft = (capturedDraft: ModeSwitchDraft) => {
+		deferredSubmitRef.current = { scope: submissionScope, draft: capturedDraft }
+	}
+	const handleSend = (capturedDraft?: ModeSwitchDraft) => {
+		if (capturedDraft && onSubmit && enabled === false) {
+			deferDraft(capturedDraft)
+			return
+		}
+		void submitDraft(capturedDraft)
+	}
 
 	useEffect(() => {
 		const deferred = deferredSubmitRef.current
@@ -108,14 +118,8 @@ export const InputSection: React.FC<InputSectionProps> = ({
 					}
 				}}
 				onSelectFilesAndImages={selectFilesAndImages}
-				onSend={(capturedDraft?: ModeSwitchDraft) => void submitDraft(capturedDraft)}
-				onSendBlocked={
-					onSubmit
-						? (capturedDraft) => {
-								deferredSubmitRef.current = { scope: submissionScope, draft: capturedDraft }
-							}
-						: undefined
-				}
+				onSend={handleSend}
+				onSendBlocked={onSubmit ? deferDraft : undefined}
 				placeholderText={placeholderText}
 				ref={textAreaRef}
 				selectedFiles={selectedFiles}
