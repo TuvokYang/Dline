@@ -1,8 +1,19 @@
-import { render, screen } from "@testing-library/react"
-import { describe, expect, it } from "vitest"
+import { fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { beforeEach, describe, expect, it, vi } from "vitest"
+import { FileServiceClient } from "@/services/grpc-client"
 import { ApiErrorBox } from "./ApiErrorBox"
 
+vi.mock("@/services/grpc-client", () => ({
+	FileServiceClient: {
+		copyToClipboard: vi.fn(async () => undefined),
+	},
+}))
+
 describe("ApiErrorBox", () => {
+	beforeEach(() => {
+		vi.mocked(FileServiceClient.copyToClipboard).mockClear()
+	})
+
 	it("renders structured provider error fields without exposing the serialized payload", () => {
 		const serializedError = JSON.stringify({
 			message: "500 No scripted E2E response remains for openai-compatible-chat",
@@ -35,6 +46,50 @@ describe("ApiErrorBox", () => {
 		expect(container).not.toHaveTextContent(serializedError)
 	})
 
+	it("copies the visible structured API error from the title action", async () => {
+		const serializedError = JSON.stringify({
+			message: "500 No scripted E2E response remains for openai-compatible-chat",
+			status: 500,
+			request_id: "req_e2e_123",
+			code: "e2e_mock_queue_exhausted",
+			modelId: "dline-e2e-model",
+			providerId: "openai",
+			details: {
+				message: "No scripted E2E response remains for openai-compatible-chat",
+				type: "e2e_mock_error",
+				target: "openai-compatible-chat",
+				retryable: true,
+			},
+		})
+
+		render(<ApiErrorBox error={serializedError} />)
+		fireEvent.click(screen.getByRole("button", { name: "Copy error" }))
+
+		await waitFor(() =>
+			expect(FileServiceClient.copyToClipboard).toHaveBeenCalledWith(
+				expect.objectContaining({
+					value: [
+						"API Request Failed",
+						"",
+						"Message",
+						"No scripted E2E response remains for openai-compatible-chat",
+						"",
+						"Provider: openai",
+						"Model: dline-e2e-model",
+						"HTTP status: 500",
+						"Error code: e2e_mock_queue_exhausted",
+						"Request ID: req_e2e_123",
+						"",
+						"Details",
+						"Type: e2e_mock_error",
+						"Target: openai-compatible-chat",
+						"Retryable: true",
+					].join("\n"),
+				}),
+			),
+		)
+	})
+
 	it("renders provider and model for an error without status or code", () => {
 		const serializedError = JSON.stringify({
 			message: "Connection error.",
@@ -57,5 +112,6 @@ describe("ApiErrorBox", () => {
 		expect(screen.getByText("Error")).toBeInTheDocument()
 		expect(screen.getByTestId("api-error-box-message")).toHaveTextContent("Command failed")
 		expect(screen.queryByTestId("api-error-box-provider")).not.toBeInTheDocument()
+		expect(screen.queryByRole("button", { name: "Copy error" })).not.toBeInTheDocument()
 	})
 })

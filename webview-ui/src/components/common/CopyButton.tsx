@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils"
 interface CopyButtonProps {
 	textToCopy?: string
 	onCopy?: () => string | undefined | null
+	writeText?: (text: string) => Promise<unknown>
 	className?: string
 	ariaLabel?: string
 }
@@ -32,7 +33,7 @@ const POSITION_CLASSES = {
 /**
  * Base copy button component with clipboard functionality
  */
-export const CopyButton: React.FC<CopyButtonProps> = ({ textToCopy, onCopy, className, ariaLabel }) => {
+export const CopyButton: React.FC<CopyButtonProps> = ({ textToCopy, onCopy, writeText, className, ariaLabel }) => {
 	const [copied, setCopied] = useState(false)
 
 	const handleCopy = useCallback(() => {
@@ -41,14 +42,14 @@ export const CopyButton: React.FC<CopyButtonProps> = ({ textToCopy, onCopy, clas
 			return
 		}
 
-		navigator.clipboard
-			.writeText(text)
+		const copy = writeText ?? ((value: string) => navigator.clipboard.writeText(value))
+		copy(text)
 			.then(() => {
 				setCopied(true)
 				setTimeout(() => setCopied(false), COPIED_TIMEOUT)
 			})
 			.catch((err) => console.error("Copy failed", err))
-	}, [textToCopy, onCopy])
+	}, [textToCopy, onCopy, writeText])
 
 	return (
 		<Button

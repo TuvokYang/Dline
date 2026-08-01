@@ -592,7 +592,7 @@ for (const status of [403, 429, 502] as const) {
 
 e2e(
 	"API recovery - OpenAI queue exhaustion renders one structured error and Retry recovers",
-	async ({ helper, server, sidebar, userDataDir }) => {
+	async ({ app, helper, server, sidebar, userDataDir }) => {
 		e2e.setTimeout(180_000)
 		const message = "No scripted E2E response remains for openai-compatible-chat"
 		const requestId = "req_queue_openai_compatible_chat"
@@ -609,6 +609,30 @@ e2e(
 			requestId,
 			details: { type: "e2e_mock_error", target: "openai-compatible-chat", retryable: "true" },
 		})
+		const copyErrorButton = sidebar.getByRole("button", { name: "Copy error" })
+		await expect(copyErrorButton).toBeVisible()
+		await copyErrorButton.click()
+		await expect(sidebar.getByRole("button", { name: "Copied" })).toBeVisible()
+		const copiedError = (await app.evaluate(({ clipboard }) => clipboard.readText())).replaceAll("\r\n", "\n")
+		expect(copiedError).toBe(
+			[
+				"API Request Failed",
+				"",
+				"Message",
+				message,
+				"",
+				"Provider: openai",
+				"Model: dline-e2e-model",
+				"HTTP status: 500",
+				"Error code: e2e_mock_queue_exhausted",
+				`Request ID: ${requestId}`,
+				"",
+				"Details",
+				"Type: e2e_mock_error",
+				"Target: openai-compatible-chat",
+				"Retryable: true",
+			].join("\n"),
+		)
 
 		server.enqueueResponses("openai-compatible-chat", {
 			type: "tool",

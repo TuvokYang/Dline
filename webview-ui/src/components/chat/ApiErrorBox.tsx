@@ -1,5 +1,8 @@
+import { StringRequest } from "@shared/proto/dline/common"
 import { TriangleAlertIcon } from "lucide-react"
 import type { ReactNode } from "react"
+import { CopyButton } from "@/components/common/CopyButton"
+import { FileServiceClient } from "@/services/grpc-client"
 import { ClineError } from "../../../../src/services/error/ClineError"
 
 interface ApiErrorDetails {
@@ -41,6 +44,11 @@ function detailTestId(key: string): string {
 
 const SENSITIVE_DETAIL_KEY = /(?:authorization|api.?key|token|secret|password|cookie)/i
 const MAX_ADDITIONAL_DETAILS = 16
+const API_REQUEST_FAILED_TITLE = "API Request Failed"
+
+function writeApiErrorToClipboard(text: string): Promise<unknown> {
+	return FileServiceClient.copyToClipboard(StringRequest.create({ value: text }))
+}
 
 function primitiveDisplayValue(value: unknown): string | undefined {
 	if (typeof value === "string") return readString(value)
@@ -117,7 +125,7 @@ export function ApiErrorBox({
 	error,
 	children,
 	testId = "api-error-box",
-	title = "API Request Failed",
+	title = API_REQUEST_FAILED_TITLE,
 }: {
 	error?: string
 	children?: ReactNode
@@ -132,12 +140,32 @@ export function ApiErrorBox({
 		{ label: "Error code", value: details.code, testId: `${testId}-code` },
 		{ label: "Request ID", value: details.requestId, testId: `${testId}-request-id` },
 	].filter((field) => field.value !== undefined)
+	const copyText = [
+		title,
+		"",
+		"Message",
+		details.message,
+		...(metadata.length > 0 ? ["", ...metadata.map((field) => `${field.label}: ${field.value}`)] : []),
+		...(details.additionalDetails.length > 0
+			? ["", "Details", ...details.additionalDetails.map((field) => `${field.label}: ${field.value}`)]
+			: []),
+	].join("\n")
 	return (
 		<div className="overflow-hidden rounded-sm border border-error/50 bg-error/10" data-testid={testId}>
 			<div className="p-3">
-				<div className="flex items-center gap-2 text-error">
-					<TriangleAlertIcon className="size-3 shrink-0" />
-					<div className="font-medium text-xs">{title}</div>
+				<div className="flex items-center justify-between gap-2 text-error">
+					<div className="flex min-w-0 items-center gap-2">
+						<TriangleAlertIcon className="size-3 shrink-0" />
+						<div className="font-medium text-xs">{title}</div>
+					</div>
+					{title === API_REQUEST_FAILED_TITLE && (
+						<CopyButton
+							ariaLabel="Copy error"
+							className="shrink-0 text-error"
+							textToCopy={copyText}
+							writeText={writeApiErrorToClipboard}
+						/>
+					)}
 				</div>
 				<div className="mt-3 text-xs">
 					<div className="text-description">Message</div>
