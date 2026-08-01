@@ -457,6 +457,10 @@ export const e2e = test
 			const executablePath = await downloadAndUnzipVSCode(channel, undefined, new SilentReporter())
 			const electronEnvironment = { ...process.env }
 			delete electronEnvironment.ELECTRON_RUN_AS_NODE
+			const cdpPort = process.env.DLINE_E2E_CDP_PORT?.trim()
+			if (cdpPort && (!/^\d+$/.test(cdpPort) || Number(cdpPort) < 1 || Number(cdpPort) > 65_535)) {
+				throw new Error(`Invalid DLINE_E2E_CDP_PORT: ${cdpPort}`)
+			}
 
 			await use(async (workspacePath: string) => {
 				const app = await _electron.launch({
@@ -481,6 +485,7 @@ export const e2e = test
 					},
 					args: [
 						"--no-sandbox",
+						...(cdpPort ? [`--remote-debugging-port=${cdpPort}`] : []),
 						"--disable-updates",
 						"--disable-workspace-trust",
 						"--disable-extensions", // Run VS Code with all extensions disabled other than the one under test.
