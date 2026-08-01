@@ -12,6 +12,7 @@ export interface ModeSwitchDraft {
 }
 
 interface PendingSwitch {
+	requestId: number
 	operationId?: string
 	targetMode: Mode
 	startRevision: number
@@ -63,7 +64,8 @@ function cloneDraft(draft: ModeSwitchDraft): ModeSwitchDraft {
 export function useModeSwitch(options: UseModeSwitchOptions): UseModeSwitchResult {
 	const { mode, stateRevision, modeSwitch, draft, attachDraft, onSend, clearDraft } = options
 	const [pending, setPending] = useState<PendingSwitch>()
-	const completedOps = useRef(new Set<string>())
+	const nextRequestId = useRef(0)
+	const completedRequests = useRef(new Set<number>())
 	const onSendRef = useRef(onSend)
 	const clearDraftRef = useRef(clearDraft)
 
@@ -77,9 +79,27 @@ export function useModeSwitch(options: UseModeSwitchOptions): UseModeSwitchResul
 
 	useEffect(() => {
 		if (!pending || stateRevision <= pending.startRevision) return
+		const matchingSnapshot =
+			modeSwitch?.operationId &&
+			modeSwitch.targetMode === pending.targetMode &&
+			(!pending.operationId || modeSwitch.operationId === pending.operationId)
+				? modeSwitch
+				: undefined
 
-		if (modeSwitch?.phase === "failed" && pending.operationId && modeSwitch.operationId === pending.operationId) {
+		if (matchingSnapshot?.phase === "failed") {
 			setPending(undefined)
+			return
+		}
+
+		if (matchingSnapshot && matchingSnapshot.phase !== "idle") {
+			const operationId = matchingSnapshot.operationId
+			const backendOwnsDraft = matchingSnapshot.phase === "awaiting_confirmation" || matchingSnapshot.phase === "compacting"
+			setPending((current) => {
+				if (current?.requestId !== pending.requestId) return current
+				const nextAttachDraft = current.attachDraft || backendOwnsDraft
+				if (current.operationId === operationId && current.attachDraft === nextAttachDraft) return current
+				return { ...current, operationId, attachDraft: nextAttachDraft }
+			})
 			return
 		}
 
@@ -88,13 +108,13 @@ export function useModeSwitch(options: UseModeSwitchOptions): UseModeSwitchResul
 			return
 		}
 
-		if (modeSwitch?.phase !== "idle" || mode !== pending.targetMode || !pending.operationId) return
-		if (completedOps.current.has(pending.operationId)) {
+		if (modeSwitch?.phase !== "idle" || mode !== pending.targetMode) return
+		if (completedRequests.current.has(pending.requestId)) {
 			setPending(undefined)
 			return
 		}
 
-		completedOps.current.add(pending.operationId)
+		completedRequests.current.add(pending.requestId)
 		const completed = pending
 		setPending(undefined)
 		if (!hasDraft(completed.draft)) return
@@ -110,7 +130,9 @@ export function useModeSwitch(options: UseModeSwitchOptions): UseModeSwitchResul
 		async (targetMode: Mode): Promise<void> => {
 			if (isSwitchPending || targetMode === mode) return
 			const capturedDraft = cloneDraft(draft)
+			const requestId = ++nextRequestId.current
 			const nextPending: PendingSwitch = {
+				requestId,
 				targetMode,
 				startRevision: stateRevision,
 				draft: capturedDraft,
@@ -122,14 +144,13 @@ export function useModeSwitch(options: UseModeSwitchOptions): UseModeSwitchResul
 				const response = await StateServiceClient.togglePlanActModeProto(
 					TogglePlanActModeRequest.create({
 						mode: toProtoMode(targetMode),
-						chatContent:
-							attachDraft && hasDraft(capturedDraft)
-								? {
-										message: capturedDraft.text || undefined,
-										images: capturedDraft.images,
-										files: capturedDraft.files,
-									}
-								: undefined,
+						chatContent: hasDraft(capturedDraft)
+							? {
+									message: capturedDraft.text || undefined,
+									images: capturedDraft.images,
+									files: capturedDraft.files,
+								}
+							: undefined,
 					}),
 				)
 				if (
@@ -138,12 +159,22 @@ export function useModeSwitch(options: UseModeSwitchOptions): UseModeSwitchResul
 					response.status === ModeSwitchStatus.UNRECOGNIZED ||
 					!response.operationId
 				) {
-					setPending(undefined)
+					setPending((current) => (current?.requestId === requestId ? undefined : current))
 					return
 				}
-				setPending((current) => (current ? { ...current, operationId: response.operationId } : current))
+				setPending((current) =>
+					current?.requestId === requestId
+						? {
+								...current,
+								operationId: response.operationId,
+								attachDraft:
+									current.attachDraft ||
+									response.status === ModeSwitchStatus.MODE_SWITCH_STATUS_CONFIRMATION_REQUIRED,
+							}
+						: current,
+				)
 			} catch {
-				setPending(undefined)
+				setPending((current) => (current?.requestId === requestId ? undefined : current))
 			}
 		},
 		[attachDraft, draft, isSwitchPending, mode, stateRevision],
