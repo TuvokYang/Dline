@@ -1,3 +1,4 @@
+import { ClineDefaultTool } from "@shared/tools"
 import { describe, expect, it } from "vitest"
 import { SystemPromptGenerator } from "../../generators/SystemPromptGenerator"
 import { ToolPromptGenerator } from "../../generators/ToolPromptGenerator"
@@ -95,6 +96,19 @@ describe("Standard/Lite transport and capability behavior matrix", () => {
 		})
 
 		expect(exposes(result, "native", "make_plan")).toBe(true)
+	})
+
+	it.each(["native", "xml"] as const)("exposes act_mode_respond only in ACT MODE for %s", async (transport) => {
+		const act = await generate(PromptProfile.Standard, transport, {
+			providerInfo: { ...BASE_CONTEXT.providerInfo, mode: "act" },
+		})
+		const plan = await generate(PromptProfile.Standard, transport, {
+			providerInfo: { ...BASE_CONTEXT.providerInfo, mode: "plan" },
+			disableTools: [ClineDefaultTool.ACT_MODE],
+		})
+
+		expect(exposes(act, transport, "act_mode_respond")).toBe(true)
+		expect(exposes(plan, transport, "act_mode_respond")).toBe(false)
 	})
 
 	it.each(["native", "xml"] as const)("applies browser support and disable gates for Standard/%s", async (transport) => {

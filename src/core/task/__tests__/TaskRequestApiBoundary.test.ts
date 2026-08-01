@@ -38,6 +38,47 @@ describe("Task request API boundary", () => {
 		expect(deferredTurnCall).toBeGreaterThan(compactionGate)
 	})
 
+	it("prepares forced truncation only after deferring the current tool turn", async () => {
+		const source = await readFile(taskSourcePath, "utf8")
+		const method = extractMethod(source, "async recursivelyMakeClineRequests(", "async loadContext(")
+		const deferredTurnCall = method.indexOf("shouldCompact = await this.deferCurrentTurn(userContent)")
+		const forcedTruncationCall = method.indexOf("await this.prepareModeSwitchCompaction(")
+
+		expect(deferredTurnCall).toBeGreaterThanOrEqual(0)
+		expect(forcedTruncationCall).toBeGreaterThan(deferredTurnCall)
+	})
+
+	it("drops all completed middle turns before a forced source-mode summary", async () => {
+		const source = await readFile(taskSourcePath, "utf8")
+		const method = extractMethod(source, "private async prepareModeSwitchCompaction(", "/** Merge a confirmation-owned draft")
+
+		expect(method).toContain('"none"')
+		expect(method).not.toContain('"lastTwo"')
+	})
+
+	it("restores the deferred tool turn before releasing the mode-switch commit barrier", async () => {
+		const source = await readFile(taskSourcePath, "utf8")
+		const method = extractMethod(source, "async recursivelyMakeClineRequests(", "async loadContext(")
+		const restoreCall = method.indexOf("await this.restoreDeferredTurn(userContent)")
+		const markAppliedCall = method.indexOf("await this.modeSwitchCompaction.markApplied()")
+
+		expect(restoreCall).toBeGreaterThanOrEqual(0)
+		expect(markAppliedCall).toBeGreaterThan(restoreCall)
+	})
+
+	it("preserves a prepared mode-compaction tail across the context-length retry", async () => {
+		const source = await readFile(taskSourcePath, "utf8")
+		const method = extractMethod(
+			source,
+			"private async handleContextWindowExceededError(",
+			"/**\n\t * Build the current system prompt",
+		)
+
+		expect(method).toContain(
+			"if (!(this.modeSwitchCompaction.shouldForce() && this.taskState.conversationHistoryDeletedRange))",
+		)
+	})
+
 	it("does not read the mutable handler after creating the request scope", async () => {
 		const source = await readFile(taskSourcePath, "utf8")
 		const method = extractMethod(source, "async recursivelyMakeClineRequests(", "async loadContext(")
@@ -58,7 +99,7 @@ describe("Task request API boundary", () => {
 
 		expect(retryBranchStart).toBeGreaterThanOrEqual(0)
 		expect(retryBranchEnd).toBeGreaterThan(retryBranchStart)
-		expect(retryBranch).toContain("void runDelayedStreamRetry({")
+		expect(retryBranch).toContain("this.scheduleAutoRetry(")
 		expect(retryBranch).toContain("return true")
 		expect(retryBranch).not.toContain("await this.cancelTask()")
 		expect(retryBranch).not.toContain("await this.reinitExistingTaskFromId(")

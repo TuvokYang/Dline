@@ -21,7 +21,7 @@ export interface ContextPressureReader {
 
 /** Run source-mode compaction and control its completion barrier. */
 export interface TaskCompactionPort {
-	compact(operationId: string): Promise<"completed" | "cancelled" | "failed">
+	compact(operationId: string, chatContent?: ChatContent): Promise<"completed" | "cancelled" | "failed">
 	release(operationId: string): void
 	fail(operationId: string, reason: string): void
 }

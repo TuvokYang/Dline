@@ -538,7 +538,8 @@ export class Controller {
 			},
 			pressure: { read: () => this.readModeSwitchPressure() },
 			compaction: {
-				compact: (operationId) => this.task?.compactForMode(operationId) ?? Promise.resolve("failed"),
+				compact: (operationId, chatContent) =>
+					this.task?.compactForMode(operationId, chatContent) ?? Promise.resolve("failed"),
 				release: (operationId) => this.task?.releaseCompact(operationId),
 				fail: (operationId, reason) => this.task?.failCompact(operationId, reason),
 			},

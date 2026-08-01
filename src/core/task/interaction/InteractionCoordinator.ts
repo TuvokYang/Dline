@@ -60,6 +60,22 @@ function outcomeFrom(response: InteractionResponse): InteractionOutcome {
 	return { actionId: response.actionId, draft: response.draft, selection: response.selection }
 }
 
+/** Select only interaction continuations that can safely carry an internal compact signal. */
+function modeCompactionAction(kind: InteractionKind): InteractionResponse["actionId"] | undefined {
+	switch (kind) {
+		case "followup":
+		case "make_plan":
+		case "qna_response":
+		case "generate_report":
+		case "completion":
+			return "reply"
+		case "status_acknowledgment":
+			return "acknowledge"
+		default:
+			return undefined
+	}
+}
+
 /** Coordinates one active interaction between runtime events and a handler waiter. */
 export class InteractionCoordinator {
 	private readonly waitingInteractionIds = new Set<string>()
@@ -152,6 +168,29 @@ export class InteractionCoordinator {
 			}
 		}
 		return result
+	}
+
+	/** Return whether the current awaiting interaction can safely initiate mode compaction. */
+	canRespondForModeCompaction(): boolean {
+		const interaction = this.runtime.getState().interaction
+		return interaction?.status === "awaiting" && modeCompactionAction(interaction.kind) !== undefined
+	}
+
+	/** Resolve one conversational interaction with a backend-only compaction signal. */
+	async respondForModeCompaction(text: string): Promise<boolean> {
+		const state = this.runtime.getState()
+		const interaction = state.interaction
+		const actionId = interaction?.status === "awaiting" ? modeCompactionAction(interaction.kind) : undefined
+		if (!interaction || !actionId) return false
+		const result = await this.respond({
+			taskId: interaction.taskId,
+			turnId: interaction.turnId,
+			interactionId: interaction.interactionId,
+			actionId,
+			stateRevision: state.revision,
+			draft: { text, images: [], files: [] },
+		})
+		return result.accepted
 	}
 
 	/** Open or strictly take over one interaction and wait for its causal response. */

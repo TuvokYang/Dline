@@ -145,14 +145,17 @@ describe("ToolPromptGenerator", () => {
 
 	it("projects summarize_task only for the active automatic compaction request", () => {
 		expect(REQUEST_SCOPED_TOOL_IDS).toEqual([ClineDefaultTool.SUMMARIZE_TASK])
-		const defaultTools = new ToolPromptGenerator().generate(PromptProfile.Standard, context) ?? []
+		const generator = new ToolPromptGenerator()
+		const defaultTools = generator.generate(PromptProfile.Standard, context) ?? []
 		const requestTools =
-			new ToolPromptGenerator().generateSelectedRequestTools(PromptProfile.Standard, context, [
-				ClineDefaultTool.SUMMARIZE_TASK,
-			]) ?? []
+			generator.generateToolsForRequest(PromptProfile.Standard, context, defaultTools, [ClineDefaultTool.SUMMARIZE_TASK]) ??
+			[]
 
 		expect(defaultTools).not.toEqual(
 			expect.arrayContaining([expect.objectContaining({ function: expect.objectContaining({ name: "summarize_task" }) })]),
+		)
+		expect(requestTools).not.toEqual(
+			expect.arrayContaining([expect.objectContaining({ function: expect.objectContaining({ name: "read_file" }) })]),
 		)
 		expect(requestTools).toEqual([
 			expect.objectContaining({

@@ -95,6 +95,7 @@ export class TaskState {
 	// Auto-context summarization
 	currentlySummarizing = false
 	lastAutoCompactTriggerIndex?: number
+	isInternalContextCompactionRequest = false
 	deferredCurrentTurn?: {
 		assistantMessage: ClineStorageMessage
 		userContent: ClineContent[]

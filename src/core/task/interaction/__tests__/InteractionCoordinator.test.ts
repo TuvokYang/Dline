@@ -92,6 +92,45 @@ function hydrateAwaitingInteraction(input: {
 }
 
 describe("InteractionCoordinator", () => {
+	it("continues a live completion with an internal mode-compaction response", async () => {
+		const runtime = new TaskRuntime(createTaskRuntimeState({ taskId: "task-1", phase: TaskPhase.STREAMING }), createPorts())
+		const coordinator = new InteractionCoordinator(runtime)
+		const outcomePromise = coordinator.complete({
+			turnId: "turn-compact",
+			interactionId: "completion-compact",
+			completionId: "completion-compact",
+			presentation: "Done",
+		})
+		await vi.waitFor(() => expect(runtime.getState().interaction?.status).toBe("awaiting"))
+
+		expect(coordinator.canRespondForModeCompaction()).toBe(true)
+		await expect(coordinator.respondForModeCompaction("__dline_mode_switch_compact__")).resolves.toBe(true)
+		await expect(outcomePromise).resolves.toMatchObject({
+			actionId: "reply",
+			draft: { text: "__dline_mode_switch_compact__", images: [], files: [] },
+		})
+		expect(runtime.getState().phase).toBe(TaskPhase.STREAMING)
+		expect(runtime.getState().interaction).toBeUndefined()
+	})
+
+	it("does not resolve approval interactions for mode compaction", async () => {
+		const state = hydrateAwaitingInteraction({
+			kind: "tool_approval",
+			phase: TaskPhase.AWAITING_APPROVAL,
+			turnId: "approval-turn",
+			interactionId: "approval-1",
+		})
+		const runtime = new TaskRuntime(state, createPorts())
+		const coordinator = new InteractionCoordinator(runtime)
+
+		expect(coordinator.canRespondForModeCompaction()).toBe(false)
+		await expect(coordinator.respondForModeCompaction("__dline_mode_switch_compact__")).resolves.toBe(false)
+		expect(runtime.getState().interaction).toMatchObject({
+			interactionId: "approval-1",
+			status: "awaiting",
+		})
+	})
+
 	it("waits for one causal response and resolves the active interaction", async () => {
 		const runtime = new TaskRuntime(createTaskRuntimeState({ taskId: "task-1", phase: TaskPhase.STREAMING }), createPorts())
 		const coordinator = new InteractionCoordinator(runtime)

@@ -2,6 +2,7 @@ import type { ToolUse } from "@core/assistant-message"
 import { formatResponse } from "@core/prompts/responses"
 import { ClineDefaultTool } from "@shared/tools"
 import type { ToolResponse } from "../../index"
+import { isCompactSignal } from "../../mode-switch-signal"
 import type { IPartialBlockHandler, IToolHandler } from "../ToolExecutorCoordinator"
 import { interactionId, interactionTurnId, type TaskConfig } from "../types/TaskConfig"
 import type { StronglyTypedUIHelpers } from "../types/UIHelpers"
@@ -70,6 +71,9 @@ export class StatusUpdateHandler implements IToolHandler, IPartialBlockHandler {
 				presentation: response,
 				existingTs: block.ts,
 			})
+			if (isCompactSignal(outcome.draft?.text)) {
+				return formatResponse.toolResult("Mode switch context compaction requested.")
+			}
 			const feedback = this.formatFeedback(outcome.draft?.text, outcome.draft?.images, outcome.draft?.files)
 			if (outcome.actionId === "stop") {
 				return formatResponse.toolResult(`[STATUS_UPDATE] User chose to stop.${feedback} Wait for further instructions.`)

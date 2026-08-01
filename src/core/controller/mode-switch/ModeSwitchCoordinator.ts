@@ -99,7 +99,7 @@ export class ModeSwitchCoordinator {
 		}
 
 		await this.setSnapshot(this.createSnapshot(operation, "compacting"))
-		const compactResult = await this.deps.compaction.compact(operation.operationId)
+		const compactResult = await this.deps.compaction.compact(operation.operationId, operation.chatContent)
 		if (compactResult !== "completed") {
 			const reason = compactResult === "cancelled" ? "Mode switch compaction cancelled." : "Mode switch compaction failed."
 			return this.failOperation(operation, reason)

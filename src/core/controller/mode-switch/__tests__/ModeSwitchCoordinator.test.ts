@@ -1,3 +1,4 @@
+import type { ChatContent } from "@shared/ChatContent"
 import type { Mode } from "@shared/storage/types"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { ModeSwitchCoordinator } from "../ModeSwitchCoordinator"
@@ -17,7 +18,9 @@ interface TestHarness {
 	compaction: TaskCompactionPort
 	commit: ModeCommitPort
 	postState: ReturnType<typeof vi.fn<() => Promise<void>>>
-	compact: ReturnType<typeof vi.fn<(operationId: string) => Promise<"completed" | "cancelled" | "failed">>>
+	compact: ReturnType<
+		typeof vi.fn<(operationId: string, chatContent?: ChatContent) => Promise<"completed" | "cancelled" | "failed">>
+	>
 	release: ReturnType<typeof vi.fn<(operationId: string) => void>>
 	fail: ReturnType<typeof vi.fn<(operationId: string, reason: string) => void>>
 	validate: ReturnType<typeof vi.fn<(operation: ModeSwitchOperation) => boolean>>
@@ -43,7 +46,9 @@ function createHarness(currentTokens = 125_000): TestHarness {
 	const resolve = vi.fn<(mode: Mode) => ResolvedModeProfile | undefined>((mode) => (mode === "plan" ? SOURCE : TARGET))
 	const profiles: ModeProfileResolver = { getSource: () => SOURCE, resolve }
 	const pressure: ContextPressureReader = { read: vi.fn(() => currentTokens) }
-	const compact = vi.fn<(operationId: string) => Promise<"completed" | "cancelled" | "failed">>(async () => "completed")
+	const compact = vi.fn<(operationId: string, chatContent?: ChatContent) => Promise<"completed" | "cancelled" | "failed">>(
+		async () => "completed",
+	)
 	const release = vi.fn<(operationId: string) => void>()
 	const fail = vi.fn<(operationId: string, reason: string) => void>()
 	const compaction: TaskCompactionPort = { compact, release, fail }
@@ -151,7 +156,7 @@ describe("ModeSwitchCoordinator", () => {
 		const result = await harness.coordinator.confirm("operation-1")
 
 		expect(result).toEqual({ status: "switched", operationId: "operation-1" })
-		expect(harness.compact).toHaveBeenCalledWith("operation-1")
+		expect(harness.compact).toHaveBeenCalledWith("operation-1", undefined)
 		expect(harness.commitMode).toHaveBeenCalledOnce()
 		expect(harness.release).toHaveBeenCalledWith("operation-1")
 		expect(harness.coordinator.getSnapshot()).toEqual({ phase: "idle" })

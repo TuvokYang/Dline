@@ -99,6 +99,36 @@ describe("ModeSwitchCompaction", () => {
 		await expect(result).resolves.toBe("failed")
 	})
 
+	/** Fail promptly when the active interaction cannot safely carry the compact signal. */
+	it("fails when no compatible interaction can be continued", async () => {
+		const compaction = new ModeSwitchCompaction()
+
+		await expect(compaction.request("operation-1", async () => false)).resolves.toBe("failed")
+		expect(compaction.getOperationId()).toBeUndefined()
+	})
+
+	/** Transfer confirmation-owned draft content only after the target commit barrier releases. */
+	it("retains draft content until successful summary application", async () => {
+		const compaction = new ModeSwitchCompaction()
+		const completion = compaction.request("operation-1", async () => true, {
+			message: "pending draft",
+			images: ["image-1"],
+			files: ["file-1"],
+		})
+		const applied = compaction.markApplied()
+		await expect(completion).resolves.toBe("completed")
+		expect(compaction.takeChatContent()).toBeUndefined()
+
+		compaction.release("operation-1")
+		await applied
+		expect(compaction.takeChatContent()).toEqual({
+			message: "pending draft",
+			images: ["image-1"],
+			files: ["file-1"],
+		})
+		expect(compaction.takeChatContent()).toBeUndefined()
+	})
+
 	/** Do not allow release before summary application to lose the barrier signal. */
 	it("remembers early release until summary application", async () => {
 		const compaction = new ModeSwitchCompaction()

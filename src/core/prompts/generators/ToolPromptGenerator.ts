@@ -112,6 +112,19 @@ export class ToolPromptGenerator {
 		})
 	}
 
+	/** Selects either the frozen defaults or the explicitly isolated request-only projection. */
+	public generateToolsForRequest(
+		profile: PromptProfile,
+		context: SystemPromptContext,
+		cachedTools: readonly ClineTool[] | undefined,
+		requestToolIds: readonly ClineDefaultTool[],
+	): readonly ClineTool[] | undefined {
+		if (requestToolIds.length > 0) {
+			return this.generateSelectedRequestTools(profile, context, requestToolIds)
+		}
+		return this.filterCachedDefaultTools(cachedTools)
+	}
+
 	/** Generates only the internal tools explicitly activated for one API request. */
 	public generateSelectedRequestTools(
 		profile: PromptProfile,

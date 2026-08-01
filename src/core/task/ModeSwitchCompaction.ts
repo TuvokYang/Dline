@@ -1,3 +1,5 @@
+import type { ChatContent } from "@shared/ChatContent"
+
 export type ModeCompactResult = "completed" | "cancelled" | "failed"
 
 interface ActiveCompaction {
@@ -6,6 +8,7 @@ interface ActiveCompaction {
 	completion: Promise<ModeCompactResult>
 	release: Promise<void>
 	releaseNow: () => void
+	chatContent?: ChatContent
 	completionDone: boolean
 	releaseDone: boolean
 }
@@ -13,6 +16,7 @@ interface ActiveCompaction {
 /** Coordinate one forced source-mode compaction and its commit barrier. */
 export class ModeSwitchCompaction {
 	private active: ActiveCompaction | undefined
+	private pendingChatContent: ChatContent | undefined
 
 	/**
 	 * Register one forced compaction and wake a pending conversational ask.
@@ -21,7 +25,11 @@ export class ModeSwitchCompaction {
 	 * @param wakeAsk Callback that resolves a current conversational ask internally.
 	 * @returns Final compaction result after summary application or failure.
 	 */
-	request(operationId: string, wakeAsk: () => void): Promise<ModeCompactResult> {
+	request(
+		operationId: string,
+		wakeInteraction: () => boolean | undefined | Promise<boolean | undefined>,
+		chatContent?: ChatContent,
+	): Promise<ModeCompactResult> {
 		if (this.active) {
 			return Promise.resolve("failed")
 		}
@@ -39,10 +47,24 @@ export class ModeSwitchCompaction {
 			complete: (result) => completeValue?.(result),
 			release,
 			releaseNow: () => releaseValue?.(),
+			chatContent: cloneChatContent(chatContent),
 			completionDone: false,
 			releaseDone: false,
 		}
-		wakeAsk()
+		try {
+			const wakeResult = wakeInteraction()
+			void Promise.resolve(wakeResult)
+				.then((accepted) => {
+					if (accepted === false) {
+						this.fail(operationId, "No compatible interaction is available for mode compaction.")
+					}
+				})
+				.catch(() => {
+					this.fail(operationId, "Failed to continue the active interaction for mode compaction.")
+				})
+		} catch {
+			this.fail(operationId, "Failed to continue the active interaction for mode compaction.")
+		}
 		return completion
 	}
 
@@ -71,6 +93,7 @@ export class ModeSwitchCompaction {
 		}
 		await active.release
 		if (this.active === active) {
+			this.pendingChatContent = cloneChatContent(active.chatContent)
 			this.active = undefined
 		}
 	}
@@ -87,9 +110,6 @@ export class ModeSwitchCompaction {
 		}
 		active.releaseDone = true
 		active.releaseNow()
-		if (active.completionDone && this.active === active) {
-			this.active = undefined
-		}
 	}
 
 	/**
@@ -108,6 +128,9 @@ export class ModeSwitchCompaction {
 			active.complete("failed")
 		}
 		this.release(operationId)
+		if (this.active === active) {
+			this.active = undefined
+		}
 	}
 
 	/** Cancel the active compaction during task abort or termination. */
@@ -121,6 +144,16 @@ export class ModeSwitchCompaction {
 			active.complete("cancelled")
 		}
 		this.release(active.operationId)
+		if (this.active === active) {
+			this.active = undefined
+		}
+	}
+
+	/** Consume user-authored draft content after the target mode has committed. */
+	takeChatContent(): ChatContent | undefined {
+		const content = this.pendingChatContent
+		this.pendingChatContent = undefined
+		return cloneChatContent(content)
 	}
 
 	/**
@@ -135,5 +168,15 @@ export class ModeSwitchCompaction {
 	/** Return the active operation only when identity matches. */
 	private match(operationId: string): ActiveCompaction | undefined {
 		return this.active?.operationId === operationId ? this.active : undefined
+	}
+}
+
+/** Detach retained draft arrays from mutable Webview request objects. */
+function cloneChatContent(content?: ChatContent): ChatContent | undefined {
+	if (!content) return undefined
+	return {
+		message: content.message,
+		images: content.images ? [...content.images] : undefined,
+		files: content.files ? [...content.files] : undefined,
 	}
 }

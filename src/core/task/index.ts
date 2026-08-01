@@ -7,7 +7,11 @@ import { AssistantMessageContent, parseAssistantMessageV2, TextStreamContent, To
 import { ContextManager } from "@core/context/context-management/ContextManager"
 import { checkContextWindowExceededError } from "@core/context/context-management/context-error-handling"
 import { getContextTokens, readContextTokens } from "@core/context/context-management/context-pressure"
-import { getContextWindowInfo } from "@core/context/context-management/context-window-utils"
+import {
+	computeCompactTrigger,
+	computeSummarizeBudget,
+	getContextWindowInfo,
+} from "@core/context/context-management/context-window-utils"
 import {
 	hasToolResult,
 	shouldDeferCurrentTurn,
@@ -1152,6 +1156,7 @@ export class Task {
 	 */
 	async commitMode(targetMode: Mode, chatContent?: ChatContent): Promise<void> {
 		this.taskSm.setMode(targetMode)
+		this.pendingSystemPromptRefreshReason = "mode_switch"
 		this.rebuildApiHandler()
 		if (targetMode === "act" && this.taskState.isAwaitingPlanResponse) {
 			this.taskState.didRespondToPlanAskBySwitchingMode = true
@@ -1172,8 +1177,13 @@ export class Task {
 	 * @param operationId Coordinator operation identity.
 	 * @returns Completion status after summary application.
 	 */
-	async compactForMode(operationId: string): Promise<ModeCompactResult> {
-		return this.modeSwitchCompaction.request(operationId, () => this.resolveCompactAsk())
+	async compactForMode(operationId: string, chatContent?: ChatContent): Promise<ModeCompactResult> {
+		if (!this.interactionCoordinator.canRespondForModeCompaction()) return "failed"
+		return this.modeSwitchCompaction.request(
+			operationId,
+			() => this.interactionCoordinator.respondForModeCompaction(MODE_SWITCH_COMPACT_SIGNAL),
+			chatContent,
+		)
 	}
 
 	/** Release the task loop after target-mode commit. */
@@ -1186,11 +1196,37 @@ export class Task {
 		this.modeSwitchCompaction.fail(operationId, reason)
 	}
 
-	/** Resolve the current conversational ask with an internal compact signal. */
-	private resolveCompactAsk(): void {
-		if (this.taskState.isAwaitingPlanResponse) {
-			this.taskController.resolveAsk("messageResponse", MODE_SWITCH_COMPACT_SIGNAL)
+	/** Apply an aggressive history range before a source request that is already near its own limit. */
+	private async prepareModeSwitchCompaction(currentTokens: number, sourceContextWindow: number): Promise<void> {
+		if (sourceContextWindow <= 0 || currentTokens < computeCompactTrigger(sourceContextWindow, computeSummarizeBudget())) {
+			return
 		}
+		const history = this.messageStateHandler.apiConversationHistory
+		const nextRange = this.contextManager.getNextTruncationRange(
+			history,
+			this.taskState.conversationHistoryDeletedRange,
+			"none",
+		)
+		if (nextRange[1] < nextRange[0]) return
+		const currentRange = this.taskState.conversationHistoryDeletedRange
+		if (currentRange?.[0] === nextRange[0] && currentRange[1] === nextRange[1]) return
+		this.taskState.conversationHistoryDeletedRange = nextRange
+		await this.messageStateHandler.updateTaskHistory()
+		await this.contextManager.triggerApplyStandardContextTruncationNoticeChange(
+			Date.now(),
+			await ensureTaskDirectoryExists(this.taskId),
+			history,
+		)
+	}
+
+	/** Merge a confirmation-owned draft into the first target-mode request. */
+	private async consumeModeSwitchChatContent(userContent: ClineContent[]): Promise<ClineContent[]> {
+		const chatContent = this.modeSwitchCompaction.takeChatContent()
+		if (!chatContent) return userContent
+		const hasContent = Boolean(chatContent.message || chatContent.images?.length || chatContent.files?.length)
+		if (!hasContent) return userContent
+		await this.say("user_feedback", chatContent.message ?? "", chatContent.images, chatContent.files)
+		return [...userContent, ...(await buildUserFeedbackContent(chatContent.message, chatContent.images, chatContent.files))]
 	}
 
 	/**
@@ -1785,11 +1821,14 @@ export class Task {
 	 * @param apiConversationHistory The full API conversation history
 	 * @returns Tuple with start and end indices for the deleted range
 	 */
-	private calculatePreCompactDeletedRange(apiConversationHistory: ClineStorageMessage[]): [number, number] {
+	private calculatePreCompactDeletedRange(
+		apiConversationHistory: ClineStorageMessage[],
+		keep: "lastTwo" | "quarter" = "quarter",
+	): [number, number] {
 		const newDeletedRange = this.contextManager.getNextTruncationRange(
 			apiConversationHistory,
 			this.taskState.conversationHistoryDeletedRange,
-			"quarter", // Force aggressive truncation on error
+			keep,
 		)
 
 		return newDeletedRange || [0, 0]
@@ -2957,13 +2996,14 @@ export class Task {
 
 	private async handleContextWindowExceededError(api: ApiHandler): Promise<void> {
 		const apiConversationHistory = this.messageStateHandler.apiConversationHistory
+		const keep = this.modeSwitchCompaction.shouldForce() ? "lastTwo" : "quarter"
 
 		// Run PreCompact hook before truncation
 		const hooksEnabled = getHooksEnabledSafe(this.stateManager.getGlobalSettingsKey("hooksEnabled"))
 		if (hooksEnabled) {
 			try {
 				// Calculate what the new deleted range will be
-				const deletedRange = this.calculatePreCompactDeletedRange(apiConversationHistory)
+				const deletedRange = this.calculatePreCompactDeletedRange(apiConversationHistory, keep)
 
 				// Execute hook - throws HookCancellationError if cancelled
 				await executePreCompactHookWithCleanup({
@@ -3000,14 +3040,18 @@ export class Task {
 			}
 		}
 
-		// Proceed with standard truncation
-		const newDeletedRange = this.contextManager.getNextTruncationRange(
-			apiConversationHistory,
-			this.taskState.conversationHistoryDeletedRange,
-			"quarter", // Force aggressive truncation
-		)
-
-		this.taskState.conversationHistoryDeletedRange = newDeletedRange
+		// A forced mode compaction already selected a pairing-safe tail. Advancing
+		// the range here would orphan and drop that latest tool-result turn.
+		if (!(this.modeSwitchCompaction.shouldForce() && this.taskState.conversationHistoryDeletedRange)) {
+			const candidateDeletedRange = this.contextManager.getNextTruncationRange(
+				apiConversationHistory,
+				this.taskState.conversationHistoryDeletedRange,
+				keep,
+			)
+			if (candidateDeletedRange[1] >= candidateDeletedRange[0]) {
+				this.taskState.conversationHistoryDeletedRange = candidateDeletedRange
+			}
+		}
 
 		await this.messageStateHandler.updateTaskHistory()
 		await this.contextManager.triggerApplyStandardContextTruncationNoticeChange(
@@ -3127,6 +3171,9 @@ export class Task {
 		// A spawned task inherits the parent's provider and should focus on its
 		// assigned sub-problem without spawning further tasks.
 		const disableTools: ClineDefaultTool[] = []
+		if (providerInfo.mode === "plan") {
+			disableTools.push(ClineDefaultTool.ACT_MODE)
+		}
 		const { OrchestratorController } = await import("@/core/orchestrator/OrchestratorController")
 		const parentTaskId = OrchestratorController.getInstance().getParentTaskId(this.taskId)
 		if (parentTaskId) {
@@ -3202,13 +3249,13 @@ export class Task {
 		}
 		const systemPrompt = frozenPrompt.text
 		const toolPromptGenerator = new ToolPromptGenerator()
-		const cachedTools = toolPromptGenerator.filterCachedDefaultTools(this.systemPromptCacheService.getLastTools())
-		const requestTools = toolPromptGenerator.generateSelectedRequestTools(
+		const selectedTools = toolPromptGenerator.generateToolsForRequest(
 			promptContext.promptProfile,
 			promptContext,
+			this.systemPromptCacheService.getLastTools(),
 			requestScope.requestToolIds,
 		)
-		const tools = cachedTools || requestTools ? [...(cachedTools ?? []), ...(requestTools ?? [])] : undefined
+		const tools = selectedTools ? [...selectedTools] : undefined
 		this.toolExecutor.setAllowedNativeToolNames(getAdvertisedNativeToolNames(tools))
 		Logger.debug(
 			`[Task ${this.taskId}] attemptApiRequest: after systemPrompt +${Math.round(performance.now() - apiReqStart)}ms`,
@@ -3223,7 +3270,8 @@ export class Task {
 			this.taskState.conversationHistoryDeletedRange,
 			previousApiReqIndex,
 			await ensureTaskDirectoryExists(this.taskId),
-			this.stateManager.getGlobalSettingsKey("useAutoCondense") && isNextGenModelFamily(providerInfo.model.id),
+			this.modeSwitchCompaction.shouldForce() ||
+				(this.stateManager.getGlobalSettingsKey("useAutoCondense") && isNextGenModelFamily(providerInfo.model.id)),
 		)
 
 		if (contextManagementMetadata.updatedConversationHistoryDeletedRange) {
@@ -3836,7 +3884,6 @@ export class Task {
 		if (this.taskState.abort) {
 			throw new Error("Task instance aborted")
 		}
-
 		// Profile changes can occur while request setup awaits workspace/runtime work.
 		// Capture the request boundary first so every adapter and parser below stays consistent.
 		const requestScope = createRequestApiScope(
@@ -3844,6 +3891,7 @@ export class Task {
 			this.taskSm.mode,
 			this.stateManager.getGlobalSettingsKey("customPrompt"),
 		)
+		userContent = await this.consumeModeSwitchChatContent(userContent)
 
 		// Ensure remote workspace detection completes before streaming begins so
 		// the presentation scheduler uses the correct cadence from the first flush.
@@ -4047,6 +4095,10 @@ export class Task {
 						shouldCompact = await this.deferCurrentTurn(userContent)
 					}
 				}
+				if (forceModeCompact) {
+					const { contextWindow } = getContextWindowInfo(requestScope.api)
+					await this.prepareModeSwitchCompaction(previousTokens ?? 0, contextWindow)
+				}
 
 				// Edge case: summarize_task tool call completes but user cancels next request before it finishes.
 				// This results in currentlySummarizing being false, and we fail to update the context window token estimate.
@@ -4075,10 +4127,6 @@ export class Task {
 			}
 		}
 
-		if (didCompleteSummarization && this.modeSwitchCompaction.getOperationId()) {
-			await this.modeSwitchCompaction.markApplied()
-		}
-
 		if (
 			shouldRestoreDeferredTurn({
 				hasDeferredTurn: this.taskState.deferredCurrentTurn !== undefined,
@@ -4087,8 +4135,15 @@ export class Task {
 		) {
 			const deferredUserContent = await this.restoreDeferredTurn(userContent)
 			if (deferredUserContent !== userContent) {
+				if (this.modeSwitchCompaction.getOperationId()) {
+					await this.modeSwitchCompaction.markApplied()
+				}
 				return this.recursivelyMakeClineRequests(deferredUserContent, includeFileDetails, transaction)
 			}
+		}
+
+		if (didCompleteSummarization && this.modeSwitchCompaction.getOperationId()) {
+			await this.modeSwitchCompaction.markApplied()
 		}
 
 		// NOW load context based on compaction decision
@@ -4097,6 +4152,7 @@ export class Task {
 		let environmentDetails: string
 		let clinerulesError: boolean
 		const requestToolIds: readonly RequestScopedToolId[] = shouldCompact ? [ClineDefaultTool.SUMMARIZE_TASK] : []
+		this.taskState.isInternalContextCompactionRequest = shouldCompact
 
 		if (shouldCompact) {
 			// When compacting, skip full context loading (use summarize_task instead)
