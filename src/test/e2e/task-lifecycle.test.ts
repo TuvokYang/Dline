@@ -19,6 +19,12 @@ async function submitWithEnter(sidebar: Frame, text: string): Promise<void> {
 	await expect(sidebar.getByText(text, { exact: true }).last()).toBeVisible()
 }
 
+async function expectSingleUserFeedback(sidebar: Frame, text: string): Promise<void> {
+	const feedback = sidebar.locator("span.ph-no-capture:not(button span)").filter({ hasText: text })
+	await expect(feedback).toHaveCount(1)
+	await expect(feedback).toHaveText(text)
+}
+
 async function closeCurrentTask(sidebar: Frame): Promise<void> {
 	const closeButton = sidebar.getByRole("button", { name: "Close Task", exact: true })
 	await expect(closeButton).toBeVisible()
@@ -308,12 +314,90 @@ e2e(
 		await selectedOption.click()
 		await expect(input).toHaveValue("")
 		await expect(sidebar.getByText("E2E_FOLLOWUP_SELECTION_ACCEPTED", { exact: true })).toBeVisible({ timeout: 60_000 })
+		await expectSingleUserFeedback(sidebar, "E2E_FOLLOWUP_OPTION_B: E2E_FOLLOWUP_DRAFT_NOTE")
 		await expect(selectedOption).toHaveAttribute("aria-pressed", "true")
 		await expect.poll(() => server.openAiRequestCount).toBe(2)
+
+		await closeCurrentTask(sidebar)
+		await reopenTask(sidebar, taskText)
+		await expectSingleUserFeedback(sidebar, "E2E_FOLLOWUP_OPTION_B: E2E_FOLLOWUP_DRAFT_NOTE")
+		await expect(selectedOption).toHaveAttribute("aria-pressed", "true")
+		expect(server.openAiRequestCount).toBe(2)
 
 		await submitWithEnter(sidebar, "E2E_FOLLOWUP_QNA_FEEDBACK")
 		await expect(sidebar.getByText("E2E_FOLLOWUP_HISTORY_OK", { exact: false }).last()).toBeVisible({ timeout: 60_000 })
 		await expect.poll(() => server.openAiRequestCount).toBe(3)
+		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+	},
+)
+
+e2e(
+	"Follow-up replies - option and free-text Enter render once and match tool results",
+	async ({ helper, server, sidebar, userDataDir }) => {
+		e2e.setTimeout(180_000)
+		await helper.signin(sidebar)
+		server.resetOpenAiMock()
+		server.enqueueOpenAiResponses(
+			{
+				type: "tool",
+				id: "call_followup_option_only",
+				name: "ask_followup_question",
+				arguments: {
+					question: "E2E_FOLLOWUP_OPTION_ONLY_QUESTION",
+					options: ["E2E_FOLLOWUP_OPTION_ONLY_A", "E2E_FOLLOWUP_OPTION_ONLY_B"],
+				},
+			},
+			{
+				type: "tool",
+				id: "call_followup_free_text",
+				name: "ask_followup_question",
+				arguments: {
+					question: "E2E_FOLLOWUP_FREE_TEXT_QUESTION",
+					options: ["E2E_FOLLOWUP_FREE_TEXT_A", "E2E_FOLLOWUP_FREE_TEXT_B"],
+				},
+				expectedToolResults: [
+					{
+						callId: "call_followup_option_only",
+						contentIncludes: ["E2E_FOLLOWUP_OPTION_ONLY_B"],
+					},
+				],
+			},
+			{
+				type: "tool",
+				id: "call_followup_visible_completion",
+				name: "attempt_completion",
+				arguments: { result: "E2E_FOLLOWUP_VISIBLE_FEEDBACK_OK" },
+				expectedToolResults: [
+					{
+						callId: "call_followup_free_text",
+						contentIncludes: ["E2E_FOLLOWUP_CUSTOM_FEEDBACK"],
+					},
+				],
+			},
+		)
+
+		const taskText = "E2E_FOLLOWUP_VISIBLE_FEEDBACK_TASK"
+		await sendTask(sidebar, taskText)
+		await expect(sidebar.getByText("E2E_FOLLOWUP_OPTION_ONLY_QUESTION", { exact: true })).toBeVisible({ timeout: 60_000 })
+
+		await sidebar.getByRole("button", { name: "E2E_FOLLOWUP_OPTION_ONLY_B", exact: true }).click()
+		await expect(sidebar.getByText("E2E_FOLLOWUP_FREE_TEXT_QUESTION", { exact: true })).toBeVisible({ timeout: 60_000 })
+		await expectSingleUserFeedback(sidebar, "E2E_FOLLOWUP_OPTION_ONLY_B")
+
+		await submitWithEnter(sidebar, "E2E_FOLLOWUP_CUSTOM_FEEDBACK")
+		await expect(sidebar.getByText("E2E_FOLLOWUP_VISIBLE_FEEDBACK_OK", { exact: false }).last()).toBeVisible({
+			timeout: 60_000,
+		})
+		await expectSingleUserFeedback(sidebar, "E2E_FOLLOWUP_CUSTOM_FEEDBACK")
+		await expect.poll(() => server.openAiRequestCount).toBe(3)
+
+		await closeCurrentTask(sidebar)
+		await reopenTask(sidebar, taskText)
+		await expectSingleUserFeedback(sidebar, "E2E_FOLLOWUP_OPTION_ONLY_B")
+		await expectSingleUserFeedback(sidebar, "E2E_FOLLOWUP_CUSTOM_FEEDBACK")
+		expect(server.getMockConsumptions("openai-compatible-chat").every((entry) => entry.contractError === undefined)).toBe(
+			true,
+		)
 		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
 	},
 )

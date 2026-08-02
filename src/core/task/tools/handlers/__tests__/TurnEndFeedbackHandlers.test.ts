@@ -189,6 +189,7 @@ describe("turn-ending feedback handlers", () => {
 		flush.resolve()
 		await continuation
 		expect(resolved).toBe(true)
+		expect(config.callbacks.say).not.toHaveBeenCalledWith("user_feedback", selected, [], [])
 		expect(config.messageState.updateTaskHistory).not.toHaveBeenCalled()
 	})
 
@@ -196,6 +197,7 @@ describe("turn-ending feedback handlers", () => {
 		const selected = "Use the second option"
 		const response = `${selected}: Keep the compatibility layer`
 		const config = createConfig(response)
+		config.taskState.ackedFeedback = undefined
 		const handler = new AskFollowupQuestionToolHandler()
 		config.messageState.clineMessages.push({
 			ts: 3,
@@ -220,6 +222,8 @@ describe("turn-ending feedback handlers", () => {
 				selected,
 			}),
 		})
+		expect(config.callbacks.say).toHaveBeenCalledOnce()
+		expect(config.callbacks.say).toHaveBeenCalledWith("user_feedback", response, [], [])
 		expect(result).toContain(`<feedback>\n${response}\n</feedback>`)
 	})
 

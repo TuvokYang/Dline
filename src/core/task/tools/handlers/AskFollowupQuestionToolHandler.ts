@@ -109,10 +109,9 @@ export class AskFollowupQuestionToolHandler implements IToolHandler, IPartialBlo
 				await config.messageState.flushMessageUpdate(lastFollowupMessageIndex)
 			}
 		} else {
-			// Option not selected, send user feedback
 			telemetryService.captureOptionsIgnored(config.ulid ?? "", options.length, "act")
-			await sayFeedbackOnce(config, "messageResponse", text, images, followupFiles)
 		}
+		await sayFeedbackOnce(config, "messageResponse", text, images, followupFiles)
 
 		// Process any attached files
 		let fileContentString = ""
