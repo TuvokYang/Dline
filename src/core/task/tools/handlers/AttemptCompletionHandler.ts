@@ -288,7 +288,7 @@ export class AttemptCompletionHandler implements IToolHandler, IPartialBlockHand
 			return formatResponse.toolResult("Mode switch context compaction requested.")
 		}
 
-		await config.callbacks.say("user_feedback", text ?? "", images, completionFiles)
+		await sayFeedbackOnce(config, "messageResponse", text, images, completionFiles)
 
 		// Run UserPromptSubmit hook when user provides post-completion feedback
 		let hookContextModification: string | undefined

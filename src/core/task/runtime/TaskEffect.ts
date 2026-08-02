@@ -1,4 +1,5 @@
 import type { ClineSay } from "@shared/ExtensionMessage"
+import type { ClineAskResponse } from "@shared/WebviewMessage"
 import type { InteractionDraft } from "../interaction/InteractionResponse"
 
 /** Effect categories emitted by the task reducer. */
@@ -62,6 +63,8 @@ export interface AppendSayEffect {
 	presentation: string
 	images?: string[]
 	files?: string[]
+	/** Legacy handler response identity used to suppress a duplicate handler-level echo. */
+	feedbackAcknowledgment?: ClineAskResponse
 }
 
 /** Append an interaction presentation anchor. */

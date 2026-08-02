@@ -105,6 +105,12 @@ async function submitInteractionFeedback(sidebar: Frame, text: string): Promise<
 	await expect(sidebar.getByText(text, { exact: true }).last()).toBeVisible()
 }
 
+async function expectSingleUserFeedback(sidebar: Frame, text: string): Promise<void> {
+	const feedback = sidebar.locator("span.ph-no-capture:not(button span)").filter({ hasText: text })
+	await expect(feedback).toHaveCount(1)
+	await expect(feedback).toHaveText(text)
+}
+
 async function exerciseChatAndEditorSurface(page: Page, sidebar: Frame): Promise<void> {
 	const input = sidebar.getByTestId("chat-input")
 	await expect(input).toBeVisible()
@@ -536,6 +542,7 @@ for (const status of [403, 429, 502] as const) {
 		async ({ helper, server, sidebar, userDataDir }) => {
 			e2e.setTimeout(180_000)
 			const marker = `E2E_HTTP_${status}`
+			const retryFeedback = `E2E_HTTP_${status}_RETRY_FEEDBACK`
 			server.enqueueResponses(
 				"openai-compatible-chat",
 				...Array.from({ length: 24 }, () => ({
@@ -570,6 +577,7 @@ for (const status of [403, 429, 502] as const) {
 					type: "tool",
 					name: "attempt_completion",
 					arguments: { result: `E2E_HTTP_${status}_RETRY_OK` },
+					expectedRequestIncludes: [retryFeedback],
 				},
 				{
 					type: "error",
@@ -578,10 +586,15 @@ for (const status of [403, 429, 502] as const) {
 					message: `Unexpected additional request after HTTP ${status} retry`,
 				},
 			)
+			const input = sidebar.getByTestId("chat-input")
+			await expect(input).toBeEnabled()
+			await input.fill(retryFeedback)
 			await retryButton.click()
+			await expect(input).toHaveValue("")
 			await expect(sidebar.getByText(`E2E_HTTP_${status}_RETRY_OK`, { exact: false }).last()).toBeVisible({
 				timeout: 60_000,
 			})
+			await expectSingleUserFeedback(sidebar, retryFeedback)
 			await expect(retryButton).not.toBeVisible()
 
 			const consumptions = server.getMockConsumptions("openai-compatible-chat")

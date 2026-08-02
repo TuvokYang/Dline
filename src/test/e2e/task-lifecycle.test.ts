@@ -16,7 +16,7 @@ async function submitWithEnter(sidebar: Frame, text: string): Promise<void> {
 	await input.fill(text)
 	await input.press("Enter")
 	await expect(input).toHaveValue("")
-	await expect(sidebar.getByText(text, { exact: true }).last()).toBeVisible()
+	await expectSingleUserFeedback(sidebar, text)
 }
 
 async function expectSingleUserFeedback(sidebar: Frame, text: string): Promise<void> {
@@ -103,7 +103,7 @@ e2e(
 		await input.fill("E2E_RESUME_DRAFT")
 		await resumeButton.click()
 		await expect(input).toHaveValue("")
-		await expect(sidebar.getByText("E2E_RESUME_DRAFT", { exact: true }).last()).toBeVisible({ timeout: 30_000 })
+		await expectSingleUserFeedback(sidebar, "E2E_RESUME_DRAFT")
 		await expect(sidebar.getByText("E2E_RESUME_CONTINUATION_OK", { exact: false }).last()).toBeVisible({ timeout: 60_000 })
 		await expect(sidebar.getByText("E2E_CANCELLED_RESPONSE_MUST_NOT_RENDER", { exact: false })).toHaveCount(0)
 		await expect.poll(() => server.openAiRequestCount).toBe(2)
@@ -182,7 +182,7 @@ e2e(
 		await input.fill("E2E_STREAM_CANCEL_RESUME_DRAFT")
 		await resumeButton.click()
 		await expect(input).toHaveValue("")
-		await expect(sidebar.getByText("E2E_STREAM_CANCEL_RESUME_DRAFT", { exact: true }).last()).toBeVisible()
+		await expectSingleUserFeedback(sidebar, "E2E_STREAM_CANCEL_RESUME_DRAFT")
 		await expect(sidebar.getByText("E2E_STREAM_CANCEL_RESUME_OK", { exact: false }).last()).toBeVisible({
 			timeout: 60_000,
 		})
@@ -403,7 +403,7 @@ e2e(
 )
 
 e2e(
-	"Status acknowledgment - restored Acknowledge, Enter, and Stop carry the current draft",
+	"Status acknowledgment - restored Acknowledge and Stop buttons render and carry the current draft",
 	async ({ helper, page, server, sidebar, userDataDir }) => {
 		e2e.setTimeout(180_000)
 		await helper.signin(sidebar)
@@ -467,14 +467,16 @@ e2e(
 		await expect(input).toBeEnabled()
 		await expect(sidebar.getByRole("contentinfo").getByText("Acknowledge", { exact: true })).toBeVisible()
 		await input.fill("E2E_STATUS_ACK_DRAFT")
-		await input.press("Enter")
+		await sidebar.getByRole("contentinfo").getByText("Acknowledge", { exact: true }).click()
 		await expect(input).toHaveValue("")
 		await expect(sidebar.getByText("E2E_STATUS_STOP", { exact: true })).toBeVisible({ timeout: 60_000 })
+		await expectSingleUserFeedback(sidebar, "E2E_STATUS_ACK_DRAFT")
 
 		await input.fill("E2E_STATUS_STOP_DRAFT")
 		await sidebar.getByRole("contentinfo").getByText("Stop", { exact: true }).click()
 		await expect(input).toHaveValue("")
 		await expect(sidebar.getByText("E2E_STATUS_STOP_ACCEPTED", { exact: true })).toBeVisible({ timeout: 60_000 })
+		await expectSingleUserFeedback(sidebar, "E2E_STATUS_STOP_DRAFT")
 		await submitWithEnter(sidebar, "E2E_STATUS_QNA_FEEDBACK")
 		await expect(sidebar.getByText("E2E_STATUS_ACKNOWLEDGMENT_OK", { exact: false }).last()).toBeVisible({ timeout: 60_000 })
 		await expect.poll(() => server.openAiRequestCount).toBe(5)
@@ -534,6 +536,7 @@ e2e(
 		await input.fill("E2E_THINKING_RESUME_DRAFT")
 		await resumeButton.click()
 		await expect(input).toHaveValue("")
+		await expectSingleUserFeedback(sidebar, "E2E_THINKING_RESUME_DRAFT")
 		await expect(sidebar.getByText("E2E_THINKING_HISTORY_RESUME_OK", { exact: false }).last()).toBeVisible({
 			timeout: 60_000,
 		})

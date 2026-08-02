@@ -237,6 +237,49 @@ describe("reduceTask lifecycle events", () => {
 		expect(result.effects.map((effect) => effect.type)).toEqual(["POST_TASK_VIEW", "PERSIST_SNAPSHOT"])
 	})
 
+	it("persists accepted interaction input before the continuation consumes it", () => {
+		const result = reduceTask(awaitingInteraction(), {
+			type: "INTERACTION_RESPONDED",
+			response: {
+				taskId: "task-1",
+				turnId: "turn-1",
+				interactionId: "interaction-1",
+				actionId: "approve",
+				stateRevision: 4,
+				draft: { text: "Approval note", images: ["image"], files: ["file"] },
+			},
+		})
+
+		expect(result.effects.map((effect) => effect.type)).toEqual(["APPEND_SAY", "POST_TASK_VIEW", "PERSIST_SNAPSHOT"])
+		expect(result.effects[0]).toMatchObject({
+			type: "APPEND_SAY",
+			interactionId: "interaction-1",
+			taskSay: "user_feedback",
+			presentation: "Approval note",
+			images: ["image"],
+			files: ["file"],
+			feedbackAcknowledgment: "yesButtonClicked",
+		})
+	})
+
+	it("does not expose the private mode compaction response as user feedback", () => {
+		const state = awaitingInteraction()
+		state.interaction.kind = "qna_response"
+		const result = reduceTask(state, {
+			type: "INTERACTION_RESPONDED",
+			response: {
+				taskId: "task-1",
+				turnId: "turn-1",
+				interactionId: "interaction-1",
+				actionId: "reply",
+				stateRevision: 4,
+				draft: { text: "__dline_mode_switch_compact__", images: [], files: [] },
+			},
+		})
+
+		expect(result.effects.map((effect) => effect.type)).toEqual(["POST_TASK_VIEW", "PERSIST_SNAPSHOT"])
+	})
+
 	it("rejects stale interaction revision without mutation", () => {
 		const state = awaitingInteraction()
 		const result = reduceTask(state, {

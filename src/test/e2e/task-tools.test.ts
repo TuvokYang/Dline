@@ -24,6 +24,12 @@ async function sendTask(sidebar: Frame, text: string): Promise<void> {
 	await expect(sidebar.getByText(text, { exact: true }).first()).toBeVisible()
 }
 
+async function expectSingleUserFeedback(sidebar: Frame, text: string): Promise<void> {
+	const feedback = sidebar.locator("span.ph-no-capture:not(button span)").filter({ hasText: text })
+	await expect(feedback).toHaveCount(1)
+	await expect(feedback).toHaveText(text)
+}
+
 e2e("Tools - auto-approves a project read and continues with its result", async ({ helper, server, sidebar }) => {
 	e2e.setTimeout(120_000)
 	await helper.signin(sidebar)
@@ -179,7 +185,7 @@ e2e(
 		await approveButton.click()
 
 		await expect(input).toHaveValue("")
-		await expect(sidebar.getByText("E2E_READ_APPROVAL_NOTE", { exact: true }).last()).toBeVisible()
+		await expectSingleUserFeedback(sidebar, "E2E_READ_APPROVAL_NOTE")
 		await expect(sidebar.getByText("E2E_READ_APPROVAL_DRAFT_OK", { exact: false }).last()).toBeVisible({
 			timeout: 60_000,
 		})
@@ -219,6 +225,7 @@ e2e(
 		await rejectButton.click()
 
 		await expect(input).toHaveValue("")
+		await expectSingleUserFeedback(sidebar, "E2E_READ_REJECT_FEEDBACK")
 		await expect(sidebar.getByText("E2E_READ_REJECTION_CONTINUED", { exact: false }).last()).toBeVisible({
 			timeout: 60_000,
 		})
@@ -294,12 +301,14 @@ e2e(
 		await input.fill("E2E_ENTER_READ_FEEDBACK")
 		await input.press("Enter")
 		await expect(input).toHaveValue("")
+		await expectSingleUserFeedback(sidebar, "E2E_ENTER_READ_FEEDBACK")
 		await expect(sidebar.getByText(relativePath, { exact: false }).last()).toBeVisible({ timeout: 60_000 })
 
 		await expect(input).toBeEnabled()
 		await input.fill("E2E_ENTER_WRITE_FEEDBACK")
 		await input.press("Enter")
 		await expect(input).toHaveValue("")
+		await expectSingleUserFeedback(sidebar, "E2E_ENTER_WRITE_FEEDBACK")
 		await expect(sidebar.getByRole("button", { name: "Copy command" }).last()).toBeVisible({ timeout: 60_000 })
 		await expect
 			.poll(() =>
@@ -313,6 +322,7 @@ e2e(
 		await input.fill("E2E_ENTER_COMMAND_FEEDBACK")
 		await input.press("Enter")
 		await expect(input).toHaveValue("")
+		await expectSingleUserFeedback(sidebar, "E2E_ENTER_COMMAND_FEEDBACK")
 		await expect(sidebar.getByText("E2E_ENTER_APPROVAL_REJECTION_OK", { exact: false }).last()).toBeVisible({
 			timeout: 60_000,
 		})

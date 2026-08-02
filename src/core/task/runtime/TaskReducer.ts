@@ -2,6 +2,7 @@ import { BlockPhase } from "../BlockPhaseMachine"
 import { reduceInteraction } from "../interaction/InteractionReducer"
 import { getInteraction } from "../interaction/InteractionRegistry"
 import type { InteractionResponseErrorCode } from "../interaction/InteractionResponse"
+import { isCompactSignal } from "../mode-switch-signal"
 import { TaskPhase } from "../TaskPhase"
 import { TaskPhaseMachine } from "../TaskPhaseMachine"
 import type { TaskEffect } from "./TaskEffect"
@@ -46,6 +47,63 @@ function stateEffects(revision: number): TaskEffect[] {
 	return [
 		{ id: effectId(revision, 1), type: "POST_TASK_VIEW" },
 		{ id: effectId(revision, 2), type: "PERSIST_SNAPSHOT" },
+	]
+}
+
+/** Map canonical interactions whose handlers still contain a legacy feedback echo guard. */
+function handlerFeedbackAcknowledgment(
+	kind: NonNullable<TaskRuntimeState["interaction"]>["kind"],
+	actionId: string,
+): "yesButtonClicked" | "noButtonClicked" | "messageResponse" | undefined {
+	switch (kind) {
+		case "tool_approval":
+		case "command_approval":
+		case "browser_approval":
+		case "mcp_approval":
+		case "subagent_approval":
+		case "spawn_task_approval":
+			return actionId === "approve" ? "yesButtonClicked" : actionId === "reject" ? "noButtonClicked" : undefined
+		case "focus_chain_change":
+			return actionId === "reject" ? "noButtonClicked" : undefined
+		case "new_task":
+			return "noButtonClicked"
+		case "report_bug":
+		case "condense":
+		case "followup":
+		case "make_plan":
+		case "qna_response":
+		case "generate_report":
+		case "completion":
+			return "messageResponse"
+		default:
+			return undefined
+	}
+}
+
+/** Persist accepted user-authored interaction input before its continuation consumes the draft. */
+function interactionResponseEffects(
+	interaction: NonNullable<TaskRuntimeState["interaction"]>,
+	response: Extract<TaskEvent, { type: "INTERACTION_RESPONDED" }>["response"],
+	revision: number,
+): TaskEffect[] {
+	const draft = response.draft
+	const hasVisibleDraft = Boolean(draft && (draft.text.trim() || draft.images.length > 0 || draft.files.length > 0))
+	if (!draft || !hasVisibleDraft || isCompactSignal(draft.text)) {
+		return stateEffects(revision)
+	}
+	return [
+		{
+			id: effectId(revision, 1),
+			type: "APPEND_SAY",
+			interactionId: interaction.interactionId,
+			taskSay: "user_feedback",
+			presentation: draft.text,
+			images: draft.images,
+			files: draft.files,
+			feedbackAcknowledgment: handlerFeedbackAcknowledgment(interaction.kind, response.actionId),
+		},
+		{ id: effectId(revision, 2), type: "POST_TASK_VIEW" },
+		{ id: effectId(revision, 3), type: "PERSIST_SNAPSHOT" },
 	]
 }
 
@@ -549,24 +607,25 @@ function reduceInteractionResponse(
 	if (!result.accepted) {
 		return reject(state, event.type, result.error.code)
 	}
+	const revision = state.revision + 1
+	const effects = interactionResponseEffects(state.interaction, event.response, revision)
 	const turn = state.turn
 	if (!turn || turn.turnId !== event.response.turnId) {
-		return acceptInteraction(state, result.next)
+		return acceptInteraction(state, result.next, state.anchor, effects)
 	}
 	const block = turn.blocks.find((candidate) => candidate.dlineTid === event.response.interactionId)
 	if (!block || block.phase !== BlockPhase.AWAITING_APPROVAL || turn.activeDlineTid !== block.dlineTid) {
-		return acceptInteraction(state, result.next)
+		return acceptInteraction(state, result.next, state.anchor, effects)
 	}
 	if (event.response.actionId === "approve") {
 		const nextTurn = replaceTurnBlock(state, block.dlineTid, BlockPhase.EXECUTING, block.dlineTid)
 		if (!nextTurn || !canTransition(state.phase, TaskPhase.EXECUTING)) {
 			return reject(state, event.type)
 		}
-		const revision = state.revision + 1
 		return {
 			accepted: true,
 			next: { ...state, revision, phase: TaskPhase.EXECUTING, turn: nextTurn, interaction: result.next },
-			effects: stateEffects(revision),
+			effects,
 		}
 	}
 	if (event.response.actionId === "reject") {
@@ -585,14 +644,13 @@ function reduceInteractionResponse(
 				return candidate
 			}),
 		}
-		const revision = state.revision + 1
 		return {
 			accepted: true,
 			next: { ...state, revision, phase: TaskPhase.BETWEEN_TURNS, turn: nextTurn, interaction: result.next },
-			effects: stateEffects(revision),
+			effects,
 		}
 	}
-	return acceptInteraction(state, result.next)
+	return acceptInteraction(state, result.next, state.anchor, effects)
 }
 
 /** Create one opening interaction embedded in a lifecycle transaction. */

@@ -555,6 +555,14 @@ export class Task {
 							effect.files,
 							effect.interactionId,
 						)
+						if (effect.feedbackAcknowledgment) {
+							this.taskState.ackedFeedback = {
+								response: effect.feedbackAcknowledgment,
+								text: effect.presentation,
+								images: effect.images,
+								files: effect.files,
+							}
+						}
 						return
 					}
 					await this.taskController.say(effect.taskSay, effect.presentation, effect.images, effect.files)
