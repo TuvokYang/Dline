@@ -1,24 +1,17 @@
 import { NewTaskRequest } from "@shared/proto/dline/task"
-import { serializeTaskCapabilityToggles } from "@shared/TaskCapabilityToggles"
 import React from "react"
-import { useExtensionState } from "@/context/ExtensionStateContext"
 import { TaskServiceClient } from "@/services/grpc-client"
 import QuickWinCard from "./QuickWinCard"
 import { QuickWinTask, quickWinTasks } from "./quickWinTasks"
 
 export const SuggestedTasks: React.FC<{ shouldShowQuickWins: boolean }> = ({ shouldShowQuickWins }) => {
-	const { draftTaskCapabilityToggles, setDraftTaskCapabilityToggles } = useExtensionState()
 	const handleExecuteQuickWin = async (prompt: string) => {
 		await TaskServiceClient.newTask(
 			NewTaskRequest.create({
 				text: prompt,
 				images: [],
-				taskSettings: draftTaskCapabilityToggles
-					? { taskCapabilityToggles: serializeTaskCapabilityToggles(draftTaskCapabilityToggles) }
-					: undefined,
 			}),
 		)
-		setDraftTaskCapabilityToggles(undefined)
 	}
 
 	if (shouldShowQuickWins) {

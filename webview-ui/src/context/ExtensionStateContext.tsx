@@ -148,8 +148,6 @@ export interface ExtensionStateContextType extends ExtensionState {
 	setLocalSkillsToggles: (toggles: Record<string, boolean>) => void
 	setRemoteSkillsToggles: (toggles: Record<string, boolean>) => void
 	setTaskCapabilityToggles: (toggles: TaskCapabilityToggles | undefined) => void
-	draftTaskCapabilityToggles: TaskCapabilityToggles | undefined
-	setDraftTaskCapabilityToggles: (toggles: TaskCapabilityToggles | undefined) => void
 	setRemoteRulesToggles: (toggles: Record<string, boolean>) => void
 	setRemoteWorkflowToggles: (toggles: Record<string, boolean>) => void
 	setMcpMarketplaceCatalog: (value: McpMarketplaceCatalog) => void
@@ -210,7 +208,6 @@ export const ExtensionStateContextProvider: React.FC<{
 	const [showAccount, setShowAccount] = useState(false)
 	const [showWorktrees, setShowWorktrees] = useState(false)
 	const [showAnnouncement, setShowAnnouncement] = useState(false)
-	const [draftTaskCapabilityToggles, setDraftTaskCapabilityToggles] = useState<TaskCapabilityToggles | undefined>()
 
 	// Helper for MCP view
 	const closeMcpView = useCallback(() => {
@@ -1103,8 +1100,6 @@ export const ExtensionStateContextProvider: React.FC<{
 		mcpServers,
 		mcpMarketplaceCatalog,
 		totalTasksSize,
-		draftTaskCapabilityToggles,
-		setDraftTaskCapabilityToggles,
 		availableTerminalProfiles,
 		showMcp,
 		mcpTab,

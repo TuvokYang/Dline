@@ -188,6 +188,60 @@ e2e(
 )
 
 e2e(
+	"Mode switch context - returning to Welcome cannot submit a draft until Send is clicked",
+	async ({ dlineDocsDir, helper, server, sidebar, userDataDir }) => {
+		e2e.setTimeout(150_000)
+		await helper.signin(sidebar)
+		server.enqueueResponses(
+			"openai-compatible-chat",
+			{
+				type: "tool",
+				id: "call_welcome_after_close_ready",
+				name: "attempt_completion",
+				arguments: { result: "E2E_WELCOME_AFTER_CLOSE_READY" },
+			},
+			{
+				type: "tool",
+				id: "call_welcome_after_close_explicit_send",
+				name: "make_plan",
+				arguments: { response: "E2E_WELCOME_AFTER_CLOSE_SENT", needs_more_exploration: false },
+				expectedRequestIncludes: ["E2E_WELCOME_AFTER_CLOSE_DRAFT", "PLAN MODE"],
+			},
+		)
+
+		await sendTask(sidebar, "E2E_WELCOME_AFTER_CLOSE_TASK")
+		await expect(sidebar.getByText("E2E_WELCOME_AFTER_CLOSE_READY", { exact: false }).last()).toBeVisible({
+			timeout: 60_000,
+		})
+		await expect.poll(() => server.getRequestCount("openai-compatible-chat")).toBe(1)
+		expect(await taskDirectoryIds(dlineDocsDir)).toHaveLength(1)
+
+		await sidebar.getByRole("button", { name: "Close Task", exact: true }).click()
+		const input = sidebar.getByTestId("chat-input")
+		await expect(input).toHaveAttribute("placeholder", "Type your task here...")
+		await E2ETestHelper.dismissWhatsNewModal(sidebar)
+		await input.fill("E2E_WELCOME_AFTER_CLOSE_DRAFT")
+		await sidebar.getByTestId("mode-switch").evaluate((element) => element.click())
+
+		await expectPlanMode(sidebar)
+		await expect(input).toHaveValue("E2E_WELCOME_AFTER_CLOSE_DRAFT")
+		await sidebar.page().waitForTimeout(1_000)
+		expect(await taskDirectoryIds(dlineDocsDir)).toHaveLength(1)
+		expect(server.getRequestCount("openai-compatible-chat")).toBe(1)
+
+		await sidebar.getByTestId("send-button").click()
+		await expect(input).toHaveValue("")
+		await expect(sidebar.getByText("E2E_WELCOME_AFTER_CLOSE_SENT", { exact: false }).last()).toBeVisible({
+			timeout: 60_000,
+		})
+		await expect.poll(() => server.getRequestCount("openai-compatible-chat")).toBe(2)
+		expect(await taskDirectoryIds(dlineDocsDir)).toHaveLength(2)
+		expect(server.getMockConsumptions("openai-compatible-chat")[1].contractError).toBeUndefined()
+		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+	},
+)
+
+e2e(
 	"Mode switch context - same profile switches directly without compaction",
 	async ({ dlineDir, helper, openVSCode, server, userDataDir, workspaceDir }) => {
 		e2e.setTimeout(150_000)

@@ -1,11 +1,6 @@
 import type { ClineMessage } from "@shared/ExtensionMessage"
 import { EmptyRequest } from "@shared/proto/dline/common"
 import { NewTaskRequest } from "@shared/proto/dline/task"
-import {
-	createTaskCapabilityToggles,
-	serializeTaskCapabilityToggles,
-	type TaskCapabilityToggles,
-} from "@shared/TaskCapabilityToggles"
 import { useCallback, useRef } from "react"
 import { TaskServiceClient } from "@/services/grpc-client"
 
@@ -37,11 +32,6 @@ export function useMessageHandlers(
 	chatState: ChatState,
 	disableAutoScrollRef?: React.MutableRefObject<boolean>,
 	taskId?: string,
-	capabilityToggles?: {
-		task: TaskCapabilityToggles | undefined
-		draft: TaskCapabilityToggles | undefined
-		setDraft: (toggles: TaskCapabilityToggles | undefined) => void
-	},
 ): MessageHandlers {
 	const {
 		activeQuote,
@@ -73,7 +63,6 @@ export function useMessageHandlers(
 				messageToSend = `[context] \n> ${activeQuote}\n[/context] \n\n${messageToSend}`
 			}
 			const submissionOwnerRevision = taskOwnershipRef.current.revision
-			const draftCapabilityToggles = capabilityToggles?.draft
 			await runNewTaskSubmission(
 				() =>
 					TaskServiceClient.newTask(
@@ -81,9 +70,6 @@ export function useMessageHandlers(
 							text: messageToSend,
 							images,
 							files,
-							taskSettings: draftCapabilityToggles
-								? { taskCapabilityToggles: serializeTaskCapabilityToggles(draftCapabilityToggles) }
-								: undefined,
 						}),
 					),
 				() => {
@@ -104,7 +90,6 @@ export function useMessageHandlers(
 				},
 				() => taskOwnershipRef.current.revision === submissionOwnerRevision && latestMessagesRef.current.length === 0,
 			)
-			capabilityToggles?.setDraft(undefined)
 			if (disableAutoScrollRef) {
 				disableAutoScrollRef.current = false
 			}
@@ -119,17 +104,13 @@ export function useMessageHandlers(
 			setSelectedImages,
 			setSendingDisabled,
 			taskId,
-			capabilityToggles,
 		],
 	)
 
 	const startNewTask = useCallback(async () => {
 		setActiveQuote(null)
-		if (capabilityToggles?.task) {
-			capabilityToggles.setDraft(createTaskCapabilityToggles(capabilityToggles.task))
-		}
 		await TaskServiceClient.clearTask(EmptyRequest.create({}))
-	}, [capabilityToggles, setActiveQuote])
+	}, [setActiveQuote])
 
 	const handleTaskCloseButtonClick = useCallback(() => {
 		void startNewTask()

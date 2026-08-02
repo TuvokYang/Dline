@@ -13,7 +13,7 @@ export async function updateMcpTimeout(controller: Controller, request: UpdateMc
 	try {
 		if (request.serverName && typeof request.serverName === "string" && typeof request.timeout === "number") {
 			await controller.mcpHub?.updateServerTimeoutRPC(request.serverName, request.timeout)
-			const mcpServers = await controller.mcpHub.getLatestMcpServersRPC(controller.mcpOwnerId)
+			const mcpServers = await controller.getLatestMcpServersForOwner()
 			const convertedMcpServers = convertMcpServersToProtoMcpServers(mcpServers)
 			Logger.log("convertedMcpServers", convertedMcpServers)
 			return McpServers.create({ mcpServers: convertedMcpServers })

@@ -247,9 +247,7 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 			setLocalSkillsToggles,
 			setGlobalSkillsToggles,
 		} = useExtensionState()
-		const { snapshot: scopedCapabilityToggles, reconcile: reconcileCapabilityToggles } = useTaskCapabilityToggles(
-			inputValue.trim().length > 0,
-		)
+		const { snapshot: scopedCapabilityToggles, reconcile: reconcileCapabilityToggles } = useTaskCapabilityToggles()
 		const effectiveLocalWorkflowToggles = scopedCapabilityToggles?.localWorkflowToggles ?? localWorkflowToggles
 		const effectiveGlobalWorkflowToggles = scopedCapabilityToggles?.globalWorkflowToggles ?? globalWorkflowToggles
 		const effectiveRemoteWorkflowToggles = scopedCapabilityToggles?.remoteWorkflowToggles ?? remoteWorkflowToggles
@@ -1729,9 +1727,9 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 							</TooltipTrigger>
 						</Tooltip>
 
-						<ServersToggleModal hasTaskDraft={inputValue.trim().length > 0} />
+						<ServersToggleModal />
 
-						<ClineRulesToggleModal hasTaskDraft={inputValue.trim().length > 0} />
+						<ClineRulesToggleModal />
 
 						<ModelSwitcher onOpenSettings={handleModelButtonClick} />
 					</ButtonGroup>

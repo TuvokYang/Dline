@@ -27,11 +27,18 @@ interface CapabilityFiles {
 	mcp: string
 }
 
-async function onlyTaskId(dlineDocsDir: string): Promise<string> {
+async function taskIds(dlineDocsDir: string): Promise<string[]> {
 	const entries = await readdir(path.join(dlineDocsDir, "tasks"), { withFileTypes: true })
-	const taskIds = entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name)
-	expect(taskIds).toHaveLength(1)
-	return taskIds[0]
+	return entries
+		.filter((entry) => entry.isDirectory())
+		.map((entry) => entry.name)
+		.sort()
+}
+
+async function onlyTaskId(dlineDocsDir: string): Promise<string> {
+	const ids = await taskIds(dlineDocsDir)
+	expect(ids).toHaveLength(1)
+	return ids[0]
 }
 
 async function readTaskCapabilityToggles(dlineDocsDir: string, taskId: string): Promise<TaskCapabilityToggles> {
@@ -196,8 +203,13 @@ function expectCapabilityState(
 
 e2e(
 	"Task capability resources scan live, persist per task, and enter the prompt only after refresh",
-	async ({ dlineDocsDir, helper, server, sidebar, userDataDir, workspaceDir }) => {
+	async ({ dlineDocsDir, helper, page, server, sidebar, userDataDir, workspaceDir }) => {
 		e2e.setTimeout(300_000)
+		const webviewErrors: string[] = []
+		page.on("console", (message) => {
+			if (message.type() === "error") webviewErrors.push(message.text())
+		})
+		page.on("pageerror", (error) => webviewErrors.push(error.stack ?? error.message))
 		await helper.signin(sidebar)
 
 		const input = sidebar.getByTestId("chat-input")
@@ -247,9 +259,22 @@ e2e(
 					"E2E_CAPABILITY_REFRESH_FEEDBACK",
 				],
 			},
+			{
+				type: "tool",
+				name: "attempt_completion",
+				arguments: { result: "E2E_CAPABILITY_WORKSPACE_DEFAULT_TASK_READY" },
+				expectedRequestIncludes: ["E2E_CAPABILITY_WORKSPACE_DEFAULT_TASK"],
+				expectedRequestExcludes: [SKILL_NAME, WORKFLOW_NAME, SUBAGENT_NAME, MCP_TOOL_NAME],
+			},
 		)
 
-		await sidebar.getByTestId("send-button").click()
+		const sendButton = sidebar.getByTestId("send-button")
+		await expect(input).toHaveValue("Verify task-local capability resources.")
+		await expect(input).toHaveAttribute("placeholder", "Type your task here...")
+		await expect(sendButton).toHaveCount(1)
+		await expect(sendButton).not.toHaveClass(/disabled/)
+		await sendButton.click()
+		await expect(input, `Webview errors: ${webviewErrors.join("\n")}`).toHaveValue("", { timeout: 5_000 })
 		await expect(sidebar.getByText("E2E_CAPABILITY_TASK_READY", { exact: false }).last()).toBeVisible({ timeout: 60_000 })
 		const taskId = await onlyTaskId(dlineDocsDir)
 		const initialToggles = await readTaskCapabilityToggles(dlineDocsDir, taskId)
@@ -307,6 +332,33 @@ e2e(
 		})
 		expect(server.getMockConsumptions("openai-compatible-chat")[1].contractError).toBeUndefined()
 
+		const startNewTask = sidebar.locator('vscode-button[aria-label="Start New Task"]')
+		await expect(startNewTask).toBeVisible()
+		await input.fill("E2E_CAPABILITY_WORKSPACE_DEFAULT_TASK")
+		await startNewTask.click()
+		await expect(input).toHaveValue("")
+		await expect(sidebar.getByText("E2E_CAPABILITY_WORKSPACE_DEFAULT_TASK_READY", { exact: false }).last()).toBeVisible({
+			timeout: 60_000,
+		})
+		const newTaskIds = await taskIds(dlineDocsDir)
+		expect(newTaskIds).toHaveLength(2)
+		const newTaskId = newTaskIds.find((candidate) => candidate !== taskId)
+		if (!newTaskId) throw new Error("Workspace-default capability task was not persisted")
+		expectCapabilityState(await readTaskCapabilityToggles(dlineDocsDir, newTaskId), files, mcpInternalName, false)
+		expect(server.getMockConsumptions("openai-compatible-chat")[2].contractError).toBeUndefined()
+
+		await openCapabilityModal(sidebar)
+		await selectCapabilityTab(sidebar, "Workflows")
+		await expectToggle(sidebar, `${WORKFLOW_NAME}.md`, false)
+		await selectCapabilityTab(sidebar, "Skills")
+		await expectToggle(sidebar, SKILL_NAME, false)
+		await selectCapabilityTab(sidebar, "Subagents")
+		await expectToggle(sidebar, SUBAGENT_NAME, false)
+		await closeCapabilityModal(sidebar)
+		await openMcpModal(sidebar)
+		await expectToggle(sidebar, MCP_NAME, false)
+		await closeMcpModal(sidebar)
+
 		await openCapabilityModal(sidebar)
 		await Promise.all([rm(files.skill), rm(files.workflow), rm(files.subagent)])
 		await selectCapabilityTab(sidebar, "Subagents")
@@ -325,7 +377,7 @@ e2e(
 
 		await expect
 			.poll(async () => {
-				const toggles = await readTaskCapabilityToggles(dlineDocsDir, taskId)
+				const toggles = await readTaskCapabilityToggles(dlineDocsDir, newTaskId)
 				return {
 					skill: taskResourceId(files.skill) in toggles.localSkillsToggles,
 					workflow: taskResourceId(files.workflow) in toggles.localWorkflowToggles,

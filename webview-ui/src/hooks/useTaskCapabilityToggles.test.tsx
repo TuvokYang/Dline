@@ -22,8 +22,6 @@ const baseState = () => ({
 	taskViewState: undefined,
 	taskCapabilityToggles: undefined,
 	setTaskCapabilityToggles: vi.fn(),
-	draftTaskCapabilityToggles: undefined,
-	setDraftTaskCapabilityToggles: vi.fn(),
 	globalClineRulesToggles: {},
 	localClineRulesToggles: {},
 	localCursorRulesToggles: {},
@@ -46,20 +44,19 @@ describe("useTaskCapabilityToggles", () => {
 	})
 
 	it("keeps an empty Welcome screen in global scope", () => {
-		const { result } = renderHook(() => useTaskCapabilityToggles(false))
+		const { result } = renderHook(() => useTaskCapabilityToggles())
 
 		expect(result.current.isTaskScoped).toBe(false)
 		expect(result.current.snapshot).toBeUndefined()
 	})
 
-	it("stores input-bound Welcome changes only in the draft snapshot", async () => {
-		const { result } = renderHook(() => useTaskCapabilityToggles(true))
+	it("does not create task-scoped state before a task exists", async () => {
+		const { result } = renderHook(() => useTaskCapabilityToggles())
 
 		await act(() => result.current.updateToggle("globalSkillsToggles", "global-skill.md", true))
 
-		const setDraft = mocks.state.setDraftTaskCapabilityToggles as ReturnType<typeof vi.fn>
-		expect(setDraft).toHaveBeenCalledOnce()
-		expect(setDraft.mock.calls[0][0].globalSkillsToggles).toEqual({ "global-skill.md": true })
+		expect(result.current.isTaskScoped).toBe(false)
+		expect(mocks.state.setTaskCapabilityToggles).not.toHaveBeenCalled()
 		expect(mocks.updateTaskSettings).not.toHaveBeenCalled()
 	})
 
@@ -69,7 +66,7 @@ describe("useTaskCapabilityToggles", () => {
 			taskViewState: { taskId: "task-1" },
 			taskCapabilityToggles: createTaskCapabilityToggles({ mcpServers: { docs: true } }),
 		}
-		const { result } = renderHook(() => useTaskCapabilityToggles(false))
+		const { result } = renderHook(() => useTaskCapabilityToggles())
 
 		await act(() => result.current.updateToggle("mcpServers", "docs", false))
 
@@ -87,7 +84,7 @@ describe("useTaskCapabilityToggles", () => {
 				localWorkflowToggles: { kept: false, stale: true },
 			}),
 		}
-		const { result } = renderHook(() => useTaskCapabilityToggles(false))
+		const { result } = renderHook(() => useTaskCapabilityToggles())
 
 		await act(() => result.current.reconcile({ localWorkflowToggles: { kept: true, added: true } }))
 

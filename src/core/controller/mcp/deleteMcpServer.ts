@@ -14,7 +14,7 @@ export async function deleteMcpServer(controller: Controller, request: StringReq
 	try {
 		// Call the RPC variant to delete the server and get updated server list
 		await controller.mcpHub?.deleteServerRPC(request.value)
-		const mcpServers = await controller.mcpHub.getLatestMcpServersRPC(controller.mcpOwnerId)
+		const mcpServers = await controller.getLatestMcpServersForOwner()
 
 		// Convert application types to protobuf types
 		const protoServers = convertMcpServersToProtoMcpServers(mcpServers)

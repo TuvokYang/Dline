@@ -257,6 +257,7 @@ export const LocalStateKeys = [
 	"localSkillsToggles",
 	"localSubagentsToggles",
 	"workflowToggles",
+	"mcpServersToggles",
 ] as const
 
 // ============================================================================

@@ -49,8 +49,7 @@ export async function subscribeToMcpServers(
 
 	// Send initial state if available
 	if (controller.mcpHub) {
-		await controller.ensureWorkspaceMcpDescriptors()
-		const mcpServers = await controller.mcpHub.getLatestMcpServersRPC(controller.mcpOwnerId)
+		const mcpServers = await controller.getLatestMcpServersForOwner()
 		if (mcpServers.length > 0) {
 			try {
 				const protoServers = McpServers.create({
@@ -81,7 +80,7 @@ export async function sendMcpServersUpdate(): Promise<void> {
 	const promises: Promise<void>[] = []
 	for (const [controller, subs] of controllerSubscriptions) {
 		const mcpServers = McpServers.create({
-			mcpServers: convertMcpServersToProtoMcpServers(await controller.mcpHub.getLatestMcpServersRPC(controller.mcpOwnerId)),
+			mcpServers: convertMcpServersToProtoMcpServers(controller.getMcpServersForOwner()),
 		})
 		for (const responseStream of subs) {
 			promises.push(

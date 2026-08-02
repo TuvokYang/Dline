@@ -163,6 +163,15 @@ export class McpHub {
 			.map((connection) => connection.server)
 	}
 
+	getAllServersForOwner(ownerId: string): McpServer[] {
+		const workspaceServerNames = new Set(
+			this.workspaceMcpRegistry.getDescriptorsForOwner(ownerId).map((descriptor) => descriptor.internalName),
+		)
+		return this.connections
+			.filter((connection) => connection.server.source !== "workspace" || workspaceServerNames.has(connection.server.name))
+			.map((connection) => connection.server)
+	}
+
 	async registerWorkspaceOwner(ownerId: string, workspaceRoots: readonly string[]): Promise<void> {
 		await this.workspaceMcpRegistry.registerOwner(ownerId, workspaceRoots)
 	}

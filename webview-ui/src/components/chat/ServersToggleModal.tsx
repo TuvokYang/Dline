@@ -1,5 +1,5 @@
 import { EmptyRequest } from "@shared/proto/dline/common"
-import { McpServers } from "@shared/proto/dline/mcp"
+import { McpServers, ToggleMcpServerRequest } from "@shared/proto/dline/mcp"
 import { convertProtoMcpServersToMcpServers } from "@shared/proto-conversions/mcp/mcp-server-conversion"
 import { VSCodeButton } from "@vscode/webview-ui-toolkit/react"
 import React, { useEffect, useRef, useState } from "react"
@@ -11,15 +11,25 @@ import { useExtensionState } from "@/context/ExtensionStateContext"
 import { useTaskCapabilityToggles } from "@/hooks/useTaskCapabilityToggles"
 import { McpServiceClient } from "@/services/grpc-client"
 
-const ServersToggleModal: React.FC<{ hasTaskDraft?: boolean }> = ({ hasTaskDraft = false }) => {
+const ServersToggleModal: React.FC = () => {
 	const { mcpServers, navigateToMcp, setMcpServers } = useExtensionState()
-	const capabilityScope = useTaskCapabilityToggles(hasTaskDraft)
+	const capabilityScope = useTaskCapabilityToggles()
 	const [isVisible, setIsVisible] = useState(false)
 	const buttonRef = useRef<HTMLDivElement>(null)
 	const modalRef = useRef<HTMLDivElement>(null)
 	const { width: viewportWidth, height: viewportHeight } = useWindowSize()
 	const [arrowPosition, setArrowPosition] = useState(0)
 	const [menuPosition, setMenuPosition] = useState(0)
+	const toggleServer = (serverName: string, enabled: boolean) => {
+		McpServiceClient.toggleMcpServer(
+			ToggleMcpServerRequest.create({
+				serverName,
+				disabled: !enabled,
+			}),
+		)
+			.then((response) => setMcpServers(convertProtoMcpServersToMcpServers(response.mcpServers)))
+			.catch((error) => console.error("Failed to toggle MCP server:", error))
+	}
 
 	useEffect(() => {
 		if (isVisible) {
@@ -105,7 +115,7 @@ const ServersToggleModal: React.FC<{ hasTaskDraft?: boolean }> = ({ hasTaskDraft
 									? (server, enabled) => {
 											void capabilityScope.updateToggle("mcpServers", server.name, enabled)
 										}
-									: undefined
+									: (server, enabled) => toggleServer(server.name, enabled)
 							}
 							servers={mcpServers}
 						/>

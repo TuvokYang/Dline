@@ -10,14 +10,12 @@ import { useCallback, useMemo, useRef } from "react"
 import { updateTaskSettings } from "@/components/settings/utils/settingsHandlers"
 import { useExtensionState } from "@/context/ExtensionStateContext"
 
-export function useTaskCapabilityToggles(hasTaskDraft: boolean) {
+export function useTaskCapabilityToggles() {
 	const {
 		currentTaskItem,
 		taskViewState,
 		taskCapabilityToggles,
 		setTaskCapabilityToggles,
-		draftTaskCapabilityToggles,
-		setDraftTaskCapabilityToggles,
 		globalClineRulesToggles,
 		localClineRulesToggles,
 		localCursorRulesToggles,
@@ -33,7 +31,7 @@ export function useTaskCapabilityToggles(hasTaskDraft: boolean) {
 		mcpServers,
 	} = useExtensionState()
 	const taskId = taskViewState?.taskId ?? currentTaskItem?.id
-	const isTaskScoped = taskId !== undefined || draftTaskCapabilityToggles !== undefined || hasTaskDraft
+	const isTaskScoped = taskId !== undefined
 	const inheritedSnapshot = useMemo(
 		() =>
 			createTaskCapabilityToggles({
@@ -67,25 +65,18 @@ export function useTaskCapabilityToggles(hasTaskDraft: boolean) {
 			mcpServers,
 		],
 	)
-	const snapshot = isTaskScoped
-		? taskId !== undefined
-			? (taskCapabilityToggles ?? inheritedSnapshot)
-			: (draftTaskCapabilityToggles ?? inheritedSnapshot)
-		: undefined
+	const snapshot = isTaskScoped ? (taskCapabilityToggles ?? inheritedSnapshot) : undefined
 	const snapshotRef = useRef(snapshot)
 	snapshotRef.current = snapshot
 
 	const persistSnapshot = useCallback(
 		(next: TaskCapabilityToggles) => {
 			snapshotRef.current = next
-			if (taskId !== undefined) {
-				setTaskCapabilityToggles(next)
-				return updateTaskSettings(taskId, { taskCapabilityToggles: serializeTaskCapabilityToggles(next) })
-			}
-			setDraftTaskCapabilityToggles(next)
-			return Promise.resolve()
+			if (taskId === undefined) return Promise.resolve()
+			setTaskCapabilityToggles(next)
+			return updateTaskSettings(taskId, { taskCapabilityToggles: serializeTaskCapabilityToggles(next) })
 		},
-		[taskId, setDraftTaskCapabilityToggles, setTaskCapabilityToggles],
+		[taskId, setTaskCapabilityToggles],
 	)
 
 	const updateToggle = useCallback(

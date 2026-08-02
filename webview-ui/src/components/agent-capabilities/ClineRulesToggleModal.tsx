@@ -30,7 +30,7 @@ import RuleRow from "./RuleRow"
 import RulesToggleList from "./RulesToggleList"
 import SubagentRow from "./SubagentRow"
 
-const ClineRulesToggleModal: React.FC<{ hasTaskDraft?: boolean }> = ({ hasTaskDraft = false }) => {
+const ClineRulesToggleModal: React.FC = () => {
 	const {
 		globalClineRulesToggles: globalClineRulesTogglesState = {},
 		localClineRulesToggles: localClineRulesTogglesState = {},
@@ -58,7 +58,7 @@ const ClineRulesToggleModal: React.FC<{ hasTaskDraft?: boolean }> = ({ hasTaskDr
 		setRemoteRulesToggles,
 		setRemoteWorkflowToggles,
 	} = useExtensionState()
-	const capabilityScope = useTaskCapabilityToggles(hasTaskDraft)
+	const capabilityScope = useTaskCapabilityToggles()
 	const globalClineRulesToggles = capabilityScope.snapshot?.globalClineRulesToggles ?? globalClineRulesTogglesState
 	const localClineRulesToggles = capabilityScope.snapshot?.localClineRulesToggles ?? localClineRulesTogglesState
 	const localCursorRulesToggles = capabilityScope.snapshot?.localCursorRulesToggles ?? localCursorRulesTogglesState

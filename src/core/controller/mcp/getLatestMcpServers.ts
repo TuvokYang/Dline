@@ -12,9 +12,7 @@ import type { Controller } from "../index"
  */
 export async function getLatestMcpServers(controller: Controller, _request: Empty): Promise<McpServers> {
 	try {
-		await controller.ensureWorkspaceMcpDescriptors()
-		// Get sorted servers from mcpHub using the RPC variant
-		const mcpServers = (await controller.mcpHub?.getLatestMcpServersRPC(controller.mcpOwnerId)) || []
+		const mcpServers = await controller.getLatestMcpServersForOwner()
 
 		// Convert to proto format
 		const protoServers = convertMcpServersToProtoMcpServers(mcpServers)

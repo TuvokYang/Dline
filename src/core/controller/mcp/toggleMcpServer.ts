@@ -3,6 +3,7 @@ import { McpServers } from "@shared/proto/dline/mcp"
 import { Logger } from "@/shared/services/Logger"
 import { convertMcpServersToProtoMcpServers } from "../../../shared/proto-conversions/mcp/mcp-server-conversion"
 import type { Controller } from "../index"
+import { sendMcpServersUpdate } from "./subscribeToMcpServers"
 
 /**
  * Toggles an MCP server's enabled/disabled status
@@ -12,8 +13,14 @@ import type { Controller } from "../index"
  */
 export async function toggleMcpServer(controller: Controller, request: ToggleMcpServerRequest): Promise<McpServers> {
 	try {
-		await controller.mcpHub?.toggleServerDisabledRPC(request.serverName, request.disabled)
-		const mcpServers = await controller.mcpHub.getLatestMcpServersRPC(controller.mcpOwnerId)
+		const server = (await controller.getLatestMcpServersForOwner()).find((candidate) => candidate.name === request.serverName)
+		if (server?.source === "workspace") {
+			controller.setWorkspaceMcpServerEnabled(request.serverName, !request.disabled)
+			await sendMcpServersUpdate()
+		} else {
+			await controller.mcpHub?.toggleServerDisabledRPC(request.serverName, request.disabled)
+		}
+		const mcpServers = await controller.getLatestMcpServersForOwner()
 
 		// Convert from McpServer[] to ProtoMcpServer[] ensuring all required fields are set
 		const protoServers = convertMcpServersToProtoMcpServers(mcpServers)

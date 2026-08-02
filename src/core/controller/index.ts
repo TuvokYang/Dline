@@ -23,7 +23,7 @@ import { combineApiRequests } from "@shared/combineApiRequests"
 import { combineCommandSequences } from "@shared/combineCommandSequences"
 import type { ExtensionState, Platform } from "@shared/ExtensionMessage"
 import type { HistoryItem } from "@shared/HistoryItem"
-import type { McpMarketplaceCatalog, McpMarketplaceItem } from "@shared/mcp"
+import type { McpMarketplaceCatalog, McpMarketplaceItem, McpServer } from "@shared/mcp"
 import type { ModeSwitchRequestResult } from "@shared/mode-switch"
 import type { TaskLockStatus } from "@shared/proto/dline/task"
 import { type Settings } from "@shared/storage/state-keys"
@@ -145,10 +145,31 @@ export class Controller {
 			remoteWorkflowToggles: this.stateManager.getGlobalStateKey("remoteWorkflowToggles") || {},
 			globalSubagentsToggles: this.stateManager.getGlobalSettingsKey("globalSubagentsToggles") || {},
 			localSubagentsToggles: this.stateManager.getWorkspaceStateKey("localSubagentsToggles") || {},
-			mcpServers: Object.fromEntries(
-				this.mcpHub.getServersForOwner(this.mcpOwnerId).map((server) => [server.name, server.disabled !== true]),
-			),
+			mcpServers: Object.fromEntries(this.getMcpServersForOwner().map((server) => [server.name, server.disabled !== true])),
 		})
+	}
+
+	private applyWorkspaceMcpServerToggles(servers: readonly McpServer[]): McpServer[] {
+		const toggles = this.stateManager.getWorkspaceStateKey("mcpServersToggles") || {}
+		return servers.map((server) => {
+			if (server.source !== "workspace" || !Object.hasOwn(toggles, server.name)) return server
+			return { ...server, disabled: toggles[server.name] !== true }
+		})
+	}
+
+	getMcpServersForOwner(): McpServer[] {
+		return this.applyWorkspaceMcpServerToggles(this.mcpHub.getAllServersForOwner(this.mcpOwnerId))
+	}
+
+	async getLatestMcpServersForOwner(): Promise<McpServer[]> {
+		await this.ensureWorkspaceMcpDescriptors()
+		return this.applyWorkspaceMcpServerToggles(await this.mcpHub.getLatestMcpServersRPC(this.mcpOwnerId))
+	}
+
+	setWorkspaceMcpServerEnabled(serverName: string, enabled: boolean): void {
+		const toggles = { ...(this.stateManager.getWorkspaceStateKey("mcpServersToggles") || {}) }
+		toggles[serverName] = enabled
+		this.stateManager.setWorkspaceState("mcpServersToggles", toggles)
 	}
 
 	private updateWorkspaceMcpRegistration(workspaceRoots?: readonly string[]): Promise<void> {

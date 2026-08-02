@@ -603,14 +603,7 @@ export class Task {
 					),
 				}),
 				async (effect) => {
-					const taskCapabilityToggles = this.taskSm.taskCapabilityToggles
-					await this.controller.initTask(
-						effect.draft.text,
-						effect.draft.images,
-						effect.draft.files,
-						undefined,
-						taskCapabilityToggles ? { taskCapabilityToggles } : undefined,
-					)
+					await this.controller.initTask(effect.draft.text, effect.draft.images, effect.draft.files)
 				},
 			),
 		)
@@ -3214,9 +3207,7 @@ export class Task {
 				refreshedSubagents.localSubagents.map((agent) => [agent.path, agent.enabled]),
 			),
 			mcpServers: Object.fromEntries(
-				this.mcpHub
-					.getServersForOwner(this.controller.mcpOwnerId)
-					.map((server) => [server.name, server.disabled !== true]),
+				this.controller.getMcpServersForOwner().map((server) => [server.name, server.disabled !== true]),
 			),
 		})
 		const taskCapabilityToggles = reconcileTaskCapabilityToggles(currentTaskToggles, discoveredTaskToggles)
