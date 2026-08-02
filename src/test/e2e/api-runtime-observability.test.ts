@@ -785,6 +785,216 @@ e2e(
 )
 
 e2e(
+	"API recovery - DeepSeek automatic connection retry clears the error and spinner after recovery",
+	async ({ helper, page, server, sidebar, userDataDir }) => {
+		e2e.setTimeout(180_000)
+		const completion = "E2E_DEEPSEEK_AUTOMATIC_RETRY_OK"
+		await helper.signin(sidebar)
+		await selectProfile(sidebar, E2E_PROFILE_NAMES.mockDeepSeek)
+		server.enqueueResponses(
+			"deepseek-chat",
+			{
+				type: "error",
+				status: 0,
+				message: "Force a DeepSeek connection failure",
+				disconnect: true,
+			},
+			{
+				type: "tool",
+				name: "attempt_completion",
+				arguments: { result: completion },
+				delayMs: 3_000,
+			},
+			{
+				type: "error",
+				status: 500,
+				code: "unexpected_retry_after_recovery",
+				message: "Unexpected request after automatic DeepSeek recovery",
+			},
+		)
+
+		await sendTask(sidebar, "Exercise automatic DeepSeek connection recovery.")
+
+		const errorBox = sidebar.getByTestId("error-retry-box")
+		await expect(errorBox).toContainText("Attempt 1 of 3", { timeout: 90_000 })
+		await expect(errorBox.getByTestId("error-retry-box-provider")).toHaveText("deepseek")
+		await expect(errorBox.getByTestId("error-retry-box-model")).toHaveText("deepseek-v4-flash")
+		await expect(errorBox.getByTestId("error-retry-box-message")).toHaveText("Connection error.")
+		await expect.poll(() => server.getRequestCount("deepseek-chat")).toBe(2)
+		await expect(errorBox.getByText("Automatic retry in progress", { exact: true })).toBeVisible()
+
+		await expect(sidebar.getByText(completion, { exact: false }).last()).toBeVisible({ timeout: 60_000 })
+		const allErrorBoxes = sidebar.locator(
+			'[data-testid="api-error-box"], [data-testid="error-message-box"], [data-testid="error-presentation-box"], [data-testid="error-retry-box"]',
+		)
+		await expect(allErrorBoxes).toHaveCount(0)
+		await expect(sidebar.getByText(/Automatic retry (scheduled|in progress|stopped)/)).toHaveCount(0)
+		await expect(sidebar.locator('vscode-button[aria-label="Start New Task"]')).toBeVisible()
+		await expect(sidebar.locator('vscode-button[aria-label="Retry"]')).toHaveCount(0)
+		await expect(sidebar.locator('vscode-button[aria-label="Cancel"]')).toHaveCount(0)
+		await page.waitForTimeout(1_000)
+		await expect(allErrorBoxes).toHaveCount(0)
+		expect(server.getMockConsumptions("deepseek-chat")).toHaveLength(2)
+		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir, [/Connection error|ECONNRESET|fetch failed/])
+	},
+)
+
+e2e(
+	"API recovery - DeepSeek recovered intermediate turn clears the previous error before task completion",
+	async ({ helper, server, sidebar, userDataDir }) => {
+		e2e.setTimeout(180_000)
+		const recoveredText = "E2E_DEEPSEEK_CONNECTION_RECOVERED"
+		const completion = "E2E_DEEPSEEK_MULTI_TURN_RETRY_OK"
+		await helper.signin(sidebar)
+		await selectProfile(sidebar, E2E_PROFILE_NAMES.mockDeepSeek)
+		server.enqueueResponses(
+			"deepseek-chat",
+			{
+				type: "error",
+				status: 0,
+				message: "Force a DeepSeek connection failure before a recovered text turn",
+				disconnect: true,
+			},
+			{ type: "message", text: recoveredText },
+			{
+				type: "tool",
+				name: "attempt_completion",
+				arguments: { result: completion },
+				delayMs: 5_000,
+			},
+			{
+				type: "error",
+				status: 500,
+				code: "unexpected_retry_after_multi_turn_recovery",
+				message: "Unexpected request after multi-turn DeepSeek recovery",
+			},
+		)
+
+		await sendTask(sidebar, "Exercise multi-turn DeepSeek connection recovery.")
+
+		const errorBox = sidebar.getByTestId("error-retry-box")
+		await expect(errorBox).toContainText("Attempt 1 of 3", { timeout: 90_000 })
+		await expect(sidebar.getByText(recoveredText, { exact: false }).last()).toBeVisible({ timeout: 60_000 })
+		await expect.poll(() => server.getRequestCount("deepseek-chat")).toBe(3)
+		await expect(errorBox).toHaveCount(0)
+		await expect(sidebar.getByText(/Automatic retry (scheduled|in progress|stopped)/)).toHaveCount(0)
+		await expect(sidebar.locator('vscode-button[aria-label="Cancel"]')).toBeVisible()
+
+		await expect(sidebar.getByText(completion, { exact: false }).last()).toBeVisible({ timeout: 60_000 })
+		await expect(sidebar.getByTestId("error-retry-box")).toHaveCount(0)
+		expect(server.getMockConsumptions("deepseek-chat")).toHaveLength(3)
+		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir, [/Connection error|ECONNRESET|fetch failed/])
+	},
+)
+
+e2e(
+	"API recovery - DeepSeek recovered follow-up interaction clears the previous error before user input",
+	async ({ helper, server, sidebar, userDataDir }) => {
+		e2e.setTimeout(180_000)
+		const question = "E2E_DEEPSEEK_RECOVERED_FOLLOWUP_QUESTION"
+		const option = "E2E_DEEPSEEK_RECOVERED_FOLLOWUP_OPTION"
+		const completion = "E2E_DEEPSEEK_FOLLOWUP_RETRY_OK"
+		await helper.signin(sidebar)
+		await selectProfile(sidebar, E2E_PROFILE_NAMES.mockDeepSeek)
+		server.enqueueResponses(
+			"deepseek-chat",
+			{
+				type: "error",
+				status: 0,
+				message: "Force a DeepSeek connection failure before a recovered follow-up",
+				disconnect: true,
+			},
+			{
+				type: "tool",
+				id: "call_deepseek_recovered_followup",
+				name: "ask_followup_question",
+				arguments: { question, options: [option, "E2E_DEEPSEEK_RECOVERED_FOLLOWUP_OTHER"] },
+			},
+			{
+				type: "tool",
+				id: "call_deepseek_recovered_completion",
+				name: "attempt_completion",
+				arguments: { result: completion },
+				expectedToolResults: [{ callId: "call_deepseek_recovered_followup", contentIncludes: [option] }],
+			},
+			{
+				type: "error",
+				status: 500,
+				code: "unexpected_retry_after_followup_recovery",
+				message: "Unexpected request after follow-up DeepSeek recovery",
+			},
+		)
+
+		await sendTask(sidebar, "Exercise DeepSeek recovery into a follow-up interaction.")
+
+		const errorBox = sidebar.getByTestId("error-retry-box")
+		await expect(errorBox).toContainText("Attempt 1 of 3", { timeout: 90_000 })
+		await expect(sidebar.getByText(question, { exact: true })).toBeVisible({ timeout: 60_000 })
+		await expect.poll(() => server.getRequestCount("deepseek-chat")).toBe(2)
+		await expect(errorBox).toHaveCount(0)
+		await expect(sidebar.getByText(/Automatic retry (scheduled|in progress|stopped)/)).toHaveCount(0)
+
+		const optionButton = sidebar.getByRole("button", { name: option, exact: true })
+		await expect(optionButton).toBeEnabled()
+		await optionButton.click()
+		await expect(sidebar.getByText(completion, { exact: false }).last()).toBeVisible({ timeout: 60_000 })
+		await expect(sidebar.getByTestId("error-retry-box")).toHaveCount(0)
+		expect(server.getMockConsumptions("deepseek-chat")).toHaveLength(3)
+		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir, [/Connection error|ECONNRESET|fetch failed/])
+	},
+)
+
+e2e(
+	"API recovery - DeepSeek first recovered stream chunk clears the previous error before completion",
+	async ({ helper, server, sidebar, userDataDir }) => {
+		e2e.setTimeout(180_000)
+		const recoveredReasoning = "E2E_DEEPSEEK_RECOVERED_STREAM_CHUNK"
+		const completion = "E2E_DEEPSEEK_STREAM_RECOVERY_OK"
+		await helper.signin(sidebar)
+		await selectProfile(sidebar, E2E_PROFILE_NAMES.mockDeepSeek)
+		server.enqueueResponses(
+			"deepseek-chat",
+			{
+				type: "error",
+				status: 0,
+				message: "Force a DeepSeek connection failure before a recovered stream",
+				disconnect: true,
+			},
+			{
+				type: "tool",
+				id: "call_deepseek_recovered_stream_completion",
+				name: "attempt_completion",
+				arguments: { result: completion },
+				reasoning: recoveredReasoning,
+				afterReasoningDelayMs: 8_000,
+			},
+			{
+				type: "error",
+				status: 500,
+				code: "unexpected_retry_after_stream_recovery",
+				message: "Unexpected request after streamed DeepSeek recovery",
+			},
+		)
+
+		await sendTask(sidebar, "Exercise DeepSeek recovery at the first streamed response chunk.")
+
+		const errorBox = sidebar.getByTestId("error-retry-box")
+		await expect(errorBox).toContainText("Attempt 1 of 3", { timeout: 90_000 })
+		await expect(sidebar.getByText(recoveredReasoning, { exact: false })).toHaveCount(1, { timeout: 60_000 })
+		await expect.poll(() => server.getRequestCount("deepseek-chat")).toBe(2)
+		await expect(errorBox).toHaveCount(0)
+		await expect(sidebar.getByText(/Automatic retry (scheduled|in progress|stopped)/)).toHaveCount(0)
+		await expect(sidebar.locator('vscode-button[aria-label="Retry"]')).toHaveCount(0)
+		await expect(sidebar.locator('vscode-button[aria-label="Cancel"]')).toBeVisible()
+
+		await expect(sidebar.getByText(completion, { exact: false }).last()).toBeVisible({ timeout: 60_000 })
+		await expect(sidebar.getByTestId("error-retry-box")).toHaveCount(0)
+		expect(server.getMockConsumptions("deepseek-chat")).toHaveLength(2)
+		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir, [/Connection error|ECONNRESET|fetch failed/])
+	},
+)
+
+e2e(
 	"API recovery - countdown Retry overrides the pending automatic retry and clears the error box",
 	async ({ helper, page, server, sidebar, userDataDir }) => {
 		e2e.setTimeout(180_000)

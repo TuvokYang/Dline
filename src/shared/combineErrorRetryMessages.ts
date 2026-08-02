@@ -1,5 +1,27 @@
 import { ClineMessage } from "./ExtensionMessage"
 
+const recoveredStreamSayTypes = new Set([
+	"reasoning",
+	"text",
+	"tool",
+	"use_mcp_server",
+	"use_subagents",
+	"browser_action_launch",
+	"browser_action",
+])
+
+function isRecoveredStreamMessage(message: ClineMessage, conversationHistoryIndex: number): boolean {
+	if (message.partial !== true || (message.conversationHistoryIndex ?? 0) !== conversationHistoryIndex) {
+		return false
+	}
+
+	if (message.type === "ask") {
+		return message.ask !== undefined
+	}
+
+	return message.say !== undefined && recoveredStreamSayTypes.has(message.say) && Boolean(message.text || message.reasoning)
+}
+
 /**
  * Consolidates error_retry messages in a retry sequence, keeping only the latest one,
  * and removes successful retry messages entirely.
@@ -66,7 +88,11 @@ export function combineErrorRetryMessages(messages: ClineMessage[]): ClineMessag
 					hasRetryStarted = true
 					continue
 				}
-				if (hasRetryStarted && (laterMessage.conversationHistoryIndex ?? 0) > conversationHistoryIndex) {
+				if (
+					hasRetryStarted &&
+					((laterMessage.conversationHistoryIndex ?? 0) > conversationHistoryIndex ||
+						isRecoveredStreamMessage(laterMessage, conversationHistoryIndex))
+				) {
 					hasRecoveredConversation = true
 					break
 				}
