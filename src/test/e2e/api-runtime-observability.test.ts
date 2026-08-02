@@ -794,7 +794,7 @@ e2e(
 		server.enqueueResponses(
 			"openai-compatible-chat",
 			{ type: "error", status: 502, code: "e2e_retry_override_1", message: firstError },
-			{ type: "error", status: 502, code: "e2e_retry_override_2", message: secondError },
+			{ type: "error", status: 502, code: "e2e_retry_override_2", message: secondError, delayMs: 5_000 },
 			{ type: "tool", name: "attempt_completion", arguments: { result: completion } },
 			{
 				type: "error",
@@ -814,17 +814,24 @@ e2e(
 		await expect(errorBox.getByTestId("error-retry-box-message")).toHaveText(firstError)
 		await expect(errorBox.getByRole("button", { name: "Copy error" })).toBeVisible()
 		await expect(errorBox.getByRole("button", { name: /^(Retry|Cancel)$/ })).toHaveCount(0)
+		const countdown = errorBox.getByTestId("error-retry-countdown")
+		await expect
+			.poll(() => countdown.evaluate((element) => element.textContent ?? ""))
+			.toMatch(/^Attempt 1 of 3\s+Next retry in [1-9]\d*s$/)
 
 		const retryButton = sidebar.locator('vscode-button[aria-label="Retry"]')
 		await expect(retryButton).toBeVisible()
 		await expect(sidebar.locator('vscode-button[aria-label="Cancel"]')).toBeVisible()
 		await startFooterActionStabilityObserver(sidebar, ["Retry", "Cancel"])
+		await expect.poll(() => server.getMockConsumptions("openai-compatible-chat").length).toBe(2)
+		await expect(errorBox.getByText("Automatic retry in progress", { exact: true })).toBeVisible()
+		await expect(countdown).toHaveText(/^Attempt 1 of 3\s+Retrying now$/)
+		await expect(countdown).not.toContainText("0s")
 		await expect(errorBox).toContainText("Attempt 2 of 3", { timeout: 90_000 })
 		await expect(errorBox.getByTestId("error-retry-box-code")).toHaveText("e2e_retry_override_2")
 		await expect(errorBox.getByTestId("error-retry-box-message")).toHaveText(secondError)
 		const footerStabilityEvents = await stopFooterActionStabilityObserver(sidebar)
 		expect(footerStabilityEvents).toEqual([])
-		const countdown = errorBox.getByTestId("error-retry-countdown")
 		const initialCountdown = await countdown.innerText()
 		await expect.poll(() => countdown.innerText(), { timeout: 3_000 }).not.toBe(initialCountdown)
 		const requestsBeforeManualRetry = server.getMockConsumptions("openai-compatible-chat").length

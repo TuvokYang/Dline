@@ -1,0 +1,74 @@
+import { act, render, screen } from "@testing-library/react"
+import React from "react"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { ChatRowContent } from "../ChatRow"
+
+void React
+
+vi.mock("@/context/ExtensionStateContext", () => ({
+	useExtensionState: () => ({
+		backgroundEditEnabled: false,
+		mcpServers: [],
+		mcpMarketplaceCatalog: [],
+		onRelinquishControl: () => () => undefined,
+		vscodeTerminalExecutionMode: "backgroundExec",
+		clineMessages: [],
+		showFeatureTips: false,
+		taskViewState: undefined,
+		currentTaskItem: { id: "task-1" },
+	}),
+}))
+
+const startedAt = 1_000_000
+const baseProps = {
+	isExpanded: false,
+	isLast: true,
+	onSetQuote: vi.fn(),
+	onToggleExpand: vi.fn(),
+}
+
+function renderRetry() {
+	return render(
+		<ChatRowContent
+			{...baseProps}
+			message={{
+				ts: startedAt,
+				type: "say",
+				say: "error_retry",
+				text: JSON.stringify({
+					attempt: 1,
+					maxAttempts: 3,
+					delaySeconds: 2,
+					errorMessage: "Connection error.",
+				}),
+			}}
+		/>,
+	)
+}
+
+describe("ChatRow automatic retry status", () => {
+	beforeEach(() => {
+		vi.useFakeTimers()
+		vi.setSystemTime(startedAt)
+	})
+
+	afterEach(() => {
+		vi.useRealTimers()
+	})
+
+	it("keeps retry details semantically separated for copying", () => {
+		renderRetry()
+
+		expect(screen.getByTestId("error-retry-countdown").textContent).toBe("Attempt 1 of 3 Next retry in 2s")
+	})
+
+	it("shows an in-progress state instead of scheduled zero seconds after the deadline", () => {
+		renderRetry()
+
+		act(() => vi.advanceTimersByTime(2_000))
+
+		expect(screen.getByText("Automatic retry in progress", { exact: true })).toBeVisible()
+		expect(screen.getByTestId("error-retry-countdown").textContent).toBe("Attempt 1 of 3 Retrying now")
+		expect(screen.queryByText(/0s/)).toBeNull()
+	})
+})

@@ -135,6 +135,7 @@ function AutoRetryErrorBox({ info, startedAt }: { info: AutoRetryInfo; startedAt
 
 	const remainingSeconds = Math.ceil(remainingMs / 1000)
 	const isFailed = info.failed === true
+	const isRetrying = !isFailed && remainingMs <= 0
 
 	return (
 		<ApiErrorBox error={info.errorMessage} testId="error-retry-box">
@@ -142,7 +143,11 @@ function AutoRetryErrorBox({ info, startedAt }: { info: AutoRetryInfo; startedAt
 				<RefreshCwIcon className={cn("mt-0.5 size-3 shrink-0 text-link", !isFailed && "animate-spin")} />
 				<div className="min-w-0 flex-1">
 					<div className="font-medium text-foreground">
-						{isFailed ? "Automatic retry stopped" : "Automatic retry scheduled"}
+						{isFailed
+							? "Automatic retry stopped"
+							: isRetrying
+								? "Automatic retry in progress"
+								: "Automatic retry scheduled"}
 					</div>
 					<div className="mt-1 text-description" data-testid="error-retry-countdown">
 						{isFailed ? (
@@ -151,9 +156,15 @@ function AutoRetryErrorBox({ info, startedAt }: { info: AutoRetryInfo; startedAt
 							<div className="flex flex-wrap gap-x-3 gap-y-1">
 								<span>
 									Attempt <strong>{info.attempt}</strong> of <strong>{info.maxAttempts}</strong>
-								</span>
+								</span>{" "}
 								<span>
-									Next retry in <strong>{remainingSeconds}s</strong>
+									{isRetrying ? (
+										"Retrying now"
+									) : (
+										<>
+											Next retry in <strong>{remainingSeconds}s</strong>
+										</>
+									)}
 								</span>
 							</div>
 						)}
