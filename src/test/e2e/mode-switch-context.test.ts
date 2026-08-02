@@ -1,4 +1,4 @@
-import { readFile, writeFile } from "node:fs/promises"
+import { readdir, readFile, writeFile } from "node:fs/promises"
 import * as path from "node:path"
 import { expect, type Frame } from "@playwright/test"
 import type { ElectronApplication } from "playwright"
@@ -155,6 +155,37 @@ async function expectNoCompactionEcho(sidebar: Frame, hiddenMarkers: readonly st
 	expect(visibleText).not.toContain("The current conversation is rapidly running out of context")
 	for (const marker of hiddenMarkers) expect(visibleText).not.toContain(marker)
 }
+
+async function taskDirectoryIds(dlineDocsDir: string): Promise<string[]> {
+	try {
+		return (await readdir(path.join(dlineDocsDir, "tasks"), { withFileTypes: true }))
+			.filter((entry) => entry.isDirectory())
+			.map((entry) => entry.name)
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return []
+		throw error
+	}
+}
+
+e2e(
+	"Mode switch context - welcome draft stays local and does not create a task",
+	async ({ dlineDocsDir, helper, server, sidebar, userDataDir }) => {
+		e2e.setTimeout(90_000)
+		await helper.signin(sidebar)
+
+		const input = sidebar.getByTestId("chat-input")
+		await expect(sidebar.getByRole("switch", { name: "Act" })).toHaveAttribute("aria-checked", "true")
+		await input.fill("E2E_WELCOME_MODE_DRAFT")
+		await sidebar.getByTestId("mode-switch").evaluate((element) => element.click())
+
+		await expectPlanMode(sidebar)
+		await expect(input).toHaveValue("E2E_WELCOME_MODE_DRAFT")
+		expect(await taskDirectoryIds(dlineDocsDir)).toEqual([])
+		expect(server.getRequestCount("openai-compatible-chat")).toBe(0)
+		expect(server.getRequestCount("openai-compatible-responses")).toBe(0)
+		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+	},
+)
 
 e2e(
 	"Mode switch context - same profile switches directly without compaction",

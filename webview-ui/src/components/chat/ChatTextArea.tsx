@@ -241,6 +241,7 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 			localSkillsToggles,
 			globalSkillsToggles,
 			remoteSkillsToggles,
+			currentTaskItem,
 			setLocalWorkflowToggles,
 			setGlobalWorkflowToggles,
 			setLocalSkillsToggles,
@@ -1156,6 +1157,7 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 			modeSwitch,
 			draft: { text: inputValue, images: selectedImages, files: selectedFiles },
 			attachDraft,
+			submitDraftAfterSwitch: currentTaskItem !== undefined,
 			onSend: (capturedDraft) => onSend(capturedDraft),
 			clearDraft: () => {
 				setInputValue("")

@@ -163,6 +163,33 @@ describe("useModeSwitch", () => {
 		expect(clearDraft).not.toHaveBeenCalled()
 	})
 
+	/** Preserve a welcome-screen draft because only an explicit submit may create a Task. */
+	it("keeps a welcome draft local after a direct switch", async () => {
+		vi.mocked(StateServiceClient.togglePlanActModeProto).mockResolvedValueOnce(
+			createResponse(ModeSwitchStatus.MODE_SWITCH_STATUS_SWITCHED),
+		)
+		const { result, rerender } = renderHook(
+			(props: HookProps) =>
+				useModeSwitch({
+					...props,
+					draft: DRAFT,
+					submitDraftAfterSwitch: false,
+					onSend,
+					clearDraft,
+				}),
+			{
+				initialProps: { mode: "plan", stateRevision: 1, modeSwitch: { phase: "idle" }, attachDraft: false },
+			},
+		)
+
+		await act(async () => result.current.requestSwitch("act"))
+		rerender({ mode: "act", stateRevision: 2, modeSwitch: { phase: "idle" }, attachDraft: false })
+
+		await waitFor(() => expect(result.current.isSwitchPending).toBe(false))
+		expect(onSend).not.toHaveBeenCalled()
+		expect(clearDraft).not.toHaveBeenCalled()
+	})
+
 	/** Treat the canonical state stream as committed even when the unary response is delayed. */
 	it("submits the draft when committed state arrives before the unary response", async () => {
 		const response = createDeferred<ModeSwitchResponse>()

@@ -18,6 +18,7 @@ interface PendingSwitch {
 	startRevision: number
 	draft: ModeSwitchDraft
 	attachDraft: boolean
+	submitDraftAfterSwitch: boolean
 }
 
 interface UseModeSwitchOptions {
@@ -26,6 +27,7 @@ interface UseModeSwitchOptions {
 	modeSwitch?: ModeSwitchSnapshot
 	draft: ModeSwitchDraft
 	attachDraft: boolean
+	submitDraftAfterSwitch?: boolean
 	onSend: (draft: ModeSwitchDraft) => void | Promise<void>
 	clearDraft: () => void
 }
@@ -62,7 +64,7 @@ function cloneDraft(draft: ModeSwitchDraft): ModeSwitchDraft {
 
 /** Coordinate Webview mode-switch RPCs from accepted backend transaction state. */
 export function useModeSwitch(options: UseModeSwitchOptions): UseModeSwitchResult {
-	const { mode, stateRevision, modeSwitch, draft, attachDraft, onSend, clearDraft } = options
+	const { mode, stateRevision, modeSwitch, draft, attachDraft, submitDraftAfterSwitch = true, onSend, clearDraft } = options
 	const [pending, setPending] = useState<PendingSwitch>()
 	const nextRequestId = useRef(0)
 	const completedRequests = useRef(new Set<number>())
@@ -122,7 +124,9 @@ export function useModeSwitch(options: UseModeSwitchOptions): UseModeSwitchResul
 			clearDraftRef.current()
 			return
 		}
-		void onSendRef.current(completed.draft)
+		if (completed.submitDraftAfterSwitch) {
+			void onSendRef.current(completed.draft)
+		}
 	}, [mode, modeSwitch, pending, stateRevision])
 
 	/** Request a new mode-switch transaction while preserving the current draft. */
@@ -137,6 +141,7 @@ export function useModeSwitch(options: UseModeSwitchOptions): UseModeSwitchResul
 				startRevision: stateRevision,
 				draft: capturedDraft,
 				attachDraft,
+				submitDraftAfterSwitch,
 			}
 			setPending(nextPending)
 
@@ -177,7 +182,7 @@ export function useModeSwitch(options: UseModeSwitchOptions): UseModeSwitchResul
 				setPending((current) => (current?.requestId === requestId ? undefined : current))
 			}
 		},
-		[attachDraft, draft, isSwitchPending, mode, stateRevision],
+		[attachDraft, draft, isSwitchPending, mode, stateRevision, submitDraftAfterSwitch],
 	)
 
 	/** Confirm compaction for the active backend operation. */
