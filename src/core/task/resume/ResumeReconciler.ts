@@ -481,7 +481,8 @@ export function reconcileResume(input: ResumeInput): ResumeResult {
 			next.interaction.status === "resolving" &&
 			(next.interaction.kind === "completion" ||
 				next.interaction.kind === "resume" ||
-				next.interaction.kind === "error_retry")
+				next.interaction.kind === "error_retry" ||
+				next.interaction.kind === "mistake_limit")
 		) {
 			next.interaction.status = "awaiting"
 			next.interaction.acceptedResponse = undefined
@@ -489,7 +490,8 @@ export function reconcileResume(input: ResumeInput): ResumeResult {
 		if (
 			next.interaction.status === "resolving" &&
 			next.interaction.kind !== "resume" &&
-			next.interaction.kind !== "error_retry"
+			next.interaction.kind !== "error_retry" &&
+			next.interaction.kind !== "mistake_limit"
 		) {
 			next.interaction = undefined
 			next.phase = TaskPhase.PAUSED

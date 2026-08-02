@@ -128,7 +128,10 @@ function snapshotWithTurn(
 	return createSnapshot(state, 206)
 }
 
-function snapshotWithStandaloneInteraction(interactionId: string, kind: "resume" | "error_retry"): TaskSnapshot {
+function snapshotWithStandaloneInteraction(
+	interactionId: string,
+	kind: "resume" | "error_retry" | "mistake_limit",
+): TaskSnapshot {
 	const turnId = `turn:${interactionId}`
 	const state = createTaskRuntimeState({
 		taskId: TASK_ID,
@@ -148,7 +151,7 @@ function snapshotWithStandaloneInteraction(interactionId: string, kind: "resume"
 			taskId: TASK_ID,
 			turnId,
 			interactionId,
-			actionId: kind === "resume" ? "resume" : "retry",
+			actionId: kind === "resume" ? "resume" : kind === "error_retry" ? "retry" : "process_anyway",
 			stateRevision: 4,
 			draft: { text: "", images: [], files: [] },
 		},
@@ -650,6 +653,7 @@ describe("reconcileResume", () => {
 	it.each([
 		["resume_task", "resume", "show_resume_interaction"],
 		["api_req_failed", "error_retry", "show_error_recovery"],
+		["mistake_limit_reached", "mistake_limit", "show_error_recovery"],
 	] as const)("reopens a resolving %s interaction as clickable awaiting", (ask, kind, entryType) => {
 		const interactionId = `${kind}-resolving`
 		const snapshot = snapshotWithStandaloneInteraction(interactionId, kind)

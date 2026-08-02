@@ -21,6 +21,11 @@ const CASES: InteractionCase[] = [
 	{ kind: "resume", taskAsk: "resume_task", actions: ["resume"], enterAction: "resume", continuation: "resume" },
 	{ kind: "error_retry", taskAsk: "api_req_failed", actions: ["retry", "start_new_task"], enterAction: "retry" },
 	{
+		kind: "mistake_limit",
+		taskAsk: "mistake_limit_reached",
+		actions: ["process_anyway", "start_new_task"],
+	},
+	{
 		kind: "completion",
 		taskAsk: "completion_result",
 		actions: ["start_new_task"],

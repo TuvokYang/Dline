@@ -213,7 +213,8 @@ function reduceApi(state: TaskRuntimeState, event: Extract<TaskEvent, { type: "A
 	const continuationInteraction =
 		state.interaction?.status === "resolving" &&
 		((state.interaction.kind === "resume" && state.interaction.acceptedResponse?.actionId === "resume") ||
-			(state.interaction.kind === "error_retry" && state.interaction.acceptedResponse?.actionId === "retry"))
+			(state.interaction.kind === "error_retry" && state.interaction.acceptedResponse?.actionId === "retry") ||
+			(state.interaction.kind === "mistake_limit" && state.interaction.acceptedResponse?.actionId === "process_anyway"))
 	const interaction = continuationInteraction ? undefined : state.interaction
 	const anchor = {
 		...state.anchor,
@@ -657,7 +658,7 @@ function reduceInteractionResponse(
 function openingInteraction(
 	state: TaskRuntimeState,
 	revision: number,
-	input: { turnId: string; interactionId: string; kind: "resume" | "error_retry" | "completion" },
+	input: { turnId: string; interactionId: string; kind: "resume" | "error_retry" | "mistake_limit" | "completion" },
 ): NonNullable<TaskRuntimeState["interaction"]> {
 	return {
 		taskId: state.taskId,
@@ -750,8 +751,10 @@ function reduceRecovery(
 		{
 			type:
 				| "ERROR_RETRY_REQUESTED"
+				| "MISTAKE_LIMIT_CONTINUE_REQUESTED"
 				| "API_RETRY_SCHEDULED"
 				| "API_RETRY_EXHAUSTED"
+				| "MISTAKE_LIMIT_REACHED"
 				| "ATTEMPT_COMPLETION_PRESENTED"
 				| "COMPLETION_FEEDBACK_RECEIVED"
 				| "TASK_CLEAR_REQUESTED"
@@ -802,6 +805,36 @@ function reduceRecovery(
 			],
 		}
 	}
+	if (event.type === "MISTAKE_LIMIT_CONTINUE_REQUESTED") {
+		if (state.interaction?.kind !== "mistake_limit" || state.interaction.status !== "resolving") {
+			return reject(state, event.type)
+		}
+		if (!canTransition(state.phase, TaskPhase.STREAMING)) {
+			return reject(state, event.type)
+		}
+		const revision = state.revision + 1
+		return {
+			accepted: true,
+			next: {
+				...state,
+				phase: TaskPhase.STREAMING,
+				revision,
+				error: undefined,
+				anchor: { ...state.anchor, apiIndex: event.apiIndex },
+			},
+			effects: [
+				{ id: effectId(revision, 1), type: "POST_TASK_VIEW" },
+				{
+					id: effectId(revision, 2),
+					type: "START_API",
+					apiIndex: event.apiIndex,
+					draft: event.draft,
+					contentTransform: "mistake_limit",
+				},
+				{ id: effectId(revision, 3), type: "PERSIST_SNAPSHOT" },
+			],
+		}
+	}
 	if (event.type === "API_RETRY_EXHAUSTED") {
 		if (!canTransition(state.phase, TaskPhase.AWAITING_APPROVAL) || state.interaction) {
 			return reject(state, event.type)
@@ -815,6 +848,28 @@ function reduceRecovery(
 			effects: interactionEffects(revision, {
 				interactionId: event.interactionId,
 				taskAsk: "api_req_failed",
+				presentation: event.presentation,
+			}),
+		})
+	}
+	if (event.type === "MISTAKE_LIMIT_REACHED") {
+		if (!canTransition(state.phase, TaskPhase.AWAITING_APPROVAL) || state.interaction) {
+			return reject(state, event.type)
+		}
+		const revision = state.revision + 1
+		return accept(state, {
+			eventType: event.type,
+			phase: TaskPhase.AWAITING_APPROVAL,
+			interaction: openingInteraction(state, revision, { ...event, kind: "mistake_limit" }),
+			anchor: {
+				...state.anchor,
+				apiIndex: event.apiIndex,
+				turnId: event.turnId,
+				interactionId: event.interactionId,
+			},
+			effects: interactionEffects(revision, {
+				interactionId: event.interactionId,
+				taskAsk: "mistake_limit_reached",
 				presentation: event.presentation,
 			}),
 		})
@@ -856,7 +911,9 @@ function reduceRecovery(
 	}
 	if (
 		state.interaction?.status !== "resolving" ||
-		(state.interaction.kind !== "completion" && state.interaction.kind !== "error_retry")
+		(state.interaction.kind !== "completion" &&
+			state.interaction.kind !== "error_retry" &&
+			state.interaction.kind !== "mistake_limit")
 	) {
 		return reject(state, event.type)
 	}
@@ -1012,14 +1069,11 @@ function reduceFailure(state: TaskRuntimeState, event: Extract<TaskEvent, { type
 			: undefined
 	const retryableInteraction =
 		failedContinuation?.anchor?.messageType === "ask" &&
-		failedContinuation.kind === "resume" &&
-		failedContinuation.acceptedResponse?.actionId === "resume"
+		((failedContinuation.kind === "resume" && failedContinuation.acceptedResponse?.actionId === "resume") ||
+			(failedContinuation.kind === "error_retry" && failedContinuation.acceptedResponse?.actionId === "retry") ||
+			(failedContinuation.kind === "mistake_limit" && failedContinuation.acceptedResponse?.actionId === "process_anyway"))
 			? failedContinuation
-			: failedContinuation?.anchor?.messageType === "ask" &&
-					failedContinuation.kind === "error_retry" &&
-					failedContinuation.acceptedResponse?.actionId === "retry"
-				? failedContinuation
-				: undefined
+			: undefined
 	const awaitingAnchoredInteraction =
 		(event.effectType === "POST_TASK_VIEW" || event.effectType === "PERSIST_SNAPSHOT") &&
 		currentInteraction?.status === "awaiting" &&
@@ -1030,9 +1084,9 @@ function reduceFailure(state: TaskRuntimeState, event: Extract<TaskEvent, { type
 	const canPause = state.phase === TaskPhase.PAUSED || canTransition(state.phase, TaskPhase.PAUSED)
 	const shouldCreateResume = !preservedInteraction && state.phase !== TaskPhase.COMPLETED && canPause
 	const failedPhase = retryableInteraction
-		? retryableInteraction.kind === "error_retry"
-			? TaskPhase.AWAITING_APPROVAL
-			: TaskPhase.PAUSED
+		? retryableInteraction.kind === "resume"
+			? TaskPhase.PAUSED
+			: TaskPhase.AWAITING_APPROVAL
 		: awaitingAnchoredInteraction
 			? state.phase
 			: shouldCreateResume
@@ -1140,8 +1194,10 @@ export function reduceTask(state: TaskRuntimeState, event: TaskEvent): Transitio
 		case "TASK_CANCELLED":
 			return reduceCancel(state, event)
 		case "ERROR_RETRY_REQUESTED":
+		case "MISTAKE_LIMIT_CONTINUE_REQUESTED":
 		case "API_RETRY_SCHEDULED":
 		case "API_RETRY_EXHAUSTED":
+		case "MISTAKE_LIMIT_REACHED":
 		case "ATTEMPT_COMPLETION_PRESENTED":
 		case "COMPLETION_FEEDBACK_RECEIVED":
 		case "TASK_CLEAR_REQUESTED":

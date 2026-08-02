@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest"
 import { BlockPhase } from "../../BlockPhaseMachine"
 import { TaskPhase } from "../../TaskPhase"
 import { reduceTask } from "../TaskReducer"
-import { createTaskRuntimeState } from "../TaskRuntimeState"
+import { createTaskRuntimeState, type TaskRuntimeState } from "../TaskRuntimeState"
 
 /** Create a runtime state restored to a focused test phase. */
 function stateAt(phase: TaskPhase) {
@@ -10,14 +10,14 @@ function stateAt(phase: TaskPhase) {
 }
 
 /** Create runtime state awaiting one causal tool approval response. */
-function awaitingInteraction() {
+function awaitingInteraction(): TaskRuntimeState & { interaction: NonNullable<TaskRuntimeState["interaction"]> } {
 	return {
 		...createTaskRuntimeState({ taskId: "task-1", phase: TaskPhase.AWAITING_APPROVAL, revision: 4 }),
 		interaction: {
 			taskId: "task-1",
 			turnId: "turn-1",
 			interactionId: "interaction-1",
-			kind: "tool_approval" as const,
+			kind: "tool_approval",
 			status: "awaiting" as const,
 			createdRevision: 4,
 			anchor: { messageTs: 100, messageType: "ask" as const },
@@ -615,6 +615,12 @@ describe("reduceTask lifecycle events", () => {
 		{
 			kind: "error_retry" as const,
 			actionId: "retry" as const,
+			phase: TaskPhase.STREAMING,
+			failedPhase: TaskPhase.AWAITING_APPROVAL,
+		},
+		{
+			kind: "mistake_limit" as const,
+			actionId: "process_anyway" as const,
 			phase: TaskPhase.STREAMING,
 			failedPhase: TaskPhase.AWAITING_APPROVAL,
 		},

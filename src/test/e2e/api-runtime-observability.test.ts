@@ -654,16 +654,16 @@ e2e(
 		await expect(attention.getByText("Task Needs Attention", { exact: true })).toBeVisible()
 
 		const footer = sidebar.getByRole("contentinfo")
-		let processAnyway = footer.getByRole("button", { name: "Process Anyway", exact: true })
+		let processAnyway = footer.locator('vscode-button[aria-label="Process Anyway"]')
 		await expect(processAnyway).toBeVisible()
-		await expect(footer.getByRole("button", { name: "Start New Task", exact: true })).toBeVisible()
+		await expect(footer.locator('vscode-button[aria-label="Start New Task"]')).toBeVisible()
 		await expect(attention.getByText("Message", { exact: true })).toHaveCount(0)
 
 		await closeCurrentTask(sidebar)
 		await reopenTask(sidebar, taskText)
-		processAnyway = footer.getByRole("button", { name: "Process Anyway", exact: true })
+		processAnyway = footer.locator('vscode-button[aria-label="Process Anyway"]')
 		await expect(processAnyway).toBeVisible({ timeout: 30_000 })
-		await expect(footer.getByRole("button", { name: "Start New Task", exact: true })).toBeVisible()
+		await expect(footer.locator('vscode-button[aria-label="Start New Task"]')).toBeVisible()
 
 		const input = sidebar.getByTestId("chat-input")
 		await expect(input).toBeEnabled()
@@ -710,7 +710,6 @@ e2e(
 			[
 				"API Request Failed",
 				"",
-				"Message",
 				message,
 				"",
 				"Provider: openai",

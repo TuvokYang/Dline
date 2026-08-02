@@ -250,6 +250,19 @@ type AskOptions = {
 type ApiRequestTransactionOptions = {
 	/** Runs after the user message is durable and before canonical API admission. */
 	beforeApiRequestStarted?: () => Promise<void>
+	/** Reuse accounting already recorded by an interrupted pre-request gate. */
+	reuseRequestAccounting?: boolean
+}
+
+/** Preserve the existing provider-facing contract for user guidance after the mistake limit. */
+async function buildMistakeLimitFeedbackContent(text?: string, images?: string[], files?: string[]): Promise<ClineUserContent[]> {
+	const content: ClineUserContent[] = [{ type: "text", text: formatResponse.tooManyMistakes(text) }]
+	if (images?.length) content.push(...formatResponse.imageBlocks(images))
+	if (files?.length) {
+		const fileContent = await processFilesIntoText(files)
+		if (fileContent) content.push({ type: "text", text: fileContent })
+	}
+	return content
 }
 
 /** Fail fast if dormant runtime effects are dispatched before flow migration. */
@@ -516,11 +529,23 @@ export class Task {
 					if (effect.draft) {
 						this.taskState.autoRetryAttempts = 0
 					}
-					const draftText =
-						this.taskRuntime.getState().phase === TaskPhase.RESUMING
-							? createResumeContinuationText(effect.draft?.text)
-							: effect.draft?.text
-					const feedbackContent = await buildUserFeedbackContent(draftText, effect.draft?.images, effect.draft?.files)
+					if (effect.contentTransform === "mistake_limit") {
+						this.resetMistakeLimitState()
+					}
+					const feedbackContent =
+						effect.contentTransform === "mistake_limit"
+							? await buildMistakeLimitFeedbackContent(
+									effect.draft?.text,
+									effect.draft?.images,
+									effect.draft?.files,
+								)
+							: await buildUserFeedbackContent(
+									this.taskRuntime.getState().phase === TaskPhase.RESUMING
+										? createResumeContinuationText(effect.draft?.text)
+										: effect.draft?.text,
+									effect.draft?.images,
+									effect.draft?.files,
+								)
 					const runtimeState = this.taskRuntime.getState()
 					const restoredToolContent =
 						runtimeState.phase === TaskPhase.RESUMING && runtimeState.turn
@@ -534,7 +559,9 @@ export class Task {
 								})
 							: []
 					const content = [...restoredToolContent, ...feedbackContent]
-					await this.recursivelyMakeClineRequests(content)
+					await this.recursivelyMakeClineRequests(content, false, {
+						reuseRequestAccounting: effect.contentTransform === "mistake_limit",
+					})
 				},
 				async (effect) => {
 					const block = this.taskState.assistantMessageContent.find(
@@ -1916,6 +1943,15 @@ export class Task {
 	/** Present exhausted retry recovery and commit the chosen continuation. */
 	public recoverApiFailure(input: { turnId: string; interactionId: string; apiIndex: number; presentation: string }) {
 		return this.interactionCoordinator.recover(input)
+	}
+
+	/** Reset every detector that feeds the mistake-limit recovery gate. */
+	private resetMistakeLimitState(): void {
+		this.taskState.consecutiveMistakeCount = 0
+		this.taskState.autoRetryAttempts = 0
+		this.taskState.consecutiveIdenticalToolCount = 0
+		this.taskState.lastToolName = ""
+		this.taskState.lastToolParams = ""
 	}
 
 	public async requestCancellation(): Promise<TaskDispatchResult> {
@@ -3997,9 +4033,11 @@ export class Task {
 		// the presentation scheduler uses the correct cadence from the first flush.
 		await this.remoteWorkspaceDetectionPromise
 
-		// Increment API request counter for focus chain list management
-		this.taskState.apiRequestCount++
-		this.taskState.apiRequestsSinceLastTodoUpdate++
+		// Increment API request counters once, even when a pre-request gate resumes through a runtime effect.
+		if (!transaction.reuseRequestAccounting) {
+			this.taskState.apiRequestCount++
+			this.taskState.apiRequestsSinceLastTodoUpdate++
+		}
 		const apiIndex = this.messageStateHandler.apiConversationHistory.length
 		if (!transaction.beforeApiRequestStarted) {
 			await this.admitApiRequest(apiIndex)
@@ -4037,46 +4075,17 @@ export class Task {
 					message: "Cline is having trouble. Would you like to continue the task?",
 				})
 			}
-			const { response, text, images, files } = await this.ask(
-				"mistake_limit_reached",
-				model.id.includes("claude")
-					? `This may indicate a failure in Dline's thought process or inability to use a tool properly, which can be mitigated with some user guidance (e.g. "Try breaking down the task into smaller steps").`
-					: "Dline uses complex prompts and iterative task execution. Verify your chosen model supports advanced agentic coding and complex prompt following.",
-			)
-			if (response === "messageResponse") {
-				// Display the user's message in the chat UI
-				await this.say("user_feedback", text, images, files)
-
-				// This userContent is for the *next* API call.
-				const feedbackUserContent: ClineUserContent[] = []
-				feedbackUserContent.push({
-					type: "text",
-					text: formatResponse.tooManyMistakes(text),
-				})
-				if (images && images.length > 0) {
-					feedbackUserContent.push(...formatResponse.imageBlocks(images))
-				}
-
-				let fileContentString = ""
-				if (files && files.length > 0) {
-					fileContentString = await processFilesIntoText(files)
-				}
-
-				if (fileContentString) {
-					feedbackUserContent.push({
-						type: "text",
-						text: fileContentString,
-					})
-				}
-
-				userContent = feedbackUserContent
-			}
-			this.taskState.consecutiveMistakeCount = 0
-			this.taskState.autoRetryAttempts = 0 // need to reset this if the user chooses to manually retry after the mistake limit is reached
-			// Reset loop detection state so it can re-arm if the model continues looping
-			this.taskState.consecutiveIdenticalToolCount = 0
-			this.taskState.lastToolName = ""
-			this.taskState.lastToolParams = ""
+			const presentation = model.id.includes("claude")
+				? `This may indicate a failure in Dline's thought process or inability to use a tool properly, which can be mitigated with some user guidance (e.g. "Try breaking down the task into smaller steps").`
+				: "Dline uses complex prompts and iterative task execution. Verify your chosen model supports advanced agentic coding and complex prompt following."
+			const interactionId = `mistake-limit:${this.taskId}:${this.getRuntimeState().revision}`
+			await this.interactionCoordinator.recoverMistakeLimit({
+				turnId: interactionId,
+				interactionId,
+				apiIndex,
+				presentation,
+			})
+			return true
 		}
 
 		// get previous api req's index to check token usage and determine if we need to truncate conversation history

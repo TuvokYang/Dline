@@ -143,7 +143,6 @@ export function ApiErrorBox({
 	const copyText = [
 		title,
 		"",
-		"Message",
 		details.message,
 		...(metadata.length > 0 ? ["", ...metadata.map((field) => `${field.label}: ${field.value}`)] : []),
 		...(details.additionalDetails.length > 0
@@ -167,11 +166,8 @@ export function ApiErrorBox({
 						/>
 					)}
 				</div>
-				<div className="mt-3 text-xs">
-					<div className="text-description">Message</div>
-					<div className="mt-1 whitespace-pre-wrap break-words text-foreground" data-testid={`${testId}-message`}>
-						{details.message}
-					</div>
+				<div className="mt-3 whitespace-pre-wrap break-words text-foreground text-xs" data-testid={`${testId}-message`}>
+					{details.message}
 				</div>
 				{metadata.length > 0 && (
 					<dl className="mt-3 grid grid-cols-[max-content_minmax(0,1fr)] gap-x-3 gap-y-2 border-error/30 border-t pt-3 text-xs">

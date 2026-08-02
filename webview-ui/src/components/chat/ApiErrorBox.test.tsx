@@ -71,7 +71,6 @@ describe("ApiErrorBox", () => {
 					value: [
 						"API Request Failed",
 						"",
-						"Message",
 						"No scripted E2E response remains for openai-compatible-chat",
 						"",
 						"Provider: openai",

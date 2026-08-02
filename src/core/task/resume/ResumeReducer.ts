@@ -7,7 +7,7 @@ export function selectAwaitingResumeEntry(snapshot: TaskSnapshot): ResumeEntry {
 	const interaction = snapshot.interaction
 	if (!interaction) throw new Error("resume_interaction_missing")
 	const continuation = getInteraction(interaction.kind).continuation
-	if (interaction.kind === "error_retry") {
+	if (interaction.kind === "error_retry" || interaction.kind === "mistake_limit") {
 		return {
 			type: "show_error_recovery",
 			interactionId: interaction.interactionId,

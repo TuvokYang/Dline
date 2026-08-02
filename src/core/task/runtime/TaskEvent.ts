@@ -53,11 +53,19 @@ export type TaskEvent =
 			resume?: { turnId: string; interactionId: string; presentation: string }
 	  }
 	| { type: "ERROR_RETRY_REQUESTED"; apiIndex: number; draft: InteractionDraft }
+	| { type: "MISTAKE_LIMIT_CONTINUE_REQUESTED"; apiIndex: number; draft: InteractionDraft }
 	| { type: "API_RETRY_SCHEDULED"; apiIndex: number }
 	| {
 			type: "API_RETRY_EXHAUSTED"
 			turnId: string
 			interactionId: string
+			presentation: string
+	  }
+	| {
+			type: "MISTAKE_LIMIT_REACHED"
+			turnId: string
+			interactionId: string
+			apiIndex: number
 			presentation: string
 	  }
 	| {

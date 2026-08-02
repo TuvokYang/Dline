@@ -923,6 +923,77 @@ describe("InteractionCoordinator", () => {
 		})
 	})
 
+	it("commits a restored mistake-limit response without a tool-block continuation", async () => {
+		const startApi = vi.fn(async () => undefined)
+		const runtime = new TaskRuntime(
+			hydrateAwaitingInteraction({
+				kind: "mistake_limit",
+				phase: TaskPhase.AWAITING_APPROVAL,
+				turnId: "mistake-turn",
+				interactionId: "mistake-1",
+				apiIndex: 7,
+			}),
+			createPorts({ startApi }),
+		)
+		const coordinator = new InteractionCoordinator(runtime)
+
+		const result = await coordinator.respond({
+			taskId: "task-1",
+			turnId: "mistake-turn",
+			interactionId: "mistake-1",
+			actionId: "process_anyway",
+			stateRevision: runtime.getState().revision,
+			draft: { text: "Continue with guidance", images: [], files: [] },
+		})
+
+		expect(result.accepted).toBe(true)
+		expect(startApi).toHaveBeenCalledWith(
+			expect.objectContaining({
+				type: "START_API",
+				apiIndex: 7,
+				contentTransform: "mistake_limit",
+				draft: { text: "Continue with guidance", images: [], files: [] },
+			}),
+		)
+		expect(runtime.getState()).toMatchObject({
+			phase: TaskPhase.STREAMING,
+			interaction: {
+				kind: "mistake_limit",
+				status: "resolving",
+				acceptedResponse: { actionId: "process_anyway" },
+			},
+		})
+	})
+
+	it("starts a new task from a restored mistake-limit footer action", async () => {
+		const startNewTask = vi.fn(async () => undefined)
+		const runtime = new TaskRuntime(
+			hydrateAwaitingInteraction({
+				kind: "mistake_limit",
+				phase: TaskPhase.AWAITING_APPROVAL,
+				turnId: "mistake-turn",
+				interactionId: "mistake-1",
+			}),
+			createPorts({ startNewTask }),
+		)
+		const coordinator = new InteractionCoordinator(runtime)
+
+		const result = await coordinator.respond({
+			taskId: "task-1",
+			turnId: "mistake-turn",
+			interactionId: "mistake-1",
+			actionId: "start_new_task",
+			stateRevision: runtime.getState().revision,
+			draft: { text: "Next task", images: [], files: [] },
+		})
+
+		expect(result.accepted).toBe(true)
+		expect(startNewTask).toHaveBeenCalledWith(
+			expect.objectContaining({ draft: { text: "Next task", images: [], files: [] } }),
+		)
+		expect(runtime.getState().interaction).toBeUndefined()
+	})
+
 	it("rejects a second primary interaction while one is active", async () => {
 		const runtime = new TaskRuntime(createTaskRuntimeState({ taskId: "task-1", phase: TaskPhase.STREAMING }), createPorts())
 		const coordinator = new InteractionCoordinator(runtime)

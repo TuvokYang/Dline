@@ -45,14 +45,14 @@ function createPorts(): RecoveryPorts {
 }
 
 /** Create an awaiting interaction state without reading UI message history. */
-function awaitingInteraction(kind: "tool_approval" | "error_retry" | "completion"): TaskRuntimeState {
+function awaitingInteraction(kind: "tool_approval" | "error_retry" | "mistake_limit" | "completion"): TaskRuntimeState {
 	return {
 		...createTaskRuntimeState({
 			taskId: "task-1",
 			phase:
 				kind === "completion"
 					? TaskPhase.COMPLETED
-					: kind === "error_retry"
+					: kind === "error_retry" || kind === "mistake_limit"
 						? TaskPhase.AWAITING_APPROVAL
 						: TaskPhase.STREAMING,
 			revision: 4,
@@ -107,6 +107,7 @@ describe("TaskRuntime recovery transactions", () => {
 		["spawn_task_approval", "awaiting"],
 		["resume", "awaiting"],
 		["error_retry", "awaiting"],
+		["mistake_limit", "awaiting"],
 		["status_acknowledgment", "awaiting"],
 		["followup", "awaiting"],
 		["qna_response", "awaiting"],
@@ -118,6 +119,7 @@ describe("TaskRuntime recovery transactions", () => {
 		["make_plan", "resolving"],
 		["generate_report", "resolving"],
 		["completion", "resolving"],
+		["mistake_limit", "resolving"],
 	] as const)("preserves a %s interaction in %s state across terminal shutdown", (kind, status) => {
 		const state = awaitingInteraction("tool_approval")
 		state.interaction = {
@@ -351,6 +353,68 @@ describe("TaskRuntime recovery transactions", () => {
 			interaction: { kind: "error_retry", interactionId: "retry-1", status: "awaiting" },
 		})
 		expect(ports.sequence).toEqual(["APPEND_ASK:retry-1", "POST_TASK_VIEW", "PERSIST_SNAPSHOT"])
+	})
+
+	it("opens one canonical mistake-limit interaction", async () => {
+		const ports = createPorts()
+		const runtime = new TaskRuntime(
+			createTaskRuntimeState({ taskId: "task-1", phase: TaskPhase.STREAMING, revision: 8, anchor: { apiIndex: 7 } }),
+			ports,
+		)
+
+		const result = await runtime.dispatch({
+			type: "MISTAKE_LIMIT_REACHED",
+			turnId: "mistake-turn-1",
+			interactionId: "mistake-1",
+			apiIndex: 7,
+			presentation: "Needs guidance",
+		})
+
+		expect(result.accepted).toBe(true)
+		expect(runtime.getState()).toMatchObject({
+			phase: TaskPhase.AWAITING_APPROVAL,
+			interaction: { kind: "mistake_limit", interactionId: "mistake-1", status: "awaiting" },
+		})
+		expect(ports.sequence).toEqual(["APPEND_ASK:mistake-1", "POST_TASK_VIEW", "PERSIST_SNAPSHOT"])
+	})
+
+	it("continues a mistake-limit response through one transformed provider effect", () => {
+		const draft: InteractionDraft = { text: "Use this guidance", images: ["image"], files: ["file"] }
+		const state = awaitingInteraction("mistake_limit")
+		if (!state.interaction) throw new Error("test interaction missing")
+		state.interaction.acceptedResponse = {
+			taskId: "task-1",
+			turnId: "turn-1",
+			interactionId: "interaction-1",
+			actionId: "process_anyway",
+			stateRevision: state.revision,
+			draft,
+		}
+
+		const result = reduceRecovery(state, {
+			type: "MISTAKE_LIMIT_CONTINUE_REQUESTED",
+			apiIndex: 7,
+			draft,
+		})
+
+		expect(result).toMatchObject({
+			accepted: true,
+			next: {
+				phase: TaskPhase.STREAMING,
+				interaction: { kind: "mistake_limit", status: "resolving", acceptedResponse: { draft } },
+			},
+		})
+		expect(effectTypes(result.effects)).toEqual(["POST_TASK_VIEW", "START_API", "PERSIST_SNAPSHOT"])
+		expect(result.effects[1]).toMatchObject({
+			type: "START_API",
+			apiIndex: 7,
+			draft,
+			contentTransform: "mistake_limit",
+		})
+
+		const admitted = reduceRecovery(result.next, { type: "API_REQUEST_STARTED", apiIndex: 7 })
+		expect(admitted).toMatchObject({ accepted: true, next: { phase: TaskPhase.STREAMING } })
+		expect(admitted.next.interaction).toBeUndefined()
 	})
 
 	it("presents completion as canonical completed state with one causal interaction", async () => {

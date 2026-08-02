@@ -44,6 +44,8 @@ export interface StartApiEffect {
 	type: "START_API"
 	apiIndex: number
 	draft?: InteractionDraft
+	/** Apply the mistake-limit feedback contract before starting the provider. */
+	contentTransform?: "mistake_limit"
 }
 
 /** Execute one canonical tool lifecycle identity. */

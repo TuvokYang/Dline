@@ -30,6 +30,14 @@ export interface RetryInteractionRequest {
 	presentation: string
 }
 
+/** Request used to present and resolve one mistake-limit transaction. */
+export interface MistakeLimitInteractionRequest {
+	turnId: string
+	interactionId: string
+	apiIndex: number
+	presentation: string
+}
+
 /** Typed user outcome returned to one interaction consumer. */
 export interface InteractionOutcome {
 	actionId: InteractionResponse["actionId"]
@@ -50,10 +58,10 @@ export interface DetachedInteractionContinuationContext {
 /** Continue one accepted interaction when no live handler waiter survived restoration. */
 export type DetachedInteractionContinuation = (context: DetachedInteractionContinuationContext) => Promise<void>
 
-type RuntimeOwnedInteractionKind = "resume" | "completion" | "error_retry"
+type RuntimeOwnedInteractionKind = "resume" | "completion" | "error_retry" | "mistake_limit"
 
 function isRuntimeOwnedInteraction(kind: InteractionKind): kind is RuntimeOwnedInteractionKind {
-	return kind === "resume" || kind === "completion" || kind === "error_retry"
+	return kind === "resume" || kind === "completion" || kind === "error_retry" || kind === "mistake_limit"
 }
 
 function outcomeFrom(response: InteractionResponse): InteractionOutcome {
@@ -276,6 +284,8 @@ export class InteractionCoordinator {
 				return this.commitHandlerResponse(interaction, response, generation, detachedContinuation)
 			case "error_retry":
 				return this.commitErrorRetryResponse(response, this.runtime.getState().anchor.apiIndex)
+			case "mistake_limit":
+				return this.commitMistakeLimitResponse(response, this.runtime.getState().anchor.apiIndex)
 			default:
 				if (!detachedContinuation) {
 					throw new Error(`Detached continuation is not registered for interaction kind=${interaction.kind}`)
@@ -396,6 +406,26 @@ export class InteractionCoordinator {
 		return outcomeFrom(response)
 	}
 
+	/** Commit one accepted mistake-limit response through its typed lifecycle event. */
+	private async commitMistakeLimitResponse(response: InteractionResponse, apiIndex: number): Promise<InteractionOutcome> {
+		const continuation: TaskEvent =
+			response.actionId === "start_new_task"
+				? {
+						type: "TASK_CLEAR_REQUESTED",
+						draft: response.draft ?? { text: "", images: [], files: [] },
+					}
+				: {
+						type: "MISTAKE_LIMIT_CONTINUE_REQUESTED",
+						apiIndex,
+						draft: response.draft ?? { text: "", images: [], files: [] },
+					}
+		const committed = await this.runtime.dispatchAtAdmission(continuation)
+		if (!committed.accepted) {
+			throw new Error(`Mistake-limit continuation rejected: ${committed.error?.code ?? "invalid_runtime_event"}`)
+		}
+		return outcomeFrom(response)
+	}
+
 	/** Present completion and commit the selected continuation as one backend transaction. */
 	async complete(request: CompleteInteractionRequest): Promise<InteractionOutcome> {
 		const response = await this.waitForPresentedResponse(
@@ -418,6 +448,18 @@ export class InteractionCoordinator {
 			},
 		)
 		return this.commitErrorRetryResponse(response, request.apiIndex)
+	}
+
+	/** Present a mistake-limit recovery and commit the selected footer action. */
+	async recoverMistakeLimit(request: MistakeLimitInteractionRequest): Promise<InteractionOutcome> {
+		const response = await this.waitForPresentedResponse(
+			{ ...request, kind: "mistake_limit" },
+			{
+				type: "MISTAKE_LIMIT_REACHED",
+				...request,
+			},
+		)
+		return this.commitMistakeLimitResponse(response, request.apiIndex)
 	}
 
 	/** Use an exact hydrated interaction when present, otherwise present a new one. */
