@@ -261,13 +261,16 @@ The test environment includes:
 - `CI=true` - Adjusts timeouts and reporting for CI environments
 - `GRPC_RECORDER_ENABLED=true` - Enable gRPC recording for debugging
 - `DLINE_E2E_PROFILE` - Select `auto`, `mock-openai`, `deepseek`, or `openai-compatible`
+- `DLINE_E2E_WORKERS` - Override the default of 2 parallel Playwright workers
+- `DLINE_E2E_CDP_PORT` - Set the first CDP port; each worker adds its worker index
 
 Each Playwright worker prepares one reusable state template. Mock tests use only generated mock profiles and never read
 `~/.dline/data` or live credential environment variables. `provider-live.test.ts` explicitly enables live preprocessing;
 only that mode may copy `secrets/**` and `settings/api_profiles.json`. It never copies `secrets.json`, user settings,
-provider registry files, task history, or other user state. Before each test, the selected template is copied to the fixed
-`%TEMP%/.dline-e2e` `DLINE_DIR`; `DLINE_HOME_DIR` uses the same path and `DLINE_DOCS_DIR` uses
-`%TEMP%/dline-e2e`. All three temporary locations are reset between tests and removed during worker teardown.
+provider registry files, task history, or other user state. Before each test, the selected template is copied to that
+worker's `%TEMP%/.dline-e2e/worker-N` `DLINE_DIR`; `DLINE_HOME_DIR` uses the same path and `DLINE_DOCS_DIR` uses
+`%TEMP%/dline-e2e/worker-N`. All three worker-owned temporary locations are reset between tests and removed during
+worker teardown.
 
 Generated live profiles use `high` reasoning effort. GitHub Actions creates only profiles whose corresponding credential
 is configured:
@@ -285,7 +288,8 @@ isolated harness but do not count as product E2E coverage.
 
 ### Isolated State And Profiles
 
-- [x] Use `%TEMP%/.dline-e2e` for `DLINE_DIR` and `DLINE_HOME_DIR`, and `%TEMP%/dline-e2e` for `DLINE_DOCS_DIR`.
+- [x] Use worker-owned subdirectories beneath `%TEMP%/.dline-e2e` for `DLINE_DIR` and `DLINE_HOME_DIR`, and beneath
+  `%TEMP%/dline-e2e` for `DLINE_DOCS_DIR`.
 - [x] Copy only `settings/api_profiles.json` and `secrets/**`; never copy root `secrets.json` or task/user state.
 - [x] Remove the isolated state after each worker and test.
 - [x] Seed mock, DeepSeek, and OpenAI-compatible profiles with `high` effort when credentials are available.

@@ -27,8 +27,15 @@ interface E2ETestDirectories {
 	dlineDocsDir: string
 }
 
+interface E2EWorkerDirectories {
+	dlineDir: string
+	dlineDocsDir: string
+	dlineStateTemplateDir: string
+}
+
 interface E2EWorkerFixtures {
 	server: ClineApiServerMock
+	workerDirectories: E2EWorkerDirectories
 	dlineStateTemplateDir: string
 	preparedE2EState: PreparedE2EState
 	profileMode: E2EProfileMode
@@ -43,9 +50,9 @@ export class E2ETestHelper {
 	// Constants
 	public static readonly CODEBASE_ROOT_DIR = path.resolve(__dirname, "..", "..", "..", "..")
 	public static readonly E2E_TESTS_DIR = path.join(E2ETestHelper.CODEBASE_ROOT_DIR, "src", "test", "e2e")
-	public static readonly DLINE_DIR = path.join(os.tmpdir(), ".dline-e2e")
-	public static readonly DLINE_DOCS_DIR = path.join(os.tmpdir(), "dline-e2e")
-	public static readonly DLINE_STATE_TEMPLATE_DIR = path.join(os.tmpdir(), ".dline-e2e-template")
+	public static readonly DLINE_DIR_ROOT = path.join(os.tmpdir(), ".dline-e2e")
+	public static readonly DLINE_DOCS_DIR_ROOT = path.join(os.tmpdir(), "dline-e2e")
+	public static readonly DLINE_STATE_TEMPLATE_DIR_ROOT = path.join(os.tmpdir(), ".dline-e2e-template")
 
 	// Instance properties for caching
 	private cachedFrame: Frame | null = null
@@ -53,6 +60,15 @@ export class E2ETestHelper {
 	// Path utilities
 	public static escapeToPath(text: string): string {
 		return text.trim().toLowerCase().replaceAll(/\W/g, "_")
+	}
+
+	public static getWorkerDirectories(workerIndex: number): E2EWorkerDirectories {
+		const workerDirectoryName = `worker-${workerIndex}`
+		return {
+			dlineDir: path.join(E2ETestHelper.DLINE_DIR_ROOT, workerDirectoryName),
+			dlineDocsDir: path.join(E2ETestHelper.DLINE_DOCS_DIR_ROOT, workerDirectoryName),
+			dlineStateTemplateDir: path.join(E2ETestHelper.DLINE_STATE_TEMPLATE_DIR_ROOT, workerDirectoryName),
+		}
 	}
 
 	public static getResultsDir(testName = "", label?: string): string {
@@ -361,6 +377,12 @@ export const e2e = test
 	})
 	.extend<E2ETestDirectories, E2EWorkerFixtures>({
 		profileMode: ["mock", { scope: "worker", option: true }],
+		workerDirectories: [
+			async ({}, use, workerInfo) => {
+				await use(E2ETestHelper.getWorkerDirectories(workerInfo.workerIndex))
+			},
+			{ scope: "worker" },
+		],
 		server: [
 			async ({}, use) => {
 				const server = await ClineApiServerMock.startGlobalServer()
@@ -373,12 +395,12 @@ export const e2e = test
 			{ scope: "worker" },
 		],
 		preparedE2EState: [
-			async ({ server, profileMode }, use) => {
-				const templateDir = E2ETestHelper.DLINE_STATE_TEMPLATE_DIR
+			async ({ server, profileMode, workerDirectories }, use) => {
+				const { dlineDir, dlineDocsDir, dlineStateTemplateDir: templateDir } = workerDirectories
 				await Promise.all([
 					E2ETestHelper.rmForRetries(templateDir, { recursive: true, force: true }),
-					E2ETestHelper.rmForRetries(E2ETestHelper.DLINE_DIR, { recursive: true, force: true }),
-					E2ETestHelper.rmForRetries(E2ETestHelper.DLINE_DOCS_DIR, { recursive: true, force: true }),
+					E2ETestHelper.rmForRetries(dlineDir, { recursive: true, force: true }),
+					E2ETestHelper.rmForRetries(dlineDocsDir, { recursive: true, force: true }),
 				])
 				try {
 					const preparedState = await prepareE2EState({
@@ -390,8 +412,8 @@ export const e2e = test
 				} finally {
 					await Promise.all([
 						E2ETestHelper.rmForRetries(templateDir, { recursive: true, force: true }),
-						E2ETestHelper.rmForRetries(E2ETestHelper.DLINE_DIR, { recursive: true, force: true }),
-						E2ETestHelper.rmForRetries(E2ETestHelper.DLINE_DOCS_DIR, { recursive: true, force: true }),
+						E2ETestHelper.rmForRetries(dlineDir, { recursive: true, force: true }),
+						E2ETestHelper.rmForRetries(dlineDocsDir, { recursive: true, force: true }),
 					])
 				}
 			},
@@ -457,33 +479,33 @@ export const e2e = test
 				await E2ETestHelper.rmForRetries(userDataDir, { recursive: true, force: true })
 			}
 		},
-		dlineDir: async ({ dlineStateTemplateDir, server }, use, testInfo) => {
-			const dlineDir = E2ETestHelper.DLINE_DIR
+		dlineDir: async ({ dlineStateTemplateDir, server, workerDirectories }, use, testInfo) => {
+			const { dlineDir, dlineDocsDir } = workerDirectories
 			server.resetOpenAiMock()
 			await Promise.all([
 				E2ETestHelper.rmForRetries(dlineDir, { recursive: true, force: true }),
-				E2ETestHelper.rmForRetries(E2ETestHelper.DLINE_DOCS_DIR, { recursive: true, force: true }),
+				E2ETestHelper.rmForRetries(dlineDocsDir, { recursive: true, force: true }),
 			])
 			cpSync(dlineStateTemplateDir, dlineDir, { recursive: true })
 			try {
 				await use(dlineDir)
 			} finally {
-				const taskStateDir = path.join(E2ETestHelper.DLINE_DOCS_DIR, "tasks")
+				const taskStateDir = path.join(dlineDocsDir, "tasks")
 				if (testInfo.status !== testInfo.expectedStatus && existsSync(taskStateDir)) {
 					cpSync(taskStateDir, testInfo.outputPath("dline-task-state"), { recursive: true })
 				}
 				await Promise.all([
 					E2ETestHelper.rmForRetries(dlineDir, { recursive: true, force: true }),
-					E2ETestHelper.rmForRetries(E2ETestHelper.DLINE_DOCS_DIR, { recursive: true, force: true }),
+					E2ETestHelper.rmForRetries(dlineDocsDir, { recursive: true, force: true }),
 				])
 			}
 		},
 		dlineHomeDir: async ({ dlineDir }, use) => {
 			await use(dlineDir)
 		},
-		dlineDocsDir: async ({ dlineDir }, use) => {
+		dlineDocsDir: async ({ dlineDir, workerDirectories }, use) => {
 			void dlineDir
-			await use(E2ETestHelper.DLINE_DOCS_DIR)
+			await use(workerDirectories.dlineDocsDir)
 		},
 	})
 	.extend<{ openVSCode: (workspacePath: string) => Promise<ElectronApplication> }>({
@@ -491,9 +513,13 @@ export const e2e = test
 			const executablePath = await downloadAndUnzipVSCode(channel, undefined, new SilentReporter())
 			const electronEnvironment = { ...process.env }
 			delete electronEnvironment.ELECTRON_RUN_AS_NODE
-			const cdpPort = process.env.DLINE_E2E_CDP_PORT?.trim()
-			if (cdpPort && (!/^\d+$/.test(cdpPort) || Number(cdpPort) < 1 || Number(cdpPort) > 65_535)) {
-				throw new Error(`Invalid DLINE_E2E_CDP_PORT: ${cdpPort}`)
+			const configuredCdpPort = process.env.DLINE_E2E_CDP_PORT?.trim()
+			if (configuredCdpPort && (!/^\d+$/.test(configuredCdpPort) || Number(configuredCdpPort) < 1)) {
+				throw new Error(`Invalid DLINE_E2E_CDP_PORT: ${configuredCdpPort}`)
+			}
+			const cdpPort = configuredCdpPort ? Number(configuredCdpPort) + testInfo.workerIndex : undefined
+			if (cdpPort !== undefined && cdpPort > 65_535) {
+				throw new Error(`DLINE_E2E_CDP_PORT exceeds 65535 for worker ${testInfo.workerIndex}: ${cdpPort}`)
 			}
 
 			await use(async (workspacePath: string) => {
@@ -519,7 +545,7 @@ export const e2e = test
 					},
 					args: [
 						"--no-sandbox",
-						...(cdpPort ? [`--remote-debugging-port=${cdpPort}`] : []),
+						...(cdpPort !== undefined ? [`--remote-debugging-port=${cdpPort}`] : []),
 						"--disable-updates",
 						"--disable-workspace-trust",
 						"--disable-extensions", // Run VS Code with all extensions disabled other than the one under test.

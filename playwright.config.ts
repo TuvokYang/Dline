@@ -2,9 +2,14 @@ import { defineConfig } from "@playwright/test"
 
 const isCI = !!process?.env?.CI
 const isWindow = process?.platform?.startsWith("win")
+const configuredWorkers = process.env.DLINE_E2E_WORKERS?.trim()
+
+if (configuredWorkers && !/^[1-9]\d*$/.test(configuredWorkers)) {
+	throw new Error(`Invalid DLINE_E2E_WORKERS: ${configuredWorkers}`)
+}
 
 export default defineConfig({
-	workers: 1,
+	workers: configuredWorkers ? Number(configuredWorkers) : 2,
 	retries: 1,
 	forbidOnly: isCI,
 	testDir: "src/test/e2e",
