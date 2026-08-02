@@ -60,6 +60,21 @@ async function sendTask(sidebar: Frame, text: string): Promise<void> {
 	await expect(sidebar.getByText(text).first()).toBeVisible()
 }
 
+async function closeCurrentTask(sidebar: Frame): Promise<void> {
+	const closeButton = sidebar.getByRole("button", { name: "Close Task", exact: true })
+	await expect(closeButton).toBeVisible()
+	await closeButton.click()
+	await expect(sidebar.getByTestId("chat-input")).toBeVisible()
+	await E2ETestHelper.dismissWhatsNewModal(sidebar)
+}
+
+async function reopenTask(sidebar: Frame, taskText: string): Promise<void> {
+	const historyTask = sidebar.getByText(taskText, { exact: true }).last()
+	await expect(historyTask).toBeVisible({ timeout: 30_000 })
+	await historyTask.click()
+	await expect(sidebar.getByText(taskText, { exact: true }).first()).toBeVisible()
+}
+
 interface StructuredApiErrorExpectation {
 	message: string
 	provider: string
@@ -603,6 +618,69 @@ for (const status of [403, 429, 502] as const) {
 		},
 	)
 }
+
+e2e(
+	"Mistake limit - footer recovery stays actionable and Process Anyway resets the counter",
+	async ({ helper, server, sidebar, userDataDir }) => {
+		e2e.setTimeout(180_000)
+		await helper.signin(sidebar)
+		server.resetOpenAiMock()
+		server.enqueueOpenAiResponses(
+			{ type: "message", text: "E2E_MISTAKE_LIMIT_NO_TOOL_1" },
+			{ type: "message", text: "E2E_MISTAKE_LIMIT_NO_TOOL_2" },
+			{ type: "message", text: "E2E_MISTAKE_LIMIT_NO_TOOL_3" },
+			{
+				type: "message",
+				text: "E2E_MISTAKE_LIMIT_AFTER_RESET",
+				expectedRequestIncludes: ["E2E_MISTAKE_LIMIT_FEEDBACK"],
+			},
+			{
+				type: "tool",
+				name: "attempt_completion",
+				arguments: { result: "E2E_MISTAKE_LIMIT_RESET_OK" },
+			},
+			{
+				type: "error",
+				status: 500,
+				code: "unexpected_additional_request",
+				message: "Unexpected request after mistake-limit recovery",
+			},
+		)
+
+		const taskText = "E2E_MISTAKE_LIMIT_TASK"
+		await sendTask(sidebar, taskText)
+		const attention = sidebar.getByTestId("error-message-box")
+		await expect(attention).toBeVisible({ timeout: 60_000 })
+		await expect(attention.getByText("Task Needs Attention", { exact: true })).toBeVisible()
+
+		const footer = sidebar.getByRole("contentinfo")
+		let processAnyway = footer.getByRole("button", { name: "Process Anyway", exact: true })
+		await expect(processAnyway).toBeVisible()
+		await expect(footer.getByRole("button", { name: "Start New Task", exact: true })).toBeVisible()
+		await expect(attention.getByText("Message", { exact: true })).toHaveCount(0)
+
+		await closeCurrentTask(sidebar)
+		await reopenTask(sidebar, taskText)
+		processAnyway = footer.getByRole("button", { name: "Process Anyway", exact: true })
+		await expect(processAnyway).toBeVisible({ timeout: 30_000 })
+		await expect(footer.getByRole("button", { name: "Start New Task", exact: true })).toBeVisible()
+
+		const input = sidebar.getByTestId("chat-input")
+		await expect(input).toBeEnabled()
+		await input.fill("E2E_MISTAKE_LIMIT_FEEDBACK")
+		await processAnyway.click()
+		await expect(input).toHaveValue("")
+		await expectSingleUserFeedback(sidebar, "E2E_MISTAKE_LIMIT_FEEDBACK")
+		await expect(sidebar.getByText("E2E_MISTAKE_LIMIT_RESET_OK", { exact: false }).last()).toBeVisible({
+			timeout: 60_000,
+		})
+		await expect.poll(() => server.openAiRequestCount).toBe(5)
+		expect(server.getMockConsumptions("openai-compatible-chat").every((entry) => entry.contractError === undefined)).toBe(
+			true,
+		)
+		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+	},
+)
 
 e2e(
 	"API recovery - OpenAI queue exhaustion renders one structured error and Retry recovers",
