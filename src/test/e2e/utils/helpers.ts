@@ -8,6 +8,7 @@ import {
 	readFileSync,
 	rmSync,
 	statSync,
+	writeFileSync,
 } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
@@ -263,6 +264,13 @@ export class E2ETestHelper {
 		return readFileSync(outputPath, "utf8")
 	}
 
+	/** Read the newest Dline Output log without waiting for one to be created. */
+	public static readDlineOutputIfPresent(userDataDir: string): string | undefined {
+		const candidates = E2ETestHelper.findDlineOutputLogs(path.join(userDataDir, "logs"))
+		const outputPath = candidates.sort((left, right) => statSync(right).mtimeMs - statSync(left).mtimeMs)[0]
+		return outputPath ? readFileSync(outputPath, "utf8") : undefined
+	}
+
 	/** Fail when the Dline output channel contains an unexpected internal error or persistent write loop. */
 	public static async expectNoUnexpectedDlineErrors(userDataDir: string, allowed: RegExp[] = []): Promise<void> {
 		const output = await E2ETestHelper.readDlineOutput(userDataDir)
@@ -426,8 +434,25 @@ export const e2e = test
 				await use(userDataDir)
 			} finally {
 				const logsDir = path.join(userDataDir, "logs")
-				if (testInfo.status !== testInfo.expectedStatus && existsSync(logsDir)) {
-					cpSync(logsDir, testInfo.outputPath("vscode-logs"), { recursive: true })
+				if (testInfo.status !== testInfo.expectedStatus) {
+					try {
+						const output = E2ETestHelper.readDlineOutputIfPresent(userDataDir)
+						const outputArtifact = testInfo.outputPath("dline-output.log")
+						writeFileSync(
+							outputArtifact,
+							output ?? "Dline Output log was not created before the test stopped.",
+							"utf8",
+						)
+						await testInfo.attach("dline-output.log", { path: outputArtifact, contentType: "text/plain" })
+						if (existsSync(logsDir)) {
+							cpSync(logsDir, testInfo.outputPath("vscode-logs"), { recursive: true })
+						}
+					} catch (error) {
+						await testInfo.attach("dline-output-capture-error.txt", {
+							body: Buffer.from(error instanceof Error ? (error.stack ?? error.message) : String(error)),
+							contentType: "text/plain",
+						})
+					}
 				}
 				await E2ETestHelper.rmForRetries(userDataDir, { recursive: true, force: true })
 			}
@@ -530,9 +555,24 @@ export const e2e = test
 		},
 	})
 	.extend({
-		page: async ({ app }, use) => {
+		page: async ({ app }, use, testInfo) => {
 			const page = await app.firstWindow()
-			await use(page)
+			try {
+				await use(page)
+			} finally {
+				if (testInfo.status !== testInfo.expectedStatus && !page.isClosed()) {
+					try {
+						const screenshotPath = testInfo.outputPath("vscode-failure.png")
+						await page.screenshot({ path: screenshotPath, fullPage: true, timeout: 5_000 })
+						await testInfo.attach("vscode-failure.png", { path: screenshotPath, contentType: "image/png" })
+					} catch (error) {
+						await testInfo.attach("vscode-screenshot-capture-error.txt", {
+							body: Buffer.from(error instanceof Error ? (error.stack ?? error.message) : String(error)),
+							contentType: "text/plain",
+						})
+					}
+				}
+			}
 		},
 	})
 	.extend<{ sidebar: Frame }>({
