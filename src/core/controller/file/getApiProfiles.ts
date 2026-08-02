@@ -248,7 +248,9 @@ function applyRegistryModelInfo(profiles: ApiProfile[]): boolean {
 		// up-to-date snapshot.
 		const modelInfoOverride = getProfileModelInfoOverride(profile)
 		const mergedModelInfo = mergeModelInfo(baseModelInfo, modelInfoOverride)
-		if (JSON.stringify(profile.modelInfo ?? undefined) !== JSON.stringify(mergedModelInfo ?? undefined)) {
+		const storedModelInfo = modelInfoToStorageJson(profile.modelInfo)
+		const normalizedOverride = modelInfoToStorageJson(modelInfoOverride)
+		if (JSON.stringify(storedModelInfo) !== JSON.stringify(normalizedOverride)) {
 			changed = true
 		}
 		profile.modelInfo = ApiProfile.fromJSON({ modelInfo: mergedModelInfo }).modelInfo

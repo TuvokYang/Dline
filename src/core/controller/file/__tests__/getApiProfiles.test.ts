@@ -7,6 +7,7 @@ import { getAllApiKeys, resetAllStores } from "@core/storage/secrets"
 import { EmptyRequest } from "@shared/proto/dline/common"
 import { ApiProfile } from "@shared/proto/dline/profile"
 import PROVIDERS from "@shared/providers/providers.json"
+import { Logger } from "@shared/services/Logger"
 import { expect } from "chai"
 import { afterEach, beforeEach, describe, it, vi } from "vitest"
 import { getApiProfiles, readApiProfiles, writeApiProfilesToFile } from "../getApiProfiles"
@@ -330,7 +331,7 @@ describe("getApiProfiles", () => {
 		expect(storedProfiles[0]).not.to.have.property("modelInfo")
 	})
 
-	it("stores only editable modelInfo overrides for registry-backed configurable profiles", async () => {
+	it("stores only editable modelInfo overrides without rewriting normalized reads", async () => {
 		const providersDir = path.join(process.env.DLINE_HOME_DIR!, "providers")
 		const settingsDir = path.join(process.env.DLINE_DIR!, "data", "settings")
 		const storedProfilesPath = path.join(settingsDir, "api_profiles.json")
@@ -418,6 +419,16 @@ describe("getApiProfiles", () => {
 				outputPrice: 3,
 			},
 		})
+
+		const logSpy = vi.spyOn(Logger, "log")
+		readApiProfiles()
+		await new Promise((resolve) => setTimeout(resolve, 100))
+		readApiProfiles()
+		await new Promise((resolve) => setTimeout(resolve, 100))
+		const cleanRewriteLogs = logSpy.mock.calls.filter(([message]) =>
+			String(message).includes("[cleanRewriteApiProfiles] Stripped apiKey fields from api_profiles.json"),
+		)
+		expect(cleanRewriteLogs).to.have.length(0)
 	})
 
 	it("keeps modelInfo for user-configurable OpenAI compatible profiles", async () => {

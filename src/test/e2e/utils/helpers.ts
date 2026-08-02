@@ -263,13 +263,22 @@ export class E2ETestHelper {
 		return readFileSync(outputPath, "utf8")
 	}
 
-	/** Fail when the Dline output channel contains an unexpected internal error. */
+	/** Fail when the Dline output channel contains an unexpected internal error or persistent write loop. */
 	public static async expectNoUnexpectedDlineErrors(userDataDir: string, allowed: RegExp[] = []): Promise<void> {
 		const output = await E2ETestHelper.readDlineOutput(userDataDir)
-		const suspiciousLines = output
-			.split(/\r?\n/)
-			.filter((line) => /\[error\]|uncaught|unhandled|TypeError|ReferenceError|invalid_runtime_event/i.test(line))
+		const outputLines = output.split(/\r?\n/)
+		const suspiciousLines = outputLines.filter((line) =>
+			/\[error\]|uncaught|unhandled|TypeError|ReferenceError|invalid_runtime_event/i.test(line),
+		)
 		const unexpected = suspiciousLines.filter((line) => !allowed.some((pattern) => pattern.test(line)))
+		const profileRewriteLines = outputLines.filter((line) =>
+			line.includes("[cleanRewriteApiProfiles] Stripped apiKey fields from api_profiles.json"),
+		)
+		if (profileRewriteLines.length > 1) {
+			unexpected.push(
+				`[profile_rewrite_storm] api_profiles.json was clean-rewritten ${profileRewriteLines.length} times in one VS Code instance`,
+			)
+		}
 		expect(unexpected, `Unexpected Dline output errors:\n${unexpected.join("\n")}`).toEqual([])
 	}
 
