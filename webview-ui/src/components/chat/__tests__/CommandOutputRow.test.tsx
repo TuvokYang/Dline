@@ -1,5 +1,5 @@
 import { COMMAND_OUTPUT_STRING, COMMAND_REQ_APP_STRING } from "@shared/combineCommandSequences"
-import { fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import React from "react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { FileServiceClient } from "@/services/grpc-client"
@@ -47,11 +47,84 @@ describe("CommandOutputRow cancellation", () => {
 		await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith("echo ready"))
 	})
 
+	it("renders the working directory outside the command block as the final metadata row", async () => {
+		const workdirectory = "E:\\workspace\\omnispace\\core"
+		const logPath = "E:\\logs\\npm-install.log"
+		render(
+			<CommandOutputRow
+				{...baseProps}
+				isCollapsed={false}
+				message={{
+					...baseProps.message,
+					logPath,
+					text: `npm install\n\nWorking directory: ${workdirectory}${COMMAND_REQ_APP_STRING}\n${COMMAND_OUTPUT_STRING}\ninstalled`,
+				}}
+			/>,
+		)
+
+		const commandBlock = screen.getByTestId("command-line")
+		const output = await screen.findByText("installed")
+		const logLink = screen.getByRole("button", { name: "Open log file npm-install.log" })
+		const approvalNotice = screen.getByText("The model has determined this command requires explicit approval.")
+		const workdirectoryRow = screen.getByTestId("command-workdirectory")
+
+		await waitFor(() => expect(commandBlock).toHaveTextContent("npm install"))
+		expect(within(commandBlock).queryByText(/Working directory:/)).not.toBeInTheDocument()
+		expect(within(workdirectoryRow).getByLabelText("Working directory")).toHaveAttribute("title", "Working directory")
+		expect(within(workdirectoryRow).queryByText("Working directory:", { exact: true })).not.toBeInTheDocument()
+		expect(workdirectoryRow).toHaveTextContent(workdirectory)
+		expect(output.compareDocumentPosition(logLink) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+		expect(logLink.compareDocumentPosition(approvalNotice) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+		expect(approvalNotice.compareDocumentPosition(workdirectoryRow) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+		expect(screen.getByTestId("command-card")).toHaveClass("border-editor-group-border", "rounded-sm")
+		expect(screen.queryByTestId("activity-command-output")).not.toBeInTheDocument()
+	})
+
 	it("keeps command copy available when the row is collapsed", () => {
 		render(<CommandOutputRow {...baseProps} isCollapsed={true} />)
 
 		expect(screen.getByRole("button", { name: "Copy command" })).toBeVisible()
 	})
+
+	it("shows the sanitized final output line when the row is collapsed", () => {
+		const command = "npm run test"
+		render(
+			<CommandOutputRow
+				{...baseProps}
+				isCollapsed={true}
+				message={{
+					...baseProps.message,
+					text:
+						command +
+						COMMAND_OUTPUT_STRING +
+						"old progress\r\x1b[31m最终_🚀\x1b[0m\tCOLUMN\b\n📋 Output is being logged to: C:\\Temp\\command.log",
+				}}
+			/>,
+		)
+
+		expect(screen.getByRole("button", { name: command })).toBeVisible()
+		const summary = screen.getByTestId("command-output-summary")
+		expect(summary.textContent).toBe("最终_🚀→   COLUMN⌫")
+		expect(summary.textContent).not.toContain("\x1b")
+	})
+
+	it("updates the colored top indicator when a command moves to the background", () => {
+		const { rerender } = render(<CommandOutputRow {...baseProps} isBackgroundExec={false} isCollapsed={false} />)
+
+		const foregroundIndicator = screen.getByTestId("command-execution-mode")
+		expect(foregroundIndicator).toHaveTextContent("Foreground")
+		expect(foregroundIndicator).toHaveClass("text-info")
+		expect(
+			foregroundIndicator.compareDocumentPosition(screen.getByTestId("command-line")) & Node.DOCUMENT_POSITION_FOLLOWING,
+		).toBeTruthy()
+
+		rerender(<CommandOutputRow {...baseProps} isBackgroundExec={true} isCollapsed={false} />)
+
+		const backgroundIndicator = screen.getByTestId("command-execution-mode")
+		expect(backgroundIndicator).toHaveTextContent("Background")
+		expect(backgroundIndicator).toHaveClass("text-editor-warning-foreground")
+	})
+
 	it("shows Cancel for a running VS Code terminal command", () => {
 		const onCancelCommand = vi.fn()
 		render(<CommandOutputRow {...baseProps} isBackgroundExec={false} isCollapsed={false} onCancelCommand={onCancelCommand} />)
@@ -73,6 +146,24 @@ describe("CommandOutputRow cancellation", () => {
 
 		expect(screen.getByText("Failed")).toBeInTheDocument()
 		expect(screen.queryByText("Skipped")).not.toBeInTheDocument()
+	})
+
+	it.each([
+		["cancelled", { isCommandCancelled: true }],
+		["interrupted", { isCommandInterrupted: true }],
+		["skipped", { isCommandSkipped: true }],
+	])("uses the neutral stopped icon for a %s command", (_status, statusProps) => {
+		render(<CommandOutputRow {...baseProps} {...statusProps} isCollapsed={false} isCommandExecuting={false} />)
+
+		const statusIcon = screen.getByTestId("command-status-icon")
+		expect(statusIcon).toHaveClass("lucide-circle-slash", "text-description")
+		expect(statusIcon).not.toHaveClass("lucide-circle-x")
+	})
+
+	it("keeps the neutral stopped icon when a cancelled command is collapsed", () => {
+		render(<CommandOutputRow {...baseProps} isCollapsed={true} isCommandCancelled={true} isCommandExecuting={false} />)
+
+		expect(screen.getByTestId("command-status-icon")).toHaveClass("lucide-circle-slash", "text-description")
 	})
 
 	it("prefers the structured log path when opening command output", () => {

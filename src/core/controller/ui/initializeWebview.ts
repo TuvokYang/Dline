@@ -2,6 +2,7 @@ import { findEnabledProfiles } from "@core/controller/file/getApiProfiles"
 import * as SecretsManager from "@core/storage/secrets"
 import { Empty, EmptyRequest } from "@shared/proto/dline/common"
 import { OpenRouterCompatibleModelInfo } from "@shared/proto/dline/models"
+import { toProtobufModelInfo } from "@shared/proto-conversions/models/typeConversion"
 import { readMcpMarketplaceCatalogFromCache } from "@/core/storage/disk"
 import { telemetryService } from "@/services/telemetry"
 import { Logger } from "@/shared/services/Logger"
@@ -27,13 +28,10 @@ export async function initializeWebview(controller: Controller, _request: EmptyR
 		// Post last cached models as soon as possible for immediate availability in the UI
 		const lastCachedModels = await controller.readOpenRouterModels()
 		if (lastCachedModels) {
-			// Proto create() expects models without the id field; strip it for serialization
-			const modelsWithoutId: Record<string, Omit<(typeof lastCachedModels)[string], "id">> = {}
-			for (const [key, model] of Object.entries(lastCachedModels)) {
-				const { id: _id, ...rest } = model
-				modelsWithoutId[key] = rest
-			}
-			sendOpenRouterModelsEvent(OpenRouterCompatibleModelInfo.create({ models: modelsWithoutId as any }))
+			const models = Object.fromEntries(
+				Object.entries(lastCachedModels).map(([modelId, modelInfo]) => [modelId, toProtobufModelInfo(modelInfo)]),
+			)
+			sendOpenRouterModelsEvent(OpenRouterCompatibleModelInfo.create({ models }))
 		}
 
 		// Refresh OpenRouter models from API (public API, always available)
@@ -106,11 +104,8 @@ export async function initializeWebview(controller: Controller, _request: EmptyR
 		controller.refreshMcpMarketplace(true /* sendCatalogEvent */)
 
 		// Initialize telemetry service with user's current setting
-		controller.getStateToPostToWebview().then((state) => {
-			const { telemetrySetting } = state
-			const isOptedIn = telemetrySetting !== "disabled"
-			telemetryService.updateTelemetryState(isOptedIn)
-		})
+		const telemetrySetting = controller.stateManager.getGlobalSettingsKey("telemetrySetting")
+		telemetryService.updateTelemetryState(telemetrySetting !== "disabled")
 
 		return Empty.create({})
 	} catch (error) {

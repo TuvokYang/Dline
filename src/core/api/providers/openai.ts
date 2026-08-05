@@ -1,6 +1,6 @@
 import { DefaultAzureCredential, getBearerTokenProvider } from "@azure/identity"
 import { azureOpenAiDefaultApiVersion, ModelInfo, openAiModelInfoSaneDefaults, openAiModels } from "@shared/api"
-import { ApiFormat } from "@shared/proto/dline/models/metadata"
+import { ApiFormat, ServerTool } from "@shared/proto/dline/models/metadata"
 import { openAiEndpointToApiFormat, prioritizeApiFormat, resolveApiFormat } from "@shared/providers/api-format"
 import { buildEffectiveModelInfo } from "@shared/providers/effective-model-info"
 import { normalizeOpenAiServiceTier, normalizeOpenaiReasoningEffort } from "@shared/storage/types"
@@ -15,7 +15,7 @@ import { buildExternalBasicHeaders } from "@/services/EnvUtils"
 import { ClineStorageMessage } from "@/shared/messages/content"
 import { createOpenAIClient, fetch } from "@/shared/net"
 import { isO1Model } from "@/shared/resolve-prompt-profile"
-import { ApiHandler, ApiHandlerContext } from "../index"
+import { ApiHandler, ApiHandlerContext, type ApiRequestOptions } from "../index"
 import { withRetry } from "../retry"
 import { convertToO1Messages } from "../transform/o1-format"
 import { convertToOpenAiMessages } from "../transform/openai-format"
@@ -136,6 +136,13 @@ export class OpenAiHandler implements ApiHandler {
 		return this.config?.openAiHeaders
 	}
 
+	supportsServerTool(tool: ServerTool): boolean {
+		return (
+			tool === ServerTool.WEB_SEARCH &&
+			(this.apiFormat === ApiFormat.OPENAI_RESPONSES || this.apiFormat === ApiFormat.OPENAI_RESPONSES_WEBSOCKET_MODE)
+		)
+	}
+
 	/**
 	 * Build effective model metadata from defaults and provider overrides.
 	 *
@@ -216,12 +223,17 @@ export class OpenAiHandler implements ApiHandler {
 	}
 
 	@withRetry()
-	async *createMessage(systemPrompt: string, messages: ClineStorageMessage[], tools?: ChatCompletionTool[]): ApiStream {
+	async *createMessage(
+		systemPrompt: string,
+		messages: ClineStorageMessage[],
+		tools?: ChatCompletionTool[],
+		options?: ApiRequestOptions,
+	): ApiStream {
 		this.requestController?.abort()
 		const requestController = new AbortController()
 		this.requestController = requestController
 		if (this.apiFormat === ApiFormat.OPENAI_RESPONSES || this.apiFormat === ApiFormat.OPENAI_RESPONSES_WEBSOCKET_MODE) {
-			yield* this.createResponsesMessage(systemPrompt, messages, tools, requestController.signal)
+			yield* this.createResponsesMessage(systemPrompt, messages, tools, options, requestController.signal)
 			if (this.requestController === requestController) this.requestController = undefined
 			return
 		}
@@ -392,13 +404,16 @@ export class OpenAiHandler implements ApiHandler {
 		systemPrompt: string,
 		messages: ClineStorageMessage[],
 		tools?: ChatCompletionTool[],
+		options?: ApiRequestOptions,
 		signal?: AbortSignal,
 	): ApiStream {
 		const client = this.ensureClient()
 		const model = this.getModel()
 		const { input } = convertToOpenAIResponsesInput(messages, { usePreviousResponseId: false })
-		const responseTools = tools
-			?.filter((tool): tool is ChatCompletionFunctionTool => tool.type === "function")
+		const hostedWebSearch = options?.serverTools?.includes(ServerTool.WEB_SEARCH) === true
+		const responseTools: OpenAI.Responses.Tool[] = (tools ?? [])
+			.filter((tool): tool is ChatCompletionFunctionTool => tool.type === "function")
+			.filter((tool) => !hostedWebSearch || tool.function.name !== "web_search")
 			.map((tool) => ({
 				type: "function" as const,
 				name: tool.function.name,
@@ -406,6 +421,9 @@ export class OpenAiHandler implements ApiHandler {
 				parameters: tool.function.parameters ?? null,
 				strict: tool.function.strict ?? true,
 			}))
+		if (hostedWebSearch) {
+			responseTools.push({ type: "web_search" })
+		}
 		const enableThinking = this.config?.reasoning?.enableThinking ?? true
 		const reasoningEffort = normalizeOpenaiReasoningEffort(this.reasoningEffort)
 		const temperature = model.info.capabilities?.temperature ?? this.config?.temperature

@@ -98,4 +98,20 @@ describe("QnaRespondHandler", () => {
 		assert.match(result, /<feedback>\n你可以干什么\n<\/feedback>/)
 		assert.doesNotMatch(result, /<user_message>/)
 	})
+
+	it("consumes the one-shot Plan to Act switch state", async () => {
+		const config = createConfig({
+			mode: "plan",
+			interactions: {
+				open: vi.fn(async () => ({ actionId: "reply", draft: { text: "", images: [], files: [] } })),
+			} as unknown as TaskConfig["interactions"],
+		})
+		config.taskState.didRespondToPlanAskBySwitchingMode = true
+
+		const result = await new QnaRespondHandler().execute(config, createBlock())
+
+		expect(config.taskState.didRespondToPlanAskBySwitchingMode).toBe(false)
+		assert.ok(typeof result === "string")
+		assert.match(result, /switched to ACT MODE/)
+	})
 })

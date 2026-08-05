@@ -1,3 +1,4 @@
+import type { ClineAsk } from "@shared/ExtensionMessage"
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import type { ComponentProps, ReactNode } from "react"
 import { describe, expect, it, vi } from "vitest"
@@ -9,8 +10,10 @@ vi.mock("@/components/chat/ChatTextArea", () => ({
 		onSend: (draft?: { text: string; images: string[]; files: string[] }) => void
 		onSendBlocked?: (draft: { text: string; images: string[]; files: string[] }) => void
 		sendingDisabled: boolean
+		clineAsk?: ClineAsk
 	}) => (
 		<>
+			<output data-testid="cline-ask">{props.clineAsk}</output>
 			<button
 				onClick={() =>
 					props.sendingDisabled
@@ -59,6 +62,12 @@ function props(currentDraft: InteractionDraft): ComponentProps<typeof InputSecti
 }
 
 describe("InputSection deferred task submission", () => {
+	it("forwards the active interaction ask to mode-switch draft ownership", () => {
+		render(<InputSection {...props(draft("answer"))} clineAsk="qna_respond" />)
+
+		expect(screen.getByTestId("cline-ask")).toHaveTextContent("qna_respond")
+	})
+
 	it("submits the captured draft once the same task interaction becomes enabled", async () => {
 		const onSubmit = vi.fn(async () => undefined)
 		const initial = props(draft("initial"))

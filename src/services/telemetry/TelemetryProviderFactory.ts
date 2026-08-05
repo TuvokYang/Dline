@@ -20,7 +20,7 @@ export type TelemetryProviderConfig =
 	 * @param config - Config for this specific collector
 	 * @param bypassUserSettings - When true, telemetry is sent regardless of the user's Cline telemetry opt-in/opt-out settings.
 	 * This is used for:
-	 * 	- User-controlled collectors configured via environment variables (e.g., CLINE_OTEL_TELEMETRY_ENABLED).
+	 * 	- User-controlled collectors configured via environment variables (e.g., DLINE_OTEL_TELEMETRY_ENABLED).
 	 * 	- Organization-controlled collectors configured via remote config.
 	 */
 	| { type: "opentelemetry"; config: OpenTelemetryClientValidConfig; bypassUserSettings: boolean }

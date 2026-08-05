@@ -1,4 +1,4 @@
-import { access, readFile } from "node:fs/promises"
+import { access, readdir, readFile } from "node:fs/promises"
 import * as path from "node:path"
 import { expect, type Frame, type Locator, type Page } from "@playwright/test"
 import { E2E_PROFILE_NAMES } from "./utils/api-profile"
@@ -322,7 +322,7 @@ e2e(
 
 e2e(
 	"Multi-window tasks - sidebar and restored panel run independent conversations concurrently",
-	async ({ helper, page, server, sidebar, userDataDir }) => {
+	async ({ dlineDocsDir, helper, page, server, sidebar, userDataDir }) => {
 		e2e.setTimeout(180_000)
 		await helper.signin(sidebar)
 
@@ -342,6 +342,12 @@ e2e(
 		await expect(sidebar.getByText("E2E_MULTI_WINDOW_PANEL_READY", { exact: false }).last()).toBeVisible({
 			timeout: 60_000,
 		})
+		const panelTaskIds = (await readdir(path.join(dlineDocsDir, "tasks"), { withFileTypes: true }))
+			.filter((entry) => entry.isDirectory())
+			.map((entry) => entry.name)
+		expect(panelTaskIds).toHaveLength(1)
+		const panelTaskId = panelTaskIds[0]
+		if (!panelTaskId) throw new Error("Panel task ID was not persisted")
 
 		await sidebar.getByRole("button", { name: "Close Task", exact: true }).click()
 		await page.getByRole("button", { name: "History", exact: true }).click()
@@ -356,6 +362,14 @@ e2e(
 		await E2ETestHelper.dismissWhatsNewModal(panel)
 		await expect(panel.getByText(panelTask, { exact: true }).first()).toBeVisible({ timeout: 30_000 })
 		await expect(panel.getByTestId("chat-input")).toBeEnabled()
+		const restoredSnapshotText = await readFile(path.join(dlineDocsDir, "tasks", panelTaskId, "snapshot.json"), "utf8")
+		const restoredSnapshot = JSON.parse(restoredSnapshotText) as {
+			interaction?: { interactionId?: string; kind?: string }
+			turn?: { blocks?: Array<{ dlineTid?: string; toolName?: string }> }
+		}
+		const completionBlock = restoredSnapshot.turn?.blocks?.find((block) => block.toolName === "attempt_completion")
+		expect(restoredSnapshot.interaction?.kind, restoredSnapshotText).toBe("completion")
+		expect(restoredSnapshot.interaction?.interactionId, restoredSnapshotText).toBe(completionBlock?.dlineTid)
 		await selectProfile(panel, E2E_PROFILE_NAMES.mockOpenAiResponses)
 
 		await sidebar.getByRole("button", { name: "Done", exact: true }).click()

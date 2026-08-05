@@ -4,6 +4,7 @@ import { execa } from "@packages/execa"
 import { ClineMessage } from "@shared/ExtensionMessage"
 import { envFlagEnabled } from "@shared/env"
 import { HistoryItem } from "@shared/HistoryItem"
+import { ApiFormat, ServerTool } from "@shared/proto/dline/models/metadata"
 import { RemoteConfig } from "@shared/remote-config/schema"
 import { GlobalState, Settings } from "@shared/storage/state-keys"
 import { fileExistsAtPath, isDirectory } from "@utils/fs"
@@ -167,13 +168,13 @@ export function getDlineHomePath(): string {
  * Get the Dline data directory path.
  * Used by StateManager for secrets/state storage and api_profiles.
  *
- * Priority: DLINE_DIR (secrets/test override) → CLINE_DIR (legacy) → ~/.dline
+ * Priority: DLINE_DIR (secrets/test override) → ~/.dline
  * Note: DLINE_DIR is separate from DLINE_HOME_DIR — the former is for
  * secrets/sensitive data that may be redirected during testing, while the
  * latter is for the main .dline directory (providers, rules, etc.).
  */
 export function getDlineDataDir(): string {
-	const dlineDir = process.env.DLINE_DIR || process.env.CLINE_DIR || path.join(os.homedir(), ".dline")
+	const dlineDir = process.env.DLINE_DIR || path.join(os.homedir(), ".dline")
 	return path.join(dlineDir, "data")
 }
 export function getDlineDocumentsPathSync(): string {
@@ -601,8 +602,32 @@ function isPromptBuilderInfo(value: unknown): value is FrozenPromptBuilderInfo {
 		isNonEmptyString(value.providerId) &&
 		isNonEmptyString(value.modelId) &&
 		(value.profile === "standard" || value.profile === "lite") &&
-		typeof value.nativeTools === "boolean"
+		typeof value.nativeTools === "boolean" &&
+		(value.apiFormat === undefined || isKnownApiFormat(value.apiFormat)) &&
+		(value.serverTools === undefined ||
+			(Array.isArray(value.serverTools) && value.serverTools.every((tool) => isKnownServerTool(tool)))) &&
+		(value.webToolsEnabled === undefined || typeof value.webToolsEnabled === "boolean") &&
+		(value.webSearchRoute === undefined ||
+			value.webSearchRoute === "disabled" ||
+			value.webSearchRoute === "local" ||
+			value.webSearchRoute === "hosted" ||
+			value.webSearchRoute === "unavailable")
 	)
+}
+
+function isKnownApiFormat(value: unknown): value is ApiFormat {
+	return (
+		value === ApiFormat.ANTHROPIC_CHAT ||
+		value === ApiFormat.GEMINI_CHAT ||
+		value === ApiFormat.OPENAI_CHAT ||
+		value === ApiFormat.R1_CHAT ||
+		value === ApiFormat.OPENAI_RESPONSES ||
+		value === ApiFormat.OPENAI_RESPONSES_WEBSOCKET_MODE
+	)
+}
+
+function isKnownServerTool(value: unknown): value is ServerTool {
+	return value === ServerTool.WEB_SEARCH
 }
 
 /** Normalize the legacy prompt profile name before validating a persisted cache. */

@@ -23,6 +23,7 @@ describe("command status persistence", () => {
 	it.each<CommandStatus>([
 		"running",
 		"cancelled",
+		"interrupted",
 		"completed",
 	])("persists %s through message-state flush and JSONL reopen", async (commandStatus) => {
 		const taskId = `command-status-${commandStatus}`

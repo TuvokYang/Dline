@@ -29,7 +29,7 @@ function createConfig(overrides: Partial<TaskConfig> = {}): TaskConfig {
 		browserSettings: {} as unknown as TaskConfig["browserSettings"],
 		focusChainSettings: { enabled: false } as unknown as TaskConfig["focusChainSettings"],
 		interactions: {
-			open: vi.fn(async () => ({ actionId: "approve" as const })),
+			open: vi.fn(async () => ({ actionId: "confirm_utility" as const })),
 			complete: vi.fn(async () => ({ actionId: "approve" as const })),
 			say: vi.fn(async () => undefined),
 		},
@@ -113,11 +113,11 @@ describe("CondenseHandler", () => {
 			})
 		})
 
-		it("treats user input as feedback when text is provided in condense mode", async () => {
+		it("asks for a replacement summary when the user rejects with feedback", async () => {
 			const config = createConfig()
 			;(config.interactions.open as ReturnType<typeof vi.fn>).mockResolvedValue({
-				actionId: "reply",
-				draft: { text: "I want to keep chatting", images: [], files: [] },
+				actionId: "reject",
+				draft: { text: "Keep the deployment details", images: [], files: [] },
 			})
 			const handler = new CondenseHandler()
 			const block = makeBlock("condense", "test summary")
@@ -126,11 +126,31 @@ describe("CondenseHandler", () => {
 
 			expect(config.callbacks.say).toHaveBeenCalledWith(
 				"user_feedback",
-				"I want to keep chatting",
+				"Keep the deployment details",
 				expect.any(Array),
 				expect.any(Array),
 			)
-			assert.ok(typeof result === "string")
+			assert.equal(typeof result, "string")
+			expect(result).toContain('<explicit_instructions type="condense">')
+			expect(result).toContain("Regenerate the summary now")
+			expect(result).toContain("<feedback>\nKeep the deployment details\n</feedback>")
+			expect(config.services.contextManager.getNextTruncationRange).not.toHaveBeenCalled()
+		})
+
+		it("regenerates without written feedback when the secondary action is clicked", async () => {
+			const config = createConfig()
+			;(config.interactions.open as ReturnType<typeof vi.fn>).mockResolvedValue({
+				actionId: "reject",
+				draft: { text: "", images: [], files: [] },
+			})
+			const handler = new CondenseHandler()
+
+			const result = await handler.execute(config, makeBlock("condense", "test summary"))
+
+			assert.equal(typeof result, "string")
+			expect(result).toContain("No additional written feedback was provided.")
+			expect(config.callbacks.say).not.toHaveBeenCalled()
+			expect(config.services.contextManager.getNextTruncationRange).not.toHaveBeenCalled()
 		})
 
 		it("returns missing context error when context is empty for condense", async () => {

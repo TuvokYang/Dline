@@ -24,7 +24,8 @@ import {
 	isActiveInteractionSynchronized,
 } from "@/task-interaction/types"
 import { Navbar } from "../menu/Navbar"
-import { TaskActivityPanel } from "./activity/TaskActivityPanel"
+import { TaskActivityNavigationProvider } from "./activity/TaskActivityNavigationContext"
+import { DEFAULT_TASK_ACTIVITY_FILTERS, type TaskActivityFilters, TaskActivityPanel } from "./activity/TaskActivityPanel"
 import { TaskActivityTabs, type TaskContentTab } from "./activity/TaskActivityTabs"
 import { useTaskActivities } from "./activity/useTaskActivities"
 import AutoApproveBar from "./auto-approve-menu/AutoApproveBar"
@@ -77,9 +78,27 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 		currentTaskItem,
 	} = useExtensionState()
 	const [contentTab, setContentTab] = useState<TaskContentTab>("chat")
-	const taskId = currentTaskItem?.id
+	const [focusedActivityId, setFocusedActivityId] = useState<string>()
+	const [activityFilters, setActivityFilters] = useState<TaskActivityFilters>(DEFAULT_TASK_ACTIVITY_FILTERS)
+	const taskId = taskViewState?.taskId ?? currentTaskItem?.id
 	const { activeCount } = useTaskActivities(taskId)
-	useEffect(() => setContentTab("chat"), [taskId])
+	useEffect(() => {
+		setContentTab("chat")
+		setFocusedActivityId(undefined)
+		setActivityFilters(DEFAULT_TASK_ACTIVITY_FILTERS)
+	}, [taskId])
+	const handleContentTabChange = useCallback((nextTab: TaskContentTab) => {
+		setContentTab(nextTab)
+		if (nextTab === "chat") setFocusedActivityId(undefined)
+	}, [])
+	const navigateToActivity = useCallback((activityId: string) => {
+		setFocusedActivityId(activityId)
+		setContentTab("activity")
+	}, [])
+	const handleActivityFiltersChange = useCallback((nextFilters: TaskActivityFilters) => {
+		setActivityFilters(nextFilters)
+		setFocusedActivityId(undefined)
+	}, [])
 	const isProdHostedApp = userInfo?.apiBaseUrl === "https://app.dline.bot"
 	const shouldShowQuickWins = isProdHostedApp && (!taskHistory || taskHistory.length < QUICK_WINS_HISTORY_THRESHOLD)
 
@@ -137,7 +156,7 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 	const currentDraftRef = useRef(interactionDraft)
 	currentTaskIdRef.current = taskId
 	currentDraftRef.current = interactionDraft
-	const settleAcceptedDraft = useCallback(
+	const clearOwnedDraft = useCallback(
 		(settlement: AcceptedInteractionSettlement): void => {
 			if (!canApplyAcceptedInteractionSettlement(currentTaskIdRef.current, currentDraftRef.current, settlement)) {
 				return
@@ -395,11 +414,30 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 			if (!request) {
 				return undefined
 			}
+			const settlement = createAcceptedInteractionSettlement(request, capturedDraft)
+			clearOwnedDraft(settlement)
 			const response = await TaskServiceClient.dispatchInteraction(request)
-			return response.accepted ? createAcceptedInteractionSettlement(request, capturedDraft) : undefined
+			return response.accepted ? settlement : undefined
 		},
-		[interactionSynchronized, taskViewState],
+		[clearOwnedDraft, interactionSynchronized, taskViewState],
 	)
+	const canSubmitCompactTask = interactionSynchronized && taskViewState?.input.enterAction === "reply"
+	const submitCompactTask = useCallback(async (): Promise<boolean> => {
+		if (!taskViewState || !canSubmitCompactTask) {
+			return false
+		}
+		const request = buildInteractionRequest(taskViewState, "reply", {
+			text: "/compact",
+			images: [],
+			files: [],
+			activeQuote: null,
+		})
+		if (!request) {
+			return false
+		}
+		const response = await TaskServiceClient.dispatchInteraction(request)
+		return response.accepted
+	}, [canSubmitCompactTask, taskViewState])
 	const submitFollowupOption = useCallback(
 		async (message: ClineMessage, option: string): Promise<void> => {
 			const view = taskViewState
@@ -423,12 +461,11 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 			}
 			const request = buildInteractionRequest(view, "reply", responseDraft)
 			if (!request) return
-			const response = await TaskServiceClient.dispatchInteraction(request)
-			if (response.accepted) {
-				settleAcceptedDraft(createAcceptedInteractionSettlement(request, capturedDraft))
-			}
+			const settlement = createAcceptedInteractionSettlement(request, capturedDraft)
+			clearOwnedDraft(settlement)
+			await TaskServiceClient.dispatchInteraction(request)
 		},
-		[interactionSynchronized, settleAcceptedDraft, taskViewState],
+		[clearOwnedDraft, interactionSynchronized, taskViewState],
 	)
 
 	const placeholderText = useMemo(() => {
@@ -446,6 +483,7 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 						lastApiReqTotalTokens={lastApiReqTotalTokens}
 						lastProgressMessageText={lastProgressMessageText}
 						messageHandlers={messageHandlers}
+						onCompactTask={canSubmitCompactTask ? submitCompactTask : undefined}
 						selectedModelInfo={{
 							contextWindow: selectedModelInfo.capabilities?.contextWindow,
 							pricing: selectedModelInfo.pricing,
@@ -468,19 +506,26 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 				)}
 				{task && (
 					<>
-						<TaskActivityTabs activeCount={activeCount} onChange={setContentTab} value={contentTab} />
+						<TaskActivityTabs activeCount={activeCount} onChange={handleContentTabChange} value={contentTab} />
 						{contentTab === "chat" ? (
-							<MessagesArea
-								chatState={chatState}
-								groupedMessages={groupedMessages}
-								messageHandlers={messageHandlers}
-								modifiedMessages={modifiedMessages}
-								onFollowupOptionSelect={submitFollowupOption}
-								scrollBehavior={scrollBehavior}
-								task={task}
-							/>
+							<TaskActivityNavigationProvider onNavigate={navigateToActivity}>
+								<MessagesArea
+									chatState={chatState}
+									groupedMessages={groupedMessages}
+									messageHandlers={messageHandlers}
+									modifiedMessages={modifiedMessages}
+									onFollowupOptionSelect={submitFollowupOption}
+									scrollBehavior={scrollBehavior}
+									task={task}
+								/>
+							</TaskActivityNavigationProvider>
 						) : taskId ? (
-							<TaskActivityPanel taskId={taskId} />
+							<TaskActivityPanel
+								filters={activityFilters}
+								focusActivityId={focusedActivityId}
+								onFiltersChange={handleActivityFiltersChange}
+								taskId={taskId}
+							/>
 						) : null}
 					</>
 				)}
@@ -491,7 +536,7 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 						dispatch={TaskServiceClient.dispatchInteraction.bind(TaskServiceClient)}
 						draft={interactionDraft}
 						messages={modifiedMessages}
-						onDraftAccepted={settleAcceptedDraft}
+						onDraftAccepted={clearOwnedDraft}
 						showTimeline={false}
 						view={taskViewState}
 					/>
@@ -501,6 +546,7 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 				<AutoApproveBar />
 				<InputSection
 					chatState={chatState}
+					clineAsk={taskViewState?.activeInteraction?.taskAsk}
 					draft={interactionDraft}
 					enabled={
 						task
@@ -508,7 +554,7 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 							: undefined
 					}
 					messageHandlers={messageHandlers}
-					onDraftAccepted={settleAcceptedDraft}
+					onDraftAccepted={clearOwnedDraft}
 					onSubmit={task ? submitInteractionDraft : undefined}
 					placeholderText={placeholderText}
 					scrollBehavior={scrollBehavior}

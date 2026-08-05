@@ -17,7 +17,6 @@ export async function executeCommandInTerminal(
 			iconPath: new vscode.ThemeIcon("dline-icon"),
 			env: {
 				DLINE_ACTIVE: "true",
-				CLINE_ACTIVE: "true",
 			},
 		}
 

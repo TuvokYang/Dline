@@ -1,4 +1,6 @@
 import type { ApiHandler } from "@core/api"
+import { ApiFormat, ServerTool } from "@shared/proto/dline/models/metadata"
+import { WebSearchMode } from "@shared/proto/dline/provider/common"
 import { ClineDefaultTool } from "@shared/tools"
 import { describe, expect, it, vi } from "vitest"
 import { createRequestApiScope, withRequestToolIds } from "../RequestApiScope"
@@ -55,10 +57,127 @@ describe("createRequestApiScope", () => {
 
 	it("accepts the automatic compaction tool only on the selected request", () => {
 		const handler = createHandler("openai", "openai-model")
-		const baseScope = createRequestApiScope(handler, "act")
+		const baseScope = createRequestApiScope(handler, "act", undefined, true)
 		const compactScope = withRequestToolIds(baseScope, [ClineDefaultTool.SUMMARIZE_TASK])
 
+		expect(baseScope.webToolsEnabled).toBe(true)
 		expect(baseScope.requestToolIds).toEqual([])
 		expect(compactScope.requestToolIds).toEqual([ClineDefaultTool.SUMMARIZE_TASK])
+		expect(compactScope.webToolsEnabled).toBe(true)
+		expect(compactScope.webSearchRoutingPlan.route).toBe("disabled")
+		expect(compactScope.webSearchRoutingPlan.serverTools).toEqual([])
+		expect(baseScope.webSearchRoutingPlan.route).not.toBe("disabled")
+	})
+
+	it("freezes the global Web Tools switch independently from later settings changes", () => {
+		const handler = createHandler("openai", "openai-model")
+		let liveWebToolsEnabled = true
+
+		const scope = createRequestApiScope(handler, "act", undefined, liveWebToolsEnabled)
+		liveWebToolsEnabled = false
+
+		expect(liveWebToolsEnabled).toBe(false)
+		expect(scope.webToolsEnabled).toBe(true)
+		expect(Object.isFrozen(scope)).toBe(true)
+	})
+
+	it("freezes hosted Web Search from model metadata, selected protocol, and handler support", () => {
+		const handler = createHandler("metadata-provider", "hosted-model")
+		handler.getModel = () => ({
+			id: "hosted-model",
+			info: {
+				id: "hosted-model",
+				apiFormats: [ApiFormat.OPENAI_RESPONSES],
+				capabilities: { tools: [ServerTool.WEB_SEARCH] },
+			},
+		})
+		handler.supportsServerTool = (tool) => tool === ServerTool.WEB_SEARCH
+
+		const scope = createRequestApiScope(handler, "act", undefined, true)
+
+		expect(scope.webSearchRoutingPlan).toMatchObject({
+			route: "hosted",
+			localToolEnabled: false,
+			serverTools: [ServerTool.WEB_SEARCH],
+		})
+	})
+
+	it("uses local Web Search in Auto when the selected transport cannot host it", () => {
+		const handler = createHandler("metadata-provider", "chat-model")
+		handler.getModel = () => ({
+			id: "chat-model",
+			info: {
+				id: "chat-model",
+				apiFormats: [ApiFormat.OPENAI_CHAT],
+				capabilities: { tools: [ServerTool.WEB_SEARCH] },
+			},
+		})
+		handler.supportsServerTool = () => false
+
+		expect(createRequestApiScope(handler, "act", undefined, true).webSearchRoutingPlan).toMatchObject({
+			route: "local",
+			localToolEnabled: true,
+			serverTools: [],
+		})
+	})
+
+	it("does not advertise local Web Search when the resolved Lite profile omits local web tools", () => {
+		const handler = createHandler("metadata-provider", "small-chat-model")
+		handler.getModel = () => ({
+			id: "small-chat-model",
+			info: {
+				id: "small-chat-model",
+				apiFormats: [ApiFormat.OPENAI_CHAT],
+				capabilities: { contextWindow: 32_000 },
+			},
+		})
+		handler.supportsServerTool = () => false
+
+		expect(createRequestApiScope(handler, "act", undefined, true).webSearchRoutingPlan).toMatchObject({
+			route: "unavailable",
+			localToolEnabled: false,
+			serverTools: [],
+			unavailableReason: "server_tool_not_declared",
+		})
+	})
+
+	it("does not fall back locally when Force Remote is unavailable", () => {
+		const handler = createHandler("metadata-provider", "chat-model")
+		handler.getModel = () => ({
+			id: "chat-model",
+			info: {
+				id: "chat-model",
+				apiFormats: [ApiFormat.OPENAI_CHAT],
+				capabilities: { tools: [ServerTool.WEB_SEARCH] },
+			},
+		})
+		handler.getWebSearchMode = () => WebSearchMode.WEB_SEARCH_MODE_FORCE_REMOTE
+		handler.supportsServerTool = () => false
+
+		expect(createRequestApiScope(handler, "act", undefined, true).webSearchRoutingPlan).toMatchObject({
+			route: "unavailable",
+			localToolEnabled: false,
+			serverTools: [],
+			unavailableReason: "server_tool_transport_unsupported",
+		})
+	})
+
+	it("lets the global Web Tools switch disable every route", () => {
+		const handler = createHandler("metadata-provider", "hosted-model")
+		handler.getModel = () => ({
+			id: "hosted-model",
+			info: {
+				id: "hosted-model",
+				apiFormats: [ApiFormat.OPENAI_RESPONSES],
+				capabilities: { tools: [ServerTool.WEB_SEARCH] },
+			},
+		})
+		handler.supportsServerTool = () => true
+
+		expect(createRequestApiScope(handler, "act", undefined, false).webSearchRoutingPlan).toMatchObject({
+			route: "disabled",
+			localToolEnabled: false,
+			serverTools: [],
+		})
 	})
 })

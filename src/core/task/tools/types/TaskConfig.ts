@@ -1,11 +1,12 @@
 import type { ApiHandler } from "@core/api"
+import type { WebSearchRoutingPlan } from "@core/api/server-tools"
 import type { IdentityFactory } from "@core/api/transform/block-identity"
 import type { FileContextTracker } from "@core/context/context-tracking/FileContextTracker"
 import type { ClineIgnoreController } from "@core/ignore/ClineIgnoreController"
 import type { CommandPermissionController } from "@core/permissions"
 import type { TaskFileTracker } from "@integrations/checkpoints/TaskFileTracker"
 import type { DiffViewProvider } from "@integrations/editor/DiffViewProvider"
-import type { CommandExecutionOptions, CommandExecutionOutcome } from "@integrations/terminal"
+import type { CommandCancellationResult, CommandExecutionOptions, CommandExecutionOutcome } from "@integrations/terminal"
 import type { BrowserSession } from "@services/browser/BrowserSession"
 import type { UrlContentFetcher } from "@services/browser/UrlContentFetcher"
 import type { McpHub } from "@services/mcp/McpHub"
@@ -67,6 +68,10 @@ export interface TaskConfig {
 	vscodeTerminalExecutionMode: "vscodeTerminal" | "backgroundExec"
 	enableParallelToolCalling: boolean
 	isSubagentExecution: boolean
+	/** Request-frozen global Web Tools switch. */
+	webToolsEnabled?: boolean
+	/** Request-frozen route used to admit or reject local Web Search execution. */
+	webSearchRoutingPlan?: WebSearchRoutingPlan
 
 	// Multi-workspace support (optional for backward compatibility)
 	workspaceManager?: WorkspaceRootManager
@@ -168,7 +173,7 @@ export interface TaskCallbacks {
 		timeoutSeconds: number | undefined,
 		options?: CommandExecutionOptions,
 	) => Promise<CommandExecutionOutcome>
-	killCommandTool?: (functionId: string) => Promise<boolean>
+	killCommandTool?: (functionId: string) => Promise<CommandCancellationResult>
 	cancelRunningCommandTool?: () => Promise<boolean>
 
 	doesLatestTaskCompletionHaveNewChanges: () => Promise<boolean>

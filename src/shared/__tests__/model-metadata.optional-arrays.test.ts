@@ -19,11 +19,12 @@ describe("optional repeated model metadata", () => {
 		const modelInfo = ModelInfo.create({
 			id: "deepseek-v4-flash",
 			apiFormats: [ApiFormat.OPENAI_CHAT, ApiFormat.OPENAI_RESPONSES],
-			capabilities: { tools: [ServerTool.WEB_SEARCH] },
+			capabilities: { tools: [ServerTool.WEB_SEARCH], supportsBrowserAction: true },
 		})
 		const decoded = ModelInfo.decode(ModelInfo.encode(modelInfo).finish())
 
 		expect(decoded.apiFormats).toEqual([ApiFormat.OPENAI_CHAT, ApiFormat.OPENAI_RESPONSES])
 		expect(decoded.capabilities?.tools).toEqual([ServerTool.WEB_SEARCH])
+		expect(decoded.capabilities?.supportsBrowserAction).toBe(true)
 	})
 })

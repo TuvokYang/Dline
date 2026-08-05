@@ -89,11 +89,11 @@ See the [CLI Reference](/cli/cli-reference#cline-auth) for all auth options.
 
 ```bash
 # Set the key
-export CLINE_API_KEY="your_api_key_here"
+export DLINE_API_KEY="your_api_key_here"
 
 # Use it in requests
 curl -X POST https://api.dline.bot/api/v1/chat/completions \
-  -H "Authorization: Bearer $CLINE_API_KEY" \
+  -H "Authorization: Bearer $DLINE_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"model": "anthropic/claude-sonnet-4-6", "messages": [{"role": "user", "content": "Hello"}]}'
 ```
@@ -102,7 +102,7 @@ curl -X POST https://api.dline.bot/api/v1/chat/completions \
 
 ```bash
 # .env (add to .gitignore)
-CLINE_API_KEY=your_api_key_here
+DLINE_API_KEY=your_api_key_here
 ```
 
 ```python
@@ -111,7 +111,7 @@ from openai import OpenAI
 
 client = OpenAI(
     base_url="https://api.dline.bot/api/v1",
-    api_key=os.environ["CLINE_API_KEY"],
+    api_key=os.environ["DLINE_API_KEY"],
 )
 ```
 

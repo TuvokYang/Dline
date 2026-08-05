@@ -286,6 +286,7 @@ message TaskActivity {
   bool cancellable = 18;
   int32 schema_version = 19;
   repeated TaskActivityEvent events = 20;
+  optional int32 timeout_seconds = 21;
 }
 
 message TaskActivityUpdate {

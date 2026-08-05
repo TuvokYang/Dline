@@ -21,6 +21,11 @@ export interface BackgroundResultSection {
 	commandIds: string[]
 }
 
+export interface BackgroundEnvironmentSection {
+	text: string
+	commandLineCounts: Array<{ id: string; lineCount: number }>
+}
+
 export interface BackgroundSubagentProvider {
 	getSubagentJobManager(): SubagentJobManager
 }
@@ -40,11 +45,19 @@ export function buildTaskBackgroundSection(
 	subagentProvider: BackgroundSubagentProvider,
 	commandProvider?: BackgroundCommandProvider,
 ): string {
+	return buildTaskBackgroundEnvironmentSection(subagentProvider, commandProvider).text
+}
+
+/** Build Environment metadata together with the exact command line-count snapshot it represents. */
+export function buildTaskBackgroundEnvironmentSection(
+	subagentProvider: BackgroundSubagentProvider,
+	commandProvider?: BackgroundCommandProvider,
+): BackgroundEnvironmentSection {
 	const injector = new BackgroundContextInjector({
 		subagentJobManager: subagentProvider.getSubagentJobManager(),
 		commandProvider,
 	})
-	return injector.buildEnvironmentSection()
+	return injector.buildEnvironmentSectionWithMetadata()
 }
 
 /**
@@ -85,8 +98,17 @@ export class BackgroundContextInjector {
 	 * @returns Markdown sections, or an empty string when no background work is visible.
 	 */
 	buildEnvironmentSection(): string {
-		const sections = [this.buildSubagentSection(), this.buildCommandSection()].filter((section) => section.length > 0)
-		return sections.join("\n\n")
+		return this.buildEnvironmentSectionWithMetadata().text
+	}
+
+	/** Build Environment text and capture the exact output counts described by that text. */
+	buildEnvironmentSectionWithMetadata(): BackgroundEnvironmentSection {
+		const commands = this.listVisibleCommands()
+		const sections = [this.buildSubagentSection(), this.buildCommandSection(commands)].filter((section) => section.length > 0)
+		return {
+			text: sections.join("\n\n"),
+			commandLineCounts: commands.map((command) => ({ id: command.id, lineCount: command.lineCount })),
+		}
 	}
 
 	/**
@@ -163,9 +185,11 @@ export class BackgroundContextInjector {
 	 * Build the background command environment section.
 	 * @returns Markdown section for visible background commands.
 	 */
-	private buildCommandSection(): string {
-		const commands =
-			this.commandProvider?.listBackgroundCommands().filter((command) => command.injectionState !== "consumed") ?? []
+	private listVisibleCommands(): InjectableBackgroundCommand[] {
+		return this.commandProvider?.listBackgroundCommands().filter((command) => command.injectionState !== "consumed") ?? []
+	}
+
+	private buildCommandSection(commands: InjectableBackgroundCommand[]): string {
 		if (commands.length === 0) return ""
 		return ["# Background Commands", ...commands.map((command) => this.formatCommand(command))].join("\n")
 	}
@@ -176,8 +200,15 @@ export class BackgroundContextInjector {
 	 * @returns One markdown list item.
 	 */
 	private formatCommand(command: InjectableBackgroundCommand): string {
-		const log = command.logFilePath ? ` (log: ${command.logFilePath})` : ""
-		return `- ${command.id}: ${command.status} - ${command.command}${log}`
+		const outputChange = Math.max(0, command.lineCount - (command.lastApiSentLineCount ?? 0))
+		const lineLabel = outputChange === 1 ? "line" : "lines"
+		return [
+			`- function_id: ${command.functionId ?? "unavailable"}`,
+			`  status: ${command.status}`,
+			`  output change since last API send: +${outputChange} ${lineLabel}`,
+			`  command: ${command.command}`,
+			`  log: ${command.logFilePath ?? "unavailable"}`,
+		].join("\n")
 	}
 
 	/**

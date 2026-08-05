@@ -2,8 +2,9 @@
  * Unit tests for ModelRegistry.
  */
 
-import { expect } from "chai"
 // sinon import removed: using vitest globals
+import { ApiFormat, ServerTool } from "@shared/proto/dline/models/metadata"
+import { expect } from "chai"
 import fsPromises from "fs/promises"
 import * as path from "path"
 import { afterEach, beforeEach, describe, it, vi } from "vitest"
@@ -112,6 +113,31 @@ describe("ModelRegistry", () => {
 	})
 
 	describe("getAllModels", () => {
+		it("loads vercel.json under the Vercel provider ID and ignores the legacy duplicate", async () => {
+			const legacyConfig = {
+				provider: "vercel-ai-gateway",
+				providerName: "Vercel AI Gateway",
+				billingMode: "token",
+				models: {},
+			}
+			const canonicalConfig = {
+				...legacyConfig,
+				models: {
+					"anthropic/claude-sonnet": {
+						id: "anthropic/claude-sonnet",
+						name: "Claude Sonnet",
+					},
+				},
+			}
+			await fsPromises.writeFile(path.join(tempDir, "vercel-ai-gateway.json"), JSON.stringify(legacyConfig))
+			await fsPromises.writeFile(path.join(tempDir, "vercel.json"), JSON.stringify(canonicalConfig))
+
+			await registry.initialize()
+
+			expect(registry.getProviderModels("vercel-ai-gateway")?.models).to.have.property("anthropic/claude-sonnet")
+			expect(registry.getAllProviders().filter((provider) => provider.provider === "vercel-ai-gateway")).to.have.lengthOf(1)
+		})
+
 		it("should return defaultModelId from provider config", async () => {
 			const config = {
 				provider: "doubao",
@@ -271,6 +297,81 @@ describe("ModelRegistry", () => {
 
 			const persisted = JSON.parse(await fsPromises.readFile(filePath, "utf8"))
 			expect(persisted.models["claude-sonnet-4-6"].capabilities).not.to.have.property("supportsTools")
+		})
+
+		it("fills missing API formats from built-in metadata in memory", async () => {
+			const filePath = path.join(tempDir, "deepseek.json")
+			await fsPromises.writeFile(
+				filePath,
+				JSON.stringify({
+					provider: "deepseek",
+					providerName: "DeepSeek",
+					defaultModelId: "deepseek-v4-pro",
+					models: {
+						"deepseek-v4-pro": {
+							id: "deepseek-v4-pro",
+							capabilities: { contextWindow: 1_000_000 },
+						},
+					},
+				}),
+			)
+
+			await registry.initialize()
+
+			expect(registry.getProviderModels("deepseek")?.models["deepseek-v4-pro"].apiFormats).to.deep.equal([
+				ApiFormat.OPENAI_CHAT,
+				ApiFormat.OPENAI_RESPONSES,
+				ApiFormat.ANTHROPIC_CHAT,
+			])
+			const persisted = JSON.parse(await fsPromises.readFile(filePath, "utf8"))
+			expect(persisted.models["deepseek-v4-pro"]).not.to.have.property("apiFormats")
+		})
+
+		it("normalizes protobuf server-tool names at the provider JSON boundary", async () => {
+			await fsPromises.writeFile(
+				path.join(tempDir, "custom.json"),
+				JSON.stringify({
+					provider: "custom",
+					providerName: "Custom",
+					billingMode: "token",
+					models: {
+						"search-model": {
+							id: "search-model",
+							capabilities: { tools: ["WEB_SEARCH", "UNKNOWN_SERVER_TOOL"] },
+						},
+					},
+				}),
+			)
+
+			await registry.initialize()
+
+			expect(registry.getProviderModels("custom")?.models["search-model"].capabilities?.tools).to.deep.equal([
+				ServerTool.WEB_SEARCH,
+			])
+		})
+
+		it("does not merge built-in metadata into a user-defined model", async () => {
+			await fsPromises.writeFile(
+				path.join(tempDir, "deepseek.json"),
+				JSON.stringify({
+					provider: "deepseek",
+					providerName: "DeepSeek",
+					models: {
+						"deepseek-v4-pro": {
+							id: "deepseek-v4-pro",
+							userDefined: true,
+							capabilities: { supportsTools: false },
+						},
+					},
+				}),
+			)
+
+			await registry.initialize()
+
+			const model = registry.getProviderModels("deepseek")?.models["deepseek-v4-pro"]
+			expect(model?.userDefined).to.equal(true)
+			expect(model?.capabilities?.supportsTools).to.equal(false)
+			expect(model?.apiFormats).to.equal(undefined)
 		})
 
 		it("should return config for existing provider", async () => {

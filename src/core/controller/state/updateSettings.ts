@@ -1,4 +1,9 @@
 import { buildApiHandler } from "@core/api"
+import {
+	MAX_AUTO_CONDENSE_CONTEXT_TOKENS,
+	MAX_AUTO_CONDENSE_TRIGGER_PERCENT,
+	MIN_AUTO_CONDENSE_TRIGGER_PERCENT,
+} from "@shared/auto-condense"
 import { Empty } from "@shared/proto/dline/common"
 import { PlanActMode, McpDisplayMode as ProtoMcpDisplayMode, UpdateSettingsRequest } from "@shared/proto/dline/state"
 import { OpenaiReasoningEffort } from "@shared/storage/types"
@@ -218,6 +223,34 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 				)
 			}
 			controller.stateManager.setGlobalState("useAutoCondense", request.useAutoCondense)
+		}
+
+		if (request.autoCondenseTriggerPercent !== undefined) {
+			const triggerPercent = Number(request.autoCondenseTriggerPercent)
+			if (
+				!Number.isSafeInteger(triggerPercent) ||
+				triggerPercent < MIN_AUTO_CONDENSE_TRIGGER_PERCENT ||
+				triggerPercent > MAX_AUTO_CONDENSE_TRIGGER_PERCENT
+			) {
+				throw new Error(
+					`Auto-compact trigger must be an integer from ${MIN_AUTO_CONDENSE_TRIGGER_PERCENT} to ${MAX_AUTO_CONDENSE_TRIGGER_PERCENT} percent`,
+				)
+			}
+			controller.stateManager.setGlobalState("autoCondenseTriggerPercent", triggerPercent)
+		}
+
+		if (request.autoCondenseMaxContextTokens !== undefined) {
+			const maxContextTokens = Number(request.autoCondenseMaxContextTokens)
+			if (
+				!Number.isSafeInteger(maxContextTokens) ||
+				maxContextTokens < 0 ||
+				maxContextTokens > MAX_AUTO_CONDENSE_CONTEXT_TOKENS
+			) {
+				throw new Error(
+					`Auto-compact maximum context must be an integer from 0 to ${MAX_AUTO_CONDENSE_CONTEXT_TOKENS} tokens`,
+				)
+			}
+			controller.stateManager.setGlobalState("autoCondenseMaxContextTokens", maxContextTokens)
 		}
 
 		// Update focus chain settings

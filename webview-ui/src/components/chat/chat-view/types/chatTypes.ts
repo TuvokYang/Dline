@@ -22,6 +22,9 @@ export interface ChatState {
 	// State values
 	inputValue: string
 	setInputValue: React.Dispatch<React.SetStateAction<string>>
+	undoInputValue: () => string | undefined
+	redoInputValue: () => string | undefined
+	resetInputValue: (value?: string) => void
 	activeQuote: string | null
 	setActiveQuote: React.Dispatch<React.SetStateAction<string | null>>
 	isTextAreaFocused: boolean

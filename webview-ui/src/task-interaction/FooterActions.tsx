@@ -47,6 +47,7 @@ export function FooterActions({ view, draft, selection, dispatch, dispatchTaskAc
 			<div className="flex border border-(--vscode-panel-border) rounded gap-1.5">
 				{actions.map((action) => {
 					const targetsTask = action.dispatchTarget === "task"
+					const carriesDraft = action.payloadPolicy === "draft" || action.payloadPolicy === "draft_and_selection"
 					const dispatcherAvailable = targetsTask ? Boolean(dispatchTaskAction) : Boolean(view.activeInteraction)
 					const buttonDisabled = !action.enabled || pending || !dispatcherAvailable
 					return (
@@ -85,7 +86,9 @@ export function FooterActions({ view, draft, selection, dispatch, dispatchTaskAc
 											setError(`Interaction was not accepted: ${response.result || "unknown error"}`)
 											return
 										}
-										onDraftAccepted?.(createAcceptedInteractionSettlement(request, capturedDraft))
+										if (carriesDraft) {
+											onDraftAccepted?.(createAcceptedInteractionSettlement(request, capturedDraft))
+										}
 									})
 									.catch((cause: unknown) => setError(errorMessage(cause)))
 									.finally(() => setPending(false))

@@ -1,10 +1,16 @@
 import { ApiHandler } from "@core/api"
 import { OpenAiHandler } from "@core/api/providers/openai"
+import { normalizeAutoCondenseMaxContextTokens, normalizeAutoCondenseTriggerPercent } from "@shared/auto-condense"
 
 const SAFETY_BUFFER_RATIO = 0.03
 const MIN_SAFETY_BUFFER = 5_000
-const MAX_SAFETY_BUFFER = 20_000
+const MAX_SAFETY_BUFFER = 30_000
 const SUMMARIZE_INSTRUCTION_BUDGET = 2_500
+
+export interface CompactTriggerOptions {
+	triggerPercent?: number
+	maxContextTokens?: number
+}
 
 /**
  * Clamp a numeric value between lower and upper bounds.
@@ -22,7 +28,7 @@ function clampValue(value: number, lower: number, upper: number): number {
  * Compute the safety buffer reserved for summarize-task request overhead.
  *
  * @param contextWindow The raw input context window in tokens.
- * @returns The safety buffer, equal to 3% clamped to 5k..20k tokens.
+ * @returns The safety buffer, equal to 3% clamped to 5k..30k tokens.
  */
 export function computeSafetyBuffer(contextWindow: number): number {
 	return clampValue(Math.floor(contextWindow * SAFETY_BUFFER_RATIO), MIN_SAFETY_BUFFER, MAX_SAFETY_BUFFER)
@@ -42,10 +48,23 @@ export function computeSummarizeBudget(): number {
  *
  * @param contextWindow The raw input context window in tokens.
  * @param summarizeInstructionBudget The injected summarize_task input budget in tokens.
- * @returns The proactive compaction trigger token count.
+ * @param options Optional user-configured percentage and absolute trigger cap.
+ * @returns The earliest safe proactive compaction trigger token count.
  */
-export function computeCompactTrigger(contextWindow: number, summarizeInstructionBudget: number): number {
-	return Math.max(contextWindow - summarizeInstructionBudget - computeSafetyBuffer(contextWindow), 0)
+export function computeCompactTrigger(
+	contextWindow: number,
+	summarizeInstructionBudget: number,
+	options: CompactTriggerOptions = {},
+): number {
+	const hardCeiling = contextWindow - summarizeInstructionBudget - computeSafetyBuffer(contextWindow)
+	const percentagePoint =
+		options.triggerPercent === undefined
+			? Number.POSITIVE_INFINITY
+			: Math.floor((contextWindow * normalizeAutoCondenseTriggerPercent(options.triggerPercent)) / 100)
+	const maxContextTokens = normalizeAutoCondenseMaxContextTokens(options.maxContextTokens)
+	const absolutePoint = maxContextTokens > 0 ? maxContextTokens : Number.POSITIVE_INFINITY
+
+	return Math.max(Math.min(hardCeiling, percentagePoint, absolutePoint), 0)
 }
 
 /**

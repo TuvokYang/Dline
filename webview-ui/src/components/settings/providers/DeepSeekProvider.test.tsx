@@ -48,7 +48,10 @@ describe("DeepSeekProvider", () => {
 			id: "deepseek-profile",
 			provider: "deepseek",
 			modelId: "deepseek-v4-pro",
-			modelInfo: models["deepseek-v4-pro"],
+			modelInfo: {
+				id: "deepseek-v4-pro",
+				capabilities: { supportsReasoning: true },
+			},
 			deepseek: BaseProviderConfig.create(),
 		} as unknown as ApiProfile
 

@@ -8,8 +8,17 @@ describe("ExecuteCommandToolHandler timeout policy", () => {
 		assert.equal(timeout, 45)
 	})
 
+	it.each([
+		["0", 0],
+		["-1", -1],
+		["-2", -2],
+	] as const)("preserves %s as an explicit no-timeout request", (value, expected) => {
+		assert.equal(resolveCommandTimeoutSeconds(value), expected)
+	})
+
 	it("leaves omitted and invalid values for the runtime setting", () => {
 		assert.equal(resolveCommandTimeoutSeconds(undefined), undefined)
 		assert.equal(resolveCommandTimeoutSeconds("invalid"), undefined)
+		assert.equal(resolveCommandTimeoutSeconds("1.5"), undefined)
 	})
 })

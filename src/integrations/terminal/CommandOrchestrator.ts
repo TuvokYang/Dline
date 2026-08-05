@@ -644,7 +644,8 @@ export async function orchestrateCommandExecution(
 	})
 
 	const startedAt = configuredStartedAt ?? (process.started ? await process.started : Date.now())
-	const deadlineAt = configuredDeadlineAt ?? (timeoutSeconds ? startedAt + timeoutSeconds * 1000 : undefined)
+	const hasFiniteTimeout = timeoutSeconds !== undefined && timeoutSeconds > 0
+	const deadlineAt = configuredDeadlineAt ?? (hasFiniteTimeout ? startedAt + timeoutSeconds * 1000 : undefined)
 	commandTiming = { startedAt, deadlineAt }
 
 	if (startInBackground && onProceedWhileRunning && !didCancelViaUi) {
@@ -656,7 +657,7 @@ export async function orchestrateCommandExecution(
 
 	// Wait for completion, the automatic handoff, or the one absolute kill deadline.
 	if (!didCancelViaUi) {
-		if (!timeoutSeconds && (synchronous || !onProceedWhileRunning)) {
+		if (!hasFiniteTimeout && (synchronous || !onProceedWhileRunning)) {
 			// Backward-compatible fallback for direct orchestrator callers.
 			await process
 		} else {

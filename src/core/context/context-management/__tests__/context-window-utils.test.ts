@@ -1,0 +1,75 @@
+import {
+	DEFAULT_AUTO_CONDENSE_MAX_CONTEXT_TOKENS,
+	DEFAULT_AUTO_CONDENSE_TRIGGER_PERCENT,
+	normalizeAutoCondenseMaxContextTokens,
+	normalizeAutoCondenseTriggerPercent,
+} from "@shared/auto-condense"
+import { describe, expect, it } from "vitest"
+import { computeCompactTrigger, computeSafetyBuffer, computeSummarizeBudget } from "../context-window-utils"
+
+describe("auto-condense context trigger", () => {
+	it("reserves three percent clamped to 5K through 30K", () => {
+		expect(computeSafetyBuffer(64_000)).toBe(5_000)
+		expect(computeSafetyBuffer(500_000)).toBe(15_000)
+		expect(computeSafetyBuffer(1_000_000)).toBe(30_000)
+		expect(computeSafetyBuffer(2_000_000)).toBe(30_000)
+	})
+
+	it("uses only the hard ceiling when no auto-condense settings are supplied", () => {
+		const summarizeBudget = computeSummarizeBudget()
+		expect(computeCompactTrigger(128_000, summarizeBudget)).toBe(120_500)
+		expect(computeCompactTrigger(1_000_000, summarizeBudget)).toBe(967_500)
+		expect(computeCompactTrigger(2_000_000, summarizeBudget)).toBe(1_967_500)
+	})
+
+	it("applies the default auto-condense percentage when it is explicitly supplied", () => {
+		expect(
+			computeCompactTrigger(2_000_000, computeSummarizeBudget(), {
+				triggerPercent: DEFAULT_AUTO_CONDENSE_TRIGGER_PERCENT,
+			}),
+		).toBe(1_940_000)
+	})
+
+	it("uses whichever configured percentage or absolute cap is reached first", () => {
+		const summarizeBudget = computeSummarizeBudget()
+		expect(
+			computeCompactTrigger(1_000_000, summarizeBudget, {
+				triggerPercent: 60,
+				maxContextTokens: 500_000,
+			}),
+		).toBe(500_000)
+		expect(
+			computeCompactTrigger(1_000_000, summarizeBudget, {
+				triggerPercent: 60,
+				maxContextTokens: 700_000,
+			}),
+		).toBe(600_000)
+	})
+
+	it("treats zero as no absolute cap", () => {
+		expect(
+			computeCompactTrigger(1_000_000, computeSummarizeBudget(), {
+				triggerPercent: 50,
+				maxContextTokens: 0,
+			}),
+		).toBe(500_000)
+	})
+
+	it("deducts summarize instructions only from the hard ceiling", () => {
+		expect(
+			computeCompactTrigger(1_000_000, computeSummarizeBudget(), {
+				triggerPercent: 50,
+				maxContextTokens: 600_000,
+			}),
+		).toBe(500_000)
+	})
+
+	it("normalizes persisted values into supported ranges", () => {
+		expect(normalizeAutoCondenseTriggerPercent(undefined)).toBe(DEFAULT_AUTO_CONDENSE_TRIGGER_PERCENT)
+		expect(normalizeAutoCondenseTriggerPercent(0)).toBe(1)
+		expect(normalizeAutoCondenseTriggerPercent(120)).toBe(97)
+		expect(normalizeAutoCondenseMaxContextTokens(undefined)).toBe(DEFAULT_AUTO_CONDENSE_MAX_CONTEXT_TOKENS)
+		expect(normalizeAutoCondenseMaxContextTokens(-1)).toBe(0)
+		expect(normalizeAutoCondenseMaxContextTokens(600_000.9)).toBe(600_000)
+	})
+})

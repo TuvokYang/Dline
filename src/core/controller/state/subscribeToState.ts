@@ -72,9 +72,21 @@ export async function subscribeToState(
 		getRequestRegistry().registerRequest(requestId, cleanup, { type: "state_subscription" }, responseStream)
 	}
 
-	// Send the initial state only if no newer asynchronous build completed first.
-	const initialState = await controller.getStateToPostToWebview()
-	if (!controller.isStateCurrent(initialState.stateRevision)) return
+	// E2E-only: deterministically overtake the first snapshot with an unsent build.
+	const forceStaleInitialState = process.env.E2E_TEST === "true" && process.env.DLINE_E2E_FORCE_STALE_INITIAL_STATE === "true"
+	if (typeof controller.ensureWorkspaceManager === "function") {
+		await controller.ensureWorkspaceManager()
+	}
+	let initialState = await controller.getStateToPostToWebview()
+	if (forceStaleInitialState) {
+		const overtakingState = await controller.getStateToPostToWebview()
+		Logger.log(
+			`[E2E state hydration race] Overtook revision ${initialState.stateRevision} with ${overtakingState.stateRevision}`,
+		)
+	}
+	while (!controller.isStateCurrent(initialState.stateRevision)) {
+		initialState = await controller.getStateToPostToWebview()
+	}
 	const initialStateJson = JSON.stringify(initialState)
 	const accountUsage = controller.getAccountUsage()
 
@@ -88,6 +100,9 @@ export async function subscribeToState(
 			},
 			false, // Not the last message
 		)
+		if (forceStaleInitialState) {
+			Logger.log(`[E2E state hydration race] Delivered initial revision ${initialState.stateRevision}`)
+		}
 	} catch (error) {
 		Logger.error("Error sending initial state:", error)
 		cleanup()

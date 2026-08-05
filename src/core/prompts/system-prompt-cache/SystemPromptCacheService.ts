@@ -15,7 +15,7 @@ import type {
 import type { ClineTool } from "@shared/tools"
 import { hashPromptContent } from "./hash"
 
-export const SYSTEM_PROMPT_CONTRACT_VERSION = 1
+export const SYSTEM_PROMPT_CONTRACT_VERSION = 2
 
 export interface BuiltSystemPrompt {
 	readonly systemPrompt: string
@@ -46,6 +46,11 @@ function renderCapabilitiesForProfile(capabilities: CapabilitiesSnapshot, profil
 	return renderCapabilitiesSection(capabilities, {
 		exclude: profile === PromptProfile.Lite ? ["skills"] : [],
 	})
+}
+
+function sameServerTools(left: readonly number[] | undefined, right: readonly number[] | undefined): boolean {
+	if (left === undefined || right === undefined) return left === right
+	return left.length === right.length && left.every((tool, index) => tool === right[index])
 }
 
 /**
@@ -171,7 +176,11 @@ export class SystemPromptCacheService {
 				cachedBuilder.modelId !== currentBuilder.modelId ||
 				cachedBuilder.profile !== currentBuilder.profile ||
 				cachedBuilder.nativeTools !== Boolean(input.promptContext.enableNativeToolCalls) ||
-				cachedBuilder.focusChainEnabled !== currentBuilder.focusChainEnabled
+				cachedBuilder.focusChainEnabled !== currentBuilder.focusChainEnabled ||
+				cachedBuilder.apiFormat !== currentBuilder.apiFormat ||
+				cachedBuilder.webToolsEnabled !== currentBuilder.webToolsEnabled ||
+				cachedBuilder.webSearchRoute !== currentBuilder.webSearchRoute ||
+				!sameServerTools(cachedBuilder.serverTools, currentBuilder.serverTools)
 			if (providerProjectionChanged) {
 				return this.refresh({ promptContext: input.promptContext, reason: "capability_change" })
 			}
@@ -199,6 +208,7 @@ export class SystemPromptCacheService {
 	 * @returns Prompt builder metadata persisted in task context cache.
 	 */
 	private buildPromptInfo(context: SystemPromptContext, tools: readonly ClineTool[] | undefined): FrozenPromptBuilderInfo {
+		const webSearchRoutingPlan = context.webSearchRoutingPlan
 		return {
 			contractVersion: SYSTEM_PROMPT_CONTRACT_VERSION,
 			providerId: context.providerInfo.providerId,
@@ -206,6 +216,12 @@ export class SystemPromptCacheService {
 			profile: context.promptProfile,
 			nativeTools: (tools?.length ?? 0) > 0,
 			focusChainEnabled: context.focusChainSettings?.enabled === true,
+			...(webSearchRoutingPlan?.serverToolPlan.apiFormat === undefined
+				? {}
+				: { apiFormat: webSearchRoutingPlan.serverToolPlan.apiFormat }),
+			webToolsEnabled: context.clineWebToolsEnabled === true,
+			...(webSearchRoutingPlan === undefined ? {} : { webSearchRoute: webSearchRoutingPlan.route }),
+			serverTools: webSearchRoutingPlan?.serverTools ?? [],
 		}
 	}
 }

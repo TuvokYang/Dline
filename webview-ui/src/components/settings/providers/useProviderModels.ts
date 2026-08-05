@@ -57,7 +57,8 @@ export function getCachedProviderDefaultModelId(providerId: string): string {
 /** All consumers share one registry catalog RPC instead of loading all models per card/editor. */
 export function useProviderModels(providerId: string): ProviderModelsResult {
 	const [, forceRender] = useState(0)
-	const providersVersion = useContext(ExtensionStateContext)?.providersVersion ?? 0
+	const extensionState = useContext(ExtensionStateContext)
+	const providersVersion = extensionState?.providersVersion ?? 0
 
 	useEffect(() => {
 		const listener = () => forceRender((value) => value + 1)
@@ -71,7 +72,10 @@ export function useProviderModels(providerId: string): ProviderModelsResult {
 	const group = sharedCatalog.find((item) => item.provider === providerId)
 	const models: Record<string, ModelInfo> = {}
 	for (const model of group?.models || []) models[model.id] = model
-	const defaultModelId = getCachedProviderDefaultModelId(providerId)
+	if (providerId === "vercel-ai-gateway") {
+		Object.assign(models, extensionState?.vercelAiGatewayModels ?? {})
+	}
+	const defaultModelId = getCachedProviderDefaultModelId(providerId) || Object.keys(models)[0] || ""
 	const modelInfoSaneDefaults = models[defaultModelId] || Object.values(models)[0] || ({} as ModelInfo)
 
 	return {

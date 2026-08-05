@@ -17,13 +17,15 @@
  *
  * Environment Variables for Customization:
  *   PROJECT_ROOT - Override project root directory (default: parent of scripts dir)
- *   CLINE_DIST_DIR - Override distribution directory (default: PROJECT_ROOT/dist-standalone)
- *   CLINE_CORE_FILE - Override core file name (default: cline-core.js)
+ *   DLINE_DIST_DIR - Override distribution directory (default: PROJECT_ROOT/dist-standalone)
+ *   DLINE_CORE_FILE - Override core file name (default: cline-core.js)
  *   PROTOBUS_PORT - gRPC server port (default: 26040)
  *   HOSTBRIDGE_PORT - HostBridge server port (default: 26041)
  *   WORKSPACE_DIR - Working directory (default: current directory)
  *   E2E_TEST - Enable E2E test mode (default: true)
  *   DLINE_ENVIRONMENT - Environment setting (default: local)
+ *   DLINE_HOME_DIR - Test provider/config directory (default: isolated temp directory)
+ *   DLINE_DOCS_DIR - Test documents directory (default: isolated temp directory)
  *
  * Ideal for local development, testing, or lightweight E2E scenarios.
  */
@@ -44,8 +46,8 @@ const USE_C8 = process.env.USE_C8 === "true"
 
 // Locate the standalone build directory and core file with flexible path resolution
 const projectRoot = process.env.PROJECT_ROOT || path.resolve(__dirname, "..")
-const distDir = process.env.CLINE_DIST_DIR || path.join(projectRoot, "dist-standalone")
-const clineCoreFile = process.env.CLINE_CORE_FILE || "cline-core.js"
+const distDir = process.env.DLINE_DIST_DIR || path.join(projectRoot, "dist-standalone")
+const clineCoreFile = process.env.DLINE_CORE_FILE || "cline-core.js"
 const coreFile = path.join(distDir, clineCoreFile)
 
 const childProcesses: ChildProcess[] = []
@@ -63,8 +65,8 @@ async function main(): Promise<void> {
 		console.error(`Standalone build not found at: ${coreFile}`)
 		console.error("Available environment variables for customization:")
 		console.error("  PROJECT_ROOT - Override project root directory")
-		console.error("  CLINE_DIST_DIR - Override distribution directory")
-		console.error("  CLINE_CORE_FILE - Override core file name")
+		console.error("  DLINE_DIST_DIR - Override distribution directory")
+		console.error("  DLINE_CORE_FILE - Override core file name")
 		console.error("")
 		console.error("To build the standalone version, run: npm run compile-standalone")
 		process.exit(1)
@@ -80,6 +82,8 @@ async function main(): Promise<void> {
 
 	const extensionsDir = path.join(distDir, "vsce-extension")
 	const userDataDir = mkdtempSync(path.join(os.tmpdir(), "vsce"))
+	const dlineHomeDir = process.env.DLINE_HOME_DIR || path.join(userDataDir, ".dline")
+	const dlineDocsDir = process.env.DLINE_DOCS_DIR || path.join(userDataDir, "dline-documents")
 	const clineTestWorkspace = mkdtempSync(path.join(os.tmpdir(), "cline-test-workspace-"))
 
 	console.log("Starting HostBridge test server...")
@@ -131,7 +135,9 @@ async function main(): Promise<void> {
 			HOST_BRIDGE_ADDRESS: `localhost:${HOSTBRIDGE_PORT}`,
 			E2E_TEST,
 			DLINE_ENVIRONMENT,
-			CLINE_DIR: userDataDir,
+			DLINE_HOME_DIR: dlineHomeDir,
+			DLINE_DIR: dlineHomeDir,
+			DLINE_DOCS_DIR: dlineDocsDir,
 			INSTALL_DIR: extensionsDir,
 		},
 		stdio: "inherit",

@@ -2,8 +2,10 @@ import { renderCapabilitiesSection } from "@core/prompts/capabilities/Capabiliti
 import { PromptProfile } from "@core/prompts/profiles/types"
 import type { SystemPromptContext } from "@core/prompts/system-prompt"
 import type { TaskContextCache } from "@core/storage/task-context-types"
+import { ApiFormat, ServerTool } from "@shared/proto/dline/models/metadata"
 import type { ClineTool } from "@shared/tools"
 import { describe, expect, it } from "vitest"
+import { HOSTED_WEB_SEARCH_ROUTING_PLAN, LOCAL_WEB_SEARCH_ROUTING_PLAN } from "../../__tests__/web-search-routing-fixtures"
 import { hashPromptContent } from "../hash"
 import { SYSTEM_PROMPT_CONTRACT_VERSION, SystemPromptCacheService } from "../SystemPromptCacheService"
 
@@ -23,6 +25,10 @@ const testPromptBuilderInfo = {
 	profile: "standard" as const,
 	nativeTools: false,
 	focusChainEnabled: false,
+	apiFormat: LOCAL_WEB_SEARCH_ROUTING_PLAN.serverToolPlan.apiFormat,
+	serverTools: LOCAL_WEB_SEARCH_ROUTING_PLAN.serverTools,
+	webToolsEnabled: true,
+	webSearchRoute: LOCAL_WEB_SEARCH_ROUTING_PLAN.route,
 }
 
 const promptContext = {
@@ -38,6 +44,8 @@ const promptContext = {
 		},
 	},
 	enableNativeToolCalls: false,
+	clineWebToolsEnabled: true,
+	webSearchRoutingPlan: LOCAL_WEB_SEARCH_ROUTING_PLAN,
 } as SystemPromptContext
 
 /**
@@ -119,12 +127,10 @@ describe("SystemPromptCacheService", () => {
 					refreshedAt: 1,
 					refreshReason: "task_start" as const,
 					promptBuilder: {
-						contractVersion: SYSTEM_PROMPT_CONTRACT_VERSION,
+						...testPromptBuilderInfo,
 						providerId: "openai",
 						modelId: "gpt-5.6-sol",
-						profile: "standard" as const,
 						nativeTools: true,
-						focusChainEnabled: false,
 					},
 				},
 			},
@@ -160,12 +166,10 @@ describe("SystemPromptCacheService", () => {
 		expect(buildCount).toBe(1)
 		expect(result.text).toBe("anthropic native prompt")
 		expect(result.promptBuilder).toEqual({
-			contractVersion: SYSTEM_PROMPT_CONTRACT_VERSION,
+			...testPromptBuilderInfo,
 			providerId: "anthropic",
 			modelId: "deepseek-v4-pro",
-			profile: "standard",
 			nativeTools: true,
-			focusChainEnabled: false,
 		})
 		expect(service.getLastTools()).toEqual(anthropicTools)
 		expect(service.getLastTools()).not.toEqual(openAiTools)
@@ -184,12 +188,8 @@ describe("SystemPromptCacheService", () => {
 					refreshedAt: 1,
 					refreshReason: "task_start" as const,
 					promptBuilder: {
-						contractVersion: SYSTEM_PROMPT_CONTRACT_VERSION,
-						providerId: "test-provider",
-						modelId: "test-model",
-						profile: "standard" as const,
+						...testPromptBuilderInfo,
 						nativeTools: true,
-						focusChainEnabled: false,
 					},
 				},
 			},
@@ -264,12 +264,8 @@ describe("SystemPromptCacheService", () => {
 					refreshedAt: 1,
 					refreshReason: "task_start" as const,
 					promptBuilder: {
-						contractVersion: SYSTEM_PROMPT_CONTRACT_VERSION,
-						providerId: "test-provider",
-						modelId: "test-model",
-						profile: "standard" as const,
+						...testPromptBuilderInfo,
 						nativeTools: true,
-						focusChainEnabled: false,
 					},
 				},
 			},
@@ -343,6 +339,137 @@ describe("SystemPromptCacheService", () => {
 		expect(buildCount).toBe(1)
 	})
 
+	it("rebuilds the frozen pair when the request routing plan changes the active server-tool projection", async () => {
+		const cached = {
+			...emptyContext("task-1"),
+			systemPrompt: {
+				frozen: {
+					text: "chat prompt without hosted tools",
+					tools: null,
+					capabilitiesHash: EMPTY_CAPABILITIES_HASH,
+					createdAt: 1,
+					refreshedAt: 1,
+					refreshReason: "task_start" as const,
+					promptBuilder: {
+						...testPromptBuilderInfo,
+						apiFormat: ApiFormat.OPENAI_CHAT,
+						serverTools: [],
+					},
+				},
+			},
+		}
+		let buildCount = 0
+		const service = new SystemPromptCacheService({
+			taskId: "task-1",
+			deps: {
+				getContext: async () => cached,
+				saveContext: async () => undefined,
+				collectCapabilities: async () => EMPTY_CAPABILITIES,
+				buildSystemPrompt: async () => {
+					buildCount += 1
+					return { systemPrompt: "responses prompt with hosted web search" }
+				},
+			},
+		})
+		const result = await service.getOrCreate({
+			promptContext: {
+				...promptContext,
+				webSearchRoutingPlan: HOSTED_WEB_SEARCH_ROUTING_PLAN,
+			},
+		})
+
+		expect(result.text).toBe("responses prompt with hosted web search")
+		expect(result.promptBuilder.apiFormat).toBe(ApiFormat.OPENAI_RESPONSES)
+		expect(result.promptBuilder.serverTools).toEqual([ServerTool.WEB_SEARCH])
+		expect(buildCount).toBe(1)
+	})
+
+	it.each([
+		["global Web Tools setting", { webToolsEnabled: false }],
+		["effective route", { webSearchRoute: "disabled" as const }],
+		["hosted server tools", { serverTools: [ServerTool.WEB_SEARCH] }],
+	] as const)("rebuilds when the cached %s differs from the request projection", async (_label, cachedOverride) => {
+		const cached: TaskContextCache = {
+			...emptyContext("task-1"),
+			systemPrompt: {
+				frozen: {
+					text: "stale web projection",
+					tools: null,
+					capabilitiesHash: EMPTY_CAPABILITIES_HASH,
+					createdAt: 1,
+					refreshedAt: 1,
+					refreshReason: "task_start",
+					promptBuilder: { ...testPromptBuilderInfo, ...cachedOverride },
+				},
+			},
+		}
+		let buildCount = 0
+		const service = new SystemPromptCacheService({
+			taskId: "task-1",
+			deps: {
+				getContext: async () => cached,
+				saveContext: async () => undefined,
+				collectCapabilities: async () => EMPTY_CAPABILITIES,
+				buildSystemPrompt: async () => {
+					buildCount += 1
+					return { systemPrompt: "current web projection" }
+				},
+			},
+		})
+
+		const result = await service.getOrCreate({ promptContext })
+
+		expect(result.text).toBe("current web projection")
+		expect(result.refreshReason).toBe("capability_change")
+		expect(buildCount).toBe(1)
+	})
+
+	it("does not derive a cache projection from changed model metadata", async () => {
+		const cached: TaskContextCache = {
+			...emptyContext("task-1"),
+			systemPrompt: {
+				frozen: {
+					text: "request-plan prompt",
+					tools: null,
+					capabilitiesHash: EMPTY_CAPABILITIES_HASH,
+					createdAt: 1,
+					refreshedAt: 1,
+					refreshReason: "task_start",
+					promptBuilder: testPromptBuilderInfo,
+				},
+			},
+		}
+		const service = new SystemPromptCacheService({
+			taskId: "task-1",
+			deps: {
+				getContext: async () => cached,
+				saveContext: async () => undefined,
+				collectCapabilities: async () => EMPTY_CAPABILITIES,
+				buildSystemPrompt: async () => {
+					throw new Error("model metadata must not replace the request routing plan")
+				},
+			},
+		})
+		const metadataChangedContext: SystemPromptContext = {
+			...promptContext,
+			providerInfo: {
+				...promptContext.providerInfo,
+				model: {
+					...promptContext.providerInfo.model,
+					info: {
+						id: promptContext.providerInfo.model.id,
+						apiFormats: [ApiFormat.OPENAI_RESPONSES],
+						capabilities: { tools: [ServerTool.WEB_SEARCH] },
+					},
+				},
+			},
+		}
+
+		const result = await service.getOrCreate({ promptContext: metadataChangedContext })
+
+		expect(result.text).toBe("request-plan prompt")
+	})
+
 	it("persists the exact tools produced by the same frozen prompt build", async () => {
 		let saved: TaskContextCache | undefined
 		const builtTools: readonly ClineTool[] = [buildTool("frozen_exact_tool")]
@@ -406,12 +533,7 @@ describe("SystemPromptCacheService", () => {
 					refreshedAt: 1,
 					refreshReason: "task_start" as const,
 					promptBuilder: {
-						contractVersion: SYSTEM_PROMPT_CONTRACT_VERSION,
-						providerId: "test-provider",
-						modelId: "test-model",
-						profile: "standard" as const,
-						nativeTools: false,
-						focusChainEnabled: false,
+						...testPromptBuilderInfo,
 					},
 				},
 			},

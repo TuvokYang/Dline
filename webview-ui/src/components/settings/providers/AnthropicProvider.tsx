@@ -270,6 +270,8 @@ const CustomModelConfig = ({
 						"contextWindow",
 						"contextWindowTiers",
 						"supportsImages",
+						"supportsWebSearch",
+						"supportsBrowserAction",
 						"supportsPromptCache",
 						"supportsTools",
 					],

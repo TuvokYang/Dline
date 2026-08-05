@@ -1,6 +1,8 @@
 import path from "node:path"
 import { ApiHandler, resolveProviderFromProfile } from "@core/api"
+import type { WebSearchRoutingPlan } from "@core/api/server-tools"
 import type { IdentityFactory } from "@core/api/transform/block-identity"
+import type { ApiStreamServerToolChunk } from "@core/api/transform/stream"
 import { FileContextTracker } from "@core/context/context-tracking/FileContextTracker"
 import { getHookModelContext } from "@core/hooks/hook-model-context"
 import { getHooksEnabledSafe } from "@core/hooks/hooks-utils"
@@ -8,13 +10,13 @@ import { ClineIgnoreController } from "@core/ignore/ClineIgnoreController"
 import { CommandPermissionController } from "@core/permissions"
 import { TaskFileTracker } from "@integrations/checkpoints/TaskFileTracker"
 import { DiffViewProvider } from "@integrations/editor/DiffViewProvider"
-import type { CommandExecutionOptions, CommandExecutionOutcome } from "@integrations/terminal"
+import type { CommandCancellationResult, CommandExecutionOptions, CommandExecutionOutcome } from "@integrations/terminal"
 import { BrowserSession } from "@services/browser/BrowserSession"
 import { UrlContentFetcher } from "@services/browser/UrlContentFetcher"
 import { McpHub } from "@services/mcp/McpHub"
 import { DlineTempManager } from "@services/temp/DlineTempManager"
 import { DEFAULT_API_PROVIDER } from "@shared/api"
-import { ClineAsk, ClineSay, type CommandStatus } from "@shared/ExtensionMessage"
+import { ClineAsk, ClineSay, ClineSayTool, type CommandStatus } from "@shared/ExtensionMessage"
 import { ClineContent, type ClineToolResponseContent, type ClineUserToolResultContentBlock } from "@shared/messages/content"
 import { Logger } from "@shared/services/Logger"
 import type { Mode } from "@shared/storage/types"
@@ -37,10 +39,12 @@ import type { InteractionOutcome } from "./interaction/InteractionCoordinator"
 import { isTurnEndContinuationHandler, requiresTurnEndContinuation } from "./interaction/TurnEndContinuationRegistry"
 import { checkRepeatedToolCall, LOOP_DETECTION_SOFT_THRESHOLD, toolCallSignature } from "./loop-detection"
 import { MessageStateHandler } from "./message-state"
+import { resolveRequestWebSearchRoutingPlan } from "./RequestApiScope"
 import { TaskController } from "./TaskController"
 import { TaskState } from "./TaskState"
 import { AutoApprove } from "./tools/autoApprove"
 import { isInternalNativeToolName, normalizeNativeToolName } from "./tools/NativeToolAdmission"
+import { ServerToolLifecycle } from "./tools/ServerToolLifecycle"
 import { SubagentJobManager } from "./tools/subagent/SubagentJobManager"
 import { type IPartialBlockHandler, ToolExecutorCoordinator } from "./tools/ToolExecutorCoordinator"
 import { ToolValidator } from "./tools/ToolValidator"
@@ -151,6 +155,9 @@ export class ToolExecutor {
 	private coordinator: ToolExecutorCoordinator
 	private subagentJobManager = new SubagentJobManager()
 	private allowedNativeToolNames: ReadonlySet<string> | undefined
+	private webToolsEnabled: boolean | undefined
+	private webSearchRoutingPlan: WebSearchRoutingPlan | undefined
+	private hostedServerToolLifecycle: ServerToolLifecycle | undefined
 
 	/** Public accessor for auto-approve logic used by TaskController.buildTurn(). */
 	public isAutoApproved(toolName: ClineDefaultTool, params?: ToolUse["params"]): boolean {
@@ -195,6 +202,60 @@ export class ToolExecutor {
 	/** Freeze the ordinary native functions exposed in the current API request. */
 	public setAllowedNativeToolNames(toolNames: ReadonlySet<string>): void {
 		this.allowedNativeToolNames = new Set(Array.from(toolNames, normalizeNativeToolName))
+	}
+
+	/** Freeze Web Tools admission alongside the current request's tool schemas. */
+	public setWebSearchRoutingPlan(plan: WebSearchRoutingPlan, webToolsEnabled: boolean, allowHosted = true): void {
+		this.webToolsEnabled = webToolsEnabled
+		this.webSearchRoutingPlan = plan
+		this.hostedServerToolLifecycle = new ServerToolLifecycle(plan, allowHosted, async (update) => {
+			const message: ClineSayTool = {
+				tool: "webSearch",
+				path: update.query,
+				content:
+					update.status === "failed"
+						? `Web search failed: ${update.error ?? update.query}`
+						: `Searching for: ${update.query}`,
+				operationIsLocatedInWorkspace: false,
+			}
+			const messageTs = await this.say(
+				"tool",
+				JSON.stringify(message),
+				undefined,
+				undefined,
+				update.partial,
+				this.hostedServerToolMessageTs.get(update.dlineTid),
+			)
+			if (messageTs !== undefined) this.hostedServerToolMessageTs.set(update.dlineTid, messageTs)
+		})
+		this.hostedServerToolMessageTs.clear()
+	}
+
+	private hostedServerToolMessageTs = new Map<string, number>()
+
+	/** Route one normalized provider-hosted event through the task's tool executor. */
+	public async consumeServerToolChunk(chunk: ApiStreamServerToolChunk): Promise<boolean> {
+		return (await this.hostedServerToolLifecycle?.consume(chunk)) ?? false
+	}
+
+	/** Close open hosted calls when the provider stream ends, fails, or is cancelled. */
+	public async finalizeServerToolCalls(reason: string): Promise<void> {
+		await this.hostedServerToolLifecycle?.finalizeOpen(reason)
+	}
+
+	/** Use live settings only for restored approvals that no longer have a request scope. */
+	private getWebToolsEnabledForExecution(): boolean {
+		if (this.webToolsEnabled !== undefined) return this.webToolsEnabled
+		return this.stateManager.getGlobalSettingsKey("clineWebToolsEnabled") === true
+	}
+
+	/** Resolve a route for restored tool approvals that no longer have their live request scope. */
+	private getWebSearchRoutingPlanForExecution(
+		webToolsEnabled = this.getWebToolsEnabledForExecution(),
+	): WebSearchRoutingPlan | undefined {
+		if (this.webSearchRoutingPlan) return this.webSearchRoutingPlan
+		if (typeof this.api?.getModel !== "function") return undefined
+		return resolveRequestWebSearchRoutingPlan(this.api, webToolsEnabled)
 	}
 
 	private isNativeToolAdmitted(toolName: string): boolean {
@@ -279,7 +340,7 @@ export class ToolExecutor {
 			timeoutSeconds: number | undefined,
 			options?: CommandExecutionOptions,
 		) => Promise<CommandExecutionOutcome>,
-		private killCommandTool: (functionId: string) => Promise<boolean>,
+		private killCommandTool: (functionId: string) => Promise<CommandCancellationResult>,
 		private cancelRunningCommandTool: () => Promise<boolean>,
 		private doesLatestTaskCompletionHaveNewChanges: () => Promise<boolean>,
 		private updateFCListFromToolResponse: (taskProgress: string | undefined) => Promise<void>,
@@ -310,6 +371,7 @@ export class ToolExecutor {
 	// Create a properly typed TaskConfig object for handlers
 	// NOTE: modifying this object in the tool handlers is okay since these are all references to the singular ToolExecutor instance's variables. However, be careful modifying this object assuming it will update the ToolExecutor instance, e.g. config.browserSession = ... will not update the ToolExecutor.browserSession instance variable. Use applyLatestBrowserSettings() instead.
 	private asToolConfig(): TaskConfig {
+		const webToolsEnabled = this.getWebToolsEnabledForExecution()
 		const config: TaskConfig = {
 			taskId: this.taskId,
 			ulid: this.ulid,
@@ -320,6 +382,8 @@ export class ToolExecutor {
 			vscodeTerminalExecutionMode: this.vscodeTerminalExecutionMode,
 			enableParallelToolCalling: this.isParallelToolCallingEnabled(),
 			isSubagentExecution: false,
+			webToolsEnabled,
+			webSearchRoutingPlan: this.getWebSearchRoutingPlanForExecution(webToolsEnabled),
 			cwd: this.cwd,
 			workspaceManager: this.workspaceManager,
 			isMultiRootEnabled: this.isMultiRootEnabled,

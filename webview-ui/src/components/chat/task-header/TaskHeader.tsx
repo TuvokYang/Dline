@@ -17,7 +17,7 @@ import { FocusChain } from "./FocusChain"
 import { highlightText } from "./Highlights"
 import SpawnedTasksBar from "./SpawnedTasksBar"
 import { TaskLockBanner } from "./TaskLockBanner"
-import { hasNonZeroModelPricing } from "./util"
+import { formatTokenMetric, hasNonZeroModelPricing } from "./util"
 
 const IS_DEV = process.env.IS_DEV === '"true"'
 interface TaskHeaderProps {
@@ -36,7 +36,7 @@ interface TaskHeaderProps {
 	showFocusChainPlaceholder?: boolean
 	pricing?: ModelPricing
 	onClose: () => void
-	onSendMessage?: (command: string, files: string[], images: string[]) => void
+	onCompactTask?: () => Promise<boolean>
 }
 
 const BUTTON_CLASS = "max-h-3 border-0 font-bold bg-transparent hover:opacity-100 text-foreground"
@@ -56,7 +56,7 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 	showFocusChainPlaceholder,
 	pricing,
 	onClose,
-	onSendMessage,
+	onCompactTask,
 }) => {
 	const {
 		apiConfiguration,
@@ -189,22 +189,12 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 								title={`In: ${totalInputTokens} / Out: ${tokensOut} / Cache read: ${cacheReads ?? 0} / Cache write: ${cacheWrites ?? 0}`}>
 								{totalInputTokens > 0 && (
 									<span className="text-xs sm:text-sm font-medium opacity-90">
-										In:
-										{totalInputTokens >= 1000000
-											? `${(totalInputTokens / 1000000).toFixed(2)}M`
-											: totalInputTokens >= 1000
-												? `${(totalInputTokens / 1000).toFixed(1)}K`
-												: totalInputTokens}
+										In:{formatTokenMetric(totalInputTokens)}
 									</span>
 								)}
 								{tokensOut > 0 && (
 									<span className="text-xs sm:text-sm font-medium opacity-90">
-										Out:
-										{tokensOut >= 1000000
-											? `${(tokensOut / 1000000).toFixed(2)}M`
-											: tokensOut >= 1000
-												? `${(tokensOut / 1000).toFixed(1)}K`
-												: tokensOut}
+										Out:{formatTokenMetric(tokensOut)}
 									</span>
 								)}
 								{cacheHitRate != null && cacheHitRate > 0 && (
@@ -258,7 +248,7 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 							cacheWrites={cacheWrites}
 							contextWindow={contextWindow}
 							lastApiReqTotalTokens={lastApiReqTotalTokens}
-							onSendMessage={onSendMessage}
+							onCompactTask={onCompactTask}
 							tokensIn={tokensIn}
 							tokensOut={tokensOut}
 							useAutoCondense={false} // Disable auto-condense configuration in UI for now

@@ -27,6 +27,13 @@ export const E2E_MOCK_PROVIDER_ROUTES = {
 		endpoint: "/chat/completions",
 		auth: "bearer",
 	},
+	"deepseek-responses": {
+		provider: "deepseek",
+		protocol: "openai-responses",
+		basePath: "/mock/deepseek/responses/v1",
+		endpoint: "/responses",
+		auth: "bearer",
+	},
 	"anthropic-messages": {
 		provider: "anthropic",
 		protocol: "anthropic-messages",
@@ -57,12 +64,13 @@ export const E2E_REGISTERED_MOCK_ENDPOINTS = {
 			"/organizations/{orgId}/api-keys",
 			"/organizations/{orgId}/remote-config",
 			"/users/me",
+			"/users/me/remote-config",
 			"/users/me/featurebase-token",
 			"/users/{userId}/balance",
 			"/users/{userId}/usages",
 			"/users/{userId}/payments",
 		],
-		POST: ["/chat/completions", "/auth/token", "/users/me/budget/request"],
+		POST: ["/chat/completions", "/auth/token", "/search/websearch", "/users/me/budget/request"],
 		PUT: ["/users/active-account"],
 	},
 	"/.test": {

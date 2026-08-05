@@ -3,6 +3,7 @@ import type { CapabilitiesSnapshot } from "@core/prompts/capabilities/types"
 import type { PromptProfile } from "@core/prompts/profiles/types"
 import type { McpServer } from "@shared/mcp"
 import type { ApiProviderInfo } from "@/core/api"
+import type { WebSearchRoutingPlan } from "@/core/api/server-tools"
 import type { BrowserSettings } from "@/shared/BrowserSettings"
 import type { FocusChainSettings } from "@/shared/FocusChainSettings"
 import type { SkillMetadata } from "@/shared/skills"
@@ -37,6 +38,7 @@ export interface SystemPromptContext {
 	readonly yoloModeToggled?: boolean
 	readonly subagentsEnabled?: boolean
 	readonly clineWebToolsEnabled?: boolean
+	readonly webSearchRoutingPlan?: WebSearchRoutingPlan
 	readonly isMultiRootEnabled?: boolean
 	readonly workspaceRoots?: Array<{ path: string; name: string; vcs?: string }>
 	readonly isSubagentsEnabledAndCliInstalled?: boolean

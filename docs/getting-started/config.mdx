@@ -94,7 +94,7 @@ cline --config /path/to/custom/config "your task"
 Or via environment variable:
 
 ```bash
-export CLINE_DATA_DIR=/custom/path/to/cline
+export DLINE_DATA_DIR=/custom/path/to/cline
 cline "your task"
 ```
 
@@ -108,27 +108,27 @@ cline dev log
 
 | Variable | Description |
 |----------|-------------|
-| `CLINE_DATA_DIR` | Custom data directory (replaces `~/.cline/data/`) |
-| `CLINE_HUB_ADDRESS` | Override hub address (default: `127.0.0.1:25463`) |
-| `CLINE_SESSION_BACKEND_MODE` | Force backend mode (`local`, `hub`, `remote`, `auto`) |
-| `CLINE_SANDBOX` | Enable sandbox mode |
-| `CLINE_SANDBOX_DATA_DIR` | Sandbox session storage directory |
-| `CLINE_HOOKS_DIR` | Additional hooks directory |
-| `CLINE_COMMAND_PERMISSIONS` | JSON policy restricting shell commands |
+| `DLINE_DATA_DIR` | Custom data directory (replaces `~/.cline/data/`) |
+| `DLINE_HUB_ADDRESS` | Override hub address (default: `127.0.0.1:25463`) |
+| `DLINE_SESSION_BACKEND_MODE` | Force backend mode (`local`, `hub`, `remote`, `auto`) |
+| `DLINE_SANDBOX` | Enable sandbox mode |
+| `DLINE_SANDBOX_DATA_DIR` | Sandbox session storage directory |
+| `DLINE_HOOKS_DIR` | Additional hooks directory |
+| `DLINE_COMMAND_PERMISSIONS` | JSON policy restricting shell commands |
 
-### CLINE_DATA_DIR
+### DLINE_DATA_DIR
 
 ```bash
-export CLINE_DATA_DIR=/custom/path/to/cline
+export DLINE_DATA_DIR=/custom/path/to/cline
 cline "your task"
 ```
 
-### CLINE_COMMAND_PERMISSIONS
+### DLINE_COMMAND_PERMISSIONS
 
 Restrict which shell commands Cline can execute:
 
 ```bash
-export CLINE_COMMAND_PERMISSIONS='{"allow": ["npm *", "git *"], "deny": ["rm -rf *"]}'
+export DLINE_COMMAND_PERMISSIONS='{"allow": ["npm *", "git *"], "deny": ["rm -rf *"]}'
 ```
 
 Format:

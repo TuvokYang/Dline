@@ -271,6 +271,7 @@ message ClineMessage {
   int64 command_ts = 28;
   string activity_id = 29;
   string interaction_id = 30;
+  string command_execution_mode = 31;
 }
 
 message ShowWebviewEvent {

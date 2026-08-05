@@ -21,6 +21,12 @@ const CASES: InteractionCase[] = [
 	{ kind: "resume", taskAsk: "resume_task", actions: ["resume"], enterAction: "resume", continuation: "resume" },
 	{ kind: "error_retry", taskAsk: "api_req_failed", actions: ["retry", "start_new_task"], enterAction: "retry" },
 	{
+		kind: "condense",
+		taskAsk: "condense",
+		actions: ["confirm_utility", "reject"],
+		enterAction: "reject",
+	},
+	{
 		kind: "mistake_limit",
 		taskAsk: "mistake_limit_reached",
 		actions: ["process_anyway", "start_new_task"],
@@ -67,5 +73,24 @@ describe("InteractionRegistry", () => {
 	it("requires draft and selection for focus-chain approval", () => {
 		const definition = getInteraction("focus_chain_change")
 		expect(definition.actions[0].payloadPolicy).toBe("draft_and_selection")
+	})
+
+	it("accepts a condense summary without a draft and regenerates with draft feedback", () => {
+		const definition = getInteraction("condense")
+
+		expect(definition.actions).toEqual([
+			{
+				type: "confirm_utility",
+				label: "Condense Conversation",
+				appearance: "primary",
+				payloadPolicy: "none",
+			},
+			{
+				type: "reject",
+				label: "Regenerate Summary",
+				appearance: "secondary",
+				payloadPolicy: "draft",
+			},
+		])
 	})
 })

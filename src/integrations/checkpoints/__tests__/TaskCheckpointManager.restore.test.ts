@@ -6,18 +6,13 @@ vi.unmock("@integrations/checkpoints")
 import { TaskRuntime } from "@/core/task/runtime/TaskRuntime"
 import { createTaskRuntimeState } from "@/core/task/runtime/TaskRuntimeState"
 import { TaskPhase } from "@/core/task/TaskPhase"
+import { TaskState } from "@/core/task/TaskState"
 import { projectTaskView } from "@/core/task/view/TaskViewProjector"
 import { createTaskCheckpointManager } from "../index"
 
 interface RestoreHarness {
 	manager: ReturnType<typeof createTaskCheckpointManager>
-	taskState: {
-		userMessageContent: unknown[]
-		assistantMessageContent: unknown[]
-		userMessageContentReady: boolean
-		lastMessageTs?: number
-		askId: string
-	}
+	taskState: TaskState & { taskId: string; askId: string }
 	resetHead: ReturnType<typeof vi.fn>
 	restoreFiles: ReturnType<typeof vi.fn>
 	restoreChatRuntime: ReturnType<typeof vi.fn>
@@ -27,14 +22,19 @@ interface RestoreHarness {
 }
 
 function createHarness(messages: ClineMessage[], trackedFiles?: string[]): RestoreHarness {
-	const taskState = {
+	const taskState = Object.assign(new TaskState(), {
 		taskId: "task-1",
 		userMessageContent: [{ type: "text", text: "active user content" }],
 		assistantMessageContent: [{ type: "text", text: "active assistant content" }],
 		userMessageContentReady: true,
 		lastMessageTs: 99,
 		askId: "task-1",
-	}
+		consecutiveMistakeCount: 3,
+		autoRetryAttempts: 2,
+		consecutiveIdenticalToolCount: 4,
+		lastToolName: "replace_in_file",
+		lastToolParams: "stale-params",
+	})
 	const resetHead = vi.fn().mockResolvedValue(undefined)
 	const restoreFiles = vi.fn().mockResolvedValue(undefined)
 	const restoreChatRuntime = vi.fn().mockResolvedValue(undefined)
@@ -108,6 +108,11 @@ describe("TaskCheckpointManager restore isolation", () => {
 			assistantMessageContent: [{ type: "text", text: "active assistant content" }],
 			userMessageContentReady: true,
 			lastMessageTs: 99,
+			consecutiveMistakeCount: 3,
+			autoRetryAttempts: 2,
+			consecutiveIdenticalToolCount: 4,
+			lastToolName: "replace_in_file",
+			lastToolParams: "stale-params",
 		})
 		expect(harness.restoreChatRuntime).not.toHaveBeenCalled()
 		expect(harness.resumeTask).not.toHaveBeenCalled()
@@ -164,6 +169,23 @@ describe("TaskCheckpointManager restore isolation", () => {
 
 		expect(harness.restoreChatRuntime).toHaveBeenCalledWith({ apiIndex: 1 })
 		expect(harness.resumeTask).not.toHaveBeenCalled()
+	})
+
+	it("clears mistake-limit detector state when restoring chat", async () => {
+		const harness = createHarness([
+			{ ts: 42, type: "say", say: "text", conversationHistoryIndex: 0 },
+			{ ts: 43, type: "say", say: "text" },
+		])
+
+		await harness.manager.restoreCheckpoint(42, "task")
+
+		expect(harness.taskState).toMatchObject({
+			consecutiveMistakeCount: 0,
+			autoRetryAttempts: 0,
+			consecutiveIdenticalToolCount: 0,
+			lastToolName: "",
+			lastToolParams: "",
+		})
 	})
 
 	it("restores chat and workspace through one combined success projection", async () => {

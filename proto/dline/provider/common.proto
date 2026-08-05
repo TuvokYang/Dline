@@ -10,6 +10,15 @@ message ReasoningConfig {
   optional int32 thinking_budget = 3;
 }
 
+// Per-profile policy for choosing between Dline's local web search executor
+// and a provider-hosted server tool.
+enum WebSearchMode {
+  WEB_SEARCH_MODE_AUTO = 0;
+  WEB_SEARCH_MODE_FORCE_LOCAL = 1;
+  WEB_SEARCH_MODE_FORCE_OFF = 2;
+  WEB_SEARCH_MODE_FORCE_REMOTE = 3;
+}
+
 message BaseProviderConfig {
   ReasoningConfig reasoning = 1;
   bool custom_model_enabled = 2;

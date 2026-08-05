@@ -1,3 +1,5 @@
+import { ClineDefaultTool } from "@shared/tools"
+import { BlockPhase } from "../BlockPhaseMachine"
 import type { TaskEvent } from "../runtime/TaskEvent"
 import type { TaskDispatchResult, TaskRuntime } from "../runtime/TaskRuntime"
 import type { InteractionKind } from "./Interaction"
@@ -59,6 +61,12 @@ export interface DetachedInteractionContinuationContext {
 export type DetachedInteractionContinuation = (context: DetachedInteractionContinuationContext) => Promise<void>
 
 type RuntimeOwnedInteractionKind = "resume" | "completion" | "error_retry" | "mistake_limit"
+
+interface PendingCompletionTarget {
+	taskId: string
+	turnId: string
+	interactionId: string
+}
 
 function isRuntimeOwnedInteraction(kind: InteractionKind): kind is RuntimeOwnedInteractionKind {
 	return kind === "resume" || kind === "completion" || kind === "error_retry" || kind === "mistake_limit"
@@ -184,8 +192,22 @@ export class InteractionCoordinator {
 		return interaction?.status === "awaiting" && modeCompactionAction(interaction.kind) !== undefined
 	}
 
+	/** Return whether the current awaiting interaction can continue after a direct mode switch. */
+	canRespondForModeSwitch(): boolean {
+		return this.canRespondForModeCompaction()
+	}
+
 	/** Resolve one conversational interaction with a backend-only compaction signal. */
 	async respondForModeCompaction(text: string): Promise<boolean> {
+		const pendingCompletion = this.pendingCompletionTarget()
+		if (pendingCompletion && !(await this.waitForPendingCompletion(pendingCompletion))) {
+			return false
+		}
+		return this.respondForModeSwitch({ text, images: [], files: [] })
+	}
+
+	/** Resolve one conversational interaction with user-authored mode-switch content, if any. */
+	async respondForModeSwitch(draft: InteractionDraft): Promise<boolean> {
 		const state = this.runtime.getState()
 		const interaction = state.interaction
 		const actionId = interaction?.status === "awaiting" ? modeCompactionAction(interaction.kind) : undefined
@@ -196,9 +218,73 @@ export class InteractionCoordinator {
 			interactionId: interaction.interactionId,
 			actionId,
 			stateRevision: state.revision,
-			draft: { text, images: [], files: [] },
+			draft,
 		})
 		return result.accepted
+	}
+
+	/** Identify the narrow completion-commit window before its interaction is presented. */
+	private pendingCompletionTarget(): PendingCompletionTarget | undefined {
+		const state = this.runtime.getState()
+		const interaction = state.interaction
+		if (interaction) {
+			return interaction.kind === "completion" && interaction.status === "opening"
+				? {
+						taskId: interaction.taskId,
+						turnId: interaction.turnId,
+						interactionId: interaction.interactionId,
+					}
+				: undefined
+		}
+		const turn = state.turn
+		const block = turn?.blocks.find(
+			(candidate) =>
+				candidate.toolName === ClineDefaultTool.ATTEMPT &&
+				(candidate.phase === BlockPhase.AUTO_EXECUTING || candidate.phase === BlockPhase.EXECUTING),
+		)
+		return turn && block ? { taskId: state.taskId, turnId: turn.turnId, interactionId: block.dlineTid } : undefined
+	}
+
+	/** Wait only for the same in-flight attempt_completion to publish its causal interaction. */
+	private waitForPendingCompletion(target: PendingCompletionTarget): Promise<boolean> {
+		return new Promise<boolean>((resolve) => {
+			let unsubscribe: () => void = () => undefined
+			let settled = false
+			const finish = (ready: boolean): void => {
+				if (settled) return
+				settled = true
+				unsubscribe()
+				resolve(ready)
+			}
+			const inspect = (): void => {
+				const state = this.runtime.getState()
+				const interaction = state.interaction
+				if (
+					interaction?.taskId === target.taskId &&
+					interaction.turnId === target.turnId &&
+					interaction.interactionId === target.interactionId &&
+					interaction.kind === "completion"
+				) {
+					if (interaction.status === "awaiting") finish(true)
+					else if (interaction.status === "resolving") finish(false)
+					return
+				}
+				if (interaction || state.cancellation || state.error) {
+					finish(false)
+					return
+				}
+				const pendingBlock = state.turn?.blocks.find(
+					(candidate) =>
+						candidate.dlineTid === target.interactionId &&
+						candidate.toolName === ClineDefaultTool.ATTEMPT &&
+						(candidate.phase === BlockPhase.AUTO_EXECUTING || candidate.phase === BlockPhase.EXECUTING),
+				)
+				if (state.turn?.turnId !== target.turnId || !pendingBlock) finish(false)
+			}
+
+			unsubscribe = this.runtime.subscribe(() => inspect())
+			inspect()
+		})
 	}
 
 	/** Open or strictly take over one interaction and wait for its causal response. */

@@ -1,7 +1,6 @@
 // The module 'vscode' contains the VS Code extensibility API
 // Import the module and reference it with the alias vscode in your code below
 
-import assert from "node:assert"
 import { DIFF_VIEW_URI_SCHEME } from "@hosts/vscode/VscodeDiffViewProvider"
 import { envFlagEnabled } from "@shared/env"
 import * as vscode from "vscode"
@@ -863,9 +862,9 @@ export async function deactivate() {
 const IS_DEV = envFlagEnabled(process.env.IS_DEV)
 const DEV_WORKSPACE_FOLDER = process.env.DEV_WORKSPACE_FOLDER
 
-// Set up development mode file watcher
-if (IS_DEV) {
-	assert(DEV_WORKSPACE_FOLDER, "DEV_WORKSPACE_FOLDER must be set in development")
+// The source watcher is only available in an Extension Development Host.
+// Dev VSIX bundles also set IS_DEV, but do not have a source checkout path.
+if (IS_DEV && DEV_WORKSPACE_FOLDER) {
 	const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(DEV_WORKSPACE_FOLDER, "src/**/*"))
 
 	watcher.onDidChange(({ scheme, path }) => {

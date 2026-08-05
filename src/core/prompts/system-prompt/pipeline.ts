@@ -15,6 +15,8 @@ export interface SystemPromptConfig extends SystemSectionContentConfig {
 	readonly browserEnabled: boolean
 	readonly cliEnvironment: boolean
 	readonly webToolsEnabled: boolean
+	readonly localWebSearchEnabled: boolean
+	readonly serverWebSearchEnabled: boolean
 }
 
 const COMPLETE_TEMPLATE_ENV_KEYS = [
@@ -53,6 +55,7 @@ const COMPLETE_TEMPLATE_CONTRACT: PromptContract = {
 export function createSystemPromptConfig(context: SystemPromptContext): SystemPromptConfig {
 	const servers = context.mcpHub?.getServers() ?? []
 	const variant = requirePromptProfile(context.promptProfile)
+	const webToolsEnabled = variant === PromptProfile.Standard && context.clineWebToolsEnabled === true
 	const userInstructionsEnabled = [
 		context.preferredLanguageInstructions,
 		context.globalClineRulesFileInstructions,
@@ -76,7 +79,9 @@ export function createSystemPromptConfig(context: SystemPromptContext): SystemPr
 		subagentRun: context.isSubagentRun === true,
 		yoloModeEnabled: context.yoloModeToggled === true,
 		cliEnvironment: context.isCliEnvironment === true,
-		webToolsEnabled: context.providerInfo.providerId === "cline" && context.clineWebToolsEnabled === true,
+		webToolsEnabled,
+		localWebSearchEnabled: webToolsEnabled && context.webSearchRoutingPlan?.route === "local",
+		serverWebSearchEnabled: webToolsEnabled && context.webSearchRoutingPlan?.route === "hosted",
 		skillsEnabled: variant === PromptProfile.Standard && (context.skills?.length ?? 0) > 0,
 		userInstructionsEnabled,
 	})
@@ -146,7 +151,11 @@ export function prepareSystemRuntimeEnv(context: SystemPromptContext, config: Sy
 		: ""
 	const browserSupport = config.browserEnabled ? getPrompt("runtimeEnvironment", "browserSupport") : ""
 	const browserCapabilities = config.browserEnabled ? getPrompt("runtimeEnvironment", "browserCapabilities") : ""
-	const webToolsCapabilities = config.webToolsEnabled ? getPrompt("runtimeEnvironment", "webToolsCapabilities") : ""
+	const webToolsCapabilities = [
+		config.webToolsEnabled ? getPrompt("runtimeEnvironment", "webToolsCapabilities") : "",
+		config.localWebSearchEnabled ? getPrompt("runtimeEnvironment", "localWebSearchCapabilities") : "",
+		config.serverWebSearchEnabled ? getPrompt("runtimeEnvironment", "serverWebSearchCapabilities") : "",
+	].join("")
 
 	return Object.freeze({
 		CWD: cwd,

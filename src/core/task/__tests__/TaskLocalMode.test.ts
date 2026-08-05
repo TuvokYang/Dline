@@ -12,16 +12,20 @@ describe("Task task-local mode", () => {
 		expect(Task.prototype.getMode.call(actTask)).toBe("act")
 	})
 
-	/** Commit mode before rebuilding, waking the ask, and flushing persistence. */
+	/** Commit mode before rebuilding, causally continuing the interaction, and flushing persistence. */
 	it("commits in atomic runtime order", async () => {
 		const order: string[] = []
 		const fakeTask = {
-			taskSm: { setMode: vi.fn(() => order.push("mode")) },
+			taskSm: { mode: "plan", setMode: vi.fn(() => order.push("mode")) },
 			rebuildApiHandler: vi.fn(() => order.push("rebuild")),
 			taskState: { isAwaitingPlanResponse: true, didRespondToPlanAskBySwitchingMode: false },
-			handleWebviewAskResponse: vi.fn(async () => {
-				order.push("wake")
-			}),
+			interactionCoordinator: {
+				canRespondForModeSwitch: vi.fn(() => true),
+				respondForModeSwitch: vi.fn(async () => {
+					order.push("wake")
+					return true
+				}),
+			},
 			stateManager: {
 				flushPendingState: vi.fn(async () => {
 					order.push("flush")
@@ -36,6 +40,62 @@ describe("Task task-local mode", () => {
 		})
 
 		expect(order).toEqual(["mode", "rebuild", "wake", "flush"])
-		expect(fakeTask.handleWebviewAskResponse).toHaveBeenCalledWith("messageResponse", "continue", ["image"], ["file"])
+		expect(fakeTask.interactionCoordinator.respondForModeSwitch).toHaveBeenCalledWith({
+			text: "continue",
+			images: ["image"],
+			files: ["file"],
+		})
+	})
+
+	/** Continue an awaiting conversational interaction when switching from Act into Plan. */
+	it("continues an awaiting Act interaction in Plan", async () => {
+		const fakeTask = {
+			taskSm: { mode: "act", setMode: vi.fn() },
+			rebuildApiHandler: vi.fn(),
+			taskState: { isAwaitingPlanResponse: true, didRespondToPlanAskBySwitchingMode: true },
+			interactionCoordinator: {
+				canRespondForModeSwitch: vi.fn(() => true),
+				respondForModeSwitch: vi.fn(async () => true),
+			},
+			stateManager: { flushPendingState: vi.fn(async () => undefined) },
+		}
+
+		await Task.prototype.commitMode.call(fakeTask, "plan")
+
+		expect(fakeTask.taskSm.setMode).toHaveBeenCalledWith("plan")
+		expect(fakeTask.interactionCoordinator.respondForModeSwitch).toHaveBeenCalledWith({ text: "", images: [], files: [] })
+		expect(fakeTask.taskState.didRespondToPlanAskBySwitchingMode).toBe(false)
+		expect(fakeTask.stateManager.flushPendingState).toHaveBeenCalledOnce()
+	})
+
+	/** Restore the source mode if the awaiting interaction changes before its causal response is accepted. */
+	it("rolls back a rejected plan continuation", async () => {
+		const taskSm = {
+			mode: "plan",
+			setMode: vi.fn((mode: "plan" | "act") => {
+				taskSm.mode = mode
+			}),
+		}
+		const fakeTask = {
+			taskSm,
+			rebuildApiHandler: vi.fn(),
+			taskState: { isAwaitingPlanResponse: true, didRespondToPlanAskBySwitchingMode: false },
+			interactionCoordinator: {
+				canRespondForModeSwitch: vi.fn(() => true),
+				respondForModeSwitch: vi.fn(async () => false),
+			},
+			stateManager: { flushPendingState: vi.fn() },
+		}
+
+		await expect(Task.prototype.commitMode.call(fakeTask, "act")).rejects.toThrow(
+			"The active plan interaction changed during the mode switch.",
+		)
+
+		expect(taskSm.mode).toBe("plan")
+		expect(taskSm.setMode).toHaveBeenNthCalledWith(1, "act")
+		expect(taskSm.setMode).toHaveBeenNthCalledWith(2, "plan")
+		expect(fakeTask.rebuildApiHandler).toHaveBeenCalledTimes(2)
+		expect(fakeTask.taskState.didRespondToPlanAskBySwitchingMode).toBe(false)
+		expect(fakeTask.stateManager.flushPendingState).not.toHaveBeenCalled()
 	})
 })

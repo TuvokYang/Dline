@@ -100,7 +100,7 @@ jobs:
       - name: Configure Cline Authentication
         if: steps.detect.outputs.hit == 'true'
         env:
-          CLINE_DIR: ${{ runner.temp }}/cline
+          DLINE_DIR: ${{ runner.temp }}/cline
         run: |
           # Configure API key using the auth command
           cline auth --provider openrouter --apikey "${{ secrets.OPENROUTER_API_KEY }}"

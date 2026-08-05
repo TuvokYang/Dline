@@ -10,6 +10,9 @@ import { Controller } from "../index"
  * @returns The current extension state
  */
 export async function getLatestState(controller: Controller, _: EmptyRequest): Promise<State> {
+	if (typeof controller.ensureWorkspaceManager === "function") {
+		await controller.ensureWorkspaceManager()
+	}
 	// Get the state using the existing method
 	const state = await controller.getStateToPostToWebview()
 	const accountUsage = controller.getAccountUsage()

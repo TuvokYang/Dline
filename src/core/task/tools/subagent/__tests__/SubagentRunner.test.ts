@@ -1,5 +1,5 @@
 import { strict as assert } from "node:assert"
-import { afterEach, describe, it, vi } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 
 vi.mock("@/config", () => ({
 	ClineEndpoint: {
@@ -34,7 +34,7 @@ import type { SystemPromptContext } from "@core/prompts/system-prompt/context"
 import type { TaskConfig } from "@core/task/tools/types/TaskConfig"
 import type { GlobalInstructionsFile } from "@shared/remote-config/schema"
 import { HostProvider } from "@/hosts/host-provider"
-import { ApiFormat } from "@/shared/proto/dline/models/metadata"
+import { ApiFormat, ServerTool } from "@/shared/proto/dline/models/metadata"
 import { Logger } from "@/shared/services/Logger"
 import { ClineDefaultTool } from "@/shared/tools"
 import { TaskState } from "../../../TaskState"
@@ -75,6 +75,14 @@ function createRemoteSkillEntry(
 }
 
 function createTaskConfig(nativeToolCallEnabled: boolean, options: any = {}): TaskConfig {
+	const globalSettings: Record<string, unknown> = {
+		mode: "act",
+		clineWebToolsEnabled: options.clineWebToolsEnabled,
+		globalSkillsToggles: options.globalSkillsToggles,
+		useAutoCondense: options.useAutoCondense,
+		autoCondenseTriggerPercent: options.autoCondenseTriggerPercent,
+		autoCondenseMaxContextTokens: options.autoCondenseMaxContextTokens,
+	}
 	return {
 		taskId: "task-1",
 		ulid: "ulid-1",
@@ -107,8 +115,7 @@ function createTaskConfig(nativeToolCallEnabled: boolean, options: any = {}): Ta
 		},
 		services: {
 			stateManager: {
-				getGlobalSettingsKey: (key: string) =>
-					key === "mode" ? "act" : key === "globalSkillsToggles" ? options.globalSkillsToggles : undefined,
+				getGlobalSettingsKey: (key: string) => globalSettings[key],
 				getGlobalStateKey: (key: string) =>
 					key === "nativeToolCallEnabled"
 						? nativeToolCallEnabled
@@ -192,20 +199,43 @@ function stubSystemPrompt(native: boolean, inspectContext?: (context: SystemProm
 	})
 }
 
-function stubApiHandler(createMessage: any, contextWindow = 200_000) {
+function stubApiHandler(createMessage: any, contextWindow = 200_000, hostedWebSearch = false) {
 	vi.spyOn(coreApi, "buildApiHandler").mockReturnValue({
 		abort: vi.fn(),
+		getProviderId: () => "anthropic",
+		supportsServerTool: (tool: ServerTool) => hostedWebSearch && tool === ServerTool.WEB_SEARCH,
 		getModel: () => ({
 			id: "anthropic/claude-sonnet-4.5",
 			info: {
 				contextWindow,
 				apiFormats: [ApiFormat.ANTHROPIC_CHAT],
 				supportsPromptCache: true,
-				capabilities: { contextWindow, supportsImages: false, supportsPromptCache: true, supportsTools: true },
+				capabilities: {
+					contextWindow,
+					supportsImages: false,
+					supportsPromptCache: true,
+					supportsTools: true,
+					tools: hostedWebSearch ? [ServerTool.WEB_SEARCH] : [],
+				},
 			},
 		}),
 		createMessage,
 	} as never)
+}
+
+function createContextApi(contextWindow: number): ReturnType<typeof coreApi.buildApiHandler> {
+	return {
+		getModel: () => ({
+			id: "gpt-5.4-mini",
+			info: {
+				capabilities: {
+					contextWindow,
+					supportsImages: false,
+					supportsPromptCache: true,
+				},
+			},
+		}),
+	} as unknown as ReturnType<typeof coreApi.buildApiHandler>
 }
 
 describe("SubagentRunner", () => {
@@ -260,6 +290,88 @@ describe("SubagentRunner", () => {
 		assert.equal(result.error, "Subagent run cancelled.")
 		assert.equal(createMessage.mock.calls.length, 0)
 		assert.equal(progress.mock.calls.at(-1)?.[0].status, "cancelled")
+	})
+
+	it("does not give the default subagent hosted Web Search outside its tool allowlist", async () => {
+		const createMessage = vi.fn().mockImplementation(async function* () {
+			yield {
+				type: "tool_calls",
+				function_id: "complete-without-search",
+				tool_call: {
+					function: {
+						name: ClineDefaultTool.ATTEMPT,
+						arguments: JSON.stringify({ result: "done" }),
+					},
+				},
+			}
+		})
+		stubSystemPrompt(false)
+		vi.spyOn(skills, "discoverSkills").mockResolvedValue([])
+		vi.spyOn(skills, "getAvailableSkills").mockReturnValue([])
+		stubApiHandler(createMessage, 200_000, true)
+		initializeHostProvider()
+
+		const result = await new SubagentRunner(createTaskConfig(false, { clineWebToolsEnabled: true })).run(
+			"Do not search remotely",
+			() => {},
+		)
+
+		assert.equal(result.status, "completed", result.error)
+		assert.deepEqual(createMessage.mock.calls[0][3], { serverTools: [] })
+	})
+
+	it("reports hosted Web Search lifecycle when the subagent allowlist explicitly enables it", async () => {
+		const createMessage = vi.fn().mockImplementation(async function* () {
+			yield {
+				type: "server_tool",
+				function_id: "srv-search-1",
+				tool: ServerTool.WEB_SEARCH,
+				phase: "started",
+				input: { query: "latest Dline docs" },
+			}
+			yield {
+				type: "server_tool",
+				function_id: "srv-search-1",
+				tool: ServerTool.WEB_SEARCH,
+				phase: "completed",
+				result: [{ title: "Dline docs" }],
+			}
+			yield {
+				type: "tool_calls",
+				function_id: "complete-after-search",
+				tool_call: {
+					function: {
+						name: ClineDefaultTool.ATTEMPT,
+						arguments: JSON.stringify({ result: "done" }),
+					},
+				},
+			}
+		})
+		stubSystemPrompt(false)
+		vi.spyOn(skills, "discoverSkills").mockResolvedValue([])
+		vi.spyOn(skills, "getAvailableSkills").mockReturnValue([])
+		stubApiHandler(createMessage, 200_000, true)
+		initializeHostProvider()
+		const config = createTaskConfig(false, { clineWebToolsEnabled: true })
+		const progress = vi.fn()
+
+		const result = await new SubagentRunner(config, "web-researcher", {
+			name: "web-researcher",
+			description: "Researches current information on the web.",
+			tools: [ClineDefaultTool.WEB_SEARCH, ClineDefaultTool.ATTEMPT],
+			systemPrompt: "",
+		}).run("Search remotely", progress)
+
+		assert.equal(result.status, "completed", result.error)
+		assert.deepEqual(createMessage.mock.calls[0][3], { serverTools: [ServerTool.WEB_SEARCH] })
+		const hostedEvents = progress.mock.calls
+			.map(([update]) => update.event)
+			.filter((event) => event?.toolName === "web_search")
+		assert.equal(hostedEvents.length, 2)
+		assert.equal(hostedEvents[0].kind, "tool_call")
+		assert.equal(hostedEvents[1].kind, "tool_result")
+		assert.equal(hostedEvents[1].toolStatus, "completed")
+		expect(config.coordinator.getHandler).not.toHaveBeenCalledWith(ClineDefaultTool.WEB_SEARCH)
 	})
 
 	it("reports cancellation between API turns as cancelled", async () => {
@@ -403,10 +515,21 @@ describe("SubagentRunner", () => {
 		stubApiHandler(createMessage)
 		initializeHostProvider()
 		const runner = new SubagentRunner(createTaskConfig(true))
-		const result = await runner.run("List files", () => {})
+		const progress = vi.fn()
+		const result = await runner.run("List files", progress)
 		assert.equal(result.status, "completed", result.error)
 		assert.equal(result.result, "done")
 		assert.equal(createMessage.mock.calls.length, 2)
+		assert.deepEqual(
+			progress.mock.calls
+				.map(([update]) => update.event)
+				.filter((event) => event?.kind === "tool_call" && event.toolStatus === "completed")
+				.map((event) => ({ toolName: event.toolName, summary: event.summary })),
+			[
+				{ toolName: ClineDefaultTool.LIST_FILES, summary: "list_files(path=., recursive=false)" },
+				{ toolName: ClineDefaultTool.ATTEMPT, summary: "attempt_completion(result=done)" },
+			],
+		)
 	})
 
 	it("passes prior request token totals into the next-turn compaction check", async () => {
@@ -457,6 +580,44 @@ describe("SubagentRunner", () => {
 		assert.equal(result.result, "done")
 		assert.equal(createMessage.mock.calls.length, 2)
 		assert.equal(scs.mock.calls.length, 1)
+	})
+
+	it("uses the global percentage and maximum context for auto-compaction", () => {
+		stubApiHandler(vi.fn(), 1_000_000)
+		const runner = new SubagentRunner(
+			createTaskConfig(true, {
+				useAutoCondense: true,
+				autoCondenseTriggerPercent: 60,
+				autoCondenseMaxContextTokens: 500_000,
+			}),
+		)
+		const probe = runner as unknown as {
+			shouldCompactBeforeNextRequest: (
+				requestTotalTokens: number,
+				api: ReturnType<typeof coreApi.buildApiHandler>,
+				modelId: string,
+			) => boolean
+		}
+		const api = createContextApi(1_000_000)
+
+		assert.equal(probe.shouldCompactBeforeNextRequest(499_999, api, "gpt-5.4-mini"), false)
+		assert.equal(probe.shouldCompactBeforeNextRequest(500_000, api, "gpt-5.4-mini"), true)
+	})
+
+	it("retains standard truncation pressure when auto-compaction is disabled", () => {
+		stubApiHandler(vi.fn(), 1_000_000)
+		const runner = new SubagentRunner(createTaskConfig(true, { useAutoCondense: false }))
+		const probe = runner as unknown as {
+			shouldCompactBeforeNextRequest: (
+				requestTotalTokens: number,
+				api: ReturnType<typeof coreApi.buildApiHandler>,
+				modelId: string,
+			) => boolean
+		}
+		const api = createContextApi(1_000_000)
+
+		assert.equal(probe.shouldCompactBeforeNextRequest(959_999, api, "gpt-5.4-mini"), false)
+		assert.equal(probe.shouldCompactBeforeNextRequest(960_000, api, "gpt-5.4-mini"), true)
 	})
 
 	it("falls back to non-native result blocks if structured tool calls appear while native mode is disabled", async () => {
@@ -559,6 +720,41 @@ describe("SubagentRunner", () => {
 		assert.equal(result.status, "failed")
 		assert.equal(createMessage.mock.calls.length, 3)
 		assert.match(result.error || "", /stream_initialization_failed/i)
+	})
+
+	it("does not retry after a hosted Web Search chunk has already been yielded", async () => {
+		const createMessage = vi.fn().mockImplementation(async function* () {
+			yield {
+				type: "server_tool",
+				function_id: "hosted-search-before-stream-error",
+				tool: ServerTool.WEB_SEARCH,
+				phase: "started",
+				input: { query: "Dline retry boundary" },
+			}
+			throw new Error("stream failed after hosted search started")
+		})
+		stubSystemPrompt(false)
+		vi.spyOn(skills, "discoverSkills").mockResolvedValue([])
+		vi.spyOn(skills, "getAvailableSkills").mockReturnValue([])
+		stubApiHandler(createMessage, 200_000, true)
+		initializeHostProvider()
+		const progress = vi.fn()
+		const runner = new SubagentRunner(createTaskConfig(false, { clineWebToolsEnabled: true }), "web-researcher", {
+			name: "web-researcher",
+			description: "Researches current information on the web.",
+			tools: [ClineDefaultTool.WEB_SEARCH, ClineDefaultTool.ATTEMPT],
+			systemPrompt: "",
+		})
+
+		const result = await runner.run("Search once", progress)
+
+		assert.equal(result.status, "failed")
+		assert.equal(createMessage.mock.calls.length, 1)
+		assert.match(result.error || "", /stream failed after hosted search started/i)
+		const hostedStartedEvents = progress.mock.calls
+			.map(([update]) => update.event)
+			.filter((event) => event?.kind === "tool_call" && event.toolName === "web_search" && event.toolStatus === "started")
+		assert.equal(hostedStartedEvents.length, 1)
 	})
 
 	it("fails context window errors", async () => {

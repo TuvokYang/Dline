@@ -30,20 +30,20 @@ function parseIntEnv(value: string | undefined, fallback: number): number {
  */
 export function getBlobStoreSettingsFromEnv(): BlobStoreSettings {
 	return {
-		adapterType: process?.env?.CLINE_STORAGE_ADAPTER || "unknown",
-		bucket: process?.env?.CLINE_STORAGE_BUCKET || "cline",
-		accessKeyId: process?.env?.CLINE_STORAGE_ACCESS_KEY_ID || "",
-		secretAccessKey: process?.env?.CLINE_STORAGE_SECRET_ACCESS_KEY || "",
-		region: process?.env?.CLINE_STORAGE_REGION,
-		endpoint: process?.env?.CLINE_STORAGE_ENDPOINT,
-		accountId: process?.env?.CLINE_STORAGE_ACCOUNT_ID,
+		adapterType: process?.env?.DLINE_STORAGE_ADAPTER || "unknown",
+		bucket: process?.env?.DLINE_STORAGE_BUCKET || "cline",
+		accessKeyId: process?.env?.DLINE_STORAGE_ACCESS_KEY_ID || "",
+		secretAccessKey: process?.env?.DLINE_STORAGE_SECRET_ACCESS_KEY || "",
+		region: process?.env?.DLINE_STORAGE_REGION,
+		endpoint: process?.env?.DLINE_STORAGE_ENDPOINT,
+		accountId: process?.env?.DLINE_STORAGE_ACCOUNT_ID,
 
-		intervalMs: parseIntEnv(process.env.CLINE_STORAGE_SYNC_INTERVAL_MS, 30000),
-		maxRetries: parseIntEnv(process.env.CLINE_STORAGE_SYNC_MAX_RETRIES, 5),
-		batchSize: parseIntEnv(process.env.CLINE_STORAGE_SYNC_BATCH_SIZE, 10),
-		maxQueueSize: parseIntEnv(process.env.CLINE_STORAGE_SYNC_MAX_QUEUE_SIZE, 1000),
-		maxFailedAgeMs: parseIntEnv(process.env.CLINE_STORAGE_SYNC_MAX_FAILED_AGE_MS, SEVEN_DAYS_MS),
-		backfillEnabled: process.env.CLINE_STORAGE_SYNC_BACKFILL_ENABLED === "true",
+		intervalMs: parseIntEnv(process.env.DLINE_STORAGE_SYNC_INTERVAL_MS, 30000),
+		maxRetries: parseIntEnv(process.env.DLINE_STORAGE_SYNC_MAX_RETRIES, 5),
+		batchSize: parseIntEnv(process.env.DLINE_STORAGE_SYNC_BATCH_SIZE, 10),
+		maxQueueSize: parseIntEnv(process.env.DLINE_STORAGE_SYNC_MAX_QUEUE_SIZE, 1000),
+		maxFailedAgeMs: parseIntEnv(process.env.DLINE_STORAGE_SYNC_MAX_FAILED_AGE_MS, SEVEN_DAYS_MS),
+		backfillEnabled: process.env.DLINE_STORAGE_SYNC_BACKFILL_ENABLED === "true",
 	}
 }
 

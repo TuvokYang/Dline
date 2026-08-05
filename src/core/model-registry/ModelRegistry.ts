@@ -5,42 +5,24 @@
  * caches them in memory, and watches for file changes.
  */
 import { getDlineHomePath } from "@core/storage/disk"
+import { ServerTool, serverToolFromJSON } from "@shared/proto/dline/models/metadata"
 import { getProviderSeedConfig } from "@shared/providers/model-infos"
 import type { ModelInfo, ProviderModelsConfig } from "@shared/providers/types"
 import { Logger } from "@shared/services/Logger"
 import chokidar, { type FSWatcher } from "chokidar"
 import fs from "fs/promises"
 import * as path from "path"
+import { getProviderConfigFileName, getProviderIdFromConfigFile } from "./provider-config-file"
+import { reconcileProviderModels } from "./provider-model-reconciliation"
 
 const PROVIDERS_DIR_NAME = "providers"
 
-function enrichMissingSeedCapabilities(providerId: string, config: ProviderModelsConfig): ProviderModelsConfig {
+function enrichMissingSeedMetadata(providerId: string, config: ProviderModelsConfig): ProviderModelsConfig {
 	const seedConfig = getProviderSeedConfig(providerId)
 	if (!seedConfig) {
 		return config
 	}
-
-	let models = config.models
-	for (const [modelId, model] of Object.entries(config.models)) {
-		if (model.capabilities?.supportsTools !== undefined) {
-			continue
-		}
-
-		const seedSupportsTools = seedConfig.models[modelId]?.capabilities?.supportsTools
-		if (seedSupportsTools === undefined) {
-			continue
-		}
-
-		if (models === config.models) {
-			models = { ...config.models }
-		}
-		models[modelId] = {
-			...model,
-			capabilities: { ...model.capabilities, supportsTools: seedSupportsTools },
-		}
-	}
-
-	return models === config.models ? config : { ...config, models }
+	return reconcileProviderModels(seedConfig, config, "fill-missing")
 }
 
 function parseProviderModelsConfig(providerId: string, raw: string): ProviderModelsConfig {
@@ -51,7 +33,14 @@ function parseProviderModelsConfig(providerId: string, raw: string): ProviderMod
 	if (!config.models || typeof config.models !== "object" || Array.isArray(config.models)) {
 		throw new Error(`Provider config "${providerId}" must define models as a keyed object`)
 	}
-	return enrichMissingSeedCapabilities(providerId, config)
+	for (const model of Object.values(config.models)) {
+		const capabilities = model.capabilities
+		if (!capabilities || !Array.isArray(capabilities.tools)) continue
+		capabilities.tools = capabilities.tools
+			.map((tool) => (typeof tool === "string" ? serverToolFromJSON(tool) : tool))
+			.filter((tool) => tool !== ServerTool.UNRECOGNIZED)
+	}
+	return enrichMissingSeedMetadata(config.provider || providerId, config)
 }
 
 export class ModelRegistry {
@@ -125,21 +114,31 @@ export class ModelRegistry {
 		try {
 			const entries = await fs.readdir(this.providersDir)
 			const jsonFiles = entries.filter((f) => f.endsWith(".json"))
+			const loadedConfigs = new Map<string, { config: ProviderModelsConfig; fileName: string }>()
 
 			for (const fileName of jsonFiles) {
-				const providerId = fileName.replace(/\.json$/i, "")
+				const fileProviderId = getProviderIdFromConfigFile(fileName)
 				try {
 					const filePath = path.join(this.providersDir, fileName)
 					const raw = await fs.readFile(filePath, "utf8")
-					const config = parseProviderModelsConfig(providerId, raw)
-					this.cache.set(providerId, config)
+					const config = parseProviderModelsConfig(fileProviderId, raw)
+					const providerId = config.provider || fileProviderId
+					const existing = loadedConfigs.get(providerId)
+					const canonicalFileName = getProviderConfigFileName(providerId)
+					if (!existing || fileName === canonicalFileName || existing.fileName !== canonicalFileName) {
+						loadedConfigs.set(providerId, { config, fileName })
+					}
 				} catch (err) {
 					Logger.warn(`[ModelRegistry] Failed to parse ${fileName}:`, err)
 				}
 			}
 
+			for (const [providerId, { config }] of loadedConfigs) {
+				this.cache.set(providerId, config)
+			}
+
 			// Remove cached entries for deleted files
-			const loadedIds = new Set(jsonFiles.map((f) => f.replace(/\.json$/i, "")))
+			const loadedIds = new Set(loadedConfigs.keys())
 			for (const id of this.cache.keys()) {
 				if (!loadedIds.has(id)) {
 					this.cache.delete(id)

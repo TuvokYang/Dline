@@ -1,7 +1,12 @@
 import { expect } from "chai"
 import type { ChatCompletionTool as OpenAITool } from "openai/resources/chat/completions"
 import { describe, it } from "vitest"
-import { convertOpenAIToolsToAnthropicTools, handleAnthropicMessagesApiStreamResponse } from "../messages_api_support"
+import { ServerTool } from "@/shared/proto/dline/models/metadata"
+import {
+	convertOpenAIToolsToAnthropicTools,
+	handleAnthropicMessagesApiStreamResponse,
+	mergeAnthropicServerTools,
+} from "../messages_api_support"
 
 const createAsyncIterable = (events: any[]) =>
 	({
@@ -88,6 +93,37 @@ describe("messages_api_support", () => {
 
 			expect(converted).to.have.length(1)
 			expect(converted?.[0]?.name).to.equal("valid_tool")
+		})
+
+		it("replaces a local web_search function with one hosted Anthropic declaration", () => {
+			const converted = convertOpenAIToolsToAnthropicTools(
+				[
+					{
+						type: "function",
+						function: { name: "web_search", description: "Local search", parameters: { type: "object" } },
+					},
+					{
+						type: "function",
+						function: { name: "read_file", description: "Read", parameters: { type: "object" } },
+					},
+				],
+				[ServerTool.WEB_SEARCH],
+			)
+
+			expect(converted).to.deep.equal([
+				{ name: "read_file", description: "Read", input_schema: { type: "object" } },
+				{ type: "web_search_20250305", name: "web_search" },
+			])
+		})
+
+		it("keeps an Anthropic local web_search tool unless hosted search was selected", () => {
+			const localTool = {
+				name: "web_search",
+				description: "Local search",
+				input_schema: { type: "object" as const, properties: {} },
+			}
+
+			expect(mergeAnthropicServerTools([localTool])).to.deep.equal([localTool])
 		})
 	})
 
@@ -235,6 +271,122 @@ describe("messages_api_support", () => {
 					},
 				},
 			})
+		})
+
+		it("emits hosted web search lifecycle and usage without local tool_calls", async () => {
+			const result = [
+				{
+					type: "web_search_result",
+					url: "https://example.com/result",
+					title: "Result",
+					page_age: null,
+					encrypted_content: "encrypted",
+				},
+			]
+			const chunks = await collectChunks([
+				{
+					type: "message_start",
+					message: {
+						usage: {
+							input_tokens: 10,
+							output_tokens: 0,
+							server_tool_use: { web_search_requests: 1, web_fetch_requests: 0 },
+						},
+					},
+				},
+				{
+					type: "content_block_start",
+					index: 0,
+					content_block: {
+						type: "server_tool_use",
+						id: "srv_web_1",
+						name: "web_search",
+						input: {},
+						caller: { type: "direct" },
+					},
+				},
+				{
+					type: "content_block_delta",
+					index: 0,
+					delta: {
+						type: "input_json_delta",
+						partial_json: '{"query":"Dline"}',
+					},
+				},
+				{
+					type: "content_block_stop",
+					index: 0,
+				},
+				{
+					type: "content_block_start",
+					index: 1,
+					content_block: {
+						type: "web_search_tool_result",
+						tool_use_id: "srv_web_1",
+						content: result,
+						caller: { type: "direct" },
+					},
+				},
+			])
+
+			expect(chunks).to.deep.equal([
+				{
+					type: "usage",
+					inputTokens: 10,
+					outputTokens: 0,
+					cacheWriteTokens: undefined,
+					cacheReadTokens: undefined,
+					serverToolUsage: { webSearchRequests: 1 },
+				},
+				{
+					type: "server_tool",
+					function_id: "srv_web_1",
+					tool: ServerTool.WEB_SEARCH,
+					phase: "started",
+					input: {},
+				},
+				{
+					type: "server_tool",
+					function_id: "srv_web_1",
+					tool: ServerTool.WEB_SEARCH,
+					phase: "searching",
+					input: { query: "Dline" },
+				},
+				{
+					type: "server_tool",
+					function_id: "srv_web_1",
+					tool: ServerTool.WEB_SEARCH,
+					phase: "completed",
+					result,
+				},
+			])
+			expect(chunks.some((chunk) => chunk.type === "tool_calls")).to.equal(false)
+		})
+
+		it("maps Anthropic hosted web search errors to a failed server_tool event", async () => {
+			const error = { type: "web_search_tool_result_error", error_code: "too_many_requests" }
+			const chunks = await collectChunks([
+				{
+					type: "content_block_start",
+					index: 0,
+					content_block: {
+						type: "web_search_tool_result",
+						tool_use_id: "srv_web_error",
+						content: error,
+						caller: { type: "direct" },
+					},
+				},
+			])
+
+			expect(chunks).to.deep.equal([
+				{
+					type: "server_tool",
+					function_id: "srv_web_error",
+					tool: ServerTool.WEB_SEARCH,
+					phase: "failed",
+					error,
+				},
+			])
 		})
 	})
 })

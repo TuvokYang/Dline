@@ -1,5 +1,12 @@
 import "@testing-library/jest-dom"
-import { vi } from "vitest"
+import { afterAll, vi } from "vitest"
+import { installIsolatedTestDirectories } from "../../src/test/isolated-test-directories"
+
+const cleanupIsolatedTestDirectories = installIsolatedTestDirectories(`webview-${process.pid}`)
+
+afterAll(() => {
+	cleanupIsolatedTestDirectories()
+})
 
 // "Official" jest workaround for mocking window.matchMedia()
 // https://jestjs.io/docs/manual-mocks#mocking-methods-which-are-not-implemented-in-jsdom

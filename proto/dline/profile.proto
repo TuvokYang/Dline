@@ -43,6 +43,10 @@ message ApiProfile {
   bool enabled = 8;
   optional ModelInfo model_info = 9;  // user defined model info overwrite
 
+  // Web search routing policy for this provider profile. Omitted legacy values
+  // resolve to WEB_SEARCH_MODE_AUTO.
+  optional dline.provider.WebSearchMode web_search_mode = 90;
+
   oneof provider_config {
     dline.provider.AnthropicProviderConfig anthropic = 10;
     dline.provider.BedrockProviderConfig bedrock = 11;

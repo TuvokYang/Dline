@@ -3,7 +3,9 @@ import { ModelRegistry } from "@core/model-registry/ModelRegistry"
 import { ApiConfiguration, ModelInfo } from "@shared/api"
 import type { AccountUsageData, AccountUsageQuotaData } from "@shared/ExtensionMessage"
 import type { ModelInfo as ProtoModelInfo } from "@shared/proto/dline/models"
+import type { ServerTool } from "@shared/proto/dline/models/metadata"
 import type { ApiProfile } from "@shared/proto/dline/profile"
+import type { WebSearchMode } from "@shared/proto/dline/provider/common"
 import { Mode } from "@shared/storage/types"
 import { ClineError } from "@/services/error"
 import { ClineStorageMessage } from "@/shared/messages/content"
@@ -79,9 +81,22 @@ export interface ApiHandlerContext {
 export type UsageQuota = AccountUsageQuotaData
 export type AccountUsage = AccountUsageData
 
+/** Immutable request-level capabilities resolved before entering a provider adapter. */
+export interface ApiRequestOptions {
+	/** Provider-hosted tools selected for this request. Local tools remain in `tools`. */
+	readonly serverTools?: readonly ServerTool[]
+}
+
 export interface ApiHandler {
-	createMessage(systemPrompt: string, messages: ClineStorageMessage[], tools?: ClineTool[], useResponseApi?: boolean): ApiStream
+	createMessage(
+		systemPrompt: string,
+		messages: ClineStorageMessage[],
+		tools?: ClineTool[],
+		options?: ApiRequestOptions,
+	): ApiStream
 	getModel(): ApiHandlerModel
+	/** Report protocol-adapter support without consulting provider or model identifiers. */
+	supportsServerTool?(tool: ServerTool): boolean
 	getApiStreamUsage?(): Promise<ApiStreamUsageChunk | undefined>
 	/** Query account-level usage/balance from the provider. Returns undefined if not supported. */
 	getAccountUsage?(): Promise<AccountUsage | undefined>
@@ -90,6 +105,8 @@ export interface ApiHandler {
 	parseError?(error: any, modelId?: string): ClineError
 	/** Return the provider ID this handler was built for (from profile.provider). */
 	getProviderId?(): string
+	/** Return the web-search mode captured by this handler's profile. */
+	getWebSearchMode?(): WebSearchMode | undefined
 }
 
 export interface ApiHandlerModel {
@@ -296,7 +313,10 @@ function createHandlerForProvider(ctx: ApiHandlerContext): ApiHandler {
 			throw new Error(`Unknown provider: ${profile.provider}`)
 	}
 	// Inject provider ID so callers can get it without going through global StateManager
-	return Object.assign(handler, { getProviderId: () => providerId })
+	return Object.assign(handler, {
+		getProviderId: () => providerId,
+		getWebSearchMode: () => profile.webSearchMode,
+	})
 }
 
 /** @deprecated Each handler now reads its own provider config via ctx.profile.[provider] */

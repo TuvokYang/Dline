@@ -91,7 +91,7 @@ export class MakePlanHandler implements IToolHandler, IPartialBlockHandler {
 
 	/** Consume a make_plan response without replaying presentation or mode-switch setup. */
 	async continueInteraction(config: TaskConfig, _block: ToolUse, outcome: InteractionOutcome): Promise<ToolResponse> {
-		let text = outcome.draft?.text
+		const text = outcome.draft?.text
 		const images = outcome.draft?.images
 		const responseFiles = outcome.draft?.files
 
@@ -99,11 +99,6 @@ export class MakePlanHandler implements IToolHandler, IPartialBlockHandler {
 
 		if (isCompactSignal(text)) {
 			return formatResponse.toolResult("Mode switch context compaction requested.")
-		}
-
-		// webview invoke sendMessage will send this marker in order to put webview into the proper state (responding to an ask) and as a flag to extension that the user switched to ACT mode.
-		if (text === "PLAN_MODE_TOGGLE_RESPONSE") {
-			text = ""
 		}
 
 		if (text || (images && images.length > 0) || (responseFiles && responseFiles.length > 0)) {

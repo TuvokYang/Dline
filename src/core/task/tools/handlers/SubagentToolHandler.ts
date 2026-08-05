@@ -189,6 +189,7 @@ function createSubagentActivity(
 		activityId: entry.jobId,
 		kind: "subagent",
 		executionMode,
+		cancellationOwner: executionMode === "background" ? "explicit" : "task",
 		title: entry.subagentName || entry.task || `Subagent ${entry.index}`,
 		detail: entry.prompt,
 		parentActivityId,

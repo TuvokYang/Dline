@@ -25,6 +25,47 @@ async function expectSingleUserFeedback(sidebar: Frame, text: string): Promise<v
 	await expect(feedback).toHaveText(text)
 }
 
+async function startEchoOverlapObserver(sidebar: Frame, marker: string): Promise<void> {
+	await sidebar.evaluate((submittedText) => {
+		const scope = window as typeof window & {
+			__dlineEchoOverlap?: boolean
+			__dlineEchoObserver?: MutationObserver
+		}
+		scope.__dlineEchoObserver?.disconnect()
+		scope.__dlineEchoOverlap = false
+		const checkForOverlap = () => {
+			const input = document.querySelector<HTMLTextAreaElement>('[data-testid="chat-input"]')
+			const echoedFeedback = Array.from(document.querySelectorAll("span.ph-no-capture")).some(
+				(element) => !element.closest("button") && element.textContent?.includes(submittedText),
+			)
+			if (echoedFeedback && input?.value === submittedText) {
+				scope.__dlineEchoOverlap = true
+			}
+		}
+		const observer = new MutationObserver(checkForOverlap)
+		observer.observe(document.body, { childList: true, characterData: true, subtree: true })
+		scope.__dlineEchoObserver = observer
+		checkForOverlap()
+	}, marker)
+}
+
+async function stopEchoOverlapObserver(sidebar: Frame): Promise<{ inputValue: string; overlap: boolean }> {
+	return sidebar.evaluate(() => {
+		const scope = window as typeof window & {
+			__dlineEchoOverlap?: boolean
+			__dlineEchoObserver?: MutationObserver
+		}
+		scope.__dlineEchoObserver?.disconnect()
+		const result = {
+			inputValue: document.querySelector<HTMLTextAreaElement>('[data-testid="chat-input"]')?.value ?? "",
+			overlap: scope.__dlineEchoOverlap === true,
+		}
+		delete scope.__dlineEchoObserver
+		delete scope.__dlineEchoOverlap
+		return result
+	})
+}
+
 async function closeCurrentTask(sidebar: Frame): Promise<void> {
 	const closeButton = sidebar.getByRole("button", { name: "Close Task", exact: true })
 	await expect(closeButton).toBeVisible()
@@ -57,6 +98,421 @@ async function selectProfile(sidebar: Frame, profileName: string): Promise<void>
 	await profileOption.click()
 	await expect(modelSwitcher).toHaveText(profileName)
 	await expect(sidebar.getByText("Available Models", { exact: true })).not.toBeVisible()
+}
+
+e2e(
+	"Chat input - Ctrl+Z and Ctrl+Y preserve bounded edit history without sending",
+	async ({ helper, page, server, sidebar, userDataDir }) => {
+		e2e.setTimeout(180_000)
+		await helper.signin(sidebar)
+		server.resetOpenAiMock()
+		server.enqueueOpenAiResponses({
+			type: "tool",
+			name: "attempt_completion",
+			arguments: { result: "E2E_INPUT_HISTORY_SEND_OK" },
+		})
+
+		const input = sidebar.getByTestId("chat-input")
+		await input.click()
+		await input.pressSequentially("alpha", { delay: 20 })
+		await page.waitForTimeout(1_000)
+		await input.pressSequentially(" beta", { delay: 20 })
+
+		await input.press("Control+z")
+		await expect(input).toHaveValue("alpha")
+		await input.press("Control+z")
+		await expect(input).toHaveValue("")
+		await input.press("Control+y")
+		await expect(input).toHaveValue("alpha")
+		await input.press("Control+y")
+		await expect(input).toHaveValue("alpha beta")
+		expect(server.openAiRequestCount).toBe(0)
+
+		await input.press("Control+z")
+		await input.pressSequentially(" branch", { delay: 20 })
+		await input.press("Control+y")
+		await expect(input).toHaveValue("alpha branch")
+
+		await sidebar.getByTestId("send-button").click()
+		await expect(sidebar.getByText("alpha branch", { exact: true }).first()).toBeVisible()
+		await expect(sidebar.getByText("E2E_INPUT_HISTORY_SEND_OK", { exact: false }).last()).toBeVisible({ timeout: 60_000 })
+		await expect(input).toHaveValue("")
+		await expect.poll(() => server.openAiRequestCount).toBe(1)
+
+		await input.press("Control+z")
+		await expect(input).toHaveValue("alpha branch")
+		await input.press("Control+y")
+		await expect(input).toHaveValue("")
+		await page.waitForTimeout(500)
+		expect(server.openAiRequestCount).toBe(1)
+		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+	},
+)
+
+e2e(
+	"Chat input - an unsent draft stays local while a running task completes",
+	async ({ helper, page, server, sidebar, userDataDir }) => {
+		e2e.setTimeout(180_000)
+		await helper.signin(sidebar)
+		server.resetOpenAiMock()
+		server.enqueueOpenAiResponses(
+			{
+				type: "tool",
+				name: "attempt_completion",
+				arguments: { result: "E2E_UNSENT_DRAFT_TASK_DONE" },
+				delayMs: 5_000,
+			},
+			{
+				type: "error",
+				status: 500,
+				code: "unexpected_unsent_draft_request",
+				message: "An unsent draft triggered an API request",
+			},
+		)
+
+		await sendTask(sidebar, "E2E_UNSENT_DRAFT_RUNNING_TASK")
+		await expect.poll(() => server.openAiRequestCount, { timeout: 60_000 }).toBe(1)
+		await expect(sidebar.getByRole("button", { name: "Cancel", exact: true }).first()).toBeVisible({
+			timeout: 30_000,
+		})
+
+		const unsentDraft = "E2E_DRAFT_MUST_STAY_IN_INPUT"
+		const input = sidebar.getByTestId("chat-input")
+		await input.fill(unsentDraft)
+		await expect(input).toHaveValue(unsentDraft)
+
+		await expect(sidebar.getByText("E2E_UNSENT_DRAFT_TASK_DONE", { exact: false }).last()).toBeVisible({
+			timeout: 60_000,
+		})
+		await page.waitForTimeout(1_000)
+
+		await expect(input).toHaveValue(unsentDraft)
+		const submittedFeedback = sidebar.locator("span.ph-no-capture:not(button span)").filter({ hasText: unsentDraft })
+		await expect(submittedFeedback).toHaveCount(0)
+		expect(server.openAiRequestCount).toBe(1)
+		expect(JSON.stringify(server.getOpenAiRequestBodies())).not.toContain(unsentDraft)
+		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+	},
+)
+
+e2e(
+	"Chat input - Enter, mouse, and keyboard send clear as soon as accepted feedback is echoed",
+	async ({ helper, server, sidebar, userDataDir }) => {
+		e2e.setTimeout(180_000)
+		await helper.signin(sidebar)
+		server.resetOpenAiMock()
+		server.enqueueOpenAiResponses(
+			{ type: "tool", name: "qna_respond", arguments: { response: "E2E_ECHO_CLEAR_ENTER_PROMPT" } },
+			{ type: "tool", name: "qna_respond", arguments: { response: "E2E_ECHO_CLEAR_MOUSE_PROMPT" } },
+			{ type: "tool", name: "qna_respond", arguments: { response: "E2E_ECHO_CLEAR_KEYBOARD_PROMPT" } },
+			{ type: "tool", name: "attempt_completion", arguments: { result: "E2E_ECHO_CLEAR_DONE" } },
+		)
+
+		await sendTask(sidebar, "E2E_ECHO_CLEAR_TASK")
+		await expect(sidebar.getByText("E2E_ECHO_CLEAR_ENTER_PROMPT", { exact: true })).toBeVisible({ timeout: 60_000 })
+
+		const input = sidebar.getByTestId("chat-input")
+		const enterFeedback = "E2E_ECHO_CLEAR_ENTER_FEEDBACK"
+		await input.fill(enterFeedback)
+		await startEchoOverlapObserver(sidebar, enterFeedback)
+		await input.press("Enter")
+		await expectSingleUserFeedback(sidebar, enterFeedback)
+		const enterObservation = await stopEchoOverlapObserver(sidebar)
+
+		await expect(sidebar.getByText("E2E_ECHO_CLEAR_MOUSE_PROMPT", { exact: true })).toBeVisible({ timeout: 60_000 })
+		const mouseFeedback = "E2E_ECHO_CLEAR_MOUSE_FEEDBACK"
+		await input.fill(mouseFeedback)
+		await startEchoOverlapObserver(sidebar, mouseFeedback)
+		await sidebar.getByTestId("send-button").click()
+		await expectSingleUserFeedback(sidebar, mouseFeedback)
+		const mouseObservation = await stopEchoOverlapObserver(sidebar)
+
+		await expect(sidebar.getByText("E2E_ECHO_CLEAR_KEYBOARD_PROMPT", { exact: true })).toBeVisible({ timeout: 60_000 })
+		const keyboardFeedback = "E2E_ECHO_CLEAR_KEYBOARD_FEEDBACK"
+		await input.fill(keyboardFeedback)
+		await startEchoOverlapObserver(sidebar, keyboardFeedback)
+		const sendButton = sidebar.getByRole("button", { name: "Send message", exact: true })
+		await input.press("Tab")
+		await expect(sendButton).toBeFocused()
+		await sendButton.press("Space")
+		await expectSingleUserFeedback(sidebar, keyboardFeedback)
+		const keyboardObservation = await stopEchoOverlapObserver(sidebar)
+
+		expect(enterObservation).toEqual({ inputValue: "", overlap: false })
+		expect(mouseObservation).toEqual({ inputValue: "", overlap: false })
+		expect(keyboardObservation).toEqual({ inputValue: "", overlap: false })
+		await expect(sidebar.getByText("E2E_ECHO_CLEAR_DONE", { exact: false }).last()).toBeVisible({ timeout: 60_000 })
+		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+	},
+)
+
+e2e(
+	"Chat input - keyboard-typed draft stays local when a partial stream ends with attempt_completion",
+	async ({ helper, page, server, sidebar, userDataDir }) => {
+		e2e.setTimeout(180_000)
+		await helper.signin(sidebar)
+		await selectProfile(sidebar, E2E_PROFILE_NAMES.mockDeepSeek)
+		server.resetOpenAiMock()
+		server.enqueueResponses(
+			"deepseek-chat",
+			{
+				type: "tool",
+				id: "call_unsent_draft_stream_completion",
+				name: "attempt_completion",
+				arguments: { result: "E2E_UNSENT_DRAFT_STREAM_DONE" },
+				reasoning: "E2E_UNSENT_DRAFT_PARTIAL_REASONING",
+				afterReasoningDelayMs: 5_000,
+			},
+			{
+				type: "error",
+				status: 500,
+				code: "unexpected_unsent_draft_stream_request",
+				message: "An unsent draft triggered an extra request after a streamed turn end",
+			},
+		)
+
+		await sendTask(sidebar, "E2E_UNSENT_DRAFT_STREAM_TASK")
+		await expect(sidebar.getByText("E2E_UNSENT_DRAFT_PARTIAL_REASONING", { exact: false })).toHaveCount(1, {
+			timeout: 60_000,
+		})
+		await expect.poll(() => server.getRequestCount("deepseek-chat")).toBe(1)
+		await expect(sidebar.getByRole("button", { name: "Cancel", exact: true }).first()).toBeVisible()
+
+		const unsentDraft = "E2E_STREAM_TURN_END_DRAFT_MUST_STAY_LOCAL"
+		const input = sidebar.getByTestId("chat-input")
+		await input.click()
+		await input.pressSequentially(unsentDraft, { delay: 20 })
+		await expect(input).toHaveValue(unsentDraft)
+
+		await expect(sidebar.getByText("E2E_UNSENT_DRAFT_STREAM_DONE", { exact: false }).last()).toBeVisible({
+			timeout: 60_000,
+		})
+		await page.waitForTimeout(1_000)
+
+		await expect(input).toHaveValue(unsentDraft)
+		const submittedFeedback = sidebar.locator("span.ph-no-capture:not(button span)").filter({ hasText: unsentDraft })
+		await expect(submittedFeedback).toHaveCount(0)
+		expect(server.getRequestCount("deepseek-chat")).toBe(1)
+		expect(JSON.stringify(server.getMockConsumptions("deepseek-chat").map((entry) => entry.requestBody))).not.toContain(
+			unsentDraft,
+		)
+		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+	},
+)
+
+e2e(
+	"Chat input - turn-end rendering during typing never replays the previous input history",
+	async ({ helper, page, server, sidebar, userDataDir }) => {
+		e2e.setTimeout(180_000)
+		await helper.signin(sidebar)
+		server.resetOpenAiMock()
+		server.enqueueOpenAiResponses(
+			{ type: "tool", name: "qna_respond", arguments: { response: "E2E_HISTORY_RACE_TURN_END_0" } },
+			{
+				type: "tool",
+				name: "qna_respond",
+				arguments: { response: "E2E_HISTORY_RACE_TURN_END_1" },
+				delayMs: 500,
+			},
+			{
+				type: "tool",
+				name: "qna_respond",
+				arguments: { response: "E2E_HISTORY_RACE_TURN_END_2" },
+				delayMs: 500,
+			},
+			{
+				type: "tool",
+				name: "attempt_completion",
+				arguments: { result: "E2E_HISTORY_RACE_COMPLETION_3" },
+				delayMs: 500,
+			},
+			{
+				type: "error",
+				status: 500,
+				code: "unexpected_stale_input_history_request",
+				message: "Turn-end rendering replayed input history without an explicit submit",
+			},
+		)
+
+		await sendTask(sidebar, "E2E_HISTORY_RACE_TASK")
+		await expect(sidebar.getByText("E2E_HISTORY_RACE_TURN_END_0", { exact: true })).toBeVisible({ timeout: 60_000 })
+		await submitWithEnter(sidebar, "E2E_PREVIOUS_INPUT_HISTORY_0")
+
+		const submittedHistory = ["E2E_PREVIOUS_INPUT_HISTORY_0"]
+		const input = sidebar.getByTestId("chat-input")
+		let finalDraft = ""
+		for (let turn = 1; turn <= 3; turn++) {
+			const expectedRequestCount = turn + 1
+			await expect.poll(() => server.openAiRequestCount, { timeout: 60_000 }).toBe(expectedRequestCount)
+
+			finalDraft = `E2E_CURRENT_DRAFT_${turn}_MUST_STAY_LOCAL_WHILE_THE_TURN_END_TOOL_IS_RENDERING`
+			await input.click()
+			const typing = input.pressSequentially(finalDraft, { delay: 20 })
+			const turnEndText = turn === 3 ? "E2E_HISTORY_RACE_COMPLETION_3" : `E2E_HISTORY_RACE_TURN_END_${turn}`
+			await expect(sidebar.getByText(turnEndText, { exact: true })).toBeVisible({ timeout: 60_000 })
+			await typing
+			await page.waitForTimeout(500)
+
+			await expect(input).toHaveValue(finalDraft)
+			expect(server.openAiRequestCount).toBe(expectedRequestCount)
+			if (turn < 3) {
+				await input.press("Enter")
+				await expect(input).toHaveValue("")
+				await expectSingleUserFeedback(sidebar, finalDraft)
+				submittedHistory.push(finalDraft)
+			}
+		}
+
+		const requestBodies = server.getOpenAiRequestBodies().map((body) => JSON.stringify(body))
+		expect(requestBodies).toHaveLength(4)
+		for (const [index, submitted] of submittedHistory.entries()) {
+			expect(requestBodies[index + 1]).toContain(submitted)
+		}
+		expect(requestBodies.join("\n")).not.toContain(finalDraft)
+		await expect(sidebar.locator("span.ph-no-capture:not(button span)").filter({ hasText: finalDraft })).toHaveCount(0)
+		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+	},
+)
+
+e2e(
+	"Chat input - keyboard-typed draft stays local across an automatic task turn",
+	async ({ helper, page, server, sidebar, userDataDir }) => {
+		e2e.setTimeout(180_000)
+		await helper.signin(sidebar)
+		server.resetOpenAiMock()
+		server.enqueueOpenAiResponses(
+			{
+				type: "message",
+				text: "E2E_UNSENT_DRAFT_INTERMEDIATE_TURN",
+				delayMs: 5_000,
+			},
+			{
+				type: "tool",
+				name: "attempt_completion",
+				arguments: { result: "E2E_UNSENT_DRAFT_MULTI_TURN_DONE" },
+				delayMs: 5_000,
+			},
+			{
+				type: "error",
+				status: 500,
+				code: "unexpected_unsent_draft_multi_turn_request",
+				message: "An unsent draft triggered an extra multi-turn API request",
+			},
+		)
+
+		await sendTask(sidebar, "E2E_UNSENT_DRAFT_MULTI_TURN_TASK")
+		await expect.poll(() => server.openAiRequestCount, { timeout: 60_000 }).toBe(1)
+		await expect(sidebar.getByRole("button", { name: "Cancel", exact: true }).first()).toBeVisible({
+			timeout: 30_000,
+		})
+
+		const unsentDraft = "E2E_KEYBOARD_DRAFT_MUST_STAY_LOCAL"
+		const input = sidebar.getByTestId("chat-input")
+		await input.click()
+		await input.pressSequentially(unsentDraft, { delay: 20 })
+		await expect(input).toHaveValue(unsentDraft)
+
+		await expect(sidebar.getByText("E2E_UNSENT_DRAFT_INTERMEDIATE_TURN", { exact: false }).last()).toBeVisible({
+			timeout: 60_000,
+		})
+		await expect.poll(() => server.openAiRequestCount, { timeout: 60_000 }).toBe(2)
+		await expect(input).toHaveValue(unsentDraft)
+		await expect(sidebar.getByText("E2E_UNSENT_DRAFT_MULTI_TURN_DONE", { exact: false }).last()).toBeVisible({
+			timeout: 60_000,
+		})
+		await page.waitForTimeout(1_000)
+
+		await expect(input).toHaveValue(unsentDraft)
+		const submittedFeedback = sidebar.locator("span.ph-no-capture:not(button span)").filter({ hasText: unsentDraft })
+		await expect(submittedFeedback).toHaveCount(0)
+		expect(server.openAiRequestCount).toBe(2)
+		expect(JSON.stringify(server.getOpenAiRequestBodies())).not.toContain(unsentDraft)
+		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+	},
+)
+
+const waitingTurnEndDraftCases = [
+	{
+		name: "qna_respond",
+		response: {
+			type: "tool" as const,
+			name: "qna_respond",
+			arguments: { response: "E2E_UNSENT_QNA_TURN_END" },
+		},
+		visibleText: "E2E_UNSENT_QNA_TURN_END",
+	},
+	{
+		name: "generate_report",
+		response: {
+			type: "tool" as const,
+			name: "generate_report",
+			arguments: { title: "E2E_UNSENT_REPORT_TURN_END", content: "E2E_UNSENT_REPORT_CONTENT" },
+		},
+		visibleText: "E2E_UNSENT_REPORT_TURN_END",
+	},
+	{
+		name: "make_plan",
+		response: {
+			type: "tool" as const,
+			name: "make_plan",
+			arguments: { response: "E2E_UNSENT_PLAN_TURN_END", needs_more_exploration: false },
+		},
+		visibleText: "E2E_UNSENT_PLAN_TURN_END",
+	},
+	{
+		name: "ask_followup_question",
+		response: {
+			type: "tool" as const,
+			name: "ask_followup_question",
+			arguments: {
+				question: "E2E_UNSENT_FOLLOWUP_TURN_END",
+				options: ["E2E_UNSENT_FOLLOWUP_OPTION_A", "E2E_UNSENT_FOLLOWUP_OPTION_B"],
+			},
+		},
+		visibleText: "E2E_UNSENT_FOLLOWUP_TURN_END",
+	},
+] as const
+
+for (const turnEndCase of waitingTurnEndDraftCases) {
+	e2e(
+		`Chat input - unsent draft stays local when ${turnEndCase.name} hands control back`,
+		async ({ helper, page, server, sidebar, userDataDir }) => {
+			e2e.setTimeout(180_000)
+			await helper.signin(sidebar)
+			server.resetOpenAiMock()
+			server.enqueueOpenAiResponses(
+				{ ...turnEndCase.response, delayMs: 5_000 },
+				{
+					type: "error",
+					status: 500,
+					code: `unexpected_unsent_${turnEndCase.name}_request`,
+					message: `An unsent draft triggered a request after ${turnEndCase.name}`,
+				},
+			)
+
+			await sendTask(sidebar, `E2E_UNSENT_${turnEndCase.name.toUpperCase()}_TASK`)
+			await expect.poll(() => server.openAiRequestCount, { timeout: 60_000 }).toBe(1)
+			await expect(sidebar.getByRole("button", { name: "Cancel", exact: true }).first()).toBeVisible({
+				timeout: 30_000,
+			})
+
+			const unsentDraft = `E2E_${turnEndCase.name.toUpperCase()}_DRAFT_MUST_STAY_LOCAL`
+			const input = sidebar.getByTestId("chat-input")
+			await input.click()
+			await input.pressSequentially(unsentDraft, { delay: 20 })
+			await expect(input).toHaveValue(unsentDraft)
+
+			await expect(sidebar.getByText(turnEndCase.visibleText, { exact: false }).last()).toBeVisible({ timeout: 60_000 })
+			await page.waitForTimeout(1_000)
+
+			await expect(input).toHaveValue(unsentDraft)
+			const submittedFeedback = sidebar.locator("span.ph-no-capture:not(button span)").filter({ hasText: unsentDraft })
+			await expect(submittedFeedback).toHaveCount(0)
+			expect(server.openAiRequestCount).toBe(1)
+			expect(JSON.stringify(server.getOpenAiRequestBodies())).not.toContain(unsentDraft)
+			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+		},
+	)
 }
 
 e2e(

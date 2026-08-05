@@ -1,9 +1,11 @@
-import { ApiFormat } from "@shared/proto/dline/models/metadata"
+import { ApiFormat, ServerTool } from "@shared/proto/dline/models/metadata"
 import { ApiProfile } from "@shared/proto/dline/profile"
 import { BaseProviderConfig } from "@shared/proto/dline/provider/common"
 import { expect } from "chai"
+import type OpenAI from "openai"
 import { afterEach, describe, it, vi } from "vitest"
 import type { ClineStorageMessage } from "@/shared/messages/content"
+import type { ApiRequestOptions } from "../../index"
 import { DeepSeekHandler } from "../deepseek"
 
 interface StreamChunk {
@@ -45,12 +47,35 @@ function createStream(data: readonly StreamChunk[] = []): AsyncIterable<StreamCh
  * @param handler DeepSeek handler under test.
  * @returns Stream chunks emitted by createMessage.
  */
-async function collectChunks(handler: DeepSeekHandler): Promise<unknown[]> {
+async function collectChunks(
+	handler: DeepSeekHandler,
+	messages: ClineStorageMessage[] = [{ role: "user", content: "hi" }],
+	tools?: OpenAI.Chat.ChatCompletionTool[],
+	options?: ApiRequestOptions,
+): Promise<unknown[]> {
 	const chunks: unknown[] = []
-	for await (const chunk of handler.createMessage("system", [{ role: "user", content: "hi" }])) {
+	for await (const chunk of handler.createMessage("system", messages, tools, options)) {
 		chunks.push(chunk)
 	}
 	return chunks
+}
+
+function contextPressureHistory(): ClineStorageMessage[] {
+	return [
+		{ role: "user", content: "initial task" },
+		{
+			role: "assistant",
+			content: "earlier response",
+			metrics: { tokens: { prompt: 100_000, completion: 100, cached: 0 } },
+		},
+		{ role: "user", content: "next request" },
+		{
+			role: "assistant",
+			content: "previous response",
+			metrics: { tokens: { prompt: 630_000, completion: 100, cached: 0 } },
+		},
+		{ role: "user", content: "continue" },
+	]
 }
 
 describe("DeepSeekHandler", () => {
@@ -82,6 +107,83 @@ describe("DeepSeekHandler", () => {
 			expect(request).to.deep.include({ model: "deepseek-v4-flash", stream: true, instructions: "system" })
 			expect(request).not.to.have.property("previous_response_id")
 			expect(request).not.to.have.property("store")
+		})
+
+		it("projects hosted web search exactly once in DeepSeek Responses requests", async () => {
+			const handler = new DeepSeekHandler({
+				profile: ApiProfile.create({
+					provider: "deepseek",
+					apiKey: "test-api-key",
+					modelId: "deepseek-v4-flash",
+					deepseek: BaseProviderConfig.create({ apiFormat: ApiFormat.OPENAI_RESPONSES }),
+				}),
+				mode: "act",
+			})
+			const responsesCreate = vi.fn().mockResolvedValue(createStream())
+			vi.spyOn(handler as unknown as { ensureClient: () => unknown }, "ensureClient").mockReturnValue({
+				responses: { create: responsesCreate },
+			})
+			const tools: OpenAI.Chat.ChatCompletionTool[] = [
+				{
+					type: "function",
+					function: { name: "web_search", description: "Local search", parameters: { type: "object" } },
+				},
+				{
+					type: "function",
+					function: { name: "read_file", description: "Read", parameters: { type: "object" } },
+				},
+			]
+
+			await collectChunks(handler, undefined, tools, { serverTools: [ServerTool.WEB_SEARCH] })
+
+			expect(responsesCreate.mock.calls[0]?.[0]?.tools).to.deep.equal([
+				{
+					type: "function",
+					name: "read_file",
+					description: "Read",
+					parameters: { type: "object" },
+					strict: false,
+				},
+				{ type: "web_search" },
+			])
+			expect(handler.supportsServerTool(ServerTool.WEB_SEARCH)).to.equal(true)
+		})
+
+		it("keeps the Responses output ceiling independent from prior context usage", async () => {
+			const profile = ApiProfile.create({
+				provider: "deepseek",
+				apiKey: "test-api-key",
+				modelId: "deepseek-v4-flash",
+				deepseek: BaseProviderConfig.create({ apiFormat: ApiFormat.OPENAI_RESPONSES }),
+			})
+			const handler = new DeepSeekHandler({ profile, mode: "act" })
+			const responsesCreate = vi.fn().mockResolvedValue(createStream())
+			vi.spyOn(handler as unknown as { ensureClient: () => unknown }, "ensureClient").mockReturnValue({
+				responses: { create: responsesCreate },
+			})
+
+			await collectChunks(handler, contextPressureHistory())
+
+			expect(responsesCreate.mock.calls[0]?.[0]?.max_output_tokens).to.equal(384_000)
+		})
+
+		it("keeps the Chat output ceiling independent from prior context usage", async () => {
+			const handler = new DeepSeekHandler({
+				profile: ApiProfile.create({
+					provider: "deepseek",
+					apiKey: "test-api-key",
+					modelId: "deepseek-v4-flash",
+				}),
+				mode: "act",
+			})
+			const create = vi.fn().mockResolvedValue(createStream())
+			vi.spyOn(handler as unknown as { ensureClient: () => FakeClient }, "ensureClient").mockReturnValue({
+				chat: { completions: { create } },
+			})
+
+			await collectChunks(handler, contextPressureHistory())
+
+			expect(create.mock.calls[0]?.[0]?.max_completion_tokens).to.equal(384_000)
 		})
 
 		it("projects canonical function identities into DeepSeek Responses history without provider IDs", async () => {
@@ -170,6 +272,64 @@ describe("DeepSeekHandler", () => {
 			expect((handler as unknown as { getAnthropicBaseUrl: () => string }).getAnthropicBaseUrl()).to.equal(
 				"https://api.deepseek.com/anthropic",
 			)
+		})
+
+		it("projects hosted web search exactly once in DeepSeek Anthropic requests", async () => {
+			const handler = new DeepSeekHandler({
+				profile: ApiProfile.create({
+					provider: "deepseek",
+					apiKey: "test-api-key",
+					modelId: "deepseek-v4-pro",
+					deepseek: BaseProviderConfig.create({ apiFormat: ApiFormat.ANTHROPIC_CHAT }),
+				}),
+				mode: "act",
+			})
+			const messagesCreate = vi.fn().mockResolvedValue(createStream())
+			;(handler as unknown as { anthropicClient?: unknown }).anthropicClient = {
+				messages: { create: messagesCreate },
+			}
+			const tools: OpenAI.Chat.ChatCompletionTool[] = [
+				{
+					type: "function",
+					function: { name: "web_search", description: "Local search", parameters: { type: "object" } },
+				},
+				{
+					type: "function",
+					function: { name: "read_file", description: "Read", parameters: { type: "object" } },
+				},
+			]
+
+			await collectChunks(handler, undefined, tools, { serverTools: [ServerTool.WEB_SEARCH] })
+
+			expect(messagesCreate.mock.calls[0]?.[0]?.tools).to.deep.equal([
+				{
+					name: "read_file",
+					description: "Read",
+					input_schema: { type: "object" },
+				},
+				{ type: "web_search_20250305", name: "web_search" },
+			])
+			expect(handler.supportsServerTool(ServerTool.WEB_SEARCH)).to.equal(true)
+		})
+
+		it("keeps the Anthropic output ceiling independent from prior context usage", async () => {
+			const handler = new DeepSeekHandler({
+				profile: ApiProfile.create({
+					provider: "deepseek",
+					apiKey: "test-api-key",
+					modelId: "deepseek-v4-pro",
+					deepseek: BaseProviderConfig.create({ apiFormat: ApiFormat.ANTHROPIC_CHAT }),
+				}),
+				mode: "act",
+			})
+			const messagesCreate = vi.fn().mockResolvedValue(createStream())
+			;(handler as unknown as { anthropicClient?: unknown }).anthropicClient = {
+				messages: { create: messagesCreate },
+			}
+
+			await collectChunks(handler, contextPressureHistory())
+
+			expect(messagesCreate.mock.calls[0]?.[0]?.max_tokens).to.equal(384_000)
 		})
 
 		for (const [configuredEffort, expectedEffort] of [
@@ -293,5 +453,18 @@ describe("DeepSeekHandler", () => {
 		expect(resolved.info.name).to.equal("DeepSeek Dynamic")
 		expect(resolved.info.capabilities?.maxTokens).to.equal(12_345)
 		expect(resolved.info.capabilities?.supportsReasoning).to.equal(true)
+	})
+
+	it("reports hosted web search unavailable for the Chat transport", () => {
+		const handler = new DeepSeekHandler({
+			profile: ApiProfile.create({
+				provider: "deepseek",
+				modelId: "deepseek-v4-pro",
+				deepseek: BaseProviderConfig.create({ apiFormat: ApiFormat.OPENAI_CHAT }),
+			}),
+			mode: "act",
+		})
+
+		expect(handler.supportsServerTool(ServerTool.WEB_SEARCH)).to.equal(false)
 	})
 })

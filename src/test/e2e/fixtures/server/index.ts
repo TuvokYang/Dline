@@ -13,7 +13,7 @@ import { ClineDataMock } from "./data"
 
 const E2E_API_SERVER_HOST = "127.0.0.1"
 
-const useVerboseLogging = process.env.CLINE_E2E_TESTS_VERBOSE === "true"
+const useVerboseLogging = process.env.DLINE_E2E_TESTS_VERBOSE === "true"
 function log(...args: unknown[]) {
 	if (useVerboseLogging) {
 		console.log("[ClineApiServerMock]", ...args)
@@ -48,6 +48,20 @@ export interface MockToolCall {
 	arguments: Record<string, unknown>
 }
 
+export interface MockHostedWebSearchResult {
+	title: string
+	url: string
+}
+
+export interface MockWebSearchRequest {
+	receivedAtMs: number
+	query: string
+	allowedDomains?: readonly string[]
+	blockedDomains?: readonly string[]
+	authorization?: string
+	taskId?: string
+}
+
 interface MockResponseOptions {
 	reasoning?: string
 	hiddenReasoning?: string
@@ -64,6 +78,13 @@ export type OpenAiMockResponse =
 	| ({ type: "message"; text: string } & MockResponseOptions)
 	| ({ type: "tool" } & MockToolCall & MockResponseOptions)
 	| ({ type: "tools"; tools: readonly MockToolCall[] } & MockResponseOptions)
+	| ({
+			type: "hosted-web-search"
+			id?: string
+			query: string
+			results: readonly MockHostedWebSearchResult[]
+			followupTools?: readonly MockToolCall[]
+	  } & MockResponseOptions)
 	| {
 			type: "error"
 			status: number
@@ -79,6 +100,7 @@ export type MockThinkingConfig = { mode: "effort"; effort: string } | { mode: "b
 
 export interface MockApiConsumption {
 	receivedAtMs: number
+	abortedAtMs?: number
 	target: MockApiTarget
 	provider: string
 	protocol: MockApiProtocol
@@ -95,6 +117,13 @@ export interface MockApiConsumption {
 	thinking?: MockThinkingConfig
 	responseReasoning?: string
 	usage?: MockTokenUsage
+}
+
+export interface MockModelListRequest {
+	receivedAtMs: number
+	target: MockApiTarget
+	path: string
+	authorization?: string
 }
 
 function createResponseQueues(): Record<MockApiTarget, OpenAiMockResponse[]> {
@@ -144,6 +173,7 @@ function getResponseUsage(
 function getResponseToolCalls(response: Exclude<OpenAiMockResponse, { type: "error" }>): readonly MockToolCall[] {
 	if (response.type === "tool") return [response]
 	if (response.type === "tools") return response.tools
+	if (response.type === "hosted-web-search") return response.followupTools ?? []
 	return []
 }
 
@@ -287,6 +317,8 @@ export class ClineApiServerMock {
 	private spendLimitExceeded = false
 	private mockResponses = createResponseQueues()
 	private mockConsumptions: MockApiConsumption[] = []
+	private mockModelListRequests: MockModelListRequest[] = []
+	private mockWebSearchRequests: MockWebSearchRequest[] = []
 	private previousSuccessfulRequestText = new Map<MockApiTarget, string>()
 	public generationCounter = 0
 
@@ -341,7 +373,17 @@ export class ClineApiServerMock {
 	public resetOpenAiMock(): void {
 		this.mockResponses = createResponseQueues()
 		this.mockConsumptions = []
+		this.mockModelListRequests = []
+		this.mockWebSearchRequests = []
 		this.previousSuccessfulRequestText.clear()
+	}
+
+	public getModelListRequests(): readonly MockModelListRequest[] {
+		return this.mockModelListRequests
+	}
+
+	public getWebSearchRequests(): readonly MockWebSearchRequest[] {
+		return this.mockWebSearchRequests
 	}
 
 	public get openAiRequestCount(): number {
@@ -385,7 +427,7 @@ export class ClineApiServerMock {
 			scriptedResponse.type === "error"
 				? undefined
 				: validateMockRequestContract(scriptedResponse, requestText, requestToolResults)
-		const response: OpenAiMockResponse = contractError
+		const contractedResponse: OpenAiMockResponse = contractError
 			? {
 					type: "error",
 					status: 500,
@@ -393,13 +435,14 @@ export class ClineApiServerMock {
 					message: contractError,
 				}
 			: scriptedResponse
+		const response = contractedResponse
 		const usage =
 			response.type === "error"
 				? undefined
 				: getResponseUsage(response, requestText, this.previousSuccessfulRequestText.get(target))
 		if (response.type !== "error") this.previousSuccessfulRequestText.set(target, requestText)
 		const responseToolCalls = response.type === "error" ? [] : getResponseToolCalls(response)
-		this.mockConsumptions.push({
+		const consumption: MockApiConsumption = {
 			receivedAtMs,
 			target,
 			provider: route.provider,
@@ -427,8 +470,9 @@ export class ClineApiServerMock {
 				? { responseReasoning: response.reasoning }
 				: {}),
 			...(usage ? { usage } : {}),
-		})
-		return { response, usage }
+		}
+		this.mockConsumptions.push(consumption)
+		return { response, usage, consumption }
 	}
 
 	// Helper to match routes against registered endpoints and extract parameters
@@ -492,6 +536,15 @@ export class ClineApiServerMock {
 		for (const target of Object.keys(E2E_MOCK_PROVIDER_ROUTES) as MockApiTarget[]) {
 			const route = E2E_MOCK_PROVIDER_ROUTES[target]
 			if (path === `${route.basePath}${route.endpoint}`) return { target, route }
+		}
+		return undefined
+	}
+
+	private static matchMockModelListRoute(path: string, method: string): MockApiTarget | undefined {
+		if (method !== "GET") return undefined
+		for (const target of Object.keys(E2E_MOCK_PROVIDER_ROUTES) as MockApiTarget[]) {
+			const route = E2E_MOCK_PROVIDER_ROUTES[target]
+			if (route.provider === "openai" && path === `${route.basePath}/models`) return target
 		}
 		return undefined
 	}
@@ -570,14 +623,31 @@ export class ClineApiServerMock {
 			// Route handling
 			const handleRequest = async () => {
 				const mockProviderRoute = ClineApiServerMock.matchMockProviderRoute(path, method)
+				const mockModelListTarget = ClineApiServerMock.matchMockModelListRoute(path, method)
 				const routeMatch = ClineApiServerMock.matchRoute(path, method)
 
-				if (!mockProviderRoute && !routeMatch.matched) {
+				if (!mockProviderRoute && !mockModelListTarget && !routeMatch.matched) {
 					return sendJson({ error: "Not found" }, 404)
 				}
 
 				const { baseRoute, endpoint, params = {} } = routeMatch
 				const controller = ClineApiServerMock.globalSharedServer!
+
+				if (mockModelListTarget) {
+					controller.mockModelListRequests.push({
+						receivedAtMs: Date.now(),
+						target: mockModelListTarget,
+						path,
+						...(authHeader ? { authorization: authHeader } : {}),
+					})
+					return sendJson({
+						object: "list",
+						data: [
+							{ id: "dline-e2e-model", object: "model" },
+							{ id: "dline-e2e-discovered-model", object: "model" },
+						],
+					})
+				}
 
 				if (mockProviderRoute) {
 					const { target, route } = mockProviderRoute
@@ -613,7 +683,16 @@ export class ClineApiServerMock {
 					if (!validRequest) {
 						return sendJson({ error: { message: `Invalid ${target} request shape` } }, 400)
 					}
-					const { response: scriptedResponse, usage } = controller.consumeMockResponse(target, path, parsed)
+					const {
+						response: scriptedResponse,
+						usage,
+						consumption,
+					} = controller.consumeMockResponse(target, path, parsed)
+					const markAborted = () => {
+						if (!res.writableFinished) consumption.abortedAtMs ??= Date.now()
+					}
+					req.once("aborted", markAborted)
+					res.once("close", markAborted)
 					const generationId = `e2e_${++controller.generationCounter}_${Date.now()}`
 					const model = parsed.model ?? "dline-e2e-model"
 
@@ -811,7 +890,23 @@ export class ClineApiServerMock {
 							role: "assistant",
 							content: [{ type: "output_text", text: messageText, annotations: [] }],
 						}
-						const outputItems = toolOutputItems.length > 0 ? toolOutputItems : [messageOutputItem]
+						const hostedSearchOutputItem =
+							scriptedResponse.type === "hosted-web-search"
+								? {
+										id: scriptedResponse.id ?? `ws_${generationId}`,
+										type: "web_search_call",
+										status: "completed",
+										action: {
+											type: "search",
+											query: scriptedResponse.query,
+											sources: scriptedResponse.results.map(({ url }) => ({ type: "url", url })),
+										},
+									}
+								: undefined
+						const ordinaryOutputItems = toolOutputItems.length > 0 ? toolOutputItems : [messageOutputItem]
+						const outputItems = hostedSearchOutputItem
+							? [hostedSearchOutputItem, ...ordinaryOutputItems]
+							: ordinaryOutputItems
 						const response = {
 							id: generationId,
 							object: "response",
@@ -880,9 +975,32 @@ export class ClineApiServerMock {
 							)
 							if (!(await waitAfterReasoning())) return
 						}
+						if (hostedSearchOutputItem) {
+							const outputIndex = outputOffset
+							const startedItem = {
+								...hostedSearchOutputItem,
+								status: "in_progress",
+								action: { type: "search", query: scriptedResponse.query },
+							}
+							writeSse(
+								{ type: "response.output_item.added", output_index: outputIndex, item: startedItem },
+								"response.output_item.added",
+							)
+							for (const type of [
+								"response.web_search_call.in_progress",
+								"response.web_search_call.searching",
+								"response.web_search_call.completed",
+							]) {
+								writeSse({ type, item_id: hostedSearchOutputItem.id, output_index: outputIndex }, type)
+							}
+							writeSse(
+								{ type: "response.output_item.done", output_index: outputIndex, item: hostedSearchOutputItem },
+								"response.output_item.done",
+							)
+						}
 						if (toolOutputItems.length > 0) {
 							for (const [index, outputItem] of toolOutputItems.entries()) {
-								const outputIndex = outputOffset + index
+								const outputIndex = outputOffset + (hostedSearchOutputItem ? 1 : 0) + index
 								writeSse(
 									{
 										type: "response.output_item.added",
@@ -902,7 +1020,7 @@ export class ClineApiServerMock {
 								)
 							}
 						} else {
-							const outputIndex = outputOffset
+							const outputIndex = outputOffset + (hostedSearchOutputItem ? 1 : 0)
 							writeSse(
 								{
 									type: "response.output_item.added",
@@ -932,8 +1050,11 @@ export class ClineApiServerMock {
 						output_tokens: 0,
 						cache_creation_input_tokens: usage.cacheWriteTokens ?? 0,
 						cache_read_input_tokens: usage.cacheReadTokens ?? 0,
+						...(scriptedResponse.type === "hosted-web-search"
+							? { server_tool_use: { web_search_requests: 1, web_fetch_requests: 0 } }
+							: {}),
 					}
-					const contentBlocks =
+					const ordinaryContentBlocks =
 						responseToolCalls.length > 0
 							? responseToolCalls.map((tool, index) => ({
 									id: tool.id ?? `toolu_${generationId}_${index}`,
@@ -942,6 +1063,35 @@ export class ClineApiServerMock {
 									input: tool.arguments,
 								}))
 							: [{ type: "text", text: messageText }]
+					const hostedSearchId =
+						scriptedResponse.type === "hosted-web-search"
+							? (scriptedResponse.id ?? `srv_web_${generationId}`)
+							: undefined
+					const hostedContentBlocks =
+						scriptedResponse.type === "hosted-web-search" && hostedSearchId
+							? [
+									{
+										type: "server_tool_use",
+										id: hostedSearchId,
+										name: "web_search",
+										input: { query: scriptedResponse.query },
+										caller: { type: "direct" },
+									},
+									{
+										type: "web_search_tool_result",
+										tool_use_id: hostedSearchId,
+										content: scriptedResponse.results.map((result) => ({
+											type: "web_search_result",
+											url: result.url,
+											title: result.title,
+											page_age: null,
+											encrypted_content: `e2e:${result.url}`,
+										})),
+										caller: { type: "direct" },
+									},
+								]
+							: []
+					const contentBlocks = [...hostedContentBlocks, ...ordinaryContentBlocks]
 					const thinkingBlock = scriptedResponse.reasoning
 						? {
 								type: "thinking",
@@ -1012,9 +1162,29 @@ export class ClineApiServerMock {
 						if (!(await waitAfterReasoning())) return
 					}
 					const contentBlockOffset = thinkingBlock ? 1 : 0
+					for (const [index, block] of hostedContentBlocks.entries()) {
+						const contentBlockIndex = contentBlockOffset + index
+						const startBlock = block.type === "server_tool_use" ? { ...block, input: {} } : block
+						writeSse(
+							{ type: "content_block_start", index: contentBlockIndex, content_block: startBlock },
+							"content_block_start",
+						)
+						if (block.type === "server_tool_use") {
+							writeSse(
+								{
+									type: "content_block_delta",
+									index: contentBlockIndex,
+									delta: { type: "input_json_delta", partial_json: JSON.stringify(block.input) },
+								},
+								"content_block_delta",
+							)
+						}
+						writeSse({ type: "content_block_stop", index: contentBlockIndex }, "content_block_stop")
+					}
+					const ordinaryContentBlockOffset = contentBlockOffset + hostedContentBlocks.length
 					if (responseToolCalls.length > 0) {
 						for (const [index, tool] of responseToolCalls.entries()) {
-							const contentBlockIndex = contentBlockOffset + index
+							const contentBlockIndex = ordinaryContentBlockOffset + index
 							writeSse(
 								{
 									type: "content_block_start",
@@ -1039,7 +1209,7 @@ export class ClineApiServerMock {
 							writeSse({ type: "content_block_stop", index: contentBlockIndex }, "content_block_stop")
 						}
 					} else {
-						const contentBlockIndex = contentBlockOffset
+						const contentBlockIndex = ordinaryContentBlockOffset
 						writeSse(
 							{
 								type: "content_block_start",
@@ -1086,6 +1256,39 @@ export class ClineApiServerMock {
 
 				// API v1 endpoints
 				if (baseRoute === "/api/v1") {
+					if (endpoint === "/search/websearch" && method === "POST") {
+						const parsed = JSON.parse(await readBody()) as {
+							query?: unknown
+							allowed_domains?: unknown
+							blocked_domains?: unknown
+						}
+						if (typeof parsed.query !== "string" || parsed.query.trim().length === 0) {
+							return sendApiError("Web search query is required", 400)
+						}
+						const allowedDomains = Array.isArray(parsed.allowed_domains)
+							? parsed.allowed_domains.filter((value): value is string => typeof value === "string")
+							: undefined
+						const blockedDomains = Array.isArray(parsed.blocked_domains)
+							? parsed.blocked_domains.filter((value): value is string => typeof value === "string")
+							: undefined
+						controller.mockWebSearchRequests.push({
+							receivedAtMs: Date.now(),
+							query: parsed.query,
+							...(allowedDomains?.length ? { allowedDomains } : {}),
+							...(blockedDomains?.length ? { blockedDomains } : {}),
+							...(authHeader ? { authorization: authHeader } : {}),
+							...(typeof req.headers["x-task-id"] === "string" ? { taskId: req.headers["x-task-id"] } : {}),
+						})
+						return sendApiResponse({
+							results: [
+								{
+									title: `E2E local result for ${parsed.query}`,
+									url: "https://example.test/dline-local-search",
+								},
+							],
+						})
+					}
+
 					// User endpoints
 					if (endpoint === "/users/me" && method === "GET") {
 						const currentUser = controller.currentUser
@@ -1093,6 +1296,10 @@ export class ClineApiServerMock {
 							return sendApiError("Unauthorized", 401)
 						}
 						return sendApiResponse(currentUser)
+					}
+
+					if (endpoint === "/users/me/remote-config" && method === "GET") {
+						return sendApiResponse(null)
 					}
 
 					if (endpoint === "/users/me/featurebase-token" && method === "GET") {

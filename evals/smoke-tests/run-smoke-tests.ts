@@ -141,7 +141,7 @@ function getScenarioProvider(scenario: SmokeScenario): string {
 function ensureScenarioAuth(scenario: SmokeScenario, modelId: string): { ok: boolean; error?: string } {
 	const provider = getScenarioProvider(scenario)
 	const authModelId = scenario.auth?.modelId || modelId
-	const apiKeyEnv = scenario.auth?.apiKeyEnv || (provider === DEFAULT_PROVIDER ? "CLINE_API_KEY" : undefined)
+	const apiKeyEnv = scenario.auth?.apiKeyEnv || (provider === DEFAULT_PROVIDER ? "DLINE_API_KEY" : undefined)
 	const apiKey = apiKeyEnv ? process.env[apiKeyEnv] : undefined
 	const baseUrl = scenario.auth?.baseUrlEnv ? process.env[scenario.auth.baseUrlEnv] : undefined
 	const authCacheKey = `${provider}|${authModelId}|${baseUrl || ""}|${apiKeyEnv || ""}`

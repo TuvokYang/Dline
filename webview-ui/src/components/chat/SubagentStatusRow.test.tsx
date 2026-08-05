@@ -267,7 +267,7 @@ describe("SubagentStatusRow", () => {
 		expect(cancelTaskActivities).toHaveBeenCalledWith("task-1", ["job-1", "job-3"])
 	})
 
-	it("renders agent name, task, and context without exposing transport tags", () => {
+	it("renders task prominently and expands context from one line", () => {
 		const msg = makeMsg({
 			say: "subagent",
 			text: JSON.stringify({
@@ -278,7 +278,7 @@ describe("SubagentStatusRow", () => {
 						prompt: "<task>review code</task><context>focus on cancellation</context>",
 						subagentName: "reviewer",
 						task: "review code",
-						context: "focus on cancellation",
+						context: "focus on cancellation\nthen verify cleanup",
 						status: "running",
 						toolCalls: 0,
 						inputTokens: 0,
@@ -296,9 +296,86 @@ describe("SubagentStatusRow", () => {
 		render(<SubagentStatusRow isLast={true} message={msg} />)
 
 		expect(screen.getByText("reviewer")).toBeInTheDocument()
-		expect(screen.getByText("review code")).toBeInTheDocument()
-		expect(screen.getByText("focus on cancellation")).toBeInTheDocument()
+		expect(screen.getByRole("heading", { name: "review code" })).toBeInTheDocument()
+		const context = screen.getByRole("button", { name: "Show full subagent context" })
+		expect(context).toHaveAttribute("aria-expanded", "false")
+		expect(screen.getByTestId("subagent-context-content")).toHaveClass("h-4", "overflow-hidden")
+		fireEvent.click(context)
+		expect(screen.getByRole("button", { name: "Collapse subagent context" })).toHaveAttribute("aria-expanded", "true")
+		expect(screen.getByText(/then verify cleanup/)).toBeInTheDocument()
 		expect(screen.queryByText(/<task>/)).not.toBeInTheDocument()
 		expect(screen.queryByText(/<context>/)).not.toBeInTheDocument()
+	})
+
+	it("renders each activity tool call once in execution order", () => {
+		taskActivities.push({
+			activityId: "job-tools",
+			taskId: "task-1",
+			kind: "subagent",
+			executionMode: "foreground",
+			status: "completed",
+			cancellable: false,
+			createdAt: 1,
+			updatedAt: 2,
+			title: "reviewer",
+			events: [
+				{
+					sequence: 4,
+					timestamp: 4,
+					kind: "tool_call",
+					toolCallId: "second",
+					toolName: "list_files",
+					toolStatus: "completed",
+					summary: "list_files(path=.)",
+				},
+				{
+					sequence: 1,
+					timestamp: 1,
+					kind: "tool_call",
+					toolCallId: "first",
+					toolName: "read_file",
+					toolStatus: "started",
+					summary: "read_file(path=README.md)",
+				},
+				{
+					sequence: 3,
+					timestamp: 3,
+					kind: "tool_call",
+					toolCallId: "first",
+					toolName: "read_file",
+					toolStatus: "completed",
+					summary: "read_file(path=README.md)",
+				},
+			],
+		})
+		const msg = makeMsg({
+			say: "subagent",
+			text: JSON.stringify({
+				status: "completed",
+				items: [
+					{
+						index: 1,
+						jobId: "job-tools",
+						prompt: "review",
+						status: "completed",
+						toolCalls: 2,
+						inputTokens: 0,
+						outputTokens: 0,
+						totalCost: 0,
+						currency: "USD",
+						contextTokens: 0,
+						contextWindow: 0,
+						contextUsagePercentage: 0,
+					},
+				],
+			}),
+		})
+
+		render(<SubagentStatusRow isLast={true} message={msg} />)
+
+		expect(screen.getAllByTestId("subagent-tool-call").map((row) => row.textContent)).toEqual([
+			"1.read_file(path=README.md)",
+			"2.list_files(path=.)",
+		])
 	})
 })

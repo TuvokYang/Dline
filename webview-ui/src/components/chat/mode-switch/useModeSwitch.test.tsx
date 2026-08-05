@@ -4,7 +4,7 @@ import type { Mode } from "@shared/storage/types"
 import { act, renderHook, waitFor } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { StateServiceClient } from "@/services/grpc-client"
-import { type ModeSwitchDraft, useModeSwitch } from "./useModeSwitch"
+import { type ModeSwitchDraft, shouldAttachModeSwitchDraft, useModeSwitch } from "./useModeSwitch"
 
 vi.mock("@/services/grpc-client", () => ({
 	StateServiceClient: {
@@ -70,6 +70,14 @@ describe("useModeSwitch", () => {
 
 	afterEach(() => {
 		vi.useRealTimers()
+	})
+
+	it("assigns conversational mode-switch drafts to the backend transaction", () => {
+		expect(shouldAttachModeSwitchDraft("make_plan")).toBe(true)
+		expect(shouldAttachModeSwitchDraft("qna_respond")).toBe(true)
+		expect(shouldAttachModeSwitchDraft("generate_report")).toBe(true)
+		expect(shouldAttachModeSwitchDraft("completion_result")).toBe(false)
+		expect(shouldAttachModeSwitchDraft(undefined)).toBe(false)
 	})
 
 	/** Preserve a backend-owned draft while user confirmation is pending. */

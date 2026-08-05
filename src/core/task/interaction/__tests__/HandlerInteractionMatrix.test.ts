@@ -274,7 +274,11 @@ describe("handler interaction matrix", () => {
 
 	it("terminates only the execute_command identified by function_id", async () => {
 		const taskConfig = config()
-		taskConfig.callbacks.killCommandTool = vi.fn(async () => true)
+		taskConfig.callbacks.killCommandTool = vi.fn(async () => ({
+			activityId: "command-activity",
+			cancelled: true,
+			command: "npm install",
+		}))
 
 		await new ExecuteCommandToolHandler(ClineDefaultTool.KILL_COMMAND).execute(
 			taskConfig,
@@ -284,7 +288,12 @@ describe("handler interaction matrix", () => {
 		expect(taskConfig.callbacks.killCommandTool).toHaveBeenCalledWith("function-execute-command")
 		expect(taskConfig.callbacks.say).toHaveBeenCalledWith(
 			"tool",
-			JSON.stringify({ tool: "killCommand", path: "function-execute-command", content: "prompt" }),
+			JSON.stringify({
+				tool: "killCommand",
+				path: "npm install",
+				content: "prompt",
+				activityId: "command-activity",
+			}),
 			undefined,
 			undefined,
 			false,

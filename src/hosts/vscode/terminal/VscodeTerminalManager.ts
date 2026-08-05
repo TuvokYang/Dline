@@ -2,6 +2,7 @@ import { arePathsEqual } from "@utils/path"
 import { getShellForProfile } from "@utils/shell"
 import pWaitFor from "p-wait-for"
 import * as vscode from "vscode"
+import { logShellEnvironmentDiagnostics } from "@/integrations/terminal/shell-environment"
 import {
 	TerminalInfo as ITerminalInfo,
 	ITerminalManager,
@@ -339,6 +340,19 @@ export class VscodeTerminalManager implements ITerminalManager {
 		// If all terminals are busy or don't match shell profile, create a new one with the configured shell
 		const newTerminalInfo = TerminalRegistry.createTerminal(cwd, expectedShellPath, launchConfiguration)
 		this.terminalIds.add(newTerminalInfo.id)
+		if (launchConfiguration?.initializationCommand) {
+			try {
+				await this.runCommand(newTerminalInfo as unknown as ITerminalInfo, launchConfiguration.initializationCommand)
+			} catch (error) {
+				newTerminalInfo.busy = false
+				Logger.error("[ShellEnvironment] Failed to initialize a new VS Code terminal", error)
+			} finally {
+				newTerminalInfo.lastCommand = ""
+				if (launchConfiguration.initializationDiagnosticsPath) {
+					await logShellEnvironmentDiagnostics(launchConfiguration.initializationDiagnosticsPath)
+				}
+			}
+		}
 		// Cast to ITerminalInfo for interface compatibility
 		return newTerminalInfo as unknown as ITerminalInfo
 	}
@@ -387,6 +401,12 @@ export class VscodeTerminalManager implements ITerminalManager {
 			terminalOutputLineLimit: this.terminalOutputLineLimit,
 			defaultTerminalProfile: this.defaultTerminalProfile,
 		})
+	}
+
+	reinitializeTerminals(): TerminalManagerConfigurationResult {
+		const busyTerminals = this.filterTerminals((terminal) => terminal.busy)
+		const closedCount = this.closeTerminals((terminal) => !terminal.busy)
+		return { closedCount, busyTerminals: busyTerminals as unknown as ITerminalInfo[] }
 	}
 
 	public processOutput(outputLines: string[], overrideLimit?: number): string {

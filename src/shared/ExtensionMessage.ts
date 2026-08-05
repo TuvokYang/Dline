@@ -42,7 +42,7 @@ export const DEFAULT_PLATFORM = "unknown"
 export const COMMAND_CANCEL_TOKEN = "__cline_command_cancel__"
 
 /** Canonical lifecycle status for a command timeline message. */
-export type CommandStatus = "pending" | "running" | "completed" | "failed" | "cancelled" | "skipped"
+export type CommandStatus = "pending" | "running" | "completed" | "failed" | "cancelled" | "skipped" | "interrupted"
 
 export interface ExtensionState {
 	/** Monotonic revision used to reject stale asynchronous state snapshots. */
@@ -106,6 +106,8 @@ export interface ExtensionState {
 	strictPlanModeEnabled?: boolean
 	yoloModeToggled?: boolean
 	useAutoCondense?: boolean
+	autoCondenseTriggerPercent?: number
+	autoCondenseMaxContextTokens?: number
 	subagentsEnabled?: boolean
 	clineWebToolsEnabled?: ClineFeatureSetting
 	worktreesEnabled?: ClineFeatureSetting
@@ -193,6 +195,8 @@ export interface ClineMessage {
 	files?: string[]
 	partial?: boolean
 	commandStatus?: CommandStatus
+	/** Whether this command currently owns the foreground turn or is detached in the background. */
+	commandExecutionMode?: CommandExecutionMode
 	/** Stable identity of the interaction that owns this ask presentation. */
 	interactionId?: string
 	/** Stable identity shared by the command message, activity, background record, and cancellation entry. */
@@ -208,6 +212,8 @@ export interface ClineMessage {
 	conversationHistoryDeletedRange?: [number, number] // for when conversation history is truncated for API requests
 	modelInfo?: ClineMessageModelInfo
 }
+
+export type CommandExecutionMode = "foreground" | "background"
 
 export type ClineAsk =
 	| "followup"
@@ -435,6 +441,8 @@ export interface ClineSayTool {
 		| "actModeRespond"
 		| "killCommand"
 	path?: string
+	/** Activity target associated with a command result presentation. */
+	activityId?: string
 	diff?: string
 	content?: string | string[]
 	regex?: string

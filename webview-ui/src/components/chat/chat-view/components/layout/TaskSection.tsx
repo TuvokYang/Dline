@@ -23,6 +23,7 @@ interface TaskSectionProps {
 		pricing?: ModelPricing
 	}
 	messageHandlers: MessageHandlers
+	onCompactTask?: () => Promise<boolean>
 	lastProgressMessageText?: string
 	showFocusChainPlaceholder?: boolean
 }
@@ -37,6 +38,7 @@ export const TaskSection: React.FC<TaskSectionProps> = ({
 	lastApiReqTotalTokens,
 	selectedModelInfo,
 	messageHandlers,
+	onCompactTask,
 	lastProgressMessageText,
 	showFocusChainPlaceholder,
 }) => {
@@ -51,7 +53,7 @@ export const TaskSection: React.FC<TaskSectionProps> = ({
 			lastApiReqTotalTokens={lastApiReqTotalTokens}
 			lastProgressMessageText={lastProgressMessageText}
 			onClose={messageHandlers.handleTaskCloseButtonClick}
-			onSendMessage={messageHandlers.handleSendMessage}
+			onCompactTask={onCompactTask}
 			pricing={selectedModelInfo.pricing}
 			showFocusChainPlaceholder={showFocusChainPlaceholder}
 			task={task}

@@ -44,6 +44,8 @@ interface E2EWorkerFixtures {
 export interface E2ETestConfigs {
 	workspaceType: "single" | "multi"
 	channel: "stable" | "insiders"
+	forceStaleInitialState: boolean
+	mockConda: boolean
 }
 
 export class E2ETestHelper {
@@ -151,8 +153,9 @@ export class E2ETestHelper {
 						this.cachedFrame = frame
 						return frame
 					}
-				} catch (error: any) {
-					if (!error.message.includes("detached") && !error.message.includes("navigation")) {
+				} catch (error: unknown) {
+					const message = error instanceof Error ? error.message : String(error)
+					if (!message.includes("detached") && !message.includes("navigation")) {
 						throw error
 					}
 				}
@@ -222,34 +225,63 @@ export class E2ETestHelper {
 	}
 
 	public async signin(webview: Frame): Promise<void> {
+		const consoleErrors: string[] = []
+		const pageErrors: string[] = []
+		const page = webview.page()
+		const onConsole = (message: { type(): string; text(): string }) => {
+			if (message.type() === "error") consoleErrors.push(message.text())
+		}
+		const onPageError = (error: Error) => pageErrors.push(error.stack ?? error.message)
+		page.on("console", onConsole)
+		page.on("pageerror", onPageError)
 		const bringYourOwnKey = webview.getByText("Bring my own API key")
 		const chatInput = webview.getByTestId("chat-input")
-		await expect(bringYourOwnKey.or(chatInput)).toBeVisible()
+		try {
+			await expect(bringYourOwnKey.or(chatInput)).toBeVisible()
 
-		if (await bringYourOwnKey.isVisible()) {
-			await bringYourOwnKey.click()
-			await webview.getByRole("button", { name: "Continue" }).click()
-			await webview.getByRole("button", { name: "Add API" }).click()
+			if (await bringYourOwnKey.isVisible()) {
+				await bringYourOwnKey.click()
+				await webview.getByRole("button", { name: "Continue" }).click()
+				await webview.getByRole("button", { name: "Add API" }).click()
 
-			const providerSelector = webview.getByRole("combobox").first()
-			await providerSelector.selectOption("openrouter")
-			await webview.getByRole("textbox", { name: "OpenRouter API Key" }).fill("test-api-key")
-			await webview.getByRole("button", { name: "Continue" }).click()
+				const providerSelector = webview.getByRole("combobox").first()
+				await providerSelector.selectOption("openrouter")
+				await webview.getByRole("textbox", { name: "OpenRouter API Key" }).fill("test-api-key")
+				await webview.getByRole("button", { name: "Continue" }).click()
+			}
+
+			await expect(chatInput).toBeVisible()
+
+			// Dismiss "What's New" version announcement if present
+			await E2ETestHelper.dismissWhatsNewModal(webview)
+		} catch (error) {
+			const rootHtml = await webview
+				.locator("#root")
+				.innerHTML()
+				.catch(() => "<root unavailable>")
+			throw new Error(
+				`Dline sign-in UI unavailable; diagnostics=${JSON.stringify({ consoleErrors, pageErrors, rootHtml })}`,
+				{ cause: error },
+			)
+		} finally {
+			page.off("console", onConsole)
+			page.off("pageerror", onPageError)
 		}
-
-		await expect(chatInput).toBeVisible()
-
-		// Dismiss "What's New" version announcement if present
-		await E2ETestHelper.dismissWhatsNewModal(webview)
 	}
 
 	public static async openClineSidebar(page: Page): Promise<void> {
 		const dlineTab = page.getByRole("tab", { name: /Dline/ })
 		await expect(dlineTab).toBeVisible({ timeout: 30_000 })
-		if ((await dlineTab.getAttribute("aria-expanded")) !== "true") {
+		for (let attempt = 1; attempt <= 3; attempt++) {
+			if ((await dlineTab.getAttribute("aria-expanded")) === "true") return
 			await dlineTab.locator("a").click()
+			try {
+				await expect(dlineTab).toHaveAttribute("aria-expanded", "true", { timeout: 5_000 })
+				return
+			} catch (error) {
+				if (attempt === 3) throw error
+			}
 		}
-		await expect(dlineTab).toHaveAttribute("aria-expanded", "true")
 	}
 
 	public static async runCommandPalette(page: Page, command: string): Promise<void> {
@@ -374,6 +406,8 @@ export const e2e = test
 	.extend<E2ETestConfigs>({
 		workspaceType: "single",
 		channel: "stable",
+		forceStaleInitialState: [false, { option: true }],
+		mockConda: [false, { option: true }],
 	})
 	.extend<E2ETestDirectories, E2EWorkerFixtures>({
 		profileMode: ["mock", { scope: "worker", option: true }],
@@ -509,10 +543,19 @@ export const e2e = test
 		},
 	})
 	.extend<{ openVSCode: (workspacePath: string) => Promise<ElectronApplication> }>({
-		openVSCode: async ({ userDataDir, dlineDir, dlineHomeDir, dlineDocsDir, channel, server }, use, testInfo) => {
+		openVSCode: async (
+			{ userDataDir, dlineDir, dlineHomeDir, dlineDocsDir, channel, forceStaleInitialState, mockConda, server },
+			use,
+			testInfo,
+		) => {
 			const executablePath = await downloadAndUnzipVSCode(channel, undefined, new SilentReporter())
 			const electronEnvironment = { ...process.env }
 			delete electronEnvironment.ELECTRON_RUN_AS_NODE
+			// Keep E2E terminals independent from the developer's active Conda session and profile auto-activation.
+			for (const name of Object.keys(electronEnvironment)) {
+				if (/^(?:CONDA_|_CONDA_|_CE_)/i.test(name)) delete electronEnvironment[name]
+			}
+			electronEnvironment.CONDA_AUTO_ACTIVATE_BASE = "false"
 			const configuredCdpPort = process.env.DLINE_E2E_CDP_PORT?.trim()
 			if (configuredCdpPort && (!/^\d+$/.test(configuredCdpPort) || Number(configuredCdpPort) < 1)) {
 				throw new Error(`Invalid DLINE_E2E_CDP_PORT: ${configuredCdpPort}`)
@@ -520,6 +563,18 @@ export const e2e = test
 			const cdpPort = configuredCdpPort ? Number(configuredCdpPort) + testInfo.workerIndex : undefined
 			if (cdpPort !== undefined && cdpPort > 65_535) {
 				throw new Error(`DLINE_E2E_CDP_PORT exceeds 65535 for worker ${testInfo.workerIndex}: ${cdpPort}`)
+			}
+			if (mockConda) {
+				const inheritedPath = Object.entries(electronEnvironment).find(([name]) => name.toLowerCase() === "path")?.[1]
+				for (const name of Object.keys(electronEnvironment)) {
+					if (name.toLowerCase() === "path") delete electronEnvironment[name]
+				}
+				electronEnvironment.PATH = [userDataDir, inheritedPath].filter(Boolean).join(path.delimiter)
+				writeFileSync(
+					path.join(userDataDir, "conda.cmd"),
+					'@echo off\r\nif /I "%1"=="info" if /I "%2"=="--envs" if /I "%3"=="--json" (\r\n  echo {"envs":["C:\\\\fake-conda","C:\\\\fake-envs\\\\dline"],"envs_details":{"C:\\\\fake-conda":{"name":"base","active":true,"base":true},"C:\\\\fake-envs\\\\dline":{"name":"dline","active":false,"base":false}}}\r\n  exit /b 0\r\n)\r\nexit /b 1\r\n',
+					"utf8",
+				)
 			}
 
 			await use(async (workspacePath: string) => {
@@ -534,6 +589,7 @@ export const e2e = test
 						DLINE_E2E_API_BASE_URL: server.baseUrl,
 						DLINE_SKIP_MIGRATION: "1",
 						DLINE_DOCS_DIR: dlineDocsDir,
+						...(forceStaleInitialState ? { DLINE_E2E_FORCE_STALE_INITIAL_STATE: "true" } : {}),
 						GRPC_RECORDER_FILE_NAME: E2ETestHelper.generateTestFileName(testInfo.title, testInfo.project.name),
 						// GRPC_RECORDER_ENABLED: "true",
 						// GRPC_RECORDER_TESTS_FILTERS_ENABLED: "true"

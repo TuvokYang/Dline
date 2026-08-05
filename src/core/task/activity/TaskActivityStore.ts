@@ -44,6 +44,7 @@ export interface CreateTaskActivityInput {
 	cancellationOwner?: TaskActivityCancellationOwner
 	title: string
 	detail?: string
+	timeoutSeconds?: number
 	parentActivityId?: string
 	status?: TaskActivityStatus
 	cancel?: CancelActivity
@@ -66,6 +67,28 @@ export class TaskActivityStore {
 	) {}
 
 	async hydrate(): Promise<void> {
+		if (!this.persistence) return
+		this.hydratePromise ??= this.loadPersistedActivities()
+		await this.hydratePromise
+	}
+
+	/** Finalize persisted in-flight work after the caller has acquired the task lock. */
+	async recoverInterruptedActivities(): Promise<string[]> {
+		await this.hydrate()
+		const interruptedActivityIds: string[] = []
+		for (const activity of this.activities.values()) {
+			if (!this.isTransient(activity.status) || this.cancellers.has(activity.activityId)) continue
+			interruptedActivityIds.push(activity.activityId)
+			this.update(activity.activityId, {
+				status: "interrupted",
+				latestEvent: "Interrupted before completion",
+			})
+		}
+		await this.waitForPersistence()
+		return interruptedActivityIds
+	}
+
+	private async loadPersistedActivities(): Promise<void> {
 		if (!this.persistence) return
 		for (const activity of await this.persistence.load()) {
 			if (!this.activities.has(activity.activityId)) {
@@ -94,6 +117,7 @@ export class TaskActivityStore {
 			updatedAt: now,
 			title: redactSensitiveText(input.title),
 			detail: input.detail === undefined ? undefined : redactSensitiveText(input.detail),
+			timeoutSeconds: input.timeoutSeconds,
 			parentActivityId: input.parentActivityId,
 			events: [],
 		}
@@ -123,7 +147,13 @@ export class TaskActivityStore {
 	): void {
 		const activity = this.activities.get(activityId)
 		if (!activity) return
-		if (activity.status === "cancelled" && patch.status && patch.status !== "cancelled") return
+		if (
+			(activity.status === "cancelled" || activity.status === "interrupted") &&
+			patch.status &&
+			patch.status !== activity.status
+		) {
+			return
+		}
 		const previousStatus = activity.status
 		const { metrics, ...activityPatch } = patch
 		const sanitizedPatch = {
@@ -196,8 +226,7 @@ export class TaskActivityStore {
 
 	subscribe(listener: ActivityListener): () => void {
 		this.listeners.set(listener, Promise.resolve())
-		this.hydratePromise ??= this.hydrate()
-		void this.hydratePromise.then(() => {
+		void this.hydrate().then(() => {
 			if (this.listeners.has(listener)) {
 				this.enqueue(listener, { sequence: ++this.sequence, snapshot: true, activities: this.list() })
 			}
@@ -306,15 +335,24 @@ export class TaskActivityStore {
 	private persist(): void {
 		const persistence = this.persistence
 		if (!persistence) return
-		this.hydratePromise ??= this.hydrate()
 		this.persistenceSequence = this.persistenceSequence
 			.catch(() => undefined)
-			.then(() => this.hydratePromise)
+			.then(() => this.hydrate())
 			.then(() => persistence.save(this.list()))
 			.catch((error) => Logger.warn("[TaskActivityStore] Failed to persist activity history", error))
 	}
 
+	private isTransient(status: TaskActivityStatus): boolean {
+		return status === "awaiting_approval" || status === "running" || status === "cancelling"
+	}
+
 	private isTerminal(status: TaskActivityStatus): boolean {
-		return status === "completed" || status === "failed" || status === "timeout" || status === "cancelled"
+		return (
+			status === "completed" ||
+			status === "failed" ||
+			status === "timeout" ||
+			status === "cancelled" ||
+			status === "interrupted"
+		)
 	}
 }

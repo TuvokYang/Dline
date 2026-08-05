@@ -8,6 +8,7 @@ describe("parseCommandExecutionOptions", () => {
 			background: false,
 			synchronous: false,
 			timeoutSeconds: undefined,
+			muteStdout: false,
 		})
 	})
 
@@ -16,6 +17,7 @@ describe("parseCommandExecutionOptions", () => {
 			background: false,
 			synchronous: false,
 			timeoutSeconds: undefined,
+			muteStdout: false,
 		})
 	})
 
@@ -24,15 +26,18 @@ describe("parseCommandExecutionOptions", () => {
 			background: true,
 			synchronous: false,
 			timeoutSeconds: 45,
+			muteStdout: false,
 		})
 		assert.deepEqual(parseCommandExecutionOptions("npm test", "false", "15"), {
 			background: false,
 			synchronous: false,
 			timeoutSeconds: 15,
+			muteStdout: false,
 		})
 	})
 
-	it("leaves invalid, zero, negative, and fractional timeout values unset", () => {
+	it("preserves -1 as no timeout and leaves other invalid values unset", () => {
+		assert.equal(parseCommandExecutionOptions("echo ready", undefined, "-1").timeoutSeconds, -1)
 		for (const timeout of ["invalid", "0", "-2", "2.5"]) {
 			assert.equal(parseCommandExecutionOptions("echo ready", undefined, timeout).timeoutSeconds, undefined)
 		}
@@ -43,12 +48,24 @@ describe("parseCommandExecutionOptions", () => {
 			background: false,
 			synchronous: true,
 			timeoutSeconds: 120,
+			muteStdout: false,
 		})
 		assert.deepEqual(parseCommandExecutionOptions("npm test", "true", "120", "true"), {
 			background: true,
 			synchronous: false,
 			timeoutSeconds: 120,
+			muteStdout: false,
 		})
+	})
+
+	it("enables stdout muting only for the exact true value", () => {
+		assert.equal(parseCommandExecutionOptions("echo ready", undefined, undefined, undefined, "true").muteStdout, true)
+		for (const muteStdout of [undefined, "", "false", "TRUE", "1"]) {
+			assert.equal(
+				parseCommandExecutionOptions("echo ready", undefined, undefined, undefined, muteStdout).muteStdout,
+				false,
+			)
+		}
 	})
 
 	it("treats every non-true background value as false", () => {

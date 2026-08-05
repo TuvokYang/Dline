@@ -27,18 +27,18 @@ Environment variable configuration bypasses user telemetry settings and will exp
 
 | Variable | Description | Values |
 |----------|-------------|--------|
-| `CLINE_OTEL_TELEMETRY_ENABLED` | Enable OpenTelemetry export | `"true"` or `"false"` |
-| `CLINE_OTEL_METRICS_EXPORTER` | Metrics exporters (comma-separated) | `"console"`, `"otlp"` |
-| `CLINE_OTEL_LOGS_EXPORTER` | Logs exporters (comma-separated) | `"console"`, `"otlp"` |
+| `DLINE_OTEL_TELEMETRY_ENABLED` | Enable OpenTelemetry export | `"true"` or `"false"` |
+| `DLINE_OTEL_METRICS_EXPORTER` | Metrics exporters (comma-separated) | `"console"`, `"otlp"` |
+| `DLINE_OTEL_LOGS_EXPORTER` | Logs exporters (comma-separated) | `"console"`, `"otlp"` |
 
 ### OTLP Configuration
 
 | Variable | Description | Values |
 |----------|-------------|--------|
-| `CLINE_OTEL_EXPORTER_OTLP_PROTOCOL` | OTLP protocol | `"grpc"`, `"http/json"`, or `"http/protobuf"` |
-| `CLINE_OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP collector endpoint (applies to both metrics and logs) | URL with optional port |
-| `CLINE_OTEL_EXPORTER_OTLP_HEADERS` | Authentication headers (comma-separated `key=value` pairs) | `"key=value,key2=value2"` |
-| `CLINE_OTEL_EXPORTER_OTLP_INSECURE` | Disable TLS for gRPC (local development only) | `"true"` |
+| `DLINE_OTEL_EXPORTER_OTLP_PROTOCOL` | OTLP protocol | `"grpc"`, `"http/json"`, or `"http/protobuf"` |
+| `DLINE_OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP collector endpoint (applies to both metrics and logs) | URL with optional port |
+| `DLINE_OTEL_EXPORTER_OTLP_HEADERS` | Authentication headers (comma-separated `key=value` pairs) | `"key=value,key2=value2"` |
+| `DLINE_OTEL_EXPORTER_OTLP_INSECURE` | Disable TLS for gRPC (local development only) | `"true"` |
 
 ### Advanced OTLP Configuration
 
@@ -46,31 +46,31 @@ For separate metrics and logs endpoints:
 
 | Variable | Description |
 |----------|-------------|
-| `CLINE_OTEL_EXPORTER_OTLP_METRICS_PROTOCOL` | Metrics-specific protocol override |
-| `CLINE_OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` | Metrics-specific endpoint |
-| `CLINE_OTEL_EXPORTER_OTLP_LOGS_PROTOCOL` | Logs-specific protocol override |
-| `CLINE_OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` | Logs-specific endpoint |
+| `DLINE_OTEL_EXPORTER_OTLP_METRICS_PROTOCOL` | Metrics-specific protocol override |
+| `DLINE_OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` | Metrics-specific endpoint |
+| `DLINE_OTEL_EXPORTER_OTLP_LOGS_PROTOCOL` | Logs-specific protocol override |
+| `DLINE_OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` | Logs-specific endpoint |
 
 ### Export Tuning
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `CLINE_OTEL_METRIC_EXPORT_INTERVAL` | Milliseconds between metric exports | 60000 |
-| `CLINE_OTEL_LOG_BATCH_SIZE` | Maximum batch size for log records | 512 |
-| `CLINE_OTEL_LOG_BATCH_TIMEOUT` | Maximum time before exporting logs (ms) | 5000 |
-| `CLINE_OTEL_LOG_MAX_QUEUE_SIZE` | Maximum queue size for log records | 2048 |
+| `DLINE_OTEL_METRIC_EXPORT_INTERVAL` | Milliseconds between metric exports | 60000 |
+| `DLINE_OTEL_LOG_BATCH_SIZE` | Maximum batch size for log records | 512 |
+| `DLINE_OTEL_LOG_BATCH_TIMEOUT` | Maximum time before exporting logs (ms) | 5000 |
+| `DLINE_OTEL_LOG_MAX_QUEUE_SIZE` | Maximum queue size for log records | 2048 |
 
 ## Quick Start Examples
 
 ### Datadog with gRPC
 
 ```bash
-export CLINE_OTEL_TELEMETRY_ENABLED=true
-export CLINE_OTEL_METRICS_EXPORTER=otlp
-export CLINE_OTEL_LOGS_EXPORTER=otlp
-export CLINE_OTEL_EXPORTER_OTLP_PROTOCOL=grpc
-export CLINE_OTEL_EXPORTER_OTLP_ENDPOINT=https://api.datadoghq.com:4317
-export CLINE_OTEL_EXPORTER_OTLP_HEADERS="dd-api-key=YOUR_API_KEY"
+export DLINE_OTEL_TELEMETRY_ENABLED=true
+export DLINE_OTEL_METRICS_EXPORTER=otlp
+export DLINE_OTEL_LOGS_EXPORTER=otlp
+export DLINE_OTEL_EXPORTER_OTLP_PROTOCOL=grpc
+export DLINE_OTEL_EXPORTER_OTLP_ENDPOINT=https://api.datadoghq.com:4317
+export DLINE_OTEL_EXPORTER_OTLP_HEADERS="dd-api-key=YOUR_API_KEY"
 
 code .
 ```
@@ -82,12 +82,12 @@ The endpoint shown above is for Datadog's **US1 region**. If you're in a differe
 ### New Relic with HTTP
 
 ```bash
-export CLINE_OTEL_TELEMETRY_ENABLED=true
-export CLINE_OTEL_METRICS_EXPORTER=otlp
-export CLINE_OTEL_LOGS_EXPORTER=otlp
-export CLINE_OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
-export CLINE_OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp.nr-data.net:4318
-export CLINE_OTEL_EXPORTER_OTLP_HEADERS="api-key=YOUR_LICENSE_KEY"
+export DLINE_OTEL_TELEMETRY_ENABLED=true
+export DLINE_OTEL_METRICS_EXPORTER=otlp
+export DLINE_OTEL_LOGS_EXPORTER=otlp
+export DLINE_OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+export DLINE_OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp.nr-data.net:4318
+export DLINE_OTEL_EXPORTER_OTLP_HEADERS="api-key=YOUR_LICENSE_KEY"
 
 code .
 ```
@@ -95,12 +95,12 @@ code .
 ### Local Development (Insecure)
 
 ```bash
-export CLINE_OTEL_TELEMETRY_ENABLED=true
-export CLINE_OTEL_METRICS_EXPORTER=otlp
-export CLINE_OTEL_LOGS_EXPORTER=otlp
-export CLINE_OTEL_EXPORTER_OTLP_PROTOCOL=grpc
-export CLINE_OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
-export CLINE_OTEL_EXPORTER_OTLP_INSECURE=true
+export DLINE_OTEL_TELEMETRY_ENABLED=true
+export DLINE_OTEL_METRICS_EXPORTER=otlp
+export DLINE_OTEL_LOGS_EXPORTER=otlp
+export DLINE_OTEL_EXPORTER_OTLP_PROTOCOL=grpc
+export DLINE_OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
+export DLINE_OTEL_EXPORTER_OTLP_INSECURE=true
 
 code .
 ```
@@ -108,9 +108,9 @@ code .
 ### Console Output (Testing)
 
 ```bash
-export CLINE_OTEL_TELEMETRY_ENABLED=true
-export CLINE_OTEL_METRICS_EXPORTER=console
-export CLINE_OTEL_LOGS_EXPORTER=console
+export DLINE_OTEL_TELEMETRY_ENABLED=true
+export DLINE_OTEL_METRICS_EXPORTER=console
+export DLINE_OTEL_LOGS_EXPORTER=console
 
 code .
 ```

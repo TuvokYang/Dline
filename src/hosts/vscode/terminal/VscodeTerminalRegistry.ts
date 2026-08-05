@@ -34,7 +34,6 @@ export class TerminalRegistry {
 			env: {
 				...launchConfiguration?.environment,
 				DLINE_ACTIVE: "true",
-				CLINE_ACTIVE: "true",
 			},
 		}
 

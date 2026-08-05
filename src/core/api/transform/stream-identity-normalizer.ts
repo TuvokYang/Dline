@@ -2,9 +2,11 @@ import type { IdentityFactory } from "./block-identity"
 import type {
 	ApiCanonicalStream,
 	ApiRawStreamChunk,
+	ApiRawStreamServerToolChunk,
 	ApiRawStreamToolCallsChunk,
 	ApiStream,
 	ApiStreamChunk,
+	ApiStreamServerToolChunk,
 	ApiStreamToolCallsChunk,
 } from "./stream"
 
@@ -13,6 +15,9 @@ interface ToolIdentityState {
 	dline_tid: string
 	function_id: string
 }
+
+type RawIdentifiedChunk = ApiRawStreamToolCallsChunk | ApiRawStreamServerToolChunk
+type CanonicalIdentifiedChunk = ApiStreamToolCallsChunk | ApiStreamServerToolChunk
 
 /** Converts provider raw stream chunks into canonical Dline stream chunks. */
 export interface StreamIdentityNormalizer {
@@ -62,8 +67,8 @@ export function createStreamNormalizer(factory: IdentityFactory): StreamIdentity
 	 * @param chunk Provider stream chunk.
 	 * @returns True when Dline trace identity has already been assigned.
 	 */
-	function isCanonicalTool(chunk: ApiRawStreamChunk): chunk is ApiStreamToolCallsChunk {
-		return chunk.type === "tool_calls" && typeof chunk.dline_tid === "string"
+	function isCanonicalTool(chunk: ApiRawStreamChunk): chunk is CanonicalIdentifiedChunk {
+		return (chunk.type === "tool_calls" || chunk.type === "server_tool") && typeof chunk.dline_tid === "string"
 	}
 
 	/**
@@ -72,8 +77,12 @@ export function createStreamNormalizer(factory: IdentityFactory): StreamIdentity
 	 * @param chunk Provider stream chunk.
 	 * @returns True when the chunk is ready for canonical normalization.
 	 */
-	function isRawTool(chunk: ApiRawStreamChunk): chunk is ApiRawStreamToolCallsChunk {
-		return chunk.type === "tool_calls" && typeof chunk.function_id === "string" && typeof chunk.dline_tid !== "string"
+	function isRawTool(chunk: ApiRawStreamChunk): chunk is RawIdentifiedChunk {
+		return (
+			(chunk.type === "tool_calls" || chunk.type === "server_tool") &&
+			typeof chunk.function_id === "string" &&
+			typeof chunk.dline_tid !== "string"
+		)
 	}
 
 	/**
@@ -82,7 +91,10 @@ export function createStreamNormalizer(factory: IdentityFactory): StreamIdentity
 	 * @param chunk Raw native tool chunk.
 	 * @returns Key that preserves interleaved tool identity.
 	 */
-	function getToolKey(chunk: ApiRawStreamToolCallsChunk): string {
+	function getToolKey(chunk: RawIdentifiedChunk): string {
+		if (chunk.type === "server_tool") {
+			return `server:${chunk.function_id}`
+		}
 		return chunk.tool_index === undefined ? `function:${chunk.function_id}` : `index:${chunk.tool_index}`
 	}
 
@@ -92,7 +104,9 @@ export function createStreamNormalizer(factory: IdentityFactory): StreamIdentity
 	 * @param chunk Raw native tool chunk.
 	 * @returns Canonical native tool chunk.
 	 */
-	function normalizeTool(chunk: ApiRawStreamToolCallsChunk): ApiStreamToolCallsChunk {
+	function normalizeTool(chunk: ApiRawStreamToolCallsChunk): ApiStreamToolCallsChunk
+	function normalizeTool(chunk: ApiRawStreamServerToolChunk): ApiStreamServerToolChunk
+	function normalizeTool(chunk: RawIdentifiedChunk): CanonicalIdentifiedChunk {
 		const key = getToolKey(chunk)
 		const existing = toolStates.get(key)
 		if (existing && existing.function_id !== chunk.function_id) {
@@ -114,7 +128,7 @@ export function createStreamNormalizer(factory: IdentityFactory): StreamIdentity
 
 	return {
 		normalize(chunk: ApiRawStreamChunk): ApiStreamChunk {
-			if (chunk.type !== "tool_calls") {
+			if (chunk.type !== "tool_calls" && chunk.type !== "server_tool") {
 				return chunk
 			}
 			if (isCanonicalTool(chunk)) {
@@ -123,7 +137,7 @@ export function createStreamNormalizer(factory: IdentityFactory): StreamIdentity
 			if (!isRawTool(chunk)) {
 				throw new Error("Provider tool chunk reached runtime without function_id")
 			}
-			return normalizeTool(chunk)
+			return chunk.type === "server_tool" ? normalizeTool(chunk) : normalizeTool(chunk)
 		},
 		endResponse(): void {
 			toolStates.clear()

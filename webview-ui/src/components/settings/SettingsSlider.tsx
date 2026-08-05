@@ -34,7 +34,15 @@ const SettingsSlider: React.FC<SettingsSliderProps> = ({
 				<Label className="space-y-0.5 flex-1 text-xs text-description">{label}</Label>
 				<span className={`text-sm font-mono text-foreground ${valueWidth} text-right`}>{value}</span>
 			</div>
-			<Slider className="mt-2" max={max} min={min} onValueChange={handleSliderChange} step={step} value={[value]} />
+			<Slider
+				aria-label={label}
+				className="mt-2"
+				max={max}
+				min={min}
+				onValueChange={handleSliderChange}
+				step={step}
+				value={[value]}
+			/>
 			{description && <p className="text-xs text-description mt-2">{description}</p>}
 		</div>
 	)

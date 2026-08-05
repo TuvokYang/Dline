@@ -3,6 +3,10 @@ import { EventEmitter } from "events"
 import * as vscode from "vscode"
 import { getLatestTerminalOutput } from "@/hosts/vscode/terminal/get-latest-output"
 import {
+	parseInternalCommandExitMarker,
+	removeInternalCommandExitMarkers,
+} from "@/integrations/terminal/command-completion-marker"
+import {
 	isCompilingOutput,
 	MAX_FULL_OUTPUT_SIZE,
 	MAX_UNRETRIEVED_LINES,
@@ -72,7 +76,9 @@ export class VscodeTerminalProcess extends EventEmitter<TerminalProcessEvents> i
 				const terminalSnapshot = await getLatestTerminalOutput()
 				if (terminalSnapshot?.trim()) {
 					const fallbackMessage = `The command's output could not be captured due to some technical issue, however it has been executed successfully. Here's the current terminal's content to help you get the command's output:\n\n${terminalSnapshot}`
-					this.emit("line", fallbackMessage, "combined")
+					for (const line of fallbackMessage.split(/\r?\n/)) {
+						this.emit("line", line, "combined")
+					}
 				}
 			} catch (error) {
 				Logger.error("Error capturing terminal output:", error)
@@ -185,12 +191,12 @@ export class VscodeTerminalProcess extends EventEmitter<TerminalProcessEvents> i
 					break
 				}
 
-				// first few chunks could be the command being echoed back, so we must ignore
-				// note this means that 'echo' commands won't work
+				// The first few chunks can contain the submitted command echoed back by the shell.
+				// Only remove an exact command line: command substrings can also be legitimate output.
 				if (!didOutputNonCommand) {
 					const lines = data.split("\n")
 					for (let i = 0; i < lines.length; i++) {
-						if (command.includes(lines[i].trim())) {
+						if (lines[i].trim() === command.trim()) {
 							lines.splice(i, 1)
 							i-- // Adjust index after removal
 						} else {
@@ -303,6 +309,12 @@ export class VscodeTerminalProcess extends EventEmitter<TerminalProcessEvents> i
 		let lineEndIndex: number
 		while ((lineEndIndex = this.buffer.indexOf("\n")) !== -1) {
 			const line = this.buffer.slice(0, lineEndIndex).trimEnd() // removes trailing \r
+			const internalExitCode = parseInternalCommandExitMarker(line)
+			if (internalExitCode !== undefined) {
+				this.exitCode = internalExitCode
+				this.buffer = this.buffer.slice(lineEndIndex + 1)
+				continue
+			}
 			// Remove \r if present (for Windows-style line endings)
 			// if (line.endsWith("\r")) {
 			// 	line = line.slice(0, -1)
@@ -315,7 +327,10 @@ export class VscodeTerminalProcess extends EventEmitter<TerminalProcessEvents> i
 	private emitRemainingBufferIfListening() {
 		if (this.buffer && this.isListening) {
 			const remainingBuffer = this.removeLastLineArtifacts(this.buffer)
-			if (remainingBuffer) {
+			const internalExitCode = parseInternalCommandExitMarker(remainingBuffer)
+			if (internalExitCode !== undefined) {
+				this.exitCode = internalExitCode
+			} else if (remainingBuffer) {
 				this.emit("line", remainingBuffer, "combined")
 			}
 			this.buffer = ""
@@ -416,7 +431,7 @@ export class VscodeTerminalProcess extends EventEmitter<TerminalProcessEvents> i
 	 * @returns The unretrieved output (truncated if necessary)
 	 */
 	getUnretrievedOutput(): string {
-		const unretrieved = this.fullOutput.slice(this.lastRetrievedIndex)
+		const unretrieved = removeInternalCommandExitMarkers(this.fullOutput.slice(this.lastRetrievedIndex))
 		this.lastRetrievedIndex = this.fullOutput.length
 
 		// Truncate if too many lines to prevent context overflow

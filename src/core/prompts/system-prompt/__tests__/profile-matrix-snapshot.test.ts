@@ -2,7 +2,7 @@ import * as fs from "node:fs/promises"
 import * as path from "node:path"
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
-
+import { LOCAL_WEB_SEARCH_ROUTING_PLAN } from "../../__tests__/web-search-routing-fixtures"
 import { renderCapabilitiesSection } from "../../capabilities/CapabilitiesSection"
 import { SystemPromptGenerator } from "../../generators/SystemPromptGenerator"
 import { PromptProfile } from "../../profiles/types"
@@ -63,6 +63,7 @@ const BASE_CONTEXT = {
 	preferredLanguageInstructions: "Preferred language: zh-CN.",
 	subagentsEnabled: true,
 	clineWebToolsEnabled: true,
+	webSearchRoutingPlan: LOCAL_WEB_SEARCH_ROUTING_PLAN,
 	enableParallelToolCalling: true,
 	yoloModeToggled: false,
 	isCliEnvironment: false,
@@ -145,7 +146,7 @@ describe("complete explicit-profile snapshot matrix", () => {
 			.map((entry) => entry.name)
 			.sort()
 		expect(generatedNames).toEqual(expectedSnapshotNames())
-		expect(generatedNames).toHaveLength(48)
+		expect(generatedNames).toHaveLength(54)
 		for (const [name, content] of legacySnapshotBaseline) {
 			expect(await fs.readFile(path.join(SNAPSHOTS_ROOT, name), "utf-8"), `legacy snapshot changed: ${name}`).toBe(content)
 		}

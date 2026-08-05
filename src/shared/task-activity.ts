@@ -4,7 +4,15 @@ export type TaskActivityExecutionMode = "foreground" | "background"
 
 export type TaskActivityCancellationOwner = "task" | "explicit"
 
-export type TaskActivityStatus = "awaiting_approval" | "running" | "cancelling" | "completed" | "failed" | "timeout" | "cancelled"
+export type TaskActivityStatus =
+	| "awaiting_approval"
+	| "running"
+	| "cancelling"
+	| "completed"
+	| "failed"
+	| "timeout"
+	| "cancelled"
+	| "interrupted"
 
 export interface TaskActivityMetrics {
 	toolCalls?: number
@@ -82,6 +90,7 @@ export interface TaskActivityRecord {
 	title: string
 	detail?: string
 	latestEvent?: string
+	timeoutSeconds?: number
 	output?: string
 	result?: string
 	error?: string

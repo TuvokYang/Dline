@@ -7,11 +7,11 @@ import { buildExternalBasicHeaders } from "@/services/EnvUtils"
 import { ClineError } from "@/services/error"
 import { ClineStorageMessage } from "@/shared/messages/content"
 import { fetch } from "@/shared/net"
-import { ApiFormat } from "@/shared/proto/dline/models/metadata"
+import { ApiFormat, ServerTool } from "@/shared/proto/dline/models/metadata"
 import { prioritizeApiFormat, resolveApiFormat } from "@/shared/providers/api-format"
 import { Logger } from "@/shared/services/Logger"
 import { resolveDeepSeekAdaptiveThinking } from "@/shared/utils/reasoning-support"
-import { AccountUsage, ApiHandler, ApiHandlerContext } from "../"
+import { AccountUsage, ApiHandler, ApiHandlerContext, type ApiRequestOptions } from "../"
 import { withRetry } from "../retry"
 import { sanitizeAnthropicMessages } from "../transform/anthropic-format"
 import {
@@ -30,7 +30,6 @@ export class DeepSeekHandler implements ApiHandler {
 	private anthropicClient: Anthropic | undefined
 	private requestController: AbortController | undefined
 	private accountUsageController: AbortController | undefined
-
 	constructor(private ctx: ApiHandlerContext) {}
 
 	private get config() {
@@ -96,6 +95,13 @@ export class DeepSeekHandler implements ApiHandler {
 		return resolveApiFormat(this.config?.apiFormat, this.getBaseModel().info, ApiFormat.OPENAI_CHAT)
 	}
 
+	supportsServerTool(tool: ServerTool): boolean {
+		const apiFormat = this.getSelectedApiFormat()
+		return (
+			tool === ServerTool.WEB_SEARCH && (apiFormat === ApiFormat.OPENAI_RESPONSES || apiFormat === ApiFormat.ANTHROPIC_CHAT)
+		)
+	}
+
 	private getThinkingSettings(model: { info: ModelInfo }) {
 		const reasoning = this.config?.reasoning
 		const adaptive = resolveDeepSeekAdaptiveThinking(reasoning?.effort)
@@ -139,17 +145,22 @@ export class DeepSeekHandler implements ApiHandler {
 	}
 
 	@withRetry()
-	async *createMessage(systemPrompt: string, messages: ClineStorageMessage[], tools?: OpenAITool[]): ApiStream {
+	async *createMessage(
+		systemPrompt: string,
+		messages: ClineStorageMessage[],
+		tools?: OpenAITool[],
+		options?: ApiRequestOptions,
+	): ApiStream {
 		this.requestController?.abort()
 		const requestController = new AbortController()
 		this.requestController = requestController
 		try {
 			switch (this.getSelectedApiFormat()) {
 				case ApiFormat.OPENAI_RESPONSES:
-					yield* this.createResponsesMessage(systemPrompt, messages, tools, requestController.signal)
+					yield* this.createResponsesMessage(systemPrompt, messages, tools, options, requestController.signal)
 					break
 				case ApiFormat.ANTHROPIC_CHAT:
-					yield* this.createAnthropicMessage(systemPrompt, messages, tools, requestController.signal)
+					yield* this.createAnthropicMessage(systemPrompt, messages, tools, options, requestController.signal)
 					break
 				default:
 					yield* this.createChatMessage(systemPrompt, messages, tools, requestController.signal)
@@ -170,6 +181,7 @@ export class DeepSeekHandler implements ApiHandler {
 		const client = this.ensureClient()
 		const model = this.getModel()
 		const thinking = this.getThinkingSettings(model)
+		const maxOutputTokens = model.info.capabilities?.maxTokens
 
 		const supportsReasoning = model.info.capabilities?.supportsReasoning ?? false
 
@@ -183,7 +195,7 @@ export class DeepSeekHandler implements ApiHandler {
 		const stream = await client.chat.completions.create(
 			{
 				model: model.id,
-				max_completion_tokens: model.info.capabilities?.maxTokens,
+				...(maxOutputTokens ? { max_completion_tokens: maxOutputTokens } : {}),
 				messages: openAiMessages,
 				stream: true,
 				stream_options: { include_usage: true },
@@ -235,12 +247,20 @@ export class DeepSeekHandler implements ApiHandler {
 		systemPrompt: string,
 		messages: ClineStorageMessage[],
 		tools: OpenAITool[] | undefined,
+		options: ApiRequestOptions | undefined,
 		signal: AbortSignal,
 	): ApiStream {
 		const client = this.ensureClient()
 		const model = this.getModel()
 		const thinking = this.getThinkingSettings(model)
-		const responseTools = convertDeepSeekResponsesTools(tools)
+		const hostedWebSearch = options?.serverTools?.includes(ServerTool.WEB_SEARCH) === true
+		const localTools = hostedWebSearch
+			? tools?.filter((tool) => tool.type !== "function" || tool.function.name !== "web_search")
+			: tools
+		const responseTools: OpenAI.Responses.Tool[] = convertDeepSeekResponsesTools(localTools) ?? []
+		if (hostedWebSearch) {
+			responseTools.push({ type: "web_search" })
+		}
 		const maxOutputTokens = model.info.capabilities?.maxTokens
 		const params: OpenAI.Responses.ResponseCreateParamsStreaming = {
 			model: model.id,
@@ -264,15 +284,17 @@ export class DeepSeekHandler implements ApiHandler {
 		systemPrompt: string,
 		messages: ClineStorageMessage[],
 		tools: OpenAITool[] | undefined,
+		options: ApiRequestOptions | undefined,
 		signal: AbortSignal,
 	): ApiStream {
 		const client = this.ensureAnthropicClient()
 		const model = this.getModel()
 		const thinking = this.getThinkingSettings(model)
 		const supportsPromptCache = model.info.capabilities?.supportsPromptCache ?? false
+		const maxOutputTokens = model.info.capabilities?.maxTokens
 		const request = {
 			model: model.id,
-			max_tokens: model.info.capabilities?.maxTokens || 8192,
+			max_tokens: maxOutputTokens ?? 8192,
 			system: [
 				{
 					type: "text" as const,
@@ -281,7 +303,7 @@ export class DeepSeekHandler implements ApiHandler {
 				},
 			],
 			messages: sanitizeAnthropicMessages(messages, supportsPromptCache),
-			tools: convertOpenAIToolsToAnthropicTools(tools),
+			tools: convertOpenAIToolsToAnthropicTools(tools, options?.serverTools),
 			stream: true as const,
 			...(thinking.enabled
 				? {

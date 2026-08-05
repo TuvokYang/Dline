@@ -5,6 +5,7 @@ import { formatResponse } from "@core/prompts/responses"
 import { WorkspacePathAdapter } from "@core/workspace/WorkspacePathAdapter"
 import { processFilesIntoText } from "@integrations/misc/extract-text"
 import { showApprovalNotification, showSystemNotification } from "@integrations/notifications"
+import type { CommandExecutionOutcome } from "@integrations/terminal"
 import { findLastIndex } from "@shared/array"
 import { COMMAND_REQ_APP_STRING } from "@shared/combineCommandSequences"
 import { ClineAsk } from "@shared/ExtensionMessage"
@@ -23,6 +24,20 @@ import { parseCommandExecutionOptions } from "./command-execution-options"
 import { resolveCommandWorkdirectory } from "./command-workdirectory"
 
 export { resolveCommandTimeoutSeconds } from "./command-execution-options"
+
+export function commandResultForModel(outcome: CommandExecutionOutcome, muteStdout: boolean): ToolResponse {
+	if (
+		muteStdout &&
+		outcome.completed &&
+		!outcome.userRejected &&
+		outcome.exitCode === 0 &&
+		!outcome.signal &&
+		!outcome.timedOut
+	) {
+		return "Command executed successfully (exit code 0)."
+	}
+	return outcome.result
+}
 
 export class ExecuteCommandToolHandler implements IFullyManagedTool {
 	constructor(readonly name: ClineDefaultTool.BASH | ClineDefaultTool.KILL_COMMAND = ClineDefaultTool.BASH) {}
@@ -67,6 +82,7 @@ export class ExecuteCommandToolHandler implements IFullyManagedTool {
 		const timeoutParam: string | undefined = block.params.timeout
 		const backgroundParam: string | undefined = block.params.background
 		const synchronousParam: string | undefined = block.params.synchronous
+		const muteStdoutParam: string | undefined = block.params.mute_stdout
 		const workdirectoryParam: string | undefined = block.params.workdirectory
 
 		// Extract provider using the proven pattern from ReportBugHandler
@@ -92,7 +108,13 @@ export class ExecuteCommandToolHandler implements IFullyManagedTool {
 		config.taskState.consecutiveMistakeCount = 0
 
 		// Parse only explicit tool overrides. The current Settings default is read at launch.
-		const executionOptions = parseCommandExecutionOptions(command, backgroundParam, timeoutParam, synchronousParam)
+		const executionOptions = parseCommandExecutionOptions(
+			command,
+			backgroundParam,
+			timeoutParam,
+			synchronousParam,
+			muteStdoutParam,
+		)
 
 		// Pre-process command for certain models
 		if (config.api.getModel().id.includes("gemini")) {
@@ -159,20 +181,20 @@ export class ExecuteCommandToolHandler implements IFullyManagedTool {
 		const executionDir = resolvedWorkdirectory.path
 		const requiresExternalWorkdirectoryApproval = !resolvedWorkdirectory.isWithinWorkspace
 
-		// Check command permission validation (CLINE_COMMAND_PERMISSIONS env var)
+		// Check command permission validation (DLINE_COMMAND_PERMISSIONS env var)
 		const permissionResult = config.services.commandPermissionController.validateCommand(actualCommand)
 		if (!permissionResult.allowed) {
 			let errorMessage: string
 			if (permissionResult.failedSegment) {
 				errorMessage =
-					`Command "${actualCommand}" was denied by CLINE_COMMAND_PERMISSIONS. ` +
+					`Command "${actualCommand}" was denied by DLINE_COMMAND_PERMISSIONS. ` +
 					`Segment "${permissionResult.failedSegment}" ${permissionResult.reason}.`
 			} else {
 				const matchedPattern = permissionResult.matchedPattern
 					? ` (matched pattern: ${permissionResult.matchedPattern})`
 					: ""
 				errorMessage =
-					`Command "${actualCommand}" was denied by CLINE_COMMAND_PERMISSIONS. ` +
+					`Command "${actualCommand}" was denied by DLINE_COMMAND_PERMISSIONS. ` +
 					`Reason: ${permissionResult.reason}${matchedPattern}`
 			}
 			if (!config.isSubagentExecution) {
@@ -376,7 +398,7 @@ export class ExecuteCommandToolHandler implements IFullyManagedTool {
 		if (outcome.backgroundCommandId && typeof outcome.result === "string") {
 			return `${outcome.result}\nfunction_id: ${block.function_id}`
 		}
-		return outcome.result
+		return commandResultForModel(outcome, executionOptions.muteStdout)
 	}
 
 	private async executeKillCommand(config: TaskConfig, block: ToolUse): Promise<ToolResponse> {
@@ -392,12 +414,17 @@ export class ExecuteCommandToolHandler implements IFullyManagedTool {
 		}
 
 		config.taskState.consecutiveMistakeCount = 0
-		const cancelled = await killCommand(functionId)
-		const result = getPrompt("killCommand", cancelled ? "terminationRequested" : "notRunning")
+		const cancellation = await killCommand(functionId)
+		const result = getPrompt("killCommand", cancellation.cancelled ? "terminationRequested" : "notRunning")
 		if (!config.isSubagentExecution) {
 			await config.callbacks.say(
 				"tool",
-				JSON.stringify({ tool: "killCommand", path: functionId, content: result }),
+				JSON.stringify({
+					tool: "killCommand",
+					path: cancellation.command ?? functionId,
+					content: result,
+					activityId: cancellation.activityId,
+				}),
 				undefined,
 				undefined,
 				false,

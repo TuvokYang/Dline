@@ -1,6 +1,5 @@
-import { UpdateTerminalConnectionTimeoutResponse } from "@shared/proto/index.dline"
 import { VSCodeCheckbox, VSCodeDropdown, VSCodeOption, VSCodeTextField } from "@vscode/webview-ui-toolkit/react"
-import React, { useState } from "react"
+import React, { useEffect, useRef, useState } from "react"
 import { PlatformType } from "@/config/platform.config"
 import { useExtensionState } from "@/context/ExtensionStateContext"
 import { usePlatform } from "@/context/PlatformContext"
@@ -27,6 +26,13 @@ export const TerminalSettingsSection: React.FC<TerminalSettingsSectionProps> = (
 
 	const [inputValue, setInputValue] = useState((shellIntegrationTimeout / 1000).toString())
 	const [inputError, setInputError] = useState<string | null>(null)
+	const isEditingShellIntegrationTimeout = useRef(false)
+
+	useEffect(() => {
+		if (!isEditingShellIntegrationTimeout.current) {
+			setInputValue((shellIntegrationTimeout / 1000).toString())
+		}
+	}, [shellIntegrationTimeout])
 
 	const handleTimeoutChange = (event: Event) => {
 		const target = event.target as HTMLInputElement
@@ -41,27 +47,22 @@ export const TerminalSettingsSection: React.FC<TerminalSettingsSectionProps> = (
 		}
 
 		setInputError(null)
-		const timeoutMs = Math.round(seconds * 1000)
-
-		StateServiceClient.updateTerminalConnectionTimeout({ timeoutMs })
-			.then((response: UpdateTerminalConnectionTimeoutResponse) => {
-				const timeoutMs = response.timeoutMs
-				// Backend calls postStateToWebview(), so state will update via subscription
-				// Just sync the input value with the confirmed backend value
-				if (timeoutMs !== undefined) {
-					setInputValue((timeoutMs / 1000).toString())
-				}
-			})
-			.catch((error) => {
-				console.error("Failed to update terminal connection timeout:", error)
-			})
 	}
 
 	const handleInputBlur = () => {
-		if (inputError) {
+		isEditingShellIntegrationTimeout.current = false
+		const seconds = Number.parseFloat(inputValue)
+		if (Number.isNaN(seconds) || seconds <= 0) {
 			setInputValue((shellIntegrationTimeout / 1000).toString())
 			setInputError(null)
+			return
 		}
+
+		const timeoutMs = Math.round(seconds * 1000)
+		setInputValue((timeoutMs / 1000).toString())
+		void StateServiceClient.updateTerminalConnectionTimeout({ timeoutMs }).catch((error) => {
+			console.error("Failed to update terminal connection timeout:", error)
+		})
 	}
 
 	const handleTerminalReuseChange = (event: Event) => {
@@ -121,7 +122,10 @@ export const TerminalSettingsSection: React.FC<TerminalSettingsSectionProps> = (
 								<VSCodeTextField
 									className="w-full"
 									onBlur={handleInputBlur}
-									onChange={(event) => handleTimeoutChange(event as Event)}
+									onFocus={() => {
+										isEditingShellIntegrationTimeout.current = true
+									}}
+									onInput={(event) => handleTimeoutChange(event as unknown as Event)}
 									placeholder="Enter timeout in seconds"
 									value={inputValue}
 								/>

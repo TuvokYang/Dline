@@ -1,24 +1,30 @@
 import { createHash } from "node:crypto"
-import { readFile, stat } from "node:fs/promises"
+import { readFile, stat, unlink } from "node:fs/promises"
 import path from "node:path"
 import { load as parseYaml } from "js-yaml"
+import { Logger } from "@/shared/services/Logger"
+import { resolveTerminalProfileId } from "@/utils/shell"
+import { INTERNAL_COMMAND_EXIT_MARKER_PREFIX } from "./command-completion-marker"
 
 const CONFIG_RELATIVE_PATH = path.join(".agents", "bashrc.yml")
 const PLATFORM_NAMES = ["win32", "linux", "darwin"] as const
+const POWERSHELL_PROFILES = new Set(["default", "powershell", "powershell-7", "powershell-legacy"])
 
 type EnvironmentMap = Record<string, string | null>
 
-interface ProfileConfiguration {
+export interface ProfileConfiguration {
 	environment: EnvironmentMap
-	commands: string[]
+	startupScripts: string[]
+	preCommands: string[]
+	postCommand?: string
 }
 
-interface PlatformConfiguration {
+export interface PlatformConfiguration {
 	environment: EnvironmentMap
 	profiles: Record<string, ProfileConfiguration>
 }
 
-interface ShellEnvironmentConfiguration {
+export interface ShellEnvironmentConfiguration {
 	environment: EnvironmentMap
 	platforms: Partial<Record<(typeof PLATFORM_NAMES)[number], PlatformConfiguration>>
 }
@@ -27,7 +33,23 @@ export interface ResolvedShellEnvironment {
 	readonly configPath: string
 	readonly configurationId: string
 	readonly environment: Readonly<EnvironmentMap>
-	readonly initializationCommands: readonly string[]
+	readonly startupScripts: readonly string[]
+	readonly preCommands: readonly string[]
+	readonly postCommand?: string
+}
+
+export interface ShellEnvironmentCommandOptions {
+	readonly command: string
+	readonly startupScripts?: readonly string[]
+	readonly preCommands?: readonly string[]
+	readonly postCommand?: string
+	readonly profile: string
+	readonly diagnosticsPath: string
+	/** Exit the spawned shell with the user command status instead of preserving an interactive shell. */
+	readonly terminateShell?: boolean
+	/** Emit an internal marker so a persistent terminal can report the preserved user-command status. */
+	readonly completionMarkerToken?: string
+	readonly platform?: NodeJS.Platform
 }
 
 interface ShellEnvironmentConfigLoaderOptions {
@@ -61,18 +83,25 @@ function parseEnvironment(value: unknown, context: string): EnvironmentMap {
 	return environment
 }
 
+function parseStringList(value: unknown, context: string): string[] {
+	if (value === undefined) return []
+	if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string" || entry.trim().length === 0)) {
+		throw new Error(`${context} must be a list of non-empty strings`)
+	}
+	return value as string[]
+}
+
 function parseProfile(value: unknown, context: string): ProfileConfiguration {
 	if (!isRecord(value)) throw new Error(`${context} must be a mapping`)
-	assertKnownKeys(value, ["environment", "commands"], context)
-	if (
-		value.commands !== undefined &&
-		(!Array.isArray(value.commands) || value.commands.some((entry) => typeof entry !== "string"))
-	) {
-		throw new Error(`${context}.commands must be a list of strings`)
+	assertKnownKeys(value, ["environment", "startupScripts", "preCommands", "postCommand"], context)
+	if (value.postCommand !== undefined && (typeof value.postCommand !== "string" || value.postCommand.trim().length === 0)) {
+		throw new Error(`${context}.postCommand must be a non-empty string`)
 	}
 	return {
 		environment: parseEnvironment(value.environment, `${context}.environment`),
-		commands: (value.commands as string[] | undefined) ?? [],
+		startupScripts: parseStringList(value.startupScripts, `${context}.startupScripts`),
+		preCommands: parseStringList(value.preCommands, `${context}.preCommands`),
+		postCommand: value.postCommand as string | undefined,
 	}
 }
 
@@ -90,7 +119,7 @@ function parsePlatform(value: unknown, context: string): PlatformConfiguration {
 	}
 }
 
-function parseConfiguration(value: unknown): ShellEnvironmentConfiguration {
+export function parseShellEnvironmentConfiguration(value: unknown): ShellEnvironmentConfiguration {
 	if (!isRecord(value)) throw new Error("configuration must be a mapping")
 	assertKnownKeys(value, ["version", "environment", "platforms"], "configuration")
 	if (value.version !== 1) throw new Error("configuration.version must be 1")
@@ -116,13 +145,24 @@ function isPathWithin(root: string, target: string): boolean {
 	return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative))
 }
 
-function expandEnvironment(environment: EnvironmentMap, base: NodeJS.ProcessEnv): EnvironmentMap {
+function expandTemplate(value: string, workspaceRoot: string, environment: NodeJS.ProcessEnv): string {
+	return value
+		.replaceAll("${workspaceFolder}", workspaceRoot)
+		.replace(/\$\{env:([^}]+)\}/g, (_match, variable: string) => environment[variable] ?? "")
+}
+
+function expandEnvironment(environment: EnvironmentMap, workspaceRoot: string, base: NodeJS.ProcessEnv): EnvironmentMap {
 	return Object.fromEntries(
 		Object.entries(environment).map(([name, value]) => [
 			name,
-			value?.replace(/\$\{env:([^}]+)\}/g, (_match, variable: string) => base[variable] ?? "") ?? null,
+			value === null ? null : expandTemplate(value, workspaceRoot, base),
 		]),
 	)
+}
+
+function resolveStartupScript(script: string, workspaceRoot: string, environment: NodeJS.ProcessEnv): string {
+	const expanded = expandTemplate(script, workspaceRoot, environment)
+	return path.isAbsolute(expanded) ? path.normalize(expanded) : path.resolve(workspaceRoot, expanded)
 }
 
 export class ShellEnvironmentConfigLoader {
@@ -151,42 +191,218 @@ export class ShellEnvironmentConfigLoader {
 
 		try {
 			const raw = await readFile(configPath, "utf8")
-			const configuration = parseConfiguration(parseYaml(raw))
+			const configuration = parseShellEnvironmentConfiguration(parseYaml(raw))
 			const platform = configuration.platforms[this.platform as (typeof PLATFORM_NAMES)[number]]
-			const profileConfiguration = platform?.profiles[profile]
+			const resolvedProfile = resolveTerminalProfileId(profile, this.platform)
+			const profileConfiguration = platform?.profiles[resolvedProfile] ?? platform?.profiles[profile]
 			const environment = expandEnvironment(
 				{
 					...configuration.environment,
 					...platform?.environment,
 					...profileConfiguration?.environment,
 				},
+				workspaceRoot,
 				this.environment,
 			)
-			const initializationCommands = profileConfiguration?.commands ?? []
+			const startupScripts = (profileConfiguration?.startupScripts ?? []).map((script) =>
+				resolveStartupScript(script, workspaceRoot, this.environment),
+			)
+			const preCommands = (profileConfiguration?.preCommands ?? []).map((command) =>
+				expandTemplate(command, workspaceRoot, this.environment),
+			)
+			const postCommand = profileConfiguration?.postCommand
+				? expandTemplate(profileConfiguration.postCommand, workspaceRoot, this.environment)
+				: undefined
 			const configurationId = createHash("sha256")
-				.update(JSON.stringify({ configPath, environment, initializationCommands, profile }))
+				.update(
+					JSON.stringify({
+						configPath,
+						environment,
+						startupScripts,
+						preCommands,
+						postCommand,
+						profile: resolvedProfile,
+					}),
+				)
 				.digest("hex")
 				.slice(0, 16)
-			return { configPath, configurationId, environment, initializationCommands }
+			return { configPath, configurationId, environment, startupScripts, preCommands, postCommand }
 		} catch (error) {
 			throw new Error(`Invalid ${CONFIG_RELATIVE_PATH} at ${configPath}: ${error instanceof Error ? error.message : error}`)
 		}
 	}
 }
 
-export function buildPreloadedCommand(
-	command: string,
-	initializationCommands: readonly string[],
+function quotePowerShell(value: string): string {
+	return `'${value.replaceAll("'", "''")}'`
+}
+
+function quotePosix(value: string): string {
+	return `'${value.replaceAll("'", `'"'"'`)}'`
+}
+
+function quoteCmdPath(value: string): string {
+	return `"${value.replaceAll('"', '""')}"`
+}
+
+function appendPowerShellDiagnostic(diagnosticsPath: string, message: string): string {
+	return `Add-Content -LiteralPath ${quotePowerShell(diagnosticsPath)} -Value ${quotePowerShell(message)} -ErrorAction SilentlyContinue`
+}
+
+function appendPosixDiagnostic(diagnosticsPath: string, message: string): string {
+	return `printf '%s\\n' ${quotePosix(message)} >> ${quotePosix(diagnosticsPath)}`
+}
+
+function appendCmdDiagnostic(diagnosticsPath: string, message: string): string {
+	return `echo ${message.replaceAll(/[&|<>^%]/g, "_")}>>${quoteCmdPath(diagnosticsPath)}`
+}
+
+function buildPowerShellStartupScript(script: string, diagnosticsPath: string, index: number): string {
+	const extension = path.extname(script).toLowerCase()
+	const failure = appendPowerShellDiagnostic(diagnosticsPath, `startupScripts[${index}] failed: ${script}`)
+	if (extension === ".ps1") {
+		return `try { . ${quotePowerShell(script)} *> $null; if (-not $?) { throw 'script failed' } } catch { ${failure} }`
+	}
+	if (extension === ".bat" || extension === ".cmd") {
+		const invocation = `call "${script.replaceAll('"', '""')}" >nul 2>&1 && set`
+		return `try { $__dline_env = & $env:ComSpec /d /s /c ${quotePowerShell(invocation)}; if ($LASTEXITCODE -ne 0) { throw 'script failed' }; foreach ($__dline_line in $__dline_env) { $__dline_pair = $__dline_line -split '=', 2; if ($__dline_pair.Length -eq 2 -and $__dline_pair[0]) { Set-Item -LiteralPath "Env:$($__dline_pair[0])" -Value $__dline_pair[1] } } } catch { ${failure} }`
+	}
+	return failure
+}
+
+function buildPosixStartupScript(script: string, diagnosticsPath: string, index: number): string {
+	const extension = path.extname(script).toLowerCase()
+	const failure = appendPosixDiagnostic(diagnosticsPath, `startupScripts[${index}] failed: ${script}`)
+	if ([".bashrc", ".bash", ".sh"].includes(extension)) {
+		return `. ${quotePosix(script)} >/dev/null 2>&1 || ${failure}`
+	}
+	return failure
+}
+
+function buildCmdStartupScript(script: string, diagnosticsPath: string, index: number): string {
+	const extension = path.extname(script).toLowerCase()
+	const failure = appendCmdDiagnostic(diagnosticsPath, `startupScripts[${index}] failed`)
+	if (extension === ".bat" || extension === ".cmd") {
+		return `call ${quoteCmdPath(script)} >nul 2>&1 || ${failure}`
+	}
+	return failure
+}
+
+function shellKind(profile: string, platform: NodeJS.Platform): "powershell" | "cmd" | "posix" {
+	if (platform !== "win32") return "posix"
+	if (profile === "cmd") return "cmd"
+	if (POWERSHELL_PROFILES.has(profile)) return "powershell"
+	return profile.includes("bash") || profile === "wsl-bash" ? "posix" : "powershell"
+}
+
+export function buildTerminalInitializationCommand(
+	startupScripts: readonly string[],
 	profile: string,
+	diagnosticsPath: string,
 	platform: NodeJS.Platform = process.platform,
-): string {
-	if (initializationCommands.length === 0) return command
-	if (platform === "win32" && (profile === "default" || profile.includes("powershell"))) {
-		const guarded = initializationCommands.map((entry) => `${entry}; if (-not $?) { exit 1 }`).join("; ")
-		return `& { ${guarded}; ${command} }`
+): string | undefined {
+	if (startupScripts.length === 0) return undefined
+	const kind = shellKind(profile, platform)
+	if (kind === "powershell") {
+		return startupScripts.map((script, index) => buildPowerShellStartupScript(script, diagnosticsPath, index)).join("; ")
 	}
-	if (platform === "win32" && profile === "cmd") {
-		return [...initializationCommands.map((entry) => `(${entry})`), `(${command})`].join(" && ")
+	if (kind === "cmd") {
+		return startupScripts.map((script, index) => buildCmdStartupScript(script, diagnosticsPath, index)).join(" & ")
 	}
-	return [...initializationCommands, command].join(" && ")
+	return startupScripts.map((script, index) => buildPosixStartupScript(script, diagnosticsPath, index)).join("; ")
+}
+
+function buildPowerShellCommand(options: ShellEnvironmentCommandOptions): string {
+	const startup = (options.startupScripts ?? []).map((script, index) =>
+		buildPowerShellStartupScript(script, options.diagnosticsPath, index),
+	)
+	const pre = (options.preCommands ?? []).map((entry, index) => {
+		const failure = appendPowerShellDiagnostic(options.diagnosticsPath, `preCommands[${index}] failed`)
+		return `try { Invoke-Expression ${quotePowerShell(entry)} *> $null; if (-not $?) { throw 'command failed' } } catch { ${failure} }`
+	})
+	const post = options.postCommand
+		? `try { Invoke-Expression ${quotePowerShell(options.postCommand)} *> $null; if (-not $?) { throw 'command failed' } } catch { ${appendPowerShellDiagnostic(options.diagnosticsPath, "postCommand failed")} }`
+		: undefined
+	const restoreExitCode = options.terminateShell ? "exit $__dline_exit_code" : '& $env:ComSpec /d /c "exit $__dline_exit_code"'
+	const completionMarker = options.completionMarkerToken
+		? `Write-Output "${INTERNAL_COMMAND_EXIT_MARKER_PREFIX}${options.completionMarkerToken}:$__dline_exit_code"`
+		: undefined
+	return `${[...startup, ...pre].join("; ")}${startup.length + pre.length > 0 ? "; " : ""}$global:LASTEXITCODE = 0; & { ${options.command} }; $__dline_succeeded = $?; $__dline_exit_code = $LASTEXITCODE; if ($__dline_succeeded -and $__dline_exit_code -eq 0) { $__dline_exit_code = 0 } elseif ($__dline_exit_code -eq 0) { $__dline_exit_code = 1 }; ${post ? `${post}; ` : ""}${completionMarker ? `${completionMarker}; ` : ""}${restoreExitCode}`
+}
+
+function buildPosixCommand(options: ShellEnvironmentCommandOptions): string {
+	const startup = (options.startupScripts ?? []).map((script, index) =>
+		buildPosixStartupScript(script, options.diagnosticsPath, index),
+	)
+	const pre = (options.preCommands ?? []).map(
+		(entry, index) =>
+			`{ ${entry}; } >/dev/null 2>&1 || ${appendPosixDiagnostic(options.diagnosticsPath, `preCommands[${index}] failed`)}`,
+	)
+	const post = options.postCommand
+		? `{ ${options.postCommand}; } >/dev/null 2>&1 || ${appendPosixDiagnostic(options.diagnosticsPath, "postCommand failed")}`
+		: undefined
+	const prefix = [...startup, ...pre]
+	const completionMarker = options.completionMarkerToken
+		? `printf '${INTERNAL_COMMAND_EXIT_MARKER_PREFIX}${options.completionMarkerToken}:%s\\n' "$__dline_exit"`
+		: undefined
+	return `( ${prefix.join("; ")}${prefix.length > 0 ? "; " : ""}${options.command}; __dline_exit=$?; ${post ? `${post}; ` : ""}${completionMarker ? `${completionMarker}; ` : ""}exit $__dline_exit )`
+}
+
+function buildCmdCommand(options: ShellEnvironmentCommandOptions): string {
+	const startup = (options.startupScripts ?? []).map((script, index) =>
+		buildCmdStartupScript(script, options.diagnosticsPath, index),
+	)
+	const pre = (options.preCommands ?? []).map(
+		(entry, index) =>
+			`(${entry}) >nul 2>&1 || ${appendCmdDiagnostic(options.diagnosticsPath, `preCommands[${index}] failed`)}`,
+	)
+	const post = options.postCommand
+		? `(${options.postCommand}) >nul 2>&1 || ${appendCmdDiagnostic(options.diagnosticsPath, "postCommand failed")}`
+		: undefined
+	const commands = [
+		"setlocal EnableExtensions EnableDelayedExpansion",
+		...startup,
+		...pre,
+		`(${options.command})`,
+		'set "__dline_exit=!errorlevel!"',
+	]
+	if (post) commands.push(post)
+	if (options.completionMarkerToken) {
+		commands.push(`echo ${INTERNAL_COMMAND_EXIT_MARKER_PREFIX}${options.completionMarkerToken}:!__dline_exit!`)
+	}
+	commands.push("exit /b !__dline_exit!")
+	return commands.join(" & ")
+}
+
+export function buildShellEnvironmentCommand(options: ShellEnvironmentCommandOptions): string {
+	const hasConfiguration =
+		(options.startupScripts?.length ?? 0) > 0 || (options.preCommands?.length ?? 0) > 0 || options.postCommand !== undefined
+	if (!hasConfiguration) return options.command
+	const platform = options.platform ?? process.platform
+	const kind = shellKind(options.profile, platform)
+	if (kind === "powershell") return buildPowerShellCommand(options)
+	if (kind === "cmd") return buildCmdCommand(options)
+	return buildPosixCommand(options)
+}
+
+export async function logShellEnvironmentDiagnostics(diagnosticsPath: string): Promise<void> {
+	try {
+		const diagnostics = await readFile(diagnosticsPath, "utf8")
+		for (const line of diagnostics
+			.split(/\r?\n/)
+			.map((entry) => entry.trim())
+			.filter(Boolean)) {
+			Logger.error(`[ShellEnvironment] ${line}`)
+		}
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+			Logger.error(`[ShellEnvironment] Failed to read diagnostics: ${diagnosticsPath}`, error)
+		}
+	} finally {
+		await unlink(diagnosticsPath).catch((error: NodeJS.ErrnoException) => {
+			if (error.code !== "ENOENT") {
+				Logger.error(`[ShellEnvironment] Failed to remove diagnostics: ${diagnosticsPath}`, error)
+			}
+		})
+	}
 }

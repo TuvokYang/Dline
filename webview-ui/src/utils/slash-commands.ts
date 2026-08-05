@@ -1,6 +1,11 @@
 import type { McpServer } from "@shared/mcp"
 import { PLATFORM_CONFIG, PlatformType } from "@/config/platform.config"
-import { getBuiltInSlashCommands, pathToCommandName, type SlashCommand } from "../../../src/shared/slashCommands.ts"
+import {
+	getBuiltInSlashCommands,
+	pathToCommandName,
+	pathToSkillName,
+	type SlashCommand,
+} from "../../../src/shared/slashCommands.ts"
 
 export type { SlashCommand }
 
@@ -103,16 +108,22 @@ export function getSkillCommands(
 	globalSkillsToggles: Record<string, boolean> = {},
 	remoteSkills?: any[],
 	remoteSkillsToggles?: Record<string, boolean>,
+	availableSkillCommands?: SlashCommand[],
 ): SlashCommand[] {
+	if (availableSkillCommands) {
+		return availableSkillCommands.map((command) => ({ ...command, section: "skill" }))
+	}
+
 	const skillNames = new Set<string>()
 	const commands: SlashCommand[] = []
 
 	// Local skills
 	for (const [path, enabled] of Object.entries(localSkillsToggles)) {
 		if (enabled && path) {
-			skillNames.add(path)
+			const name = pathToSkillName(path)
+			skillNames.add(name)
 			commands.push({
-				name: path,
+				name,
 				section: "skill",
 			} as SlashCommand)
 		}
@@ -121,10 +132,11 @@ export function getSkillCommands(
 	// Global skills (skip if local exists with same name)
 	for (const [path, enabled] of Object.entries(globalSkillsToggles)) {
 		if (enabled && path) {
-			if (skillNames.has(path)) continue
-			skillNames.add(path)
+			const name = pathToSkillName(path)
+			if (skillNames.has(name)) continue
+			skillNames.add(name)
 			commands.push({
-				name: path,
+				name,
 				section: "skill",
 			} as SlashCommand)
 		}
@@ -263,6 +275,7 @@ export function getMatchingSlashCommands(
 	remoteSkills?: any[],
 	remoteSkillsToggles?: Record<string, boolean>,
 	workflowDescriptions?: Record<string, string>,
+	availableSkillCommands?: SlashCommand[],
 ): SlashCommand[] {
 	const workflowCommands = getWorkflowCommands(
 		localWorkflowToggles,
@@ -271,7 +284,13 @@ export function getMatchingSlashCommands(
 		remoteWorkflows,
 		workflowDescriptions,
 	)
-	const skillCommands = getSkillCommands(localSkillsToggles, globalSkillsToggles, remoteSkills, remoteSkillsToggles)
+	const skillCommands = getSkillCommands(
+		localSkillsToggles,
+		globalSkillsToggles,
+		remoteSkills,
+		remoteSkillsToggles,
+		availableSkillCommands,
+	)
 	const mcpPromptCommands = getMcpPromptCommands(mcpServers)
 	const allCommands = [...DEFAULT_SLASH_COMMANDS, ...workflowCommands, ...skillCommands, ...mcpPromptCommands]
 
@@ -322,6 +341,7 @@ export function validateSlashCommand(
 	remoteSkills?: any[],
 	remoteSkillsToggles?: Record<string, boolean>,
 	workflowDescriptions?: Record<string, string>,
+	availableSkillCommands?: SlashCommand[],
 ): "full" | "partial" | null {
 	if (!command) {
 		return null
@@ -334,7 +354,13 @@ export function validateSlashCommand(
 		remoteWorkflows,
 		workflowDescriptions,
 	)
-	const skillCommands = getSkillCommands(localSkillsToggles, globalSkillsToggles, remoteSkills, remoteSkillsToggles)
+	const skillCommands = getSkillCommands(
+		localSkillsToggles,
+		globalSkillsToggles,
+		remoteSkills,
+		remoteSkillsToggles,
+		availableSkillCommands,
+	)
 	const mcpPromptCommands = getMcpPromptCommands(mcpServers)
 	const allCommands = [...DEFAULT_SLASH_COMMANDS, ...workflowCommands, ...skillCommands, ...mcpPromptCommands]
 

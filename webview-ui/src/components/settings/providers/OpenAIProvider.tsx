@@ -1,15 +1,18 @@
 import { type ModelInfo, openAiModelInfoSaneDefaults } from "@shared/api"
+import { OpenAiModelsRequest } from "@shared/proto/dline/models"
 import { ApiFormat, type ModelCapabilities, type ModelPricing } from "@shared/proto/dline/models/metadata"
 import { OpenAiProviderConfig } from "@shared/proto/dline/provider/openai"
 import { openAiEndpointToApiFormat, resolveApiFormat } from "@shared/providers/api-format"
 import { buildEffectiveModelInfo, mergeCapabilities, mergePricing } from "@shared/providers/effective-model-info"
 import { OPENAI_COMPATIBLE_REASONING_EFFORT_OPTIONS, OPENAI_REASONING_EFFORT_OPTIONS } from "@shared/storage/types"
 import { VSCodeButton, VSCodeCheckbox } from "@vscode/webview-ui-toolkit/react"
-import { useCallback } from "react"
+import { useCallback, useMemo, useState } from "react"
+import { ModelsServiceClient } from "@/services/grpc-client"
 import { ApiFormatSelector } from "../common/ApiFormatSelector"
 import { ApiKeyField } from "../common/ApiKeyField"
 import { BaseUrlField } from "../common/BaseUrlField"
 import { DebouncedTextField } from "../common/DebouncedTextField"
+import { ModelAutocomplete } from "../common/ModelAutocomplete"
 import { ModelConfiguration } from "../common/ModelConfiguration"
 import { ModelInfoView } from "../common/ModelInfoView"
 import { ModelSelector } from "../common/ModelSelector"
@@ -35,6 +38,7 @@ function getOpenAiConfig(profile: ApiProfile): OpenAiProviderConfig {
 export const OpenAIProvider = ({ showModelOptions, isPopup, profile, onUpdate }: OpenAIProviderProps) => {
 	const pc = getOpenAiConfig(profile)
 	const { models, defaultModelId, modelInfoSaneDefaults } = useProviderModels("openai")
+	const [discoveredModelIds, setDiscoveredModelIds] = useState<string[]>([])
 	// Profiles created by the former OpenAI Compatible provider have no
 	// customModelEnabled flag. Preserve their free-form model ID after the
 	// provider consolidation instead of forcing an unknown ID into the
@@ -61,6 +65,24 @@ export const OpenAIProvider = ({ showModelOptions, isPopup, profile, onUpdate }:
 		{ apiFormats },
 		ApiFormat.OPENAI_CHAT,
 	)
+	const customModels = useMemo<Record<string, ModelInfo>>(() => {
+		const modelIds = new Set(discoveredModelIds)
+		if (modelId) modelIds.add(modelId)
+		return Object.fromEntries(
+			Array.from(modelIds).map((id) => [id, { ...openAiModelInfoSaneDefaults, id, name: id, userDefined: true }]),
+		)
+	}, [discoveredModelIds, modelId])
+	const refreshCustomModels = useCallback(async () => {
+		if (!profile.baseUrl || !profile.apiKey) return
+		try {
+			const response = await ModelsServiceClient.refreshOpenAiModels(
+				OpenAiModelsRequest.create({ baseUrl: profile.baseUrl, apiKey: profile.apiKey }),
+			)
+			setDiscoveredModelIds([...new Set(response.values.filter(Boolean))])
+		} catch (error) {
+			console.error("Failed to refresh OpenAI models", error)
+		}
+	}, [profile.apiKey, profile.baseUrl])
 
 	const openAiHeaders = pc.openAiHeaders ?? {}
 	const headerEntries: [string, string][] = Object.entries(openAiHeaders)
@@ -155,13 +177,14 @@ export const OpenAIProvider = ({ showModelOptions, isPopup, profile, onUpdate }:
 					</VSCodeCheckbox>
 
 					{customModelEnabled ? (
-						<DebouncedTextField
-							initialValue={modelId}
+						<ModelAutocomplete
+							label="Model ID"
+							models={customModels}
 							onChange={(value) => onUpdate({ modelId: value })}
+							onOpen={() => void refreshCustomModels()}
 							placeholder="Enter Model ID..."
-							style={{ width: "100%", marginBottom: 8 }}>
-							<span style={{ fontWeight: 500 }}>Model ID</span>
-						</DebouncedTextField>
+							selectedModelId={modelId}
+						/>
 					) : (
 						<>
 							<ModelSelector
@@ -224,6 +247,7 @@ export const OpenAIProvider = ({ showModelOptions, isPopup, profile, onUpdate }:
 								"contextWindow",
 								"contextWindowTiers",
 								"supportsImages",
+								...(customModelEnabled ? (["supportsWebSearch", "supportsBrowserAction"] as const) : []),
 								"supportsPromptCache",
 								"supportsTools",
 								"temperature",

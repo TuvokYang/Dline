@@ -1,10 +1,9 @@
 import type { ClineContent } from "@/shared/messages/content"
-import { computeCompactTrigger, computeSummarizeBudget } from "./context-window-utils"
 
 const TOKEN_ESTIMATE_CHARS = 4
 
 export interface CurrentTurnCompactionInput {
-	contextWindow: number
+	triggerTokens: number
 	previousTokens: number
 	userContent: ClineContent[]
 }
@@ -38,7 +37,7 @@ export function hasToolResult(userContent: ClineContent[]): boolean {
 /**
  * Decide whether the current tool-result turn should be deferred while older context is summarized first.
  *
- * @param input Context-window size, previous request usage, and pending current-turn content.
+ * @param input Resolved compaction trigger, previous request usage, and pending current-turn content.
  * @returns True when pending tool results would push the next request over the compaction trigger.
  */
 export function shouldDeferCurrentTurn(input: CurrentTurnCompactionInput): boolean {
@@ -46,12 +45,11 @@ export function shouldDeferCurrentTurn(input: CurrentTurnCompactionInput): boole
 		return false
 	}
 
-	const triggerTokens = computeCompactTrigger(input.contextWindow, computeSummarizeBudget())
-	if (input.previousTokens >= triggerTokens) {
+	if (input.previousTokens >= input.triggerTokens) {
 		return true
 	}
 
-	return input.previousTokens + estimateCurrentTokens(input.userContent) >= triggerTokens
+	return input.previousTokens + estimateCurrentTokens(input.userContent) >= input.triggerTokens
 }
 
 /**

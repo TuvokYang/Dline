@@ -50,6 +50,9 @@ message ModelCapabilities {
   optional double temperature = 10;
   repeated ContextWindowTier context_window_tiers = 11;
   repeated ServerTool tools = 12;
+  // Whether the model can consume screenshots and operate browser_action.
+  // Omitted legacy metadata falls back to supports_images.
+  optional bool supports_browser_action = 13;
 }
 
 /** Pricing tier for context-window-based tiered models. */

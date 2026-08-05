@@ -118,6 +118,72 @@ service FileService {
 
   // Persists all ApiProfile configurations to api_profiles.json
   rpc updateApiProfiles(UpdateApiProfilesRequest) returns (Empty);
+
+  // Lists Conda environments available to the extension host
+  rpc listCondaEnvironments(EmptyRequest) returns (StringArray);
+
+  // Reads one profile from a workspace .agents/bashrc.yml file
+  rpc getShellEnvironmentProfile(ShellEnvironmentProfileRequest) returns (ShellEnvironmentProfile);
+
+  // Produces the YAML that would result from a profile update without writing it
+  rpc previewShellEnvironmentProfile(UpdateShellEnvironmentProfileRequest) returns (ShellEnvironmentProfilePreview);
+
+  // Writes a previously reviewed profile update when the source file is unchanged
+  rpc updateShellEnvironmentProfile(UpdateShellEnvironmentProfileRequest) returns (ShellEnvironmentProfile);
+
+  // Opens or creates a workspace .agents/bashrc.yml file
+  rpc openShellEnvironmentConfig(ShellEnvironmentWorkspaceRequest) returns (Empty);
+
+  // Closes idle task terminals so the selected profile is initialized again
+  rpc reinitializeShellEnvironment(EmptyRequest) returns (ShellEnvironmentReinitializeResponse);
+}
+
+message ShellEnvironmentWorkspaceRequest {
+  string workspace_path = 1;
+}
+
+message ShellEnvironmentProfileRequest {
+  string workspace_path = 1;
+  string profile = 2;
+}
+
+message ShellEnvironmentVariable {
+  string name = 1;
+  optional string value = 2;
+}
+
+message ShellEnvironmentProfile {
+  string workspace_path = 1;
+  string config_path = 2;
+  bool exists = 3;
+  string profile = 4;
+  repeated ShellEnvironmentVariable environment = 5;
+  repeated string startup_scripts = 6;
+  repeated string pre_commands = 7;
+  optional string post_command = 8;
+  string source_content = 9;
+}
+
+message UpdateShellEnvironmentProfileRequest {
+  string workspace_path = 1;
+  string profile = 2;
+  repeated ShellEnvironmentVariable environment = 3;
+  repeated string startup_scripts = 4;
+  repeated string pre_commands = 5;
+  optional string post_command = 6;
+  string expected_source_content = 7;
+  bool confirmed = 8;
+}
+
+message ShellEnvironmentProfilePreview {
+  string current_content = 1;
+  string proposed_content = 2;
+  bool changed = 3;
+}
+
+message ShellEnvironmentReinitializeResponse {
+  int32 closed_count = 1;
+  int32 busy_count = 2;
 }
 
 // Response for refreshRules operation — includes rules, workflows, and skills toggles
@@ -444,4 +510,3 @@ message UpdateSubagentConfigRequest {
   optional string description = 5;
   optional string profile = 6;
 }
-

@@ -106,13 +106,19 @@ export function buildInteractionRequest(
 	if (!interaction) {
 		return undefined
 	}
+	const action = view.footer.actions.find(
+		(candidate) => candidate.type === actionId && candidate.dispatchTarget === "interaction",
+	)
+	const carriesDraft = action
+		? action.payloadPolicy === "draft" || action.payloadPolicy === "draft_and_selection"
+		: view.input.enterAction === actionId
 	return {
 		taskId: interaction.taskId,
 		turnId: interaction.turnId,
 		interactionId: interaction.interactionId,
 		actionId,
 		stateRevision: interaction.stateRevision,
-		draft: { text: draft.text, images: [...draft.images], files: [...draft.files] },
+		draft: carriesDraft ? { text: draft.text, images: [...draft.images], files: [...draft.files] } : undefined,
 		selection: selection ? { values: [...selection.values] } : undefined,
 	}
 }

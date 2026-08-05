@@ -22,23 +22,78 @@ async function readGlobalState(dlineDir: string): Promise<StoredSettings> {
 	return JSON.parse(await readFile(path.join(dlineDir, "data", "globalState.json"), "utf8"))
 }
 
-async function writeShellEnvironmentConfig(workspaceDir: string, scope: string): Promise<void> {
+interface ShellEnvironmentFixture {
+	postMarkerPath: string
+	startupScripts: string[]
+}
+
+async function createShellEnvironmentFixture(workspaceDir: string, scope: string): Promise<ShellEnvironmentFixture> {
 	const agentsDirectory = path.join(workspaceDir, ".agents")
 	await mkdir(agentsDirectory, { recursive: true })
+	const powershellScriptName = `startup-${scope}.ps1`
+	const batchScriptName = `vcvars64-${scope}.bat`
+	const missingScriptName = `missing-${scope}.ps1`
 	await writeFile(
-		path.join(agentsDirectory, "bashrc.yml"),
-		`version: 1
-environment:
-  DLINE_E2E_BASHRC_ENV: ${scope}
-platforms:
-  win32:
-    profiles:
-      powershell-legacy:
-        commands:
-          - $env:DLINE_E2E_BASHRC_INIT = '${scope}-initialized'
+		path.join(agentsDirectory, powershellScriptName),
+		`$env:DLINE_E2E_STARTUP = '${scope}-startup'
+Write-Output 'HIDDEN_STARTUP_OUTPUT'
 `,
 		"utf8",
 	)
+	await writeFile(
+		path.join(agentsDirectory, batchScriptName),
+		`@set DLINE_E2E_BATCH=${scope}-batch\r\n@echo HIDDEN_BATCH_OUTPUT\r\n`,
+		"utf8",
+	)
+	return {
+		postMarkerPath: path.join(agentsDirectory, `post-${scope}.txt`),
+		startupScripts: [`.agents\\${powershellScriptName}`, `.agents\\${batchScriptName}`, `.agents\\${missingScriptName}`],
+	}
+}
+
+async function configureShellEnvironmentFromChat(
+	sidebar: Frame,
+	workspaceDir: string,
+	scope: string,
+	fixture: ShellEnvironmentFixture,
+): Promise<void> {
+	await sidebar.getByRole("button", { name: "Show Dline Rules & Workflows", exact: true }).first().click()
+	await sidebar.getByRole("button", { name: "Environments", exact: true }).click()
+	await expect(sidebar.getByTestId("shell-environment-panel")).toBeVisible()
+	await expect
+		.poll(async () => (await sidebar.getByLabel("Workspace").inputValue()).toLowerCase())
+		.toBe(workspaceDir.toLowerCase())
+	await sidebar.getByLabel("Terminal Profile").selectOption("powershell-legacy")
+
+	await sidebar.getByRole("button", { name: "Add variable" }).click()
+	await sidebar.getByLabel("Environment name 1").fill("DLINE_E2E_CONFIG")
+	await sidebar.getByLabel("Environment value 1").fill(`${scope}-config`)
+
+	await sidebar.getByRole("tab", { name: "Startup Scripts" }).click()
+	for (const [index, startupScript] of fixture.startupScripts.entries()) {
+		await sidebar.getByRole("button", { name: "Add startup script" }).click()
+		await sidebar.getByRole("textbox", { name: `Startup script ${index + 1}` }).fill(startupScript)
+	}
+
+	await sidebar.getByRole("tab", { name: "Commands" }).click()
+	await sidebar.getByRole("button", { name: "Add pre command" }).click()
+	await sidebar
+		.getByRole("textbox", { name: "Pre command 1" })
+		.fill(`$env:DLINE_E2E_PRE = '${scope}-pre'; Write-Output 'HIDDEN_PRE_OUTPUT'`)
+	await sidebar.getByRole("button", { name: "Add post command" }).click()
+	await sidebar
+		.getByRole("textbox", { name: "Post command 1" })
+		.fill(
+			`Set-Content -LiteralPath '${workspaceDir.replaceAll("'", "''")}\\.agents\\post-${scope}.txt' -Value 'post-ran'; Write-Output 'HIDDEN_POST_OUTPUT'`,
+		)
+
+	const configPath = path.join(workspaceDir, ".agents", "bashrc.yml")
+	await expect.poll(async () => await readFile(configPath, "utf8").catch(() => "")).toContain("postCommand:")
+	const config = await readFile(configPath, "utf8")
+	expect(config).toContain("startupScripts:")
+	expect(config).toContain("preCommands:")
+	expect(config).toContain("postCommand:")
+	await sidebar.getByRole("button", { name: "Hide Dline Rules & Workflows", exact: true }).first().click()
 }
 
 async function openSettings(page: Page, sidebar: Frame): Promise<void> {
@@ -157,7 +212,10 @@ e2e(
 			await startSettingControlStabilityObserver(firstSidebar, { selector: "#terminal-command-timeout input" }, "value")
 			await timeout.fill("0.5")
 			await expect(firstSidebar.getByText("Enter at least 1 minute", { exact: true })).toBeVisible()
-			await timeout.fill("42")
+			await timeout.click()
+			await timeout.press("Control+A")
+			await timeout.pressSequentially("42")
+			await expect(timeout).toHaveValue("42")
 			await timeout.press("Tab")
 			await expect(timeout).toHaveValue("42")
 			await expect.poll(async () => (await readSettings(dlineDir)).terminalCommandTimeoutSeconds).toBe(2_520)
@@ -165,6 +223,8 @@ e2e(
 			const timeoutSamples = await stopSettingControlStabilityObserver(firstSidebar)
 			const firstValidTimeoutSample = timeoutSamples.indexOf("42")
 			expect(firstValidTimeoutSample).toBeGreaterThanOrEqual(0)
+			expect(timeoutSamples.slice(firstValidTimeoutSample)).not.toContain("2")
+			expect(timeoutSamples.slice(firstValidTimeoutSample)).not.toContain("4")
 			expect(timeoutSamples.slice(firstValidTimeoutSample)).not.toContain("30")
 			await setDropdownValue(
 				firstSidebar,
@@ -255,11 +315,76 @@ e2e(
 )
 
 e2e(
+	"Settings - shell integration timeout remains stable while entering multiple digits",
+	async ({ dlineDir, helper, page, sidebar, userDataDir }) => {
+		await helper.signin(sidebar)
+		await openSettings(page, sidebar)
+		await sidebar.getByTestId("tab-terminal").click()
+
+		const timeoutField = sidebar
+			.getByText("Shell integration timeout (seconds)", { exact: true })
+			.locator("..")
+			.locator("vscode-text-field")
+		await timeoutField.evaluate((element) => {
+			element.id = "e2e-shell-integration-timeout"
+		})
+		const timeoutInput = timeoutField.locator("input")
+		await startSettingControlStabilityObserver(sidebar, { selector: "#e2e-shell-integration-timeout input" }, "value")
+		await timeoutInput.click()
+		await timeoutInput.press("Control+A")
+		await timeoutInput.pressSequentially("15")
+		await expect(timeoutInput).toHaveValue("15")
+		await timeoutInput.press("Tab")
+		await expect.poll(async () => (await readGlobalState(dlineDir)).shellIntegrationTimeout).toBe(15_000)
+		await sidebar.page().waitForTimeout(300)
+		const timeoutSamples = await stopSettingControlStabilityObserver(sidebar)
+		const firstFinalValue = timeoutSamples.indexOf("15")
+		expect(firstFinalValue).toBeGreaterThanOrEqual(0)
+		expect(timeoutSamples.slice(firstFinalValue)).not.toContain("1")
+		expect(timeoutSamples.slice(firstFinalValue)).not.toContain("4")
+		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+	},
+)
+
+e2e(
+	"Terminal - environment editor shares the capabilities popup with stable sizing and symmetric command controls",
+	async ({ helper, sidebar, userDataDir }) => {
+		e2e.setTimeout(120_000)
+		await helper.signin(sidebar)
+		await expect(sidebar.getByTestId("shell-environment-button")).toHaveCount(0)
+
+		await sidebar.getByRole("button", { name: "Show Dline Rules & Workflows", exact: true }).first().click()
+		const popup = sidebar.getByTestId("capabilities-popup")
+		await expect(popup).toBeVisible()
+		const initialHeight = await popup.evaluate((element) => element.getBoundingClientRect().height)
+
+		for (const tabName of ["Skills", "Subagents", "Environments"]) {
+			await sidebar.getByRole("button", { name: tabName, exact: true }).click()
+			await expect.poll(() => popup.evaluate((element) => element.getBoundingClientRect().height)).toBe(initialHeight)
+		}
+
+		await expect(sidebar.getByTestId("shell-environment-panel")).toBeVisible()
+		await sidebar.getByRole("tab", { name: "Commands" }).click()
+		await sidebar.getByRole("button", { name: "Add pre command" }).click()
+		await sidebar.getByRole("textbox", { name: "Pre command 1" }).fill("Write-Output pre")
+		await sidebar.getByRole("button", { name: "Add post command" }).click()
+		await sidebar.getByRole("textbox", { name: "Post command 1" }).fill("Write-Output post")
+
+		await sidebar.getByRole("button", { name: "Subagents", exact: true }).click()
+		await sidebar.getByRole("button", { name: "Environments", exact: true }).click()
+		await expect(sidebar.getByRole("textbox", { name: "Pre command 1" })).toHaveValue("Write-Output pre")
+		await expect(sidebar.getByRole("textbox", { name: "Post command 1" })).toHaveValue("Write-Output post")
+		expect(await popup.evaluate((element) => element.getBoundingClientRect().height)).toBe(initialHeight)
+		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+	},
+)
+
+e2e(
 	"Terminal - foreground VS Code terminal executes with the configured Windows shell",
 	async ({ dlineDir, helper, page, server, sidebar, userDataDir, workspaceDir }) => {
 		e2e.skip(process.platform !== "win32", "Configured Windows shell execution requires Windows")
-		e2e.setTimeout(180_000)
-		await writeShellEnvironmentConfig(workspaceDir, "foreground")
+		e2e.setTimeout(240_000)
+		const shellFixture = await createShellEnvironmentFixture(workspaceDir, "foreground")
 		await helper.signin(sidebar)
 		await openSettings(page, sidebar)
 		await sidebar.getByTestId("tab-terminal").click()
@@ -270,10 +395,11 @@ e2e(
 			.getByText("Shell integration timeout (seconds)", { exact: true })
 			.locator("..")
 			.locator("vscode-text-field")
-		await shellIntegrationTimeout.evaluate((element) => {
-			;(element as HTMLInputElement).value = "15"
-			element.dispatchEvent(new Event("change", { bubbles: true }))
-		})
+		const shellIntegrationTimeoutInput = shellIntegrationTimeout.locator("input")
+		await shellIntegrationTimeoutInput.click()
+		await shellIntegrationTimeoutInput.press("Control+A")
+		await shellIntegrationTimeoutInput.pressSequentially("15")
+		await shellIntegrationTimeoutInput.press("Tab")
 		await expect
 			.poll(async () => await readGlobalState(dlineDir))
 			.toMatchObject({
@@ -281,6 +407,8 @@ e2e(
 				shellIntegrationTimeout: 15_000,
 				vscodeTerminalExecutionMode: "vscodeTerminal",
 			})
+		await returnToChat(sidebar)
+		await configureShellEnvironmentFromChat(sidebar, workspaceDir, "foreground", shellFixture)
 
 		server.resetOpenAiMock()
 		server.enqueueOpenAiResponses(
@@ -290,7 +418,7 @@ e2e(
 				name: "execute_command",
 				arguments: {
 					command:
-						'Write-Output "E2E_VSCODE_POWERSHELL_OK"; Write-Output "E2E_PS_EDITION=$($PSVersionTable.PSEdition)"; Write-Output "E2E_BASHRC_ENV=$env:DLINE_E2E_BASHRC_ENV"; Write-Output "E2E_BASHRC_INIT=$env:DLINE_E2E_BASHRC_INIT"',
+						'Write-Output "E2E_VSCODE_POWERSHELL_OK"; Write-Output "E2E_PS_EDITION=$($PSVersionTable.PSEdition)"; Write-Output "E2E_CONFIG=$env:DLINE_E2E_CONFIG"; Write-Output "E2E_STARTUP=$env:DLINE_E2E_STARTUP"; Write-Output "E2E_BATCH=$env:DLINE_E2E_BATCH"; Write-Output "E2E_PRE=$env:DLINE_E2E_PRE"; & $env:ComSpec /d /c "exit 7"',
 					workdirectory: ".",
 					requires_approval: true,
 					synchronous: true,
@@ -306,24 +434,30 @@ e2e(
 					{
 						callId: "call_vscode_powershell",
 						contentIncludes: [
-							"Command executed successfully (exit code 0).",
+							"Command failed with exit code 7.",
 							"E2E_VSCODE_POWERSHELL_OK",
 							"E2E_PS_EDITION=Desktop",
-							"E2E_BASHRC_ENV=foreground",
-							"E2E_BASHRC_INIT=foreground-initialized",
+							"E2E_CONFIG=foreground-config",
+							"E2E_STARTUP=foreground-startup",
+							"E2E_BATCH=foreground-batch",
+							"E2E_PRE=foreground-pre",
 						],
 					},
 				],
 			},
 		)
 
-		await returnToChat(sidebar)
 		const input = sidebar.getByTestId("chat-input")
 		await input.fill("Run the configured foreground PowerShell command.")
 		await sidebar.getByTestId("send-button").click()
 		const approveButton = sidebar.getByText("Approve", { exact: true })
 		await expect(approveButton).toBeVisible({ timeout: 60_000 })
 		await approveButton.click()
+		await expect(sidebar.getByTestId("command-execution-mode").last()).toContainText("Foreground")
+		const workingDirectoryRow = sidebar.getByTestId("command-workdirectory").last()
+		await expect(workingDirectoryRow.getByLabel("Working directory")).toBeVisible()
+		await expect(workingDirectoryRow).toContainText(workspaceDir)
+		await expect(workingDirectoryRow.getByText("Working directory:", { exact: true })).toHaveCount(0)
 
 		await expect(sidebar.getByText("E2E_VSCODE_POWERSHELL_COMPLETE", { exact: false }).last()).toBeVisible({
 			timeout: 60_000,
@@ -333,12 +467,16 @@ e2e(
 		expect(continuation.requestToolResults).toContainEqual(
 			expect.objectContaining({
 				callId: "call_vscode_powershell",
-				content: expect.stringContaining("E2E_PS_EDITION=Desktop"),
+				content: expect.stringContaining("Command failed with exit code 7."),
 			}),
 		)
+		const commandResult = continuation.requestToolResults.find((result) => result.callId === "call_vscode_powershell")
+		expect(commandResult?.content).not.toContain("HIDDEN_")
+		expect((await readFile(shellFixture.postMarkerPath, "utf8")).trim()).toBe("post-ran")
 		const output = await E2ETestHelper.readDlineOutput(userDataDir)
 		expect(output).toContain("[TerminalManager] Running command")
-		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+		expect(output).toContain("[ShellEnvironment] startupScripts[2] failed")
+		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir, [/\[ShellEnvironment\] startupScripts\[2\] failed/])
 	},
 )
 
@@ -346,8 +484,8 @@ e2e(
 	"Terminal - background Exec applies the configured PowerShell project environment",
 	async ({ dlineDir, helper, page, server, sidebar, userDataDir, workspaceDir }) => {
 		e2e.skip(process.platform !== "win32", "Configured Windows shell execution requires Windows")
-		e2e.setTimeout(180_000)
-		await writeShellEnvironmentConfig(workspaceDir, "background")
+		e2e.setTimeout(240_000)
+		const shellFixture = await createShellEnvironmentFixture(workspaceDir, "background")
 		await helper.signin(sidebar)
 		await openSettings(page, sidebar)
 		await sidebar.getByTestId("tab-terminal").click()
@@ -359,6 +497,8 @@ e2e(
 				defaultTerminalProfile: "powershell-legacy",
 				vscodeTerminalExecutionMode: "backgroundExec",
 			})
+		await returnToChat(sidebar)
+		await configureShellEnvironmentFromChat(sidebar, workspaceDir, "background", shellFixture)
 
 		server.resetOpenAiMock()
 		server.enqueueOpenAiResponses(
@@ -368,7 +508,7 @@ e2e(
 				name: "execute_command",
 				arguments: {
 					command:
-						'Write-Output "E2E_BACKGROUND_BASHRC_ENV=$env:DLINE_E2E_BASHRC_ENV"; Write-Output "E2E_BACKGROUND_BASHRC_INIT=$env:DLINE_E2E_BASHRC_INIT"',
+						'Write-Output "E2E_BACKGROUND_CONFIG=$env:DLINE_E2E_CONFIG"; Write-Output "E2E_BACKGROUND_STARTUP=$env:DLINE_E2E_STARTUP"; Write-Output "E2E_BACKGROUND_BATCH=$env:DLINE_E2E_BATCH"; Write-Output "E2E_BACKGROUND_PRE=$env:DLINE_E2E_PRE"',
 					workdirectory: ".",
 					requires_approval: true,
 					synchronous: true,
@@ -385,27 +525,36 @@ e2e(
 						callId: "call_background_shell_environment",
 						contentIncludes: [
 							"Command executed successfully (exit code 0).",
-							"E2E_BACKGROUND_BASHRC_ENV=background",
-							"E2E_BACKGROUND_BASHRC_INIT=background-initialized",
+							"E2E_BACKGROUND_CONFIG=background-config",
+							"E2E_BACKGROUND_STARTUP=background-startup",
+							"E2E_BACKGROUND_BATCH=background-batch",
+							"E2E_BACKGROUND_PRE=background-pre",
 						],
 					},
 				],
 			},
 		)
 
-		await returnToChat(sidebar)
 		const input = sidebar.getByTestId("chat-input")
 		await input.fill("Run a background terminal command with the project shell environment.")
 		await sidebar.getByTestId("send-button").click()
 		await expect(sidebar.getByText("Approve", { exact: true })).toBeVisible({ timeout: 60_000 })
 		await sidebar.getByText("Approve", { exact: true }).click()
+		await expect(sidebar.getByTestId("command-execution-mode").last()).toContainText("Background")
 		await expect(sidebar.getByText("E2E_BACKGROUND_BASHRC_COMPLETE", { exact: false }).last()).toBeVisible({
 			timeout: 60_000,
 		})
 		await expect.poll(() => server.openAiRequestCount).toBe(2)
 		const continuation = server.getMockConsumptions("openai-compatible-chat")[1]
 		expect(continuation.contractError).toBeUndefined()
-		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+		const commandResult = continuation.requestToolResults.find(
+			(result) => result.callId === "call_background_shell_environment",
+		)
+		expect(commandResult?.content).not.toContain("HIDDEN_")
+		expect((await readFile(shellFixture.postMarkerPath, "utf8")).trim()).toBe("post-ran")
+		const output = await E2ETestHelper.readDlineOutput(userDataDir)
+		expect(output).toContain("[ShellEnvironment] startupScripts[2] failed")
+		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir, [/\[ShellEnvironment\] startupScripts\[2\] failed/])
 	},
 )
 
@@ -491,15 +640,22 @@ e2e(
 
 e2e(
 	"Terminal - automatic handoff exposes a background Activity and injects only status plus log metadata",
-	async ({ helper, server, sidebar, userDataDir }) => {
+	async ({ helper, page, server, sidebar, userDataDir }, testInfo) => {
 		e2e.setTimeout(240_000)
 		await helper.signin(sidebar)
+		await openSettings(page, sidebar)
+		await sidebar.getByTestId("tab-terminal").click()
+		await setDropdownValue(sidebar, sidebar.locator("#terminal-execution-mode"), "backgroundExec", "Background Exec")
+		await returnToChat(sidebar)
 		await setAutoApproveAction(sidebar, "Execute safe commands", false)
 		const startedMarker = "E2E_AUTO_BACKGROUND_OUTPUT_STARTED"
 		const finishedMarker = "E2E_AUTO_BACKGROUND_OUTPUT_FINISHED"
+		const overwrittenProgress = "E2E_OLD_PROGRESS"
+		const renderedText = "E2E_ACTIVITY_RENDER_中文_🚀"
 		const startedCodePoints = [...startedMarker].map((character) => character.codePointAt(0)).join(",")
 		const finishedCodePoints = [...finishedMarker].map((character) => character.codePointAt(0)).join(",")
-		const command = `node -e "const s=String.fromCodePoint(${startedCodePoints}); const f=String.fromCodePoint(${finishedCodePoints}); console.log(s); setTimeout(()=>console.log(f),30000)"`
+		const renderedCodePoints = [...renderedText].map((character) => character.codePointAt(0)).join(",")
+		const command = `node -e "const s=String.fromCodePoint(${startedCodePoints}); const f=String.fromCodePoint(${finishedCodePoints}); const r=String.fromCodePoint(${renderedCodePoints}); console.log(s); process.stdout.write('${overwrittenProgress}'+String.fromCodePoint(13)+String.fromCodePoint(27)+'[31m'+r+String.fromCodePoint(27)+'[0m'+String.fromCodePoint(9)+'COLUMN'+String.fromCodePoint(8)+'\\n'); setTimeout(()=>console.log(f),45000)"`
 		server.resetOpenAiMock()
 		server.enqueueOpenAiResponses(
 			{
@@ -527,7 +683,13 @@ e2e(
 						],
 					},
 				],
-				expectedRequestIncludes: ["# Background Commands", "running", "log:"],
+				expectedRequestIncludes: [
+					"# Background Commands",
+					"function_id: call_terminal_automatic_background",
+					"status: running",
+					"output change since last API send: +3 lines",
+					"log:",
+				],
 				expectedRequestExcludes: [startedMarker, finishedMarker],
 			},
 			{
@@ -537,6 +699,9 @@ e2e(
 				arguments: { result: "E2E_AUTO_BACKGROUND_RESULT_OK" },
 				expectedRequestIncludes: [
 					"E2E_AUTO_BACKGROUND_FEEDBACK",
+					"function_id: call_terminal_automatic_background",
+					"status: completed",
+					"output change since last API send: +1 line",
 					"# Background Results",
 					"## Background Command Results",
 					"completed",
@@ -554,21 +719,98 @@ e2e(
 
 		await sidebar.getByRole("tab", { name: /^Activities(?: \d+)?$/ }).click()
 		await sidebar.getByRole("button", { name: "All", exact: true }).first().click()
-		const activity = sidebar.getByTestId("activity-item").filter({ hasText: "Background Command" })
+		const activity = sidebar.getByTestId("activity-item").filter({ hasText: command })
 		await expect(activity).toHaveCount(1, { timeout: 30_000 })
 		await expect(activity).toContainText("running", { timeout: 30_000 })
-		await activity.locator("button").first().click()
-		const logLink = activity.getByRole("button", { name: /Open log file/ })
-		await expect(logLink).toBeVisible()
-		const logPath = (await logLink.getAttribute("title"))?.replace(/^Click to open:\s*/, "")
-		if (!logPath) throw new Error("Background Activity did not expose its log path")
+		const timeoutIndicator = activity.getByLabel("Command timeout: 60 s")
+		await expect(timeoutIndicator).toContainText("60 s")
+		const timeoutLayout = await timeoutIndicator.evaluate((indicator) => {
+			const icon = indicator.querySelector("svg")
+			const label = indicator.querySelector("span")
+			if (!icon || !label) throw new Error("Command timeout indicator is missing its icon or label")
+			const iconRect = icon.getBoundingClientRect()
+			const labelRect = label.getBoundingClientRect()
+			const indicatorRect = indicator.getBoundingClientRect()
+			const scale = indicator.offsetWidth > 0 ? indicatorRect.width / indicator.offsetWidth : 1
+			return {
+				iconHeight: iconRect.height,
+				expectedIconHeight: Number.parseFloat(getComputedStyle(label).fontSize) * scale,
+				centerDelta: Math.abs(iconRect.top + iconRect.height / 2 - (labelRect.top + labelRect.height / 2)),
+			}
+		})
+		expect(Math.abs(timeoutLayout.iconHeight - timeoutLayout.expectedIconHeight)).toBeLessThanOrEqual(1)
+		expect(timeoutLayout.centerDelta).toBeLessThanOrEqual(1)
+		const activityCancelButton = activity.getByRole("button", { name: "Cancel", exact: true })
+		const cancelLayout = await activityCancelButton.evaluate((button) => {
+			const row = button.parentElement
+			const textNode = Array.from(button.childNodes).find((node) => node.nodeType === Node.TEXT_NODE)
+			if (!row || !textNode) throw new Error("Activity Cancel button is missing its row or text")
+			const buttonRect = button.getBoundingClientRect()
+			const rowRect = row.getBoundingClientRect()
+			const textRange = document.createRange()
+			textRange.selectNodeContents(textNode)
+			const textRect = textRange.getBoundingClientRect()
+			return {
+				backgroundColor: getComputedStyle(button).backgroundColor,
+				height: buttonRect.height,
+				horizontalCenterDelta: Math.abs(buttonRect.left + buttonRect.width / 2 - (textRect.left + textRect.width / 2)),
+				rowCenterDelta: Math.abs(buttonRect.top + buttonRect.height / 2 - (rowRect.top + rowRect.height / 2)),
+			}
+		})
+		expect(cancelLayout.height).toBeLessThanOrEqual(20.5)
+		expect(cancelLayout.horizontalCenterDelta).toBeLessThanOrEqual(1)
+		expect(cancelLayout.rowCenterDelta).toBeLessThanOrEqual(1)
+		expect(cancelLayout.backgroundColor).not.toBe("rgba(0, 0, 0, 0)")
+		expect(cancelLayout.backgroundColor).not.toBe("transparent")
+		const expectedCollapsedOutput = `${renderedText}→   COLUMN⌫`
+		const activitySummary = activity.getByTestId("activity-output-summary")
+		await expect(activitySummary).toHaveText(expectedCollapsedOutput)
+		expect(await activitySummary.textContent()).not.toContain("\u001b")
+		expect(await activitySummary.textContent()).not.toContain(overwrittenProgress)
+		const activityScreenshotPath = testInfo.outputPath("activity-command-layout.png")
+		await activity.screenshot({ path: activityScreenshotPath })
+		await testInfo.attach("activity-command-layout", { path: activityScreenshotPath, contentType: "image/png" })
 
 		await sidebar.getByRole("tab", { name: "Work", exact: true }).click()
 		await expect(sidebar.getByText("E2E_AUTO_BACKGROUND_HANDOFF_READY", { exact: true })).toBeVisible({
 			timeout: 60_000,
 		})
+		await sidebar.getByText("Running", { exact: true }).click()
+		const collapsedCommand = sidebar.getByRole("button", { name: command, exact: true })
+		await expect(collapsedCommand).toBeVisible()
+		const commandSummary = collapsedCommand.getByTestId("command-output-summary")
+		await expect(commandSummary).toHaveText(expectedCollapsedOutput)
+		expect(await commandSummary.textContent()).not.toContain("\u001b")
+		expect(await commandSummary.textContent()).not.toContain(overwrittenProgress)
+		const commandScreenshotPath = testInfo.outputPath("collapsed-command-output.png")
+		await collapsedCommand.screenshot({ path: commandScreenshotPath })
+		await testInfo.attach("collapsed-command-output", { path: commandScreenshotPath, contentType: "image/png" })
 		const handoff = server.getMockConsumptions("openai-compatible-chat")[1]
 		expect(handoff.contractError).toBeUndefined()
+
+		await sidebar.getByRole("tab", { name: /^Activities(?: \d+)?$/ }).click()
+		await sidebar.getByRole("button", { name: "All", exact: true }).first().click()
+		await activity.locator("button").first().click()
+		const logLink = activity.getByRole("button", { name: /Open log file/ })
+		await expect(logLink).toBeVisible({ timeout: 30_000 })
+		const logPath = (await logLink.getAttribute("title"))?.replace(/^Click to open:\s*/, "")
+		if (!logPath) throw new Error("Background Activity did not expose its log path")
+		await expect(activity).toContainText(renderedText, { timeout: 30_000 })
+		const activityText = await activity.textContent()
+		expect(activityText).toContain("→   COLUMN⌫")
+		expect(activityText).not.toContain("\u001b")
+		expect(activityText).not.toContain("�")
+		const renderedAnsi = activity.locator("pre span").filter({ hasText: renderedText })
+		await expect(renderedAnsi).toHaveAttribute("style", /color/i)
+		const outputBeforeLog = await activity
+			.locator("pre")
+			.last()
+			.evaluate((output) => {
+				const item = output.closest('[data-testid="activity-item"]')
+				const link = item?.querySelector('button[title^="Click to open:"]')
+				return Boolean(link && output.compareDocumentPosition(link) & Node.DOCUMENT_POSITION_FOLLOWING)
+			})
+		expect(outputBeforeLog).toBe(true)
 
 		await sidebar.getByRole("tab", { name: /^Activities(?: \d+)?$/ }).click()
 		await sidebar.getByRole("button", { name: "All", exact: true }).first().click()
@@ -585,6 +827,7 @@ e2e(
 		expect(completion.contractError).toBeUndefined()
 		const persistedLog = await readFile(logPath, "utf8")
 		expect(persistedLog).toContain(startedMarker)
+		expect(persistedLog).toContain(renderedText)
 		expect(persistedLog).toContain(finishedMarker)
 		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
 	},

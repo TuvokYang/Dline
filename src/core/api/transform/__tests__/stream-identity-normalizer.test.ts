@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
+import { ServerTool } from "@/shared/proto/dline/models/metadata"
 import { createIdentityFactory } from "../block-identity"
-import type { ApiRawStreamToolCallsChunk } from "../stream"
+import type { ApiRawStreamServerToolChunk, ApiRawStreamToolCallsChunk } from "../stream"
 import { createStreamNormalizer } from "../stream-identity-normalizer"
 
 /**
@@ -71,5 +72,35 @@ describe("StreamIdentityNormalizer", () => {
 		expect(finalFirst.dline_tid).toBe(first.dline_tid)
 		expect(second.provider_metadata?.item_id).not.toBe(first.provider_metadata?.item_id)
 		expect(second.dline_tid).not.toBe(first.dline_tid)
+	})
+
+	it("reuses one Dline identity across a hosted server-tool lifecycle", () => {
+		const factory = createIdentityFactory(createSource(["SERVER_TRACE"]))
+		const normalizer = createStreamNormalizer(factory)
+		const started: ApiRawStreamServerToolChunk = {
+			type: "server_tool",
+			function_id: "ws_1",
+			provider_metadata: { item_id: "ws_1" },
+			tool: ServerTool.WEB_SEARCH,
+			phase: "started",
+			input: { query: "Dline" },
+		}
+		const completed: ApiRawStreamServerToolChunk = {
+			...started,
+			phase: "completed",
+			result: [{ url: "https://example.com" }],
+		}
+
+		const first = normalizer.normalize(started)
+		const final = normalizer.normalize(completed)
+
+		expect(first.type).toBe("server_tool")
+		expect(final.type).toBe("server_tool")
+		if (first.type !== "server_tool" || final.type !== "server_tool") {
+			throw new Error("Expected server tool chunks")
+		}
+		expect(first.dline_tid).toBe("dline_tid_SERVER_TRACE")
+		expect(final.dline_tid).toBe(first.dline_tid)
+		expect(final.function_id).toBe("ws_1")
 	})
 })

@@ -1,11 +1,17 @@
 import type { ClineProviderMetadata } from "@shared/messages/content"
+import type { ServerTool } from "@shared/proto/dline/models/metadata"
 
 export type ApiStream = AsyncGenerator<ApiProviderStreamChunk>
 export type ApiRawStream = AsyncGenerator<ApiProviderStreamChunk>
 export type ApiCanonicalStream = AsyncGenerator<ApiStreamChunk>
-export type ApiProviderStreamChunk = ApiStreamChunk | ApiRawStreamToolCallsChunk
+export type ApiProviderStreamChunk = ApiStreamChunk | ApiRawStreamToolCallsChunk | ApiRawStreamServerToolChunk
 export type ApiRawStreamChunk = ApiProviderStreamChunk
-export type ApiStreamChunk = ApiStreamTextChunk | ApiStreamThinkingChunk | ApiStreamUsageChunk | ApiStreamToolCallsChunk
+export type ApiStreamChunk =
+	| ApiStreamTextChunk
+	| ApiStreamThinkingChunk
+	| ApiStreamUsageChunk
+	| ApiStreamToolCallsChunk
+	| ApiStreamServerToolChunk
 
 export interface ApiStreamTextChunk {
 	type: "text"
@@ -28,7 +34,34 @@ export interface ApiStreamUsageChunk {
 	cacheReadTokens?: number
 	thoughtsTokenCount?: number // openrouter
 	totalCost?: number // openrouter
+	serverToolUsage?: {
+		webSearchRequests?: number
+	}
 	provider_metadata?: ClineProviderMetadata
+}
+
+export type ApiServerToolPhase = "started" | "in_progress" | "searching" | "completed" | "failed"
+
+interface ApiServerToolChunkBase {
+	type: "server_tool"
+	/** Provider-native identity for the hosted invocation. */
+	function_id: string
+	tool: ServerTool
+	phase: ApiServerToolPhase
+	input?: unknown
+	result?: unknown
+	error?: unknown
+	provider_metadata?: ClineProviderMetadata
+}
+
+export interface ApiRawStreamServerToolChunk extends ApiServerToolChunkBase {
+	/** Dline trace identity is assigned by the stream normalizer. */
+	dline_tid?: never
+}
+
+export interface ApiStreamServerToolChunk extends ApiServerToolChunkBase {
+	/** Dline trace identity for the complete hosted lifecycle. */
+	dline_tid: string
 }
 
 export interface ApiRawStreamToolCallsChunk {

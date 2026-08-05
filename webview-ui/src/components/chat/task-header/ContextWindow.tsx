@@ -20,7 +20,7 @@ interface ContextWindowProgressProps extends ContextWindowInfoProps {
 	useAutoCondense: boolean
 	lastApiReqTotalTokens?: number
 	contextWindow?: number
-	onSendMessage?: (command: string, files: string[], images: string[]) => void
+	onCompactTask?: () => Promise<boolean>
 }
 
 const ConfirmationDialog = memo<{
@@ -55,7 +55,7 @@ ConfirmationDialog.displayName = "ConfirmationDialog"
 const ContextWindow: React.FC<ContextWindowProgressProps> = ({
 	contextWindow = 0,
 	lastApiReqTotalTokens = 0,
-	onSendMessage,
+	onCompactTask,
 	useAutoCondense,
 	tokensIn,
 	tokensOut,
@@ -76,13 +76,14 @@ const ContextWindow: React.FC<ContextWindowProgressProps> = ({
 	)
 
 	const handleConfirm = useCallback(
-		(e: React.MouseEvent) => {
+		async (e: React.MouseEvent) => {
 			e.preventDefault()
 			e.stopPropagation()
-			onSendMessage?.("/compact", [], [])
-			setConfirmationNeeded(false)
+			if (await onCompactTask?.()) {
+				setConfirmationNeeded(false)
+			}
 		},
-		[onSendMessage],
+		[onCompactTask],
 	)
 
 	const handleCancel = useCallback((e: React.MouseEvent) => {
@@ -115,6 +116,12 @@ const ContextWindow: React.FC<ContextWindowProgressProps> = ({
 	}, [])
 
 	// Close tooltip when clicking outside
+	useEffect(() => {
+		if (!onCompactTask) {
+			setConfirmationNeeded(false)
+		}
+	}, [onCompactTask])
+
 	useEffect(() => {
 		const handleClickOutside = (event: MouseEvent) => {
 			const target = event.target as Element
@@ -179,7 +186,7 @@ const ContextWindow: React.FC<ContextWindowProgressProps> = ({
 						{formatTokenNumber(tokenData.max)}
 					</span>
 				</div>
-				<CompactTaskButton onClick={handleCompactClick} />
+				{onCompactTask && <CompactTaskButton onClick={handleCompactClick} />}
 			</div>
 			{confirmationNeeded && <ConfirmationDialog onCancel={handleCancel} onConfirm={handleConfirm} />}
 		</div>

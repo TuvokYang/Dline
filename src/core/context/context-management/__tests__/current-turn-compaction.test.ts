@@ -2,7 +2,7 @@ import { expect } from "chai"
 import { describe, it } from "vitest"
 import { shouldDeferCurrentTurn, shouldRestoreDeferredTurn } from "../current-turn-compaction"
 
-const CONTEXT_WINDOW = 272_000
+const DEFAULT_TRIGGER_TOKENS = 261_340
 
 /**
  * Create a tool result block with controllable payload size.
@@ -44,7 +44,7 @@ describe("current-turn compaction boundary", () => {
 		const toolPayload = "x".repeat(140_000)
 
 		const shouldDefer = shouldDeferCurrentTurn({
-			contextWindow: CONTEXT_WINDOW,
+			triggerTokens: DEFAULT_TRIGGER_TOKENS,
 			previousTokens,
 			userContent: [createToolResult("toolu_execute", `[execute_command] Result:\n${toolPayload}`)],
 		})
@@ -57,7 +57,7 @@ describe("current-turn compaction boundary", () => {
 		const textPayload = "x".repeat(140_000)
 
 		const shouldDefer = shouldDeferCurrentTurn({
-			contextWindow: CONTEXT_WINDOW,
+			triggerTokens: DEFAULT_TRIGGER_TOKENS,
 			previousTokens,
 			userContent: [createText(textPayload)],
 		})
@@ -70,7 +70,7 @@ describe("current-turn compaction boundary", () => {
 		const toolPayload = "x".repeat(20_000)
 
 		const shouldDefer = shouldDeferCurrentTurn({
-			contextWindow: CONTEXT_WINDOW,
+			triggerTokens: DEFAULT_TRIGGER_TOKENS,
 			previousTokens,
 			userContent: [createToolResult("toolu_search", `[search_files] Result:\n${toolPayload}`)],
 		})
@@ -82,9 +82,19 @@ describe("current-turn compaction boundary", () => {
 		const previousTokens = 263_000
 
 		const shouldDefer = shouldDeferCurrentTurn({
-			contextWindow: CONTEXT_WINDOW,
+			triggerTokens: DEFAULT_TRIGGER_TOKENS,
 			previousTokens,
 			userContent: [createToolResult("toolu_execute", "[execute_command] Result:\nsmall current result")],
+		})
+
+		expect(shouldDefer).to.equal(true)
+	})
+
+	it("uses the caller-resolved custom trigger", () => {
+		const shouldDefer = shouldDeferCurrentTurn({
+			triggerTokens: 160_000,
+			previousTokens: 150_000,
+			userContent: [createToolResult("toolu_execute", "x".repeat(40_000))],
 		})
 
 		expect(shouldDefer).to.equal(true)

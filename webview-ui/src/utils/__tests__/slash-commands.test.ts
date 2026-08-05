@@ -1,7 +1,13 @@
 import type { McpServer } from "@shared/mcp"
 import { getBuiltInSlashCommands } from "@shared/slashCommands"
 import { describe, expect, it } from "vitest"
-import { getMatchingSlashCommands, getMcpPromptCommands, slashCommandRegex, validateSlashCommand } from "../slash-commands"
+import {
+	getMatchingSlashCommands,
+	getMcpPromptCommands,
+	getSkillCommands,
+	slashCommandRegex,
+	validateSlashCommand,
+} from "../slash-commands"
 
 // Helper to create a mock MCP server
 function createMockMcpServer(overrides: Partial<McpServer> = {}): McpServer {
@@ -153,6 +159,26 @@ describe("slash-commands", () => {
 			]
 			const result = getMcpPromptCommands(servers)
 			expect(result).toEqual([])
+		})
+	})
+
+	describe("getSkillCommands", () => {
+		it("uses host-provided skill metadata instead of toggle paths", () => {
+			const togglePath = "C:\\workspace\\.agents\\skills\\folder-name\\SKILL.md"
+			const result = getSkillCommands({ [togglePath]: true }, {}, undefined, undefined, [
+				{ name: "frontmatter-name", description: "Parsed by the host", section: "skill" },
+			])
+
+			expect(result).toEqual([{ name: "frontmatter-name", description: "Parsed by the host", section: "skill" }])
+			expect(JSON.stringify(result)).not.toContain(togglePath)
+		})
+
+		it("falls back to the skill folder name without exposing SKILL.md paths", () => {
+			const togglePath = "C:\\workspace\\.agents\\skills\\folder-name\\SKILL.md"
+			const result = getSkillCommands({ [togglePath]: true })
+
+			expect(result).toEqual([{ name: "folder-name", section: "skill" }])
+			expect(JSON.stringify(result)).not.toContain("SKILL.md")
 		})
 	})
 

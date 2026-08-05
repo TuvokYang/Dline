@@ -90,6 +90,47 @@ describe("ChatRow command cancellation", () => {
 		)
 
 		expect(screen.getByText("Cancelled")).toBeInTheDocument()
+		expect(screen.getByTestId("command-status-icon")).toHaveClass("lucide-circle-slash", "text-description")
+		expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull()
+	})
+
+	it("renders an interrupted historical command without a cancellation action", () => {
+		render(
+			<ChatRowContent
+				{...baseProps}
+				message={{
+					ts: 4,
+					type: "say",
+					say: "command",
+					text: "sleep 10",
+					commandStatus: "interrupted",
+					activityId: "command-1",
+				}}
+			/>,
+		)
+
+		expect(screen.getByText("Interrupted")).toBeInTheDocument()
+		expect(screen.getByTestId("command-status-icon")).toHaveClass("lucide-circle-slash", "text-description")
+		expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull()
+	})
+
+	it("renders a skipped command with the neutral stopped icon", () => {
+		render(
+			<ChatRowContent
+				{...baseProps}
+				message={{
+					ts: 5,
+					type: "say",
+					say: "command",
+					text: "sleep 10",
+					commandStatus: "skipped",
+					activityId: "command-1",
+				}}
+			/>,
+		)
+
+		expect(screen.getByText("Skipped")).toBeInTheDocument()
+		expect(screen.getByTestId("command-status-icon")).toHaveClass("lucide-circle-slash", "text-description")
 		expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull()
 	})
 })

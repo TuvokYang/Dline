@@ -35,6 +35,7 @@ describe("reduceInteraction", () => {
 		["completion", "reply"],
 		["resume", "resume"],
 		["tool_approval", "reject"],
+		["condense", "reject"],
 	] as const)("accepts the %s Enter action with a draft", (kind, actionId) => {
 		const result = reduceInteraction(awaiting(kind), {
 			taskId: "task-1",
@@ -59,6 +60,18 @@ describe("reduceInteraction", () => {
 		})
 
 		expect(result).toEqual({ accepted: false, next: state, error: { code: "invalid_interaction_payload" } })
+	})
+
+	it("accepts manual condense confirmation without a draft payload", () => {
+		const result = reduceInteraction(awaiting("condense"), {
+			taskId: "task-1",
+			turnId: "turn-1",
+			interactionId: "interaction-1",
+			actionId: "confirm_utility",
+			stateRevision: 4,
+		})
+
+		expect(result).toMatchObject({ accepted: true, next: { status: "resolving" } })
 	})
 
 	it("rejects stale identity without mutation", () => {

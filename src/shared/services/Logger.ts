@@ -3,7 +3,7 @@ import { envFlagEnabled } from "../env"
 /**
  * Simple Logger utility for the extension's backend code.
  *
- * Log level can be controlled via CLINE_LOG_LEVEL environment variable:
+ * Log level can be controlled via DLINE_LOG_LEVEL environment variable:
  *   - "error": only errors
  *   - "warn": errors + warnings
  *   - "info": errors + warnings + info + log (default)
@@ -22,7 +22,7 @@ export class Logger {
 	private static subscribers: Set<(msg: string) => void> = new Set()
 
 	private static readLogLevel(): "error" | "warn" | "info" | "debug" | "trace" {
-		const raw = process.env.CLINE_LOG_LEVEL?.toLowerCase()
+		const raw = process.env.DLINE_LOG_LEVEL?.toLowerCase()
 		if (raw === "debug" || raw === "trace") {
 			return raw
 		}

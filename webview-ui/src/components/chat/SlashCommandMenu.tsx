@@ -21,6 +21,7 @@ interface SlashCommandMenuProps {
 	remoteSkills?: any[]
 	remoteSkillsToggles?: Record<string, boolean>
 	workflowDescriptions?: Record<string, string>
+	availableSkillCommands?: SlashCommand[]
 }
 
 const SlashCommandMenu: React.FC<SlashCommandMenuProps> = ({
@@ -39,6 +40,7 @@ const SlashCommandMenu: React.FC<SlashCommandMenuProps> = ({
 	remoteSkills,
 	remoteSkillsToggles,
 	workflowDescriptions,
+	availableSkillCommands,
 }) => {
 	const menuRef = useRef<HTMLDivElement>(null)
 
@@ -55,6 +57,7 @@ const SlashCommandMenu: React.FC<SlashCommandMenuProps> = ({
 		remoteSkills,
 		remoteSkillsToggles,
 		workflowDescriptions,
+		availableSkillCommands,
 	)
 	const defaultCommands = filteredCommands.filter((cmd) => cmd.section === "default" || !cmd.section)
 	const workflowCommands = filteredCommands.filter((cmd) => cmd.section === "workflow")

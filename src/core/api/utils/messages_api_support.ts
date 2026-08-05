@@ -1,33 +1,67 @@
 import { Anthropic } from "@anthropic-ai/sdk"
-import { Tool as AnthropicTool } from "@anthropic-ai/sdk/resources/index"
+import type { BetaRawMessageStreamEvent } from "@anthropic-ai/sdk/resources/beta/messages/messages"
+import {
+	Tool as AnthropicTool,
+	type ToolUnion as AnthropicToolUnion,
+	type WebSearchTool20250305,
+} from "@anthropic-ai/sdk/resources/messages/messages"
 import type { ChatCompletionTool as OpenAITool } from "openai/resources/chat/completions"
+import { ServerTool } from "@/shared/proto/dline/models/metadata"
 import { ApiStream } from "../transform/stream"
 
-export async function* handleAnthropicMessagesApiStreamResponse(
-	stream: AsyncIterable<Anthropic.RawMessageStreamEvent>,
-): ApiStream {
+type AnthropicMessagesStreamEvent = Anthropic.RawMessageStreamEvent | BetaRawMessageStreamEvent
+
+function getServerToolUsage(usage: { server_tool_use?: { web_search_requests?: number } | null }) {
+	const webSearchRequests = usage.server_tool_use?.web_search_requests
+	return typeof webSearchRequests === "number" ? { webSearchRequests } : undefined
+}
+
+/** Merge resolved hosted declarations with local Anthropic tools without exposing duplicate web search mechanisms. */
+export function mergeAnthropicServerTools(
+	tools?: readonly AnthropicTool[],
+	serverTools?: readonly ServerTool[],
+): AnthropicToolUnion[] | undefined {
+	const hostedWebSearch = serverTools?.includes(ServerTool.WEB_SEARCH) === true
+	const merged: AnthropicToolUnion[] = (tools ?? [])
+		.filter((tool) => !hostedWebSearch || tool.name !== "web_search")
+		.map((tool) => ({ ...tool }))
+
+	if (hostedWebSearch) {
+		merged.push({ type: "web_search_20250305", name: "web_search" } satisfies WebSearchTool20250305)
+	}
+
+	return merged.length > 0 ? merged : undefined
+}
+
+export async function* handleAnthropicMessagesApiStreamResponse(stream: AsyncIterable<AnthropicMessagesStreamEvent>): ApiStream {
 	const lastStartedToolCall = { id: "", name: "", arguments: "" }
+	const activeServerToolCall = { id: "", name: "", arguments: "", input: undefined as unknown }
 
 	for await (const chunk of stream) {
 		switch (chunk?.type) {
 			case "message_start": {
 				const usage = chunk.message.usage
+				const serverToolUsage = getServerToolUsage(usage)
 				yield {
 					type: "usage",
 					inputTokens: usage.input_tokens || 0,
 					outputTokens: usage.output_tokens || 0,
 					cacheWriteTokens: usage.cache_creation_input_tokens || undefined,
 					cacheReadTokens: usage.cache_read_input_tokens || undefined,
+					...(serverToolUsage === undefined ? {} : { serverToolUsage }),
 				}
 				break
 			}
-			case "message_delta":
+			case "message_delta": {
+				const serverToolUsage = getServerToolUsage(chunk.usage)
 				yield {
 					type: "usage",
 					inputTokens: 0,
 					outputTokens: chunk.usage.output_tokens || 0,
+					...(serverToolUsage === undefined ? {} : { serverToolUsage }),
 				}
 				break
+			}
 			case "message_stop":
 				break
 			case "content_block_start":
@@ -49,11 +83,45 @@ export async function* handleAnthropicMessagesApiStreamResponse(
 						break
 					case "tool_use":
 						if (chunk.content_block.id && chunk.content_block.name) {
+							activeServerToolCall.id = ""
+							activeServerToolCall.name = ""
+							activeServerToolCall.arguments = ""
+							activeServerToolCall.input = undefined
 							lastStartedToolCall.id = chunk.content_block.id
 							lastStartedToolCall.name = chunk.content_block.name
 							lastStartedToolCall.arguments = ""
 						}
 						break
+					case "server_tool_use":
+						if (chunk.content_block.name === "web_search") {
+							lastStartedToolCall.id = ""
+							lastStartedToolCall.name = ""
+							lastStartedToolCall.arguments = ""
+							activeServerToolCall.id = chunk.content_block.id
+							activeServerToolCall.name = chunk.content_block.name
+							activeServerToolCall.arguments = ""
+							activeServerToolCall.input = chunk.content_block.input
+							yield {
+								type: "server_tool",
+								function_id: chunk.content_block.id,
+								tool: ServerTool.WEB_SEARCH,
+								phase: "started",
+								input: chunk.content_block.input,
+							}
+						}
+						break
+					case "web_search_tool_result": {
+						const result = chunk.content_block.content
+						const failed = !Array.isArray(result) && result.type === "web_search_tool_result_error"
+						yield {
+							type: "server_tool",
+							function_id: chunk.content_block.tool_use_id,
+							tool: ServerTool.WEB_SEARCH,
+							phase: failed ? "failed" : "completed",
+							...(failed ? { error: result } : { result }),
+						}
+						break
+					}
 					case "text":
 						if (chunk.index > 0) {
 							yield {
@@ -92,7 +160,9 @@ export async function* handleAnthropicMessagesApiStreamResponse(
 						}
 						break
 					case "input_json_delta":
-						if (lastStartedToolCall.id && lastStartedToolCall.name && chunk.delta.partial_json) {
+						if (activeServerToolCall.id && activeServerToolCall.name && chunk.delta.partial_json) {
+							activeServerToolCall.arguments += chunk.delta.partial_json
+						} else if (lastStartedToolCall.id && lastStartedToolCall.name && chunk.delta.partial_json) {
 							yield {
 								type: "tool_calls",
 								function_id: lastStartedToolCall.id,
@@ -107,24 +177,57 @@ export async function* handleAnthropicMessagesApiStreamResponse(
 						break
 				}
 				break
-			case "content_block_stop":
+			case "content_block_stop": {
+				if (activeServerToolCall.id && activeServerToolCall.name === "web_search" && activeServerToolCall.arguments) {
+					try {
+						const streamedInput = JSON.parse(activeServerToolCall.arguments) as unknown
+						const initialInput = activeServerToolCall.input
+						const input =
+							initialInput &&
+							typeof initialInput === "object" &&
+							streamedInput &&
+							typeof streamedInput === "object" &&
+							!Array.isArray(initialInput) &&
+							!Array.isArray(streamedInput)
+								? { ...initialInput, ...streamedInput }
+								: streamedInput
+						yield {
+							type: "server_tool",
+							function_id: activeServerToolCall.id,
+							tool: ServerTool.WEB_SEARCH,
+							phase: "searching",
+							input,
+						}
+					} catch {
+						// Ignore malformed partial input; the provider result still completes the lifecycle.
+					}
+				}
 				lastStartedToolCall.id = ""
 				lastStartedToolCall.name = ""
 				lastStartedToolCall.arguments = ""
+				activeServerToolCall.id = ""
+				activeServerToolCall.name = ""
+				activeServerToolCall.arguments = ""
+				activeServerToolCall.input = undefined
 				break
+			}
 		}
 	}
 }
 
-export function convertOpenAIToolsToAnthropicTools(tools?: OpenAITool[]): AnthropicTool[] | undefined {
-	if (!tools?.length) {
-		return undefined
-	}
+export function convertOpenAIToolsToAnthropicTools(
+	tools?: OpenAITool[],
+	serverTools?: readonly ServerTool[],
+): AnthropicToolUnion[] | undefined {
+	const hostedWebSearch = serverTools?.includes(ServerTool.WEB_SEARCH) === true
 
 	const anthropicTools: AnthropicTool[] = []
 
-	for (const tool of tools) {
+	for (const tool of tools ?? []) {
 		if (tool?.type !== "function" || !tool.function?.name) {
+			continue
+		}
+		if (hostedWebSearch && tool.function.name === "web_search") {
 			continue
 		}
 
@@ -143,5 +246,5 @@ export function convertOpenAIToolsToAnthropicTools(tools?: OpenAITool[]): Anthro
 		})
 	}
 
-	return anthropicTools.length > 0 ? anthropicTools : undefined
+	return mergeAnthropicServerTools(anthropicTools, serverTools)
 }

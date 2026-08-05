@@ -1,4 +1,4 @@
-import { DEFAULT_CHAT_INPUT_SEND_SHORTCUT } from "@shared/ChatInputSendShortcut"
+import { DEFAULT_CHAT_INPUT_SEND_SHORTCUT, getChatInputSendShortcutLabel } from "@shared/ChatInputSendShortcut"
 import { mentionRegex, mentionRegexGlobal } from "@shared/context-mentions"
 import type { ClineAsk } from "@shared/ExtensionMessage"
 import { EmptyRequest, StringRequest } from "@shared/proto/dline/common"
@@ -14,7 +14,7 @@ import styled from "styled-components"
 import ContextMenu from "@/components/chat/ContextMenu"
 import { CHAT_CONSTANTS } from "@/components/chat/chat-view/constants"
 import { ModeSwitchDialog } from "@/components/chat/mode-switch/ModeSwitchDialog"
-import { type ModeSwitchDraft, useModeSwitch } from "@/components/chat/mode-switch/useModeSwitch"
+import { type ModeSwitchDraft, shouldAttachModeSwitchDraft, useModeSwitch } from "@/components/chat/mode-switch/useModeSwitch"
 import SlashCommandMenu from "@/components/chat/SlashCommandMenu"
 import ModelSwitcher from "@/components/chat/task-header/ModelSwitcher"
 import Thumbnails from "@/components/common/Thumbnails"
@@ -79,6 +79,8 @@ interface ChatTextAreaProps {
 	inputValue: string
 	activeQuote: string | null
 	setInputValue: (value: string) => void
+	undoInputValue: () => string | undefined
+	redoInputValue: () => string | undefined
 	sendingDisabled: boolean
 	placeholderText: string
 	selectedFiles: string[]
@@ -208,6 +210,8 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 		{
 			inputValue,
 			setInputValue,
+			undoInputValue,
+			redoInputValue,
 			sendingDisabled,
 			placeholderText,
 			selectedFiles,
@@ -268,23 +272,32 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 		const [selectedSlashCommandsIndex, setSelectedSlashCommandsIndex] = useState(0)
 		const [slashCommandsQuery, setSlashCommandsQuery] = useState("")
 		const [workflowDescriptions, setWorkflowDescriptions] = useState<Record<string, string>>({})
+		const [availableSkillCommands, setAvailableSkillCommands] = useState<SlashCommand[] | undefined>(undefined)
 		const slashCommandsMenuContainerRef = useRef<HTMLDivElement>(null)
 
-		// Fetch workflow descriptions from backend
-		// Re-fetch when workflow toggles change (e.g., after adding new workflow files via Manage dialog)
-		useEffect(() => {
-			SlashServiceClient.getAvailableSlashCommands(EmptyRequest.create({}))
-				.then((res) => {
-					const map: Record<string, string> = {}
-					for (const cmd of res.commands) {
-						if (cmd.section === "workflow" && cmd.description) {
-							map[cmd.name] = cmd.description
-						}
-					}
-					setWorkflowDescriptions(map)
-				})
-				.catch(() => {})
+		const refreshSlashCommandMetadata = useCallback(async () => {
+			const response = await SlashServiceClient.getAvailableSlashCommands(EmptyRequest.create({}))
+			const descriptions: Record<string, string> = {}
+			const skills: SlashCommand[] = []
+			for (const command of response.commands) {
+				if (command.section === "workflow" && command.description) {
+					descriptions[command.name] = command.description
+				} else if (command.section === "skill") {
+					skills.push({
+						name: command.name,
+						description: command.description || undefined,
+						section: "skill",
+					})
+				}
+			}
+			setWorkflowDescriptions(descriptions)
+			setAvailableSkillCommands(skills)
 		}, [])
+
+		// Fetch names and descriptions parsed by the extension host.
+		useEffect(() => {
+			void refreshSlashCommandMetadata().catch(() => {})
+		}, [refreshSlashCommandMetadata])
 
 		// Refresh workflow toggles when the slash command menu opens,
 		// so newly added workflow files are discovered immediately.
@@ -294,7 +307,7 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 			}
 
 			FileServiceClient.refreshRules({} as EmptyRequest)
-				.then((response: RefreshedDlineToggles) => {
+				.then(async (response: RefreshedDlineToggles) => {
 					void reconcileCapabilityToggles({
 						...(response.localWorkflowToggles?.toggles && {
 							localWorkflowToggles: response.localWorkflowToggles.toggles,
@@ -321,6 +334,7 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 					if (response.globalSkillsToggles?.toggles) {
 						setGlobalSkillsToggles(response.globalSkillsToggles.toggles)
 					}
+					await refreshSlashCommandMetadata()
 				})
 				.catch(() => {})
 		}, [
@@ -330,6 +344,7 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 			setLocalSkillsToggles,
 			setGlobalSkillsToggles,
 			reconcileCapabilityToggles,
+			refreshSlashCommandMetadata,
 		])
 
 		const [thumbnailsHeight, setThumbnailsHeight] = useState(0)
@@ -552,6 +567,8 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 		)
 		const handleKeyDown = useCallback(
 			(event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+				// Safari does not support InputEvent.isComposing (always false), so we need to fallback to keyCode === 229 for it
+				const isComposing = isSafari ? event.nativeEvent.keyCode === 229 : (event.nativeEvent?.isComposing ?? false)
 				const isSelectAllShortcut =
 					(event.metaKey || event.ctrlKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "a"
 				if (isSelectAllShortcut) {
@@ -560,6 +577,25 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 					const textArea = event.currentTarget
 					textArea.setSelectionRange(0, textArea.value.length)
 					setCursorPosition(0)
+					return
+				}
+
+				const normalizedKey = event.key.toLowerCase()
+				const hasHistoryModifier = (event.metaKey || event.ctrlKey) && !event.altKey
+				const isUndoShortcut = hasHistoryModifier && !event.shiftKey && normalizedKey === "z"
+				const isRedoShortcut =
+					hasHistoryModifier &&
+					((!event.shiftKey && normalizedKey === "y") || (event.shiftKey && normalizedKey === "z"))
+				if (!isComposing && (isUndoShortcut || isRedoShortcut)) {
+					event.preventDefault()
+					event.stopPropagation()
+					const restoredValue = isUndoShortcut ? undoInputValue() : redoInputValue()
+					if (restoredValue !== undefined) {
+						setShowContextMenu(false)
+						setShowSlashCommandsMenu(false)
+						setCursorPosition(restoredValue.length)
+						setIntendedCursorPosition(restoredValue.length)
+					}
 					return
 				}
 
@@ -586,6 +622,8 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 								effectiveGlobalSkillsToggles,
 								remoteConfigSettings?.remoteGlobalSkills,
 								effectiveRemoteSkillsToggles,
+								undefined,
+								availableSkillCommands,
 							)
 
 							if (allCommands.length === 0) {
@@ -615,6 +653,8 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 							effectiveGlobalSkillsToggles,
 							remoteConfigSettings?.remoteGlobalSkills,
 							effectiveRemoteSkillsToggles,
+							undefined,
+							availableSkillCommands,
 						)
 						if (commands.length > 0) {
 							handleSlashCommandsSelect(commands[selectedSlashCommandsIndex])
@@ -681,8 +721,6 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 					}
 				}
 
-				// Safari does not support InputEvent.isComposing (always false), so we need to fallback to keyCode === 229 for it
-				const isComposing = isSafari ? event.nativeEvent.keyCode === 229 : (event.nativeEvent?.isComposing ?? false)
 				if (shouldSendChatInput(event, chatInputSendShortcut ?? DEFAULT_CHAT_INPUT_SEND_SHORTCUT, isComposing)) {
 					event.preventDefault()
 
@@ -769,6 +807,8 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 				inputValue,
 				cursorPosition,
 				setInputValue,
+				undoInputValue,
+				redoInputValue,
 				justDeletedSpaceAfterMention,
 				queryItems,
 				fileSearchResults,
@@ -790,6 +830,7 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 				effectiveLocalSkillsToggles,
 				justDeletedSpaceAfterSlashCommand,
 				effectiveGlobalSkillsToggles,
+				availableSkillCommands,
 			],
 		)
 
@@ -1105,6 +1146,8 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 					effectiveGlobalSkillsToggles,
 					remoteConfigSettings?.remoteGlobalSkills,
 					effectiveRemoteSkillsToggles,
+					undefined,
+					availableSkillCommands,
 				)
 
 				if (isValidCommand) {
@@ -1127,6 +1170,7 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 			effectiveGlobalSkillsToggles,
 			effectiveRemoteSkillsToggles,
 			remoteConfigSettings,
+			availableSkillCommands,
 		])
 
 		useLayoutEffect(() => {
@@ -1148,7 +1192,7 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 			[updateCursorPosition],
 		)
 
-		const attachDraft = clineAsk === "make_plan" || (mode === "plan" && clineAsk === "qna_respond")
+		const attachDraft = shouldAttachModeSwitchDraft(clineAsk)
 		const modeSwitchFlow = useModeSwitch({
 			mode,
 			stateRevision,
@@ -1512,6 +1556,7 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 					{showSlashCommandsMenu && (
 						<div ref={slashCommandsMenuContainerRef}>
 							<SlashCommandMenu
+								availableSkillCommands={availableSkillCommands}
 								globalSkillsToggles={effectiveGlobalSkillsToggles}
 								globalWorkflowToggles={effectiveGlobalWorkflowToggles}
 								localSkillsToggles={effectiveLocalSkillsToggles}
@@ -1669,8 +1714,13 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 						className="absolute flex items-end bottom-4.5 right-5 z-10 h-8 text-xs"
 						style={{ height: textAreaBaseHeight }}>
 						<div className="flex flex-row items-center">
-							<div
-								className={cn("input-icon-button", { disabled: sendingDisabled }, "codicon codicon-send text-sm")}
+							<button
+								aria-disabled={sendingDisabled}
+								aria-label="Send message"
+								className={cn(
+									"input-icon-button codicon codicon-send h-5 w-5 appearance-none border-0 bg-transparent p-0 text-sm text-inherit",
+									{ disabled: sendingDisabled },
+								)}
 								data-testid="send-button"
 								onClick={() => {
 									if (!sendingDisabled) {
@@ -1684,6 +1734,8 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 										})
 									}
 								}}
+								title={`Send message (${getChatInputSendShortcutLabel(chatInputSendShortcut)})`}
+								type="button"
 							/>
 						</div>
 					</div>

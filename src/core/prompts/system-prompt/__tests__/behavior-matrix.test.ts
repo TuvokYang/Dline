@@ -1,5 +1,10 @@
 import { ClineDefaultTool } from "@shared/tools"
 import { describe, expect, it } from "vitest"
+import {
+	DISABLED_WEB_SEARCH_ROUTING_PLAN,
+	HOSTED_WEB_SEARCH_ROUTING_PLAN,
+	LOCAL_WEB_SEARCH_ROUTING_PLAN,
+} from "../../__tests__/web-search-routing-fixtures"
 import { SystemPromptGenerator } from "../../generators/SystemPromptGenerator"
 import { ToolPromptGenerator } from "../../generators/ToolPromptGenerator"
 import { PromptProfile } from "../../profiles/types"
@@ -32,6 +37,7 @@ const BASE_CONTEXT = {
 	skills: [{ name: "review", description: "Review code changes.", path: "/skills/review.md", source: "project" }],
 	subagentsEnabled: true,
 	clineWebToolsEnabled: true,
+	webSearchRoutingPlan: LOCAL_WEB_SEARCH_ROUTING_PLAN,
 	enableParallelToolCalling: true,
 	yoloModeToggled: false,
 	isCliEnvironment: false,
@@ -121,6 +127,46 @@ describe("Standard/Lite transport and capability behavior matrix", () => {
 		expect(exposes(disabled, transport, "browser_action")).toBe(false)
 	})
 
+	it.each([
+		"native",
+		"xml",
+	] as const)("projects mutually exclusive local, hosted, and disabled web search for Standard/%s", async (transport) => {
+		const local = await generate(PromptProfile.Standard, transport, {
+			webSearchRoutingPlan: LOCAL_WEB_SEARCH_ROUTING_PLAN,
+		})
+		const hosted = await generate(PromptProfile.Standard, transport, {
+			webSearchRoutingPlan: HOSTED_WEB_SEARCH_ROUTING_PLAN,
+		})
+		const disabled = await generate(PromptProfile.Standard, transport, {
+			webSearchRoutingPlan: DISABLED_WEB_SEARCH_ROUTING_PLAN,
+		})
+
+		expect(exposes(local, transport, "web_fetch")).toBe(true)
+		expect(exposes(local, transport, "web_search")).toBe(true)
+		expect(local.systemPrompt).toContain("local executor")
+		expect(local.systemPrompt).not.toContain("provider-hosted web search")
+
+		expect(exposes(hosted, transport, "web_fetch")).toBe(true)
+		expect(exposes(hosted, transport, "web_search")).toBe(false)
+		expect(hosted.systemPrompt).toContain("provider-hosted web search")
+		expect(hosted.systemPrompt).not.toContain("local executor")
+
+		expect(exposes(disabled, transport, "web_fetch")).toBe(true)
+		expect(exposes(disabled, transport, "web_search")).toBe(false)
+		expect(disabled.systemPrompt).not.toContain("provider-hosted web search")
+		expect(disabled.systemPrompt).not.toContain("local executor")
+	})
+
+	it.each(["native", "xml"] as const)("does not leak hosted web search into Lite/%s", async (transport) => {
+		const hosted = await generate(PromptProfile.Lite, transport, {
+			webSearchRoutingPlan: HOSTED_WEB_SEARCH_ROUTING_PLAN,
+		})
+
+		expect(exposes(hosted, transport, "web_search")).toBe(false)
+		expect(hosted.systemPrompt).not.toContain("provider-hosted web search")
+		expect(hosted.systemPrompt).not.toContain("local executor")
+	})
+
 	it.each(["native", "xml"] as const)("requires a connected enabled MCP server for Standard/%s", async (transport) => {
 		const disconnected = await generate(PromptProfile.Standard, transport, {
 			mcpHub: {
@@ -162,6 +208,7 @@ describe("Standard/Lite transport and capability behavior matrix", () => {
 			focusChainSettings: { enabled: false, remindClineInterval: 0 },
 			subagentsEnabled: false,
 			clineWebToolsEnabled: false,
+			webSearchRoutingPlan: DISABLED_WEB_SEARCH_ROUTING_PLAN,
 			isCliEnvironment: true,
 			yoloModeToggled: true,
 			enableParallelToolCalling: false,

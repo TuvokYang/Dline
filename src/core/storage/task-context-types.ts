@@ -1,4 +1,6 @@
+import type { ApiFormat, ServerTool } from "@shared/proto/dline/models/metadata"
 import type { ClineTool } from "@shared/tools"
+import type { WebSearchRoute } from "@/core/api/server-tools"
 
 export type SystemPromptRefreshReason = "task_start" | "manual" | "post_compaction" | "capability_change" | "mode_switch"
 
@@ -45,4 +47,12 @@ export interface FrozenPromptBuilderInfo {
 	readonly nativeTools: boolean
 	/** Optional for backward compatibility with caches written before focus-aware prompts. */
 	readonly focusChainEnabled?: boolean
+	/** Selected wire protocol used to resolve provider-hosted tools. */
+	readonly apiFormat?: ApiFormat
+	/** Active provider-hosted tools included in the prompt contract. */
+	readonly serverTools?: readonly ServerTool[]
+	/** Global Web Tools setting used to build the frozen prompt. */
+	readonly webToolsEnabled?: boolean
+	/** Effective request route used to project local or hosted Web Search. */
+	readonly webSearchRoute?: WebSearchRoute
 }

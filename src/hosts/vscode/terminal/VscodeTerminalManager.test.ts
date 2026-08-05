@@ -1,6 +1,6 @@
 import { WINDOWS_POWERSHELL_LEGACY_PATH } from "@utils/shell"
-import { afterEach, beforeEach, describe, expect, it } from "vitest"
-import type * as vscode from "vscode"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import * as vscode from "vscode"
 import { VscodeTerminalManager } from "./VscodeTerminalManager"
 import { TerminalRegistry } from "./VscodeTerminalRegistry"
 
@@ -66,6 +66,32 @@ describe("VscodeTerminalManager Windows shell selection", () => {
 			DLINE_E2E_ENV: "configured",
 			REMOVE_ME: null,
 		})
+		manager.disposeAll()
+	})
+
+	it("runs startup initialization once when a configuration-owned terminal is created", async () => {
+		const manager = new VscodeTerminalManager()
+		const runCommand = vi
+			.spyOn(manager, "runCommand")
+			.mockImplementation(() => Promise.resolve() as unknown as ReturnType<VscodeTerminalManager["runCommand"]>)
+
+		const first = await manager.getOrCreateTerminal("C:\\workspace", {
+			configurationId: "workspace-startup-v1",
+			initializationCommand: "Initialize-DlineTerminal",
+		})
+		Object.defineProperty(first.terminal, "shellIntegration", {
+			configurable: true,
+			value: { cwd: vscode.Uri.file("C:\\workspace") },
+		})
+		const reused = await manager.getOrCreateTerminal("C:\\workspace", {
+			configurationId: "workspace-startup-v1",
+			initializationCommand: "Initialize-DlineTerminal",
+		})
+
+		expect(reused).toBe(first)
+		expect(runCommand).toHaveBeenCalledTimes(1)
+		expect(runCommand).toHaveBeenCalledWith(first, "Initialize-DlineTerminal")
+		expect(first.lastCommand).toBe("")
 		manager.disposeAll()
 	})
 })

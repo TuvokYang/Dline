@@ -26,13 +26,13 @@ const partialBlock = {
 } as const
 
 describe("SummarizeTaskHandler partial rendering", () => {
-	it("does not render an internal context compaction summary", async () => {
+	it("renders the model-produced summary for internal context compaction", async () => {
 		const handler = new SummarizeTaskHandler({} as never)
 		const { helpers, say } = createHelpers(true)
 
 		await handler.handlePartialBlock(partialBlock as never, helpers)
 
-		expect(say).not.toHaveBeenCalled()
+		expect(say).toHaveBeenCalledWith("tool", expect.stringContaining("Streaming summary"), undefined, undefined, true, 12345)
 	})
 
 	it("continues to render a user-visible summary", async () => {

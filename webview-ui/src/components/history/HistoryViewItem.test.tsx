@@ -123,6 +123,29 @@ describe("HistoryPreview", () => {
 		)
 	})
 
+	it("does not restart the initial workspace request for equivalent state snapshots", async () => {
+		extensionState.taskHistory = [historyItem("other", 1, { cwdOnTaskInitialization: "C:\\work\\other" })]
+		const { rerender } = render(<HistoryPreview showHistoryView={vi.fn()} />)
+		await waitFor(() => expect(TaskServiceClient.getTaskHistory).toHaveBeenCalledTimes(1))
+
+		extensionState.taskHistory = [...extensionState.taskHistory]
+		extensionState.workspaceRoots = extensionState.workspaceRoots.map((root) => ({ ...root }))
+		rerender(<HistoryPreview showHistoryView={vi.fn()} />)
+
+		await waitFor(() => expect(TaskServiceClient.getTaskHistory).toHaveBeenCalledTimes(1))
+	})
+
+	it("retries a transient initial workspace request failure", async () => {
+		vi.mocked(TaskServiceClient.getTaskHistory)
+			.mockRejectedValueOnce(new Error("bridge not ready"))
+			.mockResolvedValueOnce({ tasks: [historyItem("workspace", 1)], totalCount: 1 })
+
+		render(<HistoryPreview showHistoryView={vi.fn()} />)
+
+		await waitFor(() => expect(TaskServiceClient.getTaskHistory).toHaveBeenCalledTimes(2))
+		expect(await screen.findByText("Task workspace")).toBeInTheDocument()
+	})
+
 	it("shows up to ten newest tasks for the selected workspace", () => {
 		const tasks = Array.from({ length: 12 }, (_, index) => historyItem(String(index), index + 1))
 		tasks.push(historyItem("other", 100, { cwdOnTaskInitialization: "C:\\work\\other" }))

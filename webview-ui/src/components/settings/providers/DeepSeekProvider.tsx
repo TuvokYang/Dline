@@ -2,6 +2,7 @@ import type { ModelInfo } from "@shared/proto/dline/models"
 import { ApiFormat } from "@shared/proto/dline/models/metadata"
 import { BaseProviderConfig } from "@shared/proto/dline/provider/common"
 import { resolveApiFormat } from "@shared/providers/api-format"
+import { resolveProfileModelInfo } from "@shared/providers/profile-model-info"
 import { DEEPSEEK_REASONING_EFFORT_OPTIONS, resolveDeepSeekAdaptiveThinking } from "@shared/utils/reasoning-support"
 import { VSCodeCheckbox } from "@vscode/webview-ui-toolkit/react"
 import { useEffect, useRef, useState } from "react"
@@ -29,16 +30,14 @@ interface DeepSeekProviderProps {
  * Reasoning effort stored in deepseek.
  */
 export const DeepSeekProvider = ({ showModelOptions, isPopup, profile, onUpdate }: DeepSeekProviderProps) => {
-	const {
-		models: deepSeekModels,
-		defaultModelId: deepSeekDefaultModelId,
-		modelInfoSaneDefaults: deepSeekModelInfoSaneDefaults,
-	} = useProviderModels("deepseek")
+	const { models: deepSeekModels, defaultModelId: deepSeekDefaultModelId } = useProviderModels("deepseek")
 
 	const modelId = profile.modelId || deepSeekDefaultModelId
 	const pc = profile.deepseek ?? BaseProviderConfig.create()
-	const modelInfo: ModelInfo | undefined =
-		profile.modelInfo ?? (profile.modelId ? deepSeekModels[profile.modelId] : undefined) ?? deepSeekModelInfoSaneDefaults
+	const modelInfo: ModelInfo = resolveProfileModelInfo(profile, {
+		models: deepSeekModels,
+		defaultModelId: deepSeekDefaultModelId,
+	})
 
 	// Reasoning effort from deepseek
 	const profileEffort = profile.deepseek?.reasoning?.effort ?? ""

@@ -107,6 +107,107 @@ describe("FooterActions", () => {
 		expect(screen.getByRole("button", { name: "Reject" })).toBeEnabled()
 	})
 
+	it("does not submit or settle the draft for a payload-free utility action", async () => {
+		const dispatch = vi.fn(async () => ({ accepted: true, result: "accepted" }))
+		const onDraftAccepted = vi.fn()
+		const view = approvalView()
+		if (!view.activeInteraction) throw new Error("Expected active interaction")
+		view.activeInteraction = {
+			...view.activeInteraction,
+			kind: "condense",
+			presentationKind: "condense",
+			taskAsk: "condense",
+		}
+		view.footer.actions = [
+			{
+				type: "confirm_utility",
+				label: "Condense Conversation",
+				appearance: "primary",
+				enabled: true,
+				payloadPolicy: "none",
+				dispatchTarget: "interaction",
+			},
+			{
+				type: "reject",
+				label: "Regenerate Summary",
+				appearance: "secondary",
+				enabled: true,
+				payloadPolicy: "draft",
+				dispatchTarget: "interaction",
+			},
+		]
+
+		render(
+			<FooterActions
+				dispatch={dispatch}
+				draft={{ text: "preserve this draft", images: ["image"], files: ["file"] }}
+				onDraftAccepted={onDraftAccepted}
+				view={view}
+			/>,
+		)
+
+		fireEvent.click(screen.getByRole("button", { name: "Condense Conversation" }))
+
+		await waitFor(() => expect(dispatch).toHaveBeenCalledOnce())
+		expect(dispatch).toHaveBeenCalledWith({
+			taskId: "task-1",
+			turnId: "turn-1",
+			interactionId: "interaction-1",
+			actionId: "confirm_utility",
+			stateRevision: 8,
+			selection: undefined,
+		})
+		expect(onDraftAccepted).not.toHaveBeenCalled()
+	})
+
+	it("submits and settles feedback through Regenerate Summary", async () => {
+		const dispatch = vi.fn(async () => ({ accepted: true, result: "accepted" }))
+		const onDraftAccepted = vi.fn()
+		const view = approvalView()
+		if (!view.activeInteraction) throw new Error("Expected active interaction")
+		view.activeInteraction = {
+			...view.activeInteraction,
+			kind: "condense",
+			presentationKind: "condense",
+			taskAsk: "condense",
+		}
+		view.input.enterAction = "reject"
+		view.footer.actions = [
+			{
+				type: "confirm_utility",
+				label: "Condense Conversation",
+				appearance: "primary",
+				enabled: true,
+				payloadPolicy: "none",
+				dispatchTarget: "interaction",
+			},
+			{
+				type: "reject",
+				label: "Regenerate Summary",
+				appearance: "secondary",
+				enabled: true,
+				payloadPolicy: "draft",
+				dispatchTarget: "interaction",
+			},
+		]
+		const draft = { text: "Keep the deployment details", images: ["image"], files: ["file"] }
+
+		render(<FooterActions dispatch={dispatch} draft={draft} onDraftAccepted={onDraftAccepted} view={view} />)
+		fireEvent.click(screen.getByRole("button", { name: "Regenerate Summary" }))
+
+		await waitFor(() => expect(dispatch).toHaveBeenCalledOnce())
+		expect(dispatch).toHaveBeenCalledWith({
+			taskId: "task-1",
+			turnId: "turn-1",
+			interactionId: "interaction-1",
+			actionId: "reject",
+			stateRevision: 8,
+			draft: { text: "Keep the deployment details", images: ["image"], files: ["file"] },
+			selection: undefined,
+		})
+		expect(onDraftAccepted).toHaveBeenCalledWith(expect.objectContaining({ draft: expect.objectContaining(draft) }))
+	})
+
 	it("shows an interaction dispatch failure and restores the action", async () => {
 		const dispatch = vi.fn(async () => {
 			throw new Error("dispatch unavailable")

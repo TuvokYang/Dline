@@ -16,8 +16,8 @@ log(`DLINE_ENVIRONMENT: ${process.env.DLINE_ENVIRONMENT}`)
 const SETTINGS_SUBFOLDER = "data"
 
 export function initializeContext(clineDir?: string) {
-	const CLINE_DIR = clineDir || process.env.CLINE_DIR || `${os.homedir()}/.cline`
-	const DATA_DIR = path.join(CLINE_DIR, SETTINGS_SUBFOLDER)
+	const resolvedDlineDir = clineDir || process.env.DLINE_DIR || `${os.homedir()}/.dline`
+	const DATA_DIR = path.join(resolvedDlineDir, SETTINGS_SUBFOLDER)
 	const INSTALL_DIR = process.env.INSTALL_DIR || __dirname
 	const WORKSPACE_STORAGE_DIR = process.env.WORKSPACE_STORAGE_DIR || path.join(DATA_DIR, "workspace")
 

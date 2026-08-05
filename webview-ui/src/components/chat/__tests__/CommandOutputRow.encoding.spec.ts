@@ -10,14 +10,14 @@
  */
 
 import { describe, expect, it } from "vitest"
+import {
+	getCommandEnvironmentLabel,
+	getCommandOutputSummary,
+	sanitizeCommandOutput,
+	stripCommandPromptArtifacts,
+} from "../command-output"
 
-/**
- * Pure-function replica of the splitMessage output-replace chain from CommandOutputRow.tsx.
- * Kept separate from React component for isolated unit testing.
- */
-function sanitizeControlChars(output: string): string {
-	return output.replace(/\x09/g, "→   ").replace(/\x08/g, "⌫").replace(/\x0C/g, "⏏").replace(/\x0B/g, "⇳")
-}
+const sanitizeControlChars = sanitizeCommandOutput
 
 describe("CommandOutputRow encoding — control char sanitization", () => {
 	describe("CJK and Unicode preservation", () => {
@@ -136,6 +136,37 @@ describe("CommandOutputRow encoding — control char sanitization", () => {
 			// 🎉 (U+1F389) = F0 9F 8E 89 in UTF-8
 			const input = "Party! 🎉🎊🎈"
 			expect(sanitizeControlChars(input)).toBe(input)
+		})
+	})
+
+	describe("collapsed output summary", () => {
+		it("uses the final visible carriage-return segment and strips ANSI without losing Unicode", () => {
+			const input =
+				"first line\r\nold progress\r\x1b[31m最终_🚀\x1b[0m\tCOLUMN\b\n📋 Output is being logged to: C:\\Temp\\command.log\n"
+
+			expect(getCommandOutputSummary(input)).toBe("最终_🚀→   COLUMN⌫")
+		})
+
+		it("returns undefined when output has no visible line", () => {
+			expect(getCommandOutputSummary("\r\n \r\n")).toBeUndefined()
+		})
+
+		it("moves the latest terminal environment prompt out of command output", () => {
+			const basePrompt = "\x1b]0;C:\\Windows\\powershell.exe\x1b\\\x1b[0m(base) \x1b[0m"
+			const projectPrompt = "\u009d0;C:\\Windows\\powershell.exe\u009c\x1b[0m(project) \x1b[0m"
+			const output = `first\n${basePrompt}\nresult\n${projectPrompt}\n`
+
+			expect(getCommandEnvironmentLabel(output)).toBe("project")
+			expect(stripCommandPromptArtifacts(output)).toBe("first\nresult\n")
+			expect(getCommandOutputSummary(output)).toBe("result")
+		})
+
+		it("preserves ordinary parenthesized command output", () => {
+			const output = "result\n(project)\n"
+
+			expect(getCommandEnvironmentLabel(output)).toBeUndefined()
+			expect(stripCommandPromptArtifacts(output)).toBe(output)
+			expect(getCommandOutputSummary(output)).toBe("(project)")
 		})
 	})
 })

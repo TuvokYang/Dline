@@ -1,4 +1,5 @@
 import type { ToolUse } from "@core/assistant-message"
+import { getPrompt, renderPrompt } from "@core/prompts/i18n"
 import { formatResponse } from "@core/prompts/responses"
 import type { ClineQnaResponse } from "@shared/ExtensionMessage"
 import { ClineDefaultTool } from "@shared/tools"
@@ -63,7 +64,7 @@ export class QnaRespondHandler implements IToolHandler, IPartialBlockHandler {
 	/** Consume a Q&A response without replaying presentation or other pre-response work. */
 	async continueInteraction(config: TaskConfig, _block: ToolUse, outcome: InteractionOutcome): Promise<ToolResponse> {
 		config.taskState.isAwaitingPlanResponse = false
-		let text = outcome.draft?.text
+		const text = outcome.draft?.text
 		const images = outcome.draft?.images
 		const files = outcome.draft?.files
 
@@ -71,14 +72,21 @@ export class QnaRespondHandler implements IToolHandler, IPartialBlockHandler {
 			return formatResponse.toolResult("Mode switch context compaction requested.")
 		}
 
-		if (text === "PLAN_MODE_TOGGLE_RESPONSE") {
-			text = ""
-		}
-
 		let fileContentString = ""
 		if (files && files.length > 0) {
 			const { processFilesIntoText } = await import("@integrations/misc/extract-text")
 			fileContentString = await processFilesIntoText(files)
+		}
+
+		if (config.taskState.didRespondToPlanAskBySwitchingMode) {
+			config.taskState.didRespondToPlanAskBySwitchingMode = false
+			if (text || (images && images.length > 0) || fileContentString) {
+				await sayFeedbackOnce(config, "messageResponse", text, images, files)
+			}
+			const switchMessage = text
+				? renderPrompt("toolHandlers", "planSwitchToActWithMessage", { TEXT: text })
+				: getPrompt("toolHandlers", "planSwitchToAct")
+			return formatResponse.toolResult(switchMessage, images, fileContentString)
 		}
 
 		if (text || (images && images.length > 0) || fileContentString) {

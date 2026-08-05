@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest"
 import { ClineDefaultTool } from "../../../../shared/tools"
+import {
+	DISABLED_WEB_SEARCH_ROUTING_PLAN,
+	HOSTED_WEB_SEARCH_ROUTING_PLAN,
+	LOCAL_WEB_SEARCH_ROUTING_PLAN,
+} from "../../__tests__/web-search-routing-fixtures"
 import { ToolPromptGenerator } from "../../generators/ToolPromptGenerator"
 import { getPrompt } from "../../i18n"
 import { PromptProfile } from "../../profiles/types"
@@ -9,6 +14,7 @@ const BASE_CONTEXT = {
 	promptProfile: PromptProfile.Standard,
 	providerInfo: { providerId: "openai", model: { id: "model", info: {} } },
 	enableNativeToolCalls: true,
+	webSearchRoutingPlan: DISABLED_WEB_SEARCH_ROUTING_PLAN,
 	terminalCommandTimeoutSeconds: 1800,
 } as unknown as SystemPromptContext
 
@@ -79,7 +85,7 @@ describe("provider tool projector", () => {
 		["openai", "function", "boolean", "integer"],
 		["anthropic", "anthropic", "boolean", "integer"],
 		["gemini", "gemini", "BOOLEAN", "NUMBER"],
-	] as const)("projects optional execute_command workdirectory, background, synchronous, and timeout for %s", (providerId, shape, boolType, intType) => {
+	] as const)("projects the complete optional execute_command lifecycle for %s", (providerId, shape, boolType, intType) => {
 		const context = { ...BASE_CONTEXT, providerInfo: { ...BASE_CONTEXT.providerInfo, providerId } }
 		const tool = findTool(new ToolPromptGenerator().generate(PromptProfile.Standard, context), ClineDefaultTool.BASH)
 		const projected = tool as unknown as {
@@ -101,11 +107,16 @@ describe("provider tool projector", () => {
 				background: { type: boolType },
 				synchronous: { type: boolType },
 				timeout: { type: intType },
+				mute_stdout: { type: boolType },
 			},
 		})
 		expect(JSON.stringify(schema)).toContain("default is 1800 seconds")
 		expect(JSON.stringify(schema)).toContain("absolute maximum runtime")
+		expect(JSON.stringify(schema)).toContain("zero or a negative integer")
 		expect(JSON.stringify(schema)).toContain("10-second background handoff")
+		expect(JSON.stringify(schema)).toContain("certain the command's stdout is not needed")
+		expect(JSON.stringify(schema)).toContain("If you are unsure whether stdout is needed")
+		expect(JSON.stringify(schema)).toContain("On failure")
 		expect(JSON.stringify(schema)).not.toContain("foreground wait")
 	})
 
@@ -273,6 +284,7 @@ describe("provider tool projector", () => {
 			...BASE_CONTEXT,
 			providerInfo: { ...BASE_CONTEXT.providerInfo, providerId: "cline" },
 			clineWebToolsEnabled: true,
+			webSearchRoutingPlan: LOCAL_WEB_SEARCH_ROUTING_PLAN,
 		}
 		const tools = new ToolPromptGenerator().generate(PromptProfile.Standard, context)
 		const fetchTool = findTool(tools, ClineDefaultTool.WEB_FETCH)
@@ -289,6 +301,18 @@ describe("provider tool projector", () => {
 				},
 			},
 		})
+	})
+
+	it("does not project the local web_search function for a hosted request", () => {
+		const context = {
+			...BASE_CONTEXT,
+			clineWebToolsEnabled: true,
+			webSearchRoutingPlan: HOSTED_WEB_SEARCH_ROUTING_PLAN,
+		}
+		const tools = new ToolPromptGenerator().generate(PromptProfile.Standard, context)
+
+		expect(findTool(tools, ClineDefaultTool.WEB_FETCH)).toBeDefined()
+		expect(findTool(tools, ClineDefaultTool.WEB_SEARCH)).toBeUndefined()
 	})
 
 	it("appends enabled MCP schemas only to Native", () => {

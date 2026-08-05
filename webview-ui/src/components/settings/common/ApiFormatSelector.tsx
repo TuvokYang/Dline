@@ -20,12 +20,23 @@ export function ApiFormatSelector({ apiFormats, selectedApiFormat, fallbackApiFo
 			<span className="text-xs font-medium">API Format</span>
 			<select
 				aria-label="API Format"
-				className="w-full h-7 px-2 border border-dropdown-border bg-dropdown-background text-dropdown-foreground"
+				className="w-full h-7 px-2 border"
 				id="api-format"
 				onChange={(event) => onChange(Number(event.target.value) as ApiFormat)}
+				style={{
+					backgroundColor: "var(--vscode-dropdown-background)",
+					borderColor: "var(--vscode-dropdown-border)",
+					color: "var(--vscode-dropdown-foreground)",
+				}}
 				value={String(selected)}>
 				{apiFormats.map((apiFormat) => (
-					<option key={apiFormat} value={String(apiFormat)}>
+					<option
+						key={apiFormat}
+						style={{
+							backgroundColor: "var(--vscode-dropdown-background)",
+							color: "var(--vscode-dropdown-foreground)",
+						}}
+						value={String(apiFormat)}>
 						{getApiFormatLabel(apiFormat)}
 					</option>
 				))}

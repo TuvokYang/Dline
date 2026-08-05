@@ -138,4 +138,31 @@ describe("StandaloneTerminalManager background command injection state", () => {
 		manager.markBackgroundCommandsInjected([command.id])
 		assert.equal(manager.getBackgroundCommand(command.id)?.injectionState, "consumed")
 	})
+
+	it("retains the function id and advances the API output baseline to the sent snapshot", () => {
+		const manager = new StandaloneTerminalManager()
+		const process = new EventEmitter() as BackgroundCommand["process"]
+
+		try {
+			const command = manager.trackBackgroundCommand(process, "npm test", "command_output_delta", [], {
+				origin: "explicit_background",
+				cancellationOwner: "explicit",
+				functionId: "call_output_delta",
+			})
+			process.emit("line", "one", "stdout")
+			process.emit("line", "two", "stdout")
+
+			assert.equal(command.functionId, "call_output_delta")
+			assert.equal(command.lastApiSentLineCount, 0)
+			manager.markBackgroundCommandOutputSent([{ id: command.id, lineCount: 2 }])
+			assert.equal(command.lastApiSentLineCount, 2)
+
+			process.emit("line", "three", "stdout")
+			manager.markBackgroundCommandOutputSent([{ id: command.id, lineCount: 1 }])
+			assert.equal(command.lastApiSentLineCount, 2)
+			assert.equal(command.lineCount - command.lastApiSentLineCount, 1)
+		} finally {
+			manager.disposeBackgroundCommands()
+		}
+	})
 })

@@ -138,8 +138,10 @@ if (production) {
 	// IS_DEV is always disabled in production builds.
 	buildEnvVars["process.env.IS_DEV"] = JSON.stringify("false")
 } else {
-	// Dev builds (npm run compile / watch / vsix:dev): enable IS_DEV
+	// Dev builds (npm run compile / watch / vsix:dev): enable development
+	// features and retain backend debug logs in installed dev VSIX packages.
 	buildEnvVars["process.env.IS_DEV"] = JSON.stringify("true")
+	buildEnvVars["process.env.DLINE_LOG_LEVEL"] = JSON.stringify(process.env.DLINE_LOG_LEVEL || "debug")
 }
 // Set the environment and telemetry env vars. The API key env vars need to be populated in the GitHub
 // workflows from the secrets.

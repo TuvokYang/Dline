@@ -15,7 +15,7 @@ vi.mock("@/context/ExtensionStateContext", () => ({
 		yoloModeToggled: false,
 		useAutoCondense: false,
 		subagentsEnabled: false,
-		clineWebToolsEnabled: { user: true, featureFlag: true },
+		clineWebToolsEnabled: { user: false, featureFlag: false },
 		worktreesEnabled: { user: true, featureFlag: true },
 		focusChainSettings: { enabled: false, remindClineInterval: 6 },
 		remoteConfigSettings: {},
@@ -98,5 +98,17 @@ describe("FeatureSettingsSection", () => {
 		fireEvent.click(activeTasksSwitch as Element)
 
 		expect(mockUpdateSetting).toHaveBeenCalledWith("showActiveTasksInEnvDetails", true)
+	})
+
+	it("always renders Web Tools and saves changes even when its feature flag is disabled", () => {
+		const { container } = render(<FeatureSettingsSection renderSectionHeader={() => null} />)
+
+		expect(screen.getByText("Web Tools")).toBeTruthy()
+		const webToolsSwitch = container.querySelector('[id="Web Tools"]')
+		expect(webToolsSwitch).toBeTruthy()
+
+		fireEvent.click(webToolsSwitch as Element)
+
+		expect(mockUpdateSetting).toHaveBeenCalledWith("clineWebToolsEnabled", true)
 	})
 })

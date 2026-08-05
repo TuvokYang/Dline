@@ -1,3 +1,4 @@
+import { ClineDefaultTool } from "@shared/tools"
 import { describe, expect, it, vi } from "vitest"
 import { BlockPhase } from "../../BlockPhaseMachine"
 import type { TaskEffectPorts } from "../../runtime/TaskEffectRunner"
@@ -92,6 +93,44 @@ function hydrateAwaitingInteraction(input: {
 }
 
 describe("InteractionCoordinator", () => {
+	it("waits for an in-flight attempt_completion to publish its compaction interaction", async () => {
+		const state = {
+			...createTaskRuntimeState({ taskId: "task-1", phase: TaskPhase.STREAMING }),
+			turn: {
+				turnId: "turn-compact",
+				assistantApiIndex: 1,
+				mode: "parallel" as const,
+				blocks: [
+					{
+						dlineTid: "completion-compact",
+						functionId: "call-completion-compact",
+						toolName: ClineDefaultTool.ATTEMPT,
+						phase: BlockPhase.AUTO_EXECUTING,
+						ts: 100,
+						requiresApproval: false,
+						conversationHistoryIndex: 1,
+					},
+				],
+			},
+		}
+		const runtime = new TaskRuntime(state, createPorts())
+		const coordinator = new InteractionCoordinator(runtime)
+		const responsePromise = coordinator.respondForModeCompaction("__dline_mode_switch_compact__")
+
+		const outcomePromise = coordinator.complete({
+			turnId: "turn-compact",
+			interactionId: "completion-compact",
+			completionId: "completion-compact",
+			presentation: "Done",
+		})
+
+		await expect(responsePromise).resolves.toBe(true)
+		await expect(outcomePromise).resolves.toMatchObject({
+			actionId: "reply",
+			draft: { text: "__dline_mode_switch_compact__", images: [], files: [] },
+		})
+	})
+
 	it("continues a live completion with an internal mode-compaction response", async () => {
 		const runtime = new TaskRuntime(createTaskRuntimeState({ taskId: "task-1", phase: TaskPhase.STREAMING }), createPorts())
 		const coordinator = new InteractionCoordinator(runtime)
@@ -108,6 +147,27 @@ describe("InteractionCoordinator", () => {
 		await expect(outcomePromise).resolves.toMatchObject({
 			actionId: "reply",
 			draft: { text: "__dline_mode_switch_compact__", images: [], files: [] },
+		})
+		expect(runtime.getState().phase).toBe(TaskPhase.STREAMING)
+		expect(runtime.getState().interaction).toBeUndefined()
+	})
+
+	it("continues a live plan interaction with an empty causal mode-switch response", async () => {
+		const runtime = new TaskRuntime(createTaskRuntimeState({ taskId: "task-1", phase: TaskPhase.STREAMING }), createPorts())
+		const coordinator = new InteractionCoordinator(runtime)
+		const outcomePromise = coordinator.open({
+			turnId: "turn-mode-switch",
+			interactionId: "plan-mode-switch",
+			kind: "make_plan",
+			presentation: "Plan ready",
+		})
+		await vi.waitFor(() => expect(runtime.getState().interaction?.status).toBe("awaiting"))
+
+		expect(coordinator.canRespondForModeSwitch()).toBe(true)
+		await expect(coordinator.respondForModeSwitch({ text: "", images: [], files: [] })).resolves.toBe(true)
+		await expect(outcomePromise).resolves.toMatchObject({
+			actionId: "reply",
+			draft: { text: "", images: [], files: [] },
 		})
 		expect(runtime.getState().phase).toBe(TaskPhase.STREAMING)
 		expect(runtime.getState().interaction).toBeUndefined()

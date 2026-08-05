@@ -104,6 +104,30 @@ describe("projectTaskView", () => {
 		expect(view.footer.actions[0]).toMatchObject({ type: "approve", payloadPolicy: "draft_and_selection" })
 	})
 
+	it("projects manual condense acceptance and feedback regeneration", () => {
+		const view = projectTaskView(runtime(TaskPhase.AWAITING_APPROVAL, active("condense")))
+
+		expect(view.input).toMatchObject({ enabled: true, enterAction: "reject" })
+		expect(view.footer.actions).toEqual([
+			{
+				type: "confirm_utility",
+				label: "Condense Conversation",
+				appearance: "primary",
+				enabled: true,
+				payloadPolicy: "none",
+				dispatchTarget: "interaction",
+			},
+			{
+				type: "reject",
+				label: "Regenerate Summary",
+				appearance: "secondary",
+				enabled: true,
+				payloadPolicy: "draft",
+				dispatchTarget: "interaction",
+			},
+		])
+	})
+
 	it("projects Resume for a paused synthesized anchored resume interaction", () => {
 		const view = projectTaskView(runtime(TaskPhase.PAUSED, active("resume")))
 

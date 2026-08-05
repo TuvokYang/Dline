@@ -1,5 +1,8 @@
 import type { EventEmitter } from "node:events"
 import { afterAll, vi } from "vitest"
+import { installIsolatedTestDirectories } from "./isolated-test-directories"
+
+const cleanupIsolatedTestDirectories = installIsolatedTestDirectories(`backend-${process.pid}`)
 
 const processListenerEvents = ["exit", "uncaughtException"] as const
 const processEventEmitter = process as unknown as EventEmitter
@@ -16,6 +19,7 @@ afterAll(() => {
 			}
 		}
 	}
+	cleanupIsolatedTestDirectories()
 })
 
 // sinon sandbox removed — use vi.mock / vi.spyOn / vi.fn() directly

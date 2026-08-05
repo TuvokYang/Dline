@@ -7,15 +7,18 @@ import { Tool as AnthropicTool } from "@anthropic-ai/sdk/resources/index"
 import type { MessageCreateParamsStreaming as AnthropicMessageCreateParamsStreaming } from "@anthropic-ai/sdk/resources/messages/messages"
 import { Stream as AnthropicStream } from "@anthropic-ai/sdk/streaming"
 import { ANTHROPIC_FAST_MODE_SUFFIX, AnthropicModelId, anthropicDefaultModelId, anthropicModels, ModelInfo } from "@shared/api"
+import { prioritizeApiFormat } from "@shared/providers/api-format"
 import { buildEffectiveModelInfo, selectContextTier } from "@shared/providers/effective-model-info"
 import { isClaudeOpusAdaptiveThinkingModel, resolveClaudeOpusAdaptiveThinking } from "@shared/utils/reasoning-support"
 import { buildExternalBasicHeaders } from "@/services/EnvUtils"
 import { ClineStorageMessage } from "@/shared/messages/content"
 import { fetch } from "@/shared/net"
-import { ApiHandler, ApiHandlerContext } from "../index"
+import { ApiFormat, ServerTool } from "@/shared/proto/dline/models/metadata"
+import { ApiHandler, ApiHandlerContext, type ApiRequestOptions } from "../index"
 import { withRetry } from "../retry"
 import { sanitizeAnthropicMessages } from "../transform/anthropic-format"
 import { ApiStream } from "../transform/stream"
+import { handleAnthropicMessagesApiStreamResponse, mergeAnthropicServerTools } from "../utils/messages_api_support"
 
 export const ANTHROPIC_FAST_MODE_BETA = "fast-mode-2026-02-01"
 
@@ -44,6 +47,10 @@ export class AnthropicHandler implements ApiHandler {
 	}
 	private get thinkingBudgetTokens() {
 		return this.config?.reasoning?.thinkingBudget ?? 0
+	}
+
+	supportsServerTool(tool: ServerTool): boolean {
+		return tool === ServerTool.WEB_SEARCH
 	}
 
 	/**
@@ -111,7 +118,12 @@ export class AnthropicHandler implements ApiHandler {
 	}
 
 	@withRetry()
-	async *createMessage(systemPrompt: string, messages: ClineStorageMessage[], tools?: AnthropicTool[]): ApiStream {
+	async *createMessage(
+		systemPrompt: string,
+		messages: ClineStorageMessage[],
+		tools?: AnthropicTool[],
+		options?: ApiRequestOptions,
+	): ApiStream {
 		const client = this.ensureClient()
 
 		const model = this.getModel()
@@ -142,8 +154,10 @@ export class AnthropicHandler implements ApiHandler {
 		const budget_tokens = this.thinkingBudgetTokens
 		const enableThinking = this.config?.reasoning?.enableThinking ?? Boolean(this.reasoningEffort || budget_tokens > 0)
 
-		// Tools are available only when native tools are enabled.
-		const nativeToolsOn = tools?.length && tools?.length > 0
+		const localNativeToolsOn = tools !== undefined && tools.length > 0
+		const requestTools = mergeAnthropicServerTools(tools, options?.serverTools)
+		// Tools are available only when local functions or resolved hosted tools are enabled.
+		const nativeToolsOn = requestTools !== undefined && requestTools.length > 0
 		const reasoningOn = enableThinking && (model.info.capabilities?.supportsReasoning ?? false) && budget_tokens !== 0
 
 		// Claude Opus 4.5+ uses adaptive thinking instead of budgeted extended thinking.
@@ -183,13 +197,13 @@ export class AnthropicHandler implements ApiHandler {
 				messages: anthropicMessages,
 				// tools, // cache breakpoints go from tools > system > messages, and since tools dont change, we can just set the breakpoint at the end of system (this avoids having to set a breakpoint at the end of tools which by itself does not meet min requirements for haiku caching)
 				stream: true,
-				tools: nativeToolsOn ? tools : undefined,
+				tools: nativeToolsOn ? requestTools : undefined,
 				// tool_choice options:
 				// - none: disables tool use, even if tools are provided. Claude will not call any tools.
 				// - auto: allows Claude to decide whether to call any provided tools or not. This is the default value when tools are provided.
 				// - any: tells Claude that it must use one of the provided tools, but doesn't force a particular tool.
 				// NOTE: Forcing tool use when tools are provided will result in error when thinking is also enabled.
-				tool_choice: nativeToolsOn && !thinkingEnabled ? { type: "any" } : undefined,
+				tool_choice: localNativeToolsOn && !thinkingEnabled ? { type: "any" } : undefined,
 			}
 			if (outputConfig) {
 				requestBody.output_config = outputConfig
@@ -218,7 +232,7 @@ export class AnthropicHandler implements ApiHandler {
 				temperature: isAdaptiveThinkingModel ? undefined : reasoningOn ? undefined : 0,
 				system: [{ text: systemPrompt, type: "text" }],
 				messages: sanitizeAnthropicMessages(messages, false),
-				tools: nativeToolsOn ? tools : undefined,
+				tools: nativeToolsOn ? requestTools : undefined,
 				tool_choice: thinkingEnabled ? undefined : { type: "auto" },
 				stream: true,
 				thinking: thinkingConfig,
@@ -230,126 +244,7 @@ export class AnthropicHandler implements ApiHandler {
 			stream = useFastMode ? await createFastModeMessage(requestBody) : await client.messages.create(requestBody)
 		}
 
-		const lastStartedToolCall = { id: "", name: "", arguments: "" }
-
-		for await (const chunk of stream) {
-			switch (chunk?.type) {
-				case "message_start":
-					{
-						// tells us cache reads/writes/input/output
-						const usage = chunk.message.usage
-						yield {
-							type: "usage",
-							inputTokens: usage.input_tokens || 0,
-							outputTokens: usage.output_tokens || 0,
-							cacheWriteTokens: usage.cache_creation_input_tokens || undefined,
-							cacheReadTokens: usage.cache_read_input_tokens || undefined,
-						}
-					}
-					break
-				case "message_delta":
-					// tells us stop_reason, stop_sequence, and output tokens along the way and at the end of the message
-
-					yield {
-						type: "usage",
-						inputTokens: 0,
-						outputTokens: chunk.usage.output_tokens || 0,
-					}
-					break
-				case "message_stop":
-					// no usage data, just an indicator that the message is done
-					break
-				case "content_block_start":
-					switch (chunk.content_block.type) {
-						case "thinking":
-							yield {
-								type: "reasoning",
-								reasoning: chunk.content_block.thinking || "",
-								signature: chunk.content_block.signature,
-							}
-							break
-						case "redacted_thinking":
-							// Content is encrypted, and we don't to pass placeholder text back to the API
-							yield {
-								type: "reasoning",
-								reasoning: "[Redacted thinking block]",
-								redacted_data: chunk.content_block.data,
-							}
-							break
-						case "tool_use":
-							if (chunk.content_block.id && chunk.content_block.name) {
-								// Convert Anthropic tool_use to OpenAI-compatible format
-								lastStartedToolCall.id = chunk.content_block.id
-								lastStartedToolCall.name = chunk.content_block.name
-								lastStartedToolCall.arguments = ""
-							}
-							break
-						case "text":
-							// we may receive multiple text blocks, in which case just insert a line break between them
-							if (chunk.index > 0) {
-								yield {
-									type: "text",
-									text: "\n",
-								}
-							}
-							yield {
-								type: "text",
-								text: chunk.content_block.text,
-							}
-							break
-					}
-					break
-				case "content_block_delta":
-					switch (chunk.delta.type) {
-						case "thinking_delta":
-							// 'reasoning' type just displays in the UI, but ant_thinking will be used to send the thinking traces back to the API
-							yield {
-								type: "reasoning",
-								reasoning: chunk.delta.thinking,
-							}
-							break
-						case "signature_delta":
-							// It's used when sending the thinking block back to the API
-							// API expects this in completed form, not as array of deltas
-							if (chunk.delta.signature) {
-								yield {
-									type: "reasoning",
-									reasoning: "", // reasoning text is already sent via thinking_delta
-									signature: chunk.delta.signature,
-								}
-							}
-							break
-						case "text_delta":
-							yield {
-								type: "text",
-								text: chunk.delta.text,
-							}
-							break
-						case "input_json_delta":
-							if (lastStartedToolCall.id && lastStartedToolCall.name && chunk.delta.partial_json) {
-								// 	// Convert Anthropic tool_use to OpenAI-compatible format
-								yield {
-									type: "tool_calls",
-									function_id: lastStartedToolCall.id,
-									tool_call: {
-										function: {
-											name: lastStartedToolCall.name,
-											arguments: chunk.delta.partial_json,
-										},
-									},
-								}
-							}
-							break
-					}
-					break
-
-				case "content_block_stop":
-					lastStartedToolCall.id = ""
-					lastStartedToolCall.name = ""
-					lastStartedToolCall.arguments = ""
-					break
-			}
-		}
+		yield* handleAnthropicMessagesApiStreamResponse(stream)
 	}
 
 	/**
@@ -362,27 +257,30 @@ export class AnthropicHandler implements ApiHandler {
 		if (mid && this.modelInfo) {
 			return {
 				id: mid as AnthropicModelId,
-				info: buildEffectiveModelInfo(mid, this.modelInfo, {
-					capabilities: this.config?.capabilities,
-					pricing: this.config?.pricing,
-					enableLongContext: this.config?.enableLongContext,
-					pricingTiersEnabled: this.config?.pricingTiersEnabled,
-				}),
+				info: prioritizeApiFormat(
+					buildEffectiveModelInfo(mid, this.modelInfo, {
+						capabilities: this.config?.capabilities,
+						pricing: this.config?.pricing,
+						enableLongContext: this.config?.enableLongContext,
+						pricingTiersEnabled: this.config?.pricingTiersEnabled,
+					}),
+					ApiFormat.ANTHROPIC_CHAT,
+				),
 			}
 		}
 		if (mid && anthropicModels[mid]) {
 			const id = mid as AnthropicModelId
-			return { id, info: this.buildRegistryModelInfo(id) }
+			return { id, info: prioritizeApiFormat(this.buildRegistryModelInfo(id), ApiFormat.ANTHROPIC_CHAT) }
 		}
 		if (mid) {
 			return {
 				id: mid as AnthropicModelId,
-				info: this.buildCustomModelInfo(mid),
+				info: prioritizeApiFormat(this.buildCustomModelInfo(mid), ApiFormat.ANTHROPIC_CHAT),
 			}
 		}
 		return {
 			id: anthropicDefaultModelId,
-			info: this.buildRegistryModelInfo(anthropicDefaultModelId),
+			info: prioritizeApiFormat(this.buildRegistryModelInfo(anthropicDefaultModelId), ApiFormat.ANTHROPIC_CHAT),
 		}
 	}
 }

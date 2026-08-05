@@ -15,6 +15,7 @@ export type HistoryPreviewFilter = "workspace" | "favorite" | "all"
 type PreviewTask = Pick<HistoryItem, "id" | "task" | "ts"> & Partial<Pick<HistoryItem, "currency" | "isFavorited" | "totalCost">>
 
 export const HISTORY_PREVIEW_LIMIT = 10
+const INITIAL_HISTORY_LOAD_RETRY_DELAY_MS = 250
 
 const FILTERS: Array<{ value: HistoryPreviewFilter; label: string }> = [
 	{ value: "workspace", label: "Workspace" },
@@ -61,33 +62,45 @@ const HistoryPreview = ({ showHistoryView }: HistoryPreviewProps) => {
 		() => filterHistoryPreview(taskHistory, filter, workspacePaths),
 		[filter, taskHistory, workspacePaths],
 	)
+	// Extension state snapshots recreate arrays even when their contents are unchanged.
+	const requestKey = useMemo(() => JSON.stringify([filter, workspacePaths, taskHistory]), [filter, taskHistory, workspacePaths])
 	const [loadedTasks, setLoadedTasks] = useState<{
-		baseline: PreviewTask[]
-		filter: HistoryPreviewFilter
+		requestKey: string
 		tasks: PreviewTask[]
 	}>()
-	const tasks = loadedTasks?.filter === filter && loadedTasks.baseline === fallbackTasks ? loadedTasks.tasks : fallbackTasks
+	const tasks = loadedTasks?.requestKey === requestKey ? loadedTasks.tasks : fallbackTasks
 
 	useEffect(() => {
 		let cancelled = false
-		TaskServiceClient.getTaskHistory(
-			GetTaskHistoryRequest.create({
-				currentWorkspaceOnly: filter === "workspace",
-				favoritesOnly: filter === "favorite",
-				sortBy: "newest",
-			}),
-		)
-			.then((response) => {
+		let retryTimer: ReturnType<typeof setTimeout> | undefined
+		const loadTasks = async (attempt: number) => {
+			try {
+				const response = await TaskServiceClient.getTaskHistory(
+					GetTaskHistoryRequest.create({
+						currentWorkspaceOnly: filter === "workspace",
+						favoritesOnly: filter === "favorite",
+						sortBy: "newest",
+					}),
+				)
 				if (!cancelled) {
-					setLoadedTasks({ baseline: fallbackTasks, filter, tasks: response.tasks.slice(0, HISTORY_PREVIEW_LIMIT) })
+					setLoadedTasks({ requestKey, tasks: response.tasks.slice(0, HISTORY_PREVIEW_LIMIT) })
 				}
-			})
-			.catch((error) => console.error("Error loading recent tasks:", error))
+			} catch (error) {
+				if (cancelled) return
+				if (attempt === 0) {
+					retryTimer = setTimeout(() => void loadTasks(1), INITIAL_HISTORY_LOAD_RETRY_DELAY_MS)
+					return
+				}
+				console.error("Error loading recent tasks:", error)
+			}
+		}
+		void loadTasks(0)
 
 		return () => {
 			cancelled = true
+			if (retryTimer) clearTimeout(retryTimer)
 		}
-	}, [fallbackTasks, filter])
+	}, [filter, requestKey])
 	const handleHistorySelect = (id: string) => {
 		TaskServiceClient.showTaskWithId(StringRequest.create({ value: id })).catch((error) =>
 			console.error("Error showing task:", error),

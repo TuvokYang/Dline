@@ -192,6 +192,85 @@ describe("TaskActivityStore", () => {
 		).toEqual(["historical-command", "live-command"])
 	})
 
+	it("recovers persisted transient activities as interrupted only when explicitly requested", async () => {
+		const historicalStore = new TaskActivityStore("task-1")
+		historicalStore.create({
+			activityId: "running-zero-timeout",
+			kind: "command",
+			executionMode: "background",
+			title: "serve forever",
+			timeoutSeconds: 0,
+		})
+		historicalStore.create({
+			activityId: "cancelling-negative-timeout",
+			kind: "command",
+			executionMode: "foreground",
+			title: "legacy command",
+			timeoutSeconds: -1,
+		})
+		historicalStore.update("cancelling-negative-timeout", {
+			status: "cancelling",
+			latestEvent: "Cancellation requested",
+		})
+		historicalStore.create({
+			activityId: "awaiting-agent",
+			kind: "subagent",
+			executionMode: "background",
+			status: "awaiting_approval",
+			title: "waiting for approval",
+		})
+		historicalStore.create({
+			activityId: "completed-command",
+			kind: "command",
+			executionMode: "foreground",
+			title: "already complete",
+		})
+		historicalStore.update("completed-command", { status: "completed", latestEvent: "Command completed" })
+
+		const save = vi.fn(async (_activities: ReturnType<TaskActivityStore["list"]>) => undefined)
+		const reopened = new TaskActivityStore("task-1", {
+			load: vi.fn(async () => historicalStore.list()),
+			save,
+		})
+
+		await reopened.hydrate()
+		expect(reopened.get("running-zero-timeout")?.status).toBe("running")
+		expect(save).not.toHaveBeenCalled()
+
+		expect((await reopened.recoverInterruptedActivities()).sort()).toEqual([
+			"awaiting-agent",
+			"cancelling-negative-timeout",
+			"running-zero-timeout",
+		])
+		for (const activityId of ["running-zero-timeout", "cancelling-negative-timeout", "awaiting-agent"]) {
+			const activity = reopened.get(activityId)
+			expect(activity).toMatchObject({
+				status: "interrupted",
+				latestEvent: "Interrupted before completion",
+			})
+			expect(activity?.finishedAt).toEqual(expect.any(Number))
+			expect(
+				activity?.events.filter(
+					(event) =>
+						event.kind === "status" &&
+						event.status === "interrupted" &&
+						event.text === "Interrupted before completion",
+				),
+			).toHaveLength(1)
+			expect(reopened.isCancellable(activityId)).toBe(false)
+		}
+		expect(reopened.get("completed-command")?.status).toBe("completed")
+		expect(reopened.listRunning()).toEqual([])
+		expect(save.mock.calls.at(-1)?.[0].map((activity) => activity.status)).toContain("interrupted")
+
+		const saveCount = save.mock.calls.length
+		expect(await reopened.recoverInterruptedActivities()).toEqual([])
+		expect(save).toHaveBeenCalledTimes(saveCount)
+		reopened.update("running-zero-timeout", { status: "completed", result: "late result" })
+		expect(reopened.get("running-zero-timeout")?.status).toBe("interrupted")
+		expect(reopened.get("running-zero-timeout")?.result).toBeUndefined()
+	})
+
 	it("redacts obvious secrets from every persisted activity text field", async () => {
 		const save = vi.fn(async (_activities: ReturnType<TaskActivityStore["list"]>) => undefined)
 		const store = new TaskActivityStore("task-1", {

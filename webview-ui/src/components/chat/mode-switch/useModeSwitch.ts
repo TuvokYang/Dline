@@ -1,3 +1,4 @@
+import type { ClineAsk } from "@shared/ExtensionMessage"
 import type { ModeSwitchSnapshot } from "@shared/mode-switch"
 import { ModeSwitchOperationRequest, ModeSwitchStatus, PlanActMode, TogglePlanActModeRequest } from "@shared/proto/dline/state"
 import type { Mode } from "@shared/storage/types"
@@ -46,6 +47,11 @@ const ACTIVE_PHASES = new Set<ModeSwitchSnapshot["phase"]>(["awaiting_confirmati
 /** Return whether a captured draft contains user-authored content. */
 function hasDraft(draft: ModeSwitchDraft): boolean {
 	return Boolean(draft.text.trim() || draft.images.length || draft.files.length)
+}
+
+/** Return whether an active conversational ask owns the draft submitted with a mode switch. */
+export function shouldAttachModeSwitchDraft(clineAsk: ClineAsk | undefined): boolean {
+	return clineAsk === "make_plan" || clineAsk === "qna_respond" || clineAsk === "generate_report"
 }
 
 /** Convert a shared mode value to its protobuf enum. */

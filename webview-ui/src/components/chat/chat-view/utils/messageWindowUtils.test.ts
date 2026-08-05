@@ -81,12 +81,33 @@ describe("bottom scroll decisions", () => {
 		expect(
 			getBottomFollowIntent({
 				disableAutoScroll: false,
-				isAtBottom: true,
 				absoluteBottomLoaded: true,
 				lastMessageTsChanged: false,
 				lastMessageContentChanged: true,
 			}),
 		).toBe("follow")
+	})
+
+	it("keeps following when a newly appended row temporarily moves the viewport off the bottom", () => {
+		expect(
+			getBottomFollowIntent({
+				disableAutoScroll: false,
+				absoluteBottomLoaded: true,
+				lastMessageTsChanged: true,
+				lastMessageContentChanged: true,
+			}),
+		).toBe("follow")
+	})
+
+	it("does not follow appended rows after the user disables auto-scroll", () => {
+		expect(
+			getBottomFollowIntent({
+				disableAutoScroll: true,
+				absoluteBottomLoaded: true,
+				lastMessageTsChanged: true,
+				lastMessageContentChanged: true,
+			}),
+		).toBe("none")
 	})
 
 	it("does not force bottom restore after visibility changes when the user intentionally scrolled up", () => {

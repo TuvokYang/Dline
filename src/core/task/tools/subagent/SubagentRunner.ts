@@ -2,12 +2,14 @@ import * as path from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import type { ApiHandler, buildApiHandler } from "@core/api"
 import { recordProviderAdapterInput, recordProviderAdapterOutput } from "@core/api/debug/api-conversation-log"
+import type { WebSearchRoutingPlan } from "@core/api/server-tools"
 import { createIdentityFactory } from "@core/api/transform/block-identity"
 import { createStreamNormalizer, normalizeApiStream } from "@core/api/transform/stream-identity-normalizer"
 import { parseAssistantMessageV2, ToolUse } from "@core/assistant-message"
 import { discoverAvailableSkills } from "@core/context/instructions/user-instructions/skills"
 import { formatResponse } from "@core/prompts/responses"
 import { getSystemPrompt, type SystemPromptContext } from "@core/prompts/system-prompt"
+import { resolveRequestWebSearchRoutingPlan } from "@core/task/RequestApiScope"
 import { StreamResponseHandler } from "@core/task/StreamResponseHandler"
 import { DEFAULT_API_PROVIDER } from "@shared/api"
 import { ClineAssistantToolUseBlock, ClineStorageMessage, ClineTextContentBlock, ClineUserContent } from "@shared/messages"
@@ -16,13 +18,18 @@ import { Logger } from "@shared/services/Logger"
 import { ClineDefaultTool, ClineTool } from "@shared/tools"
 import { ContextManager } from "@/core/context/context-management/ContextManager"
 import { checkContextWindowExceededError } from "@/core/context/context-management/context-error-handling"
-import { getContextWindowInfo } from "@/core/context/context-management/context-window-utils"
+import {
+	computeCompactTrigger,
+	computeSummarizeBudget,
+	getContextWindowInfo,
+} from "@/core/context/context-management/context-window-utils"
 import { HostRegistryInfo } from "@/registry"
 import { ClineError, ClineErrorType } from "@/services/error"
 import { ApiFormat } from "@/shared/proto/dline/models/metadata"
 import { calculateApiCostAnthropic } from "@/utils/cost"
 import { isNativeToolCallingConfig, isNextGenModelFamily } from "@/utils/model-utils"
 import { TaskState } from "../../TaskState"
+import { ServerToolLifecycle } from "../ServerToolLifecycle"
 import { ToolExecutorCoordinator } from "../ToolExecutorCoordinator"
 import { ToolValidator } from "../ToolValidator"
 import type { TaskConfig } from "../types/TaskConfig"
@@ -335,6 +342,7 @@ export class SubagentRunner {
 		}
 
 		onProgress({ status: "running", stats })
+		let activeHostedServerToolLifecycle: ServerToolLifecycle | undefined
 
 		try {
 			const mode = this.baseConfig.services.stateManager.getGlobalSettingsKey("mode")
@@ -349,6 +357,9 @@ export class SubagentRunner {
 				mode,
 				customPrompt: this.baseConfig.services.stateManager.getGlobalSettingsKey("customPrompt"),
 			}
+			const webToolsEnabled = this.baseConfig.services.stateManager.getGlobalSettingsKey("clineWebToolsEnabled") === true
+			const webSearchAllowed = this.allowedTools.includes(ClineDefaultTool.WEB_SEARCH)
+			const webSearchRoutingPlan = resolveRequestWebSearchRoutingPlan(api, webToolsEnabled && webSearchAllowed)
 			stats.contextWindow = providerInfo.model.info.capabilities?.contextWindow || 0
 			stats.currency = providerInfo.model.info.pricing?.currency || "USD"
 			const apiFormat = providerInfo.model.info.apiFormats?.[0]
@@ -395,6 +406,8 @@ export class SubagentRunner {
 				enableNativeToolCalls: useNativeToolCalls,
 				enableParallelToolCalling: false,
 				isSubagentRun: true,
+				clineWebToolsEnabled: webToolsEnabled,
+				webSearchRoutingPlan,
 			}
 
 			const generated = await getSystemPrompt(context)
@@ -484,6 +497,34 @@ export class SubagentRunner {
 				let assistantText = ""
 				let assistantTextSignature: string | undefined
 				let requestId: string | undefined
+				const countedHostedServerToolIds = new Set<string>()
+				activeHostedServerToolLifecycle = new ServerToolLifecycle(webSearchRoutingPlan, true, (update) => {
+					if (!countedHostedServerToolIds.has(update.dlineTid)) {
+						countedHostedServerToolIds.add(update.dlineTid)
+						stats.toolCalls += 1
+					}
+					onProgress({
+						stats: { ...stats },
+						latestToolCall: "web_search",
+						event:
+							update.status === "completed" || update.status === "failed"
+								? {
+										kind: "tool_result",
+										phase: "final",
+										toolCallId: update.dlineTid,
+										toolName: "web_search",
+										toolStatus: update.status,
+										error: update.error,
+									}
+								: {
+										kind: "tool_call",
+										phase: "delta",
+										toolCallId: update.dlineTid,
+										toolName: "web_search",
+										toolStatus: "started",
+									},
+					})
+				})
 
 				const providerStream = this.createMessageWithInitialChunkRetry(
 					api,
@@ -494,6 +535,7 @@ export class SubagentRunner {
 					providerInfo.model.id,
 					contextManager,
 					contextState,
+					webSearchRoutingPlan,
 				)
 				const stream = normalizeApiStream(providerStream, createStreamNormalizer(createIdentityFactory()))
 
@@ -544,6 +586,11 @@ export class SubagentRunner {
 								},
 							)
 							break
+						case "server_tool": {
+							requestId = requestId ?? chunk.provider_metadata?.response_id
+							await activeHostedServerToolLifecycle.consume(chunk)
+							break
+						}
 						case "reasoning":
 							requestId = requestId ?? chunk.provider_metadata?.response_id
 							if (chunk.reasoning) {
@@ -553,12 +600,16 @@ export class SubagentRunner {
 					}
 
 					if (this.shouldAbort()) {
+						await activeHostedServerToolLifecycle.finalizeOpen("Subagent hosted web search cancelled.")
 						await this.abort()
 						const error = "Subagent run cancelled."
 						onProgress({ status: "cancelled", error, stats: { ...stats } })
 						return { status: "cancelled", error, stats }
 					}
 				}
+				await activeHostedServerToolLifecycle.finalizeOpen(
+					"Provider stream ended before subagent hosted web search returned a result.",
+				)
 
 				const calculatedRequestCost =
 					requestUsage.totalCost ??
@@ -680,6 +731,17 @@ export class SubagentRunner {
 							continue
 						}
 
+						const latestToolCall = formatToolCallPreview(toolName, toolCallParams)
+						onProgress({
+							latestToolCall,
+							event: {
+								kind: "tool_call",
+								toolCallId: call.dline_tid,
+								toolName,
+								toolStatus: "completed",
+								summary: latestToolCall,
+							},
+						})
 						stats.toolCalls += 1
 						onProgress({ stats: { ...stats } })
 						onProgress({ status: "completed", result: completionResult, stats: { ...stats } })
@@ -717,7 +779,7 @@ export class SubagentRunner {
 						},
 					})
 
-					const subagentConfig = this.createSubagentTaskConfig(state)
+					const subagentConfig = this.createSubagentTaskConfig(state, webToolsEnabled, webSearchRoutingPlan)
 					const handler = this.baseConfig.coordinator.getHandler(toolName)
 					let toolResult: unknown
 					let toolError: string | undefined
@@ -778,6 +840,11 @@ export class SubagentRunner {
 				await delay(0)
 			}
 		} catch (error) {
+			await activeHostedServerToolLifecycle?.finalizeOpen(
+				this.shouldAbort()
+					? "Subagent hosted web search cancelled."
+					: "Provider stream failed before subagent hosted web search returned a result.",
+			)
 			if (this.shouldAbort()) {
 				const cancelledError = "Subagent run cancelled."
 				onProgress({ status: "cancelled", error: cancelledError, stats: { ...stats } })
@@ -789,11 +856,16 @@ export class SubagentRunner {
 			onProgress({ status: "failed", error: errorText, stats: { ...stats } })
 			return { status: "failed", error: errorText, stats }
 		} finally {
+			await activeHostedServerToolLifecycle?.finalizeOpen("Subagent hosted web search ended without a result.")
 			this.activeApiAbort = undefined
 		}
 	}
 
-	private createSubagentTaskConfig(state: TaskState): TaskConfig {
+	private createSubagentTaskConfig(
+		state: TaskState,
+		webToolsEnabled: boolean,
+		webSearchRoutingPlan: WebSearchRoutingPlan,
+	): TaskConfig {
 		const baseCallbacks = this.baseConfig.callbacks
 		const coordinator = new ToolExecutorCoordinator()
 		const validator = new ToolValidator(this.baseConfig.services.clineIgnoreController)
@@ -808,6 +880,8 @@ export class SubagentRunner {
 			coordinator,
 			taskState: state,
 			isSubagentExecution: true,
+			webToolsEnabled,
+			webSearchRoutingPlan,
 			vscodeTerminalExecutionMode: "backgroundExec",
 			callbacks: {
 				...baseCallbacks,
@@ -917,9 +991,10 @@ export class SubagentRunner {
 		const { contextWindow, maxAllowedSize } = getContextWindowInfo(api)
 		const useAutoCondense = this.baseConfig.services.stateManager.getGlobalSettingsKey("useAutoCondense")
 		if (useAutoCondense && isNextGenModelFamily(modelId)) {
-			const autoCondenseThreshold = 0.75
-			const roundedThreshold = autoCondenseThreshold ? Math.floor(contextWindow * autoCondenseThreshold) : maxAllowedSize
-			const thresholdTokens = Math.min(roundedThreshold, maxAllowedSize)
+			const thresholdTokens = computeCompactTrigger(contextWindow, computeSummarizeBudget(), {
+				triggerPercent: this.baseConfig.services.stateManager.getGlobalSettingsKey("autoCondenseTriggerPercent"),
+				maxContextTokens: this.baseConfig.services.stateManager.getGlobalSettingsKey("autoCondenseMaxContextTokens"),
+			})
 			return requestTotalTokens >= thresholdTokens
 		}
 
@@ -935,6 +1010,7 @@ export class SubagentRunner {
 		modelId: string,
 		contextManager: ContextManager,
 		contextState: SubagentContextState,
+		webSearchRoutingPlan: WebSearchRoutingPlan,
 	) {
 		for (let attempt = 1; attempt <= MAX_INITIAL_STREAM_ATTEMPTS; attempt += 1) {
 			const truncatedConversation = contextManager
@@ -954,19 +1030,29 @@ export class SubagentRunner {
 			})
 			const stream = recordProviderAdapterOutput(
 				roundContext,
-				api.createMessage(systemPrompt, truncatedConversation, nativeTools),
+				api.createMessage(systemPrompt, truncatedConversation, nativeTools, {
+					serverTools: webSearchRoutingPlan.serverTools,
+				}),
 			)
 			const iterator = stream[Symbol.asyncIterator]()
+			let didYieldChunk = false
 
 			try {
 				const firstChunk = await iterator.next()
 				if (!firstChunk.done) {
+					didYieldChunk = true
 					yield firstChunk.value
 				}
 
 				yield* iterator
 				return
 			} catch (error) {
+				// Once the caller has observed any response content, replaying the request
+				// would duplicate streamed text and hosted/native tool lifecycles.
+				if (didYieldChunk) {
+					throw error
+				}
+
 				if (checkContextWindowExceededError(error)) {
 					const compactResult = this.compactConversationForContextWindow(
 						contextManager,

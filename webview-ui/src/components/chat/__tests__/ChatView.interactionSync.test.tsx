@@ -4,10 +4,40 @@ import type { ReactNode } from "react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import type { AcceptedInteractionSettlement, InteractionDraft } from "@/task-interaction/types"
 
-const mocks = vi.hoisted(() => ({
-	extensionState: {} as Record<string, unknown>,
-	dispatchInteraction: vi.fn(async () => ({ accepted: true, result: "accepted" })),
-}))
+const mocks = vi.hoisted(() => {
+	const chatState = {
+		inputValue: "draft",
+		setInputValue: vi.fn(),
+		activeQuote: null as string | null,
+		setActiveQuote: vi.fn(),
+		isTextAreaFocused: false,
+		setIsTextAreaFocused: vi.fn(),
+		selectedImages: [] as string[],
+		setSelectedImages: vi.fn(),
+		selectedFiles: [] as string[],
+		setSelectedFiles: vi.fn(),
+		sendingDisabled: false,
+		setSendingDisabled: vi.fn(),
+		enableButtons: false,
+		setEnableButtons: vi.fn(),
+		primaryButtonText: undefined,
+		setPrimaryButtonText: vi.fn(),
+		secondaryButtonText: undefined,
+		setSecondaryButtonText: vi.fn(),
+		expandedRows: {},
+		setExpandedRows: vi.fn(),
+		textAreaRef: { current: null },
+		handleFocusChange: vi.fn(),
+		clearExpandedRows: vi.fn(),
+		resetState: vi.fn(),
+	}
+	return {
+		chatState,
+		extensionState: {} as Record<string, unknown>,
+		dispatchInteraction: vi.fn(async () => ({ accepted: true, result: "accepted" })),
+		useChatState: vi.fn(() => chatState),
+	}
+})
 
 vi.mock("@shared/combineApiRequests", () => ({ combineApiRequests: (messages: unknown) => messages }))
 vi.mock("@shared/combineCommandSequences", () => ({ combineCommandSequences: (messages: unknown) => messages }))
@@ -31,7 +61,10 @@ vi.mock("@/services/grpc-client", () => ({
 	},
 }))
 vi.mock("@/task-interaction/InteractionHost", () => ({ InteractionHost: () => null }))
-vi.mock("../activity/TaskActivityPanel", () => ({ TaskActivityPanel: () => null }))
+vi.mock("../activity/TaskActivityPanel", () => ({
+	DEFAULT_TASK_ACTIVITY_FILTERS: { statuses: ["active"], kinds: [] },
+	TaskActivityPanel: () => null,
+}))
 vi.mock("../activity/TaskActivityTabs", () => ({ TaskActivityTabs: () => null }))
 vi.mock("../activity/useTaskActivities", () => ({ useTaskActivities: () => ({ activeCount: 0 }) }))
 vi.mock("../auto-approve-menu/AutoApproveBar", () => ({ default: () => null }))
@@ -45,17 +78,28 @@ vi.mock("../chat-view", () => {
 		CHAT_CONSTANTS: { MAX_IMAGES_AND_FILES_PER_MESSAGE: 20 },
 		ChatLayout: ({ children }: { children: ReactNode }) => <div>{children}</div>,
 		InputSection: ({
+			chatState,
 			draft,
 			enabled,
+			onDraftAccepted,
 			onSubmit,
 		}: {
+			chatState: { inputValue: string }
 			draft: InteractionDraft
 			enabled?: boolean
+			onDraftAccepted: (settlement: AcceptedInteractionSettlement) => void
 			onSubmit?: (draft: InteractionDraft) => Promise<AcceptedInteractionSettlement | undefined>
 		}) => (
 			<div>
-				<textarea aria-label="Task input" disabled={!enabled} />
-				<button aria-label="Invoke Enter" onClick={() => void onSubmit?.(draft)} type="button">
+				<textarea aria-label="Task input" disabled={!enabled} readOnly value={chatState.inputValue} />
+				<button
+					aria-label="Invoke Enter"
+					onClick={() => {
+						void onSubmit?.(draft).then((settlement) => {
+							if (settlement) onDraftAccepted(settlement)
+						})
+					}}
+					type="button">
 					Enter
 				</button>
 			</div>
@@ -69,32 +113,7 @@ vi.mock("../chat-view", () => {
 		filterVisibleMessages: (messages: ClineMessage[]) => messages,
 		groupLowStakesTools: (messages: ClineMessage[]) => messages,
 		groupMessages: (messages: ClineMessage[]) => messages,
-		useChatState: () => ({
-			inputValue: "draft",
-			setInputValue: vi.fn(),
-			activeQuote: null,
-			setActiveQuote: vi.fn(),
-			isTextAreaFocused: false,
-			setIsTextAreaFocused: vi.fn(),
-			selectedImages: [],
-			setSelectedImages: vi.fn(),
-			selectedFiles: [],
-			setSelectedFiles: vi.fn(),
-			sendingDisabled: false,
-			setSendingDisabled: vi.fn(),
-			enableButtons: false,
-			setEnableButtons: vi.fn(),
-			primaryButtonText: undefined,
-			setPrimaryButtonText: vi.fn(),
-			secondaryButtonText: undefined,
-			setSecondaryButtonText: vi.fn(),
-			expandedRows: {},
-			setExpandedRows: vi.fn(),
-			textAreaRef: { current: null },
-			handleFocusChange: vi.fn(),
-			clearExpandedRows: vi.fn(),
-			resetState: vi.fn(),
-		}),
+		useChatState: mocks.useChatState,
 		useMessageHandlers: () => ({
 			handleSendMessage: vi.fn(async () => undefined),
 			handleTaskCloseButtonClick: vi.fn(),
@@ -145,7 +164,15 @@ function taskView(): TaskViewState {
 	}
 }
 
-function renderChat(messages: ClineMessage[], view: TaskViewState = taskView()): void {
+function chatView() {
+	return <ChatView hideAnnouncement={vi.fn()} isHidden={false} showAnnouncement={false} showHistoryView={vi.fn()} />
+}
+
+function renderChat(
+	messages: ClineMessage[],
+	view: TaskViewState = taskView(),
+	includeHistoryItem = true,
+): ReturnType<typeof render> {
 	mocks.extensionState = {
 		version: "test",
 		clineMessages: messages,
@@ -159,15 +186,30 @@ function renderChat(messages: ClineMessage[], view: TaskViewState = taskView()):
 		apiMetrics: { totalTokensIn: 0, totalTokensOut: 0, totalCost: 0 },
 		lastApiReqTotalTokens: 0,
 		taskViewState: view,
-		currentTaskItem: { id: "task-1", task: "Task", ts: 1 },
+		currentTaskItem: includeHistoryItem ? { id: "task-1", task: "Task", ts: 1 } : undefined,
 		taskTitleMessage: { ts: 1, type: "say", say: "task", text: "Task" },
 	}
-	render(<ChatView hideAnnouncement={vi.fn()} isHidden={false} showAnnouncement={false} showHistoryView={vi.fn()} />)
+	return render(chatView())
 }
 
 describe("ChatView interaction anchor synchronization", () => {
 	beforeEach(() => {
 		mocks.dispatchInteraction.mockClear()
+		mocks.useChatState.mockClear()
+		mocks.chatState.inputValue = "draft"
+		mocks.chatState.activeQuote = null
+		mocks.chatState.selectedImages = []
+		mocks.chatState.selectedFiles = []
+		mocks.chatState.setInputValue.mockClear()
+		mocks.chatState.setActiveQuote.mockClear()
+		mocks.chatState.setSelectedImages.mockClear()
+		mocks.chatState.setSelectedFiles.mockClear()
+	})
+
+	it("keeps runtime task ownership when the shared history item is temporarily unavailable", () => {
+		renderChat([ASK], taskView(), false)
+
+		expect(mocks.useChatState).toHaveBeenCalledWith([ASK], "task-1")
 	})
 
 	it.each([
@@ -207,5 +249,105 @@ describe("ChatView interaction anchor synchronization", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Invoke Enter" }))
 
 		await waitFor(() => expect(mocks.dispatchInteraction).toHaveBeenCalledOnce())
+	})
+
+	it("submits condense feedback as Reject when Enter is pressed", async () => {
+		const view = taskView()
+		if (!view.activeInteraction) throw new Error("Expected active interaction")
+		view.activeInteraction = {
+			...view.activeInteraction,
+			kind: "condense",
+			taskAsk: "condense",
+			presentationKind: "condense",
+		}
+		view.input.enterAction = "reject"
+		view.footer.actions = [
+			{
+				type: "confirm_utility",
+				label: "Condense Conversation",
+				appearance: "primary",
+				enabled: true,
+				payloadPolicy: "none",
+				dispatchTarget: "interaction",
+			},
+			{
+				type: "reject",
+				label: "Regenerate Summary",
+				appearance: "secondary",
+				enabled: true,
+				payloadPolicy: "draft",
+				dispatchTarget: "interaction",
+			},
+		]
+		const condenseAsk: ClineMessage = { ...ASK, ask: "condense", text: "Summary preview" }
+		mocks.chatState.inputValue = "Keep the deployment details"
+
+		renderChat([condenseAsk], view)
+		fireEvent.click(screen.getByRole("button", { name: "Invoke Enter" }))
+
+		await waitFor(() => expect(mocks.dispatchInteraction).toHaveBeenCalledOnce())
+		expect(mocks.dispatchInteraction).toHaveBeenCalledWith(
+			expect.objectContaining({
+				actionId: "reject",
+				draft: { text: "Keep the deployment details", images: [], files: [] },
+			}),
+		)
+		expect(mocks.chatState.setInputValue).toHaveBeenCalledWith("")
+	})
+
+	it("clears the complete submitted draft before dispatch settles", async () => {
+		let resolveDispatch: ((response: { accepted: boolean; result: string }) => void) | undefined
+		mocks.dispatchInteraction.mockImplementationOnce(
+			() =>
+				new Promise((resolve) => {
+					resolveDispatch = resolve
+				}),
+		)
+		mocks.chatState.activeQuote = "quoted context"
+		mocks.chatState.selectedImages = ["image.png"]
+		mocks.chatState.selectedFiles = ["file.txt"]
+		renderChat([ASK])
+
+		fireEvent.click(screen.getByRole("button", { name: "Invoke Enter" }))
+
+		expect(mocks.dispatchInteraction).toHaveBeenCalledOnce()
+		expect(mocks.chatState.setInputValue).toHaveBeenCalledWith("")
+		expect(mocks.chatState.setSelectedImages).toHaveBeenCalledWith([])
+		expect(mocks.chatState.setSelectedFiles).toHaveBeenCalledWith([])
+		expect(mocks.chatState.setActiveQuote).toHaveBeenCalledWith(null)
+		await act(async () => resolveDispatch?.({ accepted: true, result: "accepted" }))
+	})
+
+	it("does not restore the submitted draft when dispatch rejects it", async () => {
+		mocks.dispatchInteraction.mockResolvedValueOnce({ accepted: false, result: "rejected" })
+		renderChat([ASK])
+
+		fireEvent.click(screen.getByRole("button", { name: "Invoke Enter" }))
+		await waitFor(() => expect(mocks.dispatchInteraction).toHaveBeenCalledOnce())
+
+		expect(mocks.chatState.setInputValue).toHaveBeenCalledWith("")
+		expect(mocks.chatState.setInputValue).not.toHaveBeenCalledWith("draft")
+	})
+
+	it("does not clear a newer draft when the original dispatch settles", async () => {
+		let resolveDispatch: ((response: { accepted: boolean; result: string }) => void) | undefined
+		mocks.dispatchInteraction.mockImplementationOnce(
+			() =>
+				new Promise((resolve) => {
+					resolveDispatch = resolve
+				}),
+		)
+		const rendered = renderChat([ASK])
+
+		fireEvent.click(screen.getByRole("button", { name: "Invoke Enter" }))
+		await waitFor(() => expect(mocks.dispatchInteraction).toHaveBeenCalledOnce())
+		expect(mocks.chatState.setInputValue).toHaveBeenCalledWith("")
+		mocks.chatState.setInputValue.mockClear()
+		mocks.chatState.inputValue = "new draft"
+		rendered.rerender(chatView())
+
+		expect(screen.getByRole("textbox", { name: "Task input" })).toHaveValue("new draft")
+		await act(async () => resolveDispatch?.({ accepted: true, result: "accepted" }))
+		expect(mocks.chatState.setInputValue).not.toHaveBeenCalled()
 	})
 })

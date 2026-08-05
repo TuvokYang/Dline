@@ -7,6 +7,19 @@ export function pathToCommandName(filePath: string): string {
 }
 
 /**
+ * Returns the skill directory name for a SKILL.md path.
+ * Other inputs retain the generic slash-command path behavior.
+ */
+export function pathToSkillName(filePath: string): string {
+	const normalizedPath = filePath.replaceAll("\\", "/")
+	const segments = normalizedPath.split("/").filter(Boolean)
+	if (segments.at(-1)?.toLowerCase() === "skill.md") {
+		return segments.at(-2) ?? pathToCommandName(filePath)
+	}
+	return pathToCommandName(filePath)
+}
+
+/**
  * Extract the display name for a skill or workflow md file.
  * Reads the file's YAML frontmatter `name` field first;
  * falls back to path-based extraction if the file is unreadable

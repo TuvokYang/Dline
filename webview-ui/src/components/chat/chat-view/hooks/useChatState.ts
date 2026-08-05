@@ -1,6 +1,82 @@
 import { ClineMessage } from "@shared/ExtensionMessage"
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { type Dispatch, type SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { ChatState } from "../types/chatTypes"
+
+const INPUT_HISTORY_MERGE_INTERVAL_MS = 750
+const INPUT_HISTORY_LIMIT = 100
+
+type InputEditKind = "insert" | "delete" | "replace"
+
+interface InputHistory {
+	past: string[]
+	future: string[]
+	lastEditAt?: number
+	lastEditKind?: InputEditKind
+}
+
+function getInputEditKind(previousValue: string, nextValue: string): InputEditKind {
+	if (nextValue.length > previousValue.length) return "insert"
+	if (nextValue.length < previousValue.length) return "delete"
+	return "replace"
+}
+
+function useInputHistory() {
+	const [inputValue, setInputValueState] = useState("")
+	const inputValueRef = useRef(inputValue)
+	const historyRef = useRef<InputHistory>({ past: [], future: [] })
+
+	const setInputValue = useCallback<Dispatch<SetStateAction<string>>>((valueOrUpdater) => {
+		const previousValue = inputValueRef.current
+		const nextValue = typeof valueOrUpdater === "function" ? valueOrUpdater(previousValue) : valueOrUpdater
+		if (nextValue === previousValue) return
+
+		const history = historyRef.current
+		const now = Date.now()
+		const editKind = getInputEditKind(previousValue, nextValue)
+		const canMerge =
+			editKind !== "replace" &&
+			history.lastEditKind === editKind &&
+			history.lastEditAt !== undefined &&
+			now - history.lastEditAt <= INPUT_HISTORY_MERGE_INTERVAL_MS
+
+		if (!canMerge) {
+			history.past.push(previousValue)
+			if (history.past.length > INPUT_HISTORY_LIMIT) {
+				history.past.splice(0, history.past.length - INPUT_HISTORY_LIMIT)
+			}
+		}
+		history.future = []
+		history.lastEditAt = now
+		history.lastEditKind = editKind
+		inputValueRef.current = nextValue
+		setInputValueState(nextValue)
+	}, [])
+
+	const restoreHistoryValue = useCallback((source: "past" | "future"): string | undefined => {
+		const history = historyRef.current
+		const sourceStack = history[source]
+		const nextValue = sourceStack.pop()
+		if (nextValue === undefined) return undefined
+
+		const destinationStack = source === "past" ? history.future : history.past
+		destinationStack.push(inputValueRef.current)
+		inputValueRef.current = nextValue
+		history.lastEditAt = undefined
+		history.lastEditKind = undefined
+		setInputValueState(nextValue)
+		return nextValue
+	}, [])
+
+	const undoInputValue = useCallback(() => restoreHistoryValue("past"), [restoreHistoryValue])
+	const redoInputValue = useCallback(() => restoreHistoryValue("future"), [restoreHistoryValue])
+	const resetInputValue = useCallback((value = "") => {
+		inputValueRef.current = value
+		historyRef.current = { past: [], future: [] }
+		setInputValueState(value)
+	}, [])
+
+	return { inputValue, setInputValue, undoInputValue, redoInputValue, resetInputValue }
+}
 
 /**
  * Custom hook for managing chat state
@@ -8,7 +84,7 @@ import { ChatState } from "../types/chatTypes"
  */
 export function useChatState(messages: ClineMessage[], taskId?: string): ChatState {
 	// Input and selection state
-	const [inputValue, setInputValue] = useState("")
+	const { inputValue, setInputValue, undoInputValue, redoInputValue, resetInputValue } = useInputHistory()
 	const [activeQuote, setActiveQuote] = useState<string | null>(null)
 	const [isTextAreaFocused, setIsTextAreaFocused] = useState(false)
 	const [selectedImages, setSelectedImages] = useState<string[]>([])
@@ -35,12 +111,12 @@ export function useChatState(messages: ClineMessage[], taskId?: string): ChatSta
 
 	// Reset state when starting new conversation
 	const resetState = useCallback(() => {
-		setInputValue("")
+		resetInputValue()
 		setActiveQuote(null)
 		setSelectedImages([])
 		setSelectedFiles([])
 		setSendingDisabled(false)
-	}, [])
+	}, [resetInputValue])
 
 	// Handle focus change
 	const handleFocusChange = useCallback((isFocused: boolean) => {
@@ -49,10 +125,19 @@ export function useChatState(messages: ClineMessage[], taskId?: string): ChatSta
 
 	useEffect(() => {
 		if (draftOwnerTaskIdRef.current !== taskId) {
+			const preservesSubmittedWelcomeHistory =
+				draftOwnerTaskIdRef.current === undefined && taskId !== undefined && sendingDisabled
 			draftOwnerTaskIdRef.current = taskId
-			resetState()
+			if (preservesSubmittedWelcomeHistory) {
+				setActiveQuote(null)
+				setSelectedImages([])
+				setSelectedFiles([])
+				setSendingDisabled(false)
+			} else {
+				resetState()
+			}
 		}
-	}, [resetState, taskId])
+	}, [resetState, sendingDisabled, taskId])
 
 	useEffect(() => {
 		clearExpandedRows()
@@ -62,6 +147,9 @@ export function useChatState(messages: ClineMessage[], taskId?: string): ChatSta
 		// State values
 		inputValue,
 		setInputValue,
+		undoInputValue,
+		redoInputValue,
+		resetInputValue,
 		activeQuote,
 		setActiveQuote,
 		isTextAreaFocused,

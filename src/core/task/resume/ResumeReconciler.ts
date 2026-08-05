@@ -210,6 +210,7 @@ function retireCommandApproval(snapshot: TaskSnapshot, uiMessages: readonly Clin
 			block.phase = BlockPhase.COMPLETED
 			break
 		case "cancelled":
+		case "interrupted":
 			block.phase = BlockPhase.CANCELLED
 			break
 		case "skipped":
@@ -296,6 +297,29 @@ function bindPersistedInteraction(snapshot: TaskSnapshot, message: ClineMessage,
 	}
 }
 
+/** Verify that a restored handler interaction still owns one canonical tool block. */
+function retainInteractionWithContinuation(
+	snapshot: TaskSnapshot,
+	interactionId: string,
+	kind: InteractionKind,
+	diagnostics: ResumeDiagnostic[],
+): boolean {
+	if (kind === "resume" || kind === "error_retry" || kind === "mistake_limit") return true
+	const interaction = snapshot.interaction
+	const turn = snapshot.turn
+	if (
+		interaction?.interactionId === interactionId &&
+		turn?.turnId === interaction.turnId &&
+		turn.blocks.filter((block) => block.dlineTid === interactionId).length === 1
+	) {
+		return true
+	}
+
+	diagnostics.push({ code: "missing_interaction_continuation", interactionId })
+	clearInteractionOwnership(snapshot, interactionId)
+	return false
+}
+
 function reconcilePersistedInteraction(
 	snapshot: TaskSnapshot,
 	uiMessages: readonly ClineMessage[],
@@ -338,6 +362,16 @@ function reconcilePersistedInteraction(
 	if (!latest) {
 		if (snapshot.interaction) {
 			if (snapshot.interaction.kind === "completion") {
+				if (
+					!retainInteractionWithContinuation(
+						snapshot,
+						snapshot.interaction.interactionId,
+						snapshot.interaction.kind,
+						diagnostics,
+					)
+				) {
+					return
+				}
 				snapshot.phase = TaskPhase.COMPLETED
 				snapshot.completion = { completionId: snapshot.interaction.interactionId }
 				snapshot.interaction.status = "opening"
@@ -359,7 +393,10 @@ function reconcilePersistedInteraction(
 					interactionKind(snapshot, message) === snapshot.interaction?.kind,
 			)
 			if (anchored) {
-				bindPersistedInteraction(snapshot, anchored, snapshot.interaction.kind)
+				const interactionId = snapshot.interaction.interactionId
+				const kind = snapshot.interaction.kind
+				bindPersistedInteraction(snapshot, anchored, kind)
+				retainInteractionWithContinuation(snapshot, interactionId, kind, diagnostics)
 				return
 			}
 			diagnostics.push({ code: "missing_interaction_anchor", interactionId: snapshot.interaction.interactionId })
@@ -376,6 +413,7 @@ function reconcilePersistedInteraction(
 	}
 	if (answeredDlineTids.has(interactionId)) return
 	bindPersistedInteraction(snapshot, latest.message, latest.kind)
+	retainInteractionWithContinuation(snapshot, interactionId, latest.kind, diagnostics)
 }
 
 function stopWithoutChangingInteraction(snapshot: TaskSnapshot): void {
@@ -392,6 +430,44 @@ function clearStaleApprovalOwner(snapshot: TaskSnapshot): void {
 	const activeBlock = turn.blocks.find((block) => block.dlineTid === turn.activeDlineTid)
 	if (!activeBlock || activeBlock.phase !== BlockPhase.AWAITING_APPROVAL) {
 		turn.activeDlineTid = undefined
+	}
+}
+
+/** Recover the narrow close race after completion is visible but before its interaction opens. */
+function restorePresentedCompletion(snapshot: TaskSnapshot, uiMessages: readonly ClineMessage[]): void {
+	if (
+		snapshot.interaction ||
+		snapshot.completion ||
+		snapshot.phase !== TaskPhase.CANCELLING ||
+		snapshot.cancellation?.source !== "system" ||
+		(snapshot.cancellation.fromPhase !== TaskPhase.STREAMING && snapshot.cancellation.fromPhase !== TaskPhase.EXECUTING)
+	) {
+		return
+	}
+
+	const turn = snapshot.turn
+	if (!turn) return
+	const completionBlocks = turn.blocks.filter(
+		(block) =>
+			block.toolName === "attempt_completion" &&
+			(block.phase === BlockPhase.EXECUTING ||
+				block.phase === BlockPhase.AUTO_EXECUTING ||
+				block.phase === BlockPhase.CANCELLED),
+	)
+	if (completionBlocks.length !== 1) return
+	const completionBlock = completionBlocks[0]
+	if (!completionBlock) return
+
+	const hasPresentedResult = uiMessages.some(
+		(message) =>
+			message.type === "say" &&
+			message.say === "completion_result" &&
+			Boolean(message.text) &&
+			message.ts === completionBlock.ts &&
+			message.conversationHistoryIndex === turn.assistantApiIndex,
+	)
+	if (hasPresentedResult) {
+		snapshot.completion = { completionId: completionBlock.dlineTid }
 	}
 }
 
@@ -473,6 +549,7 @@ export function reconcileResume(input: ResumeInput): ResumeResult {
 
 	reconcilePersistedInteraction(next, prepared.uiTail, folded.answeredDlineTids, prepared.apiHistory, diagnostics)
 	clearStaleApprovalOwner(next)
+	restorePresentedCompletion(next, input.uiHistory ?? prepared.uiTail)
 	stopWithoutChangingInteraction(next)
 
 	if (next.interaction) {

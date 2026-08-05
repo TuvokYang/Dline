@@ -231,6 +231,27 @@ describe("CommandOrchestrator background transitions", () => {
 		assert.match(result.result as string, /60-second timeout/i)
 	})
 
+	it.each([0, -1, -2])("keeps a synchronous command with timeout %s alive until it completes", async (timeoutSeconds) => {
+		vi.useFakeTimers()
+		const process = new FakeTerminalProcess()
+		const onTimeout = vi.fn()
+		const execution = orchestrateCommandExecution(process.asResultPromise(), createTerminalManager(), createCallbacks(), {
+			command: "unbounded-command",
+			onTimeout,
+			synchronous: true,
+			timeoutSeconds,
+		})
+
+		await vi.advanceTimersByTimeAsync(24 * 60 * 60 * 1000)
+		assert.equal(process.terminate.mock.calls.length, 0)
+		assert.equal(onTimeout.mock.calls.length, 0)
+
+		process.complete({ exitCode: 0, signal: null })
+		const result = await execution
+		assert.equal(result.completed, true)
+		assert.equal(result.exitCode, 0)
+	})
+
 	it("starts the absolute timeout only after the process launch signal", async () => {
 		vi.useFakeTimers()
 		vi.setSystemTime(0)

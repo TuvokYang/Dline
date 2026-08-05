@@ -1,4 +1,4 @@
-import { readFile, writeFile } from "node:fs/promises"
+import { mkdir, readFile, writeFile } from "node:fs/promises"
 import * as path from "node:path"
 import { expect } from "@playwright/test"
 import type { ElectronApplication } from "playwright"
@@ -254,6 +254,66 @@ e2e(
 		} finally {
 			await reopenedApp?.close()
 			await firstApp?.close()
+		}
+	},
+)
+
+e2e(
+	"Settings API Config - upgrades legacy DeepSeek metadata while preserving user-defined models",
+	async ({ dlineHomeDir, helper, openVSCode, userDataDir, workspaceDir }) => {
+		e2e.setTimeout(150_000)
+		const providerPath = path.join(dlineHomeDir, "providers", "deepseek.json")
+		const builtInModelId = "deepseek-v4-pro"
+		const catalog = {
+			provider: "deepseek",
+			providerName: "DeepSeek",
+			billingMode: "token",
+			defaultModelId: builtInModelId,
+			models: {
+				[builtInModelId]: {
+					id: builtInModelId,
+					name: "Legacy DeepSeek V4 Pro",
+				},
+				"deepseek-user-model": {
+					id: "deepseek-user-model",
+					name: "DeepSeek User Model",
+					userDefined: true,
+					apiFormats: [ApiFormat.OPENAI_CHAT],
+				},
+			},
+		}
+		await mkdir(path.dirname(providerPath), { recursive: true })
+		await writeFile(providerPath, `${JSON.stringify(catalog, null, 2)}\n`, "utf8")
+
+		const app = await openVSCode(workspaceDir)
+		try {
+			const page = await app.firstWindow()
+			await E2ETestHelper.openClineSidebar(page)
+			const sidebar = await helper.getSidebar(page)
+			await helper.signin(sidebar)
+			await page.getByRole("button", { name: "Settings", exact: true }).click()
+
+			await sidebar.getByRole("button", { name: "Add API" }).click()
+			const profileCard = sidebar.getByTestId("api-profile-card").last()
+			await profileCard.getByRole("combobox", { name: "Provider", exact: true }).selectOption("deepseek")
+			const apiFormatSelector = profileCard.getByRole("combobox", { name: "API Format" })
+			await expect(apiFormatSelector).toBeVisible()
+			await expect(apiFormatSelector.getByRole("option", { name: "OpenAI Responses" })).toHaveCount(1)
+			await expect(apiFormatSelector.getByRole("option", { name: "Anthropic Messages" })).toHaveCount(1)
+
+			const updatedCatalog = await readJson<ProviderCatalog>(providerPath)
+			expect(updatedCatalog.models[builtInModelId].apiFormats).toEqual([
+				ApiFormat.OPENAI_CHAT,
+				ApiFormat.OPENAI_RESPONSES,
+				ApiFormat.ANTHROPIC_CHAT,
+			])
+			expect(updatedCatalog.models["deepseek-user-model"]).toMatchObject({
+				name: "DeepSeek User Model",
+				userDefined: true,
+			})
+			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+		} finally {
+			await app.close()
 		}
 	},
 )

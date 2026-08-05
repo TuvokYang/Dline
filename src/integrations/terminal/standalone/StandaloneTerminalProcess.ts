@@ -65,6 +65,15 @@ export class StandaloneTerminalProcess extends EventEmitter<TerminalProcessEvent
 		stderr: "",
 	}
 
+	/** Per-stream byte decoders preserve multibyte characters across child-process chunks. */
+	private outputDecoders: Partial<Record<StandaloneOutputStream, ReturnType<typeof iconv.getDecoder>>> = {}
+
+	/** Bytes held while distinguishing an incomplete UTF-8 sequence from a legacy encoding. */
+	private undecodedBuffers: Record<StandaloneOutputStream, Buffer> = {
+		stdout: Buffer.alloc(0),
+		stderr: Buffer.alloc(0),
+	}
+
 	/** Full output captured from the process */
 	private fullOutput = ""
 
@@ -122,32 +131,113 @@ export class StandaloneTerminalProcess extends EventEmitter<TerminalProcessEvent
 		}
 	}
 
-	/** All encodings to try, ordered by priority */
+	/** All encodings to try, ordered by priority. */
 	private static readonly CANDIDATE_ENCODINGS = ["utf-8", "gbk", "cp936", "gb2312", "big5"]
+	private static readonly STRICT_UTF8_DECODER = new TextDecoder("utf-8", { fatal: true })
 
 	/**
-	 * Decode a Buffer to string using auto-detection.
-	 * Tries each encoding, picks the one with fewest replacement characters (U+FFFD).
-	 * Tie-breaker: prefers UTF-8.
+	 * Decode one output chunk without treating an incomplete multibyte character as corrupt data.
+	 * Encoding selection is independent for stdout and stderr because the streams can split at
+	 * different byte boundaries.
 	 */
-	private decodeBuffer(data: Buffer): string {
-		let best = ""
+	private decodeBuffer(data: Buffer, stream: StandaloneOutputStream): string {
+		const decoder = this.outputDecoders[stream]
+		if (decoder) return decoder.write(data)
+
+		const buffered = this.undecodedBuffers[stream].length === 0 ? data : Buffer.concat([this.undecodedBuffers[stream], data])
+		this.undecodedBuffers[stream] = Buffer.alloc(0)
+
+		if (buffered.every((byte) => byte < 0x80)) return buffered.toString("ascii")
+
+		const utf8Status = this.getUtf8Status(buffered)
+		if (utf8Status === "incomplete") {
+			this.undecodedBuffers[stream] = buffered
+			return ""
+		}
+
+		const encoding = utf8Status === "complete" ? "utf-8" : this.detectBufferEncoding(buffered)
+		const selectedDecoder = iconv.getDecoder(encoding)
+		this.outputDecoders[stream] = selectedDecoder
+		return selectedDecoder.write(buffered)
+	}
+
+	private getUtf8Status(data: Buffer): "complete" | "incomplete" | "invalid" {
+		try {
+			StandaloneTerminalProcess.STRICT_UTF8_DECODER.decode(data)
+			return "complete"
+		} catch {
+			for (let suffixLength = 1; suffixLength <= Math.min(3, data.length); suffixLength++) {
+				const suffixStart = data.length - suffixLength
+				try {
+					StandaloneTerminalProcess.STRICT_UTF8_DECODER.decode(data.subarray(0, suffixStart))
+				} catch {
+					continue
+				}
+				if (this.isIncompleteUtf8Sequence(data.subarray(suffixStart))) return "incomplete"
+			}
+			return "invalid"
+		}
+	}
+
+	private isIncompleteUtf8Sequence(data: Buffer): boolean {
+		const lead = data[0]
+		const expectedLength =
+			lead >= 0xc2 && lead <= 0xdf ? 2 : lead >= 0xe0 && lead <= 0xef ? 3 : lead >= 0xf0 && lead <= 0xf4 ? 4 : 0
+		if (expectedLength === 0 || data.length >= expectedLength) return false
+		for (let index = 1; index < data.length; index++) {
+			if (data[index] < 0x80 || data[index] > 0xbf) return false
+		}
+		if (data.length >= 2) {
+			const second = data[1]
+			if (lead === 0xe0 && second < 0xa0) return false
+			if (lead === 0xed && second > 0x9f) return false
+			if (lead === 0xf0 && second < 0x90) return false
+			if (lead === 0xf4 && second > 0x8f) return false
+		}
+		return true
+	}
+
+	/** Pick the lowest-loss legacy encoding, preferring the detected Windows code page on ties. */
+	private detectBufferEncoding(data: Buffer): string {
+		const detectedSystemEncoding = this.systemEncoding?.toLowerCase()
+		const candidates = [
+			"utf-8",
+			...(detectedSystemEncoding && detectedSystemEncoding !== "utf-8" ? [detectedSystemEncoding] : []),
+			...StandaloneTerminalProcess.CANDIDATE_ENCODINGS.filter(
+				(encoding) => encoding !== "utf-8" && encoding !== detectedSystemEncoding,
+			),
+		]
+		let bestEncoding = "utf-8"
 		let bestScore = Number.POSITIVE_INFINITY
-		for (const enc of StandaloneTerminalProcess.CANDIDATE_ENCODINGS) {
+		for (const encoding of candidates) {
 			try {
-				const decoded = iconv.decode(data, enc)
-				// Count U+FFFD replacement characters
+				const decoded = iconv.decode(data, encoding)
 				const score = (decoded.match(/\ufffd/g) || []).length
 				if (score < bestScore) {
 					bestScore = score
-					best = decoded
-					if (score === 0 && enc === "utf-8") break // UTF-8 clean, stop early
+					bestEncoding = encoding
+					if (score === 0) break
 				}
 			} catch {
-				// skip unsupported encodings
+				// Ignore unsupported encodings and continue with the remaining candidates.
 			}
 		}
-		return best || data.toString("utf-8")
+		return bestEncoding
+	}
+
+	/** Flush buffered bytes after the child stream closes. */
+	private flushDecoder(stream: StandaloneOutputStream): string {
+		let output = ""
+		const pending = this.undecodedBuffers[stream]
+		if (pending.length > 0) {
+			this.undecodedBuffers[stream] = Buffer.alloc(0)
+			const decoder = iconv.getDecoder(this.detectBufferEncoding(pending))
+			this.outputDecoders[stream] = decoder
+			output += decoder.write(pending)
+		}
+		output += this.outputDecoders[stream]?.end() ?? ""
+		delete this.outputDecoders[stream]
+		return output
 	}
 
 	/**
@@ -213,8 +303,8 @@ export class StandaloneTerminalProcess extends EventEmitter<TerminalProcessEvent
 
 			// Handle stdout
 			this.childProcess.stdout?.on("data", (data: Buffer) => {
-				const output = this.decodeBuffer(data)
-				this.handleOutput(output, "stdout")
+				const output = this.decodeBuffer(data, "stdout")
+				if (output) this.handleOutput(output, "stdout")
 				if (!didEmitEmptyLine && output) {
 					this.emit("line", "", "stdout") // Signal start of output
 					didEmitEmptyLine = true
@@ -223,8 +313,8 @@ export class StandaloneTerminalProcess extends EventEmitter<TerminalProcessEvent
 
 			// Handle stderr
 			this.childProcess.stderr?.on("data", (data: Buffer) => {
-				const output = this.decodeBuffer(data)
-				this.handleOutput(output, "stderr")
+				const output = this.decodeBuffer(data, "stderr")
+				if (output) this.handleOutput(output, "stderr")
 				if (!didEmitEmptyLine && output) {
 					this.emit("line", "", "stderr")
 					didEmitEmptyLine = true
@@ -236,6 +326,10 @@ export class StandaloneTerminalProcess extends EventEmitter<TerminalProcessEvent
 				this.exitCode = code
 				this.signal = signal
 				this.isCompleted = true
+				for (const stream of ["stdout", "stderr"] as const) {
+					const output = this.flushDecoder(stream)
+					if (output) this.handleOutput(output, stream)
+				}
 				this.emitRemainingBuffers()
 
 				// Clear hot timer

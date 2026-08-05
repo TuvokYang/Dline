@@ -1,4 +1,4 @@
-import { ApiFormat } from "@shared/proto/dline/models/metadata"
+import { ApiFormat, ServerTool } from "@shared/proto/dline/models/metadata"
 import { ApiProfile } from "@shared/proto/dline/profile"
 import { BaseProviderConfig } from "@shared/proto/dline/provider/common"
 import { OpenAiProviderConfig } from "@shared/proto/dline/provider/openai"
@@ -61,6 +61,19 @@ describe("OpenAiHandler", () => {
 			should(result.info.capabilities?.supportsPromptCache).equal(true)
 			should(result.info.capabilities?.temperature).equal(0.7)
 			should(result.info.pricing?.inputPrice).equal(0.5)
+		})
+
+		it("reports hosted web search unavailable for the Chat transport", () => {
+			const handler = new OpenAiHandler({
+				profile: ApiProfile.create({
+					provider: "openai",
+					modelId: "chat-only-model",
+					openai: OpenAiProviderConfig.create({ apiFormat: ApiFormat.OPENAI_CHAT }),
+				}),
+				mode: "act",
+			})
+
+			expect(handler.supportsServerTool(ServerTool.WEB_SEARCH)).to.equal(false)
 		})
 	})
 
@@ -188,6 +201,88 @@ describe("OpenAiHandler", () => {
 			expect(requestBody.service_tier).to.equal("priority")
 			expect(requestBody.max_output_tokens).to.equal(16_384)
 			expect(requestBody.reasoning).to.deep.equal({ effort: "high", summary: "auto" })
+		})
+
+		it("projects hosted web search exactly once and removes the local function declaration", async () => {
+			const handler = new OpenAiHandler({
+				profile: ApiProfile.create({
+					provider: "openai",
+					apiKey: "test-api-key",
+					modelId: "gpt-compatible-responses",
+					openai: OpenAiProviderConfig.create({ apiFormat: ApiFormat.OPENAI_RESPONSES }),
+				}),
+				mode: "act",
+			})
+			const responsesCreate = vi.fn().mockResolvedValue(createAsyncIterable())
+			vi.spyOn(handler as unknown as { ensureClient: () => unknown }, "ensureClient").mockReturnValue({
+				responses: { create: responsesCreate },
+			})
+			const tools: OpenAI.Chat.ChatCompletionTool[] = [
+				{
+					type: "function",
+					function: { name: "web_search", description: "Local search", parameters: { type: "object" } },
+				},
+				{
+					type: "function",
+					function: { name: "read_file", description: "Read a file", parameters: { type: "object" } },
+				},
+			]
+
+			for await (const _chunk of handler.createMessage("system prompt", [{ role: "user", content: "Search" }], tools, {
+				serverTools: [ServerTool.WEB_SEARCH],
+			})) {
+			}
+
+			const requestTools = responsesCreate.mock.calls[0]?.[0]?.tools
+			expect(requestTools).to.deep.equal([
+				{
+					type: "function",
+					name: "read_file",
+					description: "Read a file",
+					parameters: { type: "object" },
+					strict: true,
+				},
+				{ type: "web_search" },
+			])
+			expect(handler.supportsServerTool(ServerTool.WEB_SEARCH)).to.equal(true)
+		})
+
+		it("keeps local web search as a function when no hosted tool was selected", async () => {
+			const handler = new OpenAiHandler({
+				profile: ApiProfile.create({
+					provider: "openai",
+					apiKey: "test-api-key",
+					modelId: "gpt-compatible-responses",
+					openai: OpenAiProviderConfig.create({ apiFormat: ApiFormat.OPENAI_RESPONSES }),
+				}),
+				mode: "act",
+			})
+			const responsesCreate = vi.fn().mockResolvedValue(createAsyncIterable())
+			vi.spyOn(handler as unknown as { ensureClient: () => unknown }, "ensureClient").mockReturnValue({
+				responses: { create: responsesCreate },
+			})
+
+			for await (const _chunk of handler.createMessage(
+				"system prompt",
+				[{ role: "user", content: "Search" }],
+				[
+					{
+						type: "function",
+						function: { name: "web_search", description: "Local search", parameters: { type: "object" } },
+					},
+				],
+			)) {
+			}
+
+			expect(responsesCreate.mock.calls[0]?.[0]?.tools).to.deep.equal([
+				{
+					type: "function",
+					name: "web_search",
+					description: "Local search",
+					parameters: { type: "object" },
+					strict: true,
+				},
+			])
 		})
 
 		it("routes the unified OpenAI profile from its typed API format", async () => {

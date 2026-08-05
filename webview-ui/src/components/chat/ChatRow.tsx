@@ -320,6 +320,7 @@ export const ChatRowContent = memo(
 		const isCommandSkipped = isCommandMessage && message.commandStatus === "skipped"
 		const isCommandFailed = isCommandMessage && message.commandStatus === "failed"
 		const isCommandCancelled = isCommandMessage && message.commandStatus === "cancelled"
+		const isCommandInterrupted = isCommandMessage && message.commandStatus === "interrupted"
 		const isCommandCompleted =
 			isCommandMessage &&
 			(message.commandStatus === "completed" || message.commandStatus === undefined) &&
@@ -887,7 +888,8 @@ export const ChatRowContent = memo(
 				case "killCommand":
 					return (
 						<KillCommandRow
-							functionId={tool.path || ""}
+							activityId={tool.activityId}
+							command={tool.path || ""}
 							result={Array.isArray(tool.content) ? tool.content.join("\n") : tool.content || ""}
 						/>
 					)
@@ -901,13 +903,15 @@ export const ChatRowContent = memo(
 				<CommandOutputRow
 					exitCode={message.exitCode}
 					icon={icon}
-					isBackgroundExec={vscodeTerminalExecutionMode === "backgroundExec"}
+					isBackgroundExec={message.commandExecutionMode === "background"}
 					isCollapsed={isCommandCollapsed}
 					isCommandCancelled={isCommandCancelled}
 					isCommandCompleted={isCommandCompleted}
 					isCommandExecuting={isCommandExecuting}
 					isCommandFailed={isCommandFailed}
+					isCommandInterrupted={isCommandInterrupted}
 					isCommandPending={isCommandPending}
+					isCommandSkipped={isCommandSkipped}
 					isLast={isLast}
 					isOutputFullyExpanded={isOutputFullyExpanded}
 					message={message}

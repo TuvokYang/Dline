@@ -3,6 +3,7 @@
  * Extracted from api.ts anthropicModels (lines 184-423).
  */
 import type { ModelInfo } from "@shared/api"
+import { ServerTool } from "@shared/proto/dline/models/metadata"
 
 // Tiers used for building 1M variant model pricing (also used by refresh scripts)
 export const CLAUDE_SONNET_1M_TIERS = [
@@ -64,6 +65,7 @@ export const anthropicModels: Record<string, ModelInfo> = {
 		name: "claude-fable-5",
 		capabilities: {
 			supportsTools: true,
+			tools: [ServerTool.WEB_SEARCH],
 			maxTokens: 128_000,
 			contextWindow: 200_000,
 			contextWindowTiers: [
@@ -87,6 +89,7 @@ export const anthropicModels: Record<string, ModelInfo> = {
 		name: "claude-opus-4-8",
 		capabilities: {
 			supportsTools: true,
+			tools: [ServerTool.WEB_SEARCH],
 			maxTokens: 128_000,
 			contextWindow: 200_000,
 			contextWindowTiers: [
@@ -110,6 +113,7 @@ export const anthropicModels: Record<string, ModelInfo> = {
 		name: "claude-sonnet-5",
 		capabilities: {
 			supportsTools: true,
+			tools: [ServerTool.WEB_SEARCH],
 			maxTokens: 128_000,
 			contextWindow: 200_000,
 			contextWindowTiers: [
@@ -133,6 +137,7 @@ export const anthropicModels: Record<string, ModelInfo> = {
 		name: "claude-sonnet-4-6",
 		capabilities: {
 			supportsTools: true,
+			tools: [ServerTool.WEB_SEARCH],
 			maxTokens: 64_000,
 			contextWindow: 200_000,
 			contextWindowTiers: [
@@ -156,6 +161,7 @@ export const anthropicModels: Record<string, ModelInfo> = {
 		name: "claude-opus-4-6",
 		capabilities: {
 			supportsTools: true,
+			tools: [ServerTool.WEB_SEARCH],
 			maxTokens: 128_000,
 			contextWindow: 200_000,
 			contextWindowTiers: [
@@ -181,6 +187,7 @@ export const anthropicModels: Record<string, ModelInfo> = {
 			"Anthropic fast mode preview for Claude Opus 4.6. Same model and capabilities with higher output token speed at premium pricing. Requires fast mode access on your Anthropic account.",
 		capabilities: {
 			supportsTools: true,
+			tools: [ServerTool.WEB_SEARCH],
 			maxTokens: 128_000,
 			contextWindow: 200_000,
 			contextWindowTiers: [
@@ -203,6 +210,7 @@ export const anthropicModels: Record<string, ModelInfo> = {
 		name: "claude-opus-4-7",
 		capabilities: {
 			supportsTools: true,
+			tools: [ServerTool.WEB_SEARCH],
 			maxTokens: 128_000,
 			contextWindow: 200_000,
 			contextWindowTiers: [

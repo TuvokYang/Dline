@@ -37,6 +37,7 @@ function toProtoActivity(activity: TaskActivityRecord, cancellable: boolean): Pr
 		title: activity.title,
 		detail: activity.detail,
 		latestEvent: activity.latestEvent,
+		timeoutSeconds: activity.timeoutSeconds,
 		output: activity.output,
 		result: activity.result,
 		error: activity.error,

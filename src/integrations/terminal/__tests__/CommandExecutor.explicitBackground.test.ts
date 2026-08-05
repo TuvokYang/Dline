@@ -4,6 +4,7 @@ import os from "node:os"
 import path from "node:path"
 import { EventEmitter } from "events"
 import { describe, it, vi } from "vitest"
+import { Logger } from "@/shared/services/Logger"
 import { CommandExecutor } from "../CommandExecutor"
 import { StandaloneTerminalManager } from "../standalone/StandaloneTerminalManager"
 import type {
@@ -90,7 +91,7 @@ function createCallbacks(): CommandExecutorCallbacks {
 }
 
 describe("CommandExecutor explicit background execution", () => {
-	it("applies the owning workspace shell environment without replacing the displayed command", async () => {
+	it("initializes a persistent terminal separately and wraps every user command with preCommands and postCommand", async () => {
 		const workspace = await mkdtemp(path.join(os.tmpdir(), "dline-command-environment-"))
 		const platform = process.platform
 		const profile = platform === "win32" ? "powershell-legacy" : "bash"
@@ -112,9 +113,10 @@ describe("CommandExecutor explicit background execution", () => {
 		}
 		try {
 			await mkdir(path.join(workspace, ".agents"), { recursive: true })
+			const startupScript = platform === "win32" ? "setup.ps1" : "setup.sh"
 			await writeFile(
 				path.join(workspace, ".agents", "bashrc.yml"),
-				`version: 1\nplatforms:\n  ${platform}:\n    profiles:\n      ${profile}:\n        environment:\n          DLINE_TEST_ENV: configured\n        commands:\n          - Initialize-DlineShell\n`,
+				`version: 1\nplatforms:\n  ${platform}:\n    profiles:\n      ${profile}:\n        environment:\n          DLINE_TEST_ENV: configured\n        startupScripts:\n          - ./${startupScript}\n        preCommands:\n          - Initialize-DlineShell\n        postCommand: Finalize-DlineShell\n`,
 				"utf8",
 			)
 			const terminalManager = createTerminalManager()
@@ -142,14 +144,74 @@ describe("CommandExecutor explicit background execution", () => {
 			const launchConfiguration = vi.mocked(terminalManager.getOrCreateTerminal).mock.calls[0]?.[1]
 			assert.equal(launchConfiguration?.environment?.DLINE_TEST_ENV, "configured")
 			assert.equal(typeof launchConfiguration?.configurationId, "string")
-			assert.equal(
-				vi.mocked(terminalManager.runCommand).mock.calls[0]?.[1],
-				platform === "win32"
-					? "& { Initialize-DlineShell; if (-not $?) { exit 1 }; Run-Configured-Command }"
-					: "Initialize-DlineShell && Run-Configured-Command",
-			)
+			assert.match(launchConfiguration?.initializationCommand ?? "", new RegExp(startupScript.replace(".", "\\.")))
+			assert.equal(typeof launchConfiguration?.initializationDiagnosticsPath, "string")
+			const wrappedCommand = vi.mocked(terminalManager.runCommand).mock.calls[0]?.[1] ?? ""
+			assert.match(wrappedCommand, /Initialize-DlineShell/)
+			assert.match(wrappedCommand, /Run-Configured-Command/)
+			assert.match(wrappedCommand, /Finalize-DlineShell/)
+			assert.doesNotMatch(wrappedCommand, new RegExp(startupScript.replace(".", "\\.")))
 			assert.equal(terminalInfo.lastCommand, "Run-Configured-Command")
 		} finally {
+			await rm(workspace, { recursive: true, force: true })
+		}
+	})
+
+	it("logs an invalid bashrc.yml and executes the original command without project configuration", async () => {
+		const workspace = await mkdtemp(path.join(os.tmpdir(), "dline-command-invalid-environment-"))
+		const processResult = new FakeTerminalProcess()
+		const terminalInfo: TerminalInfo = {
+			id: 1,
+			terminal: {
+				dispose: vi.fn(),
+				hide: vi.fn(),
+				name: "Unconfigured terminal",
+				processId: Promise.resolve(1),
+				sendText: vi.fn(),
+				show: vi.fn(),
+			},
+			busy: false,
+			lastActive: Date.now(),
+			lastCommand: "",
+		}
+		try {
+			await mkdir(path.join(workspace, ".agents"), { recursive: true })
+			await writeFile(
+				path.join(workspace, ".agents", "bashrc.yml"),
+				"version: 1\nplatforms:\n  win32:\n    profiles:\n      default:\n        commands:\n          - legacy-command\n",
+				"utf8",
+			)
+			const logger = vi.spyOn(Logger, "error").mockImplementation(() => undefined)
+			const terminalManager = createTerminalManager()
+			vi.mocked(terminalManager.getOrCreateTerminal).mockResolvedValue(terminalInfo)
+			vi.mocked(terminalManager.runCommand).mockReturnValue(processResult.asResultPromise())
+			const executor = new CommandExecutor(
+				{
+					cwd: workspace,
+					workspaceRoots: [workspace],
+					taskId: "task-invalid-environment",
+					terminalExecutionMode: "vscodeTerminal",
+					terminalManager,
+					terminalConfiguration,
+					ulid: "task-invalid-environment-ulid",
+				},
+				createCallbacks(),
+			)
+
+			const execution = executor.execute("Run-Original-Command", 30, { synchronous: true })
+			await vi.waitFor(() => assert.equal(vi.mocked(terminalManager.runCommand).mock.calls.length, 1))
+			processResult.complete({ exitCode: 0, signal: null })
+			processResult.continue()
+			await execution
+
+			assert.equal(vi.mocked(terminalManager.getOrCreateTerminal).mock.calls[0]?.[1], undefined)
+			assert.equal(vi.mocked(terminalManager.runCommand).mock.calls[0]?.[1], "Run-Original-Command")
+			assert.ok(
+				logger.mock.calls.some(([message]) => String(message).includes("continuing without it")),
+				"invalid configuration should be reported only through the extension logger",
+			)
+		} finally {
+			vi.restoreAllMocks()
 			await rm(workspace, { recursive: true, force: true })
 		}
 	})
@@ -174,6 +236,37 @@ describe("CommandExecutor explicit background execution", () => {
 			assert.deepEqual(standaloneConfigure.mock.calls, [[terminalConfiguration]])
 		} finally {
 			standaloneConfigure.mockRestore()
+		}
+	})
+
+	it("reinitializes every owned terminal manager without forcing busy terminals closed", () => {
+		const primaryManager = createTerminalManager()
+		primaryManager.reinitializeTerminals = vi.fn(() => ({
+			closedCount: 2,
+			busyTerminals: [],
+		}))
+		const standaloneReinitialize = vi.spyOn(StandaloneTerminalManager.prototype, "reinitializeTerminals").mockReturnValue({
+			closedCount: 1,
+			busyTerminals: [],
+		})
+		try {
+			const executor = new CommandExecutor(
+				{
+					cwd: "C:\\workspace",
+					taskId: "task-reinitialize",
+					terminalExecutionMode: "vscodeTerminal",
+					terminalManager: primaryManager,
+					terminalConfiguration,
+					ulid: "task-reinitialize-ulid",
+				},
+				createCallbacks(),
+			)
+
+			assert.deepEqual(executor.reinitializeTerminals(), { closedCount: 3, busyTerminals: [] })
+			assert.equal(vi.mocked(primaryManager.reinitializeTerminals).mock.calls.length, 1)
+			assert.equal(standaloneReinitialize.mock.calls.length, 1)
+		} finally {
+			standaloneReinitialize.mockRestore()
 		}
 	})
 
@@ -278,6 +371,7 @@ describe("CommandExecutor explicit background execution", () => {
 		assert.equal(result.logFilePath, "C:\\Temp\\command_101_1.log")
 		assert.equal(messages[0].logPath, "C:\\Temp\\command_101_1.log")
 		assert.equal(createCommandActivity.mock.calls[0]?.[0].executionMode, "background")
+		assert.equal(createCommandActivity.mock.calls[0]?.[0].timeoutSeconds, 30)
 		assert.ok(
 			updateCommandActivity.mock.calls.some(
 				([, patch]) => patch.executionMode === "background" && patch.logPath === "C:\\Temp\\command_101_1.log",
@@ -288,6 +382,78 @@ describe("CommandExecutor explicit background execution", () => {
 		await vi.waitFor(() => {
 			assert.ok(updateCommandActivity.mock.calls.some(([, patch]) => patch.status === expectedStatus))
 		})
+	})
+
+	it("updates the command message when foreground execution automatically moves to the background", async () => {
+		vi.useFakeTimers()
+		const process = new FakeTerminalProcess()
+		const processPromise = process.asResultPromise()
+		const terminalInfo: TerminalInfo = {
+			id: 1,
+			terminal: {
+				dispose: vi.fn(),
+				hide: vi.fn(),
+				name: "Foreground terminal",
+				processId: Promise.resolve(1),
+				sendText: vi.fn(),
+				show: vi.fn(),
+			},
+			busy: false,
+			lastActive: Date.now(),
+			lastCommand: "",
+		}
+		const messages: Array<Record<string, unknown>> = [{ ask: "command", text: "watch", ts: 202 }]
+		const callbacks: CommandExecutorCallbacks = {
+			addToUserMessageContent: vi.fn(),
+			ask: vi.fn(async () => ({ response: "messageResponse" })),
+			getClineMessages: () => messages,
+			say: vi.fn(async () => undefined),
+			updateBackgroundCommandState: vi.fn(),
+			updateClineMessage: vi.fn(async (index, patch) => {
+				Object.assign(messages[index], patch)
+			}),
+		}
+		const terminalManager = createTerminalManager()
+		vi.mocked(terminalManager.getOrCreateTerminal).mockResolvedValue(terminalInfo)
+		vi.mocked(terminalManager.runCommand).mockReturnValue(processPromise)
+		const executor = new CommandExecutor(
+			{
+				cwd: "C:\\workspace",
+				taskId: "task-foreground-handoff",
+				terminalExecutionMode: "vscodeTerminal",
+				terminalManager,
+				terminalConfiguration,
+				ulid: "task-foreground-handoff-ulid",
+			},
+			callbacks,
+		)
+		const standaloneManager = (executor as unknown as { standaloneManager: StandaloneTerminalManager }).standaloneManager
+		const backgroundCommand: BackgroundCommand = {
+			command: "watch",
+			id: "command_202_1",
+			origin: "foreground",
+			cancellationOwner: "task",
+			lineCount: 0,
+			logFilePath: "C:\\Temp\\command_202_1.log",
+			process: processPromise,
+			startTime: Date.now(),
+			status: "running",
+		}
+		vi.spyOn(standaloneManager, "trackBackgroundCommand").mockReturnValue(backgroundCommand)
+
+		try {
+			const execution = executor.execute("watch", 30, { commandTs: 202 })
+			await vi.waitFor(() => assert.equal(messages[0].commandExecutionMode, "foreground"))
+
+			await vi.advanceTimersByTimeAsync(10_000)
+			const result = await execution
+
+			assert.equal(result.backgroundCommandId, "command_202_1")
+			assert.equal(messages[0].commandExecutionMode, "background")
+		} finally {
+			process.complete({ exitCode: 0, signal: null })
+			vi.useRealTimers()
+		}
 	})
 
 	it("keeps explicit background work alive during Task cancellation and cancels it only explicitly", async () => {
@@ -412,13 +578,17 @@ describe("CommandExecutor explicit background execution", () => {
 
 		const execution = executor.execute("watch", undefined, { commandTs: 77, functionId: "call-watch" })
 		await vi.waitFor(() => expect(executor.hasTaskOwnedCommand()).toBe(true))
-		expect(await executor.cancelCommandByFunctionId("call-unknown")).toBe(false)
-		expect(await executor.cancelCommandByFunctionId("call-watch")).toBe(true)
+		expect(await executor.cancelCommandByFunctionId("call-unknown")).toEqual({ cancelled: false })
+		expect(await executor.cancelCommandByFunctionId("call-watch")).toEqual({
+			activityId: "command_77_1",
+			cancelled: true,
+			command: "watch",
+		})
 		process.emit("error", new Error("terminated"))
 		process.continue()
 		await execution
 
-		expect(await executor.cancelCommandByFunctionId("call-watch")).toBe(false)
+		expect(await executor.cancelCommandByFunctionId("call-watch")).toEqual({ cancelled: false })
 		expect(process.terminate).toHaveBeenCalledTimes(1)
 		expect(updateCommandActivity).toHaveBeenCalledWith("command_77_1", expect.objectContaining({ status: "cancelled" }))
 		expect(updateCommandActivity).not.toHaveBeenCalledWith("command_77_1", expect.objectContaining({ status: "failed" }))

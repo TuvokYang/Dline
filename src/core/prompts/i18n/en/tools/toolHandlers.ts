@@ -60,7 +60,12 @@ Always adhere to this format for all tool uses to ensure proper parsing and exec
 	condenseMissingContext: "Missing required parameter: context",
 	condenseNotificationSubtitle: "Dline wants to condense the conversation...",
 	condenseNotificationMessage: "Dline is suggesting to condense your conversation with: @CONTEXT@",
-	condenseFeedbackResult: "The user provided feedback on the condensed conversation summary:\n<feedback>\n@TEXT@\n</feedback>",
+	condenseFeedbackResult: `<explicit_instructions type="condense">
+The user rejected the previous condensed conversation summary. Regenerate the summary now, incorporating the user's feedback below. You are only allowed to respond by calling the condense tool with the complete replacement summary.
+</explicit_instructions>
+<feedback>
+@TEXT@
+</feedback>`,
 
 	// MakePlanHandler
 	planNeedsMoreExploration:

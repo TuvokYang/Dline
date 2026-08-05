@@ -1,4 +1,3 @@
-import { resolveProvider } from "@core/api"
 import { getPrompt } from "@core/prompts/i18n"
 import { ClineAsk, ClineSayTool } from "@shared/ExtensionMessage"
 import { ClineDefaultTool } from "@shared/tools"
@@ -6,7 +5,6 @@ import axios from "axios"
 import { ClineEnv } from "@/config"
 import { AuthService } from "@/services/auth/AuthService"
 import { buildClineExtraHeaders } from "@/services/EnvUtils"
-import { featureFlagsService } from "@/services/feature-flags"
 import { telemetryService } from "@/services/telemetry"
 import { CLINE_ACCOUNT_AUTH_ERROR_MESSAGE } from "@/shared/ClineAccount"
 import { getAxiosSettings } from "@/shared/net"
@@ -51,15 +49,13 @@ export class WebFetchToolHandler implements IFullyManagedTool {
 			const url: string | undefined = block.params.url
 			const prompt: string | undefined = block.params.prompt
 
-			// Extract provider information for telemetry
-			const apiConfig = config.services.stateManager.getApiConfiguration()
-			const currentMode = config.services.stateManager.getGlobalSettingsKey("mode")
-			const provider = resolveProvider(apiConfig, currentMode)
+			const provider = config.api.getProviderId?.()
 
-			// Check if Cline web tools are enabled (both user setting and feature flag)
-			const clineWebToolsEnabled = config.services.stateManager.getGlobalSettingsKey("clineWebToolsEnabled")
-			const featureFlagEnabled = featureFlagsService.getWebtoolsEnabled()
-			if (provider !== "cline" || !clineWebToolsEnabled || !featureFlagEnabled) {
+			// Web Fetch follows the request-frozen global Web Tools switch. A restored
+			// approval from before request scopes existed falls back to the live setting.
+			const webToolsEnabled =
+				config.webToolsEnabled ?? config.services.stateManager.getGlobalSettingsKey("clineWebToolsEnabled") === true
+			if (!webToolsEnabled) {
 				return formatResponse.toolError(getPrompt("toolHandlers", "webToolsDisabled"))
 			}
 

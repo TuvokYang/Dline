@@ -5,6 +5,7 @@ import {
 	SubagentExecutionStatus,
 	SubagentStatusItem,
 } from "@shared/ExtensionMessage"
+import type { TaskActivityEvent } from "@shared/proto/dline/task"
 import {
 	BotIcon,
 	CheckIcon,
@@ -32,13 +33,25 @@ type SubagentRowStatus = SubagentExecutionStatus
 
 interface SubagentRowData {
 	status: SubagentRowStatus
-	items: SubagentStatusItem[]
+	items: SubagentDisplayItem[]
 }
 
 interface SubagentPromptTextProps {
 	prompt: string
 	isExpanded: boolean
 	onShowMore: () => void
+}
+
+interface SubagentDisplayItem extends SubagentStatusItem {
+	activityEvents?: TaskActivityEvent[]
+}
+
+interface SubagentToolCallRow {
+	toolCallId: string
+	toolName: string
+	toolStatus?: string
+	summary?: string
+	sequence: number
 }
 
 const statusIcon = (status: DisplayStatus) => {
@@ -76,6 +89,86 @@ const formatCost = (value: number | undefined, currency: string): string => {
 		minimumFractionDigits: 2,
 		maximumFractionDigits,
 	}).format(normalized)
+}
+
+function getOrderedToolCalls(events: TaskActivityEvent[] | undefined): SubagentToolCallRow[] {
+	if (!events?.length) return []
+
+	const calls = new Map<string, SubagentToolCallRow>()
+	const orderedEvents = [...events].sort((left, right) => left.sequence - right.sequence || left.timestamp - right.timestamp)
+	for (const event of orderedEvents) {
+		if (event.kind !== "tool_call" || !event.toolCallId || !event.toolName) continue
+		const existing = calls.get(event.toolCallId)
+		calls.set(event.toolCallId, {
+			toolCallId: event.toolCallId,
+			toolName: event.toolName,
+			toolStatus: event.toolStatus,
+			summary: event.summary || existing?.summary,
+			sequence: existing?.sequence ?? event.sequence,
+		})
+	}
+
+	return [...calls.values()].sort((left, right) => left.sequence - right.sequence)
+}
+
+function SubagentContext({ context }: { context: string }) {
+	const [isExpanded, setIsExpanded] = useState(false)
+
+	return (
+		<button
+			aria-expanded={isExpanded}
+			aria-label={isExpanded ? "Collapse subagent context" : "Show full subagent context"}
+			className="block w-full rounded-xs border border-editor-group-border bg-transparent px-2 py-1 text-left text-[11px] text-foreground opacity-80 cursor-pointer wrap-anywhere"
+			onClick={() => setIsExpanded((value) => !value)}
+			type="button">
+			<span className="mb-0.5 flex items-center justify-between font-semibold">
+				Context
+				{isExpanded ? (
+					<ChevronDownIcon aria-hidden="true" className="size-2.5 shrink-0" />
+				) : (
+					<ChevronRightIcon aria-hidden="true" className="size-2.5 shrink-0" />
+				)}
+			</span>
+			<span
+				className={`block whitespace-pre-wrap break-words leading-4 ${isExpanded ? "h-auto" : "h-4 overflow-hidden"}`}
+				data-testid="subagent-context-content">
+				{context}
+			</span>
+		</button>
+	)
+}
+
+function SubagentToolCalls({ events }: { events: TaskActivityEvent[] | undefined }) {
+	const calls = useMemo(() => getOrderedToolCalls(events), [events])
+	if (calls.length === 0) return null
+
+	return (
+		<div className="mt-1.5 border-t border-editor-group-border pt-1.5">
+			<div className="mb-0.5 text-[10px] font-semibold uppercase opacity-60">Tools</div>
+			<ol className="m-0 list-none space-y-0.5 p-0">
+				{calls.map((call, index) => {
+					const text = call.summary?.trim() || call.toolName
+					return (
+						<li
+							className="flex h-4 min-w-0 items-center gap-1 font-mono text-[10px] leading-4 opacity-75"
+							data-testid="subagent-tool-call"
+							key={call.toolCallId}
+							title={text}>
+							<span className="w-3 shrink-0 text-right tabular-nums">{index + 1}.</span>
+							{call.toolStatus === "started" ? (
+								<LoaderCircleIcon className="size-2.5 shrink-0 animate-spin text-link" />
+							) : call.toolStatus === "failed" ? (
+								<CircleXIcon className="size-2.5 shrink-0 text-error" />
+							) : (
+								<CheckIcon className="size-2.5 shrink-0 text-success" />
+							)}
+							<span className="min-w-0 truncate">{text}</span>
+						</li>
+					)
+				})}
+			</ol>
+		</div>
+	)
 }
 
 function parseSubagentRowData(message: ClineMessage): SubagentRowData | null {
@@ -244,6 +337,7 @@ export default function SubagentStatusRow({ message }: SubagentStatusRowProps) {
 				currency: activity.metrics?.currency ?? entry.currency,
 				contextTokens: activity.metrics?.contextTokens ?? entry.contextTokens,
 				contextWindow: activity.metrics?.contextWindow ?? entry.contextWindow,
+				activityEvents: activity.events,
 			}
 		})
 		const statuses = items.map((entry) => entry.status)
@@ -352,6 +446,7 @@ export default function SubagentStatusRow({ message }: SubagentStatusRowProps) {
 						return (
 							<div
 								className="rounded-xs border border-editor-group-border px-2 py-1.5"
+								data-testid="subagent-item"
 								key={entry.index}
 								style={{ backgroundColor: "var(--vscode-editor-background)" }}>
 								<div className="flex items-start gap-2">
@@ -365,16 +460,14 @@ export default function SubagentStatusRow({ message }: SubagentStatusRowProps) {
 													</div>
 												)}
 												{entry.task && (
-													<div className="text-xs font-medium text-foreground wrap-anywhere">
-														<MarkdownBlock markdown={entry.task} />
+													<div>
+														<div className="text-[10px] font-semibold uppercase opacity-60">Task</div>
+														<h4 className="m-0 whitespace-pre-wrap break-words text-xs font-semibold text-foreground">
+															{entry.task}
+														</h4>
 													</div>
 												)}
-												{entry.context && (
-													<div className="rounded-xs border border-editor-group-border px-2 py-1 text-[11px] opacity-80 wrap-anywhere">
-														<div className="mb-0.5 font-semibold">Context</div>
-														<MarkdownBlock markdown={entry.context} />
-													</div>
-												)}
+												{entry.context && <SubagentContext context={entry.context} />}
 											</>
 										) : (
 											<SubagentPromptText
@@ -413,11 +506,15 @@ export default function SubagentStatusRow({ message }: SubagentStatusRowProps) {
 										<span className="shrink-0">{isExpanded ? "Hide output" : "Show output"}</span>
 									</button>
 								)}
-								{shouldShowStats && !hasDetails && latestToolCallText && (
-									<div className="mt-1 text-[10px] opacity-70 min-w-0 truncate font-mono">
-										{latestToolCallText}
-									</div>
-								)}
+								{shouldShowStats &&
+									!hasDetails &&
+									latestToolCallText &&
+									!entry.activityEvents?.some((event) => event.kind === "tool_call") && (
+										<div className="mt-1 text-[10px] opacity-70 min-w-0 truncate font-mono">
+											{latestToolCallText}
+										</div>
+									)}
+								{shouldShowStats && <SubagentToolCalls events={entry.activityEvents} />}
 								{isExpanded && entry.result && entry.status === "completed" && (
 									<div className="mt-2 text-xs opacity-80 wrap-anywhere overflow-hidden">
 										<MarkdownBlock markdown={entry.result} />

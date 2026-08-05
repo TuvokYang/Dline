@@ -344,7 +344,6 @@ export const MessagesArea: React.FC<MessagesAreaProps> = ({
 
 		const intent = getBottomFollowIntent({
 			disableAutoScroll: disableAutoScrollRef.current,
-			isAtBottom: isAtBottomRef.current,
 			absoluteBottomLoaded,
 			lastMessageTsChanged,
 			lastMessageContentChanged,

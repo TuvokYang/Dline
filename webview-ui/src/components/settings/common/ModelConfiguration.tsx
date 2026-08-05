@@ -1,5 +1,5 @@
 import type { ModelInfo } from "@shared/proto/dline/models"
-import type { ModelCapabilities, ModelPricing } from "@shared/proto/dline/models/metadata"
+import { type ModelCapabilities, type ModelPricing, ServerTool } from "@shared/proto/dline/models/metadata"
 import { VSCodeCheckbox } from "@vscode/webview-ui-toolkit/react"
 import { useEffect, useState } from "react"
 import { Label } from "@/components/ui/label"
@@ -9,6 +9,13 @@ import { ContextTierEditor, PricingTierEditor } from "./ModelTierEditor"
 
 const BUILT_IN_CONTEXT_WINDOW = 128_000
 const BUILT_IN_MAX_TOKENS = 8_192
+
+type CapabilityCheckField =
+	| "supportsImages"
+	| "supportsPromptCache"
+	| "supportsTools"
+	| "supportsWebSearch"
+	| "supportsBrowserAction"
 
 const sectionTitleStyle = {
 	color: "var(--vscode-descriptionForeground)",
@@ -50,6 +57,8 @@ interface ModelConfigurationProps {
 			| "supportsImages"
 			| "supportsPromptCache"
 			| "supportsTools"
+			| "supportsWebSearch"
+			| "supportsBrowserAction"
 			| "temperature"
 		>
 		// Pricing related fields (currency automatically shown first)
@@ -78,8 +87,8 @@ export const ModelConfiguration = ({
 	tiersEditable = false,
 }: ModelConfigurationProps) => {
 	const [expanded, setExpanded] = useState(false)
-	const [draftChecks, setDraftChecks] = useState<Partial<Record<keyof ModelCapabilities, boolean>>>({})
-	const [pendingChecks, setPendingChecks] = useState<Partial<Record<keyof ModelCapabilities, boolean>>>({})
+	const [draftChecks, setDraftChecks] = useState<Partial<Record<CapabilityCheckField, boolean>>>({})
+	const [pendingChecks, setPendingChecks] = useState<Partial<Record<CapabilityCheckField, boolean>>>({})
 	const [draftContextTiers, setDraftContextTiers] = useState(capabilityOverrides?.contextWindowTiers ?? [])
 	const [draftPricingTiers, setDraftPricingTiers] = useState(pricingOverrides?.tiers ?? [])
 
@@ -93,9 +102,31 @@ export const ModelConfiguration = ({
 			const nextPending = { ...pending }
 			const nextDraft = { ...draftChecks }
 			let changed = false
-			for (const field of ["supportsImages", "supportsPromptCache", "supportsTools"] as const) {
+			for (const field of [
+				"supportsImages",
+				"supportsPromptCache",
+				"supportsTools",
+				"supportsWebSearch",
+				"supportsBrowserAction",
+			] as const) {
 				const expected = pending[field]
-				if (expected !== undefined && capabilities[field] === expected) {
+				const persisted = (() => {
+					switch (field) {
+						case "supportsImages":
+							return capabilities.supportsImages ?? false
+						case "supportsPromptCache":
+							return capabilities.supportsPromptCache ?? true
+						case "supportsTools":
+							return capabilities.supportsTools ?? defaults?.capabilities?.supportsTools ?? false
+						case "supportsWebSearch":
+							return (capabilityOverrides?.tools ?? defaults?.capabilities?.tools ?? []).includes(
+								ServerTool.WEB_SEARCH,
+							)
+						case "supportsBrowserAction":
+							return capabilities.supportsBrowserAction ?? defaults?.capabilities?.supportsBrowserAction ?? false
+					}
+				})()
+				if (expected !== undefined && persisted === expected) {
 					delete nextPending[field]
 					delete nextDraft[field]
 					changed = true
@@ -106,7 +137,17 @@ export const ModelConfiguration = ({
 			}
 			return changed ? nextPending : pending
 		})
-	}, [capabilities.supportsImages, capabilities.supportsPromptCache, capabilities.supportsTools, draftChecks])
+	}, [
+		capabilities.supportsImages,
+		capabilities.supportsPromptCache,
+		capabilities.supportsTools,
+		capabilities.supportsBrowserAction,
+		capabilityOverrides?.tools,
+		defaults?.capabilities?.supportsTools,
+		defaults?.capabilities?.supportsBrowserAction,
+		defaults?.capabilities?.tools,
+		draftChecks,
+	])
 
 	useEffect(() => {
 		setDraftContextTiers(capabilityOverrides?.contextWindowTiers ?? [])
@@ -134,10 +175,26 @@ export const ModelConfiguration = ({
 	}
 
 	/** Optimistically update a capability checkbox until its persisted echo arrives. */
-	const updateCheck = (field: "supportsImages" | "supportsPromptCache" | "supportsTools", value: boolean) => {
+	const updateCheck = (
+		field: "supportsImages" | "supportsPromptCache" | "supportsTools" | "supportsBrowserAction",
+		value: boolean,
+	) => {
 		setDraftChecks((draft) => ({ ...draft, [field]: value }))
 		setPendingChecks((pending) => ({ ...pending, [field]: value }))
 		updateCapability(field, value)
+	}
+
+	/** Map the Web Search checkbox to the ServerTool list without discarding other server tools. */
+	const updateWebSearchCheck = (value: boolean) => {
+		setDraftChecks((draft) => ({ ...draft, supportsWebSearch: value }))
+		setPendingChecks((pending) => ({ ...pending, supportsWebSearch: value }))
+		const currentTools = capabilityOverrides?.tools ?? defaults?.capabilities?.tools ?? []
+		const tools = value
+			? currentTools.includes(ServerTool.WEB_SEARCH)
+				? currentTools
+				: [...currentTools, ServerTool.WEB_SEARCH]
+			: currentTools.filter((tool) => tool !== ServerTool.WEB_SEARCH)
+		updateCapability("tools", tools)
 	}
 
 	/** Persist context tier changes while keeping the editor responsive before profile echo. */
@@ -179,11 +236,22 @@ export const ModelConfiguration = ({
 	const pricingFields = fields.pricing ?? []
 	const supportsImages = draftChecks.supportsImages ?? capabilities.supportsImages ?? false
 	const supportsPromptCache = draftChecks.supportsPromptCache ?? capabilities.supportsPromptCache ?? true
-	const supportsTools = draftChecks.supportsTools ?? capabilities.supportsTools ?? false
+	const supportsTools =
+		draftChecks.supportsTools ?? capabilities.supportsTools ?? defaults?.capabilities?.supportsTools ?? false
+	const supportsWebSearch =
+		draftChecks.supportsWebSearch ??
+		(capabilityOverrides?.tools ?? defaults?.capabilities?.tools ?? []).includes(ServerTool.WEB_SEARCH)
+	const supportsBrowserAction =
+		draftChecks.supportsBrowserAction ??
+		capabilities.supportsBrowserAction ??
+		defaults?.capabilities?.supportsBrowserAction ??
+		false
 	const hasOptionsFields =
 		capabilityFields.includes("supportsImages") ||
 		capabilityFields.includes("supportsPromptCache") ||
 		capabilityFields.includes("supportsTools") ||
+		capabilityFields.includes("supportsWebSearch") ||
+		capabilityFields.includes("supportsBrowserAction") ||
 		capabilityFields.includes("temperature")
 	const hasCapabilityFields =
 		capabilityFields.includes("contextWindow") ||
@@ -240,6 +308,27 @@ export const ModelConfiguration = ({
 										updateCheck("supportsImages", (e.target as HTMLInputElement | null)?.checked === true)
 									}>
 									Supports Images
+								</VSCodeCheckbox>
+							)}
+							{capabilityFields.includes("supportsWebSearch") && (
+								<VSCodeCheckbox
+									checked={supportsWebSearch}
+									onChange={(e: Event | React.FormEvent<HTMLElement>) =>
+										updateWebSearchCheck((e.target as HTMLInputElement | null)?.checked === true)
+									}>
+									Supports Web Search
+								</VSCodeCheckbox>
+							)}
+							{capabilityFields.includes("supportsBrowserAction") && (
+								<VSCodeCheckbox
+									checked={supportsBrowserAction}
+									onChange={(e: Event | React.FormEvent<HTMLElement>) =>
+										updateCheck(
+											"supportsBrowserAction",
+											(e.target as HTMLInputElement | null)?.checked === true,
+										)
+									}>
+									Supports Browser Actions
 								</VSCodeCheckbox>
 							)}
 							{capabilityFields.includes("supportsPromptCache") && (

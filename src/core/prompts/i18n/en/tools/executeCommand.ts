@@ -14,8 +14,11 @@ const prompts: Record<string, string> = {
 		"Optional boolean. Set true to start the command as a Dline-owned background process, return control immediately, and keep its output and cancellation lifecycle tracked. Defaults to false.",
 	backgroundUsage: "false",
 	timeoutInstruction:
-		"Optional positive integer foreground wait in seconds. If the command is still running when this wait expires, Dline returns control and continues tracking the process in the background. Defaults to 30 seconds for ordinary commands and 300 seconds for recognized long-running commands.",
+		"Optional timeout in seconds. Use a positive integer to terminate the command after that many seconds, or any integer less than or equal to zero to allow it to run indefinitely. A command without a timeout remains cancellable.",
 	timeoutUsage: "30",
+	muteStdoutInstruction:
+		"Optional boolean. When true, successful stdout is omitted from the tool result returned to you and only the successful exit status is returned. Failures still return captured diagnostics and the error code. This can save context tokens, but use it only when you are certain stdout is unnecessary. If you are unsure whether stdout is needed, omit this parameter or set it to false. The user interface, Activities, and command logs still retain the output.",
+	muteStdoutUsage: "false",
 	standardDescription: `Request to execute a CLI command on the system. Use this when you need to perform system operations or run specific commands to accomplish any step in the user's task. You must tailor your command to the user's system and provide a clear explanation of what the command does. For command chaining, use the appropriate chaining syntax for the user's shell. Prefer to execute complex CLI commands over creating executable scripts, as they are more flexible and easier to run. Commands default to the current workspace; set workdirectory when a command must run elsewhere.`,
 	standardCommandInstruction:
 		"The CLI command to execute. This should be valid for the current operating system. Ensure the command is properly formatted and does not contain any harmful instructions. Do not use the ~ character or $HOME to refer to the home directory. Do not prepend cd solely to select the execution directory; use workdirectory instead.",
@@ -28,7 +31,9 @@ const prompts: Record<string, string> = {
 	standardSynchronousInstruction:
 		"Optional boolean. Set true to keep the command in the foreground beyond the default 10-second background handoff, waiting until the process exits or its timeout terminates it. Defaults to false. Ignored when background is true.",
 	standardTimeoutInstruction:
-		"Optional positive integer timeout in seconds. This is the command's absolute maximum runtime from actual process start; reaching it terminates the process. If omitted, default is @TERMINAL_COMMAND_TIMEOUT_SECONDS@ seconds. By default, a command still running at the 10-second background handoff continues as the same tracked background process without resetting this timeout.",
+		"Optional integer timeout in seconds. Use a positive integer as the command's absolute maximum runtime from actual process start; reaching it terminates the process. Set to zero or a negative integer to allow the command to run indefinitely without a deadline; it remains cancellable. If omitted, default is @TERMINAL_COMMAND_TIMEOUT_SECONDS@ seconds. By default, a command still running at the 10-second background handoff continues as the same tracked background process without resetting this timeout.",
+	standardMuteStdoutInstruction:
+		"Optional boolean. Set true only when you are certain the command's stdout is not needed for any later reasoning or action. After a successful exit, Dline omits stdout from the tool result returned to you and returns only the successful exit status, which can save context tokens. On failure, Dline still returns captured diagnostics and the error code. The user interface, Activities, and command logs retain the full output. If you are unsure whether stdout is needed, omit this parameter or set false.",
 	gemini3Description:
 		"Request to execute a CLI command on the system. Use this when you need to perform system operations or run specific commands to accomplish any step in the user's task. When chaining commands, use the shell operator && (not the HTML entity &&). If using search/grep commands, be careful to not use vague search terms that may return thousands of results. When in PLAN MODE, you may use the execute_command tool, but only in a non-destructive manner and in a way that does not alter any files.",
 	gemini3CommandInstruction:

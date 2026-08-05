@@ -5,6 +5,7 @@ interface PopupModalContainerProps {
 	$menuPosition: number
 	$arrowPosition: number
 	$bottomOffset?: number
+	$height?: string
 	$maxHeight?: string
 }
 
@@ -19,6 +20,7 @@ const PopupModalContainer = styled.div<PopupModalContainerProps>`
 	bottom: ${(props) => `calc(100vh - ${props.$menuPosition}px + ${props.$bottomOffset ?? 6}px)`};
 	display: flex;
 	flex-direction: column;
+	height: ${(props) => props.$height ?? "auto"};
 	max-height: ${(props) => props.$maxHeight ?? "calc(100vh - 100px)"};
 	background: ${CODE_BLOCK_BG_COLOR};
 	border: 1px solid var(--vscode-editorGroup-border);

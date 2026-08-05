@@ -214,6 +214,19 @@ describe("slash-commands", () => {
 			expect(withFocus.processedText).to.include("<task_progress>")
 		})
 
+		it("preserves user feedback written after /compact", async () => {
+			const result = await parseSlashCommands(
+				"<task>/compact Keep command decisions and unresolved failures.</task>",
+				{},
+				{},
+				"test-ulid",
+			)
+
+			expect(result.processedText).to.include('<explicit_instructions type="condense">')
+			expect(result.processedText).to.include("Keep command decisions and unresolved failures.")
+			expect(result.processedText).to.not.include("/compact")
+		})
+
 		it("does not inject task_progress into Lite condense instructions", async () => {
 			const result = await parseSlashCommands(
 				"<task>/compact</task>",

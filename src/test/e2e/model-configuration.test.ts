@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises"
+import { readFile, writeFile } from "node:fs/promises"
 import * as path from "node:path"
 import { expect, type Frame, type Locator, type Page } from "@playwright/test"
 import type { ElectronApplication } from "playwright"
@@ -48,8 +48,14 @@ interface StoredProfile {
 	}
 }
 
+interface StoredApiKey {
+	apiKey: string
+	name: string
+}
+
 const profilesPath = (dlineDir: string) => path.join(dlineDir, "data", "settings", "api_profiles.json")
 const settingsPath = (dlineDir: string) => path.join(dlineDir, "data", "settings", "settings.json")
+const apiKeysPath = (dlineDir: string) => path.join(dlineDir, "data", "secrets", "api_keys.json")
 
 async function readProfiles(dlineDir: string): Promise<StoredProfile[]> {
 	return JSON.parse(await readFile(profilesPath(dlineDir), "utf8")) as StoredProfile[]
@@ -67,6 +73,13 @@ async function waitForProfile(
 	return E2ETestHelper.waitForValue(async () => {
 		const profile = (await readProfiles(dlineDir)).find((candidate) => candidate.name === name)
 		return profile && predicate(profile) ? profile : undefined
+	}, 15_000)
+}
+
+async function waitForApiKey(dlineDir: string, profileId: string, apiKey: string): Promise<StoredApiKey> {
+	return E2ETestHelper.waitForValue(async () => {
+		const apiKeys = JSON.parse(await readFile(apiKeysPath(dlineDir), "utf8")) as Record<string, StoredApiKey>
+		return apiKeys[profileId]?.apiKey === apiKey ? apiKeys[profileId] : undefined
 	}, 15_000)
 }
 
@@ -158,12 +171,50 @@ async function expectModelInfoValue(card: Locator, label: string, value: string)
 }
 
 e2e(
+	"OpenAI provider - fetches remote models after entering Base URL and API key",
+	async ({ dlineDir, helper, page, server, sidebar, userDataDir }) => {
+		const profileName = E2E_PROFILE_NAMES.persistence
+		const modelDiscoveryBaseUrl = `${server.baseUrl}/mock/openai-compatible/chat`
+		const modelDiscoveryApiKey = "dline-e2e-entered-model-discovery-key"
+
+		await helper.signin(sidebar)
+		await openApiSettings(page, sidebar)
+		const card = await openModelConfiguration(sidebar, profileName)
+		const profile = (await readProfiles(dlineDir)).find((candidate) => candidate.name === profileName)
+		if (!profile) throw new Error("OpenAI persistence profile is missing")
+
+		await setPlaceholderField(card, "Enter base URL...", modelDiscoveryBaseUrl)
+		await waitForProfile(dlineDir, profileName, (candidate) => candidate.baseUrl === modelDiscoveryBaseUrl)
+		await setPlaceholderField(card, "Enter API Key...", modelDiscoveryApiKey)
+		await waitForApiKey(dlineDir, profile.id, modelDiscoveryApiKey)
+
+		server.resetOpenAiMock()
+		const modelInput = card.locator('vscode-text-field[placeholder="Enter Model ID..."] input')
+		await modelInput.click()
+		await modelInput.fill("")
+		await expect(sidebar.getByRole("option", { name: "dline-e2e-discovered-model", exact: true })).toBeVisible()
+		await expect.poll(() => server.getModelListRequests().length).toBeGreaterThan(0)
+		expect(server.getModelListRequests().at(-1)).toMatchObject({
+			path: "/mock/openai-compatible/chat/v1/models",
+			authorization: `Bearer ${modelDiscoveryApiKey}`,
+		})
+		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+	},
+)
+
+e2e(
 	"Model configuration - updates Model Info immediately and persists after reopening VS Code",
-	async ({ dlineDir, helper, openVSCode, workspaceDir }) => {
+	async ({ dlineDir, helper, openVSCode, server, userDataDir, workspaceDir }) => {
 		e2e.setTimeout(180_000)
 		const profileName = E2E_PROFILE_NAMES.persistence
+		const modelDiscoveryBaseUrl = `${server.baseUrl}/mock/openai-compatible/chat`
 		let firstApp: ElectronApplication | undefined
 		let reopenedApp: ElectronApplication | undefined
+		const profiles = await readProfiles(dlineDir)
+		const persistenceProfile = profiles.find((profile) => profile.name === profileName)
+		if (!persistenceProfile?.openai?.capabilities) throw new Error("OpenAI persistence profile is missing")
+		delete persistenceProfile.openai.capabilities.supportsTools
+		await writeFile(profilesPath(dlineDir), `${JSON.stringify(profiles, null, 2)}\n`, "utf8")
 
 		try {
 			firstApp = await openVSCode(workspaceDir)
@@ -177,6 +228,9 @@ e2e(
 			await expect(officialCard.locator("vscode-dropdown#model-id")).toContainText("gpt-5.4-mini")
 			const officialApiFormat = officialCard.getByRole("combobox", { name: "API Format" })
 			await expect(officialApiFormat).toHaveValue(String(ApiFormat.OPENAI_RESPONSES))
+			expect(await officialApiFormat.evaluate((element) => (element as HTMLElement).style.backgroundColor)).toBe(
+				"var(--vscode-dropdown-background)",
+			)
 			await officialApiFormat.selectOption(String(ApiFormat.OPENAI_CHAT))
 			await waitForProfile(
 				dlineDir,
@@ -191,8 +245,23 @@ e2e(
 			)
 
 			const card = await openModelConfiguration(firstSidebar, profileName)
-			await setPlaceholderField(card, "Enter base URL...", "https://compatible.example.test/v1")
-			await setPlaceholderField(card, "Enter Model ID...", "e2e-compatible-custom")
+			await setPlaceholderField(card, "Enter base URL...", modelDiscoveryBaseUrl)
+			await waitForProfile(dlineDir, profileName, (profile) => profile.baseUrl === modelDiscoveryBaseUrl)
+			const modelInput = card.locator('vscode-text-field[placeholder="Enter Model ID..."] input')
+			await modelInput.click()
+			await modelInput.fill("")
+			const discoveredModel = firstSidebar.getByRole("option", {
+				name: "dline-e2e-discovered-model",
+				exact: true,
+			})
+			await expect(discoveredModel).toBeVisible()
+			await discoveredModel.click()
+			await expect(modelInput).toHaveValue("dline-e2e-discovered-model")
+			await expect.poll(() => server.getModelListRequests().length).toBeGreaterThan(0)
+			expect(server.getModelListRequests().at(-1)).toMatchObject({
+				path: "/mock/openai-compatible/chat/v1/models",
+				authorization: "Bearer dline-e2e-api-key",
+			})
 			const apiFormatSelector = card.getByRole("combobox", { name: "API Format" })
 			await expect(apiFormatSelector).toHaveValue(String(ApiFormat.OPENAI_CHAT))
 			await apiFormatSelector.selectOption(String(ApiFormat.OPENAI_RESPONSES))
@@ -214,6 +283,8 @@ e2e(
 			expect(promptCacheSamples.slice(firstUncheckedSample)).not.toContain("true")
 			await setCapability(card, "Supports Prompt Cache", true)
 			await expectAdvancedValue(card, "Prompt Caching", "Yes")
+			const nativeTools = card.locator("vscode-checkbox").filter({ hasText: "Supports Native Tool Calls" })
+			await expect.poll(() => nativeTools.evaluate((element) => Boolean((element as HTMLInputElement).checked))).toBe(true)
 			await setCapability(card, "Supports Native Tool Calls", false)
 			await waitForProfile(dlineDir, profileName, (profile) => profile.openai?.capabilities?.supportsTools === false)
 			await setCapability(card, "Supports Native Tool Calls", true)
@@ -233,8 +304,8 @@ e2e(
 				dlineDir,
 				profileName,
 				(profile) =>
-					profile.baseUrl === "https://compatible.example.test/v1" &&
-					profile.modelId === "e2e-compatible-custom" &&
+					profile.baseUrl === modelDiscoveryBaseUrl &&
+					profile.modelId === "dline-e2e-discovered-model" &&
 					profile.openai?.customModelEnabled === true &&
 					profile.openai?.capabilities?.contextWindow === 234_567 &&
 					profile.openai.capabilities.maxTokens === 32_768 &&
@@ -297,10 +368,10 @@ e2e(
 
 			const reopenedCard = await openModelConfiguration(reopenedSidebar, profileName)
 			await expect(reopenedCard.locator('vscode-text-field[placeholder="Enter base URL..."] input')).toHaveValue(
-				"https://compatible.example.test/v1",
+				modelDiscoveryBaseUrl,
 			)
 			await expect(reopenedCard.locator('vscode-text-field[placeholder="Enter Model ID..."] input')).toHaveValue(
-				"e2e-compatible-custom",
+				"dline-e2e-discovered-model",
 			)
 			await expect(reopenedCard.getByRole("combobox", { name: "API Format" })).toHaveValue(
 				String(ApiFormat.OPENAI_RESPONSES),
@@ -342,6 +413,7 @@ e2e(
 			await expect(reopenedCard.getByText("235K", { exact: true })).toBeVisible()
 			await expectModelInfoValue(reopenedCard, "Input:", "$1.25/M")
 			await expectModelInfoValue(reopenedCard, "Output:", "$2.50/M")
+			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
 		} finally {
 			await reopenedApp?.close()
 			await firstApp?.close()
@@ -566,7 +638,7 @@ e2e(
 			id: "call_mode_profile_act_completion",
 			name: "attempt_completion",
 			arguments: { result: "E2E_MODE_PROFILE_ACT_ANTHROPIC_OK" },
-			expectedRequestIncludes: ["E2E_MODE_PROFILE_ACT_TURN"],
+			expectedRequestIncludes: ["E2E_MODE_PROFILE_PLAN_TURN", "ACT MODE"],
 		})
 
 		const input = sidebar.getByTestId("chat-input")
@@ -589,9 +661,6 @@ e2e(
 		await actMode.click()
 		await expect(actMode).toHaveAttribute("aria-checked", "true")
 		await expect(modelSwitcher).toHaveText(E2E_PROFILE_NAMES.mockAnthropic)
-		await expect(input).toBeEnabled()
-		await input.fill("E2E_MODE_PROFILE_ACT_TURN")
-		await input.press("Enter")
 		await expect(sidebar.getByText("E2E_MODE_PROFILE_ACT_ANTHROPIC_OK", { exact: false }).last()).toBeVisible({
 			timeout: 60_000,
 		})

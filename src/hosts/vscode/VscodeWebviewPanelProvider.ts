@@ -1,4 +1,4 @@
-import { WebviewProvider } from "@core/webview"
+import { shouldUseWebviewHmr, WebviewProvider } from "@core/webview"
 import * as vscode from "vscode"
 import { handleGrpcRequest, handleGrpcRequestCancel } from "@/core/controller/grpc-handler"
 import { OrchestratorController } from "@/core/orchestrator/OrchestratorController"
@@ -63,9 +63,9 @@ export class VscodeWebviewPanelProvider extends WebviewProvider {
 		// early webviewReady messages from fast-loading webview bundles.
 		this.setWebviewMessageListener(panel.webview)
 
-		// Determine if running in dev mode (ExtensionMode.Development = 2)
-		const isDev = this.context.extensionMode === 2
-		panel.webview.html = isDev ? await this.getHMRHtmlContent() : this.getHtmlContent()
+		panel.webview.html = shouldUseWebviewHmr(this.context.extensionMode)
+			? await this.getHMRHtmlContent()
+			: this.getHtmlContent()
 
 		// Notify orchestrator of new panel
 		OrchestratorController.getInstance().onPanelCreated()
@@ -104,9 +104,9 @@ export class VscodeWebviewPanelProvider extends WebviewProvider {
 		// Register listener BEFORE HTML
 		provider.setWebviewMessageListener(panel.webview)
 
-		// Determine if running in dev mode
-		const isDev = context.extensionMode === 2
-		panel.webview.html = isDev ? await provider.getHMRHtmlContent() : provider.getHtmlContent()
+		panel.webview.html = shouldUseWebviewHmr(context.extensionMode)
+			? await provider.getHMRHtmlContent()
+			: provider.getHtmlContent()
 
 		// Notify orchestrator
 		OrchestratorController.getInstance().onPanelCreated()

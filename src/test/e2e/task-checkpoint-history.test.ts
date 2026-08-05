@@ -55,6 +55,44 @@ async function pathExists(filePath: string): Promise<boolean> {
 		.catch(() => false)
 }
 
+async function seedPersistedRunningCommand(dlineDocsDir: string, taskId: string, command: string): Promise<string> {
+	const taskDir = path.join(dlineDocsDir, "tasks", taskId)
+	const activitiesPath = path.join(taskDir, "activities.json")
+	const persistedActivities = JSON.parse(await readFile(activitiesPath, "utf8")) as {
+		activities?: Array<Record<string, unknown>>
+	}
+	const activity = persistedActivities.activities?.find((candidate) => candidate.detail === command)
+	if (!activity || typeof activity.activityId !== "string") {
+		throw new Error("Expected the closed task to persist its command activity")
+	}
+	activity.status = "running"
+	activity.executionMode = "background"
+	activity.timeoutSeconds = 0
+	activity.latestEvent = "E2E_ORPHAN_COMMAND_STILL_RUNNING"
+	delete activity.finishedAt
+	await writeFile(activitiesPath, JSON.stringify(persistedActivities), "utf8")
+
+	const messagesPath = path.join(taskDir, "ui_messages.jsonl")
+	const messages = (await readFile(messagesPath, "utf8"))
+		.split(/\r?\n/)
+		.filter(Boolean)
+		.map((line) => JSON.parse(line) as Record<string, unknown>)
+	const commandMessage = messages.find(
+		(message) =>
+			(message.say === "command" || message.ask === "command") &&
+			typeof message.text === "string" &&
+			message.text.startsWith(command),
+	)
+	if (!commandMessage) {
+		throw new Error("Expected the closed task to persist its command message")
+	}
+	commandMessage.activityId = activity.activityId
+	commandMessage.commandExecutionMode = "background"
+	commandMessage.commandStatus = "running"
+	await writeFile(messagesPath, `${messages.map((message) => JSON.stringify(message)).join("\n")}\n`, "utf8")
+	return activity.activityId
+}
+
 async function readTaskSnapshot(
 	dlineDocsDir: string,
 	taskId: string,
@@ -63,6 +101,51 @@ async function readTaskSnapshot(
 	turn?: { turnId: string; blocks: Array<{ dlineTid: string }> }
 }> {
 	return JSON.parse(await readFile(path.join(dlineDocsDir, "tasks", taskId, "snapshot.json"), "utf8"))
+}
+
+async function simulateIncompleteTurnEndContinuation(dlineDocsDir: string, taskId: string): Promise<void> {
+	const taskDir = path.join(dlineDocsDir, "tasks", taskId)
+	const uiMessagesPath = path.join(taskDir, "ui_messages.jsonl")
+	const uiMessages = (await readFile(uiMessagesPath, "utf8"))
+		.split(/\r?\n/)
+		.filter(Boolean)
+		.map((line) => JSON.parse(line) as Record<string, unknown>)
+	const ask = uiMessages.findLast((message) => message.type === "ask" && message.ask === "qna_respond")
+	const interactionId = typeof ask?.interactionId === "string" ? ask.interactionId : undefined
+	const apiIndex = typeof ask?.conversationHistoryIndex === "number" ? ask.conversationHistoryIndex : undefined
+	if (!interactionId || apiIndex === undefined || apiIndex < 0) {
+		throw new Error("Expected one persisted qna_respond ask with a causal API index")
+	}
+
+	const snapshotPath = path.join(taskDir, "snapshot.json")
+	const snapshot = JSON.parse(await readFile(snapshotPath, "utf8")) as Record<string, unknown>
+	const interaction = snapshot.interaction as { interactionId?: unknown } | undefined
+	if (interaction?.interactionId !== interactionId || !snapshot.turn) {
+		throw new Error("Expected the closed task snapshot to retain the pending qna continuation")
+	}
+	delete snapshot.turn
+	await writeFile(snapshotPath, `${JSON.stringify(snapshot, null, 2)}\n`, "utf8")
+
+	const apiHistoryPath = path.join(taskDir, "api_conversation_history.jsonl")
+	const apiHistory = (await readFile(apiHistoryPath, "utf8")).split(/\r?\n/).filter(Boolean)
+	const causalMessage = JSON.parse(apiHistory[apiIndex] ?? "null") as {
+		role?: unknown
+		ts?: unknown
+		content?: Array<{ type?: unknown; dline_tid?: unknown }>
+	} | null
+	if (
+		causalMessage?.role !== "assistant" ||
+		!Array.isArray(causalMessage.content) ||
+		!causalMessage.content.some((block) => block.type === "tool_use" && block.dline_tid === interactionId)
+	) {
+		throw new Error("Expected the qna ask to reference its canonical assistant tool block")
+	}
+	apiHistory[apiIndex] = JSON.stringify({
+		role: "assistant",
+		content: "Earlier details no longer contain the pending turn-end tool declaration.",
+		ts: causalMessage.ts,
+	})
+	await writeFile(apiHistoryPath, `${apiHistory.join("\n")}\n`, "utf8")
 }
 
 async function appendPersistedTimelineTail(dlineDocsDir: string, taskId: string, count: number): Promise<void> {
@@ -242,6 +325,77 @@ e2e(
 		const continuationRequest = JSON.stringify(continuation.requestBody)
 		expect(continuationRequest).toContain("The previous task session was closed and has now been restored.")
 		expect(continuationRequest).toContain("E2E_HISTORY_RESUME_DRAFT")
+		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+	},
+)
+
+e2e(
+	"History - current input survives a restored turn-end interaction whose causal assistant turn is missing",
+	async ({ dlineDocsDir, helper, server, sidebar, userDataDir }) => {
+		e2e.setTimeout(180_000)
+		await helper.signin(sidebar)
+		server.resetOpenAiMock()
+		server.enqueueOpenAiResponses(
+			{
+				type: "tool",
+				id: "call_history_missing_qna",
+				name: "qna_respond",
+				arguments: { response: "E2E_MISSING_QNA_PROMPT" },
+			},
+			{
+				type: "tool",
+				id: "call_history_missing_qna_completion",
+				name: "attempt_completion",
+				arguments: { result: "E2E_MISSING_QNA_CONTINUED" },
+				expectedRequestIncludes: [
+					"The previous task session was closed and has now been restored.",
+					"E2E_MISSING_QNA_CURRENT_INPUT",
+				],
+			},
+		)
+
+		const taskText = "E2E_MISSING_TURN_END_HISTORY_TASK"
+		await sendTask(sidebar, taskText)
+		await expect(sidebar.getByText("E2E_MISSING_QNA_PROMPT", { exact: true })).toBeVisible({ timeout: 60_000 })
+		const [taskId] = await E2ETestHelper.waitForValue(async () => {
+			const ids = await taskDirectoryIds(dlineDocsDir)
+			return ids.length === 1 ? ids : undefined
+		})
+
+		await closeCurrentTask(sidebar)
+		await simulateIncompleteTurnEndContinuation(dlineDocsDir, taskId)
+		await reopenTask(sidebar, taskText)
+		await expect(sidebar.getByText("E2E_MISSING_QNA_PROMPT", { exact: true })).toBeVisible()
+		await expect(sidebar.getByRole("contentinfo").getByText("Resume", { exact: true })).toBeVisible({
+			timeout: 30_000,
+		})
+
+		const input = sidebar.getByTestId("chat-input")
+		await expect(input).toBeEnabled()
+		await input.fill("E2E_MISSING_QNA_CURRENT_INPUT")
+		await input.press("Enter")
+		await expect(input).toHaveValue("")
+
+		await expect
+			.poll(
+				async () => {
+					const output = await E2ETestHelper.readDlineOutput(userDataDir)
+					if (output.includes("resume_turn_missing")) return "resume_turn_missing"
+					return server.openAiRequestCount === 2 ? "continued" : "pending"
+				},
+				{ timeout: 15_000 },
+			)
+			.toBe("continued")
+		await expect(sidebar.getByText("E2E_MISSING_QNA_CONTINUED", { exact: false }).last()).toBeVisible({
+			timeout: 60_000,
+		})
+		const continuation = server.getMockConsumptions("openai-compatible-chat")[1]
+		expect(continuation.contractError).toBeUndefined()
+		expect(continuation.requestToolResults).not.toContainEqual(
+			expect.objectContaining({ callId: "call_history_missing_qna" }),
+		)
+		const output = await E2ETestHelper.readDlineOutput(userDataDir)
+		expect(output).not.toContain("resume_turn_missing")
 		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
 	},
 )
@@ -766,13 +920,14 @@ e2e(
 )
 
 e2e(
-	"History - closing a running command restores one interrupted result without rerunning it",
-	async ({ helper, page, server, sidebar, userDataDir, workspaceDir }) => {
+	"History - an orphaned no-timeout background command reopens as interrupted without stale controls",
+	async ({ dlineDocsDir, helper, page, server, sidebar, userDataDir, workspaceDir }) => {
 		e2e.setTimeout(240_000)
 		await helper.signin(sidebar)
 		await setAutoApproveAction(sidebar, "Execute safe commands", false)
 		const markerPath = path.join(workspaceDir, "e2e-running-command-should-not-finish.txt")
 		const command = `node -e "const fs=require('fs'); console.log(['E2E','RUNNING','COMMAND','STARTED'].join('_')); setTimeout(()=>fs.writeFileSync('e2e-running-command-should-not-finish.txt','unexpected'),8000)"`
+		const beforeTaskIds = await taskDirectoryIds(dlineDocsDir)
 		server.resetOpenAiMock()
 		server.enqueueOpenAiResponses(
 			{
@@ -783,18 +938,18 @@ e2e(
 					command,
 					workdirectory: ".",
 					requires_approval: true,
-					synchronous: true,
-					timeout: 60,
+					background: true,
+					timeout: 0,
 				},
 			},
 			{
 				type: "tool",
-				id: "call_history_running_command_resumed_completion",
+				id: "call_history_running_command_closed_completion",
 				name: "attempt_completion",
-				arguments: { result: "E2E_HISTORY_RUNNING_COMMAND_RESUME_OK" },
-				expectedRequestIncludes: [
-					"The previous task session was closed and has now been restored.",
-					"E2E_HISTORY_RUNNING_COMMAND_RESUME_DRAFT",
+				arguments: { result: "E2E_CLOSED_BACKGROUND_COMMAND_MUST_NOT_RENDER" },
+				delayMs: 30_000,
+				expectedToolResults: [
+					{ callId: "call_history_running_command", contentIncludes: "Command is running in the background." },
 				],
 			},
 		)
@@ -802,10 +957,28 @@ e2e(
 		const taskText = "E2E_RUNNING_COMMAND_CLOSE_HISTORY_TASK"
 		await sendTask(sidebar, taskText)
 		await sidebar.getByText("Approve", { exact: true }).click()
-		await expect(sidebar.getByText("E2E_RUNNING_COMMAND_STARTED", { exact: true }).last()).toBeVisible({ timeout: 60_000 })
+		await expect.poll(() => server.openAiRequestCount, { timeout: 60_000 }).toBe(2)
+		expect(await pathExists(markerPath)).toBe(false)
 		await expect(sidebar.getByRole("contentinfo").getByText("Approve", { exact: true })).toHaveCount(0)
-		await expect.poll(() => server.openAiRequestCount).toBe(1)
+
+		const copyCommandButton = sidebar.getByRole("button", { name: "Copy command" }).last()
+		const commandActions = copyCommandButton.locator("xpath=ancestor::div[.//button[normalize-space()='Cancel']][1]")
+		await expect(commandActions.getByRole("button", { name: "Cancel", exact: true })).toBeVisible()
+		const activitiesTab = sidebar.getByRole("tab", { name: /^Activities(?: \d+)?$/ })
+		await expect(activitiesTab).toHaveAccessibleName(/Activities 1/)
+		await activitiesTab.click()
+		const runningActivity = sidebar.getByTestId("activity-item").filter({ hasText: command })
+		await expect(runningActivity.getByTestId("activity-execution-mode")).toHaveText("Background")
+		await expect(runningActivity.getByText("Command", { exact: true })).toHaveCount(0)
+		await expect(runningActivity).toContainText("running")
+		await expect(runningActivity.getByRole("button", { name: "Cancel", exact: true })).toBeVisible()
+
 		await closeCurrentTask(sidebar)
+		const persistedTaskId = await E2ETestHelper.waitForValue(async () => {
+			const ids = await taskDirectoryIds(dlineDocsDir)
+			return ids.find((id) => !beforeTaskIds.includes(id))
+		}, 30_000)
+		const activityId = await seedPersistedRunningCommand(dlineDocsDir, persistedTaskId, command)
 		await reopenTask(sidebar, taskText)
 
 		const taskFooter = sidebar.getByRole("contentinfo")
@@ -813,24 +986,39 @@ e2e(
 		await expect(resumeButton).toBeVisible({ timeout: 30_000 })
 		await expect(taskFooter.getByText("Approve", { exact: true })).toHaveCount(0)
 		await expect(taskFooter.getByText("Reject", { exact: true })).toHaveCount(0)
-		await expect(sidebar.getByRole("button", { name: "Copy command" }).last()).toBeVisible()
+		await expect(sidebar.getByText("Interrupted", { exact: true }).last()).toBeVisible()
+		await expect(sidebar.getByRole("button", { name: "Cancel", exact: true })).toHaveCount(0)
+		await expect(sidebar.getByText("E2E_CLOSED_BACKGROUND_COMMAND_MUST_NOT_RENDER", { exact: false })).toHaveCount(0)
+
+		const reopenedActivitiesTab = sidebar.getByRole("tab", { name: "Activities", exact: true })
+		await expect(reopenedActivitiesTab).toBeVisible()
+		await reopenedActivitiesTab.click()
+		await expect(sidebar.getByText("No matching activities.", { exact: true })).toBeVisible()
+		await sidebar.getByRole("button", { name: "All", exact: true }).first().click()
+		const interruptedActivity = sidebar.getByTestId("activity-item").filter({ hasText: command })
+		await expect(interruptedActivity).toContainText("interrupted")
+		await expect(interruptedActivity.locator(".animate-spin")).toHaveCount(0)
+		await expect(interruptedActivity.getByRole("button", { name: "Cancel", exact: true })).toHaveCount(0)
+		await expect
+			.poll(async () => {
+				const persisted = JSON.parse(
+					await readFile(path.join(dlineDocsDir, "tasks", persistedTaskId, "activities.json"), "utf8"),
+				) as { activities?: Array<{ activityId?: string; status?: string }> }
+				return persisted.activities?.find((activity) => activity.activityId === activityId)?.status
+			})
+			.toBe("interrupted")
+
+		await closeCurrentTask(sidebar)
+		await reopenTask(sidebar, taskText)
+		await sidebar.getByRole("tab", { name: "Activities", exact: true }).click()
+		await sidebar.getByRole("button", { name: "All", exact: true }).first().click()
+		const reopenedInterruptedActivity = sidebar.getByTestId("activity-item").filter({ hasText: command })
+		await expect(reopenedInterruptedActivity).toContainText("interrupted")
+		await expect(reopenedInterruptedActivity.locator(".animate-spin")).toHaveCount(0)
+		await expect(reopenedInterruptedActivity.getByRole("button", { name: "Cancel", exact: true })).toHaveCount(0)
 		await page.waitForTimeout(9_000)
 		expect(await pathExists(markerPath)).toBe(false)
-		expect(server.openAiRequestCount).toBe(1)
-
-		const input = sidebar.getByTestId("chat-input")
-		await input.fill("E2E_HISTORY_RUNNING_COMMAND_RESUME_DRAFT")
-		await resumeButton.click()
-		await expect(sidebar.getByText("E2E_HISTORY_RUNNING_COMMAND_RESUME_OK", { exact: false }).last()).toBeVisible({
-			timeout: 60_000,
-		})
-		await expect.poll(() => server.openAiRequestCount).toBe(2)
-		const continuation = server.getMockConsumptions("openai-compatible-chat")[1]
-		expect(continuation.contractError).toBeUndefined()
-		const results = continuation.requestToolResults.filter((result) => result.callId === "call_history_running_command")
-		expect(results).toHaveLength(1)
-		expect(results[0].content).toMatch(/interrupted|cancelled|terminated/i)
-		expect(await pathExists(markerPath)).toBe(false)
+		expect(server.openAiRequestCount).toBe(2)
 		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
 	},
 )

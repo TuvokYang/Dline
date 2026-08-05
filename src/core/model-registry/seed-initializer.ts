@@ -2,9 +2,8 @@
  * Seed initializer — exports built-in provider model data to ~/.dline/providers/
  * on first run, so users have a complete set of model configurations to work with.
  *
- * After the initial export, the JSON files in ~/.dline/providers/ take full
- * precedence. Users can edit them directly and changes are picked up via
- * ModelRegistry's file watcher.
+ * Existing built-in models are refreshed from current metadata. Models marked
+ * userDefined, and models unknown to the current seed, are preserved.
  */
 import { allProviderModels } from "@shared/providers/model-infos"
 import type { ProviderModelsConfig } from "@shared/providers/types"
@@ -12,12 +11,26 @@ import { Logger } from "@shared/services/Logger"
 import fs from "fs"
 import fsPromises from "fs/promises"
 import * as path from "path"
+import { getLegacyProviderConfigFileNames, getProviderConfigFileName } from "./provider-config-file"
+import { markBuiltInModels, reconcileProviderModels } from "./provider-model-reconciliation"
+
+const REMOTE_CATALOG_PROVIDER_IDS = new Set(["vercel-ai-gateway"])
+
+function normalizeRemoteCatalog(config: ProviderModelsConfig): ProviderModelsConfig {
+	return {
+		...config,
+		models: Object.fromEntries(
+			Object.entries(config.models).map(([modelId, model]) => [modelId, { ...model, userDefined: false }]),
+		),
+	}
+}
 
 /**
  * Ensure that ~/.dline/providers/ contains a JSON file for every provider
- * defined in allProviderModels. Missing files are created from the seed data.
+ * defined in allProviderModels. Missing files are created and existing model
+ * catalogs are reconciled with the current seed data.
  *
- * This is safe to call on every startup — existing files are never overwritten.
+ * This is safe to call on every startup: only unmarked built-in models are refreshed.
  *
  * @param providersDir Absolute path to the providers directory
  * @returns Number of newly created seed files
@@ -29,16 +42,32 @@ export async function ensureSeedProviders(providersDir: string): Promise<number>
 	await fsPromises.mkdir(providersDir, { recursive: true })
 
 	for (const [providerId, config] of Object.entries(allProviderModels)) {
-		const filePath = path.join(providersDir, `${providerId}.json`)
+		const filePath = path.join(providersDir, getProviderConfigFileName(providerId))
+		const existingFilePath = [
+			filePath,
+			...getLegacyProviderConfigFileNames(providerId).map((name) => path.join(providersDir, name)),
+		].find((candidate) => fs.existsSync(candidate))
 
-		// Skip if the file already exists — user config takes precedence
-		if (fs.existsSync(filePath)) {
+		// Refresh built-ins while preserving explicitly marked and unknown user models.
+		if (existingFilePath) {
+			try {
+				const stored = JSON.parse(await fsPromises.readFile(existingFilePath, "utf8")) as ProviderModelsConfig
+				const reconciled = REMOTE_CATALOG_PROVIDER_IDS.has(providerId)
+					? normalizeRemoteCatalog({ ...stored, ...config, models: stored.models })
+					: reconcileProviderModels(config, stored, "refresh-built-ins")
+				if (existingFilePath !== filePath || serializeConfig(reconciled) !== serializeConfig(stored)) {
+					await fsPromises.writeFile(filePath, serializeConfig(reconciled), "utf8")
+					Logger.log(`[seed-initializer] Refreshed built-in models: ${path.basename(filePath)}`)
+				}
+			} catch (err) {
+				Logger.warn(`[seed-initializer] Failed to refresh seed config for ${providerId}:`, err)
+			}
 			continue
 		}
 
 		try {
 			// Convert the config to a clean JSON-serializable object
-			const jsonContent = serializeConfig(config)
+			const jsonContent = serializeConfig(markBuiltInModels(config))
 			await fsPromises.writeFile(filePath, jsonContent, "utf8")
 			created++
 			Logger.log(`[seed-initializer] Created seed config: ${providerId}.json (${Object.keys(config.models).length} models)`)

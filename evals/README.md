@@ -55,7 +55,7 @@ Quick validation across providers with real LLM calls:
 
 ```bash
 # Set API key (Cline provider)
-export CLINE_API_KEY=sk-...
+export DLINE_API_KEY=sk-...
 
 # Run smoke tests
 npm run eval:smoke

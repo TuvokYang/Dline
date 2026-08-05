@@ -164,6 +164,59 @@ describe("ContextManager", () => {
 				await fs.rm(taskDirectory, { recursive: true, force: true })
 			}
 		})
+
+		it("inserts the truncation notice before a native tool-only first response", async () => {
+			const taskDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "dline-context-native-tool-"))
+			const messages: ClineStorageMessage[] = [
+				{ role: "user", content: [{ type: "text", text: "<task>Keep this task</task>" }] },
+				{
+					role: "assistant",
+					content: [
+						{
+							type: "tool_use",
+							function_id: "call_initial_qna",
+							dline_tid: "dline_tid_initial_qna",
+							name: "qna_respond",
+							input: { response: "Initial question" },
+						},
+					],
+				},
+				{
+					role: "user",
+					content: [
+						{
+							type: "tool_result",
+							function_id: "call_initial_qna",
+							dline_tid: "dline_tid_initial_qna",
+							content: "Middle feedback",
+						},
+					],
+				},
+				{ role: "assistant", content: [{ type: "text", text: "Middle response" }] },
+				{ role: "user", content: [{ type: "text", text: "Latest turn" }] },
+			]
+
+			try {
+				await contextManager.triggerApplyStandardContextTruncationNoticeChange(Date.now(), taskDirectory, messages)
+				const truncated = contextManager.getTruncatedMessages(messages, [2, 3])
+				const assistantContent = truncated[1].content as ClineContent[]
+
+				expect(assistantContent[0]).to.deep.include({
+					type: "text",
+					text: "[NOTE] Some previous conversation history with the user has been removed to maintain optimal context window length. The initial user task has been retained for continuity, while intermediate conversation history has been removed. Keep this in mind as you continue assisting the user. Pay special attention to the user's latest messages.",
+				})
+				expect(assistantContent[1]).to.deep.include({
+					type: "tool_use",
+					function_id: "call_initial_qna",
+					dline_tid: "dline_tid_initial_qna",
+				})
+				const retainedUserContent = truncated[2].content as ClineContent[]
+				expect(retainedUserContent.some((block) => block.type === "tool_result")).to.equal(true)
+				expect(JSON.stringify(retainedUserContent)).to.contain("Latest turn")
+			} finally {
+				await fs.rm(taskDirectory, { recursive: true, force: true })
+			}
+		})
 	})
 
 	describe("applyContextOptimizations", () => {
@@ -600,57 +653,53 @@ describe("ContextManager", () => {
 			contextManager = new ContextManager()
 		})
 
-		it("does not compact at 33K tokens with default 0.75 threshold on 200K context", () => {
+		it("does not compact below a configured 75 percent point", () => {
 			const api = createMockApi(200_000)
 			const clineMessages: ClineMessage[] = [createApiReqMessage({ tokensIn: 30_000, tokensOut: 3_000 })]
 
-			const result = contextManager.shouldCompactContextWindow(clineMessages, api, 0, 0.75)
+			const result = contextManager.shouldCompactContextWindow(clineMessages, api, 0, { triggerPercent: 75 })
 			expect(result).to.equal(false)
 		})
 
-		it("compacts when tokens exceed 0.75 threshold on 200K context", () => {
+		it("compacts when tokens exceed a configured 75 percent point", () => {
 			const api = createMockApi(200_000)
 			const clineMessages: ClineMessage[] = [createApiReqMessage({ tokensIn: 140_000, tokensOut: 15_000 })]
 
-			const result = contextManager.shouldCompactContextWindow(clineMessages, api, 0, 0.75)
+			const result = contextManager.shouldCompactContextWindow(clineMessages, api, 0, { triggerPercent: 75 })
 			expect(result).to.equal(true)
 		})
 
-		it("compacts at only 10K tokens when threshold is accidentally set to 0.05", () => {
+		it("honors an explicitly configured 5 percent point", () => {
 			const contextWindow = 200_000
-			const accidentalThreshold = 0.05
-			// floor(200000 * 0.05) = 10000 — this is the bug case from PR #9348.
-			// Accidental clicks on the progress bar set threshold to ~5%, triggering
-			// compaction at 10K tokens instead of the intended 150K (0.75 * 200K).
-			const compactionTriggersAt = Math.floor(contextWindow * accidentalThreshold) // 10,000
-			const totalTokens = compactionTriggersAt + 500 // 10,500 — just above the trigger
+			const triggerPercent = 5
+			const compactionTriggersAt = Math.floor((contextWindow * triggerPercent) / 100)
+			const totalTokens = compactionTriggersAt + 500
 
 			const api = createMockApi(contextWindow)
 			const tokensIn = totalTokens - 1_500
 			const tokensOut = 1_500
 			const clineMessages: ClineMessage[] = [createApiReqMessage({ tokensIn, tokensOut })]
 
-			const result = contextManager.shouldCompactContextWindow(clineMessages, api, 0, accidentalThreshold)
+			const result = contextManager.shouldCompactContextWindow(clineMessages, api, 0, { triggerPercent })
 			expect(result).to.equal(true)
 		})
 
-		it("falls back to maxAllowedSize when threshold is undefined", () => {
+		it("uses the default summary-aware safety threshold when settings are omitted", () => {
 			const api = createMockApi(200_000)
-			// 155K tokens — above 0.75 threshold (150K) but below maxAllowedSize (160K)
 			const clineMessages: ClineMessage[] = [createApiReqMessage({ tokensIn: 150_000, tokensOut: 5_000 })]
 
-			const result = contextManager.shouldCompactContextWindow(clineMessages, api, 0, undefined)
-			// undefined → uses maxAllowedSize (160K), so 155K < 160K → false
+			const result = contextManager.shouldCompactContextWindow(clineMessages, api, 0)
 			expect(result).to.equal(false)
 		})
 
-		it("falls back to maxAllowedSize when threshold is 0", () => {
+		it("uses the configured absolute maximum context", () => {
 			const api = createMockApi(200_000)
 			const clineMessages: ClineMessage[] = [createApiReqMessage({ tokensIn: 150_000, tokensOut: 5_000 })]
 
-			// 0 is falsy, so ternary falls back to maxAllowedSize (160K)
-			const result = contextManager.shouldCompactContextWindow(clineMessages, api, 0, 0)
-			expect(result).to.equal(false)
+			const result = contextManager.shouldCompactContextWindow(clineMessages, api, 0, {
+				maxContextTokens: 150_000,
+			})
+			expect(result).to.equal(true)
 		})
 
 		it("does not compact at observed 232K pressure on 272K input context", () => {
@@ -690,7 +739,7 @@ describe("ContextManager", () => {
 				createApiReqMessage({ tokensIn: 5_000, tokensOut: 500, cacheWrites: 0, cacheReads: 150_000 }),
 			]
 
-			const result = contextManager.shouldCompactContextWindow(clineMessages, api, 0, 0.75)
+			const result = contextManager.shouldCompactContextWindow(clineMessages, api, 0, { triggerPercent: 75 })
 			expect(result).to.equal(true)
 		})
 
@@ -698,16 +747,15 @@ describe("ContextManager", () => {
 			const api = createMockApi(200_000)
 			const clineMessages: ClineMessage[] = [createApiReqMessage({ tokensIn: 200_000 })]
 
-			const result = contextManager.shouldCompactContextWindow(clineMessages, api, -1, 0.75)
+			const result = contextManager.shouldCompactContextWindow(clineMessages, api, -1, { triggerPercent: 75 })
 			expect(result).to.equal(false)
 		})
 
-		it("threshold is capped at maxAllowedSize even when percentage is very high", () => {
+		it("caps a high percentage at the summary-aware safety boundary", () => {
 			const api = createMockApi(200_000)
-			// threshold of 1.0 → floor(200000 * 1.0) = 200000, but min(200000, 160000) = 160000
-			const clineMessages: ClineMessage[] = [createApiReqMessage({ tokensIn: 165_000 })]
+			const clineMessages: ClineMessage[] = [createApiReqMessage({ tokensIn: 192_000 })]
 
-			const result = contextManager.shouldCompactContextWindow(clineMessages, api, 0, 1.0)
+			const result = contextManager.shouldCompactContextWindow(clineMessages, api, 0, { triggerPercent: 97 })
 			expect(result).to.equal(true)
 		})
 	})

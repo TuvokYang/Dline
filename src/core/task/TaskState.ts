@@ -128,4 +128,13 @@ export class TaskState {
 	// Reasoning block ts — assigned once at the first reasoning delta
 	// and reused for all partial/final reasoning messages in the turn.
 	reasoningTs?: number
+
+	/** Clear every detector that can stop the next provider request at the mistake-limit gate. */
+	resetMistakeLimitState(): void {
+		this.consecutiveMistakeCount = 0
+		this.autoRetryAttempts = 0
+		this.consecutiveIdenticalToolCount = 0
+		this.lastToolName = ""
+		this.lastToolParams = ""
+	}
 }

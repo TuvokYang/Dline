@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import type { ModelInfo } from "@shared/proto/dline/models"
-import type { ModelCapabilities, ModelPricing } from "@shared/proto/dline/models/metadata"
+import { type ModelCapabilities, type ModelPricing, ServerTool } from "@shared/proto/dline/models/metadata"
 import { fireEvent, render, screen } from "@testing-library/react"
 import React from "react"
 import { describe, expect, it, vi } from "vitest"
@@ -181,6 +181,65 @@ describe("ModelConfiguration", () => {
 		fireEvent.click(screen.getByLabelText("Supports Native Tool Calls"))
 
 		expect(onCapabilitiesUpdate).toHaveBeenCalledWith({ supportsTools: true })
+	})
+
+	it("maps Web Search to ServerTool.WEB_SEARCH while preserving other server tools", () => {
+		const onCapabilitiesUpdate = vi.fn()
+		const tools = [ServerTool.SERVER_TOOL_UNSPECIFIED, ServerTool.WEB_SEARCH, ServerTool.UNRECOGNIZED]
+
+		render(
+			<ModelConfiguration
+				capabilities={{ tools } as ModelCapabilities}
+				fields={{ capabilities: ["supportsWebSearch"] }}
+				onCapabilitiesUpdate={onCapabilitiesUpdate}
+				onPricingUpdate={vi.fn()}
+			/>,
+		)
+
+		fireEvent.click(screen.getByRole("button", { name: /Model Configuration/i }))
+		expect(screen.getByLabelText("Supports Web Search")).toBeChecked()
+		fireEvent.click(screen.getByLabelText("Supports Web Search"))
+
+		expect(onCapabilitiesUpdate).toHaveBeenCalledWith({
+			tools: [ServerTool.SERVER_TOOL_UNSPECIFIED, ServerTool.UNRECOGNIZED],
+		})
+	})
+
+	it("saves Web Search, Browser Actions, and Images as independent capabilities", () => {
+		const onCapabilitiesUpdate = vi.fn()
+
+		render(
+			<ModelConfiguration
+				capabilities={{ tools: [], supportsBrowserAction: false, supportsImages: false } as ModelCapabilities}
+				fields={{ capabilities: ["supportsWebSearch", "supportsBrowserAction", "supportsImages"] }}
+				onCapabilitiesUpdate={onCapabilitiesUpdate}
+				onPricingUpdate={vi.fn()}
+			/>,
+		)
+
+		fireEvent.click(screen.getByRole("button", { name: /Model Configuration/i }))
+		fireEvent.click(screen.getByLabelText("Supports Web Search"))
+		fireEvent.click(screen.getByLabelText("Supports Browser Actions"))
+		fireEvent.click(screen.getByLabelText("Supports Images"))
+
+		expect(onCapabilitiesUpdate).toHaveBeenNthCalledWith(1, { tools: [ServerTool.WEB_SEARCH] })
+		expect(onCapabilitiesUpdate).toHaveBeenNthCalledWith(2, { supportsBrowserAction: true })
+		expect(onCapabilitiesUpdate).toHaveBeenNthCalledWith(3, { supportsImages: true })
+	})
+
+	it("inherits native tool support from the selected model defaults", () => {
+		render(
+			<ModelConfiguration
+				defaults={{ capabilities: { supportsTools: true } as ModelCapabilities }}
+				fields={{ capabilities: ["supportsTools"] }}
+				onCapabilitiesUpdate={vi.fn()}
+				onPricingUpdate={vi.fn()}
+			/>,
+		)
+
+		fireEvent.click(screen.getByRole("button", { name: /Model Configuration/i }))
+
+		expect(screen.getByLabelText("Supports Native Tool Calls")).toBeChecked()
 	})
 
 	it("writes temperature changes to provider capabilities", () => {

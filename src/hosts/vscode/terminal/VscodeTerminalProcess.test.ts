@@ -7,6 +7,10 @@ import * as vscode from "vscode"
 import { VscodeTerminalProcess } from "./VscodeTerminalProcess"
 import { TerminalRegistry } from "./VscodeTerminalRegistry"
 
+const getLatestTerminalOutput = vi.hoisted(() => vi.fn<() => Promise<string | undefined>>())
+
+vi.mock("@/hosts/vscode/terminal/get-latest-output", () => ({ getLatestTerminalOutput }))
+
 declare module "vscode" {
 	// https://github.com/microsoft/vscode/blob/f0417069c62e20f3667506f4b7e53ca0004b4e3e/src/vscode-dts/vscode.d.ts#L7442
 	interface Terminal {
@@ -38,6 +42,8 @@ describe("TerminalProcess (Integration Tests)", () => {
 	beforeEach(() => {
 		vi.useFakeTimers({ shouldAdvanceTime: true })
 		setVscodeHostProviderMock()
+		getLatestTerminalOutput.mockReset()
+		getLatestTerminalOutput.mockResolvedValue(undefined)
 		process = new VscodeTerminalProcess()
 	})
 
@@ -226,6 +232,27 @@ describe("TerminalProcess (Integration Tests)", () => {
 		expect(emitSpy).toHaveBeenCalledWith("no_shell_integration")
 	})
 
+	it("emits a fallback terminal snapshot as individual lines", async () => {
+		const terminal = vscode.window.createTerminal({ name: "Fallback Terminal" })
+		createdTerminals.push(terminal)
+		vi.spyOn(terminal, "shellIntegration", "get").mockReturnValue(undefined)
+		getLatestTerminalOutput.mockResolvedValue("prompt> command\r\nfirst\r\nsecond")
+		const lines: string[] = []
+		process.on("line", (line) => lines.push(line))
+
+		const runPromise = process.run(terminal, "command")
+		await vi.advanceTimersByTimeAsync(3000)
+		await runPromise
+
+		expect(lines).toEqual([
+			"The command's output could not be captured due to some technical issue, however it has been executed successfully. Here's the current terminal's content to help you get the command's output:",
+			"",
+			"prompt> command",
+			"first",
+			"second",
+		])
+	})
+
 	// The following tests require shell integration and controlled terminal output
 	describe("Shell integration tests", () => {
 		// We'll mock the terminal run process and TerminalProcess for these tests
@@ -281,6 +308,33 @@ describe("TerminalProcess (Integration Tests)", () => {
 			await runPromise
 
 			expect(completedDetails).toEqual({ exitCode: 7, signal: null })
+		})
+
+		it("should consume an internal completion marker without exposing it as command output", async () => {
+			const terminal = TerminalRegistry.createTerminal().terminal
+			createdTerminals.push(terminal)
+			const marker = "__DLINE_INTERNAL_COMMAND_EXIT__test-token:7"
+			const decoratedMarker = `\x1b[?7l\x1b]0;PowerShell\\${marker}\x1b[?7h`
+			vi.spyOn(terminal, "shellIntegration", "get").mockReturnValue({
+				executeCommand: vi.fn().mockReturnValue({
+					read: () => createMockStream(["echo test", "visible output", decoratedMarker]),
+				}),
+			})
+			const lines: string[] = []
+			let completedDetails: unknown
+			process.on("line", (line) => lines.push(line))
+			process.once("completed", (details) => {
+				completedDetails = details
+			})
+
+			const runPromise = process.run(terminal, "echo test")
+			await vi.advanceTimersByTimeAsync(1000)
+			await runPromise
+
+			expect(completedDetails).toEqual({ exitCode: 7, signal: null })
+			expect(lines).toContain("visible output")
+			expect(lines).not.toContain(marker)
+			expect(process.getUnretrievedOutput()).not.toContain(marker)
 		})
 	})
 
@@ -398,6 +452,24 @@ describe("TerminalProcess (Integration Tests)", () => {
 			expect(emitSpy).toHaveBeenCalledWith("line", "other output", "combined")
 			// This should never be called because it should be filtered
 			expect(emitSpy).not.toHaveBeenCalledWith("line", "test-command", "combined")
+		})
+
+		it("should preserve output that is only a substring of the submitted command", async () => {
+			const terminal = TerminalRegistry.createTerminal().terminal
+			createdTerminals.push(terminal)
+			const command = 'Write-Output "E2E_VSCODE_POWERSHELL_OK"; Write-Output "done"'
+			vi.spyOn(terminal, "shellIntegration", "get").mockReturnValue({
+				executeCommand: vi.fn().mockReturnValue({
+					read: () => createMockStream(["E2E_VSCODE_POWERSHELL_OK", "done"]),
+				}),
+			})
+			const lines: string[] = []
+			process.on("line", (line) => lines.push(line))
+
+			await process.run(terminal, command)
+
+			expect(lines).toContain("E2E_VSCODE_POWERSHELL_OK")
+			expect(lines).toContain("done")
 		})
 
 		it("should handle npm run commands", async () => {

@@ -1,5 +1,6 @@
 import { ApiHandler, ApiProviderInfo, buildApiHandler, resolveProviderFromProfile } from "@core/api"
 import { recordProviderAdapterInput, recordProviderAdapterOutput } from "@core/api/debug/api-conversation-log"
+import type { WebSearchRoutingPlan } from "@core/api/server-tools"
 import { createIdentityFactory } from "@core/api/transform/block-identity"
 import { ApiStream } from "@core/api/transform/stream"
 import { createStreamNormalizer, normalizeApiStream } from "@core/api/transform/stream-identity-normalizer"
@@ -60,7 +61,12 @@ import { ensureApiMessages, ensureUserContent } from "@core/task/api-context"
 import { showContextUsage } from "@core/task/environment-context"
 import { type ModeCompactResult, ModeSwitchCompaction } from "@core/task/ModeSwitchCompaction"
 import { MODE_SWITCH_COMPACT_SIGNAL } from "@core/task/mode-switch-signal"
-import { createRequestApiScope, type RequestApiScope, withRequestToolIds } from "@core/task/RequestApiScope"
+import {
+	createRequestApiScope,
+	type RequestApiScope,
+	resolveRequestWebSearchRoutingPlan,
+	withRequestToolIds,
+} from "@core/task/RequestApiScope"
 import { isMultiRootEnabled } from "@core/workspace/multi-root-utils"
 import { WorkspaceRootManager } from "@core/workspace/WorkspaceRootManager"
 import { buildCheckpointManager, shouldUseMultiRoot } from "@integrations/checkpoints/factory"
@@ -72,13 +78,13 @@ import { formatContentBlockToMarkdown } from "@integrations/misc/export-markdown
 import { processFilesIntoText } from "@integrations/misc/extract-text"
 import { showSystemNotification } from "@integrations/notifications"
 import type {
+	CommandCancellationResult,
 	ITerminalManager,
 	TerminalManagerConfiguration,
 	TerminalManagerConfigurationResult,
 } from "@integrations/terminal/types"
 import { BrowserSession } from "@services/browser/BrowserSession"
 import { UrlContentFetcher } from "@services/browser/UrlContentFetcher"
-import { featureFlagsService } from "@services/feature-flags"
 import { listFiles } from "@services/glob/list-files"
 import { McpHub } from "@services/mcp/McpHub"
 import { ApiConfiguration, DEFAULT_API_PROVIDER } from "@shared/api"
@@ -168,7 +174,7 @@ import { buildActiveTasksSection } from "./active-tasks/ActiveTaskContextProvide
 import { orderTurnEndingContentBlocks, orderTurnEndingNativeToolBlocks } from "./assistant-message-order"
 import { getRetryDelay, getStreamRetryDecision, MAX_AUTO_RETRY_ATTEMPTS } from "./auto-retry"
 import { BlockPhase } from "./BlockPhaseMachine"
-import { buildTaskBackgroundResults, buildTaskBackgroundSection } from "./background/BackgroundContextInjector"
+import { buildTaskBackgroundEnvironmentSection, buildTaskBackgroundResults } from "./background/BackgroundContextInjector"
 import { FocusChainManager } from "./focus-chain"
 import type { InteractionKind } from "./interaction/Interaction"
 import { type DetachedInteractionContinuationContext, InteractionCoordinator } from "./interaction/InteractionCoordinator"
@@ -421,6 +427,7 @@ export class Task {
 	private latestTaskSnapshot?: TaskSnapshot
 	private pendingSystemPromptRefreshReason?: SystemPromptRefreshReason
 	private pendingBackgroundResultIds?: { subagentIds: string[]; commandIds: string[] }
+	private pendingBackgroundCommandLineCounts?: Array<{ id: string; lineCount: number }>
 	/** One cancellable automatic-retry wait, exposed to the Webview Retry action. */
 	private pendingAutoRetry?: {
 		settle: (allowed: boolean, publish?: boolean) => void
@@ -911,7 +918,7 @@ export class Task {
 				this.taskState.userMessageContent.push({ type: "text", text: content.text } as ClineTextContentBlock)
 			},
 			markWorkspaceScanRequired: () => this.taskFileTracker.markWorkspaceScanRequired(),
-			createCommandActivity: ({ activityId, command, executionMode, cancellationOwner, cancel }) => {
+			createCommandActivity: ({ activityId, command, timeoutSeconds, executionMode, cancellationOwner, cancel }) => {
 				this.activityStore.create({
 					activityId,
 					kind: "command",
@@ -919,6 +926,7 @@ export class Task {
 					cancellationOwner,
 					title: command.split(/\r?\n/, 1)[0].slice(0, 240) || "Command",
 					detail: command,
+					timeoutSeconds,
 					cancel,
 				})
 			},
@@ -1200,18 +1208,27 @@ export class Task {
 	 * @param chatContent Optional pending draft to submit after handler rebuild.
 	 */
 	async commitMode(targetMode: Mode, chatContent?: ChatContent): Promise<void> {
+		const sourceMode = this.taskSm.mode
+		const shouldContinueInteraction = this.taskState.isAwaitingPlanResponse
+		if (shouldContinueInteraction && !this.interactionCoordinator.canRespondForModeSwitch()) {
+			throw new Error("The active conversational interaction is no longer available for the mode switch.")
+		}
 		this.taskSm.setMode(targetMode)
 		this.pendingSystemPromptRefreshReason = "mode_switch"
 		this.rebuildApiHandler()
-		if (targetMode === "act" && this.taskState.isAwaitingPlanResponse) {
-			this.taskState.didRespondToPlanAskBySwitchingMode = true
-			const hasContent = Boolean(chatContent?.message || chatContent?.images?.length || chatContent?.files?.length)
-			await this.handleWebviewAskResponse(
-				"messageResponse",
-				chatContent?.message || (hasContent ? "" : "PLAN_MODE_TOGGLE_RESPONSE"),
-				chatContent?.images,
-				chatContent?.files,
-			)
+		if (shouldContinueInteraction) {
+			this.taskState.didRespondToPlanAskBySwitchingMode = sourceMode === "plan" && targetMode === "act"
+			const continued = await this.interactionCoordinator.respondForModeSwitch({
+				text: chatContent?.message ?? "",
+				images: chatContent?.images ?? [],
+				files: chatContent?.files ?? [],
+			})
+			if (!continued) {
+				this.taskState.didRespondToPlanAskBySwitchingMode = false
+				this.taskSm.setMode(sourceMode)
+				this.rebuildApiHandler()
+				throw new Error("The active plan interaction changed during the mode switch.")
+			}
 		}
 		await this.stateManager.flushPendingState()
 	}
@@ -1223,7 +1240,6 @@ export class Task {
 	 * @returns Completion status after summary application.
 	 */
 	async compactForMode(operationId: string, chatContent?: ChatContent): Promise<ModeCompactResult> {
-		if (!this.interactionCoordinator.canRespondForModeCompaction()) return "failed"
 		return this.modeSwitchCompaction.request(
 			operationId,
 			() => this.interactionCoordinator.respondForModeCompaction(MODE_SWITCH_COMPACT_SIGNAL),
@@ -2411,6 +2427,16 @@ export class Task {
 	 */
 	public async prepareFromHistory(_options?: ResumeTaskFromHistoryOptions) {
 		this.taskState.abort = true
+		const interruptedActivityIds = new Set(await this.activityStore.recoverInterruptedActivities())
+		for (const [index, message] of this.messageStateHandler.clineMessages.entries()) {
+			if (
+				message.activityId &&
+				interruptedActivityIds.has(message.activityId) &&
+				(message.commandStatus === "pending" || message.commandStatus === "running")
+			) {
+				await this.messageStateHandler.updateClineMessage(index, { commandStatus: "interrupted" })
+			}
+		}
 		await this.resumeCoordinator.prepare(this.taskId)
 	}
 
@@ -2611,9 +2637,16 @@ export class Task {
 			}
 
 			try {
-				await withTerminateTimeout(this.commandExecutor.cancelTaskOwnedCommands(), 5_000, "cancelTaskOwnedCommands")
+				await withTerminateTimeout(this.commandExecutor.cancelBackgroundCommand(), 5_000, "cancelAllCommands")
 			} catch (error) {
-				Logger.error("Failed to cancel Task-owned command during task terminate", error)
+				Logger.error("Failed to cancel command during task terminate", error)
+			}
+
+			const activeActivityIds = this.activityStore.listRunning().map((activity) => activity.activityId)
+			if (activeActivityIds.length > 0) {
+				await withTerminateTimeout(this.activityStore.cancel(activeActivityIds), 5_000, "cancelAllTaskActivities").catch(
+					(error) => Logger.error("Failed to cancel task activities during terminate", error),
+				)
 			}
 
 			// PHASE 4: Run TaskCancel hook as fire-and-forget. It must not
@@ -2749,7 +2782,7 @@ export class Task {
 	}
 
 	/** Terminate one running command by its canonical execute_command function identity. */
-	private async killCommandTool(functionId: string): Promise<boolean> {
+	private async killCommandTool(functionId: string): Promise<CommandCancellationResult> {
 		return this.commandExecutor.cancelCommandByFunctionId(functionId)
 	}
 
@@ -2791,13 +2824,20 @@ export class Task {
 		return this.commandExecutor.configure(configuration)
 	}
 
+	/** Close idle task terminals so project startup scripts run again on the next command. */
+	reinitializeTerminals(): TerminalManagerConfigurationResult {
+		return this.commandExecutor.reinitializeTerminals()
+	}
+
 	/**
 	 * Refresh the frozen system prompt cache immediately.
 	 * @returns Promise that resolves after context.json has been updated.
 	 */
 	async refreshPromptCache(): Promise<void> {
-		const promptContext = await this.buildPromptContext()
-		const providerInfo = promptContext.providerInfo
+		const providerInfo = this.getCurrentProviderInfo()
+		const webToolsEnabled = this.stateManager.getGlobalSettingsKey("clineWebToolsEnabled") === true
+		const webSearchRoutingPlan = resolveRequestWebSearchRoutingPlan(this.api, webToolsEnabled)
+		const promptContext = await this.buildPromptContext(providerInfo, webToolsEnabled, webSearchRoutingPlan)
 		await this.systemPromptCacheService.refresh({ promptContext, reason: "manual" })
 	}
 
@@ -2838,6 +2878,14 @@ export class Task {
 		this.toolExecutor.getSubagentJobManager().markConsumed(ids.subagentIds)
 		this.commandExecutor.markBackgroundCommandsConsumed(ids.commandIds)
 		this.pendingBackgroundResultIds = undefined
+	}
+
+	/** Commit the output counts represented in Environment after the request reaches the model. */
+	private markBackgroundCommandOutputSent(): void {
+		const snapshots = this.pendingBackgroundCommandLineCounts
+		if (!snapshots) return
+		this.commandExecutor.markBackgroundCommandOutputSent(snapshots)
+		this.pendingBackgroundCommandLineCounts = undefined
 	}
 
 	public async cancelHookExecution(): Promise<boolean> {
@@ -2924,14 +2972,14 @@ export class Task {
 	}
 
 	private async writePromptMetadataArtifacts(params: { systemPrompt: string; requestScope: RequestApiScope }): Promise<void> {
-		const enabledFlag = process.env.CLINE_WRITE_PROMPT_ARTIFACTS?.toLowerCase()
+		const enabledFlag = process.env.DLINE_WRITE_PROMPT_ARTIFACTS?.toLowerCase()
 		const enabled = enabledFlag === "1" || enabledFlag === "true" || enabledFlag === "yes"
 		if (!enabled) {
 			return
 		}
 
 		try {
-			const configuredDir = process.env.CLINE_PROMPT_ARTIFACT_DIR?.trim()
+			const configuredDir = process.env.DLINE_PROMPT_ARTIFACT_DIR?.trim()
 			const artifactDir = configuredDir
 				? path.isAbsolute(configuredDir)
 					? configuredDir
@@ -3134,7 +3182,11 @@ export class Task {
 		return parseTaskCapabilityToggles(this.taskSm.taskCapabilityToggles) ?? emptyTaskCapabilityToggles()
 	}
 
-	private async buildPromptContext(providerInfo = this.getCurrentProviderInfo()): Promise<SystemPromptContext> {
+	private async buildPromptContext(
+		providerInfo: Readonly<ApiProviderInfo>,
+		webToolsEnabled: boolean,
+		webSearchRoutingPlan: WebSearchRoutingPlan,
+	): Promise<SystemPromptContext> {
 		await pWaitFor(() => this.mcpHub.isConnecting !== true, {
 			timeout: 10_000,
 		}).catch(() => {
@@ -3146,8 +3198,11 @@ export class Task {
 		const isCliEnvironment = host.clineType === ClineClient.Cli
 		const browserSettings = this.stateManager.getGlobalSettingsKey("browserSettings")
 		const disableBrowserTool = browserSettings.disableToolUse ?? false
-		// cline browser tool uses image recognition for navigation (requires model image support).
-		const modelSupportsBrowserUse = providerInfo.model.info.capabilities?.supportsImages ?? false
+		// Older model metadata only declared image support, so retain that as a compatibility fallback.
+		const modelSupportsBrowserUse =
+			providerInfo.model.info.capabilities?.supportsBrowserAction ??
+			providerInfo.model.info.capabilities?.supportsImages ??
+			false
 
 		const supportsBrowserUse = modelSupportsBrowserUse && !disableBrowserTool // only enable browser use if the model supports it and the user hasn't disabled it
 		const preferredLanguageRaw = this.stateManager.getGlobalSettingsKey("preferredLanguage")
@@ -3331,8 +3386,8 @@ export class Task {
 			browserSettings: this.stateManager.getGlobalSettingsKey("browserSettings"),
 			yoloModeToggled: this.stateManager.getGlobalSettingsKey("yoloModeToggled"),
 			subagentsEnabled: this.stateManager.getGlobalSettingsKey("subagentsEnabled"),
-			clineWebToolsEnabled:
-				this.stateManager.getGlobalSettingsKey("clineWebToolsEnabled") && featureFlagsService.getWebtoolsEnabled(),
+			clineWebToolsEnabled: webToolsEnabled,
+			webSearchRoutingPlan,
 			isMultiRootEnabled: multiRootEnabled,
 			workspaceRoots,
 			isSubagentRun: false,
@@ -3355,7 +3410,11 @@ export class Task {
 		const apiReqStart = performance.now()
 		const { api, providerInfo } = requestScope
 		Logger.debug(`[Task ${this.taskId}] attemptApiRequest: start (req #${this.taskState.apiRequestCount})`)
-		const promptContext = await this.buildPromptContext(providerInfo)
+		const promptContext = await this.buildPromptContext(
+			providerInfo,
+			requestScope.webToolsEnabled,
+			requestScope.webSearchRoutingPlan,
+		)
 
 		Logger.debug(
 			`[Task ${this.taskId}] attemptApiRequest: before systemPrompt +${Math.round(performance.now() - apiReqStart)}ms`,
@@ -3384,6 +3443,11 @@ export class Task {
 		)
 		const tools = selectedTools ? [...selectedTools] : undefined
 		this.toolExecutor.setAllowedNativeToolNames(getAdvertisedNativeToolNames(tools))
+		this.toolExecutor.setWebSearchRoutingPlan(
+			requestScope.webSearchRoutingPlan,
+			requestScope.webToolsEnabled,
+			requestScope.requestToolIds.length === 0,
+		)
 		Logger.debug(
 			`[Task ${this.taskId}] attemptApiRequest: after systemPrompt +${Math.round(performance.now() - apiReqStart)}ms`,
 		)
@@ -3440,7 +3504,11 @@ export class Task {
 			thinking: thinkingSummary ?? null,
 		})
 
-		const stream = recordProviderAdapterOutput(roundContext, api.createMessage(systemPrompt, apiConversationMessages, tools))
+		const serverTools = requestScope.requestToolIds.length > 0 ? [] : requestScope.webSearchRoutingPlan.serverTools
+		const stream = recordProviderAdapterOutput(
+			roundContext,
+			api.createMessage(systemPrompt, apiConversationMessages, tools, { serverTools }),
+		)
 
 		const iterator = stream[Symbol.asyncIterator]()
 
@@ -3457,11 +3525,12 @@ export class Task {
 			yield firstChunk.value
 			this.markBackgroundResultsInjected()
 			this.markBackgroundResultsConsumed()
+			this.markBackgroundCommandOutputSent()
 			this.taskState.isWaitingForFirstChunk = false
 			Logger.debug(`[Task ${this.taskId}] attemptApiRequest: TTFB +${Math.round(performance.now() - apiReqStart)}ms`)
 		} catch (error) {
+			this.taskState.isWaitingForFirstChunk = false
 			if (this.taskState.abort) {
-				this.taskState.isWaitingForFirstChunk = false
 				Logger.debug(`[Task ${this.taskId}] API request stopped after task cancellation`)
 				throw new Error("Dline instance aborted")
 			}
@@ -4017,6 +4086,7 @@ export class Task {
 			this.api,
 			this.taskSm.mode,
 			this.stateManager.getGlobalSettingsKey("customPrompt"),
+			this.stateManager.getGlobalSettingsKey("clineWebToolsEnabled"),
 		)
 		userContent = await this.consumeModeSwitchChatContent(userContent)
 
@@ -4147,6 +4217,10 @@ export class Task {
 		const useCompactPrompt = customPrompt === "compact" && isLocalModel(requestScope.providerInfo)
 		let shouldCompact = false
 		const useAutoCondense = this.stateManager.getGlobalSettingsKey("useAutoCondense")
+		const autoCondenseTriggerOptions = {
+			triggerPercent: this.stateManager.getGlobalSettingsKey("autoCondenseTriggerPercent"),
+			maxContextTokens: this.stateManager.getGlobalSettingsKey("autoCondenseMaxContextTokens"),
+		}
 		const forceModeCompact = this.modeSwitchCompaction.shouldForce()
 		const canCompactBeforeAdmission = transaction.beforeApiRequestStarted === undefined
 
@@ -4177,17 +4251,23 @@ export class Task {
 						this.messageStateHandler.clineMessages,
 						requestScope.api,
 						previousApiReqIndex,
+						autoCondenseTriggerOptions,
 					)
 
 				const previousTokens = this.parsePreviousTokens(previousApiReqIndex)
 				const hasCurrentToolResult = hasToolResult(userContent)
 				if (hasCurrentToolResult) {
 					const { contextWindow } = getContextWindowInfo(requestScope.api)
+					const triggerTokens = computeCompactTrigger(
+						contextWindow,
+						computeSummarizeBudget(),
+						autoCondenseTriggerOptions,
+					)
 					const shouldDeferTurn =
 						shouldCompact ||
 						(previousTokens !== undefined &&
 							shouldDeferCurrentTurn({
-								contextWindow,
+								triggerTokens,
 								previousTokens,
 								userContent,
 							}))
@@ -4639,6 +4719,10 @@ export class Task {
 							didScheduleAnyContent = true
 							break
 						}
+						case "server_tool": {
+							if (await this.toolExecutor.consumeServerToolChunk(chunk)) didScheduleAnyContent = true
+							break
+						}
 						case "text": {
 							// If we have reasoning content, finalize it before processing text (only once)
 							const currentReasoning = reasonsHandler.getCurrentReasoning()
@@ -4721,8 +4805,16 @@ export class Task {
 
 				if (shouldInterruptStream) {
 					await streamCoordinator.stop()
+					await this.toolExecutor.finalizeServerToolCalls(
+						this.taskState.abort
+							? "Provider-hosted web search cancelled."
+							: "Provider-hosted web search interrupted.",
+					)
 				} else {
 					await streamCoordinator.waitForCompletion()
+					await this.toolExecutor.finalizeServerToolCalls(
+						"Provider stream ended before hosted web search returned a result.",
+					)
 				}
 				// Flush any usage updates that were already executing/queued during streaming.
 				await usageChunkSideEffectsQueue
@@ -4739,6 +4831,11 @@ export class Task {
 				}
 			} catch (error) {
 				await streamCoordinator?.stop()
+				await this.toolExecutor.finalizeServerToolCalls(
+					this.taskState.abort
+						? "Provider-hosted web search cancelled."
+						: "Provider stream failed before hosted web search returned a result.",
+				)
 				// abandoned happens when extension is no longer waiting for the cline instance to finish aborting (error is thrown here when any function in the for loop throws due to this.abort)
 				if (this.taskState.abort) {
 					Logger.debug(`[Task ${this.taskId}] API stream stopped after task cancellation`)
@@ -4830,6 +4927,11 @@ export class Task {
 					await this.reinitExistingTaskFromId(this.taskId)
 				}
 			} finally {
+				await this.toolExecutor.finalizeServerToolCalls(
+					this.taskState.abort
+						? "Provider-hosted web search cancelled."
+						: "Provider stream ended before hosted web search returned a result.",
+				)
 				this.taskState.isStreaming = false
 				// End API call tracking for session statistics
 				Session.get().endApiCall()
@@ -5482,9 +5584,10 @@ export class Task {
 			details += terminalDetails
 		}
 
-		const backgroundDetails = buildTaskBackgroundSection(this.toolExecutor, this.commandExecutor)
-		if (backgroundDetails) {
-			details += `\n\n${backgroundDetails}`
+		const backgroundEnvironment = buildTaskBackgroundEnvironmentSection(this.toolExecutor, this.commandExecutor)
+		this.pendingBackgroundCommandLineCounts = backgroundEnvironment.commandLineCounts
+		if (backgroundEnvironment.text) {
+			details += `\n\n${backgroundEnvironment.text}`
 		}
 
 		// Add recently modified files section

@@ -1,6 +1,5 @@
 export enum NEW_USER_TYPE {
-	FREE = "free",
-	POWER = "power",
+	ACCOUNT = "account",
 	BYOK = "byok",
 }
 
@@ -16,22 +15,9 @@ export const STEP_CONFIG = {
 		description: "Select an option below to get started.",
 		buttons: [{ text: "Continue", action: "next", variant: "default" }],
 	},
-	[NEW_USER_TYPE.FREE]: {
-		title: "Select a free model",
-		buttons: [
-			{ text: "Create my Account", action: "signup", variant: "default" },
-			{ text: "Back", action: "back", variant: "secondary" },
-		],
-	},
-	[NEW_USER_TYPE.POWER]: {
-		title: "Select your model",
-		buttons: [
-			{ text: "Create my Account", action: "signup", variant: "default" },
-			{ text: "Back", action: "back", variant: "secondary" },
-		],
-	},
 	[NEW_USER_TYPE.BYOK]: {
 		title: "Configure your provider",
+		description: undefined,
 		buttons: [
 			{ text: "Continue", action: "done", variant: "default" },
 			{ text: "Back", action: "back", variant: "secondary" },
@@ -39,13 +25,12 @@ export const STEP_CONFIG = {
 	},
 	2: {
 		title: "Almost there!",
-		description: "Complete account creation in your browser. Then come back here to finish up.",
+		description: "Complete login or sign up in your browser. Then come back here to finish up.",
 		buttons: [{ text: "Back", action: "back", variant: "secondary" }],
 	},
 } as const
 
 export const USER_TYPE_SELECTIONS: UserTypeSelection[] = [
-	{ title: "Absolutely Free", description: "Get started at no cost", type: NEW_USER_TYPE.FREE },
-	{ title: "Frontier Model", description: "Claude, GPT Codex, Gemini, etc.", type: NEW_USER_TYPE.POWER },
-	{ title: "Bring my own API key", description: "Use Dline with your provider of choice", type: NEW_USER_TYPE.BYOK },
+	{ title: "Login / Sign up account", description: "Use Dline with your account", type: NEW_USER_TYPE.ACCOUNT },
+	{ title: "Bring your own API key", description: "Use Dline with your provider of choice", type: NEW_USER_TYPE.BYOK },
 ]

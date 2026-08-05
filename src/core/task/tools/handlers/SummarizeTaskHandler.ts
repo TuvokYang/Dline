@@ -101,14 +101,14 @@ export class SummarizeTaskHandler implements IToolHandler, IPartialBlockHandler 
 				}
 			}
 
-			if (!config.taskState.isInternalContextCompactionRequest) {
-				const completeMessage = JSON.stringify({
-					tool: "summarizeTask",
-					content: context,
-				} satisfies ClineSayTool)
+			// Render the model-produced summary. The internal instruction that requested
+			// compaction is separate API input and must remain backend-only.
+			const completeMessage = JSON.stringify({
+				tool: "summarizeTask",
+				content: context,
+			} satisfies ClineSayTool)
 
-				await config.callbacks.say("tool", completeMessage, undefined, undefined, false, block.ts)
-			}
+			await config.callbacks.say("tool", completeMessage, undefined, undefined, false, block.ts)
 
 			// Parse "Required Files" section from context and read files
 			// We impose a max number of files which are allowed to be read in as well as on
@@ -270,10 +270,6 @@ export class SummarizeTaskHandler implements IToolHandler, IPartialBlockHandler 
 	}
 
 	async handlePartialBlock(block: ToolUse, uiHelpers: StronglyTypedUIHelpers): Promise<void> {
-		if (uiHelpers.getConfig().taskState.isInternalContextCompactionRequest) {
-			return
-		}
-
 		const context = block.params.context || ""
 
 		// Show streaming summary generation in tool UI

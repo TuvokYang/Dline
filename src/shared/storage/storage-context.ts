@@ -37,7 +37,7 @@ export interface StorageContext {
 	/** Workspace-scoped state — per-project toggles, rules, etc. */
 	readonly workspaceState: ClineFileStorage
 
-	/** The resolved path to the data directory (~/.cline/data) */
+	/** The resolved path to the data directory (~/.dline/data) */
 	readonly dataDir: string
 
 	/** The resolved path to the workspace storage directory (contains workspaceState.json) */
@@ -49,7 +49,7 @@ export interface StorageContext {
 
 export interface StorageContextOptions {
 	/**
-	 * Override the Cline home directory. Defaults to CLINE_DIR env var or ~/.cline.
+	 * Override the Dline home directory. Defaults to DLINE_DIR env var or ~/.dline.
 	 */
 	clineDir?: string
 
@@ -102,7 +102,7 @@ function hashString(str: string): string {
  * @returns A StorageContext ready for use by StateManager
  */
 export function createStorageContext(opts: StorageContextOptions = {}): StorageContext {
-	// Use unified getDlineDataDir() which respects DLINE_DIR → CLINE_DIR → ~/.dline
+	// Use unified getDlineDataDir() which respects DLINE_DIR → ~/.dline
 	const dataDir = opts.clineDir ? path.join(opts.clineDir, SETTINGS_SUBFOLDER) : getDlineDataDir()
 
 	// Resolve workspace storage directory

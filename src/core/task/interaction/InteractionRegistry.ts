@@ -63,6 +63,7 @@ const RESUME_INPUT: InputPolicy = { ...DRAFT_INPUT, enterAction: "resume" }
 const APPROVAL_INPUT: InputPolicy = { ...DRAFT_INPUT, enterAction: "reject" }
 const RETRY_INPUT: InputPolicy = { ...DRAFT_INPUT, enterAction: "retry" }
 const ACKNOWLEDGE_INPUT: InputPolicy = { ...DRAFT_INPUT, enterAction: "acknowledge" }
+const CONDENSE_INPUT: InputPolicy = { ...DRAFT_INPUT, enterAction: "reject" }
 const APPROVAL_ACTIONS = [action("approve", "Approve", "draft"), action("reject", "Reject", "draft", "danger")]
 
 const DEFINITIONS: Readonly<Record<InteractionKind, InteractionDefinition>> = {
@@ -80,7 +81,12 @@ const DEFINITIONS: Readonly<Record<InteractionKind, InteractionDefinition>> = {
 	),
 	new_task: define("new_task", "new_task", [action("approve", "Start New Task", "draft"), action("reject", "Reject", "draft")]),
 	report_bug: define("report_bug", "report_bug", [action("confirm_utility", "Report Bug", "draft")]),
-	condense: define("condense", "condense", [action("confirm_utility", "Condense Conversation", "draft")]),
+	condense: define(
+		"condense",
+		"condense",
+		[action("confirm_utility", "Condense Conversation"), action("reject", "Regenerate Summary", "draft", "secondary")],
+		CONDENSE_INPUT,
+	),
 	followup: define("followup", "followup", [], REPLY_INPUT, "handler"),
 	make_plan: define("make_plan", "make_plan", [], REPLY_INPUT, "handler"),
 	qna_response: define("qna_response", "qna_respond", [], REPLY_INPUT, "handler"),

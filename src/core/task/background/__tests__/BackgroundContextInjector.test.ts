@@ -61,6 +61,7 @@ describe("BackgroundContextInjector", () => {
 		const commands: BackgroundCommand[] = [
 			{
 				id: "command_1",
+				functionId: "call_command_1",
 				command: "npm test",
 				startTime: Date.now(),
 				status: "running",
@@ -97,6 +98,7 @@ describe("BackgroundContextInjector", () => {
 		const commands: BackgroundCommand[] = [
 			{
 				id: "command_2",
+				functionId: "call_command_2",
 				command: "npm run build",
 				startTime: Date.now(),
 				status: "running",
@@ -104,6 +106,7 @@ describe("BackgroundContextInjector", () => {
 				cancellationOwner: "explicit",
 				logFilePath: "logs/command_2.log",
 				lineCount: 3,
+				lastApiSentLineCount: 1,
 				process: {} as BackgroundCommand["process"],
 			},
 		]
@@ -114,7 +117,10 @@ describe("BackgroundContextInjector", () => {
 		)
 
 		assert.match(details, new RegExp(`${job.jobId}: completed — review state`))
-		assert.match(details, /command_2: running - npm run build/)
+		assert.match(details, /function_id: call_command_2/)
+		assert.match(details, /status: running/)
+		assert.match(details, /output change since last API send: \+2 lines/)
+		assert.match(details, /command: npm run build/)
 		assert.match(details, /log: logs\/command_2\.log/)
 	})
 
@@ -232,6 +238,7 @@ describe("BackgroundContextInjector", () => {
 				command: "npm test",
 				startTime: Date.now(),
 				status: "completed",
+				functionId: "call_command_1",
 				origin: "explicit_background",
 				cancellationOwner: "explicit",
 				logFilePath: "logs/command_1.log",
@@ -250,7 +257,10 @@ describe("BackgroundContextInjector", () => {
 		assert.match(details, /# Background Subagents/)
 		assert.match(details, new RegExp(`${job.jobId}: completed — review api`))
 		assert.match(details, /# Background Commands/)
-		assert.match(details, /command_1: completed - npm test/)
+		assert.match(details, /function_id: call_command_1/)
+		assert.match(details, /status: completed/)
+		assert.match(details, /output change since last API send: \+12 lines/)
+		assert.match(details, /command: npm test/)
 		assert.match(details, /log: logs\/command_1\.log/)
 	})
 })

@@ -17,18 +17,18 @@
 
 import { execSync } from "node:child_process"
 import fs from "node:fs"
+import { createRequire } from "node:module"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
-import vsce from "@vscode/vsce"
-
-const vscePack = vsce.createVSIX
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
+const require = createRequire(import.meta.url)
 
 const PROJECT_ROOT = path.join(__dirname, "..")
 const PACKAGE_JSON_PATH = path.join(PROJECT_ROOT, "package.json")
 const _DIST_DIR = path.join(PROJECT_ROOT, "dist")
+const { pack: packVSIX } = require(path.join(PROJECT_ROOT, "node_modules", "@vscode", "vsce", "out", "package.js"))
 
 const _NIGHTLY_SUFFIX = "-nightly"
 const _NIGHTLY_DISPLAY_SUFFIX = " (Nightly)"
@@ -124,20 +124,27 @@ if (onTag || onMain) {
 }
 
 try {
-	// 1. Dev build (no --production, so IS_DEV=true)
+	// 1. Run the same validation and Webview build as vscode:prepublish,
+	// then produce a dev extension bundle with IS_DEV=true and source maps.
 	console.log("[package-dev] Building extension in dev mode...")
-	execSync("node esbuild.mjs", {
-		cwd: PROJECT_ROOT,
-		stdio: "inherit",
-		shell: true,
-	})
+	for (const command of ["npm run check-types", "npm run build:webview", "npm run lint", "node esbuild.mjs"]) {
+		execSync(command, {
+			cwd: PROJECT_ROOT,
+			stdio: "inherit",
+			shell: true,
+		})
+	}
 
-	// 2. Pack using @vscode/vsce createVSIX() directly (skips prepublish)
+	// 2. Pack the already-built files. createVSIX() cannot be used here because
+	// it always runs vscode:prepublish and would overwrite dist with a production build.
 	console.log("[package-dev] Creating VSIX...")
-	await vscePack({
+	const { packagePath } = await packVSIX({
 		cwd: PROJECT_ROOT,
+		// The extension and Webview are bundled; dependency scanning only re-adds duplicate package files.
+		dependencies: false,
 	})
-	console.log("[package-dev] Package completed!")
+	const packageSizeMb = fs.statSync(packagePath).size / 1_000_000
+	console.log(`[package-dev] Package completed: ${packagePath} (${packageSizeMb.toFixed(2)} MB)`)
 } finally {
 	// Always restore package.json if modified
 	if (modified) {

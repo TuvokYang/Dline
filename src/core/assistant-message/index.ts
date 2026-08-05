@@ -68,6 +68,7 @@ export const toolParamNames = [
 	"background",
 	"synchronous",
 	"timeout",
+	"mute_stdout",
 	"input",
 	"from_ref",
 	"to_ref",

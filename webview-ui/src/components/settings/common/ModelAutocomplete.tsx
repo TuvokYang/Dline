@@ -1,4 +1,4 @@
-import { ModelInfo } from "@shared/api"
+import type { ModelInfo } from "@shared/api"
 import { VSCodeTextField } from "@vscode/webview-ui-toolkit/react"
 import Fuse from "fuse.js"
 import { KeyboardEvent, useEffect, useId, useMemo, useRef, useState } from "react"
@@ -12,6 +12,7 @@ interface ModelAutocompleteProps {
 	zIndex?: number
 	label?: string
 	placeholder?: string
+	onOpen?: () => void
 }
 
 const AUTOCOMPLETE_Z_INDEX = 1_000
@@ -23,6 +24,7 @@ export const ModelAutocomplete = ({
 	zIndex = AUTOCOMPLETE_Z_INDEX,
 	label = "Model",
 	placeholder = "Search and select a model...",
+	onOpen,
 }: ModelAutocompleteProps) => {
 	const [searchTerm, setSearchTerm] = useState(selectedModelId || "")
 	const [isDropdownVisible, setIsDropdownVisible] = useState(false)
@@ -173,7 +175,10 @@ export const ModelAutocomplete = ({
 								isSelectingRef.current = false
 							}, 150)
 						}}
-						onFocus={() => setIsDropdownVisible(true)}
+						onFocus={() => {
+							setIsDropdownVisible(true)
+							onOpen?.()
+						}}
 						onInput={(e) => {
 							setSearchTerm((e.target as HTMLInputElement)?.value || "")
 							setIsDropdownVisible(true)
@@ -214,14 +219,13 @@ export const ModelAutocomplete = ({
 							style={{ zIndex: zIndex - 1 }}>
 							{modelSearchResults.map((item, index) => (
 								<DropdownItem
+									$isSelected={index === selectedIndex}
 									aria-selected={index === selectedIndex}
 									id={`${listboxId}-option-${index}`}
-									isSelected={index === selectedIndex}
 									key={item.id}
 									onClick={() => {
 										handleModelChange(item.id)
 										setIsDropdownVisible(false)
-										isSelectingRef.current = false
 									}}
 									onMouseDown={() => {
 										isSelectingRef.current = true
@@ -258,13 +262,13 @@ const DropdownList = styled.div`
 	border-bottom-right-radius: 3px;
 `
 
-const DropdownItem = styled.div<{ isSelected: boolean }>`
+const DropdownItem = styled.div<{ $isSelected: boolean }>`
 	padding: 5px 10px;
 	cursor: pointer;
 	word-break: break-all;
 	white-space: normal;
 
-	background-color: ${({ isSelected }) => (isSelected ? "var(--vscode-list-activeSelectionBackground)" : "inherit")};
+	background-color: ${({ $isSelected }) => ($isSelected ? "var(--vscode-list-activeSelectionBackground)" : "inherit")};
 
 	&:hover {
 		background-color: var(--vscode-list-activeSelectionBackground);

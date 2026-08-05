@@ -45,9 +45,15 @@ function isInteractive(context: SystemPromptContext): boolean {
 	return context.yoloModeToggled !== true
 }
 
-/** Reports whether Cline-hosted web tools are enabled. */
-function hasWebTools(context: SystemPromptContext): boolean {
-	return context.providerInfo.providerId === "cline" && context.clineWebToolsEnabled === true
+/** Reports whether the local Dline Web Fetch tool is enabled. */
+function hasWebFetch(context: SystemPromptContext): boolean {
+	return context.clineWebToolsEnabled === true
+}
+
+/** Reports whether this request selected the local Web Search executor. */
+function hasLocalWebSearch(context: SystemPromptContext): boolean {
+	if (context.clineWebToolsEnabled !== true) return false
+	return context.webSearchRoutingPlan?.route === "local"
 }
 
 /** Reports whether configured skills are available. */
@@ -177,6 +183,7 @@ export const STANDARD_TOOL_SPECS: readonly Omit<ProfileToolSpec, "profile">[] = 
 		param("background", false, getPrompt("executeCommand", "standardBackgroundInstruction"), "boolean"),
 		param("synchronous", false, getPrompt("executeCommand", "standardSynchronousInstruction"), "boolean"),
 		param("timeout", false, getPrompt("executeCommand", "standardTimeoutInstruction"), "integer"),
+		param("mute_stdout", false, getPrompt("executeCommand", "standardMuteStdoutInstruction"), "boolean"),
 	]),
 	spec(ClineDefaultTool.KILL_COMMAND, getPrompt("killCommand", "standardDescription"), [
 		param("function_id", true, getPrompt("killCommand", "standardFunctionIdInstruction")),
@@ -200,7 +207,7 @@ export const STANDARD_TOOL_SPECS: readonly Omit<ProfileToolSpec, "profile">[] = 
 			param("prompt", true, getPrompt("webFetch", "standardPromptInstruction")),
 			taskProgress,
 		],
-		hasWebTools,
+		hasWebFetch,
 	),
 	spec(
 		ClineDefaultTool.WEB_SEARCH,
@@ -211,7 +218,7 @@ export const STANDARD_TOOL_SPECS: readonly Omit<ProfileToolSpec, "profile">[] = 
 			param("blocked_domains", false, getPrompt("webSearch", "blockedDomainsInstruction")),
 			taskProgress,
 		],
-		hasWebTools,
+		hasLocalWebSearch,
 	),
 	spec(
 		ClineDefaultTool.MCP_USE,

@@ -66,6 +66,286 @@ e2e("Tools - auto-approves a project read and continues with its result", async 
 })
 
 e2e(
+	"Tools - no-timeout muted commands hide successful stdout but preserve failure diagnostics",
+	async ({ helper, server, sidebar, userDataDir, workspaceDir }) => {
+		e2e.setTimeout(180_000)
+		await expect(readFile(path.join(workspaceDir, ".agents", "bashrc.yml"), "utf8")).rejects.toMatchObject({
+			code: "ENOENT",
+		})
+		await helper.signin(sidebar)
+		await setAutoApproveAction(sidebar, "Execute safe commands", true)
+		server.resetOpenAiMock()
+		const successMarker = "E2E_MUTED_SUCCESS_STDOUT"
+		const failureMarker = "E2E_MUTED_FAILURE_STDERR"
+		const environmentName = "e2e-environment-name-that-is-intentionally-long"
+		const successCommand = `node -e "console.log(['E2E','MUTED','SUCCESS','STDOUT'].join('_'))"`
+		const failureCommand = `node -e "console.error('${failureMarker}'); process.stderr.write('\\x1b]0;E2E PowerShell\\x07\\x1b[0m(${environmentName})\\x1b[0m\\n'); process.exit(7)"`
+		server.enqueueOpenAiResponses(
+			{
+				type: "tool",
+				id: "call_muted_success",
+				name: "execute_command",
+				arguments: {
+					command: successCommand,
+					workdirectory: ".",
+					requires_approval: false,
+					synchronous: true,
+					timeout: 0,
+					mute_stdout: true,
+				},
+			},
+			{
+				type: "tool",
+				id: "call_muted_failure",
+				name: "execute_command",
+				arguments: {
+					command: failureCommand,
+					workdirectory: ".",
+					requires_approval: false,
+					synchronous: true,
+					timeout: 60,
+					mute_stdout: true,
+				},
+				expectedToolResults: [
+					{ callId: "call_muted_success", contentIncludes: "Command executed successfully (exit code 0)." },
+				],
+				expectedRequestExcludes: [successMarker],
+			},
+			{
+				type: "tool",
+				id: "call_muted_completion",
+				name: "attempt_completion",
+				arguments: { result: "E2E_MUTED_COMMANDS_COMPLETE" },
+				expectedToolResults: [{ callId: "call_muted_failure", contentIncludes: failureMarker }],
+			},
+		)
+
+		await sendTask(sidebar, "Run one successful muted command without a timeout, then one failing muted command.")
+		await expect.poll(() => server.openAiRequestCount, { timeout: 60_000 }).toBe(3)
+		await expect(sidebar.getByText(failureMarker, { exact: false }).last()).toBeVisible({ timeout: 60_000 })
+		await sidebar.getByRole("button", { name: successCommand, exact: true }).click()
+		await expect(sidebar.getByText(successMarker, { exact: false }).last()).toBeVisible()
+
+		await sidebar.getByRole("tab", { name: /^Activities(?: \d+)?$/ }).click()
+		await sidebar.getByRole("button", { name: "All", exact: true }).first().click()
+		const successActivity = sidebar.getByTestId("activity-item").filter({ hasText: successCommand })
+		const failureActivity = sidebar.getByTestId("activity-item").filter({ hasText: failureCommand })
+		await expect(successActivity).toHaveCount(1)
+		await expect(failureActivity).toHaveCount(1)
+		await expect(failureActivity.getByTestId("activity-output-summary")).toContainText(failureMarker)
+		await expect(successActivity.getByTestId("activity-environment-label")).toHaveCount(0)
+		const environmentMode = failureActivity.getByTestId("activity-environment-mode")
+		await expect(failureActivity.getByTestId("activity-environment-label")).toHaveText(`(${environmentName})`)
+		const environmentModeLayout = await environmentMode.evaluate((group) => {
+			const environment = group.querySelector<HTMLElement>('[data-testid="activity-environment-label"]')
+			const mode = group.querySelector<HTMLElement>('[data-testid="activity-execution-mode"]')
+			if (!environment || !mode) throw new Error("Environment and execution mode group is incomplete")
+			const environmentRect = environment.getBoundingClientRect()
+			const modeRect = mode.getBoundingClientRect()
+			return {
+				centerDelta: Math.abs(environmentRect.top + environmentRect.height / 2 - (modeRect.top + modeRect.height / 2)),
+				environmentWidth: environmentRect.width,
+				groupWidth: group.getBoundingClientRect().width,
+				ordered: environmentRect.left < modeRect.left,
+				groupOverflows: group.scrollWidth > group.clientWidth + 1,
+				environmentTruncated: environment.scrollWidth > environment.clientWidth,
+			}
+		})
+		expect(environmentModeLayout.centerDelta).toBeLessThanOrEqual(1)
+		expect(environmentModeLayout.ordered).toBe(true)
+		expect(environmentModeLayout.groupOverflows).toBe(false)
+		expect(environmentModeLayout.environmentTruncated).toBe(true)
+		await expect(successActivity.getByText("Command", { exact: true })).toHaveCount(0)
+		await expect(successActivity.getByTestId("activity-kind-icon")).toHaveCount(1)
+		await expect(successActivity.getByLabel(/Command timeout:/)).toHaveCount(0)
+		const timeoutIndicator = failureActivity.getByLabel("Command timeout: 60 s")
+		const timeoutLayout = await timeoutIndicator.evaluate((indicator) => {
+			const icon = indicator.querySelector("svg")
+			const label = indicator.querySelector("span")
+			if (!icon || !label) throw new Error("Command timeout indicator is incomplete")
+			const iconRect = icon.getBoundingClientRect()
+			const labelRect = label.getBoundingClientRect()
+			const indicatorRect = indicator.getBoundingClientRect()
+			const scale = indicator.offsetWidth > 0 ? indicatorRect.width / indicator.offsetWidth : 1
+			const expectedHeight = Number.parseFloat(getComputedStyle(label).fontSize) * scale
+			return {
+				iconHeight: iconRect.height,
+				labelHeight: labelRect.height,
+				fontSize: Number.parseFloat(getComputedStyle(label).fontSize),
+				scale,
+				expectedHeight,
+				heightDelta: Math.abs(iconRect.height - expectedHeight),
+				centerDelta: Math.abs(iconRect.top + iconRect.height / 2 - (labelRect.top + labelRect.height / 2)),
+			}
+		})
+		expect(timeoutLayout.heightDelta, JSON.stringify(timeoutLayout)).toBeLessThanOrEqual(1)
+		expect(timeoutLayout.centerDelta).toBeLessThanOrEqual(1)
+		await successActivity.getByTestId("activity-toggle").click()
+		await failureActivity.getByTestId("activity-toggle").click()
+		await expect(successActivity.getByTestId("activity-output-summary")).toHaveCount(0)
+		await expect(failureActivity.getByTestId("activity-output-summary")).toHaveCount(0)
+		await expect(successActivity.getByTestId("activity-command-line")).toContainText(successCommand)
+		await expect(failureActivity.getByTestId("activity-command-line")).toContainText(failureCommand)
+		await expect(successActivity.getByTestId("activity-header")).toBeVisible()
+		await expect(failureActivity.getByTestId("activity-header")).toBeVisible()
+		const activityHierarchy = await failureActivity.evaluate((first) => {
+			const list = first.parentElement
+			if (!list) throw new Error("Activity list is missing")
+			const items = Array.from(list.querySelectorAll<HTMLElement>('[data-testid="activity-item"]'))
+			if (items.length < 2) throw new Error("Expected at least two Activity cards")
+			const second = items.find((item) => item !== first)
+			if (!second) throw new Error("Second Activity card is missing")
+			const firstBody = first.querySelector<HTMLElement>('[data-testid="activity-body"]')
+			const firstCommand = first.querySelector<HTMLElement>('[data-testid="activity-command-line"]')
+			const firstHeader = first.querySelector<HTMLElement>('[data-testid="activity-header"]')
+			if (!firstBody || !firstCommand || !firstHeader) throw new Error("Expanded Activity hierarchy is incomplete")
+			const firstRect = first.getBoundingClientRect()
+			const secondRect = second.getBoundingClientRect()
+			const upperRect = firstRect.top <= secondRect.top ? firstRect : secondRect
+			const lowerRect = firstRect.top <= secondRect.top ? secondRect : firstRect
+			const outerBorder = Number.parseFloat(getComputedStyle(first).borderTopWidth)
+			const innerBorder = Number.parseFloat(getComputedStyle(firstBody).borderTopWidth)
+			return {
+				cardGap: lowerRect.top - upperRect.bottom,
+				expectedCardGap: Number.parseFloat(getComputedStyle(document.documentElement).fontSize) * 0.75,
+				outerBorder,
+				innerBorder,
+				outerBorderColor: getComputedStyle(first).borderTopColor,
+				innerBorderColor: getComputedStyle(firstBody).borderTopColor,
+				overflows: items.some((item) => item.scrollWidth > item.clientWidth + 1),
+				commandBackground: getComputedStyle(firstCommand).backgroundColor,
+				headerBackground: getComputedStyle(firstHeader).backgroundColor,
+			}
+		})
+		expect(activityHierarchy.cardGap).toBeCloseTo(activityHierarchy.expectedCardGap, 1)
+		expect(activityHierarchy.outerBorder).toBeGreaterThan(0)
+		expect(activityHierarchy.innerBorder).toBeGreaterThan(0)
+		expect(activityHierarchy.outerBorderColor).not.toBe(activityHierarchy.innerBorderColor)
+		expect(activityHierarchy.overflows).toBe(false)
+		expect(activityHierarchy.commandBackground).not.toBe(activityHierarchy.headerBackground)
+		const desktopActivityScreenshot = e2e.info().outputPath("activity-command-hierarchy-desktop.png")
+		await sidebar.getByTestId("activity-list").screenshot({ path: desktopActivityScreenshot })
+		await e2e.info().attach("activity-command-hierarchy-desktop", {
+			path: desktopActivityScreenshot,
+			contentType: "image/png",
+		})
+		const desktopWidth = await sidebar.evaluate(() => document.documentElement.getBoundingClientRect().width)
+		const targetNarrowWidth = Math.max(160, Math.floor(desktopWidth * 0.72))
+		const narrowWidth = await sidebar.evaluate((width) => {
+			document.documentElement.style.width = `${width}px`
+			document.body.style.width = `${width}px`
+			return document.documentElement.getBoundingClientRect().width
+		}, targetNarrowWidth)
+		expect(narrowWidth).toBeLessThan(desktopWidth)
+		await expect(successActivity).toBeVisible()
+		expect(await successActivity.evaluate((item) => item.scrollWidth <= item.clientWidth + 1)).toBe(true)
+		const narrowEnvironmentModeLayout = await environmentMode.evaluate((group) => {
+			const environment = group.querySelector<HTMLElement>('[data-testid="activity-environment-label"]')
+			const mode = group.querySelector<HTMLElement>('[data-testid="activity-execution-mode"]')
+			if (!environment || !mode) throw new Error("Environment and execution mode group is incomplete")
+			const environmentRect = environment.getBoundingClientRect()
+			const modeRect = mode.getBoundingClientRect()
+			return {
+				centerDelta: Math.abs(environmentRect.top + environmentRect.height / 2 - (modeRect.top + modeRect.height / 2)),
+				environmentWidth: environmentRect.width,
+				groupWidth: group.getBoundingClientRect().width,
+				groupOverflows: group.scrollWidth > group.clientWidth + 1,
+				environmentTruncated: environment.scrollWidth > environment.clientWidth,
+			}
+		})
+		expect(narrowEnvironmentModeLayout.centerDelta).toBeLessThanOrEqual(1)
+		expect(narrowEnvironmentModeLayout.groupOverflows).toBe(false)
+		expect(narrowEnvironmentModeLayout.environmentTruncated).toBe(true)
+		expect(narrowEnvironmentModeLayout.groupWidth).toBeLessThan(environmentModeLayout.groupWidth)
+		expect(narrowEnvironmentModeLayout.environmentWidth).toBeLessThan(environmentModeLayout.environmentWidth)
+		const narrowActivityScreenshot = e2e.info().outputPath("activity-command-hierarchy-narrow.png")
+		await sidebar.getByTestId("activity-list").screenshot({ path: narrowActivityScreenshot })
+		await e2e.info().attach("activity-command-hierarchy-narrow", {
+			path: narrowActivityScreenshot,
+			contentType: "image/png",
+		})
+		const consumptions = server.getMockConsumptions("openai-compatible-chat")
+		const successResult = consumptions[1].requestToolResults.find(({ callId }) => callId === "call_muted_success")
+		expect(successResult?.content).toContain("Command executed successfully (exit code 0).")
+		expect(successResult?.content).not.toContain(successMarker)
+		const failureResult = consumptions[2].requestToolResults.find(({ callId }) => callId === "call_muted_failure")
+		expect(failureResult?.content).toContain(failureMarker)
+		expect(failureResult?.content).toMatch(/Command failed with exit code [1-9]\d*\./)
+		expect(failureResult?.content).not.toContain("Command executed successfully")
+		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+	},
+)
+
+e2e(
+	"Tools - keyboard-typed draft stays local while a foreground command finishes",
+	async ({ helper, page, server, sidebar, userDataDir }) => {
+		e2e.setTimeout(180_000)
+		await helper.signin(sidebar)
+		await setAutoApproveAction(sidebar, "Execute safe commands", true)
+		server.resetOpenAiMock()
+		const command = `node -e "console.log('E2E_DRAFT_COMMAND_STARTED'); setTimeout(() => console.log('E2E_DRAFT_COMMAND_FINISHED'), 5000)"`
+		server.enqueueOpenAiResponses(
+			{
+				type: "tool",
+				id: "call_unsent_draft_foreground_command",
+				name: "execute_command",
+				arguments: {
+					command,
+					workdirectory: ".",
+					requires_approval: false,
+					synchronous: true,
+					timeout: 60,
+				},
+			},
+			{
+				type: "tool",
+				id: "call_unsent_draft_foreground_completion",
+				name: "attempt_completion",
+				arguments: { result: "E2E_UNSENT_DRAFT_FOREGROUND_DONE" },
+				expectedToolResults: [
+					{
+						callId: "call_unsent_draft_foreground_command",
+						contentIncludes: ["E2E_DRAFT_COMMAND_STARTED", "E2E_DRAFT_COMMAND_FINISHED"],
+					},
+				],
+			},
+			{
+				type: "error",
+				status: 500,
+				code: "unexpected_unsent_draft_foreground_request",
+				message: "An unsent draft triggered an extra request after a foreground command",
+			},
+		)
+
+		await sendTask(sidebar, "E2E_UNSENT_DRAFT_FOREGROUND_TASK")
+		const copyCommandButton = sidebar.getByRole("button", { name: "Copy command" }).last()
+		await expect(copyCommandButton).toBeVisible({ timeout: 60_000 })
+		const commandActions = copyCommandButton.locator("xpath=ancestor::div[.//button[normalize-space()='Cancel']][1]")
+		await expect(commandActions.getByRole("button", { name: "Cancel", exact: true })).toBeVisible()
+		await expect(sidebar.getByTestId("command-execution-mode").last()).toHaveText("Foreground")
+
+		const unsentDraft = "E2E_FOREGROUND_DRAFT_MUST_STAY_LOCAL"
+		const input = sidebar.getByTestId("chat-input")
+		await input.click()
+		await input.pressSequentially(unsentDraft, { delay: 20 })
+		await expect(input).toHaveValue(unsentDraft)
+
+		await expect(sidebar.getByText("E2E_UNSENT_DRAFT_FOREGROUND_DONE", { exact: false }).last()).toBeVisible({
+			timeout: 60_000,
+		})
+		await page.waitForTimeout(1_000)
+
+		await expect(input).toHaveValue(unsentDraft)
+		const submittedFeedback = sidebar.locator("span.ph-no-capture:not(button span)").filter({ hasText: unsentDraft })
+		await expect(submittedFeedback).toHaveCount(0)
+		expect(server.openAiRequestCount).toBe(2)
+		expect(JSON.stringify(server.getOpenAiRequestBodies())).not.toContain(unsentDraft)
+		expect(server.getMockConsumptions("openai-compatible-chat")[1].contractError).toBeUndefined()
+		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+	},
+)
+
+e2e(
 	"Tools - parallel read, write, replace, and command return one complete result batch",
 	async ({ helper, server, sidebar, userDataDir, workspaceDir }) => {
 		e2e.setTimeout(180_000)
@@ -326,6 +606,10 @@ e2e(
 		await expect(sidebar.getByText("E2E_ENTER_APPROVAL_REJECTION_OK", { exact: false }).last()).toBeVisible({
 			timeout: 60_000,
 		})
+		const skippedCommand = sidebar.getByTestId("command-card").filter({ hasText: "Skipped" }).last()
+		await expect(skippedCommand).toBeVisible()
+		await expect(skippedCommand.getByTestId("command-status-icon")).toHaveClass(/lucide-circle-slash/)
+		await expect(skippedCommand.locator(".lucide-circle-x")).toHaveCount(0)
 		await expect(sidebar.getByText(commandMarker, { exact: true })).toHaveCount(0)
 		await expect.poll(() => server.openAiRequestCount).toBe(4)
 		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
@@ -562,19 +846,20 @@ e2e(
 )
 
 e2e(
-	"Tools - approved foreground command reports output and exit status to the model",
-	async ({ helper, server, sidebar, userDataDir }) => {
+	"Tools - approved foreground command reports output, copies the command, and returns exit status",
+	async ({ app, helper, server, sidebar, userDataDir }) => {
 		e2e.setTimeout(180_000)
 		await helper.signin(sidebar)
 		await setAutoApproveAction(sidebar, "Execute safe commands", false)
 		server.resetOpenAiMock()
+		const command = `node -e "process.stdout.write('E2E_COMMAND_STDOUT')"`
 		server.enqueueOpenAiResponses(
 			{
 				type: "tool",
 				id: "call_successful_command",
 				name: "execute_command",
 				arguments: {
-					command: `node -e "process.stdout.write('E2E_COMMAND_STDOUT')"`,
+					command,
 					workdirectory: ".",
 					requires_approval: true,
 					synchronous: true,
@@ -608,6 +893,11 @@ e2e(
 		await approveButton.click()
 
 		await expect(sidebar.getByText("E2E_COMMAND_APPROVAL_OK", { exact: false }).last()).toBeVisible({ timeout: 60_000 })
+		const copyCommandButton = sidebar.getByRole("button", { name: "Copy command" }).last()
+		await expect(copyCommandButton).toBeVisible()
+		await copyCommandButton.click()
+		await expect(sidebar.getByRole("button", { name: "Copied" }).last()).toBeVisible()
+		expect(await app.evaluate(({ clipboard }) => clipboard.readText())).toBe(command)
 		await expect.poll(() => server.openAiRequestCount).toBe(2)
 		const continuation = server.getMockConsumptions("openai-compatible-chat")[1]
 		expect(continuation.requestToolResults).toContainEqual(
@@ -669,6 +959,16 @@ e2e(
 		expect(commandCancelStabilityEvents).toEqual([])
 		await commandCancelButton.click()
 
+		const cancelledCommand = sidebar.getByTestId("command-card").filter({ hasText: "Cancelled" }).last()
+		await expect(cancelledCommand).toBeVisible({ timeout: 30_000 })
+		await expect(cancelledCommand.getByTestId("command-status-icon")).toHaveClass(/lucide-circle-slash/)
+		await expect(cancelledCommand.locator(".lucide-circle-x")).toHaveCount(0)
+		const cancelledScreenshotPath = e2e.info().outputPath("cancelled-command-neutral-icon.png")
+		await cancelledCommand.screenshot({ path: cancelledScreenshotPath })
+		await e2e.info().attach("cancelled-command-neutral-icon", {
+			path: cancelledScreenshotPath,
+			contentType: "image/png",
+		})
 		await expect(sidebar.getByText("E2E_COMMAND_CANCEL_OK", { exact: false }).last()).toBeVisible({ timeout: 60_000 })
 		const consumptions = server.getMockConsumptions("openai-compatible-chat")
 		expect(consumptions.map((entry) => entry.toolName)).toEqual(["execute_command", "attempt_completion"])
@@ -772,13 +1072,14 @@ e2e(
 		server.resetOpenAiMock()
 		const executeFunctionId = "call_ai_kill_background_command"
 		const killFunctionId = "call_ai_kill_command"
+		const command = `node -e "console.log('E2E_AI_KILL_STARTED'); setInterval(() => {}, 1000)"`
 		server.enqueueOpenAiResponses(
 			{
 				type: "tool",
 				id: executeFunctionId,
 				name: "execute_command",
 				arguments: {
-					command: `node -e "console.log('E2E_AI_KILL_STARTED'); setInterval(() => {}, 1000)"`,
+					command,
 					workdirectory: ".",
 					requires_approval: true,
 					background: true,
@@ -816,10 +1117,16 @@ e2e(
 		await expect(sidebar.getByText("Dline requested command termination:", { exact: true })).toBeVisible({
 			timeout: 60_000,
 		})
-		await expect(sidebar.getByText(executeFunctionId, { exact: true })).toBeVisible()
-		await expect(sidebar.getByText("Termination was requested for the running command.", { exact: true })).toBeVisible()
+		const killResult = sidebar.getByTestId("kill-command-result")
+		await expect(killResult.getByText(command, { exact: true })).toBeVisible()
+		await expect(killResult.getByText(executeFunctionId, { exact: true })).toHaveCount(0)
+		await expect(killResult.getByText("Termination was requested for the running command.", { exact: true })).toBeVisible()
 		await expect(sidebar.getByText("E2E_AI_KILL_COMMAND_OK", { exact: false }).last()).toBeVisible({ timeout: 60_000 })
-
+		await killResult.getByRole("button", { name: "View command activity", exact: true }).click()
+		await expect(sidebar.getByRole("tab", { name: /Activities/ })).toHaveAttribute("aria-selected", "true")
+		const commandActivity = sidebar.getByTestId("activity-item").filter({ hasText: "close-task-background-heartbeat.log" })
+		await expect(commandActivity).toBeVisible()
+		await expect(commandActivity.getByRole("button", { name: /^Open log file / })).toBeVisible()
 		await expect.poll(() => server.openAiRequestCount).toBe(3)
 		const consumptions = server.getMockConsumptions("openai-compatible-chat")
 		expect(consumptions.map((entry) => entry.toolName)).toEqual(["execute_command", "kill_command", "attempt_completion"])
@@ -830,6 +1137,106 @@ e2e(
 				content: expect.stringContaining("Termination was requested for the running command."),
 			}),
 		)
+		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+	},
+)
+
+e2e(
+	"Tools - subagent renders its task, expandable context, and ordered tool calls",
+	async ({ helper, server, sidebar, userDataDir }) => {
+		e2e.setTimeout(180_000)
+		const subagentTask = "E2E_SUBAGENT_RENDERING_TASK"
+		const subagentContext = [
+			"Inspect the workspace in the exact order requested.",
+			"Keep this second context line hidden until the user expands it.",
+			"Keep this third context line hidden as well.",
+		].join("\n")
+
+		await helper.signin(sidebar)
+		await setAutoApproveAction(sidebar, "Read project files", false)
+		server.resetOpenAiMock()
+		server.enqueueOpenAiResponses(
+			{
+				type: "tool",
+				id: "call_subagent_rendering",
+				name: "use_subagent",
+				arguments: {
+					agent_name: "default",
+					task: subagentTask,
+					context: subagentContext,
+					timeout: 60,
+				},
+			},
+			{
+				type: "tool",
+				id: "call_subagent_rendering_read",
+				name: "read_file",
+				arguments: { path: "README.md" },
+			},
+			{
+				type: "tool",
+				id: "call_subagent_rendering_list",
+				name: "list_files",
+				arguments: { path: ".", recursive: false },
+				expectedToolResults: [{ callId: "call_subagent_rendering_read", contentIncludes: "# Test Workspace" }],
+			},
+			{
+				type: "tool",
+				id: "call_subagent_rendering_complete",
+				name: "attempt_completion",
+				arguments: { result: "E2E_SUBAGENT_RENDERING_CHILD_DONE" },
+				expectedToolResults: [{ callId: "call_subagent_rendering_list", contentIncludes: "README.md" }],
+			},
+			{
+				type: "tool",
+				id: "call_subagent_rendering_parent_complete",
+				name: "attempt_completion",
+				arguments: { result: "E2E_SUBAGENT_RENDERING_DONE" },
+				expectedToolResults: [
+					{ callId: "call_subagent_rendering", contentIncludes: "E2E_SUBAGENT_RENDERING_CHILD_DONE" },
+				],
+			},
+		)
+
+		await sendTask(sidebar, "Ask a subagent to inspect the workspace in order.")
+		const approveButton = sidebar.getByText("Approve", { exact: true })
+		await expect(approveButton).toBeVisible({ timeout: 60_000 })
+		await approveButton.click()
+		await expect(sidebar.getByText("E2E_SUBAGENT_RENDERING_DONE", { exact: false }).last()).toBeVisible({
+			timeout: 60_000,
+		})
+
+		const taskHeading = sidebar.getByRole("heading", { name: subagentTask, exact: true }).last()
+		await expect(taskHeading).toBeVisible()
+		const subagentCard = taskHeading.locator("xpath=ancestor::*[@data-testid='subagent-item'][1]")
+		const contextToggle = subagentCard.getByRole("button", { name: "Show full subagent context", exact: true })
+		await expect(contextToggle).toHaveAttribute("aria-expanded", "false")
+		const contextContent = contextToggle.getByTestId("subagent-context-content")
+		const collapsedContext = await contextContent.evaluate((element) => ({
+			clientHeight: element.clientHeight,
+			scrollHeight: element.scrollHeight,
+		}))
+		expect(collapsedContext.scrollHeight).toBeGreaterThan(collapsedContext.clientHeight)
+		await subagentCard.screenshot({ path: e2e.info().outputPath("subagent-context-collapsed.png") })
+
+		await contextToggle.click()
+		const expandedContextToggle = subagentCard.getByRole("button", { name: "Collapse subagent context", exact: true })
+		await expect(expandedContextToggle).toHaveAttribute("aria-expanded", "true")
+		await expect(expandedContextToggle).toContainText("Keep this third context line hidden as well.")
+		const expandedContext = await expandedContextToggle.getByTestId("subagent-context-content").evaluate((element) => ({
+			clientHeight: element.clientHeight,
+			scrollHeight: element.scrollHeight,
+		}))
+		expect(expandedContext.clientHeight).toBeGreaterThanOrEqual(expandedContext.scrollHeight - 1)
+
+		const toolRows = subagentCard.getByTestId("subagent-tool-call")
+		await expect(toolRows).toHaveCount(3)
+		expect(await toolRows.allTextContents()).toEqual([
+			expect.stringContaining("read_file(path=README.md)"),
+			expect.stringContaining("list_files(path=., recursive=false)"),
+			expect.stringContaining("attempt_completion(result=E2E_SUBAGENT_RENDERING_CHILD_DONE)"),
+		])
+		await subagentCard.screenshot({ path: e2e.info().outputPath("subagent-context-expanded.png") })
 		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
 	},
 )
@@ -1131,6 +1538,153 @@ Remain active until cancelled.`,
 		expect(continuationRequest).toContain("subagent_1")
 		expect(continuationRequest).toContain("cancelled")
 		expect(continuationRequest).toContain("Subagent run cancelled.")
+		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+	},
+)
+
+e2e(
+	"Task lifecycle - Cancel preserves background work and Close Task terminates it",
+	async ({ helper, page, server, sidebar, userDataDir, workspaceDir }) => {
+		e2e.setTimeout(180_000)
+		const taskText = "Start background work that must be terminated when this task is closed."
+		const subagentTask = "E2E_CLOSE_TASK_BACKGROUND_SUBAGENT"
+		const heartbeatPath = path.join(workspaceDir, "close-task-background-heartbeat.log")
+		const commandPath = heartbeatPath.replaceAll("\\", "/")
+		const command = `node -e "const fs=require('fs');const p='${commandPath}';fs.appendFileSync(p,String(process.pid)+'\\n');const timer=setInterval(()=>fs.appendFileSync(p,'tick\\n'),100);setTimeout(()=>{clearInterval(timer);process.exit(0)},60000)"`
+		const subagentDirectory = path.join(workspaceDir, ".agents", "subagents")
+		await mkdir(subagentDirectory, { recursive: true })
+		await writeFile(
+			path.join(subagentDirectory, "e2e-close-task.yml"),
+			`---
+name: e2e-close-task
+description: E2E Close Task lifecycle agent
+tools: read_file
+profile: ${E2E_PROFILE_NAMES.mockOpenAiResponses}
+---
+
+Remain active until the parent task is closed.`,
+			"utf8",
+		)
+
+		await helper.signin(sidebar)
+		await setAutoApproveAction(sidebar, "Execute safe commands", false)
+		await setAutoApproveAction(sidebar, "Read project files", false)
+		server.resetOpenAiMock()
+		server.enqueueOpenAiResponses(
+			{
+				type: "tool",
+				id: "call_close_task_background_command",
+				name: "execute_command",
+				arguments: {
+					command,
+					workdirectory: ".",
+					requires_approval: true,
+					background: true,
+					timeout: 60,
+				},
+			},
+			{
+				type: "tool",
+				id: "call_close_task_background_subagent",
+				name: "use_subagent",
+				arguments: {
+					agent_name: "e2e-close-task",
+					task: subagentTask,
+					context: "Remain active until Close Task terminates this background subagent.",
+					background: true,
+					timeout: 60,
+				},
+				expectedToolResults: [
+					{ callId: "call_close_task_background_command", contentIncludes: "Command is running in the background." },
+				],
+			},
+			{
+				type: "tool",
+				id: "call_close_task_delayed_main_completion",
+				name: "attempt_completion",
+				arguments: { result: "E2E_CANCELLED_MAIN_RESPONSE_MUST_NOT_RENDER" },
+				delayMs: 30_000,
+				expectedToolResults: [
+					{ callId: "call_close_task_background_subagent", contentIncludes: "Started background subagent job:" },
+				],
+			},
+		)
+		server.enqueueResponses("openai-compatible-responses", {
+			type: "tool",
+			id: "call_close_task_delayed_subagent_completion",
+			name: "attempt_completion",
+			arguments: { result: "E2E_CLOSE_TASK_SUBAGENT_MUST_NOT_COMPLETE" },
+			delayMs: 30_000,
+		})
+
+		await sendTask(sidebar, taskText)
+		const commandApproveButton = sidebar.getByText("Approve", { exact: true })
+		await expect(commandApproveButton).toBeVisible({ timeout: 60_000 })
+		await commandApproveButton.click()
+		await expect.poll(() => server.openAiRequestCount, { timeout: 60_000 }).toBe(2)
+		const subagentApproveButton = sidebar.getByText("Approve", { exact: true })
+		await expect(subagentApproveButton).toBeVisible({ timeout: 60_000 })
+		await subagentApproveButton.click()
+		await expect.poll(() => server.openAiRequestCount, { timeout: 60_000 }).toBe(3)
+		await expect
+			.poll(
+				() =>
+					readFile(heartbeatPath, "utf8")
+						.then((text) => text.length)
+						.catch(() => 0),
+				{ timeout: 30_000 },
+			)
+			.toBeGreaterThan(0)
+		await expect.poll(() => server.getRequestCount("openai-compatible-responses"), { timeout: 60_000 }).toBe(1)
+		const taskFooter = sidebar.getByRole("contentinfo")
+		const taskCancelButton = taskFooter.getByText("Cancel", { exact: true })
+		await expect(taskCancelButton).toBeVisible({ timeout: 30_000 })
+		const heartbeatBeforeCancel = (await readFile(heartbeatPath, "utf8")).length
+		await taskCancelButton.click()
+		await expect(taskFooter.getByText("Resume", { exact: true })).toBeVisible({ timeout: 30_000 })
+		await page.waitForTimeout(800)
+		expect((await readFile(heartbeatPath, "utf8")).length).toBeGreaterThan(heartbeatBeforeCancel)
+		expect(server.getMockConsumptions("openai-compatible-responses")[0].abortedAtMs).toBeUndefined()
+		await expect(sidebar.getByText("E2E_CANCELLED_MAIN_RESPONSE_MUST_NOT_RENDER", { exact: false })).toHaveCount(0)
+
+		await sidebar.getByRole("button", { name: "Close Task", exact: true }).click()
+		await expect(sidebar.getByTestId("chat-input")).toBeVisible()
+		await E2ETestHelper.dismissWhatsNewModal(sidebar)
+
+		await page.waitForTimeout(800)
+		const heartbeatAfterClose = (await readFile(heartbeatPath, "utf8")).length
+		await page.waitForTimeout(800)
+		const heartbeatAfterSettle = (await readFile(heartbeatPath, "utf8")).length
+		const subagentConsumption = server.getMockConsumptions("openai-compatible-responses")[0]
+		const lifecycleResult = {
+			commandStopped: heartbeatAfterSettle === heartbeatAfterClose,
+			subagentAborted: subagentConsumption.abortedAtMs !== undefined,
+		}
+		if (!lifecycleResult.commandStopped) {
+			const commandPid = Number((await readFile(heartbeatPath, "utf8")).split(/\r?\n/, 1)[0])
+			if (Number.isInteger(commandPid) && commandPid > 0) {
+				try {
+					process.kill(commandPid)
+				} catch {
+					// The process may exit between the heartbeat check and failure cleanup.
+				}
+			}
+			await page.waitForTimeout(500)
+		}
+		expect(lifecycleResult).toEqual({ commandStopped: true, subagentAborted: true })
+
+		const historyTask = sidebar.getByText(taskText, { exact: true }).last()
+		await expect(historyTask).toBeVisible({ timeout: 30_000 })
+		await historyTask.click()
+		await expect(sidebar.getByText(taskText, { exact: true }).first()).toBeVisible()
+		await sidebar.getByRole("tab", { name: /^Activities(?: \d+)?$/ }).click()
+		await sidebar.getByRole("button", { name: "All", exact: true }).first().click()
+		const commandActivity = sidebar.getByTestId("activity-item").filter({ hasText: "close-task-background-heartbeat.log" })
+		const subagentActivity = sidebar.getByTestId("activity-item").filter({ hasText: "e2e-close-task" })
+		await expect(commandActivity).toContainText("cancelled", { timeout: 30_000 })
+		await expect(subagentActivity).toContainText("cancelled", { timeout: 30_000 })
+		await expect(commandActivity.getByRole("button", { name: "Cancel", exact: true })).toHaveCount(0)
+		await expect(subagentActivity.getByRole("button", { name: "Cancel", exact: true })).toHaveCount(0)
 		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
 	},
 )

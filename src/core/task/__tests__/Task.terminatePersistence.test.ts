@@ -18,12 +18,13 @@ describe("Task termination persistence", () => {
 		const flushUiMessages = vi.fn(() => uiFlush.promise)
 		const updateTaskHistory = vi.fn(async () => {})
 		const fakeTask = {
+			cancelPendingAutoRetry: vi.fn(),
 			modeSwitchCompaction: { abort: vi.fn() },
 			shouldRunTaskCancelHook: vi.fn(async () => false),
 			taskRuntime: { getState: () => ({ phase: TaskPhase.CANCELLING }) },
 			taskState: { abort: false, abandoned: false },
 			getActiveHookExecution: vi.fn(async () => undefined),
-			commandExecutor: { cancelTaskOwnedCommands: vi.fn(async () => {}) },
+			commandExecutor: { cancelBackgroundCommand: vi.fn(async () => {}) },
 			stateManager: { getGlobalSettingsKey: vi.fn(() => false) },
 			flushTaskSnapshot: vi.fn(async () => {}),
 			messageStateHandler: { flushApiConversationHistory, flushUiMessages, updateTaskHistory },
@@ -41,7 +42,12 @@ describe("Task termination persistence", () => {
 			fileContextTracker: { dispose: vi.fn() },
 			mcpHub: { removeNotificationCallback: vi.fn() },
 			_mcpNotificationCb: undefined,
-			activityStore: { dispose: vi.fn(), waitForPersistence: vi.fn(async () => {}) },
+			activityStore: {
+				listRunning: vi.fn(() => []),
+				cancel: vi.fn(async () => []),
+				dispose: vi.fn(),
+				waitForPersistence: vi.fn(async () => {}),
+			},
 			browserSession: { dispose: vi.fn(async () => {}) },
 			diffViewProvider: { revertChanges: vi.fn(async () => {}) },
 			presentationScheduler: { dispose: vi.fn(async () => {}) },
@@ -67,11 +73,13 @@ describe("Task termination persistence", () => {
 
 	it("does not restore a retained approval machine while terminating an executing turn", async () => {
 		const dispatchRuntime = vi.fn(async () => ({ accepted: true }))
-		const cancelTaskOwnedCommands = vi.fn(async () => true)
+		const cancelBackgroundCommand = vi.fn(async () => true)
+		const cancelActivities = vi.fn(async () => ["background-subagent"])
 		const flushTaskSnapshot = vi.fn(async () => {})
 		const flushApiConversationHistory = vi.fn(async () => {})
 		const flushUiMessages = vi.fn(async () => {})
 		const fakeTask = {
+			cancelPendingAutoRetry: vi.fn(),
 			modeSwitchCompaction: { abort: vi.fn() },
 			shouldRunTaskCancelHook: vi.fn(async () => false),
 			taskRuntime: { getState: () => ({ phase: TaskPhase.EXECUTING }) },
@@ -81,7 +89,7 @@ describe("Task termination persistence", () => {
 			}),
 			taskState: { abort: false, abandoned: false },
 			getActiveHookExecution: vi.fn(async () => undefined),
-			commandExecutor: { cancelTaskOwnedCommands },
+			commandExecutor: { cancelBackgroundCommand },
 			stateManager: { getGlobalSettingsKey: vi.fn(() => false) },
 			flushTaskSnapshot,
 			messageStateHandler: {
@@ -103,7 +111,12 @@ describe("Task termination persistence", () => {
 			fileContextTracker: { dispose: vi.fn() },
 			mcpHub: { removeNotificationCallback: vi.fn() },
 			_mcpNotificationCb: undefined,
-			activityStore: { dispose: vi.fn(), waitForPersistence: vi.fn(async () => {}) },
+			activityStore: {
+				listRunning: vi.fn(() => [{ activityId: "background-subagent" }]),
+				cancel: cancelActivities,
+				dispose: vi.fn(),
+				waitForPersistence: vi.fn(async () => {}),
+			},
 			browserSession: { dispose: vi.fn(async () => {}) },
 			diffViewProvider: { revertChanges: vi.fn(async () => {}) },
 			presentationScheduler: { dispose: vi.fn(async () => {}) },
@@ -112,7 +125,8 @@ describe("Task termination persistence", () => {
 		await expect(Task.prototype.terminate.call(fakeTask)).resolves.toBeUndefined()
 
 		expect(dispatchRuntime).toHaveBeenCalledWith({ type: "TASK_TERMINATE_REQUESTED" })
-		expect(cancelTaskOwnedCommands).toHaveBeenCalledOnce()
+		expect(cancelBackgroundCommand).toHaveBeenCalledOnce()
+		expect(cancelActivities).toHaveBeenCalledWith(["background-subagent"])
 		expect(flushTaskSnapshot).toHaveBeenCalled()
 		expect(flushApiConversationHistory).toHaveBeenCalled()
 		expect(flushUiMessages).toHaveBeenCalled()

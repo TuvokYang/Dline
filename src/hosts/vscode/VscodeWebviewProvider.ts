@@ -1,5 +1,5 @@
 import { sendShowWebviewEvent } from "@core/controller/ui/subscribeToShowWebview"
-import { WebviewProvider } from "@core/webview"
+import { shouldUseWebviewHmr, WebviewProvider } from "@core/webview"
 import * as vscode from "vscode"
 import { handleGrpcRequest, handleGrpcRequestCancel } from "@/core/controller/grpc-handler"
 import { HostProvider } from "@/hosts/host-provider"
@@ -68,14 +68,13 @@ export class VscodeWebviewProvider extends WebviewProvider implements vscode.Web
 			localResourceRoots: [vscode.Uri.file(HostProvider.get().extensionFsPath)],
 		}
 
-		webviewView.webview.html =
-			this.context.extensionMode === vscode.ExtensionMode.Development
-				? await this.getHMRHtmlContent()
-				: this.getHtmlContent()
-
-		// Sets up an event listener to listen for messages passed from the webview view context
-		// and executes code based on the message that is received
+		// Register before assigning HTML because cached/HMR webviews can post
+		// webviewReady and initial gRPC subscriptions during navigation.
 		this.setWebviewMessageListener(webviewView.webview)
+
+		webviewView.webview.html = shouldUseWebviewHmr(this.context.extensionMode)
+			? await this.getHMRHtmlContent()
+			: this.getHtmlContent()
 
 		// Logs show up in bottom panel > Debug Console
 		//Logger.log("registering listener")

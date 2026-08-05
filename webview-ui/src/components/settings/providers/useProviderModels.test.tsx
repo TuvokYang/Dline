@@ -56,4 +56,29 @@ describe("useProviderModels", () => {
 		expect(result.current.models).not.toHaveProperty("deepseek-before")
 		expect(mocks.getAvailableModels).toHaveBeenCalledTimes(2)
 	})
+
+	it("exposes refreshed Vercel models before the registry watcher reloads", async () => {
+		mocks.providersVersion = 3
+		const wrapper = ({ children }: PropsWithChildren) => (
+			<ExtensionStateContext.Provider
+				value={
+					{
+						providersVersion: mocks.providersVersion,
+						vercelAiGatewayModels: {
+							"anthropic/claude-sonnet": {
+								id: "anthropic/claude-sonnet",
+								name: "Claude Sonnet",
+							},
+						},
+					} as ExtensionStateContextType
+				}>
+				{children}
+			</ExtensionStateContext.Provider>
+		)
+
+		const { result } = renderHook(() => useProviderModels("vercel-ai-gateway"), { wrapper })
+
+		await waitFor(() => expect(result.current.models).toHaveProperty("anthropic/claude-sonnet"))
+		expect(result.current.defaultModelId).toBe("anthropic/claude-sonnet")
+	})
 })

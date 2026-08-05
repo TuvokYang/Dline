@@ -1,4 +1,5 @@
 import type { TaskContextCache } from "@core/storage/task-context-types"
+import { ApiFormat, ServerTool } from "@shared/proto/dline/models/metadata"
 import type { ClineTool } from "@shared/tools"
 import fs from "fs/promises"
 import os from "os"
@@ -57,10 +58,15 @@ function buildContext(taskId: string): TaskContextCache {
 				refreshedAt: 200,
 				refreshReason: "task_start",
 				promptBuilder: {
+					contractVersion: 2,
 					providerId: "test-provider",
 					modelId: "test-model",
 					profile: "standard",
 					nativeTools: true,
+					apiFormat: ApiFormat.OPENAI_RESPONSES,
+					serverTools: [ServerTool.WEB_SEARCH],
+					webToolsEnabled: true,
+					webSearchRoute: "hosted",
 				},
 			},
 		},
@@ -85,6 +91,12 @@ describe("task context cache", () => {
 
 		expect(actual).toEqual(expected)
 		expect(actual.systemPrompt?.frozen?.tools).toEqual(expected.systemPrompt?.frozen?.tools)
+		expect(actual.systemPrompt?.frozen?.promptBuilder).toMatchObject({
+			apiFormat: ApiFormat.OPENAI_RESPONSES,
+			serverTools: [ServerTool.WEB_SEARCH],
+			webToolsEnabled: true,
+			webSearchRoute: "hosted",
+		})
 		const filePath = path.join(testDir, "tasks", taskId, GlobalFileNames.taskContext)
 		expect(await fs.readFile(filePath, "utf8")).toContain("# Capabilities")
 	})
@@ -216,6 +228,43 @@ describe("task context cache", () => {
 			JSON.stringify({
 				...malformed,
 				systemPrompt: { frozen: { ...malformed.systemPrompt?.frozen, ...override } },
+			}),
+			"utf8",
+		)
+
+		const actual = await getTaskContext(taskId)
+
+		expect(actual.systemPrompt).toBeUndefined()
+	})
+
+	it.each([
+		["api-format", { apiFormat: "responses" }],
+		["api-format-unknown", { apiFormat: 999 }],
+		["api-format-unrecognized", { apiFormat: -1 }],
+		["server-tools-container", { serverTools: "web_search" }],
+		["server-tools-entry", { serverTools: [1.5] }],
+		["server-tools-unknown", { serverTools: [999] }],
+		["server-tools-unspecified", { serverTools: [ServerTool.SERVER_TOOL_UNSPECIFIED] }],
+		["web-tools-enabled", { webToolsEnabled: "true" }],
+		["web-search-route", { webSearchRoute: "remote" }],
+	] as const)("rejects malformed optional provider projection: %s", async (caseId, promptBuilderOverride) => {
+		const taskId = `task-malformed-projection-${caseId}`
+		const filePath = path.join(testDir, "tasks", taskId, GlobalFileNames.taskContext)
+		await fs.mkdir(path.dirname(filePath), { recursive: true })
+		const malformed = buildContext(taskId)
+		await fs.writeFile(
+			filePath,
+			JSON.stringify({
+				...malformed,
+				systemPrompt: {
+					frozen: {
+						...malformed.systemPrompt?.frozen,
+						promptBuilder: {
+							...malformed.systemPrompt?.frozen?.promptBuilder,
+							...promptBuilderOverride,
+						},
+					},
+				},
 			}),
 			"utf8",
 		)

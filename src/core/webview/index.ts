@@ -1,1 +1,1 @@
-export { WebviewProvider } from "./WebviewProvider"
+export { shouldUseWebviewHmr, WebviewProvider } from "./WebviewProvider"

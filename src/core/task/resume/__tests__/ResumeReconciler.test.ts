@@ -414,6 +414,118 @@ describe("reconcileResume", () => {
 		expect(result.entry.type).not.toBe("show_resume_interaction")
 	})
 
+	it("restores completion when close persisted after its result but before its interaction", () => {
+		const interactionId = "tid-complete-close-race"
+		const snapshot = snapshotWithTurn(interactionId, "fn-complete-close-race", {
+			toolName: "attempt_completion",
+			blockPhase: BlockPhase.EXECUTING,
+		})
+		snapshot.phase = TaskPhase.CANCELLING
+		snapshot.cancellation = { source: "system", fromPhase: TaskPhase.EXECUTING }
+
+		const result = reconcileResume(
+			fullInput(
+				[apiUser(), assistantTool(interactionId, "fn-complete-close-race", "attempt_completion")],
+				[
+					{
+						ts: 200,
+						type: "say",
+						say: "completion_result",
+						text: "Completion is already visible.",
+						conversationHistoryIndex: 1,
+					},
+				],
+				snapshot,
+			),
+		)
+
+		expect(result.entry).toEqual({
+			type: "show_completion_interaction",
+			turnId: `turn:${interactionId}`,
+			interactionId,
+		})
+		expect(result.snapshot.interaction).toMatchObject({
+			interactionId,
+			kind: "completion",
+			status: "opening",
+		})
+		expect(result.snapshot.interaction?.interactionId).not.toContain("resume:")
+	})
+
+	it("restores presented completion after close cancels its streaming turn", () => {
+		const interactionId = "tid-complete-stream-close"
+		const snapshot = snapshotWithTurn(interactionId, "fn-complete-stream-close", {
+			toolName: "attempt_completion",
+			blockPhase: BlockPhase.CANCELLED,
+		})
+		snapshot.phase = TaskPhase.CANCELLING
+		snapshot.cancellation = { source: "system", fromPhase: TaskPhase.STREAMING }
+
+		const result = reconcileResume(
+			fullInput(
+				[apiUser(), assistantTool(interactionId, "fn-complete-stream-close", "attempt_completion")],
+				[
+					{
+						ts: 200,
+						type: "say",
+						say: "completion_result",
+						text: "Completion committed before the streaming turn was cancelled.",
+						conversationHistoryIndex: 1,
+					},
+				],
+				snapshot,
+			),
+		)
+
+		expect(result.entry).toEqual({
+			type: "show_completion_interaction",
+			turnId: `turn:${interactionId}`,
+			interactionId,
+		})
+		expect(result.snapshot.interaction).toMatchObject({
+			interactionId,
+			kind: "completion",
+			status: "opening",
+		})
+	})
+
+	it("restores presented completion while its auto-executing turn closes", () => {
+		const interactionId = "tid-complete-auto-close"
+		const snapshot = snapshotWithTurn(interactionId, "fn-complete-auto-close", {
+			toolName: "attempt_completion",
+			blockPhase: BlockPhase.AUTO_EXECUTING,
+		})
+		snapshot.phase = TaskPhase.CANCELLING
+		snapshot.cancellation = { source: "system", fromPhase: TaskPhase.STREAMING }
+
+		const result = reconcileResume(
+			fullInput(
+				[apiUser(), assistantTool(interactionId, "fn-complete-auto-close", "attempt_completion")],
+				[
+					{
+						ts: 200,
+						type: "say",
+						say: "completion_result",
+						text: "Completion committed while the block remained auto-executing.",
+						conversationHistoryIndex: 1,
+					},
+				],
+				snapshot,
+			),
+		)
+
+		expect(result.entry).toEqual({
+			type: "show_completion_interaction",
+			turnId: `turn:${interactionId}`,
+			interactionId,
+		})
+		expect(result.snapshot.interaction).toMatchObject({
+			interactionId,
+			kind: "completion",
+			status: "opening",
+		})
+	})
+
 	it("keeps API admission failure as Retry", () => {
 		const result = reconcileResume(fullInput([apiUser()], [interactionAsk("api_req_failed", "retry-1", 0)]))
 
@@ -670,6 +782,7 @@ describe("reconcileResume", () => {
 			status: "awaiting",
 		})
 		expect(result.snapshot.interaction?.acceptedResponse).toBeUndefined()
+		expect(result.diagnostics).not.toContainEqual(expect.objectContaining({ code: "missing_interaction_continuation" }))
 	})
 
 	it.each([
@@ -727,6 +840,103 @@ describe("reconcileResume", () => {
 		expect(result.diagnostics).toContainEqual({
 			code: "missing_interaction_anchor",
 			interactionId: "tid-missing",
+		})
+	})
+
+	it("falls back to normal Resume when a stored handler interaction has no canonical assistant turn", () => {
+		const interactionId = "tid-missing-continuation"
+		const snapshot = snapshotWithTurn(interactionId, "fn-missing-continuation", { interaction: "qna_response" })
+		snapshot.turn = undefined
+		const result = reconcileResume(
+			fullInput(
+				[apiUser(), { role: "assistant", content: "The original tool declaration is unavailable." }],
+				[interactionAsk("qna_respond", interactionId)],
+				snapshot,
+			),
+		)
+
+		expect(result.entry).toMatchObject({ type: "show_resume_interaction" })
+		expect(result.snapshot.phase).toBe(TaskPhase.PAUSED)
+		expect(result.snapshot.interaction).toMatchObject({ kind: "resume", status: "opening" })
+		expect(result.snapshot.interaction?.interactionId).not.toBe(interactionId)
+		expect(result.diagnostics).toContainEqual({
+			code: "missing_interaction_continuation",
+			interactionId,
+		})
+	})
+
+	it("falls back to normal Resume when the canonical turn lacks the handler interaction block", () => {
+		const interactionId = "tid-missing-block"
+		const snapshot = snapshotWithTurn(interactionId, "fn-missing-block", { interaction: "qna_response" })
+		const block = snapshot.turn?.blocks[0]
+		if (!block) throw new Error("test block missing")
+		block.dlineTid = "tid-unrelated"
+		const result = reconcileResume(
+			fullInput(
+				[apiUser(), { role: "assistant", content: "The original tool declaration is unavailable." }],
+				[interactionAsk("qna_respond", interactionId)],
+				snapshot,
+			),
+		)
+
+		expect(result.entry).toMatchObject({ type: "show_resume_interaction" })
+		expect(result.snapshot.interaction).toMatchObject({ kind: "resume", status: "opening" })
+		expect(result.snapshot.interaction?.interactionId).not.toBe(interactionId)
+		expect(result.diagnostics).toContainEqual({
+			code: "missing_interaction_continuation",
+			interactionId,
+		})
+	})
+
+	it("falls back to normal Resume when more than one block claims the handler interaction", () => {
+		const interactionId = "tid-duplicate-block"
+		const snapshot = snapshotWithTurn(interactionId, "fn-duplicate-block", { interaction: "qna_response" })
+		const block = snapshot.turn?.blocks[0]
+		if (!block || !snapshot.turn) throw new Error("test turn missing")
+		snapshot.turn.blocks.push({ ...block, functionId: "fn-duplicate-block-2" })
+		const result = reconcileResume(
+			fullInput(
+				[apiUser(), assistantTool(interactionId, "fn-duplicate-block", "qna_respond")],
+				[interactionAsk("qna_respond", interactionId)],
+				snapshot,
+			),
+		)
+
+		expect(result.entry).toMatchObject({ type: "show_resume_interaction" })
+		expect(result.snapshot.interaction).toMatchObject({ kind: "resume", status: "opening" })
+		expect(result.diagnostics).toContainEqual({
+			code: "missing_interaction_continuation",
+			interactionId,
+		})
+	})
+
+	it("clears completion ownership and falls back to Resume when its canonical turn is missing", () => {
+		const interactionId = "tid-completion-missing-turn"
+		const snapshot = snapshotWithTurn(interactionId, "fn-completion-missing-turn", {
+			toolName: "attempt_completion",
+			interaction: "completion",
+			interactionStatus: "opening",
+			blockPhase: BlockPhase.COMPLETED,
+		})
+		snapshot.phase = TaskPhase.COMPLETED
+		snapshot.completion = { completionId: interactionId }
+		snapshot.turn = undefined
+		const result = reconcileResume(
+			fullInput(
+				[apiUser(), { role: "assistant", content: "The original completion declaration is unavailable." }],
+				[],
+				snapshot,
+			),
+		)
+
+		expect(result.entry).toMatchObject({ type: "show_resume_interaction" })
+		expect(result.snapshot.phase).toBe(TaskPhase.PAUSED)
+		expect(result.snapshot.completion).toBeUndefined()
+		expect(result.snapshot.interaction).toMatchObject({ kind: "resume", status: "opening" })
+		expect(result.snapshot.interaction?.interactionId).not.toBe(interactionId)
+		expect(result.diagnostics).toContainEqual({
+			code: "missing_interaction_continuation",
+			interactionId,
 		})
 	})
 

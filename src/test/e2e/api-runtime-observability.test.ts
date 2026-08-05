@@ -1,3 +1,5 @@
+import { mkdir, writeFile } from "node:fs/promises"
+import * as path from "node:path"
 import { expect, type Frame, type Page } from "@playwright/test"
 import type { MockApiConsumption, MockTokenUsage } from "./fixtures/server"
 import { E2E_PROFILE_NAMES } from "./utils/api-profile"
@@ -620,6 +622,50 @@ for (const status of [403, 429, 502] as const) {
 }
 
 e2e(
+	"Mistake limit - keyboard-typed draft stays local when Task Needs Attention appears",
+	async ({ helper, page, server, sidebar, userDataDir }) => {
+		e2e.setTimeout(180_000)
+		await helper.signin(sidebar)
+		server.resetOpenAiMock()
+		server.enqueueOpenAiResponses(
+			{ type: "message", text: "E2E_UNSENT_MISTAKE_LIMIT_NO_TOOL_1" },
+			{ type: "message", text: "E2E_UNSENT_MISTAKE_LIMIT_NO_TOOL_2", delayMs: 5_000 },
+			{ type: "message", text: "E2E_UNSENT_MISTAKE_LIMIT_NO_TOOL_3", delayMs: 5_000 },
+			{
+				type: "error",
+				status: 500,
+				code: "unexpected_unsent_mistake_limit_request",
+				message: "An unsent draft triggered an extra request at the mistake limit",
+			},
+		)
+
+		await sendTask(sidebar, "E2E_UNSENT_MISTAKE_LIMIT_TASK")
+		await expect.poll(() => server.openAiRequestCount, { timeout: 60_000 }).toBe(2)
+		await expect(sidebar.getByRole("button", { name: "Cancel", exact: true }).first()).toBeVisible({
+			timeout: 30_000,
+		})
+
+		const unsentDraft = "E2E_MISTAKE_LIMIT_DRAFT_MUST_STAY_LOCAL"
+		const input = sidebar.getByTestId("chat-input")
+		await input.click()
+		await input.pressSequentially(unsentDraft, { delay: 20 })
+		await expect(input).toHaveValue(unsentDraft)
+
+		const attention = sidebar.getByTestId("error-message-box")
+		await expect(attention.getByText("Task Needs Attention", { exact: true })).toBeVisible({ timeout: 60_000 })
+		await expect(sidebar.getByRole("contentinfo").locator('vscode-button[aria-label="Process Anyway"]')).toBeVisible()
+		await page.waitForTimeout(1_000)
+
+		await expect(input).toHaveValue(unsentDraft)
+		const submittedFeedback = sidebar.locator("span.ph-no-capture:not(button span)").filter({ hasText: unsentDraft })
+		await expect(submittedFeedback).toHaveCount(0)
+		expect(server.openAiRequestCount).toBe(3)
+		expect(JSON.stringify(server.getOpenAiRequestBodies())).not.toContain(unsentDraft)
+		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+	},
+)
+
+e2e(
 	"Mistake limit - footer recovery stays actionable and Process Anyway resets the counter",
 	async ({ helper, server, sidebar, userDataDir }) => {
 		e2e.setTimeout(180_000)
@@ -678,6 +724,88 @@ e2e(
 		expect(server.getMockConsumptions("openai-compatible-chat").every((entry) => entry.contractError === undefined)).toBe(
 			true,
 		)
+		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+	},
+)
+
+e2e(
+	"Mistake limit - checkpoint Restore Resume includes visible failed-replace feedback in the API request",
+	async ({ helper, server, sidebar, userDataDir, workspaceDir }) => {
+		e2e.setTimeout(240_000)
+		await helper.signin(sidebar)
+		const relativePath = ".memory-bank/workstreams/WS-001-omnispace/progress.md"
+		const filePath = path.join(workspaceDir, relativePath)
+		await mkdir(path.dirname(filePath), { recursive: true })
+		await writeFile(filePath, "1\n2\n3\n4\n", "utf8")
+
+		server.resetOpenAiMock()
+		server.enqueueOpenAiResponses(
+			...Array.from({ length: 3 }, (_, index) => ({
+				type: "tool" as const,
+				id: `call_failed_replace_${index + 1}`,
+				name: "replace_in_file",
+				arguments: {
+					path: relativePath,
+					diff: "------- SEARCH\n5\n=======\nfive\n+++++++ REPLACE",
+				},
+			})),
+			{
+				type: "tool",
+				id: "call_failed_replace_resume_completion",
+				name: "attempt_completion",
+				arguments: { result: "E2E_FAILED_REPLACE_RESUME_OK" },
+			},
+		)
+
+		const taskText = "E2E_FAILED_REPLACE_RESUME_TASK"
+		await sendTask(sidebar, taskText)
+		await expect.poll(() => server.openAiRequestCount, { timeout: 60_000 }).toBe(3)
+		const failedReplaceConsumptions = server.getMockConsumptions("openai-compatible-chat")
+		expect(failedReplaceConsumptions.map((entry) => entry.toolName)).toEqual([
+			"replace_in_file",
+			"replace_in_file",
+			"replace_in_file",
+		])
+		expect(failedReplaceConsumptions.every((entry) => entry.toolArguments?.path === relativePath)).toBe(true)
+		const failedReplaceResults = failedReplaceConsumptions.flatMap((entry) => entry.requestToolResults)
+		expect([...new Set(failedReplaceResults.map((result) => result.callId))]).toEqual([
+			"call_failed_replace_1",
+			"call_failed_replace_2",
+		])
+		expect(
+			failedReplaceResults.every(
+				(result) => result.content.includes("SEARCH content") && result.content.includes("was not found in the file"),
+			),
+		).toBe(true)
+		const attention = sidebar.getByTestId("error-message-box")
+		await expect(attention).toBeVisible({ timeout: 60_000 })
+		await expect(attention.getByText("Task Needs Attention", { exact: true })).toBeVisible()
+		const checkpointLabels = sidebar.getByText("Checkpoint", { exact: true })
+		await expect.poll(() => checkpointLabels.count()).toBeGreaterThan(0)
+		const latestCheckpointControl = checkpointLabels.last().locator("..").locator("..")
+		await latestCheckpointControl.hover()
+		await latestCheckpointControl.getByRole("button", { name: "Restore", exact: true }).click()
+		const restoreAllButton = sidebar.getByRole("button", { name: "Restore Files & Task", exact: true })
+		await expect(restoreAllButton).toBeVisible()
+		await restoreAllButton.click()
+
+		const feedback =
+			"同时要带mcp server， 方便ai管理服务。 还带时间触发审查， 如错误时， ai开始审查错误来源， 账号异常则自动补充。"
+		const footer = sidebar.getByRole("contentinfo")
+		const resumeButton = footer.getByText("Resume", { exact: true })
+		await expect(resumeButton).toBeVisible({ timeout: 30_000 })
+		const input = sidebar.getByTestId("chat-input")
+		await input.fill(feedback)
+		await resumeButton.click()
+		await expect(input).toHaveValue("")
+		await expectSingleUserFeedback(sidebar, feedback)
+		await expect.poll(() => server.openAiRequestCount, { timeout: 60_000 }).toBe(4)
+
+		const continuationRequest = JSON.stringify(server.getOpenAiRequestBodies()[3])
+		expect(continuationRequest).toContain(feedback)
+		await expect(sidebar.getByText("E2E_FAILED_REPLACE_RESUME_OK", { exact: false }).last()).toBeVisible({
+			timeout: 60_000,
+		})
 		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
 	},
 )
@@ -835,6 +963,63 @@ e2e(
 		await page.waitForTimeout(1_000)
 		await expect(allErrorBoxes).toHaveCount(0)
 		expect(server.getMockConsumptions("deepseek-chat")).toHaveLength(2)
+		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir, [/Connection error|ECONNRESET|fetch failed/])
+	},
+)
+
+e2e(
+	"API recovery - keyboard-typed draft stays local while an automatic retry completes",
+	async ({ helper, page, server, sidebar, userDataDir }) => {
+		e2e.setTimeout(180_000)
+		await helper.signin(sidebar)
+		await selectProfile(sidebar, E2E_PROFILE_NAMES.mockDeepSeek)
+		server.resetOpenAiMock()
+		server.enqueueResponses(
+			"deepseek-chat",
+			{
+				type: "error",
+				status: 0,
+				message: "Force a connection failure before preserving an unsent draft",
+				disconnect: true,
+			},
+			{
+				type: "tool",
+				name: "attempt_completion",
+				arguments: { result: "E2E_UNSENT_DRAFT_AUTOMATIC_RETRY_DONE" },
+				delayMs: 5_000,
+			},
+			{
+				type: "error",
+				status: 500,
+				code: "unexpected_unsent_draft_retry_request",
+				message: "An unsent draft triggered an extra request after automatic retry",
+			},
+		)
+
+		await sendTask(sidebar, "E2E_UNSENT_DRAFT_AUTOMATIC_RETRY_TASK")
+		const errorBox = sidebar.getByTestId("error-retry-box")
+		await expect(errorBox).toContainText("Attempt 1 of 3", { timeout: 90_000 })
+		await expect.poll(() => server.getRequestCount("deepseek-chat"), { timeout: 60_000 }).toBe(2)
+		await expect(errorBox.getByText("Automatic retry in progress", { exact: true })).toBeVisible()
+
+		const unsentDraft = "E2E_AUTOMATIC_RETRY_DRAFT_MUST_STAY_LOCAL"
+		const input = sidebar.getByTestId("chat-input")
+		await input.click()
+		await input.pressSequentially(unsentDraft, { delay: 20 })
+		await expect(input).toHaveValue(unsentDraft)
+
+		await expect(sidebar.getByText("E2E_UNSENT_DRAFT_AUTOMATIC_RETRY_DONE", { exact: false }).last()).toBeVisible({
+			timeout: 60_000,
+		})
+		await page.waitForTimeout(1_000)
+
+		await expect(input).toHaveValue(unsentDraft)
+		const submittedFeedback = sidebar.locator("span.ph-no-capture:not(button span)").filter({ hasText: unsentDraft })
+		await expect(submittedFeedback).toHaveCount(0)
+		expect(server.getRequestCount("deepseek-chat")).toBe(2)
+		expect(JSON.stringify(server.getMockConsumptions("deepseek-chat").map((entry) => entry.requestBody))).not.toContain(
+			unsentDraft,
+		)
 		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir, [/Connection error|ECONNRESET|fetch failed/])
 	},
 )

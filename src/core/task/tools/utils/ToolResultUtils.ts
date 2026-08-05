@@ -122,6 +122,19 @@ export class ToolResultUtils {
 		isError?: boolean,
 	): ClineUserToolResultContentBlock {
 		const pendingFeedback = ToolResultUtils.drainPendingFeedback(userMessageContent)
+		const existingIndex = userMessageContent.findIndex(
+			(item: any) => item.type === "tool_result" && item.function_id === block.function_id,
+		)
+		const storeResult = (result: ClineUserToolResultContentBlock): ClineUserToolResultContentBlock => {
+			if (existingIndex !== -1) {
+				userMessageContent[existingIndex] = result
+				Logger.warn(`ToolResultUtils: Replaced existing tool_result for function_id ${block.function_id}`)
+				return result
+			}
+			userMessageContent.push(result)
+			return result
+		}
+
 		if (typeof content === "string") {
 			const resultText = content || "(tool did not return anything)"
 
@@ -139,27 +152,13 @@ export class ToolResultUtils {
 			// replaces the older one (e.g. "SEARCH block not found"). The final
 			// result is what the AI sees, and ensureToolResultsFollowToolUse
 			// deduplicates by function_id before sending to the API.
-			const existingIndex = userMessageContent.findIndex(
-				(item: any) => item.type === "tool_result" && item.function_id === block.function_id,
-			)
 			const mergedContent = ToolResultUtils.mergeTextResult(`${description} Result:\n${resultText}`, pendingFeedback)
-			if (existingIndex !== -1) {
-				const newBlock = ToolResultUtils.createResult(mergedContent, block, isError)
-				userMessageContent[existingIndex] = newBlock
-				Logger.warn(`ToolResultUtils: Replaced existing tool_result for function_id ${block.function_id}`)
-				return newBlock
-			}
-
-			const result = ToolResultUtils.createResult(mergedContent, block, isError)
-			userMessageContent.push(result)
-			return result
+			return storeResult(ToolResultUtils.createResult(mergedContent, block, isError))
 		}
 		// For complex content (arrays with text/image blocks), pass it through directly
 		// The content array should already be properly formatted with type, text, source, etc.
 		const mergedContent = ToolResultUtils.mergeStructuredResult(content, pendingFeedback)
-		const result = ToolResultUtils.createResult(mergedContent, block, isError)
-		userMessageContent.push(result)
-		return result
+		return storeResult(ToolResultUtils.createResult(mergedContent, block, isError))
 	}
 
 	/**

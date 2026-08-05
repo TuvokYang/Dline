@@ -635,6 +635,7 @@ export class TaskCheckpointManager implements ICheckpointManager {
 		this.taskState.userMessageContent = []
 		this.taskState.assistantMessageContent = []
 		this.taskState.userMessageContentReady = false
+		this.taskState.resetMistakeLimitState()
 		this.taskState.lastMessageTs = undefined
 		this.taskState.askResponseText = undefined
 		this.taskState.askResponseImages = undefined

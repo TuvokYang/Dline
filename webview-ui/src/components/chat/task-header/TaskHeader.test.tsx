@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react"
 import { describe, expect, it, vi } from "vitest"
 import TaskHeader from "./TaskHeader"
-import { hasNonZeroModelPricing } from "./util"
+import { formatTokenMetric, hasNonZeroModelPricing } from "./util"
 
 vi.mock("@/context/ExtensionStateContext", () => ({
 	useExtensionState: () => ({
@@ -71,5 +71,26 @@ describe("TaskHeader pricing", () => {
 		expect(hasNonZeroModelPricing({ cacheReadsPrice: 0.1 })).toBe(true)
 		expect(hasNonZeroModelPricing({ tiers: [{ contextWindow: 128_000, outputPrice: 2 }] })).toBe(true)
 		expect(hasNonZeroModelPricing({ thinkingOutputPriceTiers: [{ price: 3, tokenLimit: 8_000 }] })).toBe(true)
+	})
+
+	it("promotes billion-scale input and output token metrics from M to B", () => {
+		expect(formatTokenMetric(1_000_000_000)).toBe("1.00B")
+		expect(formatTokenMetric(1_250_000_000)).toBe("1.25B")
+
+		render(
+			<TaskHeader
+				doesModelSupportPromptCache={false}
+				onClose={vi.fn()}
+				pricing={{ inputPrice: 0, outputPrice: 0 }}
+				task={task}
+				tokensIn={1_000_000_000}
+				tokensOut={1_250_000_000}
+				totalCost={0}
+			/>,
+		)
+
+		const metrics = screen.getByTitle("In: 1000000000 / Out: 1250000000 / Cache read: 0 / Cache write: 0")
+		expect(metrics).toHaveTextContent("In:1.00B")
+		expect(metrics).toHaveTextContent("Out:1.25B")
 	})
 })

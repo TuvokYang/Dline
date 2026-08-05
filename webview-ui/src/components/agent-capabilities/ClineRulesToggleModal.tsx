@@ -18,6 +18,7 @@ import { VSCodeButton, VSCodeLink } from "@vscode/webview-ui-toolkit/react"
 import React, { useEffect, useRef, useState } from "react"
 import { useClickAway, useWindowSize } from "react-use"
 import styled from "styled-components"
+import ShellEnvironmentModal from "@/components/chat/ShellEnvironmentModal"
 import PopupModalContainer from "@/components/common/PopupModalContainer"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { useExtensionState } from "@/context/ExtensionStateContext"
@@ -86,7 +87,9 @@ const ClineRulesToggleModal: React.FC = () => {
 	const { width: viewportWidth, height: viewportHeight } = useWindowSize()
 	const [arrowPosition, setArrowPosition] = useState(0)
 	const [menuPosition, setMenuPosition] = useState(0)
-	const [currentView, setCurrentView] = useState<"rules" | "workflows" | "hooks" | "skills" | "subagents">("rules")
+	const [currentView, setCurrentView] = useState<"rules" | "workflows" | "hooks" | "skills" | "subagents" | "environment">(
+		"rules",
+	)
 
 	// Auto-switch to rules tab if hooks become disabled while viewing hooks tab
 	useEffect(() => {
@@ -630,7 +633,12 @@ const ClineRulesToggleModal: React.FC = () => {
 			</div>
 
 			{isVisible && (
-				<PopupModalContainer $arrowPosition={arrowPosition} $menuPosition={menuPosition}>
+				<PopupModalContainer
+					$arrowPosition={arrowPosition}
+					$height="min(520px, calc(100vh - 110px))"
+					$maxHeight="min(520px, calc(100vh - 110px))"
+					$menuPosition={menuPosition}
+					data-testid="capabilities-popup">
 					{/* Fixed header section - tabs and description */}
 					<div className="flex-shrink-0 px-3 pt-2">
 						{/* Tabs container */}
@@ -665,6 +673,9 @@ const ClineRulesToggleModal: React.FC = () => {
 								<TabButton isActive={currentView === "subagents"} onClick={() => setCurrentView("subagents")}>
 									Subagents
 								</TabButton>
+								<TabButton isActive={currentView === "environment"} onClick={() => setCurrentView("environment")}>
+									Environments
+								</TabButton>
 							</div>
 						</div>
 
@@ -681,438 +692,457 @@ const ClineRulesToggleModal: React.FC = () => {
 						) : null}
 
 						{/* Description text */}
-						<div className="text-xs text-description mb-4">
-							{currentView === "rules" ? (
-								<p>
-									Rules allow you to provide Dline with system-level guidance. Think of them as a persistent way
-									to include context and preferences for your projects or globally for every conversation.{" "}
-									<VSCodeLink
-										className="text-xs"
-										href="https://docs.dline.bot/features/cline-rules"
-										style={{ display: "inline", fontSize: "inherit" }}>
-										Docs
-									</VSCodeLink>
-								</p>
-							) : currentView === "workflows" ? (
-								<p>
-									Workflows allow you to define a series of steps to guide Dline through a repetitive set of
-									tasks, such as deploying a service or submitting a PR. To invoke a workflow, type{" "}
-									<span className="text-foreground font-bold">/workflow-name</span> in the chat.{" "}
-									<VSCodeLink
-										className="text-xs inline"
-										href="https://docs.dline.bot/features/slash-commands/workflows">
-										Docs
-									</VSCodeLink>
-								</p>
-							) : currentView === "skills" ? (
-								<p>
-									Skills are reusable instruction sets that Dline can activate on-demand. When a task matches a
-									skill's description, Dline uses the <span className="font-bold">use_skill</span> tool to load
-									the full instructions.
-								</p>
-							) : currentView === "subagents" ? (
-								<p>
-									Subagents are custom AI agents with specific tools and prompts. Define subagents with tailored
-									tool sets and system prompts, then select them when configuring a task.
-								</p>
-							) : (
-								<p>
-									Hooks allow you to execute custom scripts at specific points in Dline's execution lifecycle,
-									enabling automation and integration with external tools.
-								</p>
-							)}
-						</div>
-					</div>
-
-					{/* Scrollable content area */}
-					<div className="flex-1 overflow-y-auto px-3 pb-3" style={{ minHeight: 0 }}>
-						{currentView === "rules" ? (
-							<>
-								{/* Remote Rules Section */}
-								{hasRemoteRules && (
-									<div className="mb-3">
-										<div className="text-sm font-normal mb-2">Enterprise Rules</div>
-										<div className="flex flex-col gap-0">
-											{remoteGlobalRules.map((rule) => {
-												const enabled =
-													rule.alwaysEnabled ||
-													(remoteRulesToggles[rule.name] ?? remoteRulesTogglesState[rule.name] ?? true)
-												return (
-													<RuleRow
-														alwaysEnabled={rule.alwaysEnabled}
-														enabled={enabled}
-														isGlobal={false}
-														isRemote={true}
-														key={rule.name}
-														rulePath={rule.name}
-														ruleType="cline"
-														toggleRule={toggleRemoteRule}
-													/>
-												)
-											})}
-										</div>
-									</div>
-								)}
-
-								{/* Global Rules Section */}
-								<div className="mb-3">
-									<div className="text-sm font-normal mb-2">Global Rules</div>
-
-									{/* File-based Global Rules */}
-									<RulesToggleList
-										isGlobal={true}
-										listGap="small"
-										rules={globalRules}
-										ruleType={"cline"}
-										showNewRule={true}
-										showNoRules={false}
-										toggleRule={(rulePath, enabled) => toggleRule(true, rulePath, enabled)}
-									/>
-								</div>
-
-								{/* Local Rules Section */}
-								<div className="-mb-2.5">
-									<div className="text-sm font-normal mb-2">Workspace Rules</div>
-									<RulesToggleList
-										isGlobal={false}
-										listGap="small"
-										rules={localRules}
-										ruleType={"cline"}
-										showNewRule={false}
-										showNoRules={false}
-										toggleRule={(rulePath, enabled) => toggleRule(false, rulePath, enabled)}
-									/>
-
-									<RulesToggleList
-										isGlobal={false}
-										listGap="small"
-										rules={cursorRules}
-										ruleType={"cursor"}
-										showNewRule={false}
-										showNoRules={false}
-										toggleRule={toggleCursorRule}
-									/>
-									<RulesToggleList
-										isGlobal={false}
-										listGap="small"
-										rules={windsurfRules}
-										ruleType={"windsurf"}
-										showNewRule={false}
-										showNoRules={false}
-										toggleRule={toggleWindsurfRule}
-									/>
-									<RulesToggleList
-										isGlobal={false}
-										listGap="small"
-										rules={agentsRules}
-										ruleType={"agents"}
-										showNewRule={true}
-										showNoRules={false}
-										toggleRule={toggleAgentsRule}
-									/>
-								</div>
-							</>
-						) : currentView === "workflows" ? (
-							<>
-								{/* Remote Workflows Section */}
-								{hasRemoteWorkflows && (
-									<div className="mb-3">
-										<div className="text-sm font-normal mb-2">Enterprise Workflows</div>
-										<div className="flex flex-col gap-0">
-											{remoteGlobalWorkflows.map((workflow) => {
-												const enabled =
-													workflow.alwaysEnabled ||
-													(remoteWorkflowToggles[workflow.name] ??
-														remoteWorkflowTogglesState[workflow.name] ??
-														true)
-												return (
-													<RuleRow
-														alwaysEnabled={workflow.alwaysEnabled}
-														enabled={enabled}
-														isGlobal={false}
-														isRemote={true}
-														key={workflow.name}
-														rulePath={workflow.name}
-														ruleType="workflow"
-														toggleRule={toggleRemoteWorkflow}
-													/>
-												)
-											})}
-										</div>
-									</div>
-								)}
-
-								{/* Global Workflows Section */}
-								<div className="mb-3">
-									<div className="text-sm font-normal mb-2">Global Workflows</div>
-
-									{/* File-based Global Workflows */}
-									<RulesToggleList
-										isGlobal={true}
-										listGap="small"
-										rules={globalWorkflows}
-										ruleType={"workflow"}
-										showNewRule={true}
-										showNoRules={false}
-										toggleRule={(rulePath, enabled) => toggleWorkflow(true, rulePath, enabled)}
-									/>
-								</div>
-
-								{/* Local Workflows Section */}
-								<div className="-mb-2.5">
-									<div className="text-sm font-normal mb-2">Workspace Workflows</div>
-									<RulesToggleList
-										isGlobal={false}
-										listGap="small"
-										rules={localWorkflows}
-										ruleType={"workflow"}
-										showNewRule={true}
-										showNoRules={false}
-										toggleRule={(rulePath, enabled) => toggleWorkflow(false, rulePath, enabled)}
-									/>
-								</div>
-							</>
-						) : currentView === "hooks" ? (
-							<>
-								<div className="text-xs text-description mb-4">
+						{currentView !== "environment" && (
+							<div className="text-xs text-description mb-4">
+								{currentView === "rules" ? (
 									<p>
-										{isWindows
-											? "On Windows, hooks execute whenever the hook file exists."
-											: "Toggle to enable/disable (chmod +x/-x)."}{" "}
+										Rules allow you to provide Dline with system-level guidance. Think of them as a persistent
+										way to include context and preferences for your projects or globally for every
+										conversation.{" "}
 										<VSCodeLink
 											className="text-xs"
-											href="https://docs.dline.bot/features/hooks"
+											href="https://docs.dline.bot/features/cline-rules"
 											style={{ display: "inline", fontSize: "inherit" }}>
 											Docs
 										</VSCodeLink>
 									</p>
-								</div>
-								{/* Hooks Tab */}
-								{/* Windows warning banner */}
-								{isWindows && (
-									<div className="flex items-center gap-2 px-3 py-3 mb-4 bg-vscode-inputValidation-warningBackground border-l-[3px] border-vscode-inputValidation-warningBorder">
-										<i className="codicon codicon-warning text-sm" />
-										<span className="text-base">
-											Hook toggling is not yet supported on Windows in this foundation PR. Hooks can be
-											created, edited, and deleted, and execute whenever the hook file exists. Coming next:
-											JSON-backed hook enabled/disabled state across platforms.
-										</span>
-									</div>
+								) : currentView === "workflows" ? (
+									<p>
+										Workflows allow you to define a series of steps to guide Dline through a repetitive set of
+										tasks, such as deploying a service or submitting a PR. To invoke a workflow, type{" "}
+										<span className="text-foreground font-bold">/workflow-name</span> in the chat.{" "}
+										<VSCodeLink
+											className="text-xs inline"
+											href="https://docs.dline.bot/features/slash-commands/workflows">
+											Docs
+										</VSCodeLink>
+									</p>
+								) : currentView === "skills" ? (
+									<p>
+										Skills are reusable instruction sets that Dline can activate on-demand. When a task
+										matches a skill's description, Dline uses the <span className="font-bold">use_skill</span>{" "}
+										tool to load the full instructions.
+									</p>
+								) : currentView === "subagents" ? (
+									<p>
+										Subagents are custom AI agents with specific tools and prompts. Define subagents with
+										tailored tool sets and system prompts, then select them when configuring a task.
+									</p>
+								) : (
+									<p>
+										Hooks allow you to execute custom scripts at specific points in Dline's execution
+										lifecycle, enabling automation and integration with external tools.
+									</p>
 								)}
+							</div>
+						)}
+					</div>
 
-								{/* Global Hooks */}
-								<div className="mb-3">
-									<div className="text-sm font-normal mb-2">Global Hooks</div>
-									<div className="flex flex-col gap-0">
-										{globalHooks
-											.sort((a, b) => a.name.localeCompare(b.name))
-											.map((hook) => (
-												<HookRow
-													absolutePath={hook.absolutePath}
-													enabled={hook.enabled}
-													hookName={hook.name}
-													isGlobal={true}
-													isWindows={isWindows}
-													key={hook.name}
-													onDelete={(hooksToggles) => {
-														// Use response data directly, no need to refresh
-														setGlobalHooks(hooksToggles.globalHooks || [])
-														setWorkspaceHooks(hooksToggles.workspaceHooks || [])
-													}}
-													onToggle={(name: string, newEnabled: boolean) =>
-														toggleHook(true, name, newEnabled)
-													}
-												/>
-											))}
-										<NewRuleRow
-											existingHooks={globalHooks.map((h) => h.name)}
+					{/* Scrollable content area */}
+					<div
+						className={
+							currentView === "environment"
+								? "flex min-h-0 flex-1 overflow-hidden"
+								: "flex-1 overflow-y-auto px-3 pb-3"
+						}
+						style={{ minHeight: 0 }}>
+						<div className={currentView === "environment" ? "flex min-h-0 flex-1" : "hidden"}>
+							<ShellEnvironmentModal isActive={currentView === "environment"} />
+						</div>
+						{currentView !== "environment" &&
+							(currentView === "rules" ? (
+								<>
+									{/* Remote Rules Section */}
+									{hasRemoteRules && (
+										<div className="mb-3">
+											<div className="text-sm font-normal mb-2">Enterprise Rules</div>
+											<div className="flex flex-col gap-0">
+												{remoteGlobalRules.map((rule) => {
+													const enabled =
+														rule.alwaysEnabled ||
+														(remoteRulesToggles[rule.name] ??
+															remoteRulesTogglesState[rule.name] ??
+															true)
+													return (
+														<RuleRow
+															alwaysEnabled={rule.alwaysEnabled}
+															enabled={enabled}
+															isGlobal={false}
+															isRemote={true}
+															key={rule.name}
+															rulePath={rule.name}
+															ruleType="cline"
+															toggleRule={toggleRemoteRule}
+														/>
+													)
+												})}
+											</div>
+										</div>
+									)}
+
+									{/* Global Rules Section */}
+									<div className="mb-3">
+										<div className="text-sm font-normal mb-2">Global Rules</div>
+
+										{/* File-based Global Rules */}
+										<RulesToggleList
 											isGlobal={true}
-											ruleType="hook"
+											listGap="small"
+											rules={globalRules}
+											ruleType={"cline"}
+											showNewRule={true}
+											showNoRules={false}
+											toggleRule={(rulePath, enabled) => toggleRule(true, rulePath, enabled)}
 										/>
 									</div>
-								</div>
 
-								{/* Workspace Hooks - one section per workspace */}
-								{workspaceHooks.map((workspace, index) => (
-									<div
-										className={index === workspaceHooks.length - 1 ? "-mb-2.5" : "mb-3"}
-										key={workspace.workspaceName}>
-										<div className="text-sm font-normal mb-2">
-											{workspace.workspaceName}/.clinerules/hooks/
+									{/* Local Rules Section */}
+									<div className="-mb-2.5">
+										<div className="text-sm font-normal mb-2">Workspace Rules</div>
+										<RulesToggleList
+											isGlobal={false}
+											listGap="small"
+											rules={localRules}
+											ruleType={"cline"}
+											showNewRule={false}
+											showNoRules={false}
+											toggleRule={(rulePath, enabled) => toggleRule(false, rulePath, enabled)}
+										/>
+
+										<RulesToggleList
+											isGlobal={false}
+											listGap="small"
+											rules={cursorRules}
+											ruleType={"cursor"}
+											showNewRule={false}
+											showNoRules={false}
+											toggleRule={toggleCursorRule}
+										/>
+										<RulesToggleList
+											isGlobal={false}
+											listGap="small"
+											rules={windsurfRules}
+											ruleType={"windsurf"}
+											showNewRule={false}
+											showNoRules={false}
+											toggleRule={toggleWindsurfRule}
+										/>
+										<RulesToggleList
+											isGlobal={false}
+											listGap="small"
+											rules={agentsRules}
+											ruleType={"agents"}
+											showNewRule={true}
+											showNoRules={false}
+											toggleRule={toggleAgentsRule}
+										/>
+									</div>
+								</>
+							) : currentView === "workflows" ? (
+								<>
+									{/* Remote Workflows Section */}
+									{hasRemoteWorkflows && (
+										<div className="mb-3">
+											<div className="text-sm font-normal mb-2">Enterprise Workflows</div>
+											<div className="flex flex-col gap-0">
+												{remoteGlobalWorkflows.map((workflow) => {
+													const enabled =
+														workflow.alwaysEnabled ||
+														(remoteWorkflowToggles[workflow.name] ??
+															remoteWorkflowTogglesState[workflow.name] ??
+															true)
+													return (
+														<RuleRow
+															alwaysEnabled={workflow.alwaysEnabled}
+															enabled={enabled}
+															isGlobal={false}
+															isRemote={true}
+															key={workflow.name}
+															rulePath={workflow.name}
+															ruleType="workflow"
+															toggleRule={toggleRemoteWorkflow}
+														/>
+													)
+												})}
+											</div>
 										</div>
+									)}
+
+									{/* Global Workflows Section */}
+									<div className="mb-3">
+										<div className="text-sm font-normal mb-2">Global Workflows</div>
+
+										{/* File-based Global Workflows */}
+										<RulesToggleList
+											isGlobal={true}
+											listGap="small"
+											rules={globalWorkflows}
+											ruleType={"workflow"}
+											showNewRule={true}
+											showNoRules={false}
+											toggleRule={(rulePath, enabled) => toggleWorkflow(true, rulePath, enabled)}
+										/>
+									</div>
+
+									{/* Local Workflows Section */}
+									<div className="-mb-2.5">
+										<div className="text-sm font-normal mb-2">Workspace Workflows</div>
+										<RulesToggleList
+											isGlobal={false}
+											listGap="small"
+											rules={localWorkflows}
+											ruleType={"workflow"}
+											showNewRule={true}
+											showNoRules={false}
+											toggleRule={(rulePath, enabled) => toggleWorkflow(false, rulePath, enabled)}
+										/>
+									</div>
+								</>
+							) : currentView === "hooks" ? (
+								<>
+									<div className="text-xs text-description mb-4">
+										<p>
+											{isWindows
+												? "On Windows, hooks execute whenever the hook file exists."
+												: "Toggle to enable/disable (chmod +x/-x)."}{" "}
+											<VSCodeLink
+												className="text-xs"
+												href="https://docs.dline.bot/features/hooks"
+												style={{ display: "inline", fontSize: "inherit" }}>
+												Docs
+											</VSCodeLink>
+										</p>
+									</div>
+									{/* Hooks Tab */}
+									{/* Windows warning banner */}
+									{isWindows && (
+										<div className="flex items-center gap-2 px-3 py-3 mb-4 bg-vscode-inputValidation-warningBackground border-l-[3px] border-vscode-inputValidation-warningBorder">
+											<i className="codicon codicon-warning text-sm" />
+											<span className="text-base">
+												Hook toggling is not yet supported on Windows in this foundation PR. Hooks can be
+												created, edited, and deleted, and execute whenever the hook file exists. Coming
+												next: JSON-backed hook enabled/disabled state across platforms.
+											</span>
+										</div>
+									)}
+
+									{/* Global Hooks */}
+									<div className="mb-3">
+										<div className="text-sm font-normal mb-2">Global Hooks</div>
 										<div className="flex flex-col gap-0">
-											{workspace.hooks
+											{globalHooks
 												.sort((a, b) => a.name.localeCompare(b.name))
 												.map((hook) => (
 													<HookRow
 														absolutePath={hook.absolutePath}
 														enabled={hook.enabled}
 														hookName={hook.name}
-														isGlobal={false}
+														isGlobal={true}
 														isWindows={isWindows}
-														key={hook.absolutePath}
+														key={hook.name}
 														onDelete={(hooksToggles) => {
 															// Use response data directly, no need to refresh
 															setGlobalHooks(hooksToggles.globalHooks || [])
 															setWorkspaceHooks(hooksToggles.workspaceHooks || [])
 														}}
 														onToggle={(name: string, newEnabled: boolean) =>
-															toggleHook(false, name, newEnabled, workspace.workspaceName)
+															toggleHook(true, name, newEnabled)
 														}
-														workspaceName={workspace.workspaceName}
 													/>
 												))}
 											<NewRuleRow
-												existingHooks={workspace.hooks.map((h) => h.name)}
-												isGlobal={false}
+												existingHooks={globalHooks.map((h) => h.name)}
+												isGlobal={true}
 												ruleType="hook"
-												workspaceName={workspace.workspaceName}
 											/>
 										</div>
 									</div>
-								))}
-							</>
-						) : currentView === "skills" ? (
-							<>
-								{/* Enterprise Skills Section (remote) */}
-								{globalSkills.some((s) => s.path.startsWith("remote:")) && (
+
+									{/* Workspace Hooks - one section per workspace */}
+									{workspaceHooks.map((workspace, index) => (
+										<div
+											className={index === workspaceHooks.length - 1 ? "-mb-2.5" : "mb-3"}
+											key={workspace.workspaceName}>
+											<div className="text-sm font-normal mb-2">
+												{workspace.workspaceName}/.clinerules/hooks/
+											</div>
+											<div className="flex flex-col gap-0">
+												{workspace.hooks
+													.sort((a, b) => a.name.localeCompare(b.name))
+													.map((hook) => (
+														<HookRow
+															absolutePath={hook.absolutePath}
+															enabled={hook.enabled}
+															hookName={hook.name}
+															isGlobal={false}
+															isWindows={isWindows}
+															key={hook.absolutePath}
+															onDelete={(hooksToggles) => {
+																// Use response data directly, no need to refresh
+																setGlobalHooks(hooksToggles.globalHooks || [])
+																setWorkspaceHooks(hooksToggles.workspaceHooks || [])
+															}}
+															onToggle={(name: string, newEnabled: boolean) =>
+																toggleHook(false, name, newEnabled, workspace.workspaceName)
+															}
+															workspaceName={workspace.workspaceName}
+														/>
+													))}
+												<NewRuleRow
+													existingHooks={workspace.hooks.map((h) => h.name)}
+													isGlobal={false}
+													ruleType="hook"
+													workspaceName={workspace.workspaceName}
+												/>
+											</div>
+										</div>
+									))}
+								</>
+							) : currentView === "skills" ? (
+								<>
+									{/* Enterprise Skills Section (remote) */}
+									{globalSkills.some((s) => s.path.startsWith("remote:")) && (
+										<div className="mb-3">
+											<div className="text-sm font-normal mb-2">Enterprise Skills</div>
+											<div className="flex flex-col gap-0">
+												{globalSkills
+													.filter((s) => s.path.startsWith("remote:"))
+													.sort((a, b) => a.name.localeCompare(b.name))
+													.map((skill) => (
+														<RuleRow
+															alwaysEnabled={skill.alwaysEnabled}
+															enabled={
+																skill.alwaysEnabled ||
+																(capabilityScope.snapshot?.remoteSkillsToggles[skill.name] ??
+																	skill.enabled)
+															}
+															isGlobal={true}
+															isRemote={true}
+															key={skill.path}
+															rulePath={skill.name}
+															ruleType="skill"
+															toggleRule={(_path, enabled) =>
+																toggleSkill(true, skill.path, enabled)
+															}
+														/>
+													))}
+											</div>
+										</div>
+									)}
+
+									{/* Global Skills Section */}
 									<div className="mb-3">
-										<div className="text-sm font-normal mb-2">Enterprise Skills</div>
+										<div className="text-sm font-normal mb-2">Global Skills</div>
 										<div className="flex flex-col gap-0">
 											{globalSkills
-												.filter((s) => s.path.startsWith("remote:"))
+												.filter((s) => !s.path.startsWith("remote:"))
 												.sort((a, b) => a.name.localeCompare(b.name))
 												.map((skill) => (
 													<RuleRow
-														alwaysEnabled={skill.alwaysEnabled}
 														enabled={
-															skill.alwaysEnabled ||
-															(capabilityScope.snapshot?.remoteSkillsToggles[skill.name] ??
-																skill.enabled)
+															capabilityScope.snapshot?.globalSkillsToggles[skill.path] ??
+															skill.enabled
 														}
 														isGlobal={true}
-														isRemote={true}
 														key={skill.path}
-														rulePath={skill.name}
+														rulePath={skill.path}
 														ruleType="skill"
 														toggleRule={(_path, enabled) => toggleSkill(true, skill.path, enabled)}
 													/>
 												))}
+											<NewRuleRow isGlobal={true} ruleType="skill" />
 										</div>
 									</div>
-								)}
 
-								{/* Global Skills Section */}
-								<div className="mb-3">
-									<div className="text-sm font-normal mb-2">Global Skills</div>
-									<div className="flex flex-col gap-0">
-										{globalSkills
-											.filter((s) => !s.path.startsWith("remote:"))
-											.sort((a, b) => a.name.localeCompare(b.name))
-											.map((skill) => (
-												<RuleRow
-													enabled={
-														capabilityScope.snapshot?.globalSkillsToggles[skill.path] ?? skill.enabled
-													}
-													isGlobal={true}
-													key={skill.path}
-													rulePath={skill.path}
-													ruleType="skill"
-													toggleRule={(_path, enabled) => toggleSkill(true, skill.path, enabled)}
-												/>
-											))}
-										<NewRuleRow isGlobal={true} ruleType="skill" />
+									{/* Workspace Skills Section */}
+									<div className="-mb-2.5">
+										<div className="text-sm font-normal mb-2">Workspace Skills</div>
+										<div className="flex flex-col gap-0">
+											{localSkills
+												.sort((a, b) => a.name.localeCompare(b.name))
+												.map((skill) => (
+													<RuleRow
+														enabled={
+															capabilityScope.snapshot?.localSkillsToggles[skill.path] ??
+															skill.enabled
+														}
+														isGlobal={false}
+														key={skill.path}
+														rulePath={skill.path}
+														ruleType="skill"
+														toggleRule={(path, enabled) => toggleSkill(false, path, enabled)}
+													/>
+												))}
+											<NewRuleRow isGlobal={false} ruleType="skill" />
+										</div>
 									</div>
-								</div>
+								</>
+							) : currentView === "subagents" ? (
+								<>
+									{/* Global Subagents Section */}
+									<div className="mb-3">
+										<div className="text-sm font-normal mb-2">Global Subagents</div>
+										<div className="flex flex-col gap-0">
+											{globalSubagents
+												.sort((a, b) => a.name.localeCompare(b.name))
+												.map((agent) => (
+													<SubagentRow
+														agent={{
+															...agent,
+															enabled:
+																capabilityScope.snapshot?.globalSubagentsToggles[agent.path] ??
+																agent.enabled,
+														}}
+														isGlobal={true}
+														key={agent.path}
+														onDelete={() => {
+															// Trigger refresh after delete
+															FileServiceClient.refreshSubagents({} as EmptyRequest)
+																.then((response: RefreshedSubagents) => {
+																	setGlobalSubagents(response.globalSubagents || [])
+																	setLocalSubagents(response.localSubagents || [])
+																})
+																.catch(console.error)
+														}}
+														onToggle={(_path, enabled) => toggleSubagent(true, agent.path, enabled)}
+													/>
+												))}
+											<NewRuleRow isGlobal={true} ruleType="subagent" />
+										</div>
+									</div>
 
-								{/* Workspace Skills Section */}
-								<div className="-mb-2.5">
-									<div className="text-sm font-normal mb-2">Workspace Skills</div>
-									<div className="flex flex-col gap-0">
-										{localSkills
-											.sort((a, b) => a.name.localeCompare(b.name))
-											.map((skill) => (
-												<RuleRow
-													enabled={
-														capabilityScope.snapshot?.localSkillsToggles[skill.path] ?? skill.enabled
-													}
-													isGlobal={false}
-													key={skill.path}
-													rulePath={skill.path}
-													ruleType="skill"
-													toggleRule={(path, enabled) => toggleSkill(false, path, enabled)}
-												/>
-											))}
-										<NewRuleRow isGlobal={false} ruleType="skill" />
+									{/* Workspace Subagents Section */}
+									<div className="-mb-2.5">
+										<div className="text-sm font-normal mb-2">Workspace Subagents</div>
+										<div className="flex flex-col gap-0">
+											{localSubagents
+												.sort((a, b) => a.name.localeCompare(b.name))
+												.map((agent) => (
+													<SubagentRow
+														agent={{
+															...agent,
+															enabled:
+																capabilityScope.snapshot?.localSubagentsToggles[agent.path] ??
+																agent.enabled,
+														}}
+														isGlobal={false}
+														key={agent.path}
+														onDelete={() => {
+															FileServiceClient.refreshSubagents({} as EmptyRequest)
+																.then((response: RefreshedSubagents) => {
+																	setGlobalSubagents(response.globalSubagents || [])
+																	setLocalSubagents(response.localSubagents || [])
+																})
+																.catch(console.error)
+														}}
+														onToggle={(_path, enabled) => toggleSubagent(false, agent.path, enabled)}
+													/>
+												))}
+											<NewRuleRow isGlobal={false} ruleType="subagent" />
+										</div>
 									</div>
-								</div>
-							</>
-						) : currentView === "subagents" ? (
-							<>
-								{/* Global Subagents Section */}
-								<div className="mb-3">
-									<div className="text-sm font-normal mb-2">Global Subagents</div>
-									<div className="flex flex-col gap-0">
-										{globalSubagents
-											.sort((a, b) => a.name.localeCompare(b.name))
-											.map((agent) => (
-												<SubagentRow
-													agent={{
-														...agent,
-														enabled:
-															capabilityScope.snapshot?.globalSubagentsToggles[agent.path] ??
-															agent.enabled,
-													}}
-													isGlobal={true}
-													key={agent.path}
-													onDelete={() => {
-														// Trigger refresh after delete
-														FileServiceClient.refreshSubagents({} as EmptyRequest)
-															.then((response: RefreshedSubagents) => {
-																setGlobalSubagents(response.globalSubagents || [])
-																setLocalSubagents(response.localSubagents || [])
-															})
-															.catch(console.error)
-													}}
-													onToggle={(_path, enabled) => toggleSubagent(true, agent.path, enabled)}
-												/>
-											))}
-										<NewRuleRow isGlobal={true} ruleType="subagent" />
-									</div>
-								</div>
-
-								{/* Workspace Subagents Section */}
-								<div className="-mb-2.5">
-									<div className="text-sm font-normal mb-2">Workspace Subagents</div>
-									<div className="flex flex-col gap-0">
-										{localSubagents
-											.sort((a, b) => a.name.localeCompare(b.name))
-											.map((agent) => (
-												<SubagentRow
-													agent={{
-														...agent,
-														enabled:
-															capabilityScope.snapshot?.localSubagentsToggles[agent.path] ??
-															agent.enabled,
-													}}
-													isGlobal={false}
-													key={agent.path}
-													onDelete={() => {
-														FileServiceClient.refreshSubagents({} as EmptyRequest)
-															.then((response: RefreshedSubagents) => {
-																setGlobalSubagents(response.globalSubagents || [])
-																setLocalSubagents(response.localSubagents || [])
-															})
-															.catch(console.error)
-													}}
-													onToggle={(_path, enabled) => toggleSubagent(false, agent.path, enabled)}
-												/>
-											))}
-										<NewRuleRow isGlobal={false} ruleType="subagent" />
-									</div>
-								</div>
-							</>
-						) : null}
+								</>
+							) : null)}
 					</div>
 				</PopupModalContainer>
 			)}

@@ -3,6 +3,7 @@
 export type { ApiProfile } from "@shared/proto/dline/profile"
 
 import type { ApiProfile } from "@shared/proto/dline/profile"
+import { WebSearchMode } from "@shared/proto/dline/provider/common"
 
 /**
  * Generate default profile name from provider and modelId.
@@ -31,6 +32,7 @@ export function createEmptyApiProfile(): ApiProfile {
 		baseUrl: undefined,
 		modelId: "",
 		modelInfo: undefined,
+		webSearchMode: WebSearchMode.WEB_SEARCH_MODE_AUTO,
 		usedFor: ["act", "plan", "subagents"],
 		enabled: true,
 		anthropic: undefined,

@@ -4,7 +4,7 @@
  */
 
 import type { ModelInfo } from "@shared/api"
-import { ApiFormat } from "@shared/proto/dline/models/metadata"
+import { ApiFormat, ServerTool } from "@shared/proto/dline/models/metadata"
 
 export const openAiCodexModels: Record<string, ModelInfo> = {
 	"gpt-5.6-sol": {
@@ -12,6 +12,7 @@ export const openAiCodexModels: Record<string, ModelInfo> = {
 		apiFormats: [ApiFormat.OPENAI_RESPONSES],
 		capabilities: {
 			supportsTools: true,
+			tools: [ServerTool.WEB_SEARCH],
 			maxTokens: 128_000,
 			contextWindow: 353_000,
 			supportsImages: true,
@@ -26,6 +27,7 @@ export const openAiCodexModels: Record<string, ModelInfo> = {
 		apiFormats: [ApiFormat.OPENAI_RESPONSES],
 		capabilities: {
 			supportsTools: true,
+			tools: [ServerTool.WEB_SEARCH],
 			maxTokens: 128_000,
 			contextWindow: 353_000,
 			supportsImages: true,
@@ -40,6 +42,7 @@ export const openAiCodexModels: Record<string, ModelInfo> = {
 		apiFormats: [ApiFormat.OPENAI_RESPONSES],
 		capabilities: {
 			supportsTools: true,
+			tools: [ServerTool.WEB_SEARCH],
 			maxTokens: 128_000,
 			contextWindow: 353_000,
 			supportsImages: true,
@@ -54,6 +57,7 @@ export const openAiCodexModels: Record<string, ModelInfo> = {
 		apiFormats: [ApiFormat.OPENAI_RESPONSES],
 		capabilities: {
 			supportsTools: true,
+			tools: [ServerTool.WEB_SEARCH],
 			maxTokens: 128_000,
 			contextWindow: 272_000,
 			supportsImages: true,
@@ -68,6 +72,7 @@ export const openAiCodexModels: Record<string, ModelInfo> = {
 		apiFormats: [ApiFormat.OPENAI_RESPONSES],
 		capabilities: {
 			supportsTools: true,
+			tools: [ServerTool.WEB_SEARCH],
 			maxTokens: 128_000,
 			contextWindow: 272_000,
 			supportsImages: true,
@@ -82,6 +87,7 @@ export const openAiCodexModels: Record<string, ModelInfo> = {
 		apiFormats: [ApiFormat.OPENAI_RESPONSES],
 		capabilities: {
 			supportsTools: true,
+			tools: [ServerTool.WEB_SEARCH],
 			maxTokens: 128_000,
 			contextWindow: 272_000,
 			supportsImages: true,

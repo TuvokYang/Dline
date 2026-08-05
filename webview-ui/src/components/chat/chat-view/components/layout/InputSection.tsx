@@ -1,3 +1,4 @@
+import type { ClineAsk } from "@shared/ExtensionMessage"
 import React, { useEffect, useRef } from "react"
 import ChatTextArea from "@/components/chat/ChatTextArea"
 import type { ModeSwitchDraft } from "@/components/chat/mode-switch/useModeSwitch"
@@ -17,6 +18,7 @@ interface InputSectionProps {
 	onSubmit?: (draft: InteractionDraft) => Promise<AcceptedInteractionSettlement | undefined>
 	onDraftAccepted: (settlement: AcceptedInteractionSettlement) => void
 	submissionScope?: string
+	clineAsk?: ClineAsk
 }
 
 /**
@@ -34,6 +36,7 @@ export const InputSection: React.FC<InputSectionProps> = ({
 	onSubmit,
 	onDraftAccepted,
 	submissionScope,
+	clineAsk,
 }) => {
 	const {
 		activeQuote,
@@ -41,6 +44,8 @@ export const InputSection: React.FC<InputSectionProps> = ({
 		isTextAreaFocused,
 		inputValue,
 		setInputValue,
+		undoInputValue,
+		redoInputValue,
 		sendingDisabled,
 		selectedImages,
 		setSelectedImages,
@@ -110,6 +115,7 @@ export const InputSection: React.FC<InputSectionProps> = ({
 
 			<ChatTextArea
 				activeQuote={activeQuote}
+				clineAsk={clineAsk}
 				inputValue={inputValue}
 				onFocusChange={handleFocusChange}
 				onHeightChange={() => {
@@ -121,6 +127,7 @@ export const InputSection: React.FC<InputSectionProps> = ({
 				onSend={handleSend}
 				onSendBlocked={onSubmit ? deferDraft : undefined}
 				placeholderText={placeholderText}
+				redoInputValue={redoInputValue}
 				ref={textAreaRef}
 				selectedFiles={selectedFiles}
 				selectedImages={selectedImages}
@@ -129,6 +136,7 @@ export const InputSection: React.FC<InputSectionProps> = ({
 				setSelectedFiles={setSelectedFiles}
 				setSelectedImages={setSelectedImages}
 				shouldDisableFilesAndImages={shouldDisableFilesAndImages}
+				undoInputValue={undoInputValue}
 			/>
 		</>
 	)

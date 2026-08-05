@@ -14,9 +14,9 @@ DIM='\033[2m'
 NC='\033[0m' # No Color
 
 # Configuration
-INSTALL_DIR="${CLINE_INSTALL_DIR:-$HOME/.cline/cli}"
+INSTALL_DIR="${DLINE_INSTALL_DIR:-$HOME/.cline/cli}"
 GITHUB_REPO="cline/cline"
-requested_version="${CLINE_VERSION:-}"
+requested_version="${DLINE_VERSION:-}"
 FORCE_INSTALL="${FORCE_INSTALL:-false}"
 
 # Detect OS and architecture

@@ -220,7 +220,8 @@ Parameters:
 - requires_approval: (required) A boolean indicating whether this command requires explicit user approval before execution in case the user has auto-approve mode enabled. Set to true for potentially impactful operations like installing or uninstalling packages, deleting or overwriting files, system configuration changes, network operations, or any commands that could have unintended side effects. Set to false for safe operations like reading files or directories, running development servers, building projects, and other non-destructive operations.
 - background: (optional) Optional boolean. Set true to start the command immediately as a Dline-owned background process, return control immediately, and keep its output and cancellation lifecycle tracked. The result includes the function_id required to terminate that process later with kill_command. This takes precedence over synchronous. Defaults to false.
 - synchronous: (optional) Optional boolean. Set true to keep the command in the foreground beyond the default 10-second background handoff, waiting until the process exits or its timeout terminates it. Defaults to false. Ignored when background is true.
-- timeout: (optional) Optional positive integer timeout in seconds. This is the command's absolute maximum runtime from actual process start; reaching it terminates the process. If omitted, default is 1800 seconds. By default, a command still running at the 10-second background handoff continues as the same tracked background process without resetting this timeout.
+- timeout: (optional) Optional integer timeout in seconds. Use a positive integer as the command's absolute maximum runtime from actual process start; reaching it terminates the process. Set to zero or a negative integer to allow the command to run indefinitely without a deadline; it remains cancellable. If omitted, default is 1800 seconds. By default, a command still running at the 10-second background handoff continues as the same tracked background process without resetting this timeout.
+- mute_stdout: (optional) Optional boolean. Set true only when you are certain the command's stdout is not needed for any later reasoning or action. After a successful exit, Dline omits stdout from the tool result returned to you and returns only the successful exit status, which can save context tokens. On failure, Dline still returns captured diagnostics and the error code. The user interface, Activities, and command logs retain the full output. If you are unsure whether stdout is needed, omit this parameter or set false.
 Usage:
 <execute_command>
 <command></command>
@@ -229,6 +230,7 @@ Usage:
 <background></background>
 <synchronous></synchronous>
 <timeout></timeout>
+<mute_stdout></mute_stdout>
 </execute_command>
 
 ## kill_command
@@ -897,7 +899,8 @@ In this mode, focus on investigation, design, and planning. You may read/search 
 - NEVER use command-line tools (sed, awk, ripgrep, etc.) to read or edit files. Always use the dedicated tools: read_file, search_files, list_files, list_code_definition_names, find_references, replace_in_file, and write_to_file.
 - You can use the browser_action tool to interact with websites (including html files and locally running development servers) through a Puppeteer-controlled browser when you feel it is necessary in accomplishing the user's task. This tool is particularly useful for web development tasks as it allows you to launch a browser, navigate to pages, interact with elements through clicks and keyboard input, and capture the results through screenshots and console logs. This tool may be useful at key stages of web development tasks-such as after implementing new features, making substantial changes, when troubleshooting issues, or to verify the result of your work. You can analyze the provided screenshots to ensure correct rendering or identify errors, and review console logs for runtime issues.
 - For example, if asked to add a component to a react website, you might create the necessary files, use execute_command to run the site locally, then use browser_action to launch the browser, navigate to the local server, and verify the component renders & functions correctly before closing the browser.
-- When the task requires or could benefit from getting up to date information on a topic (e.g. latest best practices, latest documentation, latest news, etc.), use the web_search tool to find current results, then use the web_fetch tool to retrieve and analyze the content from relevant URLs.
+- Use web_fetch to retrieve and analyze content from a known URL when external source material is needed.
+- When the task requires current information (for example current documentation, best practices, or news), use web_search. This request routes that tool through Dline's local executor.
 - You have access to MCP servers that may provide additional tools and resources. Each server may provide different capabilities that you can use to accomplish tasks more effectively.
 
 ## MCP

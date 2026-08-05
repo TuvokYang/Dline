@@ -103,9 +103,31 @@ describe("mode switch state integration", () => {
 		expect(buildState).toHaveBeenCalledTimes(2)
 	})
 
+	it("rebuilds a stale initial state before hydrating a new subscriber", async () => {
+		const controller = Object.create(Controller.prototype) as Controller
+		const ensureWorkspaceManager = vi.spyOn(controller, "ensureWorkspaceManager").mockResolvedValue(undefined)
+		const getState = vi
+			.spyOn(controller, "getStateToPostToWebview")
+			.mockResolvedValueOnce(createState(1))
+			.mockResolvedValueOnce(createState(2))
+		vi.spyOn(controller, "isStateCurrent").mockImplementation((revision) => revision === 2)
+		vi.spyOn(controller, "getAccountUsage").mockReturnValue(undefined)
+		const responseStream: StreamingResponseHandler<State> = vi.fn(async () => undefined)
+
+		await subscribeToState(controller, EmptyRequest.create(), responseStream)
+
+		expect(ensureWorkspaceManager).toHaveBeenCalledOnce()
+		expect(ensureWorkspaceManager.mock.invocationCallOrder[0]).toBeLessThan(getState.mock.invocationCallOrder[0])
+		expect(getState).toHaveBeenCalledTimes(2)
+		expect(responseStream).toHaveBeenCalledTimes(1)
+		const payload = vi.mocked(responseStream).mock.calls[0]?.[0]
+		expect(JSON.parse(payload?.stateJson ?? "{}")).toMatchObject({ stateRevision: 2 })
+	})
+
 	/** Drop an older asynchronous state result after a newer revision has been sent. */
 	it("does not send an older state revision after a newer revision", async () => {
 		const controller = Object.create(Controller.prototype) as Controller
+		vi.spyOn(controller, "ensureWorkspaceManager").mockResolvedValue(undefined)
 		const firstState = createDeferred<ExtensionState>()
 		let latestRevision = 0
 		const getState = vi
@@ -137,6 +159,7 @@ describe("mode switch state integration", () => {
 
 	it("sends account usage without rebuilding or serializing extension state", async () => {
 		const controller = Object.create(Controller.prototype) as Controller
+		vi.spyOn(controller, "ensureWorkspaceManager").mockResolvedValue(undefined)
 		vi.spyOn(controller, "getStateToPostToWebview").mockResolvedValue(createState(1))
 		vi.spyOn(controller, "isStateCurrent").mockReturnValue(true)
 		vi.spyOn(controller, "getAccountUsage").mockReturnValue(undefined)
@@ -157,6 +180,7 @@ describe("mode switch state integration", () => {
 		const slowController = Object.create(Controller.prototype) as Controller
 		const fastController = Object.create(Controller.prototype) as Controller
 		for (const controller of [slowController, fastController]) {
+			vi.spyOn(controller, "ensureWorkspaceManager").mockResolvedValue(undefined)
 			vi.spyOn(controller, "getStateToPostToWebview").mockResolvedValue(createState(1))
 			vi.spyOn(controller, "isStateCurrent").mockReturnValue(true)
 			vi.spyOn(controller, "getAccountUsage").mockReturnValue(undefined)

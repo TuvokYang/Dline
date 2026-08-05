@@ -1,4 +1,4 @@
-import { getShell } from "@utils/shell"
+import { getShell, getShellForProfile, resolveTerminalProfileId } from "@utils/shell"
 import { expect } from "chai"
 import * as os from "os"
 import { afterEach, beforeEach, describe, it, vi } from "vitest"
@@ -64,6 +64,12 @@ describe("Shell Detection Tests", () => {
 		vscode.workspace.getConfiguration = originalGetConfig
 	})
 
+	it("maps Default to the fixed shell profile for each supported platform", () => {
+		expect(resolveTerminalProfileId("default", "win32")).to.equal("powershell")
+		expect(resolveTerminalProfileId("default", "linux")).to.equal("bash")
+		expect(resolveTerminalProfileId("default", "darwin")).to.equal("zsh")
+	})
+
 	// --------------------------------------------------------------------------
 	// Windows Shell Detection
 	// --------------------------------------------------------------------------
@@ -102,14 +108,14 @@ describe("Shell Detection Tests", () => {
 			mockVsCodeConfig("windows", "WSL", {
 				WSL: { source: "WSL" },
 			})
-			expect(getShell()).to.equal("/bin/bash")
+			expect(getShell()).to.equal("C:\\Windows\\System32\\wsl.exe")
 		})
 
 		it("uses WSL bash when profile name includes 'wsl'", () => {
 			mockVsCodeConfig("windows", "Ubuntu WSL", {
 				"Ubuntu WSL": {},
 			})
-			expect(getShell()).to.equal("/bin/bash")
+			expect(getShell()).to.equal("C:\\Windows\\System32\\wsl.exe")
 		})
 
 		it("defaults to cmd.exe if no special profile is matched", () => {
@@ -131,6 +137,12 @@ describe("Shell Detection Tests", () => {
 			process.env.COMSPEC = "D:\\CustomCmd\\cmd.exe"
 
 			expect(getShell()).to.equal("D:\\CustomCmd\\cmd.exe")
+		})
+
+		it("maps the synthetic default profile to Windows PowerShell", () => {
+			expect(resolveTerminalProfileId("default")).to.equal("powershell")
+			expect(getShellForProfile("default")).to.equal("powershell")
+			expect(getShellForProfile("powershell")).to.equal("powershell")
 		})
 	})
 
@@ -203,6 +215,11 @@ describe("Shell Detection Tests", () => {
 			vscode.workspace.getConfiguration = () => ({ get: () => undefined }) as any
 			// userInfo => null, SHELL => undefined
 			expect(getShell()).to.equal("/bin/bash")
+		})
+
+		it("maps a known VS Code default shell to its concrete profile", () => {
+			mockVsCodeConfig("linux", "bash", { bash: { path: "/bin/bash" } })
+			expect(resolveTerminalProfileId("default")).to.equal("bash")
 		})
 	})
 

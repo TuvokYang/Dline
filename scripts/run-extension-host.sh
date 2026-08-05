@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 SESSION="cline-dev"
-WORKSPACE="${CLINE_WORKSPACE:-$(cd "$(dirname "$0")/.." && pwd)}"
+WORKSPACE="${DLINE_WORKSPACE:-$(cd "$(dirname "$0")/.." && pwd)}"
 ENVIRONMENT="${DLINE_ENVIRONMENT:-production}"
 
 cd "$WORKSPACE"

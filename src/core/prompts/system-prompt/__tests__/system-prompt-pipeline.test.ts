@@ -1,5 +1,10 @@
-import { WINDOWS_POWERSHELL_LEGACY_PATH } from "@utils/shell"
+import { ApiFormat, ServerTool } from "@shared/proto/dline/models/metadata"
 import { describe, expect, it, vi } from "vitest"
+import {
+	DISABLED_WEB_SEARCH_ROUTING_PLAN,
+	HOSTED_WEB_SEARCH_ROUTING_PLAN,
+	LOCAL_WEB_SEARCH_ROUTING_PLAN,
+} from "../../__tests__/web-search-routing-fixtures"
 import { PromptProfile } from "../../profiles/types"
 import { PromptScanner } from "../../template/PromptScanner"
 import { assemblePromptFragments } from "../assembly/prompt-fragment-assembler"
@@ -32,6 +37,7 @@ const BASE_CONTEXT: SystemPromptContext = {
 	skills: [{ name: "review", description: "Review code changes.", path: "/skills/review.md", source: "project" }],
 	subagentsEnabled: true,
 	clineWebToolsEnabled: true,
+	webSearchRoutingPlan: LOCAL_WEB_SEARCH_ROUTING_PLAN,
 	enableNativeToolCalls: false,
 	enableParallelToolCalling: true,
 	yoloModeToggled: false,
@@ -60,11 +66,72 @@ describe("canonical system prompt pipeline", () => {
 			subagentRun: false,
 			yoloModeEnabled: false,
 			cliEnvironment: true,
-			webToolsEnabled: true,
+			webToolsEnabled: false,
+			localWebSearchEnabled: false,
+			serverWebSearchEnabled: false,
 			skillsEnabled: false,
 			userInstructionsEnabled: true,
 		})
 		expect(Object.isFrozen(config)).toBe(true)
+	})
+
+	it("adds hosted web search guidance only from the request routing plan", () => {
+		const context: SystemPromptContext = {
+			...BASE_CONTEXT,
+			webSearchRoutingPlan: HOSTED_WEB_SEARCH_ROUTING_PLAN,
+		}
+		const config = createSystemPromptConfig(context)
+		const env = prepareSystemRuntimeEnv(context, config)
+
+		expect(config.webToolsEnabled).toBe(true)
+		expect(config.localWebSearchEnabled).toBe(false)
+		expect(config.serverWebSearchEnabled).toBe(true)
+		expect(env.WEB_TOOLS_CAPABILITIES).toContain("provider-hosted web search")
+		expect(env.WEB_TOOLS_CAPABILITIES).not.toContain("local executor")
+	})
+
+	it("does not infer hosted web search from model metadata without a request routing plan", () => {
+		const context: SystemPromptContext = {
+			...BASE_CONTEXT,
+			webSearchRoutingPlan: undefined,
+			providerInfo: {
+				...BASE_CONTEXT.providerInfo,
+				providerId: "metadata-driven-provider",
+				model: {
+					id: "metadata-driven-model",
+					info: {
+						id: "metadata-driven-model",
+						apiFormats: [ApiFormat.OPENAI_RESPONSES],
+						capabilities: { tools: [ServerTool.WEB_SEARCH] },
+					},
+				},
+			},
+		}
+		const config = createSystemPromptConfig(context)
+		const env = prepareSystemRuntimeEnv(context, config)
+
+		expect(config.serverWebSearchEnabled).toBe(false)
+		expect(config.localWebSearchEnabled).toBe(false)
+		expect(env.WEB_TOOLS_CAPABILITIES).not.toContain("provider-hosted web search")
+		expect(env.WEB_TOOLS_CAPABILITIES).not.toContain("local executor")
+	})
+
+	it("keeps local, hosted, and disabled web search guidance mutually exclusive", () => {
+		const local = prepareSystemRuntimeEnv(BASE_CONTEXT, createSystemPromptConfig(BASE_CONTEXT)).WEB_TOOLS_CAPABILITIES
+		const hostedContext = { ...BASE_CONTEXT, webSearchRoutingPlan: HOSTED_WEB_SEARCH_ROUTING_PLAN }
+		const hosted = prepareSystemRuntimeEnv(hostedContext, createSystemPromptConfig(hostedContext)).WEB_TOOLS_CAPABILITIES
+		const disabledContext = { ...BASE_CONTEXT, webSearchRoutingPlan: DISABLED_WEB_SEARCH_ROUTING_PLAN }
+		const disabled = prepareSystemRuntimeEnv(
+			disabledContext,
+			createSystemPromptConfig(disabledContext),
+		).WEB_TOOLS_CAPABILITIES
+
+		expect(local).toContain("local executor")
+		expect(local).not.toContain("provider-hosted web search")
+		expect(hosted).toContain("provider-hosted web search")
+		expect(hosted).not.toContain("local executor")
+		expect(disabled).not.toContain("provider-hosted web search")
+		expect(disabled).not.toContain("local executor")
 	})
 
 	it("prepares one frozen complete runtime env before unresolved content preparation", () => {
@@ -107,7 +174,7 @@ describe("canonical system prompt pipeline", () => {
 
 			const env = prepareSystemRuntimeEnv(context, config)
 
-			expect(env.SHELL).toBe(WINDOWS_POWERSHELL_LEGACY_PATH)
+			expect(env.SHELL).toBe("powershell")
 		} finally {
 			Object.defineProperty(process, "platform", { value: originalPlatform })
 		}

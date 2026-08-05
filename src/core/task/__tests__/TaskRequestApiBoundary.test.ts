@@ -130,6 +130,38 @@ describe("Task request API boundary", () => {
 		expect(method).not.toContain("this.getCurrentProviderInfo()")
 	})
 
+	it("passes the frozen hosted tools to ordinary requests and disables them for internal compaction", async () => {
+		const source = await readFile(taskSourcePath, "utf8")
+		const method = extractMethod(source, "async *attemptApiRequest(", "// Block identity is now assigned")
+
+		expect(method).toContain("requestScope.requestToolIds.length > 0 ? [] : requestScope.webSearchRoutingPlan.serverTools")
+		expect(method).toContain("api.createMessage(systemPrompt, apiConversationMessages, tools, { serverTools })")
+	})
+
+	it("uses the request-frozen Web Tools switch for the prompt and ToolExecutor", async () => {
+		const source = await readFile(taskSourcePath, "utf8")
+		const promptMethod = extractMethod(source, "private async buildPromptContext(", "async *attemptApiRequest(")
+		const requestMethod = extractMethod(source, "async *attemptApiRequest(", "// Block identity is now assigned")
+
+		expect(promptMethod).toContain("clineWebToolsEnabled: webToolsEnabled")
+		expect(promptMethod).not.toContain('getGlobalSettingsKey("clineWebToolsEnabled")')
+		expect(requestMethod).toMatch(
+			/this\.buildPromptContext\(\s*providerInfo,\s*requestScope\.webToolsEnabled,\s*requestScope\.webSearchRoutingPlan,?\s*\)/,
+		)
+		expect(requestMethod).toMatch(
+			/this\.toolExecutor\.setWebSearchRoutingPlan\(\s*requestScope\.webSearchRoutingPlan,\s*requestScope\.webToolsEnabled,\s*requestScope\.requestToolIds\.length === 0,?\s*\)/,
+		)
+	})
+
+	it("uses the dedicated browser capability before the legacy image fallback", async () => {
+		const source = await readFile(taskSourcePath, "utf8")
+		const method = extractMethod(source, "private async buildPromptContext(", "async *attemptApiRequest(")
+
+		expect(method).toContain("capabilities?.supportsBrowserAction ??")
+		expect(method).toContain("capabilities?.supportsImages ??")
+		expect(method.indexOf("supportsBrowserAction")).toBeLessThan(method.indexOf("supportsImages"))
+	})
+
 	it("classifies user cancellation before reporting either API request failure boundary", async () => {
 		const source = await readFile(taskSourcePath, "utf8")
 		const firstChunkBoundary = extractMethod(source, "async *attemptApiRequest(", "// Block identity is now assigned")

@@ -38,10 +38,19 @@ vi.mock("./useProviderModels", () => ({
 }))
 
 vi.mock("../common/ModelConfiguration", () => ({
-	ModelConfiguration: ({ onCapabilitiesUpdate }: { onCapabilitiesUpdate: (updates: Partial<ModelCapabilities>) => void }) => (
-		<button onClick={() => onCapabilitiesUpdate({ supportsPromptCache: false })} type="button">
-			Update Cache
-		</button>
+	ModelConfiguration: ({
+		fields,
+		onCapabilitiesUpdate,
+	}: {
+		fields: { capabilities?: string[] }
+		onCapabilitiesUpdate: (updates: Partial<ModelCapabilities>) => void
+	}) => (
+		<>
+			<span data-testid="capability-fields">{fields.capabilities?.join(",")}</span>
+			<button onClick={() => onCapabilitiesUpdate({ supportsPromptCache: false })} type="button">
+				Update Cache
+			</button>
+		</>
 	),
 }))
 
@@ -98,13 +107,16 @@ describe("AnthropicProvider", () => {
 
 		expect(screen.getByText("max:64000")).toBeInTheDocument()
 		expect(screen.getByText("input:0.5")).toBeInTheDocument()
+		expect(screen.getByTestId("capability-fields")).toHaveTextContent(
+			"supportsImages,supportsWebSearch,supportsBrowserAction,supportsPromptCache",
+		)
 
 		fireEvent.click(screen.getByText("Update Cache"))
 
 		expect(onUpdate).toHaveBeenCalledWith({
 			anthropic: {
 				...profile.anthropic,
-				capabilities: { contextWindowTiers: [], maxTokens: 64_000, supportsPromptCache: false },
+				capabilities: { maxTokens: 64_000, supportsPromptCache: false },
 			},
 		})
 	})

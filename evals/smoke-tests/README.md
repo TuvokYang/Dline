@@ -59,7 +59,7 @@ cline auth
 ### With API key (for automation)
 
 ```bash
-cline auth -p cline -k "$CLINE_API_KEY" -m anthropic/claude-sonnet-4.5
+cline auth -p cline -k "$DLINE_API_KEY" -m anthropic/claude-sonnet-4.5
 ```
 
 ## Scenarios
@@ -137,7 +137,7 @@ Upload artifact         Configure auth
 
 ### Required Secrets
 
-- `CLINE_API_KEY` - Cline API key
+- `DLINE_API_KEY` - Cline API key
 
 ### Viewing Results
 

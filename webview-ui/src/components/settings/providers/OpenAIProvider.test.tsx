@@ -2,8 +2,9 @@
 import type { ModelInfo } from "@shared/proto/dline/models"
 import { ApiFormat, type ModelCapabilities, type ModelPricing } from "@shared/proto/dline/models/metadata"
 import { OpenAiProviderConfig } from "@shared/proto/dline/provider/openai"
-import { fireEvent, render, screen } from "@testing-library/react"
-import { describe, expect, it, vi } from "vitest"
+import { fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { beforeEach, describe, expect, it, vi } from "vitest"
+import { ModelsServiceClient } from "@/services/grpc-client"
 import { OpenAIProvider } from "./OpenAIProvider"
 import type { ApiProfile } from "./ProviderProfile"
 
@@ -50,13 +51,17 @@ vi.mock("./useProviderModels", () => ({
 
 vi.mock("../common/ModelConfiguration", () => ({
 	ModelConfiguration: ({
+		defaults,
 		fields,
 		onCapabilitiesUpdate,
 	}: {
+		defaults?: ModelInfo
 		fields: { capabilities?: string[] }
 		onCapabilitiesUpdate: (updates: Partial<ModelCapabilities>) => void
 	}) => (
 		<>
+			<span data-testid="default-native-tools">{String(defaults?.capabilities?.supportsTools)}</span>
+			<span data-testid="capability-fields">{fields.capabilities?.join(",")}</span>
 			<button onClick={() => onCapabilitiesUpdate({ supportsImages: true })} type="button">
 				Update Images
 			</button>
@@ -103,6 +108,21 @@ vi.mock("../common/ModelSelector", () => ({
 		</label>
 	),
 }))
+vi.mock("../common/ModelAutocomplete", () => ({
+	ModelAutocomplete: ({ models, onChange, onOpen, selectedModelId }: any) => (
+		<div>
+			<button aria-label="Open Model" onClick={onOpen} type="button">
+				Open Model
+			</button>
+			<input
+				aria-label="Model ID"
+				defaultValue={selectedModelId}
+				onChange={(event) => onChange(event.target.value, models[event.target.value])}
+			/>
+			<span data-testid="discovered-models">{Object.keys(models).join(",")}</span>
+		</div>
+	),
+}))
 vi.mock("../ThinkingControl", () => ({
 	default: ({ effortOptions }: { effortOptions?: readonly string[] }) => (
 		<div data-testid="thinking-efforts">{effortOptions?.join(",")}</div>
@@ -128,8 +148,15 @@ vi.mock("@vscode/webview-ui-toolkit/react", () => ({
 		</label>
 	),
 }))
+vi.mock("@/services/grpc-client", () => ({
+	ModelsServiceClient: { refreshOpenAiModels: vi.fn() },
+}))
 
 describe("OpenAIProvider", () => {
+	beforeEach(() => {
+		vi.clearAllMocks()
+	})
+
 	it("uses the official model catalog and metadata-driven API Format selector", () => {
 		const onUpdate = vi.fn()
 		const config = OpenAiProviderConfig.create({ customModelEnabled: false })
@@ -147,6 +174,10 @@ describe("OpenAIProvider", () => {
 		expect(screen.queryByRole("textbox", { name: "Model ID" })).not.toBeInTheDocument()
 		const apiFormat = screen.getByRole("combobox", { name: "API Format" })
 		expect(apiFormat).toHaveValue(String(ApiFormat.OPENAI_RESPONSES))
+		expect(apiFormat).toHaveStyle({
+			backgroundColor: "var(--vscode-dropdown-background)",
+			color: "var(--vscode-dropdown-foreground)",
+		})
 		expect(screen.getByRole("option", { name: "OpenAI Responses" })).toBeInTheDocument()
 		expect(screen.getByRole("option", { name: "OpenAI Chat" })).toBeInTheDocument()
 
@@ -171,6 +202,30 @@ describe("OpenAIProvider", () => {
 		expect(screen.getByRole("textbox", { name: "Model ID" })).toHaveValue("legacy-compatible-model")
 		expect(screen.getByRole("combobox", { name: "API Format" })).toBeInTheDocument()
 		expect(screen.getByText("context:128000")).toBeInTheDocument()
+		expect(screen.getByTestId("default-native-tools")).toHaveTextContent("true")
+	})
+
+	it("loads model suggestions when the custom model dropdown opens", async () => {
+		vi.mocked(ModelsServiceClient.refreshOpenAiModels).mockResolvedValue({ values: ["server-model"] })
+		const profile = {
+			id: "discovered-openai",
+			provider: "openai",
+			apiKey: "secret",
+			baseUrl: "https://gateway.example.test",
+			modelId: "custom-model",
+			openai: OpenAiProviderConfig.create({ customModelEnabled: true }),
+		} as unknown as ApiProfile
+
+		render(<OpenAIProvider onUpdate={vi.fn()} profile={profile} showModelOptions={true} />)
+
+		fireEvent.click(screen.getByRole("button", { name: "Open Model" }))
+
+		await waitFor(() =>
+			expect(ModelsServiceClient.refreshOpenAiModels).toHaveBeenCalledWith(
+				expect.objectContaining({ baseUrl: "https://gateway.example.test", apiKey: "secret" }),
+			),
+		)
+		await waitFor(() => expect(screen.getByTestId("discovered-models")).toHaveTextContent("server-model"))
 	})
 
 	it("uses provider capabilities for configuration updates and merged display", () => {
@@ -180,6 +235,7 @@ describe("OpenAIProvider", () => {
 			provider: "openai",
 			modelId: "gpt-custom",
 			openai: OpenAiProviderConfig.create({
+				customModelEnabled: true,
 				capabilities: { maxTokens: 64_000 } as ModelCapabilities,
 				pricing: { inputPrice: 0.5 } as ModelPricing,
 			}),
@@ -189,6 +245,9 @@ describe("OpenAIProvider", () => {
 
 		expect(screen.getByText("max:64000")).toBeInTheDocument()
 		expect(screen.getByText("input:0.5")).toBeInTheDocument()
+		expect(screen.getByTestId("capability-fields")).toHaveTextContent(
+			"supportsImages,supportsWebSearch,supportsBrowserAction,supportsPromptCache",
+		)
 
 		fireEvent.click(screen.getByText("Update Images"))
 

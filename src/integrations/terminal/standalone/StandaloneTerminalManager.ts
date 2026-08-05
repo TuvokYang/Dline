@@ -304,6 +304,12 @@ export class StandaloneTerminalManager implements ITerminalManager {
 		})
 	}
 
+	reinitializeTerminals(): TerminalManagerConfigurationResult {
+		const busyTerminals = this.filterTerminals((terminal) => terminal.busy)
+		const closedCount = this.closeTerminals((terminal) => !terminal.busy)
+		return { closedCount, busyTerminals }
+	}
+
 	/**
 	 * Set the default terminal profile.
 	 * @param profile The profile identifier
@@ -438,6 +444,7 @@ export class StandaloneTerminalManager implements ITerminalManager {
 		ownership: {
 			origin: CommandOrigin
 			cancellationOwner: CommandCancellationOwner
+			functionId?: string
 			startedAt?: number
 			deadlineAt?: number
 			existingLogFilePath?: string
@@ -469,6 +476,7 @@ export class StandaloneTerminalManager implements ITerminalManager {
 
 		const backgroundCommand: BackgroundCommand = {
 			id: activityId,
+			functionId: ownership.functionId,
 			command,
 			startTime: ownership.startedAt ?? Date.now(),
 			deadlineAt: ownership.deadlineAt,
@@ -477,6 +485,7 @@ export class StandaloneTerminalManager implements ITerminalManager {
 			cancellationOwner: ownership.cancellationOwner,
 			logFilePath,
 			lineCount: ownership.existingLineCount ?? existingOutput.length,
+			lastApiSentLineCount: 0,
 			injectionState: "pending",
 			process,
 		}
@@ -630,6 +639,17 @@ export class StandaloneTerminalManager implements ITerminalManager {
 	 */
 	markBackgroundCommandsConsumed(ids: string[]): void {
 		this.markBackgroundCommands(ids, "consumed")
+	}
+
+	/** Advance output baselines to the line counts represented in a successful API request. */
+	markBackgroundCommandOutputSent(snapshots: readonly { id: string; lineCount: number }[]): void {
+		for (const snapshot of snapshots) {
+			const command = this.backgroundCommands.get(snapshot.id)
+			if (!command) continue
+			const currentBaseline = command.lastApiSentLineCount ?? 0
+			const sentLineCount = Math.max(0, Math.min(snapshot.lineCount, command.lineCount))
+			command.lastApiSentLineCount = Math.max(currentBaseline, sentLineCount)
+		}
 	}
 
 	/**

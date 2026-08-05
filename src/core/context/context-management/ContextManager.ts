@@ -19,7 +19,12 @@ import { isTurnEndingToolName } from "../../task/assistant-message-order"
 import { createMissingToolResultMessage } from "../../task/resume/ResumeProvenance"
 import { extractUserPromptFromContent } from "../../task/utils/extractUserPromptFromContent"
 import { getContextTokens, readContextTokens } from "./context-pressure"
-import { computeCompactTrigger, computeSummarizeBudget, getContextWindowInfo } from "./context-window-utils"
+import {
+	type CompactTriggerOptions,
+	computeCompactTrigger,
+	computeSummarizeBudget,
+	getContextWindowInfo,
+} from "./context-window-utils"
 
 enum EditType {
 	UNDEFINED = 0,
@@ -187,7 +192,7 @@ export class ContextManager {
 		clineMessages: ClineMessage[],
 		api: ApiHandler,
 		previousApiReqIndex: number,
-		thresholdPercentage?: number,
+		triggerOptions: CompactTriggerOptions = {},
 	): boolean {
 		if (previousApiReqIndex >= 0) {
 			const previousRequestText = clineMessages[previousApiReqIndex]?.text
@@ -195,11 +200,8 @@ export class ContextManager {
 				try {
 					const totalTokens = readContextTokens(previousRequestText)
 
-					const { contextWindow, maxAllowedSize } = getContextWindowInfo(api)
-					const roundedThreshold = thresholdPercentage
-						? Math.floor(contextWindow * thresholdPercentage)
-						: computeCompactTrigger(contextWindow, computeSummarizeBudget())
-					const thresholdTokens = thresholdPercentage ? Math.min(roundedThreshold, maxAllowedSize) : roundedThreshold
+					const { contextWindow } = getContextWindowInfo(api)
+					const thresholdTokens = computeCompactTrigger(contextWindow, computeSummarizeBudget(), triggerOptions)
 					return totalTokens >= thresholdTokens
 				} catch {
 					return false
@@ -688,7 +690,11 @@ export class ContextManager {
 					if (Array.isArray(message.content)) {
 						const block = message.content[blockIndex]
 						if (block) {
-							this.setTextInBlock(block, latestChange[2][0])
+							const text = latestChange[2][0]
+							const didSetText = this.setTextInBlock(block, text)
+							if (!didSetText && messageIndex === 1 && blockIndex === 0 && message.role === "assistant") {
+								message.content.unshift({ type: "text", text })
+							}
 						}
 					}
 				}

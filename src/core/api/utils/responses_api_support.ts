@@ -1,7 +1,60 @@
 import OpenAI from "openai"
 import { ModelInfo } from "@/shared/api"
+import { ServerTool } from "@/shared/proto/dline/models/metadata"
 import { Logger } from "@/shared/services/Logger"
 import { createResponsesRegistry, createResponsesToolChunk } from "../transform/responses-identity-registry"
+import type { ApiRawStreamServerToolChunk, ApiServerToolPhase } from "../transform/stream"
+
+function createWebSearchChunk(
+	functionId: string,
+	phase: ApiServerToolPhase,
+	payload?: Pick<ApiRawStreamServerToolChunk, "input" | "result" | "error">,
+): ApiRawStreamServerToolChunk {
+	return {
+		type: "server_tool",
+		function_id: functionId,
+		provider_metadata: { item_id: functionId },
+		tool: ServerTool.WEB_SEARCH,
+		phase,
+		...payload,
+	}
+}
+
+/** Normalize the provider-native Responses hosted Web Search lifecycle. */
+export function mapResponsesWebSearchEvent(event: any): ApiRawStreamServerToolChunk | undefined {
+	if (event?.type === "response.output_item.added" || event?.type === "response.output_item.done") {
+		const item = event.item
+		if (item?.type !== "web_search_call" || typeof item.id !== "string" || item.id.length === 0) {
+			return undefined
+		}
+		if (event.type === "response.output_item.added") {
+			return createWebSearchChunk(item.id, "started", { input: item.action })
+		}
+		return item.status === "failed"
+			? createWebSearchChunk(item.id, "failed", { error: item.action })
+			: createWebSearchChunk(item.id, "completed", { result: item.action })
+	}
+
+	if (
+		event?.type !== "response.web_search_call.in_progress" &&
+		event?.type !== "response.web_search_call.searching" &&
+		event?.type !== "response.web_search_call.completed"
+	) {
+		return undefined
+	}
+
+	const functionId = event.item_id
+	if (typeof functionId !== "string" || functionId.length === 0) {
+		return undefined
+	}
+	const phase: ApiServerToolPhase =
+		event.type === "response.web_search_call.in_progress"
+			? "in_progress"
+			: event.type === "response.web_search_call.searching"
+				? "searching"
+				: "completed"
+	return createWebSearchChunk(functionId, phase)
+}
 
 // Type that represents the OpenAI ResponseStream with its private properties
 // The #private property issue can be resolved by using the AsyncIterable interface
@@ -19,6 +72,11 @@ export async function* handleResponsesApiStreamResponse(
 	const identityRegistry = createResponsesRegistry("responses-api-support")
 	// Process the response stream
 	for await (const chunk of stream) {
+		const webSearchChunk = mapResponsesWebSearchEvent(chunk)
+		if (webSearchChunk) {
+			yield webSearchChunk
+		}
+
 		// Handle different event types from Responses API
 		if (chunk.type === "response.output_item.added") {
 			const item = chunk.item

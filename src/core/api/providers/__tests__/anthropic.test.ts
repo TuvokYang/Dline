@@ -1,4 +1,5 @@
 import { anthropicModels } from "@shared/api"
+import { ApiFormat, ServerTool } from "@shared/proto/dline/models/metadata"
 import { ApiProfile } from "@shared/proto/dline/profile"
 import { expect } from "chai"
 import should from "should"
@@ -74,7 +75,10 @@ describe("AnthropicHandler", () => {
 			const result = handler.getModel()
 
 			result.id.should.equal("claude-opus-4-6:fast")
-			result.info.should.deepEqual(anthropicModels["claude-opus-4-6:fast"])
+			result.info.should.deepEqual({
+				...anthropicModels["claude-opus-4-6:fast"],
+				apiFormats: [ApiFormat.ANTHROPIC_CHAT],
+			})
 		})
 
 		it("should keep the base model id when long context is enabled", () => {
@@ -103,7 +107,10 @@ describe("AnthropicHandler", () => {
 			const result = handler.getModel()
 
 			result.id.should.equal("claude-opus-4-7")
-			result.info.should.deepEqual(anthropicModels["claude-opus-4-7"])
+			result.info.should.deepEqual({
+				...anthropicModels["claude-opus-4-7"],
+				apiFormats: [ApiFormat.ANTHROPIC_CHAT],
+			})
 		})
 
 		it("should preserve a custom model id when profile modelInfo is missing", () => {
@@ -138,9 +145,109 @@ describe("AnthropicHandler", () => {
 			should(result.info.capabilities?.maxTokens).equal(12_345)
 			should(result.info.capabilities?.supportsPromptCache).equal(false)
 		})
+
+		it("only reports the known hosted web search tool as supported", () => {
+			const handler = new AnthropicHandler({
+				profile: ApiProfile.create({ provider: "anthropic", modelId: "claude-sonnet-4-6" }),
+				mode: "act",
+			})
+
+			expect(handler.supportsServerTool(ServerTool.WEB_SEARCH)).to.equal(true)
+			expect(handler.supportsServerTool(ServerTool.SERVER_TOOL_UNSPECIFIED)).to.equal(false)
+		})
+
+		it("projects the fixed Anthropic transport into custom model metadata", () => {
+			const handler = new AnthropicHandler({
+				profile: ApiProfile.create({
+					provider: "anthropic",
+					modelId: "custom-anthropic-model",
+					anthropic: {
+						customModelEnabled: true,
+						capabilities: { supportsTools: true, tools: [ServerTool.WEB_SEARCH] },
+					},
+				}),
+				mode: "act",
+			})
+
+			expect(handler.getModel().info.apiFormats?.[0]).to.equal(ApiFormat.ANTHROPIC_CHAT)
+			expect(handler.getModel().info.capabilities?.tools).to.deep.equal([ServerTool.WEB_SEARCH])
+		})
 	})
 
 	describe("createMessage", () => {
+		it("projects hosted web search exactly once and removes the local Anthropic tool", async () => {
+			const handler = new AnthropicHandler({
+				profile: ApiProfile.create({
+					provider: "anthropic",
+					apiKey: "test-api-key",
+					modelId: "claude-sonnet-4-6",
+				}),
+				mode: "act",
+			})
+			const standardCreate = vi.fn().mockResolvedValue(createAsyncIterable())
+			vi.spyOn(handler as unknown as { ensureClient: () => unknown }, "ensureClient").mockReturnValue({
+				messages: { create: standardCreate },
+				beta: { messages: { _client: {}, create: vi.fn().mockResolvedValue(createAsyncIterable()) } },
+			})
+
+			for await (const _chunk of handler.createMessage(
+				"system prompt",
+				[{ role: "user", content: "Search" }],
+				[
+					{
+						name: "web_search",
+						description: "Local search",
+						input_schema: { type: "object", properties: {} },
+					},
+					{
+						name: "read_file",
+						description: "Read",
+						input_schema: { type: "object", properties: {} },
+					},
+				],
+				{ serverTools: [ServerTool.WEB_SEARCH] },
+			)) {
+			}
+
+			expect(standardCreate.mock.calls[0]?.[0]?.tools).to.deep.equal([
+				{
+					name: "read_file",
+					description: "Read",
+					input_schema: { type: "object", properties: {} },
+				},
+				{ type: "web_search_20250305", name: "web_search" },
+			])
+			expect(standardCreate.mock.calls[0]?.[0]?.tool_choice).to.deep.equal({ type: "any" })
+			expect(handler.supportsServerTool(ServerTool.WEB_SEARCH)).to.equal(true)
+		})
+
+		it("does not force hosted Web Search when no local Anthropic functions are present", async () => {
+			const handler = new AnthropicHandler({
+				profile: ApiProfile.create({
+					provider: "anthropic",
+					apiKey: "test-api-key",
+					modelId: "claude-sonnet-4-6",
+				}),
+				mode: "act",
+			})
+			const standardCreate = vi.fn().mockResolvedValue(createAsyncIterable())
+			vi.spyOn(handler as unknown as { ensureClient: () => unknown }, "ensureClient").mockReturnValue({
+				messages: { create: standardCreate },
+				beta: { messages: { _client: {}, create: vi.fn().mockResolvedValue(createAsyncIterable()) } },
+			})
+
+			for await (const _chunk of handler.createMessage(
+				"system prompt",
+				[{ role: "user", content: "Answer without searching unless needed" }],
+				undefined,
+				{ serverTools: [ServerTool.WEB_SEARCH] },
+			)) {
+			}
+
+			expect(standardCreate.mock.calls[0]?.[0]?.tools).to.deep.equal([{ type: "web_search_20250305", name: "web_search" }])
+			should(standardCreate.mock.calls[0]?.[0]?.tool_choice).equal(undefined)
+		})
+
 		it("should route fast mode requests through the beta messages API", async () => {
 			const handler = new AnthropicHandler({
 				profile: ApiProfile.create({ provider: "anthropic", apiKey: "test-api-key", modelId: "claude-opus-4-6:fast" }),

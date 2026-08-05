@@ -58,17 +58,29 @@ export class CondenseHandler implements IToolHandler, IPartialBlockHandler {
 		const images = outcome.draft?.images
 		const condenseFiles = outcome.draft?.files
 
-		// If the user provided a response, treat it as feedback
-		if (text || (images && images.length > 0) || (condenseFiles && condenseFiles.length > 0)) {
+		if (outcome.actionId === "reject") {
 			let fileContentString = ""
 			if (condenseFiles && condenseFiles.length > 0) {
 				fileContentString = await processFilesIntoText(condenseFiles)
 			}
 
-			await sayFeedbackOnce(config, "messageResponse", text, images, condenseFiles)
-			return formatResponse.toolResult(`<feedback>\n${text}\n</feedback>`, images, fileContentString)
+			if (text || (images && images.length > 0) || (condenseFiles && condenseFiles.length > 0)) {
+				await sayFeedbackOnce(config, "messageResponse", text, images, condenseFiles)
+			}
+			return formatResponse.toolResult(
+				renderPrompt("toolHandlers", "condenseFeedbackResult", {
+					TEXT: text?.trim() || "No additional written feedback was provided.",
+				}),
+				images,
+				fileContentString,
+			)
 		}
-		// If no response, the user accepted the condensed version
+
+		if (outcome.actionId !== "confirm_utility") {
+			throw new Error(`Unsupported condense interaction action: ${outcome.actionId}`)
+		}
+
+		// The user accepted the condensed version.
 		const apiConversationHistory = config.messageState.apiConversationHistory
 		const lastMessage = apiConversationHistory[apiConversationHistory.length - 1]
 		const summaryAlreadyAppended = lastMessage && lastMessage.role === "assistant"

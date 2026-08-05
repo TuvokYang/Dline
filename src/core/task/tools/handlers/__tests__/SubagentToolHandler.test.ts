@@ -586,6 +586,12 @@ describe("SubagentToolHandler", () => {
 
 	it("runs stable use_subagent with selected YAML subagent", async () => {
 		const { config } = createConfig({ autoApproveSafe: true, autoApproveAll: true })
+		const createActivity = vi.fn()
+		config.activityStore = {
+			create: createActivity,
+			update: vi.fn(),
+			appendEvent: vi.fn(),
+		} as unknown as TaskConfig["activityStore"]
 		config.capabilityToggles.localSubagentsToggles = { "/workspace/.agents/subagents/code-reviewer.md": true }
 		config.capabilityToggles.globalSubagentsToggles = { "/global/subagents/reviewer.yml": false }
 		const handler = new UseSubagentToolHandler()
@@ -629,10 +635,19 @@ describe("SubagentToolHandler", () => {
 			subagentToggles: { "/workspace/.agents/subagents/code-reviewer.md": true },
 			globalSubagentToggles: { "/global/subagents/reviewer.yml": false },
 		})
+		vitestExpect(createActivity).toHaveBeenCalledWith(
+			vitestExpect.objectContaining({ executionMode: "foreground", cancellationOwner: "task" }),
+		)
 	})
 
 	it("starts stable use_subagent background job", async () => {
 		const { config, callbacks } = createConfig({ autoApproveSafe: true, autoApproveAll: true })
+		const createActivity = vi.fn()
+		config.activityStore = {
+			create: createActivity,
+			update: vi.fn(),
+			appendEvent: vi.fn(),
+		} as unknown as TaskConfig["activityStore"]
 		const handler = new UseSubagentToolHandler()
 		const resolvedConfig = { name: "code-reviewer", description: "reviewer", tools: [], systemPrompt: "Prompt" }
 		vi.spyOn(AgentConfigModule, "resolveAgentConfig").mockResolvedValue({
@@ -670,6 +685,9 @@ describe("SubagentToolHandler", () => {
 		await delay(0)
 		const subagentCalls = callbacks.say.mock.calls.filter((call) => call[0] === "subagent")
 		assert.ok(subagentCalls.length >= 2, "should emit running and final background status")
+		vitestExpect(createActivity).toHaveBeenCalledWith(
+			vitestExpect.objectContaining({ executionMode: "background", cancellationOwner: "explicit" }),
+		)
 	})
 
 	it("replaces partial message when subagents are disabled with prompts in payload", async () => {

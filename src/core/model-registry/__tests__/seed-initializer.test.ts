@@ -11,6 +11,10 @@ import * as path from "path"
 import { afterEach, beforeEach, describe, it, vi } from "vitest"
 
 // Mock provider data for testing seed initialization
+// Generated metadata enum value for ServerTool.WEB_SEARCH. Keep the hoisted fixture
+// independent from runtime module initialization.
+const WEB_SEARCH_TOOL = 1
+
 const mockAllProviderModels = vi.hoisted(
 	(): Record<string, ProviderModelsConfig> => ({
 		"test-provider": {
@@ -22,7 +26,13 @@ const mockAllProviderModels = vi.hoisted(
 				"test-model-1": {
 					id: "test-model-1",
 					name: "Test Model 1",
-					capabilities: { maxTokens: 4096, contextWindow: 128000, supportsImages: false, supportsPromptCache: false },
+					capabilities: {
+						maxTokens: 4096,
+						contextWindow: 128000,
+						supportsImages: false,
+						supportsPromptCache: false,
+						tools: [1],
+					},
 				},
 			},
 		},
@@ -89,21 +99,66 @@ describe("seed-initializer", () => {
 		expect(writeFileStub.mock.calls.length).to.equal(2)
 	})
 
-	it("should skip existing JSON files", async () => {
-		// Only test-provider.json exists; provider-with-optional should be created
+	it("should refresh existing built-in models and create missing provider files", async () => {
 		const existsStub = vi.spyOn(fs, "existsSync")
 		existsStub.mockImplementation((filePath: fs.PathLike) => {
 			const p = filePath.toString()
 			return p === path.join(tempDir, "test-provider.json")
 		})
+		vi.spyOn(fsPromises, "readFile").mockResolvedValue(
+			JSON.stringify({
+				provider: "test-provider",
+				providerName: "Test Provider",
+				billingMode: "token",
+				defaultModelId: "test-model-1",
+				models: {
+					"test-model-1": { id: "test-model-1", name: "Stale Model" },
+				},
+			}),
+		)
 
 		const created = await ensureSeedProviders(tempDir)
 
 		expect(created).to.equal(1)
-		expect(writeFileStub.mock.calls.length).to.equal(1)
-		// The created file should be for the missing provider
+		expect(writeFileStub.mock.calls.length).to.equal(2)
 		const writtenPaths = writeFileStub.mock.calls.map((call: unknown[]) => call[0] as string)
-		expect(writtenPaths.every((p: string) => p.includes("provider-with-optional"))).to.be.true
+		expect(writtenPaths).to.include(path.join(tempDir, "test-provider.json"))
+		expect(writtenPaths).to.include(path.join(tempDir, "provider-with-optional.json"))
+		const updatedCall = writeFileStub.mock.calls.find(
+			(call: unknown[]) => call[0] === path.join(tempDir, "test-provider.json"),
+		)
+		const updated = JSON.parse(updatedCall?.[1] as string)
+		expect(updated.models["test-model-1"].name).to.equal("Test Model 1")
+		expect(updated.models["test-model-1"].userDefined).to.equal(false)
+		expect(updated.models["test-model-1"].capabilities.tools).to.deep.equal([WEB_SEARCH_TOOL])
+	})
+
+	it("should preserve explicitly marked and unknown user models while refreshing built-ins", async () => {
+		vi.spyOn(fs, "existsSync").mockReturnValue(true)
+		vi.spyOn(fsPromises, "readFile").mockImplementation(async (filePath) => {
+			const providerId = path.basename(filePath.toString(), ".json")
+			if (providerId === "test-provider") {
+				return JSON.stringify({
+					provider: "test-provider",
+					providerName: "Test Provider",
+					billingMode: "token",
+					models: {
+						"test-model-1": { id: "test-model-1", name: "My Tuned Model", userDefined: true },
+						"private-model": { id: "private-model", name: "Private Model" },
+					},
+				})
+			}
+			return JSON.stringify(mockAllProviderModels[providerId])
+		})
+
+		await ensureSeedProviders(tempDir)
+
+		const updatedCall = writeFileStub.mock.calls.find(
+			(call: unknown[]) => call[0] === path.join(tempDir, "test-provider.json"),
+		)
+		const updated = JSON.parse(updatedCall?.[1] as string)
+		expect(updated.models["test-model-1"]).to.include({ name: "My Tuned Model", userDefined: true })
+		expect(updated.models["private-model"]).to.include({ name: "Private Model", userDefined: true })
 	})
 
 	it("should serialize defaultModelId in JSON output", async () => {
@@ -124,6 +179,7 @@ describe("seed-initializer", () => {
 		expect(parsed.models).to.be.an("object")
 		expect(Object.keys(parsed.models)).to.have.lengthOf(1)
 		expect(parsed.models["test-model-1"].id).to.equal("test-model-1")
+		expect(parsed.models["test-model-1"].userDefined).to.equal(false)
 	})
 
 	it("should strip undefined fields from JSON output", async () => {
@@ -155,5 +211,33 @@ describe("seed-initializer", () => {
 		expect("supportsGlobalEndpoint" in model.capabilities).to.be.false
 		expect("apiFormat" in model).to.be.false
 		expect("tiers" in model).to.be.false
+	})
+
+	it("migrates the legacy Vercel catalog to providers/vercel.json", async () => {
+		const providerId = "vercel-ai-gateway"
+		const legacyConfig: ProviderModelsConfig = {
+			provider: providerId,
+			providerName: "Vercel AI Gateway",
+			billingMode: "token",
+			models: {
+				"openai/gpt-5": { id: "openai/gpt-5", name: "GPT-5", userDefined: true },
+			},
+		}
+		mockAllProviderModels[providerId] = legacyConfig
+		try {
+			vi.spyOn(fs, "existsSync").mockImplementation(
+				(filePath) => filePath.toString() === path.join(tempDir, "vercel-ai-gateway.json"),
+			)
+			vi.spyOn(fsPromises, "readFile").mockResolvedValue(JSON.stringify(legacyConfig))
+
+			await ensureSeedProviders(tempDir)
+
+			const writeCall = writeFileStub.mock.calls.find((call: unknown[]) => call[0] === path.join(tempDir, "vercel.json"))
+			expect(writeCall).not.to.be.undefined
+			const migrated = JSON.parse(writeCall?.[1] as string) as ProviderModelsConfig
+			expect(migrated.models["openai/gpt-5"].userDefined).to.be.false
+		} finally {
+			delete mockAllProviderModels[providerId]
+		}
 	})
 })

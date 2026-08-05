@@ -10,10 +10,10 @@ import { buildExternalBasicHeaders } from "@/services/EnvUtils"
 import { featureFlagsService } from "@/services/feature-flags"
 import { ClineStorageMessage } from "@/shared/messages/content"
 import { fetch } from "@/shared/net"
-import { ApiFormat } from "@/shared/proto/dline/models/metadata"
+import { ApiFormat, ServerTool } from "@/shared/proto/dline/models/metadata"
 import { FeatureFlag } from "@/shared/services/feature-flags/feature-flags"
 import { Logger } from "@/shared/services/Logger"
-import { AccountUsage, ApiHandler, ApiHandlerContext } from "../"
+import { AccountUsage, ApiHandler, ApiHandlerContext, type ApiRequestOptions } from "../"
 import { convertToOpenAIResponsesInput } from "../transform/openai-response-format"
 import {
 	createResponsesRegistry,
@@ -21,6 +21,7 @@ import {
 	ResponsesIdentityRegistry,
 } from "../transform/responses-identity-registry"
 import { ApiStream, ApiStreamUsageChunk } from "../transform/stream"
+import { mapResponsesWebSearchEvent } from "../utils/responses_api_support"
 
 /**
  * OpenAI Codex base URL for API requests
@@ -91,6 +92,14 @@ export class OpenAiCodexHandler implements ApiHandler {
 	}
 	private get serviceTier() {
 		return normalizeOpenAiServiceTier(this.config?.serviceTier)
+	}
+
+	supportsServerTool(tool: ServerTool): boolean {
+		if (tool !== ServerTool.WEB_SEARCH) {
+			return false
+		}
+		const apiFormat = this.getModel().info.apiFormats?.[0]
+		return apiFormat === ApiFormat.OPENAI_RESPONSES || apiFormat === ApiFormat.OPENAI_RESPONSES_WEBSOCKET_MODE
 	}
 
 	private usageQuota(window: CodexUsageWindow | undefined) {
@@ -243,7 +252,12 @@ export class OpenAiCodexHandler implements ApiHandler {
 		return out
 	}
 
-	async *createMessage(systemPrompt: string, messages: ClineStorageMessage[], tools?: ChatCompletionTool[]): ApiStream {
+	async *createMessage(
+		systemPrompt: string,
+		messages: ClineStorageMessage[],
+		tools?: ChatCompletionTool[],
+		options?: ApiRequestOptions,
+	): ApiStream {
 		const model = this.getModel()
 
 		// Reset request-local Responses identity state.
@@ -259,8 +273,8 @@ export class OpenAiCodexHandler implements ApiHandler {
 		const usePreviousResponseId = useWebsocketMode && !!previousResponseId
 
 		// Build request body
-		const requestBody = this.buildRequestBody(model, input, systemPrompt, tools, previousResponseId)
-		const fallbackRequestBody = this.buildRequestBody(model, input, systemPrompt, tools)
+		const requestBody = this.buildRequestBody(model, input, systemPrompt, tools, previousResponseId, options)
+		const fallbackRequestBody = this.buildRequestBody(model, input, systemPrompt, tools, undefined, options)
 
 		// Make the request with retry on auth failure
 		for (let attempt = 0; attempt < 2; attempt++) {
@@ -300,6 +314,7 @@ export class OpenAiCodexHandler implements ApiHandler {
 		systemPrompt: string,
 		tools?: ChatCompletionTool[],
 		previousResponseId?: string,
+		options?: ApiRequestOptions,
 	): any {
 		// Determine reasoning effort. Explicit enableThinking=false disables Responses reasoning entirely.
 		const enableThinking = this.reasoningConfig?.enableThinking ?? true
@@ -325,11 +340,14 @@ export class OpenAiCodexHandler implements ApiHandler {
 				: {}),
 		}
 
+		const hostedWebSearch = options?.serverTools?.includes(ServerTool.WEB_SEARCH) === true
+
 		// Add tools if provided
 		// Pass through strict value from tool (MCP/custom tools have strict: false, built-in tools default to true)
 		if (tools && tools.length > 0) {
 			body.tools = tools
 				.filter((tool: any) => tool?.type === "function")
+				.filter((tool: any) => !hostedWebSearch || tool.function.name !== "web_search")
 				.map((tool: any) => ({
 					type: "function",
 					name: tool.function.name,
@@ -337,6 +355,9 @@ export class OpenAiCodexHandler implements ApiHandler {
 					parameters: tool.function.parameters,
 					strict: tool.function.strict ?? true,
 				}))
+		}
+		if (hostedWebSearch) {
+			body.tools = [...(body.tools ?? []), { type: "web_search" }]
 		}
 
 		return body
@@ -598,10 +619,12 @@ export class OpenAiCodexHandler implements ApiHandler {
 		ws.addEventListener("close", handleClose)
 
 		try {
+			const websocketParams = { ...params } as Record<string, unknown>
+			delete websocketParams.stream
 			ws.send(
 				JSON.stringify({
 					type: "response.create",
-					...params,
+					...websocketParams,
 				}),
 			)
 
@@ -738,6 +761,11 @@ export class OpenAiCodexHandler implements ApiHandler {
 	}
 
 	private async *processEvent(event: any, model: { id: string; info: ModelInfo }): ApiStream {
+		const webSearchChunk = mapResponsesWebSearchEvent(event)
+		if (webSearchChunk) {
+			yield webSearchChunk
+		}
+
 		// Handle text deltas
 		if (event?.type === "response.text.delta" || event?.type === "response.output_text.delta") {
 			if (event?.delta) {

@@ -13,6 +13,39 @@ afterEach(() => {
 })
 
 describe("StandaloneTerminalProcess output streams", () => {
+	it("preserves UTF-8 characters split across output chunks", () => {
+		const terminalProcess = new StandaloneTerminalProcess()
+		const decodeBuffer = (
+			terminalProcess as unknown as {
+				decodeBuffer(data: Buffer, stream: "stdout" | "stderr"): string
+			}
+		).decodeBuffer.bind(terminalProcess)
+		const expected = "output 中文 🚀 complete"
+		const encoded = Buffer.from(expected, "utf8")
+		const chineseStart = Buffer.byteLength("output ", "utf8")
+		const emojiStart = Buffer.byteLength("output 中文 ", "utf8")
+		const chunks = [
+			encoded.subarray(0, chineseStart + 1),
+			encoded.subarray(chineseStart + 1, emojiStart + 2),
+			encoded.subarray(emojiStart + 2),
+		]
+
+		const actual = chunks.map((chunk) => decodeBuffer(chunk, "stdout")).join("")
+
+		assert.equal(actual, expected)
+	})
+
+	it("preserves an intentional Unicode replacement character", () => {
+		const terminalProcess = new StandaloneTerminalProcess()
+		const decodeBuffer = (
+			terminalProcess as unknown as {
+				decodeBuffer(data: Buffer, stream: "stdout" | "stderr"): string
+			}
+		).decodeBuffer.bind(terminalProcess)
+
+		assert.equal(decodeBuffer(Buffer.from("before � after", "utf8"), "stderr"), "before � after")
+	})
+
 	it("keeps partial stdout and stderr lines in independent buffers", () => {
 		vi.useFakeTimers()
 		const process = new StandaloneTerminalProcess()

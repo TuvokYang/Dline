@@ -13,16 +13,25 @@
  * commands in hidden terminals without cluttering the visible terminal.
  */
 
+import { randomUUID } from "node:crypto"
+import { DlineTempManager } from "@services/temp"
 import { findLastIndex } from "@shared/array"
 import { Logger } from "@/shared/services/Logger"
 import { orchestrateCommandExecution } from "./CommandOrchestrator"
 import { isCommandCompletionSuccessful } from "./command-completion"
 import { formatTerminalOutput } from "./output-stream"
-import { buildPreloadedCommand, ShellEnvironmentConfigLoader } from "./shell-environment"
+import {
+	buildShellEnvironmentCommand,
+	buildTerminalInitializationCommand,
+	logShellEnvironmentDiagnostics,
+	type ResolvedShellEnvironment,
+	ShellEnvironmentConfigLoader,
+} from "./shell-environment"
 import { StandaloneTerminalManager } from "./standalone/StandaloneTerminalManager"
 import type {
 	BackgroundCommand,
 	CommandCancellationOwner,
+	CommandCancellationResult,
 	CommandExecutionOptions,
 	CommandExecutionOutcome,
 	CommandExecutorCallbacks,
@@ -57,10 +66,12 @@ export class CommandExecutor {
 	private readonly processes = new Map<string, TerminalProcessResultPromise>()
 	private readonly activityIdsByFunctionId = new Map<string, string>()
 	private readonly functionIdsByActivityId = new Map<string, string>()
+	private readonly commandsByActivityId = new Map<string, string>()
 	private readonly cancellationOwners = new Map<string, CommandCancellationOwner>()
 	private readonly cancelledActivityIds = new Set<string>()
 
 	private nextActivityNumber = 1
+	private nextShellEnvironmentDiagnosticsNumber = 1
 
 	// Track shell integration warnings to determine when to show background terminal suggestion
 	private shellIntegrationWarningTracker: ShellIntegrationWarningTracker = {
@@ -108,6 +119,19 @@ export class CommandExecutor {
 		return { closedCount, busyTerminals }
 	}
 
+	/** Close idle terminals so profile startup scripts run again on the next command. */
+	reinitializeTerminals(): TerminalManagerConfigurationResult {
+		let closedCount = 0
+		const busyTerminals = []
+		for (const manager of new Set<ITerminalManager>([this.terminalManager, this.standaloneManager])) {
+			const result = manager.reinitializeTerminals?.()
+			if (!result) continue
+			closedCount += result.closedCount
+			busyTerminals.push(...result.busyTerminals)
+		}
+		return { closedCount, busyTerminals }
+	}
+
 	/**
 	 * Execute a command in the terminal.
 	 *
@@ -134,6 +158,7 @@ export class CommandExecutor {
 		// Select the appropriate terminal manager
 		const useStandalone =
 			options?.startInBackground || options?.useBackgroundExecution || this.terminalExecutionMode === "backgroundExec"
+		const executionMode = useStandalone ? "background" : "foreground"
 		const manager = useStandalone ? this.standaloneManager : this.terminalManager
 		Logger.debug(
 			`[Task ${this.taskId}] Executing command in ${useStandalone ? "standalone" : "VSCode"} terminal (cwd: ${workdirectory}): ${command}`,
@@ -141,19 +166,53 @@ export class CommandExecutor {
 		this.callbacks.markWorkspaceScanRequired?.()
 
 		// Get terminal and run command
-		const shellEnvironment = await this.shellEnvironmentLoader.resolve(
-			workdirectory,
-			this.terminalConfiguration.defaultTerminalProfile,
+		let shellEnvironment: ResolvedShellEnvironment | undefined
+		try {
+			shellEnvironment = await this.shellEnvironmentLoader.resolve(
+				workdirectory,
+				this.terminalConfiguration.defaultTerminalProfile,
+			)
+		} catch (error) {
+			Logger.error("[ShellEnvironment] Failed to load project terminal configuration; continuing without it", error)
+		}
+		const hasShellCommands = Boolean(
+			shellEnvironment &&
+				(shellEnvironment.startupScripts.length > 0 ||
+					shellEnvironment.preCommands.length > 0 ||
+					shellEnvironment.postCommand),
 		)
-		const executionCommand = buildPreloadedCommand(
-			command,
-			shellEnvironment?.initializationCommands ?? [],
-			this.terminalConfiguration.defaultTerminalProfile,
-		)
+		const diagnosticsPath = hasShellCommands
+			? DlineTempManager.createTempFilePath(
+					`shell_environment_${this.ulid}_${Date.now()}_${this.nextShellEnvironmentDiagnosticsNumber++}`,
+				)
+			: undefined
+		const profile = this.terminalConfiguration.defaultTerminalProfile
+		const executionCommand =
+			shellEnvironment && diagnosticsPath
+				? buildShellEnvironmentCommand({
+						command,
+						startupScripts: useStandalone ? shellEnvironment.startupScripts : undefined,
+						preCommands: shellEnvironment.preCommands,
+						postCommand: shellEnvironment.postCommand,
+						profile,
+						diagnosticsPath,
+						terminateShell: useStandalone,
+						completionMarkerToken: useStandalone ? undefined : randomUUID(),
+					})
+				: command
+		const initializationCommand =
+			shellEnvironment && diagnosticsPath && !useStandalone
+				? buildTerminalInitializationCommand(shellEnvironment.startupScripts, profile, diagnosticsPath)
+				: undefined
 		const terminalInfo = await manager.getOrCreateTerminal(
 			workdirectory,
 			shellEnvironment
-				? { environment: shellEnvironment.environment, configurationId: shellEnvironment.configurationId }
+				? {
+						environment: shellEnvironment.environment,
+						configurationId: shellEnvironment.configurationId,
+						initializationCommand,
+						initializationDiagnosticsPath: initializationCommand ? diagnosticsPath : undefined,
+					}
 				: undefined,
 		)
 		if (options?.startInBackground) {
@@ -162,12 +221,23 @@ export class CommandExecutor {
 			terminalInfo.terminal.show()
 		}
 		const process = manager.runCommand(terminalInfo, executionCommand)
+		if (diagnosticsPath) {
+			let diagnosticsLogged = false
+			const logDiagnostics = () => {
+				if (diagnosticsLogged) return
+				diagnosticsLogged = true
+				void logShellEnvironmentDiagnostics(diagnosticsPath)
+			}
+			process.once("completed", logDiagnostics)
+			process.once("error", logDiagnostics)
+		}
 		terminalInfo.lastCommand = command
 		const activityId = `command_${options?.commandTs ?? Date.now()}_${this.nextActivityNumber++}`
 		const cancellationOwner: CommandCancellationOwner = options?.startInBackground ? "explicit" : "task"
 		let activityLineCount = 0
 		let timedOut = false
 		this.processes.set(activityId, process)
+		this.commandsByActivityId.set(activityId, command)
 		if (options?.functionId) {
 			this.activityIdsByFunctionId.set(options.functionId, activityId)
 			this.functionIdsByActivityId.set(activityId, options.functionId)
@@ -176,12 +246,18 @@ export class CommandExecutor {
 		if (options?.commandTs) {
 			const messages = this.callbacks.getClineMessages() as Array<{ ts?: number }>
 			const commandIndex = messages.findIndex((message) => message.ts === options.commandTs)
-			if (commandIndex !== -1) await this.callbacks.updateClineMessage(commandIndex, { activityId })
+			if (commandIndex !== -1) {
+				await this.callbacks.updateClineMessage(commandIndex, {
+					activityId,
+					commandExecutionMode: executionMode,
+				})
+			}
 		}
 		this.callbacks.createCommandActivity?.({
 			activityId,
 			command,
-			executionMode: options?.startInBackground ? "background" : "foreground",
+			timeoutSeconds,
+			executionMode,
 			cancellationOwner,
 			cancel: async () => {
 				await this.cancelCommand(activityId)
@@ -208,6 +284,7 @@ export class CommandExecutor {
 				this.activityIdsByFunctionId.delete(functionId)
 			}
 			this.cancellationOwners.delete(activityId)
+			this.commandsByActivityId.delete(activityId)
 		}
 		process.once("completed", clearCurrentProcess)
 		process.once("error", clearCurrentProcess)
@@ -291,6 +368,7 @@ export class CommandExecutor {
 					{
 						origin: options?.startInBackground ? "explicit_background" : "foreground",
 						cancellationOwner,
+						functionId: options?.functionId,
 						...timing,
 					},
 					{
@@ -322,6 +400,13 @@ export class CommandExecutor {
 					lineCount: activityLineCount,
 					logPath: backgroundCommand.logFilePath,
 				})
+				if (options?.commandTs) {
+					const messages = this.callbacks.getClineMessages() as Array<{ ts?: number }>
+					const commandIndex = messages.findIndex((message) => message.ts === options.commandTs)
+					if (commandIndex !== -1) {
+						void this.callbacks.updateClineMessage(commandIndex, { commandExecutionMode: "background" })
+					}
+				}
 				return {
 					backgroundCommandId: backgroundCommand.id,
 					logFilePath: backgroundCommand.logFilePath,
@@ -372,9 +457,15 @@ export class CommandExecutor {
 	}
 
 	/** Cancel one running command by the canonical execute_command function identity. */
-	async cancelCommandByFunctionId(functionId: string): Promise<boolean> {
+	async cancelCommandByFunctionId(functionId: string): Promise<CommandCancellationResult> {
 		const activityId = this.activityIdsByFunctionId.get(functionId)
-		return activityId ? this.cancelCommand(activityId) : false
+		if (!activityId) return { cancelled: false }
+		const command = this.commandsByActivityId.get(activityId)
+		return {
+			cancelled: await this.cancelCommand(activityId),
+			activityId,
+			command,
+		}
 	}
 
 	/** Mark one cancellation request exactly once across every command control surface. */
@@ -514,6 +605,11 @@ export class CommandExecutor {
 	 */
 	markBackgroundCommandsConsumed(ids: string[]): void {
 		this.standaloneManager.markBackgroundCommandsConsumed(ids)
+	}
+
+	/** Advance output baselines after their Environment metadata reaches the model. */
+	markBackgroundCommandOutputSent(snapshots: readonly { id: string; lineCount: number }[]): void {
+		this.standaloneManager.markBackgroundCommandOutputSent(snapshots)
 	}
 
 	/**

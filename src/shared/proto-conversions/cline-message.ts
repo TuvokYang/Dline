@@ -241,6 +241,7 @@ export function convertClineMessageToProto(message: AppClineMessage): ProtoCline
 		commandTs: message.commandTs ?? 0,
 		activityId: message.activityId ?? "",
 		interactionId: message.interactionId ?? "",
+		commandExecutionMode: message.commandExecutionMode ?? "",
 	}
 
 	return protoMessage
@@ -325,6 +326,9 @@ export function convertProtoToClineMessage(protoMessage: ProtoClineMessage): App
 	}
 	if (protoMessage.interactionId !== "") {
 		message.interactionId = protoMessage.interactionId
+	}
+	if (protoMessage.commandExecutionMode !== "") {
+		message.commandExecutionMode = protoMessage.commandExecutionMode as AppClineMessage["commandExecutionMode"]
 	}
 
 	return message

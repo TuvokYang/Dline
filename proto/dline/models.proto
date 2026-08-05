@@ -92,6 +92,7 @@ message ModelInfo {
   repeated dline.models.ApiFormat api_formats = 6;
   optional double temperature = 7;
   optional string system_role = 8;
+  optional bool user_defined = 9;
 }
 
 /** Complete provider definition: metadata + model list. */

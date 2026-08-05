@@ -13,9 +13,9 @@ import { buildExternalBasicHeaders } from "@/services/EnvUtils"
 import { OcaModelInfo } from "@/shared/api"
 import { ClineStorageMessage } from "@/shared/messages/content"
 import { fetch } from "@/shared/net"
-import { ApiFormat } from "@/shared/proto/dline/models/metadata"
+import { ApiFormat, ServerTool } from "@/shared/proto/dline/models/metadata"
 import { Logger } from "@/shared/services/Logger"
-import { ApiHandler, type ApiHandlerContext } from ".."
+import { ApiHandler, type ApiHandlerContext, type ApiRequestOptions } from ".."
 import { withRetry } from "../retry"
 import { sanitizeAnthropicMessages } from "../transform/anthropic-format"
 import { convertToOpenAiMessages } from "../transform/openai-format"
@@ -239,13 +239,25 @@ export class OcaHandler implements ApiHandler {
 		return totalCost
 	}
 
+	supportsServerTool(tool: ServerTool): boolean {
+		const apiFormat = this.modelInfo?.apiFormats?.[0]
+		return (
+			tool === ServerTool.WEB_SEARCH && (apiFormat === ApiFormat.OPENAI_RESPONSES || apiFormat === ApiFormat.ANTHROPIC_CHAT)
+		)
+	}
+
 	@withRetry()
-	async *createMessage(systemPrompt: string, messages: ClineStorageMessage[], tools?: OpenAITool[]): ApiStream {
+	async *createMessage(
+		systemPrompt: string,
+		messages: ClineStorageMessage[],
+		tools?: OpenAITool[],
+		options?: ApiRequestOptions,
+	): ApiStream {
 		const apiFormat = this.modelInfo?.apiFormats?.[0]
 		if (apiFormat === ApiFormat.OPENAI_RESPONSES) {
-			yield* this.createMessageResponsesApi(systemPrompt, messages, tools)
+			yield* this.createMessageResponsesApi(systemPrompt, messages, tools, options)
 		} else if (apiFormat === ApiFormat.ANTHROPIC_CHAT) {
-			yield* this.createMessageMessagesApi(systemPrompt, messages, tools)
+			yield* this.createMessageMessagesApi(systemPrompt, messages, tools, options)
 		} else {
 			yield* this.createMessageChatApi(systemPrompt, messages, tools)
 		}
@@ -390,15 +402,22 @@ export class OcaHandler implements ApiHandler {
 		}
 	}
 
-	async *createMessageResponsesApi(systemPrompt: string, messages: ClineStorageMessage[], tools?: OpenAITool[]): ApiStream {
+	async *createMessageResponsesApi(
+		systemPrompt: string,
+		messages: ClineStorageMessage[],
+		tools?: OpenAITool[],
+		options?: ApiRequestOptions,
+	): ApiStream {
 		const client = this.ensureOpenAIClient()
 		const inputMessages = convertToOpenAIResponsesInput(messages, { usePreviousResponseId: false }).input
 		// Convert messages to Responses API input format
 		const input: OpenAI.Responses.ResponseInputItem[] = [{ role: "system", content: systemPrompt }, ...inputMessages]
 
 		// Convert ChatCompletion tools to Responses API format if provided
-		const responseTools = tools
-			?.filter((tool) => tool?.type === "function")
+		const hostedWebSearch = options?.serverTools?.includes(ServerTool.WEB_SEARCH) === true
+		const responseTools: OpenAI.Responses.Tool[] = (tools ?? [])
+			.filter((tool) => tool?.type === "function")
+			.filter((tool) => !hostedWebSearch || tool.function.name !== "web_search")
 			.map((tool: any) => ({
 				type: "function" as const,
 				name: tool.function.name,
@@ -406,6 +425,9 @@ export class OcaHandler implements ApiHandler {
 				parameters: tool.function.parameters,
 				strict: tool.function.strict ?? true, // Responses API defaults to strict mode
 			}))
+		if (hostedWebSearch) {
+			responseTools.push({ type: "web_search" })
+		}
 
 		let temperature: number | undefined = this.modelInfo?.temperature ?? 0
 		const maxOutputTokens: number | undefined = this.modelInfo?.capabilities?.maxTokens
@@ -424,7 +446,7 @@ export class OcaHandler implements ApiHandler {
 			model: this.modelId || liteLlmDefaultModelId,
 			input,
 			stream: true,
-			tools: responseTools,
+			tools: responseTools.length > 0 ? responseTools : undefined,
 			...(typeof temperature === "number" ? { temperature } : {}),
 			...(typeof maxOutputTokens === "number" && maxOutputTokens > 0 ? { max_output_tokens: maxOutputTokens } : {}),
 		}
@@ -439,7 +461,12 @@ export class OcaHandler implements ApiHandler {
 		yield* handleResponsesApiStreamResponse(stream, ocaModelInfo, this.calculateCost.bind(this))
 	}
 
-	async *createMessageMessagesApi(systemPrompt: string, messages: ClineStorageMessage[], tools?: OpenAITool[]): ApiStream {
+	async *createMessageMessagesApi(
+		systemPrompt: string,
+		messages: ClineStorageMessage[],
+		tools?: OpenAITool[],
+		options?: ApiRequestOptions,
+	): ApiStream {
 		const client = this.ensureAnthropicClient()
 
 		const modelId = this.modelId || liteLlmDefaultModelId
@@ -454,7 +481,7 @@ export class OcaHandler implements ApiHandler {
 			temperature = 0
 		}
 
-		const anthropicTools = convertOpenAIToolsToAnthropicTools(tools)
+		const anthropicTools = convertOpenAIToolsToAnthropicTools(tools, options?.serverTools)
 		const anthropicMessages = sanitizeAnthropicMessages(messages, this.modelInfo?.capabilities?.supportsPromptCache ?? false)
 
 		const stream = await client.messages.create({

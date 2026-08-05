@@ -4,7 +4,7 @@
  * the StandaloneTerminalManager used in CLI/JetBrains environments.
  */
 
-import type { CommandStatus, SubagentInjectionState } from "@shared/ExtensionMessage"
+import type { CommandExecutionMode, CommandStatus, SubagentInjectionState } from "@shared/ExtensionMessage"
 import type { ClineToolResponseContent } from "@shared/messages"
 import type { EventEmitter } from "events"
 
@@ -235,6 +235,9 @@ export interface ITerminalManager {
 	/** Apply one complete runtime configuration snapshot. */
 	configure(configuration: TerminalManagerConfiguration): TerminalManagerConfigurationResult
 
+	/** Close idle terminals so profile startup can run again; busy terminals are preserved. */
+	reinitializeTerminals?(): TerminalManagerConfigurationResult
+
 	/** Return the currently applied immutable configuration snapshot. */
 	getConfiguration(): TerminalManagerConfiguration
 
@@ -266,6 +269,10 @@ export interface StandaloneTerminalOptions {
 export interface TerminalLaunchConfiguration {
 	readonly environment?: Readonly<Record<string, string | null>>
 	readonly configurationId?: string
+	/** Hidden command used to initialize a newly-created persistent terminal. */
+	readonly initializationCommand?: string
+	/** Internal diagnostics file populated only when terminal initialization fails. */
+	readonly initializationDiagnosticsPath?: string
 }
 
 // =============================================================================
@@ -283,6 +290,8 @@ export type CommandCancellationOwner = "explicit" | "task"
 export interface BackgroundCommand {
 	/** Unique identifier for the background command */
 	id: string
+	/** Canonical function identity of the execute_command tool call. */
+	functionId?: string
 	/** The command string being executed */
 	command: string
 	/** Timestamp when the command started */
@@ -299,6 +308,8 @@ export interface BackgroundCommand {
 	logFilePath?: string
 	/** Number of output lines captured in the log. */
 	lineCount: number
+	/** Output line count represented in the most recent successful API request. */
+	lastApiSentLineCount?: number
 	/** Exit code if the command completed or errored */
 	exitCode?: number
 	/** Context injection lifecycle state for background command visibility */
@@ -376,7 +387,14 @@ export interface CommandExecutorCallbacks {
 	 */
 	updateClineMessage: (
 		index: number,
-		updates: { text?: string; exitCode?: number; commandStatus?: CommandStatus; logPath?: string; activityId?: string },
+		updates: {
+			text?: string
+			exitCode?: number
+			commandStatus?: CommandStatus
+			commandExecutionMode?: CommandExecutionMode
+			logPath?: string
+			activityId?: string
+		},
 	) => Promise<void>
 	/** Get cline messages array */
 	getClineMessages: () => Array<{ ask?: string; say?: string; text?: string }>
@@ -388,6 +406,7 @@ export interface CommandExecutorCallbacks {
 	createCommandActivity?: (input: {
 		activityId: string
 		command: string
+		timeoutSeconds?: number
 		executionMode: "foreground" | "background"
 		cancellationOwner: CommandCancellationOwner
 		cancel: () => void | Promise<void>
@@ -432,6 +451,13 @@ export interface CommandExecutionOptions {
 	suppressUserInteraction?: boolean
 	/** ts of the command message, passed from handler to associate outputs */
 	commandTs?: number
+}
+
+/** Result of cancelling the command owned by one execute_command function call. */
+export interface CommandCancellationResult {
+	cancelled: boolean
+	activityId?: string
+	command?: string
 }
 
 /**

@@ -4,6 +4,7 @@ import { ChevronDownIcon, ChevronRightIcon } from "lucide-react"
 import type { ApiProfile } from "./ProviderProfile"
 import ApiProfileEditor from "./ProviderProfileEditor"
 import { getCachedProviderDefaultModelId, useProviderModels } from "./useProviderModels"
+import { WebSearchModeControl } from "./WebSearchModeControl"
 
 interface ApiProfileCardProps {
 	profile: ApiProfile
@@ -210,6 +211,13 @@ const ApiProfileCard: React.FC<ApiProfileCardProps> = ({
 							))}
 						</select>
 					</div>
+
+					{hasProvider && (
+						<WebSearchModeControl
+							onChange={(webSearchMode) => onUpdate({ webSearchMode })}
+							value={profile.webSearchMode}
+						/>
+					)}
 
 					{/* usedFor checkboxes */}
 					<div className="flex items-center gap-3 mb-2">

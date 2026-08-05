@@ -1,4 +1,4 @@
-import type { ChatInputSendShortcut } from "@shared/ChatInputSendShortcut"
+import { type ChatInputSendShortcut, getChatInputSendShortcutLabel } from "@shared/ChatInputSendShortcut"
 import { describe, expect, it } from "vitest"
 import { type ChatInputKeyEvent, shouldSendChatInput } from "../chat-input-shortcut"
 
@@ -41,5 +41,19 @@ describe("shouldSendChatInput", () => {
 		expect(shouldSendChatInput(enterEvent({ key: "a" }), "enter", false)).toBe(false)
 		expect(shouldSendChatInput(enterEvent({ altKey: true }), "enter", false)).toBe(false)
 		expect(shouldSendChatInput(enterEvent({ metaKey: true }), "enter", false)).toBe(false)
+	})
+})
+
+describe("chat input send shortcut labels", () => {
+	it.each([
+		["enter", "Enter"],
+		["ctrlEnter", "Ctrl + Enter"],
+		["shiftEnter", "Shift + Enter"],
+	] as const)("renders the %s label", (shortcut, label) => {
+		expect(getChatInputSendShortcutLabel(shortcut)).toBe(label)
+	})
+
+	it("defaults to Enter when the setting is missing", () => {
+		expect(getChatInputSendShortcutLabel()).toBe("Enter")
 	})
 })

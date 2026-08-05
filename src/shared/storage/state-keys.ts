@@ -1,5 +1,11 @@
 import { AutoApprovalSettings, DEFAULT_AUTO_APPROVAL_SETTINGS } from "@shared/AutoApprovalSettings"
 import { ApiProvider, ModelInfo, type OcaModelInfo } from "@shared/api"
+import {
+	DEFAULT_AUTO_CONDENSE_MAX_CONTEXT_TOKENS,
+	DEFAULT_AUTO_CONDENSE_TRIGGER_PERCENT,
+	normalizeAutoCondenseMaxContextTokens,
+	normalizeAutoCondenseTriggerPercent,
+} from "@shared/auto-condense"
 import { BrowserSettings, DEFAULT_BROWSER_SETTINGS } from "@shared/BrowserSettings"
 import { type ChatInputSendShortcut, DEFAULT_CHAT_INPUT_SEND_SHORTCUT } from "@shared/ChatInputSendShortcut"
 import { ClineRulesToggles } from "@shared/cline-rules"
@@ -124,6 +130,14 @@ const USER_SETTINGS_FIELDS = {
 	yoloModeToggled: { default: false as boolean },
 	autoApproveAllToggled: { default: false as boolean },
 	useAutoCondense: { default: false as boolean },
+	autoCondenseTriggerPercent: {
+		default: DEFAULT_AUTO_CONDENSE_TRIGGER_PERCENT as number,
+		transform: normalizeAutoCondenseTriggerPercent,
+	},
+	autoCondenseMaxContextTokens: {
+		default: DEFAULT_AUTO_CONDENSE_MAX_CONTEXT_TOKENS as number,
+		transform: normalizeAutoCondenseMaxContextTokens,
+	},
 	subagentsEnabled: { default: true as boolean },
 	clineWebToolsEnabled: { default: true as boolean },
 	worktreesEnabled: { default: false as boolean },

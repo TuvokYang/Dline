@@ -178,6 +178,37 @@ describe("ToolExecutor durable tool results", () => {
 		expect(canonical.content[1].text).toContain("keep the public API stable")
 	})
 
+	it("replaces an interrupted result with restored structured completion feedback", async () => {
+		const { executor, say, userMessageContent } = createHarness()
+		const block = createBlock(ClineDefaultTool.ATTEMPT, { result: "completed" })
+		userMessageContent.push({
+			type: "tool_result",
+			function_id: block.function_id,
+			dline_tid: block.dline_tid,
+			content: [{ type: "text", text: "Tool 'attempt_completion' was interrupted before a durable result." }],
+			is_error: true,
+		})
+
+		await executor.commitRestoredToolResult(
+			[{ type: "text", text: "The user provided restored completion feedback." }],
+			block,
+		)
+
+		expect(userMessageContent).toHaveLength(1)
+		expect(userMessageContent[0]).toMatchObject({
+			function_id: block.function_id,
+			dline_tid: block.dline_tid,
+			content: [{ type: "text", text: "The user provided restored completion feedback." }],
+		})
+		expect(userMessageContent[0].is_error).not.toBe(true)
+		expect(JSON.parse(partialResultRows(say).at(-1) ?? "null")).toMatchObject({
+			function_id: block.function_id,
+			dline_tid: block.dline_tid,
+			content: [{ type: "text", text: "The user provided restored completion feedback." }],
+			is_error: null,
+		})
+	})
+
 	it.each([
 		["a rejected native tool", { rejected: true }, ClineDefaultTool.FILE_READ],
 		["a strict-plan rejection", { strictPlan: true }, ClineDefaultTool.FILE_NEW],

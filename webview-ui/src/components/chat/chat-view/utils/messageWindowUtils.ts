@@ -17,7 +17,6 @@ export interface MergeMessageWindowResult {
 
 export interface BottomFollowInput {
 	disableAutoScroll: boolean
-	isAtBottom: boolean
 	absoluteBottomLoaded: boolean
 	lastMessageTsChanged: boolean
 	lastMessageContentChanged: boolean
@@ -144,10 +143,6 @@ export function getBottomFollowIntent(input: BottomFollowInput): BottomFollowInt
 	}
 
 	if (!input.absoluteBottomLoaded) {
-		return "none"
-	}
-
-	if (!input.isAtBottom) {
 		return "none"
 	}
 

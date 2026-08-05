@@ -6,6 +6,7 @@ export const WINDOWS_POWERSHELL_LEGACY_PATH = "C:\\Windows\\System32\\WindowsPow
 
 const SHELL_PATHS = {
 	// Windows paths
+	POWERSHELL: "powershell",
 	POWERSHELL_7: WINDOWS_POWERSHELL_7_PATH,
 	POWERSHELL_LEGACY: WINDOWS_POWERSHELL_LEGACY_PATH,
 	CMD: "C:\\Windows\\System32\\cmd.exe",
@@ -281,8 +282,9 @@ export function getShellForProfile(profileId: string): string {
 	// Dline's Windows default is PowerShell. Command Prompt remains available
 	// through the explicit "cmd" profile.
 	if (profileId === "default") {
-		return process.platform === "win32" ? SHELL_PATHS.POWERSHELL_LEGACY : getShell()
+		return process.platform === "win32" ? SHELL_PATHS.POWERSHELL : getShell()
 	}
+	if (process.platform === "win32" && profileId === "powershell") return SHELL_PATHS.POWERSHELL
 
 	// Find the profile
 	const profiles = getAvailableTerminalProfiles()
@@ -294,6 +296,13 @@ export function getShellForProfile(profileId: string): string {
 
 	// Fallback to default shell if profile not found
 	return getShell()
+}
+
+/** Resolve the synthetic default profile to the concrete shell profile it represents. */
+export function resolveTerminalProfileId(profileId: string, platform: NodeJS.Platform = process.platform): string {
+	if (profileId !== "default") return profileId
+	if (platform === "win32") return "powershell"
+	return platform === "darwin" ? "zsh" : "bash"
 }
 
 // -----------------------------------------------------

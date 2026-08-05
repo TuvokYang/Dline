@@ -315,7 +315,11 @@
           },
           "timeout": {
             "type": "integer",
-            "description": "Optional positive integer timeout in seconds. This is the command's absolute maximum runtime from actual process start; reaching it terminates the process. If omitted, default is 1800 seconds. By default, a command still running at the 10-second background handoff continues as the same tracked background process without resetting this timeout."
+            "description": "Optional integer timeout in seconds. Use a positive integer as the command's absolute maximum runtime from actual process start; reaching it terminates the process. Set to zero or a negative integer to allow the command to run indefinitely without a deadline; it remains cancellable. If omitted, default is 1800 seconds. By default, a command still running at the 10-second background handoff continues as the same tracked background process without resetting this timeout."
+          },
+          "mute_stdout": {
+            "type": "boolean",
+            "description": "Optional boolean. Set true only when you are certain the command's stdout is not needed for any later reasoning or action. After a successful exit, Dline omits stdout from the tool result returned to you and returns only the successful exit status, which can save context tokens. On failure, Dline still returns captured diagnostics and the error code. The user interface, Activities, and command logs retain the full output. If you are unsure whether stdout is needed, omit this parameter or set false."
           }
         },
         "required": [
