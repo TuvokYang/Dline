@@ -49,6 +49,8 @@ function createMessageBoundary() {
 			},
 			upsertClineMessageInMemory: async (message: ClineMessage) => message,
 			finalizeClineMessage: async (message: ClineMessage) => message,
+			flushMessageUpdate: async () => {},
+			flushUiMessages: async () => {},
 		} as unknown as MessageStateHandler,
 		taskState,
 		getProviderInfo: () => ({ providerId: "test", modelId: "test-model", mode: "act" }),
@@ -211,7 +213,13 @@ describe("dispatchInteraction after live Cancel", () => {
 					taskState.abort = false
 				},
 				appendSay: async (effect) => {
-					await channel.say(effect.taskSay, effect.presentation, effect.images, effect.files)
+					await channel.presentSay(
+						effect.taskSay,
+						effect.presentation,
+						effect.images,
+						effect.files,
+						effect.interactionId,
+					)
 				},
 			},
 		)
@@ -345,7 +353,13 @@ describe("dispatchInteraction after live Cancel", () => {
 					taskState.abort = false
 				},
 				appendSay: async (effect) => {
-					await channel.say(effect.taskSay, effect.presentation, effect.images, effect.files)
+					await channel.presentSay(
+						effect.taskSay,
+						effect.presentation,
+						effect.images,
+						effect.files,
+						effect.interactionId,
+					)
 				},
 			},
 		)
@@ -395,7 +409,13 @@ describe("dispatchInteraction after live Cancel", () => {
 					taskState.abort = false
 				},
 				appendSay: async (effect) => {
-					await channel.say(effect.taskSay, effect.presentation, effect.images, effect.files)
+					await channel.presentSay(
+						effect.taskSay,
+						effect.presentation,
+						effect.images,
+						effect.files,
+						effect.interactionId,
+					)
 				},
 			},
 		)

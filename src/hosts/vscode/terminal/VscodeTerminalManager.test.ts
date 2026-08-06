@@ -1,4 +1,3 @@
-import { WINDOWS_POWERSHELL_LEGACY_PATH } from "@utils/shell"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import * as vscode from "vscode"
 import { VscodeTerminalManager } from "./VscodeTerminalManager"
@@ -30,8 +29,15 @@ describe("VscodeTerminalManager Windows shell selection", () => {
 		const terminal = await manager.getOrCreateTerminal("C:\\workspace")
 		const vscodeTerminal = terminal.terminal as unknown as vscode.Terminal
 
-		expect(terminal.shellPath).toBe(WINDOWS_POWERSHELL_LEGACY_PATH)
-		expect((vscodeTerminal.creationOptions as vscode.TerminalOptions).shellPath).toBe(WINDOWS_POWERSHELL_LEGACY_PATH)
+		// The default Windows profile resolves to the "powershell" shell name; VS Code
+		// resolves the concrete executable path from the user's registered profiles.
+		// A terminal is only reused when its registered shellPath matches the current
+		// profile, so the recorded path must stay stable across creation and reuse.
+		const recordedShellPath = terminal.shellPath
+		expect(recordedShellPath).toBe("powershell")
+		const reused = await manager.getOrCreateTerminal("C:\\workspace")
+		expect(reused.shellPath).toBe(recordedShellPath)
+		expect((vscodeTerminal.creationOptions as vscode.TerminalOptions).shellPath).toBe("powershell")
 		manager.disposeAll()
 	})
 

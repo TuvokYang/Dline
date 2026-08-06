@@ -36,9 +36,14 @@ describe("parseCommandExecutionOptions", () => {
 		})
 	})
 
-	it("preserves -1 as no timeout and leaves other invalid values unset", () => {
-		assert.equal(parseCommandExecutionOptions("echo ready", undefined, "-1").timeoutSeconds, -1)
-		for (const timeout of ["invalid", "0", "-2", "2.5"]) {
+	it("preserves any non-positive integer as an explicit no-timeout request", () => {
+		for (const timeout of ["-1", "0", "-2"]) {
+			assert.equal(parseCommandExecutionOptions("echo ready", undefined, timeout).timeoutSeconds, Number(timeout))
+		}
+	})
+
+	it("leaves omitted and non-integer values for the runtime setting", () => {
+		for (const timeout of [undefined, "invalid", "2.5"]) {
 			assert.equal(parseCommandExecutionOptions("echo ready", undefined, timeout).timeoutSeconds, undefined)
 		}
 	})

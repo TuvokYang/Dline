@@ -122,6 +122,7 @@ describe("Task cancellation concurrency", () => {
 					return "Tool execution cancelled by PreToolUse hook"
 				},
 			},
+			getTaskCapabilityToggles: () => ({}),
 			identityFactory: {},
 			activityStore: {},
 			focusChainForceUpdate: noop,

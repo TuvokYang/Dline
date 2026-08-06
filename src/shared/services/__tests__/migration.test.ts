@@ -10,8 +10,16 @@ describe("Cline to Dline migration", () => {
 	let homeDir: string
 	let documentsDir: string
 	let dlineDocumentsDir: string
+	let previousDlineHomeDir: string | undefined
+	let previousDlineDocsDir: string | undefined
 
 	beforeEach(() => {
+		// The isolated vitest backend environment injects DLINE_HOME_DIR/DLINE_DOCS_DIR,
+		// which makes migration skip by design. Clear them so the explicit options are honored.
+		previousDlineHomeDir = process.env.DLINE_HOME_DIR
+		previousDlineDocsDir = process.env.DLINE_DOCS_DIR
+		delete process.env.DLINE_HOME_DIR
+		delete process.env.DLINE_DOCS_DIR
 		tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "cline-dline-migration-"))
 		homeDir = path.join(tempDir, "home")
 		documentsDir = path.join(tempDir, "Documents")
@@ -22,6 +30,16 @@ describe("Cline to Dline migration", () => {
 
 	afterEach(() => {
 		fs.rmSync(tempDir, { recursive: true, force: true })
+		if (previousDlineHomeDir === undefined) {
+			delete process.env.DLINE_HOME_DIR
+		} else {
+			process.env.DLINE_HOME_DIR = previousDlineHomeDir
+		}
+		if (previousDlineDocsDir === undefined) {
+			delete process.env.DLINE_DOCS_DIR
+		} else {
+			process.env.DLINE_DOCS_DIR = previousDlineDocsDir
+		}
 	})
 
 	it("migrates a legacy directory only when the target is empty", async () => {
