@@ -110,7 +110,7 @@ import { convertClineMessageToProto } from "@shared/proto-conversions/cline-mess
 import { PROFILE_PROVIDER_KEYS } from "@shared/providers/profile-model-info"
 import { resolvePromptProfile } from "@shared/resolve-prompt-profile"
 import type { Mode } from "@shared/storage/types"
-import { DEFAULT_TERMINAL_COMMAND_TIMEOUT_SECONDS } from "@shared/terminal-settings"
+import { DEFAULT_TERMINAL_COMMAND_HANDOFF_SECONDS, DEFAULT_TERMINAL_COMMAND_TIMEOUT_SECONDS } from "@shared/terminal-settings"
 import { ClineDefaultTool, CONVERSATIONAL_TOOL_NAMES, READ_ONLY_TOOLS } from "@shared/tools"
 import { ClineAskResponse } from "@shared/WebviewMessage"
 import { isLocalModel, isNativeToolCallingConfig, isNextGenModelFamily, isParallelToolCallingEnabled } from "@utils/model-utils"
@@ -875,6 +875,9 @@ export class Task {
 			workspaceRoots: this.workspaceManager?.getRoots().map((root) => root.path) ?? [this.cwd],
 			terminalConfiguration,
 			terminalExecutionMode: this.terminalExecutionMode,
+			terminalCommandHandoffSeconds:
+				this.stateManager.getGlobalSettingsKey("terminalCommandHandoffSeconds") ??
+				DEFAULT_TERMINAL_COMMAND_HANDOFF_SECONDS,
 			terminalManager: this.terminalManager,
 			taskId: this.taskId,
 			ulid: this.ulid,
@@ -2818,6 +2821,11 @@ export class Task {
 	 */
 	public async cancelBackgroundCommand(): Promise<boolean> {
 		return this.commandExecutor.cancelBackgroundCommand()
+	}
+
+	/** Request that a synchronous foreground command be handed off to background tracking. */
+	public async moveCommandToBackground(activityId: string): Promise<boolean> {
+		return this.commandExecutor.requestBackgroundHandoff(activityId)
 	}
 
 	/** Apply one complete terminal configuration to all task-owned terminal managers. */

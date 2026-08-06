@@ -213,13 +213,15 @@ describe("dispatchInteraction after live Cancel", () => {
 					taskState.abort = false
 				},
 				appendSay: async (effect) => {
-					await channel.presentSay(
-						effect.taskSay,
-						effect.presentation,
-						effect.images,
-						effect.files,
-						effect.interactionId,
-					)
+					if (effect.interactionId) {
+						await channel.presentSay(
+							effect.taskSay,
+							effect.presentation,
+							effect.images,
+							effect.files,
+							effect.interactionId,
+						)
+					}
 				},
 			},
 		)
@@ -353,13 +355,15 @@ describe("dispatchInteraction after live Cancel", () => {
 					taskState.abort = false
 				},
 				appendSay: async (effect) => {
-					await channel.presentSay(
-						effect.taskSay,
-						effect.presentation,
-						effect.images,
-						effect.files,
-						effect.interactionId,
-					)
+					if (effect.interactionId) {
+						await channel.presentSay(
+							effect.taskSay,
+							effect.presentation,
+							effect.images,
+							effect.files,
+							effect.interactionId,
+						)
+					}
 				},
 			},
 		)
@@ -409,13 +413,15 @@ describe("dispatchInteraction after live Cancel", () => {
 					taskState.abort = false
 				},
 				appendSay: async (effect) => {
-					await channel.presentSay(
-						effect.taskSay,
-						effect.presentation,
-						effect.images,
-						effect.files,
-						effect.interactionId,
-					)
+					if (effect.interactionId) {
+						await channel.presentSay(
+							effect.taskSay,
+							effect.presentation,
+							effect.images,
+							effect.files,
+							effect.interactionId,
+						)
+					}
 				},
 			},
 		)

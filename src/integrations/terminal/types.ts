@@ -394,6 +394,7 @@ export interface CommandExecutorCallbacks {
 			commandExecutionMode?: CommandExecutionMode
 			logPath?: string
 			activityId?: string
+			commandCanMoveToBackground?: boolean
 		},
 	) => Promise<void>
 	/** Get cline messages array */
@@ -472,6 +473,8 @@ export interface CommandExecutorConfig {
 	ulid: string
 	/** Terminal execution mode */
 	terminalExecutionMode: "vscodeTerminal" | "backgroundExec"
+	/** Foreground-to-background wait before automatic handoff, in seconds. Defaults to 10. */
+	terminalCommandHandoffSeconds?: number
 	/** The primary terminal manager (VSCode or Standalone) */
 	terminalManager: ITerminalManager
 	/** Workspace roots allowed to contribute project shell environment configuration. */
@@ -505,6 +508,12 @@ export interface OrchestrationOptions {
 	deadlineAt?: number
 	/** Disable the automatic foreground-to-background handoff. */
 	synchronous?: boolean
+	/** Foreground-to-background wait before automatic handoff, in seconds. Defaults to 10. */
+	handoffSeconds?: number
+	/** Called once the handoff wait elapsed while a synchronous command stays in the foreground. */
+	onHandoffAvailable?: () => void
+	/** External request to move the running command to background; resolve() triggers the handoff. */
+	handoffRequest?: { promise: Promise<void>; resolve: () => void }
 	/** Called once when the absolute command deadline is reached. */
 	onTimeout?: () => void
 	/** Callback to track output lines for background command tracking */

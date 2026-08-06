@@ -26,7 +26,6 @@ import {
 	CHUNK_BYTE_SIZE,
 	CHUNK_DEBOUNCE_MS,
 	CHUNK_LINE_COUNT,
-	COMMAND_BACKGROUND_HANDOFF_MS,
 	COMPLETION_TIMEOUT_MS,
 	DEFAULT_TERMINAL_OUTPUT_LINE_LIMIT,
 	MAX_BYTES_BEFORE_FILE,
@@ -63,6 +62,9 @@ export async function orchestrateCommandExecution(
 		startedAt: configuredStartedAt,
 		deadlineAt: configuredDeadlineAt,
 		synchronous = false,
+		handoffSeconds = 10,
+		onHandoffAvailable,
+		handoffRequest,
 		onTimeout,
 		onOutputLine,
 		showShellIntegrationSuggestion,
@@ -492,7 +494,7 @@ export async function orchestrateCommandExecution(
 		const logMessage = trackingResult?.logFilePath ? `Log file: ${trackingResult.logFilePath}\n` : ""
 		const resultPrefix =
 			reason === "automatic"
-				? "Command is still running after 10 seconds and is now tracked in the background."
+				? `Command is still running after ${handoffSeconds} seconds and is now tracked in the background.`
 				: "Command is running in the background. You can proceed with other tasks."
 
 		backgroundTrackingResult = {
@@ -655,26 +657,36 @@ export async function orchestrateCommandExecution(
 		}
 	}
 
-	// Wait for completion, the automatic handoff, or the one absolute kill deadline.
+	// Wait for completion, the automatic handoff, the one absolute kill deadline,
+	// or an external request to move a synchronous command to the background.
 	if (!didCancelViaUi) {
-		if (!hasFiniteTimeout && (synchronous || !onProceedWhileRunning)) {
+		const handoffMs = handoffSeconds * 1000
+		const canAutoHandoff = Boolean(!synchronous && onProceedWhileRunning)
+		const canManualHandoff = Boolean(synchronous && onProceedWhileRunning && onHandoffAvailable && handoffRequest)
+		if (!hasFiniteTimeout && !canAutoHandoff && !canManualHandoff) {
 			// Backward-compatible fallback for direct orchestrator callers.
 			await process
 		} else {
 			type ExecutionBoundary = "completed" | "handoff" | "timeout"
 			let handoffTimer: NodeJS.Timeout | undefined
+			let handoffAvailableTimer: NodeJS.Timeout | undefined
 			let deadlineTimer: NodeJS.Timeout | undefined
 			const boundaries: Promise<ExecutionBoundary>[] = [process.then(() => "completed" as const)]
 
-			if (!synchronous && onProceedWhileRunning) {
+			if (canAutoHandoff) {
 				boundaries.push(
 					new Promise((resolve) => {
-						handoffTimer = setTimeout(
-							() => resolve("handoff"),
-							Math.max(0, startedAt + COMMAND_BACKGROUND_HANDOFF_MS - Date.now()),
-						)
+						handoffTimer = setTimeout(() => resolve("handoff"), Math.max(0, startedAt + handoffMs - Date.now()))
 					}),
 				)
+			} else if (canManualHandoff) {
+				// Synchronous commands stay in the foreground; once the handoff wait
+				// elapsed, tell the UI a "Move to background" action is available and
+				// wait for the external request instead of handing off automatically.
+				handoffAvailableTimer = setTimeout(() => onHandoffAvailable?.(), Math.max(0, startedAt + handoffMs - Date.now()))
+				if (handoffRequest) {
+					boundaries.push(handoffRequest.promise.then(() => "handoff" as const))
+				}
 			}
 			if (deadlineAt !== undefined) {
 				boundaries.push(
@@ -687,7 +699,7 @@ export async function orchestrateCommandExecution(
 			try {
 				const boundary = await Promise.race(boundaries)
 				if (boundary === "handoff") {
-					const result = await transitionToBackground("automatic", true)
+					const result = await transitionToBackground(canAutoHandoff ? "automatic" : "user", true)
 					if (result) return result
 				}
 
@@ -723,6 +735,7 @@ export async function orchestrateCommandExecution(
 				}
 			} finally {
 				if (handoffTimer) clearTimeout(handoffTimer)
+				if (handoffAvailableTimer) clearTimeout(handoffAvailableTimer)
 				if (deadlineTimer) clearTimeout(deadlineTimer)
 			}
 		}
