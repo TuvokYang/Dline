@@ -21,44 +21,61 @@ import { ClineMessage } from "./ExtensionMessage"
 export function combineApiRequests(messages: ClineMessage[]): ClineMessage[] {
 	const combinedApiRequests: ClineMessage[] = []
 	// Index combined requests by message timestamp for O(1) lookup during the
-	// final mapping pass. The previous linear find() made the whole function
-	// O(N^2) once the conversation held thousands of API request pairs.
-	// Keep the FIRST combined entry for a duplicated ts to preserve old semantics.
+	// final mapping pass. Keep the FIRST combined entry for a duplicated ts to
+	// preserve old semantics.
 	const combinedByTs = new Map<number, ClineMessage>()
 
+	// Pre-scan finished positions so every started message can find its first
+	// following finished message in O(1) via a monotonic pointer. The original
+	// implementation rescaned forward from every started (O(N^2) once
+	// reasoning/text/tool messages interleave between the pair), which dominated
+	// buildState() in long conversations (901ms for a 22.7K-message real task).
+	// NOTE: this preserves the original pairing semantics exactly — a started
+	// message pairs with the FIRST finished after it, and the outer loop jumps
+	// past the consumed finished (skipping any interleaved started).
+	const finishedPositions: number[] = []
 	for (let i = 0; i < messages.length; i++) {
-		if (messages[i].type === "say" && messages[i].say === "api_req_started") {
-			const startedRequest = JSON.parse(messages[i].text || "{}")
-			let j = i + 1
-
-			while (j < messages.length) {
-				if (messages[j].type === "say" && messages[j].say === "api_req_finished") {
-					const finishedRequest = JSON.parse(messages[j].text || "{}")
-					const combinedRequest = {
-						...startedRequest,
-						...finishedRequest,
-					}
-
-					const combinedMessage = {
-						...messages[i],
-						text: JSON.stringify(combinedRequest),
-					}
-					combinedApiRequests.push(combinedMessage)
-					if (!combinedByTs.has(messages[i].ts)) {
-						combinedByTs.set(messages[i].ts, combinedMessage)
-					}
-
-					i = j // Skip to the api_req_finished message
-					break
-				}
-				j++
-			}
-
-			if (j === messages.length) {
-				// If no matching api_req_finished found, keep the original api_req_started
-				combinedApiRequests.push(messages[i])
-			}
+		if (messages[i].type === "say" && messages[i].say === "api_req_finished") {
+			finishedPositions.push(i)
 		}
+	}
+
+	let nextFinished = 0
+	for (let i = 0; i < messages.length; i++) {
+		const msg = messages[i]
+		if (msg.type !== "say" || msg.say !== "api_req_started") {
+			continue
+		}
+
+		// Advance past finished messages that precede this started message.
+		while (nextFinished < finishedPositions.length && finishedPositions[nextFinished] <= i) {
+			nextFinished++
+		}
+		if (nextFinished >= finishedPositions.length) {
+			// No matching api_req_finished found: keep the original api_req_started.
+			combinedApiRequests.push(msg)
+			continue
+		}
+
+		const finishedIndex = finishedPositions[nextFinished]!
+		const startedRequest = JSON.parse(msg.text || "{}")
+		const finishedRequest = JSON.parse(messages[finishedIndex]!.text || "{}")
+		const combinedMessage = {
+			...msg,
+			text: JSON.stringify({
+				...startedRequest,
+				...finishedRequest,
+			}),
+		}
+		combinedApiRequests.push(combinedMessage)
+		if (!combinedByTs.has(msg.ts)) {
+			combinedByTs.set(msg.ts, combinedMessage)
+		}
+
+		// Consume the finished message and skip past it (mirrors the original
+		// `i = j` jump; interleaved started messages are not paired).
+		nextFinished++
+		i = finishedIndex
 	}
 
 	// Replace original api_req_started and remove api_req_finished
