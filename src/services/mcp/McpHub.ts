@@ -67,6 +67,14 @@ export class McpHub {
 	private settingsServerConfigs: Record<string, McpServerConfig> = {}
 	private readonly workspaceMcpRegistry: WorkspaceMcpRegistry
 	private workspaceConnectionRefresh: Promise<void> = Promise.resolve()
+	/**
+	 * Serializes reconcile runs so concurrent triggers (file watcher, workspace
+	 * registration, RPC) cannot race each other. Without this, a second reconcile
+	 * arriving while connectToServer is in flight deletes the in-progress
+	 * connection and spawns a new process, producing the reconnect loop seen in
+	 * logs ("transport onclose" -> "spawning" every few seconds).
+	 */
+	private reconcileQueue: Promise<void> = Promise.resolve()
 	connections: McpConnection[] = []
 	isConnecting = false
 	/**
@@ -946,6 +954,15 @@ export class McpHub {
 	}
 
 	private async reconcileServerConnections(source: "rpc" | "internal"): Promise<void> {
+		const run = this.reconcileQueue.then(() => this.doReconcileServerConnections(source))
+		// Keep the chain alive even if one run fails.
+		this.reconcileQueue = run.catch((error) => {
+			Logger.error("[McpHub] reconcileServerConnections failed:", error)
+		})
+		await run
+	}
+
+	private async doReconcileServerConnections(source: "rpc" | "internal"): Promise<void> {
 		this.isConnecting = true
 		this.removeAllFileWatchers()
 		const newServers = this.getEffectiveServerConfigs()

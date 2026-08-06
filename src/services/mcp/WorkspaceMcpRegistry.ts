@@ -230,8 +230,12 @@ export class WorkspaceMcpRegistry {
 		for (const workspaceRoot of nextRoots) {
 			if (!previousRoots.has(workspaceRoot)) await this.acquireRoot(ownerId, workspaceRoot)
 		}
+		// Only notify when the root set actually changed. Every Controller (e.g. each
+		// panel opened from task history) calls registerOwner, and an unconditional
+		// notifyChange here triggered a full MCP reconnect cycle on every panel open.
+		const rootsChanged = previousRoots.size !== nextRoots.size || [...previousRoots].some((root) => !nextRoots.has(root))
 		this.owners.set(ownerId, nextRoots)
-		await this.notifyChange()
+		if (rootsChanged) await this.notifyChange()
 	}
 
 	async unregisterOwner(ownerId: string): Promise<void> {

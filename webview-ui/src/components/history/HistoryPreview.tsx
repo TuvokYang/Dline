@@ -195,6 +195,12 @@ const HistoryPreview = ({ showHistoryView }: HistoryPreviewProps) => {
 					.history-preview-item:hover .history-preview-btns {
 						opacity: 1;
 					}
+					.history-preview-list {
+						/* Fill 70vh of the Welcome page with RECENT task entries.
+						   No scrolling capability: the list just fills the height. */
+						height: 70vh;
+						overflow: hidden;
+					}
 					.history-preview-filters {
 						display: flex;
 						gap: 4px;
@@ -256,7 +262,7 @@ const HistoryPreview = ({ showHistoryView }: HistoryPreviewProps) => {
 				</div>
 			</div>
 
-			<div className="px-4">
+			<div className="px-4 history-preview-list">
 				{tasks.length > 0 ? (
 					tasks.map((item) => (
 						<div

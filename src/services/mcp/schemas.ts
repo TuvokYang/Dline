@@ -31,11 +31,13 @@ const createServerTypeSchema = () => {
 			.transform((data) => {
 				// Support both type and transportType fields
 				const finalType = data.type || (data.transportType === "stdio" ? "stdio" : undefined) || "stdio"
+				// Destructure to drop the legacy field entirely. Setting it to undefined
+				// keeps an own enumerable key in memory, which breaks deepEqual against
+				// round-tripped (JSON.stringify'd) configs and forces reconnect loops.
+				const { transportType: _legacyTransportType, ...rest } = data
 				return {
-					...data,
+					...rest,
 					type: finalType as "stdio",
-					// Remove the legacy field after transformation
-					transportType: undefined,
 				}
 			})
 			.refine((data) => data.type === "stdio", { message: TYPE_ERROR_MESSAGE }),
@@ -54,11 +56,10 @@ const createServerTypeSchema = () => {
 			.transform((data) => {
 				// Support both type and transportType fields
 				const finalType = data.type || (data.transportType === "sse" ? "sse" : undefined) || "sse"
+				const { transportType: _legacyTransportType, ...rest } = data
 				return {
-					...data,
+					...rest,
 					type: finalType as "sse",
-					// Remove the legacy field after transformation
-					transportType: undefined,
 				}
 			})
 			.refine((data) => data.type === "sse", { message: TYPE_ERROR_MESSAGE }),
@@ -77,11 +78,10 @@ const createServerTypeSchema = () => {
 				// Support both type and transportType fields
 				// Note: legacy transportType was "http" not "streamableHttp"
 				const finalType = data.type || (data.transportType === "http" ? "streamableHttp" : undefined) || "streamableHttp"
+				const { transportType: _legacyTransportType, ...rest } = data
 				return {
-					...data,
+					...rest,
 					type: finalType as "streamableHttp",
-					// Remove the legacy field after transformation
-					transportType: undefined,
 				}
 			})
 			.refine((data) => data.type === "streamableHttp", {
