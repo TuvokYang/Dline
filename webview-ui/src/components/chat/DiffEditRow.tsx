@@ -97,7 +97,12 @@ const FileBlock = memo<{
 		}, [isExpanded, isStreaming, streamingContentKey])
 
 		useEffect(() => {
-			setIsExpanded(!!isPartial)
+			// Auto-expand while streaming, but never force-close on completion:
+			// collapsing the moment a batch of parallel replace_in_file cards
+			// finishes caused visible layout jumps in the message list.
+			if (isPartial) {
+				setIsExpanded(true)
+			}
 		}, [isPartial])
 
 		const handleScroll = () => {

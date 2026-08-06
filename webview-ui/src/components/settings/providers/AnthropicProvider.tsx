@@ -54,10 +54,12 @@ export const AnthropicProvider = ({ showModelOptions, isPopup, profile, onUpdate
 	const modelId = profile.modelId || anthropicDefaultModelId
 	const customModelEnabled = pc?.customModelEnabled ?? false
 	const registryModel = anthropicModels[modelId] ?? anthropicModelInfoSaneDefaults
+	// The 1M long-context option is enabled by default; only an explicit false disables it.
+	const enableLongContext = pc.enableLongContext !== false
 	const modelInfo = buildEffectiveModelInfo(modelId, registryModel, {
 		capabilities: pc.capabilities,
 		pricing: pc.pricing,
-		enableLongContext: pc.enableLongContext,
+		enableLongContext,
 		pricingTiersEnabled: pc.pricingTiersEnabled,
 	})
 
@@ -158,7 +160,7 @@ export const AnthropicProvider = ({ showModelOptions, isPopup, profile, onUpdate
 
 							{modelInfo.capabilities?.contextWindowTiers?.length ? (
 								<StyledCheckbox
-									checked={pc.enableLongContext === true}
+									checked={pc.enableLongContext !== false}
 									onChange={(event: Event | React.FormEvent<HTMLElement>) =>
 										onUpdate({
 											anthropic: {
@@ -170,6 +172,29 @@ export const AnthropicProvider = ({ showModelOptions, isPopup, profile, onUpdate
 									Enable Long Context
 								</StyledCheckbox>
 							) : null}
+
+							<ModelConfiguration
+								capabilities={pc.capabilities}
+								defaults={registryModel}
+								fields={{
+									capabilities: [
+										"maxTokens",
+										"contextWindow",
+										"contextWindowTiers",
+										"supportsImages",
+										"supportsWebSearch",
+										"supportsBrowserAction",
+										"supportsPromptCache",
+										"supportsTools",
+									],
+									pricing: ["inputPrice", "outputPrice", "cacheWritesPrice", "cacheReadsPrice", "pricingTiers"],
+								}}
+								onCapabilitiesUpdate={handleCapabilitiesUpdate}
+								onPricingUpdate={handlePricingUpdate}
+								pricing={pc.pricing}
+								// Official models show registry tiers editable; custom models can add their own tiers.
+								tiersEditable={true}
+							/>
 						</>
 					)}
 

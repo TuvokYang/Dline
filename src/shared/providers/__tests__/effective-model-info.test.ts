@@ -46,6 +46,59 @@ describe("buildEffectiveModelInfo", () => {
 		result.pricing?.currency?.should.equal("USD")
 	})
 
+	it("should preserve an explicit context window over inherited context tiers", () => {
+		const registryModel: ModelInfo = {
+			id: "gpt-tiered-model",
+			capabilities: {
+				contextWindow: 272_000,
+				contextWindowTiers: [
+					{ id: "standard", contextWindow: 272_000, label: "272K" },
+					{ id: "long", contextWindow: 1_050_000, label: "1.05M" },
+				],
+			} as ModelCapabilities,
+		}
+
+		const result = buildEffectiveModelInfo("gpt-tiered-model", registryModel, {
+			capabilities: { contextWindow: 333_000 } as ModelCapabilities,
+		})
+
+		result.capabilities?.contextWindow?.should.equal(333_000)
+	})
+
+	it("should switch to the long context tier when enableLongContext is on", () => {
+		const registryModel: ModelInfo = {
+			id: "claude-sonnet-tiered",
+			capabilities: {
+				contextWindow: 200_000,
+				contextWindowTiers: [
+					{ id: "standard", contextWindow: 200_000, label: "200K" },
+					{ id: "long", contextWindow: 1_000_000, label: "1M", apiModelSuffix: ":1m" },
+				],
+			} as ModelCapabilities,
+		}
+
+		const result = buildEffectiveModelInfo("claude-sonnet-tiered", registryModel, { enableLongContext: true })
+
+		result.capabilities?.contextWindow?.should.equal(1_000_000)
+	})
+
+	it("should keep the standard context tier when long context is not enabled", () => {
+		const registryModel: ModelInfo = {
+			id: "claude-sonnet-tiered",
+			capabilities: {
+				contextWindow: 200_000,
+				contextWindowTiers: [
+					{ id: "standard", contextWindow: 200_000, label: "200K" },
+					{ id: "long", contextWindow: 1_000_000, label: "1M", apiModelSuffix: ":1m" },
+				],
+			} as ModelCapabilities,
+		}
+
+		const result = buildEffectiveModelInfo("claude-sonnet-tiered", registryModel, {})
+
+		result.capabilities?.contextWindow?.should.equal(200_000)
+	})
+
 	it("should compose model info from provider overrides when model id is empty", () => {
 		const result = buildEffectiveModelInfo(undefined, undefined, {
 			capabilities: {

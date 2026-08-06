@@ -59,11 +59,13 @@ export class AnthropicHandler implements ApiHandler {
 	 * @param modelId Custom model identifier configured by the user.
 	 * @returns ModelInfo using profile overrides, provider custom config, or sane defaults.
 	 */
+	// The 1M long-context option is enabled by default; only an explicit false disables it.
+	// This must match the provider UI default so tasks resolve to the same context window.
 	private buildCustomModelInfo(modelId: string): ModelInfo {
 		return buildEffectiveModelInfo(modelId, undefined, {
 			capabilities: this.config?.capabilities,
 			pricing: this.config?.pricing,
-			enableLongContext: this.config?.enableLongContext,
+			enableLongContext: this.config?.enableLongContext !== false,
 			pricingTiersEnabled: this.config?.pricingTiersEnabled,
 		})
 	}
@@ -78,7 +80,7 @@ export class AnthropicHandler implements ApiHandler {
 		return buildEffectiveModelInfo(modelId, anthropicModels[modelId], {
 			capabilities: this.config?.capabilities,
 			pricing: this.config?.pricing,
-			enableLongContext: this.config?.enableLongContext,
+			enableLongContext: this.config?.enableLongContext !== false,
 			pricingTiersEnabled: this.config?.pricingTiersEnabled,
 		})
 	}
@@ -94,7 +96,7 @@ export class AnthropicHandler implements ApiHandler {
 		const baseModelId = modelId.endsWith(ANTHROPIC_FAST_MODE_SUFFIX)
 			? modelId.slice(0, -ANTHROPIC_FAST_MODE_SUFFIX.length)
 			: modelId
-		const tier = selectContextTier(modelInfo.capabilities, this.config?.enableLongContext)
+		const tier = selectContextTier(modelInfo.capabilities, this.config?.enableLongContext !== false)
 		return `${baseModelId}${tier?.apiModelSuffix ?? ""}`
 	}
 
@@ -131,7 +133,8 @@ export class AnthropicHandler implements ApiHandler {
 
 		const useFastMode = model.id.endsWith(ANTHROPIC_FAST_MODE_SUFFIX)
 		const modelId = useFastMode ? model.id.slice(0, -ANTHROPIC_FAST_MODE_SUFFIX.length) : model.id
-		const selectedTier = selectContextTier(model.info.capabilities, this.config?.enableLongContext)
+		// Long context defaults to on; keep tier selection consistent with resolveApiModelId.
+		const selectedTier = selectContextTier(model.info.capabilities, this.config?.enableLongContext !== false)
 		const apiModelId = this.resolveApiModelId(model.id, model.info)
 		const enable1mContextWindow = Boolean(selectedTier?.apiModelSuffix)
 		const fastModeBetas = enable1mContextWindow
@@ -261,7 +264,7 @@ export class AnthropicHandler implements ApiHandler {
 					buildEffectiveModelInfo(mid, this.modelInfo, {
 						capabilities: this.config?.capabilities,
 						pricing: this.config?.pricing,
-						enableLongContext: this.config?.enableLongContext,
+						enableLongContext: this.config?.enableLongContext !== false,
 						pricingTiersEnabled: this.config?.pricingTiersEnabled,
 					}),
 					ApiFormat.ANTHROPIC_CHAT,

@@ -303,9 +303,10 @@ class ToolUseHandler {
 		// Phase 2: For long streaming fields, extract incremental
 		// content from an unclosed string value so that partial rendering can show
 		// growing text instead of waiting for the closing quote.
-		// Includes: generic text fields (content, diff) and turn-ending tool response fields
+		// Includes: generic text fields (content, diff), compaction context
+		// (summarize_task/new_task), and turn-ending tool response fields
 		// (response for make_plan/qna_respond/act_mode_respond, result for attempt_completion).
-		const streamingFields = ["content", "diff", "response", "result"]
+		const streamingFields = ["context", "content", "diff", "response", "result"]
 		for (const field of streamingFields) {
 			if (result[field] !== undefined) {
 				continue // already extracted with closed quote in Phase 1

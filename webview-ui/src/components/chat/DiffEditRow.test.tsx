@@ -110,4 +110,20 @@ describe("DiffEditRow", () => {
 		expect(screen.getByText("beta")).toHaveClass("text-green-400")
 		expect(screen.getByText("gamma")).toHaveClass("text-green-400")
 	})
+
+	it("stays expanded when streaming completes instead of collapsing", async () => {
+		const { container, rerender } = render(
+			<DiffEditRow fileAction="Update" isLoading={true} patch={buildPatch(6)} path="src/example.ts" />,
+		)
+		// Streaming: the diff body is expanded.
+		expect(container.querySelector(".max-h-80.overflow-y-auto")).not.toBeNull()
+
+		await act(async () => {
+			rerender(<DiffEditRow fileAction="Update" isLoading={false} patch={buildPatch(6)} path="src/example.ts" />)
+		})
+
+		// Completion must not force the diff closed; collapsing right when a batch
+		// of parallel replace_in_file cards finishes caused visible layout jumps.
+		expect(container.querySelector(".max-h-80.overflow-y-auto")).not.toBeNull()
+	})
 })

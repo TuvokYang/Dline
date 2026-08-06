@@ -74,7 +74,9 @@ function readOverrides(value: unknown): ProviderModelOverrides {
 	const capabilities = isObject(value.capabilities) ? (value.capabilities as ModelCapabilities) : undefined
 
 	const pricing = isObject(value.pricing) ? (value.pricing as ModelPricing) : undefined
-	const enableLongContext = typeof value.enableLongContext === "boolean" ? value.enableLongContext : undefined
+	// The 1M long-context option is enabled by default; only an explicit false disables it.
+	// Keeps TaskHeader/runtime display consistent with the provider UI and API handlers.
+	const enableLongContext = value.enableLongContext !== false
 	const pricingTiersEnabled = typeof value.pricingTiersEnabled === "boolean" ? value.pricingTiersEnabled : undefined
 
 	return { capabilities, pricing, enableLongContext, pricingTiersEnabled }

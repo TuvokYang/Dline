@@ -31,12 +31,14 @@ interface StoredProfile {
 			maxTokens?: number
 			supportsPromptCache?: boolean
 			supportsTools?: boolean
+			contextWindowTiers?: Array<{ id: string; contextWindow: number; label?: string }>
 		}
 		pricing?: {
 			inputPrice?: number
 			outputPrice?: number
 			cacheWritesPrice?: number
 			cacheReadsPrice?: number
+			tiers?: Array<{ contextWindow: number; inputPrice?: number; outputPrice?: number }>
 		}
 	}
 	anthropic?: {
@@ -44,6 +46,12 @@ interface StoredProfile {
 			enableThinking?: boolean
 			effort?: string
 			thinkingBudget?: number
+		}
+		capabilities?: {
+			contextWindowTiers?: Array<{ id: string; contextWindow: number; label?: string }>
+		}
+		pricing?: {
+			tiers?: Array<{ contextWindow: number; inputPrice?: number; outputPrice?: number }>
 		}
 	}
 }
@@ -675,6 +683,68 @@ e2e(
 			thinking: { type: "adaptive" },
 			output_config: { effort: "high" },
 		})
+		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+	},
+)
+
+e2e(
+	"Model configuration - OpenAI official models keep usage-based pricing tiers editable without context tiers",
+	async ({ dlineDir, helper, page, sidebar, userDataDir }) => {
+		const profileName = E2E_PROFILE_NAMES.mockOpenAiOfficialResponses
+
+		await helper.signin(sidebar)
+		await openApiSettings(page, sidebar)
+		const card = await openModelConfiguration(sidebar, profileName)
+
+		// OpenAI models have no context-window tiers; context is controlled directly.
+		await expect(card.getByRole("button", { name: "Add Context Tier" })).toHaveCount(0)
+
+		// Usage-based pricing tiers stay editable and persist as provider overrides.
+		const addPricingTier = card.getByRole("button", { name: "Add Pricing Tier" })
+		await expect(addPricingTier).toBeVisible()
+		await addPricingTier.click()
+		await waitForProfile(dlineDir, profileName, (profile) => profile.openai?.pricing?.tiers?.length === 1)
+
+		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+	},
+)
+
+e2e(
+	"Model configuration - official Anthropic models add and persist context and pricing tiers",
+	async ({ dlineDir, helper, page, sidebar, userDataDir }) => {
+		const profileName = E2E_PROFILE_NAMES.mockAnthropic
+
+		await helper.signin(sidebar)
+		await openApiSettings(page, sidebar)
+		const card = await openModelConfiguration(sidebar, profileName)
+
+		// Anthropic context tiers (200K / 1M) are editable and persist as provider overrides.
+		const addContextTier = card.getByRole("button", { name: "Add Context Tier" })
+		await expect(addContextTier).toBeVisible()
+		await addContextTier.click()
+		await expect
+			.poll(
+				async () => {
+					const profiles = await readProfiles(dlineDir)
+					const persisted = profiles.find((candidate) => candidate.name === profileName)?.anthropic
+					return persisted ? JSON.stringify(persisted) : null
+				},
+				{ timeout: 15_000 },
+			)
+			.toContain("contextWindowTiers")
+
+		// Usage-based pricing tiers stay editable and persist as provider overrides.
+		// Registry tiers (200K / 1M) are pre-filled in the editor, so the added
+		// default tier (128K threshold) must appear among the persisted tiers.
+		const addPricingTier = card.getByRole("button", { name: "Add Pricing Tier" })
+		await expect(addPricingTier).toBeVisible()
+		await addPricingTier.click()
+		await waitForProfile(
+			dlineDir,
+			profileName,
+			(profile) => profile.anthropic?.pricing?.tiers?.some((tier) => tier.contextWindow === 128_000) === true,
+		)
+
 		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
 	},
 )

@@ -87,7 +87,11 @@ export function buildEffectiveModelInfo(
 	const mergedCapabilities = overrides.capabilities
 		? (mergeDefined(base.capabilities, overrides.capabilities) as ModelCapabilities)
 		: base.capabilities
-	const contextTier = selectContextTier(mergedCapabilities, overrides.enableLongContext)
+	// An explicit provider context window must win over inherited context tiers;
+	// tier selection only applies when the provider did not override the window.
+	const explicitContextWindow = overrides.capabilities?.contextWindow
+	const contextTier =
+		explicitContextWindow === undefined ? selectContextTier(mergedCapabilities, overrides.enableLongContext) : undefined
 	const capabilities = {
 		...mergedCapabilities,
 		...(contextTier ? { contextWindow: contextTier.contextWindow } : {}),

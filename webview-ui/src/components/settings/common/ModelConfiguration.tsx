@@ -89,8 +89,11 @@ export const ModelConfiguration = ({
 	const [expanded, setExpanded] = useState(false)
 	const [draftChecks, setDraftChecks] = useState<Partial<Record<CapabilityCheckField, boolean>>>({})
 	const [pendingChecks, setPendingChecks] = useState<Partial<Record<CapabilityCheckField, boolean>>>({})
-	const [draftContextTiers, setDraftContextTiers] = useState(capabilityOverrides?.contextWindowTiers ?? [])
-	const [draftPricingTiers, setDraftPricingTiers] = useState(pricingOverrides?.tiers ?? [])
+	// Show registry defaults until the user edits them; edits persist as provider overrides.
+	const [draftContextTiers, setDraftContextTiers] = useState(
+		capabilityOverrides?.contextWindowTiers ?? defaults?.capabilities?.contextWindowTiers ?? [],
+	)
+	const [draftPricingTiers, setDraftPricingTiers] = useState(pricingOverrides?.tiers ?? defaults?.pricing?.tiers ?? [])
 
 	// Extract current values from provider overrides
 	const capabilities: ModelCapabilities = capabilityOverrides ?? ({} as ModelCapabilities)
@@ -150,12 +153,12 @@ export const ModelConfiguration = ({
 	])
 
 	useEffect(() => {
-		setDraftContextTiers(capabilityOverrides?.contextWindowTiers ?? [])
-	}, [capabilityOverrides?.contextWindowTiers])
+		setDraftContextTiers(capabilityOverrides?.contextWindowTiers ?? defaults?.capabilities?.contextWindowTiers ?? [])
+	}, [capabilityOverrides?.contextWindowTiers, defaults?.capabilities?.contextWindowTiers])
 
 	useEffect(() => {
-		setDraftPricingTiers(pricingOverrides?.tiers ?? [])
-	}, [pricingOverrides?.tiers])
+		setDraftPricingTiers(pricingOverrides?.tiers ?? defaults?.pricing?.tiers ?? [])
+	}, [pricingOverrides?.tiers, defaults?.pricing?.tiers])
 
 	// Derive currency symbol from pricing.currency
 	const currencySymbol = (() => {

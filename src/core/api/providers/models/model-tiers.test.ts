@@ -5,11 +5,13 @@ import { openAiModels } from "./openai"
 import { openAiCodexModels } from "./openai-codex"
 
 describe("provider model tiers", () => {
-	it("defines OpenAI 5.6 context, pricing tiers, and selectable API formats", () => {
+	it("keeps OpenAI 5.6 fixed by context size with usage-based pricing tiers only", () => {
 		for (const modelId of ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]) {
 			const model = openAiModels[modelId]
 			expect(model?.capabilities?.contextWindow).toBe(272_000)
-			expect(model?.capabilities?.contextWindowTiers?.map((tier) => tier.contextWindow)).toEqual([272_000, 1_050_000])
+			// OpenAI models have no context-window tiers; context is controlled directly.
+			expect(model?.capabilities?.contextWindowTiers).toBeUndefined()
+			// Pricing tiers are usage-based tiered pricing and stay editable.
 			expect(model?.pricing?.tiers).toHaveLength(2)
 			expect(model?.apiFormats).toEqual([ApiFormat.OPENAI_RESPONSES, ApiFormat.OPENAI_CHAT])
 		}

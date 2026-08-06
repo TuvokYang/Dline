@@ -129,7 +129,10 @@ interface PricingTierEditorProps {
 }
 
 /**
- * Render pricing tiers in read-only or editable mode.
+ * Render usage-based tiered pricing in read-only or editable mode.
+ *
+ * Each tier's threshold is the maximum input-token usage for that price band;
+ * it controls pricing, not the context window.
  *
  * @param props Pricing values, editability, currency, and update callback.
  * @returns Pricing tier editor section.
@@ -163,7 +166,7 @@ export function PricingTierEditor({ tiers, editable, currencySymbol, showCachePr
 							<DebouncedTextField
 								initialValue={String(tier.contextWindow)}
 								onChange={(value) => updateTier(index, { contextWindow: parseTierNumber(value) })}>
-								<span style={tierLabelStyle}>Pricing Tier Window</span>
+								<span style={tierLabelStyle}>Up To Input Tokens</span>
 							</DebouncedTextField>
 							<DebouncedTextField
 								initialValue={String(tier.inputPrice ?? 0)}

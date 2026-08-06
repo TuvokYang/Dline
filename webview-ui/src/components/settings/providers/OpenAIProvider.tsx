@@ -1,6 +1,6 @@
 import { type ModelInfo, openAiModelInfoSaneDefaults } from "@shared/api"
 import { OpenAiModelsRequest } from "@shared/proto/dline/models"
-import { ApiFormat, type ModelCapabilities, type ModelPricing } from "@shared/proto/dline/models/metadata"
+import { ApiFormat, type ModelCapabilities, type ModelPricing, ServerTool } from "@shared/proto/dline/models/metadata"
 import { OpenAiProviderConfig } from "@shared/proto/dline/provider/openai"
 import { openAiEndpointToApiFormat, resolveApiFormat } from "@shared/providers/api-format"
 import { buildEffectiveModelInfo, mergeCapabilities, mergePricing } from "@shared/providers/effective-model-info"
@@ -19,6 +19,7 @@ import { ModelSelector } from "../common/ModelSelector"
 import OpenAIServiceTierSelector from "../OpenAIServiceTierSelector"
 import ThinkingControl from "../ThinkingControl"
 import type { ApiProfile } from "./ProviderProfile"
+import { ProviderWebSearchSettings } from "./ProviderWebSearchSettings"
 import { useProviderModels } from "./useProviderModels"
 
 interface OpenAIProviderProps {
@@ -65,6 +66,9 @@ export const OpenAIProvider = ({ showModelOptions, isPopup, profile, onUpdate }:
 		{ apiFormats },
 		ApiFormat.OPENAI_CHAT,
 	)
+	const hostedWebSearchAvailable =
+		modelInfo.capabilities?.tools?.includes(ServerTool.WEB_SEARCH) === true &&
+		(selectedApiFormat === ApiFormat.OPENAI_RESPONSES || selectedApiFormat === ApiFormat.OPENAI_RESPONSES_WEBSOCKET_MODE)
 	const customModels = useMemo<Record<string, ModelInfo>>(() => {
 		const modelIds = new Set(discoveredModelIds)
 		if (modelId) modelIds.add(modelId)
@@ -193,20 +197,6 @@ export const OpenAIProvider = ({ showModelOptions, isPopup, profile, onUpdate }:
 								onChange={(event) => handleOfficialModelChange((event.target as HTMLSelectElement).value)}
 								selectedModelId={modelId}
 							/>
-							{modelInfo.capabilities?.contextWindowTiers?.length ? (
-								<VSCodeCheckbox
-									checked={pc.enableLongContext === true}
-									onChange={(event: Event | React.FormEvent<HTMLElement>) =>
-										onUpdate({
-											openai: {
-												...pc,
-												enableLongContext: (event.target as HTMLInputElement | null)?.checked === true,
-											},
-										})
-									}>
-									Enable Long Context
-								</VSCodeCheckbox>
-							) : null}
 						</>
 					)}
 
@@ -215,6 +205,12 @@ export const OpenAIProvider = ({ showModelOptions, isPopup, profile, onUpdate }:
 						fallbackApiFormat={ApiFormat.OPENAI_CHAT}
 						onChange={(apiFormat) => onUpdate({ openai: { ...pc, apiEndpoint: undefined, apiFormat } })}
 						selectedApiFormat={selectedApiFormat}
+					/>
+
+					<ProviderWebSearchSettings
+						hostedAvailable={hostedWebSearchAvailable}
+						onChange={(webSearchMode) => onUpdate({ webSearchMode })}
+						value={profile.webSearchMode}
 					/>
 
 					<ThinkingControl
@@ -242,12 +238,14 @@ export const OpenAIProvider = ({ showModelOptions, isPopup, profile, onUpdate }:
 						capabilities={pc.capabilities}
 						defaults={baseModel}
 						fields={{
+							// OpenAI models are controlled directly by context size; they have no
+							// context-window tiers. Pricing tiers are usage-based tiered pricing.
 							capabilities: [
 								"maxTokens",
 								"contextWindow",
-								"contextWindowTiers",
 								"supportsImages",
-								...(customModelEnabled ? (["supportsWebSearch", "supportsBrowserAction"] as const) : []),
+								"supportsWebSearch",
+								...(customModelEnabled ? (["supportsBrowserAction"] as const) : []),
 								"supportsPromptCache",
 								"supportsTools",
 								"temperature",
@@ -257,7 +255,7 @@ export const OpenAIProvider = ({ showModelOptions, isPopup, profile, onUpdate }:
 						onCapabilitiesUpdate={handleCapabilitiesUpdate}
 						onPricingUpdate={handlePricingUpdate}
 						pricing={pc.pricing}
-						tiersEditable={customModelEnabled}
+						tiersEditable={true}
 					/>
 				</>
 			)}

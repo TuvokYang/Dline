@@ -34,7 +34,8 @@ describe("AnthropicHandler", () => {
 
 			result.id.should.equal("claude-sonnet-4-6")
 			should(result.info.capabilities?.supportsTools).equal(true)
-			should(result.info.capabilities?.contextWindow).equal(200_000)
+			// Long context (1M) is enabled by default when the profile does not opt out.
+			should(result.info.capabilities?.contextWindow).equal(1_000_000)
 		})
 
 		it("should merge provider overrides into registry model metadata", () => {
@@ -60,7 +61,8 @@ describe("AnthropicHandler", () => {
 
 			result.id.should.equal("claude-opus-4-7")
 			result.info.id.should.equal("claude-opus-4-7")
-			should(result.info.capabilities?.contextWindow).equal(anthropicModels["claude-opus-4-7"].capabilities?.contextWindow)
+			// Long context defaults to on, resolving to the 1M tier.
+			should(result.info.capabilities?.contextWindow).equal(1_000_000)
 			should(result.info.capabilities?.maxTokens).equal(12_345)
 			should(result.info.capabilities?.supportsPromptCache).equal(false)
 			should(result.info.pricing?.inputPrice).equal(0.5)
@@ -75,10 +77,8 @@ describe("AnthropicHandler", () => {
 			const result = handler.getModel()
 
 			result.id.should.equal("claude-opus-4-6:fast")
-			result.info.should.deepEqual({
-				...anthropicModels["claude-opus-4-6:fast"],
-				apiFormats: [ApiFormat.ANTHROPIC_CHAT],
-			})
+			should(result.info.capabilities?.contextWindow).equal(1_000_000)
+			result.info.apiFormats?.should.deepEqual([ApiFormat.ANTHROPIC_CHAT])
 		})
 
 		it("should keep the base model id when long context is enabled", () => {
@@ -107,10 +107,8 @@ describe("AnthropicHandler", () => {
 			const result = handler.getModel()
 
 			result.id.should.equal("claude-opus-4-7")
-			result.info.should.deepEqual({
-				...anthropicModels["claude-opus-4-7"],
-				apiFormats: [ApiFormat.ANTHROPIC_CHAT],
-			})
+			should(result.info.capabilities?.contextWindow).equal(1_000_000)
+			result.info.apiFormats?.should.deepEqual([ApiFormat.ANTHROPIC_CHAT])
 		})
 
 		it("should preserve a custom model id when profile modelInfo is missing", () => {
@@ -278,8 +276,9 @@ describe("AnthropicHandler", () => {
 			expect(standardCreate)
 			expect(betaCreate)
 			const callArgs = betaCreate.mock.calls[0]?.[0] as Record<string, unknown> | undefined
-			expect(callArgs?.model).to.equal("claude-opus-4-6")
-			expect(callArgs?.betas).to.deep.equal([ANTHROPIC_FAST_MODE_BETA])
+			// Long context defaults to on, so fast mode also resolves to the 1M model.
+			expect(callArgs?.model).to.equal("claude-opus-4-6:1m")
+			expect(callArgs?.betas).to.deep.equal([ANTHROPIC_FAST_MODE_BETA, "context-1m-2025-08-07"])
 			expect(callArgs?.speed).to.equal("fast")
 			expect(callArgs?.stream).to.equal(true)
 		})

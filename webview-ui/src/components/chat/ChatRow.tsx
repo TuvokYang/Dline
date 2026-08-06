@@ -30,7 +30,6 @@ import {
 	Link2Icon,
 	LoaderCircleIcon,
 	RefreshCwIcon,
-	SearchIcon,
 	SettingsIcon,
 	SquareArrowOutUpRightIcon,
 	TriangleAlertIcon,
@@ -75,6 +74,7 @@ import StatusUpdateRow from "./StatusUpdateRow"
 import SubagentStatusRow from "./SubagentStatusRow"
 import { ThinkingRow } from "./ThinkingRow"
 import UserMessage from "./UserMessage"
+import WebSearchRow from "./WebSearchRow"
 
 const HEADER_CLASSNAMES = "flex items-center gap-2.5 mb-3"
 
@@ -768,7 +768,12 @@ export const ChatRowContent = memo(
 												<div className="grow" />
 												<ChevronDownIcon className="my-0.5 shrink-0 size-4" />
 											</div>
-											<span className="ph-no-capture break-words whitespace-pre-wrap">{tool.content}</span>
+											{/* Cap the expanded summary at 80% of the viewport with internal scrolling. */}
+											<div className="max-h-[80vh] overflow-y-auto pr-1">
+												<span className="ph-no-capture break-words whitespace-pre-wrap">
+													{tool.content}
+												</span>
+											</div>
 										</div>
 									) : (
 										<div className="flex items-center">
@@ -795,8 +800,8 @@ export const ChatRowContent = memo(
 										: "Dline fetched content from this URL:"}
 								</span>
 							</div>
-							<div
-								className="bg-code rounded-xs overflow-hidden border border-editor-group-border py-2 px-2.5 cursor-pointer select-none"
+							<button
+								className="w-full bg-code rounded-xs overflow-hidden border border-editor-group-border py-2 px-2.5 cursor-pointer select-none text-left"
 								onClick={() => {
 									// Open the URL in the default browser using gRPC
 									if (tool.path) {
@@ -804,33 +809,16 @@ export const ChatRowContent = memo(
 											console.error("Failed to open URL:", err)
 										})
 									}
-								}}>
+								}}
+								type="button">
 								<span className="ph-no-capture whitespace-nowrap overflow-hidden text-ellipsis mr-2 [direction:rtl] text-left text-link underline">
 									{`${tool.path}\u200E`}
 								</span>
-							</div>
+							</button>
 						</div>
 					)
 				case "webSearch":
-					return (
-						<div>
-							<div className={HEADER_CLASSNAMES}>
-								<SearchIcon className="size-2 rotate-90" />
-								{tool.operationIsLocatedInWorkspace === false &&
-									toolIcon("sign-out", "yellow", -90, "This search is external")}
-								<span className="font-bold">
-									{message.type === "ask"
-										? "Dline wants to search the web for:"
-										: "Dline searched the web for:"}
-								</span>
-							</div>
-							<div className="bg-code border border-editor-group-border overflow-hidden rounded-xs select-text py-[9px] px-2.5">
-								<span className="ph-no-capture whitespace-nowrap overflow-hidden text-ellipsis mr-2 text-left [direction:rtl]">
-									{`${tool.path}\u200E`}
-								</span>
-							</div>
-						</div>
-					)
+					return <WebSearchRow messageType={message.type} query={tool.path} webSearch={tool.webSearch} />
 				case "useSkill":
 					return (
 						<div>

@@ -50,6 +50,7 @@ const MemoizedMarkdownBlock = memo(
 						// Use the async file check component for potential file paths
 						return <InlineCodeWithFileCheck {...props} />
 					},
+					a: (props: ComponentProps<"a">) => <MarkdownLink {...props} />,
 					strong: (props: ComponentProps<"strong">) => {
 						// Check if this is an "Act Mode" strong element by looking for the keyboard shortcut
 						// Handle both string children and array of children cases
@@ -351,6 +352,52 @@ const PreWithCopyButton = ({ children, ...preProps }: React.HTMLAttributes<HTMLP
 	)
 }
 
+const BIDI_CONTROL_REGEX = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g
+
+function normalizeLocalPath(value: string): string {
+	let decoded = value
+	try {
+		decoded = decodeURI(value)
+	} catch {
+		// Preserve malformed URI text so opening fails at the file-service boundary.
+	}
+	return decoded.replace(BIDI_CONTROL_REGEX, "").trim()
+}
+
+function isProjectRelativeLink(value: string): boolean {
+	return (
+		value.length > 0 &&
+		!value.startsWith("#") &&
+		!value.startsWith("/") &&
+		!value.startsWith("\\") &&
+		!/^[a-zA-Z][a-zA-Z\d+.-]*:/.test(value)
+	)
+}
+
+// react-markdown passes an internal `node` prop to custom components; it must not
+// leak onto the DOM as an attribute.
+const MarkdownLink = ({ href, onClick, node: _node, ...props }: ComponentProps<"a"> & { node?: unknown }) => {
+	const localPath = typeof href === "string" ? normalizeLocalPath(href) : ""
+	const isLocal = isProjectRelativeLink(localPath)
+
+	return (
+		<a
+			{...props}
+			href={isLocal ? localPath : href}
+			onClick={(event) => {
+				onClick?.(event)
+				if (!isLocal || event.defaultPrevented) return
+				event.preventDefault()
+				void FileServiceClient.openFileRelativePath(StringRequest.create({ value: localPath })).catch(
+					(error: unknown) => {
+						console.error(`Failed to open project file ${localPath}:`, error)
+					},
+				)
+			}}
+		/>
+	)
+}
+
 // Regex to detect potential file paths (used in both remark plugin and component)
 const FILE_PATH_REGEX = /^(?!\/)[\w\-./]+(?<!\/)$/
 
@@ -361,6 +408,7 @@ const FILE_PATH_REGEX = /^(?!\/)[\w\-./]+(?<!\/)$/
 const remarkMarkPotentialFilePaths = () => {
 	return (tree: Node) => {
 		visit(tree, "inlineCode", (node: Node & { value: string; data?: any }) => {
+			node.value = normalizeLocalPath(node.value)
 			if (FILE_PATH_REGEX.test(node.value) && !node.value.includes("\n")) {
 				// Mark as potential file path - actual checking happens in React component
 				node.data = node.data || {}
@@ -377,7 +425,7 @@ const remarkMarkPotentialFilePaths = () => {
  */
 const InlineCodeWithFileCheck: React.FC<ComponentProps<"code"> & { [key: string]: any }> = (props) => {
 	const [isFilePath, setIsFilePath] = useState<boolean | null>(null)
-	const filePath = typeof props.children === "string" ? props.children : String(props.children || "")
+	const filePath = normalizeLocalPath(typeof props.children === "string" ? props.children : String(props.children || ""))
 	const isPotentialFilePath = props["data-potential-file-path"] === "true"
 
 	useEffect(() => {

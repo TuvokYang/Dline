@@ -17,12 +17,13 @@ function calculateApiCostInternal(
 	let effectiveCacheReadsPrice = modelInfo.pricing?.cacheReadsPrice || 0
 	let effectiveCacheWritesPrice = modelInfo.pricing?.cacheWritesPrice || 0
 
-	// Handle tiered pricing if available
+	// Handle usage-based tiered pricing: each tier's threshold is the maximum
+	// input-token usage for that price band (it controls pricing, not the window).
 	if (modelInfo.pricing?.tiers && modelInfo.pricing?.tiers.length > 0 && totalInputTokensForPricing !== undefined) {
-		// Ensure tiers are sorted by contextWindow ascending before finding
+		// Ensure tiers are sorted by threshold ascending before finding
 		const sortedTiers = [...modelInfo.pricing.tiers].sort((a, b) => a.contextWindow - b.contextWindow)
 
-		// Find the first tier where the total input tokens are less than or equal to the limit
+		// Find the first tier whose threshold covers the actual input-token usage
 		const tier = sortedTiers.find((t) => totalInputTokensForPricing <= t.contextWindow)
 
 		if (tier) {

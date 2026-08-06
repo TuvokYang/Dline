@@ -1,5 +1,7 @@
+import { anthropicModels } from "@core/api/providers/models/anthropic"
 import { deepSeekModels } from "@core/api/providers/models/deepseek"
 import { ApiProfile } from "@shared/proto/dline/profile"
+import { AnthropicProviderConfig } from "@shared/proto/dline/provider/anthropic"
 import { BaseProviderConfig } from "@shared/proto/dline/provider/common"
 import { OpenAiProviderConfig } from "@shared/proto/dline/provider/openai"
 import { expect } from "chai"
@@ -104,5 +106,35 @@ describe("resolveProfileModelInfo", () => {
 		expect(result.capabilities?.contextWindow).to.equal(272_000)
 		expect(result.capabilities?.maxTokens).to.equal(128_000)
 		expect(result.capabilities?.supportsReasoning).to.equal(true)
+	})
+
+	it("enables the 1M long context by default for Anthropic profiles without an explicit flag", () => {
+		const profile = ApiProfile.create({
+			provider: "anthropic",
+			modelId: "claude-sonnet-4-6",
+			anthropic: AnthropicProviderConfig.create(),
+		})
+
+		const result = resolveProfileModelInfo(profile, {
+			models: anthropicModels,
+			defaultModelId: "claude-sonnet-4-6",
+		})
+
+		expect(result.capabilities?.contextWindow).to.equal(1_000_000)
+	})
+
+	it("falls back to the standard 200K tier when long context is explicitly disabled", () => {
+		const profile = ApiProfile.create({
+			provider: "anthropic",
+			modelId: "claude-sonnet-4-6",
+			anthropic: AnthropicProviderConfig.create({ enableLongContext: false }),
+		})
+
+		const result = resolveProfileModelInfo(profile, {
+			models: anthropicModels,
+			defaultModelId: "claude-sonnet-4-6",
+		})
+
+		expect(result.capabilities?.contextWindow).to.equal(200_000)
 	})
 })

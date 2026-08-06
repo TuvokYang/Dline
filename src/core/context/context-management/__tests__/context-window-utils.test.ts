@@ -1,11 +1,27 @@
+import { OpenAiHandler } from "@core/api/providers/openai"
 import {
 	DEFAULT_AUTO_CONDENSE_MAX_CONTEXT_TOKENS,
 	DEFAULT_AUTO_CONDENSE_TRIGGER_PERCENT,
 	normalizeAutoCondenseMaxContextTokens,
 	normalizeAutoCondenseTriggerPercent,
 } from "@shared/auto-condense"
+import type { ModelInfo } from "@shared/proto/dline/models"
 import { describe, expect, it } from "vitest"
-import { computeCompactTrigger, computeSafetyBuffer, computeSummarizeBudget } from "../context-window-utils"
+import { computeCompactTrigger, computeSafetyBuffer, computeSummarizeBudget, getContextWindowInfo } from "../context-window-utils"
+
+function openAiHandlerWithModel(id: string, contextWindow?: number): OpenAiHandler {
+	const handler = Object.create(OpenAiHandler.prototype) as OpenAiHandler
+	handler.getModel = () => ({
+		id,
+		info: {
+			id,
+			...(contextWindow !== undefined
+				? { capabilities: { contextWindow, maxTokens: 8192 } as ModelInfo["capabilities"] }
+				: {}),
+		} as ModelInfo,
+	})
+	return handler
+}
 
 describe("auto-condense context trigger", () => {
 	it("reserves three percent clamped to 5K through 30K", () => {
@@ -71,5 +87,21 @@ describe("auto-condense context trigger", () => {
 		expect(normalizeAutoCondenseMaxContextTokens(undefined)).toBe(DEFAULT_AUTO_CONDENSE_MAX_CONTEXT_TOKENS)
 		expect(normalizeAutoCondenseMaxContextTokens(-1)).toBe(0)
 		expect(normalizeAutoCondenseMaxContextTokens(600_000.9)).toBe(600_000)
+	})
+})
+
+describe("getContextWindowInfo", () => {
+	it("preserves an explicit OpenAI-compatible context window for DeepSeek model IDs", () => {
+		expect(getContextWindowInfo(openAiHandlerWithModel("custom-deepseek-v4", 256_000))).toEqual({
+			contextWindow: 256_000,
+			maxAllowedSize: 216_000,
+		})
+	})
+
+	it("falls back to the default context window when capabilities are missing", () => {
+		expect(getContextWindowInfo(openAiHandlerWithModel("gpt-5-nano"))).toEqual({
+			contextWindow: 128_000,
+			maxAllowedSize: 98_000,
+		})
 	})
 })

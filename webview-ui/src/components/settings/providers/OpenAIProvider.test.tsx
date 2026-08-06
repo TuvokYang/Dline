@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import type { ModelInfo } from "@shared/proto/dline/models"
 import { ApiFormat, type ModelCapabilities, type ModelPricing } from "@shared/proto/dline/models/metadata"
+import { WebSearchMode } from "@shared/proto/dline/provider/common"
 import { OpenAiProviderConfig } from "@shared/proto/dline/provider/openai"
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
@@ -30,10 +31,6 @@ const multiFormatModel: ModelInfo = {
 	apiFormats: [ApiFormat.OPENAI_RESPONSES, ApiFormat.OPENAI_CHAT],
 	capabilities: {
 		contextWindow: 272_000,
-		contextWindowTiers: [
-			{ id: "standard", contextWindow: 272_000, label: "272K" },
-			{ id: "long", contextWindow: 1_050_000, label: "1.05M" },
-		],
 		maxTokens: 128_000,
 		supportsTools: true,
 		supportsReasoning: true,
@@ -166,6 +163,7 @@ describe("OpenAIProvider", () => {
 			provider: "openai",
 			modelId: "gpt-multi",
 			openai: config,
+			webSearchMode: WebSearchMode.WEB_SEARCH_MODE_AUTO,
 		} as unknown as ApiProfile
 
 		render(<OpenAIProvider onUpdate={onUpdate} profile={profile} showModelOptions={true} />)
@@ -180,6 +178,8 @@ describe("OpenAIProvider", () => {
 		})
 		expect(screen.getByRole("option", { name: "OpenAI Responses" })).toBeInTheDocument()
 		expect(screen.getByRole("option", { name: "OpenAI Chat" })).toBeInTheDocument()
+		expect(screen.getByTestId("capability-fields")).toHaveTextContent("supportsWebSearch")
+		expect(screen.getByRole("combobox", { name: "Web Search mode" })).toHaveValue(String(WebSearchMode.WEB_SEARCH_MODE_AUTO))
 
 		fireEvent.change(apiFormat, { target: { value: String(ApiFormat.OPENAI_CHAT) } })
 		expect(onUpdate).toHaveBeenCalledWith({

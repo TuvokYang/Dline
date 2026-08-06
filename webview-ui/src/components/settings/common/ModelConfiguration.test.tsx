@@ -147,6 +147,60 @@ describe("ModelConfiguration", () => {
 		expect(screen.queryByRole("button", { name: "Remove Context Tier" })).toBeNull()
 	})
 
+	it("shows registry default context and pricing tiers when no overrides exist", () => {
+		const defaults: Partial<ModelInfo> = {
+			capabilities: {
+				contextWindowTiers: [{ id: "standard", contextWindow: 272_000, label: "272K" }],
+			} as ModelCapabilities,
+			pricing: {
+				tiers: [{ contextWindow: 128_000, inputPrice: 1, outputPrice: 2 }],
+			} as ModelPricing,
+		}
+
+		render(
+			<ModelConfiguration
+				defaults={defaults}
+				fields={{ capabilities: ["contextWindowTiers"], pricing: ["pricingTiers"] }}
+				onCapabilitiesUpdate={vi.fn()}
+				onPricingUpdate={vi.fn()}
+				tiersEditable={true}
+			/>,
+		)
+
+		fireEvent.click(screen.getByRole("button", { name: /Model Configuration/i }))
+		expect(screen.getByLabelText("Context Tier ID")).toHaveValue("standard")
+		expect(screen.getByLabelText("Context Tier Window")).toHaveValue("272000")
+		expect(screen.getByLabelText("Up To Input Tokens")).toHaveValue("128000")
+		expect(screen.getByRole("button", { name: "Add Context Tier" })).toBeTruthy()
+		expect(screen.getByRole("button", { name: "Add Pricing Tier" })).toBeTruthy()
+	})
+
+	it("persists edits to registry default tiers as provider overrides", () => {
+		const onCapabilitiesUpdate = vi.fn()
+		const defaults: Partial<ModelInfo> = {
+			capabilities: {
+				contextWindowTiers: [{ id: "standard", contextWindow: 272_000, label: "272K" }],
+			} as ModelCapabilities,
+		}
+
+		render(
+			<ModelConfiguration
+				defaults={defaults}
+				fields={{ capabilities: ["contextWindowTiers"] }}
+				onCapabilitiesUpdate={onCapabilitiesUpdate}
+				onPricingUpdate={vi.fn()}
+				tiersEditable={true}
+			/>,
+		)
+
+		fireEvent.click(screen.getByRole("button", { name: /Model Configuration/i }))
+		fireEvent.change(screen.getByLabelText("Context Tier ID"), { target: { value: "long" } })
+
+		expect(onCapabilitiesUpdate).toHaveBeenCalledWith({
+			contextWindowTiers: [{ id: "long", contextWindow: 272_000, label: "272K" }],
+		})
+	})
+
 	it("writes checkbox changes to provider capabilities", () => {
 		const onCapabilitiesUpdate = vi.fn()
 

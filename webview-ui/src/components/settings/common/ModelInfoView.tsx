@@ -126,7 +126,9 @@ const formatCompactContext = (contextWindow: number | undefined): string => {
 }
 
 /**
- * Returns an array of formatted tier strings
+ * Format usage-based tiered pricing: each tier's threshold is the maximum
+ * input-token usage for that price band. The threshold controls pricing only,
+ * not the context window.
  */
 const formatTiers = (
 	tiers: PricingTier[],
@@ -150,14 +152,14 @@ const formatTiers = (
 					{formatPrice(price)}/million tokens (
 					{tier.contextWindow === Number.POSITIVE_INFINITY || tier.contextWindow >= Number.MAX_SAFE_INTEGER ? (
 						<span>
-							{">"} {prevLimit.toLocaleString()}
+							{">"} {prevLimit.toLocaleString()} input tokens
 						</span>
 					) : (
 						<span>
-							{"<="} {tier.contextWindow?.toLocaleString()}
+							{"<="} {tier.contextWindow?.toLocaleString()} input tokens
 						</span>
 					)}
-					{" tokens)"}
+					{")"}
 					{index < arr.length - 1 && <br />}
 				</span>
 			)

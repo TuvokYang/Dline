@@ -13,6 +13,10 @@ const registryModel: ModelInfo = {
 	name: "Registry Claude",
 	capabilities: {
 		contextWindow: 200_000,
+		contextWindowTiers: [
+			{ id: "standard", contextWindow: 200_000, label: "200K" },
+			{ id: "long", contextWindow: 1_000_000, label: "1M", apiModelSuffix: ":1m" },
+		],
 		maxTokens: 8192,
 		supportsImages: true,
 		supportsPromptCache: true,
@@ -50,6 +54,15 @@ vi.mock("../common/ModelConfiguration", () => ({
 			<button onClick={() => onCapabilitiesUpdate({ supportsPromptCache: false })} type="button">
 				Update Cache
 			</button>
+			<button
+				onClick={() =>
+					onCapabilitiesUpdate({
+						contextWindowTiers: [{ id: "long", contextWindow: 1_000_000, label: "1M" }],
+					})
+				}
+				type="button">
+				Add Context Tier
+			</button>
 		</>
 	),
 }))
@@ -59,6 +72,7 @@ vi.mock("../common/ModelInfoView", () => ({
 		<div>
 			<span>max:{modelInfo.capabilities?.maxTokens}</span>
 			<span>input:{modelInfo.pricing?.inputPrice}</span>
+			<span>context:{modelInfo.capabilities?.contextWindow}</span>
 		</div>
 	),
 }))
@@ -119,5 +133,44 @@ describe("AnthropicProvider", () => {
 				capabilities: { maxTokens: 64_000, supportsPromptCache: false },
 			},
 		})
+	})
+
+	it("exposes context window tier editing for official models and persists updates", () => {
+		const onUpdate = vi.fn()
+		const profile = {
+			id: "profile-2",
+			provider: "anthropic",
+			modelId: "claude-custom",
+			anthropic: AnthropicProviderConfig.create({}),
+		} as unknown as ApiProfile
+
+		render(<AnthropicProvider onUpdate={onUpdate} profile={profile} showModelOptions={true} />)
+
+		// Official models keep the context-window tier fields editable.
+		expect(screen.getByTestId("capability-fields")).toHaveTextContent("contextWindowTiers")
+
+		fireEvent.click(screen.getByText("Add Context Tier"))
+
+		expect(onUpdate).toHaveBeenCalledWith({
+			anthropic: {
+				...profile.anthropic,
+				capabilities: { contextWindowTiers: [{ id: "long", contextWindow: 1_000_000, label: "1M" }] },
+			},
+		})
+	})
+
+	it("enables the 1M long context by default for official models with tiers", () => {
+		const onUpdate = vi.fn()
+		const profile = {
+			id: "profile-3",
+			provider: "anthropic",
+			modelId: "claude-custom",
+			anthropic: AnthropicProviderConfig.create({}),
+		} as unknown as ApiProfile
+
+		render(<AnthropicProvider onUpdate={onUpdate} profile={profile} showModelOptions={true} />)
+
+		// Long context is on by default: the effective context window resolves to 1M.
+		expect(screen.getByText("context:1000000")).toBeInTheDocument()
 	})
 })

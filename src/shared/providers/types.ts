@@ -19,7 +19,10 @@ export interface ThinkingConfig {
 	effortLevels?: string[]
 }
 
-/** Pricing tier for context-window-based tiered models. */
+/**
+ * Usage-based tiered pricing band. `contextWindow` is the maximum input-token
+ * usage for this price band; it controls pricing only, not the context window.
+ */
 export interface PricingTier {
 	contextWindow: number
 	inputPrice?: number
