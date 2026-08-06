@@ -1,3 +1,4 @@
+import { setTimeout as setTimeoutPromise } from "node:timers/promises"
 import { DefaultAzureCredential, getBearerTokenProvider } from "@azure/identity"
 import { azureOpenAiDefaultApiVersion, ModelInfo, openAiModelInfoSaneDefaults, openAiModels } from "@shared/api"
 import { ApiFormat, ServerTool } from "@shared/proto/dline/models/metadata"
@@ -19,6 +20,7 @@ import { ApiHandler, ApiHandlerContext, type ApiRequestOptions } from "../index"
 import { withRetry } from "../retry"
 import { convertToO1Messages } from "../transform/o1-format"
 import { convertToOpenAiMessages } from "../transform/openai-format"
+import { projectOpenAIChatPromptCache, projectOpenAIResponsesPromptCache } from "../transform/openai-prompt-cache"
 import { convertToOpenAIResponsesInput } from "../transform/openai-response-format"
 import { convertToR1Format } from "../transform/r1-format"
 import { ApiStream } from "../transform/stream"
@@ -39,6 +41,13 @@ import { handleResponsesApiStreamResponse } from "../utils/responses_api_support
  * @param messages - Chat completion messages to annotate (mutated in-place)
  * @param cacheControl - The cache_control annotation, or undefined to skip
  */
+function getChatCacheWriteTokens(details: unknown): number {
+	if (typeof details !== "object" || details === null) return 0
+	const values = details as { cache_write_tokens?: unknown; cache_miss_tokens?: unknown }
+	if (typeof values.cache_write_tokens === "number") return values.cache_write_tokens
+	return typeof values.cache_miss_tokens === "number" ? values.cache_miss_tokens : 0
+}
+
 function applyCacheControlToMessages(
 	messages: OpenAI.Chat.ChatCompletionMessageParam[],
 	cacheControl: { cache_control: { type: "ephemeral" } } | undefined,
@@ -309,12 +318,23 @@ export class OpenAiHandler implements ApiHandler {
 		// for deepseek-reasoner, thinking budget, or o-series model paths above.
 		applyCacheControlToMessages(openAiMessages, cacheControl)
 
+		const toolParams = isO1 ? { tools: undefined } : getOpenAIToolParams(tools)
+		const promptCache = projectOpenAIChatPromptCache({
+			modelId,
+			systemPrompt,
+			messages: openAiMessages,
+			tools: toolParams.tools ?? [],
+		})
+		openAiMessages = promptCache.messages
+
 		const requestParams: any = {
 			model: modelId,
 			messages: openAiMessages,
 			temperature,
 			max_tokens: maxTokens,
 			stream: true,
+			prompt_cache_key: promptCache.promptCacheKey,
+			...(promptCache.promptCacheOptions ? { prompt_cache_options: promptCache.promptCacheOptions } : {}),
 			...(this.serviceTier ? { service_tier: this.serviceTier } : {}),
 		}
 		// Always pass enable_thinking so explicit false from ThinkingControl disables provider reasoning.
@@ -328,7 +348,7 @@ export class OpenAiHandler implements ApiHandler {
 			requestParams.stream_options = { include_usage: true }
 		}
 		if (!isO1) {
-			Object.assign(requestParams, getOpenAIToolParams(tools))
+			Object.assign(requestParams, toolParams)
 		}
 
 		const stream = await (client.chat.completions as any).create(requestParams, { signal: requestController.signal })
@@ -371,8 +391,7 @@ export class OpenAiHandler implements ApiHandler {
 				const cacheWriteTokens =
 					chunk.usage.cache_creation_input_tokens ??
 					chunk.usage.prompt_cache_miss_tokens ??
-					chunk.usage.prompt_tokens_details?.cache_miss_tokens ??
-					0
+					getChatCacheWriteTokens(chunk.usage.prompt_tokens_details)
 				const modelInfo = this.getModel().info
 				// Yield inputTokens in Anthropic semantic (excluding cache) so
 				// ContextManager and updateApiReqMsg can accurately estimate
@@ -398,6 +417,29 @@ export class OpenAiHandler implements ApiHandler {
 			}
 		}
 		if (this.requestController === requestController) this.requestController = undefined
+	}
+
+	private async createResponsesStream(
+		client: OpenAI,
+		params: OpenAI.Responses.ResponseCreateParamsStreaming,
+		signal?: AbortSignal,
+	) {
+		try {
+			return await client.responses.create(params, { signal })
+		} catch (error) {
+			const status =
+				typeof error === "object" && error !== null && "status" in error
+					? (error as { status?: unknown }).status
+					: undefined
+			if (typeof status !== "number" || status < 500 || signal?.aborted) {
+				throw error
+			}
+
+			const retryDelay = 250
+			this.ctx.onRetryAttempt?.(1, 2, retryDelay, error)
+			await setTimeoutPromise(retryDelay, undefined, { signal })
+			return await client.responses.create(params, { signal })
+		}
 	}
 
 	private async *createResponsesMessage(
@@ -428,10 +470,18 @@ export class OpenAiHandler implements ApiHandler {
 		const reasoningEffort = normalizeOpenaiReasoningEffort(this.reasoningEffort)
 		const temperature = model.info.capabilities?.temperature ?? this.config?.temperature
 		const maxOutputTokens = model.info.capabilities?.maxTokens
+		const promptCache = projectOpenAIResponsesPromptCache({
+			modelId: model.id,
+			systemPrompt,
+			input,
+			tools: responseTools,
+		})
 		const params: OpenAI.Responses.ResponseCreateParamsStreaming = {
 			model: model.id,
-			instructions: systemPrompt,
-			input,
+			...(promptCache.instructions === undefined ? {} : { instructions: promptCache.instructions }),
+			input: promptCache.input,
+			prompt_cache_key: promptCache.promptCacheKey,
+			...(promptCache.promptCacheOptions ? { prompt_cache_options: promptCache.promptCacheOptions } : {}),
 			stream: true,
 			store: false,
 			...(responseTools?.length ? { tools: responseTools } : {}),
@@ -443,7 +493,7 @@ export class OpenAiHandler implements ApiHandler {
 			...(typeof maxOutputTokens === "number" && maxOutputTokens > 0 ? { max_output_tokens: maxOutputTokens } : {}),
 		}
 
-		const stream = await client.responses.create(params, { signal })
+		const stream = await this.createResponsesStream(client, params, signal)
 		yield* handleResponsesApiStreamResponse(
 			stream,
 			model.info,

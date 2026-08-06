@@ -168,24 +168,6 @@ export function normalizeApiProfile(profile: unknown): ApiProfile {
 	}
 
 	let migrated = false
-	if (normalized.provider === "openai-native") {
-		const legacy = normalized.openaiNative
-		normalized.provider = "openai"
-		normalized.openai = OpenAiProviderConfig.create({
-			reasoning: legacy?.reasoning,
-			customModelEnabled: legacy?.customModelEnabled,
-			capabilities: legacy?.capabilities,
-			pricing: legacy?.pricing,
-			streamIncludeUsage: true,
-			serviceTier: legacy?.serviceTier,
-			apiFormat: legacy?.apiFormat,
-			enableLongContext: legacy?.enableLongContext,
-			pricingTiersEnabled: legacy?.pricingTiersEnabled,
-		})
-		normalized.openaiNative = undefined
-		migrated = true
-	}
-
 	const openai = normalized.openai
 	if (openai && openai.apiFormat === undefined) {
 		const legacyApiFormat = openAiEndpointToApiFormat(openai.apiEndpoint)
@@ -563,7 +545,7 @@ async function migrateFromProviders(controller: Controller): Promise<ApiProfile[
 		if (!config.models || typeof config.models !== "object" || Object.keys(config.models).length === 0) continue
 
 		const legacyProviderName = config.provider || providerId
-		const providerName = legacyProviderName === "openai-native" ? "openai" : legacyProviderName
+		const providerName = legacyProviderName
 
 		// Only migrate providers that have an API key in legacy flat secrets
 		const secretFields = ProviderToApiKeyMap[legacyProviderName as keyof typeof ProviderToApiKeyMap]

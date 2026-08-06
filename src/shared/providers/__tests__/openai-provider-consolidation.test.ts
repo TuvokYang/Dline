@@ -5,10 +5,10 @@ import { describe, expect, it } from "vitest"
 
 describe("OpenAI provider consolidation", () => {
 	it("exposes one API-key OpenAI provider with the official model catalog", () => {
-		const apiKeyProviders = PROVIDERS.list.filter(({ value }) => value === "openai" || value === "openai-native")
+		const apiKeyProviders = PROVIDERS.list.filter(({ value }) => value === "openai")
 
 		expect(apiKeyProviders).toEqual([{ value: "openai", label: "OpenAI" }])
 		expect(allProviderModels.openai.models).toEqual(openAiModels)
-		expect(allProviderModels["openai-native"]).toBeUndefined()
+		expect(PROVIDERS.list.some(({ value }) => value === "openai-native")).to.equal(false)
 	})
 })

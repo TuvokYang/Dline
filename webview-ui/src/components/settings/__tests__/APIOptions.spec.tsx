@@ -50,7 +50,7 @@ vi.mock("./providers/useApiProfiles", () => ({
 }))
 
 vi.mock("@/components/settings/utils/providerUtils", () => ({
-	normalizeApiConfiguration: () => ({ selectedProvider: "openai-native", selectedModelId: "" }),
+	normalizeApiConfiguration: () => ({ selectedProvider: "openai", selectedModelId: "" }),
 }))
 
 describe("ApiOptions Component", () => {

@@ -565,8 +565,8 @@ describe("getApiProfiles", () => {
 		const finalProfiles = [
 			{
 				id: "final-profile",
-				name: "openai-native:gpt-5.5",
-				provider: "openai-native",
+				name: "openai:gpt-5.5",
+				provider: "openai",
 				modelId: "gpt-5.5",
 				usedFor: ["act", "plan"],
 				enabled: true,
@@ -595,9 +595,9 @@ describe("getApiProfiles", () => {
 		await fs.mkdir(providersDir, { recursive: true })
 		await fs.mkdir(settingsDir, { recursive: true })
 		await fs.writeFile(
-			path.join(providersDir, "openai-native.json"),
+			path.join(providersDir, "openai.json"),
 			JSON.stringify({
-				provider: "openai-native",
+				provider: "openai",
 				defaultModelId: "registry-default-model",
 				models: { "registry-default-model": { id: "registry-default-model" } },
 			}),
@@ -608,8 +608,8 @@ describe("getApiProfiles", () => {
 			JSON.stringify([
 				{
 					id: "default-profile",
-					name: "openai-native profile",
-					provider: "openai-native",
+					name: "openai profile",
+					provider: "openai",
 					modelId: "",
 					usedFor: ["act", "plan"],
 					enabled: true,

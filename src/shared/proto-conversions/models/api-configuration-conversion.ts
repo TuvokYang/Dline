@@ -274,8 +274,6 @@ function _convertApiProviderToProto(provider: string | undefined): ProtoApiProvi
 			return ProtoApiProvider.LMSTUDIO
 		case "gemini":
 			return ProtoApiProvider.GEMINI
-		case "openai-native":
-			return ProtoApiProvider.OPENAI_NATIVE
 		case "requesty":
 			return ProtoApiProvider.REQUESTY
 		case "together":
@@ -367,7 +365,8 @@ export function convertProtoToApiProvider(provider: ProtoApiProvider): ApiProvid
 		case ProtoApiProvider.GEMINI:
 			return "gemini"
 		case ProtoApiProvider.OPENAI_NATIVE:
-			return "openai-native"
+			// The retired OpenAI Native provider is normalized onto the unified OpenAI API-key provider.
+			return "openai"
 		case ProtoApiProvider.REQUESTY:
 			return "requesty"
 		case ProtoApiProvider.TOGETHER:

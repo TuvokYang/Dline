@@ -17,15 +17,12 @@ export const openAiModels: Record<string, ModelInfo> = {
 			tools: [ServerTool.WEB_SEARCH],
 			maxTokens: 128_000,
 			contextWindow: 272_000,
-			contextWindowTiers: [
-				{ id: "standard", contextWindow: 272_000, label: "272K" },
-				{ id: "long", contextWindow: 1_050_000, label: "1.05M" },
-			],
 			supportsImages: true,
 			supportsPromptCache: true,
 			supportsReasoning: true,
 			supportsStreaming: true,
 		},
+		// OpenAI pricing is tiered by input-token usage, not by context window choice.
 		pricing: {
 			inputPrice: 5,
 			outputPrice: 30,
@@ -46,15 +43,12 @@ export const openAiModels: Record<string, ModelInfo> = {
 			tools: [ServerTool.WEB_SEARCH],
 			maxTokens: 128_000,
 			contextWindow: 272_000,
-			contextWindowTiers: [
-				{ id: "standard", contextWindow: 272_000, label: "272K" },
-				{ id: "long", contextWindow: 1_050_000, label: "1.05M" },
-			],
 			supportsImages: true,
 			supportsPromptCache: true,
 			supportsReasoning: true,
 			supportsStreaming: true,
 		},
+		// OpenAI pricing is tiered by input-token usage, not by context window choice.
 		pricing: {
 			inputPrice: 2.5,
 			outputPrice: 15,
@@ -75,15 +69,12 @@ export const openAiModels: Record<string, ModelInfo> = {
 			tools: [ServerTool.WEB_SEARCH],
 			maxTokens: 128_000,
 			contextWindow: 272_000,
-			contextWindowTiers: [
-				{ id: "standard", contextWindow: 272_000, label: "272K" },
-				{ id: "long", contextWindow: 1_050_000, label: "1.05M" },
-			],
 			supportsImages: true,
 			supportsPromptCache: true,
 			supportsReasoning: true,
 			supportsStreaming: true,
 		},
+		// OpenAI pricing is tiered by input-token usage, not by context window choice.
 		pricing: {
 			inputPrice: 1,
 			outputPrice: 6,
@@ -195,9 +186,3 @@ export const openAiModels: Record<string, ModelInfo> = {
 
 /** Default model ID for the OpenAI API-key provider. */
 export const openAiDefaultModelId = "gpt-5.6-sol"
-
-/** @deprecated Use openAiModels. Retained for legacy runtime compatibility. */
-export const openAiNativeModels = openAiModels
-
-/** @deprecated Use openAiDefaultModelId. Retained for legacy runtime compatibility. */
-export const openAiNativeDefaultModelId = openAiDefaultModelId

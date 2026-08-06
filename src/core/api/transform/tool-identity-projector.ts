@@ -53,12 +53,9 @@ export function getResultFunctionId(block: ClineUserToolResultContentBlock): str
  * @param provider Target API provider.
  * @returns Chat-compatible function identity used by both call and result.
  */
-export function projectChatFunctionId(functionId: string, provider?: ApiProvider): string {
+export function projectChatFunctionId(functionId: string, _provider?: ApiProvider): string {
 	if (functionId.startsWith(RESPONSES_ITEM_PREFIX) && functionId.length === RESPONSES_ITEM_LENGTH) {
 		return `call_${functionId.slice(functionId.length - (MAX_CHAT_FUNCTION_ID_LENGTH - 5))}`
-	}
-	if (provider === "openai-native" && functionId.length > MAX_CHAT_FUNCTION_ID_LENGTH) {
-		return functionId.slice(0, MAX_CHAT_FUNCTION_ID_LENGTH)
 	}
 	return functionId
 }

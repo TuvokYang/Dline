@@ -39,7 +39,7 @@ describe("Tool Call Parsing", () => {
 				},
 			]
 
-			const result = convertToOpenAiMessages(messages, "openai-native")
+			const result = convertToOpenAiMessages(messages, "openai")
 
 			result.should.have.length(1)
 			const msg = result[0] as any
@@ -48,29 +48,6 @@ describe("Tool Call Parsing", () => {
 			msg.tool_calls[0].type.should.equal("function")
 			msg.tool_calls[0].function.name.should.equal("read_file")
 			JSON.parse(msg.tool_calls[0].function.arguments).should.deepEqual({ path: "/test/file.ts" })
-		})
-
-		it("should truncate long tool IDs to 40 characters", () => {
-			const longId = "a".repeat(50)
-			const messages: ClineStorageMessage[] = [
-				{
-					role: "assistant",
-					content: [
-						{
-							type: "tool_use",
-							function_id: longId,
-							dline_tid: "tid_long",
-							name: "test_tool",
-							input: {},
-						} as unknown as ClineAssistantToolUseBlock,
-					],
-				},
-			]
-
-			const result = convertToOpenAiMessages(messages, "openai-native")
-
-			const msg = result[0] as any
-			msg.tool_calls[0].id.length.should.be.belowOrEqual(40)
 		})
 
 		it("should transform OpenAI Responses API tool IDs (fc_ prefix)", () => {
@@ -114,7 +91,7 @@ describe("Tool Call Parsing", () => {
 				},
 			]
 
-			;(() => convertToOpenAiMessages(messages, "openai-native")).should.throw(/missing function_id/)
+			;(() => convertToOpenAiMessages(messages, "openai")).should.throw(/missing function_id/)
 		})
 
 		it("should project canonical function_id to both Chat pairing fields", () => {
@@ -145,7 +122,7 @@ describe("Tool Call Parsing", () => {
 				},
 			]
 
-			const result = convertToOpenAiMessages(messages, "openai-native")
+			const result = convertToOpenAiMessages(messages, "openai")
 			const assistantMsg = result[0] as OpenAI.Chat.ChatCompletionAssistantMessageParam
 			const toolMsg = result[1] as OpenAI.Chat.ChatCompletionToolMessageParam
 

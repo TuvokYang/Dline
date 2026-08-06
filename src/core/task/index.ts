@@ -15,6 +15,7 @@ import {
 } from "@core/context/context-management/context-window-utils"
 import {
 	hasToolResult,
+	projectCompletedCompactionResult,
 	shouldDeferCurrentTurn,
 	shouldRestoreDeferredTurn,
 } from "@core/context/context-management/current-turn-compaction"
@@ -4320,6 +4321,10 @@ export class Task {
 				}
 				return this.recursivelyMakeClineRequests(deferredUserContent, includeFileDetails, transaction)
 			}
+		}
+
+		if (didCompleteSummarization) {
+			userContent = projectCompletedCompactionResult(userContent)
 		}
 
 		if (didCompleteSummarization && this.modeSwitchCompaction.getOperationId()) {

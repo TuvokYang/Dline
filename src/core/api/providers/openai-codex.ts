@@ -51,7 +51,7 @@ interface CodexUsageResponse {
 /**
  * OpenAiCodexHandler - Uses OpenAI Responses API with OAuth authentication
  *
- * Key differences from OpenAiNativeHandler:
+ * Key differences from OpenAiHandler:
  * - Uses OAuth Bearer tokens instead of API keys
  * - Routes requests to Codex backend (chatgpt.com/backend-api/codex)
  * - Subscription-based pricing (no per-token costs)

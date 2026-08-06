@@ -8,7 +8,7 @@ import {
 
 describe("ResponsesIdentityRegistry", () => {
 	it("preserves item and function identities across added delta and done events", () => {
-		const registry = createResponsesRegistry("openai-native")
+		const registry = createResponsesRegistry("openai")
 
 		const added = registry.registerItem({
 			itemId: "fc_item_123",
@@ -34,7 +34,7 @@ describe("ResponsesIdentityRegistry", () => {
 	})
 
 	it("creates a raw tool chunk without conflating item and function identities", () => {
-		const registry = createResponsesRegistry("openai-native")
+		const registry = createResponsesRegistry("openai")
 		const identity = registry.registerItem({
 			itemId: "fc_item_123",
 			functionId: "call_123",

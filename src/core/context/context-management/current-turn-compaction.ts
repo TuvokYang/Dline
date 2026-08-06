@@ -63,6 +63,23 @@ export function shouldRestoreDeferredTurn(input: DeferredTurnRestoreInput): bool
 }
 
 /**
+ * Project the internal summarize_task result after its matching function call has been truncated.
+ *
+ * @param userContent Pending content produced by the completed compaction turn.
+ * @returns User content that no longer contains orphaned tool results.
+ */
+export function projectCompletedCompactionResult(userContent: ClineContent[]): ClineContent[] {
+	return userContent.flatMap((block) => {
+		if (block.type !== "tool_result") {
+			return [block]
+		}
+
+		const text = getBlockText(block)
+		return text.length > 0 ? [{ type: "text" as const, text }] : []
+	})
+}
+
+/**
  * Extract text from supported Anthropic content block shapes.
  *
  * @param block Content block to inspect.

@@ -1,6 +1,5 @@
 import { ApiFormat, ServerTool } from "@shared/proto/dline/models/metadata"
 import { ApiProfile } from "@shared/proto/dline/profile"
-import { BaseProviderConfig } from "@shared/proto/dline/provider/common"
 import { OpenAiProviderConfig } from "@shared/proto/dline/provider/openai"
 import { OpenAiCodexProviderConfig } from "@shared/proto/dline/provider/openai_codex"
 import { expect } from "chai"
@@ -12,7 +11,6 @@ import type { ClineAssistantToolUseBlock, ClineStorageMessage, ClineUserToolResu
 import { mockFetchForTesting } from "@/shared/net"
 import { OpenAiHandler } from "../openai"
 import { OpenAiCodexHandler } from "../openai-codex"
-import { OpenAiNativeHandler } from "../openai-native"
 
 /**
  * Create an async iterable for mocked streaming responses.
@@ -167,6 +165,304 @@ describe("OpenAiHandler", () => {
 			const requestBody = create.mock.calls[0]?.[0] as Record<string, unknown>
 			expect(requestBody.service_tier).to.equal("priority")
 			expect(requestBody.reasoning_effort).to.equal("ultra")
+			expect(requestBody.prompt_cache_key).to.be.a("string").and.not.equal("")
+			expect(requestBody.prompt_cache_options).to.deep.equal({ mode: "explicit" })
+			expect(JSON.stringify(requestBody.messages)).to.contain("prompt_cache_breakpoint")
+		})
+
+		it("adds stable explicit prompt cache control to Chat requests across dynamic suffixes", async () => {
+			const handler = new OpenAiHandler({
+				profile: ApiProfile.create({
+					provider: "openai",
+					apiKey: "test-api-key",
+					modelId: "gpt-5.6-sol",
+					openai: OpenAiProviderConfig.create({ apiFormat: ApiFormat.OPENAI_CHAT }),
+				}),
+				mode: "act",
+			})
+			const create = vi.fn().mockResolvedValue(createAsyncIterable())
+			vi.spyOn(handler as unknown as { ensureClient: () => unknown }, "ensureClient").mockReturnValue({
+				chat: { completions: { create } },
+			})
+
+			for await (const _chunk of handler.createMessage("frozen system prompt", [
+				{ role: "user", content: "dynamic environment A" },
+			])) {
+			}
+			for await (const _chunk of handler.createMessage("frozen system prompt", [
+				{ role: "user", content: "dynamic environment B" },
+			])) {
+			}
+
+			const firstRequest = create.mock.calls[0]?.[0] as OpenAI.Chat.ChatCompletionCreateParamsStreaming
+			const secondRequest = create.mock.calls[1]?.[0] as OpenAI.Chat.ChatCompletionCreateParamsStreaming
+			expect(firstRequest.prompt_cache_key).to.be.a("string").and.not.equal("")
+			expect(secondRequest.prompt_cache_key).to.equal(firstRequest.prompt_cache_key)
+			expect(firstRequest.prompt_cache_options).to.deep.equal({ mode: "explicit" })
+			expect(JSON.stringify(firstRequest.messages[0])).to.contain("prompt_cache_breakpoint")
+			expect(JSON.stringify(firstRequest.messages.at(-1))).to.contain("dynamic environment A")
+			expect(JSON.stringify(secondRequest.messages.at(-1))).to.contain("dynamic environment B")
+		})
+
+		it("keeps automatic Chat caching for older models while adding a stable key", async () => {
+			const handler = new OpenAiHandler({
+				profile: ApiProfile.create({
+					provider: "openai",
+					apiKey: "test-api-key",
+					baseUrl: "https://compatible.example/v1",
+					modelId: "gpt-5.5-test",
+					openai: OpenAiProviderConfig.create({ apiFormat: ApiFormat.OPENAI_CHAT }),
+				}),
+				mode: "act",
+			})
+			const create = vi.fn().mockResolvedValue(createAsyncIterable())
+			vi.spyOn(handler as unknown as { ensureClient: () => unknown }, "ensureClient").mockReturnValue({
+				chat: { completions: { create } },
+			})
+
+			for await (const _chunk of handler.createMessage("system prompt", [{ role: "user", content: "Hello" }])) {
+			}
+
+			const request = create.mock.calls[0]?.[0] as OpenAI.Chat.ChatCompletionCreateParamsStreaming
+			expect(request.prompt_cache_key).to.be.a("string").and.not.equal("")
+			expect(request.prompt_cache_options).to.equal(undefined)
+			expect(JSON.stringify(request.messages)).not.to.contain("prompt_cache_breakpoint")
+		})
+
+		it("classifies official Chat cache write tokens separately from cached and uncached input", async () => {
+			const handler = new OpenAiHandler({
+				profile: ApiProfile.create({
+					provider: "openai",
+					apiKey: "test-api-key",
+					modelId: "gpt-5.6-sol",
+					openai: OpenAiProviderConfig.create({ apiFormat: ApiFormat.OPENAI_CHAT }),
+				}),
+				mode: "act",
+			})
+			const create = vi.fn().mockResolvedValue(
+				createAsyncIterable([
+					{
+						choices: [],
+						usage: {
+							prompt_tokens: 2_000,
+							completion_tokens: 300,
+							prompt_tokens_details: { cached_tokens: 1_200, cache_write_tokens: 400 },
+						},
+					},
+				]),
+			)
+			vi.spyOn(handler as unknown as { ensureClient: () => unknown }, "ensureClient").mockReturnValue({
+				chat: { completions: { create } },
+			})
+
+			const chunks = []
+			for await (const chunk of handler.createMessage("system prompt", [{ role: "user", content: "Hello" }])) {
+				chunks.push(chunk)
+			}
+
+			const usage = chunks.find((chunk) => chunk.type === "usage")
+			expect(usage).to.include({
+				inputTokens: 400,
+				outputTokens: 300,
+				cacheReadTokens: 1_200,
+				cacheWriteTokens: 400,
+			})
+		})
+
+		it("retries an OpenAI Responses 502 before the stream starts", async () => {
+			const handler = new OpenAiHandler({
+				profile: ApiProfile.create({
+					provider: "openai",
+					apiKey: "test-api-key",
+					modelId: "gpt-5.6-sol",
+					openai: OpenAiProviderConfig.create({ apiFormat: ApiFormat.OPENAI_RESPONSES }),
+				}),
+				mode: "act",
+			})
+			const upstreamError = Object.assign(new Error("502 status code (no body)"), { status: 502 })
+			const responsesCreate = vi.fn().mockRejectedValueOnce(upstreamError).mockResolvedValueOnce(createAsyncIterable())
+			vi.spyOn(handler as unknown as { ensureClient: () => unknown }, "ensureClient").mockReturnValue({
+				responses: { create: responsesCreate },
+			})
+
+			for await (const _chunk of handler.createMessage("system prompt", [{ role: "user", content: "Hello" }])) {
+			}
+
+			expect(responsesCreate.mock.calls).to.have.length(2)
+		})
+
+		it("does not retry an OpenAI Responses 400 before the stream starts", async () => {
+			const handler = new OpenAiHandler({
+				profile: ApiProfile.create({
+					provider: "openai",
+					apiKey: "test-api-key",
+					modelId: "gpt-5.6-sol",
+					openai: OpenAiProviderConfig.create({ apiFormat: ApiFormat.OPENAI_RESPONSES }),
+				}),
+				mode: "act",
+			})
+			const protocolError = Object.assign(
+				new Error("No tool call found for function call output with call_id fc_compaction."),
+				{ status: 400 },
+			)
+			const responsesCreate = vi.fn().mockRejectedValue(protocolError)
+			vi.spyOn(handler as unknown as { ensureClient: () => unknown }, "ensureClient").mockReturnValue({
+				responses: { create: responsesCreate },
+			})
+
+			let caught: unknown
+			try {
+				for await (const _chunk of handler.createMessage("system prompt", [{ role: "user", content: "Hello" }])) {
+				}
+			} catch (error) {
+				caught = error
+			}
+
+			expect(caught).to.equal(protocolError)
+			expect(responsesCreate.mock.calls).to.have.length(1)
+		})
+
+		it("does not retry a Responses error after streaming has started", async () => {
+			const handler = new OpenAiHandler({
+				profile: ApiProfile.create({
+					provider: "openai",
+					apiKey: "test-api-key",
+					modelId: "gpt-5.6-sol",
+					openai: OpenAiProviderConfig.create({ apiFormat: ApiFormat.OPENAI_RESPONSES }),
+				}),
+				mode: "act",
+			})
+			const streamError = Object.assign(new Error("502 while streaming"), { status: 502 })
+			const responsesCreate = vi.fn().mockResolvedValue({
+				async *[Symbol.asyncIterator]() {
+					yield { type: "response.output_text.delta", delta: "partial" }
+					throw streamError
+				},
+			})
+			vi.spyOn(handler as unknown as { ensureClient: () => unknown }, "ensureClient").mockReturnValue({
+				responses: { create: responsesCreate },
+			})
+
+			const chunks: unknown[] = []
+			let caught: unknown
+			try {
+				for await (const chunk of handler.createMessage("system prompt", [{ role: "user", content: "Hello" }])) {
+					chunks.push(chunk)
+				}
+			} catch (error) {
+				caught = error
+			}
+
+			expect(chunks).to.deep.equal([{ type: "text", text: "partial", provider_metadata: { response_id: undefined } }])
+			expect(caught).to.equal(streamError)
+			expect(responsesCreate.mock.calls).to.have.length(1)
+		})
+
+		it("adds stable explicit prompt cache control to GPT-5.6 Responses requests across dynamic suffixes", async () => {
+			const handler = new OpenAiHandler({
+				profile: ApiProfile.create({
+					provider: "openai",
+					apiKey: "test-api-key",
+					modelId: "gpt-5.6-sol",
+					openai: OpenAiProviderConfig.create({ apiFormat: ApiFormat.OPENAI_RESPONSES }),
+				}),
+				mode: "act",
+				ulid: "task-001",
+			})
+			const responsesCreate = vi.fn().mockResolvedValue(createAsyncIterable())
+			vi.spyOn(handler as unknown as { ensureClient: () => unknown }, "ensureClient").mockReturnValue({
+				responses: { create: responsesCreate },
+			})
+
+			for await (const _chunk of handler.createMessage("frozen system prompt", [
+				{ role: "user", content: "dynamic environment A" },
+			])) {
+			}
+			for await (const _chunk of handler.createMessage("frozen system prompt", [
+				{ role: "user", content: "dynamic environment B" },
+			])) {
+			}
+
+			const firstRequest = responsesCreate.mock.calls[0]?.[0] as OpenAI.Responses.ResponseCreateParamsStreaming
+			const secondRequest = responsesCreate.mock.calls[1]?.[0] as OpenAI.Responses.ResponseCreateParamsStreaming
+			expect(firstRequest.instructions).to.equal(undefined)
+			expect(firstRequest.prompt_cache_key).to.be.a("string").and.not.equal("")
+			expect(secondRequest.prompt_cache_key).to.equal(firstRequest.prompt_cache_key)
+			expect(firstRequest.prompt_cache_options).to.deep.equal({ mode: "explicit" })
+			expect(firstRequest.input?.[0]).to.deep.equal({
+				type: "message",
+				role: "system",
+				content: [
+					{
+						type: "input_text",
+						text: "frozen system prompt",
+						prompt_cache_breakpoint: { mode: "explicit" },
+					},
+				],
+			})
+			expect(JSON.stringify(firstRequest.input?.[1])).to.contain("dynamic environment A")
+			expect(JSON.stringify(secondRequest.input?.[1])).to.contain("dynamic environment B")
+		})
+
+		it("keeps automatic Responses caching for models below GPT-5.6 while adding a stable key", async () => {
+			const handler = new OpenAiHandler({
+				profile: ApiProfile.create({
+					provider: "openai",
+					apiKey: "test-api-key",
+					modelId: "gpt-5.5-test",
+					openai: OpenAiProviderConfig.create({
+						apiFormat: ApiFormat.OPENAI_RESPONSES,
+						capabilities: { supportsPromptCache: true },
+					}),
+				}),
+				mode: "act",
+			})
+			const responsesCreate = vi.fn().mockResolvedValue(createAsyncIterable())
+			vi.spyOn(handler as unknown as { ensureClient: () => unknown }, "ensureClient").mockReturnValue({
+				responses: { create: responsesCreate },
+			})
+
+			for await (const _chunk of handler.createMessage("system prompt", [{ role: "user", content: "Hello" }])) {
+			}
+
+			const request = responsesCreate.mock.calls[0]?.[0] as OpenAI.Responses.ResponseCreateParamsStreaming
+			expect(request.instructions).to.equal("system prompt")
+			expect(request.prompt_cache_key).to.be.a("string").and.not.equal("")
+			expect(request.prompt_cache_options).to.equal(undefined)
+			expect(JSON.stringify(request.input)).not.to.contain("prompt_cache_breakpoint")
+			expect(request.input?.[0]).to.deep.equal({
+				role: "user",
+				content: [{ type: "input_text", text: "Hello" }],
+			})
+		})
+
+		it("adds explicit prompt cache control to custom GPT-5.6 Responses endpoints", async () => {
+			const handler = new OpenAiHandler({
+				profile: ApiProfile.create({
+					provider: "openai",
+					apiKey: "test-api-key",
+					baseUrl: "https://compatible.example/v1",
+					modelId: "gpt-5.6-compatible",
+					openai: OpenAiProviderConfig.create({ apiFormat: ApiFormat.OPENAI_RESPONSES }),
+				}),
+				mode: "act",
+				ulid: "task-001",
+			})
+			const responsesCreate = vi.fn().mockResolvedValue(createAsyncIterable())
+			vi.spyOn(handler as unknown as { ensureClient: () => unknown }, "ensureClient").mockReturnValue({
+				responses: { create: responsesCreate },
+			})
+
+			for await (const _chunk of handler.createMessage("system prompt", [{ role: "user", content: "Hello" }])) {
+			}
+
+			const request = responsesCreate.mock.calls[0]?.[0] as OpenAI.Responses.ResponseCreateParamsStreaming
+			expect(request.instructions).to.equal(undefined)
+			expect(request.prompt_cache_key).to.be.a("string").and.not.equal("")
+			expect(request.prompt_cache_options).to.deep.equal({ mode: "explicit" })
+			expect(JSON.stringify(request.input?.[0])).to.contain("system prompt")
+			expect(JSON.stringify(request.input?.[0])).to.contain("prompt_cache_breakpoint")
+			expect(JSON.stringify(request.input?.[1])).to.contain("Hello")
 		})
 
 		it("routes an OpenAI-compatible profile to the Responses endpoint", async () => {
@@ -198,6 +494,8 @@ describe("OpenAiHandler", () => {
 			expect(responsesCreate.mock.calls).to.have.length(1)
 			const requestBody = responsesCreate.mock.calls[0]?.[0] as Record<string, unknown>
 			expect(requestBody.instructions).to.equal("system prompt")
+			expect(requestBody.prompt_cache_key).to.be.a("string").and.not.equal("")
+			expect(requestBody.prompt_cache_options).to.equal(undefined)
 			expect(requestBody.service_tier).to.equal("priority")
 			expect(requestBody.max_output_tokens).to.equal(16_384)
 			expect(requestBody.reasoning).to.deep.equal({ effort: "high", summary: "auto" })
@@ -418,27 +716,6 @@ describe("OpenAiHandler", () => {
 			expect(requestBody).not.to.have.property("tools")
 			expect(JSON.stringify(requestBody)).not.to.contain("Instructions for Formulating Your Response")
 		})
-	})
-})
-
-describe("OpenAiNativeHandler", () => {
-	it("adds service tier to Responses request parameters", () => {
-		const handler = new OpenAiNativeHandler({
-			profile: ApiProfile.create({
-				provider: "openai-native",
-				modelId: "gpt-5.6-sol",
-				openaiNative: BaseProviderConfig.create({ serviceTier: "flex" }),
-			}),
-			mode: "act",
-		})
-
-		const params = (
-			handler as unknown as {
-				buildResponseCreateParams: (args: Record<string, unknown>) => Record<string, unknown>
-			}
-		).buildResponseCreateParams({ modelId: "gpt-5.6-sol", systemPrompt: "system", input: [], tools: [] })
-
-		expect(params.service_tier).to.equal("flex")
 	})
 })
 

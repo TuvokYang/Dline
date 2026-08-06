@@ -19,7 +19,6 @@ function isProfileConfigured(profile: ApiProfile): boolean {
 		case "anthropic":
 		case "openrouter":
 		case "gemini":
-		case "openai-native":
 		case "deepseek":
 		case "xai":
 		case "qwen":

@@ -1,8 +1,6 @@
 import { findEnabledProfileByName } from "@core/controller/file/getApiProfiles"
-import { ModelRegistry } from "@core/model-registry/ModelRegistry"
 import { ApiConfiguration, ModelInfo } from "@shared/api"
 import type { AccountUsageData, AccountUsageQuotaData } from "@shared/ExtensionMessage"
-import type { ModelInfo as ProtoModelInfo } from "@shared/proto/dline/models"
 import type { ServerTool } from "@shared/proto/dline/models/metadata"
 import type { ApiProfile } from "@shared/proto/dline/profile"
 import type { WebSearchMode } from "@shared/proto/dline/provider/common"
@@ -39,7 +37,6 @@ import { OcaHandler } from "./providers/oca"
 import { OllamaHandler } from "./providers/ollama"
 import { OpenAiHandler } from "./providers/openai"
 import { OpenAiCodexHandler } from "./providers/openai-codex"
-import { OpenAiNativeHandler } from "./providers/openai-native"
 import { OpenRouterHandler } from "./providers/openrouter"
 import { QwenHandler } from "./providers/qwen"
 import { QwenCodeHandler } from "./providers/qwen-code"
@@ -69,7 +66,7 @@ export interface ApiHandlerContext {
 	profile: ApiProfile
 	mode: Mode
 	ulid?: string
-	onRetryAttempt?: (attempt: number, maxRetries: number, delay: number, error: any) => void
+	onRetryAttempt?: (attempt: number, maxRetries: number, delay: number, error: unknown) => void
 	requestTimeoutMs?: number
 	enableParallelToolCalling?: boolean
 }
@@ -125,54 +122,6 @@ export interface SingleCompletionHandler {
 	completePrompt(prompt: string): Promise<string>
 }
 
-/** @deprecated Replaced by ApiHandlerContext — handlers now read directly from ctx.profile */
-interface ProfileResolved {
-	apiKey?: string
-	baseUrl?: string
-	modelId?: string
-	modelInfo?: ModelInfo
-	provider: string
-	providerConfig: unknown
-}
-
-function fromProfileModelInfo(modelInfo?: ProtoModelInfo): ModelInfo | undefined {
-	const capabilities = modelInfo?.capabilities
-	if (!modelInfo || !capabilities) return undefined
-
-	return {
-		id: modelInfo.id,
-		name: modelInfo.name,
-		description: modelInfo.description,
-		capabilities: {
-			supportsImages: capabilities.supportsImages,
-			supportsPromptCache: capabilities.supportsPromptCache,
-			supportsReasoning: capabilities.supportsReasoning,
-			supportsGlobalEndpoint: capabilities.supportsGlobalEndpoint,
-			maxTokens: capabilities.maxTokens,
-			contextWindow: capabilities.contextWindow,
-			thinking: capabilities.thinking ? { ...capabilities.thinking } : undefined,
-		},
-		pricing: modelInfo.pricing
-			? {
-					inputPrice: modelInfo.pricing.inputPrice,
-					outputPrice: modelInfo.pricing.outputPrice,
-					cacheWritesPrice: modelInfo.pricing.cacheWritesPrice,
-					cacheReadsPrice: modelInfo.pricing.cacheReadsPrice,
-					currency: modelInfo.pricing.currency,
-					tiers:
-						(modelInfo.pricing.tiers?.length ?? 0) > 0
-							? modelInfo.pricing.tiers!.map((tier) => ({ ...tier }))
-							: undefined,
-					thinkingOutputPrice: modelInfo.pricing?.thinkingOutputPrice,
-					thinkingOutputPriceTiers:
-						(modelInfo.pricing.thinkingOutputPriceTiers?.length ?? 0) > 0
-							? modelInfo.pricing.thinkingOutputPriceTiers!.map((tier) => ({ ...tier }))
-							: undefined,
-				}
-			: undefined,
-	}
-}
-
 /**
  * Pure dispatch — each handler receives the full ApiHandlerContext and reads
  * what it needs directly from ctx.profile.[provider] and ctx.profile.modelInfo.
@@ -206,9 +155,6 @@ function createHandlerForProvider(ctx: ApiHandlerContext): ApiHandler {
 			break
 		case "gemini":
 			handler = new GeminiHandler(ctx)
-			break
-		case "openai-native":
-			handler = new OpenAiNativeHandler(ctx)
 			break
 		case "openai-codex":
 			handler = new OpenAiCodexHandler(ctx)
@@ -317,112 +263,6 @@ function createHandlerForProvider(ctx: ApiHandlerContext): ApiHandler {
 		getProviderId: () => providerId,
 		getWebSearchMode: () => profile.webSearchMode,
 	})
-}
-
-/** @deprecated Each handler now reads its own provider config via ctx.profile.[provider] */
-function getProviderConfig(profile: ApiProfile): unknown | undefined {
-	switch (profile.provider) {
-		case "anthropic":
-			return profile.anthropic
-		case "bedrock":
-			return profile.bedrock
-		case "vertex":
-			return profile.vertex
-		case "sapaicore":
-			return profile.sapaicore
-		case "claude-code":
-			return profile.claudeCode
-		case "openrouter":
-			return profile.openrouter
-		case "openai":
-			return profile.openai
-		case "ollama":
-			return profile.ollama
-		case "lmstudio":
-			return profile.lmstudio
-		case "qwen":
-			return profile.qwen
-		case "qwen-code":
-			return profile.qwenCode
-		case "litellm":
-			return profile.litellm
-		case "moonshot":
-			return profile.moonshot
-		case "asksage":
-			return profile.asksage
-		case "cline":
-			return profile.clineProvider
-		case "zai":
-			return profile.zai
-		case "oca":
-			return profile.oca
-		case "aihubmix":
-			return profile.aihubmix
-		case "minimax":
-			return profile.minimax
-		case "deepseek":
-			return profile.deepseek
-		case "doubao":
-			return profile.doubao
-		case "mistral":
-			return profile.mistral
-		case "vscode-lm":
-			return profile.vscodeLm
-		case "nebius":
-			return profile.nebius
-		case "fireworks":
-			return profile.fireworks
-		case "xai":
-			return profile.xai
-		case "sambanova":
-			return profile.sambanova
-		case "cerebras":
-			return profile.cerebras
-		case "groq":
-			return profile.groq
-		case "huggingface":
-			return profile.huggingface
-		case "huawei-cloud-maas":
-			return profile.huaweiCloudMaas
-		case "baseten":
-			return profile.baseten
-		case "vercel-ai-gateway":
-			return profile.vercelAiGateway
-		case "together":
-			return profile.together
-		case "requesty":
-			return profile.requesty
-		case "hicap":
-			return profile.hicap
-		case "openai-codex":
-			return profile.openaiCodex
-		case "openai-native":
-			return profile.openaiNative
-		case "gemini":
-			return profile.gemini
-		case "nousResearch":
-			return profile.nousResearch
-		case "wandb":
-			return profile.wandb
-		case "dify":
-			return profile.dify
-		default:
-			return undefined
-	}
-}
-
-/** @deprecated Handler now reads directly from ctx.profile */
-function resolveProfile(profileName: string): ProfileResolved | undefined {
-	const profile = findEnabledProfileByName(profileName)
-	if (!profile) return undefined
-	const registry = ModelRegistry.getInstance()
-	const pInfo = registry.getProviderModels(profile.provider)
-	const apiKey = profile.apiKey
-	const baseUrl = profile.baseUrl ?? pInfo?.baseUrl
-	const modelId = profile.modelId
-	const modelInfo = getProfileModelInfo(profile)
-	const providerConfig = getProviderConfig(profile)
-	return { apiKey, baseUrl, modelId, modelInfo, provider: profile.provider, providerConfig }
 }
 
 export function resolveProviderFromProfile(profileName?: string): string | undefined {

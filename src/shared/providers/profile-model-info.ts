@@ -33,7 +33,6 @@ export const PROFILE_PROVIDER_KEYS: Partial<Record<string, keyof ApiProfile>> = 
 	ollama: "ollama",
 	openai: "openai",
 	"openai-codex": "openaiCodex",
-	"openai-native": "openaiNative",
 	openrouter: "openrouter",
 	qwen: "qwen",
 	"qwen-code": "qwenCode",

@@ -5,6 +5,16 @@ import { Logger } from "@/shared/services/Logger"
 import { createResponsesRegistry, createResponsesToolChunk } from "../transform/responses-identity-registry"
 import type { ApiRawStreamServerToolChunk, ApiServerToolPhase } from "../transform/stream"
 
+interface ResponsesInputTokenDetails {
+	readonly cache_write_tokens?: number | null
+	readonly cache_miss_tokens?: number | null
+}
+
+/** Read official Responses cache-write usage while retaining compatible-provider fallback support. */
+export function getResponsesCacheWriteTokens(details: ResponsesInputTokenDetails | null | undefined): number {
+	return details?.cache_write_tokens ?? details?.cache_miss_tokens ?? 0
+}
+
 function createWebSearchChunk(
 	functionId: string,
 	phase: ApiServerToolPhase,
@@ -188,7 +198,7 @@ export async function* handleResponsesApiStreamResponse(
 			const inputTokens = usage.input_tokens || 0
 			const outputTokens = usage.output_tokens || 0
 			const cacheReadTokens = usage.input_tokens_details?.cached_tokens || 0
-			const cacheWriteTokens = (usage.input_tokens_details as { cache_miss_tokens?: number })?.cache_miss_tokens || 0
+			const cacheWriteTokens = getResponsesCacheWriteTokens(usage.input_tokens_details)
 			const reasoningTokens = usage.output_tokens_details?.reasoning_tokens || 0
 			const totalTokens = usage.total_tokens || 0
 			const totalCost = await calculateCost(

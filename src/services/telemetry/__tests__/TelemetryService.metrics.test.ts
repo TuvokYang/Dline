@@ -312,7 +312,7 @@ describe("TelemetryService metrics", () => {
 		const service = createTelemetryService(provider)
 
 		service.captureTaskCompleted("task-4", {
-			provider: "openai-native",
+			provider: "openai",
 			modelId: "gpt-5",
 			apiFormat: ApiFormat.OPENAI_RESPONSES,
 			timeToFirstTokenMs: 350,
@@ -324,7 +324,7 @@ describe("TelemetryService metrics", () => {
 		assert.ok(completionEvent)
 		assert.ok(completionEvent?.properties)
 		assert.strictEqual(completionEvent?.properties?.ulid, "task-4")
-		assert.strictEqual(completionEvent?.properties?.provider, "openai-native")
+		assert.strictEqual(completionEvent?.properties?.provider, "openai")
 		assert.strictEqual(completionEvent?.properties?.modelId, "gpt-5")
 		assert.strictEqual(completionEvent?.properties?.apiFormat, ApiFormat.OPENAI_RESPONSES)
 		assert.strictEqual(completionEvent?.properties?.apiFormatName, "OPENAI_RESPONSES")
@@ -335,7 +335,7 @@ describe("TelemetryService metrics", () => {
 		assert.ok(ttftMetric)
 		assert.strictEqual(ttftMetric?.value, 0.35)
 		assert.strictEqual(ttftMetric?.attributes.ulid, "task-4")
-		assert.strictEqual(ttftMetric?.attributes.provider, "openai-native")
+		assert.strictEqual(ttftMetric?.attributes.provider, "openai")
 		assert.strictEqual(ttftMetric?.attributes.model, "gpt-5")
 		assert.strictEqual(ttftMetric?.attributes.apiFormat, "OPENAI_RESPONSES")
 

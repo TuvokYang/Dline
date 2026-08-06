@@ -11,7 +11,6 @@ export type ApiProvider =
 	| "ollama"
 	| "lmstudio"
 	| "gemini"
-	| "openai-native"
 	| "openai-codex"
 	| "requesty"
 	| "together"
@@ -114,7 +113,7 @@ export { mistralDefaultModelId } from "../core/api/providers/models/mistral"
 export { moonshotDefaultModelId } from "../core/api/providers/models/moonshot"
 export { nebiusDefaultModelId } from "../core/api/providers/models/nebius"
 export { nousResearchDefaultModelId } from "../core/api/providers/models/nousresearch"
-export { openAiDefaultModelId, openAiNativeDefaultModelId } from "../core/api/providers/models/openai"
+export { openAiDefaultModelId } from "../core/api/providers/models/openai"
 export { openAiCodexDefaultModelId } from "../core/api/providers/models/openai-codex"
 // OpenAI-compatible
 export { azureOpenAiDefaultApiVersion, openAiModelInfoSaneDefaults } from "../core/api/providers/models/openai-compatible"
@@ -158,7 +157,6 @@ export type ClaudeCodeModelId = string
 export type BedrockModelId = string
 export type VertexModelId = string
 export type GeminiModelId = string
-export type OpenAiNativeModelId = string
 export type OpenAiCodexModelId = string
 export type DeepSeekModelId = string
 export type HuggingFaceModelId = string
@@ -223,7 +221,7 @@ export { mistralModels } from "../core/api/providers/models/mistral"
 export { moonshotModels } from "../core/api/providers/models/moonshot"
 export { nebiusModels } from "../core/api/providers/models/nebius"
 export { nousResearchModels } from "../core/api/providers/models/nousresearch"
-export { openAiModels, openAiNativeModels } from "../core/api/providers/models/openai"
+export { openAiModels } from "../core/api/providers/models/openai"
 export { openAiCodexModels } from "../core/api/providers/models/openai-codex"
 export { mainlandQwenModels } from "../core/api/providers/models/qwen-cn"
 export { qwenCodeModels } from "../core/api/providers/models/qwen-code"

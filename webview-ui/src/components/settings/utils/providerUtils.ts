@@ -24,7 +24,6 @@ import {
 	nebiusModels,
 	nousResearchModels,
 	openAiCodexModels,
-	openAiNativeModels,
 	qwenCodeModels,
 	sambanovaModels,
 	sapAiCoreModels,
@@ -60,8 +59,6 @@ export function getModelsForProvider(
 			return vertexModels
 		case "gemini":
 			return geminiModels
-		case "openai-native":
-			return openAiNativeModels
 		case "openai-codex":
 			return openAiCodexModels
 		case "deepseek":

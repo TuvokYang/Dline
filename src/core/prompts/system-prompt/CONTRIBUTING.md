@@ -487,7 +487,7 @@ enum ApiFormat {
 
 ### Using API Format in Provider Code
 
-**Example from [`src/core/api/providers/openai-native.ts`](../../api/providers/openai-native.ts):**
+**Example from [`src/core/api/providers/openai.ts`](../../api/providers/openai.ts):**
 
 ```typescript
 async *createMessage(systemPrompt: string, messages: ClineStorageMessage[], tools?: ChatCompletionTool[]): ApiStream {

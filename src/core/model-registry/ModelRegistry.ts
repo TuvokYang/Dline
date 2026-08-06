@@ -214,28 +214,25 @@ export class ModelRegistry {
 		return this.cache.get(providerId)
 	}
 
-	/** Merge the retired OpenAI Native catalog into the canonical OpenAI provider in memory. */
+	/** Resolve the canonical OpenAI provider config from memory, using the seed catalog only as a field fallback. */
 	private getUnifiedOpenAiConfig(): ProviderModelsConfig | undefined {
 		const configured = this.cache.get("openai")
-		const legacy = this.cache.get("openai-native")
-		if (!configured && !legacy) {
+		if (!configured) {
 			return undefined
 		}
 
 		const seed = getProviderSeedConfig("openai")
 		return {
-			...(seed ?? legacy ?? configured),
-			...legacy,
+			...(seed ?? configured),
 			...configured,
 			provider: "openai",
 			providerName: "OpenAI",
-			billingMode: configured?.billingMode ?? seed?.billingMode ?? legacy?.billingMode ?? "token",
+			billingMode: configured?.billingMode ?? seed?.billingMode ?? "token",
 			models: {
-				...(legacy?.models ?? {}),
 				...(seed?.models ?? {}),
 				...(configured?.models ?? {}),
 			},
-			defaultModelId: configured?.defaultModelId ?? legacy?.defaultModelId ?? seed?.defaultModelId,
+			defaultModelId: configured?.defaultModelId ?? seed?.defaultModelId,
 		}
 	}
 
@@ -244,7 +241,7 @@ export class ModelRegistry {
 	 */
 	getAllProviders(): ProviderModelsConfig[] {
 		const providers = Array.from(this.cache.entries())
-			.filter(([providerId]) => providerId !== "openai" && providerId !== "openai-native")
+			.filter(([providerId]) => providerId !== "openai")
 			.map(([, config]) => config)
 		const openai = this.getUnifiedOpenAiConfig()
 		if (openai) providers.push(openai)

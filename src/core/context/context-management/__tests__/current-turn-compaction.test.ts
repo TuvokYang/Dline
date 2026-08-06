@@ -1,6 +1,9 @@
+import { convertToOpenAiMessages } from "@core/api/transform/openai-format"
+import { convertToOpenAIResponsesInput } from "@core/api/transform/openai-response-format"
+import type { ClineStorageMessage } from "@shared/messages/content"
 import { expect } from "chai"
 import { describe, it } from "vitest"
-import { shouldDeferCurrentTurn, shouldRestoreDeferredTurn } from "../current-turn-compaction"
+import { projectCompletedCompactionResult, shouldDeferCurrentTurn, shouldRestoreDeferredTurn } from "../current-turn-compaction"
 
 const DEFAULT_TRIGGER_TOKENS = 261_340
 
@@ -104,5 +107,48 @@ describe("current-turn compaction boundary", () => {
 		expect(shouldRestoreDeferredTurn({ hasDeferredTurn: true, didCompleteSummarization: false })).to.equal(false)
 		expect(shouldRestoreDeferredTurn({ hasDeferredTurn: false, didCompleteSummarization: true })).to.equal(false)
 		expect(shouldRestoreDeferredTurn({ hasDeferredTurn: true, didCompleteSummarization: true })).to.equal(true)
+	})
+
+	it("projects a completed summarize_task result as user text after its function call is truncated", () => {
+		const projected = projectCompletedCompactionResult([
+			createToolResult("fc_compaction", "continuation summary"),
+			createText("preserved suffix"),
+		])
+
+		expect(projected).to.deep.equal([
+			{ type: "text", text: "continuation summary" },
+			{ type: "text", text: "preserved suffix" },
+		])
+		expect(projected.some((block) => block.type === "tool_result")).to.equal(false)
+	})
+
+	it("does not emit an orphan Chat tool message for a completed compaction result", () => {
+		const projected = projectCompletedCompactionResult([createToolResult("fc_compaction", "continuation summary")])
+		const messages: ClineStorageMessage[] = [{ role: "user", content: projected }]
+
+		const input = convertToOpenAiMessages(messages)
+
+		expect(input).to.deep.equal([
+			{
+				role: "user",
+				content: [{ type: "text", text: "continuation summary" }],
+			},
+		])
+		expect(input.some((message) => message.role === "tool")).to.equal(false)
+	})
+
+	it("does not emit an orphan function_call_output for a completed compaction result", () => {
+		const projected = projectCompletedCompactionResult([createToolResult("fc_compaction", "continuation summary")])
+		const messages: ClineStorageMessage[] = [{ role: "user", content: projected }]
+
+		const { input } = convertToOpenAIResponsesInput(messages)
+
+		expect(input).to.deep.equal([
+			{
+				role: "user",
+				content: [{ type: "input_text", text: "continuation summary" }],
+			},
+		])
+		expect(input.some((item) => item.type === "function_call_output")).to.equal(false)
 	})
 })
