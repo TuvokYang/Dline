@@ -179,7 +179,9 @@ export const CommandOutputRow = memo(
 		isCommandInterrupted = false,
 		isCommandSkipped = false,
 		isBackgroundExec = false,
+		canMoveToBackground = false,
 		onCancelCommand,
+		onMoveToBackground,
 		icon,
 		title,
 		isOutputFullyExpanded,
@@ -197,8 +199,10 @@ export const CommandOutputRow = memo(
 		isCommandInterrupted?: boolean
 		isCommandSkipped?: boolean
 		isBackgroundExec?: boolean
+		canMoveToBackground?: boolean
 		isLast?: boolean
 		onCancelCommand?: () => void
+		onMoveToBackground?: () => void
 		icon?: JSX.Element | null
 		title?: JSX.Element | null
 		isOutputFullyExpanded: boolean
@@ -253,6 +257,8 @@ export const CommandOutputRow = memo(
 				? undefined
 				: commandPresentation.slice(workingDirectoryIndex + workingDirectoryMarker.length).trim()
 		const showCancelButton = isActive && typeof onCancelCommand === "function"
+		const showMoveToBackgroundButton =
+			isCommandExecuting && !isBackgroundExec && canMoveToBackground === true && typeof onMoveToBackground === "function"
 		const ExecutionModeIcon = isBackgroundExec ? SendToBackIcon : BringToFrontIcon
 		const executionModeLabel = isBackgroundExec ? "Background" : "Foreground"
 		const executionModeIndicator = (
@@ -309,9 +315,22 @@ export const CommandOutputRow = memo(
 							</span>
 						</button>
 						{executionModeIndicator}
-						<CopyButton ariaLabel="Copy command" textToCopy={command} />
+						<CopyButton ariaLabel="Copy command" className="h-5" textToCopy={command} />
+						{showMoveToBackgroundButton && (
+							<Button
+								className="h-5 border px-2 py-0 text-[11px] leading-none"
+								onClick={onMoveToBackground}
+								size="sm"
+								variant="secondary">
+								Move to background
+							</Button>
+						)}
 						{showCancelButton && (
-							<Button className="border" onClick={onCancelCommand} size="sm" variant="danger">
+							<Button
+								className="h-5 border px-2 py-0 text-[11px] leading-none"
+								onClick={onCancelCommand}
+								size="sm"
+								variant="danger">
 								Cancel
 							</Button>
 						)}
@@ -342,12 +361,12 @@ export const CommandOutputRow = memo(
 							</div>
 							<div className="flex items-center gap-2 shrink-0">
 								{executionModeIndicator}
-								<div onClick={(event) => event.stopPropagation()}>
-									<CopyButton ariaLabel="Copy command" textToCopy={command} />
+								<div className="flex items-center" onClick={(event) => event.stopPropagation()}>
+									<CopyButton ariaLabel="Copy command" className="h-5" textToCopy={command} />
 								</div>
 								{showCancelButton && (
 									<Button
-										className="border"
+										className="h-5 border px-2 py-0 text-[11px] leading-none"
 										onClick={(e) => {
 											e.stopPropagation()
 											onCancelCommand?.()
@@ -382,6 +401,17 @@ export const CommandOutputRow = memo(
 						/>
 					)}
 
+					{showMoveToBackgroundButton && (
+						<div className="flex items-center gap-2 border-t border-editor-group-border px-2 py-1.5">
+							<Button className="border" onClick={onMoveToBackground} size="sm" variant="secondary">
+								Move to background
+							</Button>
+							<span className="text-xs text-description">
+								Move this command to the background to continue the conversation.
+							</span>
+						</div>
+					)}
+
 					{requestsApproval && (
 						<div className="flex items-center gap-2.5 border-t border-editor-group-border p-2 text-[12px] text-editor-warning-foreground">
 							<i className="codicon codicon-warning" />
@@ -391,9 +421,9 @@ export const CommandOutputRow = memo(
 
 					{workdirectory && (
 						<div
-							className="flex min-w-0 items-start gap-2 border-t border-editor-group-border px-3 py-2 text-xs text-description"
+							className="flex min-w-0 items-center gap-2 border-t border-editor-group-border px-3 py-2 text-xs text-description"
 							data-testid="command-workdirectory">
-							<span aria-label="Working directory" className="mt-0.5 shrink-0" title="Working directory">
+							<span aria-label="Working directory" className="shrink-0" title="Working directory">
 								<FolderRootIcon aria-hidden="true" className="size-3" />
 							</span>
 							<span className="min-w-0 break-all font-mono text-foreground" title={workdirectory}>

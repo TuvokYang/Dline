@@ -85,6 +85,7 @@ export interface ExtensionState {
 	terminalReuseEnabled?: boolean
 	terminalOutputLineLimit: number
 	terminalCommandTimeoutSeconds: number
+	terminalCommandHandoffSeconds: number
 	maxConsecutiveMistakes: number
 	defaultTerminalProfile?: string
 	vscodeTerminalExecutionMode: string
@@ -200,6 +201,8 @@ export interface ClineMessage {
 	commandStatus?: CommandStatus
 	/** Whether this command currently owns the foreground turn or is detached in the background. */
 	commandExecutionMode?: CommandExecutionMode
+	/** Set once the handoff wait elapsed so the UI can offer a "Move to background" action. */
+	commandCanMoveToBackground?: boolean
 	/** Stable identity of the interaction that owns this ask presentation. */
 	interactionId?: string
 	/** Stable identity shared by the command message, activity, background record, and cancellation entry. */

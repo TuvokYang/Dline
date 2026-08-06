@@ -61,6 +61,8 @@ service TaskService {
   rpc subscribeToTaskActivities(TaskActivitySubscriptionRequest) returns (stream TaskActivityUpdate);
   // Cancels one or more task-local activities by stable activity id
   rpc cancelTaskActivities(CancelTaskActivitiesRequest) returns (CancelTaskActivitiesResponse);
+  // Moves a synchronous foreground command to background tracking
+  rpc moveCommandToBackground(MoveCommandToBackgroundRequest) returns (MoveCommandToBackgroundResponse);
 }
 
 // Request message for creating a new task
@@ -236,6 +238,15 @@ message CancelTaskActivitiesRequest {
 
 message CancelTaskActivitiesResponse {
   repeated string cancelled_activity_ids = 1;
+}
+
+message MoveCommandToBackgroundRequest {
+  string task_id = 1;
+  string activity_id = 2;
+}
+
+message MoveCommandToBackgroundResponse {
+  bool moved = 1;
 }
 
 message TaskActivityMetrics {

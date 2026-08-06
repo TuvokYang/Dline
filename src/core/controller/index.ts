@@ -43,7 +43,7 @@ import open from "open"
 import Mutex from "p-mutex"
 import * as path from "path"
 import { ClineEnv } from "@/config"
-import { getDlineDocumentsPath, getDlineDocumentsPathSync, getTaskHeaderText } from "@/core/storage/disk"
+import { getDlineDocumentsPath, getDlineDocumentsPathSync } from "@/core/storage/disk"
 import { HostProvider } from "@/hosts/host-provider"
 import { ExtensionRegistryInfo } from "@/registry"
 import { AuthService } from "@/services/auth/AuthService"
@@ -1200,6 +1200,7 @@ export class Controller {
 		const mcpResponsesCollapsed = this.stateManager.getGlobalStateKey("mcpResponsesCollapsed")
 		const terminalOutputLineLimit = this.stateManager.getGlobalSettingsKey("terminalOutputLineLimit")
 		const terminalCommandTimeoutSeconds = this.stateManager.getGlobalSettingsKey("terminalCommandTimeoutSeconds")
+		const terminalCommandHandoffSeconds = this.stateManager.getGlobalSettingsKey("terminalCommandHandoffSeconds")
 		const maxConsecutiveMistakes = this.stateManager.getGlobalSettingsKey("maxConsecutiveMistakes")
 		const favoritedModelIds = this.stateManager.getGlobalStateKey("favoritedModelIds")
 		const doubleCheckCompletionEnabled = this.stateManager.getGlobalSettingsKey("doubleCheckCompletionEnabled")
@@ -1215,12 +1216,14 @@ export class Controller {
 
 		const currentTaskItem = this.task?.taskId ? (taskHistory || []).find((item) => item.id === this.task?.taskId) : undefined
 		const rawMessages = [...(this.task?.messageStateHandler.clineMessages || [])]
-		// Separate task header message from body messages.
-		const _taskHeaderText = this.task?.taskId
-			? await getTaskHeaderText(this.task.taskId)
-			: (rawMessages.find((m) => m.say === "task")?.text ?? rawMessages.at(0)?.text ?? "")
 		// Build a synthetic taskTitleMessage for backward compatibility with frontend
 		const taskTitleMessage = rawMessages.find((m) => m.say === "task") ?? rawMessages.at(0)
+		// Separate task header message from body messages. Read the header from the
+		// in-memory message list instead of re-reading ui_messages.jsonl on every
+		// state push: getTaskHeaderText() bypasses the jsonl cache and performs a
+		// full fs.readFile + per-line JSON.parse, which dominated buildState() time
+		// in long conversations (900-2500ms per push in field logs).
+		const _taskHeaderText = taskTitleMessage?.text ?? ""
 		// totalMessageCount now includes the task message (matching fetchMessage behavior)
 		// so the frontend can detect when scrolled to the absolute top (index 0)
 		const totalMessageCount = rawMessages.length
@@ -1320,6 +1323,7 @@ export class Controller {
 			mcpResponsesCollapsed,
 			terminalOutputLineLimit,
 			terminalCommandTimeoutSeconds,
+			terminalCommandHandoffSeconds,
 			maxConsecutiveMistakes,
 			customPrompt,
 			taskHistory: processedTaskHistory,

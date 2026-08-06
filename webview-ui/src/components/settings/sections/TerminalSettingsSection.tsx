@@ -6,6 +6,7 @@ import { usePlatform } from "@/context/PlatformContext"
 import { StateServiceClient } from "../../../services/grpc-client"
 import Section from "../Section"
 import TerminalCommandTimeoutSetting from "../TerminalCommandTimeoutSetting"
+import TerminalHandoffSecondsSetting from "../TerminalHandoffSecondsSetting"
 import TerminalOutputLineLimitSlider from "../TerminalOutputLineLimitSlider"
 import { updateSetting } from "../utils/settingsHandlers"
 
@@ -114,6 +115,7 @@ export const TerminalSettingsSection: React.FC<TerminalSettingsSectionProps> = (
 						</p>
 					</div>
 					<TerminalCommandTimeoutSetting />
+					<TerminalHandoffSecondsSetting />
 
 					<div className="mb-4">
 						<div className="mb-2">

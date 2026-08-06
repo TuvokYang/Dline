@@ -15,7 +15,7 @@ import { clearRemoteConfig } from "@/core/storage/remote-config/utils"
 import { isChatInputSendShortcut } from "@/shared/ChatInputSendShortcut"
 import { McpDisplayMode } from "@/shared/McpDisplayMode"
 import { Logger } from "@/shared/services/Logger"
-import { MIN_TERMINAL_COMMAND_TIMEOUT_SECONDS } from "@/shared/terminal-settings"
+import { MIN_TERMINAL_COMMAND_HANDOFF_SECONDS, MIN_TERMINAL_COMMAND_TIMEOUT_SECONDS } from "@/shared/terminal-settings"
 import { telemetryService } from "../../../services/telemetry"
 import { BrowserSettings as SharedBrowserSettings } from "../../../shared/BrowserSettings"
 import { Controller } from ".."
@@ -159,6 +159,14 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 				throw new Error(`Terminal command timeout must be at least ${MIN_TERMINAL_COMMAND_TIMEOUT_SECONDS} seconds`)
 			}
 			controller.stateManager.setGlobalState("terminalCommandTimeoutSeconds", timeoutSeconds)
+		}
+
+		if (request.terminalCommandHandoffSeconds !== undefined) {
+			const handoffSeconds = Number(request.terminalCommandHandoffSeconds)
+			if (!Number.isSafeInteger(handoffSeconds) || handoffSeconds < MIN_TERMINAL_COMMAND_HANDOFF_SECONDS) {
+				throw new Error(`Terminal command handoff must be at least ${MIN_TERMINAL_COMMAND_HANDOFF_SECONDS} seconds`)
+			}
+			controller.stateManager.setGlobalState("terminalCommandHandoffSeconds", handoffSeconds)
 		}
 
 		if (request.vscodeTerminalExecutionMode !== undefined && request.vscodeTerminalExecutionMode !== "") {

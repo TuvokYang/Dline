@@ -262,10 +262,18 @@ export class ExecuteCommandToolHandler implements IFullyManagedTool {
 				(!requiresApprovalPerLLM && autoApproveSafe) ||
 				(requiresApprovalPerLLM && autoApproveSafe && autoApproveAll))
 		) {
-			// Auto-approve flow
+			// Auto-approve flow: render the execution directory the same way the manual
+			// approval presentation does, so the workdirectory row is shown consistently.
 			if (!config.isSubagentExecution) {
 				const existingTs = block.ts
-				await config.callbacks.say("command", actualCommand, undefined, undefined, false, existingTs)
+				await config.callbacks.say(
+					"command",
+					`${actualCommand}\n\nWorking directory: ${executionDir}`,
+					undefined,
+					undefined,
+					false,
+					existingTs,
+				)
 			}
 			didAutoApprove = true
 			telemetryService.captureToolUsage(

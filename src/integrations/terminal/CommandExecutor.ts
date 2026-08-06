@@ -16,6 +16,7 @@
 import { randomUUID } from "node:crypto"
 import { DlineTempManager } from "@services/temp"
 import { findLastIndex } from "@shared/array"
+import { DEFAULT_TERMINAL_COMMAND_HANDOFF_SECONDS } from "@shared/terminal-settings"
 import { Logger } from "@/shared/services/Logger"
 import { orchestrateCommandExecution } from "./CommandOrchestrator"
 import { isCommandCompletionSuccessful } from "./command-completion"
@@ -69,6 +70,9 @@ export class CommandExecutor {
 	private readonly commandsByActivityId = new Map<string, string>()
 	private readonly cancellationOwners = new Map<string, CommandCancellationOwner>()
 	private readonly cancelledActivityIds = new Set<string>()
+	private readonly pendingHandoffs = new Map<string, { promise: Promise<void>; resolve: () => void }>()
+
+	private readonly handoffSeconds: number
 
 	private nextActivityNumber = 1
 	private nextShellEnvironmentDiagnosticsNumber = 1
@@ -84,6 +88,7 @@ export class CommandExecutor {
 		this.taskId = config.taskId
 		this.ulid = config.ulid
 		this.terminalExecutionMode = config.terminalExecutionMode
+		this.handoffSeconds = config.terminalCommandHandoffSeconds ?? DEFAULT_TERMINAL_COMMAND_HANDOFF_SECONDS
 		this.terminalManager = config.terminalManager
 		this.callbacks = callbacks
 		this.terminalConfiguration = config.terminalConfiguration
@@ -158,7 +163,18 @@ export class CommandExecutor {
 		// Select the appropriate terminal manager
 		const useStandalone =
 			options?.startInBackground || options?.useBackgroundExecution || this.terminalExecutionMode === "backgroundExec"
-		const executionMode = useStandalone ? "background" : "foreground"
+		// The mode marker must reflect execution semantics, not just the terminal mechanism:
+		// - explicit background and headless execution are detached work → "background"
+		// - synchronous requests stay in the foreground loop even when the global
+		//   terminal mode routes execution through the standalone manager → "foreground"
+		const executionMode: "foreground" | "background" =
+			options?.startInBackground || options?.useBackgroundExecution
+				? "background"
+				: options?.synchronous
+					? "foreground"
+					: useStandalone
+						? "background"
+						: "foreground"
 		const manager = useStandalone ? this.standaloneManager : this.terminalManager
 		Logger.debug(
 			`[Task ${this.taskId}] Executing command in ${useStandalone ? "standalone" : "VSCode"} terminal (cwd: ${workdirectory}): ${command}`,
@@ -234,6 +250,17 @@ export class CommandExecutor {
 		terminalInfo.lastCommand = command
 		const activityId = `command_${options?.commandTs ?? Date.now()}_${this.nextActivityNumber++}`
 		const cancellationOwner: CommandCancellationOwner = options?.startInBackground ? "explicit" : "task"
+		// Synchronous foreground commands stay in the foreground loop; the UI can
+		// request a manual move to background once the handoff wait has elapsed.
+		let handoffRequest: { promise: Promise<void>; resolve: () => void } | undefined
+		if (options?.synchronous) {
+			let resolveHandoff!: () => void
+			const promise = new Promise<void>((resolve) => {
+				resolveHandoff = resolve
+			})
+			handoffRequest = { promise, resolve: resolveHandoff }
+			this.pendingHandoffs.set(activityId, handoffRequest)
+		}
 		let activityLineCount = 0
 		let timedOut = false
 		this.processes.set(activityId, process)
@@ -278,6 +305,7 @@ export class CommandExecutor {
 		const clearCurrentProcess = () => {
 			if (this.currentProcess === process) this.currentProcess = null
 			this.processes.delete(activityId)
+			this.pendingHandoffs.delete(activityId)
 			const functionId = this.functionIdsByActivityId.get(activityId)
 			if (functionId) {
 				this.functionIdsByActivityId.delete(activityId)
@@ -339,6 +367,16 @@ export class CommandExecutor {
 			command,
 			timeoutSeconds,
 			synchronous: options?.synchronous,
+			handoffSeconds: this.handoffSeconds,
+			handoffRequest,
+			onHandoffAvailable: () => {
+				if (!options?.commandTs) return
+				const messages = this.callbacks.getClineMessages() as Array<{ ts?: number }>
+				const commandIndex = messages.findIndex((message) => message.ts === options.commandTs)
+				if (commandIndex !== -1) {
+					void this.callbacks.updateClineMessage(commandIndex, { commandCanMoveToBackground: true })
+				}
+			},
 			onTimeout: markTimedOut,
 			suppressUserInteraction: options?.suppressUserInteraction,
 			commandTs: options?.commandTs,
@@ -443,6 +481,18 @@ export class CommandExecutor {
 	}
 
 	/** Cancel exactly one command by its stable activity identity. */
+	/**
+	 * Move a synchronous foreground command to background tracking on request.
+	 * Returns false when the activity is not awaiting a manual handoff.
+	 */
+	async requestBackgroundHandoff(activityId: string): Promise<boolean> {
+		const pending = this.pendingHandoffs.get(activityId)
+		if (!pending) return false
+		this.pendingHandoffs.delete(activityId)
+		pending.resolve()
+		return true
+	}
+
 	async cancelCommand(activityId: string): Promise<boolean> {
 		const process = this.processes.get(activityId)
 		if (!process?.terminate || !this.markCancellationRequested(activityId)) return false

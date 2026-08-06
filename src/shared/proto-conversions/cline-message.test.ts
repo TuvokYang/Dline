@@ -11,6 +11,7 @@ describe("ClineMessage command identity conversion", () => {
 			activityId: "command-100-1",
 			commandStatus: "cancelled" as const,
 			commandExecutionMode: "background" as const,
+			commandCanMoveToBackground: true,
 		}
 
 		const protoMessage = convertClineMessageToProto(applicationMessage)
@@ -22,6 +23,7 @@ describe("ClineMessage command identity conversion", () => {
 			activityId: "command-100-1",
 			commandStatus: "cancelled",
 			commandExecutionMode: "background",
+			commandCanMoveToBackground: true,
 		})
 	})
 })

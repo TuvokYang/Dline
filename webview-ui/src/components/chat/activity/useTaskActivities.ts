@@ -1,4 +1,9 @@
-import { CancelTaskActivitiesRequest, type TaskActivity, TaskActivitySubscriptionRequest } from "@shared/proto/dline/task"
+import {
+	CancelTaskActivitiesRequest,
+	MoveCommandToBackgroundRequest,
+	type TaskActivity,
+	TaskActivitySubscriptionRequest,
+} from "@shared/proto/dline/task"
 import { useEffect, useState } from "react"
 import { TaskServiceClient } from "@/services/grpc-client"
 
@@ -40,6 +45,14 @@ export async function cancelTaskActivities(taskId: string, activityIds: string[]
 	if (activityIds.length === 0) return []
 	const response = await TaskServiceClient.cancelTaskActivities(CancelTaskActivitiesRequest.create({ taskId, activityIds }))
 	return response.cancelledActivityIds
+}
+
+/** Move one synchronous foreground command to background tracking. */
+export async function moveCommandToBackground(taskId: string, activityId: string): Promise<boolean> {
+	const response = await TaskServiceClient.moveCommandToBackground(
+		MoveCommandToBackgroundRequest.create({ taskId, activityId }),
+	)
+	return response.moved
 }
 
 /** Shared per-webview task activity subscription. */

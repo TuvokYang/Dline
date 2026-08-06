@@ -297,6 +297,10 @@ describe("State Keys Type Safety", () => {
 			expect(getDefaultValue("terminalCommandTimeoutSeconds" as GlobalStateAndSettingsKey)).to.equal(1800)
 		})
 
+		it("should default foreground command handoff to 10 seconds", () => {
+			expect(getDefaultValue("terminalCommandHandoffSeconds" as GlobalStateAndSettingsKey)).to.equal(10)
+		})
+
 		it("should return correct default values for known keys", () => {
 			// Test a few known defaults
 			const testCases: Array<{ key: GlobalStateAndSettingsKey; expectedType: string }> = [

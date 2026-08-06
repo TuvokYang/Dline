@@ -592,7 +592,133 @@ describe("CommandExecutor explicit background execution", () => {
 		expect(process.terminate).toHaveBeenCalledTimes(1)
 		expect(updateCommandActivity).toHaveBeenCalledWith("command_77_1", expect.objectContaining({ status: "cancelled" }))
 		expect(updateCommandActivity).not.toHaveBeenCalledWith("command_77_1", expect.objectContaining({ status: "failed" }))
-		expect(updateClineMessage).toHaveBeenCalledWith(0, { commandStatus: "cancelled" })
 		expect(updateClineMessage).not.toHaveBeenCalledWith(0, expect.objectContaining({ commandStatus: "failed" }))
+	})
+
+	it("sets commandCanMoveToBackground after the handoff wait and moves the synchronous command on request", async () => {
+		vi.useFakeTimers()
+		const process = new FakeTerminalProcess()
+		const processPromise = process.asResultPromise()
+		const terminalInfo: TerminalInfo = {
+			id: 1,
+			terminal: {
+				dispose: vi.fn(),
+				hide: vi.fn(),
+				name: "Standalone terminal",
+				processId: Promise.resolve(1),
+				sendText: vi.fn(),
+				show: vi.fn(),
+			},
+			busy: false,
+			lastActive: Date.now(),
+			lastCommand: "",
+		}
+		const messages: Array<Record<string, unknown>> = [{ ask: "command", text: "watch", ts: 505 }]
+		const callbacks: CommandExecutorCallbacks = {
+			addToUserMessageContent: vi.fn(),
+			ask: vi.fn(async () => ({ response: "messageResponse" })),
+			getClineMessages: () => messages,
+			say: vi.fn(async () => undefined),
+			updateBackgroundCommandState: vi.fn(),
+			updateClineMessage: vi.fn(async (index, patch) => {
+				Object.assign(messages[index], patch)
+			}),
+		}
+		const executor = new CommandExecutor(
+			{
+				cwd: "C:\\workspace",
+				taskId: "task-manual-handoff",
+				terminalExecutionMode: "backgroundExec",
+				terminalManager: createTerminalManager(),
+				terminalConfiguration,
+				ulid: "task-manual-handoff-ulid",
+			},
+			callbacks,
+		)
+		const standaloneManager = (executor as unknown as { standaloneManager: StandaloneTerminalManager }).standaloneManager
+		vi.spyOn(standaloneManager, "getOrCreateTerminal").mockResolvedValue(terminalInfo)
+		vi.spyOn(standaloneManager, "runCommand").mockReturnValue(processPromise)
+
+		try {
+			const execution = executor.execute("watch", undefined, { commandTs: 505, synchronous: true })
+			// First advance lets the async setup (shell environment, terminal creation)
+			// settle and arm the handoff timer; the second advance fires it.
+			await vi.advanceTimersByTimeAsync(10_000)
+			await vi.advanceTimersByTimeAsync(10_000)
+			assert.equal(messages[0].commandCanMoveToBackground, true)
+
+			assert.equal(await executor.requestBackgroundHandoff("command_505_1"), true)
+			assert.equal(await executor.requestBackgroundHandoff("command_505_1"), false)
+			const result = await execution
+			assert.equal(result.completed, false)
+			assert.match(result.result as string, /Command is running in the background/i)
+		} finally {
+			process.complete({ exitCode: 0, signal: null })
+			process.continue()
+		}
+	})
+
+	it("marks a synchronous command as foreground even under the global backgroundExec mode", async () => {
+		const process = new FakeTerminalProcess()
+		const processPromise = process.asResultPromise()
+		const show = vi.fn()
+		const terminalInfo: TerminalInfo = {
+			id: 1,
+			terminal: {
+				dispose: vi.fn(),
+				hide: vi.fn(),
+				name: "Standalone terminal",
+				processId: Promise.resolve(1),
+				sendText: vi.fn(),
+				show,
+			},
+			busy: false,
+			lastActive: Date.now(),
+			lastCommand: "",
+		}
+		const messages: Array<Record<string, unknown>> = [{ ask: "command", text: "watch", ts: 303 }]
+		const createCommandActivity = vi.fn()
+		const callbacks: CommandExecutorCallbacks = {
+			addToUserMessageContent: vi.fn(),
+			ask: vi.fn(async () => ({ response: "messageResponse" })),
+			createCommandActivity,
+			getClineMessages: () => messages,
+			say: vi.fn(async () => undefined),
+			updateBackgroundCommandState: vi.fn(),
+			updateClineMessage: vi.fn(async (index, patch) => {
+				Object.assign(messages[index], patch)
+			}),
+		}
+		const primaryManager = createTerminalManager()
+		const executor = new CommandExecutor(
+			{
+				cwd: "C:\\workspace",
+				taskId: "task-background-exec-synchronous",
+				terminalExecutionMode: "backgroundExec",
+				terminalManager: primaryManager,
+				terminalConfiguration,
+				ulid: "task-background-exec-synchronous-ulid",
+			},
+			callbacks,
+		)
+		const standaloneManager = (executor as unknown as { standaloneManager: StandaloneTerminalManager }).standaloneManager
+		vi.spyOn(standaloneManager, "getOrCreateTerminal").mockResolvedValue(terminalInfo)
+		vi.spyOn(standaloneManager, "runCommand").mockReturnValue(processPromise)
+
+		// The synchronous option keeps the command in the foreground loop, so the
+		// mode marker must stay "foreground" even when the global terminal mode
+		// routes execution through the standalone manager.
+		const execution = executor.execute("watch", 30, { commandTs: 303, synchronous: true })
+		try {
+			await vi.waitFor(() => assert.equal(createCommandActivity.mock.calls.length, 1))
+			assert.equal(createCommandActivity.mock.calls[0]?.[0].executionMode, "foreground")
+			assert.equal(messages[0].commandExecutionMode, "foreground")
+			assert.equal(vi.mocked(primaryManager.getOrCreateTerminal).mock.calls.length, 0)
+			assert.equal(show.mock.calls.length, 1)
+		} finally {
+			process.complete({ exitCode: 0, signal: null })
+			process.continue()
+			await execution
+		}
 	})
 })

@@ -21,6 +21,44 @@ const baseProps = {
 	onToggleCollapsed: vi.fn(),
 }
 
+describe("CommandOutputRow move to background", () => {
+	it("shows Move to background for a running foreground command with the flag", () => {
+		const onMoveToBackground = vi.fn()
+		render(
+			<CommandOutputRow
+				{...baseProps}
+				canMoveToBackground={true}
+				isCollapsed={false}
+				onMoveToBackground={onMoveToBackground}
+			/>,
+		)
+
+		fireEvent.click(screen.getByRole("button", { name: "Move to background" }))
+		expect(onMoveToBackground).toHaveBeenCalledOnce()
+	})
+
+	it("hides Move to background for background commands", () => {
+		const onMoveToBackground = vi.fn()
+		render(
+			<CommandOutputRow
+				{...baseProps}
+				canMoveToBackground={true}
+				isBackgroundExec={true}
+				isCollapsed={false}
+				onMoveToBackground={onMoveToBackground}
+			/>,
+		)
+
+		expect(screen.queryByRole("button", { name: "Move to background" })).toBeNull()
+	})
+
+	it("hides Move to background when the flag is not set", () => {
+		render(<CommandOutputRow {...baseProps} isCollapsed={false} onMoveToBackground={vi.fn()} />)
+
+		expect(screen.queryByRole("button", { name: "Move to background" })).toBeNull()
+	})
+})
+
 describe("CommandOutputRow cancellation", () => {
 	beforeEach(() => {
 		vi.mocked(FileServiceClient.openFile).mockClear()

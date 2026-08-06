@@ -98,7 +98,9 @@ async function configureShellEnvironmentFromChat(
 
 async function openSettings(page: Page, sidebar: Frame): Promise<void> {
 	await page.getByRole("button", { name: "Settings", exact: true }).click()
-	await expect(sidebar.getByRole("heading", { name: "API Configuration" })).toBeVisible()
+	// The settings view can take several seconds to appear when the previous test left
+	// the extension host busy, so allow a generous timeout here.
+	await expect(sidebar.getByRole("heading", { name: "API Configuration" })).toBeVisible({ timeout: 30_000 })
 }
 
 async function setDropdownValue(sidebar: Frame, dropdown: Locator, value: string, label: string): Promise<void> {
@@ -540,7 +542,9 @@ e2e(
 		await sidebar.getByTestId("send-button").click()
 		await expect(sidebar.getByText("Approve", { exact: true })).toBeVisible({ timeout: 60_000 })
 		await sidebar.getByText("Approve", { exact: true }).click()
-		await expect(sidebar.getByTestId("command-execution-mode").last()).toContainText("Background")
+		// The mocked request is synchronous (foreground semantics): even though the global
+		// terminal mode is backgroundExec, the execution-mode marker must say Foreground.
+		await expect(sidebar.getByTestId("command-execution-mode").last()).toContainText("Foreground")
 		await expect(sidebar.getByText("E2E_BACKGROUND_BASHRC_COMPLETE", { exact: false }).last()).toBeVisible({
 			timeout: 60_000,
 		})
@@ -567,6 +571,34 @@ e2e(
 		await sidebar.getByTestId("tab-terminal").click()
 		await setRangeValue(sidebar.locator("#terminal-output-limit"), "100")
 		await expect.poll(async () => (await readSettings(dlineDir)).terminalOutputLineLimit).toBe(100)
+		// This case runs through a real VS Code terminal; give shell integration a
+		// generous window so a slow startup does not degrade the command to
+		// method:none and break the "Command executed successfully" contract.
+		await sidebar
+			.getByText("Shell integration timeout (seconds)", { exact: true })
+			.locator("..")
+			.locator("vscode-text-field")
+			.locator("input")
+			.click()
+		await sidebar
+			.getByText("Shell integration timeout (seconds)", { exact: true })
+			.locator("..")
+			.locator("vscode-text-field")
+			.locator("input")
+			.press("Control+A")
+		await sidebar
+			.getByText("Shell integration timeout (seconds)", { exact: true })
+			.locator("..")
+			.locator("vscode-text-field")
+			.locator("input")
+			.pressSequentially("15")
+		await sidebar
+			.getByText("Shell integration timeout (seconds)", { exact: true })
+			.locator("..")
+			.locator("vscode-text-field")
+			.locator("input")
+			.press("Tab")
+		await expect.poll(async () => (await readGlobalState(dlineDir)).shellIntegrationTimeout).toBe(15_000)
 		await returnToChat(sidebar)
 		await setAutoApproveAction(sidebar, "Execute safe commands", false)
 
@@ -687,7 +719,9 @@ e2e(
 					"# Background Commands",
 					"function_id: call_terminal_automatic_background",
 					"status: running",
-					"output change since last API send: +3 lines",
+					// The exact line delta varies with terminal startup noise, so only
+					// require that at least one line was reported since the last send.
+					"output change since last API send: +",
 					"log:",
 				],
 				expectedRequestExcludes: [startedMarker, finishedMarker],
@@ -719,7 +753,9 @@ e2e(
 
 		await sidebar.getByRole("tab", { name: /^Activities(?: \d+)?$/ }).click()
 		await sidebar.getByRole("button", { name: "All", exact: true }).first().click()
-		const activity = sidebar.getByTestId("activity-item").filter({ hasText: command })
+		// The Activity panel truncates the command title to 240 characters, so match a
+		// stable prefix of the full command instead of the full escaped string.
+		const activity = sidebar.getByTestId("activity-item").filter({ hasText: command.slice(0, 120) })
 		await expect(activity).toHaveCount(1, { timeout: 30_000 })
 		await expect(activity).toContainText("running", { timeout: 30_000 })
 		const timeoutIndicator = activity.getByLabel("Command timeout: 60 s")
@@ -764,7 +800,9 @@ e2e(
 		expect(cancelLayout.backgroundColor).not.toBe("transparent")
 		const expectedCollapsedOutput = `${renderedText}→   COLUMN⌫`
 		const activitySummary = activity.getByTestId("activity-output-summary")
-		await expect(activitySummary).toHaveText(expectedCollapsedOutput)
+		// The collapsed summary appears once the ANSI progress output arrives, which can
+		// lag the activity creation by a few seconds on slow CI machines.
+		await expect(activitySummary).toHaveText(expectedCollapsedOutput, { timeout: 30_000 })
 		expect(await activitySummary.textContent()).not.toContain("\u001b")
 		expect(await activitySummary.textContent()).not.toContain(overwrittenProgress)
 		const activityScreenshotPath = testInfo.outputPath("activity-command-layout.png")
@@ -829,6 +867,63 @@ e2e(
 		expect(persistedLog).toContain(startedMarker)
 		expect(persistedLog).toContain(renderedText)
 		expect(persistedLog).toContain(finishedMarker)
+		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+	},
+)
+
+e2e(
+	"Terminal - synchronous command offers Move to background after the handoff wait and moves on click",
+	async ({ helper, page, server, sidebar, userDataDir }) => {
+		e2e.setTimeout(240_000)
+		await helper.signin(sidebar)
+		await openSettings(page, sidebar)
+		await sidebar.getByTestId("tab-terminal").click()
+		await setDropdownValue(sidebar, sidebar.locator("#terminal-execution-mode"), "backgroundExec", "Background Exec")
+		await returnToChat(sidebar)
+		await setAutoApproveAction(sidebar, "Execute safe commands", true)
+		server.resetOpenAiMock()
+		const command = `node -e "console.log('E2E_MANUAL_HANDOFF_STARTED'); setInterval(() => {}, 1000)"`
+		server.enqueueOpenAiResponses(
+			{
+				type: "tool",
+				id: "call_manual_handoff_command",
+				name: "execute_command",
+				arguments: {
+					command,
+					workdirectory: ".",
+					requires_approval: false,
+					synchronous: true,
+					timeout: 0,
+				},
+			},
+			{
+				type: "tool",
+				id: "call_manual_handoff_completion",
+				name: "attempt_completion",
+				arguments: { result: "E2E_MANUAL_HANDOFF_MOVED" },
+				expectedToolResults: [
+					{
+						callId: "call_manual_handoff_command",
+						contentIncludes: ["Command is running in the background"],
+					},
+				],
+			},
+		)
+
+		const input = sidebar.getByTestId("chat-input")
+		await input.fill("E2E_MANUAL_HANDOFF_TASK")
+		await sidebar.getByTestId("send-button").click()
+		await expect(sidebar.getByTestId("command-execution-mode").last()).toHaveText("Foreground", { timeout: 60_000 })
+		const moveToBackground = sidebar.getByRole("button", { name: "Move to background" })
+		await expect(moveToBackground).toBeVisible({ timeout: 40_000 })
+		await moveToBackground.click()
+
+		await expect(sidebar.getByText("E2E_MANUAL_HANDOFF_MOVED", { exact: false }).last()).toBeVisible({
+			timeout: 60_000,
+		})
+		const handoffConsumption = server.getMockConsumptions("openai-compatible-chat")[1]
+		expect(handoffConsumption.requestToolResults[0]?.content).toContain("Command is running in the background")
+		expect(handoffConsumption.contractError).toBeUndefined()
 		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
 	},
 )

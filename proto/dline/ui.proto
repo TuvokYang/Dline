@@ -272,6 +272,7 @@ message ClineMessage {
   string activity_id = 29;
   string interaction_id = 30;
   string command_execution_mode = 31;
+  bool command_can_move_to_background = 32;
 }
 
 message ShowWebviewEvent {

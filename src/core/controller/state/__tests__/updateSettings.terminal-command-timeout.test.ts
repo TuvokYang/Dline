@@ -35,4 +35,23 @@ describe("updateSettings terminal command timeout", () => {
 		).rejects.toThrow(/at least 60 seconds/i)
 		expect(setGlobalState).not.toHaveBeenCalled()
 	})
+
+	it.each([1, 10, 30])("persists a valid %s-second foreground handoff", async (handoffSeconds) => {
+		const { configureGlobalComponents, controller, postStateToWebview, setGlobalState } = createController()
+
+		await updateSettings(controller, UpdateSettingsRequest.create({ terminalCommandHandoffSeconds: handoffSeconds }))
+
+		expect(setGlobalState).toHaveBeenCalledWith("terminalCommandHandoffSeconds", handoffSeconds)
+		expect(configureGlobalComponents).toHaveBeenCalledOnce()
+		expect(postStateToWebview).toHaveBeenCalledOnce()
+	})
+
+	it.each([0, -1, 1.5])("rejects %s seconds because the handoff minimum is one second", async (handoffSeconds) => {
+		const { controller, setGlobalState } = createController()
+
+		await expect(
+			updateSettings(controller, UpdateSettingsRequest.create({ terminalCommandHandoffSeconds: handoffSeconds })),
+		).rejects.toThrow(/at least 1 seconds/i)
+		expect(setGlobalState).not.toHaveBeenCalled()
+	})
 })

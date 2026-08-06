@@ -49,7 +49,7 @@ import { findMatchingResourceOrTemplate, getMcpServerDisplayName } from "@/utils
 import CodeAccordian, { cleanPathPrefix } from "../common/CodeAccordian"
 import ActModeRespondRow from "./ActModeRespondRow"
 import { ApiErrorBox } from "./ApiErrorBox"
-import { cancelTaskActivities } from "./activity/useTaskActivities"
+import { cancelTaskActivities, moveCommandToBackground } from "./activity/useTaskActivities"
 import { CommandOutputContent, CommandOutputRow } from "./CommandOutputRow"
 import { CompletionOutputRow } from "./CompletionOutputRow"
 import { resolveApiErrorMessage } from "./chat-view/utils/messageUtils"
@@ -889,6 +889,7 @@ export const ChatRowContent = memo(
 		if (message.ask === "command" || message.say === "command") {
 			return (
 				<CommandOutputRow
+					canMoveToBackground={message.commandCanMoveToBackground === true}
 					exitCode={message.exitCode}
 					icon={icon}
 					isBackgroundExec={message.commandExecutionMode === "background"}
@@ -904,6 +905,14 @@ export const ChatRowContent = memo(
 					isOutputFullyExpanded={isOutputFullyExpanded}
 					message={message}
 					onCancelCommand={cancelCommand}
+					onMoveToBackground={
+						isCommandExecuting &&
+						message.commandCanMoveToBackground === true &&
+						message.activityId &&
+						currentTaskItem?.id
+							? () => void moveCommandToBackground(currentTaskItem.id as string, message.activityId as string)
+							: undefined
+					}
 					onToggleCollapsed={toggleCommandCollapsed}
 					setIsOutputFullyExpanded={setIsOutputFullyExpanded}
 					title={title}

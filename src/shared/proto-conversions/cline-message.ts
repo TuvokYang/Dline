@@ -242,6 +242,7 @@ export function convertClineMessageToProto(message: AppClineMessage): ProtoCline
 		activityId: message.activityId ?? "",
 		interactionId: message.interactionId ?? "",
 		commandExecutionMode: message.commandExecutionMode ?? "",
+		commandCanMoveToBackground: message.commandCanMoveToBackground ?? false,
 	}
 
 	return protoMessage
@@ -329,6 +330,9 @@ export function convertProtoToClineMessage(protoMessage: ProtoClineMessage): App
 	}
 	if (protoMessage.commandExecutionMode !== "") {
 		message.commandExecutionMode = protoMessage.commandExecutionMode as AppClineMessage["commandExecutionMode"]
+	}
+	if (protoMessage.commandCanMoveToBackground) {
+		message.commandCanMoveToBackground = true
 	}
 
 	return message

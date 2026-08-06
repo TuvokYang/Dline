@@ -204,6 +204,70 @@ describe("CommandOrchestrator background transitions", () => {
 		assert.equal(onOutputLine.mock.calls.length, 0)
 	})
 
+	it("uses the configured handoff seconds for automatic background handoff", async () => {
+		vi.useFakeTimers()
+		const process = new FakeTerminalProcess()
+		const onProceedWhileRunning = vi.fn(() => ({
+			backgroundCommandId: "background-configured",
+			logFilePath: "C:\\Temp\\background-configured.log",
+		}))
+		const execution = orchestrateCommandExecution(process.asResultPromise(), createTerminalManager(), createCallbacks(), {
+			command: "slow-command",
+			handoffSeconds: 3,
+			onProceedWhileRunning,
+			timeoutSeconds: 60,
+		})
+
+		await vi.advanceTimersByTimeAsync(2_999)
+		const handedOffBeforeThreeSeconds = onProceedWhileRunning.mock.calls.length
+		await vi.advanceTimersByTimeAsync(1)
+		if (onProceedWhileRunning.mock.calls.length === 0) {
+			process.complete({ exitCode: 0, signal: null })
+		}
+		const result = await execution
+
+		assert.equal(handedOffBeforeThreeSeconds, 0)
+		assert.equal(result.completed, false)
+		assert.equal(result.backgroundCommandId, "background-configured")
+		assert.match(result.result as string, /still running after 3 seconds/i)
+	})
+
+	it("notifies the UI and moves a synchronous command to background on external request", async () => {
+		vi.useFakeTimers()
+		const process = new FakeTerminalProcess()
+		const onHandoffAvailable = vi.fn()
+		const onProceedWhileRunning = vi.fn(() => ({
+			backgroundCommandId: "background-manual",
+			logFilePath: "C:\\Temp\\background-manual.log",
+		}))
+		let resolveHandoff!: () => void
+		const handoffRequest = {
+			promise: new Promise<void>((resolve) => {
+				resolveHandoff = resolve
+			}),
+			resolve: () => resolveHandoff(),
+		}
+		const execution = orchestrateCommandExecution(process.asResultPromise(), createTerminalManager(), createCallbacks(), {
+			command: "sync-command",
+			handoffSeconds: 10,
+			handoffRequest,
+			onHandoffAvailable,
+			onProceedWhileRunning,
+			synchronous: true,
+			timeoutSeconds: 60,
+		})
+
+		await vi.advanceTimersByTimeAsync(10_000)
+		assert.equal(onHandoffAvailable.mock.calls.length, 1)
+		assert.equal(onProceedWhileRunning.mock.calls.length, 0)
+		handoffRequest.resolve()
+		const result = await execution
+
+		assert.equal(result.completed, false)
+		assert.equal(result.backgroundCommandId, "background-manual")
+		assert.match(result.result as string, /Command is running in the background/i)
+	})
+
 	it("kills a synchronous command at its absolute timeout without handing it to the background tracker", async () => {
 		vi.useFakeTimers()
 		const process = new FakeTerminalProcess()

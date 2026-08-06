@@ -320,7 +320,11 @@ export function TaskActivityPanel({
 									)}
 								</button>
 								{activity.kind === "command" && (
-									<CopyButton ariaLabel="Copy command" textToCopy={activity.detail ?? activity.title} />
+									<CopyButton
+										ariaLabel="Copy command"
+										className="h-5"
+										textToCopy={activity.detail ?? activity.title}
+									/>
 								)}
 								{activity.cancellable && isActive && activity.status !== "awaiting_approval" && (
 									<Button

@@ -16,7 +16,7 @@ import { WorkspaceRoot } from "@shared/multi-root/types"
 import { GlobalInstructionsFile } from "@shared/remote-config/schema"
 import { Mode, OpenaiReasoningEffort } from "@shared/storage/types"
 import { TelemetrySetting } from "@shared/TelemetrySetting"
-import { DEFAULT_TERMINAL_COMMAND_TIMEOUT_SECONDS } from "@shared/terminal-settings"
+import { DEFAULT_TERMINAL_COMMAND_HANDOFF_SECONDS, DEFAULT_TERMINAL_COMMAND_TIMEOUT_SECONDS } from "@shared/terminal-settings"
 import { UserInfo } from "@shared/UserInfo"
 import { DEFAULT_LOCAL_SEARCH_ENGINE, type LocalSearchEngineId } from "@shared/web-search"
 import { type BlobStoreSettings } from "./types"
@@ -125,6 +125,7 @@ const USER_SETTINGS_FIELDS = {
 	defaultTerminalProfile: { default: "default" as string },
 	terminalOutputLineLimit: { default: 500 as number },
 	terminalCommandTimeoutSeconds: { default: DEFAULT_TERMINAL_COMMAND_TIMEOUT_SECONDS as number },
+	terminalCommandHandoffSeconds: { default: DEFAULT_TERMINAL_COMMAND_HANDOFF_SECONDS as number },
 	maxConsecutiveMistakes: { default: 3 as number },
 	strictPlanModeEnabled: { default: false as boolean },
 	hooksEnabled: { default: true as boolean },
