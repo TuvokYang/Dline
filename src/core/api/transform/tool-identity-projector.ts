@@ -5,6 +5,9 @@ import type { ClineAssistantToolUseBlock, ClineUserToolResultContentBlock } from
 const MAX_CHAT_FUNCTION_ID_LENGTH = 40
 const RESPONSES_ITEM_PREFIX = "fc_"
 const RESPONSES_ITEM_LENGTH = 53
+const DLINE_FUNCTION_PREFIX = "dline_function_"
+const DLINE_CALL_PREFIX = "call_dline_"
+const MAX_DLINE_CALL_SUFFIX_LENGTH = MAX_CHAT_FUNCTION_ID_LENGTH - DLINE_CALL_PREFIX.length
 
 /** Error raised when a canonical tool block cannot be projected safely. */
 export class ToolIdentityProjectionError extends Error {
@@ -56,6 +59,13 @@ export function getResultFunctionId(block: ClineUserToolResultContentBlock): str
 export function projectChatFunctionId(functionId: string, _provider?: ApiProvider): string {
 	if (functionId.startsWith(RESPONSES_ITEM_PREFIX) && functionId.length === RESPONSES_ITEM_LENGTH) {
 		return `call_${functionId.slice(functionId.length - (MAX_CHAT_FUNCTION_ID_LENGTH - 5))}`
+	}
+	if (functionId.startsWith(DLINE_FUNCTION_PREFIX)) {
+		// Dline-owned identities for non-native tool calls must never reach the
+		// provider: project them deterministically into the call-id domain so
+		// both pairing sides (and later turns) map to the same provider id.
+		const suffix = functionId.slice(DLINE_FUNCTION_PREFIX.length)
+		return `${DLINE_CALL_PREFIX}${suffix.slice(0, MAX_DLINE_CALL_SUFFIX_LENGTH)}`
 	}
 	return functionId
 }

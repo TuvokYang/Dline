@@ -1,6 +1,6 @@
 import { ResponseInput, ResponseInputMessageContentList, ResponseReasoningItem } from "openai/resources/responses/responses"
 import { ClineStorageMessage, imageSourceMediaType, imageSourceToUrl } from "@/shared/messages/content"
-import { getResultFunctionId, getUseFunctionId } from "./tool-identity-projector"
+import { getResultFunctionId, getUseFunctionId, projectChatFunctionId } from "./tool-identity-projector"
 
 /**
  * Converts an array of ClineStorageMessage objects (extension of Anthropic format) to a ResponseInput array to use with OpenAI's Responses API.
@@ -191,7 +191,7 @@ export function convertToOpenAIResponsesInput(
 						const functionId = getUseFunctionId(part)
 						assistantItems.push({
 							type: "function_call",
-							call_id: functionId,
+							call_id: projectChatFunctionId(functionId),
 							name: part.name,
 							arguments: JSON.stringify(part.input ?? {}),
 						})
@@ -226,7 +226,7 @@ export function convertToOpenAIResponsesInput(
 						const functionId = getResultFunctionId(part)
 						allItems.push({
 							type: "function_call_output",
-							call_id: functionId,
+							call_id: projectChatFunctionId(functionId),
 							output: typeof part.content === "string" ? part.content : JSON.stringify(part.content),
 						})
 						break

@@ -131,6 +131,45 @@ describe("Tool Call Parsing", () => {
 			JSON.stringify(result).should.not.match(/item_id|function_id|dline_tid/)
 		})
 
+		it("should project Dline-owned function ids into the provider call-id domain", () => {
+			const dlineFunctionId = `dline_function_${"0".repeat(26)}`
+			const messages: ClineStorageMessage[] = [
+				{
+					role: "assistant",
+					content: [
+						{
+							type: "tool_use",
+							function_id: dlineFunctionId,
+							dline_tid: "dline_tid_pair",
+							name: "read_file",
+							input: { path: "/test.ts" },
+						} as ClineAssistantToolUseBlock,
+					],
+				},
+				{
+					role: "user",
+					content: [
+						{
+							type: "tool_result",
+							function_id: dlineFunctionId,
+							dline_tid: "dline_tid_pair",
+							content: "file contents here",
+						} as ClineUserToolResultContentBlock,
+					],
+				},
+			]
+
+			const result = convertToOpenAiMessages(messages, "openai")
+			const assistantMsg = result[0] as OpenAI.Chat.ChatCompletionAssistantMessageParam
+			const toolMsg = result[1] as OpenAI.Chat.ChatCompletionToolMessageParam
+
+			const projectedId = assistantMsg.tool_calls?.[0].id
+			projectedId?.should.startWith("call_")
+			projectedId?.length.should.be.belowOrEqual(40)
+			toolMsg.tool_call_id.should.equal(projectedId)
+			JSON.stringify(result).should.not.match(/dline_function_|dline_tid/)
+		})
+
 		it("should match tool_call_id with tool_calls id for tool results", () => {
 			const toolId = "toolu_abc123"
 			const messages: ClineStorageMessage[] = [
