@@ -20,6 +20,11 @@ import { ClineMessage } from "./ExtensionMessage"
  */
 export function combineApiRequests(messages: ClineMessage[]): ClineMessage[] {
 	const combinedApiRequests: ClineMessage[] = []
+	// Index combined requests by message timestamp for O(1) lookup during the
+	// final mapping pass. The previous linear find() made the whole function
+	// O(N^2) once the conversation held thousands of API request pairs.
+	// Keep the FIRST combined entry for a duplicated ts to preserve old semantics.
+	const combinedByTs = new Map<number, ClineMessage>()
 
 	for (let i = 0; i < messages.length; i++) {
 		if (messages[i].type === "say" && messages[i].say === "api_req_started") {
@@ -34,10 +39,14 @@ export function combineApiRequests(messages: ClineMessage[]): ClineMessage[] {
 						...finishedRequest,
 					}
 
-					combinedApiRequests.push({
+					const combinedMessage = {
 						...messages[i],
 						text: JSON.stringify(combinedRequest),
-					})
+					}
+					combinedApiRequests.push(combinedMessage)
+					if (!combinedByTs.has(messages[i].ts)) {
+						combinedByTs.set(messages[i].ts, combinedMessage)
+					}
 
 					i = j // Skip to the api_req_finished message
 					break
@@ -57,7 +66,7 @@ export function combineApiRequests(messages: ClineMessage[]): ClineMessage[] {
 		.filter((msg) => !(msg.type === "say" && msg.say === "api_req_finished"))
 		.map((msg) => {
 			if (msg.type === "say" && msg.say === "api_req_started") {
-				const combinedRequest = combinedApiRequests.find((req) => req.ts === msg.ts)
+				const combinedRequest = combinedByTs.get(msg.ts)
 				return combinedRequest || msg
 			}
 			return msg

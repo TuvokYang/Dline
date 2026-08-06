@@ -11,7 +11,7 @@ import { ClineStorageMessage } from "@/shared/messages/content"
 import { Logger } from "@/shared/services/Logger"
 import { getCwd, getDesktopDir } from "@/utils/path"
 import { ApiConversation } from "../storage/ApiConversation"
-import { ensureTaskDirectoryExists, getTaskHeaderText } from "../storage/disk"
+import { ensureTaskDirectoryExists } from "../storage/disk"
 import { UIMessage } from "../storage/UIMessage"
 import { TaskState } from "./TaskState"
 
@@ -144,7 +144,10 @@ export class MessageStateHandler extends EventEmitter<MessageStateHandlerEvents>
 			const persisted = allMessages.filter((m) => !m.partial)
 			if (persisted.length === 0) return
 			const apiMetrics = getApiMetrics(combineApiRequests(combineCommandSequences(allMessages.slice(1))))
-			const taskText = await getTaskHeaderText(this.taskId)
+			// Read the task header from the in-memory message list instead of
+			// re-reading ui_messages.jsonl on every history-only update: the disk
+			// path bypasses the jsonl cache and does a full read + JSON.parse.
+			const taskText = this.clineMessages.find((m) => m.say === "task")?.text ?? ""
 			const lastRelevantIndex = findLastIndex(
 				persisted,
 				(message) => !(message.ask === "resume_task" || message.ask === "resume_completed_task"),
