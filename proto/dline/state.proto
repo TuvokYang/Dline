@@ -101,6 +101,7 @@ message Secrets {
   optional string cline_api_key = 44;
   optional string openai_codex_oauth_credentials = 48;
   optional string wandb_api_key = 50;
+  optional string searxng_search_token = 51;
 }
 
 // NOTE: Add new fields under API_HANDLER_SETTINGS_FIELDS or USER_SETTINGS_FIELDS
@@ -176,6 +177,8 @@ message Settings {
   optional string task_capability_toggles = 195;
   optional int32 auto_condense_trigger_percent = 196;
   optional int32 auto_condense_max_context_tokens = 197;
+  optional string local_web_search_engine = 198;
+  optional string searxng_search_url = 199;
 }
 
 // Account usage quota for rate-limited providers (e.g., Codex, Copilot)
@@ -365,6 +368,9 @@ message UpdateSettingsRequest {
   optional int32 terminal_command_timeout_seconds = 48;
   optional int32 auto_condense_trigger_percent = 49;
   optional int32 auto_condense_max_context_tokens = 50;
+  optional string local_web_search_engine = 51;
+  optional string searxng_search_url = 52;
+  optional string searxng_search_token = 53;
 }
 
 message UpdateTerminalConnectionTimeoutRequest {

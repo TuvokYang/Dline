@@ -18,6 +18,7 @@ import { Mode, OpenaiReasoningEffort } from "@shared/storage/types"
 import { TelemetrySetting } from "@shared/TelemetrySetting"
 import { DEFAULT_TERMINAL_COMMAND_TIMEOUT_SECONDS } from "@shared/terminal-settings"
 import { UserInfo } from "@shared/UserInfo"
+import { DEFAULT_LOCAL_SEARCH_ENGINE, type LocalSearchEngineId } from "@shared/web-search"
 import { type BlobStoreSettings } from "./types"
 
 // ============================================================================
@@ -140,6 +141,8 @@ const USER_SETTINGS_FIELDS = {
 	},
 	subagentsEnabled: { default: true as boolean },
 	clineWebToolsEnabled: { default: true as boolean },
+	localWebSearchEngine: { default: DEFAULT_LOCAL_SEARCH_ENGINE as LocalSearchEngineId },
+	searxngSearchUrl: { default: undefined as string | undefined },
 	worktreesEnabled: { default: false as boolean },
 	preferredLanguage: { default: "English" as string },
 	chatInputSendShortcut: { default: DEFAULT_CHAT_INPUT_SEND_SHORTCUT as ChatInputSendShortcut },
@@ -258,6 +261,7 @@ const SECRETS_KEYS = [
 	"ocaRefreshToken",
 	"mcpOAuthSecrets",
 	"openai-codex-oauth-credentials", // JSON blob containing OAuth tokens for OpenAI Codex (ChatGPT subscription)
+	"searxngSearchToken",
 	"wandbApiKey",
 ] as const
 

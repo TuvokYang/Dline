@@ -212,7 +212,7 @@ const ApiProfileCard: React.FC<ApiProfileCardProps> = ({
 						</select>
 					</div>
 
-					{hasProvider && (
+					{hasProvider && profile.provider !== "openai" && profile.provider !== "deepseek" && (
 						<WebSearchModeControl
 							onChange={(webSearchMode) => onUpdate({ webSearchMode })}
 							value={profile.webSearchMode}

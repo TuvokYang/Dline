@@ -46,6 +46,28 @@ describe("ServerToolLifecycle", () => {
 		])
 	})
 
+	it("preserves the provider-compressed hosted result on the terminal update", async () => {
+		const result = [
+			{
+				type: "web_search_result",
+				title: "Dline",
+				url: "https://example.com/dline",
+			},
+		]
+		const updates: Array<{ status: string; result?: unknown }> = []
+		const lifecycle = new ServerToolLifecycle(hostedPlan, true, (update) => {
+			updates.push({ status: update.status, result: update.result })
+		})
+
+		await lifecycle.consume(chunk("started"))
+		await lifecycle.consume({ ...chunk("completed"), result })
+
+		expect(updates).toEqual([
+			{ status: "started", result: undefined },
+			{ status: "completed", result },
+		])
+	})
+
 	it("closes an open call on stream termination and ignores later provider events", async () => {
 		const updates: Array<{ status: string; error?: string }> = []
 		const lifecycle = new ServerToolLifecycle(hostedPlan, true, (update) => {

@@ -9,6 +9,7 @@ import AutoCondenseSettings from "../AutoCondenseSettings"
 import Section from "../Section"
 import SettingsSlider from "../SettingsSlider"
 import { updateSetting } from "../utils/settingsHandlers"
+import WebToolsSettings from "./WebToolsSettings"
 
 // Reusable checkbox component for feature settings
 interface FeatureCheckboxProps {
@@ -84,6 +85,13 @@ const agentFeatures: FeatureToggle[] = [
 		settingKey: "focusChainSettings",
 		nestedKey: "enabled",
 	},
+	{
+		id: "web-tools",
+		label: "Web Tools",
+		description: "Access web browsing and search capabilities",
+		stateKey: "clineWebToolsEnabled",
+		settingKey: "clineWebToolsEnabled",
+	},
 ]
 
 const editorFeatures: FeatureToggle[] = [
@@ -107,13 +115,6 @@ const editorFeatures: FeatureToggle[] = [
 		description: "Save progress at key points for easy rollback",
 		stateKey: "enableCheckpointsSetting",
 		settingKey: "enableCheckpointsSetting",
-	},
-	{
-		id: "web-tools",
-		label: "Web Tools",
-		description: "Access web browsing and search capabilities",
-		stateKey: "clineWebToolsEnabled",
-		settingKey: "clineWebToolsEnabled",
 	},
 	{
 		id: "worktrees",
@@ -226,6 +227,8 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 		useAutoCondense,
 		subagentsEnabled,
 		clineWebToolsEnabled,
+		localWebSearchEngine,
+		searxngSearchUrl,
 		worktreesEnabled,
 		focusChainSettings,
 		remoteConfigSettings,
@@ -326,6 +329,12 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 										/>
 									)}
 									{feature.id === "auto-compact" && featureState[feature.stateKey] && <AutoCondenseSettings />}
+									{feature.id === "web-tools" && (
+										<WebToolsSettings
+											localWebSearchEngine={localWebSearchEngine}
+											searxngSearchUrl={searxngSearchUrl}
+										/>
+									)}
 								</div>
 							))}
 						</div>

@@ -1,5 +1,4 @@
 import { ApiProfile } from "@shared/proto/dline/profile"
-import { WebSearchMode } from "@shared/proto/dline/provider/common"
 import { fireEvent, render, screen } from "@testing-library/react"
 import { describe, expect, it, vi } from "vitest"
 import ProviderProfileCard from "./ProviderProfileCard"
@@ -78,8 +77,7 @@ describe("ProviderProfileCard", () => {
 		expect(body).toHaveClass("border-editor-widget-border/30")
 	})
 
-	it("saves the selected Web Search routing mode immediately", () => {
-		const onUpdate = vi.fn()
+	it("delegates Web Search settings to the provider editor without rendering a duplicate outer control", () => {
 		render(
 			<ProviderProfileCard
 				currentMode="act"
@@ -87,16 +85,12 @@ describe("ProviderProfileCard", () => {
 				isExpanded={true}
 				onDelete={vi.fn()}
 				onToggleExpand={vi.fn()}
-				onUpdate={onUpdate}
+				onUpdate={vi.fn()}
 				profile={buildProfile()}
 				providerOptions={providerOptions}
 			/>,
 		)
 
-		fireEvent.change(screen.getByRole("combobox", { name: "Web Search mode" }), {
-			target: { value: String(WebSearchMode.WEB_SEARCH_MODE_FORCE_REMOTE) },
-		})
-
-		expect(onUpdate).toHaveBeenCalledWith({ webSearchMode: WebSearchMode.WEB_SEARCH_MODE_FORCE_REMOTE })
+		expect(screen.queryByRole("combobox", { name: "Web Search mode" })).not.toBeInTheDocument()
 	})
 })

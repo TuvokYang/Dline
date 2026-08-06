@@ -21,6 +21,7 @@ import { Mode } from "./storage/types"
 import type { TaskCapabilityToggles } from "./TaskCapabilityToggles"
 import { TelemetrySetting } from "./TelemetrySetting"
 import { UserInfo } from "./UserInfo"
+import type { LocalSearchEngineId } from "./web-search"
 // webview will hold state
 export interface ExtensionMessage {
 	type: "grpc_response" // New type for gRPC responses
@@ -110,6 +111,8 @@ export interface ExtensionState {
 	autoCondenseMaxContextTokens?: number
 	subagentsEnabled?: boolean
 	clineWebToolsEnabled?: ClineFeatureSetting
+	localWebSearchEngine?: LocalSearchEngineId
+	searxngSearchUrl?: string
 	worktreesEnabled?: ClineFeatureSetting
 	focusChainSettings: FocusChainSettings
 	customPrompt?: string
@@ -445,6 +448,16 @@ export interface ClineSayTool {
 	activityId?: string
 	diff?: string
 	content?: string | string[]
+	webSearch?: {
+		source?: {
+			engineId: string
+			label: string
+			execution: "hosted" | "dline"
+			provider?: string
+		}
+		result?: unknown
+		error?: string
+	}
 	regex?: string
 	filePattern?: string
 	operationIsLocatedInWorkspace?: boolean

@@ -1,5 +1,5 @@
 import type { ModelInfo } from "@shared/proto/dline/models"
-import { ApiFormat } from "@shared/proto/dline/models/metadata"
+import { ApiFormat, ServerTool } from "@shared/proto/dline/models/metadata"
 import { BaseProviderConfig } from "@shared/proto/dline/provider/common"
 import { resolveApiFormat } from "@shared/providers/api-format"
 import { resolveProfileModelInfo } from "@shared/providers/profile-model-info"
@@ -12,6 +12,7 @@ import { ModelInfoView } from "../common/ModelInfoView"
 import { ModelSelector } from "../common/ModelSelector"
 import ReasoningEffortSelector from "../ReasoningEffortSelector"
 import type { ApiProfile } from "./ProviderProfile"
+import { ProviderWebSearchSettings } from "./ProviderWebSearchSettings"
 import { useProviderModels } from "./useProviderModels"
 
 /**
@@ -38,6 +39,10 @@ export const DeepSeekProvider = ({ showModelOptions, isPopup, profile, onUpdate 
 		models: deepSeekModels,
 		defaultModelId: deepSeekDefaultModelId,
 	})
+	const selectedApiFormat = resolveApiFormat(pc.apiFormat, modelInfo, ApiFormat.OPENAI_CHAT)
+	const hostedWebSearchAvailable =
+		modelInfo.capabilities?.tools?.includes(ServerTool.WEB_SEARCH) === true &&
+		(selectedApiFormat === ApiFormat.OPENAI_RESPONSES || selectedApiFormat === ApiFormat.ANTHROPIC_CHAT)
 
 	// Reasoning effort from deepseek
 	const profileEffort = profile.deepseek?.reasoning?.effort ?? ""
@@ -95,7 +100,13 @@ export const DeepSeekProvider = ({ showModelOptions, isPopup, profile, onUpdate 
 						apiFormats={modelInfo?.apiFormats}
 						fallbackApiFormat={ApiFormat.OPENAI_CHAT}
 						onChange={(apiFormat) => onUpdate({ deepseek: { ...pc, apiFormat } })}
-						selectedApiFormat={pc.apiFormat}
+						selectedApiFormat={selectedApiFormat}
+					/>
+
+					<ProviderWebSearchSettings
+						hostedAvailable={hostedWebSearchAvailable}
+						onChange={(webSearchMode) => onUpdate({ webSearchMode })}
+						value={profile.webSearchMode}
 					/>
 
 					{supportsThinking ? (

@@ -1,14 +1,11 @@
 import { getPrompt } from "@core/prompts/i18n"
 import { ClineAsk, ClineSayTool } from "@shared/ExtensionMessage"
 import { ClineDefaultTool } from "@shared/tools"
-import axios from "axios"
-import { ClineEnv } from "@/config"
-import { AuthService } from "@/services/auth/AuthService"
-import { buildClineExtraHeaders } from "@/services/EnvUtils"
+import { DEFAULT_LOCAL_SEARCH_ENGINE, isLocalSearchEngineId, LOCAL_SEARCH_ENGINE_LABELS } from "@shared/web-search"
 import { telemetryService } from "@/services/telemetry"
+import { createLocalSearchRegistry, type LocalSearchRegistryOptions } from "@/services/web-search/createLocalSearchRegistry"
+import type { LocalSearchRegistry, LocalSearchResultItem } from "@/services/web-search/LocalSearchProvider"
 import { parsePartialArrayString } from "@/shared/array"
-import { CLINE_ACCOUNT_AUTH_ERROR_MESSAGE } from "@/shared/ClineAccount"
-import { getAxiosSettings } from "@/shared/net"
 import { ToolUse } from "../../../assistant-message"
 import { formatResponse } from "../../../prompts/responses"
 import { ToolResponse } from "../.."
@@ -18,8 +15,52 @@ import type { TaskConfig } from "../types/TaskConfig"
 import type { StronglyTypedUIHelpers } from "../types/UIHelpers"
 import { ToolResultUtils } from "../utils/ToolResultUtils"
 
+type LocalSearchRegistryFactory = (options: LocalSearchRegistryOptions) => LocalSearchRegistry
+
+function matchesDomain(url: string, domain: string): boolean {
+	try {
+		const hostname = new URL(url).hostname.toLowerCase()
+		const normalizedDomain = domain.trim().toLowerCase().replace(/^\.+/, "")
+		return Boolean(normalizedDomain) && (hostname === normalizedDomain || hostname.endsWith(`.${normalizedDomain}`))
+	} catch {
+		return false
+	}
+}
+
+function filterByDomains(
+	items: readonly LocalSearchResultItem[],
+	allowedDomains: readonly string[],
+	blockedDomains: readonly string[],
+): readonly LocalSearchResultItem[] {
+	if (allowedDomains.length > 0) {
+		return items.filter((item) => allowedDomains.some((domain) => matchesDomain(item.url, domain)))
+	}
+	if (blockedDomains.length > 0) {
+		return items.filter((item) => !blockedDomains.some((domain) => matchesDomain(item.url, domain)))
+	}
+	return items
+}
+
+function formatSearchResults(engineLabel: string, items: readonly LocalSearchResultItem[]): string {
+	let resultText = `${engineLabel} search completed (${items.length} results found)`
+	if (items.length === 0) {
+		return resultText
+	}
+	resultText += ":\n\n"
+	items.forEach((item, index) => {
+		resultText += `${index + 1}. ${item.title}\n   ${item.url}`
+		if (item.snippet) {
+			resultText += `\n   ${item.snippet}`
+		}
+		resultText += "\n\n"
+	})
+	return resultText
+}
+
 export class WebSearchToolHandler implements IFullyManagedTool {
 	readonly name = ClineDefaultTool.WEB_SEARCH
+
+	constructor(private readonly createRegistry: LocalSearchRegistryFactory = createLocalSearchRegistry) {}
 
 	getDescription(block: ToolUse): string {
 		return `[${block.name} for '${block.params.query}']`
@@ -46,6 +87,7 @@ export class WebSearchToolHandler implements IFullyManagedTool {
 	}
 
 	async execute(config: TaskConfig, block: ToolUse): Promise<ToolResponse> {
+		let terminalMessage: ClineSayTool | undefined
 		try {
 			const query: string | undefined = block.params.query
 			const allowedDomainsRaw: string | undefined = block.params.allowed_domains
@@ -81,13 +123,26 @@ export class WebSearchToolHandler implements IFullyManagedTool {
 				return formatResponse.toolError(getPrompt("toolHandlers", "webSearchDomainConflict"))
 			}
 
-			// Create message for approval
+			const configuredEngine = config.services.stateManager.getGlobalSettingsKey("localWebSearchEngine")
+			const engineId = configuredEngine ?? DEFAULT_LOCAL_SEARCH_ENGINE
+			if (!isLocalSearchEngineId(engineId)) {
+				throw new Error(`Unsupported local web search engine: ${engineId}`)
+			}
+			const source = {
+				engineId,
+				label: LOCAL_SEARCH_ENGINE_LABELS[engineId],
+				execution: "dline" as const,
+			}
+
+			// Create message for approval with the exact engine frozen for this execution.
 			const sharedMessageProps: ClineSayTool = {
 				tool: "webSearch",
 				path: query,
 				content: `Searching for: ${query}`,
 				operationIsLocatedInWorkspace: false,
+				webSearch: { source },
 			}
+			terminalMessage = sharedMessageProps
 			const completeMessage = JSON.stringify(sharedMessageProps)
 
 			if (config.callbacks.shouldAutoApproveTool(this.name)) {
@@ -148,62 +203,45 @@ export class WebSearchToolHandler implements IFullyManagedTool {
 				throw error
 			}
 
-			// Execute the actual search
-			const envConfig = ClineEnv.config()
-			if (!envConfig) throw new Error("ClineEndpoint not initialized")
-			const baseUrl = envConfig.apiBaseUrl
-			const authToken = await AuthService.getInstance().getAuthToken()
-
-			if (!authToken) {
-				throw new Error(CLINE_ACCOUNT_AUTH_ERROR_MESSAGE)
+			const searxngSearchUrl = config.services.stateManager.getGlobalSettingsKey("searxngSearchUrl")?.trim()
+			if (engineId === "searxng" && !searxngSearchUrl) {
+				throw new Error("SearXNG is selected but no SearXNG URL is configured")
 			}
-
-			const requestBody: {
-				query: string
-				allowed_domains?: string[]
-				blocked_domains?: string[]
-			} = {
-				query: query,
-			}
-
-			// Only include domain filters if they have values
-			if (allowedDomains.length > 0) {
-				requestBody.allowed_domains = allowedDomains
-			}
-			if (blockedDomains.length > 0) {
-				requestBody.blocked_domains = blockedDomains
-			}
-
-			const response = await axios.post(`${baseUrl}/api/v1/search/websearch`, requestBody, {
-				headers: {
-					Authorization: `Bearer ${authToken}`,
-					"Content-Type": "application/json",
-					"X-Task-ID": (config.ulid ?? "") || "",
-					...(await buildClineExtraHeaders()),
-				},
-				timeout: 15000,
-				...getAxiosSettings(),
+			const searxngSearchToken = config.services.stateManager.getSecretKey("searxngSearchToken")?.trim()
+			const registry = this.createRegistry({
+				...(searxngSearchUrl ? { searxngSearchUrl } : {}),
+				...(searxngSearchToken ? { searxngSearchToken } : {}),
 			})
-
-			// Parse response
-			// Axios will throw on non-200 status, so no need to check fetchStatus
-			const data = response.data.data
-
-			// Format results for display
-			const results = data.results || []
-			const resultCount = results.length
-
-			let resultText = `Search completed (${resultCount} results found)`
-			if (results.length > 0) {
-				resultText += ":\n\n"
-				results.forEach((result: { title: string; url: string }, index: number) => {
-					resultText += `${index + 1}. ${result.title}\n   ${result.url}\n\n`
-				})
+			const descriptor = registry.list().find((entry) => entry.id === engineId)
+			if (!descriptor) {
+				throw new Error(`Local web search engine "${engineId}" is not configured`)
 			}
-
-			return formatResponse.toolResult(resultText)
+			const response = await registry.search(engineId, { query })
+			const items = filterByDomains(response.items, allowedDomains, blockedDomains)
+			const completedMessage: ClineSayTool = {
+				...sharedMessageProps,
+				content: `${descriptor.label} search completed`,
+				webSearch: {
+					source,
+					result: { items },
+				},
+			}
+			await config.callbacks.say("tool", JSON.stringify(completedMessage), undefined, undefined, false, block.ts)
+			return formatResponse.toolResult(formatSearchResults(descriptor.label, items))
 		} catch (error) {
-			return `Error performing web search: ${(error as Error).message}`
+			const message = error instanceof Error ? error.message : String(error)
+			if (terminalMessage) {
+				const failedMessage: ClineSayTool = {
+					...terminalMessage,
+					content: `Web search failed: ${message}`,
+					webSearch: {
+						...terminalMessage.webSearch,
+						error: message,
+					},
+				}
+				await config.callbacks.say("tool", JSON.stringify(failedMessage), undefined, undefined, false, block.ts)
+			}
+			return `Error performing web search: ${message}`
 		}
 	}
 }

@@ -56,6 +56,16 @@ export function getE2EMockProviderUrl(baseUrl: string, target: E2EMockProviderTa
 }
 
 export const E2E_REGISTERED_MOCK_ENDPOINTS = {
+	"/mock/web-fetch": {
+		GET: ["/page"],
+		POST: [],
+		PUT: [],
+	},
+	"/mock/searxng": {
+		GET: ["/search"],
+		POST: [],
+		PUT: [],
+	},
 	"/api/v1": {
 		GET: [
 			"/generation",
@@ -70,7 +80,7 @@ export const E2E_REGISTERED_MOCK_ENDPOINTS = {
 			"/users/{userId}/usages",
 			"/users/{userId}/payments",
 		],
-		POST: ["/chat/completions", "/auth/token", "/search/websearch", "/users/me/budget/request"],
+		POST: ["/chat/completions", "/auth/token", "/users/me/budget/request"],
 		PUT: ["/users/active-account"],
 	},
 	"/.test": {

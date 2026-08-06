@@ -93,13 +93,12 @@ async function openSidebar(
 	return { app, page, sidebar }
 }
 
-async function signInToDlineAccount(page: Page, sidebar: Frame): Promise<void> {
-	await page.getByRole("button", { name: "Account", exact: true }).click()
-	await expect(sidebar.getByRole("heading", { name: "Account", exact: true })).toBeVisible()
-	await sidebar.getByRole("button", { name: "Sign up with Dline", exact: true }).click()
-	await expect(sidebar.getByText("Personal User", { exact: true })).toBeVisible({ timeout: 15_000 })
-	await sidebar.getByRole("button", { name: "Done", exact: true }).click()
-	await expect(sidebar.getByTestId("chat-input")).toBeVisible()
+async function configureSearxngSearch(dlineDir: string, serverBaseUrl: string): Promise<void> {
+	const settings = JSON.parse(await readFile(settingsPath(dlineDir), "utf8")) as Record<string, unknown>
+	settings.clineWebToolsEnabled = true
+	settings.localWebSearchEngine = "searxng"
+	settings.searxngSearchUrl = `${serverBaseUrl}/mock/searxng`
+	await writeFile(settingsPath(dlineDir), `${JSON.stringify(settings, null, 2)}\n`, "utf8")
 }
 
 async function sendTask(sidebar: Frame, text: string): Promise<void> {
@@ -192,7 +191,7 @@ e2e(
 			const [firstRequest] = server.getMockConsumptions("openai-official-responses")
 			expect(firstRequest).toBeDefined()
 			expectSingleSearchRoute(firstRequest, "hosted")
-			expect(server.getWebSearchRequests()).toHaveLength(0)
+			expect(server.getSearxngSearchRequests()).toHaveLength(0)
 			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
 		} finally {
 			await app?.close()
@@ -231,7 +230,7 @@ e2e(
 			const [firstRequest] = server.getMockConsumptions("openai-compatible-responses")
 			expect(firstRequest).toBeDefined()
 			expectSingleSearchRoute(firstRequest, "hosted")
-			expect(server.getWebSearchRequests()).toHaveLength(0)
+			expect(server.getSearxngSearchRequests()).toHaveLength(0)
 			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
 		} finally {
 			await app?.close()
@@ -271,7 +270,7 @@ e2e(
 			const [firstRequest] = server.getMockConsumptions("deepseek-responses")
 			expect(firstRequest).toBeDefined()
 			expectSingleSearchRoute(firstRequest, "hosted")
-			expect(server.getWebSearchRequests()).toHaveLength(0)
+			expect(server.getSearxngSearchRequests()).toHaveLength(0)
 			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
 		} finally {
 			await app?.close()
@@ -310,7 +309,7 @@ e2e(
 			const [firstRequest] = server.getMockConsumptions("anthropic-messages")
 			expect(firstRequest).toBeDefined()
 			expectSingleSearchRoute(firstRequest, "hosted")
-			expect(server.getWebSearchRequests()).toHaveLength(0)
+			expect(server.getSearxngSearchRequests()).toHaveLength(0)
 			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
 		} finally {
 			await app?.close()
@@ -328,6 +327,7 @@ e2e(
 			mode: "WEB_SEARCH_MODE_AUTO",
 			supportsWebSearch: true,
 		})
+		await configureSearxngSearch(dlineDir, server.baseUrl)
 		const query = "Dline local fallback search"
 		const resultMarker = `E2E local result for ${query}`
 		const completion = "E2E_LOCAL_WEB_SEARCH_RESULT_REPLAYED"
@@ -347,7 +347,6 @@ e2e(
 		try {
 			const opened = await openSidebar(openVSCode, workspaceDir, helper)
 			app = opened.app
-			await signInToDlineAccount(opened.page, opened.sidebar)
 			await sendTask(opened.sidebar, "Search locally when hosted search is unavailable, then finish.")
 			await expect(opened.sidebar.getByText("Dline wants to search the web for:", { exact: true })).toBeVisible({
 				timeout: 60_000,
@@ -358,12 +357,9 @@ e2e(
 			const consumptions = server.getMockConsumptions("openai-compatible-chat")
 			expect(consumptions).toHaveLength(2)
 			expectSingleSearchRoute(consumptions[0], "local")
-			const [searchRequest] = server.getWebSearchRequests()
-			expect(searchRequest).toMatchObject({
-				query,
-				authorization: "Bearer test-personal-token_access",
-			})
-			expect(searchRequest.taskId).toBeTruthy()
+			const [searchRequest] = server.getSearxngSearchRequests()
+			expect(searchRequest).toMatchObject({ query, format: "json" })
+			expect(searchRequest.authorization).toBeUndefined()
 			expect(JSON.stringify(consumptions[1].requestBody)).toContain(resultMarker)
 			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
 		} finally {
@@ -382,6 +378,7 @@ e2e(
 			mode: "WEB_SEARCH_MODE_AUTO",
 			supportsWebSearch: true,
 		})
+		await configureSearxngSearch(dlineDir, server.baseUrl)
 		const query = "Dline restored local search"
 		const resultMarker = `E2E local result for ${query}`
 		const completion = "E2E_RESTORED_LOCAL_WEB_SEARCH_OK"
@@ -401,11 +398,10 @@ e2e(
 		try {
 			const opened = await openSidebar(openVSCode, workspaceDir, helper)
 			app = opened.app
-			await signInToDlineAccount(opened.page, opened.sidebar)
 			const taskText = "Search locally only after I reopen and approve this task."
 			await sendTask(opened.sidebar, taskText)
 			await expect(opened.sidebar.getByText("Approve", { exact: true })).toBeVisible({ timeout: 60_000 })
-			expect(server.getWebSearchRequests()).toHaveLength(0)
+			expect(server.getSearxngSearchRequests()).toHaveLength(0)
 
 			await closeCurrentTask(opened.sidebar)
 			await reopenTask(opened.sidebar, taskText)
@@ -414,7 +410,7 @@ e2e(
 			await approveButton.click()
 
 			await expect(opened.sidebar.getByText(completion, { exact: false }).last()).toBeVisible({ timeout: 60_000 })
-			await expect.poll(() => server.getWebSearchRequests().length, { timeout: 30_000 }).toBe(1)
+			await expect.poll(() => server.getSearxngSearchRequests().length, { timeout: 30_000 }).toBe(1)
 			const consumptions = server.getMockConsumptions("openai-compatible-chat")
 			expect(consumptions).toHaveLength(2)
 			expect(consumptions[1].contractError).toBeUndefined()
@@ -436,6 +432,7 @@ e2e(
 			mode: "WEB_SEARCH_MODE_FORCE_LOCAL",
 			supportsWebSearch: true,
 		})
+		await configureSearxngSearch(dlineDir, server.baseUrl)
 		const query = "Dline forced local search"
 		const resultMarker = `E2E local result for ${query}`
 		const completion = "E2E_FORCE_LOCAL_WEB_SEARCH_RESULT_REPLAYED"
@@ -455,7 +452,6 @@ e2e(
 		try {
 			const opened = await openSidebar(openVSCode, workspaceDir, helper)
 			app = opened.app
-			await signInToDlineAccount(opened.page, opened.sidebar)
 			await sendTask(opened.sidebar, "Force local web search even though hosted search is available, then finish.")
 			await expect(opened.sidebar.getByText("Dline wants to search the web for:", { exact: true })).toBeVisible({
 				timeout: 60_000,
@@ -466,12 +462,9 @@ e2e(
 			const consumptions = server.getMockConsumptions("openai-compatible-responses")
 			expect(consumptions).toHaveLength(2)
 			expectSingleSearchRoute(consumptions[0], "local")
-			const [searchRequest] = server.getWebSearchRequests()
-			expect(searchRequest).toMatchObject({
-				query,
-				authorization: "Bearer test-personal-token_access",
-			})
-			expect(searchRequest.taskId).toBeTruthy()
+			const [searchRequest] = server.getSearxngSearchRequests()
+			expect(searchRequest).toMatchObject({ query, format: "json" })
+			expect(searchRequest.authorization).toBeUndefined()
 			expect(JSON.stringify(consumptions[1].requestBody)).toContain(resultMarker)
 			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
 		} finally {
@@ -479,6 +472,79 @@ e2e(
 		}
 	},
 )
+
+const webFetchCases = [
+	{
+		title: "OpenAI Chat",
+		profileName: E2E_PROFILE_NAMES.mockOpenAi,
+		target: "openai-compatible-chat" as MockApiTarget,
+	},
+	{
+		title: "OpenAI Responses",
+		profileName: E2E_PROFILE_NAMES.mockOpenAiResponses,
+		target: "openai-compatible-responses" as MockApiTarget,
+	},
+] as const
+
+for (const testCase of webFetchCases) {
+	e2e(
+		`ServerTool runtime - ${testCase.title} executes local Web Fetch without a Cline login`,
+		async ({ dlineDir, dlineDocsDir, dlineHomeDir, helper, openVSCode, server, userDataDir, workspaceDir }) => {
+			e2e.setTimeout(180_000)
+			expectIsolatedDirectories(dlineDir, dlineHomeDir, dlineDocsDir)
+			await prepareRuntimeProfile(dlineDir, testCase.profileName, {
+				enabled: true,
+				mode: "WEB_SEARCH_MODE_AUTO",
+				supportsWebSearch: true,
+			})
+			const url = `${server.baseUrl}/mock/web-fetch/page`
+			const prompt = "Extract the local Web Fetch marker"
+			const completion = `E2E_${testCase.target.toUpperCase().replaceAll("-", "_")}_WEB_FETCH_OK`
+			server.enqueueResponses(
+				testCase.target,
+				{ type: "tool", id: `call_${testCase.target}_web_fetch`, name: "web_fetch", arguments: { url, prompt } },
+				{
+					type: "tool",
+					id: `call_${testCase.target}_web_fetch_done`,
+					name: "attempt_completion",
+					arguments: { result: completion },
+					expectedToolResults: [
+						{
+							callId: `call_${testCase.target}_web_fetch`,
+							contentIncludes: ["Dline local Web Fetch", prompt],
+						},
+					],
+					expectedRequestExcludes: ["REMOVE_NAVIGATION", "REMOVE_SCRIPT"],
+				},
+			)
+
+			let app: ElectronApplication | undefined
+			try {
+				const opened = await openSidebar(openVSCode, workspaceDir, helper)
+				app = opened.app
+				await sendTask(opened.sidebar, `Use ${testCase.title} local Web Fetch without signing in to Cline.`)
+				await expect(
+					opened.sidebar.getByText("Dline wants to fetch content from this URL:", { exact: true }),
+				).toBeVisible({
+					timeout: 60_000,
+				})
+				await opened.sidebar.getByText("Approve", { exact: true }).click()
+				await expect(opened.sidebar.getByText(completion, { exact: false }).last()).toBeVisible({ timeout: 90_000 })
+
+				const consumptions = server.getMockConsumptions(testCase.target)
+				expect(consumptions).toHaveLength(2)
+				expect(consumptions[1].contractError).toBeUndefined()
+				const [pageRequest] = server.getWebFetchPageRequests()
+				expect(pageRequest).toBeDefined()
+				expect(pageRequest.authorization).toBeUndefined()
+				expect(server.getWebFetchPageRequests()).toHaveLength(1)
+				await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+			} finally {
+				await app?.close()
+			}
+		},
+	)
+}
 
 const disabledCases = [
 	{
@@ -533,7 +599,7 @@ for (const testCase of disabledCases) {
 				const [firstRequest] = server.getMockConsumptions(testCase.target)
 				expect(firstRequest).toBeDefined()
 				expectSingleSearchRoute(firstRequest, "none")
-				expect(server.getWebSearchRequests()).toHaveLength(0)
+				expect(server.getSearxngSearchRequests()).toHaveLength(0)
 				await expect(opened.sidebar.getByText(/search(ed)? the web for:/i)).toHaveCount(0)
 				await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
 			} finally {

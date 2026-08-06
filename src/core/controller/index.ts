@@ -1340,6 +1340,8 @@ export class Controller {
 				user: this.stateManager.getGlobalSettingsKey("clineWebToolsEnabled"),
 				featureFlag: featureFlagsService.getWebtoolsEnabled(),
 			},
+			localWebSearchEngine: this.stateManager.getGlobalSettingsKey("localWebSearchEngine"),
+			searxngSearchUrl: this.stateManager.getGlobalSettingsKey("searxngSearchUrl"),
 			worktreesEnabled: {
 				user: this.stateManager.getGlobalSettingsKey("worktreesEnabled"),
 				featureFlag: featureFlagsService.getWorktreesEnabled(),

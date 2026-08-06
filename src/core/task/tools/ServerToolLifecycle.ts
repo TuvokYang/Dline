@@ -11,6 +11,7 @@ export interface HostedServerToolUpdate {
 	readonly status: HostedServerToolUpdateStatus
 	readonly partial: boolean
 	readonly query: string
+	readonly result?: unknown
 	readonly error?: string
 }
 
@@ -115,6 +116,7 @@ export class ServerToolLifecycle {
 			status,
 			partial: !state.terminal,
 			query,
+			...(status === "completed" && chunk.result !== undefined ? { result: chunk.result } : {}),
 			...(status === "failed" ? { error: errorFromUnknown(chunk.error, "Provider-hosted web search failed") } : {}),
 		})
 		return true

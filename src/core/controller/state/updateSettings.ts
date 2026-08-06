@@ -8,6 +8,7 @@ import { Empty } from "@shared/proto/dline/common"
 import { PlanActMode, McpDisplayMode as ProtoMcpDisplayMode, UpdateSettingsRequest } from "@shared/proto/dline/state"
 import { OpenaiReasoningEffort } from "@shared/storage/types"
 import { TelemetrySetting } from "@shared/TelemetrySetting"
+import { isLocalSearchEngineId } from "@shared/web-search"
 import { ClineEnv } from "@/config"
 import { fetchRemoteConfig } from "@/core/storage/remote-config/fetch"
 import { clearRemoteConfig } from "@/core/storage/remote-config/utils"
@@ -44,6 +45,11 @@ function getStringConfigField(config: unknown, field: string): string | undefine
  */
 export async function updateSettings(controller: Controller, request: UpdateSettingsRequest): Promise<Empty> {
 	try {
+		const localWebSearchEngine = request.localWebSearchEngine
+		if (localWebSearchEngine !== undefined && !isLocalSearchEngineId(localWebSearchEngine)) {
+			throw new Error(`Unsupported local web search engine: ${localWebSearchEngine}`)
+		}
+
 		if (request.clineEnv !== undefined) {
 			ClineEnv.setEnvironment(request.clineEnv)
 			await accountLogoutClicked(controller, Empty.create())
@@ -188,12 +194,23 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 			controller.stateManager.setGlobalState("yoloModeToggled", request.yoloModeToggled)
 		}
 
-		// Update cline web tools setting
+		// Update Web Tools settings. Credentials must remain in Secret Storage.
 		if (request.clineWebToolsEnabled !== undefined) {
 			if (controller.task) {
 				telemetryService.captureClineWebToolsToggle(controller.task.ulid, request.clineWebToolsEnabled)
 			}
 			controller.stateManager.setGlobalState("clineWebToolsEnabled", request.clineWebToolsEnabled)
+		}
+		if (localWebSearchEngine !== undefined) {
+			controller.stateManager.setGlobalState("localWebSearchEngine", localWebSearchEngine)
+		}
+		const searxngSearchUrl = request.searxngSearchUrl
+		if (searxngSearchUrl !== undefined) {
+			controller.stateManager.setGlobalState("searxngSearchUrl", searxngSearchUrl.trim() || undefined)
+		}
+		const searxngSearchToken = request.searxngSearchToken
+		if (searxngSearchToken !== undefined) {
+			controller.stateManager.setSecret("searxngSearchToken", searxngSearchToken.trim() ? searxngSearchToken : undefined)
 		}
 
 		// Update worktrees setting

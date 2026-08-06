@@ -51,15 +51,19 @@ export interface MockToolCall {
 export interface MockHostedWebSearchResult {
 	title: string
 	url: string
+	snippet?: string
 }
 
-export interface MockWebSearchRequest {
+export interface MockSearxngSearchRequest {
 	receivedAtMs: number
 	query: string
-	allowedDomains?: readonly string[]
-	blockedDomains?: readonly string[]
+	format?: string
 	authorization?: string
-	taskId?: string
+}
+
+export interface MockWebFetchPageRequest {
+	receivedAtMs: number
+	authorization?: string
 }
 
 interface MockResponseOptions {
@@ -318,7 +322,8 @@ export class ClineApiServerMock {
 	private mockResponses = createResponseQueues()
 	private mockConsumptions: MockApiConsumption[] = []
 	private mockModelListRequests: MockModelListRequest[] = []
-	private mockWebSearchRequests: MockWebSearchRequest[] = []
+	private mockSearxngSearchRequests: MockSearxngSearchRequest[] = []
+	private mockWebFetchPageRequests: MockWebFetchPageRequest[] = []
 	private previousSuccessfulRequestText = new Map<MockApiTarget, string>()
 	public generationCounter = 0
 
@@ -374,7 +379,8 @@ export class ClineApiServerMock {
 		this.mockResponses = createResponseQueues()
 		this.mockConsumptions = []
 		this.mockModelListRequests = []
-		this.mockWebSearchRequests = []
+		this.mockSearxngSearchRequests = []
+		this.mockWebFetchPageRequests = []
 		this.previousSuccessfulRequestText.clear()
 	}
 
@@ -382,8 +388,12 @@ export class ClineApiServerMock {
 		return this.mockModelListRequests
 	}
 
-	public getWebSearchRequests(): readonly MockWebSearchRequest[] {
-		return this.mockWebSearchRequests
+	public getSearxngSearchRequests(): readonly MockSearxngSearchRequest[] {
+		return this.mockSearxngSearchRequests
+	}
+
+	public getWebFetchPageRequests(): readonly MockWebFetchPageRequest[] {
+		return this.mockWebFetchPageRequests
 	}
 
 	public get openAiRequestCount(): number {
@@ -595,7 +605,12 @@ export class ClineApiServerMock {
 			// Authentication middleware
 			const authHeader = req.headers.authorization
 			const hasApiCredential = authHeader?.startsWith("Bearer ") || typeof req.headers["x-api-key"] === "string"
-			const isAuthRequired = !path.startsWith("/.test/") && path !== "/health" && path !== "/api/v1/auth/token"
+			const isAuthRequired =
+				!path.startsWith("/.test/") &&
+				!path.startsWith("/mock/searxng/") &&
+				!path.startsWith("/mock/web-fetch/") &&
+				path !== "/health" &&
+				path !== "/api/v1/auth/token"
 
 			if (isAuthRequired && !hasApiCredential) {
 				return sendApiError("Unauthorized", 401)
@@ -632,6 +647,38 @@ export class ClineApiServerMock {
 
 				const { baseRoute, endpoint, params = {} } = routeMatch
 				const controller = ClineApiServerMock.globalSharedServer!
+
+				if (baseRoute === "/mock/web-fetch" && endpoint === "/page" && method === "GET") {
+					controller.mockWebFetchPageRequests.push({
+						receivedAtMs: Date.now(),
+						...(authHeader ? { authorization: authHeader } : {}),
+					})
+					res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" })
+					res.end(
+						"<!doctype html><html><body><nav>REMOVE_NAVIGATION</nav><main><h1>Dline local Web Fetch</h1><p>E2E_WEB_FETCH_PAGE_CONTENT</p></main><script>REMOVE_SCRIPT</script></body></html>",
+					)
+					return
+				}
+
+				if (baseRoute === "/mock/searxng" && endpoint === "/search" && method === "GET") {
+					const searchQuery = parsedUrl.searchParams.get("q")?.trim()
+					if (!searchQuery) return sendJson({ error: "Search query is required" }, 400)
+					controller.mockSearxngSearchRequests.push({
+						receivedAtMs: Date.now(),
+						query: searchQuery,
+						...(parsedUrl.searchParams.get("format") ? { format: parsedUrl.searchParams.get("format")! } : {}),
+						...(authHeader ? { authorization: authHeader } : {}),
+					})
+					return sendJson({
+						results: [
+							{
+								title: `E2E local result for ${searchQuery}`,
+								url: "https://example.test/dline-local-search",
+								content: `E2E local snippet for ${searchQuery}`,
+							},
+						],
+					})
+				}
 
 				if (mockModelListTarget) {
 					controller.mockModelListRequests.push({
@@ -899,7 +946,12 @@ export class ClineApiServerMock {
 										action: {
 											type: "search",
 											query: scriptedResponse.query,
-											sources: scriptedResponse.results.map(({ url }) => ({ type: "url", url })),
+											sources: scriptedResponse.results.map(({ title, url, snippet }) => ({
+												type: "url",
+												title,
+												url,
+												...(snippet ? { snippet } : {}),
+											})),
 										},
 									}
 								: undefined
@@ -1084,6 +1136,7 @@ export class ClineApiServerMock {
 											type: "web_search_result",
 											url: result.url,
 											title: result.title,
+											...(result.snippet ? { snippet: result.snippet } : {}),
 											page_age: null,
 											encrypted_content: `e2e:${result.url}`,
 										})),
@@ -1256,39 +1309,6 @@ export class ClineApiServerMock {
 
 				// API v1 endpoints
 				if (baseRoute === "/api/v1") {
-					if (endpoint === "/search/websearch" && method === "POST") {
-						const parsed = JSON.parse(await readBody()) as {
-							query?: unknown
-							allowed_domains?: unknown
-							blocked_domains?: unknown
-						}
-						if (typeof parsed.query !== "string" || parsed.query.trim().length === 0) {
-							return sendApiError("Web search query is required", 400)
-						}
-						const allowedDomains = Array.isArray(parsed.allowed_domains)
-							? parsed.allowed_domains.filter((value): value is string => typeof value === "string")
-							: undefined
-						const blockedDomains = Array.isArray(parsed.blocked_domains)
-							? parsed.blocked_domains.filter((value): value is string => typeof value === "string")
-							: undefined
-						controller.mockWebSearchRequests.push({
-							receivedAtMs: Date.now(),
-							query: parsed.query,
-							...(allowedDomains?.length ? { allowedDomains } : {}),
-							...(blockedDomains?.length ? { blockedDomains } : {}),
-							...(authHeader ? { authorization: authHeader } : {}),
-							...(typeof req.headers["x-task-id"] === "string" ? { taskId: req.headers["x-task-id"] } : {}),
-						})
-						return sendApiResponse({
-							results: [
-								{
-									title: `E2E local result for ${parsed.query}`,
-									url: "https://example.test/dline-local-search",
-								},
-							],
-						})
-					}
-
 					// User endpoints
 					if (endpoint === "/users/me" && method === "GET") {
 						const currentUser = controller.currentUser

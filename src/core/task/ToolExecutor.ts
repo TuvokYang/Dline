@@ -209,6 +209,8 @@ export class ToolExecutor {
 		this.webToolsEnabled = webToolsEnabled
 		this.webSearchRoutingPlan = plan
 		this.hostedServerToolLifecycle = new ServerToolLifecycle(plan, allowHosted, async (update) => {
+			const providerId = this.api.getProviderId?.() ?? "provider"
+			const providerLabel = providerId === "openai" ? "OpenAI" : providerId === "deepseek" ? "DeepSeek" : providerId
 			const message: ClineSayTool = {
 				tool: "webSearch",
 				path: update.query,
@@ -217,6 +219,16 @@ export class ToolExecutor {
 						? `Web search failed: ${update.error ?? update.query}`
 						: `Searching for: ${update.query}`,
 				operationIsLocatedInWorkspace: false,
+				webSearch: {
+					source: {
+						engineId: `${providerId}-hosted`,
+						label: `${providerLabel} Web Search`,
+						execution: "hosted",
+						provider: providerId,
+					},
+					...(update.result === undefined ? {} : { result: update.result }),
+					...(update.error === undefined ? {} : { error: update.error }),
+				},
 			}
 			const messageTs = await this.say(
 				"tool",

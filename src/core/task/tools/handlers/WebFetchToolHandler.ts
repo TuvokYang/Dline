@@ -1,13 +1,8 @@
 import { getPrompt } from "@core/prompts/i18n"
 import { ClineAsk, ClineSayTool } from "@shared/ExtensionMessage"
 import { ClineDefaultTool } from "@shared/tools"
-import axios from "axios"
-import { ClineEnv } from "@/config"
-import { AuthService } from "@/services/auth/AuthService"
-import { buildClineExtraHeaders } from "@/services/EnvUtils"
 import { telemetryService } from "@/services/telemetry"
-import { CLINE_ACCOUNT_AUTH_ERROR_MESSAGE } from "@/shared/ClineAccount"
-import { getAxiosSettings } from "@/shared/net"
+import { BrowserWebFetchProvider, type LocalWebFetchProvider } from "@/services/web-fetch/LocalWebFetchProvider"
 import { ToolUse } from "../../../assistant-message"
 import { formatResponse } from "../../../prompts/responses"
 import { ToolResponse } from "../.."
@@ -19,6 +14,8 @@ import { ToolResultUtils } from "../utils/ToolResultUtils"
 
 export class WebFetchToolHandler implements IFullyManagedTool {
 	readonly name = ClineDefaultTool.WEB_FETCH
+
+	constructor(private readonly provider: LocalWebFetchProvider = new BrowserWebFetchProvider()) {}
 
 	getDescription(block: ToolUse): string {
 		return `[${block.name} for '${block.params.url}']`
@@ -137,37 +134,15 @@ export class WebFetchToolHandler implements IFullyManagedTool {
 				throw error
 			}
 
-			// Execute the actual fetch
-			const baseUrl = ClineEnv.config()?.apiBaseUrl
-			const authToken = await AuthService.getInstance().getAuthToken()
-
-			if (!authToken) {
-				throw new Error(CLINE_ACCOUNT_AUTH_ERROR_MESSAGE)
-			}
-
-			const response = await axios.post(
-				`${baseUrl}/api/v1/search/webfetch`,
-				{
-					Url: url,
-					Prompt: prompt,
-				},
-				{
-					headers: {
-						Authorization: `Bearer ${authToken}`,
-						"Content-Type": "application/json",
-						"X-Task-ID": (config.ulid ?? "") || "",
-						...(await buildClineExtraHeaders()),
-					},
-					timeout: 15000,
-					...getAxiosSettings(),
-				},
+			const result = await this.provider.fetch({ url, prompt })
+			return formatResponse.toolResult(
+				JSON.stringify({
+					url: result.url,
+					prompt: result.prompt,
+					source: result.source,
+					content: result.content,
+				}),
 			)
-
-			// Parse response
-			// Axios will throw on non-200 status, so no need to check fetchStatus
-			const result = response.data.data.result
-
-			return formatResponse.toolResult(result)
 		} catch (error) {
 			return `Error fetching web content: ${(error as Error).message}`
 		}
