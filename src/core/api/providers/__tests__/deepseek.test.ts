@@ -5,6 +5,7 @@ import { expect } from "chai"
 import type OpenAI from "openai"
 import { afterEach, describe, it, vi } from "vitest"
 import type { ClineStorageMessage } from "@/shared/messages/content"
+import { createRequestApiScope } from "../../../task/RequestApiScope"
 import type { ApiRequestOptions } from "../../index"
 import { DeepSeekHandler } from "../deepseek"
 
@@ -173,6 +174,7 @@ describe("DeepSeekHandler", () => {
 					provider: "deepseek",
 					apiKey: "test-api-key",
 					modelId: "deepseek-v4-flash",
+					deepseek: BaseProviderConfig.create({ apiFormat: ApiFormat.OPENAI_CHAT }),
 				}),
 				mode: "act",
 			})
@@ -343,7 +345,10 @@ describe("DeepSeekHandler", () => {
 						provider: "deepseek",
 						apiKey: "test-api-key",
 						modelId: "deepseek-v4-pro",
-						deepseek: BaseProviderConfig.create({ reasoning: { effort: configuredEffort } }),
+						deepseek: BaseProviderConfig.create({
+							apiFormat: ApiFormat.OPENAI_CHAT,
+							reasoning: { effort: configuredEffort },
+						}),
 					}),
 					mode: "act",
 				})
@@ -364,6 +369,7 @@ describe("DeepSeekHandler", () => {
 					provider: "deepseek",
 					apiKey: "test-api-key",
 					modelId: "deepseek-v4-pro",
+					deepseek: BaseProviderConfig.create({ apiFormat: ApiFormat.OPENAI_CHAT }),
 				}),
 				mode: "act",
 			})
@@ -404,7 +410,12 @@ describe("DeepSeekHandler", () => {
 
 		it("passes an AbortSignal to the SDK and aborts an in-flight request", async () => {
 			const handler = new DeepSeekHandler({
-				profile: ApiProfile.create({ provider: "deepseek", apiKey: "test-api-key", modelId: "deepseek-v4-pro" }),
+				profile: ApiProfile.create({
+					provider: "deepseek",
+					apiKey: "test-api-key",
+					modelId: "deepseek-v4-pro",
+					deepseek: BaseProviderConfig.create({ apiFormat: ApiFormat.OPENAI_CHAT }),
+				}),
 				mode: "act",
 			})
 			let requestSignal: AbortSignal | undefined
@@ -454,6 +465,62 @@ describe("DeepSeekHandler", () => {
 		expect(resolved.info.capabilities?.maxTokens).to.equal(12_345)
 		expect(resolved.info.capabilities?.supportsReasoning).to.equal(true)
 	})
+
+	it("defaults DeepSeek flash to Chat and freezes Auto Web Search as local", () => {
+		const handler = new DeepSeekHandler({
+			profile: ApiProfile.create({
+				provider: "deepseek",
+				apiKey: "test-api-key",
+				modelId: "deepseek-v4-flash",
+			}),
+			mode: "act",
+		})
+
+		expect(handler.getModel().info.apiFormats?.[0]).to.equal(ApiFormat.OPENAI_CHAT)
+		expect(handler.supportsServerTool(ServerTool.WEB_SEARCH)).to.equal(false)
+		expect(createRequestApiScope(handler, "act", undefined, true).webSearchRoutingPlan).to.deep.include({
+			route: "local",
+			localToolEnabled: true,
+			serverTools: [],
+		})
+	})
+
+	it("defaults DeepSeek pro to Chat while preserving its compatibility formats", () => {
+		const handler = new DeepSeekHandler({
+			profile: ApiProfile.create({
+				provider: "deepseek",
+				modelId: "deepseek-v4-pro",
+			}),
+			mode: "act",
+		})
+
+		expect(handler.getModel().info.apiFormats).to.deep.equal([
+			ApiFormat.OPENAI_CHAT,
+			ApiFormat.OPENAI_RESPONSES,
+			ApiFormat.ANTHROPIC_CHAT,
+		])
+		expect(handler.supportsServerTool(ServerTool.WEB_SEARCH)).to.equal(false)
+	})
+
+	for (const apiFormat of [ApiFormat.OPENAI_RESPONSES, ApiFormat.ANTHROPIC_CHAT]) {
+		it(`uses hosted Web Search when DeepSeek explicitly selects ${ApiFormat[apiFormat]}`, () => {
+			const handler = new DeepSeekHandler({
+				profile: ApiProfile.create({
+					provider: "deepseek",
+					modelId: "deepseek-v4-pro",
+					deepseek: BaseProviderConfig.create({ apiFormat }),
+				}),
+				mode: "act",
+			})
+
+			expect(handler.supportsServerTool(ServerTool.WEB_SEARCH)).to.equal(true)
+			expect(createRequestApiScope(handler, "act", undefined, true).webSearchRoutingPlan).to.deep.include({
+				route: "hosted",
+				localToolEnabled: false,
+				serverTools: [ServerTool.WEB_SEARCH],
+			})
+		})
+	}
 
 	it("reports hosted web search unavailable for the Chat transport", () => {
 		const handler = new DeepSeekHandler({

@@ -32,6 +32,10 @@ export class DeepSeekHandler implements ApiHandler {
 	private accountUsageController: AbortController | undefined
 	constructor(private ctx: ApiHandlerContext) {}
 
+	getProviderId(): string {
+		return this.ctx.profile.provider
+	}
+
 	private get config() {
 		return this.ctx.profile.deepseek
 	}
