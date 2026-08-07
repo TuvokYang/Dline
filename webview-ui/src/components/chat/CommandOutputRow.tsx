@@ -328,7 +328,7 @@ export const CommandOutputRow = memo(
 						)}
 						{showCancelButton && (
 							<Button
-								className="h-5 border px-2 py-0 text-[11px] leading-none"
+								className="h-6 border px-2 py-0 text-[11px] leading-none"
 								onClick={onCancelCommand}
 								size="sm"
 								variant="danger">
