@@ -111,6 +111,7 @@ export interface ExtensionState {
 	autoCondenseTriggerPercent?: number
 	autoCondenseMaxContextTokens?: number
 	subagentsEnabled?: boolean
+	mcpEnabled?: boolean
 	clineWebToolsEnabled?: ClineFeatureSetting
 	localWebSearchEngine?: LocalSearchEngineId
 	searxngSearchUrl?: string

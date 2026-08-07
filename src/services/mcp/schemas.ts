@@ -6,6 +6,7 @@ export const AutoApproveSchema = z.array(z.string()).default([])
 
 export const BaseConfigSchema = z.object({
 	autoApprove: AutoApproveSchema.optional(),
+	disabledAutoApprove: AutoApproveSchema.optional(),
 	disabled: z.boolean().optional(),
 	timeout: z.number().min(MIN_MCP_TIMEOUT_SECONDS).optional().default(DEFAULT_MCP_TIMEOUT_SECONDS),
 	// Marker for servers that were added by remote config sync.

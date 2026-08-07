@@ -118,4 +118,89 @@ describe("Task.attemptApiRequest first chunk state", () => {
 			true,
 		)
 	})
+
+	it("fails explicitly when the provider stream ends without yielding any chunk", async () => {
+		// A Responses stream that only emits codex.rate_limits / metadata /
+		// response.failed events produces no chunks. Previously the empty
+		// generator was treated as a successful first chunk and yielded
+		// undefined, crashing downstream on
+		// "Cannot read properties of undefined (reading 'type')".
+		const api = {
+			createMessage: vi.fn(() => (async function* () {})()),
+		}
+		const requestScope = {
+			api,
+			providerInfo: {
+				providerId: "openai",
+				model: { id: "gpt-5.6-sol", info: {} },
+				mode: "act",
+			},
+			requestToolIds: [],
+			webToolsEnabled: true,
+			webSearchRoutingPlan: resolveWebSearchRoutingPlan({
+				enabled: false,
+				modelInfo: undefined,
+				selectedApiFormat: undefined,
+				localAvailable: true,
+				remoteAdapterAvailable: false,
+			}),
+		} as unknown as RequestApiScope
+		const taskState = {
+			abort: false,
+			apiRequestCount: 1,
+			autoRetryAttempts: 3,
+			conversationHistoryDeletedRange: undefined,
+			didAutomaticallyRetryFailedApiRequest: false,
+			isWaitingForFirstChunk: false,
+		}
+		const conversationHistory = [{ role: "user" as const, content: "hello" }]
+		const clineError = {
+			message: "API stream ended without producing any content.",
+			isErrorType: vi.fn(() => false),
+			serialize: vi.fn(() => '{"message":"API stream ended without producing any content."}'),
+		}
+		vi.spyOn(ErrorService, "get").mockReturnValue({
+			logMessage: vi.fn(),
+			toClineError: vi.fn(() => clineError),
+		} as unknown as ErrorService)
+		vi.spyOn(ToolPromptGenerator.prototype, "generateToolsForRequest").mockReturnValue(undefined)
+
+		const fakeTask = {
+			taskId: "task-first-chunk-empty-stream",
+			taskState,
+			pendingSystemPromptRefreshReason: undefined,
+			buildPromptContext: vi.fn(async () => ({
+				promptProfile: {},
+				clineWebToolsEnabled: true,
+				webSearchRoutingPlan: requestScope.webSearchRoutingPlan,
+			})),
+			buildThinkingSummary: vi.fn(() => undefined),
+			contextManager: {
+				getNewContextMessagesAndMetadata: vi.fn(async () => ({
+					truncatedConversationHistory: conversationHistory,
+				})),
+			},
+			endAutoRetrySequence: vi.fn(),
+			messageStateHandler: {
+				apiConversationHistory: conversationHistory,
+				clineMessages: [],
+			},
+			modeSwitchCompaction: { shouldForce: vi.fn(() => false) },
+			stateManager: {
+				getApiConfiguration: vi.fn(() => ({ actModeProfile: "openai:gpt-5.6-sol" })),
+				getGlobalSettingsKey: vi.fn(() => false),
+			},
+			systemPromptCacheService: {
+				getLastTools: vi.fn(() => undefined),
+				getOrCreate: vi.fn(async () => ({ text: "system prompt" })),
+			},
+			toolExecutor: { setAllowedNativeToolNames: vi.fn(), setWebSearchRoutingPlan: vi.fn() },
+			writePromptMetadataArtifacts: vi.fn(async () => undefined),
+		}
+
+		const request = Task.prototype.attemptApiRequest.call(fakeTask as unknown as Task, -1, requestScope)
+
+		await expect(request.next()).rejects.toThrow("API stream ended without producing any content")
+		expect(taskState.isWaitingForFirstChunk).toBe(false)
+	})
 })

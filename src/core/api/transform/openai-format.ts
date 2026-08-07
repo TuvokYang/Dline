@@ -29,6 +29,13 @@ export function convertToOpenAiMessages(
 	provider?: ApiProvider,
 ): OpenAI.Chat.ChatCompletionMessageParam[] {
 	const openAiMessages: OpenAI.Chat.ChatCompletionMessageParam[] = []
+	// Track projected tool call ids that are actually sent to the provider.
+	// Tool results whose pairing tool_use was truncated away are demoted to
+	// plain user text instead of emitting an orphaned "tool" message, which
+	// providers reject with "No tool call found for function call output".
+	const sentToolCallIds = new Set<string>()
+	// Demoted orphan results accumulated across messages, flushed as user text.
+	const demotedResults: ClineTextContentBlock[] = []
 
 	for (const anthropicMessage of anthropicMessages) {
 		if (typeof anthropicMessage.content === "string") {
@@ -84,11 +91,21 @@ export function convertToOpenAiMessages(
 						// Handle undefined content
 						content = ""
 					}
+					const projectedToolCallId = projectChatFunctionId(getResultFunctionId(toolMessage), provider)
+					if (!sentToolCallIds.has(projectedToolCallId)) {
+						// The pairing tool_use is not in the sent history (truncated or
+						// never recorded). Emitting an orphaned "tool" message would
+						// fail the request, so keep the result as plain user text.
+						if (content) {
+							demotedResults.push({ type: "text", text: content })
+						}
+						return
+					}
 					openAiMessages.push({
 						role: "tool",
 						// The tool_call_id must match the id used in the assistant's tool_calls array.
 						// Use the same transformation logic as tool_calls to ensure IDs match.
-						tool_call_id: projectChatFunctionId(getResultFunctionId(toolMessage), provider),
+						tool_call_id: projectedToolCallId,
 						content: content,
 					})
 				})
@@ -125,6 +142,14 @@ export function convertToOpenAiMessages(
 							return { type: "text", text: part.text }
 						}),
 					})
+				}
+				// Flush demoted orphan results that could not be attached to a message.
+				if (demotedResults.length > 0) {
+					openAiMessages.push({
+						role: "user",
+						content: demotedResults.map((part) => ({ type: "text", text: part.text })),
+					})
+					demotedResults.length = 0
 				}
 			} else if (anthropicMessage.role === "assistant") {
 				const { nonToolMessages, toolMessages } = anthropicMessage.content.reduce<{
@@ -225,6 +250,12 @@ export function convertToOpenAiMessages(
 				// schema, so skip it.
 				if (finalContent === undefined && !hasToolCalls) {
 					continue
+				}
+
+				for (const toolCall of tool_calls) {
+					if (toolCall.id) {
+						sentToolCallIds.add(toolCall.id)
+					}
 				}
 
 				openAiMessages.push({

@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest"
 import type { ToolUse } from "../../../../assistant-message"
 import { TaskState } from "../../../TaskState"
 import type { TaskConfig } from "../../types/TaskConfig"
+import { NO_TOOL_RESULT } from "../../utils/ToolResultUtils"
 import { CondenseHandler } from "../CondenseHandler"
 
 function createConfig(overrides: Partial<TaskConfig> = {}): TaskConfig {
@@ -20,6 +21,7 @@ function createConfig(overrides: Partial<TaskConfig> = {}): TaskConfig {
 		messageState: {
 			clineMessages,
 			apiConversationHistory,
+			addToApiConversationHistory: vi.fn().mockResolvedValue(undefined),
 			updateTaskHistory: vi.fn().mockResolvedValue(undefined),
 			updateClineMessage: vi.fn().mockResolvedValue(undefined),
 		} as unknown as TaskConfig["messageState"],
@@ -162,6 +164,28 @@ describe("CondenseHandler", () => {
 
 			assert.equal(config.taskState.consecutiveMistakeCount, 1)
 			assert.ok(typeof result === "string")
+		})
+
+		it("persists the accepted summary without committing an orphaned tool result", async () => {
+			const config = createConfig()
+			;(config.interactions.open as ReturnType<typeof vi.fn>).mockResolvedValue({
+				actionId: "confirm_utility",
+				draft: { text: "", images: [], files: [] },
+			})
+			const handler = new CondenseHandler()
+
+			const result = await handler.execute(config, makeBlock("condense", "test summary"))
+
+			// The truncation deleted the pairing tool_use turn; committing a
+			// tool_result would orphan it and fail the next request.
+			assert.equal(result, NO_TOOL_RESULT)
+			expect(config.services.contextManager.getNextTruncationRange).toHaveBeenCalled()
+			expect(config.messageState.addToApiConversationHistory).toHaveBeenCalledWith({
+				role: "user",
+				content: [{ type: "text", text: "test summary" }],
+				ts: expect.any(Number),
+			})
+			expect(config.messageState.updateTaskHistory).toHaveBeenCalled()
 		})
 	})
 })

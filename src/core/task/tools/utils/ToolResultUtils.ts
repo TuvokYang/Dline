@@ -10,6 +10,18 @@ import { TaskConfig } from "../types/TaskConfig"
 import { sayFeedbackOnce } from "./UserFeedbackUtils"
 
 /**
+ * Sentinel tool response meaning "the tool turn must not emit a tool_result".
+ *
+ * Manual condense confirmation truncates the conversation before the handler
+ * returns, so the pairing tool_use is deleted from history. Writing a
+ * tool_result afterwards would leave an orphaned result behind (projected as
+ * call_dline_* by the OpenAI transformer) and fail the next request with
+ * "No tool call found for tool output". Only the regenerate (reject) path
+ * needs to return feedback content to the model.
+ */
+export const NO_TOOL_RESULT = "__dline_no_tool_result__"
+
+/**
  * Utility functions for handling tool results and feedback
  */
 interface PendingToolFeedbackBlock {

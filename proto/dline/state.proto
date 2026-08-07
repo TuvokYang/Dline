@@ -180,6 +180,7 @@ message Settings {
   optional string local_web_search_engine = 198;
   optional string searxng_search_url = 199;
   optional int32 terminal_command_handoff_seconds = 200;
+  optional bool mcp_enabled = 201;
 }
 
 // Account usage quota for rate-limited providers (e.g., Codex, Copilot)
@@ -373,6 +374,7 @@ message UpdateSettingsRequest {
   optional string searxng_search_url = 52;
   optional string searxng_search_token = 53;
   optional int32 terminal_command_handoff_seconds = 54;
+  optional bool mcp_enabled = 55;
 }
 
 message UpdateTerminalConnectionTimeoutRequest {

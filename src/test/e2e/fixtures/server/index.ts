@@ -81,6 +81,8 @@ interface MockResponseOptions {
 export type OpenAiMockResponse =
 	| ({ type: "message"; text: string } & MockResponseOptions)
 	| ({ type: "tool" } & MockToolCall & MockResponseOptions)
+	| ({ type: "tool-with-completion-snapshots" } & MockToolCall & MockResponseOptions)
+	| ({ type: "truncated-tool"; truncateAfter: number } & MockToolCall & MockResponseOptions)
 	| ({ type: "tools"; tools: readonly MockToolCall[] } & MockResponseOptions)
 	| ({
 			type: "hosted-web-search"
@@ -175,7 +177,9 @@ function getResponseUsage(
 }
 
 function getResponseToolCalls(response: Exclude<OpenAiMockResponse, { type: "error" }>): readonly MockToolCall[] {
-	if (response.type === "tool") return [response]
+	if (response.type === "tool" || response.type === "tool-with-completion-snapshots" || response.type === "truncated-tool") {
+		return [response]
+	}
 	if (response.type === "tools") return response.tools
 	if (response.type === "hosted-web-search") return response.followupTools ?? []
 	return []
@@ -1061,15 +1065,35 @@ export class ClineApiServerMock {
 									},
 									"response.output_item.added",
 								)
+								const deltaArguments =
+									scriptedResponse.type === "truncated-tool"
+										? outputItem.arguments.slice(0, scriptedResponse.truncateAfter)
+										: outputItem.arguments
 								writeSse(
 									{
 										type: "response.function_call_arguments.delta",
 										item_id: outputItem.id,
 										output_index: outputIndex,
-										delta: outputItem.arguments,
+										delta: deltaArguments,
 									},
 									"response.function_call_arguments.delta",
 								)
+								if (scriptedResponse.type === "tool-with-completion-snapshots") {
+									writeSse(
+										{
+											type: "response.function_call_arguments.done",
+											item_id: outputItem.id,
+											output_index: outputIndex,
+											name: outputItem.name,
+											arguments: outputItem.arguments,
+										},
+										"response.function_call_arguments.done",
+									)
+									writeSse(
+										{ type: "response.output_item.done", output_index: outputIndex, item: outputItem },
+										"response.output_item.done",
+									)
+								}
 							}
 						} else {
 							const outputIndex = outputOffset + (hostedSearchOutputItem ? 1 : 0)
@@ -1091,6 +1115,21 @@ export class ClineApiServerMock {
 								},
 								"response.output_text.delta",
 							)
+						}
+						if (scriptedResponse.type === "truncated-tool") {
+							writeSse(
+								{
+									type: "response.incomplete",
+									response: {
+										...response,
+										status: "incomplete",
+										incomplete_details: { reason: "max_output_tokens" },
+									},
+								},
+								"response.incomplete",
+							)
+							res.end()
+							return
 						}
 						writeSse({ type: "response.completed", response }, "response.completed")
 						res.end()

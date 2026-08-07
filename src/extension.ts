@@ -860,11 +860,12 @@ export async function deactivate() {
 // This is a workaround to reload the extension when the source code changes
 // since vscode doesn't support hot reload for extensions
 const IS_DEV = envFlagEnabled(process.env.IS_DEV)
+const IS_E2E = envFlagEnabled(process.env.E2E_TEST)
 const DEV_WORKSPACE_FOLDER = process.env.DEV_WORKSPACE_FOLDER
 
-// The source watcher is only available in an Extension Development Host.
-// Dev VSIX bundles also set IS_DEV, but do not have a source checkout path.
-if (IS_DEV && DEV_WORKSPACE_FOLDER) {
+// The source watcher is only available in an interactive Extension Development Host.
+// E2E hosts must remain stable while parallel tasks modify the source checkout.
+if (IS_DEV && !IS_E2E && DEV_WORKSPACE_FOLDER) {
 	const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(DEV_WORKSPACE_FOLDER, "src/**/*"))
 
 	watcher.onDidChange(({ scheme, path }) => {

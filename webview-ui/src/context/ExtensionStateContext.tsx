@@ -341,6 +341,7 @@ export const ExtensionStateContextProvider: React.FC<{
 		autoCondenseTriggerPercent: DEFAULT_AUTO_CONDENSE_TRIGGER_PERCENT,
 		autoCondenseMaxContextTokens: DEFAULT_AUTO_CONDENSE_MAX_CONTEXT_TOKENS,
 		subagentsEnabled: true,
+		mcpEnabled: true,
 		clineWebToolsEnabled: { user: true, featureFlag: false },
 		worktreesEnabled: { user: true, featureFlag: false },
 		favoritedModelIds: [],

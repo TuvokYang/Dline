@@ -288,6 +288,11 @@ describe("State Keys Type Safety", () => {
 			expect(getDefaultValue("subagentsEnabled")).to.equal(true)
 		})
 
+		it("should enable MCP by default", () => {
+			expect(SETTINGS_DEFAULTS.mcpEnabled).to.equal(true)
+			expect(getDefaultValue("mcpEnabled")).to.equal(true)
+		})
+
 		it("should send chat input with Enter by default", () => {
 			expect(SETTINGS_DEFAULTS.chatInputSendShortcut).to.equal(DEFAULT_CHAT_INPUT_SEND_SHORTCUT)
 			expect(getDefaultValue("chatInputSendShortcut")).to.equal(DEFAULT_CHAT_INPUT_SEND_SHORTCUT)

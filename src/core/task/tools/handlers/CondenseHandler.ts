@@ -12,6 +12,7 @@ import type { ToolResponse } from "../../index"
 import type { IPartialBlockHandler, IToolHandler } from "../ToolExecutorCoordinator"
 import { interactionId, interactionTurnId, type TaskConfig } from "../types/TaskConfig"
 import type { StronglyTypedUIHelpers } from "../types/UIHelpers"
+import { NO_TOOL_RESULT } from "../utils/ToolResultUtils"
 import { sayFeedbackOnce } from "../utils/UserFeedbackUtils"
 
 export class CondenseHandler implements IToolHandler, IPartialBlockHandler {
@@ -98,8 +99,16 @@ export class CondenseHandler implements IToolHandler, IPartialBlockHandler {
 			await ensureTaskDirectoryExists(config.taskId),
 			apiConversationHistory,
 		)
+		await config.messageState.addToApiConversationHistory({
+			role: "user",
+			content: [{ type: "text", text: context }],
+			ts: Date.now(),
+		})
 
-		return formatResponse.toolResult(formatResponse.condense())
+		// The truncation above removed the condense tool_use turn from history.
+		// Returning a tool_result here would orphan it (the pairing tool_use is
+		// gone), so signal the executor to skip the result entirely.
+		return NO_TOOL_RESULT
 	}
 
 	/**

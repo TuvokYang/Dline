@@ -12,7 +12,7 @@ import { useTaskCapabilityToggles } from "@/hooks/useTaskCapabilityToggles"
 import { McpServiceClient } from "@/services/grpc-client"
 
 const ServersToggleModal: React.FC = () => {
-	const { mcpServers, navigateToMcp, setMcpServers } = useExtensionState()
+	const { mcpEnabled, mcpServers, navigateToMcp, setMcpServers } = useExtensionState()
 	const capabilityScope = useTaskCapabilityToggles()
 	const [isVisible, setIsVisible] = useState(false)
 	const buttonRef = useRef<HTMLDivElement>(null)
@@ -65,6 +65,10 @@ const ServersToggleModal: React.FC = () => {
 			setMenuPosition(buttonRect.top + 1)
 		}
 	}, [isVisible])
+
+	if (mcpEnabled === false) {
+		return null
+	}
 
 	return (
 		<div className="inline-flex min-w-0 max-w-full shrink-0 items-center" ref={modalRef}>

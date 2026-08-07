@@ -1,5 +1,5 @@
 import type OpenAI from "openai"
-import { hashPromptContent } from "@/core/prompts/system-prompt-cache/hash"
+import { hashPromptContentHex } from "@/core/prompts/system-prompt-cache/hash"
 
 const EXPLICIT_BREAKPOINT = { mode: "explicit" as const }
 
@@ -60,9 +60,39 @@ export function supportsExplicitOpenAIPromptCache(modelId: string): boolean {
 	return major > 5 || (major === 5 && minor >= 6)
 }
 
+/**
+ * Suppression switch for the official-only explicit prompt-cache controls
+ * (prompt_cache_breakpoint / prompt_cache_options).
+ *
+ * The official endpoint rejects these parameters for models like
+ * gpt-5.6-sol ("prompt_cache_breakpoint is not supported on this model")
+ * even though the documentation claims GPT-5.6+ support; the documented
+ * version-based rule is unreliable. The explicit projection code below is
+ * kept intact; this toggle only short-circuits the projection. The generic
+ * `prompt_cache_key` is still projected.
+ *
+ * Currently ENABLED (true): explicit controls are suppressed.
+ * Set to `false` (and unset DLINE_DISABLE_OPENAI_PROMPT_BREAKPOINT) to
+ * restore the explicit projection once the model/endpoint supports it.
+ */
+const EXPLICIT_PROMPT_CACHE_SUPPRESSED = true
+
+/**
+ * Return whether the explicit prompt-cache projection is currently
+ * suppressed. Environment override `DLINE_DISABLE_OPENAI_PROMPT_BREAKPOINT=1`
+ * forces suppression regardless of the constant.
+ */
+function isExplicitPromptCacheSuppressed(): boolean {
+	return (
+		EXPLICIT_PROMPT_CACHE_SUPPRESSED ||
+		process.env.DLINE_DISABLE_OPENAI_PROMPT_BREAKPOINT === "1" ||
+		process.env.DLINE_DISABLE_OPENAI_PROMPT_BREAKPOINT === "true"
+	)
+}
+
 /** Build a non-sensitive routing key from the stable rendered-prefix inputs. */
 function createPromptCacheKey(input: PromptCacheIdentityInput): string {
-	return hashPromptContent(
+	return hashPromptContentHex(
 		JSON.stringify({
 			apiFormat: input.apiFormat,
 			model: input.modelId,
@@ -128,7 +158,7 @@ export function projectOpenAIChatPromptCache(input: OpenAIChatPromptCacheInput):
 		systemPrompt: input.systemPrompt,
 		tools: input.tools,
 	})
-	if (!supportsExplicitOpenAIPromptCache(input.modelId)) {
+	if (!supportsExplicitOpenAIPromptCache(input.modelId) || isExplicitPromptCacheSuppressed()) {
 		return { messages: input.messages, promptCacheKey }
 	}
 
@@ -147,7 +177,7 @@ export function projectOpenAIResponsesPromptCache(input: OpenAIResponsesPromptCa
 		systemPrompt: input.systemPrompt,
 		tools: input.tools,
 	})
-	if (!supportsExplicitOpenAIPromptCache(input.modelId)) {
+	if (!supportsExplicitOpenAIPromptCache(input.modelId) || isExplicitPromptCacheSuppressed()) {
 		return {
 			instructions: input.systemPrompt,
 			input: input.input,

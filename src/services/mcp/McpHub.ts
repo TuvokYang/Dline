@@ -44,6 +44,7 @@ import { getServerAuthHash } from "@/utils/mcpAuth"
 import { TelemetryService } from "../telemetry/TelemetryService"
 import { DEFAULT_REQUEST_TIMEOUT_MS } from "./constants"
 import { McpOAuthManager } from "./McpOAuthManager"
+import { resolveMcpToolAutoApprove, updateMcpToolAutoApproveConfig } from "./mcp-auto-approval"
 import { StreamableHttpReconnectHandler } from "./StreamableHttpReconnectHandler"
 import { BaseConfigSchema, McpSettingsSchema, ServerConfigSchema } from "./schemas"
 import { McpConnection, McpServerConfig, Transport } from "./types"
@@ -360,7 +361,7 @@ export class McpHub {
 									url: rs.url,
 									type: "streamableHttp",
 									disabled: false,
-									autoApprove: [],
+									disabledAutoApprove: [],
 									remoteConfigured: true,
 								}
 								fileNeedsUpdate = true
@@ -821,16 +822,14 @@ export class McpHub {
 				timeout: DEFAULT_REQUEST_TIMEOUT_MS,
 			})
 
-			// Get autoApprove settings
 			const settingsPath = await getMcpSettingsFilePathHelper(await this.getSettingsDirectoryPath())
 			const content = await fs.readFile(settingsPath, "utf-8")
 			const config = JSON.parse(content)
-			const autoApproveConfig = config.mcpServers[serverName]?.autoApprove || []
+			const approvalConfig = config.mcpServers[serverName] || {}
 
-			// Mark tools as always allowed based on settings
 			const tools = (response?.tools || []).map((tool) => ({
 				...tool,
-				autoApprove: autoApproveConfig.includes(tool.name),
+				autoApprove: resolveMcpToolAutoApprove(approvalConfig, tool.name),
 			}))
 
 			return tools
@@ -1009,16 +1008,32 @@ export class McpHub {
 					} catch (error) {
 						Logger.error(`Failed to reconnect MCP server ${name}:`, error)
 					}
+				} else if (currentConnection.server.status === "disconnected") {
+					// Config is unchanged but the connection is down (e.g. the
+					// first connect attempt failed while the server was still
+					// starting). Retry automatically so a transient failure does
+					// not leave the server dead until a manual restart.
+					try {
+						currentConnection.server.status = "connecting"
+						currentConnection.server.error = ""
+						if (source === "internal") await this.notifyWebviewOfServerChanges()
+						await this.deleteConnection(name)
+						await this.connectToServer(name, config, source, metadata)
+						Logger.log(`Reconnected MCP server after disconnect: ${name}`)
+						connectionChangesOccurred = true
+					} catch (error) {
+						Logger.error(`Failed to reconnect MCP server ${name}:`, error)
+					}
 				} else {
-					const autoApprove = config.autoApprove || []
 					if (currentConnection.server.tools) {
 						currentConnection.server.tools = currentConnection.server.tools.map((tool) => ({
 							...tool,
-							autoApprove: autoApprove.includes(tool.name),
+							autoApprove: resolveMcpToolAutoApprove(config, tool.name),
 						}))
 					}
 					const currentConfig = JSON.parse(currentConnection.server.config)
 					currentConfig.autoApprove = config.autoApprove
+					currentConfig.disabledAutoApprove = config.disabledAutoApprove
 					currentConfig.timeout = config.timeout
 					currentConnection.server.config = JSON.stringify(currentConfig)
 					currentConnection.server.source = metadata?.source
@@ -1040,7 +1055,8 @@ export class McpHub {
 	 * Excludes Cline-specific settings since they don't affect the MCP server transport connection.
 	 *
 	 * ## Cline-specific settings (don't require restart):
-	 * - `autoApprove`: tool approval list (UI setting)
+	 * - `autoApprove`: legacy tool approval allowlist
+	 * - `disabledAutoApprove`: tool approval deny-list
 	 * - `timeout`: request timeout (read at request time, not connection time)
 	 *
 	 * ## MCP SDK connection settings (require restart):
@@ -1057,12 +1073,14 @@ export class McpHub {
 		// Exclude Cline-specific settings from comparison (add new ones here)
 		const {
 			autoApprove: _oldAutoApprove,
+			disabledAutoApprove: _oldDisabledAutoApprove,
 			timeout: _oldTimeout,
 			remoteConfigured: _oldRemoteConfigured,
 			...oldConnectionConfig
 		} = oldConfig
 		const {
 			autoApprove: _newAutoApprove,
+			disabledAutoApprove: _newDisabledAutoApprove,
 			timeout: _newTimeout,
 			remoteConfigured: _newRemoteConfigured,
 			...newConnectionConfig
@@ -1395,33 +1413,19 @@ export class McpHub {
 			const content = await fs.readFile(settingsPath, "utf-8")
 			const config = JSON.parse(content)
 
-			// Initialize autoApprove if it doesn't exist
-			if (!config.mcpServers[serverName].autoApprove) {
-				config.mcpServers[serverName].autoApprove = []
-			}
-
-			const autoApprove = config.mcpServers[serverName].autoApprove
-			for (const toolName of toolNames) {
-				const toolIndex = autoApprove.indexOf(toolName)
-
-				if (shouldAllow && toolIndex === -1) {
-					// Add tool to autoApprove list
-					autoApprove.push(toolName)
-				} else if (!shouldAllow && toolIndex !== -1) {
-					// Remove tool from autoApprove list
-					autoApprove.splice(toolIndex, 1)
-				}
-			}
+			const connection = this.connections.find((conn) => conn.server.name === serverName)
+			const serverConfig = config.mcpServers[serverName]
+			const availableToolNames = connection?.server.tools?.map((tool) => tool.name) || toolNames
+			const approvalConfig = updateMcpToolAutoApproveConfig(serverConfig, toolNames, shouldAllow, availableToolNames)
+			delete serverConfig.autoApprove
+			serverConfig.disabledAutoApprove = approvalConfig.disabledAutoApprove
 
 			await fs.writeFile(settingsPath, JSON.stringify(config, null, 2))
 
-			// Update the tools list to reflect the change
-			const connection = this.connections.find((conn) => conn.server.name === serverName)
 			if (connection?.server.tools) {
-				// Update the autoApprove property of each tool in the in-memory server object
 				connection.server.tools = connection.server.tools.map((tool) => ({
 					...tool,
-					autoApprove: autoApprove.includes(tool.name),
+					autoApprove: resolveMcpToolAutoApprove(serverConfig, tool.name),
 				}))
 			}
 
@@ -1448,33 +1452,19 @@ export class McpHub {
 			const content = await fs.readFile(settingsPath, "utf-8")
 			const config = JSON.parse(content)
 
-			// Initialize autoApprove if it doesn't exist
-			if (!config.mcpServers[serverName].autoApprove) {
-				config.mcpServers[serverName].autoApprove = []
-			}
-
-			const autoApprove = config.mcpServers[serverName].autoApprove
-			for (const toolName of toolNames) {
-				const toolIndex = autoApprove.indexOf(toolName)
-
-				if (shouldAllow && toolIndex === -1) {
-					// Add tool to autoApprove list
-					autoApprove.push(toolName)
-				} else if (!shouldAllow && toolIndex !== -1) {
-					// Remove tool from autoApprove list
-					autoApprove.splice(toolIndex, 1)
-				}
-			}
+			const connection = this.connections.find((conn) => conn.server.name === serverName)
+			const serverConfig = config.mcpServers[serverName]
+			const availableToolNames = connection?.server.tools?.map((tool) => tool.name) || toolNames
+			const approvalConfig = updateMcpToolAutoApproveConfig(serverConfig, toolNames, shouldAllow, availableToolNames)
+			delete serverConfig.autoApprove
+			serverConfig.disabledAutoApprove = approvalConfig.disabledAutoApprove
 
 			await fs.writeFile(settingsPath, JSON.stringify(config, null, 2))
 
-			// Update the tools list to reflect the change
-			const connection = this.connections.find((conn) => conn.server.name === serverName)
 			if (connection?.server.tools) {
-				// Update the autoApprove property of each tool in the in-memory server object
 				connection.server.tools = connection.server.tools.map((tool) => ({
 					...tool,
-					autoApprove: autoApprove.includes(tool.name),
+					autoApprove: resolveMcpToolAutoApprove(serverConfig, tool.name),
 				}))
 				await this.notifyWebviewOfServerChanges()
 			}
@@ -1508,7 +1498,7 @@ export class McpHub {
 				url: serverUrl,
 				type: transportType,
 				disabled: false,
-				autoApprove: [],
+				disabledAutoApprove: [],
 			}
 
 			// Expand environment variables for validation

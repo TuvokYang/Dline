@@ -141,6 +141,7 @@ const USER_SETTINGS_FIELDS = {
 		transform: normalizeAutoCondenseMaxContextTokens,
 	},
 	subagentsEnabled: { default: true as boolean },
+	mcpEnabled: { default: true as boolean },
 	clineWebToolsEnabled: { default: true as boolean },
 	localWebSearchEngine: { default: DEFAULT_LOCAL_SEARCH_ENGINE as LocalSearchEngineId },
 	searxngSearchUrl: { default: undefined as string | undefined },

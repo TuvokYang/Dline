@@ -12,8 +12,6 @@ type McpToolRowProps = {
 }
 
 const McpToolRow = ({ tool, serverName, showAutoApprove = true }: McpToolRowProps) => {
-	const { autoApprovalSettings } = useExtensionState()
-
 	const { setMcpServers } = useExtensionState()
 	const schemaProperties =
 		tool.inputSchema &&
@@ -36,7 +34,7 @@ const McpToolRow = ({ tool, serverName, showAutoApprove = true }: McpToolRowProp
 			ToggleToolAutoApproveRequest.create({
 				serverName,
 				toolNames: [tool.name],
-				autoApprove: !tool.autoApprove,
+				autoApprove: !(tool.autoApprove ?? true),
 			}),
 		)
 			.then((response) => {
@@ -61,9 +59,9 @@ const McpToolRow = ({ tool, serverName, showAutoApprove = true }: McpToolRowProp
 					<span className="codicon codicon-symbol-method" style={{ marginRight: "6px", flexShrink: 0 }} />
 					<span style={{ fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis" }}>{tool.name}</span>
 				</div>
-				{showAutoApprove && serverName && autoApprovalSettings.actions.useMcp && (
+				{showAutoApprove && serverName && (
 					<VSCodeCheckbox
-						checked={tool.autoApprove ?? false}
+						checked={tool.autoApprove ?? true}
 						data-tool={tool.name}
 						onChange={handleAutoApproveChange}
 						style={{ fontSize: "11px" }}>

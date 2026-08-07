@@ -2,6 +2,7 @@ import { resolveProvider } from "@core/api"
 import type { ToolUse } from "@core/assistant-message"
 import { formatResponse } from "@core/prompts/responses"
 import { ClineAsk, ClineAskUseMcpServer } from "@shared/ExtensionMessage"
+import { isMcpToolAutoApproved } from "@/services/mcp/mcp-auto-approval"
 import { telemetryService } from "@/services/telemetry"
 import { truncateContent } from "@/shared/content-limits"
 import { ClineDefaultTool } from "@/shared/tools"
@@ -11,6 +12,20 @@ import type { IFullyManagedTool } from "../ToolExecutorCoordinator"
 import type { TaskConfig } from "../types/TaskConfig"
 import type { StronglyTypedUIHelpers } from "../types/UIHelpers"
 import { ToolResultUtils } from "../utils/ToolResultUtils"
+
+function shouldAutoApproveMcpTool(config: TaskConfig, serverName?: string, toolName?: string): boolean {
+	const toolEnabled =
+		config.services.mcpHub.connections
+			?.find((connection) => connection.server.name === serverName)
+			?.server.tools?.find((tool) => tool.name === toolName)?.autoApprove ?? true
+	const forceApprove =
+		config.yoloModeToggled || config.services.stateManager.getGlobalSettingsKey("autoApproveAllToggled") === true
+	return isMcpToolAutoApproved({
+		forceApprove,
+		globalEnabled: config.autoApprovalSettings.actions.useMcp,
+		toolEnabled,
+	})
+}
 
 export class UseMcpToolHandler implements IFullyManagedTool {
 	readonly name = ClineDefaultTool.MCP_USE
@@ -31,9 +46,8 @@ export class UseMcpToolHandler implements IFullyManagedTool {
 			arguments: uiHelpers.removeClosingTag(block, "arguments", mcp_arguments),
 		} satisfies ClineAskUseMcpServer)
 
-		// Check if tool should be auto-approved using MCP-specific logic
 		const config = uiHelpers.getConfig()
-		const shouldAutoApprove = config.callbacks.shouldAutoApproveTool(block.name)
+		const shouldAutoApprove = shouldAutoApproveMcpTool(config, server_name, tool_name)
 
 		const existingTs = block.ts
 		if (shouldAutoApprove) {
@@ -95,11 +109,7 @@ export class UseMcpToolHandler implements IFullyManagedTool {
 			arguments: mcp_arguments,
 		} satisfies ClineAskUseMcpServer)
 
-		const isToolAutoApproved = config.services.mcpHub.connections
-			?.find((conn: any) => conn.server.name === server_name)
-			?.server.tools?.find((tool: any) => tool.name === tool_name)?.autoApprove
-
-		if (config.callbacks.shouldAutoApproveTool(block.name) || isToolAutoApproved) {
+		if (shouldAutoApproveMcpTool(config, server_name, tool_name)) {
 			// Auto-approval flow
 			const existingTs = block.ts
 			await config.callbacks.say("use_mcp_server", completeMessage, undefined, undefined, false, existingTs)

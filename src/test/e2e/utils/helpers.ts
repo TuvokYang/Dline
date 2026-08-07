@@ -17,8 +17,15 @@ import { downloadAndUnzipVSCode, SilentReporter } from "@vscode/test-electron"
 import { _electron } from "playwright"
 import { ClineApiServerMock } from "../fixtures/server"
 import { type E2EProfileMode, type PreparedE2EState, prepareE2EState } from "./api-profile"
+import { E2E_OUTPUT_ROOT as E2E_OUTPUT_ROOT_PATH, E2E_RUN_ID as E2E_RUN_NAMESPACE } from "./run-context"
+
+interface E2ETaskDirectories {
+	dlineDir: string
+	dlineDocsDir: string
+}
 
 interface E2ETestDirectories {
+	testDirectories: E2ETaskDirectories
 	workspaceDir: string
 	multiRootWorkspaceDir: string
 	userDataDir: string
@@ -52,9 +59,10 @@ export class E2ETestHelper {
 	// Constants
 	public static readonly CODEBASE_ROOT_DIR = path.resolve(__dirname, "..", "..", "..", "..")
 	public static readonly E2E_TESTS_DIR = path.join(E2ETestHelper.CODEBASE_ROOT_DIR, "src", "test", "e2e")
-	public static readonly DLINE_DIR_ROOT = path.join(os.tmpdir(), ".dline-e2e")
-	public static readonly DLINE_DOCS_DIR_ROOT = path.join(os.tmpdir(), "dline-e2e")
-	public static readonly DLINE_STATE_TEMPLATE_DIR_ROOT = path.join(os.tmpdir(), ".dline-e2e-template")
+	public static readonly E2E_OUTPUT_ROOT = E2E_OUTPUT_ROOT_PATH
+	public static readonly DLINE_DIR_ROOT = path.join(os.tmpdir(), ".dline-e2e", E2E_RUN_NAMESPACE)
+	public static readonly DLINE_DOCS_DIR_ROOT = path.join(os.tmpdir(), "dline-e2e", E2E_RUN_NAMESPACE)
+	public static readonly DLINE_STATE_TEMPLATE_DIR_ROOT = path.join(os.tmpdir(), ".dline-e2e-template", E2E_RUN_NAMESPACE)
 
 	// Instance properties for caching
 	private cachedFrame: Frame | null = null
@@ -73,13 +81,19 @@ export class E2ETestHelper {
 		}
 	}
 
-	public static getResultsDir(testName = "", label?: string): string {
-		const testDir = path.join(
-			E2ETestHelper.CODEBASE_ROOT_DIR,
-			"test-results",
-			"playwright",
-			E2ETestHelper.escapeToPath(testName),
-		)
+	public static getTestDirectories(workerDirectories: E2EWorkerDirectories, testId: string, retry: number): E2ETaskDirectories {
+		const testDirectoryName = `test-${E2ETestHelper.escapeToPath(testId)}-retry-${retry}`
+		return {
+			dlineDir: path.join(workerDirectories.dlineDir, testDirectoryName),
+			dlineDocsDir: path.join(workerDirectories.dlineDocsDir, testDirectoryName),
+		}
+	}
+
+	public static getResultsDir(testName = "", label?: string, testIdentity?: string): string {
+		const testDirectoryName = testIdentity
+			? `${E2ETestHelper.escapeToPath(testIdentity)}-${E2ETestHelper.escapeToPath(testName)}`
+			: E2ETestHelper.escapeToPath(testName)
+		const testDir = path.join(E2ETestHelper.E2E_OUTPUT_ROOT, testDirectoryName)
 		return label ? path.join(testDir, label) : testDir
 	}
 
@@ -417,6 +431,9 @@ export const e2e = test
 			},
 			{ scope: "worker" },
 		],
+		testDirectories: async ({ workerDirectories }, use, testInfo) => {
+			await use(E2ETestHelper.getTestDirectories(workerDirectories, testInfo.testId, testInfo.retry))
+		},
 		server: [
 			async ({}, use) => {
 				const server = await ClineApiServerMock.startGlobalServer()
@@ -513,8 +530,8 @@ export const e2e = test
 				await E2ETestHelper.rmForRetries(userDataDir, { recursive: true, force: true })
 			}
 		},
-		dlineDir: async ({ dlineStateTemplateDir, server, workerDirectories }, use, testInfo) => {
-			const { dlineDir, dlineDocsDir } = workerDirectories
+		dlineDir: async ({ dlineStateTemplateDir, server, testDirectories }, use, testInfo) => {
+			const { dlineDir, dlineDocsDir } = testDirectories
 			server.resetOpenAiMock()
 			await Promise.all([
 				E2ETestHelper.rmForRetries(dlineDir, { recursive: true, force: true }),
@@ -537,9 +554,9 @@ export const e2e = test
 		dlineHomeDir: async ({ dlineDir }, use) => {
 			await use(dlineDir)
 		},
-		dlineDocsDir: async ({ dlineDir, workerDirectories }, use) => {
+		dlineDocsDir: async ({ dlineDir, testDirectories }, use) => {
 			void dlineDir
-			await use(workerDirectories.dlineDocsDir)
+			await use(testDirectories.dlineDocsDir)
 		},
 	})
 	.extend<{ openVSCode: (workspacePath: string) => Promise<ElectronApplication> }>({
@@ -597,7 +614,11 @@ export const e2e = test
 						DEV_WORKSPACE_FOLDER: E2ETestHelper.CODEBASE_ROOT_DIR,
 					},
 					recordVideo: {
-						dir: E2ETestHelper.getResultsDir(testInfo.title, "recordings"),
+						dir: E2ETestHelper.getResultsDir(
+							testInfo.title,
+							"recordings",
+							`${testInfo.testId}-retry-${testInfo.retry}`,
+						),
 					},
 					args: [
 						"--no-sandbox",

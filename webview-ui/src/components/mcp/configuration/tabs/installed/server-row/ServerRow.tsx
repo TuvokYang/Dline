@@ -55,7 +55,7 @@ const ServerRow = ({
 	enabled?: boolean
 	onToggleEnabled?: (enabled: boolean) => void
 }) => {
-	const { mcpMarketplaceCatalog, autoApprovalSettings, setMcpServers, remoteConfigSettings } = useExtensionState()
+	const { mcpMarketplaceCatalog, setMcpServers, remoteConfigSettings } = useExtensionState()
 
 	const [isExpanded, setIsExpanded] = useState(false)
 	const [isDeleting, setIsDeleting] = useState(false)
@@ -163,7 +163,7 @@ const ServerRow = ({
 			ToggleToolAutoApproveRequest.create({
 				serverName: server.name,
 				toolNames: server.tools?.map((tool) => tool.name) || [],
-				autoApprove: !server.tools?.every((tool) => tool.autoApprove),
+				autoApprove: !server.tools?.every((tool) => tool.autoApprove ?? true),
 			}),
 		)
 			.then((response) => {
@@ -335,9 +335,9 @@ const ServerRow = ({
 							<VSCodePanelView id="tools-view">
 								{server.tools && server.tools.length > 0 ? (
 									<div className="flex flex-col gap-2 w-full pt-2">
-										{!isWorkspaceServer && server.name && autoApprovalSettings.actions.useMcp && (
+										{!isWorkspaceServer && server.name && (
 											<VSCodeCheckbox
-												checked={server.tools.every((tool) => tool.autoApprove)}
+												checked={server.tools.every((tool) => tool.autoApprove ?? true)}
 												className="mb-1 text-xs"
 												data-tool="all-tools"
 												onChange={handleAutoApproveChange}>

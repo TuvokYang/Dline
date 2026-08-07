@@ -15,6 +15,52 @@ interface StoredProfile {
 	}
 }
 
+interface OpenAiChatRequestBody {
+	messages?: unknown[]
+	tools?: Array<{ function?: { name?: string } }>
+	prompt_cache_key?: string
+	prompt_cache_options?: unknown
+}
+
+function estimateTokens(value: unknown): number {
+	return Math.max(1, Math.ceil(Buffer.byteLength(JSON.stringify(value), "utf8") / 4))
+}
+
+function estimateCommonPrefixTokens(left: unknown, right: unknown): number {
+	const leftText = JSON.stringify(left)
+	const rightText = JSON.stringify(right)
+	const limit = Math.min(leftText.length, rightText.length)
+	let index = 0
+	while (index < limit && leftText[index] === rightText[index]) index++
+	return Math.ceil(Buffer.byteLength(leftText.slice(0, index), "utf8") / 4)
+}
+
+function getToolNames(body: OpenAiChatRequestBody): string[] {
+	return (body.tools ?? []).flatMap((tool) => (tool.function?.name ? [tool.function.name] : []))
+}
+
+function stripPromptCacheAnnotations(value: unknown): unknown {
+	if (Array.isArray(value)) {
+		return value.map(stripPromptCacheAnnotations)
+	}
+	if (typeof value !== "object" || value === null) {
+		return value
+	}
+
+	return Object.fromEntries(
+		Object.entries(value)
+			.filter(([key]) => key !== "cache_control" && key !== "prompt_cache_breakpoint")
+			.map(([key, nested]) => [key, stripPromptCacheAnnotations(nested)]),
+	)
+}
+
+function commonMessageCount(left: readonly unknown[], right: readonly unknown[]): number {
+	const limit = Math.min(left.length, right.length)
+	let index = 0
+	while (index < limit && JSON.stringify(left[index]) === JSON.stringify(right[index])) index++
+	return index
+}
+
 const profilesPath = (dlineDir: string) => path.join(dlineDir, "data", "settings", "api_profiles.json")
 const settingsPath = (dlineDir: string) => path.join(dlineDir, "data", "settings", "settings.json")
 
@@ -65,7 +111,7 @@ async function sendTask(sidebar: Frame, text: string): Promise<void> {
 
 e2e(
 	"OpenAI compaction - Chat request after summarize_task has no orphan tool output",
-	async ({ dlineDir, helper, openVSCode, server, userDataDir, workspaceDir }) => {
+	async ({ dlineDir, helper, openVSCode, server, userDataDir, workspaceDir }, testInfo) => {
 		e2e.setTimeout(180_000)
 		await configureChatAutoCompaction(dlineDir)
 		server.enqueueResponses(
@@ -78,10 +124,8 @@ e2e(
 				usage: { inputTokens: 125_000, outputTokens: 100 },
 			},
 			{
-				type: "tool",
-				id: "call_chat_compaction_summary",
-				name: "summarize_task",
-				arguments: { context: "E2E_CHAT_COMPACTION_SUMMARY preserves the task and latest user request." },
+				type: "message",
+				text: "<thinking>E2E summary analysis</thinking><summarize_task><context>E2E_CHAT_COMPACTION_SUMMARY preserves the task and latest user request.</context></summarize_task>",
 				expectedRequestIncludes: ["The current conversation is rapidly running out of context"],
 				expectedRequestExcludes: ["E2E_CHAT_COMPACTION_CONTINUE"],
 			},
@@ -111,21 +155,72 @@ e2e(
 			expect(requests[1].contractError).toBeUndefined()
 			expect(requests[2].contractError).toBeUndefined()
 
+			const initialBody = requests[0].requestBody as OpenAiChatRequestBody
+			const summaryBody = requests[1].requestBody as OpenAiChatRequestBody
+			const initialRequestTokens = estimateTokens(initialBody)
+			const summaryRequestTokens = estimateTokens(summaryBody)
+			const initialMessageTokens = estimateTokens(initialBody.messages ?? [])
+			const summaryMessageTokens = estimateTokens(summaryBody.messages ?? [])
+			const initialToolTokens = estimateTokens(initialBody.tools ?? [])
+			const summaryToolTokens = estimateTokens(summaryBody.tools ?? [])
+			const messagePrefixTokens = estimateCommonPrefixTokens(initialBody.messages ?? [], summaryBody.messages ?? [])
+			const normalizedInitialMessages = stripPromptCacheAnnotations(initialBody.messages ?? []) as unknown[]
+			const normalizedSummaryMessages = stripPromptCacheAnnotations(summaryBody.messages ?? []) as unknown[]
+			const normalizedCommonMessageCount = commonMessageCount(normalizedInitialMessages, normalizedSummaryMessages)
+			const projectedSummaryTokens = 350_600 + summaryRequestTokens - initialRequestTokens
+			const cacheEvidence = {
+				actual: {
+					initialRequestTokens,
+					summaryRequestTokens,
+					initialMessageTokens,
+					summaryMessageTokens,
+					initialToolTokens,
+					summaryToolTokens,
+					messagePrefixTokens,
+					initialMessageCount: initialBody.messages?.length ?? 0,
+					summaryMessageCount: summaryBody.messages?.length ?? 0,
+					normalizedCommonMessageCount,
+					initialMessageTokensByIndex: (initialBody.messages ?? []).map(estimateTokens),
+					summaryMessageTokensByIndex: (summaryBody.messages ?? []).map(estimateTokens),
+				},
+				projected: {
+					initialRequestTokens: 350_600,
+					summaryRequestTokens: projectedSummaryTokens,
+				},
+				initialToolNames: getToolNames(initialBody),
+				summaryToolNames: getToolNames(summaryBody),
+				initialPromptCacheKey: initialBody.prompt_cache_key,
+				summaryPromptCacheKey: summaryBody.prompt_cache_key,
+			}
+			const evidencePath = testInfo.outputPath("openai-compaction-cache-evidence.json")
+			await writeFile(evidencePath, `${JSON.stringify(cacheEvidence, null, 2)}\n`, "utf8")
+			await testInfo.attach("openai-compaction-cache-evidence.json", {
+				path: evidencePath,
+				contentType: "application/json",
+			})
+
+			expect(summaryMessageTokens).toBeGreaterThan(initialMessageTokens)
+			expect(normalizedCommonMessageCount).toBe(initialBody.messages?.length ?? 0)
+			expect(summaryBody.tools).toEqual(initialBody.tools)
+			expect(getToolNames(summaryBody)).toEqual(getToolNames(initialBody))
+			expect(getToolNames(summaryBody)).not.toContain("summarize_task")
+			expect(summaryBody.prompt_cache_key).toBe(initialBody.prompt_cache_key)
+			expect(projectedSummaryTokens).toBeGreaterThan(350_600)
+
 			const finalBody = requests[2].requestBody as {
 				messages?: Array<{ role?: string; tool_call_id?: string; content?: unknown }>
 			}
 			const orphanSummaryOutputs = (finalBody.messages ?? []).filter(
-				(message) => message.role === "tool" && message.tool_call_id === "call_chat_compaction_summary",
+				(message) => message.role === "tool" && JSON.stringify(message.content).includes("E2E_CHAT_COMPACTION_SUMMARY"),
 			)
 			expect(orphanSummaryOutputs).toEqual([])
 			expect(JSON.stringify(finalBody)).toContain("E2E_CHAT_COMPACTION_SUMMARY")
 
 			for (const request of requests) {
 				expect(request.requestBody?.prompt_cache_key).toBeTruthy()
-				expect(request.requestBody?.prompt_cache_options).toEqual({ mode: "explicit" })
+				expect(request.requestBody?.prompt_cache_options).toBeUndefined()
+				expect(JSON.stringify(request.requestBody)).not.toContain("prompt_cache_breakpoint")
 			}
-			expect(JSON.stringify(requests[0].requestBody)).toContain("prompt_cache_breakpoint")
-			expect(JSON.stringify(requests[2].requestBody)).toContain("prompt_cache_breakpoint")
 			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
 		} finally {
 			await app.close()

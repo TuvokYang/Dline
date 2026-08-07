@@ -1205,6 +1205,7 @@ export class Controller {
 		const favoritedModelIds = this.stateManager.getGlobalStateKey("favoritedModelIds")
 		const doubleCheckCompletionEnabled = this.stateManager.getGlobalSettingsKey("doubleCheckCompletionEnabled")
 		const lazyTeammateModeEnabled = this.stateManager.getGlobalSettingsKey("lazyTeammateModeEnabled")
+		const mcpEnabled = this.stateManager.getGlobalSettingsKey("mcpEnabled")
 		const showFeatureTips = this.stateManager.getGlobalSettingsKey("showFeatureTips")
 		const showActiveTasksInEnvDetails = this.stateManager.getGlobalSettingsKey("showActiveTasksInEnvDetails")
 
@@ -1358,6 +1359,7 @@ export class Controller {
 			optOutOfRemoteConfig: this.stateManager.getGlobalSettingsKey("optOutOfRemoteConfig"),
 			doubleCheckCompletionEnabled,
 			lazyTeammateModeEnabled,
+			mcpEnabled,
 			showFeatureTips,
 			showActiveTasksInEnvDetails,
 			openAiCodexIsAuthenticated,

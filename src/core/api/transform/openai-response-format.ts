@@ -99,6 +99,13 @@ export function convertToOpenAIResponsesInput(
 	}
 
 	const allItems: any[] = []
+	// Track projected call ids that are actually emitted as function_call items.
+	// Tool outputs whose pairing function_call was truncated away are demoted to
+	// plain user text instead of emitting an orphaned function_call_output item,
+	// which the Responses API rejects with "No tool call found for tool output".
+	const sentCallIds = new Set<string>()
+	// Demoted orphan outputs accumulated across messages, flushed as user text.
+	const demotedOutputs: string[] = []
 
 	for (const m of messages) {
 		if (typeof m.content === "string") {
@@ -189,9 +196,11 @@ export function convertToOpenAIResponsesInput(
 						break
 					case "tool_use": {
 						const functionId = getUseFunctionId(part)
+						const projectedCallId = projectChatFunctionId(functionId)
+						sentCallIds.add(projectedCallId)
 						assistantItems.push({
 							type: "function_call",
-							call_id: projectChatFunctionId(functionId),
+							call_id: projectedCallId,
 							name: part.name,
 							arguments: JSON.stringify(part.input ?? {}),
 						})
@@ -224,10 +233,21 @@ export function convertToOpenAIResponsesInput(
 							messageContent.length = 0
 						}
 						const functionId = getResultFunctionId(part)
+						const projectedCallId = projectChatFunctionId(functionId)
+						const output = typeof part.content === "string" ? part.content : JSON.stringify(part.content)
+						if (!sentCallIds.has(projectedCallId)) {
+							// The pairing function_call is not in the sent history (truncated or
+							// never recorded). Emitting an orphaned function_call_output would
+							// fail the request, so keep the output as plain user text.
+							if (output) {
+								demotedOutputs.push(output)
+							}
+							break
+						}
 						allItems.push({
 							type: "function_call_output",
-							call_id: projectChatFunctionId(functionId),
-							output: typeof part.content === "string" ? part.content : JSON.stringify(part.content),
+							call_id: projectedCallId,
+							output,
 						})
 						break
 					}
@@ -237,6 +257,14 @@ export function convertToOpenAIResponsesInput(
 			// Flush any remaining user message content
 			if (messageContent.length > 0) {
 				allItems.push({ role: m.role, content: [...messageContent] })
+			}
+			// Flush demoted orphan outputs as plain user text.
+			if (demotedOutputs.length > 0) {
+				allItems.push({
+					role: m.role,
+					content: demotedOutputs.map((output) => ({ type: "input_text", text: output })),
+				})
+				demotedOutputs.length = 0
 			}
 		}
 	}

@@ -52,7 +52,7 @@ import { ToolValidator } from "./tools/ToolValidator"
 import { type TaskConfig, type TaskInteractionPorts, validateTaskConfig } from "./tools/types/TaskConfig"
 import { createUIHelpers } from "./tools/types/UIHelpers"
 import { ToolDisplayUtils } from "./tools/utils/ToolDisplayUtils"
-import { ToolResultUtils } from "./tools/utils/ToolResultUtils"
+import { NO_TOOL_RESULT, ToolResultUtils } from "./tools/utils/ToolResultUtils"
 
 type ToolResponse = ClineToolResponseContent
 
@@ -1037,7 +1037,9 @@ export class ToolExecutor {
 				toolResult = await this.coordinator.execute(config, block)
 			}
 			toolWasExecuted = true
-			await this.commitToolResult(toolResult, block)
+			if (toolResult !== NO_TOOL_RESULT) {
+				await this.commitToolResult(toolResult, block)
+			}
 
 			// --- Repeated tool call loop detection ---
 			// Must run BEFORE updating lastToolName/lastToolParams so we compare

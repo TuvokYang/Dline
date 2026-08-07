@@ -1,0 +1,203 @@
+---
+name: use-e2e
+description: Use when running or diagnosing Dline Playwright E2E tests, especially VS Code UI failures, timeouts, screenshots, missing profiles, mock queue exhaustion, flaky parallel tasks, or artifacts under tmp/test-result.
+---
+
+# Use E2E
+
+## Overview
+
+Dline E2E tests use Playwright to launch a real VS Code instance, load the extension, and verify observable behavior through a mock API. E2E tests are appropriate for Webview and host-bridge integration, Task lifecycle, tool calls, persisted configuration, screenshot layouts, and cross-process state. Prefer Webview/Vitest or backend tests for pure React rendering or backend-only logic.
+
+## When to Use
+
+Use this skill when:
+
+- You need to verify real VS Code, Webview, Electron, or extension-host interaction.
+- Vitest passes, but a real Task, API request, tool result, or layout is still incorrect.
+- You need to reproduce `API Request Failed`, profile-unavailable errors, mock queue exhaustion, VS Code startup failures, or test timeouts.
+- You need to inspect screenshots, Dline Output logs, VS Code logs, or Task state.
+- Parallel E2E processes cause missing profiles, state leakage, port conflicts, or overwritten artifacts.
+
+Do not launch full VS Code merely to verify a pure function, one React class name, or one RPC handler. Choose the smallest useful test layer first.
+
+## Core Commands
+
+The project root is `e:\workspace\vscode\dline`. Commands use PowerShell by default and must be collected until the process exits.
+
+| Purpose | Command |
+| --- | --- |
+| Build, then run the full E2E suite | `npm run test:e2e` |
+| Run E2E after the build already exists | `npm run e2e` |
+| Run one file | `npm run e2e -- src/test/e2e/mode-switch-context.test.ts` |
+| Run one test | `npm run e2e -- src/test/e2e/mode-switch-context.test.ts -g "Automatic compaction"` |
+| Show the VS Code window | `npm run e2e -- <path> --headed` |
+| Open the Playwright debugger | `npm run e2e -- <path> --debug` |
+| List tests without launching VS Code | `npx playwright test -c playwright.config.ts <path> --list` |
+| Run a low-cost fixture/state test | `npx playwright test -c playwright.config.ts src/test/e2e/profile-preprocess.test.ts --project="e2e tests"` |
+
+Start with one test file or one test name. Broaden only when the change crosses multiple protocols, fixtures, or shared components. Do not use `--debug`, `--headed`, or a long-running watcher as a substitute for one-shot verification.
+
+## Pre-Run Checks
+
+1. Read `package.json` and `playwright.config.ts`; do not infer script names or project names from memory.
+2. Decide whether the `npm run test:e2e` build prerequisite is needed. If only tests or fixtures changed and the build is current, use `npm run e2e`.
+3. Set a unique run ID for parallel or repeatable runs:
+
+```powershell
+$env:DLINE_E2E_RUN_ID = "compact-debug-20260807"
+npm run e2e -- src/test/e2e/mode-switch-context.test.ts -g "Manual compaction" --workers=1 --retries=0
+```
+
+`DLINE_E2E_RUN_ID` may contain only letters, numbers, dots, underscores, and hyphens. If it is not set, the fixture creates a process-unique ID.
+
+4. Do not manually delete the entire `tmp/test-result` directory or temporary directories owned by another run. Global setup cleans only its own run namespace; deleting external directories can cause trace `ENOENT` errors or remove another Task's profile.
+
+## Artifact Locations and Isolation
+
+Playwright artifacts are stored at:
+
+```text
+tmp/test-result/<run-id>/
+├── <test-result-directory>/
+│   ├── trace.zip
+│   ├── test-failed-1.png
+│   ├── vscode-failure.png
+│   ├── dline-output.log
+│   ├── vscode-logs/
+│   └── dline-task-state/
+└── .last-run.json
+```
+
+Dline runtime data uses a finer isolation hierarchy:
+
+```text
+System temp/.dline-e2e/<run-id>/worker-<index>/test-<test-id>-retry-<n>/...
+System temp/dline-e2e/<run-id>/worker-<index>/test-<test-id>-retry-<n>/...
+```
+
+- **Run ID** isolates separate Playwright processes.
+- **Worker index** isolates workers within one run.
+- **Test ID + retry** isolates each Task test and retry.
+- The mock server uses a dynamic loopback port; each test calls `resetOpenAiMock()` to clear response queues and consumptions.
+- Do not assume identical test titles share an artifact directory; recording paths must include test identity and retry.
+
+If two independent E2E processes still interfere while both start at `worker-0`, first check whether `DLINE_E2E_RUN_ID` was reused and whether code is cleaning a fixed root outside the current run namespace.
+
+## Writing E2E Tests
+
+### Use the Project Fixture
+
+Real VS Code tests use `e2e`, not the base `test` fixture:
+
+```typescript
+import { expect } from "@playwright/test"
+import { e2e } from "./utils/helpers"
+
+e2e("Task renders the completed result", async ({ helper, sidebar, server, userDataDir }) => {
+	await helper.signin(sidebar)
+	server.resetOpenAiMock()
+	server.enqueueOpenAiResponses(
+		{ type: "message", text: "E2E_RESULT_OK" },
+	)
+
+	const input = sidebar.getByTestId("chat-input")
+	await input.fill("Run the E2E task")
+	await sidebar.getByTestId("send-button").click()
+	await expect(sidebar.getByText("E2E_RESULT_OK", { exact: false })).toBeVisible({ timeout: 60_000 })
+	await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+})
+```
+
+### Interaction and Waiting
+
+- Prefer `getByTestId`, `getByRole`, `getByLabel`, and observable text.
+- Wait for every asynchronous boundary using observable results: a button becomes visible, input becomes enabled, completion text appears, or request count reaches the expected value.
+- Do not use a short fixed `waitForTimeout` to prove that business behavior completed. If startup or streaming stabilization truly requires a delay, explain why and use `expect.poll` or a state assertion.
+- Verify real inputs, outputs, tool results, and request contracts rather than only checking that a mock function was called.
+- Assert only stable, product-relevant layout properties such as `max-height: 80vh`, `overflow-y`, and `scrollHeight > clientHeight`.
+
+### Mock Response Queues
+
+Reset the queue at the start of each test and enqueue only the responses that test needs:
+
+```typescript
+server.resetOpenAiMock()
+server.enqueueOpenAiResponses(
+	{ type: "tool", id: "call_read", name: "read_file", arguments: { path: "README.md" } },
+	{
+		type: "tool",
+		id: "call_done",
+		name: "attempt_completion",
+		arguments: { result: "E2E_DONE" },
+		expectedToolResults: [{ callId: "call_read", contentIncludes: "# Test Workspace" }],
+	},
+)
+```
+
+After the test, inspect `server.getMockConsumptions(...)`:
+
+- `responseType` and `toolName` appear in the expected order.
+- `contractError` is undefined.
+- `requestToolResults` contains the real tool result.
+- Do not use an oversized shared queue that lets neighboring Tasks pass by coincidence.
+
+## Failure-Diagnosis Order
+
+When a test fails, do not immediately change production code. Preserve the failed run's `DLINE_E2E_RUN_ID` and full command, then inspect evidence in this order:
+
+1. **The first Playwright assertion or timeout boundary**
+   - Distinguish startup, fixture, UI locator, API-contract, and business-assertion failures.
+   - A timeout near 60 seconds usually indicates an unresolved Promise, streaming state, Electron startup, or fixture-scope problem.
+2. **Screenshots**
+   - Inspect `tmp/test-result/<run-id>/<test-result-directory>/test-failed-1.png`.
+   - For a real VS Code page failure, also inspect `vscode-failure.png`.
+   - Use screenshots to determine whether the page is stuck on Welcome, profile unavailable, API Request Failed, approval, a blank Webview, or another error state. Do not infer the UI state from the exception text alone.
+3. **Dline output log**
+   - Inspect `dline-output.log`, captured automatically by the `userDataDir` fixture on failure.
+   - Search for `[error]`, `uncaught`, `unhandled`, `TypeError`, `ReferenceError`, `invalid_runtime_event`, profile rebuild, API request, and mock queue messages.
+   - Use `E2ETestHelper.expectNoUnexpectedDlineErrors` as an aid, but do not blanket-suppress diagnostics that have not been understood.
+4. **VS Code logs**
+   - Inspect the newest files under `vscode-logs/` to determine whether the extension host, Webview, Electron, or CDP exited early.
+   - If the page closed, a screenshot may not exist; logs and the Playwright trace become the primary evidence.
+5. **Task state**
+   - Inspect `dline-task-state/` to determine whether the Task was created, the profile was written, an interaction or operation is stuck, or data was written to the wrong directory.
+6. **Mock consumption and request body**
+   - Inspect the first `contractError`, request count, provider/protocol/path, tool results, and response order in `getMockConsumptions()`.
+   - For `Profile not found`, provider unavailable, or queue exhaustion, investigate fixture and directory isolation before attributing the failure to UI business logic.
+7. **Trace**
+   - For a complete action timeline, run with `--trace=on` and inspect actions, DOM snapshots, network, and console in the Playwright trace viewer.
+   - Do not let global setup delete `outputDir` during a trace run; otherwise `.playwright-artifacts/*.zip` can fail with `ENOENT`.
+
+### Symptom-to-Evidence Map
+
+| Symptom | First evidence to inspect |
+| --- | --- |
+| `Profile ... not found` / provider unavailable | Run ID, Dline profile file, Task state, and setup/teardown directory cleanup |
+| `e2e_mock_queue_exhausted` | Mock consumption order, response count, and unexpected retry requests |
+| `e2e_tool_result_contract_failed` | Previous tool result, call ID, request body, and `expectedToolResults` |
+| `API Request Failed` | Screenshot, Dline log, provider/protocol/path, and response status |
+| Blank page or sidebar frame unavailable | `vscode-failure.png`, VS Code logs, console/pageerror, and Webview-frame initialization |
+| `ENOENT .playwright-artifacts/*.zip` | Whether setup deleted the current run's output root |
+| Tasks interfere with each other | `DLINE_E2E_RUN_ID`, worker/test/retry directories, dynamic ports, and mock queue reset |
+| 60-second timeout | The first unmet wait boundary; do not increase the timeout first |
+
+## Minimal Reproduction After a Failure
+
+1. Preserve the failed run's artifacts; do not clean the directory.
+2. Rerun one test with the same `DLINE_E2E_RUN_ID` to confirm reproducibility. Use a new run ID if the old artifacts must remain untouched.
+3. Use `--workers=1 --retries=0` to remove parallel and retry noise, but do not treat this as the final isolation fix.
+4. If one worker passes while parallel execution fails, run the isolation-contract test and inspect directory naming instead of changing business logic.
+5. After a fix, rerun the original failing test first, then adjacent protocol/fixture tests, and only then consider a broader regression run.
+
+## Completion Criteria
+
+Before declaring an E2E change complete, record:
+
+- The exact command, files, and test counts that ran.
+- The first meaningful assertion or log evidence from the failure or success.
+- Whether failure screenshots, Dline logs, VS Code logs, and Task state were available.
+- Whether parallel isolation, mock queues, and retry behavior were verified.
+- Which Electron E2E, build, or type checks were not run, with the reason.
+
+Do not report “Playwright listed the tests” as “the feature passed”; `--list` proves only that the configuration parses, not that VS Code behavior works.

@@ -126,4 +126,28 @@ describe("ServerRow workspace descriptor presentation", () => {
 		expect(screen.getByText("Auto-approve")).toBeInTheDocument()
 		expect(screen.getAllByRole("button", { name: "Delete Server" })).toHaveLength(2)
 	})
+
+	it("defaults unconfigured settings tools to auto-approve and persists an explicit disable", () => {
+		mocks.toggleToolAutoApprove.mockResolvedValue({ mcpServers: [] })
+		const settingsServer: McpServer = {
+			...workspaceServer,
+			name: "global-docs",
+			displayName: undefined,
+			source: "settings",
+			tools: [{ name: "search" }],
+		}
+		render(<ServerRow server={settingsServer} />)
+		fireEvent.click(screen.getByText("global-docs"))
+
+		const toolCheckbox = screen.getByRole("checkbox", { name: "Auto-approve" })
+		expect(toolCheckbox).toBeChecked()
+
+		fireEvent.click(toolCheckbox)
+
+		expect(mocks.toggleToolAutoApprove).toHaveBeenCalledWith({
+			serverName: "global-docs",
+			toolNames: ["search"],
+			autoApprove: false,
+		})
+	})
 })

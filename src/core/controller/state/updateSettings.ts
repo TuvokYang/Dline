@@ -408,6 +408,10 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 			controller.stateManager.setGlobalState("showActiveTasksInEnvDetails", request.showActiveTasksInEnvDetails)
 		}
 
+		if (request.mcpEnabled !== undefined) {
+			controller.stateManager.setGlobalState("mcpEnabled", request.mcpEnabled)
+		}
+
 		// Profile-driven model selection
 		Logger.info("[updateSettings] received", {
 			planModeProfile: request.planModeProfile,

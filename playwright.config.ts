@@ -1,4 +1,5 @@
 import { defineConfig } from "@playwright/test"
+import { E2E_OUTPUT_ROOT } from "./src/test/e2e/utils/run-context"
 
 const isCI = !!process?.env?.CI
 const isWindow = process?.platform?.startsWith("win")
@@ -19,6 +20,7 @@ export default defineConfig({
 		timeout: isCI || isWindow ? 5000 : 2000,
 	},
 	fullyParallel: true,
+	outputDir: E2E_OUTPUT_ROOT,
 	reporter: isCI ? [["github"], ["list"]] : [["list"]],
 	use: {
 		screenshot: "only-on-failure",

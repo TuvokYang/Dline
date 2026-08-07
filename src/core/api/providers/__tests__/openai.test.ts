@@ -166,11 +166,11 @@ describe("OpenAiHandler", () => {
 			expect(requestBody.service_tier).to.equal("priority")
 			expect(requestBody.reasoning_effort).to.equal("ultra")
 			expect(requestBody.prompt_cache_key).to.be.a("string").and.not.equal("")
-			expect(requestBody.prompt_cache_options).to.deep.equal({ mode: "explicit" })
-			expect(JSON.stringify(requestBody.messages)).to.contain("prompt_cache_breakpoint")
+			expect(requestBody.prompt_cache_options).to.equal(undefined)
+			expect(JSON.stringify(requestBody.messages)).not.to.contain("prompt_cache_breakpoint")
 		})
 
-		it("adds stable explicit prompt cache control to Chat requests across dynamic suffixes", async () => {
+		it("adds a stable Chat cache key while suppressing explicit controls across dynamic suffixes", async () => {
 			const handler = new OpenAiHandler({
 				profile: ApiProfile.create({
 					provider: "openai",
@@ -198,8 +198,8 @@ describe("OpenAiHandler", () => {
 			const secondRequest = create.mock.calls[1]?.[0] as OpenAI.Chat.ChatCompletionCreateParamsStreaming
 			expect(firstRequest.prompt_cache_key).to.be.a("string").and.not.equal("")
 			expect(secondRequest.prompt_cache_key).to.equal(firstRequest.prompt_cache_key)
-			expect(firstRequest.prompt_cache_options).to.deep.equal({ mode: "explicit" })
-			expect(JSON.stringify(firstRequest.messages[0])).to.contain("prompt_cache_breakpoint")
+			expect(firstRequest.prompt_cache_options).to.equal(undefined)
+			expect(JSON.stringify(firstRequest.messages)).not.to.contain("prompt_cache_breakpoint")
 			expect(JSON.stringify(firstRequest.messages.at(-1))).to.contain("dynamic environment A")
 			expect(JSON.stringify(secondRequest.messages.at(-1))).to.contain("dynamic environment B")
 		})
@@ -358,7 +358,7 @@ describe("OpenAiHandler", () => {
 			expect(responsesCreate.mock.calls).to.have.length(1)
 		})
 
-		it("adds stable explicit prompt cache control to GPT-5.6 Responses requests across dynamic suffixes", async () => {
+		it("adds a stable Responses cache key while suppressing explicit controls across dynamic suffixes", async () => {
 			const handler = new OpenAiHandler({
 				profile: ApiProfile.create({
 					provider: "openai",
@@ -385,23 +385,13 @@ describe("OpenAiHandler", () => {
 
 			const firstRequest = responsesCreate.mock.calls[0]?.[0] as OpenAI.Responses.ResponseCreateParamsStreaming
 			const secondRequest = responsesCreate.mock.calls[1]?.[0] as OpenAI.Responses.ResponseCreateParamsStreaming
-			expect(firstRequest.instructions).to.equal(undefined)
+			expect(firstRequest.instructions).to.equal("frozen system prompt")
 			expect(firstRequest.prompt_cache_key).to.be.a("string").and.not.equal("")
 			expect(secondRequest.prompt_cache_key).to.equal(firstRequest.prompt_cache_key)
-			expect(firstRequest.prompt_cache_options).to.deep.equal({ mode: "explicit" })
-			expect(firstRequest.input?.[0]).to.deep.equal({
-				type: "message",
-				role: "system",
-				content: [
-					{
-						type: "input_text",
-						text: "frozen system prompt",
-						prompt_cache_breakpoint: { mode: "explicit" },
-					},
-				],
-			})
-			expect(JSON.stringify(firstRequest.input?.[1])).to.contain("dynamic environment A")
-			expect(JSON.stringify(secondRequest.input?.[1])).to.contain("dynamic environment B")
+			expect(firstRequest.prompt_cache_options).to.equal(undefined)
+			expect(JSON.stringify(firstRequest.input)).not.to.contain("prompt_cache_breakpoint")
+			expect(JSON.stringify(firstRequest.input?.[0])).to.contain("dynamic environment A")
+			expect(JSON.stringify(secondRequest.input?.[0])).to.contain("dynamic environment B")
 		})
 
 		it("keeps automatic Responses caching for models below GPT-5.6 while adding a stable key", async () => {
@@ -436,7 +426,7 @@ describe("OpenAiHandler", () => {
 			})
 		})
 
-		it("adds explicit prompt cache control to custom GPT-5.6 Responses endpoints", async () => {
+		it("suppresses explicit prompt cache control for custom GPT-5.6 Responses endpoints", async () => {
 			const handler = new OpenAiHandler({
 				profile: ApiProfile.create({
 					provider: "openai",
@@ -457,12 +447,11 @@ describe("OpenAiHandler", () => {
 			}
 
 			const request = responsesCreate.mock.calls[0]?.[0] as OpenAI.Responses.ResponseCreateParamsStreaming
-			expect(request.instructions).to.equal(undefined)
+			expect(request.instructions).to.equal("system prompt")
 			expect(request.prompt_cache_key).to.be.a("string").and.not.equal("")
-			expect(request.prompt_cache_options).to.deep.equal({ mode: "explicit" })
-			expect(JSON.stringify(request.input?.[0])).to.contain("system prompt")
-			expect(JSON.stringify(request.input?.[0])).to.contain("prompt_cache_breakpoint")
-			expect(JSON.stringify(request.input?.[1])).to.contain("Hello")
+			expect(request.prompt_cache_options).to.equal(undefined)
+			expect(JSON.stringify(request.input)).not.to.contain("prompt_cache_breakpoint")
+			expect(JSON.stringify(request.input?.[0])).to.contain("Hello")
 		})
 
 		it("routes an OpenAI-compatible profile to the Responses endpoint", async () => {

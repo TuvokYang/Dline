@@ -250,6 +250,18 @@ describe("Tool Call Parsing", () => {
 		it("should handle tool results with array content", () => {
 			const messages: ClineStorageMessage[] = [
 				{
+					role: "assistant",
+					content: [
+						{
+							type: "tool_use",
+							function_id: "tool_123",
+							dline_tid: "tid_tool_123",
+							name: "read_file",
+							input: { path: "test.ts" },
+						} as unknown as ClineAssistantToolUseBlock,
+					],
+				},
+				{
 					role: "user",
 					content: [
 						{
@@ -267,8 +279,8 @@ describe("Tool Call Parsing", () => {
 
 			const result = convertToOpenAiMessages(messages)
 
-			result.should.have.length(1)
-			const msg = result[0] as OpenAI.Chat.ChatCompletionToolMessageParam
+			result.should.have.length(2)
+			const msg = result[1] as OpenAI.Chat.ChatCompletionToolMessageParam
 			msg.role.should.equal("tool")
 			msg.content.should.equal("Line 1\nLine 2")
 		})
@@ -294,6 +306,67 @@ describe("Tool Call Parsing", () => {
 			const msg = result[0] as any
 			// Content should be null, not undefined or empty string
 			;(msg.content === null).should.be.true()
+		})
+
+		it("should demote orphaned tool results to user text instead of emitting orphan tool messages", () => {
+			// The pairing tool_use was truncated away; only the tool_result remains.
+			const messages: ClineStorageMessage[] = [
+				{
+					role: "user",
+					content: [
+						{
+							type: "tool_result",
+							function_id: "dline_function_00000000000000000000000000",
+							dline_tid: "tid_orphan",
+							content: "orphan result content",
+						} as ClineUserToolResultContentBlock,
+					],
+				},
+			]
+
+			const result = convertToOpenAiMessages(messages)
+
+			result.should.have.length(1)
+			const msg = result[0] as OpenAI.Chat.ChatCompletionUserMessageParam
+			msg.role.should.equal("user")
+			msg.content.should.deepEqual([{ type: "text", text: "orphan result content" }])
+			JSON.stringify(result).should.not.match(/call_dline_|tool_call_id/)
+		})
+
+		it("should keep paired tool results as tool messages after their tool_use is emitted", () => {
+			const messages: ClineStorageMessage[] = [
+				{
+					role: "assistant",
+					content: [
+						{
+							type: "tool_use",
+							function_id: "tool_123",
+							dline_tid: "tid_tool_123",
+							name: "read_file",
+							input: { path: "/test.ts" },
+						} as unknown as ClineAssistantToolUseBlock,
+					],
+				},
+				{
+					role: "user",
+					content: [
+						{
+							type: "tool_result",
+							function_id: "tool_123",
+							dline_tid: "tid_tool_123",
+							content: "file contents",
+						} as ClineUserToolResultContentBlock,
+					],
+				},
+			]
+
+			const result = convertToOpenAiMessages(messages)
+
+			result.should.have.length(2)
+			const toolMsg = result[1] as OpenAI.Chat.ChatCompletionToolMessageParam
+			toolMsg.role.should.equal("tool")
+			toolMsg.tool_call_id.should.equal("tool_123")
+			toolMsg.content.should.equal("file contents")
 		})
 	})
 
