@@ -1601,14 +1601,6 @@ export class Controller {
 	}
 
 	private async clearTaskWithinLifecycle(options?: { clearPanelState?: boolean }) {
-		// Stop lock heartbeat
-		if (this.lockHeartbeatTimer) {
-			clearInterval(this.lockHeartbeatTimer)
-			this.lockHeartbeatTimer = undefined
-		}
-		// Stop lock polling
-		this.stopLockPoll()
-		this.taskLockAcquired = false
 		const taskId = this.task?.taskId
 		if (taskId && options?.clearPanelState) {
 			await this.clearPanelStateIfNeeded()
@@ -1621,6 +1613,16 @@ export class Controller {
 			await this.stateManager.clearTaskSettings(taskId)
 		}
 		await this.task?.terminate()
+		// Stop lock heartbeat and polling only after terminate() completes:
+		// terminate() pushes intermediate state to the webview while the task
+		// instance still exists, so flipping taskLockAcquired early would make
+		// getTaskLockStatus() report a phantom "locked by another instance" banner.
+		if (this.lockHeartbeatTimer) {
+			clearInterval(this.lockHeartbeatTimer)
+			this.lockHeartbeatTimer = undefined
+		}
+		this.stopLockPoll()
+		this.taskLockAcquired = false
 		// Release file lock so other instances can open the task
 		if (taskId) {
 			await this.lockService.releaseTaskLock(taskId).catch((e) => Logger.error("Failed to release lock:", e))

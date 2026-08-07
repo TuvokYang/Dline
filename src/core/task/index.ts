@@ -46,7 +46,6 @@ import { summarizeTask } from "@core/prompts/contextManagement"
 import { ToolPromptGenerator } from "@core/prompts/generators/ToolPromptGenerator"
 import { PromptProfile } from "@core/prompts/profiles/types"
 import { formatResponse } from "@core/prompts/responses"
-import type { RequestScopedToolId } from "@core/prompts/tools/tool-ids"
 import { parseSlashCommands } from "@core/slash-commands"
 import {
 	ensureRulesDirectoryExists,
@@ -62,12 +61,7 @@ import { ensureApiMessages, ensureUserContent } from "@core/task/api-context"
 import { showContextUsage } from "@core/task/environment-context"
 import { type ModeCompactResult, ModeSwitchCompaction } from "@core/task/ModeSwitchCompaction"
 import { MODE_SWITCH_COMPACT_SIGNAL } from "@core/task/mode-switch-signal"
-import {
-	createRequestApiScope,
-	type RequestApiScope,
-	resolveRequestWebSearchRoutingPlan,
-	withRequestToolIds,
-} from "@core/task/RequestApiScope"
+import { createRequestApiScope, type RequestApiScope, resolveRequestWebSearchRoutingPlan } from "@core/task/RequestApiScope"
 import { isMultiRootEnabled } from "@core/workspace/multi-root-utils"
 import { WorkspaceRootManager } from "@core/workspace/WorkspaceRootManager"
 import { buildCheckpointManager, shouldUseMultiRoot } from "@integrations/checkpoints/factory"
@@ -610,8 +604,11 @@ export class Task {
 						effect.interactionId,
 					),
 				}),
-				async (effect) => {
-					await this.controller.initTask(effect.draft.text, effect.draft.images, effect.draft.files)
+				async () => {
+					// The footer "Start New Task" action must close the current task and return to
+					// the RECENT welcome screen instead of immediately launching a replacement task,
+					// so the user can review history and explicitly start a new task from there.
+					await this.controller.clearTask({ clearPanelState: true })
 				},
 			),
 		)
@@ -1249,6 +1246,35 @@ export class Task {
 			() => this.interactionCoordinator.respondForModeCompaction(MODE_SWITCH_COMPACT_SIGNAL),
 			chatContent,
 		)
+	}
+
+	/** Request one user-triggered compaction without consuming a causal interaction. */
+	public async compactTask(expectedRevision: number): Promise<{ accepted: boolean; result: string }> {
+		const runtimeState = this.getRuntimeState()
+		if (runtimeState.revision !== expectedRevision) {
+			return { accepted: false, result: "stale_state" }
+		}
+		if (this.taskState.abort || !this.taskState.isInitialized || !runtimeState.interaction) {
+			return { accepted: false, result: "unavailable" }
+		}
+		if (this.modeSwitchCompaction.getOperationId()) {
+			return { accepted: false, result: "already_running" }
+		}
+
+		const operationId = `manual-compact:${this.taskId}:${expectedRevision}`
+		const canWakeInteraction = this.interactionCoordinator.canRespondForModeCompaction()
+		const completion = this.modeSwitchCompaction.request(
+			operationId,
+			canWakeInteraction
+				? () => this.interactionCoordinator.respondForModeCompaction(MODE_SWITCH_COMPACT_SIGNAL)
+				: () => true,
+		)
+		void completion.then((result) => {
+			if (result === "completed") {
+				this.releaseCompact(operationId)
+			}
+		})
+		return { accepted: true, result: canWakeInteraction ? "accepted" : "queued" }
 	}
 
 	/** Release the task loop after target-mode commit. */
@@ -2638,30 +2664,43 @@ export class Task {
 			// PHASE 3: Set abort flag
 			this.taskState.abort = true
 
-			// PHASE 4: Cancel hooks and background commands
+			// PHASE 4: Cancel hooks, background commands and task activities in
+			// parallel. Each cancellation is individually bounded by a timeout, so
+			// the worst-case close latency is one timeout instead of the sum of
+			// three sequential timeouts.
 			const activeHook = await this.getActiveHookExecution()
-			if (activeHook) {
-				try {
-					await withTerminateTimeout(this.cancelHookExecution(), 5_000, "cancelHookExecution")
-					await this.clearActiveHookExecution()
-				} catch (error) {
-					Logger.error("Failed to cancel hook during task terminate", error)
-					await this.clearActiveHookExecution()
-				}
-			}
-
-			try {
-				await withTerminateTimeout(this.commandExecutor.cancelBackgroundCommand(), 5_000, "cancelAllCommands")
-			} catch (error) {
-				Logger.error("Failed to cancel command during task terminate", error)
-			}
-
 			const activeActivityIds = this.activityStore.listRunning().map((activity) => activity.activityId)
-			if (activeActivityIds.length > 0) {
-				await withTerminateTimeout(this.activityStore.cancel(activeActivityIds), 5_000, "cancelAllTaskActivities").catch(
-					(error) => Logger.error("Failed to cancel task activities during terminate", error),
-				)
-			}
+			await Promise.allSettled([
+				(async () => {
+					if (!activeHook) {
+						return
+					}
+					try {
+						await withTerminateTimeout(this.cancelHookExecution(), 5_000, "cancelHookExecution")
+					} catch (error) {
+						Logger.error("Failed to cancel hook during task terminate", error)
+					} finally {
+						await this.clearActiveHookExecution()
+					}
+				})(),
+				(async () => {
+					try {
+						await withTerminateTimeout(this.commandExecutor.cancelBackgroundCommand(), 5_000, "cancelAllCommands")
+					} catch (error) {
+						Logger.error("Failed to cancel command during task terminate", error)
+					}
+				})(),
+				(async () => {
+					if (activeActivityIds.length === 0) {
+						return
+					}
+					await withTerminateTimeout(
+						this.activityStore.cancel(activeActivityIds),
+						5_000,
+						"cancelAllTaskActivities",
+					).catch((error) => Logger.error("Failed to cancel task activities during terminate", error))
+				})(),
+			])
 
 			// PHASE 4: Run TaskCancel hook as fire-and-forget. It must not
 			// block terminate because a slow or hanging hook would prevent
@@ -3458,15 +3497,10 @@ export class Task {
 			promptContext.promptProfile,
 			promptContext,
 			this.systemPromptCacheService.getLastTools(),
-			requestScope.requestToolIds,
 		)
 		const tools = selectedTools ? [...selectedTools] : undefined
 		this.toolExecutor.setAllowedNativeToolNames(getAdvertisedNativeToolNames(tools))
-		this.toolExecutor.setWebSearchRoutingPlan(
-			requestScope.webSearchRoutingPlan,
-			requestScope.webToolsEnabled,
-			requestScope.requestToolIds.length === 0,
-		)
+		this.toolExecutor.setWebSearchRoutingPlan(requestScope.webSearchRoutingPlan, requestScope.webToolsEnabled)
 		Logger.debug(
 			`[Task ${this.taskId}] attemptApiRequest: after systemPrompt +${Math.round(performance.now() - apiReqStart)}ms`,
 		)
@@ -3523,7 +3557,7 @@ export class Task {
 			thinking: thinkingSummary ?? null,
 		})
 
-		const serverTools = requestScope.requestToolIds.length > 0 ? [] : requestScope.webSearchRoutingPlan.serverTools
+		const serverTools = requestScope.webSearchRoutingPlan.serverTools
 		const stream = recordProviderAdapterOutput(
 			roundContext,
 			api.createMessage(systemPrompt, apiConversationMessages, tools, { serverTools }),
@@ -4369,7 +4403,6 @@ export class Task {
 		let parsedUserContent: ClineContent[]
 		let environmentDetails: string
 		let clinerulesError: boolean
-		const requestToolIds: readonly RequestScopedToolId[] = shouldCompact ? [ClineDefaultTool.SUMMARIZE_TASK] : []
 		this.taskState.isInternalContextCompactionRequest = shouldCompact
 
 		if (shouldCompact) {
@@ -4387,8 +4420,6 @@ export class Task {
 				requestScope.providerInfo,
 			)
 		}
-		const requestScopeWithTools = withRequestToolIds(requestScope, requestToolIds)
-
 		// error handling if the user uses the /newrule command & their .clinerules is a file, for file read operations didnt work properly
 		if (clinerulesError === true) {
 			await this.say(
@@ -4629,7 +4660,7 @@ export class Task {
 			this.taskState.partialToolLifecycleByTs.clear()
 
 			const { toolUseHandler, reasonsHandler } = this.streamHandler.getHandlers()
-			const providerStream = this.attemptApiRequest(previousApiReqIndex, requestScopeWithTools) // yields only if the first chunk is successful, otherwise will allow the user to retry the request (most likely due to rate limit error, which gets thrown on the first chunk)
+			const providerStream = this.attemptApiRequest(previousApiReqIndex, requestScope) // yields only if the first chunk is successful, otherwise will allow the user to retry the request (most likely due to rate limit error, which gets thrown on the first chunk)
 			const stream = normalizeApiStream(providerStream, createStreamNormalizer(this.identityFactory))
 
 			let assistantMessageId = ""

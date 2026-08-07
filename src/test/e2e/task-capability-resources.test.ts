@@ -334,9 +334,16 @@ e2e(
 
 		const startNewTask = sidebar.locator('vscode-button[aria-label="Start New Task"]')
 		await expect(startNewTask).toBeVisible()
-		await input.fill("E2E_CAPABILITY_WORKSPACE_DEFAULT_TASK")
+		// Start New Task closes the current task and returns to the RECENT
+		// welcome screen; the user then explicitly submits the next task.
 		await startNewTask.click()
 		await expect(input).toHaveValue("")
+		// Wait until the previous task is fully closed (the welcome input
+		// placeholder is only shown once no task is active), otherwise the
+		// submission is swallowed while the webview still tracks the old task.
+		await expect(input).toHaveAttribute("placeholder", "Type your task here...")
+		await input.fill("E2E_CAPABILITY_WORKSPACE_DEFAULT_TASK")
+		await input.press("Enter")
 		await expect(sidebar.getByText("E2E_CAPABILITY_WORKSPACE_DEFAULT_TASK_READY", { exact: false }).last()).toBeVisible({
 			timeout: 60_000,
 		})
