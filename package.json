@@ -4,9 +4,6 @@
 	"description": "Autonomous coding agent right in your IDE, capable of creating/editing files, running commands, using the browser, and more with your permission every step of the way.",
 	"version": "0.9.1",
 	"icon": "assets/icons/icon.png",
-	"workspaces": [
-		"."
-	],
 	"engines": {
 		"vscode": "^1.84.0"
 	},
@@ -450,7 +447,7 @@
 		"e2e": "playwright test -c playwright.config.ts",
 		"pree2e:legacy": "npm run pree2e",
 		"e2e:legacy": "playwright test -c playwright.legacy.config.ts",
-		"test:e2e:build": "vsce package --allow-package-secrets sendgrid --out dist/e2e.vsix",
+		"test:e2e:build": "vsce package --no-dependencies --allow-package-secrets sendgrid --out dist/e2e.vsix",
 		"test:e2e": "npm run test:e2e:build && node src/test/e2e/utils/build.mjs && playwright test",
 		"test:e2e:optimal": "npm run test:e2e:build && node src/test/e2e/utils/build.mjs && playwright test",
 		"test:e2e:ui": "npx tsx scripts/interactive-playwright.ts",

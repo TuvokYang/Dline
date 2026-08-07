@@ -38,7 +38,7 @@ process.on("SIGINT", cleanupOnSignal(130))
 process.on("SIGTERM", cleanupOnSignal(143))
 
 try {
-	const ovsxArgs = ["ovsx", "publish"]
+	const ovsxArgs = ["ovsx", "publish", "--no-dependencies"]
 	if (isPrerelease) {
 		ovsxArgs.push("--pre-release")
 	}

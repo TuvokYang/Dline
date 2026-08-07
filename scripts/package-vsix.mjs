@@ -139,7 +139,7 @@ try {
 		fs.mkdirSync(DIST_DIR, { recursive: true })
 	}
 
-	const vsceCmd = "npx vsce package --allow-package-secrets sendgrid"
+	const vsceCmd = "npx vsce package --no-dependencies --allow-package-secrets sendgrid"
 	console.log(`[package-vsix] Running: ${vsceCmd}`)
 	execSync(vsceCmd, {
 		cwd: PROJECT_ROOT,
