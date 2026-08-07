@@ -39,6 +39,7 @@ export interface WebSearchRoutingPlan {
 	readonly route: WebSearchRoute
 	readonly serverToolPlan: ServerToolPlan
 	readonly localToolEnabled: boolean
+	readonly localFallbackAvailable: boolean
 	readonly serverTools: readonly ServerTool[]
 	readonly unavailableReason?: WebSearchUnavailableReason
 }
@@ -100,6 +101,7 @@ export function disableWebSearchRoutingPlan(plan: WebSearchRoutingPlan): WebSear
 		route: "disabled" as const,
 		serverToolPlan: plan.serverToolPlan,
 		localToolEnabled: false,
+		localFallbackAvailable: false,
 		serverTools: Object.freeze([] as ServerTool[]),
 	})
 }
@@ -108,6 +110,7 @@ function createWebSearchRoutingPlan(
 	mode: WebSearchMode,
 	route: WebSearchRoute,
 	serverToolPlan: ServerToolPlan,
+	localAvailable: boolean,
 	unavailableReason?: WebSearchUnavailableReason,
 ): WebSearchRoutingPlan {
 	return Object.freeze({
@@ -115,6 +118,7 @@ function createWebSearchRoutingPlan(
 		route,
 		serverToolPlan,
 		localToolEnabled: route === "local",
+		localFallbackAvailable: localAvailable,
 		serverTools: Object.freeze(route === "hosted" ? [ServerTool.WEB_SEARCH] : []),
 		...(unavailableReason === undefined ? {} : { unavailableReason }),
 	})
@@ -126,13 +130,13 @@ export function resolveWebSearchRoutingPlan(input: WebSearchRoutingInput): WebSe
 	const serverToolPlan = resolveServerToolPlan(input.modelInfo, input.selectedApiFormat)
 
 	if (!input.enabled || mode === WebSearchMode.WEB_SEARCH_MODE_FORCE_OFF) {
-		return createWebSearchRoutingPlan(mode, "disabled", serverToolPlan)
+		return createWebSearchRoutingPlan(mode, "disabled", serverToolPlan, false)
 	}
 
 	if (mode === WebSearchMode.WEB_SEARCH_MODE_FORCE_LOCAL) {
 		return input.localAvailable
-			? createWebSearchRoutingPlan(mode, "local", serverToolPlan)
-			: createWebSearchRoutingPlan(mode, "unavailable", serverToolPlan, "local_web_search_unavailable")
+			? createWebSearchRoutingPlan(mode, "local", serverToolPlan, true)
+			: createWebSearchRoutingPlan(mode, "unavailable", serverToolPlan, false, "local_web_search_unavailable")
 	}
 
 	const declared = serverToolPlan.declared.includes(ServerTool.WEB_SEARCH)
@@ -141,25 +145,26 @@ export function resolveWebSearchRoutingPlan(input: WebSearchRoutingInput): WebSe
 
 	if (mode === WebSearchMode.WEB_SEARCH_MODE_FORCE_REMOTE) {
 		if (!declared) {
-			return createWebSearchRoutingPlan(mode, "unavailable", serverToolPlan, "server_tool_not_declared")
+			return createWebSearchRoutingPlan(mode, "unavailable", serverToolPlan, false, "server_tool_not_declared")
 		}
 		if (!transportSupported) {
-			return createWebSearchRoutingPlan(mode, "unavailable", serverToolPlan, "server_tool_transport_unsupported")
+			return createWebSearchRoutingPlan(mode, "unavailable", serverToolPlan, false, "server_tool_transport_unsupported")
 		}
 		return input.remoteAdapterAvailable
-			? createWebSearchRoutingPlan(mode, "hosted", serverToolPlan)
-			: createWebSearchRoutingPlan(mode, "unavailable", serverToolPlan, "server_tool_adapter_unavailable")
+			? createWebSearchRoutingPlan(mode, "hosted", serverToolPlan, false)
+			: createWebSearchRoutingPlan(mode, "unavailable", serverToolPlan, false, "server_tool_adapter_unavailable")
 	}
 
 	if (hostedAvailable) {
-		return createWebSearchRoutingPlan(mode, "hosted", serverToolPlan)
+		return createWebSearchRoutingPlan(mode, "hosted", serverToolPlan, input.localAvailable)
 	}
 	return input.localAvailable
-		? createWebSearchRoutingPlan(mode, "local", serverToolPlan)
+		? createWebSearchRoutingPlan(mode, "local", serverToolPlan, true)
 		: createWebSearchRoutingPlan(
 				mode,
 				"unavailable",
 				serverToolPlan,
+				false,
 				!declared
 					? "server_tool_not_declared"
 					: !transportSupported

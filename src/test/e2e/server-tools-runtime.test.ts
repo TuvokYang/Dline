@@ -200,6 +200,70 @@ e2e(
 )
 
 e2e(
+	"ServerTool runtime - OpenAI Responses Auto renders hosted routing failure and replays local fallback result",
+	async ({ dlineDir, dlineDocsDir, dlineHomeDir, helper, openVSCode, server, userDataDir, workspaceDir }) => {
+		e2e.setTimeout(180_000)
+		expectIsolatedDirectories(dlineDir, dlineHomeDir, dlineDocsDir)
+		await prepareRuntimeProfile(dlineDir, E2E_PROFILE_NAMES.mockOpenAiResponses, {
+			enabled: true,
+			mode: "WEB_SEARCH_MODE_AUTO",
+			supportsWebSearch: true,
+		})
+		await configureSearxngSearch(dlineDir, server.baseUrl)
+		const query = "Dline hosted function fallback search"
+		const resultMarker = `E2E local result for ${query}`
+		const completion = "E2E_HOSTED_FUNCTION_AUTO_LOCAL_FALLBACK_OK"
+		server.enqueueResponses(
+			"openai-compatible-responses",
+			{ type: "tool", id: "call_hosted_function_fallback", name: "web_search", arguments: { query } },
+			{
+				type: "tool",
+				id: "call_hosted_function_fallback_done",
+				name: "attempt_completion",
+				arguments: { result: completion },
+				expectedToolResults: [{ callId: "call_hosted_function_fallback", contentIncludes: resultMarker }],
+			},
+		)
+
+		let app: ElectronApplication | undefined
+		try {
+			const opened = await openSidebar(openVSCode, workspaceDir, helper)
+			app = opened.app
+			await sendTask(
+				opened.sidebar,
+				"Use OpenAI hosted search, recover locally if the provider returns a function call, then finish.",
+			)
+			await expect(opened.sidebar.getByText("OpenAI Web Search (Hosted)", { exact: true })).toBeVisible({
+				timeout: 60_000,
+			})
+			await expect(
+				opened.sidebar.getByText(
+					"OpenAI hosted Web Search returned a local web_search function call instead of a hosted search event; falling back to Dline local Web Search.",
+					{ exact: true },
+				),
+			).toBeVisible({ timeout: 60_000 })
+			await expect(opened.sidebar.getByText("Dline wants to search the web for:", { exact: true })).toBeVisible({
+				timeout: 60_000,
+			})
+			await opened.sidebar.getByText("Approve", { exact: true }).click()
+			await expect(opened.sidebar.getByText("SearXNG (Dline)", { exact: true })).toBeVisible({ timeout: 60_000 })
+			await expect(opened.sidebar.getByText(completion, { exact: false }).last()).toBeVisible({ timeout: 60_000 })
+
+			const consumptions = server.getMockConsumptions("openai-compatible-responses")
+			expect(consumptions).toHaveLength(2)
+			expectSingleSearchRoute(consumptions[0], "hosted")
+			expect(consumptions[1].contractError).toBeUndefined()
+			const [searchRequest] = server.getSearxngSearchRequests()
+			expect(searchRequest).toMatchObject({ query, format: "json" })
+			expect(JSON.stringify(consumptions[1].requestBody)).toContain(resultMarker)
+			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+		} finally {
+			await app?.close()
+		}
+	},
+)
+
+e2e(
 	"ServerTool runtime - Force Remote on OpenAI Responses uses hosted Web Search without a local duplicate",
 	async ({ dlineDir, dlineDocsDir, dlineHomeDir, helper, openVSCode, server, userDataDir, workspaceDir }) => {
 		e2e.setTimeout(180_000)

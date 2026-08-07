@@ -18,6 +18,7 @@ import { DlineTempManager } from "@services/temp/DlineTempManager"
 import { DEFAULT_API_PROVIDER } from "@shared/api"
 import { ClineAsk, ClineSay, ClineSayTool, type CommandStatus } from "@shared/ExtensionMessage"
 import { ClineContent, type ClineToolResponseContent, type ClineUserToolResultContentBlock } from "@shared/messages/content"
+import { WebSearchMode } from "@shared/proto/dline/provider/common"
 import { Logger } from "@shared/services/Logger"
 import type { Mode } from "@shared/storage/types"
 import type { TaskCapabilityToggles } from "@shared/TaskCapabilityToggles"
@@ -274,6 +275,60 @@ export class ToolExecutor {
 		// A reopened task has no live request scope. Its persisted approval
 		// interaction remains executable so an explicit Approve action still works.
 		return this.allowedNativeToolNames === undefined || this.allowedNativeToolNames.has(normalizeNativeToolName(toolName))
+	}
+
+	private canFallbackUnadvertisedWebSearch(config: TaskConfig): boolean {
+		const plan = config.webSearchRoutingPlan
+		return (
+			config.webToolsEnabled === true &&
+			plan?.mode === WebSearchMode.WEB_SEARCH_MODE_AUTO &&
+			plan.route === "hosted" &&
+			plan.localFallbackAvailable &&
+			this.coordinator.has(ClineDefaultTool.WEB_SEARCH)
+		)
+	}
+
+	private createLocalWebSearchFallbackConfig(config: TaskConfig): TaskConfig {
+		const plan = config.webSearchRoutingPlan
+		if (!plan) return config
+		return {
+			...config,
+			webSearchRoutingPlan: Object.freeze({
+				...plan,
+				route: "local" as const,
+				localToolEnabled: true,
+				serverTools: Object.freeze([]),
+			}),
+		}
+	}
+
+	private async presentUnadvertisedHostedWebSearch(block: ToolUse, fallback: boolean, mode: WebSearchMode): Promise<string> {
+		const providerId = this.api.getProviderId?.() ?? "provider"
+		const providerLabel = providerId === "openai" ? "OpenAI" : providerId === "deepseek" ? "DeepSeek" : providerId
+		const query =
+			typeof block.params?.query === "string" && block.params.query.trim() ? block.params.query.trim() : "Web search"
+		const message = fallback
+			? `${providerLabel} hosted Web Search returned a local web_search function call instead of a hosted search event; falling back to Dline local Web Search.`
+			: mode === WebSearchMode.WEB_SEARCH_MODE_FORCE_REMOTE
+				? `${providerLabel} hosted Web Search returned a local web_search function call, but the request is configured for Force Remote. The local call was rejected.`
+				: `${providerLabel} hosted Web Search returned a local web_search function call, but Auto mode has no Dline local Web Search fallback for the current prompt profile. The local call was rejected.`
+		const presentation: ClineSayTool = {
+			tool: "webSearch",
+			path: query,
+			content: `Web search routing failed: ${message}`,
+			operationIsLocatedInWorkspace: false,
+			webSearch: {
+				source: {
+					engineId: `${providerId}-hosted`,
+					label: `${providerLabel} Web Search`,
+					execution: "hosted",
+					provider: providerId,
+				},
+				error: message,
+			},
+		}
+		await this.say("tool", JSON.stringify(presentation), undefined, undefined, false)
+		return message
 	}
 
 	// Auto-approval methods using the AutoApprove class
@@ -642,11 +697,27 @@ export class ToolExecutor {
 			}
 
 			if (block.isNativeToolCall && !this.isNativeToolAdmitted(block.name)) {
-				if (!block.partial) {
-					const message = `Native tool '${block.name}' was not available in this API request. The call was ignored.`
-					await this.commitToolResult(formatResponse.toolError(message), block, true)
+				if (block.name === ClineDefaultTool.WEB_SEARCH && config.webSearchRoutingPlan?.route === "hosted") {
+					if (block.partial) return true
+					const fallback = this.canFallbackUnadvertisedWebSearch(config)
+					const message = await this.presentUnadvertisedHostedWebSearch(
+						block,
+						fallback,
+						config.webSearchRoutingPlan.mode,
+					)
+					if (fallback) {
+						config = this.createLocalWebSearchFallbackConfig(config)
+					} else {
+						await this.commitToolResult(formatResponse.toolError(message), block, true)
+						return true
+					}
+				} else {
+					if (!block.partial) {
+						const message = `Native tool '${block.name}' was not available in this API request. The call was ignored.`
+						await this.commitToolResult(formatResponse.toolError(message), block, true)
+					}
+					return true
 				}
-				return true
 			}
 
 			if (!this.coordinator.has(block.name)) {

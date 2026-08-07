@@ -27,6 +27,7 @@ describe("resolveServerToolPlan", () => {
 
 		expect(disabled.route).toBe("disabled")
 		expect(disabled.localToolEnabled).toBe(false)
+		expect(disabled.localFallbackAvailable).toBe(false)
 		expect(disabled.serverTools).toEqual([])
 		expect(disabled.serverToolPlan).toBe(hosted.serverToolPlan)
 	})
@@ -162,6 +163,7 @@ describe("resolveWebSearchRoutingPlan", () => {
 		expect(resolveWebSearchRoutingPlan({ ...base, mode: WebSearchMode.WEB_SEARCH_MODE_AUTO })).toMatchObject({
 			route: "hosted",
 			localToolEnabled: false,
+			localFallbackAvailable: true,
 			serverTools: [ServerTool.WEB_SEARCH],
 		})
 		expect(
@@ -170,7 +172,7 @@ describe("resolveWebSearchRoutingPlan", () => {
 				mode: WebSearchMode.WEB_SEARCH_MODE_AUTO,
 				selectedApiFormat: ApiFormat.OPENAI_CHAT,
 			}),
-		).toMatchObject({ route: "local", localToolEnabled: true, serverTools: [] })
+		).toMatchObject({ route: "local", localToolEnabled: true, localFallbackAvailable: true, serverTools: [] })
 	})
 
 	it("keeps Force Local and Force Off mutually exclusive with hosted declarations", () => {
@@ -211,6 +213,7 @@ describe("resolveWebSearchRoutingPlan", () => {
 
 		expect(plan).toMatchObject({ route: "unavailable", unavailableReason: reason })
 		expect(plan.localToolEnabled).toBe(false)
+		expect(plan.localFallbackAvailable).toBe(false)
 		expect(plan.serverTools).toEqual([])
 	})
 

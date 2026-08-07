@@ -1,5 +1,8 @@
 import { strict as assert } from "node:assert"
+import { resolveWebSearchRoutingPlan, type WebSearchRoutingPlan } from "@core/api/server-tools"
 import type { ToolUse } from "@core/assistant-message"
+import { ApiFormat, ServerTool } from "@shared/proto/dline/models/metadata"
+import { WebSearchMode } from "@shared/proto/dline/provider/common"
 import { ClineDefaultTool } from "@shared/tools"
 import { describe, expect, it, vi } from "vitest"
 import { ToolExecutor } from "../ToolExecutor"
@@ -28,6 +31,9 @@ interface HarnessOptions {
 	coordinatorHas?: boolean
 	allowedNativeToolNames?: string[]
 	focusChainEnabled?: boolean
+	providerId?: string
+	webToolsEnabled?: boolean
+	webSearchRoutingPlan?: WebSearchRoutingPlan
 }
 
 function createHarness(options: HarnessOptions = {}) {
@@ -37,7 +43,7 @@ function createHarness(options: HarnessOptions = {}) {
 	const coordinator = {
 		has: vi.fn(() => options.coordinatorHas ?? true),
 		getHandler: vi.fn(() => ({ getDescription: (block: ToolUse) => `[${block.name}]` })),
-		execute: vi.fn(async () => {
+		execute: vi.fn(async (_config: { webSearchRoutingPlan?: WebSearchRoutingPlan }, _block: ToolUse) => {
 			if (options.throwFromTool) throw new Error("handler exploded")
 			return "tool completed"
 		}),
@@ -58,8 +64,12 @@ function createHarness(options: HarnessOptions = {}) {
 				if (key === "strictPlanModeEnabled") return options.strictPlan === true
 				if (key === "focusChainSettings") return { enabled: options.focusChainEnabled === true }
 				if (key === "hooksEnabled") return false
+				if (key === "clineWebToolsEnabled") return options.webToolsEnabled === true
 				return false
 			}),
+		},
+		api: {
+			getProviderId: () => options.providerId ?? "openai",
 		},
 		autoApprover: { shouldAutoApproveTool: vi.fn(() => false) },
 		getMode: () => (options.strictPlan ? "plan" : "act"),
@@ -68,6 +78,8 @@ function createHarness(options: HarnessOptions = {}) {
 		say,
 		updateFCListFromToolResponse,
 		allowedNativeToolNames: new Set(options.allowedNativeToolNames ?? []),
+		webToolsEnabled: options.webToolsEnabled,
+		webSearchRoutingPlan: options.webSearchRoutingPlan,
 		isParallelToolCallingEnabled: () => true,
 	})
 
@@ -91,6 +103,26 @@ function partialResultRows(say: ReturnType<typeof vi.fn>): string[] {
 		.filter(([type]) => type === "partial_tool_result")
 		.map(([, text]) => text)
 		.filter((text): text is string => typeof text === "string")
+}
+
+function hostedWebSearchPlan(mode: WebSearchMode, localAvailable = true): WebSearchRoutingPlan {
+	return resolveWebSearchRoutingPlan({
+		enabled: true,
+		mode,
+		modelInfo: { capabilities: { tools: [ServerTool.WEB_SEARCH] } },
+		selectedApiFormat: ApiFormat.OPENAI_RESPONSES,
+		localAvailable,
+		remoteAdapterAvailable: true,
+	})
+}
+
+function webSearchCards(say: ReturnType<typeof vi.fn>): Array<Record<string, unknown>> {
+	return say.mock.calls
+		.filter(([type]) => type === "tool")
+		.map(([, text]) => text)
+		.filter((text): text is string => typeof text === "string")
+		.map((text) => JSON.parse(text) as Record<string, unknown>)
+		.filter((payload) => payload.tool === "webSearch")
 }
 
 describe("ToolExecutor durable tool results", () => {
@@ -139,6 +171,100 @@ describe("ToolExecutor durable tool results", () => {
 			dline_tid: "tid-read_file",
 			is_error: true,
 		})
+	})
+
+	it("renders a hosted Web Search error before rejecting an unadvertised Force Remote function call", async () => {
+		const plan = hostedWebSearchPlan(WebSearchMode.WEB_SEARCH_MODE_FORCE_REMOTE)
+		const { coordinator, executor, say } = createHarness({
+			allowedNativeToolNames: [],
+			providerId: "openai",
+			webToolsEnabled: true,
+			webSearchRoutingPlan: plan,
+		})
+		const block = createBlock(ClineDefaultTool.WEB_SEARCH, { query: "current OpenAI news" })
+
+		await executor.execute(block, {
+			webToolsEnabled: true,
+			webSearchRoutingPlan: plan,
+		})
+
+		expect(coordinator.execute).not.toHaveBeenCalled()
+		expect(webSearchCards(say)).toEqual([
+			expect.objectContaining({
+				tool: "webSearch",
+				path: "current OpenAI news",
+				webSearch: expect.objectContaining({
+					source: {
+						engineId: "openai-hosted",
+						label: "OpenAI Web Search",
+						execution: "hosted",
+						provider: "openai",
+					},
+					error: expect.stringContaining("Force Remote"),
+				}),
+			}),
+		])
+		expect(JSON.parse(partialResultRows(say)[0])).toMatchObject({ is_error: true })
+	})
+
+	it("renders an actionable error when Auto has no local Web Search fallback", async () => {
+		const plan = hostedWebSearchPlan(WebSearchMode.WEB_SEARCH_MODE_AUTO, false)
+		const { coordinator, executor, say } = createHarness({
+			allowedNativeToolNames: [],
+			providerId: "openai",
+			webToolsEnabled: true,
+			webSearchRoutingPlan: plan,
+		})
+		const block = createBlock(ClineDefaultTool.WEB_SEARCH, { query: "current OpenAI news" })
+
+		await executor.execute(block, {
+			webToolsEnabled: true,
+			webSearchRoutingPlan: plan,
+		})
+
+		expect(coordinator.execute).not.toHaveBeenCalled()
+		expect(webSearchCards(say)).toEqual([
+			expect.objectContaining({
+				webSearch: expect.objectContaining({
+					error: expect.stringContaining("Auto mode has no Dline local Web Search fallback"),
+				}),
+			}),
+		])
+		expect(JSON.parse(partialResultRows(say)[0])).toMatchObject({ is_error: true })
+	})
+
+	it("falls back to the registered local Web Search handler for an unadvertised Auto function call", async () => {
+		const plan = hostedWebSearchPlan(WebSearchMode.WEB_SEARCH_MODE_AUTO)
+		const { coordinator, executor, say } = createHarness({
+			allowedNativeToolNames: [],
+			providerId: "openai",
+			webToolsEnabled: true,
+			webSearchRoutingPlan: plan,
+		})
+		const block = createBlock(ClineDefaultTool.WEB_SEARCH, { query: "current OpenAI news" })
+
+		await executor.execute(block, {
+			webToolsEnabled: true,
+			webSearchRoutingPlan: plan,
+		})
+
+		expect(coordinator.execute).toHaveBeenCalledOnce()
+		const fallbackConfig = coordinator.execute.mock.calls[0]?.[0]
+		expect(fallbackConfig?.webSearchRoutingPlan).toMatchObject({
+			mode: WebSearchMode.WEB_SEARCH_MODE_AUTO,
+			route: "local",
+			localToolEnabled: true,
+			serverTools: [],
+		})
+		expect(webSearchCards(say)).toEqual([
+			expect.objectContaining({
+				webSearch: expect.objectContaining({
+					source: expect.objectContaining({ execution: "hosted", provider: "openai" }),
+					error: expect.stringContaining("falling back to Dline local Web Search"),
+				}),
+			}),
+		])
+		expect(JSON.parse(partialResultRows(say)[0])).toMatchObject({ is_error: null })
 	})
 
 	it("closes an unregistered native function with a durable error result", async () => {

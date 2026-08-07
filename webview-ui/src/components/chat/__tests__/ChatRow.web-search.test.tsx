@@ -108,6 +108,38 @@ describe("ChatRow hosted Web Search rendering", () => {
 		expect(screen.getByText("Provider-compressed search result")).toBeInTheDocument()
 	})
 
+	it("renders the hosted source and routing failure", () => {
+		render(
+			<ChatRowContent
+				{...baseProps}
+				message={{
+					ts: 2,
+					type: "say",
+					say: "tool",
+					partial: false,
+					text: JSON.stringify({
+						tool: "webSearch",
+						path: "current OpenAI news",
+						webSearch: {
+							source: {
+								engineId: "openai-hosted",
+								label: "OpenAI Web Search",
+								execution: "hosted",
+								provider: "openai",
+							},
+							error: "OpenAI hosted Web Search returned a local function call; falling back to Dline local Web Search.",
+						},
+					}),
+				}}
+			/>,
+		)
+
+		expect(screen.getByText("OpenAI Web Search (Hosted)")).toBeInTheDocument()
+		expect(
+			screen.getByText("OpenAI hosted Web Search returned a local function call; falling back to Dline local Web Search."),
+		).toBeInTheDocument()
+	})
+
 	it("renders the selected Dline engine and actionable error", () => {
 		render(
 			<ChatRowContent
