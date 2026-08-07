@@ -23,6 +23,7 @@ interface TaskSectionProps {
 		pricing?: ModelPricing
 	}
 	messageHandlers: MessageHandlers
+	compactTaskDisabled?: boolean
 	onCompactTask?: () => Promise<boolean>
 	lastProgressMessageText?: string
 	showFocusChainPlaceholder?: boolean
@@ -38,6 +39,7 @@ export const TaskSection: React.FC<TaskSectionProps> = ({
 	lastApiReqTotalTokens,
 	selectedModelInfo,
 	messageHandlers,
+	compactTaskDisabled,
 	onCompactTask,
 	lastProgressMessageText,
 	showFocusChainPlaceholder,
@@ -47,6 +49,7 @@ export const TaskSection: React.FC<TaskSectionProps> = ({
 			cacheHitRate={apiMetrics.cacheHitRate}
 			cacheReads={apiMetrics.totalCacheReads}
 			cacheWrites={apiMetrics.totalCacheWrites}
+			compactTaskDisabled={compactTaskDisabled}
 			contextWindow={selectedModelInfo.contextWindow}
 			currency={apiMetrics.currency}
 			doesModelSupportPromptCache={selectedModelInfo.supportsPromptCache}

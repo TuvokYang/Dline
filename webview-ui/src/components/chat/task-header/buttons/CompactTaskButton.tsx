@@ -5,21 +5,25 @@ import { cn } from "@/lib/utils"
 
 const CompactTaskButton: React.FC<{
 	className?: string
+	disabled?: boolean
 	onClick: (e: React.MouseEvent<HTMLButtonElement>) => void
-}> = ({ onClick, className }) => {
+}> = ({ onClick, disabled, className }) => {
 	return (
 		<Tooltip>
 			<TooltipContent side="left">Compact Task</TooltipContent>
 			<TooltipTrigger
+				aria-disabled={disabled}
 				className={cn(
 					buttonVariants({ variant: "icon", size: "icon" }),
 					"!overflow-visible !min-h-6",
 					"[&_svg]:size-3",
+					disabled && "opacity-50 cursor-not-allowed pointer-events-none",
 					className,
 				)}
 				onClick={(e) => {
 					e.preventDefault()
 					e.stopPropagation()
+					if (disabled) return
 					onClick(e)
 				}}>
 				<FoldVerticalIcon />

@@ -1,9 +1,8 @@
 import type { ApiHandler } from "@core/api"
 import { ApiFormat, ServerTool } from "@shared/proto/dline/models/metadata"
 import { WebSearchMode } from "@shared/proto/dline/provider/common"
-import { ClineDefaultTool } from "@shared/tools"
 import { describe, expect, it, vi } from "vitest"
-import { createRequestApiScope, withRequestToolIds } from "../RequestApiScope"
+import { createRequestApiScope } from "../RequestApiScope"
 
 function createHandler(providerId: string, modelId: string): ApiHandler {
 	return {
@@ -55,18 +54,14 @@ describe("createRequestApiScope", () => {
 		expect(() => createRequestApiScope(handler, "act")).toThrow("API handler is missing its provider identity")
 	})
 
-	it("accepts the automatic compaction tool only on the selected request", () => {
+	it("keeps explicit compaction instructions out of the request scope", () => {
 		const handler = createHandler("openai", "openai-model")
-		const baseScope = createRequestApiScope(handler, "act", undefined, true)
-		const compactScope = withRequestToolIds(baseScope, [ClineDefaultTool.SUMMARIZE_TASK])
+		const scope = createRequestApiScope(handler, "act", undefined, true)
 
-		expect(baseScope.webToolsEnabled).toBe(true)
-		expect(baseScope.requestToolIds).toEqual([])
-		expect(compactScope.requestToolIds).toEqual([ClineDefaultTool.SUMMARIZE_TASK])
-		expect(compactScope.webToolsEnabled).toBe(true)
-		expect(compactScope.webSearchRoutingPlan.route).toBe("disabled")
-		expect(compactScope.webSearchRoutingPlan.serverTools).toEqual([])
-		expect(baseScope.webSearchRoutingPlan.route).not.toBe("disabled")
+		expect(scope.webToolsEnabled).toBe(true)
+		expect(scope).not.toHaveProperty("requestToolIds")
+		expect(scope).not.toHaveProperty("withRequestToolIds")
+		expect(scope.webSearchRoutingPlan.route).not.toBe("disabled")
 	})
 
 	it("freezes the global Web Tools switch independently from later settings changes", () => {

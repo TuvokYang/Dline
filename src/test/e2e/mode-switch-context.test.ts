@@ -17,7 +17,7 @@ interface StoredProfile {
 }
 
 const COMPACT_SIGNAL = "__dline_mode_switch_compact__"
-const COMPACT_INSTRUCTION_MARKER = '<explicit_instructions type="summarize_task">'
+const COMPACT_INSTRUCTION_MARKER = "The current conversation is rapidly running out of context"
 const INTERNAL_MODE_RESPONSE = "PLAN_MODE_TOGGLE_RESPONSE"
 const profilesPath = (dlineDir: string) => path.join(dlineDir, "data", "settings", "api_profiles.json")
 const settingsPath = (dlineDir: string) => path.join(dlineDir, "data", "settings", "settings.json")
@@ -102,6 +102,48 @@ async function configureDeepSeekAutoCompact(dlineDir: string, useAutoCondense = 
 	)
 }
 
+async function configureTaskProfileSwitch(dlineDir: string): Promise<void> {
+	const profiles = JSON.parse(await readFile(profilesPath(dlineDir), "utf8")) as StoredProfile[]
+	const targetProfile = profiles.find((profile) => profile.name === E2E_PROFILE_NAMES.mockOpenAiResponses)
+	if (!targetProfile?.openai?.capabilities) throw new Error("Missing configurable OpenAI Responses E2E profile")
+	targetProfile.modelId = "gpt-5.6-sol"
+	targetProfile.openai.capabilities.contextWindow = 372_000
+	await writeFile(profilesPath(dlineDir), `${JSON.stringify(profiles, null, 2)}\n`, "utf8")
+
+	const settings = JSON.parse(await readFile(settingsPath(dlineDir), "utf8")) as Record<string, unknown>
+	await writeFile(
+		settingsPath(dlineDir),
+		`${JSON.stringify(
+			{
+				...settings,
+				planActSeparateModelsSetting: false,
+				actModeProfile: E2E_PROFILE_NAMES.mockDeepSeek,
+				planModeProfile: E2E_PROFILE_NAMES.mockDeepSeek,
+				useAutoCondense: true,
+				autoCondenseTriggerPercent: 97,
+				autoCondenseMaxContextTokens: 0,
+			},
+			null,
+			2,
+		)}\n`,
+		"utf8",
+	)
+}
+
+async function clickProfileOption(sidebar: Frame, profileName: string): Promise<void> {
+	const modelSwitcher = sidebar.getByRole("button", { name: "Select model" })
+	if ((await modelSwitcher.innerText()).trim() === profileName) return
+	await modelSwitcher.click()
+	const profileOption = sidebar.getByRole("option").filter({ has: sidebar.getByText(profileName, { exact: true }) })
+	await expect(profileOption).toHaveCount(1)
+	await profileOption.click()
+}
+
+async function selectProfile(sidebar: Frame, profileName: string): Promise<void> {
+	await clickProfileOption(sidebar, profileName)
+	await expect(sidebar.getByRole("button", { name: "Select model" })).toHaveText(profileName)
+}
+
 async function openSidebar(
 	app: ElectronApplication,
 	helper: E2ETestHelper,
@@ -114,9 +156,9 @@ async function openSidebar(
 	return { page, sidebar }
 }
 
-async function sendTask(sidebar: Frame, text: string): Promise<void> {
+async function sendTask(sidebar: Frame, text: string, timeout = 5_000): Promise<void> {
 	const input = sidebar.getByTestId("chat-input")
-	await expect(input).toBeEnabled()
+	await expect(input).toBeEnabled({ timeout })
 	await input.fill(text)
 	await input.press("Enter")
 	await expect(input).toHaveValue("")
@@ -193,6 +235,61 @@ async function taskDirectoryIds(dlineDocsDir: string): Promise<string[]> {
 		throw error
 	}
 }
+
+e2e(
+	"Task-local profile switch - DeepSeek 160K to GPT-5.6 does not inject compaction below 372K",
+	async ({ dlineDir, helper, openVSCode, server, userDataDir, workspaceDir }) => {
+		e2e.setTimeout(180_000)
+		await configureTaskProfileSwitch(dlineDir)
+
+		server.enqueueResponses("deepseek-chat", {
+			type: "tool",
+			id: "call_profile_switch_deepseek_ready",
+			name: "attempt_completion",
+			arguments: { result: "E2E_PROFILE_SWITCH_DEEPSEEK_READY" },
+			usage: { inputTokens: 160_000, outputTokens: 100 },
+			expectedRequestIncludes: ["E2E_PROFILE_SWITCH_DEEPSEEK_TASK"],
+		})
+		server.enqueueResponses("openai-compatible-responses", {
+			type: "tool",
+			id: "call_profile_switch_gpt_continue",
+			name: "attempt_completion",
+			arguments: { result: "E2E_PROFILE_SWITCH_GPT_CONTINUE_OK" },
+			expectedRequestIncludes: ["E2E_PROFILE_SWITCH_GPT_CONTINUE"],
+			expectedRequestExcludes: [COMPACT_INSTRUCTION_MARKER],
+		})
+
+		const app = await openVSCode(workspaceDir)
+		try {
+			const { sidebar } = await openSidebar(app, helper)
+			await sendTask(sidebar, "E2E_PROFILE_SWITCH_DEEPSEEK_TASK", 60_000)
+			await expect(sidebar.getByText("E2E_PROFILE_SWITCH_DEEPSEEK_READY", { exact: false }).last()).toBeVisible({
+				timeout: 60_000,
+			})
+			// Reproduce the real task-local profile race: the selection RPC is
+			// intentionally still in flight when the next user turn is submitted.
+			await clickProfileOption(sidebar, E2E_PROFILE_NAMES.mockOpenAiResponses)
+
+			const input = sidebar.getByTestId("chat-input")
+			await expect(input).toBeEnabled()
+			await input.fill("E2E_PROFILE_SWITCH_GPT_CONTINUE")
+			await input.press("Enter")
+			await expect(sidebar.getByText("E2E_PROFILE_SWITCH_GPT_CONTINUE_OK", { exact: false }).last()).toBeVisible({
+				timeout: 60_000,
+			})
+
+			await expect.poll(() => server.getRequestCount("openai-compatible-responses")).toBe(1)
+			const targetRequest = server.getMockConsumptions("openai-compatible-responses")[0]
+			expect(targetRequest).toMatchObject({ provider: "openai", protocol: "openai-responses" })
+			expect(targetRequest.requestBody).toMatchObject({ model: "gpt-5.6-sol" })
+			expect(JSON.stringify(targetRequest.requestBody)).not.toContain(COMPACT_INSTRUCTION_MARKER)
+			expect(targetRequest.contractError).toBeUndefined()
+			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+		} finally {
+			await app.close()
+		}
+	},
+)
 
 e2e(
 	"Mode switch context - welcome draft stays local until configured Enter submits it",
@@ -650,12 +747,9 @@ e2e(
 				usage: { inputTokens: 125_000, outputTokens: 100 },
 			},
 			{
-				type: "tool",
-				id: "call_smaller_target_summary",
-				name: "summarize_task",
-				arguments: {
-					context: "E2E_MODE_SWITCH_SUMMARY preserves E2E_SMALLER_TARGET_TASK and the pending plan draft.",
-				},
+				type: "message",
+				text: "<thinking>E2E mode switch summary</thinking><summarize_task><context>E2E_MODE_SWITCH_SUMMARY preserves E2E_SMALLER_TARGET_TASK and the pending plan draft.</context></summarize_task>",
+				expectedRequestIncludes: [COMPACT_INSTRUCTION_MARKER],
 				expectedRequestExcludes: [COMPACT_SIGNAL, "E2E_SMALLER_TARGET_PLAN_DRAFT"],
 			},
 		)
@@ -694,8 +788,11 @@ e2e(
 			expect(observedValues).not.toContain(COMPACT_SIGNAL)
 			await expect.poll(() => server.getRequestCount("openai-compatible-responses")).toBe(2)
 			await expect.poll(() => server.getRequestCount("openai-compatible-chat")).toBe(1)
-			const summaryRequest = server.getMockConsumptions("openai-compatible-responses")[1]
-			expect(requestToolNames(summaryRequest)).toEqual(["summarize_task"])
+			const sourceRequests = server.getMockConsumptions("openai-compatible-responses")
+			const summaryRequest = sourceRequests[1]
+			expect(summaryRequest).toMatchObject({ responseType: "message" })
+			expect(requestToolNames(summaryRequest)).toEqual(requestToolNames(sourceRequests[0]))
+			expect(requestToolNames(summaryRequest)).not.toContain("summarize_task")
 			expect(summaryRequest.contractError).toBeUndefined()
 			const targetRequest = server.getMockConsumptions("openai-compatible-chat")[0]
 			expect(requestToolNames(targetRequest)).toContain("make_plan")
@@ -759,13 +856,9 @@ e2e(
 				requestId: "req_mode_switch_context_limit",
 			},
 			{
-				type: "tool",
-				id: "call_over_limit_summary",
-				name: "summarize_task",
-				arguments: {
-					context: "E2E_OVER_LIMIT_SUMMARY preserves E2E_OVER_LIMIT_TASK and E2E_OVER_LIMIT_LATE_TURN.",
-				},
-				expectedRequestIncludes: ["E2E_OVER_LIMIT_TASK", "E2E_OVER_LIMIT_LATE_TURN"],
+				type: "message",
+				text: "<thinking>E2E over-limit summary</thinking><summarize_task><context>E2E_OVER_LIMIT_SUMMARY preserves E2E_OVER_LIMIT_TASK and E2E_OVER_LIMIT_LATE_TURN.</context></summarize_task>",
+				expectedRequestIncludes: [COMPACT_INSTRUCTION_MARKER, "E2E_OVER_LIMIT_TASK", "E2E_OVER_LIMIT_LATE_TURN"],
 				expectedRequestExcludes: [
 					COMPACT_SIGNAL,
 					"E2E_OVER_LIMIT_PLAN_DRAFT",
@@ -829,13 +922,15 @@ e2e(
 			const retriedSummary = sourceRequests[5]
 			for (const request of [firstSummary, retriedSummary]) {
 				const requestText = JSON.stringify(request.requestBody)
-				expect(requestToolNames(request)).toEqual(["summarize_task"])
+				expect(requestToolNames(request)).toEqual(requestToolNames(sourceRequests[3]))
+				expect(requestToolNames(request)).not.toContain("summarize_task")
 				expect(requestText).toContain("E2E_OVER_LIMIT_TASK")
 				expect(requestText).toContain("E2E_OVER_LIMIT_LATE_TURN")
 				expect(requestText).not.toContain("E2E_OVER_LIMIT_MIDDLE_ONE")
 				expect(requestText).not.toContain("E2E_OVER_LIMIT_MIDDLE_TWO")
 			}
-			expect(requestToolNames(retriedSummary)).toEqual(["summarize_task"])
+			expect(firstSummary).toMatchObject({ responseType: "error" })
+			expect(retriedSummary).toMatchObject({ responseType: "message" })
 			expect(retriedSummary.contractError).toBeUndefined()
 			expect(sidebar.getByText("E2E_OVER_LIMIT_TASK", { exact: true }).first()).toBeVisible()
 			await expectCompactionSummary(
@@ -864,11 +959,9 @@ e2e(
 				usage: { inputTokens: 125_000, outputTokens: 100 },
 			},
 			{
-				type: "tool",
-				id: "call_auto_compact_summary",
-				name: "summarize_task",
-				arguments: { context: "E2E_AUTO_COMPACT_SUMMARY preserves the task and latest user request." },
-				expectedRequestIncludes: ["The current conversation is rapidly running out of context"],
+				type: "message",
+				text: "<thinking>E2E automatic summary</thinking><summarize_task><context>E2E_AUTO_COMPACT_SUMMARY preserves the task and latest user request.</context></summarize_task>",
+				expectedRequestIncludes: [COMPACT_INSTRUCTION_MARKER],
 				expectedRequestExcludes: [COMPACT_SIGNAL, "E2E_AUTO_COMPACT_CONTINUE"],
 			},
 			{
@@ -892,7 +985,9 @@ e2e(
 
 			await expect.poll(() => server.getRequestCount("openai-compatible-responses")).toBe(3)
 			const requests = server.getMockConsumptions("openai-compatible-responses")
-			expect(requestToolNames(requests[1])).toEqual(["summarize_task"])
+			expect(requests[1]).toMatchObject({ responseType: "message" })
+			expect(requestToolNames(requests[1])).toEqual(requestToolNames(requests[0]))
+			expect(requestToolNames(requests[1])).not.toContain("summarize_task")
 			expect(requests[1].contractError).toBeUndefined()
 			expect(requests[2].contractError).toBeUndefined()
 			await expectCompactionSummary(sidebar, "E2E_AUTO_COMPACT_SUMMARY preserves the task and latest user request.")
@@ -967,12 +1062,9 @@ e2e(
 			},
 			{
 				type: "message",
-				text: "<condense>\n<context>E2E_MANUAL_COMPACT_SUMMARY preserves the task and current intent.</context>\n</condense>",
-				expectedRequestIncludes: [
-					"The user has explicitly asked you to create a detailed summary",
-					"E2E_MANUAL_COMPACT_TASK",
-				],
-				expectedRequestExcludes: ["/compact"],
+				text: "<thinking>E2E manual summary</thinking><summarize_task><context>E2E_MANUAL_COMPACT_SUMMARY preserves the task and current intent.</context></summarize_task>",
+				expectedRequestIncludes: [COMPACT_INSTRUCTION_MARKER, "E2E_MANUAL_COMPACT_TASK"],
+				expectedRequestExcludes: [COMPACT_SIGNAL, "/compact"],
 			},
 			{
 				type: "tool",
@@ -981,6 +1073,10 @@ e2e(
 				arguments: { result: "E2E_MANUAL_COMPACT_DONE" },
 				usage: { inputTokens: 1_200, outputTokens: 100 },
 				expectedRequestIncludes: ["E2E_MANUAL_COMPACT_SUMMARY"],
+				expectedRequestExcludes: [COMPACT_SIGNAL, COMPACT_INSTRUCTION_MARKER],
+				expectedToolResults: [
+					{ callId: "call_manual_compact_ready", contentIncludes: "Mode switch context compaction requested." },
+				],
 			},
 		)
 
@@ -1008,21 +1104,18 @@ e2e(
 			await expect(sidebar.getByText("Compact the current task?", { exact: true })).toBeVisible()
 			await sidebar.getByTitle("Yes, compact the task").click()
 
-			await expect.poll(() => server.getRequestCount("openai-compatible-responses"), { timeout: 60_000 }).toBe(2)
-			const summaryRequest = server.getMockConsumptions("openai-compatible-responses")[1]
-			expect(summaryRequest).toMatchObject({ responseType: "message" })
-			expect(requestToolNames(summaryRequest)).not.toContain("condense")
-			expect(summaryRequest.contractError).toBeUndefined()
-			await expect(sidebar.getByText("Dline wants to condense your conversation:", { exact: true }).last()).toBeVisible()
-			await expect(sidebar.getByText("E2E_MANUAL_COMPACT_SUMMARY", { exact: false }).last()).toBeVisible()
-			await expect(sidebar.getByText("/compact", { exact: true }).last()).toBeVisible()
-			await expect(input).toHaveValue("E2E_MANUAL_COMPACT_PRESERVED_DRAFT")
-
-			await sidebar.locator('vscode-button[aria-label="Condense Conversation"]').click()
 			await expect(sidebar.getByText("E2E_MANUAL_COMPACT_DONE", { exact: false }).last()).toBeVisible({
 				timeout: 60_000,
 			})
 			await expect.poll(() => server.getRequestCount("openai-compatible-responses")).toBe(3)
+			const requests = server.getMockConsumptions("openai-compatible-responses")
+			expect(requests[1]).toMatchObject({ responseType: "message" })
+			expect(requestToolNames(requests[1])).toEqual(requestToolNames(requests[0]))
+			expect(requestToolNames(requests[1])).not.toContain("summarize_task")
+			expect(requests[1].contractError).toBeUndefined()
+			expect(requests[2].contractError).toBeUndefined()
+			await expectCompactionSummary(sidebar, "E2E_MANUAL_COMPACT_SUMMARY preserves the task and current intent.")
+			await expect(sidebar.getByText("/compact", { exact: true })).toHaveCount(0)
 			await expect.poll(async () => Number(await progress.getAttribute("aria-valuenow"))).toBeLessThan(beforeCompact)
 			await expect(input).toHaveValue("E2E_MANUAL_COMPACT_PRESERVED_DRAFT")
 			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
@@ -1215,11 +1308,9 @@ e2e(
 				usage: { inputTokens: 980_000, outputTokens: 100 },
 			},
 			{
-				type: "tool",
-				id: "call_deepseek_near_limit_summary",
-				name: "summarize_task",
-				arguments: { context: "E2E_DEEPSEEK_NEAR_LIMIT_SUMMARY preserves the task and latest request." },
-				expectedRequestIncludes: ["The current conversation is rapidly running out of context"],
+				type: "message",
+				text: "<thinking>E2E DeepSeek summary</thinking><summarize_task><context>E2E_DEEPSEEK_NEAR_LIMIT_SUMMARY preserves the task and latest request.</context></summarize_task>",
+				expectedRequestIncludes: [COMPACT_INSTRUCTION_MARKER],
 				expectedRequestExcludes: [COMPACT_SIGNAL, "E2E_DEEPSEEK_NEAR_LIMIT_CONTINUE"],
 			},
 			{
@@ -1254,11 +1345,14 @@ e2e(
 
 			await sendTask(sidebar, "E2E_DEEPSEEK_NEAR_LIMIT_CONTINUE")
 			await expect.poll(() => server.getRequestCount("deepseek-chat"), { timeout: 60_000 }).toBeGreaterThanOrEqual(2)
-			const summaryRequest = server.getMockConsumptions("deepseek-chat")[1]
+			const requests = server.getMockConsumptions("deepseek-chat")
+			const summaryRequest = requests[1]
 			const summaryBody = summaryRequest.requestBody as { max_completion_tokens?: number }
 			// The model output ceiling is independent from the input-context compaction trigger.
 			expect(summaryBody.max_completion_tokens).toBe(384_000)
-			expect(requestToolNames(summaryRequest)).toEqual(["summarize_task"])
+			expect(summaryRequest).toMatchObject({ responseType: "message" })
+			expect(requestToolNames(summaryRequest)).toEqual(requestToolNames(requests[0]))
+			expect(requestToolNames(summaryRequest)).not.toContain("summarize_task")
 
 			await expect(sidebar.getByText("E2E_DEEPSEEK_NEAR_LIMIT_OK", { exact: false }).last()).toBeVisible({
 				timeout: 60_000,

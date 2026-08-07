@@ -14,6 +14,10 @@ interface FocusChainChangeRowProps {
 	reason: string
 	/** Whether this focus chain change was auto-approved (no user interaction needed) */
 	autoApproved?: boolean
+	/** Controlled expansion state for the message row. */
+	isExpanded?: boolean
+	/** Toggle the controlled expansion state. */
+	onToggleExpand?: () => void
 	onSelectionChange?: (selectedPlan: string) => void
 }
 
@@ -100,7 +104,14 @@ export function getFocusChainSelectedPlan(): string {
 	return buildSelectedPlan(planRef.current, selectedRef.current)
 }
 
-export const FocusChainChangeRow: React.FC<FocusChainChangeRowProps> = ({ plan, reason, autoApproved, onSelectionChange }) => {
+export const FocusChainChangeRow: React.FC<FocusChainChangeRowProps> = ({
+	plan,
+	reason,
+	autoApproved,
+	isExpanded = true,
+	onToggleExpand,
+	onSelectionChange,
+}) => {
 	const { title, items } = useMemo(() => parsePlan(plan), [plan])
 
 	// Auto-approved plans are not interactive — all items pre-selected, checkboxes disabled
@@ -151,10 +162,17 @@ export const FocusChainChangeRow: React.FC<FocusChainChangeRowProps> = ({ plan, 
 	const isRejected = hasMarkers && !hasApproved
 	const bgClass = isRejected ? "bg-red-500/10" : hasApproved ? "bg-green-500/10" : "bg-toolbar-hover/30"
 
+	const toggleLabel = isExpanded ? "Collapse focus-chain change" : "Expand focus-chain change"
+
 	return (
 		<div className={`flex flex-col gap-2 p-3 rounded border border-description/50 ${bgClass}`}>
 			{(reason || autoApproved) && (
-				<div className="text-base font-bold border-b border-description/20 pb-1 mb-2 flex justify-between items-center gap-2">
+				<button
+					aria-label={toggleLabel}
+					className="w-full text-base font-bold border-b border-description/20 pb-1 mb-2 flex justify-between items-center gap-2 text-left"
+					disabled={!onToggleExpand}
+					onClick={onToggleExpand}
+					type="button">
 					{reason ? (
 						<span className="flex items-center gap-1 min-w-0 overflow-hidden flex-1">
 							<span className="codicon codicon-checklist shrink-0 text-sm" />
@@ -178,35 +196,41 @@ export const FocusChainChangeRow: React.FC<FocusChainChangeRowProps> = ({ plan, 
 							</span>
 						)}
 					</div>
-				</div>
+				</button>
 			)}
 
-			{title && <div className="text-base font-bold">{title}</div>}
+			{isExpanded && (
+				<div className="max-h-[80vh] overflow-y-auto pr-1" data-testid="focus-chain-change-details">
+					{title && <div className="text-base font-bold">{title}</div>}
 
-			{items.length > 0 ? (
-				items.map((item, idx) => {
-					const prevHeading = idx > 0 ? items[idx - 1].heading : null
-					const showHeading = item.heading && item.heading !== prevHeading
-					return (
-						<React.Fragment key={idx}>
-							{showHeading && <div className="text-sm font-medium text-muted-foreground mt-1">{item.heading}</div>}
-							<div className="flex items-center gap-1.5">
-								{item.prefix === "done" ? (
-									<span className="text-sm text-green-500">✓</span>
-								) : (
-									<VSCodeCheckbox
-										checked={selected.has(idx)}
-										disabled={!isActive}
-										onChange={() => toggleItem(idx)}
-									/>
-								)}
-								<span className="text-base">{item.text}</span>
-							</div>
-						</React.Fragment>
-					)
-				})
-			) : (
-				<div className="text-base text-muted-foreground italic">{plan}</div>
+					{items.length > 0 ? (
+						items.map((item, idx) => {
+							const prevHeading = idx > 0 ? items[idx - 1].heading : null
+							const showHeading = item.heading && item.heading !== prevHeading
+							return (
+								<React.Fragment key={idx}>
+									{showHeading && (
+										<div className="text-sm font-medium text-muted-foreground mt-1">{item.heading}</div>
+									)}
+									<div className="flex items-center gap-1.5">
+										{item.prefix === "done" ? (
+											<span className="text-sm text-green-500">✓</span>
+										) : (
+											<VSCodeCheckbox
+												checked={selected.has(idx)}
+												disabled={!isActive}
+												onChange={() => toggleItem(idx)}
+											/>
+										)}
+										<span className="text-base">{item.text}</span>
+									</div>
+								</React.Fragment>
+							)
+						})
+					) : (
+						<div className="text-base text-muted-foreground italic">{plan}</div>
+					)}
+				</div>
 			)}
 		</div>
 	)

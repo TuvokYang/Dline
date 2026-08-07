@@ -77,16 +77,6 @@ function spec(
 	return { transport: "both", id, name: id, description, descriptionFragments, parameters, contextRequirements }
 }
 
-/** Creates a descriptor that can only be projected into a provider-native request. */
-function nativeRequestSpec(
-	id: ClineDefaultTool,
-	description: string,
-	parameters: readonly ProfileToolParam[] = [],
-	contextRequirements?: (context: SystemPromptContext) => boolean,
-): Omit<ProfileToolSpec, "profile"> {
-	return { ...spec(id, description, parameters, contextRequirements), transport: "native" }
-}
-
 const LOAD_PARAMS = [param("name", true, getPrompt("loadCapability", "nameInstruction"))]
 const SINGLE_SUBAGENT_PARAMS = [
 	param("agent_name", false, getPrompt("subagent", "agentNameInstruction")),
@@ -318,10 +308,6 @@ export const STANDARD_TOOL_SPECS: readonly Omit<ProfileToolSpec, "profile">[] = 
 		],
 		(context) => context.isCliEnvironment !== true,
 	),
-	nativeRequestSpec(ClineDefaultTool.SUMMARIZE_TASK, getPrompt("contextManagement", "summarizeToolDescription"), [
-		param("context", true, getPrompt("contextManagement", "summarizeContextInstruction")),
-		taskProgress,
-	]),
 	spec(ClineDefaultTool.GENERATE_REPORT, getPrompt("generateReport", "standardDescription"), [
 		param("title", true, getPrompt("generateReport", "titleInstruction")),
 		param("content", true, getPrompt("generateReport", "contentInstruction")),

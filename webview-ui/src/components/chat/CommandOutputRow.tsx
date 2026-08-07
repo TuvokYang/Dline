@@ -141,8 +141,8 @@ export const CommandOutputContent = memo(
 			)
 		}
 
-		// Compute max-height: semi-collapse (20% ≈ 120px) vs expanded (60% ≈ 360px)
-		const maxH = shouldAutoShow ? undefined : isOutputFullyExpanded ? "max-h-[360px]" : "max-h-[120px]"
+		// Keep compact output previews small while capping full expansion at the viewport boundary.
+		const maxH = shouldAutoShow ? undefined : isOutputFullyExpanded ? "max-h-[80vh]" : "max-h-[120px]"
 
 		return (
 			<div
@@ -157,6 +157,7 @@ export const CommandOutputContent = memo(
 						[maxH || ""]: !!maxH,
 						"overflow-y-visible": shouldAutoShow,
 					})}
+					data-testid="command-output-scroll"
 					ref={outputRef}>
 					<div className="bg-code">{renderOutput()}</div>
 				</div>

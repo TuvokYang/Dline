@@ -35,6 +35,7 @@ interface TaskHeaderProps {
 	lastProgressMessageText?: string
 	showFocusChainPlaceholder?: boolean
 	pricing?: ModelPricing
+	compactTaskDisabled?: boolean
 	onClose: () => void
 	onCompactTask?: () => Promise<boolean>
 }
@@ -55,6 +56,7 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 	lastProgressMessageText,
 	showFocusChainPlaceholder,
 	pricing,
+	compactTaskDisabled,
 	onClose,
 	onCompactTask,
 }) => {
@@ -246,6 +248,7 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 						<ContextWindow
 							cacheReads={cacheReads}
 							cacheWrites={cacheWrites}
+							compactTaskDisabled={compactTaskDisabled}
 							contextWindow={contextWindow}
 							lastApiReqTotalTokens={lastApiReqTotalTokens}
 							onCompactTask={onCompactTask}

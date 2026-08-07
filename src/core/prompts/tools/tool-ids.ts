@@ -59,17 +59,3 @@ export const LITE_TOOL_IDS = [
 	ClineDefaultTool.STATUS_UPDATE,
 	ClineDefaultTool.GENERATE_REPORT,
 ] as const
-
-/** Tools exposed only while an internal runtime operation is active. */
-export const INTERNAL_RUNTIME_TOOL_IDS = [ClineDefaultTool.SUMMARIZE_TASK] as const
-
-export const REQUEST_SCOPED_TOOL_IDS = INTERNAL_RUNTIME_TOOL_IDS
-
-export type RequestScopedToolId = (typeof REQUEST_SCOPED_TOOL_IDS)[number]
-
-const REQUEST_SCOPED_TOOL_ID_SET: ReadonlySet<string> = new Set(REQUEST_SCOPED_TOOL_IDS)
-
-/** Reports whether a tool schema may be projected only for one selected request. */
-export function isRequestScopedToolId(id: string): id is RequestScopedToolId {
-	return REQUEST_SCOPED_TOOL_ID_SET.has(id)
-}

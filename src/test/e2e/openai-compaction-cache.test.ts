@@ -26,6 +26,8 @@ function estimateTokens(value: unknown): number {
 	return Math.max(1, Math.ceil(Buffer.byteLength(JSON.stringify(value), "utf8") / 4))
 }
 
+const TRUNCATED_SUMMARY_MARKER = "E2E_CHAT_COMPACTION_TRUNCATED_RESPONSE_SHOULD_NOT_SURVIVE"
+
 function estimateCommonPrefixTokens(left: unknown, right: unknown): number {
 	const leftText = JSON.stringify(left)
 	const rightText = JSON.stringify(right)
@@ -222,6 +224,73 @@ e2e(
 				expect(JSON.stringify(request.requestBody)).not.toContain("prompt_cache_breakpoint")
 			}
 			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+		} finally {
+			await app.close()
+		}
+	},
+)
+
+e2e(
+	"OpenAI compaction - interrupted summary response is removed before retry",
+	async ({ dlineDir, helper, openVSCode, server, userDataDir, workspaceDir }) => {
+		e2e.setTimeout(180_000)
+		await configureChatAutoCompaction(dlineDir)
+		server.enqueueResponses(
+			"openai-compatible-chat",
+			{
+				type: "tool",
+				id: "call_chat_compaction_retry_ready",
+				name: "qna_respond",
+				arguments: { response: "E2E_CHAT_COMPACTION_RETRY_READY" },
+				usage: { inputTokens: 125_000, outputTokens: 100 },
+			},
+			{
+				type: "truncated-message",
+				text: `<thinking>incomplete summary</thinking><summarize_task><context>${TRUNCATED_SUMMARY_MARKER}`,
+				usage: { inputTokens: 125_000, outputTokens: 100 },
+				expectedRequestIncludes: ["The current conversation is rapidly running out of context"],
+			},
+			{
+				type: "message",
+				text: "<thinking>recovered summary</thinking><summarize_task><context>E2E_CHAT_COMPACTION_RETRY_SUMMARY is complete.</context></summarize_task>",
+				usage: { inputTokens: 125_000, outputTokens: 100 },
+				expectedRequestIncludes: ["The current conversation is rapidly running out of context"],
+				expectedRequestExcludes: [TRUNCATED_SUMMARY_MARKER],
+			},
+			{
+				type: "tool",
+				id: "call_chat_compaction_retry_complete",
+				name: "attempt_completion",
+				arguments: { result: "E2E_CHAT_COMPACTION_RETRY_OK" },
+				expectedRequestIncludes: ["E2E_CHAT_COMPACTION_RETRY_SUMMARY", "E2E_CHAT_COMPACTION_RETRY_CONTINUE"],
+				expectedRequestExcludes: [TRUNCATED_SUMMARY_MARKER],
+			},
+		)
+
+		const app = await openVSCode(workspaceDir)
+		try {
+			const sidebar = await openSidebar(app, helper)
+			await sendTask(sidebar, "E2E_CHAT_COMPACTION_RETRY_TASK")
+			await expect(sidebar.getByText("E2E_CHAT_COMPACTION_RETRY_READY", { exact: false }).last()).toBeVisible({
+				timeout: 60_000,
+			})
+			await sendTask(sidebar, "E2E_CHAT_COMPACTION_RETRY_CONTINUE")
+			await expect(sidebar.getByText("E2E_CHAT_COMPACTION_RETRY_OK", { exact: false }).last()).toBeVisible({
+				timeout: 90_000,
+			})
+
+			await expect.poll(() => server.getRequestCount("openai-compatible-chat")).toBe(4)
+			const requests = server.getMockConsumptions("openai-compatible-chat")
+			expect(requests[1].contractError).toBeUndefined()
+			expect(requests[1].responseType).toBe("truncated-message")
+			expect(requests[1].abortedAtMs).toBeTruthy()
+			expect(requests[2].contractError).toBeUndefined()
+			expect(requests[2].responseType).toBe("message")
+			expect(requests[3].contractError).toBeUndefined()
+			expect(JSON.stringify(requests[2].requestBody)).not.toContain(TRUNCATED_SUMMARY_MARKER)
+			expect(JSON.stringify(requests[3].requestBody)).not.toContain(TRUNCATED_SUMMARY_MARKER)
+			await expect(sidebar.getByText(TRUNCATED_SUMMARY_MARKER, { exact: false })).toHaveCount(0)
+			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir, [/Connection error|ECONNRESET|fetch failed/])
 		} finally {
 			await app.close()
 		}

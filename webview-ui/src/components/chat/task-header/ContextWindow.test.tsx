@@ -3,10 +3,25 @@ import { describe, expect, it, vi } from "vitest"
 import ContextWindow from "./ContextWindow"
 
 describe("ContextWindow manual compaction", () => {
-	it("hides the compact control when the active interaction cannot accept a reply", () => {
-		render(<ContextWindow contextWindow={128_000} lastApiReqTotalTokens={64_000} useAutoCondense={false} />)
+	it("keeps the compact control visible but greyed out when replies are disabled", () => {
+		render(
+			<ContextWindow
+				compactTaskDisabled
+				contextWindow={128_000}
+				lastApiReqTotalTokens={64_000}
+				onCompactTask={vi.fn(async () => true)}
+				useAutoCondense={false}
+			/>,
+		)
 
-		expect(screen.queryByRole("button")).not.toBeInTheDocument()
+		const compactButton = screen.getByRole("button")
+		expect(compactButton).toBeInTheDocument()
+		expect(compactButton).toHaveAttribute("aria-disabled", "true")
+		expect(compactButton).toHaveClass("pointer-events-none")
+
+		// A disabled compact control must not open the confirmation dialog.
+		fireEvent.click(compactButton)
+		expect(screen.queryByText("Compact the current task?")).not.toBeInTheDocument()
 	})
 
 	it("dispatches the dedicated compact action after confirmation", async () => {

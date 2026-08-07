@@ -9,7 +9,6 @@ import { PromptProfile } from "../../profiles/types"
 import type { SystemPromptContext } from "../../system-prompt/context"
 import { PromptScanner } from "../../template/PromptScanner"
 import { TemplateStore, TemplateStoreError } from "../../template/TemplateStore"
-import { REQUEST_SCOPED_TOOL_IDS } from "../../tools/tool-ids"
 import { CommandPromptGenerator } from "../CommandPromptGenerator"
 import { RuntimePromptGenerator } from "../RuntimePromptGenerator"
 import { ToolPromptGenerator } from "../ToolPromptGenerator"
@@ -112,7 +111,7 @@ describe("ToolPromptGenerator", () => {
 	it.each([
 		PromptProfile.Standard,
 		PromptProfile.Lite,
-	])("does not leak request-scoped tools into the %s defaults", (profile) => {
+	])("does not expose explicit control instructions in the %s native defaults", (profile) => {
 		const tools = new ToolPromptGenerator().generate(profile, { ...context, promptProfile: profile }) ?? []
 		const names = tools.flatMap((tool) =>
 			"function" in tool && tool.function?.name
@@ -122,49 +121,29 @@ describe("ToolPromptGenerator", () => {
 					: [],
 		)
 
-		for (const toolId of REQUEST_SCOPED_TOOL_IDS) {
-			expect(names).not.toContain(toolId)
-		}
+		expect(names).not.toContain(ClineDefaultTool.SUMMARIZE_TASK)
+		expect(names).not.toContain(ClineDefaultTool.NEW_TASK)
+		expect(names).not.toContain(ClineDefaultTool.CONDENSE)
+		expect(names).not.toContain(ClineDefaultTool.NEW_RULE)
+		expect(names).not.toContain(ClineDefaultTool.REPORT_BUG)
+		expect(names).not.toContain(ClineDefaultTool.GENERATE_EXPLANATION)
 	})
 
-	it("rejects ordinary tools from request-only projection", () => {
-		expect(
-			new ToolPromptGenerator().generateSelectedRequestTools(PromptProfile.Standard, context, [ClineDefaultTool.FILE_READ]),
-		).toBeUndefined()
-	})
-
-	it.each([
-		ClineDefaultTool.NEW_TASK,
-		ClineDefaultTool.CONDENSE,
-		ClineDefaultTool.NEW_RULE,
-		ClineDefaultTool.REPORT_BUG,
-		ClineDefaultTool.GENERATE_EXPLANATION,
-	])("does not project slash command %s as a request-scoped function", (toolId) => {
-		expect(new ToolPromptGenerator().generateSelectedRequestTools(PromptProfile.Standard, context, [toolId])).toBeUndefined()
-	})
-
-	it("projects summarize_task only for the active automatic compaction request", () => {
-		expect(REQUEST_SCOPED_TOOL_IDS).toEqual([ClineDefaultTool.SUMMARIZE_TASK])
+	it("keeps explicit compaction instructions on the stable cached native projection", () => {
 		const generator = new ToolPromptGenerator()
 		const defaultTools = generator.generate(PromptProfile.Standard, context) ?? []
-		const requestTools =
-			generator.generateToolsForRequest(PromptProfile.Standard, context, defaultTools, [ClineDefaultTool.SUMMARIZE_TASK]) ??
-			[]
+		const staleTools = [
+			...defaultTools,
+			{ type: "function", function: { name: ClineDefaultTool.SUMMARIZE_TASK } },
+		] as typeof defaultTools
+		const compactRequestTools = generator.generateToolsForRequest(PromptProfile.Standard, context, staleTools)
 
-		expect(defaultTools).not.toEqual(
-			expect.arrayContaining([expect.objectContaining({ function: expect.objectContaining({ name: "summarize_task" }) })]),
+		expect(compactRequestTools).toEqual(defaultTools)
+		expect(compactRequestTools).not.toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ function: expect.objectContaining({ name: ClineDefaultTool.SUMMARIZE_TASK }) }),
+			]),
 		)
-		expect(requestTools).not.toEqual(
-			expect.arrayContaining([expect.objectContaining({ function: expect.objectContaining({ name: "read_file" }) })]),
-		)
-		expect(requestTools).toEqual([
-			expect.objectContaining({
-				function: expect.objectContaining({
-					name: "summarize_task",
-					parameters: expect.objectContaining({ required: ["context"] }),
-				}),
-			}),
-		])
 	})
 })
 

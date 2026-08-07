@@ -20,6 +20,7 @@ interface ContextWindowProgressProps extends ContextWindowInfoProps {
 	useAutoCondense: boolean
 	lastApiReqTotalTokens?: number
 	contextWindow?: number
+	compactTaskDisabled?: boolean
 	onCompactTask?: () => Promise<boolean>
 }
 
@@ -55,6 +56,7 @@ ConfirmationDialog.displayName = "ConfirmationDialog"
 const ContextWindow: React.FC<ContextWindowProgressProps> = ({
 	contextWindow = 0,
 	lastApiReqTotalTokens = 0,
+	compactTaskDisabled,
 	onCompactTask,
 	useAutoCondense,
 	tokensIn,
@@ -70,9 +72,10 @@ const ContextWindow: React.FC<ContextWindowProgressProps> = ({
 		(e: React.MouseEvent) => {
 			e.preventDefault()
 			e.stopPropagation()
+			if (compactTaskDisabled) return
 			setConfirmationNeeded(!confirmationNeeded)
 		},
-		[confirmationNeeded],
+		[confirmationNeeded, compactTaskDisabled],
 	)
 
 	const handleConfirm = useCallback(
@@ -186,7 +189,7 @@ const ContextWindow: React.FC<ContextWindowProgressProps> = ({
 						{formatTokenNumber(tokenData.max)}
 					</span>
 				</div>
-				{onCompactTask && <CompactTaskButton onClick={handleCompactClick} />}
+				{onCompactTask && <CompactTaskButton disabled={compactTaskDisabled} onClick={handleCompactClick} />}
 			</div>
 			{confirmationNeeded && <ConfirmationDialog onCancel={handleCancel} onConfirm={handleConfirm} />}
 		</div>

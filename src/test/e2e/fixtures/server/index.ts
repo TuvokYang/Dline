@@ -80,6 +80,7 @@ interface MockResponseOptions {
 
 export type OpenAiMockResponse =
 	| ({ type: "message"; text: string } & MockResponseOptions)
+	| ({ type: "truncated-message"; text: string; truncateAfter?: number } & MockResponseOptions)
 	| ({ type: "tool" } & MockToolCall & MockResponseOptions)
 	| ({ type: "tool-with-completion-snapshots" } & MockToolCall & MockResponseOptions)
 	| ({ type: "truncated-tool"; truncateAfter: number } & MockToolCall & MockResponseOptions)
@@ -166,7 +167,7 @@ function getResponseUsage(
 	const reasoningText = response.reasoning ?? response.hiddenReasoning ?? ""
 	const reasoningTokens = reasoningText ? estimateTokens(reasoningText) : 0
 	const responseText =
-		response.type === "message"
+		response.type === "message" || response.type === "truncated-message"
 			? response.text
 			: getResponseToolCalls(response)
 					.map((tool) => `${tool.name}\n${JSON.stringify(tool.arguments)}`)
@@ -803,7 +804,10 @@ export class ClineApiServerMock {
 									prompt_cache_miss_tokens: usage.cacheWriteTokens ?? 0,
 								}
 							: openAiUsage
-					const messageText = scriptedResponse.type === "message" ? scriptedResponse.text : ""
+					const messageText =
+						scriptedResponse.type === "message" || scriptedResponse.type === "truncated-message"
+							? scriptedResponse.text
+							: ""
 					const responseToolCalls = getResponseToolCalls(scriptedResponse)
 					const writeSse = (data: unknown, event?: string) => {
 						if (res.destroyed || res.writableEnded) return
@@ -837,9 +841,13 @@ export class ClineApiServerMock {
 							},
 						}))
 						const reasoningContent = protocol === "deepseek-chat" ? scriptedResponse.reasoning : undefined
+						const streamedMessageText =
+							scriptedResponse.type === "truncated-message"
+								? messageText.slice(0, scriptedResponse.truncateAfter ?? messageText.length)
+								: messageText
 						const responseDelta = {
 							role: "assistant",
-							...(toolCalls.length > 0 ? { tool_calls: toolCalls } : { content: messageText }),
+							...(toolCalls.length > 0 ? { tool_calls: toolCalls } : { content: streamedMessageText }),
 						}
 						if (parsed.stream !== false) {
 							res.writeHead(200, {
@@ -877,6 +885,10 @@ export class ClineApiServerMock {
 										finish_reason: null,
 									},
 								])
+							}
+							if (scriptedResponse.type === "truncated-message") {
+								res.destroy()
+								return
 							}
 							writeChunk(
 								[

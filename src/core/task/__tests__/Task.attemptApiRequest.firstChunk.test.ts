@@ -36,7 +36,6 @@ describe("Task.attemptApiRequest first chunk state", () => {
 				model: { id: "deepseek-v4-pro", info: {} },
 				mode: "act",
 			},
-			requestToolIds: [],
 			webToolsEnabled: true,
 			webSearchRoutingPlan: resolveWebSearchRoutingPlan({
 				enabled: true,
@@ -115,7 +114,6 @@ describe("Task.attemptApiRequest first chunk state", () => {
 		expect(fakeTask.toolExecutor.setWebSearchRoutingPlan).toHaveBeenCalledWith(
 			requestScope.webSearchRoutingPlan,
 			requestScope.webToolsEnabled,
-			true,
 		)
 	})
 
@@ -135,7 +133,6 @@ describe("Task.attemptApiRequest first chunk state", () => {
 				model: { id: "gpt-5.6-sol", info: {} },
 				mode: "act",
 			},
-			requestToolIds: [],
 			webToolsEnabled: true,
 			webSearchRoutingPlan: resolveWebSearchRoutingPlan({
 				enabled: false,

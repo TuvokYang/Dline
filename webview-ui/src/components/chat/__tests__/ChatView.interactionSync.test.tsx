@@ -35,6 +35,7 @@ const mocks = vi.hoisted(() => {
 		chatState,
 		extensionState: {} as Record<string, unknown>,
 		dispatchInteraction: vi.fn(async () => ({ accepted: true, result: "accepted" })),
+		compactTask: vi.fn(async () => ({ accepted: true, result: "accepted" })),
 		useChatState: vi.fn(() => chatState),
 	}
 })
@@ -54,7 +55,10 @@ vi.mock("@/services/grpc-client", () => ({
 		copyToClipboard: vi.fn(async () => undefined),
 		selectFiles: vi.fn(async () => ({ values1: [], values2: [] })),
 	},
-	TaskServiceClient: { dispatchInteraction: mocks.dispatchInteraction },
+	TaskServiceClient: {
+		compactTask: mocks.compactTask,
+		dispatchInteraction: mocks.dispatchInteraction,
+	},
 	UiServiceClient: {
 		subscribeToAddToInput: vi.fn(() => () => undefined),
 		subscribeToShowWebview: vi.fn(() => () => undefined),
@@ -105,7 +109,22 @@ vi.mock("../chat-view", () => {
 			</div>
 		),
 		MessagesArea: () => null,
-		TaskSection: () => null,
+		TaskSection: ({
+			compactTaskDisabled,
+			onCompactTask,
+		}: {
+			compactTaskDisabled?: boolean
+			onCompactTask?: () => Promise<boolean>
+		}) => (
+			<button
+				aria-disabled={compactTaskDisabled ? "true" : "false"}
+				aria-label="Compact task"
+				disabled={compactTaskDisabled}
+				onClick={() => void onCompactTask?.()}
+				type="button">
+				Compact
+			</button>
+		),
 		TaskActivityPanel: () => null,
 		TaskActivityTabs: () => null,
 		WelcomeSection: () => null,
@@ -194,6 +213,7 @@ function renderChat(
 
 describe("ChatView interaction anchor synchronization", () => {
 	beforeEach(() => {
+		mocks.compactTask.mockClear()
 		mocks.dispatchInteraction.mockClear()
 		mocks.useChatState.mockClear()
 		mocks.chatState.inputValue = "draft"
@@ -239,6 +259,36 @@ describe("ChatView interaction anchor synchronization", () => {
 		await act(async () => {
 			fireEvent.click(screen.getByRole("button", { name: "Invoke Enter" }))
 		})
+		expect(mocks.dispatchInteraction).not.toHaveBeenCalled()
+	})
+
+	it("keeps Compact enabled whenever the footer input is enabled, regardless of enter action", () => {
+		const view = taskView()
+		view.input.enterAction = "reject"
+		renderChat([ASK], view)
+
+		expect(screen.getByRole("textbox", { name: "Task input" })).toBeEnabled()
+		expect(screen.getByRole("button", { name: "Compact task" })).toBeEnabled()
+	})
+
+	it("disables Compact when the footer input is unavailable", () => {
+		const view = taskView()
+		view.input.enabled = false
+		renderChat([ASK], view)
+
+		expect(screen.getByRole("textbox", { name: "Task input" })).toBeDisabled()
+		expect(screen.getByRole("button", { name: "Compact task" })).toBeDisabled()
+	})
+
+	it("routes Compact through the dedicated task RPC instead of the active interaction", async () => {
+		const view = taskView()
+		view.input.enterAction = "reject"
+		renderChat([ASK], view)
+
+		fireEvent.click(screen.getByRole("button", { name: "Compact task" }))
+
+		await waitFor(() => expect(mocks.compactTask).toHaveBeenCalledOnce())
+		expect(mocks.compactTask).toHaveBeenCalledWith(expect.objectContaining({ taskId: "task-1" }))
 		expect(mocks.dispatchInteraction).not.toHaveBeenCalled()
 	})
 

@@ -16,6 +16,7 @@ interface StoredProfile {
 	}
 }
 
+const COMPACT_INSTRUCTION_MARKER = "The current conversation is rapidly running out of context"
 const profilesPath = (dlineDir: string) => path.join(dlineDir, "data", "settings", "api_profiles.json")
 const settingsPath = (dlineDir: string) => path.join(dlineDir, "data", "settings", "settings.json")
 
@@ -60,6 +61,15 @@ async function sendTask(sidebar: Frame, text: string): Promise<void> {
 	await input.press("Enter")
 	await expect(input).toHaveValue("")
 	await expect(sidebar.getByText(text, { exact: true }).last()).toBeVisible()
+}
+
+function requestToolNames(consumption: MockApiConsumption): string[] {
+	const body = consumption.requestBody as {
+		tools?: Array<{ name?: string; function?: { name?: string } }>
+	}
+	return (body.tools ?? [])
+		.map((tool) => tool.name ?? tool.function?.name)
+		.filter((name): name is string => typeof name === "string")
 }
 
 /**
@@ -113,14 +123,9 @@ e2e(
 				usage: { inputTokens: 80_000, outputTokens: 100 },
 			},
 			{
-				type: "tool",
-				id: "call_condense_orphan_summary",
-				name: "summarize_task",
-				arguments: { context: "E2E_CONDENSE_ORPHAN_SUMMARY preserves the task and current intent." },
-				expectedRequestIncludes: [
-					"The current conversation is rapidly running out of context",
-					"E2E_CONDENSE_ORPHAN_TASK",
-				],
+				type: "message",
+				text: "<thinking>E2E orphan-safe summary</thinking><summarize_task><context>E2E_CONDENSE_ORPHAN_SUMMARY preserves the task and current intent.</context></summarize_task>",
+				expectedRequestIncludes: [COMPACT_INSTRUCTION_MARKER, "E2E_CONDENSE_ORPHAN_TASK"],
 				expectedRequestExcludes: ["__dline_mode_switch_compact__", "/compact"],
 			},
 			{
@@ -129,7 +134,7 @@ e2e(
 				name: "attempt_completion",
 				arguments: { result: "E2E_CONDENSE_ORPHAN_DONE" },
 				expectedRequestIncludes: ["E2E_CONDENSE_ORPHAN_SUMMARY"],
-				expectedRequestExcludes: ["__dline_mode_switch_compact__", '<explicit_instructions type="summarize_task">'],
+				expectedRequestExcludes: ["__dline_mode_switch_compact__", COMPACT_INSTRUCTION_MARKER],
 				expectedToolResults: [
 					{ callId: "call_condense_orphan_ready", contentIncludes: "Mode switch context compaction requested." },
 				],
@@ -164,7 +169,9 @@ e2e(
 			await expect(sidebar.getByText("E2E_CONDENSE_ORPHAN_SUMMARY", { exact: false }).last()).toBeVisible()
 
 			const requests = server.getMockConsumptions("openai-compatible-responses")
-			expect(requests[1]).toMatchObject({ responseType: "tool", toolName: "summarize_task" })
+			expect(requests[1]).toMatchObject({ responseType: "message" })
+			expect(requestToolNames(requests[1])).toEqual(requestToolNames(requests[0]))
+			expect(requestToolNames(requests[1])).not.toContain("summarize_task")
 			for (const request of requests) {
 				expect(request.contractError).toBeUndefined()
 				// The post-condense request must not carry orphaned tool outputs.

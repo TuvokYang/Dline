@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react"
+import { fireEvent, render, screen } from "@testing-library/react"
 import { describe, expect, it, vi } from "vitest"
 import { ChatRowContent } from "../ChatRow"
 
@@ -62,5 +62,78 @@ describe("ChatRow summarizeTask rendering", () => {
 		expect(scrollContainer).not.toBeNull()
 		expect(scrollContainer).toHaveClass("max-h-[80vh]")
 		expect(scrollContainer).toHaveClass("overflow-y-auto")
+	})
+
+	it("requests one collapse when an expanded summary stops being the latest message", () => {
+		const onToggleExpand = vi.fn()
+		const message = {
+			ts: 2,
+			type: "say" as const,
+			say: "tool" as const,
+			partial: false,
+			text: JSON.stringify({ tool: "summarizeTask", content: "summary" }),
+		}
+		const rendered = render(
+			<ChatRowContent {...baseProps} isExpanded={true} isLast={true} message={message} onToggleExpand={onToggleExpand} />,
+		)
+
+		rendered.rerender(
+			<ChatRowContent {...baseProps} isExpanded={true} isLast={false} message={message} onToggleExpand={onToggleExpand} />,
+		)
+
+		expect(onToggleExpand).toHaveBeenCalledOnce()
+	})
+
+	it("does not auto-collapse a summary again after the user manually reopens it", () => {
+		const onToggleExpand = vi.fn()
+		const message = {
+			ts: 3,
+			type: "say" as const,
+			say: "tool" as const,
+			partial: false,
+			text: JSON.stringify({ tool: "summarizeTask", content: "summary" }),
+		}
+		const rendered = render(
+			<ChatRowContent {...baseProps} isExpanded={true} isLast={true} message={message} onToggleExpand={onToggleExpand} />,
+		)
+
+		rendered.rerender(
+			<ChatRowContent {...baseProps} isExpanded={true} isLast={false} message={message} onToggleExpand={onToggleExpand} />,
+		)
+		expect(onToggleExpand).toHaveBeenCalledOnce()
+
+		rendered.rerender(
+			<ChatRowContent {...baseProps} isExpanded={false} isLast={false} message={message} onToggleExpand={onToggleExpand} />,
+		)
+		fireEvent.click(screen.getByLabelText("Expand summary"))
+		expect(onToggleExpand).toHaveBeenCalledTimes(2)
+
+		rendered.rerender(
+			<ChatRowContent {...baseProps} isExpanded={true} isLast={true} message={message} onToggleExpand={onToggleExpand} />,
+		)
+		rendered.rerender(
+			<ChatRowContent {...baseProps} isExpanded={true} isLast={false} message={message} onToggleExpand={onToggleExpand} />,
+		)
+
+		expect(onToggleExpand).toHaveBeenCalledTimes(2)
+	})
+
+	it("requests one collapse when an expanded focus change stops being the latest message", () => {
+		const onToggleExpand = vi.fn()
+		const message = {
+			ts: 4,
+			type: "ask" as const,
+			ask: "focus_chain_change" as const,
+			text: JSON.stringify({ plan: "- [ ] Keep the API boundary", reason: "Changed focus" }),
+		}
+		const rendered = render(
+			<ChatRowContent {...baseProps} isExpanded={true} isLast={true} message={message} onToggleExpand={onToggleExpand} />,
+		)
+
+		rendered.rerender(
+			<ChatRowContent {...baseProps} isExpanded={true} isLast={false} message={message} onToggleExpand={onToggleExpand} />,
+		)
+
+		expect(onToggleExpand).toHaveBeenCalledOnce()
 	})
 })

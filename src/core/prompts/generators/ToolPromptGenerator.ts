@@ -7,7 +7,6 @@ import type { PromptContract, PromptEnv } from "../template/types"
 import { createMcpToolSpecs } from "../tools/mcp-tool-adapter"
 import type { ProfileToolSet } from "../tools/profile-tool-set"
 import { projectTool } from "../tools/provider-projector"
-import { isRequestScopedToolId, REQUEST_SCOPED_TOOL_IDS } from "../tools/tool-ids"
 import { createToolSet, LITE_TOOL_IDS, STANDARD_TOOL_IDS } from "../tools/tool-profile"
 import { projectXmlTool } from "../tools/xml-tool-projector"
 
@@ -104,60 +103,18 @@ export class ToolPromptGenerator {
 		return [...builtInTools, ...mcpTools]
 	}
 
-	/** Removes request-only schemas from a frozen default projection loaded from an older task cache. */
+	/** Removes stale control-tool schemas from a frozen projection loaded from an older task cache. */
 	public filterCachedDefaultTools(tools: readonly ClineTool[] | undefined): readonly ClineTool[] | undefined {
-		return tools?.filter((tool) => {
-			const name = projectedToolName(tool)
-			return name === undefined || !isRequestScopedToolId(name)
-		})
+		return tools?.filter((tool) => projectedToolName(tool) !== ClineDefaultTool.SUMMARIZE_TASK)
 	}
 
-	/** Selects either the frozen defaults or the explicitly isolated request-only projection. */
+	/** Returns the frozen ordinary tool projection for every request, including explicit control instructions. */
 	public generateToolsForRequest(
-		profile: PromptProfile,
-		context: SystemPromptContext,
+		_profile: PromptProfile,
+		_context: SystemPromptContext,
 		cachedTools: readonly ClineTool[] | undefined,
-		requestToolIds: readonly ClineDefaultTool[],
 	): readonly ClineTool[] | undefined {
-		if (requestToolIds.length > 0) {
-			return this.generateSelectedRequestTools(profile, context, requestToolIds)
-		}
 		return this.filterCachedDefaultTools(cachedTools)
-	}
-
-	/** Generates only the internal tools explicitly activated for one API request. */
-	public generateSelectedRequestTools(
-		profile: PromptProfile,
-		context: SystemPromptContext,
-		requestToolIds: readonly ClineDefaultTool[],
-	): readonly ClineTool[] | undefined {
-		if (!context.enableNativeToolCalls || requestToolIds.length === 0) {
-			return undefined
-		}
-
-		const projectionContext = this.resolveProfileContext(profile, context)
-		const selectedIds = [...new Set(requestToolIds.filter(isRequestScopedToolId))]
-		if (selectedIds.length === 0) {
-			return undefined
-		}
-
-		const disabled = new Set(projectionContext.disableTools ?? [])
-		const selectedSpecs = this.toolSet
-			.list(profile, selectedIds)
-			.filter((spec) => !disabled.has(spec.id))
-			.filter((spec) => !spec.contextRequirements || spec.contextRequirements(projectionContext))
-		if (selectedSpecs.length === 0) {
-			return undefined
-		}
-
-		const enabledToolIds = new Set([
-			...this.listEnabled(profile, projectionContext).map((spec) => spec.id),
-			...REQUEST_SCOPED_TOOL_IDS,
-		])
-		return this.resolveNativeProjection(
-			selectedSpecs.map((spec) => projectTool(spec, projectionContext, enabledToolIds)),
-			projectionContext,
-		)
 	}
 
 	/** Generates complete XML documentation from the exact-profile descriptors. */

@@ -259,25 +259,9 @@ export const ChatRowContent = memo(
 		useEffect(() => {
 			const isCompletionResult = message.ask === "completion_result" || message.say === "completion_result"
 
-			// Auto-expand if it's last and we haven't already auto-expanded
 			if (isLast && isCompletionResult && !hasAutoExpandedRef.current) {
 				hasAutoExpandedRef.current = true
-				hasAutoCollapsedRef.current = false // Reset the auto-collapse flag when expanding
 			}
-		}, [isLast, message.ask, message.say])
-
-		// Auto-collapse completion output ONCE when transitioning from last to not-last
-		useEffect(() => {
-			const isCompletionResult = message.ask === "completion_result" || message.say === "completion_result"
-			const wasLast = prevIsLastRef.current
-
-			// Only auto-collapse if transitioning from last to not-last, and we haven't already auto-collapsed
-			if (wasLast && !isLast && isCompletionResult && !hasAutoCollapsedRef.current) {
-				hasAutoCollapsedRef.current = true
-				hasAutoExpandedRef.current = false // Reset the auto-expand flag when collapsing
-			}
-
-			prevIsLastRef.current = isLast
 		}, [isLast, message.ask, message.say])
 
 		const [cost, _apiReqCancelReason, apiReqStreamingFailedMessage, , usageInfo] = useMemo(() => {
@@ -472,6 +456,24 @@ export const ChatRowContent = memo(
 			}
 			return null
 		}, [message.ask, message.say, message.text])
+
+		const isAutoCollapsibleMessage =
+			message.ask === "completion_result" ||
+			message.say === "completion_result" ||
+			message.ask === "focus_chain_change" ||
+			tool?.tool === "summarizeTask" ||
+			tool?.tool === "focusChainChanged"
+
+		// Collapse expandable summaries and focus changes once when newer output arrives.
+		// The parent owns expandedRows, so a manual reopen remains respected.
+		useEffect(() => {
+			const wasLast = prevIsLastRef.current
+			if (wasLast && !isLast && isExpanded && isAutoCollapsibleMessage && !hasAutoCollapsedRef.current) {
+				hasAutoCollapsedRef.current = true
+				onToggleExpand(message.ts)
+			}
+			prevIsLastRef.current = isLast
+		}, [isAutoCollapsibleMessage, isExpanded, isLast, message.ts, onToggleExpand])
 
 		const conditionalRulesInfo = useMemo(() => {
 			if (message.say !== "conditional_rules_applied" || !message.text) return null
@@ -865,6 +867,8 @@ export const ChatRowContent = memo(
 					return (
 						<FocusChainChangeRow
 							autoApproved
+							isExpanded={isExpanded}
+							onToggleExpand={handleToggle}
 							plan={tool.path || ""}
 							reason={Array.isArray(tool.content) ? tool.content.join("\n") : tool.content || ""}
 						/>
@@ -956,7 +960,7 @@ export const ChatRowContent = memo(
 							<div>
 								<div onClick={(e) => e.stopPropagation()}>
 									<McpToolRow
-										serverName={useMcpServer.serverName}
+										showAutoApprove={false}
 										tool={{
 											name: useMcpServer.toolName || "",
 											description:
@@ -1289,7 +1293,14 @@ export const ChatRowContent = memo(
 						try {
 							const data = message.text ? JSON.parse(message.text) : { plan: "", reason: "" }
 							if (data.plan) {
-								return <FocusChainChangeRow plan={data.plan} reason={data.reason || ""} />
+								return (
+									<FocusChainChangeRow
+										isExpanded={isExpanded}
+										onToggleExpand={handleToggle}
+										plan={data.plan}
+										reason={data.reason || ""}
+									/>
+								)
 							}
 						} catch {}
 						return <InvisibleSpacer />

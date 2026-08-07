@@ -24,7 +24,7 @@ interface StoredSettings {
 	planModeProfile?: string
 }
 
-const COMPACT_INSTRUCTION_MARKER = '<explicit_instructions type="summarize_task">'
+const COMPACT_INSTRUCTION_MARKER = "The current conversation is rapidly running out of context"
 const profilesPath = (dlineDir: string) => path.join(dlineDir, "data", "settings", "api_profiles.json")
 const settingsPath = (dlineDir: string) => path.join(dlineDir, "data", "settings", "settings.json")
 
@@ -125,11 +125,9 @@ e2e(
 				usage: { inputTokens: 120_000, outputTokens: 100 },
 			},
 			{
-				type: "tool",
-				id: "call_auto_settings_summary",
-				name: "summarize_task",
-				arguments: { context: "E2E_AUTO_SETTINGS_SUMMARY preserves the task and latest request." },
-				expectedRequestIncludes: ["The current conversation is rapidly running out of context"],
+				type: "message",
+				text: "<thinking>E2E auto settings summary</thinking><summarize_task><context>E2E_AUTO_SETTINGS_SUMMARY preserves the task and latest request.</context></summarize_task>",
+				expectedRequestIncludes: [COMPACT_INSTRUCTION_MARKER],
 				expectedRequestExcludes: ["E2E_AUTO_SETTINGS_CONTINUE"],
 			},
 			{
@@ -199,7 +197,9 @@ e2e(
 
 			await expect.poll(() => server.getRequestCount("openai-compatible-responses")).toBe(3)
 			const requests = server.getMockConsumptions("openai-compatible-responses")
-			expect(requestToolNames(requests[1])).toEqual(["summarize_task"])
+			expect(requests[1]).toMatchObject({ responseType: "message" })
+			expect(requestToolNames(requests[1])).toEqual(requestToolNames(requests[0]))
+			expect(requestToolNames(requests[1])).not.toContain("summarize_task")
 			expect(requests[1].contractError).toBeUndefined()
 			expect(requests[2].contractError).toBeUndefined()
 			await expectCompactionSummary(reopened.sidebar, "E2E_AUTO_SETTINGS_SUMMARY preserves the task and latest request.")

@@ -118,6 +118,26 @@ describe("CommandOutputRow cancellation", () => {
 		expect(screen.queryByTestId("activity-command-output")).not.toBeInTheDocument()
 	})
 
+	it("caps fully expanded long output at 80vh and keeps it scrollable", () => {
+		const longOutput = Array.from({ length: 8 }, (_, index) => `output line ${index + 1}`).join("\n")
+		const message = {
+			...baseProps.message,
+			text: `run report${COMMAND_OUTPUT_STRING}${longOutput}`,
+		}
+		const { rerender } = render(
+			<CommandOutputRow {...baseProps} isCollapsed={false} isOutputFullyExpanded={false} message={message} />,
+		)
+
+		const output = screen.getByTestId("command-output-scroll")
+		expect(output).toHaveClass("max-h-[120px]", "overflow-auto")
+		expect(output).not.toHaveClass("max-h-[80vh]")
+
+		rerender(<CommandOutputRow {...baseProps} isCollapsed={false} isOutputFullyExpanded={true} message={message} />)
+
+		expect(output).toHaveClass("max-h-[80vh]", "overflow-auto")
+		expect(output).not.toHaveClass("max-h-[120px]")
+	})
+
 	it("keeps command copy available when the row is collapsed", () => {
 		render(<CommandOutputRow {...baseProps} isCollapsed={true} />)
 

@@ -130,12 +130,13 @@ describe("Task request API boundary", () => {
 		expect(method).not.toContain("this.getCurrentProviderInfo()")
 	})
 
-	it("passes the frozen hosted tools to ordinary requests and disables them for internal compaction", async () => {
+	it("passes the frozen hosted tools to every request without a control-tool branch", async () => {
 		const source = await readFile(taskSourcePath, "utf8")
 		const method = extractMethod(source, "async *attemptApiRequest(", "// Block identity is now assigned")
 
-		expect(method).toContain("requestScope.requestToolIds.length > 0 ? [] : requestScope.webSearchRoutingPlan.serverTools")
+		expect(method).toContain("const serverTools = requestScope.webSearchRoutingPlan.serverTools")
 		expect(method).toContain("api.createMessage(systemPrompt, apiConversationMessages, tools, { serverTools })")
+		expect(method).not.toContain("requestToolIds")
 	})
 
 	it("uses the request-frozen Web Tools switch for the prompt and ToolExecutor", async () => {
@@ -148,9 +149,10 @@ describe("Task request API boundary", () => {
 		expect(requestMethod).toMatch(
 			/this\.buildPromptContext\(\s*providerInfo,\s*requestScope\.webToolsEnabled,\s*requestScope\.webSearchRoutingPlan,?\s*\)/,
 		)
-		expect(requestMethod).toMatch(
-			/this\.toolExecutor\.setWebSearchRoutingPlan\(\s*requestScope\.webSearchRoutingPlan,\s*requestScope\.webToolsEnabled,\s*requestScope\.requestToolIds\.length === 0,?\s*\)/,
+		expect(requestMethod).toContain(
+			"this.toolExecutor.setWebSearchRoutingPlan(requestScope.webSearchRoutingPlan, requestScope.webToolsEnabled)",
 		)
+		expect(requestMethod).not.toContain("requestToolIds")
 	})
 
 	it("uses the dedicated browser capability before the legacy image fallback", async () => {

@@ -5,6 +5,7 @@ import { combineHookSequences } from "@shared/combineHookSequences"
 import type { ClineMessage } from "@shared/ExtensionMessage"
 import { BooleanRequest, StringRequest } from "@shared/proto/dline/common"
 import type { ModelInfo } from "@shared/proto/dline/models"
+import { CompactTaskRequest } from "@shared/proto/dline/task"
 import { resolveProfileModelInfo } from "@shared/providers/profile-model-info"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useApiProfiles } from "@/components/settings/providers/useApiProfiles"
@@ -421,23 +422,21 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 		},
 		[clearOwnedDraft, interactionSynchronized, taskViewState],
 	)
-	const canSubmitCompactTask = interactionSynchronized && taskViewState?.input.enterAction === "reply"
+	const taskInputEnabled = Boolean(taskViewState?.input.enabled && taskViewState.input.enterAction && interactionSynchronized)
+	const canSubmitCompactTask = Boolean(taskViewState?.taskId && taskInputEnabled)
+	const compactTaskDisabled = !taskInputEnabled
 	const submitCompactTask = useCallback(async (): Promise<boolean> => {
-		if (!taskViewState || !canSubmitCompactTask) {
+		if (!taskViewState?.taskId || !taskInputEnabled) {
 			return false
 		}
-		const request = buildInteractionRequest(taskViewState, "reply", {
-			text: "/compact",
-			images: [],
-			files: [],
-			activeQuote: null,
-		})
-		if (!request) {
-			return false
-		}
-		const response = await TaskServiceClient.dispatchInteraction(request)
+		const response = await TaskServiceClient.compactTask(
+			CompactTaskRequest.create({
+				taskId: taskViewState.taskId,
+				stateRevision: taskViewState.stateRevision,
+			}),
+		)
 		return response.accepted
-	}, [canSubmitCompactTask, taskViewState])
+	}, [taskInputEnabled, taskViewState])
 	const submitFollowupOption = useCallback(
 		async (message: ClineMessage, option: string): Promise<void> => {
 			const view = taskViewState
@@ -480,6 +479,7 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 				{task ? (
 					<TaskSection
 						apiMetrics={displayedApiMetrics}
+						compactTaskDisabled={compactTaskDisabled}
 						lastApiReqTotalTokens={lastApiReqTotalTokens}
 						lastProgressMessageText={lastProgressMessageText}
 						messageHandlers={messageHandlers}
@@ -548,11 +548,7 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 					chatState={chatState}
 					clineAsk={taskViewState?.activeInteraction?.taskAsk}
 					draft={interactionDraft}
-					enabled={
-						task
-							? Boolean(taskViewState?.input.enabled && taskViewState.input.enterAction && interactionSynchronized)
-							: undefined
-					}
+					enabled={task ? taskInputEnabled : undefined}
 					messageHandlers={messageHandlers}
 					onDraftAccepted={clearOwnedDraft}
 					onSubmit={task ? submitInteractionDraft : undefined}
