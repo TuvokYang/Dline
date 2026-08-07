@@ -300,7 +300,7 @@ export async function applyRemoteConfig(
 	// not by flat provider fields. Remote config no longer overrides providers.
 
 	// Build the full new cache and swap atomically to avoid a window where
-	// concurrent readers (e.g., UseSkillToolHandler) see an empty cache.
+	// concurrent capability readers see an empty cache.
 	const newCache: Partial<RemoteConfigFields> = { ...transformed, configuredApiKeys: configuredKeys }
 	if (previousRemoteMCPServers !== undefined) {
 		newCache.previousRemoteMCPServers = previousRemoteMCPServers

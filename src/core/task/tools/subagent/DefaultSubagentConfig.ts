@@ -9,7 +9,7 @@ export const DEFAULT_SUBAGENT_ALLOWED_TOOLS: ClineDefaultTool[] = [
 	ClineDefaultTool.SEARCH,
 	ClineDefaultTool.LIST_CODE_DEF,
 	ClineDefaultTool.BASH,
-	ClineDefaultTool.USE_SKILL,
+	ClineDefaultTool.LOAD_SKILL,
 	ClineDefaultTool.ATTEMPT,
 ]
 

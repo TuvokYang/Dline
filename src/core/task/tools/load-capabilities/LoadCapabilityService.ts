@@ -1,3 +1,4 @@
+import { resolveProvider } from "@core/api"
 import { parseYamlFrontmatter } from "@core/context/instructions/user-instructions/frontmatter"
 import { discoverAvailableSkills, getSkillContent } from "@core/context/instructions/user-instructions/skills"
 import { getWorkflowsScanDirectories } from "@core/storage/disk"
@@ -10,6 +11,7 @@ import {
 import type { GlobalInstructionsFile } from "@shared/remote-config/schema"
 import fs from "fs/promises"
 import * as path from "path"
+import { telemetryService } from "@/services/telemetry"
 import type { TaskConfig } from "../types/TaskConfig"
 
 interface WorkflowEntry {
@@ -88,7 +90,6 @@ export class LoadCapabilityService {
 				},
 				{ label: "Available", value: match.server.status === "connected" ? "yes" : match.server.status },
 			],
-			body: JSON.stringify(inputSchema, null, 2),
 		}
 	}
 
@@ -115,6 +116,25 @@ export class LoadCapabilityService {
 		}
 
 		const source = content.path.startsWith("remote:") ? "remote" : content.source
+		const apiConfig = config.services.stateManager.getApiConfiguration()
+		const currentMode = config.services.stateManager.getGlobalSettingsKey("mode")
+		const provider = resolveProvider(apiConfig, currentMode)
+		const globalCount = skills.filter((skill) => skill.source === "global").length
+		const projectCount = skills.filter((skill) => skill.source === "project").length
+		telemetryService.safeCapture(
+			() =>
+				telemetryService.captureSkillUsed({
+					ulid: config.ulid ?? "",
+					skillName: content.name,
+					skillSource: content.source === "global" ? "global" : "project",
+					skillsAvailableGlobal: globalCount,
+					skillsAvailableProject: projectCount,
+					provider,
+					modelId: config.api.getModel().id,
+				}),
+			"LoadCapabilityService.loadSkill",
+		)
+
 		return {
 			tool: "loadCapability",
 			kind: "skill",

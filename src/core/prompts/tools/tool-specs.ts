@@ -77,7 +77,9 @@ function spec(
 	return { transport: "both", id, name: id, description, descriptionFragments, parameters, contextRequirements }
 }
 
-const LOAD_PARAMS = [param("name", true, getPrompt("loadCapability", "nameInstruction"))]
+const LOAD_MCP_PARAMS = [param("name", true, getPrompt("loadCapability", "mcpNameInstruction"))]
+const LOAD_SKILL_PARAMS = [param("name", true, getPrompt("loadCapability", "skillNameInstruction"))]
+const LOAD_WORKFLOW_PARAMS = [param("name", true, getPrompt("loadCapability", "workflowNameInstruction"))]
 const SINGLE_SUBAGENT_PARAMS = [
 	param("agent_name", false, getPrompt("subagent", "agentNameInstruction")),
 	param("task", true, getPrompt("subagent", "taskInstruction")),
@@ -232,15 +234,9 @@ export const STANDARD_TOOL_SPECS: readonly Omit<ProfileToolSpec, "profile">[] = 
 		hasMcp,
 	),
 	spec(ClineDefaultTool.MCP_DOCS, getPrompt("loadMcpDocumentationTool", "description"), [], hasMcp),
-	spec(
-		ClineDefaultTool.USE_SKILL,
-		getPrompt("useSkill", "description"),
-		[param("skill_name", true, getPrompt("useSkill", "skillNameInstruction"))],
-		hasSkills,
-	),
-	spec(ClineDefaultTool.LOAD_MCP, getPrompt("loadCapability", "standardDescription"), LOAD_PARAMS, hasMcp),
-	spec(ClineDefaultTool.LOAD_SKILL, getPrompt("loadCapability", "standardDescription"), LOAD_PARAMS),
-	spec(ClineDefaultTool.LOAD_WORKFLOW, getPrompt("loadCapability", "standardDescription"), LOAD_PARAMS),
+	spec(ClineDefaultTool.LOAD_MCP, getPrompt("loadCapability", "mcpDescription"), LOAD_MCP_PARAMS, hasMcp),
+	spec(ClineDefaultTool.LOAD_SKILL, getPrompt("loadCapability", "skillDescription"), LOAD_SKILL_PARAMS, hasSkills),
+	spec(ClineDefaultTool.LOAD_WORKFLOW, getPrompt("loadCapability", "workflowDescription"), LOAD_WORKFLOW_PARAMS),
 	spec(ClineDefaultTool.FIND_REFERENCES, getPrompt("findReferences", "standardDescription"), [
 		param("file_path", true, getPrompt("findReferences", "filePathInstruction")),
 		param("line", true, getPrompt("findReferences", "lineInstruction"), "integer"),

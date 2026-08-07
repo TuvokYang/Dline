@@ -4,17 +4,17 @@ sidebarTitle: "Skills"
 description: "Modular instruction sets that extend Cline's capabilities for specific tasks."
 ---
 
-Skills are modular instruction sets that extend Cline's capabilities for specific tasks. Each skill packages detailed guidance, processes, and optional resources that Cline loads only when relevant to your request.
+Skills 是面向特定任务的模块化指令集。每个 Skill 可以包含详细指导、约束、流程和可选资源；Dline 只会在请求与已公布的 Skill 描述匹配时加载其完整正文。
 
-Install multiple skills and Cline only loads what it needs. A deployment skill stays dormant until you ask about deploying. Unlike [rules](/customization/cline-rules) (which are always active), skills load on-demand so they don't consume context when you're working on something unrelated.
+你可以安装多个 Skill，而系统提示词只常驻它们的名称和描述。部署类 Skill 会保持未加载状态，直到任务确实需要它。与始终生效的 [rules](/customization/cline-rules) 不同，Skill 按需进入上下文，从而避免无关任务的上下文污染。
 
 <Note>
 Skills is an experimental feature. Enable it in **Settings → Features → Enable Skills**.
 </Note>
 
-## How Skills Work
+## Skill 如何工作
 
-Skills use progressive loading to maximize efficiency:
+Skill 使用分层加载来控制上下文开销：
 
 | Level | When Loaded | Token Cost | Content |
 |-------|-------------|------------|---------|
@@ -22,17 +22,19 @@ Skills use progressive loading to maximize efficiency:
 | Instructions | When skill is triggered | Under 5k tokens | SKILL.md body with instructions and guidance |
 | Resources | As needed | Effectively unlimited | Bundled files accessed via `read_file` or executed scripts |
 
-When you send a message, Cline sees a list of available skills with their descriptions. If your request matches a skill's description, Cline activates it using the `use_skill` tool, which loads the full instructions from SKILL.md.
+发送消息时，Dline 会在 `# Capabilities` 的 `## Skills` 小节看到当前任务可用的 Skill 名称和描述。请求与某个描述匹配时，Dline 调用一次 `load_skill(name)` 读取完整 `SKILL.md` 正文，然后在当前任务中直接遵循这些指令；`use_skill` 已不再作为模型工具提供。
 
-## Triggering Skills with Slash Commands
+`load_skill` 只负责加载并返回 Skill 指令，不会执行第二次“激活”调用。相同 Skill 在当前任务中不应重复加载。Workflow 使用独立的 `load_workflow(name)`：它加载可复用操作步骤，并要求按顺序执行；不要将 Skill 与 Workflow 的职责混用。
 
-You can also invoke enabled skills explicitly from the chat input using slash commands.
+## 使用 Slash Command 触发 Skill
 
-1. Type `/` in chat to open command suggestions.
-2. Select the skill command you want to run (for example, `/aws-deploy`).
-3. Cline triggers that skill and loads its `SKILL.md` instructions.
+你也可以从聊天输入框显式调用已启用的 Skill：
 
-This is useful when you want to force a specific skill immediately instead of waiting for auto-matching based on description.
+1. 输入 `/` 打开命令建议。
+2. 选择目标 Skill 命令，例如 `/skills:aws-deploy`。
+3. Dline 将 `SKILL.md` 正文直接注入一段 `<explicit_instructions type="skill">`。
+
+Slash Command 已经完成正文加载，因此不会额外创建 `load_skill` 工具调用；模型看到该显式指令后必须直接遵循，不能再次加载同一 Skill。该入口适合你希望明确指定 Skill，而不是等待模型按描述匹配的场景。
 
 ## Skill Structure
 
@@ -57,7 +59,7 @@ description: Brief description of what this skill does and when to use it.
 
 # My Skill
 
-Detailed instructions for Cline to follow when this skill is activated.
+Detailed instructions for Dline to follow after this Skill is loaded.
 
 ## Steps
 1. First, do this

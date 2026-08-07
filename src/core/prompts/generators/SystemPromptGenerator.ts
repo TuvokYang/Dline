@@ -33,9 +33,20 @@ export class SystemPromptGenerator {
 		const sections = new Map(
 			config.variant === "lite" ? createLiteSystemSections(config) : createStandardSystemSections(config),
 		)
-		const capabilitiesSection = context.capabilities
-			? renderCapabilitiesSection(context.capabilities, {
+		const capabilities =
+			context.capabilities ??
+			(context.skills?.length
+				? {
+						mcp: [],
+						skills: context.skills.map((skill) => ({ name: skill.name, description: skill.description })),
+						workflows: [],
+						subagents: [],
+					}
+				: undefined)
+		const capabilitiesSection = capabilities
+			? renderCapabilitiesSection(capabilities, {
 					exclude: config.variant === "lite" ? ["skills"] : [],
+					profile: config.variant,
 				})
 			: config.variant === "lite"
 				? ""

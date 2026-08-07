@@ -15,8 +15,6 @@ Primary Working Directory: @CWD@`,
 		"\n- When the task requires current information (for example current documentation, best practices, or news), use web_search. This request routes that tool through Dline's local executor.",
 	serverWebSearchCapabilities:
 		"\n- A provider-hosted web search tool is available. Use it when the task requires current or externally sourced information. The provider executes this search inside the current response; do not emit a local web_search function call or wait for local approval.",
-	skillListEntry: '  - "@NAME@": @DESCRIPTION@',
-	runtimeSkillListEntry: '- "@NAME@": @DESCRIPTION@',
 	connectedMcpServers: "Connected MCP servers: @NAMES@",
 	workspaceReferenceHint: " Use @workspace:path syntax (e.g., @frontend:src/index.ts) to specify a workspace.",
 	workspaceRootsTitle: "Workspace Roots",

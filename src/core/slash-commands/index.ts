@@ -212,7 +212,7 @@ export async function parseSlashCommands(
 			}
 
 			// ── Skill matching (prefix: skills:) ─────────────────────────────
-			// Reuses the same loading mechanism as UseSkillToolHandler
+			// Injects Skill instructions directly without creating a load_skill tool call.
 			if (prefix === "skills") {
 				const skillName = name
 				if (skillName) {

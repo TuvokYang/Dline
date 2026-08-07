@@ -61,6 +61,20 @@ Prompt body`
 		assert.deepEqual(parsed.tools, [ClineDefaultTool.FILE_READ, ClineDefaultTool.LIST_FILES])
 	})
 
+	it("migrates the retired use_skill tool id to load_skill", () => {
+		const content = `---
+name: legacy-skill-agent
+description: Uses the retired skill tool id
+tools: use_skill
+---
+
+Prompt body`
+
+		const parsed = parseAgentConfigFromYaml(content)
+
+		assert.deepEqual(parsed.tools, [ClineDefaultTool.LOAD_SKILL])
+	})
+
 	it("ignores deprecated modelId frontmatter", () => {
 		const content = `---
 name: legacy-agent

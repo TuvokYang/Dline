@@ -25,7 +25,6 @@ const COMPLETE_TEMPLATE_ENV_KEYS = [
 	"YOLO_ASK_TEXT",
 	"BROWSER_CAPABILITIES",
 	"WEB_TOOLS_CAPABILITIES",
-	"SKILLS_LIST",
 	"CUSTOM_INSTRUCTIONS",
 	"OS",
 	"IDE",
@@ -82,7 +81,6 @@ export function createSystemPromptConfig(context: SystemPromptContext): SystemPr
 		webToolsEnabled,
 		localWebSearchEnabled: webToolsEnabled && context.webSearchRoutingPlan?.route === "local",
 		serverWebSearchEnabled: webToolsEnabled && context.webSearchRoutingPlan?.route === "hosted",
-		skillsEnabled: variant === PromptProfile.Standard && (context.skills?.length ?? 0) > 0,
 		userInstructionsEnabled,
 	})
 }
@@ -163,15 +161,6 @@ export function prepareSystemRuntimeEnv(context: SystemPromptContext, config: Sy
 		YOLO_ASK_TEXT: config.yoloModeEnabled ? "" : getPrompt("runtimeEnvironment", "yoloAskText"),
 		BROWSER_CAPABILITIES: browserCapabilities,
 		WEB_TOOLS_CAPABILITIES: webToolsCapabilities,
-		SKILLS_LIST:
-			context.skills
-				?.map((skill) =>
-					assemblePromptFragments(getPrompt("runtimeEnvironment", "skillListEntry"), {
-						NAME: skill.name,
-						DESCRIPTION: skill.description,
-					}),
-				)
-				.join("\n") ?? "",
 		CUSTOM_INSTRUCTIONS: customInstructions,
 		OS: context.isTesting ? "macOS" : process.platform,
 		IDE: context.isTesting ? "TestIde" : context.ide,

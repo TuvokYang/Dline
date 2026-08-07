@@ -3,12 +3,25 @@ import { describe, expect, it, vi } from "vitest"
 import type { TaskConfig } from "../types/TaskConfig"
 import { LoadCapabilityService } from "./LoadCapabilityService"
 
-function createConfig(remoteWorkflowEnabled: boolean): TaskConfig {
+const telemetryMocks = vi.hoisted(() => ({
+	captureSkillUsed: vi.fn(),
+	safeCapture: vi.fn((capture: () => unknown) => capture()),
+}))
+
+vi.mock("@core/api", () => ({ resolveProvider: vi.fn().mockReturnValue("openai") }))
+vi.mock("@/services/telemetry", () => ({ telemetryService: telemetryMocks }))
+
+function createConfig(remoteWorkflowEnabled: boolean, remoteSkillEnabled = true): TaskConfig {
 	return {
 		cwd: "E:/workspace/project",
+		ulid: "task-123",
 		capabilityToggles: createTaskCapabilityToggles({
 			remoteWorkflowToggles: { "review-release": remoteWorkflowEnabled },
+			remoteSkillsToggles: { reviewer: remoteSkillEnabled },
 		}),
+		api: {
+			getModel: vi.fn().mockReturnValue({ id: "test-model" }),
+		},
 		services: {
 			mcpHub: {
 				getServers: vi.fn().mockReturnValue([]),
@@ -22,9 +35,17 @@ function createConfig(remoteWorkflowEnabled: boolean): TaskConfig {
 							alwaysEnabled: false,
 						},
 					],
+					remoteGlobalSkills: [
+						{
+							name: "reviewer",
+							contents: "---\nname: reviewer\ndescription: Review code\n---\nReview carefully.",
+							alwaysEnabled: false,
+						},
+					],
 				}),
 				getGlobalStateKey: vi.fn().mockReturnValue({ "review-release": true }),
-				getGlobalSettingsKey: vi.fn().mockReturnValue({}),
+				getGlobalSettingsKey: vi.fn((key: string) => (key === "mode" ? "act" : {})),
+				getApiConfiguration: vi.fn().mockReturnValue({ actModeProfile: "test-profile" }),
 				getWorkspaceStateKey: vi.fn().mockReturnValue({}),
 			},
 		},
@@ -44,6 +65,32 @@ describe("LoadCapabilityService task capability scope", () => {
 
 		expect(payload.status).toBe("completed")
 		expect(payload.body).toBe("Check the release.")
+	})
+
+	it("does not load a remote skill disabled in the current task", async () => {
+		telemetryMocks.captureSkillUsed.mockClear()
+		const payload = await new LoadCapabilityService().load("skill", "reviewer", createConfig(true, false))
+
+		expect(payload.status).toBe("failed")
+		expect(payload.error).toContain("Unknown or disabled skill")
+		expect(telemetryMocks.captureSkillUsed).not.toHaveBeenCalled()
+	})
+
+	it("loads remote Skill instructions and records telemetry on the single success path", async () => {
+		telemetryMocks.captureSkillUsed.mockClear()
+		const payload = await new LoadCapabilityService().load("skill", "reviewer", createConfig(true))
+
+		expect(payload.status).toBe("completed")
+		expect(payload.body).toBe("Review carefully.")
+		expect(telemetryMocks.captureSkillUsed).toHaveBeenCalledWith({
+			ulid: "task-123",
+			skillName: "reviewer",
+			skillSource: "global",
+			skillsAvailableGlobal: 1,
+			skillsAvailableProject: 0,
+			provider: "openai",
+			modelId: "test-model",
+		})
 	})
 
 	it("does not load an MCP tool disabled in the current task", async () => {

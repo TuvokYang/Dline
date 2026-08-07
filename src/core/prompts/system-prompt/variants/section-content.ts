@@ -13,7 +13,6 @@ export type { SystemSectionContentConfig } from "./section-content-config"
 const STANDARD_AGENT_ROLE = getPrompt("agentRole", "main")
 const STANDARD_CAPABILITIES = getPrompt("capabilities", "main")
 const STANDARD_FEEDBACK = getPrompt("variants.standard", "feedback")
-const SHARED_SKILLS = getPrompt("skills", "main")
 const SHARED_SYSTEM_INFO = getPrompt("systemInfo", "main")
 const SHARED_USER_INSTRUCTIONS = getPrompt("userInstructions", "main")
 const SHARED_FOCUS_CHAIN = getPrompt("focusChain", "main")
@@ -31,7 +30,6 @@ export function createStandardSystemSections(config: SystemSectionContentConfig)
 		"task-progress": config.focusChainEnabled ? SHARED_TASK_PROGRESS : "",
 		"act-vs-plan": createStandardActVsPlan(),
 		capabilities: STANDARD_CAPABILITIES,
-		skills: config.skillsEnabled ? SHARED_SKILLS : "",
 		feedback: config.focusChainEnabled ? STANDARD_FEEDBACK : "",
 		rules: createStandardRules(config),
 		"system-info": SHARED_SYSTEM_INFO,
@@ -49,7 +47,6 @@ export function createLiteSystemSections(config: SystemSectionContentConfig): Sy
 		capabilities: config.yoloModeEnabled
 			? withoutPromptFragments(LITE_CAPABILITIES, [LITE_CAPABILITIES_YOLO_QUESTION_GUIDANCE])
 			: LITE_CAPABILITIES,
-		skills: "",
 		rules: createLiteRules(config),
 		"system-info": SHARED_SYSTEM_INFO,
 		objective: createLiteObjective(),

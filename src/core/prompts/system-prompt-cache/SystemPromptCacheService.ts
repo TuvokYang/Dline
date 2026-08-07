@@ -15,7 +15,7 @@ import type {
 import type { ClineTool } from "@shared/tools"
 import { hashPromptContent } from "./hash"
 
-export const SYSTEM_PROMPT_CONTRACT_VERSION = 2
+export const SYSTEM_PROMPT_CONTRACT_VERSION = 3
 
 export interface BuiltSystemPrompt {
 	readonly systemPrompt: string
@@ -45,6 +45,7 @@ export interface RefreshSystemPromptInput extends GetOrCreatePromptInput {
 function renderCapabilitiesForProfile(capabilities: CapabilitiesSnapshot, profile: PromptProfile): string {
 	return renderCapabilitiesSection(capabilities, {
 		exclude: profile === PromptProfile.Lite ? ["skills"] : [],
+		profile,
 	})
 }
 

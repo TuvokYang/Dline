@@ -129,6 +129,23 @@ describe("ToolPromptGenerator", () => {
 		expect(names).not.toContain(ClineDefaultTool.GENERATE_EXPLANATION)
 	})
 
+	it("exposes load_skill as the only Skill loading tool in Standard native projections", () => {
+		const tools = new ToolPromptGenerator().generate(PromptProfile.Standard, {
+			...context,
+			skills: [{ name: "review", description: "Review code", path: "/skills/review/SKILL.md", source: "project" }],
+		})
+		const names = (tools ?? []).flatMap((tool) =>
+			"function" in tool && tool.function?.name
+				? [tool.function.name]
+				: "name" in tool && typeof tool.name === "string"
+					? [tool.name]
+					: [],
+		)
+
+		expect(names).toContain("load_skill")
+		expect(names).not.toContain("use_skill")
+	})
+
 	it("keeps explicit compaction instructions on the stable cached native projection", () => {
 		const generator = new ToolPromptGenerator()
 		const defaultTools = generator.generate(PromptProfile.Standard, context) ?? []
@@ -144,6 +161,25 @@ describe("ToolPromptGenerator", () => {
 				expect.objectContaining({ function: expect.objectContaining({ name: ClineDefaultTool.SUMMARIZE_TASK }) }),
 			]),
 		)
+	})
+
+	it("filters retired use_skill schemas from frozen native projections", () => {
+		const generator = new ToolPromptGenerator()
+		const staleTools = [
+			{ type: "function", function: { name: "use_skill" } },
+			{ type: "function", function: { name: ClineDefaultTool.LOAD_SKILL } },
+		] as NonNullable<ReturnType<ToolPromptGenerator["generate"]>>
+
+		const selected = generator.generateToolsForRequest(PromptProfile.Standard, context, staleTools)
+		const names = (selected ?? []).flatMap((tool) =>
+			"function" in tool && tool.function?.name
+				? [tool.function.name]
+				: "name" in tool && typeof tool.name === "string"
+					? [tool.name]
+					: [],
+		)
+
+		expect(names).toEqual([ClineDefaultTool.LOAD_SKILL])
 	})
 })
 

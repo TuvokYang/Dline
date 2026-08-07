@@ -20,7 +20,6 @@ export const STANDARD_TOOL_IDS = [
 	ClineDefaultTool.MCP_USE,
 	ClineDefaultTool.MCP_ACCESS,
 	ClineDefaultTool.MCP_DOCS,
-	ClineDefaultTool.USE_SKILL,
 	ClineDefaultTool.LOAD_MCP,
 	ClineDefaultTool.LOAD_SKILL,
 	ClineDefaultTool.LOAD_WORKFLOW,

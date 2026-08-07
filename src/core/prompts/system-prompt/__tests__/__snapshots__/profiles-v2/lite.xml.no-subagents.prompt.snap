@@ -300,9 +300,15 @@ Usage:
 # CAPABILITIES
 
 ## MCP
+MCP tools connect Dline to external services, data sources, and specialized operations that are not provided by built-in tools. This Lite profile lists connected MCP tools for awareness but does not expose MCP metadata-loading or execution tools; switch to a profile that exposes them when an MCP operation is required.
+
+The connected MCP tools known to the current task are listed below:
 - `Snapshot MCP.echo`: Returns the complete provided text.
 
 ## Workflows
+Workflows provide reusable, ordered procedures for multi-step operations so required stages, checks, and handoffs are followed consistently. If `<explicit_instructions type="workflow">` is present, follow the provided steps in order.
+
+The Workflows available to the current task are listed below:
 - `release`: Run the release workflow.
 
 # GLOBAL RULES

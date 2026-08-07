@@ -30,7 +30,6 @@ import statusUpdate from "./statusUpdate"
 import subagent from "./subagent"
 import toolHandlers from "./toolHandlers"
 import useMcpTool from "./useMcpTool"
-import useSkill from "./useSkill"
 import webFetch from "./webFetch"
 import webSearch from "./webSearch"
 import writeToFile from "./writeToFile"
@@ -121,7 +120,6 @@ export const toolPromptModules = [
 	defineLegacyModule("useMcpTool", "tools", useMcpTool, {
 		invalidMcpToolArgumentError: createRuntimeContract("SERVER_NAME", "TOOL_NAME"),
 	}),
-	defineLegacyModule("useSkill", "tools", useSkill),
 	defineLegacyModule("webFetch", "tools", webFetch),
 	defineLegacyModule("webSearch", "tools", webSearch),
 	defineLegacyModule("xmlProjection", "tools", xmlProjection, {

@@ -62,11 +62,11 @@ const EXPECTED_NAMESPACES = [
 	"toolUseTools",
 	"useMcpTool",
 	"userInstructions",
-	"useSkill",
 	"variants.lite",
 	"variants.standard",
 	"webFetch",
 	"webSearch",
+	"workflows",
 	"writeToFile",
 	"xmlProjection",
 ] as const
@@ -117,7 +117,7 @@ describe("prompt asset inventory", () => {
 
 	it("locks the static domain group order and coverage", () => {
 		expect(englishPromptGroups.map((group) => group.name)).toEqual(["system", "tools", "commands", "variants"])
-		expect(englishPromptGroups.map((group) => group.modules.length)).toEqual([23, 34, 3, 2])
+		expect(englishPromptGroups.map((group) => group.modules.length)).toEqual([24, 33, 3, 2])
 		expect(englishPromptGroups.flatMap((group) => group.modules)).toHaveLength(62)
 		expect(englishPromptGroups[3].modules.map((module) => module.name)).toEqual(["variants.standard", "variants.lite"])
 		for (const group of englishPromptGroups) {
@@ -161,6 +161,7 @@ describe("prompt asset inventory", () => {
 			"toolUseIndex.ts",
 			"toolUseTools.ts",
 			"userInstructions.ts",
+			"workflows.ts",
 		]
 
 		await Promise.all(
@@ -228,7 +229,6 @@ describe("prompt asset inventory", () => {
 			"subagent.ts",
 			"toolHandlers.ts",
 			"useMcpTool.ts",
-			"useSkill.ts",
 			"webFetch.ts",
 			"webSearch.ts",
 			"writeToFile.ts",

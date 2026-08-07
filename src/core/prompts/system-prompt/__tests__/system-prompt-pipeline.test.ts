@@ -69,7 +69,6 @@ describe("canonical system prompt pipeline", () => {
 			webToolsEnabled: false,
 			localWebSearchEnabled: false,
 			serverWebSearchEnabled: false,
-			skillsEnabled: false,
 			userInstructionsEnabled: true,
 		})
 		expect(Object.isFrozen(config)).toBe(true)
@@ -146,7 +145,6 @@ describe("canonical system prompt pipeline", () => {
 			CLARIFY_PERMISSION: expect.stringContaining("ask the user clarifying questions"),
 			PARALLEL_TOOL_POLICY: expect.stringContaining("multiple independent tools"),
 			CUSTOM_INSTRUCTIONS: "Preferred language: zh-CN.\n\nGlobal project rules.",
-			SKILLS_LIST: '  - "review": Review code changes.',
 			OS: "macOS",
 			IDE: "TestIde",
 		})

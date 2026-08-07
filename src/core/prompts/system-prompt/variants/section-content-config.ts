@@ -6,6 +6,5 @@ export interface SystemSectionContentConfig {
 	readonly subagentRun: boolean
 	readonly focusChainEnabled: boolean
 	readonly yoloModeEnabled: boolean
-	readonly skillsEnabled: boolean
 	readonly userInstructionsEnabled: boolean
 }

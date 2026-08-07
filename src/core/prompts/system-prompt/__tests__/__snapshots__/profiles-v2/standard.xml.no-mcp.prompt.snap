@@ -314,28 +314,19 @@ Usage:
 <task_progress></task_progress>
 </web_search>
 
-## use_skill
-Description: Load and activate a skill by name. Skills provide specialized instructions for specific tasks. Use this tool ONCE when a user's request matches one of the available skill descriptions shown in the SKILLS section of your system prompt. After activation, follow the skill's instructions directly - do not call use_skill again.
-Parameters:
-- skill_name: (required) The name of the skill to activate (must match exactly one of the available skill names)
-Usage:
-<use_skill>
-<skill_name></skill_name>
-</use_skill>
-
 ## load_skill
-Description: Load detailed read-only metadata for one named capability. The name parameter must match an advertised capability exactly. This tool does not discover capability lists, modify cached system prompts, refresh metadata, or execute the capability.
+Description: Load the full instructions for one advertised Skill. Call this tool once with the exact Skill name, then follow the returned instructions directly for the current task. Do not call it when the Skill was already injected through explicit instructions.
 Parameters:
-- name: (required) The exact capability name to load.
+- name: (required) The exact advertised Skill name whose full instructions should be loaded.
 Usage:
 <load_skill>
 <name></name>
 </load_skill>
 
 ## load_workflow
-Description: Load detailed read-only metadata for one named capability. The name parameter must match an advertised capability exactly. This tool does not discover capability lists, modify cached system prompts, refresh metadata, or execute the capability.
+Description: Load the full procedure for one advertised Workflow. Call this tool once with the exact Workflow name, then follow the returned steps in order. Do not call it when the Workflow was already injected through explicit instructions.
 Parameters:
-- name: (required) The exact capability name to load.
+- name: (required) The exact advertised Workflow name whose full procedure should be loaded.
 Usage:
 <load_workflow>
 <name></name>
@@ -873,26 +864,22 @@ In this mode, focus on investigation, design, and planning. You may read/search 
 - You have access to MCP servers that may provide additional tools and resources. Each server may provide different capabilities that you can use to accomplish tasks more effectively.
 
 ## Skills
+Skills provide task-specific methods, constraints, and best practices so work follows a proven domain approach instead of generic reasoning. Match the request to an advertised description. Use `load_skill` once with the exact name, then follow the returned instructions directly for the current task. If `<explicit_instructions type="skill">` is already present, follow those instructions directly and do not call `load_skill` again.
+
+The Skills available to the current task are listed below:
 - `review`: Review complete Prompt differences.
 
 ## Workflows
+Workflows provide reusable, ordered procedures for multi-step operations so required stages, checks, and handoffs are followed consistently. Use `load_workflow` once with the exact advertised name, then follow the returned steps in order. If `<explicit_instructions type="workflow">` is already present, follow those instructions directly and do not call `load_workflow` again.
+
+The Workflows available to the current task are listed below:
 - `release`: Run the release workflow.
 
 ## Subagents
+Subagents delegate self-contained research or analysis to isolated workers with explicit tool and Skill visibility, preserving the main task's context and enabling parallel progress when subtasks are independent. Use `use_subagent` for one default or named subagent. Use `use_subagents` for one to five parallel default subtasks.
+
+The Subagents available to the current task are listed below:
 - `reviewer`: Review implementation changes.
-Use `use_subagent` for one default or named subagent. Use `use_subagents` for one to five parallel default subtasks.
-
-# SKILLS
-
-The following skills provide specialized instructions for specific tasks. When a user's request matches a skill description, use the use_skill tool to load and activate the skill.
-
-Available skills:
-  - "review": Review complete Prompt differences.
-
-To use a skill:
-1. Match the user's request to a skill based on its description
-2. Call use_skill with the skill_name parameter set to the exact skill name
-3. Follow the instructions returned by the tool
 
 # FEEDBACK
 

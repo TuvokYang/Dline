@@ -165,17 +165,60 @@ describe("complete explicit-profile snapshot matrix", () => {
 					expect(generated.systemPrompt).not.toContain("\n====\n")
 					expect(generated.systemPrompt).toContain(profile === "standard" ? "# TOOL USE" : "# TOOLS")
 					expect(generated.systemPrompt).toContain("# CAPABILITIES")
+					expect(generated.systemPrompt).not.toMatch(/^# SKILLS$/gm)
 					expect(generated.systemPrompt).toContain("# USER'S CUSTOM INSTRUCTIONS")
-					expect(generated.systemPrompt).toContain("## Workflows\n- `release`: Run the release workflow.")
+					expect(generated.systemPrompt).toContain("## Workflows\n")
+					expect(generated.systemPrompt).toContain(
+						"Workflows provide reusable, ordered procedures for multi-step operations",
+					)
+					expect(generated.systemPrompt).toContain("The Workflows available to the current task are listed below:")
+					expect(generated.systemPrompt).toContain("- `release`: Run the release workflow.")
+					expect(
+						generated.systemPrompt.indexOf("The Workflows available to the current task are listed below:"),
+					).toBeLessThan(generated.systemPrompt.indexOf("- `release`: Run the release workflow."))
+					if (profile === "standard") {
+						expect(generated.systemPrompt.match(/^## Skills$/gm)).toHaveLength(1)
+						expect(generated.systemPrompt).toContain(
+							"Skills provide task-specific methods, constraints, and best practices",
+						)
+						expect(generated.systemPrompt).toContain("The Skills available to the current task are listed below:")
+						expect(generated.systemPrompt).toContain("Use `load_skill` once")
+						expect(generated.systemPrompt).toContain("Use `load_workflow` once")
+						expect(generated.systemPrompt).not.toContain("use_skill")
+					} else {
+						expect(generated.systemPrompt).not.toMatch(/^## Skills$/gm)
+						expect(generated.systemPrompt).not.toContain("load_skill")
+						expect(generated.systemPrompt).not.toContain("load_workflow")
+					}
 					if (snapshotCase.id === "no-mcp") {
 						expect(generated.systemPrompt).not.toContain("## MCP")
 					} else {
-						expect(generated.systemPrompt).toContain("## MCP\n- `Snapshot MCP.echo`")
+						expect(generated.systemPrompt).toContain("## MCP\n")
+						expect(generated.systemPrompt).toContain("MCP tools connect Dline to external services")
+						const mcpListIntroduction =
+							profile === "standard"
+								? "The MCP tools available to the current task are listed below:"
+								: "The connected MCP tools known to the current task are listed below:"
+						expect(generated.systemPrompt).toContain(mcpListIntroduction)
+						expect(generated.systemPrompt).toContain("- `Snapshot MCP.echo`: Returns the complete provided text.")
+						expect(generated.systemPrompt.indexOf(mcpListIntroduction)).toBeLessThan(
+							generated.systemPrompt.indexOf("- `Snapshot MCP.echo`: Returns the complete provided text."),
+						)
+						if (profile === "standard") {
+							expect(generated.systemPrompt).toContain("Use `load_mcp` to inspect")
+						} else {
+							expect(generated.systemPrompt).not.toContain("`load_mcp`")
+							expect(generated.systemPrompt).not.toContain("`use_mcp_tool`")
+						}
 					}
 					if (snapshotCase.id === "no-subagents") {
 						expect(generated.systemPrompt).not.toContain("## Subagents")
 					} else {
-						expect(generated.systemPrompt).toContain("## Subagents\n- `reviewer`: Review implementation changes.")
+						expect(generated.systemPrompt).toContain("## Subagents\n")
+						expect(generated.systemPrompt).toContain("Subagents delegate self-contained research or analysis")
+						expect(generated.systemPrompt).toContain("Use `use_subagents` for one to five parallel default subtasks.")
+						expect(generated.systemPrompt).toContain("The Subagents available to the current task are listed below:")
+						expect(generated.systemPrompt).toContain("- `reviewer`: Review implementation changes.")
 					}
 					expect(generated.systemPrompt).toContain("Local Dline rules.")
 					expect(generated.systemPrompt).toContain("Local Cursor rules.")

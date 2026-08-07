@@ -4,7 +4,7 @@ sidebarTitle: "Subagents"
 description: "Run parallel research agents to explore your codebase without filling the main agent's context window."
 ---
 
-Subagents let Cline spawn focused research agents that run in parallel. Each subagent gets its own prompt and context window, explores the codebase independently, and returns a detailed report to the main agent. This keeps the main agent's context clean while gathering broad information fast.
+Subagents 让 Dline 启动相互隔离的研究代理。每个 Subagent 都有独立的提示词、上下文窗口、工具白名单和可见 Skill 集合，并将结果返回主代理，从而避免把全部调查材料塞入主上下文。
 
 <Tip>
   Subagents is an experimental feature. Behavior may change in future releases.
@@ -12,11 +12,11 @@ Subagents let Cline spawn focused research agents that run in parallel. Each sub
 
 ## How It Works
 
-When Cline uses the `use_subagents` tool, it launches independent agents simultaneously. Each one:
+Dline 可以使用 `use_subagent` 启动一个 default 或具名 Subagent，也可以使用 `use_subagents` 启动一到五个并行的 default 子任务。并行入口支持 1-N，而不是强制至少两个。每个 Subagent：
 
 - Gets its own prompt describing what to investigate
 - Runs with a separate context window and token budget
-- Can read files, search code, list directories, run read-only commands, and use skills
+- 可以读取文件、搜索代码、列出目录、运行只读命令，并按可见清单使用 `load_skill`
 - Cannot edit files, use the browser, access MCP servers, or spawn nested subagents
 - Returns a result focused on the most relevant file paths for the main agent to read next
 
@@ -58,9 +58,9 @@ Subagents are read-only research agents. Here is what they have access to:
 | `search_files` | Regex search across files |
 | `list_code_definition_names` | List top-level classes, functions, and methods |
 | `execute_command` | Run read-only commands (`ls`, `grep`, `git log`, `git diff`, etc.) |
-| `use_skill` | Load and activate skills |
+| `load_skill` | 按精确名称加载一次 Skill 完整指令，并直接遵循返回内容 |
 
-Subagents cannot write files, apply patches, use the browser, access MCP servers, or perform web searches. They also cannot spawn their own subagents.
+内置 default Subagent 不能写文件、应用补丁、使用浏览器、访问 MCP Server 或执行 Web Search，也不能继续派生 Subagent。具名 Subagent 的工具边界由其 YAML `tools` 白名单显式定义；`skills` 字段只限制可见 Skill 清单，不会预加载 Skill 正文。
 
 <Note>
   Commands run by subagents execute in the background and are restricted to read-only operations. Subagents will not run commands that modify files or system state.

@@ -99,7 +99,25 @@ export class LoadCapabilityHandler {
 			const value = typeof detail.value === "string" ? detail.value : JSON.stringify(detail.value, null, 2)
 			return `- ${detail.label}: ${value}`
 		})
-		const body = payload.body ? `\n\n## Body\n${payload.body}` : ""
-		return `# Loaded ${payload.kind}: ${payload.name}\n\n${payload.summary ?? "No summary provided."}\n\n${detailLines.join("\n")}${body}`
+		const sections = [
+			`# Loaded ${payload.kind}: ${payload.name}`,
+			payload.summary ?? "No summary provided.",
+			detailLines.join("\n"),
+		].filter(Boolean)
+
+		if (payload.body) {
+			sections.push(payload.kind === "workflow" ? `## Procedure\n${payload.body}` : `## Instructions\n${payload.body}`)
+		}
+		if (payload.kind === "skill") {
+			sections.push(
+				`Follow these instructions directly for the current task. Do not call load_skill again for '${payload.name}'.`,
+			)
+		} else if (payload.kind === "workflow") {
+			sections.push(`Follow these steps in order. Do not call load_workflow again for '${payload.name}'.`)
+		} else {
+			sections.push("This metadata load did not execute the MCP tool. Use use_mcp_tool if execution is required.")
+		}
+
+		return sections.join("\n\n")
 	}
 }

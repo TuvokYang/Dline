@@ -6,7 +6,6 @@ export const SYSTEM_SECTION_IDS = [
 	"editing-files",
 	"act-vs-plan",
 	"capabilities",
-	"skills",
 	"feedback",
 	"rules",
 	"system-info",

@@ -18,6 +18,7 @@ const TOOL_RUNTIME_KEYS = [
 	"TERMINAL_COMMAND_TIMEOUT_SECONDS",
 ] as const
 const TOOL_RUNTIME_RULE = { stages: ["runtime"] as const, required: true }
+const RETIRED_DEFAULT_TOOL_NAMES = new Set<string>([ClineDefaultTool.SUMMARIZE_TASK, "use_skill"])
 const TOOL_PROJECTION_CONTRACT: PromptContract = {
 	variables: Object.fromEntries(TOOL_RUNTIME_KEYS.map((key) => [key, TOOL_RUNTIME_RULE])),
 }
@@ -103,9 +104,12 @@ export class ToolPromptGenerator {
 		return [...builtInTools, ...mcpTools]
 	}
 
-	/** Removes stale control-tool schemas from a frozen projection loaded from an older task cache. */
+	/** Removes retired default-tool schemas from a frozen projection loaded from an older task cache. */
 	public filterCachedDefaultTools(tools: readonly ClineTool[] | undefined): readonly ClineTool[] | undefined {
-		return tools?.filter((tool) => projectedToolName(tool) !== ClineDefaultTool.SUMMARIZE_TASK)
+		return tools?.filter((tool) => {
+			const name = projectedToolName(tool)
+			return name === undefined || !RETIRED_DEFAULT_TOOL_NAMES.has(name)
+		})
 	}
 
 	/** Returns the frozen ordinary tool projection for every request, including explicit control instructions. */

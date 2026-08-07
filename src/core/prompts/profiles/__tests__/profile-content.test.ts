@@ -67,6 +67,22 @@ describe("standard and lite profile content", () => {
 		expect(text).not.toMatch(/\b(?:XS|compact|native-next-gen)\b/i)
 	})
 
+	it("keeps Skill guidance inside the capability catalog without a duplicate top-level section", async () => {
+		const text = await generateProfile(PromptProfile.Standard, {
+			capabilities: {
+				mcp: [],
+				skills: [{ name: "review", description: "Review code changes." }],
+				workflows: [{ name: "release", description: "Run the release workflow." }],
+				subagents: [],
+			},
+		})
+
+		expect(text.match(/^## Skills$/gm)).toHaveLength(1)
+		expect(text).not.toMatch(/^# SKILLS$/gm)
+		expect(text).toContain("Use `load_skill` once")
+		expect(text.indexOf("Use `load_skill` once")).toBeLessThan(text.indexOf("`review`: Review code changes."))
+	})
+
 	it("generates the compact Lite candidate without legacy profile identity", async () => {
 		const text = await generateProfile(PromptProfile.Lite)
 

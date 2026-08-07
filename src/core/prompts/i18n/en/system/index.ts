@@ -24,6 +24,7 @@ import toolUseGuidelines from "./toolUseGuidelines"
 import toolUseIndex from "./toolUseIndex"
 import toolUseTools from "./toolUseTools"
 import userInstructions from "./userInstructions"
+import workflows from "./workflows"
 
 export const systemPromptModules = [
 	defineLegacyModule("actVsPlanMode", "system", actVsPlanMode),
@@ -33,7 +34,7 @@ export const systemPromptModules = [
 	}),
 	defineLegacyModule("capabilityCatalog", "system", capabilityCatalog, {
 		entry: createRuntimeContract("NAME", "DESCRIPTION"),
-		group: createRuntimeContract("TITLE", "ENTRIES"),
+		group: createRuntimeContract("TITLE", "GUIDANCE", "ENTRIES"),
 	}),
 	defineLegacyModule("contextManagement", "system", contextManagement, {
 		summarizeMain: createRuntimeContract(
@@ -58,8 +59,6 @@ export const systemPromptModules = [
 	defineLegacyModule("runtimeEnvironment", "system", runtimeEnvironment, {
 		multiRootWorkingDirectory: createRuntimeContract("ROOTS", "CWD"),
 		multiRootHint: createRuntimeContract("ROOTS"),
-		skillListEntry: createRuntimeContract("NAME", "DESCRIPTION"),
-		runtimeSkillListEntry: createRuntimeContract("NAME", "DESCRIPTION"),
 		connectedMcpServers: createRuntimeContract("NAMES"),
 	}),
 	defineLegacyModule("responses", "system", responses, {
@@ -81,7 +80,7 @@ export const systemPromptModules = [
 		continuationWithUserText: createRuntimeContract("PROVENANCE", "USER_TEXT"),
 	}),
 	defineLegacyModule("rules", "system", rules),
-	defineLegacyModule("skills", "system", skills, { main: createRuntimeContract("SKILLS_LIST") }),
+	defineLegacyModule("skills", "system", skills),
 	defineLegacyModule("systemInfo", "system", systemInfo, {
 		main: createRuntimeContract("OS", "IDE", "SHELL", "HOME_DIR", "WORKSPACE_TITLE", "WORKING_DIR"),
 	}),
@@ -102,5 +101,6 @@ export const systemPromptModules = [
 		),
 	}),
 	defineLegacyModule("toolUseTools", "system", toolUseTools),
+	defineLegacyModule("workflows", "system", workflows),
 	defineLegacyModule("userInstructions", "system", userInstructions, { main: createRuntimeContract("CUSTOM_INSTRUCTIONS") }),
 ] as const

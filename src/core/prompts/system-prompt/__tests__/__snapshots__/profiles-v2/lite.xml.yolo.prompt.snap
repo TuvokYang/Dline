@@ -336,14 +336,22 @@ Usage:
 # CAPABILITIES
 
 ## MCP
+MCP tools connect Dline to external services, data sources, and specialized operations that are not provided by built-in tools. This Lite profile lists connected MCP tools for awareness but does not expose MCP metadata-loading or execution tools; switch to a profile that exposes them when an MCP operation is required.
+
+The connected MCP tools known to the current task are listed below:
 - `Snapshot MCP.echo`: Returns the complete provided text.
 
 ## Workflows
+Workflows provide reusable, ordered procedures for multi-step operations so required stages, checks, and handoffs are followed consistently. If `<explicit_instructions type="workflow">` is present, follow the provided steps in order.
+
+The Workflows available to the current task are listed below:
 - `release`: Run the release workflow.
 
 ## Subagents
+Subagents delegate self-contained research or analysis to isolated workers with explicit tool and Skill visibility, preserving the main task's context and enabling parallel progress when subtasks are independent. Use `use_subagent` for one default or named subagent. Use `use_subagents` for one to five parallel default subtasks.
+
+The Subagents available to the current task are listed below:
 - `reviewer`: Review implementation changes.
-Use `use_subagent` for one default or named subagent. Use `use_subagents` for one to five parallel default subtasks.
 
 # GLOBAL RULES
 - One tool per message; wait for result. Never assume outcomes.

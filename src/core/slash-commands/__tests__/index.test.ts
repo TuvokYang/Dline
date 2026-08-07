@@ -372,8 +372,42 @@ describe("slash-commands", () => {
 		// through to workflow checking. The core MCP functionality is covered above.
 	})
 
+	describe("parseSlashCommands task Skill scope", () => {
+		it("injects enabled remote Skill instructions exactly once without a load_skill call", async () => {
+			const result = await parseSlashCommands(
+				"<task>/skills:reviewer Check this change.</task>",
+				{},
+				{},
+				"test-ulid",
+				undefined,
+				true,
+				createProviderInfo(128_000, "gpt-5"),
+				undefined,
+				{
+					cwd: "",
+					capabilityToggles: createTaskCapabilityToggles({ remoteSkillsToggles: { reviewer: true } }),
+					remoteSkills: [
+						{
+							name: "reviewer",
+							alwaysEnabled: false,
+							contents: "---\nname: reviewer\ndescription: Review code\n---\nReview carefully.",
+						},
+					],
+					remoteWorkflows: [],
+				},
+			)
+
+			expect(result.processedText).to.include('<explicit_instructions type="skill" name="reviewer"')
+			expect(result.processedText.split("Review carefully.")).to.have.length(2)
+			expect(result.processedText).to.include("Check this change.")
+			expect(result.processedText).to.not.include("/skills:reviewer")
+			expect(result.processedText).to.not.include("load_skill")
+			expect(result).to.not.have.property("requestToolIds")
+		})
+	})
+
 	describe("parseSlashCommands task workflow scope", () => {
-		it("injects an enabled remote workflow from the current task context", async () => {
+		it("injects enabled remote Workflow instructions exactly once without a load_workflow call", async () => {
 			const result = await parseSlashCommands(
 				"<task>/workflow:review-release</task>",
 				{},
@@ -400,7 +434,9 @@ describe("slash-commands", () => {
 			)
 
 			expect(result.processedText).to.include('<explicit_instructions type="workflow" name="review-release"')
-			expect(result.processedText).to.include("Review the release marker.")
+			expect(result.processedText.split("Review the release marker.")).to.have.length(2)
+			expect(result.processedText).to.not.include("load_workflow")
+			expect(result).to.not.have.property("requestToolIds")
 		})
 
 		it("does not inject a remote workflow disabled in the current task context", async () => {

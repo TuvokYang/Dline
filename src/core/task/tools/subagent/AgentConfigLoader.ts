@@ -44,6 +44,9 @@ function normalizeToolName(toolName: string): ClineDefaultTool {
 	if (!trimmed) {
 		throw new Error("Tool name cannot be empty.")
 	}
+	if (trimmed === "use_skill") {
+		return ClineDefaultTool.LOAD_SKILL
+	}
 	const asDefaultTool = trimmed as ClineDefaultTool
 	if (Object.values(ClineDefaultTool).includes(asDefaultTool)) {
 		return asDefaultTool
@@ -378,8 +381,8 @@ System prompt body for the subagent.
 Read-only:
   read_file, search_files, list_files, list_code_definition_names
   browser_action, ask_followup_question, web_fetch, web_search
-  use_skill, load_mcp_documentation, access_mcp_resource
-  use_mcp_tool, make_plan, generate_explanation, focus_chain
+  load_skill, load_mcp, load_workflow, load_mcp_documentation
+  access_mcp_resource, use_mcp_tool, make_plan, generate_explanation, focus_chain
 
 Write (⚠️ use with caution — subagent can modify files):
   write_to_file, replace_in_file, execute_command
@@ -388,7 +391,7 @@ Write (⚠️ use with caution — subagent can modify files):
 ## Default Subagent (when no YAML is configured)
 Subagents use these defaults if no YAML overrides are present:
   Tools: read_file, search_files, list_files, list_code_definition_names,
-         execute_command (readonly commands only), use_skill, attempt_completion
+         execute_command (readonly commands only), load_skill, attempt_completion
   Profile: default act profile
   System prompt: research subagent — explore codebase, read files,
                  run readonly commands, report findings. No file modifications.
