@@ -1674,6 +1674,25 @@ export class Task {
 		)
 	}
 
+	/** Persist the canonical fallback result for a skipped or cancelled terminal block exactly once. */
+	private async ensureTerminalToolResult(block: ToolUse, phase: BlockPhase): Promise<void> {
+		const reason =
+			phase === BlockPhase.SKIPPED
+				? "The tool was skipped after an earlier interaction was rejected."
+				: phase === BlockPhase.CANCELLED
+					? "The tool was cancelled before a durable result was recorded."
+					: undefined
+		if (!reason) return
+
+		const { dline_tid: dlineTid, function_id: functionId } = block
+		if (!dlineTid || !functionId) {
+			throw new Error(`Terminal tool block is missing canonical identity: tool=${block.name}`)
+		}
+		if (this.hasPendingToolResult(dlineTid, functionId)) return
+
+		await this.toolExecutor.commitInterruptedToolResult(block, reason)
+	}
+
 	/** Consume one history-only interaction after its causal response has been durably accepted. */
 	private async continueRestoredInteraction(context: DetachedInteractionContinuationContext): Promise<void> {
 		try {
@@ -1740,20 +1759,11 @@ export class Task {
 				if (!context.isCurrent()) return
 			}
 			for (const candidate of this.taskRuntime.getState().turn?.blocks ?? []) {
-				if (
-					(candidate.phase !== BlockPhase.SKIPPED && candidate.phase !== BlockPhase.CANCELLED) ||
-					this.hasPendingToolResult(candidate.dlineTid, candidate.functionId)
-				) {
-					continue
-				}
-				const skippedBlock = blocks.find((item) => item.dline_tid === candidate.dlineTid)
-				if (!skippedBlock) throw new Error("resume_skipped_block_missing")
-				await this.toolExecutor.commitInterruptedToolResult(
-					skippedBlock,
-					candidate.phase === BlockPhase.SKIPPED
-						? "The tool was skipped after an earlier interaction was rejected."
-						: "The tool was cancelled before a durable result was recorded.",
-				)
+				if (candidate.phase !== BlockPhase.SKIPPED && candidate.phase !== BlockPhase.CANCELLED) continue
+
+				const terminalBlock = blocks.find((item) => item.dline_tid === candidate.dlineTid)
+				if (!terminalBlock) throw new Error("resume_terminal_block_missing")
+				await this.ensureTerminalToolResult(terminalBlock, candidate.phase)
 				if (!context.isCurrent()) return
 			}
 
@@ -3531,6 +3541,14 @@ export class Task {
 			if (!firstChunk.done) {
 				this.endAutoRetrySequence()
 			}
+			// A provider stream that ends without yielding any chunk (e.g. a
+			// Responses stream that only emitted codex.rate_limits / metadata /
+			// response.failed events) must fail explicitly. Yielding undefined
+			// here would surface as "Cannot read properties of undefined
+			// (reading 'type')" in the stream normalizer downstream.
+			if (firstChunk.done) {
+				throw new Error("API stream ended without producing any content")
+			}
 			yield firstChunk.value
 			this.markBackgroundResultsInjected()
 			this.markBackgroundResultsConsumed()
@@ -3953,6 +3971,7 @@ export class Task {
 				throw new Error(`Canonical runtime block is missing for tool=${tool.name}`)
 			}
 			if (this.isTerminalRuntimeBlock(runtimeBlock.phase)) {
+				await this.ensureTerminalToolResult(tool, runtimeBlock.phase)
 				this.markFinalizedToolPresented(tool)
 				continue
 			}
@@ -3974,6 +3993,7 @@ export class Task {
 				throw new Error(`Tool handler cannot start its approval interaction: tool=${tool.name}`)
 			}
 			if (this.isTerminalRuntimeBlock(runtimeBlock.phase)) {
+				await this.ensureTerminalToolResult(tool, runtimeBlock.phase)
 				this.markFinalizedToolPresented(tool)
 				continue
 			}
@@ -4004,7 +4024,12 @@ export class Task {
 
 			if (this.controller.task?.taskId !== this.taskId) return
 			runtimeBlock = this.taskRuntime.getState().turn?.blocks.find((block) => block.dlineTid === dlineTid)
-			if (!runtimeBlock || this.isTerminalRuntimeBlock(runtimeBlock.phase)) {
+			if (!runtimeBlock) {
+				this.markFinalizedToolPresented(tool)
+				continue
+			}
+			if (this.isTerminalRuntimeBlock(runtimeBlock.phase)) {
+				await this.ensureTerminalToolResult(tool, runtimeBlock.phase)
 				this.markFinalizedToolPresented(tool)
 				continue
 			}
@@ -4519,14 +4544,21 @@ export class Task {
 					await this.diffViewProvider.revertChanges() // closes diff view
 				}
 
-				// if last message is a partial we need to finalize it in memory.
+				// Finalize every partial message (reasoning/text/tool rows) so no
+				// streaming spinner survives a cancel or aborted stream. Clearing
+				// only the last message left earlier partial reasoning rows with
+				// partial=true forever, keeping their spinner animating.
 				// Do NOT push to frontend here — the Controller will later clear
 				// partial flags and refresh via postStateToWebview.
 				// Sending a partialMessageEvent would re-insert the message after clearing.
-				const lastIndex = this.messageStateHandler.clineMessages.length - 1
-				const lastMessage = this.messageStateHandler.clineMessages.at(-1)
-				if (lastMessage?.partial) {
-					await this.messageStateHandler.updateClineMessage(lastIndex, {
+				const partialIndices: number[] = []
+				this.messageStateHandler.clineMessages.forEach((candidate, index) => {
+					if (candidate?.partial) {
+						partialIndices.push(index)
+					}
+				})
+				for (const index of partialIndices) {
+					await this.messageStateHandler.updateClineMessage(index, {
 						partial: false,
 					})
 				}
@@ -4844,6 +4876,11 @@ export class Task {
 				}
 			} catch (error) {
 				await streamCoordinator?.stop()
+				if (!this.taskState.abort && !this.taskState.abandoned && this.diffViewProvider.isEditing) {
+					// Streaming file edits are previews. Revert them before retrying so a
+					// truncated provider response cannot leave partial content on disk.
+					await this.diffViewProvider.revertChanges()
+				}
 				await this.toolExecutor.finalizeServerToolCalls(
 					this.taskState.abort
 						? "Provider-hosted web search cancelled."

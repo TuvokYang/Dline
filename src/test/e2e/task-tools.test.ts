@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises"
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises"
 import * as path from "node:path"
 import { expect, type Frame } from "@playwright/test"
 import { E2E_PROFILE_NAMES } from "./utils/api-profile"
@@ -520,6 +520,74 @@ e2e(
 		const rejectedReadResult = continuation.requestToolResults.find(({ callId }) => callId === "call_rejected_read")
 		expect(rejectedReadResult?.content).toContain("E2E_READ_REJECT_FEEDBACK")
 		expect(JSON.stringify(continuation.requestBody)).not.toContain("This workspace is used for testing the extension")
+		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+	},
+)
+
+e2e(
+	"Tools - rejecting a missing external path between project reads persists skipped results",
+	async ({ dlineDocsDir, helper, server, sidebar, userDataDir }) => {
+		e2e.setTimeout(120_000)
+		await helper.signin(sidebar)
+		await setAutoApproveAction(sidebar, "Read project files", true)
+		server.resetOpenAiMock()
+
+		const missingExternalPath = path.join(dlineDocsDir, "missing-external", "does-not-exist.txt")
+		const skippedReason = "The tool was skipped after an earlier interaction was rejected."
+		server.enqueueOpenAiResponses(
+			{
+				type: "tools",
+				tools: [
+					{ id: "call_batch_local_before", name: "read_file", arguments: { path: "README.md" } },
+					{ id: "call_batch_missing_external", name: "read_file", arguments: { path: missingExternalPath } },
+					{ id: "call_batch_local_after", name: "read_file", arguments: { path: "test.ts" } },
+					{ id: "call_batch_search_after", name: "search_files", arguments: { path: ".", regex: "Test Workspace" } },
+				],
+			},
+			{
+				type: "tool",
+				id: "call_batch_missing_external_continuation",
+				name: "attempt_completion",
+				arguments: { result: "E2E_MISSING_EXTERNAL_REJECTION_CONTINUED" },
+				expectedToolResultCount: 4,
+				expectedToolResults: [
+					{ callId: "call_batch_local_before", contentIncludes: "# Test Workspace" },
+					{ callId: "call_batch_missing_external", contentIncludes: "The user denied this operation." },
+					{ callId: "call_batch_local_after", contentIncludes: skippedReason },
+					{ callId: "call_batch_search_after", contentIncludes: skippedReason },
+				],
+				expectedRequestExcludes: ["prior session ended before it was stored"],
+			},
+		)
+
+		await sendTask(sidebar, "Read the requested project files and the external path in one batch.")
+		const rejectButton = sidebar.getByText("Reject", { exact: true })
+		await expect(rejectButton).toBeVisible({ timeout: 60_000 })
+		await rejectButton.click()
+
+		await expect(sidebar.getByText("E2E_MISSING_EXTERNAL_REJECTION_CONTINUED", { exact: false }).last()).toBeVisible({
+			timeout: 30_000,
+		})
+		await expect.poll(() => server.openAiRequestCount).toBe(2)
+
+		const taskId = await E2ETestHelper.waitForValue(async () => {
+			const entries = await readdir(path.join(dlineDocsDir, "tasks"), { withFileTypes: true }).catch(() => [])
+			const ids = entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name)
+			return ids.length === 1 ? ids[0] : undefined
+		}, 30_000)
+		if (!taskId) throw new Error("E2E task directory was not created")
+		const durableHistoryPath = path.join(dlineDocsDir, "tasks", taskId, "api_conversation_history.jsonl")
+
+		await sidebar.getByRole("button", { name: "Close Task", exact: true }).click()
+		await expect(sidebar.getByTestId("chat-input")).toBeVisible()
+		const durableHistory = await E2ETestHelper.waitForValue(async () => {
+			const content = await readFile(durableHistoryPath, "utf8").catch(() => "")
+			return content.includes('"function_id":"call_batch_search_after"') ? content : undefined
+		}, 30_000)
+		if (!durableHistory) throw new Error("Skipped tool results were not flushed to durable history")
+		expect(durableHistory).toContain('"function_id":"call_batch_local_after"')
+		expect(durableHistory.split(skippedReason)).toHaveLength(3)
+		expect(durableHistory).not.toContain("prior session ended before it was stored")
 		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
 	},
 )

@@ -9,6 +9,7 @@ import { TaskRuntime } from "@core/task/runtime/TaskRuntime"
 import { createTaskRuntimeState } from "@core/task/runtime/TaskRuntimeState"
 import { TaskPhase } from "@core/task/TaskPhase"
 import type { ClineMessage } from "@shared/ExtensionMessage"
+import type { ClineContent } from "@shared/messages/content"
 import { ClineDefaultTool } from "@shared/tools"
 import { describe, expect, it, vi } from "vitest"
 
@@ -113,9 +114,19 @@ describe("Task.processNativeToolCalls", () => {
 				params: { path: "must-not-run.txt" },
 				partial: false,
 				isNativeToolCall: true,
-				function_id: "call-later",
-				dline_tid: "dline-later",
+				function_id: "call-later-read",
+				dline_tid: "dline-later-read",
 				ts: 602,
+			},
+			{
+				type: "tool_use",
+				name: ClineDefaultTool.SEARCH,
+				params: { path: ".", regex: "must-not-run" },
+				partial: false,
+				isNativeToolCall: true,
+				function_id: "call-later-search",
+				dline_tid: "dline-later-search",
+				ts: 603,
 			},
 		]
 		const runtimeBlocks = toolBlocks.map((block) => ({
@@ -141,6 +152,17 @@ describe("Task.processNativeToolCalls", () => {
 			if (block.dline_tid === "dline-command") {
 				await Task.prototype.executeCommandTool.call(fakeTask, "echo first", undefined, { commandTs: block.ts })
 			}
+		})
+		const userMessageContent: ClineContent[] = []
+		const commitInterruptedToolResult = vi.fn(async (block: ToolUse, reason: string) => {
+			if (!block.function_id || !block.dline_tid) throw new Error("Test tool block is missing canonical identity")
+			userMessageContent.push({
+				type: "tool_result",
+				function_id: block.function_id,
+				dline_tid: block.dline_tid,
+				content: [{ type: "text", text: reason }],
+				is_error: true,
+			})
 		})
 		const runtime = new TaskRuntime(
 			createTaskRuntimeState({
@@ -181,11 +203,13 @@ describe("Task.processNativeToolCalls", () => {
 			toolExecutor: {
 				isBlockApproved: () => true,
 				executeTool,
+				commitInterruptedToolResult,
 			},
 			messageStateHandler: { apiConversationHistory: [{ role: "user" }, { role: "assistant" }] },
 			taskState: {
 				abort: false,
 				assistantMessageContent: toolBlocks as AssistantMessageContent[],
+				userMessageContent,
 				userMessageContentReady: false,
 			},
 			markFinalizedToolPresented: vi.fn(),
@@ -197,16 +221,61 @@ describe("Task.processNativeToolCalls", () => {
 
 		expect(commandExecutor.execute).toHaveBeenCalledOnce()
 		expect(executeTool).toHaveBeenCalledTimes(1)
+		expect(commitInterruptedToolResult).toHaveBeenCalledTimes(2)
+		expect(commitInterruptedToolResult.mock.calls).toEqual([
+			[toolBlocks[1], "The tool was skipped after an earlier interaction was rejected."],
+			[toolBlocks[2], "The tool was skipped after an earlier interaction was rejected."],
+		])
+		expect(userMessageContent).toMatchObject([
+			{ type: "tool_result", function_id: "call-later-read", dline_tid: "dline-later-read", is_error: true },
+			{ type: "tool_result", function_id: "call-later-search", dline_tid: "dline-later-search", is_error: true },
+		])
 		expect(runtimeEvents).toContain("BLOCK_EXECUTION_REJECTED")
 		expect(runtime.getState()).toMatchObject({
 			phase: TaskPhase.BETWEEN_TURNS,
 			turn: {
 				blocks: [
 					{ dlineTid: "dline-command", phase: BlockPhase.REJECTED },
-					{ dlineTid: "dline-later", phase: BlockPhase.SKIPPED },
+					{ dlineTid: "dline-later-read", phase: BlockPhase.SKIPPED },
+					{ dlineTid: "dline-later-search", phase: BlockPhase.SKIPPED },
 				],
 			},
 		})
+	})
+
+	it("does not duplicate an existing durable result for a skipped tool", async () => {
+		const block: ToolUse = {
+			type: "tool_use",
+			name: ClineDefaultTool.FILE_READ,
+			params: { path: "already-closed.txt" },
+			partial: false,
+			isNativeToolCall: true,
+			function_id: "call-existing-skipped",
+			dline_tid: "dline-existing-skipped",
+			ts: 604,
+		}
+		const commitInterruptedToolResult = vi.fn(async () => undefined)
+		const fakeTask = Object.assign(Object.create(Task.prototype), {
+			toolExecutor: { commitInterruptedToolResult },
+			taskState: {
+				userMessageContent: [
+					{
+						type: "tool_result",
+						function_id: block.function_id,
+						dline_tid: block.dline_tid,
+						content: [{ type: "text", text: "existing durable result" }],
+					},
+				] as ClineContent[],
+			},
+		})
+
+		await (
+			Task.prototype as unknown as {
+				ensureTerminalToolResult(block: ToolUse, phase: BlockPhase): Promise<void>
+			}
+		).ensureTerminalToolResult.call(fakeTask, block, BlockPhase.SKIPPED)
+
+		expect(commitInterruptedToolResult).not.toHaveBeenCalled()
 	})
 
 	it("finalizes a partial prev text block and reuses its ts for the state text block", async () => {
