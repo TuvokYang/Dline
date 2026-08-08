@@ -200,102 +200,6 @@ Usage:
 <function_id></function_id>
 </kill_command>
 
-## find_references
-Description: Find all semantic references to a symbol at the given file position via the IDE's LSP. Returns file paths, line numbers, and context lines for each reference (definitions, imports, calls). This does NOT find occurrences in string literals, comments, or JSDoc. An empty result may mean the LSP does not support this language or file type, not that no references exist. Use this before renaming or refactoring to understand semantic impact. To search strings and comments, use search_files with regex. Only available in VSCode; other environments return an error suggesting search_files as a fallback.
-Parameters:
-- file_path: (required) Absolute path to the file containing the symbol. Use the exact path as shown in the workspace file listing.
-- line: (required) 1-based line number where the symbol appears.
-- character: (required) 1-based character offset on the line where the symbol starts.
-Usage:
-<find_references>
-<file_path></file_path>
-<line></line>
-<character></character>
-</find_references>
-
-## rename
-Description: Rename a symbol at the given file position using the IDE's LSP (semantic rename). Only renames symbol references (definitions, imports, calls); skips string literals, comments, and JSDoc. Set dry_run=true to preview changes without applying them. If LSP returns no edits, the rename could not be performed (language or project may not be supported). Only available in VSCode; for text-level renaming including strings and comments, use replace_text instead.
-Parameters:
-- file_path: (required) Absolute path to the file containing the symbol. Use the exact path as shown in the workspace file listing.
-- line: (required) 1-based line number where the symbol appears.
-- character: (required) 1-based character offset on the line where the symbol starts.
-- new_name: (required) The new name for the symbol. Use camelCase/PascalCase/snake_case as appropriate for the language.
-- dry_run: (optional) When true, returns a preview of all changes without actually modifying any files. Defaults to false.
-Usage:
-<rename>
-<file_path></file_path>
-<line></line>
-<character></character>
-<new_name></new_name>
-<dry_run></dry_run>
-</rename>
-
-## replace_text
-Description: ALWAYS run with dry_run=true FIRST to preview changes before applying. Perform a global text replacement across all files matching a glob pattern. This operates at the text level (not semantic), replacing all occurrences of a literal or regex pattern. Substrings are matched: replacing "Hello" also changes "sayHello" to "sayHi". String literals and comments are also affected. Set dry_run=true to preview changes without modifying files. Use this for bulk text changes like renaming strings, updating URLs, or fixing repeated typos. For single-file edits, use replace_in_file. For safe identifier-only renames that skip strings and comments, use rename (semantic, LSP-based).
-Parameters:
-- find: (required) The text to search for. By default this is a literal string; set literal=false to use a regex pattern.
-- replace: (required) The replacement text. Use an empty string to delete matches.
-- file_pattern: (required) Glob pattern to filter files (e.g., '*.ts', '*.md', 'src/**/*.ts'). Only files matching this pattern in the workspace will be checked.
-- dry_run: (optional) When true, returns a preview of all matches without modifying any files. Defaults to false.
-- literal: (optional) When true (default), 'find' is treated as a literal string. When false, 'find' is treated as a regex pattern.
-Usage:
-<replace_text>
-<find></find>
-<replace></replace>
-<file_pattern></file_pattern>
-<dry_run></dry_run>
-<literal></literal>
-</replace_text>
-
-## use_subagent
-Description: Run one focused default or named subagent. Omit agent_name or use 'default' for the built-in readonly research subagent; use an advertised YAML name for a configured agent.
-Parameters:
-- agent_name: (optional) Optional advertised subagent name. Omit or use 'default' for the built-in default profile.
-- task: (required) Focused task for the subagent.
-- context: (required) Relevant context, constraints, and expected result for the subagent.
-- background: (optional) Optional boolean. Set true to run in background. Defaults to false.
-- timeout: (optional) Optional positive integer timeout in seconds for each subagent. Defaults to 600.
-Usage:
-<use_subagent>
-<agent_name></agent_name>
-<task></task>
-<context></context>
-<background></background>
-<timeout></timeout>
-</use_subagent>
-
-## use_subagents
-Description: Run up to five built-in default subagents in parallel. Each subagent gets its own prompt and returns a comprehensive research result with tool and token stats. Use this for broad exploration when reading many files would consume the main agent's context window. Using one subagent is valid.
-Parameters:
-- prompt_1: (required) First subagent prompt. Must include <task> and <context> sections.
-- prompt_2: (optional) Optional second subagent prompt. Must include <task> and <context> sections when provided.
-- prompt_3: (optional) Optional third subagent prompt. Must include <task> and <context> sections when provided.
-- prompt_4: (optional) Optional fourth subagent prompt. Must include <task> and <context> sections when provided.
-- prompt_5: (optional) Optional fifth subagent prompt. Must include <task> and <context> sections when provided.
-- background: (optional) Optional boolean. Set true to run in background. Defaults to false.
-- timeout: (optional) Optional positive integer timeout in seconds for each subagent. Defaults to 600.
-Usage:
-<use_subagents>
-<prompt_1></prompt_1>
-<prompt_2></prompt_2>
-<prompt_3></prompt_3>
-<prompt_4></prompt_4>
-<prompt_5></prompt_5>
-<background></background>
-<timeout></timeout>
-</use_subagents>
-
-## spawn_task
-Description: Spawn a new independent task. The spawned task has its OWN context — it does NOT inherit the parent's conversation history. Use the task parameter for goals and the context parameter for background information. The task runs autonomously in PLAN mode with auto-run enabled, inheriting the parent's API provider, MCP servers, and rules. The user must approve before creation.
-Parameters:
-- task: (required) Describe what the spawned task should investigate or execute. Be specific about the goals and expected work to be done.
-- context: (optional) Provide relevant background context for the spawned task. Include: why this task is needed, relevant conversation history or prior work, key technical concepts, constraints, and configuration. The spawned task cannot access the parent's conversation history — include everything it needs to know.
-Usage:
-<spawn_task>
-<task></task>
-<context></context>
-</spawn_task>
-
 ## status_update
 Description: Provide a progress statement or announcement to the user during task execution. By default, execution continues immediately — you can proceed with the next tool call without waiting. Use this tool for phase transitions, milestone announcements, or when you want to inform the user of your current approach.
 
@@ -353,12 +257,6 @@ Workflows provide reusable, ordered procedures for multi-step operations so requ
 
 The Workflows available to the current task are listed below:
 - `release`: Run the release workflow.
-
-## Subagents
-Subagents delegate self-contained research or analysis to isolated workers with explicit tool and Skill visibility, preserving the main task's context and enabling parallel progress when subtasks are independent. Use `use_subagent` for one default or named subagent. Use `use_subagents` for one to five parallel default subtasks.
-
-The Subagents available to the current task are listed below:
-- `reviewer`: Review implementation changes.
 
 # GLOBAL RULES
 - One tool per message; wait for result. Never assume outcomes.

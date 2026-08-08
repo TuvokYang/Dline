@@ -107,6 +107,53 @@ describe("XML tool projection", () => {
 		expect(disabled).not.toContain("- task_progress: (optional)")
 	})
 
+	it("projects spawn_task into the Standard XML projection", () => {
+		const xml = new ToolPromptGenerator().generateXml(PromptProfile.Standard, {
+			...BASE_CONTEXT,
+			promptProfile: PromptProfile.Standard,
+			subagentsEnabled: true,
+			isSubagentRun: false,
+		})
+
+		expect(xml).toContain("## spawn_task")
+		expect(xml).toContain("<spawn_task>")
+	})
+
+	it("keeps spawn_task out of the Lite XML projection", () => {
+		const xml = new ToolPromptGenerator().generateXml(PromptProfile.Lite, {
+			...BASE_CONTEXT,
+			promptProfile: PromptProfile.Lite,
+			subagentsEnabled: true,
+			isSubagentRun: false,
+		})
+
+		expect(xml).not.toContain("## spawn_task")
+		expect(xml).not.toContain("<spawn_task>")
+	})
+
+	it("keeps Lite XML free of subagent, LSP, browser, and web tools", () => {
+		const xml = new ToolPromptGenerator().generateXml(PromptProfile.Lite, {
+			...BASE_CONTEXT,
+			promptProfile: PromptProfile.Lite,
+			subagentsEnabled: true,
+			isSubagentRun: false,
+			supportsBrowserUse: true,
+			clineWebToolsEnabled: true,
+		})
+		const excludedHeadings = [
+			"## use_subagent",
+			"## use_subagents",
+			"## find_references",
+			"## rename",
+			"## replace_text",
+			"## browser_action",
+			"## web_fetch",
+			"## web_search",
+		]
+
+		for (const heading of excludedHeadings) expect(xml).not.toContain(heading)
+	})
+
 	it.each([
 		PromptProfile.Standard,
 		PromptProfile.Lite,

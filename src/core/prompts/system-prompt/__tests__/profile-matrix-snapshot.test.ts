@@ -211,7 +211,7 @@ describe("complete explicit-profile snapshot matrix", () => {
 							expect(generated.systemPrompt).not.toContain("`use_mcp_tool`")
 						}
 					}
-					if (snapshotCase.id === "no-subagents") {
+					if (profile === "lite" || snapshotCase.id === "no-subagents") {
 						expect(generated.systemPrompt).not.toContain("## Subagents")
 					} else {
 						expect(generated.systemPrompt).toContain("## Subagents\n")
@@ -223,16 +223,34 @@ describe("complete explicit-profile snapshot matrix", () => {
 					expect(generated.systemPrompt).toContain("Local Dline rules.")
 					expect(generated.systemPrompt).toContain("Local Cursor rules.")
 					expect(generated.systemPrompt).toContain("Local agent rules.")
-					if (profile === "lite" && snapshotCase.id === "basic") {
-						if (transport === "native") {
-							expect(generated.systemPrompt).toContain("**use_subagents**")
-							expect(generated.systemPrompt).not.toContain("<use_subagents>")
-							expect(generated.systemPrompt).not.toContain("<prompt_1>")
+					if (transport === "xml" && profile !== "lite") {
+						expect(generated.systemPrompt).toContain("## spawn_task")
+						expect(generated.systemPrompt).toContain("<spawn_task>")
+					}
+					if (profile === "lite") {
+						for (const toolName of [
+							"spawn_task",
+							"use_subagent",
+							"use_subagents",
+							"find_references",
+							"rename",
+							"replace_text",
+							"browser_action",
+							"web_fetch",
+							"web_search",
+						]) {
+							expect(generated.systemPrompt).not.toContain(toolName)
+							expect(serializeTools(generated.tools)).not.toContain(`"${toolName}"`)
+						}
+					} else if (transport === "native") {
+						const tools = serializeTools(generated.tools)
+						expect(tools).toContain('"spawn_task"')
+						if (snapshotCase.id === "no-subagents") {
+							expect(tools).not.toContain('"use_subagent"')
+							expect(tools).not.toContain('"use_subagents"')
 						} else {
-							expect(generated.systemPrompt).toContain("## use_subagents")
-							expect(generated.systemPrompt).toContain("<use_subagents>")
-							expect(generated.systemPrompt).toContain("<prompt_1>")
-							expect(generated.systemPrompt).not.toContain("**use_subagents**")
+							expect(tools).toContain('"use_subagent"')
+							expect(tools).toContain('"use_subagents"')
 						}
 					}
 					await assertCompleteSnapshot(

@@ -61,6 +61,11 @@ function hasSkills(context: SystemPromptContext): boolean {
 	return (context.skills?.length ?? 0) > 0
 }
 
+/** Reports whether an independent task may be spawned from the current task. */
+function canSpawnTask(context: SystemPromptContext): boolean {
+	return context.isSubagentRun !== true
+}
+
 /** Reports whether subagents may be invoked from the current task. */
 function hasSubagents(context: SystemPromptContext): boolean {
 	return context.subagentsEnabled === true && context.isSubagentRun !== true
@@ -75,6 +80,16 @@ function spec(
 	descriptionFragments?: readonly ProfilePromptFragment[],
 ): Omit<ProfileToolSpec, "profile"> {
 	return { transport: "both", id, name: id, description, descriptionFragments, parameters, contextRequirements }
+}
+
+/** Creates a provider-native-only canonical tool descriptor. */
+function nativeSpec(
+	id: ClineDefaultTool,
+	description: string,
+	parameters: readonly ProfileToolParam[] = [],
+	contextRequirements?: (context: SystemPromptContext) => boolean,
+): Omit<ProfileToolSpec, "profile"> {
+	return { ...spec(id, description, parameters, contextRequirements), transport: "native" }
 }
 
 const LOAD_MCP_PARAMS = [param("name", true, getPrompt("loadCapability", "mcpNameInstruction"))]
@@ -270,7 +285,7 @@ export const STANDARD_TOOL_SPECS: readonly Omit<ProfileToolSpec, "profile">[] = 
 			param("task", true, getPrompt("spawnTask", "taskInstruction")),
 			param("context", false, getPrompt("spawnTask", "contextInstruction")),
 		],
-		hasSubagents,
+		canSpawnTask,
 	),
 	spec(
 		ClineDefaultTool.FOCUS_CHAIN_CHANGE,

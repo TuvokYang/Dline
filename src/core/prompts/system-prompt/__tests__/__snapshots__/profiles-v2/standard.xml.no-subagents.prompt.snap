@@ -495,6 +495,17 @@ Usage:
 <task_progress></task_progress>
 </apply_patch>
 
+## spawn_task
+Description: Spawn a new independent task. The spawned task has its OWN context — it does NOT inherit the parent's conversation history. Use the task parameter for goals and the context parameter for background information. The task runs autonomously in PLAN mode with auto-run enabled, inheriting the parent's API provider, MCP servers, and rules. The user must approve before creation.
+Parameters:
+- task: (required) Describe what the spawned task should investigate or execute. Be specific about the goals and expected work to be done.
+- context: (optional) Provide relevant background context for the spawned task. Include: why this task is needed, relevant conversation history or prior work, key technical concepts, constraints, and configuration. The spawned task cannot access the parent's conversation history — include everything it needs to know.
+Usage:
+<spawn_task>
+<task></task>
+<context></context>
+</spawn_task>
+
 ## focus_chain_change
 Description: Request to override the current focus chain plan with a new plan. Each item in the new plan will have a checkbox for user approval. Only approved items will replace the current focus chain. Requires user authorization to proceed.
 Parameters:

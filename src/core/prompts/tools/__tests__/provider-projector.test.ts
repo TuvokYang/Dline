@@ -147,16 +147,48 @@ describe("provider tool projector", () => {
 		expect(JSON.stringify(tool)).toContain("does not cancel the task or other commands")
 	})
 
-	it.each([
-		PromptProfile.Standard,
-		PromptProfile.Lite,
-	])("exposes singular and parallel subagent tools without load_subagent in %s", (profile) => {
-		const context = { ...BASE_CONTEXT, subagentsEnabled: true, isSubagentRun: false }
-		const tools = new ToolPromptGenerator().generate(profile, context)
+	it("keeps spawn_task independent from the Standard subagents feature toggle", () => {
+		const context = { ...BASE_CONTEXT, subagentsEnabled: false, isSubagentRun: false }
+		const tools = new ToolPromptGenerator().generate(PromptProfile.Standard, context)
 
-		expect(findTool(tools, ClineDefaultTool.USE_SUBAGENT)).toBeDefined()
-		expect(findTool(tools, ClineDefaultTool.USE_SUBAGENTS)).toBeDefined()
-		expect(findTool(tools, "load_subagent")).toBeUndefined()
+		expect(findTool(tools, ClineDefaultTool.SPAWN_TASK)).toBeDefined()
+		expect(findTool(tools, ClineDefaultTool.USE_SUBAGENT)).toBeUndefined()
+		expect(findTool(tools, ClineDefaultTool.USE_SUBAGENTS)).toBeUndefined()
+	})
+
+	it("exposes singular and parallel subagent tools only in Standard", () => {
+		const context = { ...BASE_CONTEXT, subagentsEnabled: true, isSubagentRun: false }
+		const standardTools = new ToolPromptGenerator().generate(PromptProfile.Standard, context)
+		const liteTools = new ToolPromptGenerator().generate(PromptProfile.Lite, context)
+
+		expect(findTool(standardTools, ClineDefaultTool.USE_SUBAGENT)).toBeDefined()
+		expect(findTool(standardTools, ClineDefaultTool.USE_SUBAGENTS)).toBeDefined()
+		expect(findTool(standardTools, "load_subagent")).toBeUndefined()
+		expect(findTool(liteTools, ClineDefaultTool.USE_SUBAGENT)).toBeUndefined()
+		expect(findTool(liteTools, ClineDefaultTool.USE_SUBAGENTS)).toBeUndefined()
+	})
+
+	it("keeps Lite free of spawn, subagent, LSP, browser, and web tools", () => {
+		const tools = new ToolPromptGenerator().generate(PromptProfile.Lite, {
+			...BASE_CONTEXT,
+			subagentsEnabled: true,
+			isSubagentRun: false,
+			supportsBrowserUse: true,
+			clineWebToolsEnabled: true,
+		})
+		const excluded = [
+			ClineDefaultTool.SPAWN_TASK,
+			ClineDefaultTool.USE_SUBAGENT,
+			ClineDefaultTool.USE_SUBAGENTS,
+			ClineDefaultTool.FIND_REFERENCES,
+			ClineDefaultTool.RENAME,
+			ClineDefaultTool.REPLACE_TEXT,
+			ClineDefaultTool.BROWSER,
+			ClineDefaultTool.WEB_FETCH,
+			ClineDefaultTool.WEB_SEARCH,
+		]
+
+		for (const toolId of excluded) expect(findTool(tools, toolId)).toBeUndefined()
 	})
 
 	it("projects use_subagent with agent_name, task, and context", () => {
@@ -187,6 +219,17 @@ describe("provider tool projector", () => {
 		expect(findTool(tools, ClineDefaultTool.SPAWN_TASK)).toBeUndefined()
 		expect(findTool(tools, ClineDefaultTool.USE_SUBAGENT)).toBeUndefined()
 		expect(findTool(tools, ClineDefaultTool.USE_SUBAGENTS)).toBeUndefined()
+	})
+
+	it("honors the explicit spawned-child disableTools guard", () => {
+		const tools = new ToolPromptGenerator().generate(PromptProfile.Standard, {
+			...BASE_CONTEXT,
+			subagentsEnabled: false,
+			isSubagentRun: false,
+			disableTools: [ClineDefaultTool.SPAWN_TASK],
+		})
+
+		expect(findTool(tools, ClineDefaultTool.SPAWN_TASK)).toBeUndefined()
 	})
 
 	it("projects canonical parameters to Anthropic schemas", () => {

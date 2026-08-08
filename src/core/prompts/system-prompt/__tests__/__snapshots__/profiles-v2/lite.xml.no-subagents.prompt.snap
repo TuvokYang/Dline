@@ -200,53 +200,6 @@ Usage:
 <function_id></function_id>
 </kill_command>
 
-## find_references
-Description: Find all semantic references to a symbol at the given file position via the IDE's LSP. Returns file paths, line numbers, and context lines for each reference (definitions, imports, calls). This does NOT find occurrences in string literals, comments, or JSDoc. An empty result may mean the LSP does not support this language or file type, not that no references exist. Use this before renaming or refactoring to understand semantic impact. To search strings and comments, use search_files with regex. Only available in VSCode; other environments return an error suggesting search_files as a fallback.
-Parameters:
-- file_path: (required) Absolute path to the file containing the symbol. Use the exact path as shown in the workspace file listing.
-- line: (required) 1-based line number where the symbol appears.
-- character: (required) 1-based character offset on the line where the symbol starts.
-Usage:
-<find_references>
-<file_path></file_path>
-<line></line>
-<character></character>
-</find_references>
-
-## rename
-Description: Rename a symbol at the given file position using the IDE's LSP (semantic rename). Only renames symbol references (definitions, imports, calls); skips string literals, comments, and JSDoc. Set dry_run=true to preview changes without applying them. If LSP returns no edits, the rename could not be performed (language or project may not be supported). Only available in VSCode; for text-level renaming including strings and comments, use replace_text instead.
-Parameters:
-- file_path: (required) Absolute path to the file containing the symbol. Use the exact path as shown in the workspace file listing.
-- line: (required) 1-based line number where the symbol appears.
-- character: (required) 1-based character offset on the line where the symbol starts.
-- new_name: (required) The new name for the symbol. Use camelCase/PascalCase/snake_case as appropriate for the language.
-- dry_run: (optional) When true, returns a preview of all changes without actually modifying any files. Defaults to false.
-Usage:
-<rename>
-<file_path></file_path>
-<line></line>
-<character></character>
-<new_name></new_name>
-<dry_run></dry_run>
-</rename>
-
-## replace_text
-Description: ALWAYS run with dry_run=true FIRST to preview changes before applying. Perform a global text replacement across all files matching a glob pattern. This operates at the text level (not semantic), replacing all occurrences of a literal or regex pattern. Substrings are matched: replacing "Hello" also changes "sayHello" to "sayHi". String literals and comments are also affected. Set dry_run=true to preview changes without modifying files. Use this for bulk text changes like renaming strings, updating URLs, or fixing repeated typos. For single-file edits, use replace_in_file. For safe identifier-only renames that skip strings and comments, use rename (semantic, LSP-based).
-Parameters:
-- find: (required) The text to search for. By default this is a literal string; set literal=false to use a regex pattern.
-- replace: (required) The replacement text. Use an empty string to delete matches.
-- file_pattern: (required) Glob pattern to filter files (e.g., '*.ts', '*.md', 'src/**/*.ts'). Only files matching this pattern in the workspace will be checked.
-- dry_run: (optional) When true, returns a preview of all matches without modifying any files. Defaults to false.
-- literal: (optional) When true (default), 'find' is treated as a literal string. When false, 'find' is treated as a regex pattern.
-Usage:
-<replace_text>
-<find></find>
-<replace></replace>
-<file_pattern></file_pattern>
-<dry_run></dry_run>
-<literal></literal>
-</replace_text>
-
 ## status_update
 Description: Provide a progress statement or announcement to the user during task execution. By default, execution continues immediately — you can proceed with the next tool call without waiting. Use this tool for phase transitions, milestone announcements, or when you want to inform the user of your current approach.
 

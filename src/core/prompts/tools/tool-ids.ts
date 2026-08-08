@@ -49,12 +49,6 @@ export const LITE_TOOL_IDS = [
 	ClineDefaultTool.ACT_MODE,
 	ClineDefaultTool.BASH,
 	ClineDefaultTool.KILL_COMMAND,
-	ClineDefaultTool.FIND_REFERENCES,
-	ClineDefaultTool.RENAME,
-	ClineDefaultTool.REPLACE_TEXT,
-	ClineDefaultTool.USE_SUBAGENT,
-	ClineDefaultTool.USE_SUBAGENTS,
-	ClineDefaultTool.SPAWN_TASK,
 	ClineDefaultTool.STATUS_UPDATE,
 	ClineDefaultTool.GENERATE_REPORT,
 ] as const

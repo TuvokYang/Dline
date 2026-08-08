@@ -11,7 +11,7 @@ You MUST ONLY respond to this message by using either the attempt_completion too
 
 When responding with the summarize_task tool call, follow these instructions:
 
-Before providing your final summary, wrap your analysis in <thinking> tags to organize your thoughts and ensure you've covered all necessary points. In your analysis process:
+Before providing your final summary, thoroughly analyze the conversation to ensure you've covered all necessary points. In your analysis process:
 1. Chronologically analyze each message and section of the conversation. For each section thoroughly identify:
    - The user's explicit requests and intents
    - Your approach to addressing the user's requests
