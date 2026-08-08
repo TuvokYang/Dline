@@ -116,13 +116,45 @@ describe("OrchestratorController — Registry & Spawn Relations", () => {
 			;(orchestrator.getParentTaskId("unknown") === undefined).should.be.true()
 		})
 
-		it("should clear spawn relations when parent controller unregisters", () => {
+		it("should clear spawn relations when parent unregisters without active children", () => {
 			const orchestrator = OrchestratorController.initialize()
 			orchestrator.registerController("parent-1", createMockController())
 			orchestrator.recordSpawn("parent-1", "child-1")
 
 			orchestrator.unregisterController("parent-1")
 			orchestrator.getSpawnedTaskIds("parent-1").should.deepEqual([])
+		})
+
+		it("keeps the child identity when its parent controller closes", () => {
+			const orchestrator = OrchestratorController.initialize()
+			orchestrator.registerController("parent-1", createMockController())
+			orchestrator.registerController("child-1", createMockController())
+			orchestrator.recordSpawn("parent-1", "child-1")
+
+			orchestrator.unregisterController("parent-1")
+
+			orchestrator.getParentTaskId("child-1")?.should.equal("parent-1")
+		})
+
+		it("removes a closed child from its parent's spawn relation", () => {
+			const orchestrator = OrchestratorController.initialize()
+			orchestrator.registerController("child-1", createMockController())
+			orchestrator.recordSpawn("parent-1", "child-1")
+
+			orchestrator.unregisterController("child-1")
+
+			orchestrator.getSpawnedTaskIds("parent-1").should.deepEqual([])
+			;(orchestrator.getParentTaskId("child-1") === undefined).should.be.true()
+		})
+
+		it("returns a spawn relation snapshot that callers cannot mutate", () => {
+			const orchestrator = OrchestratorController.initialize()
+			orchestrator.recordSpawn("parent-1", "child-1")
+
+			const children = orchestrator.getSpawnedTaskIds("parent-1")
+			children.push("injected-child")
+
+			orchestrator.getSpawnedTaskIds("parent-1").should.deepEqual(["child-1"])
 		})
 	})
 

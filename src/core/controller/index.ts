@@ -80,12 +80,19 @@ import type { ModeSwitchOperation, ResolvedModeProfile } from "./mode-switch/typ
 import { getClineOnboardingModels } from "./models/getClineOnboardingModels"
 import { appendClineStealthModels } from "./models/refreshOpenRouterModels"
 import { sendAccountUsageUpdate, sendStateUpdate } from "./state/subscribeToState"
+import { startTaskLifecycle } from "./task/task-start-lifecycle"
 import { sendChatButtonClickedEvent } from "./ui/subscribeToChatButtonClicked"
 
 type InitTaskOptions = {
 	onHistoryTaskReadyToDisplay?: () => Promise<void>
 	/** Context fragments for spawned or new tasks. Each entry becomes an independent text block for cache-friendly design. */
 	context?: string[]
+	/** Return after task-start admission while the agent loop continues in the background. */
+	startInBackground?: boolean
+	/** Complete identity-dependent setup before the task can issue its first API request. */
+	beforeStart?: (taskId: string) => Promise<void> | void
+	/** Observe a background task-start failure without rejecting the completed admission. */
+	onBackgroundError?: (error: unknown, taskId: string) => Promise<void> | void
 }
 
 type PostStateOptions = {
@@ -561,7 +568,25 @@ export class Controller {
 				// Readonly (taskLockAcquired === false): display-only, no recovery actions.
 				// Frontend shows a lock banner with a force-unlock button.
 			} else if (task || images || files) {
-				await taskInstance.startTask(task, images, files, options?.context)
+				await startTaskLifecycle({
+					taskId: initializedTaskId,
+					startInBackground: options?.startInBackground === true,
+					beforeStart: options?.beforeStart,
+					start: () => taskInstance.startTask(task, images, files, options?.context),
+					onBackgroundError: async (error) => {
+						const message = error instanceof Error ? error.message : String(error)
+						Logger.error(`[Task ${initializedTaskId}] Background task start failed:`, error)
+						if (this.task === taskInstance) {
+							await taskInstance.say("error", `Background task failed: ${message}`).catch((sayError) => {
+								Logger.error(`[Task ${initializedTaskId}] Failed to present background task error:`, sayError)
+							})
+							await this.postStateToWebview().catch((postError) => {
+								Logger.error(`[Task ${initializedTaskId}] Failed to post background task error state:`, postError)
+							})
+						}
+						await options?.onBackgroundError?.(error, initializedTaskId)
+					},
+				})
 			}
 		} finally {
 			// Polling is started once in the constructor and is a controller-

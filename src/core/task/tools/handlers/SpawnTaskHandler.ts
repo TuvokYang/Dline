@@ -68,7 +68,7 @@ export class SpawnTaskHandler implements IToolHandler {
 			return formatResponse.toolError("Task was aborted before spawn could complete")
 		}
 
-		let panelProvider: any = null
+		let disposePanel: (() => Promise<void>) | undefined
 		try {
 			// VscodeWebviewPanelProvider is expensive to load and cannot be constructed
 			// without the extension context, so reject incomplete task configs first.
@@ -85,16 +85,17 @@ export class SpawnTaskHandler implements IToolHandler {
 				return formatResponse.toolError("Task was aborted before spawn could complete")
 			}
 
-			// Get parent task's current provider info to pass to spawn
+			// Resolve the parent task's frozen profile instead of relying on the
+			// process-wide active-task routing cursor.
 			const parentTaskId = config.taskId
-			const apiConfiguration = config.services.stateManager.getApiConfiguration()
-			const mode = config.services.stateManager.getGlobalSettingsKey("mode") || "plan"
-			const currentProfile = mode === "plan" ? apiConfiguration.planModeProfile : apiConfiguration.actModeProfile
+			const apiConfiguration = config.services.stateManager.getApiConfigurationForTask(parentTaskId)
+			const currentProfile = config.mode === "plan" ? apiConfiguration.planModeProfile : apiConfiguration.actModeProfile
 			if (!currentProfile) {
-				return formatResponse.toolError(`No profile configured for ${mode} mode`)
+				return formatResponse.toolError(`No profile configured for ${config.mode} mode`)
 			}
 
-			panelProvider = new VscodeWebviewPanelProvider(controllerContext, { deferController: false })
+			const panelProvider = new VscodeWebviewPanelProvider(controllerContext, { deferController: false })
+			disposePanel = () => panelProvider.dispose()
 
 			// Truncate title for tab display
 			const title = taskDescription.length > 16 ? taskDescription.substring(0, 16) : taskDescription
@@ -103,7 +104,7 @@ export class SpawnTaskHandler implements IToolHandler {
 			// Check after panel creation — most expensive async step
 			if (config.taskState.abort) {
 				// Clean up the panel we just created
-				panelProvider.dispose().catch(() => {})
+				await panelProvider.dispose().catch(() => undefined)
 				return formatResponse.toolError("Task was aborted during spawn panel creation")
 			}
 
@@ -111,8 +112,11 @@ export class SpawnTaskHandler implements IToolHandler {
 			// Context is passed as a separate string[] for cache-friendly independent text blocks.
 			const fullPrompt = taskDescription
 
-			// Set provider/mode on the new controller to inherit from parent
+			// Register the parent/child identity before the child can issue its first
+			// API request, then let the child agent loop continue independently.
 			const childController = panelProvider.controller
+			const { OrchestratorController } = await import("@/core/orchestrator/OrchestratorController")
+			const orchestrator = OrchestratorController.getInstance()
 			const childTaskId = await childController.initTask(
 				fullPrompt,
 				undefined,
@@ -121,28 +125,31 @@ export class SpawnTaskHandler implements IToolHandler {
 				{
 					planModeProfile: currentProfile,
 					actModeProfile: currentProfile,
-					mode: "plan" as any,
+					mode: "plan",
 				},
-				contextParam ? { context: [contextParam] } : undefined,
+				{
+					...(contextParam ? { context: [contextParam] } : {}),
+					startInBackground: true,
+					beforeStart: (initializedChildTaskId) => {
+						orchestrator.recordSpawn(parentTaskId, initializedChildTaskId)
+					},
+				},
 			)
 
 			// Final check after initTask — parent may have been aborted during initialization
 			if (config.taskState.abort) {
 				// Clean up the child task that was just created
-				childController.clearTask().catch(() => {})
-				childController.dispose().catch(() => {})
+				await panelProvider.dispose().catch(() => undefined)
 				return formatResponse.toolError("Task was aborted after spawn initialization")
 			}
 
-			// Register with orchestrator
-			const { OrchestratorController } = await import("@/core/orchestrator/OrchestratorController")
-			OrchestratorController.getInstance().spawnTask(childTaskId, childController, parentTaskId)
-
-			// Return success with task ID
+			// Return success once the child has been admitted. Its agent loop remains
+			// owned by the child controller and continues in the background.
 			return formatResponse.toolResult(
 				`Spawned new task "${taskDescription}" with ID: ${childTaskId}. The task has been created in a new editor tab.`,
 			)
 		} catch (error) {
+			await disposePanel?.().catch(() => undefined)
 			return formatResponse.toolError(`Failed to spawn task: ${error instanceof Error ? error.message : String(error)}`)
 		}
 	}

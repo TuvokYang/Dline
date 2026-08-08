@@ -54,10 +54,19 @@ export class OrchestratorController {
 		Logger.log(`[OrchestratorController] Registered controller for task ${taskId}`)
 	}
 
-	/** Unregister a controller by taskId. Called on panel/task disposal. */
+	/** Unregister a controller and remove stale parent/child references. */
 	unregisterController(taskId: string): void {
 		this.controllers.delete(taskId)
-		this.spawnRelations.delete(taskId)
+		for (const [parentTaskId, childTaskIds] of this.spawnRelations) {
+			const activeChildren = childTaskIds.filter(
+				(childTaskId) => childTaskId !== taskId && this.controllers.has(childTaskId),
+			)
+			if (activeChildren.length > 0) {
+				this.spawnRelations.set(parentTaskId, activeChildren)
+			} else {
+				this.spawnRelations.delete(parentTaskId)
+			}
+		}
 		Logger.log(`[OrchestratorController] Unregistered controller for task ${taskId}`)
 	}
 
@@ -94,8 +103,9 @@ export class OrchestratorController {
 	 */
 	recordSpawn(parentTaskId: string, childTaskId: string): void {
 		const children = this.spawnRelations.get(parentTaskId) ?? []
-		children.push(childTaskId)
-		this.spawnRelations.set(parentTaskId, children)
+		if (!children.includes(childTaskId)) {
+			this.spawnRelations.set(parentTaskId, [...children, childTaskId])
+		}
 		Logger.log(`[OrchestratorController] Recorded spawn: ${parentTaskId} → ${childTaskId}`)
 	}
 
@@ -103,7 +113,7 @@ export class OrchestratorController {
 	 * Get all child task IDs spawned from the given parent task.
 	 */
 	getSpawnedTaskIds(parentTaskId: string): string[] {
-		return this.spawnRelations.get(parentTaskId) ?? []
+		return [...(this.spawnRelations.get(parentTaskId) ?? [])]
 	}
 
 	/**
