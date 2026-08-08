@@ -46,6 +46,72 @@ describe("ServerToolLifecycle", () => {
 		])
 	})
 
+	it("enriches a completed hosted call when the provider result arrives later", async () => {
+		const result = {
+			type: "search",
+			query: "lifecycle query",
+			sources: [{ type: "url", url: "https://example.com/dline" }],
+		}
+		const updates: Array<{ status: string; result?: unknown }> = []
+		const lifecycle = new ServerToolLifecycle(hostedPlan, true, (update) => {
+			updates.push({ status: update.status, result: update.result })
+		})
+
+		await lifecycle.consume(chunk("started"))
+		await lifecycle.consume(chunk("completed"))
+		await lifecycle.consume({ ...chunk("completed"), result })
+		await lifecycle.consume({ ...chunk("completed"), result })
+
+		expect(updates).toEqual([
+			{ status: "started", result: undefined },
+			{ status: "completed", result: undefined },
+			{ status: "completed", result },
+		])
+	})
+
+	it("enriches terminal-first hosted calls with a late query and result without duplicate updates", async () => {
+		const result = {
+			action: {
+				query: "late lifecycle query",
+				sources: [{ type: "url", url: "https://example.com/late" }],
+			},
+		}
+		const updates: Array<{ status: string; query: string; result?: unknown }> = []
+		const lifecycle = new ServerToolLifecycle(hostedPlan, true, (update) => {
+			updates.push({ status: update.status, query: update.query, result: update.result })
+		})
+
+		await lifecycle.consume(chunk("completed", null))
+		await lifecycle.consume(chunk("started", { query: "late lifecycle query" }))
+		await lifecycle.consume({ ...chunk("completed", null), result })
+		await lifecycle.consume({ ...chunk("completed", null), result })
+
+		expect(updates).toEqual([
+			{ status: "completed", query: "Provider-hosted web search", result: undefined },
+			{ status: "completed", query: "late lifecycle query", result: undefined },
+			{ status: "completed", query: "late lifecycle query", result },
+		])
+	})
+
+	it("does not revive a failed hosted call with late query or result events", async () => {
+		const result = {
+			action: {
+				query: "ignored late query",
+				sources: [{ type: "url", url: "https://example.com/ignored" }],
+			},
+		}
+		const updates: Array<{ status: string; query: string; result?: unknown }> = []
+		const lifecycle = new ServerToolLifecycle(hostedPlan, true, (update) => {
+			updates.push({ status: update.status, query: update.query, result: update.result })
+		})
+
+		await lifecycle.consume({ ...chunk("failed", null), error: "hosted search failed" })
+		await lifecycle.consume(chunk("started", { query: "ignored late query" }))
+		await lifecycle.consume({ ...chunk("completed", null), result })
+
+		expect(updates).toEqual([{ status: "failed", query: "Provider-hosted web search", result: undefined }])
+	})
+
 	it("preserves the provider-compressed hosted result on the terminal update", async () => {
 		const result = [
 			{

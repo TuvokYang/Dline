@@ -45,7 +45,7 @@ export class SystemPromptGenerator {
 				: undefined)
 		const capabilitiesSection = capabilities
 			? renderCapabilitiesSection(capabilities, {
-					exclude: config.variant === "lite" ? ["skills"] : [],
+					exclude: config.variant === "lite" ? ["skills", "subagents"] : [],
 					profile: config.variant,
 				})
 			: config.variant === "lite"

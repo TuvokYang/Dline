@@ -62,7 +62,9 @@ describe("OpenAiCodexHandler hosted Web Search", () => {
 			{ type: "function", name: "read_file", description: "Read a file", parameters: { type: "object" }, strict: true },
 			{ type: "web_search" },
 		])
+		expect(requestBody?.include).to.deep.equal(["reasoning.encrypted_content", "web_search_call.action.sources"])
 		expect(fallbackRequestBody?.tools).to.deep.equal(requestBody?.tools)
+		expect(fallbackRequestBody?.include).to.deep.equal(requestBody?.include)
 	})
 
 	it("projects hosted Web Search when no local functions are present", () => {

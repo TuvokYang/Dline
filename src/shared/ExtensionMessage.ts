@@ -22,6 +22,7 @@ import type { TaskCapabilityToggles } from "./TaskCapabilityToggles"
 import { TelemetrySetting } from "./TelemetrySetting"
 import { UserInfo } from "./UserInfo"
 import type { LocalSearchEngineId } from "./web-search"
+import type { WebFetchPresentationV1, WebSearchPresentationV1 } from "./web-tools"
 // webview will hold state
 export interface ExtensionMessage {
 	type: "grpc_response" // New type for gRPC responses
@@ -452,16 +453,8 @@ export interface ClineSayTool {
 	activityId?: string
 	diff?: string
 	content?: string | string[]
-	webSearch?: {
-		source?: {
-			engineId: string
-			label: string
-			execution: "hosted" | "dline"
-			provider?: string
-		}
-		result?: unknown
-		error?: string
-	}
+	webSearch?: WebSearchPresentationV1
+	webFetch?: WebFetchPresentationV1
 	regex?: string
 	filePattern?: string
 	operationIsLocatedInWorkspace?: boolean

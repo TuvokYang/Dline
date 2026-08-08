@@ -170,6 +170,7 @@ import { orderTurnEndingContentBlocks, orderTurnEndingNativeToolBlocks } from ".
 import { getRetryDelay, getStreamRetryDecision, MAX_AUTO_RETRY_ATTEMPTS } from "./auto-retry"
 import { BlockPhase } from "./BlockPhaseMachine"
 import { buildTaskBackgroundEnvironmentSection, buildTaskBackgroundResults } from "./background/BackgroundContextInjector"
+import { detectAvailableCliTools } from "./cli-tool-detector"
 import { FocusChainManager } from "./focus-chain"
 import type { InteractionKind } from "./interaction/Interaction"
 import { type DetachedInteractionContinuationContext, InteractionCoordinator } from "./interaction/InteractionCoordinator"
@@ -205,7 +206,7 @@ import { TaskStateManager } from "./TaskStateManager"
 import { withTerminateTimeout } from "./TaskTerminateTimeout"
 import { ToolExecutor } from "./ToolExecutor"
 import { getAdvertisedNativeToolNames } from "./tools/NativeToolAdmission"
-import { detectAvailableCliTools, updateApiReqMsg } from "./utils"
+import { updateApiReqMsg } from "./utils"
 import { buildUserFeedbackContent } from "./utils/buildUserFeedbackContent"
 
 export type ToolResponse = ClineToolResponseContent
@@ -523,10 +524,12 @@ export class Task {
 				async (state) => this.emitStateSnapshot(createSnapshot(state)),
 				async () => this.abortExecution(),
 				async () => {
+					this.taskState.resetOperationCancellation()
 					this.taskState.abort = false
 					this.taskState.autoRetryAttempts = 0
 				},
 				async (effect) => {
+					this.taskState.resetOperationCancellation()
 					this.taskState.abort = false
 					if (effect.draft) {
 						this.taskState.autoRetryAttempts = 0
@@ -1737,6 +1740,7 @@ export class Task {
 			const block = blocks.find((candidate) => candidate.dline_tid === lifecycle?.dlineTid)
 			if (!block || block.function_id !== lifecycle.functionId) throw new Error("resume_interaction_block_mismatch")
 
+			this.taskState.resetOperationCancellation()
 			this.taskState.abort = false
 			this.taskState.userMessageContent = collectResumeTurnContent({
 				blocks: turn.blocks,
@@ -2551,6 +2555,7 @@ export class Task {
 			const shouldRunTaskCancelHook = await this.shouldRunTaskCancelHook()
 
 			this.taskState.abort = true
+			this.taskState.cancelOperations("task_cancelled")
 			this.api?.abort?.()
 			this.presentationScheduler.reset()
 			this.pendingReasoningText = undefined
@@ -2632,17 +2637,34 @@ export class Task {
 	 * No resume ask is sent because the task is being destroyed.
 	 */
 	async interrupt(): Promise<void> {
-		this.cancelPendingAutoRetry()
-		this.modeSwitchCompaction.abort()
-		this.taskState.abort = true
-		this.api?.abort?.()
+		const cutoffRevision = this.taskRuntime.getState().revision
+		const cancellationGeneration = this.interactionCoordinator.cancelPending("checkpoint_restore")
+		try {
+			this.cancelPendingAutoRetry()
+			this.modeSwitchCompaction.abort()
+			this.taskState.abort = true
+			this.taskState.cancelOperations("checkpoint_restore")
+			this.api?.abort?.()
 
-		await pWaitFor(() => !this.taskState.isStreaming || this.taskState.didFinishAbortingStream, {
-			interval: 100,
-			timeout: 3_000,
-		}).catch(() => {})
+			await Promise.all([
+				pWaitFor(() => !this.taskState.isStreaming || this.taskState.didFinishAbortingStream, {
+					interval: 100,
+					timeout: 3_000,
+				}).catch(() => {}),
+				withTerminateTimeout(
+					Promise.all([
+						this.taskRuntime.waitForDeferredEffectsThrough(cutoffRevision),
+						this.interactionCoordinator.waitForClaimedContinuations(),
+					]).then(() => undefined),
+					5_000,
+					"checkpointRestore.waitForSupersededOperations",
+				),
+			])
 
-		await this.diffViewProvider.revertChanges()
+			await this.diffViewProvider.revertChanges()
+		} finally {
+			this.interactionCoordinator.completeCancellation(cancellationGeneration)
+		}
 	}
 
 	async terminate() {
@@ -2663,6 +2685,7 @@ export class Task {
 
 			// PHASE 3: Set abort flag
 			this.taskState.abort = true
+			this.taskState.cancelOperations("task_terminated")
 
 			// PHASE 4: Cancel hooks, background commands and task activities in
 			// parallel. Each cancellation is individually bounded by a timeout, so

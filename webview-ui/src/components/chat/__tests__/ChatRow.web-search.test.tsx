@@ -42,21 +42,22 @@ describe("ChatRow hosted Web Search rendering", () => {
 						content: "Searching for: Dline web search",
 						operationIsLocatedInWorkspace: false,
 						webSearch: {
+							schemaVersion: 1,
+							status: "completed",
 							source: {
-								engineId: "deepseek-hosted",
+								id: "deepseek-hosted",
 								label: "DeepSeek Web Search",
 								execution: "hosted",
 								provider: "deepseek",
 							},
-							result: {
-								items: [
-									{
-										title: "Dline result",
-										url: "https://example.com/dline",
-										snippet: "Provider-compressed search result",
-									},
-								],
-							},
+							query: "Dline web search",
+							items: [
+								{
+									title: "Dline result",
+									url: "https://example.com/dline",
+									snippet: "Provider-compressed search result",
+								},
+							],
 						},
 					}),
 				}}
@@ -81,21 +82,22 @@ describe("ChatRow hosted Web Search rendering", () => {
 						content: "Searching for: Dline web search",
 						operationIsLocatedInWorkspace: false,
 						webSearch: {
+							schemaVersion: 1,
+							status: "completed",
 							source: {
-								engineId: "deepseek-hosted",
+								id: "deepseek-hosted",
 								label: "DeepSeek Web Search",
 								execution: "hosted",
 								provider: "deepseek",
 							},
-							result: {
-								items: [
-									{
-										title: "Dline result",
-										url: "https://example.com/dline",
-										snippet: "Provider-compressed search result",
-									},
-								],
-							},
+							query: "Dline web search",
+							items: [
+								{
+									title: "Dline result",
+									url: "https://example.com/dline",
+									snippet: "Provider-compressed search result",
+								},
+							],
 						},
 					}),
 				}}
@@ -106,6 +108,34 @@ describe("ChatRow hosted Web Search rendering", () => {
 		expect(screen.getByText("Dline result")).toBeInTheDocument()
 		expect(screen.getByText("https://example.com/dline")).toBeInTheDocument()
 		expect(screen.getByText("Provider-compressed search result")).toBeInTheDocument()
+		expect(screen.getByTestId("web-search-results")).toHaveClass("max-h-[40vh]", "overflow-y-auto")
+	})
+
+	it("renders URL-only hosted sources with a readable fallback title", () => {
+		render(
+			<ChatRowContent
+				{...baseProps}
+				message={{
+					ts: 3,
+					type: "say",
+					say: "tool",
+					partial: false,
+					text: JSON.stringify({
+						tool: "webSearch",
+						path: "URL only",
+						webSearch: {
+							schemaVersion: 1,
+							status: "completed",
+							query: "URL only",
+							items: [{ url: "https://docs.example.com/current" }],
+						},
+					}),
+				}}
+			/>,
+		)
+
+		expect(screen.getByText("docs.example.com")).toBeInTheDocument()
+		expect(screen.getByText("https://docs.example.com/current")).toBeInTheDocument()
 	})
 
 	it("renders the hosted source and routing failure", () => {
@@ -121,12 +151,15 @@ describe("ChatRow hosted Web Search rendering", () => {
 						tool: "webSearch",
 						path: "current OpenAI news",
 						webSearch: {
+							schemaVersion: 1,
+							status: "failed",
 							source: {
-								engineId: "openai-hosted",
+								id: "openai-hosted",
 								label: "OpenAI Web Search",
 								execution: "hosted",
 								provider: "openai",
 							},
+							query: "current OpenAI news",
 							error: "OpenAI hosted Web Search returned a local function call; falling back to Dline local Web Search.",
 						},
 					}),
@@ -153,7 +186,10 @@ describe("ChatRow hosted Web Search rendering", () => {
 						tool: "webSearch",
 						path: "Dline timeout",
 						webSearch: {
-							source: { engineId: "bing", label: "Browser / Bing", execution: "dline" },
+							schemaVersion: 1,
+							status: "failed",
+							source: { id: "bing", label: "Browser / Bing", execution: "dline" },
+							query: "Dline timeout",
 							error: "Browser / Bing search failed: navigation timed out",
 						},
 					}),
@@ -163,5 +199,35 @@ describe("ChatRow hosted Web Search rendering", () => {
 
 		expect(screen.getByText("Browser / Bing (Dline)")).toBeInTheDocument()
 		expect(screen.getByText("Browser / Bing search failed: navigation timed out")).toBeInTheDocument()
+	})
+
+	it("renders completed Web Fetch content in a 40vh scroll container", () => {
+		render(
+			<ChatRowContent
+				{...baseProps}
+				message={{
+					ts: 4,
+					type: "say",
+					say: "tool",
+					partial: false,
+					text: JSON.stringify({
+						tool: "webFetch",
+						path: "https://example.com/docs",
+						webFetch: {
+							schemaVersion: 1,
+							status: "completed",
+							source: { id: "browser", label: "Browser Web Fetch", execution: "dline" },
+							url: "https://example.com/docs",
+							prompt: "Extract the current docs",
+							content: "# Current docs\n\nFetched content marker",
+						},
+					}),
+				}}
+			/>,
+		)
+
+		expect(screen.getByText("Browser Web Fetch (Dline)")).toBeInTheDocument()
+		expect(screen.getByText("Fetched content marker", { exact: false })).toBeInTheDocument()
+		expect(screen.getByTestId("web-fetch-results")).toHaveClass("max-h-[40vh]", "overflow-y-auto")
 	})
 })

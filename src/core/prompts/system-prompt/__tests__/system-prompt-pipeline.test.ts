@@ -62,7 +62,7 @@ describe("canonical system prompt pipeline", () => {
 			mcpEnabled: false,
 			browserEnabled: true,
 			focusChainEnabled: false,
-			subagentsEnabled: true,
+			subagentsEnabled: false,
 			subagentRun: false,
 			yoloModeEnabled: false,
 			cliEnvironment: true,

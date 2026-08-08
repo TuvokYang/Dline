@@ -20,6 +20,7 @@ interface HostedServerToolState {
 	phase: ApiStreamServerToolChunk["phase"]
 	query: string
 	terminal: boolean
+	resultEmitted: boolean
 }
 
 const PHASE_RANK: Readonly<Record<ApiStreamServerToolChunk["phase"], number>> = {
@@ -48,7 +49,8 @@ function errorFromUnknown(value: unknown, fallback: string): string {
 
 /**
  * Owns one provider-hosted server-tool lifecycle for one API response.
- * It admits only the frozen hosted route and emits at most one terminal update.
+ * It admits only the frozen hosted route and permits one late result enrichment
+ * when a provider emits a result-free completion before its final output item.
  */
 export class ServerToolLifecycle {
 	private readonly calls = new Map<string, HostedServerToolState>()
@@ -86,7 +88,27 @@ export class ServerToolLifecycle {
 
 		const existing = this.calls.get(chunk.dline_tid)
 		if (existing?.functionId !== undefined && existing.functionId !== chunk.function_id) return false
-		if (existing?.terminal) return true
+		if (existing?.terminal) {
+			if (existing.phase !== "completed" || chunk.phase === "failed") return true
+
+			const enrichedQuery = textFromUnknown(chunk.input) ?? textFromUnknown(chunk.result) ?? existing.query
+			const queryChanged = enrichedQuery !== existing.query
+			const hasNewResult = chunk.phase === "completed" && chunk.result !== undefined && !existing.resultEmitted
+			if (!queryChanged && !hasNewResult) return true
+
+			existing.query = enrichedQuery
+			if (hasNewResult) existing.resultEmitted = true
+			await this.emit({
+				dlineTid: chunk.dline_tid,
+				functionId: chunk.function_id,
+				tool: chunk.tool,
+				status: "completed",
+				partial: false,
+				query: enrichedQuery,
+				...(hasNewResult ? { result: chunk.result } : {}),
+			})
+			return true
+		}
 
 		const query = textFromUnknown(chunk.input) ?? existing?.query ?? "Provider-hosted web search"
 		const currentRank = existing ? PHASE_RANK[existing.phase] : -1
@@ -101,10 +123,12 @@ export class ServerToolLifecycle {
 			phase: chunk.phase,
 			query,
 			terminal: false,
+			resultEmitted: false,
 		}
 		state.phase = chunk.phase
 		state.query = query
 		state.terminal = chunk.phase === "completed" || chunk.phase === "failed"
+		state.resultEmitted = chunk.phase === "completed" && chunk.result !== undefined
 		this.calls.set(chunk.dline_tid, state)
 
 		const status: HostedServerToolUpdateStatus =

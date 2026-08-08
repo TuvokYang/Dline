@@ -68,11 +68,17 @@ export class WebSearchToolHandler implements IFullyManagedTool {
 
 	async handlePartialBlock(block: ToolUse, uiHelpers: StronglyTypedUIHelpers): Promise<void> {
 		const query = block.params.query || ""
+		const normalizedQuery = uiHelpers.removeClosingTag(block, "query", query)
 		const sharedMessageProps: ClineSayTool = {
 			tool: "webSearch",
-			path: uiHelpers.removeClosingTag(block, "query", query),
-			content: `Searching for: ${uiHelpers.removeClosingTag(block, "query", query)}`,
+			path: normalizedQuery,
+			content: `Searching for: ${normalizedQuery}`,
 			operationIsLocatedInWorkspace: false, // web_search is always external
+			webSearch: {
+				schemaVersion: 1,
+				status: "running",
+				query: normalizedQuery,
+			},
 		} satisfies ClineSayTool
 
 		const partialMessage = JSON.stringify(sharedMessageProps)
@@ -88,6 +94,22 @@ export class WebSearchToolHandler implements IFullyManagedTool {
 
 	async execute(config: TaskConfig, block: ToolUse): Promise<ToolResponse> {
 		let terminalMessage: ClineSayTool | undefined
+		let failureWritten = false
+		const writeFailure = async (message: string): Promise<void> => {
+			if (failureWritten || !terminalMessage?.webSearch) return
+			const failedMessage: ClineSayTool = {
+				...terminalMessage,
+				content: `Web search failed: ${message}`,
+				webSearch: {
+					...terminalMessage.webSearch,
+					status: "failed",
+					error: message,
+				},
+			}
+			await config.callbacks.say("tool", JSON.stringify(failedMessage), undefined, undefined, false, block.ts)
+			failureWritten = true
+		}
+
 		try {
 			const query: string | undefined = block.params.query
 			const allowedDomainsRaw: string | undefined = block.params.allowed_domains
@@ -129,7 +151,7 @@ export class WebSearchToolHandler implements IFullyManagedTool {
 				throw new Error(`Unsupported local web search engine: ${engineId}`)
 			}
 			const source = {
-				engineId,
+				id: engineId,
 				label: LOCAL_SEARCH_ENGINE_LABELS[engineId],
 				execution: "dline" as const,
 			}
@@ -140,7 +162,12 @@ export class WebSearchToolHandler implements IFullyManagedTool {
 				path: query,
 				content: `Searching for: ${query}`,
 				operationIsLocatedInWorkspace: false,
-				webSearch: { source },
+				webSearch: {
+					schemaVersion: 1,
+					status: "running",
+					source,
+					query,
+				},
 			}
 			terminalMessage = sharedMessageProps
 			const completeMessage = JSON.stringify(sharedMessageProps)
@@ -194,10 +221,11 @@ export class WebSearchToolHandler implements IFullyManagedTool {
 			// Run PreToolUse hook after approval but before execution
 			try {
 				const { ToolHookUtils } = await import("../utils/ToolHookUtils")
-				await ToolHookUtils.runPreToolUseIfEnabled(config, block)
+				await ToolHookUtils.runPreToolUseIfEnabled(config, block, { beforeTaskCancellation: writeFailure })
 			} catch (error) {
 				const { PreToolUseHookCancellationError } = await import("@core/hooks/PreToolUseHookCancellationError")
 				if (error instanceof PreToolUseHookCancellationError) {
+					await writeFailure(error.message)
 					return formatResponse.toolDenied()
 				}
 				throw error
@@ -222,25 +250,18 @@ export class WebSearchToolHandler implements IFullyManagedTool {
 				...sharedMessageProps,
 				content: `${descriptor.label} search completed`,
 				webSearch: {
+					schemaVersion: 1,
+					status: "completed",
 					source,
-					result: { items },
+					query,
+					items: [...items],
 				},
 			}
 			await config.callbacks.say("tool", JSON.stringify(completedMessage), undefined, undefined, false, block.ts)
 			return formatResponse.toolResult(formatSearchResults(descriptor.label, items))
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error)
-			if (terminalMessage) {
-				const failedMessage: ClineSayTool = {
-					...terminalMessage,
-					content: `Web search failed: ${message}`,
-					webSearch: {
-						...terminalMessage.webSearch,
-						error: message,
-					},
-				}
-				await config.callbacks.say("tool", JSON.stringify(failedMessage), undefined, undefined, false, block.ts)
-			}
+			await writeFailure(message)
 			return `Error performing web search: ${message}`
 		}
 	}

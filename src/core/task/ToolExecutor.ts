@@ -24,6 +24,7 @@ import type { Mode } from "@shared/storage/types"
 import type { TaskCapabilityToggles } from "@shared/TaskCapabilityToggles"
 import { ClineDefaultTool, toolUseNames } from "@shared/tools"
 import { ClineAskResponse } from "@shared/WebviewMessage"
+import { normalizeWebSearchItems } from "@shared/web-tools"
 import { isParallelToolCallingEnabled, modelDoesntSupportWebp } from "@/utils/model-utils"
 import { isLocatedInPath } from "@/utils/path"
 import { ToolUse } from "../assistant-message"
@@ -212,6 +213,7 @@ export class ToolExecutor {
 		this.hostedServerToolLifecycle = new ServerToolLifecycle(plan, allowHosted, async (update) => {
 			const providerId = this.api.getProviderId?.() ?? "provider"
 			const providerLabel = providerId === "openai" ? "OpenAI" : providerId === "deepseek" ? "DeepSeek" : providerId
+			const items = normalizeWebSearchItems(update.result)
 			const message: ClineSayTool = {
 				tool: "webSearch",
 				path: update.query,
@@ -221,13 +223,16 @@ export class ToolExecutor {
 						: `Searching for: ${update.query}`,
 				operationIsLocatedInWorkspace: false,
 				webSearch: {
+					schemaVersion: 1,
+					status: update.status === "failed" ? "failed" : update.status === "completed" ? "completed" : "running",
 					source: {
-						engineId: `${providerId}-hosted`,
+						id: `${providerId}-hosted`,
 						label: `${providerLabel} Web Search`,
 						execution: "hosted",
 						provider: providerId,
 					},
-					...(update.result === undefined ? {} : { result: update.result }),
+					query: update.query,
+					...(items.length > 0 ? { items } : {}),
 					...(update.error === undefined ? {} : { error: update.error }),
 				},
 			}
@@ -318,12 +323,15 @@ export class ToolExecutor {
 			content: `Web search routing failed: ${message}`,
 			operationIsLocatedInWorkspace: false,
 			webSearch: {
+				schemaVersion: 1,
+				status: "failed",
 				source: {
-					engineId: `${providerId}-hosted`,
+					id: `${providerId}-hosted`,
 					label: `${providerLabel} Web Search`,
 					execution: "hosted",
 					provider: providerId,
 				},
+				query,
 				error: message,
 			},
 		}

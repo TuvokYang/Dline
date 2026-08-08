@@ -320,6 +320,11 @@ export class OpenAiCodexHandler implements ApiHandler {
 		const enableThinking = this.reasoningConfig?.enableThinking ?? true
 		const reasoningEffort = normalizeOpenaiReasoningEffort(this.reasoningEffort)
 		const includeReasoning = enableThinking && reasoningEffort !== "none"
+		const hostedWebSearch = options?.serverTools?.includes(ServerTool.WEB_SEARCH) === true
+		const include = [
+			...(includeReasoning ? ["reasoning.encrypted_content"] : []),
+			...(hostedWebSearch ? ["web_search_call.action.sources"] : []),
+		]
 
 		const body: any = {
 			model: model.id,
@@ -329,7 +334,7 @@ export class OpenAiCodexHandler implements ApiHandler {
 			instructions: systemPrompt,
 			...(this.serviceTier ? { service_tier: this.serviceTier } : {}),
 			...(previousResponseId ? { previous_response_id: previousResponseId } : {}),
-			...(includeReasoning ? { include: ["reasoning.encrypted_content"] } : {}),
+			...(include.length > 0 ? { include } : {}),
 			...(includeReasoning
 				? {
 						reasoning: {
@@ -339,8 +344,6 @@ export class OpenAiCodexHandler implements ApiHandler {
 					}
 				: {}),
 		}
-
-		const hostedWebSearch = options?.serverTools?.includes(ServerTool.WEB_SEARCH) === true
 
 		// Add tools if provided
 		// Pass through strict value from tool (MCP/custom tools have strict: false, built-in tools default to true)

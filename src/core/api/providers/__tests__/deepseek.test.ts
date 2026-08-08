@@ -137,7 +137,8 @@ describe("DeepSeekHandler", () => {
 
 			await collectChunks(handler, undefined, tools, { serverTools: [ServerTool.WEB_SEARCH] })
 
-			expect(responsesCreate.mock.calls[0]?.[0]?.tools).to.deep.equal([
+			const request = responsesCreate.mock.calls[0]?.[0]
+			expect(request?.tools).to.deep.equal([
 				{
 					type: "function",
 					name: "read_file",
@@ -147,6 +148,7 @@ describe("DeepSeekHandler", () => {
 				},
 				{ type: "web_search" },
 			])
+			expect(request?.include).to.deep.equal(["web_search_call.action.sources"])
 			expect(handler.supportsServerTool(ServerTool.WEB_SEARCH)).to.equal(true)
 		})
 

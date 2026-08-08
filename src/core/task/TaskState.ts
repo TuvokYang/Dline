@@ -85,6 +85,26 @@ export class TaskState {
 	abort = false
 	didFinishAbortingStream = false
 	abandoned = false
+	private operationAbortController = new AbortController()
+
+	/** Signal shared by cancellable task operations in the current continuation. */
+	get operationSignal(): AbortSignal {
+		return this.operationAbortController.signal
+	}
+
+	/** Start a fresh cancellation scope before admitting a new continuation. */
+	resetOperationCancellation(): void {
+		if (this.operationAbortController.signal.aborted) {
+			this.operationAbortController = new AbortController()
+		}
+	}
+
+	/** Cancel every task operation that belongs to the superseded continuation. */
+	cancelOperations(reason = "task_cancelled"): void {
+		if (!this.operationAbortController.signal.aborted) {
+			this.operationAbortController.abort(new Error(reason))
+		}
+	}
 
 	// Subagent execution tracking for cancel detection
 	isExecutingSubagent = false

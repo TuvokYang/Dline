@@ -27,7 +27,6 @@ import {
 	FoldVerticalIcon,
 	ImageUpIcon,
 	LightbulbIcon,
-	Link2Icon,
 	LoaderCircleIcon,
 	RefreshCwIcon,
 	SettingsIcon,
@@ -74,6 +73,7 @@ import StatusUpdateRow from "./StatusUpdateRow"
 import SubagentStatusRow from "./SubagentStatusRow"
 import { ThinkingRow } from "./ThinkingRow"
 import UserMessage from "./UserMessage"
+import WebFetchRow from "./WebFetchRow"
 import WebSearchRow from "./WebSearchRow"
 
 const HEADER_CLASSNAMES = "flex items-center gap-2.5 mb-3"
@@ -790,35 +790,7 @@ export const ChatRowContent = memo(
 						</div>
 					)
 				case "webFetch":
-					return (
-						<div>
-							<div className={HEADER_CLASSNAMES}>
-								<Link2Icon className="size-2" />
-								{tool.operationIsLocatedInWorkspace === false &&
-									toolIcon("sign-out", "yellow", -90, "This URL is external")}
-								<span className="font-bold">
-									{message.type === "ask"
-										? "Dline wants to fetch content from this URL:"
-										: "Dline fetched content from this URL:"}
-								</span>
-							</div>
-							<button
-								className="w-full bg-code rounded-xs overflow-hidden border border-editor-group-border py-2 px-2.5 cursor-pointer select-none text-left"
-								onClick={() => {
-									// Open the URL in the default browser using gRPC
-									if (tool.path) {
-										UiServiceClient.openUrl(StringRequest.create({ value: tool.path })).catch((err) => {
-											console.error("Failed to open URL:", err)
-										})
-									}
-								}}
-								type="button">
-								<span className="ph-no-capture whitespace-nowrap overflow-hidden text-ellipsis mr-2 [direction:rtl] text-left text-link underline">
-									{`${tool.path}\u200E`}
-								</span>
-							</button>
-						</div>
-					)
+					return <WebFetchRow messageType={message.type} url={tool.path} webFetch={tool.webFetch} />
 				case "webSearch":
 					return <WebSearchRow messageType={message.type} query={tool.path} webSearch={tool.webSearch} />
 				case "useSkill":

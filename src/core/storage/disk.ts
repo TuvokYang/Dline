@@ -603,6 +603,7 @@ function isPromptBuilderInfo(value: unknown): value is FrozenPromptBuilderInfo {
 		isNonEmptyString(value.modelId) &&
 		(value.profile === "standard" || value.profile === "lite") &&
 		typeof value.nativeTools === "boolean" &&
+		(value.subagentsEnabled === undefined || typeof value.subagentsEnabled === "boolean") &&
 		(value.apiFormat === undefined || isKnownApiFormat(value.apiFormat)) &&
 		(value.serverTools === undefined ||
 			(Array.isArray(value.serverTools) && value.serverTools.every((tool) => isKnownServerTool(tool)))) &&

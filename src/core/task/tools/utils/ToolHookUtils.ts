@@ -4,6 +4,10 @@ import { getHooksEnabledSafe } from "@core/hooks/hooks-utils"
 import { PreToolUseHookCancellationError } from "@core/hooks/PreToolUseHookCancellationError"
 import type { TaskConfig } from "../types/TaskConfig"
 
+export interface PreToolUseHookOptions {
+	beforeTaskCancellation?: (message: string) => Promise<void> | void
+}
+
 /**
  * Utility functions for tool hook execution.
  */
@@ -16,10 +20,15 @@ export class ToolHookUtils {
 	 *
 	 * @param config The task configuration
 	 * @param block The tool use block being executed
+	 * @param options Optional lifecycle callbacks for handlers with durable UI state
 	 * @returns Promise<boolean> - true if execution should continue, false if hook cancelled
 	 * @throws PreToolUseHookCancellationError if the hook requests cancellation
 	 */
-	static async runPreToolUseIfEnabled(config: TaskConfig, block: ToolUse): Promise<boolean> {
+	static async runPreToolUseIfEnabled(
+		config: TaskConfig,
+		block: ToolUse,
+		options: PreToolUseHookOptions = {},
+	): Promise<boolean> {
 		// Check if hooks are enabled via user setting
 		const hooksEnabled = getHooksEnabledSafe(config.services.stateManager.getGlobalSettingsKey("hooksEnabled"))
 
@@ -92,18 +101,31 @@ export class ToolHookUtils {
 
 		// Handle cancellation from hook
 		if (preToolResult.cancel === true) {
+			const message = preToolResult.errorMessage || "PreToolUse hook requested cancellation"
+
 			// Clear the active hook execution state BEFORE calling cancelTask
-			// This prevents abortTask from trying to "cancel" an already-completed hook
+			// This prevents abortTask from trying to "cancel" an already-completed hook.
 			await config.callbacks.clearActiveHookExecution()
+
+			// Durable tool presentations must reach a terminal state before task
+			// cancellation tears down message writes. UI write failures must not block cancellation.
+			try {
+				await options.beforeTaskCancellation?.(message)
+			} catch {}
 
 			// Abort the entire task (consistent with PostToolUse and other hook cancellations)
 			await config.callbacks.cancelTask()
-			throw new PreToolUseHookCancellationError(preToolResult.errorMessage || "PreToolUse hook requested cancellation")
+			throw new PreToolUseHookCancellationError(message)
 		}
 
-		// If task was aborted (e.g., via cancel button during hook), throw cancellation error
+		// If task was aborted (e.g., via cancel button during hook), give durable
+		// presentations one final write opportunity before propagating cancellation.
 		if (config.taskState.abort) {
-			throw new PreToolUseHookCancellationError("Task was aborted during PreToolUse hook execution")
+			const message = "Task was aborted during PreToolUse hook execution"
+			try {
+				await options.beforeTaskCancellation?.(message)
+			} catch {}
+			throw new PreToolUseHookCancellationError(message)
 		}
 
 		// Add context modification to the conversation if provided by the hook

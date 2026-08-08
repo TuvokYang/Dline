@@ -15,7 +15,7 @@ import type {
 import type { ClineTool } from "@shared/tools"
 import { hashPromptContent } from "./hash"
 
-export const SYSTEM_PROMPT_CONTRACT_VERSION = 3
+export const SYSTEM_PROMPT_CONTRACT_VERSION = 4
 
 export interface BuiltSystemPrompt {
 	readonly systemPrompt: string
@@ -44,7 +44,7 @@ export interface RefreshSystemPromptInput extends GetOrCreatePromptInput {
 
 function renderCapabilitiesForProfile(capabilities: CapabilitiesSnapshot, profile: PromptProfile): string {
 	return renderCapabilitiesSection(capabilities, {
-		exclude: profile === PromptProfile.Lite ? ["skills"] : [],
+		exclude: profile === PromptProfile.Lite ? ["skills", "subagents"] : [],
 		profile,
 	})
 }
@@ -178,6 +178,7 @@ export class SystemPromptCacheService {
 				cachedBuilder.profile !== currentBuilder.profile ||
 				cachedBuilder.nativeTools !== Boolean(input.promptContext.enableNativeToolCalls) ||
 				cachedBuilder.focusChainEnabled !== currentBuilder.focusChainEnabled ||
+				cachedBuilder.subagentsEnabled !== currentBuilder.subagentsEnabled ||
 				cachedBuilder.apiFormat !== currentBuilder.apiFormat ||
 				cachedBuilder.webToolsEnabled !== currentBuilder.webToolsEnabled ||
 				cachedBuilder.webSearchRoute !== currentBuilder.webSearchRoute ||
@@ -217,6 +218,7 @@ export class SystemPromptCacheService {
 			profile: context.promptProfile,
 			nativeTools: (tools?.length ?? 0) > 0,
 			focusChainEnabled: context.focusChainSettings?.enabled === true,
+			subagentsEnabled: context.promptProfile === PromptProfile.Standard && context.subagentsEnabled === true,
 			...(webSearchRoutingPlan?.serverToolPlan.apiFormat === undefined
 				? {}
 				: { apiFormat: webSearchRoutingPlan.serverToolPlan.apiFormat }),

@@ -63,6 +63,7 @@ export interface MockSearxngSearchRequest {
 
 export interface MockWebFetchPageRequest {
 	receivedAtMs: number
+	closedAtMs?: number
 	authorization?: string
 }
 
@@ -654,13 +655,34 @@ export class ClineApiServerMock {
 				const controller = ClineApiServerMock.globalSharedServer!
 
 				if (baseRoute === "/mock/web-fetch" && endpoint === "/page" && method === "GET") {
-					controller.mockWebFetchPageRequests.push({
+					const pageRequest: MockWebFetchPageRequest = {
 						receivedAtMs: Date.now(),
 						...(authHeader ? { authorization: authHeader } : {}),
-					})
+					}
+					controller.mockWebFetchPageRequests.push(pageRequest)
+					const delayMs = Number.parseInt(parsedUrl.searchParams.get("delayMs") ?? "0", 10)
+					if (Number.isFinite(delayMs) && delayMs > 0) {
+						await new Promise<void>((resolve) => {
+							const onClose = () => {
+								pageRequest.closedAtMs = Date.now()
+								clearTimeout(timer)
+								resolve()
+							}
+							const timer = setTimeout(() => {
+								res.off("close", onClose)
+								resolve()
+							}, delayMs)
+							res.once("close", onClose)
+						})
+						if (res.destroyed || res.writableEnded) return
+					}
 					res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" })
+					const longContent = Array.from(
+						{ length: 32 },
+						(_, index) => `<p>E2E_WEB_FETCH_PAGE_CONTENT_${index.toString().padStart(2, "0")}</p>`,
+					).join("")
 					res.end(
-						"<!doctype html><html><body><nav>REMOVE_NAVIGATION</nav><main><h1>Dline local Web Fetch</h1><p>E2E_WEB_FETCH_PAGE_CONTENT</p></main><script>REMOVE_SCRIPT</script></body></html>",
+						`<!doctype html><html><body><nav>REMOVE_NAVIGATION</nav><main><h1>Dline local Web Fetch</h1>${longContent}</main><script>REMOVE_SCRIPT</script></body></html>`,
 					)
 					return
 				}
@@ -675,13 +697,17 @@ export class ClineApiServerMock {
 						...(authHeader ? { authorization: authHeader } : {}),
 					})
 					return sendJson({
-						results: [
-							{
-								title: `E2E local result for ${searchQuery}`,
-								url: "https://example.test/dline-local-search",
-								content: `E2E local snippet for ${searchQuery}`,
-							},
-						],
+						results: Array.from({ length: 24 }, (_, index) => ({
+							title:
+								index === 0
+									? `E2E local result for ${searchQuery}`
+									: `E2E local result ${index} for ${searchQuery}`,
+							url:
+								index === 0
+									? "https://example.test/dline-local-search"
+									: `https://example.test/dline-local-search/${index}`,
+							content: `E2E local snippet ${index} for ${searchQuery}`,
+						})),
 					})
 				}
 

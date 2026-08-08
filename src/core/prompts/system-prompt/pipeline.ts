@@ -74,7 +74,7 @@ export function createSystemPromptConfig(context: SystemPromptContext): SystemPr
 		mcpEnabled: servers.some((server) => server.status === "connected" && server.disabled !== true),
 		browserEnabled: context.supportsBrowserUse === true && context.browserSettings?.disableToolUse !== true,
 		focusChainEnabled: variant === PromptProfile.Standard && context.focusChainSettings?.enabled === true,
-		subagentsEnabled: context.subagentsEnabled === true,
+		subagentsEnabled: variant === PromptProfile.Standard && context.subagentsEnabled === true,
 		subagentRun: context.isSubagentRun === true,
 		yoloModeEnabled: context.yoloModeToggled === true,
 		cliEnvironment: context.isCliEnvironment === true,

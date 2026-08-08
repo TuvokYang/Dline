@@ -63,6 +63,7 @@ export class E2ETestHelper {
 	public static readonly DLINE_DIR_ROOT = path.join(os.tmpdir(), ".dline-e2e", E2E_RUN_NAMESPACE)
 	public static readonly DLINE_DOCS_DIR_ROOT = path.join(os.tmpdir(), "dline-e2e", E2E_RUN_NAMESPACE)
 	public static readonly DLINE_STATE_TEMPLATE_DIR_ROOT = path.join(os.tmpdir(), ".dline-e2e-template", E2E_RUN_NAMESPACE)
+	public static readonly PUPPETEER_CACHE_DIR = path.join(E2ETestHelper.CODEBASE_ROOT_DIR, "tmp", "e2e-puppeteer-cache")
 
 	// Instance properties for caching
 	private cachedFrame: Frame | null = null
@@ -360,13 +361,10 @@ export class E2ETestHelper {
 	/** Dismiss "What's New" version announcement modal if visible. */
 	public static async dismissWhatsNewModal(sidebar: Frame): Promise<void> {
 		const whatsNewDialog = sidebar.getByRole("heading", { name: /New in v/ })
-		try {
-			await whatsNewDialog.waitFor({ state: "visible", timeout: 5000 })
-			await sidebar.getByRole("button", { name: "Close" }).click()
-			await expect(whatsNewDialog).not.toBeVisible()
-		} catch {
-			// "What's New" modal did not appear
-		}
+		if (!(await whatsNewDialog.isVisible())) return
+
+		await sidebar.getByRole("button", { name: "Close" }).click()
+		await expect(whatsNewDialog).not.toBeVisible()
 	}
 }
 

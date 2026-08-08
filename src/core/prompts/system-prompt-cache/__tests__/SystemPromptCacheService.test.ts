@@ -25,6 +25,7 @@ const testPromptBuilderInfo = {
 	profile: "standard" as const,
 	nativeTools: false,
 	focusChainEnabled: false,
+	subagentsEnabled: false,
 	apiFormat: LOCAL_WEB_SEARCH_ROUTING_PLAN.serverToolPlan.apiFormat,
 	serverTools: LOCAL_WEB_SEARCH_ROUTING_PLAN.serverTools,
 	webToolsEnabled: true,
@@ -295,6 +296,44 @@ describe("SystemPromptCacheService", () => {
 
 		expect(result.text).toBe("current xml prompt")
 		expect(service.getLastTools()).toBeUndefined()
+		expect(buildCount).toBe(1)
+	})
+
+	it("rebuilds the frozen pair when the Standard subagents tool projection changes", async () => {
+		const cached = {
+			...emptyContext("task-1"),
+			systemPrompt: {
+				frozen: {
+					text: "subagents-disabled prompt",
+					tools: [buildTool("spawn_task")],
+					capabilitiesHash: EMPTY_CAPABILITIES_HASH,
+					createdAt: 1,
+					refreshedAt: 1,
+					refreshReason: "task_start" as const,
+					promptBuilder: { ...testPromptBuilderInfo, nativeTools: true, subagentsEnabled: false },
+				},
+			},
+		}
+		let buildCount = 0
+		const service = new SystemPromptCacheService({
+			taskId: "task-1",
+			deps: {
+				getContext: async () => cached,
+				saveContext: async () => undefined,
+				collectCapabilities: async () => EMPTY_CAPABILITIES,
+				buildSystemPrompt: async () => {
+					buildCount += 1
+					return { systemPrompt: "subagents-enabled prompt", tools: [buildTool("use_subagent")] }
+				},
+			},
+		})
+
+		const result = await service.getOrCreate({
+			promptContext: { ...promptContext, enableNativeToolCalls: true, subagentsEnabled: true },
+		})
+
+		expect(result.text).toBe("subagents-enabled prompt")
+		expect(result.refreshReason).toBe("capability_change")
 		expect(buildCount).toBe(1)
 	})
 

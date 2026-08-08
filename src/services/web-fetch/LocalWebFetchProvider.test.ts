@@ -3,8 +3,8 @@ import { BrowserWebFetchProvider, type UrlContentFetcherPort } from "./LocalWebF
 
 function contentFetcher(markdown = "# Dline\n\nFetched locally") {
 	return {
-		launchBrowser: vi.fn(async () => undefined),
-		urlToMarkdown: vi.fn(async () => markdown),
+		launchBrowser: vi.fn(async (_signal?: AbortSignal) => undefined),
+		urlToMarkdown: vi.fn(async (_url: string, _signal?: AbortSignal) => markdown),
 		closeBrowser: vi.fn(async () => undefined),
 	} satisfies UrlContentFetcherPort
 }
@@ -30,7 +30,8 @@ describe("BrowserWebFetchProvider", () => {
 			},
 		})
 		expect(fetcher.launchBrowser).toHaveBeenCalledOnce()
-		expect(fetcher.urlToMarkdown).toHaveBeenCalledWith("https://example.test/docs")
+		expect(fetcher.launchBrowser.mock.calls[0]?.[0]).toBeInstanceOf(AbortSignal)
+		expect(fetcher.urlToMarkdown).toHaveBeenCalledWith("https://example.test/docs", expect.any(AbortSignal))
 		expect(fetcher.closeBrowser).toHaveBeenCalledOnce()
 	})
 
@@ -42,6 +43,34 @@ describe("BrowserWebFetchProvider", () => {
 		await expect(provider.fetch({ url: "https://example.test/slow", prompt: "Read the page" })).rejects.toThrow(
 			"Navigation timed out",
 		)
+		expect(fetcher.closeBrowser).toHaveBeenCalledOnce()
+	})
+
+	it("enforces the total fetch budget and closes the browser", async () => {
+		const fetcher = contentFetcher()
+		fetcher.launchBrowser.mockImplementationOnce(() => new Promise(() => undefined))
+		const provider = new BrowserWebFetchProvider(() => fetcher)
+
+		await expect(
+			provider.fetch({ url: "https://example.test/cold", prompt: "Read the page", timeoutMs: 10 }),
+		).rejects.toThrow("Web fetch timed out after 1 seconds")
+		expect(fetcher.closeBrowser).toHaveBeenCalledOnce()
+	})
+
+	it("forwards external cancellation and closes the browser", async () => {
+		const fetcher = contentFetcher()
+		fetcher.urlToMarkdown.mockImplementationOnce(() => new Promise(() => undefined))
+		const provider = new BrowserWebFetchProvider(() => fetcher)
+		const controller = new AbortController()
+		const fetching = provider.fetch({
+			url: "https://example.test/restore",
+			prompt: "Read the page",
+			signal: controller.signal,
+		})
+
+		controller.abort(new Error("checkpoint_restore"))
+
+		await expect(fetching).rejects.toThrow("checkpoint_restore")
 		expect(fetcher.closeBrowser).toHaveBeenCalledOnce()
 	})
 })

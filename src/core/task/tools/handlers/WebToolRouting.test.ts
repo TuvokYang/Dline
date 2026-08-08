@@ -1,12 +1,17 @@
 import { resolveWebSearchRoutingPlan } from "@core/api/server-tools"
+import { PreToolUseHookCancellationError } from "@core/hooks/PreToolUseHookCancellationError"
 import { ToolExecutor } from "@core/task/ToolExecutor"
 import { ApiFormat, ServerTool } from "@shared/proto/dline/models/metadata"
 import { WebSearchMode } from "@shared/proto/dline/provider/common"
+import { ClineDefaultTool } from "@shared/tools"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { AuthService } from "@/services/auth/AuthService"
 import type { LocalWebFetchProvider } from "@/services/web-fetch/LocalWebFetchProvider"
 import { type LocalSearchProvider, LocalSearchRegistry } from "@/services/web-search/LocalSearchProvider"
 import type { ToolUse } from "../../../assistant-message"
+import { AutoApprove } from "../autoApprove"
+import { ToolHookUtils } from "../utils/ToolHookUtils"
+import { NO_TOOL_RESULT } from "../utils/ToolResultUtils"
 import { WebFetchToolHandler } from "./WebFetchToolHandler"
 import { WebSearchToolHandler } from "./WebSearchToolHandler"
 
@@ -22,6 +27,7 @@ function routingPlan(route: "disabled" | "local" | "hosted") {
 }
 
 function config(webToolsEnabled: boolean, route: "disabled" | "local" | "hosted", includeRoute = true) {
+	const operationAbortController = new AbortController()
 	return {
 		api: {
 			getProviderId: () => "deepseek",
@@ -34,7 +40,7 @@ function config(webToolsEnabled: boolean, route: "disabled" | "local" | "hosted"
 				getGlobalSettingsKey: (key: string) => (key === "clineWebToolsEnabled" ? webToolsEnabled : undefined),
 			},
 		},
-		taskState: { consecutiveMistakeCount: 0 },
+		taskState: { consecutiveMistakeCount: 0, operationSignal: operationAbortController.signal },
 		callbacks: {
 			sayAndCreateMissingParamError: vi.fn(async (_tool: string, parameter: string) => `missing:${parameter}`),
 		},
@@ -52,6 +58,59 @@ function block(name: "web_search" | "web_fetch"): ToolUse {
 		dline_tid: "dline-1",
 	} as ToolUse
 }
+
+describe("Web Tool auto-approval", () => {
+	it("uses an independent Web permission instead of the Browser permission", () => {
+		const settings = {
+			actions: {
+				useBrowser: true,
+				useWeb: false,
+			},
+		}
+		const stateManager = {
+			getGlobalSettingsKey: vi.fn((key: string) => (key === "autoApprovalSettings" ? settings : false)),
+		}
+		const autoApprove = new AutoApprove(stateManager as any)
+
+		expect(autoApprove.shouldAutoApproveTool(ClineDefaultTool.BROWSER)).toBe(true)
+		expect(autoApprove.shouldAutoApproveTool(ClineDefaultTool.WEB_SEARCH)).toBe(false)
+		expect(autoApprove.shouldAutoApproveTool(ClineDefaultTool.WEB_FETCH)).toBe(false)
+
+		settings.actions.useBrowser = false
+		settings.actions.useWeb = true
+
+		expect(autoApprove.shouldAutoApproveTool(ClineDefaultTool.BROWSER)).toBe(false)
+		expect(autoApprove.shouldAutoApproveTool(ClineDefaultTool.WEB_SEARCH)).toBe(true)
+		expect(autoApprove.shouldAutoApproveTool(ClineDefaultTool.WEB_FETCH)).toBe(true)
+	})
+
+	it("defaults a missing Web permission to false instead of inheriting Browser approval", () => {
+		const stateManager = {
+			getGlobalSettingsKey: vi.fn((key: string) =>
+				key === "autoApprovalSettings" ? { actions: { useBrowser: true } } : false,
+			),
+		}
+		const autoApprove = new AutoApprove(stateManager as any)
+
+		expect(autoApprove.shouldAutoApproveTool(ClineDefaultTool.WEB_SEARCH)).toBe(false)
+		expect(autoApprove.shouldAutoApproveTool(ClineDefaultTool.WEB_FETCH)).toBe(false)
+	})
+
+	it("does not let legacy Auto Approve All bypass the independent Web permission", () => {
+		const stateManager = {
+			getGlobalSettingsKey: vi.fn((key: string) => {
+				if (key === "autoApproveAllToggled") return true
+				if (key === "autoApprovalSettings") return { actions: { useBrowser: true, useWeb: false } }
+				return false
+			}),
+		}
+		const autoApprove = new AutoApprove(stateManager as any)
+
+		expect(autoApprove.shouldAutoApproveTool(ClineDefaultTool.BROWSER)).toBe(true)
+		expect(autoApprove.shouldAutoApproveTool(ClineDefaultTool.WEB_SEARCH)).toBe(false)
+		expect(autoApprove.shouldAutoApproveTool(ClineDefaultTool.WEB_FETCH)).toBe(false)
+	})
+})
 
 describe("local Web Tool routing", () => {
 	beforeEach(() => vi.clearAllMocks())
@@ -181,16 +240,18 @@ describe("local Web Tool routing", () => {
 		expect(taskConfig.callbacks.say).toHaveBeenCalledTimes(2)
 		const approvalPayload = JSON.parse(taskConfig.callbacks.say.mock.calls[0][1])
 		const completedPayload = JSON.parse(taskConfig.callbacks.say.mock.calls[1][1])
-		expect(approvalPayload.webSearch.source).toEqual({
-			engineId: "searxng",
-			label: "SearXNG",
-			execution: "dline",
+		expect(approvalPayload.webSearch).toEqual({
+			schemaVersion: 1,
+			status: "running",
+			source: { id: "searxng", label: "SearXNG", execution: "dline" },
+			query: "Dline local search",
 		})
 		expect(completedPayload.webSearch).toEqual({
-			source: { engineId: "searxng", label: "SearXNG", execution: "dline" },
-			result: {
-				items: [{ title: "Dline", url: "https://example.test/dline", snippet: "Local result" }],
-			},
+			schemaVersion: 1,
+			status: "completed",
+			source: { id: "searxng", label: "SearXNG", execution: "dline" },
+			query: "Dline local search",
+			items: [{ title: "Dline", url: "https://example.test/dline", snippet: "Local result" }],
 		})
 		expect(taskConfig.callbacks.say.mock.calls[1][5]).toBe(searchBlock.ts)
 		expect(getAuthToken).not.toHaveBeenCalled()
@@ -224,8 +285,50 @@ describe("local Web Tool routing", () => {
 		const failedPayload = JSON.parse(taskConfig.callbacks.say.mock.calls[1][1])
 		expect(failedPayload.content).toContain("navigation timed out")
 		expect(failedPayload.webSearch).toEqual({
-			source: { engineId: "bing", label: "Browser / Bing", execution: "dline" },
+			schemaVersion: 1,
+			status: "failed",
+			source: { id: "bing", label: "Browser / Bing", execution: "dline" },
+			query: "Dline timeout",
 			error: "Browser / Bing search failed: navigation timed out",
+		})
+		expect(taskConfig.callbacks.say.mock.calls[1][5]).toBe(searchBlock.ts)
+	})
+
+	it("terminates the local Web Search card when PreToolUse cancels execution", async () => {
+		const taskConfig = config(true, "local")
+		taskConfig.services.stateManager.getGlobalSettingsKey = (key: string) =>
+			key === "clineWebToolsEnabled" ? true : key === "localWebSearchEngine" ? "bing" : undefined
+		taskConfig.services.stateManager.getSecretKey = vi.fn()
+		taskConfig.autoApprovalSettings = { enableNotifications: false }
+		taskConfig.callbacks.shouldAutoApproveTool = vi.fn(() => true)
+		taskConfig.callbacks.say = vi.fn(async () => undefined)
+		const search = vi.fn()
+		const provider: LocalSearchProvider = {
+			descriptor: { id: "bing", label: "Browser / Bing", execution: "dline" },
+			search,
+		}
+		const runHook = vi
+			.spyOn(ToolHookUtils, "runPreToolUseIfEnabled")
+			.mockImplementationOnce(async (_config, _block, options) => {
+				const message = "Web search blocked by workspace policy"
+				await options?.beforeTaskCancellation?.(message)
+				throw new PreToolUseHookCancellationError(message)
+			})
+		const searchBlock = { ...block("web_search"), params: { query: "blocked search" } } as ToolUse
+
+		try {
+			await new WebSearchToolHandler(() => new LocalSearchRegistry([provider])).execute(taskConfig, searchBlock)
+		} finally {
+			runHook.mockRestore()
+		}
+
+		expect(search).not.toHaveBeenCalled()
+		expect(taskConfig.callbacks.say).toHaveBeenCalledTimes(2)
+		const failedPayload = JSON.parse(taskConfig.callbacks.say.mock.calls[1][1])
+		expect(failedPayload.webSearch).toMatchObject({
+			status: "failed",
+			query: "blocked search",
+			error: "Web search blocked by workspace policy",
 		})
 		expect(taskConfig.callbacks.say.mock.calls[1][5]).toBe(searchBlock.ts)
 	})
@@ -258,7 +361,81 @@ describe("local Web Tool routing", () => {
 		expect(fetch).toHaveBeenCalledWith({
 			url: "https://example.test/docs",
 			prompt: "Extract the release notes",
+			signal: taskConfig.taskState.operationSignal,
 		})
+		expect(taskConfig.callbacks.say).toHaveBeenCalledTimes(2)
+		const completedPayload = JSON.parse(taskConfig.callbacks.say.mock.calls[1][1])
+		expect(completedPayload.webFetch).toEqual({
+			schemaVersion: 1,
+			status: "completed",
+			source: { id: "browser", label: "Browser Web Fetch", execution: "dline" },
+			url: "https://example.test/docs",
+			prompt: "Extract the release notes",
+			content: "# Local OpenAI Web Fetch\n\nNo Cline login required.",
+		})
+		expect(taskConfig.callbacks.say.mock.calls[1][5]).toBe(fetchBlock.ts)
 		expect(getAuthToken).not.toHaveBeenCalled()
+	})
+
+	it("does not write a terminal card or tool result after task cancellation", async () => {
+		const taskConfig = config(true, "local")
+		taskConfig.services.stateManager.getGlobalSettingsKey = (key: string) =>
+			key === "clineWebToolsEnabled" ? true : key === "hooksEnabled" ? false : undefined
+		taskConfig.autoApprovalSettings = { enableNotifications: false }
+		taskConfig.callbacks.shouldAutoApproveTool = vi.fn(() => true)
+		taskConfig.callbacks.say = vi.fn(async () => undefined)
+		const operationAbortController = new AbortController()
+		taskConfig.taskState.operationSignal = operationAbortController.signal
+		const fetch = vi.fn(async () => {
+			operationAbortController.abort(new Error("checkpoint_restore"))
+			throw new Error("checkpoint_restore")
+		})
+		const provider = { fetch } satisfies LocalWebFetchProvider
+		const fetchBlock = {
+			...block("web_fetch"),
+			params: { url: "https://example.test/restore", prompt: "Wait for restore" },
+		} as ToolUse
+
+		await expect(new WebFetchToolHandler(provider).execute(taskConfig, fetchBlock)).resolves.toBe(NO_TOOL_RESULT)
+		expect(taskConfig.callbacks.say).toHaveBeenCalledTimes(1)
+	})
+
+	it("terminates the local Web Fetch card when PreToolUse cancels execution", async () => {
+		const taskConfig = config(true, "local")
+		taskConfig.services.stateManager.getGlobalSettingsKey = (key: string) =>
+			key === "clineWebToolsEnabled" ? true : undefined
+		taskConfig.autoApprovalSettings = { enableNotifications: false }
+		taskConfig.callbacks.shouldAutoApproveTool = vi.fn(() => true)
+		taskConfig.callbacks.say = vi.fn(async () => undefined)
+		const fetch = vi.fn()
+		const provider = { fetch } satisfies LocalWebFetchProvider
+		const runHook = vi
+			.spyOn(ToolHookUtils, "runPreToolUseIfEnabled")
+			.mockImplementationOnce(async (_config, _block, options) => {
+				const message = "Web fetch blocked by workspace policy"
+				await options?.beforeTaskCancellation?.(message)
+				throw new PreToolUseHookCancellationError(message)
+			})
+		const fetchBlock = {
+			...block("web_fetch"),
+			params: { url: "https://example.test/blocked", prompt: "Extract blocked content" },
+		} as ToolUse
+
+		try {
+			await new WebFetchToolHandler(provider).execute(taskConfig, fetchBlock)
+		} finally {
+			runHook.mockRestore()
+		}
+
+		expect(fetch).not.toHaveBeenCalled()
+		expect(taskConfig.callbacks.say).toHaveBeenCalledTimes(2)
+		const failedPayload = JSON.parse(taskConfig.callbacks.say.mock.calls[1][1])
+		expect(failedPayload.webFetch).toMatchObject({
+			status: "failed",
+			url: "https://example.test/blocked",
+			prompt: "Extract blocked content",
+			error: "Web fetch blocked by workspace policy",
+		})
+		expect(taskConfig.callbacks.say.mock.calls[1][5]).toBe(fetchBlock.ts)
 	})
 })

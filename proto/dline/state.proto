@@ -43,6 +43,7 @@ message AutoApprovalActions {
   optional bool use_browser = 7;
   optional bool use_mcp = 8;
   optional bool focus_chain = 9;
+  optional bool use_web = 10;
 }
 
 // Auto approval settings for task execution

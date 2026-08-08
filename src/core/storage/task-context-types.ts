@@ -47,6 +47,8 @@ export interface FrozenPromptBuilderInfo {
 	readonly nativeTools: boolean
 	/** Optional for backward compatibility with caches written before focus-aware prompts. */
 	readonly focusChainEnabled?: boolean
+	/** Whether the Standard subagent tool projection was enabled. */
+	readonly subagentsEnabled?: boolean
 	/** Selected wire protocol used to resolve provider-hosted tools. */
 	readonly apiFormat?: ApiFormat
 	/** Active provider-hosted tools included in the prompt contract. */

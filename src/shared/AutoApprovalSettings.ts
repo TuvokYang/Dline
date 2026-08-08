@@ -18,7 +18,8 @@ export interface AutoApprovalSettings {
 		editFilesExternally?: boolean // Edit files outside of the working directory
 		executeSafeCommands?: boolean // Execute safe commands
 		executeAllCommands?: boolean // Execute all commands
-		useBrowser: boolean // Use browser
+		useBrowser: boolean // Use browser automation
+		useWeb?: boolean // Use local Web Search and Web Fetch
 		useMcp: boolean // Use MCP servers
 		focusChain: boolean // Auto-approve focus chain overrides
 	}
@@ -39,6 +40,7 @@ export const DEFAULT_AUTO_APPROVAL_SETTINGS: AutoApprovalSettings = {
 		executeSafeCommands: true,
 		executeAllCommands: false,
 		useBrowser: false,
+		useWeb: false,
 		useMcp: true,
 		focusChain: false,
 	},

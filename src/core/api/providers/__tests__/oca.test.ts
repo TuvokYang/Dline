@@ -151,11 +151,12 @@ describe("OcaHandler.createMessage", () => {
 
 		await collectChunks(handler.createMessage("system", messages, tools, { serverTools: [ServerTool.WEB_SEARCH] }))
 
-		const request = create.mock.calls[0]?.[0] as { tools?: unknown[] }
+		const request = create.mock.calls[0]?.[0] as { tools?: unknown[]; include?: unknown[] }
 		expect(request.tools).to.deep.equal([
 			{ type: "function", name: "read_file", description: "Read a file", parameters: { type: "object" }, strict: true },
 			{ type: "web_search" },
 		])
+		expect(request.include).to.deep.equal(["web_search_call.action.sources"])
 	})
 
 	it("keeps local Responses Web Search when hosted search was not selected", async () => {

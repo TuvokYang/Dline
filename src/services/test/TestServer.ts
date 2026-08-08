@@ -62,6 +62,7 @@ async function updateAutoApprovalSettings(controller?: Controller) {
 				executeSafeCommands: true,
 				executeAllCommands: true,
 				useBrowser: false, // Keep browser disabled for tests
+				useWeb: false, // Keep local Web tools approval-visible by default
 				useMcp: false, // Keep MCP disabled for tests
 				focusChain: true, // Auto-approve focus chain overrides in tests
 			},

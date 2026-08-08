@@ -10,7 +10,17 @@ import { showNotificationForApproval } from "../../utils"
 import type { IFullyManagedTool } from "../ToolExecutorCoordinator"
 import type { TaskConfig } from "../types/TaskConfig"
 import type { StronglyTypedUIHelpers } from "../types/UIHelpers"
-import { ToolResultUtils } from "../utils/ToolResultUtils"
+import { NO_TOOL_RESULT, ToolResultUtils } from "../utils/ToolResultUtils"
+
+function cancellationError(signal: AbortSignal): Error {
+	return signal.reason instanceof Error ? signal.reason : new Error("Web fetch operation was cancelled")
+}
+
+function throwIfCancelled(signal: AbortSignal): void {
+	if (signal.aborted) {
+		throw cancellationError(signal)
+	}
+}
 
 export class WebFetchToolHandler implements IFullyManagedTool {
 	readonly name = ClineDefaultTool.WEB_FETCH
@@ -23,11 +33,17 @@ export class WebFetchToolHandler implements IFullyManagedTool {
 
 	async handlePartialBlock(block: ToolUse, uiHelpers: StronglyTypedUIHelpers): Promise<void> {
 		const url = block.params.url || ""
+		const normalizedUrl = uiHelpers.removeClosingTag(block, "url", url)
 		const sharedMessageProps: ClineSayTool = {
 			tool: "webFetch",
-			path: uiHelpers.removeClosingTag(block, "url", url),
-			content: `Fetching URL: ${uiHelpers.removeClosingTag(block, "url", url)}`,
+			path: normalizedUrl,
+			content: `Fetching URL: ${normalizedUrl}`,
 			operationIsLocatedInWorkspace: false, // web_fetch is always external
+			webFetch: {
+				schemaVersion: 1,
+				status: "running",
+				url: normalizedUrl,
+			},
 		} satisfies ClineSayTool
 
 		const partialMessage = JSON.stringify(sharedMessageProps)
@@ -42,6 +58,24 @@ export class WebFetchToolHandler implements IFullyManagedTool {
 	}
 
 	async execute(config: TaskConfig, block: ToolUse): Promise<ToolResponse> {
+		const operationSignal = config.taskState.operationSignal
+		let terminalMessage: ClineSayTool | undefined
+		let failureWritten = false
+		const writeFailure = async (message: string): Promise<void> => {
+			if (operationSignal.aborted || failureWritten || !terminalMessage?.webFetch) return
+			const failedMessage: ClineSayTool = {
+				...terminalMessage,
+				content: `Web fetch failed: ${message}`,
+				webFetch: {
+					...terminalMessage.webFetch,
+					status: "failed",
+					error: message,
+				},
+			}
+			await config.callbacks.say("tool", JSON.stringify(failedMessage), undefined, undefined, false, block.ts)
+			failureWritten = true
+		}
+
 		try {
 			const url: string | undefined = block.params.url
 			const prompt: string | undefined = block.params.prompt
@@ -73,7 +107,14 @@ export class WebFetchToolHandler implements IFullyManagedTool {
 				path: url,
 				content: `Fetching URL: ${url}`,
 				operationIsLocatedInWorkspace: false,
+				webFetch: {
+					schemaVersion: 1,
+					status: "running",
+					url,
+					prompt,
+				},
 			}
+			terminalMessage = sharedMessageProps
 			const completeMessage = JSON.stringify(sharedMessageProps)
 
 			if (config.callbacks.shouldAutoApproveTool(this.name)) {
@@ -125,16 +166,32 @@ export class WebFetchToolHandler implements IFullyManagedTool {
 			// Run PreToolUse hook after approval but before execution
 			try {
 				const { ToolHookUtils } = await import("../utils/ToolHookUtils")
-				await ToolHookUtils.runPreToolUseIfEnabled(config, block)
+				await ToolHookUtils.runPreToolUseIfEnabled(config, block, { beforeTaskCancellation: writeFailure })
 			} catch (error) {
 				const { PreToolUseHookCancellationError } = await import("@core/hooks/PreToolUseHookCancellationError")
 				if (error instanceof PreToolUseHookCancellationError) {
+					await writeFailure(error.message)
 					return formatResponse.toolDenied()
 				}
 				throw error
 			}
 
-			const result = await this.provider.fetch({ url, prompt })
+			throwIfCancelled(operationSignal)
+			const result = await this.provider.fetch({ url, prompt, signal: operationSignal })
+			throwIfCancelled(operationSignal)
+			const completedMessage: ClineSayTool = {
+				...sharedMessageProps,
+				content: `Fetched URL: ${result.url}`,
+				webFetch: {
+					schemaVersion: 1,
+					status: "completed",
+					source: result.source,
+					url: result.url,
+					prompt: result.prompt,
+					content: result.content,
+				},
+			}
+			await config.callbacks.say("tool", JSON.stringify(completedMessage), undefined, undefined, false, block.ts)
 			return formatResponse.toolResult(
 				JSON.stringify({
 					url: result.url,
@@ -144,7 +201,12 @@ export class WebFetchToolHandler implements IFullyManagedTool {
 				}),
 			)
 		} catch (error) {
-			return `Error fetching web content: ${(error as Error).message}`
+			if (operationSignal.aborted) {
+				return NO_TOOL_RESULT
+			}
+			const message = error instanceof Error ? error.message : String(error)
+			await writeFailure(message)
+			return `Error fetching web content: ${message}`
 		}
 	}
 }

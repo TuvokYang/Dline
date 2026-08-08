@@ -1,7 +1,9 @@
-import { readFile, writeFile } from "node:fs/promises"
+import { access, cp, mkdir, readFile, rm, writeFile } from "node:fs/promises"
 import * as path from "node:path"
-import { expect, type Frame, type Page } from "@playwright/test"
+import { expect, type Frame, type Locator, type Page } from "@playwright/test"
 import type { ElectronApplication } from "playwright"
+// @ts-expect-error puppeteer-chromium-resolver does not publish TypeScript declarations.
+import PCR from "puppeteer-chromium-resolver"
 import type { MockApiConsumption, MockApiTarget } from "./fixtures/server"
 import { getE2EMockProviderBaseUrl } from "./fixtures/server/api"
 import { E2E_PROFILE_NAMES } from "./utils/api-profile"
@@ -39,6 +41,26 @@ interface SearchMechanisms {
 
 const profilesPath = (dlineDir: string) => path.join(dlineDir, "data", "settings", "api_profiles.json")
 const settingsPath = (dlineDir: string) => path.join(dlineDir, "data", "settings", "settings.json")
+
+async function prepareWebFetchBrowser(dlineHomeDir: string): Promise<void> {
+	const workerDirectoryName = path.basename(path.dirname(dlineHomeDir))
+	const seedDir = path.join(E2ETestHelper.PUPPETEER_CACHE_DIR, workerDirectoryName)
+	const prepareSeed = async (): Promise<void> => {
+		await mkdir(seedDir, { recursive: true })
+		const stats = await PCR({ downloadPath: seedDir })
+		await access(stats.executablePath)
+	}
+	try {
+		await prepareSeed()
+	} catch {
+		await rm(seedDir, { recursive: true, force: true })
+		await prepareSeed()
+	}
+
+	const testPuppeteerDir = path.join(dlineHomeDir, "puppeteer")
+	await rm(testPuppeteerDir, { recursive: true, force: true })
+	await cp(seedDir, testPuppeteerDir, { recursive: true })
+}
 
 async function prepareRuntimeProfile(
 	dlineDir: string,
@@ -88,7 +110,6 @@ async function openSidebar(
 	const page = await app.firstWindow()
 	await E2ETestHelper.openClineSidebar(page)
 	const sidebar = await helper.getSidebar(page)
-	await E2ETestHelper.dismissWhatsNewModal(sidebar)
 	await helper.signin(sidebar)
 	return { app, page, sidebar }
 }
@@ -98,6 +119,49 @@ async function configureSearxngSearch(dlineDir: string, serverBaseUrl: string): 
 	settings.clineWebToolsEnabled = true
 	settings.localWebSearchEngine = "searxng"
 	settings.searxngSearchUrl = `${serverBaseUrl}/mock/searxng`
+	await writeFile(settingsPath(dlineDir), `${JSON.stringify(settings, null, 2)}\n`, "utf8")
+}
+
+async function configureLegacyAutoApproveAll(dlineDir: string): Promise<void> {
+	const settings = JSON.parse(await readFile(settingsPath(dlineDir), "utf8")) as Record<string, unknown>
+	settings.yoloModeToggled = false
+	settings.autoApproveAllToggled = true
+	settings.autoApprovalSettings = {
+		version: 2,
+		enabled: true,
+		favorites: [],
+		maxRequests: 20,
+		actions: {
+			readFiles: true,
+			readFilesExternally: false,
+			editFiles: false,
+			editFilesExternally: false,
+			executeSafeCommands: true,
+			executeAllCommands: false,
+			useBrowser: false,
+			useWeb: false,
+			useMcp: true,
+			focusChain: false,
+		},
+		enableNotifications: false,
+	}
+	await writeFile(settingsPath(dlineDir), `${JSON.stringify(settings, null, 2)}\n`, "utf8")
+}
+
+async function configureCancelingPreToolUseHook(
+	dlineDir: string,
+	workspaceDir: string,
+	errorMessage: string,
+	delaySeconds = 0,
+): Promise<void> {
+	const hooksDir = path.join(workspaceDir, ".dline", "hooks")
+	await mkdir(hooksDir, { recursive: true })
+	const output = JSON.stringify({ cancel: true, errorMessage })
+	const delay = delaySeconds > 0 ? `Start-Sleep -Seconds ${delaySeconds}\n` : ""
+	await writeFile(path.join(hooksDir, "PreToolUse.ps1"), `${delay}Write-Output '${output}'\n`, "utf8")
+
+	const settings = JSON.parse(await readFile(settingsPath(dlineDir), "utf8")) as Record<string, unknown>
+	settings.hooksEnabled = true
 	await writeFile(settingsPath(dlineDir), `${JSON.stringify(settings, null, 2)}\n`, "utf8")
 }
 
@@ -121,6 +185,34 @@ async function reopenTask(sidebar: Frame, taskText: string): Promise<void> {
 	await expect(historyTask).toBeVisible({ timeout: 30_000 })
 	await historyTask.click()
 	await expect(sidebar.getByText(taskText, { exact: true }).first()).toBeVisible()
+}
+
+async function setAutoApproveAction(sidebar: Frame, label: string, enabled: boolean): Promise<void> {
+	await sidebar.getByLabel("Open auto-approve settings").click()
+	const checkbox = sidebar.locator("vscode-checkbox").filter({ hasText: label })
+	await expect(checkbox).toHaveCount(1)
+	const isChecked = () => checkbox.evaluate((element) => Boolean((element as HTMLInputElement).checked))
+	if ((await isChecked()) !== enabled) {
+		await sidebar.getByText(label, { exact: true }).click()
+	}
+	await expect.poll(isChecked).toBe(enabled)
+	await sidebar.getByLabel("Close auto-approve settings").click()
+}
+
+async function expectScrollable40Vh(results: Locator): Promise<void> {
+	await expect(results).toBeVisible({ timeout: 60_000 })
+	const metrics = await results.evaluate((element) => ({
+		className: element.className,
+		maxHeight: getComputedStyle(element).maxHeight,
+		overflowY: getComputedStyle(element).overflowY,
+		clientHeight: element.clientHeight,
+		scrollHeight: element.scrollHeight,
+		viewportHeight: window.innerHeight,
+	}))
+	expect(metrics.className).toContain("max-h-[40vh]")
+	expect(metrics.overflowY).toBe("auto")
+	expect(metrics.scrollHeight).toBeGreaterThan(metrics.clientHeight)
+	expect(Number.parseFloat(metrics.maxHeight)).toBeCloseTo(metrics.viewportHeight * 0.4, 0)
 }
 
 function searchMechanisms(consumption: MockApiConsumption): SearchMechanisms {
@@ -154,11 +246,14 @@ function expectIsolatedDirectories(dlineDir: string, dlineHomeDir: string, dline
 	expect(path.resolve(dlineDocsDir)).not.toBe(path.resolve(dlineDir))
 }
 
-async function expectHostedLifecycle(sidebar: Frame, query: string): Promise<void> {
+async function expectHostedLifecycle(sidebar: Frame, query: string, result: { title: string; url: string }): Promise<Locator> {
 	await expect(sidebar.getByText("Dline searched the web for:", { exact: true })).toBeVisible({ timeout: 60_000 })
-	const queryDisplay = sidebar.locator("span.ph-no-capture").filter({ hasText: query })
-	await expect(queryDisplay).toHaveCount(1)
-	await expect(queryDisplay).toContainText(query)
+	const card = sidebar.getByTestId("web-search-card").filter({ hasText: query })
+	await expect(card).toHaveCount(1)
+	await expect(card.getByText(query, { exact: true })).toBeVisible()
+	await expect(card.getByText(result.title, { exact: true })).toBeVisible()
+	await expect(card.getByText(result.url, { exact: true })).toBeVisible()
+	return card
 }
 
 e2e(
@@ -185,7 +280,10 @@ e2e(
 			const opened = await openSidebar(openVSCode, workspaceDir, helper)
 			app = opened.app
 			await sendTask(opened.sidebar, "Use OpenAI provider-hosted search and finish the task.")
-			await expectHostedLifecycle(opened.sidebar, query)
+			await expectHostedLifecycle(opened.sidebar, query, {
+				title: "OpenAI hosted result",
+				url: "https://example.test/openai-hosted",
+			})
 			await expect(opened.sidebar.getByText(completion, { exact: false }).last()).toBeVisible({ timeout: 60_000 })
 
 			const [firstRequest] = server.getMockConsumptions("openai-official-responses")
@@ -288,7 +386,10 @@ e2e(
 			const opened = await openSidebar(openVSCode, workspaceDir, helper)
 			app = opened.app
 			await sendTask(opened.sidebar, "Use forced remote web search and finish the task.")
-			await expectHostedLifecycle(opened.sidebar, query)
+			await expectHostedLifecycle(opened.sidebar, query, {
+				title: "Forced remote result",
+				url: "https://example.test/forced-remote",
+			})
 			await expect(opened.sidebar.getByText(completion, { exact: false }).last()).toBeVisible({ timeout: 60_000 })
 
 			const [firstRequest] = server.getMockConsumptions("openai-compatible-responses")
@@ -328,7 +429,10 @@ e2e(
 			const opened = await openSidebar(openVSCode, workspaceDir, helper)
 			app = opened.app
 			await sendTask(opened.sidebar, "Use DeepSeek provider-hosted search and finish the task.")
-			await expectHostedLifecycle(opened.sidebar, query)
+			await expectHostedLifecycle(opened.sidebar, query, {
+				title: "DeepSeek hosted result",
+				url: "https://example.test/deepseek-hosted",
+			})
 			await expect(opened.sidebar.getByText(completion, { exact: false }).last()).toBeVisible({ timeout: 60_000 })
 
 			const [firstRequest] = server.getMockConsumptions("deepseek-responses")
@@ -367,7 +471,10 @@ e2e(
 			const opened = await openSidebar(openVSCode, workspaceDir, helper)
 			app = opened.app
 			await sendTask(opened.sidebar, "Use Anthropic hosted search and finish the task.")
-			await expectHostedLifecycle(opened.sidebar, query)
+			await expectHostedLifecycle(opened.sidebar, query, {
+				title: "Anthropic hosted result",
+				url: "https://example.test/anthropic-hosted",
+			})
 			await expect(opened.sidebar.getByText(completion, { exact: false }).last()).toBeVisible({ timeout: 60_000 })
 
 			const [firstRequest] = server.getMockConsumptions("anthropic-messages")
@@ -411,12 +518,20 @@ e2e(
 		try {
 			const opened = await openSidebar(openVSCode, workspaceDir, helper)
 			app = opened.app
+			await setAutoApproveAction(opened.sidebar, "Use the browser", true)
+			await setAutoApproveAction(opened.sidebar, "Use Web", false)
 			await sendTask(opened.sidebar, "Search locally when hosted search is unavailable, then finish.")
 			await expect(opened.sidebar.getByText("Dline wants to search the web for:", { exact: true })).toBeVisible({
 				timeout: 60_000,
 			})
 			await opened.sidebar.getByText("Approve", { exact: true }).click()
 			await expect(opened.sidebar.getByText(completion, { exact: false }).last()).toBeVisible({ timeout: 60_000 })
+			const searchCard = opened.sidebar.getByTestId("web-search-card").filter({ hasText: query })
+			await expect(searchCard).toHaveCount(1)
+			await expect(searchCard.getByText("SearXNG (Dline)", { exact: true })).toBeVisible()
+			await expect(searchCard.getByText(resultMarker, { exact: true })).toBeVisible()
+			await expect(searchCard.getByText("https://example.test/dline-local-search", { exact: true })).toBeVisible()
+			await expectScrollable40Vh(searchCard.getByTestId("web-search-results"))
 
 			const consumptions = server.getMockConsumptions("openai-compatible-chat")
 			expect(consumptions).toHaveLength(2)
@@ -425,6 +540,44 @@ e2e(
 			expect(searchRequest).toMatchObject({ query, format: "json" })
 			expect(searchRequest.authorization).toBeUndefined()
 			expect(JSON.stringify(consumptions[1].requestBody)).toContain(resultMarker)
+			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+		} finally {
+			await app?.close()
+		}
+	},
+)
+
+e2e(
+	"ServerTool runtime - legacy Auto Approve All does not bypass disabled Use Web",
+	async ({ dlineDir, dlineDocsDir, dlineHomeDir, helper, openVSCode, server, userDataDir, workspaceDir }) => {
+		e2e.setTimeout(120_000)
+		expectIsolatedDirectories(dlineDir, dlineHomeDir, dlineDocsDir)
+		await prepareRuntimeProfile(dlineDir, E2E_PROFILE_NAMES.mockOpenAi, {
+			enabled: true,
+			mode: "WEB_SEARCH_MODE_AUTO",
+			supportsWebSearch: true,
+		})
+		await configureSearxngSearch(dlineDir, server.baseUrl)
+		await configureLegacyAutoApproveAll(dlineDir)
+		const query = "Dline legacy auto approve isolation"
+		server.enqueueResponses("openai-compatible-chat", {
+			type: "tool",
+			id: "call_legacy_auto_approve_web_search",
+			name: "web_search",
+			arguments: { query },
+		})
+
+		let app: ElectronApplication | undefined
+		try {
+			const opened = await openSidebar(openVSCode, workspaceDir, helper)
+			app = opened.app
+			await sendTask(opened.sidebar, "Require explicit approval despite the removed legacy total auto-approve state.")
+
+			await expect(opened.sidebar.getByText("Dline wants to search the web for:", { exact: true })).toBeVisible({
+				timeout: 60_000,
+			})
+			await expect(opened.sidebar.getByRole("contentinfo").getByText("Approve", { exact: true })).toBeVisible()
+			expect(server.getSearxngSearchRequests()).toHaveLength(0)
 			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
 		} finally {
 			await app?.close()
@@ -475,6 +628,18 @@ e2e(
 
 			await expect(opened.sidebar.getByText(completion, { exact: false }).last()).toBeVisible({ timeout: 60_000 })
 			await expect.poll(() => server.getSearxngSearchRequests().length, { timeout: 30_000 }).toBe(1)
+			const completedCard = opened.sidebar.getByTestId("web-search-card").filter({ hasText: query })
+			await expect(completedCard).toHaveCount(1)
+			await expect(completedCard.getByText(resultMarker, { exact: true })).toBeVisible()
+			await expect(completedCard.getByText("https://example.test/dline-local-search", { exact: true })).toBeVisible()
+
+			await closeCurrentTask(opened.sidebar)
+			await reopenTask(opened.sidebar, taskText)
+			const restoredCard = opened.sidebar.getByTestId("web-search-card").filter({ hasText: query })
+			await expect(restoredCard).toHaveCount(1)
+			await expect(restoredCard.getByText(resultMarker, { exact: true })).toBeVisible()
+			await expect(restoredCard.getByText("https://example.test/dline-local-search", { exact: true })).toBeVisible()
+
 			const consumptions = server.getMockConsumptions("openai-compatible-chat")
 			expect(consumptions).toHaveLength(2)
 			expect(consumptions[1].contractError).toBeUndefined()
@@ -516,12 +681,16 @@ e2e(
 		try {
 			const opened = await openSidebar(openVSCode, workspaceDir, helper)
 			app = opened.app
+			await setAutoApproveAction(opened.sidebar, "Use the browser", false)
+			await setAutoApproveAction(opened.sidebar, "Use Web", true)
 			await sendTask(opened.sidebar, "Force local web search even though hosted search is available, then finish.")
-			await expect(opened.sidebar.getByText("Dline wants to search the web for:", { exact: true })).toBeVisible({
-				timeout: 60_000,
-			})
-			await opened.sidebar.getByText("Approve", { exact: true }).click()
+			await expect.poll(() => server.getSearxngSearchRequests().length, { timeout: 60_000 }).toBe(1)
+			await expect(opened.sidebar.getByText("Approve", { exact: true })).toHaveCount(0)
 			await expect(opened.sidebar.getByText(completion, { exact: false }).last()).toBeVisible({ timeout: 60_000 })
+			const searchCard = opened.sidebar.getByTestId("web-search-card").filter({ hasText: query })
+			await expect(searchCard).toHaveCount(1)
+			await expect(searchCard.getByText(resultMarker, { exact: true })).toBeVisible()
+			await expect(searchCard.getByText("https://example.test/dline-local-search", { exact: true })).toBeVisible()
 
 			const consumptions = server.getMockConsumptions("openai-compatible-responses")
 			expect(consumptions).toHaveLength(2)
@@ -537,16 +706,77 @@ e2e(
 	},
 )
 
+e2e(
+	"ServerTool runtime - OpenAI Responses manual Web Fetch reaches a terminal state within the product budget",
+	async ({ dlineDir, dlineDocsDir, dlineHomeDir, helper, openVSCode, server, userDataDir, workspaceDir }) => {
+		e2e.setTimeout(120_000)
+		expectIsolatedDirectories(dlineDir, dlineHomeDir, dlineDocsDir)
+		await prepareRuntimeProfile(dlineDir, E2E_PROFILE_NAMES.mockOpenAiResponses, {
+			enabled: true,
+			mode: "WEB_SEARCH_MODE_AUTO",
+			supportsWebSearch: true,
+		})
+		const url = `${server.baseUrl}/mock/web-fetch/page`
+		const prompt = "Return the local Web Fetch page content within the product budget"
+		const completion = "E2E_RESPONSES_MANUAL_WEB_FETCH_TERMINAL"
+		server.enqueueResponses(
+			"openai-compatible-responses",
+			{ type: "tool", id: "call_responses_manual_web_fetch", name: "web_fetch", arguments: { url, prompt } },
+			{
+				type: "tool",
+				id: "call_responses_manual_web_fetch_done",
+				name: "attempt_completion",
+				arguments: { result: completion },
+			},
+		)
+
+		let app: ElectronApplication | undefined
+		try {
+			const opened = await openSidebar(openVSCode, workspaceDir, helper)
+			app = opened.app
+			await setAutoApproveAction(opened.sidebar, "Use Web", false)
+			await sendTask(opened.sidebar, "Run an OpenAI Responses local Web Fetch after explicit approval.")
+			await expect(opened.sidebar.getByText("Dline wants to fetch content from this URL:", { exact: true })).toBeVisible({
+				timeout: 60_000,
+			})
+			await opened.sidebar.getByRole("contentinfo").getByText("Approve", { exact: true }).click()
+
+			const fetchCard = opened.sidebar.getByTestId("web-fetch-card").filter({ hasText: url })
+			await expect(fetchCard).toHaveCount(1)
+			await expect
+				.poll(
+					async () => {
+						if ((await fetchCard.getByTestId("web-fetch-results").count()) > 0) return "completed"
+						const text = (await fetchCard.textContent()) ?? ""
+						return /Web fetch failed:|Error fetching web content:|timed out|timeout|cancelled|canceled/i.test(text)
+							? "failed"
+							: "running"
+					},
+					{ timeout: 45_000, intervals: [250, 500, 1_000] },
+				)
+				.toMatch(/completed|failed/)
+			await expect(opened.sidebar.getByText(completion, { exact: false }).last()).toBeVisible({ timeout: 60_000 })
+			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+		} finally {
+			await app?.close()
+		}
+	},
+)
+
 const webFetchCases = [
 	{
 		title: "OpenAI Chat",
 		profileName: E2E_PROFILE_NAMES.mockOpenAi,
 		target: "openai-compatible-chat" as MockApiTarget,
+		useBrowser: true,
+		useWeb: false,
 	},
 	{
 		title: "OpenAI Responses",
 		profileName: E2E_PROFILE_NAMES.mockOpenAiResponses,
 		target: "openai-compatible-responses" as MockApiTarget,
+		useBrowser: false,
+		useWeb: true,
 	},
 ] as const
 
@@ -554,13 +784,14 @@ for (const testCase of webFetchCases) {
 	e2e(
 		`ServerTool runtime - ${testCase.title} executes local Web Fetch without a Cline login`,
 		async ({ dlineDir, dlineDocsDir, dlineHomeDir, helper, openVSCode, server, userDataDir, workspaceDir }) => {
-			e2e.setTimeout(180_000)
+			e2e.setTimeout(300_000)
 			expectIsolatedDirectories(dlineDir, dlineHomeDir, dlineDocsDir)
 			await prepareRuntimeProfile(dlineDir, testCase.profileName, {
 				enabled: true,
 				mode: "WEB_SEARCH_MODE_AUTO",
 				supportsWebSearch: true,
 			})
+			await prepareWebFetchBrowser(dlineHomeDir)
 			const url = `${server.baseUrl}/mock/web-fetch/page`
 			const prompt = "Extract the local Web Fetch marker"
 			const completion = `E2E_${testCase.target.toUpperCase().replaceAll("-", "_")}_WEB_FETCH_OK`
@@ -586,14 +817,32 @@ for (const testCase of webFetchCases) {
 			try {
 				const opened = await openSidebar(openVSCode, workspaceDir, helper)
 				app = opened.app
+				await setAutoApproveAction(opened.sidebar, "Use the browser", testCase.useBrowser)
+				await setAutoApproveAction(opened.sidebar, "Use Web", testCase.useWeb)
 				await sendTask(opened.sidebar, `Use ${testCase.title} local Web Fetch without signing in to Cline.`)
-				await expect(
-					opened.sidebar.getByText("Dline wants to fetch content from this URL:", { exact: true }),
-				).toBeVisible({
-					timeout: 60_000,
+				if (testCase.useWeb) {
+					await expect(opened.sidebar.getByTestId("web-fetch-card").filter({ hasText: url })).toBeVisible({
+						timeout: 60_000,
+					})
+					await expect(opened.sidebar.getByText("Approve", { exact: true })).toHaveCount(0)
+				} else {
+					await expect(
+						opened.sidebar.getByText("Dline wants to fetch content from this URL:", { exact: true }),
+					).toBeVisible({
+						timeout: 60_000,
+					})
+					await opened.sidebar.getByText("Approve", { exact: true }).click()
+				}
+				const fetchCard = opened.sidebar.getByTestId("web-fetch-card").filter({ hasText: url })
+				await expect(fetchCard).toHaveCount(1)
+				await expect(fetchCard.getByText("Browser Web Fetch (Dline)", { exact: true })).toBeVisible({
+					timeout: 180_000,
 				})
-				await opened.sidebar.getByText("Approve", { exact: true }).click()
-				await expect(opened.sidebar.getByText(completion, { exact: false }).last()).toBeVisible({ timeout: 90_000 })
+				const fetchResults = fetchCard.getByTestId("web-fetch-results")
+				await expect(fetchResults).toContainText("E2E\\_WEB\\_FETCH\\_PAGE\\_CONTENT\\_00")
+				await expect(fetchResults).toContainText("E2E\\_WEB\\_FETCH\\_PAGE\\_CONTENT\\_31")
+				await expectScrollable40Vh(fetchResults)
+				await expect(opened.sidebar.getByText(completion, { exact: false }).last()).toBeVisible({ timeout: 60_000 })
 
 				const consumptions = server.getMockConsumptions(testCase.target)
 				expect(consumptions).toHaveLength(2)
@@ -609,6 +858,237 @@ for (const testCase of webFetchCases) {
 		},
 	)
 }
+
+e2e(
+	"ServerTool runtime - checkpoint Restore cancels an established Web Fetch before the first Resume",
+	async ({ dlineDir, dlineDocsDir, dlineHomeDir, helper, openVSCode, server, userDataDir, workspaceDir }) => {
+		e2e.setTimeout(480_000)
+		expectIsolatedDirectories(dlineDir, dlineHomeDir, dlineDocsDir)
+		await prepareRuntimeProfile(dlineDir, E2E_PROFILE_NAMES.mockOpenAiResponses, {
+			enabled: true,
+			mode: "WEB_SEARCH_MODE_AUTO",
+			supportsWebSearch: true,
+		})
+		await prepareWebFetchBrowser(dlineHomeDir)
+		const warmUrl = `${server.baseUrl}/mock/web-fetch/page`
+		const delayedUrl = `${server.baseUrl}/mock/web-fetch/page?delayMs=30000`
+		const resumeDraft = "E2E_WEB_FETCH_RESTORE_FIRST_RESUME_DRAFT"
+		const completion = "E2E_WEB_FETCH_RESTORE_FIRST_RESUME_OK"
+		server.enqueueResponses(
+			"openai-compatible-responses",
+			{
+				type: "tool",
+				id: "call_web_fetch_restore_ready",
+				name: "qna_respond",
+				arguments: { response: "E2E_WEB_FETCH_RESTORE_READY" },
+			},
+			{
+				type: "tool",
+				id: "call_web_fetch_restore_warm",
+				name: "web_fetch",
+				arguments: { url: warmUrl, prompt: "Warm the isolated Web Fetch browser" },
+			},
+			{
+				type: "tool",
+				id: "call_web_fetch_restore_warm_ready",
+				name: "qna_respond",
+				arguments: { response: "E2E_WEB_FETCH_RESTORE_WARM_READY" },
+				expectedToolResults: [{ callId: "call_web_fetch_restore_warm", contentIncludes: "Dline local Web Fetch" }],
+			},
+			{
+				type: "tool",
+				id: "call_web_fetch_restore_in_flight",
+				name: "web_fetch",
+				arguments: { url: delayedUrl, prompt: "Remain in flight until checkpoint restore cancels this request" },
+			},
+			{
+				type: "tool",
+				id: "call_web_fetch_restore_done",
+				name: "attempt_completion",
+				arguments: { result: completion },
+				expectedRequestIncludes: [resumeDraft],
+			},
+			{
+				type: "error",
+				status: 500,
+				code: "unexpected_post_restore_request",
+				message: "An obsolete Web Fetch continuation consumed the post-restore response",
+			},
+		)
+
+		let app: ElectronApplication | undefined
+		try {
+			const opened = await openSidebar(openVSCode, workspaceDir, helper)
+			app = opened.app
+			await setAutoApproveAction(opened.sidebar, "Use Web", false)
+			await sendTask(opened.sidebar, "Create a checkpoint before warming Web Fetch.")
+			await expect(opened.sidebar.getByText("E2E_WEB_FETCH_RESTORE_READY", { exact: true })).toBeVisible({
+				timeout: 60_000,
+			})
+
+			const checkpointLabels = opened.sidebar.getByText("Checkpoint", { exact: true })
+			await expect.poll(() => checkpointLabels.count(), { timeout: 30_000 }).toBeGreaterThan(0)
+			const initialCheckpointControl = checkpointLabels.first().locator("..").locator("..")
+			const input = opened.sidebar.getByTestId("chat-input")
+			await input.fill("E2E_WARM_WEB_FETCH")
+			await input.press("Enter")
+			await expect(opened.sidebar.getByRole("contentinfo").getByText("Approve", { exact: true })).toBeVisible({
+				timeout: 60_000,
+			})
+			await opened.sidebar.getByRole("contentinfo").getByText("Approve", { exact: true }).click()
+			await expect(opened.sidebar.getByText("E2E_WEB_FETCH_RESTORE_WARM_READY", { exact: true })).toBeVisible({
+				timeout: 300_000,
+			})
+			await expect.poll(() => server.getWebFetchPageRequests().length, { timeout: 30_000 }).toBe(1)
+
+			await input.fill("E2E_START_DELAYED_WEB_FETCH")
+			await input.press("Enter")
+			const approveButton = opened.sidebar.getByRole("contentinfo").getByText("Approve", { exact: true })
+			await expect(approveButton).toBeVisible({ timeout: 60_000 })
+			await approveButton.click()
+			const runningCard = opened.sidebar.getByTestId("web-fetch-card").filter({ hasText: delayedUrl })
+			await expect(runningCard).toBeVisible({ timeout: 30_000 })
+			await expect.poll(() => server.getWebFetchPageRequests().length, { timeout: 30_000 }).toBe(2)
+
+			await initialCheckpointControl.hover()
+			await initialCheckpointControl.getByRole("button", { name: "Restore", exact: true }).click()
+			const moreOptions = opened.sidebar.getByText("More options", { exact: true })
+			await expect(moreOptions).toBeVisible()
+			await moreOptions.click()
+			const restoreTaskButton = opened.sidebar.getByRole("button", { name: "Restore Task Only", exact: true })
+			const restoreStartedAt = Date.now()
+			await restoreTaskButton.click()
+
+			const resumeButton = opened.sidebar.getByRole("contentinfo").getByText("Resume", { exact: true })
+			await expect(resumeButton).toBeVisible({ timeout: 5_000 })
+			await expect
+				.poll(() => server.getWebFetchPageRequests()[1]?.closedAtMs, { timeout: 5_000 })
+				.toBeGreaterThanOrEqual(restoreStartedAt)
+			await input.fill(resumeDraft)
+			await resumeButton.click()
+
+			await expect(input).toHaveValue("")
+			await expect(opened.sidebar.getByText(/stale_interaction|stale interaction/i)).toHaveCount(0)
+			await expect(opened.sidebar.getByText(completion, { exact: false }).last()).toBeVisible({ timeout: 60_000 })
+			await expect.poll(() => server.getMockConsumptions("openai-compatible-responses").length).toBe(5)
+			const continuation = server.getMockConsumptions("openai-compatible-responses")[4]
+			expect(continuation.contractError).toBeUndefined()
+			expect(JSON.stringify(continuation.requestBody)).toContain(resumeDraft)
+			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+		} finally {
+			await app?.close()
+		}
+	},
+)
+
+e2e(
+	"ServerTool runtime - PreToolUse cancellation terminates and restores the local Web Fetch card",
+	async ({ dlineDir, dlineDocsDir, dlineHomeDir, helper, openVSCode, server, userDataDir, workspaceDir }) => {
+		e2e.setTimeout(180_000)
+		expectIsolatedDirectories(dlineDir, dlineHomeDir, dlineDocsDir)
+		await prepareRuntimeProfile(dlineDir, E2E_PROFILE_NAMES.mockOpenAiResponses, {
+			enabled: true,
+			mode: "WEB_SEARCH_MODE_AUTO",
+			supportsWebSearch: true,
+		})
+		const errorMessage = "E2E Web Fetch blocked by PreToolUse hook"
+		await configureCancelingPreToolUseHook(dlineDir, workspaceDir, errorMessage)
+		const url = `${server.baseUrl}/mock/web-fetch/page`
+		const prompt = "This fetch must be blocked before provider execution"
+		const taskText = "Run the Web Fetch that the workspace policy will block."
+		server.enqueueResponses("openai-compatible-responses", {
+			type: "tool",
+			id: "call_hook_cancelled_web_fetch",
+			name: "web_fetch",
+			arguments: { url, prompt },
+		})
+
+		let app: ElectronApplication | undefined
+		try {
+			const opened = await openSidebar(openVSCode, workspaceDir, helper)
+			app = opened.app
+			await setAutoApproveAction(opened.sidebar, "Use Web", true)
+			await sendTask(opened.sidebar, taskText)
+
+			const fetchCard = opened.sidebar.getByTestId("web-fetch-card").filter({ hasText: url })
+			await expect(fetchCard.getByText(errorMessage, { exact: true })).toBeVisible({ timeout: 60_000 })
+			await expect(fetchCard).toHaveCount(1)
+			await expect(fetchCard.getByTestId("web-fetch-results")).toHaveCount(0)
+			await expect(opened.sidebar.getByText("Approve", { exact: true })).toHaveCount(0)
+			expect(server.getWebFetchPageRequests()).toHaveLength(0)
+			expect(server.getMockConsumptions("openai-compatible-responses")).toHaveLength(1)
+
+			await closeCurrentTask(opened.sidebar)
+			await reopenTask(opened.sidebar, taskText)
+			const restoredCard = opened.sidebar.getByTestId("web-fetch-card").filter({ hasText: url })
+			await expect(restoredCard).toHaveCount(1)
+			await expect(restoredCard.getByText(errorMessage, { exact: true })).toBeVisible()
+			await expect(restoredCard.getByTestId("web-fetch-results")).toHaveCount(0)
+			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+		} finally {
+			await app?.close()
+		}
+	},
+)
+
+e2e(
+	"ServerTool runtime - local Web Fetch failure is replayed to the model and restored as one terminal card",
+	async ({ dlineDir, dlineDocsDir, dlineHomeDir, helper, openVSCode, server, userDataDir, workspaceDir }) => {
+		e2e.setTimeout(300_000)
+		expectIsolatedDirectories(dlineDir, dlineHomeDir, dlineDocsDir)
+		await prepareRuntimeProfile(dlineDir, E2E_PROFILE_NAMES.mockOpenAi, {
+			enabled: true,
+			mode: "WEB_SEARCH_MODE_AUTO",
+			supportsWebSearch: true,
+		})
+		await prepareWebFetchBrowser(dlineHomeDir)
+		const url = "http://127.0.0.1:1/e2e-web-fetch-failure"
+		const prompt = "Extract content from the intentionally unreachable page"
+		const taskText = "Attempt the unreachable local Web Fetch, report its error, then finish."
+		const completion = "E2E_LOCAL_WEB_FETCH_FAILURE_REPLAYED"
+		server.enqueueResponses(
+			"openai-compatible-chat",
+			{ type: "tool", id: "call_failed_web_fetch", name: "web_fetch", arguments: { url, prompt } },
+			{
+				type: "tool",
+				id: "call_failed_web_fetch_done",
+				name: "attempt_completion",
+				arguments: { result: completion },
+				expectedToolResults: [{ callId: "call_failed_web_fetch", contentIncludes: ["Error fetching web content", url] }],
+			},
+		)
+
+		let app: ElectronApplication | undefined
+		try {
+			const opened = await openSidebar(openVSCode, workspaceDir, helper)
+			app = opened.app
+			await setAutoApproveAction(opened.sidebar, "Use Web", true)
+			await sendTask(opened.sidebar, taskText)
+			await expect(opened.sidebar.getByText(completion, { exact: false }).last()).toBeVisible({ timeout: 180_000 })
+
+			const fetchCard = opened.sidebar.getByTestId("web-fetch-card").filter({ hasText: url })
+			await expect(fetchCard).toHaveCount(1)
+			await expect(fetchCard).toContainText(/ERR_UNSAFE_PORT|unsafe port/i)
+			await expect(fetchCard.getByTestId("web-fetch-results")).toHaveCount(0)
+			await expect(opened.sidebar.getByText("Approve", { exact: true })).toHaveCount(0)
+
+			const consumptions = server.getMockConsumptions("openai-compatible-chat")
+			expect(consumptions).toHaveLength(2)
+			expect(consumptions[1].contractError).toBeUndefined()
+			expect(JSON.stringify(consumptions[1].requestBody)).toContain("Error fetching web content")
+
+			await closeCurrentTask(opened.sidebar)
+			await reopenTask(opened.sidebar, taskText)
+			const restoredCard = opened.sidebar.getByTestId("web-fetch-card").filter({ hasText: url })
+			await expect(restoredCard).toHaveCount(1)
+			await expect(restoredCard).toContainText(/ERR_UNSAFE_PORT|unsafe port/i)
+			await expect(restoredCard.getByTestId("web-fetch-results")).toHaveCount(0)
+			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+		} finally {
+			await app?.close()
+		}
+	},
+)
 
 const disabledCases = [
 	{

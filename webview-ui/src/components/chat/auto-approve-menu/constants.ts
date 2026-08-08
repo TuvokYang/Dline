@@ -44,6 +44,12 @@ export const ACTION_METADATA: ActionMetadata[] = [
 		id: "useBrowser",
 		label: "Use the browser",
 		shortName: "Browser",
+		icon: "codicon-browser",
+	},
+	{
+		id: "useWeb",
+		label: "Use Web",
+		shortName: "Web",
 		icon: "codicon-globe",
 	},
 	{
