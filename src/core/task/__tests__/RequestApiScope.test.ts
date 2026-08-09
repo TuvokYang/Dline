@@ -97,7 +97,7 @@ describe("createRequestApiScope", () => {
 		})
 	})
 
-	it("uses local Web Search in Auto when hosted execution is not auto-approved", () => {
+	it("does not store a local auto-approval gate in the hosted request scope", () => {
 		const handler = createHandler("metadata-provider", "hosted-model")
 		handler.getModel = () => ({
 			id: "hosted-model",
@@ -109,10 +109,13 @@ describe("createRequestApiScope", () => {
 		})
 		handler.supportsServerTool = (tool) => tool === ServerTool.WEB_SEARCH
 
-		expect(createRequestApiScope(handler, "act", undefined, true, false).webSearchRoutingPlan).toMatchObject({
-			route: "local",
-			localToolEnabled: true,
-			serverTools: [],
+		const scope = createRequestApiScope(handler, "act", undefined, true)
+
+		expect(scope).not.toHaveProperty("hostedWebSearchAllowed")
+		expect(scope.webSearchRoutingPlan).toMatchObject({
+			route: "hosted",
+			localToolEnabled: false,
+			serverTools: [ServerTool.WEB_SEARCH],
 		})
 	})
 

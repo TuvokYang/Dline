@@ -272,6 +272,51 @@ function reduceResumeApi(
 	}
 }
 
+/** Continue one restored Hosted Web request whose user message is already durable. */
+function reduceHostedWebRequest(
+	state: TaskRuntimeState,
+	event: Extract<TaskEvent, { type: "HOSTED_WEB_REQUEST_CONTINUATION_REQUESTED" }>,
+): TransitionResult {
+	const interaction = state.interaction
+	if (
+		interaction?.kind !== "hosted_web_approval" ||
+		interaction.status !== "resolving" ||
+		interaction.interactionId !== event.interactionId ||
+		interaction.acceptedResponse?.actionId !== "approve" ||
+		event.apiIndex !== state.anchor.apiIndex
+	) {
+		return reject(state, event.type)
+	}
+	if (state.phase !== TaskPhase.STREAMING && !canTransition(state.phase, TaskPhase.STREAMING)) {
+		return reject(state, event.type)
+	}
+	const revision = state.revision + 1
+	return {
+		accepted: true,
+		next: {
+			...state,
+			phase: TaskPhase.STREAMING,
+			revision,
+			interaction: undefined,
+			anchor: {
+				...state.anchor,
+				apiIndex: event.apiIndex,
+				interactionId: undefined,
+			},
+		},
+		effects: [
+			{ id: effectId(revision, 1), type: "POST_TASK_VIEW" },
+			{
+				id: effectId(revision, 2),
+				type: "START_API",
+				apiIndex: event.apiIndex,
+				persistedRequest: true,
+			},
+			{ id: effectId(revision, 3), type: "PERSIST_SNAPSHOT" },
+		],
+	}
+}
+
 /** Reset only reconciled non-terminal blocks before replaying their normal handler lifecycle. */
 function reduceResumeBlocks(
 	state: TaskRuntimeState,
@@ -502,6 +547,7 @@ function reduceInteractionOpen(
 	}
 	const approvalKinds = new Set([
 		"tool_approval",
+		"hosted_web_approval",
 		"command_approval",
 		"browser_approval",
 		"mcp_approval",
@@ -522,6 +568,10 @@ function reduceInteractionOpen(
 	const turn = approvalBlock
 		? replaceTurnBlock(state, approvalBlock.dlineTid, BlockPhase.AWAITING_APPROVAL, approvalBlock.dlineTid)
 		: state.turn
+	const requestApproval = event.kind === "hosted_web_approval"
+	if (requestApproval && !canTransition(state.phase, TaskPhase.AWAITING_APPROVAL)) {
+		return reject(state, event.type)
+	}
 	const revision = state.revision + 1
 	const definition = getInteraction(event.kind)
 	return {
@@ -529,7 +579,7 @@ function reduceInteractionOpen(
 		next: {
 			...state,
 			...(turn ? { turn } : {}),
-			...(approvalBlock ? { phase: TaskPhase.AWAITING_APPROVAL } : {}),
+			...(approvalBlock || requestApproval ? { phase: TaskPhase.AWAITING_APPROVAL } : {}),
 			revision,
 			anchor: { ...state.anchor, turnId: event.turnId, interactionId: event.interactionId },
 			interaction: {
@@ -610,6 +660,19 @@ function reduceInteractionResponse(
 	}
 	const revision = state.revision + 1
 	const effects = interactionResponseEffects(state.interaction, event.response, revision)
+	if (state.interaction.kind === "hosted_web_approval") {
+		const phase = event.response.actionId === "approve" ? TaskPhase.STREAMING : TaskPhase.PAUSED
+		if (!canTransition(state.phase, phase)) {
+			return reject(state, event.type)
+		}
+		return accept(state, {
+			eventType: event.type,
+			phase,
+			interaction: result.next,
+			anchor: { ...state.anchor },
+			effects,
+		})
+	}
 	const turn = state.turn
 	if (!turn || turn.turnId !== event.response.turnId) {
 		return acceptInteraction(state, result.next, state.anchor, effects)
@@ -1167,6 +1230,8 @@ export function reduceTask(state: TaskRuntimeState, event: TaskEvent): Transitio
 			return reduceApi(state, event)
 		case "RESUME_API_CONTINUATION_REQUESTED":
 			return reduceResumeApi(state, event)
+		case "HOSTED_WEB_REQUEST_CONTINUATION_REQUESTED":
+			return reduceHostedWebRequest(state, event)
 		case "RESUME_BLOCK_REPLAY_REQUESTED":
 			return reduceResumeBlocks(state, event)
 		case "TURN_CREATED":

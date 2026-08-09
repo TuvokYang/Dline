@@ -155,7 +155,7 @@ describe("local Web Tool routing", () => {
 		})
 	})
 
-	it("keeps hosted execution disabled for a restored approval when Use Web is off", () => {
+	it("keeps provider-hosted search enabled for restored execution when local Use Web auto-approval is off", () => {
 		const executor = Object.assign(Object.create(ToolExecutor.prototype), {
 			api: {
 				getModel: () => ({
@@ -187,9 +187,9 @@ describe("local Web Tool routing", () => {
 		).getWebSearchRoutingPlanForExecution
 
 		expect(resolveForExecution.call(executor)).toMatchObject({
-			route: "local",
-			localToolEnabled: true,
-			serverTools: [],
+			route: "hosted",
+			localToolEnabled: false,
+			serverTools: [ServerTool.WEB_SEARCH],
 		})
 	})
 

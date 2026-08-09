@@ -71,6 +71,53 @@ describe("reduceTask lifecycle events", () => {
 		})
 	})
 
+	it("continues an approved restored Hosted Web request through exactly one persisted-request effect", () => {
+		const interactionId = "hosted-web:task-1:3"
+		const state = {
+			...createTaskRuntimeState({
+				taskId: "task-1",
+				phase: TaskPhase.STREAMING,
+				revision: 5,
+				anchor: { apiIndex: 3, turnId: interactionId, interactionId },
+			}),
+			interaction: {
+				taskId: "task-1",
+				turnId: interactionId,
+				interactionId,
+				kind: "hosted_web_approval" as const,
+				status: "resolving" as const,
+				createdRevision: 4,
+				anchor: { messageTs: 100, messageType: "ask" as const },
+				acceptedResponse: {
+					taskId: "task-1",
+					turnId: interactionId,
+					interactionId,
+					actionId: "approve" as const,
+					stateRevision: 4,
+					draft: { text: "", images: [], files: [] },
+				},
+			},
+		}
+
+		const result = reduceTask(state, {
+			type: "HOSTED_WEB_REQUEST_CONTINUATION_REQUESTED",
+			interactionId,
+			apiIndex: 3,
+		})
+
+		expect(result).toMatchObject({
+			accepted: true,
+			next: { phase: TaskPhase.STREAMING, interaction: undefined, anchor: { apiIndex: 3 } },
+		})
+		expect(result.effects.map((effect) => effect.type)).toEqual(["POST_TASK_VIEW", "START_API", "PERSIST_SNAPSHOT"])
+		expect(result.effects.filter((effect) => effect.type === "START_API")).toHaveLength(1)
+		expect(result.effects[1]).toMatchObject({
+			type: "START_API",
+			apiIndex: 3,
+			persistedRequest: true,
+		})
+	})
+
 	it("rejects an API continuation while an unfinished restored turn still owns execution", () => {
 		const state = createTaskRuntimeState({ taskId: "task-1", phase: TaskPhase.STREAMING, anchor: { apiIndex: 3 } })
 		state.turn = {

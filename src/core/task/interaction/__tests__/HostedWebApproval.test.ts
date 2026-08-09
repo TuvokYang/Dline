@@ -5,7 +5,7 @@ import type { TaskEffectPorts } from "../../runtime/TaskEffectRunner"
 import { TaskRuntime } from "../../runtime/TaskRuntime"
 import { createTaskRuntimeState } from "../../runtime/TaskRuntimeState"
 import { TaskPhase } from "../../TaskPhase"
-import { requestHostedWebApproval } from "../HostedWebApproval"
+import { hostedWebApprovalApiIndex, requestHostedWebApproval } from "../HostedWebApproval"
 import { InteractionCoordinator } from "../InteractionCoordinator"
 
 const HOSTED_WEB_PLAN = resolveWebSearchRoutingPlan({
@@ -31,6 +31,14 @@ function createPorts(appendAsk: TaskEffectPorts["appendAsk"]): TaskEffectPorts {
 }
 
 describe("Hosted Web Search request approval", () => {
+	it("parses only this task's canonical non-negative request identity", () => {
+		expect(hostedWebApprovalApiIndex("task-1", "hosted-web:task-1:0")).toBe(0)
+		expect(hostedWebApprovalApiIndex("task-1", "hosted-web:task-1:42")).toBe(42)
+		expect(hostedWebApprovalApiIndex("task-1", "hosted-web:task-2:0")).toBeUndefined()
+		expect(hostedWebApprovalApiIndex("task-1", "hosted-web:task-1:-1")).toBeUndefined()
+		expect(hostedWebApprovalApiIndex("task-1", "hosted-web:task-1:01")).toBeUndefined()
+	})
+
 	it("keeps the hosted route and blocks the Provider request until Use Web approval", async () => {
 		expect(HOSTED_WEB_PLAN).toMatchObject({
 			route: "hosted",
@@ -54,10 +62,10 @@ describe("Hosted Web Search request approval", () => {
 			routingPlan: HOSTED_WEB_PLAN,
 			autoApproved: false,
 		}).then(async (decision) => {
-				if (!decision.approved) return "rejected" as const
-				await sendProviderRequest({ serverTools: HOSTED_WEB_PLAN.serverTools })
-				return "sent" as const
-			})
+			if (!decision.approved) return "rejected" as const
+			await sendProviderRequest({ serverTools: HOSTED_WEB_PLAN.serverTools })
+			return "sent" as const
+		})
 
 		await vi.waitFor(() => expect(runtime.getState().interaction?.status).toBe("awaiting"))
 		expect(runtime.getState()).toMatchObject({
@@ -107,10 +115,10 @@ describe("Hosted Web Search request approval", () => {
 			routingPlan: HOSTED_WEB_PLAN,
 			autoApproved: false,
 		}).then(async (decision) => {
-				if (!decision.approved) return "rejected" as const
-				await sendProviderRequest({ serverTools: HOSTED_WEB_PLAN.serverTools })
-				return "sent" as const
-			})
+			if (!decision.approved) return "rejected" as const
+			await sendProviderRequest({ serverTools: HOSTED_WEB_PLAN.serverTools })
+			return "sent" as const
+		})
 
 		await vi.waitFor(() => expect(runtime.getState().interaction?.status).toBe("awaiting"))
 		expect(sendProviderRequest).not.toHaveBeenCalled()
@@ -136,13 +144,16 @@ describe("Hosted Web Search request approval", () => {
 		const open = vi.fn()
 
 		await expect(
-			requestHostedWebApproval({ open }, {
-				taskId: "task-1",
-				apiIndex: 4,
-				providerId: "openai",
-				routingPlan: HOSTED_WEB_PLAN,
-				autoApproved: true,
-			}),
+			requestHostedWebApproval(
+				{ open },
+				{
+					taskId: "task-1",
+					apiIndex: 4,
+					providerId: "openai",
+					routingPlan: HOSTED_WEB_PLAN,
+					autoApproved: true,
+				},
+			),
 		).resolves.toEqual({ required: false, approved: true })
 		expect(open).not.toHaveBeenCalled()
 	})
@@ -158,13 +169,16 @@ describe("Hosted Web Search request approval", () => {
 		})
 
 		await expect(
-			requestHostedWebApproval({ open }, {
-				taskId: "task-1",
-				apiIndex: 5,
-				providerId: "openai",
-				routingPlan: localPlan,
-				autoApproved: false,
-			}),
+			requestHostedWebApproval(
+				{ open },
+				{
+					taskId: "task-1",
+					apiIndex: 5,
+					providerId: "openai",
+					routingPlan: localPlan,
+					autoApproved: false,
+				},
+			),
 		).resolves.toEqual({ required: false, approved: true })
 		expect(localPlan.route).toBe("local")
 		expect(open).not.toHaveBeenCalled()

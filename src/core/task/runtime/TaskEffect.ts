@@ -46,6 +46,8 @@ export interface StartApiEffect {
 	draft?: InteractionDraft
 	/** Apply the mistake-limit feedback contract before starting the provider. */
 	contentTransform?: "mistake_limit"
+	/** Resume one request whose complete user message is already durable at apiIndex. */
+	persistedRequest?: boolean
 }
 
 /** Execute one canonical tool lifecycle identity. */

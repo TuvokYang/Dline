@@ -45,6 +45,17 @@ describe("projectTaskView", () => {
 		expect(view.activeInteraction).toMatchObject({ askMessageTs: 100, taskAsk: "tool" })
 	})
 
+	it("projects Hosted Web request approval with tool presentation and approval actions", () => {
+		const view = projectTaskView(runtime(TaskPhase.AWAITING_APPROVAL, active("hosted_web_approval")))
+
+		expect(view.activeInteraction).toMatchObject({
+			kind: "hosted_web_approval",
+			presentationKind: "tool_approval",
+			taskAsk: "tool",
+		})
+		expect(view.footer.actions.map((action) => action.type)).toEqual(["approve", "reject"])
+	})
+
 	it("projects the current runtime revision as causal response identity", () => {
 		const view = projectTaskView(runtime(TaskPhase.AWAITING_APPROVAL, active("tool_approval")))
 

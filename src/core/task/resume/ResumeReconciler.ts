@@ -139,7 +139,12 @@ function isPendingCommandApproval(snapshot: TaskSnapshot, message: ClineMessage)
 function interactionKind(snapshot: TaskSnapshot, message: ClineMessage): InteractionKind | undefined {
 	if (message.type !== "ask" || !message.ask) return undefined
 	if (message.ask === "command" && !isPendingCommandApproval(snapshot, message)) return undefined
-	const kind = ASK_INTERACTIONS[message.ask]
+	const currentInteraction = snapshot.interaction
+	let knownKind: InteractionKind | undefined
+	if (currentInteraction && message.interactionId === currentInteraction.interactionId) {
+		knownKind = currentInteraction.kind
+	}
+	const kind = knownKind ?? ASK_INTERACTIONS[message.ask]
 	if (!kind || !BLOCK_APPROVAL_INTERACTIONS.has(kind)) return kind
 	const block = snapshot.turn?.blocks.find((candidate) => candidate.dlineTid === message.interactionId)
 	return block && TERMINAL_BLOCK_PHASES.has(block.phase) ? undefined : kind
@@ -304,7 +309,9 @@ function retainInteractionWithContinuation(
 	kind: InteractionKind,
 	diagnostics: ResumeDiagnostic[],
 ): boolean {
-	if (kind === "resume" || kind === "error_retry" || kind === "mistake_limit") return true
+	if (kind === "hosted_web_approval" || kind === "resume" || kind === "error_retry" || kind === "mistake_limit") {
+		return true
+	}
 	const interaction = snapshot.interaction
 	const turn = snapshot.turn
 	if (

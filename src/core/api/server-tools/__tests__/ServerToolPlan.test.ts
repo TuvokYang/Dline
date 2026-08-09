@@ -188,21 +188,6 @@ describe("resolveWebSearchRoutingPlan", () => {
 		})
 	})
 
-	it("does not fall back locally from Force Remote when hosted execution requires approval", () => {
-		const plan = resolveWebSearchRoutingPlan({
-			...base,
-			mode: WebSearchMode.WEB_SEARCH_MODE_FORCE_REMOTE,
-			hostedExecutionAllowed: false,
-		})
-
-		expect(plan).toMatchObject({
-			route: "unavailable",
-			localToolEnabled: false,
-			serverTools: [],
-			unavailableReason: "hosted_web_search_requires_approval",
-		})
-	})
-
 	it.each([
 		{
 			name: "missing model declaration",

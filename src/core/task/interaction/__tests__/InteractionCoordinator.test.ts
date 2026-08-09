@@ -616,6 +616,96 @@ describe("InteractionCoordinator", () => {
 		expect(runtime.getState().interaction).toBeUndefined()
 	})
 
+	it("hands an accepted Resume continuation to a subsequent request gate", async () => {
+		const interactionId = "resume-request-gate"
+		const turnId = "resume-turn"
+		const response: InteractionResponse = {
+			taskId: "task-1",
+			turnId,
+			interactionId,
+			actionId: "resume",
+			stateRevision: 4,
+			draft: { text: "Continue", images: [], files: [] },
+		}
+		const runtime = new TaskRuntime(
+			hydrateResolvingInteraction({
+				kind: "resume",
+				phase: TaskPhase.RESUMING,
+				turnId,
+				interactionId,
+				response,
+				apiIndex: 2,
+			}),
+			createPorts(),
+		)
+		const coordinator = new InteractionCoordinator(runtime)
+
+		await expect(coordinator.releaseApiContinuationForRequestGate()).resolves.toBe(true)
+		expect(runtime.getState()).toMatchObject({
+			phase: TaskPhase.RESUMING,
+			interaction: undefined,
+			anchor: { apiIndex: 2 },
+		})
+
+		const approval = coordinator.open({
+			turnId: "hosted-web:task-1:2",
+			interactionId: "hosted-web:task-1:2",
+			kind: "hosted_web_approval",
+			presentation: "Hosted Web approval",
+		})
+		await vi.waitFor(() => {
+			expect(runtime.getState()).toMatchObject({
+				phase: TaskPhase.AWAITING_APPROVAL,
+				interaction: {
+					kind: "hosted_web_approval",
+					status: "awaiting",
+				},
+			})
+		})
+		await runtime.dispatch({
+			type: "INTERACTION_RESPONDED",
+			response: {
+				taskId: "task-1",
+				turnId: "hosted-web:task-1:2",
+				interactionId: "hosted-web:task-1:2",
+				actionId: "approve",
+				stateRevision: runtime.getState().revision,
+				draft: { text: "", images: [], files: [] },
+			},
+		})
+		await expect(approval).resolves.toMatchObject({ actionId: "approve" })
+	})
+
+	it("does not release interaction ownership before an API continuation is accepted", async () => {
+		const runtime = new TaskRuntime(
+			{
+				...createTaskRuntimeState({
+					taskId: "task-1",
+					phase: TaskPhase.PAUSED,
+					revision: 4,
+					anchor: { apiIndex: 2, turnId: "resume-turn", interactionId: "resume-awaiting" },
+				}),
+				interaction: {
+					taskId: "task-1",
+					turnId: "resume-turn",
+					interactionId: "resume-awaiting",
+					kind: "resume",
+					status: "awaiting",
+					createdRevision: 3,
+					anchor: { messageTs: 100, messageType: "ask" },
+				},
+			},
+			createPorts(),
+		)
+
+		await expect(new InteractionCoordinator(runtime).releaseApiContinuationForRequestGate()).resolves.toBe(false)
+		expect(runtime.getState().interaction).toMatchObject({
+			kind: "resume",
+			status: "awaiting",
+			interactionId: "resume-awaiting",
+		})
+	})
+
 	it("continues completion from a hydrated resolving response exactly once", async () => {
 		const interactionId = "completion-crash"
 		const turnId = "completion-turn"

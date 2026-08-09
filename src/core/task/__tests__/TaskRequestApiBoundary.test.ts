@@ -24,18 +24,46 @@ describe("Task request API boundary", () => {
 		expect(firstAwaitIndex).toBeGreaterThan(scopeIndex)
 	})
 
+	it("lets an explicit manual compaction command reach slash-command parsing before auto compaction", async () => {
+		const source = await readFile(taskSourcePath, "utf8")
+		const method = extractMethod(source, "async recursivelyMakeClineRequests(", "async loadContext(")
+		const manualIntentIndex = method.indexOf("hasManualCompactionIntent(userContent)")
+		const autoCompactionIndex = method.indexOf("this.contextManager.shouldCompactContextWindow(")
+
+		expect(manualIntentIndex).toBeGreaterThanOrEqual(0)
+		expect(autoCompactionIndex).toBeGreaterThan(manualIntentIndex)
+		expect(method).toContain("!manualCompactionRequested")
+	})
+
 	it("does not compact a restored tool-result transaction before its durable admission boundary", async () => {
 		const source = await readFile(taskSourcePath, "utf8")
 		const method = extractMethod(source, "async recursivelyMakeClineRequests(", "async loadContext(")
 		const compactionCapability = method.indexOf(
-			"const canCompactBeforeAdmission = transaction.beforeApiRequestStarted === undefined",
+			"const canCompactBeforeAdmission = !persistedRequest && transaction.beforeApiRequestStarted === undefined",
 		)
-		const compactionGate = method.indexOf("if (canCompactBeforeAdmission &&")
+		const compactionGate = method.indexOf("canCompactBeforeAdmission &&")
 		const deferredTurnCall = method.indexOf("shouldDeferCurrentTurn({")
 
 		expect(compactionCapability).toBeGreaterThanOrEqual(0)
 		expect(compactionGate).toBeGreaterThan(compactionCapability)
 		expect(deferredTurnCall).toBeGreaterThan(compactionGate)
+	})
+
+	it("resumes a durable Hosted request without repeating preprocessing, history append, or approval", async () => {
+		const source = await readFile(taskSourcePath, "utf8")
+		const method = extractMethod(source, "async recursivelyMakeClineRequests(", "async loadContext(")
+		const persistedIndex = method.indexOf("const persistedRequestApiIndex = transaction.persistedRequestApiIndex")
+		const tailValidation = method.indexOf("apiIndex !== this.messageStateHandler.apiConversationHistory.length - 1")
+		const newRequestPlaceholder = method.indexOf("if (!persistedRequest) {\n\t\t\tawait this.say(")
+		const gateSelection = method.indexOf("const requestApproved = persistedRequest")
+
+		expect(persistedIndex).toBeGreaterThanOrEqual(0)
+		expect(tailValidation).toBeGreaterThan(persistedIndex)
+		expect(newRequestPlaceholder).toBeGreaterThan(tailValidation)
+		expect(gateSelection).toBeGreaterThan(newRequestPlaceholder)
+		expect(method).toContain("? true\n\t\t\t: await this.persistApiRequestUserMessage(")
+		expect(method).toContain("if (persistedRequest) {\n\t\t\tparsedUserContent = userContent")
+		expect(method).toContain("if (!persistedRequest && !shouldCompact)")
 	})
 
 	it("prepares forced truncation only after deferring the current tool turn", async () => {
@@ -90,6 +118,71 @@ describe("Task request API boundary", () => {
 		expect(requestBody).not.toMatch(/\bthis\.api\b/)
 	})
 
+	it("resolves the compaction output budget from the complete provider candidate before sending", async () => {
+		const source = await readFile(taskSourcePath, "utf8")
+		const method = extractMethod(source, "async *attemptApiRequest(", "// Block identity is now assigned")
+		const resolveIndex = method.indexOf("resolveCompactionWindowBudget({")
+		const recordIndex = method.indexOf("recordProviderAdapterInput(")
+		const sendIndex = method.indexOf("api.createMessage(")
+
+		expect(resolveIndex).toBeGreaterThanOrEqual(0)
+		expect(recordIndex).toBeGreaterThan(resolveIndex)
+		expect(sendIndex).toBeGreaterThan(resolveIndex)
+		expect(method).toContain("serverTools")
+		expect(method).toContain("providerInfo.model.info.capabilities?.maxTokens")
+	})
+
+	it("registers every orchestrated compaction as summarize_task authority", async () => {
+		const source = await readFile(taskSourcePath, "utf8")
+		const method = extractMethod(source, "async recursivelyMakeClineRequests(", "async loadContext(")
+		const registrationStart = method.indexOf("requestScope.explicitInstructions.registerAndRender(")
+		const registrationEnd = method.indexOf('userContent.push({ type: "text", text: registered.text })', registrationStart)
+		const registration = method.slice(registrationStart, registrationEnd)
+
+		expect(registrationStart).toBeGreaterThanOrEqual(0)
+		expect(registration).toContain("summarizeTask(")
+		expect(registration).toContain('type: "summarize_task"')
+		expect(registration).toContain("targetTool: ClineDefaultTool.SUMMARIZE_TASK")
+		expect(registration).not.toContain("ClineDefaultTool.CONDENSE")
+	})
+
+	it("maps automatic, Header, and mode-switch compaction to source metadata only", async () => {
+		const source = await readFile(taskSourcePath, "utf8")
+		const method = extractMethod(source, "async recursivelyMakeClineRequests(", "async loadContext(")
+		const operationStart = method.indexOf("const operationId = this.modeSwitchCompaction.getOperationId()")
+		const registrationStart = method.indexOf("requestScope.explicitInstructions.registerAndRender(", operationStart)
+		const sourceProjection = method.slice(operationStart, registrationStart)
+
+		expect(operationStart).toBeGreaterThanOrEqual(0)
+		expect(sourceProjection).toContain('? "task_header"')
+		expect(sourceProjection).toContain('? "mode_switch"')
+		expect(sourceProjection).toContain(': "auto_compaction"')
+	})
+
+	it("creates a stable compaction row before the provider can fail without producing a tool call", async () => {
+		const source = await readFile(taskSourcePath, "utf8")
+		const method = extractMethod(source, "async recursivelyMakeClineRequests(", "async loadContext(")
+		const rowIndex = method.indexOf("ensureContextCompactionStatusRow(")
+		const requestIndex = method.indexOf('"api_req_started"', rowIndex)
+
+		expect(rowIndex).toBeGreaterThanOrEqual(0)
+		expect(requestIndex).toBeGreaterThan(rowIndex)
+	})
+
+	it("updates the same compaction row from the existing retry owner", async () => {
+		const source = await readFile(taskSourcePath, "utf8")
+		const method = extractMethod(source, "async recursivelyMakeClineRequests(", "async loadContext(")
+		const retryBranchStart = method.indexOf("if (retryDecision.shouldRetry) {")
+		const retryBranchEnd = method.indexOf("if (retryDecision.shouldPrompt) {", retryBranchStart)
+		const retryBranch = method.slice(retryBranchStart, retryBranchEnd)
+		const promptBranchEnd = method.indexOf("// needs to happen after the say", retryBranchEnd)
+		const promptBranch = method.slice(retryBranchEnd, promptBranchEnd)
+
+		expect(retryBranch).toContain('updateContextCompactionStatus("retrying"')
+		expect(promptBranch).toContain('updateContextCompactionStatus("failed"')
+		expect(retryBranch).toContain("this.scheduleAutoRetry(")
+	})
+
 	it("ends the failed request chain after scheduling an automatic retry without cancelling the task", async () => {
 		const source = await readFile(taskSourcePath, "utf8")
 		const method = extractMethod(source, "async recursivelyMakeClineRequests(", "async loadContext(")
@@ -117,6 +210,33 @@ describe("Task request API boundary", () => {
 		expect(promptBranch).toContain("await this.recoverApiFailure({")
 		expect(promptBranch).toContain("return true")
 		expect(promptBranch).not.toContain('return outcome.actionId === "start_new_task"')
+	})
+
+	it("closes or cancels explicit authority at every terminal request boundary", async () => {
+		const source = await readFile(taskSourcePath, "utf8")
+		const method = extractMethod(source, "async recursivelyMakeClineRequests(", "async loadContext(")
+		const approvalBranch = method.indexOf("if (!requestApproved) {")
+		const normalClose = method.lastIndexOf("requestScope.explicitInstructions.close()")
+		const errorCancel = method.lastIndexOf("requestScope.explicitInstructions.cancel()")
+
+		expect(approvalBranch).toBeGreaterThanOrEqual(0)
+		expect(method.slice(approvalBranch, approvalBranch + 160)).toContain("requestScope.explicitInstructions.cancel()")
+		expect(normalClose).toBeGreaterThan(approvalBranch)
+		expect(errorCancel).toBeGreaterThan(normalClose)
+	})
+
+	it("starts explicit instruction authority at the provider boundary and rolls retry attempts", async () => {
+		const source = await readFile(taskSourcePath, "utf8")
+		const method = extractMethod(source, "async *attemptApiRequest(", "// Block identity is now assigned")
+		const beginAttemptIndex = method.indexOf("requestScope.explicitInstructions.beginProviderAttempt(")
+		const consumePortIndex = method.indexOf("requestScope.explicitInstructions.createConsumePort()")
+		const sendIndex = method.indexOf("api.createMessage(")
+
+		expect(beginAttemptIndex).toBeGreaterThanOrEqual(0)
+		expect(consumePortIndex).toBeGreaterThan(beginAttemptIndex)
+		expect(sendIndex).toBeGreaterThan(consumePortIndex)
+		expect(method).toContain("rewriteProviderInstructionIds(")
+		expect(method).toContain("providerAttempt + 1")
 	})
 
 	it("routes provider operations in attemptApiRequest through the frozen scope", async () => {

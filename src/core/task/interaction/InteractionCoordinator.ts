@@ -141,6 +141,27 @@ export class InteractionCoordinator {
 		}
 	}
 
+	/** Release one accepted API continuation before a causally subsequent request gate opens. */
+	async releaseApiContinuationForRequestGate(): Promise<boolean> {
+		const interaction = this.runtime.getState().interaction
+		const acceptedAction = interaction?.acceptedResponse?.actionId
+		const ownsAdmittedApiContinuation =
+			interaction?.status === "resolving" &&
+			((interaction.kind === "resume" && acceptedAction === "resume") ||
+				(interaction.kind === "error_retry" && acceptedAction === "retry") ||
+				(interaction.kind === "mistake_limit" && acceptedAction === "process_anyway"))
+		if (!interaction || !ownsAdmittedApiContinuation) return false
+
+		const resolved = await this.runtime.dispatch({
+			type: "INTERACTION_RESOLVED",
+			interactionId: interaction.interactionId,
+		})
+		if (!resolved.accepted) {
+			throw new Error(`Request-gate interaction handoff rejected: ${resolved.error?.code ?? "invalid_runtime_event"}`)
+		}
+		return true
+	}
+
 	/** Dispatch one response and synchronously consume resume continuation only when no waiter owns it. */
 	async respond(response: InteractionResponse): Promise<TaskDispatchResult> {
 		const generation = this.continuationGeneration

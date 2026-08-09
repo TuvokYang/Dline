@@ -11,6 +11,7 @@ export type TaskEvent =
 	| { type: "TASK_INITIALIZED"; anchor: TaskAnchor; hasTask: boolean }
 	| { type: "API_REQUEST_STARTED"; apiIndex: number }
 	| { type: "RESUME_API_CONTINUATION_REQUESTED"; apiIndex: number; draft?: InteractionDraft }
+	| { type: "HOSTED_WEB_REQUEST_CONTINUATION_REQUESTED"; interactionId: string; apiIndex: number }
 	| { type: "RESUME_BLOCK_REPLAY_REQUESTED"; turnId: string; dlineTids: string[] }
 	| {
 			type: "TURN_CREATED"

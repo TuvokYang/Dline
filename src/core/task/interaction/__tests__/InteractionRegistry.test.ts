@@ -12,6 +12,13 @@ interface InteractionCase {
 
 const CASES: InteractionCase[] = [
 	{ kind: "tool_approval", taskAsk: "tool", actions: ["approve", "reject"], enterAction: "reject" },
+	{
+		kind: "hosted_web_approval",
+		taskAsk: "tool",
+		actions: ["approve", "reject"],
+		enterAction: "reject",
+		continuation: "api",
+	},
 	{ kind: "command_approval", taskAsk: "command", actions: ["approve", "reject"], enterAction: "reject" },
 	{ kind: "focus_chain_change", taskAsk: "focus_chain_change", actions: ["approve", "reject"], enterAction: "reject" },
 	{ kind: "followup", taskAsk: "followup", actions: [], enterAction: "reply", continuation: "handler" },
@@ -61,6 +68,14 @@ describe("InteractionRegistry", () => {
 		for (const kind of INTERACTION_KINDS) {
 			expect(getInteraction(kind).kind).toBe(kind)
 		}
+	})
+
+	it("projects Hosted Web approval through the registered tool approval renderer", () => {
+		expect(getInteraction("hosted_web_approval")).toMatchObject({
+			kind: "hosted_web_approval",
+			taskAsk: "tool",
+			presentationKind: "tool_approval",
+		})
 	})
 
 	it("keeps tool approval draft-capable and defaults Enter to Reject", () => {

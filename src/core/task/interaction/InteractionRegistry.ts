@@ -10,6 +10,7 @@ import type {
 
 export const INTERACTION_KINDS = [
 	"tool_approval",
+	"hosted_web_approval",
 	"command_approval",
 	"browser_approval",
 	"mcp_approval",
@@ -54,8 +55,9 @@ function define(
 	actions: readonly InteractionActionDefinition[],
 	input: InputPolicy = DRAFT_INPUT,
 	continuation: InteractionContinuation = "none",
+	presentationKind: InteractionDefinition["presentationKind"] = kind,
 ): InteractionDefinition {
-	return { kind, taskAsk, presentationKind: kind, input, actions, continuation }
+	return { kind, taskAsk, presentationKind, input, actions, continuation }
 }
 
 const REPLY_INPUT: InputPolicy = { ...DRAFT_INPUT, enterAction: "reply" }
@@ -68,6 +70,7 @@ const APPROVAL_ACTIONS = [action("approve", "Approve", "draft"), action("reject"
 
 const DEFINITIONS: Readonly<Record<InteractionKind, InteractionDefinition>> = {
 	tool_approval: define("tool_approval", "tool", APPROVAL_ACTIONS, APPROVAL_INPUT),
+	hosted_web_approval: define("hosted_web_approval", "tool", APPROVAL_ACTIONS, APPROVAL_INPUT, "api", "tool_approval"),
 	command_approval: define("command_approval", "command", APPROVAL_ACTIONS, APPROVAL_INPUT),
 	browser_approval: define("browser_approval", "browser_action_launch", APPROVAL_ACTIONS, APPROVAL_INPUT),
 	mcp_approval: define("mcp_approval", "use_mcp_server", APPROVAL_ACTIONS, APPROVAL_INPUT),

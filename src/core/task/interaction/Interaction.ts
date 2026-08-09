@@ -3,6 +3,7 @@ import type { ClineAsk } from "@shared/ExtensionMessage"
 /** All primary interaction definitions supported by the task runtime. */
 export type InteractionKind =
 	| "tool_approval"
+	| "hosted_web_approval"
 	| "command_approval"
 	| "browser_approval"
 	| "mcp_approval"
@@ -75,7 +76,7 @@ export interface InteractionActionDefinition {
 }
 
 /** One complete interaction definition. */
-export type InteractionContinuation = "handler" | "resume" | "completion" | "none"
+export type InteractionContinuation = "handler" | "api" | "resume" | "completion" | "none"
 
 export interface InteractionDefinition {
 	kind: InteractionKind

@@ -762,6 +762,37 @@ describe("reconcileResume", () => {
 		expect(result.snapshot.interaction?.interactionId).not.toBe("tid-accepted")
 	})
 
+	it("reopens pending Hosted Web approval without requiring a tool block", () => {
+		const interactionId = `hosted-web:${TASK_ID}:0`
+		const state = createTaskRuntimeState({
+			taskId: TASK_ID,
+			phase: TaskPhase.AWAITING_APPROVAL,
+			revision: 4,
+			anchor: { apiIndex: 0, turnId: interactionId, interactionId, uiMessageTs: 205 },
+		})
+		state.interaction = {
+			taskId: TASK_ID,
+			turnId: interactionId,
+			interactionId,
+			kind: "hosted_web_approval",
+			status: "awaiting",
+			createdRevision: 3,
+			anchor: { messageTs: 205, messageType: "ask" },
+		}
+		const snapshot = createSnapshot(state, 206)
+		const result = reconcileResume(fullInput([apiUser()], [interactionAsk("tool", interactionId, 0)], snapshot))
+
+		expect(result.entry).toEqual({ type: "reopen_interaction", interactionId, turnId: interactionId })
+		expect(result.snapshot.phase).toBe(TaskPhase.AWAITING_APPROVAL)
+		expect(result.snapshot.turn).toBeUndefined()
+		expect(result.snapshot.interaction).toMatchObject({
+			interactionId,
+			kind: "hosted_web_approval",
+			status: "awaiting",
+		})
+		expect(result.diagnostics).not.toContainEqual(expect.objectContaining({ code: "missing_interaction_continuation" }))
+	})
+
 	it.each([
 		["resume_task", "resume", "show_resume_interaction"],
 		["api_req_failed", "error_retry", "show_error_recovery"],

@@ -124,8 +124,14 @@ async function configureSearxngSearch(dlineDir: string, serverBaseUrl: string): 
 
 async function configureNormalApprovalMode(dlineDir: string): Promise<void> {
 	const settings = JSON.parse(await readFile(settingsPath(dlineDir), "utf8")) as Record<string, unknown>
+	const autoApprovalSettings = (settings.autoApprovalSettings ?? {}) as Record<string, unknown>
+	const actions = (autoApprovalSettings.actions ?? {}) as Record<string, unknown>
 	settings.yoloModeToggled = false
 	settings.autoApproveAllToggled = false
+	settings.autoApprovalSettings = {
+		...autoApprovalSettings,
+		actions: { ...actions, useWeb: false },
+	}
 	await writeFile(settingsPath(dlineDir), `${JSON.stringify(settings, null, 2)}\n`, "utf8")
 }
 
@@ -157,7 +163,8 @@ async function closeCurrentTask(sidebar: Frame): Promise<void> {
 	const closeButton = sidebar.getByRole("button", { name: "Close Task", exact: true })
 	await expect(closeButton).toBeVisible()
 	await closeButton.click()
-	await expect(sidebar.getByTestId("chat-input")).toBeVisible()
+	await expect(sidebar.getByTestId("chat-input")).toHaveAttribute("placeholder", "Type your task here...")
+	await expect(closeButton).toHaveCount(0)
 	await E2ETestHelper.dismissWhatsNewModal(sidebar)
 }
 
@@ -165,6 +172,7 @@ async function reopenTask(sidebar: Frame, taskText: string): Promise<void> {
 	const historyTask = sidebar.getByText(taskText, { exact: true }).last()
 	await expect(historyTask).toBeVisible({ timeout: 30_000 })
 	await historyTask.click()
+	await expect(sidebar.getByRole("button", { name: "Close Task", exact: true })).toBeVisible({ timeout: 30_000 })
 	await expect(sidebar.getByText(taskText, { exact: true }).first()).toBeVisible()
 }
 
@@ -255,17 +263,19 @@ async function expectHostedLifecycle(
 }
 
 e2e(
-	"ServerTool runtime - OpenAI built-in Responses metadata uses one hosted Web Search and renders its lifecycle",
+	"ServerTool runtime - OpenAI Responses hosted Web Search waits for Use Web approval before the Provider request",
 	async ({ dlineDir, dlineDocsDir, dlineHomeDir, helper, openVSCode, server, userDataDir, workspaceDir }) => {
 		e2e.setTimeout(180_000)
 		expectIsolatedDirectories(dlineDir, dlineHomeDir, dlineDocsDir)
-		await prepareRuntimeProfile(dlineDir, E2E_PROFILE_NAMES.mockOpenAiOfficialResponses, {
+		await prepareRuntimeProfile(dlineDir, E2E_PROFILE_NAMES.mockOpenAiResponses, {
 			enabled: true,
 			mode: "WEB_SEARCH_MODE_AUTO",
+			supportsWebSearch: true,
 		})
+		await configureNormalApprovalMode(dlineDir)
 		const query = "Dline OpenAI hosted search"
 		const completion = "E2E_OPENAI_HOSTED_WEB_SEARCH_OK"
-		server.enqueueResponses("openai-official-responses", {
+		server.enqueueResponses("openai-compatible-responses", {
 			type: "hosted-web-search",
 			id: "ws_openai_e2e",
 			query,
@@ -283,8 +293,34 @@ e2e(
 		try {
 			const opened = await openSidebar(openVSCode, workspaceDir, helper)
 			app = opened.app
-			await setAutoApproveAction(opened.sidebar, "Use Web", true)
-			await sendTask(opened.sidebar, "Use OpenAI provider-hosted search and finish the task.")
+			const taskText = "Use OpenAI provider-hosted search and finish the task."
+			await sendTask(opened.sidebar, taskText)
+			let approveButton = opened.sidebar.getByRole("contentinfo").getByText("Approve", { exact: true })
+			await expect
+				.poll(
+					async () => ({
+						approvalCount: await approveButton.count(),
+						providerRequests: server.getMockConsumptions("openai-compatible-responses").length,
+					}),
+					{ timeout: 60_000, intervals: [250, 500, 1_000] },
+				)
+				.toEqual({ approvalCount: 1, providerRequests: 0 })
+			await expect(opened.sidebar.getByText("Dline wants to search the web for:", { exact: true })).toBeVisible()
+			await expect(opened.sidebar.getByText("OpenAI Web Search (Hosted)", { exact: true })).toBeVisible()
+			expect(server.getSearxngSearchRequests()).toHaveLength(0)
+			await closeCurrentTask(opened.sidebar)
+			await reopenTask(opened.sidebar, taskText)
+			approveButton = opened.sidebar.getByRole("contentinfo").getByText("Approve", { exact: true })
+			await expect(approveButton).toBeVisible({ timeout: 60_000 })
+			expect(server.getMockConsumptions("openai-compatible-responses")).toHaveLength(0)
+			expect(server.getSearxngSearchRequests()).toHaveLength(0)
+			await approveButton.click()
+
+			await expect.poll(() => server.getMockConsumptions("openai-compatible-responses").length, { timeout: 60_000 }).toBe(1)
+			const [firstRequest] = server.getMockConsumptions("openai-compatible-responses")
+			expect(firstRequest).toBeDefined()
+			expectSingleSearchRoute(firstRequest, "hosted")
+			expect(server.getSearxngSearchRequests()).toHaveLength(0)
 			await expectHostedLifecycle(opened.sidebar, query, {
 				title: "OpenAI hosted result",
 				url: "https://example.test/openai-hosted",
@@ -292,9 +328,130 @@ e2e(
 			})
 			await expect(opened.sidebar.getByText(completion, { exact: false }).last()).toBeVisible({ timeout: 60_000 })
 
-			const [firstRequest] = server.getMockConsumptions("openai-official-responses")
-			expect(firstRequest).toBeDefined()
-			expectSingleSearchRoute(firstRequest, "hosted")
+			await closeCurrentTask(opened.sidebar)
+			await reopenTask(opened.sidebar, taskText)
+			const restoredCard = opened.sidebar.getByTestId("web-search-card").filter({ hasText: query })
+			await expect(restoredCard).toHaveCount(1)
+			const restoredToggle = restoredCard.getByTestId("web-search-details-toggle")
+			await expect(restoredToggle).toHaveAttribute("aria-expanded", "false")
+			await expect(restoredCard.getByText("OpenAI hosted result", { exact: true })).toHaveCount(0)
+			await restoredToggle.click()
+			await expect(restoredCard.getByText("OpenAI hosted result", { exact: true })).toBeVisible()
+			await expect(restoredCard.getByText("https://example.test/openai-hosted", { exact: true })).toBeVisible()
+			await expect(restoredCard.getByText("E2E_OPENAI_HOSTED_RESULT_SNIPPET", { exact: true })).toBeVisible()
+
+			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+		} finally {
+			await app?.close()
+		}
+	},
+)
+
+e2e(
+	"ServerTool runtime - checkpoint Restore replaces pending Hosted Web approval and reapproves the resumed request",
+	async ({ dlineDir, dlineDocsDir, dlineHomeDir, helper, openVSCode, server, userDataDir, workspaceDir }) => {
+		e2e.setTimeout(240_000)
+		expectIsolatedDirectories(dlineDir, dlineHomeDir, dlineDocsDir)
+		await prepareRuntimeProfile(dlineDir, E2E_PROFILE_NAMES.mockOpenAiResponses, {
+			enabled: true,
+			mode: "WEB_SEARCH_MODE_AUTO",
+			supportsWebSearch: true,
+		})
+		await configureNormalApprovalMode(dlineDir)
+		const pendingDraft = "E2E_HOSTED_WEB_RESTORE_PENDING_DRAFT"
+		const resumeDraft = "E2E_HOSTED_WEB_RESTORE_RESUME_DRAFT"
+		const completion = "E2E_HOSTED_WEB_RESTORE_OK"
+		server.enqueueResponses(
+			"openai-compatible-responses",
+			{
+				type: "tool",
+				id: "call_hosted_restore_ready",
+				name: "qna_respond",
+				arguments: { response: "E2E_HOSTED_WEB_RESTORE_READY" },
+			},
+			{
+				type: "tool",
+				id: "call_hosted_restore_done",
+				name: "attempt_completion",
+				arguments: { result: completion },
+				expectedRequestIncludes: [resumeDraft],
+			},
+			{
+				type: "error",
+				status: 500,
+				code: "unexpected_stale_hosted_request",
+				message: "A stale Hosted Web approval sent an extra Provider request after checkpoint Restore",
+			},
+		)
+
+		let app: ElectronApplication | undefined
+		try {
+			const opened = await openSidebar(openVSCode, workspaceDir, helper)
+			app = opened.app
+			await sendTask(opened.sidebar, "Create a checkpoint before testing Hosted Web approval Restore.")
+			let approveButton = opened.sidebar.getByRole("contentinfo").getByText("Approve", { exact: true })
+			await expect(approveButton).toBeVisible({ timeout: 60_000 })
+			expect(server.getMockConsumptions("openai-compatible-responses")).toHaveLength(0)
+			expect(server.getSearxngSearchRequests()).toHaveLength(0)
+			await approveButton.click()
+			await expect(opened.sidebar.getByText("E2E_HOSTED_WEB_RESTORE_READY", { exact: true })).toBeVisible({
+				timeout: 60_000,
+			})
+			await expect.poll(() => server.getMockConsumptions("openai-compatible-responses").length).toBe(1)
+			const checkpointLabels = opened.sidebar.getByText("Checkpoint", { exact: true })
+			await expect.poll(() => checkpointLabels.count(), { timeout: 30_000 }).toBeGreaterThan(0)
+			const restoreCheckpointIndex = (await checkpointLabels.count()) - 1
+
+			const input = opened.sidebar.getByTestId("chat-input")
+			await input.fill(pendingDraft)
+			await input.press("Enter")
+			approveButton = opened.sidebar.getByRole("contentinfo").getByText("Approve", { exact: true })
+			await expect(approveButton).toBeVisible({ timeout: 60_000 })
+			await expect(opened.sidebar.getByText("OpenAI Web Search (Hosted)", { exact: true }).last()).toBeVisible()
+			expect(server.getMockConsumptions("openai-compatible-responses")).toHaveLength(1)
+			expect(server.getSearxngSearchRequests()).toHaveLength(0)
+
+			const restoreCheckpointControl = checkpointLabels.nth(restoreCheckpointIndex).locator("..").locator("..")
+			await restoreCheckpointControl.scrollIntoViewIfNeeded()
+			await restoreCheckpointControl.hover()
+			const restoreButton = restoreCheckpointControl.getByRole("button", { name: "Restore", exact: true })
+			await expect(restoreButton).toBeVisible({ timeout: 3_000 })
+			await restoreButton.click({ timeout: 3_000 })
+			const moreOptions = opened.sidebar.getByText("More options", { exact: true })
+			await expect(moreOptions).toBeVisible()
+			await moreOptions.click()
+			await opened.sidebar.getByRole("button", { name: "Restore Task Only", exact: true }).click()
+
+			const resumeButton = opened.sidebar.getByRole("contentinfo").getByText("Resume", { exact: true })
+			await expect(resumeButton).toBeVisible({ timeout: 5_000 })
+			await expect(approveButton).toHaveCount(0)
+			await expect(opened.sidebar.getByText(pendingDraft, { exact: true })).toHaveCount(0)
+			expect(server.getMockConsumptions("openai-compatible-responses")).toHaveLength(1)
+			expect(server.getSearxngSearchRequests()).toHaveLength(0)
+
+			await input.fill(resumeDraft)
+			await resumeButton.click()
+			approveButton = opened.sidebar.getByRole("contentinfo").getByText("Approve", { exact: true })
+			await expect
+				.poll(
+					async () => ({
+						approvalCount: await approveButton.count(),
+						providerRequests: server.getMockConsumptions("openai-compatible-responses").length,
+					}),
+					{ timeout: 60_000, intervals: [250, 500, 1_000] },
+				)
+				.toEqual({ approvalCount: 1, providerRequests: 1 })
+			expect(server.getSearxngSearchRequests()).toHaveLength(0)
+			await approveButton.click()
+
+			await expect.poll(() => server.getMockConsumptions("openai-compatible-responses").length, { timeout: 60_000 }).toBe(2)
+			const continuation = server.getMockConsumptions("openai-compatible-responses")[1]
+			expect(continuation.contractError).toBeUndefined()
+			expectSingleSearchRoute(continuation, "hosted")
+			expect(JSON.stringify(continuation.requestBody)).toContain(resumeDraft)
+			await expect(opened.sidebar.getByText(completion, { exact: false }).last()).toBeVisible({ timeout: 60_000 })
+			await expect(opened.sidebar.getByText(/stale_interaction|stale interaction/i)).toHaveCount(0)
+			expect(server.getMockConsumptions("openai-compatible-responses")).toHaveLength(2)
 			expect(server.getSearxngSearchRequests()).toHaveLength(0)
 			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
 		} finally {
@@ -567,13 +724,13 @@ e2e(
 )
 
 e2e(
-	"ServerTool runtime - disabled Use Web requires approval in normal mode",
+	"ServerTool runtime - Force Local requires approval when local Use Web auto-approval is off",
 	async ({ dlineDir, dlineDocsDir, dlineHomeDir, helper, openVSCode, server, userDataDir, workspaceDir }) => {
 		e2e.setTimeout(120_000)
 		expectIsolatedDirectories(dlineDir, dlineHomeDir, dlineDocsDir)
 		await prepareRuntimeProfile(dlineDir, E2E_PROFILE_NAMES.mockOpenAiResponses, {
 			enabled: true,
-			mode: "WEB_SEARCH_MODE_AUTO",
+			mode: "WEB_SEARCH_MODE_FORCE_LOCAL",
 			supportsWebSearch: true,
 		})
 		await configureSearxngSearch(dlineDir, server.baseUrl)
@@ -590,9 +747,7 @@ e2e(
 		try {
 			const opened = await openSidebar(openVSCode, workspaceDir, helper)
 			app = opened.app
-			await setAutoApproveAction(opened.sidebar, "Use Web", true)
-			await setAutoApproveAction(opened.sidebar, "Use Web", false)
-			await sendTask(opened.sidebar, "Require explicit Web Search approval in normal mode.")
+			await sendTask(opened.sidebar, "Require explicit local Web Search approval in normal mode.")
 
 			await expect(opened.sidebar.getByText("Dline wants to search the web for:", { exact: true })).toBeVisible({
 				timeout: 60_000,
@@ -616,7 +771,7 @@ e2e(
 		expectIsolatedDirectories(dlineDir, dlineHomeDir, dlineDocsDir)
 		await prepareRuntimeProfile(dlineDir, E2E_PROFILE_NAMES.mockOpenAiResponses, {
 			enabled: true,
-			mode: "WEB_SEARCH_MODE_AUTO",
+			mode: "WEB_SEARCH_MODE_FORCE_LOCAL",
 			supportsWebSearch: true,
 		})
 		await configureSearxngSearch(dlineDir, server.baseUrl)
@@ -640,8 +795,6 @@ e2e(
 		try {
 			const opened = await openSidebar(openVSCode, workspaceDir, helper)
 			app = opened.app
-			await setAutoApproveAction(opened.sidebar, "Use Web", true)
-			await setAutoApproveAction(opened.sidebar, "Use Web", false)
 			const taskText = "Search locally only after I reopen and approve this task."
 			await sendTask(opened.sidebar, taskText)
 			await expect(opened.sidebar.getByText("Approve", { exact: true })).toBeVisible({ timeout: 60_000 })
@@ -754,7 +907,7 @@ e2e(
 		expectIsolatedDirectories(dlineDir, dlineHomeDir, dlineDocsDir)
 		await prepareRuntimeProfile(dlineDir, E2E_PROFILE_NAMES.mockOpenAiResponses, {
 			enabled: true,
-			mode: "WEB_SEARCH_MODE_AUTO",
+			mode: "WEB_SEARCH_MODE_FORCE_LOCAL",
 			supportsWebSearch: true,
 		})
 		const url = `${server.baseUrl}/mock/web-fetch/page`
@@ -912,7 +1065,7 @@ e2e(
 		expectIsolatedDirectories(dlineDir, dlineHomeDir, dlineDocsDir)
 		await prepareRuntimeProfile(dlineDir, E2E_PROFILE_NAMES.mockOpenAiResponses, {
 			enabled: true,
-			mode: "WEB_SEARCH_MODE_AUTO",
+			mode: "WEB_SEARCH_MODE_FORCE_LOCAL",
 			supportsWebSearch: true,
 		})
 		await prepareWebFetchBrowser(dlineHomeDir)
@@ -1022,6 +1175,7 @@ e2e(
 			await expect.poll(() => server.getMockConsumptions("openai-compatible-responses").length).toBe(5)
 			const continuation = server.getMockConsumptions("openai-compatible-responses")[4]
 			expect(continuation.contractError).toBeUndefined()
+			expectSingleSearchRoute(continuation, "local")
 			expect(JSON.stringify(continuation.requestBody)).toContain(resumeDraft)
 			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
 		} finally {

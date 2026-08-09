@@ -21,7 +21,6 @@ import {
 	getCompactionUserText,
 	hasManualCompactionIntent,
 	hasToolResult,
-	isManualCompactionRequest,
 	projectCompletedCompactionResult,
 	shouldDeferCurrentTurn,
 	shouldRestoreDeferredTurn,
@@ -67,6 +66,7 @@ import { TaskActivityStore } from "@core/task/activity/TaskActivityStore"
 import { ensureApiMessages, ensureUserContent } from "@core/task/api-context"
 import { showContextUsage } from "@core/task/environment-context"
 import { ExplicitInstructionRegistry } from "@core/task/explicit-instructions/ExplicitInstructionRegistry"
+import { rewriteProviderInstructionIds } from "@core/task/explicit-instructions/explicit-instruction-projection"
 import { type ModeCompactResult, ModeSwitchCompaction } from "@core/task/ModeSwitchCompaction"
 import { MODE_SWITCH_COMPACT_SIGNAL } from "@core/task/mode-switch-signal"
 import { createRequestApiScope, type RequestApiScope, resolveRequestWebSearchRoutingPlan } from "@core/task/RequestApiScope"
@@ -107,8 +107,8 @@ import {
 import { isFocusChainItem } from "@shared/focus-chain-utils"
 import { HistoryItem } from "@shared/HistoryItem"
 import { DEFAULT_LANGUAGE_SETTINGS, getLanguageKey, LanguageDisplay } from "@shared/Languages"
-import type { PromptCacheHealthSnapshot } from "@shared/PromptCacheHealth"
 import { USER_CONTENT_TAGS } from "@shared/messages/constants"
+import type { PromptCacheHealthSnapshot } from "@shared/PromptCacheHealth"
 import type { ReasoningConfig } from "@shared/proto/dline/provider/common"
 import { convertClineMessageToProto } from "@shared/proto-conversions/cline-message"
 import { PROFILE_PROVIDER_KEYS } from "@shared/providers/profile-model-info"
@@ -182,8 +182,8 @@ import { BlockPhase } from "./BlockPhaseMachine"
 import { buildTaskBackgroundEnvironmentSection, buildTaskBackgroundResults } from "./background/BackgroundContextInjector"
 import { detectAvailableCliTools } from "./cli-tool-detector"
 import { FocusChainManager } from "./focus-chain"
+import { hostedWebApprovalApiIndex, requestHostedWebApproval } from "./interaction/HostedWebApproval"
 import type { InteractionKind } from "./interaction/Interaction"
-import { requestHostedWebApproval } from "./interaction/HostedWebApproval"
 import { type DetachedInteractionContinuationContext, InteractionCoordinator } from "./interaction/InteractionCoordinator"
 import { getInteraction } from "./interaction/InteractionRegistry"
 import {
@@ -195,6 +195,7 @@ import {
 import { MessageChannel } from "./MessageChannel"
 import { MessageStateHandler } from "./message-state"
 import type { PresentationPriority } from "./presentation-types"
+import { PromptCacheHealthTracker } from "./prompt-cache/PromptCacheHealthTracker"
 import { RestoreHandler } from "./RestoreHandler"
 import { ResumeCoordinator } from "./resume/ResumeCoordinator"
 import { type ResumeInput, selectResumeUiTail } from "./resume/ResumeInput"
@@ -204,7 +205,6 @@ import type { TaskEffectPorts } from "./runtime/TaskEffectRunner"
 import type { TaskEvent } from "./runtime/TaskEvent"
 import { type TaskDispatchResult, TaskRuntime } from "./runtime/TaskRuntime"
 import { createTaskRuntimeState, type TaskRuntimeState } from "./runtime/TaskRuntimeState"
-import { PromptCacheHealthTracker } from "./prompt-cache/PromptCacheHealthTracker"
 import { StreamChunkCoordinator } from "./StreamChunkCoordinator"
 import { StreamResponseHandler } from "./StreamResponseHandler"
 import { shouldRunTaskCancelHook } from "./TaskCancelPolicy"
@@ -266,6 +266,8 @@ type ApiRequestTransactionOptions = {
 	beforeApiRequestStarted?: () => Promise<void>
 	/** Reuse accounting already recorded by an interrupted pre-request gate. */
 	reuseRequestAccounting?: boolean
+	/** Reuse one fully processed user message already durable at this history index. */
+	persistedRequestApiIndex?: number
 }
 
 /** Preserve the existing provider-facing contract for user guidance after the mistake limit. */
@@ -546,6 +548,17 @@ export class Task {
 				async (effect) => {
 					this.taskState.resetOperationCancellation()
 					this.taskState.abort = false
+					if (effect.persistedRequest) {
+						const persisted = this.messageStateHandler.apiConversationHistory[effect.apiIndex]
+						if (persisted?.role !== "user" || !Array.isArray(persisted.content)) {
+							throw new Error(`Persisted API request is missing at apiIndex=${effect.apiIndex}`)
+						}
+						await this.recursivelyMakeClineRequests(persisted.content as ClineContent[], false, {
+							reuseRequestAccounting: true,
+							persistedRequestApiIndex: effect.apiIndex,
+						})
+						return
+					}
 					if (effect.draft) {
 						this.taskState.autoRetryAttempts = 0
 					}
@@ -1748,6 +1761,23 @@ export class Task {
 		try {
 			if (!context.isCurrent()) return
 			const state = this.taskRuntime.getState()
+			if (context.interaction.kind === "hosted_web_approval") {
+				const apiIndex = hostedWebApprovalApiIndex(this.taskId, context.interaction.interactionId)
+				if (apiIndex === undefined || apiIndex !== state.anchor.apiIndex) {
+					throw new Error("resume_hosted_web_request_identity_mismatch")
+				}
+				if (context.outcome.actionId === "reject") {
+					await context.resolve()
+					return
+				}
+				const continued = await this.dispatchRuntime({
+					type: "HOSTED_WEB_REQUEST_CONTINUATION_REQUESTED",
+					interactionId: context.interaction.interactionId,
+					apiIndex,
+				})
+				if (!continued.accepted) throw new Error("resume_hosted_web_request_rejected")
+				return
+			}
 			const turn = state.turn
 			if (!turn) throw new Error(`resume_turn_missing: interaction=${context.interaction.turnId}`)
 			if (turn.turnId !== context.interaction.turnId) {
@@ -3562,7 +3592,7 @@ export class Task {
 		return promptContext
 	}
 
-	async *attemptApiRequest(previousApiReqIndex: number, requestScope: RequestApiScope): ApiStream {
+	async *attemptApiRequest(previousApiReqIndex: number, requestScope: RequestApiScope, providerAttempt = 0): ApiStream {
 		const apiReqStart = performance.now()
 		const { api, providerInfo } = requestScope
 		Logger.debug(`[Task ${this.taskId}] attemptApiRequest: start (req #${this.taskState.apiRequestCount})`)
@@ -3598,6 +3628,7 @@ export class Task {
 		)
 		const tools = selectedTools ? [...selectedTools] : undefined
 		this.toolExecutor.setAllowedNativeToolNames(getAdvertisedNativeToolNames(tools))
+		requestScope.explicitInstructions.beginProviderAttempt(providerAttempt === 0 ? undefined : `attempt-${providerAttempt}`)
 		this.toolExecutor.setExplicitInstructionConsumePort(requestScope.explicitInstructions.createConsumePort())
 		this.toolExecutor.setWebSearchRoutingPlan(requestScope.webSearchRoutingPlan, requestScope.webToolsEnabled)
 		Logger.debug(
@@ -3632,6 +3663,12 @@ export class Task {
 			contextManagementMetadata.truncatedConversationHistory,
 			this.messageStateHandler.apiConversationHistory,
 		)
+		if (providerAttempt > 0) {
+			apiConversationMessages = rewriteProviderInstructionIds(
+				apiConversationMessages,
+				requestScope.explicitInstructions.rewriteInstructionIds.bind(requestScope.explicitInstructions),
+			)
+		}
 		const serverTools = requestScope.webSearchRoutingPlan.serverTools
 
 		if (hasCompactionWindowBudgetMarker(apiConversationMessages)) {
@@ -3875,7 +3912,7 @@ export class Task {
 				this.taskState.didAutomaticallyRetryFailedApiRequest = false
 			}
 			// delegate generator output from the recursive call
-			yield* this.attemptApiRequest(previousApiReqIndex, requestScope)
+			yield* this.attemptApiRequest(previousApiReqIndex, requestScope, providerAttempt + 1)
 			return
 		}
 
@@ -4255,12 +4292,16 @@ export class Task {
 		beforeApiRequestStarted?: () => Promise<void>,
 	): Promise<boolean> {
 		await beforeApiRequestStarted?.()
+		const webSearchAutoApproved = this.toolExecutor.isAutoApproved(ClineDefaultTool.WEB_SEARCH)
+		if (requestScope.webSearchRoutingPlan.route === "hosted" && !webSearchAutoApproved) {
+			await this.interactionCoordinator.releaseApiContinuationForRequestGate()
+		}
 		const approval = await requestHostedWebApproval(this.interactionCoordinator, {
 			taskId: this.taskId,
 			apiIndex,
 			providerId: requestScope.providerInfo.providerId,
 			routingPlan: requestScope.webSearchRoutingPlan,
-			autoApproved: this.toolExecutor.isAutoApproved(ClineDefaultTool.WEB_SEARCH),
+			autoApproved: webSearchAutoApproved,
 		})
 		if (!approval.approved) return false
 		await this.admitApiRequest(apiIndex)
@@ -4301,7 +4342,11 @@ export class Task {
 			this.stateManager.getGlobalSettingsKey("clineWebToolsEnabled"),
 			this.explicitInstructionRegistry,
 		)
-		userContent = await this.consumeModeSwitchChatContent(userContent)
+		const persistedRequestApiIndex = transaction.persistedRequestApiIndex
+		const persistedRequest = persistedRequestApiIndex !== undefined
+		if (!persistedRequest) {
+			userContent = await this.consumeModeSwitchChatContent(userContent)
+		}
 
 		// Ensure remote workspace detection completes before streaming begins so
 		// the presentation scheduler uses the correct cadence from the first flush.
@@ -4312,7 +4357,10 @@ export class Task {
 			this.taskState.apiRequestCount++
 			this.taskState.apiRequestsSinceLastTodoUpdate++
 		}
-		const apiIndex = this.messageStateHandler.apiConversationHistory.length
+		const apiIndex = persistedRequestApiIndex ?? this.messageStateHandler.apiConversationHistory.length
+		if (persistedRequest && (apiIndex < 0 || apiIndex !== this.messageStateHandler.apiConversationHistory.length - 1)) {
+			throw new Error(`Persisted API request is not the active history tail: apiIndex=${apiIndex}`)
+		}
 
 		// Used to know what models were used in the task if user wants to export metadata for error reporting purposes
 		const { model, providerId, customPrompt, mode } = requestScope.providerInfo
@@ -4328,7 +4376,10 @@ export class Task {
 			mode: mode,
 		}
 
-		if (this.taskState.consecutiveMistakeCount >= this.stateManager.getGlobalSettingsKey("maxConsecutiveMistakes")) {
+		if (
+			!persistedRequest &&
+			this.taskState.consecutiveMistakeCount >= this.stateManager.getGlobalSettingsKey("maxConsecutiveMistakes")
+		) {
 			// In yolo mode, don't wait for user input - fail the task
 			if (this.stateManager.getGlobalSettingsKey("yoloModeToggled")) {
 				const errorMessage =
@@ -4363,7 +4414,8 @@ export class Task {
 		const previousApiReqIndex = findLastIndex(this.messageStateHandler.clineMessages, (m) => m.say === "api_req_started")
 
 		// Save checkpoint if this is the first API request
-		const isFirstRequest = this.messageStateHandler.clineMessages.filter((m) => m.say === "api_req_started").length === 0
+		const isFirstRequest =
+			!persistedRequest && this.messageStateHandler.clineMessages.filter((m) => m.say === "api_req_started").length === 0
 
 		// Initialize checkpointManager first if enabled and it's the first request
 		if (
@@ -4432,12 +4484,14 @@ export class Task {
 			maxContextTokens: this.stateManager.getGlobalSettingsKey("autoCondenseMaxContextTokens"),
 		}
 		const forceModeCompact = this.modeSwitchCompaction.shouldForce()
-		const canCompactBeforeAdmission = transaction.beforeApiRequestStarted === undefined
-		const manualCompactionRequested = hasManualCompactionIntent(userContent)
-		const manualCompactionCommitted = this.taskState.manualCompactionCommitted
-		this.taskState.manualCompactionCommitted = false
+		const canCompactBeforeAdmission = !persistedRequest && transaction.beforeApiRequestStarted === undefined
+		const manualCompactionRequested = !persistedRequest && hasManualCompactionIntent(userContent)
+		const manualCompactionCommitted = !persistedRequest && this.taskState.manualCompactionCommitted
+		if (!persistedRequest) {
+			this.taskState.manualCompactionCommitted = false
+		}
 
-		const didCompleteSummarization = this.taskState.currentlySummarizing
+		const didCompleteSummarization = !persistedRequest && this.taskState.currentlySummarizing
 		if (didCompleteSummarization || manualCompactionCommitted) {
 			this.promptCacheHealth.recordCompactionResult(true)
 		}
@@ -4555,9 +4609,15 @@ export class Task {
 		let parsedUserContent: ClineContent[]
 		let environmentDetails: string
 		let clinerulesError: boolean
-		this.taskState.isInternalContextCompactionRequest = shouldCompact
+		if (!persistedRequest) {
+			this.taskState.isInternalContextCompactionRequest = shouldCompact
+		}
 
-		if (shouldCompact) {
+		if (persistedRequest) {
+			parsedUserContent = userContent
+			environmentDetails = ""
+			clinerulesError = false
+		} else if (shouldCompact) {
 			// Preserve user-authored current-turn content while tool results remain deferred until compaction completes.
 			parsedUserContent = this.taskState.deferredCurrentTurn
 				? getCompactionUserText(this.taskState.deferredCurrentTurn.userContent)
@@ -4574,11 +4634,9 @@ export class Task {
 				requestScope,
 			)
 		}
-		this.taskState.isManualContextCompactionRequest =
-			!shouldCompact &&
-			requestScope.explicitInstructions
-				.consumeBehaviorInstructions()
-				.some((authorization) => authorization.source === "manual_compact_command")
+		if (!persistedRequest && shouldCompact) {
+			this.taskState.isManualContextCompactionRequest = false
+		}
 		if (this.taskState.isManualContextCompactionRequest) {
 			// A manual request owns a new failure row and must never overwrite an earlier automatic compaction status.
 			this.taskState.contextCompactionMessageTs = undefined
@@ -4600,7 +4658,7 @@ export class Task {
 			userContent.push({ type: "text", text: environmentDetails })
 		}
 
-		if (!shouldCompact) {
+		if (!persistedRequest && !shouldCompact) {
 			await this.appendBackgroundResults(userContent)
 		}
 
@@ -4638,20 +4696,22 @@ export class Task {
 
 		// getting verbose details is an expensive operation, it uses globby to top-down build file structure of project which for large projects can take a few seconds
 		// for the best UX we show a placeholder api_req_started message with a loading spinner as this happens
-		await this.say(
-			"api_req_started",
-			JSON.stringify({
-				request: `${userContent.map((block) => formatContentBlockToMarkdown(block)).join("\n\n")}\n\nLoading...`,
-			}),
-		)
+		if (!persistedRequest) {
+			await this.say(
+				"api_req_started",
+				JSON.stringify({
+					request: `${userContent.map((block) => formatContentBlockToMarkdown(block)).join("\n\n")}\n\nLoading...`,
+				}),
+			)
+		}
 
-		const requestApproved = await this.persistApiRequestUserMessage(
-			userContent,
-			apiIndex,
-			requestScope,
-			transaction.beforeApiRequestStarted,
-		)
-		if (!requestApproved) return true
+		const requestApproved = persistedRequest
+			? true
+			: await this.persistApiRequestUserMessage(userContent, apiIndex, requestScope, transaction.beforeApiRequestStarted)
+		if (!requestApproved) {
+			requestScope.explicitInstructions.cancel()
+			return true
+		}
 
 		telemetryService.captureConversationTurnEvent(this.ulid, providerId, model.id, "user", modelInfo.mode)
 
@@ -5515,8 +5575,10 @@ export class Task {
 				return true
 			}
 
+			requestScope.explicitInstructions.close()
 			return didEndLoop // will always be false for now
 		} catch (_error) {
+			requestScope.explicitInstructions.cancel()
 			// this should never happen since the only thing that can throw an error is the attemptApiRequest, which is wrapped in a try catch that sends an ask where if noButtonClicked, will clear current task and destroy this instance. However to avoid unhandled promise rejection, we will end this loop which will end execution of this instance (see startTask)
 			return true // needs to be true so parent loop knows to end task
 		}
@@ -5576,7 +5638,11 @@ export class Task {
 				}
 			}
 
-			const { processedText, needsClinerulesFileCheck: needsCheck, explicitInstructions } = await parseSlashCommands(
+			const {
+				processedText,
+				needsClinerulesFileCheck: needsCheck,
+				explicitInstructions,
+			} = await parseSlashCommands(
 				parsedText,
 				localWorkflowToggles,
 				globalWorkflowToggles,
@@ -5599,6 +5665,9 @@ export class Task {
 			let registeredText = processedText
 			for (const declaration of explicitInstructions) {
 				registeredText = requestScope.explicitInstructions.registerAndRender(registeredText, declaration).text
+				if (declaration.source === "manual_compact_command") {
+					this.taskState.isManualContextCompactionRequest = true
+				}
 			}
 			return registeredText
 		}
