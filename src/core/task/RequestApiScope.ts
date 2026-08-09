@@ -1,6 +1,9 @@
+import { randomUUID } from "node:crypto"
 import type { ApiHandler, ApiProviderInfo } from "@core/api"
 import { resolveWebSearchRoutingPlan, type WebSearchRoutingPlan } from "@core/api/server-tools"
 import { PromptProfile } from "@core/prompts/profiles/types"
+import { ExplicitInstructionRegistry } from "@core/task/explicit-instructions/ExplicitInstructionRegistry"
+import { ExplicitInstructionRequestScope } from "@core/task/explicit-instructions/ExplicitInstructionRequestScope"
 import { ServerTool } from "@shared/proto/dline/models/metadata"
 import { resolvePromptProfile } from "@shared/resolve-prompt-profile"
 
@@ -8,16 +11,12 @@ export interface RequestApiScope {
 	readonly api: ApiHandler
 	readonly providerInfo: Readonly<ApiProviderInfo>
 	readonly webToolsEnabled: boolean
-	readonly hostedWebSearchAllowed: boolean
 	readonly webSearchRoutingPlan: WebSearchRoutingPlan
+	readonly explicitInstructions: ExplicitInstructionRequestScope
 }
 
 /** Resolve Web Search once from the handler/profile captured for a request. */
-export function resolveRequestWebSearchRoutingPlan(
-	api: ApiHandler,
-	enabled: boolean,
-	hostedExecutionAllowed = true,
-): WebSearchRoutingPlan {
+export function resolveRequestWebSearchRoutingPlan(api: ApiHandler, enabled: boolean): WebSearchRoutingPlan {
 	const model = api.getModel()
 	const promptProfile = resolvePromptProfile({
 		modelId: model.id,
@@ -30,7 +29,6 @@ export function resolveRequestWebSearchRoutingPlan(
 		selectedApiFormat: model.info.apiFormats?.[0],
 		localAvailable: promptProfile === PromptProfile.Standard,
 		remoteAdapterAvailable: api.supportsServerTool?.(ServerTool.WEB_SEARCH) === true,
-		hostedExecutionAllowed,
 	})
 }
 
@@ -40,7 +38,7 @@ export function createRequestApiScope(
 	mode: ApiProviderInfo["mode"],
 	customPrompt?: string,
 	webToolsEnabled = false,
-	hostedWebSearchAllowed = true,
+	explicitInstructionRegistry = new ExplicitInstructionRegistry(),
 ): RequestApiScope {
 	const providerId = api.getProviderId?.()
 	if (!providerId) {
@@ -48,13 +46,15 @@ export function createRequestApiScope(
 	}
 	const model = api.getModel()
 	const frozenWebToolsEnabled = webToolsEnabled === true
-	const frozenHostedWebSearchAllowed = hostedWebSearchAllowed === true
 
 	return Object.freeze({
 		api,
+		explicitInstructions: new ExplicitInstructionRequestScope(explicitInstructionRegistry, {
+			requestId: randomUUID(),
+			attemptId: randomUUID(),
+		}),
 		webToolsEnabled: frozenWebToolsEnabled,
-		hostedWebSearchAllowed: frozenHostedWebSearchAllowed,
-		webSearchRoutingPlan: resolveRequestWebSearchRoutingPlan(api, frozenWebToolsEnabled, frozenHostedWebSearchAllowed),
+		webSearchRoutingPlan: resolveRequestWebSearchRoutingPlan(api, frozenWebToolsEnabled),
 		providerInfo: Object.freeze({
 			providerId,
 			model,

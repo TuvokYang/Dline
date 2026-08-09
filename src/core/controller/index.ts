@@ -1302,6 +1302,7 @@ export class Controller {
 			firstItemIndex,
 			apiMetrics,
 			lastApiReqTotalTokens,
+			promptCacheHealth: this.task?.getPromptCacheHealth(),
 			currentFocusChainChecklist: checklistForState,
 			focusChainHistory: this.task?.taskState.focusChainHistory || null,
 			checkpointManagerErrorMessage,

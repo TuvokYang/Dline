@@ -15,6 +15,7 @@ import { CheckpointError } from "./CheckpointError"
 import ContextWindow from "./ContextWindow"
 import { FocusChain } from "./FocusChain"
 import { highlightText } from "./Highlights"
+import { PromptCacheHealthBanner } from "./PromptCacheHealthBanner"
 import SpawnedTasksBar from "./SpawnedTasksBar"
 import { TaskLockBanner } from "./TaskLockBanner"
 import { formatTokenMetric, hasNonZeroModelPricing } from "./util"
@@ -70,6 +71,7 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 		expandTaskHeader: isTaskExpanded,
 		setExpandTaskHeader: setIsTaskExpanded,
 		environment,
+		promptCacheHealth,
 		taskLockStatus,
 	} = useExtensionState()
 
@@ -121,6 +123,7 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 
 	return (
 		<div className="py-2 px-4 flex flex-col gap-2">
+			<PromptCacheHealthBanner health={promptCacheHealth} />
 			{/* Display Checkpoint Error */}
 			<CheckpointError
 				checkpointManagerErrorMessage={checkpointManagerErrorMessage}

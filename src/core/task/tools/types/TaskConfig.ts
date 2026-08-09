@@ -3,6 +3,7 @@ import type { WebSearchRoutingPlan } from "@core/api/server-tools"
 import type { IdentityFactory } from "@core/api/transform/block-identity"
 import type { FileContextTracker } from "@core/context/context-tracking/FileContextTracker"
 import type { ClineIgnoreController } from "@core/ignore/ClineIgnoreController"
+import type { ExplicitInstructionConsumePort } from "@core/task/explicit-instructions/types"
 import type { CommandPermissionController } from "@core/permissions"
 import type { TaskFileTracker } from "@integrations/checkpoints/TaskFileTracker"
 import type { DiffViewProvider } from "@integrations/editor/DiffViewProvider"
@@ -72,6 +73,8 @@ export interface TaskConfig {
 	webToolsEnabled?: boolean
 	/** Request-frozen route used to admit or reject local Web Search execution. */
 	webSearchRoutingPlan?: WebSearchRoutingPlan
+	/** Request-scoped one-shot authority for explicit-only tools. */
+	explicitInstructions?: ExplicitInstructionConsumePort
 
 	// Multi-workspace support (optional for backward compatibility)
 	workspaceManager?: WorkspaceRootManager

@@ -15,6 +15,7 @@ import type { LoadCapabilityPayload } from "./load-capabilities"
 import { McpDisplayMode } from "./McpDisplayMode"
 import { ClineMessageModelInfo } from "./messages"
 import type { ModeSwitchSnapshot } from "./mode-switch"
+import type { PromptCacheHealthSnapshot } from "./PromptCacheHealth"
 import { OnboardingModelGroup } from "./proto/dline/state"
 import type { TaskLockStatus } from "./proto/dline/task"
 import { Mode } from "./storage/types"
@@ -155,6 +156,8 @@ export interface ExtensionState {
 	}
 	/** Total tokens from the last API request for context window progress bar */
 	lastApiReqTotalTokens?: number
+	/** Current Task-local prompt cache health snapshot. */
+	promptCacheHealth?: PromptCacheHealthSnapshot
 	/** Account-level usage/balance info queried from provider API */
 	accountUsage?: AccountUsageData
 	/** Task lock status indicating if the current task is locked by another instance */
@@ -453,6 +456,14 @@ export interface ClineSayTool {
 	activityId?: string
 	diff?: string
 	content?: string | string[]
+	/** Lifecycle for the stable conversation-compaction chat row. */
+	compactionStatus?: "running" | "retrying" | "failed" | "completed"
+	/** Actionable compaction failure detail. */
+	error?: string
+	/** One-based retry attempt currently scheduled. */
+	retryAttempt?: number
+	/** Maximum automatic retry attempts. */
+	maxRetryAttempts?: number
 	webSearch?: WebSearchPresentationV1
 	webFetch?: WebFetchPresentationV1
 	regex?: string

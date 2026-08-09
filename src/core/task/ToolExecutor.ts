@@ -34,6 +34,7 @@ import { StateManager } from "../storage/StateManager"
 import { WorkspaceRootManager } from "../workspace"
 import type { TaskActivityStore } from "./activity/TaskActivityStore"
 import { isTurnEndingToolName } from "./assistant-message-order"
+import type { ExplicitInstructionConsumePort } from "./explicit-instructions/types"
 import { serializeDurableToolResult } from "./DurableToolResult"
 import { isAllItemsCompleted } from "./focus-chain/file-utils"
 import type { InteractionKind } from "./interaction/Interaction"
@@ -159,6 +160,7 @@ export class ToolExecutor {
 	private allowedNativeToolNames: ReadonlySet<string> | undefined
 	private webToolsEnabled: boolean | undefined
 	private webSearchRoutingPlan: WebSearchRoutingPlan | undefined
+	private explicitInstructions: ExplicitInstructionConsumePort | undefined
 	private hostedServerToolLifecycle: ServerToolLifecycle | undefined
 
 	/** Public accessor for auto-approve logic used by TaskController.buildTurn(). */
@@ -204,6 +206,11 @@ export class ToolExecutor {
 	/** Freeze the ordinary native functions exposed in the current API request. */
 	public setAllowedNativeToolNames(toolNames: ReadonlySet<string>): void {
 		this.allowedNativeToolNames = new Set(Array.from(toolNames, normalizeNativeToolName))
+	}
+
+	/** Freeze explicit-only tool authority for the current provider attempt. */
+	public setExplicitInstructionConsumePort(port: ExplicitInstructionConsumePort): void {
+		this.explicitInstructions = port
 	}
 
 	/** Freeze Web Tools admission alongside the current request's tool schemas. */
@@ -273,8 +280,7 @@ export class ToolExecutor {
 	): WebSearchRoutingPlan | undefined {
 		if (this.webSearchRoutingPlan) return this.webSearchRoutingPlan
 		if (typeof this.api?.getModel !== "function") return undefined
-		const hostedWebSearchAllowed = this.isAutoApproved(ClineDefaultTool.WEB_SEARCH)
-		return resolveRequestWebSearchRoutingPlan(this.api, webToolsEnabled, hostedWebSearchAllowed)
+		return resolveRequestWebSearchRoutingPlan(this.api, webToolsEnabled)
 	}
 
 	private isNativeToolAdmitted(toolName: string): boolean {
@@ -460,6 +466,7 @@ export class ToolExecutor {
 			isSubagentExecution: false,
 			webToolsEnabled,
 			webSearchRoutingPlan: this.getWebSearchRoutingPlanForExecution(webToolsEnabled),
+			explicitInstructions: this.explicitInstructions,
 			cwd: this.cwd,
 			workspaceManager: this.workspaceManager,
 			isMultiRootEnabled: this.isMultiRootEnabled,

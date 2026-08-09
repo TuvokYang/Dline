@@ -1,7 +1,13 @@
 import { expect } from "@playwright/test"
 import OpenAI from "openai"
 import { ToolCallProcessor } from "../../core/api/transform/tool-call-processor"
-import type { MockApiConsumption, MockTokenUsage } from "./fixtures/server"
+import type {
+	MockApiConsumption,
+	MockCacheDiagnostic,
+	MockCacheWarning,
+	MockCacheWarningCode,
+	MockTokenUsage,
+} from "./fixtures/server"
 import { getE2EMockProviderBaseUrl, getE2EMockProviderUrl } from "./fixtures/server/api"
 import { e2e } from "./utils/helpers"
 
@@ -12,6 +18,18 @@ function usageOf(consumption: MockApiConsumption): MockTokenUsage {
 
 function totalInputTokens(usage: MockTokenUsage): number {
 	return usage.inputTokens + (usage.cacheReadTokens ?? 0) + (usage.cacheWriteTokens ?? 0)
+}
+
+function cacheDiagnosticOf(consumption: MockApiConsumption): MockCacheDiagnostic {
+	if (!consumption.cacheDiagnostic) throw new Error(`Missing cache diagnostic for ${consumption.target}`)
+	return consumption.cacheDiagnostic
+}
+
+function cacheWarningsOf(
+	server: { getCacheWarnings(target?: MockApiConsumption["target"]): readonly MockCacheWarning[] },
+	target: MockApiConsumption["target"],
+): readonly MockCacheWarning[] {
+	return server.getCacheWarnings(target)
 }
 
 function expectDerivedUsage(consumption: MockApiConsumption, responseText: string, reasoning: string): MockTokenUsage {
@@ -304,6 +322,156 @@ e2e("Mock API - isolates provider endpoints and emits protocol-native usage", as
 	expect(anthropicBody).toContain(`"output_tokens":${anthropicUsage.outputTokens}`)
 	expect(anthropicBody).toContain(`"cache_creation_input_tokens":${anthropicUsage.cacheWriteTokens ?? 0}`)
 	expect(anthropicBody).toContain(`"cache_read_input_tokens":${anthropicUsage.cacheReadTokens ?? 0}`)
+})
+
+e2e("Mock API - tracks growing OpenAI prompt prefixes without false cache warnings", async ({ server }) => {
+	const target = "openai-official-responses" as const
+	const stableInstructions = "Stable system instructions for OpenAI prompt cache diagnostics. ".repeat(12)
+	const stableTools = [
+		{
+			type: "function",
+			name: "read_file",
+			description: "Read one project file without changing the workspace.",
+			parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
+		},
+	]
+	const turns = [
+		[{ role: "user", content: `FIRST_TURN_${"a".repeat(640)}` }],
+		[
+			{ role: "user", content: `FIRST_TURN_${"a".repeat(640)}` },
+			{ role: "assistant", content: `FIRST_REPLY_${"b".repeat(320)}` },
+			{ role: "user", content: `SECOND_TURN_${"c".repeat(480)}` },
+		],
+		[
+			{ role: "user", content: `FIRST_TURN_${"a".repeat(640)}` },
+			{ role: "assistant", content: `FIRST_REPLY_${"b".repeat(320)}` },
+			{ role: "user", content: `SECOND_TURN_${"c".repeat(480)}` },
+			{ role: "assistant", content: `SECOND_REPLY_${"d".repeat(320)}` },
+			{ role: "user", content: `THIRD_TURN_${"e".repeat(480)}` },
+		],
+	]
+
+	server.resetOpenAiMock()
+	server.enqueueResponses(
+		target,
+		{ type: "message", text: "first" },
+		{ type: "message", text: "second" },
+		{ type: "message", text: "third" },
+	)
+	for (const input of turns) {
+		const response = await post(getE2EMockProviderUrl(server.baseUrl, target), {
+			model: "gpt-5.4-mini",
+			prompt_cache_key: "stable-task-cache-key",
+			instructions: stableInstructions,
+			tools: stableTools,
+			input,
+			stream: true,
+			store: false,
+		})
+		expect(response.status).toBe(200)
+		await response.text()
+	}
+
+	const diagnostics = server.getMockConsumptions(target).map(cacheDiagnosticOf)
+	expect(diagnostics.map(({ state }) => state)).toEqual(["cold", "warm", "warm"])
+	expect(diagnostics[0].cacheReadTokens).toBe(0)
+	expect(diagnostics[1].cacheReadTokens).toBeGreaterThan(0)
+	expect(diagnostics[2].cacheReadTokens).toBeGreaterThan(diagnostics[1].cacheReadTokens)
+	expect(diagnostics[2].reusablePrefixTokens).toBeGreaterThan(diagnostics[1].reusablePrefixTokens)
+	expect(cacheWarningsOf(server, target)).toEqual([])
+})
+
+e2e("Mock API - warns when reported OpenAI cache reads plateau while the prompt keeps growing", async ({ server }) => {
+	const target = "openai-official-responses" as const
+	const usages: MockTokenUsage[] = [
+		{ inputTokens: 240, outputTokens: 8, cacheReadTokens: 0, cacheWriteTokens: 160 },
+		{ inputTokens: 280, outputTokens: 8, cacheReadTokens: 120, cacheWriteTokens: 120 },
+		{ inputTokens: 400, outputTokens: 8, cacheReadTokens: 120, cacheWriteTokens: 120 },
+		{ inputTokens: 520, outputTokens: 8, cacheReadTokens: 120, cacheWriteTokens: 120 },
+	]
+	const stablePrefix = { role: "user", content: `STABLE_PREFIX_${"p".repeat(720)}` }
+
+	server.resetOpenAiMock()
+	server.enqueueResponses(
+		target,
+		...usages.map((usage, index) => ({ type: "message" as const, text: `response-${index}`, usage })),
+	)
+	for (let index = 0; index < usages.length; index++) {
+		const input = [
+			stablePrefix,
+			...Array.from({ length: index + 1 }, (_, turn) => ({
+				role: turn % 2 === 0 ? "assistant" : "user",
+				content: `GROWING_TURN_${turn}_${"x".repeat(480)}`,
+			})),
+		]
+		const response = await post(getE2EMockProviderUrl(server.baseUrl, target), {
+			model: "gpt-5.4-mini",
+			prompt_cache_key: "plateau-task-cache-key",
+			instructions: "Stable plateau diagnostic instructions.",
+			input,
+			stream: true,
+			store: false,
+		})
+		expect(response.status).toBe(200)
+		await response.text()
+	}
+
+	const diagnostics = server.getMockConsumptions(target).map(cacheDiagnosticOf)
+	expect(diagnostics.map(({ totalInputTokens }) => totalInputTokens)).toEqual(usages.map(totalInputTokens))
+	expect(diagnostics.at(-1)?.state).toBe("plateau")
+	expect(cacheWarningsOf(server, target).map(({ code }) => code)).toContain("cache_plateau")
+})
+
+e2e("Mock API - distinguishes OpenAI cache identity drift, prefix regression, and a warm miss", async ({ server }) => {
+	const target = "openai-compatible-responses" as const
+	const stableHead = { role: "user", content: `STABLE_HEAD_${"s".repeat(800)}` }
+	const requests = [
+		{
+			include: ["reasoning.encrypted_content"],
+			input: [stableHead],
+			usage: { inputTokens: 180, outputTokens: 8, cacheReadTokens: 0, cacheWriteTokens: 120 },
+		},
+		{
+			include: ["reasoning.encrypted_content"],
+			input: [stableHead, { role: "user", content: `WARM_SUFFIX_${"w".repeat(640)}` }],
+			usage: { inputTokens: 160, outputTokens: 8, cacheReadTokens: 240, cacheWriteTokens: 80 },
+		},
+		{
+			include: ["reasoning.encrypted_content"],
+			input: [{ role: "user", content: `CHANGED_EARLY_PREFIX_${"z".repeat(640)}` }],
+			usage: { inputTokens: 360, outputTokens: 8, cacheReadTokens: 0, cacheWriteTokens: 120 },
+		},
+		{
+			include: ["reasoning.encrypted_content", "web_search_call.results"],
+			input: [{ role: "user", content: `CHANGED_EARLY_PREFIX_${"z".repeat(640)}` }],
+			usage: { inputTokens: 280, outputTokens: 8, cacheReadTokens: 120, cacheWriteTokens: 80 },
+		},
+	]
+
+	server.resetOpenAiMock()
+	server.enqueueResponses(
+		target,
+		...requests.map(({ usage }, index) => ({ type: "message" as const, text: `response-${index}`, usage })),
+	)
+	for (const request of requests) {
+		const response = await post(getE2EMockProviderUrl(server.baseUrl, target), {
+			model: "gpt-5.4-mini",
+			prompt_cache_key: "identity-task-cache-key",
+			instructions: "Stable identity diagnostic instructions.",
+			input: request.input,
+			include: request.include,
+			stream: true,
+			store: false,
+		})
+		expect(response.status).toBe(200)
+		await response.text()
+	}
+
+	const diagnostics = server.getMockConsumptions(target).map(cacheDiagnosticOf)
+	const expectedWarningCodes: MockCacheWarningCode[] = ["prefix_regression", "warm_cache_miss"]
+	expect(diagnostics[2].warnings.map(({ code }) => code)).toEqual(expect.arrayContaining(expectedWarningCodes))
+	expect(diagnostics[3].warnings.map(({ code }) => code)).toContain("identity_changed")
+	expect(new Set(diagnostics.map(({ identity }) => identity)).size).toBe(2)
 })
 
 e2e("Mock API - scripts 403, 429, and 502 responses and records their consumption", async ({ server }) => {

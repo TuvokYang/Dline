@@ -13,6 +13,13 @@ vi.mock("@/context/ExtensionStateContext", () => ({
 		focusChainSettings: { enabled: false },
 		mode: "act",
 		navigateToSettings: vi.fn(),
+		promptCacheHealth: {
+			status: "warming",
+			sampleCount: 1,
+			warmingRound: 1,
+			warmingTarget: 3,
+			nearContextWindow: false,
+		},
 		setExpandTaskHeader: vi.fn(),
 		taskLockStatus: undefined,
 	}),
@@ -26,6 +33,25 @@ const task = {
 }
 
 describe("TaskHeader pricing", () => {
+	it("renders prompt cache health before the task header card", () => {
+		const { container } = render(
+			<TaskHeader
+				doesModelSupportPromptCache={true}
+				onClose={vi.fn()}
+				task={task}
+				tokensIn={0}
+				tokensOut={0}
+				totalCost={0}
+			/>,
+		)
+
+		const warming = screen.getByRole("status")
+		const taskHeader = screen.getByLabelText("Expand task header").closest("div.relative")
+		expect(taskHeader).not.toBeNull()
+		expect(warming.compareDocumentPosition(taskHeader as Node) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+		expect(container).toHaveTextContent("Prompt cache warming (1/3)")
+	})
+
 	it("hides a zero-priced model cost while retaining token metrics", () => {
 		render(
 			<TaskHeader

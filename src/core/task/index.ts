@@ -18,7 +18,10 @@ import {
 	getContextWindowInfo,
 } from "@core/context/context-management/context-window-utils"
 import {
+	getCompactionUserText,
+	hasManualCompactionIntent,
 	hasToolResult,
+	isManualCompactionRequest,
 	projectCompletedCompactionResult,
 	shouldDeferCurrentTurn,
 	shouldRestoreDeferredTurn,
@@ -63,6 +66,7 @@ import { TaskActivityPersistence } from "@core/task/activity/TaskActivityPersist
 import { TaskActivityStore } from "@core/task/activity/TaskActivityStore"
 import { ensureApiMessages, ensureUserContent } from "@core/task/api-context"
 import { showContextUsage } from "@core/task/environment-context"
+import { ExplicitInstructionRegistry } from "@core/task/explicit-instructions/ExplicitInstructionRegistry"
 import { type ModeCompactResult, ModeSwitchCompaction } from "@core/task/ModeSwitchCompaction"
 import { MODE_SWITCH_COMPACT_SIGNAL } from "@core/task/mode-switch-signal"
 import { createRequestApiScope, type RequestApiScope, resolveRequestWebSearchRoutingPlan } from "@core/task/RequestApiScope"
@@ -103,6 +107,7 @@ import {
 import { isFocusChainItem } from "@shared/focus-chain-utils"
 import { HistoryItem } from "@shared/HistoryItem"
 import { DEFAULT_LANGUAGE_SETTINGS, getLanguageKey, LanguageDisplay } from "@shared/Languages"
+import type { PromptCacheHealthSnapshot } from "@shared/PromptCacheHealth"
 import { USER_CONTENT_TAGS } from "@shared/messages/constants"
 import type { ReasoningConfig } from "@shared/proto/dline/provider/common"
 import { convertClineMessageToProto } from "@shared/proto-conversions/cline-message"
@@ -178,6 +183,7 @@ import { buildTaskBackgroundEnvironmentSection, buildTaskBackgroundResults } fro
 import { detectAvailableCliTools } from "./cli-tool-detector"
 import { FocusChainManager } from "./focus-chain"
 import type { InteractionKind } from "./interaction/Interaction"
+import { requestHostedWebApproval } from "./interaction/HostedWebApproval"
 import { type DetachedInteractionContinuationContext, InteractionCoordinator } from "./interaction/InteractionCoordinator"
 import { getInteraction } from "./interaction/InteractionRegistry"
 import {
@@ -198,6 +204,7 @@ import type { TaskEffectPorts } from "./runtime/TaskEffectRunner"
 import type { TaskEvent } from "./runtime/TaskEvent"
 import { type TaskDispatchResult, TaskRuntime } from "./runtime/TaskRuntime"
 import { createTaskRuntimeState, type TaskRuntimeState } from "./runtime/TaskRuntimeState"
+import { PromptCacheHealthTracker } from "./prompt-cache/PromptCacheHealthTracker"
 import { StreamChunkCoordinator } from "./StreamChunkCoordinator"
 import { StreamResponseHandler } from "./StreamResponseHandler"
 import { shouldRunTaskCancelHook } from "./TaskCancelPolicy"
@@ -388,6 +395,7 @@ export class Task {
 	private useNativeToolCalls = false
 	private streamHandler: StreamResponseHandler
 	private readonly identityFactory = createIdentityFactory()
+	private readonly explicitInstructionRegistry = new ExplicitInstructionRegistry()
 
 	private terminalExecutionMode: "vscodeTerminal" | "backgroundExec"
 
@@ -427,6 +435,7 @@ export class Task {
 	private readonly systemPromptCacheService: SystemPromptCacheService
 	private latestTaskSnapshot?: TaskSnapshot
 	private pendingSystemPromptRefreshReason?: SystemPromptRefreshReason
+	private readonly promptCacheHealth: PromptCacheHealthTracker
 	private pendingBackgroundResultIds?: { subagentIds: string[]; commandIds: string[] }
 	private pendingBackgroundCommandLineCounts?: Array<{ id: string; lineCount: number }>
 	/** One cancellable automatic-retry wait, exposed to the Webview Retry action. */
@@ -521,6 +530,7 @@ export class Task {
 		this.diffViewProvider = backgroundEditEnabled ? new FileEditProvider() : HostProvider.get().createDiffViewProvider()
 
 		this.taskId = taskId
+		this.promptCacheHealth = new PromptCacheHealthTracker(taskId, Logger)
 		this.activityStore = new TaskActivityStore(taskId, new TaskActivityPersistence(taskId))
 		this.taskRuntime = new TaskRuntime(
 			createTaskRuntimeState({ taskId: this.taskId }),
@@ -1073,6 +1083,12 @@ export class Task {
 		if (this.toolExecutor) {
 			;(this.toolExecutor as any).api = this.api
 		}
+		this.promptCacheHealth.reset("profile_changed")
+	}
+
+	/** Return the current Task-local prompt cache health projection. */
+	public getPromptCacheHealth(): PromptCacheHealthSnapshot {
+		return this.promptCacheHealth.getSnapshot()
 	}
 
 	private async scheduleAssistantPresentation(
@@ -2922,8 +2938,7 @@ export class Task {
 	async refreshPromptCache(): Promise<void> {
 		const providerInfo = this.getCurrentProviderInfo()
 		const webToolsEnabled = this.stateManager.getGlobalSettingsKey("clineWebToolsEnabled") === true
-		const hostedWebSearchAllowed = this.toolExecutor.isAutoApproved(ClineDefaultTool.WEB_SEARCH)
-		const webSearchRoutingPlan = resolveRequestWebSearchRoutingPlan(this.api, webToolsEnabled, hostedWebSearchAllowed)
+		const webSearchRoutingPlan = resolveRequestWebSearchRoutingPlan(this.api, webToolsEnabled)
 		const promptContext = await this.buildPromptContext(providerInfo, webToolsEnabled, webSearchRoutingPlan)
 		await this.systemPromptCacheService.refresh({ promptContext, reason: "manual" })
 	}
@@ -3126,7 +3141,7 @@ export class Task {
 		status: NonNullable<ClineSayTool["compactionStatus"]>,
 		options: { error?: string; retryAttempt?: number; maxRetryAttempts?: number } = {},
 	): Promise<void> {
-		if (!this.taskState.isInternalContextCompactionRequest) return
+		if (!this.taskState.isInternalContextCompactionRequest && !this.taskState.isManualContextCompactionRequest) return
 		const existingTs = this.taskState.contextCompactionMessageTs
 		const existing = existingTs
 			? this.messageStateHandler.clineMessages.find((message) => message.ts === existingTs)
@@ -3157,6 +3172,18 @@ export class Task {
 			existingTs,
 		)
 		if (ts !== undefined) this.taskState.contextCompactionMessageTs = ts
+	}
+
+	private async awaitManualCompactionRecovery(): Promise<void> {
+		const interactionId = `compaction-failed:${this.taskId}:${this.getRuntimeState().revision}`
+		const outcome = await this.interactionCoordinator.open({
+			turnId: interactionId,
+			interactionId,
+			kind: "followup",
+			presentation: "Conversation compaction failed. Send another message to continue without the incomplete summary.",
+		})
+		const continuation = await buildUserFeedbackContent(outcome.draft?.text, outcome.draft?.images, outcome.draft?.files)
+		await this.recursivelyMakeClineRequests(continuation)
 	}
 
 	private parsePreviousTokens(previousApiReqIndex: number): number | undefined {
@@ -3571,6 +3598,7 @@ export class Task {
 		)
 		const tools = selectedTools ? [...selectedTools] : undefined
 		this.toolExecutor.setAllowedNativeToolNames(getAdvertisedNativeToolNames(tools))
+		this.toolExecutor.setExplicitInstructionConsumePort(requestScope.explicitInstructions.createConsumePort())
 		this.toolExecutor.setWebSearchRoutingPlan(requestScope.webSearchRoutingPlan, requestScope.webToolsEnabled)
 		Logger.debug(
 			`[Task ${this.taskId}] attemptApiRequest: after systemPrompt +${Math.round(performance.now() - apiReqStart)}ms`,
@@ -3618,12 +3646,6 @@ export class Task {
 			})
 
 			apiConversationMessages = resolvedBudget.messages
-			if (!resolvedBudget.budget.canSend) {
-				const errorMessage =
-					"Conversation compaction cannot start because the complete request leaves no safe output space."
-				await this.updateContextCompactionStatus("failed", { error: errorMessage })
-				throw new Error(errorMessage)
-			}
 		}
 
 		const roundContext = {
@@ -3697,6 +3719,11 @@ export class Task {
 
 			// Capture provider failure telemetry using clineError
 			ErrorService.get().logMessage(clineError.message)
+
+			if (this.taskState.isManualContextCompactionRequest) {
+				// The outer request boundary removes partial manual summary UI and reports one terminal failure.
+				throw error
+			}
 
 			if (isContextWindowExceededError && !this.taskState.didAutomaticallyRetryFailedApiRequest) {
 				await this.handleContextWindowExceededError(api)
@@ -4221,21 +4248,39 @@ export class Task {
 		}
 	}
 
+	/** Finish every request-local write-ahead gate before the Provider request is admitted. */
+	private async completeApiRequestGate(
+		requestScope: RequestApiScope,
+		apiIndex: number,
+		beforeApiRequestStarted?: () => Promise<void>,
+	): Promise<boolean> {
+		await beforeApiRequestStarted?.()
+		const approval = await requestHostedWebApproval(this.interactionCoordinator, {
+			taskId: this.taskId,
+			apiIndex,
+			providerId: requestScope.providerInfo.providerId,
+			routingPlan: requestScope.webSearchRoutingPlan,
+			autoApproved: this.toolExecutor.isAutoApproved(ClineDefaultTool.WEB_SEARCH),
+		})
+		if (!approval.approved) return false
+		await this.admitApiRequest(apiIndex)
+		return true
+	}
+
 	/** Persist the request user message and finish any write-ahead transaction before API admission. */
 	private async persistApiRequestUserMessage(
 		userContent: ClineContent[],
 		apiIndex: number,
+		requestScope: RequestApiScope,
 		beforeApiRequestStarted?: () => Promise<void>,
-	): Promise<void> {
+	): Promise<boolean> {
 		await this.messageStateHandler.addToApiConversationHistory({
 			role: "user",
 			content: userContent,
 			ts: Date.now(),
 		})
-		if (!beforeApiRequestStarted) return
 		await this.messageStateHandler.flushApiConversationHistory()
-		await beforeApiRequestStarted()
-		await this.admitApiRequest(apiIndex)
+		return this.completeApiRequestGate(requestScope, apiIndex, beforeApiRequestStarted)
 	}
 
 	async recursivelyMakeClineRequests(
@@ -4254,7 +4299,7 @@ export class Task {
 			this.taskSm.mode,
 			this.stateManager.getGlobalSettingsKey("customPrompt"),
 			this.stateManager.getGlobalSettingsKey("clineWebToolsEnabled"),
-			this.toolExecutor.isAutoApproved(ClineDefaultTool.WEB_SEARCH),
+			this.explicitInstructionRegistry,
 		)
 		userContent = await this.consumeModeSwitchChatContent(userContent)
 
@@ -4268,9 +4313,6 @@ export class Task {
 			this.taskState.apiRequestsSinceLastTodoUpdate++
 		}
 		const apiIndex = this.messageStateHandler.apiConversationHistory.length
-		if (!transaction.beforeApiRequestStarted) {
-			await this.admitApiRequest(apiIndex)
-		}
 
 		// Used to know what models were used in the task if user wants to export metadata for error reporting purposes
 		const { model, providerId, customPrompt, mode } = requestScope.providerInfo
@@ -4391,9 +4433,19 @@ export class Task {
 		}
 		const forceModeCompact = this.modeSwitchCompaction.shouldForce()
 		const canCompactBeforeAdmission = transaction.beforeApiRequestStarted === undefined
+		const manualCompactionRequested = hasManualCompactionIntent(userContent)
+		const manualCompactionCommitted = this.taskState.manualCompactionCommitted
+		this.taskState.manualCompactionCommitted = false
 
 		const didCompleteSummarization = this.taskState.currentlySummarizing
-		if (canCompactBeforeAdmission && (forceModeCompact || (useAutoCondense && isNextGenModelFamily(model.id)))) {
+		if (didCompleteSummarization || manualCompactionCommitted) {
+			this.promptCacheHealth.recordCompactionResult(true)
+		}
+		if (
+			canCompactBeforeAdmission &&
+			(forceModeCompact ||
+				(useAutoCondense && !manualCompactionRequested && !manualCompactionCommitted && isNextGenModelFamily(model.id)))
+		) {
 			// When we initially trigger context cleanup, we increase the context window size, so we need state `currentlySummarizing`
 			// to track if we've already started the context summarization flow. After summarizing, we increment
 			// conversationHistoryDeletedRange to mask out the summarization-trigger user & assistant response messages
@@ -4506,8 +4558,10 @@ export class Task {
 		this.taskState.isInternalContextCompactionRequest = shouldCompact
 
 		if (shouldCompact) {
-			// When compacting, skip full context loading (use summarize_task instead)
-			parsedUserContent = this.taskState.deferredCurrentTurn ? [] : userContent
+			// Preserve user-authored current-turn content while tool results remain deferred until compaction completes.
+			parsedUserContent = this.taskState.deferredCurrentTurn
+				? getCompactionUserText(this.taskState.deferredCurrentTurn.userContent)
+				: userContent
 			environmentDetails = ""
 			clinerulesError = false
 			this.taskState.lastAutoCompactTriggerIndex = previousApiReqIndex
@@ -4517,8 +4571,17 @@ export class Task {
 				userContent,
 				includeFileDetails,
 				useCompactPrompt,
-				requestScope.providerInfo,
+				requestScope,
 			)
+		}
+		this.taskState.isManualContextCompactionRequest =
+			!shouldCompact &&
+			requestScope.explicitInstructions
+				.consumeBehaviorInstructions()
+				.some((authorization) => authorization.source === "manual_compact_command")
+		if (this.taskState.isManualContextCompactionRequest) {
+			// A manual request owns a new failure row and must never overwrite an earlier automatic compaction status.
+			this.taskState.contextCompactionMessageTs = undefined
 		}
 		// error handling if the user uses the /newrule command & their .clinerules is a file, for file read operations didnt work properly
 		if (clinerulesError === true) {
@@ -4546,16 +4609,28 @@ export class Task {
 				modelId: requestScope.providerInfo.model.id,
 				contextWindow: requestScope.providerInfo.model.info.capabilities?.contextWindow,
 			})
-			userContent.push({
-				type: "text",
-				text: summarizeTask(
+			const operationId = this.modeSwitchCompaction.getOperationId()
+			const source = operationId?.startsWith("manual-compact:")
+				? "task_header"
+				: operationId
+					? "mode_switch"
+					: "auto_compaction"
+			const registered = requestScope.explicitInstructions.registerAndRender(
+				summarizeTask(
 					promptProfile === PromptProfile.Standard
 						? this.stateManager.getGlobalSettingsKey("focusChainSettings")
 						: undefined,
 					this.cwd,
 					isMultiRootEnabled(this.stateManager),
 				),
-			})
+				{
+					type: "summarize_task",
+					source,
+					targetTool: ClineDefaultTool.SUMMARIZE_TASK,
+					...(operationId === undefined ? {} : { operationId }),
+				},
+			)
+			userContent.push({ type: "text", text: registered.text })
 			await this.ensureContextCompactionStatusRow()
 		}
 
@@ -4570,7 +4645,13 @@ export class Task {
 			}),
 		)
 
-		await this.persistApiRequestUserMessage(userContent, apiIndex, transaction.beforeApiRequestStarted)
+		const requestApproved = await this.persistApiRequestUserMessage(
+			userContent,
+			apiIndex,
+			requestScope,
+			transaction.beforeApiRequestStarted,
+		)
+		if (!requestApproved) return true
 
 		telemetryService.captureConversationTurnEvent(this.ulid, providerId, model.id, "user", modelInfo.mode)
 
@@ -4603,6 +4684,7 @@ export class Task {
 				totalCost: number | undefined
 			} = { cacheWriteTokens: 0, cacheReadTokens: 0, inputTokens: 0, outputTokens: 0, totalCost: undefined }
 			let didFinalizeApiReqMsg = false
+			let cacheUsageReported = false
 			let usageChunkSideEffectsQueue = Promise.resolve()
 			/*
 				Usage side effects run as soon as a usage chunk arrives.
@@ -4805,6 +4887,7 @@ export class Task {
 						taskMetrics.outputTokens += chunk.outputTokens
 						taskMetrics.cacheWriteTokens += chunk.cacheWriteTokens ?? 0
 						taskMetrics.cacheReadTokens += chunk.cacheReadTokens ?? 0
+						cacheUsageReported ||= chunk.cacheWriteTokens !== undefined || chunk.cacheReadTokens !== undefined
 						taskMetrics.totalCost = chunk.totalCost ?? taskMetrics.totalCost
 						queueUsageChunkSideEffects(chunk.inputTokens, chunk.outputTokens, {
 							cacheWriteTokens: chunk.cacheWriteTokens,
@@ -5030,6 +5113,22 @@ export class Task {
 						ErrorService.get().logException(clineError, { modelId: model.id, providerId })
 					}
 					const errorMessage = clineError.serialize()
+					if (this.taskState.isManualContextCompactionRequest) {
+						// Manual condense is user-owned and one-shot: discard the incomplete preview and its request turn.
+						await this.messageStateHandler.removePartialMessages()
+						await this.messageStateHandler.overwriteApiConversationHistory(
+							this.messageStateHandler.apiConversationHistory.slice(0, apiIndex),
+						)
+						await finalizeApiReqMsg("streaming_failed", errorMessage)
+						await this.updateContextCompactionStatus("failed", { error: errorMessage })
+						this.taskState.isManualContextCompactionRequest = false
+						this.taskState.contextCompactionMessageTs = undefined
+						this.endAutoRetrySequence(false)
+						await this.messageStateHandler.updateTaskHistory()
+						await this.postStateToWebview()
+						await this.awaitManualCompactionRecovery()
+						return true
+					}
 					const isStreamingSpendLimitError = clineError.isErrorType(ClineErrorType.SpendLimit)
 					// Auto-retry for streaming failures (skip for spend limit errors)
 					const retryDecision = getStreamRetryDecision({
@@ -5136,6 +5235,8 @@ export class Task {
 					taskMetrics.outputTokens += apiStreamUsage.outputTokens
 					taskMetrics.cacheWriteTokens += apiStreamUsage.cacheWriteTokens ?? 0
 					taskMetrics.cacheReadTokens += apiStreamUsage.cacheReadTokens ?? 0
+					cacheUsageReported ||=
+						apiStreamUsage.cacheWriteTokens !== undefined || apiStreamUsage.cacheReadTokens !== undefined
 					taskMetrics.totalCost = apiStreamUsage.totalCost ?? taskMetrics.totalCost
 					queueUsageChunkSideEffects(apiStreamUsage.inputTokens, apiStreamUsage.outputTokens, {
 						cacheWriteTokens: apiStreamUsage.cacheWriteTokens,
@@ -5148,12 +5249,35 @@ export class Task {
 			// Update the api_req_started message with final usage and cost details
 			await finalizeApiReqMsg()
 			await this.messageStateHandler.updateTaskHistory()
-			await this.postStateToWebview()
 
-			// need to call here in case the stream was aborted
+			// Do not treat a canceled provider stream as a completed cache sample.
 			if (this.taskState.abort) {
 				throw new Error("Dline instance aborted")
 			}
+
+			const { contextWindow } = getContextWindowInfo(requestScope.api)
+			const compactTriggerTokens = computeCompactTrigger(contextWindow, computeSummarizeBudget(), {
+				triggerPercent: this.stateManager.getGlobalSettingsKey("autoCondenseTriggerPercent"),
+				maxContextTokens: this.stateManager.getGlobalSettingsKey("autoCondenseMaxContextTokens"),
+			})
+			this.promptCacheHealth.recordRequest({
+				completed: true,
+				isCompactionRequest:
+					this.taskState.isInternalContextCompactionRequest || this.taskState.isManualContextCompactionRequest,
+				supportsPromptCache: requestScope.providerInfo.model.info.capabilities?.supportsPromptCache === true,
+				cacheUsageReported,
+				inputTokens: taskMetrics.inputTokens,
+				cacheWriteTokens: taskMetrics.cacheWriteTokens,
+				cacheReadTokens: taskMetrics.cacheReadTokens,
+				contextTokens:
+					taskMetrics.inputTokens +
+					taskMetrics.outputTokens +
+					taskMetrics.cacheWriteTokens +
+					taskMetrics.cacheReadTokens,
+				contextWindow,
+				compactTriggerTokens,
+			})
+			await this.postStateToWebview()
 
 			// Stored the assistant API response immediately after the stream finishes in the same turn
 			// Check if the stream produced any content ÃƒÂ¢Ã¢â€?either text or native tool calls.
@@ -5402,8 +5526,9 @@ export class Task {
 		userContent: ClineContent[],
 		includeFileDetails = false,
 		useCompactPrompt = false,
-		providerInfo: Readonly<ApiProviderInfo> = this.getCurrentProviderInfo(),
+		requestScope: RequestApiScope,
 	): Promise<[ClineContent[], string, boolean]> {
+		const providerInfo = requestScope.providerInfo
 		let needsClinerulesFileCheck = false
 
 		// Pre-fetch necessary data to avoid redundant calls within loops
@@ -5451,7 +5576,7 @@ export class Task {
 				}
 			}
 
-			const { processedText, needsClinerulesFileCheck: needsCheck } = await parseSlashCommands(
+			const { processedText, needsClinerulesFileCheck: needsCheck, explicitInstructions } = await parseSlashCommands(
 				parsedText,
 				localWorkflowToggles,
 				globalWorkflowToggles,
@@ -5471,7 +5596,11 @@ export class Task {
 			if (needsCheck) {
 				needsClinerulesFileCheck = true
 			}
-			return processedText
+			let registeredText = processedText
+			for (const declaration of explicitInstructions) {
+				registeredText = requestScope.explicitInstructions.registerAndRender(registeredText, declaration).text
+			}
+			return registeredText
 		}
 
 		const processTextContent = async (block: ClineTextContentBlock): Promise<ClineTextContentBlock> => {

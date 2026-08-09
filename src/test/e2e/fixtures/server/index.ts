@@ -10,6 +10,11 @@ import {
 	type E2EMockProviderTarget,
 } from "./api"
 import { ClineDataMock } from "./data"
+import {
+	type MockCacheDiagnostic,
+	type MockCacheWarning,
+	OpenAiCacheDiagnostics,
+} from "./openai-cache-diagnostics"
 
 const E2E_API_SERVER_HOST = "127.0.0.1"
 
@@ -22,6 +27,7 @@ function log(...args: unknown[]) {
 
 export type MockApiProtocol = E2EMockApiProtocol
 export type MockApiTarget = E2EMockProviderTarget
+export type { MockCacheDiagnostic, MockCacheWarning, MockCacheWarningCode } from "./openai-cache-diagnostics"
 
 export interface MockTokenUsage {
 	/** Input tokens excluding cache reads and writes. */
@@ -125,6 +131,7 @@ export interface MockApiConsumption {
 	thinking?: MockThinkingConfig
 	responseReasoning?: string
 	usage?: MockTokenUsage
+	cacheDiagnostic?: MockCacheDiagnostic
 }
 
 export interface MockModelListRequest {
@@ -331,6 +338,7 @@ export class ClineApiServerMock {
 	private mockSearxngSearchRequests: MockSearxngSearchRequest[] = []
 	private mockWebFetchPageRequests: MockWebFetchPageRequest[] = []
 	private previousSuccessfulRequestText = new Map<MockApiTarget, string>()
+	private readonly openAiCacheDiagnostics = new OpenAiCacheDiagnostics()
 	public generationCounter = 0
 
 	public readonly API_USER = new ClineDataMock("personal")
@@ -388,6 +396,7 @@ export class ClineApiServerMock {
 		this.mockSearxngSearchRequests = []
 		this.mockWebFetchPageRequests = []
 		this.previousSuccessfulRequestText.clear()
+		this.openAiCacheDiagnostics.reset()
 	}
 
 	public getModelListRequests(): readonly MockModelListRequest[] {
@@ -418,6 +427,10 @@ export class ClineApiServerMock {
 
 	public getMockConsumptions(target?: MockApiTarget): readonly MockApiConsumption[] {
 		return target ? this.mockConsumptions.filter((consumption) => consumption.target === target) : this.mockConsumptions
+	}
+
+	public getCacheWarnings(target?: MockApiTarget): readonly MockCacheWarning[] {
+		return this.openAiCacheDiagnostics.getWarnings(target)
 	}
 
 	public setCurrentUser(user: UserResponse | null) {
@@ -456,6 +469,9 @@ export class ClineApiServerMock {
 			response.type === "error"
 				? undefined
 				: getResponseUsage(response, requestText, this.previousSuccessfulRequestText.get(target))
+		const cacheDiagnostic = usage
+			? this.openAiCacheDiagnostics.observe(target, route.protocol, requestBody, usage)
+			: undefined
 		if (response.type !== "error") this.previousSuccessfulRequestText.set(target, requestText)
 		const responseToolCalls = response.type === "error" ? [] : getResponseToolCalls(response)
 		const consumption: MockApiConsumption = {
@@ -486,6 +502,7 @@ export class ClineApiServerMock {
 				? { responseReasoning: response.reasoning }
 				: {}),
 			...(usage ? { usage } : {}),
+			...(cacheDiagnostic ? { cacheDiagnostic } : {}),
 		}
 		this.mockConsumptions.push(consumption)
 		return { response, usage, consumption }
