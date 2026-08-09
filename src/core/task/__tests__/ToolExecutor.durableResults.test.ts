@@ -195,7 +195,7 @@ describe("ToolExecutor durable tool results", () => {
 				path: "current OpenAI news",
 				webSearch: expect.objectContaining({
 					source: {
-						engineId: "openai-hosted",
+						id: "openai-hosted",
 						label: "OpenAI Web Search",
 						execution: "hosted",
 						provider: "openai",

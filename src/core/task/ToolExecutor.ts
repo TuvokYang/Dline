@@ -273,7 +273,8 @@ export class ToolExecutor {
 	): WebSearchRoutingPlan | undefined {
 		if (this.webSearchRoutingPlan) return this.webSearchRoutingPlan
 		if (typeof this.api?.getModel !== "function") return undefined
-		return resolveRequestWebSearchRoutingPlan(this.api, webToolsEnabled)
+		const hostedWebSearchAllowed = this.isAutoApproved(ClineDefaultTool.WEB_SEARCH)
+		return resolveRequestWebSearchRoutingPlan(this.api, webToolsEnabled, hostedWebSearchAllowed)
 	}
 
 	private isNativeToolAdmitted(toolName: string): boolean {

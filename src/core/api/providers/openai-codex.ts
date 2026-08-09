@@ -323,7 +323,7 @@ export class OpenAiCodexHandler implements ApiHandler {
 		const hostedWebSearch = options?.serverTools?.includes(ServerTool.WEB_SEARCH) === true
 		const include = [
 			...(includeReasoning ? ["reasoning.encrypted_content"] : []),
-			...(hostedWebSearch ? ["web_search_call.action.sources"] : []),
+			...(hostedWebSearch ? ["web_search_call.results", "web_search_call.action.sources"] : []),
 		]
 
 		const body: any = {

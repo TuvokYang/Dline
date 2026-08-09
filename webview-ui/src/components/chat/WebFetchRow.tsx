@@ -1,6 +1,7 @@
 import type { ClineSayTool } from "@shared/ExtensionMessage"
 import { StringRequest } from "@shared/proto/dline/common"
-import { Link2Icon, TriangleAlertIcon } from "lucide-react"
+import { ChevronDownIcon, ChevronRightIcon, Link2Icon, TriangleAlertIcon } from "lucide-react"
+import { useState } from "react"
 import { UiServiceClient } from "@/services/grpc-client"
 
 interface WebFetchRowProps {
@@ -19,9 +20,10 @@ function sourceLabel(webFetch: ClineSayTool["webFetch"]): string | undefined {
 const WebFetchRow = ({ messageType, url, webFetch }: WebFetchRowProps) => {
 	const resolvedUrl = webFetch?.url || url || ""
 	const label = sourceLabel(webFetch)
+	const [detailsExpanded, setDetailsExpanded] = useState(false)
 
 	return (
-		<div data-testid="web-fetch-card">
+		<div className="max-h-[40vh] overflow-y-auto pr-1" data-testid="web-fetch-card">
 			<div className="mb-3 flex items-center gap-2.5">
 				<Link2Icon className="size-2" />
 				<span className="font-bold">
@@ -53,11 +55,27 @@ const WebFetchRow = ({ messageType, url, webFetch }: WebFetchRowProps) => {
 					</div>
 				)}
 				{webFetch?.content && (
-					<div
-						className="max-h-[40vh] overflow-y-auto border-t border-editor-widget-border/50 pt-2 pr-1"
-						data-testid="web-fetch-results">
-						<div className="ph-no-capture break-words whitespace-pre-wrap text-xs">{webFetch.content}</div>
-					</div>
+					<>
+						<button
+							aria-expanded={detailsExpanded}
+							aria-label={detailsExpanded ? "Collapse fetched web content" : "Expand fetched web content"}
+							className="flex w-full cursor-pointer items-center gap-1 border-0 border-t border-editor-widget-border/50 bg-transparent pt-2 text-left text-xs text-description"
+							data-testid="web-fetch-details-toggle"
+							onClick={() => setDetailsExpanded((expanded) => !expanded)}
+							type="button">
+							{detailsExpanded ? (
+								<ChevronDownIcon aria-hidden="true" className="size-3 shrink-0" />
+							) : (
+								<ChevronRightIcon aria-hidden="true" className="size-3 shrink-0" />
+							)}
+							<span>{detailsExpanded ? "Hide fetched content" : "Show fetched content"}</span>
+						</button>
+						{detailsExpanded && (
+							<div className="border-t border-editor-widget-border/50 pt-2" data-testid="web-fetch-results">
+								<div className="ph-no-capture break-words whitespace-pre-wrap text-xs">{webFetch.content}</div>
+							</div>
+						)}
+					</>
 				)}
 			</div>
 		</div>

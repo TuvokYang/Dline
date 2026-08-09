@@ -33,6 +33,7 @@ export type WebSearchUnavailableReason =
 	| "server_tool_not_declared"
 	| "server_tool_transport_unsupported"
 	| "server_tool_adapter_unavailable"
+	| "hosted_web_search_requires_approval"
 
 export interface WebSearchRoutingPlan {
 	readonly mode: WebSearchMode
@@ -51,6 +52,7 @@ export interface WebSearchRoutingInput {
 	readonly selectedApiFormat: ApiFormat | undefined
 	readonly localAvailable: boolean
 	readonly remoteAdapterAvailable: boolean
+	readonly hostedExecutionAllowed?: boolean
 }
 
 /** Resolve provider-hosted tools solely from model metadata and the selected wire protocol. */
@@ -141,9 +143,13 @@ export function resolveWebSearchRoutingPlan(input: WebSearchRoutingInput): WebSe
 
 	const declared = serverToolPlan.declared.includes(ServerTool.WEB_SEARCH)
 	const transportSupported = serverToolPlan.active.includes(ServerTool.WEB_SEARCH)
-	const hostedAvailable = declared && transportSupported && input.remoteAdapterAvailable
+	const hostedExecutionAllowed = input.hostedExecutionAllowed !== false
+	const hostedAvailable = declared && transportSupported && input.remoteAdapterAvailable && hostedExecutionAllowed
 
 	if (mode === WebSearchMode.WEB_SEARCH_MODE_FORCE_REMOTE) {
+		if (!hostedExecutionAllowed) {
+			return createWebSearchRoutingPlan(mode, "unavailable", serverToolPlan, false, "hosted_web_search_requires_approval")
+		}
 		if (!declared) {
 			return createWebSearchRoutingPlan(mode, "unavailable", serverToolPlan, false, "server_tool_not_declared")
 		}
@@ -157,6 +163,9 @@ export function resolveWebSearchRoutingPlan(input: WebSearchRoutingInput): WebSe
 
 	if (hostedAvailable) {
 		return createWebSearchRoutingPlan(mode, "hosted", serverToolPlan, input.localAvailable)
+	}
+	if (!hostedExecutionAllowed && !input.localAvailable) {
+		return createWebSearchRoutingPlan(mode, "unavailable", serverToolPlan, false, "hosted_web_search_requires_approval")
 	}
 	return input.localAvailable
 		? createWebSearchRoutingPlan(mode, "local", serverToolPlan, true)

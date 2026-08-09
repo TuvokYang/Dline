@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react"
+import { fireEvent, render, screen } from "@testing-library/react"
 import React from "react"
 import { describe, expect, it, vi } from "vitest"
 import { ChatRowContent } from "../ChatRow"
@@ -105,10 +105,19 @@ describe("ChatRow hosted Web Search rendering", () => {
 		)
 
 		expect(screen.getByText("DeepSeek Web Search (Hosted)")).toBeInTheDocument()
+		const toggle = screen.getByTestId("web-search-details-toggle")
+		expect(toggle).toHaveAttribute("aria-expanded", "false")
+		expect(screen.queryByTestId("web-search-results")).not.toBeInTheDocument()
+		expect(screen.queryByText("Dline result")).not.toBeInTheDocument()
+
+		fireEvent.click(toggle)
+
+		expect(toggle).toHaveAttribute("aria-expanded", "true")
 		expect(screen.getByText("Dline result")).toBeInTheDocument()
 		expect(screen.getByText("https://example.com/dline")).toBeInTheDocument()
 		expect(screen.getByText("Provider-compressed search result")).toBeInTheDocument()
-		expect(screen.getByTestId("web-search-results")).toHaveClass("max-h-[40vh]", "overflow-y-auto")
+		expect(screen.getByTestId("web-search-card")).toHaveClass("max-h-[40vh]", "overflow-y-auto")
+		expect(screen.getByTestId("web-search-results")).not.toHaveClass("max-h-[40vh]", "overflow-y-auto")
 	})
 
 	it("renders URL-only hosted sources with a readable fallback title", () => {
@@ -134,6 +143,7 @@ describe("ChatRow hosted Web Search rendering", () => {
 			/>,
 		)
 
+		fireEvent.click(screen.getByTestId("web-search-details-toggle"))
 		expect(screen.getByText("docs.example.com")).toBeInTheDocument()
 		expect(screen.getByText("https://docs.example.com/current")).toBeInTheDocument()
 	})
@@ -227,7 +237,16 @@ describe("ChatRow hosted Web Search rendering", () => {
 		)
 
 		expect(screen.getByText("Browser Web Fetch (Dline)")).toBeInTheDocument()
+		const toggle = screen.getByTestId("web-fetch-details-toggle")
+		expect(toggle).toHaveAttribute("aria-expanded", "false")
+		expect(screen.queryByTestId("web-fetch-results")).not.toBeInTheDocument()
+		expect(screen.queryByText("Fetched content marker", { exact: false })).not.toBeInTheDocument()
+
+		fireEvent.click(toggle)
+
+		expect(toggle).toHaveAttribute("aria-expanded", "true")
 		expect(screen.getByText("Fetched content marker", { exact: false })).toBeInTheDocument()
-		expect(screen.getByTestId("web-fetch-results")).toHaveClass("max-h-[40vh]", "overflow-y-auto")
+		expect(screen.getByTestId("web-fetch-card")).toHaveClass("max-h-[40vh]", "overflow-y-auto")
+		expect(screen.getByTestId("web-fetch-results")).not.toHaveClass("max-h-[40vh]", "overflow-y-auto")
 	})
 })

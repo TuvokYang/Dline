@@ -138,6 +138,47 @@ describe("local Web Tool routing", () => {
 			stateManager: {
 				getGlobalSettingsKey: (key: string) => (key === "clineWebToolsEnabled" ? true : undefined),
 			},
+			autoApprover: new AutoApprove({
+				getGlobalSettingsKey: () => ({ actions: { useWeb: true } }),
+			} as any),
+		}) as ToolExecutor
+		const resolveForExecution = (
+			ToolExecutor.prototype as unknown as {
+				getWebSearchRoutingPlanForExecution(): ReturnType<typeof routingPlan> | undefined
+			}
+		).getWebSearchRoutingPlanForExecution
+
+		expect(resolveForExecution.call(executor)).toMatchObject({
+			route: "local",
+			localToolEnabled: true,
+			serverTools: [],
+		})
+	})
+
+	it("keeps hosted execution disabled for a restored approval when Use Web is off", () => {
+		const executor = Object.assign(Object.create(ToolExecutor.prototype), {
+			api: {
+				getModel: () => ({
+					id: "restored-responses-model",
+					info: {
+						id: "restored-responses-model",
+						apiFormats: [ApiFormat.OPENAI_RESPONSES],
+						capabilities: { contextWindow: 131_072, tools: [ServerTool.WEB_SEARCH] },
+					},
+				}),
+				supportsServerTool: () => true,
+			},
+			stateManager: {
+				getGlobalSettingsKey: (key: string) =>
+					key === "clineWebToolsEnabled"
+						? true
+						: key === "autoApprovalSettings"
+							? { actions: { useWeb: false } }
+							: undefined,
+			},
+			autoApprover: new AutoApprove({
+				getGlobalSettingsKey: (key: string) => (key === "autoApprovalSettings" ? { actions: { useWeb: false } } : false),
+			} as any),
 		}) as ToolExecutor
 		const resolveForExecution = (
 			ToolExecutor.prototype as unknown as {

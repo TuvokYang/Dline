@@ -447,7 +447,9 @@ export class OcaHandler implements ApiHandler {
 			input,
 			stream: true,
 			tools: responseTools.length > 0 ? responseTools : undefined,
-			...(hostedWebSearch ? { include: ["web_search_call.action.sources" as const] } : {}),
+			...(hostedWebSearch
+				? { include: ["web_search_call.results" as const, "web_search_call.action.sources" as const] }
+				: {}),
 			...(typeof temperature === "number" ? { temperature } : {}),
 			...(typeof maxOutputTokens === "number" && maxOutputTokens > 0 ? { max_output_tokens: maxOutputTokens } : {}),
 		}

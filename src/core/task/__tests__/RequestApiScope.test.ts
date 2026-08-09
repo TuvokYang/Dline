@@ -97,6 +97,25 @@ describe("createRequestApiScope", () => {
 		})
 	})
 
+	it("uses local Web Search in Auto when hosted execution is not auto-approved", () => {
+		const handler = createHandler("metadata-provider", "hosted-model")
+		handler.getModel = () => ({
+			id: "hosted-model",
+			info: {
+				id: "hosted-model",
+				apiFormats: [ApiFormat.OPENAI_RESPONSES],
+				capabilities: { tools: [ServerTool.WEB_SEARCH] },
+			},
+		})
+		handler.supportsServerTool = (tool) => tool === ServerTool.WEB_SEARCH
+
+		expect(createRequestApiScope(handler, "act", undefined, true, false).webSearchRoutingPlan).toMatchObject({
+			route: "local",
+			localToolEnabled: true,
+			serverTools: [],
+		})
+	})
+
 	it("uses local Web Search in Auto when the selected transport cannot host it", () => {
 		const handler = createHandler("metadata-provider", "chat-model")
 		handler.getModel = () => ({

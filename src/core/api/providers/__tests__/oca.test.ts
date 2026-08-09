@@ -156,7 +156,7 @@ describe("OcaHandler.createMessage", () => {
 			{ type: "function", name: "read_file", description: "Read a file", parameters: { type: "object" }, strict: true },
 			{ type: "web_search" },
 		])
-		expect(request.include).to.deep.equal(["web_search_call.action.sources"])
+		expect(request.include).to.deep.equal(["web_search_call.results", "web_search_call.action.sources"])
 	})
 
 	it("keeps local Responses Web Search when hosted search was not selected", async () => {

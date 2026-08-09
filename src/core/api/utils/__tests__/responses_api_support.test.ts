@@ -27,11 +27,14 @@ async function collectChunks(events: any[], calculateCost = vi.fn(async () => 0)
 describe("responses_api_support hosted tools", () => {
 	it("emits the complete web_search_call lifecycle without local tool_calls", async () => {
 		const startedAction = { type: "search", query: "Dline" }
-		const completedAction = {
-			type: "search",
-			query: "Dline",
-			sources: [{ type: "url", url: "https://example.com/result" }],
-		}
+		const completedAction = { type: "search", query: "Dline" }
+		const completedResults = [
+			{
+				title: "Dline result",
+				url: "https://example.com/result",
+				snippet: "A result returned by the hosted search provider.",
+			},
+		]
 		const chunks = await collectChunks([
 			{
 				type: "response.output_item.added",
@@ -46,7 +49,13 @@ describe("responses_api_support hosted tools", () => {
 				type: "response.output_item.done",
 				output_index: 0,
 				sequence_number: 5,
-				item: { type: "web_search_call", id: "ws_1", status: "completed", action: completedAction },
+				item: {
+					type: "web_search_call",
+					id: "ws_1",
+					status: "completed",
+					action: completedAction,
+					results: completedResults,
+				},
 			},
 		])
 
@@ -86,7 +95,7 @@ describe("responses_api_support hosted tools", () => {
 				provider_metadata: { item_id: "ws_1" },
 				tool: ServerTool.WEB_SEARCH,
 				phase: "completed",
-				result: completedAction,
+				result: { action: completedAction, results: completedResults },
 			},
 		])
 		expect(chunks.some((chunk) => chunk.type === "tool_calls")).to.equal(false)

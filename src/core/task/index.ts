@@ -6,6 +6,10 @@ import { ApiStream } from "@core/api/transform/stream"
 import { createStreamNormalizer, normalizeApiStream } from "@core/api/transform/stream-identity-normalizer"
 import { AssistantMessageContent, parseAssistantMessageV2, TextStreamContent, ToolUse } from "@core/assistant-message"
 import { ContextManager } from "@core/context/context-management/ContextManager"
+import {
+	hasCompactionWindowBudgetMarker,
+	resolveCompactionWindowBudget,
+} from "@core/context/context-management/compaction-window-budget"
 import { checkContextWindowExceededError } from "@core/context/context-management/context-error-handling"
 import { getContextTokens, readContextTokens } from "@core/context/context-management/context-pressure"
 import {
@@ -93,6 +97,7 @@ import {
 	ClineAsk,
 	ClineMessage,
 	ClineSay,
+	type ClineSayTool,
 	type CommandStatus,
 } from "@shared/ExtensionMessage"
 import { isFocusChainItem } from "@shared/focus-chain-utils"
@@ -2917,7 +2922,8 @@ export class Task {
 	async refreshPromptCache(): Promise<void> {
 		const providerInfo = this.getCurrentProviderInfo()
 		const webToolsEnabled = this.stateManager.getGlobalSettingsKey("clineWebToolsEnabled") === true
-		const webSearchRoutingPlan = resolveRequestWebSearchRoutingPlan(this.api, webToolsEnabled)
+		const hostedWebSearchAllowed = this.toolExecutor.isAutoApproved(ClineDefaultTool.WEB_SEARCH)
+		const webSearchRoutingPlan = resolveRequestWebSearchRoutingPlan(this.api, webToolsEnabled, hostedWebSearchAllowed)
 		const promptContext = await this.buildPromptContext(providerInfo, webToolsEnabled, webSearchRoutingPlan)
 		await this.systemPromptCacheService.refresh({ promptContext, reason: "manual" })
 	}
@@ -3111,6 +3117,48 @@ export class Task {
 	 * @param previousApiReqIndex Index of the previous api_req_started UI message.
 	 * @returns Total request pressure tokens, or undefined when metadata is unavailable.
 	 */
+	private async ensureContextCompactionStatusRow(): Promise<void> {
+		if (!this.taskState.isInternalContextCompactionRequest) return
+		await this.updateContextCompactionStatus("running")
+	}
+
+	private async updateContextCompactionStatus(
+		status: NonNullable<ClineSayTool["compactionStatus"]>,
+		options: { error?: string; retryAttempt?: number; maxRetryAttempts?: number } = {},
+	): Promise<void> {
+		if (!this.taskState.isInternalContextCompactionRequest) return
+		const existingTs = this.taskState.contextCompactionMessageTs
+		const existing = existingTs
+			? this.messageStateHandler.clineMessages.find((message) => message.ts === existingTs)
+			: undefined
+		let content = ""
+		if (existing?.text) {
+			try {
+				const payload = JSON.parse(existing.text) as ClineSayTool
+				content = typeof payload.content === "string" ? payload.content : ""
+			} catch {
+				content = ""
+			}
+		}
+		const payload = JSON.stringify({
+			tool: "summarizeTask",
+			content,
+			compactionStatus: status,
+			...(options.error ? { error: options.error } : {}),
+			...(options.retryAttempt !== undefined ? { retryAttempt: options.retryAttempt } : {}),
+			...(options.maxRetryAttempts !== undefined ? { maxRetryAttempts: options.maxRetryAttempts } : {}),
+		} satisfies ClineSayTool)
+		const ts = await this.say(
+			"tool",
+			payload,
+			undefined,
+			undefined,
+			status !== "failed" && status !== "completed",
+			existingTs,
+		)
+		if (ts !== undefined) this.taskState.contextCompactionMessageTs = ts
+	}
+
 	private parsePreviousTokens(previousApiReqIndex: number): number | undefined {
 		if (previousApiReqIndex < 0) {
 			return undefined
@@ -3552,10 +3600,31 @@ export class Task {
 			`[Task ${this.taskId}] attemptApiRequest: after contextMgmt +${Math.round(performance.now() - apiReqStart)}ms`,
 		)
 		// Debug: record full API request context when DLINE_LOG_API_CONTEXT=1 or IS_DEV=true
-		const apiConversationMessages = ensureApiMessages(
+		let apiConversationMessages = ensureApiMessages(
 			contextManagementMetadata.truncatedConversationHistory,
 			this.messageStateHandler.apiConversationHistory,
 		)
+		const serverTools = requestScope.webSearchRoutingPlan.serverTools
+
+		if (hasCompactionWindowBudgetMarker(apiConversationMessages)) {
+			const { contextWindow } = getContextWindowInfo(api)
+			const resolvedBudget = resolveCompactionWindowBudget({
+				contextWindow,
+				maxOutputTokens: providerInfo.model.info.capabilities?.maxTokens,
+				systemPrompt,
+				messages: apiConversationMessages,
+				tools,
+				serverTools,
+			})
+
+			apiConversationMessages = resolvedBudget.messages
+			if (!resolvedBudget.budget.canSend) {
+				const errorMessage =
+					"Conversation compaction cannot start because the complete request leaves no safe output space."
+				await this.updateContextCompactionStatus("failed", { error: errorMessage })
+				throw new Error(errorMessage)
+			}
+		}
 
 		const roundContext = {
 			taskId: this.taskId,
@@ -3580,7 +3649,6 @@ export class Task {
 			thinking: thinkingSummary ?? null,
 		})
 
-		const serverTools = requestScope.webSearchRoutingPlan.serverTools
 		const stream = recordProviderAdapterOutput(
 			roundContext,
 			api.createMessage(systemPrompt, apiConversationMessages, tools, { serverTools }),
@@ -3690,6 +3758,11 @@ export class Task {
 				if (shouldRetry) {
 					// Auto-retry enabled with max 3 attempts: automatically approve the retry
 					this.taskState.autoRetryAttempts++
+					await this.updateContextCompactionStatus("retrying", {
+						error: clineError.message,
+						retryAttempt: this.taskState.autoRetryAttempts,
+						maxRetryAttempts: MAX_AUTO_RETRY_ATTEMPTS,
+					})
 
 					// Calculate delay: 2s, 4s, 8s
 					const delay = getRetryDelay(this.taskState.autoRetryAttempts)
@@ -3740,6 +3813,9 @@ export class Task {
 						throw new Error("Dline instance aborted")
 					}
 				} else {
+					await this.updateContextCompactionStatus("failed", {
+						error: clineError.message,
+					})
 					this.endAutoRetrySequence(false)
 					// The outer stream boundary owns canonical API recovery. Opening the
 					// retained Task.ask waiter here creates a second, divergent phase state.
@@ -4178,6 +4254,7 @@ export class Task {
 			this.taskSm.mode,
 			this.stateManager.getGlobalSettingsKey("customPrompt"),
 			this.stateManager.getGlobalSettingsKey("clineWebToolsEnabled"),
+			this.toolExecutor.isAutoApproved(ClineDefaultTool.WEB_SEARCH),
 		)
 		userContent = await this.consumeModeSwitchChatContent(userContent)
 
@@ -4479,6 +4556,7 @@ export class Task {
 					isMultiRootEnabled(this.stateManager),
 				),
 			})
+			await this.ensureContextCompactionStatusRow()
 		}
 
 		userContent = ensureUserContent(userContent, shouldCompact ? "auto compact request" : "task user turn")
@@ -4960,6 +5038,11 @@ export class Task {
 					})
 					if (retryDecision.shouldRetry) {
 						this.taskState.autoRetryAttempts++
+						await this.updateContextCompactionStatus("retrying", {
+							error: errorMessage,
+							retryAttempt: this.taskState.autoRetryAttempts,
+							maxRetryAttempts: MAX_AUTO_RETRY_ATTEMPTS,
+						})
 
 						// Calculate exponential backoff for streaming failures: 2s, 4s, 8s
 						const delay = getRetryDelay(this.taskState.autoRetryAttempts)
@@ -5003,6 +5086,7 @@ export class Task {
 					}
 					if (retryDecision.shouldPrompt) {
 						this.endAutoRetrySequence(false)
+						await this.updateContextCompactionStatus("failed", { error: errorMessage })
 						// Show error_retry with failed flag to indicate all retries exhausted
 						await this.say(
 							"error_retry",

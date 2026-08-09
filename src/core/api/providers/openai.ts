@@ -485,7 +485,9 @@ export class OpenAiHandler implements ApiHandler {
 			stream: true,
 			store: false,
 			...(responseTools?.length ? { tools: responseTools } : {}),
-			...(hostedWebSearch ? { include: ["web_search_call.action.sources" as const] } : {}),
+			...(hostedWebSearch
+				? { include: ["web_search_call.results" as const, "web_search_call.action.sources" as const] }
+				: {}),
 			...(this.serviceTier ? { service_tier: this.serviceTier } : {}),
 			...(enableThinking && reasoningEffort !== "none"
 				? { reasoning: { effort: reasoningEffort as ChatCompletionReasoningEffort, summary: "auto" } }

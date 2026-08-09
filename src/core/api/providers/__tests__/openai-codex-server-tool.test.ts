@@ -62,7 +62,11 @@ describe("OpenAiCodexHandler hosted Web Search", () => {
 			{ type: "function", name: "read_file", description: "Read a file", parameters: { type: "object" }, strict: true },
 			{ type: "web_search" },
 		])
-		expect(requestBody?.include).to.deep.equal(["reasoning.encrypted_content", "web_search_call.action.sources"])
+		expect(requestBody?.include).to.deep.equal([
+			"reasoning.encrypted_content",
+			"web_search_call.results",
+			"web_search_call.action.sources",
+		])
 		expect(fallbackRequestBody?.tools).to.deep.equal(requestBody?.tools)
 		expect(fallbackRequestBody?.include).to.deep.equal(requestBody?.include)
 	})
@@ -99,7 +103,13 @@ describe("OpenAiCodexHandler hosted Web Search", () => {
 			{ type: "response.web_search_call.completed", item_id: "ws_1" },
 			{
 				type: "response.output_item.done",
-				item: { type: "web_search_call", id: "ws_1", status: "completed", action: { count: 1 } },
+				item: {
+					type: "web_search_call",
+					id: "ws_1",
+					status: "completed",
+					action: { query: "Dline" },
+					results: [{ title: "Dline result", url: "https://example.com/dline" }],
+				},
 			},
 		]
 		const chunks: unknown[] = []
@@ -136,7 +146,10 @@ describe("OpenAiCodexHandler hosted Web Search", () => {
 				provider_metadata: { item_id: "ws_1" },
 				tool: ServerTool.WEB_SEARCH,
 				phase: "completed",
-				result: { count: 1 },
+				result: {
+					action: { query: "Dline" },
+					results: [{ title: "Dline result", url: "https://example.com/dline" }],
+				},
 			},
 		])
 	})

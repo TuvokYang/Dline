@@ -122,29 +122,10 @@ async function configureSearxngSearch(dlineDir: string, serverBaseUrl: string): 
 	await writeFile(settingsPath(dlineDir), `${JSON.stringify(settings, null, 2)}\n`, "utf8")
 }
 
-async function configureLegacyAutoApproveAll(dlineDir: string): Promise<void> {
+async function configureNormalApprovalMode(dlineDir: string): Promise<void> {
 	const settings = JSON.parse(await readFile(settingsPath(dlineDir), "utf8")) as Record<string, unknown>
 	settings.yoloModeToggled = false
-	settings.autoApproveAllToggled = true
-	settings.autoApprovalSettings = {
-		version: 2,
-		enabled: true,
-		favorites: [],
-		maxRequests: 20,
-		actions: {
-			readFiles: true,
-			readFilesExternally: false,
-			editFiles: false,
-			editFilesExternally: false,
-			executeSafeCommands: true,
-			executeAllCommands: false,
-			useBrowser: false,
-			useWeb: false,
-			useMcp: true,
-			focusChain: false,
-		},
-		enableNotifications: false,
-	}
+	settings.autoApproveAllToggled = false
 	await writeFile(settingsPath(dlineDir), `${JSON.stringify(settings, null, 2)}\n`, "utf8")
 }
 
@@ -199,9 +180,9 @@ async function setAutoApproveAction(sidebar: Frame, label: string, enabled: bool
 	await sidebar.getByLabel("Close auto-approve settings").click()
 }
 
-async function expectScrollable40Vh(results: Locator): Promise<void> {
-	await expect(results).toBeVisible({ timeout: 60_000 })
-	const metrics = await results.evaluate((element) => ({
+async function expect40VhCard(card: Locator, shouldScroll = false): Promise<void> {
+	await expect(card).toBeVisible({ timeout: 60_000 })
+	const metrics = await card.evaluate((element) => ({
 		className: element.className,
 		maxHeight: getComputedStyle(element).maxHeight,
 		overflowY: getComputedStyle(element).overflowY,
@@ -211,7 +192,10 @@ async function expectScrollable40Vh(results: Locator): Promise<void> {
 	}))
 	expect(metrics.className).toContain("max-h-[40vh]")
 	expect(metrics.overflowY).toBe("auto")
-	expect(metrics.scrollHeight).toBeGreaterThan(metrics.clientHeight)
+	expect(metrics.clientHeight).toBeLessThanOrEqual(metrics.viewportHeight * 0.4 + 1)
+	if (shouldScroll) {
+		expect(metrics.scrollHeight).toBeGreaterThan(metrics.clientHeight)
+	}
 	expect(Number.parseFloat(metrics.maxHeight)).toBeCloseTo(metrics.viewportHeight * 0.4, 0)
 }
 
@@ -246,13 +230,27 @@ function expectIsolatedDirectories(dlineDir: string, dlineHomeDir: string, dline
 	expect(path.resolve(dlineDocsDir)).not.toBe(path.resolve(dlineDir))
 }
 
-async function expectHostedLifecycle(sidebar: Frame, query: string, result: { title: string; url: string }): Promise<Locator> {
+async function expectHostedLifecycle(
+	sidebar: Frame,
+	query: string,
+	result: { title: string; url: string; snippet?: string },
+): Promise<Locator> {
 	await expect(sidebar.getByText("Dline searched the web for:", { exact: true })).toBeVisible({ timeout: 60_000 })
 	const card = sidebar.getByTestId("web-search-card").filter({ hasText: query })
 	await expect(card).toHaveCount(1)
 	await expect(card.getByText(query, { exact: true })).toBeVisible()
+	const toggle = card.getByTestId("web-search-details-toggle")
+	await expect(toggle).toHaveAttribute("aria-expanded", "false")
+	await expect(card.getByTestId("web-search-results")).toHaveCount(0)
+	await expect(card.getByText(result.title, { exact: true })).toHaveCount(0)
+	await toggle.click()
+	await expect(toggle).toHaveAttribute("aria-expanded", "true")
 	await expect(card.getByText(result.title, { exact: true })).toBeVisible()
 	await expect(card.getByText(result.url, { exact: true })).toBeVisible()
+	if (result.snippet) {
+		await expect(card.getByText(result.snippet, { exact: true })).toBeVisible()
+	}
+	await expect40VhCard(card)
 	return card
 }
 
@@ -271,7 +269,13 @@ e2e(
 			type: "hosted-web-search",
 			id: "ws_openai_e2e",
 			query,
-			results: [{ title: "OpenAI hosted result", url: "https://example.test/openai-hosted" }],
+			results: [
+				{
+					title: "OpenAI hosted result",
+					url: "https://example.test/openai-hosted",
+					snippet: "E2E_OPENAI_HOSTED_RESULT_SNIPPET",
+				},
+			],
 			followupTools: [{ id: "call_openai_hosted_done", name: "attempt_completion", arguments: { result: completion } }],
 		})
 
@@ -279,10 +283,12 @@ e2e(
 		try {
 			const opened = await openSidebar(openVSCode, workspaceDir, helper)
 			app = opened.app
+			await setAutoApproveAction(opened.sidebar, "Use Web", true)
 			await sendTask(opened.sidebar, "Use OpenAI provider-hosted search and finish the task.")
 			await expectHostedLifecycle(opened.sidebar, query, {
 				title: "OpenAI hosted result",
 				url: "https://example.test/openai-hosted",
+				snippet: "E2E_OPENAI_HOSTED_RESULT_SNIPPET",
 			})
 			await expect(opened.sidebar.getByText(completion, { exact: false }).last()).toBeVisible({ timeout: 60_000 })
 
@@ -327,6 +333,7 @@ e2e(
 		try {
 			const opened = await openSidebar(openVSCode, workspaceDir, helper)
 			app = opened.app
+			await setAutoApproveAction(opened.sidebar, "Use Web", true)
 			await sendTask(
 				opened.sidebar,
 				"Use OpenAI hosted search, recover locally if the provider returns a function call, then finish.",
@@ -340,11 +347,14 @@ e2e(
 					{ exact: true },
 				),
 			).toBeVisible({ timeout: 60_000 })
-			await expect(opened.sidebar.getByText("Dline wants to search the web for:", { exact: true })).toBeVisible({
-				timeout: 60_000,
-			})
-			await opened.sidebar.getByText("Approve", { exact: true }).click()
-			await expect(opened.sidebar.getByText("SearXNG (Dline)", { exact: true })).toBeVisible({ timeout: 60_000 })
+			await expect(opened.sidebar.getByText("Dline wants to search the web for:", { exact: true })).toHaveCount(0)
+			await expect(opened.sidebar.getByText("Approve", { exact: true })).toHaveCount(0)
+			const fallbackCard = opened.sidebar.getByTestId("web-search-card").filter({ hasText: query })
+			await expect(fallbackCard.getByText("SearXNG (Dline)", { exact: true })).toBeVisible({ timeout: 60_000 })
+			const fallbackToggle = fallbackCard.getByTestId("web-search-details-toggle")
+			await expect(fallbackToggle).toHaveAttribute("aria-expanded", "false")
+			await fallbackToggle.click()
+			await expect(fallbackCard.getByText(resultMarker, { exact: true })).toBeVisible()
 			await expect(opened.sidebar.getByText(completion, { exact: false }).last()).toBeVisible({ timeout: 60_000 })
 
 			const consumptions = server.getMockConsumptions("openai-compatible-responses")
@@ -385,6 +395,7 @@ e2e(
 		try {
 			const opened = await openSidebar(openVSCode, workspaceDir, helper)
 			app = opened.app
+			await setAutoApproveAction(opened.sidebar, "Use Web", true)
 			await sendTask(opened.sidebar, "Use forced remote web search and finish the task.")
 			await expectHostedLifecycle(opened.sidebar, query, {
 				title: "Forced remote result",
@@ -428,6 +439,7 @@ e2e(
 		try {
 			const opened = await openSidebar(openVSCode, workspaceDir, helper)
 			app = opened.app
+			await setAutoApproveAction(opened.sidebar, "Use Web", true)
 			await sendTask(opened.sidebar, "Use DeepSeek provider-hosted search and finish the task.")
 			await expectHostedLifecycle(opened.sidebar, query, {
 				title: "DeepSeek hosted result",
@@ -470,6 +482,7 @@ e2e(
 		try {
 			const opened = await openSidebar(openVSCode, workspaceDir, helper)
 			app = opened.app
+			await setAutoApproveAction(opened.sidebar, "Use Web", true)
 			await sendTask(opened.sidebar, "Use Anthropic hosted search and finish the task.")
 			await expectHostedLifecycle(opened.sidebar, query, {
 				title: "Anthropic hosted result",
@@ -529,9 +542,15 @@ e2e(
 			const searchCard = opened.sidebar.getByTestId("web-search-card").filter({ hasText: query })
 			await expect(searchCard).toHaveCount(1)
 			await expect(searchCard.getByText("SearXNG (Dline)", { exact: true })).toBeVisible()
+			const searchToggle = searchCard.getByTestId("web-search-details-toggle")
+			await expect(searchToggle).toHaveAttribute("aria-expanded", "false")
+			await expect(searchCard.getByTestId("web-search-results")).toHaveCount(0)
+			await expect(searchCard.getByText(resultMarker, { exact: true })).toHaveCount(0)
+			await searchToggle.click()
+			await expect(searchToggle).toHaveAttribute("aria-expanded", "true")
 			await expect(searchCard.getByText(resultMarker, { exact: true })).toBeVisible()
 			await expect(searchCard.getByText("https://example.test/dline-local-search", { exact: true })).toBeVisible()
-			await expectScrollable40Vh(searchCard.getByTestId("web-search-results"))
+			await expect40VhCard(searchCard, true)
 
 			const consumptions = server.getMockConsumptions("openai-compatible-chat")
 			expect(consumptions).toHaveLength(2)
@@ -548,21 +567,21 @@ e2e(
 )
 
 e2e(
-	"ServerTool runtime - legacy Auto Approve All does not bypass disabled Use Web",
+	"ServerTool runtime - disabled Use Web requires approval in normal mode",
 	async ({ dlineDir, dlineDocsDir, dlineHomeDir, helper, openVSCode, server, userDataDir, workspaceDir }) => {
 		e2e.setTimeout(120_000)
 		expectIsolatedDirectories(dlineDir, dlineHomeDir, dlineDocsDir)
-		await prepareRuntimeProfile(dlineDir, E2E_PROFILE_NAMES.mockOpenAi, {
+		await prepareRuntimeProfile(dlineDir, E2E_PROFILE_NAMES.mockOpenAiResponses, {
 			enabled: true,
 			mode: "WEB_SEARCH_MODE_AUTO",
 			supportsWebSearch: true,
 		})
 		await configureSearxngSearch(dlineDir, server.baseUrl)
-		await configureLegacyAutoApproveAll(dlineDir)
-		const query = "Dline legacy auto approve isolation"
-		server.enqueueResponses("openai-compatible-chat", {
+		await configureNormalApprovalMode(dlineDir)
+		const query = "Dline normal mode web approval isolation"
+		server.enqueueResponses("openai-compatible-responses", {
 			type: "tool",
-			id: "call_legacy_auto_approve_web_search",
+			id: "call_normal_mode_web_search",
 			name: "web_search",
 			arguments: { query },
 		})
@@ -571,12 +590,17 @@ e2e(
 		try {
 			const opened = await openSidebar(openVSCode, workspaceDir, helper)
 			app = opened.app
-			await sendTask(opened.sidebar, "Require explicit approval despite the removed legacy total auto-approve state.")
+			await setAutoApproveAction(opened.sidebar, "Use Web", true)
+			await setAutoApproveAction(opened.sidebar, "Use Web", false)
+			await sendTask(opened.sidebar, "Require explicit Web Search approval in normal mode.")
 
 			await expect(opened.sidebar.getByText("Dline wants to search the web for:", { exact: true })).toBeVisible({
 				timeout: 60_000,
 			})
 			await expect(opened.sidebar.getByRole("contentinfo").getByText("Approve", { exact: true })).toBeVisible()
+			const consumptions = server.getMockConsumptions("openai-compatible-responses")
+			expect(consumptions).toHaveLength(1)
+			expectSingleSearchRoute(consumptions[0], "local")
 			expect(server.getSearxngSearchRequests()).toHaveLength(0)
 			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
 		} finally {
@@ -590,17 +614,18 @@ e2e(
 	async ({ dlineDir, dlineDocsDir, dlineHomeDir, helper, openVSCode, server, userDataDir, workspaceDir }) => {
 		e2e.setTimeout(180_000)
 		expectIsolatedDirectories(dlineDir, dlineHomeDir, dlineDocsDir)
-		await prepareRuntimeProfile(dlineDir, E2E_PROFILE_NAMES.mockOpenAi, {
+		await prepareRuntimeProfile(dlineDir, E2E_PROFILE_NAMES.mockOpenAiResponses, {
 			enabled: true,
 			mode: "WEB_SEARCH_MODE_AUTO",
 			supportsWebSearch: true,
 		})
 		await configureSearxngSearch(dlineDir, server.baseUrl)
+		await configureNormalApprovalMode(dlineDir)
 		const query = "Dline restored local search"
 		const resultMarker = `E2E local result for ${query}`
 		const completion = "E2E_RESTORED_LOCAL_WEB_SEARCH_OK"
 		server.enqueueResponses(
-			"openai-compatible-chat",
+			"openai-compatible-responses",
 			{ type: "tool", id: "call_restored_local_search", name: "web_search", arguments: { query } },
 			{
 				type: "tool",
@@ -615,9 +640,14 @@ e2e(
 		try {
 			const opened = await openSidebar(openVSCode, workspaceDir, helper)
 			app = opened.app
+			await setAutoApproveAction(opened.sidebar, "Use Web", true)
+			await setAutoApproveAction(opened.sidebar, "Use Web", false)
 			const taskText = "Search locally only after I reopen and approve this task."
 			await sendTask(opened.sidebar, taskText)
 			await expect(opened.sidebar.getByText("Approve", { exact: true })).toBeVisible({ timeout: 60_000 })
+			const initialConsumption = server.getMockConsumptions("openai-compatible-responses")[0]
+			expect(initialConsumption).toBeDefined()
+			expectSingleSearchRoute(initialConsumption, "local")
 			expect(server.getSearxngSearchRequests()).toHaveLength(0)
 
 			await closeCurrentTask(opened.sidebar)
@@ -630,6 +660,9 @@ e2e(
 			await expect.poll(() => server.getSearxngSearchRequests().length, { timeout: 30_000 }).toBe(1)
 			const completedCard = opened.sidebar.getByTestId("web-search-card").filter({ hasText: query })
 			await expect(completedCard).toHaveCount(1)
+			const completedToggle = completedCard.getByTestId("web-search-details-toggle")
+			await expect(completedToggle).toHaveAttribute("aria-expanded", "false")
+			await completedToggle.click()
 			await expect(completedCard.getByText(resultMarker, { exact: true })).toBeVisible()
 			await expect(completedCard.getByText("https://example.test/dline-local-search", { exact: true })).toBeVisible()
 
@@ -637,11 +670,16 @@ e2e(
 			await reopenTask(opened.sidebar, taskText)
 			const restoredCard = opened.sidebar.getByTestId("web-search-card").filter({ hasText: query })
 			await expect(restoredCard).toHaveCount(1)
+			const restoredToggle = restoredCard.getByTestId("web-search-details-toggle")
+			await expect(restoredToggle).toHaveAttribute("aria-expanded", "false")
+			await expect(restoredCard.getByText(resultMarker, { exact: true })).toHaveCount(0)
+			await restoredToggle.click()
 			await expect(restoredCard.getByText(resultMarker, { exact: true })).toBeVisible()
 			await expect(restoredCard.getByText("https://example.test/dline-local-search", { exact: true })).toBeVisible()
 
-			const consumptions = server.getMockConsumptions("openai-compatible-chat")
+			const consumptions = server.getMockConsumptions("openai-compatible-responses")
 			expect(consumptions).toHaveLength(2)
+			expectSingleSearchRoute(consumptions[1], "local")
 			expect(consumptions[1].contractError).toBeUndefined()
 			expect(JSON.stringify(consumptions[1].requestBody)).toContain(resultMarker)
 			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
@@ -689,6 +727,9 @@ e2e(
 			await expect(opened.sidebar.getByText(completion, { exact: false }).last()).toBeVisible({ timeout: 60_000 })
 			const searchCard = opened.sidebar.getByTestId("web-search-card").filter({ hasText: query })
 			await expect(searchCard).toHaveCount(1)
+			const searchToggle = searchCard.getByTestId("web-search-details-toggle")
+			await expect(searchToggle).toHaveAttribute("aria-expanded", "false")
+			await searchToggle.click()
 			await expect(searchCard.getByText(resultMarker, { exact: true })).toBeVisible()
 			await expect(searchCard.getByText("https://example.test/dline-local-search", { exact: true })).toBeVisible()
 
@@ -746,7 +787,7 @@ e2e(
 			await expect
 				.poll(
 					async () => {
-						if ((await fetchCard.getByTestId("web-fetch-results").count()) > 0) return "completed"
+						if ((await fetchCard.getByTestId("web-fetch-details-toggle").count()) > 0) return "completed"
 						const text = (await fetchCard.textContent()) ?? ""
 						return /Web fetch failed:|Error fetching web content:|timed out|timeout|cancelled|canceled/i.test(text)
 							? "failed"
@@ -838,10 +879,15 @@ for (const testCase of webFetchCases) {
 				await expect(fetchCard.getByText("Browser Web Fetch (Dline)", { exact: true })).toBeVisible({
 					timeout: 180_000,
 				})
+				const fetchToggle = fetchCard.getByTestId("web-fetch-details-toggle")
+				await expect(fetchToggle).toHaveAttribute("aria-expanded", "false")
+				await expect(fetchCard.getByTestId("web-fetch-results")).toHaveCount(0)
+				await fetchToggle.click()
+				await expect(fetchToggle).toHaveAttribute("aria-expanded", "true")
 				const fetchResults = fetchCard.getByTestId("web-fetch-results")
 				await expect(fetchResults).toContainText("E2E\\_WEB\\_FETCH\\_PAGE\\_CONTENT\\_00")
 				await expect(fetchResults).toContainText("E2E\\_WEB\\_FETCH\\_PAGE\\_CONTENT\\_31")
-				await expectScrollable40Vh(fetchResults)
+				await expect40VhCard(fetchCard, true)
 				await expect(opened.sidebar.getByText(completion, { exact: false }).last()).toBeVisible({ timeout: 60_000 })
 
 				const consumptions = server.getMockConsumptions(testCase.target)
@@ -928,7 +974,6 @@ e2e(
 
 			const checkpointLabels = opened.sidebar.getByText("Checkpoint", { exact: true })
 			await expect.poll(() => checkpointLabels.count(), { timeout: 30_000 }).toBeGreaterThan(0)
-			const initialCheckpointControl = checkpointLabels.first().locator("..").locator("..")
 			const input = opened.sidebar.getByTestId("chat-input")
 			await input.fill("E2E_WARM_WEB_FETCH")
 			await input.press("Enter")
@@ -950,8 +995,12 @@ e2e(
 			await expect(runningCard).toBeVisible({ timeout: 30_000 })
 			await expect.poll(() => server.getWebFetchPageRequests().length, { timeout: 30_000 }).toBe(2)
 
-			await initialCheckpointControl.hover()
-			await initialCheckpointControl.getByRole("button", { name: "Restore", exact: true }).click()
+			const restoreCheckpointControl = checkpointLabels.last().locator("..").locator("..")
+			await restoreCheckpointControl.scrollIntoViewIfNeeded()
+			await restoreCheckpointControl.hover()
+			const restoreButton = restoreCheckpointControl.getByRole("button", { name: "Restore", exact: true })
+			await expect(restoreButton).toBeVisible({ timeout: 3_000 })
+			await restoreButton.click({ timeout: 3_000 })
 			const moreOptions = opened.sidebar.getByText("More options", { exact: true })
 			await expect(moreOptions).toBeVisible()
 			await moreOptions.click()

@@ -532,7 +532,7 @@ describe("OpenAiHandler", () => {
 				},
 				{ type: "web_search" },
 			])
-			expect(request?.include).to.deep.equal(["web_search_call.action.sources"])
+			expect(request?.include).to.deep.equal(["web_search_call.results", "web_search_call.action.sources"])
 			expect(handler.supportsServerTool(ServerTool.WEB_SEARCH)).to.equal(true)
 		})
 

@@ -988,13 +988,12 @@ export class ClineApiServerMock {
 										action: {
 											type: "search",
 											query: scriptedResponse.query,
-											sources: scriptedResponse.results.map(({ title, url, snippet }) => ({
-												type: "url",
-												title,
-												url,
-												...(snippet ? { snippet } : {}),
-											})),
 										},
+										results: scriptedResponse.results.map(({ title, url, snippet }) => ({
+											title,
+											url,
+											...(snippet ? { snippet } : {}),
+										})),
 									}
 								: undefined
 						const ordinaryOutputItems = toolOutputItems.length > 0 ? toolOutputItems : [messageOutputItem]

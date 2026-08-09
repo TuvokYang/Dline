@@ -42,7 +42,12 @@ export function mapResponsesWebSearchEvent(event: any): ApiRawStreamServerToolCh
 		}
 		return item.status === "failed"
 			? createWebSearchChunk(item.id, "failed", { error: item.action })
-			: createWebSearchChunk(item.id, "completed", { result: item.action })
+			: createWebSearchChunk(item.id, "completed", {
+					result: {
+						action: item.action,
+						...(Array.isArray(item.results) ? { results: item.results } : {}),
+					},
+				})
 	}
 
 	if (

@@ -272,7 +272,9 @@ export class DeepSeekHandler implements ApiHandler {
 			input: convertDeepSeekResponsesInput(messages),
 			stream: true,
 			...(responseTools?.length ? { tools: responseTools } : {}),
-			...(hostedWebSearch ? { include: ["web_search_call.action.sources" as const] } : {}),
+			...(hostedWebSearch
+				? { include: ["web_search_call.results" as const, "web_search_call.action.sources" as const] }
+				: {}),
 			...(thinking.enabled ? { reasoning: { effort: thinking.effort, summary: "auto" } } : {}),
 			...(typeof maxOutputTokens === "number" && maxOutputTokens > 0 ? { max_output_tokens: maxOutputTokens } : {}),
 		}
