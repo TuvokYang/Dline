@@ -9,6 +9,7 @@ import { afterEach, describe, it, vi } from "vitest"
 import { openAiCodexOAuthManager } from "@/integrations/openai-codex/oauth"
 import type { ClineAssistantToolUseBlock, ClineStorageMessage, ClineUserToolResultContentBlock } from "@/shared/messages/content"
 import { mockFetchForTesting } from "@/shared/net"
+import { StreamIdleTimeoutError } from "../../stream/openai-responses-stream-monitor"
 import { OpenAiHandler } from "../openai"
 import { OpenAiCodexHandler } from "../openai-codex"
 
@@ -320,6 +321,52 @@ describe("OpenAiHandler", () => {
 
 			expect(caught).to.equal(protocolError)
 			expect(responsesCreate.mock.calls).to.have.length(1)
+		})
+
+		it("aborts an idle Responses stream using the configured timeout without provider-level replay", async () => {
+			vi.useFakeTimers()
+			try {
+				const config = OpenAiProviderConfig.create({ apiFormat: ApiFormat.OPENAI_RESPONSES })
+				;(config as OpenAiProviderConfig & { streamIdleTimeoutSeconds?: number }).streamIdleTimeoutSeconds = 1
+				const handler = new OpenAiHandler({
+					profile: ApiProfile.create({
+						provider: "openai",
+						apiKey: "test-api-key",
+						modelId: "gpt-5.6-sol",
+						openai: config,
+					}),
+					mode: "act",
+					ulid: "task-001",
+				})
+				let requestSignal: AbortSignal | undefined
+				const next = vi.fn(() => new Promise<IteratorResult<unknown>>(() => {}))
+				const responsesCreate = vi.fn().mockImplementation((_body, options) => {
+					requestSignal = options?.signal
+					return Promise.resolve({
+						[Symbol.asyncIterator]() {
+							return { next }
+						},
+					})
+				})
+				vi.spyOn(handler as unknown as { ensureClient: () => unknown }, "ensureClient").mockReturnValue({
+					responses: { create: responsesCreate },
+				})
+				const pending = handler.createMessage("system prompt", [{ role: "user", content: "Hello" }]).next()
+				const outcome = pending.then(
+					() => undefined,
+					(error: unknown) => error,
+				)
+				await vi.waitFor(() => expect(next.mock.calls).to.have.length(1))
+
+				await vi.advanceTimersByTimeAsync(1_000)
+
+				const error = await outcome
+				expect(error).to.be.instanceOf(StreamIdleTimeoutError)
+				expect(requestSignal?.aborted).to.equal(true)
+				expect(responsesCreate.mock.calls).to.have.length(1)
+			} finally {
+				vi.useRealTimers()
+			}
 		})
 
 		it("does not retry a Responses error after streaming has started", async () => {

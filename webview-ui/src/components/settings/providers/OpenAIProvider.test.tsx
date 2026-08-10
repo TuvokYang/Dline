@@ -87,7 +87,11 @@ vi.mock("../common/DebouncedTextField", () => ({
 	DebouncedTextField: ({ children, initialValue, onChange }: any) => (
 		<label>
 			{children}
-			<input aria-label="Model ID" defaultValue={initialValue} onChange={(event) => onChange(event.target.value)} />
+			<input
+				aria-label={typeof children === "string" ? children : "Model ID"}
+				defaultValue={initialValue}
+				onChange={(event) => onChange(event.target.value)}
+			/>
 		</label>
 	),
 }))
@@ -264,6 +268,25 @@ describe("OpenAIProvider", () => {
 				...profile.openai,
 				capabilities: { maxTokens: 64_000, supportsTools: true },
 			},
+		})
+	})
+
+	it("shows the default Responses stream idle timeout and persists a positive number of seconds", () => {
+		const onUpdate = vi.fn()
+		const profile = {
+			id: "profile-1",
+			provider: "openai",
+			modelId: "gpt-multi",
+			openai: OpenAiProviderConfig.create({ apiFormat: ApiFormat.OPENAI_RESPONSES }),
+		} as unknown as ApiProfile
+
+		render(<OpenAIProvider onUpdate={onUpdate} profile={profile} showModelOptions={true} />)
+
+		const input = screen.getByRole("textbox", { name: "Responses stream idle timeout (seconds)" })
+		expect(input).toHaveValue("120")
+		fireEvent.change(input, { target: { value: "45" } })
+		expect(onUpdate).toHaveBeenCalledWith({
+			openai: expect.objectContaining({ streamIdleTimeoutSeconds: 45 }),
 		})
 	})
 

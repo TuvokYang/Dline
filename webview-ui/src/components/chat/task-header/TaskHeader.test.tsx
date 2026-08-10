@@ -52,6 +52,28 @@ describe("TaskHeader pricing", () => {
 		expect(container).toHaveTextContent("Prompt cache warming (1/3)")
 	})
 
+	it("renders RPM and TPM before usage metrics in a responsive right-aligned region", () => {
+		render(
+			<TaskHeader
+				doesModelSupportPromptCache={false}
+				onClose={vi.fn()}
+				requestsPerMinute={3}
+				task={task}
+				tokensIn={1_250}
+				tokensOut={250}
+				tokensPerMinute={4_500}
+				totalCost={0}
+			/>,
+		)
+
+		const rate = screen.getByTestId("task-rate-metrics")
+		const usage = screen.getByTitle("In: 1250 / Out: 250 / Cache read: 0 / Cache write: 0")
+		expect(rate).toHaveTextContent("RPM:3")
+		expect(rate).toHaveTextContent("TPM:4.5K")
+		expect(rate).toHaveClass("ml-auto", "justify-end", "@max-sm:hidden")
+		expect(rate.compareDocumentPosition(usage) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+	})
+
 	it("hides a zero-priced model cost while retaining token metrics", () => {
 		render(
 			<TaskHeader

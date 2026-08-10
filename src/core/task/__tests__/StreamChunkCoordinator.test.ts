@@ -45,6 +45,38 @@ async function* createRawStream(): ApiStream {
 }
 
 describe("StreamChunkCoordinator", () => {
+	it("tracks and periodically reports queued chunk depth while the consumer is behind", async () => {
+		vi.useFakeTimers()
+		try {
+			async function* createQueuedStream(): ApiStream {
+				yield { type: "text", text: "one" }
+				yield { type: "reasoning", reasoning: "two" }
+				yield { type: "text", text: "three" }
+			}
+			const factory = createIdentityFactory(createSource(["ONE", "TWO", "THREE"]))
+			const stream = normalizeApiStream(createQueuedStream(), createStreamNormalizer(factory))
+			const onQueueMetrics = vi.fn()
+			const coordinator = new StreamChunkCoordinator(stream, {
+				onUsageChunk: vi.fn(),
+				onQueueMetrics,
+				queueMetricsIntervalMs: 1_000,
+			})
+
+			await coordinator.waitForCompletion()
+			await vi.advanceTimersByTimeAsync(1_000)
+
+			expect(coordinator.getQueueDepth()).toBe(3)
+			expect(coordinator.getMaxQueueDepth()).toBe(3)
+			expect(onQueueMetrics).toHaveBeenCalledWith({ queueDepth: 3, maxQueueDepth: 3, streamCompleted: true })
+			await coordinator.nextChunk()
+			expect(coordinator.getQueueDepth()).toBe(2)
+			expect(coordinator.getMaxQueueDepth()).toBe(3)
+			await coordinator.stop()
+		} finally {
+			vi.useRealTimers()
+		}
+	})
+
 	it("receives only canonical chunks after provider stream normalization", async () => {
 		const factory = createIdentityFactory(createSource(["TRACE"]))
 		const normalizer = createStreamNormalizer(factory)

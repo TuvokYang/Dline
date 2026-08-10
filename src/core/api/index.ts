@@ -69,6 +69,7 @@ export interface ApiHandlerContext {
 	onRetryAttempt?: (attempt: number, maxRetries: number, delay: number, error: unknown) => void
 	requestTimeoutMs?: number
 	enableParallelToolCalling?: boolean
+	onStreamEstimatedTokens?: (tokens: number) => void
 }
 
 /**
@@ -300,5 +301,6 @@ export function buildApiHandler(configuration: ApiConfiguration, mode: Mode): Ap
 		onRetryAttempt: configuration.onRetryAttempt,
 		requestTimeoutMs: configuration.requestTimeoutMs,
 		enableParallelToolCalling: configuration.enableParallelToolCalling,
+		onStreamEstimatedTokens: configuration.onStreamEstimatedTokens,
 	})
 }

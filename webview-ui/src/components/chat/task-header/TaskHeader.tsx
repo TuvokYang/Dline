@@ -37,6 +37,8 @@ interface TaskHeaderProps {
 	showFocusChainPlaceholder?: boolean
 	pricing?: ModelPricing
 	compactTaskDisabled?: boolean
+	requestsPerMinute?: number
+	tokensPerMinute?: number
 	onClose: () => void
 	onCompactTask?: () => Promise<boolean>
 }
@@ -58,6 +60,8 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 	showFocusChainPlaceholder,
 	pricing,
 	compactTaskDisabled,
+	requestsPerMinute,
+	tokensPerMinute,
 	onClose,
 	onCompactTask,
 }) => {
@@ -134,7 +138,7 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 			{/* Task Header */}
 			<div
 				className={cn(
-					"relative overflow-hidden cursor-pointer rounded-sm flex flex-col gap-1.5 z-10 pt-2 pb-2 px-2 hover:opacity-100 bg-(--vscode-toolbar-hoverBackground)/65",
+					"@container relative overflow-hidden cursor-pointer rounded-sm flex flex-col gap-1.5 z-10 pt-2 pb-2 px-2 hover:opacity-100 bg-(--vscode-toolbar-hoverBackground)/65",
 					{
 						"opacity-100 border-1": isTaskExpanded, // No hover effects when expanded, add border
 						"hover:bg-toolbar-hover border-1": !isTaskExpanded, // Hover effects only when collapsed
@@ -186,7 +190,16 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 							</div>
 						)}
 					</div>
-					<div className="inline-flex items-center justify-end select-none shrink-0">
+					<div className="inline-flex items-center justify-end select-none shrink-0 min-w-0">
+						{((requestsPerMinute ?? 0) > 0 || (tokensPerMinute ?? 0) > 0) && (
+							<div
+								className="ml-auto mr-1 inline-flex min-w-0 items-center justify-end gap-1.5 whitespace-nowrap text-xs font-medium opacity-80 @max-sm:hidden"
+								data-testid="task-rate-metrics"
+								title={`Requests per minute: ${requestsPerMinute ?? 0} / Tokens per minute: ${tokensPerMinute ?? 0}`}>
+								<span>RPM:{formatTokenMetric(requestsPerMinute ?? 0)}</span>
+								<span>TPM:{formatTokenMetric(tokensPerMinute ?? 0)}</span>
+							</div>
+						)}
 						{hasMetrics && (
 							<div
 								className="mx-1 px-1.5 py-0.25 rounded-full inline-flex shrink-0 text-badge-background bg-badge-foreground/80 items-center gap-1.5"

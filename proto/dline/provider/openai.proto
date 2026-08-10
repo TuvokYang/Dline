@@ -30,4 +30,6 @@ message OpenAiProviderConfig {
   optional bool enable_long_context = 13;
   // Apply editable pricing tiers when configured.
   optional bool pricing_tiers_enabled = 14;
+  // Abort a Responses stream after this many seconds without any event.
+  optional uint32 stream_idle_timeout_seconds = 15;
 }

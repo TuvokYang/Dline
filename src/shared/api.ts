@@ -64,6 +64,8 @@ export interface ApiConfiguration {
 	requestTimeoutMs?: number
 	/** Whether parallel tool calling is enabled */
 	enableParallelToolCalling?: boolean
+	/** Report estimated streaming token activity for Task-local rate metrics. */
+	onStreamEstimatedTokens?: (tokens: number) => void
 }
 
 /**

@@ -4,6 +4,7 @@ import { ApiFormat, type ModelCapabilities, type ModelPricing, ServerTool } from
 import { OpenAiProviderConfig } from "@shared/proto/dline/provider/openai"
 import { openAiEndpointToApiFormat, resolveApiFormat } from "@shared/providers/api-format"
 import { buildEffectiveModelInfo, mergeCapabilities, mergePricing } from "@shared/providers/effective-model-info"
+import { DEFAULT_OPENAI_RESPONSES_STREAM_IDLE_TIMEOUT_SECONDS } from "@shared/providers/openai-stream"
 import { OPENAI_COMPATIBLE_REASONING_EFFORT_OPTIONS, OPENAI_REASONING_EFFORT_OPTIONS } from "@shared/storage/types"
 import { VSCodeButton, VSCodeCheckbox } from "@vscode/webview-ui-toolkit/react"
 import { useCallback, useMemo, useState } from "react"
@@ -120,6 +121,12 @@ export const OpenAIProvider = ({ showModelOptions, isPopup, profile, onUpdate }:
 
 	const handlePricingUpdate = (updates: Partial<ModelPricing>) => {
 		onUpdate({ openai: { ...pc, pricing: mergePricing(pc.pricing, updates) } })
+	}
+
+	const handleStreamIdleTimeoutChange = (value: string) => {
+		const seconds = Number.parseInt(value, 10)
+		if (!Number.isSafeInteger(seconds) || seconds <= 0) return
+		onUpdate({ openai: { ...pc, streamIdleTimeoutSeconds: seconds } })
 	}
 
 	const handleCustomModelToggle = (checked: boolean) => {
@@ -312,6 +319,16 @@ export const OpenAIProvider = ({ showModelOptions, isPopup, profile, onUpdate }:
 				}>
 				Include usage stats in stream responses
 			</VSCodeCheckbox>
+
+			<DebouncedTextField
+				initialValue={String(pc.streamIdleTimeoutSeconds ?? DEFAULT_OPENAI_RESPONSES_STREAM_IDLE_TIMEOUT_SECONDS)}
+				onChange={handleStreamIdleTimeoutChange}
+				placeholder={String(DEFAULT_OPENAI_RESPONSES_STREAM_IDLE_TIMEOUT_SECONDS)}>
+				Responses stream idle timeout (seconds)
+			</DebouncedTextField>
+			<p style={{ fontSize: 12, marginTop: 3, color: "var(--vscode-descriptionForeground)" }}>
+				Abort and retry when no Responses streaming event is received for this many seconds.
+			</p>
 
 			<p style={{ fontSize: 12, marginTop: 3, color: "var(--vscode-descriptionForeground)" }}>
 				<span style={{ color: "var(--vscode-errorForeground)" }}>

@@ -4,6 +4,7 @@ import { azureOpenAiDefaultApiVersion, ModelInfo, openAiModelInfoSaneDefaults, o
 import { ApiFormat, ServerTool } from "@shared/proto/dline/models/metadata"
 import { openAiEndpointToApiFormat, prioritizeApiFormat, resolveApiFormat } from "@shared/providers/api-format"
 import { buildEffectiveModelInfo } from "@shared/providers/effective-model-info"
+import { normalizeOpenAIResponsesStreamIdleTimeoutSeconds } from "@shared/providers/openai-stream"
 import { normalizeOpenAiServiceTier, normalizeOpenaiReasoningEffort } from "@shared/storage/types"
 import { calculateApiCostOpenAI } from "@utils/cost"
 import OpenAI, { AzureOpenAI } from "openai"
@@ -16,8 +17,10 @@ import { buildExternalBasicHeaders } from "@/services/EnvUtils"
 import { ClineStorageMessage } from "@/shared/messages/content"
 import { createOpenAIClient, fetch } from "@/shared/net"
 import { isO1Model } from "@/shared/resolve-prompt-profile"
+import { Logger } from "@/shared/services/Logger"
 import { ApiHandler, ApiHandlerContext, type ApiRequestOptions } from "../index"
 import { withRetry } from "../retry"
+import { OpenAIResponsesStreamMonitor } from "../stream/openai-responses-stream-monitor"
 import { convertToO1Messages } from "../transform/o1-format"
 import { convertToOpenAiMessages } from "../transform/openai-format"
 import { projectOpenAIChatPromptCache, projectOpenAIResponsesPromptCache } from "../transform/openai-prompt-cache"
@@ -242,8 +245,11 @@ export class OpenAiHandler implements ApiHandler {
 		const requestController = new AbortController()
 		this.requestController = requestController
 		if (this.apiFormat === ApiFormat.OPENAI_RESPONSES || this.apiFormat === ApiFormat.OPENAI_RESPONSES_WEBSOCKET_MODE) {
-			yield* this.createResponsesMessage(systemPrompt, messages, tools, options, requestController.signal)
-			if (this.requestController === requestController) this.requestController = undefined
+			try {
+				yield* this.createResponsesMessage(systemPrompt, messages, requestController, tools, options)
+			} finally {
+				if (this.requestController === requestController) this.requestController = undefined
+			}
 			return
 		}
 
@@ -445,9 +451,9 @@ export class OpenAiHandler implements ApiHandler {
 	private async *createResponsesMessage(
 		systemPrompt: string,
 		messages: ClineStorageMessage[],
+		requestController: AbortController,
 		tools?: ChatCompletionTool[],
 		options?: ApiRequestOptions,
-		signal?: AbortSignal,
 	): ApiStream {
 		const client = this.ensureClient()
 		const model = this.getModel()
@@ -496,9 +502,17 @@ export class OpenAiHandler implements ApiHandler {
 			...(typeof maxOutputTokens === "number" && maxOutputTokens > 0 ? { max_output_tokens: maxOutputTokens } : {}),
 		}
 
-		const stream = await this.createResponsesStream(client, params, signal)
+		const stream = await this.createResponsesStream(client, params, requestController.signal)
+		const idleTimeoutSeconds = normalizeOpenAIResponsesStreamIdleTimeoutSeconds(this.config?.streamIdleTimeoutSeconds)
+		const monitor = new OpenAIResponsesStreamMonitor({
+			idleTimeoutMs: idleTimeoutSeconds * 1_000,
+			abort: () => requestController.abort(),
+			log: (message) => Logger.debug(message),
+			requestLabel: this.ctx.ulid ? `Task ${this.ctx.ulid}` : "OpenAI",
+			onEstimatedTokens: this.ctx.onStreamEstimatedTokens,
+		})
 		yield* handleResponsesApiStreamResponse(
-			stream,
+			monitor.observe(stream),
 			model.info,
 			async (info, inputTokens, outputTokens, cacheWrite, cacheRead) =>
 				calculateApiCostOpenAI(info, inputTokens, outputTokens, cacheWrite, cacheRead),

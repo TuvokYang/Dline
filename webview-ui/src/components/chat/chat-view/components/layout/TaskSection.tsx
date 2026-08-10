@@ -14,6 +14,8 @@ interface TaskSectionProps {
 		totalCost: number
 		cacheHitRate?: number
 		currency?: string
+		requestsPerMinute?: number
+		tokensPerMinute?: number
 	}
 	lastApiReqTotalTokens?: number
 	selectedModelInfo: {
@@ -58,10 +60,12 @@ export const TaskSection: React.FC<TaskSectionProps> = ({
 			onClose={messageHandlers.handleTaskCloseButtonClick}
 			onCompactTask={onCompactTask}
 			pricing={selectedModelInfo.pricing}
+			requestsPerMinute={apiMetrics.requestsPerMinute}
 			showFocusChainPlaceholder={showFocusChainPlaceholder}
 			task={task}
 			tokensIn={apiMetrics.totalTokensIn}
 			tokensOut={apiMetrics.totalTokensOut}
+			tokensPerMinute={apiMetrics.tokensPerMinute}
 			totalCost={apiMetrics.totalCost}
 		/>
 	)

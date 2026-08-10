@@ -16,25 +16,52 @@ Without this split, usage updates can be delayed behind awaited UI/tool work.
 */
 export type NonUsageApiStreamChunk = Exclude<ApiStreamChunk, { type: "usage" }>
 
+interface QueueMetrics {
+	queueDepth: number
+	maxQueueDepth: number
+	streamCompleted: boolean
+}
+
 type StreamChunkCoordinatorOptions = {
 	onUsageChunk: (chunk: ApiStreamUsageChunk) => void
+	onQueueMetrics?: (metrics: QueueMetrics) => void
+	queueMetricsIntervalMs?: number
 }
 
 export class StreamChunkCoordinator {
 	private iterator: AsyncGenerator<ApiStreamChunk>
 	private queue: NonUsageApiStreamChunk[] = []
+	private maxQueueDepth = 0
 	private readError: unknown
 	private completed = false
 	private stopRequested = false
 	private waiterResolve: (() => void) | undefined
 	private pumpPromise: Promise<void>
+	private queueMetricsTimer: ReturnType<typeof setInterval> | undefined
 
 	constructor(
 		stream: ApiCanonicalStream,
 		private readonly options: StreamChunkCoordinatorOptions,
 	) {
 		this.iterator = stream[Symbol.asyncIterator]()
+		if (options.onQueueMetrics) {
+			this.queueMetricsTimer = setInterval(() => this.emitQueueMetrics(), options.queueMetricsIntervalMs ?? 1_000)
+			this.queueMetricsTimer.unref?.()
+		}
 		this.pumpPromise = this.startPump()
+	}
+
+	private emitQueueMetrics(): void {
+		this.options.onQueueMetrics?.({
+			queueDepth: this.queue.length,
+			maxQueueDepth: this.maxQueueDepth,
+			streamCompleted: this.completed,
+		})
+	}
+
+	private clearQueueMetricsTimer(): void {
+		if (this.queueMetricsTimer !== undefined) clearInterval(this.queueMetricsTimer)
+		this.queueMetricsTimer = undefined
 	}
 
 	private notifyWaiter() {
@@ -77,15 +104,25 @@ export class StreamChunkCoordinator {
 						continue
 					}
 					this.queue.push(chunk)
+					this.maxQueueDepth = Math.max(this.maxQueueDepth, this.queue.length)
 					this.notifyWaiter()
 				}
 			} catch (error) {
 				this.readError = error
 			} finally {
 				this.completed = true
+				this.emitQueueMetrics()
 				this.notifyWaiter()
 			}
 		})()
+	}
+
+	getQueueDepth(): number {
+		return this.queue.length
+	}
+
+	getMaxQueueDepth(): number {
+		return this.maxQueueDepth
 	}
 
 	async nextChunk(): Promise<NonUsageApiStreamChunk | undefined> {
@@ -106,12 +143,14 @@ export class StreamChunkCoordinator {
 
 	async stop(): Promise<void> {
 		this.stopRequested = true
+		this.clearQueueMetricsTimer()
 		await this.closeIterator()
 		await this.pumpPromise.catch(() => {})
 	}
 
 	async waitForCompletion(): Promise<void> {
 		await this.pumpPromise
+		this.clearQueueMetricsTimer()
 		if (this.readError) {
 			throw this.readError
 		}
