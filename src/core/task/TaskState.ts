@@ -122,6 +122,20 @@ export class TaskState {
 	isInternalContextCompactionRequest = false
 	/** Stable chat row used across one compaction request and its retries. */
 	contextCompactionMessageTs?: number
+	/** User-authored content to admit after a confirmed manual compaction has committed. */
+	pendingManualCompactionContinuation?: {
+		text: string
+		images: string[]
+		files: string[]
+	}
+	/** Regenerate supersedes the completed manual summary turn before a fresh /compact request is admitted. */
+	pendingManualCompactionRegeneration?: {
+		requestApiIndex: number
+		operationId?: string
+		text: string
+		images: string[]
+		files: string[]
+	}
 	deferredCurrentTurn?: {
 		assistantMessage: ClineStorageMessage
 		userContent: ClineContent[]

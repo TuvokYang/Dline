@@ -160,6 +160,18 @@ describe("current-turn compaction boundary", () => {
 		expect(projected.some((block) => block.type === "tool_result")).to.equal(false)
 	})
 
+	it("appends post-compaction user continuation after the projected summary", () => {
+		const projected = projectCompletedCompactionResult(
+			[createToolResult("fc_compaction", "continuation summary")],
+			[createText("<user_message>\ncontinue after compact\n</user_message>")],
+		)
+
+		expect(projected).to.deep.equal([
+			{ type: "text", text: "continuation summary" },
+			{ type: "text", text: "<user_message>\ncontinue after compact\n</user_message>" },
+		])
+	})
+
 	it("does not emit an orphan Chat tool message for a completed compaction result", () => {
 		const projected = projectCompletedCompactionResult([createToolResult("fc_compaction", "continuation summary")])
 		const messages: ClineStorageMessage[] = [{ role: "user", content: projected }]

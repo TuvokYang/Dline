@@ -321,7 +321,7 @@ describe("ChatView interaction anchor synchronization", () => {
 				label: "Condense Conversation",
 				appearance: "primary",
 				enabled: true,
-				payloadPolicy: "none",
+				payloadPolicy: "draft",
 				dispatchTarget: "interaction",
 			},
 			{

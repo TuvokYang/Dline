@@ -50,6 +50,8 @@ export class ExplicitInstructionRequestScope {
 		const identity = Object.freeze({ ...this.identity })
 		return Object.freeze({
 			identity,
+			getPendingToolAuthorization: (targetTool: ClineDefaultTool): ExplicitInstructionAuthorization | undefined =>
+				this.registry.findPendingTool(identity, targetTool),
 			consumeTool: (targetTool: ClineDefaultTool): ConsumeExplicitInstructionResult =>
 				this.registry.consumeTool({ ...identity, targetTool }),
 		})

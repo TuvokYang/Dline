@@ -19,6 +19,7 @@ interface RestoreHarness {
 	resumeTask: ReturnType<typeof vi.fn>
 	persistTaskHistory: ReturnType<typeof vi.fn>
 	postStateToWebview: ReturnType<typeof vi.fn>
+	truncateContextHistory: ReturnType<typeof vi.fn>
 }
 
 function createHarness(messages: ClineMessage[], trackedFiles?: string[]): RestoreHarness {
@@ -47,6 +48,7 @@ function createHarness(messages: ClineMessage[], trackedFiles?: string[]): Resto
 	const uiMessage = { truncateByLineNum: vi.fn().mockResolvedValue(undefined) }
 	const persistTaskHistory = vi.fn().mockResolvedValue(undefined)
 	const postStateToWebview = vi.fn().mockResolvedValue(undefined)
+	const truncateContextHistory = vi.fn().mockResolvedValue(undefined)
 	const messageStateHandler = {
 		clineMessages: messages,
 		apiConversationHistory: [
@@ -66,6 +68,7 @@ function createHarness(messages: ClineMessage[], trackedFiles?: string[]): Resto
 		{ enableCheckpoints: true },
 		{
 			fileContextTracker: { detectFilesEditedAfterMessage: vi.fn().mockResolvedValue([]) },
+			contextManager: { truncateContextHistory },
 			diffViewProvider: {},
 			messageStateHandler,
 			taskState,
@@ -93,6 +96,7 @@ function createHarness(messages: ClineMessage[], trackedFiles?: string[]): Resto
 		resumeTask,
 		persistTaskHistory,
 		postStateToWebview,
+		truncateContextHistory,
 	}
 }
 
@@ -169,6 +173,7 @@ describe("TaskCheckpointManager restore isolation", () => {
 
 		expect(harness.restoreChatRuntime).toHaveBeenCalledWith({ apiIndex: 1 })
 		expect(harness.resumeTask).not.toHaveBeenCalled()
+		expect(harness.truncateContextHistory).toHaveBeenCalledWith(42, expect.any(String))
 	})
 
 	it("clears mistake-limit detector state when restoring chat", async () => {

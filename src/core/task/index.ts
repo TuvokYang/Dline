@@ -2625,6 +2625,8 @@ export class Task {
 		try {
 			this.cancelPendingAutoRetry()
 			this.modeSwitchCompaction.abort()
+			this.taskState.pendingManualCompactionContinuation = undefined
+			this.taskState.pendingManualCompactionRegeneration = undefined
 			// PHASE 1: Check if TaskCancel should run BEFORE any cleanup
 			const shouldRunTaskCancelHook = await this.shouldRunTaskCancelHook()
 
@@ -2716,6 +2718,8 @@ export class Task {
 		try {
 			this.cancelPendingAutoRetry()
 			this.modeSwitchCompaction.abort()
+			this.taskState.pendingManualCompactionContinuation = undefined
+			this.taskState.pendingManualCompactionRegeneration = undefined
 			this.taskState.abort = true
 			this.taskState.cancelOperations("checkpoint_restore")
 			this.api?.abort?.()
@@ -4634,6 +4638,19 @@ export class Task {
 			}
 		}
 
+		let manualCompactionContinuation: ClineContent[] = []
+		if (didCompleteSummarization) {
+			const pendingContinuation = this.taskState.pendingManualCompactionContinuation
+			if (pendingContinuation) {
+				manualCompactionContinuation = await buildUserFeedbackContent(
+					pendingContinuation.text,
+					pendingContinuation.images,
+					pendingContinuation.files,
+				)
+			}
+			this.taskState.pendingManualCompactionContinuation = undefined
+		}
+
 		if (
 			shouldRestoreDeferredTurn({
 				hasDeferredTurn: this.taskState.deferredCurrentTurn !== undefined,
@@ -4645,12 +4662,16 @@ export class Task {
 				if (this.modeSwitchCompaction.getOperationId()) {
 					await this.modeSwitchCompaction.markApplied()
 				}
-				return this.recursivelyMakeClineRequests(deferredUserContent, includeFileDetails, transaction)
+				return this.recursivelyMakeClineRequests(
+					[...deferredUserContent, ...manualCompactionContinuation],
+					includeFileDetails,
+					transaction,
+				)
 			}
 		}
 
 		if (didCompleteSummarization) {
-			userContent = projectCompletedCompactionResult(userContent)
+			userContent = projectCompletedCompactionResult(userContent, manualCompactionContinuation)
 		}
 
 		if (didCompleteSummarization && this.modeSwitchCompaction.getOperationId()) {

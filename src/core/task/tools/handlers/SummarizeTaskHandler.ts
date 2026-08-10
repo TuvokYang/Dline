@@ -17,8 +17,9 @@ import { ClineDefaultTool } from "@/shared/tools"
 import type { ToolResponse } from "../../index"
 import type { IPartialBlockHandler, IToolHandler } from "../ToolExecutorCoordinator"
 import type { ToolValidator } from "../ToolValidator"
-import type { TaskConfig } from "../types/TaskConfig"
+import { interactionId, interactionTurnId, type TaskConfig } from "../types/TaskConfig"
 import type { StronglyTypedUIHelpers } from "../types/UIHelpers"
+import { NO_TOOL_RESULT } from "../utils/ToolResultUtils"
 
 export class SummarizeTaskHandler implements IToolHandler, IPartialBlockHandler {
 	readonly name = ClineDefaultTool.SUMMARIZE_TASK
@@ -124,8 +125,19 @@ export class SummarizeTaskHandler implements IToolHandler, IPartialBlockHandler 
 			const compactionMessageTs = config.taskState.isInternalContextCompactionRequest
 				? config.taskState.contextCompactionMessageTs
 				: undefined
+			const manualOutcome = isManualCompaction
+				? await config.interactions.open({
+						turnId: interactionTurnId(block),
+						interactionId: interactionId(block),
+						kind: "condense",
+						presentation: context,
+						existingTs: block.ts,
+					})
+				: undefined
 
-			await config.callbacks.say("tool", completeMessage, undefined, undefined, false, compactionMessageTs ?? block.ts)
+			if (!isManualCompaction) {
+				await config.callbacks.say("tool", completeMessage, undefined, undefined, false, compactionMessageTs ?? block.ts)
+			}
 			if (compactionMessageTs !== undefined) {
 				config.taskState.contextCompactionMessageTs = undefined
 			}
@@ -239,6 +251,41 @@ export class SummarizeTaskHandler implements IToolHandler, IPartialBlockHandler 
 
 			const toolResult = formatResponse.toolResult(toolResultContent)
 
+			if (manualOutcome?.actionId === "reject") {
+				config.taskState.pendingManualCompactionContinuation = undefined
+				const apiConversationHistory = config.messageState.apiConversationHistory
+				const summaryApiIndex = apiConversationHistory.length - 1
+				const requestApiIndex = summaryApiIndex - 1
+				if (
+					summaryApiIndex < 0 ||
+					apiConversationHistory[summaryApiIndex]?.role !== "assistant" ||
+					requestApiIndex < 0 ||
+					apiConversationHistory[requestApiIndex]?.role !== "user"
+				) {
+					throw new Error("Manual compaction request history is missing")
+				}
+				config.taskState.pendingManualCompactionRegeneration = {
+					requestApiIndex,
+					...(authorization.operationId === undefined ? {} : { operationId: authorization.operationId }),
+					text: manualOutcome.draft?.text ?? "",
+					images: [...(manualOutcome.draft?.images ?? [])],
+					files: [...(manualOutcome.draft?.files ?? [])],
+				}
+				config.taskState.isManualContextCompactionRequest = false
+				return NO_TOOL_RESULT
+			}
+			if (manualOutcome && manualOutcome.actionId !== "confirm_utility") {
+				throw new Error(`Unsupported manual compaction action: ${manualOutcome.actionId}`)
+			}
+			let manualCompactionContinuation: { text: string; images: string[]; files: string[] } | undefined
+			if (manualOutcome?.actionId === "confirm_utility") {
+				const text = manualOutcome.draft?.text ?? ""
+				const images = [...(manualOutcome.draft?.images ?? [])]
+				const files = [...(manualOutcome.draft?.files ?? [])]
+				manualCompactionContinuation =
+					text.trim() || images.length > 0 || files.length > 0 ? { text, images, files } : undefined
+			}
+
 			// Handle context management
 			const apiConversationHistory = config.messageState.apiConversationHistory
 			const keepStrategy = "none"
@@ -257,6 +304,7 @@ export class SummarizeTaskHandler implements IToolHandler, IPartialBlockHandler 
 				apiConversationHistory,
 			)
 			if (isManualCompaction) {
+				config.taskState.pendingManualCompactionContinuation = manualCompactionContinuation
 				// Skip one stale-usage automatic compaction check after a user-owned summary is committed.
 				config.taskState.manualCompactionCommitted = true
 			}
@@ -296,6 +344,16 @@ export class SummarizeTaskHandler implements IToolHandler, IPartialBlockHandler 
 	async handlePartialBlock(block: ToolUse, uiHelpers: StronglyTypedUIHelpers): Promise<void> {
 		const context = block.params.context || ""
 		const config = uiHelpers.getConfig()
+		const authorization = config.explicitInstructions?.getPendingToolAuthorization(ClineDefaultTool.SUMMARIZE_TASK)
+		const isManualCompaction = authorization?.source === "manual_compact_command" || authorization?.source === "task_header"
+		if (isManualCompaction) {
+			await uiHelpers
+				.ask("condense", uiHelpers.removeClosingTag(block, "context", context), true, {
+					existingTs: block.ts,
+				})
+				.catch(() => {})
+			return
+		}
 		const existingTs = config.taskState.isInternalContextCompactionRequest
 			? config.taskState.contextCompactionMessageTs
 			: undefined

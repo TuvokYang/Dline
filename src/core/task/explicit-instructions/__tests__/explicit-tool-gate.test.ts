@@ -6,6 +6,7 @@ import type { ExplicitInstructionConsumePort } from "../types"
 function createPort(result: ReturnType<ExplicitInstructionConsumePort["consumeTool"]>): ExplicitInstructionConsumePort {
 	return {
 		identity: { requestId: "request-1", attemptId: "attempt-1" },
+		getPendingToolAuthorization: vi.fn(() => undefined),
 		consumeTool: vi.fn(() => result),
 	}
 }

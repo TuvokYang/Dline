@@ -107,7 +107,7 @@ describe("FooterActions", () => {
 		expect(screen.getByRole("button", { name: "Reject" })).toBeEnabled()
 	})
 
-	it("does not submit or settle the draft for a payload-free utility action", async () => {
+	it("submits and settles the current draft through Condense Conversation", async () => {
 		const dispatch = vi.fn(async () => ({ accepted: true, result: "accepted" }))
 		const onDraftAccepted = vi.fn()
 		const view = approvalView()
@@ -124,7 +124,7 @@ describe("FooterActions", () => {
 				label: "Condense Conversation",
 				appearance: "primary",
 				enabled: true,
-				payloadPolicy: "none",
+				payloadPolicy: "draft",
 				dispatchTarget: "interaction",
 			},
 			{
@@ -155,9 +155,12 @@ describe("FooterActions", () => {
 			interactionId: "interaction-1",
 			actionId: "confirm_utility",
 			stateRevision: 8,
+			draft: { text: "preserve this draft", images: ["image"], files: ["file"] },
 			selection: undefined,
 		})
-		expect(onDraftAccepted).not.toHaveBeenCalled()
+		expect(onDraftAccepted).toHaveBeenCalledWith(
+			expect.objectContaining({ draft: expect.objectContaining({ text: "preserve this draft" }) }),
+		)
 	})
 
 	it("submits and settles feedback through Regenerate Summary", async () => {
@@ -178,7 +181,7 @@ describe("FooterActions", () => {
 				label: "Condense Conversation",
 				appearance: "primary",
 				enabled: true,
-				payloadPolicy: "none",
+				payloadPolicy: "draft",
 				dispatchTarget: "interaction",
 			},
 			{

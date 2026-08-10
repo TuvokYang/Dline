@@ -1,3 +1,4 @@
+import type { ContextManager } from "@core/context/context-management/ContextManager"
 import type { FileContextTracker } from "@core/context/context-tracking/FileContextTracker"
 import type { MessageStateHandler } from "@core/task/message-state"
 import type { TaskState } from "@core/task/TaskState"
@@ -35,6 +36,7 @@ type BuildArgs = {
 	messageStateHandler: MessageStateHandler
 	// single-root deps
 	fileContextTracker: FileContextTracker
+	contextManager: ContextManager
 	diffViewProvider: DiffViewProvider
 	taskState: TaskState
 	taskFileTracker: TaskFileTracker
@@ -66,6 +68,7 @@ export function buildCheckpointManager(args: BuildArgs): ICheckpointManager {
 		controller,
 		messageStateHandler,
 		fileContextTracker,
+		contextManager,
 		diffViewProvider,
 		taskState,
 		taskFileTracker,
@@ -95,6 +98,7 @@ export function buildCheckpointManager(args: BuildArgs): ICheckpointManager {
 			diffViewProvider,
 			messageStateHandler,
 			fileContextTracker,
+			contextManager,
 			taskFileTracker,
 			taskState,
 			workspaceManager,

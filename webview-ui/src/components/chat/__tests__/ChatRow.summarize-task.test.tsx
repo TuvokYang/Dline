@@ -95,7 +95,7 @@ describe("ChatRow summarizeTask rendering", () => {
 		expect(screen.queryByText("Dline is condensing the conversation:")).not.toBeInTheDocument()
 	})
 
-	it("caps the expanded summary at 80% of the viewport with internal scrolling", () => {
+	it("caps the expanded automatic summary at 60% of the viewport with internal scrolling", () => {
 		render(
 			<ChatRowContent
 				{...baseProps}
@@ -110,9 +110,30 @@ describe("ChatRow summarizeTask rendering", () => {
 			/>,
 		)
 
-		const scrollContainer = screen.getByText("long summary content").parentElement
-		expect(scrollContainer).not.toBeNull()
-		expect(scrollContainer).toHaveClass("max-h-[80vh]")
+		const scrollContainer = screen.getByTestId("summary-scroll-container")
+		expect(scrollContainer).toHaveTextContent("long summary content")
+		expect(scrollContainer).toHaveClass("max-h-[60vh]")
+		expect(scrollContainer).toHaveClass("overflow-y-auto")
+	})
+
+	it("caps the manual condense summary at 60% of the viewport with internal scrolling", () => {
+		render(
+			<ChatRowContent
+				{...baseProps}
+				isExpanded={true}
+				message={{
+					ts: 5,
+					type: "ask",
+					ask: "condense",
+					partial: false,
+					text: "manual long summary content",
+				}}
+			/>,
+		)
+
+		const scrollContainer = screen.getByTestId("summary-scroll-container")
+		expect(scrollContainer).toHaveTextContent("manual long summary content")
+		expect(scrollContainer).toHaveClass("max-h-[60vh]")
 		expect(scrollContainer).toHaveClass("overflow-y-auto")
 	})
 

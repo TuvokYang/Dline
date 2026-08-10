@@ -215,6 +215,12 @@ export class ToolExecutor {
 		this.explicitInstructions = port
 	}
 
+	/** Return whether the current request attempt may render an explicit-only tool while it is still partial. */
+	private canRenderExplicitTool(toolName: ClineDefaultTool): boolean {
+		if (!isExplicitOnlyTool(toolName)) return true
+		return this.explicitInstructions?.getPendingToolAuthorization(toolName) !== undefined
+	}
+
 	/** Freeze Web Tools admission alongside the current request's tool schemas. */
 	public setWebSearchRoutingPlan(plan: WebSearchRoutingPlan, webToolsEnabled: boolean, allowHosted = true): void {
 		this.webToolsEnabled = webToolsEnabled
@@ -792,8 +798,9 @@ export class ToolExecutor {
 				await this.browserSession.closeBrowser()
 			}
 
-			// Handle partial blocks
+			// Explicit-only tools must hold pending authority before any partial UI is rendered.
 			if (block.partial) {
+				if (!this.canRenderExplicitTool(block.name)) return true
 				await this.handlePartialBlock(block, config)
 				return true
 			}
@@ -1012,6 +1019,7 @@ export class ToolExecutor {
 	public async reRenderPartialBlock(block: ToolUse, _existingTs?: number): Promise<void> {
 		if (this.taskState.abort || this.taskController.wasRejected(block.dline_tid || "")) return
 		if (!block.partial) return
+		if (!this.canRenderExplicitTool(block.name)) return
 		if (!this.coordinator.has(block.name)) return
 		const handler = this.coordinator.getHandler(block.name)
 		if (!handler || !("handlePartialBlock" in handler)) return

@@ -71,6 +71,7 @@ import { RequestStartRow } from "./RequestStartRow"
 import SearchResultsDisplay from "./SearchResultsDisplay"
 import StatusUpdateRow from "./StatusUpdateRow"
 import SubagentStatusRow from "./SubagentStatusRow"
+import { SummaryScrollContainer } from "./SummaryScrollContainer"
 import { ThinkingRow } from "./ThinkingRow"
 import UserMessage from "./UserMessage"
 import WebFetchRow from "./WebFetchRow"
@@ -795,11 +796,11 @@ export const ChatRowContent = memo(
 													<div className="grow" />
 													<ChevronDownIcon className="my-0.5 shrink-0 size-4" />
 												</div>
-												<div className="max-h-[80vh] overflow-y-auto pr-1">
+												<SummaryScrollContainer>
 													<span className="ph-no-capture break-words whitespace-pre-wrap">
 														{content}
 													</span>
-												</div>
+												</SummaryScrollContainer>
 											</div>
 										) : (
 											<div className="flex items-center">
@@ -1425,7 +1426,9 @@ export const ChatRowContent = memo(
 									<FilePlus2Icon className="size-2" />
 									<span className="text-foreground font-bold">Dline wants to condense your conversation:</span>
 								</div>
-								<NewTaskPreview task={message.text || ""} />
+								<SummaryScrollContainer>
+									<NewTaskPreview task={message.text || ""} />
+								</SummaryScrollContainer>
 							</div>
 						)
 					case "report_bug":

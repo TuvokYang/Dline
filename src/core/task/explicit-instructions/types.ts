@@ -64,6 +64,7 @@ export interface ConsumeExplicitToolInput extends ExplicitInstructionRequestIden
 
 export interface ExplicitInstructionConsumePort {
 	readonly identity: ExplicitInstructionRequestIdentity
+	getPendingToolAuthorization(targetTool: ClineDefaultTool): ExplicitInstructionAuthorization | undefined
 	consumeTool(targetTool: ClineDefaultTool): ConsumeExplicitInstructionResult
 }
 

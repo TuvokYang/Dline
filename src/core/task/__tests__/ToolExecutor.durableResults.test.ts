@@ -40,9 +40,13 @@ function createHarness(options: HarnessOptions = {}) {
 	const userMessageContent: any[] = []
 	const say = vi.fn(async () => 1)
 	const updateFCListFromToolResponse = vi.fn(async () => undefined)
+	const partialRender = vi.fn(async () => undefined)
 	const coordinator = {
 		has: vi.fn(() => options.coordinatorHas ?? true),
-		getHandler: vi.fn(() => ({ getDescription: (block: ToolUse) => `[${block.name}]` })),
+		getHandler: vi.fn(() => ({
+			getDescription: (block: ToolUse) => `[${block.name}]`,
+			handlePartialBlock: partialRender,
+		})),
 		execute: vi.fn(async (_config: { webSearchRoutingPlan?: WebSearchRoutingPlan }, _block: ToolUse) => {
 			if (options.throwFromTool) throw new Error("handler exploded")
 			return "tool completed"
@@ -95,7 +99,7 @@ function createHarness(options: HarnessOptions = {}) {
 			isError,
 		)
 
-	return { coordinator, executor, say, updateFCListFromToolResponse, userMessageContent }
+	return { coordinator, executor, partialRender, say, updateFCListFromToolResponse, userMessageContent }
 }
 
 function partialResultRows(say: ReturnType<typeof vi.fn>): string[] {
@@ -126,6 +130,17 @@ function webSearchCards(say: ReturnType<typeof vi.fn>): Array<Record<string, unk
 }
 
 describe("ToolExecutor durable tool results", () => {
+	it("does not render an unauthorized partial summarize_task block", async () => {
+		const { executor, partialRender } = createHarness()
+		const block = createBlock(ClineDefaultTool.SUMMARIZE_TASK, { context: "UNAUTHORIZED_SUMMARY_MUST_NOT_RENDER" })
+		block.partial = true
+		block.isNativeToolCall = false
+
+		await executor.execute(block, { explicitInstructions: undefined })
+
+		expect(partialRender).not.toHaveBeenCalled()
+	})
+
 	it("keeps an advertised read_file on its registered execution path", async () => {
 		const { coordinator, executor, say } = createHarness({
 			allowedNativeToolNames: [ClineDefaultTool.FILE_READ],

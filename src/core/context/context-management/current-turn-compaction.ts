@@ -104,10 +104,14 @@ export function shouldRestoreDeferredTurn(input: DeferredTurnRestoreInput): bool
  * Project the internal summarize_task result after its matching function call has been truncated.
  *
  * @param userContent Pending content produced by the completed compaction turn.
- * @returns User content that no longer contains orphaned tool results.
+ * @param continuationContent User-authored content to place after the projected summary.
+ * @returns Orphan-safe summary content followed by the optional user continuation.
  */
-export function projectCompletedCompactionResult(userContent: ClineContent[]): ClineContent[] {
-	return userContent.flatMap((block) => {
+export function projectCompletedCompactionResult(
+	userContent: ClineContent[],
+	continuationContent: ClineContent[] = [],
+): ClineContent[] {
+	const projected = userContent.flatMap((block) => {
 		if (block.type !== "tool_result") {
 			return [block]
 		}
@@ -115,6 +119,7 @@ export function projectCompletedCompactionResult(userContent: ClineContent[]): C
 		const text = getBlockText(block)
 		return text.length > 0 ? [{ type: "text" as const, text }] : []
 	})
+	return [...projected, ...continuationContent]
 }
 
 /**

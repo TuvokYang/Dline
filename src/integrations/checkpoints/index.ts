@@ -47,6 +47,7 @@ interface CheckpointManagerConfig {
 }
 interface CheckpointManagerServices {
 	readonly fileContextTracker: FileContextTracker
+	readonly contextManager: ContextManager
 	readonly diffViewProvider: DiffViewProvider
 	readonly messageStateHandler: MessageStateHandler
 	readonly taskState: TaskState
@@ -686,8 +687,7 @@ export class TaskCheckpointManager implements ICheckpointManager {
 
 		await this.services.messageStateHandler.uiMessage?.truncateByLineNum(messageIndex + 1)
 
-		const contextManager = new ContextManager()
-		await contextManager.truncateContextHistory(message.ts, await ensureTaskDirectoryExists(this.task.taskId))
+		await this.services.contextManager.truncateContextHistory(message.ts, await ensureTaskDirectoryExists(this.task.taskId))
 
 		const clineMessages = this.services.messageStateHandler.clineMessages
 		const deletedMessages = clineMessages.slice(messageIndex + 1)

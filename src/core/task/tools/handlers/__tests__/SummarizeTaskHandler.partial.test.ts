@@ -4,17 +4,26 @@ import type { TaskConfig } from "../../types/TaskConfig"
 import type { StronglyTypedUIHelpers } from "../../types/UIHelpers"
 import { SummarizeTaskHandler } from "../SummarizeTaskHandler"
 
-function createHelpers(isInternalContextCompactionRequest: boolean, contextCompactionMessageTs?: number) {
+function createHelpers(
+	isInternalContextCompactionRequest: boolean,
+	contextCompactionMessageTs?: number,
+	manualSource?: "manual_compact_command" | "task_header",
+) {
 	const say = vi.fn().mockResolvedValue(undefined)
+	const ask = vi.fn().mockRejectedValue(new Error("Current ask promise was ignored"))
 	const config = {
 		taskState: { isInternalContextCompactionRequest, contextCompactionMessageTs },
+		explicitInstructions: {
+			getPendingToolAuthorization: vi.fn(() => (manualSource ? { source: manualSource } : undefined)),
+		},
 	} as unknown as TaskConfig
 	const helpers = {
 		say,
+		ask,
 		removeClosingTag: vi.fn((_block, _tag, text) => text ?? ""),
 		getConfig: () => config,
 	} as unknown as StronglyTypedUIHelpers
-	return { helpers, say }
+	return { helpers, say, ask }
 }
 
 const partialBlock = {
@@ -48,5 +57,15 @@ describe("SummarizeTaskHandler partial rendering", () => {
 		await handler.handlePartialBlock(partialBlock as never, helpers)
 
 		expect(say).toHaveBeenCalledWith("tool", expect.stringContaining("Streaming summary"), undefined, undefined, true, 12345)
+	})
+
+	it("swallows the expected partial ask sentinel for manual compaction", async () => {
+		const handler = new SummarizeTaskHandler({} as never)
+		const { helpers, say, ask } = createHelpers(false, undefined, "manual_compact_command")
+
+		await expect(handler.handlePartialBlock(partialBlock as never, helpers)).resolves.toBeUndefined()
+
+		expect(ask).toHaveBeenCalledWith("condense", "Streaming summary", true, { existingTs: 12345 })
+		expect(say).not.toHaveBeenCalled()
 	})
 })
