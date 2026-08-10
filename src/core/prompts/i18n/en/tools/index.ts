@@ -112,8 +112,6 @@ export const toolPromptModules = [
 		doubleCheckVerification: createRuntimeContract("TASK_SECTION"),
 		yoloAutoRespond: createRuntimeContract("QUESTION"),
 		yoloToolResult: createRuntimeContract("QUESTION"),
-		condenseNotificationMessage: createRuntimeContract("CONTEXT"),
-		condenseFeedbackResult: createRuntimeContract("TEXT"),
 		generateExplanationNoChanges: createRuntimeContract("FROM_REF", "TO_REF"),
 		planSwitchToActWithMessage: createRuntimeContract("TEXT"),
 	}),

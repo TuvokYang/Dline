@@ -128,8 +128,15 @@ e2e(
 			{
 				type: "message",
 				text: "<thinking>E2E summary analysis</thinking><summarize_task><context>E2E_CHAT_COMPACTION_SUMMARY preserves the task and latest user request.</context></summarize_task>",
-				expectedRequestIncludes: ["The current conversation is rapidly running out of context"],
-				expectedRequestExcludes: ["E2E_CHAT_COMPACTION_CONTINUE"],
+				expectedRequestIncludes: [
+					"The current conversation is rapidly running out of context",
+					"# Compaction Window Budget",
+					"Estimated available context-window remainder:",
+					"Hard limit for the complete response:",
+					"Recommended total response range:",
+					"E2E_CHAT_COMPACTION_CONTINUE",
+				],
+				expectedRequestExcludes: ["<compaction_window_budget />"],
 			},
 			{
 				type: "tool",
@@ -208,6 +215,11 @@ e2e(
 			expect(getToolNames(summaryBody)).not.toContain("summarize_task")
 			expect(summaryBody.prompt_cache_key).toBe(initialBody.prompt_cache_key)
 			expect(projectedSummaryTokens).toBeGreaterThan(350_600)
+			const summaryRequestText = JSON.stringify(summaryBody)
+			expect(summaryRequestText).toMatch(/Estimated available context-window remainder: [1-9][0-9]* tokens/)
+			expect(summaryRequestText).toMatch(/Hard limit for the complete response: [1-9][0-9]* tokens/)
+			expect(summaryRequestText).toMatch(/Recommended total response range: [0-9]+[–-][1-9][0-9]* tokens/)
+			expect(summaryRequestText).not.toContain("<compaction_window_budget />")
 
 			const finalBody = requests[2].requestBody as {
 				messages?: Array<{ role?: string; tool_call_id?: string; content?: unknown }>
@@ -248,14 +260,21 @@ e2e(
 				type: "truncated-message",
 				text: `<thinking>incomplete summary</thinking><summarize_task><context>${TRUNCATED_SUMMARY_MARKER}`,
 				usage: { inputTokens: 125_000, outputTokens: 100 },
-				expectedRequestIncludes: ["The current conversation is rapidly running out of context"],
+				expectedRequestIncludes: [
+					"The current conversation is rapidly running out of context",
+					"Hard limit for the complete response:",
+				],
+				expectedRequestExcludes: ["<compaction_window_budget />"],
 			},
 			{
 				type: "message",
 				text: "<thinking>recovered summary</thinking><summarize_task><context>E2E_CHAT_COMPACTION_RETRY_SUMMARY is complete.</context></summarize_task>",
 				usage: { inputTokens: 125_000, outputTokens: 100 },
-				expectedRequestIncludes: ["The current conversation is rapidly running out of context"],
-				expectedRequestExcludes: [TRUNCATED_SUMMARY_MARKER],
+				expectedRequestIncludes: [
+					"The current conversation is rapidly running out of context",
+					"Hard limit for the complete response:",
+				],
+				expectedRequestExcludes: [TRUNCATED_SUMMARY_MARKER, "<compaction_window_budget />"],
 			},
 			{
 				type: "tool",
@@ -275,6 +294,10 @@ e2e(
 				timeout: 60_000,
 			})
 			await sendTask(sidebar, "E2E_CHAT_COMPACTION_RETRY_CONTINUE")
+			await expect(sidebar.getByText("Compaction was interrupted; retrying:", { exact: true })).toBeVisible({
+				timeout: 60_000,
+			})
+			await expect(sidebar.locator("div.text-description.mb-2").filter({ hasText: /^Attempt 1 of 3$/ })).toBeVisible()
 			await expect(sidebar.getByText("E2E_CHAT_COMPACTION_RETRY_OK", { exact: false }).last()).toBeVisible({
 				timeout: 90_000,
 			})

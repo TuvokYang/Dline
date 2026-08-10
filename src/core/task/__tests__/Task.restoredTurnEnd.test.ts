@@ -215,6 +215,7 @@ describe("Task restored turn-end continuation", () => {
 			userMessageContent: [] as Array<Record<string, unknown>>,
 			assistantMessageContent: [] as ToolUse[],
 			didCompleteReadingStream: false,
+			resetOperationCancellation: vi.fn(),
 		}
 		const apiConversationHistory = [
 			{ role: "user" as const, content: "task" },
@@ -320,6 +321,7 @@ describe("Task restored turn-end continuation", () => {
 			userMessageContent: [] as Array<Record<string, unknown>>,
 			assistantMessageContent: [] as ToolUse[],
 			didCompleteReadingStream: false,
+			resetOperationCancellation: vi.fn(),
 		}
 		let releaseHandler: (() => void) | undefined
 		let handlerStarted: (() => void) | undefined
@@ -455,8 +457,9 @@ describe("Task restored turn-end continuation", () => {
 				persistApiRequestUserMessage(
 					content: unknown[],
 					apiIndex: number,
+					requestScope: unknown,
 					beforeApiRequestStarted: () => Promise<void>,
-				): Promise<void>
+				): Promise<boolean>
 			}
 		).persistApiRequestUserMessage
 		const content = [{ type: "tool_result", function_id: "function-restored", dline_tid: "restored-interaction" }]
@@ -469,15 +472,18 @@ describe("Task restored turn-end continuation", () => {
 					sequence.push("user-message-flushed")
 				}),
 			},
-			admitApiRequest: vi.fn(async () => {
+			completeApiRequestGate: vi.fn(async (_requestScope, _apiIndex, beforeApiRequestStarted) => {
+				await beforeApiRequestStarted?.()
 				sequence.push("api-request-started")
+				return true
 			}),
 		} as unknown as Task
 
-		await persistApiRequestUserMessage.call(fakeTask, content, 6, async () => {
+		const approved = await persistApiRequestUserMessage.call(fakeTask, content, 6, {}, async () => {
 			sequence.push("previous-turn-completed")
 		})
 
+		expect(approved).toBe(true)
 		expect(sequence).toEqual([
 			"user-message-appended",
 			"user-message-flushed",

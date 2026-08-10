@@ -3,8 +3,8 @@ import type { WebSearchRoutingPlan } from "@core/api/server-tools"
 import type { IdentityFactory } from "@core/api/transform/block-identity"
 import type { FileContextTracker } from "@core/context/context-tracking/FileContextTracker"
 import type { ClineIgnoreController } from "@core/ignore/ClineIgnoreController"
-import type { ExplicitInstructionConsumePort } from "@core/task/explicit-instructions/types"
 import type { CommandPermissionController } from "@core/permissions"
+import type { ExplicitInstructionAuthorization, ExplicitInstructionConsumePort } from "@core/task/explicit-instructions/types"
 import type { TaskFileTracker } from "@integrations/checkpoints/TaskFileTracker"
 import type { DiffViewProvider } from "@integrations/editor/DiffViewProvider"
 import type { CommandCancellationResult, CommandExecutionOptions, CommandExecutionOutcome } from "@integrations/terminal"
@@ -75,6 +75,8 @@ export interface TaskConfig {
 	webSearchRoutingPlan?: WebSearchRoutingPlan
 	/** Request-scoped one-shot authority for explicit-only tools. */
 	explicitInstructions?: ExplicitInstructionConsumePort
+	/** Authorization consumed by the central gate for the current complete handler invocation. */
+	explicitInstructionAuthorization?: ExplicitInstructionAuthorization
 
 	// Multi-workspace support (optional for backward compatibility)
 	workspaceManager?: WorkspaceRootManager

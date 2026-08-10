@@ -10,11 +10,7 @@ import {
 	type E2EMockProviderTarget,
 } from "./api"
 import { ClineDataMock } from "./data"
-import {
-	type MockCacheDiagnostic,
-	type MockCacheWarning,
-	OpenAiCacheDiagnostics,
-} from "./openai-cache-diagnostics"
+import { type MockCacheDiagnostic, type MockCacheWarning, OpenAiCacheDiagnostics } from "./openai-cache-diagnostics"
 
 const E2E_API_SERVER_HOST = "127.0.0.1"
 
@@ -464,6 +460,19 @@ export class ClineApiServerMock {
 					message: contractError,
 				}
 			: scriptedResponse
+		const scriptedToolCall = scriptedResponse.type === "error" ? undefined : getResponseToolCalls(scriptedResponse)[0]
+		log(
+			"Mock provider consumption:",
+			JSON.stringify({
+				target,
+				scriptedResponseType: scriptedResponse.type,
+				scriptedToolName: scriptedToolCall?.name,
+				scriptedToolCallId: scriptedToolCall?.id,
+				contractError,
+				remainingResponses: this.mockResponses[target].length,
+				requestBytes: Buffer.byteLength(requestText, "utf8"),
+			}),
+		)
 		const response = contractedResponse
 		const usage =
 			response.type === "error"

@@ -1,4 +1,5 @@
 import type { ApiProviderInfo } from "@core/api"
+import type { ExplicitInstructionDeclaration } from "@core/task/explicit-instructions/types"
 import { ClineRulesToggles } from "@shared/cline-rules"
 import { McpPromptResponse } from "@shared/mcp"
 import type { GlobalInstructionsFile } from "@shared/remote-config/schema"
@@ -6,6 +7,7 @@ import { resolvePromptProfile } from "@shared/resolve-prompt-profile"
 import { pathToCommandName } from "@shared/slashCommands"
 import { SLASH_TYPE_DESC } from "@shared/slashContext"
 import type { TaskCapabilityToggles } from "@shared/TaskCapabilityToggles"
+import { ClineDefaultTool } from "@shared/tools"
 import fs from "fs/promises"
 import { telemetryService } from "@/services/telemetry"
 import { Logger } from "@/shared/services/Logger"
@@ -39,6 +41,68 @@ type RemoteWorkflow = {
 
 type Workflow = FileBasedWorkflow | RemoteWorkflow
 
+const USER_CONTENT_TAG_PATTERNS = [
+	/<task>([\s\S]*?)<\/task>/i,
+	/<feedback>([\s\S]*?)<\/feedback>/i,
+	/<answer>([\s\S]*?)<\/answer>/i,
+	/<user_message>([\s\S]*?)<\/user_message>/i,
+]
+const SLASH_COMMAND_IN_TEXT_REGEX = /(^|\s)\/([a-zA-Z0-9_.:@-]+)(?=\s|$)/
+
+function parsePrefixedCommand(commandName: string): { prefix: string | null; name: string } {
+	const colonIndex = commandName.indexOf(":")
+	if (colonIndex === -1) {
+		return { prefix: null, name: commandName }
+	}
+	return {
+		prefix: commandName.substring(0, colonIndex),
+		name: commandName.substring(colonIndex + 1),
+	}
+}
+
+/**
+ * Detect whether the first slash command in user-authored tagged content explicitly requests manual compaction.
+ *
+ * @param text Text block that may contain one user-content tag.
+ * @returns True for /compact, /smol, /cmd:compact, or /cmd:smol when it is the first command parsed.
+ */
+export function hasManualCompactionCommand(text: string): boolean {
+	for (const pattern of USER_CONTENT_TAG_PATTERNS) {
+		const tagMatch = new RegExp(pattern.source, pattern.flags).exec(text)
+		if (!tagMatch) continue
+
+		const slashMatch = SLASH_COMMAND_IN_TEXT_REGEX.exec(tagMatch[1])
+		if (!slashMatch) continue
+
+		const commandName = slashMatch[2]
+		const { prefix, name } = parsePrefixedCommand(commandName)
+		const builtInName = prefix === "cmd" ? name : prefix === null ? commandName : undefined
+		return builtInName === "compact" || builtInName === "smol"
+	}
+
+	return false
+}
+
+export interface SlashCommandParseResult {
+	processedText: string
+	needsClinerulesFileCheck: boolean
+	explicitInstructions: readonly ExplicitInstructionDeclaration[]
+}
+
+const BUILTIN_EXPLICIT_INSTRUCTIONS: Readonly<Record<string, ExplicitInstructionDeclaration | undefined>> = {
+	newtask: { type: "new_task", source: "slash_command", targetTool: ClineDefaultTool.NEW_TASK },
+	smol: { type: "summarize_task", source: "manual_compact_command", targetTool: ClineDefaultTool.SUMMARIZE_TASK },
+	compact: { type: "summarize_task", source: "manual_compact_command", targetTool: ClineDefaultTool.SUMMARIZE_TASK },
+	newrule: { type: "new_rule", source: "slash_command", targetTool: ClineDefaultTool.NEW_RULE },
+	reportbug: { type: "report_bug", source: "slash_command", targetTool: ClineDefaultTool.REPORT_BUG },
+	"deep-planning": { type: "deep-planning", source: "slash_command", targetTool: ClineDefaultTool.NEW_TASK },
+	"explain-changes": {
+		type: "explain_changes",
+		source: "slash_command",
+		targetTool: ClineDefaultTool.GENERATE_EXPLANATION,
+	},
+}
+
 export interface SlashCommandCapabilityContext {
 	cwd: string
 	capabilityToggles: TaskCapabilityToggles
@@ -60,7 +124,7 @@ export async function parseSlashCommands(
 	providerInfo?: Readonly<ApiProviderInfo>,
 	mcpPromptFetcher?: McpPromptFetcher,
 	capabilityContext?: SlashCommandCapabilityContext,
-): Promise<{ processedText: string; needsClinerulesFileCheck: boolean }> {
+): Promise<SlashCommandParseResult> {
 	const SUPPORTED_DEFAULT_COMMANDS = ["newtask", "smol", "compact", "newrule", "reportbug", "deep-planning", "explain-changes"]
 	const promptProfile = resolvePromptProfile({
 		modelId: providerInfo?.model.id,
@@ -78,13 +142,7 @@ export async function parseSlashCommands(
 		"explain-changes": explainChangesToolResponse(),
 	}
 
-	// Regex patterns to extract content from different XML tags
-	const tagPatterns = [
-		{ tag: "task", regex: /<task>([\s\S]*?)<\/task>/i },
-		{ tag: "feedback", regex: /<feedback>([\s\S]*?)<\/feedback>/i },
-		{ tag: "answer", regex: /<answer>([\s\S]*?)<\/answer>/i },
-		{ tag: "user_message", regex: /<user_message>([\s\S]*?)<\/user_message>/i },
-	]
+	const tagPatterns = USER_CONTENT_TAG_PATTERNS.map((regex) => ({ regex }))
 
 	// Regex to find slash commands anywhere in text (not just at the beginning).
 	// This mirrors how @ mentions work - they can appear anywhere in a message.
@@ -102,7 +160,7 @@ export async function parseSlashCommands(
 	//
 	// Only ONE slash command per message is processed (first match found).
 	// Note: Colons are allowed to support prefix namespacing (cmd:, skills:, workflow:, mcp:)
-	const slashCommandInTextRegex = /(^|\s)\/([a-zA-Z0-9_.:@-]+)(?=\s|$)/
+	const slashCommandInTextRegex = SLASH_COMMAND_IN_TEXT_REGEX
 
 	// Helper function to calculate positions and remove slash command from text
 	const removeSlashCommand = (
@@ -120,23 +178,6 @@ export async function parseSlashCommands(
 		const commandEndPosition = slashPositionInFullText + commandText.length
 
 		return fullText.substring(0, slashPositionInFullText) + fullText.substring(commandEndPosition)
-	}
-
-	/**
-	 * Parse the command name to extract prefix and unprefixed name.
-	 * Supports namespaced formats: cmd:xxx, skills:xxx, workflow:xxx, mcp:xxx:xxx
-	 * Returns { prefix, name } where prefix is the namespace and name is the rest.
-	 * If no colon found, returns { prefix: null, name: commandName } for legacy matching.
-	 */
-	const parsePrefixedCommand = (commandName: string): { prefix: string | null; name: string } => {
-		const colonIndex = commandName.indexOf(":")
-		if (colonIndex === -1) {
-			return { prefix: null, name: commandName }
-		}
-		return {
-			prefix: commandName.substring(0, colonIndex),
-			name: commandName.substring(colonIndex + 1),
-		}
 	}
 
 	// if we find a valid match, we will return inside that block
@@ -175,6 +216,9 @@ export async function parseSlashCommands(
 					return {
 						processedText,
 						needsClinerulesFileCheck: cmdName === "newrule",
+						explicitInstructions: BUILTIN_EXPLICIT_INSTRUCTIONS[cmdName]
+							? [BUILTIN_EXPLICIT_INSTRUCTIONS[cmdName]]
+							: [],
 					}
 				}
 			}
@@ -187,7 +231,7 @@ export async function parseSlashCommands(
 					const serverName = mcpParts[0]
 					const promptName = mcpParts.slice(1).join(":")
 					if (capabilityContext?.capabilityToggles.mcpServers[serverName] !== true) {
-						return { processedText: text, needsClinerulesFileCheck: false }
+						return { processedText: text, needsClinerulesFileCheck: false, explicitInstructions: [] }
 					}
 
 					try {
@@ -202,7 +246,7 @@ export async function parseSlashCommands(
 
 							telemetryService.captureSlashCommandUsed(ulid, commandName, "mcp_prompt")
 
-							return { processedText, needsClinerulesFileCheck: false }
+							return { processedText, needsClinerulesFileCheck: false, explicitInstructions: [] }
 						}
 						Logger.debug(`MCP prompt not found: ${commandName} (server: ${serverName}, prompt: ${promptName})`)
 					} catch (error) {
@@ -247,7 +291,11 @@ export async function parseSlashCommands(
 
 						telemetryService.captureSlashCommandUsed(ulid, commandName, "skill")
 
-						return { processedText, needsClinerulesFileCheck: false }
+						return {
+							processedText,
+							needsClinerulesFileCheck: false,
+							explicitInstructions: [{ type: "skill", source: "skill_injection", metadata: { name: skillName } }],
+						}
 					}
 				}
 			}
@@ -311,7 +359,13 @@ export async function parseSlashCommands(
 
 					telemetryService.captureSlashCommandUsed(ulid, commandName, "workflow")
 
-					return { processedText, needsClinerulesFileCheck: false }
+					return {
+						processedText,
+						needsClinerulesFileCheck: false,
+						explicitInstructions: [
+							{ type: "workflow", source: "workflow_injection", metadata: { name: matchingWorkflow.fileName } },
+						],
+					}
 				} catch (error) {
 					Logger.error(`Error reading workflow file ${matchingWorkflow.fullPath}: ${error}`)
 				}
@@ -351,7 +405,17 @@ export async function parseSlashCommands(
 
 						telemetryService.captureSlashCommandUsed(ulid, commandName, "workflow")
 
-						return { processedText, needsClinerulesFileCheck: false }
+						return {
+							processedText,
+							needsClinerulesFileCheck: false,
+							explicitInstructions: [
+								{
+									type: "workflow",
+									source: "workflow_injection",
+									metadata: { name: pathToCommandName(legacyMatch.fileName) },
+								},
+							],
+						}
 					} catch (error) {
 						Logger.error(`Error reading workflow file ${legacyMatch.fullPath}: ${error}`)
 					}
@@ -361,7 +425,7 @@ export async function parseSlashCommands(
 	}
 
 	// if no supported commands are found, return the original text
-	return { processedText: text, needsClinerulesFileCheck: false }
+	return { processedText: text, needsClinerulesFileCheck: false, explicitInstructions: [] }
 }
 
 /**

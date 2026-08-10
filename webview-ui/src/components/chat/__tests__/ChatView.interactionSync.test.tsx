@@ -115,16 +115,17 @@ vi.mock("../chat-view", () => {
 		}: {
 			compactTaskDisabled?: boolean
 			onCompactTask?: () => Promise<boolean>
-		}) => (
-			<button
-				aria-disabled={compactTaskDisabled ? "true" : "false"}
-				aria-label="Compact task"
-				disabled={compactTaskDisabled}
-				onClick={() => void onCompactTask?.()}
-				type="button">
-				Compact
-			</button>
-		),
+		}) =>
+			onCompactTask ? (
+				<button
+					aria-disabled={compactTaskDisabled ? "true" : "false"}
+					aria-label="Compact task"
+					disabled={compactTaskDisabled}
+					onClick={() => void onCompactTask()}
+					type="button">
+					Compact
+				</button>
+			) : null,
 		TaskActivityPanel: () => null,
 		TaskActivityTabs: () => null,
 		WelcomeSection: () => null,
@@ -271,13 +272,16 @@ describe("ChatView interaction anchor synchronization", () => {
 		expect(screen.getByRole("button", { name: "Compact task" })).toBeEnabled()
 	})
 
-	it("disables Compact when the footer input is unavailable", () => {
+	it("keeps Compact visible but disabled when the footer input is unavailable", () => {
 		const view = taskView()
 		view.input.enabled = false
 		renderChat([ASK], view)
 
 		expect(screen.getByRole("textbox", { name: "Task input" })).toBeDisabled()
-		expect(screen.getByRole("button", { name: "Compact task" })).toBeDisabled()
+		const compactButton = screen.getByRole("button", { name: "Compact task" })
+		expect(compactButton).toBeDisabled()
+		fireEvent.click(compactButton)
+		expect(mocks.compactTask).not.toHaveBeenCalled()
 	})
 
 	it("routes Compact through the dedicated task RPC instead of the active interaction", async () => {

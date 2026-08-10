@@ -167,10 +167,7 @@ export class OpenAiCacheDiagnostics {
 		const previous = state.observations.at(-1)
 		const sameIdentityHistory = state.observations.filter(({ identity }) => identity === projection.identity)
 		const reusablePrefixTokens = sameIdentityHistory.reduce((highest, observation) => {
-			const sharedText = projection.promptText.slice(
-				0,
-				commonPrefixLength(observation.promptText, projection.promptText),
-			)
+			const sharedText = projection.promptText.slice(0, commonPrefixLength(observation.promptText, projection.promptText))
 			return Math.max(highest, estimateTokens(sharedText))
 		}, 0)
 		const totalInputTokens = usage.inputTokens + (usage.cacheReadTokens ?? 0) + (usage.cacheWriteTokens ?? 0)

@@ -66,7 +66,6 @@ import { TaskActivityStore } from "@core/task/activity/TaskActivityStore"
 import { ensureApiMessages, ensureUserContent } from "@core/task/api-context"
 import { showContextUsage } from "@core/task/environment-context"
 import { ExplicitInstructionRegistry } from "@core/task/explicit-instructions/ExplicitInstructionRegistry"
-import { rewriteProviderInstructionIds } from "@core/task/explicit-instructions/explicit-instruction-projection"
 import { type ModeCompactResult, ModeSwitchCompaction } from "@core/task/ModeSwitchCompaction"
 import { MODE_SWITCH_COMPACT_SIGNAL } from "@core/task/mode-switch-signal"
 import { createRequestApiScope, type RequestApiScope, resolveRequestWebSearchRoutingPlan } from "@core/task/RequestApiScope"
@@ -3663,12 +3662,6 @@ export class Task {
 			contextManagementMetadata.truncatedConversationHistory,
 			this.messageStateHandler.apiConversationHistory,
 		)
-		if (providerAttempt > 0) {
-			apiConversationMessages = rewriteProviderInstructionIds(
-				apiConversationMessages,
-				requestScope.explicitInstructions.rewriteInstructionIds.bind(requestScope.explicitInstructions),
-			)
-		}
 		const serverTools = requestScope.webSearchRoutingPlan.serverTools
 
 		if (hasCompactionWindowBudgetMarker(apiConversationMessages)) {
@@ -4309,6 +4302,16 @@ export class Task {
 	}
 
 	/** Persist the request user message and finish any write-ahead transaction before API admission. */
+	private isTrustedUserFeedbackResult(block: ClineUserToolResultContentBlock): boolean {
+		return this.taskState.assistantMessageContent.some(
+			(candidate): candidate is ToolUse =>
+				candidate.type === "tool_use" &&
+				candidate.function_id === block.function_id &&
+				candidate.dline_tid === block.dline_tid &&
+				CONVERSATIONAL_TOOL_NAMES.has(candidate.name as ClineDefaultTool),
+		)
+	}
+
 	private async persistApiRequestUserMessage(
 		userContent: ClineContent[],
 		apiIndex: number,
@@ -4485,7 +4488,8 @@ export class Task {
 		}
 		const forceModeCompact = this.modeSwitchCompaction.shouldForce()
 		const canCompactBeforeAdmission = !persistedRequest && transaction.beforeApiRequestStarted === undefined
-		const manualCompactionRequested = !persistedRequest && hasManualCompactionIntent(userContent)
+		const manualCompactionRequested =
+			!persistedRequest && hasManualCompactionIntent(userContent, (block) => this.isTrustedUserFeedbackResult(block))
 		const manualCompactionCommitted = !persistedRequest && this.taskState.manualCompactionCommitted
 		if (!persistedRequest) {
 			this.taskState.manualCompactionCommitted = false
@@ -4497,7 +4501,8 @@ export class Task {
 		}
 		if (
 			canCompactBeforeAdmission &&
-			(forceModeCompact ||
+			(didCompleteSummarization ||
+				forceModeCompact ||
 				(useAutoCondense && !manualCompactionRequested && !manualCompactionCommitted && isNextGenModelFamily(model.id)))
 		) {
 			// When we initially trigger context cleanup, we increase the context window size, so we need state `currentlySummarizing`
@@ -4673,22 +4678,20 @@ export class Task {
 				: operationId
 					? "mode_switch"
 					: "auto_compaction"
-			const registered = requestScope.explicitInstructions.registerAndRender(
-				summarizeTask(
-					promptProfile === PromptProfile.Standard
-						? this.stateManager.getGlobalSettingsKey("focusChainSettings")
-						: undefined,
-					this.cwd,
-					isMultiRootEnabled(this.stateManager),
-				),
-				{
-					type: "summarize_task",
-					source,
-					targetTool: ClineDefaultTool.SUMMARIZE_TASK,
-					...(operationId === undefined ? {} : { operationId }),
-				},
+			requestScope.explicitInstructions.register({
+				type: "summarize_task",
+				source,
+				targetTool: ClineDefaultTool.SUMMARIZE_TASK,
+				...(operationId === undefined ? {} : { operationId }),
+			})
+			const summaryPrompt = summarizeTask(
+				promptProfile === PromptProfile.Standard
+					? this.stateManager.getGlobalSettingsKey("focusChainSettings")
+					: undefined,
+				this.cwd,
+				isMultiRootEnabled(this.stateManager),
 			)
-			userContent.push({ type: "text", text: registered.text })
+			userContent.push({ type: "text", text: summaryPrompt })
 			await this.ensureContextCompactionStatusRow()
 		}
 
@@ -5617,7 +5620,7 @@ export class Task {
 			return USER_CONTENT_TAGS.some((tag) => text.includes(tag))
 		}
 
-		const parseTextBlock = async (text: string): Promise<string> => {
+		const parseTextBlock = async (text: string, parseCommands = true): Promise<string> => {
 			const parsedText = await parseMentions(
 				text,
 				cwd,
@@ -5625,6 +5628,7 @@ export class Task {
 				this.fileContextTracker,
 				this.workspaceManager,
 			)
+			if (!parseCommands) return parsedText
 
 			// Create MCP prompt fetcher callback that wraps mcpHub.getPrompt
 			const mcpPromptFetcher = async (serverName: string, promptName: string) => {
@@ -5662,14 +5666,13 @@ export class Task {
 			if (needsCheck) {
 				needsClinerulesFileCheck = true
 			}
-			let registeredText = processedText
 			for (const declaration of explicitInstructions) {
-				registeredText = requestScope.explicitInstructions.registerAndRender(registeredText, declaration).text
+				requestScope.explicitInstructions.register(declaration)
 				if (declaration.source === "manual_compact_command") {
 					this.taskState.isManualContextCompactionRequest = true
 				}
 			}
-			return registeredText
+			return processedText
 		}
 
 		const processTextContent = async (block: ClineTextContentBlock): Promise<ClineTextContentBlock> => {
@@ -5687,22 +5690,53 @@ export class Task {
 			}
 
 			if (block.type === "tool_result") {
+				const parseTrustedManualCompaction =
+					this.isTrustedUserFeedbackResult(block) && hasManualCompactionIntent([block], () => true)
+				if (parseTrustedManualCompaction) {
+					if (typeof block.content === "string") {
+						return { ...block, content: [{ type: "text", text: await parseTextBlock(block.content) }] }
+					}
+					if (Array.isArray(block.content)) {
+						const processedContent = await Promise.all(
+							block.content.map(async (contentBlock) =>
+								contentBlock.type === "text"
+									? { ...contentBlock, text: await parseTextBlock(contentBlock.text) }
+									: contentBlock,
+							),
+						)
+						return { ...block, content: processedContent }
+					}
+				}
 				if (!block.content) {
 					return block
 				}
 
 				// Handle string content
 				if (typeof block.content === "string") {
-					const processed = await processTextContent({ type: "text", text: block.content })
-					// Creates NEW object and turns the string content as array
-					return { ...block, content: [processed] }
+					const processed = await parseMentions(
+						block.content,
+						cwd,
+						this.urlContentFetcher,
+						this.fileContextTracker,
+						this.workspaceManager,
+					)
+					// Untrusted tool results remain data and must not run slash-command parsing.
+					return { ...block, content: [{ type: "text", text: processed }] }
 				}
 
 				// Handle array content
 				if (Array.isArray(block.content)) {
 					const processedContent = await Promise.all(
 						block.content.map(async (contentBlock) => {
-							return contentBlock.type === "text" ? processTextContent(contentBlock) : contentBlock
+							return contentBlock.type === "text"
+								? parseMentions(
+										contentBlock.text,
+										cwd,
+										this.urlContentFetcher,
+										this.fileContextTracker,
+										this.workspaceManager,
+									).then((text) => ({ ...contentBlock, text }))
+								: contentBlock
 						}),
 					)
 

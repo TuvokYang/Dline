@@ -64,8 +64,7 @@ export class ExplicitInstructionRegistry {
 				: { ok: false, code: "explicit_instruction_missing" }
 		}
 		const attemptCandidate = candidates.find(
-			(authorization) =>
-				authorization.requestId === input.requestId && authorization.attemptId === input.attemptId,
+			(authorization) => authorization.requestId === input.requestId && authorization.attemptId === input.attemptId,
 		)
 		if (!attemptCandidate) {
 			return { ok: false, code: "explicit_instruction_attempt_mismatch" }
@@ -158,6 +157,20 @@ export class ExplicitInstructionRegistry {
 
 	get(instructionId: string): ExplicitInstructionAuthorization | undefined {
 		const authorization = this.authorizations.get(instructionId)
+		return authorization ? this.snapshot(authorization) : undefined
+	}
+
+	findPendingTool(
+		identity: ExplicitInstructionRequestIdentity,
+		targetTool: ExplicitInstructionAuthorization["targetTool"],
+	): ExplicitInstructionAuthorization | undefined {
+		const authorization = Array.from(this.authorizations.values()).find(
+			(candidate) =>
+				candidate.requestId === identity.requestId &&
+				candidate.attemptId === identity.attemptId &&
+				candidate.targetTool === targetTool &&
+				candidate.state === "pending",
+		)
 		return authorization ? this.snapshot(authorization) : undefined
 	}
 

@@ -24,6 +24,7 @@ import {
 	computeCompactTrigger,
 	computeSummarizeBudget,
 	getContextWindowInfo,
+	shouldCompactProjectedUsage,
 } from "./context-window-utils"
 
 enum EditType {
@@ -202,7 +203,7 @@ export class ContextManager {
 
 					const { contextWindow } = getContextWindowInfo(api)
 					const thresholdTokens = computeCompactTrigger(contextWindow, computeSummarizeBudget(), triggerOptions)
-					return totalTokens >= thresholdTokens
+					return shouldCompactProjectedUsage(totalTokens, thresholdTokens)
 				} catch {
 					return false
 				}

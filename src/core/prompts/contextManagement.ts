@@ -1,3 +1,4 @@
+import { COMPACTION_WINDOW_BUDGET_MARKER } from "@core/context/context-management/compaction-window-budget"
 import { RuntimePromptGenerator } from "./generators/RuntimePromptGenerator"
 import { englishTemplateStore } from "./i18n/en"
 
@@ -25,7 +26,7 @@ export const summarizeTask = (focusChainSettings?: { enabled: boolean }, cwd?: s
 		{},
 	).text
 
-	return `${
+	return `${COMPACTION_WINDOW_BUDGET_MARKER}\n\n${
 		runtimeGenerator.generate("contextManagement.summarizeMain", {
 			CWD,
 			MULTI_ROOT_HINT,

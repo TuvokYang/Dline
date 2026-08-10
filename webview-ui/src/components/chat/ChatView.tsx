@@ -423,7 +423,7 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 		[clearOwnedDraft, interactionSynchronized, taskViewState],
 	)
 	const taskInputEnabled = Boolean(taskViewState?.input.enabled && taskViewState.input.enterAction && interactionSynchronized)
-	const canSubmitCompactTask = Boolean(taskViewState?.taskId && taskInputEnabled)
+	const canRenderCompactTask = Boolean(taskViewState?.taskId)
 	const compactTaskDisabled = !taskInputEnabled
 	const submitCompactTask = useCallback(async (): Promise<boolean> => {
 		if (!taskViewState?.taskId || !taskInputEnabled) {
@@ -483,7 +483,7 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 						lastApiReqTotalTokens={lastApiReqTotalTokens}
 						lastProgressMessageText={lastProgressMessageText}
 						messageHandlers={messageHandlers}
-						onCompactTask={canSubmitCompactTask ? submitCompactTask : undefined}
+						onCompactTask={canRenderCompactTask ? submitCompactTask : undefined}
 						selectedModelInfo={{
 							contextWindow: selectedModelInfo.capabilities?.contextWindow,
 							pricing: selectedModelInfo.pricing,

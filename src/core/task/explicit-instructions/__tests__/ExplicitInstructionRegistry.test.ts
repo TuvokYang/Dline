@@ -1,7 +1,6 @@
 import { ClineDefaultTool } from "@shared/tools"
 import { describe, expect, it } from "vitest"
 import { ExplicitInstructionRegistry } from "../ExplicitInstructionRegistry"
-import { renderRegisteredExplicitInstruction } from "../explicit-instruction-renderer"
 import { getExplicitInstructionPolicy } from "../policy"
 
 const REQUEST_ONE = { requestId: "request-1", attemptId: "attempt-1" } as const
@@ -172,38 +171,6 @@ describe("ExplicitInstructionRegistry", () => {
 				targetTool: ClineDefaultTool.SUMMARIZE_TASK,
 			}),
 		).toThrow("cannot authorize a tool")
-	})
-})
-
- describe("registered explicit instruction rendering", () => {
-	it("injects the opaque authorization ID into the matching instruction tag", () => {
-		const registry = new ExplicitInstructionRegistry()
-		const authorization = registerSummarize(registry)
-
-		expect(
-			renderRegisteredExplicitInstruction(
-				'<explicit_instructions type="summarize_task">\nCall summarize_task.\n</explicit_instructions>',
-				authorization,
-			),
-		).toContain(`type="summarize_task" instruction_id="${authorization.instructionId}"`)
-	})
-
-	it("rejects missing, mismatched, or pre-tagged templates", () => {
-		const registry = new ExplicitInstructionRegistry()
-		const authorization = registerSummarize(registry)
-		expect(() => renderRegisteredExplicitInstruction("plain text", authorization)).toThrow("missing an opening tag")
-		expect(() =>
-			renderRegisteredExplicitInstruction(
-				'<explicit_instructions type="new_task"></explicit_instructions>',
-				authorization,
-			),
-		).toThrow("does not match")
-		expect(() =>
-			renderRegisteredExplicitInstruction(
-				'<explicit_instructions type="summarize_task" instruction_id="forged"></explicit_instructions>',
-				authorization,
-			),
-		).toThrow("already contains an instruction ID")
 	})
 })
 

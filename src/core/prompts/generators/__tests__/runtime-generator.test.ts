@@ -1,6 +1,7 @@
 import { ClineDefaultTool } from "@shared/tools"
 import { describe, expect, it, vi } from "vitest"
 
+import { COMPACTION_WINDOW_BUDGET_MARKER } from "../../../context/context-management/compaction-window-budget"
 import { summarizeTask } from "../../contextManagement"
 import { englishTemplateStore } from "../../i18n/en"
 import { createPromptGroup } from "../../i18n/helpers/create-pack"
@@ -190,7 +191,17 @@ describe("RuntimePromptGenerator", () => {
 
 		expect(enabled).toContain("task_progress")
 		expect(disabled).not.toContain("task_progress")
-		expect(disabled).toContain("you must call the summarize_task tool")
+		expect(disabled).toContain("You must call the summarize_task tool")
+		expect(disabled).toContain("Do not call attempt_completion")
+		expect(disabled).not.toContain("you may call attempt_completion")
+		expect(disabled).not.toContain("either the attempt_completion tool or the summarize_task tool call")
+	})
+
+	it("marks auto-condense prompts for request-scoped output-budget resolution", () => {
+		const prompt = summarizeTask({ enabled: false })
+
+		expect(prompt).toContain(COMPACTION_WINDOW_BUDGET_MARKER)
+		expect(prompt).not.toContain("projected input")
 	})
 
 	it("preserves literal dollar text and does not rescan inserted values", () => {

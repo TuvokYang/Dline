@@ -744,51 +744,79 @@ export const ChatRowContent = memo(
 							/>
 						</div>
 					)
-				case "summarizeTask":
+				case "summarizeTask": {
+					const status = tool.compactionStatus ?? (message.partial ? "running" : "completed")
+					const content = typeof tool.content === "string" ? tool.content : ""
+					const title =
+						status === "retrying"
+							? "Compaction was interrupted; retrying:"
+							: status === "failed"
+								? "Conversation compaction failed:"
+								: "Dline is condensing the conversation:"
+					const contentLabel =
+						status === "completed"
+							? "Summary:"
+							: status === "retrying"
+								? "Partial summary (not applied):"
+								: "Partial summary:"
 					return (
 						<div>
 							<div className={HEADER_CLASSNAMES}>
 								<FoldVerticalIcon className="size-2" />
-								<span className="font-bold">Dline is condensing the conversation:</span>
+								<span className="font-bold">{title}</span>
 							</div>
-							<div className="bg-code overflow-hidden border border-editor-group-border rounded-[3px]">
-								<div
-									aria-label={isExpanded ? "Collapse summary" : "Expand summary"}
-									className="text-description py-2 px-2.5 cursor-pointer select-none"
-									onClick={handleToggle}
-									onKeyDown={(e) => {
-										if (e.key === "Enter" || e.key === " ") {
-											e.preventDefault()
-											e.stopPropagation()
-											handleToggle()
-										}
-									}}>
-									{isExpanded ? (
-										<div>
-											<div className="flex items-center mb-2">
-												<span className="font-bold mr-1">Summary:</span>
-												<div className="grow" />
-												<ChevronDownIcon className="my-0.5 shrink-0 size-4" />
-											</div>
-											{/* Cap the expanded summary at 80% of the viewport with internal scrolling. */}
-											<div className="max-h-[80vh] overflow-y-auto pr-1">
-												<span className="ph-no-capture break-words whitespace-pre-wrap">
-													{tool.content}
-												</span>
-											</div>
-										</div>
-									) : (
-										<div className="flex items-center">
-											<span className="ph-no-capture whitespace-nowrap overflow-hidden text-ellipsis text-left flex-1 mr-2 [direction:rtl]">
-												{`${tool.content}\u200E`}
-											</span>
-											<ChevronRightIcon className="my-0.5 shrink-0 size-4" />
-										</div>
-									)}
+							{status === "retrying" && tool.retryAttempt !== undefined && tool.maxRetryAttempts !== undefined && (
+								<div className="text-description mb-2">
+									Attempt {tool.retryAttempt} of {tool.maxRetryAttempts}
 								</div>
-							</div>
+							)}
+							{status === "failed" && tool.error && (
+								<div className="text-error mb-2 whitespace-pre-wrap">{tool.error}</div>
+							)}
+							{content ? (
+								<div className="bg-code overflow-hidden border border-editor-group-border rounded-[3px]">
+									<div
+										aria-label={isExpanded ? "Collapse summary" : "Expand summary"}
+										className="text-description py-2 px-2.5 cursor-pointer select-none"
+										onClick={handleToggle}
+										onKeyDown={(e) => {
+											if (e.key === "Enter" || e.key === " ") {
+												e.preventDefault()
+												e.stopPropagation()
+												handleToggle()
+											}
+										}}
+										role="button"
+										tabIndex={0}>
+										{isExpanded ? (
+											<div>
+												<div className="flex items-center mb-2">
+													<span className="font-bold mr-1">{contentLabel}</span>
+													<div className="grow" />
+													<ChevronDownIcon className="my-0.5 shrink-0 size-4" />
+												</div>
+												<div className="max-h-[80vh] overflow-y-auto pr-1">
+													<span className="ph-no-capture break-words whitespace-pre-wrap">
+														{content}
+													</span>
+												</div>
+											</div>
+										) : (
+											<div className="flex items-center">
+												<span className="ph-no-capture whitespace-nowrap overflow-hidden text-ellipsis text-left flex-1 mr-2 [direction:rtl]">
+													{`${content}\u200E`}
+												</span>
+												<ChevronRightIcon className="my-0.5 shrink-0 size-4" />
+											</div>
+										)}
+									</div>
+								</div>
+							) : status === "running" ? (
+								<div className="text-description">Preparing a context-safe summary…</div>
+							) : null}
 						</div>
 					)
+				}
 				case "webFetch":
 					return <WebFetchRow messageType={message.type} url={tool.path} webFetch={tool.webFetch} />
 				case "webSearch":

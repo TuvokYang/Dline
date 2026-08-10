@@ -1,7 +1,6 @@
 import type { ClineDefaultTool } from "@shared/tools"
-import { renderRegisteredExplicitInstruction } from "./explicit-instruction-renderer"
-import { getExplicitInstructionPolicy } from "./policy"
 import type { ExplicitInstructionRegistry } from "./ExplicitInstructionRegistry"
+import { getExplicitInstructionPolicy } from "./policy"
 import type {
 	ConsumeExplicitInstructionResult,
 	ExplicitInstructionAuthorization,
@@ -10,8 +9,6 @@ import type {
 	ExplicitInstructionRequestIdentity,
 } from "./types"
 
-const INSTRUCTION_ID_ATTRIBUTE = /\binstruction_id=["']([^"']+)["']/g
-
 /**
  * Owns all explicit instruction authority for one logical API request.
  * Provider retries advance the attempt identity without transferring old authority.
@@ -19,7 +16,7 @@ const INSTRUCTION_ID_ATTRIBUTE = /\binstruction_id=["']([^"']+)["']/g
 export class ExplicitInstructionRequestScope {
 	private identity: ExplicitInstructionRequestIdentity
 	private readonly currentInstructionIds = new Set<string>()
-	private readonly replacements = new Map<string, string>()
+	private providerAttemptStarted = false
 	private closed = false
 
 	constructor(
@@ -39,14 +36,13 @@ export class ExplicitInstructionRequestScope {
 		return authorization
 	}
 
-	registerAndRender(
+	registerInstruction(
 		template: string,
 		declaration: ExplicitInstructionDeclaration,
 	): { readonly text: string; readonly authorization: ExplicitInstructionAuthorization } {
-		const authorization = this.register(declaration)
 		return Object.freeze({
-			text: renderRegisteredExplicitInstruction(template, authorization),
-			authorization,
+			text: template,
+			authorization: this.register(declaration),
 		})
 	}
 
@@ -65,10 +61,28 @@ export class ExplicitInstructionRequestScope {
 	}
 
 	/**
-	 * Advance to a fresh provider attempt and re-register only retryable pending authority.
-	 * The returned map allows request text to replace stale opaque instruction IDs.
+	 * Start one provider attempt for this logical request.
+	 *
+	 * The first attempt consumes request-bound behavior instructions. A retry must
+	 * supply a fresh attempt identity, expires the old attempt, and re-registers
+	 * only policy-approved pending tool authority.
 	 */
-	beginRetryAttempt(attemptId: string): ReadonlyMap<string, string> {
+	beginProviderAttempt(attemptId?: string): void {
+		this.assertOpen()
+		if (!this.providerAttemptStarted) {
+			if (attemptId !== undefined && attemptId !== this.identity.attemptId) {
+				throw new Error("The first provider attempt must use the request scope identity.")
+			}
+			this.providerAttemptStarted = true
+			this.consumeBehaviorInstructions()
+			return
+		}
+		if (!attemptId) throw new Error("A provider retry must use a fresh attempt identity.")
+		this.beginRetryAttempt(attemptId)
+	}
+
+	/** Advance to a fresh provider attempt and re-register only retryable pending authority. */
+	beginRetryAttempt(attemptId: string): void {
 		this.assertOpen()
 		if (!attemptId || attemptId === this.identity.attemptId) {
 			throw new Error("Explicit instruction retry attempt must use a fresh identity.")
@@ -76,7 +90,6 @@ export class ExplicitInstructionRequestScope {
 
 		const previousIdentity = this.identity
 		const nextInstructionIds = new Set<string>()
-		const attemptReplacements = new Map<string, string>()
 
 		for (const instructionId of this.currentInstructionIds) {
 			const authorization = this.registry.get(instructionId)
@@ -84,8 +97,6 @@ export class ExplicitInstructionRequestScope {
 			if (!getExplicitInstructionPolicy(authorization.type).allowRetry) continue
 
 			const retry = this.registry.registerRetry(instructionId, attemptId)
-			this.replacements.set(instructionId, retry.instructionId)
-			attemptReplacements.set(instructionId, retry.instructionId)
 			nextInstructionIds.add(retry.instructionId)
 		}
 
@@ -93,28 +104,10 @@ export class ExplicitInstructionRequestScope {
 		this.currentInstructionIds.clear()
 		for (const instructionId of nextInstructionIds) this.currentInstructionIds.add(instructionId)
 		this.identity = Object.freeze({ requestId: previousIdentity.requestId, attemptId })
-		return attemptReplacements
 	}
 
-	getCurrentAuthorization(instructionId: string): ExplicitInstructionAuthorization | undefined {
-		let currentId = instructionId
-		const visited = new Set<string>()
-		while (!visited.has(currentId)) {
-			visited.add(currentId)
-			const replacement = this.replacements.get(currentId)
-			if (!replacement) break
-			currentId = replacement
-		}
-		return this.registry.get(currentId)
-	}
-
-	rewriteInstructionIds(text: string): string {
-		return text.replace(INSTRUCTION_ID_ATTRIBUTE, (attribute, instructionId: string) => {
-			const current = this.getCurrentAuthorization(instructionId)
-			return current && current.instructionId !== instructionId
-				? attribute.replace(instructionId, current.instructionId)
-				: attribute
-		})
+	getPendingToolAuthorization(targetTool: ClineDefaultTool): ExplicitInstructionAuthorization | undefined {
+		return this.registry.findPendingTool(this.identity, targetTool)
 	}
 
 	close(): void {

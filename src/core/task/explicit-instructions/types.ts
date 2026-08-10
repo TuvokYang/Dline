@@ -77,6 +77,7 @@ export interface ConsumeExplicitInstructionInput {
 }
 
 export type ExplicitInstructionFailureCode =
+	| "explicit_instruction_retired"
 	| "explicit_instruction_missing"
 	| "explicit_instruction_type_mismatch"
 	| "explicit_instruction_source_mismatch"

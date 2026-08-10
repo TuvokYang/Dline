@@ -56,17 +56,6 @@ Always adhere to this format for all tool uses to ensure proper parsing and exec
 		'[YOLO MODE: User input is not available in non-interactive mode. You must use available tools (read_file, list_files, search_files, etc.) to gather the information you need instead of asking the user. Proceed with using tools to find the answer to your question: "@QUESTION@"]',
 	askFollowupNotificationSubtitle: "Dline has a question...",
 
-	// CondenseHandler
-	condenseMissingContext: "Missing required parameter: context",
-	condenseNotificationSubtitle: "Dline wants to condense the conversation...",
-	condenseNotificationMessage: "Dline is suggesting to condense your conversation with: @CONTEXT@",
-	condenseFeedbackResult: `<explicit_instructions type="condense">
-The user rejected the previous condensed conversation summary. Regenerate the summary now, incorporating the user's feedback below. You are only allowed to respond by calling the condense tool with the complete replacement summary.
-</explicit_instructions>
-<feedback>
-@TEXT@
-</feedback>`,
-
 	// MakePlanHandler
 	planNeedsMoreExploration:
 		"[You have indicated that you need more exploration. Proceed with calling tools to continue the planning process.]",

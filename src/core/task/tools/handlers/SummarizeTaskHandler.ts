@@ -31,6 +31,19 @@ export class SummarizeTaskHandler implements IToolHandler, IPartialBlockHandler 
 
 	async execute(config: TaskConfig, block: ToolUse): Promise<ToolResponse> {
 		try {
+			const authorization = config.explicitInstructionAuthorization
+			if (
+				!authorization ||
+				authorization.type !== "summarize_task" ||
+				authorization.targetTool !== ClineDefaultTool.SUMMARIZE_TASK ||
+				authorization.state !== "consumed"
+			) {
+				return formatResponse.toolError("summarize_task requires a consumed explicit instruction authorization.")
+			}
+			const isManualCompaction = authorization.source === "manual_compact_command" || authorization.source === "task_header"
+			config.taskState.isManualContextCompactionRequest = isManualCompaction
+			config.taskState.isInternalContextCompactionRequest = !isManualCompaction
+
 			const context: string | undefined = block.params.context
 
 			// Validate required parameters
@@ -106,9 +119,16 @@ export class SummarizeTaskHandler implements IToolHandler, IPartialBlockHandler 
 			const completeMessage = JSON.stringify({
 				tool: "summarizeTask",
 				content: context,
+				compactionStatus: "completed",
 			} satisfies ClineSayTool)
+			const compactionMessageTs = config.taskState.isInternalContextCompactionRequest
+				? config.taskState.contextCompactionMessageTs
+				: undefined
 
-			await config.callbacks.say("tool", completeMessage, undefined, undefined, false, block.ts)
+			await config.callbacks.say("tool", completeMessage, undefined, undefined, false, compactionMessageTs ?? block.ts)
+			if (compactionMessageTs !== undefined) {
+				config.taskState.contextCompactionMessageTs = undefined
+			}
 
 			// Parse "Required Files" section from context and read files
 			// We impose a max number of files which are allowed to be read in as well as on
@@ -236,6 +256,10 @@ export class SummarizeTaskHandler implements IToolHandler, IPartialBlockHandler 
 				await ensureTaskDirectoryExists(config.taskId),
 				apiConversationHistory,
 			)
+			if (isManualCompaction) {
+				// Skip one stale-usage automatic compaction check after a user-owned summary is committed.
+				config.taskState.manualCompactionCommitted = true
+			}
 
 			// Set summarizing state
 			config.taskState.currentlySummarizing = true
@@ -271,13 +295,21 @@ export class SummarizeTaskHandler implements IToolHandler, IPartialBlockHandler 
 
 	async handlePartialBlock(block: ToolUse, uiHelpers: StronglyTypedUIHelpers): Promise<void> {
 		const context = block.params.context || ""
+		const config = uiHelpers.getConfig()
+		const existingTs = config.taskState.isInternalContextCompactionRequest
+			? config.taskState.contextCompactionMessageTs
+			: undefined
 
-		// Show streaming summary generation in tool UI
+		// Show streaming summary generation in the stable compaction row.
 		const partialMessage = JSON.stringify({
 			tool: "summarizeTask",
 			content: uiHelpers.removeClosingTag(block, "context", context),
+			compactionStatus: "running",
 		} satisfies ClineSayTool)
 
-		await uiHelpers.say("tool", partialMessage, undefined, undefined, true, block.ts)
+		const messageTs = await uiHelpers.say("tool", partialMessage, undefined, undefined, true, existingTs ?? block.ts)
+		if (config.taskState.isInternalContextCompactionRequest && messageTs !== undefined) {
+			config.taskState.contextCompactionMessageTs = messageTs
+		}
 	}
 }

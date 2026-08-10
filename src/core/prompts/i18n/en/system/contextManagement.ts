@@ -7,7 +7,7 @@ This summary should be thorough in capturing technical details, code patterns, a
 
 @SUMMARY_DECISION@
 
-You MUST ONLY respond to this message by using either the attempt_completion tool or the summarize_task tool call. When using the summarize_task tool call, you must include ALL information in the summary required for continuing with the task at hand. This is because you will lose access to all messages other than this summary.
+You must respond to this message by calling the summarize_task tool. Do not call attempt_completion or any other tool. Include ALL information in the summary required for continuing with the task at hand. This is because you will lose access to all messages other than this summary.
 
 When responding with the summarize_task tool call, follow these instructions:
 
@@ -111,10 +111,10 @@ There is an optional task_progress parameter. Only report COMPLETED items (\`- [
 </task_progress>`,
 
 	summarizeDecisionWithFocus:
-		"You have only two options: If you are immediately prepared to call the attempt_completion tool, and have completed all items in your task_progress list, you may call attempt_completion at this time. If you are not prepared to call the attempt_completion tool, and have not completed all items in your task_progress list, you must call the summarize_task tool - in this case you must call the summarize_task tool whether you are in PLAN or ACT mode.",
+		"You must call the summarize_task tool whether you are in PLAN or ACT mode, regardless of whether prior work or every task_progress item appears complete. Do not call attempt_completion. Treat the latest user-authored input as authoritative context that must be preserved in the summary and subsequent continuation.",
 
 	summarizeDecisionWithoutFocus:
-		"You have only two options: If you are immediately prepared to call the attempt_completion tool, you may call attempt_completion at this time. If you are not prepared to call the attempt_completion tool, you must call the summarize_task tool - in this case you must call the summarize_task tool whether you are in PLAN or ACT mode.",
+		"You must call the summarize_task tool whether you are in PLAN or ACT mode, even if prior work appears complete. Do not call attempt_completion. Treat the latest user-authored input as authoritative context that must be preserved in the summary and subsequent continuation.",
 
 	summarizeToolDescription:
 		"The current conversation is rapidly running out of context. Now, your urgent task is to create a comprehensive detailed summary of the conversation so far, paying close attention to the user's explicit requests and your previous actions.",

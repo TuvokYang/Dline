@@ -1,5 +1,6 @@
 import type { ApiProviderInfo } from "@/core/api"
 import { getDeepPlanningPrompt } from "./commands/deep-planning"
+import { summarizeTask } from "./contextManagement"
 import { CommandPromptGenerator } from "./generators/CommandPromptGenerator"
 import { englishTemplateStore } from "./i18n/en"
 import type { PromptProfile } from "./profiles/types"
@@ -24,21 +25,8 @@ export const newTaskToolResponse = () => {
 	})}\n`
 }
 
-export const condenseToolResponse = (focusChainSettings?: { enabled: boolean }) => {
-	const focusChainEnabled = focusChainSettings?.enabled
-	const focusChainParam = focusChainEnabled ? generateCommand("commands.condenseFocusChainParam") : ""
-	const focusChainUsage = focusChainEnabled ? generateCommand("toolUseTools.focusChainUsage") : ""
-	const focusChainExample = focusChainEnabled ? generateCommand("commands.condenseFocusChainExample") : ""
-	const toolCallFormat = generateCommand("commands.condenseXmlToolCallFormat", {
-		FOCUS_CHAIN_USAGE: focusChainUsage,
-		FOCUS_CHAIN_EXAMPLE: focusChainExample,
-	})
-
-	return `${generateCommand("commands.condenseMain", {
-		FOCUS_CHAIN_PARAM: focusChainParam,
-		TOOL_CALL_FORMAT: toolCallFormat,
-	})}\n`
-}
+/** Generate the shared summarize_task instruction for explicit manual compaction. */
+export const condenseToolResponse = (focusChainSettings?: { enabled: boolean }) => summarizeTask(focusChainSettings)
 
 export const newRuleToolResponse = () =>
 	`${generateCommand("commands.newRuleToolResponse", {

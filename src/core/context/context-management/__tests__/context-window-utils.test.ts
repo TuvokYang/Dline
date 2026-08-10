@@ -7,7 +7,14 @@ import {
 } from "@shared/auto-condense"
 import type { ModelInfo } from "@shared/proto/dline/models"
 import { describe, expect, it } from "vitest"
-import { computeCompactTrigger, computeSafetyBuffer, computeSummarizeBudget, getContextWindowInfo } from "../context-window-utils"
+import {
+	computeCompactTrigger,
+	computeSafetyBuffer,
+	computeSummarizeBudget,
+	getContextWindowInfo,
+	getEstimationTolerance,
+	shouldCompactProjectedUsage,
+} from "../context-window-utils"
 
 function openAiHandlerWithModel(id: string, contextWindow?: number): OpenAiHandler {
 	const handler = Object.create(OpenAiHandler.prototype) as OpenAiHandler
@@ -29,6 +36,18 @@ describe("auto-condense context trigger", () => {
 		expect(computeSafetyBuffer(500_000)).toBe(15_000)
 		expect(computeSafetyBuffer(1_000_000)).toBe(30_000)
 		expect(computeSafetyBuffer(2_000_000)).toBe(30_000)
+	})
+
+	it("preserves the 372K safety and trigger contract while applying the 2K admission tolerance", () => {
+		const summarizeBudget = computeSummarizeBudget()
+		const triggerTokens = computeCompactTrigger(372_000, summarizeBudget)
+
+		expect(computeSafetyBuffer(372_000)).toBe(11_160)
+		expect(summarizeBudget).toBe(2_500)
+		expect(triggerTokens).toBe(358_340)
+		expect(getEstimationTolerance()).toBe(2_000)
+		expect(shouldCompactProjectedUsage(356_339, triggerTokens)).toBe(false)
+		expect(shouldCompactProjectedUsage(356_340, triggerTokens)).toBe(true)
 	})
 
 	it("uses only the hard ceiling when no auto-condense settings are supplied", () => {

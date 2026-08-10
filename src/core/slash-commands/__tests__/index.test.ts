@@ -1,9 +1,10 @@
 import type { ApiProviderInfo } from "@core/api"
+import { COMPACTION_WINDOW_BUDGET_MARKER } from "@core/context/context-management/compaction-window-budget"
 import type { McpPromptResponse } from "@shared/mcp"
 import { createTaskCapabilityToggles } from "@shared/TaskCapabilityToggles"
 import { expect } from "chai"
 import { vi } from "vitest"
-import { formatMcpPromptResponse, McpPromptFetcher, parseSlashCommands } from "../index"
+import { formatMcpPromptResponse, hasManualCompactionCommand, McpPromptFetcher, parseSlashCommands } from "../index"
 
 function createProviderInfo(contextWindow?: number, modelId = "test-model"): ApiProviderInfo {
 	return {
@@ -17,6 +18,22 @@ function createProviderInfo(contextWindow?: number, modelId = "test-model"): Api
 }
 
 describe("slash-commands", () => {
+	describe("hasManualCompactionCommand", () => {
+		it("detects built-in manual compaction commands in user-content tags", () => {
+			expect(hasManualCompactionCommand("<task>/compact Keep unresolved failures.</task>")).to.equal(true)
+			expect(hasManualCompactionCommand("<feedback>Please /smol before continuing.</feedback>")).to.equal(true)
+			expect(hasManualCompactionCommand("<user_message>/cmd:compact Preserve the latest request.</user_message>")).to.equal(
+				true,
+			)
+		})
+
+		it("does not mistake unrelated slash text for a manual compaction command", () => {
+			expect(hasManualCompactionCommand("<task>Read https://example.com/compact first.</task>")).to.equal(false)
+			expect(hasManualCompactionCommand("<task>/newtask then /compact</task>")).to.equal(false)
+			expect(hasManualCompactionCommand("plain /compact text outside a user-content tag")).to.equal(false)
+		})
+	})
+
 	describe("formatMcpPromptResponse", () => {
 		it("should format text message", () => {
 			const response: McpPromptResponse = {
@@ -146,8 +163,8 @@ describe("slash-commands", () => {
 	describe("parseSlashCommands explicit instruction injection", () => {
 		const cases = [
 			["newtask", "new_task"],
-			["compact", "condense"],
-			["smol", "condense"],
+			["compact", "summarize_task"],
+			["smol", "summarize_task"],
 			["newrule", "new_rule"],
 			["reportbug", "report_bug"],
 		] as const
@@ -185,6 +202,7 @@ describe("slash-commands", () => {
 
 				expect(result.processedText).to.include(`<${toolName}>`)
 				expect(result.processedText).to.include(`</${toolName}>`)
+				expect(result.processedText).to.not.include("instruction_id")
 				expect(result.processedText).to.not.include("request-scoped native")
 				expect(result).to.not.have.property("requestToolIds")
 			})
@@ -200,7 +218,7 @@ describe("slash-commands", () => {
 			})
 		}
 
-		it("injects task_progress only for focus-enabled condense instructions", async () => {
+		it("injects task_progress only for focus-enabled summarize instructions", async () => {
 			const withoutFocus = await parseSlashCommands("<task>/compact</task>", {}, {}, "test-ulid", {
 				enabled: false,
 			})
@@ -222,12 +240,23 @@ describe("slash-commands", () => {
 				"test-ulid",
 			)
 
-			expect(result.processedText).to.include('<explicit_instructions type="condense">')
+			expect(result.processedText).to.include("The current conversation is rapidly running out of context")
+			expect(result.processedText).to.include("<summarize_task>")
+			expect(result.processedText).to.not.include("instruction_id")
+			expect(result.processedText).to.not.include("<condense>")
+			expect(result.explicitInstructions).to.deep.equal([
+				{
+					type: "summarize_task",
+					source: "manual_compact_command",
+					targetTool: "summarize_task",
+				},
+			])
+			expect(result.processedText).to.include(COMPACTION_WINDOW_BUDGET_MARKER)
 			expect(result.processedText).to.include("Keep command decisions and unresolved failures.")
 			expect(result.processedText).to.not.include("/compact")
 		})
 
-		it("does not inject task_progress into Lite condense instructions", async () => {
+		it("does not inject task_progress into Lite summarize instructions", async () => {
 			const result = await parseSlashCommands(
 				"<task>/compact</task>",
 				{},

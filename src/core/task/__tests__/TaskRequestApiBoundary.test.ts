@@ -27,7 +27,7 @@ describe("Task request API boundary", () => {
 	it("lets an explicit manual compaction command reach slash-command parsing before auto compaction", async () => {
 		const source = await readFile(taskSourcePath, "utf8")
 		const method = extractMethod(source, "async recursivelyMakeClineRequests(", "async loadContext(")
-		const manualIntentIndex = method.indexOf("hasManualCompactionIntent(userContent)")
+		const manualIntentIndex = method.indexOf("hasManualCompactionIntent(userContent,")
 		const autoCompactionIndex = method.indexOf("this.contextManager.shouldCompactContextWindow(")
 
 		expect(manualIntentIndex).toBeGreaterThanOrEqual(0)
@@ -47,6 +47,36 @@ describe("Task request API boundary", () => {
 		expect(compactionCapability).toBeGreaterThanOrEqual(0)
 		expect(compactionGate).toBeGreaterThan(compactionCapability)
 		expect(deferredTurnCall).toBeGreaterThan(compactionGate)
+	})
+
+	it("parses manual compaction only from canonically paired conversational tool feedback", async () => {
+		const source = await readFile(taskSourcePath, "utf8")
+		const method = extractMethod(source, "async loadContext(", "async getEnvironmentDetails(")
+		const toolResultBranchStart = method.indexOf('if (block.type === "tool_result")')
+		const toolResultBranch = method.slice(toolResultBranchStart)
+		const trustedBranchEnd = toolResultBranch.indexOf("// Handle string content")
+		const trustedBranch = toolResultBranch.slice(0, trustedBranchEnd)
+		const untrustedBranch = toolResultBranch.slice(trustedBranchEnd)
+
+		expect(toolResultBranchStart).toBeGreaterThanOrEqual(0)
+		expect(trustedBranch).toContain("this.isTrustedUserFeedbackResult(block)")
+		expect(trustedBranch).toContain("hasManualCompactionIntent([block], () => true)")
+		expect(trustedBranch).toContain("parseTextBlock(block.content)")
+		expect(untrustedBranch).toContain("parseMentions(")
+		expect(untrustedBranch).not.toContain("parseTextBlock(")
+	})
+
+	it("pairs trusted feedback by canonical identities and conversational tool admission", async () => {
+		const source = await readFile(taskSourcePath, "utf8")
+		const method = extractMethod(
+			source,
+			"private isTrustedUserFeedbackResult(",
+			"private async persistApiRequestUserMessage(",
+		)
+
+		expect(method).toContain("candidate.function_id === block.function_id")
+		expect(method).toContain("candidate.dline_tid === block.dline_tid")
+		expect(method).toContain("CONVERSATIONAL_TOOL_NAMES.has")
 	})
 
 	it("resumes a durable Hosted request without repeating preprocessing, history append, or approval", async () => {
@@ -132,31 +162,43 @@ describe("Task request API boundary", () => {
 		expect(method).toContain("providerInfo.model.info.capabilities?.maxTokens")
 	})
 
-	it("registers every orchestrated compaction as summarize_task authority", async () => {
+	it("registers every orchestrated compaction internally and sends the existing prompt unchanged", async () => {
 		const source = await readFile(taskSourcePath, "utf8")
 		const method = extractMethod(source, "async recursivelyMakeClineRequests(", "async loadContext(")
-		const registrationStart = method.indexOf("requestScope.explicitInstructions.registerAndRender(")
-		const registrationEnd = method.indexOf('userContent.push({ type: "text", text: registered.text })', registrationStart)
-		const registration = method.slice(registrationStart, registrationEnd)
+		const registrationStart = method.indexOf("requestScope.explicitInstructions.register({")
+		const promptStart = method.indexOf("const summaryPrompt = summarizeTask(", registrationStart)
+		const pushStart = method.indexOf('userContent.push({ type: "text", text: summaryPrompt })', promptStart)
+		const registration = method.slice(registrationStart, pushStart)
 
 		expect(registrationStart).toBeGreaterThanOrEqual(0)
-		expect(registration).toContain("summarizeTask(")
+		expect(promptStart).toBeGreaterThan(registrationStart)
+		expect(pushStart).toBeGreaterThan(promptStart)
 		expect(registration).toContain('type: "summarize_task"')
 		expect(registration).toContain("targetTool: ClineDefaultTool.SUMMARIZE_TASK")
 		expect(registration).not.toContain("ClineDefaultTool.CONDENSE")
+		expect(registration).not.toContain("instruction_id")
 	})
 
 	it("maps automatic, Header, and mode-switch compaction to source metadata only", async () => {
 		const source = await readFile(taskSourcePath, "utf8")
 		const method = extractMethod(source, "async recursivelyMakeClineRequests(", "async loadContext(")
 		const operationStart = method.indexOf("const operationId = this.modeSwitchCompaction.getOperationId()")
-		const registrationStart = method.indexOf("requestScope.explicitInstructions.registerAndRender(", operationStart)
+		const registrationStart = method.indexOf("requestScope.explicitInstructions.register({", operationStart)
 		const sourceProjection = method.slice(operationStart, registrationStart)
 
 		expect(operationStart).toBeGreaterThanOrEqual(0)
 		expect(sourceProjection).toContain('? "task_header"')
 		expect(sourceProjection).toContain('? "mode_switch"')
 		expect(sourceProjection).toContain(': "auto_compaction"')
+	})
+
+	it("does not project internal authorization IDs into provider messages", async () => {
+		const source = await readFile(taskSourcePath, "utf8")
+		const method = extractMethod(source, "async *attemptApiRequest(", "// Block identity is now assigned")
+
+		expect(method).not.toContain("rewriteProviderInstructionIds(")
+		expect(method).not.toContain("rewriteInstructionIds")
+		expect(method).not.toContain("instruction_id")
 	})
 
 	it("creates a stable compaction row before the provider can fail without producing a tool call", async () => {
@@ -235,7 +277,8 @@ describe("Task request API boundary", () => {
 		expect(beginAttemptIndex).toBeGreaterThanOrEqual(0)
 		expect(consumePortIndex).toBeGreaterThan(beginAttemptIndex)
 		expect(sendIndex).toBeGreaterThan(consumePortIndex)
-		expect(method).toContain("rewriteProviderInstructionIds(")
+		expect(method).not.toContain("rewriteProviderInstructionIds(")
+		expect(method).not.toContain("instruction_id")
 		expect(method).toContain("providerAttempt + 1")
 	})
 

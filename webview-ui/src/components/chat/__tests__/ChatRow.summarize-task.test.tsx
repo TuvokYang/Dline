@@ -43,6 +43,58 @@ describe("ChatRow summarizeTask rendering", () => {
 		expect(screen.getByText(content)).toBeInTheDocument()
 	})
 
+	it("renders a retrying compaction without presenting the partial text as a completed summary", () => {
+		render(
+			<ChatRowContent
+				{...baseProps}
+				isExpanded={true}
+				message={{
+					ts: 10,
+					type: "say",
+					say: "tool",
+					partial: true,
+					text: JSON.stringify({
+						tool: "summarizeTask",
+						content: "partial summary that must not be applied",
+						compactionStatus: "retrying",
+						retryAttempt: 2,
+						maxRetryAttempts: 3,
+					}),
+				}}
+			/>,
+		)
+
+		expect(screen.getByText(/Compaction was interrupted.*retrying/i)).toBeInTheDocument()
+		expect(screen.getByText(/attempt 2 of 3/i)).toBeInTheDocument()
+		expect(screen.getByText("Partial summary (not applied):")).toBeInTheDocument()
+		expect(screen.queryByText("Summary:")).not.toBeInTheDocument()
+	})
+
+	it("renders an actionable failed compaction state", () => {
+		render(
+			<ChatRowContent
+				{...baseProps}
+				isExpanded={true}
+				message={{
+					ts: 11,
+					type: "say",
+					say: "tool",
+					partial: false,
+					text: JSON.stringify({
+						tool: "summarizeTask",
+						content: "",
+						compactionStatus: "failed",
+						error: "The summary exceeded the request output limit.",
+					}),
+				}}
+			/>,
+		)
+
+		expect(screen.getByText("Conversation compaction failed:")).toBeInTheDocument()
+		expect(screen.getByText("The summary exceeded the request output limit.")).toBeInTheDocument()
+		expect(screen.queryByText("Dline is condensing the conversation:")).not.toBeInTheDocument()
+	})
+
 	it("caps the expanded summary at 80% of the viewport with internal scrolling", () => {
 		render(
 			<ChatRowContent

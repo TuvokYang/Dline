@@ -4,10 +4,10 @@ import type { TaskConfig } from "../../types/TaskConfig"
 import type { StronglyTypedUIHelpers } from "../../types/UIHelpers"
 import { SummarizeTaskHandler } from "../SummarizeTaskHandler"
 
-function createHelpers(isInternalContextCompactionRequest: boolean) {
+function createHelpers(isInternalContextCompactionRequest: boolean, contextCompactionMessageTs?: number) {
 	const say = vi.fn().mockResolvedValue(undefined)
 	const config = {
-		taskState: { isInternalContextCompactionRequest },
+		taskState: { isInternalContextCompactionRequest, contextCompactionMessageTs },
 	} as unknown as TaskConfig
 	const helpers = {
 		say,
@@ -26,13 +26,19 @@ const partialBlock = {
 } as const
 
 describe("SummarizeTaskHandler partial rendering", () => {
-	it("renders the model-produced summary for internal context compaction", async () => {
+	it("updates the stable running row for internal context compaction", async () => {
 		const handler = new SummarizeTaskHandler({} as never)
-		const { helpers, say } = createHelpers(true)
+		const { helpers, say } = createHelpers(true, 777)
 
 		await handler.handlePartialBlock(partialBlock as never, helpers)
 
-		expect(say).toHaveBeenCalledWith("tool", expect.stringContaining("Streaming summary"), undefined, undefined, true, 12345)
+		const payload = JSON.parse(say.mock.calls[0][1])
+		expect(payload).toMatchObject({
+			tool: "summarizeTask",
+			content: "Streaming summary",
+			compactionStatus: "running",
+		})
+		expect(say).toHaveBeenCalledWith("tool", expect.any(String), undefined, undefined, true, 777)
 	})
 
 	it("continues to render a user-visible summary", async () => {

@@ -8,7 +8,6 @@ import { ApplyPatchHandler } from "./handlers/ApplyPatchHandler"
 import { AskFollowupQuestionToolHandler } from "./handlers/AskFollowupQuestionToolHandler"
 import { AttemptCompletionHandler } from "./handlers/AttemptCompletionHandler"
 import { BrowserToolHandler } from "./handlers/BrowserToolHandler"
-import { CondenseHandler } from "./handlers/CondenseHandler"
 import { ExecuteCommandToolHandler } from "./handlers/ExecuteCommandToolHandler"
 import { FindReferencesHandler } from "./handlers/FindReferencesHandler"
 import { FocusChainHandler } from "./handlers/FocusChainHandler"
@@ -109,7 +108,7 @@ export class ToolExecutorCoordinator {
 		[ClineDefaultTool.TODO]: (_v: ToolValidator) => undefined,
 		[ClineDefaultTool.WEB_FETCH]: (_v: ToolValidator) => new WebFetchToolHandler(),
 		[ClineDefaultTool.WEB_SEARCH]: (_v: ToolValidator) => new WebSearchToolHandler(),
-		[ClineDefaultTool.CONDENSE]: (_v: ToolValidator) => new CondenseHandler(),
+		[ClineDefaultTool.CONDENSE]: (_v: ToolValidator) => undefined,
 		[ClineDefaultTool.SUMMARIZE_TASK]: (_v: ToolValidator) => new SummarizeTaskHandler(_v),
 		[ClineDefaultTool.REPORT_BUG]: (_v: ToolValidator) => new ReportBugHandler(),
 		[ClineDefaultTool.NEW_RULE]: (v: ToolValidator) =>

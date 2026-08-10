@@ -34,8 +34,10 @@ import { StateManager } from "../storage/StateManager"
 import { WorkspaceRootManager } from "../workspace"
 import type { TaskActivityStore } from "./activity/TaskActivityStore"
 import { isTurnEndingToolName } from "./assistant-message-order"
-import type { ExplicitInstructionConsumePort } from "./explicit-instructions/types"
 import { serializeDurableToolResult } from "./DurableToolResult"
+import { authorizeExplicitToolExecution } from "./explicit-instructions/explicit-tool-gate"
+import { isExplicitOnlyTool } from "./explicit-instructions/policy"
+import type { ExplicitInstructionConsumePort } from "./explicit-instructions/types"
 import { isAllItemsCompleted } from "./focus-chain/file-utils"
 import type { InteractionKind } from "./interaction/Interaction"
 import type { InteractionOutcome } from "./interaction/InteractionCoordinator"
@@ -712,7 +714,7 @@ export class ToolExecutor {
 				return true
 			}
 
-			if (block.isNativeToolCall && !this.isNativeToolAdmitted(block.name)) {
+			if (block.isNativeToolCall && !isExplicitOnlyTool(block.name) && !this.isNativeToolAdmitted(block.name)) {
 				if (block.name === ClineDefaultTool.WEB_SEARCH && config.webSearchRoutingPlan?.route === "hosted") {
 					if (block.partial) return true
 					const fallback = this.canFallbackUnadvertisedWebSearch(config)
@@ -794,6 +796,16 @@ export class ToolExecutor {
 			if (block.partial) {
 				await this.handlePartialBlock(block, config)
 				return true
+			}
+
+			const explicitAuthorization = authorizeExplicitToolExecution(block.name, config.explicitInstructions)
+			if (!explicitAuthorization.ok) {
+				const message = `Explicit-only tool '${block.name}' was rejected: ${explicitAuthorization.code}.`
+				await this.commitToolResult(formatResponse.toolError(message), block, true)
+				return true
+			}
+			if (explicitAuthorization.authorization) {
+				config = { ...config, explicitInstructionAuthorization: explicitAuthorization.authorization }
 			}
 
 			// Handle complete blocks

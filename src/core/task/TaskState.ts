@@ -115,7 +115,13 @@ export class TaskState {
 	// Auto-context summarization
 	currentlySummarizing = false
 	lastAutoCompactTriggerIndex?: number
+	/** Skip one stale-usage auto-compaction check after a confirmed manual summary is durably committed. */
+	manualCompactionCommitted = false
+	/** Identify the active provider request as manual compaction so failure does not enter automatic retry. */
+	isManualContextCompactionRequest = false
 	isInternalContextCompactionRequest = false
+	/** Stable chat row used across one compaction request and its retries. */
+	contextCompactionMessageTs?: number
 	deferredCurrentTurn?: {
 		assistantMessage: ClineStorageMessage
 		userContent: ClineContent[]

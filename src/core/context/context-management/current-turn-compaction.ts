@@ -1,4 +1,6 @@
+import { hasManualCompactionCommand } from "@core/slash-commands"
 import type { ClineContent } from "@/shared/messages/content"
+import { shouldCompactProjectedUsage } from "./context-window-utils"
 
 const TOKEN_ESTIMATE_CHARS = 4
 
@@ -35,6 +37,42 @@ export function hasToolResult(userContent: ClineContent[]): boolean {
 }
 
 /**
+ * Detect an explicit manual compaction command in current-turn text, including nested tool-result feedback.
+ *
+ * @param userContent Pending current-turn content.
+ * @returns True when user-authored tagged content requests /compact or /smol.
+ */
+export function hasManualCompactionIntent(
+	userContent: ClineContent[],
+	isTrustedUserFeedback: (block: Extract<ClineContent, { type: "tool_result" }>) => boolean = () => false,
+): boolean {
+	return userContent.some((block) => {
+		if (block.type === "text") {
+			return hasManualCompactionCommand(block.text)
+		}
+		if (block.type !== "tool_result" || !isTrustedUserFeedback(block)) {
+			return false
+		}
+		if (typeof block.content === "string") {
+			return hasManualCompactionCommand(block.content)
+		}
+		return block.content?.some((contentBlock) =>
+			contentBlock.type === "text" ? hasManualCompactionCommand(contentBlock.text) : false,
+		)
+	})
+}
+
+/**
+ * Preserve user-authored text in the explicit compaction request while tool results stay deferred.
+ *
+ * @param userContent Deferred current-turn content.
+ * @returns Non-tool-result blocks that the summary must account for.
+ */
+export function getCompactionUserText(userContent: ClineContent[]): ClineContent[] {
+	return userContent.filter((block) => block.type !== "tool_result")
+}
+
+/**
  * Decide whether the current tool-result turn should be deferred while older context is summarized first.
  *
  * @param input Resolved compaction trigger, previous request usage, and pending current-turn content.
@@ -45,11 +83,11 @@ export function shouldDeferCurrentTurn(input: CurrentTurnCompactionInput): boole
 		return false
 	}
 
-	if (input.previousTokens >= input.triggerTokens) {
+	if (shouldCompactProjectedUsage(input.previousTokens, input.triggerTokens)) {
 		return true
 	}
 
-	return input.previousTokens + estimateCurrentTokens(input.userContent) >= input.triggerTokens
+	return shouldCompactProjectedUsage(input.previousTokens + estimateCurrentTokens(input.userContent), input.triggerTokens)
 }
 
 /**

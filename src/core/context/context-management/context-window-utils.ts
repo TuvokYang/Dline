@@ -5,6 +5,7 @@ const SAFETY_BUFFER_RATIO = 0.03
 const MIN_SAFETY_BUFFER = 5_000
 const MAX_SAFETY_BUFFER = 30_000
 const SUMMARIZE_INSTRUCTION_BUDGET = 2_500
+const ESTIMATION_TOLERANCE = 2_000
 
 export interface CompactTriggerOptions {
 	triggerPercent?: number
@@ -40,6 +41,16 @@ export function computeSafetyBuffer(contextWindow: number): number {
  */
 export function computeSummarizeBudget(): number {
 	return SUMMARIZE_INSTRUCTION_BUDGET
+}
+
+/** Return the fixed tolerance reserved for request-token estimation error. */
+export function getEstimationTolerance(): number {
+	return ESTIMATION_TOLERANCE
+}
+
+/** Decide whether projected usage reaches the proactive trigger after estimation tolerance. */
+export function shouldCompactProjectedUsage(projectedUsage: number, triggerTokens: number): boolean {
+	return projectedUsage + ESTIMATION_TOLERANCE >= triggerTokens
 }
 
 /**

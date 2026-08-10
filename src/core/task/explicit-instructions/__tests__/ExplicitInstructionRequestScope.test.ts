@@ -2,7 +2,6 @@ import { ClineDefaultTool } from "@shared/tools"
 import { describe, expect, it } from "vitest"
 import { ExplicitInstructionRegistry } from "../ExplicitInstructionRegistry"
 import { ExplicitInstructionRequestScope } from "../ExplicitInstructionRequestScope"
-import { renderRegisteredExplicitInstruction } from "../explicit-instruction-renderer"
 
 const FIRST_ATTEMPT = { requestId: "request-1", attemptId: "attempt-1" } as const
 
@@ -41,11 +40,10 @@ describe("ExplicitInstructionRequestScope", () => {
 		const scope = new ExplicitInstructionRequestScope(registry, FIRST_ATTEMPT)
 		const first = registerSummary(scope)
 		const oldPort = scope.createConsumePort()
-		const replacements = scope.beginRetryAttempt("attempt-2")
-		const current = scope.getCurrentAuthorization(first.instructionId)
+		scope.beginRetryAttempt("attempt-2")
+		const current = scope.getPendingToolAuthorization(ClineDefaultTool.SUMMARIZE_TASK)
 		const currentPort = scope.createConsumePort()
 
-		expect(replacements.get(first.instructionId)).toBe(current?.instructionId)
 		expect(current).toMatchObject({ requestId: "request-1", attemptId: "attempt-2", state: "pending" })
 		expect(oldPort.consumeTool(ClineDefaultTool.SUMMARIZE_TASK)).toEqual({
 			ok: false,
@@ -54,21 +52,38 @@ describe("ExplicitInstructionRequestScope", () => {
 		expect(currentPort.consumeTool(ClineDefaultTool.SUMMARIZE_TASK).ok).toBe(true)
 	})
 
-	it("rewrites registered instruction IDs for the active retry attempt", () => {
+	it("registers authority without changing the model-visible instruction text", () => {
 		const registry = new ExplicitInstructionRegistry()
 		const scope = new ExplicitInstructionRequestScope(registry, FIRST_ATTEMPT)
-		const first = registerSummary(scope)
-		const rendered = renderRegisteredExplicitInstruction(
-			'<explicit_instructions type="summarize_task">Call summarize_task.</explicit_instructions>',
-			first,
-		)
+		const template =
+			'<explicit_instructions type="new_task">Use <new_task><context>...</context></new_task>.</explicit_instructions>'
 
-		scope.beginRetryAttempt("attempt-2")
-		const current = scope.getCurrentAuthorization(first.instructionId)
-		const rewritten = scope.rewriteInstructionIds(rendered)
+		const registered = scope.registerInstruction(template, {
+			type: "new_task",
+			source: "slash_command",
+			targetTool: ClineDefaultTool.NEW_TASK,
+		})
 
-		expect(rewritten).toContain(`instruction_id="${current?.instructionId}"`)
-		expect(rewritten).not.toContain(`instruction_id="${first.instructionId}"`)
+		expect(registered.text).toBe(template)
+		expect(registered.text).not.toContain("instruction_id")
+		expect(registered.authorization).toMatchObject({ ...FIRST_ATTEMPT, type: "new_task", state: "pending" })
+	})
+
+	it("rolls provider attempts and consumes behavior authority without rewriting prompt text", () => {
+		const registry = new ExplicitInstructionRegistry()
+		const scope = new ExplicitInstructionRequestScope(registry, FIRST_ATTEMPT)
+		const summary = registerSummary(scope)
+		const skill = scope.register({
+			type: "skill",
+			source: "skill_injection",
+			metadata: { name: "reviewer" },
+		})
+		expect(scope.beginProviderAttempt()).toBeUndefined()
+		expect(registry.get(skill.instructionId)?.state).toBe("consumed")
+
+		expect(scope.beginProviderAttempt("attempt-2")).toBeUndefined()
+		const current = scope.getPendingToolAuthorization(ClineDefaultTool.SUMMARIZE_TASK)
+		expect(current).toMatchObject({ attemptId: "attempt-2", state: "pending" })
 	})
 
 	it("expires pending authority when the request closes", () => {
