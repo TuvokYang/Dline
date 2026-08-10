@@ -74,6 +74,8 @@ interface MockResponseOptions {
 	hiddenReasoning?: string
 	delayMs?: number
 	afterReasoningDelayMs?: number
+	/** Select this response by request contract instead of strict FIFO order. */
+	matchRequestContract?: boolean
 	usage?: MockTokenUsage
 	expectedToolResults?: readonly MockToolResultExpectation[]
 	expectedToolResultCount?: number
@@ -274,6 +276,24 @@ function validateMockRequestContract(
 	return undefined
 }
 
+function takeMockResponse(
+	queue: OpenAiMockResponse[],
+	requestText: string,
+	toolResults: readonly MockObservedToolResult[],
+): OpenAiMockResponse | undefined {
+	const first = queue[0]
+	if (!first || first.type === "error" || !first.matchRequestContract) return queue.shift()
+
+	const matchingIndex = queue.findIndex(
+		(response) =>
+			response.type !== "error" &&
+			response.matchRequestContract === true &&
+			validateMockRequestContract(response, requestText, toolResults) === undefined,
+	)
+	if (matchingIndex < 0) return queue.shift()
+	return queue.splice(matchingIndex, 1)[0]
+}
+
 function getRequestThinking(requestBody: unknown): MockThinkingConfig | undefined {
 	const body = asRecord(requestBody)
 	if (!body) return undefined
@@ -437,7 +457,9 @@ export class ClineApiServerMock {
 	private consumeMockResponse(target: MockApiTarget, path: string, requestBody: unknown) {
 		const receivedAtMs = Date.now()
 		const route = E2E_MOCK_PROVIDER_ROUTES[target]
-		const scriptedResponse = this.mockResponses[target].shift() ?? {
+		const requestText = JSON.stringify(requestBody)
+		const requestToolResults = extractRequestToolResults(requestBody)
+		const scriptedResponse = takeMockResponse(this.mockResponses[target], requestText, requestToolResults) ?? {
 			type: "error",
 			status: 500,
 			code: "e2e_mock_queue_exhausted",
@@ -446,8 +468,6 @@ export class ClineApiServerMock {
 			details: { target, retryable: true },
 		}
 		const thinking = getRequestThinking(requestBody)
-		const requestText = JSON.stringify(requestBody)
-		const requestToolResults = extractRequestToolResults(requestBody)
 		const contractError =
 			scriptedResponse.type === "error"
 				? undefined

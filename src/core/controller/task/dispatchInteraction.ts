@@ -61,5 +61,6 @@ export async function dispatchInteraction(
 	if (!result.accepted) {
 		return response(false, normalizeResult(result.error?.code))
 	}
+	await controller.task.waitForInteractionSettlement(request.interactionId)
 	return response(true, "accepted")
 }

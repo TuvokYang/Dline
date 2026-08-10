@@ -42,6 +42,7 @@ interface RootRegistration {
 	owners: Set<string>
 	descriptors: WorkspaceMcpDescriptor[]
 	watcher?: FSWatcher
+	ready: Promise<void>
 	refreshQueue: Promise<void>
 }
 
@@ -223,29 +224,29 @@ export class WorkspaceMcpRegistry {
 		if (this.disposed) throw new Error("Workspace MCP registry is disposed.")
 		const nextRoots = new Set(workspaceRoots.map((root) => path.resolve(root)))
 		const previousRoots = this.owners.get(ownerId) ?? new Set<string>()
+		let descriptorsChanged = false
 
 		for (const workspaceRoot of previousRoots) {
-			if (!nextRoots.has(workspaceRoot)) await this.releaseRoot(ownerId, workspaceRoot)
+			if (!nextRoots.has(workspaceRoot))
+				descriptorsChanged = (await this.releaseRoot(ownerId, workspaceRoot)) || descriptorsChanged
 		}
 		for (const workspaceRoot of nextRoots) {
-			if (!previousRoots.has(workspaceRoot)) await this.acquireRoot(ownerId, workspaceRoot)
+			if (!previousRoots.has(workspaceRoot))
+				descriptorsChanged = (await this.acquireRoot(ownerId, workspaceRoot)) || descriptorsChanged
 		}
-		// Only notify when the root set actually changed. Every Controller (e.g. each
-		// panel opened from task history) calls registerOwner, and an unconditional
-		// notifyChange here triggered a full MCP reconnect cycle on every panel open.
-		const rootsChanged = previousRoots.size !== nextRoots.size || [...previousRoots].some((root) => !nextRoots.has(root))
 		this.owners.set(ownerId, nextRoots)
-		if (rootsChanged) await this.notifyChange()
+		if (descriptorsChanged) await this.notifyChange()
 	}
 
 	async unregisterOwner(ownerId: string): Promise<void> {
 		const workspaceRoots = this.owners.get(ownerId)
 		if (!workspaceRoots) return
+		let descriptorsChanged = false
 		for (const workspaceRoot of workspaceRoots) {
-			await this.releaseRoot(ownerId, workspaceRoot)
+			descriptorsChanged = (await this.releaseRoot(ownerId, workspaceRoot)) || descriptorsChanged
 		}
 		this.owners.delete(ownerId)
-		await this.notifyChange()
+		if (descriptorsChanged) await this.notifyChange()
 	}
 
 	async refreshOwner(ownerId: string): Promise<void> {
@@ -278,31 +279,38 @@ export class WorkspaceMcpRegistry {
 		this.owners.clear()
 	}
 
-	private async acquireRoot(ownerId: string, workspaceRoot: string): Promise<void> {
+	private async acquireRoot(ownerId: string, workspaceRoot: string): Promise<boolean> {
 		const existing = this.roots.get(workspaceRoot)
 		if (existing) {
 			existing.owners.add(ownerId)
-			return
+			await existing.ready
+			return false
 		}
 
 		const registration: RootRegistration = {
 			owners: new Set([ownerId]),
 			descriptors: [],
+			ready: Promise.resolve(),
 			refreshQueue: Promise.resolve(),
 		}
 		this.roots.set(workspaceRoot, registration)
 		registration.watcher = this.watchRoot(workspaceRoot)
-		await new Promise<void>((resolve) => registration.watcher?.once("ready", resolve))
-		registration.descriptors = await scanWorkspaceRoot(workspaceRoot)
+		registration.ready = (async () => {
+			await new Promise<void>((resolve) => registration.watcher?.once("ready", resolve))
+			registration.descriptors = await scanWorkspaceRoot(workspaceRoot)
+		})()
+		await registration.ready
+		return registration.descriptors.length > 0
 	}
 
-	private async releaseRoot(ownerId: string, workspaceRoot: string): Promise<void> {
+	private async releaseRoot(ownerId: string, workspaceRoot: string): Promise<boolean> {
 		const registration = this.roots.get(workspaceRoot)
-		if (!registration) return
+		if (!registration) return false
 		registration.owners.delete(ownerId)
-		if (registration.owners.size > 0) return
+		if (registration.owners.size > 0) return false
 		this.roots.delete(workspaceRoot)
 		await registration.watcher?.close()
+		return registration.descriptors.length > 0
 	}
 
 	private watchRoot(workspaceRoot: string): FSWatcher {

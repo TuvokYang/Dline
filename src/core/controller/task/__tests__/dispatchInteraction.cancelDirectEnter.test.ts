@@ -69,6 +69,9 @@ function createDispatchTask(runtime: TaskRuntime, coordinator: InteractionCoordi
 		dispatchRuntime(event: TaskEvent) {
 			return event.type === "INTERACTION_RESPONDED" ? coordinator.respond(event.response) : runtime.dispatch(event)
 		},
+		waitForInteractionSettlement(interactionId: string) {
+			return coordinator.waitForClaimedContinuation(interactionId)
+		},
 	}
 }
 

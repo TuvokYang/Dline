@@ -79,7 +79,7 @@ import { ModeSwitchCoordinator } from "./mode-switch/ModeSwitchCoordinator"
 import type { ModeSwitchOperation, ResolvedModeProfile } from "./mode-switch/types"
 import { getClineOnboardingModels } from "./models/getClineOnboardingModels"
 import { appendClineStealthModels } from "./models/refreshOpenRouterModels"
-import { sendAccountUsageUpdate, sendStateUpdate } from "./state/subscribeToState"
+import { cleanupStateSubscriptions, sendAccountUsageUpdate, sendStateUpdate } from "./state/subscribeToState"
 import { startTaskLifecycle } from "./task/task-start-lifecycle"
 import { sendChatButtonClickedEvent } from "./ui/subscribeToChatButtonClicked"
 
@@ -204,6 +204,9 @@ export class Controller {
 	private accountUsagePolling = false
 	private accountUsagePollingEnabled = true
 	private disposed = false
+	private uiDetached = false
+	private stateBuildsAfterDetach = 0
+	private suppressedStatePostsAfterDetach = 0
 	private workspaceMcpRegistration: Promise<void> = Promise.resolve()
 	private workspaceMcpRegistrationGeneration = 0
 	// Timer for periodic lock heartbeat (keeps .lock file fresh)
@@ -344,7 +347,26 @@ export class Controller {
 	- https://vscode-docs.readthedocs.io/en/stable/extensions/patterns-and-principles/
 	- https://github.com/microsoft/vscode-extension-samples/blob/main/webview-sample/src/extension.ts
 	*/
+	/** Return whether this controller can still accept UI subscriptions and updates. */
+	isUiAttached(): boolean {
+		return !this.uiDetached && !this.disposed
+	}
+
+	/** Detach the UI synchronously before asynchronous task and service cleanup starts. */
+	detachUi(): void {
+		if (this.uiDetached) return
+		this.uiDetached = true
+		this.stopAccountUsagePolling()
+		const cleanup = cleanupStateSubscriptions(this)
+		Logger.debug(
+			`[Controller] UI detached: taskId=${this.task?.taskId ?? "none"}, subscribers=${cleanup.subscriberCount}, pendingState=${cleanup.hadPendingUpdate}, debounceTimer=${cleanup.hadDebounceTimer}, sendChain=${cleanup.hadSendChain}`,
+		)
+	}
+
 	async dispose() {
+		const disposeStartedAtMs = performance.now()
+		const taskId = this.task?.taskId ?? "none"
+		this.detachUi()
 		this.disposed = true
 		// Clear the remote config timer
 		if (this.remoteConfigTimer) {
@@ -377,6 +399,10 @@ export class Controller {
 		// receives external state-change notifications.
 		this.stateManagerCallbacksDispose?.()
 
+		const cleanupMs = Math.round(performance.now() - disposeStartedAtMs)
+		Logger.debug(
+			`[Controller] dispose timing: taskId=${taskId}, cleanupMs=${cleanupMs}, stateBuildsAfterDetach=${this.stateBuildsAfterDetach}, suppressedStatePosts=${this.suppressedStatePostsAfterDetach}`,
+		)
 		Logger.error("Controller disposed")
 	}
 
@@ -813,7 +839,7 @@ export class Controller {
 	 * @param title - New title text (will be truncated to 16 chars)
 	 */
 	async syncPanelTitle(title: string): Promise<void> {
-		if (!this.task) {
+		if (this.uiDetached || this.disposed || !this.task) {
 			return
 		}
 		try {
@@ -1138,6 +1164,10 @@ export class Controller {
 
 	/** Build and publish the latest non-stale extension state. */
 	async postStateToWebview(options?: PostStateOptions): Promise<void> {
+		if (this.uiDetached || this.disposed) {
+			this.suppressedStatePostsAfterDetach++
+			return
+		}
 		const state = await this.getStateToPostToWebview()
 		if (!this.isStateCurrent(state.stateRevision)) return
 		await sendStateUpdate(this, state, this._accountUsage, options)
@@ -1145,6 +1175,7 @@ export class Controller {
 
 	/** Build a monotonic extension state while preserving the public non-optional contract. */
 	async getStateToPostToWebview(): Promise<ExtensionState> {
+		if (this.uiDetached || this.disposed) this.stateBuildsAfterDetach++
 		const revision = ++this.nextStateRevision
 		const state = await this.buildState(revision)
 		if (revision > this.latestStateRevision) {
@@ -1283,7 +1314,10 @@ export class Controller {
 			Logger.warn("Failed to combine messages for api metrics:", error)
 		}
 		const { getApiMetrics, getLastApiReqTotalTokens, getLastTaskProgressText } = await import("@shared/getApiMetrics")
-		const apiMetrics = getApiMetrics(metricMessages)
+		const apiMetrics = {
+			...getApiMetrics(metricMessages),
+			...this.task?.getApiRateSnapshot(),
+		}
 		const lastApiReqTotalTokens = getLastApiReqTotalTokens(metricMessages)
 
 		// If currentFocusChainChecklist is null, fall back to searching
@@ -1403,7 +1437,16 @@ export class Controller {
 
 		const durationMs = Math.round(performance.now() - startTime)
 		if (durationMs > 10) {
-			Logger.debug(`[Controller] getStateToPostToWebview took ${durationMs}ms for task ${this.task?.taskId}`)
+			let activeTasks = 1
+			try {
+				const { OrchestratorController } = await import("@/core/orchestrator/OrchestratorController")
+				activeTasks = OrchestratorController.getInstance().getControllerCount()
+			} catch {
+				// Unit and CLI contexts may not initialize the VS Code orchestrator.
+			}
+			Logger.debug(
+				`[StateUpdate] build timing: taskId=${this.task?.taskId ?? "none"}, buildMs=${durationMs}, activeTasks=${activeTasks}`,
+			)
 		}
 		return result
 	}

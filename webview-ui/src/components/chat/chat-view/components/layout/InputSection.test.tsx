@@ -1,24 +1,27 @@
 import type { ClineAsk } from "@shared/ExtensionMessage"
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
-import type { ComponentProps, ReactNode } from "react"
+import { type ComponentProps, forwardRef, type ReactNode } from "react"
 import { describe, expect, it, vi } from "vitest"
 import type { InteractionDraft } from "@/task-interaction/types"
 import { InputSection } from "./InputSection"
 
 vi.mock("@/components/chat/ChatTextArea", () => ({
-	default: (props: {
-		onSend: (draft?: { text: string; images: string[]; files: string[] }) => void
-		onSendBlocked?: (draft: { text: string; images: string[]; files: string[] }) => void
-		sendingDisabled: boolean
-		clineAsk?: ClineAsk
-	}) => (
+	default: forwardRef<
+		HTMLTextAreaElement,
+		{
+			onSend: (draft: { text: string; images: string[]; files: string[] }) => void
+			onSendBlocked?: (draft: { text: string; images: string[]; files: string[] }) => void
+			sendingDisabled: boolean
+			clineAsk?: ClineAsk
+		}
+	>((props, _ref) => (
 		<>
 			<output data-testid="cline-ask">{props.clineAsk}</output>
 			<button
 				onClick={() =>
 					props.sendingDisabled
 						? props.onSendBlocked?.({ text: "captured", images: ["image"], files: ["file"] })
-						: props.onSend()
+						: props.onSend({ text: "captured", images: ["image"], files: ["file"] })
 				}
 				type="button">
 				Submit
@@ -29,7 +32,7 @@ vi.mock("@/components/chat/ChatTextArea", () => ({
 				Complete Mode Switch
 			</button>
 		</>
-	),
+	)),
 }))
 vi.mock("@/components/chat/QuotedMessagePreview", () => ({ default: ({ children }: { children?: ReactNode }) => children }))
 
@@ -66,6 +69,23 @@ describe("InputSection deferred task submission", () => {
 		render(<InputSection {...props(draft("answer"))} clineAsk="qna_respond" />)
 
 		expect(screen.getByTestId("cline-ask")).toHaveTextContent("qna_respond")
+	})
+
+	it("submits the input-owned draft instead of a stale parent draft", async () => {
+		const onSubmit = vi.fn(async () => undefined)
+		const current = props(draft("stale parent"))
+		render(<InputSection {...current} enabled={true} onSubmit={onSubmit} submissionScope="task-1" />)
+
+		fireEvent.click(screen.getByRole("button", { name: "Submit" }))
+
+		await waitFor(() => expect(onSubmit).toHaveBeenCalledOnce())
+		expect(onSubmit).toHaveBeenCalledWith({
+			text: "captured",
+			images: ["image"],
+			files: ["file"],
+			activeQuote: null,
+			ownerRevision: 1,
+		})
 	})
 
 	it("submits the captured draft once the same task interaction becomes enabled", async () => {

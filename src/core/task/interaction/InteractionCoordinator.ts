@@ -141,6 +141,12 @@ export class InteractionCoordinator {
 		}
 	}
 
+	/** Wait only for the detached continuation claimed by one interaction response. */
+	async waitForClaimedContinuation(interactionId: string): Promise<void> {
+		const pending = this.claimedContinuations.get(interactionId)
+		if (pending) await Promise.allSettled([pending])
+	}
+
 	/** Release one accepted API continuation before a causally subsequent request gate opens. */
 	async releaseApiContinuationForRequestGate(): Promise<boolean> {
 		const interaction = this.runtime.getState().interaction

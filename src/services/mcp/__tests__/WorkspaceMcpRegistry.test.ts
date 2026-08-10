@@ -109,6 +109,30 @@ describe("parseWorkspaceMcpDescriptor", () => {
 })
 
 describe("WorkspaceMcpRegistry", () => {
+	it("notifies only when a shared workspace root enters or leaves the effective registry", async () => {
+		const workspace = await createWorkspace("shared")
+		await writeDescriptor(workspace, "docs.yml", ["name: docs", "type: stdio", "command: node"].join("\n"))
+		const notifications: string[][] = []
+		const registry = new WorkspaceMcpRegistry((descriptors) => {
+			notifications.push(descriptors.map((descriptor) => descriptor.internalName))
+		})
+		registries.push(registry)
+
+		await registry.registerOwner("panel-1", [workspace])
+		expect(notifications).toHaveLength(1)
+		expect(notifications[0]).toHaveLength(1)
+
+		await registry.registerOwner("panel-2", [workspace])
+		expect(notifications).toHaveLength(1)
+
+		await registry.unregisterOwner("panel-1")
+		expect(notifications).toHaveLength(1)
+
+		await registry.unregisterOwner("panel-2")
+		expect(notifications).toHaveLength(2)
+		expect(notifications[1]).toEqual([])
+	})
+
 	it("shares one workspace descriptor across owners without leaking other workspaces", async () => {
 		const alpha = await createWorkspace("alpha")
 		const beta = await createWorkspace("beta")

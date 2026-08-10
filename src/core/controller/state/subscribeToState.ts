@@ -23,6 +23,13 @@ const pendingUpdates = new Map<Controller, PendingUpdate>()
 const debounceTimers = new Map<Controller, ReturnType<typeof setTimeout>>()
 const controllerSendChains = new Map<Controller, Promise<void>>()
 
+export interface StateSubscriptionCleanupResult {
+	subscriberCount: number
+	hadPendingUpdate: boolean
+	hadDebounceTimer: boolean
+	hadSendChain: boolean
+}
+
 type StateUpdateOptions = {
 	immediate?: boolean
 }
@@ -44,6 +51,7 @@ export async function subscribeToState(
 ): Promise<void> {
 	// Get or create the subscription set for this controller
 	let subs = controllerSubscriptions.get(controller)
+	if (!controller.isUiAttached()) return
 	if (!subs) {
 		subs = new Set()
 		controllerSubscriptions.set(controller, subs)
@@ -77,7 +85,15 @@ export async function subscribeToState(
 	if (typeof controller.ensureWorkspaceManager === "function") {
 		await controller.ensureWorkspaceManager()
 	}
+	if (!controller.isUiAttached()) {
+		cleanup()
+		return
+	}
 	let initialState = await controller.getStateToPostToWebview()
+	if (!controller.isUiAttached()) {
+		cleanup()
+		return
+	}
 	if (forceStaleInitialState) {
 		const overtakingState = await controller.getStateToPostToWebview()
 		Logger.log(
@@ -86,6 +102,14 @@ export async function subscribeToState(
 	}
 	while (!controller.isStateCurrent(initialState.stateRevision)) {
 		initialState = await controller.getStateToPostToWebview()
+		if (!controller.isUiAttached()) {
+			cleanup()
+			return
+		}
+	}
+	if (!controller.isUiAttached()) {
+		cleanup()
+		return
 	}
 	const initialStateJson = JSON.stringify(initialState)
 	const accountUsage = controller.getAccountUsage()
@@ -118,12 +142,32 @@ export async function subscribeToState(
  * @param accountUsage Optional account usage data
  * @param options Debounce / immediate options
  */
+/** Remove every state-delivery resource owned by one detached controller. */
+export function cleanupStateSubscriptions(controller: Controller): StateSubscriptionCleanupResult {
+	const subscriptions = controllerSubscriptions.get(controller)
+	const timer = debounceTimers.get(controller)
+	const result = {
+		subscriberCount: subscriptions?.size ?? 0,
+		hadPendingUpdate: pendingUpdates.has(controller),
+		hadDebounceTimer: timer !== undefined,
+		hadSendChain: controllerSendChains.has(controller),
+	}
+	if (timer) clearTimeout(timer)
+	subscriptions?.clear()
+	controllerSubscriptions.delete(controller)
+	pendingUpdates.delete(controller)
+	debounceTimers.delete(controller)
+	controllerSendChains.delete(controller)
+	return result
+}
+
 export async function sendStateUpdate(
 	controller: Controller,
 	state: ExtensionState,
 	accountUsage?: AccountUsage,
 	options?: StateUpdateOptions,
 ): Promise<void> {
+	if (!controller.isUiAttached()) return
 	pendingUpdates.set(controller, { state, accountUsage })
 
 	if (options?.immediate) {
@@ -149,6 +193,10 @@ export async function sendStateUpdate(
 		controller,
 		setTimeout(async () => {
 			debounceTimers.delete(controller)
+			if (!controller.isUiAttached()) {
+				pendingUpdates.delete(controller)
+				return
+			}
 			const pending = pendingUpdates.get(controller)
 			if (pending) {
 				pendingUpdates.delete(controller)
@@ -160,6 +208,7 @@ export async function sendStateUpdate(
 
 /** Send an account-usage-only event without rebuilding or serializing ExtensionState. */
 export async function sendAccountUsageUpdate(controller: Controller, accountUsage?: AccountUsage): Promise<void> {
+	if (!controller.isUiAttached()) return
 	await enqueueControllerSend(controller, async () => {
 		await sendPayloadToSubscribers(controller, "", accountUsage)
 	})
@@ -171,8 +220,22 @@ async function sendStateToSubscribers(
 	finalAccountUsage?: AccountUsage,
 ): Promise<void> {
 	try {
+		const serializationStartedAtMs = performance.now()
 		const stateJson = JSON.stringify(state)
+		const serializationMs = Math.round(performance.now() - serializationStartedAtMs)
 		const stateSizeBytes = Buffer.byteLength(stateJson, "utf8")
+		if (serializationMs > 10) {
+			let activeTasks = 1
+			try {
+				const { OrchestratorController } = await import("@/core/orchestrator/OrchestratorController")
+				activeTasks = OrchestratorController.getInstance().getControllerCount()
+			} catch {
+				// Unit and CLI contexts may not initialize the VS Code orchestrator.
+			}
+			Logger.debug(
+				`[StateUpdate] serialization timing: taskId=${controller.task?.taskId ?? "none"}, serializationMs=${serializationMs}, sizeBytes=${stateSizeBytes}, activeTasks=${activeTasks}`,
+			)
+		}
 		recordStateSizeTelemetry(stateSizeBytes)
 		await enqueueControllerSend(controller, async () => {
 			await sendPayloadToSubscribers(controller, stateJson, finalAccountUsage, stateSizeBytes)
@@ -216,7 +279,9 @@ async function sendPayloadToSubscribers(
 
 	const durationMs = Math.round(performance.now() - startTime)
 	if (durationMs > 20) {
-		Logger.debug(`[StateUpdate] sendPayloadToSubscribers took ${durationMs}ms, size=${stateSizeBytes}B, subs=${subs.size}`)
+		Logger.debug(
+			`[StateUpdate] delivery timing: taskId=${controller.task?.taskId ?? "none"}, deliveryMs=${durationMs}, sizeBytes=${stateSizeBytes}, subscribers=${subs.size}`,
+		)
 	}
 }
 

@@ -87,7 +87,7 @@ interface ChatTextAreaProps {
 	selectedImages: string[]
 	setSelectedImages: React.Dispatch<React.SetStateAction<string[]>>
 	setSelectedFiles: React.Dispatch<React.SetStateAction<string[]>>
-	onSend: (draft?: ModeSwitchDraft) => void
+	onSend: (draft: ModeSwitchDraft) => void
 	onSendBlocked?: (draft: ModeSwitchDraft) => void
 	onSelectFilesAndImages: () => void
 	shouldDisableFilesAndImages: boolean
@@ -724,11 +724,16 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 				if (shouldSendChatInput(event, chatInputSendShortcut ?? DEFAULT_CHAT_INPUT_SEND_SHORTCUT, isComposing)) {
 					event.preventDefault()
 
+					const capturedDraft = {
+						text: event.currentTarget.value,
+						images: [...selectedImages],
+						files: [...selectedFiles],
+					}
 					if (!sendingDisabled) {
 						setIsTextAreaFocused(false)
-						onSend()
+						onSend(capturedDraft)
 					} else {
-						onSendBlocked?.({ text: inputValue, images: [...selectedImages], files: [...selectedFiles] })
+						onSendBlocked?.(capturedDraft)
 					}
 				}
 
@@ -1723,15 +1728,16 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 								)}
 								data-testid="send-button"
 								onClick={() => {
+									const capturedDraft = {
+										text: textAreaRef.current?.value ?? inputValue,
+										images: [...selectedImages],
+										files: [...selectedFiles],
+									}
 									if (!sendingDisabled) {
 										setIsTextAreaFocused(false)
-										onSend()
+										onSend(capturedDraft)
 									} else {
-										onSendBlocked?.({
-											text: inputValue,
-											images: [...selectedImages],
-											files: [...selectedFiles],
-										})
+										onSendBlocked?.(capturedDraft)
 									}
 								}}
 								title={`Send message (${getChatInputSendShortcutLabel(chatInputSendShortcut)})`}

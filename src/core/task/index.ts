@@ -68,6 +68,7 @@ import { showContextUsage } from "@core/task/environment-context"
 import { ExplicitInstructionRegistry } from "@core/task/explicit-instructions/ExplicitInstructionRegistry"
 import { type ModeCompactResult, ModeSwitchCompaction } from "@core/task/ModeSwitchCompaction"
 import { MODE_SWITCH_COMPACT_SIGNAL } from "@core/task/mode-switch-signal"
+import { calculateApiRequestTiming } from "@core/task/performance/api-request-timing"
 import { createRequestApiScope, type RequestApiScope, resolveRequestWebSearchRoutingPlan } from "@core/task/RequestApiScope"
 import { isMultiRootEnabled } from "@core/workspace/multi-root-utils"
 import { WorkspaceRootManager } from "@core/workspace/WorkspaceRootManager"
@@ -172,6 +173,7 @@ import { Controller } from "../controller"
 import { refreshSkills } from "../controller/file/refreshSkills"
 import { refreshSubagents } from "../controller/file/refreshSubagents"
 import { executeHook } from "../hooks/hook-executor"
+import { OrchestratorController } from "../orchestrator/OrchestratorController"
 import { StateManager } from "../storage/StateManager"
 import { createUnavailableApiHandler, resolveTaskApiProfile } from "./ApiProfileRecovery"
 import { buildActiveTasksSection } from "./active-tasks/ActiveTaskContextProvider"
@@ -193,6 +195,7 @@ import {
 } from "./latency"
 import { MessageChannel } from "./MessageChannel"
 import { MessageStateHandler } from "./message-state"
+import { type ApiRateSnapshot, ApiRateTracker } from "./performance/api-rate-tracker"
 import type { PresentationPriority } from "./presentation-types"
 import { PromptCacheHealthTracker } from "./prompt-cache/PromptCacheHealthTracker"
 import { RestoreHandler } from "./RestoreHandler"
@@ -437,6 +440,7 @@ export class Task {
 	private latestTaskSnapshot?: TaskSnapshot
 	private pendingSystemPromptRefreshReason?: SystemPromptRefreshReason
 	private readonly promptCacheHealth: PromptCacheHealthTracker
+	private readonly apiRateTracker: ApiRateTracker
 	private pendingBackgroundResultIds?: { subagentIds: string[]; commandIds: string[] }
 	private pendingBackgroundCommandLineCounts?: Array<{ id: string; lineCount: number }>
 	/** One cancellable automatic-retry wait, exposed to the Webview Retry action. */
@@ -491,6 +495,13 @@ export class Task {
 		this.mcpHub = mcpHub
 		this.updateTaskHistory = updateTaskHistory
 		this.postStateToWebview = postStateToWebview
+		this.apiRateTracker = new ApiRateTracker({
+			onChanged: () => {
+				void this.postStateToWebview().catch((error) => {
+					Logger.debug(`[Task ${this.taskId}] Failed to publish API rate metrics: ${error}`)
+				})
+			},
+		})
 		this.reinitExistingTaskFromId = reinitExistingTaskFromId
 		this.cancelTask = cancelTask
 		this.clineIgnoreController = new ClineIgnoreController(cwd)
@@ -752,6 +763,7 @@ export class Task {
 					controller: this.controller,
 					messageStateHandler: this.messageStateHandler,
 					fileContextTracker: this.fileContextTracker,
+					contextManager: this.contextManager,
 					diffViewProvider: this.diffViewProvider,
 					taskState: this.taskState,
 					taskFileTracker: this.taskFileTracker,
@@ -810,6 +822,7 @@ export class Task {
 			...(this.taskSm.planModeProfile !== undefined && { planModeProfile: this.taskSm.planModeProfile }),
 			...(this.taskSm.actModeProfile !== undefined && { actModeProfile: this.taskSm.actModeProfile }),
 			ulid: this.ulid,
+			onStreamEstimatedTokens: (tokens) => this.apiRateTracker.recordEstimatedTokens(tokens),
 			onRetryAttempt: async (attempt: number, maxRetries: number, delay: number, error: any) => {
 				const clineMessages = this.messageStateHandler.clineMessages
 				const lastApiReqStartedIndex = findLastIndex(clineMessages, (m) => m.say === "api_req_started")
@@ -1089,6 +1102,7 @@ export class Task {
 			...(this.taskSm.planModeProfile !== undefined && { planModeProfile: this.taskSm.planModeProfile }),
 			...(this.taskSm.actModeProfile !== undefined && { actModeProfile: this.taskSm.actModeProfile }),
 			ulid: this.ulid,
+			onStreamEstimatedTokens: (tokens) => this.apiRateTracker.recordEstimatedTokens(tokens),
 		}
 		this.api = buildApiHandler(effectiveConfig, mode)
 		// Update toolExecutor's api reference so tool handlers use the new handler
@@ -1101,6 +1115,11 @@ export class Task {
 	/** Return the current Task-local prompt cache health projection. */
 	public getPromptCacheHealth(): PromptCacheHealthSnapshot {
 		return this.promptCacheHealth.getSnapshot()
+	}
+
+	/** Return trailing-minute request and token activity for the active Task. */
+	public getApiRateSnapshot(): ApiRateSnapshot {
+		return this.apiRateTracker.getSnapshot()
 	}
 
 	private async scheduleAssistantPresentation(
@@ -2109,6 +2128,11 @@ export class Task {
 		return this.taskRuntime.dispatch(event)
 	}
 
+	/** Wait until the detached continuation for one accepted interaction has settled. */
+	public waitForInteractionSettlement(interactionId: string): Promise<void> {
+		return this.interactionCoordinator.waitForClaimedContinuation(interactionId)
+	}
+
 	public async startTask(task?: string, images?: string[], files?: string[], context?: string[]): Promise<void> {
 		try {
 			await this.clineIgnoreController.initialize()
@@ -2859,6 +2883,7 @@ export class Task {
 				() => {
 					if (this.FocusChainManager) this.FocusChainManager.dispose()
 				},
+				() => this.apiRateTracker.dispose(),
 				() => this.activityStore.dispose(),
 			]
 			const asyncCleanups: Array<Promise<void>> = [
@@ -3701,17 +3726,21 @@ export class Task {
 			thinking: thinkingSummary ?? null,
 		})
 
+		this.apiRateTracker.recordRequestStarted()
+		const providerRequestStartedAtMs = performance.now()
 		const stream = recordProviderAdapterOutput(
 			roundContext,
 			api.createMessage(systemPrompt, apiConversationMessages, tools, { serverTools }),
 		)
 
 		const iterator = stream[Symbol.asyncIterator]()
+		let firstChunkAtMs = providerRequestStartedAtMs
 
 		try {
 			// awaiting first chunk to see if it will throw an error
 			this.taskState.isWaitingForFirstChunk = true
 			const firstChunk = await iterator.next()
+			firstChunkAtMs = performance.now()
 			// A first chunk proves that the request in the active retry sequence
 			// reached the provider. Keep Cancel for the live stream, but release
 			// the retry-sequence-owned Retry action.
@@ -3731,7 +3760,9 @@ export class Task {
 			this.markBackgroundResultsConsumed()
 			this.markBackgroundCommandOutputSent()
 			this.taskState.isWaitingForFirstChunk = false
-			Logger.debug(`[Task ${this.taskId}] attemptApiRequest: TTFB +${Math.round(performance.now() - apiReqStart)}ms`)
+			Logger.debug(
+				`[Task ${this.taskId}] attemptApiRequest: upstream TTFB ${Math.round(firstChunkAtMs - providerRequestStartedAtMs)}ms`,
+			)
 		} catch (error) {
 			this.taskState.isWaitingForFirstChunk = false
 			if (this.taskState.abort) {
@@ -3912,7 +3943,24 @@ export class Task {
 		// no error, so we can continue to yield all remaining chunks
 		// (needs to be placed outside of try/catch since it we want caller to handle errors not with api_req_failed as that is reserved for first chunk failures only)
 		// this delegates to another generator or iterable object. In this case, it's saying "yield all remaining values from this iterator". This effectively passes along all subsequent chunks from the original stream.
-		yield* iterator
+		for await (const chunk of { [Symbol.asyncIterator]: () => iterator }) {
+			yield chunk
+		}
+		const timing = calculateApiRequestTiming({
+			requestStartedAtMs: apiReqStart,
+			providerRequestStartedAtMs,
+			firstChunkAtMs,
+			streamCompletedAtMs: performance.now(),
+		})
+		let activeTasks = 1
+		try {
+			activeTasks = OrchestratorController.getInstance().getControllerCount()
+		} catch {
+			// Unit and CLI contexts may not initialize the VS Code orchestrator.
+		}
+		Logger.debug(
+			`[Task ${this.taskId}] API timing: request=${this.taskState.apiRequestCount}, localPrepareMs=${timing.localPrepareMs}, upstreamTtfbMs=${timing.upstreamTtfbMs}, streamMs=${timing.streamMs}, totalMs=${timing.totalMs}, activeTasks=${activeTasks}`,
+		)
 	}
 
 	// Block identity is now assigned at parse time via parseAssistantMessageV2's
@@ -4946,6 +4994,13 @@ export class Task {
 					onUsageChunk: (chunk) => {
 						this.streamHandler.setRequestId(chunk.provider_metadata?.response_id)
 						didReceiveUsageChunk = true
+						this.apiRateTracker.recordExactTokens(
+							chunk.inputTokens +
+								chunk.outputTokens +
+								(chunk.cacheWriteTokens ?? 0) +
+								(chunk.cacheReadTokens ?? 0) +
+								(chunk.thoughtsTokenCount ?? 0),
+						)
 						taskMetrics.inputTokens += chunk.inputTokens
 						taskMetrics.outputTokens += chunk.outputTokens
 						taskMetrics.cacheWriteTokens += chunk.cacheWriteTokens ?? 0
@@ -4957,6 +5012,11 @@ export class Task {
 							cacheReadTokens: chunk.cacheReadTokens,
 							totalCost: chunk.totalCost,
 						})
+					},
+					onQueueMetrics: ({ queueDepth, maxQueueDepth, streamCompleted }) => {
+						Logger.debug(
+							`[Task ${this.taskId}] stream backlog: queueDepth=${queueDepth}, maxQueueDepth=${maxQueueDepth}, streamCompleted=${streamCompleted}`,
+						)
 					},
 				})
 
@@ -5294,6 +5354,13 @@ export class Task {
 			if (!didReceiveUsageChunk) {
 				const apiStreamUsage = await requestScope.api.getApiStreamUsage?.()
 				if (apiStreamUsage) {
+					this.apiRateTracker.recordExactTokens(
+						apiStreamUsage.inputTokens +
+							apiStreamUsage.outputTokens +
+							(apiStreamUsage.cacheWriteTokens ?? 0) +
+							(apiStreamUsage.cacheReadTokens ?? 0) +
+							(apiStreamUsage.thoughtsTokenCount ?? 0),
+					)
 					taskMetrics.inputTokens += apiStreamUsage.inputTokens
 					taskMetrics.outputTokens += apiStreamUsage.outputTokens
 					taskMetrics.cacheWriteTokens += apiStreamUsage.cacheWriteTokens ?? 0
@@ -5481,6 +5548,37 @@ export class Task {
 
 				if (this.taskRuntime.getState().phase === TaskPhase.COMPLETED) {
 					return true
+				}
+
+				const manualRegeneration = this.taskState.pendingManualCompactionRegeneration
+				if (manualRegeneration) {
+					this.taskState.pendingManualCompactionRegeneration = undefined
+					const history = this.messageStateHandler.apiConversationHistory
+					if (
+						manualRegeneration.requestApiIndex < 0 ||
+						manualRegeneration.requestApiIndex >= history.length ||
+						history[manualRegeneration.requestApiIndex]?.role !== "user"
+					) {
+						throw new Error("Manual compaction regeneration history boundary is invalid")
+					}
+					await this.messageStateHandler.overwriteApiConversationHistory(
+						history.slice(0, manualRegeneration.requestApiIndex),
+					)
+					await this.messageStateHandler.flushApiConversationHistory()
+					if (manualRegeneration.operationId) {
+						this.modeSwitchCompaction.fail(manualRegeneration.operationId, "Manual compaction summary was superseded")
+					}
+					this.taskState.currentlySummarizing = false
+					this.taskState.manualCompactionCommitted = false
+					this.taskState.isManualContextCompactionRequest = false
+					this.taskState.isInternalContextCompactionRequest = false
+					const command = manualRegeneration.text.trim() ? `/compact ${manualRegeneration.text.trim()}` : "/compact"
+					const regenerationContent = await buildUserFeedbackContent(
+						command,
+						manualRegeneration.images,
+						manualRegeneration.files,
+					)
+					return this.recursivelyMakeClineRequests(regenerationContent)
 				}
 
 				const recDidEndLoop = await this.recursivelyMakeClineRequests(this.taskState.userMessageContent)

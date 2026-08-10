@@ -12,7 +12,7 @@ import { describe, expect, it, vi } from "vitest"
 import type { StreamingResponseHandler } from "@/core/controller/grpc-handler"
 import { cancelModeSwitch } from "../cancelModeSwitch"
 import { confirmModeSwitch } from "../confirmModeSwitch"
-import { sendAccountUsageUpdate, sendStateUpdate, subscribeToState } from "../subscribeToState"
+import { cleanupStateSubscriptions, sendAccountUsageUpdate, sendStateUpdate, subscribeToState } from "../subscribeToState"
 import { togglePlanActModeProto } from "../togglePlanActModeProto"
 
 /** Create the minimum serializable state needed by revision-order tests. */
@@ -155,6 +155,46 @@ describe("mode switch state integration", () => {
 		const payload = vi.mocked(responseStream).mock.calls[0]?.[0]
 		expect(JSON.parse(payload?.stateJson ?? "{}")).toMatchObject({ stateRevision: 2 })
 		expect(getState).toHaveBeenCalledTimes(3)
+	})
+
+	it("does not build or send state after the controller UI detaches", async () => {
+		const controller = Object.create(Controller.prototype) as Controller
+		Object.assign(controller, {
+			uiDetached: true,
+			suppressedStatePostsAfterDetach: 0,
+			stateBuildsAfterDetach: 0,
+		})
+		const getState = vi.spyOn(controller, "getStateToPostToWebview")
+
+		await controller.postStateToWebview({ immediate: true })
+
+		expect(getState).not.toHaveBeenCalled()
+		expect((controller as unknown as { suppressedStatePostsAfterDetach: number }).suppressedStatePostsAfterDetach).toBe(1)
+	})
+
+	it("cleans controller subscribers and cancels pending debounced state", async () => {
+		vi.useFakeTimers()
+		try {
+			const controller = Object.create(Controller.prototype) as Controller
+			vi.spyOn(controller, "ensureWorkspaceManager").mockResolvedValue(undefined)
+			vi.spyOn(controller, "getStateToPostToWebview").mockResolvedValue(createState(1))
+			vi.spyOn(controller, "isStateCurrent").mockReturnValue(true)
+			vi.spyOn(controller, "getAccountUsage").mockReturnValue(undefined)
+			const responseStream: StreamingResponseHandler<State> = vi.fn(async () => undefined)
+			await subscribeToState(controller, EmptyRequest.create(), responseStream)
+			vi.mocked(responseStream).mockClear()
+			void sendStateUpdate(controller, createState(2))
+
+			const result = cleanupStateSubscriptions(controller)
+			await vi.runAllTimersAsync()
+
+			expect(result.subscriberCount).toBe(1)
+			expect(result.hadPendingUpdate).toBe(true)
+			expect(result.hadDebounceTimer).toBe(true)
+			expect(responseStream).not.toHaveBeenCalled()
+		} finally {
+			vi.useRealTimers()
+		}
 	})
 
 	it("sends account usage without rebuilding or serializing extension state", async () => {

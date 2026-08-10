@@ -73,6 +73,7 @@ export class VscodeWebviewPanelProvider extends WebviewProvider {
 		// Dispose self when panel is closed
 		panel.onDidDispose(
 			() => {
+				this.controller.detachUi()
 				dlineEditorGroup.unregister(panel)
 				this.isWebviewReady = false
 				this.pendingTaskId = undefined
@@ -113,6 +114,7 @@ export class VscodeWebviewPanelProvider extends WebviewProvider {
 
 		panel.onDidDispose(
 			() => {
+				provider.controller.detachUi()
 				dlineEditorGroup.unregister(panel)
 				provider.isWebviewReady = false
 				provider.pendingTaskId = undefined

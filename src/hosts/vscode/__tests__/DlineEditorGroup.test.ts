@@ -12,7 +12,7 @@ function createPanel(viewColumn: ViewColumn | undefined, active = true) {
 }
 
 describe("DlineEditorGroup", () => {
-	it("opens the first panel beside and later panels in its resolved column", () => {
+	it("opens the first panel beside and later new panels in its resolved column", () => {
 		const group = new DlineEditorGroup()
 
 		expect(group.getCreateViewColumn()).toBe(ViewColumn.Beside)
@@ -21,7 +21,7 @@ describe("DlineEditorGroup", () => {
 		expect(group.getCreateViewColumn()).toBe(ViewColumn.Two)
 	})
 
-	it("moves a restored panel into the existing Dline column without taking focus", () => {
+	it("preserves a restored panel in the VS Code column that owns it", () => {
 		const group = new DlineEditorGroup()
 		const existingPanel = createPanel(ViewColumn.Two)
 		const restoredPanel = createPanel(ViewColumn.Three)
@@ -29,21 +29,19 @@ describe("DlineEditorGroup", () => {
 
 		group.register(restoredPanel)
 
-		expect(restoredPanel.reveal).toHaveBeenCalledOnce()
-		expect(restoredPanel.reveal).toHaveBeenCalledWith(ViewColumn.Two, true)
+		expect(restoredPanel.reveal).not.toHaveBeenCalled()
 	})
 
-	it("aligns a panel after VS Code resolves its concrete view column", () => {
+	it("uses the first panel column for later panels after VS Code resolves it", () => {
 		const group = new DlineEditorGroup()
-		const existingPanel = createPanel(ViewColumn.Two)
 		const pendingPanel = createPanel(undefined)
-		group.register(existingPanel)
 		group.register(pendingPanel)
 
-		Object.defineProperty(pendingPanel, "viewColumn", { configurable: true, value: ViewColumn.Three })
+		Object.defineProperty(pendingPanel, "viewColumn", { configurable: true, value: ViewColumn.Two })
 		group.synchronize(pendingPanel)
 
-		expect(pendingPanel.reveal).toHaveBeenCalledWith(ViewColumn.Two, true)
+		expect(group.getCreateViewColumn()).toBe(ViewColumn.Two)
+		expect(pendingPanel.reveal).not.toHaveBeenCalled()
 	})
 
 	it("clears the target column after the last panel is removed", () => {
@@ -56,15 +54,13 @@ describe("DlineEditorGroup", () => {
 		expect(group.getCreateViewColumn()).toBe(ViewColumn.Beside)
 	})
 
-	it("locks the first active Dline panel group exactly once", () => {
-		const lockEditorGroup = vi.fn(() => Promise.resolve())
-		const group = new DlineEditorGroup(lockEditorGroup)
-		const firstPanel = createPanel(ViewColumn.Two)
+	it("does not move a panel when its view state changes", () => {
+		const group = new DlineEditorGroup()
+		const panel = createPanel(ViewColumn.Two)
+		group.register(panel)
 
-		group.register(firstPanel)
-		group.synchronize(firstPanel)
-		group.register(createPanel(ViewColumn.Two))
+		group.synchronize(panel)
 
-		expect(lockEditorGroup).toHaveBeenCalledOnce()
+		expect(panel.reveal).not.toHaveBeenCalled()
 	})
 })

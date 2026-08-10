@@ -8,11 +8,12 @@ interface DispatchTask {
 		accepted: boolean
 		error?: { code: string }
 	}>
+	waitForInteractionSettlement?: (interactionId: string) => Promise<void>
 }
 
 /** Create a controller-shaped test boundary with one optional task. */
 function controller(task?: DispatchTask): { task?: DispatchTask } {
-	return task ? { task } : {}
+	return task ? { task: { waitForInteractionSettlement: async () => {}, ...task } } : {}
 }
 
 describe("dispatchInteraction", () => {
@@ -44,6 +45,35 @@ describe("dispatchInteraction", () => {
 			},
 		})
 		expect(result).toMatchObject({ accepted: true, result: "accepted" })
+	})
+
+	it("waits for the accepted interaction continuation before returning", async () => {
+		let releaseSettlement: (() => void) | undefined
+		const settlement = new Promise<void>((resolve) => {
+			releaseSettlement = resolve
+		})
+		const waitForInteractionSettlement = vi.fn(() => settlement)
+		const resultPromise = dispatchInteraction(
+			controller({ dispatchRuntime: vi.fn(async () => ({ accepted: true })), waitForInteractionSettlement }) as never,
+			DispatchInteractionRequest.create({
+				taskId: "task-1",
+				turnId: "turn-1",
+				interactionId: "interaction-1",
+				actionId: "reply",
+				stateRevision: 12,
+				draft: { text: "next turn", images: [], files: [] },
+			}),
+		)
+		let resolved = false
+		void resultPromise.then(() => {
+			resolved = true
+		})
+
+		await Promise.resolve()
+		expect(waitForInteractionSettlement).toHaveBeenCalledWith("interaction-1")
+		expect(resolved).toBe(false)
+		releaseSettlement?.()
+		await expect(resultPromise).resolves.toMatchObject({ accepted: true, result: "accepted" })
 	})
 
 	it("returns stale interaction from runtime rejection", async () => {
