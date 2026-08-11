@@ -120,6 +120,125 @@ describe("ChatRow hosted Web Search rendering", () => {
 		expect(screen.getByTestId("web-search-results")).not.toHaveClass("max-h-[40vh]", "overflow-y-auto")
 	})
 
+	it("renders all normalized search queries instead of the generic hosted placeholder", () => {
+		render(
+			<ChatRowContent
+				{...baseProps}
+				message={{
+					ts: 5,
+					type: "say",
+					say: "tool",
+					partial: false,
+					text: JSON.stringify({
+						tool: "webSearch",
+						path: "Provider-hosted web search",
+						webSearch: {
+							schemaVersion: 1,
+							status: "completed",
+							operation: {
+								type: "search",
+								queries: ["Dline hosted search", "OpenAI Responses"],
+							},
+						},
+					}),
+				}}
+			/>,
+		)
+
+		expect(screen.getByText("Dline searched the web for:")).toBeInTheDocument()
+		expect(screen.getByText("Dline hosted search")).toBeInTheDocument()
+		expect(screen.getByText("OpenAI Responses")).toBeInTheDocument()
+		expect(screen.queryByText("Provider-hosted web search")).not.toBeInTheDocument()
+	})
+
+	it("renders open_page with its actual URL and operation-specific title", () => {
+		render(
+			<ChatRowContent
+				{...baseProps}
+				message={{
+					ts: 6,
+					type: "say",
+					say: "tool",
+					partial: false,
+					text: JSON.stringify({
+						tool: "webSearch",
+						path: "Provider-hosted web search",
+						webSearch: {
+							schemaVersion: 1,
+							status: "completed",
+							operation: {
+								type: "open_page",
+								url: "https://example.com/current",
+							},
+						},
+					}),
+				}}
+			/>,
+		)
+
+		expect(screen.getByText("Dline opened a web page:")).toBeInTheDocument()
+		expect(screen.getByText("https://example.com/current")).toBeInTheDocument()
+		expect(screen.queryByText("Provider-hosted web search")).not.toBeInTheDocument()
+	})
+
+	it("renders find_in_page with its URL, pattern, and operation-specific title", () => {
+		render(
+			<ChatRowContent
+				{...baseProps}
+				message={{
+					ts: 7,
+					type: "say",
+					say: "tool",
+					partial: false,
+					text: JSON.stringify({
+						tool: "webSearch",
+						path: "Provider-hosted web search",
+						webSearch: {
+							schemaVersion: 1,
+							status: "completed",
+							operation: {
+								type: "find_in_page",
+								url: "https://example.com/docs",
+								pattern: "hosted search action",
+							},
+						},
+					}),
+				}}
+			/>,
+		)
+
+		expect(screen.getByText("Dline searched within a web page:")).toBeInTheDocument()
+		expect(screen.getByText("https://example.com/docs")).toBeInTheDocument()
+		expect(screen.getByText("hosted search action")).toBeInTheDocument()
+		expect(screen.queryByText("Provider-hosted web search")).not.toBeInTheDocument()
+	})
+
+	it("falls back to the legacy query when a persisted message has no operation", () => {
+		render(
+			<ChatRowContent
+				{...baseProps}
+				message={{
+					ts: 8,
+					type: "say",
+					say: "tool",
+					partial: false,
+					text: JSON.stringify({
+						tool: "webSearch",
+						path: "legacy path",
+						webSearch: {
+							schemaVersion: 1,
+							status: "completed",
+							query: "legacy persisted query",
+						},
+					}),
+				}}
+			/>,
+		)
+
+		expect(screen.getByText("Dline searched the web for:")).toBeInTheDocument()
+		expect(screen.getByText("legacy persisted query")).toBeInTheDocument()
+	})
+
 	it("renders URL-only hosted sources with a readable fallback title", () => {
 		render(
 			<ChatRowContent

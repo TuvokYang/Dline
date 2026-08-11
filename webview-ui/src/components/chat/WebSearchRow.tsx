@@ -1,4 +1,5 @@
 import type { ClineSayTool } from "@shared/ExtensionMessage"
+import type { HostedWebSearchOperation } from "@shared/web-tools"
 import { ChevronDownIcon, ChevronRightIcon, SearchIcon, TriangleAlertIcon } from "lucide-react"
 import { useState } from "react"
 
@@ -6,6 +7,30 @@ interface WebSearchRowProps {
 	messageType: "ask" | "say"
 	query?: string
 	webSearch?: ClineSayTool["webSearch"]
+}
+
+function operationTitle(messageType: "ask" | "say", operation: HostedWebSearchOperation | undefined): string {
+	if (operation?.type === "open_page") {
+		return messageType === "ask" ? "Dline wants to open a web page:" : "Dline opened a web page:"
+	}
+	if (operation?.type === "find_in_page") {
+		return messageType === "ask" ? "Dline wants to search within a web page:" : "Dline searched within a web page:"
+	}
+	return messageType === "ask" ? "Dline wants to search the web for:" : "Dline searched the web for:"
+}
+
+function operationLines(operation: HostedWebSearchOperation | undefined, fallback: string | undefined): string[] {
+	switch (operation?.type) {
+		case "search":
+			return operation.queries
+		case "open_page":
+			return [operation.url]
+		case "find_in_page":
+			return [operation.url, operation.pattern]
+		case "unknown":
+		case undefined:
+			return fallback ? [fallback] : []
+	}
 }
 
 function resultTitle(title: string | undefined, url: string): string {
@@ -21,7 +46,8 @@ const WebSearchRow = ({ messageType, query, webSearch }: WebSearchRowProps) => {
 	const source = webSearch?.source
 	const sourceSuffix = source?.execution === "hosted" ? "Hosted" : source?.execution === "dline" ? "Dline" : undefined
 	const sourceLabel = source ? `${source.label}${sourceSuffix ? ` (${sourceSuffix})` : ""}` : undefined
-	const resolvedQuery = webSearch?.query || query
+	const operation = webSearch?.operation
+	const operationDetails = operationLines(operation, webSearch?.query || query)
 	const items = webSearch?.items ?? []
 	const [detailsExpanded, setDetailsExpanded] = useState(false)
 
@@ -29,13 +55,15 @@ const WebSearchRow = ({ messageType, query, webSearch }: WebSearchRowProps) => {
 		<div className="max-h-[40vh] overflow-y-auto pr-1" data-testid="web-search-card">
 			<div className="mb-3 flex items-center gap-2.5">
 				<SearchIcon className="size-2 rotate-90" />
-				<span className="font-bold">
-					{messageType === "ask" ? "Dline wants to search the web for:" : "Dline searched the web for:"}
-				</span>
+				<span className="font-bold">{operationTitle(messageType, operation)}</span>
 			</div>
 			<div className="space-y-2 overflow-hidden rounded-xs border border-editor-group-border bg-code px-2.5 py-[9px] select-text">
 				{sourceLabel && <div className="text-xs font-semibold text-description">{sourceLabel}</div>}
-				<div className="ph-no-capture break-words">{resolvedQuery}</div>
+				{operationDetails.map((detail, index) => (
+					<div className="ph-no-capture break-words" key={`${index}:${detail}`}>
+						{detail}
+					</div>
+				))}
 				{webSearch?.error && (
 					<div className="flex items-start gap-2 rounded border border-error/40 bg-error/10 p-2 text-error">
 						<TriangleAlertIcon className="mt-0.5 size-3 shrink-0" />

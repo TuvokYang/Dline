@@ -248,6 +248,7 @@ export class ToolExecutor {
 						provider: providerId,
 					},
 					query: update.query,
+					operation: update.operation,
 					...(items.length > 0 ? { items } : {}),
 					...(update.error === undefined ? {} : { error: update.error }),
 				},

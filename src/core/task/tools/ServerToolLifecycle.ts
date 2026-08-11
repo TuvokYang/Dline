@@ -1,6 +1,7 @@
 import type { WebSearchRoutingPlan } from "@core/api/server-tools"
 import type { ApiStreamServerToolChunk } from "@core/api/transform/stream"
 import { ServerTool } from "@shared/proto/dline/models/metadata"
+import { type HostedWebSearchOperation, normalizeHostedWebSearchOperation } from "@shared/web-tools"
 
 export type HostedServerToolUpdateStatus = "started" | "completed" | "failed"
 
@@ -11,6 +12,7 @@ export interface HostedServerToolUpdate {
 	readonly status: HostedServerToolUpdateStatus
 	readonly partial: boolean
 	readonly query: string
+	readonly operation: HostedWebSearchOperation
 	readonly result?: unknown
 	readonly error?: string
 }
@@ -19,6 +21,7 @@ interface HostedServerToolState {
 	readonly functionId: string
 	phase: ApiStreamServerToolChunk["phase"]
 	query: string
+	operation: HostedWebSearchOperation
 	terminal: boolean
 	resultEmitted: boolean
 }
@@ -45,6 +48,57 @@ function textFromUnknown(value: unknown): string | undefined {
 
 function errorFromUnknown(value: unknown, fallback: string): string {
 	return textFromUnknown(value) ?? fallback
+}
+
+function isKnownOperation(operation: HostedWebSearchOperation): boolean {
+	return operation.type !== "unknown"
+}
+
+function operationsEqual(left: HostedWebSearchOperation, right: HostedWebSearchOperation): boolean {
+	if (left.type !== right.type) return false
+	switch (left.type) {
+		case "search":
+			return (
+				right.type === "search" &&
+				left.queries.length === right.queries.length &&
+				left.queries.every((query, index) => query === right.queries[index])
+			)
+		case "open_page":
+			return right.type === "open_page" && left.url === right.url
+		case "find_in_page":
+			return right.type === "find_in_page" && left.url === right.url && left.pattern === right.pattern
+		case "unknown":
+			return right.type === "unknown" && left.providerType === right.providerType
+	}
+}
+
+function operationText(operation: HostedWebSearchOperation): string | undefined {
+	switch (operation.type) {
+		case "search":
+			return operation.queries.join("\n")
+		case "open_page":
+			return operation.url
+		case "find_in_page":
+			return `${operation.pattern}\n${operation.url}`
+		case "unknown":
+			return undefined
+	}
+}
+
+function resolveOperation(chunk: ApiStreamServerToolChunk, existing?: HostedWebSearchOperation): HostedWebSearchOperation {
+	const inputOperation = normalizeHostedWebSearchOperation(chunk.input)
+	if (isKnownOperation(inputOperation)) return inputOperation
+
+	const resultOperation = normalizeHostedWebSearchOperation(chunk.result)
+	if (isKnownOperation(resultOperation)) return resultOperation
+
+	const errorOperation = normalizeHostedWebSearchOperation(chunk.error)
+	if (isKnownOperation(errorOperation)) return errorOperation
+
+	if (existing) return existing
+	if (inputOperation.type === "unknown" && inputOperation.providerType) return inputOperation
+	if (resultOperation.type === "unknown" && resultOperation.providerType) return resultOperation
+	return errorOperation
 }
 
 /**
@@ -91,11 +145,18 @@ export class ServerToolLifecycle {
 		if (existing?.terminal) {
 			if (existing.phase !== "completed" || chunk.phase === "failed") return true
 
-			const enrichedQuery = textFromUnknown(chunk.input) ?? textFromUnknown(chunk.result) ?? existing.query
+			const enrichedOperation = resolveOperation(chunk, existing.operation)
+			const enrichedQuery =
+				operationText(enrichedOperation) ??
+				textFromUnknown(chunk.input) ??
+				textFromUnknown(chunk.result) ??
+				existing.query
+			const operationChanged = !operationsEqual(enrichedOperation, existing.operation)
 			const queryChanged = enrichedQuery !== existing.query
 			const hasNewResult = chunk.phase === "completed" && chunk.result !== undefined && !existing.resultEmitted
-			if (!queryChanged && !hasNewResult) return true
+			if (!operationChanged && !queryChanged && !hasNewResult) return true
 
+			existing.operation = enrichedOperation
 			existing.query = enrichedQuery
 			if (hasNewResult) existing.resultEmitted = true
 			await this.emit({
@@ -105,12 +166,14 @@ export class ServerToolLifecycle {
 				status: "completed",
 				partial: false,
 				query: enrichedQuery,
+				operation: enrichedOperation,
 				...(hasNewResult ? { result: chunk.result } : {}),
 			})
 			return true
 		}
 
-		const query = textFromUnknown(chunk.input) ?? existing?.query ?? "Provider-hosted web search"
+		const operation = resolveOperation(chunk, existing?.operation)
+		const query = operationText(operation) ?? textFromUnknown(chunk.input) ?? existing?.query ?? "Provider-hosted web search"
 		const currentRank = existing ? PHASE_RANK[existing.phase] : -1
 		if (existing && PHASE_RANK[chunk.phase] < currentRank) return true
 		if (existing && PHASE_RANK[chunk.phase] === currentRank && chunk.phase !== "completed" && chunk.phase !== "failed") {
@@ -122,11 +185,13 @@ export class ServerToolLifecycle {
 			functionId: chunk.function_id,
 			phase: chunk.phase,
 			query,
+			operation,
 			terminal: false,
 			resultEmitted: false,
 		}
 		state.phase = chunk.phase
 		state.query = query
+		state.operation = operation
 		state.terminal = chunk.phase === "completed" || chunk.phase === "failed"
 		state.resultEmitted = chunk.phase === "completed" && chunk.result !== undefined
 		this.calls.set(chunk.dline_tid, state)
@@ -140,6 +205,7 @@ export class ServerToolLifecycle {
 			status,
 			partial: !state.terminal,
 			query,
+			operation,
 			...(status === "completed" && chunk.result !== undefined ? { result: chunk.result } : {}),
 			...(status === "failed" ? { error: errorFromUnknown(chunk.error, "Provider-hosted web search failed") } : {}),
 		})
@@ -159,6 +225,7 @@ export class ServerToolLifecycle {
 				status: "failed",
 				partial: false,
 				query: state.query,
+				operation: state.operation,
 				error: reason,
 			})
 		}

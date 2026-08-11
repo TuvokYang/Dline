@@ -56,6 +56,28 @@ export interface MockHostedWebSearchResult {
 	snippet?: string
 }
 
+interface MockHostedWebSearchSource {
+	url: string
+	title?: string
+	snippet?: string
+}
+
+type MockHostedWebSearchAction =
+	| {
+			type: "search"
+			queries?: readonly string[]
+			query?: string
+			sources?: readonly MockHostedWebSearchSource[]
+	  }
+	| { type: "open_page"; url: string; sources?: readonly MockHostedWebSearchSource[] }
+	| { type: "find_in_page"; url: string; pattern: string; sources?: readonly MockHostedWebSearchSource[] }
+
+interface MockHostedWebSearchActionCall {
+	id?: string
+	action: MockHostedWebSearchAction
+	results?: readonly MockHostedWebSearchResult[]
+}
+
 export interface MockSearxngSearchRequest {
 	receivedAtMs: number
 	query: string
@@ -101,6 +123,8 @@ export type OpenAiMockResponse =
 			id?: string
 			query: string
 			results: readonly MockHostedWebSearchResult[]
+			/** OpenAI Responses action sequence; other protocols keep the legacy single-search fixture. */
+			actions?: readonly MockHostedWebSearchActionCall[]
 			followupTools?: readonly MockToolCall[]
 	  } & MockResponseOptions)
 	| {
@@ -1032,27 +1056,34 @@ export class ClineApiServerMock {
 							role: "assistant",
 							content: [{ type: "output_text", text: messageText, annotations: [] }],
 						}
-						const hostedSearchOutputItem =
+						const hostedSearchOutputItems =
 							scriptedResponse.type === "hosted-web-search"
-								? {
-										id: scriptedResponse.id ?? `ws_${generationId}`,
+								? (
+										scriptedResponse.actions ?? [
+											{
+												id: scriptedResponse.id,
+												action: { type: "search" as const, query: scriptedResponse.query },
+												results: scriptedResponse.results,
+											},
+										]
+									).map((call, index) => ({
+										id: call.id ?? `ws_${generationId}_${index}`,
 										type: "web_search_call",
 										status: "completed",
-										action: {
-											type: "search",
-											query: scriptedResponse.query,
-										},
-										results: scriptedResponse.results.map(({ title, url, snippet }) => ({
-											title,
-											url,
-											...(snippet ? { snippet } : {}),
-										})),
-									}
-								: undefined
+										action: call.action,
+										...(call.results
+											? {
+													results: call.results.map(({ title, url, snippet }) => ({
+														title,
+														url,
+														...(snippet ? { snippet } : {}),
+													})),
+												}
+											: {}),
+									}))
+								: []
 						const ordinaryOutputItems = toolOutputItems.length > 0 ? toolOutputItems : [messageOutputItem]
-						const outputItems = hostedSearchOutputItem
-							? [hostedSearchOutputItem, ...ordinaryOutputItems]
-							: ordinaryOutputItems
+						const outputItems = [...hostedSearchOutputItems, ...ordinaryOutputItems]
 						const response = {
 							id: generationId,
 							object: "response",
@@ -1121,12 +1152,11 @@ export class ClineApiServerMock {
 							)
 							if (!(await waitAfterReasoning())) return
 						}
-						if (hostedSearchOutputItem) {
-							const outputIndex = outputOffset
+						for (const [index, hostedSearchOutputItem] of hostedSearchOutputItems.entries()) {
+							const outputIndex = outputOffset + index
 							const startedItem = {
 								...hostedSearchOutputItem,
 								status: "in_progress",
-								action: { type: "search", query: scriptedResponse.query },
 							}
 							writeSse(
 								{ type: "response.output_item.added", output_index: outputIndex, item: startedItem },
@@ -1146,7 +1176,7 @@ export class ClineApiServerMock {
 						}
 						if (toolOutputItems.length > 0) {
 							for (const [index, outputItem] of toolOutputItems.entries()) {
-								const outputIndex = outputOffset + (hostedSearchOutputItem ? 1 : 0) + index
+								const outputIndex = outputOffset + hostedSearchOutputItems.length + index
 								writeSse(
 									{
 										type: "response.output_item.added",
@@ -1188,7 +1218,7 @@ export class ClineApiServerMock {
 							if (scriptedResponse.afterToolCompletionReasoning) {
 								if (!(await waitForOpenConnection(scriptedResponse.afterToolCompletionDelayMs))) return
 								const reasoningOutputIndex =
-									outputOffset + (hostedSearchOutputItem ? 1 : 0) + toolOutputItems.length
+									outputOffset + hostedSearchOutputItems.length + toolOutputItems.length
 								const postToolReasoningItem = {
 									id: `reasoning_after_tool_${generationId}`,
 									type: "reasoning",
@@ -1244,7 +1274,7 @@ export class ClineApiServerMock {
 								if (!(await waitForOpenConnection(scriptedResponse.afterToolCompletionHoldMs))) return
 							}
 						} else {
-							const outputIndex = outputOffset + (hostedSearchOutputItem ? 1 : 0)
+							const outputIndex = outputOffset + hostedSearchOutputItems.length
 							writeSse(
 								{
 									type: "response.output_item.added",
@@ -1290,7 +1320,12 @@ export class ClineApiServerMock {
 						cache_creation_input_tokens: usage.cacheWriteTokens ?? 0,
 						cache_read_input_tokens: usage.cacheReadTokens ?? 0,
 						...(scriptedResponse.type === "hosted-web-search"
-							? { server_tool_use: { web_search_requests: 1, web_fetch_requests: 0 } }
+							? {
+									server_tool_use: {
+										web_search_requests: scriptedResponse.actions?.length ?? 1,
+										web_fetch_requests: 0,
+									},
+								}
 							: {}),
 					}
 					const ordinaryContentBlocks =

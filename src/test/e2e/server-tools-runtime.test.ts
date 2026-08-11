@@ -348,6 +348,118 @@ e2e(
 )
 
 e2e(
+	"ServerTool runtime - OpenAI Responses preserves multiple hosted Web Search actions across task reopen",
+	async ({ dlineDir, dlineDocsDir, dlineHomeDir, helper, openVSCode, server, userDataDir, workspaceDir }) => {
+		e2e.setTimeout(180_000)
+		expectIsolatedDirectories(dlineDir, dlineHomeDir, dlineDocsDir)
+		await prepareRuntimeProfile(dlineDir, E2E_PROFILE_NAMES.mockOpenAiResponses, {
+			enabled: true,
+			mode: "WEB_SEARCH_MODE_AUTO",
+			supportsWebSearch: true,
+		})
+		const searchQuery = "Dline multi action hosted search"
+		const secondQuery = "OpenAI Responses hosted actions"
+		const openPageUrl = "https://example.test/open-page"
+		const findPageUrl = "https://example.test/find-page"
+		const findPattern = "E2E_FIND_IN_PAGE_PATTERN"
+		const completion = "E2E_HOSTED_MULTI_ACTION_OK"
+		server.enqueueResponses("openai-compatible-responses", {
+			type: "hosted-web-search",
+			query: searchQuery,
+			results: [],
+			actions: [
+				{
+					id: "ws_multi_search",
+					action: {
+						type: "search",
+						queries: [searchQuery, secondQuery],
+						sources: [
+							{ url: "https://example.test/shared", title: "Shared source title" },
+							{ url: "https://example.test/source-only", title: "Source-only result" },
+						],
+					},
+					results: [
+						{ title: "", url: "https://example.test/shared", snippet: "E2E_SHARED_RESULT_SNIPPET" },
+						{ title: "Result-only item", url: "https://example.test/result-only" },
+					],
+				},
+				{
+					id: "ws_multi_open",
+					action: {
+						type: "open_page",
+						url: openPageUrl,
+						sources: [{ url: openPageUrl, title: "Opened page source" }],
+					},
+				},
+				{
+					id: "ws_multi_find",
+					action: {
+						type: "find_in_page",
+						url: findPageUrl,
+						pattern: findPattern,
+					},
+				},
+			],
+			followupTools: [{ id: "call_hosted_multi_done", name: "attempt_completion", arguments: { result: completion } }],
+		})
+
+		let app: ElectronApplication | undefined
+		try {
+			const opened = await openSidebar(openVSCode, workspaceDir, helper)
+			app = opened.app
+			await setAutoApproveAction(opened.sidebar, "Use Web", true)
+			const taskText = "Use every OpenAI provider-hosted web action and preserve each result."
+			await sendTask(opened.sidebar, taskText)
+
+			await expect(opened.sidebar.getByTestId("web-search-card")).toHaveCount(3, { timeout: 60_000 })
+			const searchCard = opened.sidebar.getByTestId("web-search-card").filter({ hasText: searchQuery })
+			const openPageCard = opened.sidebar.getByTestId("web-search-card").filter({ hasText: openPageUrl })
+			const findPageCard = opened.sidebar.getByTestId("web-search-card").filter({ hasText: findPattern })
+			await expect(searchCard).toHaveCount(1)
+			await expect(searchCard.getByText(secondQuery, { exact: true })).toBeVisible()
+			await expect(openPageCard).toHaveCount(1)
+			await expect(openPageCard.getByText("Dline opened a web page:", { exact: true })).toBeVisible()
+			await expect(findPageCard).toHaveCount(1)
+			await expect(findPageCard.getByText("Dline searched within a web page:", { exact: true })).toBeVisible()
+			await expect(findPageCard.getByText(findPageUrl, { exact: true })).toBeVisible()
+
+			const searchToggle = searchCard.getByTestId("web-search-details-toggle")
+			await expect(searchToggle).toHaveText("Show results (3)")
+			await searchToggle.click()
+			await expect(searchCard.getByText("Shared source title", { exact: true })).toBeVisible()
+			await expect(searchCard.getByText("E2E_SHARED_RESULT_SNIPPET", { exact: true })).toBeVisible()
+			await expect(searchCard.getByText("Result-only item", { exact: true })).toBeVisible()
+			await expect(searchCard.getByText("Source-only result", { exact: true })).toBeVisible()
+			await expect(opened.sidebar.getByText("Provider-hosted web search", { exact: true })).toHaveCount(0)
+			await expect(opened.sidebar.getByText(completion, { exact: false }).last()).toBeVisible({ timeout: 60_000 })
+			expect(server.getMockConsumptions("openai-compatible-responses")).toHaveLength(1)
+			expectSingleSearchRoute(server.getMockConsumptions("openai-compatible-responses")[0], "hosted")
+			expect(server.getSearxngSearchRequests()).toHaveLength(0)
+
+			await closeCurrentTask(opened.sidebar)
+			await reopenTask(opened.sidebar, taskText)
+			await expect(opened.sidebar.getByTestId("web-search-card")).toHaveCount(3)
+			const restoredSearchCard = opened.sidebar.getByTestId("web-search-card").filter({ hasText: searchQuery })
+			const restoredOpenPageCard = opened.sidebar.getByTestId("web-search-card").filter({ hasText: openPageUrl })
+			const restoredFindPageCard = opened.sidebar.getByTestId("web-search-card").filter({ hasText: findPattern })
+			await expect(restoredSearchCard).toHaveCount(1)
+			await expect(restoredOpenPageCard.getByText("Dline opened a web page:", { exact: true })).toBeVisible()
+			await expect(restoredFindPageCard.getByText("Dline searched within a web page:", { exact: true })).toBeVisible()
+			const restoredToggle = restoredSearchCard.getByTestId("web-search-details-toggle")
+			await expect(restoredToggle).toHaveText("Show results (3)")
+			await restoredToggle.click()
+			await expect(restoredSearchCard.getByText("Shared source title", { exact: true })).toBeVisible()
+			await expect(restoredSearchCard.getByText("E2E_SHARED_RESULT_SNIPPET", { exact: true })).toBeVisible()
+			await expect(restoredSearchCard.getByText("Source-only result", { exact: true })).toBeVisible()
+			await expect(opened.sidebar.getByText("Provider-hosted web search", { exact: true })).toHaveCount(0)
+			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+		} finally {
+			await app?.close()
+		}
+	},
+)
+
+e2e(
 	"ServerTool runtime - checkpoint Restore replaces pending Hosted Web approval and reapproves the resumed request",
 	async ({ dlineDir, dlineDocsDir, dlineHomeDir, helper, openVSCode, server, userDataDir, workspaceDir }) => {
 		e2e.setTimeout(240_000)
