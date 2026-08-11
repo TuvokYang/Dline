@@ -4,11 +4,12 @@ import { describe, expect, it, vi } from "vitest"
 import { TaskRateMetrics } from "./TaskRateMetrics"
 
 describe("TaskRateMetrics", () => {
-	it("renders the green rate capsule as a semantic button with active seconds", () => {
-		render(<TaskRateMetrics activeSeconds={7} requestsPerMinute={3} taskId="task-1" tokensPerMinute={4_500} />)
+	it("renders the green rate capsule as a semantic button without active seconds", () => {
+		render(<TaskRateMetrics requestsPerMinute={3} taskId="task-1" tokensPerMinute={4_500} />)
 
 		const button = screen.getByRole("button", { name: /View API rate history/ })
-		expect(button).toHaveTextContent("Active:7s")
+		expect(button).not.toHaveTextContent("Active:")
+		expect(button).toHaveAttribute("aria-label", "View API rate history. Requests per minute: 3; tokens per minute: 4500")
 		expect(button).toHaveTextContent("RPM:3")
 		expect(button).toHaveTextContent("TPM:4.5K")
 		expect(button).toHaveClass("rounded-full", "bg-success/80", "text-background")
@@ -19,7 +20,7 @@ describe("TaskRateMetrics", () => {
 		const user = userEvent.setup()
 		render(
 			<div onClick={parentClick} onKeyDown={parentClick}>
-				<TaskRateMetrics activeSeconds={7} requestsPerMinute={3} taskId="task-1" tokensPerMinute={4_500} />
+				<TaskRateMetrics requestsPerMinute={3} taskId="task-1" tokensPerMinute={4_500} />
 			</div>,
 		)
 

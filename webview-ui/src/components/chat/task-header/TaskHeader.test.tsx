@@ -55,7 +55,6 @@ describe("TaskHeader pricing", () => {
 	it("renders RPM and TPM before usage metrics in a responsive right-aligned region", () => {
 		render(
 			<TaskHeader
-				activeSeconds={7}
 				doesModelSupportPromptCache={false}
 				onClose={vi.fn()}
 				requestsPerMinute={3}
@@ -69,7 +68,7 @@ describe("TaskHeader pricing", () => {
 
 		const rate = screen.getByTestId("task-rate-metrics")
 		const usage = screen.getByTitle("In: 1250 / Out: 250 / Cache read: 0 / Cache write: 0")
-		expect(rate).toHaveTextContent("Active:7s")
+		expect(rate).not.toHaveTextContent("Active:")
 		expect(rate).toHaveTextContent("RPM:3")
 		expect(rate).toHaveTextContent("TPM:4.5K")
 		expect(rate).toHaveClass("ml-auto", "justify-end", "@max-sm:hidden")

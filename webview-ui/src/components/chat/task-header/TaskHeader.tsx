@@ -38,7 +38,6 @@ interface TaskHeaderProps {
 	showFocusChainPlaceholder?: boolean
 	pricing?: ModelPricing
 	compactTaskDisabled?: boolean
-	activeSeconds?: number
 	requestsPerMinute?: number
 	tokensPerMinute?: number
 	onClose: () => void
@@ -62,7 +61,6 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 	showFocusChainPlaceholder,
 	pricing,
 	compactTaskDisabled,
-	activeSeconds,
 	requestsPerMinute,
 	tokensPerMinute,
 	onClose,
@@ -196,7 +194,6 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 					<div className="inline-flex items-center justify-end select-none shrink-0 min-w-0">
 						{((requestsPerMinute ?? 0) > 0 || (tokensPerMinute ?? 0) > 0) && (
 							<TaskRateMetrics
-								activeSeconds={activeSeconds ?? 0}
 								requestsPerMinute={requestsPerMinute ?? 0}
 								taskId={currentTaskItem?.id}
 								tokensPerMinute={tokensPerMinute ?? 0}

@@ -4,15 +4,14 @@ import { TaskRateMetricsDialog } from "./TaskRateMetricsDialog"
 
 interface TaskRateMetricsProps {
 	taskId?: string
-	activeSeconds: number
 	requestsPerMinute: number
 	tokensPerMinute: number
 }
 
-/** Display the current active-second rate summary and open its history view. */
-export function TaskRateMetrics({ taskId, activeSeconds, requestsPerMinute, tokensPerMinute }: TaskRateMetricsProps) {
+/** Display the current API rate summary and open its history view. */
+export function TaskRateMetrics({ taskId, requestsPerMinute, tokensPerMinute }: TaskRateMetricsProps) {
 	const [open, setOpen] = useState(false)
-	const accessibleLabel = `View API rate history. Active seconds: ${activeSeconds}; requests per minute: ${requestsPerMinute}; tokens per minute: ${tokensPerMinute}`
+	const accessibleLabel = `View API rate history. Requests per minute: ${requestsPerMinute}; tokens per minute: ${tokensPerMinute}`
 
 	return (
 		<>
@@ -27,7 +26,6 @@ export function TaskRateMetrics({ taskId, activeSeconds, requestsPerMinute, toke
 				onKeyDown={(event) => event.stopPropagation()}
 				title={accessibleLabel}
 				type="button">
-				<span>Active:{activeSeconds}s</span>
 				<span>RPM:{formatTokenMetric(requestsPerMinute)}</span>
 				<span>TPM:{formatTokenMetric(tokensPerMinute)}</span>
 			</button>
