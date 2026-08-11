@@ -77,11 +77,13 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 		lastApiReqTotalTokens: lastApiReqTotalTokensFromState,
 		taskViewState,
 		currentTaskItem,
+		taskTitleMessage,
 	} = useExtensionState()
 	const [contentTab, setContentTab] = useState<TaskContentTab>("chat")
 	const [focusedActivityId, setFocusedActivityId] = useState<string>()
 	const [activityFilters, setActivityFilters] = useState<TaskActivityFilters>(DEFAULT_TASK_ACTIVITY_FILTERS)
-	const taskId = taskViewState?.taskId ?? currentTaskItem?.id
+	const task = taskTitleMessage
+	const taskId = task ? (taskViewState?.taskId ?? currentTaskItem?.id) : undefined
 	const { activeCount } = useTaskActivities(taskId)
 	useEffect(() => {
 		setContentTab("chat")
@@ -104,8 +106,6 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 	const shouldShowQuickWins = isProdHostedApp && (!taskHistory || taskHistory.length < QUICK_WINS_HISTORY_THRESHOLD)
 
 	// task is no longer at index 0 — it's sent separately via taskMessage and displayed in fixed header
-	const { taskTitleMessage } = useExtensionState()
-	const task = taskTitleMessage
 	const modifiedMessages = useMemo(() => {
 		// task is separate (taskMessage) — no need to slice
 		const withHooks = hooksEnabled ? combineHookSequences(messages) : messages

@@ -35,6 +35,8 @@ service TaskService {
   rpc toggleTaskFavorite(TaskFavoriteRequest) returns (Empty);
   // Gets filtered task history
   rpc getTaskHistory(GetTaskHistoryRequest) returns (TaskHistoryArray);
+  // Gets task-local API rate history without adding it to ExtensionState
+  rpc getTaskRateMetrics(GetTaskRateMetricsRequest) returns (GetTaskRateMetricsResponse);
   // Sends a response to a previous ask operation
   rpc askResponse(AskResponseRequest) returns (Empty);
   // Dispatches a causally identified response to the active task interaction
@@ -113,6 +115,46 @@ message GetTaskHistoryRequest {
 message TaskHistoryArray {
   repeated TaskItem tasks = 1;
   int32 total_count = 2;
+}
+
+enum TaskRateMetricsResolution {
+  TASK_RATE_METRICS_RESOLUTION_UNSPECIFIED = 0;
+  TASK_RATE_METRICS_RESOLUTION_MINUTE = 1;
+  TASK_RATE_METRICS_RESOLUTION_HOUR = 2;
+  TASK_RATE_METRICS_RESOLUTION_DAY = 3;
+}
+
+enum TaskRateTokenQuality {
+  TASK_RATE_TOKEN_QUALITY_ESTIMATED = 0;
+  TASK_RATE_TOKEN_QUALITY_MIXED = 1;
+  TASK_RATE_TOKEN_QUALITY_EXACT = 2;
+}
+
+message GetTaskRateMetricsRequest {
+  string task_id = 1;
+  TaskRateMetricsResolution resolution = 2;
+  int64 start_ms = 3;
+  int64 end_ms = 4;
+  int32 max_points = 5;
+}
+
+message TaskRateMetricPoint {
+  int64 bucket_start_ms = 1;
+  int64 bucket_end_ms = 2;
+  int32 active_seconds = 3;
+  int32 request_count = 4;
+  int64 token_count = 5;
+  int32 requests_per_minute = 6;
+  int64 tokens_per_minute = 7;
+  TaskRateTokenQuality token_quality = 8;
+  bool provisional = 9;
+}
+
+message GetTaskRateMetricsResponse {
+  repeated TaskRateMetricPoint points = 1;
+  bool degraded = 2;
+  bool truncated = 3;
+  optional int64 retention_start_ms = 4;
 }
 
 // Task item details for history list

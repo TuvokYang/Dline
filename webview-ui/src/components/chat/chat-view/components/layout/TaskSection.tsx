@@ -14,6 +14,7 @@ interface TaskSectionProps {
 		totalCost: number
 		cacheHitRate?: number
 		currency?: string
+		activeSeconds?: number
 		requestsPerMinute?: number
 		tokensPerMinute?: number
 	}
@@ -48,6 +49,7 @@ export const TaskSection: React.FC<TaskSectionProps> = ({
 }) => {
 	return (
 		<TaskHeader
+			activeSeconds={apiMetrics.activeSeconds}
 			cacheHitRate={apiMetrics.cacheHitRate}
 			cacheReads={apiMetrics.totalCacheReads}
 			cacheWrites={apiMetrics.totalCacheWrites}

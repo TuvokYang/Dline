@@ -16,6 +16,7 @@ import ContextWindow from "./ContextWindow"
 import { FocusChain } from "./FocusChain"
 import { highlightText } from "./Highlights"
 import { PromptCacheHealthBanner } from "./PromptCacheHealthBanner"
+import { TaskRateMetrics } from "./rate-metrics/TaskRateMetrics"
 import SpawnedTasksBar from "./SpawnedTasksBar"
 import { TaskLockBanner } from "./TaskLockBanner"
 import { formatTokenMetric, hasNonZeroModelPricing } from "./util"
@@ -37,6 +38,7 @@ interface TaskHeaderProps {
 	showFocusChainPlaceholder?: boolean
 	pricing?: ModelPricing
 	compactTaskDisabled?: boolean
+	activeSeconds?: number
 	requestsPerMinute?: number
 	tokensPerMinute?: number
 	onClose: () => void
@@ -60,6 +62,7 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 	showFocusChainPlaceholder,
 	pricing,
 	compactTaskDisabled,
+	activeSeconds,
 	requestsPerMinute,
 	tokensPerMinute,
 	onClose,
@@ -192,13 +195,12 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 					</div>
 					<div className="inline-flex items-center justify-end select-none shrink-0 min-w-0">
 						{((requestsPerMinute ?? 0) > 0 || (tokensPerMinute ?? 0) > 0) && (
-							<div
-								className="ml-auto mr-1 inline-flex min-w-0 items-center justify-end gap-1.5 whitespace-nowrap text-xs font-medium opacity-80 @max-sm:hidden"
-								data-testid="task-rate-metrics"
-								title={`Requests per minute: ${requestsPerMinute ?? 0} / Tokens per minute: ${tokensPerMinute ?? 0}`}>
-								<span>RPM:{formatTokenMetric(requestsPerMinute ?? 0)}</span>
-								<span>TPM:{formatTokenMetric(tokensPerMinute ?? 0)}</span>
-							</div>
+							<TaskRateMetrics
+								activeSeconds={activeSeconds ?? 0}
+								requestsPerMinute={requestsPerMinute ?? 0}
+								taskId={currentTaskItem?.id}
+								tokensPerMinute={tokensPerMinute ?? 0}
+							/>
 						)}
 						{hasMetrics && (
 							<div

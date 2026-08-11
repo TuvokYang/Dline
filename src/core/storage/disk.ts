@@ -4,6 +4,7 @@ import { execa } from "@packages/execa"
 import { ClineMessage } from "@shared/ExtensionMessage"
 import { envFlagEnabled } from "@shared/env"
 import { HistoryItem } from "@shared/HistoryItem"
+import { requiresLegacyConversationMigration } from "@shared/messages/legacy-identity-migration"
 import { ApiFormat, ServerTool } from "@shared/proto/dline/models/metadata"
 import { RemoteConfig } from "@shared/remote-config/schema"
 import { GlobalState, Settings } from "@shared/storage/state-keys"
@@ -90,6 +91,7 @@ export const GlobalFileNames = {
 	apiConversationAll: "api_conversation_all.jsonl",
 	taskSnapshot: "snapshot.json",
 	taskActivities: "activities.json",
+	taskApiRateMetrics: "api_rate_metrics.jsonl",
 	taskContext: "context.json",
 	apiConversationHistory: "api_conversation_history.jsonl",
 	contextHistory: "context_history.jsonl",
@@ -381,8 +383,11 @@ export async function getSavedApiConversationHistory(taskId: string): Promise<Cl
 	// If .jsonl exists, use it exclusively — never fall back to legacy .json
 	if (await fileExistsAtPath(p)) {
 		const stored = await readJsonl<unknown>(p)
+		if (!requiresLegacyConversationMigration(stored)) {
+			return stored as ClineStorageMessage[]
+		}
 		const normalized = normalizeLegacyConversation(stored)
-		if (JSON.stringify(stored) !== JSON.stringify(normalized)) await writeJsonl(p, normalized)
+		await writeJsonl(p, normalized)
 		return normalized
 	}
 

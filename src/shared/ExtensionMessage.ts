@@ -153,6 +153,7 @@ export interface ExtensionState {
 		totalCost: number
 		cacheHitRate?: number // Overall cache hit rate percentage (0-100)
 		currency?: string // Billing currency code
+		activeSeconds?: number
 		requestsPerMinute?: number
 		tokensPerMinute?: number
 	}

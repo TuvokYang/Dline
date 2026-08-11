@@ -8,6 +8,7 @@ export interface ApiMetrics {
 	totalCost: number
 	cacheHitRate?: number
 	currency?: string
+	activeSeconds?: number
 	requestsPerMinute?: number
 	tokensPerMinute?: number
 }

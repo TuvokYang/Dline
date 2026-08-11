@@ -130,6 +130,7 @@ export interface TaskSectionProps {
 		totalCacheWrites?: number
 		totalCacheReads?: number
 		totalCost: number
+		activeSeconds?: number
 		requestsPerMinute?: number
 		tokensPerMinute?: number
 	}
