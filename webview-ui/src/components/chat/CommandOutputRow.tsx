@@ -180,9 +180,7 @@ export const CommandOutputRow = memo(
 		isCommandInterrupted = false,
 		isCommandSkipped = false,
 		isBackgroundExec = false,
-		canMoveToBackground = false,
 		onCancelCommand,
-		onMoveToBackground,
 		icon,
 		title,
 		isOutputFullyExpanded,
@@ -200,10 +198,8 @@ export const CommandOutputRow = memo(
 		isCommandInterrupted?: boolean
 		isCommandSkipped?: boolean
 		isBackgroundExec?: boolean
-		canMoveToBackground?: boolean
 		isLast?: boolean
 		onCancelCommand?: () => void
-		onMoveToBackground?: () => void
 		icon?: JSX.Element | null
 		title?: JSX.Element | null
 		isOutputFullyExpanded: boolean
@@ -258,8 +254,6 @@ export const CommandOutputRow = memo(
 				? undefined
 				: commandPresentation.slice(workingDirectoryIndex + workingDirectoryMarker.length).trim()
 		const showCancelButton = isActive && typeof onCancelCommand === "function"
-		const showMoveToBackgroundButton =
-			isCommandExecuting && !isBackgroundExec && canMoveToBackground === true && typeof onMoveToBackground === "function"
 		const ExecutionModeIcon = isBackgroundExec ? SendToBackIcon : BringToFrontIcon
 		const executionModeLabel = isBackgroundExec ? "Background" : "Foreground"
 		const executionModeIndicator = (
@@ -317,15 +311,6 @@ export const CommandOutputRow = memo(
 						</button>
 						{executionModeIndicator}
 						<CopyButton ariaLabel="Copy command" className="h-5" textToCopy={command} />
-						{showMoveToBackgroundButton && (
-							<Button
-								className="h-5 border px-2 py-0 text-[11px] leading-none"
-								onClick={onMoveToBackground}
-								size="sm"
-								variant="secondary">
-								Move to background
-							</Button>
-						)}
 						{showCancelButton && (
 							<Button
 								className="h-6 border px-2 py-0 text-[11px] leading-none"
@@ -400,17 +385,6 @@ export const CommandOutputRow = memo(
 							onToggle={() => setIsOutputFullyExpanded(!isOutputFullyExpanded)}
 							output={output}
 						/>
-					)}
-
-					{showMoveToBackgroundButton && (
-						<div className="flex items-center gap-2 border-t border-editor-group-border px-2 py-1.5">
-							<Button className="border" onClick={onMoveToBackground} size="sm" variant="secondary">
-								Move to background
-							</Button>
-							<span className="text-xs text-description">
-								Move this command to the background to continue the conversation.
-							</span>
-						</div>
 					)}
 
 					{requestsApproval && (

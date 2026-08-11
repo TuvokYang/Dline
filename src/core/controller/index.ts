@@ -1428,10 +1428,17 @@ export class Controller {
 			taskLockStatus: this.getTaskLockStatus(),
 			/** Complete interaction view projected only from canonical runtime state. */
 			taskViewState: this.task
-				? projectTaskView(this.task.getRuntimeState(), {
-						autoRetryActive: this.task.hasAutoRetrySequence(),
-						autoRetryPending: this.task.hasPendingAutoRetry(),
-					})
+				? (() => {
+						const commandHandoffActivityId = this.task.getReadyBackgroundHandoffActivityId()
+						return projectTaskView(this.task.getRuntimeState(), {
+							autoRetryActive: this.task.hasAutoRetrySequence(),
+							autoRetryPending: this.task.hasPendingAutoRetry(),
+							commandHandoffActivityId,
+							commandHandoffRequested: commandHandoffActivityId
+								? this.task.isBackgroundHandoffRequested(commandHandoffActivityId)
+								: false,
+						})
+					})()
 				: undefined,
 		}
 

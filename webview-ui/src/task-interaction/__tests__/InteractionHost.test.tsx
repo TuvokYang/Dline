@@ -5,7 +5,10 @@ import { TaskServiceClient } from "@/services/grpc-client"
 import { InteractionHost } from "../InteractionHost"
 
 vi.mock("@/services/grpc-client", () => ({
-	TaskServiceClient: { cancelTask: vi.fn(async () => undefined) },
+	TaskServiceClient: {
+		cancelTask: vi.fn(async () => undefined),
+		moveCommandToBackground: vi.fn(async () => ({ moved: true })),
+	},
 }))
 
 const ASK: ClineMessage = {
@@ -94,6 +97,7 @@ function configureInteraction(
 describe("InteractionHost", () => {
 	beforeEach(() => {
 		vi.mocked(TaskServiceClient.cancelTask).mockClear()
+		vi.mocked(TaskServiceClient.moveCommandToBackground).mockClear()
 	})
 
 	it("renders say content without actions when no interaction exists", () => {
@@ -178,6 +182,33 @@ describe("InteractionHost", () => {
 
 		await waitFor(() => expect(dispatch).toHaveBeenCalledOnce())
 		expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({ selection: { values: ["1"] } }))
+	})
+
+	it("moves the projected foreground command to the background from the footer", async () => {
+		const view = taskView()
+		delete view.activeInteraction
+		view.phase = "executing"
+		view.footer.actions = [
+			{
+				type: "continue_in_background",
+				label: "Continue in Background",
+				appearance: "secondary",
+				enabled: true,
+				payloadPolicy: "none",
+				dispatchTarget: "task",
+				activityId: "command-1",
+			},
+		]
+		render(<InteractionHost dispatch={vi.fn()} messages={[SAY]} view={view} />)
+
+		fireEvent.click(screen.getByRole("button", { name: "Continue in Background" }))
+
+		await waitFor(() =>
+			expect(TaskServiceClient.moveCommandToBackground).toHaveBeenCalledWith(
+				expect.objectContaining({ taskId: "task-1", activityId: "command-1" }),
+			),
+		)
+		expect(TaskServiceClient.cancelTask).not.toHaveBeenCalled()
 	})
 
 	it.each([

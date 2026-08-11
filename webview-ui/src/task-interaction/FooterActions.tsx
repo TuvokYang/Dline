@@ -1,4 +1,4 @@
-import type { TaskViewState } from "@shared/ExtensionMessage"
+import type { TaskViewAction, TaskViewState } from "@shared/ExtensionMessage"
 import { VSCodeButton } from "@vscode/webview-ui-toolkit/react"
 import { useState } from "react"
 import {
@@ -17,7 +17,7 @@ export interface FooterActionsProps {
 	draft: InteractionDraft
 	selection?: InteractionSelection
 	dispatch: DispatchInteraction
-	dispatchTaskAction?: (action: "cancel" | "retry") => Promise<void>
+	dispatchTaskAction?: (action: TaskViewAction) => Promise<void>
 	onDraftAccepted?: (settlement: AcceptedInteractionSettlement) => void
 }
 
@@ -63,12 +63,16 @@ export function FooterActions({ view, draft, selection, dispatch, dispatchTaskAc
 									return
 								}
 								if (targetsTask) {
-									if (!dispatchTaskAction || (action.type !== "cancel" && action.type !== "retry")) {
+									const supportedTaskAction =
+										action.type === "cancel" ||
+										action.type === "retry" ||
+										(action.type === "continue_in_background" && Boolean(action.activityId))
+									if (!dispatchTaskAction || !supportedTaskAction) {
 										return
 									}
 									setError(undefined)
 									setPending(true)
-									void dispatchTaskAction(action.type)
+									void dispatchTaskAction(action)
 										.catch((cause: unknown) => setError(errorMessage(cause)))
 										.finally(() => setPending(false))
 									return

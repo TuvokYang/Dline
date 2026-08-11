@@ -107,7 +107,7 @@ describe("FooterActions", () => {
 		expect(screen.getByRole("button", { name: "Reject" })).toBeEnabled()
 	})
 
-	it("submits and settles the current draft through Condense Conversation", async () => {
+	it("confirms Condense Conversation without submitting or settling the current draft", async () => {
 		const dispatch = vi.fn(async () => ({ accepted: true, result: "accepted" }))
 		const onDraftAccepted = vi.fn()
 		const view = approvalView()
@@ -124,7 +124,7 @@ describe("FooterActions", () => {
 				label: "Condense Conversation",
 				appearance: "primary",
 				enabled: true,
-				payloadPolicy: "draft",
+				payloadPolicy: "none",
 				dispatchTarget: "interaction",
 			},
 			{
@@ -155,12 +155,10 @@ describe("FooterActions", () => {
 			interactionId: "interaction-1",
 			actionId: "confirm_utility",
 			stateRevision: 8,
-			draft: { text: "preserve this draft", images: ["image"], files: ["file"] },
+			draft: undefined,
 			selection: undefined,
 		})
-		expect(onDraftAccepted).toHaveBeenCalledWith(
-			expect.objectContaining({ draft: expect.objectContaining({ text: "preserve this draft" }) }),
-		)
+		expect(onDraftAccepted).not.toHaveBeenCalled()
 	})
 
 	it("submits and settles feedback through Regenerate Summary", async () => {
@@ -249,7 +247,41 @@ describe("FooterActions", () => {
 		)
 		fireEvent.click(screen.getByRole("button", { name: "Cancel" }))
 
-		await waitFor(() => expect(dispatchTaskAction).toHaveBeenCalledWith("cancel"))
+		await waitFor(() => expect(dispatchTaskAction).toHaveBeenCalledWith(expect.objectContaining({ type: "cancel" })))
+	})
+
+	it("dispatches Continue in Background with the projected command activity identity", async () => {
+		const view = approvalView()
+		delete view.activeInteraction
+		view.phase = "executing"
+		view.footer.actions = [
+			{
+				type: "continue_in_background",
+				label: "Continue in Background",
+				appearance: "secondary",
+				enabled: true,
+				payloadPolicy: "none",
+				dispatchTarget: "task",
+				activityId: "command-1",
+			},
+		]
+		const dispatchTaskAction = vi.fn(async () => undefined)
+
+		render(
+			<FooterActions
+				dispatch={vi.fn()}
+				dispatchTaskAction={dispatchTaskAction}
+				draft={{ text: "", images: [], files: [] }}
+				view={view}
+			/>,
+		)
+		fireEvent.click(screen.getByRole("button", { name: "Continue in Background" }))
+
+		await waitFor(() =>
+			expect(dispatchTaskAction).toHaveBeenCalledWith(
+				expect.objectContaining({ type: "continue_in_background", activityId: "command-1" }),
+			),
+		)
 	})
 
 	it("shows a task action dispatch failure and restores the action", async () => {

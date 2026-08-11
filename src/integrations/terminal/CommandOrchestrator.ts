@@ -681,8 +681,7 @@ export async function orchestrateCommandExecution(
 				)
 			} else if (canManualHandoff) {
 				// Synchronous commands stay in the foreground; once the handoff wait
-				// elapsed, tell the UI a "Move to background" action is available and
-				// wait for the external request instead of handing off automatically.
+				// elapsed, publish the footer handoff action and wait for its request.
 				handoffAvailableTimer = setTimeout(() => onHandoffAvailable?.(), Math.max(0, startedAt + handoffMs - Date.now()))
 				if (handoffRequest) {
 					boundaries.push(handoffRequest.promise.then(() => "handoff" as const))

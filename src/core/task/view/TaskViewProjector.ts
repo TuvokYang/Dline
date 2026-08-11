@@ -40,6 +40,8 @@ const CANCELLABLE_PHASES = new Set<TaskPhase>([
 export interface TaskViewProjectionOptions {
 	autoRetryActive?: boolean
 	autoRetryPending?: boolean
+	commandHandoffActivityId?: string
+	commandHandoffRequested?: boolean
 }
 
 /** Project complete Webview state from backend-owned task state. */
@@ -61,7 +63,7 @@ export function projectTaskView(
 	const diagnostic = state.interaction?.status === "opening" && !state.error ? undefined : interaction?.diagnostic
 	const isCancellable = CANCELLABLE_PHASES.has(state.phase)
 	const interactionIsBeingResolved = state.interaction?.status === "resolving"
-	const actions =
+	const projectedActions =
 		options.autoRetryActive && !state.interaction
 			? [{ ...RETRY_PENDING_ACTION }, ...(isCancellable ? [{ ...CANCEL_ACTION }] : [])]
 			: interactionIsBeingResolved
@@ -69,6 +71,20 @@ export function projectTaskView(
 					? [{ ...CANCEL_ACTION }]
 					: []
 				: (interaction?.actions ?? (isCancellable ? [{ ...CANCEL_ACTION }] : []))
+	const commandHandoffAction: TaskViewAction | undefined = options.commandHandoffActivityId
+		? {
+				type: "continue_in_background",
+				label: "Continue in Background",
+				appearance: "secondary",
+				enabled: options.commandHandoffRequested !== true,
+				payloadPolicy: "none",
+				dispatchTarget: "task",
+				activityId: options.commandHandoffActivityId,
+			}
+		: undefined
+	const actions = commandHandoffAction
+		? projectedActions.map((action) => (action.type === "cancel" ? commandHandoffAction : action))
+		: projectedActions
 	return {
 		taskId: state.taskId,
 		phase: state.phase,

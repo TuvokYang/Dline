@@ -381,6 +381,8 @@ export interface CommandExecutorCallbacks {
 	resolvePendingAsk?: (response: AskResponse["response"]) => void
 	/** Update the background command running state in the controller */
 	updateBackgroundCommandState: (running: boolean) => void
+	/** Publish a full task view when the foreground handoff action becomes available or changes state. */
+	onHandoffAvailabilityChanged?: () => void
 	/**
 	 * Update a cline message by index
 	 * Supports updating commandCompleted status and/or text content
@@ -394,7 +396,6 @@ export interface CommandExecutorCallbacks {
 			commandExecutionMode?: CommandExecutionMode
 			logPath?: string
 			activityId?: string
-			commandCanMoveToBackground?: boolean
 		},
 	) => Promise<void>
 	/** Get cline messages array */
@@ -418,6 +419,7 @@ export interface CommandExecutorCallbacks {
 		patch: {
 			status?: "running" | "cancelling" | "completed" | "failed" | "timeout" | "cancelled"
 			executionMode?: "foreground" | "background"
+			cancellationOwner?: CommandCancellationOwner
 			latestEvent?: string
 			error?: string
 			lineCount?: number

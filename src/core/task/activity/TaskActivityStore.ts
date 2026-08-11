@@ -141,7 +141,15 @@ export class TaskActivityStore {
 		patch: Partial<
 			Pick<
 				TaskActivityRecord,
-				"status" | "executionMode" | "title" | "detail" | "latestEvent" | "result" | "error" | "finishedAt"
+				| "status"
+				| "executionMode"
+				| "cancellationOwner"
+				| "title"
+				| "detail"
+				| "latestEvent"
+				| "result"
+				| "error"
+				| "finishedAt"
 			>
 		> & { metrics?: Partial<TaskActivityMetrics> },
 	): void {

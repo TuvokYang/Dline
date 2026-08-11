@@ -595,7 +595,7 @@ describe("CommandExecutor explicit background execution", () => {
 		expect(updateClineMessage).not.toHaveBeenCalledWith(0, expect.objectContaining({ commandStatus: "failed" }))
 	})
 
-	it("sets commandCanMoveToBackground after the handoff wait and moves the synchronous command on request", async () => {
+	it("publishes footer handoff readiness after the wait and moves the synchronous command on request", async () => {
 		vi.useFakeTimers()
 		const process = new FakeTerminalProcess()
 		const processPromise = process.asResultPromise()
@@ -614,6 +614,8 @@ describe("CommandExecutor explicit background execution", () => {
 			lastCommand: "",
 		}
 		const messages: Array<Record<string, unknown>> = [{ ask: "command", text: "watch", ts: 505 }]
+		const updateCommandActivity = vi.fn()
+		const onHandoffAvailabilityChanged = vi.fn()
 		const callbacks: CommandExecutorCallbacks = {
 			addToUserMessageContent: vi.fn(),
 			ask: vi.fn(async () => ({ response: "messageResponse" })),
@@ -623,6 +625,8 @@ describe("CommandExecutor explicit background execution", () => {
 			updateClineMessage: vi.fn(async (index, patch) => {
 				Object.assign(messages[index], patch)
 			}),
+			updateCommandActivity,
+			onHandoffAvailabilityChanged,
 		}
 		const executor = new CommandExecutor(
 			{
@@ -641,17 +645,39 @@ describe("CommandExecutor explicit background execution", () => {
 
 		try {
 			const execution = executor.execute("watch", undefined, { commandTs: 505, synchronous: true })
-			// First advance lets the async setup (shell environment, terminal creation)
-			// settle and arm the handoff timer; the second advance fires it.
+			await vi.waitFor(() => assert.equal(vi.mocked(standaloneManager.runCommand).mock.calls.length, 1))
+			assert.equal(executor.getReadyBackgroundHandoffActivityId(), undefined)
 			await vi.advanceTimersByTimeAsync(10_000)
-			await vi.advanceTimersByTimeAsync(10_000)
-			assert.equal(messages[0].commandCanMoveToBackground, true)
+			assert.equal(executor.getReadyBackgroundHandoffActivityId(), "command_505_1")
+			assert.equal(executor.isBackgroundHandoffRequested("command_505_1"), false)
+			assert.equal(onHandoffAvailabilityChanged.mock.calls.length, 1)
 
 			assert.equal(await executor.requestBackgroundHandoff("command_505_1"), true)
+			assert.equal(executor.getReadyBackgroundHandoffActivityId(), "command_505_1")
+			assert.equal(executor.isBackgroundHandoffRequested("command_505_1"), true)
+			assert.equal(onHandoffAvailabilityChanged.mock.calls.length, 2)
 			assert.equal(await executor.requestBackgroundHandoff("command_505_1"), false)
 			const result = await execution
+			assert.equal(executor.getReadyBackgroundHandoffActivityId(), undefined)
+			assert.equal(executor.isBackgroundHandoffRequested("command_505_1"), false)
+			assert.equal(onHandoffAvailabilityChanged.mock.calls.length, 3)
 			assert.equal(result.completed, false)
 			assert.match(result.result as string, /Command is running in the background/i)
+			assert.equal(standaloneManager.getBackgroundCommand("command_505_1")?.cancellationOwner, "explicit")
+			assert.equal(executor.hasTaskOwnedCommand(), false)
+			assert.equal(await executor.cancelTaskOwnedCommands(), false)
+			assert.equal(process.terminate.mock.calls.length, 0)
+			assert.equal(
+				updateCommandActivity.mock.calls.some(
+					([activityId, patch]) =>
+						activityId === "command_505_1" &&
+						typeof patch === "object" &&
+						patch !== null &&
+						"cancellationOwner" in patch &&
+						patch.cancellationOwner === "explicit",
+				),
+				true,
+			)
 		} finally {
 			process.complete({ exitCode: 0, signal: null })
 			process.continue()

@@ -209,7 +209,7 @@ export interface ClineMessage {
 	commandStatus?: CommandStatus
 	/** Whether this command currently owns the foreground turn or is detached in the background. */
 	commandExecutionMode?: CommandExecutionMode
-	/** Set once the handoff wait elapsed so the UI can offer a "Move to background" action. */
+	/** Legacy persisted handoff flag; current UI uses the backend-projected footer action. */
 	commandCanMoveToBackground?: boolean
 	/** Stable identity of the interaction that owns this ask presentation. */
 	interactionId?: string
@@ -373,6 +373,7 @@ export type TaskViewActionType =
 	| "acknowledge"
 	| "stop"
 	| "confirm_utility"
+	| "continue_in_background"
 	| "cancel"
 
 /** Payload required when dispatching one projected action. */
@@ -386,6 +387,8 @@ export interface TaskViewAction {
 	enabled: boolean
 	payloadPolicy: TaskViewPayloadPolicy
 	dispatchTarget: "interaction" | "task"
+	/** Stable command identity required by command-scoped task actions. */
+	activityId?: string
 }
 
 /** Diagnostic for an interaction that cannot be projected to its persisted ask anchor. */

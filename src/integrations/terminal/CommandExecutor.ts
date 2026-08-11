@@ -71,6 +71,8 @@ export class CommandExecutor {
 	private readonly cancellationOwners = new Map<string, CommandCancellationOwner>()
 	private readonly cancelledActivityIds = new Set<string>()
 	private readonly pendingHandoffs = new Map<string, { promise: Promise<void>; resolve: () => void }>()
+	private readyBackgroundHandoffActivityId: string | undefined
+	private requestedBackgroundHandoffActivityId: string | undefined
 
 	private readonly handoffSeconds: number
 
@@ -306,6 +308,7 @@ export class CommandExecutor {
 			if (this.currentProcess === process) this.currentProcess = null
 			this.processes.delete(activityId)
 			this.pendingHandoffs.delete(activityId)
+			this.clearBackgroundHandoffState(activityId)
 			const functionId = this.functionIdsByActivityId.get(activityId)
 			if (functionId) {
 				this.functionIdsByActivityId.delete(activityId)
@@ -370,12 +373,10 @@ export class CommandExecutor {
 			handoffSeconds: this.handoffSeconds,
 			handoffRequest,
 			onHandoffAvailable: () => {
-				if (!options?.commandTs) return
-				const messages = this.callbacks.getClineMessages() as Array<{ ts?: number }>
-				const commandIndex = messages.findIndex((message) => message.ts === options.commandTs)
-				if (commandIndex !== -1) {
-					void this.callbacks.updateClineMessage(commandIndex, { commandCanMoveToBackground: true })
-				}
+				if (!this.pendingHandoffs.has(activityId)) return
+				this.readyBackgroundHandoffActivityId = activityId
+				this.requestedBackgroundHandoffActivityId = undefined
+				this.callbacks.onHandoffAvailabilityChanged?.()
 			},
 			onTimeout: markTimedOut,
 			suppressUserInteraction: options?.suppressUserInteraction,
@@ -398,41 +399,50 @@ export class CommandExecutor {
 						logFilePath: backgroundCommand.logFilePath,
 					}
 				}
-				backgroundCommand = this.standaloneManager.trackBackgroundCommand(
-					process,
-					command,
-					activityId,
-					existingOutput,
-					{
-						origin: options?.startInBackground ? "explicit_background" : "foreground",
-						cancellationOwner,
-						functionId: options?.functionId,
-						...timing,
-					},
-					{
-						onOutputLine: (line) => {
-							activityLineCount++
-							this.callbacks.appendCommandActivityOutput?.(activityId, `${line}\n`)
-							this.callbacks.updateCommandActivity?.(activityId, {
-								latestEvent: line.trim() || "Command produced output",
-								lineCount: activityLineCount,
-							})
+				try {
+					backgroundCommand = this.standaloneManager.trackBackgroundCommand(
+						process,
+						command,
+						activityId,
+						existingOutput,
+						{
+							origin: options?.startInBackground ? "explicit_background" : "foreground",
+							cancellationOwner: "explicit",
+							functionId: options?.functionId,
+							...timing,
 						},
-						onTimeout: () => {
-							markTimedOut()
+						{
+							onOutputLine: (line) => {
+								activityLineCount++
+								this.callbacks.appendCommandActivityOutput?.(activityId, `${line}\n`)
+								this.callbacks.updateCommandActivity?.(activityId, {
+									latestEvent: line.trim() || "Command produced output",
+									lineCount: activityLineCount,
+								})
+							},
+							onTimeout: () => {
+								markTimedOut()
+							},
+							onLogFileCreated: (logFilePath) => {
+								this.callbacks.updateCommandActivity?.(activityId, { logPath: logFilePath })
+								if (!options?.commandTs) return
+								const messages = this.callbacks.getClineMessages() as Array<{ ts?: number }>
+								const commandIndex = messages.findIndex((message) => message.ts === options.commandTs)
+								if (commandIndex !== -1) {
+									void this.callbacks.updateClineMessage(commandIndex, { logPath: logFilePath })
+								}
+							},
 						},
-						onLogFileCreated: (logFilePath) => {
-							this.callbacks.updateCommandActivity?.(activityId, { logPath: logFilePath })
-							if (!options?.commandTs) return
-							const messages = this.callbacks.getClineMessages() as Array<{ ts?: number }>
-							const commandIndex = messages.findIndex((message) => message.ts === options.commandTs)
-							if (commandIndex !== -1) {
-								void this.callbacks.updateClineMessage(commandIndex, { logPath: logFilePath })
-							}
-						},
-					},
-				)
+					)
+				} catch (error) {
+					this.clearBackgroundHandoffState(activityId)
+					throw error
+				}
+				// A successful handoff detaches the command from the foreground Task
+				// lifecycle while preserving explicit command/activity cancellation.
+				this.cancellationOwners.set(activityId, "explicit")
 				this.callbacks.updateCommandActivity?.(activityId, {
+					cancellationOwner: "explicit",
 					executionMode: "background",
 					latestEvent: "Continuing in background",
 					lineCount: activityLineCount,
@@ -445,6 +455,7 @@ export class CommandExecutor {
 						void this.callbacks.updateClineMessage(commandIndex, { commandExecutionMode: "background" })
 					}
 				}
+				this.clearBackgroundHandoffState(activityId)
 				return {
 					backgroundCommandId: backgroundCommand.id,
 					logFilePath: backgroundCommand.logFilePath,
@@ -487,10 +498,36 @@ export class CommandExecutor {
 	 */
 	async requestBackgroundHandoff(activityId: string): Promise<boolean> {
 		const pending = this.pendingHandoffs.get(activityId)
-		if (!pending) return false
+		if (!pending || this.readyBackgroundHandoffActivityId !== activityId) return false
 		this.pendingHandoffs.delete(activityId)
+		this.requestedBackgroundHandoffActivityId = activityId
+		this.callbacks.onHandoffAvailabilityChanged?.()
 		pending.resolve()
 		return true
+	}
+
+	/** Return the exact foreground command currently eligible for manual background handoff. */
+	getReadyBackgroundHandoffActivityId(): string | undefined {
+		return this.readyBackgroundHandoffActivityId
+	}
+
+	/** Return whether the eligible handoff has been accepted and is transitioning. */
+	isBackgroundHandoffRequested(activityId: string): boolean {
+		return this.requestedBackgroundHandoffActivityId === activityId
+	}
+
+	/** Clear one command's projected handoff action after completion, failure, or successful handoff. */
+	private clearBackgroundHandoffState(activityId: string): void {
+		let changed = false
+		if (this.readyBackgroundHandoffActivityId === activityId) {
+			this.readyBackgroundHandoffActivityId = undefined
+			changed = true
+		}
+		if (this.requestedBackgroundHandoffActivityId === activityId) {
+			this.requestedBackgroundHandoffActivityId = undefined
+			changed = true
+		}
+		if (changed) this.callbacks.onHandoffAvailabilityChanged?.()
 	}
 
 	async cancelCommand(activityId: string): Promise<boolean> {

@@ -872,7 +872,7 @@ e2e(
 )
 
 e2e(
-	"Terminal - synchronous command offers Move to background after the handoff wait and moves on click",
+	"Terminal - synchronous command offers Continue in Background in the footer after the handoff wait",
 	async ({ helper, page, server, sidebar, userDataDir }) => {
 		e2e.setTimeout(240_000)
 		await helper.signin(sidebar)
@@ -914,9 +914,12 @@ e2e(
 		await input.fill("E2E_MANUAL_HANDOFF_TASK")
 		await sidebar.getByTestId("send-button").click()
 		await expect(sidebar.getByTestId("command-execution-mode").last()).toHaveText("Foreground", { timeout: 60_000 })
-		const moveToBackground = sidebar.getByRole("button", { name: "Move to background" })
-		await expect(moveToBackground).toBeVisible({ timeout: 40_000 })
-		await moveToBackground.click()
+		const taskFooter = sidebar.getByRole("contentinfo")
+		await expect(sidebar.getByRole("button", { name: "Move to background" })).toHaveCount(0)
+		const continueInBackground = taskFooter.getByText("Continue in Background", { exact: true })
+		await expect(continueInBackground).toBeVisible({ timeout: 40_000 })
+		await expect(taskFooter.getByText("Cancel", { exact: true })).toHaveCount(0)
+		await continueInBackground.click()
 
 		await expect(sidebar.getByText("E2E_MANUAL_HANDOFF_MOVED", { exact: false }).last()).toBeVisible({
 			timeout: 60_000,
@@ -924,6 +927,107 @@ e2e(
 		const handoffConsumption = server.getMockConsumptions("openai-compatible-chat")[1]
 		expect(handoffConsumption.requestToolResults[0]?.content).toContain("Command is running in the background")
 		expect(handoffConsumption.contractError).toBeUndefined()
+		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+	},
+)
+
+e2e(
+	"Terminal - task Cancel preserves a manually handed-off command after its tool result reaches the API",
+	async ({ helper, page, server, sidebar, userDataDir }) => {
+		e2e.setTimeout(240_000)
+		await helper.signin(sidebar)
+		await openSettings(page, sidebar)
+		await sidebar.getByTestId("tab-terminal").click()
+		await setDropdownValue(sidebar, sidebar.locator("#terminal-execution-mode"), "backgroundExec", "Background Exec")
+		const handoffInput = sidebar.locator("#terminal-command-handoff input")
+		await handoffInput.fill("1")
+		await expect(handoffInput).toHaveValue("1")
+		await returnToChat(sidebar)
+		await setAutoApproveAction(sidebar, "Execute safe commands", true)
+
+		const startedMarker = "E2E_TASK_CANCEL_HANDOFF_STARTED"
+		const finishedMarker = "E2E_TASK_CANCEL_HANDOFF_FINISHED"
+		const command = `node -e "console.log('${startedMarker}'); setTimeout(()=>console.log('${finishedMarker}'),12000)"`
+		server.resetOpenAiMock()
+		server.enqueueOpenAiResponses(
+			{
+				type: "tool",
+				id: "call_task_cancel_handoff_command",
+				name: "execute_command",
+				arguments: {
+					command,
+					workdirectory: ".",
+					requires_approval: false,
+					synchronous: true,
+					timeout: 30,
+				},
+			},
+			{
+				type: "tool",
+				id: "call_task_cancel_handoff_interrupted",
+				name: "attempt_completion",
+				arguments: { result: "E2E_TASK_CANCEL_HANDOFF_MUST_NOT_RENDER" },
+				delayMs: 30_000,
+				expectedToolResults: [
+					{
+						callId: "call_task_cancel_handoff_command",
+						contentIncludes: "Command is running in the background",
+					},
+				],
+			},
+		)
+
+		const input = sidebar.getByTestId("chat-input")
+		await input.fill("Move a command to the background, then cancel only the foreground task.")
+		await sidebar.getByTestId("send-button").click()
+		await expect(sidebar.getByTestId("command-execution-mode").last()).toHaveText("Foreground", { timeout: 60_000 })
+		const taskFooter = sidebar.getByRole("contentinfo")
+		await expect(sidebar.getByRole("button", { name: "Move to background" })).toHaveCount(0)
+		const continueInBackground = taskFooter.getByText("Continue in Background", { exact: true })
+		await expect(continueInBackground).toBeVisible({ timeout: 30_000 })
+		await expect(taskFooter.getByText("Cancel", { exact: true })).toHaveCount(0)
+		await continueInBackground.click()
+
+		await expect.poll(() => server.openAiRequestCount, { timeout: 60_000 }).toBe(2)
+		const handoffConsumption = server.getMockConsumptions("openai-compatible-chat")[1]
+		expect(handoffConsumption.contractError).toBeUndefined()
+		expect(handoffConsumption.requestToolResults).toContainEqual(
+			expect.objectContaining({
+				callId: "call_task_cancel_handoff_command",
+				content: expect.stringContaining("Command is running in the background"),
+			}),
+		)
+		await expect(sidebar.getByTestId("command-execution-mode").last()).toHaveText("Background", { timeout: 30_000 })
+
+		await sidebar.getByRole("tab", { name: /^Activities(?: \d+)?$/ }).click()
+		await sidebar.getByRole("button", { name: "All", exact: true }).first().click()
+		const activity = sidebar.getByTestId("activity-item").filter({ hasText: command })
+		await expect(activity).toHaveCount(1, { timeout: 30_000 })
+		await activity.locator("button").first().click()
+		const logLink = activity.getByRole("button", { name: /Open log file/ })
+		await expect(logLink).toBeVisible({ timeout: 30_000 })
+		const logPath = (await logLink.getAttribute("title"))?.replace(/^Click to open:\s*/, "")
+		if (!logPath) throw new Error("Handed-off command Activity did not expose its log path")
+
+		await sidebar.getByRole("tab", { name: "Work", exact: true }).click()
+		const taskCancelButton = taskFooter.getByText("Cancel", { exact: true })
+		await expect(taskCancelButton).toBeVisible({ timeout: 30_000 })
+		await taskCancelButton.click()
+		await expect(taskFooter.getByText("Resume", { exact: true })).toBeVisible({ timeout: 30_000 })
+		await expect(sidebar.getByText("E2E_TASK_CANCEL_HANDOFF_MUST_NOT_RENDER", { exact: false })).toHaveCount(0)
+
+		await expect
+			.poll(async () => readFile(logPath, "utf8").catch(() => ""), { timeout: 30_000 })
+			.toMatch(new RegExp(`${finishedMarker}|\\[CANCELLED\\]`))
+		const persistedLog = await readFile(logPath, "utf8")
+		expect(persistedLog).toContain(finishedMarker)
+		expect(persistedLog).not.toContain("[CANCELLED] Command cancelled by user")
+		expect(server.getMockConsumptions("openai-compatible-chat")[1].abortedAtMs).toBeDefined()
+
+		await sidebar.getByRole("tab", { name: /^Activities(?: \d+)?$/ }).click()
+		await sidebar.getByRole("button", { name: "All", exact: true }).first().click()
+		await expect(activity).toContainText("completed", { timeout: 30_000 })
+		await expect(activity).not.toContainText("Cancelled by user")
 		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
 	},
 )

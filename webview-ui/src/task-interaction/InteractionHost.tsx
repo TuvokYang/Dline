@@ -1,6 +1,6 @@
-import type { ClineMessage, TaskViewState } from "@shared/ExtensionMessage"
+import type { ClineMessage, TaskViewAction, TaskViewState } from "@shared/ExtensionMessage"
 import { EmptyRequest } from "@shared/proto/dline/common"
-import { AskResponseRequest } from "@shared/proto/dline/task"
+import { AskResponseRequest, MoveCommandToBackgroundRequest } from "@shared/proto/dline/task"
 import { useState } from "react"
 import { TaskServiceClient } from "@/services/grpc-client"
 import { FooterActions } from "./FooterActions"
@@ -49,11 +49,21 @@ const DIAGNOSTIC_MESSAGES = {
 	interaction_anchor_is_say: "Dline found an invalid saved interaction message. The task remains saved for recovery.",
 } as const
 
-type TaskLevelAction = "cancel" | "retry"
-
-async function dispatchTaskAction(action: TaskLevelAction): Promise<void> {
-	if (action === "retry") {
+async function dispatchTaskAction(view: TaskViewState, action: TaskViewAction): Promise<void> {
+	if (action.type === "retry") {
 		await TaskServiceClient.askResponse(AskResponseRequest.create({ responseType: "retry" }))
+		return
+	}
+	if (action.type === "continue_in_background") {
+		if (!action.activityId) {
+			throw new Error("The foreground command is no longer available to continue in the background.")
+		}
+		const response = await TaskServiceClient.moveCommandToBackground(
+			MoveCommandToBackgroundRequest.create({ taskId: view.taskId, activityId: action.activityId }),
+		)
+		if (!response.moved) {
+			throw new Error("The foreground command is no longer available to continue in the background.")
+		}
 		return
 	}
 	await TaskServiceClient.cancelTask(EmptyRequest.create({}))
@@ -73,7 +83,7 @@ export function InteractionHost({
 	const anchor = findActiveInteractionAnchor(messages, view)
 	const presentationKind = interaction?.presentationKind
 	const supported = presentationKind ? isPresentationKind(presentationKind) : false
-	const taskActionDispatcher = (action: TaskLevelAction) => dispatchTaskAction(action)
+	const taskActionDispatcher = (action: TaskViewAction) => dispatchTaskAction(view, action)
 	const taskOnlyView: TaskViewState = {
 		...view,
 		activeInteraction: undefined,

@@ -951,6 +951,9 @@ export class Task {
 			},
 			updateBackgroundCommandState: (isRunning: boolean) =>
 				this.controller.updateBackgroundCommandState(isRunning, this.taskId),
+			onHandoffAvailabilityChanged: () => {
+				void this.postStateToWebview({ immediate: true })
+			},
 			updateClineMessage: async (
 				index: number,
 				updates: {
@@ -3037,6 +3040,16 @@ export class Task {
 		return this.commandExecutor.cancelBackgroundCommand()
 	}
 
+	/** Return the synchronous foreground command currently eligible for manual background handoff. */
+	public getReadyBackgroundHandoffActivityId(): string | undefined {
+		return this.commandExecutor.getReadyBackgroundHandoffActivityId()
+	}
+
+	/** Return whether the current manual handoff is already transitioning. */
+	public isBackgroundHandoffRequested(activityId: string): boolean {
+		return this.commandExecutor.isBackgroundHandoffRequested(activityId)
+	}
+
 	/** Request that a synchronous foreground command be handed off to background tracking. */
 	public async moveCommandToBackground(activityId: string): Promise<boolean> {
 		return this.commandExecutor.requestBackgroundHandoff(activityId)
@@ -4912,6 +4925,9 @@ export class Task {
 				targetTool: ClineDefaultTool.SUMMARIZE_TASK,
 				...(operationId === undefined ? {} : { operationId }),
 			} as const
+			const isManualCompaction = source === "task_header"
+			this.taskState.isManualContextCompactionRequest = isManualCompaction
+			this.taskState.isInternalContextCompactionRequest = !isManualCompaction
 			requestScope.explicitInstructions.register(compactionDeclaration)
 			if (source === "auto_compaction" || source === "mode_switch") {
 				this.compactionRequestReplay.begin(

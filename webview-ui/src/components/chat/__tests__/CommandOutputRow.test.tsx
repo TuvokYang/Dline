@@ -21,41 +21,18 @@ const baseProps = {
 	onToggleCollapsed: vi.fn(),
 }
 
-describe("CommandOutputRow move to background", () => {
-	it("shows Move to background for a running foreground command with the flag", () => {
-		const onMoveToBackground = vi.fn()
-		render(
-			<CommandOutputRow
-				{...baseProps}
-				canMoveToBackground={true}
-				isCollapsed={false}
-				onMoveToBackground={onMoveToBackground}
-			/>,
-		)
+describe("CommandOutputRow handoff controls", () => {
+	it("does not render a handoff action inside the command card", () => {
+		const legacyHandoffProps = {
+			...baseProps,
+			canMoveToBackground: true,
+			onMoveToBackground: vi.fn(),
+		} as unknown as React.ComponentProps<typeof CommandOutputRow>
 
-		fireEvent.click(screen.getByRole("button", { name: "Move to background" }))
-		expect(onMoveToBackground).toHaveBeenCalledOnce()
-	})
-
-	it("hides Move to background for background commands", () => {
-		const onMoveToBackground = vi.fn()
-		render(
-			<CommandOutputRow
-				{...baseProps}
-				canMoveToBackground={true}
-				isBackgroundExec={true}
-				isCollapsed={false}
-				onMoveToBackground={onMoveToBackground}
-			/>,
-		)
+		render(<CommandOutputRow {...legacyHandoffProps} isCollapsed={false} />)
 
 		expect(screen.queryByRole("button", { name: "Move to background" })).toBeNull()
-	})
-
-	it("hides Move to background when the flag is not set", () => {
-		render(<CommandOutputRow {...baseProps} isCollapsed={false} onMoveToBackground={vi.fn()} />)
-
-		expect(screen.queryByRole("button", { name: "Move to background" })).toBeNull()
+		expect(screen.queryByRole("button", { name: "Continue in Background" })).toBeNull()
 	})
 })
 
