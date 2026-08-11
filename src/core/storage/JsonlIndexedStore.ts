@@ -14,6 +14,15 @@ const L2_MAX_SIZE = 500
 /** Default flush interval in milliseconds. */
 const DEFAULT_FLUSH_INTERVAL_MS = 1000
 
+export interface JsonlIndexedStoreOptions {
+	/**
+	 * Treat append as creation even when its requested `ts` is already present.
+	 * The store allocates a later unique timestamp locally and again while holding
+	 * FileLock, so concurrent appenders cannot collapse distinct rows by identity.
+	 */
+	ensureUniqueAppendTs?: boolean
+}
+
 /**
  * Single-file indexed storage for JSONL entries.
  *
@@ -28,10 +37,11 @@ const DEFAULT_FLUSH_INTERVAL_MS = 1000
  *   only the affected range to disk via writeJsonl (tmp+rename, atomic)
  *
  * **Merge strategy** (in _flush):
- * - Disk rows [0, _firstDirtyIndex) are untouched
- * - Disk rows [_firstDirtyIndex, end) merged with memory rows [_firstDirtyIndex, end)
- * - Same virtual row index → memory wins
- * - Result written atomically via writeJsonl
+ * - Compare the local items with this instance's last persisted baseline
+ * - Apply local updates and removals to the latest disk state by message identity (`ts`)
+ * - Preserve rows appended by another instance after this store was opened
+ * - Merge concurrent additions deterministically within their baseline gap
+ * - Write the merged result atomically via writeJsonl
  *
  * @typeParam T Entry type — must include a numeric `ts` field
  */
@@ -56,20 +66,27 @@ export class JsonlIndexedStore<T extends { ts: number }> {
 	private _dirty = false
 	/** First modified virtual row index (0-based). _items.length means no dirty rows. */
 	private _firstDirtyIndex = 0
+	/** Last disk state observed by this instance, used for three-way merge. */
+	private _persistedItems: T[] = []
 
 	// ── Concurrency ──
 	private _mutex = new Mutex()
 	private _lock: FileLock
 	private _loaded = false
+	private _closing = false
+	private _closed = false
+	private _closePromise: Promise<void> | undefined
 
 	// ── Flush timer ──
 	private _flushTimer: ReturnType<typeof setInterval> | null = null
 	private _flushIntervalMs: number
+	private readonly _ensureUniqueAppendTs: boolean
 
-	private constructor(filePath: string, flushIntervalMs: number) {
+	private constructor(filePath: string, flushIntervalMs: number, options: JsonlIndexedStoreOptions) {
 		this._filePath = filePath
 		this._lock = new FileLock()
 		this._flushIntervalMs = flushIntervalMs
+		this._ensureUniqueAppendTs = options.ensureUniqueAppendTs ?? false
 	}
 
 	// ──────────────── Factory ────────────────
@@ -82,9 +99,11 @@ export class JsonlIndexedStore<T extends { ts: number }> {
 	 */
 	static async open<T extends { ts: number }>(
 		filePath: string,
-		flushIntervalMs: number = DEFAULT_FLUSH_INTERVAL_MS,
+		flushIntervalOrOptions: number | JsonlIndexedStoreOptions = DEFAULT_FLUSH_INTERVAL_MS,
 	): Promise<JsonlIndexedStore<T>> {
-		const store = new JsonlIndexedStore<T>(filePath, flushIntervalMs)
+		const flushIntervalMs = typeof flushIntervalOrOptions === "number" ? flushIntervalOrOptions : DEFAULT_FLUSH_INTERVAL_MS
+		const options = typeof flushIntervalOrOptions === "number" ? {} : flushIntervalOrOptions
+		const store = new JsonlIndexedStore<T>(filePath, flushIntervalMs, options)
 		await store._ensureLoaded()
 		store._startFlushTimer()
 		return store
@@ -165,9 +184,13 @@ export class JsonlIndexedStore<T extends { ts: number }> {
 		this._l2Cache.clear()
 		this._l2AccessOrder = []
 		this._setItems(raw)
+		this._persistedItems = this._cloneItems(raw)
 		this._rebuildTsIndex()
 		this._fullyLoaded = true
-		// Keep _firstDirtyIndex after loading all — flush may still be pending
+		if (force) {
+			this._dirty = false
+			this._firstDirtyIndex = this._items.length
+		}
 	}
 
 	get isFullyLoaded(): boolean {
@@ -181,11 +204,13 @@ export class JsonlIndexedStore<T extends { ts: number }> {
 	 * Safe because append only adds to the end, never changes existing virtual row numbers.
 	 */
 	async append(item: T): Promise<void> {
+		this._assertWritable()
 		await this._mutex.withLock(async () => {
-			this._items.push(item)
-			this._l1Index.set(item.ts)
-			this._sortedTs.push(item.ts)
-			this._addToL2(item.ts, item)
+			const admittedItem = this._ensureUniqueAppendTs ? this._withLocallyUniqueAppendTs(item) : item
+			this._items.push(admittedItem)
+			this._l1Index.set(admittedItem.ts)
+			this._sortedTs.push(admittedItem.ts)
+			this._addToL2(admittedItem.ts, admittedItem)
 			this._markDirty(this._items.length - 1)
 		})
 	}
@@ -199,6 +224,7 @@ export class JsonlIndexedStore<T extends { ts: number }> {
 	 * @param item The entry to insert
 	 */
 	async insertLine(index: number, item: T): Promise<void> {
+		this._assertWritable()
 		await this._mutex.withLock(async () => {
 			if (index >= this._items.length) {
 				this._items.push(item)
@@ -217,6 +243,7 @@ export class JsonlIndexedStore<T extends { ts: number }> {
 	 * Ensures _fullyLoaded before updating so the index maps to the correct entry.
 	 */
 	async updateAt(index: number, item: T): Promise<void> {
+		this._assertWritable()
 		await this._mutex.withLock(async () => {
 			await this._ensureFullyLoaded()
 			if (index < 0 || index >= this._items.length) {
@@ -236,6 +263,7 @@ export class JsonlIndexedStore<T extends { ts: number }> {
 	 * cannot replace one another with stale copies.
 	 */
 	async patchAt(index: number, updates: Partial<T>): Promise<T> {
+		this._assertWritable()
 		return await this._mutex.withLock(async () => {
 			await this._ensureFullyLoaded()
 			if (index < 0 || index >= this._items.length) {
@@ -256,6 +284,7 @@ export class JsonlIndexedStore<T extends { ts: number }> {
 	 * Ensures _fullyLoaded before upserting so ts-based lookup is accurate.
 	 */
 	async upsertByTs(item: T): Promise<void> {
+		this._assertWritable()
 		await this._mutex.withLock(async () => {
 			await this._ensureFullyLoaded()
 			const existingIdx = (() => {
@@ -379,6 +408,7 @@ export class JsonlIndexedStore<T extends { ts: number }> {
 	 * @param fn Transformation function: receives current items, returns modified items
 	 */
 	async transact(fn: (items: T[]) => T[]): Promise<void> {
+		this._assertWritable()
 		await this._mutex.withLock(async () => {
 			// Ensure all pending dirty data is flushed before reading disk
 			await this._flushLocked()
@@ -395,6 +425,7 @@ export class JsonlIndexedStore<T extends { ts: number }> {
 
 				// Update in-memory state (pong — memory now matches disk)
 				this._items = result
+				this._persistedItems = this._cloneItems(result)
 				this._rebuildTsIndex()
 
 				// Rebuild L2 cache to reflect new state (stale entries would break getByTs)
@@ -457,45 +488,31 @@ export class JsonlIndexedStore<T extends { ts: number }> {
 
 	/**
 	 * Core flush logic (caller must hold _mutex).
-	 * 1. FileLock acquire
-	 * 2. Read disk rows from _firstDirtyIndex onward
-	 * 3. Merge: disk[0.._firstDirtyIndex) unchanged, memory rows from _firstDirtyIndex win
-	 * 4. writeJsonl atomically
-	 * 5. Reset dirty state
+	 * 1. Acquire FileLock
+	 * 2. Read the latest complete disk state
+	 * 3. Three-way merge local changes against the persisted baseline and latest disk state
+	 * 4. Write the merged result atomically
+	 * 5. Reset the persisted baseline and dirty state
 	 */
 	private async _flushLocked(): Promise<void> {
 		if (!this._dirty) return
 
 		await this._lock.withLock(this._filePath, async () => {
-			// Read current disk content to get cross-process writes
+			// Merge against the latest disk state. FileLock serializes writers, while
+			// the persisted baseline prevents a stale instance from deleting rows
+			// appended by another task/window after this instance was opened.
 			const diskItems = await readJsonl<T>(this._filePath)
-			const dirtyStart = Math.min(this._firstDirtyIndex, diskItems.length)
+			const merged = this._mergeWithDisk(diskItems)
 
-			// Merge: disk[0..dirtyStart) unchanged, memory[dirtyStart..] wins
-			const merged: T[] = []
-			// Keep disk rows before dirty start
-			for (let i = 0; i < dirtyStart; i++) {
-				merged.push(diskItems[i])
-			}
-			// Memory rows from dirty start
-			for (let i = dirtyStart; i < this._items.length; i++) {
-				merged.push(this._items[i])
-			}
-
-			// Write atomically
 			await writeJsonl(this._filePath, merged)
-
-			// Rebuild L1 from merged data (accurate ts→offset not needed, just ts set)
-			this._l1Index.clear()
-			this._sortedTs = []
-			for (const entry of merged) {
-				if (entry.ts > 0) {
-					this._l1Index.set(entry.ts)
-					this._sortedTs.push(entry.ts)
-				}
-			}
-			this._sortedTs.sort((a, b) => a - b)
 			this._items = merged
+			this._persistedItems = this._cloneItems(merged)
+			this._l2Cache.clear()
+			this._l2AccessOrder = []
+			this._rebuildTsIndex()
+			for (let i = 0; i < Math.min(merged.length, L2_MAX_SIZE); i++) {
+				if (merged[i].ts > 0) this._addToL2(merged[i].ts, merged[i])
+			}
 		})
 
 		// Reset dirty state
@@ -517,16 +534,26 @@ export class JsonlIndexedStore<T extends { ts: number }> {
 	// ──────────────── Lifecycle ────────────────
 
 	/**
-	 * Stop flush timer and force a final flush if dirty.
-	 * Call when the store is no longer needed (e.g. task closed).
+	 * Stop accepting writes, stop the timer, and wait for the final atomic flush.
+	 * The promise is idempotent so multiple lifecycle owners can safely await it.
 	 */
-	dispose(): void {
+	close(): Promise<void> {
+		if (this._closePromise) return this._closePromise
+		this._closing = true
 		if (this._flushTimer) {
 			clearInterval(this._flushTimer)
 			this._flushTimer = null
 		}
-		// Fire-and-forget final flush — errors are logged but don't propagate
-		this._flush().catch(() => {})
+		this._closePromise = this._mutex.withLock(async () => {
+			await this._flushLocked()
+			this._closed = true
+		})
+		return this._closePromise
+	}
+
+	/** Compatibility cleanup for callers that cannot await disposal. */
+	dispose(): void {
+		void this.close().catch(() => {})
 	}
 
 	// ──────────────── Internal helpers ────────────────
@@ -580,6 +607,7 @@ export class JsonlIndexedStore<T extends { ts: number }> {
 		}
 		this._sortedTs.sort((a, b) => a - b)
 		this._items = entries
+		this._persistedItems = this._cloneItems(entries)
 		this._firstDirtyIndex = this._items.length
 		this._loaded = true
 		this._fullyLoaded = true
@@ -644,6 +672,104 @@ export class JsonlIndexedStore<T extends { ts: number }> {
 	private async _ensureFullyLoaded(): Promise<void> {
 		if (!this._fullyLoaded) {
 			await this.loadAll()
+		}
+	}
+
+	private _mergeWithDisk(diskItems: T[]): T[] {
+		const baselineByTs = new Map(this._persistedItems.map((item) => [item.ts, item]))
+		const baselineTs = new Set(baselineByTs.keys())
+		const localByTs = new Map(this._items.map((item) => [item.ts, item]))
+		const removedTs = new Set(this._persistedItems.filter((item) => !localByTs.has(item.ts)).map((item) => item.ts))
+		let merged = diskItems.filter((item) => !removedTs.has(item.ts))
+
+		const additions: Array<{ item: T; localIndex: number }> = []
+		for (let localIndex = 0; localIndex < this._items.length; localIndex++) {
+			const localItem = this._items[localIndex]
+			const baselineItem = baselineByTs.get(localItem.ts)
+			if (!baselineItem) {
+				additions.push({ item: localItem, localIndex })
+				continue
+			}
+			if (JSON.stringify(localItem) === JSON.stringify(baselineItem)) continue
+			const diskIndex = merged.findIndex((item) => item.ts === localItem.ts)
+			if (diskIndex >= 0) merged[diskIndex] = localItem
+			else additions.push({ item: localItem, localIndex })
+		}
+
+		if (additions.length === 0) return merged
+
+		if (this._ensureUniqueAppendTs) {
+			const usedTs = new Set(merged.map((item) => item.ts))
+			let maxUsedTs = merged.reduce((max, item) => Math.max(max, item.ts), 0)
+			for (const addition of additions) {
+				if (usedTs.has(addition.item.ts)) {
+					let nextTs = Math.max(addition.item.ts, maxUsedTs) + 1
+					while (usedTs.has(nextTs)) nextTs++
+					addition.item = { ...addition.item, ts: nextTs }
+					this._items[addition.localIndex] = addition.item
+				}
+				usedTs.add(addition.item.ts)
+				maxUsedTs = Math.max(maxUsedTs, addition.item.ts)
+			}
+		}
+
+		const localAdditionTs = new Set(additions.map(({ item }) => item.ts))
+		merged = merged.filter((item) => !localAdditionTs.has(item.ts))
+		const groups = new Map<string, { previousTs?: number; nextTs?: number; items: T[] }>()
+		for (const addition of additions) {
+			let previousTs: number | undefined
+			let nextTs: number | undefined
+			for (let i = addition.localIndex - 1; i >= 0; i--) {
+				if (baselineTs.has(this._items[i].ts)) {
+					previousTs = this._items[i].ts
+					break
+				}
+			}
+			for (let i = addition.localIndex + 1; i < this._items.length; i++) {
+				if (baselineTs.has(this._items[i].ts)) {
+					nextTs = this._items[i].ts
+					break
+				}
+			}
+			const key = `${previousTs ?? "start"}:${nextTs ?? "end"}`
+			const group = groups.get(key) ?? { previousTs, nextTs, items: [] }
+			group.items.push(addition.item)
+			groups.set(key, group)
+		}
+
+		for (const group of groups.values()) {
+			const previousIndex = group.previousTs === undefined ? -1 : merged.findIndex((item) => item.ts === group.previousTs)
+			const nextIndex = group.nextTs === undefined ? merged.length : merged.findIndex((item) => item.ts === group.nextTs)
+			const start = previousIndex >= 0 ? previousIndex + 1 : 0
+			const end = nextIndex >= start ? nextIndex : merged.length
+			const gap = merged.slice(start, end)
+			if (gap.some((item) => baselineTs.has(item.ts))) {
+				merged.splice(end, 0, ...group.items)
+				continue
+			}
+			const byTs = new Map(gap.map((item) => [item.ts, item]))
+			for (const item of group.items) byTs.set(item.ts, item)
+			const ordered = [...byTs.values()].sort((left, right) => left.ts - right.ts)
+			merged.splice(start, end - start, ...ordered)
+		}
+
+		return merged
+	}
+
+	private _cloneItems(items: T[]): T[] {
+		return items.map((item) => JSON.parse(JSON.stringify(item)) as T)
+	}
+
+	private _withLocallyUniqueAppendTs(item: T): T {
+		if (!this._l1Index.has(item.ts)) return item
+		let nextTs = Math.max(item.ts, this._sortedTs.at(-1) ?? item.ts) + 1
+		while (this._l1Index.has(nextTs)) nextTs++
+		return { ...item, ts: nextTs }
+	}
+
+	private _assertWritable(): void {
+		if (this._closing || this._closed) {
+			throw new Error("JsonlIndexedStore is closed")
 		}
 	}
 

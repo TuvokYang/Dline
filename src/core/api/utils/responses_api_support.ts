@@ -87,6 +87,7 @@ export async function* handleResponsesApiStreamResponse(
 	const identityRegistry = createResponsesRegistry("responses-api-support")
 	const streamedArgumentItems = new Set<string>()
 	const emittedArgumentSnapshots = new Set<string>()
+	const completedArgumentItems = new Set<string>()
 	const pendingArgumentSnapshots = new Map<string, string>()
 	try {
 		// Process the response stream
@@ -134,7 +135,11 @@ export async function* handleResponsesApiStreamResponse(
 					const completedArguments = item.arguments || pendingArgumentSnapshots.get(item.id)
 					if (completedArguments && !streamedArgumentItems.has(item.id) && !emittedArgumentSnapshots.has(item.id)) {
 						emittedArgumentSnapshots.add(item.id)
-						yield createResponsesToolChunk(identity, completedArguments)
+						yield createResponsesToolChunk(identity, completedArguments, "delta")
+					}
+					if (!completedArgumentItems.has(item.id)) {
+						completedArgumentItems.add(item.id)
+						yield createResponsesToolChunk(identity, undefined, "completed")
 					}
 					pendingArgumentSnapshots.delete(item.id)
 				}
@@ -198,7 +203,7 @@ export async function* handleResponsesApiStreamResponse(
 				streamedArgumentItems.add(chunk.item_id)
 				pendingArgumentSnapshots.delete(chunk.item_id)
 				if (chunk.delta) {
-					yield createResponsesToolChunk(identity, chunk.delta)
+					yield createResponsesToolChunk(identity, chunk.delta, "delta")
 				}
 			}
 			if (chunk.type === "response.function_call_arguments.done") {
@@ -206,7 +211,11 @@ export async function* handleResponsesApiStreamResponse(
 					const identity = identityRegistry.requireItem(chunk.item_id)
 					if (!streamedArgumentItems.has(chunk.item_id) && !emittedArgumentSnapshots.has(chunk.item_id)) {
 						emittedArgumentSnapshots.add(chunk.item_id)
-						yield createResponsesToolChunk(identity, chunk.arguments)
+						yield createResponsesToolChunk(identity, chunk.arguments, "delta")
+					}
+					if (!completedArgumentItems.has(chunk.item_id)) {
+						completedArgumentItems.add(chunk.item_id)
+						yield createResponsesToolChunk(identity, undefined, "completed")
 					}
 					pendingArgumentSnapshots.delete(chunk.item_id)
 				}
@@ -237,7 +246,11 @@ export async function* handleResponsesApiStreamResponse(
 					if (streamedArgumentItems.has(itemId) || emittedArgumentSnapshots.has(itemId)) continue
 					const identity = identityRegistry.requireItem(itemId)
 					emittedArgumentSnapshots.add(itemId)
-					yield createResponsesToolChunk(identity, argumentsText)
+					yield createResponsesToolChunk(identity, argumentsText, "delta")
+					if (!completedArgumentItems.has(itemId)) {
+						completedArgumentItems.add(itemId)
+						yield createResponsesToolChunk(identity, undefined, "completed")
+					}
 				}
 				pendingArgumentSnapshots.clear()
 			}

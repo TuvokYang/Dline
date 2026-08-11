@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto"
 import fs from "fs/promises"
 import { Logger } from "@/shared/services/Logger"
 
@@ -8,6 +9,8 @@ import { Logger } from "@/shared/services/Logger"
 interface LockPayload {
 	/** Process ID that owns the lock */
 	pid: number
+	/** Unique acquisition identity, including between lock instances in one process. */
+	ownerId?: string
 	/** Timestamp when the lock was acquired (ms since epoch) */
 	ts: number
 }
@@ -25,6 +28,9 @@ const STALE_LOCK_TIMEOUT_MS = 10_000
  */
 const MAX_ACQUIRE_RETRIES = 10
 const ACQUIRE_RETRY_DELAY_MS = 100
+const MAX_RELEASE_ATTEMPTS = 5
+const RELEASE_RETRY_DELAYS_MS = [10, 25, 50, 100] as const
+const RETRYABLE_RELEASE_ERROR_CODES = new Set(["EPERM", "EBUSY", "EACCES"])
 
 /**
  * Derive the lock file path from a JSONL file path.
@@ -34,17 +40,30 @@ function lockPathFor(jsonlPath: string): string {
 	return `${jsonlPath}.lck`
 }
 
+function isProcessAlive(pid: number): boolean {
+	if (!Number.isInteger(pid) || pid <= 0) return false
+	try {
+		process.kill(pid, 0)
+		return true
+	} catch (error) {
+		return (error as NodeJS.ErrnoException).code === "EPERM"
+	}
+}
+
 /**
- * Check whether a lock file exists and is NOT stale.
- * Returns true if the lock is still active (held by a live process).
+ * Check whether a lock file exists and is still active.
+ * A young lock is active unconditionally. An older lock remains active while
+ * its owner process exists, preventing a long atomic write from being broken.
  */
 async function isLockActive(lockPath: string): Promise<boolean> {
 	try {
 		const stat = await fs.stat(lockPath)
 		const age = Date.now() - stat.mtimeMs
-		return age < STALE_LOCK_TIMEOUT_MS
+		if (age < STALE_LOCK_TIMEOUT_MS) return true
+		const payload = JSON.parse(await fs.readFile(lockPath, "utf8")) as LockPayload
+		return typeof payload.ownerId === "string" && payload.ownerId.length > 0 && isProcessAlive(payload.pid)
 	} catch {
-		// Lock file does not exist → not active
+		// Missing or unreadable old lock → not active and eligible for cleanup.
 		return false
 	}
 }
@@ -82,6 +101,8 @@ async function breakStaleLock(lockPath: string): Promise<void> {
  *   })
  */
 export class FileLock {
+	private readonly ownedLocks = new Map<string, string>()
+
 	/**
 	 * Acquire the lock for a JSONL file.
 	 *
@@ -93,53 +114,38 @@ export class FileLock {
 	 */
 	async acquire(jsonlPath: string): Promise<void> {
 		const lockPath = lockPathFor(jsonlPath)
+		const ownerId = randomUUID()
 
 		for (let attempt = 1; attempt <= MAX_ACQUIRE_RETRIES; attempt++) {
-			if (await isLockActive(lockPath)) {
-				if (attempt === MAX_ACQUIRE_RETRIES) {
-					throw new Error(`[FileLock] Failed to acquire lock after ${MAX_ACQUIRE_RETRIES} attempts: ${lockPath}`)
-				}
-				await new Promise((r) => setTimeout(r, ACQUIRE_RETRY_DELAY_MS))
-				continue
-			}
-
-			// If a lock file exists but is stale, break it first
-			try {
-				await fs.stat(lockPath)
-				// File exists → must be stale (isLockActive returned false)
-				await breakStaleLock(lockPath)
-			} catch {
-				// File does not exist — proceed
-			}
-
-			// Create the lock file
 			const payload: LockPayload = {
 				pid: process.pid,
+				ownerId,
 				ts: Date.now(),
 			}
-			await fs.writeFile(lockPath, JSON.stringify(payload), "utf8")
 
-			// Double-check: verify we actually hold the lock by re-reading it
-			// (guards against a TOCTOU race between stat and writeFile)
 			try {
-				const raw = await fs.readFile(lockPath, "utf8")
-				const written = JSON.parse(raw) as LockPayload
-				if (written.pid === process.pid) {
-					return // Lock acquired successfully
+				// `wx` is an atomic create-if-absent operation. Unlike stat + writeFile,
+				// it cannot let two windows or two lock instances both become owners.
+				const handle = await fs.open(lockPath, "wx")
+				try {
+					await handle.writeFile(JSON.stringify(payload), "utf8")
+				} finally {
+					await handle.close()
 				}
-			} catch {
-				// Re-read failed — another process likely won the race
+				this.ownedLocks.set(jsonlPath, ownerId)
+				return
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error
 			}
 
-			// Another process won the race; clean up our lock file and retry
-			try {
-				await fs.unlink(lockPath)
-			} catch {
-				/* best-effort */
+			if (!(await isLockActive(lockPath))) {
+				await breakStaleLock(lockPath)
+				continue
 			}
-			if (attempt < MAX_ACQUIRE_RETRIES) {
-				await new Promise((r) => setTimeout(r, ACQUIRE_RETRY_DELAY_MS))
+			if (attempt === MAX_ACQUIRE_RETRIES) {
+				throw new Error(`[FileLock] Failed to acquire lock after ${MAX_ACQUIRE_RETRIES} attempts: ${lockPath}`)
 			}
+			await new Promise((r) => setTimeout(r, ACQUIRE_RETRY_DELAY_MS))
 		}
 
 		throw new Error(`[FileLock] Failed to acquire lock after all retries: ${lockPath}`)
@@ -147,16 +153,45 @@ export class FileLock {
 
 	/**
 	 * Release the lock for a JSONL file.
-	 * Safe to call even if the lock was never acquired — errors are silently ignored.
+	 * Safe to call if this instance never acquired the lock. Transient Windows
+	 * unlink failures are retried; a persistent owned-lock failure is surfaced.
 	 *
 	 * @param jsonlPath Absolute path to the protected JSONL file
 	 */
 	async release(jsonlPath: string): Promise<void> {
+		const ownerId = this.ownedLocks.get(jsonlPath)
+		if (!ownerId) return
 		const lockPath = lockPathFor(jsonlPath)
+		let payload: LockPayload
 		try {
-			await fs.unlink(lockPath)
-		} catch {
-			// Lock file already gone or never created — ignore
+			payload = JSON.parse(await fs.readFile(lockPath, "utf8")) as LockPayload
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+				this.ownedLocks.delete(jsonlPath)
+			}
+			return
+		}
+		if (payload.ownerId !== ownerId) {
+			this.ownedLocks.delete(jsonlPath)
+			return
+		}
+
+		for (let attempt = 1; attempt <= MAX_RELEASE_ATTEMPTS; attempt++) {
+			try {
+				await fs.unlink(lockPath)
+				this.ownedLocks.delete(jsonlPath)
+				return
+			} catch (error) {
+				const code = (error as NodeJS.ErrnoException).code
+				if (code === "ENOENT") {
+					this.ownedLocks.delete(jsonlPath)
+					return
+				}
+				if (!code || !RETRYABLE_RELEASE_ERROR_CODES.has(code) || attempt === MAX_RELEASE_ATTEMPTS) {
+					throw new Error(`[FileLock] Failed to release owned lock: ${lockPath}`, { cause: error })
+				}
+				await new Promise<void>((resolve) => setTimeout(resolve, RELEASE_RETRY_DELAYS_MS[attempt - 1] ?? 0))
+			}
 		}
 	}
 

@@ -26,6 +26,43 @@ describe("MessageChannel completion ask persistence", () => {
 		await rm(docsDir, { force: true, recursive: true })
 	})
 
+	it("persists the latest reasoning delta when the task store closes mid-stream", async () => {
+		const taskId = "task-partial-reasoning-close"
+		const taskState = new TaskState()
+		const uiMessage = await UIMessage.open(taskId)
+		const messageStateHandler = new MessageStateHandler({
+			taskId,
+			ulid: "ulid-partial-reasoning-close",
+			taskState,
+			uiMessage,
+			updateTaskHistory: async () => [],
+		})
+		const channel = new MessageChannel({
+			pushMessage: () => {},
+			syncState: async () => {},
+			messageStateHandler,
+			taskState,
+			getProviderInfo: () => ({ providerId: "test", modelId: "test-model", mode: "act" }),
+			genTs: () => 100,
+		})
+
+		await channel.say("reasoning", "first thinking delta", undefined, undefined, true, 100)
+		await channel.say("reasoning", "latest complete thinking snapshot", undefined, undefined, true, 100)
+		await messageStateHandler.close()
+
+		const reopened = await UIMessage.open(taskId)
+		expect(reopened.getAll()).toEqual([
+			expect.objectContaining({
+				ts: 100,
+				type: "say",
+				say: "reasoning",
+				text: "latest complete thinking snapshot",
+				partial: true,
+			}),
+		])
+		await reopened.close()
+	})
+
 	it("keeps the upgraded completion ask anchor after reopening ui_messages.jsonl", async () => {
 		const taskId = "task-completion-ask"
 		const taskState = new TaskState()

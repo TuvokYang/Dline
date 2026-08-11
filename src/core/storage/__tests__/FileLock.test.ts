@@ -1,7 +1,7 @@
 /**
  * Unit tests for FileLock — filesystem-based mutual exclusion for JSONL files.
  */
-import { afterEach, describe, it } from "vitest"
+import { afterEach, describe, it, vi } from "vitest"
 import "should"
 import fs from "fs/promises"
 import os from "os"
@@ -13,6 +13,7 @@ describe("FileLock", () => {
 	const lock = new FileLock()
 
 	afterEach(async () => {
+		vi.restoreAllMocks()
 		if (tmpDir) {
 			try {
 				await fs.rm(tmpDir, { recursive: true, force: true })
@@ -57,6 +58,25 @@ describe("FileLock", () => {
 			.then(() => false)
 			.catch(() => true)
 		lckGone.should.be.true()
+	})
+
+	it("should retry a transient unlink failure when releasing the owned lock", async () => {
+		const dir = await mkTmpDir()
+		const jsonlPath = path.join(dir, "release-retry.jsonl")
+		const lockPath = `${jsonlPath}.lck`
+		await lock.acquire(jsonlPath)
+		const originalUnlink = fs.unlink.bind(fs)
+		const transientError = Object.assign(new Error("lock file is temporarily busy"), { code: "EPERM" })
+		const unlinkSpy = vi.spyOn(fs, "unlink").mockRejectedValueOnce(transientError).mockImplementation(originalUnlink)
+
+		await lock.release(jsonlPath)
+
+		unlinkSpy.mock.calls.length.should.equal(2)
+		const lockStillExists = await fs
+			.stat(lockPath)
+			.then(() => true)
+			.catch(() => false)
+		lockStillExists.should.equal(false)
 	})
 
 	it("should release silently when lock was never acquired", async () => {
@@ -127,6 +147,76 @@ describe("FileLock", () => {
 		}
 
 		await lock.release(jsonlPath)
+	})
+
+	it("should serialize independent lock instances in the same process", async () => {
+		const dir = await mkTmpDir()
+		const jsonlPath = path.join(dir, "independent-instances.jsonl")
+		const left = new FileLock()
+		const right = new FileLock()
+		let activeCriticalSections = 0
+		let maxActiveCriticalSections = 0
+		let releaseLeft!: () => void
+		let markLeftEntered!: () => void
+		const leftEntered = new Promise<void>((resolve) => {
+			markLeftEntered = resolve
+		})
+		const leftGate = new Promise<void>((resolve) => {
+			releaseLeft = resolve
+		})
+
+		const leftWork = left.withLock(jsonlPath, async () => {
+			activeCriticalSections++
+			maxActiveCriticalSections = Math.max(maxActiveCriticalSections, activeCriticalSections)
+			markLeftEntered()
+			await leftGate
+			activeCriticalSections--
+		})
+		await leftEntered
+		const rightWork = right.withLock(jsonlPath, async () => {
+			activeCriticalSections++
+			maxActiveCriticalSections = Math.max(maxActiveCriticalSections, activeCriticalSections)
+			activeCriticalSections--
+		})
+		await new Promise((resolve) => setTimeout(resolve, 150))
+		maxActiveCriticalSections.should.equal(1)
+
+		releaseLeft()
+		await Promise.all([leftWork, rightWork])
+		maxActiveCriticalSections.should.equal(1)
+	})
+
+	it("should not break an old lock while its owner process is still alive", async () => {
+		const dir = await mkTmpDir()
+		const jsonlPath = path.join(dir, "old-live-owner.jsonl")
+		const lockPath = `${jsonlPath}.lck`
+		await fs.writeFile(
+			lockPath,
+			JSON.stringify({ pid: process.pid, ownerId: "still-alive", ts: Date.now() - 15_000 }),
+			"utf8",
+		)
+		const oldTime = new Date(Date.now() - 15_000)
+		await fs.utimes(lockPath, oldTime, oldTime)
+
+		const contender = new FileLock()
+		await contender.acquire(jsonlPath).should.be.rejectedWith(/Failed to acquire lock/)
+		const payload = JSON.parse(await fs.readFile(lockPath, "utf8"))
+		payload.ownerId.should.equal("still-alive")
+	})
+
+	it("should break an old legacy lock without owner identity even when its pid is still alive", async () => {
+		const dir = await mkTmpDir()
+		const jsonlPath = path.join(dir, "legacy-live-pid.jsonl")
+		const lockPath = `${jsonlPath}.lck`
+		await fs.writeFile(lockPath, JSON.stringify({ pid: process.pid, ts: Date.now() - 15_000 }), "utf8")
+		const oldTime = new Date(Date.now() - 15_000)
+		await fs.utimes(lockPath, oldTime, oldTime)
+
+		const upgradedLock = new FileLock()
+		await upgradedLock.acquire(jsonlPath)
+		const payload = JSON.parse(await fs.readFile(lockPath, "utf8"))
+		payload.ownerId.should.be.type("string")
+		await upgradedLock.release(jsonlPath)
 	})
 
 	it("should break stale locks (older than 10s)", async () => {

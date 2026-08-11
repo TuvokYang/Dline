@@ -1,7 +1,9 @@
+import { fileExistsAtPath } from "@utils/fs"
 import path from "path"
 import { ClineMessage } from "@/shared/ExtensionMessage"
-import { ensureTaskDirectoryExists, GlobalFileNames } from "./disk"
+import { dedupeClineMessagesByTs, ensureTaskDirectoryExists, GlobalFileNames } from "./disk"
 import { JsonlIndexedStore } from "./JsonlIndexedStore"
+import { readJsonl } from "./jsonl-utils"
 
 /**
  * UI messages store backed by ui_messages.jsonl.
@@ -22,7 +24,25 @@ export class UIMessage {
 	static async open(taskId: string): Promise<UIMessage> {
 		const dir = await ensureTaskDirectoryExists(taskId)
 		const filePath = path.join(dir, GlobalFileNames.uiMessages)
+		const targetExists = await fileExistsAtPath(filePath)
 		const store = await JsonlIndexedStore.open<ClineMessage>(filePath)
+
+		if (!targetExists) {
+			for (const legacyName of ["ui_messages.json", "claude_messages.json"]) {
+				const legacyPath = path.join(dir, legacyName)
+				if (!(await fileExistsAtPath(legacyPath))) continue
+				const legacyMessages = dedupeClineMessagesByTs(await readJsonl<ClineMessage>(legacyPath))
+				if (legacyMessages.length > 0) {
+					await store.transact((current) => (current.length > 0 ? dedupeClineMessagesByTs(current) : legacyMessages))
+				}
+				break
+			}
+		}
+
+		const stored = store.getAll()
+		if (new Set(stored.map((message) => message.ts)).size !== stored.length) {
+			await store.transact((current) => dedupeClineMessagesByTs(current))
+		}
 		return new UIMessage(store)
 	}
 
@@ -105,9 +125,9 @@ export class UIMessage {
 		const existingIndex = all.findIndex((m) => m.ts === msg.ts)
 
 		if (existingIndex >= 0) {
-			// Same ts — streaming update of existing partial message, replace in-place
-			Object.assign(all[existingIndex], msg)
-			return { index: existingIndex, message: all[existingIndex] }
+			// Same ts — update through the store so close/flush observes the latest delta.
+			const updated = await this.store.patchAt(existingIndex, msg)
+			return { index: existingIndex, message: updated }
 		}
 
 		// New ts — find insertion point in ascending order, insert via memory-layer API
@@ -240,5 +260,10 @@ export class UIMessage {
 	 */
 	async reload(): Promise<void> {
 		await this.store.loadAll()
+	}
+
+	/** Stop accepting messages and wait until all pending data is durable. */
+	async close(): Promise<void> {
+		await this.store.close()
 	}
 }

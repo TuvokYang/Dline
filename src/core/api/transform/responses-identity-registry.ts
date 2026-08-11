@@ -1,4 +1,4 @@
-import type { ApiRawStreamToolCallsChunk } from "./stream"
+import type { ApiRawStreamToolCallsChunk, ApiToolCallPhase } from "./stream"
 
 /** Canonical provider identities for one OpenAI Responses function item. */
 export interface ResponsesFunctionIdentity {
@@ -76,18 +76,24 @@ export interface ResponsesIdentityRegistry {
  * Create a raw native tool chunk from registered Responses identities.
  *
  * @param identity Provider-native item and function identities.
- * @param argumentsText Function argument delta or completed JSON.
+ * @param argumentsText Function argument delta or completed JSON. Omit for a lifecycle-only boundary.
+ * @param phase Provider lifecycle phase when known.
  * @returns Raw tool chunk ready for Dline identity normalization.
  */
-export function createResponsesToolChunk(identity: ResponsesFunctionIdentity, argumentsText: string): ApiRawStreamToolCallsChunk {
+export function createResponsesToolChunk(
+	identity: ResponsesFunctionIdentity,
+	argumentsText?: string,
+	phase?: ApiToolCallPhase,
+): ApiRawStreamToolCallsChunk {
 	return {
 		type: "tool_calls",
 		function_id: identity.function_id,
 		provider_metadata: { item_id: identity.item_id },
+		...(phase ? { phase } : {}),
 		tool_call: {
 			function: {
 				name: identity.name,
-				arguments: argumentsText,
+				...(argumentsText !== undefined ? { arguments: argumentsText } : {}),
 			},
 		},
 	}

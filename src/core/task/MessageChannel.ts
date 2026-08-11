@@ -119,7 +119,7 @@ export class MessageChannel {
 
 		const modelInfo = this.getProviderInfo()
 
-		// partial === true: memory-only upsert, no jsonl, no postState
+		// partial === true: update the memory layer and defer the durable flush.
 		if (partial === true) {
 			const ts = existingTs ?? this.genTs()
 			// eslint-disable-next-line @typescript-eslint/no-explicit-any

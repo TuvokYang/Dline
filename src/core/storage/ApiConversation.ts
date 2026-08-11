@@ -1,11 +1,42 @@
+import { ClineStorageMessage } from "@shared/messages/content"
+import { normalizeLegacyConversation, requiresLegacyConversationMigration } from "@shared/messages/legacy-identity-migration"
+import { fileExistsAtPath } from "@utils/fs"
 import path from "path"
-import { ClineStorageMessage } from "@/shared/messages/content"
-import { normalizeLegacyConversation } from "@/shared/messages/legacy-identity-migration"
 import { ensureTaskDirectoryExists, GlobalFileNames } from "./disk"
 import { JsonlIndexedStore } from "./JsonlIndexedStore"
+import { readJsonl } from "./jsonl-utils"
 
 /** ClineStorageMessage with guaranteed ts for JsonlIndexedStore indexing. */
 type IndexedApiMessage = ClineStorageMessage & { ts: number }
+
+function requiresIndexedApiMigration(messages: readonly unknown[]): boolean {
+	const seenTs = new Set<number>()
+	return (
+		requiresLegacyConversationMigration(messages) ||
+		messages.some((message) => {
+			const ts = (message as { ts?: unknown } | undefined)?.ts
+			if (typeof ts !== "number" || !Number.isFinite(ts) || ts <= 0 || seenTs.has(ts)) return true
+			seenTs.add(ts)
+			return false
+		})
+	)
+}
+
+function assignUniqueApiMessageTs(messages: readonly ClineStorageMessage[]): IndexedApiMessage[] {
+	const usedTs = new Set<number>()
+	let fallbackTs = Date.now()
+	return messages.map((message) => {
+		let ts = typeof message.ts === "number" && Number.isFinite(message.ts) && message.ts > 0 ? message.ts : fallbackTs
+		while (usedTs.has(ts)) ts = Math.max(ts + 1, fallbackTs)
+		usedTs.add(ts)
+		fallbackTs = Math.max(fallbackTs, ts + 1)
+		return { ...message, ts }
+	})
+}
+
+function normalizeIndexedApiMessages(messages: readonly unknown[]): IndexedApiMessage[] {
+	return assignUniqueApiMessageTs(normalizeLegacyConversation(messages))
+}
 
 /**
  * API conversation history store backed by api_conversation_history.jsonl.
@@ -25,11 +56,28 @@ export class ApiConversation {
 	static async open(taskId: string): Promise<ApiConversation> {
 		const dir = await ensureTaskDirectoryExists(taskId)
 		const filePath = path.join(dir, GlobalFileNames.apiConversationHistory)
-		const store = await JsonlIndexedStore.open<IndexedApiMessage>(filePath)
-		const stored = store.getAll()
-		const normalized = normalizeLegacyConversation(stored) as IndexedApiMessage[]
-		if (JSON.stringify(stored) !== JSON.stringify(normalized)) {
-			await store.overwrite(normalized)
+		const targetExists = await fileExistsAtPath(filePath)
+		const targetNeedsMigration = targetExists && requiresIndexedApiMigration(await readJsonl<unknown>(filePath))
+		const store = await JsonlIndexedStore.open<IndexedApiMessage>(filePath, { ensureUniqueAppendTs: true })
+
+		if (!targetExists) {
+			const legacyPath = path.join(dir, "api_conversation_history.json")
+			if (await fileExistsAtPath(legacyPath)) {
+				const legacyMessages = await readJsonl<unknown>(legacyPath)
+				if (legacyMessages.length > 0) {
+					await store.transact((current) =>
+						current.length > 0
+							? requiresIndexedApiMigration(current)
+								? normalizeIndexedApiMessages(current)
+								: current
+							: normalizeIndexedApiMessages(legacyMessages),
+					)
+				}
+			}
+		} else if (targetNeedsMigration) {
+			await store.transact((current) =>
+				requiresIndexedApiMigration(current) ? normalizeIndexedApiMessages(current) : current,
+			)
 		}
 		return new ApiConversation(store)
 	}
@@ -103,11 +151,7 @@ export class ApiConversation {
 	 * Prefer incremental operations (addMessage/truncate) when possible.
 	 */
 	async overwrite(messages: ClineStorageMessage[]): Promise<void> {
-		const indexed = messages.map((m) => {
-			const ts = m.ts === undefined || m.ts === null ? Date.now() : m.ts
-			return { ...m, ts } as IndexedApiMessage
-		})
-		await this.store.overwrite(indexed)
+		await this.store.overwrite(assignUniqueApiMessageTs(messages))
 	}
 
 	/**
@@ -135,5 +179,10 @@ export class ApiConversation {
 	 */
 	async deleteAt(index: number): Promise<void> {
 		await this.store.deleteAt(index)
+	}
+
+	/** Stop accepting messages and wait until all pending data is durable. */
+	async close(): Promise<void> {
+		await this.store.close()
 	}
 }

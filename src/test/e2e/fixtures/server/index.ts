@@ -74,6 +74,12 @@ interface MockResponseOptions {
 	hiddenReasoning?: string
 	delayMs?: number
 	afterReasoningDelayMs?: number
+	/** Emit a provider reasoning item after a completed function-call item. */
+	afterToolCompletionReasoning?: string
+	/** Delay before the post-tool reasoning item is emitted. */
+	afterToolCompletionDelayMs?: number
+	/** Keep the response open after the post-tool reasoning item is emitted. */
+	afterToolCompletionHoldMs?: number
 	/** Select this response by request contract instead of strict FIFO order. */
 	matchRequestContract?: boolean
 	usage?: MockTokenUsage
@@ -885,8 +891,7 @@ export class ClineApiServerMock {
 						if (res.destroyed || res.writableEnded) return
 						res.write(`${event ? `event: ${event}\n` : ""}data: ${JSON.stringify(data)}\n\n`)
 					}
-					const waitAfterReasoning = async (): Promise<boolean> => {
-						const delayMs = scriptedResponse.afterReasoningDelayMs
+					const waitForOpenConnection = async (delayMs?: number): Promise<boolean> => {
 						if (!delayMs) return !(res.destroyed || res.writableEnded)
 						await new Promise<void>((resolve) => {
 							const onClose = () => {
@@ -901,6 +906,8 @@ export class ClineApiServerMock {
 						})
 						return !(res.destroyed || res.writableEnded)
 					}
+					const waitAfterReasoning = (): Promise<boolean> =>
+						waitForOpenConnection(scriptedResponse.afterReasoningDelayMs)
 
 					if (protocol === "openai-chat" || protocol === "deepseek-chat") {
 						const toolCalls = responseToolCalls.map((tool, index) => ({
@@ -1177,6 +1184,64 @@ export class ClineApiServerMock {
 										"response.output_item.done",
 									)
 								}
+							}
+							if (scriptedResponse.afterToolCompletionReasoning) {
+								if (!(await waitForOpenConnection(scriptedResponse.afterToolCompletionDelayMs))) return
+								const reasoningOutputIndex =
+									outputOffset + (hostedSearchOutputItem ? 1 : 0) + toolOutputItems.length
+								const postToolReasoningItem = {
+									id: `reasoning_after_tool_${generationId}`,
+									type: "reasoning",
+									status: "completed",
+									summary: [{ type: "summary_text", text: scriptedResponse.afterToolCompletionReasoning }],
+								}
+								writeSse(
+									{
+										type: "response.output_item.added",
+										output_index: reasoningOutputIndex,
+										item: { ...postToolReasoningItem, status: "in_progress", summary: [] },
+									},
+									"response.output_item.added",
+								)
+								writeSse(
+									{
+										type: "response.reasoning_summary_part.added",
+										item_id: postToolReasoningItem.id,
+										output_index: reasoningOutputIndex,
+										summary_index: 0,
+										part: { type: "summary_text", text: "" },
+									},
+									"response.reasoning_summary_part.added",
+								)
+								writeSse(
+									{
+										type: "response.reasoning_summary_text.delta",
+										item_id: postToolReasoningItem.id,
+										output_index: reasoningOutputIndex,
+										summary_index: 0,
+										delta: scriptedResponse.afterToolCompletionReasoning,
+									},
+									"response.reasoning_summary_text.delta",
+								)
+								writeSse(
+									{
+										type: "response.reasoning_summary_part.done",
+										item_id: postToolReasoningItem.id,
+										output_index: reasoningOutputIndex,
+										summary_index: 0,
+										part: postToolReasoningItem.summary[0],
+									},
+									"response.reasoning_summary_part.done",
+								)
+								writeSse(
+									{
+										type: "response.output_item.done",
+										output_index: reasoningOutputIndex,
+										item: postToolReasoningItem,
+									},
+									"response.output_item.done",
+								)
+								if (!(await waitForOpenConnection(scriptedResponse.afterToolCompletionHoldMs))) return
 							}
 						} else {
 							const outputIndex = outputOffset + (hostedSearchOutputItem ? 1 : 0)

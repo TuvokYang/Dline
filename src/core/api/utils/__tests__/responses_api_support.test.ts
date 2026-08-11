@@ -182,6 +182,14 @@ describe("responses_api_support hosted tools", () => {
 				function_id: "call_1",
 				tool_call: { function: { name: "read_file", arguments: "{}" } },
 				provider_metadata: { item_id: "fc_1" },
+				phase: "delta",
+			},
+			{
+				type: "tool_calls",
+				function_id: "call_1",
+				tool_call: { function: { name: "read_file" } },
+				provider_metadata: { item_id: "fc_1" },
+				phase: "completed",
 			},
 		])
 	})
@@ -291,6 +299,50 @@ describe("responses_api_support hosted tools", () => {
 		expect(chunks.map((chunk) => chunk.tool_call?.function.arguments).filter((value) => value !== undefined)).to.deep.equal([
 			completeArguments.slice(0, splitAt),
 			completeArguments.slice(splitAt),
+		])
+	})
+
+	it("emits an explicit completion boundary after streamed function arguments finish", async () => {
+		const completeArguments = JSON.stringify({ response: "A complete plan", needs_more_exploration: false })
+		const chunks = await collectChunks([
+			{
+				type: "response.output_item.added",
+				output_index: 0,
+				sequence_number: 1,
+				item: { type: "function_call", id: "fc_plan", call_id: "call_plan", name: "make_plan", arguments: "" },
+			},
+			{
+				type: "response.function_call_arguments.delta",
+				item_id: "fc_plan",
+				output_index: 0,
+				sequence_number: 2,
+				delta: completeArguments,
+			},
+			{
+				type: "response.function_call_arguments.done",
+				item_id: "fc_plan",
+				output_index: 0,
+				sequence_number: 3,
+				name: "make_plan",
+				arguments: completeArguments,
+			},
+		])
+
+		expect(chunks).to.deep.equal([
+			{
+				type: "tool_calls",
+				function_id: "call_plan",
+				tool_call: { function: { name: "make_plan", arguments: completeArguments } },
+				provider_metadata: { item_id: "fc_plan" },
+				phase: "delta",
+			},
+			{
+				type: "tool_calls",
+				function_id: "call_plan",
+				tool_call: { function: { name: "make_plan" } },
+				provider_metadata: { item_id: "fc_plan" },
+				phase: "completed",
+			},
 		])
 	})
 

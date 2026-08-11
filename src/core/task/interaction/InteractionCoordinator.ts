@@ -3,6 +3,7 @@ import { BlockPhase } from "../BlockPhaseMachine"
 import type { TaskEvent } from "../runtime/TaskEvent"
 import type { TaskDispatchResult, TaskRuntime } from "../runtime/TaskRuntime"
 import type { InteractionKind } from "./Interaction"
+import { InteractionCancellationError, isInteractionCancellationError } from "./InteractionCancellationError"
 import type { ActiveInteraction } from "./InteractionReducer"
 import type { InteractionDraft, InteractionResponse, InteractionSelection } from "./InteractionResponse"
 
@@ -121,7 +122,7 @@ export class InteractionCoordinator {
 		const generation = ++this.continuationGeneration
 		this.activeCancellationGenerations.add(generation)
 		for (const reject of this.waitingInteractionRejectors.values()) {
-			reject(new Error(reason))
+			reject(new InteractionCancellationError(reason))
 		}
 		this.waitingInteractionRejectors.clear()
 		return generation
@@ -362,7 +363,7 @@ export class InteractionCoordinator {
 		const existing = this.claimedContinuations.get(interactionId)
 		if (existing) return existing
 		if (!this.isCurrentGeneration(generation)) {
-			return Promise.reject(new Error("task_cancelled"))
+			return Promise.reject(new InteractionCancellationError("task_cancelled"))
 		}
 		const continuation = commit()
 		this.claimedContinuations.set(interactionId, continuation)
@@ -584,6 +585,7 @@ export class InteractionCoordinator {
 			try {
 				return await this.waitForExistingResponse(request.interactionId, request.turnId, request.kind)
 			} catch (error) {
+				if (isInteractionCancellationError(error)) throw error
 				throw new Error("Interaction open rejected: hydrated_interaction_mismatch", { cause: error })
 			}
 		}
@@ -597,7 +599,7 @@ export class InteractionCoordinator {
 		kind: InteractionKind,
 	): Promise<InteractionResponse> {
 		const generation = this.continuationGeneration
-		if (!this.isCurrentGeneration(generation)) throw new Error("task_cancelled")
+		if (!this.isCurrentGeneration(generation)) throw new InteractionCancellationError("task_cancelled")
 		const interaction = this.runtime.getState().interaction
 		if (
 			!interaction ||
@@ -627,7 +629,7 @@ export class InteractionCoordinator {
 		})
 		try {
 			const response = await responsePromise
-			if (!this.isCurrentGeneration(generation)) throw new Error("task_cancelled")
+			if (!this.isCurrentGeneration(generation)) throw new InteractionCancellationError("task_cancelled")
 			return response
 		} finally {
 			this.waitingInteractionIds.delete(interactionId)
@@ -639,7 +641,7 @@ export class InteractionCoordinator {
 	/** Dispatch an opening event and wait for its causally matching accepted response. */
 	private async waitForResponse(interactionId: string, openingEvent: TaskEvent): Promise<InteractionResponse> {
 		const generation = this.continuationGeneration
-		if (!this.isCurrentGeneration(generation)) throw new Error("task_cancelled")
+		if (!this.isCurrentGeneration(generation)) throw new InteractionCancellationError("task_cancelled")
 		this.waitingInteractionIds.add(interactionId)
 		let resolveResponse: ((response: InteractionResponse) => void) | undefined
 		const responsePromise = new Promise<InteractionResponse>((resolve, reject) => {
@@ -655,7 +657,7 @@ export class InteractionCoordinator {
 				throw new Error(`Interaction open rejected: ${opened.error?.code ?? "invalid_runtime_event"}`)
 			}
 			const response = await responsePromise
-			if (!this.isCurrentGeneration(generation)) throw new Error("task_cancelled")
+			if (!this.isCurrentGeneration(generation)) throw new InteractionCancellationError("task_cancelled")
 			return response
 		} finally {
 			this.waitingInteractionIds.delete(interactionId)

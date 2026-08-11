@@ -204,15 +204,9 @@ export class MessageStateHandler extends EventEmitter<MessageStateHandlerEvents>
 		return await this.apiConversation?.addMessage(message)
 	}
 
-	/**
-	 * Replace the entire API conversation history using clear + incremental add.
-	 * Each message is added individually to leverage append's memory+markDirty path.
-	 */
+	/** Replace the entire API conversation history in one atomic store transaction. */
 	async overwriteApiConversationHistory(newHistory: ClineStorageMessage[]): Promise<void> {
-		await this.apiConversation?.clear()
-		for (const msg of newHistory) {
-			await this.apiConversation?.addMessage(msg)
-		}
+		await this.apiConversation?.overwrite(newHistory)
 	}
 
 	/**
@@ -229,6 +223,11 @@ export class MessageStateHandler extends EventEmitter<MessageStateHandlerEvents>
 	 */
 	async flushUiMessages(): Promise<void> {
 		await this.uiMessage?.flush()
+	}
+
+	/** Close both stores after all task-owned continuations have exited. */
+	async close(): Promise<void> {
+		await Promise.all([this.apiConversation?.close(), this.uiMessage?.close()])
 	}
 
 	// ── ClineMessages lifecycle ──
@@ -284,9 +283,8 @@ export class MessageStateHandler extends EventEmitter<MessageStateHandlerEvents>
 			msg.conversationHistoryIndex = all[existingIndex].conversationHistoryIndex
 			msg.conversationHistoryDeletedRange = all[existingIndex].conversationHistoryDeletedRange
 
-			// Use UIMessage API for in-memory upsert (no disk write for partial)
-			this.uiMessage?.upsertMessage(msg)
-			// The store's internal array is updated — re-read for fresh state
+			// Use UIMessage API for in-memory upsert and dirty tracking.
+			await this.uiMessage?.upsertMessage(msg)
 			const freshAll = this.clineMessages
 
 			this.emitClineMessagesChanged({
@@ -312,18 +310,18 @@ export class MessageStateHandler extends EventEmitter<MessageStateHandlerEvents>
 			}
 		}
 
-		// For memory-only upsert, we need to insert into the store's internal array.
-		// UIMessage.upsertMessage returns the index but doesn't modify the store.
-		// We use insertAt for persistence; for memory-only, we signal via event.
-		// Note: true persistence happens when partial transitions to false.
+		const inserted = await this.uiMessage?.upsertMessage(msg)
+		const freshAll = this.clineMessages
+		const actualIndex = inserted?.index ?? insertIndex
+		const storedMessage = inserted?.message ?? msg
 		this.emitClineMessagesChanged({
 			type: "add",
-			messages: this.clineMessages,
-			index: insertIndex,
-			message: msg,
+			messages: freshAll,
+			index: actualIndex,
+			message: storedMessage,
 		})
 
-		return msg
+		return storedMessage
 	}
 
 	/**
@@ -448,8 +446,11 @@ export class MessageStateHandler extends EventEmitter<MessageStateHandlerEvents>
 
 	/**
 	 * Remove messages by their timestamps.
+	 *
+	 * Retry recovery may defer task-history metadata because the replacement
+	 * status message immediately becomes the new history boundary.
 	 */
-	async removeMessagesByTs(tsList: number[]): Promise<void> {
+	async removeMessagesByTs(tsList: number[], options: { updateTaskHistory?: boolean } = {}): Promise<void> {
 		if (tsList.length === 0) return
 		const previousMessages = [...this.clineMessages]
 		await this.uiMessage?.removeByTs(tsList)
@@ -462,7 +463,9 @@ export class MessageStateHandler extends EventEmitter<MessageStateHandlerEvents>
 			messages: freshAll,
 			previousMessages,
 		})
-		await this.updateTaskHistoryOnly()
+		if (options.updateTaskHistory !== false) {
+			await this.updateTaskHistoryOnly()
+		}
 	}
 
 	/**

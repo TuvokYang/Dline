@@ -21,6 +21,35 @@ function providerMetadata(block: LegacyBlock): ClineProviderMetadata | undefined
 	return responseId || itemId ? { response_id: responseId, item_id: itemId } : undefined
 }
 
+function hasOwn(value: LegacyBlock, key: string): boolean {
+	return Object.hasOwn(value, key)
+}
+
+/** Return true only when persisted messages still contain legacy identity shapes. */
+export function requiresLegacyConversationMigration(input: readonly unknown[]): boolean {
+	return input.some((rawMessage) => {
+		const message = rawMessage as LegacyBlock | undefined
+		if (!message || typeof message !== "object") return false
+		if (["id", "call_id", "tool_use_id", "item_id"].some((key) => hasOwn(message, key))) return true
+		if (!Array.isArray(message.content)) return false
+		return message.content.some((rawBlock: unknown) => {
+			const block = rawBlock as LegacyBlock | undefined
+			if (!block || typeof block !== "object") return false
+			if (["call_id", "tool_use_id", "item_id"].some((key) => hasOwn(block, key))) return true
+			if (block.type === "tool_use" || block.type === "tool_result") {
+				return (
+					hasOwn(block, "id") ||
+					typeof block.function_id !== "string" ||
+					block.function_id.length === 0 ||
+					typeof block.dline_tid !== "string" ||
+					block.dline_tid.length === 0
+				)
+			}
+			return ["id", "function_id", "dline_tid"].some((key) => hasOwn(block, key))
+		})
+	})
+}
+
 /**
  * Normalize persisted legacy identities at the storage ingress boundary.
  * The returned conversation never exposes call_id, tool_use_id, item_id, or tool-use id.

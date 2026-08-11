@@ -40,6 +40,7 @@ import { isExplicitOnlyTool } from "./explicit-instructions/policy"
 import type { ExplicitInstructionConsumePort } from "./explicit-instructions/types"
 import { isAllItemsCompleted } from "./focus-chain/file-utils"
 import type { InteractionKind } from "./interaction/Interaction"
+import { isInteractionCancellationError } from "./interaction/InteractionCancellationError"
 import type { InteractionOutcome } from "./interaction/InteractionCoordinator"
 import { isTurnEndContinuationHandler, requiresTurnEndContinuation } from "./interaction/TurnEndContinuationRegistry"
 import { checkRepeatedToolCall, LOOP_DETECTION_SOFT_THRESHOLD, toolCallSignature } from "./loop-detection"
@@ -819,7 +820,7 @@ export class ToolExecutor {
 			await this.handleCompleteBlock(block, config)
 			return true
 		} catch (error) {
-			if (this.taskState.abort) {
+			if (this.taskState.abort || isInteractionCancellationError(error)) {
 				return true
 			}
 			await this.handleError(`executing ${block.name}`, error as Error, block)

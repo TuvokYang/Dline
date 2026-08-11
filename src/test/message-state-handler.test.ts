@@ -1,4 +1,4 @@
-import { describe, it } from "vitest"
+import { describe, it, vi } from "vitest"
 import "should"
 import should from "should"
 import { MessageStateHandler } from "../core/task/message-state"
@@ -279,22 +279,35 @@ describe("MessageStateHandler Mutex Protection", () => {
 	 * Test overwrite API conversation history
 	 */
 	it("should handle overwriteApiConversationHistory atomically", async () => {
-		const handler = createTestHandler()
-
-		// Set initial history
-		handler.apiConversationHistory = [{ role: "user", content: "old", ts: Date.now() }]
-
-		// Overwrite with new history
+		let data = [{ role: "user" as const, content: "old", ts: Date.now() }]
+		const overwrite = vi.fn(async (messages: typeof data) => {
+			data = [...messages]
+		})
+		const clear = vi.fn(async () => {
+			data = []
+		})
+		const addMessage = vi.fn(async (message: (typeof data)[number]) => {
+			data.push(message)
+		})
+		const handler = new MessageStateHandler({
+			taskId: "test-task-id",
+			ulid: "test-ulid",
+			taskState: new TaskState(),
+			updateTaskHistory: async () => [],
+			apiConversation: { getAll: () => data, overwrite, clear, addMessage } as any,
+		})
 		const newHistory = [
 			{ role: "user" as const, content: "new1", ts: Date.now() },
 			{ role: "assistant" as const, content: "new2", ts: Date.now() },
 		]
+
 		await handler.overwriteApiConversationHistory(newHistory)
 
-		const finalHistory = handler.apiConversationHistory
-		finalHistory.length.should.equal(2)
-		finalHistory[0].content.should.equal("new1")
-		finalHistory[1].content.should.equal("new2")
+		overwrite.mock.calls.length.should.equal(1)
+		overwrite.mock.calls[0][0].should.deepEqual(newHistory)
+		clear.mock.calls.length.should.equal(0)
+		addMessage.mock.calls.length.should.equal(0)
+		handler.apiConversationHistory.should.deepEqual(newHistory)
 	})
 
 	it("upsertClineMessageInMemory then finalizeClineMessage keeps a single message", async () => {

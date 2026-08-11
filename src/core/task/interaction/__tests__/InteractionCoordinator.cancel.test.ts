@@ -5,6 +5,7 @@ import type { TaskEvent } from "../../runtime/TaskEvent"
 import { TaskRuntime } from "../../runtime/TaskRuntime"
 import { createTaskRuntimeState } from "../../runtime/TaskRuntimeState"
 import { TaskPhase } from "../../TaskPhase"
+import { InteractionCancellationError } from "../InteractionCancellationError"
 import { InteractionCoordinator } from "../InteractionCoordinator"
 
 function createPorts(): TaskEffectPorts {
@@ -105,6 +106,47 @@ describe("InteractionCoordinator cancellation fence", () => {
 		})
 		expect(continuation).not.toHaveBeenCalled()
 		expect(runtime.getState().phase).toBe(TaskPhase.CANCELLING)
+	})
+
+	it("preserves lifecycle cancellation identity for a restored awaiting interaction", async () => {
+		const interactionId = "restored-make-plan"
+		const turnId = `turn:${interactionId}`
+		const runtime = new TaskRuntime(
+			{
+				...createTaskRuntimeState({
+					taskId: "task-1",
+					phase: TaskPhase.EXECUTING,
+					revision: 4,
+					anchor: { apiIndex: 1, uiMessageTs: 100, turnId, interactionId },
+				}),
+				interaction: {
+					taskId: "task-1",
+					turnId,
+					interactionId,
+					kind: "make_plan",
+					status: "awaiting",
+					createdRevision: 3,
+					anchor: { messageTs: 100, messageType: "ask" },
+				},
+			},
+			createPorts(),
+		)
+		const coordinator = new InteractionCoordinator(runtime)
+		const waiting = coordinator.open({
+			turnId,
+			interactionId,
+			kind: "make_plan",
+			presentation: "Plan ready",
+		})
+
+		const cancellationGeneration = coordinator.cancelPending("task_terminated")
+
+		await expect(waiting).rejects.toMatchObject({
+			name: "InteractionCancellationError",
+			reason: "task_terminated",
+		})
+		await expect(waiting).rejects.toBeInstanceOf(InteractionCancellationError)
+		coordinator.completeCancellation(cancellationGeneration)
 	})
 
 	it("rejects a response submitted after cancellation intent without mutating the replacement interaction", async () => {

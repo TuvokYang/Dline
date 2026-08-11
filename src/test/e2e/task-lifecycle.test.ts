@@ -1,3 +1,5 @@
+import { readdir, readFile, stat, writeFile } from "node:fs/promises"
+import * as path from "node:path"
 import { expect, type Frame } from "@playwright/test"
 import { E2E_PROFILE_NAMES } from "./utils/api-profile"
 import { E2ETestHelper, e2e } from "./utils/helpers"
@@ -79,6 +81,31 @@ async function reopenTask(sidebar: Frame, taskText: string): Promise<void> {
 	await expect(historyTask).toBeVisible({ timeout: 30_000 })
 	await historyTask.click()
 	await expect(sidebar.getByText(taskText, { exact: true }).first()).toBeVisible()
+}
+
+async function onlyTaskId(dlineDocsDir: string): Promise<string> {
+	const entries = await readdir(path.join(dlineDocsDir, "tasks"), { withFileTypes: true })
+	const taskIds = entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name)
+	if (taskIds.length !== 1 || !taskIds[0]) {
+		throw new Error(`Expected exactly one persisted task, found ${taskIds.length}`)
+	}
+	return taskIds[0]
+}
+
+async function configureGpt56ResponsesProfile(dlineDir: string): Promise<void> {
+	const profilesPath = path.join(dlineDir, "data", "settings", "api_profiles.json")
+	const profiles = JSON.parse(await readFile(profilesPath, "utf8")) as Array<{
+		name: string
+		modelId?: string
+		webSearchMode?: string
+		openai?: { capabilities?: { contextWindow?: number } }
+	}>
+	const profile = profiles.find((candidate) => candidate.name === E2E_PROFILE_NAMES.mockOpenAiResponses)
+	if (!profile?.openai?.capabilities) throw new Error("Missing configurable OpenAI Responses E2E profile")
+	profile.modelId = "gpt-5.6-sol"
+	profile.openai.capabilities.contextWindow = 372_000
+	profile.webSearchMode = "WEB_SEARCH_MODE_FORCE_OFF"
+	await writeFile(profilesPath, `${JSON.stringify(profiles, null, 2)}\n`, "utf8")
 }
 
 async function expectNoDecisionButtons(sidebar: Frame): Promise<void> {
@@ -942,62 +969,274 @@ e2e(
 )
 
 e2e(
-	"Thinking restore - Close stops the partial stream and History Resume starts only after explicit input",
-	async ({ helper, page, server, sidebar, userDataDir }) => {
+	"OpenAI Responses - completed make_plan stops post-tool reasoning before handing control back",
+	async ({ dlineDir, helper, openVSCode, server, userDataDir, workspaceDir }) => {
 		e2e.setTimeout(180_000)
-		await helper.signin(sidebar)
-		await selectProfile(sidebar, E2E_PROFILE_NAMES.mockDeepSeek)
+		await configureGpt56ResponsesProfile(dlineDir)
 		server.resetOpenAiMock()
+
+		const planText = "E2E_TURN_END_PLAN_READY"
+		const forbiddenReasoning = "E2E_REASONING_AFTER_COMPLETED_MAKE_PLAN_MUST_NOT_STREAM"
+		server.enqueueResponses("openai-compatible-responses", {
+			type: "tool-with-completion-snapshots",
+			id: "call_completed_make_plan",
+			name: "make_plan",
+			arguments: { response: planText, needs_more_exploration: false },
+			reasoning: "E2E_REASONING_BEFORE_MAKE_PLAN",
+			afterToolCompletionReasoning: forbiddenReasoning,
+			afterToolCompletionDelayMs: 2_000,
+			afterToolCompletionHoldMs: 30_000,
+		})
+
+		const app = await openVSCode(workspaceDir)
+		try {
+			const page = await app.firstWindow()
+			await E2ETestHelper.openClineSidebar(page)
+			const sidebar = await helper.getSidebar(page)
+			await E2ETestHelper.dismissWhatsNewModal(sidebar)
+			await helper.signin(sidebar)
+			await selectProfile(sidebar, E2E_PROFILE_NAMES.mockOpenAiResponses)
+
+			await sendTask(sidebar, "E2E_COMPLETED_MAKE_PLAN_STOPS_STREAM_TASK")
+			await expect(sidebar.getByText(planText, { exact: false }).last()).toBeVisible({ timeout: 60_000 })
+			await expect
+				.poll(() => server.getMockConsumptions("openai-compatible-responses")[0]?.abortedAtMs, { timeout: 10_000 })
+				.not.toBeUndefined()
+			await expect(sidebar.getByTestId("chat-input")).toBeEnabled({ timeout: 30_000 })
+			await page.waitForTimeout(750)
+			await expect(sidebar.getByText(forbiddenReasoning, { exact: false })).toHaveCount(0)
+			const consumption = server.getMockConsumptions("openai-compatible-responses")[0]
+			expect(consumption?.requestBody).toMatchObject({ model: "gpt-5.6-sol" })
+			expect(consumption?.contractError).toBeUndefined()
+			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+		} finally {
+			await app.close()
+		}
+	},
+)
+
+e2e(
+	"Task history - reopening an awaiting make_plan preserves stores without rewriting them",
+	async ({ dlineDir, dlineDocsDir, helper, openVSCode, server, userDataDir, workspaceDir }) => {
+		e2e.setTimeout(180_000)
+		await configureGpt56ResponsesProfile(dlineDir)
+		server.resetOpenAiMock()
+
+		const taskText = "E2E_MAKE_PLAN_READ_ONLY_REOPEN_TASK"
+		const reasoningText = "E2E_MAKE_PLAN_PERSISTED_REASONING"
+		const planText = "E2E_MAKE_PLAN_PERSISTED_RESPONSE"
+		server.enqueueResponses("openai-compatible-responses", {
+			type: "tool-with-completion-snapshots",
+			id: "call_persisted_make_plan",
+			name: "make_plan",
+			arguments: { response: planText, needs_more_exploration: false },
+			reasoning: reasoningText,
+		})
+
+		const app = await openVSCode(workspaceDir)
+		try {
+			const page = await app.firstWindow()
+			await E2ETestHelper.openClineSidebar(page)
+			const sidebar = await helper.getSidebar(page)
+			await E2ETestHelper.dismissWhatsNewModal(sidebar)
+			await helper.signin(sidebar)
+			await selectProfile(sidebar, E2E_PROFILE_NAMES.mockOpenAiResponses)
+
+			await sendTask(sidebar, taskText)
+			await expect(sidebar.getByText(planText, { exact: false }).last()).toBeVisible({ timeout: 60_000 })
+			await expect(sidebar.getByTestId("chat-input")).toBeEnabled({ timeout: 30_000 })
+			const taskId = await onlyTaskId(dlineDocsDir)
+			const taskDir = path.join(dlineDocsDir, "tasks", taskId)
+			const uiPath = path.join(taskDir, "ui_messages.jsonl")
+			const apiPath = path.join(taskDir, "api_conversation_history.jsonl")
+			await expect.poll(async () => (await readFile(apiPath, "utf8")).includes(planText), { timeout: 30_000 }).toBe(true)
+			await closeCurrentTask(sidebar)
+
+			const [uiBefore, apiBefore, uiStatBefore, apiStatBefore] = await Promise.all([
+				readFile(uiPath, "utf8"),
+				readFile(apiPath, "utf8"),
+				stat(uiPath),
+				stat(apiPath),
+			])
+			expect(uiBefore).toContain(reasoningText)
+			expect(uiBefore).toContain(planText)
+			expect(apiBefore).toContain(reasoningText)
+			expect(apiBefore).toContain(planText)
+
+			await page.waitForTimeout(25)
+			await reopenTask(sidebar, taskText)
+			await expect(sidebar.getByText(planText, { exact: false }).last()).toBeVisible({ timeout: 30_000 })
+			await page.waitForTimeout(1_250)
+
+			const [uiAfter, apiAfter, uiStatAfter, apiStatAfter] = await Promise.all([
+				readFile(uiPath, "utf8"),
+				readFile(apiPath, "utf8"),
+				stat(uiPath),
+				stat(apiPath),
+			])
+			expect(uiAfter).toBe(uiBefore)
+			expect(apiAfter).toBe(apiBefore)
+			expect(uiStatAfter.mtimeMs).toBe(uiStatBefore.mtimeMs)
+			expect(apiStatAfter.mtimeMs).toBe(apiStatBefore.mtimeMs)
+
+			await sidebar.getByRole("button", { name: "Thinking", exact: true }).last().click()
+			await expect(sidebar.getByText(reasoningText, { exact: false }).last()).toBeVisible({ timeout: 30_000 })
+			const consumption = server.getMockConsumptions("openai-compatible-responses")[0]
+			expect(consumption?.requestBody).toMatchObject({ model: "gpt-5.6-sol" })
+			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+		} finally {
+			await app.close()
+		}
+	},
+)
+
+e2e(
+	"Thinking restore - gpt-5.6-sol survives cancel, close, reopen, and explicit resume without losing reasoning",
+	async ({ dlineDir, dlineDocsDir, helper, openVSCode, server, userDataDir, workspaceDir }) => {
+		e2e.setTimeout(240_000)
+		await configureGpt56ResponsesProfile(dlineDir)
+		server.resetOpenAiMock()
+
+		const firstReasoning = "E2E_GPT56_REASONING_BEFORE_CANCEL"
+		const secondReasoning = "E2E_GPT56_REASONING_BEFORE_CLOSE"
+		const intermediateDraft = "E2E_GPT56_CANCEL_RESUME_DRAFT"
+		const finalDraft = "E2E_GPT56_HISTORY_RESUME_DRAFT"
 		server.enqueueResponses(
-			"deepseek-chat",
+			"openai-compatible-responses",
 			{
-				type: "tool",
-				id: "call_thinking_closed_completion",
+				type: "tool-with-completion-snapshots",
+				id: "call_gpt56_cancelled_completion",
 				name: "attempt_completion",
-				arguments: { result: "E2E_THINKING_CLOSED_RESPONSE_MUST_NOT_RENDER" },
-				reasoning: "E2E_THINKING_STREAM_BEFORE_CLOSE",
+				arguments: { result: "E2E_GPT56_CANCELLED_RESPONSE_MUST_NOT_RENDER" },
+				reasoning: firstReasoning,
 				afterReasoningDelayMs: 30_000,
 			},
 			{
-				type: "tool",
-				id: "call_thinking_restored_completion",
+				type: "tool-with-completion-snapshots",
+				id: "call_gpt56_closed_completion",
 				name: "attempt_completion",
-				arguments: { result: "E2E_THINKING_HISTORY_RESUME_OK" },
-				expectedRequestIncludes: [
-					"The previous task session was closed and has now been restored.",
-					"E2E_THINKING_RESUME_DRAFT",
-				],
+				arguments: { result: "E2E_GPT56_CLOSED_RESPONSE_MUST_NOT_RENDER" },
+				reasoning: secondReasoning,
+				afterReasoningDelayMs: 30_000,
+				expectedRequestIncludes: [intermediateDraft],
+			},
+			{
+				type: "tool-with-completion-snapshots",
+				id: "call_gpt56_restored_completion",
+				name: "attempt_completion",
+				arguments: { result: "E2E_GPT56_HISTORY_RESUME_OK" },
+				expectedRequestIncludes: ["The previous task session was closed and has now been restored.", finalDraft],
 			},
 		)
 
-		const taskText = "E2E_THINKING_CLOSE_HISTORY_TASK"
-		await sendTask(sidebar, taskText)
-		await expect(sidebar.getByText("E2E_THINKING_STREAM_BEFORE_CLOSE", { exact: false }).last()).toBeVisible({
-			timeout: 60_000,
-		})
-		await expect.poll(() => server.getRequestCount("deepseek-chat")).toBe(1)
+		const app = await openVSCode(workspaceDir)
+		try {
+			const page = await app.firstWindow()
+			await E2ETestHelper.openClineSidebar(page)
+			const sidebar = await helper.getSidebar(page)
+			await E2ETestHelper.dismissWhatsNewModal(sidebar)
+			await helper.signin(sidebar)
+			await selectProfile(sidebar, E2E_PROFILE_NAMES.mockOpenAiResponses)
 
-		await closeCurrentTask(sidebar)
-		await reopenTask(sidebar, taskText)
-		const taskFooter = sidebar.getByRole("contentinfo")
-		const resumeButton = taskFooter.getByText("Resume", { exact: true })
-		await expect(resumeButton).toBeVisible({ timeout: 30_000 })
-		await expect(taskFooter.getByText("Start New Task", { exact: true })).toHaveCount(0)
-		await expect(sidebar.getByText("E2E_THINKING_CLOSED_RESPONSE_MUST_NOT_RENDER", { exact: false })).toHaveCount(0)
-		await page.waitForTimeout(750)
-		expect(server.getRequestCount("deepseek-chat")).toBe(1)
+			const taskText = "E2E_GPT56_CANCEL_CLOSE_HISTORY_TASK"
+			await sendTask(sidebar, taskText)
+			await expect(sidebar.getByText(firstReasoning, { exact: false }).last()).toBeVisible({ timeout: 60_000 })
+			await expect.poll(() => server.getRequestCount("openai-compatible-responses")).toBe(1)
 
-		const input = sidebar.getByTestId("chat-input")
-		await expect(input).toBeEnabled()
-		await input.fill("E2E_THINKING_RESUME_DRAFT")
-		await resumeButton.click()
-		await expect(input).toHaveValue("")
-		await expectSingleUserFeedback(sidebar, "E2E_THINKING_RESUME_DRAFT")
-		await expect(sidebar.getByText("E2E_THINKING_HISTORY_RESUME_OK", { exact: false }).last()).toBeVisible({
-			timeout: 60_000,
-		})
-		await expect.poll(() => server.getRequestCount("deepseek-chat")).toBe(2)
-		expect(server.getMockConsumptions("deepseek-chat")[1].contractError).toBeUndefined()
-		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+			const taskFooter = sidebar.getByRole("contentinfo")
+			const cancelButton = taskFooter.getByText("Cancel", { exact: true })
+			await expect(cancelButton).toBeVisible({ timeout: 30_000 })
+			await cancelButton.click()
+			await expect
+				.poll(() => server.getMockConsumptions("openai-compatible-responses")[0]?.abortedAtMs, { timeout: 30_000 })
+				.not.toBeUndefined()
+
+			const resumeAfterCancel = taskFooter.getByText("Resume", { exact: true })
+			await expect(resumeAfterCancel).toBeVisible({ timeout: 30_000 })
+			const input = sidebar.getByTestId("chat-input")
+			await input.fill(intermediateDraft)
+			await resumeAfterCancel.click()
+			await expect(input).toHaveValue("")
+			await expectSingleUserFeedback(sidebar, intermediateDraft)
+			await expect(sidebar.getByText(secondReasoning, { exact: false }).last()).toBeVisible({ timeout: 60_000 })
+			await expect.poll(() => server.getRequestCount("openai-compatible-responses")).toBe(2)
+
+			const taskId = await onlyTaskId(dlineDocsDir)
+			const taskDir = path.join(dlineDocsDir, "tasks", taskId)
+			const uiPath = path.join(taskDir, "ui_messages.jsonl")
+			const apiPath = path.join(taskDir, "api_conversation_history.jsonl")
+			await closeCurrentTask(sidebar)
+			await expect
+				.poll(() => server.getMockConsumptions("openai-compatible-responses")[1]?.abortedAtMs, { timeout: 30_000 })
+				.not.toBeUndefined()
+			await expect
+				.poll(async () => (await readFile(apiPath, "utf8")).includes(secondReasoning), { timeout: 30_000 })
+				.toBe(true)
+
+			const [uiBefore, apiBefore, uiStatBefore, apiStatBefore] = await Promise.all([
+				readFile(uiPath, "utf8"),
+				readFile(apiPath, "utf8"),
+				stat(uiPath),
+				stat(apiPath),
+			])
+			expect(uiBefore).toContain(firstReasoning)
+			expect(uiBefore).toContain(secondReasoning)
+			expect(apiBefore).toContain(firstReasoning)
+			expect(apiBefore).toContain(secondReasoning)
+			expect(apiBefore.match(/Response interrupted by user/g)?.length).toBe(2)
+
+			await reopenTask(sidebar, taskText)
+			const resumeAfterClose = sidebar.getByRole("contentinfo").getByText("Resume", { exact: true })
+			await expect(resumeAfterClose).toBeVisible({ timeout: 30_000 })
+			await expect(sidebar.getByText("E2E_GPT56_CANCELLED_RESPONSE_MUST_NOT_RENDER", { exact: false })).toHaveCount(0)
+			await expect(sidebar.getByText("E2E_GPT56_CLOSED_RESPONSE_MUST_NOT_RENDER", { exact: false })).toHaveCount(0)
+			await page.waitForTimeout(1_250)
+
+			const [uiAfter, apiAfter, uiStatAfter, apiStatAfter] = await Promise.all([
+				readFile(uiPath, "utf8"),
+				readFile(apiPath, "utf8"),
+				stat(uiPath),
+				stat(apiPath),
+			])
+			// Reopen may append the one durable resume interaction it presents, but
+			// every byte from the pre-reopen timeline must remain an unchanged prefix.
+			expect(uiAfter.startsWith(uiBefore)).toBe(true)
+			const appendedUiMessages = uiAfter
+				.slice(uiBefore.length)
+				.split(/\r?\n/)
+				.filter(Boolean)
+				.map((line) => JSON.parse(line) as Record<string, unknown>)
+			expect(appendedUiMessages).toHaveLength(1)
+			expect(appendedUiMessages[0]).toMatchObject({ type: "ask", ask: "resume_task", text: "" })
+			expect(appendedUiMessages[0].interactionId).toEqual(expect.any(String))
+			expect(uiStatAfter.size).toBeGreaterThan(uiStatBefore.size)
+			expect(apiAfter).toBe(apiBefore)
+			expect(apiStatAfter.mtimeMs).toBe(apiStatBefore.mtimeMs)
+
+			const thinkingButtons = sidebar.getByRole("button", { name: "Thinking", exact: true })
+			await expect(thinkingButtons).toHaveCount(2)
+			await thinkingButtons.first().click()
+			await expect(sidebar.getByText(firstReasoning, { exact: false }).last()).toBeVisible({ timeout: 30_000 })
+			await thinkingButtons.last().click()
+			await expect(sidebar.getByText(secondReasoning, { exact: false }).last()).toBeVisible({ timeout: 30_000 })
+
+			await input.fill(finalDraft)
+			await resumeAfterClose.click()
+			await expect(input).toHaveValue("")
+			await expectSingleUserFeedback(sidebar, finalDraft)
+			await expect(sidebar.getByText("E2E_GPT56_HISTORY_RESUME_OK", { exact: false }).last()).toBeVisible({
+				timeout: 60_000,
+			})
+			await expect.poll(() => server.getRequestCount("openai-compatible-responses")).toBe(3)
+			const consumptions = server.getMockConsumptions("openai-compatible-responses")
+			expect(consumptions).toHaveLength(3)
+			for (const consumption of consumptions) {
+				expect(consumption.requestBody).toMatchObject({ model: "gpt-5.6-sol" })
+				expect(consumption.contractError).toBeUndefined()
+			}
+			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+		} finally {
+			await app.close()
+		}
 	},
 )

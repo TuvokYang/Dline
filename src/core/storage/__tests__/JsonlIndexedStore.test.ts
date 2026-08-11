@@ -830,4 +830,123 @@ describe("JsonlIndexedStore", () => {
 			store.getByTs(300)?.text.should.equal("third")
 		})
 	})
+
+	describe("multi-instance persistence stress", () => {
+		it("preserves a newer disk tail when a stale instance updates an earlier row", async () => {
+			const staleStore = await openStore("stale-update-tail", [
+				{ ts: 100, text: "task" },
+				{ ts: 200, text: "reasoning" },
+			])
+			const filePath = (staleStore as unknown as { _filePath: string })._filePath
+			const activeStore = await JsonlIndexedStore.open<TestEntry>(filePath, 60_000)
+
+			await activeStore.append({ ts: 300, text: "make_plan" })
+			await activeStore.flush()
+			await staleStore.updateAt(0, { ts: 100, text: "task-updated" })
+			await staleStore.flush()
+
+			const reopened = await JsonlIndexedStore.open<TestEntry>(filePath, 60_000)
+			reopened.getAll().should.deepEqual([
+				{ ts: 100, text: "task-updated" },
+				{ ts: 200, text: "reasoning" },
+				{ ts: 300, text: "make_plan" },
+			])
+			staleStore.dispose()
+			activeStore.dispose()
+			reopened.dispose()
+		})
+
+		it("preserves every message identity across seeded dual-writer flush and reopen cycles", async () => {
+			const initial = await openStore("seeded-dual-writer")
+			const filePath = (initial as unknown as { _filePath: string })._filePath
+			initial.dispose()
+			const expected: TestEntry[] = []
+			const messageKinds = ["message", "reasoning", "make_plan"] as const
+			let randomState = 0x5eed1234
+			const nextRandom = () => {
+				randomState = (Math.imul(randomState, 1_664_525) + 1_013_904_223) >>> 0
+				return randomState
+			}
+
+			for (let round = 0; round < 40; round++) {
+				const left = await JsonlIndexedStore.open<TestEntry>(filePath, 60_000)
+				const right = await JsonlIndexedStore.open<TestEntry>(filePath, 60_000)
+				const leftEntry = {
+					ts: round * 2 + 1,
+					text: `${messageKinds[nextRandom() % messageKinds.length]}:left:${round}`,
+				}
+				const rightEntry = {
+					ts: round * 2 + 2,
+					text: `${messageKinds[nextRandom() % messageKinds.length]}:right:${round}`,
+				}
+				expected.push(leftEntry, rightEntry)
+				await Promise.all([left.append(leftEntry), right.append(rightEntry)])
+				const flushMode = nextRandom() % 3
+				if (flushMode === 0) {
+					await left.flush()
+					await right.flush()
+				} else if (flushMode === 1) {
+					await right.flush()
+					await left.flush()
+				} else {
+					await Promise.all([left.flush(), right.flush()])
+				}
+				left.dispose()
+				right.dispose()
+
+				const reopened = await JsonlIndexedStore.open<TestEntry>(filePath, 60_000)
+				reopened.getAll().should.deepEqual(expected)
+				reopened.dispose()
+			}
+		})
+
+		it("completes writes admitted before close instead of dropping the final queued message", async () => {
+			const store = await openStore("close-admission-barrier")
+			const mutex = (
+				store as unknown as {
+					_mutex: { withLock<TResult>(callback: () => Promise<TResult> | TResult): Promise<TResult> }
+				}
+			)._mutex
+			let releaseBlocker!: () => void
+			let markBlockerEntered!: () => void
+			const blockerEntered = new Promise<void>((resolve) => {
+				markBlockerEntered = resolve
+			})
+			const blockerGate = new Promise<void>((resolve) => {
+				releaseBlocker = resolve
+			})
+			const blocker = mutex.withLock(async () => {
+				markBlockerEntered()
+				await blockerGate
+			})
+			await blockerEntered
+
+			const admittedWrite = store.append({ ts: 100, text: "final-thinking-before-close" })
+			const close = store.close()
+			releaseBlocker()
+
+			await Promise.all([blocker, admittedWrite, close])
+			const reopened = await JsonlIndexedStore.open<TestEntry>(
+				(store as unknown as { _filePath: string })._filePath,
+				60_000,
+			)
+			reopened.getAll().should.deepEqual([{ ts: 100, text: "final-thinking-before-close" }])
+			reopened.dispose()
+		})
+
+		it("rejects writes after disposal so a closed task cannot produce late messages", async () => {
+			const store = await openStore("disposed-write-guard")
+			await store.append({ ts: 100, text: "before-close" })
+			await store.flush()
+			store.dispose()
+
+			let rejected = false
+			try {
+				await store.append({ ts: 200, text: "late-thinking" })
+			} catch {
+				rejected = true
+			}
+			rejected.should.equal(true)
+		})
+	})
 })

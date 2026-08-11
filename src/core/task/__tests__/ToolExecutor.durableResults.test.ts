@@ -5,6 +5,7 @@ import { ApiFormat, ServerTool } from "@shared/proto/dline/models/metadata"
 import { WebSearchMode } from "@shared/proto/dline/provider/common"
 import { ClineDefaultTool } from "@shared/tools"
 import { describe, expect, it, vi } from "vitest"
+import { InteractionCancellationError } from "../interaction/InteractionCancellationError"
 import { ToolExecutor } from "../ToolExecutor"
 import { ToolResultUtils } from "../tools/utils/ToolResultUtils"
 
@@ -28,6 +29,7 @@ interface HarnessOptions {
 	rejected?: boolean
 	strictPlan?: boolean
 	throwFromTool?: boolean
+	throwInteractionCancellation?: boolean
 	coordinatorHas?: boolean
 	allowedNativeToolNames?: string[]
 	focusChainEnabled?: boolean
@@ -48,6 +50,7 @@ function createHarness(options: HarnessOptions = {}) {
 			handlePartialBlock: partialRender,
 		})),
 		execute: vi.fn(async (_config: { webSearchRoutingPlan?: WebSearchRoutingPlan }, _block: ToolUse) => {
+			if (options.throwInteractionCancellation) throw new InteractionCancellationError("task_terminated")
 			if (options.throwFromTool) throw new Error("handler exploded")
 			return "tool completed"
 		}),
@@ -348,6 +351,20 @@ describe("ToolExecutor durable tool results", () => {
 			content: [{ type: "text", text: "The user provided restored completion feedback." }],
 			is_error: null,
 		})
+	})
+
+	it("does not persist an expected interaction cancellation as a tool failure", async () => {
+		const { coordinator, executor, say, userMessageContent } = createHarness({
+			throwInteractionCancellation: true,
+			allowedNativeToolNames: [ClineDefaultTool.MAKE_PLAN],
+		})
+
+		await executor.execute(createBlock(ClineDefaultTool.MAKE_PLAN, { response: "Plan ready" }), {})
+
+		expect(coordinator.execute).toHaveBeenCalledOnce()
+		expect(say).not.toHaveBeenCalledWith("error", expect.any(String))
+		expect(partialResultRows(say)).toEqual([])
+		expect(userMessageContent).toEqual([])
 	})
 
 	it.each([

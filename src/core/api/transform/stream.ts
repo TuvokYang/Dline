@@ -64,10 +64,14 @@ export interface ApiStreamServerToolChunk extends ApiServerToolChunkBase {
 	dline_tid: string
 }
 
+export type ApiToolCallPhase = "delta" | "completed"
+
 export interface ApiRawStreamToolCallsChunk {
 	type: "tool_calls"
 	/** Provider-native function call and result pairing identity. */
 	function_id: string
+	/** Provider lifecycle boundary when the adapter can determine it. */
+	phase?: ApiToolCallPhase
 	/** Provider-owned replay metadata, never used as runtime identity. */
 	provider_metadata?: ClineProviderMetadata
 	/** Provider response-local tool position used for interleaved deltas. */
@@ -86,6 +90,8 @@ export interface ApiStreamToolCallsChunk {
 	type: "tool_calls"
 	/** Provider-native function call and result pairing identity. */
 	function_id: string
+	/** Provider lifecycle boundary when the adapter can determine it. */
+	phase?: ApiToolCallPhase
 	/** Dline trace identity for the complete tool lifecycle. */
 	dline_tid: string
 	/** Provider-owned replay metadata, never used as runtime identity. */
