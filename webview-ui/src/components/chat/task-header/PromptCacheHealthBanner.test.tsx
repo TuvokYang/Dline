@@ -1,5 +1,5 @@
 import type { PromptCacheHealthSnapshot } from "@shared/PromptCacheHealth"
-import { render, screen } from "@testing-library/react"
+import { fireEvent, render, screen } from "@testing-library/react"
 import { describe, expect, it } from "vitest"
 import { PromptCacheHealthBanner } from "./PromptCacheHealthBanner"
 
@@ -28,7 +28,7 @@ describe("PromptCacheHealthBanner", () => {
 		expect(screen.getByText("Dline is checking whether cached input grows across requests.")).toBeInTheDocument()
 	})
 
-	it("renders a non-dismissible stalled cache warning", () => {
+	it("renders a dismissible stalled cache warning", () => {
 		render(
 			<PromptCacheHealthBanner
 				health={snapshot({
@@ -43,7 +43,8 @@ describe("PromptCacheHealthBanner", () => {
 
 		expect(screen.getByRole("alert")).toHaveTextContent("Prompt cache is not improving")
 		expect(screen.getByRole("alert")).toHaveTextContent("three eligible requests")
-		expect(screen.queryByRole("button", { name: "Dismiss" })).not.toBeInTheDocument()
+		fireEvent.click(screen.getByRole("button", { name: "Dismiss" }))
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument()
 	})
 
 	it("renders a distinct near-context warning", () => {

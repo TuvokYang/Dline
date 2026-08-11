@@ -33,7 +33,7 @@ export const PromptCacheHealthBanner: React.FC<PromptCacheHealthBannerProps> = (
 		: "Cached input did not improve across three eligible requests. Check the active Profile, Provider, or proxy cache before the context grows further."
 
 	return (
-		<Alert isDismissible={false} title={title} variant="warning">
+		<Alert title={title} variant="warning">
 			<AlertDescription>{description}</AlertDescription>
 		</Alert>
 	)

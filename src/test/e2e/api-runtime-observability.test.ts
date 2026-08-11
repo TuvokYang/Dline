@@ -819,7 +819,7 @@ e2e(
 		await helper.signin(sidebar)
 		await sendTask(sidebar, "Exercise an exhausted OpenAI mock response queue.")
 
-		await expect(sidebar.getByText("Automatic retry stopped", { exact: true })).toBeVisible({ timeout: 90_000 })
+		await expect(sidebar.locator('vscode-button[aria-label="Retry"]')).toBeVisible({ timeout: 90_000 })
 		await expectSingleStructuredApiError(sidebar, {
 			message,
 			provider: "openai",

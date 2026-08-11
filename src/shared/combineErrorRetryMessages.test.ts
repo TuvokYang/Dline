@@ -72,6 +72,21 @@ describe("combineErrorRetryMessages", () => {
 		expect(combineErrorRetryMessages(messages)).toContainEqual(messages[0])
 	})
 
+	it("retires automatic retry status when the canonical API recovery ask is shown", () => {
+		const messages: ClineMessage[] = [
+			activeRetry(),
+			{
+				type: "ask",
+				ask: "api_req_failed",
+				text: "Provider failed",
+				ts: 2,
+				conversationHistoryIndex: 0,
+			},
+		]
+
+		expect(combineErrorRetryMessages(messages)).toEqual([messages[1]])
+	})
+
 	it("keeps an exhausted error while a manual retry has not produced a durable response", () => {
 		const messages: ClineMessage[] = [
 			exhaustedRetry(),

@@ -63,10 +63,7 @@ export function projectTaskView(
 	const interactionIsBeingResolved = state.interaction?.status === "resolving"
 	const actions =
 		options.autoRetryActive && !state.interaction
-			? [
-					{ ...RETRY_PENDING_ACTION, enabled: options.autoRetryPending ?? true },
-					...(isCancellable ? [{ ...CANCEL_ACTION }] : []),
-				]
+			? [{ ...RETRY_PENDING_ACTION }, ...(isCancellable ? [{ ...CANCEL_ACTION }] : [])]
 			: interactionIsBeingResolved
 				? isCancellable
 					? [{ ...CANCEL_ACTION }]

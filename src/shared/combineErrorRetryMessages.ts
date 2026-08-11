@@ -70,6 +70,7 @@ export function combineErrorRetryMessages(messages: ClineMessage[]): ClineMessag
 			let hasLaterErrorRetry = false
 			let hasApiReqStartedBefore = false
 			let hasRecoveredConversation = false
+			let hasCanonicalRecoveryAsk = false
 			let hasRetryStarted = false
 			const conversationHistoryIndex = message.conversationHistoryIndex ?? 0
 
@@ -77,6 +78,10 @@ export function combineErrorRetryMessages(messages: ClineMessage[]): ClineMessag
 				const laterMessage = messages[j]
 				if (laterMessage.say === "error_retry") {
 					hasLaterErrorRetry = true
+					break
+				}
+				if (laterMessage.type === "ask" && laterMessage.ask === "api_req_failed") {
+					hasCanonicalRecoveryAsk = true
 					break
 				}
 				if (laterMessage.say === "api_req_retried") {
@@ -103,10 +108,9 @@ export function combineErrorRetryMessages(messages: ClineMessage[]): ClineMessag
 				continue
 			}
 
-			// A later durable model response retires both automatic and exhausted
-			// retry errors. This also covers first-chunk retries, which reuse the
-			// original api_req_started message instead of appending another one.
-			if (hasRecoveredConversation) {
+			// The canonical recovery ask owns terminal presentation, while a later
+			// durable model response retires recovered retry status entirely.
+			if (hasCanonicalRecoveryAsk || hasRecoveredConversation) {
 				continue
 			}
 

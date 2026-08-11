@@ -18,10 +18,11 @@ import {
 	getContextWindowInfo,
 } from "@core/context/context-management/context-window-utils"
 import {
-	getCompactionUserText,
 	hasManualCompactionIntent,
 	hasToolResult,
+	projectCompactionRequestContent,
 	projectCompletedCompactionResult,
+	shouldContinueCompactionFitting,
 	shouldDeferCurrentTurn,
 	shouldRestoreDeferredTurn,
 } from "@core/context/context-management/current-turn-compaction"
@@ -53,18 +54,13 @@ import { ToolPromptGenerator } from "@core/prompts/generators/ToolPromptGenerato
 import { PromptProfile } from "@core/prompts/profiles/types"
 import { formatResponse } from "@core/prompts/responses"
 import { parseSlashCommands } from "@core/slash-commands"
-import {
-	ensureRulesDirectoryExists,
-	ensureTaskDirectoryExists,
-	GlobalFileNames,
-	getSavedApiConversationHistory,
-	getSavedClineMessages,
-} from "@core/storage/disk"
+import { ensureRulesDirectoryExists, ensureTaskDirectoryExists, GlobalFileNames } from "@core/storage/disk"
 import type { FrozenSystemPromptCache, SystemPromptRefreshReason } from "@core/storage/task-context-types"
 import { TaskActivityPersistence } from "@core/task/activity/TaskActivityPersistence"
 import { TaskActivityStore } from "@core/task/activity/TaskActivityStore"
 import { ensureApiMessages, ensureUserContent } from "@core/task/api-context"
-import { showContextUsage } from "@core/task/environment-context"
+import { CompactionRequestReplay } from "@core/task/compaction/CompactionRequestReplay"
+import { getHighContextPressureWarning, showContextUsage } from "@core/task/environment-context"
 import { ExplicitInstructionRegistry } from "@core/task/explicit-instructions/ExplicitInstructionRegistry"
 import { type ModeCompactResult, ModeSwitchCompaction } from "@core/task/ModeSwitchCompaction"
 import { MODE_SWITCH_COMPACT_SIGNAL } from "@core/task/mode-switch-signal"
@@ -177,7 +173,7 @@ import { OrchestratorController } from "../orchestrator/OrchestratorController"
 import { StateManager } from "../storage/StateManager"
 import { createUnavailableApiHandler, resolveTaskApiProfile } from "./ApiProfileRecovery"
 import { buildActiveTasksSection } from "./active-tasks/ActiveTaskContextProvider"
-import { orderTurnEndingContentBlocks, orderTurnEndingNativeToolBlocks } from "./assistant-message-order"
+import { isTurnEndingToolName, orderTurnEndingContentBlocks, orderTurnEndingNativeToolBlocks } from "./assistant-message-order"
 import { getRetryDelay, getStreamRetryDecision, MAX_AUTO_RETRY_ATTEMPTS } from "./auto-retry"
 import { BlockPhase } from "./BlockPhaseMachine"
 import { buildTaskBackgroundEnvironmentSection, buildTaskBackgroundResults } from "./background/BackgroundContextInjector"
@@ -195,7 +191,10 @@ import {
 } from "./latency"
 import { MessageChannel } from "./MessageChannel"
 import { MessageStateHandler } from "./message-state"
-import { type ApiRateSnapshot, ApiRateTracker } from "./performance/api-rate-tracker"
+import type { ApiRateMetricsQuery, ApiRateMetricsQueryResult } from "./performance/api-rate-metrics-types"
+import type { ApiRateSnapshot } from "./performance/api-rate-tracker"
+import { TaskApiRateMetricsRepository } from "./performance/task-api-rate-metrics-repository"
+import { TaskApiRateMetricsService } from "./performance/task-api-rate-metrics-service"
 import type { PresentationPriority } from "./presentation-types"
 import { PromptCacheHealthTracker } from "./prompt-cache/PromptCacheHealthTracker"
 import { RestoreHandler } from "./RestoreHandler"
@@ -270,6 +269,8 @@ type ApiRequestTransactionOptions = {
 	reuseRequestAccounting?: boolean
 	/** Reuse one fully processed user message already durable at this history index. */
 	persistedRequestApiIndex?: number
+	/** Preserve the runtime request identity when compaction changes physical history indices. */
+	logicalApiIndex?: number
 }
 
 /** Preserve the existing provider-facing contract for user guidance after the mistake limit. */
@@ -400,6 +401,7 @@ export class Task {
 	private streamHandler: StreamResponseHandler
 	private readonly identityFactory = createIdentityFactory()
 	private readonly explicitInstructionRegistry = new ExplicitInstructionRegistry()
+	private readonly compactionRequestReplay = new CompactionRequestReplay()
 
 	private terminalExecutionMode: "vscodeTerminal" | "backgroundExec"
 
@@ -440,7 +442,8 @@ export class Task {
 	private latestTaskSnapshot?: TaskSnapshot
 	private pendingSystemPromptRefreshReason?: SystemPromptRefreshReason
 	private readonly promptCacheHealth: PromptCacheHealthTracker
-	private readonly apiRateTracker: ApiRateTracker
+	private readonly apiRateMetricsService: TaskApiRateMetricsService
+	private apiRateMetricsInitialization?: Promise<void>
 	private pendingBackgroundResultIds?: { subagentIds: string[]; commandIds: string[] }
 	private pendingBackgroundCommandLineCounts?: Array<{ id: string; lineCount: number }>
 	/** One cancellable automatic-retry wait, exposed to the Webview Retry action. */
@@ -449,6 +452,8 @@ export class Task {
 	}
 	/** Remains true across the timer and every request in one automatic retry sequence. */
 	private autoRetrySequenceActive = false
+	/** Stops automatic scheduling after the user takes ownership through Retry. */
+	private manualRetryTakeoverActive = false
 	private readonly presentationSchedulingDisabled = isPresentationSchedulingDisabled()
 	private lastLoggedPresentationTrigger = 0
 	restoreHandler!: RestoreHandler
@@ -495,7 +500,9 @@ export class Task {
 		this.mcpHub = mcpHub
 		this.updateTaskHistory = updateTaskHistory
 		this.postStateToWebview = postStateToWebview
-		this.apiRateTracker = new ApiRateTracker({
+		this.apiRateMetricsService = new TaskApiRateMetricsService({
+			repository: new TaskApiRateMetricsRepository({ taskId }),
+			taskId,
 			onChanged: () => {
 				void this.postStateToWebview().catch((error) => {
 					Logger.debug(`[Task ${this.taskId}] Failed to publish API rate metrics: ${error}`)
@@ -558,14 +565,19 @@ export class Task {
 				async (effect) => {
 					this.taskState.resetOperationCancellation()
 					this.taskState.abort = false
-					if (effect.persistedRequest) {
-						const persisted = this.messageStateHandler.apiConversationHistory[effect.apiIndex]
+					const replayHistoryIndex = this.compactionRequestReplay.getHistoryIndex(effect.apiIndex)
+					if (effect.persistedRequest || replayHistoryIndex !== undefined) {
+						const persistedRequestApiIndex = replayHistoryIndex ?? effect.apiIndex
+						const persisted = this.messageStateHandler.apiConversationHistory[persistedRequestApiIndex]
 						if (persisted?.role !== "user" || !Array.isArray(persisted.content)) {
-							throw new Error(`Persisted API request is missing at apiIndex=${effect.apiIndex}`)
+							throw new Error(
+								`Persisted API request is missing at logicalApiIndex=${effect.apiIndex}, historyIndex=${persistedRequestApiIndex}`,
+							)
 						}
 						await this.recursivelyMakeClineRequests(persisted.content as ClineContent[], false, {
 							reuseRequestAccounting: true,
-							persistedRequestApiIndex: effect.apiIndex,
+							persistedRequestApiIndex,
+							logicalApiIndex: effect.apiIndex,
 						})
 						return
 					}
@@ -822,7 +834,7 @@ export class Task {
 			...(this.taskSm.planModeProfile !== undefined && { planModeProfile: this.taskSm.planModeProfile }),
 			...(this.taskSm.actModeProfile !== undefined && { actModeProfile: this.taskSm.actModeProfile }),
 			ulid: this.ulid,
-			onStreamEstimatedTokens: (tokens) => this.apiRateTracker.recordEstimatedTokens(tokens),
+			onStreamEstimatedTokens: (tokens) => this.apiRateMetricsService.recordEstimatedTokens(tokens),
 			onRetryAttempt: async (attempt: number, maxRetries: number, delay: number, error: any) => {
 				const clineMessages = this.messageStateHandler.clineMessages
 				const lastApiReqStartedIndex = findLastIndex(clineMessages, (m) => m.say === "api_req_started")
@@ -1102,7 +1114,7 @@ export class Task {
 			...(this.taskSm.planModeProfile !== undefined && { planModeProfile: this.taskSm.planModeProfile }),
 			...(this.taskSm.actModeProfile !== undefined && { actModeProfile: this.taskSm.actModeProfile }),
 			ulid: this.ulid,
-			onStreamEstimatedTokens: (tokens) => this.apiRateTracker.recordEstimatedTokens(tokens),
+			onStreamEstimatedTokens: (tokens) => this.apiRateMetricsService.recordEstimatedTokens(tokens),
 		}
 		this.api = buildApiHandler(effectiveConfig, mode)
 		// Update toolExecutor's api reference so tool handlers use the new handler
@@ -1117,9 +1129,20 @@ export class Task {
 		return this.promptCacheHealth.getSnapshot()
 	}
 
-	/** Return trailing-minute request and token activity for the active Task. */
+	/** Return rates for the latest 60 API-active seconds, or every active second until the window fills. */
 	public getApiRateSnapshot(): ApiRateSnapshot {
-		return this.apiRateTracker.getSnapshot()
+		return this.apiRateMetricsService.getSnapshot()
+	}
+
+	/** Query persisted Task-local API rate history without adding it to ExtensionState. */
+	public async queryApiRateMetrics(query: ApiRateMetricsQuery): Promise<ApiRateMetricsQueryResult> {
+		await this.ensureApiRateMetricsInitialized()
+		return this.apiRateMetricsService.query(query)
+	}
+
+	private ensureApiRateMetricsInitialized(): Promise<void> {
+		this.apiRateMetricsInitialization ??= this.apiRateMetricsService.initialize()
+		return this.apiRateMetricsInitialization
 	}
 
 	private async scheduleAssistantPresentation(
@@ -1441,12 +1464,24 @@ export class Task {
 		return this.autoRetrySequenceActive && !this.taskState.abort
 	}
 
-	/** Trigger the pending automatic retry immediately from the Webview. */
+	/** Transfer one automatic retry sequence to explicit user control. */
 	public overridePendingAutoRetry(): boolean {
+		if (!this.autoRetrySequenceActive || this.taskState.abort) return false
+		this.manualRetryTakeoverActive = true
 		const pending = this.pendingAutoRetry
-		if (!pending || this.taskState.abort) return false
-		pending.settle(true)
+		if (pending) {
+			pending.settle(true, false)
+		}
+		this.autoRetrySequenceActive = false
+		this.postAutoRetryViewState()
 		return true
+	}
+
+	/** Consume the one-shot manual takeover at the next retry decision boundary. */
+	private consumeManualRetryTakeover(): boolean {
+		const active = this.manualRetryTakeoverActive
+		this.manualRetryTakeoverActive = false
+		return active
 	}
 
 	/** Schedule a retry that can be superseded by the explicit Retry action. */
@@ -2134,6 +2169,7 @@ export class Task {
 	}
 
 	public async startTask(task?: string, images?: string[], files?: string[], context?: string[]): Promise<void> {
+		await this.ensureApiRateMetricsInitialized()
 		try {
 			await this.clineIgnoreController.initialize()
 		} catch (error) {
@@ -2512,18 +2548,17 @@ export class Task {
 	 * Used for both readonly (locked task) and interactive resume scenarios.
 	 */
 	public async displayHistory(): Promise<void> {
+		await this.ensureApiRateMetricsInitialized()
 		try {
 			await this.clineIgnoreController.initialize()
 		} catch (error) {
 			Logger.error("Failed to initialize ClineIgnoreController:", error)
 		}
 
-		const savedClineMessages = await getSavedClineMessages(this.taskId)
-		await this.messageStateHandler.uiMessage?.overwrite(savedClineMessages)
+		// UIMessage and ApiConversation were opened before Task construction and are
+		// already the authoritative in-memory views. Rewriting their full contents on
+		// every history open creates a crash window and can overwrite a newer writer.
 		await this.messageStateHandler.updateTaskHistory()
-
-		const savedApiConversationHistory = await getSavedApiConversationHistory(this.taskId)
-		await this.messageStateHandler.overwriteApiConversationHistory(savedApiConversationHistory)
 
 		await ensureTaskDirectoryExists(this.taskId)
 		await this.contextManager.initializeContextHistory(await ensureTaskDirectoryExists(this.taskId))
@@ -2746,6 +2781,8 @@ export class Task {
 	}
 
 	async terminate() {
+		const cancellationGeneration = this.interactionCoordinator.cancelPending("task_terminated")
+		let cutoffRevision = this.taskRuntime.getState().revision
 		try {
 			this.cancelPendingAutoRetry()
 			this.modeSwitchCompaction.abort()
@@ -2756,14 +2793,17 @@ export class Task {
 			const runtimePhase = this.taskRuntime.getState().phase
 			if (runtimePhase !== TaskPhase.CANCELLING && runtimePhase !== TaskPhase.ABORTED) {
 				const terminating = await this.dispatchRuntime({ type: "TASK_TERMINATE_REQUESTED" })
-				if (!terminating.accepted && runtimePhase !== TaskPhase.IDLE) {
+				if (terminating.accepted) {
+					cutoffRevision = terminating.next.supersededEffectRevision ?? terminating.next.revision - 1
+				} else if (runtimePhase !== TaskPhase.IDLE) {
 					Logger.warn(`Task termination transition rejected: ${terminating.error?.code ?? "invalid_runtime_event"}`)
 				}
 			}
 
-			// PHASE 3: Set abort flag
+			// PHASE 3: Fence every old continuation and stop the provider transport.
 			this.taskState.abort = true
 			this.taskState.cancelOperations("task_terminated")
+			this.api?.abort?.()
 
 			// PHASE 4: Cancel hooks, background commands and task activities in
 			// parallel. Each cancellation is individually bounded by a timeout, so
@@ -2803,12 +2843,28 @@ export class Task {
 				})(),
 			])
 
-			// PHASE 4: Run TaskCancel hook as fire-and-forget. It must not
-			// block terminate because a slow or hanging hook would prevent
-			// the user from closing a task.
+			// Wait for the provider stream and every already-admitted continuation
+			// before taking the final persistence snapshot. Timed-out work is fenced
+			// by the store close guard below and can no longer write after close.
+			await Promise.all([
+				pWaitFor(() => !this.taskState.isStreaming || this.taskState.didFinishAbortingStream, {
+					interval: 50,
+					timeout: 5_000,
+				}).catch(() => {}),
+				withTerminateTimeout(
+					Promise.all([
+						this.taskRuntime.waitForDeferredEffectsThrough(cutoffRevision),
+						this.interactionCoordinator.waitForClaimedContinuations(),
+					]).then(() => undefined),
+					5_000,
+					"taskTerminate.waitForSupersededOperations",
+				),
+			])
+
 			const hooksEnabled = getHooksEnabledSafe(this.stateManager.getGlobalSettingsKey("hooksEnabled"))
+			let taskCancelHookPromise = Promise.resolve()
 			if (hooksEnabled && shouldRunTaskCancelHook) {
-				void (async () => {
+				taskCancelHookPromise = (async () => {
 					try {
 						await executeHook({
 							hookName: "TaskCancel",
@@ -2887,10 +2943,11 @@ export class Task {
 				() => {
 					if (this.FocusChainManager) this.FocusChainManager.dispose()
 				},
-				() => this.apiRateTracker.dispose(),
 				() => this.activityStore.dispose(),
 			]
 			const asyncCleanups: Array<Promise<void>> = [
+				withTerminateTimeout(taskCancelHookPromise, 5_000, "taskCancelHook"),
+				withTerminateTimeout(this.apiRateMetricsService.dispose(), 5_000, "apiRateMetricsService.dispose"),
 				withTerminateTimeout(this.activityStore.waitForPersistence(), 5_000, "activityStore.waitForPersistence"),
 				withTerminateTimeout(this.browserSession.dispose(), 5_000, "browserSession.dispose"),
 				withTerminateTimeout(this.diffViewProvider.revertChanges(), 5_000, "diffViewProvider.revertChanges"),
@@ -2909,16 +2966,22 @@ export class Task {
 			// Wait for async cleanups with timeouts
 			await Promise.allSettled(asyncCleanups)
 		} finally {
-			// Final state update
 			try {
-				await Promise.all([
-					this.flushTaskSnapshot(),
-					this.messageStateHandler.flushApiConversationHistory(),
-					this.messageStateHandler.flushUiMessages(),
-				])
-				await this.postStateToWebview()
-			} catch (error) {
-				Logger.error("Failed to post final state after terminate", error)
+				try {
+					await Promise.all([
+						this.flushTaskSnapshot(),
+						this.messageStateHandler.flushApiConversationHistory(),
+						this.messageStateHandler.flushUiMessages(),
+					])
+					await this.postStateToWebview()
+				} catch (error) {
+					Logger.error("Failed to post final state after terminate", error)
+				}
+				// Store close is the durability boundary and must not be best-effort:
+				// Controller.clearTask releases the task lock only after this resolves.
+				await this.messageStateHandler.close()
+			} finally {
+				this.interactionCoordinator.completeCancellation(cancellationGeneration)
 			}
 		}
 	}
@@ -3197,7 +3260,7 @@ export class Task {
 
 	private async updateContextCompactionStatus(
 		status: NonNullable<ClineSayTool["compactionStatus"]>,
-		options: { error?: string; retryAttempt?: number; maxRetryAttempts?: number } = {},
+		options: { error?: string; retryAttempt?: number; maxRetryAttempts?: number; clearContent?: boolean } = {},
 	): Promise<void> {
 		if (!this.taskState.isInternalContextCompactionRequest && !this.taskState.isManualContextCompactionRequest) return
 		const existingTs = this.taskState.contextCompactionMessageTs
@@ -3205,7 +3268,7 @@ export class Task {
 			? this.messageStateHandler.clineMessages.find((message) => message.ts === existingTs)
 			: undefined
 		let content = ""
-		if (existing?.text) {
+		if (!options.clearContent && existing?.text) {
 			try {
 				const payload = JSON.parse(existing.text) as ClineSayTool
 				content = typeof payload.content === "string" ? payload.content : ""
@@ -3230,6 +3293,50 @@ export class Task {
 			existingTs,
 		)
 		if (ts !== undefined) this.taskState.contextCompactionMessageTs = ts
+	}
+
+	/** Remove every provider-produced artifact from a failed automatic compaction attempt. */
+	private async discardFailedCompactionAttempt(apiIndex: number): Promise<void> {
+		if (!this.compactionRequestReplay.getDeclaration(apiIndex)) return
+
+		this.presentationScheduler.reset()
+		const clineMessages = this.messageStateHandler.clineMessages
+		const apiRequestMessageIndex = findLastIndex(clineMessages, (message) => message.say === "api_req_started")
+		const removableMessageTs = new Set<number>()
+		const compactionMessageTs = this.taskState.contextCompactionMessageTs
+		if (apiRequestMessageIndex >= 0) {
+			for (const message of clineMessages.slice(apiRequestMessageIndex + 1)) {
+				if (message.ts !== compactionMessageTs) {
+					removableMessageTs.add(message.ts)
+				}
+			}
+		}
+		await this.messageStateHandler.removeMessagesByTs([...removableMessageTs], { updateTaskHistory: false })
+
+		const historyIndex = this.compactionRequestReplay.getHistoryIndex(apiIndex)
+		if (historyIndex === undefined) {
+			throw new Error(`Compaction retry history boundary is missing at apiIndex=${apiIndex}`)
+		}
+		const apiHistory = this.messageStateHandler.apiConversationHistory
+		if (apiHistory[historyIndex]?.role !== "user") {
+			throw new Error(`Compaction retry request is missing at apiIndex=${apiIndex}, historyIndex=${historyIndex}`)
+		}
+		if (apiHistory.length > historyIndex + 1) {
+			await this.messageStateHandler.overwriteApiConversationHistory(apiHistory.slice(0, historyIndex + 1))
+			await this.messageStateHandler.flushApiConversationHistory()
+		}
+
+		this.taskState.currentStreamingContentIndex = 0
+		this.taskState.assistantMessageContent = []
+		this.taskState.userMessageContent = []
+		this.taskState.userMessageContentReady = false
+		this.pendingReasoningText = undefined
+		this.taskState.reasoningTs = undefined
+		this.taskState.parseBlockTsByKey.clear()
+		this.taskState.parseToolIdentityByKey.clear()
+		this.taskState.lastRenderedPartialByTs.clear()
+		this.taskState.partialToolLifecycleByTs.clear()
+		this.streamHandler.reset()
 	}
 
 	private async awaitManualCompactionRecovery(): Promise<void> {
@@ -3620,41 +3727,96 @@ export class Task {
 		return promptContext
 	}
 
-	async *attemptApiRequest(previousApiReqIndex: number, requestScope: RequestApiScope, providerAttempt = 0): ApiStream {
+	async *attemptApiRequest(
+		previousApiReqIndex: number,
+		requestScope: RequestApiScope,
+		apiIndex = this.messageStateHandler.apiConversationHistory.length - 1,
+		providerAttempt = 0,
+	): ApiStream {
 		const apiReqStart = performance.now()
 		const { api, providerInfo } = requestScope
 		Logger.debug(`[Task ${this.taskId}] attemptApiRequest: start (req #${this.taskState.apiRequestCount})`)
-		const promptContext = await this.buildPromptContext(
-			providerInfo,
-			requestScope.webToolsEnabled,
-			requestScope.webSearchRoutingPlan,
-		)
 
-		Logger.debug(
-			`[Task ${this.taskId}] attemptApiRequest: before systemPrompt +${Math.round(performance.now() - apiReqStart)}ms`,
-		)
-		const refreshReason = this.pendingSystemPromptRefreshReason
-		let frozenPrompt: FrozenSystemPromptCache
-		if (refreshReason) {
-			try {
-				frozenPrompt = await this.systemPromptCacheService.refresh({ promptContext, reason: refreshReason })
-			} catch (error) {
-				Logger.warn(`[Task ${this.taskId}] Failed to refresh frozen system prompt after ${refreshReason}:`, error)
+		let providerInput = this.compactionRequestReplay.getProviderInput(apiIndex)
+		if (!providerInput) {
+			const promptContext = await this.buildPromptContext(
+				providerInfo,
+				requestScope.webToolsEnabled,
+				requestScope.webSearchRoutingPlan,
+			)
+
+			Logger.debug(
+				`[Task ${this.taskId}] attemptApiRequest: before systemPrompt +${Math.round(performance.now() - apiReqStart)}ms`,
+			)
+			const refreshReason = this.pendingSystemPromptRefreshReason
+			let frozenPrompt: FrozenSystemPromptCache
+			if (refreshReason) {
+				try {
+					frozenPrompt = await this.systemPromptCacheService.refresh({ promptContext, reason: refreshReason })
+				} catch (error) {
+					Logger.warn(`[Task ${this.taskId}] Failed to refresh frozen system prompt after ${refreshReason}:`, error)
+					frozenPrompt = await this.systemPromptCacheService.getOrCreate({ promptContext })
+				} finally {
+					this.pendingSystemPromptRefreshReason = undefined
+				}
+			} else {
 				frozenPrompt = await this.systemPromptCacheService.getOrCreate({ promptContext })
-			} finally {
-				this.pendingSystemPromptRefreshReason = undefined
 			}
+			const systemPrompt = frozenPrompt.text
+			const toolPromptGenerator = new ToolPromptGenerator()
+			const selectedTools = toolPromptGenerator.generateToolsForRequest(
+				promptContext.promptProfile,
+				promptContext,
+				this.systemPromptCacheService.getLastTools(),
+			)
+			const tools = selectedTools ? [...selectedTools] : undefined
+			const contextManagementMetadata = await this.contextManager.getNewContextMessagesAndMetadata(
+				this.messageStateHandler.apiConversationHistory,
+				this.messageStateHandler.clineMessages,
+				api,
+				this.taskState.conversationHistoryDeletedRange,
+				previousApiReqIndex,
+				await ensureTaskDirectoryExists(this.taskId),
+				this.modeSwitchCompaction.shouldForce() ||
+					(this.stateManager.getGlobalSettingsKey("useAutoCondense") && isNextGenModelFamily(providerInfo.model.id)),
+			)
+
+			if (contextManagementMetadata.updatedConversationHistoryDeletedRange) {
+				this.taskState.conversationHistoryDeletedRange = contextManagementMetadata.conversationHistoryDeletedRange
+				await this.messageStateHandler.updateTaskHistory()
+			}
+
+			Logger.debug(
+				`[Task ${this.taskId}] attemptApiRequest: after contextMgmt +${Math.round(performance.now() - apiReqStart)}ms`,
+			)
+			let apiConversationMessages = ensureApiMessages(
+				contextManagementMetadata.truncatedConversationHistory,
+				this.messageStateHandler.apiConversationHistory,
+			)
+			const serverTools = requestScope.webSearchRoutingPlan.serverTools
+
+			if (hasCompactionWindowBudgetMarker(apiConversationMessages)) {
+				const { contextWindow } = getContextWindowInfo(api)
+				const resolvedBudget = resolveCompactionWindowBudget({
+					contextWindow,
+					maxOutputTokens: providerInfo.model.info.capabilities?.maxTokens,
+					systemPrompt,
+					messages: apiConversationMessages,
+					tools,
+					serverTools,
+				})
+				apiConversationMessages = resolvedBudget.messages
+			}
+
+			const candidateInput = { systemPrompt, messages: apiConversationMessages, tools, serverTools }
+			providerInput = this.taskState.isInternalContextCompactionRequest
+				? this.compactionRequestReplay.captureProviderInput(apiIndex, candidateInput)
+				: candidateInput
 		} else {
-			frozenPrompt = await this.systemPromptCacheService.getOrCreate({ promptContext })
+			Logger.debug(`[Task ${this.taskId}] Reusing canonical compaction provider input for apiIndex=${apiIndex}`)
 		}
-		const systemPrompt = frozenPrompt.text
-		const toolPromptGenerator = new ToolPromptGenerator()
-		const selectedTools = toolPromptGenerator.generateToolsForRequest(
-			promptContext.promptProfile,
-			promptContext,
-			this.systemPromptCacheService.getLastTools(),
-		)
-		const tools = selectedTools ? [...selectedTools] : undefined
+
+		const { systemPrompt, messages: apiConversationMessages, tools, serverTools } = providerInput
 		this.toolExecutor.setAllowedNativeToolNames(getAdvertisedNativeToolNames(tools))
 		requestScope.explicitInstructions.beginProviderAttempt(providerAttempt === 0 ? undefined : `attempt-${providerAttempt}`)
 		this.toolExecutor.setExplicitInstructionConsumePort(requestScope.explicitInstructions.createConsumePort())
@@ -3664,48 +3826,6 @@ export class Task {
 		)
 		this.useNativeToolCalls = !!tools?.length
 		await this.writePromptMetadataArtifacts({ systemPrompt, requestScope })
-
-		const contextManagementMetadata = await this.contextManager.getNewContextMessagesAndMetadata(
-			this.messageStateHandler.apiConversationHistory,
-			this.messageStateHandler.clineMessages,
-			api,
-			this.taskState.conversationHistoryDeletedRange,
-			previousApiReqIndex,
-			await ensureTaskDirectoryExists(this.taskId),
-			this.modeSwitchCompaction.shouldForce() ||
-				(this.stateManager.getGlobalSettingsKey("useAutoCondense") && isNextGenModelFamily(providerInfo.model.id)),
-		)
-
-		if (contextManagementMetadata.updatedConversationHistoryDeletedRange) {
-			this.taskState.conversationHistoryDeletedRange = contextManagementMetadata.conversationHistoryDeletedRange
-			await this.messageStateHandler.updateTaskHistory()
-			// saves task history item which we use to keep track of conversation history deleted range
-		}
-
-		// Response API requires native tool calls to be enabled
-		Logger.debug(
-			`[Task ${this.taskId}] attemptApiRequest: after contextMgmt +${Math.round(performance.now() - apiReqStart)}ms`,
-		)
-		// Debug: record full API request context when DLINE_LOG_API_CONTEXT=1 or IS_DEV=true
-		let apiConversationMessages = ensureApiMessages(
-			contextManagementMetadata.truncatedConversationHistory,
-			this.messageStateHandler.apiConversationHistory,
-		)
-		const serverTools = requestScope.webSearchRoutingPlan.serverTools
-
-		if (hasCompactionWindowBudgetMarker(apiConversationMessages)) {
-			const { contextWindow } = getContextWindowInfo(api)
-			const resolvedBudget = resolveCompactionWindowBudget({
-				contextWindow,
-				maxOutputTokens: providerInfo.model.info.capabilities?.maxTokens,
-				systemPrompt,
-				messages: apiConversationMessages,
-				tools,
-				serverTools,
-			})
-
-			apiConversationMessages = resolvedBudget.messages
-		}
 
 		const roundContext = {
 			taskId: this.taskId,
@@ -3730,7 +3850,7 @@ export class Task {
 			thinking: thinkingSummary ?? null,
 		})
 
-		this.apiRateTracker.recordRequestStarted()
+		this.apiRateMetricsService.recordRequestStarted()
 		const providerRequestStartedAtMs = performance.now()
 		const stream = recordProviderAdapterOutput(
 			roundContext,
@@ -3840,8 +3960,10 @@ export class Task {
 				const isInsufficientCredits = clineError.isErrorType(ClineErrorType.Balance)
 
 				let response: ClineAskResponse
-				// Skip auto-retry for Cline provider insufficient credits, auth errors, or spend limit errors
+				const manualRetryTakeover = this.consumeManualRetryTakeover()
+				// Skip auto-retry after explicit user takeover or for non-recoverable account errors.
 				const shouldRetry =
+					!manualRetryTakeover &&
 					!isInsufficientCredits &&
 					!isAuthError &&
 					!isSpendLimitError &&
@@ -3850,10 +3972,12 @@ export class Task {
 				if (shouldRetry) {
 					// Auto-retry enabled with max 3 attempts: automatically approve the retry
 					this.taskState.autoRetryAttempts++
+					await this.discardFailedCompactionAttempt(apiIndex)
 					await this.updateContextCompactionStatus("retrying", {
 						error: clineError.message,
 						retryAttempt: this.taskState.autoRetryAttempts,
 						maxRetryAttempts: MAX_AUTO_RETRY_ATTEMPTS,
+						clearContent: true,
 					})
 
 					// Calculate delay: 2s, 4s, 8s
@@ -3940,7 +4064,7 @@ export class Task {
 				this.taskState.didAutomaticallyRetryFailedApiRequest = false
 			}
 			// delegate generator output from the recursive call
-			yield* this.attemptApiRequest(previousApiReqIndex, requestScope, providerAttempt + 1)
+			yield* this.attemptApiRequest(previousApiReqIndex, requestScope, apiIndex, providerAttempt + 1)
 			return
 		}
 
@@ -4149,7 +4273,10 @@ export class Task {
 	}
 
 	/** Execute one fully persisted assistant tool turn exactly once. */
-	private async executeFinalizedAssistantTurn(): Promise<void> {
+	private async executeFinalizedAssistantTurn(compactionFitInput?: {
+		contextTokens: number
+		contextWindow: number
+	}): Promise<void> {
 		const toolUses = this.taskState.assistantMessageContent.filter(
 			(block): block is ToolUse => block.type === "tool_use" && !block.partial,
 		)
@@ -4289,6 +4416,10 @@ export class Task {
 			this.markFinalizedToolPresented(tool)
 		}
 
+		if (compactionFitInput && this.taskState.currentlySummarizing && this.taskState.isInternalContextCompactionRequest) {
+			this.taskState.compactionFittingRequired = shouldContinueCompactionFitting(compactionFitInput)
+		}
+
 		const finalState = this.taskRuntime.getState()
 		const finalTurn = finalState.turn
 		if (
@@ -4412,9 +4543,24 @@ export class Task {
 			this.taskState.apiRequestCount++
 			this.taskState.apiRequestsSinceLastTodoUpdate++
 		}
-		const apiIndex = persistedRequestApiIndex ?? this.messageStateHandler.apiConversationHistory.length
-		if (persistedRequest && (apiIndex < 0 || apiIndex !== this.messageStateHandler.apiConversationHistory.length - 1)) {
-			throw new Error(`Persisted API request is not the active history tail: apiIndex=${apiIndex}`)
+		const apiIndex =
+			transaction.logicalApiIndex ?? persistedRequestApiIndex ?? this.messageStateHandler.apiConversationHistory.length
+		if (
+			persistedRequest &&
+			(persistedRequestApiIndex < 0 ||
+				persistedRequestApiIndex !== this.messageStateHandler.apiConversationHistory.length - 1)
+		) {
+			throw new Error(
+				`Persisted API request is not the active history tail: logicalApiIndex=${apiIndex}, historyIndex=${persistedRequestApiIndex}`,
+			)
+		}
+		if (persistedRequest) {
+			const replayDeclaration = this.compactionRequestReplay.getDeclaration(apiIndex)
+			if (replayDeclaration) {
+				requestScope.explicitInstructions.register(replayDeclaration)
+				this.taskState.isInternalContextCompactionRequest = true
+				this.taskState.isManualContextCompactionRequest = false
+			}
 		}
 
 		// Used to know what models were used in the task if user wants to export metadata for error reporting purposes
@@ -4548,12 +4694,14 @@ export class Task {
 		}
 
 		const didCompleteSummarization = !persistedRequest && this.taskState.currentlySummarizing
+		const fittingCompactionRequired = !persistedRequest && this.taskState.compactionFittingRequired
 		if (didCompleteSummarization || manualCompactionCommitted) {
 			this.promptCacheHealth.recordCompactionResult(true)
 		}
 		if (
 			canCompactBeforeAdmission &&
 			(didCompleteSummarization ||
+				fittingCompactionRequired ||
 				forceModeCompact ||
 				(useAutoCondense && !manualCompactionRequested && !manualCompactionCommitted && isNextGenModelFamily(model.id)))
 		) {
@@ -4562,7 +4710,9 @@ export class Task {
 			// conversationHistoryDeletedRange to mask out the summarization-trigger user & assistant response messages
 			if (didCompleteSummarization) {
 				this.taskState.currentlySummarizing = false
+				this.compactionRequestReplay.clear()
 				this.pendingSystemPromptRefreshReason = "post_compaction"
+				shouldCompact = fittingCompactionRequired
 
 				if (this.taskState.conversationHistoryDeletedRange) {
 					const [start, end] = this.taskState.conversationHistoryDeletedRange
@@ -4577,6 +4727,7 @@ export class Task {
 				}
 			} else {
 				shouldCompact =
+					fittingCompactionRequired ||
 					forceModeCompact ||
 					this.contextManager.shouldCompactContextWindow(
 						this.messageStateHandler.clineMessages,
@@ -4587,7 +4738,7 @@ export class Task {
 
 				const previousTokens = this.parsePreviousTokens(previousApiReqIndex)
 				const hasCurrentToolResult = hasToolResult(userContent)
-				if (hasCurrentToolResult) {
+				if (hasCurrentToolResult && !fittingCompactionRequired) {
 					const { contextWindow } = getContextWindowInfo(requestScope.api)
 					const triggerTokens = computeCompactTrigger(
 						contextWindow,
@@ -4614,7 +4765,12 @@ export class Task {
 				// Edge case: summarize_task tool call completes but user cancels next request before it finishes.
 				// This results in currentlySummarizing being false, and we fail to update the context window token estimate.
 				// Check active message count to avoid summarizing a summary (bad UX but doesn't break logic).
-				if (shouldCompact && !forceModeCompact && this.taskState.conversationHistoryDeletedRange) {
+				if (
+					shouldCompact &&
+					!fittingCompactionRequired &&
+					!forceModeCompact &&
+					this.taskState.conversationHistoryDeletedRange
+				) {
 					const apiHistory = this.messageStateHandler.apiConversationHistory
 					const activeMessageCount = apiHistory.length - this.taskState.conversationHistoryDeletedRange[1] - 1
 
@@ -4626,7 +4782,7 @@ export class Task {
 				}
 
 				// Determine whether we can save enough tokens from context rewriting to skip auto-compact
-				if (shouldCompact && !forceModeCompact && !this.taskState.deferredCurrentTurn) {
+				if (shouldCompact && !fittingCompactionRequired && !forceModeCompact && !this.taskState.deferredCurrentTurn) {
 					shouldCompact = await this.contextManager.attemptFileReadOptimization(
 						this.messageStateHandler.apiConversationHistory,
 						this.taskState.conversationHistoryDeletedRange,
@@ -4655,11 +4811,12 @@ export class Task {
 			shouldRestoreDeferredTurn({
 				hasDeferredTurn: this.taskState.deferredCurrentTurn !== undefined,
 				didCompleteSummarization,
+				fittingCompactionRequired,
 			})
 		) {
 			const deferredUserContent = await this.restoreDeferredTurn(userContent)
 			if (deferredUserContent !== userContent) {
-				if (this.modeSwitchCompaction.getOperationId()) {
+				if (this.modeSwitchCompaction.getOperationId() && !fittingCompactionRequired) {
 					await this.modeSwitchCompaction.markApplied()
 				}
 				return this.recursivelyMakeClineRequests(
@@ -4674,7 +4831,7 @@ export class Task {
 			userContent = projectCompletedCompactionResult(userContent, manualCompactionContinuation)
 		}
 
-		if (didCompleteSummarization && this.modeSwitchCompaction.getOperationId()) {
+		if (didCompleteSummarization && this.modeSwitchCompaction.getOperationId() && !fittingCompactionRequired) {
 			await this.modeSwitchCompaction.markApplied()
 		}
 
@@ -4692,10 +4849,12 @@ export class Task {
 			environmentDetails = ""
 			clinerulesError = false
 		} else if (shouldCompact) {
-			// Preserve user-authored current-turn content while tool results remain deferred until compaction completes.
-			parsedUserContent = this.taskState.deferredCurrentTurn
-				? getCompactionUserText(this.taskState.deferredCurrentTurn.userContent)
-				: userContent
+			// Iterative passes include the latest summary while the original tool-result turn remains deferred.
+			parsedUserContent = projectCompactionRequestContent(
+				userContent,
+				this.taskState.deferredCurrentTurn?.userContent,
+				fittingCompactionRequired,
+			)
 			environmentDetails = ""
 			clinerulesError = false
 			this.taskState.lastAutoCompactTriggerIndex = previousApiReqIndex
@@ -4747,12 +4906,20 @@ export class Task {
 				: operationId
 					? "mode_switch"
 					: "auto_compaction"
-			requestScope.explicitInstructions.register({
+			const compactionDeclaration = {
 				type: "summarize_task",
 				source,
 				targetTool: ClineDefaultTool.SUMMARIZE_TASK,
 				...(operationId === undefined ? {} : { operationId }),
-			})
+			} as const
+			requestScope.explicitInstructions.register(compactionDeclaration)
+			if (source === "auto_compaction" || source === "mode_switch") {
+				this.compactionRequestReplay.begin(
+					apiIndex,
+					this.messageStateHandler.apiConversationHistory.length,
+					compactionDeclaration,
+				)
+			}
 			const summaryPrompt = summarizeTask(
 				promptProfile === PromptProfile.Standard
 					? this.stateManager.getGlobalSettingsKey("focusChainSettings")
@@ -4782,6 +4949,7 @@ export class Task {
 			: await this.persistApiRequestUserMessage(userContent, apiIndex, requestScope, transaction.beforeApiRequestStarted)
 		if (!requestApproved) {
 			requestScope.explicitInstructions.cancel()
+			this.compactionRequestReplay.clear(apiIndex)
 			return true
 		}
 
@@ -4883,8 +5051,20 @@ export class Task {
 				await updateApiReqMsgFromMetrics(cancelReason, streamingFailedMessage)
 			}
 
-			const abortStream = async (cancelReason: ClineApiReqCancelReason, streamingFailedMessage?: string) => {
+			const abortStreamOnce = async (cancelReason: ClineApiReqCancelReason, streamingFailedMessage?: string) => {
 				Session.get().finalizeRequest()
+				const reasoningHandler = this.streamHandler.getHandlers().reasonsHandler
+				const currentReasoning = reasoningHandler.getCurrentReasoning()
+				if (currentReasoning?.thinking) {
+					const reasoningTs = this.taskState.reasoningTs ?? this.genMessageTs()
+					await this.messageStateHandler.finalizeClineMessage({
+						ts: reasoningTs,
+						type: "say",
+						say: "reasoning",
+						text: currentReasoning.thinking,
+					})
+					this.taskState.reasoningTs = undefined
+				}
 
 				if (this.diffViewProvider.isEditing) {
 					await this.diffViewProvider.revertChanges() // closes diff view
@@ -4912,21 +5092,25 @@ export class Task {
 				await finalizeApiReqMsg(cancelReason, streamingFailedMessage)
 				await this.messageStateHandler.updateTaskHistory()
 
-				// Let assistant know their response was interrupted for when task is resumed
+				// Preserve reasoning already received from the provider together with
+				// an explicit interruption marker for deterministic resume behavior.
+				const interruptedContent: ClineAssistantContent[] = [
+					...reasoningHandler.getRedactedThinking(),
+					...(currentReasoning ? [{ ...currentReasoning }] : []),
+					{
+						type: "text",
+						text:
+							assistantMessage +
+							`\n\n[${
+								cancelReason === "streaming_failed"
+									? "Response interrupted by API Error"
+									: "Response interrupted by user"
+							}]`,
+					},
+				]
 				await this.messageStateHandler.addToApiConversationHistory({
 					role: "assistant",
-					content: [
-						{
-							type: "text",
-							text:
-								assistantMessage +
-								`\n\n[${
-									cancelReason === "streaming_failed"
-										? "Response interrupted by API Error"
-										: "Response interrupted by user"
-								}]`,
-						},
-					],
+					content: interruptedContent,
 					modelInfo,
 					metrics: {
 						tokens: {
@@ -4952,11 +5136,17 @@ export class Task {
 				// signals to provider that it can retrieve the saved messages from disk, as abortTask can not be awaited on in nature
 				this.taskState.didFinishAbortingStream = true
 			}
+			let abortStreamPromise: Promise<void> | undefined
+			const abortStream = (cancelReason: ClineApiReqCancelReason, streamingFailedMessage?: string): Promise<void> => {
+				abortStreamPromise ??= abortStreamOnce(cancelReason, streamingFailedMessage)
+				return abortStreamPromise
+			}
 
 			// reset streaming state
 			this.taskState.currentStreamingContentIndex = 0
 			this.taskState.assistantMessageContent = []
 			this.taskState.didCompleteReadingStream = false
+			this.taskState.didFinishAbortingStream = false
 			this.taskState.userMessageContent = []
 			this.taskState.userMessageContentReady = false
 			this.taskController.reset()
@@ -4975,7 +5165,7 @@ export class Task {
 			this.taskState.partialToolLifecycleByTs.clear()
 
 			const { toolUseHandler, reasonsHandler } = this.streamHandler.getHandlers()
-			const providerStream = this.attemptApiRequest(previousApiReqIndex, requestScope) // yields only if the first chunk is successful, otherwise will allow the user to retry the request (most likely due to rate limit error, which gets thrown on the first chunk)
+			const providerStream = this.attemptApiRequest(previousApiReqIndex, requestScope, apiIndex) // yields only if the first chunk is successful, otherwise will allow the user to retry the request (most likely due to rate limit error, which gets thrown on the first chunk)
 			const stream = normalizeApiStream(providerStream, createStreamNormalizer(this.identityFactory))
 
 			let assistantMessageId = ""
@@ -5015,13 +5205,13 @@ export class Task {
 					onUsageChunk: (chunk) => {
 						this.streamHandler.setRequestId(chunk.provider_metadata?.response_id)
 						didReceiveUsageChunk = true
-						this.apiRateTracker.recordExactTokens(
-							chunk.inputTokens +
-								chunk.outputTokens +
-								(chunk.cacheWriteTokens ?? 0) +
-								(chunk.cacheReadTokens ?? 0) +
-								(chunk.thoughtsTokenCount ?? 0),
-						)
+						this.apiRateMetricsService.recordExactUsage({
+							inputTokens: chunk.inputTokens,
+							outputTokens: chunk.outputTokens,
+							cacheWriteTokens: chunk.cacheWriteTokens,
+							cacheReadTokens: chunk.cacheReadTokens,
+							thoughtsTokens: chunk.thoughtsTokenCount,
+						})
 						taskMetrics.inputTokens += chunk.inputTokens
 						taskMetrics.outputTokens += chunk.outputTokens
 						taskMetrics.cacheWriteTokens += chunk.cacheWriteTokens ?? 0
@@ -5121,6 +5311,13 @@ export class Task {
 								this.getPresentationPriorityForChunk({ chunkType: "tool_calls", hadVisibleAssistantContent }),
 							)
 							didScheduleAnyContent = true
+							if (chunk.phase === "completed" && isTurnEndingToolName(chunk.tool_call.function?.name)) {
+								// A turn-ending tool owns the rest of the interaction. Stop the provider
+								// transport immediately so post-tool reasoning cannot enter UI or history,
+								// while preserving the normal assistant-turn finalization path below.
+								requestScope.api.abort?.()
+								shouldInterruptStream = true
+							}
 							break
 						}
 						case "server_tool": {
@@ -5181,6 +5378,10 @@ export class Task {
 							didScheduleAnyContent = true
 							break
 						}
+					}
+
+					if (shouldInterruptStream) {
+						break
 					}
 
 					if (this.taskState.abort) {
@@ -5247,6 +5448,9 @@ export class Task {
 				)
 				// abandoned happens when extension is no longer waiting for the cline instance to finish aborting (error is thrown here when any function in the for loop throws due to this.abort)
 				if (this.taskState.abort) {
+					if (!this.taskState.didFinishAbortingStream && !this.taskState.abandoned) {
+						await abortStream("user_cancelled")
+					}
 					Logger.debug(`[Task ${this.taskId}] API stream stopped after task cancellation`)
 				} else if (!this.taskState.abandoned) {
 					// Use provider-specific parseError if available, otherwise fall back to generic classification
@@ -5275,16 +5479,19 @@ export class Task {
 					}
 					const isStreamingSpendLimitError = clineError.isErrorType(ClineErrorType.SpendLimit)
 					// Auto-retry for streaming failures (skip for spend limit errors)
+					const manualRetryTakeover = this.consumeManualRetryTakeover()
 					const retryDecision = getStreamRetryDecision({
 						isSpendLimitError: isStreamingSpendLimitError,
-						autoRetryAttempts: this.taskState.autoRetryAttempts,
+						autoRetryAttempts: manualRetryTakeover ? MAX_AUTO_RETRY_ATTEMPTS : this.taskState.autoRetryAttempts,
 					})
 					if (retryDecision.shouldRetry) {
 						this.taskState.autoRetryAttempts++
+						await this.discardFailedCompactionAttempt(apiIndex)
 						await this.updateContextCompactionStatus("retrying", {
 							error: errorMessage,
 							retryAttempt: this.taskState.autoRetryAttempts,
 							maxRetryAttempts: MAX_AUTO_RETRY_ATTEMPTS,
+							clearContent: true,
 						})
 
 						// Calculate exponential backoff for streaming failures: 2s, 4s, 8s
@@ -5325,22 +5532,12 @@ export class Task {
 						)
 						// The scheduled retry is now the sole continuation. End this failed
 						// request chain without cancelling or reopening the task.
+						requestScope.explicitInstructions.close()
 						return true
 					}
 					if (retryDecision.shouldPrompt) {
 						this.endAutoRetrySequence(false)
 						await this.updateContextCompactionStatus("failed", { error: errorMessage })
-						// Show error_retry with failed flag to indicate all retries exhausted
-						await this.say(
-							"error_retry",
-							JSON.stringify({
-								attempt: 3,
-								maxAttempts: 3,
-								delaySeconds: 0,
-								failed: true, // Special flag to indicate retries exhausted
-								errorMessage,
-							}),
-						)
 						const retryId = `retry:${this.taskId}:${this.getRuntimeState().revision}`
 						await this.recoverApiFailure({
 							turnId: retryId,
@@ -5358,14 +5555,26 @@ export class Task {
 					await this.reinitExistingTaskFromId(this.taskId)
 				}
 			} finally {
-				await this.toolExecutor.finalizeServerToolCalls(
-					this.taskState.abort
-						? "Provider-hosted web search cancelled."
-						: "Provider stream ended before hosted web search returned a result.",
-				)
-				this.taskState.isStreaming = false
-				// End API call tracking for session statistics
-				Session.get().endApiCall()
+				try {
+					if (this.taskState.abort && !this.taskState.didFinishAbortingStream && !this.taskState.abandoned) {
+						// Some provider adapters surface transport abort as a clean iterator EOF.
+						// Persist the interrupted turn before isStreaming becomes false so task
+						// termination cannot close the stores ahead of this durability boundary.
+						await abortStream("user_cancelled")
+					}
+				} finally {
+					try {
+						await this.toolExecutor.finalizeServerToolCalls(
+							this.taskState.abort
+								? "Provider-hosted web search cancelled."
+								: "Provider stream ended before hosted web search returned a result.",
+						)
+					} finally {
+						this.taskState.isStreaming = false
+						// End API call tracking for session statistics
+						Session.get().endApiCall()
+					}
+				}
 			}
 
 			// Finalize any remaining tool calls at the end of the stream
@@ -5375,13 +5584,13 @@ export class Task {
 			if (!didReceiveUsageChunk) {
 				const apiStreamUsage = await requestScope.api.getApiStreamUsage?.()
 				if (apiStreamUsage) {
-					this.apiRateTracker.recordExactTokens(
-						apiStreamUsage.inputTokens +
-							apiStreamUsage.outputTokens +
-							(apiStreamUsage.cacheWriteTokens ?? 0) +
-							(apiStreamUsage.cacheReadTokens ?? 0) +
-							(apiStreamUsage.thoughtsTokenCount ?? 0),
-					)
+					this.apiRateMetricsService.recordExactUsage({
+						inputTokens: apiStreamUsage.inputTokens,
+						outputTokens: apiStreamUsage.outputTokens,
+						cacheWriteTokens: apiStreamUsage.cacheWriteTokens,
+						cacheReadTokens: apiStreamUsage.cacheReadTokens,
+						thoughtsTokens: apiStreamUsage.thoughtsTokenCount,
+					})
 					taskMetrics.inputTokens += apiStreamUsage.inputTokens
 					taskMetrics.outputTokens += apiStreamUsage.outputTokens
 					taskMetrics.cacheWriteTokens += apiStreamUsage.cacheWriteTokens ?? 0
@@ -5524,7 +5733,14 @@ export class Task {
 			const partialToolBlocks = toolUseHandler.getPartialToolUsesAsContent()?.map((block) => ({ ...block, partial: false }))
 			await this.processNativeToolCalls(assistantTextOnly, partialToolBlocks)
 			await this.flushAssistantPresentationOrThrow() // finalization is immediate so no coalesced content remains pending
-			await this.executeFinalizedAssistantTurn()
+			await this.executeFinalizedAssistantTurn({
+				contextTokens:
+					taskMetrics.inputTokens +
+					taskMetrics.outputTokens +
+					taskMetrics.cacheWriteTokens +
+					taskMetrics.cacheReadTokens,
+				contextWindow,
+			})
 
 			const phaseAfterAssistantTurn = this.taskRuntime.getState().phase
 			if (
@@ -5563,8 +5779,9 @@ export class Task {
 					this.taskState.consecutiveMistakeCount++
 				}
 
-				// Reset auto-retry counter for each new API request
+				// A completed request ends both automatic retry accounting and manual takeover.
 				this.taskState.autoRetryAttempts = 0
+				this.manualRetryTakeoverActive = false
 				this.endAutoRetrySequence()
 
 				if (this.taskRuntime.getState().phase === TaskPhase.COMPLETED) {
@@ -5647,8 +5864,9 @@ export class Task {
 				let response: ClineAskResponse
 
 				const noResponseErrorMessage = "No assistant message was received. Would you like to retry the request?"
+				const manualRetryTakeover = this.consumeManualRetryTakeover()
 
-				if (this.taskState.autoRetryAttempts < 3) {
+				if (!manualRetryTakeover && this.taskState.autoRetryAttempts < 3) {
 					// Auto-retry enabled with max 3 attempts: automatically approve the retry
 					this.taskState.autoRetryAttempts++
 
@@ -5669,17 +5887,7 @@ export class Task {
 					}
 				} else {
 					this.endAutoRetrySequence(false)
-					// Max retries exhausted (>= 3 attempts), ask user
-					await this.say(
-						"error_retry",
-						JSON.stringify({
-							attempt: 3,
-							maxAttempts: 3,
-							delaySeconds: 0,
-							failed: true, // Special flag to indicate retries exhausted
-							errorMessage: noResponseErrorMessage,
-						}),
-					)
+					// Manual takeover and exhausted retries share one canonical recovery ask.
 					const askResult = await this.ask("api_req_failed", noResponseErrorMessage)
 					response = askResult.response
 					// Reset retry counter if user chooses to manually retry
@@ -5701,6 +5909,7 @@ export class Task {
 			return didEndLoop // will always be false for now
 		} catch (_error) {
 			requestScope.explicitInstructions.cancel()
+			this.compactionRequestReplay.clear(apiIndex)
 			// this should never happen since the only thing that can throw an error is the attemptApiRequest, which is wrapped in a try catch that sends an ask where if noButtonClicked, will clear current task and destroy this instance. However to avoid unhandled promise rejection, we will end this loop which will end execution of this instance (see startTask)
 			return true // needs to be true so parent loop knows to end task
 		}
@@ -6211,6 +6420,14 @@ export class Task {
 			const useAutoCondense = this.stateManager.getGlobalSettingsKey("useAutoCondense")
 			if (useAutoCondense) {
 				details += "\n\nAuto-Compact is enabled. Context will be automatically compacted as needed."
+			}
+			const highContextPressureWarning = getHighContextPressureWarning({
+				contextWindow,
+				lastApiReqTotalTokens,
+				modelId: currentModelId,
+			})
+			if (highContextPressureWarning) {
+				details += `\n\n${highContextPressureWarning}`
 			}
 		}
 
