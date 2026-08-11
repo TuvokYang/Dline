@@ -1,6 +1,6 @@
 import { ApiFormat, ServerTool } from "@shared/proto/dline/models/metadata"
 import { ApiProfile } from "@shared/proto/dline/profile"
-import { OpenAiProviderConfig } from "@shared/proto/dline/provider/openai"
+import { OpenAiPromptCacheMode, OpenAiProviderConfig } from "@shared/proto/dline/provider/openai"
 import { OpenAiCodexProviderConfig } from "@shared/proto/dline/provider/openai_codex"
 import { expect } from "chai"
 import OpenAI from "openai"
@@ -203,6 +203,82 @@ describe("OpenAiHandler", () => {
 			expect(JSON.stringify(firstRequest.messages)).not.to.contain("prompt_cache_breakpoint")
 			expect(JSON.stringify(firstRequest.messages.at(-1))).to.contain("dynamic environment A")
 			expect(JSON.stringify(secondRequest.messages.at(-1))).to.contain("dynamic environment B")
+		})
+
+		it("keeps the complete prior Chat request as an exact prefix when another turn is appended", async () => {
+			const handler = new OpenAiHandler({
+				profile: ApiProfile.create({
+					provider: "openai",
+					apiKey: "test-api-key",
+					baseUrl: "https://compatible.example/v1",
+					modelId: "gpt-5.6-sol",
+					openai: OpenAiProviderConfig.create({ apiFormat: ApiFormat.OPENAI_CHAT }),
+				}),
+				mode: "act",
+			})
+			const create = vi.fn().mockResolvedValue(createAsyncIterable())
+			vi.spyOn(handler as unknown as { ensureClient: () => unknown }, "ensureClient").mockReturnValue({
+				chat: { completions: { create } },
+			})
+
+			const firstHistory: ClineStorageMessage[] = [
+				{ role: "user", content: "first user turn" },
+				{ role: "assistant", content: "first assistant turn" },
+				{ role: "user", content: "second user turn" },
+			]
+			const secondHistory: ClineStorageMessage[] = [
+				...firstHistory,
+				{ role: "assistant", content: "second assistant turn" },
+				{ role: "user", content: "third user turn" },
+			]
+
+			for await (const _chunk of handler.createMessage("frozen system prompt", firstHistory)) {
+			}
+			for await (const _chunk of handler.createMessage("frozen system prompt", secondHistory)) {
+			}
+
+			const firstRequest = create.mock.calls[0]?.[0] as OpenAI.Chat.ChatCompletionCreateParamsStreaming
+			const secondRequest = create.mock.calls[1]?.[0] as OpenAI.Chat.ChatCompletionCreateParamsStreaming
+			expect(JSON.stringify(firstRequest.messages)).not.to.contain("cache_control")
+			expect(JSON.stringify(secondRequest.messages)).not.to.contain("cache_control")
+			expect(secondRequest.prompt_cache_key).to.equal(firstRequest.prompt_cache_key)
+			expect(secondRequest.messages.slice(0, firstRequest.messages.length)).to.deep.equal(firstRequest.messages)
+		})
+
+		it("retries Chat once with automatic caching when an opted-in endpoint rejects explicit controls", async () => {
+			const config = OpenAiProviderConfig.create({
+				apiFormat: ApiFormat.OPENAI_CHAT,
+				promptCacheMode: OpenAiPromptCacheMode.OPENAI_PROMPT_CACHE_MODE_EXPLICIT,
+			})
+			const handler = new OpenAiHandler({
+				profile: ApiProfile.create({
+					provider: "openai",
+					apiKey: "test-api-key",
+					baseUrl: "https://compatible.example/v1",
+					modelId: "gpt-5.6-sol",
+					openai: config,
+				}),
+				mode: "act",
+			})
+			const protocolError = Object.assign(new Error("prompt_cache_breakpoint is not supported on this model"), {
+				status: 400,
+			})
+			const create = vi.fn().mockRejectedValueOnce(protocolError).mockResolvedValue(createAsyncIterable())
+			vi.spyOn(handler as unknown as { ensureClient: () => unknown }, "ensureClient").mockReturnValue({
+				chat: { completions: { create } },
+			})
+
+			for await (const _chunk of handler.createMessage("system prompt", [{ role: "user", content: "Hello" }])) {
+			}
+
+			expect(create.mock.calls).to.have.length(2)
+			const explicitRequest = create.mock.calls[0]?.[0] as OpenAI.Chat.ChatCompletionCreateParamsStreaming
+			const fallbackRequest = create.mock.calls[1]?.[0] as OpenAI.Chat.ChatCompletionCreateParamsStreaming
+			expect(explicitRequest.prompt_cache_options).to.deep.equal({ mode: "explicit" })
+			expect(JSON.stringify(explicitRequest.messages)).to.contain("prompt_cache_breakpoint")
+			expect(fallbackRequest.prompt_cache_options).to.equal(undefined)
+			expect(JSON.stringify(fallbackRequest.messages)).not.to.contain("prompt_cache_breakpoint")
+			expect(fallbackRequest.prompt_cache_key).to.equal(explicitRequest.prompt_cache_key)
 		})
 
 		it("keeps automatic Chat caching for older models while adding a stable key", async () => {
@@ -473,19 +549,24 @@ describe("OpenAiHandler", () => {
 			})
 		})
 
-		it("suppresses explicit prompt cache control for custom GPT-5.6 Responses endpoints", async () => {
+		it("retries Responses once with automatic caching when an opted-in endpoint rejects explicit controls", async () => {
+			const config = OpenAiProviderConfig.create({
+				apiFormat: ApiFormat.OPENAI_RESPONSES,
+				promptCacheMode: OpenAiPromptCacheMode.OPENAI_PROMPT_CACHE_MODE_EXPLICIT,
+			})
 			const handler = new OpenAiHandler({
 				profile: ApiProfile.create({
 					provider: "openai",
 					apiKey: "test-api-key",
 					baseUrl: "https://compatible.example/v1",
 					modelId: "gpt-5.6-compatible",
-					openai: OpenAiProviderConfig.create({ apiFormat: ApiFormat.OPENAI_RESPONSES }),
+					openai: config,
 				}),
 				mode: "act",
 				ulid: "task-001",
 			})
-			const responsesCreate = vi.fn().mockResolvedValue(createAsyncIterable())
+			const protocolError = Object.assign(new Error("Unknown parameter: prompt_cache_options"), { status: 400 })
+			const responsesCreate = vi.fn().mockRejectedValueOnce(protocolError).mockResolvedValue(createAsyncIterable())
 			vi.spyOn(handler as unknown as { ensureClient: () => unknown }, "ensureClient").mockReturnValue({
 				responses: { create: responsesCreate },
 			})
@@ -493,12 +574,16 @@ describe("OpenAiHandler", () => {
 			for await (const _chunk of handler.createMessage("system prompt", [{ role: "user", content: "Hello" }])) {
 			}
 
-			const request = responsesCreate.mock.calls[0]?.[0] as OpenAI.Responses.ResponseCreateParamsStreaming
-			expect(request.instructions).to.equal("system prompt")
-			expect(request.prompt_cache_key).to.be.a("string").and.not.equal("")
-			expect(request.prompt_cache_options).to.equal(undefined)
-			expect(JSON.stringify(request.input)).not.to.contain("prompt_cache_breakpoint")
-			expect(JSON.stringify(request.input?.[0])).to.contain("Hello")
+			expect(responsesCreate.mock.calls).to.have.length(2)
+			const explicitRequest = responsesCreate.mock.calls[0]?.[0] as OpenAI.Responses.ResponseCreateParamsStreaming
+			const fallbackRequest = responsesCreate.mock.calls[1]?.[0] as OpenAI.Responses.ResponseCreateParamsStreaming
+			expect(explicitRequest.instructions).to.equal(undefined)
+			expect(explicitRequest.prompt_cache_options).to.deep.equal({ mode: "explicit" })
+			expect(JSON.stringify(explicitRequest.input)).to.contain("prompt_cache_breakpoint")
+			expect(fallbackRequest.instructions).to.equal("system prompt")
+			expect(fallbackRequest.prompt_cache_options).to.equal(undefined)
+			expect(JSON.stringify(fallbackRequest.input)).not.to.contain("prompt_cache_breakpoint")
+			expect(fallbackRequest.prompt_cache_key).to.equal(explicitRequest.prompt_cache_key)
 		})
 
 		it("routes an OpenAI-compatible profile to the Responses endpoint", async () => {

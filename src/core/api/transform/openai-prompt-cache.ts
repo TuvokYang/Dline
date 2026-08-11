@@ -3,6 +3,7 @@ import { hashPromptContentHex } from "@/core/prompts/system-prompt-cache/hash"
 
 const EXPLICIT_BREAKPOINT = { mode: "explicit" as const }
 
+export type OpenAIPromptCacheProjectionMode = "automatic" | "explicit"
 type PromptCacheApiFormat = "chat" | "responses"
 
 interface PromptCacheIdentityInput {
@@ -17,6 +18,7 @@ export interface OpenAIChatPromptCacheInput {
 	readonly systemPrompt: string
 	readonly messages: OpenAI.Chat.ChatCompletionMessageParam[]
 	readonly tools: readonly OpenAI.Chat.ChatCompletionTool[]
+	readonly mode?: OpenAIPromptCacheProjectionMode
 }
 
 export interface OpenAIChatPromptCacheProjection {
@@ -30,6 +32,7 @@ export interface OpenAIResponsesPromptCacheInput {
 	readonly systemPrompt: string
 	readonly input: OpenAI.Responses.ResponseInput
 	readonly tools: readonly OpenAI.Responses.Tool[]
+	readonly mode?: OpenAIPromptCacheProjectionMode
 }
 
 export interface OpenAIResponsesPromptCacheProjection {
@@ -48,46 +51,6 @@ interface MutableContentMessage {
 interface MutableContentBlock {
 	readonly type?: unknown
 	readonly [key: string]: unknown
-}
-
-/** Return whether the model accepts explicit prompt-cache controls introduced with GPT-5.6. */
-export function supportsExplicitOpenAIPromptCache(modelId: string): boolean {
-	const match = /^gpt-(\d+)(?:\.(\d+))?/i.exec(modelId)
-	if (!match) return false
-
-	const major = Number(match[1])
-	const minor = Number(match[2] ?? 0)
-	return major > 5 || (major === 5 && minor >= 6)
-}
-
-/**
- * Suppression switch for the official-only explicit prompt-cache controls
- * (prompt_cache_breakpoint / prompt_cache_options).
- *
- * The official endpoint rejects these parameters for models like
- * gpt-5.6-sol ("prompt_cache_breakpoint is not supported on this model")
- * even though the documentation claims GPT-5.6+ support; the documented
- * version-based rule is unreliable. The explicit projection code below is
- * kept intact; this toggle only short-circuits the projection. The generic
- * `prompt_cache_key` is still projected.
- *
- * Currently ENABLED (true): explicit controls are suppressed.
- * Set to `false` (and unset DLINE_DISABLE_OPENAI_PROMPT_BREAKPOINT) to
- * restore the explicit projection once the model/endpoint supports it.
- */
-const EXPLICIT_PROMPT_CACHE_SUPPRESSED = true
-
-/**
- * Return whether the explicit prompt-cache projection is currently
- * suppressed. Environment override `DLINE_DISABLE_OPENAI_PROMPT_BREAKPOINT=1`
- * forces suppression regardless of the constant.
- */
-function isExplicitPromptCacheSuppressed(): boolean {
-	return (
-		EXPLICIT_PROMPT_CACHE_SUPPRESSED ||
-		process.env.DLINE_DISABLE_OPENAI_PROMPT_BREAKPOINT === "1" ||
-		process.env.DLINE_DISABLE_OPENAI_PROMPT_BREAKPOINT === "true"
-	)
 }
 
 /** Build a non-sensitive routing key from the stable rendered-prefix inputs. */
@@ -158,7 +121,7 @@ export function projectOpenAIChatPromptCache(input: OpenAIChatPromptCacheInput):
 		systemPrompt: input.systemPrompt,
 		tools: input.tools,
 	})
-	if (!supportsExplicitOpenAIPromptCache(input.modelId) || isExplicitPromptCacheSuppressed()) {
+	if (input.mode !== "explicit") {
 		return { messages: input.messages, promptCacheKey }
 	}
 
@@ -177,7 +140,7 @@ export function projectOpenAIResponsesPromptCache(input: OpenAIResponsesPromptCa
 		systemPrompt: input.systemPrompt,
 		tools: input.tools,
 	})
-	if (!supportsExplicitOpenAIPromptCache(input.modelId) || isExplicitPromptCacheSuppressed()) {
+	if (input.mode !== "explicit") {
 		return {
 			instructions: input.systemPrompt,
 			input: input.input,

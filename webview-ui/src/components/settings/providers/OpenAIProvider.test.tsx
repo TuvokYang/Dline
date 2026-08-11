@@ -2,7 +2,7 @@
 import type { ModelInfo } from "@shared/proto/dline/models"
 import { ApiFormat, type ModelCapabilities, type ModelPricing } from "@shared/proto/dline/models/metadata"
 import { WebSearchMode } from "@shared/proto/dline/provider/common"
-import { OpenAiProviderConfig } from "@shared/proto/dline/provider/openai"
+import { OpenAiPromptCacheMode, OpenAiProviderConfig } from "@shared/proto/dline/provider/openai"
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { ModelsServiceClient } from "@/services/grpc-client"
@@ -184,6 +184,7 @@ describe("OpenAIProvider", () => {
 		expect(screen.getByRole("option", { name: "OpenAI Chat" })).toBeInTheDocument()
 		expect(screen.getByTestId("capability-fields")).toHaveTextContent("supportsWebSearch")
 		expect(screen.getByRole("combobox", { name: "Web Search mode" })).toHaveValue(String(WebSearchMode.WEB_SEARCH_MODE_AUTO))
+		expect(screen.getByRole("checkbox", { name: "Use explicit prompt cache controls" })).not.toBeChecked()
 
 		fireEvent.change(apiFormat, { target: { value: String(ApiFormat.OPENAI_CHAT) } })
 		expect(onUpdate).toHaveBeenCalledWith({
@@ -307,6 +308,14 @@ describe("OpenAIProvider", () => {
 			openai: {
 				...profile.openai,
 				serviceTier: "priority",
+			},
+		})
+
+		fireEvent.click(screen.getByRole("checkbox", { name: "Use explicit prompt cache controls" }))
+		expect(onUpdate).toHaveBeenCalledWith({
+			openai: {
+				...profile.openai,
+				promptCacheMode: OpenAiPromptCacheMode.OPENAI_PROMPT_CACHE_MODE_EXPLICIT,
 			},
 		})
 

@@ -1,18 +1,19 @@
 import { expect } from "chai"
 import type OpenAI from "openai"
 import { describe, it } from "vitest"
-import {
-	projectOpenAIChatPromptCache,
-	projectOpenAIResponsesPromptCache,
-	supportsExplicitOpenAIPromptCache,
-} from "../openai-prompt-cache"
+import { projectOpenAIChatPromptCache, projectOpenAIResponsesPromptCache } from "../openai-prompt-cache"
 
 describe("OpenAI prompt cache projection", () => {
-	it("recognizes only GPT-5.6 and later model families for explicit controls", () => {
-		expect(supportsExplicitOpenAIPromptCache("gpt-5.5")).to.equal(false)
-		expect(supportsExplicitOpenAIPromptCache("gpt-5.6-sol")).to.equal(true)
-		expect(supportsExplicitOpenAIPromptCache("gpt-6")).to.equal(true)
-		expect(supportsExplicitOpenAIPromptCache("compatible-model")).to.equal(false)
+	it("uses automatic prompt caching by default without inferring explicit support from the model ID", () => {
+		const projection = projectOpenAIChatPromptCache({
+			modelId: "gpt-6",
+			systemPrompt: "stable system",
+			messages: [{ role: "developer", content: "stable system" }],
+			tools: [],
+		})
+
+		expect(projection.promptCacheOptions).to.equal(undefined)
+		expect(JSON.stringify(projection.messages)).not.to.contain("prompt_cache_breakpoint")
 	})
 
 	it("keeps prompt cache keys within the upstream 64-character limit", () => {
@@ -72,7 +73,7 @@ describe("OpenAI prompt cache projection", () => {
 		expect(second.messages.at(-1)).to.deep.include({ role: "user" })
 	})
 
-	it("suppresses explicit Chat controls while preserving the stable cache key and dynamic messages", () => {
+	it("projects explicit Chat controls only when the caller opts in", () => {
 		const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
 			{ role: "developer", content: "stable system" },
 			{ role: "user", content: "one" },
@@ -88,13 +89,16 @@ describe("OpenAI prompt cache projection", () => {
 			systemPrompt: "stable system",
 			messages,
 			tools: [],
+			mode: "explicit",
 		})
 
 		expect(messages).to.deep.equal(original)
-		expect(projection.messages).to.equal(messages)
-		expect(projection.promptCacheOptions).to.equal(undefined)
+		expect(projection.promptCacheOptions).to.deep.equal({ mode: "explicit" })
 		expect(projection.promptCacheKey).to.be.a("string").and.not.equal("")
-		expect(JSON.stringify(projection.messages)).not.to.contain("prompt_cache_breakpoint")
+		expect(JSON.stringify(projection.messages[0])).to.contain("prompt_cache_breakpoint")
+		for (const message of projection.messages.slice(1)) {
+			expect(JSON.stringify(message)).not.to.contain("prompt_cache_breakpoint")
+		}
 	})
 
 	it("keeps old Responses request semantics while adding a stable key", () => {
@@ -112,7 +116,7 @@ describe("OpenAI prompt cache projection", () => {
 		expect(projection.promptCacheOptions).to.equal(undefined)
 	})
 
-	it("suppresses explicit Responses controls while preserving instructions and dynamic input", () => {
+	it("projects explicit Responses controls only when the caller opts in", () => {
 		const input: OpenAI.Responses.ResponseInput = [{ role: "user", content: [{ type: "input_text", text: "dynamic" }] }]
 		const original = structuredClone(input)
 		const projection = projectOpenAIResponsesPromptCache({
@@ -120,14 +124,15 @@ describe("OpenAI prompt cache projection", () => {
 			systemPrompt: "stable system",
 			input,
 			tools: [],
+			mode: "explicit",
 		})
 
 		expect(input).to.deep.equal(original)
-		expect(projection.instructions).to.equal("stable system")
-		expect(projection.input).to.equal(input)
-		expect(projection.promptCacheOptions).to.equal(undefined)
+		expect(projection.instructions).to.equal(undefined)
+		expect(projection.promptCacheOptions).to.deep.equal({ mode: "explicit" })
 		expect(projection.promptCacheKey).to.be.a("string").and.not.equal("")
-		expect(JSON.stringify(projection.input)).not.to.contain("prompt_cache_breakpoint")
+		expect(JSON.stringify(projection.input[0])).to.contain("prompt_cache_breakpoint")
+		expect(JSON.stringify(projection.input[1])).to.contain("dynamic")
 	})
 
 	it("separates Chat and Responses cache routing keys", () => {

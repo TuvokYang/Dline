@@ -2,6 +2,7 @@ import { setTimeout as setTimeoutPromise } from "node:timers/promises"
 import { DefaultAzureCredential, getBearerTokenProvider } from "@azure/identity"
 import { azureOpenAiDefaultApiVersion, ModelInfo, openAiModelInfoSaneDefaults, openAiModels } from "@shared/api"
 import { ApiFormat, ServerTool } from "@shared/proto/dline/models/metadata"
+import { OpenAiPromptCacheMode } from "@shared/proto/dline/provider/openai"
 import { openAiEndpointToApiFormat, prioritizeApiFormat, resolveApiFormat } from "@shared/providers/api-format"
 import { buildEffectiveModelInfo } from "@shared/providers/effective-model-info"
 import { normalizeOpenAIResponsesStreamIdleTimeoutSeconds } from "@shared/providers/openai-stream"
@@ -9,6 +10,7 @@ import { normalizeOpenAiServiceTier, normalizeOpenaiReasoningEffort } from "@sha
 import { calculateApiCostOpenAI } from "@utils/cost"
 import OpenAI, { AzureOpenAI } from "openai"
 import type {
+	ChatCompletionChunk,
 	ChatCompletionFunctionTool,
 	ChatCompletionReasoningEffort,
 	ChatCompletionTool,
@@ -23,27 +25,24 @@ import { withRetry } from "../retry"
 import { OpenAIResponsesStreamMonitor } from "../stream/openai-responses-stream-monitor"
 import { convertToO1Messages } from "../transform/o1-format"
 import { convertToOpenAiMessages } from "../transform/openai-format"
-import { projectOpenAIChatPromptCache, projectOpenAIResponsesPromptCache } from "../transform/openai-prompt-cache"
+import {
+	type OpenAIPromptCacheProjectionMode,
+	projectOpenAIChatPromptCache,
+	projectOpenAIResponsesPromptCache,
+} from "../transform/openai-prompt-cache"
 import { convertToOpenAIResponsesInput } from "../transform/openai-response-format"
 import { convertToR1Format } from "../transform/r1-format"
 import { ApiStream } from "../transform/stream"
 import { getOpenAIToolParams, ToolCallProcessor } from "../transform/tool-call-processor"
 import { handleResponsesApiStreamResponse } from "../utils/responses_api_support"
 
-/**
- * Applies prompt cache control to messages at the content-block level.
- *
- * Many third-party OpenAI-compatible APIs (e.g., LiteLLM, OpenRouter with
- * Anthropic backends) support an Anthropic-style cache_control field.
- * Per the Anthropic protocol, cache_control must be placed on individual
- * content blocks, not at the message top-level.
- *
- * NOTE: Native OpenAI does NOT use cache_control — prompt caching is
- * automatic there. This function exists solely for third-party compatibility.
- *
- * @param messages - Chat completion messages to annotate (mutated in-place)
- * @param cacheControl - The cache_control annotation, or undefined to skip
- */
+type OpenAICompatibleCompletionUsage = NonNullable<ChatCompletionChunk["usage"]> & {
+	cache_creation_input_tokens?: number
+	cache_read_input_tokens?: number
+	prompt_cache_hit_tokens?: number
+	prompt_cache_miss_tokens?: number
+}
+
 function getChatCacheWriteTokens(details: unknown): number {
 	if (typeof details !== "object" || details === null) return 0
 	const values = details as { cache_write_tokens?: unknown; cache_miss_tokens?: unknown }
@@ -51,65 +50,27 @@ function getChatCacheWriteTokens(details: unknown): number {
 	return typeof values.cache_miss_tokens === "number" ? values.cache_miss_tokens : 0
 }
 
-function applyCacheControlToMessages(
-	messages: OpenAI.Chat.ChatCompletionMessageParam[],
-	cacheControl: { cache_control: { type: "ephemeral" } } | undefined,
-): void {
-	if (!cacheControl) {
-		return
+function isUnsupportedPromptCacheControlError(error: unknown): boolean {
+	if (typeof error !== "object" || error === null) return false
+	const record = error as {
+		status?: unknown
+		message?: unknown
+		body?: unknown
+		error?: { message?: unknown; code?: unknown; param?: unknown }
 	}
+	if (record.status !== 400) return false
 
-	// Attach cache_control to a single message at content-block level
-	const attachToMessage = (msg: OpenAI.Chat.ChatCompletionMessageParam) => {
-		if (typeof msg.content === "string") {
-			// Wrap string content in an array so cache_control can live on the block
-			msg.content = [{ type: "text", text: msg.content, ...cacheControl } as any]
-		} else if (Array.isArray(msg.content)) {
-			const lastIdx = msg.content.length - 1
-			if (lastIdx >= 0) {
-				msg.content[lastIdx] = { ...msg.content[lastIdx], ...cacheControl }
-			}
-		}
-		// Messages without content (e.g. assistant with only tool_calls) are skipped
-	}
-
-	// Always cache the system/developer message (index 0)
-	if (messages.length > 0) {
-		const firstRole = messages[0].role
-		if (firstRole === "system" || firstRole === "developer") {
-			attachToMessage(messages[0])
-		}
-	}
-
-	// Find the last two user messages for cache breakpoints.
-	// Strategy: mark the latest user message as ephemeral so it can be cached
-	// for the *next* request, and mark the second-to-last user message as
-	// ephemeral to tell the server which message to retrieve from cache for
-	// the *current* request.
-	let lastUserIdx = -1
-	let secondLastUserIdx = -1
-	for (let i = messages.length - 1; i >= 0; i--) {
-		if (messages[i].role === "user") {
-			if (lastUserIdx === -1) {
-				lastUserIdx = i
-			} else {
-				secondLastUserIdx = i
-				break
-			}
-		}
-	}
-
-	if (lastUserIdx >= 0) {
-		attachToMessage(messages[lastUserIdx])
-	}
-	if (secondLastUserIdx >= 0) {
-		attachToMessage(messages[secondLastUserIdx])
-	}
+	const diagnostic = [record.message, record.body, record.error?.message, record.error?.code, record.error?.param]
+		.filter((value): value is string => typeof value === "string")
+		.join(" ")
+		.toLowerCase()
+	return diagnostic.includes("prompt_cache_breakpoint") || diagnostic.includes("prompt_cache_options")
 }
 
 export class OpenAiHandler implements ApiHandler {
 	private client: OpenAI | undefined
 	private requestController: AbortController | undefined
+	private explicitPromptCacheRejected = false
 
 	constructor(private ctx: ApiHandlerContext) {}
 
@@ -146,6 +107,27 @@ export class OpenAiHandler implements ApiHandler {
 	}
 	private get openAiHeaders() {
 		return this.config?.openAiHeaders
+	}
+	private get promptCacheProjectionMode(): OpenAIPromptCacheProjectionMode {
+		return this.config?.promptCacheMode === OpenAiPromptCacheMode.OPENAI_PROMPT_CACHE_MODE_EXPLICIT &&
+			!this.explicitPromptCacheRejected
+			? "explicit"
+			: "automatic"
+	}
+
+	private async createWithPromptCacheFallback<T>(
+		mode: OpenAIPromptCacheProjectionMode,
+		create: (projectionMode: OpenAIPromptCacheProjectionMode) => Promise<T>,
+	): Promise<T> {
+		try {
+			return await create(mode)
+		} catch (error) {
+			if (mode !== "explicit" || !isUnsupportedPromptCacheControlError(error)) throw error
+
+			this.explicitPromptCacheRejected = true
+			Logger.warn("[OpenAI] Explicit prompt cache controls were rejected; retrying with automatic caching")
+			return await create("automatic")
+		}
 	}
 
 	supportsServerTool(tool: ServerTool): boolean {
@@ -266,11 +248,6 @@ export class OpenAiHandler implements ApiHandler {
 		]
 
 		const model = this.getModel()
-		// Determine cache_control annotation — applied later after all message
-		// transformations are complete (see applyCacheControlToMessages below)
-		const cacheControl = model.info.capabilities?.supportsPromptCache
-			? { cache_control: { type: "ephemeral" as const } }
-			: undefined
 
 		let temperature: number | undefined
 		const capabilityTemp = model.info.capabilities?.temperature
@@ -319,45 +296,45 @@ export class OpenAiHandler implements ApiHandler {
 			temperature = undefined // does not support temperature
 		}
 
-		// Apply prompt cache control AFTER all message transformations are complete.
-		// This ensures cache_control is not lost when openAiMessages is reassigned
-		// for deepseek-reasoner, thinking budget, or o-series model paths above.
-		applyCacheControlToMessages(openAiMessages, cacheControl)
-
 		const toolParams = isO1 ? { tools: undefined } : getOpenAIToolParams(tools)
-		const promptCache = projectOpenAIChatPromptCache({
-			modelId,
-			systemPrompt,
-			messages: openAiMessages,
-			tools: toolParams.tools ?? [],
-		})
-		openAiMessages = promptCache.messages
+		const buildRequestParams = (mode: OpenAIPromptCacheProjectionMode): OpenAI.Chat.ChatCompletionCreateParamsStreaming => {
+			const promptCache = projectOpenAIChatPromptCache({
+				modelId,
+				systemPrompt,
+				messages: openAiMessages,
+				tools: toolParams.tools ?? [],
+				mode,
+			})
+			const requestParams: any = {
+				model: modelId,
+				messages: promptCache.messages,
+				temperature,
+				max_tokens: maxTokens,
+				stream: true,
+				prompt_cache_key: promptCache.promptCacheKey,
+				...(promptCache.promptCacheOptions ? { prompt_cache_options: promptCache.promptCacheOptions } : {}),
+				...(this.serviceTier ? { service_tier: this.serviceTier } : {}),
+			}
+			// Always pass enable_thinking so explicit false from ThinkingControl disables provider reasoning.
+			requestParams.enable_thinking = enableThinking
+			if (enableThinking && thinkingBudget > 0) {
+				requestParams.thinking_budget = thinkingBudget
+			} else if (enableThinking && reasoningEffort) {
+				requestParams.reasoning_effort = reasoningEffort
+			}
+			if (this.config?.streamIncludeUsage !== false) {
+				requestParams.stream_options = { include_usage: true }
+			}
+			if (!isO1) {
+				Object.assign(requestParams, toolParams)
+			}
+			return requestParams
+		}
 
-		const requestParams: any = {
-			model: modelId,
-			messages: openAiMessages,
-			temperature,
-			max_tokens: maxTokens,
-			stream: true,
-			prompt_cache_key: promptCache.promptCacheKey,
-			...(promptCache.promptCacheOptions ? { prompt_cache_options: promptCache.promptCacheOptions } : {}),
-			...(this.serviceTier ? { service_tier: this.serviceTier } : {}),
-		}
-		// Always pass enable_thinking so explicit false from ThinkingControl disables provider reasoning.
-		requestParams.enable_thinking = enableThinking
-		if (enableThinking && thinkingBudget > 0) {
-			requestParams.thinking_budget = thinkingBudget
-		} else if (enableThinking && reasoningEffort) {
-			requestParams.reasoning_effort = reasoningEffort
-		}
-		if (this.config?.streamIncludeUsage !== false) {
-			requestParams.stream_options = { include_usage: true }
-		}
-		if (!isO1) {
-			Object.assign(requestParams, toolParams)
-		}
-
-		const stream = await (client.chat.completions as any).create(requestParams, { signal: requestController.signal })
+		const stream = await this.createWithPromptCacheFallback<AsyncIterable<ChatCompletionChunk>>(
+			this.promptCacheProjectionMode,
+			(mode) => (client.chat.completions as any).create(buildRequestParams(mode), { signal: requestController.signal }),
+		)
 
 		const toolCallProcessor = new ToolCallProcessor()
 
@@ -387,17 +364,18 @@ export class OpenAiHandler implements ApiHandler {
 				usageYielded = true
 				// Parse cache tokens from multiple possible field names
 				// Different OpenAI-compatible providers use different field names
-				const rawInputTokens = chunk.usage.prompt_tokens || 0
-				const outputTokens = chunk.usage.completion_tokens || 0
+				const usage = chunk.usage as OpenAICompatibleCompletionUsage
+				const rawInputTokens = usage.prompt_tokens || 0
+				const outputTokens = usage.completion_tokens || 0
 				const cacheReadTokens =
-					chunk.usage.cache_read_input_tokens ??
-					chunk.usage.prompt_cache_hit_tokens ??
-					chunk.usage.prompt_tokens_details?.cached_tokens ??
+					usage.cache_read_input_tokens ??
+					usage.prompt_cache_hit_tokens ??
+					usage.prompt_tokens_details?.cached_tokens ??
 					0
 				const cacheWriteTokens =
-					chunk.usage.cache_creation_input_tokens ??
-					chunk.usage.prompt_cache_miss_tokens ??
-					getChatCacheWriteTokens(chunk.usage.prompt_tokens_details)
+					usage.cache_creation_input_tokens ??
+					usage.prompt_cache_miss_tokens ??
+					getChatCacheWriteTokens(usage.prompt_tokens_details)
 				const modelInfo = this.getModel().info
 				// Yield inputTokens in Anthropic semantic (excluding cache) so
 				// ContextManager and updateApiReqMsg can accurately estimate
@@ -476,33 +454,38 @@ export class OpenAiHandler implements ApiHandler {
 		const reasoningEffort = normalizeOpenaiReasoningEffort(this.reasoningEffort)
 		const temperature = model.info.capabilities?.temperature ?? this.config?.temperature
 		const maxOutputTokens = model.info.capabilities?.maxTokens
-		const promptCache = projectOpenAIResponsesPromptCache({
-			modelId: model.id,
-			systemPrompt,
-			input,
-			tools: responseTools,
-		})
-		const params: OpenAI.Responses.ResponseCreateParamsStreaming = {
-			model: model.id,
-			...(promptCache.instructions === undefined ? {} : { instructions: promptCache.instructions }),
-			input: promptCache.input,
-			prompt_cache_key: promptCache.promptCacheKey,
-			...(promptCache.promptCacheOptions ? { prompt_cache_options: promptCache.promptCacheOptions } : {}),
-			stream: true,
-			store: false,
-			...(responseTools?.length ? { tools: responseTools } : {}),
-			...(hostedWebSearch
-				? { include: ["web_search_call.results" as const, "web_search_call.action.sources" as const] }
-				: {}),
-			...(this.serviceTier ? { service_tier: this.serviceTier } : {}),
-			...(enableThinking && reasoningEffort !== "none"
-				? { reasoning: { effort: reasoningEffort as ChatCompletionReasoningEffort, summary: "auto" } }
-				: {}),
-			...(!enableThinking && typeof temperature === "number" ? { temperature } : {}),
-			...(typeof maxOutputTokens === "number" && maxOutputTokens > 0 ? { max_output_tokens: maxOutputTokens } : {}),
+		const buildParams = (mode: OpenAIPromptCacheProjectionMode): OpenAI.Responses.ResponseCreateParamsStreaming => {
+			const promptCache = projectOpenAIResponsesPromptCache({
+				modelId: model.id,
+				systemPrompt,
+				input,
+				tools: responseTools,
+				mode,
+			})
+			return {
+				model: model.id,
+				...(promptCache.instructions === undefined ? {} : { instructions: promptCache.instructions }),
+				input: promptCache.input,
+				prompt_cache_key: promptCache.promptCacheKey,
+				...(promptCache.promptCacheOptions ? { prompt_cache_options: promptCache.promptCacheOptions } : {}),
+				stream: true,
+				store: false,
+				...(responseTools?.length ? { tools: responseTools } : {}),
+				...(hostedWebSearch
+					? { include: ["web_search_call.results" as const, "web_search_call.action.sources" as const] }
+					: {}),
+				...(this.serviceTier ? { service_tier: this.serviceTier } : {}),
+				...(enableThinking && reasoningEffort !== "none"
+					? { reasoning: { effort: reasoningEffort as ChatCompletionReasoningEffort, summary: "auto" } }
+					: {}),
+				...(!enableThinking && typeof temperature === "number" ? { temperature } : {}),
+				...(typeof maxOutputTokens === "number" && maxOutputTokens > 0 ? { max_output_tokens: maxOutputTokens } : {}),
+			}
 		}
 
-		const stream = await this.createResponsesStream(client, params, requestController.signal)
+		const stream = await this.createWithPromptCacheFallback(this.promptCacheProjectionMode, (mode) =>
+			this.createResponsesStream(client, buildParams(mode), requestController.signal),
+		)
 		const idleTimeoutSeconds = normalizeOpenAIResponsesStreamIdleTimeoutSeconds(this.config?.streamIdleTimeoutSeconds)
 		const monitor = new OpenAIResponsesStreamMonitor({
 			idleTimeoutMs: idleTimeoutSeconds * 1_000,

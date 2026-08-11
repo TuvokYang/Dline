@@ -5,6 +5,14 @@ package dline.provider;
 import "dline/models/metadata.proto";
 import "dline/provider/common.proto";
 
+// Per-profile policy for OpenAI prompt cache controls.
+enum OpenAiPromptCacheMode {
+  // Use the endpoint's automatic caching with a stable prompt_cache_key.
+  OPENAI_PROMPT_CACHE_MODE_AUTOMATIC = 0;
+  // Send OpenAI explicit breakpoint controls and fall back if rejected.
+  OPENAI_PROMPT_CACHE_MODE_EXPLICIT = 1;
+}
+
 message OpenAiProviderConfig {
   ReasoningConfig reasoning = 1;
   bool custom_model_enabled = 2;
@@ -32,4 +40,6 @@ message OpenAiProviderConfig {
   optional bool pricing_tiers_enabled = 14;
   // Abort a Responses stream after this many seconds without any event.
   optional uint32 stream_idle_timeout_seconds = 15;
+  // Prompt cache control policy for this profile. Defaults to automatic.
+  OpenAiPromptCacheMode prompt_cache_mode = 16;
 }
