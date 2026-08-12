@@ -3,6 +3,7 @@ import type { ClineContent } from "@/shared/messages/content"
 import { shouldCompactProjectedUsage } from "./context-window-utils"
 
 const TOKEN_ESTIMATE_CHARS = 4
+const COMPACTION_FIT_TARGET_RATIO = 0.8
 
 export interface CurrentTurnCompactionInput {
 	triggerTokens: number
@@ -13,6 +14,12 @@ export interface CurrentTurnCompactionInput {
 export interface DeferredTurnRestoreInput {
 	hasDeferredTurn: boolean
 	didCompleteSummarization: boolean
+	fittingCompactionRequired: boolean
+}
+
+export interface CompactionFitInput {
+	contextTokens: number
+	contextWindow: number
 }
 
 /**
@@ -73,6 +80,30 @@ export function getCompactionUserText(userContent: ClineContent[]): ClineContent
 }
 
 /**
+ * Project one compaction request while a current tool-result turn remains deferred.
+ *
+ * @param currentContent Current summary content for an iterative fitting pass.
+ * @param deferredContent Original deferred current-turn content, when present.
+ * @param fittingCompactionRequired Whether this request is a subsequent fitting pass.
+ * @returns First-pass user text, or prior summary plus user text for an iterative pass.
+ */
+export function projectCompactionRequestContent(
+	currentContent: ClineContent[],
+	deferredContent: ClineContent[] | undefined,
+	fittingCompactionRequired: boolean,
+): ClineContent[] {
+	if (!deferredContent) {
+		return currentContent
+	}
+
+	if (!fittingCompactionRequired) {
+		return getCompactionUserText(deferredContent)
+	}
+
+	return [...currentContent, ...projectCompletedCompactionResult(deferredContent)]
+}
+
+/**
  * Decide whether the current tool-result turn should be deferred while older context is summarized first.
  *
  * @param input Resolved compaction trigger, previous request usage, and pending current-turn content.
@@ -93,11 +124,19 @@ export function shouldDeferCurrentTurn(input: CurrentTurnCompactionInput): boole
 /**
  * Decide whether a cached current turn can be restored.
  *
- * @param input Deferred-turn and summarization completion state.
- * @returns True only when a deferred turn exists and summarize_task has completed.
+ * @param input Deferred-turn, summarization completion, and iterative fitting state.
+ * @returns True only after the final summarize_task pass has completed.
  */
 export function shouldRestoreDeferredTurn(input: DeferredTurnRestoreInput): boolean {
-	return input.hasDeferredTurn && input.didCompleteSummarization
+	return input.hasDeferredTurn && input.didCompleteSummarization && !input.fittingCompactionRequired
+}
+
+/** Continue iterative compaction until actual request usage is strictly below 80%. */
+export function shouldContinueCompactionFitting(input: CompactionFitInput): boolean {
+	if (!Number.isFinite(input.contextTokens) || !Number.isFinite(input.contextWindow) || input.contextWindow <= 0) {
+		return false
+	}
+	return input.contextTokens >= input.contextWindow * COMPACTION_FIT_TARGET_RATIO
 }
 
 /**

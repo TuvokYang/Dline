@@ -4,6 +4,40 @@ import { AssistantMessageContent, TextStreamContent, ToolParamName, ToolUse, too
 /**
  * Options for parse-time block identity assignment.
  */
+// Summary text may quote the tool's XML example verbatim. Walk backward from
+// the actual response tail so quoted closing payloads cannot become boundaries.
+function findTerminalSummarizeContextClose(assistantMessage: string): number | undefined {
+	const toolCloseTag = `</${ClineDefaultTool.SUMMARIZE_TASK}>`
+	let tailStart = assistantMessage.trimEnd().length - toolCloseTag.length
+	if (tailStart < 0 || !assistantMessage.startsWith(toolCloseTag, tailStart)) {
+		return undefined
+	}
+
+	while (tailStart > 0 && /\s/.test(assistantMessage[tailStart - 1])) {
+		tailStart--
+	}
+
+	const taskProgressCloseTag = "</task_progress>"
+	const taskProgressCloseStart = tailStart - taskProgressCloseTag.length
+	if (taskProgressCloseStart >= 0 && assistantMessage.startsWith(taskProgressCloseTag, taskProgressCloseStart)) {
+		const taskProgressOpenTag = "<task_progress>"
+		const taskProgressOpenStart = assistantMessage.lastIndexOf(taskProgressOpenTag, taskProgressCloseStart)
+		if (taskProgressOpenStart < 0) {
+			return undefined
+		}
+		tailStart = taskProgressOpenStart
+		while (tailStart > 0 && /\s/.test(assistantMessage[tailStart - 1])) {
+			tailStart--
+		}
+	}
+
+	const contextCloseTag = "</context>"
+	const contextCloseStart = tailStart - contextCloseTag.length
+	return contextCloseStart >= 0 && assistantMessage.startsWith(contextCloseTag, contextCloseStart)
+		? contextCloseStart
+		: undefined
+}
+
 export interface ParseTsRegistry {
 	/**
 	 * Given a stable source-offset key, returns the ts for this block.
@@ -51,6 +85,7 @@ export function parseAssistantMessageV2(assistantMessage: string, registry: Pars
 		toolParamOpenTags.set(`<${name}>`, name)
 	}
 
+	const terminalSummarizeContextClose = findTerminalSummarizeContextClose(assistantMessage)
 	const len = assistantMessage.length
 	for (let i = 0; i < len; i++) {
 		const currentCharIndex = i
@@ -58,11 +93,15 @@ export function parseAssistantMessageV2(assistantMessage: string, registry: Pars
 		// --- State: Parsing a Tool Parameter ---
 		if (currentToolUse && currentParamName) {
 			const closeTag = `</${currentParamName}>`
-			if (
-				currentCharIndex >= closeTag.length - 1 &&
-				assistantMessage.startsWith(closeTag, currentCharIndex - closeTag.length + 1)
-			) {
-				const value = assistantMessage.slice(currentParamValueStart, currentCharIndex - closeTag.length + 1).trim()
+			const closeTagStart = currentCharIndex - closeTag.length + 1
+			const foundCloseTag = currentCharIndex >= closeTag.length - 1 && assistantMessage.startsWith(closeTag, closeTagStart)
+			const foundTerminalParamClose =
+				foundCloseTag &&
+				(currentToolUse.name !== ClineDefaultTool.SUMMARIZE_TASK ||
+					currentParamName !== "context" ||
+					closeTagStart === terminalSummarizeContextClose)
+			if (foundTerminalParamClose) {
+				const value = assistantMessage.slice(currentParamValueStart, closeTagStart).trim()
 				currentToolUse.params[currentParamName] = value
 				currentParamName = undefined
 			} else {

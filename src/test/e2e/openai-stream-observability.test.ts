@@ -263,7 +263,7 @@ async function expectRateMetricsDialog(frame: Frame, summary: RateSummary, exerc
 	const rate = frame.getByTestId("task-rate-metrics")
 	await expect(rate).toHaveAttribute(
 		"aria-label",
-		`View API rate history. Active seconds: ${summary.activeSeconds}; requests per minute: ${summary.requestsPerMinute}; tokens per minute: ${summary.tokensPerMinute}`,
+		`View API rate history. Requests per minute: ${summary.requestsPerMinute}; tokens per minute: ${summary.tokensPerMinute}`,
 	)
 	await rate.click()
 	const dialog = frame.getByRole("dialog")

@@ -44,6 +44,10 @@ describe("Task.attemptApiRequest first chunk state", () => {
 				localAvailable: true,
 				remoteAdapterAvailable: false,
 			}),
+			explicitInstructions: {
+				beginProviderAttempt: vi.fn(),
+				createConsumePort: vi.fn(() => ({})),
+			},
 		} as unknown as RequestApiScope
 		const taskState = {
 			abort: false,
@@ -65,16 +69,24 @@ describe("Task.attemptApiRequest first chunk state", () => {
 		} as unknown as ErrorService)
 		vi.spyOn(ToolPromptGenerator.prototype, "generateToolsForRequest").mockReturnValue(undefined)
 
-		const fakeTask = {
+		const buildPromptContext = vi.fn(async (_providerInfo, webToolsEnabled, webSearchRoutingPlan) => {
+			await Promise.resolve()
+			liveWebToolsEnabled = false
+			return { promptProfile: {}, clineWebToolsEnabled: webToolsEnabled, webSearchRoutingPlan }
+		})
+		const toolExecutor = {
+			setAllowedNativeToolNames: vi.fn(),
+			setExplicitInstructionConsumePort: vi.fn(),
+			setWebSearchRoutingPlan: vi.fn(),
+		}
+		const fakeTask = Object.assign(Object.create(Task.prototype), {
 			taskId: "task-first-chunk-failure",
 			taskState,
 			pendingSystemPromptRefreshReason: undefined,
-			buildPromptContext: vi.fn(async (_providerInfo, webToolsEnabled, webSearchRoutingPlan) => {
-				await Promise.resolve()
-				liveWebToolsEnabled = false
-				return { promptProfile: {}, clineWebToolsEnabled: webToolsEnabled, webSearchRoutingPlan }
-			}),
+			buildPromptContext,
+			apiRateMetricsService: { recordRequestStarted: vi.fn() },
 			buildThinkingSummary: vi.fn(() => undefined),
+			compactionRequestReplay: { getProviderInput: vi.fn(() => undefined) },
 			contextManager: {
 				getNewContextMessagesAndMetadata: vi.fn(async () => ({
 					truncatedConversationHistory: conversationHistory,
@@ -94,24 +106,24 @@ describe("Task.attemptApiRequest first chunk state", () => {
 				getLastTools: vi.fn(() => undefined),
 				getOrCreate: vi.fn(async () => ({ text: "system prompt" })),
 			},
-			toolExecutor: { setAllowedNativeToolNames: vi.fn(), setWebSearchRoutingPlan: vi.fn() },
+			toolExecutor,
 			writePromptMetadataArtifacts: vi.fn(async () => undefined),
-		}
+		}) as Task
 
-		const request = Task.prototype.attemptApiRequest.call(fakeTask as unknown as Task, -1, requestScope)
+		const request = fakeTask.attemptApiRequest(-1, requestScope)
 
 		await expect(request.next()).rejects.toBe(connectionError)
 		expect(taskState.isWaitingForFirstChunk).toBe(false)
 		expect(liveWebToolsEnabled).toBe(false)
-		expect(fakeTask.buildPromptContext).toHaveBeenCalledWith(
+		expect(buildPromptContext).toHaveBeenCalledWith(
 			requestScope.providerInfo,
 			requestScope.webToolsEnabled,
 			requestScope.webSearchRoutingPlan,
 		)
-		await expect(fakeTask.buildPromptContext.mock.results[0]?.value).resolves.toMatchObject({
+		await expect(buildPromptContext.mock.results[0]?.value).resolves.toMatchObject({
 			clineWebToolsEnabled: true,
 		})
-		expect(fakeTask.toolExecutor.setWebSearchRoutingPlan).toHaveBeenCalledWith(
+		expect(toolExecutor.setWebSearchRoutingPlan).toHaveBeenCalledWith(
 			requestScope.webSearchRoutingPlan,
 			requestScope.webToolsEnabled,
 		)
@@ -141,6 +153,10 @@ describe("Task.attemptApiRequest first chunk state", () => {
 				localAvailable: true,
 				remoteAdapterAvailable: false,
 			}),
+			explicitInstructions: {
+				beginProviderAttempt: vi.fn(),
+				createConsumePort: vi.fn(() => ({})),
+			},
 		} as unknown as RequestApiScope
 		const taskState = {
 			abort: false,
@@ -162,7 +178,7 @@ describe("Task.attemptApiRequest first chunk state", () => {
 		} as unknown as ErrorService)
 		vi.spyOn(ToolPromptGenerator.prototype, "generateToolsForRequest").mockReturnValue(undefined)
 
-		const fakeTask = {
+		const fakeTask = Object.assign(Object.create(Task.prototype), {
 			taskId: "task-first-chunk-empty-stream",
 			taskState,
 			pendingSystemPromptRefreshReason: undefined,
@@ -171,7 +187,9 @@ describe("Task.attemptApiRequest first chunk state", () => {
 				clineWebToolsEnabled: true,
 				webSearchRoutingPlan: requestScope.webSearchRoutingPlan,
 			})),
+			apiRateMetricsService: { recordRequestStarted: vi.fn() },
 			buildThinkingSummary: vi.fn(() => undefined),
+			compactionRequestReplay: { getProviderInput: vi.fn(() => undefined) },
 			contextManager: {
 				getNewContextMessagesAndMetadata: vi.fn(async () => ({
 					truncatedConversationHistory: conversationHistory,
@@ -191,11 +209,15 @@ describe("Task.attemptApiRequest first chunk state", () => {
 				getLastTools: vi.fn(() => undefined),
 				getOrCreate: vi.fn(async () => ({ text: "system prompt" })),
 			},
-			toolExecutor: { setAllowedNativeToolNames: vi.fn(), setWebSearchRoutingPlan: vi.fn() },
+			toolExecutor: {
+				setAllowedNativeToolNames: vi.fn(),
+				setExplicitInstructionConsumePort: vi.fn(),
+				setWebSearchRoutingPlan: vi.fn(),
+			},
 			writePromptMetadataArtifacts: vi.fn(async () => undefined),
-		}
+		}) as Task
 
-		const request = Task.prototype.attemptApiRequest.call(fakeTask as unknown as Task, -1, requestScope)
+		const request = fakeTask.attemptApiRequest(-1, requestScope)
 
 		await expect(request.next()).rejects.toThrow("API stream ended without producing any content")
 		expect(taskState.isWaitingForFirstChunk).toBe(false)

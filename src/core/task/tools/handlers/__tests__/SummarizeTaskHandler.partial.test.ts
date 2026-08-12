@@ -23,7 +23,7 @@ function createHelpers(
 		removeClosingTag: vi.fn((_block, _tag, text) => text ?? ""),
 		getConfig: () => config,
 	} as unknown as StronglyTypedUIHelpers
-	return { helpers, say, ask }
+	return { helpers, say, ask, config }
 }
 
 const partialBlock = {
@@ -61,11 +61,12 @@ describe("SummarizeTaskHandler partial rendering", () => {
 
 	it("swallows the expected partial ask sentinel for manual compaction", async () => {
 		const handler = new SummarizeTaskHandler({} as never)
-		const { helpers, say, ask } = createHelpers(false, undefined, "manual_compact_command")
+		const { helpers, say, ask, config } = createHelpers(false, undefined, "manual_compact_command")
 
 		await expect(handler.handlePartialBlock(partialBlock as never, helpers)).resolves.toBeUndefined()
 
 		expect(ask).toHaveBeenCalledWith("condense", "Streaming summary", true, { existingTs: 12345 })
+		expect(config.taskState.contextCompactionMessageTs).toBe(12345)
 		expect(say).not.toHaveBeenCalled()
 	})
 })

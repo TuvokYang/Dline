@@ -87,10 +87,7 @@ const DEFINITIONS: Readonly<Record<InteractionKind, InteractionDefinition>> = {
 	condense: define(
 		"condense",
 		"condense",
-		[
-			action("confirm_utility", "Condense Conversation", "draft"),
-			action("reject", "Regenerate Summary", "draft", "secondary"),
-		],
+		[action("confirm_utility", "Condense Conversation"), action("reject", "Regenerate Summary", "draft", "secondary")],
 		CONDENSE_INPUT,
 	),
 	followup: define("followup", "followup", [], REPLY_INPUT, "handler"),

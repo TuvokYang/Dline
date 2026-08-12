@@ -7,7 +7,10 @@ interface SummaryScrollContainerProps {
 /** Keep long automatic and manual summaries inside a viewport-bounded scroll region. */
 export function SummaryScrollContainer({ children }: SummaryScrollContainerProps) {
 	return (
-		<div className="max-h-[60vh] overflow-y-auto pr-1" data-testid="summary-scroll-container">
+		<div
+			className="max-h-[60vh] overflow-y-auto pr-1"
+			data-testid="summary-scroll-container"
+			style={{ maxHeight: "60vh", overflowY: "auto" }}>
 			{children}
 		</div>
 	)

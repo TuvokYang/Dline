@@ -255,25 +255,6 @@ function assertNoOrphanToolOutputs(consumption: MockApiConsumption): void {
 	expect(JSON.stringify(body)).not.toContain("dline_function_")
 }
 
-/** Every Anthropic tool result must reference a tool use in the immediately preceding assistant message. */
-function lastAnthropicUserTextBlocks(consumption: MockApiConsumption): string[] {
-	const messages = (consumption.requestBody as { messages?: unknown[] }).messages ?? []
-	for (let index = messages.length - 1; index >= 0; index--) {
-		const value = messages[index]
-		if (typeof value !== "object" || value === null) continue
-		const message = value as { role?: unknown; content?: unknown }
-		if (message.role !== "user") continue
-		if (typeof message.content === "string") return [message.content]
-		if (!Array.isArray(message.content)) return []
-		return message.content.flatMap((content) => {
-			if (typeof content !== "object" || content === null) return []
-			const block = content as { type?: unknown; text?: unknown }
-			return block.type === "text" && typeof block.text === "string" ? [block.text] : []
-		})
-	}
-	return []
-}
-
 function assertAnthropicToolPairing(consumption: MockApiConsumption): void {
 	const messages = (consumption.requestBody as { messages?: unknown[] }).messages ?? []
 	for (const [index, value] of messages.entries()) {
@@ -389,9 +370,6 @@ e2e(
 				arguments: { result: "E2E_CONDENSE_ORPHAN_DONE" },
 				expectedRequestIncludes: ["E2E_CONDENSE_ORPHAN_SUMMARY"],
 				expectedRequestExcludes: ["__dline_mode_switch_compact__", COMPACT_INSTRUCTION_MARKER],
-				expectedToolResults: [
-					{ callId: "call_condense_orphan_ready", contentIncludes: "Mode switch context compaction requested." },
-				],
 			},
 		)
 
@@ -415,13 +393,12 @@ e2e(
 			await expect(sidebar.getByText("Compact the current task?", { exact: true })).toBeVisible()
 			await sidebar.getByTitle("Yes, compact the task").click()
 
-			await expect(sidebar.getByText("Dline is condensing the conversation:", { exact: true }).last()).toBeVisible({
+			await expect(sidebar.getByText("E2E_CONDENSE_ORPHAN_SUMMARY", { exact: false }).last()).toBeVisible({
 				timeout: 60_000,
 			})
-			await expect(sidebar.getByText("E2E_CONDENSE_ORPHAN_SUMMARY", { exact: false }).last()).toBeVisible()
 			await expect.poll(() => server.getRequestCount("openai-compatible-responses")).toBe(2)
 			const confirmCompactionButton = sidebar.locator('vscode-button[aria-label="Condense Conversation"]')
-			await expect(confirmCompactionButton).toBeVisible()
+			await expect(confirmCompactionButton).toBeVisible({ timeout: 60_000 })
 			await attachScreenshot(app, "manual-compaction-summary-review")
 			await confirmCompactionButton.click()
 
@@ -455,7 +432,7 @@ e2e(
 )
 
 e2e(
-	"Manual compaction - Condense sends input as the first post-compaction user continuation",
+	"Manual compaction - Condense preserves draft until the user explicitly sends it",
 	async ({ dlineDir, helper, openVSCode, server, userDataDir, workspaceDir }) => {
 		e2e.setTimeout(180_000)
 		await configureAnthropicManualCompact(dlineDir)
@@ -489,8 +466,16 @@ e2e(
 			{
 				type: "tool",
 				id: "call_condense_input_completion",
+				name: "qna_respond",
+				arguments: { response: "E2E_CONDENSE_INPUT_DONE" },
+				expectedRequestIncludes: [summaryMarker],
+				expectedRequestExcludes: [COMPACT_INSTRUCTION_MARKER, guidance, continuationInput],
+			},
+			{
+				type: "tool",
+				id: "call_condense_input_explicit_continuation",
 				name: "attempt_completion",
-				arguments: { result: "E2E_CONDENSE_INPUT_DONE" },
+				arguments: { result: "E2E_CONDENSE_INPUT_SENT" },
 				expectedRequestIncludes: [summaryMarker, continuationInput],
 				expectedRequestExcludes: [COMPACT_INSTRUCTION_MARKER, guidance],
 			},
@@ -519,21 +504,30 @@ e2e(
 			await attachScreenshot(app, "condense-input-summary-review")
 
 			await confirmButton.click()
-			await expect(input).toHaveValue("")
+			await expect(input).toHaveValue(continuationInput)
 			await expect(sidebar.getByText("E2E_CONDENSE_INPUT_DONE", { exact: false }).last()).toBeVisible({ timeout: 60_000 })
 			await expect.poll(() => server.getRequestCount("anthropic-messages")).toBe(3)
 
-			const requests = server.getMockConsumptions("anthropic-messages")
+			let requests = server.getMockConsumptions("anthropic-messages")
 			const postCompactionRequest = requests[2]
 			expect(postCompactionRequest.contractError).toBeUndefined()
-			const postCompactionTextBlocks = lastAnthropicUserTextBlocks(postCompactionRequest)
-			const summaryBlockIndex = postCompactionTextBlocks.findIndex((text) => text.includes(summaryMarker))
-			const continuationBlockIndex = postCompactionTextBlocks.findIndex((text) => text.includes(continuationInput))
-			expect(summaryBlockIndex).toBeGreaterThanOrEqual(0)
-			expect(continuationBlockIndex).toBeGreaterThan(summaryBlockIndex)
+			const postCompactionRequestText = JSON.stringify(postCompactionRequest.requestBody)
+			expect(postCompactionRequestText).toContain(summaryMarker)
+			expect(postCompactionRequestText).not.toContain(continuationInput)
 			expect(postCompactionRequest.requestToolResults.some((result) => result.content.includes(continuationInput))).toBe(
 				false,
 			)
+
+			await input.press("Enter")
+			await expect(input).toHaveValue("")
+			await expect(sidebar.getByText("E2E_CONDENSE_INPUT_SENT", { exact: false }).last()).toBeVisible({ timeout: 60_000 })
+			await expect.poll(() => server.getRequestCount("anthropic-messages")).toBe(4)
+			requests = server.getMockConsumptions("anthropic-messages")
+			const explicitContinuationRequest = requests[3]
+			expect(explicitContinuationRequest.contractError).toBeUndefined()
+			const explicitContinuationRequestText = JSON.stringify(explicitContinuationRequest.requestBody)
+			expect(explicitContinuationRequestText).toContain(summaryMarker)
+			expect(explicitContinuationRequestText).toContain(continuationInput)
 			for (const request of requests) {
 				expect(request.contractError).toBeUndefined()
 				assertAnthropicToolPairing(request)

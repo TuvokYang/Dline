@@ -90,7 +90,7 @@ describe("InteractionRegistry", () => {
 		expect(definition.actions[0].payloadPolicy).toBe("draft_and_selection")
 	})
 
-	it("carries the current draft through both Condense and Regenerate actions", () => {
+	it("preserves the current draft on Condense and carries it only for Regenerate", () => {
 		const definition = getInteraction("condense")
 
 		expect(definition.actions).toEqual([
@@ -98,7 +98,7 @@ describe("InteractionRegistry", () => {
 				type: "confirm_utility",
 				label: "Condense Conversation",
 				appearance: "primary",
-				payloadPolicy: "draft",
+				payloadPolicy: "none",
 			},
 			{
 				type: "reject",

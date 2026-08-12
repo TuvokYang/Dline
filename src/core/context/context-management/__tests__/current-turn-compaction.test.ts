@@ -6,7 +6,9 @@ import { describe, it } from "vitest"
 import {
 	getCompactionUserText,
 	hasManualCompactionIntent,
+	projectCompactionRequestContent,
 	projectCompletedCompactionResult,
+	shouldContinueCompactionFitting,
 	shouldDeferCurrentTurn,
 	shouldRestoreDeferredTurn,
 } from "../current-turn-compaction"
@@ -61,6 +63,39 @@ describe("current-turn compaction boundary", () => {
 		const content = [createToolResult("fc_done", "previous completion result")]
 
 		expect(getCompactionUserText(content)).to.deep.equal([])
+	})
+
+	it("projects the first compaction pass from deferred user text only", () => {
+		const deferredContent = [
+			createToolResult("fc_done", "previous completion result"),
+			createText("continue after the current tool turn"),
+		]
+
+		expect(projectCompactionRequestContent([], deferredContent, false)).to.deep.equal([
+			createText("continue after the current tool turn"),
+		])
+	})
+
+	it("projects iterative compaction from the prior summary and orphan-safe deferred turn", () => {
+		const summaryContent = [createText("summary pass one")]
+		const deferredContent = [
+			createToolResult("fc_done", "previous completion result"),
+			createText("continue after the current tool turn"),
+		]
+
+		const projected = projectCompactionRequestContent(summaryContent, deferredContent, true)
+		expect(projected).to.deep.equal([
+			createText("summary pass one"),
+			createText("previous completion result"),
+			createText("continue after the current tool turn"),
+		])
+		expect(projected.some((block) => block.type === "tool_result")).to.equal(false)
+	})
+
+	it("keeps current compaction content when no turn is deferred", () => {
+		const summaryContent = [createText("summary pass one")]
+
+		expect(projectCompactionRequestContent(summaryContent, undefined, true)).to.deep.equal(summaryContent)
 	})
 
 	it("accepts a manual compaction command from a trusted user-feedback tool result", () => {
@@ -141,10 +176,42 @@ describe("current-turn compaction boundary", () => {
 		expect(shouldDefer).to.equal(true)
 	})
 
-	it("restores deferred turns only after summarize_task has completed", () => {
-		expect(shouldRestoreDeferredTurn({ hasDeferredTurn: true, didCompleteSummarization: false })).to.equal(false)
-		expect(shouldRestoreDeferredTurn({ hasDeferredTurn: false, didCompleteSummarization: true })).to.equal(false)
-		expect(shouldRestoreDeferredTurn({ hasDeferredTurn: true, didCompleteSummarization: true })).to.equal(true)
+	it("restores deferred turns only after the final summarize_task fitting pass", () => {
+		expect(
+			shouldRestoreDeferredTurn({
+				hasDeferredTurn: true,
+				didCompleteSummarization: false,
+				fittingCompactionRequired: false,
+			}),
+		).to.equal(false)
+		expect(
+			shouldRestoreDeferredTurn({
+				hasDeferredTurn: false,
+				didCompleteSummarization: true,
+				fittingCompactionRequired: false,
+			}),
+		).to.equal(false)
+		expect(
+			shouldRestoreDeferredTurn({
+				hasDeferredTurn: true,
+				didCompleteSummarization: true,
+				fittingCompactionRequired: true,
+			}),
+		).to.equal(false)
+		expect(
+			shouldRestoreDeferredTurn({
+				hasDeferredTurn: true,
+				didCompleteSummarization: true,
+				fittingCompactionRequired: false,
+			}),
+		).to.equal(true)
+	})
+
+	it("continues iterative fitting at or above 80 percent and exits strictly below it", () => {
+		expect(shouldContinueCompactionFitting({ contextTokens: 79_999, contextWindow: 100_000 })).to.equal(false)
+		expect(shouldContinueCompactionFitting({ contextTokens: 80_000, contextWindow: 100_000 })).to.equal(true)
+		expect(shouldContinueCompactionFitting({ contextTokens: 85_000, contextWindow: 100_000 })).to.equal(true)
+		expect(shouldContinueCompactionFitting({ contextTokens: 0, contextWindow: 0 })).to.equal(false)
 	})
 
 	it("projects a completed summarize_task result as user text after its function call is truncated", () => {

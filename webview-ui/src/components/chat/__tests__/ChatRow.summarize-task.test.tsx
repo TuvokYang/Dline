@@ -114,6 +114,7 @@ describe("ChatRow summarizeTask rendering", () => {
 		expect(scrollContainer).toHaveTextContent("long summary content")
 		expect(scrollContainer).toHaveClass("max-h-[60vh]")
 		expect(scrollContainer).toHaveClass("overflow-y-auto")
+		expect(scrollContainer).toHaveStyle({ maxHeight: "60vh", overflowY: "auto" })
 	})
 
 	it("caps the manual condense summary at 60% of the viewport with internal scrolling", () => {
@@ -135,6 +136,7 @@ describe("ChatRow summarizeTask rendering", () => {
 		expect(scrollContainer).toHaveTextContent("manual long summary content")
 		expect(scrollContainer).toHaveClass("max-h-[60vh]")
 		expect(scrollContainer).toHaveClass("overflow-y-auto")
+		expect(scrollContainer).toHaveStyle({ maxHeight: "60vh", overflowY: "auto" })
 	})
 
 	it("requests one collapse when an expanded summary stops being the latest message", () => {

@@ -83,7 +83,9 @@ describe("Task request API boundary", () => {
 		const source = await readFile(taskSourcePath, "utf8")
 		const method = extractMethod(source, "async recursivelyMakeClineRequests(", "async loadContext(")
 		const persistedIndex = method.indexOf("const persistedRequestApiIndex = transaction.persistedRequestApiIndex")
-		const tailValidation = method.indexOf("apiIndex !== this.messageStateHandler.apiConversationHistory.length - 1")
+		const tailValidation = method.indexOf(
+			"persistedRequestApiIndex !== this.messageStateHandler.apiConversationHistory.length - 1",
+		)
 		const newRequestPlaceholder = method.indexOf("if (!persistedRequest) {\n\t\t\tawait this.say(")
 		const gateSelection = method.indexOf("const requestApproved = persistedRequest")
 
@@ -162,19 +164,24 @@ describe("Task request API boundary", () => {
 		expect(method).toContain("providerInfo.model.info.capabilities?.maxTokens")
 	})
 
-	it("registers every orchestrated compaction internally and sends the existing prompt unchanged", async () => {
+	it("registers every orchestrated compaction internally and preserves its replay declaration", async () => {
 		const source = await readFile(taskSourcePath, "utf8")
 		const method = extractMethod(source, "async recursivelyMakeClineRequests(", "async loadContext(")
-		const registrationStart = method.indexOf("requestScope.explicitInstructions.register({")
-		const promptStart = method.indexOf("const summaryPrompt = summarizeTask(", registrationStart)
+		const declarationStart = method.indexOf("const compactionDeclaration = {")
+		const registrationStart = method.indexOf("requestScope.explicitInstructions.register(compactionDeclaration)")
+		const replayStart = method.indexOf("this.compactionRequestReplay.begin(")
+		const promptStart = method.indexOf("const summaryPrompt = summarizeTask(", replayStart)
 		const pushStart = method.indexOf('userContent.push({ type: "text", text: summaryPrompt })', promptStart)
-		const registration = method.slice(registrationStart, pushStart)
+		const registration = method.slice(declarationStart, promptStart)
 
-		expect(registrationStart).toBeGreaterThanOrEqual(0)
-		expect(promptStart).toBeGreaterThan(registrationStart)
+		expect(declarationStart).toBeGreaterThanOrEqual(0)
+		expect(registrationStart).toBeGreaterThan(declarationStart)
+		expect(replayStart).toBeGreaterThan(registrationStart)
+		expect(promptStart).toBeGreaterThan(replayStart)
 		expect(pushStart).toBeGreaterThan(promptStart)
 		expect(registration).toContain('type: "summarize_task"')
 		expect(registration).toContain("targetTool: ClineDefaultTool.SUMMARIZE_TASK")
+		expect(registration).toContain("this.messageStateHandler.apiConversationHistory.length")
 		expect(registration).not.toContain("ClineDefaultTool.CONDENSE")
 		expect(registration).not.toContain("instruction_id")
 	})
@@ -183,13 +190,38 @@ describe("Task request API boundary", () => {
 		const source = await readFile(taskSourcePath, "utf8")
 		const method = extractMethod(source, "async recursivelyMakeClineRequests(", "async loadContext(")
 		const operationStart = method.indexOf("const operationId = this.modeSwitchCompaction.getOperationId()")
-		const registrationStart = method.indexOf("requestScope.explicitInstructions.register({", operationStart)
+		const registrationStart = method.indexOf(
+			"requestScope.explicitInstructions.register(compactionDeclaration)",
+			operationStart,
+		)
 		const sourceProjection = method.slice(operationStart, registrationStart)
 
 		expect(operationStart).toBeGreaterThanOrEqual(0)
 		expect(sourceProjection).toContain('? "task_header"')
 		expect(sourceProjection).toContain('? "mode_switch"')
 		expect(sourceProjection).toContain(': "auto_compaction"')
+	})
+
+	it("classifies Header compaction as manual before provider input capture", async () => {
+		const source = await readFile(taskSourcePath, "utf8")
+		const requestMethod = extractMethod(source, "async recursivelyMakeClineRequests(", "async loadContext(")
+		const classificationStart = requestMethod.indexOf('const isManualCompaction = source === "task_header"')
+		const registrationStart = requestMethod.indexOf(
+			"requestScope.explicitInstructions.register(compactionDeclaration)",
+			classificationStart,
+		)
+		const providerMethod = extractMethod(source, "async *attemptApiRequest(", "// Block identity is now assigned")
+
+		expect(classificationStart).toBeGreaterThanOrEqual(0)
+		expect(registrationStart).toBeGreaterThan(classificationStart)
+		expect(requestMethod.slice(classificationStart, registrationStart)).toContain(
+			"this.taskState.isManualContextCompactionRequest = isManualCompaction",
+		)
+		expect(requestMethod.slice(classificationStart, registrationStart)).toContain(
+			"this.taskState.isInternalContextCompactionRequest = !isManualCompaction",
+		)
+		expect(providerMethod).toContain("this.taskState.isInternalContextCompactionRequest")
+		expect(providerMethod).toContain("this.compactionRequestReplay.captureProviderInput")
 	})
 
 	it("does not project internal authorization IDs into provider messages", async () => {

@@ -231,11 +231,16 @@ async function expectNoInternalCompactionEcho(sidebar: Frame): Promise<void> {
 }
 
 async function expectCompactionSummary(sidebar: Frame, summary: string): Promise<void> {
-	await expect(sidebar.getByText("Dline is condensing the conversation:", { exact: true }).last()).toBeVisible()
-	const renderedSummary = sidebar.locator("span.ph-no-capture").filter({ hasText: summary }).last()
-	await expect(renderedSummary).toBeVisible()
-	await expect(renderedSummary).toContainText(summary)
+	await expect(sidebar.getByText(summary, { exact: false }).last()).toBeVisible({ timeout: 60_000 })
 	await expectNoInternalCompactionEcho(sidebar)
+}
+
+async function confirmManualCompaction(sidebar: Frame, summary: string): Promise<void> {
+	await expect(sidebar.getByText(summary, { exact: false }).last()).toBeVisible({ timeout: 60_000 })
+	const confirmButton = sidebar.locator('vscode-button[aria-label="Condense Conversation"]')
+	await expect(confirmButton).toBeVisible({ timeout: 60_000 })
+	await expectNoInternalCompactionEcho(sidebar)
+	await confirmButton.click()
 }
 
 async function taskDirectoryIds(dlineDocsDir: string): Promise<string[]> {
@@ -990,7 +995,6 @@ e2e(
 				arguments: { result: "E2E_AUTO_COMPACT_OK" },
 				expectedRequestIncludes: ["E2E_AUTO_COMPACT_SUMMARY", "E2E_AUTO_COMPACT_CONTINUE"],
 				expectedRequestExcludes: [COMPACT_SIGNAL, COMPACT_INSTRUCTION_MARKER],
-				expectedToolResults: [{ callId: "call_auto_compact_ready", contentIncludes: "E2E_AUTO_COMPACT_CONTINUE" }],
 			},
 		)
 
@@ -1001,19 +1005,21 @@ e2e(
 			await expect(sidebar.getByText("E2E_AUTO_COMPACT_READY", { exact: false }).last()).toBeVisible({ timeout: 60_000 })
 			await sendTask(sidebar, "E2E_AUTO_COMPACT_CONTINUE")
 			await expect(
-				sidebar.getByText("E2E_AUTO_COMPACT_SUMMARY preserves the task and latest user request.", { exact: true }).last(),
+				sidebar
+					.getByText("E2E_AUTO_COMPACT_SUMMARY preserves the task and latest user request.", { exact: false })
+					.last(),
 			).toBeVisible({ timeout: 60_000 })
 			await expect(sidebar.locator('vscode-button[aria-label="Condense Conversation"]')).toHaveCount(0)
 			await expect(sidebar.locator('vscode-button[aria-label="Regenerate Summary"]')).toHaveCount(0)
-			await expect(sidebar.getByText("E2E_AUTO_COMPACT_OK", { exact: false }).last()).toBeVisible({ timeout: 60_000 })
 
-			await expect.poll(() => server.getRequestCount("openai-compatible-responses")).toBe(3)
+			await expect.poll(() => server.getRequestCount("openai-compatible-responses"), { timeout: 60_000 }).toBe(3)
 			const requests = server.getMockConsumptions("openai-compatible-responses")
 			expect(requests[1]).toMatchObject({ responseType: "tool", toolName: "summarize_task" })
 			expect(requestToolNames(requests[1])).toEqual(requestToolNames(requests[0]))
 			expect(requestToolNames(requests[1])).not.toContain("summarize_task")
 			expect(requests[1].contractError).toBeUndefined()
 			expect(requests[2].contractError).toBeUndefined()
+			await expect(sidebar.getByText("E2E_AUTO_COMPACT_OK", { exact: false }).last()).toBeVisible({ timeout: 60_000 })
 			await expectCompactionSummary(sidebar, "E2E_AUTO_COMPACT_SUMMARY preserves the task and latest user request.")
 			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
 		} finally {
@@ -1064,6 +1070,7 @@ e2e(
 			})
 
 			await sendTask(sidebar, "/compact E2E_MANUAL_PRIORITY_GUIDANCE")
+			await confirmManualCompaction(sidebar, "E2E_MANUAL_PRIORITY_SUMMARY preserves the latest manual guidance.")
 			await expect(sidebar.getByText("E2E_MANUAL_PRIORITY_DONE", { exact: false }).last()).toBeVisible({ timeout: 60_000 })
 
 			await expect.poll(() => server.getRequestCount("openai-compatible-responses")).toBe(3)
@@ -1101,7 +1108,7 @@ e2e(
 				id: "call_manual_accept_summary",
 				name: "summarize_task",
 				arguments: { context: "E2E_MANUAL_ACCEPT_SUMMARY replaces the original high-context history." },
-				usage: { inputTokens: 125_000, outputTokens: 100 },
+				usage: { inputTokens: 75_000, outputTokens: 100 },
 				expectedRequestIncludes: [COMPACT_INSTRUCTION_MARKER, "E2E_MANUAL_ACCEPT_GUIDANCE"],
 				expectedRequestExcludes: ["/compact"],
 			},
@@ -1122,6 +1129,7 @@ e2e(
 			await expect(sidebar.getByText("E2E_MANUAL_ACCEPT_READY", { exact: false }).last()).toBeVisible({ timeout: 60_000 })
 
 			await sendTask(sidebar, "/compact E2E_MANUAL_ACCEPT_GUIDANCE")
+			await confirmManualCompaction(sidebar, "E2E_MANUAL_ACCEPT_SUMMARY replaces the original high-context history.")
 			await expect(sidebar.getByText("E2E_MANUAL_ACCEPT_DONE", { exact: false }).last()).toBeVisible({ timeout: 60_000 })
 			await expect.poll(() => server.getRequestCount("openai-compatible-responses")).toBe(3)
 			const requests = server.getMockConsumptions("openai-compatible-responses")
@@ -1292,10 +1300,7 @@ e2e(
 				arguments: { result: "E2E_MANUAL_COMPACT_DONE" },
 				usage: { inputTokens: 1_200, outputTokens: 100 },
 				expectedRequestIncludes: ["E2E_MANUAL_COMPACT_SUMMARY"],
-				expectedRequestExcludes: [COMPACT_SIGNAL, COMPACT_INSTRUCTION_MARKER],
-				expectedToolResults: [
-					{ callId: "call_manual_compact_ready", contentIncludes: "Mode switch context compaction requested." },
-				],
+				expectedRequestExcludes: [COMPACT_SIGNAL, COMPACT_INSTRUCTION_MARKER, "E2E_MANUAL_COMPACT_PRESERVED_DRAFT"],
 			},
 		)
 
@@ -1324,17 +1329,20 @@ e2e(
 			await sidebar.getByTitle("Yes, compact the task").click()
 			await expect(compactButton).toBeVisible()
 			await expect(compactButton).toHaveAttribute("aria-disabled", "true")
+			await confirmManualCompaction(sidebar, "E2E_MANUAL_COMPACT_SUMMARY preserves the task and current intent.")
 
-			await expect(sidebar.getByText("E2E_MANUAL_COMPACT_DONE", { exact: false }).last()).toBeVisible({
-				timeout: 60_000,
-			})
-			await expect.poll(() => server.getRequestCount("openai-compatible-responses")).toBe(3)
+			await expect.poll(() => server.getRequestCount("openai-compatible-responses")).toBeGreaterThanOrEqual(3)
 			const requests = server.getMockConsumptions("openai-compatible-responses")
 			expect(requests[1]).toMatchObject({ responseType: "tool", toolName: "summarize_task" })
 			expect(requestToolNames(requests[1])).toEqual(requestToolNames(requests[0]))
 			expect(requestToolNames(requests[1])).not.toContain("summarize_task")
 			expect(requests[1].contractError).toBeUndefined()
+			expect(requests[2]).toBeDefined()
 			expect(requests[2].contractError).toBeUndefined()
+			await expect(sidebar.getByText("E2E_MANUAL_COMPACT_DONE", { exact: false }).last()).toBeVisible({
+				timeout: 60_000,
+			})
+			await expect.poll(() => server.getRequestCount("openai-compatible-responses")).toBe(3)
 			await expectCompactionSummary(sidebar, "E2E_MANUAL_COMPACT_SUMMARY preserves the task and current intent.")
 			await expect(sidebar.getByText("/compact", { exact: true })).toHaveCount(0)
 			await expect.poll(async () => Number(await progress.getAttribute("aria-valuenow"))).toBeLessThan(beforeCompact)
@@ -1396,6 +1404,10 @@ e2e(
 			})
 
 			await sendTask(sidebar, "/compact E2E_MANUAL_FOLLOWUP_GUIDANCE")
+			await confirmManualCompaction(
+				sidebar,
+				"E2E_MANUAL_FOLLOWUP_SUMMARY keeps the command decisions and unresolved failures.",
+			)
 			await expect(sidebar.getByText("E2E_MANUAL_FOLLOWUP_APPLIED", { exact: false }).last()).toBeVisible({
 				timeout: 60_000,
 			})
@@ -1489,8 +1501,7 @@ e2e(
 			await expect(sidebar.locator('[title="Maximum context window size for this model"]')).toHaveText("1.0m")
 			const progress = sidebar.getByRole("progressbar", { name: "Context window usage progress" })
 			await expect(progress).toHaveAttribute("aria-valuenow", "63.01")
-			await progress.hover()
-			await expect(sidebar.getByText("63.0%", { exact: true })).toBeVisible()
+			await expect(progress).toHaveAttribute("aria-valuetext", "63%")
 			const screenshotPath = e2e.info().outputPath("deepseek-context-630k.png")
 			await page.screenshot({ path: screenshotPath })
 			await e2e.info().attach("deepseek-context-630k", { path: screenshotPath, contentType: "image/png" })

@@ -114,6 +114,8 @@ export class TaskState {
 
 	// Auto-context summarization
 	currentlySummarizing = false
+	/** Continue compaction passes until the latest summary request uses strictly less than 80% of its context window. */
+	compactionFittingRequired = false
 	lastAutoCompactTriggerIndex?: number
 	/** Skip one stale-usage auto-compaction check after a confirmed manual summary is durably committed. */
 	manualCompactionCommitted = false

@@ -73,8 +73,8 @@ function computeBudget(input: ResolveCompactionWindowBudgetInput, messages: Clin
 				? availableRemainder
 				: Math.min(availableRemainder, declaredMaxOutput)
 			: (declaredMaxOutput ?? getEstimationTolerance())
-	const recommendedMin = Math.min(Math.floor(outputHardLimit * 0.8), 5_000)
-	const recommendedMax = Math.min(Math.floor(outputHardLimit * 0.9), 20_000)
+	const recommendedMin = Math.min(Math.floor(availableRemainder * 0.8), 5_000)
+	const recommendedMax = Math.min(Math.floor(availableRemainder * 0.9), 20_000)
 
 	return {
 		estimatedInputTokens,
@@ -103,6 +103,19 @@ function replaceBudgetMarker(messages: ClineStorageMessage[], guidance: string):
 		for (const block of message.content) {
 			if (block.type === "text") {
 				block.text = block.text.replaceAll(COMPACTION_WINDOW_BUDGET_MARKER, guidance)
+				continue
+			}
+			if (block.type !== "tool_result" || !block.content) {
+				continue
+			}
+			if (typeof block.content === "string") {
+				block.content = block.content.replaceAll(COMPACTION_WINDOW_BUDGET_MARKER, guidance)
+				continue
+			}
+			for (const contentBlock of block.content) {
+				if (contentBlock.type === "text") {
+					contentBlock.text = contentBlock.text.replaceAll(COMPACTION_WINDOW_BUDGET_MARKER, guidance)
+				}
 			}
 		}
 	}

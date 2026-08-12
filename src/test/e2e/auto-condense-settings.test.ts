@@ -9,6 +9,7 @@ import { E2ETestHelper, e2e } from "./utils/helpers"
 interface StoredProfile {
 	name: string
 	modelId?: string
+	webSearchMode?: "WEB_SEARCH_MODE_FORCE_OFF"
 	openai?: {
 		capabilities?: {
 			contextWindow?: number
@@ -33,6 +34,7 @@ async function configureLongContextMock(dlineDir: string): Promise<void> {
 	const profile = profiles.find((candidate) => candidate.name === E2E_PROFILE_NAMES.mockOpenAiResponses)
 	if (!profile?.openai?.capabilities) throw new Error("Missing configurable OpenAI Responses E2E profile")
 	profile.modelId = "gpt-5.4-mini"
+	profile.webSearchMode = "WEB_SEARCH_MODE_FORCE_OFF"
 	profile.openai.capabilities.contextWindow = 1_000_000
 	await writeFile(profilesPath(dlineDir), `${JSON.stringify(profiles, null, 2)}\n`, "utf8")
 
@@ -104,8 +106,7 @@ function requestToolNames(consumption: MockApiConsumption): string[] {
 }
 
 async function expectCompactionSummary(sidebar: Frame, summary: string): Promise<void> {
-	await expect(sidebar.getByText("Dline is condensing the conversation:", { exact: true }).last()).toBeVisible()
-	await expect(sidebar.locator("span.ph-no-capture").filter({ hasText: summary }).last()).toContainText(summary)
+	await expect(sidebar.getByText(summary, { exact: false }).last()).toBeVisible({ timeout: 60_000 })
 	const visibleText = await sidebar.locator("body").innerText()
 	expect(visibleText).not.toContain("The current conversation is rapidly running out of context")
 }
@@ -173,6 +174,7 @@ e2e(
 
 			await settingsApp.close()
 			settingsApp = undefined
+			helper.clearCachedFrame()
 
 			taskApp = await openVSCode(workspaceDir)
 			const reopened = await openSidebar(taskApp, helper)

@@ -122,9 +122,7 @@ export class SummarizeTaskHandler implements IToolHandler, IPartialBlockHandler 
 				content: context,
 				compactionStatus: "completed",
 			} satisfies ClineSayTool)
-			const compactionMessageTs = config.taskState.isInternalContextCompactionRequest
-				? config.taskState.contextCompactionMessageTs
-				: undefined
+			const compactionMessageTs = config.taskState.contextCompactionMessageTs
 			const manualOutcome = isManualCompaction
 				? await config.interactions.open({
 						turnId: interactionTurnId(block),
@@ -277,14 +275,8 @@ export class SummarizeTaskHandler implements IToolHandler, IPartialBlockHandler 
 			if (manualOutcome && manualOutcome.actionId !== "confirm_utility") {
 				throw new Error(`Unsupported manual compaction action: ${manualOutcome.actionId}`)
 			}
-			let manualCompactionContinuation: { text: string; images: string[]; files: string[] } | undefined
-			if (manualOutcome?.actionId === "confirm_utility") {
-				const text = manualOutcome.draft?.text ?? ""
-				const images = [...(manualOutcome.draft?.images ?? [])]
-				const files = [...(manualOutcome.draft?.files ?? [])]
-				manualCompactionContinuation =
-					text.trim() || images.length > 0 || files.length > 0 ? { text, images, files } : undefined
-			}
+			// Confirmation applies the summary only. Draft text remains owned by the chat input;
+			// regeneration is the only condense action that consumes draft feedback.
 
 			// Handle context management
 			const apiConversationHistory = config.messageState.apiConversationHistory
@@ -304,7 +296,7 @@ export class SummarizeTaskHandler implements IToolHandler, IPartialBlockHandler 
 				apiConversationHistory,
 			)
 			if (isManualCompaction) {
-				config.taskState.pendingManualCompactionContinuation = manualCompactionContinuation
+				config.taskState.pendingManualCompactionContinuation = undefined
 				// Skip one stale-usage automatic compaction check after a user-owned summary is committed.
 				config.taskState.manualCompactionCommitted = true
 			}
@@ -347,6 +339,7 @@ export class SummarizeTaskHandler implements IToolHandler, IPartialBlockHandler 
 		const authorization = config.explicitInstructions?.getPendingToolAuthorization(ClineDefaultTool.SUMMARIZE_TASK)
 		const isManualCompaction = authorization?.source === "manual_compact_command" || authorization?.source === "task_header"
 		if (isManualCompaction) {
+			config.taskState.contextCompactionMessageTs = block.ts
 			await uiHelpers
 				.ask("condense", uiHelpers.removeClosingTag(block, "context", context), true, {
 					existingTs: block.ts,
