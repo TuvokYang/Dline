@@ -62,8 +62,12 @@ export class Logger {
 		Logger.#output("LOG", message, args)
 	}
 
+	static isDebugEnabled(): boolean {
+		return Logger.logLevel === "debug" || Logger.logLevel === "trace"
+	}
+
 	static debug(message: string, ...args: any[]) {
-		if (Logger.logLevel !== "debug" && Logger.logLevel !== "trace") return
+		if (!Logger.isDebugEnabled()) return
 		Logger.#output("DEBUG", message, args)
 	}
 
