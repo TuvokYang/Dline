@@ -84,6 +84,7 @@ describe("assistant message tool ordering", () => {
 		assert.equal(isTurnEndingToolName(ClineDefaultTool.ATTEMPT), true)
 		assert.equal(isTurnEndingToolName(ClineDefaultTool.ASK), true)
 		assert.equal(isTurnEndingToolName(ClineDefaultTool.MAKE_PLAN), true)
+		assert.equal(isTurnEndingToolName(ClineDefaultTool.NEW_TASK), true)
 		assert.equal(isTurnEndingToolName(ClineDefaultTool.FILE_READ), false)
 	})
 })

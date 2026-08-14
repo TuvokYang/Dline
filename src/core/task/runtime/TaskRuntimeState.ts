@@ -1,5 +1,6 @@
 import type { BlockLifecycle } from "../BlockPhaseMachine"
 import type { ActiveInteraction } from "../interaction/InteractionReducer"
+import type { NewTaskConsumedState } from "../new-task/new-task-handoff"
 import { TaskPhase } from "../TaskPhase"
 import type { TaskEffectType } from "./TaskEffect"
 
@@ -51,6 +52,8 @@ export interface TaskRuntimeState {
 	cancellation?: TaskCancellationState
 	error?: TaskRuntimeError
 	completion?: TaskCompletionState
+	/** Canonical New Task identity already consumed before this Task exited. */
+	newTaskConsumed?: NewTaskConsumedState
 	/** Highest effect-origin revision invalidated by a cancellation transaction. */
 	supersededEffectRevision?: number
 }

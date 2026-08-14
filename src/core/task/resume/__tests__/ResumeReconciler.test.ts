@@ -69,6 +69,20 @@ function baseline(apiIndex = 0): TaskSnapshot {
 	)
 }
 
+function consumedNewTaskSnapshot(): TaskSnapshot {
+	const state = createTaskRuntimeState({
+		taskId: TASK_ID,
+		phase: TaskPhase.ABORTED,
+		revision: 9,
+		anchor: { apiIndex: 1, turnId: "turn:new-task" },
+	})
+	state.newTaskConsumed = {
+		functionId: "fn-new-task",
+		dlineTid: "tid-new-task",
+	}
+	return createSnapshot(state, 206)
+}
+
 function snapshotWithTurn(
 	dlineTid: string,
 	functionId: string,
@@ -183,6 +197,20 @@ describe("reconcileResume", () => {
 		expect(result.snapshot.phase).toBe(TaskPhase.PAUSED)
 		expect(result.snapshot.turn?.blocks).toMatchObject([{ dlineTid: "tid-1", phase: BlockPhase.COMPLETED }])
 		expect(result.diagnostics).toEqual([])
+	})
+
+	it("keeps a consumed old Task inert without synthesizing Resume or a successor", () => {
+		const result = reconcileResume(
+			fullInput([apiUser(), assistantTool("tid-new-task", "fn-new-task", "new_task")], [], consumedNewTaskSnapshot()),
+		)
+
+		expect(result.entry).toEqual({ type: "show_consumed_task" })
+		expect(result.snapshot.phase).toBe(TaskPhase.ABORTED)
+		expect(result.snapshot.newTaskConsumed).toEqual({
+			functionId: "fn-new-task",
+			dlineTid: "tid-new-task",
+		})
+		expect(result.snapshot.interaction).toBeUndefined()
 	})
 
 	it("rebuilds a missing snapshot from the complete histories", () => {

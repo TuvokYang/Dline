@@ -6,18 +6,33 @@ import { ApiStream } from "@core/api/transform/stream"
 import { createStreamNormalizer, normalizeApiStream } from "@core/api/transform/stream-identity-normalizer"
 import { AssistantMessageContent, parseAssistantMessageV2, TextStreamContent, ToolUse } from "@core/assistant-message"
 import { ContextManager } from "@core/context/context-management/ContextManager"
+import { planNextCompactionPass } from "@core/context/context-management/compaction-pass-planner"
+import { CompactionRetryPolicy } from "@core/context/context-management/compaction-retry-policy"
 import {
 	hasCompactionWindowBudgetMarker,
 	resolveCompactionWindowBudget,
 } from "@core/context/context-management/compaction-window-budget"
 import { checkContextWindowExceededError } from "@core/context/context-management/context-error-handling"
-import { getContextTokens, readContextTokens } from "@core/context/context-management/context-pressure"
 import {
+	getContextTokens,
+	readContextTokens,
+	readContextWindowRequestPressure,
+} from "@core/context/context-management/context-pressure"
+import {
+	type ContextWindowProjection,
+	estimateContextWindowCandidate,
+	resolveContextWindowProjection,
+} from "@core/context/context-management/context-window-projection"
+import {
+	type CompactTriggerOptions,
 	computeCompactTrigger,
 	computeSummarizeBudget,
 	getContextWindowInfo,
+	resolveCompactTriggerPolicy,
+	shouldCompactProjectedUsage,
 } from "@core/context/context-management/context-window-utils"
 import {
+	getCompactionUserText,
 	hasManualCompactionIntent,
 	hasToolResult,
 	projectCompactionRequestContent,
@@ -26,8 +41,24 @@ import {
 	shouldDeferCurrentTurn,
 	shouldRestoreDeferredTurn,
 } from "@core/context/context-management/current-turn-compaction"
+import { commitCompactionCheckpoint } from "@core/context/context-management/fitting-commit"
+import { FittingRecoveryStore } from "@core/context/context-management/fitting-recovery-store"
+import { runInternalCompactionPassWithRetry } from "@core/context/context-management/internal-compaction-pass"
+import { indexLogicalTurns } from "@core/context/context-management/logical-turns"
+import { decideTargetWindowFitting } from "@core/context/context-management/TargetWindowFittingService"
+import { resolveTargetContextScope } from "@core/context/context-management/target-context-scope"
+import {
+	acceptCompactionPass,
+	applyCompactionPassPlan,
+	areCompactionPassIdentitiesEqual,
+	buildCompactionPassHistory,
+	buildTargetCandidateHistory,
+	getCompactionPassIdentity,
+	type TargetWindowFittingState,
+	tryStartTargetWindowFitting,
+} from "@core/context/context-management/target-window-fitting"
 import { EnvironmentContextTracker } from "@core/context/context-tracking/EnvironmentContextTracker"
-import { FileContextTracker } from "@core/context/context-tracking/FileContextTracker"
+import { FileContextTracker, type RecentlyModifiedFilesSnapshot } from "@core/context/context-tracking/FileContextTracker"
 import { ModelContextTracker } from "@core/context/context-tracking/ModelContextTracker"
 import {
 	getGlobalClineRules,
@@ -59,11 +90,44 @@ import type { FrozenSystemPromptCache, SystemPromptRefreshReason } from "@core/s
 import { TaskActivityPersistence } from "@core/task/activity/TaskActivityPersistence"
 import { TaskActivityStore } from "@core/task/activity/TaskActivityStore"
 import { ensureApiMessages, ensureUserContent } from "@core/task/api-context"
-import { CompactionRequestReplay } from "@core/task/compaction/CompactionRequestReplay"
+import {
+	CONTEXT_COMPACTION_RECOVERY_DIRECTORY,
+	type ContextCompactionCheckpointPayload,
+	type ContextCompactionIndicatorCheckpoint,
+	createAuthoritativeIndicatorCheckpoint,
+	createContextCompactionCheckpointPayload,
+	createContextCompactionScopeIdentity,
+	createLegacyIndicatorCheckpoint,
+} from "@core/task/ContextCompactionCheckpoint"
+import {
+	ContextCompactionPresentation,
+	type ContextCompactionPresentationSnapshot,
+} from "@core/task/ContextCompactionPresentation"
+import {
+	type ContextCompactionIndicatorApplyContext,
+	ContextCompactionRecoveryAdapter,
+	type ContextCompactionTransitionRestoreTarget,
+} from "@core/task/ContextCompactionRecoveryAdapter"
+import {
+	ContextCompactionRecoveryCoordinator,
+	type ContextCompactionRestoreResult,
+} from "@core/task/ContextCompactionRecoveryCoordinator"
+import {
+	type ContextCompactionAcceptedPassCheckpoint,
+	type ContextCompactionReprojection,
+	ContextCompactionSession,
+	type ContextCompactionSessionEvent,
+	type ContextCompactionSessionInput,
+	type ContextCompactionSessionResult,
+	type ContextCompactionTransitionState,
+} from "@core/task/ContextCompactionSession"
+import { ContextWindowIndicator, isSameContextWindowIndicatorLineage } from "@core/task/ContextWindowIndicator"
+import { type CompactionProviderInput, CompactionRequestReplay } from "@core/task/compaction/CompactionRequestReplay"
+import { normalizeCompactionResponse } from "@core/task/compaction/CompactionResponseNormalizer"
 import { getHighContextPressureWarning, showContextUsage } from "@core/task/environment-context"
 import { ExplicitInstructionRegistry } from "@core/task/explicit-instructions/ExplicitInstructionRegistry"
-import { type ModeCompactResult, ModeSwitchCompaction } from "@core/task/ModeSwitchCompaction"
-import { MODE_SWITCH_COMPACT_SIGNAL } from "@core/task/mode-switch-signal"
+import { ModeSwitchCompaction } from "@core/task/ModeSwitchCompaction"
+import { projectModeSwitchContinuation } from "@core/task/mode-switch-continuation"
 import { calculateApiRequestTiming } from "@core/task/performance/api-request-timing"
 import { createRequestApiScope, type RequestApiScope, resolveRequestWebSearchRoutingPlan } from "@core/task/RequestApiScope"
 import { isMultiRootEnabled } from "@core/workspace/multi-root-utils"
@@ -91,6 +155,7 @@ import { findLast, findLastIndex } from "@shared/array"
 import type { ChatContent } from "@shared/ChatContent"
 import { combineApiRequests } from "@shared/combineApiRequests"
 import { combineCommandSequences } from "@shared/combineCommandSequences"
+import type { ContextWindowIndicatorLineage, ContextWindowIndicatorSnapshot } from "@shared/context-window-indicator"
 import {
 	ClineApiReqCancelReason,
 	ClineApiReqInfo,
@@ -177,6 +242,7 @@ import { isTurnEndingToolName, orderTurnEndingContentBlocks, orderTurnEndingNati
 import { getRetryDelay, getStreamRetryDecision, MAX_AUTO_RETRY_ATTEMPTS } from "./auto-retry"
 import { BlockPhase } from "./BlockPhaseMachine"
 import { buildTaskBackgroundEnvironmentSection, buildTaskBackgroundResults } from "./background/BackgroundContextInjector"
+import { estimateContextWindowIndicatorSegments, estimateContextWindowReceivingDelta } from "./ContextWindowIndicatorProjection"
 import { detectAvailableCliTools } from "./cli-tool-detector"
 import { FocusChainManager } from "./focus-chain"
 import { hostedWebApprovalApiIndex, requestHostedWebApproval } from "./interaction/HostedWebApproval"
@@ -191,6 +257,9 @@ import {
 } from "./latency"
 import { MessageChannel } from "./MessageChannel"
 import { MessageStateHandler } from "./message-state"
+import { deriveNewTaskFeedbackContinuation } from "./new-task/new-task-continuation"
+import { buildNewTaskFeedbackContent, findLatestNewTaskFeedback } from "./new-task/new-task-feedback"
+import { createNewTaskHandoff } from "./new-task/new-task-handoff"
 import type { ApiRateMetricsQuery, ApiRateMetricsQueryResult } from "./performance/api-rate-metrics-types"
 import type { ApiRateSnapshot } from "./performance/api-rate-tracker"
 import { TaskApiRateMetricsRepository } from "./performance/task-api-rate-metrics-repository"
@@ -271,6 +340,8 @@ type ApiRequestTransactionOptions = {
 	persistedRequestApiIndex?: number
 	/** Preserve the runtime request identity when compaction changes physical history indices. */
 	logicalApiIndex?: number
+	/** Enter compaction after the complete unsent ordinary candidate crosses the final guard. */
+	forceCompaction?: boolean
 }
 
 /** Preserve the existing provider-facing contract for user guidance after the mistake limit. */
@@ -300,6 +371,7 @@ function createInteractionPorts(
 	appendSay: TaskEffectPorts["appendSay"],
 	appendAsk: TaskEffectPorts["appendAsk"],
 	startNewTask: TaskEffectPorts["startNewTask"],
+	startSuccessorTask: NonNullable<TaskEffectPorts["startSuccessorTask"]>,
 ): TaskEffectPorts {
 	return {
 		postView,
@@ -311,6 +383,7 @@ function createInteractionPorts(
 		appendSay,
 		appendAsk,
 		startNewTask,
+		startSuccessorTask,
 	}
 }
 
@@ -384,6 +457,23 @@ export class Task {
 	browserSession: BrowserSession
 	contextManager: ContextManager
 	private readonly modeSwitchCompaction = new ModeSwitchCompaction()
+	private readonly contextCompactionSession: ContextCompactionSession
+	private readonly contextCompactionPresentation = new ContextCompactionPresentation()
+	private readonly contextWindowIndicator: ContextWindowIndicator
+	private contextCompactionRecoveryStorePromise?: Promise<FittingRecoveryStore>
+	private contextCompactionRecoveryAdapter?: ContextCompactionRecoveryAdapter
+	private contextCompactionRecoveryCoordinator?: ContextCompactionRecoveryCoordinator
+	private readonly contextCompactionSnapshots = new Map<
+		string,
+		{
+			history: ClineStorageMessage[]
+			deletedRange?: [number, number]
+			fittingState?: TargetWindowFittingState
+			projection?: TaskState["targetWindowFittingProjection"]
+			checkpointHead?: TaskState["targetWindowFittingCheckpointHead"]
+			targetWindowFittingCommitted: boolean
+		}
+	>()
 	private diffViewProvider: DiffViewProvider
 	public checkpointManager?: ICheckpointManager
 	private initialCheckpointCommitPromise?: Promise<string | undefined>
@@ -402,6 +492,7 @@ export class Task {
 	private readonly identityFactory = createIdentityFactory()
 	private readonly explicitInstructionRegistry = new ExplicitInstructionRegistry()
 	private readonly compactionRequestReplay = new CompactionRequestReplay()
+	private readonly compactionRetryPolicy = new CompactionRetryPolicy(MAX_AUTO_RETRY_ATTEMPTS)
 
 	private terminalExecutionMode: "vscodeTerminal" | "backgroundExec"
 
@@ -446,6 +537,17 @@ export class Task {
 	private apiRateMetricsInitialization?: Promise<void>
 	private pendingBackgroundResultIds?: { subagentIds: string[]; commandIds: string[] }
 	private pendingBackgroundCommandLineCounts?: Array<{ id: string; lineCount: number }>
+	private pendingRecentlyModifiedFilesSnapshot?: RecentlyModifiedFilesSnapshot
+	private readonly preparedOrdinaryProviderInputs = new Map<number, CompactionProviderInput>()
+	private readonly ordinaryContextIndicatorLineageByApiIndex = new Map<number, ContextWindowIndicatorLineage>()
+	private readonly ordinaryContextIndicatorReceivingByApiIndex = new Map<
+		number,
+		{ estimatedContentTokens: number; exactOutputTokens: number }
+	>()
+	private readonly contextCompactionIndicatorReceivingByAttemptId = new Map<
+		string,
+		{ estimatedContentTokens: number; exactOutputTokens: number }
+	>()
 	/** One cancellable automatic-retry wait, exposed to the Webview Retry action. */
 	private pendingAutoRetry?: {
 		settle: (allowed: boolean, publish?: boolean) => void
@@ -663,6 +765,26 @@ export class Task {
 					// so the user can review history and explicitly start a new task from there.
 					await this.controller.clearTask({ clearPanelState: true })
 				},
+				async (effect) => {
+					const committed = await this.taskRuntime.dispatch({
+						type: "TASK_SUCCESSOR_START_COMMITTED",
+						source: effect.handoff.source,
+					})
+					if (!committed.accepted) {
+						throw new Error(`Task successor commit rejected: ${committed.error?.code ?? "invalid_runtime_event"}`)
+					}
+					await Promise.all([
+						this.flushTaskSnapshot(),
+						this.messageStateHandler.flushApiConversationHistory(),
+						this.messageStateHandler.flushUiMessages(),
+					])
+					await this.controller.startSuccessorTask(
+						this.taskId,
+						effect.handoff.context,
+						effect.handoff.taskSettings,
+						effect.handoff.initialUserContent,
+					)
+				},
 			),
 		)
 		this.interactionCoordinator = new InteractionCoordinator(this.taskRuntime)
@@ -723,6 +845,7 @@ export class Task {
 			genTs: () => this.genMessageTs(),
 		})
 		this.taskController = new TaskController(channel)
+		this.contextCompactionSession = this.createContextCompactionSession()
 
 		// Initialize context trackers
 		this.fileContextTracker = new FileContextTracker(controller, this.taskId)
@@ -879,6 +1002,19 @@ export class Task {
 		this.api = profileResolution.error
 			? createUnavailableApiHandler(profileResolution.error)
 			: buildApiHandler(profileResolution.configuration, mode)
+		const currentProfileRecord = findEnabledProfileByName(currentProfile)
+		const { contextWindow: initialContextWindow } = getContextWindowInfo(this.api)
+		const legacyIndicator = createLegacyIndicatorCheckpoint(this.getContextWindowRequestPressures(), initialContextWindow)
+		this.contextWindowIndicator = new ContextWindowIndicator({
+			taskId: this.taskId,
+			durableContextTokens: legacyIndicator.durableContextTokens,
+			environmentTokens: legacyIndicator.environmentTokens,
+			contextWindow: initialContextWindow,
+			profileId: currentProfileRecord?.id,
+			profileName: currentProfileRecord?.name ?? currentProfile,
+			mode,
+		})
+		this.taskState.contextWindowIndicator = this.contextWindowIndicator.getSnapshot()
 
 		// Set ulid on browserSession for telemetry tracking
 		this.browserSession.setUlid(this.ulid)
@@ -1081,6 +1217,10 @@ export class Task {
 					)
 				},
 			},
+			{
+				isCurrent: (passIdentity, authorizationAttemptId) =>
+					this.compactionRequestReplay.isCurrentAuthorizationAttempt(passIdentity, authorizationAttemptId),
+			},
 			this.say.bind(this),
 			this.ask.bind(this),
 			this.saveCheckpointCallback.bind(this),
@@ -1125,6 +1265,271 @@ export class Task {
 			;(this.toolExecutor as any).api = this.api
 		}
 		this.promptCacheHealth.reset("profile_changed")
+	}
+
+	/** Return the authoritative Task-local context-window indicator snapshot. */
+	public getContextWindowIndicator(): ContextWindowIndicatorSnapshot {
+		return this.contextWindowIndicator.getSnapshot()
+	}
+
+	private setContextWindowIndicatorSnapshot(snapshot: ContextWindowIndicatorSnapshot): boolean {
+		if ((this.taskState.contextWindowIndicator?.revision ?? -1) >= snapshot.revision) return false
+		this.taskState.contextWindowIndicator = cloneDeep(snapshot)
+		return true
+	}
+
+	private async publishContextWindowIndicatorSnapshot(
+		snapshot: ContextWindowIndicatorSnapshot,
+		options: { immediate?: boolean; wait?: boolean } = {},
+	): Promise<void> {
+		if (!this.setContextWindowIndicatorSnapshot(snapshot)) return
+		const publication = this.postStateToWebview({ immediate: options.immediate ?? true })
+		if (options.wait === false) {
+			void publication.catch((error) =>
+				Logger.debug(`[Task ${this.taskId}] Failed to publish context-window indicator: ${error}`),
+			)
+			return
+		}
+		await publication
+	}
+
+	private getContextWindowIndicatorProfile(mode: Mode, profileName?: string): { profileId?: string; profileName?: string } {
+		const resolvedName = profileName ?? this.getContextCompactionProfileBinding(mode)
+		const profile = findEnabledProfileByName(resolvedName)
+		return { profileId: profile?.id, profileName: profile?.name ?? resolvedName }
+	}
+
+	private async beginOrdinaryContextWindowIndicator(
+		apiIndex: number,
+		providerAttempt: number,
+		requestScope: RequestApiScope,
+		providerInput: CompactionProviderInput,
+	): Promise<ContextWindowIndicatorLineage> {
+		const lineage: ContextWindowIndicatorLineage = {
+			kind: "ordinary",
+			requestId: `ordinary:${this.taskId}:${apiIndex}`,
+			requestSequence: this.taskState.apiRequestCount,
+			attemptId: `ordinary:${this.taskId}:${apiIndex}:attempt:${providerAttempt}`,
+		}
+		const segments = estimateContextWindowIndicatorSegments({
+			providerInput,
+			durableMessageCount: Math.max(0, providerInput.messages.length - 1),
+		})
+		const profile = this.getContextWindowIndicatorProfile(requestScope.providerInfo.mode)
+		this.ordinaryContextIndicatorLineageByApiIndex.set(apiIndex, lineage)
+		this.ordinaryContextIndicatorReceivingByApiIndex.set(apiIndex, {
+			estimatedContentTokens: 0,
+			exactOutputTokens: 0,
+		})
+		await this.publishContextWindowIndicatorSnapshot(
+			this.contextWindowIndicator.beginSend({
+				lineage,
+				durableContextTokens: segments.durableContextTokens,
+				pendingSendTokens: segments.pendingSendTokens,
+				environmentTokens: segments.environmentTokens,
+				contextWindow: getContextWindowInfo(requestScope.api).contextWindow,
+				...profile,
+				mode: requestScope.providerInfo.mode,
+			}),
+		)
+		return lineage
+	}
+
+	private async receiveOrdinaryContextWindowIndicator(
+		apiIndex: number,
+		expectedLineage: ContextWindowIndicatorLineage,
+		chunk: unknown,
+	): Promise<void> {
+		const lineage = this.ordinaryContextIndicatorLineageByApiIndex.get(apiIndex)
+		const receiving = this.ordinaryContextIndicatorReceivingByApiIndex.get(apiIndex)
+		if (!lineage || !receiving || !isSameContextWindowIndicatorLineage(lineage, expectedLineage)) return
+		const delta = estimateContextWindowReceivingDelta(chunk)
+		if (delta <= 0) return
+		if (typeof chunk === "object" && chunk !== null && (chunk as { type?: string }).type === "usage") {
+			receiving.exactOutputTokens += delta
+		} else {
+			receiving.estimatedContentTokens += delta
+		}
+		await this.publishContextWindowIndicatorSnapshot(
+			this.contextWindowIndicator.receive({
+				lineage,
+				receivingTokens: Math.max(receiving.estimatedContentTokens, receiving.exactOutputTokens),
+			}),
+		)
+	}
+
+	private async commitOrdinaryContextWindowIndicator(
+		apiIndex: number,
+		requestScope: RequestApiScope,
+		contextTokens: number,
+	): Promise<void> {
+		const lineage = this.ordinaryContextIndicatorLineageByApiIndex.get(apiIndex)
+		if (!lineage) return
+		const current = this.contextWindowIndicator.getSnapshot()
+		const profile = this.getContextWindowIndicatorProfile(requestScope.providerInfo.mode)
+		const committed = this.contextWindowIndicator.commit({
+			lineage,
+			durableContextTokens: Math.max(0, contextTokens - current.environmentTokens),
+			environmentTokens: current.environmentTokens,
+			contextWindow: getContextWindowInfo(requestScope.api).contextWindow,
+			...profile,
+			mode: requestScope.providerInfo.mode,
+		})
+		await this.publishContextWindowIndicatorSnapshot(committed)
+		await this.publishContextWindowIndicatorSnapshot(this.contextWindowIndicator.settle({ lineage: committed.lineage }))
+		this.ordinaryContextIndicatorLineageByApiIndex.delete(apiIndex)
+		this.ordinaryContextIndicatorReceivingByApiIndex.delete(apiIndex)
+	}
+
+	private async rollbackOrdinaryContextWindowIndicator(
+		apiIndex: number,
+		expectedLineage?: ContextWindowIndicatorLineage,
+	): Promise<void> {
+		const lineage = this.ordinaryContextIndicatorLineageByApiIndex.get(apiIndex)
+		if (!lineage || (expectedLineage && !isSameContextWindowIndicatorLineage(lineage, expectedLineage))) return
+		const rolledBack = this.contextWindowIndicator.rollback({ lineage })
+		await this.publishContextWindowIndicatorSnapshot(rolledBack)
+		await this.publishContextWindowIndicatorSnapshot(this.contextWindowIndicator.settle({ lineage: rolledBack.lineage }))
+		this.ordinaryContextIndicatorLineageByApiIndex.delete(apiIndex)
+		this.ordinaryContextIndicatorReceivingByApiIndex.delete(apiIndex)
+	}
+
+	private getContextCompactionIndicatorLineage(
+		operationId: string,
+		passIndex: number,
+		attempt: { attemptIndex: number; authorizationAttemptId: string },
+		head: { headCheckpointId: string; chainRevision: number; branchId: string },
+	): ContextWindowIndicatorLineage {
+		return {
+			kind: "compaction_pass",
+			operationId,
+			passIndex,
+			attemptIndex: attempt.attemptIndex,
+			attemptId: attempt.authorizationAttemptId,
+			headCheckpointId: head.headCheckpointId,
+			chainRevision: head.chainRevision,
+			branchId: head.branchId,
+		}
+	}
+
+	private async beginContextCompactionIndicator(
+		input: ContextCompactionSessionInput,
+		event:
+			| Extract<ContextCompactionSessionEvent, { kind: "pass_started" }>
+			| Extract<ContextCompactionSessionEvent, { kind: "pass_retry" }>,
+		attempt: { attemptIndex: number; authorizationAttemptId: string },
+	): Promise<void> {
+		const lineage = this.getContextCompactionIndicatorLineage(
+			input.operationId,
+			event.passIdentity.passIndex,
+			attempt,
+			event.checkpointHead,
+		)
+		const segments = estimateContextWindowIndicatorSegments({
+			providerInput: event.providerInput,
+			durableMessageCount: event.state.cumulativeSummary ? 1 : 0,
+		})
+		const targetProfile = input.transition?.target.profile ?? this.getContextCompactionProfileBinding(input.targetMode)
+		this.contextCompactionIndicatorReceivingByAttemptId.set(attempt.authorizationAttemptId, {
+			estimatedContentTokens: 0,
+			exactOutputTokens: 0,
+		})
+		await this.publishContextWindowIndicatorSnapshot(
+			this.contextWindowIndicator.beginSend({
+				lineage,
+				durableContextTokens: segments.durableContextTokens,
+				pendingSendTokens: segments.pendingSendTokens,
+				environmentTokens: segments.environmentTokens,
+				contextWindow: getContextWindowInfo(input.compactionApi).contextWindow,
+				...this.getContextWindowIndicatorProfile(input.targetMode, targetProfile),
+				mode: input.targetMode,
+			}),
+		)
+	}
+
+	private async receiveContextCompactionIndicator(
+		event: Extract<ContextCompactionSessionEvent, { kind: "pass_receiving" }>,
+	): Promise<void> {
+		const lineage = this.getContextCompactionIndicatorLineage(
+			event.passIdentity.operationId,
+			event.passIdentity.passIndex,
+			event.attempt,
+			event.checkpointHead,
+		)
+		const currentLineage = this.contextWindowIndicator.getSnapshot().lineage
+		if (!isSameContextWindowIndicatorLineage(currentLineage, lineage)) return
+		const receiving = this.contextCompactionIndicatorReceivingByAttemptId.get(event.attempt.authorizationAttemptId)
+		if (!receiving) return
+		const delta = estimateContextWindowReceivingDelta(event.chunk)
+		if (delta <= 0) return
+		if (typeof event.chunk === "object" && event.chunk !== null && (event.chunk as { type?: string }).type === "usage") {
+			receiving.exactOutputTokens += delta
+		} else {
+			receiving.estimatedContentTokens += delta
+		}
+		await this.publishContextWindowIndicatorSnapshot(
+			this.contextWindowIndicator.receive({
+				lineage,
+				receivingTokens: Math.max(receiving.estimatedContentTokens, receiving.exactOutputTokens),
+			}),
+		)
+	}
+
+	private async retryContextCompactionIndicator(
+		input: ContextCompactionSessionInput,
+		event: Extract<ContextCompactionSessionEvent, { kind: "pass_retry" }>,
+	): Promise<void> {
+		const failedLineage = this.getContextCompactionIndicatorLineage(
+			input.operationId,
+			event.passIdentity.passIndex,
+			event.event.failedAttempt,
+			event.checkpointHead,
+		)
+		if (!isSameContextWindowIndicatorLineage(this.contextWindowIndicator.getSnapshot().lineage, failedLineage)) return
+		await this.publishContextWindowIndicatorSnapshot(this.contextWindowIndicator.rollback({ lineage: failedLineage }))
+		this.contextCompactionIndicatorReceivingByAttemptId.delete(event.event.failedAttempt.authorizationAttemptId)
+		await this.beginContextCompactionIndicator(input, event, event.event.nextAttempt)
+	}
+
+	private async commitContextCompactionIndicator(
+		event: Extract<ContextCompactionSessionEvent, { kind: "pass_completed" }>,
+	): Promise<void> {
+		const projection = event.projection.indicator
+		if (!projection) return
+		const currentLineage = this.contextWindowIndicator.getSnapshot().lineage
+		if (
+			currentLineage.kind !== "compaction_pass" ||
+			currentLineage.operationId !== event.passIdentity.operationId ||
+			currentLineage.passIndex !== event.passIdentity.passIndex ||
+			currentLineage.attemptIndex !== event.attempt.attemptIndex ||
+			currentLineage.attemptId !== event.attempt.authorizationAttemptId ||
+			currentLineage.headCheckpointId !== event.previousCheckpointHead.headCheckpointId ||
+			currentLineage.chainRevision !== event.previousCheckpointHead.chainRevision ||
+			currentLineage.branchId !== event.previousCheckpointHead.branchId
+		) {
+			return
+		}
+		const checkpointLineage: ContextWindowIndicatorLineage = {
+			kind: "checkpoint",
+			operationId: event.checkpointHead.operationId,
+			checkpointId: event.checkpointHead.headCheckpointId,
+			chainRevision: event.checkpointHead.chainRevision,
+			branchId: event.checkpointHead.branchId,
+		}
+		const committed = this.contextWindowIndicator.commit({
+			lineage: currentLineage,
+			nextLineage: checkpointLineage,
+			durableContextTokens: projection.durableContextTokens,
+			pendingSendTokens: projection.pendingSendTokens,
+			environmentTokens: projection.environmentTokens,
+			contextWindow: projection.contextWindow,
+			profileId: projection.profileId,
+			profileName: projection.profileName,
+			mode: projection.mode,
+		})
+		await this.publishContextWindowIndicatorSnapshot(committed)
+		await this.publishContextWindowIndicatorSnapshot(this.contextWindowIndicator.settle({ lineage: checkpointLineage }))
+		this.contextCompactionIndicatorReceivingByAttemptId.delete(event.attempt.authorizationAttemptId)
 	}
 
 	/** Return the current Task-local prompt cache health projection. */
@@ -1284,6 +1689,40 @@ export class Task {
 	}
 
 	/**
+	 * Atomically commit one or both task-local Profile bindings.
+	 *
+	 * @param targetProfile Validated Profile name selected by the user.
+	 * @param targetModes Task-local bindings included in the transaction.
+	 */
+	async commitProfileBindings(targetProfile: string, targetModes: readonly Mode[]): Promise<void> {
+		const uniqueModes = [...new Set(targetModes)]
+		const sourceBindings: Partial<Record<Mode, string | undefined>> = {}
+		const targetBindings: Partial<Record<Mode, string>> = {}
+		for (const mode of uniqueModes) {
+			sourceBindings[mode] = mode === "plan" ? this.taskSm.planModeProfile : this.taskSm.actModeProfile
+			targetBindings[mode] = targetProfile
+		}
+		const rebuildActiveHandler = uniqueModes.includes(this.taskSm.mode)
+		this.taskSm.setProfileBindings(targetBindings)
+		try {
+			if (rebuildActiveHandler) this.rebuildApiHandler()
+			await this.stateManager.flushPendingState()
+		} catch (error) {
+			this.taskSm.setProfileBindings(sourceBindings)
+			if (rebuildActiveHandler) {
+				try {
+					this.rebuildApiHandler()
+				} catch (rollbackError) {
+					throw new Error("Failed to restore the source Profile handler after Profile adoption failed.", {
+						cause: rollbackError,
+					})
+				}
+			}
+			throw error
+		}
+	}
+
+	/**
 	 * Commit a validated task-local mode switch and rebuild runtime dependencies.
 	 *
 	 * @param targetMode Validated target mode.
@@ -1315,62 +1754,952 @@ export class Task {
 		await this.stateManager.flushPendingState()
 	}
 
-	/**
-	 * Request source-mode context compaction for one mode-switch operation.
-	 *
-	 * @param operationId Coordinator operation identity.
-	 * @returns Completion status after summary application.
-	 */
-	async compactForMode(operationId: string, chatContent?: ChatContent): Promise<ModeCompactResult> {
-		return this.modeSwitchCompaction.request(
-			operationId,
-			() => this.interactionCoordinator.respondForModeCompaction(MODE_SWITCH_COMPACT_SIGNAL),
+	/** Project the complete pending target request without adopting the target mode or consuming one-shot context. */
+	async projectModeSwitchTargetUsage(targetApi: ApiHandler, targetMode: Mode, chatContent?: ChatContent): Promise<number> {
+		return this.projectContextTransitionTargetUsage(targetApi, targetMode, {
 			chatContent,
+			didSwitchFromPlan: this.taskSm.mode === "plan" && targetMode === "act",
+			missingInteractionError: "Mode switch interaction block is unavailable for target projection.",
+			projectInteraction: async (interaction, lifecycle) =>
+				projectModeSwitchContinuation({
+					kind: interaction.kind,
+					functionId: lifecycle.functionId,
+					dlineTid: lifecycle.dlineTid,
+					sourceMode: this.taskSm.mode,
+					targetMode,
+					chatContent,
+				}),
+		})
+	}
+
+	/** Project the active-mode candidate through a selected Profile without adopting its binding. */
+	async projectProfileSwitchTargetUsage(targetApi: ApiHandler, targetMode: Mode, chatContent?: ChatContent): Promise<number> {
+		return this.projectContextTransitionTargetUsage(targetApi, targetMode, {
+			chatContent,
+			didSwitchFromPlan: false,
+			missingInteractionError: "Profile switch interaction block is unavailable for target projection.",
+		})
+	}
+
+	/** Assemble one non-destructive complete target candidate for an explicit context transition. */
+	private async projectContextTransitionTargetUsage(
+		targetApi: ApiHandler,
+		targetMode: Mode,
+		options: {
+			chatContent?: ChatContent
+			didSwitchFromPlan: boolean
+			missingInteractionError: string
+			projectInteraction?: (
+				interaction: NonNullable<ReturnType<TaskRuntime["getState"]>["interaction"]>,
+				lifecycle: NonNullable<ReturnType<TaskRuntime["getState"]>["turn"]>["blocks"][number],
+			) => ClineContent | Promise<ClineContent>
+		},
+	): Promise<number> {
+		const requestScope = createRequestApiScope(
+			targetApi,
+			targetMode,
+			this.stateManager.getGlobalSettingsKey("customPrompt"),
+			this.stateManager.getGlobalSettingsKey("clineWebToolsEnabled"),
+			this.explicitInstructionRegistry,
 		)
+		try {
+			const runtimeState = this.taskRuntime.getState()
+			const interaction = runtimeState.interaction
+			const turn = runtimeState.turn
+			let continuationContent: ClineContent[] = []
+			if (interaction && turn) {
+				const lifecycle = turn.blocks.find((candidate) => candidate.dlineTid === interaction.interactionId)
+				if (!lifecycle) throw new Error(options.missingInteractionError)
+				continuationContent = collectResumeTurnContent({
+					blocks: turn.blocks,
+					assistantApiIndex: turn.assistantApiIndex,
+					apiHistory: this.messageStateHandler.apiConversationHistory,
+					uiHistory: this.messageStateHandler.clineMessages,
+					pendingContent: this.taskState.userMessageContent,
+					synthesizeMissing: "terminal_only",
+					deferMissingDlineTids: [interaction.interactionId],
+				})
+				if (options.projectInteraction) {
+					continuationContent.push(await options.projectInteraction(interaction, lifecycle))
+				} else if (options.chatContent) {
+					continuationContent.push(
+						...(await buildUserFeedbackContent(
+							options.chatContent.message,
+							options.chatContent.images,
+							options.chatContent.files,
+						)),
+					)
+				}
+			} else if (options.chatContent) {
+				continuationContent = await buildUserFeedbackContent(
+					options.chatContent.message,
+					options.chatContent.images,
+					options.chatContent.files,
+				)
+			}
+
+			const [parsedContent, environmentDetails] = await this.loadContext(continuationContent, false, false, requestScope, {
+				preview: true,
+				mode: targetMode,
+				didSwitchFromPlan: options.didSwitchFromPlan,
+			})
+			if (environmentDetails) parsedContent.push({ type: "text", text: environmentDetails })
+			await this.appendBackgroundResults(parsedContent, { preview: true })
+			const targetHistory: ClineStorageMessage[] = [
+				...cloneDeep(this.messageStateHandler.apiConversationHistory),
+				{ role: "user", content: parsedContent, ts: Date.now() },
+			]
+			const previousApiReqIndex = findLastIndex(
+				this.messageStateHandler.clineMessages,
+				(message) => message.say === "api_req_started",
+			)
+			const providerInput = await this.buildOrdinaryProviderInput(previousApiReqIndex, requestScope, targetHistory, {
+				preview: true,
+			})
+			return estimateContextWindowCandidate(providerInput)
+		} finally {
+			requestScope.explicitInstructions.cancel()
+		}
+	}
+
+	/** Create the sole Task-local execution boundary shared by every compaction trigger. */
+	private createContextCompactionSession(): ContextCompactionSession {
+		return new ContextCompactionSession(
+			{
+				prepareRootCheckpoint: (input, initialState) => this.prepareContextCompactionRootCheckpoint(input, initialState),
+				checkpointAcceptedPass: (input, checkpoint) => this.checkpointAcceptedContextCompactionPass(input, checkpoint),
+				getPassInputCeiling: (input) => {
+					const { contextWindow } = getContextWindowInfo(input.compactionApi)
+					return resolveCompactTriggerPolicy(
+						contextWindow,
+						computeSummarizeBudget(),
+						this.getAutoCondenseTriggerOptions(),
+					).passInputCeilingTokens
+				},
+				estimatePassInput: async (input, passHistory) => {
+					const request = await this.buildContextCompactionPassRequest(input, passHistory)
+					try {
+						return estimateContextWindowCandidate(request.providerInput)
+					} finally {
+						request.explicitInstructions.cancel()
+					}
+				},
+				buildPassRequest: (input, state) =>
+					this.buildContextCompactionPassRequest(input, buildCompactionPassHistory(state)),
+				stageAcceptedPass: async (_input, state, checkpointHead, projection) => {
+					this.taskState.targetWindowFittingState = cloneDeep(state)
+					this.taskState.targetWindowFittingCheckpointHead = cloneDeep(checkpointHead)
+					this.taskState.targetWindowFittingProjection = {
+						projectedUsageTokens: projection.projectedUsageTokens,
+						targetContextWindow: projection.targetContextWindow,
+						coveredTurnCount: state.coveredTurnCount,
+						totalTurnCount: state.turns.length,
+					}
+				},
+				commit: (input, state) => this.commitContextCompaction(input, state),
+				rollback: (input, state, reason) => this.rollbackContextCompaction(input, state, reason),
+				publish: (input, event) => this.publishContextCompactionEvent(input, event),
+				waitForRetry: (_input, retryAttempt, signal) => this.waitForContextCompactionRetry(retryAttempt, signal),
+				recordUsage: (usage) => this.apiRateMetricsService.recordExactUsage(usage),
+			},
+			{ maxRetryAttempts: MAX_AUTO_RETRY_ATTEMPTS },
+		)
+	}
+
+	/** Resolve the Task-local content-addressed recovery store without sharing live handlers. */
+	private getContextCompactionRecoveryStore(): Promise<FittingRecoveryStore> {
+		this.contextCompactionRecoveryStorePromise ??= ensureTaskDirectoryExists(this.taskId).then(
+			(taskDirectory) => new FittingRecoveryStore(path.join(taskDirectory, CONTEXT_COMPACTION_RECOVERY_DIRECTORY)),
+		)
+		return this.contextCompactionRecoveryStorePromise
+	}
+
+	private getContextCompactionRecoveryCoordinator(): ContextCompactionRecoveryCoordinator {
+		this.contextCompactionRecoveryCoordinator ??= new ContextCompactionRecoveryCoordinator({
+			store: () => this.getContextCompactionRecoveryStore(),
+			adapter: () => this.getContextCompactionRecoveryAdapter(),
+			session: () => this.contextCompactionSession,
+			onRestorePrepared: (operationId) => this.contextCompactionPresentation.clear(operationId),
+			onRecoveryFailure: (operationId, error) => {
+				this.contextCompactionPresentation.clear(operationId)
+				Logger.warn(
+					`[Task ${this.taskId}] Restored C0 after interrupted transition adoption: ${
+						error instanceof Error ? error.message : String(error)
+					}`,
+				)
+			},
+		})
+		return this.contextCompactionRecoveryCoordinator
+	}
+
+	private getContextCompactionRecoveryAdapter(): ContextCompactionRecoveryAdapter {
+		this.contextCompactionRecoveryAdapter ??= new ContextCompactionRecoveryAdapter({
+			overwriteCanonicalHistory: (history) => this.messageStateHandler.overwriteApiConversationHistory(cloneDeep(history)),
+			setDeletedRange: (range) => {
+				this.taskState.conversationHistoryDeletedRange = range ? [...range] : undefined
+			},
+			restoreRuntime: async (snapshot) => {
+				this.taskRuntime.restore(hydrateSnapshot(snapshot))
+				this.syncRetainedMachines()
+				await this.writeTaskSnapshot(snapshot)
+			},
+			setOrdinaryInput: (content) => {
+				this.taskState.userMessageContent = cloneDeep(content)
+				this.taskState.userMessageContentReady = false
+			},
+			setManualState: (state) => {
+				this.taskState.pendingManualCompactionContinuation = cloneDeep(state.pendingManualCompactionContinuation)
+				this.taskState.pendingManualCompactionRegeneration = cloneDeep(state.pendingManualCompactionRegeneration)
+				this.taskState.deferredCurrentTurn = cloneDeep(state.deferredCurrentTurn)
+			},
+			setOneShotState: (state) => {
+				this.fileContextTracker.restoreRecentlyModifiedFiles(state.recentlyModifiedFiles)
+				this.pendingRecentlyModifiedFilesSnapshot = cloneDeep(state.pendingRecentlyModifiedFilesSnapshot)
+				this.pendingBackgroundCommandLineCounts = cloneDeep(state.pendingBackgroundCommandLineCounts)
+				this.pendingSystemPromptRefreshReason = state.pendingSystemPromptRefreshReason as
+					| SystemPromptRefreshReason
+					| undefined
+			},
+			setFittingState: (state, head, committed) => {
+				this.taskState.targetWindowFittingState = cloneDeep(state)
+				this.taskState.targetWindowFittingCheckpointHead = cloneDeep(head)
+				this.taskState.targetWindowFittingProjection = undefined
+				this.taskState.compactionFittingRequired = Boolean(state && state.coveredTurnCount < state.turns.length)
+				this.taskState.targetWindowFittingCommitted = committed
+			},
+			applyIndicator: (indicator, context) => this.applyContextCompactionIndicator(indicator, context),
+			settleIndicator: () => this.settleContextCompactionIndicator(),
+			restoreTransition: (transition, target) => this.restoreContextCompactionTransition(transition, target),
+			markPostCompactionRefresh: () => {
+				this.pendingSystemPromptRefreshReason = "post_compaction"
+			},
+			flush: async () => {
+				await this.messageStateHandler.flushApiConversationHistory()
+				await this.messageStateHandler.updateTaskHistory()
+				await this.stateManager.flushPendingState()
+				await this.postStateToWebview({ immediate: true })
+			},
+		})
+		return this.contextCompactionRecoveryAdapter
+	}
+
+	private async applyContextCompactionIndicator(
+		indicator: ContextCompactionIndicatorCheckpoint,
+		applyContext: ContextCompactionIndicatorApplyContext,
+	): Promise<void> {
+		const profile = this.getContextWindowIndicatorProfile(applyContext.scope.mode, applyContext.scope.profile)
+		const durable =
+			indicator.source === "authoritative"
+				? indicator
+				: {
+						durableContextTokens: indicator.durableContextTokens,
+						pendingSendTokens: 0,
+						environmentTokens: indicator.environmentTokens,
+						contextWindow: applyContext.scope.contextWindow,
+						...profile,
+						mode: applyContext.scope.mode,
+					}
+		const lineage: ContextWindowIndicatorLineage =
+			applyContext.kind === "commit"
+				? {
+						kind: "checkpoint",
+						operationId: applyContext.context.checkpointHead.operationId,
+						checkpointId: applyContext.context.checkpointId,
+						chainRevision: applyContext.context.checkpointHead.chainRevision,
+						branchId: applyContext.context.checkpointHead.branchId,
+					}
+				: {
+						kind: "restore",
+						operationId: applyContext.context.nextHead.operationId,
+						journalId: applyContext.context.journalId,
+						targetCheckpointId: applyContext.context.targetCheckpointId,
+						headCheckpointId: applyContext.context.nextHead.headCheckpointId,
+						chainRevision: applyContext.context.nextHead.chainRevision,
+						branchId: applyContext.context.nextHead.branchId,
+					}
+		const snapshot =
+			applyContext.kind === "commit"
+				? this.contextWindowIndicator.recoverCommit({ lineage, ...durable })
+				: this.contextWindowIndicator.restore({ lineage, ...durable })
+		await this.publishContextWindowIndicatorSnapshot(snapshot)
+	}
+
+	private async settleContextCompactionIndicator(): Promise<void> {
+		const lineage = this.contextWindowIndicator.getSnapshot().lineage
+		await this.publishContextWindowIndicatorSnapshot(this.contextWindowIndicator.settle({ lineage }))
+	}
+
+	private async restoreContextCompactionTransition(
+		transition: ContextCompactionTransitionState | undefined,
+		target: ContextCompactionTransitionRestoreTarget,
+	): Promise<void> {
+		if (!transition || target === "none") return
+		if (target === "target") {
+			if (transition.kind === "profile_switch") {
+				const targetProfile = transition.target.profile
+				const targetModes = transition.targetModes?.length ? transition.targetModes : [transition.target.mode]
+				if (
+					targetProfile &&
+					targetModes.some((mode) => this.getContextCompactionProfileBinding(mode) !== targetProfile)
+				) {
+					await this.commitProfileBindings(targetProfile, targetModes)
+				}
+				return
+			}
+			if (this.taskSm.mode !== transition.target.mode) {
+				await this.commitMode(transition.target.mode, transition.chatContent)
+			}
+			return
+		}
+
+		const sourceBindings =
+			transition.sourceProfiles ??
+			(transition.source.profile ? { [transition.source.mode]: transition.source.profile } : {})
+		this.taskSm.setProfileBindings(sourceBindings)
+		this.taskSm.setMode(transition.source.mode)
+		this.taskState.didRespondToPlanAskBySwitchingMode = false
+		this.pendingSystemPromptRefreshReason = "mode_switch"
+		this.rebuildApiHandler()
+		await this.stateManager.flushPendingState()
+	}
+
+	/** Persist complete C0 before the Session may build or send its first hidden Pass. */
+	private async prepareContextCompactionRootCheckpoint(
+		input: ContextCompactionSessionInput,
+		initialState: TargetWindowFittingState,
+	) {
+		const payload = this.createContextCompactionCheckpointPayload(input, initialState, "root")
+		const operation = await (await this.getContextCompactionRecoveryStore()).createRoot({
+			operationId: input.operationId,
+			branchId: `branch:${input.operationId}:0`,
+			payload,
+		})
+		this.taskState.targetWindowFittingCheckpointHead = cloneDeep(operation.head)
+		return operation.head
+	}
+
+	/** Persist one accepted Pass artifact and CAS head before any in-memory coverage advances. */
+	private async checkpointAcceptedContextCompactionPass(
+		input: ContextCompactionSessionInput,
+		checkpoint: ContextCompactionAcceptedPassCheckpoint,
+	) {
+		const store = await this.getContextCompactionRecoveryStore()
+		const current = await store.loadOperation<ContextCompactionCheckpointPayload>(input.operationId)
+		const projection = await this.reprojectContextCompactionTarget(input, checkpoint.nextState)
+		if (!projection.indicator) {
+			throw new Error("Accepted compaction Pass is missing its authoritative target indicator projection.")
+		}
+		const indicator = createAuthoritativeIndicatorCheckpoint({
+			...this.contextWindowIndicator.getSnapshot(),
+			phase: "stable",
+			durableContextTokens: projection.indicator.durableContextTokens,
+			pendingSendTokens: projection.indicator.pendingSendTokens,
+			receivingTokens: 0,
+			environmentTokens: projection.indicator.environmentTokens,
+			contextWindow: projection.indicator.contextWindow,
+			profileId: projection.indicator.profileId,
+			profileName: projection.indicator.profileName,
+			mode: projection.indicator.mode,
+		})
+		const payload = this.createContextCompactionCheckpointPayload(
+			input,
+			checkpoint.nextState,
+			"pass",
+			current.current.artifact.payload,
+			indicator,
+		)
+		const operation = await store.appendCheckpoint({
+			operationId: input.operationId,
+			expectedHeadCheckpointId: checkpoint.expectedHead.headCheckpointId,
+			expectedChainRevision: checkpoint.expectedHead.chainRevision,
+			passIdentity: checkpoint.passIdentity,
+			attempt: checkpoint.attempt,
+			payload,
+		})
+		return { checkpointHead: operation.head, projection }
+	}
+
+	/** Materialize every recoverable Task field without serializing credentials or a live ApiHandler. */
+	private createContextCompactionCheckpointPayload(
+		input: ContextCompactionSessionInput,
+		fittingState: TargetWindowFittingState,
+		kind: "root" | "pass",
+		previous?: ContextCompactionCheckpointPayload,
+		indicator: ContextCompactionIndicatorCheckpoint = createAuthoritativeIndicatorCheckpoint(
+			this.contextWindowIndicator.getSnapshot(),
+		),
+	): ContextCompactionCheckpointPayload {
+		const sourceMode = input.transition?.source.mode ?? this.taskSm.mode
+		const sourceProfile = input.transition?.source.profile ?? this.getContextCompactionProfileBinding(sourceMode)
+		const targetProfile = input.transition?.target.profile ?? this.getContextCompactionProfileBinding(input.targetMode)
+		const sourceScope = previous?.sourceScope ?? createContextCompactionScopeIdentity(this.api, sourceMode, sourceProfile)
+		const targetScope =
+			previous?.targetScope ?? createContextCompactionScopeIdentity(input.targetApi, input.targetMode, targetProfile)
+		return createContextCompactionCheckpointPayload({
+			kind,
+			taskId: this.taskId,
+			operationId: input.operationId,
+			trigger: input.trigger,
+			canonicalHistory: previous?.canonicalHistory ?? this.messageStateHandler.apiConversationHistory,
+			conversationHistoryDeletedRange:
+				previous?.conversationHistoryDeletedRange ?? this.taskState.conversationHistoryDeletedRange,
+			fittingState,
+			protectedHistory: previous?.protectedHistory ?? input.targetContinuationHistory ?? [],
+			protectedContinuation: previous?.protectedContinuation ?? input.targetContinuationContent ?? [],
+			ordinaryInput: previous?.ordinaryInput ?? input.ordinaryInput ?? this.taskState.userMessageContent,
+			runtimeSnapshot: createSnapshot(this.getRuntimeState()),
+			manualState: {
+				pendingManualCompactionContinuation: cloneDeep(this.taskState.pendingManualCompactionContinuation),
+				pendingManualCompactionRegeneration: cloneDeep(this.taskState.pendingManualCompactionRegeneration),
+				deferredCurrentTurn: cloneDeep(this.taskState.deferredCurrentTurn),
+			},
+			oneShotState: {
+				recentlyModifiedFiles: this.fileContextTracker.peekRecentlyModifiedFiles(),
+				pendingRecentlyModifiedFilesSnapshot: cloneDeep(this.pendingRecentlyModifiedFilesSnapshot),
+				pendingBackgroundCommandLineCounts: cloneDeep(this.pendingBackgroundCommandLineCounts),
+				pendingSystemPromptRefreshReason: this.pendingSystemPromptRefreshReason,
+			},
+			transition: cloneDeep(input.transition ?? previous?.transition),
+			sourceScope,
+			targetScope,
+			indicator,
+		})
+	}
+
+	/** Resolve the effective task-local Profile name without consulting another active Task. */
+	private getContextCompactionProfileBinding(mode: Mode): string | undefined {
+		const configuration = this.stateManager.getApiConfigurationForTask(this.taskId)
+		return mode === "plan"
+			? (this.taskSm.planModeProfile ?? configuration.planModeProfile)
+			: (this.taskSm.actModeProfile ?? configuration.actModeProfile)
+	}
+
+	/** Build one authorized hidden Pass request through the frozen target handler. */
+	private async buildContextCompactionPassRequest(
+		input: ContextCompactionSessionInput,
+		passHistory: readonly ClineStorageMessage[],
+	) {
+		const requestScope = createRequestApiScope(
+			input.compactionApi,
+			input.targetMode,
+			this.stateManager.getGlobalSettingsKey("customPrompt"),
+			this.stateManager.getGlobalSettingsKey("clineWebToolsEnabled"),
+			this.explicitInstructionRegistry,
+		)
+		requestScope.explicitInstructions.register({
+			type: "summarize_task",
+			source: input.trigger,
+			targetTool: ClineDefaultTool.SUMMARIZE_TASK,
+			operationId: input.operationId,
+		})
+		const summaryPrompt = summarizeTask(
+			resolvePromptProfile({
+				modelId: requestScope.providerInfo.model.id,
+				contextWindow: requestScope.providerInfo.model.info.capabilities?.contextWindow,
+			}) === PromptProfile.Standard
+				? this.stateManager.getGlobalSettingsKey("focusChainSettings")
+				: undefined,
+			this.cwd,
+			isMultiRootEnabled(this.stateManager),
+		)
+		const candidateHistory: ClineStorageMessage[] = [
+			...cloneDeep(passHistory),
+			{ role: "user", content: [{ type: "text", text: summaryPrompt }], ts: Date.now() },
+		]
+		const previousApiReqIndex = findLastIndex(
+			this.messageStateHandler.clineMessages,
+			(message) => message.say === "api_req_started",
+		)
+		try {
+			const providerInput = await this.buildProviderInput(previousApiReqIndex, requestScope, {
+				apiConversationHistory: candidateHistory,
+				applyContextManagement: false,
+				preview: true,
+				conversationHistoryDeletedRange: null,
+			})
+			return {
+				providerInput,
+				explicitInstructions: requestScope.explicitInstructions,
+				initialAttemptId: requestScope.explicitInstructions.createConsumePort().identity.attemptId,
+			}
+		} catch (error) {
+			requestScope.explicitInstructions.cancel()
+			throw error
+		}
+	}
+
+	/** Rebuild the complete target candidate with fresh dynamic environment after each accepted Pass. */
+	private async reprojectContextCompactionTarget(
+		input: ContextCompactionSessionInput,
+		state: TargetWindowFittingState,
+	): Promise<ContextCompactionReprojection> {
+		const targetProfile = input.transition?.target.profile ?? this.getContextCompactionProfileBinding(input.targetMode)
+		const requestScope = createRequestApiScope(
+			input.targetApi,
+			input.targetMode,
+			this.stateManager.getGlobalSettingsKey("customPrompt"),
+			this.stateManager.getGlobalSettingsKey("clineWebToolsEnabled"),
+			this.explicitInstructionRegistry,
+		)
+		try {
+			const continuationContent = cloneDeep(input.targetContinuationContent ?? [])
+			const [parsedContent, environmentDetails] = await this.loadContext(
+				continuationContent,
+				input.includeFileDetails === true,
+				false,
+				requestScope,
+				{
+					preview: true,
+					mode: input.targetMode,
+					didSwitchFromPlan: input.didSwitchFromPlan === true,
+				},
+			)
+			if (environmentDetails) parsedContent.push({ type: "text", text: environmentDetails })
+			await this.appendBackgroundResults(parsedContent, { preview: true })
+			const continuation: ClineStorageMessage[] = parsedContent.length
+				? [{ role: "user", content: parsedContent, ts: Date.now() }]
+				: []
+			const targetHistory = buildTargetCandidateHistory(state, [
+				...cloneDeep(input.targetContinuationHistory ?? []),
+				...continuation,
+			])
+			const previousApiReqIndex = findLastIndex(
+				this.messageStateHandler.clineMessages,
+				(message) => message.say === "api_req_started",
+			)
+			const targetInput = await this.buildOrdinaryProviderInput(previousApiReqIndex, requestScope, targetHistory, {
+				preview: true,
+			})
+			const candidateEstimatedTokens = estimateContextWindowCandidate(targetInput)
+			const { contextWindow } = getContextWindowInfo(input.targetApi)
+			const decision = decideTargetWindowFitting({
+				candidateEstimatedTokens,
+				providerContextWindow: contextWindow,
+				maxContextTokens: this.stateManager.getGlobalSettingsKey("autoCondenseMaxContextTokens"),
+				hasMoreTurns: state.coveredTurnCount < state.turns.length,
+			})
+			const segments = estimateContextWindowIndicatorSegments({
+				providerInput: targetInput,
+				durableMessageCount: Math.max(0, targetInput.messages.length - continuation.length),
+			})
+			return {
+				...decision,
+				indicator: {
+					durableContextTokens: segments.durableContextTokens,
+					pendingSendTokens: segments.pendingSendTokens,
+					environmentTokens: segments.environmentTokens,
+					contextWindow,
+					...this.getContextWindowIndicatorProfile(input.targetMode, targetProfile),
+					mode: input.targetMode,
+				},
+			}
+		} finally {
+			requestScope.explicitInstructions.cancel()
+		}
+	}
+
+	/** Journal canonical history before a non-transition completion or transition adoption barrier. */
+	private async commitContextCompaction(input: ContextCompactionSessionInput, _state: TargetWindowFittingState): Promise<void> {
+		const store = await this.getContextCompactionRecoveryStore()
+		const operation = await store.loadOperation<ContextCompactionCheckpointPayload>(input.operationId)
+		await commitCompactionCheckpoint<ContextCompactionCheckpointPayload>({
+			store,
+			operationId: input.operationId,
+			expectedHeadCheckpointId: operation.head.headCheckpointId,
+			expectedChainRevision: operation.head.chainRevision,
+			requiresAdoption: input.trigger === "profile_switch" || input.trigger === "mode_switch",
+			applyCanonical: (payload, context) => this.getContextCompactionRecoveryAdapter().applyCanonical(payload, context),
+		})
+	}
+
+	/** Restore C0 through the durable journal before a failed operation releases its barrier. */
+	private async rollbackContextCompaction(
+		input: ContextCompactionSessionInput,
+		_state: TargetWindowFittingState | undefined,
+		reason: string,
+	): Promise<void> {
+		const store = await this.getContextCompactionRecoveryStore()
+		const operation = await store.loadOperationIfPresent<ContextCompactionCheckpointPayload>(input.operationId)
+		if (operation) {
+			await this.getContextCompactionRecoveryCoordinator().restoreAfterFailure({
+				operationId: input.operationId,
+				target: { kind: "initial" },
+				expectedHeadCheckpointId: operation.head.headCheckpointId,
+				expectedChainRevision: operation.head.chainRevision,
+				completionPhase: "cancelled",
+			})
+		} else {
+			await this.restoreContextCompactionMemoryFallback(input.operationId)
+		}
+		Logger.warn(`[Task ${this.taskId}] Restored C0 after compaction rollback: ${reason}`)
+	}
+
+	private async restoreContextCompactionMemoryFallback(operationId: string): Promise<void> {
+		const snapshot = this.contextCompactionSnapshots.get(operationId)
+		if (!snapshot) return
+		await this.messageStateHandler.overwriteApiConversationHistory(cloneDeep(snapshot.history))
+		this.taskState.conversationHistoryDeletedRange = snapshot.deletedRange
+		this.taskState.targetWindowFittingState = cloneDeep(snapshot.fittingState)
+		this.taskState.targetWindowFittingProjection = cloneDeep(snapshot.projection)
+		this.taskState.targetWindowFittingCheckpointHead = cloneDeep(snapshot.checkpointHead)
+		this.taskState.targetWindowFittingCommitted = snapshot.targetWindowFittingCommitted
+		await this.messageStateHandler.flushApiConversationHistory()
+		await this.messageStateHandler.updateTaskHistory()
+		await this.postStateToWebview({ immediate: true })
+	}
+
+	/** Publish one Session Pass lifecycle through the Task-local per-Pass presentation owner. */
+	private async publishContextCompactionEvent(
+		input: ContextCompactionSessionInput,
+		event: ContextCompactionSessionEvent,
+	): Promise<void> {
+		const isManual = input.trigger === "task_header" || input.trigger === "manual_compact_command"
+		this.taskState.isManualContextCompactionRequest = isManual
+		this.taskState.isInternalContextCompactionRequest = !isManual
+		let snapshot: ContextCompactionPresentationSnapshot | undefined
+		switch (event.kind) {
+			case "pass_started":
+				this.contextCompactionPresentation.startPass(event.passIdentity, event.attempt)
+				await this.beginContextCompactionIndicator(input, event, event.attempt)
+				break
+			case "pass_receiving":
+				await this.receiveContextCompactionIndicator(event)
+				break
+			case "pass_partial":
+				snapshot = this.contextCompactionPresentation.partial(event.passIdentity, event.attempt, event.content)
+				break
+			case "pass_retry":
+				await this.retryContextCompactionIndicator(input, event)
+				snapshot = this.contextCompactionPresentation.retry(
+					event.passIdentity,
+					event.event.failedAttempt,
+					event.event.nextAttempt,
+					event.event.kind === "pass_retry" ? event.event.retryAttempt : undefined,
+					event.event.kind === "pass_retry" ? event.event.maxRetryAttempts : undefined,
+				)
+				break
+			case "pass_completed":
+				await this.commitContextCompactionIndicator(event)
+				snapshot = this.contextCompactionPresentation.complete(event.passIdentity, event.attempt, event.content)
+				break
+			case "failed":
+				this.contextCompactionIndicatorReceivingByAttemptId.clear()
+				snapshot = this.contextCompactionPresentation.fail(input.operationId)
+				break
+		}
+		if (snapshot) await this.publishContextCompactionSnapshot(snapshot)
+		await this.postStateToWebview()
+	}
+
+	/** Persist one accepted presentation snapshot without allowing another Pass to reuse its row. */
+	private async publishContextCompactionSnapshot(snapshot: ContextCompactionPresentationSnapshot): Promise<void> {
+		const payload = JSON.stringify({
+			tool: "summarizeTask",
+			content: snapshot.content,
+			compactionStatus: snapshot.status,
+			...(snapshot.retryAttempt !== undefined ? { retryAttempt: snapshot.retryAttempt } : {}),
+			...(snapshot.maxRetryAttempts !== undefined ? { maxRetryAttempts: snapshot.maxRetryAttempts } : {}),
+			compactionOperationId: snapshot.passIdentity.operationId,
+			compactionPassIndex: snapshot.passIdentity.passIndex,
+			compactionAttemptIndex: snapshot.attempt.attemptIndex,
+			compactionAttemptId: snapshot.attempt.authorizationAttemptId,
+		} satisfies ClineSayTool)
+		const ts = await this.say(
+			"tool",
+			payload,
+			undefined,
+			undefined,
+			snapshot.status !== "failed" && snapshot.status !== "completed",
+			snapshot.existingTs,
+		)
+		if (snapshot.existingTs === undefined && ts !== undefined) {
+			this.contextCompactionPresentation.bindMessageTs(snapshot.passIdentity, ts)
+		}
+	}
+
+	/** Wait for one Pass retry while respecting the Session-owned cancellation signal. */
+	private waitForContextCompactionRetry(retryAttempt: number, signal: AbortSignal): Promise<void> {
+		return new Promise<void>((resolve, reject) => {
+			const timer = setTimeout(finish, getRetryDelay(retryAttempt))
+			const abort = () => finish(signal.reason ?? new Error("Context compaction cancelled."))
+			function finish(error?: unknown): void {
+				clearTimeout(timer)
+				signal.removeEventListener("abort", abort)
+				if (error) reject(error)
+				else resolve()
+			}
+			if (signal.aborted) abort()
+			else signal.addEventListener("abort", abort, { once: true })
+		})
+	}
+
+	/** Capture the reversible source state before any hidden Pass starts. */
+	private captureContextCompactionSnapshot(operationId: string): void {
+		this.contextCompactionSnapshots.set(operationId, {
+			history: cloneDeep(this.messageStateHandler.apiConversationHistory),
+			deletedRange: this.taskState.conversationHistoryDeletedRange
+				? [...this.taskState.conversationHistoryDeletedRange]
+				: undefined,
+			fittingState: cloneDeep(this.taskState.targetWindowFittingState),
+			projection: cloneDeep(this.taskState.targetWindowFittingProjection),
+			checkpointHead: cloneDeep(this.taskState.targetWindowFittingCheckpointHead),
+			targetWindowFittingCommitted: this.taskState.targetWindowFittingCommitted,
+		})
+	}
+
+	/** Return only the currently active canonical history as the fitting source. */
+	private getContextCompactionSourceHistory(): ClineStorageMessage[] {
+		return this.contextManager.getTruncatedMessages(
+			cloneDeep(this.messageStateHandler.apiConversationHistory),
+			this.taskState.conversationHistoryDeletedRange,
+		)
+	}
+
+	/** Split active canonical history without mutating the assistant/tool tail protected from compaction. */
+	private getOrdinaryContextCompactionBoundary(): {
+		sourceHistory: ClineStorageMessage[]
+		targetContinuationHistory: ClineStorageMessage[]
+	} {
+		const activeHistory = this.getContextCompactionSourceHistory()
+		const logicalTurns = indexLogicalTurns(activeHistory)
+		return {
+			sourceHistory: cloneDeep(activeHistory.slice(0, logicalTurns.protectedStartIndex)),
+			targetContinuationHistory: cloneDeep(logicalTurns.protectedTail),
+		}
+	}
+
+	/** Execute automatic fitting before ordinary admission without exposing a second Pass authority. */
+	private async runOrdinaryContextCompaction(
+		operationId: string,
+		requestScope: RequestApiScope,
+		ordinaryInput: ClineContent[],
+		includeFileDetails: boolean,
+	): Promise<ContextCompactionSessionResult> {
+		if (this.contextCompactionSession.getActiveOperationId()) return "failed"
+		const { sourceHistory, targetContinuationHistory } = this.getOrdinaryContextCompactionBoundary()
+		this.captureContextCompactionSnapshot(operationId)
+		try {
+			return await this.contextCompactionSession.run({
+				operationId,
+				trigger: "auto_compaction",
+				compactionApi: requestScope.api,
+				targetApi: requestScope.api,
+				targetMode: requestScope.providerInfo.mode,
+				sourceHistory,
+				targetContinuationHistory,
+				targetContinuationContent: cloneDeep(ordinaryInput),
+				ordinaryInput: cloneDeep(ordinaryInput),
+				includeFileDetails,
+				signal: this.taskState.operationSignal,
+			})
+		} finally {
+			this.contextCompactionSnapshots.delete(operationId)
+			this.contextCompactionPresentation.clear(operationId)
+			this.taskState.isInternalContextCompactionRequest = false
+			this.taskState.isManualContextCompactionRequest = false
+		}
+	}
+
+	/** Freeze the target continuation without resolving the live interaction. */
+	private async captureContextTransitionContinuation(
+		trigger: "profile_switch" | "mode_switch",
+		targetMode: Mode,
+		chatContent?: ChatContent,
+	): Promise<ClineContent[]> {
+		const runtimeState = this.taskRuntime.getState()
+		const interaction = runtimeState.interaction
+		const turn = runtimeState.turn
+		if (!interaction || !turn) {
+			return chatContent ? buildUserFeedbackContent(chatContent.message, chatContent.images, chatContent.files) : []
+		}
+		const lifecycle = turn.blocks.find((candidate) => candidate.dlineTid === interaction.interactionId)
+		if (!lifecycle) throw new Error("Context transition interaction block is unavailable for compaction.")
+		const continuation = collectResumeTurnContent({
+			blocks: turn.blocks,
+			assistantApiIndex: turn.assistantApiIndex,
+			apiHistory: this.messageStateHandler.apiConversationHistory,
+			uiHistory: this.messageStateHandler.clineMessages,
+			pendingContent: this.taskState.userMessageContent,
+			synthesizeMissing: "terminal_only",
+			deferMissingDlineTids: [interaction.interactionId],
+		})
+		if (trigger === "mode_switch") {
+			continuation.push(
+				await projectModeSwitchContinuation({
+					kind: interaction.kind,
+					functionId: lifecycle.functionId,
+					dlineTid: lifecycle.dlineTid,
+					sourceMode: this.taskSm.mode,
+					targetMode,
+					chatContent,
+				}),
+			)
+		} else if (chatContent) {
+			continuation.push(...(await buildUserFeedbackContent(chatContent.message, chatContent.images, chatContent.files)))
+		}
+		return continuation
+	}
+
+	/** Execute one Profile/Mode compaction without waking a conversational handler. */
+	async compactForTransition(
+		trigger: "profile_switch" | "mode_switch",
+		operationId: string,
+		targetApi: ApiHandler,
+		targetMode: Mode,
+		chatContent?: ChatContent,
+		transition?: ContextCompactionTransitionState,
+	): Promise<ContextCompactionSessionResult> {
+		if (this.contextCompactionSession.getActiveOperationId()) return "failed"
+		this.captureContextCompactionSnapshot(operationId)
+		try {
+			const targetContinuationContent = await this.captureContextTransitionContinuation(trigger, targetMode, chatContent)
+			const result = await this.contextCompactionSession.run({
+				operationId,
+				trigger,
+				compactionApi: targetApi,
+				targetApi,
+				targetMode,
+				sourceHistory: this.getContextCompactionSourceHistory(),
+				targetContinuationContent,
+				didSwitchFromPlan: trigger === "mode_switch" && this.taskSm.mode === "plan" && targetMode === "act",
+				transition,
+				signal: this.taskState.operationSignal,
+			})
+			if (result !== "completed") {
+				this.contextCompactionSnapshots.delete(operationId)
+				this.contextCompactionPresentation.clear(operationId)
+			}
+			return result
+		} catch (error) {
+			await this.rollbackContextCompaction(
+				{
+					operationId,
+					trigger,
+					compactionApi: targetApi,
+					targetApi,
+					targetMode,
+					sourceHistory: [],
+					transition,
+				},
+				undefined,
+				error instanceof Error ? error.message : String(error),
+			)
+			this.contextCompactionSnapshots.delete(operationId)
+			this.contextCompactionPresentation.clear(operationId)
+			return "failed"
+		} finally {
+			this.taskState.isInternalContextCompactionRequest = false
+			this.taskState.isManualContextCompactionRequest = false
+		}
 	}
 
 	/** Request one user-triggered compaction without consuming a causal interaction. */
 	public async compactTask(expectedRevision: number): Promise<{ accepted: boolean; result: string }> {
 		const runtimeState = this.getRuntimeState()
-		if (runtimeState.revision !== expectedRevision) {
-			return { accepted: false, result: "stale_state" }
-		}
+		if (runtimeState.revision !== expectedRevision) return { accepted: false, result: "stale_state" }
 		if (this.taskState.abort || !this.taskState.isInitialized || !runtimeState.interaction) {
 			return { accepted: false, result: "unavailable" }
 		}
-		if (this.modeSwitchCompaction.getOperationId()) {
+		if (this.contextCompactionSession.getActiveOperationId()) {
 			return { accepted: false, result: "already_running" }
 		}
 
 		const operationId = `manual-compact:${this.taskId}:${expectedRevision}`
-		const canWakeInteraction = this.interactionCoordinator.canRespondForModeCompaction()
-		const completion = this.modeSwitchCompaction.request(
+		this.captureContextCompactionSnapshot(operationId)
+		void this.contextCompactionSession
+			.run({
+				operationId,
+				trigger: "task_header",
+				compactionApi: this.api,
+				targetApi: this.api,
+				targetMode: this.taskSm.mode,
+				sourceHistory: this.getContextCompactionSourceHistory(),
+				signal: this.taskState.operationSignal,
+			})
+			.finally(() => {
+				this.contextCompactionSnapshots.delete(operationId)
+				this.contextCompactionPresentation.clear(operationId)
+				this.taskState.isInternalContextCompactionRequest = false
+				this.taskState.isManualContextCompactionRequest = false
+			})
+		return { accepted: true, result: "accepted" }
+	}
+
+	async restoreContextCompactionCheckpoint(
+		operationId: string,
+		checkpointId: string,
+		expectedHeadCheckpointId: string,
+		expectedChainRevision: number,
+	): Promise<ContextCompactionRestoreResult> {
+		return this.getContextCompactionRecoveryCoordinator().restore({
 			operationId,
-			canWakeInteraction
-				? () => this.interactionCoordinator.respondForModeCompaction(MODE_SWITCH_COMPACT_SIGNAL)
-				: () => true,
-		)
-		void completion.then((result) => {
-			if (result === "completed") {
-				this.releaseCompact(operationId)
-			}
+			target: { kind: "checkpoint", checkpointId },
+			expectedHeadCheckpointId,
+			expectedChainRevision,
 		})
-		return { accepted: true, result: canWakeInteraction ? "accepted" : "queued" }
 	}
 
-	/** Release the task loop after target-mode commit. */
-	releaseCompact(operationId: string): void {
-		this.modeSwitchCompaction.release(operationId)
+	async restorePreviousContextCompactionCheckpoint(
+		operationId: string,
+		expectedHeadCheckpointId: string,
+		expectedChainRevision: number,
+	): Promise<ContextCompactionRestoreResult> {
+		return this.getContextCompactionRecoveryCoordinator().restore({
+			operationId,
+			target: { kind: "previous" },
+			expectedHeadCheckpointId,
+			expectedChainRevision,
+		})
 	}
 
-	/** Fail and release a matching mode-switch compaction operation. */
-	failCompact(operationId: string, reason: string): void {
-		this.modeSwitchCompaction.fail(operationId, reason)
+	async restoreInitialContextCompactionCheckpoint(
+		operationId: string,
+		expectedHeadCheckpointId: string,
+		expectedChainRevision: number,
+	): Promise<ContextCompactionRestoreResult> {
+		return this.getContextCompactionRecoveryCoordinator().restore({
+			operationId,
+			target: { kind: "initial" },
+			expectedHeadCheckpointId,
+			expectedChainRevision,
+		})
+	}
+
+	/** Complete the durable adoption journal before releasing the canonical compaction barrier. */
+	async releaseCompact(operationId: string): Promise<void> {
+		await this.getContextCompactionRecoveryCoordinator().completeAdoption(operationId)
+		await this.settleContextCompactionIndicator()
+		this.contextCompactionSession.release(operationId)
+		this.contextCompactionSnapshots.delete(operationId)
+		this.contextCompactionPresentation.clear(operationId)
+	}
+
+	/** Roll back and release a matching transition compaction operation. */
+	async failCompact(operationId: string, reason: string): Promise<void> {
+		await this.contextCompactionSession.fail(operationId, reason)
+		this.contextCompactionSnapshots.delete(operationId)
+		this.contextCompactionPresentation.clear(operationId)
+		this.taskState.isInternalContextCompactionRequest = false
+		this.taskState.isManualContextCompactionRequest = false
+	}
+
+	private getAutoCondenseTriggerOptions(): CompactTriggerOptions {
+		return {
+			triggerPercent: this.stateManager.getGlobalSettingsKey("autoCondenseTriggerPercent"),
+			minReserveTokens: this.stateManager.getGlobalSettingsKey("autoCondenseMinReserveTokens"),
+			maxReserveTokens: this.stateManager.getGlobalSettingsKey("autoCondenseMaxReserveTokens"),
+			maxContextTokens: this.stateManager.getGlobalSettingsKey("autoCondenseMaxContextTokens"),
+		}
 	}
 
 	/** Apply an aggressive history range before a source request that is already near its own limit. */
-	private async prepareModeSwitchCompaction(currentTokens: number, sourceContextWindow: number): Promise<void> {
-		if (sourceContextWindow <= 0 || currentTokens < computeCompactTrigger(sourceContextWindow, computeSummarizeBudget())) {
+	private async prepareModeSwitchCompaction(
+		currentTokens: number,
+		sourceContextWindow: number,
+		triggerOptions: CompactTriggerOptions,
+	): Promise<void> {
+		const triggerTokens = computeCompactTrigger(sourceContextWindow, computeSummarizeBudget(), triggerOptions)
+		if (sourceContextWindow <= 0 || !shouldCompactProjectedUsage(currentTokens, triggerTokens)) {
 			return
 		}
 		const history = this.messageStateHandler.apiConversationHistory
@@ -1452,6 +2781,41 @@ export class Task {
 		}
 	}
 
+	/** Remove obsolete automatic-retry cards after a provider request recovers. */
+	private async clearAutoRetryMessages(): Promise<void> {
+		const retryMessageTimestamps = this.messageStateHandler.clineMessages
+			.filter((message) => message.type === "say" && message.say === "error_retry")
+			.map((message) => message.ts)
+		await this.messageStateHandler.removeMessagesByTs(retryMessageTimestamps)
+	}
+
+	/** Mark the latest automatic-retry card as exhausted before opening manual recovery. */
+	private async markAutoRetryExhausted(errorMessage: string): Promise<void> {
+		const retryMessageIndex = findLastIndex(
+			this.messageStateHandler.clineMessages,
+			(message) => message.type === "say" && message.say === "error_retry",
+		)
+		if (retryMessageIndex === -1) return
+		const retryMessage = this.messageStateHandler.clineMessages[retryMessageIndex]
+		let retryInfo: Record<string, unknown> = {}
+		try {
+			retryInfo = JSON.parse(retryMessage.text || "{}") as Record<string, unknown>
+		} catch {
+			retryInfo = {}
+		}
+		await this.messageStateHandler.updateClineMessage(retryMessageIndex, {
+			text: JSON.stringify({
+				...retryInfo,
+				attempt: MAX_AUTO_RETRY_ATTEMPTS,
+				maxAttempts: MAX_AUTO_RETRY_ATTEMPTS,
+				delaySeconds: 0,
+				failed: true,
+				errorMessage,
+			}),
+		})
+		await this.messageStateHandler.flushMessageUpdate(retryMessageIndex)
+	}
+
 	/** Cancel a delayed retry as part of task cancellation or termination. */
 	private cancelPendingAutoRetry(publish = true): void {
 		this.endAutoRetrySequence(publish)
@@ -1501,6 +2865,150 @@ export class Task {
 				this.endAutoRetrySequence()
 				Logger.error(`[Task ${this.taskId}] Automatic retry dispatch failed:`, error)
 			}
+		})
+	}
+
+	/** Start a canonical compaction replay only after the failed stream has fully released its request lifecycle. */
+	private scheduleCompactionReplay(apiIndex: number): void {
+		void pWaitFor(() => !this.taskState.isStreaming, { interval: 10, timeout: 10_000 })
+			.then(async () => {
+				if (this.controller.task !== this || this.taskState.abort) return
+				const retried = await this.dispatchRuntime({ type: "API_RETRY_SCHEDULED", apiIndex })
+				if (!retried.accepted) {
+					throw new Error(`Compaction replay rejected: ${retried.error?.code ?? "invalid_runtime_event"}`)
+				}
+			})
+			.catch((error) => {
+				Logger.error(`[Task ${this.taskId}] Compaction replay dispatch failed:`, error)
+			})
+	}
+
+	/** Schedule the next attempt owned exclusively by the immutable fitting Pass. */
+	private scheduleFittingPassRetry(
+		delay: number,
+		apiIndex: number,
+		passIdentity: ReturnType<typeof getCompactionPassIdentity>,
+	): void {
+		const taskId = this.taskId
+		const signal = this.taskState.operationSignal
+		void new Promise<void>((resolve, reject) => {
+			if (signal.aborted) {
+				reject(signal.reason)
+				return
+			}
+			const timer = setTimeout(resolve, delay)
+			signal.addEventListener(
+				"abort",
+				() => {
+					clearTimeout(timer)
+					reject(signal.reason)
+				},
+				{ once: true },
+			)
+		})
+			.then(() => pWaitFor(() => !this.taskState.isStreaming, { interval: 10, timeout: 10_000 }))
+			.then(async () => {
+				if (this.controller.task?.taskId !== taskId || this.taskState.abort) return
+				if (!this.compactionRequestReplay.isActivePass(apiIndex, passIdentity)) return
+				const retried = await this.dispatchRuntime({ type: "API_RETRY_SCHEDULED", apiIndex })
+				if (!retried.accepted) {
+					throw new Error(`Fitting Pass retry rejected: ${retried.error?.code ?? "invalid_runtime_event"}`)
+				}
+			})
+			.catch((error) => {
+				if (signal.aborted) return
+				Logger.error(`[Task ${this.taskId}] Fitting Pass retry dispatch failed:`, error)
+			})
+	}
+
+	/** Continue Task-owned recovery after an automatic compaction attempt has been fully discarded. */
+	private async recoverAutomaticCompactionFailure(
+		apiIndex: number,
+		errorMessage: string,
+		requestScope: RequestApiScope,
+	): Promise<void> {
+		const fittingState = this.taskState.targetWindowFittingState
+		if (fittingState) {
+			const passIdentity = getCompactionPassIdentity(fittingState)
+			const retryDecision = this.compactionRetryPolicy.registerFailure(passIdentity)
+			if (retryDecision.action === "retry") {
+				await this.updateContextCompactionStatus("retrying", {
+					error: errorMessage,
+					retryAttempt: retryDecision.retryAttempt,
+					maxRetryAttempts: retryDecision.maxRetryAttempts,
+					clearContent: true,
+				})
+				const delay = getRetryDelay(retryDecision.retryAttempt)
+				this.scheduleFittingPassRetry(delay, apiIndex, passIdentity)
+				requestScope.explicitInstructions.close()
+				return
+			}
+
+			await this.updateContextCompactionStatus("failed", { error: errorMessage })
+			this.compactionRetryPolicy.reset()
+			const retryId = `retry:${this.taskId}:${this.getRuntimeState().revision}`
+			await this.recoverApiFailure({
+				turnId: retryId,
+				interactionId: retryId,
+				apiIndex,
+				presentation: errorMessage,
+			})
+			return
+		}
+
+		const manualRetryTakeover = this.consumeManualRetryTakeover()
+		const retryDecision = getStreamRetryDecision({
+			isSpendLimitError: false,
+			autoRetryAttempts: manualRetryTakeover ? MAX_AUTO_RETRY_ATTEMPTS : this.taskState.autoRetryAttempts,
+		})
+		if (retryDecision.shouldRetry) {
+			this.taskState.autoRetryAttempts++
+			await this.updateContextCompactionStatus("retrying", {
+				error: errorMessage,
+				retryAttempt: this.taskState.autoRetryAttempts,
+				maxRetryAttempts: MAX_AUTO_RETRY_ATTEMPTS,
+				clearContent: true,
+			})
+			const delay = getRetryDelay(this.taskState.autoRetryAttempts)
+			await this.say(
+				"error_retry",
+				JSON.stringify({
+					attempt: this.taskState.autoRetryAttempts,
+					maxAttempts: MAX_AUTO_RETRY_ATTEMPTS,
+					delaySeconds: delay / 1000,
+					errorMessage,
+				}),
+			)
+			const taskId = this.taskId
+			const retryAttempts = this.taskState.autoRetryAttempts
+			this.scheduleAutoRetry(
+				delay,
+				() => this.controller.task?.taskId === taskId,
+				async () => {
+					const activeTask = this.controller.task
+					if (!activeTask) return
+					activeTask.taskState.autoRetryAttempts = retryAttempts
+					const retried = await activeTask.dispatchRuntime({ type: "API_RETRY_SCHEDULED", apiIndex })
+					if (!retried.accepted) {
+						throw new Error(`Automatic compaction retry rejected: ${retried.error?.code ?? "invalid_runtime_event"}`)
+					}
+				},
+			)
+			requestScope.explicitInstructions.close()
+			return
+		}
+
+		await this.updateContextCompactionStatus("failed", { error: errorMessage })
+		if (!manualRetryTakeover && this.taskState.autoRetryAttempts >= MAX_AUTO_RETRY_ATTEMPTS) {
+			await this.markAutoRetryExhausted(errorMessage)
+		}
+		this.endAutoRetrySequence(false)
+		const retryId = `retry:${this.taskId}:${this.getRuntimeState().revision}`
+		await this.recoverApiFailure({
+			turnId: retryId,
+			interactionId: retryId,
+			apiIndex,
+			presentation: errorMessage,
 		})
 	}
 
@@ -1922,6 +3430,7 @@ export class Task {
 			this.syncRetainedMachines(false)
 			await this.executeFinalizedAssistantTurn()
 			if (!context.isCurrent()) return
+			if (this.taskRuntime.getState().phase === TaskPhase.CANCELLING) return
 			this.taskState.userMessageContent.push({ type: "text", text: createResumeContinuationText() })
 			await this.recursivelyMakeClineRequests(this.taskState.userMessageContent)
 		} catch (error) {
@@ -2171,7 +3680,13 @@ export class Task {
 		return this.interactionCoordinator.waitForClaimedContinuation(interactionId)
 	}
 
-	public async startTask(task?: string, images?: string[], files?: string[], context?: string[]): Promise<void> {
+	public async startTask(
+		task?: string,
+		images?: string[],
+		files?: string[],
+		context?: string[],
+		initialUserContent: readonly ClineUserContent[] = [],
+	): Promise<void> {
 		await this.ensureApiRateMetricsInitialized()
 		try {
 			await this.clineIgnoreController.initialize()
@@ -2220,6 +3735,8 @@ export class Task {
 				})
 			}
 		}
+
+		userContent.push(...cloneDeep(initialUserContent))
 
 		// Add TaskStart hook context to the conversation if provided
 		const hooksEnabled = getHooksEnabledSafe(this.stateManager.getGlobalSettingsKey("hooksEnabled"))
@@ -2583,6 +4100,7 @@ export class Task {
 	 */
 	public async prepareFromHistory(_options?: ResumeTaskFromHistoryOptions) {
 		this.taskState.abort = true
+		await this.getContextCompactionRecoveryCoordinator().resumePendingJournals()
 		const interruptedActivityIds = new Set(await this.activityStore.recoverInterruptedActivities())
 		for (const [index, message] of this.messageStateHandler.clineMessages.entries()) {
 			if (
@@ -2785,7 +4303,8 @@ export class Task {
 
 	async terminate() {
 		const cancellationGeneration = this.interactionCoordinator.cancelPending("task_terminated")
-		let cutoffRevision = this.taskRuntime.getState().revision
+		const initialRuntimeState = this.taskRuntime.getState()
+		let cutoffRevision = initialRuntimeState.supersededEffectRevision ?? initialRuntimeState.revision
 		try {
 			this.cancelPendingAutoRetry()
 			this.modeSwitchCompaction.abort()
@@ -3085,14 +4604,28 @@ export class Task {
 	 * Append injectable background results to the next user message.
 	 * @param userContent Mutable user content for the next model request.
 	 */
-	private async appendBackgroundResults(userContent: ClineContent[]): Promise<void> {
+	private async appendBackgroundResults(userContent: ClineContent[], options: { preview?: boolean } = {}): Promise<void> {
 		const result = await buildTaskBackgroundResults(this.toolExecutor, this.commandExecutor)
 		if (!result.text) return
 		userContent.push({ type: "text", text: result.text })
-		this.pendingBackgroundResultIds = {
-			subagentIds: result.subagentIds,
-			commandIds: result.commandIds,
+		if (!options.preview) {
+			this.pendingBackgroundResultIds = {
+				subagentIds: result.subagentIds,
+				commandIds: result.commandIds,
+			}
 		}
+	}
+
+	/** Commit every one-shot dynamic snapshot after an ordinary request reaches the Provider. */
+	private acknowledgeOrdinaryRequestSnapshots(): void {
+		const recentlyModifiedFilesSnapshot = this.pendingRecentlyModifiedFilesSnapshot
+		if (recentlyModifiedFilesSnapshot) {
+			this.fileContextTracker.acknowledgeRecentlyModifiedFiles(recentlyModifiedFilesSnapshot)
+			this.pendingRecentlyModifiedFilesSnapshot = undefined
+		}
+		this.markBackgroundResultsInjected()
+		this.markBackgroundResultsConsumed()
+		this.markBackgroundCommandOutputSent()
 	}
 
 	/**
@@ -3266,14 +4799,15 @@ export class Task {
 	 * @param previousApiReqIndex Index of the previous api_req_started UI message.
 	 * @returns Total request pressure tokens, or undefined when metadata is unavailable.
 	 */
-	private async ensureContextCompactionStatusRow(): Promise<void> {
-		if (!this.taskState.isInternalContextCompactionRequest) return
-		await this.updateContextCompactionStatus("running")
-	}
-
 	private async updateContextCompactionStatus(
 		status: NonNullable<ClineSayTool["compactionStatus"]>,
-		options: { error?: string; retryAttempt?: number; maxRetryAttempts?: number; clearContent?: boolean } = {},
+		options: {
+			error?: string
+			retryAttempt?: number
+			maxRetryAttempts?: number
+			clearContent?: boolean
+			content?: string
+		} = {},
 	): Promise<void> {
 		if (!this.taskState.isInternalContextCompactionRequest && !this.taskState.isManualContextCompactionRequest) return
 		const existingTs = this.taskState.contextCompactionMessageTs
@@ -3288,6 +4822,9 @@ export class Task {
 			} catch {
 				content = ""
 			}
+		}
+		if (options.content !== undefined) {
+			content = options.content
 		}
 		const payload = JSON.stringify({
 			tool: "summarizeTask",
@@ -3306,6 +4843,43 @@ export class Task {
 			existingTs,
 		)
 		if (ts !== undefined) this.taskState.contextCompactionMessageTs = ts
+	}
+
+	/** Remove failed manual compaction output while preserving its durable request for Retry. */
+	private async discardFailedManualCompactionAttempt(apiIndex: number): Promise<void> {
+		this.presentationScheduler.reset()
+		const clineMessages = this.messageStateHandler.clineMessages
+		const apiRequestMessageIndex = findLastIndex(clineMessages, (message) => message.say === "api_req_started")
+		const compactionMessageTs = this.taskState.contextCompactionMessageTs
+		const removableMessageTs =
+			apiRequestMessageIndex < 0
+				? []
+				: clineMessages
+						.slice(apiRequestMessageIndex + 1)
+						.filter((message) => message.ts !== compactionMessageTs)
+						.map((message) => message.ts)
+		await this.messageStateHandler.removeMessagesByTs(removableMessageTs, { updateTaskHistory: false })
+
+		const historyIndex = this.compactionRequestReplay.getHistoryIndex(apiIndex) ?? apiIndex
+		const apiHistory = this.messageStateHandler.apiConversationHistory
+		if (apiHistory[historyIndex]?.role !== "user") {
+			throw new Error(`Manual compaction retry request is missing at apiIndex=${apiIndex}, historyIndex=${historyIndex}`)
+		}
+		if (apiHistory.length > historyIndex + 1) {
+			await this.messageStateHandler.overwriteApiConversationHistory(apiHistory.slice(0, historyIndex + 1))
+			await this.messageStateHandler.flushApiConversationHistory()
+		}
+		this.taskState.currentStreamingContentIndex = 0
+		this.taskState.assistantMessageContent = []
+		this.taskState.userMessageContent = []
+		this.taskState.userMessageContentReady = false
+		this.pendingReasoningText = undefined
+		this.taskState.reasoningTs = undefined
+		this.taskState.parseBlockTsByKey.clear()
+		this.taskState.parseToolIdentityByKey.clear()
+		this.taskState.lastRenderedPartialByTs.clear()
+		this.taskState.partialToolLifecycleByTs.clear()
+		this.streamHandler.reset()
 	}
 
 	/** Remove every provider-produced artifact from a failed automatic compaction attempt. */
@@ -3327,8 +4901,9 @@ export class Task {
 		await this.messageStateHandler.removeMessagesByTs([...removableMessageTs], { updateTaskHistory: false })
 
 		const historyIndex = this.compactionRequestReplay.getHistoryIndex(apiIndex)
-		if (historyIndex === undefined) {
-			throw new Error(`Compaction retry history boundary is missing at apiIndex=${apiIndex}`)
+		const initialConsecutiveMistakeCount = this.compactionRequestReplay.getInitialConsecutiveMistakeCount(apiIndex)
+		if (historyIndex === undefined || initialConsecutiveMistakeCount === undefined) {
+			throw new Error(`Compaction retry baseline is missing at apiIndex=${apiIndex}`)
 		}
 		const apiHistory = this.messageStateHandler.apiConversationHistory
 		if (apiHistory[historyIndex]?.role !== "user") {
@@ -3340,6 +4915,8 @@ export class Task {
 		}
 
 		this.taskState.currentStreamingContentIndex = 0
+		this.taskState.consecutiveMistakeCount = initialConsecutiveMistakeCount
+		this.taskState.currentlySummarizing = false
 		this.taskState.assistantMessageContent = []
 		this.taskState.userMessageContent = []
 		this.taskState.userMessageContentReady = false
@@ -3350,18 +4927,6 @@ export class Task {
 		this.taskState.lastRenderedPartialByTs.clear()
 		this.taskState.partialToolLifecycleByTs.clear()
 		this.streamHandler.reset()
-	}
-
-	private async awaitManualCompactionRecovery(): Promise<void> {
-		const interactionId = `compaction-failed:${this.taskId}:${this.getRuntimeState().revision}`
-		const outcome = await this.interactionCoordinator.open({
-			turnId: interactionId,
-			interactionId,
-			kind: "followup",
-			presentation: "Conversation compaction failed. Send another message to continue without the incomplete summary.",
-		})
-		const continuation = await buildUserFeedbackContent(outcome.draft?.text, outcome.draft?.images, outcome.draft?.files)
-		await this.recursivelyMakeClineRequests(continuation)
 	}
 
 	private parsePreviousTokens(previousApiReqIndex: number): number | undefined {
@@ -3388,19 +4953,20 @@ export class Task {
 	 * @param userContent Pending tool result content for the next request.
 	 * @returns True when a current turn was cached and removed from API history.
 	 */
-	private async deferCurrentTurn(userContent: ClineContent[]): Promise<boolean> {
+	private async deferCurrentTurn(userContent: ClineContent[], includeUserText = true): Promise<boolean> {
 		const apiHistory = this.messageStateHandler.apiConversationHistory
 		const assistantMessage = apiHistory[apiHistory.length - 1]
-		if (!assistantMessage || assistantMessage.role !== "assistant") {
-			return false
-		}
+		const hasAssistantMessage = assistantMessage?.role === "assistant"
 
 		this.taskState.deferredCurrentTurn = {
-			assistantMessage: cloneDeep(assistantMessage),
+			...(hasAssistantMessage ? { assistantMessage: cloneDeep(assistantMessage) } : {}),
 			userContent: cloneDeep(userContent),
+			compactionContent: includeUserText ? getCompactionUserText(userContent) : [],
 		}
 
-		await this.messageStateHandler.overwriteApiConversationHistory(apiHistory.slice(0, -1))
+		if (hasAssistantMessage) {
+			await this.messageStateHandler.overwriteApiConversationHistory(apiHistory.slice(0, -1))
+		}
 		return true
 	}
 
@@ -3426,7 +4992,9 @@ export class Task {
 			})
 		}
 
-		await this.messageStateHandler.addToApiConversationHistory(deferredTurn.assistantMessage)
+		if (deferredTurn.assistantMessage) {
+			await this.messageStateHandler.addToApiConversationHistory(deferredTurn.assistantMessage)
+		}
 		return deferredTurn.userContent
 	}
 
@@ -3740,6 +5308,116 @@ export class Task {
 		return promptContext
 	}
 
+	/** Build one complete provider-neutral request input from an explicit conversation snapshot. */
+	private async buildProviderInput(
+		previousApiReqIndex: number,
+		requestScope: RequestApiScope,
+		options: {
+			apiConversationHistory?: ClineStorageMessage[]
+			applyContextManagement?: boolean
+			preview?: boolean
+			conversationHistoryDeletedRange?: [number, number] | null
+		} = {},
+	): Promise<CompactionProviderInput> {
+		const { api, providerInfo } = requestScope
+		const apiConversationHistory = options.apiConversationHistory ?? this.messageStateHandler.apiConversationHistory
+		const applyContextManagement = options.applyContextManagement !== false
+		const promptContext = await this.buildPromptContext(
+			providerInfo,
+			requestScope.webToolsEnabled,
+			requestScope.webSearchRoutingPlan,
+		)
+		const refreshReason = options.preview ? undefined : this.pendingSystemPromptRefreshReason
+		let frozenPrompt: FrozenSystemPromptCache
+		if (refreshReason) {
+			try {
+				frozenPrompt = await this.systemPromptCacheService.refresh({ promptContext, reason: refreshReason })
+			} catch (error) {
+				Logger.warn(`[Task ${this.taskId}] Failed to refresh frozen system prompt after ${refreshReason}:`, error)
+				frozenPrompt = await this.systemPromptCacheService.getOrCreate({ promptContext })
+			} finally {
+				if (!options.preview) this.pendingSystemPromptRefreshReason = undefined
+			}
+		} else {
+			frozenPrompt = await this.systemPromptCacheService.getOrCreate({ promptContext })
+		}
+
+		const systemPrompt = frozenPrompt.text
+		const toolPromptGenerator = new ToolPromptGenerator()
+		const selectedTools = toolPromptGenerator.generateToolsForRequest(
+			promptContext.promptProfile,
+			promptContext,
+			this.systemPromptCacheService.getLastTools(),
+		)
+		const tools = selectedTools ? [...selectedTools] : undefined
+		let managedMessages: ClineStorageMessage[]
+		if (applyContextManagement) {
+			const contextManagementMetadata = await this.contextManager.getNewContextMessagesAndMetadata(
+				apiConversationHistory,
+				this.messageStateHandler.clineMessages,
+				api,
+				this.taskState.conversationHistoryDeletedRange,
+				previousApiReqIndex,
+				await ensureTaskDirectoryExists(this.taskId),
+				this.modeSwitchCompaction.shouldForce() || this.stateManager.getGlobalSettingsKey("useAutoCondense"),
+				this.getAutoCondenseTriggerOptions(),
+			)
+			if (contextManagementMetadata.updatedConversationHistoryDeletedRange) {
+				this.taskState.conversationHistoryDeletedRange = contextManagementMetadata.conversationHistoryDeletedRange
+				await this.messageStateHandler.updateTaskHistory()
+			}
+			managedMessages = contextManagementMetadata.truncatedConversationHistory
+		} else {
+			const deletedRange =
+				options.conversationHistoryDeletedRange === undefined
+					? this.taskState.conversationHistoryDeletedRange
+					: options.conversationHistoryDeletedRange
+			managedMessages =
+				deletedRange === null
+					? cloneDeep(apiConversationHistory)
+					: this.contextManager.getTruncatedMessages(cloneDeep(apiConversationHistory), deletedRange)
+		}
+
+		let messages = ensureApiMessages(managedMessages, apiConversationHistory)
+		const serverTools = requestScope.webSearchRoutingPlan.serverTools
+		let providerOutputCap: number | undefined
+		if (hasCompactionWindowBudgetMarker(messages)) {
+			const { contextWindow } = getContextWindowInfo(api)
+			const resolvedBudget = resolveCompactionWindowBudget({
+				contextWindow,
+				maxOutputTokens: providerInfo.model.info.capabilities?.maxTokens,
+				systemPrompt,
+				messages,
+				tools,
+				serverTools,
+			})
+			messages = resolvedBudget.messages
+			providerOutputCap = resolvedBudget.budget.providerOutputCap
+		}
+		return { systemPrompt, messages, tools, serverTools, providerOutputCap }
+	}
+
+	/** Build the exact ordinary candidate used by the final admission projection. */
+	private buildOrdinaryProviderInput(
+		previousApiReqIndex: number,
+		requestScope: RequestApiScope,
+		apiConversationHistory: ClineStorageMessage[],
+		options: { preview?: boolean } = {},
+	): Promise<CompactionProviderInput> {
+		return this.buildProviderInput(previousApiReqIndex, requestScope, {
+			apiConversationHistory,
+			applyContextManagement: false,
+			preview: options.preview,
+		})
+	}
+
+	/** Take a prepared ordinary candidate exactly once; retries may then rebuild from durable history. */
+	private takePreparedOrdinaryProviderInput(apiIndex: number): CompactionProviderInput | undefined {
+		const providerInput = this.preparedOrdinaryProviderInputs.get(apiIndex)
+		this.preparedOrdinaryProviderInputs.delete(apiIndex)
+		return providerInput
+	}
+
 	async *attemptApiRequest(
 		previousApiReqIndex: number,
 		requestScope: RequestApiScope,
@@ -3751,87 +5429,34 @@ export class Task {
 		Logger.debug(`[Task ${this.taskId}] attemptApiRequest: start (req #${this.taskState.apiRequestCount})`)
 
 		let providerInput = this.compactionRequestReplay.getProviderInput(apiIndex)
-		if (!providerInput) {
-			const promptContext = await this.buildPromptContext(
-				providerInfo,
-				requestScope.webToolsEnabled,
-				requestScope.webSearchRoutingPlan,
-			)
-
-			Logger.debug(
-				`[Task ${this.taskId}] attemptApiRequest: before systemPrompt +${Math.round(performance.now() - apiReqStart)}ms`,
-			)
-			const refreshReason = this.pendingSystemPromptRefreshReason
-			let frozenPrompt: FrozenSystemPromptCache
-			if (refreshReason) {
-				try {
-					frozenPrompt = await this.systemPromptCacheService.refresh({ promptContext, reason: refreshReason })
-				} catch (error) {
-					Logger.warn(`[Task ${this.taskId}] Failed to refresh frozen system prompt after ${refreshReason}:`, error)
-					frozenPrompt = await this.systemPromptCacheService.getOrCreate({ promptContext })
-				} finally {
-					this.pendingSystemPromptRefreshReason = undefined
-				}
-			} else {
-				frozenPrompt = await this.systemPromptCacheService.getOrCreate({ promptContext })
-			}
-			const systemPrompt = frozenPrompt.text
-			const toolPromptGenerator = new ToolPromptGenerator()
-			const selectedTools = toolPromptGenerator.generateToolsForRequest(
-				promptContext.promptProfile,
-				promptContext,
-				this.systemPromptCacheService.getLastTools(),
-			)
-			const tools = selectedTools ? [...selectedTools] : undefined
-			const contextManagementMetadata = await this.contextManager.getNewContextMessagesAndMetadata(
-				this.messageStateHandler.apiConversationHistory,
-				this.messageStateHandler.clineMessages,
-				api,
-				this.taskState.conversationHistoryDeletedRange,
-				previousApiReqIndex,
-				await ensureTaskDirectoryExists(this.taskId),
-				this.modeSwitchCompaction.shouldForce() ||
-					(this.stateManager.getGlobalSettingsKey("useAutoCondense") && isNextGenModelFamily(providerInfo.model.id)),
-			)
-
-			if (contextManagementMetadata.updatedConversationHistoryDeletedRange) {
-				this.taskState.conversationHistoryDeletedRange = contextManagementMetadata.conversationHistoryDeletedRange
-				await this.messageStateHandler.updateTaskHistory()
-			}
-
-			Logger.debug(
-				`[Task ${this.taskId}] attemptApiRequest: after contextMgmt +${Math.round(performance.now() - apiReqStart)}ms`,
-			)
-			let apiConversationMessages = ensureApiMessages(
-				contextManagementMetadata.truncatedConversationHistory,
-				this.messageStateHandler.apiConversationHistory,
-			)
-			const serverTools = requestScope.webSearchRoutingPlan.serverTools
-
-			if (hasCompactionWindowBudgetMarker(apiConversationMessages)) {
-				const { contextWindow } = getContextWindowInfo(api)
-				const resolvedBudget = resolveCompactionWindowBudget({
-					contextWindow,
-					maxOutputTokens: providerInfo.model.info.capabilities?.maxTokens,
-					systemPrompt,
-					messages: apiConversationMessages,
-					tools,
-					serverTools,
-				})
-				apiConversationMessages = resolvedBudget.messages
-			}
-
-			const candidateInput = { systemPrompt, messages: apiConversationMessages, tools, serverTools }
-			providerInput = this.taskState.isInternalContextCompactionRequest
-				? this.compactionRequestReplay.captureProviderInput(apiIndex, candidateInput)
-				: candidateInput
-		} else {
+		if (providerInput) {
 			Logger.debug(`[Task ${this.taskId}] Reusing canonical compaction provider input for apiIndex=${apiIndex}`)
+		} else {
+			providerInput =
+				this.takePreparedOrdinaryProviderInput(apiIndex) ??
+				(await this.buildProviderInput(previousApiReqIndex, requestScope))
+			// Capture the canonical compaction input only while a replay owner is
+			// actually active for this API index. A stale compaction flag from an
+			// earlier turn must not throw here; it just skips caching.
+			const replayOwnsIndex = this.compactionRequestReplay.getHistoryIndex(apiIndex) !== undefined
+			if (
+				replayOwnsIndex &&
+				(this.taskState.isInternalContextCompactionRequest || this.taskState.isManualContextCompactionRequest)
+			) {
+				providerInput = this.compactionRequestReplay.captureProviderInput(apiIndex, providerInput)
+			}
 		}
 
-		const { systemPrompt, messages: apiConversationMessages, tools, serverTools } = providerInput
+		const { systemPrompt, messages: apiConversationMessages, tools, serverTools, providerOutputCap } = providerInput
 		this.toolExecutor.setAllowedNativeToolNames(getAdvertisedNativeToolNames(tools))
 		requestScope.explicitInstructions.beginProviderAttempt(providerAttempt === 0 ? undefined : `attempt-${providerAttempt}`)
+		if (this.taskState.isInternalContextCompactionRequest && this.taskState.targetWindowFittingState) {
+			const authorization = requestScope.explicitInstructions.getPendingToolAuthorization(ClineDefaultTool.SUMMARIZE_TASK)
+			if (!authorization) {
+				throw new Error("Current fitting Pass is missing summarize_task authorization")
+			}
+			this.compactionRequestReplay.beginAttempt(apiIndex, authorization.attemptId)
+		}
 		this.toolExecutor.setExplicitInstructionConsumePort(requestScope.explicitInstructions.createConsumePort())
 		this.toolExecutor.setWebSearchRoutingPlan(requestScope.webSearchRoutingPlan, requestScope.webToolsEnabled)
 		Logger.debug(
@@ -3863,11 +5488,21 @@ export class Task {
 			thinking: thinkingSummary ?? null,
 		})
 
+		const isOrdinaryIndicatorRequest =
+			!this.taskState.isInternalContextCompactionRequest && !this.taskState.isManualContextCompactionRequest
+		const ordinaryIndicatorLineage = isOrdinaryIndicatorRequest
+			? await this.beginOrdinaryContextWindowIndicator(apiIndex, providerAttempt, requestScope, providerInput)
+			: undefined
 		this.apiRateMetricsService.recordRequestStarted()
 		const providerRequestStartedAtMs = performance.now()
 		const stream = recordProviderAdapterOutput(
 			roundContext,
-			api.createMessage(systemPrompt, apiConversationMessages, tools, { serverTools }),
+			api.createMessage(systemPrompt, apiConversationMessages, tools, {
+				serverTools,
+				...(providerOutputCap === undefined
+					? {}
+					: { generation: { purpose: "compaction", maxOutputTokens: providerOutputCap } as const }),
+			}),
 		)
 
 		const iterator = stream[Symbol.asyncIterator]()
@@ -3882,7 +5517,9 @@ export class Task {
 			// reached the provider. Keep Cancel for the live stream, but release
 			// the retry-sequence-owned Retry action.
 			if (!firstChunk.done) {
-				this.endAutoRetrySequence()
+				this.endAutoRetrySequence(false)
+				await this.clearAutoRetryMessages()
+				await this.postStateToWebview()
 			}
 			// A provider stream that ends without yielding any chunk (e.g. a
 			// Responses stream that only emitted codex.rate_limits / metadata /
@@ -3892,20 +5529,46 @@ export class Task {
 			if (firstChunk.done) {
 				throw new Error("API stream ended without producing any content")
 			}
+			if (ordinaryIndicatorLineage) {
+				await this.receiveOrdinaryContextWindowIndicator(apiIndex, ordinaryIndicatorLineage, firstChunk.value)
+			}
 			yield firstChunk.value
-			this.markBackgroundResultsInjected()
-			this.markBackgroundResultsConsumed()
-			this.markBackgroundCommandOutputSent()
+			if (!this.taskState.isInternalContextCompactionRequest && !this.taskState.isManualContextCompactionRequest) {
+				this.acknowledgeOrdinaryRequestSnapshots()
+			}
 			this.taskState.isWaitingForFirstChunk = false
 			Logger.debug(
 				`[Task ${this.taskId}] attemptApiRequest: upstream TTFB ${Math.round(firstChunkAtMs - providerRequestStartedAtMs)}ms`,
 			)
 		} catch (error) {
 			this.taskState.isWaitingForFirstChunk = false
+			if (ordinaryIndicatorLineage) {
+				await this.rollbackOrdinaryContextWindowIndicator(apiIndex, ordinaryIndicatorLineage)
+			}
 			if (this.taskState.abort) {
 				Logger.debug(`[Task ${this.taskId}] API request stopped after task cancellation`)
 				throw new Error("Dline instance aborted")
 			}
+			const openAiMaxOutputReplayDecision = this.taskState.isInternalContextCompactionRequest
+				? this.compactionRequestReplay.prepareOpenAiMaxOutputReplay(apiIndex, error)
+				: "not_applicable"
+			if (this.taskState.isInternalContextCompactionRequest) {
+				await this.discardFailedCompactionAttempt(apiIndex)
+			}
+			if (openAiMaxOutputReplayDecision === "replay") {
+				await this.updateContextCompactionStatus("retrying", {
+					error: error instanceof Error ? error.message : "OpenAI output limit exceeded",
+					retryAttempt: 1,
+					maxRetryAttempts: 1,
+					clearContent: true,
+				})
+				yield* this.attemptApiRequest(previousApiReqIndex, requestScope, apiIndex, providerAttempt + 1)
+				return
+			}
+			if (openAiMaxOutputReplayDecision === "exhausted") {
+				throw error
+			}
+
 			const isContextWindowExceededError = checkContextWindowExceededError(error)
 			const { model, providerId } = providerInfo
 			// Use provider-specific parseError if available, otherwise fall back to generic classification.
@@ -3977,15 +5640,12 @@ export class Task {
 				// Skip auto-retry after explicit user takeover or for non-recoverable account errors.
 				const shouldRetry =
 					!manualRetryTakeover &&
-					!isInsufficientCredits &&
-					!isAuthError &&
-					!isSpendLimitError &&
-					!quotaExceeded &&
-					this.taskState.autoRetryAttempts < MAX_AUTO_RETRY_ATTEMPTS
+					this.taskState.autoRetryAttempts < MAX_AUTO_RETRY_ATTEMPTS &&
+					(this.taskState.isInternalContextCompactionRequest ||
+						(!isInsufficientCredits && !isAuthError && !isSpendLimitError && !quotaExceeded))
 				if (shouldRetry) {
 					// Auto-retry enabled with max 3 attempts: automatically approve the retry
 					this.taskState.autoRetryAttempts++
-					await this.discardFailedCompactionAttempt(apiIndex)
 					await this.updateContextCompactionStatus("retrying", {
 						error: clineError.message,
 						retryAttempt: this.taskState.autoRetryAttempts,
@@ -4045,6 +5705,9 @@ export class Task {
 					await this.updateContextCompactionStatus("failed", {
 						error: clineError.message,
 					})
+					if (!manualRetryTakeover && this.taskState.autoRetryAttempts >= MAX_AUTO_RETRY_ATTEMPTS) {
+						await this.markAutoRetryExhausted(streamingFailedMessage)
+					}
 					this.endAutoRetrySequence(false)
 					// The outer stream boundary owns canonical API recovery. Opening the
 					// retained Task.ask waiter here creates a second, divergent phase state.
@@ -4085,6 +5748,9 @@ export class Task {
 		// (needs to be placed outside of try/catch since it we want caller to handle errors not with api_req_failed as that is reserved for first chunk failures only)
 		// this delegates to another generator or iterable object. In this case, it's saying "yield all remaining values from this iterator". This effectively passes along all subsequent chunks from the original stream.
 		for await (const chunk of { [Symbol.asyncIterator]: () => iterator }) {
+			if (ordinaryIndicatorLineage) {
+				await this.receiveOrdinaryContextWindowIndicator(apiIndex, ordinaryIndicatorLineage, chunk)
+			}
 			yield chunk
 		}
 		const timing = calculateApiRequestTiming({
@@ -4429,7 +6095,12 @@ export class Task {
 			this.markFinalizedToolPresented(tool)
 		}
 
-		if (compactionFitInput && this.taskState.currentlySummarizing && this.taskState.isInternalContextCompactionRequest) {
+		if (
+			compactionFitInput &&
+			this.taskState.currentlySummarizing &&
+			this.taskState.isInternalContextCompactionRequest &&
+			!this.taskState.targetWindowFittingState
+		) {
 			this.taskState.compactionFittingRequired = shouldContinueCompactionFitting(compactionFitInput)
 		}
 
@@ -4445,6 +6116,34 @@ export class Task {
 				const state = this.taskRuntime.getState()
 				if (this.taskState.abort || state.phase === TaskPhase.CANCELLING) return
 				throw new Error(`Turn completion rejected: ${completed.error?.code ?? "invalid_runtime_event"}`)
+			}
+		}
+
+		const postCommitDirectives = toolUses.flatMap((tool) => {
+			const directive = this.toolExecutor.takePostCommitDirective(tool.dline_tid)
+			return directive ? [directive] : []
+		})
+		if (postCommitDirectives.length > 1) {
+			throw new Error("A finalized assistant turn produced multiple post-commit directives")
+		}
+		const postCommitDirective = postCommitDirectives[0]
+		if (postCommitDirective?.type === "start_successor_task") {
+			const approvedSource = {
+				functionId: postCommitDirective.functionId,
+				dlineTid: postCommitDirective.dlineTid,
+			}
+			const feedback = findLatestNewTaskFeedback({
+				apiHistory: this.messageStateHandler.apiConversationHistory,
+				uiHistory: this.messageStateHandler.clineMessages,
+				approvedSource,
+			})
+			const initialUserContent = await buildNewTaskFeedbackContent(feedback)
+			const successor = await this.taskRuntime.dispatchAtAdmission({
+				type: "TASK_SUCCESSOR_REQUESTED",
+				handoff: createNewTaskHandoff(postCommitDirective, this.taskSm, initialUserContent),
+			})
+			if (!successor.accepted) {
+				throw new Error(`Task successor rejected: ${successor.error?.code ?? "invalid_runtime_event"}`)
 			}
 		}
 		this.taskState.userMessageContentReady = true
@@ -4508,6 +6207,240 @@ export class Task {
 		)
 	}
 
+	/** Parse every persisted API request pressure record without inventing zero usage. */
+	private getContextWindowRequestPressures() {
+		return this.messageStateHandler.clineMessages.flatMap((message) => {
+			if (message.say !== "api_req_started") return []
+			const pressure = readContextWindowRequestPressure(message.text)
+			return pressure === undefined ? [] : [pressure]
+		})
+	}
+
+	/** Append one high-pressure warning to the dynamic environment block. */
+	private appendHighContextPressureWarning(userContent: ClineContent[], warning: string): void {
+		if (!warning || userContent.some((block) => block.type === "text" && block.text.includes("# High Context Pressure"))) {
+			return
+		}
+		const environmentBlock = [...userContent]
+			.reverse()
+			.find(
+				(block): block is ClineTextContentBlock => block.type === "text" && block.text.includes("<environment_details>"),
+			)
+		if (!environmentBlock) {
+			userContent.push({ type: "text", text: warning })
+			return
+		}
+		environmentBlock.text = environmentBlock.text.replace("</environment_details>", `\n\n${warning}\n</environment_details>`)
+	}
+
+	private async runTargetWindowFittingPass(params: {
+		providerInput: CompactionProviderInput
+		requestScope: RequestApiScope
+		apiIndex: number
+		includeFileDetails: boolean
+		transaction: ApiRequestTransactionOptions
+	}): Promise<boolean> {
+		const fittingState = this.taskState.targetWindowFittingState
+		if (!fittingState) {
+			throw new Error("Target-window fitting state is unavailable")
+		}
+		const passIdentity = getCompactionPassIdentity(fittingState)
+		const initialAttemptId = params.requestScope.explicitInstructions.createConsumePort().identity.attemptId
+
+		try {
+			const result = await runInternalCompactionPassWithRetry({
+				api: params.requestScope.api,
+				providerInput: params.providerInput,
+				explicitInstructions: params.requestScope.explicitInstructions,
+				passIdentity,
+				retryPolicy: this.compactionRetryPolicy,
+				attemptIdFactory: (attemptIndex) =>
+					attemptIndex === 0
+						? initialAttemptId
+						: `fitting:${passIdentity.operationId}:${passIdentity.passIndex}:attempt:${attemptIndex}`,
+				waitForRetry: async (retryAttempt) => {
+					const signal = this.taskState.operationSignal
+					if (signal.aborted) throw signal.reason
+					await new Promise<void>((resolve, reject) => {
+						const timer = setTimeout(resolve, getRetryDelay(retryAttempt))
+						const onAbort = () => {
+							clearTimeout(timer)
+							reject(signal.reason)
+						}
+						signal.addEventListener("abort", onAbort, { once: true })
+					})
+				},
+				onRetry: async (event) => {
+					const error = event.error instanceof Error ? event.error.message : String(event.error)
+					await this.updateContextCompactionStatus("retrying", {
+						error,
+						retryAttempt: event.kind === "pass_retry" ? event.retryAttempt : 1,
+						maxRetryAttempts: event.kind === "pass_retry" ? event.maxRetryAttempts : 1,
+						clearContent: true,
+					})
+				},
+				onSummaryUpdate: async (context) => {
+					await this.updateContextCompactionStatus("running", { content: context })
+					await this.postStateToWebview()
+				},
+			})
+			const activeState = this.taskState.targetWindowFittingState
+			if (!activeState || !areCompactionPassIdentitiesEqual(getCompactionPassIdentity(activeState), passIdentity)) {
+				throw new Error("Discarded stale hidden compaction Pass result")
+			}
+			this.apiRateMetricsService.recordExactUsage({
+				inputTokens: result.usage.inputTokens,
+				outputTokens: result.usage.outputTokens,
+				cacheWriteTokens: result.usage.cacheWriteTokens,
+				cacheReadTokens: result.usage.cacheReadTokens,
+			})
+			const accepted = acceptCompactionPass(activeState, result.summary)
+			this.taskState.targetWindowFittingState = accepted.state
+			this.taskState.compactionFittingRequired = accepted.hasMoreTurns
+			this.taskState.currentlySummarizing = true
+			await this.updateContextCompactionStatus("completed", { content: result.summary })
+			params.requestScope.explicitInstructions.close()
+			return this.recursivelyMakeClineRequests([], params.includeFileDetails, {
+				...params.transaction,
+				forceCompaction: false,
+				logicalApiIndex: params.apiIndex,
+				reuseRequestAccounting: true,
+			})
+		} catch (error) {
+			params.requestScope.explicitInstructions.cancel()
+			this.compactionRetryPolicy.reset()
+			this.taskState.currentlySummarizing = false
+			this.taskState.compactionFittingRequired = false
+			// Terminal hidden-Pass failure: the approved contract forbids recovering the ordinary continuation,
+			// so the deferred turn and staged fitting state must not survive the ended loop.
+			this.taskState.targetWindowFittingState = undefined
+			this.taskState.deferredCurrentTurn = undefined
+			this.taskState.targetWindowFittingProjection = undefined
+			// The compaction row keeps a failed status without a red error detail; the
+			// terminal failure is presented by the api-request error rendering together
+			// with the exhausted retry count.
+			await this.updateContextCompactionStatus("failed", {
+				clearContent: true,
+			})
+			await this.say(
+				"error_retry",
+				JSON.stringify({
+					attempt: MAX_AUTO_RETRY_ATTEMPTS,
+					maxAttempts: MAX_AUTO_RETRY_ATTEMPTS,
+					delaySeconds: 0,
+					failed: true,
+					errorMessage: error instanceof Error ? error.message : String(error),
+				}),
+			)
+			return true
+		}
+	}
+
+	/** Rebuild and evaluate the next ordinary target candidate after an accepted compaction Pass. */
+	private async evaluateTargetWindowFitting(
+		previousApiReqIndex: number,
+		requestScope: RequestApiScope,
+		includeFileDetails: boolean,
+	) {
+		const fittingState = this.taskState.targetWindowFittingState
+		if (!fittingState) {
+			throw new Error("Target-window fitting state is unavailable")
+		}
+
+		const deferredTurn = this.taskState.deferredCurrentTurn
+		const targetUserContent = cloneDeep(deferredTurn?.userContent ?? [])
+		const [parsedTargetContent, environmentDetails] = await this.loadContext(
+			targetUserContent,
+			includeFileDetails,
+			false,
+			requestScope,
+		)
+		if (environmentDetails) {
+			parsedTargetContent.push({ type: "text", text: environmentDetails })
+		}
+		await this.appendBackgroundResults(parsedTargetContent)
+
+		const protectedContinuation: ClineStorageMessage[] = [
+			...(deferredTurn?.assistantMessage ? [cloneDeep(deferredTurn.assistantMessage)] : []),
+			{ role: "user", content: parsedTargetContent, ts: Date.now() },
+		]
+		const targetHistory = buildTargetCandidateHistory(fittingState, protectedContinuation)
+		const targetInput = await this.buildOrdinaryProviderInput(previousApiReqIndex, requestScope, targetHistory)
+		const candidateEstimatedTokens = estimateContextWindowCandidate(targetInput)
+		const { contextWindow } = getContextWindowInfo(requestScope.api)
+		const decision = decideTargetWindowFitting({
+			candidateEstimatedTokens,
+			providerContextWindow: contextWindow,
+			maxContextTokens: this.stateManager.getGlobalSettingsKey("autoCondenseMaxContextTokens"),
+			hasMoreTurns: fittingState.coveredTurnCount < fittingState.turns.length,
+		})
+		this.taskState.targetWindowFittingProjection = {
+			projectedUsageTokens: decision.projectedUsageTokens,
+			targetContextWindow: decision.targetContextWindow,
+			coveredTurnCount: fittingState.coveredTurnCount,
+			totalTurnCount: fittingState.turns.length,
+		}
+		Logger.debug(`[Task ${this.taskId}] target-window fitting projection`, {
+			coveredTurnCount: fittingState.coveredTurnCount,
+			totalTurnCount: fittingState.turns.length,
+			...decision,
+		})
+		return decision
+	}
+
+	/** Evaluate the complete unsent ordinary candidate and freeze the exact admitted provider input. */
+	private async evaluateFinalContextWindowGuard(
+		userContent: ClineContent[],
+		previousApiReqIndex: number,
+		requestScope: RequestApiScope,
+		apiIndex: number,
+	): Promise<{ projection: ContextWindowProjection; candidateEstimatedTokens: number }> {
+		const buildCandidate = () => {
+			const prospectiveHistory: ClineStorageMessage[] = [
+				...cloneDeep(this.messageStateHandler.apiConversationHistory),
+				{ role: "user", content: cloneDeep(userContent), ts: Date.now() },
+			]
+			return this.buildOrdinaryProviderInput(previousApiReqIndex, requestScope, prospectiveHistory)
+		}
+		const { contextWindow } = getContextWindowInfo(requestScope.api)
+		const triggerTokens = computeCompactTrigger(contextWindow, computeSummarizeBudget(), this.getAutoCondenseTriggerOptions())
+		let candidateInput = await buildCandidate()
+		let candidateEstimatedTokens = estimateContextWindowCandidate(candidateInput)
+		let projection = resolveContextWindowProjection({
+			requestInfos: this.getContextWindowRequestPressures(),
+			candidateEstimatedTokens,
+			contextWindow,
+			triggerTokens,
+		})
+		const warning = getHighContextPressureWarning({
+			contextWindow,
+			lastApiReqTotalTokens: projection.projectedUsageTokens,
+			modelId: requestScope.providerInfo.model.id,
+		})
+		if (warning) {
+			this.appendHighContextPressureWarning(userContent, warning)
+			candidateInput = await buildCandidate()
+			candidateEstimatedTokens = estimateContextWindowCandidate(candidateInput)
+			projection = resolveContextWindowProjection({
+				requestInfos: this.getContextWindowRequestPressures(),
+				candidateEstimatedTokens,
+				contextWindow,
+				triggerTokens,
+			})
+		}
+		if (this.stateManager.getGlobalSettingsKey("useAutoCondense") && !projection.shouldCompact) {
+			this.preparedOrdinaryProviderInputs.set(apiIndex, candidateInput)
+		}
+		Logger.debug(`[Task ${this.taskId}] final context-window projection`, {
+			apiIndex,
+			candidateEstimatedTokens,
+			projectedUsageTokens: projection.projectedUsageTokens,
+			pressureSource: projection.pressureSource,
+			shouldCompact: projection.shouldCompact,
+		})
+		return { projection, candidateEstimatedTokens }
+	}
+
 	private async persistApiRequestUserMessage(
 		userContent: ClineContent[],
 		apiIndex: number,
@@ -4534,9 +6467,10 @@ export class Task {
 		}
 		// Profile changes can occur while request setup awaits workspace/runtime work.
 		// Capture the request boundary first so every adapter and parser below stays consistent.
+		const transitionScope = this.modeSwitchCompaction.getExecutionScope()
 		const requestScope = createRequestApiScope(
-			this.api,
-			this.taskSm.mode,
+			transitionScope?.api ?? this.api,
+			transitionScope?.mode ?? this.taskSm.mode,
 			this.stateManager.getGlobalSettingsKey("customPrompt"),
 			this.stateManager.getGlobalSettingsKey("clineWebToolsEnabled"),
 			this.explicitInstructionRegistry,
@@ -4546,6 +6480,7 @@ export class Task {
 		if (!persistedRequest) {
 			userContent = await this.consumeModeSwitchChatContent(userContent)
 		}
+		const originalUserContent = cloneDeep(userContent)
 
 		// Ensure remote workspace detection completes before streaming begins so
 		// the presentation scheduler uses the correct cadence from the first flush.
@@ -4571,8 +6506,10 @@ export class Task {
 			const replayDeclaration = this.compactionRequestReplay.getDeclaration(apiIndex)
 			if (replayDeclaration) {
 				requestScope.explicitInstructions.register(replayDeclaration)
-				this.taskState.isInternalContextCompactionRequest = true
-				this.taskState.isManualContextCompactionRequest = false
+				const isManualCompaction =
+					replayDeclaration.source === "manual_compact_command" || replayDeclaration.source === "task_header"
+				this.taskState.isManualContextCompactionRequest = isManualCompaction
+				this.taskState.isInternalContextCompactionRequest = !isManualCompaction
 			}
 		}
 
@@ -4693,11 +6630,10 @@ export class Task {
 		const useCompactPrompt = customPrompt === "compact" && isLocalModel(requestScope.providerInfo)
 		let shouldCompact = false
 		const useAutoCondense = this.stateManager.getGlobalSettingsKey("useAutoCondense")
-		const autoCondenseTriggerOptions = {
-			triggerPercent: this.stateManager.getGlobalSettingsKey("autoCondenseTriggerPercent"),
-			maxContextTokens: this.stateManager.getGlobalSettingsKey("autoCondenseMaxContextTokens"),
-		}
-		const forceModeCompact = this.modeSwitchCompaction.shouldForce()
+		const autoCondenseTriggerOptions = this.getAutoCondenseTriggerOptions()
+		const targetWindowFittingCommitted = !persistedRequest && this.taskState.targetWindowFittingCommitted
+		this.taskState.targetWindowFittingCommitted = false
+		const forceFinalGuardCompact = transaction.forceCompaction === true
 		const canCompactBeforeAdmission = !persistedRequest && transaction.beforeApiRequestStarted === undefined
 		const manualCompactionRequested =
 			!persistedRequest && hasManualCompactionIntent(userContent, (block) => this.isTrustedUserFeedbackResult(block))
@@ -4705,108 +6641,72 @@ export class Task {
 		if (!persistedRequest) {
 			this.taskState.manualCompactionCommitted = false
 		}
+		// An ordinary turn that follows a completed manual compaction must not
+		// keep the stale manual flag; it would otherwise make the next request
+		// attempt to capture a replay that has already been cleared.
+		if (
+			!persistedRequest &&
+			!this.taskState.isInternalContextCompactionRequest &&
+			this.taskState.isManualContextCompactionRequest &&
+			!manualCompactionRequested &&
+			!this.taskState.currentlySummarizing &&
+			this.compactionRequestReplay.getHistoryIndex(apiIndex) === undefined
+		) {
+			this.taskState.isManualContextCompactionRequest = false
+		}
 
 		const didCompleteSummarization = !persistedRequest && this.taskState.currentlySummarizing
-		const fittingCompactionRequired = !persistedRequest && this.taskState.compactionFittingRequired
+		const fittingCompactionRequired = false
 		if (didCompleteSummarization || manualCompactionCommitted) {
 			this.promptCacheHealth.recordCompactionResult(true)
 		}
 		if (
 			canCompactBeforeAdmission &&
-			(didCompleteSummarization ||
-				fittingCompactionRequired ||
-				forceModeCompact ||
-				(useAutoCondense && !manualCompactionRequested && !manualCompactionCommitted && isNextGenModelFamily(model.id)))
+			!didCompleteSummarization &&
+			!manualCompactionRequested &&
+			!manualCompactionCommitted &&
+			(useAutoCondense || forceFinalGuardCompact)
 		) {
-			// When we initially trigger context cleanup, we increase the context window size, so we need state `currentlySummarizing`
-			// to track if we've already started the context summarization flow. After summarizing, we increment
-			// conversationHistoryDeletedRange to mask out the summarization-trigger user & assistant response messages
-			if (didCompleteSummarization) {
-				this.taskState.currentlySummarizing = false
-				this.compactionRequestReplay.clear()
-				this.pendingSystemPromptRefreshReason = "post_compaction"
-				shouldCompact = fittingCompactionRequired
-
-				if (this.taskState.conversationHistoryDeletedRange) {
-					const [start, end] = this.taskState.conversationHistoryDeletedRange
-					const apiHistory = this.messageStateHandler.apiConversationHistory
-
-					// we want to increment the deleted range to remove the pre-summarization tool call output, with additional safety check
-					const safeEnd = Math.min(end + 2, apiHistory.length - 1)
-					if (end + 2 <= safeEnd) {
-						this.taskState.conversationHistoryDeletedRange = [start, end + 2]
-						await this.messageStateHandler.updateTaskHistory()
-					}
-				}
-			} else {
-				shouldCompact =
-					fittingCompactionRequired ||
-					forceModeCompact ||
+			shouldCompact =
+				forceFinalGuardCompact ||
+				(!targetWindowFittingCommitted &&
 					this.contextManager.shouldCompactContextWindow(
 						this.messageStateHandler.clineMessages,
 						requestScope.api,
 						previousApiReqIndex,
 						autoCondenseTriggerOptions,
-					)
+					))
 
-				const previousTokens = this.parsePreviousTokens(previousApiReqIndex)
-				const hasCurrentToolResult = hasToolResult(userContent)
-				if (hasCurrentToolResult && !fittingCompactionRequired) {
-					const { contextWindow } = getContextWindowInfo(requestScope.api)
-					const triggerTokens = computeCompactTrigger(
-						contextWindow,
-						computeSummarizeBudget(),
-						autoCondenseTriggerOptions,
-					)
-					const shouldDeferTurn =
-						shouldCompact ||
-						(previousTokens !== undefined &&
-							shouldDeferCurrentTurn({
-								triggerTokens,
-								previousTokens,
-								userContent,
-							}))
-					if (shouldDeferTurn) {
-						shouldCompact = await this.deferCurrentTurn(userContent)
-					}
-				}
-				if (forceModeCompact) {
-					const { contextWindow } = getContextWindowInfo(requestScope.api)
-					await this.prepareModeSwitchCompaction(previousTokens ?? 0, contextWindow)
-				}
-
-				// Edge case: summarize_task tool call completes but user cancels next request before it finishes.
-				// This results in currentlySummarizing being false, and we fail to update the context window token estimate.
-				// Check active message count to avoid summarizing a summary (bad UX but doesn't break logic).
-				if (
-					shouldCompact &&
-					!fittingCompactionRequired &&
-					!forceModeCompact &&
-					this.taskState.conversationHistoryDeletedRange
-				) {
-					const apiHistory = this.messageStateHandler.apiConversationHistory
-					const activeMessageCount = apiHistory.length - this.taskState.conversationHistoryDeletedRange[1] - 1
-
-					// IMPORTANT: We haven't appended the next user message yet, so the last message is an assistant message.
-					// That's why we compare to even numbers (0, 2) rather than odd (1, 3).
-					if (activeMessageCount <= 2) {
-						shouldCompact = false
-					}
-				}
-
-				// Determine whether we can save enough tokens from context rewriting to skip auto-compact
-				if (shouldCompact && !fittingCompactionRequired && !forceModeCompact && !this.taskState.deferredCurrentTurn) {
-					shouldCompact = await this.contextManager.attemptFileReadOptimization(
-						this.messageStateHandler.apiConversationHistory,
-						this.taskState.conversationHistoryDeletedRange,
-						this.messageStateHandler.clineMessages,
-						previousApiReqIndex,
-						await ensureTaskDirectoryExists(this.taskId),
-					)
-				}
+			if (shouldCompact && !forceFinalGuardCompact) {
+				shouldCompact = await this.contextManager.attemptFileReadOptimization(
+					this.messageStateHandler.apiConversationHistory,
+					this.taskState.conversationHistoryDeletedRange,
+					this.messageStateHandler.clineMessages,
+					previousApiReqIndex,
+					await ensureTaskDirectoryExists(this.taskId),
+				)
 			}
 		}
 
+		if (!persistedRequest && shouldCompact && !manualCompactionRequested) {
+			this.preparedOrdinaryProviderInputs.delete(apiIndex)
+			requestScope.explicitInstructions.cancel()
+			const operationId = `auto-compaction:${this.taskId}:${apiIndex}:${this.genMessageTs()}`
+			const result = await this.runOrdinaryContextCompaction(
+				operationId,
+				requestScope,
+				originalUserContent,
+				includeFileDetails,
+			)
+			if (result !== "completed") return true
+			this.promptCacheHealth.recordCompactionResult(true)
+			return this.recursivelyMakeClineRequests(originalUserContent, includeFileDetails, {
+				...transaction,
+				forceCompaction: false,
+				logicalApiIndex: apiIndex,
+				reuseRequestAccounting: true,
+			})
+		}
 		let manualCompactionContinuation: ClineContent[] = []
 		if (didCompleteSummarization) {
 			const pendingContinuation = this.taskState.pendingManualCompactionContinuation
@@ -4835,7 +6735,7 @@ export class Task {
 				return this.recursivelyMakeClineRequests(
 					[...deferredUserContent, ...manualCompactionContinuation],
 					includeFileDetails,
-					transaction,
+					{ ...transaction, forceCompaction: false },
 				)
 			}
 		}
@@ -4862,16 +6762,29 @@ export class Task {
 			environmentDetails = ""
 			clinerulesError = false
 		} else if (shouldCompact) {
-			// Iterative passes include the latest summary while the original tool-result turn remains deferred.
-			parsedUserContent = projectCompactionRequestContent(
-				userContent,
-				this.taskState.deferredCurrentTurn?.userContent,
-				fittingCompactionRequired,
-			)
+			parsedUserContent = this.taskState.targetWindowFittingState
+				? []
+				: projectCompactionRequestContent(
+						userContent,
+						this.taskState.deferredCurrentTurn?.compactionContent,
+						fittingCompactionRequired,
+					)
 			environmentDetails = ""
 			clinerulesError = false
 			this.taskState.lastAutoCompactTriggerIndex = previousApiReqIndex
 		} else {
+			const newTaskContinuation = deriveNewTaskFeedbackContinuation({
+				userContent,
+				assistantContent: this.messageStateHandler.apiConversationHistory.flatMap((message) =>
+					message.role === "assistant" && Array.isArray(message.content)
+						? message.content.filter((block): block is ClineAssistantToolUseBlock => block.type === "tool_use")
+						: [],
+				),
+				persistedRequest: false,
+			})
+			if (newTaskContinuation) {
+				requestScope.explicitInstructions.register(newTaskContinuation)
+			}
 			// When NOT compacting, load full context with mentions parsing and slash commands
 			;[parsedUserContent, environmentDetails, clinerulesError] = await this.loadContext(
 				userContent,
@@ -4879,6 +6792,27 @@ export class Task {
 				useCompactPrompt,
 				requestScope,
 			)
+			if (this.taskState.isManualContextCompactionRequest) {
+				const manualAuthorization = requestScope.explicitInstructions.getPendingToolAuthorization(
+					ClineDefaultTool.SUMMARIZE_TASK,
+				)
+				if (manualAuthorization?.source === "manual_compact_command") {
+					this.compactionRequestReplay.begin(
+						apiIndex,
+						this.messageStateHandler.apiConversationHistory.length,
+						this.taskState.consecutiveMistakeCount,
+						{
+							type: manualAuthorization.type,
+							source: manualAuthorization.source,
+							targetTool: manualAuthorization.targetTool,
+							...(manualAuthorization.operationId === undefined
+								? {}
+								: { operationId: manualAuthorization.operationId }),
+							...(manualAuthorization.metadata === undefined ? {} : { metadata: manualAuthorization.metadata }),
+						},
+					)
+				}
+			}
 		}
 		if (!persistedRequest && shouldCompact) {
 			this.taskState.isManualContextCompactionRequest = false
@@ -4908,46 +6842,46 @@ export class Task {
 			await this.appendBackgroundResults(userContent)
 		}
 
-		if (shouldCompact) {
-			const promptProfile = resolvePromptProfile({
-				modelId: requestScope.providerInfo.model.id,
-				contextWindow: requestScope.providerInfo.model.info.capabilities?.contextWindow,
-			})
-			const operationId = this.modeSwitchCompaction.getOperationId()
-			const source = operationId?.startsWith("manual-compact:")
-				? "task_header"
-				: operationId
-					? "mode_switch"
-					: "auto_compaction"
-			const compactionDeclaration = {
-				type: "summarize_task",
-				source,
-				targetTool: ClineDefaultTool.SUMMARIZE_TASK,
-				...(operationId === undefined ? {} : { operationId }),
-			} as const
-			const isManualCompaction = source === "task_header"
-			this.taskState.isManualContextCompactionRequest = isManualCompaction
-			this.taskState.isInternalContextCompactionRequest = !isManualCompaction
-			requestScope.explicitInstructions.register(compactionDeclaration)
-			if (source === "auto_compaction" || source === "mode_switch") {
-				this.compactionRequestReplay.begin(
-					apiIndex,
-					this.messageStateHandler.apiConversationHistory.length,
-					compactionDeclaration,
-				)
-			}
-			const summaryPrompt = summarizeTask(
-				promptProfile === PromptProfile.Standard
-					? this.stateManager.getGlobalSettingsKey("focusChainSettings")
-					: undefined,
-				this.cwd,
-				isMultiRootEnabled(this.stateManager),
+		let finalProjection: ContextWindowProjection | undefined
+		let candidateEstimatedTokens: number | undefined
+		if (!persistedRequest && !shouldCompact) {
+			const finalGuard = await this.evaluateFinalContextWindowGuard(
+				userContent,
+				previousApiReqIndex,
+				requestScope,
+				apiIndex,
 			)
-			userContent.push({ type: "text", text: summaryPrompt })
-			await this.ensureContextCompactionStatusRow()
+			finalProjection = finalGuard.projection
+			candidateEstimatedTokens = finalGuard.candidateEstimatedTokens
+			if (
+				useAutoCondense &&
+				finalProjection.shouldCompact &&
+				!targetWindowFittingCommitted &&
+				!manualCompactionRequested &&
+				!this.taskState.isManualContextCompactionRequest &&
+				!manualCompactionCommitted
+			) {
+				this.preparedOrdinaryProviderInputs.delete(apiIndex)
+				requestScope.explicitInstructions.cancel()
+				const operationId = `auto-compaction:${this.taskId}:${apiIndex}:${this.genMessageTs()}`
+				const result = await this.runOrdinaryContextCompaction(
+					operationId,
+					requestScope,
+					originalUserContent,
+					includeFileDetails,
+				)
+				if (result !== "completed") return true
+				this.promptCacheHealth.recordCompactionResult(true)
+				return this.recursivelyMakeClineRequests(originalUserContent, includeFileDetails, {
+					...transaction,
+					forceCompaction: false,
+					logicalApiIndex: apiIndex,
+					reuseRequestAccounting: true,
+				})
+			}
 		}
 
-		userContent = ensureUserContent(userContent, shouldCompact ? "auto compact request" : "task user turn")
+		userContent = ensureUserContent(userContent, "task user turn")
 
 		// getting verbose details is an expensive operation, it uses globby to top-down build file structure of project which for large projects can take a few seconds
 		// for the best UX we show a placeholder api_req_started message with a loading spinner as this happens
@@ -4987,6 +6921,8 @@ export class Task {
 		await this.messageStateHandler.updateClineMessage(lastApiReqIndex, {
 			text: JSON.stringify({
 				request: userContent.map((block) => formatContentBlockToMarkdown(block)).join("\n\n"),
+				...(candidateEstimatedTokens === undefined ? {} : { estimatedContextTokens: candidateEstimatedTokens }),
+				...(finalProjection === undefined ? {} : { contextTokensSource: "estimate" as const }),
 			} satisfies ClineApiReqInfo),
 		})
 		await this.postStateToWebview()
@@ -5357,12 +7293,18 @@ export class Task {
 							}
 							assistantMessage += chunk.text
 							assistantTextOnly += chunk.text // Accumulate text separately
+							const isCompactionResponse =
+								this.taskState.isInternalContextCompactionRequest ||
+								this.taskState.isManualContextCompactionRequest
+							const assistantMessageForParsing = isCompactionResponse
+								? normalizeCompactionResponse(assistantMessage).assistantText
+								: assistantMessage
 							// parse raw assistant message into content blocks
 							const prevLength = this.taskState.assistantMessageContent.length
 							const _prevBlocks = this.taskState.assistantMessageContent
 
 							const nextBlocks = orderTurnEndingContentBlocks(
-								parseAssistantMessageV2(assistantMessage, {
+								parseAssistantMessageV2(assistantMessageForParsing, {
 									getOrCreateTsForBlock: (key) => {
 										const existing = this.taskState.parseBlockTsByKey.get(key)
 										if (existing !== undefined) return existing
@@ -5452,6 +7394,9 @@ export class Task {
 				}
 			} catch (error) {
 				await streamCoordinator?.stop()
+				if (!this.taskState.isInternalContextCompactionRequest && !this.taskState.isManualContextCompactionRequest) {
+					await this.rollbackOrdinaryContextWindowIndicator(apiIndex)
+				}
 				if (!this.taskState.abort && !this.taskState.abandoned && this.diffViewProvider.isEditing) {
 					// Streaming file edits are previews. Revert them before retrying so a
 					// truncated provider response cannot leave partial content on disk.
@@ -5477,20 +7422,57 @@ export class Task {
 						ErrorService.get().logException(clineError, { modelId: model.id, providerId })
 					}
 					const errorMessage = clineError.serialize()
-					if (this.taskState.isManualContextCompactionRequest) {
-						// Manual condense is user-owned and one-shot: discard the incomplete preview and its request turn.
-						await this.messageStateHandler.removePartialMessages()
-						await this.messageStateHandler.overwriteApiConversationHistory(
-							this.messageStateHandler.apiConversationHistory.slice(0, apiIndex),
-						)
+					if (this.taskState.isInternalContextCompactionRequest) {
+						await this.discardFailedCompactionAttempt(apiIndex)
+					}
+					const openAiMaxOutputReplayDecision = this.taskState.isInternalContextCompactionRequest
+						? this.compactionRequestReplay.prepareOpenAiMaxOutputReplay(apiIndex, error)
+						: "not_applicable"
+					if (openAiMaxOutputReplayDecision === "replay") {
+						await this.updateContextCompactionStatus("retrying", {
+							error: errorMessage,
+							retryAttempt: 1,
+							maxRetryAttempts: 1,
+							clearContent: true,
+						})
+						this.scheduleCompactionReplay(apiIndex)
+						requestScope.explicitInstructions.close()
+						return true
+					}
+					if (openAiMaxOutputReplayDecision === "exhausted") {
 						await finalizeApiReqMsg("streaming_failed", errorMessage)
 						await this.updateContextCompactionStatus("failed", { error: errorMessage })
-						this.taskState.isManualContextCompactionRequest = false
-						this.taskState.contextCompactionMessageTs = undefined
 						this.endAutoRetrySequence(false)
 						await this.messageStateHandler.updateTaskHistory()
 						await this.postStateToWebview()
-						await this.awaitManualCompactionRecovery()
+						const retryId = `retry:${this.taskId}:${this.getRuntimeState().revision}`
+						await this.recoverApiFailure({
+							turnId: retryId,
+							interactionId: retryId,
+							apiIndex: this.getRuntimeState().anchor.apiIndex,
+							presentation: errorMessage,
+						})
+						return true
+					}
+					if (this.taskState.isManualContextCompactionRequest) {
+						// Manual compaction is one-shot until the user explicitly selects Retry.
+						await this.discardFailedManualCompactionAttempt(apiIndex)
+						await finalizeApiReqMsg("streaming_failed", errorMessage)
+						await this.updateContextCompactionStatus("failed", { error: errorMessage })
+						this.endAutoRetrySequence(false)
+						await this.messageStateHandler.updateTaskHistory()
+						await this.postStateToWebview()
+						const retryId = `retry:${this.taskId}:${this.getRuntimeState().revision}`
+						await this.recoverApiFailure({
+							turnId: retryId,
+							interactionId: retryId,
+							apiIndex,
+							presentation: errorMessage,
+						})
+						return true
+					}
+					if (this.taskState.isInternalContextCompactionRequest) {
+						await this.recoverAutomaticCompactionFailure(apiIndex, errorMessage, requestScope)
 						return true
 					}
 					const isStreamingSpendLimitError = clineError.isErrorType(ClineErrorType.SpendLimit)
@@ -5502,7 +7484,6 @@ export class Task {
 					})
 					if (retryDecision.shouldRetry) {
 						this.taskState.autoRetryAttempts++
-						await this.discardFailedCompactionAttempt(apiIndex)
 						await this.updateContextCompactionStatus("retrying", {
 							error: errorMessage,
 							retryAttempt: this.taskState.autoRetryAttempts,
@@ -5552,6 +7533,9 @@ export class Task {
 						return true
 					}
 					if (retryDecision.shouldPrompt) {
+						if (!manualRetryTakeover && this.taskState.autoRetryAttempts >= MAX_AUTO_RETRY_ATTEMPTS) {
+							await this.markAutoRetryExhausted(errorMessage)
+						}
 						this.endAutoRetrySequence(false)
 						await this.updateContextCompactionStatus("failed", { error: errorMessage })
 						const retryId = `retry:${this.taskId}:${this.getRuntimeState().revision}`
@@ -5593,6 +7577,11 @@ export class Task {
 				}
 			}
 
+			if (this.taskState.isInternalContextCompactionRequest || this.taskState.isManualContextCompactionRequest) {
+				assistantMessage = normalizeCompactionResponse(assistantMessage).assistantText
+				assistantTextOnly = normalizeCompactionResponse(assistantTextOnly).assistantText
+			}
+
 			// Finalize any remaining tool calls at the end of the stream
 
 			// OpenRouter/Cline may not return token usage as part of the stream (since it may abort early), so we fetch after the stream is finished
@@ -5632,10 +7621,11 @@ export class Task {
 			}
 
 			const { contextWindow } = getContextWindowInfo(requestScope.api)
-			const compactTriggerTokens = computeCompactTrigger(contextWindow, computeSummarizeBudget(), {
-				triggerPercent: this.stateManager.getGlobalSettingsKey("autoCondenseTriggerPercent"),
-				maxContextTokens: this.stateManager.getGlobalSettingsKey("autoCondenseMaxContextTokens"),
-			})
+			const compactTriggerTokens = computeCompactTrigger(
+				contextWindow,
+				computeSummarizeBudget(),
+				autoCondenseTriggerOptions,
+			)
 			this.promptCacheHealth.recordRequest({
 				completed: true,
 				isCompactionRequest:
@@ -5734,6 +7724,16 @@ export class Task {
 						},
 						ts: Date.now(),
 					})
+					if (!this.taskState.isInternalContextCompactionRequest && !this.taskState.isManualContextCompactionRequest) {
+						await this.commitOrdinaryContextWindowIndicator(
+							apiIndex,
+							requestScope,
+							taskMetrics.inputTokens +
+								taskMetrics.outputTokens +
+								taskMetrics.cacheWriteTokens +
+								taskMetrics.cacheReadTokens,
+						)
+					}
 				}
 			}
 
@@ -5757,6 +7757,34 @@ export class Task {
 					taskMetrics.cacheReadTokens,
 				contextWindow,
 			})
+
+			if (
+				(this.taskState.isInternalContextCompactionRequest || this.taskState.isManualContextCompactionRequest) &&
+				!this.taskState.currentlySummarizing
+			) {
+				const errorMessage = "Conversation compaction did not return a valid summarize_task context."
+				if (this.taskState.isInternalContextCompactionRequest) {
+					await this.discardFailedCompactionAttempt(apiIndex)
+					await finalizeApiReqMsg("streaming_failed", errorMessage)
+					await this.recoverAutomaticCompactionFailure(apiIndex, errorMessage, requestScope)
+					return true
+				}
+
+				await this.discardFailedManualCompactionAttempt(apiIndex)
+				await finalizeApiReqMsg("streaming_failed", errorMessage)
+				await this.updateContextCompactionStatus("failed", { error: errorMessage })
+				this.endAutoRetrySequence(false)
+				await this.messageStateHandler.updateTaskHistory()
+				await this.postStateToWebview()
+				const retryId = `retry:${this.taskId}:${this.getRuntimeState().revision}`
+				await this.recoverApiFailure({
+					turnId: retryId,
+					interactionId: retryId,
+					apiIndex,
+					presentation: errorMessage,
+				})
+				return true
+			}
 
 			const phaseAfterAssistantTurn = this.taskRuntime.getState().phase
 			if (
@@ -5838,6 +7866,7 @@ export class Task {
 				const recDidEndLoop = await this.recursivelyMakeClineRequests(this.taskState.userMessageContent)
 				didEndLoop = recDidEndLoop
 			} else {
+				await this.rollbackOrdinaryContextWindowIndicator(apiIndex)
 				// if there's no assistant_responses, that means we got no text or tool_use content blocks from API which we should assume is an error
 				const reqId = this.getApiRequestIdSafe(requestScope.api)
 
@@ -5902,6 +7931,9 @@ export class Task {
 						throw new Error("Dline instance aborted")
 					}
 				} else {
+					if (!manualRetryTakeover && this.taskState.autoRetryAttempts >= MAX_AUTO_RETRY_ATTEMPTS) {
+						await this.markAutoRetryExhausted(noResponseErrorMessage)
+					}
 					this.endAutoRetrySequence(false)
 					// Manual takeover and exhausted retries share one canonical recovery ask.
 					const askResult = await this.ask("api_req_failed", noResponseErrorMessage)
@@ -5936,6 +7968,7 @@ export class Task {
 		includeFileDetails = false,
 		useCompactPrompt = false,
 		requestScope: RequestApiScope,
+		options: { preview?: boolean; mode?: Mode; didSwitchFromPlan?: boolean } = {},
 	): Promise<[ClineContent[], string, boolean]> {
 		const providerInfo = requestScope.providerInfo
 		let needsClinerulesFileCheck = false
@@ -5969,7 +8002,7 @@ export class Task {
 				text,
 				cwd,
 				this.urlContentFetcher,
-				this.fileContextTracker,
+				options.preview ? undefined : this.fileContextTracker,
 				this.workspaceManager,
 			)
 			if (!parseCommands) return parsedText
@@ -6061,7 +8094,7 @@ export class Task {
 						block.content,
 						cwd,
 						this.urlContentFetcher,
-						this.fileContextTracker,
+						options.preview ? undefined : this.fileContextTracker,
 						this.workspaceManager,
 					)
 					// Untrusted tool results remain data and must not run slash-command parsing.
@@ -6077,7 +8110,7 @@ export class Task {
 										contentBlock.text,
 										cwd,
 										this.urlContentFetcher,
-										this.fileContextTracker,
+										options.preview ? undefined : this.fileContextTracker,
 										this.workspaceManager,
 									).then((text) => ({ ...contentBlock, text }))
 								: contentBlock
@@ -6096,7 +8129,11 @@ export class Task {
 		// (Note: this caused the @/ import alias bug where file contents were being parsed as well, since v2 converted tool results to text blocks)
 		const [processedUserContent, environmentDetails] = await Promise.all([
 			Promise.all(userContent.map(processContentBlock)),
-			this.getEnvironmentDetails(includeFileDetails, promptProfile),
+			this.getEnvironmentDetails(includeFileDetails, promptProfile, {
+				preview: options.preview,
+				api: requestScope.api,
+				mode: options.mode ?? requestScope.providerInfo.mode,
+			}),
 		])
 
 		// Check clinerulesData if needed
@@ -6108,17 +8145,26 @@ export class Task {
 		if (
 			promptProfile === PromptProfile.Standard &&
 			!useCompactPrompt &&
-			this.FocusChainManager?.shouldIncludeFocusChainInstructions()
+			this.FocusChainManager?.shouldIncludeFocusChainInstructions({
+				mode: options.mode,
+				didSwitchFromPlan: options.didSwitchFromPlan,
+			})
 		) {
-			const focusChainInstructions = this.FocusChainManager.generateFocusChainInstructions()
+			const focusChainInstructions = this.FocusChainManager.generateFocusChainInstructions({
+				preview: options.preview,
+				mode: options.mode,
+				didSwitchFromPlan: options.didSwitchFromPlan,
+			})
 			if (focusChainInstructions.trim()) {
 				processedUserContent.push({
 					type: "text",
 					text: focusChainInstructions,
 				})
 
-				this.taskState.apiRequestsSinceLastTodoUpdate = 0
-				this.taskState.todoListWasUpdatedByUser = false
+				if (!options.preview) {
+					this.taskState.apiRequestsSinceLastTodoUpdate = 0
+					this.taskState.todoListWasUpdatedByUser = false
+				}
 			}
 		}
 
@@ -6275,8 +8321,14 @@ export class Task {
 		return this.taskFileTracker.getAllModifiedFiles()
 	}
 
-	async getEnvironmentDetails(includeFileDetails = false, requestPromptProfile?: PromptProfile) {
+	async getEnvironmentDetails(
+		includeFileDetails = false,
+		requestPromptProfile?: PromptProfile,
+		options: { preview?: boolean; api?: ApiHandler; mode?: Mode } = {},
+	) {
 		const host = await HostProvider.env.getHostVersion({})
+		const effectiveApi = options.api ?? this.api
+		const effectiveMode = options.mode ?? this.taskSm.mode
 		let details = ""
 
 		// Dline extension version (all builds)
@@ -6334,7 +8386,7 @@ export class Task {
 
 		const busyTerminals = this.terminalManager.getTerminals(true)
 
-		this.taskState.didEditFile = false
+		if (!options.preview) this.taskState.didEditFile = false
 
 		let terminalDetails = ""
 		if (busyTerminals.length > 0) {
@@ -6349,13 +8401,15 @@ export class Task {
 		}
 
 		const backgroundEnvironment = buildTaskBackgroundEnvironmentSection(this.toolExecutor, this.commandExecutor)
-		this.pendingBackgroundCommandLineCounts = backgroundEnvironment.commandLineCounts
+		if (!options.preview) this.pendingBackgroundCommandLineCounts = backgroundEnvironment.commandLineCounts
 		if (backgroundEnvironment.text) {
 			details += `\n\n${backgroundEnvironment.text}`
 		}
 
-		// Add recently modified files section
-		const recentlyModifiedFiles = this.fileContextTracker.getAndClearRecentlyModifiedFiles()
+		// Add recently modified files section without consuming it before ordinary Provider admission.
+		const recentlyModifiedFilesSnapshot = this.fileContextTracker.peekRecentlyModifiedFiles()
+		if (!options.preview) this.pendingRecentlyModifiedFilesSnapshot = recentlyModifiedFilesSnapshot
+		const recentlyModifiedFiles = recentlyModifiedFilesSnapshot.files
 		if (recentlyModifiedFiles.length > 0) {
 			details +=
 				"\n\n# Recently Modified Files\nThese files have been modified since you last accessed them (file was just edited so you may need to re-read it before editing):"
@@ -6408,7 +8462,7 @@ export class Task {
 		}
 
 		// Add context window usage information (conditionally for some models)
-		const { contextWindow } = getContextWindowInfo(this.api)
+		const { contextWindow } = getContextWindowInfo(effectiveApi)
 
 		// Get the token count from the most recent API request to accurately reflect context management
 		/** Read normalized context occupancy from one persisted request message. */
@@ -6428,7 +8482,7 @@ export class Task {
 		const lastApiReqTotalTokens = lastApiReqMessage ? getTotalTokensFromApiReqMessage(lastApiReqMessage) : 0
 		const usagePercentage = Math.round((lastApiReqTotalTokens / contextWindow) * 100)
 
-		const currentModelId = this.api.getModel().id
+		const currentModelId = effectiveApi.getModel().id
 		if (showContextUsage({ contextWindow, lastApiReqTotalTokens, modelId: currentModelId })) {
 			details += "\n\n# Context Window Usage"
 			details += `\n${lastApiReqTotalTokens.toLocaleString()} / ${(contextWindow / 1000).toLocaleString()}K tokens used (${usagePercentage}%)`
@@ -6437,19 +8491,10 @@ export class Task {
 			if (useAutoCondense) {
 				details += "\n\nAuto-Compact is enabled. Context will be automatically compacted as needed."
 			}
-			const highContextPressureWarning = getHighContextPressureWarning({
-				contextWindow,
-				lastApiReqTotalTokens,
-				modelId: currentModelId,
-			})
-			if (highContextPressureWarning) {
-				details += `\n\n${highContextPressureWarning}`
-			}
 		}
 
 		details += "\n\n# Current Mode"
-		const mode = this.taskSm.mode
-		if (mode === "plan") {
+		if (effectiveMode === "plan") {
 			details += `\nPLAN MODE\n${formatResponse.planModeInstructions()}`
 		} else {
 			details += "\nACT MODE"
@@ -6457,7 +8502,13 @@ export class Task {
 
 		// Add focus chain task_progress status if enabled and checklist exists
 		const focusChainSettings = this.stateManager.getGlobalSettingsKey("focusChainSettings")
-		const providerInfo = requestPromptProfile ? undefined : this.getCurrentProviderInfo()
+		const providerInfo = requestPromptProfile
+			? undefined
+			: {
+					providerId: effectiveApi.getProviderId?.() ?? DEFAULT_API_PROVIDER,
+					model: effectiveApi.getModel(),
+					mode: effectiveMode,
+				}
 		const promptProfile =
 			requestPromptProfile ??
 			resolvePromptProfile({

@@ -2,6 +2,7 @@ import type { BlockLifecycle } from "../BlockPhaseMachine"
 import type { InteractionKind } from "../interaction/Interaction"
 import type { ActiveInteraction } from "../interaction/InteractionReducer"
 import type { InteractionDraft, InteractionResponse } from "../interaction/InteractionResponse"
+import type { NewTaskConsumedState, NewTaskHandoff } from "../new-task/new-task-handoff"
 import type { TaskEffectType } from "./TaskEffect"
 import type { CancelSource, TaskAnchor } from "./TaskRuntimeState"
 
@@ -79,6 +80,8 @@ export type TaskEvent =
 	  }
 	| { type: "COMPLETION_FEEDBACK_RECEIVED"; draft: InteractionDraft }
 	| { type: "TASK_CLEAR_REQUESTED"; draft: InteractionDraft }
+	| { type: "TASK_SUCCESSOR_REQUESTED"; handoff: NewTaskHandoff }
+	| { type: "TASK_SUCCESSOR_START_COMMITTED"; source: NewTaskConsumedState }
 	| { type: "TASK_COMPLETED"; completionId: string }
 	| {
 			type: "EFFECT_FAILED"

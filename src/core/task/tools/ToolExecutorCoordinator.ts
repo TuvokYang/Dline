@@ -1,7 +1,6 @@
 import type { ToolUse } from "@core/assistant-message"
 import { CLINE_MCP_TOOL_IDENTIFIER } from "@/shared/mcp"
 import { ClineDefaultTool } from "@/shared/tools"
-import type { ToolResponse } from "../index"
 import { AccessMcpResourceHandler } from "./handlers/AccessMcpResourceHandler"
 import { ActModeRespondHandler } from "./handlers/ActModeRespondHandler"
 import { ApplyPatchHandler } from "./handlers/ApplyPatchHandler"
@@ -33,13 +32,14 @@ import { UseMcpToolHandler } from "./handlers/UseMcpToolHandler"
 import { WebFetchToolHandler } from "./handlers/WebFetchToolHandler"
 import { WebSearchToolHandler } from "./handlers/WebSearchToolHandler"
 import { WriteToFileToolHandler } from "./handlers/WriteToFileToolHandler"
+import type { ToolHandlerResult } from "./ToolExecutionResult"
 import { ToolValidator } from "./ToolValidator"
 import type { TaskConfig } from "./types/TaskConfig"
 import type { StronglyTypedUIHelpers } from "./types/UIHelpers"
 
 export interface IToolHandler {
 	readonly name: ClineDefaultTool
-	execute(config: TaskConfig, block: ToolUse): Promise<ToolResponse>
+	execute(config: TaskConfig, block: ToolUse): Promise<ToolHandlerResult>
 	getDescription(block: ToolUse): string
 }
 
@@ -65,7 +65,7 @@ export class SharedToolHandler implements IFullyManagedTool {
 		return this.baseHandler.getDescription(block)
 	}
 
-	async execute(config: TaskConfig, block: ToolUse): Promise<ToolResponse> {
+	async execute(config: TaskConfig, block: ToolUse): Promise<ToolHandlerResult> {
 		return this.baseHandler.execute(config, block)
 	}
 
@@ -167,7 +167,7 @@ export class ToolExecutorCoordinator {
 	/**
 	 * Execute a tool through its registered handler
 	 */
-	async execute(config: TaskConfig, block: ToolUse): Promise<ToolResponse> {
+	async execute(config: TaskConfig, block: ToolUse): Promise<ToolHandlerResult> {
 		const handler = this.getHandler(block.name)
 		if (!handler) {
 			throw new Error(`No handler registered for tool: ${block.name}`)

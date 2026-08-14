@@ -30,6 +30,7 @@ const mocks = vi.hoisted(() => {
 		handleFocusChange: vi.fn(),
 		clearExpandedRows: vi.fn(),
 		resetState: vi.fn(),
+		restoreDraft: vi.fn(),
 	}
 	return {
 		chatState,
@@ -225,6 +226,7 @@ describe("ChatView interaction anchor synchronization", () => {
 		mocks.chatState.setActiveQuote.mockClear()
 		mocks.chatState.setSelectedImages.mockClear()
 		mocks.chatState.setSelectedFiles.mockClear()
+		mocks.chatState.restoreDraft.mockClear()
 	})
 
 	it("keeps runtime task ownership when the shared history item is temporarily unavailable", () => {

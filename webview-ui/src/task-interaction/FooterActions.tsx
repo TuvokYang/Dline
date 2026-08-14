@@ -9,6 +9,7 @@ import {
 	type DispatchInteraction,
 	type InteractionDraft,
 	type InteractionSelection,
+	type PendingSuccessorDraftTransfer,
 } from "./types"
 
 /** Props for the backend-projected task footer. */
@@ -19,6 +20,8 @@ export interface FooterActionsProps {
 	dispatch: DispatchInteraction
 	dispatchTaskAction?: (action: TaskViewAction) => Promise<void>
 	onDraftAccepted?: (settlement: AcceptedInteractionSettlement) => void
+	onSuccessorAccepted?: (transfer: PendingSuccessorDraftTransfer) => void
+	successorContext?: string
 }
 
 function errorMessage(error: unknown): string {
@@ -26,7 +29,16 @@ function errorMessage(error: unknown): string {
 }
 
 /** Render and dispatch footer actions without inspecting message history. */
-export function FooterActions({ view, draft, selection, dispatch, dispatchTaskAction, onDraftAccepted }: FooterActionsProps) {
+export function FooterActions({
+	view,
+	draft,
+	selection,
+	dispatch,
+	dispatchTaskAction,
+	onDraftAccepted,
+	onSuccessorAccepted,
+	successorContext,
+}: FooterActionsProps) {
 	const [pending, setPending] = useState(false)
 	const errorScope = `${view.taskId}:${view.stateRevision}:${view.activeInteraction?.interactionId ?? ""}`
 	const [errorState, setErrorState] = useState<{ scope: string; message: string }>()
@@ -49,6 +61,7 @@ export function FooterActions({ view, draft, selection, dispatch, dispatchTaskAc
 					const targetsTask = action.dispatchTarget === "task"
 					const carriesDraft = action.payloadPolicy === "draft" || action.payloadPolicy === "draft_and_selection"
 					const dispatcherAvailable = targetsTask ? Boolean(dispatchTaskAction) : Boolean(view.activeInteraction)
+					const startsSuccessor = view.activeInteraction?.kind === "new_task" && action.type === "approve"
 					const buttonDisabled = !action.enabled || pending || !dispatcherAvailable
 					return (
 						<VSCodeButton
@@ -92,6 +105,13 @@ export function FooterActions({ view, draft, selection, dispatch, dispatchTaskAc
 										}
 										if (carriesDraft) {
 											onDraftAccepted?.(createAcceptedInteractionSettlement(request, capturedDraft))
+										}
+										if (startsSuccessor && successorContext) {
+											onSuccessorAccepted?.({
+												sourceTaskId: request.taskId,
+												context: successorContext,
+												draft: capturedDraft,
+											})
 										}
 									})
 									.catch((cause: unknown) => setError(errorMessage(cause)))

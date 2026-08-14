@@ -187,4 +187,33 @@ describe("TaskInput", () => {
 			expect.objectContaining({ actionId: "reject", draft: { text: "note", images: [], files: [] } }),
 		)
 	})
+
+	it("submits New Task feedback through the projected reject action on Enter", () => {
+		const dispatch = vi.fn(async () => ({ accepted: true, result: "accepted" }))
+		const view = resumeView()
+		if (!view.activeInteraction) {
+			throw new Error("Expected active interaction")
+		}
+		view.activeInteraction = {
+			...view.activeInteraction,
+			interactionId: "new-task-1",
+			kind: "new_task",
+			presentationKind: "new_task",
+			taskAsk: "new_task",
+		}
+		view.input.enterAction = "reject"
+		const draft = { text: "Keep the compatibility constraints", images: ["image-1"], files: ["file-1"] }
+
+		render(<TaskInput dispatch={dispatch} draft={draft} onDraftChange={vi.fn()} view={view} />)
+		fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter", code: "Enter" })
+
+		expect(dispatch).toHaveBeenCalledWith({
+			taskId: "task-1",
+			turnId: "turn-1",
+			interactionId: "new-task-1",
+			actionId: "reject",
+			stateRevision: 9,
+			draft,
+		})
+	})
 })

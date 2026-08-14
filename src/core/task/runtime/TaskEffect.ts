@@ -1,6 +1,7 @@
 import type { ClineSay } from "@shared/ExtensionMessage"
 import type { ClineAskResponse } from "@shared/WebviewMessage"
 import type { InteractionDraft } from "../interaction/InteractionResponse"
+import type { NewTaskHandoff } from "../new-task/new-task-handoff"
 
 /** Effect categories emitted by the task reducer. */
 export type TaskEffectType =
@@ -13,6 +14,7 @@ export type TaskEffectType =
 	| "APPEND_SAY"
 	| "APPEND_ASK"
 	| "START_NEW_TASK"
+	| "START_SUCCESSOR_TASK"
 
 /** Refresh the Webview from the already committed runtime state. */
 export interface PostTaskViewEffect {
@@ -88,6 +90,13 @@ export interface StartNewTaskEffect {
 	draft: InteractionDraft
 }
 
+/** Start an independent successor through the current surface Controller. */
+export interface StartSuccessorTaskEffect {
+	id: string
+	type: "START_SUCCESSOR_TASK"
+	handoff: NewTaskHandoff
+}
+
 /** Data-only side effects emitted by task transitions. */
 export type TaskEffect =
 	| PostTaskViewEffect
@@ -99,3 +108,4 @@ export type TaskEffect =
 	| AppendSayEffect
 	| AppendAskEffect
 	| StartNewTaskEffect
+	| StartSuccessorTaskEffect

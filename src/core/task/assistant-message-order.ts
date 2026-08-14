@@ -8,6 +8,7 @@ const TURN_ENDING_TOOL_NAMES = new Set<string>([
 	ClineDefaultTool.MAKE_PLAN,
 	ClineDefaultTool.QNA_RESPOND,
 	ClineDefaultTool.GENERATE_REPORT,
+	ClineDefaultTool.NEW_TASK,
 ])
 
 export function isTurnEndingToolName(name?: string): boolean {

@@ -2,7 +2,6 @@ import { BlockPhase } from "../BlockPhaseMachine"
 import { reduceInteraction } from "../interaction/InteractionReducer"
 import { getInteraction } from "../interaction/InteractionRegistry"
 import type { InteractionResponseErrorCode } from "../interaction/InteractionResponse"
-import { isCompactSignal } from "../mode-switch-signal"
 import { TaskPhase } from "../TaskPhase"
 import { TaskPhaseMachine } from "../TaskPhaseMachine"
 import type { TaskEffect } from "./TaskEffect"
@@ -33,6 +32,7 @@ interface AcceptedChange {
 	completion?: TaskRuntimeState["completion"] | null
 	turn?: TaskRuntimeState["turn"] | null
 	interaction?: TaskRuntimeState["interaction"] | null
+	newTaskConsumed?: TaskRuntimeState["newTaskConsumed"] | null
 	supersededEffectRevision?: number
 	effects?: TaskEffect[]
 }
@@ -88,7 +88,7 @@ function interactionResponseEffects(
 ): TaskEffect[] {
 	const draft = response.draft
 	const hasVisibleDraft = Boolean(draft && (draft.text.trim() || draft.images.length > 0 || draft.files.length > 0))
-	if (!draft || !hasVisibleDraft || isCompactSignal(draft.text)) {
+	if (!draft || !hasVisibleDraft) {
 		return stateEffects(revision)
 	}
 	return [
@@ -152,6 +152,11 @@ function accept(state: TaskRuntimeState, change: AcceptedChange): TransitionResu
 		delete next.interaction
 	} else if (change.interaction !== undefined) {
 		next.interaction = change.interaction
+	}
+	if (change.newTaskConsumed === null) {
+		delete next.newTaskConsumed
+	} else if (change.newTaskConsumed !== undefined) {
+		next.newTaskConsumed = change.newTaskConsumed
 	}
 	if (change.supersededEffectRevision !== undefined) {
 		next.supersededEffectRevision = change.supersededEffectRevision
@@ -863,7 +868,13 @@ function reduceRecovery(
 			},
 			effects: [
 				{ id: effectId(revision, 1), type: "POST_TASK_VIEW" },
-				{ id: effectId(revision, 2), type: "START_API", apiIndex: event.apiIndex, draft: event.draft },
+				{
+					id: effectId(revision, 2),
+					type: "START_API",
+					apiIndex: event.apiIndex,
+					draft: event.draft,
+					persistedRequest: true,
+				},
 				{ id: effectId(revision, 3), type: "PERSIST_SNAPSHOT" },
 			],
 		}
@@ -995,6 +1006,47 @@ function reduceRecovery(
 			{ id: effectId(revision, 3), type: "START_NEW_TASK", draft: event.draft },
 		],
 	}
+}
+
+/** Admit a successor only after the current assistant turn has fully closed. */
+function reduceTaskSuccessor(
+	state: TaskRuntimeState,
+	event: Extract<TaskEvent, { type: "TASK_SUCCESSOR_REQUESTED" | "TASK_SUCCESSOR_START_COMMITTED" }>,
+): TransitionResult {
+	if (event.type === "TASK_SUCCESSOR_START_COMMITTED") {
+		if (
+			state.phase !== TaskPhase.CANCELLING ||
+			state.cancellation?.source !== "system" ||
+			state.newTaskConsumed?.functionId !== event.source.functionId ||
+			state.newTaskConsumed.dlineTid !== event.source.dlineTid
+		) {
+			return reject(state, event.type)
+		}
+		return accept(state, {
+			eventType: event.type,
+			phase: TaskPhase.ABORTED,
+			cancellation: null,
+			interaction: null,
+		})
+	}
+
+	if (state.phase !== TaskPhase.BETWEEN_TURNS || state.interaction || state.newTaskConsumed) {
+		return reject(state, event.type)
+	}
+	const revision = state.revision + 1
+	return accept(state, {
+		eventType: event.type,
+		phase: TaskPhase.CANCELLING,
+		cancellation: { source: "system", fromPhase: state.phase },
+		newTaskConsumed: { ...event.handoff.source },
+		supersededEffectRevision: Math.max(state.supersededEffectRevision ?? -1, state.revision),
+		interaction: null,
+		effects: [
+			{ id: effectId(revision, 1), type: "POST_TASK_VIEW" },
+			{ id: effectId(revision, 2), type: "PERSIST_SNAPSHOT" },
+			{ id: effectId(revision, 3), type: "START_SUCCESSOR_TASK", handoff: event.handoff },
+		],
+	})
 }
 
 /** Commit a checkpoint chat rewind as one canonical runtime boundary. */
@@ -1267,6 +1319,9 @@ export function reduceTask(state: TaskRuntimeState, event: TaskEvent): Transitio
 		case "COMPLETION_FEEDBACK_RECEIVED":
 		case "TASK_CLEAR_REQUESTED":
 			return reduceRecovery(state, event)
+		case "TASK_SUCCESSOR_REQUESTED":
+		case "TASK_SUCCESSOR_START_COMMITTED":
+			return reduceTaskSuccessor(state, event)
 		case "CHECKPOINT_CHAT_RESTORED":
 			return reduceCheckpointRestore(state, event)
 		case "TASK_RESUME_REQUESTED":

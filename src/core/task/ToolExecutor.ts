@@ -52,9 +52,15 @@ import { AutoApprove } from "./tools/autoApprove"
 import { isInternalNativeToolName, normalizeNativeToolName } from "./tools/NativeToolAdmission"
 import { ServerToolLifecycle } from "./tools/ServerToolLifecycle"
 import { SubagentJobManager } from "./tools/subagent/SubagentJobManager"
+import { normalizeToolExecutionResult, type ToolPostCommitDirective } from "./tools/ToolExecutionResult"
 import { type IPartialBlockHandler, ToolExecutorCoordinator } from "./tools/ToolExecutorCoordinator"
 import { ToolValidator } from "./tools/ToolValidator"
-import { type TaskConfig, type TaskInteractionPorts, validateTaskConfig } from "./tools/types/TaskConfig"
+import {
+	type CompactionAttemptGuard,
+	type TaskConfig,
+	type TaskInteractionPorts,
+	validateTaskConfig,
+} from "./tools/types/TaskConfig"
 import { createUIHelpers } from "./tools/types/UIHelpers"
 import { ToolDisplayUtils } from "./tools/utils/ToolDisplayUtils"
 import { NO_TOOL_RESULT, ToolResultUtils } from "./tools/utils/ToolResultUtils"
@@ -165,6 +171,7 @@ export class ToolExecutor {
 	private webSearchRoutingPlan: WebSearchRoutingPlan | undefined
 	private explicitInstructions: ExplicitInstructionConsumePort | undefined
 	private hostedServerToolLifecycle: ServerToolLifecycle | undefined
+	private readonly postCommitDirectives = new Map<string, ToolPostCommitDirective>()
 
 	/** Public accessor for auto-approve logic used by TaskController.buildTurn(). */
 	public isAutoApproved(toolName: ClineDefaultTool, params?: ToolUse["params"]): boolean {
@@ -400,6 +407,7 @@ export class ToolExecutor {
 		private workspaceManager: WorkspaceRootManager | undefined,
 		private isMultiRootEnabled: boolean,
 		private interactions: TaskInteractionPorts,
+		private compactionAttemptGuard: CompactionAttemptGuard,
 
 		// Callbacks to the Task (Entity)
 		private say: (
@@ -490,6 +498,7 @@ export class ToolExecutor {
 			focusChainSettings: this.stateManager.getGlobalSettingsKey("focusChainSettings"),
 			capabilityToggles: this.getTaskCapabilityToggles(),
 			interactions: this.interactions,
+			compactionAttemptGuard: this.compactionAttemptGuard,
 			services: {
 				mcpHub: this.mcpHub,
 				browserSession: this.browserSession,
@@ -565,6 +574,13 @@ export class ToolExecutor {
 	 */
 	public async executeTool(block: ToolUse): Promise<void> {
 		await this.execute(block)
+	}
+
+	/** Consume one directive only after the owning runtime block has committed completion. */
+	public takePostCommitDirective(dlineTid: string): ToolPostCommitDirective | undefined {
+		const directive = this.postCommitDirectives.get(dlineTid)
+		this.postCommitDirectives.delete(dlineTid)
+		return directive
 	}
 
 	/** Consume a restored turn-end response through the original handler's post-response path. */
@@ -1045,7 +1061,8 @@ export class ToolExecutor {
 		let shouldCancelAfterHook = false
 
 		let executionSuccess = true
-		let toolResult: any = null
+		let toolResult: ToolResponse = ""
+		let postCommitDirective: ToolPostCommitDirective | undefined
 		let toolWasExecuted = false
 		const executionStartTime = Date.now()
 
@@ -1072,7 +1089,9 @@ export class ToolExecutor {
 				this.taskState.consecutiveMistakeCount++
 			} else {
 				// Execute the actual tool
-				toolResult = await this.coordinator.execute(config, block)
+				const executionResult = normalizeToolExecutionResult(await this.coordinator.execute(config, block))
+				toolResult = executionResult.response
+				postCommitDirective = executionResult.postCommit
 			}
 			toolWasExecuted = true
 			if (toolResult !== NO_TOOL_RESULT) {
@@ -1161,6 +1180,12 @@ export class ToolExecutor {
 		// Handle focus chain updates
 		if (!block.partial && this.stateManager.getGlobalSettingsKey("focusChainSettings").enabled) {
 			await this.updateFCListFromToolResponse(block.params.task_progress)
+		}
+		if (postCommitDirective) {
+			if (this.postCommitDirectives.has(block.dline_tid)) {
+				throw new Error(`Post-commit directive already exists for dlineTid=${block.dline_tid}`)
+			}
+			this.postCommitDirectives.set(block.dline_tid, postCommitDirective)
 		}
 	}
 }

@@ -5,7 +5,11 @@ import { AccountUsage, buildApiHandler } from "@core/api"
 import { getProfileModelInfo } from "@core/api/model-info"
 import { createGlobalConfigurationSnapshot, type GlobalConfigurationSnapshot } from "@core/configuration/GlobalConfiguration"
 import { GlobalConfigurationManager, type GlobalConfigurationResult } from "@core/configuration/GlobalConfigurationManager"
-import { readContextTokens } from "@core/context/context-management/context-pressure"
+import { resolveTargetContextScope } from "@core/context/context-management/target-context-scope"
+import { ContextTransitionEngine } from "@core/controller/context-transition/ContextTransitionEngine"
+import { ContextTransitionLease } from "@core/controller/context-transition/ContextTransitionLease"
+import { ModeTransitionPolicy } from "@core/controller/context-transition/policies/ModeTransitionPolicy"
+import { ProfileTransitionPolicy } from "@core/controller/context-transition/policies/ProfileTransitionPolicy"
 import { findEnabledProfileByName, findEnabledProfiles } from "@core/controller/file/getApiProfiles"
 import { getHooksEnabledSafe } from "@core/hooks/hooks-utils"
 import { TaskLockService } from "@core/locks/TaskLockService"
@@ -21,10 +25,13 @@ import type { ModelInfo } from "@shared/api"
 import type { ChatContent } from "@shared/ChatContent"
 import { combineApiRequests } from "@shared/combineApiRequests"
 import { combineCommandSequences } from "@shared/combineCommandSequences"
+import { getContextWindowIndicatorTotalTokens } from "@shared/context-window-indicator"
 import type { ExtensionState, Platform } from "@shared/ExtensionMessage"
 import type { HistoryItem } from "@shared/HistoryItem"
 import type { McpMarketplaceCatalog, McpMarketplaceItem, McpServer } from "@shared/mcp"
+import type { ClineUserContent } from "@shared/messages/content"
 import type { ModeSwitchRequestResult } from "@shared/mode-switch"
+import type { ProfileSwitchRequestResult } from "@shared/profile-switch"
 import type { TaskLockStatus } from "@shared/proto/dline/task"
 import { type Settings } from "@shared/storage/state-keys"
 import type { Mode } from "@shared/storage/types"
@@ -79,6 +86,8 @@ import { ModeSwitchCoordinator } from "./mode-switch/ModeSwitchCoordinator"
 import type { ModeSwitchOperation, ResolvedModeProfile } from "./mode-switch/types"
 import { getClineOnboardingModels } from "./models/getClineOnboardingModels"
 import { appendClineStealthModels } from "./models/refreshOpenRouterModels"
+import { ProfileSwitchCoordinator } from "./profile-switch/ProfileSwitchCoordinator"
+import type { ProfileSwitchOperation, ResolvedProfileTarget } from "./profile-switch/types"
 import { cleanupStateSubscriptions, sendAccountUsageUpdate, sendStateUpdate } from "./state/subscribeToState"
 import { startTaskLifecycle } from "./task/task-start-lifecycle"
 import { sendChatButtonClickedEvent } from "./ui/subscribeToChatButtonClicked"
@@ -87,12 +96,16 @@ type InitTaskOptions = {
 	onHistoryTaskReadyToDisplay?: () => Promise<void>
 	/** Context fragments for spawned or new tasks. Each entry becomes an independent text block for cache-friendly design. */
 	context?: string[]
+	/** Trusted internal content appended to the successor's first Provider request. */
+	initialUserContent?: ClineUserContent[]
 	/** Return after task-start admission while the agent loop continues in the background. */
 	startInBackground?: boolean
 	/** Complete identity-dependent setup before the task can issue its first API request. */
 	beforeStart?: (taskId: string) => Promise<void> | void
 	/** Observe a background task-start failure without rejecting the completed admission. */
 	onBackgroundError?: (error: unknown, taskId: string) => Promise<void> | void
+	/** Internal lifecycle transaction already removed the previous Task. */
+	skipInitialClear?: boolean
 }
 
 type PostStateOptions = {
@@ -101,7 +114,7 @@ type PostStateOptions = {
 
 export type TaskLifecycleScope = {
 	/** Clear the active task while already holding the controller lifecycle lock. */
-	clearTask(options?: { clearPanelState?: boolean }): Promise<void>
+	clearTask(options?: { clearPanelState?: boolean; suppressPostState?: boolean }): Promise<void>
 }
 
 /*
@@ -131,7 +144,9 @@ export class Controller {
 	private cancelInProgress = false
 	private readonly taskLifecycleMutex = new Mutex()
 
+	private readonly contextTransitionEngine: ContextTransitionEngine
 	private readonly modeSwitchCoordinator: ModeSwitchCoordinator
+	private readonly profileSwitchCoordinator: ProfileSwitchCoordinator
 	private nextStateRevision = 0
 	private latestStateRevision = 0
 
@@ -285,7 +300,9 @@ export class Controller {
 		this.authService = AuthService.getInstance(this)
 		this.ocaAuthService = OcaAuthService.initialize(this)
 		this.accountService = ClineAccountService.getInstance()
+		this.contextTransitionEngine = this.createContextTransitionEngine()
 		this.modeSwitchCoordinator = this.createModeSwitchCoordinator()
+		this.profileSwitchCoordinator = this.createProfileSwitchCoordinator()
 
 		this.authService.restoreRefreshTokenAndRetrieveAuthInfo().then(() => {
 			this.startRemoteConfigTimer()
@@ -464,7 +481,9 @@ export class Controller {
 		// when done and catches all errors internally.
 		fetchRemoteConfig(this)
 
-		await this.clearTask() // ensures that an existing task doesn't exist before starting a new one, although this shouldn't be possible since user must clear task before starting a new one
+		if (!options?.skipInitialClear) {
+			await this.clearTask()
+		}
 
 		const autoApprovalSettings = this.stateManager.getGlobalSettingsKey("autoApprovalSettings")
 		const shellIntegrationTimeout = this.stateManager.getGlobalSettingsKey("shellIntegrationTimeout")
@@ -598,7 +617,7 @@ export class Controller {
 					taskId: initializedTaskId,
 					startInBackground: options?.startInBackground === true,
 					beforeStart: options?.beforeStart,
-					start: () => taskInstance.startTask(task, images, files, options?.context),
+					start: () => taskInstance.startTask(task, images, files, options?.context, options?.initialUserContent),
 					onBackgroundError: async (error) => {
 						const message = error instanceof Error ? error.message : String(error)
 						Logger.error(`[Task ${initializedTaskId}] Background task start failed:`, error)
@@ -666,19 +685,34 @@ export class Controller {
 		await this.postStateToWebview()
 	}
 
-	/** Build task-local ports used by the mode-switch transaction. */
+	/** Create the sole Profile/Mode transition state owner for this Controller. */
+	private createContextTransitionEngine(): ContextTransitionEngine {
+		return new ContextTransitionEngine({
+			lease: new ContextTransitionLease(),
+			compaction: {
+				compact: ({ trigger, operationId, targetApi, targetMode, chatContent, transition }) =>
+					this.task?.compactForTransition(trigger, operationId, targetApi, targetMode, chatContent, transition) ??
+					Promise.resolve("failed"),
+				release: (operationId) => this.task?.releaseCompact(operationId) ?? Promise.resolve(),
+				fail: async (operationId, reason) => {
+					await this.task?.failCompact(operationId, reason)
+				},
+			},
+			postState: () => this.postStateToWebview({ immediate: true }),
+			createId: () => randomUUID(),
+		})
+	}
+
+	/** Build the Mode-specific policy and expose the compatibility RPC adapter. */
 	private createModeSwitchCoordinator(): ModeSwitchCoordinator {
-		return new ModeSwitchCoordinator({
+		const policy = new ModeTransitionPolicy({
 			profiles: {
 				getSource: () => (this.task ? this.resolveModeProfile(this.task.getMode()) : undefined),
 				resolve: (mode) => this.resolveModeProfile(mode),
 			},
-			pressure: { read: () => this.readModeSwitchPressure() },
-			compaction: {
-				compact: (operationId, chatContent) =>
-					this.task?.compactForMode(operationId, chatContent) ?? Promise.resolve("failed"),
-				release: (operationId) => this.task?.releaseCompact(operationId),
-				fail: (operationId, reason) => this.task?.failCompact(operationId, reason),
+			pressure: {
+				read: (targetApi, targetMode, chatContent) =>
+					this.task?.projectModeSwitchTargetUsage(targetApi, targetMode, chatContent) ?? Promise.resolve(0),
 			},
 			commit: {
 				validate: (operation) => this.validateModeSwitch(operation),
@@ -690,36 +724,87 @@ export class Controller {
 					await this.postStateToWebview({ immediate: true })
 				},
 			},
-			postState: () => this.postStateToWebview({ immediate: true }),
-			createId: () => crypto.randomUUID(),
 			getTaskId: () => this.task?.taskId,
 		})
+		return new ModeSwitchCoordinator({ engine: this.contextTransitionEngine, policy })
+	}
+
+	/** Build the Profile-specific policy without adopting its binding during preflight. */
+	private createProfileSwitchCoordinator(): ProfileSwitchCoordinator {
+		const policy = new ProfileTransitionPolicy({
+			bindings: {
+				getCurrentMode: () => this.task?.getMode() ?? "plan",
+				getBinding: (mode) => this.resolveTaskProfileName(mode),
+				resolveTarget: (profile, mode) => this.resolveProfileTarget(profile, mode),
+			},
+			pressure: {
+				read: (targetApi, targetMode, chatContent) =>
+					this.task?.projectProfileSwitchTargetUsage(targetApi, targetMode, chatContent) ?? Promise.resolve(0),
+			},
+			commit: {
+				validate: (operation) => this.validateProfileSwitch(operation),
+				commit: async (operation) => {
+					if (!this.task) throw new Error("Active task is unavailable.")
+					await this.task.commitProfileBindings(operation.targetProfile, operation.targetModes)
+					await this.postStateToWebview({ immediate: true })
+				},
+			},
+			getTaskId: () => this.task?.taskId,
+		})
+		return new ProfileSwitchCoordinator({ engine: this.contextTransitionEngine, policy })
+	}
+
+	/** Resolve the effective task-local Profile name for one mode. */
+	private resolveTaskProfileName(mode: Mode): string | undefined {
+		if (!this.task) return undefined
+		const config = this.stateManager.getApiConfigurationForTask(this.task.taskId)
+		return mode === "plan"
+			? (this.task.taskSm.planModeProfile ?? config.planModeProfile)
+			: (this.task.taskSm.actModeProfile ?? config.actModeProfile)
 	}
 
 	/** Resolve effective profile metadata for one task-local mode. */
 	private resolveModeProfile(mode: Mode): ResolvedModeProfile | undefined {
 		if (!this.task) return undefined
-		const config = this.stateManager.getApiConfiguration()
-		const profileName =
-			mode === "plan"
-				? (this.task.taskSm.planModeProfile ?? config.planModeProfile)
-				: (this.task.taskSm.actModeProfile ?? config.actModeProfile)
+		const config = this.stateManager.getApiConfigurationForTask(this.task.taskId)
+		const profileName = this.resolveTaskProfileName(mode)
 		const profile = findEnabledProfileByName(profileName)
-		const contextWindow = profile ? getProfileModelInfo(profile).capabilities?.contextWindow : undefined
-		return profileName && contextWindow ? { mode, profile: profileName, contextWindow } : undefined
+		const providerContextWindow = profile ? getProfileModelInfo(profile).capabilities?.contextWindow : undefined
+		if (!profileName || !providerContextWindow) return undefined
+
+		const effectiveConfig = {
+			...config,
+			...(this.task.taskSm.planModeProfile !== undefined && { planModeProfile: this.task.taskSm.planModeProfile }),
+			...(this.task.taskSm.actModeProfile !== undefined && { actModeProfile: this.task.taskSm.actModeProfile }),
+			...(mode === "plan" ? { planModeProfile: profileName } : { actModeProfile: profileName }),
+			ulid: this.task.ulid,
+		}
+		const executionApi = buildApiHandler(effectiveConfig, mode)
+		const { targetContextWindow } = resolveTargetContextScope({
+			providerContextWindow,
+			maxContextTokens: this.stateManager.getGlobalSettingsKey("autoCondenseMaxContextTokens"),
+		})
+		return { mode, profile: profileName, contextWindow: targetContextWindow, executionApi }
 	}
 
-	/** Read canonical pressure from the latest completed API request. */
-	private readModeSwitchPressure(): number {
-		const messages = this.task?.messageStateHandler.clineMessages ?? []
-		for (let index = messages.length - 1; index >= 0; index--) {
-			const message = messages[index]
-			if (message.say === "api_req_started") {
-				const tokens = readContextTokens(message.text)
-				if (tokens > 0) return tokens
-			}
+	/** Resolve one user-selected Profile into a frozen active-mode request scope. */
+	private resolveProfileTarget(profileName: string, mode: Mode): ResolvedProfileTarget | undefined {
+		if (!this.task) return undefined
+		const profile = findEnabledProfileByName(profileName)
+		const providerContextWindow = profile ? getProfileModelInfo(profile).capabilities?.contextWindow : undefined
+		if (!profile || !providerContextWindow) return undefined
+		const config = this.stateManager.getApiConfigurationForTask(this.task.taskId)
+		const effectiveConfig = {
+			...config,
+			...(mode === "plan" ? { planModeProfile: profileName } : { actModeProfile: profileName }),
+			ulid: this.task.ulid,
 		}
-		return 0
+		const executionApi = buildApiHandler(effectiveConfig, mode)
+		const { targetContextWindow } = resolveTargetContextScope({
+			providerContextWindow,
+			maxContextTokens: this.stateManager.getGlobalSettingsKey("autoCondenseMaxContextTokens"),
+		})
+		return { profile: profileName, mode, contextWindow: targetContextWindow, executionApi }
 	}
 
 	/** Validate task, source mode, and source profile immediately before compaction or commit. */
@@ -731,6 +816,12 @@ export class Controller {
 				source.profile === operation.source.profile &&
 				source.contextWindow === operation.source.contextWindow,
 		)
+	}
+
+	/** Validate every source binding captured before a Profile preflight. */
+	private validateProfileSwitch(operation: ProfileSwitchOperation): boolean {
+		if (this.task?.taskId !== operation.taskId || this.task.getMode() !== operation.activeMode) return false
+		return operation.targetModes.every((mode) => this.resolveTaskProfileName(mode) === operation.sourceBindings[mode])
 	}
 
 	/** Request a task-local transaction or update the welcome-screen global mode. */
@@ -751,6 +842,29 @@ export class Controller {
 	/** Cancel the active mode-switch confirmation transaction. */
 	async cancelModeSwitch(operationId: string): Promise<ModeSwitchRequestResult> {
 		return this.modeSwitchCoordinator.cancel(operationId)
+	}
+
+	/** Request a delayed-adoption Profile transition for the active task. */
+	async requestProfileSwitch(
+		targetProfile: string,
+		targetModes: Mode[],
+		chatContent?: ChatContent,
+	): Promise<ProfileSwitchRequestResult> {
+		if (!this.task) return { status: "rejected", error: "Active task is unavailable." }
+		return this.profileSwitchCoordinator.request({
+			taskId: this.task.taskId,
+			targetProfile,
+			targetModes,
+			chatContent,
+		})
+	}
+
+	async confirmProfileSwitch(operationId: string): Promise<ProfileSwitchRequestResult> {
+		return this.profileSwitchCoordinator.confirm(operationId)
+	}
+
+	async cancelProfileSwitch(operationId: string): Promise<ProfileSwitchRequestResult> {
+		return this.profileSwitchCoordinator.cancel(operationId)
 	}
 
 	/** Compatibility wrapper for internal callers that still consume a Boolean commit result. */
@@ -1228,6 +1342,8 @@ export class Controller {
 		const yoloModeToggled = this.stateManager.getGlobalSettingsKey("yoloModeToggled")
 		const useAutoCondense = this.stateManager.getGlobalSettingsKey("useAutoCondense")
 		const autoCondenseTriggerPercent = this.stateManager.getGlobalSettingsKey("autoCondenseTriggerPercent")
+		const autoCondenseMinReserveTokens = this.stateManager.getGlobalSettingsKey("autoCondenseMinReserveTokens")
+		const autoCondenseMaxReserveTokens = this.stateManager.getGlobalSettingsKey("autoCondenseMaxReserveTokens")
 		const autoCondenseMaxContextTokens = this.stateManager.getGlobalSettingsKey("autoCondenseMaxContextTokens")
 		const subagentsEnabled = this.stateManager.getGlobalSettingsKey("subagentsEnabled")
 		const userInfo = this.stateManager.getGlobalStateKey("userInfo")
@@ -1313,12 +1429,15 @@ export class Controller {
 		} catch (error) {
 			Logger.warn("Failed to combine messages for api metrics:", error)
 		}
-		const { getApiMetrics, getLastApiReqTotalTokens, getLastTaskProgressText } = await import("@shared/getApiMetrics")
+		const { getApiMetrics, getLastTaskProgressText } = await import("@shared/getApiMetrics")
 		const apiMetrics = {
 			...getApiMetrics(metricMessages),
 			...this.task?.getApiRateSnapshot(),
 		}
-		const lastApiReqTotalTokens = getLastApiReqTotalTokens(metricMessages)
+		const contextWindowIndicator = this.task?.getContextWindowIndicator()
+		const lastApiReqTotalTokens = contextWindowIndicator
+			? getContextWindowIndicatorTotalTokens(contextWindowIndicator)
+			: undefined
 
 		// If currentFocusChainChecklist is null, fall back to searching
 		// the full message list (not the window slice) for task_progress.
@@ -1328,6 +1447,7 @@ export class Controller {
 		const result: ExtensionState = {
 			stateRevision: revision,
 			modeSwitch: this.modeSwitchCoordinator.getSnapshot(),
+			profileSwitch: this.profileSwitchCoordinator?.getSnapshot(),
 			version,
 			apiConfiguration,
 			currentTaskItem,
@@ -1335,6 +1455,7 @@ export class Controller {
 			totalMessageCount,
 			firstItemIndex,
 			apiMetrics,
+			contextWindowIndicator,
 			lastApiReqTotalTokens,
 			promptCacheHealth: this.task?.getPromptCacheHealth(),
 			currentFocusChainChecklist: checklistForState,
@@ -1350,6 +1471,8 @@ export class Controller {
 			yoloModeToggled,
 			useAutoCondense,
 			autoCondenseTriggerPercent,
+			autoCondenseMinReserveTokens,
+			autoCondenseMaxReserveTokens,
 			autoCondenseMaxContextTokens,
 			subagentsEnabled,
 			userInfo,
@@ -1672,16 +1795,34 @@ export class Controller {
 		)
 	}
 
+	/** Replace one source-owned Task with an independent successor on the same surface. */
+	async startSuccessorTask(
+		expectedTaskId: string,
+		task: string,
+		taskSettings: Partial<Settings>,
+		initialUserContent: readonly ClineUserContent[],
+	): Promise<string | undefined> {
+		return this.runTaskLifecycleOperation(async (scope) => {
+			if (this.task?.taskId !== expectedTaskId) return undefined
+			await scope.clearTask({ suppressPostState: true })
+			return this.initTask(task, undefined, undefined, undefined, taskSettings, {
+				startInBackground: true,
+				initialUserContent: [...initialUserContent],
+				skipInitialClear: true,
+			})
+		})
+	}
+
 	async clearTask(options?: { clearPanelState?: boolean }) {
 		return this.runTaskLifecycleOperation((scope) => scope.clearTask(options))
 	}
 
-	private async clearTaskWithinLifecycle(options?: { clearPanelState?: boolean }) {
+	private async clearTaskWithinLifecycle(options?: { clearPanelState?: boolean; suppressPostState?: boolean }) {
 		const taskId = this.task?.taskId
 		if (taskId && options?.clearPanelState) {
 			await this.clearPanelStateIfNeeded()
 		}
-		await this.modeSwitchCoordinator.reset("Task cleared during mode switch.")
+		await this.contextTransitionEngine.reset("Task cleared during context transition.")
 		if (this.task) {
 			// Sync task mode to global state so slider works after task closed
 			this.stateManager.setGlobalState("mode", this.task.taskSm.mode)
@@ -1712,7 +1853,9 @@ export class Controller {
 			const { WorkspaceFileRegistry } = await import("@integrations/checkpoints/WorkspaceFileRegistry")
 			WorkspaceFileRegistry.getInstance().releaseTask(taskId)
 		}
-		await this.postStateToWebview()
+		if (!options?.suppressPostState) {
+			await this.postStateToWebview()
+		}
 	}
 
 	// Caching mechanism to keep track of webview messages + API conversation history per provider instance

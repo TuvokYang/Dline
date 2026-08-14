@@ -40,6 +40,7 @@ export type ResumeEntry =
 	| { type: "show_resume_interaction"; interactionId?: string; turnId?: string }
 	| { type: "show_completion_interaction"; interactionId: string; turnId: string }
 	| { type: "show_error_recovery"; interactionId: string; turnId: string; apiIndex: number }
+	| { type: "show_consumed_task" }
 
 /** Typed reconciliation diagnostic that never guesses missing identity or anchors. */
 export type ResumeDiagnostic =

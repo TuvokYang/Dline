@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { BlockPhase } from "../BlockPhaseMachine"
 import { type ActiveInteraction } from "../interaction/InteractionReducer"
-import type { TaskRuntimeState, TurnState } from "../runtime/TaskRuntimeState"
+import { createTaskRuntimeState, type TaskRuntimeState, type TurnState } from "../runtime/TaskRuntimeState"
 import { TaskPhase } from "../TaskPhase"
 import { createSnapshot, hydrateSnapshot, TaskSnapshotIdentityError } from "../TaskSnapshot"
 
@@ -69,6 +69,33 @@ describe("TaskSnapshot v2 schema", () => {
 			interaction: { kind: "focus_chain_change", status: "awaiting" },
 		})
 		expect(hydrateSnapshot(snapshot)).toEqual(state)
+	})
+
+	it("round-trips only the consumed New Task identity for crash recovery", () => {
+		const state = createTaskRuntimeState({
+			taskId: "task-1",
+			phase: TaskPhase.ABORTED,
+			revision: 9,
+			anchor: { apiIndex: 4, turnId: "turn-new-task" },
+		})
+		state.newTaskConsumed = {
+			functionId: "function-new-task",
+			dlineTid: "tid-new-task",
+		}
+
+		const snapshot = createSnapshot(state, 200)
+		const hydrated = hydrateSnapshot(snapshot)
+
+		expect(snapshot).toMatchObject({
+			phase: TaskPhase.ABORTED,
+			newTaskConsumed: {
+				functionId: "function-new-task",
+				dlineTid: "tid-new-task",
+			},
+		})
+		expect(snapshot).not.toHaveProperty("pendingReplacement")
+		expect(hydrated.newTaskConsumed).toEqual(state.newTaskConsumed)
+		expect(hydrated.newTaskConsumed).not.toBe(state.newTaskConsumed)
 	})
 
 	it("round-trips the accepted response required by a resolving interaction", () => {

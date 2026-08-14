@@ -161,6 +161,120 @@ describe("FooterActions", () => {
 		expect(onDraftAccepted).not.toHaveBeenCalled()
 	})
 
+	it("confirms New Task without submitting or settling the current feedback draft", async () => {
+		const dispatch = vi.fn(async () => ({ accepted: true, result: "accepted" }))
+		const onDraftAccepted = vi.fn()
+		const onSuccessorAccepted = vi.fn()
+		const view = approvalView()
+		if (!view.activeInteraction) throw new Error("Expected active interaction")
+		view.activeInteraction = {
+			...view.activeInteraction,
+			kind: "new_task",
+			presentationKind: "new_task",
+			taskAsk: "new_task",
+		}
+		view.footer.actions = [
+			{
+				type: "approve",
+				label: "Start New Task",
+				appearance: "primary",
+				enabled: true,
+				payloadPolicy: "none",
+				dispatchTarget: "interaction",
+			},
+			{
+				type: "reject",
+				label: "Regenerate Context",
+				appearance: "secondary",
+				enabled: true,
+				payloadPolicy: "draft",
+				dispatchTarget: "interaction",
+			},
+		]
+
+		render(
+			<FooterActions
+				dispatch={dispatch}
+				draft={{ text: "Do not submit this", images: ["image"], files: ["file"] }}
+				onDraftAccepted={onDraftAccepted}
+				onSuccessorAccepted={onSuccessorAccepted}
+				successorContext="Successor context"
+				view={view}
+			/>,
+		)
+		fireEvent.click(screen.getByRole("button", { name: "Start New Task" }))
+
+		await waitFor(() => expect(dispatch).toHaveBeenCalledOnce())
+		expect(dispatch).toHaveBeenCalledWith({
+			taskId: "task-1",
+			turnId: "turn-1",
+			interactionId: "interaction-1",
+			actionId: "approve",
+			stateRevision: 8,
+			draft: undefined,
+			selection: undefined,
+		})
+		expect(onDraftAccepted).not.toHaveBeenCalled()
+		expect(onSuccessorAccepted).toHaveBeenCalledWith({
+			sourceTaskId: "task-1",
+			context: "Successor context",
+			draft: {
+				text: "Do not submit this",
+				images: ["image"],
+				files: ["file"],
+				activeQuote: null,
+			},
+		})
+	})
+
+	it("submits and settles New Task feedback through Regenerate Context", async () => {
+		const dispatch = vi.fn(async () => ({ accepted: true, result: "accepted" }))
+		const onDraftAccepted = vi.fn()
+		const view = approvalView()
+		if (!view.activeInteraction) throw new Error("Expected active interaction")
+		view.activeInteraction = {
+			...view.activeInteraction,
+			kind: "new_task",
+			presentationKind: "new_task",
+			taskAsk: "new_task",
+		}
+		view.input.enterAction = "reject"
+		view.footer.actions = [
+			{
+				type: "approve",
+				label: "Start New Task",
+				appearance: "primary",
+				enabled: true,
+				payloadPolicy: "none",
+				dispatchTarget: "interaction",
+			},
+			{
+				type: "reject",
+				label: "Regenerate Context",
+				appearance: "secondary",
+				enabled: true,
+				payloadPolicy: "draft",
+				dispatchTarget: "interaction",
+			},
+		]
+		const draft = { text: "Keep the compatibility constraints", images: ["image"], files: ["file"] }
+
+		render(<FooterActions dispatch={dispatch} draft={draft} onDraftAccepted={onDraftAccepted} view={view} />)
+		fireEvent.click(screen.getByRole("button", { name: "Regenerate Context" }))
+
+		await waitFor(() => expect(dispatch).toHaveBeenCalledOnce())
+		expect(dispatch).toHaveBeenCalledWith({
+			taskId: "task-1",
+			turnId: "turn-1",
+			interactionId: "interaction-1",
+			actionId: "reject",
+			stateRevision: 8,
+			draft,
+			selection: undefined,
+		})
+		expect(onDraftAccepted).toHaveBeenCalledWith(expect.objectContaining({ draft: expect.objectContaining(draft) }))
+	})
+
 	it("submits and settles feedback through Regenerate Summary", async () => {
 		const dispatch = vi.fn(async () => ({ accepted: true, result: "accepted" }))
 		const onDraftAccepted = vi.fn()

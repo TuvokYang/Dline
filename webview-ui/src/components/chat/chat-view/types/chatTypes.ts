@@ -4,6 +4,7 @@
 
 import { ClineAsk, ClineMessage } from "@shared/ExtensionMessage"
 import { ListRange, VirtuosoHandle } from "react-virtuoso"
+import type { InteractionDraft } from "../../../../task-interaction/types"
 
 /**
  * Main ChatView component props
@@ -55,6 +56,7 @@ export interface ChatState {
 	handleFocusChange: (isFocused: boolean) => void
 	clearExpandedRows: () => void
 	resetState: () => void
+	restoreDraft: (draft: InteractionDraft) => void
 
 	// Scroll-related state (will be moved to scroll hook)
 	showScrollToBottom?: boolean

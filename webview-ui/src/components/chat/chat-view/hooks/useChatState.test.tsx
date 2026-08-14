@@ -36,6 +36,38 @@ describe("useChatState task ownership", () => {
 		act(() => result.current.undoInputValue())
 		expect(result.current.inputValue).toBe("submitted task")
 	})
+
+	it("restores a captured successor draft after the successor task becomes active", async () => {
+		const { result, rerender } = renderHook(({ taskId }: { taskId: string }) => useChatState([], taskId), {
+			initialProps: { taskId: "task-1" },
+		})
+
+		act(() => {
+			result.current.setInputValue("unsent successor draft")
+			result.current.setSelectedImages(["image"])
+			result.current.setSelectedFiles(["file"])
+			result.current.setActiveQuote("quote")
+		})
+		rerender({ taskId: "task-2" })
+		await waitFor(() => expect(result.current.inputValue).toBe(""))
+
+		act(() => {
+			result.current.restoreDraft({
+				text: "unsent successor draft",
+				images: ["image"],
+				files: ["file"],
+				activeQuote: "quote",
+			})
+		})
+
+		expect(result.current.inputValue).toBe("unsent successor draft")
+		expect(result.current.selectedImages).toEqual(["image"])
+		expect(result.current.selectedFiles).toEqual(["file"])
+		expect(result.current.activeQuote).toBe("quote")
+
+		rerender({ taskId: "task-3" })
+		await waitFor(() => expect(result.current.inputValue).toBe(""))
+	})
 })
 
 describe("useChatState input history", () => {

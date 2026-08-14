@@ -1,5 +1,6 @@
 import { ClineMessage } from "@shared/ExtensionMessage"
 import { type Dispatch, type SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from "react"
+import type { InteractionDraft } from "../../../../task-interaction/types"
 import { ChatState } from "../types/chatTypes"
 
 const INPUT_HISTORY_MERGE_INTERVAL_MS = 750
@@ -118,6 +119,17 @@ export function useChatState(messages: ClineMessage[], taskId?: string): ChatSta
 		setSendingDisabled(false)
 	}, [resetInputValue])
 
+	const restoreDraft = useCallback(
+		(draft: InteractionDraft) => {
+			resetInputValue(draft.text)
+			setActiveQuote(draft.activeQuote ?? null)
+			setSelectedImages([...draft.images])
+			setSelectedFiles([...draft.files])
+			setSendingDisabled(false)
+		},
+		[resetInputValue],
+	)
+
 	// Handle focus change
 	const handleFocusChange = useCallback((isFocused: boolean) => {
 		setIsTextAreaFocused(isFocused)
@@ -180,5 +192,6 @@ export function useChatState(messages: ClineMessage[], taskId?: string): ChatSta
 		handleFocusChange,
 		clearExpandedRows,
 		resetState,
+		restoreDraft,
 	}
 }

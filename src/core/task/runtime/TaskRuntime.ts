@@ -25,7 +25,12 @@ interface PreparedDispatch {
 
 /** Effects whose ports can causally dispatch more events into this runtime. */
 function isReentrantEffect(effect: TaskEffect): boolean {
-	return effect.type === "EXECUTE_TOOL" || effect.type === "START_API" || effect.type === "START_NEW_TASK"
+	return (
+		effect.type === "EXECUTE_TOOL" ||
+		effect.type === "START_API" ||
+		effect.type === "START_NEW_TASK" ||
+		effect.type === "START_SUCCESSOR_TASK"
+	)
 }
 
 /** Owns the task runtime aggregate and serializes all event dispatches. */

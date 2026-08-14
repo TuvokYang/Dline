@@ -4,6 +4,7 @@ import type {
 	ExecuteToolEffect,
 	StartApiEffect,
 	StartNewTaskEffect,
+	StartSuccessorTaskEffect,
 	TaskEffect,
 } from "./TaskEffect"
 import type { TaskRuntimeState } from "./TaskRuntimeState"
@@ -24,6 +25,8 @@ export interface TaskEffectPorts {
 	appendSay(effect: AppendSayEffect): Promise<void>
 	appendAsk(effect: AppendAskEffect): Promise<InteractionAnchorResult>
 	startNewTask(effect: StartNewTaskEffect): Promise<void>
+	/** Optional only for backward-compatible test ports that cannot start a successor. */
+	startSuccessorTask?(effect: StartSuccessorTaskEffect): Promise<void>
 }
 
 /** Identifies one effect that failed while being executed. */
@@ -86,6 +89,12 @@ export class TaskEffectRunner {
 				return this.ports.appendAsk(effect)
 			case "START_NEW_TASK":
 				await this.ports.startNewTask(effect)
+				return
+			case "START_SUCCESSOR_TASK":
+				if (!this.ports.startSuccessorTask) {
+					throw new Error("Task runtime successor port is unavailable")
+				}
+				await this.ports.startSuccessorTask(effect)
 				return
 		}
 	}

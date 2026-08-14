@@ -10,6 +10,7 @@ import {
 	type DispatchInteraction,
 	findActiveInteractionAnchor,
 	type InteractionDraft,
+	type PendingSuccessorDraftTransfer,
 } from "./types"
 
 /** Presentation-only props for a say timeline row. */
@@ -40,6 +41,7 @@ export interface InteractionHostProps {
 	draft?: InteractionDraft
 	showTimeline?: boolean
 	onDraftAccepted?: (settlement: AcceptedInteractionSettlement) => void
+	onSuccessorAccepted?: (transfer: PendingSuccessorDraftTransfer) => void
 }
 
 const EMPTY_DRAFT: InteractionDraft = { text: "", images: [], files: [], activeQuote: null }
@@ -77,10 +79,12 @@ export function InteractionHost({
 	draft = EMPTY_DRAFT,
 	showTimeline = true,
 	onDraftAccepted,
+	onSuccessorAccepted,
 }: InteractionHostProps) {
 	const [selection, setSelection] = useState<string[]>([])
 	const interaction = view.activeInteraction
 	const anchor = findActiveInteractionAnchor(messages, view)
+	const successorContext = interaction?.kind === "new_task" ? anchor?.text : undefined
 	const presentationKind = interaction?.presentationKind
 	const supported = presentationKind ? isPresentationKind(presentationKind) : false
 	const taskActionDispatcher = (action: TaskViewAction) => dispatchTaskAction(view, action)
@@ -115,6 +119,8 @@ export function InteractionHost({
 					dispatchTaskAction={taskActionDispatcher}
 					draft={draft}
 					onDraftAccepted={onDraftAccepted}
+					onSuccessorAccepted={onSuccessorAccepted}
+					successorContext={successorContext}
 					view={taskOnlyView}
 				/>
 			) : anchor && presentationKind && isPresentationKind(presentationKind) ? (
@@ -127,7 +133,9 @@ export function InteractionHost({
 						dispatchTaskAction={taskActionDispatcher}
 						draft={draft}
 						onDraftAccepted={onDraftAccepted}
+						onSuccessorAccepted={onSuccessorAccepted}
 						selection={{ values: selection }}
+						successorContext={successorContext}
 						view={view}
 					/>
 				</>
@@ -137,6 +145,8 @@ export function InteractionHost({
 					dispatchTaskAction={taskActionDispatcher}
 					draft={draft}
 					onDraftAccepted={onDraftAccepted}
+					onSuccessorAccepted={onSuccessorAccepted}
+					successorContext={successorContext}
 					view={view}
 				/>
 			)}

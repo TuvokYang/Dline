@@ -82,7 +82,12 @@ const DEFINITIONS: Readonly<Record<InteractionKind, InteractionDefinition>> = {
 		[action("approve", "Approve", "draft_and_selection"), action("reject", "Reject", "draft", "danger")],
 		APPROVAL_INPUT,
 	),
-	new_task: define("new_task", "new_task", [action("approve", "Start New Task", "draft"), action("reject", "Reject", "draft")]),
+	new_task: define(
+		"new_task",
+		"new_task",
+		[action("approve", "Start New Task"), action("reject", "Regenerate Context", "draft", "secondary")],
+		APPROVAL_INPUT,
+	),
 	report_bug: define("report_bug", "report_bug", [action("confirm_utility", "Report Bug", "draft")]),
 	condense: define(
 		"condense",

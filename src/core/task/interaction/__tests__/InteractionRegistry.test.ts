@@ -21,6 +21,7 @@ const CASES: InteractionCase[] = [
 	},
 	{ kind: "command_approval", taskAsk: "command", actions: ["approve", "reject"], enterAction: "reject" },
 	{ kind: "focus_chain_change", taskAsk: "focus_chain_change", actions: ["approve", "reject"], enterAction: "reject" },
+	{ kind: "new_task", taskAsk: "new_task", actions: ["approve", "reject"], enterAction: "reject" },
 	{ kind: "followup", taskAsk: "followup", actions: [], enterAction: "reply", continuation: "handler" },
 	{ kind: "make_plan", taskAsk: "make_plan", actions: [], enterAction: "reply", continuation: "handler" },
 	{ kind: "qna_response", taskAsk: "qna_respond", actions: [], enterAction: "reply", continuation: "handler" },
@@ -88,6 +89,26 @@ describe("InteractionRegistry", () => {
 	it("requires draft and selection for focus-chain approval", () => {
 		const definition = getInteraction("focus_chain_change")
 		expect(definition.actions[0].payloadPolicy).toBe("draft_and_selection")
+	})
+
+	it("confirms New Task without draft and carries feedback only for regeneration", () => {
+		const definition = getInteraction("new_task")
+
+		expect(definition.input).toMatchObject({ enabled: true, acceptsText: true, enterAction: "reject" })
+		expect(definition.actions).toEqual([
+			{
+				type: "approve",
+				label: "Start New Task",
+				appearance: "primary",
+				payloadPolicy: "none",
+			},
+			{
+				type: "reject",
+				label: "Regenerate Context",
+				appearance: "secondary",
+				payloadPolicy: "draft",
+			},
+		])
 	})
 
 	it("preserves the current draft on Condense and carries it only for Regenerate", () => {

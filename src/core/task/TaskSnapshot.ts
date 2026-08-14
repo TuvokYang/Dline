@@ -1,6 +1,7 @@
 import type { ClineAsk } from "@shared/ExtensionMessage"
 import type { BlockLifecycle } from "./BlockPhaseMachine"
 import type { ActiveInteraction } from "./interaction/InteractionReducer"
+import type { NewTaskConsumedState } from "./new-task/new-task-handoff"
 import type {
 	TaskAnchor,
 	TaskCancellationState,
@@ -149,6 +150,8 @@ export interface TaskSnapshot {
 	cancellation?: TaskCancellationState
 	runtimeError?: TaskRuntimeError
 	completion?: TaskCompletionState
+	/** Canonical New Task identity consumed before this historical Task exited. */
+	newTaskConsumed?: NewTaskConsumedState
 	awaiting?: TaskSnapshotAwaiting
 	approval?: TaskSnapshotApproval
 	execution?: TaskSnapshotExecution
@@ -199,7 +202,7 @@ export function normalizeLegacyTaskSnapshot(input: unknown): TaskSnapshot {
 }
 
 /** Identity field rejected while hydrating a canonical snapshot. */
-export type TaskSnapshotIdentityField = "taskId" | "turnId" | "interactionId" | "dlineTid"
+export type TaskSnapshotIdentityField = "taskId" | "turnId" | "interactionId" | "functionId" | "dlineTid"
 
 /** Typed failure raised when a version 2 snapshot lacks canonical identity. */
 export class TaskSnapshotIdentityError extends Error {
@@ -232,6 +235,14 @@ function cloneTurn(turn: TurnState): TurnState {
 		requireIdentity(turn.activeDlineTid, "dlineTid")
 	}
 	return { ...turn, turnId, blocks }
+}
+
+/** Clone one consumed New Task identity without retaining successor payload. */
+function cloneNewTaskConsumed(consumed: NewTaskConsumedState): NewTaskConsumedState {
+	return {
+		functionId: requireIdentity(consumed.functionId, "functionId"),
+		dlineTid: requireIdentity(consumed.dlineTid, "dlineTid"),
+	}
 }
 
 /** Clone one active interaction and validate its causal identity. */
@@ -288,6 +299,7 @@ export function createSnapshot(state: Readonly<TaskRuntimeState>, timestamp = Da
 		cancellation: state.cancellation ? { ...state.cancellation } : undefined,
 		runtimeError: state.error ? { ...state.error } : undefined,
 		completion: state.completion ? { ...state.completion } : undefined,
+		newTaskConsumed: state.newTaskConsumed ? cloneNewTaskConsumed(state.newTaskConsumed) : undefined,
 	}
 }
 
@@ -315,5 +327,6 @@ export function hydrateSnapshot(snapshot: TaskSnapshot): TaskRuntimeState {
 		cancellation: snapshot.cancellation ? { ...snapshot.cancellation } : undefined,
 		error: snapshot.runtimeError ? { ...snapshot.runtimeError } : undefined,
 		completion: snapshot.completion ? { ...snapshot.completion } : undefined,
+		newTaskConsumed: snapshot.newTaskConsumed ? cloneNewTaskConsumed(snapshot.newTaskConsumed) : undefined,
 	}
 }

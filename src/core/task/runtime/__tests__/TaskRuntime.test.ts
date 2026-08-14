@@ -172,6 +172,56 @@ describe("TaskRuntime dispatch", () => {
 		expect(runtime.getState().phase).toBe(TaskPhase.CANCELLING)
 	})
 
+	it("releases successor admission before its effect commits the consumed Task", async () => {
+		let runtime: TaskRuntime
+		let signalSuccessor: (() => void) | undefined
+		const successorEntered = new Promise<void>((resolve) => {
+			signalSuccessor = resolve
+		})
+		let nestedCommitAccepted = false
+		runtime = new TaskRuntime(
+			createTaskRuntimeState({ taskId: "task-1", phase: TaskPhase.BETWEEN_TURNS, revision: 8 }),
+			createPorts({
+				startSuccessorTask: async (effect) => {
+					signalSuccessor?.()
+					const committed = await runtime.dispatch({
+						type: "TASK_SUCCESSOR_START_COMMITTED",
+						source: effect.handoff.source,
+					})
+					nestedCommitAccepted = committed.accepted
+				},
+			}),
+		)
+
+		let admitted: Awaited<ReturnType<TaskRuntime["dispatchAtAdmission"]>> | undefined
+		const admission = runtime
+			.dispatchAtAdmission({
+				type: "TASK_SUCCESSOR_REQUESTED",
+				handoff: {
+					context: "next task",
+					source: { functionId: "function-new-task", dlineTid: "tid-new-task" },
+					initialUserContent: [],
+					taskSettings: { mode: "act", actModeProfile: "act-profile" },
+				},
+			})
+			.then((result) => {
+				admitted = result
+				return result
+			})
+
+		await successorEntered
+		await Promise.resolve()
+		await Promise.resolve()
+
+		expect(admitted).toMatchObject({ accepted: true })
+		await admission
+		await vi.waitFor(() => expect(nestedCommitAccepted).toBe(true))
+		expect(runtime.getState()).toMatchObject({
+			phase: TaskPhase.ABORTED,
+			newTaskConsumed: { functionId: "function-new-task", dlineTid: "tid-new-task" },
+		})
+	})
+
 	it("commits next state before running effects in order", async () => {
 		const order: string[] = []
 		let runtime: TaskRuntime

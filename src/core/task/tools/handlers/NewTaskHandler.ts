@@ -4,7 +4,8 @@ import { formatResponse } from "@core/prompts/responses"
 import { processFilesIntoText } from "@integrations/misc/extract-text"
 import { showSystemNotification } from "@integrations/notifications"
 import { ClineDefaultTool } from "@/shared/tools"
-import type { ToolResponse } from "../../index"
+import { NEW_TASK_FEEDBACK_CONTINUATION_MARKER } from "../../new-task/new-task-continuation"
+import type { ToolHandlerResult } from "../ToolExecutionResult"
 import type { IPartialBlockHandler, IToolHandler } from "../ToolExecutorCoordinator"
 import { interactionId, interactionTurnId, type TaskConfig } from "../types/TaskConfig"
 import type { StronglyTypedUIHelpers } from "../types/UIHelpers"
@@ -25,7 +26,7 @@ export class NewTaskHandler implements IToolHandler, IPartialBlockHandler {
 		await uiHelpers.ask(this.name, context, true, { existingTs: block.ts }).catch(() => {})
 	}
 
-	async execute(config: TaskConfig, block: ToolUse): Promise<ToolResponse> {
+	async execute(config: TaskConfig, block: ToolUse): Promise<ToolHandlerResult> {
 		const context: string | undefined = block.params.context
 
 		// Validate required parameters
@@ -51,25 +52,35 @@ export class NewTaskHandler implements IToolHandler, IPartialBlockHandler {
 			presentation: context,
 			existingTs: block.ts,
 		})
-		const text = outcome.draft?.text
+		if (outcome.actionId === "approve") {
+			return {
+				response: formatResponse.toolResult(getPrompt("toolHandlers", "newTaskCreated")),
+				postCommit: {
+					type: "start_successor_task",
+					context,
+					functionId: block.function_id,
+					dlineTid: block.dline_tid,
+				},
+			}
+		}
+
+		if (outcome.actionId !== "reject") {
+			throw new Error(`Unsupported New Task action: ${outcome.actionId}`)
+		}
+
+		const text = outcome.draft?.text ?? ""
 		const images = outcome.draft?.images
 		const newTaskFiles = outcome.draft?.files
-
-		// If the user provided a response, treat it as feedback
-		if (text || (images && images.length > 0) || (newTaskFiles && newTaskFiles.length > 0)) {
-			let fileContentString = ""
-			if (newTaskFiles && newTaskFiles.length > 0) {
-				fileContentString = await processFilesIntoText(newTaskFiles)
-			}
-
-			await sayFeedbackOnce(config, "noButtonClicked", text, images, newTaskFiles)
-			return formatResponse.toolResult(
-				`The user provided feedback instead of creating a new task:\n<feedback>\n${text}\n</feedback>`,
-				images,
-				fileContentString,
-			)
+		let fileContentString = ""
+		if (newTaskFiles && newTaskFiles.length > 0) {
+			fileContentString = await processFilesIntoText(newTaskFiles)
 		}
-		// If no response, the user clicked the "Create New Task" button
-		return formatResponse.toolResult(getPrompt("toolHandlers", "newTaskCreated"))
+
+		await sayFeedbackOnce(config, "noButtonClicked", text, images, newTaskFiles)
+		return formatResponse.toolResult(
+			`${NEW_TASK_FEEDBACK_CONTINUATION_MARKER}\nThe user provided feedback instead of creating a new task:\n<feedback>\n${text}\n</feedback>`,
+			images,
+			fileContentString,
+		)
 	}
 }

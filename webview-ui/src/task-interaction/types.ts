@@ -34,6 +34,13 @@ export function isSameInteractionDraft(current: InteractionDraft, captured: Inte
 	)
 }
 
+/** Accepted New Task approval retained until the matching successor surface is stable. */
+export interface PendingSuccessorDraftTransfer {
+	readonly sourceTaskId: string
+	readonly context: string
+	readonly draft: InteractionDraft
+}
+
 /** Accepted interaction identity and exact draft snapshot returned to the composition owner. */
 export interface AcceptedInteractionSettlement {
 	readonly taskId: string

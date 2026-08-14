@@ -23,6 +23,7 @@ import {
 	createAcceptedInteractionSettlement,
 	type InteractionDraft,
 	isActiveInteractionSynchronized,
+	type PendingSuccessorDraftTransfer,
 } from "@/task-interaction/types"
 import { Navbar } from "../menu/Navbar"
 import { TaskActivityNavigationProvider } from "./activity/TaskActivityNavigationContext"
@@ -81,6 +82,7 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 	} = useExtensionState()
 	const [contentTab, setContentTab] = useState<TaskContentTab>("chat")
 	const [focusedActivityId, setFocusedActivityId] = useState<string>()
+	const [pendingSuccessorDraft, setPendingSuccessorDraft] = useState<PendingSuccessorDraftTransfer>()
 	const [activityFilters, setActivityFilters] = useState<TaskActivityFilters>(DEFAULT_TASK_ACTIVITY_FILTERS)
 	const task = taskTitleMessage
 	const taskId = task ? (taskViewState?.taskId ?? currentTaskItem?.id) : undefined
@@ -130,6 +132,7 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 		setSelectedImages,
 		selectedFiles,
 		setSelectedFiles,
+		restoreDraft,
 		expandedRows,
 		setExpandedRows,
 		textAreaRef,
@@ -169,6 +172,23 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 		},
 		[setActiveQuote, setInputValue, setSelectedFiles, setSelectedImages],
 	)
+	const retainSuccessorDraft = useCallback((transfer: PendingSuccessorDraftTransfer): void => {
+		setPendingSuccessorDraft(transfer)
+	}, [])
+	useEffect(() => {
+		if (!pendingSuccessorDraft || !taskId || taskId === pendingSuccessorDraft.sourceTaskId) {
+			return
+		}
+		const successorStateStable =
+			currentTaskItem?.id === taskId &&
+			taskViewState?.taskId === taskId &&
+			taskTitleMessage?.text === pendingSuccessorDraft.context
+		if (!successorStateStable) {
+			return
+		}
+		restoreDraft(pendingSuccessorDraft.draft)
+		setPendingSuccessorDraft(undefined)
+	}, [currentTaskItem?.id, pendingSuccessorDraft, restoreDraft, taskId, taskTitleMessage?.text, taskViewState?.taskId])
 
 	useEffect(() => {
 		const handleCopy = async (e: ClipboardEvent) => {
@@ -537,6 +557,7 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 						draft={interactionDraft}
 						messages={modifiedMessages}
 						onDraftAccepted={clearOwnedDraft}
+						onSuccessorAccepted={retainSuccessorDraft}
 						showTimeline={false}
 						view={taskViewState}
 					/>

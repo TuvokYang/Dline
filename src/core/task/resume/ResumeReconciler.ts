@@ -4,7 +4,7 @@ import { BlockPhase } from "../BlockPhaseMachine"
 import type { InteractionKind } from "../interaction/Interaction"
 import { getInteraction } from "../interaction/InteractionRegistry"
 import { TaskPhase } from "../TaskPhase"
-import { hydrateSnapshot, type TaskSnapshot } from "../TaskSnapshot"
+import { createSnapshot, hydrateSnapshot, type TaskSnapshot } from "../TaskSnapshot"
 import type { ResumeDiagnostic, ResumeEntry, ResumeInput, ResumeResult } from "./ResumeInput"
 import { selectResumeUiTail } from "./ResumeInput"
 import { selectAwaitingResumeEntry } from "./ResumeReducer"
@@ -46,23 +46,7 @@ const BLOCK_APPROVAL_INTERACTIONS = new Set<InteractionKind>([
 ])
 
 function cloneSnapshot(snapshot: TaskSnapshot): TaskSnapshot {
-	const state = hydrateSnapshot(snapshot)
-	return {
-		version: 2,
-		taskId: state.taskId,
-		phase: state.phase,
-		apiIndex: state.anchor.apiIndex,
-		timestamp: snapshot.timestamp,
-		revision: state.revision,
-		anchor: { ...state.anchor },
-		turn: state.turn ? { ...state.turn, blocks: state.turn.blocks.map((block) => ({ ...block })) } : undefined,
-		interaction: state.interaction
-			? { ...state.interaction, anchor: state.interaction.anchor ? { ...state.interaction.anchor } : undefined }
-			: undefined,
-		cancellation: state.cancellation ? { ...state.cancellation } : undefined,
-		runtimeError: state.error ? { ...state.error } : undefined,
-		completion: state.completion ? { ...state.completion } : undefined,
-	}
+	return createSnapshot(hydrateSnapshot(snapshot), snapshot.timestamp)
 }
 
 function isValidAnchor(snapshot: TaskSnapshot, historyLength: number): boolean {
@@ -552,6 +536,17 @@ export function reconcileResume(input: ResumeInput): ResumeResult {
 	if (next.runtimeError) {
 		diagnostics.push({ code: "unsafe_runtime_error", effectType: next.runtimeError.effectType })
 		next.runtimeError = undefined
+	}
+
+	if (next.newTaskConsumed) {
+		next.phase = TaskPhase.ABORTED
+		next.cancellation = undefined
+		next.interaction = undefined
+		return {
+			snapshot: next,
+			entry: { type: "show_consumed_task" },
+			diagnostics,
+		}
 	}
 
 	reconcilePersistedInteraction(next, prepared.uiTail, folded.answeredDlineTids, prepared.apiHistory, diagnostics)
