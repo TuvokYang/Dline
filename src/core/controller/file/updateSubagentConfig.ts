@@ -67,8 +67,10 @@ export async function updateSubagentConfig(_controller: Controller, request: Upd
 		updatedFrontmatter = upsertYamlField(updatedFrontmatter, "description", description || null)
 	}
 
-	// Reconstruct the file
-	const newContent = `${beforeFrontmatter}---${updatedFrontmatter}\n---${afterFrontmatter}`
+	// Reconstruct the file with explicit line boundaries around YAML frontmatter.
+	const normalizedFrontmatter = updatedFrontmatter.trim().replace(/\r?\n/g, "\n")
+	const normalizedBody = afterFrontmatter.replace(/^\r?\n/, "")
+	const newContent = `${beforeFrontmatter}---\n${normalizedFrontmatter}\n---\n${normalizedBody}`
 
 	try {
 		await fs.writeFile(subagentPath, newContent, "utf8")

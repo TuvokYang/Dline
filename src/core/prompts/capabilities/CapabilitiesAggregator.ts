@@ -167,7 +167,7 @@ async function collectWorkflows(input: CollectCapabilitiesInput): Promise<Capabi
  * @returns Subagent capability entries containing only name and description.
  */
 async function collectSubagents(input: CollectCapabilitiesInput): Promise<CapabilityEntry[]> {
-	const entries: CapabilityEntry[] = [{ name: DEFAULT_SUBAGENT_CONFIG.name, description: DEFAULT_SUBAGENT_CONFIG.description }]
+	const entries: CapabilityEntry[] = []
 	for (const dir of getSubagentsScanDirectories(input.cwd)) {
 		if (!(await fileExistsAtPath(dir.path)) || !(await isDirectory(dir.path))) {
 			continue
@@ -188,6 +188,7 @@ async function collectSubagents(input: CollectCapabilitiesInput): Promise<Capabi
 			} catch {}
 		}
 	}
+	entries.push({ name: DEFAULT_SUBAGENT_CONFIG.name, description: DEFAULT_SUBAGENT_CONFIG.description })
 	return stableEntries(entries)
 }
 

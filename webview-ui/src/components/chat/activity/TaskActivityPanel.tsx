@@ -337,14 +337,12 @@ export function TaskActivityPanel({
 								)}
 							</div>
 							{isExpanded && (
-								<div
-									className="max-h-[60vh] overflow-y-auto border-t border-editor-widget-border/25 text-xs"
-									data-testid="activity-body">
+								<div className="border-t border-editor-widget-border/25 text-xs" data-testid="activity-body">
 									{activity.kind === "command" ? (
 										<>
 											{activity.detail && (
 												<div
-													className="flex items-start gap-2 bg-code px-3 py-2.5"
+													className="flex max-h-[72px] items-start gap-2 overflow-y-auto bg-code px-3 py-2.5"
 													data-testid="activity-command-line">
 													<TerminalIcon
 														aria-hidden="true"
@@ -357,12 +355,12 @@ export function TaskActivityPanel({
 											)}
 											<CommandActivityOutput activity={activity} />
 											{activity.result && (
-												<div className="border-t border-editor-widget-border/25 px-3 py-2.5 whitespace-pre-wrap break-words">
+												<div className="max-h-[120px] overflow-y-auto border-t border-editor-widget-border/25 px-3 py-2.5 whitespace-pre-wrap break-words">
 													{activity.result}
 												</div>
 											)}
 											{activity.error && (
-												<div className="border-t border-editor-widget-border/25 px-3 py-2.5 whitespace-pre-wrap break-words text-error">
+												<div className="max-h-[120px] overflow-y-auto border-t border-editor-widget-border/25 px-3 py-2.5 whitespace-pre-wrap break-words text-error">
 													{activity.error}
 												</div>
 											)}
@@ -370,18 +368,22 @@ export function TaskActivityPanel({
 									) : (
 										<div className="p-2.5">
 											{activity.detail && (
-												<div className="whitespace-pre-wrap text-description">{activity.detail}</div>
+												<div className="max-h-[72px] overflow-y-auto whitespace-pre-wrap text-description">
+													{activity.detail}
+												</div>
 											)}
 											{activity.result && (
-												<div className="mt-2 whitespace-pre-wrap break-words">{activity.result}</div>
+												<div className="mt-2 max-h-[240px] overflow-y-auto whitespace-pre-wrap break-words">
+													{activity.result}
+												</div>
 											)}
 											{activity.error && (
-												<div className="mt-2 whitespace-pre-wrap break-words text-error">
+												<div className="mt-2 max-h-[120px] overflow-y-auto whitespace-pre-wrap break-words text-error">
 													{activity.error}
 												</div>
 											)}
 											{activity.events.length > 0 && (
-												<div className="mt-2">
+												<div className="mt-2 max-h-[240px] overflow-y-auto">
 													<ActivityTimeline events={activity.events} />
 												</div>
 											)}

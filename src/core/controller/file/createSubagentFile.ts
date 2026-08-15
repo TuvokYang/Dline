@@ -17,6 +17,8 @@ tools:
   - list_files
   - list_code_definition_names
 skills: []
+# maxOutputTokens is measured in tokens. Omit it for the dynamic 5% default,
+# use 0.05 for a ratio, or use a positive integer such as 10240 for an absolute budget.
 ---
 You are {{SUBAGENT_NAME}}, a specialized research subagent. Your role is to explore the codebase, read files, search for code patterns, and report your findings clearly.
 

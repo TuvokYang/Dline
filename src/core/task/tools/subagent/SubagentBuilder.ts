@@ -57,6 +57,10 @@ export class SubagentBuilder {
 		return this.agentConfig.skills
 	}
 
+	getConfiguredMaxOutputTokens(): number | undefined {
+		return this.agentConfig.maxOutputTokens
+	}
+
 	buildSystemPrompt(generatedSystemPrompt: string): string {
 		const configuredSystemPrompt = this.agentConfig?.systemPrompt?.trim()
 		const systemPrompt = configuredSystemPrompt || generatedSystemPrompt

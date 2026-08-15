@@ -22,6 +22,26 @@ Dline 可以使用 `use_subagent` 启动一个 default 或具名 Subagent，也�
 
 Subagent costs (tokens and API spend) are tracked separately per subagent and rolled into the task's total cost. You can see per-subagent stats (tool calls, tokens, cost) in the chat UI as they run.
 
+## Final Result Output Budget
+
+具名 Subagent 的 YAML frontmatter 可以通过 `maxOutputTokens` 控制最终返回主任务的 `attempt_completion.result` 大小。该字段的单位始终是 token，而不是字符：
+
+```yaml
+---
+name: reviewer
+description: Research and exploration subagent
+maxOutputTokens: 0.05
+---
+```
+
+- 不配置时，默认使用启动该 Subagent 时主任务剩余上下文窗口的 5%。
+- `0 < maxOutputTokens < 1` 表示比例，例如 `0.05` 表示剩余窗口的 5%。
+- 正整数表示固定 token 数，例如 `10240`；实际生效值不会超过主任务当时的剩余窗口。
+- 生效预算会注入 Subagent 的任务提示词，Subagent 必须据此组织最终报告。
+- 该限制只约束最终 `attempt_completion.result`，不会把每一轮工具调用或 Provider 请求截断；返回前会再次执行同一 token 预算的硬限制。
+
+如果项目使用 UTF-8 文本估算 token，运行时采用保守的字节估算，因此最终结果可能略短于配置值，这是为了避免把超长结果重新注入主任务上下文。
+
 ## Enabling Subagents
 
 Subagents are enabled by default. Cline decides when parallel research is worth the overhead — you don't need to opt in or call them out in your prompt. To turn subagents off, disable the `use_subagents` tool in Settings → Features → Agent.

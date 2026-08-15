@@ -81,6 +81,8 @@ function createTaskConfig(nativeToolCallEnabled: boolean, options: any = {}): Ta
 		globalSkillsToggles: options.globalSkillsToggles,
 		useAutoCondense: options.useAutoCondense,
 		autoCondenseTriggerPercent: options.autoCondenseTriggerPercent,
+		autoCondenseMinReserveTokens: options.autoCondenseMinReserveTokens,
+		autoCondenseMaxReserveTokens: options.autoCondenseMaxReserveTokens,
 		autoCondenseMaxContextTokens: options.autoCondenseMaxContextTokens,
 	}
 	return {
@@ -465,6 +467,44 @@ describe("SubagentRunner", () => {
 		assert.equal(result.result, "done")
 	})
 
+	it("uses the configured YAML body as the provider system prompt", async () => {
+		const createMessage = vi.fn().mockImplementation(async function* (systemPrompt: string) {
+			assert.match(systemPrompt, /^Local YAML system prompt\./)
+			assert.doesNotMatch(systemPrompt, /^generated facade prompt/)
+			yield {
+				type: "tool_calls",
+				function_id: "yaml-prompt-complete",
+				tool_call: {
+					function: {
+						name: ClineDefaultTool.ATTEMPT,
+						arguments: JSON.stringify({ result: "done" }),
+					},
+				},
+			}
+		})
+		vi.spyOn(systemPromptFacade, "getSystemPrompt").mockResolvedValue({
+			systemPrompt: "generated facade prompt",
+			tools: undefined,
+			profile: PromptProfile.Standard,
+			warnings: [],
+		})
+		vi.spyOn(skills, "discoverSkills").mockResolvedValue([])
+		vi.spyOn(skills, "getAvailableSkills").mockReturnValue([])
+		stubApiHandler(createMessage)
+		initializeHostProvider()
+
+		const result = await new SubagentRunner(createTaskConfig(false), "local-reviewer", {
+			name: "local-reviewer",
+			description: "Local reviewer",
+			tools: [ClineDefaultTool.ATTEMPT],
+			systemPrompt: "Local YAML system prompt.",
+		}).run("Use local config", () => {})
+
+		assert.equal(result.status, "completed")
+		assert.equal(result.result, "done")
+		assert.equal(createMessage.mock.calls.length, 1)
+	})
+
 	it("emits native tool blocks with matching canonical identities across turns", async () => {
 		const createMessage = vi.fn()
 		createMessage.mockImplementationOnce(async function* () {
@@ -582,12 +622,14 @@ describe("SubagentRunner", () => {
 		assert.equal(scs.mock.calls.length, 1)
 	})
 
-	it("uses the global percentage and maximum context for auto-compaction", () => {
+	it("uses the absolute cap with the shared 2K trigger tolerance", () => {
 		stubApiHandler(vi.fn(), 1_000_000)
 		const runner = new SubagentRunner(
 			createTaskConfig(true, {
 				useAutoCondense: true,
 				autoCondenseTriggerPercent: 60,
+				autoCondenseMinReserveTokens: 5_000,
+				autoCondenseMaxReserveTokens: 30_000,
 				autoCondenseMaxContextTokens: 500_000,
 			}),
 		)
@@ -600,8 +642,32 @@ describe("SubagentRunner", () => {
 		}
 		const api = createContextApi(1_000_000)
 
-		assert.equal(probe.shouldCompactBeforeNextRequest(499_999, api, "gpt-5.4-mini"), false)
-		assert.equal(probe.shouldCompactBeforeNextRequest(500_000, api, "gpt-5.4-mini"), true)
+		assert.equal(probe.shouldCompactBeforeNextRequest(497_999, api, "gpt-5.4-mini"), false)
+		assert.equal(probe.shouldCompactBeforeNextRequest(498_000, api, "gpt-5.4-mini"), true)
+	})
+
+	it("uses the reserve pair when the context window equals the absolute cap", () => {
+		stubApiHandler(vi.fn(), 272_000)
+		const runner = new SubagentRunner(
+			createTaskConfig(true, {
+				useAutoCondense: true,
+				autoCondenseTriggerPercent: 97,
+				autoCondenseMinReserveTokens: 20_000,
+				autoCondenseMaxReserveTokens: 30_000,
+				autoCondenseMaxContextTokens: 272_000,
+			}),
+		)
+		const probe = runner as unknown as {
+			shouldCompactBeforeNextRequest: (
+				requestTotalTokens: number,
+				api: ReturnType<typeof coreApi.buildApiHandler>,
+				modelId: string,
+			) => boolean
+		}
+		const api = createContextApi(272_000)
+
+		assert.equal(probe.shouldCompactBeforeNextRequest(247_499, api, "gpt-5.4-mini"), false)
+		assert.equal(probe.shouldCompactBeforeNextRequest(247_500, api, "gpt-5.4-mini"), true)
 	})
 
 	it("retains standard truncation pressure when auto-compaction is disabled", () => {
@@ -969,6 +1035,45 @@ describe("SubagentRunner", () => {
 		const result = await runner.run("Run task", () => {})
 		assert.equal(result.status, "completed")
 		assert.equal(createMessage.mock.calls.length, 1)
+	})
+
+	it("injects and enforces the configured final output token budget", async () => {
+		const longResult = "abcdefghij".repeat(100)
+		const createMessage = vi.fn().mockImplementation(async function* (_systemPrompt: string, messages: unknown[]) {
+			const initialUserMessage = messages[0] as { content: Array<{ type: string; text?: string }> }
+			const initialText = initialUserMessage.content
+				.filter((block) => block.type === "text")
+				.map((block) => block.text ?? "")
+				.join("\n")
+			assert.match(initialText, /within 64 tokens/)
+			yield {
+				type: "tool_calls",
+				function_id: "budget-complete",
+				tool_call: {
+					function: {
+						name: ClineDefaultTool.ATTEMPT,
+						arguments: JSON.stringify({ result: longResult }),
+					},
+				},
+			}
+		})
+		stubSystemPrompt(false)
+		vi.spyOn(skills, "discoverSkills").mockResolvedValue([])
+		vi.spyOn(skills, "getAvailableSkills").mockReturnValue([])
+		stubApiHandler(createMessage)
+		initializeHostProvider()
+
+		const result = await new SubagentRunner(createTaskConfig(false), "budget-agent", {
+			name: "budget-agent",
+			description: "Budget test agent",
+			tools: [ClineDefaultTool.ATTEMPT],
+			maxOutputTokens: 64,
+			systemPrompt: "",
+		}).run("Return a detailed report", () => {})
+
+		assert.equal(result.status, "completed", result.error)
+		assert.ok(result.result)
+		assert.ok(Buffer.byteLength(result.result ?? "", "utf8") <= 64 * 4)
 	})
 
 	it("includes workspace metadata only in the initial user message", async () => {

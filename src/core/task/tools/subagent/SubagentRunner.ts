@@ -22,6 +22,7 @@ import {
 	computeCompactTrigger,
 	computeSummarizeBudget,
 	getContextWindowInfo,
+	shouldCompactProjectedUsage,
 } from "@/core/context/context-management/context-window-utils"
 import { HostRegistryInfo } from "@/registry"
 import { ClineError, ClineErrorType } from "@/services/error"
@@ -35,6 +36,11 @@ import { ToolValidator } from "../ToolValidator"
 import type { TaskConfig } from "../types/TaskConfig"
 import type { AgentBaseConfig } from "./AgentConfigLoader"
 import { SubagentBuilder } from "./SubagentBuilder"
+import {
+	buildSubagentOutputBudgetPrompt,
+	resolveSubagentOutputBudget,
+	truncateTextToSubagentOutputBudget,
+} from "./SubagentOutputBudget"
 
 const MAX_EMPTY_ASSISTANT_RETRIES = 3
 const MAX_INITIAL_STREAM_ATTEMPTS = 3
@@ -347,6 +353,8 @@ export class SubagentRunner {
 		try {
 			const mode = this.baseConfig.services.stateManager.getGlobalSettingsKey("mode")
 			const api = this.apiHandler
+			const outputBudget = resolveSubagentOutputBudget(this.baseConfig, this.agent.getConfiguredMaxOutputTokens())
+			const promptWithBudget = buildSubagentOutputBudgetPrompt(prompt, outputBudget.outputTokens)
 			this.activeApiAbort = api.abort?.bind(api)
 
 			// Use handler's provider ID to avoid cross-task interference from global StateManager
@@ -443,7 +451,7 @@ export class SubagentRunner {
 					content: [
 						{
 							type: "text",
-							text: prompt,
+							text: promptWithBudget,
 						} as ClineTextContentBlock,
 						// Server-side task loop checks require workspace metadata to be present in the
 						// initial user message of subagent runs.
@@ -731,6 +739,10 @@ export class SubagentRunner {
 							continue
 						}
 
+						const boundedCompletionResult = truncateTextToSubagentOutputBudget(
+							completionResult,
+							outputBudget.outputTokens,
+						)
 						const latestToolCall = formatToolCallPreview(toolName, toolCallParams)
 						onProgress({
 							latestToolCall,
@@ -744,8 +756,8 @@ export class SubagentRunner {
 						})
 						stats.toolCalls += 1
 						onProgress({ stats: { ...stats } })
-						onProgress({ status: "completed", result: completionResult, stats: { ...stats } })
-						return { status: "completed", result: completionResult, stats }
+						onProgress({ status: "completed", result: boundedCompletionResult, stats: { ...stats } })
+						return { status: "completed", result: boundedCompletionResult, stats }
 					}
 
 					if (!this.allowedTools.includes(toolName)) {
@@ -993,9 +1005,11 @@ export class SubagentRunner {
 		if (useAutoCondense && isNextGenModelFamily(modelId)) {
 			const thresholdTokens = computeCompactTrigger(contextWindow, computeSummarizeBudget(), {
 				triggerPercent: this.baseConfig.services.stateManager.getGlobalSettingsKey("autoCondenseTriggerPercent"),
+				minReserveTokens: this.baseConfig.services.stateManager.getGlobalSettingsKey("autoCondenseMinReserveTokens"),
+				maxReserveTokens: this.baseConfig.services.stateManager.getGlobalSettingsKey("autoCondenseMaxReserveTokens"),
 				maxContextTokens: this.baseConfig.services.stateManager.getGlobalSettingsKey("autoCondenseMaxContextTokens"),
 			})
-			return requestTotalTokens >= thresholdTokens
+			return shouldCompactProjectedUsage(requestTotalTokens, thresholdTokens)
 		}
 
 		return requestTotalTokens >= maxAllowedSize

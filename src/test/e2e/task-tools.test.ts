@@ -1210,7 +1210,103 @@ e2e(
 )
 
 e2e(
-	"Tools - subagent renders its task, expandable context, and ordered tool calls",
+	"Tools - local subagent YAML controls its system prompt and final output token budget",
+	async ({ helper, server, sidebar, userDataDir, workspaceDir }) => {
+		e2e.setTimeout(180_000)
+		const subagentDirectory = path.join(workspaceDir, ".agents", "subagents")
+		const yamlSystemPromptMarker = "E2E_SUBAGENT_YAML_SYSTEM_PROMPT"
+		const truncatedResultMarker = "...[truncated to 32 tokens]"
+		const omittedTailMarker = "E2E_SUBAGENT_BUDGET_TAIL"
+		const longChildResult = `E2E_SUBAGENT_BUDGET_PREFIX_${"A".repeat(256)}_${omittedTailMarker}`
+		await mkdir(subagentDirectory, { recursive: true })
+		await writeFile(
+			path.join(subagentDirectory, "e2e-output-budget.yml"),
+			`---
+name: e2e-output-budget
+description: E2E subagent output budget
+profile: ${E2E_PROFILE_NAMES.mockOpenAiResponses}
+tools:
+  - attempt_completion
+maxOutputTokens: 32
+---
+
+${yamlSystemPromptMarker}
+Return only the highest-value findings.`,
+			"utf8",
+		)
+
+		await helper.signin(sidebar)
+		await setAutoApproveAction(sidebar, "Read project files", false)
+		server.resetOpenAiMock()
+		server.enqueueOpenAiResponses(
+			{
+				type: "tool",
+				id: "call_subagent_output_budget",
+				name: "use_subagent",
+				arguments: {
+					agent_name: "e2e-output-budget",
+					task: "E2E_SUBAGENT_OUTPUT_BUDGET_TASK",
+					context: "Verify the configured final response budget.",
+					timeout: 60,
+				},
+			},
+			{
+				type: "tool",
+				id: "call_subagent_output_budget_parent_complete",
+				name: "attempt_completion",
+				arguments: { result: "E2E_SUBAGENT_OUTPUT_BUDGET_DONE" },
+				expectedToolResults: [
+					{
+						callId: "call_subagent_output_budget",
+						contentIncludes: ["E2E_SUBAGENT_BUDGET_PREFIX_", truncatedResultMarker],
+					},
+				],
+				expectedRequestExcludes: [omittedTailMarker],
+			},
+		)
+		server.enqueueResponses("openai-compatible-responses", {
+			type: "tool",
+			id: "call_subagent_output_budget_child_complete",
+			name: "attempt_completion",
+			arguments: { result: longChildResult },
+			expectedRequestIncludes: [
+				yamlSystemPromptMarker,
+				"# Final Response Budget",
+				"Keep that final result within 32 tokens.",
+			],
+		})
+
+		await sendTask(sidebar, "Run the configured output-budget subagent.")
+		const approveButton = sidebar.getByText("Approve", { exact: true })
+		await expect(approveButton).toBeVisible({ timeout: 60_000 })
+		await approveButton.click()
+		await expect(sidebar.getByText("E2E_SUBAGENT_OUTPUT_BUDGET_DONE", { exact: false }).last()).toBeVisible({
+			timeout: 60_000,
+		})
+
+		await expect.poll(() => server.getRequestCount("openai-compatible-chat")).toBe(2)
+		await expect.poll(() => server.getRequestCount("openai-compatible-responses")).toBe(1)
+		const childRequest = server.getMockConsumptions("openai-compatible-responses")[0]
+		expect(childRequest.contractError).toBeUndefined()
+		const childRequestText = JSON.stringify(childRequest.requestBody)
+		expect(childRequestText).toContain(yamlSystemPromptMarker)
+		expect(childRequestText).toContain("# Final Response Budget")
+		expect(childRequestText).toContain("Keep that final result within 32 tokens.")
+
+		const parentContinuation = server.getMockConsumptions("openai-compatible-chat")[1]
+		expect(parentContinuation.contractError).toBeUndefined()
+		const returnedResult = parentContinuation.requestToolResults.find(
+			(result) => result.callId === "call_subagent_output_budget",
+		)?.content
+		expect(returnedResult).toContain("E2E_SUBAGENT_BUDGET_PREFIX_")
+		expect(returnedResult).toContain(truncatedResultMarker)
+		expect(returnedResult).not.toContain(omittedTailMarker)
+		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+	},
+)
+
+e2e(
+	"Tools - subagent renders its name, single-line context, bounded sections, and ordered tool calls",
 	async ({ helper, server, sidebar, userDataDir }) => {
 		e2e.setTimeout(180_000)
 		const subagentTask = "E2E_SUBAGENT_RENDERING_TASK"
@@ -1277,25 +1373,44 @@ e2e(
 		const taskHeading = sidebar.getByRole("heading", { name: subagentTask, exact: true }).last()
 		await expect(taskHeading).toBeVisible()
 		const subagentCard = taskHeading.locator("xpath=ancestor::*[@data-testid='subagent-item'][1]")
-		const contextToggle = subagentCard.getByRole("button", { name: "Show full subagent context", exact: true })
-		await expect(contextToggle).toHaveAttribute("aria-expanded", "false")
-		const contextContent = contextToggle.getByTestId("subagent-context-content")
-		const collapsedContext = await contextContent.evaluate((element) => ({
-			clientHeight: element.clientHeight,
-			scrollHeight: element.scrollHeight,
-		}))
-		expect(collapsedContext.scrollHeight).toBeGreaterThan(collapsedContext.clientHeight)
-		await subagentCard.screenshot({ path: e2e.info().outputPath("subagent-context-collapsed.png") })
+		await expect(subagentCard.getByTestId("subagent-name")).toHaveText("default")
+		await expect(subagentCard).toContainText("#1 · Foreground")
+		await expect(subagentCard).not.toContainText("subagent_1")
 
-		await contextToggle.click()
-		const expandedContextToggle = subagentCard.getByRole("button", { name: "Collapse subagent context", exact: true })
-		await expect(expandedContextToggle).toHaveAttribute("aria-expanded", "true")
-		await expect(expandedContextToggle).toContainText("Keep this third context line hidden as well.")
-		const expandedContext = await expandedContextToggle.getByTestId("subagent-context-content").evaluate((element) => ({
-			clientHeight: element.clientHeight,
-			scrollHeight: element.scrollHeight,
-		}))
-		expect(expandedContext.clientHeight).toBeGreaterThanOrEqual(expandedContext.scrollHeight - 1)
+		const taskContainer = taskHeading.locator("..")
+		expect(
+			await taskContainer.evaluate((element) => {
+				const style = getComputedStyle(element)
+				return { maxHeight: style.maxHeight, overflowY: style.overflowY }
+			}),
+		).toEqual({ maxHeight: "72px", overflowY: "auto" })
+
+		const context = subagentCard.getByTestId("subagent-context")
+		await expect(context).toContainText("Context")
+		const contextContent = context.getByTestId("subagent-context-content")
+		await expect(contextContent).toHaveAttribute("title", subagentContext)
+		const contextLayout = await context.evaluate((element) => {
+			const style = getComputedStyle(element)
+			return {
+				clientHeight: element.clientHeight,
+				scrollHeight: element.scrollHeight,
+				overflowY: style.overflowY,
+			}
+		})
+		expect(contextLayout.clientHeight).toBeGreaterThan(0)
+		expect(contextLayout.scrollHeight).toBeLessThanOrEqual(contextLayout.clientHeight + 1)
+		expect(contextLayout.overflowY).toBe("visible")
+		expect(
+			await contextContent.evaluate((element) => {
+				const style = getComputedStyle(element)
+				return {
+					overflow: style.overflow,
+					textOverflow: style.textOverflow,
+					whiteSpace: style.whiteSpace,
+				}
+			}),
+		).toEqual({ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" })
+		await expect(subagentCard.getByRole("button", { name: "Show full subagent context", exact: true })).toHaveCount(0)
 
 		const toolRows = subagentCard.getByTestId("subagent-tool-call")
 		await expect(toolRows).toHaveCount(3)
@@ -1304,7 +1419,32 @@ e2e(
 			expect.stringContaining("list_files(path=., recursive=false)"),
 			expect.stringContaining("attempt_completion(result=E2E_SUBAGENT_RENDERING_CHILD_DONE)"),
 		])
-		await subagentCard.screenshot({ path: e2e.info().outputPath("subagent-context-expanded.png") })
+		const toolsContainer = toolRows.first().locator("xpath=ancestor::ol[1]/parent::div[1]")
+		expect(
+			await toolsContainer.evaluate((element) => {
+				const style = getComputedStyle(element)
+				return { maxHeight: style.maxHeight, overflowY: style.overflowY }
+			}),
+		).toEqual({ maxHeight: "96px", overflowY: "auto" })
+
+		const itemsContainer = subagentCard.locator("..")
+		expect(
+			await itemsContainer.evaluate((element) => {
+				const style = getComputedStyle(element)
+				return { maxHeight: style.maxHeight, overflowY: style.overflowY }
+			}),
+		).toEqual({ maxHeight: "none", overflowY: "visible" })
+
+		await subagentCard.getByRole("button", { name: "Show subagent output", exact: true }).click()
+		const output = subagentCard.getByTestId("subagent-output")
+		await expect(output).toContainText("E2E_SUBAGENT_RENDERING_CHILD_DONE")
+		expect(
+			await output.locator("..").evaluate((element) => {
+				const style = getComputedStyle(element)
+				return { maxHeight: style.maxHeight, overflowY: style.overflowY }
+			}),
+		).toEqual({ maxHeight: "240px", overflowY: "auto" })
+		await subagentCard.screenshot({ path: e2e.info().outputPath("subagent-bounded-sections.png") })
 		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
 	},
 )

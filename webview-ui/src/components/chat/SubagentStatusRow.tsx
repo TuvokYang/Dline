@@ -112,29 +112,15 @@ function getOrderedToolCalls(events: TaskActivityEvent[] | undefined): SubagentT
 }
 
 function SubagentContext({ context }: { context: string }) {
-	const [isExpanded, setIsExpanded] = useState(false)
-
 	return (
-		<button
-			aria-expanded={isExpanded}
-			aria-label={isExpanded ? "Collapse subagent context" : "Show full subagent context"}
-			className="block w-full rounded-xs border border-editor-group-border bg-transparent px-2 py-1 text-left text-[11px] text-foreground opacity-80 cursor-pointer wrap-anywhere"
-			onClick={() => setIsExpanded((value) => !value)}
-			type="button">
-			<span className="mb-0.5 flex items-center justify-between font-semibold">
-				Context
-				{isExpanded ? (
-					<ChevronDownIcon aria-hidden="true" className="size-2.5 shrink-0" />
-				) : (
-					<ChevronRightIcon aria-hidden="true" className="size-2.5 shrink-0" />
-				)}
-			</span>
-			<span
-				className={`block whitespace-pre-wrap break-words leading-4 ${isExpanded ? "h-auto" : "h-4 overflow-hidden"}`}
-				data-testid="subagent-context-content">
+		<div
+			className="flex h-5 min-w-0 items-center gap-1 rounded-xs border border-editor-group-border px-2 text-[11px] text-foreground opacity-80"
+			data-testid="subagent-context">
+			<span className="shrink-0 font-semibold">Context</span>
+			<span className="min-w-0 truncate" data-testid="subagent-context-content" title={context}>
 				{context}
 			</span>
-		</button>
+		</div>
 	)
 }
 
@@ -143,7 +129,7 @@ function SubagentToolCalls({ events }: { events: TaskActivityEvent[] | undefined
 	if (calls.length === 0) return null
 
 	return (
-		<div className="mt-1.5 border-t border-editor-group-border pt-1.5">
+		<div className="mt-1.5 max-h-[96px] overflow-y-auto border-t border-editor-group-border pt-1.5">
 			<div className="mb-0.5 text-[10px] font-semibold uppercase opacity-60">Tools</div>
 			<ol className="m-0 list-none space-y-0.5 p-0">
 				{calls.map((call, index) => {
@@ -420,7 +406,7 @@ export default function SubagentStatusRow({ message }: SubagentStatusRowProps) {
 				)}
 			</div>
 			{!collapsed && (
-				<div className="max-h-[40vh] space-y-2 overflow-y-auto pr-0.5">
+				<div className="space-y-2 pr-0.5">
 					{data.items.map((entry, index) => {
 						const displayStatus: DisplayStatus = entry.status
 						const hasDetails = Boolean(
@@ -429,14 +415,15 @@ export default function SubagentStatusRow({ message }: SubagentStatusRowProps) {
 									(entry.status === "failed" || entry.status === "timeout" || entry.status === "cancelled")),
 						)
 						const isExpanded = expandedItems[entry.index] === true
-						const hasStructuredPrompt = Boolean(entry.task || entry.context || entry.subagentName)
+						const hasStructuredPrompt = Boolean(entry.task || entry.context)
+						const displaySubagentName = entry.subagentName?.trim() || "default"
 						const isStreamingPromptUnderConstruction =
 							isPromptConstructionRow && message.partial === true && index === data.items.length - 1
 						const shouldShowStats = !isStreamingPromptUnderConstruction
 						const statsText = `${formatCount(entry.toolCalls)} tools called · ${formatCount(entry.contextTokens)} tokens · ${formatCost(entry.totalCost, entry.currency)}`
 						const metadataText = [
+							`#${entry.index}`,
 							entry.background ? "Background" : "Foreground",
-							entry.jobId ? `job ${entry.jobId}` : undefined,
 							entry.timeoutSeconds ? `timeout ${entry.timeoutSeconds}s` : undefined,
 							entry.injectionState ? `result ${entry.injectionState}` : undefined,
 						]
@@ -452,19 +439,22 @@ export default function SubagentStatusRow({ message }: SubagentStatusRowProps) {
 								<div className="flex items-start gap-2">
 									{statusIcon(displayStatus)}
 									<div className="min-w-0 flex-1 space-y-1.5">
+										<div
+											className="truncate text-[11px] font-semibold uppercase tracking-wide opacity-70"
+											data-testid="subagent-name"
+											title={displaySubagentName}>
+											{displaySubagentName}
+										</div>
 										{hasStructuredPrompt ? (
 											<>
-												{entry.subagentName && (
-													<div className="text-[11px] font-semibold uppercase tracking-wide opacity-70">
-														{entry.subagentName}
-													</div>
-												)}
 												{entry.task && (
 													<div>
 														<div className="text-[10px] font-semibold uppercase opacity-60">Task</div>
-														<h4 className="m-0 whitespace-pre-wrap break-words text-xs font-semibold text-foreground">
-															{entry.task}
-														</h4>
+														<div className="max-h-[72px] overflow-y-auto">
+															<h4 className="m-0 whitespace-pre-wrap break-words text-xs font-semibold text-foreground">
+																{entry.task}
+															</h4>
+														</div>
 													</div>
 												)}
 												{entry.context && <SubagentContext context={entry.context} />}
@@ -516,14 +506,16 @@ export default function SubagentStatusRow({ message }: SubagentStatusRowProps) {
 									)}
 								{shouldShowStats && <SubagentToolCalls events={entry.activityEvents} />}
 								{isExpanded && entry.result && entry.status === "completed" && (
-									<div className="mt-2 text-xs opacity-80 wrap-anywhere overflow-hidden">
-										<MarkdownBlock markdown={entry.result} />
+									<div className="mt-2 max-h-[240px] overflow-y-auto text-xs opacity-80 wrap-anywhere">
+										<div data-testid="subagent-output">
+											<MarkdownBlock markdown={entry.result} />
+										</div>
 									</div>
 								)}
 								{isExpanded &&
 									entry.error &&
 									(entry.status === "failed" || entry.status === "timeout" || entry.status === "cancelled") && (
-										<div className="mt-2 text-xs text-error whitespace-pre-wrap break-words">
+										<div className="mt-2 max-h-[120px] overflow-y-auto text-xs text-error whitespace-pre-wrap break-words">
 											{entry.error}
 										</div>
 									)}

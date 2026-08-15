@@ -141,8 +141,16 @@ export const CommandOutputContent = memo(
 			)
 		}
 
-		// Keep compact output previews small while capping full expansion at the viewport boundary.
-		const maxH = shouldAutoShow ? undefined : isOutputFullyExpanded ? "max-h-[80vh]" : "max-h-[120px]"
+		// Keep every long output independently scrollable without allowing it to consume the whole view.
+		const maxH = shouldAutoShow
+			? undefined
+			: presentation === "activity"
+				? isOutputFullyExpanded
+					? "max-h-[50vh]"
+					: "max-h-[96px]"
+				: isOutputFullyExpanded
+					? "max-h-[80vh]"
+					: "max-h-[120px]"
 
 		return (
 			<div

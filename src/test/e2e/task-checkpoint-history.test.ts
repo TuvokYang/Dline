@@ -55,6 +55,60 @@ async function pathExists(filePath: string): Promise<boolean> {
 		.catch(() => false)
 }
 
+async function seedPersistedCommandLayoutActivities(dlineDocsDir: string, taskId: string): Promise<void> {
+	const createdAt = Date.now()
+	const commandLines = Array.from({ length: 16 }, (_, index) => `echo E2E_ACTIVITY_COMMAND_LINE_${index}`).join("\n")
+	const outputLines = Array.from({ length: 40 }, (_, index) => `E2E_ACTIVITY_OUTPUT_LINE_${index}`).join("\n")
+	const resultLines = Array.from({ length: 40 }, (_, index) => `E2E_ACTIVITY_RESULT_LINE_${index}`).join("\n")
+	const errorLines = Array.from({ length: 40 }, (_, index) => `E2E_ACTIVITY_ERROR_LINE_${index}`).join("\n")
+	await writeFile(
+		path.join(dlineDocsDir, "tasks", taskId, "activities.json"),
+		JSON.stringify({
+			schemaVersion: 1,
+			taskId,
+			activities: [
+				{
+					schemaVersion: 1,
+					activityId: "e2e-command-layout-completed",
+					taskId,
+					kind: "command",
+					executionMode: "foreground",
+					cancellationOwner: "task",
+					status: "completed",
+					createdAt,
+					updatedAt: createdAt + 1_000,
+					finishedAt: createdAt + 1_000,
+					title: "E2E_ACTIVITY_COMMAND_COMPLETED",
+					detail: commandLines,
+					output: outputLines,
+					result: resultLines,
+					timeoutSeconds: 60,
+					events: [],
+				},
+				{
+					schemaVersion: 1,
+					activityId: "e2e-command-layout-failed",
+					taskId,
+					kind: "command",
+					executionMode: "foreground",
+					cancellationOwner: "task",
+					status: "failed",
+					createdAt: createdAt + 2_000,
+					updatedAt: createdAt + 3_000,
+					finishedAt: createdAt + 3_000,
+					title: "E2E_ACTIVITY_COMMAND_FAILED",
+					detail: commandLines.replaceAll("COMPLETED", "FAILED"),
+					output: outputLines.replaceAll("OUTPUT", "FAILED_OUTPUT"),
+					error: errorLines,
+					timeoutSeconds: 60,
+					events: [],
+				},
+			],
+		}),
+		"utf8",
+	)
+}
+
 async function seedPersistedRunningCommand(dlineDocsDir: string, taskId: string, command: string): Promise<string> {
 	const taskDir = path.join(dlineDocsDir, "tasks", taskId)
 	const activitiesPath = path.join(taskDir, "activities.json")
@@ -915,6 +969,108 @@ e2e(
 		expect(continuation.contractError).toBeUndefined()
 		expect(continuation.requestToolResults.filter((result) => result.callId === "call_history_replace")).toHaveLength(1)
 		expect((await readFile(filePath, "utf8")).replaceAll("\r\n", "\n")).toBe("after\n")
+		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+	},
+)
+
+e2e(
+	"History - persisted command activities keep independently bounded detail and output sections",
+	async ({ dlineDocsDir, helper, server, sidebar, userDataDir }) => {
+		e2e.setTimeout(180_000)
+		await helper.signin(sidebar)
+		const beforeTaskIds = await taskDirectoryIds(dlineDocsDir)
+		server.resetOpenAiMock()
+		server.enqueueOpenAiResponses({
+			type: "tool",
+			id: "call_activity_layout_ready",
+			name: "attempt_completion",
+			arguments: { result: "E2E_ACTIVITY_LAYOUT_READY" },
+		})
+
+		const taskText = "E2E_ACTIVITY_LAYOUT_HISTORY_TASK"
+		await sendTask(sidebar, taskText)
+		await expect(sidebar.getByText("E2E_ACTIVITY_LAYOUT_READY", { exact: false }).last()).toBeVisible({ timeout: 60_000 })
+		await closeCurrentTask(sidebar)
+		const persistedTaskId = await E2ETestHelper.waitForValue(async () => {
+			const ids = await taskDirectoryIds(dlineDocsDir)
+			return ids.find((id) => !beforeTaskIds.includes(id))
+		}, 30_000)
+		await seedPersistedCommandLayoutActivities(dlineDocsDir, persistedTaskId)
+		await reopenTask(sidebar, taskText)
+
+		await sidebar.getByRole("tab", { name: /^Activities(?: \d+)?$/ }).click()
+		await sidebar.getByRole("button", { name: "All", exact: true }).first().click()
+		const completedActivity = sidebar.getByTestId("activity-item").filter({ hasText: "E2E_ACTIVITY_COMMAND_COMPLETED" })
+		const failedActivity = sidebar.getByTestId("activity-item").filter({ hasText: "E2E_ACTIVITY_COMMAND_FAILED" })
+		await expect(completedActivity).toHaveCount(1)
+		await expect(failedActivity).toHaveCount(1)
+		await completedActivity.getByTestId("activity-toggle").click()
+		await failedActivity.getByTestId("activity-toggle").click()
+
+		const completedBody = completedActivity.getByTestId("activity-body")
+		const bodyLayout = await completedBody.evaluate((element) => {
+			const style = getComputedStyle(element)
+			return { maxHeight: style.maxHeight, overflowY: style.overflowY }
+		})
+		expect(bodyLayout).toEqual({ maxHeight: "none", overflowY: "visible" })
+
+		const commandLine = completedActivity.getByTestId("activity-command-line")
+		const commandLayout = await commandLine.evaluate((element) => {
+			const style = getComputedStyle(element)
+			return {
+				maxHeight: style.maxHeight,
+				overflowY: style.overflowY,
+				clientHeight: element.clientHeight,
+				scrollHeight: element.scrollHeight,
+			}
+		})
+		expect(commandLayout.maxHeight).toBe("72px")
+		expect(commandLayout.overflowY).toBe("auto")
+		expect(commandLayout.scrollHeight).toBeGreaterThan(commandLayout.clientHeight)
+
+		const output = completedActivity.getByTestId("command-output-scroll")
+		const outputLayout = await output.evaluate((element) => {
+			const style = getComputedStyle(element)
+			return {
+				maxHeight: style.maxHeight,
+				overflowY: style.overflowY,
+				clientHeight: element.clientHeight,
+				scrollHeight: element.scrollHeight,
+			}
+		})
+		expect(outputLayout.maxHeight).toBe("96px")
+		expect(outputLayout.overflowY).toBe("auto")
+		expect(outputLayout.scrollHeight).toBeGreaterThan(outputLayout.clientHeight)
+
+		const result = completedActivity.getByText("E2E_ACTIVITY_RESULT_LINE_0", { exact: false })
+		const resultLayout = await result.evaluate((element) => {
+			const style = getComputedStyle(element)
+			return {
+				maxHeight: style.maxHeight,
+				overflowY: style.overflowY,
+				clientHeight: element.clientHeight,
+				scrollHeight: element.scrollHeight,
+			}
+		})
+		expect(resultLayout.maxHeight).toBe("120px")
+		expect(resultLayout.overflowY).toBe("auto")
+		expect(resultLayout.scrollHeight).toBeGreaterThan(resultLayout.clientHeight)
+
+		const error = failedActivity.getByText("E2E_ACTIVITY_ERROR_LINE_0", { exact: false })
+		const errorLayout = await error.evaluate((element) => {
+			const style = getComputedStyle(element)
+			return {
+				maxHeight: style.maxHeight,
+				overflowY: style.overflowY,
+				clientHeight: element.clientHeight,
+				scrollHeight: element.scrollHeight,
+			}
+		})
+		expect(errorLayout.maxHeight).toBe("120px")
+		expect(errorLayout.overflowY).toBe("auto")
+		expect(errorLayout.scrollHeight).toBeGreaterThan(errorLayout.clientHeight)
+		await completedActivity.screenshot({ path: e2e.info().outputPath("activity-command-bounded-sections.png") })
+		expect(server.openAiRequestCount).toBe(1)
 		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
 	},
 )

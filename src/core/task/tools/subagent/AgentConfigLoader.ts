@@ -6,8 +6,17 @@ import fs from "fs/promises"
 import * as path from "path"
 import { z } from "zod"
 import { getDlineSubagentsDirectoryPath, getSubagentsScanDirectories } from "@/core/storage/disk"
+import { DEFAULT_SUBAGENT_FILE_NAME, DEFAULT_SUBAGENT_YAML_CONTENT } from "./DefaultSubagentConfig"
 
 export const AGENTS_CONFIG_DIRECTORY_NAME = "subagents"
+
+const SubagentOutputTokensSchema = z
+	.number()
+	.finite()
+	.refine(
+		(value) => value > 0 && (value < 1 || Number.isInteger(value)),
+		"maxOutputTokens must be a positive ratio below 1 or a positive integer token count.",
+	)
 
 const AgentBaseConfigSchema = z.object({
 	name: z.string().trim().min(1),
@@ -15,6 +24,7 @@ const AgentBaseConfigSchema = z.object({
 	tools: z.array(z.nativeEnum(ClineDefaultTool)).default([]),
 	skills: z.array(z.string().trim().min(1)).optional(),
 	profile: z.string().trim().min(1).nullable().optional(),
+	maxOutputTokens: SubagentOutputTokensSchema.optional(),
 	systemPrompt: z.string().trim().min(1),
 })
 
@@ -22,6 +32,12 @@ const AgentConfigFrontmatterSchema = z.object({
 	name: z.string().trim().min(1),
 	description: z.string().trim().min(1),
 	profile: z.string().trim().min(1).nullable().optional(),
+	maxOutputTokens: z
+		.preprocess(
+			(value) => (typeof value === "string" && value.trim() ? Number(value.trim()) : value),
+			SubagentOutputTokensSchema,
+		)
+		.optional(),
 	tools: z.union([z.string(), z.array(z.string())]).optional(),
 	skills: z.union([z.string(), z.array(z.string())]).optional(),
 })
@@ -84,6 +100,7 @@ export function parseAgentConfigFromYaml(content: string): AgentBaseConfig {
 		name: parsedFrontmatter.name,
 		description: parsedFrontmatter.description,
 		profile: parsedFrontmatter.profile,
+		maxOutputTokens: parsedFrontmatter.maxOutputTokens,
 		tools: parseTools(parsedFrontmatter.tools),
 		skills: parseSkills(parsedFrontmatter.skills),
 		systemPrompt,
@@ -95,6 +112,33 @@ function normalizeAgentName(name: string): string {
 }
 function isYamlFile(filePath: string): boolean {
 	return /\.(yaml|yml)$/i.test(filePath)
+}
+
+/**
+ * Create the editable default subagent config when a global directory has no YAML files.
+ * Concurrent extension instances use exclusive creation so existing user content is never overwritten.
+ *
+ * @param dirPath Global subagent config directory.
+ * @returns Created file path, or undefined when YAML already exists.
+ */
+export async function ensureDefaultSubagentConfigExists(dirPath: string): Promise<string | undefined> {
+	await fs.mkdir(dirPath, { recursive: true })
+	const entries = await fs.readdir(dirPath, { withFileTypes: true })
+	if (entries.some((entry) => entry.isFile() && isYamlFile(entry.name))) {
+		return undefined
+	}
+
+	const defaultPath = path.join(dirPath, DEFAULT_SUBAGENT_FILE_NAME)
+	try {
+		await fs.writeFile(defaultPath, DEFAULT_SUBAGENT_YAML_CONTENT, { encoding: "utf8", flag: "wx" })
+		Logger.log(`[AgentConfigLoader] Created default subagent config at ${defaultPath}`)
+		return defaultPath
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+			return undefined
+		}
+		throw error
+	}
 }
 
 /**
@@ -216,7 +260,10 @@ export class AgentConfigLoader {
 	private cachedConfigs = new Map<string, AgentBaseConfig>()
 	private listeners = new Set<AgentConfigChangeListener>()
 
-	private constructor(dirPath: string) {
+	private constructor(
+		dirPath: string,
+		private readonly ensureDefaultConfig: boolean,
+	) {
 		this.directoryPath = dirPath
 		this.initialLoadPromise = this.load()
 			.then(() => undefined)
@@ -231,7 +278,7 @@ export class AgentConfigLoader {
 		const resolvedPath = dirPath || getDlineSubagentsDirectoryPath()
 		const existing = AgentConfigLoader.instances.get(resolvedPath)
 		if (existing) return existing
-		const loader = new AgentConfigLoader(resolvedPath)
+		const loader = new AgentConfigLoader(resolvedPath, dirPath === undefined)
 		AgentConfigLoader.instances.set(resolvedPath, loader)
 		return loader
 	}
@@ -270,10 +317,16 @@ export class AgentConfigLoader {
 	}
 
 	public async load(): Promise<ReadonlyMap<string, AgentBaseConfig>> {
+		if (this.ensureDefaultConfig) {
+			await this.ensureReadmeExists()
+			await ensureDefaultSubagentConfigExists(this.directoryPath)
+		}
 		const configs = await readAgentConfigsFromDisk(this.directoryPath)
 		this.cachedConfigs = configs
 		Logger.debug(`[AgentConfigLoader] Loaded ${configs.size} agent config(s) from disk.`)
-		await this.ensureReadmeExists()
+		if (!this.ensureDefaultConfig) {
+			await this.ensureReadmeExists()
+		}
 		return this.getAllCachedConfigs()
 	}
 

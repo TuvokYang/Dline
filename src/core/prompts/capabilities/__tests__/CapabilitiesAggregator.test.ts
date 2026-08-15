@@ -46,12 +46,17 @@ describe("collectCapabilities", () => {
 				"---\nname: reviewer\ndescription: Review code\ntools: []\n---\nReview system prompt",
 				"utf8",
 			)
+			await fs.writeFile(
+				path.join(subagentDir, "default.yml"),
+				"---\nname: default\ndescription: Customized default research\ntools: []\n---\nCustom default prompt",
+				"utf8",
+			)
 
 			const snapshot = await collectCapabilities({ cwd })
 
 			expect(snapshot.workflows).toEqual([{ name: "release", description: "Release flow" }])
 			expect(snapshot.subagents).toEqual([
-				{ name: "default", description: "Built-in readonly research subagent" },
+				{ name: "default", description: "Customized default research" },
 				{ name: "reviewer", description: "Review code" },
 			])
 			expect(JSON.stringify(snapshot)).not.toContain("systemPrompt")

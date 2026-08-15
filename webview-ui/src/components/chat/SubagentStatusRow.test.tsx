@@ -267,7 +267,8 @@ describe("SubagentStatusRow", () => {
 		expect(cancelTaskActivities).toHaveBeenCalledWith("task-1", ["job-1", "job-3"])
 	})
 
-	it("renders task prominently and expands context from one line", () => {
+	it("renders the subagent name, sequence, bounded task, and single-line context without exposing the job id", () => {
+		const jobId = "subagent_batch_fg_call_AvllKHRBjVSaDfW6gFJJVvhL_1"
 		const msg = makeMsg({
 			say: "subagent",
 			text: JSON.stringify({
@@ -275,6 +276,7 @@ describe("SubagentStatusRow", () => {
 				items: [
 					{
 						index: 1,
+						jobId,
 						prompt: "<task>review code</task><context>focus on cancellation</context>",
 						subagentName: "reviewer",
 						task: "review code",
@@ -295,14 +297,22 @@ describe("SubagentStatusRow", () => {
 
 		render(<SubagentStatusRow isLast={true} message={msg} />)
 
-		expect(screen.getByText("reviewer")).toBeInTheDocument()
-		expect(screen.getByRole("heading", { name: "review code" })).toBeInTheDocument()
-		const context = screen.getByRole("button", { name: "Show full subagent context" })
-		expect(context).toHaveAttribute("aria-expanded", "false")
-		expect(screen.getByTestId("subagent-context-content")).toHaveClass("h-4", "overflow-hidden")
-		fireEvent.click(context)
-		expect(screen.getByRole("button", { name: "Collapse subagent context" })).toHaveAttribute("aria-expanded", "true")
-		expect(screen.getByText(/then verify cleanup/)).toBeInTheDocument()
+		const item = screen.getByTestId("subagent-item")
+		const name = screen.getByTestId("subagent-name")
+		const task = screen.getByRole("heading", { name: "review code" })
+		const context = screen.getByTestId("subagent-context")
+		const contextContent = screen.getByTestId("subagent-context-content")
+		expect(name).toHaveTextContent("reviewer")
+		expect(screen.getAllByText("reviewer")).toHaveLength(1)
+		expect(task.parentElement).toHaveClass("max-h-[72px]", "overflow-y-auto")
+		expect(context).toHaveClass("h-5")
+		expect(context).toHaveTextContent("Context")
+		expect(contextContent).toHaveClass("truncate")
+		expect(contextContent).toHaveAttribute("title", "focus on cancellation\nthen verify cleanup")
+		expect(screen.queryByRole("button", { name: /subagent context/i })).not.toBeInTheDocument()
+		expect(item).toHaveTextContent("#1 · Foreground")
+		expect(item).not.toHaveTextContent(jobId)
+		expect(item.parentElement).not.toHaveClass("overflow-y-auto")
 		expect(screen.queryByText(/<task>/)).not.toBeInTheDocument()
 		expect(screen.queryByText(/<context>/)).not.toBeInTheDocument()
 	})
@@ -373,9 +383,38 @@ describe("SubagentStatusRow", () => {
 
 		render(<SubagentStatusRow isLast={true} message={msg} />)
 
-		expect(screen.getAllByTestId("subagent-tool-call").map((row) => row.textContent)).toEqual([
-			"1.read_file(path=README.md)",
-			"2.list_files(path=.)",
-		])
+		const toolCalls = screen.getAllByTestId("subagent-tool-call")
+		expect(toolCalls.map((row) => row.textContent)).toEqual(["1.read_file(path=README.md)", "2.list_files(path=.)"])
+		expect(screen.getByText("Tools").parentElement).toHaveClass("max-h-[96px]", "overflow-y-auto")
+	})
+
+	it("bounds expanded subagent output inside the individual item", () => {
+		const msg = makeMsg({
+			say: "subagent",
+			text: JSON.stringify({
+				status: "completed",
+				items: [
+					{
+						index: 1,
+						prompt: "review",
+						status: "completed",
+						result: "long result",
+						toolCalls: 1,
+						inputTokens: 10,
+						outputTokens: 5,
+						totalCost: 0,
+						currency: "USD",
+						contextTokens: 15,
+						contextWindow: 200000,
+						contextUsagePercentage: 0.01,
+					},
+				],
+			}),
+		})
+
+		render(<SubagentStatusRow isLast={true} message={msg} />)
+		fireEvent.click(screen.getByRole("button", { name: "Show subagent output" }))
+
+		expect(screen.getByTestId("subagent-output").parentElement).toHaveClass("max-h-[240px]", "overflow-y-auto")
 	})
 })

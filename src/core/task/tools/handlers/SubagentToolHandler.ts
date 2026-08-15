@@ -63,15 +63,17 @@ async function getAvailableSubagentNames(config: TaskConfig): Promise<string[]> 
 }
 
 /**
- * Shorten long result text for tool summaries.
- * @param text Text to shorten.
- * @param maxChars Maximum number of characters to keep.
- * @returns Shortened text.
+ * Normalize result text for tool summaries.
+ *
+ * Final subagent results are bounded by SubagentRunner in tokens. This helper
+ * must not apply a second fixed character limit because that would override
+ * the configured or dynamically resolved output budget.
+ *
+ * @param text Text to normalize.
+ * @returns Trimmed text.
  */
-function excerpt(text: string | undefined, maxChars = 1200): string {
-	if (!text) return ""
-	const trimmed = text.trim()
-	return trimmed.length <= maxChars ? trimmed : `${trimmed.slice(0, maxChars)}...`
+function excerpt(text: string | undefined): string {
+	return text?.trim() ?? ""
 }
 
 /**
@@ -404,9 +406,7 @@ export class UseSubagentToolHandler implements IFullyManagedTool {
 			return formatResponse.toolError(error instanceof Error ? error.message : String(error))
 		}
 		const usesDefault = isDefaultSubagentName(request.agentName)
-		const resolvedSubagent = usesDefault
-			? undefined
-			: await resolveAgentConfig(config.cwd, request.agentName, getResolveOptions(config))
+		const resolvedSubagent = await resolveAgentConfig(config.cwd, request.agentName, getResolveOptions(config))
 		if (!usesDefault && !resolvedSubagent) {
 			const available = await getAvailableSubagentNames(config)
 			return formatResponse.toolError(
@@ -617,11 +617,17 @@ export class UseSubagentsToolHandler implements IFullyManagedTool {
 			config.taskState.consecutiveMistakeCount++
 			return formatResponse.toolError(error instanceof Error ? error.message : String(error))
 		}
+		const resolvedDefaultSubagent = await resolveAgentConfig(config.cwd, DEFAULT_SUBAGENT_NAME, getResolveOptions(config))
+		const effectiveSubagentName = resolvedDefaultSubagent?.config.name ?? DEFAULT_SUBAGENT_NAME
 		const prompts = request.items.map((item) => item.prompt)
 		const approvalBody = JSON.stringify({
 			kind: "batch",
 			prompts,
-			items: request.items.map((item) => ({ task: item.task, context: item.context })),
+			items: request.items.map((item) => ({
+				task: item.task,
+				context: item.context,
+				subagentName: effectiveSubagentName,
+			})),
 			background: request.options.background,
 			timeoutSeconds: request.options.timeoutSeconds,
 		} satisfies ClineAskUseSubagents)
@@ -638,6 +644,7 @@ export class UseSubagentsToolHandler implements IFullyManagedTool {
 		const entries: SubagentStatusItem[] = request.items.map((item) => ({
 			index: item.index,
 			prompt: item.prompt,
+			subagentName: effectiveSubagentName,
 			task: item.task,
 			context: item.context,
 			background: request.options.background,
@@ -647,10 +654,13 @@ export class UseSubagentsToolHandler implements IFullyManagedTool {
 			...emptyStats(),
 		}))
 		if (request.options.background) {
-			const runners = request.items.map(() => new SubagentRunner(config))
+			const runners = request.items.map(
+				() => new SubagentRunner(config, effectiveSubagentName, resolvedDefaultSubagent?.config),
+			)
 			const batch = getSubagentJobManager(config).startBatch({
 				timeoutSeconds: request.options.timeoutSeconds,
 				items: request.items.map((item, index) => ({
+					subagentName: effectiveSubagentName,
 					task: item.task,
 					prompt: item.prompt,
 					runner: () =>
@@ -711,7 +721,9 @@ export class UseSubagentsToolHandler implements IFullyManagedTool {
 			return formatResponse.toolResult(`Started background subagent batch job: ${batch.batchJobId}`)
 		}
 		config.taskState.isExecutingSubagent = true
-		const foregroundRunners = request.items.map(() => new SubagentRunner(config))
+		const foregroundRunners = request.items.map(
+			() => new SubagentRunner(config, effectiveSubagentName, resolvedDefaultSubagent?.config),
+		)
 		const foregroundBatchId = `subagent_batch_fg_${block.function_id || block.ts}`
 		entries.forEach((entry, index) => {
 			entry.jobId = `${foregroundBatchId}_${index + 1}`

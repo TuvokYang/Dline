@@ -7,6 +7,7 @@ import { ClineDefaultTool, getToolUseNames } from "@/shared/tools"
 import {
 	AGENTS_CONFIG_DIRECTORY_NAME,
 	AgentConfigLoader,
+	ensureDefaultSubagentConfigExists,
 	parseAgentConfigFromYaml,
 	readAgentConfigsFromDisk,
 	resolveAgentConfig,
@@ -31,6 +32,7 @@ name: code-reviewer
 description: Reviews code for quality and best practices
 tools: read_file, list_files, search_files
 profile: subagent-reviewer
+maxOutputTokens: 0.05
 ---
 
 You are a code reviewer.`
@@ -40,9 +42,36 @@ You are a code reviewer.`
 		assert.equal(parsed.name, "code-reviewer")
 		assert.equal(parsed.description, "Reviews code for quality and best practices")
 		assert.equal((parsed as { profile?: string }).profile, "subagent-reviewer")
+		assert.equal(parsed.maxOutputTokens, 0.05)
 		assert.equal("modelId" in parsed, false)
 		assert.deepEqual(parsed.tools, [ClineDefaultTool.FILE_READ, ClineDefaultTool.LIST_FILES, ClineDefaultTool.SEARCH])
 		assert.equal(parsed.systemPrompt, "You are a code reviewer.")
+	})
+
+	it("parses an absolute maxOutputTokens budget", () => {
+		const content = `---
+name: detailed-reviewer
+description: Returns detailed findings
+maxOutputTokens: 10240
+---
+
+Prompt body`
+
+		const parsed = parseAgentConfigFromYaml(content)
+
+		assert.equal(parsed.maxOutputTokens, 10_240)
+	})
+
+	it.each([0, -0.05, 1.5])("rejects invalid maxOutputTokens value %s", (maxOutputTokens) => {
+		const content = `---
+name: invalid-budget
+description: Invalid output budget
+maxOutputTokens: ${maxOutputTokens}
+---
+
+Prompt body`
+
+		assert.throws(() => parseAgentConfigFromYaml(content), /maxOutputTokens/)
 	})
 
 	it("supports raw Cline tool ids in tools", () => {
@@ -103,6 +132,37 @@ Prompt body`
 		assert.throws(() => parseAgentConfigFromYaml(content), /Unknown tool/)
 	})
 
+	it("creates default.yml when the global subagent directory has no YAML files", async () => {
+		const directoryPath = await createTempHomeDir()
+		tempDirs.push(directoryPath)
+
+		const createdPath = await ensureDefaultSubagentConfigExists(directoryPath)
+		const content = await fs.readFile(path.join(directoryPath, "default.yml"), "utf8")
+		const parsed = parseAgentConfigFromYaml(content)
+
+		assert.equal(createdPath, path.join(directoryPath, "default.yml"))
+		assert.equal(parsed.name, "default")
+		assert.match(parsed.systemPrompt, /default readonly research subagent/)
+	})
+
+	it("does not overwrite or add default.yml when any YAML config already exists", async () => {
+		const directoryPath = await createTempHomeDir()
+		tempDirs.push(directoryPath)
+		const existingPath = path.join(directoryPath, "reviewer.yaml")
+		const existingContent = `---
+name: reviewer
+description: Existing reviewer
+---
+Keep this prompt unchanged.`
+		await fs.writeFile(existingPath, existingContent, "utf8")
+
+		const createdPath = await ensureDefaultSubagentConfigExists(directoryPath)
+
+		assert.equal(createdPath, undefined)
+		assert.equal(await fs.readFile(existingPath, "utf8"), existingContent)
+		await assert.rejects(fs.stat(path.join(directoryPath, "default.yml")), { code: "ENOENT" })
+	})
+
 	it("returns an empty config map when the agents directory does not exist", async () => {
 		const tempHome = await createTempHomeDir()
 		tempDirs.push(tempHome)
@@ -154,6 +214,27 @@ Reviewer prompt`,
 		assert.equal(reviewer?.name, "reviewer")
 		assert.deepEqual(reviewer?.tools, [ClineDefaultTool.LIST_FILES])
 		assert.equal(loader.getAllCachedConfigs().size, 2)
+	})
+
+	it("prefers a local YAML config and preserves its system prompt body", async () => {
+		const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "agent-config-loader-cwd-"))
+		tempDirs.push(cwd)
+		const projectDir = path.join(cwd, ".agents", "subagents")
+		await fs.mkdir(projectDir, { recursive: true })
+		await fs.writeFile(
+			path.join(projectDir, "reviewer.yml"),
+			`---
+name: reviewer
+description: Local reviewer
+---
+Local reviewer system prompt.`,
+			"utf8",
+		)
+
+		const resolved = await resolveAgentConfig(cwd, "reviewer")
+
+		assert.equal(resolved?.source, "project")
+		assert.equal(resolved?.config.systemPrompt, "Local reviewer system prompt.")
 	})
 
 	it("does not resolve disabled project subagents", async () => {
