@@ -762,20 +762,14 @@ describe("SubagentRunner", () => {
 	})
 
 	it("retries initial stream failures before failing", async () => {
-		const createMessage = vi.fn()
-		const errMsg = '{"code":"stream_initialization_failed","message":"Failed to create stream"}'
-		createMessage.mockImplementationOnce(async function* () {
+		const createMessage = vi.fn().mockImplementation(async function* () {
 			yield* []
-			throw new Error(errMsg)
+			throw new Error('{"code":"stream_initialization_failed","message":"Failed to create stream"}')
 		})
-		createMessage.mockImplementationOnce(async function* () {
-			yield* []
-			throw new Error(errMsg)
-		})
-		createMessage.mockImplementationOnce(async function* () {
-			yield* []
-			throw new Error(errMsg)
-		})
+		vi.spyOn(global, "setTimeout").mockImplementation(((callback: (...args: unknown[]) => void) => {
+			queueMicrotask(callback)
+			return {} as NodeJS.Timeout
+		}) as typeof setTimeout)
 		stubSystemPrompt(false)
 		vi.spyOn(skills, "discoverSkills").mockResolvedValue([])
 		vi.spyOn(skills, "getAvailableSkills").mockReturnValue([])
@@ -784,8 +778,76 @@ describe("SubagentRunner", () => {
 		const runner = new SubagentRunner(createTaskConfig(false))
 		const result = await runner.run("List files", () => {})
 		assert.equal(result.status, "failed")
-		assert.equal(createMessage.mock.calls.length, 3)
+		assert.equal(createMessage.mock.calls.length, 6)
 		assert.match(result.error || "", /stream_initialization_failed/i)
+	})
+
+	it("retries retryable initial API failures five times with linear 3*n delays", async () => {
+		const createMessage = vi.fn().mockImplementation(async function* () {
+			yield* []
+			throw new Error('{"code":"stream_initialization_failed","message":"Temporary provider failure"}')
+		})
+		const setTimeoutSpy = vi.spyOn(global, "setTimeout").mockImplementation(((callback: (...args: unknown[]) => void) => {
+			queueMicrotask(callback)
+			return {} as NodeJS.Timeout
+		}) as typeof setTimeout)
+		stubSystemPrompt(false)
+		vi.spyOn(skills, "discoverSkills").mockResolvedValue([])
+		vi.spyOn(skills, "getAvailableSkills").mockReturnValue([])
+		stubApiHandler(createMessage)
+		initializeHostProvider()
+
+		const runner = new SubagentRunner(createTaskConfig(false))
+		const result = await runner.run("Retry the provider request", () => {})
+
+		assert.equal(result.status, "failed")
+		assert.equal(createMessage.mock.calls.length, 6)
+		assert.deepEqual(
+			setTimeoutSpy.mock.calls.map(([, timeout]) => timeout),
+			[3_000, 6_000, 9_000, 12_000, 15_000],
+		)
+		assert.match(result.error || "", /stream_initialization_failed|Temporary provider failure/i)
+	})
+
+	it.each([
+		["configuration error", new Error("Invalid subagent configuration")],
+		["authentication error", Object.assign(new Error("Unauthorized"), { status: 401 })],
+	])("does not retry %s", async (_label, error) => {
+		const createMessage = vi.fn().mockImplementation(async function* () {
+			yield* []
+			throw error
+		})
+		stubSystemPrompt(false)
+		vi.spyOn(skills, "discoverSkills").mockResolvedValue([])
+		vi.spyOn(skills, "getAvailableSkills").mockReturnValue([])
+		stubApiHandler(createMessage)
+		initializeHostProvider()
+
+		const result = await new SubagentRunner(createTaskConfig(false)).run("Do not retry this", () => {})
+
+		assert.equal(result.status, "failed")
+		assert.equal(createMessage.mock.calls.length, 1)
+	})
+
+	it("cancels a pending retry wait without issuing another API request", async () => {
+		const createMessage = vi.fn().mockImplementation(async function* () {
+			yield* []
+			throw new Error('{"code":"stream_initialization_failed","message":"Temporary provider failure"}')
+		})
+		stubSystemPrompt(false)
+		vi.spyOn(skills, "discoverSkills").mockResolvedValue([])
+		vi.spyOn(skills, "getAvailableSkills").mockReturnValue([])
+		stubApiHandler(createMessage)
+		initializeHostProvider()
+
+		const runner = new SubagentRunner(createTaskConfig(false))
+		const runPromise = runner.run("Cancel the provider retry", () => {})
+		await vi.waitFor(() => assert.equal(createMessage.mock.calls.length, 1))
+		await runner.abort()
+		const result = await runPromise
+
+		assert.equal(result.status, "cancelled")
+		assert.equal(createMessage.mock.calls.length, 1)
 	})
 
 	it("does not retry after a hosted Web Search chunk has already been yielded", async () => {

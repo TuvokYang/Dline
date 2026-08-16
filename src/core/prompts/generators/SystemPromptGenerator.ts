@@ -1,4 +1,4 @@
-import { renderCapabilitiesSection } from "../capabilities/CapabilitiesSection"
+import { renderCapabilitiesForContext } from "../capabilities/CapabilitiesSection"
 import { getPrompt } from "../i18n"
 import type { SystemPromptContext } from "../system-prompt/context"
 import {
@@ -44,9 +44,9 @@ export class SystemPromptGenerator {
 					}
 				: undefined)
 		const capabilitiesSection = capabilities
-			? renderCapabilitiesSection(capabilities, {
-					exclude: config.variant === "lite" ? ["skills", "subagents"] : [],
+			? renderCapabilitiesForContext(capabilities, {
 					profile: config.variant,
+					subagentsEnabled: context.subagentsEnabled,
 				})
 			: config.variant === "lite"
 				? ""

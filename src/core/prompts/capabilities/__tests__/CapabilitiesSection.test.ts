@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { PromptProfile } from "../../profiles/types"
-import { renderCapabilitiesSection } from "../CapabilitiesSection"
+import { renderCapabilitiesForContext, renderCapabilitiesSection } from "../CapabilitiesSection"
 
 describe("renderCapabilitiesSection", () => {
 	it("renders purpose, usage, and available entries without internal metadata", () => {
@@ -47,6 +47,31 @@ describe("renderCapabilitiesSection", () => {
 		expect(rendered).not.toContain("systemPrompt")
 		expect(rendered).not.toContain("path")
 		expect(rendered).not.toContain('"source"')
+	})
+
+	it("hides subagent guidance when the Standard feature gate is disabled", () => {
+		const capabilities = {
+			mcp: [],
+			skills: [],
+			workflows: [],
+			subagents: [{ name: "reviewer", description: "Review code" }],
+		}
+
+		const disabled = renderCapabilitiesForContext(capabilities, {
+			profile: PromptProfile.Standard,
+			subagentsEnabled: false,
+		})
+		const enabled = renderCapabilitiesForContext(capabilities, {
+			profile: PromptProfile.Standard,
+			subagentsEnabled: true,
+		})
+
+		expect(disabled).not.toContain("Subagents delegate self-contained research or analysis")
+		expect(disabled).not.toContain("The Subagents available to the current task are listed below:")
+		expect(disabled).not.toContain("`reviewer`: Review code")
+		expect(enabled).toContain("Subagents delegate self-contained research or analysis")
+		expect(enabled).toContain("The Subagents available to the current task are listed below:")
+		expect(enabled).toContain("`reviewer`: Review code")
 	})
 
 	it("keeps Lite guidance honest without exposing unavailable loaders", () => {

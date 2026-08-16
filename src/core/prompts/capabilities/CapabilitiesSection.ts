@@ -106,3 +106,17 @@ export function renderCapabilitiesSection(
 	}
 	return sections.join("\n\n")
 }
+
+/** Render only capability groups whose invocation tools are available in the current prompt context. */
+export function renderCapabilitiesForContext(
+	snapshot: CapabilitiesSnapshot,
+	context: { readonly profile: PromptProfile; readonly subagentsEnabled?: boolean },
+): string {
+	const exclude: CapabilitySource[] = []
+	if (context.profile === PromptProfile.Lite) {
+		exclude.push("skills", "subagents")
+	} else if (context.subagentsEnabled !== true) {
+		exclude.push("subagents")
+	}
+	return renderCapabilitiesSection(snapshot, { exclude, profile: context.profile })
+}

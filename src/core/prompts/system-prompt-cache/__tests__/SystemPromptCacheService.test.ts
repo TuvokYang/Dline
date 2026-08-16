@@ -252,6 +252,43 @@ describe("SystemPromptCacheService", () => {
 		expect(result.promptBuilder.contractVersion).toBe(SYSTEM_PROMPT_CONTRACT_VERSION)
 	})
 
+	it("rebuilds a frozen prompt from the previous prompt contract version", async () => {
+		const cached: TaskContextCache = {
+			...emptyContext("task-1"),
+			systemPrompt: {
+				frozen: {
+					text: "version-4 prompt with stale capability guidance",
+					tools: null,
+					capabilitiesHash: EMPTY_CAPABILITIES_HASH,
+					createdAt: 1,
+					refreshedAt: 1,
+					refreshReason: "task_start",
+					promptBuilder: { ...testPromptBuilderInfo, contractVersion: SYSTEM_PROMPT_CONTRACT_VERSION - 1 },
+				},
+			},
+		}
+		let buildCount = 0
+		const service = new SystemPromptCacheService({
+			taskId: "task-1",
+			deps: {
+				getContext: async () => cached,
+				saveContext: async () => undefined,
+				collectCapabilities: async () => EMPTY_CAPABILITIES,
+				buildSystemPrompt: async () => {
+					buildCount += 1
+					return { systemPrompt: "current contract prompt" }
+				},
+			},
+		})
+
+		const result = await service.getOrCreate({ promptContext })
+
+		expect(buildCount).toBe(1)
+		expect(result.text).toBe("current contract prompt")
+		expect(result.refreshReason).toBe("capability_change")
+		expect(result.promptBuilder.contractVersion).toBe(SYSTEM_PROMPT_CONTRACT_VERSION)
+	})
+
 	it("rebuilds the frozen pair when the prompt profile or native transport changes", async () => {
 		const frozenTools: readonly ClineTool[] = [buildTool("frozen_browser_tool")]
 		const cached = {
@@ -755,7 +792,10 @@ describe("SystemPromptCacheService", () => {
 			},
 		})
 
-		const result = await service.refresh({ promptContext, reason: "post_compaction" })
+		const result = await service.refresh({
+			promptContext: { ...promptContext, subagentsEnabled: true },
+			reason: "post_compaction",
+		})
 
 		expect(result.refreshReason).toBe("post_compaction")
 		expect(result.text).toContain("compact")

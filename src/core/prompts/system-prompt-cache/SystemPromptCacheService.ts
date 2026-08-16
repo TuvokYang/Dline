@@ -1,7 +1,6 @@
 import type { CollectCapabilitiesInput } from "@core/prompts/capabilities/CapabilitiesAggregator"
 import { collectCapabilities } from "@core/prompts/capabilities/CapabilitiesAggregator"
-import { renderCapabilitiesSection } from "@core/prompts/capabilities/CapabilitiesSection"
-import type { CapabilitiesSnapshot } from "@core/prompts/capabilities/types"
+import { renderCapabilitiesForContext } from "@core/prompts/capabilities/CapabilitiesSection"
 import { PromptProfile } from "@core/prompts/profiles/types"
 import type { SystemPromptContext } from "@core/prompts/system-prompt"
 import { getSystemPrompt } from "@core/prompts/system-prompt"
@@ -15,7 +14,7 @@ import type {
 import type { ClineTool } from "@shared/tools"
 import { hashPromptContent } from "./hash"
 
-export const SYSTEM_PROMPT_CONTRACT_VERSION = 4
+export const SYSTEM_PROMPT_CONTRACT_VERSION = 5
 
 export interface BuiltSystemPrompt {
 	readonly systemPrompt: string
@@ -40,13 +39,6 @@ export interface GetOrCreatePromptInput {
 
 export interface RefreshSystemPromptInput extends GetOrCreatePromptInput {
 	readonly reason: SystemPromptRefreshReason
-}
-
-function renderCapabilitiesForProfile(capabilities: CapabilitiesSnapshot, profile: PromptProfile): string {
-	return renderCapabilitiesSection(capabilities, {
-		exclude: profile === PromptProfile.Lite ? ["skills", "subagents"] : [],
-		profile,
-	})
 }
 
 function sameServerTools(left: readonly number[] | undefined, right: readonly number[] | undefined): boolean {
@@ -128,7 +120,10 @@ export class SystemPromptCacheService {
 			mcpHub: input.promptContext.mcpHub,
 			...input.promptContext.capabilityToggleState,
 		})
-		const capabilitiesSection = renderCapabilitiesForProfile(capabilities, input.promptContext.promptProfile)
+		const capabilitiesSection = renderCapabilitiesForContext(capabilities, {
+			profile: input.promptContext.promptProfile,
+			subagentsEnabled: input.promptContext.subagentsEnabled,
+		})
 		const capabilitiesHash = hashPromptContent(capabilitiesSection)
 		const promptContext: SystemPromptContext = {
 			...input.promptContext,

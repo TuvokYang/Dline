@@ -1,5 +1,4 @@
 import * as path from "node:path"
-import { setTimeout as delay } from "node:timers/promises"
 import type { ApiHandler, buildApiHandler } from "@core/api"
 import { recordProviderAdapterInput, recordProviderAdapterOutput } from "@core/api/debug/api-conversation-log"
 import type { WebSearchRoutingPlan } from "@core/api/server-tools"
@@ -43,8 +42,8 @@ import {
 } from "./SubagentOutputBudget"
 
 const MAX_EMPTY_ASSISTANT_RETRIES = 3
-const MAX_INITIAL_STREAM_ATTEMPTS = 3
-const INITIAL_STREAM_RETRY_BASE_DELAY_MS = 2_000
+const MAX_INITIAL_STREAM_ATTEMPTS = 6
+const INITIAL_STREAM_RETRY_BASE_DELAY_MS = 3_000
 
 export type SubagentRunStatus = "completed" | "failed" | "cancelled"
 
@@ -184,6 +183,27 @@ function formatToolCallPreview(toolName: string, params: Partial<Record<string, 
 	return `${toolName}(${args})`
 }
 
+function waitForSubagentRetry(delayMs: number, signal?: AbortSignal): Promise<void> {
+	if (signal?.aborted) {
+		return Promise.reject(signal.reason ?? new Error("Subagent retry wait was aborted."))
+	}
+
+	return new Promise((resolve, reject) => {
+		let timer: NodeJS.Timeout | undefined
+		const onAbort = () => {
+			if (timer) clearTimeout(timer)
+			signal?.removeEventListener("abort", onAbort)
+			reject(signal?.reason ?? new Error("Subagent retry wait was aborted."))
+		}
+
+		timer = setTimeout(() => {
+			signal?.removeEventListener("abort", onAbort)
+			resolve()
+		}, delayMs)
+		signal?.addEventListener("abort", onAbort, { once: true })
+	})
+}
+
 function normalizeToolCallArguments(argumentsPayload: unknown): string {
 	if (typeof argumentsPayload === "string") {
 		return argumentsPayload
@@ -262,6 +282,7 @@ export class SubagentRunner {
 	private readonly apiHandler: ApiHandler
 	private readonly allowedTools: ClineDefaultTool[]
 	private activeApiAbort: (() => void) | undefined
+	private activeRetryAbortController: AbortController | undefined
 	private abortRequested = false
 	private activeCommandExecutions = 0
 	private abortingCommands = false
@@ -279,6 +300,7 @@ export class SubagentRunner {
 
 	async abort(): Promise<void> {
 		this.abortRequested = true
+		this.activeRetryAbortController?.abort()
 
 		try {
 			this.activeApiAbort?.()
@@ -327,6 +349,7 @@ export class SubagentRunner {
 
 	async run(prompt: string, onProgress: (update: SubagentProgressUpdate) => void): Promise<SubagentRunResult> {
 		this.abortRequested = false
+		this.activeRetryAbortController = new AbortController()
 		const state = new TaskState()
 		let emptyAssistantResponseRetries = 0
 		const contextState: SubagentContextState = {}
@@ -721,7 +744,7 @@ export class SubagentRunner {
 							},
 						],
 					})
-					await delay(0)
+					await Promise.resolve()
 					continue
 				}
 				emptyAssistantResponseRetries = 0
@@ -849,7 +872,7 @@ export class SubagentRunner {
 					content: toolResultBlocks,
 				})
 
-				await delay(0)
+				await Promise.resolve()
 			}
 		} catch (error) {
 			await activeHostedServerToolLifecycle?.finalizeOpen(
@@ -870,6 +893,7 @@ export class SubagentRunner {
 		} finally {
 			await activeHostedServerToolLifecycle?.finalizeOpen("Subagent hosted web search ended without a result.")
 			this.activeApiAbort = undefined
+			this.activeRetryAbortController = undefined
 		}
 	}
 
@@ -917,16 +941,51 @@ export class SubagentRunner {
 	}
 
 	private shouldRetryInitialStreamError(error: unknown, providerId: string, modelId: string): boolean {
-		// Mirror main loop behavior: do not auto-retry auth/balance failures.
+		// Mirror main loop behavior: do not auto-retry auth, quota, or account-limit failures.
+		if (error instanceof Error && error.name === "AbortError") return false
+
 		const parsedError = ClineError.transform(error, modelId, providerId)
-		const isAuthError = parsedError.isErrorType(ClineErrorType.Auth)
-		const isBalanceError = parsedError.isErrorType(ClineErrorType.Balance)
+		const nonRetryableTypes = [
+			ClineErrorType.Auth,
+			ClineErrorType.Balance,
+			ClineErrorType.SpendLimit,
+			ClineErrorType.QuotaExceeded,
+		]
+		if (nonRetryableTypes.some((type) => parsedError.isErrorType(type))) return false
 
-		if (isAuthError || isBalanceError) {
-			return false
-		}
+		const raw = error !== null && typeof error === "object" ? (error as Record<string, unknown>) : undefined
+		const messageRecord =
+			error instanceof Error
+				? (() => {
+						try {
+							const parsed = JSON.parse(error.message) as unknown
+							return parsed !== null && typeof parsed === "object" ? (parsed as Record<string, unknown>) : undefined
+						} catch {
+							return undefined
+						}
+					})()
+				: undefined
+		const errorRecord = raw ?? messageRecord
+		const status =
+			errorRecord?.status ??
+			errorRecord?.statusCode ??
+			(errorRecord?.response as Record<string, unknown> | undefined)?.status
+		const code = errorRecord?.code ?? (errorRecord?.error as Record<string, unknown> | undefined)?.code
+		const numericStatus = typeof status === "number" ? status : Number(status)
+		const isRetryableStatus =
+			Number.isFinite(numericStatus) &&
+			(numericStatus === 408 || numericStatus === 409 || numericStatus === 429 || numericStatus >= 500)
+		const isNetworkError =
+			code === "ECONNRESET" ||
+			code === "ECONNREFUSED" ||
+			code === "ETIMEDOUT" ||
+			code === "ENETUNREACH" ||
+			parsedError.isErrorType(ClineErrorType.RateLimit)
+		const isStreamInitializationFailure =
+			code === "stream_initialization_failed" ||
+			(error instanceof Error && error.message.includes("stream_initialization_failed"))
 
-		return true
+		return isRetryableStatus || isNetworkError || isStreamInitializationFailure
 	}
 
 	private compactConversationForContextWindow(
@@ -1091,9 +1150,9 @@ export class SubagentRunner {
 					throw error
 				}
 
-				const delayMs = INITIAL_STREAM_RETRY_BASE_DELAY_MS * 2 ** (attempt - 1)
+				const delayMs = INITIAL_STREAM_RETRY_BASE_DELAY_MS * attempt
 				Logger.warn(`[SubagentRunner] Initial stream failed. Retrying attempt ${attempt + 1}.`, error)
-				await delay(delayMs)
+				await waitForSubagentRetry(delayMs, this.activeRetryAbortController?.signal)
 			}
 		}
 	}
