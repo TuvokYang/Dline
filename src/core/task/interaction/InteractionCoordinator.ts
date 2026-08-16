@@ -1,5 +1,3 @@
-import { ClineDefaultTool } from "@shared/tools"
-import { BlockPhase } from "../BlockPhaseMachine"
 import type { TaskEvent } from "../runtime/TaskEvent"
 import type { TaskDispatchResult, TaskRuntime } from "../runtime/TaskRuntime"
 import type { InteractionKind } from "./Interaction"
@@ -63,12 +61,6 @@ export type DetachedInteractionContinuation = (context: DetachedInteractionConti
 
 type RuntimeOwnedInteractionKind = "resume" | "completion" | "error_retry" | "mistake_limit"
 
-interface PendingCompletionTarget {
-	taskId: string
-	turnId: string
-	interactionId: string
-}
-
 function isRuntimeOwnedInteraction(kind: InteractionKind): kind is RuntimeOwnedInteractionKind {
 	return kind === "resume" || kind === "completion" || kind === "error_retry" || kind === "mistake_limit"
 }
@@ -77,8 +69,8 @@ function outcomeFrom(response: InteractionResponse): InteractionOutcome {
 	return { actionId: response.actionId, draft: response.draft, selection: response.selection }
 }
 
-/** Select only interaction continuations that can safely carry an internal compact signal. */
-function modeCompactionAction(kind: InteractionKind): InteractionResponse["actionId"] | undefined {
+/** Select conversational interactions that can continue after a committed mode switch. */
+function modeSwitchAction(kind: InteractionKind): InteractionResponse["actionId"] | undefined {
 	switch (kind) {
 		case "followup":
 		case "make_plan":
@@ -97,6 +89,7 @@ function modeCompactionAction(kind: InteractionKind): InteractionResponse["actio
 export class InteractionCoordinator {
 	private readonly waitingInteractionIds = new Set<string>()
 	private readonly waitingInteractionRejectors = new Map<string, (error: Error) => void>()
+	private readonly pendingInteractionSettlements = new Map<string, Promise<void>>()
 	private readonly claimedContinuations = new Map<string, Promise<InteractionOutcome>>()
 	private detachedContinuation?: DetachedInteractionContinuation
 	private continuationGeneration = 0
@@ -126,6 +119,20 @@ export class InteractionCoordinator {
 		}
 		this.waitingInteractionRejectors.clear()
 		return generation
+	}
+
+	/** Cancel only the live waiter owned by one interaction without fencing unrelated continuations. */
+	cancelPendingInteraction(interactionId: string, reason = "interaction_cancelled"): boolean {
+		const reject = this.waitingInteractionRejectors.get(interactionId)
+		if (!reject) return false
+		reject(new InteractionCancellationError(reason))
+		return true
+	}
+
+	/** Wait until one explicitly cancelled or responded interaction waiter has fully unwound. */
+	async waitForPendingInteraction(interactionId: string): Promise<void> {
+		const pending = this.pendingInteractionSettlements.get(interactionId)
+		if (pending) await pending
 	}
 
 	/** Release one cancellation transaction without making its old continuations current again. */
@@ -214,31 +221,17 @@ export class InteractionCoordinator {
 		return result
 	}
 
-	/** Return whether the current awaiting interaction can safely initiate mode compaction. */
-	canRespondForModeCompaction(): boolean {
-		const interaction = this.runtime.getState().interaction
-		return interaction?.status === "awaiting" && modeCompactionAction(interaction.kind) !== undefined
-	}
-
 	/** Return whether the current awaiting interaction can continue after a direct mode switch. */
 	canRespondForModeSwitch(): boolean {
-		return this.canRespondForModeCompaction()
-	}
-
-	/** Resolve one conversational interaction with a backend-only compaction signal. */
-	async respondForModeCompaction(text: string): Promise<boolean> {
-		const pendingCompletion = this.pendingCompletionTarget()
-		if (pendingCompletion && !(await this.waitForPendingCompletion(pendingCompletion))) {
-			return false
-		}
-		return this.respondForModeSwitch({ text, images: [], files: [] })
+		const interaction = this.runtime.getState().interaction
+		return interaction?.status === "awaiting" && modeSwitchAction(interaction.kind) !== undefined
 	}
 
 	/** Resolve one conversational interaction with user-authored mode-switch content, if any. */
 	async respondForModeSwitch(draft: InteractionDraft): Promise<boolean> {
 		const state = this.runtime.getState()
 		const interaction = state.interaction
-		const actionId = interaction?.status === "awaiting" ? modeCompactionAction(interaction.kind) : undefined
+		const actionId = interaction?.status === "awaiting" ? modeSwitchAction(interaction.kind) : undefined
 		if (!interaction || !actionId) return false
 		const result = await this.respond({
 			taskId: interaction.taskId,
@@ -249,70 +242,6 @@ export class InteractionCoordinator {
 			draft,
 		})
 		return result.accepted
-	}
-
-	/** Identify the narrow completion-commit window before its interaction is presented. */
-	private pendingCompletionTarget(): PendingCompletionTarget | undefined {
-		const state = this.runtime.getState()
-		const interaction = state.interaction
-		if (interaction) {
-			return interaction.kind === "completion" && interaction.status === "opening"
-				? {
-						taskId: interaction.taskId,
-						turnId: interaction.turnId,
-						interactionId: interaction.interactionId,
-					}
-				: undefined
-		}
-		const turn = state.turn
-		const block = turn?.blocks.find(
-			(candidate) =>
-				candidate.toolName === ClineDefaultTool.ATTEMPT &&
-				(candidate.phase === BlockPhase.AUTO_EXECUTING || candidate.phase === BlockPhase.EXECUTING),
-		)
-		return turn && block ? { taskId: state.taskId, turnId: turn.turnId, interactionId: block.dlineTid } : undefined
-	}
-
-	/** Wait only for the same in-flight attempt_completion to publish its causal interaction. */
-	private waitForPendingCompletion(target: PendingCompletionTarget): Promise<boolean> {
-		return new Promise<boolean>((resolve) => {
-			let unsubscribe: () => void = () => undefined
-			let settled = false
-			const finish = (ready: boolean): void => {
-				if (settled) return
-				settled = true
-				unsubscribe()
-				resolve(ready)
-			}
-			const inspect = (): void => {
-				const state = this.runtime.getState()
-				const interaction = state.interaction
-				if (
-					interaction?.taskId === target.taskId &&
-					interaction.turnId === target.turnId &&
-					interaction.interactionId === target.interactionId &&
-					interaction.kind === "completion"
-				) {
-					if (interaction.status === "awaiting") finish(true)
-					else if (interaction.status === "resolving") finish(false)
-					return
-				}
-				if (interaction || state.cancellation || state.error) {
-					finish(false)
-					return
-				}
-				const pendingBlock = state.turn?.blocks.find(
-					(candidate) =>
-						candidate.dlineTid === target.interactionId &&
-						candidate.toolName === ClineDefaultTool.ATTEMPT &&
-						(candidate.phase === BlockPhase.AUTO_EXECUTING || candidate.phase === BlockPhase.EXECUTING),
-				)
-				if (state.turn?.turnId !== target.turnId || !pendingBlock) finish(false)
-			}
-
-			unsubscribe = this.runtime.subscribe(() => inspect())
-			inspect()
-		})
 	}
 
 	/** Open or strictly take over one interaction and wait for its causal response. */
@@ -327,6 +256,22 @@ export class InteractionCoordinator {
 		})
 		if (!resolved.accepted) {
 			throw new Error(`Interaction resolve rejected: ${resolved.error?.code ?? "invalid_runtime_event"}`)
+		}
+		return { actionId: response.actionId, draft: response.draft, selection: response.selection }
+	}
+
+	/** Temporarily replace one awaiting primary interaction and restore it after this response is consumed. */
+	async interrupt(request: OpenInteractionRequest): Promise<InteractionOutcome> {
+		const response = await this.waitForResponse(request.interactionId, {
+			type: "INTERACTION_INTERRUPT_REQUESTED",
+			...request,
+		})
+		const resolved = await this.runtime.dispatch({
+			type: "INTERACTION_RESOLVED",
+			interactionId: request.interactionId,
+		})
+		if (!resolved.accepted) {
+			throw new Error(`Interaction interrupt resolve rejected: ${resolved.error?.code ?? "invalid_runtime_event"}`)
 		}
 		return { actionId: response.actionId, draft: response.draft, selection: response.selection }
 	}
@@ -620,10 +565,15 @@ export class InteractionCoordinator {
 		}
 		this.waitingInteractionIds.add(interactionId)
 		let resolveResponse: ((response: InteractionResponse) => void) | undefined
+		let resolveSettlement: (() => void) | undefined
 		const responsePromise = new Promise<InteractionResponse>((resolve, reject) => {
 			resolveResponse = resolve
 			this.waitingInteractionRejectors.set(interactionId, reject)
 		})
+		const settlement = new Promise<void>((resolve) => {
+			resolveSettlement = resolve
+		})
+		this.pendingInteractionSettlements.set(interactionId, settlement)
 		const unsubscribe = this.runtime.subscribe((event, result) => {
 			this.captureResponse(interactionId, generation, event, result, resolveResponse)
 		})
@@ -634,6 +584,10 @@ export class InteractionCoordinator {
 		} finally {
 			this.waitingInteractionIds.delete(interactionId)
 			this.waitingInteractionRejectors.delete(interactionId)
+			if (this.pendingInteractionSettlements.get(interactionId) === settlement) {
+				this.pendingInteractionSettlements.delete(interactionId)
+			}
+			resolveSettlement?.()
 			unsubscribe()
 		}
 	}
@@ -644,10 +598,15 @@ export class InteractionCoordinator {
 		if (!this.isCurrentGeneration(generation)) throw new InteractionCancellationError("task_cancelled")
 		this.waitingInteractionIds.add(interactionId)
 		let resolveResponse: ((response: InteractionResponse) => void) | undefined
+		let resolveSettlement: (() => void) | undefined
 		const responsePromise = new Promise<InteractionResponse>((resolve, reject) => {
 			resolveResponse = resolve
 			this.waitingInteractionRejectors.set(interactionId, reject)
 		})
+		const settlement = new Promise<void>((resolve) => {
+			resolveSettlement = resolve
+		})
+		this.pendingInteractionSettlements.set(interactionId, settlement)
 		const unsubscribe = this.runtime.subscribe((event, result) => {
 			this.captureResponse(interactionId, generation, event, result, resolveResponse)
 		})
@@ -662,6 +621,10 @@ export class InteractionCoordinator {
 		} finally {
 			this.waitingInteractionIds.delete(interactionId)
 			this.waitingInteractionRejectors.delete(interactionId)
+			if (this.pendingInteractionSettlements.get(interactionId) === settlement) {
+				this.pendingInteractionSettlements.delete(interactionId)
+			}
+			resolveSettlement?.()
 			unsubscribe()
 		}
 	}

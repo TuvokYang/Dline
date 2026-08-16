@@ -10,7 +10,9 @@ import { ContextTransitionEngine } from "@core/controller/context-transition/Con
 import { ContextTransitionLease } from "@core/controller/context-transition/ContextTransitionLease"
 import { ModeTransitionPolicy } from "@core/controller/context-transition/policies/ModeTransitionPolicy"
 import { ProfileTransitionPolicy } from "@core/controller/context-transition/policies/ProfileTransitionPolicy"
-import { findEnabledProfileByName, findEnabledProfiles } from "@core/controller/file/getApiProfiles"
+import { findEnabledProfileByName, findEnabledProfiles, readApiProfiles } from "@core/controller/file/getApiProfiles"
+import { resolveProfileReference } from "@core/profiles/profile-binding"
+import { getProfileCatalogRevision } from "@core/profiles/profile-catalog-state"
 import { getHooksEnabledSafe } from "@core/hooks/hooks-utils"
 import { TaskLockService } from "@core/locks/TaskLockService"
 import * as SecretsManager from "@core/storage/secrets"
@@ -735,7 +737,7 @@ export class Controller {
 			bindings: {
 				getCurrentMode: () => this.task?.getMode() ?? "plan",
 				getBinding: (mode) => this.resolveTaskProfileName(mode),
-				resolveTarget: (profile, mode) => this.resolveProfileTarget(profile, mode),
+				resolveTarget: (profileId, profileName, mode) => this.resolveProfileTarget(profileId, profileName, mode),
 			},
 			pressure: {
 				read: (targetApi, targetMode, chatContent) =>
@@ -745,7 +747,10 @@ export class Controller {
 				validate: (operation) => this.validateProfileSwitch(operation),
 				commit: async (operation) => {
 					if (!this.task) throw new Error("Active task is unavailable.")
-					await this.task.commitProfileBindings(operation.targetProfile, operation.targetModes)
+					await this.task.commitProfileBindings(
+						{ profileId: operation.targetProfileId, profileName: operation.targetProfile },
+						operation.targetModes,
+					)
 					await this.postStateToWebview({ immediate: true })
 				},
 			},
@@ -780,31 +785,41 @@ export class Controller {
 			ulid: this.task.ulid,
 		}
 		const executionApi = buildApiHandler(effectiveConfig, mode)
-		const { targetContextWindow } = resolveTargetContextScope({
+		const { targetContextWindow, fittingExitTarget } = resolveTargetContextScope({
 			providerContextWindow,
 			maxContextTokens: this.stateManager.getGlobalSettingsKey("autoCondenseMaxContextTokens"),
 		})
-		return { mode, profile: profileName, contextWindow: targetContextWindow, executionApi }
+		return { mode, profile: profileName, contextWindow: targetContextWindow, fittingExitTarget, executionApi }
 	}
 
 	/** Resolve one user-selected Profile into a frozen active-mode request scope. */
-	private resolveProfileTarget(profileName: string, mode: Mode): ResolvedProfileTarget | undefined {
+	private resolveProfileTarget(profileId: string, profileName: string, mode: Mode): ResolvedProfileTarget | undefined {
 		if (!this.task) return undefined
-		const profile = findEnabledProfileByName(profileName)
-		const providerContextWindow = profile ? getProfileModelInfo(profile).capabilities?.contextWindow : undefined
-		if (!profile || !providerContextWindow) return undefined
+		const resolution = resolveProfileReference(readApiProfiles(), profileId)
+		if (resolution.status !== "resolved" || resolution.profileName !== profileName) return undefined
+		const providerContextWindow = getProfileModelInfo(resolution.profile).capabilities?.contextWindow
+		if (!providerContextWindow) return undefined
 		const config = this.stateManager.getApiConfigurationForTask(this.task.taskId)
 		const effectiveConfig = {
 			...config,
-			...(mode === "plan" ? { planModeProfile: profileName } : { actModeProfile: profileName }),
+			...(mode === "plan"
+				? { planModeProfileId: resolution.profileId, planModeProfile: resolution.profileName }
+				: { actModeProfileId: resolution.profileId, actModeProfile: resolution.profileName }),
 			ulid: this.task.ulid,
 		}
 		const executionApi = buildApiHandler(effectiveConfig, mode)
-		const { targetContextWindow } = resolveTargetContextScope({
+		const { targetContextWindow, fittingExitTarget } = resolveTargetContextScope({
 			providerContextWindow,
 			maxContextTokens: this.stateManager.getGlobalSettingsKey("autoCondenseMaxContextTokens"),
 		})
-		return { profile: profileName, mode, contextWindow: targetContextWindow, executionApi }
+		return {
+			profileId: resolution.profileId,
+			profile: resolution.profileName,
+			mode,
+			contextWindow: targetContextWindow,
+			fittingExitTarget,
+			executionApi,
+		}
 	}
 
 	/** Validate task, source mode, and source profile immediately before compaction or commit. */
@@ -822,6 +837,37 @@ export class Controller {
 	private validateProfileSwitch(operation: ProfileSwitchOperation): boolean {
 		if (this.task?.taskId !== operation.taskId || this.task.getMode() !== operation.activeMode) return false
 		return operation.targetModes.every((mode) => this.resolveTaskProfileName(mode) === operation.sourceBindings[mode])
+	}
+
+	/** Reject Task-local runtime override changes while the active Task cannot safely replace its handler. */
+	assertTaskRuntimeOverridesMutable(taskId: string): void {
+		const task = this.task
+		if (!task || task.taskId !== taskId) return
+
+		const runtimeState = task.getRuntimeState()
+		if (runtimeState.profileInvalid) {
+			throw new Error(runtimeState.profileInvalid.message)
+		}
+		if (
+			["initializing", "streaming", "executing", "resuming", "cancelling"].includes(runtimeState.phase) ||
+			task.taskState.isStreaming ||
+			task.taskState.isWaitingForFirstChunk
+		) {
+			throw new Error("Task runtime overrides cannot change while a request is active.")
+		}
+		if (task.getContextCompactionOperationId() || task.taskState.currentlySummarizing) {
+			throw new Error("Task runtime overrides cannot change while context compaction is active.")
+		}
+
+		const transitionIsActive = (phase: string) => phase !== "idle" && phase !== "failed"
+		const modeSwitch = this.modeSwitchCoordinator.getSnapshot()
+		const profileSwitch = this.profileSwitchCoordinator.getSnapshot()
+		if (
+			(transitionIsActive(modeSwitch.phase) && (!modeSwitch.taskId || modeSwitch.taskId === taskId)) ||
+			(transitionIsActive(profileSwitch.phase) && (!profileSwitch.taskId || profileSwitch.taskId === taskId))
+		) {
+			throw new Error("Task runtime overrides cannot change during a Profile or mode transition.")
+		}
 	}
 
 	/** Request a task-local transaction or update the welcome-screen global mode. */
@@ -846,15 +892,42 @@ export class Controller {
 
 	/** Request a delayed-adoption Profile transition for the active task. */
 	async requestProfileSwitch(
-		targetProfile: string,
+		targetProfileReference: string,
 		targetModes: Mode[],
 		chatContent?: ChatContent,
 	): Promise<ProfileSwitchRequestResult> {
-		if (!this.task) return { status: "rejected", error: "Active task is unavailable." }
+		const resolution = resolveProfileReference(readApiProfiles(), targetProfileReference)
+		if (resolution.status !== "resolved") {
+			return { status: "rejected", error: resolution.error }
+		}
+
+		const uniqueModes = [...new Set(targetModes)]
+		if (uniqueModes.length === 0) {
+			return { status: "rejected", error: "Profile switch requires at least one target mode." }
+		}
+
+		if (!this.task) {
+			const updates: Partial<Settings> = {}
+			for (const mode of uniqueModes) {
+				if (mode === "plan") {
+					updates.planModeProfileId = resolution.profileId
+					updates.planModeProfile = resolution.profileName
+				} else {
+					updates.actModeProfileId = resolution.profileId
+					updates.actModeProfile = resolution.profileName
+				}
+			}
+			this.stateManager.setGlobalStateBatch(updates)
+			await this.stateManager.flushPendingState()
+			await this.postStateToWebview({ immediate: true })
+			return { status: "switched", operationId: randomUUID() }
+		}
+
 		return this.profileSwitchCoordinator.request({
 			taskId: this.task.taskId,
-			targetProfile,
-			targetModes,
+			targetProfileId: resolution.profileId,
+			targetProfile: resolution.profileName,
+			targetModes: uniqueModes,
 			chatContent,
 		})
 	}
@@ -865,6 +938,19 @@ export class Controller {
 
 	async cancelProfileSwitch(operationId: string): Promise<ProfileSwitchRequestResult> {
 		return this.profileSwitchCoordinator.cancel(operationId)
+	}
+
+	/** Restore the active Task to a durable compaction checkpoint using CAS identity. */
+	async restoreContextCompaction(
+		target: "previous" | "initial",
+		operationId: string,
+		expectedHeadCheckpointId: string,
+		expectedChainRevision: number,
+	) {
+		if (!this.task) throw new Error("Active task is unavailable.")
+		return target === "previous"
+			? this.task.restorePreviousContextCompactionCheckpoint(operationId, expectedHeadCheckpointId, expectedChainRevision)
+			: this.task.restoreInitialContextCompactionCheckpoint(operationId, expectedHeadCheckpointId, expectedChainRevision)
 	}
 
 	/** Compatibility wrapper for internal callers that still consume a Boolean commit result. */
@@ -1320,12 +1406,21 @@ export class Controller {
 
 		// Override with task-level profile settings if available (multi-window isolation fix)
 		if (this.task?.taskSm) {
+			const taskPlanProfileId = this.task.taskSm.planModeProfileId
 			const taskPlanProfile = this.task.taskSm.planModeProfile
+			const taskActProfileId = this.task.taskSm.actModeProfileId
 			const taskActProfile = this.task.taskSm.actModeProfile
-			if (taskPlanProfile !== undefined || taskActProfile !== undefined) {
+			if (
+				taskPlanProfileId !== undefined ||
+				taskPlanProfile !== undefined ||
+				taskActProfileId !== undefined ||
+				taskActProfile !== undefined
+			) {
 				apiConfiguration = {
 					...apiConfiguration,
+					...(taskPlanProfileId !== undefined && { planModeProfileId: taskPlanProfileId }),
 					...(taskPlanProfile !== undefined && { planModeProfile: taskPlanProfile }),
+					...(taskActProfileId !== undefined && { actModeProfileId: taskActProfileId }),
 					...(taskActProfile !== undefined && { actModeProfile: taskActProfile }),
 				}
 			}
@@ -1514,6 +1609,7 @@ export class Controller {
 			shouldShowAnnouncement,
 			favoritedModelIds,
 			providersVersion: ModelRegistry.getInstance().version,
+			profileCatalogRevision: getProfileCatalogRevision(),
 			backgroundCommandRunning: this.backgroundCommandRunning,
 			backgroundCommandTaskId: this.backgroundCommandTaskId,
 			// NEW: Add workspace information
@@ -1556,6 +1652,7 @@ export class Controller {
 						return projectTaskView(this.task.getRuntimeState(), {
 							autoRetryActive: this.task.hasAutoRetrySequence(),
 							autoRetryPending: this.task.hasPendingAutoRetry(),
+							contextCompactionOperationId: this.task.getContextCompactionOperationId(),
 							commandHandoffActivityId,
 							commandHandoffRequested: commandHandoffActivityId
 								? this.task.isBackgroundHandoffRequested(commandHandoffActivityId)

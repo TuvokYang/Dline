@@ -32,6 +32,7 @@ interface AcceptedChange {
 	completion?: TaskRuntimeState["completion"] | null
 	turn?: TaskRuntimeState["turn"] | null
 	interaction?: TaskRuntimeState["interaction"] | null
+	interruptedInteraction?: TaskRuntimeState["interruptedInteraction"] | null
 	newTaskConsumed?: TaskRuntimeState["newTaskConsumed"] | null
 	supersededEffectRevision?: number
 	effects?: TaskEffect[]
@@ -153,6 +154,11 @@ function accept(state: TaskRuntimeState, change: AcceptedChange): TransitionResu
 	} else if (change.interaction !== undefined) {
 		next.interaction = change.interaction
 	}
+	if (change.interruptedInteraction === null) {
+		delete next.interruptedInteraction
+	} else if (change.interruptedInteraction !== undefined) {
+		next.interruptedInteraction = change.interruptedInteraction
+	}
 	if (change.newTaskConsumed === null) {
 		delete next.newTaskConsumed
 	} else if (change.newTaskConsumed !== undefined) {
@@ -195,6 +201,51 @@ function acceptInteraction(
 		accepted: true,
 		next: { ...state, revision, anchor, interaction },
 		effects: effects ?? stateEffects(revision),
+	}
+}
+
+/** Commit Task-local Profile validity without changing the lifecycle phase. */
+function acceptProfileValidity(state: TaskRuntimeState, profileInvalid: TaskRuntimeState["profileInvalid"]): TransitionResult {
+	const revision = state.revision + 1
+	const next: TaskRuntimeState = { ...state, revision }
+	if (profileInvalid) {
+		next.profileInvalid = { ...profileInvalid }
+	} else {
+		delete next.profileInvalid
+	}
+	return {
+		accepted: true,
+		next,
+		effects: stateEffects(revision),
+	}
+}
+
+/** Close only the Profile-related retry interaction after a durable replacement commit. */
+function acceptProfileRecovery(state: TaskRuntimeState, interactionId: string): TransitionResult {
+	if (
+		state.phase !== TaskPhase.AWAITING_APPROVAL ||
+		state.interaction?.kind !== "error_retry" ||
+		state.interaction.interactionId !== interactionId
+	) {
+		return reject(state, "PROFILE_RECOVERY_COMMITTED")
+	}
+	const revision = state.revision + 1
+	const anchor = { ...state.anchor }
+	delete anchor.interactionId
+	delete anchor.turnId
+	const next: TaskRuntimeState = {
+		...state,
+		phase: TaskPhase.BETWEEN_TURNS,
+		revision,
+		anchor,
+	}
+	delete next.interaction
+	delete next.error
+	delete next.profileInvalid
+	return {
+		accepted: true,
+		next,
+		effects: stateEffects(revision),
 	}
 }
 
@@ -609,6 +660,45 @@ function reduceInteractionOpen(
 	}
 }
 
+/** Temporarily replace one awaiting interaction while retaining its live causal waiter. */
+function reduceInteractionInterrupt(
+	state: TaskRuntimeState,
+	event: Extract<TaskEvent, { type: "INTERACTION_INTERRUPT_REQUESTED" }>,
+): TransitionResult {
+	if (!state.interaction || state.interaction.status !== "awaiting" || state.interruptedInteraction) {
+		return reject(state, event.type)
+	}
+	const revision = state.revision + 1
+	const definition = getInteraction(event.kind)
+	return {
+		accepted: true,
+		next: {
+			...state,
+			revision,
+			anchor: { ...state.anchor, turnId: event.turnId, interactionId: event.interactionId },
+			interruptedInteraction: state.interaction,
+			interaction: {
+				taskId: state.taskId,
+				turnId: event.turnId,
+				interactionId: event.interactionId,
+				kind: event.kind,
+				status: "opening",
+				createdRevision: revision,
+			},
+		},
+		effects: [
+			{
+				id: effectId(revision, 1),
+				type: "APPEND_ASK",
+				interactionId: event.interactionId,
+				taskAsk: definition.taskAsk,
+				presentation: event.presentation,
+				existingTs: event.existingTs,
+			},
+		],
+	}
+}
+
 /** Bind a persisted ask anchor to the opening interaction. */
 function reduceInteractionPresented(
 	state: TaskRuntimeState,
@@ -648,7 +738,26 @@ function reduceInteractionResolved(
 	) {
 		return reject(state, event.type)
 	}
-	return acceptInteraction(state, undefined)
+	if (!state.interruptedInteraction) return acceptInteraction(state, undefined)
+
+	const revision = state.revision + 1
+	const restored = state.interruptedInteraction
+	return {
+		accepted: true,
+		next: {
+			...state,
+			revision,
+			interaction: restored,
+			interruptedInteraction: undefined,
+			anchor: {
+				...state.anchor,
+				uiMessageTs: restored.anchor?.messageTs ?? state.anchor.uiMessageTs,
+				turnId: restored.turnId,
+				interactionId: restored.interactionId,
+			},
+		},
+		effects: stateEffects(revision),
+	}
 }
 
 /** Reduce one causal interaction response without reading message history. */
@@ -783,6 +892,7 @@ function reduceCancel(
 			cancellation: { source: event.source, fromPhase: state.phase },
 			supersededEffectRevision: Math.max(state.supersededEffectRevision ?? -1, state.revision),
 			interaction: null,
+			interruptedInteraction: null,
 			effects: [
 				{ id: effectId(revision, 1), type: "POST_TASK_VIEW" },
 				{ id: effectId(revision, 2), type: "CANCEL_RUNTIME" },
@@ -1278,6 +1388,10 @@ export function reduceTask(state: TaskRuntimeState, event: TaskEvent): Transitio
 		case "TASK_INITIALIZE_REQUESTED":
 		case "TASK_INITIALIZED":
 			return reduceInitialize(state, event)
+		case "PROFILE_VALIDITY_UPDATED":
+			return acceptProfileValidity(state, event.profileInvalid)
+		case "PROFILE_RECOVERY_COMMITTED":
+			return acceptProfileRecovery(state, event.interactionId)
 		case "API_REQUEST_STARTED":
 			return reduceApi(state, event)
 		case "RESUME_API_CONTINUATION_REQUESTED":
@@ -1300,6 +1414,8 @@ export function reduceTask(state: TaskRuntimeState, event: TaskEvent): Transitio
 			return reduceApproval(state, event)
 		case "INTERACTION_OPEN_REQUESTED":
 			return reduceInteractionOpen(state, event)
+		case "INTERACTION_INTERRUPT_REQUESTED":
+			return reduceInteractionInterrupt(state, event)
 		case "INTERACTION_PRESENTED":
 			return reduceInteractionPresented(state, event)
 		case "INTERACTION_RESPONDED":

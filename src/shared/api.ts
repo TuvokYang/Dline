@@ -1,5 +1,7 @@
 import { vertexModels } from "../core/api/providers/models/vertex"
 import type { ModelInfo } from "./providers/types"
+import type { TaskServiceTierOverride } from "./task-provider-overrides"
+import type { TaskReasoningOverride } from "./task-reasoning"
 
 export type ApiProvider =
 	| "anthropic"
@@ -52,10 +54,22 @@ export const DEFAULT_API_PROVIDER = "openrouter" as ApiProvider
  * are now sourced from ApiProfile + ModelRegistry at runtime.
  */
 export interface ApiConfiguration {
-	/** Profile name for plan mode */
+	/** Stable Profile identity for plan mode. */
+	planModeProfileId?: string
+	/** Legacy/display Profile name for plan mode. */
 	planModeProfile?: string
-	/** Profile name for act mode */
+	/** Stable Profile identity for act mode. */
+	actModeProfileId?: string
+	/** Legacy/display Profile name for act mode. */
 	actModeProfile?: string
+	/** Task-local reasoning override for plan mode. */
+	planModeReasoningOverride?: TaskReasoningOverride
+	/** Task-local reasoning override for act mode. */
+	actModeReasoningOverride?: TaskReasoningOverride
+	/** Task-local OpenAI service tier override for plan mode. */
+	planModeServiceTierOverride?: TaskServiceTierOverride
+	/** Task-local OpenAI service tier override for act mode. */
+	actModeServiceTierOverride?: TaskServiceTierOverride
 	/** Task identifier */
 	ulid?: string
 	/** Retry callback */

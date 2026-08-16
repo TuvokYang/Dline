@@ -213,9 +213,20 @@ export function useModeSwitch(options: UseModeSwitchOptions): UseModeSwitchResul
 	}, [])
 
 	const statusText = useMemo(() => {
-		if (modeSwitch?.phase === "compacting") return "Compacting..."
-		if (modeSwitch?.phase === "committing") return "Switching..."
-		return undefined
+		switch (modeSwitch?.phase) {
+			case "preflighting":
+				return "Checking..."
+			case "awaiting_confirmation":
+				return "Confirm"
+			case "compacting":
+				return "Compacting..."
+			case "committing":
+				return "Switching..."
+			case "failed":
+				return "Switch failed"
+			default:
+				return undefined
+		}
 	}, [modeSwitch?.phase])
 
 	return {

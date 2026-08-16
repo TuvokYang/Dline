@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest"
-import { decideModeSwitch, getContextTokens, readContextTokens } from "../context-pressure"
+import {
+	decideModeSwitch,
+	getContextTokens,
+	readContextTokens,
+	readContextWindowRequestPressure,
+} from "../context-pressure"
 import { computeCompactTrigger, computeSummarizeBudget } from "../context-window-utils"
 
 /** Verify canonical context-pressure accounting and mode-switch decisions. */
@@ -14,9 +19,33 @@ describe("context pressure", () => {
 		expect(readContextTokens(JSON.stringify({ tokensIn: 5_000, tokensOut: 500, cacheReads: 9_000 }))).toBe(14_500)
 	})
 
-	/** Treat malformed persisted request metadata as unavailable pressure. */
-	it("returns zero for malformed usage", () => {
+	/** Keep legacy display compatibility without treating malformed metadata as a reliable zero baseline. */
+	it("separates unavailable pressure from the legacy zero token reader", () => {
 		expect(readContextTokens("not-json")).toBe(0)
+		expect(readContextWindowRequestPressure("not-json")).toBeUndefined()
+		expect(readContextWindowRequestPressure(JSON.stringify({ request: "pending" }))).toEqual({})
+	})
+
+	/** Preserve estimate provenance until a positive provider usage sample replaces it. */
+	it("reads estimate and provider pressure sources without inventing reliable usage", () => {
+		expect(
+			readContextWindowRequestPressure(
+				JSON.stringify({ estimatedContextTokens: 42_000, contextTokensSource: "estimate" }),
+			),
+		).toEqual({ estimatedContextTokens: 42_000, contextTokensSource: "estimate" })
+		expect(
+			readContextWindowRequestPressure(
+				JSON.stringify({
+					contextTokens: 45_000,
+					estimatedContextTokens: 42_000,
+					contextTokensSource: "provider",
+				}),
+			),
+		).toEqual({
+			contextTokens: 45_000,
+			estimatedContextTokens: 42_000,
+			contextTokensSource: "provider",
+		})
 	})
 
 	/** Same-profile switches never require compaction confirmation. */

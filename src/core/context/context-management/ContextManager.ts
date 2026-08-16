@@ -18,7 +18,8 @@ import { Logger } from "@/shared/services/Logger"
 import { isTurnEndingToolName } from "../../task/assistant-message-order"
 import { createMissingToolResultMessage } from "../../task/resume/ResumeProvenance"
 import { extractUserPromptFromContent } from "../../task/utils/extractUserPromptFromContent"
-import { getContextTokens, readContextTokens } from "./context-pressure"
+import { getContextTokens, readContextTokens, readContextWindowRequestPressure } from "./context-pressure"
+import { resolveContextWindowProjection } from "./context-window-projection"
 import {
 	type CompactTriggerOptions,
 	computeCompactTrigger,
@@ -195,21 +196,24 @@ export class ContextManager {
 		previousApiReqIndex: number,
 		triggerOptions: CompactTriggerOptions = {},
 	): boolean {
-		if (previousApiReqIndex >= 0) {
-			const previousRequestText = clineMessages[previousApiReqIndex]?.text
-			if (previousRequestText) {
-				try {
-					const totalTokens = readContextTokens(previousRequestText)
+		if (previousApiReqIndex < 0) return false
 
-					const { contextWindow } = getContextWindowInfo(api)
-					const thresholdTokens = computeCompactTrigger(contextWindow, computeSummarizeBudget(), triggerOptions)
-					return shouldCompactProjectedUsage(totalTokens, thresholdTokens)
-				} catch {
-					return false
-				}
-			}
-		}
-		return false
+		const requestInfos = clineMessages.slice(0, previousApiReqIndex + 1).flatMap((message) => {
+			if (message.say !== "api_req_started") return []
+			const pressure = readContextWindowRequestPressure(message.text)
+			return pressure === undefined ? [] : [pressure]
+		})
+		if (requestInfos.length === 0) return false
+
+		const { contextWindow } = getContextWindowInfo(api)
+		const triggerTokens = computeCompactTrigger(contextWindow, computeSummarizeBudget(), triggerOptions)
+		return resolveContextWindowProjection({
+			requestInfos,
+			candidateEstimatedTokens: 0,
+			candidateDeltaTokens: 0,
+			contextWindow,
+			triggerTokens,
+		}).shouldCompact
 	}
 
 	/**
@@ -269,6 +273,7 @@ export class ContextManager {
 		previousApiReqIndex: number,
 		taskDirectory: string,
 		useAutoCondense: boolean, // option to use new auto-condense or old programmatic context management
+		triggerOptions: CompactTriggerOptions = {},
 	) {
 		let updatedConversationHistoryDeletedRange = false
 
@@ -281,10 +286,10 @@ export class ContextManager {
 					const requestInfo: ClineApiReqInfo = JSON.parse(previousRequestText)
 					const totalTokens = getContextTokens(requestInfo)
 					const { contextWindow } = getContextWindowInfo(api)
-					const triggerTokens = computeCompactTrigger(contextWindow, computeSummarizeBudget())
+					const triggerTokens = computeCompactTrigger(contextWindow, computeSummarizeBudget(), triggerOptions)
 
 					// Use the same input-context trigger as auto-condense to avoid early standard truncation.
-					if (totalTokens >= triggerTokens) {
+					if (shouldCompactProjectedUsage(totalTokens, triggerTokens)) {
 						// Since the user may switch between models with different context windows, truncating half may not be enough (ie if switching from claude 200k to deepseek 64k, half truncation will only remove 100k tokens, but we need to remove much more)
 						// So if totalTokens/2 is greater than triggerTokens, we truncate 3/4 instead of 1/2
 						const keep = totalTokens / 2 > triggerTokens ? "quarter" : "half"

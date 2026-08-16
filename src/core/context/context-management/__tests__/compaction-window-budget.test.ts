@@ -32,10 +32,13 @@ describe("compaction window budget", () => {
 		expect(rendered).toContain(`${result.budget.availableRemainder}`)
 		expect(rendered).toContain(`${result.budget.outputHardLimit}`)
 		expect(result.budget.estimatedInputTokens).toBeGreaterThan(0)
-		expect(result.budget.availableRemainder).toBe(Math.max(0, 32_000 - result.budget.estimatedInputTokens - 2_000))
-		expect(result.budget.outputHardLimit).toBe(Math.min(result.budget.availableRemainder, 4_096))
+		expect(result.budget.rawRemainder).toBe(32_000 - result.budget.estimatedInputTokens)
+		expect(result.budget.availableRemainder).toBe(Math.max(0, result.budget.rawRemainder))
+		expect(result.budget.providerOutputCap).toBe(Math.min(result.budget.availableRemainder, 30_000))
+		expect(result.budget.outputHardLimit).toBe(result.budget.providerOutputCap)
+		expect(result.budget.decision).toBe("ready")
 		expect(result.budget.recommendedMin).toBe(Math.min(Math.floor(result.budget.availableRemainder * 0.8), 5_000))
-		expect(result.budget.recommendedMax).toBe(Math.min(Math.floor(result.budget.availableRemainder * 0.9), 20_000))
+		expect(result.budget.recommendedMax).toBe(Math.min(Math.floor(result.budget.availableRemainder * 0.9), 30_000))
 		expect(result.budget.recommendedMin).toBeLessThanOrEqual(result.budget.recommendedMax)
 		expect(result.budget.recommendedMax).toBeLessThanOrEqual(result.budget.availableRemainder)
 	})
@@ -66,6 +69,36 @@ describe("compaction window budget", () => {
 		expect(rendered).not.toContain(COMPACTION_WINDOW_BUDGET_MARKER)
 		expect(rendered).toContain("# Compaction Window Budget")
 		expect(rendered).toContain("Preserve user feedback.")
+	})
+
+	it("ignores model output metadata when resolving the compaction policy cap", () => {
+		const common = {
+			contextWindow: 64_000,
+			systemPrompt: "system",
+			messages: compactionMessages(),
+		}
+		const missing = resolveCompactionWindowBudget(common)
+		const small = resolveCompactionWindowBudget({ ...common, maxOutputTokens: 1_024 })
+		const large = resolveCompactionWindowBudget({ ...common, maxOutputTokens: 500_000 })
+
+		expect(missing.budget.providerOutputCap).toBeGreaterThan(0)
+		expect(small.budget.providerOutputCap).toBe(missing.budget.providerOutputCap)
+		expect(large.budget.providerOutputCap).toBe(missing.budget.providerOutputCap)
+	})
+
+	it("requests a smaller input instead of inventing an output cap when no remainder exists", () => {
+		const result = resolveCompactionWindowBudget({
+			contextWindow: 128,
+			maxOutputTokens: 500_000,
+			systemPrompt: "system".repeat(1_000),
+			messages: compactionMessages(),
+		})
+
+		expect(result.budget.rawRemainder).toBeLessThan(0)
+		expect(result.budget.availableRemainder).toBe(0)
+		expect(result.budget.providerOutputCap).toBe(0)
+		expect(result.budget.outputHardLimit).toBe(0)
+		expect(result.budget.decision).toBe("needs_smaller_input")
 	})
 
 	it("includes system prompt and tool schemas in the request estimate", () => {

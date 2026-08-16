@@ -52,6 +52,36 @@ describe("reduceTask lifecycle events", () => {
 		expect(result.effects.map((effect) => effect.type)).toEqual(["POST_TASK_VIEW", "PERSIST_SNAPSHOT"])
 	})
 
+	it("commits and clears Profile validity without changing the Task phase", () => {
+		const invalid = reduceTask(stateAt(TaskPhase.BETWEEN_TURNS), {
+			type: "PROFILE_VALIDITY_UPDATED",
+			profileInvalid: {
+				profileId: "profile-deleted",
+				displayName: "deleted-profile",
+				reason: "missing",
+				message: 'Profile not valid: "deleted-profile" no longer exists.',
+			},
+		})
+
+		expect(invalid).toMatchObject({
+			accepted: true,
+			next: {
+				phase: TaskPhase.BETWEEN_TURNS,
+				profileInvalid: { profileId: "profile-deleted", reason: "missing" },
+			},
+		})
+		expect(invalid.effects.map((effect) => effect.type)).toEqual(["POST_TASK_VIEW", "PERSIST_SNAPSHOT"])
+
+		const valid = reduceTask(invalid.next, {
+			type: "PROFILE_VALIDITY_UPDATED",
+			profileInvalid: undefined,
+		})
+
+		expect(valid).toMatchObject({ accepted: true, next: { phase: TaskPhase.BETWEEN_TURNS } })
+		expect(valid.next.profileInvalid).toBeUndefined()
+		expect(valid.effects.map((effect) => effect.type)).toEqual(["POST_TASK_VIEW", "PERSIST_SNAPSHOT"])
+	})
+
 	it("starts exactly one reconciled API continuation through an ordered effect", () => {
 		const result = reduceTask(
 			createTaskRuntimeState({ taskId: "task-1", phase: TaskPhase.STREAMING, anchor: { apiIndex: 3 } }),
@@ -251,6 +281,105 @@ describe("reduceTask lifecycle events", () => {
 		expect(presented.effects.map((effect) => effect.type)).toEqual(["POST_TASK_VIEW", "PERSIST_SNAPSHOT"])
 	})
 
+	it("temporarily replaces one awaiting interaction and restores its causal anchor", () => {
+		const original = awaitingInteraction()
+		const interrupted = reduceTask(original, {
+			type: "INTERACTION_INTERRUPT_REQUESTED",
+			turnId: "condense-turn",
+			interactionId: "condense-1",
+			kind: "condense",
+			presentation: "Compaction review",
+		})
+
+		expect(interrupted).toMatchObject({
+			accepted: true,
+			next: {
+				anchor: { turnId: "condense-turn", interactionId: "condense-1" },
+				interaction: { kind: "condense", status: "opening", interactionId: "condense-1" },
+				interruptedInteraction: { kind: "tool_approval", status: "awaiting", interactionId: "interaction-1" },
+			},
+		})
+
+		const presented = reduceTask(interrupted.next, {
+			type: "INTERACTION_PRESENTED",
+			interactionId: "condense-1",
+			messageTs: 200,
+		})
+		const responded = reduceTask(presented.next, {
+			type: "INTERACTION_RESPONDED",
+			response: {
+				taskId: "task-1",
+				turnId: "condense-turn",
+				interactionId: "condense-1",
+				actionId: "confirm_utility",
+				stateRevision: presented.next.revision,
+			},
+		})
+		const restored = reduceTask(responded.next, {
+			type: "INTERACTION_RESOLVED",
+			interactionId: "condense-1",
+		})
+
+		expect(restored).toMatchObject({
+			accepted: true,
+			next: {
+				anchor: { uiMessageTs: 100, turnId: "turn-1", interactionId: "interaction-1" },
+				interaction: { kind: "tool_approval", status: "awaiting", interactionId: "interaction-1" },
+				interruptedInteraction: undefined,
+			},
+		})
+	})
+
+	it.each(["opening", "resolving"] as const)("rejects interruption while the active interaction is %s", (status) => {
+		const awaiting = awaitingInteraction()
+		const state = { ...awaiting, interaction: { ...awaiting.interaction, status } }
+		const result = reduceTask(state, {
+			type: "INTERACTION_INTERRUPT_REQUESTED",
+			turnId: "condense-turn",
+			interactionId: "condense-1",
+			kind: "condense",
+			presentation: "Compaction review",
+		})
+
+		expect(result).toMatchObject({ accepted: false, error: { code: "invalid_runtime_event" } })
+		expect(result.next).toBe(state)
+	})
+
+	it("rejects a nested interaction interruption", () => {
+		const interrupted = reduceTask(awaitingInteraction(), {
+			type: "INTERACTION_INTERRUPT_REQUESTED",
+			turnId: "condense-turn",
+			interactionId: "condense-1",
+			kind: "condense",
+			presentation: "Compaction review",
+		})
+		const nested = reduceTask(interrupted.next, {
+			type: "INTERACTION_INTERRUPT_REQUESTED",
+			turnId: "nested-turn",
+			interactionId: "nested-1",
+			kind: "condense",
+			presentation: "Nested review",
+		})
+
+		expect(nested).toMatchObject({ accepted: false, error: { code: "invalid_runtime_event" } })
+		expect(nested.next).toBe(interrupted.next)
+	})
+
+	it("clears both active and interrupted interactions when cancellation starts", () => {
+		const interrupted = reduceTask(awaitingInteraction(), {
+			type: "INTERACTION_INTERRUPT_REQUESTED",
+			turnId: "condense-turn",
+			interactionId: "condense-1",
+			kind: "condense",
+			presentation: "Compaction review",
+		})
+		const cancelled = reduceTask(interrupted.next, { type: "TASK_CANCEL_REQUESTED", source: "user" })
+
+		expect(cancelled).toMatchObject({ accepted: true, next: { phase: TaskPhase.CANCELLING } })
+		expect(cancelled.next.interaction).toBeUndefined()
+		expect(cancelled.next.interruptedInteraction).toBeUndefined()
+	})
+
 	it("resolves only the matching active interaction", () => {
 		const awaiting = awaitingInteraction()
 		const state = { ...awaiting, interaction: { ...awaiting.interaction, status: "resolving" as const } }
@@ -307,24 +436,6 @@ describe("reduceTask lifecycle events", () => {
 			files: ["file"],
 			feedbackAcknowledgment: "yesButtonClicked",
 		})
-	})
-
-	it("does not expose the private mode compaction response as user feedback", () => {
-		const state = awaitingInteraction()
-		state.interaction.kind = "qna_response"
-		const result = reduceTask(state, {
-			type: "INTERACTION_RESPONDED",
-			response: {
-				taskId: "task-1",
-				turnId: "turn-1",
-				interactionId: "interaction-1",
-				actionId: "reply",
-				stateRevision: 4,
-				draft: { text: "__dline_mode_switch_compact__", images: [], files: [] },
-			},
-		})
-
-		expect(result.effects.map((effect) => effect.type)).toEqual(["POST_TASK_VIEW", "PERSIST_SNAPSHOT"])
 	})
 
 	it("rejects stale interaction revision without mutation", () => {

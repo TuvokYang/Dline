@@ -1,3 +1,4 @@
+import type { ContextWindowIndicatorSnapshot } from "@shared/context-window-indicator"
 import { VSCodeButton } from "@vscode/webview-ui-toolkit/react"
 import debounce from "debounce"
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from "react"
@@ -5,7 +6,9 @@ import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/h
 import { Progress } from "@/components/ui/progress"
 import { formatLargeNumber as formatTokenNumber } from "@/utils/format"
 import CompactTaskButton from "./buttons/CompactTaskButton"
+import { createContextWindowIndicatorViewModel } from "./ContextWindowIndicatorViewModel"
 import { ContextWindowSummary } from "./ContextWindowSummary"
+import ContextWindowSegmentedProgress from "./ContextWindowSegmentedProgress"
 
 // Type definitions
 interface ContextWindowInfoProps {
@@ -20,13 +23,14 @@ interface ContextWindowProgressProps extends ContextWindowInfoProps {
 	useAutoCondense: boolean
 	lastApiReqTotalTokens?: number
 	contextWindow?: number
+	contextWindowIndicator?: ContextWindowIndicatorSnapshot
 	compactTaskDisabled?: boolean
 	onCompactTask?: () => Promise<boolean>
 }
 
 const ConfirmationDialog = memo<{
-	onConfirm: (e: React.MouseEvent) => void
-	onCancel: (e: React.MouseEvent) => void
+	onConfirm: (event: React.MouseEvent) => void
+	onCancel: (event: React.MouseEvent) => void
 }>(({ onConfirm, onCancel }) => (
 	<div className="text-sm my-2 flex items-center gap-0 justify-between">
 		<span className="font-semibold text-sm">Compact the current task?</span>
@@ -41,7 +45,7 @@ const ConfirmationDialog = memo<{
 			</VSCodeButton>
 			<VSCodeButton
 				appearance="primary"
-				autoFocus={true}
+				autoFocus
 				className="text-sm"
 				onClick={onConfirm}
 				title="Yes, compact the task"
@@ -56,55 +60,32 @@ ConfirmationDialog.displayName = "ConfirmationDialog"
 const ContextWindow: React.FC<ContextWindowProgressProps> = ({
 	contextWindow = 0,
 	lastApiReqTotalTokens = 0,
-	compactTaskDisabled,
-	onCompactTask,
-	useAutoCondense,
 	tokensIn,
 	tokensOut,
 	cacheWrites,
 	cacheReads,
+	contextWindowIndicator,
+	compactTaskDisabled,
+	onCompactTask,
 }) => {
 	const [isOpened, setIsOpened] = useState(false)
 	const [confirmationNeeded, setConfirmationNeeded] = useState(false)
 	const progressBarRef = useRef<HTMLDivElement>(null)
 
-	const handleCompactClick = useCallback(
-		(e: React.MouseEvent) => {
-			e.preventDefault()
-			e.stopPropagation()
-			if (compactTaskDisabled) return
-			setConfirmationNeeded(!confirmationNeeded)
-		},
-		[confirmationNeeded, compactTaskDisabled],
+	const indicatorViewModel = useMemo(
+		() => (contextWindowIndicator ? createContextWindowIndicatorViewModel(contextWindowIndicator) : undefined),
+		[contextWindowIndicator],
 	)
-
-	const handleConfirm = useCallback(
-		async (e: React.MouseEvent) => {
-			e.preventDefault()
-			e.stopPropagation()
-			if (await onCompactTask?.()) {
-				setConfirmationNeeded(false)
-			}
-		},
-		[onCompactTask],
-	)
-
-	const handleCancel = useCallback((e: React.MouseEvent) => {
-		e.preventDefault()
-		e.stopPropagation()
-		setConfirmationNeeded(false)
-	}, [])
-
 	const tokenData = useMemo(() => {
-		if (!contextWindow) {
-			return null
-		}
+		const max = indicatorViewModel?.contextWindow ?? contextWindow
+		if (!max) return null
+		const used = indicatorViewModel?.totalTokens ?? lastApiReqTotalTokens
 		return {
-			percentage: (lastApiReqTotalTokens / contextWindow) * 100,
-			max: contextWindow,
-			used: lastApiReqTotalTokens,
+			percentage: indicatorViewModel?.percentage ?? (used / max) * 100,
+			max,
+			used,
 		}
-	}, [contextWindow, lastApiReqTotalTokens])
+	}, [contextWindow, indicatorViewModel, lastApiReqTotalTokens])
 
 	const debounceCloseHover = useCallback((e: React.MouseEvent) => {
 		e.preventDefault()
@@ -118,13 +99,36 @@ const ContextWindow: React.FC<ContextWindowProgressProps> = ({
 		setIsOpened(true)
 	}, [])
 
-	// Close tooltip when clicking outside
+	const handleCompactClick = useCallback(
+		(event: React.MouseEvent) => {
+			event.preventDefault()
+			event.stopPropagation()
+			if (compactTaskDisabled) return
+			setConfirmationNeeded((needed) => !needed)
+		},
+		[compactTaskDisabled],
+	)
+
+	const handleConfirm = useCallback(
+		async (event: React.MouseEvent) => {
+			event.preventDefault()
+			event.stopPropagation()
+			if (await onCompactTask?.()) setConfirmationNeeded(false)
+		},
+		[onCompactTask],
+	)
+
+	const handleCancel = useCallback((event: React.MouseEvent) => {
+		event.preventDefault()
+		event.stopPropagation()
+		setConfirmationNeeded(false)
+	}, [])
+
 	useEffect(() => {
-		if (!onCompactTask) {
-			setConfirmationNeeded(false)
-		}
+		if (!onCompactTask) setConfirmationNeeded(false)
 	}, [onCompactTask])
 
+	// Close tooltip when clicking outside
 	useEffect(() => {
 		const handleClickOutside = (event: MouseEvent) => {
 			const target = event.target as Element
@@ -149,7 +153,7 @@ const ContextWindow: React.FC<ContextWindowProgressProps> = ({
 	}
 
 	return (
-		<div className="flex flex-col my-1.5" onMouseLeave={debounceCloseHover}>
+		<div className="flex flex-col my-1.5" data-testid="context-window-indicator" onMouseLeave={debounceCloseHover}>
 			<div className="flex gap-1 flex-row @max-xs:flex-col @max-xs:items-start items-center text-sm">
 				<div className="flex items-center gap-1.5 flex-1 whitespace-nowrap">
 					<span className="cursor-pointer text-sm" title="Current tokens used in this request">
@@ -162,6 +166,7 @@ const ContextWindow: React.FC<ContextWindowProgressProps> = ({
 									cacheReads={cacheReads}
 									cacheWrites={cacheWrites}
 									contextWindow={tokenData.max}
+									indicatorViewModel={indicatorViewModel}
 									percentage={tokenData.percentage}
 									tokensIn={tokensIn}
 									tokensOut={tokensOut}
@@ -175,13 +180,12 @@ const ContextWindow: React.FC<ContextWindowProgressProps> = ({
 									className="relative w-full text-foreground context-window-progress brightness-100"
 									onFocus={handleFocus}
 									ref={progressBarRef}>
-									<Progress
-										aria-label="Context window usage progress"
-										color="success"
-										value={tokenData.percentage}
-									/>
-									{isOpened}
-								</div>
+									{contextWindowIndicator ? (
+										<ContextWindowSegmentedProgress snapshot={contextWindowIndicator} />
+									) : (
+										<Progress aria-label="Context window usage progress" value={tokenData.percentage} />
+									)}
+									</div>
 							</HoverCardTrigger>
 						</HoverCard>
 					</div>

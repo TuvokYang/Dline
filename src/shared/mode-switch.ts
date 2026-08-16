@@ -1,7 +1,7 @@
 import type { Mode } from "./storage/types"
 
 /** Backend transaction phases projected to the Webview. */
-export type ModeSwitchPhase = "idle" | "awaiting_confirmation" | "compacting" | "committing" | "failed"
+export type ModeSwitchPhase = "idle" | "preflighting" | "awaiting_confirmation" | "compacting" | "committing" | "failed"
 
 /** Immediate result statuses returned by mode-switch RPC requests. */
 export type ModeSwitchRequestStatus = "switched" | "confirmation_required" | "in_progress" | "rejected"
@@ -15,8 +15,12 @@ export interface ModeSwitchSnapshot {
 	targetMode?: Mode
 	sourceProfile?: string
 	targetProfile?: string
+	/** Model id used by the frozen target handler for any required compaction. */
+	compactionModel?: string
 	sourceContextWindow?: number
 	targetContextWindow?: number
+	/** Strict fitting exit target resolved by the backend from the same scope as the actual compaction. */
+	fittingExitTarget?: number
 	currentTokens?: number
 	triggerTokens?: number
 	error?: string

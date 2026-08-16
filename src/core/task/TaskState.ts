@@ -1,5 +1,8 @@
 import { Anthropic } from "@anthropic-ai/sdk"
 import { AssistantMessageContent } from "@core/assistant-message"
+import type { CompactionCheckpointHead } from "@core/context/context-management/compaction-checkpoint-chain"
+import type { TargetWindowFittingState } from "@core/context/context-management/target-window-fitting"
+import type { ContextWindowIndicatorSnapshot } from "@shared/context-window-indicator"
 import { ClineAskResponse } from "@shared/WebviewMessage"
 import type { ClineContent, ClineStorageMessage } from "@/shared/messages"
 import type { PartialToolLifecycle } from "./partial-tool-lifecycle"
@@ -44,6 +47,8 @@ export class TaskState {
 
 	// Context and history
 	conversationHistoryDeletedRange?: [number, number]
+	/** Immutable mirror of the Task-owned authoritative context-window indicator. */
+	contextWindowIndicator?: ContextWindowIndicatorSnapshot
 
 	// Tool execution flags
 	didAlreadyUseTool = false
@@ -114,11 +119,24 @@ export class TaskState {
 
 	// Auto-context summarization
 	currentlySummarizing = false
-	/** Continue compaction passes until the latest summary request uses strictly less than 80% of its context window. */
+	/** Continue compaction passes until the complete ordinary target candidate is strictly below its fitting exit target. */
 	compactionFittingRequired = false
+	/** In-memory rolling-merge stage; durable persistence is owned by CTX-004. */
+	targetWindowFittingState?: TargetWindowFittingState
+	/** Latest durable checkpoint head accepted by the shared compaction Session. */
+	targetWindowFittingCheckpointHead?: CompactionCheckpointHead
+	/** Latest staged target candidate projection for the context-window indicator after each fitting Pass. */
+	targetWindowFittingProjection?: {
+		projectedUsageTokens: number
+		targetContextWindow: number
+		coveredTurnCount: number
+		totalTurnCount: number
+	}
 	lastAutoCompactTriggerIndex?: number
 	/** Skip one stale-usage auto-compaction check after a confirmed manual summary is durably committed. */
 	manualCompactionCommitted = false
+	/** Skip one stale-usage auto-compaction check after a committed target-window fitting candidate admits its continuation. */
+	targetWindowFittingCommitted = false
 	/** Identify the active provider request as manual compaction so failure does not enter automatic retry. */
 	isManualContextCompactionRequest = false
 	isInternalContextCompactionRequest = false
@@ -139,8 +157,9 @@ export class TaskState {
 		files: string[]
 	}
 	deferredCurrentTurn?: {
-		assistantMessage: ClineStorageMessage
+		assistantMessage?: ClineStorageMessage
 		userContent: ClineContent[]
+		compactionContent: ClineContent[]
 	}
 
 	// Block identity: maps source-offset keys to stable UI ts values.

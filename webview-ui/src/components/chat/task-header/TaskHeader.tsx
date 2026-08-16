@@ -67,12 +67,11 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 	onCompactTask,
 }) => {
 	const {
-		apiConfiguration,
 		currentTaskItem,
 		checkpointManagerErrorMessage,
+		contextWindowIndicator,
 		focusChainSettings,
 		navigateToSettings,
-		mode,
 		expandTaskHeader: isTaskExpanded,
 		setExpandTaskHeader: setIsTaskExpanded,
 		environment,
@@ -265,6 +264,7 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 							cacheWrites={cacheWrites}
 							compactTaskDisabled={compactTaskDisabled}
 							contextWindow={contextWindow}
+							contextWindowIndicator={contextWindowIndicator}
 							lastApiReqTotalTokens={lastApiReqTotalTokens}
 							onCompactTask={onCompactTask}
 							tokensIn={tokensIn}

@@ -95,6 +95,8 @@ interface MockResponseOptions {
 	reasoning?: string
 	hiddenReasoning?: string
 	delayMs?: number
+	/** Keep a chat-family stream open after its first content or tool-call chunk. */
+	afterChatContentDelayMs?: number
 	afterReasoningDelayMs?: number
 	/** Emit a provider reasoning item after a completed function-call item. */
 	afterToolCompletionReasoning?: string
@@ -102,6 +104,10 @@ interface MockResponseOptions {
 	afterToolCompletionDelayMs?: number
 	/** Keep the response open after the post-tool reasoning item is emitted. */
 	afterToolCompletionHoldMs?: number
+	/** Delay the final Provider usage event after all response content is emitted. */
+	beforeUsageDelayMs?: number
+	/** Keep the stream open after the final Provider usage event. */
+	afterUsageHoldMs?: number
 	/** Select this response by request contract instead of strict FIFO order. */
 	matchRequestContract?: boolean
 	usage?: MockTokenUsage
@@ -989,6 +995,7 @@ export class ClineApiServerMock {
 									},
 								])
 							}
+							if (!(await waitForOpenConnection(scriptedResponse.afterChatContentDelayMs))) return
 							if (scriptedResponse.type === "truncated-message") {
 								res.destroy()
 								return
@@ -1309,7 +1316,9 @@ export class ClineApiServerMock {
 							res.end()
 							return
 						}
+						if (!(await waitForOpenConnection(scriptedResponse.beforeUsageDelayMs))) return
 						writeSse({ type: "response.completed", response }, "response.completed")
+						if (!(await waitForOpenConnection(scriptedResponse.afterUsageHoldMs))) return
 						res.end()
 						return
 					}

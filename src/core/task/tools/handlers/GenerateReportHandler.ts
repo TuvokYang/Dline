@@ -4,7 +4,6 @@ import { formatResponse } from "@core/prompts/responses"
 import { ClineDefaultTool } from "@shared/tools"
 import type { ToolResponse } from "../../index"
 import type { InteractionOutcome } from "../../interaction/InteractionCoordinator"
-import { isCompactSignal } from "../../mode-switch-signal"
 import type { IPartialBlockHandler, IToolHandler } from "../ToolExecutorCoordinator"
 import { interactionId, interactionTurnId, type TaskConfig } from "../types/TaskConfig"
 import type { StronglyTypedUIHelpers } from "../types/UIHelpers"
@@ -61,10 +60,6 @@ export class GenerateReportHandler implements IToolHandler, IPartialBlockHandler
 		const files = outcome.draft?.files
 
 		config.taskState.isAwaitingPlanResponse = false
-
-		if (isCompactSignal(text)) {
-			return formatResponse.toolResult("Mode switch context compaction requested.")
-		}
 
 		// Handle mode switching response (same as MakePlanHandler)
 		if (config.taskState.didRespondToPlanAskBySwitchingMode) {

@@ -1,4 +1,5 @@
 import { findEnabledProfiles } from "@core/controller/file/getApiProfiles"
+import { getProfileCatalogRepository } from "@core/profiles/profile-catalog-runtime"
 import * as SecretsManager from "@core/storage/secrets"
 import { Empty, EmptyRequest } from "@shared/proto/dline/common"
 import { OpenRouterCompatibleModelInfo } from "@shared/proto/dline/models"
@@ -25,6 +26,9 @@ import { sendOpenRouterModelsEvent } from "../models/subscribeToOpenRouterModels
  */
 export async function initializeWebview(controller: Controller, _request: EmptyRequest): Promise<Empty> {
 	try {
+		// Start cross-process Catalog reconciliation even when this window only reads Profiles.
+		await getProfileCatalogRepository()
+
 		// Post last cached models as soon as possible for immediate availability in the UI
 		const lastCachedModels = await controller.readOpenRouterModels()
 		if (lastCachedModels) {

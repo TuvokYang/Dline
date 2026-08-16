@@ -310,6 +310,54 @@ describe("TaskRuntime dispatch", () => {
 		})
 	})
 
+	it("awaits the completed view and rejects a repeated completion presentation without republishing", async () => {
+		let releaseCompletedView: (() => void) | undefined
+		const completedViewGate = new Promise<void>((resolve) => {
+			releaseCompletedView = resolve
+		})
+		const completedViews: Array<{ phase: TaskPhase; interactionStatus?: string }> = []
+		const runtime = new TaskRuntime(
+			createTaskRuntimeState({ taskId: "task-1", phase: TaskPhase.EXECUTING }),
+			createPorts({
+				postView: async (state) => {
+					completedViews.push({ phase: state.phase, interactionStatus: state.interaction?.status })
+					await completedViewGate
+				},
+			}),
+		)
+		const event = {
+			type: "ATTEMPT_COMPLETION_PRESENTED" as const,
+			completionId: "completion-1",
+			turnId: "turn-completion",
+			interactionId: "completion-1",
+			presentation: "done",
+		}
+		let dispatchSettled = false
+		const completion = runtime.dispatch(event).then((result) => {
+			dispatchSettled = true
+			return result
+		})
+
+		await vi.waitFor(() => expect(completedViews).toEqual([{ phase: TaskPhase.COMPLETED, interactionStatus: "awaiting" }]))
+		expect(dispatchSettled).toBe(false)
+		expect(runtime.getState()).toMatchObject({
+			phase: TaskPhase.COMPLETED,
+			completion: { completionId: "completion-1" },
+			interaction: { kind: "completion", interactionId: "completion-1", status: "awaiting" },
+		})
+		releaseCompletedView?.()
+		const accepted = await completion
+		expect(accepted.accepted).toBe(true)
+		const revision = runtime.getState().revision
+
+		const repeated = await runtime.dispatch(event)
+
+		expect(repeated.accepted).toBe(false)
+		expect(repeated.effects).toEqual([])
+		expect(runtime.getState().revision).toBe(revision)
+		expect(completedViews).toEqual([{ phase: TaskPhase.COMPLETED, interactionStatus: "awaiting" }])
+	})
+
 	it("notifies observers after a causal response is committed", async () => {
 		const observed: string[] = []
 		const runtime = new TaskRuntime(

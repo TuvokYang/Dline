@@ -6,6 +6,7 @@ import type {
 	TaskAnchor,
 	TaskCancellationState,
 	TaskCompletionState,
+	TaskProfileInvalidState,
 	TaskRuntimeError,
 	TaskRuntimeState,
 	TurnState,
@@ -147,9 +148,12 @@ export interface TaskSnapshot {
 	anchor?: TaskAnchor
 	turn?: TurnState
 	interaction?: ActiveInteraction
+	interruptedInteraction?: ActiveInteraction
 	cancellation?: TaskCancellationState
 	runtimeError?: TaskRuntimeError
 	completion?: TaskCompletionState
+	/** Task-bound Profile failure retained across crash and history recovery. */
+	profileInvalid?: TaskProfileInvalidState
 	/** Canonical New Task identity consumed before this historical Task exited. */
 	newTaskConsumed?: NewTaskConsumedState
 	awaiting?: TaskSnapshotAwaiting
@@ -281,7 +285,14 @@ function cloneInteraction(interaction: ActiveInteraction): ActiveInteraction {
 	) {
 		throw new Error("invalid_resolving_interaction_identity")
 	}
-	return { ...interaction, taskId, turnId, interactionId, ...(acceptedResponse ? { acceptedResponse } : {}) }
+	return {
+		...interaction,
+		taskId,
+		turnId,
+		interactionId,
+		...(interaction.anchor ? { anchor: { ...interaction.anchor } } : {}),
+		...(acceptedResponse ? { acceptedResponse } : {}),
+	}
 }
 
 /** Convert runtime state into a complete version 2 persistence snapshot. */
@@ -296,9 +307,11 @@ export function createSnapshot(state: Readonly<TaskRuntimeState>, timestamp = Da
 		anchor: { ...state.anchor },
 		turn: state.turn ? cloneTurn(state.turn) : undefined,
 		interaction: state.interaction ? cloneInteraction(state.interaction) : undefined,
+		interruptedInteraction: state.interruptedInteraction ? cloneInteraction(state.interruptedInteraction) : undefined,
 		cancellation: state.cancellation ? { ...state.cancellation } : undefined,
 		runtimeError: state.error ? { ...state.error } : undefined,
 		completion: state.completion ? { ...state.completion } : undefined,
+		profileInvalid: state.profileInvalid ? { ...state.profileInvalid } : undefined,
 		newTaskConsumed: state.newTaskConsumed ? cloneNewTaskConsumed(state.newTaskConsumed) : undefined,
 	}
 }
@@ -311,6 +324,9 @@ export function hydrateSnapshot(snapshot: TaskSnapshot): TaskRuntimeState {
 	const taskId = requireIdentity(snapshot.taskId, "taskId")
 	const turn = snapshot.turn ? cloneTurn(snapshot.turn) : undefined
 	const interaction = snapshot.interaction ? cloneInteraction(snapshot.interaction) : undefined
+	const interruptedInteraction = snapshot.interruptedInteraction
+		? cloneInteraction(snapshot.interruptedInteraction)
+		: undefined
 	if (snapshot.anchor.turnId) {
 		requireIdentity(snapshot.anchor.turnId, "turnId")
 	}
@@ -324,9 +340,11 @@ export function hydrateSnapshot(snapshot: TaskSnapshot): TaskRuntimeState {
 		anchor: { ...snapshot.anchor },
 		turn,
 		interaction,
+		interruptedInteraction,
 		cancellation: snapshot.cancellation ? { ...snapshot.cancellation } : undefined,
 		error: snapshot.runtimeError ? { ...snapshot.runtimeError } : undefined,
 		completion: snapshot.completion ? { ...snapshot.completion } : undefined,
+		profileInvalid: snapshot.profileInvalid ? { ...snapshot.profileInvalid } : undefined,
 		newTaskConsumed: snapshot.newTaskConsumed ? cloneNewTaskConsumed(snapshot.newTaskConsumed) : undefined,
 	}
 }

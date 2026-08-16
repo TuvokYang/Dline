@@ -661,26 +661,19 @@ describe("ContextManager", () => {
 			expect(result).to.equal(false)
 		})
 
-		it("compacts when tokens exceed a configured 75 percent point", () => {
+		it("compacts when a configured percentage reserve reaches the guarded trigger", () => {
 			const api = createMockApi(200_000)
-			const clineMessages: ClineMessage[] = [createApiReqMessage({ tokensIn: 140_000, tokensOut: 15_000 })]
+			const clineMessages: ClineMessage[] = [createApiReqMessage({ tokensIn: 150_000, tokensOut: 15_500 })]
 
 			const result = contextManager.shouldCompactContextWindow(clineMessages, api, 0, { triggerPercent: 75 })
 			expect(result).to.equal(true)
 		})
 
-		it("honors an explicitly configured 5 percent point", () => {
-			const contextWindow = 200_000
-			const triggerPercent = 5
-			const compactionTriggersAt = Math.floor((contextWindow * triggerPercent) / 100)
-			const totalTokens = compactionTriggersAt + 500
+		it("clamps a low trigger percentage to the maximum reserve", () => {
+			const api = createMockApi(200_000)
+			const clineMessages: ClineMessage[] = [createApiReqMessage({ tokensIn: 164_000, tokensOut: 1_500 })]
 
-			const api = createMockApi(contextWindow)
-			const tokensIn = totalTokens - 1_500
-			const tokensOut = 1_500
-			const clineMessages: ClineMessage[] = [createApiReqMessage({ tokensIn, tokensOut })]
-
-			const result = contextManager.shouldCompactContextWindow(clineMessages, api, 0, { triggerPercent })
+			const result = contextManager.shouldCompactContextWindow(clineMessages, api, 0, { triggerPercent: 5 })
 			expect(result).to.equal(true)
 		})
 
@@ -736,10 +729,30 @@ describe("ContextManager", () => {
 			const api = createMockApi(200_000)
 			// Low direct tokens but high cache reads push total over threshold
 			const clineMessages: ClineMessage[] = [
-				createApiReqMessage({ tokensIn: 5_000, tokensOut: 500, cacheWrites: 0, cacheReads: 150_000 }),
+				createApiReqMessage({ tokensIn: 5_000, tokensOut: 500, cacheWrites: 0, cacheReads: 160_000 }),
 			]
 
 			const result = contextManager.shouldCompactContextWindow(clineMessages, api, 0, { triggerPercent: 75 })
+			expect(result).to.equal(true)
+		})
+
+		it("keeps reliable usage plus uncovered failed-request estimate growth in the early guard", () => {
+			const api = createMockApi(200_000)
+			const clineMessages: ClineMessage[] = [
+				createApiReqMessage({ tokensIn: 145_000, tokensOut: 5_000 }),
+				{
+					ts: Date.now() + 1,
+					type: "say",
+					say: "api_req_started",
+					text: JSON.stringify({
+						estimatedContextTokens: 166_000,
+						contextTokensSource: "estimate",
+						cancelReason: "streaming_failed",
+					}),
+				},
+			]
+
+			const result = contextManager.shouldCompactContextWindow(clineMessages, api, 1, { triggerPercent: 75 })
 			expect(result).to.equal(true)
 		})
 

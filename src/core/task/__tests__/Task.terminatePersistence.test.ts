@@ -10,6 +10,20 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
 	return { promise, resolve }
 }
 
+function createTerminationRuntime(phase: TaskPhase) {
+	return {
+		interactionCoordinator: {
+			cancelPending: vi.fn(() => 1),
+			waitForClaimedContinuations: vi.fn(async () => {}),
+			completeCancellation: vi.fn(),
+		},
+		taskRuntime: {
+			getState: vi.fn(() => ({ phase, revision: 1 })),
+			waitForDeferredEffectsThrough: vi.fn(async () => {}),
+		},
+	}
+}
+
 describe("Task termination persistence", () => {
 	it("waits for API and UI message stores to flush before returning", async () => {
 		const apiFlush = deferred()
@@ -17,17 +31,23 @@ describe("Task termination persistence", () => {
 		const flushApiConversationHistory = vi.fn(() => apiFlush.promise)
 		const flushUiMessages = vi.fn(() => uiFlush.promise)
 		const updateTaskHistory = vi.fn(async () => {})
+		const terminationRuntime = createTerminationRuntime(TaskPhase.CANCELLING)
 		const fakeTask = {
 			cancelPendingAutoRetry: vi.fn(),
 			modeSwitchCompaction: { abort: vi.fn() },
 			shouldRunTaskCancelHook: vi.fn(async () => false),
-			taskRuntime: { getState: () => ({ phase: TaskPhase.CANCELLING }) },
-			taskState: { abort: false, abandoned: false },
+			...terminationRuntime,
+			taskState: { abort: false, abandoned: false, isStreaming: false, cancelOperations: vi.fn() },
 			getActiveHookExecution: vi.fn(async () => undefined),
 			commandExecutor: { cancelBackgroundCommand: vi.fn(async () => {}) },
 			stateManager: { getGlobalSettingsKey: vi.fn(() => false) },
 			flushTaskSnapshot: vi.fn(async () => {}),
-			messageStateHandler: { flushApiConversationHistory, flushUiMessages, updateTaskHistory },
+			messageStateHandler: {
+				flushApiConversationHistory,
+				flushUiMessages,
+				updateTaskHistory,
+				close: vi.fn(async () => {}),
+			},
 			postStateToWebview: vi.fn(async () => {}),
 			getCurrentProviderInfo: () => ({
 				providerId: "openai",
@@ -48,6 +68,7 @@ describe("Task termination persistence", () => {
 				dispose: vi.fn(),
 				waitForPersistence: vi.fn(async () => {}),
 			},
+			apiRateMetricsService: { dispose: vi.fn(async () => {}) },
 			browserSession: { dispose: vi.fn(async () => {}) },
 			diffViewProvider: { revertChanges: vi.fn(async () => {}) },
 			presentationScheduler: { dispose: vi.fn(async () => {}) },
@@ -72,22 +93,25 @@ describe("Task termination persistence", () => {
 	})
 
 	it("does not restore a retained approval machine while terminating an executing turn", async () => {
-		const dispatchRuntime = vi.fn(async () => ({ accepted: true }))
+		const dispatchRuntime = vi.fn(async () => ({
+			accepted: true,
+			next: { phase: TaskPhase.CANCELLING, revision: 2, supersededEffectRevision: 1 },
+		}))
 		const cancelBackgroundCommand = vi.fn(async () => true)
 		const cancelActivities = vi.fn(async () => ["background-subagent"])
 		const flushTaskSnapshot = vi.fn(async () => {})
 		const flushApiConversationHistory = vi.fn(async () => {})
 		const flushUiMessages = vi.fn(async () => {})
+		const syncRetainedMachines = vi.fn()
+		const terminationRuntime = createTerminationRuntime(TaskPhase.EXECUTING)
 		const fakeTask = {
 			cancelPendingAutoRetry: vi.fn(),
 			modeSwitchCompaction: { abort: vi.fn() },
 			shouldRunTaskCancelHook: vi.fn(async () => false),
-			taskRuntime: { getState: () => ({ phase: TaskPhase.EXECUTING }) },
+			...terminationRuntime,
 			dispatchRuntime,
-			syncRetainedMachines: vi.fn(() => {
-				throw new Error("Canonical activeDlineTid has no awaiting approval block")
-			}),
-			taskState: { abort: false, abandoned: false },
+			syncRetainedMachines,
+			taskState: { abort: false, abandoned: false, isStreaming: false, cancelOperations: vi.fn() },
 			getActiveHookExecution: vi.fn(async () => undefined),
 			commandExecutor: { cancelBackgroundCommand },
 			stateManager: { getGlobalSettingsKey: vi.fn(() => false) },
@@ -96,6 +120,7 @@ describe("Task termination persistence", () => {
 				flushApiConversationHistory,
 				flushUiMessages,
 				updateTaskHistory: vi.fn(async () => {}),
+				close: vi.fn(async () => {}),
 			},
 			postStateToWebview: vi.fn(async () => {}),
 			getCurrentProviderInfo: () => ({
@@ -117,6 +142,7 @@ describe("Task termination persistence", () => {
 				dispose: vi.fn(),
 				waitForPersistence: vi.fn(async () => {}),
 			},
+			apiRateMetricsService: { dispose: vi.fn(async () => {}) },
 			browserSession: { dispose: vi.fn(async () => {}) },
 			diffViewProvider: { revertChanges: vi.fn(async () => {}) },
 			presentationScheduler: { dispose: vi.fn(async () => {}) },
@@ -127,6 +153,7 @@ describe("Task termination persistence", () => {
 		expect(dispatchRuntime).toHaveBeenCalledWith({ type: "TASK_TERMINATE_REQUESTED" })
 		expect(cancelBackgroundCommand).toHaveBeenCalledOnce()
 		expect(cancelActivities).toHaveBeenCalledWith(["background-subagent"])
+		expect(syncRetainedMachines).not.toHaveBeenCalled()
 		expect(flushTaskSnapshot).toHaveBeenCalled()
 		expect(flushApiConversationHistory).toHaveBeenCalled()
 		expect(flushUiMessages).toHaveBeenCalled()

@@ -1,9 +1,16 @@
+import type { ApiHandler } from "@core/api"
 import type { ChatContent } from "@shared/ChatContent"
+import type { Mode } from "@shared/storage/types"
 
 export type ModeCompactResult = "completed" | "cancelled" | "failed"
 
-interface ActiveCompaction {
+export interface ModeSwitchExecutionScope {
 	operationId: string
+	api: ApiHandler
+	mode: Mode
+}
+
+interface ActiveCompaction extends ModeSwitchExecutionScope {
 	complete: (result: ModeCompactResult) => void
 	completion: Promise<ModeCompactResult>
 	release: Promise<void>
@@ -22,11 +29,15 @@ export class ModeSwitchCompaction {
 	 * Register one forced compaction and wake a pending conversational ask.
 	 *
 	 * @param operationId Coordinator operation identity.
-	 * @param wakeAsk Callback that resolves a current conversational ask internally.
+	 * @param api Pending target handler used by every fitting Pass.
+	 * @param mode Pending target mode captured with the handler.
+	 * @param wakeInteraction Callback that resolves a current conversational ask internally.
 	 * @returns Final compaction result after summary application or failure.
 	 */
 	request(
 		operationId: string,
+		api: ApiHandler,
+		mode: Mode,
 		wakeInteraction: () => boolean | undefined | Promise<boolean | undefined>,
 		chatContent?: ChatContent,
 	): Promise<ModeCompactResult> {
@@ -43,6 +54,8 @@ export class ModeSwitchCompaction {
 		})
 		this.active = {
 			operationId,
+			api,
+			mode,
 			completion,
 			complete: (result) => completeValue?.(result),
 			release,
@@ -154,6 +167,12 @@ export class ModeSwitchCompaction {
 		const content = this.pendingChatContent
 		this.pendingChatContent = undefined
 		return cloneChatContent(content)
+	}
+
+	/** Return the frozen target handler and mode for the next forced Pass. */
+	getExecutionScope(): ModeSwitchExecutionScope | undefined {
+		const active = this.active
+		return active ? { operationId: active.operationId, api: active.api, mode: active.mode } : undefined
 	}
 
 	/**

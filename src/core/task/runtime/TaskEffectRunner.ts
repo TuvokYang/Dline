@@ -16,7 +16,7 @@ export interface InteractionAnchorResult {
 
 /** Explicit infrastructure ports used by the task effect runner. */
 export interface TaskEffectPorts {
-	postView(): Promise<void>
+	postView(state: Readonly<TaskRuntimeState>): Promise<void>
 	persistSnapshot(state: Readonly<TaskRuntimeState>): Promise<void>
 	cancelRuntime(): Promise<void>
 	prepareResume(): Promise<void>
@@ -65,7 +65,7 @@ export class TaskEffectRunner {
 	private async runOne(effect: TaskEffect, state: Readonly<TaskRuntimeState>): Promise<InteractionAnchorResult | undefined> {
 		switch (effect.type) {
 			case "POST_TASK_VIEW":
-				await this.ports.postView()
+				await this.ports.postView(state)
 				return
 			case "PERSIST_SNAPSHOT":
 				await this.ports.persistSnapshot(state)

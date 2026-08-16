@@ -9,6 +9,7 @@ import { ClineError } from "@/services/error"
 import { ClineStorageMessage } from "@/shared/messages/content"
 import { ClineTool } from "@/shared/tools"
 import { getProfileModelInfo } from "./model-info"
+import { applyTaskRuntimeOverrides } from "./runtime-profile"
 import { AIhubmixHandler } from "./providers/aihubmix"
 import { AnthropicHandler } from "./providers/anthropic"
 import { AskSageHandler } from "./providers/asksage"
@@ -79,10 +80,18 @@ export interface ApiHandlerContext {
 export type UsageQuota = AccountUsageQuotaData
 export type AccountUsage = AccountUsageData
 
+/** Request-scoped generation controls resolved above provider adapters. */
+export interface ApiGenerationOptions {
+	readonly purpose: "compaction"
+	readonly maxOutputTokens: number
+}
+
 /** Immutable request-level capabilities resolved before entering a provider adapter. */
 export interface ApiRequestOptions {
 	/** Provider-hosted tools selected for this request. Local tools remain in `tools`. */
 	readonly serverTools?: readonly ServerTool[]
+	/** Optional generation policy for internal requests; ordinary requests omit this field. */
+	readonly generation?: ApiGenerationOptions
 }
 
 export interface ApiHandler {
@@ -293,7 +302,11 @@ export function buildApiHandler(configuration: ApiConfiguration, mode: Mode): Ap
 	if (!profile) {
 		throw new Error(`Profile "${profileName}" not found`)
 	}
-	const runtimeProfile: ApiProfile = { ...profile, modelInfo: getProfileModelInfo(profile) }
+	const runtimeProfile = applyTaskRuntimeOverrides(
+		{ ...profile, modelInfo: getProfileModelInfo(profile) },
+		configuration,
+		mode,
+	)
 	return createHandlerForProvider({
 		profile: runtimeProfile,
 		mode,

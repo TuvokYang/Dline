@@ -1,6 +1,6 @@
 import { readdir, readFile, writeFile } from "node:fs/promises"
 import * as path from "node:path"
-import { expect, type Frame } from "@playwright/test"
+import { expect, type Frame, type TestInfo } from "@playwright/test"
 import type { ElectronApplication } from "playwright"
 import type { MockApiConsumption } from "./fixtures/server"
 import { E2E_PROFILE_NAMES } from "./utils/api-profile"
@@ -15,6 +15,18 @@ interface StoredProfile {
 			contextWindow?: number
 		}
 	}
+}
+
+interface StoredCompletionSnapshot {
+	phase?: string
+	completion?: { completionId?: string }
+	interaction?: {
+		interactionId?: string
+		kind?: string
+		status?: string
+	}
+	anchor?: { interactionId?: string }
+	turn?: { blocks?: Array<{ dlineTid?: string; phase?: string; toolName?: string }> }
 }
 
 const COMPACT_SIGNAL = "__dline_mode_switch_compact__"
@@ -103,6 +115,10 @@ async function configureDeepSeekAutoCompact(dlineDir: string, useAutoCondense = 
 				actModeProfile: E2E_PROFILE_NAMES.mockDeepSeek,
 				planModeProfile: E2E_PROFILE_NAMES.mockDeepSeek,
 				useAutoCondense,
+				autoCondenseTriggerPercent: 97,
+				autoCondenseMinReserveTokens: 5_000,
+				autoCondenseMaxReserveTokens: 30_000,
+				autoCondenseMaxContextTokens: 0,
 			},
 			null,
 			2,
@@ -143,6 +159,39 @@ async function configureTaskProfileSwitch(dlineDir: string): Promise<void> {
 	)
 }
 
+async function configureProfileCompactionSwitch(dlineDir: string): Promise<void> {
+	const profiles = JSON.parse(await readFile(profilesPath(dlineDir), "utf8")) as StoredProfile[]
+	const sourceProfile = profiles.find((profile) => profile.name === E2E_PROFILE_NAMES.mockOpenAiResponses)
+	const targetProfile = profiles.find((profile) => profile.name === E2E_PROFILE_NAMES.mockOpenAi)
+	if (!sourceProfile?.openai?.capabilities || !targetProfile?.openai?.capabilities) {
+		throw new Error("Missing configurable OpenAI E2E profiles")
+	}
+	sourceProfile.modelId = "gpt-5.6-sol"
+	sourceProfile.openai.capabilities.contextWindow = 272_000
+	sourceProfile.webSearchMode = "WEB_SEARCH_MODE_FORCE_OFF"
+	targetProfile.modelId = "gpt-5.6-sol"
+	targetProfile.openai.capabilities.contextWindow = 131_072
+	targetProfile.webSearchMode = "WEB_SEARCH_MODE_FORCE_OFF"
+	await writeFile(profilesPath(dlineDir), `${JSON.stringify(profiles, null, 2)}\n`, "utf8")
+
+	const settings = JSON.parse(await readFile(settingsPath(dlineDir), "utf8")) as Record<string, unknown>
+	await writeFile(
+		settingsPath(dlineDir),
+		`${JSON.stringify(
+			{
+				...settings,
+				planActSeparateModelsSetting: false,
+				actModeProfile: E2E_PROFILE_NAMES.mockOpenAiResponses,
+				planModeProfile: E2E_PROFILE_NAMES.mockOpenAiResponses,
+				useAutoCondense: false,
+			},
+			null,
+			2,
+		)}\n`,
+		"utf8",
+	)
+}
+
 async function clickProfileOption(sidebar: Frame, profileName: string): Promise<void> {
 	const modelSwitcher = sidebar.getByRole("button", { name: "Select model" })
 	if ((await modelSwitcher.innerText()).trim() === profileName) return
@@ -150,11 +199,6 @@ async function clickProfileOption(sidebar: Frame, profileName: string): Promise<
 	const profileOption = sidebar.getByRole("option").filter({ has: sidebar.getByText(profileName, { exact: true }) })
 	await expect(profileOption).toHaveCount(1)
 	await profileOption.click()
-}
-
-async function selectProfile(sidebar: Frame, profileName: string): Promise<void> {
-	await clickProfileOption(sidebar, profileName)
-	await expect(sidebar.getByRole("button", { name: "Select model" })).toHaveText(profileName)
 }
 
 async function openSidebar(
@@ -235,6 +279,59 @@ async function expectCompactionSummary(sidebar: Frame, summary: string): Promise
 	await expectNoInternalCompactionEcho(sidebar)
 }
 
+const CONTEXT_WINDOW_SEGMENT_ORDER = ["durable", "sending", "receiving", "environment"] as const
+const CONTEXT_WINDOW_SEGMENT_COLORS = [
+	"var(--vscode-charts-green, #3fb950)",
+	"var(--vscode-charts-blue, #58a6ff)",
+	"var(--vscode-charts-yellow, #d29922)",
+	"var(--vscode-charts-purple, #bc8cff)",
+] as const
+
+async function expandTaskHeader(sidebar: Frame): Promise<void> {
+	const expandTaskHeader = sidebar.getByLabel("Expand task header")
+	if (await expandTaskHeader.isVisible()) await expandTaskHeader.click()
+	await expect(sidebar.getByTestId("context-window-indicator")).toBeVisible({ timeout: 60_000 })
+}
+
+async function readContextWindowVisual(sidebar: Frame) {
+	return sidebar.getByTestId("context-window-segmented-progress").evaluate((progress) => {
+		const progressElement = progress as HTMLElement
+		return {
+			contextWindow: Number(progressElement.dataset.contextWindow ?? 0),
+			epoch: Number(progressElement.dataset.epoch ?? 0),
+			minorFactor: Number(progressElement.dataset.minorFactor ?? 1),
+			mode: progressElement.dataset.mode,
+			motion: progressElement.dataset.motion,
+			phase: progressElement.dataset.phase,
+			profileName: progressElement.dataset.profileName,
+			revision: Number(progressElement.dataset.revision ?? 0),
+			segments: Array.from(progressElement.querySelectorAll<HTMLElement>("[data-segment]")).map((segment) => ({
+				active: segment.dataset.active,
+				authoritativeTokens: Number(segment.dataset.authoritativeTokens ?? 0),
+				computedColor: getComputedStyle(segment).backgroundColor,
+				inlineColor: segment.style.backgroundColor,
+				inlineWidth: segment.style.width,
+				kind: segment.dataset.segment,
+				tokens: Number(segment.dataset.tokens ?? 0),
+				transitionSource: segment.dataset.transitionSource,
+			})),
+		}
+	})
+}
+
+function expectFourContextSegments(visual: Awaited<ReturnType<typeof readContextWindowVisual>>): void {
+	expect(visual.segments.map((segment) => segment.kind)).toEqual(CONTEXT_WINDOW_SEGMENT_ORDER)
+	expect(visual.segments.map((segment) => segment.inlineColor)).toEqual(CONTEXT_WINDOW_SEGMENT_COLORS)
+	expect(new Set(visual.segments.map((segment) => segment.computedColor)).size).toBe(4)
+	expect(visual.segments.at(-1)?.kind).toBe("environment")
+}
+
+async function captureContextWindowEvidence(sidebar: Frame, testInfo: TestInfo, name: string): Promise<void> {
+	const screenshotPath = testInfo.outputPath(`${name}.png`)
+	await sidebar.getByTestId("context-window-indicator").screenshot({ path: screenshotPath })
+	await testInfo.attach(name, { path: screenshotPath, contentType: "image/png" })
+}
+
 async function confirmManualCompaction(sidebar: Frame, summary: string): Promise<void> {
 	await expect(sidebar.getByText(summary, { exact: false }).last()).toBeVisible({ timeout: 60_000 })
 	const confirmButton = sidebar.locator('vscode-button[aria-label="Condense Conversation"]')
@@ -251,6 +348,23 @@ async function taskDirectoryIds(dlineDocsDir: string): Promise<string[]> {
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code === "ENOENT") return []
 		throw error
+	}
+}
+
+async function readCompletionSnapshot(dlineDocsDir: string, taskId: string): Promise<StoredCompletionSnapshot> {
+	return JSON.parse(await readFile(path.join(dlineDocsDir, "tasks", taskId, "snapshot.json"), "utf8"))
+}
+
+function completionSnapshotState(snapshot: StoredCompletionSnapshot) {
+	const completionBlock = snapshot.turn?.blocks?.find((block) => block.toolName === "attempt_completion")
+	return {
+		phase: snapshot.phase,
+		completionId: snapshot.completion?.completionId,
+		interactionId: snapshot.interaction?.interactionId,
+		interactionKind: snapshot.interaction?.kind,
+		interactionStatus: snapshot.interaction?.status,
+		anchorInteractionId: snapshot.anchor?.interactionId,
+		completionBlockId: completionBlock?.dlineTid,
 	}
 }
 
@@ -302,6 +416,190 @@ e2e(
 			expect(targetRequest.requestBody).toMatchObject({ model: "gpt-5.6-sol" })
 			expect(JSON.stringify(targetRequest.requestBody)).not.toContain(COMPACT_INSTRUCTION_MARKER)
 			expect(targetRequest.contractError).toBeUndefined()
+			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+		} finally {
+			await app.close()
+		}
+	},
+)
+
+e2e(
+	"Task-local profile switch - smaller target compacts with the target Profile and restores C0",
+	async ({ dlineDir, helper, openVSCode, server, userDataDir, workspaceDir }, testInfo) => {
+		e2e.setTimeout(240_000)
+		await configureProfileCompactionSwitch(dlineDir)
+		server.enqueueResponses(
+			"openai-compatible-responses",
+			{
+				type: "tool",
+				id: "call_profile_compaction_history_ready",
+				name: "qna_respond",
+				arguments: { response: "E2E_PROFILE_COMPACTION_HISTORY_READY" },
+				expectedRequestIncludes: ["E2E_PROFILE_COMPACTION_TASK"],
+			},
+			{
+				type: "tool",
+				id: "call_profile_compaction_source_ready",
+				name: "attempt_completion",
+				arguments: { result: "E2E_PROFILE_COMPACTION_SOURCE_READY" },
+				usage: { inputTokens: 140_000, outputTokens: 100 },
+				expectedRequestIncludes: ["E2E_PROFILE_COMPACTION_LATEST"],
+			},
+		)
+		server.enqueueResponses("openai-compatible-chat", {
+			type: "tool",
+			id: "call_profile_compaction_target_summary",
+			delayMs: 1_500,
+			afterChatContentDelayMs: 2_500,
+			name: "summarize_task",
+			arguments: {
+				context: "E2E_PROFILE_TARGET_SUMMARY preserves E2E_PROFILE_COMPACTION_TASK and E2E_PROFILE_COMPACTION_LATEST.",
+			},
+			expectedRequestIncludes: [COMPACT_INSTRUCTION_MARKER, "E2E_PROFILE_COMPACTION_TASK", "E2E_PROFILE_COMPACTION_LATEST"],
+			expectedRequestExcludes: [COMPACT_SIGNAL],
+		})
+
+		const app = await openVSCode(workspaceDir)
+		try {
+			const { sidebar } = await openSidebar(app, helper)
+			await sendTask(sidebar, "E2E_PROFILE_COMPACTION_TASK", 60_000)
+			await expect(sidebar.getByText("E2E_PROFILE_COMPACTION_HISTORY_READY", { exact: false }).last()).toBeVisible({
+				timeout: 60_000,
+			})
+			await sendTask(sidebar, "E2E_PROFILE_COMPACTION_LATEST", 60_000)
+			await expect(sidebar.getByText("E2E_PROFILE_COMPACTION_SOURCE_READY", { exact: false }).last()).toBeVisible({
+				timeout: 60_000,
+			})
+			await expandTaskHeader(sidebar)
+
+			await clickProfileOption(sidebar, E2E_PROFILE_NAMES.mockOpenAi)
+			const modelSwitcher = sidebar.getByRole("button", { name: "Select model" })
+			await expect(modelSwitcher).toContainText(E2E_PROFILE_NAMES.mockOpenAiResponses)
+			const dialog = sidebar.getByRole("dialog")
+			await expect(dialog.getByRole("heading", { name: "Compact context before switching?" })).toBeVisible()
+			await expect(dialog).toContainText(`Compaction will run with ${E2E_PROFILE_NAMES.mockOpenAi}`)
+			await expect(dialog).toContainText("Must fit below")
+			await dialog.getByRole("button", { name: "Compact & Switch" }).click()
+
+			const progress = sidebar.getByTestId("context-window-segmented-progress")
+			await expect(progress).toHaveAttribute("data-phase", "sending", { timeout: 60_000 })
+			let visual = await readContextWindowVisual(sidebar)
+			expectFourContextSegments(visual)
+			expect(visual).toMatchObject({
+				contextWindow: 131_072,
+				mode: "act",
+				motion: "none",
+				phase: "sending",
+				profileName: E2E_PROFILE_NAMES.mockOpenAi,
+			})
+			expect(visual.segments[1]).toMatchObject({ active: "true", kind: "sending" })
+			expect(visual.segments[1].authoritativeTokens).toBeGreaterThan(0)
+			expect(visual.segments[2]).toMatchObject({ active: "false", authoritativeTokens: 0, kind: "receiving" })
+			await captureContextWindowEvidence(sidebar, testInfo, "context-sending")
+
+			await expect(progress).toHaveAttribute("data-phase", "receiving", { timeout: 60_000 })
+			visual = await readContextWindowVisual(sidebar)
+			expectFourContextSegments(visual)
+			expect(visual).toMatchObject({
+				contextWindow: 131_072,
+				mode: "act",
+				motion: "none",
+				phase: "receiving",
+				profileName: E2E_PROFILE_NAMES.mockOpenAi,
+			})
+			expect(visual.segments[1].authoritativeTokens).toBeGreaterThan(0)
+			expect(visual.segments[2]).toMatchObject({ active: "true", kind: "receiving" })
+			expect(visual.segments[2].authoritativeTokens).toBeGreaterThan(0)
+			// Minor-group visual amplification must preserve the internal token ratio
+			// between Sending and Receiving regardless of the applied factor.
+			expect(visual.minorFactor).toBeGreaterThanOrEqual(1)
+			if (visual.segments[1].tokens > 0 && visual.segments[2].tokens > 0) {
+				const sendingWidth = Number.parseFloat(visual.segments[1].inlineWidth ?? "0")
+				const receivingWidth = Number.parseFloat(visual.segments[2].inlineWidth ?? "0")
+				expect(sendingWidth / receivingWidth).toBeCloseTo(
+					visual.segments[1].tokens / visual.segments[2].tokens,
+					1,
+				)
+			}
+			await captureContextWindowEvidence(sidebar, testInfo, "context-receiving")
+
+			await expect(progress).toHaveAttribute("data-motion", "commit", { timeout: 60_000 })
+			visual = await readContextWindowVisual(sidebar)
+			expectFourContextSegments(visual)
+			expect(visual.contextWindow).toBe(131_072)
+			expect(visual.profileName).toBe(E2E_PROFILE_NAMES.mockOpenAi)
+			expect(visual.segments[1]).toMatchObject({ authoritativeTokens: 0, transitionSource: "previous" })
+			expect(visual.segments[2]).toMatchObject({ authoritativeTokens: 0, transitionSource: "previous" })
+			expect(visual.segments[1].tokens).toBeGreaterThan(0)
+			expect(visual.segments[2].tokens).toBeGreaterThan(0)
+			await captureContextWindowEvidence(sidebar, testInfo, "context-committing")
+
+			await expect(modelSwitcher).toHaveText(E2E_PROFILE_NAMES.mockOpenAi, { timeout: 60_000 })
+			await expect(sidebar.getByText("E2E_PROFILE_TARGET_SUMMARY", { exact: false }).last()).toBeVisible({
+				timeout: 60_000,
+			})
+			await expect(progress).toHaveAttribute("data-phase", "stable", { timeout: 60_000 })
+			await expect(progress).toHaveAttribute("data-motion", "none", { timeout: 60_000 })
+			visual = await readContextWindowVisual(sidebar)
+			expectFourContextSegments(visual)
+			expect(visual).toMatchObject({
+				contextWindow: 131_072,
+				mode: "act",
+				motion: "none",
+				phase: "stable",
+				profileName: E2E_PROFILE_NAMES.mockOpenAi,
+			})
+			expect(visual.segments[1]).toMatchObject({ authoritativeTokens: 0, inlineWidth: "0%", tokens: 0 })
+			expect(visual.segments[2]).toMatchObject({ authoritativeTokens: 0, inlineWidth: "0%", tokens: 0 })
+			await captureContextWindowEvidence(sidebar, testInfo, "context-committed")
+
+			await expect.poll(() => server.getRequestCount("openai-compatible-responses")).toBe(2)
+			await expect.poll(() => server.getRequestCount("openai-compatible-chat")).toBe(1)
+			const targetSummary = server.getMockConsumptions("openai-compatible-chat")[0]
+			expect(targetSummary).toMatchObject({ provider: "openai", protocol: "openai-chat", toolName: "summarize_task" })
+			expect(targetSummary.contractError).toBeUndefined()
+
+			const completedPass = sidebar.getByTestId("compaction-pass").filter({ hasText: "E2E_PROFILE_TARGET_SUMMARY" }).last()
+			await expect(completedPass).toHaveAttribute("data-compaction-status", "completed")
+			const checkpointControl = completedPass
+				.getByText("Compaction checkpoint", { exact: true })
+				.locator("..")
+				.locator("..")
+			await checkpointControl.hover()
+			const restoreButton = completedPass.getByRole("button", { name: "Restore", exact: true })
+			await expect(restoreButton).toBeVisible()
+			await restoreButton.click()
+			const restoreTaskButton = sidebar.getByRole("button", { name: "Restore Task Only", exact: true })
+			await expect(restoreTaskButton).toBeVisible()
+			await restoreTaskButton.click()
+			await expect(progress).toHaveAttribute("data-motion", "restore", { timeout: 60_000 })
+			visual = await readContextWindowVisual(sidebar)
+			expectFourContextSegments(visual)
+			expect(visual).toMatchObject({
+				contextWindow: 272_000,
+				mode: "act",
+				motion: "restore",
+				profileName: E2E_PROFILE_NAMES.mockOpenAiResponses,
+			})
+			expect(visual.segments[1]).toMatchObject({ authoritativeTokens: 0, tokens: 0 })
+			expect(visual.segments[2]).toMatchObject({ authoritativeTokens: 0, tokens: 0 })
+			await captureContextWindowEvidence(sidebar, testInfo, "context-restoring")
+
+			await expect(restoreTaskButton).toHaveCount(0)
+			await expect(sidebar.getByText("Restore was not completed", { exact: false })).toHaveCount(0)
+			await expect(modelSwitcher).toHaveText(E2E_PROFILE_NAMES.mockOpenAiResponses)
+			await expect(progress).toHaveAttribute("data-phase", "stable", { timeout: 60_000 })
+			await expect(progress).toHaveAttribute("data-motion", "none", { timeout: 60_000 })
+			visual = await readContextWindowVisual(sidebar)
+			expectFourContextSegments(visual)
+			expect(visual).toMatchObject({
+				contextWindow: 272_000,
+				mode: "act",
+				motion: "none",
+				phase: "stable",
+				profileName: E2E_PROFILE_NAMES.mockOpenAiResponses,
+			})
+			await captureContextWindowEvidence(sidebar, testInfo, "context-restored")
 			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
 		} finally {
 			await app.close()
@@ -708,18 +1006,33 @@ e2e(
 			planProfile: E2E_PROFILE_NAMES.mockOpenAi,
 			planContextWindow: 131_072,
 		})
-		server.enqueueResponses("openai-compatible-responses", {
-			type: "tool",
-			id: "call_cancel_compaction_completion",
-			name: "attempt_completion",
-			arguments: { result: "E2E_CANCEL_COMPACTION_READY" },
-			usage: { inputTokens: 125_000, outputTokens: 100 },
-		})
+		server.enqueueResponses(
+			"openai-compatible-responses",
+			{
+				type: "tool",
+				id: "call_cancel_compaction_history",
+				name: "qna_respond",
+				arguments: { response: "E2E_CANCEL_COMPACTION_HISTORY_READY" },
+				expectedRequestIncludes: ["E2E_CANCEL_COMPACTION_TASK"],
+			},
+			{
+				type: "tool",
+				id: "call_cancel_compaction_completion",
+				name: "attempt_completion",
+				arguments: { result: "E2E_CANCEL_COMPACTION_READY" },
+				usage: { inputTokens: 140_000, outputTokens: 100 },
+				expectedRequestIncludes: ["E2E_CANCEL_COMPACTION_LATEST"],
+			},
+		)
 
 		const app = await openVSCode(workspaceDir)
 		try {
 			const { sidebar } = await openSidebar(app, helper)
 			await sendTask(sidebar, "E2E_CANCEL_COMPACTION_TASK")
+			await expect(sidebar.getByText("E2E_CANCEL_COMPACTION_HISTORY_READY", { exact: false }).last()).toBeVisible({
+				timeout: 60_000,
+			})
+			await sendTask(sidebar, "E2E_CANCEL_COMPACTION_LATEST")
 			await expect(sidebar.getByText("E2E_CANCEL_COMPACTION_READY", { exact: false }).last()).toBeVisible({
 				timeout: 60_000,
 			})
@@ -728,14 +1041,14 @@ e2e(
 			await input.fill("E2E_CANCEL_COMPACTION_DRAFT")
 			await sidebar.getByTestId("mode-switch").evaluate((element) => element.click())
 			const dialog = sidebar.getByRole("dialog")
-			await expect(dialog.getByRole("heading", { name: "Switch to a smaller context window?" })).toBeVisible()
+			await expect(dialog.getByRole("heading", { name: "Compact context before switching?" })).toBeVisible()
 			await dialog.getByRole("button", { name: "Cancel" }).click()
 
 			await expect(dialog).toHaveCount(0)
 			await expect(sidebar.getByRole("switch", { name: "Act" })).toHaveAttribute("aria-checked", "true")
 			await expect(sidebar.getByRole("switch", { name: "Plan" })).toHaveAttribute("aria-checked", "false")
 			await expect(input).toHaveValue("E2E_CANCEL_COMPACTION_DRAFT")
-			await expect.poll(() => server.getRequestCount("openai-compatible-responses")).toBe(1)
+			await expect.poll(() => server.getRequestCount("openai-compatible-responses")).toBe(2)
 			await expect.poll(() => server.getRequestCount("openai-compatible-chat")).toBe(0)
 			await expectNoInternalCompactionEcho(sidebar)
 			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
@@ -759,33 +1072,52 @@ e2e(
 			"openai-compatible-responses",
 			{
 				type: "tool",
-				id: "call_smaller_target_completion",
-				name: "attempt_completion",
-				arguments: { result: "E2E_SMALLER_TARGET_READY" },
-				usage: { inputTokens: 125_000, outputTokens: 100 },
+				id: "call_smaller_target_history",
+				name: "qna_respond",
+				arguments: { response: "E2E_SMALLER_TARGET_HISTORY_READY" },
+				expectedRequestIncludes: ["E2E_SMALLER_TARGET_TASK"],
 			},
+			{
+				type: "tool",
+				id: "call_smaller_target_completion",
+				name: "qna_respond",
+				arguments: { response: "E2E_SMALLER_TARGET_READY" },
+				usage: { inputTokens: 140_000, outputTokens: 100 },
+				expectedRequestIncludes: ["E2E_SMALLER_TARGET_LATEST"],
+			},
+		)
+		server.enqueueResponses(
+			"openai-compatible-chat",
 			{
 				type: "tool",
 				id: "call_mode_switch_summary",
 				name: "summarize_task",
-				arguments: { context: "E2E_MODE_SWITCH_SUMMARY preserves E2E_SMALLER_TARGET_TASK and the pending plan draft." },
-				expectedRequestIncludes: [COMPACT_INSTRUCTION_MARKER],
+				arguments: { context: "E2E_MODE_SWITCH_SUMMARY preserves E2E_SMALLER_TARGET_TASK and E2E_SMALLER_TARGET_LATEST." },
+				expectedRequestIncludes: [
+					COMPACT_INSTRUCTION_MARKER,
+					"E2E_SMALLER_TARGET_TASK",
+					"E2E_SMALLER_TARGET_LATEST",
+				],
 				expectedRequestExcludes: [COMPACT_SIGNAL, "E2E_SMALLER_TARGET_PLAN_DRAFT"],
 			},
+			{
+				type: "tool",
+				id: "call_smaller_target_plan",
+				name: "make_plan",
+				arguments: { response: "E2E_SMALLER_TARGET_PLAN_OK", needs_more_exploration: false },
+				expectedRequestIncludes: ["E2E_MODE_SWITCH_SUMMARY", "E2E_SMALLER_TARGET_PLAN_DRAFT", "PLAN MODE"],
+				expectedRequestExcludes: [COMPACT_SIGNAL],
+			},
 		)
-		server.enqueueResponses("openai-compatible-chat", {
-			type: "tool",
-			id: "call_smaller_target_plan",
-			name: "make_plan",
-			arguments: { response: "E2E_SMALLER_TARGET_PLAN_OK", needs_more_exploration: false },
-			expectedRequestIncludes: ["E2E_MODE_SWITCH_SUMMARY", "E2E_SMALLER_TARGET_PLAN_DRAFT", "PLAN MODE"],
-			expectedRequestExcludes: [COMPACT_SIGNAL],
-		})
 
 		const app = await openVSCode(workspaceDir)
 		try {
 			const { sidebar } = await openSidebar(app, helper)
 			await sendTask(sidebar, "E2E_SMALLER_TARGET_TASK")
+			await expect(sidebar.getByText("E2E_SMALLER_TARGET_HISTORY_READY", { exact: false }).last()).toBeVisible({
+				timeout: 60_000,
+			})
+			await sendTask(sidebar, "E2E_SMALLER_TARGET_LATEST")
 			await expect(sidebar.getByText("E2E_SMALLER_TARGET_READY", { exact: false }).last()).toBeVisible({
 				timeout: 60_000,
 			})
@@ -795,9 +1127,12 @@ e2e(
 			await startInputValueObserver(sidebar)
 			await sidebar.getByTestId("mode-switch").evaluate((element) => element.click())
 			const dialog = sidebar.getByRole("dialog")
-			await expect(dialog.getByRole("heading", { name: "Switch to a smaller context window?" })).toBeVisible()
+			await expect(dialog.getByRole("heading", { name: "Compact context before switching?" })).toBeVisible()
+			await expect(dialog.getByText("Source", { exact: true })).toBeVisible()
+			await expect(dialog.getByText(`${E2E_PROFILE_NAMES.mockOpenAiResponses} · 272,000 tokens`, { exact: true })).toBeVisible()
+			await expect(dialog.getByText("Target", { exact: true })).toBeVisible()
+			await expect(dialog.getByText(`${E2E_PROFILE_NAMES.mockOpenAi} · 131,072 tokens`, { exact: true })).toBeVisible()
 			await expect(input).toHaveValue("E2E_SMALLER_TARGET_PLAN_DRAFT")
-			await expect(sidebar.getByRole("switch", { name: "Act" })).toHaveAttribute("aria-checked", "true")
 			await dialog.getByRole("button", { name: "Compact & Switch" }).click()
 
 			await expectPlanMode(sidebar)
@@ -807,21 +1142,20 @@ e2e(
 			const observedValues = await stopInputValueObserver(sidebar)
 			expect(observedValues).not.toContain(COMPACT_SIGNAL)
 			await expect.poll(() => server.getRequestCount("openai-compatible-responses")).toBe(2)
-			await expect.poll(() => server.getRequestCount("openai-compatible-chat")).toBe(1)
-			const sourceRequests = server.getMockConsumptions("openai-compatible-responses")
-			const summaryRequest = sourceRequests[1]
+			await expect.poll(() => server.getRequestCount("openai-compatible-chat")).toBe(2)
+			const targetRequests = server.getMockConsumptions("openai-compatible-chat")
+			const summaryRequest = targetRequests[0]
 			expect(summaryRequest).toMatchObject({ responseType: "tool", toolName: "summarize_task" })
-			expect(requestToolNames(summaryRequest)).toEqual(requestToolNames(sourceRequests[0]))
 			expect(requestToolNames(summaryRequest)).not.toContain("summarize_task")
 			expect(summaryRequest.contractError).toBeUndefined()
-			const targetRequest = server.getMockConsumptions("openai-compatible-chat")[0]
+			const targetRequest = targetRequests[1]
 			expect(requestToolNames(targetRequest)).toContain("make_plan")
 			expect(requestToolNames(targetRequest)).not.toContain("act_mode_respond")
 			expect(requestToolNames(targetRequest)).not.toEqual(["summarize_task"])
 			expect(targetRequest.contractError).toBeUndefined()
 			await expectCompactionSummary(
 				sidebar,
-				"E2E_MODE_SWITCH_SUMMARY preserves E2E_SMALLER_TARGET_TASK and the pending plan draft.",
+				"E2E_MODE_SWITCH_SUMMARY preserves E2E_SMALLER_TARGET_TASK and E2E_SMALLER_TARGET_LATEST.",
 			)
 			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
 		} finally {
@@ -868,40 +1202,46 @@ e2e(
 				usage: { inputTokens: 299_000, outputTokens: 1_000 },
 				expectedRequestIncludes: ["E2E_OVER_LIMIT_LATE_TURN"],
 			},
+		)
+		server.enqueueResponses(
+			"openai-compatible-chat",
 			{
 				type: "error",
 				status: 400,
 				code: "context_length_exceeded",
-				message: "Maximum context length is 272000 tokens; this request contains 300000 tokens.",
+				message: "Maximum context length is 131072 tokens; this request contains 300000 tokens.",
 				requestId: "req_mode_switch_context_limit",
 			},
 			{
 				type: "tool",
 				id: "call_over_limit_summary",
 				name: "summarize_task",
-				arguments: { context: "E2E_OVER_LIMIT_SUMMARY preserves E2E_OVER_LIMIT_TASK and E2E_OVER_LIMIT_LATE_TURN." },
-				expectedRequestIncludes: [COMPACT_INSTRUCTION_MARKER, "E2E_OVER_LIMIT_TASK", "E2E_OVER_LIMIT_LATE_TURN"],
-				expectedRequestExcludes: [
-					COMPACT_SIGNAL,
-					"E2E_OVER_LIMIT_PLAN_DRAFT",
+				arguments: {
+					context:
+						"E2E_OVER_LIMIT_SUMMARY preserves E2E_OVER_LIMIT_TASK, both middle turns, and E2E_OVER_LIMIT_LATE_TURN.",
+				},
+				expectedRequestIncludes: [
+					COMPACT_INSTRUCTION_MARKER,
+					"E2E_OVER_LIMIT_TASK",
 					"E2E_OVER_LIMIT_MIDDLE_ONE",
 					"E2E_OVER_LIMIT_MIDDLE_TWO",
+					"E2E_OVER_LIMIT_LATE_TURN",
 				],
+				expectedRequestExcludes: [COMPACT_SIGNAL, "E2E_OVER_LIMIT_PLAN_DRAFT"],
+			},
+			{
+				type: "tool",
+				id: "call_over_limit_plan",
+				name: "make_plan",
+				arguments: { response: "E2E_OVER_LIMIT_PLAN_OK", needs_more_exploration: false },
+				expectedRequestIncludes: [
+					"E2E_OVER_LIMIT_SUMMARY",
+					"E2E_OVER_LIMIT_PLAN_DRAFT",
+					"PLAN MODE",
+				],
+				expectedRequestExcludes: [COMPACT_SIGNAL],
 			},
 		)
-		server.enqueueResponses("openai-compatible-chat", {
-			type: "tool",
-			id: "call_over_limit_plan",
-			name: "make_plan",
-			arguments: { response: "E2E_OVER_LIMIT_PLAN_OK", needs_more_exploration: false },
-			expectedRequestIncludes: [
-				"E2E_OVER_LIMIT_SUMMARY",
-				"E2E_OVER_LIMIT_LATE_TURN",
-				"E2E_OVER_LIMIT_PLAN_DRAFT",
-				"PLAN MODE",
-			],
-			expectedRequestExcludes: [COMPACT_SIGNAL],
-		})
 
 		const app = await openVSCode(workspaceDir)
 		try {
@@ -928,7 +1268,7 @@ e2e(
 			await startInputValueObserver(sidebar)
 			await sidebar.getByTestId("mode-switch").evaluate((element) => element.click())
 			const dialog = sidebar.getByRole("dialog")
-			await expect(dialog.getByRole("heading", { name: "Switch to a smaller context window?" })).toBeVisible()
+			await expect(dialog.getByRole("heading", { name: "Compact context before switching?" })).toBeVisible()
 			await dialog.getByRole("button", { name: "Compact & Switch" }).click()
 
 			await expectPlanMode(sidebar)
@@ -937,27 +1277,27 @@ e2e(
 			})
 			const observedValues = await stopInputValueObserver(sidebar)
 			expect(observedValues).not.toContain(COMPACT_SIGNAL)
-			await expect.poll(() => server.getRequestCount("openai-compatible-responses")).toBe(6)
-			await expect.poll(() => server.getRequestCount("openai-compatible-chat")).toBe(1)
-			const sourceRequests = server.getMockConsumptions("openai-compatible-responses")
-			const firstSummary = sourceRequests[4]
-			const retriedSummary = sourceRequests[5]
+			await expect.poll(() => server.getRequestCount("openai-compatible-responses")).toBe(4)
+			await expect.poll(() => server.getRequestCount("openai-compatible-chat")).toBe(3)
+			const targetRequests = server.getMockConsumptions("openai-compatible-chat")
+			const firstSummary = targetRequests[0]
+			const retriedSummary = targetRequests[1]
 			for (const request of [firstSummary, retriedSummary]) {
 				const requestText = JSON.stringify(request.requestBody)
-				expect(requestToolNames(request)).toEqual(requestToolNames(sourceRequests[3]))
 				expect(requestToolNames(request)).not.toContain("summarize_task")
 				expect(requestText).toContain("E2E_OVER_LIMIT_TASK")
+				expect(requestText).toContain("E2E_OVER_LIMIT_MIDDLE_ONE")
+				expect(requestText).toContain("E2E_OVER_LIMIT_MIDDLE_TWO")
 				expect(requestText).toContain("E2E_OVER_LIMIT_LATE_TURN")
-				expect(requestText).not.toContain("E2E_OVER_LIMIT_MIDDLE_ONE")
-				expect(requestText).not.toContain("E2E_OVER_LIMIT_MIDDLE_TWO")
 			}
+			expect(requestToolNames(firstSummary)).toEqual(requestToolNames(retriedSummary))
 			expect(firstSummary).toMatchObject({ responseType: "error" })
 			expect(retriedSummary).toMatchObject({ responseType: "tool", toolName: "summarize_task" })
 			expect(retriedSummary.contractError).toBeUndefined()
 			expect(sidebar.getByText("E2E_OVER_LIMIT_TASK", { exact: true }).first()).toBeVisible()
 			await expectCompactionSummary(
 				sidebar,
-				"E2E_OVER_LIMIT_SUMMARY preserves E2E_OVER_LIMIT_TASK and E2E_OVER_LIMIT_LATE_TURN.",
+				"E2E_OVER_LIMIT_SUMMARY preserves E2E_OVER_LIMIT_TASK, both middle turns, and E2E_OVER_LIMIT_LATE_TURN.",
 			)
 			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir, [/context length/i])
 		} finally {
@@ -975,10 +1315,18 @@ e2e(
 			"openai-compatible-responses",
 			{
 				type: "tool",
+				id: "call_auto_compact_history",
+				name: "qna_respond",
+				arguments: { response: "E2E_AUTO_COMPACT_HISTORY_READY" },
+				expectedRequestIncludes: ["E2E_AUTO_COMPACT_TASK"],
+			},
+			{
+				type: "tool",
 				id: "call_auto_compact_ready",
 				name: "qna_respond",
 				arguments: { response: "E2E_AUTO_COMPACT_READY" },
 				usage: { inputTokens: 125_000, outputTokens: 100 },
+				expectedRequestIncludes: ["E2E_AUTO_COMPACT_LATEST"],
 			},
 			{
 				type: "tool",
@@ -1002,6 +1350,10 @@ e2e(
 		try {
 			const { sidebar } = await openSidebar(app, helper)
 			await sendTask(sidebar, "E2E_AUTO_COMPACT_TASK")
+			await expect(sidebar.getByText("E2E_AUTO_COMPACT_HISTORY_READY", { exact: false }).last()).toBeVisible({
+				timeout: 60_000,
+			})
+			await sendTask(sidebar, "E2E_AUTO_COMPACT_LATEST")
 			await expect(sidebar.getByText("E2E_AUTO_COMPACT_READY", { exact: false }).last()).toBeVisible({ timeout: 60_000 })
 			await sendTask(sidebar, "E2E_AUTO_COMPACT_CONTINUE")
 			await expect(
@@ -1012,13 +1364,13 @@ e2e(
 			await expect(sidebar.locator('vscode-button[aria-label="Condense Conversation"]')).toHaveCount(0)
 			await expect(sidebar.locator('vscode-button[aria-label="Regenerate Summary"]')).toHaveCount(0)
 
-			await expect.poll(() => server.getRequestCount("openai-compatible-responses"), { timeout: 60_000 }).toBe(3)
+			await expect.poll(() => server.getRequestCount("openai-compatible-responses"), { timeout: 60_000 }).toBe(4)
 			const requests = server.getMockConsumptions("openai-compatible-responses")
-			expect(requests[1]).toMatchObject({ responseType: "tool", toolName: "summarize_task" })
-			expect(requestToolNames(requests[1])).toEqual(requestToolNames(requests[0]))
-			expect(requestToolNames(requests[1])).not.toContain("summarize_task")
-			expect(requests[1].contractError).toBeUndefined()
+			expect(requests[2]).toMatchObject({ responseType: "tool", toolName: "summarize_task" })
+			expect(requestToolNames(requests[2])).toEqual(requestToolNames(requests[1]))
+			expect(requestToolNames(requests[2])).not.toContain("summarize_task")
 			expect(requests[2].contractError).toBeUndefined()
+			expect(requests[3].contractError).toBeUndefined()
 			await expect(sidebar.getByText("E2E_AUTO_COMPACT_OK", { exact: false }).last()).toBeVisible({ timeout: 60_000 })
 			await expectCompactionSummary(sidebar, "E2E_AUTO_COMPACT_SUMMARY preserves the task and latest user request.")
 			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
@@ -1038,10 +1390,18 @@ e2e(
 			"openai-compatible-responses",
 			{
 				type: "tool",
+				id: "call_manual_priority_history",
+				name: "qna_respond",
+				arguments: { response: "E2E_MANUAL_PRIORITY_HISTORY_READY" },
+				expectedRequestIncludes: ["E2E_MANUAL_PRIORITY_TASK"],
+			},
+			{
+				type: "tool",
 				id: "call_manual_priority_ready",
 				name: "qna_respond",
 				arguments: { response: "E2E_MANUAL_PRIORITY_READY" },
 				usage: { inputTokens: 70_000, outputTokens: 100 },
+				expectedRequestIncludes: ["E2E_MANUAL_PRIORITY_LATEST"],
 			},
 			{
 				type: "tool",
@@ -1065,6 +1425,10 @@ e2e(
 		try {
 			const { sidebar } = await openSidebar(app, helper)
 			await sendTask(sidebar, "E2E_MANUAL_PRIORITY_TASK")
+			await expect(sidebar.getByText("E2E_MANUAL_PRIORITY_HISTORY_READY", { exact: false }).last()).toBeVisible({
+				timeout: 60_000,
+			})
+			await sendTask(sidebar, "E2E_MANUAL_PRIORITY_LATEST")
 			await expect(sidebar.getByText("E2E_MANUAL_PRIORITY_READY", { exact: false }).last()).toBeVisible({
 				timeout: 60_000,
 			})
@@ -1073,12 +1437,12 @@ e2e(
 			await confirmManualCompaction(sidebar, "E2E_MANUAL_PRIORITY_SUMMARY preserves the latest manual guidance.")
 			await expect(sidebar.getByText("E2E_MANUAL_PRIORITY_DONE", { exact: false }).last()).toBeVisible({ timeout: 60_000 })
 
-			await expect.poll(() => server.getRequestCount("openai-compatible-responses")).toBe(3)
+			await expect.poll(() => server.getRequestCount("openai-compatible-responses")).toBe(4)
 			const requests = server.getMockConsumptions("openai-compatible-responses")
-			expect(requests[1]).toMatchObject({ responseType: "tool", toolName: "summarize_task" })
-			expect(requestToolNames(requests[1])).toEqual(requestToolNames(requests[0]))
-			expect(requestToolNames(requests[1])).not.toContain("summarize_task")
-			expect(requests.slice(1).every((request) => request.contractError === undefined)).toBe(true)
+			expect(requests[2]).toMatchObject({ responseType: "tool", toolName: "summarize_task" })
+			expect(requestToolNames(requests[2])).toEqual(requestToolNames(requests[1]))
+			expect(requestToolNames(requests[2])).not.toContain("summarize_task")
+			expect(requests.slice(2).every((request) => request.contractError === undefined)).toBe(true)
 			await expectCompactionSummary(sidebar, "E2E_MANUAL_PRIORITY_SUMMARY preserves the latest manual guidance.")
 			await expect(sidebar.locator('vscode-button[aria-label="Condense Conversation"]')).toHaveCount(0)
 			await expect(sidebar.locator('vscode-button[aria-label="Regenerate Summary"]')).toHaveCount(0)
@@ -1098,10 +1462,18 @@ e2e(
 			"openai-compatible-responses",
 			{
 				type: "tool",
+				id: "call_manual_accept_history",
+				name: "qna_respond",
+				arguments: { response: "E2E_MANUAL_ACCEPT_HISTORY_READY" },
+				expectedRequestIncludes: ["E2E_MANUAL_ACCEPT_TASK"],
+			},
+			{
+				type: "tool",
 				id: "call_manual_accept_ready",
 				name: "qna_respond",
 				arguments: { response: "E2E_MANUAL_ACCEPT_READY" },
 				usage: { inputTokens: 70_000, outputTokens: 100 },
+				expectedRequestIncludes: ["E2E_MANUAL_ACCEPT_LATEST"],
 			},
 			{
 				type: "tool",
@@ -1126,17 +1498,21 @@ e2e(
 		try {
 			const { sidebar } = await openSidebar(app, helper)
 			await sendTask(sidebar, "E2E_MANUAL_ACCEPT_TASK")
+			await expect(sidebar.getByText("E2E_MANUAL_ACCEPT_HISTORY_READY", { exact: false }).last()).toBeVisible({
+				timeout: 60_000,
+			})
+			await sendTask(sidebar, "E2E_MANUAL_ACCEPT_LATEST")
 			await expect(sidebar.getByText("E2E_MANUAL_ACCEPT_READY", { exact: false }).last()).toBeVisible({ timeout: 60_000 })
 
 			await sendTask(sidebar, "/compact E2E_MANUAL_ACCEPT_GUIDANCE")
 			await confirmManualCompaction(sidebar, "E2E_MANUAL_ACCEPT_SUMMARY replaces the original high-context history.")
 			await expect(sidebar.getByText("E2E_MANUAL_ACCEPT_DONE", { exact: false }).last()).toBeVisible({ timeout: 60_000 })
-			await expect.poll(() => server.getRequestCount("openai-compatible-responses")).toBe(3)
+			await expect.poll(() => server.getRequestCount("openai-compatible-responses")).toBe(4)
 			const requests = server.getMockConsumptions("openai-compatible-responses")
 
-			expect(requests.slice(1).every((request) => request.contractError === undefined)).toBe(true)
-			expect(requestToolNames(requests[2])).toEqual(requestToolNames(requests[1]))
-			expect(requestToolNames(requests[2])).not.toContain("summarize_task")
+			expect(requests.slice(2).every((request) => request.contractError === undefined)).toBe(true)
+			expect(requestToolNames(requests[3])).toEqual(requestToolNames(requests[2]))
+			expect(requestToolNames(requests[3])).not.toContain("summarize_task")
 			await expectCompactionSummary(sidebar, "E2E_MANUAL_ACCEPT_SUMMARY replaces the original high-context history.")
 			await expect(sidebar.locator('vscode-button[aria-label="Condense Conversation"]')).toHaveCount(0)
 			await expect(sidebar.locator('vscode-button[aria-label="Regenerate Summary"]')).toHaveCount(0)
@@ -1158,10 +1534,18 @@ e2e(
 			"openai-compatible-responses",
 			{
 				type: "tool",
+				id: "call_manual_incomplete_history",
+				name: "qna_respond",
+				arguments: { response: "E2E_MANUAL_INCOMPLETE_HISTORY_READY" },
+				expectedRequestIncludes: ["E2E_MANUAL_INCOMPLETE_TASK"],
+			},
+			{
+				type: "tool",
 				id: "call_manual_incomplete_ready",
 				name: "qna_respond",
 				arguments: { response: "E2E_MANUAL_INCOMPLETE_READY" },
 				usage: { inputTokens: 70_000, outputTokens: 100 },
+				expectedRequestIncludes: ["E2E_MANUAL_INCOMPLETE_LATEST"],
 			},
 			{
 				type: "truncated-tool",
@@ -1186,6 +1570,10 @@ e2e(
 		try {
 			const { sidebar } = await openSidebar(app, helper)
 			await sendTask(sidebar, "E2E_MANUAL_INCOMPLETE_TASK")
+			await expect(sidebar.getByText("E2E_MANUAL_INCOMPLETE_HISTORY_READY", { exact: false }).last()).toBeVisible({
+				timeout: 60_000,
+			})
+			await sendTask(sidebar, "E2E_MANUAL_INCOMPLETE_LATEST")
 			await expect(sidebar.getByText("E2E_MANUAL_INCOMPLETE_READY", { exact: false }).last()).toBeVisible({
 				timeout: 60_000,
 			})
@@ -1197,11 +1585,11 @@ e2e(
 			await expect(sidebar.getByText(partialSummary, { exact: false })).toHaveCount(0)
 			await expect(sidebar.locator('vscode-button[aria-label="Condense Conversation"]')).toHaveCount(0)
 			await expect(sidebar.locator('vscode-button[aria-label="Regenerate Summary"]')).toHaveCount(0)
-			await expect.poll(() => server.getRequestCount("openai-compatible-responses")).toBe(2)
+			await expect.poll(() => server.getRequestCount("openai-compatible-responses")).toBe(3)
 			const requests = server.getMockConsumptions("openai-compatible-responses")
-			expect(requests[1].responseType).toBe("truncated-tool")
-			expect(requests[1].contractError).toBeUndefined()
-			expect(requests[1].requestToolResults).not.toContainEqual(
+			expect(requests[2].responseType).toBe("truncated-tool")
+			expect(requests[2].contractError).toBeUndefined()
+			expect(requests[2].requestToolResults).not.toContainEqual(
 				expect.objectContaining({ callId: "call_manual_incomplete_summary" }),
 			)
 
@@ -1209,8 +1597,8 @@ e2e(
 			await expect(sidebar.getByText("E2E_MANUAL_INCOMPLETE_RECOVERED", { exact: false }).last()).toBeVisible({
 				timeout: 60_000,
 			})
-			await expect.poll(() => server.getRequestCount("openai-compatible-responses")).toBe(3)
-			const recoveryRequest = server.getMockConsumptions("openai-compatible-responses")[2]
+			await expect.poll(() => server.getRequestCount("openai-compatible-responses")).toBe(4)
+			const recoveryRequest = server.getMockConsumptions("openai-compatible-responses")[3]
 			expect(recoveryRequest.contractError).toBeUndefined()
 			expect(recoveryRequest.requestToolResults).not.toContainEqual(
 				expect.objectContaining({ callId: "call_manual_incomplete_summary" }),
@@ -1279,10 +1667,18 @@ e2e(
 			"openai-compatible-responses",
 			{
 				type: "tool",
+				id: "call_manual_compact_history",
+				name: "qna_respond",
+				arguments: { response: "E2E_MANUAL_COMPACT_HISTORY_READY" },
+				expectedRequestIncludes: ["E2E_MANUAL_COMPACT_TASK"],
+			},
+			{
+				type: "tool",
 				id: "call_manual_compact_ready",
 				name: "qna_respond",
 				arguments: { response: "E2E_MANUAL_COMPACT_READY" },
 				usage: { inputTokens: 80_000, outputTokens: 100 },
+				expectedRequestIncludes: ["E2E_MANUAL_COMPACT_LATEST"],
 			},
 			{
 				type: "tool",
@@ -1299,8 +1695,8 @@ e2e(
 				name: "attempt_completion",
 				arguments: { result: "E2E_MANUAL_COMPACT_DONE" },
 				usage: { inputTokens: 1_200, outputTokens: 100 },
-				expectedRequestIncludes: ["E2E_MANUAL_COMPACT_SUMMARY"],
-				expectedRequestExcludes: [COMPACT_SIGNAL, COMPACT_INSTRUCTION_MARKER, "E2E_MANUAL_COMPACT_PRESERVED_DRAFT"],
+				expectedRequestIncludes: ["E2E_MANUAL_COMPACT_SUMMARY", "E2E_MANUAL_COMPACT_PRESERVED_DRAFT"],
+				expectedRequestExcludes: [COMPACT_SIGNAL, COMPACT_INSTRUCTION_MARKER],
 			},
 		)
 
@@ -1308,6 +1704,10 @@ e2e(
 		try {
 			const { sidebar } = await openSidebar(app, helper)
 			await sendTask(sidebar, "E2E_MANUAL_COMPACT_TASK")
+			await expect(sidebar.getByText("E2E_MANUAL_COMPACT_HISTORY_READY", { exact: false }).last()).toBeVisible({
+				timeout: 60_000,
+			})
+			await sendTask(sidebar, "E2E_MANUAL_COMPACT_LATEST")
 			await expect(sidebar.getByText("E2E_MANUAL_COMPACT_READY", { exact: false }).last()).toBeVisible({
 				timeout: 60_000,
 			})
@@ -1317,7 +1717,7 @@ e2e(
 			const expandTaskHeader = sidebar.getByLabel("Expand task header")
 			if (await expandTaskHeader.isVisible()) await expandTaskHeader.click()
 			const progress = sidebar.getByRole("progressbar", { name: "Context window usage progress" })
-			await expect.poll(async () => Number(await progress.getAttribute("aria-valuenow"))).toBeGreaterThan(60)
+			await expect.poll(async () => Number(await progress.getAttribute("aria-valuenow"))).toBeGreaterThan(60_000)
 			const beforeCompact = Number(await progress.getAttribute("aria-valuenow"))
 
 			const compactButton = sidebar.locator("button").filter({
@@ -1330,23 +1730,26 @@ e2e(
 			await expect(compactButton).toBeVisible()
 			await expect(compactButton).toHaveAttribute("aria-disabled", "true")
 			await confirmManualCompaction(sidebar, "E2E_MANUAL_COMPACT_SUMMARY preserves the task and current intent.")
+			await expect(input).toHaveValue("E2E_MANUAL_COMPACT_PRESERVED_DRAFT")
+			await expect(compactButton).toHaveAttribute("aria-disabled", "false")
+			await sidebar.getByTestId("send-button").click()
 
-			await expect.poll(() => server.getRequestCount("openai-compatible-responses")).toBeGreaterThanOrEqual(3)
+			await expect.poll(() => server.getRequestCount("openai-compatible-responses")).toBeGreaterThanOrEqual(4)
 			const requests = server.getMockConsumptions("openai-compatible-responses")
-			expect(requests[1]).toMatchObject({ responseType: "tool", toolName: "summarize_task" })
-			expect(requestToolNames(requests[1])).toEqual(requestToolNames(requests[0]))
-			expect(requestToolNames(requests[1])).not.toContain("summarize_task")
-			expect(requests[1].contractError).toBeUndefined()
-			expect(requests[2]).toBeDefined()
+			expect(requests[2]).toMatchObject({ responseType: "tool", toolName: "summarize_task" })
+			expect(requestToolNames(requests[2])).toEqual(requestToolNames(requests[1]))
+			expect(requestToolNames(requests[2])).not.toContain("summarize_task")
 			expect(requests[2].contractError).toBeUndefined()
+			expect(requests[3]).toBeDefined()
+			expect(requests[3].contractError).toBeUndefined()
 			await expect(sidebar.getByText("E2E_MANUAL_COMPACT_DONE", { exact: false }).last()).toBeVisible({
 				timeout: 60_000,
 			})
-			await expect.poll(() => server.getRequestCount("openai-compatible-responses")).toBe(3)
+			await expect.poll(() => server.getRequestCount("openai-compatible-responses")).toBe(4)
 			await expectCompactionSummary(sidebar, "E2E_MANUAL_COMPACT_SUMMARY preserves the task and current intent.")
 			await expect(sidebar.getByText("/compact", { exact: true })).toHaveCount(0)
 			await expect.poll(async () => Number(await progress.getAttribute("aria-valuenow"))).toBeLessThan(beforeCompact)
-			await expect(input).toHaveValue("E2E_MANUAL_COMPACT_PRESERVED_DRAFT")
+			await expect(input).toHaveValue("")
 			await expect(compactButton).toBeVisible()
 			await expect(compactButton).toHaveAttribute("aria-disabled", "false")
 			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
@@ -1365,9 +1768,17 @@ e2e(
 			"openai-compatible-responses",
 			{
 				type: "tool",
+				id: "call_manual_followup_history",
+				name: "qna_respond",
+				arguments: { response: "E2E_MANUAL_FOLLOWUP_HISTORY_READY" },
+				expectedRequestIncludes: ["E2E_MANUAL_FOLLOWUP_TASK"],
+			},
+			{
+				type: "tool",
 				id: "call_manual_followup_ready",
 				name: "qna_respond",
 				arguments: { response: "E2E_MANUAL_FOLLOWUP_READY" },
+				expectedRequestIncludes: ["E2E_MANUAL_FOLLOWUP_LATEST"],
 			},
 			{
 				type: "tool",
@@ -1399,6 +1810,10 @@ e2e(
 		try {
 			const { sidebar } = await openSidebar(app, helper)
 			await sendTask(sidebar, "E2E_MANUAL_FOLLOWUP_TASK")
+			await expect(sidebar.getByText("E2E_MANUAL_FOLLOWUP_HISTORY_READY", { exact: false }).last()).toBeVisible({
+				timeout: 60_000,
+			})
+			await sendTask(sidebar, "E2E_MANUAL_FOLLOWUP_LATEST")
 			await expect(sidebar.getByText("E2E_MANUAL_FOLLOWUP_READY", { exact: false }).last()).toBeVisible({
 				timeout: 60_000,
 			})
@@ -1424,7 +1839,7 @@ e2e(
 			await expect(input).toHaveValue("")
 			await expect(sidebar.getByText("E2E_MANUAL_FOLLOWUP_MESSAGE", { exact: true }).last()).toBeVisible()
 			await expect(sidebar.getByText("E2E_MANUAL_FOLLOWUP_DONE", { exact: false }).last()).toBeVisible({ timeout: 60_000 })
-			await expect.poll(() => server.getRequestCount("openai-compatible-responses")).toBe(4)
+			await expect.poll(() => server.getRequestCount("openai-compatible-responses")).toBe(5)
 			const requests = server.getMockConsumptions("openai-compatible-responses")
 			expect(requests.slice(1).every((request) => request.contractError === undefined)).toBe(true)
 			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
@@ -1436,7 +1851,7 @@ e2e(
 
 e2e(
 	"DeepSeek context - 630K usage remains at 63 percent of 1M without an early recovery truncation",
-	async ({ dlineDir, helper, openVSCode, server, userDataDir, workspaceDir }) => {
+	async ({ dlineDir, dlineDocsDir, helper, openVSCode, server, userDataDir, workspaceDir }) => {
 		e2e.setTimeout(180_000)
 		await configureDeepSeekAutoCompact(dlineDir)
 		server.enqueueResponses(
@@ -1467,15 +1882,18 @@ e2e(
 				id: "call_deepseek_context_direct_completion",
 				name: "attempt_completion",
 				arguments: { result: "E2E_DEEPSEEK_CONTEXT_DIRECT_OK" },
+				usage: { inputTokens: 630_000, outputTokens: 100 },
+				delayMs: 5_000,
 				expectedRequestIncludes: ["E2E_DEEPSEEK_CONTEXT_CONTINUE"],
 			},
 			{
 				type: "tool",
-				id: "call_deepseek_context_unexpected_recovery",
+				id: "call_deepseek_context_final_completion",
 				name: "attempt_completion",
-				arguments: { result: "E2E_DEEPSEEK_CONTEXT_UNEXPECTED_RECOVERY" },
-				expectedRequestIncludes: ["E2E_DEEPSEEK_CONTEXT_TASK", "E2E_DEEPSEEK_CONTEXT_CONTINUE"],
-				expectedRequestExcludes: ["E2E_DEEPSEEK_CONTEXT_MIDDLE_ONE"],
+				arguments: { result: "E2E_DEEPSEEK_CONTEXT_FINAL_OK" },
+				usage: { inputTokens: 630_000, outputTokens: 100 },
+				delayMs: 5_000,
+				expectedRequestIncludes: ["E2E_DEEPSEEK_CONTEXT_POST_COMPLETION_FEEDBACK"],
 			},
 		)
 
@@ -1500,22 +1918,225 @@ e2e(
 			await expect(sidebar.locator('[title="Current tokens used in this request"]')).toHaveText("630.1k")
 			await expect(sidebar.locator('[title="Maximum context window size for this model"]')).toHaveText("1.0m")
 			const progress = sidebar.getByRole("progressbar", { name: "Context window usage progress" })
-			await expect(progress).toHaveAttribute("aria-valuenow", "63.01")
-			await expect(progress).toHaveAttribute("aria-valuetext", "63%")
+			await expect(progress).toHaveAttribute("aria-valuenow", "630100")
+			await expect(progress).toHaveAttribute("aria-valuemax", "1000000")
+			await expect(progress).toHaveAttribute("aria-valuetext", "630100 of 1000000 tokens; phase receiving")
+			const receivingVisual = await readContextWindowVisual(sidebar)
+			expectFourContextSegments(receivingVisual)
+			expect(receivingVisual.phase).toBe("receiving")
+			expect(receivingVisual.minorFactor).toBeLessThanOrEqual(3)
+			expect(receivingVisual.segments.reduce((total, segment) => total + segment.authoritativeTokens, 0)).toBe(630100)
+
+			const focusableContextSegment = sidebar.getByTestId("context-window-segment-durable")
+			await focusableContextSegment.focus()
+			await page.waitForTimeout(800)
+			const hoverCardContent = sidebar.locator('[data-slot="hover-card-content"]')
+			await expect(hoverCardContent).toBeVisible()
+			const contextWindowSummary = hoverCardContent.getByText("Context Window", { exact: true })
+			await expect(contextWindowSummary).toBeVisible()
+			await contextWindowSummary.click()
+			const segmentDetails = hoverCardContent.getByTestId("context-window-segment-details")
+			await expect(segmentDetails).toBeVisible()
+			for (const kind of ["durable", "sending", "receiving", "environment"] as const) {
+				await expect(segmentDetails.locator(`[data-segment-detail="${kind}"]`)).toBeVisible()
+			}
 			const screenshotPath = e2e.info().outputPath("deepseek-context-630k.png")
 			await page.screenshot({ path: screenshotPath })
 			await e2e.info().attach("deepseek-context-630k", { path: screenshotPath, contentType: "image/png" })
 
+			const [taskId] = await E2ETestHelper.waitForValue(async () => {
+				const ids = await taskDirectoryIds(dlineDocsDir)
+				return ids.length === 1 ? ids : undefined
+			})
+			if (!taskId) throw new Error("DeepSeek Context E2E task directory was not created")
+
 			await sendTask(sidebar, "E2E_DEEPSEEK_CONTEXT_CONTINUE")
-			await expect(
-				sidebar.getByText(/E2E_DEEPSEEK_CONTEXT_(?:DIRECT_OK|UNEXPECTED_RECOVERY)/, { exact: false }).last(),
-			).toBeVisible({ timeout: 60_000 })
+			await expect(sidebar.getByText("E2E_DEEPSEEK_CONTEXT_DIRECT_OK", { exact: false }).last()).toBeVisible({ timeout: 60_000 })
+			await expect.poll(() => server.getRequestCount("deepseek-chat"), { timeout: 30_000 }).toBe(4)
+			await expect
+				.poll(async () => completionSnapshotState(await readCompletionSnapshot(dlineDocsDir, taskId)), {
+					timeout: 30_000,
+				})
+				.toMatchObject({
+					phase: "completed",
+					interactionKind: "completion",
+					interactionStatus: "awaiting",
+				})
+			const firstCompletion = completionSnapshotState(await readCompletionSnapshot(dlineDocsDir, taskId))
+			expect(firstCompletion.completionId).toBe(firstCompletion.interactionId)
+			expect(firstCompletion.anchorInteractionId).toBe(firstCompletion.interactionId)
+			expect(firstCompletion.completionBlockId).toBe(firstCompletion.interactionId)
+			await expect(progress).toHaveAttribute("data-phase", "stable")
+			await expect(progress).toHaveAttribute("aria-valuenow", "630100")
+			await expect(progress).toHaveAttribute("aria-valuetext", "630100 of 1000000 tokens; phase stable")
+
+			await sendTask(sidebar, "E2E_DEEPSEEK_CONTEXT_POST_COMPLETION_FEEDBACK")
+			await expect.poll(() => server.getRequestCount("deepseek-chat"), { timeout: 30_000 }).toBe(5)
+			await expect
+				.poll(async () => completionSnapshotState(await readCompletionSnapshot(dlineDocsDir, taskId)), {
+					timeout: 4_000,
+				})
+				.toMatchObject({
+					phase: "streaming",
+					completionId: undefined,
+					interactionId: undefined,
+					interactionKind: undefined,
+					interactionStatus: undefined,
+				})
+			await expect(sidebar.getByText("E2E_DEEPSEEK_CONTEXT_FINAL_OK", { exact: false }).last()).toBeVisible({ timeout: 60_000 })
 
 			const requests = server.getMockConsumptions("deepseek-chat")
-			expect(requests).toHaveLength(4)
+			expect(requests).toHaveLength(5)
 			expect(requests[3]).toMatchObject({ responseType: "tool", toolName: "attempt_completion" })
-			await expect(sidebar.getByText("E2E_DEEPSEEK_CONTEXT_DIRECT_OK", { exact: false }).last()).toBeVisible()
-			await expect(sidebar.getByText("E2E_DEEPSEEK_CONTEXT_UNEXPECTED_RECOVERY", { exact: false })).toHaveCount(0)
+			expect(requests[4]).toMatchObject({ responseType: "tool", toolName: "attempt_completion" })
+			await expect(progress).toHaveAttribute("data-phase", "stable")
+			await expect(progress).toHaveAttribute("aria-valuenow", "630100")
+			await expect(progress).toHaveAttribute("aria-valuetext", "630100 of 1000000 tokens; phase stable")
+			await expect
+				.poll(async () => completionSnapshotState(await readCompletionSnapshot(dlineDocsDir, taskId)), {
+					timeout: 30_000,
+				})
+				.toMatchObject({
+					phase: "completed",
+					interactionKind: "completion",
+					interactionStatus: "awaiting",
+				})
+			const finalCompletion = completionSnapshotState(await readCompletionSnapshot(dlineDocsDir, taskId))
+			expect(finalCompletion.completionId).toBe(finalCompletion.interactionId)
+			expect(finalCompletion.anchorInteractionId).toBe(finalCompletion.interactionId)
+			expect(finalCompletion.completionBlockId).toBe(finalCompletion.interactionId)
+			const stableVisual = await readContextWindowVisual(sidebar)
+			expectFourContextSegments(stableVisual)
+			expect(stableVisual.phase).toBe("stable")
+			expect(stableVisual.segments.reduce((total, segment) => total + segment.authoritativeTokens, 0)).toBe(630100)
+			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+		} finally {
+			await app.close()
+		}
+	},
+)
+
+e2e(
+	"DeepSeek context - 630K plus large successful tool results compacts under the real 1M window",
+	async ({ dlineDir, dlineDocsDir, helper, openVSCode, server, userDataDir, workspaceDir }) => {
+		e2e.setTimeout(300_000)
+		await configureDeepSeekAutoCompact(dlineDir)
+
+		const buildLargeFile = (marker: string, fill: string) =>
+			[marker, ...Array.from({ length: 998 }, (_, index) => `${String(index).padStart(4, "0")}:${fill.repeat(355)}`)].join(
+				"\n",
+			)
+		const seedFiles = Array.from({ length: 6 }, (_, index) => ({
+			callId: `call_deepseek_pressure_seed_${index}`,
+			marker: `E2E_DEEPSEEK_PRESSURE_SEED_${index}`,
+			path: `deepseek-pressure-seed-${index}.txt`,
+		}))
+		const protectedFiles = Array.from({ length: 4 }, (_, index) => ({
+			callId: `call_deepseek_pressure_protected_${index}`,
+			marker: `E2E_DEEPSEEK_PRESSURE_PROTECTED_${index}`,
+			path: `deepseek-pressure-protected-${index}.txt`,
+		}))
+		await Promise.all([
+			...seedFiles.map((file, index) =>
+				writeFile(path.join(workspaceDir, file.path), buildLargeFile(file.marker, String(index)), "utf8"),
+			),
+			...protectedFiles.map((file, index) =>
+				writeFile(path.join(workspaceDir, file.path), buildLargeFile(file.marker, String(index + 6)), "utf8"),
+			),
+		])
+
+		const summary = "E2E_DEEPSEEK_PRESSURE_SUMMARY preserves the task while the protected tool-result turn is replayed."
+		server.enqueueResponses(
+			"deepseek-chat",
+			{
+				type: "tools",
+				tools: seedFiles.map((file) => ({ id: file.callId, name: "read_file", arguments: { path: file.path } })),
+				expectedRequestIncludes: ["E2E_DEEPSEEK_PRESSURE_TASK"],
+			},
+			{
+				type: "tools",
+				tools: protectedFiles.map((file) => ({ id: file.callId, name: "read_file", arguments: { path: file.path } })),
+				usage: { inputTokens: 630_000, outputTokens: 100 },
+				expectedToolResults: seedFiles.map((file) => ({ callId: file.callId, contentIncludes: file.marker })),
+			},
+			{
+				type: "tool",
+				id: "call_deepseek_pressure_summary",
+				name: "summarize_task",
+				arguments: { context: summary },
+				delayMs: 5_000,
+				expectedRequestIncludes: [COMPACT_INSTRUCTION_MARKER, ...seedFiles.map((file) => file.marker)],
+				expectedRequestExcludes: protectedFiles.map((file) => file.marker),
+			},
+			{
+				type: "tool",
+				id: "call_deepseek_pressure_complete",
+				name: "attempt_completion",
+				arguments: { result: "E2E_DEEPSEEK_PRESSURE_COMPLETE" },
+				expectedRequestIncludes: [summary, ...protectedFiles.map((file) => file.marker)],
+				expectedRequestExcludes: [COMPACT_INSTRUCTION_MARKER, ...seedFiles.map((file) => file.marker)],
+				expectedToolResults: protectedFiles.map((file) => ({ callId: file.callId, contentIncludes: file.marker })),
+			},
+		)
+
+		const app = await openVSCode(workspaceDir)
+		try {
+			const { page, sidebar } = await openSidebar(app, helper)
+			await sendTask(sidebar, "E2E_DEEPSEEK_PRESSURE_TASK", 60_000)
+
+			await expect.poll(() => server.getRequestCount("deepseek-chat"), { timeout: 120_000 }).toBeGreaterThanOrEqual(3)
+			const requestsAtSummary = server.getMockConsumptions("deepseek-chat")
+			const ordinaryRequest = requestsAtSummary[1]
+			const summaryRequest = requestsAtSummary[2]
+			const ordinaryEstimatedTokens = Math.ceil(Buffer.byteLength(JSON.stringify(ordinaryRequest.requestBody), "utf8") / 4)
+			expect(ordinaryEstimatedTokens).toBeGreaterThan(500_000)
+			expect(ordinaryEstimatedTokens).toBeLessThan(800_000)
+			expect(ordinaryRequest).toMatchObject({ responseType: "tools", usage: { inputTokens: 630_000 } })
+			expect(summaryRequest).toMatchObject({ responseType: "tool", toolName: "summarize_task" })
+			expect(summaryRequest.contractError).toBeUndefined()
+
+			const expandTaskHeader = sidebar.getByLabel("Expand task header")
+			if (await expandTaskHeader.isVisible()) await expandTaskHeader.click()
+			await expect(sidebar.locator('[title="Maximum context window size for this model"]')).toHaveText("1.0m")
+			await expect(sidebar.locator('[title="Current tokens used in this request"]')).toHaveText("630.1k")
+
+			await expect(sidebar.getByText("E2E_DEEPSEEK_PRESSURE_COMPLETE", { exact: false }).last()).toBeVisible({
+				timeout: 120_000,
+			})
+			await expect.poll(() => server.getRequestCount("deepseek-chat"), { timeout: 60_000 }).toBe(4)
+			const requests = server.getMockConsumptions("deepseek-chat")
+			const finalRequest = requests[3]
+			const finalEstimatedTokens = Math.ceil(Buffer.byteLength(JSON.stringify(finalRequest.requestBody), "utf8") / 4)
+			expect(finalRequest).toMatchObject({ responseType: "tool", toolName: "attempt_completion" })
+			expect(finalRequest.contractError).toBeUndefined()
+			expect(finalEstimatedTokens).toBeLessThan(800_000)
+			expect(requests.every((request) => request.status === undefined && request.contractError === undefined)).toBe(true)
+			await expectCompactionSummary(sidebar, summary)
+			await expect
+				.poll(async () =>
+					Number(
+						await sidebar
+							.getByRole("progressbar", { name: "Context window usage progress" })
+							.getAttribute("aria-valuenow"),
+					),
+				)
+				.toBeLessThan(63.01)
+
+			const screenshotPath = e2e.info().outputPath("deepseek-context-1m-large-tool-result.png")
+			await page.screenshot({ path: screenshotPath })
+			await e2e.info().attach("deepseek-context-1m-large-tool-result", { path: screenshotPath, contentType: "image/png" })
+
+			const [taskId] = await taskDirectoryIds(dlineDocsDir)
+			if (!taskId) throw new Error("DeepSeek pressure E2E task directory was not created")
+			const taskDirectory = path.join(dlineDocsDir, "tasks", taskId)
+			const apiHistory = await readFile(path.join(taskDirectory, "api_conversation_history.jsonl"), "utf8")
+			const uiMessages = await readFile(path.join(taskDirectory, "ui_messages.jsonl"), "utf8")
+			expect(apiHistory).toContain(summary)
+			for (const file of protectedFiles) expect(apiHistory).toContain(file.marker)
+			for (const file of seedFiles) expect(apiHistory).not.toContain(file.marker)
+			expect(uiMessages).toContain(summary)
+			expect(uiMessages).toContain('"compactionStatus":"completed"')
+			expect(uiMessages).not.toMatch(/"conversationHistoryDeletedRange":\s*\[/)
 			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
 		} finally {
 			await app.close()
@@ -1572,7 +2193,7 @@ e2e(
 			await expect(sidebar.locator('[title="Maximum context window size for this model"]')).toHaveText("1.0m")
 			await expect(sidebar.getByRole("progressbar", { name: "Context window usage progress" })).toHaveAttribute(
 				"aria-valuenow",
-				"98.00999999999999",
+				"980100",
 			)
 
 			await sendTask(sidebar, "E2E_DEEPSEEK_NEAR_LIMIT_CONTINUE")
@@ -1599,7 +2220,7 @@ e2e(
 							.getAttribute("aria-valuenow"),
 					),
 				)
-				.toBeLessThan(98.00999999999999)
+				.toBeLessThan(980_100)
 			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
 		} finally {
 			await app.close()

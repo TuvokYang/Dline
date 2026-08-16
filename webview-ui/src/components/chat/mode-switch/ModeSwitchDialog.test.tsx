@@ -15,6 +15,7 @@ function createSnapshot(): ModeSwitchSnapshot {
 		targetProfile: "small-profile",
 		sourceContextWindow: 200_000,
 		targetContextWindow: 100_000,
+		fittingExitTarget: 75_000,
 		currentTokens: 92_000,
 		triggerTokens: 90_000,
 	}
@@ -22,21 +23,21 @@ function createSnapshot(): ModeSwitchSnapshot {
 
 /** Verify the mode-switch warning exposes only safe transaction actions. */
 describe("ModeSwitchDialog", () => {
-	/** Render complete pressure details and only Cancel/Compact actions. */
-	it("renders smaller-window warning details and safe actions", () => {
+	/** Render target-Profile fitting details and only Cancel/Compact actions. */
+	it("renders target-Profile fitting details and safe actions", () => {
 		const onCancel = vi.fn()
 		const onConfirm = vi.fn()
 
 		render(<ModeSwitchDialog onCancel={onCancel} onConfirm={onConfirm} state={createSnapshot()} />)
 
 		expect(screen.getByRole("dialog")).toBeInTheDocument()
-		expect(screen.getByText(/smaller context window/i)).toBeInTheDocument()
+		expect(screen.getByText(/Compaction will run with small-profile/i)).toBeInTheDocument()
 		expect(screen.getByText(/large-profile/)).toBeInTheDocument()
-		expect(screen.getByText(/small-profile/)).toBeInTheDocument()
+		expect(screen.getAllByText(/small-profile/)).toHaveLength(2)
 		expect(screen.getByText(/200,000/)).toBeInTheDocument()
 		expect(screen.getByText(/100,000/)).toBeInTheDocument()
 		expect(screen.getByText(/92,000/)).toBeInTheDocument()
-		expect(screen.getByText(/90,000/)).toBeInTheDocument()
+		expect(screen.getByText(/75,000/)).toBeInTheDocument()
 		expect(document.querySelectorAll("vscode-button")).toHaveLength(2)
 		expect(screen.getByText("Cancel")).toBeInTheDocument()
 		expect(screen.getByText("Compact & Switch")).toBeInTheDocument()
@@ -62,5 +63,23 @@ describe("ModeSwitchDialog", () => {
 		const state: ModeSwitchSnapshot = { phase: "compacting", operationId: "operation-1" }
 		render(<ModeSwitchDialog onCancel={vi.fn()} onConfirm={vi.fn()} state={state} />)
 		expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
+	})
+
+	/** Render the backend-resolved fitting exit target instead of a locally derived value. */
+	it("shows the backend fitting exit target even when it differs from 80 percent of the target window", () => {
+		const state = createSnapshot()
+		render(<ModeSwitchDialog onCancel={vi.fn()} onConfirm={vi.fn()} state={state} />)
+
+		expect(screen.getByText(/75,000/)).toBeInTheDocument()
+		expect(screen.queryByText(/80,000/)).not.toBeInTheDocument()
+	})
+
+	/** Omit the fitting row when the backend has not resolved an exit target. */
+	it("omits the fitting target row when the backend did not provide one", () => {
+		const state: ModeSwitchSnapshot = { ...createSnapshot(), fittingExitTarget: undefined }
+		render(<ModeSwitchDialog onCancel={vi.fn()} onConfirm={vi.fn()} state={state} />)
+
+		expect(screen.getByRole("dialog")).toBeInTheDocument()
+		expect(screen.queryByText(/Must fit below/i)).not.toBeInTheDocument()
 	})
 })

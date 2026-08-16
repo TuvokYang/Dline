@@ -13,6 +13,7 @@ import {
 	computeSummarizeBudget,
 	getContextWindowInfo,
 	getEstimationTolerance,
+	resolveCompactTriggerPolicy,
 	shouldCompactProjectedUsage,
 } from "../context-window-utils"
 
@@ -57,46 +58,78 @@ describe("auto-condense context trigger", () => {
 		expect(computeCompactTrigger(2_000_000, summarizeBudget)).toBe(1_967_500)
 	})
 
-	it("applies the default auto-condense percentage when it is explicitly supplied", () => {
-		expect(
-			computeCompactTrigger(2_000_000, computeSummarizeBudget(), {
-				triggerPercent: DEFAULT_AUTO_CONDENSE_TRIGGER_PERCENT,
-			}),
-		).toBe(1_940_000)
+	it("preserves the default 97 percent reserve clamp at small and large windows", () => {
+		const defaultPolicy = {
+			triggerPercent: DEFAULT_AUTO_CONDENSE_TRIGGER_PERCENT,
+			minReserveTokens: 5_000,
+			maxReserveTokens: 30_000,
+			maxContextTokens: 0,
+		}
+
+		expect(computeCompactTrigger(128_000, computeSummarizeBudget(), defaultPolicy)).toBe(120_500)
+		expect(computeCompactTrigger(2_000_000, computeSummarizeBudget(), defaultPolicy)).toBe(1_967_500)
 	})
 
-	it("uses whichever configured percentage or absolute cap is reached first", () => {
+	it("uses the guarded percentage branch when the window equals the absolute cap", () => {
+		const defaultPolicy = {
+			triggerPercent: DEFAULT_AUTO_CONDENSE_TRIGGER_PERCENT,
+			minReserveTokens: 5_000,
+			maxReserveTokens: 30_000,
+			maxContextTokens: 272_000,
+		}
+
+		expect(computeCompactTrigger(272_000, computeSummarizeBudget(), defaultPolicy)).toBe(261_340)
+	})
+
+	it("uses the absolute cap only when the provider window is strictly larger", () => {
+		const defaultPolicy = {
+			triggerPercent: DEFAULT_AUTO_CONDENSE_TRIGGER_PERCENT,
+			minReserveTokens: 5_000,
+			maxReserveTokens: 30_000,
+			maxContextTokens: 272_000,
+		}
+
+		expect(computeCompactTrigger(1_000_000, computeSummarizeBudget(), defaultPolicy)).toBe(272_000)
+	})
+
+	it("clamps the percentage reserve below, within, and above the configured interval", () => {
 		const summarizeBudget = computeSummarizeBudget()
-		expect(
-			computeCompactTrigger(1_000_000, summarizeBudget, {
-				triggerPercent: 60,
-				maxContextTokens: 500_000,
-			}),
-		).toBe(500_000)
-		expect(
-			computeCompactTrigger(1_000_000, summarizeBudget, {
-				triggerPercent: 60,
-				maxContextTokens: 700_000,
-			}),
-		).toBe(600_000)
+		const settings = {
+			triggerPercent: DEFAULT_AUTO_CONDENSE_TRIGGER_PERCENT,
+			minReserveTokens: 5_000,
+			maxReserveTokens: 30_000,
+		}
+
+		expect(computeCompactTrigger(128_000, summarizeBudget, settings)).toBe(120_500)
+		expect(computeCompactTrigger(500_000, summarizeBudget, settings)).toBe(482_500)
+		expect(computeCompactTrigger(2_000_000, summarizeBudget, settings)).toBe(1_967_500)
 	})
 
-	it("treats zero as no absolute cap", () => {
-		expect(
-			computeCompactTrigger(1_000_000, computeSummarizeBudget(), {
-				triggerPercent: 50,
-				maxContextTokens: 0,
-			}),
-		).toBe(500_000)
-	})
+	it("does not deduct summarize instructions twice from the pass input ceiling", () => {
+		const percentagePolicy = resolveCompactTriggerPolicy(272_000, computeSummarizeBudget(), {
+			triggerPercent: DEFAULT_AUTO_CONDENSE_TRIGGER_PERCENT,
+			minReserveTokens: 5_000,
+			maxReserveTokens: 30_000,
+			maxContextTokens: 272_000,
+		})
+		const absolutePolicy = resolveCompactTriggerPolicy(1_000_000, computeSummarizeBudget(), {
+			triggerPercent: DEFAULT_AUTO_CONDENSE_TRIGGER_PERCENT,
+			minReserveTokens: 5_000,
+			maxReserveTokens: 30_000,
+			maxContextTokens: 272_000,
+		})
 
-	it("deducts summarize instructions only from the hard ceiling", () => {
-		expect(
-			computeCompactTrigger(1_000_000, computeSummarizeBudget(), {
-				triggerPercent: 50,
-				maxContextTokens: 600_000,
-			}),
-		).toBe(500_000)
+		expect(percentagePolicy).toMatchObject({
+			branch: "percentage_guarded",
+			guardedReserveTokens: 8_160,
+			compactTriggerTokens: 261_340,
+			passInputCeilingTokens: 261_840,
+		})
+		expect(absolutePolicy).toMatchObject({
+			branch: "absolute_cap",
+			compactTriggerTokens: 272_000,
+			passInputCeilingTokens: 270_000,
+		})
 	})
 
 	it("normalizes persisted values into supported ranges", () => {

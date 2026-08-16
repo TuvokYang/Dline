@@ -23,11 +23,14 @@ describe("Task.attemptApiRequest first chunk state", () => {
 		const connectionError = new Error("connection dropped before first chunk")
 		let liveWebToolsEnabled = true
 		const api = {
-			createMessage: vi.fn(() =>
-				(async function* () {
+			createMessage: vi.fn(() => ({
+				[Symbol.asyncIterator]() {
+					return this
+				},
+				next: vi.fn(async () => {
 					throw connectionError
-				})(),
-			),
+				}),
+			})),
 		}
 		const requestScope = {
 			api,
@@ -79,14 +82,26 @@ describe("Task.attemptApiRequest first chunk state", () => {
 			setExplicitInstructionConsumePort: vi.fn(),
 			setWebSearchRoutingPlan: vi.fn(),
 		}
+		const beginIndicator = vi.fn(async () => ({
+			kind: "ordinary" as const,
+			requestId: "ordinary:task-first-chunk-failure:0",
+			requestSequence: 1,
+			attemptId: "attempt-0",
+		}))
+		const receiveIndicator = vi.fn(async () => undefined)
+		const rollbackIndicator = vi.fn(async () => undefined)
 		const fakeTask = Object.assign(Object.create(Task.prototype), {
 			taskId: "task-first-chunk-failure",
+			takePreparedOrdinaryProviderInput: vi.fn(() => undefined),
 			taskState,
 			pendingSystemPromptRefreshReason: undefined,
 			buildPromptContext,
+			beginOrdinaryContextWindowIndicator: beginIndicator,
+			receiveOrdinaryContextWindowIndicator: receiveIndicator,
+			rollbackOrdinaryContextWindowIndicator: rollbackIndicator,
 			apiRateMetricsService: { recordRequestStarted: vi.fn() },
 			buildThinkingSummary: vi.fn(() => undefined),
-			compactionRequestReplay: { getProviderInput: vi.fn(() => undefined) },
+			compactionRequestReplay: { getProviderInput: vi.fn(() => undefined), getHistoryIndex: vi.fn(() => undefined) },
 			contextManager: {
 				getNewContextMessagesAndMetadata: vi.fn(async () => ({
 					truncatedConversationHistory: conversationHistory,
@@ -115,6 +130,10 @@ describe("Task.attemptApiRequest first chunk state", () => {
 		await expect(request.next()).rejects.toBe(connectionError)
 		expect(taskState.isWaitingForFirstChunk).toBe(false)
 		expect(liveWebToolsEnabled).toBe(false)
+		expect(beginIndicator).toHaveBeenCalledOnce()
+		expect(beginIndicator.mock.invocationCallOrder[0]).toBeLessThan(api.createMessage.mock.invocationCallOrder[0])
+		expect(receiveIndicator).not.toHaveBeenCalled()
+		expect(rollbackIndicator).toHaveBeenCalledOnce()
 		expect(buildPromptContext).toHaveBeenCalledWith(
 			requestScope.providerInfo,
 			requestScope.webToolsEnabled,
@@ -178,9 +197,21 @@ describe("Task.attemptApiRequest first chunk state", () => {
 		} as unknown as ErrorService)
 		vi.spyOn(ToolPromptGenerator.prototype, "generateToolsForRequest").mockReturnValue(undefined)
 
+		const beginIndicator = vi.fn(async () => ({
+			kind: "ordinary" as const,
+			requestId: "ordinary:task-first-chunk-empty-stream:0",
+			requestSequence: 1,
+			attemptId: "attempt-0",
+		}))
+		const receiveIndicator = vi.fn(async () => undefined)
+		const rollbackIndicator = vi.fn(async () => undefined)
 		const fakeTask = Object.assign(Object.create(Task.prototype), {
 			taskId: "task-first-chunk-empty-stream",
+			takePreparedOrdinaryProviderInput: vi.fn(() => undefined),
 			taskState,
+			beginOrdinaryContextWindowIndicator: beginIndicator,
+			receiveOrdinaryContextWindowIndicator: receiveIndicator,
+			rollbackOrdinaryContextWindowIndicator: rollbackIndicator,
 			pendingSystemPromptRefreshReason: undefined,
 			buildPromptContext: vi.fn(async () => ({
 				promptProfile: {},
@@ -189,7 +220,7 @@ describe("Task.attemptApiRequest first chunk state", () => {
 			})),
 			apiRateMetricsService: { recordRequestStarted: vi.fn() },
 			buildThinkingSummary: vi.fn(() => undefined),
-			compactionRequestReplay: { getProviderInput: vi.fn(() => undefined) },
+			compactionRequestReplay: { getProviderInput: vi.fn(() => undefined), getHistoryIndex: vi.fn(() => undefined) },
 			contextManager: {
 				getNewContextMessagesAndMetadata: vi.fn(async () => ({
 					truncatedConversationHistory: conversationHistory,
@@ -221,5 +252,8 @@ describe("Task.attemptApiRequest first chunk state", () => {
 
 		await expect(request.next()).rejects.toThrow("API stream ended without producing any content")
 		expect(taskState.isWaitingForFirstChunk).toBe(false)
+		expect(beginIndicator).toHaveBeenCalledOnce()
+		expect(receiveIndicator).not.toHaveBeenCalled()
+		expect(rollbackIndicator).toHaveBeenCalledOnce()
 	})
 })

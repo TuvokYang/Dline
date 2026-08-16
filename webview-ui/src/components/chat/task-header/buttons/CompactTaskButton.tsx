@@ -13,6 +13,8 @@ const CompactTaskButton: React.FC<{
 			<TooltipContent side="left">Compact Task</TooltipContent>
 			<TooltipTrigger
 				aria-disabled={disabled}
+				aria-label="Compact task"
+				disabled={disabled}
 				className={cn(
 					buttonVariants({ variant: "icon", size: "icon" }),
 					"!overflow-visible !min-h-6",

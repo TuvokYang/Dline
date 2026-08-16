@@ -1,4 +1,3 @@
-import { ClineDefaultTool } from "@shared/tools"
 import { describe, expect, it, vi } from "vitest"
 import { BlockPhase } from "../../BlockPhaseMachine"
 import type { TaskEffectPorts } from "../../runtime/TaskEffectRunner"
@@ -8,6 +7,7 @@ import { TaskPhase } from "../../TaskPhase"
 import { createSnapshot, hydrateSnapshot } from "../../TaskSnapshot"
 import type { InteractionKind } from "../Interaction"
 import { InteractionCoordinator } from "../InteractionCoordinator"
+import { getInteraction, INTERACTION_KINDS } from "../InteractionRegistry"
 import type { InteractionResponse } from "../InteractionResponse"
 
 /** Create no-op runtime ports for coordinator tests. */
@@ -93,65 +93,6 @@ function hydrateAwaitingInteraction(input: {
 }
 
 describe("InteractionCoordinator", () => {
-	it("waits for an in-flight attempt_completion to publish its compaction interaction", async () => {
-		const state = {
-			...createTaskRuntimeState({ taskId: "task-1", phase: TaskPhase.STREAMING }),
-			turn: {
-				turnId: "turn-compact",
-				assistantApiIndex: 1,
-				mode: "parallel" as const,
-				blocks: [
-					{
-						dlineTid: "completion-compact",
-						functionId: "call-completion-compact",
-						toolName: ClineDefaultTool.ATTEMPT,
-						phase: BlockPhase.AUTO_EXECUTING,
-						ts: 100,
-						requiresApproval: false,
-						conversationHistoryIndex: 1,
-					},
-				],
-			},
-		}
-		const runtime = new TaskRuntime(state, createPorts())
-		const coordinator = new InteractionCoordinator(runtime)
-		const responsePromise = coordinator.respondForModeCompaction("__dline_mode_switch_compact__")
-
-		const outcomePromise = coordinator.complete({
-			turnId: "turn-compact",
-			interactionId: "completion-compact",
-			completionId: "completion-compact",
-			presentation: "Done",
-		})
-
-		await expect(responsePromise).resolves.toBe(true)
-		await expect(outcomePromise).resolves.toMatchObject({
-			actionId: "reply",
-			draft: { text: "__dline_mode_switch_compact__", images: [], files: [] },
-		})
-	})
-
-	it("continues a live completion with an internal mode-compaction response", async () => {
-		const runtime = new TaskRuntime(createTaskRuntimeState({ taskId: "task-1", phase: TaskPhase.STREAMING }), createPorts())
-		const coordinator = new InteractionCoordinator(runtime)
-		const outcomePromise = coordinator.complete({
-			turnId: "turn-compact",
-			interactionId: "completion-compact",
-			completionId: "completion-compact",
-			presentation: "Done",
-		})
-		await vi.waitFor(() => expect(runtime.getState().interaction?.status).toBe("awaiting"))
-
-		expect(coordinator.canRespondForModeCompaction()).toBe(true)
-		await expect(coordinator.respondForModeCompaction("__dline_mode_switch_compact__")).resolves.toBe(true)
-		await expect(outcomePromise).resolves.toMatchObject({
-			actionId: "reply",
-			draft: { text: "__dline_mode_switch_compact__", images: [], files: [] },
-		})
-		expect(runtime.getState().phase).toBe(TaskPhase.STREAMING)
-		expect(runtime.getState().interaction).toBeUndefined()
-	})
-
 	it("continues a live plan interaction with an empty causal mode-switch response", async () => {
 		const runtime = new TaskRuntime(createTaskRuntimeState({ taskId: "task-1", phase: TaskPhase.STREAMING }), createPorts())
 		const coordinator = new InteractionCoordinator(runtime)
@@ -171,24 +112,6 @@ describe("InteractionCoordinator", () => {
 		})
 		expect(runtime.getState().phase).toBe(TaskPhase.STREAMING)
 		expect(runtime.getState().interaction).toBeUndefined()
-	})
-
-	it("does not resolve approval interactions for mode compaction", async () => {
-		const state = hydrateAwaitingInteraction({
-			kind: "tool_approval",
-			phase: TaskPhase.AWAITING_APPROVAL,
-			turnId: "approval-turn",
-			interactionId: "approval-1",
-		})
-		const runtime = new TaskRuntime(state, createPorts())
-		const coordinator = new InteractionCoordinator(runtime)
-
-		expect(coordinator.canRespondForModeCompaction()).toBe(false)
-		await expect(coordinator.respondForModeCompaction("__dline_mode_switch_compact__")).resolves.toBe(false)
-		expect(runtime.getState().interaction).toMatchObject({
-			interactionId: "approval-1",
-			status: "awaiting",
-		})
 	})
 
 	it("waits for one causal response and resolves the active interaction", async () => {
@@ -1143,6 +1066,76 @@ describe("InteractionCoordinator", () => {
 		)
 		expect(runtime.getState().interaction).toBeUndefined()
 	})
+
+	it.each(INTERACTION_KINDS.filter((kind) => kind !== "condense"))(
+		"temporarily interrupts and restores a live %s interaction",
+		async (kind) => {
+			const runtime = new TaskRuntime(
+				createTaskRuntimeState({ taskId: "task-1", phase: TaskPhase.STREAMING }),
+				createPorts(),
+			)
+			const coordinator = new InteractionCoordinator(runtime)
+			const originalInteractionId = `original-${kind}`
+			const originalOutcome = coordinator.open({
+				turnId: `turn-${kind}`,
+				interactionId: originalInteractionId,
+				kind,
+				presentation: `Original ${kind}`,
+			})
+			await vi.waitFor(() => expect(runtime.getState().interaction?.interactionId).toBe(originalInteractionId))
+
+			const interruptionId = `interrupt-${kind}`
+			const interruptionOutcome = coordinator.interrupt({
+				turnId: interruptionId,
+				interactionId: interruptionId,
+				kind: "condense",
+				presentation: "Compaction review",
+			})
+			await vi.waitFor(() => expect(runtime.getState().interaction?.interactionId).toBe(interruptionId))
+			expect(runtime.getState().interruptedInteraction).toMatchObject({
+				interactionId: originalInteractionId,
+				kind,
+				status: "awaiting",
+			})
+
+			await coordinator.respond({
+				taskId: "task-1",
+				turnId: interruptionId,
+				interactionId: interruptionId,
+				actionId: "confirm_utility",
+				stateRevision: runtime.getState().revision,
+			})
+			await expect(interruptionOutcome).resolves.toMatchObject({ actionId: "confirm_utility" })
+			expect(runtime.getState().interaction).toMatchObject({
+				interactionId: originalInteractionId,
+				kind,
+				status: "awaiting",
+			})
+			expect(runtime.getState().interruptedInteraction).toBeUndefined()
+
+			const definition = getInteraction(kind)
+			const action = definition.actions[0]
+			const actionId = action?.type ?? definition.input.enterAction
+			if (!actionId) throw new Error(`Interaction ${kind} has no response action`)
+			const payloadPolicy = action?.payloadPolicy ?? "draft"
+			const response = await coordinator.respond({
+				taskId: "task-1",
+				turnId: `turn-${kind}`,
+				interactionId: originalInteractionId,
+				actionId,
+				stateRevision: runtime.getState().revision,
+				...(payloadPolicy === "draft" || payloadPolicy === "draft_and_selection"
+					? { draft: { text: `Continue ${kind}`, images: [], files: [] } }
+					: {}),
+				...(payloadPolicy === "selection" || payloadPolicy === "draft_and_selection"
+					? { selection: { values: [`selection-${kind}`] } }
+					: {}),
+			})
+			expect(response.accepted).toBe(true)
+			await expect(originalOutcome).resolves.toMatchObject({ actionId })
+			expect(runtime.getState().interaction).toBeUndefined()
+		},
+	)
 
 	it("rejects a second primary interaction while one is active", async () => {
 		const runtime = new TaskRuntime(createTaskRuntimeState({ taskId: "task-1", phase: TaskPhase.STREAMING }), createPorts())

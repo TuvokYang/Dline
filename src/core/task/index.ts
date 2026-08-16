@@ -102,6 +102,7 @@ import {
 } from "@core/task/ContextCompactionRecoveryAdapter"
 import {
 	ContextCompactionRecoveryCoordinator,
+	type ContextCompactionRestoreRequest,
 	type ContextCompactionRestoreResult,
 } from "@core/task/ContextCompactionRecoveryCoordinator"
 import {
@@ -115,6 +116,12 @@ import {
 	type ContextCompactionTransitionState,
 } from "@core/task/ContextCompactionSession"
 import { ContextWindowIndicator, isSameContextWindowIndicatorLineage } from "@core/task/ContextWindowIndicator"
+import {
+	getContextWindowProviderUsageTotal,
+	mergeContextWindowProviderUsage,
+	type ContextWindowProviderUsage,
+	type ContextWindowProviderUsageChunk,
+} from "@core/task/ContextWindowIndicatorUsage"
 import { type CompactionProviderInput, CompactionRequestReplay } from "@core/task/compaction/CompactionRequestReplay"
 import { normalizeCompactionResponse } from "@core/task/compaction/CompactionResponseNormalizer"
 import { getHighContextPressureWarning, showContextUsage } from "@core/task/environment-context"
@@ -229,7 +236,13 @@ import { refreshSubagents } from "../controller/file/refreshSubagents"
 import { executeHook } from "../hooks/hook-executor"
 import { OrchestratorController } from "../orchestrator/OrchestratorController"
 import { StateManager } from "../storage/StateManager"
-import { createUnavailableApiHandler, resolveTaskApiProfile } from "./ApiProfileRecovery"
+import {
+	createUnavailableApiHandler,
+	reconcileTaskProfileInvalidState,
+	resolveTaskApiProfile,
+	toTaskProfileInvalidState,
+	validateResolvedTaskApiProfile,
+} from "./ApiProfileRecovery"
 import { buildActiveTasksSection } from "./active-tasks/ActiveTaskContextProvider"
 import { isTurnEndingToolName, orderTurnEndingContentBlocks, orderTurnEndingNativeToolBlocks } from "./assistant-message-order"
 import { getRetryDelay, getStreamRetryDecision, MAX_AUTO_RETRY_ATTEMPTS } from "./auto-retry"
@@ -355,7 +368,7 @@ function unavailableRuntimePort(port: keyof TaskEffectPorts): never {
 
 /** Create explicit runtime infrastructure ports for the migrated task transactions. */
 function createInteractionPorts(
-	postView: () => Promise<void>,
+	postView: TaskEffectPorts["postView"],
 	persistSnapshot: TaskEffectPorts["persistSnapshot"],
 	cancelRuntime: TaskEffectPorts["cancelRuntime"],
 	prepareResume: TaskEffectPorts["prepareResume"],
@@ -535,7 +548,11 @@ export class Task {
 	private readonly ordinaryContextIndicatorLineageByApiIndex = new Map<number, ContextWindowIndicatorLineage>()
 	private readonly ordinaryContextIndicatorReceivingByApiIndex = new Map<
 		number,
-		{ estimatedContentTokens: number; exactOutputTokens: number }
+		{
+			estimatedContentTokens: number
+			exactOutputTokens: number
+			exactContextUsage?: ContextWindowProviderUsage
+		}
 	>()
 	private readonly contextCompactionIndicatorReceivingByAttemptId = new Map<
 		string,
@@ -649,7 +666,7 @@ export class Task {
 		this.taskRuntime = new TaskRuntime(
 			createTaskRuntimeState({ taskId: this.taskId }),
 			createInteractionPorts(
-				async () => this.postStateToWebview(),
+				async (state) => this.publishRuntimeTaskView(state),
 				async (state) => this.emitStateSnapshot(createSnapshot(state)),
 				async () => this.abortExecution(),
 				async () => {
@@ -939,15 +956,25 @@ export class Task {
 		// Existing history bindings always win; global profiles initialize only
 		// genuinely new tasks whose task-local bindings are absent.
 		if (!historyItem && this.taskSm.planModeProfile === undefined && apiConfiguration.planModeProfile) {
-			this.taskSm.setPlanModeProfile(apiConfiguration.planModeProfile)
+			if (apiConfiguration.planModeProfileId) {
+				this.taskSm.adoptProfileIdentity("plan", apiConfiguration.planModeProfileId, apiConfiguration.planModeProfile)
+			} else {
+				this.taskSm.setPlanModeProfile(apiConfiguration.planModeProfile)
+			}
 		}
 		if (!historyItem && this.taskSm.actModeProfile === undefined && apiConfiguration.actModeProfile) {
-			this.taskSm.setActModeProfile(apiConfiguration.actModeProfile)
+			if (apiConfiguration.actModeProfileId) {
+				this.taskSm.adoptProfileIdentity("act", apiConfiguration.actModeProfileId, apiConfiguration.actModeProfile)
+			} else {
+				this.taskSm.setActModeProfile(apiConfiguration.actModeProfile)
+			}
 		}
 
 		const effectiveApiConfiguration: ApiConfiguration = {
 			...apiConfiguration,
+			...(this.taskSm.planModeProfileId !== undefined && { planModeProfileId: this.taskSm.planModeProfileId }),
 			...(this.taskSm.planModeProfile !== undefined && { planModeProfile: this.taskSm.planModeProfile }),
+			...(this.taskSm.actModeProfileId !== undefined && { actModeProfileId: this.taskSm.actModeProfileId }),
 			...(this.taskSm.actModeProfile !== undefined && { actModeProfile: this.taskSm.actModeProfile }),
 			ulid: this.ulid,
 			onStreamEstimatedTokens: (tokens) => this.apiRateMetricsService.recordEstimatedTokens(tokens),
@@ -995,6 +1022,21 @@ export class Task {
 		this.api = profileResolution.error
 			? createUnavailableApiHandler(profileResolution.error)
 			: buildApiHandler(profileResolution.configuration, mode)
+		const initialProfileInvalid = toTaskProfileInvalidState(profileResolution.validity)
+		if (initialProfileInvalid) {
+			this.taskRuntime.restore({ ...this.taskRuntime.getState(), profileInvalid: initialProfileInvalid })
+		}
+		if (
+			!profileResolution.usedFallback &&
+			profileResolution.resolvedProfileId &&
+			profileResolution.resolvedProfile
+		) {
+			this.taskSm.adoptProfileIdentity(
+				mode,
+				profileResolution.resolvedProfileId,
+				profileResolution.resolvedProfile,
+			)
+		}
 		const currentProfileRecord = findEnabledProfileByName(currentProfile)
 		const { contextWindow: initialContextWindow } = getContextWindowInfo(this.api)
 		const legacyIndicator = createLegacyIndicatorCheckpoint(this.getContextWindowRequestPressures(), initialContextWindow)
@@ -1238,22 +1280,72 @@ export class Task {
 		;(this.toolExecutor as any)._controllerContext = this.controller?.context
 	}
 
-	/**
-	 * Rebuild the API handler at runtime (for mid-task model switching).
-	 * Profile-driven: planModeProfile/actModeProfile already stores the profile name.
-	 */
-	public rebuildApiHandler(): void {
-		const mode = this.taskSm.mode
-		const apiConfiguration = this.stateManager.getApiConfiguration()
-		const effectiveConfig: ApiConfiguration = {
+	private getEffectiveApiConfiguration(): ApiConfiguration {
+		const apiConfiguration = this.stateManager.getApiConfigurationForTask(this.taskId)
+		return {
 			...apiConfiguration,
+			...(this.taskSm.planModeProfileId !== undefined && { planModeProfileId: this.taskSm.planModeProfileId }),
 			...(this.taskSm.planModeProfile !== undefined && { planModeProfile: this.taskSm.planModeProfile }),
+			...(this.taskSm.actModeProfileId !== undefined && { actModeProfileId: this.taskSm.actModeProfileId }),
 			...(this.taskSm.actModeProfile !== undefined && { actModeProfile: this.taskSm.actModeProfile }),
 			ulid: this.ulid,
 			onStreamEstimatedTokens: (tokens) => this.apiRateMetricsService.recordEstimatedTokens(tokens),
 		}
-		this.api = buildApiHandler(effectiveConfig, mode)
-		// Update toolExecutor's api reference so tool handlers use the new handler
+	}
+
+	private resolveProfileBinding(profileName: string): { profileId: string; profileName: string } {
+		const profile = findEnabledProfileByName(profileName)
+		if (!profile) throw new Error(`Profile not valid: "${profileName}" is unavailable.`)
+		return { profileId: profile.id, profileName: profile.name }
+	}
+
+	private async commitProfileValidity(
+		validity: ReturnType<typeof resolveTaskApiProfile>["validity"],
+		allowProfileRecovery: boolean,
+	): Promise<void> {
+		const current = this.taskRuntime.getState().profileInvalid
+		const profileInvalid = reconcileTaskProfileInvalidState(current, validity, allowProfileRecovery)
+		if (
+			current?.profileId === profileInvalid?.profileId &&
+			current?.displayName === profileInvalid?.displayName &&
+			current?.reason === profileInvalid?.reason &&
+			current?.message === profileInvalid?.message
+		) {
+			return
+		}
+		const result = await this.dispatchRuntime({ type: "PROFILE_VALIDITY_UPDATED", profileInvalid })
+		if (!result.accepted) {
+			throw new Error(`Profile validity update rejected: ${result.error?.code ?? "invalid_runtime_event"}`)
+		}
+	}
+
+	/** Reconcile the active binding against the latest Catalog without replacing its handler. */
+	public async reconcileApiProfileValidity(): Promise<void> {
+		const resolution = resolveTaskApiProfile(this.getEffectiveApiConfiguration(), this.taskSm.mode)
+		const validity = await validateResolvedTaskApiProfile(resolution)
+		await this.commitProfileValidity(validity, false)
+	}
+
+	/** Rebuild the active handler and synchronize canonical Profile validity. */
+	public async rebuildApiHandler(options: { allowProfileRecovery?: boolean } = {}): Promise<void> {
+		const mode = this.taskSm.mode
+		const profileResolution = resolveTaskApiProfile(this.getEffectiveApiConfiguration(), mode)
+		this.api = profileResolution.error
+			? createUnavailableApiHandler(profileResolution.error)
+			: buildApiHandler(profileResolution.configuration, mode)
+		if (
+			!profileResolution.usedFallback &&
+			profileResolution.resolvedProfileId &&
+			profileResolution.resolvedProfile
+		) {
+			this.taskSm.adoptProfileIdentity(
+				mode,
+				profileResolution.resolvedProfileId,
+				profileResolution.resolvedProfile,
+			)
+		}
+		const validity = await validateResolvedTaskApiProfile(profileResolution)
+		await this.commitProfileValidity(validity, options.allowProfileRecovery === true)
 		if (this.toolExecutor) {
 			;(this.toolExecutor as any).api = this.api
 		}
@@ -1268,6 +1360,28 @@ export class Task {
 	/** Return the authoritative Task-local context-window indicator snapshot. */
 	public getContextWindowIndicator(): ContextWindowIndicatorSnapshot {
 		return this.contextWindowIndicator.getSnapshot()
+	}
+
+	/** Publish one committed runtime view after completing any phase-bound indicator transition. */
+	private async publishRuntimeTaskView(state: Readonly<TaskRuntimeState>): Promise<void> {
+		if (state.phase === TaskPhase.COMPLETED) {
+			await this.foldOrdinaryIndicatorRound()
+		}
+		await this.postStateToWebview()
+	}
+
+	/** Synchronize the authoritative indicator after an active runtime scope is durably adopted. */
+	private syncContextWindowIndicatorScope(): void {
+		const mode = this.taskSm.mode
+		const profile = this.getContextWindowIndicatorProfile(mode)
+		const { contextWindow } = getContextWindowInfo(this.api)
+		this.setContextWindowIndicatorSnapshot(
+			this.contextWindowIndicator.adoptScope({
+				contextWindow,
+				...profile,
+				mode,
+			}),
+		)
 	}
 
 	private setContextWindowIndicatorSnapshot(snapshot: ContextWindowIndicatorSnapshot): boolean {
@@ -1314,6 +1428,12 @@ export class Task {
 			durableMessageCount: Math.max(0, providerInput.messages.length - 1),
 		})
 		const profile = this.getContextWindowIndicatorProfile(requestScope.providerInfo.mode)
+		// Freeze the previously folded durable baseline while the current round is
+		// still in flight. Only a fully completed round (including tool calls) may
+		// fold sending/receiving into durable; the dynamic ENV segment is always
+		// recomputed from this frozen input and is never folded.
+		const frozenDurable = this.contextWindowIndicator.getSnapshot().durableContextTokens
+		const pendingSendTokens = Math.max(0, segments.totalTokens - segments.environmentTokens - frozenDurable)
 		this.ordinaryContextIndicatorLineageByApiIndex.set(apiIndex, lineage)
 		this.ordinaryContextIndicatorReceivingByApiIndex.set(apiIndex, {
 			estimatedContentTokens: 0,
@@ -1322,8 +1442,8 @@ export class Task {
 		await this.publishContextWindowIndicatorSnapshot(
 			this.contextWindowIndicator.beginSend({
 				lineage,
-				durableContextTokens: segments.durableContextTokens,
-				pendingSendTokens: segments.pendingSendTokens,
+				durableContextTokens: frozenDurable,
+				pendingSendTokens,
 				environmentTokens: segments.environmentTokens,
 				contextWindow: getContextWindowInfo(requestScope.api).contextWindow,
 				...profile,
@@ -1342,41 +1462,50 @@ export class Task {
 		const receiving = this.ordinaryContextIndicatorReceivingByApiIndex.get(apiIndex)
 		if (!lineage || !receiving || !isSameContextWindowIndicatorLineage(lineage, expectedLineage)) return
 		const delta = estimateContextWindowReceivingDelta(chunk)
-		if (delta <= 0) return
 		if (typeof chunk === "object" && chunk !== null && (chunk as { type?: string }).type === "usage") {
-			receiving.exactOutputTokens += delta
+			const previousUsage = receiving.exactContextUsage
+			const usage = mergeContextWindowProviderUsage(previousUsage, chunk as ContextWindowProviderUsageChunk)
+			if (
+				previousUsage &&
+				previousUsage.inputTokens === usage.inputTokens &&
+				previousUsage.outputTokens === usage.outputTokens &&
+				previousUsage.cacheWriteTokens === usage.cacheWriteTokens &&
+				previousUsage.cacheReadTokens === usage.cacheReadTokens
+			) {
+				return
+			}
+			receiving.exactContextUsage = usage
+			receiving.exactOutputTokens = usage.outputTokens
 		} else {
+			if (delta <= 0) return
 			receiving.estimatedContentTokens += delta
 		}
 		await this.publishContextWindowIndicatorSnapshot(
 			this.contextWindowIndicator.receive({
 				lineage,
 				receivingTokens: Math.max(receiving.estimatedContentTokens, receiving.exactOutputTokens),
+				authoritativeContextTokens: getContextWindowProviderUsageTotal(receiving.exactContextUsage),
 			}),
 		)
 	}
 
-	private async commitOrdinaryContextWindowIndicator(
-		apiIndex: number,
-		requestScope: RequestApiScope,
-		contextTokens: number,
-	): Promise<void> {
-		const lineage = this.ordinaryContextIndicatorLineageByApiIndex.get(apiIndex)
-		if (!lineage) return
-		const current = this.contextWindowIndicator.getSnapshot()
-		const profile = this.getContextWindowIndicatorProfile(requestScope.providerInfo.mode)
-		const committed = this.contextWindowIndicator.commit({
-			lineage,
-			durableContextTokens: Math.max(0, contextTokens - current.environmentTokens),
-			environmentTokens: current.environmentTokens,
-			contextWindow: getContextWindowInfo(requestScope.api).contextWindow,
-			...profile,
-			mode: requestScope.providerInfo.mode,
-		})
-		await this.publishContextWindowIndicatorSnapshot(committed)
-		await this.publishContextWindowIndicatorSnapshot(this.contextWindowIndicator.settle({ lineage: committed.lineage }))
-		this.ordinaryContextIndicatorLineageByApiIndex.delete(apiIndex)
-		this.ordinaryContextIndicatorReceivingByApiIndex.delete(apiIndex)
+	/** Fold one fully completed round (including tool calls) into durable; ENV is never folded. */
+	private async foldOrdinaryIndicatorRound(): Promise<void> {
+		const pendingEntries = [...this.ordinaryContextIndicatorLineageByApiIndex.entries()]
+		if (pendingEntries.length === 0) return
+		const latestEntry = pendingEntries[pendingEntries.length - 1]
+		const latestLineage = latestEntry?.[1]
+		if (!latestLineage || latestEntry === undefined) return
+		const authoritativeContextTokens = getContextWindowProviderUsageTotal(
+			this.ordinaryContextIndicatorReceivingByApiIndex.get(latestEntry[0])?.exactContextUsage,
+		)
+		const folded = this.contextWindowIndicator.foldRound({ lineage: latestLineage, authoritativeContextTokens })
+		await this.publishContextWindowIndicatorSnapshot(folded)
+		await this.publishContextWindowIndicatorSnapshot(this.contextWindowIndicator.settle({ lineage: folded.lineage }))
+		for (const [apiIndex] of pendingEntries) {
+			this.ordinaryContextIndicatorLineageByApiIndex.delete(apiIndex)
+			this.ordinaryContextIndicatorReceivingByApiIndex.delete(apiIndex)
+		}
 	}
 
 	private async rollbackOrdinaryContextWindowIndicator(
@@ -1686,30 +1815,83 @@ export class Task {
 		return this.taskSm.mode
 	}
 
+	/** Return the active Profile-related error interaction eligible for explicit recovery. */
+	private getProfileRecoveryInteractionId(): string | undefined {
+		const interaction = this.getRuntimeState().interaction
+		if (interaction?.kind !== "error_retry" || !interaction.anchor?.messageTs) return undefined
+		const presentation = this.messageStateHandler.clineMessages.find(
+			(message) => message.ts === interaction.anchor?.messageTs && message.ask === "api_req_failed",
+		)
+		return presentation?.text?.includes("Profile not valid:") ? interaction.interactionId : undefined
+	}
+
+	/** Persistently remove the error presentation superseded by a durable Profile recovery. */
+	private async clearProfileRecoveryMessages(interactionId: string): Promise<void> {
+		const messages = this.messageStateHandler.clineMessages
+		const errorAskIndex = findLastIndex(
+			messages,
+			(message) =>
+				message.ask === "api_req_failed" &&
+				message.interactionId === interactionId &&
+				message.text?.includes("Profile not valid:") === true,
+		)
+		if (errorAskIndex < 0) return
+
+		for (let index = errorAskIndex - 1; index >= 0; index--) {
+			const message = messages[index]
+			if (message.say !== "api_req_started" || !message.text) continue
+			let requestInfo: ClineApiReqInfo
+			try {
+				requestInfo = JSON.parse(message.text) as ClineApiReqInfo
+			} catch {
+				continue
+			}
+			if (!requestInfo.streamingFailedMessage?.includes("Profile not valid:")) continue
+			delete requestInfo.streamingFailedMessage
+			await this.messageStateHandler.updateClineMessage(index, { text: JSON.stringify(requestInfo) })
+			await this.messageStateHandler.flushMessageUpdate(index)
+			break
+		}
+
+		await this.messageStateHandler.removeMessagesByTs([messages[errorAskIndex].ts])
+	}
+
 	/**
 	 * Atomically commit one or both task-local Profile bindings.
 	 *
 	 * @param targetProfile Validated Profile name selected by the user.
 	 * @param targetModes Task-local bindings included in the transaction.
 	 */
-	async commitProfileBindings(targetProfile: string, targetModes: readonly Mode[]): Promise<void> {
+	async commitProfileBindings(
+		targetProfile: { profileId: string; profileName: string } | string,
+		targetModes: readonly Mode[],
+	): Promise<void> {
 		const uniqueModes = [...new Set(targetModes)]
-		const sourceBindings: Partial<Record<Mode, string | undefined>> = {}
-		const targetBindings: Partial<Record<Mode, string>> = {}
+		const resolvedTarget =
+			typeof targetProfile === "string" ? this.resolveProfileBinding(targetProfile) : targetProfile
+		const sourceBindings: Partial<
+			Record<Mode, { profileId?: string; profileName?: string } | undefined>
+		> = {}
+		const targetBindings: Partial<Record<Mode, { profileId: string; profileName: string }>> = {}
 		for (const mode of uniqueModes) {
-			sourceBindings[mode] = mode === "plan" ? this.taskSm.planModeProfile : this.taskSm.actModeProfile
-			targetBindings[mode] = targetProfile
+			sourceBindings[mode] =
+				mode === "plan"
+					? { profileId: this.taskSm.planModeProfileId, profileName: this.taskSm.planModeProfile }
+					: { profileId: this.taskSm.actModeProfileId, profileName: this.taskSm.actModeProfile }
+			targetBindings[mode] = resolvedTarget
 		}
 		const rebuildActiveHandler = uniqueModes.includes(this.taskSm.mode)
-		this.taskSm.setProfileBindings(targetBindings)
+		const profileRecoveryInteractionId = rebuildActiveHandler ? this.getProfileRecoveryInteractionId() : undefined
+		this.taskSm.setProfileIdentityBindings(targetBindings)
 		try {
-			if (rebuildActiveHandler) this.rebuildApiHandler()
+			if (rebuildActiveHandler) await this.rebuildApiHandler({ allowProfileRecovery: true })
 			await this.stateManager.flushPendingState()
+			if (rebuildActiveHandler) this.syncContextWindowIndicatorScope()
 		} catch (error) {
-			this.taskSm.setProfileBindings(sourceBindings)
+			this.taskSm.setProfileIdentityBindings(sourceBindings)
 			if (rebuildActiveHandler) {
 				try {
-					this.rebuildApiHandler()
+					await this.rebuildApiHandler()
 				} catch (rollbackError) {
 					throw new Error("Failed to restore the source Profile handler after Profile adoption failed.", {
 						cause: rollbackError,
@@ -1717,6 +1899,30 @@ export class Task {
 				}
 			}
 			throw error
+		}
+		if (profileRecoveryInteractionId) {
+			// The recovery waiter owns the failed request boundary. Cancel it before
+			// removing the canonical interaction so its request finally block can
+			// release the active-request flags before the UI becomes editable.
+			const recoveryWaiterCancelled = this.interactionCoordinator.cancelPendingInteraction(
+				profileRecoveryInteractionId,
+				"profile_recovered",
+			)
+			if (recoveryWaiterCancelled) {
+				await this.interactionCoordinator.waitForPendingInteraction(profileRecoveryInteractionId)
+				await pWaitFor(() => !this.taskState.isStreaming && !this.taskState.isWaitingForFirstChunk, {
+					interval: 10,
+					timeout: 10_000,
+				})
+			}
+			await this.clearProfileRecoveryMessages(profileRecoveryInteractionId)
+			const recovered = await this.dispatchRuntime({
+				type: "PROFILE_RECOVERY_COMMITTED",
+				interactionId: profileRecoveryInteractionId,
+			})
+			if (!recovered.accepted && this.getRuntimeState().interaction?.interactionId === profileRecoveryInteractionId) {
+				Logger.warn(`[Task ${this.taskId}] Profile recovery interaction remained active after durable Profile commit.`)
+			}
 		}
 	}
 
@@ -1734,7 +1940,7 @@ export class Task {
 		}
 		this.taskSm.setMode(targetMode)
 		this.pendingSystemPromptRefreshReason = "mode_switch"
-		this.rebuildApiHandler()
+		await this.rebuildApiHandler()
 		if (shouldContinueInteraction) {
 			this.taskState.didRespondToPlanAskBySwitchingMode = sourceMode === "plan" && targetMode === "act"
 			const continued = await this.interactionCoordinator.respondForModeSwitch({
@@ -1745,7 +1951,7 @@ export class Task {
 			if (!continued) {
 				this.taskState.didRespondToPlanAskBySwitchingMode = false
 				this.taskSm.setMode(sourceMode)
-				this.rebuildApiHandler()
+				await this.rebuildApiHandler()
 				throw new Error("The active plan interaction changed during the mode switch.")
 			}
 		}
@@ -1941,9 +2147,27 @@ export class Task {
 
 	private getContextCompactionRecoveryAdapter(): ContextCompactionRecoveryAdapter {
 		this.contextCompactionRecoveryAdapter ??= new ContextCompactionRecoveryAdapter({
-			overwriteCanonicalHistory: (history) => this.messageStateHandler.overwriteApiConversationHistory(cloneDeep(history)),
+			overwriteCanonicalHistory: (history) => {
+				this.invalidatePreparedProviderInputs()
+				return this.messageStateHandler.overwriteApiConversationHistory(cloneDeep(history))
+			},
 			setDeletedRange: (range) => {
 				this.taskState.conversationHistoryDeletedRange = range ? [...range] : undefined
+			},
+			restoreUiHistory: async (boundary) => {
+				const uiMessage = this.messageStateHandler.uiMessage
+				if (!uiMessage) return
+				if (!Number.isInteger(boundary.count) || boundary.count < 0 || boundary.count > uiMessage.count) {
+					throw new Error("Compaction checkpoint UI boundary is outside the current message history.")
+				}
+				const lastMessage = boundary.count > 0 ? uiMessage.getAt(boundary.count - 1) : undefined
+				if (lastMessage?.ts !== boundary.lastMessageTs) {
+					throw new Error("Compaction checkpoint UI boundary no longer matches the current message history.")
+				}
+				await uiMessage.truncateByLineNum(boundary.count)
+				if (lastMessage) {
+					await this.contextManager.truncateContextHistory(lastMessage.ts, await ensureTaskDirectoryExists(this.taskId))
+				}
 			},
 			restoreRuntime: async (snapshot) => {
 				this.taskRuntime.restore(hydrateSnapshot(snapshot))
@@ -2059,14 +2283,19 @@ export class Task {
 			return
 		}
 
-		const sourceBindings =
+		const sourceProfiles =
 			transition.sourceProfiles ??
 			(transition.source.profile ? { [transition.source.mode]: transition.source.profile } : {})
-		this.taskSm.setProfileBindings(sourceBindings)
+		const sourceBindings: Partial<Record<Mode, { profileId: string; profileName: string }>> = {}
+		for (const mode of ["plan", "act"] as const) {
+			const profileName = sourceProfiles[mode]
+			if (profileName) sourceBindings[mode] = this.resolveProfileBinding(profileName)
+		}
+		this.taskSm.setProfileIdentityBindings(sourceBindings)
 		this.taskSm.setMode(transition.source.mode)
 		this.taskState.didRespondToPlanAskBySwitchingMode = false
 		this.pendingSystemPromptRefreshReason = "mode_switch"
-		this.rebuildApiHandler()
+		await this.rebuildApiHandler()
 		await this.stateManager.flushPendingState()
 	}
 
@@ -2142,6 +2371,11 @@ export class Task {
 		const sourceScope = previous?.sourceScope ?? createContextCompactionScopeIdentity(this.api, sourceMode, sourceProfile)
 		const targetScope =
 			previous?.targetScope ?? createContextCompactionScopeIdentity(input.targetApi, input.targetMode, targetProfile)
+		const uiMessages = this.messageStateHandler.clineMessages
+		const uiMessageBoundary = {
+			count: uiMessages.length,
+			...(uiMessages.at(-1)?.ts !== undefined ? { lastMessageTs: uiMessages.at(-1)?.ts } : {}),
+		}
 		return createContextCompactionCheckpointPayload({
 			kind,
 			taskId: this.taskId,
@@ -2155,6 +2389,7 @@ export class Task {
 			protectedContinuation: previous?.protectedContinuation ?? input.targetContinuationContent ?? [],
 			passGuidance: input.passGuidance ?? previous?.passGuidance ?? [],
 			ordinaryInput: previous?.ordinaryInput ?? input.ordinaryInput ?? this.taskState.userMessageContent,
+			uiMessageBoundary,
 			runtimeSnapshot: createSnapshot(this.getRuntimeState()),
 			manualState: {
 				pendingManualCompactionContinuation: cloneDeep(this.taskState.pendingManualCompactionContinuation),
@@ -2227,6 +2462,17 @@ export class Task {
 				preview: true,
 				conversationHistoryDeletedRange: null,
 			})
+			Logger.debug(`[Task ${this.taskId}] compaction pass request`, {
+				operationId: input.operationId,
+				passMessageRoles: passHistory.map((message) => message.role),
+				passTextPreview: passHistory.map((message) =>
+					typeof message.content === "string"
+						? message.content.slice(0, 120)
+						: message.content
+								.map((block) => (block.type === "text" ? block.text.slice(0, 120) : block.type))
+								.join(" | "),
+				),
+			})
 			return {
 				providerInput,
 				explicitInstructions: requestScope.explicitInstructions,
@@ -2282,12 +2528,21 @@ export class Task {
 			})
 			const candidateEstimatedTokens = estimateContextWindowCandidate(targetInput)
 			const { contextWindow } = getContextWindowInfo(input.targetApi)
-			const decision = decideTargetWindowFitting({
-				candidateEstimatedTokens,
-				providerContextWindow: contextWindow,
-				maxContextTokens: this.stateManager.getGlobalSettingsKey("autoCondenseMaxContextTokens"),
-				hasMoreTurns: state.coveredTurnCount < state.turns.length,
-			})
+		const decision = decideTargetWindowFitting({
+			candidateEstimatedTokens,
+			providerContextWindow: contextWindow,
+			maxContextTokens: this.stateManager.getGlobalSettingsKey("autoCondenseMaxContextTokens"),
+			hasMoreTurns: state.coveredTurnCount < state.turns.length,
+		})
+		Logger.debug(`[Task ${this.taskId}] compaction reprojection`, {
+			operationId: input.operationId,
+			coveredTurnCount: state.coveredTurnCount,
+			totalTurnCount: state.turns.length,
+			candidateEstimatedTokens,
+			decision: decision.status,
+			projectedUsageTokens: decision.projectedUsageTokens,
+			targetContextWindow: decision.targetContextWindow,
+		})
 			const segments = estimateContextWindowIndicatorSegments({
 				providerInput: targetInput,
 				durableMessageCount: Math.max(0, targetInput.messages.length - continuation.length),
@@ -2347,6 +2602,7 @@ export class Task {
 	private async restoreContextCompactionMemoryFallback(operationId: string): Promise<void> {
 		const snapshot = this.contextCompactionSnapshots.get(operationId)
 		if (!snapshot) return
+		this.invalidatePreparedProviderInputs()
 		await this.messageStateHandler.overwriteApiConversationHistory(cloneDeep(snapshot.history))
 		this.taskState.conversationHistoryDeletedRange = snapshot.deletedRange
 		this.taskState.targetWindowFittingState = cloneDeep(snapshot.fittingState)
@@ -2390,7 +2646,10 @@ export class Task {
 				break
 			case "pass_completed":
 				await this.commitContextCompactionIndicator(event)
-				snapshot = this.contextCompactionPresentation.complete(event.passIdentity, event.attempt, event.content)
+				snapshot = this.contextCompactionPresentation.complete(event.passIdentity, event.attempt, event.content, {
+					prePass: event.previousCheckpointHead,
+					postPass: event.checkpointHead,
+				})
 				break
 			case "failed":
 				this.contextCompactionIndicatorReceivingByAttemptId.clear()
@@ -2413,6 +2672,15 @@ export class Task {
 			compactionPassIndex: snapshot.passIdentity.passIndex,
 			compactionAttemptIndex: snapshot.attempt.attemptIndex,
 			compactionAttemptId: snapshot.attempt.authorizationAttemptId,
+			...(snapshot.prePassCheckpoint
+				? {
+						compactionPrePassCheckpointId: snapshot.prePassCheckpoint.headCheckpointId,
+						compactionPostPassCheckpointId: snapshot.postPassCheckpoint?.headCheckpointId,
+						compactionExpectedHeadCheckpointId: snapshot.postPassCheckpoint?.headCheckpointId,
+						compactionExpectedChainRevision: snapshot.postPassCheckpoint?.chainRevision,
+						compactionBranchId: snapshot.postPassCheckpoint?.branchId,
+					}
+				: {}),
 		} satisfies ClineSayTool)
 		const ts = await this.say(
 			"tool",
@@ -2446,13 +2714,17 @@ export class Task {
 				? snapshot.existingTs
 				: undefined
 		const interactionId = `context-compaction-review:${input.operationId}:${passIdentity.passIndex}:${attempt.attemptIndex}`
-		const outcome = await this.interactionCoordinator.open({
+		const review = {
 			turnId: interactionId,
 			interactionId,
-			kind: "condense",
+			kind: "condense" as const,
 			presentation: summary,
 			existingTs,
-		})
+		}
+		const outcome =
+			this.getRuntimeState().interaction?.status === "awaiting"
+				? await this.interactionCoordinator.interrupt(review)
+				: await this.interactionCoordinator.open(review)
 		if (outcome.actionId === "confirm_utility") return { action: "accept" }
 		if (outcome.actionId !== "reject") {
 			throw new Error(`Unsupported manual compaction action: ${outcome.actionId}`)
@@ -2483,8 +2755,15 @@ export class Task {
 		})
 	}
 
+	/** Clear request inputs that were frozen against a canonical state which is about to change. */
+	private invalidatePreparedProviderInputs(): void {
+		this.preparedOrdinaryProviderInputs.clear()
+		this.compactionRequestReplay.clear()
+	}
+
 	/** Capture the reversible source state before any hidden Pass starts. */
 	private captureContextCompactionSnapshot(operationId: string): void {
+		this.invalidatePreparedProviderInputs()
 		this.contextCompactionSnapshots.set(operationId, {
 			history: cloneDeep(this.messageStateHandler.apiConversationHistory),
 			deletedRange: this.taskState.conversationHistoryDeletedRange
@@ -2505,16 +2784,48 @@ export class Task {
 		)
 	}
 
-	/** Split active canonical history without mutating the assistant/tool tail protected from compaction. */
+	/**
+	 * Split active canonical history without mutating the assistant/tool tail protected from compaction.
+	 *
+	 * The compaction gate evaluates BEFORE the current request's user message is
+	 * persisted, so tool results produced by the previous turn (e.g. a qna_respond
+	 * reply) are still pending in taskState.userMessageContent. Indexing canonical
+	 * history alone leaves their tool_use unpaired and pushes the entire history
+	 * into the protected tail. Pending tool results are therefore merged into the
+	 * boundary view so pairing succeeds; they never enter targetContinuationHistory
+	 * because the upcoming request persists them separately.
+	 */
 	private getOrdinaryContextCompactionBoundary(): {
 		sourceHistory: ClineStorageMessage[]
 		targetContinuationHistory: ClineStorageMessage[]
 	} {
 		const activeHistory = this.getContextCompactionSourceHistory()
-		const logicalTurns = indexLogicalTurns(activeHistory)
+		// Every pending block that will be persisted by the upcoming request
+		// participates in the pairing view: tool_result blocks from ANY tool
+		// (qna_respond, attempt_completion turn-end feedback, ordinary tools) and
+		// user-authored text feedback. Excluding them leaves the previous
+		// assistant tool_use unpaired and pushes the whole history into the
+		// protected tail. tool_feedback/image blocks are transient carriers and
+		// do not participate in logical-turn pairing.
+		const pendingBlocks = this.taskState.userMessageContent.filter(
+			(block): block is ClineUserToolResultContentBlock | ClineTextContentBlock =>
+				block.type === "tool_result" || block.type === "text",
+		)
+		const pendingMessage: ClineStorageMessage | undefined =
+			pendingBlocks.length > 0 ? { role: "user", content: pendingBlocks, ts: Date.now() } : undefined
+		const boundaryHistory = pendingMessage ? [...activeHistory, pendingMessage] : activeHistory
+		const logicalTurns = indexLogicalTurns(boundaryHistory)
+		// Pending blocks may participate in the last complete source turn (tool
+		// results pair the previous assistant tool_use and close the turn; tagged
+		// text starts the next round), but they must never appear in the
+		// continuation tail: the upcoming request persists them as its own user
+		// message, and duplicating them in the tail would write the same content
+		// twice. Clamp the source end to the boundary view so a pending message
+		// that closes the last turn stays inside the summarizable source.
+		const sourceEndIndex = Math.min(logicalTurns.protectedStartIndex, boundaryHistory.length)
 		return {
-			sourceHistory: cloneDeep(activeHistory.slice(0, logicalTurns.protectedStartIndex)),
-			targetContinuationHistory: cloneDeep(logicalTurns.protectedTail),
+			sourceHistory: cloneDeep(boundaryHistory.slice(0, sourceEndIndex)),
+			targetContinuationHistory: cloneDeep(activeHistory.slice(sourceEndIndex)),
 		}
 	}
 
@@ -2713,13 +3024,24 @@ export class Task {
 		return { accepted: true, result: "accepted" }
 	}
 
+	private async restoreCompactionState(
+		request: ContextCompactionRestoreRequest,
+	): Promise<ContextCompactionRestoreResult> {
+		const sessionOwnsContinuation = this.contextCompactionSession.getActiveOperationId() === request.operationId
+		const result = await this.getContextCompactionRecoveryCoordinator().restore(request)
+		if (!sessionOwnsContinuation) {
+			await this.restoreCheckpointChatRuntime({ apiIndex: this.getRuntimeState().anchor.apiIndex })
+		}
+		return result
+	}
+
 	async restoreContextCompactionCheckpoint(
 		operationId: string,
 		checkpointId: string,
 		expectedHeadCheckpointId: string,
 		expectedChainRevision: number,
 	): Promise<ContextCompactionRestoreResult> {
-		return this.getContextCompactionRecoveryCoordinator().restore({
+		return this.restoreCompactionState({
 			operationId,
 			target: { kind: "checkpoint", checkpointId },
 			expectedHeadCheckpointId,
@@ -2732,7 +3054,7 @@ export class Task {
 		expectedHeadCheckpointId: string,
 		expectedChainRevision: number,
 	): Promise<ContextCompactionRestoreResult> {
-		return this.getContextCompactionRecoveryCoordinator().restore({
+		return this.restoreCompactionState({
 			operationId,
 			target: { kind: "previous" },
 			expectedHeadCheckpointId,
@@ -2745,7 +3067,7 @@ export class Task {
 		expectedHeadCheckpointId: string,
 		expectedChainRevision: number,
 	): Promise<ContextCompactionRestoreResult> {
-		return this.getContextCompactionRecoveryCoordinator().restore({
+		return this.restoreCompactionState({
 			operationId,
 			target: { kind: "initial" },
 			expectedHeadCheckpointId,
@@ -3741,13 +4063,19 @@ export class Task {
 
 	/** Commit a checkpoint chat rewind and optionally continue edited input exactly once. */
 	private async restoreCheckpointChatRuntime(input: { apiIndex: number; editedText?: string }): Promise<void> {
+		const before = this.getRuntimeState()
 		const restored = await this.dispatchRuntime({
 			type: "CHECKPOINT_CHAT_RESTORED",
 			apiIndex: input.apiIndex,
 			...(input.editedText === undefined ? {} : { draft: { text: input.editedText, images: [], files: [] } }),
 		})
 		if (!restored.accepted) {
-			throw new Error(`Checkpoint chat restore rejected: ${restored.error?.code ?? "invalid_runtime_event"}`)
+			const detail = restored.effectError
+				? `${restored.effectError.effectType}: ${restored.effectError.message}`
+				: (restored.error?.code ?? "invalid_runtime_event")
+			throw new Error(
+				`Checkpoint chat restore rejected: ${detail}; requestedApiIndex=${String(input.apiIndex)}; phase=${before.phase}; currentApiIndex=${String(before.anchor.apiIndex)}`,
+			)
 		}
 		this.syncRetainedMachines()
 	}
@@ -4173,6 +4501,7 @@ export class Task {
 		await ensureTaskDirectoryExists(this.taskId)
 		await this.contextManager.initializeContextHistory(await ensureTaskDirectoryExists(this.taskId))
 		await this.loadTaskSnapshot()
+		await this.rebuildApiHandler()
 
 		// Display-only history loading never infers or mutates runtime phase from message tails.
 		// Interactive restoration is owned exclusively by ResumeCoordinator.
@@ -6335,6 +6664,14 @@ export class Task {
 		Session.get().updateToolCall(tool.function_id, tool.name)
 	}
 
+	/** Refresh Profile validity for admission without silently replacing the running handler. */
+	private async validateApiProfileAdmission(): Promise<boolean> {
+		const resolution = resolveTaskApiProfile(this.getEffectiveApiConfiguration(), this.taskSm.mode)
+		const validity = await validateResolvedTaskApiProfile(resolution)
+		await this.commitProfileValidity(validity, false)
+		return this.taskRuntime.getState().profileInvalid === undefined
+	}
+
 	/** Admit one provider request through the canonical runtime gate. */
 	private async admitApiRequest(apiIndex: number): Promise<void> {
 		const apiStarted = await this.dispatchRuntime({ type: "API_REQUEST_STARTED", apiIndex })
@@ -6350,6 +6687,7 @@ export class Task {
 		beforeApiRequestStarted?: () => Promise<void>,
 	): Promise<boolean> {
 		await beforeApiRequestStarted?.()
+		if (!(await this.validateApiProfileAdmission())) return false
 		const webSearchAutoApproved = this.toolExecutor.isAutoApproved(ClineDefaultTool.WEB_SEARCH)
 		if (requestScope.webSearchRoutingPlan.route === "hosted" && !webSearchAutoApproved) {
 			await this.interactionCoordinator.releaseApiContinuationForRequestGate()
@@ -6443,9 +6781,7 @@ export class Task {
 				triggerTokens,
 			})
 		}
-		if (this.stateManager.getGlobalSettingsKey("useAutoCondense") && !projection.shouldCompact) {
-			this.preparedOrdinaryProviderInputs.set(apiIndex, candidateInput)
-		}
+		this.preparedOrdinaryProviderInputs.set(apiIndex, candidateInput)
 		Logger.debug(`[Task ${this.taskId}] final context-window projection`, {
 			apiIndex,
 			candidateEstimatedTokens,
@@ -7746,16 +8082,9 @@ export class Task {
 						},
 						ts: Date.now(),
 					})
-					if (!this.taskState.isInternalContextCompactionRequest && !this.taskState.isManualContextCompactionRequest) {
-						await this.commitOrdinaryContextWindowIndicator(
-							apiIndex,
-							requestScope,
-							taskMetrics.inputTokens +
-								taskMetrics.outputTokens +
-								taskMetrics.cacheWriteTokens +
-								taskMetrics.cacheReadTokens,
-						)
-					}
+					// A request ended, but the round is not complete yet: keep the
+					// current lineage alive. Folding happens only after the full
+					// round (including tool calls) completes.
 				}
 			}
 
@@ -7809,11 +8138,16 @@ export class Task {
 			}
 
 			const phaseAfterAssistantTurn = this.taskRuntime.getState().phase
+			if (phaseAfterAssistantTurn === TaskPhase.BETWEEN_TURNS || phaseAfterAssistantTurn === TaskPhase.COMPLETED) {
+				// The full round (including every tool call) has completed: fold the
+				// Provider-calibrated request snapshot into durable. ENV stays live.
+				await this.foldOrdinaryIndicatorRound()
+				if (phaseAfterAssistantTurn === TaskPhase.COMPLETED) return true
+			}
 			if (
 				this.taskState.abort ||
 				phaseAfterAssistantTurn === TaskPhase.CANCELLING ||
-				phaseAfterAssistantTurn === TaskPhase.ABORTED ||
-				phaseAfterAssistantTurn === TaskPhase.COMPLETED
+				phaseAfterAssistantTurn === TaskPhase.ABORTED
 			) {
 				return true
 			}
@@ -7850,8 +8184,10 @@ export class Task {
 				this.manualRetryTakeoverActive = false
 				this.endAutoRetrySequence()
 
-				if (this.taskRuntime.getState().phase === TaskPhase.COMPLETED) {
-					return true
+				const phaseBeforeContinuation = this.taskRuntime.getState().phase
+				if (phaseBeforeContinuation === TaskPhase.BETWEEN_TURNS || phaseBeforeContinuation === TaskPhase.COMPLETED) {
+					await this.foldOrdinaryIndicatorRound()
+					if (phaseBeforeContinuation === TaskPhase.COMPLETED) return true
 				}
 
 				const recDidEndLoop = await this.recursivelyMakeClineRequests(this.taskState.userMessageContent)

@@ -5,7 +5,6 @@ import type { ClineQnaResponse } from "@shared/ExtensionMessage"
 import { ClineDefaultTool } from "@shared/tools"
 import type { ToolResponse } from "../../index"
 import type { InteractionOutcome } from "../../interaction/InteractionCoordinator"
-import { isCompactSignal } from "../../mode-switch-signal"
 import type { IPartialBlockHandler, IToolHandler } from "../ToolExecutorCoordinator"
 import { interactionId, interactionTurnId, type TaskConfig } from "../types/TaskConfig"
 import type { StronglyTypedUIHelpers } from "../types/UIHelpers"
@@ -67,10 +66,6 @@ export class QnaRespondHandler implements IToolHandler, IPartialBlockHandler {
 		const text = outcome.draft?.text
 		const images = outcome.draft?.images
 		const files = outcome.draft?.files
-
-		if (isCompactSignal(text)) {
-			return formatResponse.toolResult("Mode switch context compaction requested.")
-		}
 
 		let fileContentString = ""
 		if (files && files.length > 0) {

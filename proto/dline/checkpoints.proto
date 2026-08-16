@@ -23,6 +23,10 @@ message CheckpointRestoreRequest {
   string restore_type = 3;
   optional int64 offset = 4;
   optional string edited_text = 5;
+  optional string compaction_operation_id = 6;
+  optional string compaction_checkpoint_id = 7;
+  optional string compaction_expected_head_checkpoint_id = 8;
+  optional int32 compaction_expected_chain_revision = 9;
 }
 
 message CheckpointSubscriptionRequest {

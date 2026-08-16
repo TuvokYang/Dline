@@ -108,6 +108,49 @@ describe("InteractionCoordinator cancellation fence", () => {
 		expect(runtime.getState().phase).toBe(TaskPhase.CANCELLING)
 	})
 
+	it("cancels one error recovery waiter and exposes its settlement boundary", async () => {
+		const interactionId = "profile-recovery"
+		const turnId = "turn:profile-recovery"
+		const runtime = new TaskRuntime(
+			{
+				...createTaskRuntimeState({
+					taskId: "task-1",
+					phase: TaskPhase.AWAITING_APPROVAL,
+					revision: 2,
+					anchor: { apiIndex: 1, uiMessageTs: 100, turnId, interactionId },
+				}),
+				interaction: {
+					taskId: "task-1",
+					turnId,
+					interactionId,
+					kind: "error_retry",
+					status: "awaiting",
+					createdRevision: 1,
+					anchor: { messageTs: 100, messageType: "ask" },
+				},
+			},
+			createPorts(),
+		)
+		const coordinator = new InteractionCoordinator(runtime)
+		const recovery = coordinator.recover({
+			turnId,
+			interactionId,
+			apiIndex: 1,
+			presentation: "Profile not valid",
+		})
+
+		await vi.waitFor(() => expect(runtime.getState().interaction?.status).toBe("awaiting"))
+		const settlement = coordinator.waitForPendingInteraction(interactionId)
+
+		expect(coordinator.cancelPendingInteraction(interactionId, "profile_recovered")).toBe(true)
+		await expect(recovery).rejects.toMatchObject({
+			name: "InteractionCancellationError",
+			reason: "profile_recovered",
+		})
+		await expect(settlement).resolves.toBeUndefined()
+		expect(coordinator.cancelPendingInteraction(interactionId)).toBe(false)
+	})
+
 	it("preserves lifecycle cancellation identity for a restored awaiting interaction", async () => {
 		const interactionId = "restored-make-plan"
 		const turnId = `turn:${interactionId}`

@@ -1,5 +1,6 @@
 import { ChevronDownIcon, ChevronRightIcon } from "lucide-react"
 import React, { memo, useCallback, useMemo, useState } from "react"
+import type { ContextWindowIndicatorViewModel } from "./ContextWindowIndicatorViewModel"
 import { formatLargeNumber as formatTokenNumber } from "@/utils/format"
 
 interface TokenUsageInfoProps {
@@ -22,6 +23,7 @@ interface TaskContextWindowButtonsProps extends TokenUsageInfoProps {
 	autoCompactThreshold?: number
 	isThresholdChanged?: boolean
 	isThresholdFadingOut?: boolean
+	indicatorViewModel?: ContextWindowIndicatorViewModel
 }
 
 // New accordion item component
@@ -99,6 +101,7 @@ export const ContextWindowSummary: React.FC<TaskContextWindowButtonsProps> = ({
 	cacheReads,
 	percentage,
 	autoCompactThreshold = 0,
+	indicatorViewModel,
 }) => {
 	// Accordion state
 	const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set())
@@ -157,8 +160,20 @@ export const ContextWindowSummary: React.FC<TaskContextWindowButtonsProps> = ({
 					</div>
 					<div className="flex justify-between">
 						<span>Remaining:</span>
-						<span className="font-mono">{formatTokenNumber(contextWindow - tokenUsed)}</span>
+						<span className="font-mono">
+							{formatTokenNumber(indicatorViewModel?.remainingTokens ?? Math.max(0, contextWindow - tokenUsed))}
+						</span>
 					</div>
+					{indicatorViewModel && (
+						<div className="mt-2 border-t border-foreground/10 pt-1 space-y-1" data-testid="context-window-segment-details">
+							{indicatorViewModel.segments.map((segment) => (
+								<div className="flex justify-between" data-segment-detail={segment.kind} key={segment.kind}>
+									<span>{segment.label}:</span>
+									<span className="font-mono">{formatTokenNumber(segment.authoritativeTokens)}</span>
+								</div>
+							))}
+						</div>
+					)}
 				</div>
 			</AccordionItem>
 

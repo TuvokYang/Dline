@@ -1,4 +1,5 @@
 import type { ClineApiReqInfo } from "@shared/ExtensionMessage"
+import type { ContextWindowRequestPressure } from "./context-window-projection"
 import { computeCompactTrigger, computeSummarizeBudget } from "./context-window-utils"
 
 /** Context pressure inputs required to evaluate one mode-switch request. */
@@ -41,6 +42,39 @@ export function readContextTokens(text?: string): number {
 	} catch {
 		return 0
 	}
+}
+
+/** Parse request pressure while preserving whether occupancy is reliable or estimated. */
+export function readContextWindowRequestPressure(text?: string): ContextWindowRequestPressure | undefined {
+	if (!text) return undefined
+
+	try {
+		const info = JSON.parse(text) as ClineApiReqInfo
+		const pressure: ContextWindowRequestPressure = {}
+		const estimatedContextTokens = normalizePositiveTokens(info.estimatedContextTokens)
+		if (estimatedContextTokens > 0) {
+			pressure.estimatedContextTokens = estimatedContextTokens
+			pressure.contextTokensSource = "estimate"
+		}
+
+		const explicitContextTokens = normalizePositiveTokens(info.contextTokens)
+		const legacyContextTokens = normalizePositiveTokens(
+			(info.tokensIn || 0) + (info.tokensOut || 0) + (info.cacheWrites || 0) + (info.cacheReads || 0),
+		)
+		const reliableContextTokens = info.contextTokensSource === "estimate" ? 0 : explicitContextTokens || legacyContextTokens
+		if (reliableContextTokens > 0) {
+			pressure.contextTokens = reliableContextTokens
+			pressure.contextTokensSource = "provider"
+		}
+		if (info.cancelReason) pressure.cancelReason = info.cancelReason
+		return pressure
+	} catch {
+		return undefined
+	}
+}
+
+function normalizePositiveTokens(value: unknown): number {
+	return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0
 }
 
 /**

@@ -1,15 +1,30 @@
 import { ApiHandler } from "@core/api"
-import { normalizeAutoCondenseMaxContextTokens, normalizeAutoCondenseTriggerPercent } from "@shared/auto-condense"
+import {
+	DEFAULT_AUTO_CONDENSE_MAX_RESERVE_TOKENS,
+	DEFAULT_AUTO_CONDENSE_MIN_RESERVE_TOKENS,
+	normalizeAutoCondenseMaxContextTokens,
+	normalizeAutoCondenseReservePair,
+	normalizeAutoCondenseTriggerPercent,
+} from "@shared/auto-condense"
 
 const SAFETY_BUFFER_RATIO = 0.03
-const MIN_SAFETY_BUFFER = 5_000
-const MAX_SAFETY_BUFFER = 30_000
 const SUMMARIZE_INSTRUCTION_BUDGET = 2_500
 const ESTIMATION_TOLERANCE = 2_000
 
 export interface CompactTriggerOptions {
 	triggerPercent?: number
+	minReserveTokens?: number
+	maxReserveTokens?: number
 	maxContextTokens?: number
+}
+
+export type CompactTriggerBranch = "percentage_guarded" | "absolute_cap"
+
+export interface CompactTriggerPolicy {
+	branch: CompactTriggerBranch
+	guardedReserveTokens: number
+	compactTriggerTokens: number
+	passInputCeilingTokens: number
 }
 
 /**
@@ -31,7 +46,11 @@ function clampValue(value: number, lower: number, upper: number): number {
  * @returns The safety buffer, equal to 3% clamped to 5k..30k tokens.
  */
 export function computeSafetyBuffer(contextWindow: number): number {
-	return clampValue(Math.floor(contextWindow * SAFETY_BUFFER_RATIO), MIN_SAFETY_BUFFER, MAX_SAFETY_BUFFER)
+	return clampValue(
+		Math.floor(contextWindow * SAFETY_BUFFER_RATIO),
+		DEFAULT_AUTO_CONDENSE_MIN_RESERVE_TOKENS,
+		DEFAULT_AUTO_CONDENSE_MAX_RESERVE_TOKENS,
+	)
 }
 
 /**
@@ -53,28 +72,47 @@ export function shouldCompactProjectedUsage(projectedUsage: number, triggerToken
 	return projectedUsage + ESTIMATION_TOLERANCE >= triggerTokens
 }
 
-/**
- * Compute the token threshold where proactive compaction should start.
- *
- * @param contextWindow The raw input context window in tokens.
- * @param summarizeInstructionBudget The injected summarize_task input budget in tokens.
- * @param options Optional user-configured percentage and absolute trigger cap.
- * @returns The earliest safe proactive compaction trigger token count.
- */
+/** Resolve the single auto-condense trigger policy shared by every runtime consumer. */
+export function resolveCompactTriggerPolicy(
+	contextWindow: number,
+	summarizeInstructionBudget: number,
+	options: CompactTriggerOptions = {},
+): CompactTriggerPolicy {
+	const normalizedContextWindow = Math.max(0, Math.floor(contextWindow))
+	const normalizedInstructionBudget = Math.max(0, Math.floor(summarizeInstructionBudget))
+	const maxContextTokens = normalizeAutoCondenseMaxContextTokens(options.maxContextTokens)
+	if (maxContextTokens > 0 && normalizedContextWindow > maxContextTokens) {
+		return {
+			branch: "absolute_cap",
+			guardedReserveTokens: 0,
+			compactTriggerTokens: maxContextTokens,
+			passInputCeilingTokens: Math.max(0, maxContextTokens - ESTIMATION_TOLERANCE),
+		}
+	}
+
+	const triggerPercent = normalizeAutoCondenseTriggerPercent(options.triggerPercent)
+	const percentageReserveTokens = Math.floor((normalizedContextWindow * (100 - triggerPercent)) / 100)
+	const { minReserveTokens, maxReserveTokens } = normalizeAutoCondenseReservePair(
+		options.minReserveTokens,
+		options.maxReserveTokens,
+	)
+	const guardedReserveTokens = clampValue(percentageReserveTokens, minReserveTokens, maxReserveTokens)
+
+	return {
+		branch: "percentage_guarded",
+		guardedReserveTokens,
+		compactTriggerTokens: Math.max(0, normalizedContextWindow - normalizedInstructionBudget - guardedReserveTokens),
+		passInputCeilingTokens: Math.max(0, normalizedContextWindow - guardedReserveTokens - ESTIMATION_TOLERANCE),
+	}
+}
+
+/** Compute the token threshold where proactive compaction should start. */
 export function computeCompactTrigger(
 	contextWindow: number,
 	summarizeInstructionBudget: number,
 	options: CompactTriggerOptions = {},
 ): number {
-	const hardCeiling = contextWindow - summarizeInstructionBudget - computeSafetyBuffer(contextWindow)
-	const percentagePoint =
-		options.triggerPercent === undefined
-			? Number.POSITIVE_INFINITY
-			: Math.floor((contextWindow * normalizeAutoCondenseTriggerPercent(options.triggerPercent)) / 100)
-	const maxContextTokens = normalizeAutoCondenseMaxContextTokens(options.maxContextTokens)
-	const absolutePoint = maxContextTokens > 0 ? maxContextTokens : Number.POSITIVE_INFINITY
-
-	return Math.max(Math.min(hardCeiling, percentagePoint, absolutePoint), 0)
+	return resolveCompactTriggerPolicy(contextWindow, summarizeInstructionBudget, options).compactTriggerTokens
 }
 
 /**

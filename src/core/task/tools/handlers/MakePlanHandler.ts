@@ -8,7 +8,6 @@ import { Logger } from "@/shared/services/Logger"
 import { ClineDefaultTool } from "@/shared/tools"
 import type { ToolResponse } from "../../index"
 import type { InteractionOutcome } from "../../interaction/InteractionCoordinator"
-import { isCompactSignal } from "../../mode-switch-signal"
 import type { IPartialBlockHandler, IToolHandler } from "../ToolExecutorCoordinator"
 import { interactionId, interactionTurnId, type TaskConfig } from "../types/TaskConfig"
 import type { StronglyTypedUIHelpers } from "../types/UIHelpers"
@@ -96,10 +95,6 @@ export class MakePlanHandler implements IToolHandler, IPartialBlockHandler {
 		const responseFiles = outcome.draft?.files
 
 		config.taskState.isAwaitingPlanResponse = false
-
-		if (isCompactSignal(text)) {
-			return formatResponse.toolResult("Mode switch context compaction requested.")
-		}
 
 		if (text || (images && images.length > 0) || (responseFiles && responseFiles.length > 0)) {
 			await sayFeedbackOnce(config, "messageResponse", text, images, responseFiles)

@@ -1,15 +1,20 @@
 import cloneDeep from "clone-deep"
 import type { ClineStorageMessage } from "@/shared/messages"
-import { getEstimationTolerance } from "./context-window-utils"
 
 export const COMPACTION_WINDOW_BUDGET_MARKER = "<compaction_window_budget />"
 
+export type CompactionWindowBudgetDecision = "ready" | "needs_smaller_input"
+
 export interface CompactionWindowBudget {
 	estimatedInputTokens: number
+	rawRemainder: number
 	availableRemainder: number
+	providerOutputCap: number
+	/** Backward-compatible prompt-facing alias for providerOutputCap. */
 	outputHardLimit: number
 	recommendedMin: number
 	recommendedMax: number
+	decision: CompactionWindowBudgetDecision
 }
 
 export interface ResolveCompactionWindowBudgetInput {
@@ -65,32 +70,26 @@ function computeBudget(input: ResolveCompactionWindowBudgetInput, messages: Clin
 		tools: input.tools ?? [],
 		serverTools: input.serverTools ?? [],
 	})
-	const availableRemainder = Math.max(0, Math.floor(input.contextWindow) - estimatedInputTokens - getEstimationTolerance())
-	const declaredMaxOutput = normalizePositiveInteger(input.maxOutputTokens)
-	const outputHardLimit =
-		availableRemainder > 0
-			? declaredMaxOutput === undefined
-				? availableRemainder
-				: Math.min(availableRemainder, declaredMaxOutput)
-			: (declaredMaxOutput ?? getEstimationTolerance())
+	const rawRemainder = Math.floor(input.contextWindow) - estimatedInputTokens
+	const availableRemainder = Math.max(0, rawRemainder)
+	const providerOutputCap = Math.min(30_000, availableRemainder)
 	const recommendedMin = Math.min(Math.floor(availableRemainder * 0.8), 5_000)
-	const recommendedMax = Math.min(Math.floor(availableRemainder * 0.9), 20_000)
+	const recommendedMax = Math.min(Math.floor(availableRemainder * 0.9), 30_000)
 
 	return {
 		estimatedInputTokens,
+		rawRemainder,
 		availableRemainder,
-		outputHardLimit,
+		providerOutputCap,
+		outputHardLimit: providerOutputCap,
 		recommendedMin,
 		recommendedMax,
+		decision: providerOutputCap > 0 ? "ready" : "needs_smaller_input",
 	}
 }
 
 function estimateTokens(value: unknown): number {
 	return Math.max(1, Math.ceil(Buffer.byteLength(JSON.stringify(value), "utf8") / TOKEN_ESTIMATE_BYTES))
-}
-
-function normalizePositiveInteger(value: number | undefined): number | undefined {
-	return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : undefined
 }
 
 function replaceBudgetMarker(messages: ClineStorageMessage[], guidance: string): ClineStorageMessage[] {

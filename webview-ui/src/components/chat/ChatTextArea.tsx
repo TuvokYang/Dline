@@ -11,6 +11,7 @@ import type React from "react"
 import { forwardRef, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import DynamicTextArea from "react-textarea-autosize"
 import styled from "styled-components"
+import { ChatInputRuntimeControls } from "./input/ChatInputRuntimeControls"
 import ContextMenu from "@/components/chat/ContextMenu"
 import { CHAT_CONSTANTS } from "@/components/chat/chat-view/constants"
 import { ModeSwitchDialog } from "@/components/chat/mode-switch/ModeSwitchDialog"
@@ -1789,7 +1790,9 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 
 						<ClineRulesToggleModal />
 
-						<ModelSwitcher onOpenSettings={handleModelButtonClick} />
+						<ChatInputRuntimeControls
+							profileControl={<ModelSwitcher onOpenSettings={handleModelButtonClick} />}
+						/>
 					</ButtonGroup>
 					<span className="shrink-0">
 						<UsageBar />
@@ -1799,6 +1802,9 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 						<ModeSwitchDialog
 							onCancel={modeSwitchFlow.cancelSwitch}
 							onConfirm={modeSwitchFlow.confirmSwitch}
+							onRetry={() => {
+								if (modeSwitch?.targetMode) void modeSwitchFlow.requestSwitch(modeSwitch.targetMode)
+							}}
 							state={modeSwitch ?? { phase: "idle" }}
 						/>
 						<Tooltip>

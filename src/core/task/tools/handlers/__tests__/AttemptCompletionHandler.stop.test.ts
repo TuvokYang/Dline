@@ -147,25 +147,6 @@ describe("AttemptCompletionHandler stop behavior", () => {
 		assert.equal(result, "[attempt_completion] Result: Done")
 	})
 
-	it("consumes the internal compact signal without presenting user feedback", async () => {
-		const taskState = new TaskState()
-		const config = createConfig(taskState, {
-			actionId: "reply",
-			text: "__dline_mode_switch_compact__",
-		})
-
-		const result = await new AttemptCompletionHandler().execute(config, createBlock())
-
-		assert.match(JSON.stringify(result), /Mode switch context compaction requested/)
-		expect(config.callbacks.say).not.toHaveBeenCalledWith(
-			"user_feedback",
-			expect.anything(),
-			expect.anything(),
-			expect.anything(),
-		)
-		expect(config.callbacks.runUserPromptSubmitHook).not.toHaveBeenCalled()
-	})
-
 	it("keeps the command card separate and presents the non-empty completion result", async () => {
 		const taskState = new TaskState()
 		const config = createConfig(taskState)

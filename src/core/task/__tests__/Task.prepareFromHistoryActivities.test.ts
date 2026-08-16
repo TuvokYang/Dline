@@ -45,6 +45,11 @@ describe("Task.prepareFromHistory activity recovery", () => {
 				}),
 			},
 			messageStateHandler: { clineMessages: messages, updateClineMessage },
+			getContextCompactionRecoveryCoordinator: () => ({
+				resumePendingJournals: vi.fn(async () => {
+					order.push("compaction")
+				}),
+			}),
 			resumeCoordinator: {
 				prepare: vi.fn(async () => {
 					order.push("resume")
@@ -56,6 +61,6 @@ describe("Task.prepareFromHistory activity recovery", () => {
 
 		expect(task.taskState.abort).toBe(true)
 		expect(messages.map((message) => message.commandStatus)).toEqual(["interrupted", "interrupted", "completed"])
-		expect(order).toEqual(["activities", "message:0", "message:1", "resume"])
+		expect(order).toEqual(["compaction", "activities", "message:0", "message:1", "resume"])
 	})
 })

@@ -1,29 +1,24 @@
+import type { ApiHandler } from "@core/api"
 import type { ChatContent } from "@shared/ChatContent"
 import type { Mode } from "@shared/storage/types"
+
+export type { ContextPressureReader, TaskCompactionPort } from "@core/controller/context-transition/types"
 
 /** Effective task-local profile information for one mode. */
 export interface ResolvedModeProfile {
 	mode: Mode
 	profile: string
 	contextWindow: number
+	/** Strict fitting exit target resolved from the same target scope as the actual compaction. */
+	fittingExitTarget: number
+	/** In-memory handler frozen for a pending target transition; never persisted. */
+	executionApi?: ApiHandler
 }
 
 /** Resolve effective source and target profiles without Webview dependencies. */
 export interface ModeProfileResolver {
 	getSource(): ResolvedModeProfile | undefined
 	resolve(mode: Mode): ResolvedModeProfile | undefined
-}
-
-/** Read canonical current context occupancy for the active task. */
-export interface ContextPressureReader {
-	read(): number
-}
-
-/** Run source-mode compaction and control its completion barrier. */
-export interface TaskCompactionPort {
-	compact(operationId: string, chatContent?: ChatContent): Promise<"completed" | "cancelled" | "failed">
-	release(operationId: string): void
-	fail(operationId: string, reason: string): void
 }
 
 /** Validate and atomically commit one task-local target mode. */
@@ -44,7 +39,8 @@ export interface ModeSwitchOperation {
 	operationId: string
 	taskId: string
 	source: ResolvedModeProfile
-	target: ResolvedModeProfile
+	target: ResolvedModeProfile & { executionApi: ApiHandler }
+	/** Complete target-candidate projection retained for confirmation UI. */
 	currentTokens: number
 	triggerTokens: number
 	chatContent?: ChatContent

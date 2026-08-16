@@ -9,6 +9,7 @@ import { BrowserSettings } from "./BrowserSettings"
 import type { ChatInputSendShortcut } from "./ChatInputSendShortcut"
 import { ClineFeatureSetting } from "./ClineFeatureSetting"
 import { ClineRulesToggles } from "./cline-rules"
+import type { ContextWindowIndicatorSnapshot } from "./context-window-indicator"
 import { FocusChainSettings } from "./FocusChainSettings"
 import { HistoryItem } from "./HistoryItem"
 import type { LoadCapabilityPayload } from "./load-capabilities"
@@ -16,6 +17,7 @@ import { McpDisplayMode } from "./McpDisplayMode"
 import { ClineMessageModelInfo } from "./messages"
 import type { ModeSwitchSnapshot } from "./mode-switch"
 import type { PromptCacheHealthSnapshot } from "./PromptCacheHealth"
+import type { ProfileSwitchSnapshot } from "./profile-switch"
 import { OnboardingModelGroup } from "./proto/dline/state"
 import type { TaskLockStatus } from "./proto/dline/task"
 import { Mode } from "./storage/types"
@@ -52,6 +54,8 @@ export interface ExtensionState {
 	stateRevision: number
 	/** Current task-local mode-switch transaction state. */
 	modeSwitch?: ModeSwitchSnapshot
+	/** Current task-local Profile transition state. */
+	profileSwitch?: ProfileSwitchSnapshot
 	isNewUser: boolean
 	welcomeViewCompleted: boolean
 	onboardingModels: OnboardingModelGroup | undefined
@@ -111,6 +115,8 @@ export interface ExtensionState {
 	yoloModeToggled?: boolean
 	useAutoCondense?: boolean
 	autoCondenseTriggerPercent?: number
+	autoCondenseMinReserveTokens?: number
+	autoCondenseMaxReserveTokens?: number
 	autoCondenseMaxContextTokens?: number
 	subagentsEnabled?: boolean
 	mcpEnabled?: boolean
@@ -123,6 +129,8 @@ export interface ExtensionState {
 	favoritedModelIds: string[]
 	/** Version counter incremented when ModelRegistry reloads from disk (fs-watch). Webview uses this to re-fetch models. */
 	providersVersion: number
+	/** Process-local revision incremented after each local or externally observed Profile Catalog commit. */
+	profileCatalogRevision: number
 	// NEW: Add workspace information
 	workspaceRoots: WorkspaceRoot[]
 	primaryRootIndex: number
@@ -157,7 +165,9 @@ export interface ExtensionState {
 		requestsPerMinute?: number
 		tokensPerMinute?: number
 	}
-	/** Total tokens from the last API request for context window progress bar */
+	/** Authoritative segmented context-window indicator for the active Task. */
+	contextWindowIndicator?: ContextWindowIndicatorSnapshot
+	/** Compatibility total derived from contextWindowIndicator's four segments. */
 	lastApiReqTotalTokens?: number
 	/** Current Task-local prompt cache health snapshot. */
 	promptCacheHealth?: PromptCacheHealthSnapshot
@@ -424,6 +434,20 @@ export interface TaskFooterViewState {
 	actions: TaskViewAction[]
 }
 
+/** Active context-compaction ownership projected by the backend Session. */
+export interface TaskContextCompactionViewState {
+	active: true
+	operationId: string
+}
+
+/** Task-bound Profile failure projected for an actionable Webview card. */
+export interface TaskProfileInvalidViewState {
+	profileId?: string
+	displayName?: string
+	reason: "missing" | "disabled" | "credential_unavailable" | "configuration_invalid"
+	message: string
+}
+
 /** Complete backend projection consumed by the Webview interaction host. */
 export interface TaskViewState {
 	taskId: string
@@ -431,6 +455,8 @@ export interface TaskViewState {
 	stateRevision: number
 	activeInteraction?: ActiveInteractionView
 	diagnostic?: TaskViewDiagnostic
+	profileInvalid?: TaskProfileInvalidViewState
+	contextCompaction?: TaskContextCompactionViewState
 	input: TaskInputViewState
 	footer: TaskFooterViewState
 }
@@ -470,6 +496,24 @@ export interface ClineSayTool {
 	retryAttempt?: number
 	/** Maximum automatic retry attempts. */
 	maxRetryAttempts?: number
+	/** Stable compaction operation owning this Pass card. */
+	compactionOperationId?: string
+	/** Zero-based immutable Pass index within the compaction operation. */
+	compactionPassIndex?: number
+	/** Zero-based Provider attempt index currently owning this card update. */
+	compactionAttemptIndex?: number
+	/** Request-scoped authorization attempt identity for stale-event rejection. */
+	compactionAttemptId?: string
+	/** Checkpoint immediately before this accepted Pass. */
+	compactionPrePassCheckpointId?: string
+	/** Checkpoint head immediately after this accepted Pass. */
+	compactionPostPassCheckpointId?: string
+	/** CAS head identity required when restoring the pre-Pass checkpoint. */
+	compactionExpectedHeadCheckpointId?: string
+	/** CAS chain revision required when restoring the pre-Pass checkpoint. */
+	compactionExpectedChainRevision?: number
+	/** Branch identity for diagnostics and stale-card rejection. */
+	compactionBranchId?: string
 	webSearch?: WebSearchPresentationV1
 	webFetch?: WebFetchPresentationV1
 	regex?: string
@@ -673,6 +717,10 @@ export interface ClineApiReqInfo {
 	request?: string
 	/** Canonical context occupancy after provider usage normalization. */
 	contextTokens?: number
+	/** Absolute request-pressure estimate captured before Provider admission. */
+	estimatedContextTokens?: number
+	/** Distinguishes reliable Provider usage from a request-pressure estimate. */
+	contextTokensSource?: "provider" | "estimate"
 	tokensIn?: number
 	tokensOut?: number
 	cacheWrites?: number

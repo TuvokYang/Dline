@@ -1,3 +1,5 @@
+import type { ApiHandler } from "@core/api"
+import { ContextTransitionLease } from "@core/controller/context-transition/ContextTransitionLease"
 import type { ChatContent } from "@shared/ChatContent"
 import type { Mode } from "@shared/storage/types"
 import { beforeEach, describe, expect, it, vi } from "vitest"
@@ -13,16 +15,18 @@ import type {
 
 interface TestHarness {
 	coordinator: ModeSwitchCoordinator
+	lease: ContextTransitionLease
 	profiles: ModeProfileResolver
 	pressure: ContextPressureReader
 	compaction: TaskCompactionPort
 	commit: ModeCommitPort
 	postState: ReturnType<typeof vi.fn<() => Promise<void>>>
 	compact: ReturnType<
-		typeof vi.fn<(operationId: string, chatContent?: ChatContent) => Promise<"completed" | "cancelled" | "failed">>
+		typeof vi.fn<(request: Parameters<TaskCompactionPort["compact"]>[0]) => Promise<"completed" | "cancelled" | "failed">>
 	>
-	release: ReturnType<typeof vi.fn<(operationId: string) => void>>
-	fail: ReturnType<typeof vi.fn<(operationId: string, reason: string) => void>>
+	preflight: ReturnType<typeof vi.fn<(targetApi: ApiHandler, targetMode: Mode, chatContent?: ChatContent) => Promise<number>>>
+	release: ReturnType<typeof vi.fn<(operationId: string) => Promise<void>>>
+	fail: ReturnType<typeof vi.fn<(operationId: string, reason: string) => Promise<void>>>
 	validate: ReturnType<typeof vi.fn<(operation: ModeSwitchOperation) => boolean>>
 	commitMode: ReturnType<typeof vi.fn<(operation: ModeSwitchOperation) => Promise<void>>>
 	setTaskId: (taskId: string | undefined) => void
@@ -32,25 +36,34 @@ const SOURCE: ResolvedModeProfile = {
 	mode: "plan",
 	profile: "large",
 	contextWindow: 272_000,
+	fittingExitTarget: 217_600,
 }
+
+const TARGET_API = { getModel: vi.fn() } as unknown as ApiHandler
 
 const TARGET: ResolvedModeProfile = {
 	mode: "act",
 	profile: "small",
 	contextWindow: 128_000,
+	fittingExitTarget: 102_400,
+	executionApi: TARGET_API,
 }
 
 /** Build deterministic ports for one coordinator test. */
-function createHarness(currentTokens = 125_000): TestHarness {
+function createHarness(projectedUsageTokens = 128_001): TestHarness {
 	let taskId: string | undefined = "task-1"
+	const lease = new ContextTransitionLease()
 	const resolve = vi.fn<(mode: Mode) => ResolvedModeProfile | undefined>((mode) => (mode === "plan" ? SOURCE : TARGET))
 	const profiles: ModeProfileResolver = { getSource: () => SOURCE, resolve }
-	const pressure: ContextPressureReader = { read: vi.fn(() => currentTokens) }
-	const compact = vi.fn<(operationId: string, chatContent?: ChatContent) => Promise<"completed" | "cancelled" | "failed">>(
-		async () => "completed",
+	const preflight = vi.fn<(targetApi: ApiHandler, targetMode: Mode, chatContent?: ChatContent) => Promise<number>>(
+		async () => projectedUsageTokens,
 	)
-	const release = vi.fn<(operationId: string) => void>()
-	const fail = vi.fn<(operationId: string, reason: string) => void>()
+	const pressure: ContextPressureReader = { read: preflight }
+	const compact = vi.fn<
+		(request: Parameters<TaskCompactionPort["compact"]>[0]) => Promise<"completed" | "cancelled" | "failed">
+	>(async () => "completed")
+	const release = vi.fn<(operationId: string) => Promise<void>>(async () => undefined)
+	const fail = vi.fn<(operationId: string, reason: string) => Promise<void>>(async () => undefined)
 	const compaction: TaskCompactionPort = { compact, release, fail }
 	const validate = vi.fn<(operation: ModeSwitchOperation) => boolean>(() => true)
 	const commitMode = vi.fn<(operation: ModeSwitchOperation) => Promise<void>>(async () => {})
@@ -61,18 +74,21 @@ function createHarness(currentTokens = 125_000): TestHarness {
 		pressure,
 		compaction,
 		commit,
+		lease,
 		postState,
 		createId: () => "operation-1",
 		getTaskId: () => taskId,
 	})
 	return {
 		coordinator,
+		lease,
 		profiles,
 		pressure,
 		compaction,
 		commit,
 		postState,
 		compact,
+		preflight,
 		release,
 		fail,
 		validate,
@@ -92,13 +108,14 @@ describe("ModeSwitchCoordinator", () => {
 		harness = createHarness()
 	})
 
-	/** Directly commit when current pressure is below the smaller target trigger. */
-	it("switches directly below the target trigger", async () => {
-		harness = createHarness(100_000)
+	/** Directly commit when the complete target candidate exactly fits the target window. */
+	it("switches directly when the target candidate equals the target window", async () => {
+		harness = createHarness(128_000)
 		const result = await harness.coordinator.request({ taskId: "task-1", targetMode: "act" })
 
 		expect(result).toEqual({ status: "switched", operationId: "operation-1" })
 		expect(harness.compact).not.toHaveBeenCalled()
+		expect(harness.preflight).toHaveBeenCalledWith(TARGET_API, "act", undefined)
 		expect(harness.commitMode).toHaveBeenCalledOnce()
 		expect(harness.coordinator.getSnapshot()).toEqual({ phase: "idle" })
 	})
@@ -107,13 +124,14 @@ describe("ModeSwitchCoordinator", () => {
 	it("switches directly for the same profile", async () => {
 		const sharedProfile: ModeProfileResolver = {
 			getSource: () => ({ ...SOURCE, profile: "shared" }),
-			resolve: (mode) => ({ ...SOURCE, mode, profile: "shared" }),
+			resolve: (mode) => ({ ...SOURCE, mode, profile: "shared", executionApi: TARGET_API }),
 		}
 		harness.coordinator = new ModeSwitchCoordinator({
 			profiles: sharedProfile,
 			pressure: harness.pressure,
 			compaction: harness.compaction,
 			commit: harness.commit,
+			lease: harness.lease,
 			postState: harness.postState,
 			createId: () => "operation-1",
 			getTaskId: () => "task-1",
@@ -125,8 +143,8 @@ describe("ModeSwitchCoordinator", () => {
 		expect(harness.compact).not.toHaveBeenCalled()
 	})
 
-	/** Project confirmation details without committing target mode. */
-	it("requests confirmation for overflowing smaller target", async () => {
+	/** Project confirmation details from the complete target candidate without committing target mode. */
+	it("requests confirmation only when the target candidate strictly exceeds the target window", async () => {
 		const result = await harness.coordinator.request({ taskId: "task-1", targetMode: "act" })
 
 		expect(result).toEqual({ status: "confirmation_required", operationId: "operation-1" })
@@ -136,7 +154,8 @@ describe("ModeSwitchCoordinator", () => {
 			taskId: "task-1",
 			sourceMode: "plan",
 			targetMode: "act",
-			currentTokens: 125_000,
+			currentTokens: 128_001,
+			fittingExitTarget: 102_400,
 		})
 		expect(harness.commitMode).not.toHaveBeenCalled()
 	})
@@ -156,7 +175,18 @@ describe("ModeSwitchCoordinator", () => {
 		const result = await harness.coordinator.confirm("operation-1")
 
 		expect(result).toEqual({ status: "switched", operationId: "operation-1" })
-		expect(harness.compact).toHaveBeenCalledWith("operation-1", undefined)
+		expect(harness.compact).toHaveBeenCalledWith({
+			trigger: "mode_switch",
+			operationId: "operation-1",
+			targetApi: TARGET_API,
+			targetMode: "act",
+			chatContent: undefined,
+			transition: expect.objectContaining({
+				kind: "mode_switch",
+				source: { mode: "plan", profile: "large", contextWindow: 272_000 },
+				target: { mode: "act", profile: "small", contextWindow: 128_000 },
+			}),
+		})
 		expect(harness.commitMode).toHaveBeenCalledOnce()
 		expect(harness.release).toHaveBeenCalledWith("operation-1")
 		expect(harness.coordinator.getSnapshot()).toEqual({ phase: "idle" })
@@ -201,6 +231,39 @@ describe("ModeSwitchCoordinator", () => {
 
 		expect(result.status).toBe("rejected")
 		expect(harness.coordinator.getSnapshot().phase).toBe("awaiting_confirmation")
+	})
+
+	/** Hold the shared transition lease before asynchronous target preflight completes. */
+	it("rejects re-entry while target preflight is unresolved", async () => {
+		let resolvePreflight: ((tokens: number) => void) | undefined
+		harness.preflight.mockReturnValueOnce(
+			new Promise<number>((resolve) => {
+				resolvePreflight = resolve
+			}),
+		)
+		const first = harness.coordinator.request({ taskId: "task-1", targetMode: "act" })
+		await Promise.resolve()
+
+		expect(harness.coordinator.getSnapshot()).toMatchObject({
+			phase: "preflighting",
+			operationId: "operation-1",
+			taskId: "task-1",
+		})
+		const second = await harness.coordinator.request({ taskId: "task-1", targetMode: "act" })
+
+		expect(second).toEqual({ status: "in_progress", operationId: "operation-1" })
+		resolvePreflight?.(128_000)
+		await expect(first).resolves.toMatchObject({ status: "switched" })
+	})
+
+	/** Reject a Mode request while a Profile transition owns the shared lease. */
+	it("rejects requests while a Profile transition owns the shared lease", async () => {
+		harness.lease.acquire({ kind: "profile", operationId: "profile-operation-1", taskId: "task-1" })
+
+		const result = await harness.coordinator.request({ taskId: "task-1", targetMode: "act" })
+
+		expect(result).toEqual({ status: "in_progress", operationId: "profile-operation-1" })
+		expect(harness.preflight).not.toHaveBeenCalled()
 	})
 
 	/** Reject a second request until the active transaction reaches a terminal state. */

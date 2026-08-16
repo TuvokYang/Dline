@@ -3,7 +3,15 @@ import { describe, expect, it, vi } from "vitest"
 import TaskHeader from "./TaskHeader"
 import { formatTokenMetric, hasNonZeroModelPricing } from "./util"
 
-vi.mock("@/context/ExtensionStateContext", () => ({
+vi.mock("@components/settings/providers/useApiProfiles", () => ({
+	useApiProfiles: () => ({
+		profiles: [],
+		selectProfile: vi.fn(),
+		selectProfiles: vi.fn(),
+	}),
+}))
+
+vi.mock("@context/ExtensionStateContext", () => ({
 	useExtensionState: () => ({
 		apiConfiguration: {},
 		checkpointManagerErrorMessage: undefined,
@@ -33,6 +41,23 @@ const task = {
 }
 
 describe("TaskHeader pricing", () => {
+	it("keeps the compact action out of the collapsed task-title row", () => {
+		render(
+			<TaskHeader
+				doesModelSupportPromptCache={false}
+				onClose={vi.fn()}
+				onCompactTask={vi.fn(async () => true)}
+				task={task}
+				tokensIn={0}
+				tokensOut={0}
+				totalCost={0}
+			/>,
+		)
+
+		expect(screen.queryByRole("button", { name: "Compact task" })).not.toBeInTheDocument()
+		expect(screen.getByLabelText("Expand task header")).toBeInTheDocument()
+	})
+
 	it("renders prompt cache health before the task header card", () => {
 		const { container } = render(
 			<TaskHeader

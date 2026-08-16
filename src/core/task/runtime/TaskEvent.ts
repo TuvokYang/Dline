@@ -4,12 +4,14 @@ import type { ActiveInteraction } from "../interaction/InteractionReducer"
 import type { InteractionDraft, InteractionResponse } from "../interaction/InteractionResponse"
 import type { NewTaskConsumedState, NewTaskHandoff } from "../new-task/new-task-handoff"
 import type { TaskEffectType } from "./TaskEffect"
-import type { CancelSource, TaskAnchor } from "./TaskRuntimeState"
+import type { CancelSource, TaskAnchor, TaskProfileInvalidState } from "./TaskRuntimeState"
 
 /** Typed events accepted by the task runtime reducer. */
 export type TaskEvent =
 	| { type: "TASK_INITIALIZE_REQUESTED" }
 	| { type: "TASK_INITIALIZED"; anchor: TaskAnchor; hasTask: boolean }
+	| { type: "PROFILE_VALIDITY_UPDATED"; profileInvalid: TaskProfileInvalidState | undefined }
+	| { type: "PROFILE_RECOVERY_COMMITTED"; interactionId: string }
 	| { type: "API_REQUEST_STARTED"; apiIndex: number }
 	| { type: "RESUME_API_CONTINUATION_REQUESTED"; apiIndex: number; draft?: InteractionDraft }
 	| { type: "HOSTED_WEB_REQUEST_CONTINUATION_REQUESTED"; interactionId: string; apiIndex: number }
@@ -32,6 +34,14 @@ export type TaskEvent =
 	| { type: "APPROVAL_REQUIRED"; turnId: string; interactionId: string }
 	| {
 			type: "INTERACTION_OPEN_REQUESTED"
+			turnId: string
+			interactionId: string
+			kind: InteractionKind
+			presentation: string
+			existingTs?: number
+	  }
+	| {
+			type: "INTERACTION_INTERRUPT_REQUESTED"
 			turnId: string
 			interactionId: string
 			kind: InteractionKind

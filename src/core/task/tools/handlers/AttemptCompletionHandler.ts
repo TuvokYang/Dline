@@ -15,7 +15,6 @@ import { ClineDefaultTool } from "@shared/tools"
 import { commitCompletion } from "../../completion/CompletionCommit"
 import type { ToolResponse } from "../../index"
 import type { InteractionOutcome } from "../../interaction/InteractionCoordinator"
-import { isCompactSignal } from "../../mode-switch-signal"
 import { showNotificationForApproval } from "../../utils"
 import { buildUserFeedbackContent } from "../../utils/buildUserFeedbackContent"
 import type { IPartialBlockHandler, IToolHandler } from "../ToolExecutorCoordinator"
@@ -284,10 +283,6 @@ export class AttemptCompletionHandler implements IToolHandler, IPartialBlockHand
 		if (outcome.actionId === "start_new_task") {
 			return prefix
 		}
-		if (isCompactSignal(text)) {
-			return formatResponse.toolResult("Mode switch context compaction requested.")
-		}
-
 		await sayFeedbackOnce(config, "messageResponse", text, images, completionFiles)
 
 		// Run UserPromptSubmit hook when user provides post-completion feedback

@@ -223,6 +223,7 @@ export class TaskRuntime {
 	private presentedInteractionId(event: TaskEvent): string | undefined {
 		switch (event.type) {
 			case "INTERACTION_OPEN_REQUESTED":
+			case "INTERACTION_INTERRUPT_REQUESTED":
 			case "API_RETRY_EXHAUSTED":
 			case "MISTAKE_LIMIT_REACHED":
 			case "ATTEMPT_COMPLETION_PRESENTED":

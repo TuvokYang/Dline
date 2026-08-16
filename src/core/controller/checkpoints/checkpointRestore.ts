@@ -8,6 +8,22 @@ import { ClineCheckpointRestore } from "../../../shared/WebviewMessage"
 import { Controller } from ".."
 
 export async function checkpointRestore(controller: Controller, request: CheckpointRestoreRequest): Promise<Empty> {
+	const { compactionOperationId, compactionCheckpointId, compactionExpectedHeadCheckpointId, compactionExpectedChainRevision } =
+		request
+	if (
+		compactionOperationId !== undefined &&
+		compactionCheckpointId !== undefined &&
+		compactionExpectedHeadCheckpointId !== undefined &&
+		compactionExpectedChainRevision !== undefined
+	) {
+		await controller.task?.restoreContextCompactionCheckpoint(
+			compactionOperationId,
+			compactionCheckpointId,
+			compactionExpectedHeadCheckpointId,
+			compactionExpectedChainRevision,
+		)
+		return Empty.create({})
+	}
 	if (request.number) {
 		// wait for messages to be loaded
 		await pWaitFor(() => controller.task?.taskState.isInitialized === true, {

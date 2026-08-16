@@ -1,3 +1,4 @@
+import type { ApiHandler } from "@core/api"
 import { describe, expect, it, vi } from "vitest"
 import { ModeSwitchCompaction } from "../ModeSwitchCompaction"
 
@@ -18,13 +19,27 @@ function createDeferred<T>(): DeferredValue<T> {
 	}
 }
 
+const TARGET_API = { getModel: vi.fn() } as unknown as ApiHandler
+
 /** Verify forced compaction completion and release ordering. */
 describe("ModeSwitchCompaction", () => {
+	/** Freeze the pending target handler for every forced Pass until terminal cleanup. */
+	it("exposes the target execution scope only while its operation is active", async () => {
+		const compaction = new ModeSwitchCompaction()
+		const completion = compaction.request("operation-1", TARGET_API, "act", async () => true)
+
+		expect(compaction.getExecutionScope()).toEqual({ operationId: "operation-1", api: TARGET_API, mode: "act" })
+		compaction.fail("operation-1", "failed")
+
+		await expect(completion).resolves.toBe("failed")
+		expect(compaction.getExecutionScope()).toBeUndefined()
+	})
+
 	/** Resolve completion only after the summarize tool applied its context changes. */
 	it("resolves completion only after summary application", async () => {
 		const compaction = new ModeSwitchCompaction()
 		let result: string | undefined
-		void compaction.request("operation-1", vi.fn()).then((value) => {
+		void compaction.request("operation-1", TARGET_API, "act", vi.fn()).then((value) => {
 			result = value
 		})
 
@@ -41,7 +56,7 @@ describe("ModeSwitchCompaction", () => {
 	/** Hold the task loop until Coordinator releases the committed operation. */
 	it("holds the task loop until coordinator release", async () => {
 		const compaction = new ModeSwitchCompaction()
-		void compaction.request("operation-1", vi.fn())
+		void compaction.request("operation-1", TARGET_API, "act", vi.fn())
 		let appliedDone = false
 		const applied = compaction.markApplied().then(() => {
 			appliedDone = true
@@ -57,16 +72,16 @@ describe("ModeSwitchCompaction", () => {
 	/** Reject a second operation while one source-mode compaction is active. */
 	it("rejects a second active operation", async () => {
 		const compaction = new ModeSwitchCompaction()
-		void compaction.request("operation-1", vi.fn())
+		void compaction.request("operation-1", TARGET_API, "act", vi.fn())
 
-		await expect(compaction.request("operation-2", vi.fn())).resolves.toBe("failed")
+		await expect(compaction.request("operation-2", TARGET_API, "act", vi.fn())).resolves.toBe("failed")
 		expect(compaction.getOperationId()).toBe("operation-1")
 	})
 
 	/** Ignore stale release and failure commands from older operations. */
 	it("ignores stale operation commands", async () => {
 		const compaction = new ModeSwitchCompaction()
-		const result = compaction.request("operation-1", vi.fn())
+		const result = compaction.request("operation-1", TARGET_API, "act", vi.fn())
 		compaction.release("stale-operation")
 		compaction.fail("stale-operation", "stale")
 
@@ -78,7 +93,7 @@ describe("ModeSwitchCompaction", () => {
 	/** Return cancelled and release the barrier when task lifecycle aborts. */
 	it("returns cancelled after task abort", async () => {
 		const compaction = new ModeSwitchCompaction()
-		const result = compaction.request("operation-1", vi.fn())
+		const result = compaction.request("operation-1", TARGET_API, "act", vi.fn())
 
 		compaction.abort()
 
@@ -91,7 +106,7 @@ describe("ModeSwitchCompaction", () => {
 		const compaction = new ModeSwitchCompaction()
 		const wakeAsk = vi.fn()
 		const unrelatedFeedback = vi.fn()
-		const result = compaction.request("operation-1", wakeAsk)
+		const result = compaction.request("operation-1", TARGET_API, "act", wakeAsk)
 
 		expect(wakeAsk).toHaveBeenCalledOnce()
 		expect(unrelatedFeedback).not.toHaveBeenCalled()
@@ -103,14 +118,14 @@ describe("ModeSwitchCompaction", () => {
 	it("fails when no compatible interaction can be continued", async () => {
 		const compaction = new ModeSwitchCompaction()
 
-		await expect(compaction.request("operation-1", async () => false)).resolves.toBe("failed")
+		await expect(compaction.request("operation-1", TARGET_API, "act", async () => false)).resolves.toBe("failed")
 		expect(compaction.getOperationId()).toBeUndefined()
 	})
 
 	/** Transfer confirmation-owned draft content only after the target commit barrier releases. */
 	it("retains draft content until successful summary application", async () => {
 		const compaction = new ModeSwitchCompaction()
-		const completion = compaction.request("operation-1", async () => true, {
+		const completion = compaction.request("operation-1", TARGET_API, "act", async () => true, {
 			message: "pending draft",
 			images: ["image-1"],
 			files: ["file-1"],
@@ -132,7 +147,7 @@ describe("ModeSwitchCompaction", () => {
 	/** Do not allow release before summary application to lose the barrier signal. */
 	it("remembers early release until summary application", async () => {
 		const compaction = new ModeSwitchCompaction()
-		const completion = compaction.request("operation-1", vi.fn())
+		const completion = compaction.request("operation-1", TARGET_API, "act", vi.fn())
 		compaction.release("operation-1")
 
 		await compaction.markApplied()

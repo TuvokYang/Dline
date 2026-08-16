@@ -1,7 +1,6 @@
 import { ClineDefaultTool } from "@shared/tools"
 import { describe, expect, it, vi } from "vitest"
 import type { TaskConfig } from "../../types/TaskConfig"
-import { NO_TOOL_RESULT } from "../../utils/ToolResultUtils"
 import { SummarizeTaskHandler } from "../SummarizeTaskHandler"
 
 const summaryBlock = {
@@ -14,30 +13,19 @@ const summaryBlock = {
 	params: { context: "First generated summary" },
 } as const
 
-describe("SummarizeTaskHandler manual regeneration", () => {
-	it("records the preceding user compaction request as the regeneration boundary", async () => {
+describe("SummarizeTaskHandler manual compatibility", () => {
+	it("does not own regeneration, deleted-range, or canonical mutation", async () => {
 		const apiConversationHistory = [
 			{ role: "user", content: [{ type: "text", text: "Initial task" }] },
 			{ role: "assistant", content: [{ type: "text", text: "Previous response" }] },
-			{ role: "user", content: [{ type: "text", text: "/compact" }] },
-			{
-				role: "assistant",
-				content: [
-					{
-						type: "tool_use",
-						name: ClineDefaultTool.SUMMARIZE_TASK,
-						function_id: summaryBlock.function_id,
-						dline_tid: summaryBlock.dline_tid,
-						input: { context: summaryBlock.params.context },
-					},
-				],
-			},
 		]
+		const updateTaskHistory = vi.fn(async () => undefined)
 		const taskState = {
 			consecutiveMistakeCount: 0,
 			isManualContextCompactionRequest: false,
 			isInternalContextCompactionRequest: false,
 			pendingManualCompactionRegeneration: undefined,
+			conversationHistoryDeletedRange: undefined,
 		}
 		const config = {
 			taskId: "task-regenerate",
@@ -50,34 +38,32 @@ describe("SummarizeTaskHandler manual regeneration", () => {
 				operationId: "manual-operation",
 			},
 			taskState,
-			messageState: { apiConversationHistory },
+			messageState: {
+				apiConversationHistory,
+				clineMessages: [],
+				updateTaskHistory,
+			},
 			services: {
 				stateManager: {
 					getGlobalSettingsKey: vi.fn(() => false),
 				},
+				contextManager: {
+					getContextTelemetryData: vi.fn(() => undefined),
+				},
 			},
-			interactions: {
-				open: vi.fn(async () => ({
-					actionId: "reject" as const,
-					draft: {
-						text: "Focus on the latest failure",
-						images: [],
-						files: [],
-					},
-				})),
+			callbacks: {
+				say: vi.fn(async () => undefined),
+				sayAndCreateMissingParamError: vi.fn(),
 			},
 		} as unknown as TaskConfig
 		const handler = new SummarizeTaskHandler({} as never)
 
-		await expect(handler.execute(config, summaryBlock as never)).resolves.toBe(NO_TOOL_RESULT)
+		const result = await handler.execute(config, summaryBlock as never)
 
-		expect(taskState.pendingManualCompactionRegeneration).toEqual({
-			requestApiIndex: 2,
-			operationId: "manual-operation",
-			text: "Focus on the latest failure",
-			images: [],
-			files: [],
-		})
-		expect(apiConversationHistory[2]?.role).toBe("user")
+		expect(result).toContain("First generated summary")
+		expect(taskState.pendingManualCompactionRegeneration).toBeUndefined()
+		expect(taskState.conversationHistoryDeletedRange).toBeUndefined()
+		expect(updateTaskHistory).not.toHaveBeenCalled()
+		expect(apiConversationHistory).toHaveLength(2)
 	})
 })
