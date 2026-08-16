@@ -2,8 +2,9 @@ import type { ApiProfile } from "@shared/proto/dline/profile"
 import type { Controller } from "@/core/controller"
 
 interface ProfileChange {
-	oldName?: string
-	newName?: string
+	id: string
+	oldProfile?: ApiProfile
+	nextProfile?: ApiProfile
 }
 
 /** Coordinate process-wide profile update notifications across active controllers. */
@@ -34,53 +35,91 @@ export class ProfileChangeCoordinator {
 		await Promise.all(
 			this.getControllers().map(async (controller) => {
 				const task = controller.task
-				const planProfile = task?.taskSm.planModeProfile
-				const actProfile = task?.taskSm.actModeProfile
-				const planChange = [...changes.values()].find((change) => planProfile === change.oldName)
-				const actChange = [...changes.values()].find((change) => actProfile === change.oldName)
-				const affected = [...changes.values()].some(
-					(change) =>
-						planProfile === change.oldName ||
-						planProfile === change.newName ||
-						actProfile === change.oldName ||
-						actProfile === change.newName,
-				)
-				if (affected && task) {
-					if (planChange && planChange.oldName !== planChange.newName) {
-						const nextName = planChange.newName || this.findFallback(nextProfiles, "plan")
-						if (nextName) task.taskSm.setPlanModeProfile(nextName)
-					}
-					if (actChange && actChange.oldName !== actChange.newName) {
-						const nextName = actChange.newName || this.findFallback(nextProfiles, "act")
-						if (nextName) task.taskSm.setActModeProfile(nextName)
-					}
-					task.rebuildApiHandler()
-					controller.restartAccountUsagePolling()
+				if (task) {
+					this.adoptTaskBinding(
+						task.taskSm.planModeProfileId,
+						task.taskSm.planModeProfile,
+						"plan",
+						changes,
+						task.taskSm,
+					)
+					this.adoptTaskBinding(task.taskSm.actModeProfileId, task.taskSm.actModeProfile, "act", changes, task.taskSm)
+					await task.reconcileApiProfileValidity()
 				}
 
-				const globalPlanProfile = controller.stateManager.getGlobalSettingsKey("planModeProfile")
-				const globalActProfile = controller.stateManager.getGlobalSettingsKey("actModeProfile")
-				const globalPlanChange = [...changes.values()].find(
-					(change) => globalPlanProfile === change.oldName && change.oldName !== change.newName,
+				this.adoptGlobalBinding(
+					controller,
+					controller.stateManager.getGlobalSettingsKey("planModeProfileId"),
+					controller.stateManager.getGlobalSettingsKey("planModeProfile"),
+					"plan",
+					changes,
 				)
-				const globalActChange = [...changes.values()].find(
-					(change) => globalActProfile === change.oldName && change.oldName !== change.newName,
+				this.adoptGlobalBinding(
+					controller,
+					controller.stateManager.getGlobalSettingsKey("actModeProfileId"),
+					controller.stateManager.getGlobalSettingsKey("actModeProfile"),
+					"act",
+					changes,
 				)
-				if (globalPlanChange) {
-					const nextName = globalPlanChange.newName || this.findFallback(nextProfiles, "plan")
-					if (nextName) controller.stateManager.setGlobalState("planModeProfile", nextName)
-				}
-				if (globalActChange) {
-					const nextName = globalActChange.newName || this.findFallback(nextProfiles, "act")
-					if (nextName) controller.stateManager.setGlobalState("actModeProfile", nextName)
-				}
+
+				// Rename adoption updates compatibility names only. Persist those
+				// bindings before publishing the committed Catalog revision.
+				await controller.stateManager.flushPendingState()
+
+				// Catalog edits are a list/display concern. They must not replace a
+				// running handler; explicit Task Profile selection owns that boundary.
 				await controller.postStateToWebview()
 			}),
 		)
 	}
 
-	private findFallback(profiles: ApiProfile[], mode: "plan" | "act"): string | undefined {
-		return profiles.find((profile) => profile.enabled && profile.usedFor.includes(mode))?.name
+	private adoptTaskBinding(
+		profileId: string | undefined,
+		profileName: string | undefined,
+		mode: "plan" | "act",
+		changes: Map<string, ProfileChange>,
+		taskState: {
+			adoptProfileIdentity: (mode: "plan" | "act", profileId: string, profileName: string) => void
+		},
+	): void {
+		const change = this.findBindingChange(profileId, profileName, changes)
+		const profile = change?.nextProfile
+		if (profile) {
+			taskState.adoptProfileIdentity(mode, profile.id, profile.name)
+		}
+	}
+
+	private adoptGlobalBinding(
+		controller: Controller,
+		profileId: string | undefined,
+		profileName: string | undefined,
+		mode: "plan" | "act",
+		changes: Map<string, ProfileChange>,
+	): void {
+		const change = this.findBindingChange(profileId, profileName, changes)
+		const profile = change?.nextProfile
+		if (!profile) {
+			return
+		}
+
+		const idKey = mode === "plan" ? "planModeProfileId" : "actModeProfileId"
+		const nameKey = mode === "plan" ? "planModeProfile" : "actModeProfile"
+		controller.stateManager.setGlobalState(idKey, profile.id)
+		controller.stateManager.setGlobalState(nameKey, profile.name)
+	}
+
+	private findBindingChange(
+		profileId: string | undefined,
+		profileName: string | undefined,
+		changes: Map<string, ProfileChange>,
+	): ProfileChange | undefined {
+		if (profileId) {
+			return changes.get(profileId)
+		}
+		if (!profileName) {
+			return undefined
+		}
+		return [...changes.values()].find((change) => change.oldProfile?.name === profileName)
 	}
 
 	/** Build stable-ID profile changes for added, updated, renamed, and deleted profiles. */
@@ -92,7 +131,7 @@ export class ProfileChangeCoordinator {
 			const oldProfile = oldMap.get(id)
 			const nextProfile = nextMap.get(id)
 			if (JSON.stringify(oldProfile) !== JSON.stringify(nextProfile)) {
-				changes.set(id, { oldName: oldProfile?.name, newName: nextProfile?.name })
+				changes.set(id, { id, oldProfile, nextProfile })
 			}
 		}
 		return changes

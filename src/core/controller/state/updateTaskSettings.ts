@@ -4,6 +4,20 @@ import { Logger } from "@shared/services/Logger"
 import { Mode } from "@/shared/storage/types"
 import { Controller } from ".."
 import { normalizeOpenaiReasoningEffort } from "./reasoningEffort"
+import { prepareTaskRuntimeOverrideUpdate } from "./taskRuntimeOverrides"
+
+const TASK_RUNTIME_OVERRIDE_KEYS = new Set([
+	"planModeReasoningOverrideKind",
+	"planModeReasoningOverrideEffort",
+	"planModeThinkingBudgetTokens",
+	"actModeReasoningOverrideKind",
+	"actModeReasoningOverrideEffort",
+	"actModeThinkingBudgetTokens",
+	"planModeServiceTierOverrideKind",
+	"planModeServiceTierOverrideTier",
+	"actModeServiceTierOverrideKind",
+	"actModeServiceTierOverrideTier",
+])
 
 /**
  * Updates task-specific settings for the current task.
@@ -24,6 +38,16 @@ export async function updateTaskSettings(controller: Controller, request: Update
 	}
 
 	if (request.settings) {
+		const hasTaskRuntimeOverrideUpdate = Object.entries(request.settings).some(
+			([key, value]) => value !== undefined && TASK_RUNTIME_OVERRIDE_KEYS.has(key),
+		)
+		const taskRuntimeOverrideUpdate = hasTaskRuntimeOverrideUpdate
+			? prepareTaskRuntimeOverrideUpdate(request.settings, controller.stateManager.getApiConfigurationForTask(taskId))
+			: { mutations: [], changed: false }
+		if (taskRuntimeOverrideUpdate.changed) {
+			controller.assertTaskRuntimeOverridesMutable(taskId)
+		}
+
 		const {
 			autoApprovalSettings,
 			planModeReasoningEffort,
@@ -36,11 +60,22 @@ export async function updateTaskSettings(controller: Controller, request: Update
 			...simpleSettings
 		} = request.settings
 
-		const filteredSettings: any = Object.fromEntries(
-			Object.entries(simpleSettings).filter(([key, value]) => key !== "openaiReasoningEffort" && value !== undefined),
+		const filteredSettings = Object.fromEntries(
+			Object.entries(simpleSettings).filter(
+				([key, value]) => key !== "openaiReasoningEffort" && value !== undefined && !TASK_RUNTIME_OVERRIDE_KEYS.has(key),
+			),
 		)
 
-		controller.stateManager.setTaskSettingsBatch(taskId, filteredSettings)
+		if (Object.keys(filteredSettings).length > 0) {
+			controller.stateManager.setTaskSettingsBatch(taskId, filteredSettings)
+		}
+		for (const mutation of taskRuntimeOverrideUpdate.mutations) {
+			if (mutation.value === undefined) {
+				controller.stateManager.clearTaskSetting(taskId, mutation.key)
+			} else {
+				controller.stateManager.setTaskSettings(taskId, mutation.key, mutation.value)
+			}
+		}
 
 		if (autoApprovalSettings) {
 			const currentAutoApprovalSettings = controller.stateManager.getGlobalSettingsKey("autoApprovalSettings")
@@ -102,7 +137,8 @@ export async function updateTaskSettings(controller: Controller, request: Update
 			controller.stateManager.setTaskSettings(taskId, "actModeProfile", actModeProfile)
 		}
 
-		const taskReasoningChanged = planModeReasoningEffort !== undefined || actModeReasoningEffort !== undefined
+		const taskReasoningChanged =
+			planModeReasoningEffort !== undefined || actModeReasoningEffort !== undefined || taskRuntimeOverrideUpdate.changed
 		const taskModeChanged = mode !== undefined
 		const shouldRebuild = taskProfileChanged || taskReasoningChanged || taskModeChanged
 
@@ -135,8 +171,10 @@ export async function updateTaskSettings(controller: Controller, request: Update
 			controller.stateManager.setTaskSettings(taskId, "browserSettings", newBrowserSettings)
 		}
 
-		// Rebuild the active task's API handler when profile, reasoning, or mode changes.
-		// This ensures the next API request uses the updated configuration.
+		// RPC success is a durable boundary: publish and rebuild only after task settings reach disk.
+		await controller.stateManager.flushPendingState()
+
+		// Rebuild the active task's API handler exactly once when its runtime configuration changed.
 		if (shouldRebuild && controller.task && controller.task.taskId === taskId) {
 			Logger.info("[updateTaskSettings] profile/mode/reasoning changed — rebuilding API handler", {
 				taskId,
@@ -144,9 +182,10 @@ export async function updateTaskSettings(controller: Controller, request: Update
 				actModeProfile: actModeProfile ?? "(unchanged)",
 				planModeReasoningEffort: planModeReasoningEffort ?? "(unchanged)",
 				actModeReasoningEffort: actModeReasoningEffort ?? "(unchanged)",
+				taskRuntimeOverrideChanged: taskRuntimeOverrideUpdate.changed,
 				mode: mode ?? "(unchanged)",
 			})
-			controller.task.rebuildApiHandler()
+			await controller.task.rebuildApiHandler()
 			if (taskProfileChanged || taskModeChanged) {
 				controller.restartAccountUsagePolling()
 			}

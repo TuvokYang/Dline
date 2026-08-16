@@ -1,0 +1,197 @@
+import type { ModelCapabilities, ThinkingConfig } from "@shared/proto/dline/models/metadata"
+import type { ApiProfile } from "@shared/proto/dline/profile"
+import type { ReasoningConfig } from "@shared/proto/dline/provider/common"
+import { PROFILE_PROVIDER_KEYS } from "@shared/providers/profile-model-info"
+import { OPENAI_REASONING_EFFORT_OPTIONS } from "@shared/storage/types"
+
+/** Task-local reasoning policy layered over a Profile's reasoning configuration. */
+export interface TaskReasoningOverride {
+	readonly kind: "inherit" | "effort" | "budget"
+	readonly effort?: string
+	readonly budgetTokens?: number
+}
+
+export type TaskReasoningOverrideKind = TaskReasoningOverride["kind"]
+
+/** Resolve the Task-facing thinking capability from one Profile model contract. */
+export function resolveTaskThinkingConfig(
+	provider: string | undefined,
+	capabilities: ModelCapabilities | undefined,
+): ThinkingConfig | undefined {
+	const thinking = capabilities?.thinking
+	const supportsReasoning = capabilities?.supportsReasoning === true || thinking?.supported === true
+	if (!supportsReasoning) return thinking
+	if (thinking && ((thinking.effortLevels?.length ?? 0) > 0 || thinking.maxBudget !== undefined)) {
+		return { ...thinking, supported: true, effortLevels: [...(thinking.effortLevels ?? [])] }
+	}
+	if (provider === "openai" || provider === "openai-codex") {
+		return {
+			...thinking,
+			supported: true,
+			mode: thinking?.mode ?? "effort",
+			effortLevels: [...OPENAI_REASONING_EFFORT_OPTIONS],
+		}
+	}
+	return { ...thinking, supported: true, effortLevels: [...(thinking?.effortLevels ?? [])] }
+}
+
+export interface TaskReasoningOverrideFields {
+	readonly kind?: string
+	readonly effort?: string
+	readonly budgetTokens?: number
+}
+
+export function taskReasoningOverrideFromFields(
+	fields: TaskReasoningOverrideFields,
+	legacyEffort?: string,
+): TaskReasoningOverride | undefined {
+	const kind = fields.kind?.trim()
+	if (kind === "effort") {
+		return { kind, effort: fields.effort }
+	}
+	if (kind === "budget") {
+		return { kind, budgetTokens: fields.budgetTokens }
+	}
+	if (kind === "inherit") {
+		return { kind }
+	}
+	if (legacyEffort !== undefined && legacyEffort.trim() !== "") {
+		return { kind: "effort", effort: legacyEffort.trim() }
+	}
+	return undefined
+}
+
+export function taskReasoningOverrideToFields(override: TaskReasoningOverride | undefined): TaskReasoningOverrideFields {
+	if (!override || override.kind === "inherit") {
+		return { kind: undefined, effort: undefined, budgetTokens: undefined }
+	}
+	if (override.kind === "effort") {
+		return { kind: "effort", effort: override.effort, budgetTokens: undefined }
+	}
+	return { kind: "budget", effort: undefined, budgetTokens: override.budgetTokens }
+}
+
+export type TaskReasoningOverrideError =
+	| "unsupported_effort"
+	| "unsupported_budget"
+	| "invalid_effort"
+	| "invalid_budget"
+	| "negative_budget"
+	| "budget_exceeds_max"
+
+export type TaskReasoningOverrideValidation =
+	| { readonly valid: true; readonly override: TaskReasoningOverride }
+	| { readonly valid: false; readonly error: TaskReasoningOverrideError; readonly message: string }
+
+interface ProviderReasoningConfig {
+	reasoning?: ReasoningConfig
+	readonly [key: string]: unknown
+}
+
+/** Read the Profile-owned reasoning configuration for display and inheritance. */
+export function resolveProfileReasoningConfig(profile: ApiProfile | undefined): ReasoningConfig | undefined {
+	if (!profile) return undefined
+	const providerKey = PROFILE_PROVIDER_KEYS[profile.provider]
+	if (!providerKey) return undefined
+	const providerConfig = readProviderConfig(profile[providerKey])
+	return providerConfig?.reasoning ? { ...providerConfig.reasoning } : undefined
+}
+
+/** Normalize a Task-local reasoning override into its canonical discriminated shape. */
+export function normalizeTaskReasoningOverride(override: TaskReasoningOverride): TaskReasoningOverride {
+	switch (override.kind) {
+		case "inherit":
+			return { kind: "inherit" }
+		case "effort":
+			return { kind: "effort", effort: override.effort?.trim() }
+		case "budget":
+			return { kind: "budget", budgetTokens: override.budgetTokens }
+	}
+}
+
+/** Validate a Task-local reasoning override against the selected model capability. */
+export function validateTaskReasoningOverride(
+	override: TaskReasoningOverride,
+	thinking: ThinkingConfig | undefined,
+): TaskReasoningOverrideValidation {
+	const normalized = normalizeTaskReasoningOverride(override)
+	if (normalized.kind === "inherit") return { valid: true, override: normalized }
+
+	if (normalized.kind === "effort") {
+		const effort = normalized.effort
+		if (!effort) return invalid("invalid_effort", "Reasoning effort must be a non-empty value.")
+		if (thinking?.supported !== true || !thinking.effortLevels?.includes(effort)) {
+			return invalid("unsupported_effort", `Reasoning effort '${effort}' is not supported by the selected model.`)
+		}
+		return { valid: true, override: { kind: "effort", effort } }
+	}
+
+	const budgetTokens = normalized.budgetTokens
+	if (budgetTokens === undefined || !Number.isSafeInteger(budgetTokens)) {
+		return invalid("invalid_budget", "Reasoning budget must be a safe integer.")
+	}
+	if (budgetTokens < 0) return invalid("negative_budget", "Reasoning budget cannot be negative.")
+
+	const maxBudget = thinking?.maxBudget
+	if (thinking?.supported !== true || maxBudget === undefined || !Number.isSafeInteger(maxBudget) || maxBudget < 0) {
+		return invalid("unsupported_budget", "Reasoning budget is not supported by the selected model.")
+	}
+	if (budgetTokens > maxBudget) {
+		return invalid("budget_exceeds_max", `Reasoning budget cannot exceed ${maxBudget} tokens for the selected model.`)
+	}
+	return { valid: true, override: { kind: "budget", budgetTokens } }
+}
+
+/** Apply a validated Task-local override to a runtime-only Profile clone. */
+export function applyTaskReasoningOverride(profile: ApiProfile, override: TaskReasoningOverride): ApiProfile {
+	const normalized = normalizeTaskReasoningOverride(override)
+	const providerKey = PROFILE_PROVIDER_KEYS[profile.provider]
+	if (!providerKey) {
+		if (normalized.kind === "inherit") return { ...profile }
+		throw new Error(`Provider '${profile.provider}' does not expose a reasoning configuration.`)
+	}
+
+	const providerConfig = readProviderConfig(profile[providerKey])
+	if (!providerConfig) {
+		if (normalized.kind === "inherit") return { ...profile }
+		throw new Error(`Provider '${profile.provider}' has no runtime configuration for a reasoning override.`)
+	}
+
+	const inheritedReasoning = providerConfig.reasoning ? { ...providerConfig.reasoning } : undefined
+	return {
+		...profile,
+		[providerKey]: {
+			...providerConfig,
+			reasoning: applyReasoningConfig(inheritedReasoning, normalized),
+		},
+	} as ApiProfile
+}
+
+function applyReasoningConfig(
+	inherited: ReasoningConfig | undefined,
+	override: TaskReasoningOverride,
+): ReasoningConfig | undefined {
+	if (override.kind === "inherit") return inherited
+	if (override.kind === "effort") {
+		return {
+			...inherited,
+			enableThinking: override.effort !== "none",
+			effort: override.effort,
+			thinkingBudget: undefined,
+		}
+	}
+	return {
+		...inherited,
+		enableThinking: (override.budgetTokens ?? 0) > 0,
+		effort: undefined,
+		thinkingBudget: override.budgetTokens,
+	}
+}
+
+function readProviderConfig(value: unknown): ProviderReasoningConfig | undefined {
+	return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as ProviderReasoningConfig) : undefined
+}
+
+function invalid(error: TaskReasoningOverrideError, message: string): TaskReasoningOverrideValidation {
+	return { valid: false, error, message }
+}

@@ -4,6 +4,8 @@ import { useApiProfiles } from "@/components/settings/providers/useApiProfiles"
 import { updateSetting } from "@/components/settings/utils/settingsHandlers"
 import { Switch } from "@/components/ui/switch"
 import { useExtensionState } from "@/context/ExtensionStateContext"
+import { ProfileSwitchDialog } from "../profile-switch/ProfileSwitchDialog"
+import { useProfileSwitch } from "../profile-switch/useProfileSwitch"
 
 interface ModelSwitcherProps {
 	onOpenSettings: () => void
@@ -18,27 +20,43 @@ type ModeTab = "act" | "plan"
  * planActSeparateModelsSetting is enabled.
  */
 const ModelSwitcher: React.FC<ModelSwitcherProps> = ({ onOpenSettings }) => {
-	const { apiConfiguration, mode, planActSeparateModelsSetting, currentTaskItem, taskTitleMessage } = useExtensionState()
+	const {
+		apiConfiguration,
+		mode,
+		planActSeparateModelsSetting,
+		currentTaskItem,
+		taskTitleMessage,
+		taskViewState,
+		profileSwitch,
+		stateRevision,
+	} = useExtensionState()
 	const { profiles, selectProfile, selectProfiles } = useApiProfiles()
 	const [open, setOpen] = useState(false)
 	const [activeTab, setActiveTab] = useState<ModeTab>(mode || "act")
 	const [hoveredId, setHoveredId] = useState<string | null>(null)
 
-	// Get current task ID for task-level profile settings
-	const taskId = currentTaskItem?.id
-	const hasActiveTask = Boolean(taskTitleMessage)
+	// A completed Task can remain open and accept another turn even when its
+	// history item or title message is temporarily absent from the state window.
+	const taskId = taskViewState?.taskId ?? currentTaskItem?.id
+	const hasActiveTask = Boolean(taskId) || Boolean(taskTitleMessage)
+	const profileSwitchFlow = useProfileSwitch({ stateRevision, profileSwitch })
 
 	useEffect(() => {
 		if (!open) setActiveTab(mode || "act")
 	}, [mode, open])
 
-	// Resolve currently selected profile name per mode
+	// Resolve currently selected Profile identity and legacy display name per mode.
+	const planProfileId = apiConfiguration?.planModeProfileId
 	const planProfileName = apiConfiguration?.planModeProfile
+	const actProfileId = apiConfiguration?.actModeProfileId
 	const actProfileName = apiConfiguration?.actModeProfile
 
-	// Current mode's display info
+	// Stable identity remains valid across rename; name is legacy fallback only.
+	const currentProfileId = mode === "plan" ? planProfileId : actProfileId
 	const currentProfileName = mode === "plan" ? planProfileName : actProfileName
-	const currentProfile = currentProfileName ? profiles.find((p) => p.name === currentProfileName) : undefined
+	const currentProfile =
+		(currentProfileId ? profiles.find((profile) => profile.id === currentProfileId) : undefined) ??
+		(currentProfileName ? profiles.find((profile) => profile.name === currentProfileName) : undefined)
 	const displayLine = currentProfile ? currentProfile.name || `${currentProfile.provider}:${currentProfile.modelId}` : "-:-"
 
 	// Build detailed tooltip from modelInfo
@@ -62,12 +80,15 @@ const ModelSwitcher: React.FC<ModelSwitcherProps> = ({ onOpenSettings }) => {
 		if (!profile) return
 		setOpen(false)
 
+		const targetModes: ModeTab[] = planActSeparateModelsSetting ? [activeTab] : ["plan", "act"]
+		if (hasActiveTask) {
+			void profileSwitchFlow.requestSwitch(profile.id, targetModes)
+			return
+		}
 		if (planActSeparateModelsSetting) {
-			// Separated mode: write to the active tab's mode (task-level)
-			void selectProfile(profile.id, activeTab, taskId, hasActiveTask)
+			void selectProfile(profile.id, activeTab, taskId, false)
 		} else {
-			// Unified mode: write to both plan and act in one task-level request.
-			void selectProfiles(profile.id, ["plan", "act"], taskId, hasActiveTask)
+			void selectProfiles(profile.id, targetModes, taskId, false)
 		}
 	}
 
@@ -99,13 +120,24 @@ const ModelSwitcher: React.FC<ModelSwitcherProps> = ({ onOpenSettings }) => {
 
 	return (
 		<div style={{ flex: "1 1 auto", minWidth: 0, position: "relative" }}>
+			<ProfileSwitchDialog
+				onCancel={profileSwitchFlow.cancelSwitch}
+				onConfirm={profileSwitchFlow.confirmSwitch}
+				onRetry={() => {
+					if (profileSwitch?.targetProfile && profileSwitch.targetModes?.length) {
+						void profileSwitchFlow.requestSwitch(profileSwitch.targetProfile, profileSwitch.targetModes)
+					}
+				}}
+				state={profileSwitch ?? { phase: "idle" }}
+			/>
 			<button
 				aria-label="Select model"
-				className="bg-transparent border-0 cursor-pointer p-0 text-xs text-description w-full text-left truncate"
+				className="bg-transparent border-0 cursor-pointer p-0 text-xs text-description w-full text-left truncate disabled:cursor-not-allowed disabled:opacity-60"
+				disabled={profileSwitchFlow.isSwitchPending}
 				onClick={() => setOpen(!open)}
 				title={tooltip}
 				type="button">
-				{displayLine}
+				{profileSwitchFlow.statusText ? `${displayLine} · ${profileSwitchFlow.statusText}` : displayLine}
 			</button>
 
 			{open && (
@@ -213,12 +245,14 @@ const ModelSwitcher: React.FC<ModelSwitcherProps> = ({ onOpenSettings }) => {
 
 								return (
 									<div
+										aria-disabled={profileSwitchFlow.isSwitchPending}
 										aria-selected={selected}
 										className="flex items-center px-3 py-2 cursor-pointer transition-colors"
 										key={profile.id}
-										onClick={() => handleSelect(name)}
+										onClick={() => !profileSwitchFlow.isSwitchPending && handleSelect(name)}
 										onKeyDown={(e) => {
-											if (e.key === "Enter" || e.key === " ") handleSelect(name)
+											if (!profileSwitchFlow.isSwitchPending && (e.key === "Enter" || e.key === " "))
+												handleSelect(name)
 										}}
 										onMouseEnter={() => setHoveredId(profile.id)}
 										onMouseLeave={() => setHoveredId(null)}
@@ -232,7 +266,7 @@ const ModelSwitcher: React.FC<ModelSwitcherProps> = ({ onOpenSettings }) => {
 													: "transparent",
 											transition: "background 0.1s ease",
 										}}
-										tabIndex={0}
+										tabIndex={profileSwitchFlow.isSwitchPending ? -1 : 0}
 										title={capTooltip}>
 										{/* Check circle */}
 										<div

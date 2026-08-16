@@ -1,4 +1,5 @@
 import type { ExtensionMessage } from "@shared/ExtensionMessage"
+import { EmptyRequest } from "@shared/proto/dline/common"
 import { ResetStateRequest } from "@shared/proto/dline/state"
 import { UserOrganization } from "@shared/proto/index.dline"
 import {
@@ -31,6 +32,9 @@ import FeatureSettingsSection from "./sections/FeatureSettingsSection"
 import GeneralSettingsSection from "./sections/GeneralSettingsSection"
 import { RemoteConfigSection } from "./sections/RemoteConfigSection"
 import TerminalSettingsSection from "./sections/TerminalSettingsSection"
+import { flushPendingSettingsRequests } from "./utils/settingsHandlers"
+import { saveSettingsAndClose } from "./utils/settingsSaveCoordinator"
+import { flushPendingDebouncedInputs } from "./utils/useDebouncedInput"
 
 const IS_DEV = process.env.IS_DEV
 
@@ -109,7 +113,7 @@ export const SETTINGS_TABS: SettingsTab[] = [
 ]
 
 type SettingsViewProps = {
-	onDone: () => void
+	onDone: () => void | Promise<void>
 	targetSection?: string
 }
 
@@ -150,6 +154,26 @@ const SettingsView = ({ onDone, targetSection }: SettingsViewProps) => {
 	const { activeOrganization } = useClineAuth()
 
 	const [activeTab, setActiveTab] = useState<string>(targetSection || SETTINGS_TABS[0].id)
+	const [isSaving, setIsSaving] = useState(false)
+	const [saveError, setSaveError] = useState<string | null>(null)
+
+	const handleDone = useCallback(async () => {
+		if (isSaving) return
+		setIsSaving(true)
+		setSaveError(null)
+		try {
+			await saveSettingsAndClose({
+				flushInputs: flushPendingDebouncedInputs,
+				flushRequests: flushPendingSettingsRequests,
+				flushBackend: () => StateServiceClient.flushPendingState(EmptyRequest.create({})),
+				close: onDone,
+			})
+		} catch (error) {
+			setSaveError(error instanceof Error ? error.message : "Unable to persist Settings")
+		} finally {
+			setIsSaving(false)
+		}
+	}, [isSaving, onDone])
 
 	// Optimized message handler with early returns
 	const handleMessage = useCallback((event: MessageEvent) => {
@@ -258,7 +282,18 @@ const SettingsView = ({ onDone, targetSection }: SettingsViewProps) => {
 
 	return (
 		<Tab>
-			<ViewHeader environment={environment} onDone={onDone} title="Settings" />
+			<ViewHeader
+				doneDisabled={isSaving}
+				doneLabel={isSaving ? "Saving..." : "Done"}
+				environment={environment}
+				onDone={handleDone}
+				title="Settings"
+			/>
+			{saveError && (
+				<div className="mx-5 mb-3 rounded border border-(--vscode-errorForeground) p-2 text-sm" role="alert">
+					Failed to save settings: {saveError}
+				</div>
+			)}
 
 			<div className="flex flex-1 overflow-hidden">
 				<TabList

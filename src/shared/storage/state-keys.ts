@@ -2,8 +2,11 @@ import { AutoApprovalSettings, DEFAULT_AUTO_APPROVAL_SETTINGS } from "@shared/Au
 import { ApiProvider, ModelInfo, type OcaModelInfo } from "@shared/api"
 import {
 	DEFAULT_AUTO_CONDENSE_MAX_CONTEXT_TOKENS,
+	DEFAULT_AUTO_CONDENSE_MAX_RESERVE_TOKENS,
+	DEFAULT_AUTO_CONDENSE_MIN_RESERVE_TOKENS,
 	DEFAULT_AUTO_CONDENSE_TRIGGER_PERCENT,
 	normalizeAutoCondenseMaxContextTokens,
+	normalizeAutoCondenseReserveTokens,
 	normalizeAutoCondenseTriggerPercent,
 } from "@shared/auto-condense"
 import { BrowserSettings, DEFAULT_BROWSER_SETTINGS } from "@shared/BrowserSettings"
@@ -97,7 +100,9 @@ const GLOBAL_STATE_FIELDS = {
 // All provider-specific fields (apiKey, baseUrl, modelId, modelInfo, etc.)
 // are now sourced from ApiProfile + ModelRegistry at runtime.
 const API_HANDLER_SETTINGS_FIELDS = {
+	planModeProfileId: { default: undefined as string | undefined },
 	planModeProfile: { default: undefined as string | undefined },
+	actModeProfileId: { default: undefined as string | undefined },
 	actModeProfile: { default: undefined as string | undefined },
 	requestTimeoutMs: { default: undefined as number | undefined },
 	enableParallelToolCalling: { default: true as boolean },
@@ -114,6 +119,17 @@ const USER_SETTINGS_FIELDS = {
 	globalSubagentsToggles: { default: {} as Record<string, boolean> },
 	/** Serialized TaskCapabilityToggles snapshot. Only task settings use this field. */
 	taskCapabilityToggles: { default: undefined as string | undefined },
+	/** Task-local reasoning override fields. These never become global defaults. */
+	planModeReasoningOverrideKind: { default: undefined as string | undefined },
+	planModeReasoningOverrideEffort: { default: undefined as string | undefined },
+	planModeThinkingBudgetTokens: { default: undefined as number | undefined },
+	actModeReasoningOverrideKind: { default: undefined as string | undefined },
+	actModeReasoningOverrideEffort: { default: undefined as string | undefined },
+	actModeThinkingBudgetTokens: { default: undefined as number | undefined },
+	planModeServiceTierOverrideKind: { default: undefined as string | undefined },
+	planModeServiceTierOverrideTier: { default: undefined as string | undefined },
+	actModeServiceTierOverrideKind: { default: undefined as string | undefined },
+	actModeServiceTierOverrideTier: { default: undefined as string | undefined },
 	browserSettings: {
 		default: DEFAULT_BROWSER_SETTINGS as BrowserSettings,
 		transform: (v: any) => ({ ...DEFAULT_BROWSER_SETTINGS, ...v }),
@@ -135,6 +151,14 @@ const USER_SETTINGS_FIELDS = {
 	autoCondenseTriggerPercent: {
 		default: DEFAULT_AUTO_CONDENSE_TRIGGER_PERCENT as number,
 		transform: normalizeAutoCondenseTriggerPercent,
+	},
+	autoCondenseMinReserveTokens: {
+		default: DEFAULT_AUTO_CONDENSE_MIN_RESERVE_TOKENS as number,
+		transform: (value: unknown) => normalizeAutoCondenseReserveTokens(value, DEFAULT_AUTO_CONDENSE_MIN_RESERVE_TOKENS),
+	},
+	autoCondenseMaxReserveTokens: {
+		default: DEFAULT_AUTO_CONDENSE_MAX_RESERVE_TOKENS as number,
+		transform: (value: unknown) => normalizeAutoCondenseReserveTokens(value, DEFAULT_AUTO_CONDENSE_MAX_RESERVE_TOKENS),
 	},
 	autoCondenseMaxContextTokens: {
 		default: DEFAULT_AUTO_CONDENSE_MAX_CONTEXT_TOKENS as number,

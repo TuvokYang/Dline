@@ -921,7 +921,7 @@ export async function writeTaskSettingsToStorage(taskId: string, s: Partial<Sett
 			next[key] = value
 		}
 	}
-	await fs.writeFile(p, JSON.stringify(next, null, 2))
+	await atomicWriteFile(p, JSON.stringify(next, null, 2))
 }
 
 export async function readRemoteConfigFromCache(orgId: string): Promise<RemoteConfig | undefined> {

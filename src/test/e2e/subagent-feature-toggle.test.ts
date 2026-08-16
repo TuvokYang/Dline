@@ -3,19 +3,32 @@ import path from "node:path"
 import { expect, type Frame, type Page } from "@playwright/test"
 import type { MockApiConsumption } from "./fixtures/server"
 import { E2ETestHelper, e2e } from "./utils/helpers"
+import { MultiInstanceLauncher } from "./utils/multi-instance"
 
 interface StoredSettingsFile {
 	subagentsEnabled?: boolean
+	mcpEnabled?: boolean
 	values?: {
 		subagentsEnabled?: boolean
+		mcpEnabled?: boolean
 	}
 }
 
 const settingsPath = (dlineDir: string) => path.join(dlineDir, "data", "settings", "settings.json")
+const globalStatePath = (dlineDir: string) => path.join(dlineDir, "data", "globalState.json")
+
+async function readStoredSettings(dlineDir: string): Promise<StoredSettingsFile> {
+	return JSON.parse(await readFile(settingsPath(dlineDir), "utf8")) as StoredSettingsFile
+}
 
 async function readSubagentsEnabled(dlineDir: string): Promise<boolean | undefined> {
-	const settings = JSON.parse(await readFile(settingsPath(dlineDir), "utf8")) as StoredSettingsFile
+	const settings = await readStoredSettings(dlineDir)
 	return settings.values?.subagentsEnabled ?? settings.subagentsEnabled
+}
+
+async function readMcpEnabled(dlineDir: string): Promise<boolean | undefined> {
+	const settings = await readStoredSettings(dlineDir)
+	return settings.values?.mcpEnabled ?? settings.mcpEnabled
 }
 
 async function openFeatureSettings(page: Page, sidebar: Frame): Promise<void> {
@@ -25,14 +38,18 @@ async function openFeatureSettings(page: Page, sidebar: Frame): Promise<void> {
 	await expect(sidebar.getByRole("heading", { name: "Feature Settings" })).toBeVisible()
 }
 
+function subagentsSwitch(sidebar: Frame) {
+	return sidebar.locator('[id="Subagents"]')
+}
+
 async function setSubagentsEnabled(page: Page, sidebar: Frame, enabled: boolean): Promise<void> {
 	await openFeatureSettings(page, sidebar)
-	const subagentsSwitch = sidebar.locator('[id="Subagents"]')
-	await expect(subagentsSwitch).toBeVisible()
-	if ((await subagentsSwitch.getAttribute("aria-checked")) !== String(enabled)) {
-		await subagentsSwitch.click()
+	const toggle = subagentsSwitch(sidebar)
+	await expect(toggle).toBeVisible()
+	if ((await toggle.getAttribute("aria-checked")) !== String(enabled)) {
+		await toggle.click()
 	}
-	await expect(subagentsSwitch).toHaveAttribute("aria-checked", String(enabled))
+	await expect(toggle).toHaveAttribute("aria-checked", String(enabled))
 	await sidebar.getByRole("button", { name: "Done", exact: true }).click()
 	await expect(sidebar.getByTestId("chat-input")).toBeVisible()
 }
@@ -84,6 +101,35 @@ function requestToolNames(consumption: MockApiConsumption): string[] {
 		.map((tool) => tool.name ?? tool.function?.name)
 		.filter((name): name is string => typeof name === "string")
 }
+
+e2e(
+	"Subagent feature toggle - semi-fresh canonical Settings uses the declared enabled default instead of stale legacy false",
+	async ({ dlineDir, helper, openVSCode, userDataDir, workspaceDir }) => {
+		e2e.setTimeout(180_000)
+		const settings = await readStoredSettings(dlineDir)
+		delete settings.subagentsEnabled
+		if (settings.values) delete settings.values.subagentsEnabled
+		await writeFile(settingsPath(dlineDir), `${JSON.stringify(settings, null, 2)}\n`, "utf8")
+
+		const legacyGlobalState = JSON.parse(await readFile(globalStatePath(dlineDir), "utf8")) as Record<string, unknown>
+		legacyGlobalState.subagentsEnabled = false
+		await writeFile(globalStatePath(dlineDir), `${JSON.stringify(legacyGlobalState, null, 2)}\n`, "utf8")
+
+		const app = await openVSCode(workspaceDir)
+		try {
+			const page = await app.firstWindow()
+			await E2ETestHelper.openClineSidebar(page)
+			const sidebar = await helper.getSidebar(page)
+			await helper.signin(sidebar)
+			await openFeatureSettings(page, sidebar)
+
+			await expect(subagentsSwitch(sidebar)).toHaveAttribute("aria-checked", "true")
+			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+		} finally {
+			await app.close()
+		}
+	},
+)
 
 e2e(
 	"Subagent feature toggle - enabling inside an active task advertises and executes use_subagent on the next request",
@@ -159,6 +205,133 @@ e2e(
 		const consumptions = server.getMockConsumptions("openai-compatible-chat")
 		expect(consumptions[3].contractError).toBeUndefined()
 		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+	},
+)
+
+e2e(
+	"Subagent feature toggle - enabled state survives later state publications and Settings remounts",
+	async ({ dlineDir, helper, page, sidebar, userDataDir }) => {
+		e2e.setTimeout(180_000)
+		await helper.signin(sidebar)
+		await setSubagentsEnabled(page, sidebar, false)
+		await expect.poll(() => readSubagentsEnabled(dlineDir)).toBe(false)
+
+		await openFeatureSettings(page, sidebar)
+		const toggle = subagentsSwitch(sidebar)
+		await toggle.click()
+		await expect(toggle).toHaveAttribute("aria-checked", "true")
+		await expect.poll(() => readSubagentsEnabled(dlineDir), { timeout: 10_000 }).toBe(true)
+
+		// Remount the feature section after the committed backend state has been published.
+		await sidebar.getByTestId("tab-general").click()
+		await sidebar.getByTestId("tab-features").click()
+		await expect(subagentsSwitch(sidebar)).toHaveAttribute("aria-checked", "true")
+
+		// Publish two later global Settings revisions while Subagents remains enabled.
+		const mcpSwitch = sidebar.locator('[id="Enable MCP"]')
+		const originalMcpState = await mcpSwitch.getAttribute("aria-checked")
+		await mcpSwitch.click()
+		await expect(mcpSwitch).not.toHaveAttribute("aria-checked", originalMcpState ?? "true")
+		await mcpSwitch.click()
+		await expect(mcpSwitch).toHaveAttribute("aria-checked", originalMcpState ?? "true")
+		await expect(subagentsSwitch(sidebar)).toHaveAttribute("aria-checked", "true")
+		await expect.poll(() => readSubagentsEnabled(dlineDir), { timeout: 10_000 }).toBe(true)
+
+		await sidebar.getByRole("button", { name: "Done", exact: true }).click()
+		await expect(sidebar.getByTestId("chat-input")).toBeVisible()
+		await openFeatureSettings(page, sidebar)
+		await expect(subagentsSwitch(sidebar)).toHaveAttribute("aria-checked", "true")
+		await sidebar.getByRole("button", { name: "Done", exact: true }).click()
+		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+	},
+)
+
+e2e(
+	"Subagent feature toggle - a stale second VS Code instance cannot roll an enabled active task back to disabled",
+	async ({ dlineDir, dlineDocsDir, server, workspaceDir }, testInfo) => {
+		e2e.setTimeout(300_000)
+		const launcher = new MultiInstanceLauncher({ dlineDir, dlineDocsDir, server, testInfo, workspaceDir })
+		try {
+			const instanceA = await launcher.launch("subagent-instance-a")
+			await setSubagentsEnabled(instanceA.page, instanceA.sidebar, false)
+			await expect.poll(() => readSubagentsEnabled(dlineDir), { timeout: 10_000 }).toBe(false)
+
+			const instanceB = await launcher.launch("subagent-instance-b")
+			await openFeatureSettings(instanceB.page, instanceB.sidebar)
+			await expect(subagentsSwitch(instanceB.sidebar)).toHaveAttribute("aria-checked", "false")
+
+			server.resetOpenAiMock()
+			server.enqueueOpenAiResponses(
+				{
+					type: "tool",
+					id: "call_stale_instance_ready",
+					name: "qna_respond",
+					arguments: { response: "E2E_STALE_SUBAGENT_READY" },
+				},
+				{
+					type: "tool",
+					id: "call_stale_instance_subagent",
+					name: "use_subagent",
+					arguments: {
+						agent_name: "default",
+						task: "E2E_STALE_SUBAGENT_CHILD",
+						context: "Return the child marker.",
+						timeout: 60,
+					},
+				},
+				{
+					type: "tool",
+					id: "call_stale_instance_child_complete",
+					name: "attempt_completion",
+					arguments: { result: "E2E_STALE_SUBAGENT_CHILD_DONE" },
+				},
+				{
+					type: "tool",
+					id: "call_stale_instance_parent_complete",
+					name: "attempt_completion",
+					arguments: { result: "E2E_STALE_SUBAGENT_PARENT_DONE" },
+					expectedToolResults: [
+						{
+							callId: "call_stale_instance_subagent",
+							contentIncludes: "E2E_STALE_SUBAGENT_CHILD_DONE",
+						},
+					],
+				},
+			)
+
+			await sendTask(instanceA.sidebar, "Create the active task before enabling Subagents.")
+			await expect(instanceA.sidebar.getByText("E2E_STALE_SUBAGENT_READY", { exact: false }).last()).toBeVisible({
+				timeout: 60_000,
+			})
+
+			await openFeatureSettings(instanceA.page, instanceA.sidebar)
+			await subagentsSwitch(instanceA.sidebar).click()
+			await expect(subagentsSwitch(instanceA.sidebar)).toHaveAttribute("aria-checked", "true")
+			await expect.poll(() => readSubagentsEnabled(dlineDir), { timeout: 10_000 }).toBe(true)
+
+			// Instance B still owns the pre-enable snapshot. Committing another key must
+			// merge against the latest disk revision instead of restoring Subagents=false.
+			const instanceBMcpSwitch = instanceB.sidebar.locator('[id="Enable MCP"]')
+			const originalMcpEnabled = (await instanceBMcpSwitch.getAttribute("aria-checked")) === "true"
+			await instanceBMcpSwitch.click()
+			await expect(instanceBMcpSwitch).toHaveAttribute("aria-checked", String(!originalMcpEnabled))
+			await expect.poll(() => readMcpEnabled(dlineDir), { timeout: 10_000 }).toBe(!originalMcpEnabled)
+			await expect.poll(() => readSubagentsEnabled(dlineDir), { timeout: 10_000 }).toBe(true)
+			await expect(subagentsSwitch(instanceA.sidebar)).toHaveAttribute("aria-checked", "true")
+
+			await instanceA.sidebar.getByRole("button", { name: "Done", exact: true }).click()
+			await sendTask(instanceA.sidebar, "Use the default subagent after the stale instance committed another setting.")
+			await expect(instanceA.sidebar.getByText("E2E_STALE_SUBAGENT_PARENT_DONE", { exact: false }).last()).toBeVisible({
+				timeout: 60_000,
+			})
+			const consumptions = server.getMockConsumptions("openai-compatible-chat")
+			expect(requestToolNames(consumptions[1])).toContain("use_subagent")
+			await expect(
+				instanceA.sidebar.getByText(/Native tool 'use_subagent' was not available/, { exact: false }),
+			).toHaveCount(0)
+		} finally {
+			await launcher.dispose()
+		}
 	},
 )
 

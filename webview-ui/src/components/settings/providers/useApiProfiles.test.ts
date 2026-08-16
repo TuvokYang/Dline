@@ -1,6 +1,55 @@
 import { ApiProfile } from "@shared/proto/dline/profile"
-import { describe, expect, it } from "vitest"
-import { applyProfileUpdate, buildProfileSettings, shouldUseTaskProfileSettings } from "./useApiProfiles"
+import { renderHook, waitFor } from "@testing-library/react"
+import React, { type PropsWithChildren } from "react"
+import { beforeEach, describe, expect, it, vi } from "vitest"
+import { ExtensionStateContext, type ExtensionStateContextType } from "../../../context/ExtensionStateContext"
+import { applyProfileUpdate, buildProfileSettings, shouldUseTaskProfileSettings, useApiProfiles } from "./useApiProfiles"
+
+const mocks = vi.hoisted(() => ({
+	getApiProfiles: vi.fn(),
+}))
+
+vi.mock("../../../services/grpc-client", () => ({
+	FileServiceClient: {
+		getApiProfiles: mocks.getApiProfiles,
+	},
+	StateServiceClient: {
+		requestProfileSwitch: vi.fn(),
+	},
+}))
+
+describe("useApiProfiles", () => {
+	beforeEach(() => {
+		mocks.getApiProfiles.mockReset()
+	})
+
+	it("reloads the shared Catalog when profileCatalogRevision changes", async () => {
+		let revision = 101
+		mocks.getApiProfiles
+			.mockResolvedValueOnce({
+				profiles: [ApiProfile.create({ id: "before", name: "Before" })],
+			})
+			.mockResolvedValueOnce({
+				profiles: [ApiProfile.create({ id: "after", name: "After" })],
+			})
+		const wrapper = ({ children }: PropsWithChildren) =>
+			React.createElement(
+				ExtensionStateContext.Provider,
+				{ value: { profileCatalogRevision: revision } as ExtensionStateContextType },
+				children,
+			)
+		const { result, rerender } = renderHook(() => useApiProfiles(), { wrapper })
+
+		await waitFor(() => expect(result.current.profiles[0]?.id).to.equal("before"))
+		expect(mocks.getApiProfiles).toHaveBeenCalledTimes(1)
+
+		revision = 102
+		rerender()
+
+		await waitFor(() => expect(result.current.profiles[0]?.id).to.equal("after"))
+		expect(mocks.getApiProfiles).toHaveBeenCalledTimes(2)
+	})
+})
 
 describe("applyProfileUpdate", () => {
 	it("returns unchanged profiles when an update is a no-op", () => {
@@ -51,19 +100,24 @@ describe("applyProfileUpdate", () => {
 })
 
 describe("buildProfileSettings", () => {
-	it("builds both mode profile settings for unified selection", () => {
-		const result = buildProfileSettings("deepseek-selected", ["plan", "act"])
+	it("builds stable identity and display name for unified selection", () => {
+		const result = buildProfileSettings("deepseek-id", "deepseek-selected", ["plan", "act"])
 
 		expect(result).to.deep.equal({
+			planModeProfileId: "deepseek-id",
 			planModeProfile: "deepseek-selected",
+			actModeProfileId: "deepseek-id",
 			actModeProfile: "deepseek-selected",
 		})
 	})
 
-	it("builds only the target mode profile setting for split selection", () => {
-		const result = buildProfileSettings("anthropic-plan", ["plan"])
+	it("builds stable identity and display name only for the target mode", () => {
+		const result = buildProfileSettings("anthropic-id", "anthropic-plan", ["plan"])
 
-		expect(result).to.deep.equal({ planModeProfile: "anthropic-plan" })
+		expect(result).to.deep.equal({
+			planModeProfileId: "anthropic-id",
+			planModeProfile: "anthropic-plan",
+		})
 	})
 })
 

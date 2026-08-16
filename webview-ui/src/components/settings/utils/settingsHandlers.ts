@@ -1,5 +1,25 @@
-import { McpDisplayMode, Settings, UpdateSettingsRequest, UpdateTaskSettingsRequest } from "@shared/proto/dline/state"
+import type { Settings } from "@shared/proto/dline/state"
+import { McpDisplayMode, UpdateSettingsRequest, UpdateTaskSettingsRequest } from "@shared/proto/dline/state"
 import { StateServiceClient } from "@/services/grpc-client"
+
+import { SettingsRequestTracker } from "./settingsRequestTracker"
+
+type SettingsField = Exclude<keyof UpdateSettingsRequest, "metadata">
+type SettingsInputValue<K extends SettingsField> = K extends "mcpDisplayMode"
+	? UpdateSettingsRequest[K] | "rich" | "plain" | "markdown"
+	: UpdateSettingsRequest[K]
+type SettingsUpdate = {
+	[K in SettingsField]?: SettingsInputValue<K>
+}
+
+const settingsRequestTracker = new SettingsRequestTracker()
+
+/** Wait for every Settings RPC and surface the latest failure for each setting. */
+export const flushPendingSettingsRequests = () => settingsRequestTracker.flush()
+
+function settingsRequestKeys(scope: string, fields: readonly string[]): string[] {
+	return fields.map((field) => `${scope}:${field}`)
+}
 
 /**
  * Converts values to their corresponding proto format
@@ -8,7 +28,7 @@ import { StateServiceClient } from "@/services/grpc-client"
  * @returns The converted value
  * @throws Error if the value is invalid for the field
  */
-const convertToProtoValue = (field: keyof UpdateSettingsRequest, value: any): any => {
+const convertToProtoValue = (field: SettingsField, value: unknown): unknown => {
 	if (field === "mcpDisplayMode" && typeof value === "string") {
 		switch (value) {
 			case "rich":
@@ -24,22 +44,28 @@ const convertToProtoValue = (field: keyof UpdateSettingsRequest, value: any): an
 	return value
 }
 
+/** Updates multiple global settings in one request. */
+export const updateSettings = (settings: SettingsUpdate) => {
+	const updateRequest: Partial<UpdateSettingsRequest> = {}
+	for (const [field, value] of Object.entries(settings) as Array<[SettingsField, unknown]>) {
+		Object.assign(updateRequest, { [field]: convertToProtoValue(field, value) })
+	}
+
+	return settingsRequestTracker.track(
+		settingsRequestKeys("global", Object.keys(updateRequest)),
+		StateServiceClient.updateSettings(UpdateSettingsRequest.create(updateRequest)),
+		"Failed to update settings:",
+	)
+}
+
 /**
  * Updates a single field in the settings.
  *
  * @param field - The field key to update
  * @param value - The new value for the field
  */
-export const updateSetting = (field: keyof UpdateSettingsRequest, value: any) => {
-	const updateRequest: Partial<UpdateSettingsRequest> = {}
-
-	const convertedValue = convertToProtoValue(field, value)
-	updateRequest[field] = convertedValue
-
-	return StateServiceClient.updateSettings(UpdateSettingsRequest.create(updateRequest)).catch((error) => {
-		console.error(`Failed to update setting ${field}:`, error)
-	})
-}
+export const updateSetting = <K extends SettingsField>(field: K, value: SettingsInputValue<K>) =>
+	updateSettings({ [field]: value } as SettingsUpdate)
 
 /**
  * Updates a task-level setting for a specific task.
@@ -49,9 +75,8 @@ export const updateSetting = (field: keyof UpdateSettingsRequest, value: any) =>
  * @param field - The settings field to update (e.g., "planModeProfile", "actModeProfile")
  * @param value - The new value for the field
  */
-export const updateTaskSetting = (taskId: string, field: keyof Settings, value: any) => {
-	updateTaskSettings(taskId, { [field]: value })
-}
+export const updateTaskSetting = <K extends keyof Settings>(taskId: string, field: K, value: Settings[K]) =>
+	updateTaskSettings(taskId, { [field]: value } as Partial<Settings>)
 
 /**
  * Updates multiple task-level settings for a specific task.
@@ -65,7 +90,9 @@ export const updateTaskSettings = (taskId: string | undefined, settings: Partial
 		settings,
 	})
 
-	return StateServiceClient.updateTaskSettings(request).catch((error) => {
-		console.error(`Failed to update task settings for task ${taskId ?? "active"}:`, error)
-	})
+	return settingsRequestTracker.track(
+		settingsRequestKeys(`task:${taskId ?? "active"}`, Object.keys(settings)),
+		StateServiceClient.updateTaskSettings(request),
+		`Failed to update task settings for task ${taskId ?? "active"}:`,
+	)
 }

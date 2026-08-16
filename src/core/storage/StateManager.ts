@@ -5,6 +5,7 @@ import {
 	type GlobalState,
 	type GlobalStateAndSettings,
 	type GlobalStateAndSettingsKey,
+	getDefaultValue,
 	isSecretKey,
 	isSettingsKey,
 	type LocalState,
@@ -18,6 +19,8 @@ import {
 	SettingsKeys,
 } from "@shared/storage/state-keys"
 import type { StorageContext } from "@shared/storage/storage-context"
+import { taskServiceTierOverrideFromFields } from "@shared/task-provider-overrides"
+import { taskReasoningOverrideFromFields } from "@shared/task-reasoning"
 import { initializeDistinctId } from "@/services/logging/distinctId"
 import { Logger } from "@/shared/services/Logger"
 import { fileExistsAtPath } from "@/utils/fs"
@@ -36,6 +39,8 @@ import {
 	setFirebaseAccountId,
 	setWandbApiKey,
 } from "./secrets"
+import { SettingsRepository } from "./settings/SettingsRepository"
+import type { SettingsCommit, SettingsSnapshot } from "./settings/settings-types"
 import { TaskHistory } from "./TaskHistory"
 import { readGlobalStateFromStorage, readSecretsFromStorage, readWorkspaceStateFromStorage } from "./utils/state-helpers"
 export interface PersistenceErrorEvent {
@@ -50,18 +55,13 @@ export interface PersistenceErrorEvent {
  * This is shared across all platforms (VSCode, CLI, JetBrains).
  *
  * MULTI-INSTANCE BEHAVIOR:
- * StateManager reads from disk ONLY during initialize(). After that, all reads come from
- * the in-memory cache. Writes update both the cache and disk, but other running instances
- * won't see those changes because they don't re-read from disk.
+ * Settings are committed through the revisioned SettingsRepository. Each instance keeps an
+ * in-memory snapshot for reads, reconciles higher committed revisions through a file watcher,
+ * and publishes committed changes to every registered controller in the process.
  *
- * This means: If you have multiple VS Code windows open, each has its own StateManager
- * instance with its own cache. Changing a setting (like plan/act mode) in Window A writes
- * to disk, but Window B keeps using its cached value. Window B only sees the change after
- * restart (when it re-initializes from disk).
- *
- * This is intentional for performance (avoids constant disk reads) and provides natural
- * isolation between concurrent instances. Task-specific state is independent anyway since
- * each window typically runs different tasks.
+ * Task-scoped state remains isolated by task ID. Global Settings are shared facts and converge
+ * across running VS Code instances without allowing stale full-file writes to overwrite newer
+ * keys.
  */
 export class StateManager {
 	private static instance: StateManager | null = null
@@ -69,6 +69,9 @@ export class StateManager {
 	private globalStateCache: GlobalStateAndSettings = {} as GlobalStateAndSettings
 	/** Settings cache — non-deprecated SETTINGS_FIELDS, persisted to settings/settings.json */
 	private settingsCache: Settings = {} as Settings
+	/** Legacy/global defaults used only while the first canonical Settings snapshot is applied. */
+	private settingsFallbackCache: Partial<Settings> = {}
+	private settingsFallbackActive = true
 	/** Per-task settings cache keyed by taskId. null/undefined keys use empty fallback. */
 	private taskStateCache = new Map<string, Partial<Settings>>()
 	private sessionOverrideCache: Partial<Settings> = {}
@@ -83,6 +86,9 @@ export class StateManager {
 	 * Do NOT access VSCode's ExtensionContext for storage — use this instead.
 	 */
 	private storage: StorageContext
+	private settingsRepository?: SettingsRepository
+	private settingsRepositoryUnsubscribe?: () => void
+	private appliedSettingsRevision = 0
 	private isInitialized = false
 
 	// Cache TTL: 1 hour - long enough to prevent duplicate fetches, short enough to see new models
@@ -124,6 +130,9 @@ export class StateManager {
 	private pendingSecrets = new Set<SecretKey>()
 	private pendingWorkspaceState = new Set<LocalStateKey>()
 	private persistenceTimeout: NodeJS.Timeout | null = null
+	private persistenceQueue: Promise<void> = Promise.resolve()
+	private shuttingDown = false
+	private shutdownPromise?: Promise<void>
 	private readonly PERSISTENCE_DELAY_MS = 2000
 
 	// Callbacks for persistence errors — multiple controllers may register.
@@ -165,12 +174,13 @@ export class StateManager {
 			const secrets = readSecretsFromStorage(storage.secrets)
 			const workspaceState = readWorkspaceStateFromStorage(storage.workspaceState)
 
-			// Load settings from settings.json (or migrate from globalState)
-			await StateManager.loadAndMigrateSettings(storage, globalState)
-
-			// Populate the cache with all extension state and secrets fields
-			// Use populate method to avoid triggering persistence during initialization
+			// Populate non-Settings caches without triggering persistence during initialization.
 			StateManager.instance.populateCache(globalState, secrets, workspaceState)
+			StateManager.instance.captureSettingsFallbackCache()
+
+			// Load Settings from the canonical repository after global state so the
+			// committed Settings snapshot remains authoritative for overlapping keys.
+			await StateManager.loadAndMigrateSettings(storage, globalState)
 
 			// Create TaskHistory inside the injected storage boundary.
 			const filePath = storage.taskHistoryPath
@@ -234,9 +244,22 @@ export class StateManager {
 	private static async loadAndMigrateSettings(storage: StorageContext, globalState: GlobalStateAndSettings): Promise<void> {
 		const instance = StateManager.instance!
 		const SETTINGS_MIGRATION_VERSION_KEY = "__settingsMigrationVersion"
+		const repository = new SettingsRepository({ filePath: storage.settingsFilePath })
+		instance.settingsRepository = repository
+		instance.settingsRepositoryUnsubscribe = repository.subscribe((commit) => instance.applySettingsCommit(commit))
 
-		// List of deprecated settings keys that should NOT be migrated
-		const DEPRECATED_SETTINGS = new Set([
+		await repository.initialize()
+		instance.applySettingsSnapshot(repository.readSnapshot())
+
+		const existingSentinel = (repository.readSnapshot().values as Record<string, unknown>)[SETTINGS_MIGRATION_VERSION_KEY]
+		if (typeof existingSentinel === "number" && existingSentinel >= 1) {
+			instance.disableSettingsFallback()
+			return
+		}
+
+		// Deprecated Settings remain in legacy global state and are not copied into
+		// the canonical Settings document during the one-time migration.
+		const deprecatedSettings = new Set([
 			"planModeOcaModelId",
 			"planModeOcaModelInfo",
 			"planModeOcaReasoningEffort",
@@ -253,36 +276,104 @@ export class StateManager {
 			"planModeReasoningEffort",
 			"actModeReasoningEffort",
 		])
-
-		// 1. Read existing settings.json — check sentinel
-		const existingSentinel = storage.settings.get(SETTINGS_MIGRATION_VERSION_KEY) as number | undefined
-		if (existingSentinel !== undefined && existingSentinel >= 1) {
-			// Already migrated — load settings from settings.json
-			const keys = storage.settings.keys()
-			for (const key of keys) {
-				if (key === SETTINGS_MIGRATION_VERSION_KEY) continue
-				const value = storage.settings.get(key)
-				if (value !== undefined) {
-					;(instance.settingsCache as Record<string, unknown>)[key] = value
-				}
-			}
-			return
-		}
-
-		// 2. Migration needed: extract non-deprecated SettingsKeys from globalState
 		const settingsEntries: Record<string, unknown> = {}
 		for (const key of SettingsKeys) {
-			if (DEPRECATED_SETTINGS.has(key as string)) continue
+			if (deprecatedSettings.has(key as string)) continue
 			const value = (globalState as Record<string, unknown>)[key as string]
 			if (value !== undefined) {
-				;(instance.settingsCache as Record<string, unknown>)[key as string] = value
 				settingsEntries[key as string] = value
 			}
 		}
-
-		// 3. Write settings.json with sentinel
 		settingsEntries[SETTINGS_MIGRATION_VERSION_KEY] = 1
-		storage.settingsBackingStore.setBatch(settingsEntries as Record<string, any>)
+
+		await repository.mutate(settingsEntries as Partial<Settings>)
+		instance.applySettingsSnapshot(repository.readSnapshot())
+		instance.disableSettingsFallback()
+	}
+
+	private captureSettingsFallbackCache(): void {
+		const fallback = this.settingsFallbackCache as Record<string, unknown>
+		const global = this.globalStateCache as Record<string, unknown>
+		for (const key of SettingsKeys) {
+			const value = global[key as string]
+			if (value !== undefined) {
+				fallback[key as string] = value
+			}
+		}
+	}
+
+	private async applySettingsCommit(commit: SettingsCommit): Promise<void> {
+		if (commit.revision <= this.appliedSettingsRevision) {
+			return
+		}
+		this.applySettingsSnapshot(commit.snapshot)
+		await this.notifySyncExternalChange()
+	}
+
+	private applySettingsSnapshot(snapshot: SettingsSnapshot): void {
+		const pendingValues = new Map<string, unknown>()
+		for (const key of this.pendingSettings) {
+			pendingValues.set(key as string, (this.settingsCache as Record<string, unknown>)[key as string])
+		}
+
+		this.settingsCache = { ...(snapshot.values as Settings) }
+		this.appliedSettingsRevision = snapshot.revision
+		const settingsRecord = this.settingsCache as Record<string, unknown>
+		const globalRecord = this.globalStateCache as Record<string, unknown>
+		for (const key of SettingsKeys) {
+			const keyName = key as string
+			const value = settingsRecord[keyName]
+			if (value !== undefined) {
+				globalRecord[keyName] = value
+				continue
+			}
+
+			const fallbackValue = this.settingsFallbackActive
+				? (this.settingsFallbackCache as Record<string, unknown>)[keyName]
+				: undefined
+			if (fallbackValue !== undefined) {
+				globalRecord[keyName] = fallbackValue
+				continue
+			}
+
+			const defaultValue = getDefaultValue(key)
+			if (defaultValue !== undefined) {
+				globalRecord[keyName] = defaultValue
+			} else {
+				delete globalRecord[keyName]
+			}
+		}
+
+		// Preserve optimistic local mutations until their own transaction commits.
+		for (const [key, value] of pendingValues) {
+			if (value === undefined) {
+				// The missing Settings key has already been projected to its declared
+				// default above; only remove the explicit value from the canonical cache.
+				delete settingsRecord[key]
+			} else {
+				settingsRecord[key] = value
+				globalRecord[key] = value
+			}
+		}
+	}
+
+	private disableSettingsFallback(): void {
+		this.settingsFallbackActive = false
+		this.settingsFallbackCache = {}
+	}
+
+	private async notifySyncExternalChange(): Promise<void> {
+		const callbacks = new Set(this.onSyncExternalChangeCallbacks)
+		if (this.onSyncExternalChange) {
+			callbacks.add(this.onSyncExternalChange)
+		}
+		for (const callback of callbacks) {
+			try {
+				await callback()
+			} catch (error) {
+				Logger.error("[StateManager] Failed to broadcast committed Settings state:", error)
+			}
+		}
 	}
 
 	public static get(): StateManager {
@@ -302,8 +393,41 @@ export class StateManager {
 
 		const taskHistory = instance._taskHistory
 		instance._taskHistory = null
-		instance.dispose()
-		await Promise.all([taskHistory?.dispose(), AgentConfigLoader.resetInstanceForTests()])
+		await Promise.all([instance.dispose(), taskHistory?.dispose(), AgentConfigLoader.resetInstanceForTests()])
+	}
+
+	/**
+	 * Flush and dispose the singleton after all consumers have stopped using it.
+	 * The singleton remains visible until disposal completes so late cleanup can
+	 * still unregister callbacks against the same StateManager instance.
+	 */
+	public static async shutdown(): Promise<void> {
+		const instance = StateManager.instance
+		if (!instance) return
+		if (!instance.shutdownPromise) {
+			instance.shutdownPromise = instance.shutdownInstance()
+		}
+
+		try {
+			await instance.shutdownPromise
+			StateManager.instance = null
+		} catch (error) {
+			instance.shutdownPromise = undefined
+			throw error
+		}
+	}
+
+	private async shutdownInstance(): Promise<void> {
+		this.shuttingDown = true
+		try {
+			await this.flushPendingState()
+			const taskHistory = this._taskHistory
+			this._taskHistory = null
+			await Promise.all([this.dispose(), taskHistory?.dispose()])
+		} catch (error) {
+			this.shuttingDown = false
+			throw error
+		}
 	}
 
 	/**
@@ -347,13 +471,15 @@ export class StateManager {
 	/**
 	 * Set method for global state keys - updates cache immediately and schedules debounced persistence
 	 */
-	setGlobalState<K extends keyof GlobalStateAndSettings>(key: K, value: GlobalStateAndSettings[K]): void {
+	setGlobalState<K extends keyof GlobalStateAndSettings>(key: K, value: GlobalStateAndSettings[K] | undefined): void {
 		if (!this.isInitialized) {
 			throw new Error(STATE_MANAGER_NOT_INITIALIZED)
 		}
+		this.ensureMutationAllowed()
 
-		// Update cache immediately for instant access
-		this.globalStateCache[key] = value
+		// Update cache immediately for instant access. The public setter permits
+		// undefined as an explicit delete value even for fields with a default.
+		;(this.globalStateCache as Record<string, unknown>)[key as string] = value
 
 		// Add to pending persistence set and schedule debounced write
 		this.pendingGlobalState.add(key)
@@ -376,15 +502,21 @@ export class StateManager {
 		if (!this.isInitialized) {
 			throw new Error(STATE_MANAGER_NOT_INITIALIZED)
 		}
+		this.ensureMutationAllowed()
 
-		// Update cache in one go
-		// Using object.assign to because typescript is not able to infer the type of the updates object when using Object.entries
+		// Update the legacy cache and route every Settings key through the same
+		// canonical repository path used by setGlobalState().
 		Object.assign(this.globalStateCache, updates)
+		const updateRecord = updates as Record<string, unknown>
+		const settingsRecord = this.settingsCache as Record<string, unknown>
 
-		// Then track the keys for persistence
-		Object.keys(updates).forEach((key) => {
+		for (const key of Object.keys(updates)) {
 			this.pendingGlobalState.add(key as GlobalStateAndSettingsKey)
-		})
+			if (isSettingsKey(key)) {
+				settingsRecord[key] = updateRecord[key]
+				this.pendingSettings.add(key as SettingsKey)
+			}
+		}
 
 		// Schedule debounced persistence
 		this.scheduleDebouncedPersistence()
@@ -436,6 +568,7 @@ export class StateManager {
 	 * @param key The setting key that was modified
 	 */
 	markTaskSettingDirty(taskId: string, key: SettingsKey): void {
+		this.ensureMutationAllowed()
 		if (!this.pendingTaskState.has(taskId)) {
 			this.pendingTaskState.set(taskId, new Set())
 		}
@@ -470,6 +603,7 @@ export class StateManager {
 		if (!this.isInitialized) {
 			throw new Error(STATE_MANAGER_NOT_INITIALIZED)
 		}
+		this.ensureMutationAllowed()
 
 		// Update per-task cache immediately for instant access
 		const cache = this.getOrCreateTaskCache(taskId)
@@ -490,6 +624,7 @@ export class StateManager {
 		if (!this.isInitialized) {
 			throw new Error(STATE_MANAGER_NOT_INITIALIZED)
 		}
+		this.ensureMutationAllowed()
 
 		const cache = this.getOrCreateTaskCache(taskId)
 		delete cache[key]
@@ -508,6 +643,7 @@ export class StateManager {
 		if (!this.isInitialized) {
 			throw new Error(STATE_MANAGER_NOT_INITIALIZED)
 		}
+		this.ensureMutationAllowed()
 
 		// Update per-task cache in one go
 		const cache = this.getOrCreateTaskCache(taskId)
@@ -590,6 +726,7 @@ export class StateManager {
 		if (!this.isInitialized) {
 			throw new Error(STATE_MANAGER_NOT_INITIALIZED)
 		}
+		this.ensureMutationAllowed()
 
 		// Route to split stores for migrated keys
 		switch (key) {
@@ -621,6 +758,7 @@ export class StateManager {
 		if (!this.isInitialized) {
 			throw new Error(STATE_MANAGER_NOT_INITIALIZED)
 		}
+		this.ensureMutationAllowed()
 
 		// Update cache immediately for all keys
 		Object.entries(updates).forEach(([key, value]) => {
@@ -645,6 +783,7 @@ export class StateManager {
 		if (!this.isInitialized) {
 			throw new Error(STATE_MANAGER_NOT_INITIALIZED)
 		}
+		this.ensureMutationAllowed()
 
 		// Update cache immediately for instant access
 		this.workspaceStateCache[key] = value
@@ -661,6 +800,7 @@ export class StateManager {
 		if (!this.isInitialized) {
 			throw new Error(STATE_MANAGER_NOT_INITIALIZED)
 		}
+		this.ensureMutationAllowed()
 
 		// Update cache immediately for all keys
 		Object.entries(updates).forEach(([key, value]) => {
@@ -973,11 +1113,10 @@ export class StateManager {
 	 * Used for error recovery when write operations fail
 	 */
 	async reInitialize(currentTaskId?: string): Promise<void> {
-		if (this.persistenceTimeout) {
-			await this.persistPendingState()
-		}
-		// Clear all cached data and pending state
-		this.dispose()
+		await this.flushPendingState()
+		const taskHistory = this._taskHistory
+		this._taskHistory = null
+		await Promise.all([this.dispose(), taskHistory?.dispose()])
 
 		// Reinitialize from the same storage context
 		await StateManager.initialize(this.storage)
@@ -991,7 +1130,7 @@ export class StateManager {
 	/**
 	 * Dispose of the state manager
 	 */
-	private dispose(): void {
+	private async dispose(): Promise<void> {
 		if (this.persistenceTimeout) {
 			clearTimeout(this.persistenceTimeout)
 			this.persistenceTimeout = null
@@ -1002,14 +1141,23 @@ export class StateManager {
 		this.pendingWorkspaceState.clear()
 		this.pendingTaskState.clear()
 
+		this.settingsRepositoryUnsubscribe?.()
+		this.settingsRepositoryUnsubscribe = undefined
+		const settingsRepository = this.settingsRepository
+		this.settingsRepository = undefined
+		await settingsRepository?.dispose()
+
 		this.globalStateCache = {} as GlobalStateAndSettings
 		this.settingsCache = {} as Settings
+		this.settingsFallbackCache = {}
+		this.settingsFallbackActive = true
 		this.secretsCache = {} as Secrets
 		this.workspaceStateCache = {} as LocalState
 		this.taskStateCache.clear()
 		this.activeTaskId = undefined
 		this.remoteConfigCache = {} as GlobalStateAndSettings
 		this.sessionOverrideCache = {}
+		this.appliedSettingsRevision = 0
 
 		this.isInitialized = false
 	}
@@ -1018,33 +1166,77 @@ export class StateManager {
 	 * Private method to persist all pending state changes
 	 * Returns early if nothing is pending
 	 */
-	private async persistPendingState(): Promise<void> {
-		// Early return if nothing to persist
-		if (
-			this.pendingGlobalState.size === 0 &&
-			this.pendingSettings.size === 0 &&
-			this.pendingSecrets.size === 0 &&
-			this.pendingWorkspaceState.size === 0 &&
-			this.pendingTaskState.size === 0
-		) {
-			return
+	private hasPendingState(): boolean {
+		return (
+			this.pendingGlobalState.size > 0 ||
+			this.pendingSettings.size > 0 ||
+			this.pendingSecrets.size > 0 ||
+			this.pendingWorkspaceState.size > 0 ||
+			this.pendingTaskState.size > 0
+		)
+	}
+
+	private ensureMutationAllowed(): void {
+		if (this.shuttingDown) {
+			throw new Error("StateManager is shutting down")
 		}
+	}
 
-		// Execute all persistence operations in parallel
-		await Promise.all([
-			this.persistGlobalStateBatch(this.pendingGlobalState),
-			this.persistSettingsBatch(this.pendingSettings),
-			this.persistSecretsBatch(this.pendingSecrets),
-			this.persistWorkspaceStateBatch(this.pendingWorkspaceState),
-			this.persistTaskStateBatch(this.pendingTaskState),
-		])
+	private persistPendingState(): Promise<void> {
+		const operation = this.persistenceQueue.then(async () => {
+			if (
+				this.pendingGlobalState.size === 0 &&
+				this.pendingSettings.size === 0 &&
+				this.pendingSecrets.size === 0 &&
+				this.pendingWorkspaceState.size === 0 &&
+				this.pendingTaskState.size === 0
+			) {
+				return
+			}
 
-		// Clear pending sets after successful persistence
-		this.pendingGlobalState.clear()
-		this.pendingSettings.clear()
-		this.pendingSecrets.clear()
-		this.pendingWorkspaceState.clear()
-		this.pendingTaskState.clear()
+			// Swap the dirty collections before writing. Mutations created while this
+			// batch is in flight land in fresh collections and cannot be cleared by it.
+			const pendingGlobalState = this.pendingGlobalState
+			const pendingSettings = this.pendingSettings
+			const pendingSecrets = this.pendingSecrets
+			const pendingWorkspaceState = this.pendingWorkspaceState
+			const pendingTaskState = this.pendingTaskState
+			this.pendingGlobalState = new Set()
+			this.pendingSettings = new Set()
+			this.pendingSecrets = new Set()
+			this.pendingWorkspaceState = new Set()
+			this.pendingTaskState = new Map()
+
+			try {
+				await Promise.all([
+					this.persistGlobalStateBatch(pendingGlobalState),
+					this.persistSettingsBatch(pendingSettings),
+					this.persistSecretsBatch(pendingSecrets),
+					this.persistWorkspaceStateBatch(pendingWorkspaceState),
+					this.persistTaskStateBatch(pendingTaskState),
+				])
+			} catch (error) {
+				// A partially successful batch is safe to retry because each store writes
+				// current cache values. Merge failed batch keys behind newer mutations.
+				for (const key of pendingGlobalState) this.pendingGlobalState.add(key)
+				for (const key of pendingSettings) this.pendingSettings.add(key)
+				for (const key of pendingSecrets) this.pendingSecrets.add(key)
+				for (const key of pendingWorkspaceState) this.pendingWorkspaceState.add(key)
+				for (const [taskId, keys] of pendingTaskState) {
+					let currentKeys = this.pendingTaskState.get(taskId)
+					if (!currentKeys) {
+						currentKeys = new Set()
+						this.pendingTaskState.set(taskId, currentKeys)
+					}
+					for (const key of keys) currentKeys.add(key)
+				}
+				throw error
+			}
+		})
+
+		// Keep later flushes ordered even when one caller observes a rejection.
+		this.persistenceQueue = operation.catch(() => undefined)
+		return operation
 	}
 
 	/**
@@ -1058,8 +1250,13 @@ export class StateManager {
 			this.persistenceTimeout = null
 		}
 
-		// Execute persistence immediately
-		await this.persistPendingState()
+		// Mutations are normally allowed while a regular flush is in progress. Keep
+		// draining until the queue and all dirty collections are empty; shutdown sets
+		// shuttingDown first so no new mutation can be admitted during this loop.
+		do {
+			await this.persistPendingState()
+			await this.settingsRepository?.flush()
+		} while (this.hasPendingState())
 	}
 
 	/**
@@ -1071,32 +1268,41 @@ export class StateManager {
 			clearTimeout(this.persistenceTimeout)
 		}
 
-		// Schedule a new timeout to persist pending changes
-		this.persistenceTimeout = setTimeout(async () => {
+		// Schedule a new timeout to persist pending changes. Clear only this timer's
+		// token so a mutation created during the write keeps its own debounce timer.
+		const timeout = setTimeout(async () => {
+			if (this.persistenceTimeout === timeout) {
+				this.persistenceTimeout = null
+			}
 			try {
 				await this.persistPendingState()
-				this.persistenceTimeout = null
 			} catch (error) {
 				Logger.error("[StateManager] Failed to persist pending changes:", error)
-				this.persistenceTimeout = null
 
 				// Call persistence error callback for error recovery
 				this.onPersistenceError?.({ error: error })
 			}
 		}, this.PERSISTENCE_DELAY_MS)
+		this.persistenceTimeout = timeout
 	}
 
 	/**
 	 * Persist settings keys to settings/settings.json via StorageContext.
 	 */
 	private async persistSettingsBatch(keys: Set<SettingsKey>): Promise<void> {
-		const entries: Record<string, any> = {}
+		if (keys.size === 0) {
+			return
+		}
+		const repository = this.settingsRepository
+		if (!repository) {
+			throw new Error("Settings repository is not initialized")
+		}
+		const entries: Partial<Settings> = {}
+		const settingsRecord = entries as Record<string, unknown>
 		for (const key of keys) {
-			entries[key] = this.settingsCache[key]
+			settingsRecord[key as string] = (this.settingsCache as Record<string, unknown>)[key as string]
 		}
-		if (Object.keys(entries).length > 0) {
-			this.storage.settingsBackingStore.setBatch(entries)
-		}
+		await repository.mutate(entries)
 	}
 
 	/**
@@ -1247,9 +1453,41 @@ export class StateManager {
 			// If api_profiles.json can't be read, fall back to secretsCache only
 		}
 
+		const taskCache = taskId ? this.taskStateCache.get(taskId) : undefined
+		const planModeReasoningOverride = taskReasoningOverrideFromFields(
+			{
+				kind: taskCache?.planModeReasoningOverrideKind,
+				effort: taskCache?.planModeReasoningOverrideEffort,
+				budgetTokens: taskCache?.planModeThinkingBudgetTokens,
+			},
+			taskCache?.planModeReasoningEffort,
+		)
+		const actModeReasoningOverride = taskReasoningOverrideFromFields(
+			{
+				kind: taskCache?.actModeReasoningOverrideKind,
+				effort: taskCache?.actModeReasoningOverrideEffort,
+				budgetTokens: taskCache?.actModeThinkingBudgetTokens,
+			},
+			taskCache?.actModeReasoningEffort,
+		)
+		const planModeServiceTierOverride = taskServiceTierOverrideFromFields({
+			kind: taskCache?.planModeServiceTierOverrideKind,
+			tier: taskCache?.planModeServiceTierOverrideTier,
+		})
+		const actModeServiceTierOverride = taskServiceTierOverrideFromFields({
+			kind: taskCache?.actModeServiceTierOverrideKind,
+			tier: taskCache?.actModeServiceTierOverrideTier,
+		})
+
 		return {
+			planModeProfileId: this.getSettingWithOverrideForTask("planModeProfileId", taskId),
 			planModeProfile: this.getSettingWithOverrideForTask("planModeProfile", taskId),
+			actModeProfileId: this.getSettingWithOverrideForTask("actModeProfileId", taskId),
 			actModeProfile: this.getSettingWithOverrideForTask("actModeProfile", taskId),
+			...(planModeReasoningOverride && { planModeReasoningOverride }),
+			...(actModeReasoningOverride && { actModeReasoningOverride }),
+			...(planModeServiceTierOverride && { planModeServiceTierOverride }),
+			...(actModeServiceTierOverride && { actModeServiceTierOverride }),
 			requestTimeoutMs: this.getSettingWithOverrideForTask("requestTimeoutMs", taskId),
 			enableParallelToolCalling: this.getSettingWithOverrideForTask("enableParallelToolCalling", taskId),
 		} satisfies ApiConfiguration

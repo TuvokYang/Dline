@@ -197,8 +197,19 @@ export async function tearDown(): Promise<void> {
 	telemetryService.dispose()
 	ErrorService.get().dispose()
 	featureFlagsService.dispose()
+
+	// Flush once before controller disposal so edits made by Settings controls are
+	// durable, then flush again as part of StateManager shutdown for cleanup writes
+	// produced while controllers release their task resources.
+	try {
+		await StateManager.get().flushPendingState()
+	} catch (error) {
+		Logger.error("[Dline] Initial StateManager shutdown flush failed:", error)
+	}
+
 	// Dispose all webview instances
 	await WebviewProvider.disposeAllInstances()
+	await StateManager.shutdown()
 	syncWorker().dispose()
 	clearOnboardingModelsCache()
 

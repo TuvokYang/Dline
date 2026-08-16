@@ -1,10 +1,11 @@
 import { EmptyRequest } from "@shared/proto/dline/common"
 import { ApiProfile, ApiProfilesResponse, UpdateApiProfilesRequest } from "@shared/proto/dline/profile"
+import { PlanActMode, ProfileSwitchRequest, ProfileSwitchStatus } from "@shared/proto/dline/state"
 import PROVIDERS from "@shared/providers/providers.json"
 import deepEqual from "fast-deep-equal"
-import { useCallback, useEffect, useMemo, useState } from "react"
-import { updateSetting, updateTaskSettings } from "@/components/settings/utils/settingsHandlers"
-import { FileServiceClient } from "@/services/grpc-client"
+import { useCallback, useContext, useEffect, useMemo, useState } from "react"
+import { ExtensionStateContext } from "../../../context/ExtensionStateContext"
+import { FileServiceClient, StateServiceClient } from "../../../services/grpc-client"
 import { createEmptyApiProfile, generateApiProfileName } from "./ProviderProfile"
 
 export interface ProfileUpdateResult {
@@ -18,6 +19,7 @@ let sharedProfiles: ApiProfile[] = []
 let sharedLoaded = false
 let sharedLoadError: Error | undefined
 let sharedLoadPromise: Promise<ApiProfile[]> | undefined
+let sharedCatalogRevision = -1
 let sharedPersistQueue: Promise<void> = Promise.resolve()
 let sharedSelectionQueue: Promise<void> = Promise.resolve()
 const profileListeners = new Set<() => void>()
@@ -31,14 +33,23 @@ function replaceSharedProfiles(profiles: ApiProfile[]): void {
 	notifyProfileListeners()
 }
 
-function loadSharedProfiles(force = false): Promise<ApiProfile[]> {
-	if (sharedLoadPromise && !force) return sharedLoadPromise
-	if (sharedLoaded && !force) return Promise.resolve(sharedProfiles)
+function loadSharedProfiles(catalogRevision?: number, force = false): Promise<ApiProfile[]> {
+	if (sharedLoadPromise) {
+		return sharedLoadPromise.then(() =>
+			catalogRevision !== undefined && sharedCatalogRevision !== catalogRevision
+				? loadSharedProfiles(catalogRevision, true)
+				: sharedProfiles,
+		)
+	}
+	if (sharedLoaded && !force && (catalogRevision === undefined || sharedCatalogRevision === catalogRevision)) {
+		return Promise.resolve(sharedProfiles)
+	}
 
 	const request = FileServiceClient.getApiProfiles({} as EmptyRequest)
 		.then((response: ApiProfilesResponse) => {
 			sharedProfiles = response.profiles || []
 			sharedLoaded = true
+			if (catalogRevision !== undefined) sharedCatalogRevision = catalogRevision
 			sharedLoadError = undefined
 			notifyProfileListeners()
 			return sharedProfiles
@@ -66,7 +77,7 @@ function persistSharedProfiles(profiles: ApiProfile[]): void {
 		.catch((error: unknown) => {
 			sharedLoadError = error instanceof Error ? error : new Error(String(error))
 			notifyProfileListeners()
-			void loadSharedProfiles(true).catch(() => undefined)
+			void loadSharedProfiles(undefined, true).catch(() => undefined)
 		})
 }
 
@@ -92,13 +103,22 @@ export function applyProfileUpdate(prev: ApiProfile[], id: string, updates: Part
 	return { profiles: changed ? next : prev, changed }
 }
 
-export function buildProfileSettings(
-	profileName: string,
-	modes: ProfileMode[],
-): { planModeProfile?: string; actModeProfile?: string } {
-	return modes.reduce<{ planModeProfile?: string; actModeProfile?: string }>((settings, mode) => {
-		if (mode === "plan") settings.planModeProfile = profileName
-		else settings.actModeProfile = profileName
+type ProfileSettings = {
+	planModeProfileId?: string
+	planModeProfile?: string
+	actModeProfileId?: string
+	actModeProfile?: string
+}
+
+export function buildProfileSettings(profileId: string, profileName: string, modes: ProfileMode[]): ProfileSettings {
+	return modes.reduce<ProfileSettings>((settings, mode) => {
+		if (mode === "plan") {
+			settings.planModeProfileId = profileId
+			settings.planModeProfile = profileName
+		} else {
+			settings.actModeProfileId = profileId
+			settings.actModeProfile = profileName
+		}
 		return settings
 	}, {})
 }
@@ -115,15 +135,20 @@ export function useApiProfiles() {
 	const [, forceRender] = useState(0)
 	const [expandedId, setExpandedId] = useState<string | null>(null)
 	const [editMode, setEditMode] = useState(false)
+	const extensionState = useContext(ExtensionStateContext)
+	const profileCatalogRevision = extensionState?.profileCatalogRevision ?? 0
 
 	useEffect(() => {
 		const listener = () => forceRender((value) => value + 1)
 		profileListeners.add(listener)
-		void loadSharedProfiles().catch(() => undefined)
 		return () => {
 			profileListeners.delete(listener)
 		}
 	}, [])
+
+	useEffect(() => {
+		void loadSharedProfiles(profileCatalogRevision).catch(() => undefined)
+	}, [profileCatalogRevision])
 
 	const persist = useCallback((profiles: ApiProfile[]) => {
 		if (!sharedLoaded) return
@@ -165,17 +190,18 @@ export function useApiProfiles() {
 	const selectProfiles = useCallback((id: string, modes: ProfileMode[], taskId?: string, hasActiveTask = false) => {
 		const profile = sharedProfiles.find((item) => item.id === id)
 		if (!profile) return Promise.resolve()
-		const settings = buildProfileSettings(profile.name || "", modes)
 		sharedSelectionQueue = sharedSelectionQueue
 			.catch(() => undefined)
 			.then(async () => {
-				if (shouldUseTaskProfileSettings(taskId, hasActiveTask)) {
-					await updateTaskSettings(taskId, settings)
-					return
-				}
-				await Promise.all(
-					Object.entries(settings).map(([field, value]) => updateSetting(field as keyof typeof settings, value)),
+				const response = await StateServiceClient.requestProfileSwitch(
+					ProfileSwitchRequest.create({
+						targetProfile: profile.id,
+						targetModes: modes.map((mode) => (mode === "plan" ? PlanActMode.PLAN : PlanActMode.ACT)),
+					}),
 				)
+				if (response.status === ProfileSwitchStatus.PROFILE_SWITCH_STATUS_REJECTED) {
+					throw new Error(response.error || `Profile not valid: "${profile.name}" could not be selected.`)
+				}
 			})
 		return sharedSelectionQueue
 	}, [])
@@ -223,6 +249,6 @@ export function useApiProfiles() {
 		providerOptions,
 		loaded: sharedLoaded,
 		error: sharedLoadError,
-		reloadProfiles: () => loadSharedProfiles(true),
+		reloadProfiles: () => loadSharedProfiles(profileCatalogRevision, true),
 	}
 }

@@ -5,6 +5,7 @@
  */
 
 import { ModelRegistry } from "@core/model-registry/ModelRegistry"
+import { recordProfileCatalogBaseline } from "@core/profiles/profile-catalog-state"
 import { getDlineDataDir, getDlineHomePath } from "@core/storage/disk"
 import {
 	getAllProviderSecrets,
@@ -159,15 +160,19 @@ function readProfilesFromJson(data: unknown): ApiProfile[] {
 
 export function normalizeApiProfile(profile: unknown): ApiProfile {
 	const normalized = ApiProfile.fromJSON(profile ?? {})
+	let migrated = false
 	if (profile && typeof profile === "object") {
 		const rawProfile = profile as Record<string, unknown>
+		if (!Object.hasOwn(rawProfile, "enabled")) {
+			normalized.enabled = true
+			migrated = true
+		}
 		const rawModelInfo = rawProfile.modelInfo ?? rawProfile.model_info
 		if (rawModelInfo && typeof rawModelInfo === "object") {
 			normalized.modelInfo = rawModelInfo as ApiProfile["modelInfo"]
 		}
 	}
 
-	let migrated = false
 	const openai = normalized.openai
 	if (openai && openai.apiFormat === undefined) {
 		const legacyApiFormat = openAiEndpointToApiFormat(openai.apiEndpoint)
@@ -277,6 +282,7 @@ export function serializeApiProfilesForStorage(profiles: ApiProfile[]): unknown[
 		const modelInfo = getProfileModelInfoOverride(profile)
 		const sanitized = stripEmbeddedProviderSecrets(profile)
 		const serialized = ApiProfile.toJSON({ ...sanitized, apiKey: "", modelInfo: undefined }) as Record<string, unknown>
+		serialized.enabled = sanitized.enabled
 		delete serialized.apiKey
 		delete serialized.api_key
 		delete serialized.model_info
@@ -429,8 +435,10 @@ export async function getApiProfiles(controller: Controller, _request: EmptyRequ
 		// posting on every read causes excessive webview re-renders and
 		// contributes to updateApiProfiles call storms).
 		if (defaultsChanged) {
+			await controller.stateManager.flushPendingState()
 			await controller.postStateToWebview()
 		}
+		recordProfileCatalogBaseline(controller, profiles)
 		return ApiProfilesResponse.create({ profiles })
 	} catch (err: any) {
 		if (err.code === "ENOENT") {
@@ -447,9 +455,12 @@ export async function getApiProfiles(controller: Controller, _request: EmptyRequ
 			// reads planModeProfile/actModeProfile, so it sees the latest values
 			// and doesn't incorrectly reset to the provider default.
 			await controller.stateManager.flushPendingState()
-			ensureProfileDefaults(controller, profiles)
+			if (ensureProfileDefaults(controller, profiles)) {
+				await controller.stateManager.flushPendingState()
+			}
 			// Always post on first initialization so webview picks up defaults
 			await controller.postStateToWebview()
+			recordProfileCatalogBaseline(controller, profiles)
 			return ApiProfilesResponse.create({ profiles })
 		}
 		Logger.error("[getApiProfiles] Failed to read api_profiles.json:", err)
@@ -458,25 +469,13 @@ export async function getApiProfiles(controller: Controller, _request: EmptyRequ
 }
 
 /**
- * Ensure planModeProfile and actModeProfile are set to valid profile names.
- * Reads providers.json lastUsedProvider as the default when no profile is set.
- * Falls back to first matching profile if the stored profile no longer exists.
- *
- * @returns true if any global state was modified (profiles defaults were set)
+ * Initialize an absent global Profile binding or migrate one unique legacy name.
+ * Explicit missing IDs, missing names, and ambiguous legacy names remain unchanged
+ * so Task admission can fail closed instead of silently selecting a fallback.
  */
 function ensureProfileDefaults(controller: Controller, profiles: ApiProfile[]): boolean {
 	const apiConfig = controller.stateManager.getApiConfiguration()
-	const planExists = !!(apiConfig.planModeProfile && profiles.some((p) => p.name === apiConfig.planModeProfile))
-	const actExists = !!(apiConfig.actModeProfile && profiles.some((p) => p.name === apiConfig.actModeProfile))
-	Logger.debug("[ensureProfileDefaults]", {
-		plan: apiConfig.planModeProfile,
-		planExists,
-		act: apiConfig.actModeProfile,
-		actExists,
-		profileCount: profiles.length,
-	})
 
-	// Read lastUsedProvider from providers.json as migration default
 	let lastUsedProvider: string | undefined
 	try {
 		const providersPath = path.join(getDlineDataDir(), "settings", "providers.json")
@@ -486,34 +485,47 @@ function ensureProfileDefaults(controller: Controller, profiles: ApiProfile[]): 
 			lastUsedProvider = data?.lastUsedProvider as string | undefined
 		}
 	} catch {
-		// providers.json may not exist or be malformed
+		// providers.json may not exist or be malformed.
 	}
 
-	let changed = false
+	const reconcileMode = (mode: "plan" | "act"): boolean => {
+		const idKey = mode === "plan" ? "planModeProfileId" : "actModeProfileId"
+		const nameKey = mode === "plan" ? "planModeProfile" : "actModeProfile"
+		const profileId = apiConfig[idKey]
+		const profileName = apiConfig[nameKey]
 
-	if (!planExists) {
-		// Prefer lastUsedProvider if available
-		const planProfile = lastUsedProvider
-			? profiles.find((p) => p.provider === lastUsedProvider && p.usedFor.includes("plan"))
-			: undefined
-		const fallback = planProfile || profiles.find((p) => p.usedFor.includes("plan"))
-		if (fallback) {
-			controller.stateManager.setGlobalState("planModeProfile", fallback.name)
-			changed = true
+		if (profileId) {
+			const profile = profiles.find((candidate) => candidate.id === profileId)
+			if (!profile || profile.name === profileName) return false
+			controller.stateManager.setGlobalState(idKey, profile.id)
+			controller.stateManager.setGlobalState(nameKey, profile.name)
+			return true
 		}
-	}
-	if (!actExists) {
-		const actProfile = lastUsedProvider
-			? profiles.find((p) => p.provider === lastUsedProvider && p.usedFor.includes("act"))
-			: undefined
-		const fallback = actProfile || profiles.find((p) => p.usedFor.includes("act"))
-		if (fallback) {
-			controller.stateManager.setGlobalState("actModeProfile", fallback.name)
-			changed = true
+
+		if (profileName) {
+			const matches = profiles.filter((candidate) => candidate.name === profileName)
+			if (matches.length !== 1) return false
+			controller.stateManager.setGlobalState(idKey, matches[0].id)
+			controller.stateManager.setGlobalState(nameKey, matches[0].name)
+			return true
 		}
+
+		const matchingProvider = lastUsedProvider
+			? profiles.find(
+					(candidate) =>
+						candidate.enabled && candidate.provider === lastUsedProvider && candidate.usedFor.includes(mode),
+				)
+			: undefined
+		const initial = matchingProvider ?? profiles.find((candidate) => candidate.enabled && candidate.usedFor.includes(mode))
+		if (!initial) return false
+		controller.stateManager.setGlobalState(idKey, initial.id)
+		controller.stateManager.setGlobalState(nameKey, initial.name)
+		return true
 	}
 
-	return changed
+	const planChanged = reconcileMode("plan")
+	const actChanged = reconcileMode("act")
+	return planChanged || actChanged
 }
 
 /**
@@ -627,6 +639,21 @@ function initializeFromApiConfig(controller: Controller): ApiProfile[] {
 	return profiles
 }
 
+/** Read the latest persisted Catalog without consulting or updating the process cache. */
+export async function readApiProfilesFresh(): Promise<ApiProfile[]> {
+	const filePath = path.join(getDlineDataDir(), "settings", API_PROFILES_FILE)
+	try {
+		const raw = await fs.readFile(filePath, "utf8")
+		const profiles = parseApiProfilesJson(raw).profiles
+		hydrateApiKeys(profiles)
+		hydrateProviderSecrets(profiles)
+		return profiles
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return []
+		throw error
+	}
+}
+
 /**
  * Synchronously read ApiProfiles from disk.
  * Backfills apiKey from ApiKeyStore for each profile.
@@ -681,7 +708,7 @@ export function readApiProfiles(): ApiProfile[] {
  * with valid apiKeys before making model-list API calls.
  */
 export function findEnabledProfiles(provider: string): ApiProfile[] {
-	return readApiProfiles().filter((p) => p.provider === provider && p.enabled)
+	return readApiProfiles().filter((p) => p.provider === provider && p.enabled !== false)
 }
 
 export function findEnabledProfileByName(profileName?: string): ApiProfile | undefined {

@@ -165,7 +165,96 @@ describe("StateManager — Per-Task Settings Isolation", () => {
 		})
 	})
 
-	describe("settings dual-write to settings.json", () => {
+	describe("settings repository synchronization", () => {
+		it("broadcasts a committed Settings revision to every registered controller callback", async () => {
+			const first = vi.fn().mockResolvedValue(undefined)
+			const second = vi.fn().mockResolvedValue(undefined)
+			const disposeFirst = sm.registerCallbacks({ onSyncExternalChange: first })
+			const disposeSecond = sm.registerCallbacks({ onSyncExternalChange: second })
+
+			await (sm as any).settingsRepository.mutate({ chatInputSendShortcut: "ctrlEnter" })
+
+			expect(first).toHaveBeenCalledOnce()
+			expect(second).toHaveBeenCalledOnce()
+			disposeFirst()
+			disposeSecond()
+		})
+
+		it("uses the declared default after a committed Settings key is deleted", async () => {
+			await (sm as any).settingsRepository.mutate({ showFeatureTips: false })
+			sm.getGlobalSettingsKey("showFeatureTips").should.equal(false)
+
+			await (sm as any).settingsRepository.mutate({ showFeatureTips: undefined })
+
+			sm.getGlobalSettingsKey("showFeatureTips").should.equal(true)
+		})
+
+		it("restores the declared default after a StateManager Settings deletion is committed", async () => {
+			await (sm as any).settingsRepository.mutate({ showFeatureTips: false })
+			sm.getGlobalSettingsKey("showFeatureTips").should.equal(false)
+
+			sm.setGlobalState("showFeatureTips", undefined)
+			await sm.flushPendingState()
+
+			sm.getGlobalSettingsKey("showFeatureTips").should.equal(true)
+		})
+
+		it("routes Settings keys in a batch through the canonical repository", async () => {
+			sm.setGlobalStateBatch({
+				chatInputSendShortcut: "ctrlEnter",
+				terminalOutputLineLimit: 900,
+			})
+			await sm.flushPendingState()
+
+			const settingsStorage = createStorageContext({ clineDir: tempDir }).settings
+			settingsStorage.get("chatInputSendShortcut").should.equal("ctrlEnter")
+			settingsStorage.get("terminalOutputLineLimit").should.equal(900)
+		})
+
+		it("keeps pending Settings durable when the StateManager shuts down", async () => {
+			sm.setGlobalState("chatInputSendShortcut", "ctrlEnter")
+			await (StateManager as any).shutdown()
+
+			const restarted = await StateManager.initialize(createStorageContext({ clineDir: tempDir }))
+			restarted.getGlobalSettingsKey("chatInputSendShortcut").should.equal("ctrlEnter")
+		})
+
+		it("does not clear a Settings mutation created while an earlier flush is in flight", async () => {
+			const repository = (sm as any).settingsRepository as {
+				mutate: (patch: Partial<Record<string, unknown>>, sourceId?: string) => Promise<unknown>
+			}
+			const originalMutate = repository.mutate.bind(repository)
+			let releaseFirstCommit!: () => void
+			let markFirstCommitStarted!: () => void
+			const firstCommitStarted = new Promise<void>((resolve) => {
+				markFirstCommitStarted = resolve
+			})
+			const firstCommitRelease = new Promise<void>((resolve) => {
+				releaseFirstCommit = resolve
+			})
+			let isFirstCommit = true
+			vi.spyOn(repository, "mutate").mockImplementation(async (patch, sourceId) => {
+				if (isFirstCommit) {
+					isFirstCommit = false
+					markFirstCommitStarted()
+					await firstCommitRelease
+				}
+				return originalMutate(patch, sourceId)
+			})
+
+			sm.setGlobalState("chatInputSendShortcut", "ctrlEnter")
+			const firstFlush = sm.flushPendingState()
+			await firstCommitStarted
+			sm.setGlobalState("terminalOutputLineLimit", 900)
+			releaseFirstCommit()
+			await firstFlush
+			await sm.flushPendingState()
+
+			const settingsStorage = createStorageContext({ clineDir: tempDir }).settings
+			settingsStorage.get("chatInputSendShortcut").should.equal("ctrlEnter")
+			settingsStorage.get("terminalOutputLineLimit").should.equal(900)
+		})
+
 		it("should dual-write settings to settings.json and globalState.json", async () => {
 			sm.setGlobalState("mode" as any, "plan" as any)
 			await sm.flushPendingState()

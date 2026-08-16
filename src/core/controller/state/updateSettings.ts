@@ -1,5 +1,9 @@
 import { buildApiHandler } from "@core/api"
 import {
+	DEFAULT_AUTO_CONDENSE_MAX_RESERVE_TOKENS,
+	DEFAULT_AUTO_CONDENSE_MIN_RESERVE_TOKENS,
+	isValidAutoCondenseReservePair,
+	isValidAutoCondenseTokenSetting,
 	MAX_AUTO_CONDENSE_CONTEXT_TOKENS,
 	MAX_AUTO_CONDENSE_TRIGGER_PERCENT,
 	MIN_AUTO_CONDENSE_TRIGGER_PERCENT,
@@ -48,6 +52,31 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 		const localWebSearchEngine = request.localWebSearchEngine
 		if (localWebSearchEngine !== undefined && !isLocalSearchEngineId(localWebSearchEngine)) {
 			throw new Error(`Unsupported local web search engine: ${localWebSearchEngine}`)
+		}
+
+		const shouldUpdateMinReserve = request.autoCondenseMinReserveTokens !== undefined
+		const shouldUpdateMaxReserve = request.autoCondenseMaxReserveTokens !== undefined
+		let resolvedMinReserveTokens: number | undefined
+		let resolvedMaxReserveTokens: number | undefined
+		if (shouldUpdateMinReserve || shouldUpdateMaxReserve) {
+			resolvedMinReserveTokens = shouldUpdateMinReserve
+				? Number(request.autoCondenseMinReserveTokens)
+				: (controller.stateManager.getGlobalSettingsKey("autoCondenseMinReserveTokens") ??
+					DEFAULT_AUTO_CONDENSE_MIN_RESERVE_TOKENS)
+			resolvedMaxReserveTokens = shouldUpdateMaxReserve
+				? Number(request.autoCondenseMaxReserveTokens)
+				: (controller.stateManager.getGlobalSettingsKey("autoCondenseMaxReserveTokens") ??
+					DEFAULT_AUTO_CONDENSE_MAX_RESERVE_TOKENS)
+
+			if (
+				!isValidAutoCondenseTokenSetting(resolvedMinReserveTokens) ||
+				!isValidAutoCondenseTokenSetting(resolvedMaxReserveTokens)
+			) {
+				throw new Error(`Auto-compact reserve must be an integer from 0 to ${MAX_AUTO_CONDENSE_CONTEXT_TOKENS} tokens`)
+			}
+			if (!isValidAutoCondenseReservePair(resolvedMinReserveTokens, resolvedMaxReserveTokens)) {
+				throw new Error("Auto-compact reserve minimum cannot exceed maximum")
+			}
 		}
 
 		if (request.clineEnv !== undefined) {
@@ -278,6 +307,13 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 			controller.stateManager.setGlobalState("autoCondenseMaxContextTokens", maxContextTokens)
 		}
 
+		if (shouldUpdateMinReserve && resolvedMinReserveTokens !== undefined) {
+			controller.stateManager.setGlobalState("autoCondenseMinReserveTokens", resolvedMinReserveTokens)
+		}
+		if (shouldUpdateMaxReserve && resolvedMaxReserveTokens !== undefined) {
+			controller.stateManager.setGlobalState("autoCondenseMaxReserveTokens", resolvedMaxReserveTokens)
+		}
+
 		// Update focus chain settings
 		if (request.focusChainSettings !== undefined) {
 			{
@@ -444,6 +480,10 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 			// tasks retain their task-local bindings and handlers unchanged.
 		}
 
+		// A successful Settings RPC is a durable commit boundary. Reconfigure
+		// runtime components and publish the new state only after every pending
+		// storage write has completed successfully.
+		await controller.stateManager.flushPendingState()
 		await controller.configureGlobalComponents()
 
 		// Post updated state to webview

@@ -1,5 +1,24 @@
 import { useCallback, useEffect, useRef, useState } from "react"
-import { useDebounceEffect } from "@/utils/useDebounceEffect"
+
+type DebouncedInputChange<T> = (value: T) => unknown
+type FlushPendingInput = () => Promise<void>
+
+const pendingInputFlushers = new Set<FlushPendingInput>()
+
+/** Flush every mounted Settings input before the Settings view is closed. */
+export async function flushPendingDebouncedInputs(): Promise<void> {
+	const results = await Promise.allSettled([...pendingInputFlushers].map((flush) => flush()))
+	const failures = results
+		.filter((result): result is PromiseRejectedResult => result.status === "rejected")
+		.map((result) => result.reason)
+
+	if (failures.length === 1) {
+		throw failures[0]
+	}
+	if (failures.length > 1) {
+		throw new AggregateError(failures, "Multiple Settings inputs failed to save")
+	}
+}
 
 /**
  * A custom hook that provides debounced input handling to prevent jumpy text inputs
@@ -8,53 +27,108 @@ import { useDebounceEffect } from "@/utils/useDebounceEffect"
  * @param initialValue - The initial value for the input
  * @param onChange - Callback function to save the value (e.g., to backend)
  * @param debounceMs - Debounce delay in milliseconds (default: 100ms)
- * @returns A tuple of [currentValue, setValue] similar to useState
+ * @returns A tuple of [currentValue, setValue, flush] similar to useState
  */
-export function useDebouncedInput<T>(initialValue: T, onChange: (value: T) => void, debounceMs = 100): [T, (value: T) => void] {
-	// Local state to prevent jumpy input - initialize once
+export function useDebouncedInput<T>(
+	initialValue: T,
+	onChange: DebouncedInputChange<T>,
+	debounceMs = 100,
+): [T, (value: T) => void, FlushPendingInput] {
 	const [localValue, setLocalValue] = useState(initialValue)
-
-	// Track previous initialValue to detect external changes
 	const prevInitialValueRef = useRef<T>(initialValue)
 	const localValueRef = useRef<T>(initialValue)
 	const pendingUserChangeRef = useRef(false)
+	const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+	const inFlightRef = useRef<Promise<void> | null>(null)
+	const onChangeRef = useRef(onChange)
+	onChangeRef.current = onChange
 
-	// Sync local state when initialValue changes externally (e.g., when switching Plan/Act tabs)
+	const savePending = useCallback(async (): Promise<void> => {
+		if (!pendingUserChangeRef.current) {
+			return
+		}
+
+		pendingUserChangeRef.current = false
+		const value = localValueRef.current
+		const previous = inFlightRef.current ?? Promise.resolve()
+		const operation = previous.then(() => onChangeRef.current(value)).then(() => undefined)
+		const tracked = operation.catch((error: unknown) => {
+			// Keep the value dirty so an explicit Done/flush can retry the failed save.
+			pendingUserChangeRef.current = true
+			throw error
+		})
+		inFlightRef.current = tracked
+		try {
+			await tracked
+		} finally {
+			if (inFlightRef.current === tracked) {
+				inFlightRef.current = null
+			}
+		}
+	}, [])
+
+	const flush = useCallback(async (): Promise<void> => {
+		if (timerRef.current) {
+			clearTimeout(timerRef.current)
+			timerRef.current = null
+		}
+
+		while (pendingUserChangeRef.current || inFlightRef.current) {
+			if (pendingUserChangeRef.current) {
+				await savePending()
+			} else {
+				await inFlightRef.current
+			}
+		}
+	}, [savePending])
+
+	// Sync local state when initialValue changes externally (e.g., when switching tabs).
 	useEffect(() => {
 		if (prevInitialValueRef.current !== initialValue) {
-			if (localValueRef.current === prevInitialValueRef.current) {
+			if (Object.is(localValueRef.current, prevInitialValueRef.current)) {
+				localValueRef.current = initialValue
 				setLocalValue(initialValue)
 				prevInitialValueRef.current = initialValue
 			} else {
-				// User is editing — keep ref aligned so future external changes can still sync
+				// User is editing — keep the local draft until it is committed.
 				prevInitialValueRef.current = localValueRef.current
 			}
 		}
 	}, [initialValue])
 
-	// Track localValue changes so the sync effect can check if user has edited
+	// Register the flusher so SettingsView can commit every mounted input before Done.
 	useEffect(() => {
-		localValueRef.current = localValue
-	}, [localValue])
+		pendingInputFlushers.add(flush)
+		return () => {
+			pendingInputFlushers.delete(flush)
+			void flush().catch((error: unknown) => {
+				console.error("Failed to flush debounced Settings input on unmount:", error)
+			})
+		}
+	}, [flush])
 
-	// Debounced backend save - saves after user stops changing value
-	useDebounceEffect(
-		() => {
-			if (!pendingUserChangeRef.current) return
-			pendingUserChangeRef.current = false
-			onChange(localValue)
+	const setInputValue = useCallback(
+		(value: T) => {
+			if (Object.is(localValueRef.current, value)) {
+				return
+			}
+
+			localValueRef.current = value
+			pendingUserChangeRef.current = true
+			setLocalValue(value)
+
+			if (timerRef.current) {
+				clearTimeout(timerRef.current)
+			}
+			timerRef.current = setTimeout(() => {
+				timerRef.current = null
+				void flush().catch((error: unknown) => {
+					console.error("Failed to persist debounced Settings input:", error)
+				})
+			}, debounceMs)
 		},
-		debounceMs,
-		[localValue],
+		[debounceMs, flush],
 	)
 
-	const setInputValue = useCallback((value: T) => {
-		setLocalValue((currentValue) => {
-			if (Object.is(currentValue, value)) return currentValue
-			pendingUserChangeRef.current = true
-			return value
-		})
-	}, [])
-
-	return [localValue, setInputValue]
+	return [localValue, setInputValue, flush]
 }

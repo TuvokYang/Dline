@@ -20,6 +20,10 @@ service StateService {
   rpc togglePlanActModeProto(TogglePlanActModeRequest) returns (ModeSwitchResponse);
   rpc confirmModeSwitch(ModeSwitchOperationRequest) returns (ModeSwitchResponse);
   rpc cancelModeSwitch(ModeSwitchOperationRequest) returns (ModeSwitchResponse);
+  rpc requestProfileSwitch(ProfileSwitchRequest) returns (ProfileSwitchResponse);
+  rpc confirmProfileSwitch(ProfileSwitchOperationRequest) returns (ProfileSwitchResponse);
+  rpc cancelProfileSwitch(ProfileSwitchOperationRequest) returns (ProfileSwitchResponse);
+  rpc restoreContextCompaction(ContextCompactionRestoreRequest) returns (ContextCompactionRestoreResponse);
   rpc updateAutoApprovalSettings(AutoApprovalSettingsRequest) returns (Empty);
   rpc updateSettings(UpdateSettingsRequest) returns (Empty);
   rpc updateTaskSettings(UpdateTaskSettingsRequest) returns (Empty);
@@ -182,6 +186,20 @@ message Settings {
   optional string searxng_search_url = 199;
   optional int32 terminal_command_handoff_seconds = 200;
   optional bool mcp_enabled = 201;
+  optional int32 auto_condense_min_reserve_tokens = 202;
+  optional int32 auto_condense_max_reserve_tokens = 203;
+  optional string plan_mode_profile_id = 204;
+  optional string act_mode_profile_id = 205;
+  optional string plan_mode_reasoning_override_kind = 206;
+  optional string plan_mode_reasoning_override_effort = 207;
+  optional int64 plan_mode_thinking_budget_tokens = 208;
+  optional string act_mode_reasoning_override_kind = 209;
+  optional string act_mode_reasoning_override_effort = 210;
+  optional int64 act_mode_thinking_budget_tokens = 211;
+  optional string plan_mode_service_tier_override_kind = 212;
+  optional string plan_mode_service_tier_override_tier = 213;
+  optional string act_mode_service_tier_override_kind = 214;
+  optional string act_mode_service_tier_override_tier = 215;
 }
 
 // Account usage quota for rate-limited providers (e.g., Codex, Copilot)
@@ -253,6 +271,62 @@ message ModeSwitchResponse {
 message ModeSwitchOperationRequest {
   Metadata metadata = 1;
   string operation_id = 2;
+}
+
+message ProfileSwitchRequest {
+  Metadata metadata = 1;
+  string target_profile = 2;
+  repeated PlanActMode target_modes = 3;
+  optional ChatContent chat_content = 4;
+}
+
+enum ProfileSwitchStatus {
+  PROFILE_SWITCH_STATUS_UNSPECIFIED = 0;
+  PROFILE_SWITCH_STATUS_SWITCHED = 1;
+  PROFILE_SWITCH_STATUS_CONFIRMATION_REQUIRED = 2;
+  PROFILE_SWITCH_STATUS_IN_PROGRESS = 3;
+  PROFILE_SWITCH_STATUS_REJECTED = 4;
+}
+
+message ProfileSwitchResponse {
+  ProfileSwitchStatus status = 1;
+  optional string operation_id = 2;
+  optional string error = 3;
+}
+
+message ProfileSwitchOperationRequest {
+  Metadata metadata = 1;
+  string operation_id = 2;
+}
+
+enum ContextCompactionRestoreTarget {
+  CONTEXT_COMPACTION_RESTORE_TARGET_UNSPECIFIED = 0;
+  CONTEXT_COMPACTION_RESTORE_TARGET_PREVIOUS = 1;
+  CONTEXT_COMPACTION_RESTORE_TARGET_INITIAL = 2;
+}
+
+message ContextCompactionRestoreRequest {
+  Metadata metadata = 1;
+  string operation_id = 2;
+  ContextCompactionRestoreTarget target = 3;
+  string expected_head_checkpoint_id = 4;
+  int32 expected_chain_revision = 5;
+}
+
+enum ContextCompactionRestoreStatus {
+  CONTEXT_COMPACTION_RESTORE_STATUS_UNSPECIFIED = 0;
+  CONTEXT_COMPACTION_RESTORE_STATUS_RESTORED = 1;
+  CONTEXT_COMPACTION_RESTORE_STATUS_REJECTED = 2;
+}
+
+message ContextCompactionRestoreResponse {
+  ContextCompactionRestoreStatus status = 1;
+  optional string operation_id = 2;
+  optional string checkpoint_id = 3;
+  optional string head_checkpoint_id = 4;
+  optional int32 chain_revision = 5;
+  optional string branch_id = 6;
+  optional string error = 7;
 }
 
 enum PlanActMode {
@@ -376,6 +450,8 @@ message UpdateSettingsRequest {
   optional string searxng_search_token = 53;
   optional int32 terminal_command_handoff_seconds = 54;
   optional bool mcp_enabled = 55;
+  optional int32 auto_condense_min_reserve_tokens = 56;
+  optional int32 auto_condense_max_reserve_tokens = 57;
 }
 
 message UpdateTerminalConnectionTimeoutRequest {

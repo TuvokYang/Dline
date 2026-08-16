@@ -167,6 +167,77 @@ describe("TaskStateManager - Multi-window Profile Isolation", () => {
 		taskSm2.actModeProfile?.should.equal("gpt-4")
 	})
 
+	it("isolates and durably restores Task-local reasoning and service tier overrides", async () => {
+		await sm.loadTaskSettings("task-override-1")
+		await sm.loadTaskSettings("task-override-2")
+		const taskSm1 = new TaskStateManager("task-override-1", sm)
+		const taskSm2 = new TaskStateManager("task-override-2", sm)
+
+		taskSm1.setReasoningOverride("act", { kind: "effort", effort: "high" })
+		taskSm1.setServiceTierOverride("act", { kind: "tier", tier: "priority" })
+		taskSm2.setReasoningOverride("act", { kind: "budget", budgetTokens: 4_096 })
+		taskSm2.setServiceTierOverride("act", { kind: "tier", tier: "flex" })
+
+		sm.setActiveTaskId("task-override-2")
+		expect(sm.getApiConfigurationForTask("task-override-1").actModeReasoningOverride).toEqual({
+			kind: "effort",
+			effort: "high",
+		})
+		expect(sm.getApiConfigurationForTask("task-override-1").actModeServiceTierOverride).toEqual({
+			kind: "tier",
+			tier: "priority",
+		})
+		sm.setActiveTaskId("task-override-1")
+		expect(sm.getApiConfigurationForTask("task-override-2").actModeReasoningOverride).toEqual({
+			kind: "budget",
+			budgetTokens: 4_096,
+		})
+		expect(sm.getApiConfigurationForTask("task-override-2").actModeServiceTierOverride).toEqual({
+			kind: "tier",
+			tier: "flex",
+		})
+
+		await sm.flushPendingState()
+		await StateManager.resetForTest()
+		sm = await StateManager.initialize(createStorageContext({ clineDir: tempDir }))
+		await sm.loadTaskSettings("task-override-1")
+		await sm.loadTaskSettings("task-override-2")
+
+		expect(sm.getApiConfigurationForTask("task-override-1").actModeReasoningOverride).toEqual({
+			kind: "effort",
+			effort: "high",
+		})
+		expect(sm.getApiConfigurationForTask("task-override-1").actModeServiceTierOverride).toEqual({
+			kind: "tier",
+			tier: "priority",
+		})
+		expect(sm.getApiConfigurationForTask("task-override-2").actModeReasoningOverride).toEqual({
+			kind: "budget",
+			budgetTokens: 4_096,
+		})
+		expect(sm.getApiConfigurationForTask("task-override-2").actModeServiceTierOverride).toEqual({
+			kind: "tier",
+			tier: "flex",
+		})
+	})
+
+	it("clears an inherited Task override without changing another Task", () => {
+		const taskSm1 = new TaskStateManager("task-inherit-1", sm)
+		const taskSm2 = new TaskStateManager("task-inherit-2", sm)
+		taskSm1.setReasoningOverride("plan", { kind: "effort", effort: "high" })
+		taskSm1.setServiceTierOverride("plan", { kind: "tier", tier: "scale" })
+		taskSm2.setReasoningOverride("plan", { kind: "budget", budgetTokens: 2_048 })
+		taskSm2.setServiceTierOverride("plan", { kind: "tier", tier: "flex" })
+
+		taskSm1.setReasoningOverride("plan", { kind: "inherit" })
+		taskSm1.setServiceTierOverride("plan", { kind: "inherit" })
+
+		expect(taskSm1.getReasoningOverride("plan")).toBeUndefined()
+		expect(taskSm1.getServiceTierOverride("plan")).toBeUndefined()
+		expect(taskSm2.getReasoningOverride("plan")).toEqual({ kind: "budget", budgetTokens: 2_048 })
+		expect(taskSm2.getServiceTierOverride("plan")).toEqual({ kind: "tier", tier: "flex" })
+	})
+
 	it("should handle concurrent profile updates from multiple windows", () => {
 		// Simulate rapid concurrent updates (race condition scenario)
 		const taskSm1 = new TaskStateManager("task-race-1", sm)

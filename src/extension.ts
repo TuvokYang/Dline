@@ -433,16 +433,18 @@ export async function activate(context: vscode.ExtensionContext) {
 	// Register the command handlers
 	context.subscriptions.push(
 		vscode.commands.registerCommand(commands.AddToChat, async (range?: vscode.Range, diagnostics?: vscode.Diagnostic[]) => {
-			const context = await getContextForCommand(range, diagnostics)
+			const context = await getContextForCommand(range, diagnostics, { panelTitle: "Add to Dline" })
 			if (!context) {
 				return
 			}
-			await addToCline(context.controller, context.commandContext)
+			await addToCline(context.controller, context.commandContext, undefined, {
+				startTask: context.surface === "panel",
+			})
 		}),
 	)
 	context.subscriptions.push(
 		vscode.commands.registerCommand(commands.FixWithCline, async (range: vscode.Range, diagnostics: vscode.Diagnostic[]) => {
-			const context = await getContextForCommand(range, diagnostics)
+			const context = await getContextForCommand(range, diagnostics, { panelTitle: "Fix with Dline" })
 			if (!context) {
 				return
 			}
@@ -451,7 +453,7 @@ export async function activate(context: vscode.ExtensionContext) {
 	)
 	context.subscriptions.push(
 		vscode.commands.registerCommand(commands.ExplainCode, async (range: vscode.Range) => {
-			const context = await getContextForCommand(range)
+			const context = await getContextForCommand(range, undefined, { panelTitle: "Explain with Dline" })
 			if (!context) {
 				return
 			}
@@ -460,7 +462,7 @@ export async function activate(context: vscode.ExtensionContext) {
 	)
 	context.subscriptions.push(
 		vscode.commands.registerCommand(commands.ImproveCode, async (range: vscode.Range) => {
-			const context = await getContextForCommand(range)
+			const context = await getContextForCommand(range, undefined, { panelTitle: "Improve with Dline" })
 			if (!context) {
 				return
 			}
@@ -517,7 +519,7 @@ export async function activate(context: vscode.ExtensionContext) {
 			return null
 		}
 
-		const ctx = await getContextForCommand(range, diagnostics)
+		const ctx = await getContextForCommand(range, diagnostics, { reuseBusySidebar: true })
 		if (!ctx) {
 			return null
 		}

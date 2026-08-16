@@ -80,7 +80,9 @@ export class OrchestratorController {
 	 * @returns A snapshot array that callers can read without mutating the registry.
 	 */
 	getActiveControllers(): Controller[] {
-		return Array.from(this.controllers.values())
+		const controllers = new Set(this.controllers.values())
+		if (this.mainController) controllers.add(this.mainController)
+		return Array.from(controllers)
 	}
 
 	/** Get count of active controllers (sidebar + panels). */

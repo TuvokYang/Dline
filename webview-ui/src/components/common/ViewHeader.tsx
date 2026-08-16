@@ -11,12 +11,21 @@ const ENV_DISPLAY_NAMES: Record<Environment, string> = {
 
 type ViewHeaderProps = {
 	title: string
-	onDone: () => void
+	onDone: () => void | Promise<void>
+	doneDisabled?: boolean
+	doneLabel?: string
 	showEnvironmentSuffix?: boolean
 	environment?: Environment
 }
 
-const ViewHeader = ({ title, onDone, showEnvironmentSuffix, environment }: ViewHeaderProps) => {
+const ViewHeader = ({
+	title,
+	onDone,
+	doneDisabled = false,
+	doneLabel = "Done",
+	showEnvironmentSuffix,
+	environment,
+}: ViewHeaderProps) => {
 	const showSubtext = showEnvironmentSuffix && environment && environment !== "production"
 	const capitalizedEnv = environment ? ENV_DISPLAY_NAMES[environment] : ""
 	const titleColor = getEnvironmentColor(environment)
@@ -33,8 +42,8 @@ const ViewHeader = ({ title, onDone, showEnvironmentSuffix, environment }: ViewH
 					</span>
 				)}
 			</div>
-			<Button onClick={onDone} size="header">
-				Done
+			<Button disabled={doneDisabled} onClick={() => void onDone()} size="header">
+				{doneLabel}
 			</Button>
 		</div>
 	)

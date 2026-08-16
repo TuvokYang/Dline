@@ -31,6 +31,9 @@ export interface StorageContext {
 	/** Backing store for settings. Prefer `settings` when possible. */
 	readonly settingsBackingStore: ClineFileStorage
 
+	/** Absolute path of the canonical settings document used by SettingsRepository. */
+	readonly settingsFilePath: string
+
 	/** Secrets — API keys and other sensitive values. File uses restricted permissions (0o600). */
 	readonly secrets: ClineFileStorage<string>
 
@@ -123,7 +126,8 @@ export function createStorageContext(opts: StorageContextOptions = {}): StorageC
 
 	const settingsDir = path.join(dataDir, "settings")
 	fsSync.mkdirSync(settingsDir, { recursive: true })
-	const settings = new ClineFileStorage(path.join(settingsDir, "settings.json"), "Settings")
+	const settingsFilePath = path.join(settingsDir, "settings.json")
+	const settings = new ClineFileStorage(settingsFilePath, "Settings")
 
 	const globalState = new ClineFileStorage(path.join(dataDir, "globalState.json"), "GlobalState")
 	const taskRoot = opts.clineDir ?? getDlineDocumentsPathSync()
@@ -134,6 +138,7 @@ export function createStorageContext(opts: StorageContextOptions = {}): StorageC
 		globalStateBackingStore: globalState,
 		settings,
 		settingsBackingStore: settings,
+		settingsFilePath,
 		secrets: new ClineFileStorage<string>(path.join(dataDir, "secrets.json"), "Secrets", {
 			fileMode: 0o600, // Owner read/write only — protects API keys
 		}),
