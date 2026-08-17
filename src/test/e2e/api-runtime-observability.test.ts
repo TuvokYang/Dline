@@ -35,6 +35,29 @@ const REPORT_FEEDBACK = "E2E_REPORT_FEEDBACK_ACCEPTED"
 const QNA_RESPONSE = "E2E_QNA_REVIEW_REQUIRED: confirm the guarded completion path."
 const QNA_FEEDBACK = "E2E_QNA_FEEDBACK_ACCEPTED"
 
+async function findAdditionalDlineFrame(page: Page, existingFrames: ReadonlySet<Frame>): Promise<Frame> {
+	let resolved: Frame | undefined
+	await expect
+		.poll(
+			async () => {
+				for (const frame of page.frames()) {
+					if (existingFrames.has(frame) || frame.isDetached() || !frame.url().startsWith("vscode-webview://")) {
+						continue
+					}
+					if ((await frame.locator("#root").count()) > 0) {
+						resolved = frame
+						return true
+					}
+				}
+				return false
+			},
+			{ timeout: 30_000 },
+		)
+		.toBe(true)
+	if (!resolved) throw new Error("Dline editor panel frame was not created")
+	return resolved
+}
+
 async function selectProfile(sidebar: Frame, profileName: string): Promise<void> {
 	const modelSwitcher = sidebar.getByRole("button", { name: "Select model" })
 	const profileListTitle = sidebar.getByText("Available Models", { exact: true })
@@ -258,8 +281,9 @@ async function expectContextUsage(
 
 	const progress = sidebar.getByRole("progressbar", { name: "Context window usage progress" })
 	await expect(progress).toBeVisible()
-	const percentage = Number(await progress.getAttribute("aria-valuenow"))
-	expectInRange(percentage, (latestTokens / contextWindow) * 100, 0.02, 0.05)
+	await expect(progress).toHaveAttribute("aria-valuemin", "0")
+	await expect(progress).toHaveAttribute("aria-valuemax", String(contextWindow))
+	await expect(progress).toHaveAttribute("aria-valuenow", String(Math.min(latestTokens, contextWindow)))
 
 	const priceTag = sidebar.locator("#price-tag")
 	await expect(priceTag).toBeVisible()
@@ -291,6 +315,7 @@ const protocolCases = [
 		thinking: { mode: "effort" as const, effort: "high" },
 		exposesReasoningSummary: false,
 		replaysReasoningInRequestBody: false,
+		requiresWebSearchApproval: false,
 	},
 	{
 		target: "openai-compatible-responses" as const,
@@ -300,6 +325,7 @@ const protocolCases = [
 		thinking: { mode: "effort" as const, effort: "high" },
 		exposesReasoningSummary: true,
 		replaysReasoningInRequestBody: true,
+		requiresWebSearchApproval: false,
 	},
 	{
 		target: "openai-official-responses" as const,
@@ -309,6 +335,7 @@ const protocolCases = [
 		thinking: { mode: "effort" as const, effort: "high" },
 		exposesReasoningSummary: true,
 		replaysReasoningInRequestBody: true,
+		requiresWebSearchApproval: true,
 	},
 	{
 		target: "deepseek-chat" as const,
@@ -318,15 +345,17 @@ const protocolCases = [
 		thinking: { mode: "effort" as const, effort: "high" },
 		exposesReasoningSummary: true,
 		replaysReasoningInRequestBody: true,
+		requiresWebSearchApproval: false,
 	},
 	{
 		target: "anthropic-messages" as const,
 		profileName: E2E_PROFILE_NAMES.mockAnthropic,
-		contextWindow: 200_000,
+		contextWindow: 1_000_000,
 		responseText: "E2E_ANTHROPIC_USAGE_OK",
 		thinking: { mode: "budget" as const, budget: 2_048 },
 		exposesReasoningSummary: true,
 		replaysReasoningInRequestBody: true,
+		requiresWebSearchApproval: true,
 	},
 ]
 
@@ -441,7 +470,20 @@ for (const testCase of protocolCases) {
 				},
 			)
 			await sendTask(sidebar, `Exercise ${testCase.target} usage accounting.`)
-			await expect.poll(() => server.getRequestCount(testCase.target), { timeout: 60_000 }).toBeGreaterThanOrEqual(1)
+			const hostedSearchApproval = sidebar.getByRole("contentinfo").getByText("Approve", { exact: true })
+			const approveInitialHostedRequest = async (): Promise<void> => {
+				await expect(hostedSearchApproval).toHaveCount(1, { timeout: 60_000 })
+				await expect(hostedSearchApproval).toBeVisible()
+				expect(server.getRequestCount(testCase.target)).toBe(0)
+				await hostedSearchApproval.click()
+				await expect.poll(() => server.getRequestCount(testCase.target), { timeout: 60_000 }).toBe(1)
+			}
+			if (testCase.requiresWebSearchApproval) {
+				await approveInitialHostedRequest()
+			} else {
+				await expect(hostedSearchApproval).toHaveCount(0)
+				await expect.poll(() => server.getRequestCount(testCase.target), { timeout: 60_000 }).toBeGreaterThanOrEqual(1)
+			}
 			const firstConsumption = server.getMockConsumptions(testCase.target)[0]
 			if (!firstConsumption) throw new Error("First API request was not recorded")
 			const advertisedTools = advertisedToolNames(firstConsumption)
@@ -458,18 +500,25 @@ for (const testCase of protocolCases) {
 			const advertisedToolPayload = JSON.stringify((firstConsumption.requestBody as { tools?: unknown }).tools ?? [])
 			expect(advertisedToolPayload).toContain("task_progress")
 
+			if (testCase.requiresWebSearchApproval) {
+				await expect(hostedSearchApproval).toHaveCount(0)
+			}
 			await expect(sidebar.getByText(REPORT_TITLE, { exact: true })).toBeVisible({ timeout: 60_000 })
 			await expect(sidebar.getByText(REPORT_CONTENT, { exact: true })).toBeVisible()
 			await expect.poll(() => server.getRequestCount(testCase.target)).toBe(3)
 			await page.waitForTimeout(500)
 			expect(server.getRequestCount(testCase.target)).toBe(3)
 			await submitInteractionFeedback(sidebar, REPORT_FEEDBACK)
+			if (testCase.requiresWebSearchApproval) await expect(hostedSearchApproval).toHaveCount(0)
 
 			await expect(sidebar.getByText(QNA_RESPONSE, { exact: true })).toBeVisible({ timeout: 60_000 })
 			await expect.poll(() => server.getRequestCount(testCase.target)).toBe(4)
 			await page.waitForTimeout(500)
 			expect(server.getRequestCount(testCase.target)).toBe(4)
 			await submitInteractionFeedback(sidebar, QNA_FEEDBACK)
+			if (testCase.requiresWebSearchApproval) {
+				await expect(hostedSearchApproval).toHaveCount(0)
+			}
 
 			await expect(sidebar.getByText(testCase.responseText, { exact: false }).last()).toBeVisible({ timeout: 60_000 })
 			const thinkingToggles = sidebar.getByRole("button", { name: "Thinking", exact: true })
@@ -553,6 +602,74 @@ for (const testCase of protocolCases) {
 	)
 }
 
+e2e(
+	"Editor commands - a busy sidebar launches an independent panel without replacing its task",
+	async ({ helper, page, server, sidebar, userDataDir }) => {
+		e2e.setTimeout(180_000)
+		await helper.signin(sidebar)
+		server.resetOpenAiMock()
+
+		const sidebarTask = "E2E_EDITOR_ROUTE_SIDEBAR_TASK"
+		const sidebarPrompt = "E2E_EDITOR_ROUTE_SIDEBAR_WAITING"
+		const sidebarFeedback = "E2E_EDITOR_ROUTE_SIDEBAR_CONTINUE"
+		const panelCompletion = "E2E_EDITOR_ROUTE_PANEL_DONE"
+		const sidebarCompletion = "E2E_EDITOR_ROUTE_SIDEBAR_DONE"
+		server.enqueueResponses(
+			"openai-compatible-chat",
+			{
+				type: "tool",
+				id: "call_editor_route_sidebar_waiting",
+				name: "qna_respond",
+				arguments: { response: sidebarPrompt },
+				expectedRequestIncludes: [sidebarTask],
+			},
+			{
+				type: "tool",
+				id: "call_editor_route_panel_completion",
+				name: "attempt_completion",
+				arguments: { result: panelCompletion },
+				expectedRequestIncludes: ["Explain the following code", "<h1>Test Workspace</h1>"],
+			},
+			{
+				type: "tool",
+				id: "call_editor_route_sidebar_completion",
+				name: "attempt_completion",
+				arguments: { result: sidebarCompletion },
+				expectedRequestIncludes: [sidebarFeedback],
+			},
+		)
+
+		await sendTask(sidebar, sidebarTask)
+		await expect(sidebar.getByText(sidebarPrompt, { exact: true })).toBeVisible({ timeout: 60_000 })
+		await expect(sidebar.getByTestId("chat-input")).toBeEnabled()
+		expect(server.getRequestCount("openai-compatible-chat")).toBe(1)
+
+		await openTab(page, "Explorer ")
+		await page.getByRole("treeitem", { name: "index.html" }).locator("a").click()
+		const editor = page.getByRole("textbox", { name: "The editor is not accessible" })
+		await editor.focus()
+		await editor.press("ControlOrMeta+a")
+		const existingFrames = new Set(page.frames())
+		await E2ETestHelper.runCommandPalette(page, "Explain with Dline")
+		const panel = await findAdditionalDlineFrame(page, existingFrames)
+		await E2ETestHelper.dismissWhatsNewModal(panel)
+		await expect(panel.getByText(panelCompletion, { exact: false }).last()).toBeVisible({ timeout: 60_000 })
+		await expect(panel.getByText(sidebarTask, { exact: true })).toHaveCount(0)
+		await expect(sidebar.getByText(panelCompletion, { exact: false })).toHaveCount(0)
+
+		await E2ETestHelper.openClineSidebar(page)
+		await expect(sidebar.getByText(sidebarTask, { exact: true }).first()).toBeVisible()
+		await expect(sidebar.getByText(sidebarPrompt, { exact: true })).toBeVisible()
+		await expect(sidebar.getByTestId("chat-input")).toBeVisible()
+		await expect(sidebar.getByTestId("send-button")).toBeVisible()
+		await submitInteractionFeedback(sidebar, sidebarFeedback)
+		await expect(sidebar.getByText(sidebarCompletion, { exact: false }).last()).toBeVisible({ timeout: 60_000 })
+		await expect(panel.getByText(sidebarCompletion, { exact: false })).toHaveCount(0)
+		await expect.poll(() => server.getRequestCount("openai-compatible-chat")).toBe(3)
+		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+	},
+)
+
 for (const status of [403, 429, 502] as const) {
 	e2e(
 		`API recovery - renders HTTP ${status} and Retry continues the task`,
@@ -560,6 +677,7 @@ for (const status of [403, 429, 502] as const) {
 			e2e.setTimeout(180_000)
 			const marker = `E2E_HTTP_${status}`
 			const retryFeedback = `E2E_HTTP_${status}_RETRY_FEEDBACK`
+			const expectedFailureRequestCount = status === 403 ? 1 : status === 429 ? 12 : 4
 			server.enqueueResponses(
 				"openai-compatible-chat",
 				...Array.from({ length: 24 }, () => ({
@@ -572,19 +690,49 @@ for (const status of [403, 429, 502] as const) {
 
 			await helper.signin(sidebar)
 			await sendTask(sidebar, `Exercise HTTP ${status} recovery.`)
-			const errorBox = sidebar.getByTestId("error-retry-box")
-			await expect(errorBox).toContainText("Automatic retry stopped", { timeout: 90_000 })
-			await expect(errorBox.getByTestId("error-retry-box-status")).toHaveText(String(status))
-			await expect(errorBox.getByTestId("error-retry-box-code")).toHaveText(`e2e_http_${status}`)
-			await expect(errorBox.getByTestId("error-retry-box-message")).toHaveText(marker)
-			await expect(errorBox.getByRole("button", { name: "Copy error" })).toBeVisible()
-			await expect(errorBox.getByRole("button", { name: /^(Retry|Cancel)$/ })).toHaveCount(0)
+			if (status === 403) {
+				await expectSingleStructuredApiError(sidebar, {
+					message: marker,
+					provider: "openai",
+					model: "dline-e2e-model",
+					status,
+					code: `e2e_http_${status}`,
+					details: { type: "e2e_mock_error" },
+				})
+				await expect(sidebar.getByTestId("api-error-box")).toBeVisible()
+				await expect(sidebar.getByTestId("error-retry-box")).toHaveCount(0)
+				await expect(sidebar.getByText("Automatic retry stopped", { exact: true })).toHaveCount(0)
+				await expect.poll(() => server.getRequestCount("openai-compatible-chat"), { timeout: 60_000 }).toBe(1)
+			} else {
+				const errorBox = sidebar.getByTestId("error-retry-box")
+				await expect(errorBox).toContainText("Attempt 1 of 3", { timeout: 90_000 })
+				await expect(errorBox.getByTestId("error-retry-box-status")).toHaveText(String(status))
+				await expect(errorBox.getByTestId("error-retry-box-code")).toHaveText(`e2e_http_${status}`)
+				await expect(errorBox.getByTestId("error-retry-box-message")).toHaveText(marker)
+				await expect(errorBox.getByRole("button", { name: "Copy error" })).toBeVisible()
+				await expect(errorBox.getByRole("button", { name: /^(Retry|Cancel)$/ })).toHaveCount(0)
+				await expect(errorBox).toContainText("Attempt 2 of 3", { timeout: 90_000 })
+				await expect(errorBox).toContainText("Attempt 3 of 3", { timeout: 90_000 })
+				await expect
+					.poll(() => server.getRequestCount("openai-compatible-chat"), { timeout: 90_000 })
+					.toBe(expectedFailureRequestCount)
+				await expectSingleStructuredApiError(sidebar, {
+					message: marker,
+					provider: "openai",
+					model: "dline-e2e-model",
+					status,
+					code: `e2e_http_${status}`,
+					details: { type: "e2e_mock_error" },
+				})
+				await expect(sidebar.getByTestId("error-retry-box")).toHaveCount(0)
+				await expect(sidebar.getByText("Automatic retry stopped", { exact: true })).toHaveCount(0)
+			}
 
 			const retryButton = sidebar.locator('vscode-button[aria-label="Retry"]')
 			await expect(retryButton).toBeVisible({ timeout: 90_000 })
 			await expect(sidebar.locator('vscode-button[aria-label="Start New Task"]')).toBeVisible()
 			const failures = server.getMockConsumptions("openai-compatible-chat")
-			expect(failures.length).toBeGreaterThan(0)
+			expect(failures).toHaveLength(expectedFailureRequestCount)
 			expect(failures.every((entry) => entry.status === status)).toBe(true)
 
 			server.clearPendingResponses("openai-compatible-chat")
@@ -615,6 +763,7 @@ for (const status of [403, 429, 502] as const) {
 			await expect(retryButton).not.toBeVisible()
 
 			const consumptions = server.getMockConsumptions("openai-compatible-chat")
+			expect(consumptions).toHaveLength(expectedFailureRequestCount + 1)
 			expect(consumptions.at(-1)).toMatchObject({ responseType: "tool", toolName: "attempt_completion" })
 			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir, [new RegExp(marker)])
 		},
@@ -885,13 +1034,39 @@ e2e(
 			})),
 		)
 		await sendTask(sidebar, "Exercise an Anthropic connection failure.")
+		const expectedFailureRequestCount = 12
+		const hostedSearchApproval = sidebar.getByRole("contentinfo").getByText("Approve", { exact: true })
+		const approveNextHostedRequest = async (completedRequestCount: number): Promise<void> => {
+			await expect(hostedSearchApproval).toHaveCount(1, { timeout: 60_000 })
+			await expect(hostedSearchApproval).toBeVisible()
+			expect(server.getRequestCount("anthropic-messages")).toBe(completedRequestCount)
+			await hostedSearchApproval.click()
+			await expect
+				.poll(() => server.getRequestCount("anthropic-messages"), { timeout: 60_000 })
+				.toBe(completedRequestCount + 1)
+		}
 
-		await expect(sidebar.getByText("Automatic retry stopped", { exact: true })).toBeVisible({ timeout: 90_000 })
+		const errorBox = sidebar.getByTestId("error-retry-box")
+		await approveNextHostedRequest(0)
+		await expect(errorBox).toContainText("Attempt 1 of 3", { timeout: 90_000 })
+		await expect(errorBox.getByTestId("error-retry-box-provider")).toHaveText("anthropic")
+		await expect(errorBox.getByTestId("error-retry-box-model")).toHaveText("claude-sonnet-4-6")
+		await expect(errorBox.getByTestId("error-retry-box-message")).toHaveText("Connection error.")
+		await expect(errorBox).toContainText("Attempt 2 of 3", { timeout: 90_000 })
+		await expect(errorBox).toContainText("Attempt 3 of 3", { timeout: 90_000 })
+		await expect
+			.poll(() => server.getRequestCount("anthropic-messages"), { timeout: 90_000 })
+			.toBe(expectedFailureRequestCount)
 		await expectSingleStructuredApiError(sidebar, {
 			message: "Connection error.",
 			provider: "anthropic",
 			model: "claude-sonnet-4-6",
 		})
+		await expect(errorBox).toHaveCount(0)
+		await expect(sidebar.getByText("Automatic retry stopped", { exact: true })).toHaveCount(0)
+		const failures = server.getMockConsumptions("anthropic-messages")
+		expect(failures).toHaveLength(expectedFailureRequestCount)
+		expect(failures.every((entry) => entry.status === 0)).toBe(true)
 
 		server.clearPendingResponses("anthropic-messages")
 		server.enqueueResponses("anthropic-messages", {
@@ -900,6 +1075,7 @@ e2e(
 			arguments: { result: "E2E_ANTHROPIC_CONNECTION_RETRY_OK" },
 		})
 		await sidebar.locator('vscode-button[aria-label="Retry"]').click()
+		await approveNextHostedRequest(expectedFailureRequestCount)
 		await expect(sidebar.getByText("E2E_ANTHROPIC_CONNECTION_RETRY_OK", { exact: false }).last()).toBeVisible({
 			timeout: 60_000,
 		})
@@ -908,6 +1084,9 @@ e2e(
 				'[data-testid="api-error-box"], [data-testid="error-message-box"], [data-testid="error-presentation-box"], [data-testid="error-retry-box"]',
 			),
 		).toHaveCount(0)
+		const consumptions = server.getMockConsumptions("anthropic-messages")
+		expect(consumptions).toHaveLength(expectedFailureRequestCount + 1)
+		expect(consumptions.at(-1)).toMatchObject({ responseType: "tool", toolName: "attempt_completion" })
 		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir, [/Connection error|ECONNRESET|fetch failed/])
 	},
 )
