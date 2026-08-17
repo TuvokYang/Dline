@@ -11,8 +11,10 @@ import type {
 	SystemPromptRefreshReason,
 	TaskContextCache,
 } from "@core/storage/task-context-types"
+import type { PromptFreshnessSnapshot } from "@shared/PromptFreshness"
 import type { ClineTool } from "@shared/tools"
 import { hashPromptContent } from "./hash"
+import { buildPromptFreshnessBaseline, comparePromptFreshness } from "./PromptFreshnessProjection"
 
 export const SYSTEM_PROMPT_CONTRACT_VERSION = 5
 
@@ -63,6 +65,7 @@ export class SystemPromptCacheService {
 	) => FrozenPromptBuilderInfo
 	private readonly now: () => number
 	private lastTools?: readonly ClineTool[]
+	private latestPromptFreshness: PromptFreshnessSnapshot = { status: "unknown", changes: [], checkedAt: 0 }
 	private pendingGetOrCreate?: Promise<FrozenSystemPromptCache>
 
 	/**
@@ -87,6 +90,28 @@ export class SystemPromptCacheService {
 	 */
 	public getLastTools(): readonly ClineTool[] | undefined {
 		return this.lastTools
+	}
+
+	/** Return the latest read-only prompt freshness projection. */
+	public getPromptFreshness(): PromptFreshnessSnapshot {
+		return this.latestPromptFreshness
+	}
+
+	/** Re-evaluate freshness without rebuilding or persisting the frozen prompt and tools. */
+	public async reevaluateFreshness(input: GetOrCreatePromptInput): Promise<PromptFreshnessSnapshot> {
+		const context = await this.getContext(this.taskId)
+		const cached = context.systemPrompt?.frozen
+		if (!cached) {
+			this.latestPromptFreshness = {
+				status: "unknown",
+				changes: [],
+				checkedAt: this.now(),
+			}
+			return this.latestPromptFreshness
+		}
+
+		await this.updateFreshnessSnapshot(cached, input.promptContext)
+		return this.latestPromptFreshness
 	}
 
 	/**
@@ -125,6 +150,7 @@ export class SystemPromptCacheService {
 			subagentsEnabled: input.promptContext.subagentsEnabled,
 		})
 		const capabilitiesHash = hashPromptContent(capabilitiesSection)
+		const freshnessBaseline = buildPromptFreshnessBaseline(input.promptContext, capabilities)
 		const promptContext: SystemPromptContext = {
 			...input.promptContext,
 			capabilities,
@@ -136,6 +162,7 @@ export class SystemPromptCacheService {
 			text: built.systemPrompt,
 			tools: built.tools ?? null,
 			capabilitiesHash,
+			freshnessBaseline,
 			createdAt: context.systemPrompt?.frozen?.createdAt ?? now,
 			refreshedAt: now,
 			refreshReason: input.reason,
@@ -153,6 +180,10 @@ export class SystemPromptCacheService {
 			},
 		})
 		this.lastTools = built.tools
+		this.latestPromptFreshness = comparePromptFreshness(freshnessBaseline, freshnessBaseline, {
+			checkedAt: now,
+			frozenAt: frozen.refreshedAt,
+		})
 		return frozen
 	}
 
@@ -181,10 +212,24 @@ export class SystemPromptCacheService {
 			if (providerProjectionChanged) {
 				return this.refresh({ promptContext: input.promptContext, reason: "capability_change" })
 			}
+			await this.updateFreshnessSnapshot(cached, input.promptContext)
 			this.lastTools = cached.tools ?? undefined
 			return cached
 		}
 		return this.refresh({ promptContext: input.promptContext, reason: "task_start" })
+	}
+
+	private async updateFreshnessSnapshot(cached: FrozenSystemPromptCache, promptContext: SystemPromptContext): Promise<void> {
+		const capabilities = await this.collectCapabilitiesFn({
+			cwd: promptContext.cwd ?? process.cwd(),
+			mcpHub: promptContext.mcpHub,
+			...promptContext.capabilityToggleState,
+		})
+		const currentBaseline = buildPromptFreshnessBaseline(promptContext, capabilities)
+		this.latestPromptFreshness = comparePromptFreshness(cached.freshnessBaseline, currentBaseline, {
+			checkedAt: this.now(),
+			frozenAt: cached.refreshedAt,
+		})
 	}
 
 	/**

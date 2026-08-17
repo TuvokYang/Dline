@@ -11,10 +11,11 @@ import { ContextTransitionLease } from "@core/controller/context-transition/Cont
 import { ModeTransitionPolicy } from "@core/controller/context-transition/policies/ModeTransitionPolicy"
 import { ProfileTransitionPolicy } from "@core/controller/context-transition/policies/ProfileTransitionPolicy"
 import { findEnabledProfileByName, findEnabledProfiles, readApiProfiles } from "@core/controller/file/getApiProfiles"
-import { resolveProfileReference } from "@core/profiles/profile-binding"
-import { getProfileCatalogRevision } from "@core/profiles/profile-catalog-state"
 import { getHooksEnabledSafe } from "@core/hooks/hooks-utils"
 import { TaskLockService } from "@core/locks/TaskLockService"
+import { resolveProfileReference } from "@core/profiles/profile-binding"
+import { getProfileCatalogRevision } from "@core/profiles/profile-catalog-state"
+import { settingsAffectPromptFreshness } from "@core/prompts/system-prompt-cache/PromptFreshnessProjection"
 import * as SecretsManager from "@core/storage/secrets"
 import { projectTaskView } from "@core/task/view/TaskViewProjector"
 import { detectWorkspaceRoots } from "@core/workspace/detection"
@@ -294,8 +295,11 @@ export class Controller {
 				// and will be retried automatically on the next debounced persistence).
 				Logger.error("[Controller] Storage persistence failed (will retry):", error)
 			},
-			onSyncExternalChange: async () => {
+			onSyncExternalChange: async (event) => {
 				await this.configureGlobalComponents()
+				if (event.source === "settings" && this.task && settingsAffectPromptFreshness(event.commit.changedKeys)) {
+					await this.task.reevaluatePromptFreshness()
+				}
 				await this.postStateToWebview()
 			},
 		})
@@ -849,7 +853,7 @@ export class Controller {
 			throw new Error(runtimeState.profileInvalid.message)
 		}
 		if (
-			["initializing", "streaming", "executing", "resuming", "cancelling"].includes(runtimeState.phase) ||
+			["initializing", "streaming", "resuming", "cancelling"].includes(runtimeState.phase) ||
 			task.taskState.isStreaming ||
 			task.taskState.isWaitingForFirstChunk
 		) {
@@ -1553,6 +1557,7 @@ export class Controller {
 			contextWindowIndicator,
 			lastApiReqTotalTokens,
 			promptCacheHealth: this.task?.getPromptCacheHealth(),
+			promptFreshness: this.task?.getPromptFreshness(),
 			currentFocusChainChecklist: checklistForState,
 			focusChainHistory: this.task?.taskState.focusChainHistory || null,
 			checkpointManagerErrorMessage,

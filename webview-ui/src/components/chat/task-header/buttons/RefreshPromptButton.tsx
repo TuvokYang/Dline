@@ -1,3 +1,4 @@
+import type { PromptFreshnessSnapshot } from "@shared/PromptFreshness"
 import { AlertTriangle, RefreshCw } from "lucide-react"
 import { useMemo, useState } from "react"
 import {
@@ -22,6 +23,7 @@ interface RefreshPromptButtonProps {
 	estimatedInputTokens?: number
 	inputPrice?: number
 	currency?: string
+	promptFreshness?: PromptFreshnessSnapshot
 }
 
 /**
@@ -34,6 +36,7 @@ const RefreshPromptButton: React.FC<RefreshPromptButtonProps> = ({
 	estimatedInputTokens = 0,
 	inputPrice,
 	currency,
+	promptFreshness,
 }) => {
 	const [loading, setLoading] = useState(false)
 	const [confirmOpen, setConfirmOpen] = useState(false)
@@ -41,6 +44,9 @@ const RefreshPromptButton: React.FC<RefreshPromptButtonProps> = ({
 		() => buildRefreshPromptBudget({ estimatedInputTokens, inputPrice, currency }),
 		[estimatedInputTokens, inputPrice, currency],
 	)
+	const isStale = promptFreshness?.status === "stale"
+	const visibleChanges = promptFreshness?.changes.slice(0, 4) ?? []
+	const remainingChangeCount = Math.max(0, (promptFreshness?.changes.length ?? 0) - visibleChanges.length)
 
 	const handleRefresh = (e: React.MouseEvent) => {
 		e.preventDefault()
@@ -67,12 +73,46 @@ const RefreshPromptButton: React.FC<RefreshPromptButtonProps> = ({
 	return (
 		<>
 			<Tooltip>
-				<TooltipContent>Refresh Prompt Cache</TooltipContent>
+				<TooltipContent>
+					{isStale ? (
+						<span className="flex max-w-xs flex-col gap-1.5">
+							<span className="font-semibold">Prompt update available</span>
+							<span>The current task is still using its previous prompt and tool snapshot.</span>
+							{visibleChanges.length > 0 && (
+								<span className="flex flex-col">
+									{visibleChanges.map((change) => (
+										<span key={change.kind}>• {change.summary}</span>
+									))}
+									{remainingChangeCount > 0 && (
+										<span>
+											+{remainingChangeCount} more {remainingChangeCount === 1 ? "change" : "changes"}
+										</span>
+									)}
+								</span>
+							)}
+							<span>Click to review and refresh.</span>
+						</span>
+					) : (
+						"Refresh Prompt Cache"
+					)}
+				</TooltipContent>
 				<TooltipTrigger
-					className={cn(buttonVariants({ variant: "icon", size: "xs" }), "!overflow-visible !min-h-6", className)}
+					className={cn(
+						buttonVariants({ variant: "icon", size: "xs" }),
+						"relative !overflow-visible !min-h-6",
+						className,
+					)}
 					disabled={!taskId || loading}
 					onClick={handleRefresh}>
 					<RefreshCw className={loading ? "animate-spin" : ""} />
+					{isStale && (
+						<AlertTriangle
+							aria-label="Prompt update available"
+							className="absolute -right-1 -top-1 !h-3 !w-3 fill-(--vscode-warningForeground) text-(--vscode-warningForeground)"
+							data-testid="prompt-freshness-warning"
+							role="img"
+						/>
+					)}
 				</TooltipTrigger>
 			</Tooltip>
 			<AlertDialog onOpenChange={setConfirmOpen} open={confirmOpen}>

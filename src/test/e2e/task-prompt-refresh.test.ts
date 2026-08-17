@@ -66,6 +66,10 @@ e2e(
 		const before = initialContext.systemPrompt?.frozen
 		if (!before) throw new Error("Initial task prompt cache was not persisted")
 		expect(before.text).not.toContain(capabilityMarker)
+		const refreshButton = sidebar.locator("button:has(svg.lucide-refresh-cw)").first()
+		const freshnessWarning = refreshButton.getByTestId("prompt-freshness-warning")
+		await expect(refreshButton).toBeVisible()
+		await expect(freshnessWarning).toHaveCount(0)
 
 		const subagentDirectory = path.join(workspaceDir, ".agents", "subagents")
 		await mkdir(subagentDirectory, { recursive: true })
@@ -87,13 +91,17 @@ Read only the files needed for the requested review.`,
 		const frozenBeforeManualRefresh = await readPromptContext(dlineDocsDir, taskId)
 		expect(frozenBeforeManualRefresh.systemPrompt?.frozen?.refreshedAt).toBe(before.refreshedAt)
 		expect(frozenBeforeManualRefresh.systemPrompt?.frozen?.text).not.toContain(capabilityMarker)
+		await expect(freshnessWarning).toBeVisible()
+		await refreshButton.hover()
+		const freshnessTooltip = sidebar.getByRole("tooltip").filter({ hasText: "Prompt update available" })
+		await expect(freshnessTooltip).toContainText("The current task is still using its previous prompt and tool snapshot.")
+		await expect(freshnessTooltip).toContainText("Subagents changed")
+		await expect(freshnessTooltip).toContainText("Click to review and refresh.")
 
 		const requestCount = server.openAiRequestCount
 		const input = sidebar.getByTestId("chat-input")
 		await input.fill("E2E_PROMPT_REFRESH_DRAFT")
 
-		const refreshButton = sidebar.locator("button:has(svg.lucide-refresh-cw)").first()
-		await expect(refreshButton).toBeVisible()
 		await refreshButton.click()
 		const dialog = sidebar.getByRole("dialog")
 		await expect(dialog.getByRole("heading", { name: "Refresh Prompt Cache", exact: true })).toBeVisible()
@@ -103,6 +111,7 @@ Read only the files needed for the requested review.`,
 		const afterCancel = await readPromptContext(dlineDocsDir, taskId)
 		expect(afterCancel.systemPrompt?.frozen?.refreshedAt).toBe(before.refreshedAt)
 		expect(server.openAiRequestCount).toBe(requestCount)
+		await expect(freshnessWarning).toBeVisible()
 
 		await refreshButton.click()
 		await dialog.getByRole("button", { name: "Confirm", exact: true }).click()
@@ -118,6 +127,7 @@ Read only the files needed for the requested review.`,
 		if (!refreshed) throw new Error("Manual prompt refresh did not persist a frozen prompt")
 		expect(refreshed.refreshedAt).toBeGreaterThan(before.refreshedAt)
 		expect(refreshed.text).toContain(capabilityMarker)
+		await expect(freshnessWarning).toHaveCount(0)
 		await expect(input).toHaveValue("E2E_PROMPT_REFRESH_DRAFT")
 		await page.waitForTimeout(500)
 		expect(server.openAiRequestCount).toBe(requestCount)

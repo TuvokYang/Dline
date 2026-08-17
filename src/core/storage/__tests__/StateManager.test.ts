@@ -175,6 +175,10 @@ describe("StateManager — Per-Task Settings Isolation", () => {
 			await (sm as any).settingsRepository.mutate({ chatInputSendShortcut: "ctrlEnter" })
 
 			expect(first).toHaveBeenCalledOnce()
+			expect(first).toHaveBeenCalledWith({
+				source: "settings",
+				commit: expect.objectContaining({ changedKeys: ["chatInputSendShortcut"] }),
+			})
 			expect(second).toHaveBeenCalledOnce()
 			disposeFirst()
 			disposeSecond()

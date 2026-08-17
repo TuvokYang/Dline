@@ -1,4 +1,5 @@
 import { PROVIDER_API_KEY_MAP, readApiProfiles } from "@core/controller/file/getApiProfiles"
+import { type AutoApprovalSettings, DEFAULT_AUTO_APPROVAL_SETTINGS } from "@shared/AutoApprovalSettings"
 import type { ApiConfiguration, ModelInfo } from "@shared/api"
 import type { HistoryItem } from "@shared/HistoryItem"
 import {
@@ -46,6 +47,10 @@ import { readGlobalStateFromStorage, readSecretsFromStorage, readWorkspaceStateF
 export interface PersistenceErrorEvent {
 	error: Error
 }
+
+export type StateSyncEvent =
+	| { readonly source: "settings"; readonly commit: SettingsCommit }
+	| { readonly source: "task_history" }
 
 /**
  * In-memory state manager for fast state access.
@@ -139,7 +144,7 @@ export class StateManager {
 	private onPersistenceErrorCallbacks = new Set<(event: PersistenceErrorEvent) => void | Promise<void>>()
 
 	// Callbacks to sync external state changes — multiple controllers may register.
-	private onSyncExternalChangeCallbacks = new Set<() => void | Promise<void>>()
+	private onSyncExternalChangeCallbacks = new Set<(event: StateSyncEvent) => void | Promise<void>>()
 
 	/** TaskHistory instance (cross-process safe via JsonlIndexedStore). */
 	private _taskHistory: TaskHistory | null = null
@@ -148,7 +153,7 @@ export class StateManager {
 	onPersistenceError?: (event: PersistenceErrorEvent) => void
 
 	/** @deprecated Use the Set-based callbacks below. Kept for external compatibility. */
-	onSyncExternalChange?: () => void | Promise<void>
+	onSyncExternalChange?: (event: StateSyncEvent) => void | Promise<void>
 
 	private constructor(storage: StorageContext) {
 		this.storage = storage
@@ -212,7 +217,7 @@ export class StateManager {
 				if (!callbacks) return
 				for (const cb of callbacks) {
 					try {
-						await cb()
+						await cb({ source: "task_history" })
 					} catch {
 						/* ignore */
 					}
@@ -307,7 +312,7 @@ export class StateManager {
 			return
 		}
 		this.applySettingsSnapshot(commit.snapshot)
-		await this.notifySyncExternalChange()
+		await this.notifySyncExternalChange({ source: "settings", commit })
 	}
 
 	private applySettingsSnapshot(snapshot: SettingsSnapshot): void {
@@ -362,14 +367,14 @@ export class StateManager {
 		this.settingsFallbackCache = {}
 	}
 
-	private async notifySyncExternalChange(): Promise<void> {
+	private async notifySyncExternalChange(event: StateSyncEvent): Promise<void> {
 		const callbacks = new Set(this.onSyncExternalChangeCallbacks)
 		if (this.onSyncExternalChange) {
 			callbacks.add(this.onSyncExternalChange)
 		}
 		for (const callback of callbacks) {
 			try {
-				await callback()
+				await callback(event)
 			} catch (error) {
 				Logger.error("[StateManager] Failed to broadcast committed Settings state:", error)
 			}
@@ -442,7 +447,7 @@ export class StateManager {
 	 */
 	public registerCallbacks(callbacks: {
 		onPersistenceError?: (event: PersistenceErrorEvent) => void | Promise<void>
-		onSyncExternalChange?: () => void | Promise<void>
+		onSyncExternalChange?: (event: StateSyncEvent) => void | Promise<void>
 	}): () => void {
 		const { onPersistenceError, onSyncExternalChange } = callbacks
 
@@ -1038,6 +1043,22 @@ export class StateManager {
 	 * Get method for global settings keys - reads from in-memory cache
 	 * Precedence: remote config > session override > task settings > global settings
 	 */
+	getCanonicalSettingsKey<K extends keyof Settings>(key: K): Settings[K] {
+		if (!this.isInitialized) {
+			throw new Error(STATE_MANAGER_NOT_INITIALIZED)
+		}
+		if (this.remoteConfigCache[key] !== undefined) {
+			return this.remoteConfigCache[key] as Settings[K]
+		}
+		if (this.sessionOverrideCache[key] !== undefined) {
+			return this.sessionOverrideCache[key] as Settings[K]
+		}
+		if (this.settingsCache[key] !== undefined) {
+			return this.settingsCache[key]
+		}
+		return this.globalStateCache[key]
+	}
+
 	getGlobalSettingsKey<K extends keyof Settings>(key: K): Settings[K] {
 		if (!this.isInitialized) {
 			throw new Error(STATE_MANAGER_NOT_INITIALIZED)
@@ -1047,6 +1068,11 @@ export class StateManager {
 		}
 		if (this.sessionOverrideCache[key] !== undefined) {
 			return this.sessionOverrideCache[key] as Settings[K]
+		}
+		// Auto-Approve is a live global permission. A historical Task snapshot must
+		// never shadow changes made from this or another running VS Code instance.
+		if (key === "autoApprovalSettings") {
+			return this.getCanonicalSettingsKey(key)
 		}
 		// Look up the active task's cache to support per-task settings isolation
 		if (this.activeTaskId) {
@@ -1060,6 +1086,35 @@ export class StateManager {
 			return this.settingsCache[key]
 		}
 		return this.globalStateCache[key]
+	}
+
+	/** Atomically merge Auto-Approve changes against the latest cross-process Settings snapshot. */
+	async updateAutoApprovalSettings(patch: {
+		version?: number
+		actions?: Partial<AutoApprovalSettings["actions"]>
+		enableNotifications?: boolean
+	}): Promise<AutoApprovalSettings> {
+		this.ensureMutationAllowed()
+		await this.flushPendingState()
+		const repository = this.settingsRepository
+		if (!repository) throw new Error("Settings repository is not initialized")
+
+		const commit = await repository.mutateResolved((values) => {
+			const current = values.autoApprovalSettings ?? DEFAULT_AUTO_APPROVAL_SETTINGS
+			const currentVersion = current.version ?? DEFAULT_AUTO_APPROVAL_SETTINGS.version
+			const version = Math.max(currentVersion + 1, patch.version ?? 0)
+			return {
+				autoApprovalSettings: {
+					...current,
+					version,
+					...(patch.enableNotifications === undefined ? {} : { enableNotifications: patch.enableNotifications }),
+					actions: { ...current.actions, ...patch.actions },
+				},
+			}
+		})
+		const committed = commit.snapshot.values.autoApprovalSettings
+		if (!committed) throw new Error("Auto-Approve Settings transaction completed without a value")
+		return committed
 	}
 
 	/**

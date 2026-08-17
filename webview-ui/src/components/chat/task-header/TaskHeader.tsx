@@ -76,6 +76,7 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 		setExpandTaskHeader: setIsTaskExpanded,
 		environment,
 		promptCacheHealth,
+		promptFreshness,
 		taskLockStatus,
 	} = useExtensionState()
 
@@ -169,6 +170,7 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 									currency={displayCurrency}
 									estimatedInputTokens={currentContextTokens}
 									inputPrice={pricing?.inputPrice}
+									promptFreshness={promptFreshness}
 									taskId={currentTaskItem?.id}
 								/>
 								<DeleteTaskButton

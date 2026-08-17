@@ -450,8 +450,7 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 
 		// Profile-driven model selection
 		Logger.info("[updateSettings] received", {
-			planModeProfile: request.planModeProfile,
-			actModeProfile: request.actModeProfile,
+			fields: Object.keys(request),
 		})
 		const didChangeProfile = request.planModeProfile !== undefined || request.actModeProfile !== undefined
 		if (request.planModeProfile !== undefined) {

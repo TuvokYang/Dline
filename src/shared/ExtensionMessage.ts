@@ -17,6 +17,7 @@ import { McpDisplayMode } from "./McpDisplayMode"
 import { ClineMessageModelInfo } from "./messages"
 import type { ModeSwitchSnapshot } from "./mode-switch"
 import type { PromptCacheHealthSnapshot } from "./PromptCacheHealth"
+import type { PromptFreshnessSnapshot } from "./PromptFreshness"
 import type { ProfileSwitchSnapshot } from "./profile-switch"
 import { OnboardingModelGroup } from "./proto/dline/state"
 import type { TaskLockStatus } from "./proto/dline/task"
@@ -171,6 +172,8 @@ export interface ExtensionState {
 	lastApiReqTotalTokens?: number
 	/** Current Task-local prompt cache health snapshot. */
 	promptCacheHealth?: PromptCacheHealthSnapshot
+	/** Current Task-local frozen prompt freshness snapshot. */
+	promptFreshness?: PromptFreshnessSnapshot
 	/** Account-level usage/balance info queried from provider API */
 	accountUsage?: AccountUsageData
 	/** Task lock status indicating if the current task is locked by another instance */

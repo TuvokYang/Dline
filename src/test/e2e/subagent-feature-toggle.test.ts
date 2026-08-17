@@ -209,6 +209,51 @@ e2e(
 )
 
 e2e(
+	"Subagent feature toggle - changing Settings marks the active frozen prompt stale without another API request",
+	async ({ dlineDir, helper, page, server, sidebar, userDataDir }) => {
+		e2e.setTimeout(180_000)
+		await helper.signin(sidebar)
+		await setSubagentsEnabled(page, sidebar, false)
+		await expect.poll(() => readSubagentsEnabled(dlineDir)).toBe(false)
+
+		server.resetOpenAiMock()
+		server.enqueueOpenAiResponses({
+			type: "tool",
+			id: "call_subagent_freshness_ready",
+			name: "attempt_completion",
+			arguments: { result: "E2E_SUBAGENT_FRESHNESS_READY" },
+		})
+
+		await sendTask(sidebar, "Create a frozen prompt before changing the Subagents setting.")
+		await expect(sidebar.getByText("E2E_SUBAGENT_FRESHNESS_READY", { exact: false }).last()).toBeVisible({
+			timeout: 60_000,
+		})
+		await expect.poll(() => server.getRequestCount("openai-compatible-chat")).toBe(1)
+
+		const refreshButton = sidebar.locator("button:has(svg.lucide-refresh-cw)").first()
+		const freshnessWarning = refreshButton.getByTestId("prompt-freshness-warning")
+		await expect(refreshButton).toBeVisible()
+		await expect(freshnessWarning).toHaveCount(0)
+
+		await openFeatureSettings(page, sidebar)
+		const toggle = subagentsSwitch(sidebar)
+		await expect(toggle).toHaveAttribute("aria-checked", "false")
+		await toggle.click()
+		await expect(toggle).toHaveAttribute("aria-checked", "true")
+		await expect.poll(() => readSubagentsEnabled(dlineDir), { timeout: 10_000 }).toBe(true)
+		await sidebar.getByRole("button", { name: "Done", exact: true }).click()
+		await expect(sidebar.getByTestId("chat-input")).toBeVisible()
+
+		await expect.poll(() => server.getRequestCount("openai-compatible-chat")).toBe(1)
+		await expect(freshnessWarning).toBeVisible()
+		await refreshButton.hover()
+		const freshnessTooltip = sidebar.getByRole("tooltip").filter({ hasText: "Prompt update available" })
+		await expect(freshnessTooltip).toContainText("Subagents changed")
+		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+	},
+)
+
+e2e(
 	"Subagent feature toggle - enabled state survives later state publications and Settings remounts",
 	async ({ dlineDir, helper, page, sidebar, userDataDir }) => {
 		e2e.setTimeout(180_000)

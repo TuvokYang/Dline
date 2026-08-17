@@ -7,6 +7,7 @@ import type { ClineTool } from "@shared/tools"
 import { describe, expect, it } from "vitest"
 import { HOSTED_WEB_SEARCH_ROUTING_PLAN, LOCAL_WEB_SEARCH_ROUTING_PLAN } from "../../__tests__/web-search-routing-fixtures"
 import { hashPromptContent } from "../hash"
+import { buildPromptFreshnessBaseline } from "../PromptFreshnessProjection"
 import { SYSTEM_PROMPT_CONTRACT_VERSION, SystemPromptCacheService } from "../SystemPromptCacheService"
 
 const EMPTY_CAPABILITIES = {
@@ -104,8 +105,10 @@ describe("SystemPromptCacheService", () => {
 		expect(result.text).toContain("mcp.tool")
 		expect(result.refreshReason).toBe("task_start")
 		expect(result.tools).toBeNull()
+		expect(result.freshnessBaseline).toBeDefined()
 		expect(saved?.systemPrompt?.frozen?.text).toBe(result.text)
 		expect(saved?.systemPrompt?.frozen?.tools).toBeNull()
+		expect(service.getPromptFreshness()).toMatchObject({ status: "fresh", changes: [], frozenAt: 10 })
 	})
 
 	it("rebuilds provider-shaped tools when the active provider changes", async () => {
@@ -597,7 +600,8 @@ describe("SystemPromptCacheService", () => {
 		expect(service.getLastTools()).toEqual(rebuiltTools)
 	})
 
-	it("keeps the frozen prompt until an explicit refresh when canonical capabilities change", async () => {
+	it("keeps the frozen prompt until an explicit refresh and reports visible capability changes as stale", async () => {
+		const enabledContext: SystemPromptContext = { ...promptContext, subagentsEnabled: true }
 		const cached = {
 			...emptyContext("task-1"),
 			systemPrompt: {
@@ -605,6 +609,7 @@ describe("SystemPromptCacheService", () => {
 					text: "old prompt # Capabilities old",
 					tools: null,
 					capabilitiesHash: "sha256:old",
+					freshnessBaseline: buildPromptFreshnessBaseline(enabledContext, EMPTY_CAPABILITIES),
 					createdAt: 1,
 					refreshedAt: 1,
 					refreshReason: "task_start" as const,
@@ -633,10 +638,65 @@ describe("SystemPromptCacheService", () => {
 			},
 		})
 
-		const result = await service.getOrCreate({ promptContext })
+		const result = await service.getOrCreate({ promptContext: enabledContext })
 
 		expect(result.text).toBe("old prompt # Capabilities old")
 		expect(result.refreshReason).toBe("task_start")
+		expect(saveCount).toBe(0)
+		expect(service.getPromptFreshness()).toMatchObject({
+			status: "stale",
+			changes: [{ kind: "subagents", summary: "Subagents changed" }],
+			frozenAt: 1,
+		})
+	})
+
+	it("re-evaluates a Settings change without rebuilding or persisting the frozen pair", async () => {
+		const disabledContext: SystemPromptContext = { ...promptContext, subagentsEnabled: false }
+		const cached: TaskContextCache = {
+			...emptyContext("task-1"),
+			systemPrompt: {
+				frozen: {
+					text: "subagents-disabled prompt",
+					tools: null,
+					capabilitiesHash: EMPTY_CAPABILITIES_HASH,
+					freshnessBaseline: buildPromptFreshnessBaseline(disabledContext, EMPTY_CAPABILITIES),
+					createdAt: 1,
+					refreshedAt: 1,
+					refreshReason: "task_start",
+					promptBuilder: testPromptBuilderInfo,
+				},
+			},
+		}
+		let saveCount = 0
+		let buildCount = 0
+		const service = new SystemPromptCacheService({
+			taskId: "task-1",
+			deps: {
+				getContext: async () => cached,
+				saveContext: async () => {
+					saveCount += 1
+				},
+				collectCapabilities: async () => EMPTY_CAPABILITIES,
+				buildSystemPrompt: async () => {
+					buildCount += 1
+					return { systemPrompt: "must not build" }
+				},
+				now: () => 40,
+			},
+		})
+
+		const snapshot = await service.reevaluateFreshness({
+			promptContext: { ...promptContext, subagentsEnabled: true },
+		})
+
+		expect(snapshot).toEqual({
+			status: "stale",
+			changes: [{ kind: "subagents", summary: "Subagents changed" }],
+			checkedAt: 40,
+			frozenAt: 1,
+		})
+		expect(service.getPromptFreshness()).toEqual(snapshot)
+		expect(buildCount).toBe(0)
 		expect(saveCount).toBe(0)
 	})
 

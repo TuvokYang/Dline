@@ -1,3 +1,4 @@
+import type { PromptFreshnessBaseline } from "@shared/PromptFreshness"
 import type { ApiFormat, ServerTool } from "@shared/proto/dline/models/metadata"
 import type { ClineTool } from "@shared/tools"
 import type { WebSearchRoute } from "@/core/api/server-tools"
@@ -29,6 +30,8 @@ export interface FrozenSystemPromptCache {
 	readonly text: string
 	readonly tools: readonly ClineTool[] | null
 	readonly capabilitiesHash: string
+	/** Optional so frozen prompts created before freshness tracking remain readable. */
+	readonly freshnessBaseline?: PromptFreshnessBaseline
 	readonly createdAt: number
 	readonly refreshedAt: number
 	readonly refreshReason: SystemPromptRefreshReason
