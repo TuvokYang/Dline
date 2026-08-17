@@ -52,12 +52,12 @@ const WebSearchRow = ({ messageType, query, webSearch }: WebSearchRowProps) => {
 	const [detailsExpanded, setDetailsExpanded] = useState(false)
 
 	return (
-		<div className="max-h-[40vh] overflow-y-auto pr-1" data-testid="web-search-card">
-			<div className="mb-3 flex items-center gap-2.5">
+		<div className="flex max-h-[40vh] flex-col overflow-hidden pr-1" data-testid="web-search-card">
+			<div className="mb-3 flex shrink-0 items-center gap-2.5">
 				<SearchIcon className="size-2 rotate-90" />
 				<span className="font-bold">{operationTitle(messageType, operation)}</span>
 			</div>
-			<div className="space-y-2 overflow-hidden rounded-xs border border-editor-group-border bg-code px-2.5 py-[9px] select-text">
+			<div className="flex min-h-0 flex-1 flex-col space-y-2 overflow-hidden rounded-xs border border-editor-group-border bg-code px-2.5 py-[9px] select-text">
 				{sourceLabel && <div className="text-xs font-semibold text-description">{sourceLabel}</div>}
 				{operationDetails.map((detail, index) => (
 					<div className="ph-no-capture break-words" key={`${index}:${detail}`}>
@@ -88,7 +88,7 @@ const WebSearchRow = ({ messageType, query, webSearch }: WebSearchRowProps) => {
 						</button>
 						{detailsExpanded && (
 							<div
-								className="space-y-2 border-t border-editor-widget-border/50 pt-2"
+								className="min-h-0 flex-1 space-y-2 overflow-y-auto border-t border-editor-widget-border/50 pt-2"
 								data-testid="web-search-results">
 								{items.map((item) => (
 									<div className="space-y-0.5" key={item.url}>

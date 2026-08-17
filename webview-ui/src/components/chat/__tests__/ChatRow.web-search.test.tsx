@@ -116,8 +116,9 @@ describe("ChatRow hosted Web Search rendering", () => {
 		expect(screen.getByText("Dline result")).toBeInTheDocument()
 		expect(screen.getByText("https://example.com/dline")).toBeInTheDocument()
 		expect(screen.getByText("Provider-compressed search result")).toBeInTheDocument()
-		expect(screen.getByTestId("web-search-card")).toHaveClass("max-h-[40vh]", "overflow-y-auto")
-		expect(screen.getByTestId("web-search-results")).not.toHaveClass("max-h-[40vh]", "overflow-y-auto")
+		expect(screen.getByTestId("web-search-card")).toHaveClass("max-h-[40vh]", "overflow-hidden")
+		expect(screen.getByTestId("web-search-card")).not.toHaveClass("overflow-y-auto")
+		expect(screen.getByTestId("web-search-results")).toHaveClass("overflow-y-auto")
 	})
 
 	it("renders all normalized search queries instead of the generic hosted placeholder", () => {
