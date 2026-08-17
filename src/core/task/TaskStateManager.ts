@@ -11,6 +11,45 @@ export interface TaskProfileBinding {
 	profileName?: string
 }
 
+export interface TaskProfileBindingUpdateOptions {
+	readonly clearRuntimeOverrides?: boolean
+}
+
+export type TaskProfileStateSnapshot = Partial<Record<Mode, Partial<Record<SettingsKey, string | number | undefined>>>>
+
+interface TaskProfileModeFields {
+	readonly profileId: "planModeProfileId" | "actModeProfileId"
+	readonly profileName: "planModeProfile" | "actModeProfile"
+	readonly runtimeOverrides: readonly SettingsKey[]
+}
+
+const TASK_PROFILE_MODE_FIELDS: Record<Mode, TaskProfileModeFields> = {
+	plan: {
+		profileId: "planModeProfileId",
+		profileName: "planModeProfile",
+		runtimeOverrides: [
+			"planModeReasoningOverrideKind",
+			"planModeReasoningOverrideEffort",
+			"planModeThinkingBudgetTokens",
+			"planModeReasoningEffort",
+			"planModeServiceTierOverrideKind",
+			"planModeServiceTierOverrideTier",
+		],
+	},
+	act: {
+		profileId: "actModeProfileId",
+		profileName: "actModeProfile",
+		runtimeOverrides: [
+			"actModeReasoningOverrideKind",
+			"actModeReasoningOverrideEffort",
+			"actModeThinkingBudgetTokens",
+			"actModeReasoningEffort",
+			"actModeServiceTierOverrideKind",
+			"actModeServiceTierOverrideTier",
+		],
+	},
+}
+
 /**
  * Per-task state manager that eliminates the activeTaskId indirection.
  * Each Task owns its own TaskStateManager instance with a direct
@@ -124,21 +163,51 @@ export class TaskStateManager {
 		this.globalSm.markTaskSettingDirty(this.taskId, "actModeProfile")
 	}
 
-	/** Atomically update stable identity and display name for one or both task-local Profile bindings. */
-	setProfileIdentityBindings(bindings: Partial<Record<Mode, TaskProfileBinding | undefined>>): void {
+	/**
+	 * Atomically update one or both task-local Profile bindings.
+	 *
+	 * The returned pre-mutation snapshot can restore both bindings and raw
+	 * runtime override fields if handler rebuild or durable persistence fails.
+	 */
+	setProfileIdentityBindings(
+		bindings: Partial<Record<Mode, TaskProfileBinding | undefined>>,
+		options: TaskProfileBindingUpdateOptions = {},
+	): TaskProfileStateSnapshot {
+		const snapshot: TaskProfileStateSnapshot = {}
 		const apply = (mode: Mode, binding: TaskProfileBinding | undefined) => {
-			const idKey = mode === "plan" ? "planModeProfileId" : "actModeProfileId"
-			const nameKey = mode === "plan" ? "planModeProfile" : "actModeProfile"
-			if (binding?.profileId === undefined) delete this.cache[idKey]
-			else this.cache[idKey] = binding.profileId
-			if (binding?.profileName === undefined) delete this.cache[nameKey]
-			else this.cache[nameKey] = binding.profileName
-			this.globalSm.markTaskSettingDirty(this.taskId, idKey)
-			this.globalSm.markTaskSettingDirty(this.taskId, nameKey)
+			const fields = TASK_PROFILE_MODE_FIELDS[mode]
+			snapshot[mode] = this.captureProfileState(mode)
+			this.writeOptionalSetting(fields.profileId, binding?.profileId)
+			this.writeOptionalSetting(fields.profileName, binding?.profileName)
+			if (options.clearRuntimeOverrides) {
+				for (const key of fields.runtimeOverrides) this.writeOptionalSetting(key, undefined)
+			}
 		}
 
 		if (Object.hasOwn(bindings, "plan")) apply("plan", bindings.plan)
 		if (Object.hasOwn(bindings, "act")) apply("act", bindings.act)
+		return snapshot
+	}
+
+	/** Restore an exact pre-adoption Profile state after a failed transaction. */
+	restoreProfileState(snapshot: TaskProfileStateSnapshot): void {
+		for (const mode of ["plan", "act"] as const) {
+			if (!Object.hasOwn(snapshot, mode)) continue
+			const state = snapshot[mode]
+			const fields = TASK_PROFILE_MODE_FIELDS[mode]
+			for (const key of [fields.profileId, fields.profileName, ...fields.runtimeOverrides]) {
+				this.writeOptionalSetting(key, state?.[key])
+			}
+		}
+	}
+
+	private captureProfileState(mode: Mode): Partial<Record<SettingsKey, string | number | undefined>> {
+		const fields = TASK_PROFILE_MODE_FIELDS[mode]
+		const state: Partial<Record<SettingsKey, string | number | undefined>> = {}
+		for (const key of [fields.profileId, fields.profileName, ...fields.runtimeOverrides]) {
+			state[key] = this.cache[key] as string | number | undefined
+		}
+		return state
 	}
 
 	/** Return the Task-local reasoning override for one mode, including legacy effort migration. */

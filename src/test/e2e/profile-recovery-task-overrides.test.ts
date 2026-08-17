@@ -8,6 +8,7 @@ import { E2ETestHelper, e2e } from "./utils/helpers"
 interface StoredProfile {
 	id: string
 	name: string
+	webSearchMode?: "WEB_SEARCH_MODE_FORCE_OFF"
 	modelInfo?: {
 		capabilities?: {
 			supportsReasoning?: boolean
@@ -33,15 +34,26 @@ interface StoredProfile {
 }
 
 interface StoredTaskSettings {
+	planModeProfileId?: string
+	planModeProfile?: string
+	planModeReasoningOverrideKind?: string
+	planModeReasoningOverrideEffort?: string
+	planModeThinkingBudgetTokens?: number
+	planModeReasoningEffort?: string
+	planModeServiceTierOverrideKind?: string
+	planModeServiceTierOverrideTier?: string
 	actModeProfileId?: string
 	actModeProfile?: string
 	actModeReasoningOverrideKind?: string
 	actModeReasoningOverrideEffort?: string
+	actModeThinkingBudgetTokens?: number
+	actModeReasoningEffort?: string
 	actModeServiceTierOverrideKind?: string
 	actModeServiceTierOverrideTier?: string
 }
 
 const profilesPath = (dlineDir: string) => path.join(dlineDir, "data", "settings", "api_profiles.json")
+const settingsPath = (dlineDir: string) => path.join(dlineDir, "data", "settings", "settings.json")
 
 async function configureRecoveryProfileCapabilities(dlineDir: string): Promise<void> {
 	const profiles = JSON.parse(await readFile(profilesPath(dlineDir), "utf8")) as StoredProfile[]
@@ -63,6 +75,56 @@ async function configureRecoveryProfileCapabilities(dlineDir: string): Promise<v
 		},
 	}
 	await writeFile(profilesPath(dlineDir), `${JSON.stringify(profiles, null, 2)}\n`, "utf8")
+}
+
+async function configureProfileSwitchDefaults(dlineDir: string): Promise<StoredProfile> {
+	const profiles = JSON.parse(await readFile(profilesPath(dlineDir), "utf8")) as StoredProfile[]
+	const sourceProfile = profiles.find((profile) => profile.name === E2E_PROFILE_NAMES.mockOpenAi)
+	const targetProfile = profiles.find((profile) => profile.name === E2E_PROFILE_NAMES.mockOpenAiResponses)
+	if (!sourceProfile?.openai?.capabilities || !targetProfile?.openai?.capabilities) {
+		throw new Error("Missing configurable OpenAI E2E profiles")
+	}
+	const thinking = {
+		supported: true,
+		mode: "effort",
+		effortLevels: ["none", "low", "medium", "high"],
+	}
+	for (const profile of [sourceProfile, targetProfile]) {
+		profile.webSearchMode = "WEB_SEARCH_MODE_FORCE_OFF"
+		profile.openai.capabilities.supportsReasoning = true
+		profile.modelInfo = {
+			...(profile.modelInfo ?? {}),
+			capabilities: {
+				...(profile.modelInfo?.capabilities ?? {}),
+				supportsReasoning: true,
+				thinking,
+			},
+		}
+	}
+	targetProfile.openai.reasoning = { enableThinking: true, effort: "high", thinkingBudget: 0 }
+	targetProfile.openai.serviceTier = "flex"
+
+	const settings = JSON.parse(await readFile(settingsPath(dlineDir), "utf8")) as Record<string, unknown>
+	await Promise.all([
+		writeFile(profilesPath(dlineDir), `${JSON.stringify(profiles, null, 2)}\n`, "utf8"),
+		writeFile(
+			settingsPath(dlineDir),
+			`${JSON.stringify(
+				{
+					...settings,
+					planActSeparateModelsSetting: true,
+					planModeProfileId: sourceProfile.id,
+					planModeProfile: sourceProfile.name,
+					actModeProfileId: sourceProfile.id,
+					actModeProfile: sourceProfile.name,
+				},
+				null,
+				2,
+			)}\n`,
+			"utf8",
+		),
+	])
+	return JSON.parse(JSON.stringify(targetProfile)) as StoredProfile
 }
 
 async function onlyTaskId(dlineDocsDir: string): Promise<string> {
@@ -106,6 +168,169 @@ async function selectServiceTier(sidebar: Frame, optionName: string): Promise<vo
 	await expect(sidebar.getByRole("option", { name: "Profile", exact: true })).toHaveCount(0)
 	await sidebar.getByRole("option", { name: optionName, exact: true }).click()
 }
+
+function activeRuntimeOverrideState(settings: StoredTaskSettings) {
+	return {
+		reasoningKind: settings.actModeReasoningOverrideKind,
+		reasoningEffort: settings.actModeReasoningOverrideEffort,
+		thinkingBudget: settings.actModeThinkingBudgetTokens,
+		legacyReasoningEffort: settings.actModeReasoningEffort,
+		serviceTierKind: settings.actModeServiceTierOverrideKind,
+		serviceTier: settings.actModeServiceTierOverrideTier,
+	}
+}
+
+e2e(
+	"Profile switch clears Task runtime overrides and reopened history uses the target Profile defaults",
+	async ({ dlineDir, dlineDocsDir, helper, openVSCode, server, userDataDir, workspaceDir }, testInfo) => {
+		e2e.setTimeout(240_000)
+		const targetProfileBefore = await configureProfileSwitchDefaults(dlineDir)
+		server.enqueueResponses("openai-compatible-chat", {
+			type: "tool",
+			name: "qna_respond",
+			arguments: { response: "E2E_PROFILE_OVERRIDE_SWITCH_READY" },
+			expectedRequestIncludes: ["E2E_PROFILE_OVERRIDE_SWITCH_TASK"],
+		})
+		server.enqueueResponses("openai-compatible-responses", {
+			type: "tool",
+			name: "attempt_completion",
+			arguments: { result: "E2E_PROFILE_OVERRIDE_SWITCH_DONE" },
+			expectedRequestIncludes: ["E2E_PROFILE_OVERRIDE_SWITCH_FEEDBACK"],
+		})
+		let app: ElectronApplication | undefined
+		const taskText = "E2E_PROFILE_OVERRIDE_SWITCH_TASK"
+
+		try {
+			app = await openVSCode(workspaceDir)
+			let page = await app.firstWindow()
+			await E2ETestHelper.openClineSidebar(page)
+			let sidebar = await helper.getSidebar(page)
+			await helper.signin(sidebar)
+
+			const input = sidebar.getByTestId("chat-input")
+			await input.fill(taskText)
+			await sidebar.getByTestId("send-button").click()
+			await expect(sidebar.getByText("E2E_PROFILE_OVERRIDE_SWITCH_READY", { exact: true })).toBeVisible({ timeout: 60_000 })
+			await selectThinkingOverride(sidebar, "Low")
+			await selectServiceTier(sidebar, "Priority")
+
+			const taskId = await onlyTaskId(dlineDocsDir)
+			await expect
+				.poll(async () => activeRuntimeOverrideState(await readTaskSettings(dlineDocsDir, taskId)), { timeout: 30_000 })
+				.toEqual({
+					reasoningKind: "effort",
+					reasoningEffort: "low",
+					thinkingBudget: undefined,
+					legacyReasoningEffort: undefined,
+					serviceTierKind: "tier",
+					serviceTier: "priority",
+				})
+
+			await selectProfile(sidebar, E2E_PROFILE_NAMES.mockOpenAiResponses)
+			await expect(sidebar.getByRole("combobox", { name: "Task thinking override" })).toContainText("High")
+			await expect(sidebar.getByRole("button", { name: "Task service tier" })).toHaveAttribute(
+				"title",
+				"Service tier: Flex",
+			)
+			await expect
+				.poll(
+					async () => {
+						const settings = await readTaskSettings(dlineDocsDir, taskId)
+						return {
+							profileId: settings.actModeProfileId,
+							profileName: settings.actModeProfile,
+							...activeRuntimeOverrideState(settings),
+						}
+					},
+					{ timeout: 30_000 },
+				)
+				.toEqual({
+					profileId: targetProfileBefore.id,
+					profileName: targetProfileBefore.name,
+					reasoningKind: undefined,
+					reasoningEffort: undefined,
+					thinkingBudget: undefined,
+					legacyReasoningEffort: undefined,
+					serviceTierKind: undefined,
+					serviceTier: undefined,
+				})
+
+			const currentScreenshot = testInfo.outputPath("profile-switch-cleared-current-task.png")
+			await page.screenshot({ path: currentScreenshot })
+			await testInfo.attach("profile-switch-cleared-current-task", { path: currentScreenshot, contentType: "image/png" })
+			await sidebar.getByRole("button", { name: "Close Task", exact: true }).click()
+			await app.close()
+			app = undefined
+			helper.clearCachedFrame()
+
+			app = await openVSCode(workspaceDir)
+			page = await app.firstWindow()
+			await E2ETestHelper.openClineSidebar(page)
+			sidebar = await helper.getSidebar(page)
+			await helper.signin(sidebar)
+			await page.getByRole("button", { name: "History", exact: true }).click()
+			await E2ETestHelper.dismissWhatsNewModal(sidebar)
+			const historyItem = sidebar.locator(".history-item").filter({ hasText: taskText })
+			await expect(historyItem).toHaveCount(1)
+			await historyItem.click()
+			await expect(sidebar.getByRole("button", { name: "Select model" })).toHaveText(targetProfileBefore.name)
+			await expect(sidebar.getByRole("combobox", { name: "Task thinking override" })).toContainText("High")
+			await expect(sidebar.getByRole("button", { name: "Task service tier" })).toHaveAttribute(
+				"title",
+				"Service tier: Flex",
+			)
+			const reopenedScreenshot = testInfo.outputPath("profile-switch-cleared-reopened-task.png")
+			await page.screenshot({ path: reopenedScreenshot })
+			await testInfo.attach("profile-switch-cleared-reopened-task", { path: reopenedScreenshot, contentType: "image/png" })
+
+			const reopenedInput = sidebar.getByTestId("chat-input")
+			await expect(reopenedInput).toBeEnabled()
+			await reopenedInput.fill("E2E_PROFILE_OVERRIDE_SWITCH_FEEDBACK")
+			await reopenedInput.press("Enter")
+			await expect(sidebar.getByText("E2E_PROFILE_OVERRIDE_SWITCH_DONE", { exact: false }).last()).toBeVisible({
+				timeout: 60_000,
+			})
+			await expect.poll(() => server.getRequestCount("openai-compatible-responses")).toBe(1)
+			const targetRequest = server.getMockConsumptions("openai-compatible-responses")[0]
+			expect(targetRequest.thinking).toEqual({ mode: "effort", effort: "high" })
+			expect(targetRequest.requestBody).toMatchObject({ service_tier: "flex" })
+
+			const persistedProfiles = JSON.parse(await readFile(profilesPath(dlineDir), "utf8")) as StoredProfile[]
+			const targetProfileAfter = persistedProfiles.find((profile) => profile.id === targetProfileBefore.id)
+			expect(targetProfileAfter).toEqual(targetProfileBefore)
+			const evidence = [
+				{
+					fileName: "profile-switch-task-settings.json",
+					content: JSON.stringify(await readTaskSettings(dlineDocsDir, taskId), null, 2),
+					contentType: "application/json",
+				},
+				{
+					fileName: "profile-switch-profile-catalog.json",
+					content: JSON.stringify({ before: targetProfileBefore, after: targetProfileAfter }, null, 2),
+					contentType: "application/json",
+				},
+				{
+					fileName: "profile-switch-target-request.json",
+					content: JSON.stringify(targetRequest, null, 2),
+					contentType: "application/json",
+				},
+				{
+					fileName: "profile-switch-dline-output.log",
+					content: await E2ETestHelper.readDlineOutput(userDataDir),
+					contentType: "text/plain",
+				},
+			] as const
+			for (const item of evidence) {
+				const evidencePath = testInfo.outputPath(item.fileName)
+				await writeFile(evidencePath, item.content, "utf8")
+				await testInfo.attach(item.fileName, { path: evidencePath, contentType: item.contentType })
+			}
+			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+		} finally {
+			await app?.close()
+		}
+	},
+)
 
 e2e(
 	"Profile recovery clears the stale error and restores Task-local Thinking and Service Tier",

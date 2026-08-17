@@ -9,13 +9,19 @@ interface ProfileBinding {
 	profileName?: string
 }
 
+type FakeProfileStateSnapshot = Partial<Record<Mode, ProfileBinding | undefined>>
+
 interface FakeTaskStateManager {
 	mode: Mode
 	planModeProfileId?: string
 	planModeProfile?: string
 	actModeProfileId?: string
 	actModeProfile?: string
-	setProfileIdentityBindings: (bindings: Partial<Record<Mode, ProfileBinding | undefined>>) => void
+	setProfileIdentityBindings: (
+		bindings: Partial<Record<Mode, ProfileBinding | undefined>>,
+		options?: { clearRuntimeOverrides?: boolean },
+	) => FakeProfileStateSnapshot
+	restoreProfileState: (snapshot: FakeProfileStateSnapshot) => void
 	setProfileBindings: (bindings: Partial<Record<Mode, string | undefined>>) => void
 	setMode: (mode: Mode) => void
 }
@@ -28,13 +34,27 @@ function createTaskStateManager(mode: Mode): FakeTaskStateManager {
 		actModeProfileId: "act-source-id",
 		actModeProfile: "act-source",
 		setProfileIdentityBindings: vi.fn((bindings: Partial<Record<Mode, ProfileBinding | undefined>>) => {
+			const snapshot: FakeProfileStateSnapshot = {}
 			if (Object.hasOwn(bindings, "plan")) {
+				snapshot.plan = { profileId: state.planModeProfileId, profileName: state.planModeProfile }
 				state.planModeProfileId = bindings.plan?.profileId
 				state.planModeProfile = bindings.plan?.profileName
 			}
 			if (Object.hasOwn(bindings, "act")) {
+				snapshot.act = { profileId: state.actModeProfileId, profileName: state.actModeProfile }
 				state.actModeProfileId = bindings.act?.profileId
 				state.actModeProfile = bindings.act?.profileName
+			}
+			return snapshot
+		}),
+		restoreProfileState: vi.fn((snapshot: FakeProfileStateSnapshot) => {
+			if (Object.hasOwn(snapshot, "plan")) {
+				state.planModeProfileId = snapshot.plan?.profileId
+				state.planModeProfile = snapshot.plan?.profileName
+			}
+			if (Object.hasOwn(snapshot, "act")) {
+				state.actModeProfileId = snapshot.act?.profileId
+				state.actModeProfile = snapshot.act?.profileName
 			}
 		}),
 		setProfileBindings: vi.fn((bindings: Partial<Record<Mode, string | undefined>>) => {
@@ -54,9 +74,9 @@ describe("Task task-local Profile adoption", () => {
 		const taskSm = createTaskStateManager("act")
 		const order: string[] = []
 		const originalSet = taskSm.setProfileIdentityBindings
-		taskSm.setProfileIdentityBindings = vi.fn((bindings) => {
+		taskSm.setProfileIdentityBindings = vi.fn((bindings, options) => {
 			order.push("bindings")
-			originalSet(bindings)
+			return originalSet(bindings, options)
 		})
 		const fakeTask = {
 			taskSm,
@@ -73,10 +93,13 @@ describe("Task task-local Profile adoption", () => {
 
 		await Task.prototype.commitProfileBindings.call(fakeTask, "target-profile", ["plan", "act"])
 
-		expect(taskSm.setProfileIdentityBindings).toHaveBeenCalledWith({
-			plan: { profileId: "target-id", profileName: "target-profile" },
-			act: { profileId: "target-id", profileName: "target-profile" },
-		})
+		expect(taskSm.setProfileIdentityBindings).toHaveBeenCalledWith(
+			{
+				plan: { profileId: "target-id", profileName: "target-profile" },
+				act: { profileId: "target-id", profileName: "target-profile" },
+			},
+			{ clearRuntimeOverrides: true },
+		)
 		expect(fakeTask.rebuildApiHandler).toHaveBeenCalledOnce()
 		expect(fakeTask.syncContextWindowIndicatorScope).toHaveBeenCalledOnce()
 		expect(order).toEqual(["bindings", "rebuild", "flush", "scope"])
@@ -241,6 +264,7 @@ describe("Task task-local Profile adoption", () => {
 		expect(taskSm.planModeProfile).toBe("plan-source")
 		expect(taskSm.actModeProfileId).toBe("act-source-id")
 		expect(taskSm.actModeProfile).toBe("act-source")
+		expect(taskSm.restoreProfileState).toHaveBeenCalledOnce()
 		expect(fakeTask.rebuildApiHandler).toHaveBeenCalledTimes(2)
 		expect(fakeTask.syncContextWindowIndicatorScope).not.toHaveBeenCalled()
 	})
