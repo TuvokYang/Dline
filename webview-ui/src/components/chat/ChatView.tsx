@@ -83,14 +83,19 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 	const [contentTab, setContentTab] = useState<TaskContentTab>("chat")
 	const [focusedActivityId, setFocusedActivityId] = useState<string>()
 	const [pendingSuccessorDraft, setPendingSuccessorDraft] = useState<PendingSuccessorDraftTransfer>()
+	const [compactTaskRpcPending, setCompactTaskRpcPending] = useState(false)
+	const compactTaskRpcPendingRef = useRef(false)
 	const [activityFilters, setActivityFilters] = useState<TaskActivityFilters>(DEFAULT_TASK_ACTIVITY_FILTERS)
 	const task = taskTitleMessage
 	const taskId = task ? (taskViewState?.taskId ?? currentTaskItem?.id) : undefined
+	const contextCompactionActive = taskViewState?.contextCompaction?.active === true
 	const { activeCount } = useTaskActivities(taskId)
 	useEffect(() => {
 		setContentTab("chat")
 		setFocusedActivityId(undefined)
 		setActivityFilters(DEFAULT_TASK_ACTIVITY_FILTERS)
+		compactTaskRpcPendingRef.current = false
+		setCompactTaskRpcPending(false)
 	}, [taskId])
 	const handleContentTabChange = useCallback((nextTab: TaskContentTab) => {
 		setContentTab(nextTab)
@@ -444,19 +449,35 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 	)
 	const taskInputEnabled = Boolean(taskViewState?.input.enabled && taskViewState.input.enterAction && interactionSynchronized)
 	const canRenderCompactTask = Boolean(taskViewState?.taskId)
-	const compactTaskDisabled = !taskInputEnabled
+	useEffect(() => {
+		if (!contextCompactionActive || !compactTaskRpcPendingRef.current) return
+		compactTaskRpcPendingRef.current = false
+		setCompactTaskRpcPending(false)
+	}, [contextCompactionActive])
+	const compactTaskDisabled = !taskInputEnabled || contextCompactionActive || compactTaskRpcPending
 	const submitCompactTask = useCallback(async (): Promise<boolean> => {
-		if (!taskViewState?.taskId || !taskInputEnabled) {
+		if (!taskViewState?.taskId || !taskInputEnabled || contextCompactionActive || compactTaskRpcPendingRef.current) {
 			return false
 		}
-		const response = await TaskServiceClient.compactTask(
-			CompactTaskRequest.create({
-				taskId: taskViewState.taskId,
-				stateRevision: taskViewState.stateRevision,
-			}),
-		)
-		return response.accepted
-	}, [taskInputEnabled, taskViewState])
+		compactTaskRpcPendingRef.current = true
+		setCompactTaskRpcPending(true)
+		let accepted = false
+		try {
+			const response = await TaskServiceClient.compactTask(
+				CompactTaskRequest.create({
+					taskId: taskViewState.taskId,
+					stateRevision: taskViewState.stateRevision,
+				}),
+			)
+			accepted = response.accepted
+			return accepted
+		} finally {
+			if (!accepted) {
+				compactTaskRpcPendingRef.current = false
+				setCompactTaskRpcPending(false)
+			}
+		}
+	}, [contextCompactionActive, taskInputEnabled, taskViewState])
 	const submitFollowupOption = useCallback(
 		async (message: ClineMessage, option: string): Promise<void> => {
 			const view = taskViewState
@@ -580,9 +601,13 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 						shouldDisableFilesAndImages ||
 						Boolean(
 							task &&
-								(!interactionSynchronized ||
-									!taskViewState?.input.enabled ||
-									(!taskViewState.input.acceptsImages && !taskViewState.input.acceptsFiles)),
+								(!taskViewState ||
+									!interactionSynchronized ||
+									Boolean(
+										taskViewState.activeInteraction &&
+											!taskViewState.input.acceptsImages &&
+											!taskViewState.input.acceptsFiles,
+									)),
 						)
 					}
 					submissionScope={taskId}
