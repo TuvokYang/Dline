@@ -30,9 +30,48 @@ export async function openImage(dataUri: string) {
 	}
 }
 
+/**
+ * File extensions opened through the generic `vscode.open` command because
+ * the text editor cannot display them (binary/media/document files).
+ */
+const GENERIC_OPEN_EXTENSIONS = new Set([
+	".png",
+	".jpg",
+	".jpeg",
+	".webp",
+	".gif",
+	".bmp",
+	".svg",
+	".ico",
+	".pdf",
+	".doc",
+	".docx",
+	".xls",
+	".xlsx",
+	".ppt",
+	".pptx",
+	".zip",
+	".gz",
+	".tar",
+])
+
+/**
+ * Decides whether a file should be opened through the generic open command
+ * instead of the text editor. Text files stay on the text editor path so
+ * line-number selection keeps working.
+ */
+export function shouldOpenViaGenericCommand(absolutePath: string): boolean {
+	const extension = path.extname(absolutePath).toLowerCase()
+	return GENERIC_OPEN_EXTENSIONS.has(extension)
+}
+
 export async function openFile(absolutePath: string, preserveFocus = false, preview = false, lineNumber?: number) {
 	try {
 		if (!existsSync(absolutePath)) {
+			return
+		}
+		if (shouldOpenViaGenericCommand(absolutePath)) {
+			await HostProvider.window.openFile({ filePath: absolutePath })
 			return
 		}
 		const options: Record<string, unknown> = {
