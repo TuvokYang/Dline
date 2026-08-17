@@ -128,7 +128,7 @@ export const DeepSeekProvider = ({ showModelOptions, isPopup, profile, onUpdate 
 								<ReasoningEffortSelector
 									allowedEfforts={DEEPSEEK_REASONING_EFFORT_OPTIONS}
 									defaultEffort={adaptiveThinking.effort ?? "high"}
-									description="Toggle above to enable thinking. High is the standard level; Max is for complex tasks."
+									description="Toggle above to enable thinking. Low uses less reasoning; High is the standard level; Max is for complex tasks."
 									label="Thinking Level"
 									onReasoningEffortChange={persistEffort}
 									reasoningEffort={profileEffort}

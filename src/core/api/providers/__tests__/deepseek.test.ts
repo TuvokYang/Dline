@@ -7,10 +7,11 @@ import { afterEach, describe, it, vi } from "vitest"
 import type { ClineStorageMessage } from "@/shared/messages/content"
 import { createRequestApiScope } from "../../../task/RequestApiScope"
 import type { ApiRequestOptions } from "../../index"
+import { OutputLimitExceededError } from "../../stream/OutputLimitExceededError"
 import { DeepSeekHandler } from "../deepseek"
 
 interface StreamChunk {
-	choices?: Array<{ delta?: { content?: string; reasoning_content?: string } }>
+	choices?: Array<{ delta?: { content?: string; reasoning_content?: string }; finish_reason?: string | null }>
 	usage?: {
 		prompt_tokens?: number
 		completion_tokens?: number
@@ -170,6 +171,28 @@ describe("DeepSeekHandler", () => {
 			expect(responsesCreate.mock.calls[0]?.[0]?.max_output_tokens).to.equal(384_000)
 		})
 
+		it("uses the request-scoped compaction cap for DeepSeek Responses", async () => {
+			const handler = new DeepSeekHandler({
+				profile: ApiProfile.create({
+					provider: "deepseek",
+					apiKey: "test-api-key",
+					modelId: "deepseek-v4-flash",
+					deepseek: BaseProviderConfig.create({ apiFormat: ApiFormat.OPENAI_RESPONSES }),
+				}),
+				mode: "act",
+			})
+			const responsesCreate = vi.fn().mockResolvedValue(createStream())
+			vi.spyOn(handler as unknown as { ensureClient: () => unknown }, "ensureClient").mockReturnValue({
+				responses: { create: responsesCreate },
+			})
+
+			await collectChunks(handler, undefined, undefined, {
+				generation: { purpose: "compaction", maxOutputTokens: 30_000 },
+			} as any)
+
+			expect(responsesCreate.mock.calls[0]?.[0]?.max_output_tokens).to.equal(30_000)
+		})
+
 		it("keeps the Chat output ceiling independent from prior context usage", async () => {
 			const handler = new DeepSeekHandler({
 				profile: ApiProfile.create({
@@ -188,6 +211,54 @@ describe("DeepSeekHandler", () => {
 			await collectChunks(handler, contextPressureHistory())
 
 			expect(create.mock.calls[0]?.[0]?.max_completion_tokens).to.equal(384_000)
+		})
+
+		it("uses the request-scoped compaction cap for DeepSeek Chat", async () => {
+			const handler = new DeepSeekHandler({
+				profile: ApiProfile.create({
+					provider: "deepseek",
+					apiKey: "test-api-key",
+					modelId: "deepseek-v4-flash",
+					deepseek: BaseProviderConfig.create({ apiFormat: ApiFormat.OPENAI_CHAT }),
+				}),
+				mode: "act",
+			})
+			const create = vi.fn().mockResolvedValue(createStream())
+			vi.spyOn(handler as unknown as { ensureClient: () => FakeClient }, "ensureClient").mockReturnValue({
+				chat: { completions: { create } },
+			})
+
+			await collectChunks(handler, undefined, undefined, {
+				generation: { purpose: "compaction", maxOutputTokens: 30_000 },
+			} as any)
+
+			expect(create.mock.calls[0]?.[0]?.max_completion_tokens).to.equal(30_000)
+		})
+
+		it("throws a typed output-limit error for DeepSeek Chat finish_reason length", async () => {
+			const handler = new DeepSeekHandler({
+				profile: ApiProfile.create({
+					provider: "deepseek",
+					apiKey: "test-api-key",
+					modelId: "deepseek-v4-flash",
+					deepseek: BaseProviderConfig.create({ apiFormat: ApiFormat.OPENAI_CHAT }),
+				}),
+				mode: "act",
+			})
+			const create = vi.fn().mockResolvedValue(createStream([{ choices: [{ delta: {}, finish_reason: "length" }] }]))
+			vi.spyOn(handler as unknown as { ensureClient: () => FakeClient }, "ensureClient").mockReturnValue({
+				chat: { completions: { create } },
+			})
+
+			let caught: unknown
+			try {
+				await collectChunks(handler)
+			} catch (error) {
+				caught = error
+			}
+
+			expect(caught).to.be.instanceOf(OutputLimitExceededError)
+			expect(caught).to.deep.include({ protocol: "openai_chat", reason: "length" })
 		})
 
 		it("projects canonical function identities into DeepSeek Responses history without provider IDs", async () => {
@@ -336,7 +407,30 @@ describe("DeepSeekHandler", () => {
 			expect(messagesCreate.mock.calls[0]?.[0]?.max_tokens).to.equal(384_000)
 		})
 
+		it("uses the request-scoped compaction cap for DeepSeek Anthropic Messages", async () => {
+			const handler = new DeepSeekHandler({
+				profile: ApiProfile.create({
+					provider: "deepseek",
+					apiKey: "test-api-key",
+					modelId: "deepseek-v4-pro",
+					deepseek: BaseProviderConfig.create({ apiFormat: ApiFormat.ANTHROPIC_CHAT }),
+				}),
+				mode: "act",
+			})
+			const messagesCreate = vi.fn().mockResolvedValue(createStream())
+			;(handler as unknown as { anthropicClient?: unknown }).anthropicClient = {
+				messages: { create: messagesCreate },
+			}
+
+			await collectChunks(handler, undefined, undefined, {
+				generation: { purpose: "compaction", maxOutputTokens: 30_000 },
+			} as any)
+
+			expect(messagesCreate.mock.calls[0]?.[0]?.max_tokens).to.equal(30_000)
+		})
+
 		for (const [configuredEffort, expectedEffort] of [
+			["low", "low"],
 			["high", "high"],
 			["max", "max"],
 			["xhigh", "max"],

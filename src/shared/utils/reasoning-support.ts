@@ -7,7 +7,7 @@ export interface ClaudeOpusAdaptiveThinkingSettings {
 	effort?: ClaudeAdaptiveThinkingEffort
 }
 
-export const DEEPSEEK_REASONING_EFFORT_OPTIONS = ["high", "max"] as const
+export const DEEPSEEK_REASONING_EFFORT_OPTIONS = ["low", "high", "max"] as const
 
 export type DeepSeekReasoningEffort = (typeof DEEPSEEK_REASONING_EFFORT_OPTIONS)[number]
 
@@ -61,8 +61,8 @@ export function resolveClaudeOpusAdaptiveThinking(
  * 1. Default thinking is enabled.
  * 2. Default effort is "high" for standard requests; for complex agent-style
  *    requests (e.g., Claude Code, OpenCode), effort is automatically set to "max".
- * 3. For compatibility, old lower efforts map to "high" and old higher
- *    efforts map to "max".
+ * 3. The native "low", "high", and "max" values are preserved; legacy higher
+ *    aliases continue to map to "max", while unknown values fall back to "high".
  */
 export function resolveDeepSeekAdaptiveThinking(reasoningEffort?: string): DeepSeekAdaptiveThinkingSettings {
 	if (!reasoningEffort) {
@@ -75,6 +75,9 @@ export function resolveDeepSeekAdaptiveThinking(reasoningEffort?: string): DeepS
 	}
 	if (effort === "max" || effort === "xhigh" || effort === "ultra") {
 		return { enabled: true, effort: "max" }
+	}
+	if (effort === "low" || effort === "high") {
+		return { enabled: true, effort }
 	}
 	return { enabled: true, effort: "high" }
 }

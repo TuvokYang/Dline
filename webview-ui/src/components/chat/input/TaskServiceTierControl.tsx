@@ -1,9 +1,8 @@
 import { OPENAI_SERVICE_TIER_OPTIONS, type OpenAiServiceTier } from "@shared/storage/types"
-import { CheckIcon, GaugeIcon } from "lucide-react"
-import { useEffect, useState } from "react"
+import { CheckIcon, GaugeIcon, LayersIcon, ShuffleIcon, SparklesIcon, ZapIcon } from "lucide-react"
+import { useState } from "react"
 
 interface TaskServiceTierControlProps {
-	disabled: boolean
 	onSelect: (tier: OpenAiServiceTier) => void
 	value?: OpenAiServiceTier
 }
@@ -16,18 +15,23 @@ const SERVICE_TIER_DESCRIPTIONS: Record<OpenAiServiceTier, string> = {
 	priority: "Use the priority service tier.",
 }
 
+const SERVICE_TIER_ICONS = {
+	auto: SparklesIcon,
+	default: GaugeIcon,
+	flex: ShuffleIcon,
+	scale: LayersIcon,
+	priority: ZapIcon,
+} satisfies Record<OpenAiServiceTier, typeof GaugeIcon>
+
 function tierLabel(tier: OpenAiServiceTier): string {
 	return tier.charAt(0).toUpperCase() + tier.slice(1)
 }
 
 /** Icon-only Task-local OpenAI service-tier control with a Profile-style popover. */
-export function TaskServiceTierControl({ disabled, onSelect, value }: TaskServiceTierControlProps) {
+export function TaskServiceTierControl({ onSelect, value }: TaskServiceTierControlProps) {
 	const [open, setOpen] = useState(false)
 	const [hoveredTier, setHoveredTier] = useState<OpenAiServiceTier>()
-
-	useEffect(() => {
-		if (disabled) setOpen(false)
-	}, [disabled])
+	const ServiceTierIcon = SERVICE_TIER_ICONS[value ?? "auto"]
 
 	const selectTier = (tier: OpenAiServiceTier) => {
 		setOpen(false)
@@ -40,31 +44,50 @@ export function TaskServiceTierControl({ disabled, onSelect, value }: TaskServic
 				aria-expanded={open}
 				aria-haspopup="listbox"
 				aria-label="Task service tier"
-				className="inline-flex size-5 shrink-0 cursor-pointer items-center justify-center border-0 bg-transparent p-0 leading-none text-description shadow-none outline-none hover:text-foreground focus-visible:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+				className="inline-flex size-4 shrink-0 cursor-pointer items-center justify-center border-0 bg-transparent p-0 leading-none text-description shadow-none outline-none hover:text-foreground focus-visible:text-foreground"
 				data-icon-only="true"
-				disabled={disabled}
 				onClick={() => setOpen((current) => !current)}
 				style={{ border: 0, boxShadow: "none" }}
 				title={value ? `Service tier: ${tierLabel(value)}` : "Service tier: no Task override"}
 				type="button">
-				<GaugeIcon aria-hidden="true" className="size-4" data-testid="task-service-tier-icon" />
+				<ServiceTierIcon
+					aria-hidden="true"
+					className="size-3"
+					data-service-tier-icon={value ?? "auto"}
+					data-testid="task-service-tier-icon"
+				/>
 			</button>
 
 			{open && (
 				<>
-					<div className="fixed inset-0 z-40" onClick={() => setOpen(false)} onKeyDown={() => {}} />
+					<button
+						aria-label="Close service tier menu"
+						className="fixed inset-0 z-40 cursor-default border-0 bg-transparent p-0"
+						onClick={() => setOpen(false)}
+						type="button"
+					/>
 					<div
 						aria-label="Task service tier options"
-						className="absolute bottom-full left-0 z-50 mb-1 min-w-36 overflow-hidden rounded border border-dropdown-border bg-menu text-menu-foreground shadow-lg"
-						role="listbox">
-						<div className="border-b border-dropdown-border px-3 py-2 text-xs font-medium">Service Tier</div>
+						className="absolute bottom-full left-0 z-50 mb-1 min-w-56 overflow-hidden rounded border shadow-lg"
+						role="listbox"
+						style={{
+							background: "var(--vscode-dropdown-background)",
+							borderColor: "var(--vscode-dropdown-border)",
+							color: "var(--vscode-foreground)",
+						}}>
+						<div
+							className="px-3 py-2 text-xs font-medium"
+							style={{ borderBottom: "1px solid var(--vscode-dropdown-border)" }}>
+							Service Tier
+						</div>
 						{OPENAI_SERVICE_TIER_OPTIONS.map((tier) => {
 							const selected = value === tier
 							const hovered = hoveredTier === tier
+							const OptionIcon = SERVICE_TIER_ICONS[tier]
 							return (
 								<div
 									aria-selected={selected}
-									className="flex cursor-pointer items-center gap-2 px-3 py-2 text-xs"
+									className="flex cursor-pointer items-center px-3 py-2 text-xs transition-colors"
 									key={tier}
 									onClick={() => selectTier(tier)}
 									onKeyDown={(event) => {
@@ -74,18 +97,37 @@ export function TaskServiceTierControl({ disabled, onSelect, value }: TaskServic
 									onMouseLeave={() => setHoveredTier(undefined)}
 									role="option"
 									style={{
+										borderBottom: "1px solid var(--vscode-dropdown-border)",
 										background: selected
 											? "var(--vscode-list-activeSelectionBackground)"
 											: hovered
 												? "var(--vscode-list-hoverBackground)"
 												: "transparent",
+										transition: "background 0.1s ease",
 									}}
 									tabIndex={0}
 									title={SERVICE_TIER_DESCRIPTIONS[tier]}>
-									<span className="flex size-3 shrink-0 items-center justify-center">
-										{selected && <CheckIcon aria-hidden="true" className="size-3" />}
+									<span
+										className="mr-2 flex size-4 shrink-0 items-center justify-center"
+										data-service-tier-option-icon={tier}>
+										<OptionIcon aria-hidden="true" className="size-3" />
 									</span>
-									<span>{tierLabel(tier)}</span>
+									<span className="min-w-0 flex-1 truncate" data-service-tier-option-label={tier}>
+										{tierLabel(tier)}
+									</span>
+									<span
+										className="ml-2 flex size-4 shrink-0 items-center justify-center rounded-full"
+										data-profile-style-selection="true"
+										style={{
+											border: selected
+												? "1px solid var(--vscode-button-background)"
+												: "1px solid var(--vscode-descriptionForeground)",
+											background: selected ? "var(--vscode-button-background)" : "transparent",
+										}}>
+										{selected && (
+											<CheckIcon aria-hidden="true" color="var(--vscode-button-foreground)" size={10} />
+										)}
+									</span>
 								</div>
 							)
 						})}

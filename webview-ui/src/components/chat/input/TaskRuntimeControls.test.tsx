@@ -2,6 +2,7 @@ import { render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 import { TaskRuntimeControls } from "./TaskRuntimeControls"
+import { TaskServiceTierControl } from "./TaskServiceTierControl"
 
 const mocks = vi.hoisted(() => ({
 	state: {
@@ -102,13 +103,155 @@ describe("chat input TaskRuntimeControls", () => {
 		mocks.updateTaskSettings.mockResolvedValue(undefined)
 	})
 
-	it("hides Task-local controls when no Task is open even if stale Task state remains", () => {
-		mocks.state.taskTitleMessage = undefined
+	it("hides Task-local controls when no Task is open", () => {
+		Object.assign(mocks.state, {
+			currentTaskItem: undefined,
+			taskTitleMessage: undefined,
+			taskViewState: undefined,
+		})
 		const { container } = render(<TaskRuntimeControls />)
 
 		expect(container).toBeEmptyDOMElement()
 		expect(screen.queryByRole("combobox", { name: "Task thinking override" })).not.toBeInTheDocument()
 		expect(screen.queryByRole("button", { name: "Task service tier" })).not.toBeInTheDocument()
+	})
+
+	it("keeps Task-local controls visible while the title message is absent from an active Task state window", () => {
+		mocks.state.taskTitleMessage = undefined
+		render(<TaskRuntimeControls />)
+
+		expect(screen.getByRole("combobox", { name: "Task thinking override" })).toHaveTextContent("High")
+		expect(screen.getByRole("button", { name: "Task service tier" })).toBeInTheDocument()
+	})
+
+	it("projects Profile effort from provider capabilities before top-level modelInfo is hydrated", () => {
+		mocks.profiles = [
+			{
+				id: "openai-id",
+				name: "renamed-openai",
+				provider: "openai",
+				modelId: "gpt-test",
+				usedFor: [],
+				enabled: true,
+				openai: {
+					capabilities: { supportsReasoning: true },
+					reasoning: { enableThinking: true, effort: "high", thinkingBudget: 0 },
+					serviceTier: "priority",
+				},
+			},
+		]
+		render(<TaskRuntimeControls />)
+
+		expect(screen.getByRole("combobox", { name: "Task thinking override" })).toHaveTextContent("High")
+	})
+
+	it("projects DeepSeek low/high/max and commits real effort overrides", async () => {
+		const user = userEvent.setup()
+		mocks.profiles = [
+			{
+				id: "openai-id",
+				name: "deepseek-thinking",
+				provider: "deepseek",
+				modelId: "deepseek-v4-flash",
+				usedFor: [],
+				enabled: true,
+				deepseek: {
+					capabilities: { supportsReasoning: true },
+					reasoning: { enableThinking: true, effort: "high", thinkingBudget: 0 },
+				},
+			},
+		]
+		render(<TaskRuntimeControls />)
+
+		const thinkingControl = screen.getByRole("combobox", { name: "Task thinking override" })
+		expect(thinkingControl).toBeEnabled()
+		expect(thinkingControl).toHaveTextContent("High")
+		expect(screen.queryByRole("button", { name: "Task service tier" })).not.toBeInTheDocument()
+		await user.click(thinkingControl)
+		expect(screen.getByRole("option", { name: "Low" })).toBeInTheDocument()
+		expect(screen.getByRole("option", { name: "High" })).toBeInTheDocument()
+		expect(screen.getByRole("option", { name: "Max" })).toBeInTheDocument()
+		expect(screen.queryByRole("option", { name: "Xhigh" })).not.toBeInTheDocument()
+		await user.click(screen.getByRole("option", { name: "Low" }))
+
+		await waitFor(() => expect(mocks.updateTaskSettings).toHaveBeenCalledTimes(1))
+		expect(mocks.updateTaskSettings).toHaveBeenCalledWith("task-1", {
+			actModeReasoningOverrideKind: "effort",
+			actModeReasoningOverrideEffort: "low",
+		})
+		expect(screen.getByRole("combobox", { name: "Task thinking override" })).toHaveTextContent("Low")
+
+		await user.click(screen.getByRole("combobox", { name: "Task thinking override" }))
+		await user.click(screen.getByRole("option", { name: "Max" }))
+
+		await waitFor(() => expect(mocks.updateTaskSettings).toHaveBeenCalledTimes(2))
+		expect(mocks.updateTaskSettings).toHaveBeenLastCalledWith("task-1", {
+			actModeReasoningOverrideKind: "effort",
+			actModeReasoningOverrideEffort: "max",
+		})
+		expect(screen.getByRole("combobox", { name: "Task thinking override" })).toHaveTextContent("Max")
+	})
+
+	it("projects Profile budget and durably submits edited tokens", async () => {
+		const user = userEvent.setup()
+		mocks.profiles = [
+			{
+				id: "openai-id",
+				name: "anthropic-budget",
+				provider: "anthropic",
+				modelId: "claude-test",
+				usedFor: [],
+				enabled: true,
+				anthropic: {
+					capabilities: { thinking: { supported: true, mode: "budget", maxBudget: 16_384 } },
+					reasoning: { enableThinking: true, thinkingBudget: 2_048 },
+				},
+			},
+		]
+		render(<TaskRuntimeControls />)
+
+		expect(screen.getByRole("combobox", { name: "Task thinking override" })).toHaveTextContent("Budget")
+		const budgetInput = screen.getByRole("spinbutton", { name: "Task thinking budget" })
+		expect(budgetInput).toBeEnabled()
+		expect(budgetInput).toHaveValue(2_048)
+		await user.clear(budgetInput)
+		await user.type(budgetInput, "4096")
+		await user.tab()
+
+		await waitFor(() => expect(mocks.updateTaskSettings).toHaveBeenCalledTimes(1))
+		expect(mocks.updateTaskSettings).toHaveBeenCalledWith("task-1", {
+			actModeReasoningOverrideKind: "budget",
+			actModeThinkingBudgetTokens: 4_096,
+		})
+		expect(screen.queryByRole("button", { name: "Task service tier" })).not.toBeInTheDocument()
+	})
+
+	it("uses the active mode Task override ahead of that mode Profile default", async () => {
+		mocks.state.apiConfiguration = {
+			...mocks.state.apiConfiguration,
+			planModeProfileId: "plan-id",
+			planModeProfile: "plan-profile",
+			planModeReasoningOverride: { kind: "effort", effort: "low" },
+		}
+		mocks.profiles = [
+			mocks.profiles[0],
+			{
+				...mocks.profiles[0],
+				id: "plan-id",
+				name: "plan-profile",
+				openai: {
+					...mocks.profiles[0].openai,
+					reasoning: { enableThinking: true, effort: "medium", thinkingBudget: 0 },
+				},
+			},
+		]
+		const { rerender } = render(<TaskRuntimeControls />)
+		expect(screen.getByRole("combobox", { name: "Task thinking override" })).toHaveTextContent("High")
+
+		mocks.state.mode = "plan"
+		rerender(<TaskRuntimeControls />)
+
+		await waitFor(() => expect(screen.getByRole("combobox", { name: "Task thinking override" })).toHaveTextContent("Low"))
 	})
 
 	it("renders frameless Thinking text and an icon-only Service Tier trigger", async () => {
@@ -125,24 +268,30 @@ describe("chat input TaskRuntimeControls", () => {
 		expect(serviceTierControl.textContent).toBe("")
 		expect(serviceTierControl).toHaveAttribute("data-icon-only", "true")
 		expect(serviceTierControl).toHaveAttribute("title", "Service tier: Priority")
-		expect(serviceTierControl).toHaveClass("border-0", "shadow-none", "p-0")
-		expect(screen.getByTestId("task-service-tier-icon")).toBeInTheDocument()
+		expect(serviceTierControl).toHaveClass("border-0", "shadow-none", "p-0", "size-4")
+		expect(screen.getByTestId("task-service-tier-icon")).toHaveClass("lucide-zap", "size-3")
 		expect(screen.queryByText("Tier")).not.toBeInTheDocument()
 		expect(screen.queryByText("Thinking", { exact: true })).not.toBeInTheDocument()
-		expect(container.querySelector('[data-chat-input-slot="thinking"]')).toHaveClass(
-			"min-w-[3ch]",
-			"max-w-[7ch]",
-			"flex-[0_1_7ch]",
-			"overflow-hidden",
-		)
-		expect(container.querySelector('[data-chat-input-slot="thinking"]')).not.toHaveClass("shrink-0")
+		expect(container.querySelector('[data-chat-input-slot="thinking"]')).toHaveClass("flex-none", "overflow-visible")
+		expect(container.querySelector('[data-chat-input-slot="thinking"]')).not.toHaveClass("flex-[0_1_7ch]")
 		expect(container.querySelector('[data-chat-input-slot="service-tier"]')).toHaveClass("shrink-0")
 
 		await user.click(serviceTierControl)
-		expect(screen.getByRole("listbox", { name: "Task service tier options" })).toBeInTheDocument()
+		const tierOptions = screen.getByRole("listbox", { name: "Task service tier options" })
+		expect(tierOptions).toBeInTheDocument()
+		expect(tierOptions.getAttribute("style")).toContain("background: var(--vscode-dropdown-background)")
+		expect(tierOptions.getAttribute("style")).toContain("border-color: var(--vscode-dropdown-border)")
+		const selectedTier = screen.getByRole("option", { name: "Priority" })
+		expect(selectedTier.getAttribute("style")).toContain("border-bottom: 1px solid var(--vscode-dropdown-border)")
+		expect(selectedTier.querySelector('[data-profile-style-selection="true"]')).toHaveClass("rounded-full")
 		expect(screen.queryByRole("option", { name: "Profile" })).not.toBeInTheDocument()
 		for (const tier of ["Auto", "Default", "Flex", "Scale", "Priority"]) {
-			expect(screen.getByRole("option", { name: tier })).toBeInTheDocument()
+			const optionValue = tier.toLowerCase()
+			const option = screen.getByRole("option", { name: tier })
+			expect(option).toBeInTheDocument()
+			expect(option.querySelector(`[data-service-tier-option-icon="${optionValue}"]`)).toHaveClass("mr-2", "size-4")
+			expect(option.querySelector(`[data-service-tier-option-icon="${optionValue}"] svg`)).toHaveClass("size-3")
+			expect(option.querySelector(`[data-service-tier-option-label="${optionValue}"]`)).toHaveTextContent(tier)
 		}
 		await user.click(serviceTierControl)
 
@@ -150,6 +299,24 @@ describe("chat input TaskRuntimeControls", () => {
 		expect(screen.getByRole("option", { name: "High" })).toBeInTheDocument()
 		expect(screen.queryByRole("option", { name: "Profile" })).not.toBeInTheDocument()
 		expect(document.querySelector('[data-slot="select-content"]')).toHaveClass("bg-menu")
+	})
+
+	it("changes the Service Tier trigger icon with the selected tier", () => {
+		const onSelect = vi.fn()
+		const { rerender } = render(<TaskServiceTierControl onSelect={onSelect} value="auto" />)
+		expect(screen.getByTestId("task-service-tier-icon")).toHaveClass("lucide-sparkles")
+
+		rerender(<TaskServiceTierControl onSelect={onSelect} value="default" />)
+		expect(screen.getByTestId("task-service-tier-icon")).toHaveClass("lucide-gauge")
+
+		rerender(<TaskServiceTierControl onSelect={onSelect} value="flex" />)
+		expect(screen.getByTestId("task-service-tier-icon")).toHaveClass("lucide-shuffle")
+
+		rerender(<TaskServiceTierControl onSelect={onSelect} value="scale" />)
+		expect(screen.getByTestId("task-service-tier-icon")).toHaveClass("lucide-layers")
+
+		rerender(<TaskServiceTierControl onSelect={onSelect} value="priority" />)
+		expect(screen.getByTestId("task-service-tier-icon")).toHaveClass("lucide-zap")
 	})
 
 	it("commits an effort and service tier only to the active Task and mode", async () => {
@@ -226,7 +393,7 @@ describe("chat input TaskRuntimeControls", () => {
 		["between_turns", { phase: "preflighting" }, { phase: "idle" }, false],
 		["between_turns", { phase: "idle" }, { phase: "compacting" }, false],
 		["between_turns", { phase: "idle" }, { phase: "idle" }, true],
-	] as const)("disables controls for unsafe runtime state %#", (phase, modeSwitch, profileSwitch, invalid) => {
+	] as const)("hides controls instead of exposing a disabled cursor for unsafe runtime state %#", (phase, modeSwitch, profileSwitch, invalid) => {
 		mocks.state.taskViewState = {
 			taskId: "task-1",
 			phase,
@@ -241,9 +408,11 @@ describe("chat input TaskRuntimeControls", () => {
 		}
 		mocks.state.modeSwitch = modeSwitch
 		mocks.state.profileSwitch = profileSwitch
-		render(<TaskRuntimeControls />)
+		const { container } = render(<TaskRuntimeControls />)
 
-		expect(screen.getByRole("combobox", { name: "Task thinking override" })).toBeDisabled()
-		expect(screen.getByRole("button", { name: "Task service tier" })).toBeDisabled()
+		expect(screen.queryByRole("combobox", { name: "Task thinking override" })).not.toBeInTheDocument()
+		expect(screen.queryByRole("button", { name: "Task service tier" })).not.toBeInTheDocument()
+		expect(container.querySelector("[disabled]")).toBeNull()
+		expect(container.querySelector('[class*="cursor-not-allowed"]')).toBeNull()
 	})
 })

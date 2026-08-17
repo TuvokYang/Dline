@@ -3,6 +3,7 @@ import type { ApiProfile } from "@shared/proto/dline/profile"
 import type { ReasoningConfig } from "@shared/proto/dline/provider/common"
 import { PROFILE_PROVIDER_KEYS } from "@shared/providers/profile-model-info"
 import { OPENAI_REASONING_EFFORT_OPTIONS } from "@shared/storage/types"
+import { DEEPSEEK_REASONING_EFFORT_OPTIONS } from "@shared/utils/reasoning-support"
 
 /** Task-local reasoning policy layered over a Profile's reasoning configuration. */
 export interface TaskReasoningOverride {
@@ -30,6 +31,14 @@ export function resolveTaskThinkingConfig(
 			supported: true,
 			mode: thinking?.mode ?? "effort",
 			effortLevels: [...OPENAI_REASONING_EFFORT_OPTIONS],
+		}
+	}
+	if (provider === "deepseek") {
+		return {
+			...thinking,
+			supported: true,
+			mode: "effort",
+			effortLevels: [...DEEPSEEK_REASONING_EFFORT_OPTIONS],
 		}
 	}
 	return { ...thinking, supported: true, effortLevels: [...(thinking?.effortLevels ?? [])] }
