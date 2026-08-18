@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
 		profileSwitch: { phase: "idle" as const },
 		taskViewState: { taskId: "task-1", phase: "between_turns" as const },
 	},
+	providerCatalogAvailable: true,
 	profiles: [
 		{
 			id: "openai-id",
@@ -51,6 +52,35 @@ vi.mock("@components/settings/providers/useApiProfiles", () => ({
 	useApiProfiles: () => ({ profiles: mocks.profiles }),
 }))
 
+vi.mock("@components/settings/providers/useProviderModels", () => ({
+	useProviderModels: (providerId: string) => ({
+		models: !mocks.providerCatalogAvailable
+			? {}
+			: providerId === "deepseek"
+				? {
+						"deepseek-v4-flash": {
+							id: "deepseek-v4-flash",
+							capabilities: { supportsReasoning: true },
+						},
+					}
+				: providerId === "anthropic"
+					? {
+							"claude-sonnet-4-6": {
+								id: "claude-sonnet-4-6",
+								capabilities: { supportsReasoning: true },
+							},
+						}
+					: {},
+		defaultModelId: !mocks.providerCatalogAvailable
+			? ""
+			: providerId === "deepseek"
+				? "deepseek-v4-flash"
+				: providerId === "anthropic"
+					? "claude-sonnet-4-6"
+					: "",
+	}),
+}))
+
 vi.mock("@components/settings/utils/settingsHandlers", () => ({
 	updateTaskSettings: mocks.updateTaskSettings,
 }))
@@ -67,6 +97,7 @@ beforeAll(() => {
 describe("chat input TaskRuntimeControls", () => {
 	beforeEach(() => {
 		vi.clearAllMocks()
+		mocks.providerCatalogAvailable = true
 		mocks.state.apiConfiguration = {
 			actModeProfileId: "openai-id",
 			actModeProfile: "old-name",
@@ -124,6 +155,20 @@ describe("chat input TaskRuntimeControls", () => {
 		expect(screen.getByRole("button", { name: "Task service tier" })).toBeInTheDocument()
 	})
 
+	it("keeps Thinking visible but hides Task Service Tier when the Profile disables it", () => {
+		mocks.profiles = [
+			{
+				...mocks.profiles[0],
+				openai: { ...mocks.profiles[0].openai, serviceTierEnabled: false },
+			},
+		]
+
+		render(<TaskRuntimeControls />)
+
+		expect(screen.getByRole("combobox", { name: "Task thinking override" })).toHaveTextContent("High")
+		expect(screen.queryByRole("button", { name: "Task service tier" })).not.toBeInTheDocument()
+	})
+
 	it("projects Profile effort from provider capabilities before top-level modelInfo is hydrated", () => {
 		mocks.profiles = [
 			{
@@ -145,8 +190,35 @@ describe("chat input TaskRuntimeControls", () => {
 		expect(screen.getByRole("combobox", { name: "Task thinking override" })).toHaveTextContent("High")
 	})
 
-	it("projects DeepSeek low/high/max and commits real effort overrides", async () => {
+	it("projects Anthropic budget from Provider enable config before model capability hydration", () => {
+		mocks.providerCatalogAvailable = false
+		mocks.state.apiConfiguration = {
+			...mocks.state.apiConfiguration,
+			actModeProfileId: "anthropic-id",
+			actModeProfile: "anthropic-thinking",
+		}
+		mocks.profiles = [
+			{
+				id: "anthropic-id",
+				name: "anthropic-thinking",
+				provider: "anthropic",
+				modelId: "claude-sonnet-4-6",
+				usedFor: [],
+				enabled: true,
+				anthropic: {
+					reasoning: { enableThinking: true, thinkingBudget: 2_048 },
+				},
+			},
+		]
+		render(<TaskRuntimeControls />)
+
+		expect(screen.getByRole("combobox", { name: "Task thinking override" })).toHaveTextContent("Budget")
+		expect(screen.getByRole("spinbutton", { name: "Task thinking budget" })).toHaveValue(2_048)
+	})
+
+	it("projects DeepSeek low/high/max from Provider enable config before model capability hydration", async () => {
 		const user = userEvent.setup()
+		mocks.providerCatalogAvailable = false
 		mocks.profiles = [
 			{
 				id: "openai-id",
@@ -156,7 +228,6 @@ describe("chat input TaskRuntimeControls", () => {
 				usedFor: [],
 				enabled: true,
 				deepseek: {
-					capabilities: { supportsReasoning: true },
 					reasoning: { enableThinking: true, effort: "high", thinkingBudget: 0 },
 				},
 			},
@@ -190,6 +261,50 @@ describe("chat input TaskRuntimeControls", () => {
 			actModeReasoningOverrideEffort: "max",
 		})
 		expect(screen.getByRole("combobox", { name: "Task thinking override" })).toHaveTextContent("Max")
+	})
+
+	it("hides Thinking when the Provider explicitly disables it despite model support", () => {
+		mocks.profiles = [
+			{
+				id: "openai-id",
+				name: "deepseek-disabled",
+				provider: "deepseek",
+				modelId: "deepseek-v4-flash",
+				usedFor: [],
+				enabled: true,
+				deepseek: {
+					reasoning: { enableThinking: false },
+				},
+			},
+		]
+
+		const { container } = render(<TaskRuntimeControls />)
+
+		expect(screen.queryByRole("combobox", { name: "Task thinking override" })).not.toBeInTheDocument()
+		expect(container).toBeEmptyDOMElement()
+	})
+
+	it("hides Thinking when capability explicitly rejects a Provider enable config", () => {
+		mocks.providerCatalogAvailable = false
+		mocks.profiles = [
+			{
+				id: "openai-id",
+				name: "deepseek-unsupported",
+				provider: "deepseek",
+				modelId: "custom-deepseek",
+				usedFor: [],
+				enabled: true,
+				deepseek: {
+					capabilities: { supportsReasoning: false },
+					reasoning: { enableThinking: true, effort: "high" },
+				},
+			},
+		]
+
+		const { container } = render(<TaskRuntimeControls />)
+
+		expect(screen.queryByRole("combobox", { name: "Task thinking override" })).not.toBeInTheDocument()
+		expect(container).toBeEmptyDOMElement()
 	})
 
 	it("projects Profile budget and durably submits edited tokens", async () => {
@@ -269,11 +384,16 @@ describe("chat input TaskRuntimeControls", () => {
 		expect(serviceTierControl).toHaveAttribute("data-icon-only", "true")
 		expect(serviceTierControl).toHaveAttribute("title", "Service tier: Priority")
 		expect(serviceTierControl).toHaveClass("border-0", "shadow-none", "p-0", "size-4")
-		expect(screen.getByTestId("task-service-tier-icon")).toHaveClass("lucide-zap", "size-3")
+		expect(screen.getByTestId("task-service-tier-icon")).toHaveAttribute("data-service-tier-icon", "priority")
+		expect(screen.getByTestId("task-service-tier-icon")).toHaveClass("size-3")
 		expect(screen.queryByText("Tier")).not.toBeInTheDocument()
 		expect(screen.queryByText("Thinking", { exact: true })).not.toBeInTheDocument()
-		expect(container.querySelector('[data-chat-input-slot="thinking"]')).toHaveClass("flex-none", "overflow-visible")
-		expect(container.querySelector('[data-chat-input-slot="thinking"]')).not.toHaveClass("flex-[0_1_7ch]")
+		expect(container.querySelector('[data-chat-input-slot="thinking"]')).toHaveClass(
+			"min-w-[4ch]",
+			"max-w-[8ch]",
+			"flex-[0_1_auto]",
+			"overflow-hidden",
+		)
 		expect(container.querySelector('[data-chat-input-slot="service-tier"]')).toHaveClass("shrink-0")
 
 		await user.click(serviceTierControl)
@@ -285,7 +405,7 @@ describe("chat input TaskRuntimeControls", () => {
 		expect(selectedTier.getAttribute("style")).toContain("border-bottom: 1px solid var(--vscode-dropdown-border)")
 		expect(selectedTier.querySelector('[data-profile-style-selection="true"]')).toHaveClass("rounded-full")
 		expect(screen.queryByRole("option", { name: "Profile" })).not.toBeInTheDocument()
-		for (const tier of ["Auto", "Default", "Flex", "Scale", "Priority"]) {
+		for (const tier of ["Auto", "Default", "Flex", "Scale", "Priority", "Ultrafast"]) {
 			const optionValue = tier.toLowerCase()
 			const option = screen.getByRole("option", { name: tier })
 			expect(option).toBeInTheDocument()
@@ -304,19 +424,57 @@ describe("chat input TaskRuntimeControls", () => {
 	it("changes the Service Tier trigger icon with the selected tier", () => {
 		const onSelect = vi.fn()
 		const { rerender } = render(<TaskServiceTierControl onSelect={onSelect} value="auto" />)
-		expect(screen.getByTestId("task-service-tier-icon")).toHaveClass("lucide-sparkles")
+		const expectStandardIcon = (tier: string, pathCount: number) => {
+			const icon = screen.getByTestId("task-service-tier-icon")
+			expect(icon).toHaveAttribute("data-service-tier-icon", tier)
+			expect(icon).toHaveClass("size-3")
+			expect(icon).toHaveAttribute("fill", "none")
+			expect(icon).toHaveAttribute("stroke", "currentColor")
+			expect(icon).toHaveAttribute("stroke-width", "0.8")
+			expect(icon).toHaveAttribute("viewBox", "0 0 24 24")
+			expect(icon.querySelectorAll("path")).toHaveLength(pathCount)
+		}
+
+		expectStandardIcon("auto", 5)
 
 		rerender(<TaskServiceTierControl onSelect={onSelect} value="default" />)
-		expect(screen.getByTestId("task-service-tier-icon")).toHaveClass("lucide-gauge")
+		expectStandardIcon("default", 2)
 
 		rerender(<TaskServiceTierControl onSelect={onSelect} value="flex" />)
-		expect(screen.getByTestId("task-service-tier-icon")).toHaveClass("lucide-shuffle")
+		expectStandardIcon("flex", 5)
 
 		rerender(<TaskServiceTierControl onSelect={onSelect} value="scale" />)
-		expect(screen.getByTestId("task-service-tier-icon")).toHaveClass("lucide-layers")
+		expectStandardIcon("scale", 3)
 
 		rerender(<TaskServiceTierControl onSelect={onSelect} value="priority" />)
-		expect(screen.getByTestId("task-service-tier-icon")).toHaveClass("lucide-zap")
+		expectStandardIcon("priority", 1)
+
+		rerender(<TaskServiceTierControl onSelect={onSelect} value="ultrafast" />)
+		const ultrafastControl = screen.getByRole("button", { name: "Task service tier" })
+		const ultrafastIcon = screen.getByTestId("task-service-tier-icon")
+		expect(ultrafastControl).toHaveClass("size-4", "items-center", "justify-center")
+		expect(ultrafastIcon).toHaveAttribute("data-service-tier-icon", "ultrafast")
+		expect(ultrafastIcon).toHaveClass("size-3")
+		expect(ultrafastIcon).toHaveAttribute("stroke", "currentColor")
+		expect(ultrafastIcon).toHaveAttribute("stroke-linecap", "round")
+		expect(ultrafastIcon).toHaveAttribute("stroke-linejoin", "round")
+		expect(ultrafastIcon).toHaveAttribute("viewBox", "0 0 24 24")
+		const lightningPaths = ultrafastIcon.querySelectorAll("path")
+		expect(lightningPaths).toHaveLength(3)
+		expect([...lightningPaths].map((path) => path.getAttribute("data-ultrafast-layer"))).toEqual([
+			"rear",
+			"middle",
+			"primary",
+		])
+		expect([...lightningPaths].map((path) => path.getAttribute("fill"))).toEqual(["#202020", "#202020", "#202020"])
+		expect([...lightningPaths].map((path) => path.getAttribute("stroke-width"))).toEqual(["1.36", "1.19", "1.07"])
+		expect([...lightningPaths].map((path) => path.getAttribute("transform"))).toEqual([
+			"translate(7.4 1.45) scale(0.59)",
+			"translate(4.05 3.15) scale(0.67)",
+			"translate(0.85 4.85) scale(0.75)",
+		])
+		expect(lightningPaths[0]).toHaveAttribute("d", lightningPaths[1].getAttribute("d") ?? "")
+		expect(lightningPaths[1]).toHaveAttribute("d", lightningPaths[2].getAttribute("d") ?? "")
 	})
 
 	it("commits an effort and service tier only to the active Task and mode", async () => {

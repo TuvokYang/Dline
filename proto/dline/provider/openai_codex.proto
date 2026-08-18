@@ -10,6 +10,8 @@ message OpenAiCodexProviderConfig {
   bool custom_model_enabled = 2;
   dline.models.ModelCapabilities capabilities = 3;
   dline.models.ModelPricing pricing = 4;
-  // OpenAI request processing tier (auto/default/flex/scale/priority)
+  // OpenAI request processing tier (auto/default/flex/scale/priority/ultrafast)
   optional string service_tier = 5;
+  // Whether this endpoint supports Service Tier controls. Missing values remain enabled for compatibility.
+  optional bool service_tier_enabled = 6;
 }

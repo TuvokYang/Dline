@@ -34,9 +34,18 @@ export function taskServiceTierOverrideToFields(override: TaskServiceTierOverrid
 	return { kind: "tier", tier: override.tier }
 }
 
+/** Whether one Profile exposes Service Tier configuration and Task-local overrides. */
+export function profileServiceTierEnabled(profile: ApiProfile | undefined): boolean {
+	if (profile?.provider === "openai") return profile.openai !== undefined && profile.openai.serviceTierEnabled !== false
+	if (profile?.provider === "openai-codex") {
+		return profile.openaiCodex !== undefined && profile.openaiCodex.serviceTierEnabled !== false
+	}
+	return false
+}
+
 /** Read the Profile-owned OpenAI service tier for display and inheritance. */
 export function resolveProfileServiceTier(profile: ApiProfile | undefined): OpenAiServiceTier | undefined {
-	if (!profile) return undefined
+	if (!profile || !profileServiceTierEnabled(profile)) return undefined
 	const configuredTier = profile.provider === "openai" ? profile.openai?.serviceTier : profile.openaiCodex?.serviceTier
 	return normalizeOpenAiServiceTier(configuredTier)
 }

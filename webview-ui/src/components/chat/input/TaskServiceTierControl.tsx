@@ -1,6 +1,7 @@
 import { OPENAI_SERVICE_TIER_OPTIONS, type OpenAiServiceTier } from "@shared/storage/types"
-import { CheckIcon, GaugeIcon, LayersIcon, ShuffleIcon, SparklesIcon, ZapIcon } from "lucide-react"
+import { CheckIcon } from "lucide-react"
 import { useState } from "react"
+import { SERVICE_TIER_ICONS } from "./ServiceTierIcons"
 
 interface TaskServiceTierControlProps {
 	onSelect: (tier: OpenAiServiceTier) => void
@@ -13,15 +14,8 @@ const SERVICE_TIER_DESCRIPTIONS: Record<OpenAiServiceTier, string> = {
 	flex: "Use the lower-cost flexible service tier.",
 	scale: "Use the Scale service tier.",
 	priority: "Use the priority service tier.",
+	ultrafast: "Use the ultra-fast service tier.",
 }
-
-const SERVICE_TIER_ICONS = {
-	auto: SparklesIcon,
-	default: GaugeIcon,
-	flex: ShuffleIcon,
-	scale: LayersIcon,
-	priority: ZapIcon,
-} satisfies Record<OpenAiServiceTier, typeof GaugeIcon>
 
 function tierLabel(tier: OpenAiServiceTier): string {
 	return tier.charAt(0).toUpperCase() + tier.slice(1)

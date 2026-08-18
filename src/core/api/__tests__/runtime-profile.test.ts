@@ -50,6 +50,29 @@ describe("Task runtime Profile overrides", () => {
 		expect(profile.openai?.serviceTier).toBe("default")
 	})
 
+	it("applies the shared DeepSeek high/max policy at the runtime handler boundary", () => {
+		const profile = ApiProfile.create({
+			id: "profile-deepseek",
+			name: "DeepSeek profile",
+			provider: "deepseek",
+			modelId: "deepseek-v4-flash",
+			enabled: true,
+			modelInfo: { capabilities: { supportsReasoning: true } },
+			deepseek: {
+				reasoning: { enableThinking: true, effort: "high" },
+			},
+		})
+
+		const runtimeProfile = applyTaskRuntimeOverrides(
+			profile,
+			{ actModeReasoningOverride: { kind: "effort", effort: "max" } },
+			"act",
+		)
+
+		expect(runtimeProfile.deepseek?.reasoning).toMatchObject({ enableThinking: true, effort: "max" })
+		expect(profile.deepseek?.reasoning?.effort).toBe("high")
+	})
+
 	it("preserves Profile values when the Task inherits both controls", () => {
 		const profile = createOpenAiProfile()
 		const runtimeProfile = applyTaskRuntimeOverrides(

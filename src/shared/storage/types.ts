@@ -17,7 +17,7 @@ export function normalizeOpenaiReasoningEffort(effort?: string): OpenaiReasoning
 	return isOpenaiReasoningEffort(value) ? value : "medium"
 }
 
-export const OPENAI_SERVICE_TIER_OPTIONS = ["auto", "default", "flex", "scale", "priority"] as const
+export const OPENAI_SERVICE_TIER_OPTIONS = ["auto", "default", "flex", "scale", "priority", "ultrafast"] as const
 
 export type OpenAiServiceTier = (typeof OPENAI_SERVICE_TIER_OPTIONS)[number]
 

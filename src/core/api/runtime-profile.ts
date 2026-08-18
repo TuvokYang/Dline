@@ -2,7 +2,13 @@ import type { ApiConfiguration } from "@shared/api"
 import type { ApiProfile } from "@shared/proto/dline/profile"
 import type { Mode } from "@shared/storage/types"
 import { applyTaskServiceTierOverride, validateTaskServiceTierOverride } from "@shared/task-provider-overrides"
-import { applyTaskReasoningOverride, validateTaskReasoningOverride } from "@shared/task-reasoning"
+import {
+	applyTaskReasoningOverride,
+	resolveProfileReasoningConfig,
+	resolveTaskThinkingConfig,
+	validateTaskReasoningOverride,
+} from "@shared/task-reasoning"
+import { getProfileModelInfo } from "./model-info"
 
 /**
  * Apply mode-scoped Task overrides to a runtime-only Profile clone.
@@ -18,7 +24,11 @@ export function applyTaskRuntimeOverrides(profile: ApiProfile, configuration: Ap
 
 	let runtimeProfile = { ...profile }
 	if (reasoningOverride) {
-		const validation = validateTaskReasoningOverride(reasoningOverride, profile.modelInfo?.capabilities?.thinking)
+		const modelCapabilities = getProfileModelInfo(profile).capabilities
+		const validation = validateTaskReasoningOverride(
+			reasoningOverride,
+			resolveTaskThinkingConfig(profile.provider, modelCapabilities, resolveProfileReasoningConfig(profile)),
+		)
 		if (!validation.valid) throw new Error(validation.message)
 		runtimeProfile = applyTaskReasoningOverride(runtimeProfile, validation.override)
 	}

@@ -47,7 +47,7 @@ describe("Task service tier override domain", () => {
 			valid: true,
 			override: { kind: "inherit" },
 		})
-		for (const tier of ["auto", "default", "flex", "scale", "priority"] as const) {
+		for (const tier of ["auto", "default", "flex", "scale", "priority", "ultrafast"] as const) {
 			expect(validateTaskServiceTierOverride({ kind: "tier", tier }, "openai-codex")).toEqual({
 				valid: true,
 				override: { kind: "tier", tier },

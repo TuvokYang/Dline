@@ -1,10 +1,11 @@
 import { useApiProfiles } from "@components/settings/providers/useApiProfiles"
+import { useProviderModels } from "@components/settings/providers/useProviderModels"
 import { updateTaskSettings } from "@components/settings/utils/settingsHandlers"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@components/ui/select"
 import { useExtensionState } from "@context/ExtensionStateContext"
 import { resolveProfileModelInfo } from "@shared/providers/profile-model-info"
 import type { OpenAiServiceTier } from "@shared/storage/types"
-import { resolveProfileServiceTier } from "@shared/task-provider-overrides"
+import { profileServiceTierEnabled, resolveProfileServiceTier } from "@shared/task-provider-overrides"
 import { resolveProfileReasoningConfig, resolveTaskThinkingConfig } from "@shared/task-reasoning"
 import { useEffect, useMemo, useState } from "react"
 import { TaskServiceTierControl } from "./TaskServiceTierControl"
@@ -31,19 +32,22 @@ export function TaskRuntimeControls() {
 			(profileName ? profiles.find((candidate) => candidate.name === profileName) : undefined),
 		[profileId, profileName, profiles],
 	)
-	const effectiveModelInfo = profile ? resolveProfileModelInfo(profile) : undefined
-	const thinking = resolveTaskThinkingConfig(profile?.provider, effectiveModelInfo?.capabilities)
+	const { models: providerModels, defaultModelId: providerDefaultModelId } = useProviderModels(profile?.provider ?? "")
+	const effectiveModelInfo = profile
+		? resolveProfileModelInfo(profile, { models: providerModels, defaultModelId: providerDefaultModelId })
+		: undefined
+	const profileReasoning = resolveProfileReasoningConfig(profile)
+	const thinking = resolveTaskThinkingConfig(profile?.provider, effectiveModelInfo?.capabilities, profileReasoning)
 	const effortLevels = thinking?.effortLevels ?? []
 	const maxBudget = thinking?.maxBudget
 	const supportsEffort = effortLevels.length > 0
 	const supportsBudget = Number.isSafeInteger(maxBudget) && (maxBudget ?? -1) >= 0
-	const supportsServiceTier = profile?.provider === "openai" || profile?.provider === "openai-codex"
+	const supportsServiceTier = profileServiceTierEnabled(profile)
 
 	const reasoningOverride =
 		mode === "plan" ? apiConfiguration?.planModeReasoningOverride : apiConfiguration?.actModeReasoningOverride
 	const serviceTierOverride =
 		mode === "plan" ? apiConfiguration?.planModeServiceTierOverride : apiConfiguration?.actModeServiceTierOverride
-	const profileReasoning = resolveProfileReasoningConfig(profile)
 	const profileThinkingValue =
 		(profileReasoning?.thinkingBudget ?? 0) > 0
 			? "budget"
@@ -135,14 +139,16 @@ export function TaskRuntimeControls() {
 	return (
 		<>
 			{(supportsEffort || supportsBudget) && (
-				<div className="flex flex-none items-center overflow-visible" data-chat-input-slot="thinking">
+				<div
+					className="flex min-w-[4ch] max-w-[8ch] flex-[0_1_auto] items-center overflow-hidden"
+					data-chat-input-slot="thinking">
 					<Select onValueChange={updateThinking} value={thinkingValue}>
 						<SelectTrigger
 							aria-label="Task thinking override"
-							className="!h-auto w-auto min-w-0 max-w-[8ch] justify-start gap-0 overflow-hidden rounded-none border-0 bg-transparent p-0 text-left text-xs shadow-none outline-none focus-visible:border-transparent focus-visible:ring-0"
+							className="!h-4 inline-flex w-auto min-w-0 max-w-full items-center justify-start gap-0 overflow-hidden rounded-none border-0 bg-transparent p-0 text-left text-xs leading-none shadow-none outline-none focus-visible:border-transparent focus-visible:ring-0"
 							showIcon={false}
 							size="sm">
-							<SelectValue className="block min-w-0 truncate text-left" />
+							<SelectValue className="flex min-w-0 items-center truncate text-left leading-none" />
 						</SelectTrigger>
 						<SelectContent align="start" className="min-w-28" position="popper" side="top" sideOffset={4}>
 							{supportsEffort &&

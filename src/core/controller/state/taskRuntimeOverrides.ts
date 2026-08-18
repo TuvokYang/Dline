@@ -12,6 +12,7 @@ import {
 	validateTaskServiceTierOverride,
 } from "@shared/task-provider-overrides"
 import {
+	resolveProfileReasoningConfig,
 	resolveTaskThinkingConfig,
 	type TaskReasoningOverride,
 	taskReasoningOverrideFromFields,
@@ -98,7 +99,10 @@ function prepareModeUpdate(settings: ProtoSettings, configuration: ApiConfigurat
 	if (hasReasoningUpdate) {
 		const override = parseReasoningOverride(settings, fields)
 		const modelCapabilities = getProfileModelInfo(profile).capabilities
-		const validation = validateTaskReasoningOverride(override, resolveTaskThinkingConfig(profile.provider, modelCapabilities))
+		const validation = validateTaskReasoningOverride(
+			override,
+			resolveTaskThinkingConfig(profile.provider, modelCapabilities, resolveProfileReasoningConfig(profile)),
+		)
 		if (!validation.valid) throw new Error(validation.message)
 		mutations.push(...reasoningMutations(fields, validation.override))
 	}

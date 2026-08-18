@@ -27,6 +27,41 @@ describe("provider reasoning and service-tier options", () => {
 		})
 	})
 
+	it("resolves Anthropic budget capability when registry metadata only marks reasoning support", () => {
+		const thinking = resolveTaskThinkingConfig("anthropic", { supportsReasoning: true })
+
+		expect(thinking).to.deep.include({ supported: true, mode: "budget", maxBudget: 6_000 })
+		expect(thinking?.effortLevels).to.deep.equal([])
+		expect(validateTaskReasoningOverride({ kind: "budget", budgetTokens: 2_048 }, thinking)).to.deep.equal({
+			valid: true,
+			override: { kind: "budget", budgetTokens: 2_048 },
+		})
+	})
+
+	it("uses an enabled Provider reasoning config when model capability hydration is unavailable", () => {
+		const deepSeekThinking = resolveTaskThinkingConfig("deepseek", undefined, {
+			enableThinking: true,
+			effort: "high",
+		})
+		const anthropicThinking = resolveTaskThinkingConfig("anthropic", undefined, {
+			enableThinking: true,
+			thinkingBudget: 2_048,
+		})
+
+		expect(deepSeekThinking).to.deep.include({ supported: true, mode: "effort" })
+		expect(deepSeekThinking?.effortLevels).to.deep.equal([...DEEPSEEK_REASONING_EFFORT_OPTIONS])
+		expect(anthropicThinking).to.deep.include({ supported: true, mode: "budget", maxBudget: 6_000 })
+		expect(validateTaskReasoningOverride({ kind: "budget", budgetTokens: 2_048 }, anthropicThinking)).to.deep.equal({
+			valid: true,
+			override: { kind: "budget", budgetTokens: 2_048 },
+		})
+	})
+
+	it("honors an explicit Provider disable and does not invent unsupported reasoning", () => {
+		expect(resolveTaskThinkingConfig("deepseek", { supportsReasoning: true }, { enableThinking: false })).to.equal(undefined)
+		expect(resolveTaskThinkingConfig("anthropic", undefined, undefined)).to.equal(undefined)
+	})
+
 	it("projects DeepSeek low, high and max efforts into the shared Task override policy", () => {
 		const thinking = resolveTaskThinkingConfig("deepseek", { supportsReasoning: true })
 
@@ -43,8 +78,9 @@ describe("provider reasoning and service-tier options", () => {
 	})
 
 	it("accepts only OpenAI service tiers supported by the SDK", () => {
-		expect(OPENAI_SERVICE_TIER_OPTIONS).to.deep.equal(["auto", "default", "flex", "scale", "priority"])
+		expect(OPENAI_SERVICE_TIER_OPTIONS).to.deep.equal(["auto", "default", "flex", "scale", "priority", "ultrafast"])
 		expect(normalizeOpenAiServiceTier("priority")).to.equal("priority")
+		expect(normalizeOpenAiServiceTier("ultrafast")).to.equal("ultrafast")
 		expect(normalizeOpenAiServiceTier("unsupported")).to.equal(undefined)
 	})
 

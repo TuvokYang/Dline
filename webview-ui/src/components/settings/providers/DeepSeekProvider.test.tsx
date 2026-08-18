@@ -38,10 +38,71 @@ vi.mock("../common/ModelSelector", () => ({
 	),
 }))
 vi.mock("@vscode/webview-ui-toolkit/react", () => ({
-	VSCodeCheckbox: ({ children }: { children: React.ReactNode }) => <label>{children}</label>,
+	VSCodeCheckbox: ({
+		checked,
+		children,
+		onChange,
+	}: {
+		checked?: boolean
+		children: React.ReactNode
+		onChange?: (event: React.ChangeEvent<HTMLInputElement>) => void
+	}) => (
+		<label>
+			<input
+				aria-label={typeof children === "string" ? children : undefined}
+				checked={checked}
+				onChange={onChange}
+				type="checkbox"
+			/>
+			{children}
+		</label>
+	),
 }))
 
 describe("DeepSeekProvider", () => {
+	it("persists explicit Enable Thinking without a zero budget", () => {
+		const onUpdate = vi.fn()
+		const profile = {
+			id: "deepseek-profile",
+			provider: "deepseek",
+			modelId: "deepseek-v4-pro",
+			deepseek: BaseProviderConfig.create({ reasoning: { enableThinking: false } }),
+		} as unknown as ApiProfile
+
+		render(<DeepSeekProvider onUpdate={onUpdate} profile={profile} showModelOptions={true} />)
+		fireEvent.click(screen.getByRole("checkbox", { name: "Enable Thinking" }))
+
+		expect(onUpdate).toHaveBeenCalledWith({
+			deepseek: expect.objectContaining({
+				reasoning: { enableThinking: true, effort: "high" },
+			}),
+		})
+		const update = onUpdate.mock.calls.at(-1)?.[0] as { deepseek?: { reasoning?: Record<string, unknown> } }
+		expect(update.deepseek?.reasoning).not.toHaveProperty("thinkingBudget")
+	})
+
+	it("persists explicit disable and clears the effort and budget fields", () => {
+		const onUpdate = vi.fn()
+		const profile = {
+			id: "deepseek-profile",
+			provider: "deepseek",
+			modelId: "deepseek-v4-pro",
+			deepseek: BaseProviderConfig.create({
+				reasoning: { enableThinking: true, effort: "high", thinkingBudget: 0 },
+			}),
+		} as unknown as ApiProfile
+
+		render(<DeepSeekProvider onUpdate={onUpdate} profile={profile} showModelOptions={true} />)
+		fireEvent.click(screen.getByRole("checkbox", { name: "Enable Thinking" }))
+
+		expect(onUpdate).toHaveBeenCalledWith({
+			deepseek: expect.objectContaining({ reasoning: { enableThinking: false } }),
+		})
+		const update = onUpdate.mock.calls.at(-1)?.[0] as { deepseek?: { reasoning?: Record<string, unknown> } }
+		expect(update.deepseek?.reasoning).not.toHaveProperty("effort")
+		expect(update.deepseek?.reasoning).not.toHaveProperty("thinkingBudget")
+	})
+
 	it("shows metadata-supported API formats while retaining the complete model catalog", () => {
 		const onUpdate = vi.fn()
 		const profile = {

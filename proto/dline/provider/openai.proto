@@ -42,4 +42,6 @@ message OpenAiProviderConfig {
   optional uint32 stream_idle_timeout_seconds = 15;
   // Prompt cache control policy for this profile. Defaults to automatic.
   OpenAiPromptCacheMode prompt_cache_mode = 16;
+  // Whether this endpoint supports Service Tier controls. Missing values remain enabled for compatibility.
+  optional bool service_tier_enabled = 17;
 }
