@@ -55,6 +55,8 @@ export interface ContextCompactionTransitionState {
 export interface ContextCompactionSessionInput {
 	operationId: string
 	trigger: ContextCompactionTriggerKind
+	/** Stable owning Task identity for provider-side prompt cache isolation. */
+	taskNamespace?: string
 	compactionApi: ApiHandler
 	targetApi: ApiHandler
 	targetMode: Mode
@@ -101,9 +103,7 @@ export interface ContextCompactionPassRequest {
 	initialAttemptId: string
 }
 
-export type ContextCompactionPassReview =
-	| { action: "accept" }
-	| { action: "regenerate"; feedback: ClineContent[] }
+export type ContextCompactionPassReview = { action: "accept" } | { action: "regenerate"; feedback: ClineContent[] }
 
 export type ContextCompactionPassRetryEvent =
 	| InternalCompactionPassRetryEvent
@@ -325,6 +325,7 @@ export class ContextCompactionSession {
 								api: input.compactionApi,
 								providerInput: request.providerInput,
 								explicitInstructions: request.explicitInstructions,
+								taskNamespace: input.taskNamespace,
 								passIdentity,
 								retryPolicy,
 								allowOpenAiMaxOutputReplay: automaticReplayAllowed,

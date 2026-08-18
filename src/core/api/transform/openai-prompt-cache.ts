@@ -10,6 +10,7 @@ interface PromptCacheIdentityInput {
 	readonly apiFormat: PromptCacheApiFormat
 	readonly modelId: string
 	readonly systemPrompt: string
+	readonly taskNamespace?: string
 	readonly tools: readonly unknown[]
 }
 
@@ -18,6 +19,7 @@ export interface OpenAIChatPromptCacheInput {
 	readonly systemPrompt: string
 	readonly messages: OpenAI.Chat.ChatCompletionMessageParam[]
 	readonly tools: readonly OpenAI.Chat.ChatCompletionTool[]
+	readonly taskNamespace?: string
 	readonly mode?: OpenAIPromptCacheProjectionMode
 }
 
@@ -32,6 +34,7 @@ export interface OpenAIResponsesPromptCacheInput {
 	readonly systemPrompt: string
 	readonly input: OpenAI.Responses.ResponseInput
 	readonly tools: readonly OpenAI.Responses.Tool[]
+	readonly taskNamespace?: string
 	readonly mode?: OpenAIPromptCacheProjectionMode
 }
 
@@ -60,6 +63,7 @@ function createPromptCacheKey(input: PromptCacheIdentityInput): string {
 			apiFormat: input.apiFormat,
 			model: input.modelId,
 			systemPrompt: input.systemPrompt,
+			taskNamespace: input.taskNamespace,
 			tools: input.tools,
 		}),
 	)
@@ -119,6 +123,7 @@ export function projectOpenAIChatPromptCache(input: OpenAIChatPromptCacheInput):
 		apiFormat: "chat",
 		modelId: input.modelId,
 		systemPrompt: input.systemPrompt,
+		taskNamespace: input.taskNamespace,
 		tools: input.tools,
 	})
 	if (input.mode !== "explicit") {
@@ -138,6 +143,7 @@ export function projectOpenAIResponsesPromptCache(input: OpenAIResponsesPromptCa
 		apiFormat: "responses",
 		modelId: input.modelId,
 		systemPrompt: input.systemPrompt,
+		taskNamespace: input.taskNamespace,
 		tools: input.tools,
 	})
 	if (input.mode !== "explicit") {

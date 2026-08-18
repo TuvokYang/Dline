@@ -9,7 +9,6 @@ import { ClineError } from "@/services/error"
 import { ClineStorageMessage } from "@/shared/messages/content"
 import { ClineTool } from "@/shared/tools"
 import { getProfileModelInfo } from "./model-info"
-import { applyTaskRuntimeOverrides } from "./runtime-profile"
 import { AIhubmixHandler } from "./providers/aihubmix"
 import { AnthropicHandler } from "./providers/anthropic"
 import { AskSageHandler } from "./providers/asksage"
@@ -51,6 +50,7 @@ import { VsCodeLmHandler } from "./providers/vscode-lm"
 import { WandbHandler } from "./providers/wandb"
 import { XAIHandler } from "./providers/xai"
 import { ZAiHandler } from "./providers/zai"
+import { applyTaskRuntimeOverrides } from "./runtime-profile"
 import { ApiStream, ApiStreamUsageChunk } from "./transform/stream"
 
 /** @deprecated Use ApiHandlerContext instead */
@@ -90,6 +90,8 @@ export interface ApiGenerationOptions {
 export interface ApiRequestOptions {
 	/** Provider-hosted tools selected for this request. Local tools remain in `tools`. */
 	readonly serverTools?: readonly ServerTool[]
+	/** Stable Task identity used to isolate provider-side prompt cache routing. */
+	readonly taskNamespace?: string
 	/** Optional generation policy for internal requests; ordinary requests omit this field. */
 	readonly generation?: ApiGenerationOptions
 }
@@ -302,11 +304,7 @@ export function buildApiHandler(configuration: ApiConfiguration, mode: Mode): Ap
 	if (!profile) {
 		throw new Error(`Profile "${profileName}" not found`)
 	}
-	const runtimeProfile = applyTaskRuntimeOverrides(
-		{ ...profile, modelInfo: getProfileModelInfo(profile) },
-		configuration,
-		mode,
-	)
+	const runtimeProfile = applyTaskRuntimeOverrides({ ...profile, modelInfo: getProfileModelInfo(profile) }, configuration, mode)
 	return createHandlerForProvider({
 		profile: runtimeProfile,
 		mode,

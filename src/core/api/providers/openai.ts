@@ -22,6 +22,7 @@ import { isO1Model } from "@/shared/resolve-prompt-profile"
 import { Logger } from "@/shared/services/Logger"
 import { ApiHandler, ApiHandlerContext, type ApiRequestOptions } from "../index"
 import { withRetry } from "../retry"
+import { getOpenAIChatOutputLimitError } from "../stream/OutputLimitExceededError"
 import { OpenAIResponsesStreamMonitor } from "../stream/openai-responses-stream-monitor"
 import { convertToO1Messages } from "../transform/o1-format"
 import { convertToOpenAiMessages } from "../transform/openai-format"
@@ -93,7 +94,7 @@ export class OpenAiHandler implements ApiHandler {
 		return this.config?.reasoning?.effort
 	}
 	private get serviceTier() {
-		return normalizeOpenAiServiceTier(this.config?.serviceTier)
+		return this.config?.serviceTierEnabled === false ? undefined : normalizeOpenAiServiceTier(this.config?.serviceTier)
 	}
 	private get apiFormat() {
 		const selected = this.config?.apiFormat ?? openAiEndpointToApiFormat(this.config?.apiEndpoint)
@@ -262,7 +263,9 @@ export class OpenAiHandler implements ApiHandler {
 		let reasoningEffort: ChatCompletionReasoningEffort | undefined
 		let maxTokens: number | undefined
 
-		if (model.info.capabilities?.maxTokens && model.info.capabilities.maxTokens > 0) {
+		if (options?.generation?.purpose === "compaction") {
+			maxTokens = options.generation.maxOutputTokens
+		} else if (model.info.capabilities?.maxTokens && model.info.capabilities.maxTokens > 0) {
 			maxTokens = Number(model.info.capabilities.maxTokens)
 		} else {
 			maxTokens = undefined
@@ -303,6 +306,7 @@ export class OpenAiHandler implements ApiHandler {
 				systemPrompt,
 				messages: openAiMessages,
 				tools: toolParams.tools ?? [],
+				taskNamespace: options?.taskNamespace,
 				mode,
 			})
 			const requestParams: any = {
@@ -399,6 +403,12 @@ export class OpenAiHandler implements ApiHandler {
 					totalCost,
 				}
 			}
+
+			const outputLimitError = getOpenAIChatOutputLimitError(chunk.choices?.[0]?.finish_reason)
+			if (outputLimitError) {
+				if (this.requestController === requestController) this.requestController = undefined
+				throw outputLimitError
+			}
 		}
 		if (this.requestController === requestController) this.requestController = undefined
 	}
@@ -453,13 +463,17 @@ export class OpenAiHandler implements ApiHandler {
 		const enableThinking = this.config?.reasoning?.enableThinking ?? true
 		const reasoningEffort = normalizeOpenaiReasoningEffort(this.reasoningEffort)
 		const temperature = model.info.capabilities?.temperature ?? this.config?.temperature
-		const maxOutputTokens = model.info.capabilities?.maxTokens
+		const maxOutputTokens =
+			options?.generation?.purpose === "compaction"
+				? options.generation.maxOutputTokens
+				: model.info.capabilities?.maxTokens
 		const buildParams = (mode: OpenAIPromptCacheProjectionMode): OpenAI.Responses.ResponseCreateParamsStreaming => {
 			const promptCache = projectOpenAIResponsesPromptCache({
 				modelId: model.id,
 				systemPrompt,
 				input,
 				tools: responseTools,
+				taskNamespace: options?.taskNamespace,
 				mode,
 			})
 			return {

@@ -486,6 +486,10 @@ export class Task {
 		}
 	>()
 	private readonly contextCompactionFailureReasons = new Map<string, string>()
+	private pendingAutomaticCompactionContinuation?: {
+		userContent: ClineContent[]
+		includeFileDetails: boolean
+	}
 	private diffViewProvider: DiffViewProvider
 	public checkpointManager?: ICheckpointManager
 	private initialCheckpointCommitPromise?: Promise<string | undefined>
@@ -687,6 +691,22 @@ export class Task {
 							persistedRequestApiIndex,
 							logicalApiIndex: effect.apiIndex,
 						})
+						return
+					}
+					if (effect.persistedRequest === false) {
+						const pendingContinuation = this.pendingAutomaticCompactionContinuation
+						if (!pendingContinuation) {
+							throw new Error("Automatic compaction continuation is missing")
+						}
+						this.pendingAutomaticCompactionContinuation = undefined
+						await this.recursivelyMakeClineRequests(
+							pendingContinuation.userContent,
+							pendingContinuation.includeFileDetails,
+							{
+								reuseRequestAccounting: true,
+								logicalApiIndex: effect.apiIndex,
+							},
+						)
 						return
 					}
 					if (effect.draft) {
@@ -1352,6 +1372,17 @@ export class Task {
 	/** Return the operation currently owning the Task-local compaction Session. */
 	public getContextCompactionOperationId(): string | undefined {
 		return this.contextCompactionSession.getActiveOperationId()
+	}
+
+	/** Expose the destructive fallback only while terminal automatic compaction recovery is awaiting Retry. */
+	public isForceTruncateAvailable(): boolean {
+		const interaction = this.getRuntimeState().interaction
+		return (
+			this.taskState.forceTruncateAvailable &&
+			!this.taskState.abort &&
+			interaction?.kind === "error_retry" &&
+			interaction.status === "awaiting"
+		)
 	}
 
 	/** Return the authoritative Task-local context-window indicator snapshot. */
@@ -2647,6 +2678,7 @@ export class Task {
 
 	/** Present a terminal automatic-compaction failure through the existing API retry interaction. */
 	private async presentTerminalCompactionFailure(operationId: string, apiIndex: number): Promise<void> {
+		this.taskState.forceTruncateAvailable = true
 		const errorMessage =
 			this.contextCompactionFailureReasons.get(operationId) ??
 			"Context compaction failed after all automatic attempts were exhausted."
@@ -2669,6 +2701,7 @@ export class Task {
 			interactionId: retryId,
 			apiIndex,
 			presentation: errorMessage,
+			persistedRequest: false,
 		})
 	}
 
@@ -2902,6 +2935,7 @@ export class Task {
 			return await this.contextCompactionSession.run({
 				operationId,
 				trigger: "auto_compaction",
+				taskNamespace: this.taskId,
 				compactionApi: requestScope.api,
 				targetApi: requestScope.api,
 				targetMode: requestScope.providerInfo.mode,
@@ -2936,6 +2970,7 @@ export class Task {
 			return await this.contextCompactionSession.run({
 				operationId,
 				trigger: "manual_compact_command",
+				taskNamespace: this.taskId,
 				compactionApi: requestScope.api,
 				targetApi: requestScope.api,
 				targetMode: requestScope.providerInfo.mode,
@@ -3012,6 +3047,7 @@ export class Task {
 			const result = await this.contextCompactionSession.run({
 				operationId,
 				trigger,
+				taskNamespace: this.taskId,
 				compactionApi: targetApi,
 				targetApi,
 				targetMode,
@@ -3089,6 +3125,35 @@ export class Task {
 		void settlement.finally(() => {
 			if (this.taskHeaderCompactionSettlement === settlement) this.taskHeaderCompactionSettlement = undefined
 		})
+		await this.postStateToWebview({ immediate: true })
+		return { accepted: true, result: "accepted" }
+	}
+
+	/** Apply one explicit legacy history truncation without starting a provider request. */
+	public async forceTruncateTask(expectedRevision: number): Promise<{ accepted: boolean; result: string }> {
+		const runtimeState = this.getRuntimeState()
+		if (runtimeState.revision !== expectedRevision) return { accepted: false, result: "stale_state" }
+		if (this.taskState.abort || !this.taskState.isInitialized || !runtimeState.interaction) {
+			return { accepted: false, result: "unavailable" }
+		}
+		if (!this.isForceTruncateAvailable()) {
+			return { accepted: false, result: "not_available" }
+		}
+		if (this.contextCompactionSession.getActiveOperationId()) {
+			return { accepted: false, result: "already_running" }
+		}
+
+		const previousRange = this.taskState.conversationHistoryDeletedRange
+		await this.handleContextWindowExceededError(this.api, false, "none")
+		const nextRange = this.taskState.conversationHistoryDeletedRange
+		const rangeChanged =
+			(nextRange?.[0] ?? undefined) !== (previousRange?.[0] ?? undefined) ||
+			(nextRange?.[1] ?? undefined) !== (previousRange?.[1] ?? undefined)
+		if (!rangeChanged) return { accepted: false, result: "no_history_to_truncate" }
+
+		this.taskState.manualHistoryTruncationCommitted = true
+		this.taskState.forceTruncateAvailable = false
+		this.taskState.didAutomaticallyRetryFailedApiRequest = false
 		await this.postStateToWebview({ immediate: true })
 		return { accepted: true, result: "accepted" }
 	}
@@ -3424,6 +3489,7 @@ export class Task {
 			}
 
 			await this.updateContextCompactionStatus("failed", { error: errorMessage })
+			this.taskState.forceTruncateAvailable = true
 			this.compactionRetryPolicy.reset()
 			const retryId = `retry:${this.taskId}:${this.getRuntimeState().revision}`
 			await this.recoverApiFailure({
@@ -3478,6 +3544,7 @@ export class Task {
 		}
 
 		await this.updateContextCompactionStatus("failed", { error: errorMessage })
+		this.taskState.forceTruncateAvailable = true
 		if (!manualRetryTakeover && this.taskState.autoRetryAttempts >= MAX_AUTO_RETRY_ATTEMPTS) {
 			await this.markAutoRetryExhausted(errorMessage)
 		}
@@ -4031,7 +4098,7 @@ export class Task {
 	 */
 	private calculatePreCompactDeletedRange(
 		apiConversationHistory: ClineStorageMessage[],
-		keep: "lastTwo" | "quarter" = "quarter",
+		keep: "none" | "lastTwo" | "half" | "quarter" = "quarter",
 	): [number, number] {
 		const newDeletedRange = this.contextManager.getNextTruncationRange(
 			apiConversationHistory,
@@ -4097,7 +4164,13 @@ export class Task {
 
 	/** Run the complete cancellation transaction without message-derived state inference. */
 	/** Present exhausted retry recovery and commit the chosen continuation. */
-	public recoverApiFailure(input: { turnId: string; interactionId: string; apiIndex: number; presentation: string }) {
+	public recoverApiFailure(input: {
+		turnId: string
+		interactionId: string
+		apiIndex: number
+		presentation: string
+		persistedRequest?: boolean
+	}) {
 		return this.interactionCoordinator.recover(input)
 	}
 
@@ -4163,7 +4236,23 @@ export class Task {
 	/** Dispatch one typed event through the serialized task runtime. */
 	public dispatchRuntime(event: TaskEvent): Promise<TaskDispatchResult> {
 		if (event.type === "INTERACTION_RESPONDED") {
-			return this.interactionCoordinator.respond(event.response)
+			const interactionBeforeResponse = this.taskRuntime.getState().interaction
+			return this.interactionCoordinator.respond(event.response).then((result) => {
+				const isAcceptedErrorRetryTakeover =
+					result.accepted &&
+					interactionBeforeResponse?.status === "awaiting" &&
+					interactionBeforeResponse.kind === "error_retry" &&
+					interactionBeforeResponse.interactionId === event.response.interactionId &&
+					interactionBeforeResponse.turnId === event.response.turnId &&
+					(event.response.actionId === "retry" || event.response.actionId === "start_new_task")
+				if (isAcceptedErrorRetryTakeover) {
+					this.taskState.forceTruncateAvailable = false
+					if (event.response.actionId === "start_new_task") {
+						this.pendingAutomaticCompactionContinuation = undefined
+					}
+				}
+				return result
+			})
 		}
 		return this.taskRuntime.dispatch(event)
 	}
@@ -5507,9 +5596,13 @@ export class Task {
 		return deferredTurn.userContent
 	}
 
-	private async handleContextWindowExceededError(api: ApiHandler): Promise<void> {
+	private async handleContextWindowExceededError(
+		api: ApiHandler,
+		markAutomaticRetry = true,
+		keepOverride?: "none" | "lastTwo" | "half" | "quarter",
+	): Promise<void> {
 		const apiConversationHistory = this.messageStateHandler.apiConversationHistory
-		const keep = this.modeSwitchCompaction.shouldForce() ? "lastTwo" : "quarter"
+		const keep = keepOverride ?? (this.modeSwitchCompaction.shouldForce() ? "lastTwo" : "quarter")
 
 		// Run PreCompact hook before truncation
 		const hooksEnabled = getHooksEnabledSafe(this.stateManager.getGlobalSettingsKey("hooksEnabled"))
@@ -5573,7 +5666,9 @@ export class Task {
 			apiConversationHistory,
 		)
 
-		this.taskState.didAutomaticallyRetryFailedApiRequest = true
+		if (markAutomaticRetry) {
+			this.taskState.didAutomaticallyRetryFailedApiRequest = true
+		}
 	}
 
 	/**
@@ -6088,6 +6183,7 @@ export class Task {
 			roundContext,
 			api.createMessage(systemPrompt, apiConversationMessages, tools, {
 				serverTools,
+				taskNamespace: this.taskId,
 				...(providerOutputCap === undefined
 					? {}
 					: { generation: { purpose: "compaction", maxOutputTokens: providerOutputCap } as const }),
@@ -6159,6 +6255,7 @@ export class Task {
 			}
 
 			const isContextWindowExceededError = checkContextWindowExceededError(error)
+			const autoCondenseEnabled = this.stateManager.getGlobalSettingsKey("useAutoCondense") === true
 			const { model, providerId } = providerInfo
 			// Use provider-specific parseError if available, otherwise fall back to generic classification.
 			// Telemetry: toClineError logs internally; parseError must log manually when used.
@@ -6175,13 +6272,18 @@ export class Task {
 				throw error
 			}
 
-			if (isContextWindowExceededError && !this.taskState.didAutomaticallyRetryFailedApiRequest) {
+			if (
+				isContextWindowExceededError &&
+				!autoCondenseEnabled &&
+				!this.taskState.isInternalContextCompactionRequest &&
+				!this.taskState.didAutomaticallyRetryFailedApiRequest
+			) {
 				await this.handleContextWindowExceededError(api)
 			} else {
 				// request failed after retrying automatically once, ask user if they want to retry again
 				// note that this api_req_failed ask is unique in that we only present this option if the api hasn't streamed any content yet (ie it fails on the first chunk due), as it would allow them to hit a retry button. However if the api failed mid-stream, it could be in any arbitrary state where some tools may have executed, so that error is handled differently and requires cancelling the task entirely.
 
-				if (isContextWindowExceededError) {
+				if (isContextWindowExceededError && !autoCondenseEnabled && !this.taskState.isInternalContextCompactionRequest) {
 					const truncatedConversationHistory = this.contextManager.getTruncatedMessages(
 						this.messageStateHandler.apiConversationHistory,
 						this.taskState.conversationHistoryDeletedRange,
@@ -6230,6 +6332,9 @@ export class Task {
 				const shouldRetry =
 					!manualRetryTakeover &&
 					this.taskState.autoRetryAttempts < MAX_AUTO_RETRY_ATTEMPTS &&
+					(!isContextWindowExceededError ||
+						!autoCondenseEnabled ||
+						this.taskState.isInternalContextCompactionRequest) &&
 					(this.taskState.isInternalContextCompactionRequest ||
 						(!isInsufficientCredits && !isAuthError && !isSpendLimitError && !quotaExceeded))
 				if (shouldRetry) {
@@ -7097,8 +7202,10 @@ export class Task {
 		const manualCompactionRequested =
 			!persistedRequest && hasManualCompactionIntent(userContent, (block) => this.isTrustedUserFeedbackResult(block))
 		const manualCompactionCommitted = !persistedRequest && this.taskState.manualCompactionCommitted
+		const manualHistoryTruncationCommitted = !persistedRequest && this.taskState.manualHistoryTruncationCommitted
 		if (!persistedRequest) {
 			this.taskState.manualCompactionCommitted = false
+			this.taskState.manualHistoryTruncationCommitted = false
 		}
 		// An ordinary turn that follows a completed manual compaction must not
 		// keep the stale manual flag; it would otherwise make the next request
@@ -7124,6 +7231,7 @@ export class Task {
 			!didCompleteSummarization &&
 			!manualCompactionRequested &&
 			!manualCompactionCommitted &&
+			!manualHistoryTruncationCommitted &&
 			(useAutoCondense || forceFinalGuardCompact)
 		) {
 			shouldCompact =
@@ -7158,6 +7266,10 @@ export class Task {
 				includeFileDetails,
 			)
 			if (result === "failed") {
+				this.pendingAutomaticCompactionContinuation = {
+					userContent: cloneDeep(originalUserContent),
+					includeFileDetails,
+				}
 				await this.presentTerminalCompactionFailure(operationId, apiIndex)
 				return true
 			}
@@ -7331,7 +7443,8 @@ export class Task {
 				!targetWindowFittingCommitted &&
 				!manualCompactionRequested &&
 				!this.taskState.isManualContextCompactionRequest &&
-				!manualCompactionCommitted
+				!manualCompactionCommitted &&
+				!manualHistoryTruncationCommitted
 			) {
 				this.preparedOrdinaryProviderInputs.delete(apiIndex)
 				requestScope.explicitInstructions.cancel()
@@ -7343,6 +7456,10 @@ export class Task {
 					includeFileDetails,
 				)
 				if (result === "failed") {
+					this.pendingAutomaticCompactionContinuation = {
+						userContent: cloneDeep(originalUserContent),
+						includeFileDetails,
+					}
 					await this.presentTerminalCompactionFailure(operationId, apiIndex)
 					return true
 				}
@@ -7669,6 +7786,7 @@ export class Task {
 				})
 
 				let shouldInterruptStream = false
+				let shouldDrainUsageOnly = false
 
 				while (true) {
 					const chunk = await streamCoordinator.nextChunk()
@@ -7749,10 +7867,10 @@ export class Task {
 							)
 							didScheduleAnyContent = true
 							if (chunk.phase === "completed" && isTurnEndingToolName(chunk.tool_call.function?.name)) {
-								// A turn-ending tool owns the rest of the interaction. Stop the provider
-								// transport immediately so post-tool reasoning cannot enter UI or history,
-								// while preserving the normal assistant-turn finalization path below.
-								requestScope.api.abort?.()
+								// A turn-ending tool owns the visible interaction. Stop consuming ordinary
+								// content, but keep the Provider transport alive long enough to receive its
+								// final usage event for TaskHeader, history, telemetry and rate metrics.
+								shouldDrainUsageOnly = true
 								shouldInterruptStream = true
 							}
 							break
@@ -7851,7 +7969,12 @@ export class Task {
 					// may still arrive later in the same response and must be handled.
 				}
 
-				if (shouldInterruptStream) {
+				if (shouldDrainUsageOnly) {
+					await streamCoordinator.drainUsageOnly()
+					await this.toolExecutor.finalizeServerToolCalls(
+						"Provider stream ended before hosted web search returned a result.",
+					)
+				} else if (shouldInterruptStream) {
 					await streamCoordinator.stop()
 					await this.toolExecutor.finalizeServerToolCalls(
 						this.taskState.abort
@@ -7927,6 +8050,7 @@ export class Task {
 					if (openAiMaxOutputReplayDecision === "exhausted") {
 						await finalizeApiReqMsg("streaming_failed", errorMessage)
 						await this.updateContextCompactionStatus("failed", { error: errorMessage })
+						this.taskState.forceTruncateAvailable = true
 						this.endAutoRetrySequence(false)
 						await this.messageStateHandler.updateTaskHistory()
 						await this.postStateToWebview()

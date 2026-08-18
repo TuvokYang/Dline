@@ -1,7 +1,7 @@
 import type { ApiHandler } from "@core/api"
 import { isOutputLimitExceededError } from "@core/api/stream/OutputLimitExceededError"
 import { createIdentityFactory } from "@core/api/transform/block-identity"
-import type { ApiStreamUsageChunk } from "@core/api/transform/stream"
+import { ApiUsageAccumulator } from "@core/api/transform/usage-accumulator"
 import { parseAssistantMessageV2, type ToolUse } from "@core/assistant-message"
 import type { CompactionProviderInput } from "@core/task/compaction/CompactionRequestReplay"
 import type { ExplicitInstructionRequestScope } from "@core/task/explicit-instructions/ExplicitInstructionRequestScope"
@@ -27,6 +27,7 @@ export interface RunInternalCompactionPassInput {
 	api: ApiHandler
 	providerInput: CompactionProviderInput
 	explicitInstructions: ExplicitInstructionRequestScope
+	taskNamespace?: string
 	attemptId?: string
 	/** Every accepted Provider chunk, before summary parsing, for request lifecycle observers. */
 	onChunk?(chunk: unknown): void | Promise<void>
@@ -81,6 +82,7 @@ export async function runInternalCompactionPass(input: RunInternalCompactionPass
 		input.providerInput.tools,
 		{
 			serverTools: input.providerInput.serverTools,
+			taskNamespace: input.taskNamespace,
 			...(input.providerInput.providerOutputCap === undefined
 				? {}
 				: {
@@ -95,6 +97,7 @@ export async function runInternalCompactionPass(input: RunInternalCompactionPass
 	let assistantText = ""
 	let nativeSummary: string | undefined
 	let usage: InternalCompactionUsage | undefined
+	const usageAccumulator = new ApiUsageAccumulator()
 	let lastPublishedSummary: string | undefined
 	const nativeArguments = new Map<string, string>()
 	const publishSummarySnapshot = async (context: string | undefined): Promise<void> => {
@@ -139,9 +142,14 @@ export async function runInternalCompactionPass(input: RunInternalCompactionPass
 				}
 				break
 			}
-			case "usage":
-				usage = addUsage(usage, chunk)
+			case "usage": {
+				const current = usageAccumulator.apply(chunk).usage
+				usage = {
+					...current,
+					totalTokens: current.inputTokens + current.outputTokens + current.cacheWriteTokens + current.cacheReadTokens,
+				}
 				break
+			}
 			case "reasoning":
 			case "server_tool":
 				break
@@ -177,6 +185,7 @@ export async function runInternalCompactionPassWithRetry(
 				api: input.api,
 				providerInput: currentProviderInput,
 				explicitInstructions: input.explicitInstructions,
+				taskNamespace: input.taskNamespace,
 				attemptId: currentAttempt.authorizationAttemptId,
 				onChunk: (chunk) => input.onChunk?.(chunk, currentAttempt),
 				onSummaryUpdate: (context) => input.onSummaryUpdate?.(context, currentAttempt),
@@ -311,18 +320,4 @@ function parseXmlSummaryBlock(text: string, allowPartial: boolean): string | und
 			block.params.context.trim().length > 0,
 	)
 	return summaries.length === 1 ? summaries[0].params.context?.trim() : undefined
-}
-
-function addUsage(current: InternalCompactionUsage | undefined, chunk: ApiStreamUsageChunk): InternalCompactionUsage {
-	const inputTokens = (current?.inputTokens ?? 0) + Math.max(0, chunk.inputTokens || 0)
-	const outputTokens = (current?.outputTokens ?? 0) + Math.max(0, chunk.outputTokens || 0)
-	const cacheWriteTokens = (current?.cacheWriteTokens ?? 0) + Math.max(0, chunk.cacheWriteTokens || 0)
-	const cacheReadTokens = (current?.cacheReadTokens ?? 0) + Math.max(0, chunk.cacheReadTokens || 0)
-	return {
-		inputTokens,
-		outputTokens,
-		cacheWriteTokens,
-		cacheReadTokens,
-		totalTokens: inputTokens + outputTokens + cacheWriteTokens + cacheReadTokens,
-	}
 }
