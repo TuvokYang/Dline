@@ -69,6 +69,8 @@ export class TaskState {
 
 	// Retry tracking for auto-retry feature
 	autoRetryAttempts = 0
+	/** Auto-approval Settings version covered by one manual Hosted Web approval in this live Task. */
+	hostedWebApprovalLeaseVersion?: number
 
 	// Task Initialization
 	isInitialized = false
@@ -135,6 +137,10 @@ export class TaskState {
 	lastAutoCompactTriggerIndex?: number
 	/** Skip one stale-usage auto-compaction check after a confirmed manual summary is durably committed. */
 	manualCompactionCommitted = false
+	/** Skip one stale-usage auto-compaction check after explicit history truncation is committed. */
+	manualHistoryTruncationCommitted = false
+	/** Expose the destructive history-truncation fallback only after terminal automatic compaction failure. */
+	forceTruncateAvailable = false
 	/** Skip one stale-usage auto-compaction check after a committed target-window fitting candidate admits its continuation. */
 	targetWindowFittingCommitted = false
 	/** Identify the active provider request as manual compaction so failure does not enter automatic retry. */

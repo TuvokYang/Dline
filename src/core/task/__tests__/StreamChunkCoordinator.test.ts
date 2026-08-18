@@ -77,6 +77,38 @@ describe("StreamChunkCoordinator", () => {
 		}
 	})
 
+	it("drains late usage while discarding content after a turn-ending chunk", async () => {
+		let releaseLateStream: (() => void) | undefined
+		const lateStream = new Promise<void>((resolve) => {
+			releaseLateStream = resolve
+		})
+		async function* createTurnEndingStream(): ApiStream {
+			yield {
+				type: "tool_calls",
+				function_id: "call_attempt",
+				tool_index: 0,
+				tool_call: { function: { name: "attempt_completion", arguments: "{}" } },
+			}
+			yield { type: "reasoning", reasoning: "must not be presented" }
+			await lateStream
+			yield { type: "usage", inputTokens: 40, outputTokens: 20 }
+		}
+
+		const factory = createIdentityFactory(createSource(["ATTEMPT", "REASONING"]))
+		const stream = normalizeApiStream(createTurnEndingStream(), createStreamNormalizer(factory))
+		const onUsageChunk = vi.fn()
+		const coordinator = new StreamChunkCoordinator(stream, { onUsageChunk })
+
+		const terminalChunk = await coordinator.nextChunk()
+		const drainPromise = coordinator.drainUsageOnly()
+		releaseLateStream?.()
+		await drainPromise
+
+		expect(terminalChunk?.type).toBe("tool_calls")
+		expect(await coordinator.nextChunk()).toBeUndefined()
+		expect(onUsageChunk).toHaveBeenCalledWith(expect.objectContaining({ inputTokens: 40, outputTokens: 20 }))
+	})
+
 	it("receives only canonical chunks after provider stream normalization", async () => {
 		const factory = createIdentityFactory(createSource(["TRACE"]))
 		const normalizer = createStreamNormalizer(factory)

@@ -38,14 +38,19 @@ describe("Task API rate metrics boundary", () => {
 		)
 	})
 
-	it("routes request, estimated stream, and structured exact usage events to the same service", async () => {
+	it("aggregates Provider usage and commits one final exact request snapshot", async () => {
 		const source = await readFile(taskSourcePath, "utf8")
 
 		expect(source).toContain("onStreamEstimatedTokens: (tokens) => this.apiRateMetricsService.recordEstimatedTokens(tokens)")
 		expect(source).toContain("this.apiRateMetricsService.recordRequestStarted()")
-		expect(source).toContain("this.apiRateMetricsService.recordExactUsage({")
-		expect(source).toContain("thoughtsTokens: chunk.thoughtsTokenCount")
-		expect(source).toContain("thoughtsTokens: apiStreamUsage.thoughtsTokenCount")
+		expect(source).toContain("const usageTracker = new TaskRequestUsageTracker()")
+		expect(source).toContain("const usage = usageTracker.apply(chunk)")
+		expect(source).toContain("const usage = usageTracker.apply(apiStreamUsage)")
+		expect(source).toContain("const finalUsage = usageTracker.getSnapshot()")
+		expect(source).toContain("thoughtsTokens: finalUsage.thoughtsTokens")
+		expect(source.match(/this\.apiRateMetricsService\.recordExactUsage\(\{/g)).toHaveLength(1)
+		expect(source).not.toContain("thoughtsTokens: chunk.thoughtsTokenCount")
+		expect(source).not.toContain("thoughtsTokens: apiStreamUsage.thoughtsTokenCount")
 		expect(source).not.toContain("this.apiRateTracker.recordExactTokens(")
 	})
 

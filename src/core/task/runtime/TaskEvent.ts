@@ -15,6 +15,13 @@ export type TaskEvent =
 	| { type: "API_REQUEST_STARTED"; apiIndex: number }
 	| { type: "RESUME_API_CONTINUATION_REQUESTED"; apiIndex: number; draft?: InteractionDraft }
 	| { type: "HOSTED_WEB_REQUEST_CONTINUATION_REQUESTED"; interactionId: string; apiIndex: number }
+	| {
+			type: "HOSTED_WEB_REQUEST_REJECTED"
+			apiIndex: number
+			turnId: string
+			interactionId: string
+			presentation: string
+	  }
 	| { type: "RESUME_BLOCK_REPLAY_REQUESTED"; turnId: string; dlineTids: string[] }
 	| {
 			type: "TURN_CREATED"
@@ -64,7 +71,13 @@ export type TaskEvent =
 			draft?: InteractionDraft
 			resume?: { turnId: string; interactionId: string; presentation: string }
 	  }
-	| { type: "ERROR_RETRY_REQUESTED"; apiIndex: number; draft: InteractionDraft }
+	| {
+			type: "ERROR_RETRY_REQUESTED"
+			apiIndex: number
+			draft: InteractionDraft
+			/** Whether the failed request already has a durable user message at apiIndex. */
+			persistedRequest?: boolean
+	  }
 	| { type: "MISTAKE_LIMIT_CONTINUE_REQUESTED"; apiIndex: number; draft: InteractionDraft }
 	| { type: "API_RETRY_SCHEDULED"; apiIndex: number }
 	| {

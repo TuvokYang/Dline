@@ -1,3 +1,5 @@
+import { isInteractionCancellationError } from "@core/task/interaction/InteractionCancellationError"
+
 export interface TaskStartLifecycleOptions {
 	taskId: string
 	startInBackground: boolean
@@ -11,6 +13,11 @@ export interface TaskStartLifecycleOptions {
  * Foreground starts preserve the existing await semantics. Background starts
  * return after admission while retaining an observed rejection path.
  */
+async function reportBackgroundError(options: TaskStartLifecycleOptions, error: unknown): Promise<void> {
+	if (isInteractionCancellationError(error)) return
+	await options.onBackgroundError(error)
+}
+
 export async function startTaskLifecycle(options: TaskStartLifecycleOptions): Promise<void> {
 	await options.beforeStart?.(options.taskId)
 
@@ -23,11 +30,11 @@ export async function startTaskLifecycle(options: TaskStartLifecycleOptions): Pr
 	try {
 		startPromise = options.start()
 	} catch (error) {
-		await options.onBackgroundError(error)
+		await reportBackgroundError(options, error)
 		return
 	}
 
 	void startPromise.catch((error: unknown) => {
-		void Promise.resolve(options.onBackgroundError(error)).catch(() => undefined)
+		void reportBackgroundError(options, error).catch(() => undefined)
 	})
 }

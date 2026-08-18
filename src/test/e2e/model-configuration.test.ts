@@ -13,6 +13,7 @@ interface StoredProfile {
 	provider: string
 	modelId: string
 	baseUrl?: string
+	webSearchMode?: string
 	openai?: {
 		apiFormat?: string
 		customModelEnabled?: boolean
@@ -343,6 +344,12 @@ e2e(
 			await selectLabeledOption(card, firstSidebar, "Thinking Mode", "Reasoning Effort")
 			await selectLabeledOption(card, firstSidebar, "Reasoning Effort", "Ultra")
 			await waitForProfile(dlineDir, profileName, (profile) => profile.openai?.reasoning?.effort === "ultra")
+			await setCapability(card, "Enable Service Tier", false)
+			await expect(card.getByText("Service Tier", { exact: true }).last()).not.toBeVisible()
+			await waitForProfile(dlineDir, profileName, (profile) => profile.openai?.serviceTierEnabled === false)
+			await setCapability(card, "Enable Service Tier", true)
+			await expect(card.getByText("Service Tier", { exact: true }).last()).toBeVisible()
+			await waitForProfile(dlineDir, profileName, (profile) => profile.openai?.serviceTierEnabled === true)
 			await selectLabeledOption(card, firstSidebar, "Service Tier", "Priority")
 			await waitForProfile(dlineDir, profileName, (profile) => profile.openai?.serviceTier === "priority")
 
@@ -573,6 +580,14 @@ e2e(
 		)
 
 		const anthropicCard = await openProfileEditor(sidebar, E2E_PROFILE_NAMES.mockAnthropic)
+		const anthropicWebSearchMode = anthropicCard.getByRole("combobox", { name: "Web Search mode" })
+		await anthropicWebSearchMode.selectOption({ label: "Off" })
+		await expect(anthropicWebSearchMode).toHaveValue("2")
+		await waitForProfile(
+			dlineDir,
+			E2E_PROFILE_NAMES.mockAnthropic,
+			(profile) => profile.webSearchMode === "WEB_SEARCH_MODE_FORCE_OFF",
+		)
 		const anthropicModel = anthropicCard.locator("vscode-dropdown#model-id")
 		await expect(anthropicModel.locator('vscode-option[value="claude-opus-4-8"]')).toHaveCount(1)
 		await anthropicModel.evaluate((element, value) => {
@@ -679,7 +694,7 @@ e2e(
 			thinking: { mode: "effort", effort: "high" },
 		})
 		expect(actRequest.requestBody).toMatchObject({
-			model: "claude-opus-4-8",
+			model: "claude-opus-4-8:1m",
 			thinking: { type: "adaptive" },
 			output_config: { effort: "high" },
 		})

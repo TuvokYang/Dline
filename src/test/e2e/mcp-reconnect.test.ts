@@ -108,11 +108,19 @@ e2e(
 		})
 		await closeMcpModal(sidebar)
 
-		// The recovered server exposes its tools and is usable.
+		// The compact chat modal intentionally disables server expansion. Open the
+		// full MCP configuration view to verify the recovered server's tool catalog.
 		await openMcpModal(sidebar)
-		await row.click()
-		await expect(sidebar.getByText(/^Tools \(\d+\)$/, { exact: true })).toBeVisible({ timeout: 60_000 })
-		await closeMcpModal(sidebar)
+		await sidebar.getByRole("button", { name: "Go to MCP server settings", exact: true }).click()
+		await expect(sidebar.getByRole("heading", { name: "MCP Servers", exact: true })).toBeVisible()
+		const recoveredServerRow = sidebar.getByText(SERVER_NAME, { exact: true }).filter({ visible: true })
+		await expect(recoveredServerRow).toHaveCount(1, { timeout: 60_000 })
+		await recoveredServerRow.click()
+		await expect(sidebar.getByRole("tab", { name: /^Tools \([1-9]\d*\)$/, exact: true })).toBeVisible({
+			timeout: 60_000,
+		})
+		await sidebar.getByRole("button", { name: "Done", exact: true }).click()
+		await expect(sidebar.getByTestId("chat-input")).toBeVisible()
 
 		// Disabled servers stay listed with their toggles off.
 		await openMcpModal(sidebar)

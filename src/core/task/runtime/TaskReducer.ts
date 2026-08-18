@@ -1,4 +1,5 @@
 import { BlockPhase } from "../BlockPhaseMachine"
+import { hostedWebApprovalId } from "../interaction/HostedWebApproval"
 import { reduceInteraction } from "../interaction/InteractionReducer"
 import { getInteraction } from "../interaction/InteractionRegistry"
 import type { InteractionResponseErrorCode } from "../interaction/InteractionResponse"
@@ -371,6 +372,33 @@ function reduceHostedWebRequest(
 			{ id: effectId(revision, 3), type: "PERSIST_SNAPSHOT" },
 		],
 	}
+}
+
+/** Open a durable Resume interaction after one request-level Hosted Web rejection. */
+function reduceHostedWebRejection(
+	state: TaskRuntimeState,
+	event: Extract<TaskEvent, { type: "HOSTED_WEB_REQUEST_REJECTED" }>,
+): TransitionResult {
+	const approvalInteractionId = hostedWebApprovalId(state.taskId, event.apiIndex)
+	if (
+		state.phase !== TaskPhase.PAUSED ||
+		state.interaction ||
+		state.anchor.turnId !== approvalInteractionId ||
+		state.anchor.interactionId !== approvalInteractionId
+	) {
+		return reject(state, event.type)
+	}
+	const revision = state.revision + 1
+	return acceptInteraction(
+		state,
+		openingInteraction(state, revision, { ...event, kind: "resume" }),
+		{ ...state.anchor, apiIndex: event.apiIndex, turnId: event.turnId, interactionId: event.interactionId },
+		interactionEffects(revision, {
+			interactionId: event.interactionId,
+			taskAsk: "resume_task",
+			presentation: event.presentation,
+		}),
+	)
 }
 
 /** Reset only reconciled non-terminal blocks before replaying their normal handler lifecycle. */
@@ -983,7 +1011,7 @@ function reduceRecovery(
 					type: "START_API",
 					apiIndex: event.apiIndex,
 					draft: event.draft,
-					persistedRequest: true,
+					persistedRequest: event.persistedRequest !== false,
 				},
 				{ id: effectId(revision, 3), type: "PERSIST_SNAPSHOT" },
 			],
@@ -1398,6 +1426,8 @@ export function reduceTask(state: TaskRuntimeState, event: TaskEvent): Transitio
 			return reduceResumeApi(state, event)
 		case "HOSTED_WEB_REQUEST_CONTINUATION_REQUESTED":
 			return reduceHostedWebRequest(state, event)
+		case "HOSTED_WEB_REQUEST_REJECTED":
+			return reduceHostedWebRejection(state, event)
 		case "RESUME_BLOCK_REPLAY_REQUESTED":
 			return reduceResumeBlocks(state, event)
 		case "TURN_CREATED":

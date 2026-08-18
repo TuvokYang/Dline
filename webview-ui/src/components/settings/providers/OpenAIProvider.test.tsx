@@ -130,10 +130,24 @@ vi.mock("../ThinkingControl", () => ({
 	),
 }))
 vi.mock("../OpenAIServiceTierSelector", () => ({
-	default: ({ onServiceTierChange }: { onServiceTierChange: (value: string) => void }) => (
-		<button onClick={() => onServiceTierChange("priority")} type="button">
-			Set Priority Tier
-		</button>
+	default: ({
+		onServiceTierChange,
+		onServiceTierEnabledChange,
+		serviceTierEnabled,
+	}: {
+		onServiceTierChange: (value: string) => void
+		onServiceTierEnabledChange: (enabled: boolean) => void
+		serviceTierEnabled?: boolean
+	}) => (
+		<>
+			<span data-testid="service-tier-enabled">{String(serviceTierEnabled !== false)}</span>
+			<button onClick={() => onServiceTierChange("priority")} type="button">
+				Set Priority Tier
+			</button>
+			<button onClick={() => onServiceTierEnabledChange(false)} type="button">
+				Disable Service Tier
+			</button>
+		</>
 	),
 }))
 vi.mock("@vscode/webview-ui-toolkit/react", () => ({
@@ -303,11 +317,20 @@ describe("OpenAIProvider", () => {
 		render(<OpenAIProvider onUpdate={onUpdate} profile={profile} showModelOptions={true} />)
 
 		expect(screen.getByTestId("thinking-efforts")).toHaveTextContent("none,minimal,low,medium,high,xhigh,max,ultra")
+		expect(screen.getByTestId("service-tier-enabled")).toHaveTextContent("true")
 		fireEvent.click(screen.getByRole("button", { name: "Set Priority Tier" }))
 		expect(onUpdate).toHaveBeenCalledWith({
 			openai: {
 				...profile.openai,
 				serviceTier: "priority",
+			},
+		})
+
+		fireEvent.click(screen.getByRole("button", { name: "Disable Service Tier" }))
+		expect(onUpdate).toHaveBeenCalledWith({
+			openai: {
+				...profile.openai,
+				serviceTierEnabled: false,
 			},
 		})
 

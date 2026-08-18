@@ -4,6 +4,7 @@ import { expect } from "chai"
 import type { ChatCompletionTool } from "openai/resources/chat/completions"
 import { afterEach, describe, it, vi } from "vitest"
 import { openAiCodexOAuthManager } from "@/integrations/openai-codex/oauth"
+import { OutputLimitExceededError } from "../../stream/OutputLimitExceededError"
 import { OpenAiCodexHandler } from "../openai-codex"
 
 const localTools: ChatCompletionTool[] = [
@@ -69,6 +70,30 @@ describe("OpenAiCodexHandler hosted Web Search", () => {
 		])
 		expect(fallbackRequestBody?.tools).to.deep.equal(requestBody?.tools)
 		expect(fallbackRequestBody?.include).to.deep.equal(requestBody?.include)
+	})
+
+	it("projects the request-scoped compaction cap into primary and fallback Responses bodies", () => {
+		const handler = createHandler()
+		const options = { generation: { purpose: "compaction", maxOutputTokens: 30_000 } } as any
+		const body = (handler as any).buildRequestBody(
+			handler.getModel(),
+			[],
+			"system",
+			undefined,
+			"response-id",
+			options,
+		) as Record<string, unknown>
+		const fallback = (handler as any).buildRequestBody(
+			handler.getModel(),
+			[],
+			"system",
+			undefined,
+			undefined,
+			options,
+		) as Record<string, unknown>
+
+		expect(body.max_output_tokens).to.equal(30_000)
+		expect(fallback.max_output_tokens).to.equal(30_000)
 	})
 
 	it("projects hosted Web Search when no local functions are present", () => {
@@ -152,6 +177,34 @@ describe("OpenAiCodexHandler hosted Web Search", () => {
 				},
 			},
 		])
+	})
+
+	it("surfaces Codex max_output_tokens as typed termination without HTTP fallback", async () => {
+		const handler = createHandler()
+		vi.spyOn(openAiCodexOAuthManager, "getAccountId").mockResolvedValue(null)
+		const responseStream = {
+			async *[Symbol.asyncIterator]() {
+				yield {
+					type: "response.incomplete",
+					response: { status: "incomplete", incomplete_details: { reason: "max_output_tokens" } },
+				}
+			},
+		}
+		;(handler as any).client = { responses: { create: vi.fn().mockResolvedValue(responseStream) } }
+		const fallback = vi.spyOn(handler as any, "makeCodexRequest").mockImplementation(async function* () {
+			yield { type: "text", text: "unexpected fallback" }
+		})
+
+		let caught: unknown
+		try {
+			await collect((handler as any).executeRequest({}, {}, handler.getModel(), "access-token", false))
+		} catch (error) {
+			caught = error
+		}
+
+		expect(caught).to.be.instanceOf(OutputLimitExceededError)
+		expect(caught).to.deep.include({ protocol: "openai_responses", reason: "max_output_tokens" })
+		expect(fallback.mock.calls).to.have.length(0)
 	})
 
 	it("maps a failed output item to one failed hosted lifecycle event", async () => {

@@ -10,16 +10,67 @@ const recoveredStreamSayTypes = new Set([
 	"browser_action",
 ])
 
+function isTerminalRetryFailure(message: ClineMessage): boolean {
+	try {
+		const retryInfo = JSON.parse(message.text || "{}") as { failed?: unknown }
+		return retryInfo.failed === true
+	} catch {
+		return false
+	}
+}
+
 function isRecoveredStreamMessage(message: ClineMessage, conversationHistoryIndex: number): boolean {
-	if (message.partial !== true || (message.conversationHistoryIndex ?? 0) !== conversationHistoryIndex) {
+	if ((message.conversationHistoryIndex ?? 0) !== conversationHistoryIndex) {
 		return false
 	}
 
 	if (message.type === "ask") {
-		return message.ask !== undefined
+		if (message.ask === "followup" && message.partial !== true) {
+			return Boolean(message.text)
+		}
+		return message.partial === true && message.ask !== undefined
 	}
 
-	return message.say !== undefined && recoveredStreamSayTypes.has(message.say) && Boolean(message.text || message.reasoning)
+	return (
+		message.partial === true &&
+		message.say !== undefined &&
+		recoveredStreamSayTypes.has(message.say) &&
+		Boolean(message.text || message.reasoning)
+	)
+}
+
+function projectCanonicalApiError(messages: ClineMessage[]): ClineMessage[] {
+	const canonicalError = messages.at(-1)
+	if (canonicalError?.type !== "ask" || canonicalError.ask !== "api_req_failed" || !canonicalError.text) {
+		return messages
+	}
+
+	let requestIndex = -1
+	for (let index = messages.length - 2; index >= 0; index--) {
+		if (messages[index].type === "say" && messages[index].say === "api_req_started") {
+			requestIndex = index
+			break
+		}
+	}
+	if (requestIndex === -1) {
+		return messages
+	}
+
+	const request = messages[requestIndex]
+	try {
+		const requestInfo = JSON.parse(request.text || "{}")
+		if (requestInfo.streamingFailedMessage === canonicalError.text) {
+			return messages
+		}
+		const projected = [...messages]
+		projected[requestIndex] = {
+			...request,
+			text: JSON.stringify({ ...requestInfo, streamingFailedMessage: canonicalError.text }),
+		}
+		return projected
+	} catch {
+		return messages
+	}
 }
 
 /**
@@ -60,13 +111,15 @@ function isRecoveredStreamMessage(message: ClineMessage, conversationHistoryInde
  * // Result: [{ type: 'say', say: 'api_req_started', text: '{}', ts: 1002 }]
  */
 export function combineErrorRetryMessages(messages: ClineMessage[]): ClineMessage[] {
+	const projectedMessages = projectCanonicalApiError(messages)
 	const result: ClineMessage[] = []
 
-	for (let i = 0; i < messages.length; i++) {
-		const message = messages[i]
+	for (let i = 0; i < projectedMessages.length; i++) {
+		const message = projectedMessages[i]
 
 		if (message.say === "error_retry") {
 			// Look ahead to find if there's another error_retry before the next api_req_started
+			const isTerminalFailure = isTerminalRetryFailure(message)
 			let hasLaterErrorRetry = false
 			let hasApiReqStartedBefore = false
 			let hasRecoveredConversation = false
@@ -74,8 +127,8 @@ export function combineErrorRetryMessages(messages: ClineMessage[]): ClineMessag
 			let hasRetryStarted = false
 			const conversationHistoryIndex = message.conversationHistoryIndex ?? 0
 
-			for (let j = i + 1; j < messages.length; j++) {
-				const laterMessage = messages[j]
+			for (let j = i + 1; j < projectedMessages.length; j++) {
+				const laterMessage = projectedMessages[j]
 				if (laterMessage.say === "error_retry") {
 					hasLaterErrorRetry = true
 					break
@@ -108,25 +161,17 @@ export function combineErrorRetryMessages(messages: ClineMessage[]): ClineMessag
 				continue
 			}
 
-			// The canonical recovery ask owns terminal presentation, while a later
-			// durable model response retires recovered retry status entirely.
-			if (hasCanonicalRecoveryAsk || hasRecoveredConversation) {
+			// A canonical recovery ask replaces transient retry status, but the
+			// exhausted card remains the visible explanation beside its actions.
+			// Any later durable model response retires both states entirely.
+			if (hasRecoveredConversation || (hasCanonicalRecoveryAsk && !isTerminalFailure)) {
 				continue
 			}
 
-			// Case 2: api_req_started follows (no later error_retry) - retry succeeded
-			// Don't show the error_retry unless it has failed: true
-			if (hasApiReqStartedBefore) {
-				try {
-					const retryInfo = JSON.parse(message.text || "{}")
-					// Only skip if this wasn't a final failure message
-					if (!retryInfo.failed) {
-						continue
-					}
-				} catch {
-					// If we can't parse, still skip to be safe
-					continue
-				}
+			// Case 2: api_req_started follows (no later error_retry) - retry succeeded.
+			// Keep only a terminal failure until a durable response proves recovery.
+			if (hasApiReqStartedBefore && !isTerminalFailure) {
+				continue
 			}
 		}
 

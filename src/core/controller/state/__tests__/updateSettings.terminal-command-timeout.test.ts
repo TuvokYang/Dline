@@ -5,11 +5,12 @@ import { updateSettings } from "../updateSettings"
 
 function createController() {
 	const setGlobalState = vi.fn()
+	const flushPendingState = vi.fn().mockResolvedValue(undefined)
 	const postStateToWebview = vi.fn().mockResolvedValue(undefined)
 	const configureGlobalComponents = vi.fn().mockResolvedValue({ components: [], durationMs: 0 })
 	const controller = {
 		configureGlobalComponents,
-		stateManager: { setGlobalState },
+		stateManager: { flushPendingState, setGlobalState },
 		postStateToWebview,
 	} as unknown as Controller
 

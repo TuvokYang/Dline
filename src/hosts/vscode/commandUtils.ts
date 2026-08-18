@@ -6,6 +6,7 @@ import { CommandContext } from "@/shared/proto/dline"
 import { Logger } from "@/shared/services/Logger"
 import { Controller } from "../../core/controller"
 import { WebviewProvider } from "../../core/webview"
+import { type EditorCommandRoutingOptions, resolveEditorCommandTarget } from "./editorCommandRouting"
 import { convertVscodeDiagnostics } from "./hostbridge/workspace/getDiagnostics"
 
 /**
@@ -45,62 +46,78 @@ export async function findMatchingNotebookCell(filePath: string, notebookCell?: 
 }
 
 /**
- * Gets the context needed for VSCode commands that interact with the editor
- * @param range Optional range to use instead of current selection
- * @param vscodeDiagnostics Optional diagnostics to include
- * @returns Context object with controller, selected text, file info, and problems
+ * Captures editor state before any Webview surface changes focus.
+ */
+export function getEditorCommandContext(
+	range?: vscode.Range,
+	vscodeDiagnostics?: vscode.Diagnostic[],
+): CommandContext | undefined {
+	const editor = vscode.window.activeTextEditor
+	if (!editor) {
+		const activeNotebook = vscode.window.activeNotebookEditor
+		if (!activeNotebook) {
+			return
+		}
+		return {
+			selectedText: "",
+			filePath: activeNotebook.notebook.uri.fsPath,
+			diagnostics: convertVscodeDiagnostics(vscodeDiagnostics || []),
+			language: "",
+		}
+	}
+
+	const textRange = range instanceof vscode.Range ? range : editor.selection
+	return {
+		selectedText: editor.document.getText(textRange),
+		filePath: editor.document.uri.fsPath,
+		diagnostics: convertVscodeDiagnostics(vscodeDiagnostics || []),
+		language: editor.document.languageId,
+	}
+}
+
+/**
+ * Gets the captured editor context and routes the command to an isolated Controller when needed.
  */
 export async function getContextForCommand(
 	range?: vscode.Range,
 	vscodeDiagnostics?: vscode.Diagnostic[],
-	options?: {
-		/**
-		 * When true, the editor keeps focus when showing the sidebar webview.
-		 * Use this for non-interruptive flows (e.g. copy terminal output to Cline).
-		 */
-		preserveEditorFocus?: boolean
-	},
+	options: EditorCommandRoutingOptions = {},
 ): Promise<
 	| undefined
 	| {
 			controller: Controller
 			commandContext: CommandContext
+			surface: "sidebar" | "panel"
 	  }
 > {
-	const activeWebview = await showWebview(options?.preserveEditorFocus ?? false)
-	if (!activeWebview) {
+	const commandContext = getEditorCommandContext(range, vscodeDiagnostics)
+	if (!commandContext) {
 		return
 	}
-	// Use the controller from the active instance
-	const controller = activeWebview.controller
 
-	const editor = vscode.window.activeTextEditor
-	if (!editor) {
-		// Fallback for notebooks with no cells (no text editor active)
-		const activeNotebook = vscode.window.activeNotebookEditor
-		if (!activeNotebook) {
-			return
-		}
-		const filePath = activeNotebook.notebook.uri.fsPath
-		const diagnostics = convertVscodeDiagnostics(vscodeDiagnostics || [])
-		return { controller, commandContext: { selectedText: "", filePath, diagnostics, language: "" } }
-	}
-	// Use provided range if available, otherwise use current selection
-	// (vscode command passes an argument in the first param by default, so we need to ensure it's a Range object)
-	const textRange = range instanceof vscode.Range ? range : editor.selection
-	const selectedText = editor.document.getText(textRange)
-
-	const filePath = editor.document.uri.fsPath
-	const language = editor.document.languageId
-	const diagnostics = convertVscodeDiagnostics(vscodeDiagnostics || [])
-	const commandContext: CommandContext = {
-		selectedText,
-		filePath,
-		diagnostics,
-		language,
+	const sidebar = WebviewProvider.getInstance()
+	if (!sidebar) {
+		return
 	}
 
-	return { controller, commandContext }
+	const target = await resolveEditorCommandTarget(sidebar, options, {
+		showSidebar: async (preserveEditorFocus) => {
+			await vscode.commands.executeCommand(ExtensionRegistryInfo.commands.FocusChatInput, preserveEditorFocus)
+		},
+		createPanel: async (title, sidebarProvider) => {
+			const { VscodeWebviewPanelProvider } = await import("./VscodeWebviewPanelProvider")
+			const panelProvider = new VscodeWebviewPanelProvider(sidebarProvider.context, { deferController: false })
+			try {
+				await panelProvider.createPanel(title)
+				return panelProvider.controller
+			} catch (error) {
+				await panelProvider.dispose().catch(() => undefined)
+				throw error
+			}
+		},
+	})
+
+	return { ...target, commandContext }
 }
 
 export async function showWebview(preserveEditorFocus = true): Promise<WebviewProvider | undefined> {

@@ -310,6 +310,65 @@ describe("TaskRuntime dispatch", () => {
 		})
 	})
 
+	it("commits the durable Resume presentation after a Hosted Web rejection", async () => {
+		const sequence: string[] = []
+		const appendAsk = vi.fn(async () => {
+			sequence.push("append")
+			return { uiMessageTs: 321 }
+		})
+		const postView = vi.fn(async () => {
+			sequence.push("view")
+		})
+		const persistSnapshot = vi.fn(async () => {
+			sequence.push("snapshot")
+		})
+		const runtime = new TaskRuntime(
+			createTaskRuntimeState({
+				taskId: "task-1",
+				phase: TaskPhase.PAUSED,
+				revision: 7,
+				anchor: {
+					apiIndex: 0,
+					turnId: "hosted-web:task-1:3",
+					interactionId: "hosted-web:task-1:3",
+				},
+			}),
+			createPorts({ appendAsk, postView, persistSnapshot }),
+		)
+
+		const result = await runtime.dispatch({
+			type: "HOSTED_WEB_REQUEST_REJECTED",
+			apiIndex: 3,
+			turnId: "hosted-web-rejected:task-1:3",
+			interactionId: "hosted-web-rejected:task-1:3",
+			presentation: "Hosted Web Search was rejected. Resume when you are ready to continue without this request.",
+		})
+
+		expect(result.accepted).toBe(true)
+		expect(appendAsk).toHaveBeenCalledWith(
+			expect.objectContaining({
+				interactionId: "hosted-web-rejected:task-1:3",
+				taskAsk: "resume_task",
+			}),
+		)
+		expect(runtime.getState()).toMatchObject({
+			revision: 9,
+			phase: TaskPhase.PAUSED,
+			anchor: {
+				apiIndex: 3,
+				uiMessageTs: 321,
+				turnId: "hosted-web-rejected:task-1:3",
+				interactionId: "hosted-web-rejected:task-1:3",
+			},
+			interaction: {
+				kind: "resume",
+				status: "awaiting",
+				anchor: { messageTs: 321, messageType: "ask" },
+			},
+		})
+		expect(sequence).toEqual(["append", "view", "snapshot"])
+	})
+
 	it("awaits the completed view and rejects a repeated completion presentation without republishing", async () => {
 		let releaseCompletedView: (() => void) | undefined
 		const completedViewGate = new Promise<void>((resolve) => {

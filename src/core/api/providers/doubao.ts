@@ -6,6 +6,7 @@ import { ApiHandler, ApiHandlerContext } from ".."
 import { withRetry } from "../retry"
 import { convertToOpenAiMessages } from "../transform/openai-format"
 import { ApiStream } from "../transform/stream"
+import { splitInclusiveInputUsage } from "../transform/usage-normalization"
 
 export class DoubaoHandler implements ApiHandler {
 	private client: OpenAI | undefined
@@ -90,14 +91,17 @@ export class DoubaoHandler implements ApiHandler {
 			}
 
 			if (chunk.usage) {
+				const inputUsage = splitInclusiveInputUsage({
+					totalInputTokens: chunk.usage.prompt_tokens,
+					// @ts-expect-error-next-line
+					cacheReadTokens: chunk.usage.prompt_cache_hit_tokens,
+					// @ts-expect-error-next-line
+					cacheWriteTokens: chunk.usage.prompt_cache_miss_tokens,
+				})
 				yield {
 					type: "usage",
-					inputTokens: chunk.usage.prompt_tokens || 0,
+					...inputUsage,
 					outputTokens: chunk.usage.completion_tokens || 0,
-					// @ts-expect-error-next-line
-					cacheReadTokens: chunk.usage.prompt_cache_hit_tokens || 0,
-					// @ts-expect-error-next-line
-					cacheWriteTokens: chunk.usage.prompt_cache_miss_tokens || 0,
 				}
 			}
 		}

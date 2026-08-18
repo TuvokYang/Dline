@@ -35,6 +35,7 @@ export class StreamChunkCoordinator {
 	private readError: unknown
 	private completed = false
 	private stopRequested = false
+	private usageOnly = false
 	private waiterResolve: (() => void) | undefined
 	private pumpPromise: Promise<void>
 	private queueMetricsTimer: ReturnType<typeof setInterval> | undefined
@@ -103,6 +104,9 @@ export class StreamChunkCoordinator {
 						this.options.onUsageChunk(chunk)
 						continue
 					}
+					if (this.usageOnly) {
+						continue
+					}
 					this.queue.push(chunk)
 					this.maxQueueDepth = Math.max(this.maxQueueDepth, this.queue.length)
 					this.notifyWaiter()
@@ -139,6 +143,14 @@ export class StreamChunkCoordinator {
 			}
 			await this.waitForData()
 		}
+	}
+
+	/** Discard queued and future presentation chunks while preserving final Provider usage. */
+	async drainUsageOnly(): Promise<void> {
+		this.usageOnly = true
+		this.queue = []
+		this.notifyWaiter()
+		await this.waitForCompletion()
 	}
 
 	async stop(): Promise<void> {

@@ -1,3 +1,4 @@
+import { InteractionCancellationError } from "@core/task/interaction/InteractionCancellationError"
 import { describe, expect, it, vi } from "vitest"
 import { startTaskLifecycle } from "../task-start-lifecycle"
 
@@ -65,5 +66,26 @@ describe("startTaskLifecycle", () => {
 		})
 		await vi.waitFor(() => expect(onBackgroundError).toHaveBeenCalledOnce())
 		expect(onBackgroundError.mock.calls[0]?.[0]).toMatchObject({ message: "background failed" })
+	})
+
+	it("ignores expected interaction cancellation from background starts", async () => {
+		let rejectStart: ((error: unknown) => void) | undefined
+		const pendingStart = new Promise<void>((_resolve, reject) => {
+			rejectStart = reject
+		})
+		const onBackgroundError = vi.fn<(error: unknown) => Promise<void>>(async () => undefined)
+
+		await startTaskLifecycle({
+			taskId: "child-1",
+			startInBackground: true,
+			start: () => pendingStart,
+			onBackgroundError,
+		})
+
+		const cancellation = new InteractionCancellationError("task_terminated")
+		rejectStart?.(cancellation)
+		await expect(pendingStart).rejects.toBe(cancellation)
+		await Promise.resolve()
+		expect(onBackgroundError).not.toHaveBeenCalled()
 	})
 })

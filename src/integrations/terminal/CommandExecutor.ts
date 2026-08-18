@@ -20,6 +20,7 @@ import { DEFAULT_TERMINAL_COMMAND_HANDOFF_SECONDS } from "@shared/terminal-setti
 import { Logger } from "@/shared/services/Logger"
 import { orchestrateCommandExecution } from "./CommandOrchestrator"
 import { isCommandCompletionSuccessful } from "./command-completion"
+import { appendCommandLogPath } from "./command-result"
 import { formatTerminalOutput } from "./output-stream"
 import {
 	buildShellEnvironmentCommand,
@@ -481,8 +482,9 @@ export class CommandExecutor {
 			const outputSoFar = separatedOutput ? `\nOutput captured before cancellation:\n${separatedOutput}` : ""
 			return {
 				userRejected: true,
-				result: `Command was cancelled by the user.${outputSoFar}`,
+				result: appendCommandLogPath(`Command was cancelled by the user.${outputSoFar}`, result.logFilePath),
 				completed: false,
+				logFilePath: result.logFilePath,
 				exitCode: result.exitCode,
 				signal: result.signal,
 			}

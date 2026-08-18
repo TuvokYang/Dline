@@ -27,6 +27,9 @@ describe("internal compaction Pass", () => {
 					},
 				},
 			}
+			yield { type: "usage", inputTokens: 100, outputTokens: 0 }
+			yield { type: "usage", usageMode: "delta", inputTokens: 0, outputTokens: 8 }
+			yield { type: "usage", usageMode: "delta", inputTokens: 0, outputTokens: 12 }
 			yield { type: "usage", inputTokens: 100, outputTokens: 20 }
 		}
 
@@ -55,6 +58,13 @@ describe("internal compaction Pass", () => {
 		})
 
 		expect(result.summary).toBe("Chat-family cumulative summary")
+		expect(result.usage).toEqual({
+			inputTokens: 100,
+			outputTokens: 20,
+			cacheWriteTokens: 0,
+			cacheReadTokens: 0,
+			totalTokens: 120,
+		})
 		expect(instructions.getPendingToolAuthorization(ClineDefaultTool.SUMMARIZE_TASK)).toBeUndefined()
 	})
 

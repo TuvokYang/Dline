@@ -451,6 +451,7 @@ export class AwsBedrockHandler implements ApiHandler {
 									const totalCost = calculateApiCostOpenAI(model.info, 0, accumulatedTokens, 0, 0)
 									yield {
 										type: "usage",
+										usageMode: "delta",
 										inputTokens: 0,
 										outputTokens: accumulatedTokens,
 										totalCost: totalCost,
@@ -474,6 +475,7 @@ export class AwsBedrockHandler implements ApiHandler {
 								const totalCost = calculateApiCostOpenAI(model.info, 0, accumulatedTokens, 0, 0)
 								yield {
 									type: "usage",
+									usageMode: "delta",
 									inputTokens: 0,
 									outputTokens: accumulatedTokens,
 									totalCost: totalCost,
@@ -497,6 +499,7 @@ export class AwsBedrockHandler implements ApiHandler {
 				const totalCost = calculateApiCostOpenAI(model.info, 0, accumulatedTokens, 0, 0)
 				yield {
 					type: "usage",
+					usageMode: "delta",
 					inputTokens: 0,
 					outputTokens: accumulatedTokens,
 					totalCost: totalCost,

@@ -28,6 +28,70 @@ function runtimePorts(): TaskEffectPorts {
 }
 
 describe("Task restored turn-end continuation", () => {
+	it("releases the Task Header compaction barrier before its trailing presentation publication settles", async () => {
+		let releaseTrailingPublication: (() => void) | undefined
+		const trailingPublication = new Promise<void>((resolve) => {
+			releaseTrailingPublication = resolve
+		})
+		let publicationCount = 0
+		const taskState = {
+			abort: false,
+			isInitialized: true,
+			isInternalContextCompactionRequest: true,
+			isManualContextCompactionRequest: true,
+			operationSignal: new AbortController().signal,
+		}
+		const fakeTask = {
+			taskId: "task-1",
+			taskState,
+			api: {},
+			taskSm: { mode: "act" },
+			getRuntimeState: () => ({
+				revision: 7,
+				interaction: { interactionId: "qna-history-interaction" },
+			}),
+			contextCompactionSession: {
+				getActiveOperationId: () => undefined,
+				run: vi.fn(async () => "completed" as const),
+			},
+			getTaskHeaderContextCompactionBoundary: () => ({ sourceHistory: [], targetContinuationHistory: [] }),
+			captureContextCompactionSnapshot: vi.fn(),
+			contextCompactionSnapshots: new Map<string, unknown>(),
+			contextCompactionPresentation: { clear: vi.fn() },
+			postStateToWebview: vi.fn(async () => {
+				publicationCount++
+				if (publicationCount === 2) await trailingPublication
+			}),
+		} as unknown as Task
+		const compactTask = (
+			Task.prototype as unknown as {
+				compactTask(expectedRevision: number): Promise<{ accepted: boolean; result: string }>
+			}
+		).compactTask
+		const waitForSettlement = (
+			Task.prototype as unknown as {
+				waitForTaskHeaderCompactionSettlement(): Promise<void>
+			}
+		).waitForTaskHeaderCompactionSettlement
+
+		const result = await compactTask.call(fakeTask, 7)
+		expect(result).toEqual({ accepted: true, result: "accepted" })
+		await vi.waitFor(() => expect(publicationCount).toBe(2))
+
+		let barrierSettled = false
+		const barrier = waitForSettlement.call(fakeTask).then(() => {
+			barrierSettled = true
+		})
+		try {
+			await vi.waitFor(() => expect(barrierSettled).toBe(true), { timeout: 250 })
+			expect(taskState.isInternalContextCompactionRequest).toBe(false)
+			expect(taskState.isManualContextCompactionRequest).toBe(false)
+		} finally {
+			releaseTrailingPublication?.()
+			await barrier
+		}
+	})
+
 	it("loads a restored interaction block only from its exact assistant API index", () => {
 		const interactionId = "approval-history-interaction"
 		const staleBlock = {
@@ -210,6 +274,10 @@ describe("Task restored turn-end continuation", () => {
 			runtimePorts(),
 		)
 		const sequence: string[] = []
+		let releaseCompaction: (() => void) | undefined
+		const compactionSettlement = new Promise<void>((resolve) => {
+			releaseCompaction = resolve
+		})
 		const taskState = {
 			abort: true,
 			userMessageContent: [] as Array<Record<string, unknown>>,
@@ -262,6 +330,11 @@ describe("Task restored turn-end continuation", () => {
 			},
 			isTerminalRuntimeBlock: (phase: BlockPhase) =>
 				[BlockPhase.COMPLETED, BlockPhase.REJECTED, BlockPhase.SKIPPED, BlockPhase.CANCELLED].includes(phase),
+			waitForTaskHeaderCompactionSettlement: async () => {
+				sequence.push("compaction-waiting")
+				await compactionSettlement
+				sequence.push("compaction-settled")
+			},
 			syncRetainedMachines: () => sequence.push("machines-synced"),
 			executeFinalizedAssistantTurn: async () => {
 				sequence.push("turn-finalized")
@@ -290,9 +363,14 @@ describe("Task restored turn-end continuation", () => {
 			},
 		}
 
-		await continueRestoredInteraction.call(fakeTask, context)
+		const continuation = continueRestoredInteraction.call(fakeTask, context)
+		await vi.waitFor(() => expect(sequence).toEqual(["compaction-waiting"]))
+		releaseCompaction?.()
+		await continuation
 
 		expect(sequence).toEqual([
+			"compaction-waiting",
+			"compaction-settled",
 			"handler-continuation",
 			"result-committed",
 			"interaction-resolved",
@@ -415,6 +493,7 @@ describe("Task restored turn-end continuation", () => {
 			},
 			isTerminalRuntimeBlock: (phase: BlockPhase) =>
 				[BlockPhase.COMPLETED, BlockPhase.REJECTED, BlockPhase.SKIPPED, BlockPhase.CANCELLED].includes(phase),
+			waitForTaskHeaderCompactionSettlement: vi.fn(async () => undefined),
 			syncRetainedMachines: vi.fn(),
 			executeFinalizedAssistantTurn,
 			recursivelyMakeClineRequests,

@@ -7,6 +7,7 @@ import {
 } from "@anthropic-ai/sdk/resources/messages/messages"
 import type { ChatCompletionTool as OpenAITool } from "openai/resources/chat/completions"
 import { ServerTool } from "@/shared/proto/dline/models/metadata"
+import { OutputLimitExceededError } from "../stream/OutputLimitExceededError"
 import { ApiStream } from "../transform/stream"
 
 type AnthropicMessagesStreamEvent = Anthropic.RawMessageStreamEvent | BetaRawMessageStreamEvent
@@ -59,6 +60,9 @@ export async function* handleAnthropicMessagesApiStreamResponse(stream: AsyncIte
 					inputTokens: 0,
 					outputTokens: chunk.usage.output_tokens || 0,
 					...(serverToolUsage === undefined ? {} : { serverToolUsage }),
+				}
+				if (chunk.delta?.stop_reason === "max_tokens") {
+					throw new OutputLimitExceededError("anthropic_messages", "max_tokens")
 				}
 				break
 			}

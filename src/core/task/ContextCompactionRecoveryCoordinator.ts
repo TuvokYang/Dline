@@ -38,6 +38,11 @@ export interface ContextCompactionRestoreResult {
 	fittingState: TargetWindowFittingState
 }
 
+interface ContextCompactionRestoreOptions {
+	interruptActiveSession: boolean
+	notifyRestorePrepared: boolean
+}
+
 export interface ContextCompactionRecoveryCoordinatorPorts {
 	store(): Promise<FittingRecoveryStore>
 	adapter(): ContextCompactionRecoveryAdapter
@@ -51,16 +56,16 @@ export class ContextCompactionRecoveryCoordinator {
 	constructor(private readonly ports: ContextCompactionRecoveryCoordinatorPorts) {}
 
 	async restore(request: ContextCompactionRestoreRequest): Promise<ContextCompactionRestoreResult> {
-		return this.restoreInternal(request, true)
+		return this.restoreInternal(request, { interruptActiveSession: true, notifyRestorePrepared: true })
 	}
 
 	async restoreAfterFailure(request: ContextCompactionRestoreRequest): Promise<ContextCompactionRestoreResult> {
-		return this.restoreInternal(request, false)
+		return this.restoreInternal(request, { interruptActiveSession: false, notifyRestorePrepared: false })
 	}
 
 	private async restoreInternal(
 		request: ContextCompactionRestoreRequest,
-		interruptActiveSession: boolean,
+		options: ContextCompactionRestoreOptions,
 	): Promise<ContextCompactionRestoreResult> {
 		const store = await this.ports.store()
 		const operation = await store.loadOperation<ContextCompactionCheckpointPayload>(request.operationId)
@@ -94,7 +99,7 @@ export class ContextCompactionRecoveryCoordinator {
 				expectedChainRevision: request.expectedChainRevision,
 				completionPhase: activeCompletionPhase,
 			})
-			this.ports.onRestorePrepared?.(request.operationId)
+			if (options.notifyRestorePrepared) this.ports.onRestorePrepared?.(request.operationId)
 		}
 		const apply = async () => {
 			const restored = await resumePendingCompactionRestore<ContextCompactionCheckpointPayload>({
@@ -110,7 +115,7 @@ export class ContextCompactionRecoveryCoordinator {
 			}
 		}
 
-		if (interruptActiveSession && activeOperationId === request.operationId) {
+		if (options.interruptActiveSession && activeOperationId === request.operationId) {
 			await this.ports.session().restore(request.operationId, { prepare, apply })
 		} else {
 			await prepare()
@@ -181,7 +186,7 @@ export class ContextCompactionRecoveryCoordinator {
 					expectedChainRevision: failed.head.chainRevision,
 					completionPhase: "cancelled",
 				},
-				false,
+				{ interruptActiveSession: false, notifyRestorePrepared: false },
 			)
 			this.ports.onRecoveryFailure?.(failed.head.operationId, error)
 		}

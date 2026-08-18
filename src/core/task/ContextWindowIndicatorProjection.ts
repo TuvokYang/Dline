@@ -18,6 +18,12 @@ export interface EstimateContextWindowIndicatorSegmentsInput {
 	durableMessageCount: number
 }
 
+export interface ProjectAuthoritativeContextWindowIndicatorSegmentsInput {
+	projectedTotalTokens: number
+	durableContextTokens: number
+	estimatedEnvironmentTokens: number
+}
+
 /** Decompose one frozen Provider input into non-overlapping durable, pending-send, and environment segments. */
 export function estimateContextWindowIndicatorSegments(
 	input: EstimateContextWindowIndicatorSegmentsInput,
@@ -52,14 +58,24 @@ export function estimateContextWindowIndicatorSegments(
 	}
 }
 
-/** Estimate one response chunk as a monotonic receiving-token delta until exact usage arrives. */
-export function estimateContextWindowReceivingDelta(chunk: unknown): number {
-	if (typeof chunk !== "object" || chunk === null) return 0
-	const candidate = chunk as { type?: string; text?: string; reasoning?: string; outputTokens?: number }
-	if (candidate.type === "usage") return normalizeTokens(candidate.outputTokens)
-	const content = candidate.type === "text" ? candidate.text : candidate.type === "reasoning" ? candidate.reasoning : chunk
-	const bytes = Buffer.byteLength(typeof content === "string" ? content : JSON.stringify(content), "utf8")
-	return bytes > 0 ? Math.max(1, Math.ceil(bytes / 4)) : 0
+/** Allocate one authoritative occupancy total without subtracting values from a different token-estimation baseline. */
+export function projectAuthoritativeContextWindowIndicatorSegments(
+	input: ProjectAuthoritativeContextWindowIndicatorSegmentsInput,
+): ContextWindowIndicatorSegments {
+	const totalTokens = normalizeTokens(input.projectedTotalTokens)
+	const environmentTokens = Math.min(normalizeTokens(input.estimatedEnvironmentTokens), totalTokens)
+	const durableContextTokens = Math.min(
+		normalizeTokens(input.durableContextTokens),
+		Math.max(0, totalTokens - environmentTokens),
+	)
+	const pendingSendTokens = Math.max(0, totalTokens - environmentTokens - durableContextTokens)
+
+	return {
+		durableContextTokens,
+		pendingSendTokens,
+		environmentTokens,
+		totalTokens,
+	}
 }
 
 function stripEnvironmentDetails(messages: readonly ClineStorageMessage[]): ClineStorageMessage[] {
@@ -76,6 +92,6 @@ function stripEnvironmentBlock(block: ClineContent): ClineContent[] {
 	return text ? [{ ...block, text }] : []
 }
 
-function normalizeTokens(value: unknown): number {
-	return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0
+function normalizeTokens(value: number): number {
+	return Number.isFinite(value) && value > 0 ? Math.floor(value) : 0
 }

@@ -1,14 +1,15 @@
 import type { ContextWindowIndicatorPhase, ContextWindowIndicatorSnapshot } from "@shared/context-window-indicator"
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import {
-	createContextWindowIndicatorViewModel,
 	type ContextWindowSegmentKind,
 	type ContextWindowSegmentViewModel,
+	createContextWindowIndicatorViewModel,
 } from "./ContextWindowIndicatorViewModel"
 export type ContextWindowSegmentMotion = "none" | "commit" | "rollback" | "restore"
 
 interface ContextWindowSegmentedProgressProps {
 	snapshot: ContextWindowIndicatorSnapshot
+	onOccupiedMouseEnter?: () => void
 }
 
 interface SegmentDefinition extends ContextWindowSegmentViewModel {
@@ -24,6 +25,7 @@ interface SegmentTransitionState {
 }
 
 const MOTION_SETTLE_MS = 720
+const MIN_VISIBLE_SEGMENT_PX = 3
 
 const SEGMENT_COLORS: Record<ContextWindowSegmentKind, string> = {
 	durable: "var(--vscode-charts-green, #3fb950)",
@@ -109,7 +111,7 @@ function transientTransform(motion: ContextWindowSegmentMotion): string {
 }
 
 /** Render the authoritative context snapshot as four ordered, independently animated segments. */
-const ContextWindowSegmentedProgress = memo(({ snapshot }: ContextWindowSegmentedProgressProps) => {
+const ContextWindowSegmentedProgress = memo(({ snapshot, onOccupiedMouseEnter }: ContextWindowSegmentedProgressProps) => {
 	const transition = useSegmentTransition(snapshot)
 	const motion = transition.motion
 	const previousTemporaryTokens = transition.previous
@@ -160,15 +162,14 @@ const ContextWindowSegmentedProgress = memo(({ snapshot }: ContextWindowSegmente
 			className="relative h-3 w-full overflow-hidden rounded-full bg-code-foreground/20"
 			data-context-window={snapshot.contextWindow}
 			data-epoch={snapshot.epoch}
+			data-minor-factor={viewModel.minorGroupFactor}
 			data-mode={snapshot.mode}
 			data-motion={motion}
 			data-phase={snapshot.phase}
-		data-minor-factor={viewModel.minorGroupFactor}
-		data-profile-name={snapshot.profileName}
-		data-revision={snapshot.revision}
-		data-testid="context-window-segmented-progress"
-			role="progressbar"
-			title={`Context phase: ${snapshot.phase}`}>
+			data-profile-name={snapshot.profileName}
+			data-revision={snapshot.revision}
+			data-testid="context-window-segmented-progress"
+			role="progressbar">
 			<div className="absolute inset-0 flex items-stretch overflow-hidden rounded-full">
 				{segments.map((segment) => {
 					const active =
@@ -177,8 +178,8 @@ const ContextWindowSegmentedProgress = memo(({ snapshot }: ContextWindowSegmente
 					const settling = segment.temporary && motion !== "none"
 					return (
 						<div
-							aria-label={`${segment.label}: ${segment.authoritativeTokens} tokens`}
 							aria-hidden={segment.displayTokens <= 0 ? "true" : undefined}
+							aria-label={`${segment.label}: ${segment.authoritativeTokens} tokens`}
 							className={`h-full shrink transition-[width,opacity,transform,filter] duration-300 ease-out motion-reduce:transition-none motion-reduce:transform-none ${
 								active ? "animate-pulse motion-reduce:animate-none" : ""
 							}`}
@@ -189,15 +190,16 @@ const ContextWindowSegmentedProgress = memo(({ snapshot }: ContextWindowSegmente
 							data-tokens={segment.displayTokens}
 							data-transition-source={segment.transitionSource}
 							key={segment.kind}
-							tabIndex={segment.displayTokens > 0 ? 0 : -1}
+							onMouseEnter={segment.displayTokens > 0 && !settling ? onOccupiedMouseEnter : undefined}
 							style={{
 								backgroundColor: segment.color,
 								filter: motion === "commit" && segment.kind === "durable" ? "brightness(1.16)" : "none",
+								minWidth: segment.displayTokens > 0 && !settling ? `${MIN_VISIBLE_SEGMENT_PX}px` : "0px",
 								opacity: settling ? 0 : segment.displayTokens > 0 ? 1 : 0,
-						transform: segment.temporary ? transientTransform(motion) : "translateX(0)",
-						width: settling ? "0%" : `${segment.widthPercent}%`,
+								pointerEvents: segment.displayTokens > 0 && !settling ? "auto" : "none",
+								transform: segment.temporary ? transientTransform(motion) : "translateX(0)",
+								width: settling ? "0%" : `${segment.widthPercent}%`,
 							}}
-							title={`${segment.label}: ${segment.authoritativeTokens} tokens`}
 						/>
 					)
 				})}

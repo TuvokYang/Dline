@@ -37,6 +37,52 @@ describe("OpenAI prompt cache projection", () => {
 		expect(responses.promptCacheKey).to.match(/^[0-9a-f]{64}$/)
 	})
 
+	it("keeps cache keys stable within one Task namespace and isolates different Tasks", () => {
+		const firstChat = projectOpenAIChatPromptCache({
+			modelId: "gpt-5.6-sol",
+			systemPrompt: "stable system",
+			messages: [{ role: "user", content: "first turn" }],
+			tools: [],
+			taskNamespace: "task-a",
+		})
+		const appendedChat = projectOpenAIChatPromptCache({
+			modelId: "gpt-5.6-sol",
+			systemPrompt: "stable system",
+			messages: [
+				{ role: "user", content: "first turn" },
+				{ role: "assistant", content: "response" },
+				{ role: "user", content: "second turn" },
+			],
+			tools: [],
+			taskNamespace: "task-a",
+		})
+		const otherTaskChat = projectOpenAIChatPromptCache({
+			modelId: "gpt-5.6-sol",
+			systemPrompt: "stable system",
+			messages: [{ role: "user", content: "first turn" }],
+			tools: [],
+			taskNamespace: "task-b",
+		})
+		const firstResponses = projectOpenAIResponsesPromptCache({
+			modelId: "gpt-5.6-sol",
+			systemPrompt: "stable system",
+			input: [{ role: "user", content: [{ type: "input_text", text: "first turn" }] }],
+			tools: [],
+			taskNamespace: "task-a",
+		})
+		const otherTaskResponses = projectOpenAIResponsesPromptCache({
+			modelId: "gpt-5.6-sol",
+			systemPrompt: "stable system",
+			input: [{ role: "user", content: [{ type: "input_text", text: "first turn" }] }],
+			tools: [],
+			taskNamespace: "task-b",
+		})
+
+		expect(appendedChat.promptCacheKey).to.equal(firstChat.promptCacheKey)
+		expect(otherTaskChat.promptCacheKey).not.to.equal(firstChat.promptCacheKey)
+		expect(otherTaskResponses.promptCacheKey).not.to.equal(firstResponses.promptCacheKey)
+	})
+
 	it("keeps Chat keys stable across dynamic messages and changes them with tools", () => {
 		const first = projectOpenAIChatPromptCache({
 			modelId: "gpt-5.6-sol",

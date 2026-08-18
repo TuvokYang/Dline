@@ -1,4 +1,11 @@
-import { AutoApprovalSettings } from "@shared/AutoApprovalSettings"
+import type { AutoApprovalSettings } from "@shared/AutoApprovalSettings"
+
+export interface AutoApprovalSettingsUpdate {
+	version: number
+	actions?: Partial<AutoApprovalSettings["actions"]>
+	enableNotifications?: boolean
+}
+
 import { StateServiceClient } from "@/services/grpc-client"
 
 /**
@@ -6,9 +13,14 @@ import { StateServiceClient } from "@/services/grpc-client"
  * @param settings The auto approval settings to update
  * @throws Error if the update fails
  */
-export async function updateAutoApproveSettings(settings: AutoApprovalSettings) {
+export async function updateAutoApproveSettings(settings: AutoApprovalSettingsUpdate) {
 	try {
-		await StateServiceClient.updateAutoApprovalSettings({ metadata: {}, ...settings })
+		await StateServiceClient.updateAutoApprovalSettings({
+			metadata: {},
+			version: settings.version,
+			actions: settings.actions,
+			enableNotifications: settings.enableNotifications,
+		})
 	} catch (error) {
 		console.error("Failed to update auto approval settings:", error)
 		throw error

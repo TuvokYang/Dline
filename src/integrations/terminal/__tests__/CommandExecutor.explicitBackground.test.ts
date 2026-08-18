@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
+import { DlineTempManager } from "@services/temp"
 import { EventEmitter } from "events"
 import { describe, it, vi } from "vitest"
 import { Logger } from "@/shared/services/Logger"
@@ -65,11 +66,11 @@ class FakeTerminalProcess extends EventEmitter<TerminalProcessEvents> {
 	}
 }
 
-function createTerminalManager(): ITerminalManager {
+function createTerminalManager(outputLineLimit = terminalConfiguration.terminalOutputLineLimit): ITerminalManager {
 	return {
 		configure: vi.fn(() => ({ closedCount: 0, busyTerminals: [] })),
 		disposeAll: vi.fn(),
-		getConfiguration: vi.fn(() => terminalConfiguration),
+		getConfiguration: vi.fn(() => ({ ...terminalConfiguration, terminalOutputLineLimit: outputLineLimit })),
 		getOrCreateTerminal: vi.fn(),
 		getTerminals: vi.fn(() => []),
 		getUnretrievedOutput: vi.fn(() => ""),
@@ -538,10 +539,10 @@ describe("CommandExecutor explicit background execution", () => {
 		assert.equal(process.terminate.mock.calls.length, 1)
 	})
 
-	it("cancels by canonical function identity and keeps cancellation terminal when the process reports an error", async () => {
+	it("cancels by canonical function identity and returns the existing log path", async () => {
 		const process = new FakeTerminalProcess()
 		const processPromise = process.asResultPromise()
-		const terminalManager = createTerminalManager()
+		const terminalManager = createTerminalManager(1)
 		vi.mocked(terminalManager.getOrCreateTerminal).mockResolvedValue({
 			id: 1,
 			terminal: {
@@ -575,24 +576,33 @@ describe("CommandExecutor explicit background execution", () => {
 				updateCommandActivity,
 			},
 		)
+		const expectedLogPath = DlineTempManager.createTempFilePath("command_77_1")
 
-		const execution = executor.execute("watch", undefined, { commandTs: 77, functionId: "call-watch" })
-		await vi.waitFor(() => expect(executor.hasTaskOwnedCommand()).toBe(true))
-		expect(await executor.cancelCommandByFunctionId("call-unknown")).toEqual({ cancelled: false })
-		expect(await executor.cancelCommandByFunctionId("call-watch")).toEqual({
-			activityId: "command_77_1",
-			cancelled: true,
-			command: "watch",
-		})
-		process.emit("error", new Error("terminated"))
-		process.continue()
-		await execution
+		try {
+			const execution = executor.execute("watch", undefined, { commandTs: 77, functionId: "call-watch" })
+			await vi.waitFor(() => expect(executor.hasTaskOwnedCommand()).toBe(true))
+			process.emit("line", "first line before cancellation", "stdout")
+			process.emit("line", "second line before cancellation", "stderr")
+			expect(await executor.cancelCommandByFunctionId("call-unknown")).toEqual({ cancelled: false })
+			expect(await executor.cancelCommandByFunctionId("call-watch")).toEqual({
+				activityId: "command_77_1",
+				cancelled: true,
+				command: "watch",
+			})
+			process.emit("error", new Error("terminated"))
+			process.continue()
+			const result = await execution
 
-		expect(await executor.cancelCommandByFunctionId("call-watch")).toEqual({ cancelled: false })
-		expect(process.terminate).toHaveBeenCalledTimes(1)
-		expect(updateCommandActivity).toHaveBeenCalledWith("command_77_1", expect.objectContaining({ status: "cancelled" }))
-		expect(updateCommandActivity).not.toHaveBeenCalledWith("command_77_1", expect.objectContaining({ status: "failed" }))
-		expect(updateClineMessage).not.toHaveBeenCalledWith(0, expect.objectContaining({ commandStatus: "failed" }))
+			expect(await executor.cancelCommandByFunctionId("call-watch")).toEqual({ cancelled: false })
+			expect(process.terminate).toHaveBeenCalledTimes(1)
+			expect(updateCommandActivity).toHaveBeenCalledWith("command_77_1", expect.objectContaining({ status: "cancelled" }))
+			expect(updateCommandActivity).not.toHaveBeenCalledWith("command_77_1", expect.objectContaining({ status: "failed" }))
+			expect(updateClineMessage).not.toHaveBeenCalledWith(0, expect.objectContaining({ commandStatus: "failed" }))
+			expect(result.logFilePath).toBe(expectedLogPath)
+			expect((result.result as string).split("\n").at(-1)).toBe(`Full output saved to: ${expectedLogPath}`)
+		} finally {
+			await rm(expectedLogPath, { force: true })
+		}
 	})
 
 	it("publishes footer handoff readiness after the wait and moves the synchronous command on request", async () => {

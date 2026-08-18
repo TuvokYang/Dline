@@ -7,7 +7,7 @@ import { useDebouncedInput } from "../utils/useDebouncedInput"
  */
 interface BaseUrlFieldProps {
 	initialValue: string | undefined
-	onChange: (value: string) => void
+	onChange: (value: string) => void | Promise<unknown>
 	defaultValue?: string
 	label?: string
 	placeholder?: string

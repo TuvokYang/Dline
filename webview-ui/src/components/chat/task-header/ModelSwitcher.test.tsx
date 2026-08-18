@@ -79,7 +79,9 @@ describe("ModelSwitcher Profile transitions", () => {
 
 		render(<ModelSwitcher onOpenSettings={vi.fn()} />)
 
-		expect(screen.getByRole("button", { name: "Select model" })).toHaveTextContent("large-profile")
+		const profileButton = screen.getByRole("button", { name: "Select model" })
+		expect(profileButton).toHaveTextContent("large-profile")
+		expect(profileButton).toHaveClass("inline-flex", "h-4", "items-center", "leading-none")
 	})
 
 	it("routes an active Task selection through the Profile transition transaction", () => {

@@ -15,6 +15,7 @@ export type ExplicitInstructionSource =
 	| "auto_compaction"
 	| "manual_compact_command"
 	| "task_header"
+	| "profile_switch"
 	| "mode_switch"
 	| "slash_command"
 	| "skill_injection"

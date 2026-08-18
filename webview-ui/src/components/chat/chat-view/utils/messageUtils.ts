@@ -52,6 +52,7 @@ export function processMessages(messages: ClineMessage[]): ClineMessage[] {
 interface ApiErrorMessageInput {
 	isLast: boolean
 	lastModifiedMessage?: ClineMessage
+	streamingFailedMessage?: string
 	taskViewState?: TaskViewState
 }
 
@@ -72,11 +73,11 @@ export function resolveApiErrorMessage(input: ApiErrorMessageInput): string | un
 		return input.lastModifiedMessage.text
 	}
 
-	if (!activeInteraction && input.lastModifiedMessage?.ask === "api_req_failed") {
-		return input.lastModifiedMessage.text
+	if (input.taskViewState) {
+		return input.lastModifiedMessage?.ask === "api_req_failed" ? undefined : input.streamingFailedMessage
 	}
 
-	return undefined
+	return input.lastModifiedMessage?.ask === "api_req_failed" ? input.lastModifiedMessage.text : input.streamingFailedMessage
 }
 
 /**

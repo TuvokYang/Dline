@@ -7,7 +7,7 @@ import { useDebouncedInput } from "../utils/useDebouncedInput"
 interface DebouncedTextFieldProps {
 	// Custom props for debouncing functionality
 	initialValue: string
-	onChange: (value: string) => void
+	onChange: (value: string) => void | Promise<unknown>
 
 	// Common VSCodeTextField props
 	style?: React.CSSProperties

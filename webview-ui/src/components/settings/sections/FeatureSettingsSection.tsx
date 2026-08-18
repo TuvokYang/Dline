@@ -1,4 +1,4 @@
-import { UpdateSettingsRequest } from "@shared/proto/dline/state"
+import type { UpdateSettingsRequest } from "@shared/proto/dline/state"
 import { memo, type ReactNode, useCallback } from "react"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -23,12 +23,19 @@ interface FeatureCheckboxProps {
 	isVisible?: boolean
 }
 
+type FeatureSettingKey = Exclude<keyof UpdateSettingsRequest, "metadata">
+type McpDisplayModeValue = "rich" | "plain" | "markdown"
+
+function isMcpDisplayModeValue(value: string): value is McpDisplayModeValue {
+	return value === "rich" || value === "plain" || value === "markdown"
+}
+
 // Interface for feature toggle configuration
 interface FeatureToggle {
 	id: string
 	label: string
 	description: ReactNode
-	settingKey: keyof UpdateSettingsRequest
+	settingKey: FeatureSettingKey
 	stateKey: string
 	/** If set, the setting value is nested with this key (e.g., "enabled" -> { enabled: checked }) */
 	nestedKey?: string
@@ -256,6 +263,12 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 		[focusChainSettings],
 	)
 
+	const handleMcpDisplayModeChange = useCallback((value: string) => {
+		if (isMcpDisplayModeValue(value)) {
+			updateSetting("mcpDisplayMode", value)
+		}
+	}, [])
+
 	const isYoloRemoteLocked = remoteConfigSettings?.yoloModeToggled !== undefined
 
 	// State lookup for mapped features
@@ -411,7 +424,7 @@ const FeatureSettingsSection = ({ renderSectionHeader }: FeatureSettingsSectionP
 							<div className="space-y-2">
 								<Label className="text-sm font-medium text-foreground">MCP Display Mode</Label>
 								<p className="text-xs text-muted-foreground">Controls how MCP responses are displayed</p>
-								<Select onValueChange={(v) => updateSetting("mcpDisplayMode", v)} value={mcpDisplayMode}>
+								<Select onValueChange={handleMcpDisplayModeChange} value={mcpDisplayMode}>
 									<SelectTrigger className="w-full">
 										<SelectValue />
 									</SelectTrigger>

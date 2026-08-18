@@ -7,7 +7,6 @@ export interface ContextWindowSegmentViewModel {
 	label: string
 	authoritativeTokens: number
 	displayTokens: number
-	visualTokens: number
 	widthPercent: number
 }
 
@@ -59,17 +58,14 @@ export function createContextWindowIndicatorViewModel(
 	const minorGroupTotal = displayedTokens.sending + displayedTokens.receiving + displayedTokens.environment
 	const availableMinorSpace = Math.max(0, displayDenominator - displayedTokens.durable)
 	const minorGroupFactor =
-		minorGroupTotal > 0
-			? Math.min(MAX_MINOR_GROUP_FACTOR, Math.max(1, availableMinorSpace / minorGroupTotal))
-			: 1
+		minorGroupTotal > 0 ? Math.min(MAX_MINOR_GROUP_FACTOR, Math.max(1, availableMinorSpace / minorGroupTotal)) : 1
 	const segments = (Object.keys(SEGMENT_LABELS) as ContextWindowSegmentKind[]).map((kind) => {
-		const visualTokens = kind === "durable" ? displayedTokens[kind] : Math.floor(displayedTokens[kind] * minorGroupFactor)
+		const visualTokens = kind === "durable" ? displayedTokens[kind] : displayedTokens[kind] * minorGroupFactor
 		return {
 			kind,
 			label: SEGMENT_LABELS[kind],
 			authoritativeTokens: authoritativeTokens[kind],
 			displayTokens: displayedTokens[kind],
-			visualTokens,
 			widthPercent: displayDenominator > 0 ? Math.min(100, (visualTokens / displayDenominator) * 100) : 0,
 		}
 	})

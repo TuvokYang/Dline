@@ -10,6 +10,7 @@ import { withRetry } from "../retry"
 import { convertToOpenAiMessages } from "../transform/openai-format"
 import { ApiStream } from "../transform/stream"
 import { getOpenAIToolParams, ToolCallProcessor } from "../transform/tool-call-processor"
+import { splitInclusiveInputUsage } from "../transform/usage-normalization"
 
 // Enhanced usage interface to support Groq's cached token fields
 interface GroqUsage extends OpenAI.CompletionUsage {
@@ -127,23 +128,26 @@ export class GroqHandler implements ApiHandler {
 	}
 
 	private async *yieldUsage(info: ModelInfo, usage: GroqUsage | undefined): ApiStream {
-		const inputTokens = usage?.prompt_tokens || 0
+		const totalInputTokens = usage?.prompt_tokens || 0
 		const outputTokens = usage?.completion_tokens || 0
+		const inputUsage = splitInclusiveInputUsage({
+			totalInputTokens,
+			cacheReadTokens: usage?.prompt_tokens_details?.cached_tokens,
+		})
 
-		const cacheReadTokens = usage?.prompt_tokens_details?.cached_tokens || 0
-
-		// Groq does not track cache writes
-		const cacheWriteTokens = 0
-
-		// Calculate cost using OpenAI-compatible cost calculation
-		const totalCost = calculateApiCostOpenAI(info, inputTokens, outputTokens, cacheWriteTokens, cacheReadTokens)
+		// Calculate cost with the Provider total; canonical usage remains non-overlapping.
+		const totalCost = calculateApiCostOpenAI(
+			info,
+			totalInputTokens,
+			outputTokens,
+			inputUsage.cacheWriteTokens,
+			inputUsage.cacheReadTokens,
+		)
 
 		yield {
 			type: "usage",
-			inputTokens: inputTokens,
+			...inputUsage,
 			outputTokens,
-			cacheWriteTokens,
-			cacheReadTokens,
 			totalCost,
 		}
 	}

@@ -229,6 +229,26 @@ describe("InteractionHost", () => {
 		expect(screen.queryByRole("button", { name: "Approve" })).toBeNull()
 	})
 
+	it("uses the API error row and bottom Profile selector as the Profile validity surfaces", () => {
+		const view = taskView()
+		delete view.activeInteraction
+		view.phase = "between_turns"
+		view.profileInvalid = {
+			profileId: "profile-deleted",
+			displayName: "deleted-profile",
+			reason: "missing",
+			message: 'Profile not valid: "deleted-profile" no longer exists.',
+		}
+		view.input = { enabled: false, acceptsText: false, acceptsImages: false, acceptsFiles: false }
+		view.footer.actions = []
+
+		render(<InteractionHost dispatch={vi.fn()} messages={[SAY]} view={view} />)
+
+		expect(screen.queryByText("Profile not valid")).toBeNull()
+		expect(screen.queryByRole("button", { name: "Select profile" })).toBeNull()
+		expect(TaskServiceClient.cancelTask).not.toHaveBeenCalled()
+	})
+
 	it("renders a backend interaction diagnostic without inventing an action", () => {
 		const view = taskView()
 		delete view.activeInteraction

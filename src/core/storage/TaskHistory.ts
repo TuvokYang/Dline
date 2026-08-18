@@ -250,7 +250,7 @@ export class TaskHistory {
 		}
 	}
 
-	/** Stop watcher and wait until all native watcher resources are released. */
+	/** Stop watchers and flush/close the underlying JSONL store. */
 	async dispose(): Promise<void> {
 		const watcher = this._watcher
 		this._watcher = null
@@ -258,5 +258,6 @@ export class TaskHistory {
 		if (watcher) {
 			await watcher.close()
 		}
+		await this.store.close()
 	}
 }

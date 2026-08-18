@@ -57,22 +57,31 @@ const settingsPath = (dlineDir: string) => path.join(dlineDir, "data", "settings
 
 async function configureRecoveryProfileCapabilities(dlineDir: string): Promise<void> {
 	const profiles = JSON.parse(await readFile(profilesPath(dlineDir), "utf8")) as StoredProfile[]
-	const recoveryProfile = profiles.find((profile) => profile.name === E2E_PROFILE_NAMES.mockOpenAiResponses)
-	if (!recoveryProfile?.openai?.capabilities) {
-		throw new Error("Missing configurable OpenAI Responses E2E profile")
+	const recoveryProfiles = [E2E_PROFILE_NAMES.mockOpenAiResponses, E2E_PROFILE_NAMES.mockOpenAiOfficialResponses].map(
+		(profileName) => profiles.find((profile) => profile.name === profileName),
+	)
+	if (recoveryProfiles.some((profile) => !profile?.openai)) {
+		throw new Error("Missing configurable OpenAI recovery Profiles")
 	}
-	recoveryProfile.openai.capabilities.supportsReasoning = true
-	recoveryProfile.modelInfo = {
-		...(recoveryProfile.modelInfo ?? {}),
-		capabilities: {
-			...(recoveryProfile.modelInfo?.capabilities ?? {}),
+	const thinking = {
+		supported: true,
+		mode: "effort",
+		effortLevels: ["none", "low", "medium", "high"],
+	}
+	for (const profile of recoveryProfiles) {
+		if (!profile?.openai) continue
+		profile.openai.capabilities = {
+			...(profile.openai.capabilities ?? {}),
 			supportsReasoning: true,
-			thinking: {
-				supported: true,
-				mode: "effort",
-				effortLevels: ["none", "low", "medium", "high"],
+		}
+		profile.modelInfo = {
+			...(profile.modelInfo ?? {}),
+			capabilities: {
+				...(profile.modelInfo?.capabilities ?? {}),
+				supportsReasoning: true,
+				thinking,
 			},
-		},
+		}
 	}
 	await writeFile(profilesPath(dlineDir), `${JSON.stringify(profiles, null, 2)}\n`, "utf8")
 }
@@ -372,12 +381,19 @@ e2e(
 			await expect(profileSlot).toBeVisible()
 			await expect(thinkingControl).toBeVisible()
 			await expect(serviceTierControl).toBeVisible()
-			const profileLayout = await profileSlot.evaluate((element) => ({
-				flexShrink: getComputedStyle(element).flexShrink,
-				width: element.getBoundingClientRect().width,
-			}))
-			expect(profileLayout.flexShrink).toBe("0")
-			expect(profileLayout.width).toBeGreaterThan(60)
+			const profileLayout = await profileSlot.evaluate((element) => {
+				const style = getComputedStyle(element)
+				return {
+					flexShrink: style.flexShrink,
+					maxWidth: Number.parseFloat(style.maxWidth),
+					overflowX: style.overflowX,
+					width: element.getBoundingClientRect().width,
+				}
+			})
+			expect(profileLayout.flexShrink).toBe("1")
+			expect(profileLayout.overflowX).toBe("hidden")
+			expect(profileLayout.maxWidth).toBeGreaterThan(0)
+			expect(profileLayout.width).toBeLessThanOrEqual(profileLayout.maxWidth + 1)
 			const thinkingAppearance = await thinkingControl.evaluate((element) => ({
 				borderTopWidth: getComputedStyle(element).borderTopWidth,
 				svgCount: element.querySelectorAll("svg").length,
@@ -448,13 +464,32 @@ e2e(
 			await expect(sidebar.getByText(/Profile not valid:/)).toHaveCount(0)
 			await expect(sidebar.getByRole("combobox", { name: "Task thinking override" })).toBeEnabled()
 			await expect(sidebar.getByRole("button", { name: "Task service tier" })).toBeEnabled()
+
+			const persistedProfilesBeforeResumeSwitch = JSON.parse(
+				await readFile(profilesPath(dlineDir), "utf8"),
+			) as StoredProfile[]
+			const recoveryTargetProfile = persistedProfilesBeforeResumeSwitch.find(
+				(profile) => profile.name === E2E_PROFILE_NAMES.mockOpenAiOfficialResponses,
+			)
+			expect(recoveryTargetProfile).toBeDefined()
+			await selectProfile(sidebar, E2E_PROFILE_NAMES.mockOpenAiOfficialResponses)
+			await expect(sidebar.getByRole("button", { name: "Select model" })).toHaveText(
+				E2E_PROFILE_NAMES.mockOpenAiOfficialResponses,
+			)
+			await expect
+				.poll(async () => readTaskSettings(dlineDocsDir, taskId), { timeout: 30_000 })
+				.toMatchObject({
+					actModeProfileId: recoveryTargetProfile?.id,
+					actModeProfile: E2E_PROFILE_NAMES.mockOpenAiOfficialResponses,
+				})
+
 			await selectThinkingOverride(sidebar, "Medium")
 			await selectServiceTier(sidebar, "Flex")
 			await expect
 				.poll(async () => readTaskSettings(dlineDocsDir, taskId), { timeout: 30_000 })
 				.toMatchObject({
-					actModeProfileId: staleNameSettings.actModeProfileId,
-					actModeProfile: E2E_PROFILE_NAMES.mockOpenAiResponses,
+					actModeProfileId: recoveryTargetProfile?.id,
+					actModeProfile: E2E_PROFILE_NAMES.mockOpenAiOfficialResponses,
 					actModeReasoningOverrideKind: "effort",
 					actModeReasoningOverrideEffort: "medium",
 					actModeServiceTierOverrideKind: "tier",

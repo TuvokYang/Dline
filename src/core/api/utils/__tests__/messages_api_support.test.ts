@@ -1,7 +1,8 @@
+import { ServerTool } from "@shared/proto/dline/models/metadata"
 import { expect } from "chai"
 import type { ChatCompletionTool as OpenAITool } from "openai/resources/chat/completions"
 import { describe, it } from "vitest"
-import { ServerTool } from "@/shared/proto/dline/models/metadata"
+import { OutputLimitExceededError } from "../../stream/OutputLimitExceededError"
 import {
 	convertOpenAIToolsToAnthropicTools,
 	handleAnthropicMessagesApiStreamResponse,
@@ -387,6 +388,29 @@ describe("messages_api_support", () => {
 					error,
 				},
 			])
+		})
+
+		it("throws a typed output-limit error when Anthropic stops at max_tokens", async () => {
+			let caught: unknown
+			try {
+				await collectChunks([
+					{
+						type: "message_delta",
+						delta: { stop_reason: "max_tokens", stop_sequence: null },
+						usage: { output_tokens: 30_000 },
+					},
+					{ type: "message_stop" },
+				])
+			} catch (error) {
+				caught = error
+			}
+
+			expect(caught).to.be.instanceOf(OutputLimitExceededError)
+			expect(caught).to.deep.include({
+				code: "output_limit_exceeded",
+				protocol: "anthropic_messages",
+				reason: "max_tokens",
+			})
 		})
 	})
 })

@@ -6,9 +6,18 @@ import { Logger } from "@/shared/services/Logger"
 import { Controller } from "../index"
 import { sendAddToInputEvent } from "../ui/subscribeToAddToInput"
 
+interface AddToClineOptions {
+	startTask?: boolean
+}
+
 // 'Add to Dline' context menu in editor and code action
-// Inserts the selected code into the chat.
-export async function addToCline(controller: Controller, request: CommandContext, notebookContext?: string): Promise<Empty> {
+// Inserts the selected code into the chat or starts an isolated panel task.
+export async function addToCline(
+	controller: Controller,
+	request: CommandContext,
+	notebookContext?: string,
+	options: AddToClineOptions = {},
+): Promise<Empty> {
 	if (!request.selectedText?.trim() && !notebookContext) {
 		Logger.log("No text selected and no notebook context - returning early")
 		return {}
@@ -30,10 +39,11 @@ export async function addToCline(controller: Controller, request: CommandContext
 		input += `\nProblems:\n${problemsString}`
 	}
 
-	// Notebooks send immediately, regular adds just fill input
+	// Notebooks send immediately. Busy-sidebar editor commands start a task
+	// on their isolated panel Controller; idle-sidebar adds keep the draft workflow.
 	if (notebookContext && controller.task) {
 		await controller.task.handleWebviewAskResponse("messageResponse", input)
-	} else if (notebookContext) {
+	} else if (notebookContext || options.startTask) {
 		await controller.initTask(input)
 	} else {
 		await sendAddToInputEvent(controller, input)

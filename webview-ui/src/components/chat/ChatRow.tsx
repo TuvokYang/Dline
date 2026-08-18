@@ -291,6 +291,7 @@ export const ChatRowContent = memo(
 		const apiRequestFailedMessage = resolveApiErrorMessage({
 			isLast,
 			lastModifiedMessage,
+			streamingFailedMessage: apiReqStreamingFailedMessage,
 			taskViewState,
 		})
 
@@ -748,6 +749,20 @@ export const ChatRowContent = memo(
 				case "summarizeTask": {
 					const status = tool.compactionStatus ?? (message.partial ? "running" : "completed")
 					const content = typeof tool.content === "string" ? tool.content : ""
+					const compactionRestore =
+						status === "completed" &&
+						tool.compactionOperationId !== undefined &&
+						tool.compactionPrePassCheckpointId !== undefined &&
+						tool.compactionExpectedHeadCheckpointId !== undefined &&
+						tool.compactionExpectedChainRevision !== undefined
+							? {
+									operationId: tool.compactionOperationId,
+									prePassCheckpointId: tool.compactionPrePassCheckpointId,
+									expectedHeadCheckpointId: tool.compactionExpectedHeadCheckpointId,
+									expectedChainRevision: tool.compactionExpectedChainRevision,
+								}
+							: undefined
+					if (status === "running" && !content) return null
 					const title =
 						status === "retrying"
 							? "Compaction was interrupted; retrying:"
@@ -761,7 +776,13 @@ export const ChatRowContent = memo(
 								? "Partial summary (not applied):"
 								: "Partial summary:"
 					return (
-						<div>
+						<div
+							data-compaction-attempt-id={tool.compactionAttemptId}
+							data-compaction-attempt-index={tool.compactionAttemptIndex}
+							data-compaction-operation-id={tool.compactionOperationId}
+							data-compaction-pass-index={tool.compactionPassIndex}
+							data-compaction-status={status}
+							data-testid="compaction-pass">
 							<div className={HEADER_CLASSNAMES}>
 								<FoldVerticalIcon className="size-2" />
 								<span className="font-bold">{title}</span>
@@ -770,9 +791,6 @@ export const ChatRowContent = memo(
 								<div className="text-description mb-2">
 									Attempt {tool.retryAttempt} of {tool.maxRetryAttempts}
 								</div>
-							)}
-							{status === "failed" && tool.error && (
-								<div className="text-error mb-2 whitespace-pre-wrap">{tool.error}</div>
 							)}
 							{content ? (
 								<div className="bg-code overflow-hidden border border-editor-group-border rounded-[3px]">
@@ -812,9 +830,10 @@ export const ChatRowContent = memo(
 										)}
 									</div>
 								</div>
-							) : status === "running" ? (
-								<div className="text-description">Preparing a context-safe summary…</div>
 							) : null}
+							{compactionRestore && (
+								<CheckmarkControl compactionRestore={compactionRestore} messageTs={message.ts} />
+							)}
 						</div>
 					)
 				}
@@ -988,7 +1007,6 @@ export const ChatRowContent = memo(
 					case "api_req_started":
 						return (
 							<RequestStartRow
-								apiReqStreamingFailedMessage={apiReqStreamingFailedMessage}
 								apiRequestFailedMessage={apiRequestFailedMessage}
 								clineMessages={clineMessages}
 								cost={cost}

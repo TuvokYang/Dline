@@ -1,28 +1,31 @@
-import type { ContextWindowIndicatorLineage, ContextWindowIndicatorSnapshot } from "@shared/context-window-indicator"
 import type { ApiHandler } from "@core/api"
+import {
+	estimateContextWindowCandidate,
+	resolveContextWindowProjection,
+} from "@core/context/context-management/context-window-projection"
+import type { ContextWindowIndicatorLineage, ContextWindowIndicatorSnapshot } from "@shared/context-window-indicator"
 import { describe, expect, it, vi } from "vitest"
-import { TaskPhase } from "../TaskPhase"
-import { createTaskRuntimeState, type TaskRuntimeState } from "../runtime/TaskRuntimeState"
 import { ContextWindowIndicator } from "../ContextWindowIndicator"
-import { Task } from "../index"
+import { estimateContextWindowIndicatorSegments } from "../ContextWindowIndicatorProjection"
+import { ContextWindowReceivingTracker } from "../ContextWindowReceivingTracker"
 import type { CompactionProviderInput } from "../compaction/CompactionRequestReplay"
-import type { ContextWindowProviderUsage } from "../ContextWindowIndicatorUsage"
+import { Task } from "../index"
+import { createTaskRuntimeState, type TaskRuntimeState } from "../runtime/TaskRuntimeState"
+import { TaskPhase } from "../TaskPhase"
 
 interface RoundTaskHarness {
 	taskId: string
 	taskState: { contextWindowIndicator?: ContextWindowIndicatorSnapshot; apiRequestCount?: number }
 	contextWindowIndicator: ContextWindowIndicator
 	ordinaryContextIndicatorLineageByApiIndex: Map<number, ContextWindowIndicatorLineage>
-	ordinaryContextIndicatorReceivingByApiIndex: Map<
-		number,
-		{
-			estimatedContentTokens: number
-			exactOutputTokens: number
-			exactContextUsage?: ContextWindowProviderUsage
-		}
-	>
+	ordinaryContextIndicatorReceivingByApiIndex: Map<number, ContextWindowReceivingTracker>
 	postStateToWebview: ReturnType<typeof vi.fn>
 	getContextWindowIndicatorProfile(mode: string, profileName?: string): { profileId?: string; profileName?: string }
+	getContextWindowRequestPressures(): Array<{
+		contextTokens?: number
+		estimatedContextTokens?: number
+		contextTokensSource?: "provider" | "estimate"
+	}>
 	beginOrdinaryContextWindowIndicator(
 		apiIndex: number,
 		providerAttempt: number,
@@ -38,10 +41,10 @@ interface RoundTaskHarness {
 	foldOrdinaryIndicatorRound(): Promise<void>
 }
 
-function createHarness(): RoundTaskHarness {
+function createHarness(durableContextTokens = 100): RoundTaskHarness {
 	const contextWindowIndicator = new ContextWindowIndicator({
 		taskId: "task-round-indicator",
-		durableContextTokens: 100,
+		durableContextTokens,
 		environmentTokens: 0,
 		contextWindow: 1_000,
 		mode: "act",
@@ -58,11 +61,15 @@ function createHarness(): RoundTaskHarness {
 		ordinaryContextIndicatorReceivingByApiIndex: new Map(),
 		postStateToWebview: vi.fn(async () => undefined),
 		getContextWindowIndicatorProfile: vi.fn(() => ({})),
+		getContextWindowRequestPressures: vi.fn(() => []),
 	}) as RoundTaskHarness
 	return harness
 }
 
-function providerInput(messages: CompactionProviderInput["messages"], contextWindow: number): {
+function providerInput(
+	messages: CompactionProviderInput["messages"],
+	contextWindow: number,
+): {
 	providerInput: CompactionProviderInput
 	requestScope: { api: ApiHandler; providerInfo: { mode: "act" } }
 } {
@@ -91,10 +98,7 @@ describe("Task ordinary indicator round folding", () => {
 		})
 		task.taskState.contextWindowIndicator = current
 		task.ordinaryContextIndicatorLineageByApiIndex.set(1, current.lineage)
-		task.ordinaryContextIndicatorReceivingByApiIndex.set(1, {
-			estimatedContentTokens: 0,
-			exactOutputTokens: 0,
-		})
+		task.ordinaryContextIndicatorReceivingByApiIndex.set(1, new ContextWindowReceivingTracker())
 
 		await task.foldOrdinaryIndicatorRound()
 
@@ -106,6 +110,37 @@ describe("Task ordinary indicator round folding", () => {
 		expect(snapshot.phase).toBe("stable")
 		expect(task.ordinaryContextIndicatorLineageByApiIndex.size).toBe(0)
 		expect(task.ordinaryContextIndicatorReceivingByApiIndex.size).toBe(0)
+	})
+
+	it("uses the frozen request decomposition before the first Provider usage instead of assigning the full request to Sending", async () => {
+		const task = createHarness(0)
+		const request = providerInput(
+			[
+				{
+					role: "user",
+					content: [
+						{ type: "text", text: "current input" },
+						{ type: "text", text: "<environment_details>current environment</environment_details>" },
+					],
+				},
+			],
+			372_000,
+		)
+		request.providerInput.systemPrompt = "system prompt ".repeat(4_000)
+		const expected = estimateContextWindowIndicatorSegments({
+			providerInput: request.providerInput,
+			durableMessageCount: 0,
+		})
+
+		await task.beginOrdinaryContextWindowIndicator(0, 0, request.requestScope, request.providerInput)
+
+		const snapshot = task.contextWindowIndicator.getSnapshot()
+		expect(snapshot.phase).toBe("sending")
+		expect(snapshot.durableContextTokens).toBe(expected.durableContextTokens)
+		expect(snapshot.pendingSendTokens).toBe(expected.pendingSendTokens)
+		expect(snapshot.environmentTokens).toBe(expected.environmentTokens)
+		expect(snapshot.durableContextTokens).toBeGreaterThan(0)
+		expect(snapshot.pendingSendTokens).toBeLessThan(snapshot.durableContextTokens)
 	})
 
 	it("keeps durable frozen across continuation requests and accumulates the round into sending", async () => {
@@ -130,6 +165,54 @@ describe("Task ordinary indicator round folding", () => {
 
 		expect(afterSecond.durableContextTokens).toBe(100)
 		expect(afterSecond.pendingSendTokens).toBeGreaterThan(afterFirst.pendingSendTokens)
+	})
+
+	it("projects a continuation from Provider occupancy plus local growth instead of re-estimating the full history", async () => {
+		const task = createHarness()
+		const largeRequestEnvelope = "system".repeat(8_000)
+		const firstProviderInput: CompactionProviderInput = {
+			systemPrompt: largeRequestEnvelope,
+			messages: [{ role: "user", content: [{ type: "text", text: "first turn" }] }],
+			tools: [],
+			serverTools: [],
+		}
+		const secondProviderInput: CompactionProviderInput = {
+			...firstProviderInput,
+			messages: [
+				...firstProviderInput.messages,
+				{ role: "assistant", content: [{ type: "text", text: "first response" }] },
+				{ role: "user", content: [{ type: "text", text: "continuation feedback".repeat(100) }] },
+			],
+		}
+		const requestScope = providerInput([], 131_072).requestScope
+		const firstEstimate = estimateContextWindowCandidate(firstProviderInput)
+		const secondEstimate = estimateContextWindowCandidate(secondProviderInput)
+
+		const firstLineage = await task.beginOrdinaryContextWindowIndicator(0, 0, requestScope, firstProviderInput)
+		await task.receiveOrdinaryContextWindowIndicator(0, firstLineage, {
+			type: "usage",
+			inputTokens: 6_000,
+			outputTokens: 100,
+		})
+		await task.foldOrdinaryIndicatorRound()
+		task.getContextWindowRequestPressures = vi.fn(() => [
+			{ contextTokens: 6_100, estimatedContextTokens: firstEstimate, contextTokensSource: "provider" as const },
+			{ estimatedContextTokens: secondEstimate, contextTokensSource: "estimate" as const },
+		])
+
+		await task.beginOrdinaryContextWindowIndicator(1, 0, requestScope, secondProviderInput)
+
+		const projection = resolveContextWindowProjection({
+			requestInfos: task.getContextWindowRequestPressures(),
+			candidateEstimatedTokens: secondEstimate,
+			contextWindow: 131_072,
+			triggerTokens: 131_072,
+		})
+		const snapshot = task.contextWindowIndicator.getSnapshot()
+		const total =
+			snapshot.durableContextTokens + snapshot.pendingSendTokens + snapshot.receivingTokens + snapshot.environmentTokens
+		expect(secondEstimate).toBeGreaterThan(projection.projectedUsageTokens)
+		expect(total).toBe(projection.projectedUsageTokens)
 	})
 
 	it("folds the latest Provider usage into the stable context snapshot for a completed turn", async () => {
@@ -163,7 +246,7 @@ describe("Task ordinary indicator round folding", () => {
 		expect(snapshot.phase).toBe("stable")
 	})
 
-	it("lets exact Provider output replace an inflated receiving fallback", async () => {
+	it("excludes Provider-hosted results and lets exact Provider output calibrate receiving", async () => {
 		const task = createHarness()
 		const request = providerInput(
 			[{ role: "user", content: [{ type: "text", text: "small hosted result request" }] }],
@@ -178,8 +261,8 @@ describe("Task ordinary indicator round folding", () => {
 			result: { results: [{ snippet: "provider result".repeat(4_000) }] },
 		})
 
-		const inflated = task.contextWindowIndicator.getSnapshot().receivingTokens
-		expect(inflated).toBeGreaterThan(10_000)
+		const beforeExactUsage = task.contextWindowIndicator.getSnapshot().receivingTokens
+		expect(beforeExactUsage).toBe(0)
 
 		await task.receiveOrdinaryContextWindowIndicator(0, lineage, {
 			type: "usage",
@@ -201,10 +284,7 @@ describe("Task ordinary indicator round folding", () => {
 
 	it("accepts split Provider usage and does not double-count repeated output snapshots", async () => {
 		const task = createHarness()
-		const request = providerInput(
-			[{ role: "user", content: [{ type: "text", text: "split usage request" }] }],
-			272_000,
-		)
+		const request = providerInput([{ role: "user", content: [{ type: "text", text: "split usage request" }] }], 272_000)
 		const lineage = await task.beginOrdinaryContextWindowIndicator(0, 0, request.requestScope, request.providerInput)
 
 		await task.receiveOrdinaryContextWindowIndicator(0, lineage, {
@@ -216,9 +296,9 @@ describe("Task ordinary indicator round folding", () => {
 		})
 
 		let snapshot = task.contextWindowIndicator.getSnapshot()
-		expect(snapshot.durableContextTokens + snapshot.pendingSendTokens + snapshot.receivingTokens + snapshot.environmentTokens).toBe(
-			140_015,
-		)
+		expect(
+			snapshot.durableContextTokens + snapshot.pendingSendTokens + snapshot.receivingTokens + snapshot.environmentTokens,
+		).toBe(140_015)
 		expect(snapshot.receivingTokens).toBe(0)
 		expect(snapshot.phase).toBe("receiving")
 
@@ -232,18 +312,22 @@ describe("Task ordinary indicator round folding", () => {
 		await task.receiveOrdinaryContextWindowIndicator(0, lineage, outputUsage)
 		await task.receiveOrdinaryContextWindowIndicator(0, lineage, outputUsage)
 
-		const receiving = task.ordinaryContextIndicatorReceivingByApiIndex.get(0)
-		expect(receiving?.exactOutputTokens).toBe(100)
-		expect(receiving?.exactContextUsage).toEqual({
-			inputTokens: 140_000,
-			outputTokens: 100,
-			cacheWriteTokens: 10,
-			cacheReadTokens: 5,
+		const receiving = task.ordinaryContextIndicatorReceivingByApiIndex.get(0)?.getSnapshot()
+		expect(receiving).toMatchObject({
+			providerOutputTokens: 100,
+			receivingTokens: 100,
+			authoritativeContextTokens: 140_115,
+			providerUsage: {
+				inputTokens: 140_000,
+				outputTokens: 100,
+				cacheWriteTokens: 10,
+				cacheReadTokens: 5,
+			},
 		})
 		snapshot = task.contextWindowIndicator.getSnapshot()
-		expect(snapshot.durableContextTokens + snapshot.pendingSendTokens + snapshot.receivingTokens + snapshot.environmentTokens).toBe(
-			140_115,
-		)
+		expect(
+			snapshot.durableContextTokens + snapshot.pendingSendTokens + snapshot.receivingTokens + snapshot.environmentTokens,
+		).toBe(140_115)
 		expect(snapshot.receivingTokens).toBe(100)
 
 		await task.foldOrdinaryIndicatorRound()

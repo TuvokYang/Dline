@@ -8,11 +8,11 @@ interface ChatInputRuntimeControlsProps {
 /** Existing Profile entry followed by Task-local runtime controls in the chat input toolbar. */
 export function ChatInputRuntimeControls({ profileControl }: ChatInputRuntimeControlsProps) {
 	return (
-		<>
-			<div className="min-w-[10ch] max-w-[24ch] flex-[1_0_12ch] overflow-visible" data-chat-input-slot="profile">
+		<div className="flex min-w-0 items-center gap-[3px]" data-chat-input-runtime-controls>
+			<div className="min-w-0 max-w-[12ch] flex-[0_1_auto] overflow-hidden" data-chat-input-slot="profile">
 				{profileControl}
 			</div>
 			<TaskRuntimeControls />
-		</>
+		</div>
 	)
 }

@@ -8,6 +8,7 @@ import { withRetry } from "../retry"
 import { convertToOpenAiMessages } from "../transform/openai-format"
 import { ApiStream } from "../transform/stream"
 import { getOpenAIToolParams, ToolCallProcessor } from "../transform/tool-call-processor"
+import { splitInclusiveInputUsage } from "../transform/usage-normalization"
 
 // Enhanced usage interface to support Moonshot's cached token field
 interface MoonshotUsage extends OpenAI.CompletionUsage {
@@ -98,11 +99,13 @@ export class MoonshotHandler implements ApiHandler {
 
 			if (chunk.usage) {
 				const usage = chunk.usage as MoonshotUsage
+				const inputUsage = splitInclusiveInputUsage({
+					totalInputTokens: usage.prompt_tokens,
+					cacheReadTokens: usage.cached_tokens,
+				})
 				yield {
 					type: "usage",
-					cacheWriteTokens: 0,
-					cacheReadTokens: usage.cached_tokens ?? 0,
-					inputTokens: usage.prompt_tokens || 0,
+					...inputUsage,
 					outputTokens: usage.completion_tokens || 0,
 				}
 			}

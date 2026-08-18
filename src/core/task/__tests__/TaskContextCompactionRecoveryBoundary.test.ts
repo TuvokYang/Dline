@@ -38,6 +38,57 @@ function restoreResult(): ContextCompactionRestoreResult {
 }
 
 describe("Task context compaction recovery boundary", () => {
+	it("replaces restored interaction feedback with the checkpoint resume draft while preserving tool identity", async () => {
+		const restoredToolResult = {
+			type: "tool_result" as const,
+			function_id: "call-restored-qna",
+			dline_tid: "dline-restored-qna",
+			content: [{ type: "text" as const, text: "stale restored Q&A result" }],
+		}
+		const task = {
+			taskRuntime: { getState: () => ({ phase: "resuming", turn: undefined }) },
+			taskState: { userMessageContent: [restoredToolResult] },
+			taskSm: { mode: "act" },
+			messageStateHandler: {
+				apiConversationHistory: [
+					{
+						role: "assistant",
+						content: [
+							{
+								type: "tool_use",
+								name: "qna_respond",
+								function_id: restoredToolResult.function_id,
+								dline_tid: restoredToolResult.dline_tid,
+								input: { response: "Restored question" },
+							},
+						],
+					},
+				],
+				clineMessages: [],
+			},
+		} as unknown as Task
+		const buildResumeApiContent = (
+			Task.prototype as unknown as {
+				buildResumeApiContent(draft: { text: string; images: string[]; files: string[] }): Promise<unknown[]>
+			}
+		).buildResumeApiContent
+
+		const content = await buildResumeApiContent.call(task, {
+			text: "continue after restore",
+			images: [],
+			files: [],
+		})
+
+		expect(content[0]).toMatchObject({
+			type: "tool_result",
+			function_id: restoredToolResult.function_id,
+			dline_tid: restoredToolResult.dline_tid,
+		})
+		expect(JSON.stringify(content[0])).toContain("continue after restore")
+		expect(JSON.stringify(content)).not.toContain("stale restored Q&A result")
+		expect(JSON.stringify(content)).toContain("The previous task session was closed and has now been restored.")
+	})
+
 	it("completes the durable adoption journal before releasing the Session and transient owners", async () => {
 		const order: string[] = []
 		const completeAdoption = vi.fn(async () => {

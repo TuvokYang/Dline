@@ -67,4 +67,93 @@ describe("ContextManager canonical tool-result recovery", () => {
 		expect(result).not.toHaveProperty("tool_use_id")
 		expect(result).not.toHaveProperty("call_id")
 	})
+
+	it("demotes a Dline-owned orphaned result to user text", () => {
+		const history: ClineStorageMessage[] = [
+			{ role: "user", content: [{ type: "text", text: "Initial task" }] },
+			{ role: "assistant", content: [{ type: "text", text: "Attempted an internal XML tool call" }] },
+			{
+				role: "user",
+				content: [
+					{
+						type: "tool_result",
+						function_id: "dline_function_internal_rejection",
+						dline_tid: "dline_tid_internal_rejection",
+						content: [
+							{
+								type: "text",
+								text: "Explicit-only tool was rejected: explicit_instruction_missing.",
+							},
+						],
+						is_error: true,
+					},
+					{ type: "text", text: "<environment_details />" },
+				],
+			},
+		]
+
+		const repaired = new ContextManager().getTruncatedMessages(history, undefined) as ClineStorageMessage[]
+		const repairedContent = repaired[2].content
+		const projected = convertToOpenAIResponsesInput(repaired)
+
+		expect(Array.isArray(repairedContent)).toBe(true)
+		expect(JSON.stringify(repairedContent)).toContain("explicit_instruction_missing")
+		expect(JSON.stringify(repairedContent)).not.toContain("dline_function_internal_rejection")
+		expect(JSON.stringify(projected.input)).toContain("explicit_instruction_missing")
+		expect(JSON.stringify(projected.input)).not.toContain("function_call_output")
+	})
+
+	it("removes an orphaned result after a compacted summary while preserving explicit user feedback", () => {
+		const history: ClineStorageMessage[] = [
+			{ role: "user", content: [{ type: "text", text: "Compacted summary" }] },
+			{
+				role: "user",
+				content: [
+					{
+						type: "tool_result",
+						function_id: "call_removed_turn",
+						dline_tid: "dline_removed_turn",
+						content: [
+							{
+								type: "text",
+								text: "[qna_respond] Result:\n<feedback>\nPreserve the unresolved requirement\n</feedback>",
+							},
+						],
+					},
+				],
+			},
+			{
+				role: "assistant",
+				content: [
+					{
+						type: "tool_use",
+						function_id: "call_current_turn",
+						dline_tid: "dline_current_turn",
+						name: "qna_respond",
+						input: { response: "Continue" },
+					},
+				],
+			},
+			{
+				role: "user",
+				content: [
+					{
+						type: "tool_result",
+						function_id: "call_current_turn",
+						dline_tid: "dline_current_turn",
+						content: [{ type: "text", text: "Current result" }],
+					},
+				],
+			},
+		]
+
+		const repaired = new ContextManager().getTruncatedMessages(history, undefined) as ClineStorageMessage[]
+		const orphanBoundaryContent = repaired[1].content
+		const currentResultContent = repaired[3].content
+
+		expect(Array.isArray(orphanBoundaryContent)).toBe(true)
+		expect(JSON.stringify(orphanBoundaryContent)).not.toContain("call_removed_turn")
+		expect(JSON.stringify(orphanBoundaryContent)).toContain("Preserve the unresolved requirement")
+		expect(JSON.stringify(currentResultContent)).toContain("call_current_turn")
+	})
 })

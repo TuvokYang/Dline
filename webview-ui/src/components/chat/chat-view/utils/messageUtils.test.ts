@@ -76,6 +76,41 @@ describe("resolveApiErrorMessage", () => {
 		expect(resolved).toBeUndefined()
 	})
 
+	it("clears both persisted API error carriers when canonical Task state has recovered", () => {
+		const recoveredView: TaskViewState = {
+			taskId: "task-1",
+			phase: "between_turns",
+			stateRevision: 3,
+			input: { enabled: true, acceptsText: true, acceptsImages: true, acceptsFiles: true, enterAction: "reply" },
+			footer: { actions: [] },
+		}
+		const resolved = resolveApiErrorMessage({
+			isLast: true,
+			lastModifiedMessage: { type: "ask", ask: "api_req_failed", text: "Profile not valid", ts: 2 },
+			streamingFailedMessage: "Profile not valid",
+			taskViewState: recoveredView,
+		})
+
+		expect(resolved).toBeUndefined()
+	})
+
+	it("keeps a streaming failure that is not owned by an api_req_failed interaction", () => {
+		const resolved = resolveApiErrorMessage({
+			isLast: true,
+			lastModifiedMessage: { type: "say", say: "text", text: "Partial response", ts: 2 },
+			streamingFailedMessage: "Connection interrupted",
+			taskViewState: {
+				taskId: "task-1",
+				phase: "paused",
+				stateRevision: 3,
+				input: { enabled: true, acceptsText: true, acceptsImages: true, acceptsFiles: true, enterAction: "reply" },
+				footer: { actions: [] },
+			},
+		})
+
+		expect(resolved).toBe("Connection interrupted")
+	})
+
 	it("keeps legacy api_req_failed message when snapshot-first message is unavailable", () => {
 		const resolved = resolveApiErrorMessage({
 			isLast: true,

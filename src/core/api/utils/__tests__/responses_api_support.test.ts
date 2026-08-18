@@ -1,6 +1,7 @@
+import { ServerTool } from "@shared/proto/dline/models/metadata"
 import { expect } from "chai"
 import { describe, it, vi } from "vitest"
-import { ServerTool } from "@/shared/proto/dline/models/metadata"
+import { OutputLimitExceededError } from "../../stream/OutputLimitExceededError"
 import { handleResponsesApiStreamResponse } from "../responses_api_support"
 
 const createAsyncIterable = (events: any[]) =>
@@ -376,8 +377,12 @@ describe("responses_api_support hosted tools", () => {
 			caught = error
 		}
 
-		expect(caught).to.be.instanceOf(Error)
-		expect((caught as Error).message).to.include("max_output_tokens")
+		expect(caught).to.be.instanceOf(OutputLimitExceededError)
+		expect(caught).to.deep.include({
+			code: "output_limit_exceeded",
+			protocol: "openai_responses",
+			reason: "max_output_tokens",
+		})
 	})
 
 	it("emits a failed server_tool event for a failed web_search_call item", async () => {

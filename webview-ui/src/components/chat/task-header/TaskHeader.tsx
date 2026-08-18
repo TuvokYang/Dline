@@ -19,7 +19,7 @@ import { PromptCacheHealthBanner } from "./PromptCacheHealthBanner"
 import { TaskRateMetrics } from "./rate-metrics/TaskRateMetrics"
 import SpawnedTasksBar from "./SpawnedTasksBar"
 import { TaskLockBanner } from "./TaskLockBanner"
-import { formatTokenMetric, hasNonZeroModelPricing } from "./util"
+import { hasNonZeroModelPricing } from "./util"
 
 const IS_DEV = process.env.IS_DEV === '"true"'
 interface TaskHeaderProps {
@@ -33,15 +33,19 @@ interface TaskHeaderProps {
 	totalCost: number
 	cacheHitRate?: number
 	currency?: string
+	taskId?: string
 	lastApiReqTotalTokens?: number
 	lastProgressMessageText?: string
 	showFocusChainPlaceholder?: boolean
 	pricing?: ModelPricing
 	compactTaskDisabled?: boolean
+	forceTruncateAvailable?: boolean
+	forceTruncateTaskDisabled?: boolean
 	requestsPerMinute?: number
 	tokensPerMinute?: number
 	onClose: () => void
 	onCompactTask?: () => Promise<boolean>
+	onForceTruncateTask?: () => Promise<boolean>
 }
 
 const BUTTON_CLASS = "max-h-3 border-0 font-bold bg-transparent hover:opacity-100 text-foreground"
@@ -56,15 +60,19 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 	totalCost,
 	cacheHitRate,
 	currency,
+	taskId,
 	lastApiReqTotalTokens,
 	lastProgressMessageText,
 	showFocusChainPlaceholder,
 	pricing,
 	compactTaskDisabled,
+	forceTruncateAvailable,
+	forceTruncateTaskDisabled,
 	requestsPerMinute,
 	tokensPerMinute,
 	onClose,
 	onCompactTask,
+	onForceTruncateTask,
 }) => {
 	const {
 		currentTaskItem,
@@ -116,6 +124,8 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 	const currentContextTokens = lastApiReqTotalTokens ?? totalInputTokens
 	const isCostAvailable = totalCost != null && hasNonZeroModelPricing(pricing)
 	const hasMetrics = isCostAvailable || totalInputTokens > 0 || tokensOut > 0 || (cacheHitRate ?? 0) > 0
+	const hasRateMetrics = (requestsPerMinute ?? 0) > 0 || (tokensPerMinute ?? 0) > 0
+	const hasUnifiedMetrics = hasMetrics || hasRateMetrics
 
 	// Event handlers
 	const toggleTaskExpanded = useCallback(() => setIsTaskExpanded(!isTaskExpanded), [setIsTaskExpanded, isTaskExpanded])
@@ -193,40 +203,20 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 						)}
 					</div>
 					<div className="inline-flex items-center justify-end select-none shrink-0 min-w-0">
-						{((requestsPerMinute ?? 0) > 0 || (tokensPerMinute ?? 0) > 0) && (
+						{hasUnifiedMetrics && (
 							<TaskRateMetrics
+								cacheHitRate={cacheHitRate}
+								cacheReads={cacheReads}
+								cacheWrites={cacheWrites}
+								currency={displayCurrency}
+								isCostAvailable={isCostAvailable}
 								requestsPerMinute={requestsPerMinute ?? 0}
 								taskId={currentTaskItem?.id}
+								tokensOut={tokensOut}
 								tokensPerMinute={tokensPerMinute ?? 0}
+								totalCost={totalCost}
+								totalInputTokens={totalInputTokens}
 							/>
-						)}
-						{hasMetrics && (
-							<div
-								className="mx-1 px-1.5 py-0.25 rounded-full inline-flex shrink-0 text-badge-background bg-badge-foreground/80 items-center gap-1.5"
-								id="price-tag"
-								title={`In: ${totalInputTokens} / Out: ${tokensOut} / Cache read: ${cacheReads ?? 0} / Cache write: ${cacheWrites ?? 0}`}>
-								{totalInputTokens > 0 && (
-									<span className="text-xs sm:text-sm font-medium opacity-90">
-										In:{formatTokenMetric(totalInputTokens)}
-									</span>
-								)}
-								{tokensOut > 0 && (
-									<span className="text-xs sm:text-sm font-medium opacity-90">
-										Out:{formatTokenMetric(tokensOut)}
-									</span>
-								)}
-								{cacheHitRate != null && cacheHitRate > 0 && (
-									<span className="text-xs sm:text-sm font-medium opacity-90">
-										Hit:{cacheHitRate.toFixed(1)}%
-									</span>
-								)}
-								{isCostAvailable && (
-									<span className="text-xs sm:text-sm font-medium">
-										{{ USD: "$", CNY: "¥", EUR: "€", GBP: "£" }[displayCurrency] || "$"}
-										{totalCost?.toFixed(3)}
-									</span>
-								)}
-							</div>
 						)}
 						<NewTaskButton className={BUTTON_CLASS} onClick={onClose} />
 					</div>
@@ -267,8 +257,12 @@ const TaskHeader: React.FC<TaskHeaderProps> = ({
 							compactTaskDisabled={compactTaskDisabled}
 							contextWindow={contextWindow}
 							contextWindowIndicator={contextWindowIndicator}
+							forceTruncateAvailable={forceTruncateAvailable}
+							forceTruncateTaskDisabled={forceTruncateTaskDisabled}
 							lastApiReqTotalTokens={lastApiReqTotalTokens}
 							onCompactTask={onCompactTask}
+							onForceTruncateTask={onForceTruncateTask}
+							taskId={taskId}
 							tokensIn={tokensIn}
 							tokensOut={tokensOut}
 							useAutoCondense={false} // Disable auto-condense configuration in UI for now

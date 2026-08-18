@@ -13,6 +13,7 @@ import { Logger } from "@/shared/services/Logger"
 import { resolveDeepSeekAdaptiveThinking } from "@/shared/utils/reasoning-support"
 import { AccountUsage, ApiHandler, ApiHandlerContext, type ApiRequestOptions } from "../"
 import { withRetry } from "../retry"
+import { getOpenAIChatOutputLimitError } from "../stream/OutputLimitExceededError"
 import { sanitizeAnthropicMessages } from "../transform/anthropic-format"
 import {
 	convertDeepSeekMessages,
@@ -167,7 +168,7 @@ export class DeepSeekHandler implements ApiHandler {
 					yield* this.createAnthropicMessage(systemPrompt, messages, tools, options, requestController.signal)
 					break
 				default:
-					yield* this.createChatMessage(systemPrompt, messages, tools, requestController.signal)
+					yield* this.createChatMessage(systemPrompt, messages, tools, options, requestController.signal)
 			}
 		} finally {
 			if (this.requestController === requestController) {
@@ -180,12 +181,16 @@ export class DeepSeekHandler implements ApiHandler {
 		systemPrompt: string,
 		messages: ClineStorageMessage[],
 		tools: OpenAITool[] | undefined,
+		options: ApiRequestOptions | undefined,
 		signal: AbortSignal,
 	): ApiStream {
 		const client = this.ensureClient()
 		const model = this.getModel()
 		const thinking = this.getThinkingSettings(model)
-		const maxOutputTokens = model.info.capabilities?.maxTokens
+		const maxOutputTokens =
+			options?.generation?.purpose === "compaction"
+				? options.generation.maxOutputTokens
+				: model.info.capabilities?.maxTokens
 
 		const supportsReasoning = model.info.capabilities?.supportsReasoning ?? false
 
@@ -244,6 +249,11 @@ export class DeepSeekHandler implements ApiHandler {
 			if (chunk.usage) {
 				yield* this.yieldUsage(model.info, chunk.usage)
 			}
+
+			const outputLimitError = getOpenAIChatOutputLimitError(chunk.choices?.[0]?.finish_reason)
+			if (outputLimitError) {
+				throw outputLimitError
+			}
 		}
 	}
 
@@ -265,7 +275,10 @@ export class DeepSeekHandler implements ApiHandler {
 		if (hostedWebSearch) {
 			responseTools.push({ type: "web_search" })
 		}
-		const maxOutputTokens = model.info.capabilities?.maxTokens
+		const maxOutputTokens =
+			options?.generation?.purpose === "compaction"
+				? options.generation.maxOutputTokens
+				: model.info.capabilities?.maxTokens
 		const params: OpenAI.Responses.ResponseCreateParamsStreaming = {
 			model: model.id,
 			instructions: systemPrompt,
@@ -298,7 +311,10 @@ export class DeepSeekHandler implements ApiHandler {
 		const model = this.getModel()
 		const thinking = this.getThinkingSettings(model)
 		const supportsPromptCache = model.info.capabilities?.supportsPromptCache ?? false
-		const maxOutputTokens = model.info.capabilities?.maxTokens
+		const maxOutputTokens =
+			options?.generation?.purpose === "compaction"
+				? options.generation.maxOutputTokens
+				: model.info.capabilities?.maxTokens
 		const request = {
 			model: model.id,
 			max_tokens: maxOutputTokens ?? 8192,

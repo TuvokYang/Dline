@@ -17,6 +17,7 @@ import { ApiFormat, ServerTool } from "@/shared/proto/dline/models/metadata"
 import { Logger } from "@/shared/services/Logger"
 import { ApiHandler, type ApiHandlerContext, type ApiRequestOptions } from ".."
 import { withRetry } from "../retry"
+import { getOpenAIChatOutputLimitError } from "../stream/OutputLimitExceededError"
 import { sanitizeAnthropicMessages } from "../transform/anthropic-format"
 import { convertToOpenAiMessages } from "../transform/openai-format"
 import { convertToOpenAIResponsesInput } from "../transform/openai-response-format"
@@ -259,11 +260,16 @@ export class OcaHandler implements ApiHandler {
 		} else if (apiFormat === ApiFormat.ANTHROPIC_CHAT) {
 			yield* this.createMessageMessagesApi(systemPrompt, messages, tools, options)
 		} else {
-			yield* this.createMessageChatApi(systemPrompt, messages, tools)
+			yield* this.createMessageChatApi(systemPrompt, messages, tools, options)
 		}
 	}
 
-	async *createMessageChatApi(systemPrompt: string, messages: ClineStorageMessage[], tools?: OpenAITool[]): ApiStream {
+	async *createMessageChatApi(
+		systemPrompt: string,
+		messages: ClineStorageMessage[],
+		tools?: OpenAITool[],
+		options?: ApiRequestOptions,
+	): ApiStream {
 		const client = this.ensureOpenAIClient()
 		const formattedMessages = convertToOpenAiMessages(messages)
 		const systemMessage: OpenAI.Chat.ChatCompletionSystemMessageParam = {
@@ -279,7 +285,10 @@ export class OcaHandler implements ApiHandler {
 		const thinkingConfig = reasoningOn ? { type: "enabled", budget_tokens: budgetTokens } : undefined
 
 		let temperature: number | undefined = this.modelInfo?.temperature ?? 0
-		const maxTokens: number | undefined = this.modelInfo?.capabilities?.maxTokens
+		const maxTokens: number | undefined =
+			options?.generation?.purpose === "compaction"
+				? options.generation.maxOutputTokens
+				: this.modelInfo?.capabilities?.maxTokens
 
 		if (isOminiModel && reasoningOn) {
 			temperature = undefined // Thinking mode doesn't support temperature
@@ -399,6 +408,11 @@ export class OcaHandler implements ApiHandler {
 					totalCost,
 				}
 			}
+
+			const outputLimitError = getOpenAIChatOutputLimitError(chunk.choices?.[0]?.finish_reason)
+			if (outputLimitError) {
+				throw outputLimitError
+			}
 		}
 	}
 
@@ -430,7 +444,10 @@ export class OcaHandler implements ApiHandler {
 		}
 
 		let temperature: number | undefined = this.modelInfo?.temperature ?? 0
-		const maxOutputTokens: number | undefined = this.modelInfo?.capabilities?.maxTokens
+		const maxOutputTokens: number | undefined =
+			options?.generation?.purpose === "compaction"
+				? options.generation.maxOutputTokens
+				: this.modelInfo?.capabilities?.maxTokens
 
 		const ocaModelInfo = this.modelInfo
 		if (!ocaModelInfo) {
@@ -478,7 +495,10 @@ export class OcaHandler implements ApiHandler {
 		const reasoningOn = this.modelInfo?.capabilities?.supportsReasoning && budgetTokens !== 0
 
 		let temperature: number | undefined = this.modelInfo?.temperature ?? 0
-		const maxTokens: number | undefined = this.modelInfo?.capabilities?.maxTokens || 8192
+		const maxTokens: number | undefined =
+			options?.generation?.purpose === "compaction"
+				? options.generation.maxOutputTokens
+				: this.modelInfo?.capabilities?.maxTokens || 8192
 
 		if (reasoningOn) {
 			temperature = 0

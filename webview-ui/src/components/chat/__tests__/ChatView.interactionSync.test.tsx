@@ -215,7 +215,8 @@ function renderChat(
 
 describe("ChatView interaction anchor synchronization", () => {
 	beforeEach(() => {
-		mocks.compactTask.mockClear()
+		mocks.compactTask.mockReset()
+		mocks.compactTask.mockResolvedValue({ accepted: true, result: "accepted" })
 		mocks.dispatchInteraction.mockClear()
 		mocks.useChatState.mockClear()
 		mocks.chatState.inputValue = "draft"
@@ -286,6 +287,52 @@ describe("ChatView interaction anchor synchronization", () => {
 		expect(mocks.compactTask).not.toHaveBeenCalled()
 	})
 
+	it("keeps Compact mounted but disabled while backend compaction is active", () => {
+		const view = taskView()
+		view.contextCompaction = {
+			active: true,
+			operationId: "manual-compact:task-1:8",
+		}
+		renderChat([ASK], view)
+
+		const compactButton = screen.getByRole("button", { name: "Compact task" })
+		expect(compactButton).toBeInTheDocument()
+		expect(compactButton).toBeDisabled()
+		fireEvent.click(compactButton)
+		expect(mocks.compactTask).not.toHaveBeenCalled()
+	})
+
+	it("disables Compact immediately while its RPC is pending and rejects a duplicate dispatch", async () => {
+		let resolveCompact!: (value: { accepted: boolean; result: string }) => void
+		mocks.compactTask.mockImplementationOnce(
+			() =>
+				new Promise((resolve) => {
+					resolveCompact = resolve
+				}),
+		)
+		renderChat([ASK])
+		const compactButton = screen.getByRole("button", { name: "Compact task" })
+
+		fireEvent.click(compactButton)
+		await waitFor(() => expect(compactButton).toBeDisabled())
+		fireEvent.click(compactButton)
+		expect(mocks.compactTask).toHaveBeenCalledOnce()
+
+		await act(async () => {
+			resolveCompact({ accepted: true, result: "accepted" })
+		})
+	})
+
+	it("re-enables Compact when the dedicated task RPC rejects the request", async () => {
+		mocks.compactTask.mockResolvedValueOnce({ accepted: false, result: "stale_state" })
+		renderChat([ASK])
+		const compactButton = screen.getByRole("button", { name: "Compact task" })
+
+		fireEvent.click(compactButton)
+		await waitFor(() => expect(mocks.compactTask).toHaveBeenCalledOnce())
+		await waitFor(() => expect(compactButton).toBeEnabled())
+	})
+
 	it("routes Compact through the dedicated task RPC instead of the active interaction", async () => {
 		const view = taskView()
 		view.input.enterAction = "reject"
@@ -305,6 +352,29 @@ describe("ChatView interaction anchor synchronization", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Invoke Enter" }))
 
 		await waitFor(() => expect(mocks.dispatchInteraction).toHaveBeenCalledOnce())
+	})
+
+	it("submits the latest interaction revision after the same Q&A is reprojected", async () => {
+		const rendered = renderChat([ASK])
+		const updatedView = taskView()
+		updatedView.stateRevision = 11
+		if (!updatedView.activeInteraction) throw new Error("Expected active interaction")
+		updatedView.activeInteraction.stateRevision = 11
+		mocks.extensionState = {
+			...mocks.extensionState,
+			taskViewState: updatedView,
+		}
+		rendered.rerender(chatView())
+
+		fireEvent.click(screen.getByRole("button", { name: "Invoke Enter" }))
+
+		await waitFor(() => expect(mocks.dispatchInteraction).toHaveBeenCalledOnce())
+		expect(mocks.dispatchInteraction).toHaveBeenCalledWith(
+			expect.objectContaining({
+				interactionId: "interaction-1",
+				stateRevision: 11,
+			}),
+		)
 	})
 
 	it("submits condense feedback as Reject when Enter is pressed", async () => {

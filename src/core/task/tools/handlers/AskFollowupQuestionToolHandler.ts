@@ -9,7 +9,6 @@ import { ToolUse } from "../../../assistant-message"
 import { formatResponse } from "../../../prompts/responses"
 import { ToolResponse } from "../.."
 import type { InteractionOutcome } from "../../interaction/InteractionCoordinator"
-import { isCompactSignal } from "../../mode-switch-signal"
 import type { IPartialBlockHandler, IToolHandler } from "../ToolExecutorCoordinator"
 import { interactionId, interactionTurnId, type TaskConfig } from "../types/TaskConfig"
 import type { StronglyTypedUIHelpers } from "../types/UIHelpers"
@@ -86,9 +85,6 @@ export class AskFollowupQuestionToolHandler implements IToolHandler, IPartialBlo
 		const text = outcome.draft?.text
 		const images = outcome.draft?.images
 		const followupFiles = outcome.draft?.files
-		if (isCompactSignal(text)) {
-			return formatResponse.toolResult("Mode switch context compaction requested.")
-		}
 		const selectedOption =
 			options.find((option) => text === option) ??
 			options.filter((option) => text?.startsWith(`${option}: `)).sort((left, right) => right.length - left.length)[0]

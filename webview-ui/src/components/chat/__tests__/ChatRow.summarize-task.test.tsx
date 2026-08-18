@@ -59,6 +59,10 @@ describe("ChatRow summarizeTask rendering", () => {
 						compactionStatus: "retrying",
 						retryAttempt: 2,
 						maxRetryAttempts: 3,
+						compactionOperationId: "operation-1",
+						compactionPassIndex: 4,
+						compactionAttemptIndex: 2,
+						compactionAttemptId: "attempt-2",
 					}),
 				}}
 			/>,
@@ -68,9 +72,32 @@ describe("ChatRow summarizeTask rendering", () => {
 		expect(screen.getByText(/attempt 2 of 3/i)).toBeInTheDocument()
 		expect(screen.getByText("Partial summary (not applied):")).toBeInTheDocument()
 		expect(screen.queryByText("Summary:")).not.toBeInTheDocument()
+		expect(screen.getByTestId("compaction-pass")).toHaveAttribute("data-compaction-operation-id", "operation-1")
+		expect(screen.getByTestId("compaction-pass")).toHaveAttribute("data-compaction-pass-index", "4")
+		expect(screen.getByTestId("compaction-pass")).toHaveAttribute("data-compaction-attempt-index", "2")
+		expect(screen.getByTestId("compaction-pass")).toHaveAttribute("data-compaction-attempt-id", "attempt-2")
 	})
 
-	it("renders an actionable failed compaction state", () => {
+	it("does not render a historical empty running compaction payload", () => {
+		const { container } = render(
+			<ChatRowContent
+				{...baseProps}
+				isExpanded={true}
+				message={{
+					ts: 12,
+					type: "say",
+					say: "tool",
+					partial: true,
+					text: JSON.stringify({ tool: "summarizeTask", content: "", compactionStatus: "running" }),
+				}}
+			/>,
+		)
+
+		expect(container).toBeEmptyDOMElement()
+		expect(screen.queryByText(/Preparing a context-safe summary/i)).not.toBeInTheDocument()
+	})
+
+	it("renders a failed compaction marker without duplicating the API request error detail", () => {
 		render(
 			<ChatRowContent
 				{...baseProps}
@@ -91,7 +118,7 @@ describe("ChatRow summarizeTask rendering", () => {
 		)
 
 		expect(screen.getByText("Conversation compaction failed:")).toBeInTheDocument()
-		expect(screen.getByText("The summary exceeded the request output limit.")).toBeInTheDocument()
+		expect(screen.queryByText("The summary exceeded the request output limit.")).not.toBeInTheDocument()
 		expect(screen.queryByText("Dline is condensing the conversation:")).not.toBeInTheDocument()
 	})
 

@@ -20,6 +20,8 @@ interface StoredProfile {
 interface StoredSettings {
 	useAutoCondense?: boolean
 	autoCondenseTriggerPercent?: number
+	autoCondenseMinReserveTokens?: number
+	autoCondenseMaxReserveTokens?: number
 	autoCondenseMaxContextTokens?: number
 	actModeProfile?: string
 	planModeProfile?: string
@@ -156,6 +158,11 @@ e2e(
 
 			const triggerSlider = sidebar.locator('[aria-label="Compression point (%)"] [role="slider"]')
 			await setRangeValue(triggerSlider, 60)
+			const minReserveInput = sidebar.getByLabel("Minimum reserve (K tokens)")
+			const maxReserveInput = sidebar.getByLabel("Maximum reserve (K tokens)")
+			await minReserveInput.fill("10")
+			await maxReserveInput.fill("40")
+			await maxReserveInput.press("Tab")
 			const maxContextInput = sidebar.getByLabel("Maximum context (K tokens)")
 			await maxContextInput.fill("100")
 			await maxContextInput.press("Tab")
@@ -165,6 +172,8 @@ e2e(
 				.toMatchObject({
 					useAutoCondense: true,
 					autoCondenseTriggerPercent: 60,
+					autoCondenseMinReserveTokens: 10_000,
+					autoCondenseMaxReserveTokens: 40_000,
 					autoCondenseMaxContextTokens: 100_000,
 				})
 
@@ -184,6 +193,8 @@ e2e(
 				"aria-valuenow",
 				"60",
 			)
+			await expect(reopened.sidebar.getByLabel("Minimum reserve (K tokens)")).toHaveValue("10")
+			await expect(reopened.sidebar.getByLabel("Maximum reserve (K tokens)")).toHaveValue("40")
 			await expect(reopened.sidebar.getByLabel("Maximum context (K tokens)")).toHaveValue("100")
 
 			await reopened.sidebar.getByRole("button", { name: "Done", exact: true }).click()

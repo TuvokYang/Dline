@@ -360,9 +360,9 @@ message ResetStateRequest {
 
 message AutoApprovalSettingsRequest {
   Metadata metadata = 1;
-  int32 version = 2;
+  optional int32 version = 2;
   AutoApprovalActions actions = 3;
-  bool enable_notifications = 4;
+  optional bool enable_notifications = 4;
 }
 
 enum TelemetrySettingEnum {

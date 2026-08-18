@@ -28,6 +28,12 @@ import { selectFocusChainInstructionPolicy } from "./instruction-policy"
 import { FocusChainPrompts } from "./prompts"
 import { parseFocusChainListCounts } from "./utils"
 
+export interface FocusChainProjectionOptions {
+	preview?: boolean
+	mode?: Mode
+	didSwitchFromPlan?: boolean
+}
+
 export interface FocusChainDependencies {
 	taskId: string
 	taskState: TaskState
@@ -165,11 +171,11 @@ export class FocusChainManager {
 	 * @requires this.taskState with current focus chain list state and API request counts
 	 * @returns string - Formatted markdown instructions for focus chain list management, varies by context
 	 */
-	public generateFocusChainInstructions(): string {
+	public generateFocusChainInstructions(options: FocusChainProjectionOptions = {}): string {
 		// If rejection/warning message is pending, return it directly
 		if (this.taskState.focusChainRejectionMessage) {
 			const msg = this.taskState.focusChainRejectionMessage
-			this.taskState.focusChainRejectionMessage = null
+			if (!options.preview) this.taskState.focusChainRejectionMessage = null
 			return `\n\n${msg}\n`
 		}
 
@@ -226,11 +232,11 @@ export class FocusChainManager {
 				`
 		}
 		// When switching from Plan to Act, request that a new list be generated
-		if (this.taskState.didRespondToPlanAskBySwitchingMode) {
+		if (options.didSwitchFromPlan || this.taskState.didRespondToPlanAskBySwitchingMode) {
 			return `${FocusChainPrompts.initial}`
 		}
 		// When in plan mode, lists are optional
-		if (this.getMode() === "plan") {
+		if ((options.mode ?? this.getMode()) === "plan") {
 			return FocusChainPrompts.planModeReminder
 		}
 		// Check if we're early in the task
@@ -561,9 +567,9 @@ export class FocusChainManager {
 	 * @requires this.mode, this.taskState, and this.focusChainSettings to be initialized
 	 * @returns boolean - True if instructions should be included in AI prompt, false otherwise
 	 */
-	public shouldIncludeFocusChainInstructions(): boolean {
+	public shouldIncludeFocusChainInstructions(options: FocusChainProjectionOptions = {}): boolean {
 		// Include when switching from Plan > Act
-		const justSwitchedFromPlanMode = this.taskState.didRespondToPlanAskBySwitchingMode
+		const justSwitchedFromPlanMode = options.didSwitchFromPlan || this.taskState.didRespondToPlanAskBySwitchingMode
 		// Include when user had edited the list manually
 		const userUpdatedList = this.taskState.todoListWasUpdatedByUser
 		// Include when reaching the reminder interval, configured by settings

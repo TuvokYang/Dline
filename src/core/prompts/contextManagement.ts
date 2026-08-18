@@ -26,7 +26,7 @@ export const summarizeTask = (focusChainSettings?: { enabled: boolean }, cwd?: s
 		{},
 	).text
 
-	return `${COMPACTION_WINDOW_BUDGET_MARKER}\n\n${
+	return `${
 		runtimeGenerator.generate("contextManagement.summarizeMain", {
 			CWD,
 			MULTI_ROOT_HINT,
@@ -34,6 +34,7 @@ export const summarizeTask = (focusChainSettings?: { enabled: boolean }, cwd?: s
 			FOCUS_CHAIN_USAGE: focusChainUsage,
 			FOCUS_CHAIN_EXAMPLE: focusChainExample,
 			SUMMARY_DECISION: summaryDecision,
+			COMPACTION_WINDOW_BUDGET: COMPACTION_WINDOW_BUDGET_MARKER,
 		}).text
 	}\n`
 }

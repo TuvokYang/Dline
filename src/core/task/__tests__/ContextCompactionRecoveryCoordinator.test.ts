@@ -128,6 +128,7 @@ function createHarness(store: FittingRecoveryStore, activeOperationId?: string) 
 		applyCanonical: vi.fn(async () => undefined),
 		applyTransition: vi.fn(async () => undefined),
 	} as unknown as ContextCompactionRecoveryAdapter
+	const onRestorePrepared = vi.fn()
 	const onRecoveryFailure = vi.fn()
 	const sessionRestore = vi.fn(async (_operationId: string, request: ContextCompactionSessionRestoreRequest) => {
 		await request.prepare()
@@ -142,9 +143,16 @@ function createHarness(store: FittingRecoveryStore, activeOperationId?: string) 
 		store: async () => store,
 		adapter: () => adapter,
 		session: () => session,
+		onRestorePrepared,
 		onRecoveryFailure,
 	}
-	return { coordinator: new ContextCompactionRecoveryCoordinator(ports), adapter, sessionRestore, onRecoveryFailure }
+	return {
+		coordinator: new ContextCompactionRecoveryCoordinator(ports),
+		adapter,
+		sessionRestore,
+		onRestorePrepared,
+		onRecoveryFailure,
+	}
 }
 
 describe("ContextCompactionRecoveryCoordinator", () => {
@@ -162,7 +170,7 @@ describe("ContextCompactionRecoveryCoordinator", () => {
 
 	it("restores an inactive operation through the durable adapter and moves head to a new branch", async () => {
 		const { root, pass } = await appendPass(store)
-		const { coordinator, adapter, sessionRestore } = createHarness(store)
+		const { coordinator, adapter, sessionRestore, onRestorePrepared } = createHarness(store)
 
 		const restored = await coordinator.restore({
 			operationId,
@@ -173,6 +181,7 @@ describe("ContextCompactionRecoveryCoordinator", () => {
 
 		expect(sessionRestore).not.toHaveBeenCalled()
 		expect(adapter.applyRestore).toHaveBeenCalledOnce()
+		expect(onRestorePrepared).toHaveBeenCalledWith(operationId)
 		expect(restored).toMatchObject({
 			checkpointId: root.root.checkpointId,
 			phase: "prepared",
@@ -195,6 +204,28 @@ describe("ContextCompactionRecoveryCoordinator", () => {
 		expect(sessionRestore).toHaveBeenCalledOnce()
 		expect(adapter.applyRestore).toHaveBeenCalledOnce()
 		expect(restored.head.headCheckpointId).toBe(root.root.checkpointId)
+	})
+
+	it("keeps presentation ownership while restoring C0 after a failed Pass", async () => {
+		const { root, pass } = await appendPass(store)
+		const { coordinator, adapter, sessionRestore, onRestorePrepared } = createHarness(store, operationId)
+
+		const restored = await coordinator.restoreAfterFailure({
+			operationId,
+			target: { kind: "initial" },
+			expectedHeadCheckpointId: pass.head.headCheckpointId,
+			expectedChainRevision: pass.head.chainRevision,
+			completionPhase: "cancelled",
+		})
+
+		expect(sessionRestore).not.toHaveBeenCalled()
+		expect(adapter.applyRestore).toHaveBeenCalledOnce()
+		expect(onRestorePrepared).not.toHaveBeenCalled()
+		expect(restored).toMatchObject({
+			checkpointId: root.root.checkpointId,
+			phase: "cancelled",
+			head: { headCheckpointId: root.root.checkpointId, chainRevision: pass.head.chainRevision + 1 },
+		})
 	})
 
 	it("rejects barrier release while a transition commit journal has not applied canonical state", async () => {

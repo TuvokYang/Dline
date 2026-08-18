@@ -6,7 +6,7 @@ import { useDebouncedInput } from "../utils/useDebouncedInput"
  */
 interface ApiKeyFieldProps {
 	initialValue: string
-	onChange: (value: string) => void
+	onChange: (value: string) => void | Promise<unknown>
 	providerName: string
 	signupUrl?: string
 	placeholder?: string

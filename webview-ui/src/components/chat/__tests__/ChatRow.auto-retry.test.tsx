@@ -27,7 +27,7 @@ const baseProps = {
 	onToggleExpand: vi.fn(),
 }
 
-function renderRetry() {
+function renderRetry(failed = false) {
 	return render(
 		<ChatRowContent
 			{...baseProps}
@@ -40,6 +40,7 @@ function renderRetry() {
 					maxAttempts: 3,
 					delaySeconds: 2,
 					errorMessage: "Connection error.",
+					failed,
 				}),
 			}}
 		/>,
@@ -70,5 +71,12 @@ describe("ChatRow automatic retry status", () => {
 		expect(screen.getByText("Automatic retry in progress", { exact: true })).toBeVisible()
 		expect(screen.getByTestId("error-retry-countdown").textContent).toBe("Attempt 1 of 3 Retrying now")
 		expect(screen.queryByText(/0s/)).toBeNull()
+	})
+
+	it("shows a terminal stopped state after all automatic attempts are exhausted", () => {
+		renderRetry(true)
+
+		expect(screen.getByText("Automatic retry stopped", { exact: true })).toBeVisible()
+		expect(screen.getByTestId("error-retry-countdown").textContent).toBe("All 3 automatic attempts were used.")
 	})
 })

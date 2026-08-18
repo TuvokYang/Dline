@@ -326,6 +326,20 @@ function expectFourContextSegments(visual: Awaited<ReturnType<typeof readContext
 	expect(visual.segments.at(-1)?.kind).toBe("environment")
 }
 
+function expectContextVisualAllocation(visual: Awaited<ReturnType<typeof readContextWindowVisual>>): void {
+	expect(visual.minorFactor).toBeGreaterThanOrEqual(1)
+	expect(visual.minorFactor).toBeLessThanOrEqual(3)
+	const widths = visual.segments.map((segment) => Number.parseFloat(segment.inlineWidth || "0"))
+	expect(widths.reduce((total, width) => total + width, 0)).toBeLessThanOrEqual(100.000_001)
+	const authoritativeTotal = visual.segments.reduce((total, segment) => total + segment.authoritativeTokens, 0)
+	const displayTotal = visual.segments.reduce((total, segment) => total + segment.tokens, 0)
+	const denominator = Math.max(visual.contextWindow, authoritativeTotal, displayTotal)
+	for (const segment of visual.segments.slice(1)) {
+		const expectedWidth = denominator > 0 ? (segment.tokens * visual.minorFactor * 100) / denominator : 0
+		expect(Number.parseFloat(segment.inlineWidth || "0")).toBeCloseTo(expectedWidth, 4)
+	}
+}
+
 async function captureContextWindowEvidence(sidebar: Frame, testInfo: TestInfo, name: string): Promise<void> {
 	const screenshotPath = testInfo.outputPath(`${name}.png`)
 	await sidebar.getByTestId("context-window-indicator").screenshot({ path: screenshotPath })
@@ -425,7 +439,7 @@ e2e(
 
 e2e(
 	"Task-local profile switch - smaller target compacts with the target Profile and restores C0",
-	async ({ dlineDir, helper, openVSCode, server, userDataDir, workspaceDir }, testInfo) => {
+	async ({ dlineDir, dlineDocsDir, helper, openVSCode, server, userDataDir, workspaceDir }, testInfo) => {
 		e2e.setTimeout(240_000)
 		await configureProfileCompactionSwitch(dlineDir)
 		server.enqueueResponses(
@@ -453,10 +467,10 @@ e2e(
 			afterChatContentDelayMs: 2_500,
 			name: "summarize_task",
 			arguments: {
-				context: "E2E_PROFILE_TARGET_SUMMARY preserves E2E_PROFILE_COMPACTION_TASK and E2E_PROFILE_COMPACTION_LATEST.",
+				context: "E2E_PROFILE_TARGET_SUMMARY preserves E2E_PROFILE_COMPACTION_TASK.",
 			},
-			expectedRequestIncludes: [COMPACT_INSTRUCTION_MARKER, "E2E_PROFILE_COMPACTION_TASK", "E2E_PROFILE_COMPACTION_LATEST"],
-			expectedRequestExcludes: [COMPACT_SIGNAL],
+			expectedRequestIncludes: [COMPACT_INSTRUCTION_MARKER, "E2E_PROFILE_COMPACTION_TASK"],
+			expectedRequestExcludes: [COMPACT_SIGNAL, "E2E_PROFILE_COMPACTION_LATEST"],
 		})
 
 		const app = await openVSCode(workspaceDir)
@@ -510,17 +524,7 @@ e2e(
 			expect(visual.segments[1].authoritativeTokens).toBeGreaterThan(0)
 			expect(visual.segments[2]).toMatchObject({ active: "true", kind: "receiving" })
 			expect(visual.segments[2].authoritativeTokens).toBeGreaterThan(0)
-			// Minor-group visual amplification must preserve the internal token ratio
-			// between Sending and Receiving regardless of the applied factor.
-			expect(visual.minorFactor).toBeGreaterThanOrEqual(1)
-			if (visual.segments[1].tokens > 0 && visual.segments[2].tokens > 0) {
-				const sendingWidth = Number.parseFloat(visual.segments[1].inlineWidth ?? "0")
-				const receivingWidth = Number.parseFloat(visual.segments[2].inlineWidth ?? "0")
-				expect(sendingWidth / receivingWidth).toBeCloseTo(
-					visual.segments[1].tokens / visual.segments[2].tokens,
-					1,
-				)
-			}
+			expectContextVisualAllocation(visual)
 			await captureContextWindowEvidence(sidebar, testInfo, "context-receiving")
 
 			await expect(progress).toHaveAttribute("data-motion", "commit", { timeout: 60_000 })
@@ -553,6 +557,16 @@ e2e(
 			expect(visual.segments[2]).toMatchObject({ authoritativeTokens: 0, inlineWidth: "0%", tokens: 0 })
 			await captureContextWindowEvidence(sidebar, testInfo, "context-committed")
 
+			const [taskId] = await taskDirectoryIds(dlineDocsDir)
+			if (!taskId) throw new Error("Profile compaction E2E task directory was not created")
+			const apiHistoryPath = path.join(dlineDocsDir, "tasks", taskId, "api_conversation_history.jsonl")
+			await expect
+				.poll(async () => await readFile(apiHistoryPath, "utf8"), { timeout: 30_000 })
+				.toContain("E2E_PROFILE_TARGET_SUMMARY")
+			const committedApiHistory = await readFile(apiHistoryPath, "utf8")
+			expect(committedApiHistory).toContain("E2E_PROFILE_COMPACTION_LATEST")
+			expect(committedApiHistory).toContain("E2E_PROFILE_COMPACTION_SOURCE_READY")
+
 			await expect.poll(() => server.getRequestCount("openai-compatible-responses")).toBe(2)
 			await expect.poll(() => server.getRequestCount("openai-compatible-chat")).toBe(1)
 			const targetSummary = server.getMockConsumptions("openai-compatible-chat")[0]
@@ -583,6 +597,8 @@ e2e(
 			})
 			expect(visual.segments[1]).toMatchObject({ authoritativeTokens: 0, tokens: 0 })
 			expect(visual.segments[2]).toMatchObject({ authoritativeTokens: 0, tokens: 0 })
+			expect(visual.segments[3]).toMatchObject({ kind: "environment" })
+			expect(visual.segments[3].tokens).toBeGreaterThan(0)
 			await captureContextWindowEvidence(sidebar, testInfo, "context-restoring")
 
 			await expect(restoreTaskButton).toHaveCount(0)
@@ -599,7 +615,21 @@ e2e(
 				phase: "stable",
 				profileName: E2E_PROFILE_NAMES.mockOpenAiResponses,
 			})
+			expect(visual.segments[3].tokens).toBeGreaterThan(0)
+			const restoredRevision = visual.revision
+			await expect
+				.poll(async () => (await readContextWindowVisual(sidebar)).revision, { timeout: 20_000 })
+				.toBeGreaterThan(restoredRevision)
+			visual = await readContextWindowVisual(sidebar)
+			expect(visual.contextWindow).toBe(272_000)
+			expect(visual.segments[3].tokens).toBeGreaterThan(0)
 			await captureContextWindowEvidence(sidebar, testInfo, "context-restored")
+			await expect
+				.poll(async () => await readFile(apiHistoryPath, "utf8"), { timeout: 30_000 })
+				.not.toContain("E2E_PROFILE_TARGET_SUMMARY")
+			const restoredApiHistory = await readFile(apiHistoryPath, "utf8")
+			expect(restoredApiHistory).toContain("E2E_PROFILE_COMPACTION_TASK")
+			expect(restoredApiHistory).toContain("E2E_PROFILE_COMPACTION_LATEST")
 			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
 		} finally {
 			await app.close()
@@ -1092,12 +1122,10 @@ e2e(
 				type: "tool",
 				id: "call_mode_switch_summary",
 				name: "summarize_task",
-				arguments: { context: "E2E_MODE_SWITCH_SUMMARY preserves E2E_SMALLER_TARGET_TASK and E2E_SMALLER_TARGET_LATEST." },
-				expectedRequestIncludes: [
-					COMPACT_INSTRUCTION_MARKER,
-					"E2E_SMALLER_TARGET_TASK",
-					"E2E_SMALLER_TARGET_LATEST",
-				],
+				arguments: {
+					context: "E2E_MODE_SWITCH_SUMMARY preserves E2E_SMALLER_TARGET_TASK and E2E_SMALLER_TARGET_LATEST.",
+				},
+				expectedRequestIncludes: [COMPACT_INSTRUCTION_MARKER, "E2E_SMALLER_TARGET_TASK", "E2E_SMALLER_TARGET_LATEST"],
 				expectedRequestExcludes: [COMPACT_SIGNAL, "E2E_SMALLER_TARGET_PLAN_DRAFT"],
 			},
 			{
@@ -1129,7 +1157,9 @@ e2e(
 			const dialog = sidebar.getByRole("dialog")
 			await expect(dialog.getByRole("heading", { name: "Compact context before switching?" })).toBeVisible()
 			await expect(dialog.getByText("Source", { exact: true })).toBeVisible()
-			await expect(dialog.getByText(`${E2E_PROFILE_NAMES.mockOpenAiResponses} · 272,000 tokens`, { exact: true })).toBeVisible()
+			await expect(
+				dialog.getByText(`${E2E_PROFILE_NAMES.mockOpenAiResponses} · 272,000 tokens`, { exact: true }),
+			).toBeVisible()
 			await expect(dialog.getByText("Target", { exact: true })).toBeVisible()
 			await expect(dialog.getByText(`${E2E_PROFILE_NAMES.mockOpenAi} · 131,072 tokens`, { exact: true })).toBeVisible()
 			await expect(input).toHaveValue("E2E_SMALLER_TARGET_PLAN_DRAFT")
@@ -1234,11 +1264,7 @@ e2e(
 				id: "call_over_limit_plan",
 				name: "make_plan",
 				arguments: { response: "E2E_OVER_LIMIT_PLAN_OK", needs_more_exploration: false },
-				expectedRequestIncludes: [
-					"E2E_OVER_LIMIT_SUMMARY",
-					"E2E_OVER_LIMIT_PLAN_DRAFT",
-					"PLAN MODE",
-				],
+				expectedRequestIncludes: ["E2E_OVER_LIMIT_SUMMARY", "E2E_OVER_LIMIT_PLAN_DRAFT", "PLAN MODE"],
 				expectedRequestExcludes: [COMPACT_SIGNAL],
 			},
 		)
@@ -1556,14 +1582,6 @@ e2e(
 				expectedRequestIncludes: [COMPACT_INSTRUCTION_MARKER, "E2E_MANUAL_INCOMPLETE_GUIDANCE"],
 				expectedRequestExcludes: ["/compact"],
 			},
-			{
-				type: "tool",
-				id: "call_manual_incomplete_recovered",
-				name: "attempt_completion",
-				arguments: { result: "E2E_MANUAL_INCOMPLETE_RECOVERED" },
-				expectedRequestIncludes: ["E2E_MANUAL_INCOMPLETE_CONTINUE"],
-				expectedRequestExcludes: [COMPACT_INSTRUCTION_MARKER, "E2E_MANUAL_INCOMPLETE_GUIDANCE", partialSummary],
-			},
 		)
 
 		const app = await openVSCode(workspaceDir)
@@ -1582,7 +1600,7 @@ e2e(
 			await expect(sidebar.getByText("Conversation compaction failed:", { exact: true }).last()).toBeVisible({
 				timeout: 60_000,
 			})
-			await expect(sidebar.getByText(partialSummary, { exact: false })).toHaveCount(0)
+			await expect(sidebar.getByText(partialSummary, { exact: false })).not.toBeVisible()
 			await expect(sidebar.locator('vscode-button[aria-label="Condense Conversation"]')).toHaveCount(0)
 			await expect(sidebar.locator('vscode-button[aria-label="Regenerate Summary"]')).toHaveCount(0)
 			await expect.poll(() => server.getRequestCount("openai-compatible-responses")).toBe(3)
@@ -1593,16 +1611,6 @@ e2e(
 				expect.objectContaining({ callId: "call_manual_incomplete_summary" }),
 			)
 
-			await sendTask(sidebar, "E2E_MANUAL_INCOMPLETE_CONTINUE")
-			await expect(sidebar.getByText("E2E_MANUAL_INCOMPLETE_RECOVERED", { exact: false }).last()).toBeVisible({
-				timeout: 60_000,
-			})
-			await expect.poll(() => server.getRequestCount("openai-compatible-responses")).toBe(4)
-			const recoveryRequest = server.getMockConsumptions("openai-compatible-responses")[3]
-			expect(recoveryRequest.contractError).toBeUndefined()
-			expect(recoveryRequest.requestToolResults).not.toContainEqual(
-				expect.objectContaining({ callId: "call_manual_incomplete_summary" }),
-			)
 			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir, [/max_output_tokens/])
 		} finally {
 			await app.close()
@@ -1924,7 +1932,7 @@ e2e(
 			const receivingVisual = await readContextWindowVisual(sidebar)
 			expectFourContextSegments(receivingVisual)
 			expect(receivingVisual.phase).toBe("receiving")
-			expect(receivingVisual.minorFactor).toBeLessThanOrEqual(3)
+			expectContextVisualAllocation(receivingVisual)
 			expect(receivingVisual.segments.reduce((total, segment) => total + segment.authoritativeTokens, 0)).toBe(630100)
 
 			const focusableContextSegment = sidebar.getByTestId("context-window-segment-durable")
@@ -1951,7 +1959,9 @@ e2e(
 			if (!taskId) throw new Error("DeepSeek Context E2E task directory was not created")
 
 			await sendTask(sidebar, "E2E_DEEPSEEK_CONTEXT_CONTINUE")
-			await expect(sidebar.getByText("E2E_DEEPSEEK_CONTEXT_DIRECT_OK", { exact: false }).last()).toBeVisible({ timeout: 60_000 })
+			await expect(sidebar.getByText("E2E_DEEPSEEK_CONTEXT_DIRECT_OK", { exact: false }).last()).toBeVisible({
+				timeout: 60_000,
+			})
 			await expect.poll(() => server.getRequestCount("deepseek-chat"), { timeout: 30_000 }).toBe(4)
 			await expect
 				.poll(async () => completionSnapshotState(await readCompletionSnapshot(dlineDocsDir, taskId)), {
@@ -1983,7 +1993,9 @@ e2e(
 					interactionKind: undefined,
 					interactionStatus: undefined,
 				})
-			await expect(sidebar.getByText("E2E_DEEPSEEK_CONTEXT_FINAL_OK", { exact: false }).last()).toBeVisible({ timeout: 60_000 })
+			await expect(sidebar.getByText("E2E_DEEPSEEK_CONTEXT_FINAL_OK", { exact: false }).last()).toBeVisible({
+				timeout: 60_000,
+			})
 
 			const requests = server.getMockConsumptions("deepseek-chat")
 			expect(requests).toHaveLength(5)

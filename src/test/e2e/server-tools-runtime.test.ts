@@ -1,4 +1,4 @@
-import { access, cp, mkdir, readFile, rm, writeFile } from "node:fs/promises"
+import { access, cp, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises"
 import * as path from "node:path"
 import { expect, type Frame, type Locator, type Page } from "@playwright/test"
 import type { ElectronApplication } from "playwright"
@@ -41,6 +41,61 @@ interface SearchMechanisms {
 
 const profilesPath = (dlineDir: string) => path.join(dlineDir, "data", "settings", "api_profiles.json")
 const settingsPath = (dlineDir: string) => path.join(dlineDir, "data", "settings", "settings.json")
+
+async function onlyTaskId(dlineDocsDir: string): Promise<string> {
+	return E2ETestHelper.waitForValue(async () => {
+		const entries = await readdir(path.join(dlineDocsDir, "tasks"), { withFileTypes: true }).catch(() => [])
+		const taskIds = entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name)
+		return taskIds.length === 1 ? taskIds[0] : undefined
+	}, 30_000)
+}
+
+async function attachHostedWebScreenshot(page: Page, name: string): Promise<void> {
+	const testInfo = e2e.info()
+	const screenshotPath = testInfo.outputPath(`${name}.png`)
+	await page.screenshot({ path: screenshotPath })
+	await testInfo.attach(name, { path: screenshotPath, contentType: "image/png" })
+}
+
+async function attachHostedWebResumeEvidence(
+	page: Page,
+	dlineDir: string,
+	dlineDocsDir: string,
+	userDataDir: string,
+	name: string,
+): Promise<void> {
+	await attachHostedWebScreenshot(page, name)
+	const testInfo = e2e.info()
+	const taskId = await onlyTaskId(dlineDocsDir)
+	const taskDir = path.join(dlineDocsDir, "tasks", taskId)
+	const snapshot = await E2ETestHelper.waitForValue(async () => {
+		const content = await readFile(path.join(taskDir, "snapshot.json"), "utf8").catch(() => undefined)
+		if (!content) return undefined
+		const parsed = JSON.parse(content) as { interaction?: { kind?: string; status?: string } }
+		return parsed.interaction?.kind === "resume" && parsed.interaction.status === "awaiting" ? content : undefined
+	}, 30_000)
+	const uiMessages = await E2ETestHelper.waitForValue(async () => {
+		const content = await readFile(path.join(taskDir, "ui_messages.jsonl"), "utf8").catch(() => undefined)
+		return content?.includes('"ask":"resume_task"') ? content : undefined
+	}, 30_000)
+	const settings = await E2ETestHelper.waitForValue(async () => {
+		const content = await readFile(settingsPath(dlineDir), "utf8").catch(() => undefined)
+		if (!content) return undefined
+		const parsed = JSON.parse(content) as { autoApprovalSettings?: { actions?: { useWeb?: boolean } } }
+		return parsed.autoApprovalSettings?.actions?.useWeb === false ? content : undefined
+	}, 30_000)
+	const outputLog = await E2ETestHelper.readDlineOutput(userDataDir)
+	for (const evidence of [
+		{ fileName: `${name}-snapshot.json`, content: snapshot, contentType: "application/json" },
+		{ fileName: `${name}-ui_messages.jsonl`, content: uiMessages, contentType: "application/x-ndjson" },
+		{ fileName: `${name}-settings.json`, content: settings, contentType: "application/json" },
+		{ fileName: `${name}-dline-output.log`, content: outputLog, contentType: "text/plain" },
+	]) {
+		const evidencePath = testInfo.outputPath(evidence.fileName)
+		await writeFile(evidencePath, evidence.content, "utf8")
+		await testInfo.attach(evidence.fileName, { path: evidencePath, contentType: evidence.contentType })
+	}
+}
 
 async function prepareWebFetchBrowser(dlineHomeDir: string): Promise<void> {
 	const workerDirectoryName = path.basename(path.dirname(dlineHomeDir))
@@ -340,6 +395,159 @@ e2e(
 			await expect(restoredCard.getByText("https://example.test/openai-hosted", { exact: true })).toBeVisible()
 			await expect(restoredCard.getByText("E2E_OPENAI_HOSTED_RESULT_SNIPPET", { exact: true })).toBeVisible()
 
+			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+		} finally {
+			await app?.close()
+		}
+	},
+)
+
+e2e(
+	"ServerTool runtime - disabling Use Web prompts once and reuses manual Hosted approval for the current task",
+	async ({ dlineDir, dlineDocsDir, dlineHomeDir, helper, openVSCode, server, userDataDir, workspaceDir }) => {
+		e2e.setTimeout(180_000)
+		expectIsolatedDirectories(dlineDir, dlineHomeDir, dlineDocsDir)
+		await prepareRuntimeProfile(dlineDir, E2E_PROFILE_NAMES.mockOpenAiResponses, {
+			enabled: true,
+			mode: "WEB_SEARCH_MODE_AUTO",
+			supportsWebSearch: true,
+		})
+		await configureNormalApprovalMode(dlineDir)
+		const ready = "E2E_HOSTED_APPROVAL_LEASE_READY"
+		const approved = "E2E_HOSTED_APPROVAL_LEASE_APPROVED"
+		const firstReply = "E2E_HOSTED_APPROVAL_LEASE_FIRST_REPLY"
+		const secondReply = "E2E_HOSTED_APPROVAL_LEASE_SECOND_REPLY"
+		const completion = "E2E_HOSTED_APPROVAL_LEASE_OK"
+		server.enqueueResponses(
+			"openai-compatible-responses",
+			{
+				type: "tool",
+				id: "call_hosted_approval_lease_ready",
+				name: "qna_respond",
+				arguments: { response: ready },
+			},
+			{
+				type: "tool",
+				id: "call_hosted_approval_lease_approved",
+				name: "qna_respond",
+				arguments: { response: approved },
+				expectedRequestIncludes: [firstReply],
+			},
+			{
+				type: "tool",
+				id: "call_hosted_approval_lease_done",
+				name: "attempt_completion",
+				arguments: { result: completion },
+				expectedRequestIncludes: [secondReply],
+			},
+		)
+
+		let app: ElectronApplication | undefined
+		try {
+			const opened = await openSidebar(openVSCode, workspaceDir, helper)
+			app = opened.app
+			await setAutoApproveAction(opened.sidebar, "Use Web", true)
+			await sendTask(opened.sidebar, "Keep working after one manual Hosted Web approval.")
+			await expect(opened.sidebar.getByText(ready, { exact: true })).toBeVisible({ timeout: 60_000 })
+			await expect.poll(() => server.getMockConsumptions("openai-compatible-responses").length).toBe(1)
+
+			await setAutoApproveAction(opened.sidebar, "Use Web", false)
+			const input = opened.sidebar.getByTestId("chat-input")
+			await input.fill(firstReply)
+			await input.press("Enter")
+
+			const footer = opened.sidebar.getByRole("contentinfo")
+			const approveButton = footer.getByText("Approve", { exact: true })
+			await expect(approveButton).toBeVisible({ timeout: 60_000 })
+			expect(server.getMockConsumptions("openai-compatible-responses")).toHaveLength(1)
+			await approveButton.click()
+
+			await expect(opened.sidebar.getByText(approved, { exact: true })).toBeVisible({ timeout: 60_000 })
+			await expect.poll(() => server.getMockConsumptions("openai-compatible-responses").length).toBe(2)
+			await expect(approveButton).toHaveCount(0)
+
+			await input.fill(secondReply)
+			await input.press("Enter")
+			await expect(opened.sidebar.getByText(completion, { exact: false }).last()).toBeVisible({ timeout: 60_000 })
+			await expect.poll(() => server.getMockConsumptions("openai-compatible-responses").length).toBe(3)
+			await expect(approveButton).toHaveCount(0)
+			await attachHostedWebScreenshot(opened.page, "hosted-web-manual-approval-lease")
+			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+		} finally {
+			await app?.close()
+		}
+	},
+)
+
+e2e(
+	"ServerTool runtime - rejecting Hosted Web approval leaves an immediate durable Resume path",
+	async ({ dlineDir, dlineDocsDir, dlineHomeDir, helper, openVSCode, server, userDataDir, workspaceDir }) => {
+		e2e.setTimeout(180_000)
+		expectIsolatedDirectories(dlineDir, dlineHomeDir, dlineDocsDir)
+		await prepareRuntimeProfile(dlineDir, E2E_PROFILE_NAMES.mockOpenAiResponses, {
+			enabled: true,
+			mode: "WEB_SEARCH_MODE_AUTO",
+			supportsWebSearch: true,
+		})
+		await configureNormalApprovalMode(dlineDir)
+		const ready = "E2E_HOSTED_REJECT_RECOVERY_READY"
+		const rejectedDraft = "E2E_HOSTED_REJECT_RECOVERY_DRAFT"
+		server.enqueueResponses("openai-compatible-responses", {
+			type: "tool",
+			id: "call_hosted_reject_recovery_ready",
+			name: "qna_respond",
+			arguments: { response: ready },
+		})
+
+		let app: ElectronApplication | undefined
+		try {
+			const opened = await openSidebar(openVSCode, workspaceDir, helper)
+			app = opened.app
+			await setAutoApproveAction(opened.sidebar, "Use Web", true)
+			const taskText = "Pause safely when I reject Hosted Web access."
+			await sendTask(opened.sidebar, taskText)
+			await expect(opened.sidebar.getByText(ready, { exact: true })).toBeVisible({ timeout: 60_000 })
+			await expect.poll(() => server.getMockConsumptions("openai-compatible-responses").length).toBe(1)
+
+			await setAutoApproveAction(opened.sidebar, "Use Web", false)
+			const input = opened.sidebar.getByTestId("chat-input")
+			await input.fill(rejectedDraft)
+			await input.press("Enter")
+
+			const footer = opened.sidebar.getByRole("contentinfo")
+			const rejectButton = footer.getByText("Reject", { exact: true })
+			await expect(rejectButton).toBeVisible({ timeout: 60_000 })
+			expect(server.getMockConsumptions("openai-compatible-responses")).toHaveLength(1)
+			await rejectButton.click()
+
+			const resumeButton = footer.getByText("Resume", { exact: true })
+			await expect(resumeButton).toBeVisible({ timeout: 30_000 })
+			await expect(input).toBeEnabled()
+			expect(server.getMockConsumptions("openai-compatible-responses")).toHaveLength(1)
+			await expect(footer.getByText("Approve", { exact: true })).toHaveCount(0)
+			await expect(rejectButton).toHaveCount(0)
+			await attachHostedWebResumeEvidence(
+				opened.page,
+				dlineDir,
+				dlineDocsDir,
+				userDataDir,
+				"hosted-web-reject-immediate-resume",
+			)
+
+			await closeCurrentTask(opened.sidebar)
+			await reopenTask(opened.sidebar, taskText)
+			await expect(opened.sidebar.getByRole("contentinfo").getByText("Resume", { exact: true })).toBeVisible({
+				timeout: 30_000,
+			})
+			await expect(opened.sidebar.getByTestId("chat-input")).toBeEnabled()
+			expect(server.getMockConsumptions("openai-compatible-responses")).toHaveLength(1)
+			await attachHostedWebResumeEvidence(
+				opened.page,
+				dlineDir,
+				dlineDocsDir,
+				userDataDir,
+				"hosted-web-reject-reopened-resume",
+			)
 			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
 		} finally {
 			await app?.close()

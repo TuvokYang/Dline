@@ -18,6 +18,7 @@ import { _electron } from "playwright"
 import { ClineApiServerMock } from "../fixtures/server"
 import { type E2EProfileMode, type PreparedE2EState, prepareE2EState } from "./api-profile"
 import { E2E_OUTPUT_ROOT as E2E_OUTPUT_ROOT_PATH, E2E_RUN_ID as E2E_RUN_NAMESPACE } from "./run-context"
+import { resolveVSCodeDownloadPlatform, resolveVSCodeDownloadVersion } from "./vscode-version-resolver"
 
 interface E2ETaskDirectories {
 	dlineDir: string
@@ -300,11 +301,19 @@ export class E2ETestHelper {
 	}
 
 	public static async runCommandPalette(page: Page, command: string): Promise<void> {
-		await page.keyboard.press("F1")
+		await page.keyboard.press("ControlOrMeta+Shift+p")
 		const commandInput = page.locator(".quick-input-widget input").last()
 		await expect(commandInput).toBeVisible()
-		await commandInput.fill(command)
-		await commandInput.press("Enter")
+		await expect(commandInput).toHaveAttribute("placeholder", /command/i)
+		await commandInput.fill(`> ${command}`)
+		await expect(commandInput).toHaveAttribute("placeholder", /command/i)
+		await expect(commandInput).toHaveValue(`> ${command}`)
+		const commandOption = page
+			.locator(".quick-input-widget .monaco-list-row")
+			.filter({ has: page.getByText(command, { exact: true }) })
+		await expect(commandOption).toHaveCount(1)
+		await expect(commandOption).toBeVisible()
+		await commandOption.click()
 	}
 
 	private static findDlineOutputLogs(directory: string): string[] {
@@ -563,7 +572,15 @@ export const e2e = test
 			use,
 			testInfo,
 		) => {
-			const executablePath = await downloadAndUnzipVSCode(channel, undefined, new SilentReporter())
+			const vscodeCachePath = path.join(E2ETestHelper.CODEBASE_ROOT_DIR, ".vscode-test")
+			const vscodePlatform = resolveVSCodeDownloadPlatform()
+			const vscodeVersion = resolveVSCodeDownloadVersion(channel, vscodeCachePath, vscodePlatform)
+			const executablePath = await downloadAndUnzipVSCode({
+				version: vscodeVersion,
+				platform: vscodePlatform,
+				cachePath: vscodeCachePath,
+				reporter: new SilentReporter(),
+			})
 			const electronEnvironment = { ...process.env }
 			delete electronEnvironment.ELECTRON_RUN_AS_NODE
 			// Keep E2E terminals independent from the developer's active Conda session and profile auto-activation.

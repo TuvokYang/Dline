@@ -10,10 +10,41 @@ import PROVIDERS from "@shared/providers/providers.json"
 import { Logger } from "@shared/services/Logger"
 import { expect } from "chai"
 import { afterEach, beforeEach, describe, it, vi } from "vitest"
-import { getApiProfiles, readApiProfiles, writeApiProfilesToFile } from "../getApiProfiles"
+import {
+	getApiProfiles,
+	normalizeApiProfile,
+	readApiProfiles,
+	serializeApiProfilesForStorage,
+	writeApiProfilesToFile,
+} from "../getApiProfiles"
 import { updateApiProfiles } from "../updateApiProfiles"
 
 describe("getApiProfiles", () => {
+	it("treats a legacy Profile without enabled as active", () => {
+		const profile = normalizeApiProfile({
+			id: "legacy-deepseek",
+			name: "deepseek:deepseek-v4-pro:2",
+			provider: "deepseek",
+			modelId: "deepseek-v4-pro",
+		})
+
+		expect(profile.enabled).to.equal(true)
+	})
+
+	it("persists an explicitly disabled Profile as disabled", () => {
+		const stored = serializeApiProfilesForStorage([
+			ApiProfile.create({
+				id: "disabled-deepseek",
+				name: "disabled-deepseek",
+				provider: "deepseek",
+				modelId: "deepseek-v4-pro",
+				enabled: false,
+			}),
+		]) as Array<Record<string, unknown>>
+
+		expect(stored[0].enabled).to.equal(false)
+	})
+
 	let tempDir: string
 	let originalDlineHomeDir: string | undefined
 	let originalDlineDir: string | undefined
@@ -322,10 +353,11 @@ describe("getApiProfiles", () => {
 		const response = await getApiProfiles(controller, EmptyRequest.create({}))
 
 		expect(response.profiles).to.have.length(1)
-		// Non-override providers (deepseek, anthropic, etc.) no longer
-		// hydrate modelInfo from the registry — stale top-level modelInfo
-		// is cleared to prevent a read-merge-strip loop.
-		expect(response.profiles[0].modelInfo).to.be.undefined
+		// Runtime consumers receive current registry capabilities, while the
+		// persisted Profile still omits the derived snapshot.
+		expect(response.profiles[0].modelInfo?.capabilities?.contextWindow).to.equal(272_000)
+		expect(response.profiles[0].modelInfo?.capabilities?.maxTokens).to.equal(128_000)
+		expect(response.profiles[0].modelInfo?.capabilities?.supportsPromptCache).to.equal(true)
 
 		const storedProfiles = JSON.parse(await fs.readFile(storedProfilesPath, "utf8"))
 		expect(storedProfiles[0]).not.to.have.property("modelInfo")
@@ -689,6 +721,80 @@ describe("getApiProfiles", () => {
 		expect(repairedProfiles[0].id).to.equal("deepseek-profile")
 		expect(repairedRaw.trim().endsWith("]")).to.equal(true)
 		expect(repairedRaw).not.to.include('"outputPrice": 0')
+	})
+
+	it("initializes absent global bindings with stable ID and display name", async () => {
+		const settingsDir = path.join(process.env.DLINE_DIR!, "data", "settings")
+		await fs.mkdir(settingsDir, { recursive: true })
+		await fs.writeFile(
+			path.join(settingsDir, "api_profiles.json"),
+			JSON.stringify([
+				{
+					id: "initial-profile",
+					name: "Initial Profile",
+					provider: "openai",
+					modelId: "gpt-initial",
+					usedFor: ["plan", "act"],
+					enabled: true,
+				},
+			]),
+			"utf8",
+		)
+		const setGlobalState = vi.fn()
+		const flushPendingState = vi.fn().mockResolvedValue(undefined)
+		const controller = {
+			stateManager: {
+				getApiConfiguration: () => ({}),
+				setGlobalState,
+				flushPendingState,
+			},
+			postStateToWebview: vi.fn().mockResolvedValue(undefined),
+		} as any
+
+		await getApiProfiles(controller, EmptyRequest.create({}))
+
+		expect(setGlobalState.mock.calls).to.deep.include(["planModeProfileId", "initial-profile"])
+		expect(setGlobalState.mock.calls).to.deep.include(["planModeProfile", "Initial Profile"])
+		expect(setGlobalState.mock.calls).to.deep.include(["actModeProfileId", "initial-profile"])
+		expect(setGlobalState.mock.calls).to.deep.include(["actModeProfile", "Initial Profile"])
+		expect(flushPendingState.mock.calls.length).to.equal(2)
+	})
+
+	it("does not replace an explicitly missing stable Profile ID with a fallback", async () => {
+		const settingsDir = path.join(process.env.DLINE_DIR!, "data", "settings")
+		await fs.mkdir(settingsDir, { recursive: true })
+		await fs.writeFile(
+			path.join(settingsDir, "api_profiles.json"),
+			JSON.stringify([
+				{
+					id: "fallback-id",
+					name: "Fallback Profile",
+					provider: "openai",
+					modelId: "gpt-fallback",
+					usedFor: ["plan", "act"],
+					enabled: true,
+				},
+			]),
+			"utf8",
+		)
+		const setGlobalState = vi.fn()
+		const controller = {
+			stateManager: {
+				getApiConfiguration: () => ({
+					planModeProfileId: "missing-id",
+					planModeProfile: "Deleted Profile",
+					actModeProfileId: "missing-id",
+					actModeProfile: "Deleted Profile",
+				}),
+				setGlobalState,
+				flushPendingState: vi.fn().mockResolvedValue(undefined),
+			},
+			postStateToWebview: vi.fn().mockResolvedValue(undefined),
+		} as any
+
+		await getApiProfiles(controller, EmptyRequest.create({}))
+
+		expect(setGlobalState.mock.calls).to.have.length(0)
 	})
 
 	it("caches synchronous profile reads until the profile file changes", async () => {

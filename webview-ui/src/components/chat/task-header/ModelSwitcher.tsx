@@ -1,5 +1,6 @@
 import { CheckIcon, SettingsIcon } from "lucide-react"
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
+import { createPortal } from "react-dom"
 import { useApiProfiles } from "@/components/settings/providers/useApiProfiles"
 import { updateSetting } from "@/components/settings/utils/settingsHandlers"
 import { Switch } from "@/components/ui/switch"
@@ -33,6 +34,9 @@ const ModelSwitcher: React.FC<ModelSwitcherProps> = ({ onOpenSettings }) => {
 	const { profiles, selectProfile, selectProfiles } = useApiProfiles()
 	const [open, setOpen] = useState(false)
 	const [activeTab, setActiveTab] = useState<ModeTab>(mode || "act")
+	const [menuPosition, setMenuPosition] = useState<{ left: number; bottom: number }>()
+	const containerRef = useRef<HTMLDivElement>(null)
+	const menuRef = useRef<HTMLDivElement>(null)
 	const [hoveredId, setHoveredId] = useState<string | null>(null)
 
 	// A completed Task can remain open and accept another turn even when its
@@ -44,6 +48,30 @@ const ModelSwitcher: React.FC<ModelSwitcherProps> = ({ onOpenSettings }) => {
 	useEffect(() => {
 		if (!open) setActiveTab(mode || "act")
 	}, [mode, open])
+
+	useEffect(() => {
+		if (!open) return
+		const updateMenuPosition = (): void => {
+			const anchor = containerRef.current?.getBoundingClientRect()
+			if (!anchor) return
+			setMenuPosition({ left: anchor.left, bottom: window.innerHeight - anchor.top + 4 })
+		}
+		const handlePointerDown = (event: PointerEvent): void => {
+			const target = event.target
+			if (target instanceof Node && !containerRef.current?.contains(target) && !menuRef.current?.contains(target)) {
+				setOpen(false)
+			}
+		}
+		updateMenuPosition()
+		document.addEventListener("pointerdown", handlePointerDown)
+		window.addEventListener("resize", updateMenuPosition)
+		window.addEventListener("scroll", updateMenuPosition, true)
+		return () => {
+			document.removeEventListener("pointerdown", handlePointerDown)
+			window.removeEventListener("resize", updateMenuPosition)
+			window.removeEventListener("scroll", updateMenuPosition, true)
+		}
+	}, [open])
 
 	// Resolve currently selected Profile identity and legacy display name per mode.
 	const planProfileId = apiConfiguration?.planModeProfileId
@@ -119,7 +147,10 @@ const ModelSwitcher: React.FC<ModelSwitcherProps> = ({ onOpenSettings }) => {
 	}, [profiles, planActSeparateModelsSetting, activeTab])
 
 	return (
-		<div style={{ flex: "1 1 auto", minWidth: 0, position: "relative" }}>
+		<div
+			className="flex h-4 min-w-0 items-center"
+			ref={containerRef}
+			style={{ flex: "1 1 auto", position: "relative", zIndex: open ? 50 : undefined }}>
 			<ProfileSwitchDialog
 				onCancel={profileSwitchFlow.cancelSwitch}
 				onConfirm={profileSwitchFlow.confirmSwitch}
@@ -132,23 +163,31 @@ const ModelSwitcher: React.FC<ModelSwitcherProps> = ({ onOpenSettings }) => {
 			/>
 			<button
 				aria-label="Select model"
-				className="bg-transparent border-0 cursor-pointer p-0 text-xs text-description w-full text-left truncate disabled:cursor-not-allowed disabled:opacity-60"
+				className="inline-flex h-4 w-full min-w-0 items-center bg-transparent border-0 cursor-pointer p-0 text-xs leading-none text-description text-left truncate disabled:cursor-not-allowed disabled:opacity-60"
 				disabled={profileSwitchFlow.isSwitchPending}
-				onClick={() => setOpen(!open)}
+				onClick={() => {
+					if (open) {
+						setOpen(false)
+						return
+					}
+					const anchor = containerRef.current?.getBoundingClientRect()
+					if (anchor) setMenuPosition({ left: anchor.left, bottom: window.innerHeight - anchor.top + 4 })
+					setOpen(true)
+				}}
 				title={tooltip}
 				type="button">
 				{profileSwitchFlow.statusText ? `${displayLine} · ${profileSwitchFlow.statusText}` : displayLine}
 			</button>
 
-			{open && (
-				<>
-					<div className="fixed inset-0 z-40" onClick={() => setOpen(false)} onKeyDown={() => {}} />
+			{open &&
+				menuPosition &&
+				createPortal(
 					<div
-						className="absolute z-50 rounded shadow-lg border"
+						className="fixed z-[2000] rounded border shadow-lg"
+						ref={menuRef}
 						style={{
-							bottom: "100%",
-							left: 0,
-							marginBottom: 4,
+							bottom: menuPosition.bottom,
+							left: menuPosition.left,
 							minWidth: 280,
 							maxHeight: 360,
 							overflowY: "auto",
@@ -298,9 +337,9 @@ const ModelSwitcher: React.FC<ModelSwitcherProps> = ({ onOpenSettings }) => {
 								)
 							})
 						)}
-					</div>
-				</>
-			)}
+					</div>,
+					document.body,
+				)}
 		</div>
 	)
 }

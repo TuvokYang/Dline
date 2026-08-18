@@ -220,6 +220,7 @@ export class GeminiHandler implements ApiHandler {
 							yield {
 								type: "tool_calls",
 								function_id: toolCallId,
+								argumentsMode: "snapshot",
 								provider_metadata: { response_id: chunk.responseId },
 								tool_call: {
 									function: {

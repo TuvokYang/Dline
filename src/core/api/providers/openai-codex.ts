@@ -14,6 +14,7 @@ import { ApiFormat, ServerTool } from "@/shared/proto/dline/models/metadata"
 import { FeatureFlag } from "@/shared/services/feature-flags/feature-flags"
 import { Logger } from "@/shared/services/Logger"
 import { AccountUsage, ApiHandler, ApiHandlerContext, type ApiRequestOptions } from "../"
+import { isOutputLimitExceededError, OutputLimitExceededError } from "../stream/OutputLimitExceededError"
 import { convertToOpenAIResponsesInput } from "../transform/openai-response-format"
 import {
 	createResponsesRegistry,
@@ -91,7 +92,7 @@ export class OpenAiCodexHandler implements ApiHandler {
 		return this.reasoningConfig?.effort
 	}
 	private get serviceTier() {
-		return normalizeOpenAiServiceTier(this.config?.serviceTier)
+		return this.config?.serviceTierEnabled === false ? undefined : normalizeOpenAiServiceTier(this.config?.serviceTier)
 	}
 
 	supportsServerTool(tool: ServerTool): boolean {
@@ -321,6 +322,7 @@ export class OpenAiCodexHandler implements ApiHandler {
 		const reasoningEffort = normalizeOpenaiReasoningEffort(this.reasoningEffort)
 		const includeReasoning = enableThinking && reasoningEffort !== "none"
 		const hostedWebSearch = options?.serverTools?.includes(ServerTool.WEB_SEARCH) === true
+		const maxOutputTokens = options?.generation?.purpose === "compaction" ? options.generation.maxOutputTokens : undefined
 		const include = [
 			...(includeReasoning ? ["reasoning.encrypted_content"] : []),
 			...(hostedWebSearch ? ["web_search_call.results", "web_search_call.action.sources"] : []),
@@ -334,6 +336,7 @@ export class OpenAiCodexHandler implements ApiHandler {
 			instructions: systemPrompt,
 			...(this.serviceTier ? { service_tier: this.serviceTier } : {}),
 			...(previousResponseId ? { previous_response_id: previousResponseId } : {}),
+			...(maxOutputTokens === undefined ? {} : { max_output_tokens: maxOutputTokens }),
 			...(include.length > 0 ? { include } : {}),
 			...(includeReasoning
 				? {
@@ -394,6 +397,9 @@ export class OpenAiCodexHandler implements ApiHandler {
 					yield* this.createResponseStreamWebsocket(requestBody, fallbackRequestBody, accessToken, codexHeaders, model)
 					return
 				} catch (error) {
+					if (isOutputLimitExceededError(error)) {
+						throw error
+					}
 					Logger.error("OpenAI Codex websocket mode failed, falling back to HTTP Responses API:", error)
 					this.closeResponsesWebsocket()
 				}
@@ -428,7 +434,10 @@ export class OpenAiCodexHandler implements ApiHandler {
 						yield outChunk
 					}
 				}
-			} catch (_sdkErr) {
+			} catch (error) {
+				if (isOutputLimitExceededError(error)) {
+					throw error
+				}
 				// Fallback to manual SSE via fetch
 				yield* this.makeCodexRequest(requestBody, model, accessToken)
 			}
@@ -584,7 +593,11 @@ export class OpenAiCodexHandler implements ApiHandler {
 				}
 
 				eventQueue.push(parsed as OpenAI.Responses.ResponseStreamEvent)
-				if (parsed?.type === "response.completed" || parsed?.type === "response.failed") {
+				if (
+					parsed?.type === "response.completed" ||
+					parsed?.type === "response.failed" ||
+					parsed?.type === "response.incomplete"
+				) {
 					completed = true
 				}
 				wake()
@@ -710,6 +723,9 @@ export class OpenAiCodexHandler implements ApiHandler {
 
 			yield* this.handleStreamResponse(response.body, model)
 		} catch (error) {
+			if (isOutputLimitExceededError(error)) {
+				throw error
+			}
 			if (error instanceof Error) {
 				throw new Error(`Codex API error: ${error.message}`)
 			}
@@ -767,6 +783,14 @@ export class OpenAiCodexHandler implements ApiHandler {
 		const webSearchChunk = mapResponsesWebSearchEvent(event)
 		if (webSearchChunk) {
 			yield webSearchChunk
+		}
+
+		if (
+			event?.type === "response.incomplete" &&
+			event?.response?.status === "incomplete" &&
+			event?.response?.incomplete_details?.reason === "max_output_tokens"
+		) {
+			throw new OutputLimitExceededError("openai_responses", "max_output_tokens")
 		}
 
 		// Handle text deltas

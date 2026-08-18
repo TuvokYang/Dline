@@ -5,9 +5,9 @@ import { useDebouncedInput } from "./utils/useDebouncedInput"
 
 const TerminalOutputLineLimitSlider: React.FC = () => {
 	const { terminalOutputLineLimit } = useExtensionState()
-	const [localValue, setLocalValue] = useDebouncedInput(terminalOutputLineLimit ?? 500, (value) => {
-		void updateSetting("terminalOutputLineLimit", value)
-	})
+	const [localValue, setLocalValue] = useDebouncedInput(terminalOutputLineLimit ?? 500, (value) =>
+		updateSetting("terminalOutputLineLimit", value),
+	)
 
 	const handleSliderChange = (event: React.ChangeEvent<HTMLInputElement>) => {
 		const value = Number.parseInt(event.target.value, 10)

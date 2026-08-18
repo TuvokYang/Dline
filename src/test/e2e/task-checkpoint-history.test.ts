@@ -26,6 +26,7 @@ async function closeCurrentTask(sidebar: Frame): Promise<void> {
 	const closeButton = sidebar.getByRole("button", { name: "Close Task", exact: true })
 	await expect(closeButton).toBeVisible()
 	await closeButton.click()
+	await expect(closeButton).toHaveCount(0, { timeout: 30_000 })
 	await expect(sidebar.getByTestId("chat-input")).toBeVisible()
 	await E2ETestHelper.dismissWhatsNewModal(sidebar)
 }
@@ -34,6 +35,7 @@ async function reopenTask(sidebar: Frame, taskText: string): Promise<void> {
 	const historyTask = sidebar.getByText(taskText, { exact: true }).last()
 	await expect(historyTask).toBeVisible({ timeout: 30_000 })
 	await historyTask.click()
+	await expect(sidebar.getByRole("button", { name: "Close Task", exact: true })).toBeVisible({ timeout: 30_000 })
 	await expect(sidebar.getByText(taskText, { exact: true }).first()).toBeVisible()
 }
 
@@ -722,6 +724,18 @@ e2e(
 		await expect(sidebar.getByRole("button", { name: "Copy command" }).last()).toBeVisible()
 		await expect(taskFooter.getByText("Approve", { exact: true })).toHaveCount(0)
 		await expect(taskFooter.getByText("Reject", { exact: true })).toHaveCount(0)
+		const expandTaskHeader = sidebar.getByLabel("Expand task header")
+		if (await expandTaskHeader.isVisible()) await expandTaskHeader.click()
+		const progress = sidebar.getByTestId("context-window-segmented-progress")
+		await expect(progress).toHaveAttribute("data-phase", "stable", { timeout: 30_000 })
+		await expect(progress).toHaveAttribute("data-context-window", /^[1-9]\d*$/)
+		await expect(sidebar.locator('[title="Maximum context window size for this model"]')).toHaveText(/[1-9]/)
+		const environmentSegment = sidebar.getByTestId("context-window-segment-environment")
+		await expect(environmentSegment).toHaveAttribute("data-tokens", /^[1-9]\d*$/, { timeout: 30_000 })
+		const restoredRevision = Number((await progress.getAttribute("data-revision")) ?? 0)
+		await expect
+			.poll(async () => Number((await progress.getAttribute("data-revision")) ?? 0), { timeout: 20_000 })
+			.toBeGreaterThan(restoredRevision)
 		await page.waitForTimeout(750)
 		expect(server.openAiRequestCount).toBe(2)
 		await expect(sidebar.getByText("E2E_HISTORY_COMPLETED_COMMAND_CLOSED_MUST_NOT_RENDER", { exact: false })).toHaveCount(0)
@@ -741,6 +755,7 @@ e2e(
 				content: expect.stringContaining("E2E_HISTORY_COMPLETED_COMMAND_STDOUT"),
 			}),
 		)
+		expect(JSON.stringify(continuation.requestBody)).toContain("<environment_details>")
 		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
 	},
 )

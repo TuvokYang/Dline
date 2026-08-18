@@ -1,5 +1,6 @@
 import assert from "node:assert/strict"
 import fs from "node:fs/promises"
+import { DlineTempManager } from "@services/temp"
 import { EventEmitter } from "events"
 import { afterEach, describe, it, vi } from "vitest"
 import { Logger } from "@/shared/services/Logger"
@@ -268,12 +269,15 @@ describe("CommandOrchestrator background transitions", () => {
 		assert.match(result.result as string, /Command is running in the background/i)
 	})
 
-	it("kills a synchronous command at its absolute timeout without handing it to the background tracker", async () => {
+	it("kills a synchronous command at its absolute timeout and returns its existing log path", async () => {
 		vi.useFakeTimers()
 		const process = new FakeTerminalProcess()
 		const onProceedWhileRunning = vi.fn(() => ({ backgroundCommandId: "unexpected-background" }))
 		const onTimeout = vi.fn()
-		const execution = orchestrateCommandExecution(process.asResultPromise(), createTerminalManager(), createCallbacks(), {
+		const activityId = "command_timeout_log_contract"
+		const expectedLogPath = DlineTempManager.createTempFilePath(activityId)
+		const execution = orchestrateCommandExecution(process.asResultPromise(), createTerminalManager(1), createCallbacks(), {
+			activityId,
 			command: "blocking-command",
 			onProceedWhileRunning,
 			onTimeout,
@@ -281,18 +285,27 @@ describe("CommandOrchestrator background transitions", () => {
 			timeoutSeconds: 60,
 		})
 
-		await vi.advanceTimersByTimeAsync(10_000)
-		assert.equal(onProceedWhileRunning.mock.calls.length, 0)
-		assert.equal(process.terminate.mock.calls.length, 0)
+		process.emitOutput("first line before timeout", "stdout")
+		process.emitOutput("second line before timeout", "stderr")
 
-		await vi.advanceTimersByTimeAsync(50_000)
-		const result = await execution
+		try {
+			await vi.advanceTimersByTimeAsync(10_000)
+			assert.equal(onProceedWhileRunning.mock.calls.length, 0)
+			assert.equal(process.terminate.mock.calls.length, 0)
 
-		assert.equal(onProceedWhileRunning.mock.calls.length, 0)
-		assert.equal(onTimeout.mock.calls.length, 1)
-		assert.equal(process.terminate.mock.calls.length, 1)
-		assert.equal(result.timedOut, true)
-		assert.match(result.result as string, /60-second timeout/i)
+			await vi.advanceTimersByTimeAsync(50_000)
+			const result = await execution
+
+			assert.equal(onProceedWhileRunning.mock.calls.length, 0)
+			assert.equal(onTimeout.mock.calls.length, 1)
+			assert.equal(process.terminate.mock.calls.length, 1)
+			assert.equal(result.timedOut, true)
+			assert.match(result.result as string, /60-second timeout/i)
+			assert.equal(result.logFilePath, expectedLogPath)
+			assert.equal((result.result as string).split("\n").at(-1), `Full output saved to: ${expectedLogPath}`)
+		} finally {
+			await fs.rm(expectedLogPath, { force: true })
+		}
 	})
 
 	it.each([0, -1, -2])("keeps a synchronous command with timeout %s alive until it completes", async (timeoutSeconds) => {
@@ -433,21 +446,31 @@ describe("CommandOrchestrator exit status messaging", () => {
 		assert.doesNotMatch(result.result as string, /\nOutput:\n/)
 	})
 
-	it("reports non-zero exit codes as command failures", async () => {
+	it("reports non-zero exit codes with the existing log path on its own result line", async () => {
 		const process = new FakeTerminalProcess()
+		const activityId = "command_failed_log_contract"
+		const expectedLogPath = DlineTempManager.createTempFilePath(activityId)
 		const orchestrationPromise = orchestrateCommandExecution(
 			process.asResultPromise(),
-			createTerminalManager(),
+			createTerminalManager(1),
 			createCallbacks(),
-			{ command: "false" },
+			{ activityId, command: "false" },
 		)
 
+		process.emitOutput("failure detail one", "stderr")
+		process.emitOutput("failure detail two", "stderr")
 		process.complete({ exitCode: 2, signal: null })
 		const result: OrchestrationResult = await orchestrationPromise
 
-		assert.equal(result.completed, true)
-		assert.equal(result.exitCode, 2)
-		assert.match(result.result as string, /^Command failed with exit code 2\./)
+		try {
+			assert.equal(result.completed, true)
+			assert.equal(result.exitCode, 2)
+			assert.match(result.result as string, /^Command failed with exit code 2\./)
+			assert.equal(result.logFilePath, expectedLogPath)
+			assert.equal((result.result as string).split("\n").at(-1), `Full output saved to: ${expectedLogPath}`)
+		} finally {
+			await fs.rm(expectedLogPath, { force: true })
+		}
 	})
 
 	it("marks an approved command with a non-zero exit code as failed", async () => {

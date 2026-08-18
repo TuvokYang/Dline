@@ -3,15 +3,33 @@ import userEvent from "@testing-library/user-event"
 import { describe, expect, it, vi } from "vitest"
 import { TaskRateMetrics } from "./TaskRateMetrics"
 
+const defaultProps = {
+	cacheHitRate: 0,
+	cacheReads: 0,
+	cacheWrites: 0,
+	currency: "USD",
+	isCostAvailable: false,
+	requestsPerMinute: 3,
+	taskId: "task-1",
+	tokensOut: 250,
+	tokensPerMinute: 4_500,
+	totalCost: 0,
+	totalInputTokens: 1_250,
+}
+
 describe("TaskRateMetrics", () => {
-	it("renders the green rate capsule as a semantic button without active seconds", () => {
-		render(<TaskRateMetrics requestsPerMinute={3} taskId="task-1" tokensPerMinute={4_500} />)
+	it("renders one unified capsule with In/Out before secondary rate metrics", () => {
+		render(<TaskRateMetrics {...defaultProps} />)
 
 		const button = screen.getByRole("button", { name: /View API rate history/ })
-		expect(button).not.toHaveTextContent("Active:")
-		expect(button).toHaveAttribute("aria-label", "View API rate history. Requests per minute: 3; tokens per minute: 4500")
+		expect(button).toHaveAttribute("id", "price-tag")
+		expect(button).toHaveAttribute("title", "In: 1250 / Out: 250 / Cache read: 0 / Cache write: 0")
+		expect(button).toHaveTextContent("In:1.3K")
+		expect(button).toHaveTextContent("Out:250")
 		expect(button).toHaveTextContent("RPM:3")
 		expect(button).toHaveTextContent("TPM:4.5K")
+		expect(button.textContent?.indexOf("In:1.3K")).toBeLessThan(button.textContent?.indexOf("RPM:3") ?? -1)
+		expect(button.querySelectorAll("button")).toHaveLength(0)
 		expect(button).toHaveClass("rounded-full", "bg-success/80", "text-background")
 	})
 
@@ -20,7 +38,7 @@ describe("TaskRateMetrics", () => {
 		const user = userEvent.setup()
 		render(
 			<div onClick={parentClick} onKeyDown={parentClick}>
-				<TaskRateMetrics requestsPerMinute={3} taskId="task-1" tokensPerMinute={4_500} />
+				<TaskRateMetrics {...defaultProps} />
 			</div>,
 		)
 

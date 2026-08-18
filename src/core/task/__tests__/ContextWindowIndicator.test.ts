@@ -247,4 +247,41 @@ describe("ContextWindowIndicator", () => {
 			lineage: restoreLineage,
 		})
 	})
+
+	it("refreshes dynamic environment and Provider scope only while stable", () => {
+		const indicator = createIndicator()
+		const refreshed = indicator.refreshStable({
+			environmentTokens: 45,
+			contextWindow: 2_000,
+			profileName: "refreshed-profile",
+			mode: "plan",
+			updatedAt: 2,
+		})
+		const sending = indicator.beginSend({
+			lineage: { kind: "ordinary", requestId: "request", requestSequence: 1, attemptId: "attempt" },
+			durableContextTokens: 100,
+			pendingSendTokens: 10,
+			environmentTokens: 45,
+			contextWindow: 2_000,
+			profileName: "refreshed-profile",
+			mode: "plan",
+			updatedAt: 3,
+		})
+		const ignored = indicator.refreshStable({
+			environmentTokens: 90,
+			contextWindow: 4_000,
+			profileName: "stale-profile",
+			mode: "act",
+			updatedAt: 4,
+		})
+
+		expect(refreshed).toMatchObject({
+			phase: "stable",
+			environmentTokens: 45,
+			contextWindow: 2_000,
+			profileName: "refreshed-profile",
+			mode: "plan",
+		})
+		expect(ignored).toEqual(sending)
+	})
 })

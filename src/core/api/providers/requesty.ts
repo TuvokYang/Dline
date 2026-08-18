@@ -9,6 +9,7 @@ import { ApiHandler, ApiHandlerContext } from "../index"
 import { withRetry } from "../retry"
 import { convertToOpenAiMessages } from "../transform/openai-format"
 import { ApiStream } from "../transform/stream"
+import { splitInclusiveInputUsage } from "../transform/usage-normalization"
 
 // Requesty usage includes an extra field for Anthropic use cases.
 // Safely cast the prompt token details section to the appropriate structure.
@@ -144,19 +145,26 @@ export class RequestyHandler implements ApiHandler {
 
 		if (lastUsage) {
 			const usage = lastUsage as RequestyUsage
-			const inputTokens = usage.prompt_tokens || 0
+			const totalInputTokens = usage.prompt_tokens || 0
 			const outputTokens = usage.completion_tokens || 0
-			const cacheWriteTokens = usage.prompt_tokens_details?.caching_tokens || undefined
-			const cacheReadTokens = usage.prompt_tokens_details?.cached_tokens || undefined
-			const totalCost = calculateApiCostOpenAI(model.info, inputTokens, outputTokens, cacheWriteTokens, cacheReadTokens)
+			const inputUsage = splitInclusiveInputUsage({
+				totalInputTokens,
+				cacheWriteTokens: usage.prompt_tokens_details?.caching_tokens,
+				cacheReadTokens: usage.prompt_tokens_details?.cached_tokens,
+			})
+			const totalCost = calculateApiCostOpenAI(
+				model.info,
+				totalInputTokens,
+				outputTokens,
+				inputUsage.cacheWriteTokens,
+				inputUsage.cacheReadTokens,
+			)
 
 			yield {
 				type: "usage",
-				inputTokens: inputTokens,
-				outputTokens: outputTokens,
-				cacheWriteTokens: cacheWriteTokens,
-				cacheReadTokens: cacheReadTokens,
-				totalCost: totalCost,
+				...inputUsage,
+				outputTokens,
+				totalCost,
 			}
 		}
 	}

@@ -108,6 +108,10 @@ interface MockResponseOptions {
 	beforeUsageDelayMs?: number
 	/** Keep the stream open after the final Provider usage event. */
 	afterUsageHoldMs?: number
+	/** Split native tool arguments into multiple provider stream events. */
+	toolArgumentChunkSize?: number
+	/** Delay between native tool argument stream events. */
+	toolArgumentChunkDelayMs?: number
 	/** Select this response by request contract instead of strict FIFO order. */
 	matchRequestContract?: boolean
 	usage?: MockTokenUsage
@@ -226,6 +230,15 @@ function getResponseToolCalls(response: Exclude<OpenAiMockResponse, { type: "err
 	if (response.type === "tools") return response.tools
 	if (response.type === "hosted-web-search") return response.followupTools ?? []
 	return []
+}
+
+function splitStreamText(text: string, chunkSize?: number): string[] {
+	if (!chunkSize || chunkSize <= 0 || text.length <= chunkSize) return [text]
+	const chunks: string[] = []
+	for (let offset = 0; offset < text.length; offset += chunkSize) {
+		chunks.push(text.slice(offset, offset + chunkSize))
+	}
+	return chunks
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -983,6 +996,47 @@ export class ClineApiServerMock {
 								])
 								if (!(await waitAfterReasoning())) return
 								writeChunk([{ index: 0, delta: responseDelta, finish_reason: null }])
+							} else if (toolCalls.length > 0 && scriptedResponse.toolArgumentChunkSize) {
+								for (const [toolIndex, toolCall] of toolCalls.entries()) {
+									const argumentChunks = splitStreamText(
+										toolCall.function.arguments,
+										scriptedResponse.toolArgumentChunkSize,
+									)
+									for (const [chunkIndex, argumentChunk] of argumentChunks.entries()) {
+										writeChunk([
+											{
+												index: toolIndex,
+												delta: {
+													...(chunkIndex === 0
+														? {
+																role: "assistant",
+																tool_calls: [
+																	{
+																		index: toolIndex,
+																		id: toolCall.id,
+																		type: "function",
+																		function: {
+																			name: toolCall.function.name,
+																			arguments: argumentChunk,
+																		},
+																	},
+																],
+															}
+														: {
+																tool_calls: [
+																	{
+																		index: toolIndex,
+																		function: { arguments: argumentChunk },
+																	},
+																],
+															}),
+												},
+												finish_reason: null,
+											},
+										])
+										if (!(await waitForOpenConnection(scriptedResponse.toolArgumentChunkDelayMs))) return
+									}
+								}
 							} else {
 								writeChunk([
 									{
@@ -1196,15 +1250,19 @@ export class ClineApiServerMock {
 									scriptedResponse.type === "truncated-tool"
 										? outputItem.arguments.slice(0, scriptedResponse.truncateAfter)
 										: outputItem.arguments
-								writeSse(
-									{
-										type: "response.function_call_arguments.delta",
-										item_id: outputItem.id,
-										output_index: outputIndex,
-										delta: deltaArguments,
-									},
-									"response.function_call_arguments.delta",
-								)
+								const argumentChunks = splitStreamText(deltaArguments, scriptedResponse.toolArgumentChunkSize)
+								for (const argumentChunk of argumentChunks) {
+									writeSse(
+										{
+											type: "response.function_call_arguments.delta",
+											item_id: outputItem.id,
+											output_index: outputIndex,
+											delta: argumentChunk,
+										},
+										"response.function_call_arguments.delta",
+									)
+									if (!(await waitForOpenConnection(scriptedResponse.toolArgumentChunkDelayMs))) return
+								}
 								if (scriptedResponse.type === "tool-with-completion-snapshots") {
 									writeSse(
 										{
@@ -1482,14 +1540,21 @@ export class ClineApiServerMock {
 								},
 								"content_block_start",
 							)
-							writeSse(
-								{
-									type: "content_block_delta",
-									index: contentBlockIndex,
-									delta: { type: "input_json_delta", partial_json: JSON.stringify(tool.arguments) },
-								},
-								"content_block_delta",
+							const argumentChunks = splitStreamText(
+								JSON.stringify(tool.arguments),
+								scriptedResponse.toolArgumentChunkSize,
 							)
+							for (const argumentChunk of argumentChunks) {
+								writeSse(
+									{
+										type: "content_block_delta",
+										index: contentBlockIndex,
+										delta: { type: "input_json_delta", partial_json: argumentChunk },
+									},
+									"content_block_delta",
+								)
+								if (!(await waitForOpenConnection(scriptedResponse.toolArgumentChunkDelayMs))) return
+							}
 							writeSse({ type: "content_block_stop", index: contentBlockIndex }, "content_block_stop")
 						}
 					} else {
@@ -1512,6 +1577,7 @@ export class ClineApiServerMock {
 						)
 						writeSse({ type: "content_block_stop", index: contentBlockIndex }, "content_block_stop")
 					}
+					if (!(await waitForOpenConnection(scriptedResponse.beforeUsageDelayMs))) return
 					writeSse(
 						{
 							type: "message_delta",
@@ -1523,6 +1589,7 @@ export class ClineApiServerMock {
 						},
 						"message_delta",
 					)
+					if (!(await waitForOpenConnection(scriptedResponse.afterUsageHoldMs))) return
 					writeSse({ type: "message_stop" }, "message_stop")
 					res.end()
 					return

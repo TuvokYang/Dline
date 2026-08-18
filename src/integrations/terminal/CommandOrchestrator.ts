@@ -21,6 +21,7 @@ import { COMMAND_CANCEL_TOKEN } from "@shared/ExtensionMessage"
 import * as fs from "fs"
 import { Logger } from "@/shared/services/Logger"
 import { isCommandCompletionSuccessful } from "./command-completion"
+import { appendCommandLogPath } from "./command-result"
 import {
 	BUFFER_STUCK_TIMEOUT_MS,
 	CHUNK_BYTE_SIZE,
@@ -721,15 +722,20 @@ export async function orchestrateCommandExecution(
 					await clearCommandState(process.getCompletionDetails?.(), true)
 					await finishFileBased()
 					const currentOutput = formatOutput(output)
+					const logFilePath = largeOutputLogPath ?? undefined
 					return {
 						userRejected: false,
-						result: `Command reached its ${timeoutSeconds}-second timeout and was terminated.${
-							currentOutput.length > 0 ? `\nOutput captured before termination:\n${currentOutput}` : ""
-						}`,
+						result: appendCommandLogPath(
+							`Command reached its ${timeoutSeconds}-second timeout and was terminated.${
+								currentOutput.length > 0 ? `\nOutput captured before termination:\n${currentOutput}` : ""
+							}`,
+							logFilePath,
+						),
 						completed: false,
 						timedOut: true,
 						...splitTerminalOutput(output),
 						...process.getCompletionDetails?.(),
+						logFilePath,
 					}
 				}
 			} finally {
@@ -779,14 +785,18 @@ export async function orchestrateCommandExecution(
 	const resultLines = splitTerminalOutput(resultOutput)
 
 	if (didCancelViaUi) {
+		const logFilePath = largeOutputLogPath ?? undefined
 		return {
 			userRejected: true,
-			result: formatResponse.toolResult(
-				`Command cancelled. ${result.length > 0 ? `\nOutput captured before cancellation:\n${result}` : ""}`,
+			result: appendCommandLogPath(
+				formatResponse.toolResult(
+					`Command cancelled. ${result.length > 0 ? `\nOutput captured before cancellation:\n${result}` : ""}`,
+				),
+				logFilePath,
 			),
 			completed: false,
 			...resultLines,
-			logFilePath: largeOutputLogPath || undefined,
+			logFilePath,
 			exitCode: completionDetails?.exitCode,
 			signal: completionDetails?.signal,
 		}

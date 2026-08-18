@@ -179,13 +179,17 @@ export class AnthropicHandler implements ApiHandler {
 				: { type: "enabled", budget_tokens: budget_tokens }
 			: undefined
 		const outputConfig = isAdaptiveThinkingModel && adaptiveThinkingEffort ? { effort: adaptiveThinkingEffort } : undefined
+		const maxOutputTokens =
+			options?.generation?.purpose === "compaction"
+				? options.generation.maxOutputTokens
+				: model.info.capabilities?.maxTokens || 8192
 
 		if (model.info.capabilities?.supportsPromptCache) {
 			const anthropicMessages = sanitizeAnthropicMessages(messages, true)
 			const requestBody: AnthropicMessageCreateParamsStreaming & Record<string, unknown> = {
 				model: apiModelId,
 				thinking: thinkingConfig,
-				max_tokens: model.info.capabilities?.maxTokens || 8192,
+				max_tokens: maxOutputTokens,
 				// "Thinking isn't compatible with temperature, top_p, or top_k modifications as well as forced tool use."
 				// (https://docs.anthropic.com/en/docs/build-with-claude/extended-thinking#important-considerations-when-using-extended-thinking)
 				// Adaptive Claude Opus models do not support temperature.
@@ -231,7 +235,7 @@ export class AnthropicHandler implements ApiHandler {
 		} else {
 			const requestBody: AnthropicMessageCreateParamsStreaming & Record<string, unknown> = {
 				model: apiModelId,
-				max_tokens: model.info.capabilities?.maxTokens || 8192,
+				max_tokens: maxOutputTokens,
 				temperature: isAdaptiveThinkingModel ? undefined : reasoningOn ? undefined : 0,
 				system: [{ text: systemPrompt, type: "text" }],
 				messages: sanitizeAnthropicMessages(messages, false),

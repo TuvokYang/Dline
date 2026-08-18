@@ -10,6 +10,7 @@ import { withRetry } from "../retry"
 import { convertToOpenAiMessages } from "../transform/openai-format"
 import { ApiStream } from "../transform/stream"
 import { getOpenAIToolParams, ToolCallProcessor } from "../transform/tool-call-processor"
+import { splitInclusiveInputUsage } from "../transform/usage-normalization"
 
 export class XAIHandler implements ApiHandler {
 	private client: OpenAI | undefined
@@ -102,13 +103,16 @@ export class XAIHandler implements ApiHandler {
 			}
 
 			if (chunk.usage) {
+				const inputUsage = splitInclusiveInputUsage({
+					totalInputTokens: chunk.usage.prompt_tokens,
+					cacheReadTokens: chunk.usage.prompt_tokens_details?.cached_tokens,
+					// @ts-expect-error-next-line
+					cacheWriteTokens: chunk.usage.prompt_cache_miss_tokens,
+				})
 				yield {
 					type: "usage",
-					inputTokens: chunk.usage.prompt_tokens || 0,
+					...inputUsage,
 					outputTokens: chunk.usage.completion_tokens || 0,
-					cacheReadTokens: chunk.usage.prompt_tokens_details?.cached_tokens || 0,
-					// @ts-expect-error-next-line
-					cacheWriteTokens: chunk.usage.prompt_cache_miss_tokens || 0,
 				}
 			}
 		}

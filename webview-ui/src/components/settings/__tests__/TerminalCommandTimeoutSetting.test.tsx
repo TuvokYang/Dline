@@ -5,10 +5,11 @@ import TerminalCommandTimeoutSetting from "../TerminalCommandTimeoutSetting"
 
 const mocks = vi.hoisted(() => ({
 	updateSetting: vi.fn(),
+	useExtensionState: vi.fn(() => ({ terminalCommandTimeoutSeconds: 1800 })),
 }))
 
 vi.mock("@/context/ExtensionStateContext", () => ({
-	useExtensionState: () => ({ terminalCommandTimeoutSeconds: 1800 }),
+	useExtensionState: mocks.useExtensionState,
 }))
 
 vi.mock("@vscode/webview-ui-toolkit/react", () => ({
@@ -22,6 +23,7 @@ vi.mock("../utils/settingsHandlers", () => ({
 describe("TerminalCommandTimeoutSetting", () => {
 	beforeEach(() => {
 		mocks.updateSetting.mockClear()
+		mocks.useExtensionState.mockReturnValue({ terminalCommandTimeoutSeconds: 1800 })
 	})
 
 	it("shows minutes and persists the backend value in seconds", () => {
@@ -32,6 +34,20 @@ describe("TerminalCommandTimeoutSetting", () => {
 		fireEvent.input(input, { target: { value: "45" } })
 
 		expect(mocks.updateSetting).toHaveBeenCalledWith("terminalCommandTimeoutSeconds", 2700)
+	})
+
+	it("does not replace an active edit with a stale persisted value", () => {
+		const { rerender } = render(<TerminalCommandTimeoutSetting />)
+		const input = screen.getByLabelText("Terminal command timeout (minutes)") as HTMLInputElement
+
+		fireEvent.focus(input)
+		fireEvent.input(input, { target: { value: "42" } })
+		expect(input.value).toBe("42")
+
+		mocks.useExtensionState.mockReturnValue({ terminalCommandTimeoutSeconds: 240 })
+		rerender(<TerminalCommandTimeoutSetting />)
+
+		expect(input.value).toBe("42")
 	})
 
 	it("does not persist values below one minute", () => {

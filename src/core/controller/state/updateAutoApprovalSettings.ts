@@ -9,29 +9,12 @@ import { Controller } from ".."
  * @returns Empty response
  */
 export async function updateAutoApprovalSettings(controller: Controller, request: AutoApprovalSettingsRequest): Promise<Empty> {
-	const currentSettings = (await controller.getStateToPostToWebview()).autoApprovalSettings
-	const incomingVersion = request.version
-	const currentVersion = currentSettings?.version ?? 1
-
-	// Only update if incoming version is higher
-	if (incomingVersion > currentVersion) {
-		// Merge with current settings to preserve unspecified fields
-		const settings = {
-			...currentSettings,
-			...(request.version !== undefined && { version: request.version }),
-			...(request.enableNotifications !== undefined && { enableNotifications: request.enableNotifications }),
-			actions: {
-				...currentSettings.actions,
-				...(request.actions
-					? Object.fromEntries(Object.entries(request.actions).filter(([_, v]) => v !== undefined))
-					: {}),
-			},
-		}
-
-		controller.stateManager.setGlobalState("autoApprovalSettings", settings)
-
-		await controller.postStateToWebview()
-	}
-
+	await controller.stateManager.updateAutoApprovalSettings({
+		version: request.version,
+		enableNotifications: request.enableNotifications,
+		actions: request.actions
+			? Object.fromEntries(Object.entries(request.actions).filter(([_, value]) => value !== undefined))
+			: undefined,
+	})
 	return Empty.create()
 }

@@ -1,3 +1,4 @@
+import { indexLogicalTurns } from "@core/context/context-management/logical-turns"
 import type { ClineStorageMessage, ClineUserToolResultContentBlock } from "@shared/messages"
 import type { ClineContent } from "@shared/messages/content"
 import { describe, expect, it } from "vitest"
@@ -14,13 +15,17 @@ interface BoundaryTaskHarness {
 	messageStateHandler: {
 		apiConversationHistory: ClineStorageMessage[]
 	}
-	getOrdinaryContextCompactionBoundary(): {
+	getOrdinaryContextCompactionBoundary(pendingContent?: readonly ClineContent[]): {
+		sourceHistory: ClineStorageMessage[]
+		targetContinuationHistory: ClineStorageMessage[]
+	}
+	getTaskHeaderContextCompactionBoundary(): {
 		sourceHistory: ClineStorageMessage[]
 		targetContinuationHistory: ClineStorageMessage[]
 	}
 }
 
-function createHarness(): BoundaryTaskHarness {
+function createHarness(toolName = "qna_respond"): BoundaryTaskHarness {
 	const history: ClineStorageMessage[] = [
 		{
 			role: "user",
@@ -32,7 +37,7 @@ function createHarness(): BoundaryTaskHarness {
 			content: [
 				{
 					type: "tool_use",
-					name: "qna_respond",
+					name: toolName,
 					input: { response: "question" },
 					dline_tid: "tid-qna",
 					function_id: "fn-qna",
@@ -76,8 +81,34 @@ describe("Task ordinary context compaction boundary", () => {
 		const boundary = task.getOrdinaryContextCompactionBoundary()
 
 		expect(boundary.targetContinuationHistory).toEqual([])
-		expect(boundary.sourceHistory.length).toBe(2)
+		expect(boundary.sourceHistory.length).toBe(3)
 		expect(boundary.sourceHistory[1]?.role).toBe("assistant")
+		expect(boundary.sourceHistory[2]?.role).toBe("user")
+		expect(JSON.stringify(boundary.sourceHistory)).not.toContain("user reply")
+	})
+
+	it("uses request-local pending tool results after mutable Task state has been cleared", () => {
+		const task = createHarness()
+		const requestLocalContent = [pendingToolResult()]
+
+		const boundary = task.getOrdinaryContextCompactionBoundary(requestLocalContent)
+
+		expect(task.taskState.userMessageContent).toEqual([])
+		expect(boundary.targetContinuationHistory).toEqual([])
+		expect(boundary.sourceHistory.length).toBe(3)
+		expect(boundary.sourceHistory[1]?.role).toBe("assistant")
+		expect(boundary.sourceHistory[2]?.role).toBe("user")
+		expect(JSON.stringify(boundary.sourceHistory)).not.toContain("user reply")
+	})
+
+	it("returns a pairing-safe source when pending tagged feedback closes the previous conversational tool", () => {
+		const task = createHarness()
+		const boundary = task.getOrdinaryContextCompactionBoundary([pendingToolResult()])
+
+		const sourceIndex = indexLogicalTurns(boundary.sourceHistory)
+		expect(sourceIndex.turns).toHaveLength(1)
+		expect(sourceIndex.protectedTail).toEqual([])
+		expect(sourceIndex.issues).toEqual([])
 		expect(JSON.stringify(boundary.sourceHistory)).not.toContain("user reply")
 	})
 
@@ -163,10 +194,72 @@ describe("Task ordinary context compaction boundary", () => {
 
 		const boundary = task.getOrdinaryContextCompactionBoundary()
 
-		expect(boundary.targetContinuationHistory).toEqual([])
-		expect(boundary.sourceHistory.length).toBe(4)
-		expect(boundary.sourceHistory[3]?.role).toBe("assistant")
+		expect(indexLogicalTurns(boundary.sourceHistory).issues).toEqual([])
+		expect(boundary.sourceHistory.length).toBe(3)
+		expect(boundary.targetContinuationHistory.length).toBe(2)
+		expect(JSON.stringify(boundary.targetContinuationHistory)).toContain("fn-attempt")
 		expect(JSON.stringify(boundary.sourceHistory)).not.toContain("please continue")
+		expect(JSON.stringify(boundary.targetContinuationHistory)).not.toContain("please continue")
+	})
+
+	it("keeps the latest completed-by-pending turn protected when earlier turns remain compressible", () => {
+		const task = createHarness()
+		task.messageStateHandler.apiConversationHistory = [
+			{ role: "user", content: [{ type: "text", text: "turn A" }], ts: 1 },
+			{
+				role: "assistant",
+				content: [{ type: "tool_use", name: "qna_respond", input: {}, dline_tid: "tid-a", function_id: "fn-a" }],
+				ts: 2,
+			},
+			{
+				role: "user",
+				content: [
+					{
+						...pendingToolResult("<feedback>\nturn B request\n</feedback>"),
+						dline_tid: "tid-a",
+						function_id: "fn-a",
+					},
+				],
+				ts: 3,
+			},
+			{
+				role: "assistant",
+				content: [{ type: "tool_use", name: "qna_respond", input: {}, dline_tid: "tid-b", function_id: "fn-b" }],
+				ts: 4,
+			},
+			{
+				role: "user",
+				content: [
+					{
+						...pendingToolResult("<feedback>\nturn C request\n</feedback>"),
+						dline_tid: "tid-b",
+						function_id: "fn-b",
+					},
+				],
+				ts: 5,
+			},
+			{
+				role: "assistant",
+				content: [{ type: "tool_use", name: "qna_respond", input: {}, dline_tid: "tid-c", function_id: "fn-c" }],
+				ts: 6,
+			},
+		]
+		const pendingResultC = {
+			...pendingToolResult("<feedback>\ncontinuation request\n</feedback>"),
+			dline_tid: "tid-c",
+			function_id: "fn-c",
+		}
+
+		const boundary = task.getOrdinaryContextCompactionBoundary([pendingResultC])
+		const sourceText = JSON.stringify(boundary.sourceHistory)
+		const continuationText = JSON.stringify(boundary.targetContinuationHistory)
+
+		expect(indexLogicalTurns(boundary.sourceHistory).issues).toEqual([])
+		expect(sourceText).toContain("fn-a")
+		expect(sourceText).toContain("fn-b")
+		expect(sourceText).not.toContain("fn-c")
+		expect(continuationText).toContain("fn-c")
+		expect(continuationText).not.toContain("continuation request")
 	})
 
 	it("pairs pending results for multiple different tools in one view", () => {
@@ -246,5 +339,39 @@ describe("Task ordinary context compaction boundary", () => {
 		// the upcoming round's own content and must not appear in the tail.
 		expect(boundary.sourceHistory.length).toBe(3)
 		expect(boundary.targetContinuationHistory).toEqual([])
+	})
+
+	it.each([
+		"qna_respond",
+		"attempt_completion",
+		"make_plan",
+		"generate_report",
+		"new_task",
+	])("projects an awaiting %s presentation as a pairing-safe task-header source", (toolName) => {
+		const task = createHarness(toolName)
+		const canonicalBefore = structuredClone(task.messageStateHandler.apiConversationHistory)
+
+		const boundary = task.getTaskHeaderContextCompactionBoundary()
+
+		expect(indexLogicalTurns(boundary.sourceHistory)).toMatchObject({
+			turns: [{ startIndex: 0, endIndex: 2 }],
+			protectedTail: [],
+			issues: [],
+		})
+		expect(boundary.targetContinuationHistory).toEqual([canonicalBefore[1]])
+		expect(boundary.targetContinuationHistory[0]?.role).toBe("assistant")
+		expect(JSON.stringify(boundary.targetContinuationHistory)).toContain("fn-qna")
+		expect(task.messageStateHandler.apiConversationHistory).toEqual(canonicalBefore)
+	})
+
+	it("does not synthesize task-header completion for an unpaired side-effect tool", () => {
+		const task = createHarness("read_file")
+		const canonicalBefore = structuredClone(task.messageStateHandler.apiConversationHistory)
+
+		const boundary = task.getTaskHeaderContextCompactionBoundary()
+
+		expect(boundary.sourceHistory).toEqual([])
+		expect(boundary.targetContinuationHistory).toEqual(canonicalBefore)
+		expect(task.messageStateHandler.apiConversationHistory).toEqual(canonicalBefore)
 	})
 })

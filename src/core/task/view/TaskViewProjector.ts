@@ -42,6 +42,8 @@ export interface TaskViewProjectionOptions {
 	autoRetryPending?: boolean
 	commandHandoffActivityId?: string
 	commandHandoffRequested?: boolean
+	contextCompactionOperationId?: string
+	forceTruncateAvailable?: boolean
 }
 
 /** Project complete Webview state from backend-owned task state. */
@@ -49,18 +51,37 @@ export function projectTaskView(
 	state: Readonly<TaskRuntimeState>,
 	options: Readonly<TaskViewProjectionOptions> = {},
 ): TaskViewState {
+	const contextCompaction = options.contextCompactionOperationId
+		? { active: true as const, operationId: options.contextCompactionOperationId }
+		: undefined
 	if (state.phase === TaskPhase.CANCELLING) {
 		return {
 			taskId: state.taskId,
 			phase: state.phase,
 			stateRevision: state.revision,
+			...(contextCompaction ? { contextCompaction } : {}),
 			input: { ...DISABLED_INPUT },
 			footer: { actions: [{ ...CANCELLING_ACTION }] },
+		}
+	}
+	if (state.profileInvalid) {
+		return {
+			taskId: state.taskId,
+			phase: state.phase,
+			stateRevision: state.revision,
+			profileInvalid: { ...state.profileInvalid },
+			...(contextCompaction ? { contextCompaction } : {}),
+			input: { ...DISABLED_INPUT },
+			footer: { actions: [] },
 		}
 	}
 
 	const interaction = state.interaction ? projectInteraction(state.interaction, state.revision) : undefined
 	const diagnostic = state.interaction?.status === "opening" && !state.error ? undefined : interaction?.diagnostic
+	const forceTruncateAvailable =
+		options.forceTruncateAvailable === true &&
+		state.interaction?.kind === "error_retry" &&
+		state.interaction.status === "awaiting"
 	const isCancellable = CANCELLABLE_PHASES.has(state.phase)
 	const interactionIsBeingResolved = state.interaction?.status === "resolving"
 	const projectedActions =
@@ -91,6 +112,8 @@ export function projectTaskView(
 		stateRevision: state.revision,
 		activeInteraction: interaction?.view,
 		...(diagnostic ? { diagnostic } : {}),
+		...(contextCompaction ? { contextCompaction } : {}),
+		...(forceTruncateAvailable ? { forceTruncateAvailable: true } : {}),
 		input: interaction?.input ?? { ...DISABLED_INPUT },
 		footer: { actions },
 	}

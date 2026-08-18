@@ -4,6 +4,15 @@ import React from "react"
 import { describe, expect, it, vi } from "vitest"
 import OpenAIServiceTierSelector from "./OpenAIServiceTierSelector"
 
+vi.mock("@vscode/webview-ui-toolkit/react", () => ({
+	VSCodeCheckbox: ({ checked, children, onChange }: any) => (
+		<label>
+			<input checked={checked} onChange={onChange} type="checkbox" />
+			{children}
+		</label>
+	),
+}))
+
 vi.mock("@/components/ui/label", () => ({
 	Label: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
 }))
@@ -37,7 +46,13 @@ vi.mock("@/components/ui/select", () => ({
 describe("OpenAIServiceTierSelector", () => {
 	it("selects an explicit tier and can restore provider default", () => {
 		const onServiceTierChange = vi.fn()
-		const { rerender } = render(<OpenAIServiceTierSelector onServiceTierChange={onServiceTierChange} />)
+		const onServiceTierEnabledChange = vi.fn()
+		const { rerender } = render(
+			<OpenAIServiceTierSelector
+				onServiceTierChange={onServiceTierChange}
+				onServiceTierEnabledChange={onServiceTierEnabledChange}
+			/>,
+		)
 
 		expect(screen.getByTestId("service-tier")).toHaveAttribute("data-value", "provider-default")
 		expect(screen.getAllByTitle("Do not send service_tier; let the provider choose.")).toHaveLength(2)
@@ -48,10 +63,39 @@ describe("OpenAIServiceTierSelector", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Choose Priority" }))
 		expect(onServiceTierChange).toHaveBeenLastCalledWith("priority")
 
-		rerender(<OpenAIServiceTierSelector onServiceTierChange={onServiceTierChange} serviceTier="priority" />)
+		rerender(
+			<OpenAIServiceTierSelector
+				onServiceTierChange={onServiceTierChange}
+				onServiceTierEnabledChange={onServiceTierEnabledChange}
+				serviceTier="priority"
+			/>,
+		)
 		expect(screen.getByTestId("service-tier")).toHaveAttribute("data-value", "priority")
 		expect(screen.getAllByTitle('Send service_tier: "priority", the API tier used by Codex Fast.')).toHaveLength(2)
 		fireEvent.click(screen.getByRole("button", { name: "Choose Provider Default" }))
 		expect(onServiceTierChange).toHaveBeenLastCalledWith(undefined)
+	})
+
+	it("defaults Service Tier to enabled and hides the selector when explicitly disabled", () => {
+		const onServiceTierEnabledChange = vi.fn()
+		const { rerender } = render(
+			<OpenAIServiceTierSelector onServiceTierChange={vi.fn()} onServiceTierEnabledChange={onServiceTierEnabledChange} />,
+		)
+
+		const enableCheckbox = screen.getByRole("checkbox", { name: "Enable Service Tier" })
+		expect(enableCheckbox).toBeChecked()
+		expect(screen.getByTestId("service-tier")).toBeInTheDocument()
+		fireEvent.click(enableCheckbox)
+		expect(onServiceTierEnabledChange).toHaveBeenCalledWith(false)
+
+		rerender(
+			<OpenAIServiceTierSelector
+				onServiceTierChange={vi.fn()}
+				onServiceTierEnabledChange={onServiceTierEnabledChange}
+				serviceTierEnabled={false}
+			/>,
+		)
+		expect(screen.getByRole("checkbox", { name: "Enable Service Tier" })).not.toBeChecked()
+		expect(screen.queryByTestId("service-tier")).not.toBeInTheDocument()
 	})
 })

@@ -1,6 +1,7 @@
 import type { ApiHandler } from "@core/api"
 import type { WebSearchRoutingPlan } from "@core/api/server-tools"
 import type { IdentityFactory } from "@core/api/transform/block-identity"
+import type { CompactionPassIdentity } from "@core/context/context-management/target-window-fitting"
 import type { FileContextTracker } from "@core/context/context-tracking/FileContextTracker"
 import type { ClineIgnoreController } from "@core/ignore/ClineIgnoreController"
 import type { CommandPermissionController } from "@core/permissions"
@@ -57,6 +58,10 @@ export interface TaskInteractionPorts {
 	say(request: SayPresentationRequest): Promise<void>
 }
 
+export interface CompactionAttemptGuard {
+	isCurrent(passIdentity: CompactionPassIdentity, authorizationAttemptId: string): boolean
+}
+
 export interface TaskConfig {
 	// Core identifiers
 	taskId: string
@@ -77,6 +82,8 @@ export interface TaskConfig {
 	explicitInstructions?: ExplicitInstructionConsumePort
 	/** Authorization consumed by the central gate for the current complete handler invocation. */
 	explicitInstructionAuthorization?: ExplicitInstructionAuthorization
+	/** Read-only identity gate for accepting one hidden fitting Pass result. */
+	compactionAttemptGuard?: CompactionAttemptGuard
 
 	// Multi-workspace support (optional for backward compatibility)
 	workspaceManager?: WorkspaceRootManager

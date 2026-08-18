@@ -6,6 +6,7 @@ import { ApiHandler, ApiHandlerContext } from ".."
 import { withRetry } from "../retry"
 import { convertToOpenAiMessages } from "../transform/openai-format"
 import { ApiStream } from "../transform/stream"
+import { splitInclusiveInputUsage } from "../transform/usage-normalization"
 
 export class FireworksHandler implements ApiHandler {
 	private client: OpenAI | undefined
@@ -102,13 +103,16 @@ export class FireworksHandler implements ApiHandler {
 						cached_tokens?: number
 					}
 				}
+				const inputUsage = splitInclusiveInputUsage({
+					totalInputTokens: usage.prompt_tokens,
+					// Fireworks can return cache hits either as prompt_cache_hit_tokens or prompt_tokens_details.cached_tokens.
+					cacheReadTokens: usage.prompt_cache_hit_tokens ?? usage.prompt_tokens_details?.cached_tokens,
+					cacheWriteTokens: usage.prompt_cache_miss_tokens,
+				})
 				yield {
 					type: "usage",
-					inputTokens: usage.prompt_tokens || 0,
+					...inputUsage,
 					outputTokens: usage.completion_tokens || 0,
-					// Fireworks can return cache hits either as prompt_cache_hit_tokens or prompt_tokens_details.cached_tokens.
-					cacheReadTokens: usage.prompt_cache_hit_tokens ?? usage.prompt_tokens_details?.cached_tokens ?? 0,
-					cacheWriteTokens: usage.prompt_cache_miss_tokens || 0,
 				}
 			}
 		}

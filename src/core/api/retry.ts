@@ -1,5 +1,7 @@
 import { Logger } from "@/shared/services/Logger"
 
+import { isOutputLimitExceededError } from "./stream/OutputLimitExceededError"
+
 interface RetryOptions {
 	maxRetries?: number
 	baseDelay?: number
@@ -12,6 +14,47 @@ const DEFAULT_OPTIONS: Required<RetryOptions> = {
 	baseDelay: 1_000,
 	maxDelay: 10_000,
 	retryAllErrors: false,
+}
+
+function isCompactionGenerationRequest(args: readonly unknown[]): boolean {
+	const options = args[3]
+	if (typeof options !== "object" || options === null) return false
+	const generation = (options as { generation?: unknown }).generation
+	return typeof generation === "object" && generation !== null && (generation as { purpose?: unknown }).purpose === "compaction"
+}
+
+interface RetryOwnershipContext {
+	getStore(): boolean | undefined
+	run<T>(store: boolean, callback: () => T): T
+}
+
+let taskOwnedRetryContextPromise: Promise<RetryOwnershipContext> | undefined
+
+async function getTaskOwnedRetryContext(): Promise<RetryOwnershipContext> {
+	taskOwnedRetryContextPromise ??= import("node:async_hooks").then(({ AsyncLocalStorage }) => new AsyncLocalStorage<boolean>())
+	return taskOwnedRetryContextPromise
+}
+
+function bindRetryOwnership<T>(
+	context: RetryOwnershipContext,
+	iterable: AsyncIterable<T>,
+	taskOwnsRetry: boolean,
+): AsyncIterable<T> {
+	return {
+		[Symbol.asyncIterator](): AsyncIterator<T> {
+			const iterator = iterable[Symbol.asyncIterator]()
+			return {
+				next: (value?: unknown) => context.run(taskOwnsRetry, () => iterator.next(value as never)),
+				return: iterator.return
+					? (value?: unknown) =>
+							context.run(taskOwnsRetry, () => iterator.return?.(value as never) as Promise<IteratorResult<T>>)
+					: undefined,
+				throw: iterator.throw
+					? (error?: unknown) => context.run(taskOwnsRetry, () => iterator.throw?.(error) as Promise<IteratorResult<T>>)
+					: undefined,
+			}
+		},
+	}
 }
 
 export class RetriableError extends Error {
@@ -50,11 +93,17 @@ export function withRetry(options: RetryOptions = {}) {
 		const originalMethod = descriptor.value
 
 		descriptor.value = async function* (...args: any[]) {
+			const retryOwnershipContext = await getTaskOwnedRetryContext()
+			const taskOwnsRetry = retryOwnershipContext.getStore() === true || isCompactionGenerationRequest(args)
 			for (let attempt = 0; attempt < maxRetries; attempt++) {
 				try {
-					yield* originalMethod.apply(this, args)
+					const iterable = originalMethod.apply(this, args) as AsyncIterable<unknown>
+					yield* bindRetryOwnership(retryOwnershipContext, iterable, taskOwnsRetry)
 					return
 				} catch (error: any) {
+					if (taskOwnsRetry || isOutputLimitExceededError(error)) {
+						throw error
+					}
 					const isRateLimit = error?.status === 429 || error instanceof RetriableError
 					const isLastAttempt = attempt === maxRetries - 1
 

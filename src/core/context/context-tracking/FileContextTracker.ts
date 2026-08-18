@@ -8,6 +8,11 @@ import { Logger } from "@/shared/services/Logger"
 import { getCwd } from "@/utils/path"
 import type { FileMetadataEntry } from "./ContextTrackerTypes"
 
+export interface RecentlyModifiedFilesSnapshot {
+	files: string[]
+	revisions: Record<string, number>
+}
+
 // This class is responsible for tracking file operations that may result in stale context.
 // If a user modifies a file outside of Cline, the context may become stale and need to be updated.
 // We do not want Cline to reload the context every time a file is modified, so we use this class merely
@@ -28,7 +33,8 @@ export class FileContextTracker {
 
 	// File tracking and watching
 	private fileWatchers = new Map<string, FSWatcher>()
-	private recentlyModifiedFiles = new Set<string>()
+	private recentlyModifiedFiles = new Map<string, number>()
+	private recentlyModifiedRevision = 0
 	private recentlyEditedByCline = new Set<string>()
 
 	constructor(controller: Controller, taskId: string) {
@@ -69,7 +75,7 @@ export class FileContextTracker {
 			if (this.recentlyEditedByCline.has(filePath)) {
 				this.recentlyEditedByCline.delete(filePath) // This was an edit by Cline, no need to inform Cline
 			} else {
-				this.recentlyModifiedFiles.add(filePath) // This was a user edit, we will inform Cline
+				this.markRecentlyModified(filePath) // This was a user edit, we will inform Cline
 				this.trackFileContext(filePath, "user_edited") // Update the task metadata with file tracking
 			}
 		})
@@ -139,7 +145,7 @@ export class FileContextTracker {
 				// user_edited: The user has edited the file
 				case "user_edited":
 					newEntry.user_edit_date = now
-					this.recentlyModifiedFiles.add(filePath)
+					this.markRecentlyModified(filePath)
 					break
 
 				// cline_edited: Cline has edited the file
@@ -162,13 +168,46 @@ export class FileContextTracker {
 		}
 	}
 
-	/**
-	 * Returns (and then clears) the set of recently modified files
-	 */
+	/** Return a non-destructive snapshot of recently modified files. */
+	peekRecentlyModifiedFiles(): RecentlyModifiedFilesSnapshot {
+		return {
+			files: Array.from(this.recentlyModifiedFiles.keys()),
+			revisions: Object.fromEntries(this.recentlyModifiedFiles),
+		}
+	}
+
+	/** Merge a durable snapshot without replacing file edits recorded after that snapshot. */
+	restoreRecentlyModifiedFiles(snapshot: RecentlyModifiedFilesSnapshot): void {
+		for (const filePath of snapshot.files) {
+			const restoredRevision = snapshot.revisions[filePath]
+			if (!Number.isSafeInteger(restoredRevision) || restoredRevision <= 0) continue
+			const currentRevision = this.recentlyModifiedFiles.get(filePath) ?? 0
+			if (restoredRevision > currentRevision) {
+				this.recentlyModifiedFiles.set(filePath, restoredRevision)
+			}
+			this.recentlyModifiedRevision = Math.max(this.recentlyModifiedRevision, restoredRevision, currentRevision)
+		}
+	}
+
+	/** Remove only entries that still match the acknowledged snapshot revision. */
+	acknowledgeRecentlyModifiedFiles(snapshot: RecentlyModifiedFilesSnapshot): void {
+		for (const filePath of snapshot.files) {
+			if (this.recentlyModifiedFiles.get(filePath) === snapshot.revisions[filePath]) {
+				this.recentlyModifiedFiles.delete(filePath)
+			}
+		}
+	}
+
+	/** Returns and clears the exact set of recently modified files observed by this call. */
 	getAndClearRecentlyModifiedFiles(): string[] {
-		const files = Array.from(this.recentlyModifiedFiles)
-		this.recentlyModifiedFiles.clear()
-		return files
+		const snapshot = this.peekRecentlyModifiedFiles()
+		this.acknowledgeRecentlyModifiedFiles(snapshot)
+		return snapshot.files
+	}
+
+	private markRecentlyModified(filePath: string): void {
+		this.recentlyModifiedRevision += 1
+		this.recentlyModifiedFiles.set(filePath, this.recentlyModifiedRevision)
 	}
 
 	/**

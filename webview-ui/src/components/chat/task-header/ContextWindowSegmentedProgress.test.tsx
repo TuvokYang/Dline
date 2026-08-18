@@ -55,8 +55,9 @@ describe("ContextWindowSegmentedProgress", () => {
 		])
 		expect(segments[2]).toHaveAttribute("data-active", "true")
 		expect(segments[2]).toHaveClass("animate-pulse")
-		expect(segments[3]).toHaveAttribute("title", "ENV: 5000 tokens")
-		expect(segments.map((segment) => segment.getAttribute("tabindex"))).toEqual(["0", "0", "0", "0"])
+		expect(progress).not.toHaveAttribute("title")
+		expect(segments.every((segment) => !segment.hasAttribute("title"))).toBe(true)
+		expect(segments.map((segment) => segment.getAttribute("tabindex"))).toEqual([null, null, null, null])
 		expect(segments.map((segment) => segment.getAttribute("aria-label"))).toEqual([
 			"Durable: 40000 tokens",
 			"Sending: 20000 tokens",
@@ -288,6 +289,24 @@ describe("ContextWindowSegmentedProgress", () => {
 		expect(screen.getByTestId("context-window-segment-receiving")).toHaveClass("motion-reduce:animate-none")
 	})
 
+	it("gives every non-zero segment a real pixel minimum while zero-token segments remain absent", () => {
+		render(
+			<ContextWindowSegmentedProgress
+				snapshot={snapshot({
+					contextWindow: 1_000_000,
+					durableContextTokens: 10_000,
+					pendingSendTokens: 2_000,
+					receivingTokens: 1,
+					environmentTokens: 1_000,
+				})}
+			/>,
+		)
+
+		for (const kind of ["durable", "sending", "receiving", "environment"] as const) {
+			expect(screen.getByTestId(`context-window-segment-${kind}`).style.minWidth).toBe("3px")
+		}
+	})
+
 	it("caps the shared minor-group factor when receiving starts with one token", () => {
 		render(
 			<ContextWindowSegmentedProgress
@@ -302,7 +321,10 @@ describe("ContextWindowSegmentedProgress", () => {
 		)
 
 		const progress = screen.getByTestId("context-window-segmented-progress")
-		expect(Number(progress.getAttribute("data-minor-factor"))).toBeLessThanOrEqual(3)
+		expect(progress).toHaveAttribute("data-minor-factor", "3")
+		expect(screen.getByTestId("context-window-segment-sending").style.width).toBe("0.6%")
+		expect(Number.parseFloat(screen.getByTestId("context-window-segment-receiving").style.width)).toBeCloseTo(0.0003, 8)
+		expect(screen.getByTestId("context-window-segment-environment").style.width).toBe("0.3%")
 		const totalWidth = ["durable", "sending", "receiving", "environment"].reduce(
 			(total, kind) => total + Number.parseFloat(screen.getByTestId(`context-window-segment-${kind}`).style.width),
 			0,
@@ -310,7 +332,7 @@ describe("ContextWindowSegmentedProgress", () => {
 		expect(totalWidth).toBeLessThan(5)
 	})
 
-	it("amplifies sub-pixel minor segments into visible widths with one common factor", () => {
+	it("amplifies sub-pixel minor segments with one bounded shared factor", () => {
 		render(
 			<ContextWindowSegmentedProgress
 				snapshot={snapshot({
@@ -333,11 +355,31 @@ describe("ContextWindowSegmentedProgress", () => {
 		expect(sending).toHaveAttribute("data-authoritative-tokens", "2000")
 		expect(sending).toHaveAttribute("data-tokens", "2000")
 		expect(screen.getByTestId("context-window-segment-environment")).toHaveAttribute("data-tokens", "1000")
-
 		const minorRatio =
 			Number.parseFloat(sending.style.width) /
 			Number.parseFloat(screen.getByTestId("context-window-segment-receiving").style.width)
-		expect(minorRatio).toBeCloseTo(2, 1)
+		expect(minorRatio).toBeCloseTo(2, 8)
+	})
+
+	it("keeps zero-token segments at zero width without a minimum-width placeholder", () => {
+		render(
+			<ContextWindowSegmentedProgress
+				snapshot={snapshot({
+					phase: "stable",
+					durableContextTokens: 40_000,
+					pendingSendTokens: 0,
+					receivingTokens: 0,
+					environmentTokens: 0,
+				})}
+			/>,
+		)
+
+		for (const kind of ["sending", "receiving", "environment"] as const) {
+			const segment = screen.getByTestId(`context-window-segment-${kind}`)
+			expect(segment.style.width).toBe("0%")
+			expect(segment.style.minWidth).toBe("0px")
+			expect(segment.style.opacity).toBe("0")
+		}
 	})
 
 	it("updates the ENV segment when the backend publishes a freshly recomputed environment", () => {
@@ -366,6 +408,7 @@ describe("ContextWindowSegmentedProgress", () => {
 		expect(envAfter).toHaveAttribute("data-tokens", "9000")
 		expect(envAfter).toHaveAttribute("data-authoritative-tokens", "9000")
 		expect(envAfter.style.width).toBe("27%")
+		expect(envAfter.style.minWidth).toBe("3px")
 	})
 
 	it("keeps ENV separate and applies the bounded shared factor after a round completes", () => {
@@ -388,7 +431,7 @@ describe("ContextWindowSegmentedProgress", () => {
 		expect(env.style.width).toBe("0.15%")
 	})
 
-	it("caps the minor-group amplification so the bar never overflows when durable fills the window", () => {
+	it("caps the shared minor-group amplification so the bar never overflows", () => {
 		render(
 			<ContextWindowSegmentedProgress
 				snapshot={snapshot({

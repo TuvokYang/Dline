@@ -58,7 +58,7 @@ describe("FireworksHandler", () => {
 		])
 	})
 
-	it("should read cache hits from prompt_tokens_details when hit tokens are not present", async () => {
+	it("should split cache subsets out of the total prompt token count", async () => {
 		const handler = new FireworksHandler({
 			profile: ApiProfile.create({
 				provider: "fireworks",
@@ -96,7 +96,7 @@ describe("FireworksHandler", () => {
 		chunks.should.deepEqual([
 			{
 				type: "usage",
-				inputTokens: 60,
+				inputTokens: 0,
 				outputTokens: 12,
 				cacheReadTokens: 20,
 				cacheWriteTokens: 40,

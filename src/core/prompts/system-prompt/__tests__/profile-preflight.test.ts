@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from "vitest"
 
+import { LOCAL_WEB_SEARCH_ROUTING_PLAN } from "../../__tests__/web-search-routing-fixtures"
 import { SystemPromptGenerator } from "../../generators/SystemPromptGenerator"
 import { ToolPromptGenerator } from "../../generators/ToolPromptGenerator"
 import { PromptProfile } from "../../profiles/types"
 import { PromptScanner } from "../../template/PromptScanner"
+import { LITE_TOOL_IDS, STANDARD_TOOL_IDS } from "../../tools/tool-profile"
 import type { SystemPromptContext } from "../context"
 
 const BASE_CONTEXT: SystemPromptContext = {
@@ -23,11 +25,25 @@ const BASE_CONTEXT: SystemPromptContext = {
 		viewport: { width: 1280, height: 800 },
 		disableToolUse: false,
 	},
+	mcpHub: {
+		getServers: () => [
+			{
+				uid: "preflight",
+				name: "Preflight Server",
+				config: "{}",
+				status: "connected",
+				tools: [],
+			},
+		],
+	} as SystemPromptContext["mcpHub"],
+	skills: [{ name: "review", description: "Review code changes.", path: "/skills/review.md", source: "project" }],
 	capabilitiesSection: "# Capabilities\n- load_skill: Load one skill.",
 	focusChainSettings: { enabled: true, remindClineInterval: 6 },
 	globalClineRulesFileInstructions: "Global project rules.",
 	preferredLanguageInstructions: "Preferred language: zh-CN.",
 	subagentsEnabled: true,
+	clineWebToolsEnabled: true,
+	webSearchRoutingPlan: LOCAL_WEB_SEARCH_ROUTING_PLAN,
 	enableNativeToolCalls: true,
 	enableParallelToolCalling: true,
 	yoloModeToggled: false,
@@ -57,7 +73,7 @@ describe("profile facade preflight", () => {
 		expect(result.systemPrompt).toContain("## Task Closure Contract")
 		expect(result.systemPrompt).toContain("The current working directory is `/workspace/project`")
 		expect(result.systemPrompt).not.toContain("[MISSING:")
-		expect(toolNames(result.tools)).toHaveLength(26)
+		expect(toolNames(result.tools)).toEqual([...STANDARD_TOOL_IDS])
 		expect(toolNames(result.tools).slice(0, 3)).toEqual(["write_to_file", "replace_in_file", "read_file"])
 		expect(toolNames(result.tools)).not.toContain("generate_explanation")
 	})
@@ -99,9 +115,9 @@ describe("profile facade preflight", () => {
 		expect(result.systemPrompt).toContain("MODES (STRICT)")
 		expect(result.systemPrompt).toContain("CURIOSITY & FIRST CONTACT")
 		expect(result.systemPrompt).toContain("FILE EDITING RULES")
-		expect(names).toHaveLength(21)
-		expect(names).toContain("use_subagent")
-		expect(names).toContain("use_subagents")
+		expect(names).toEqual([...LITE_TOOL_IDS])
+		expect(names).not.toContain("use_subagent")
+		expect(names).not.toContain("use_subagents")
 		expect(names).not.toContain("load_subagent")
 		expect(names).not.toContain("browser_action")
 		expect(names).not.toContain("use_mcp_tool")

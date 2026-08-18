@@ -33,7 +33,7 @@ export function getHighContextPressureWarning(input: ContextUsageInput): string 
 	}
 
 	return `# High Context Pressure
-Less than 10% of the context window remains based on the previous provider request.
+Less than 10% of the context window remains for the complete projected request candidate.
 Avoid launching too many parallel tool calls that may produce large results.
 Keep tool output focused and continue the current work efficiently.
 Do not skip information or verification required to complete the current task.`

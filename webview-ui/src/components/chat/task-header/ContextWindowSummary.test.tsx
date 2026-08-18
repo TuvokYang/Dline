@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react"
+import { render, screen } from "@testing-library/react"
 import { describe, expect, it } from "vitest"
 import { createContextWindowIndicatorViewModel } from "./ContextWindowIndicatorViewModel"
 import { ContextWindowSummary } from "./ContextWindowSummary"
@@ -28,16 +28,23 @@ describe("ContextWindowSummary", () => {
 			/>,
 		)
 
-		fireEvent.click(screen.getByText("Context Window"))
-
+		expect(screen.getByText("Context Window")).toBeInTheDocument()
 		expect(screen.getByText("131.9k")).toBeInTheDocument()
-		for (const [kind, value] of [
-			["durable", "137.0k"],
-			["sending", "2.0k"],
-			["receiving", "100"],
-			["environment", "1.0k"],
+		const metricCells = ["used", "remaining", "total"].map((metric) =>
+			document.querySelector<HTMLElement>(`[data-context-summary-metric="${metric}"]`),
+		)
+		for (const cell of metricCells) expect(cell).toHaveClass("min-w-0", "text-center")
+		expect(metricCells[0]?.parentElement).toHaveClass("grid", "grid-cols-3", "gap-2")
+		const segmentDetails = screen.getByTestId("context-window-segment-details")
+		for (const [kind, value, color] of [
+			["durable", "137.0k", "var(--vscode-charts-green, #3fb950)"],
+			["sending", "2.0k", "var(--vscode-charts-blue, #58a6ff)"],
+			["receiving", "100", "var(--vscode-charts-yellow, #d29922)"],
+			["environment", "1.0k", "var(--vscode-charts-purple, #bc8cff)"],
 		] as const) {
-			expect(document.querySelector(`[data-segment-detail="${kind}"]`)).toHaveTextContent(value)
+			const detail = segmentDetails.querySelector<HTMLElement>(`[data-segment-detail="${kind}"]`)
+			expect(detail).toHaveTextContent(value)
+			expect(detail).toHaveStyle({ backgroundColor: color })
 		}
 	})
 })

@@ -221,13 +221,10 @@ function applyRegistryModelInfo(profiles: ApiProfile[]): boolean {
 			continue
 		}
 		if (!canStoreRegistryModelInfoOverrides(profile.provider)) {
-			// Registry-backed non-override providers store model metadata in
-			// provider config or registry data, so stale top-level snapshots
-			// must be removed without affecting custom model metadata.
-			if (profile.modelInfo) {
-				profile.modelInfo = undefined
-				changed = true
-			}
+			// Registry-backed non-override providers expose derived metadata to
+			// runtime consumers without persisting a stale Profile snapshot.
+			if (profile.modelInfo) changed = true
+			profile.modelInfo = ApiProfile.fromJSON({ modelInfo: baseModelInfo }).modelInfo
 			continue
 		}
 		// Override-enabled providers (e.g. openai): merge registry modelInfo

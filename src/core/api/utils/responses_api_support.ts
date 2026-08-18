@@ -2,6 +2,7 @@ import OpenAI from "openai"
 import { ModelInfo } from "@/shared/api"
 import { ServerTool } from "@/shared/proto/dline/models/metadata"
 import { Logger } from "@/shared/services/Logger"
+import { OutputLimitExceededError } from "../stream/OutputLimitExceededError"
 import { createResponsesRegistry, createResponsesToolChunk } from "../transform/responses-identity-registry"
 import type { ApiRawStreamServerToolChunk, ApiServerToolPhase } from "../transform/stream"
 
@@ -226,7 +227,7 @@ export async function* handleResponsesApiStreamResponse(
 				chunk.response?.status === "incomplete" &&
 				chunk.response?.incomplete_details?.reason === "max_output_tokens"
 			) {
-				throw new Error("Responses API request incomplete: max_output_tokens")
+				throw new OutputLimitExceededError("openai_responses", "max_output_tokens")
 			}
 
 			if (chunk.type === "response.failed") {

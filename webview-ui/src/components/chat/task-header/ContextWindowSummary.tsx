@@ -1,19 +1,12 @@
-import { ChevronDownIcon, ChevronRightIcon } from "lucide-react"
-import React, { memo, useCallback, useMemo, useState } from "react"
-import type { ContextWindowIndicatorViewModel } from "./ContextWindowIndicatorViewModel"
+import React from "react"
 import { formatLargeNumber as formatTokenNumber } from "@/utils/format"
+import type { ContextWindowIndicatorViewModel } from "./ContextWindowIndicatorViewModel"
 
 interface TokenUsageInfoProps {
 	tokensIn?: number
 	tokensOut?: number
 	cacheWrites?: number
 	cacheReads?: number
-}
-
-interface TokenDetail {
-	title: string
-	value?: number
-	icon: string
 }
 
 interface TaskContextWindowButtonsProps extends TokenUsageInfoProps {
@@ -26,171 +19,55 @@ interface TaskContextWindowButtonsProps extends TokenUsageInfoProps {
 	indicatorViewModel?: ContextWindowIndicatorViewModel
 }
 
-// New accordion item component
-const AccordionItem = memo<{
-	title: string
-	value: React.ReactNode
-	isExpanded: boolean
-	onToggle: (event?: React.MouseEvent) => void
-	children?: React.ReactNode
-}>(({ title, value, isExpanded, onToggle, children }) => {
-	const handleClick = useCallback(
-		(event: React.MouseEvent) => {
-			event.preventDefault()
-			event.stopPropagation()
-			onToggle(event)
-		},
-		[onToggle],
-	)
-
-	return (
-		<div className="flex flex-col w-full">
-			<div
-				className="flex justify-between items-center gap-1 cursor-pointer hover:bg-foreground/5 rounded p-0.5 transition-colors w-full"
-				onClick={handleClick}>
-				<div className="flex items-center gap-1">
-					{isExpanded ? <ChevronDownIcon size={12} /> : <ChevronRightIcon size={12} />}
-					<div className="font-semibold">{title}</div>
-				</div>
-				<div className="text-muted-foreground">{value}</div>
-			</div>
-			{isExpanded && children && <div className="ml-5 my-1 text-xs text-muted-foreground">{children}</div>}
-		</div>
-	)
-})
-AccordionItem.displayName = "AccordionItem"
-
-// Constants
-const TOKEN_DETAILS_CONFIG: Omit<TokenDetail, "value">[] = [
-	{ title: "Prompt Tokens", icon: "codicon-arrow-up" },
-	{ title: "Completion Tokens", icon: "codicon-arrow-down" },
-	{ title: "Cache Writes", icon: "codicon-arrow-left" },
-	{ title: "Cache Reads", icon: "codicon-arrow-right" },
-]
-
-const TokenUsageDetails = memo<TokenUsageInfoProps>(({ tokensIn, tokensOut, cacheWrites, cacheReads }) => {
-	const totalPromptTokens = (tokensIn || 0) + (cacheWrites || 0) + (cacheReads || 0)
-	const contextTokenDetails = useMemo(() => {
-		const values = [totalPromptTokens, tokensOut, cacheWrites || 0, cacheReads || 0]
-		return TOKEN_DETAILS_CONFIG.map((config, index) => ({ ...config, value: values[index] })).filter((item) => item.value)
-	}, [totalPromptTokens, tokensOut, cacheWrites, cacheReads])
-
-	if (!totalPromptTokens && !tokensOut) {
-		return <div>No token usage data available</div>
-	}
-
-	return (
-		<div className="space-y-1">
-			{contextTokenDetails.map((item) => (
-				<div className="flex justify-between">
-					<span>{item.title}</span>
-					<span className="font-mono">{formatTokenNumber(item.value || 0)}</span>
-				</div>
-			))}
-		</div>
-	)
-})
-TokenUsageDetails.displayName = "TokenUsageDetails"
+const SEGMENT_COLORS = {
+	durable: "var(--vscode-charts-green, #3fb950)",
+	sending: "var(--vscode-charts-blue, #58a6ff)",
+	receiving: "var(--vscode-charts-yellow, #d29922)",
+	environment: "var(--vscode-charts-purple, #bc8cff)",
+} as const
 
 export const ContextWindowSummary: React.FC<TaskContextWindowButtonsProps> = ({
 	contextWindow,
 	tokenUsed,
-	tokensIn,
-	tokensOut,
-	cacheWrites,
-	cacheReads,
 	percentage,
-	autoCompactThreshold = 0,
 	indicatorViewModel,
-}) => {
-	// Accordion state
-	const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set())
-
-	const toggleSection = useCallback((section: string, event?: React.MouseEvent) => {
-		if (event) {
-			event.preventDefault()
-			event.stopPropagation()
-		}
-		setExpandedSections((prev) => {
-			const newSet = new Set(prev)
-			if (newSet.has(section)) {
-				newSet.delete(section)
-			} else {
-				newSet.add(section)
-			}
-			return newSet
-		})
-	}, [])
-
-	const totalInputTokens = (tokensIn || 0) + (cacheWrites || 0) + (cacheReads || 0)
-	const totalTokens = totalInputTokens + (tokensOut || 0)
-
-	return (
-		<div className="context-window-tooltip-content flex flex-col gap-2 bg-menu rounded shadow-sm z-100 w-60 p-1">
-			{autoCompactThreshold > 0 && (
-				<AccordionItem
-					isExpanded={expandedSections.has("threshold")}
-					onToggle={(event) => toggleSection("threshold", event)}
-					title="Auto Condense Threshold"
-					value={<span className="text-muted-foreground">{`${(autoCompactThreshold * 100).toFixed(0)}%`}</span>}>
-					<div className="space-y-1">
-						<p className="text-xs leading-relaxed text-white">
-							Click on the context window bar to set a new threshold.
-						</p>
-						<p className="text-xs leading-relaxed mt-0 mb-0">
-							When the context window usage exceeds this threshold, the task will be automatically condensed.
-						</p>
-					</div>
-				</AccordionItem>
-			)}
-
-			<AccordionItem
-				isExpanded={expandedSections.has("context")}
-				onToggle={(event) => toggleSection("context", event)}
-				title="Context Window"
-				value={percentage ? `${percentage.toFixed(1)}%` : formatTokenNumber(contextWindow)}>
-				<div className="space-y-1">
-					<div className="flex justify-between">
-						<span>Used:</span>
-						<span className="font-mono">{formatTokenNumber(tokenUsed)}</span>
-					</div>
-					<div className="flex justify-between">
-						<span>Total:</span>
-						<span className="font-mono">{formatTokenNumber(contextWindow)}</span>
-					</div>
-					<div className="flex justify-between">
-						<span>Remaining:</span>
-						<span className="font-mono">
-							{formatTokenNumber(indicatorViewModel?.remainingTokens ?? Math.max(0, contextWindow - tokenUsed))}
-						</span>
-					</div>
-					{indicatorViewModel && (
-						<div className="mt-2 border-t border-foreground/10 pt-1 space-y-1" data-testid="context-window-segment-details">
-							{indicatorViewModel.segments.map((segment) => (
-								<div className="flex justify-between" data-segment-detail={segment.kind} key={segment.kind}>
-									<span>{segment.label}:</span>
-									<span className="font-mono">{formatTokenNumber(segment.authoritativeTokens)}</span>
-								</div>
-							))}
-						</div>
-					)}
-				</div>
-			</AccordionItem>
-
-			{totalTokens > 0 && (
-				<AccordionItem
-					isExpanded={expandedSections.has("tokens")}
-					onToggle={(event) => toggleSection("tokens", event)}
-					title="Token Usage"
-					value={`${formatTokenNumber(totalTokens)}`}>
-					<TokenUsageDetails
-						cacheReads={cacheReads}
-						cacheWrites={cacheWrites}
-						tokensIn={tokensIn}
-						tokensOut={tokensOut}
-					/>
-				</AccordionItem>
-			)}
+}) => (
+	<div className="context-window-tooltip-content flex w-60 flex-col gap-2 rounded bg-menu p-2 shadow-sm z-100">
+		<div className="flex items-center justify-between gap-3">
+			<span className="font-semibold">Context Window</span>
+			<span className="font-mono text-muted-foreground">{percentage.toFixed(1)}%</span>
 		</div>
-	)
-}
+		<div className="grid grid-cols-3 gap-2 text-xs">
+			<div className="min-w-0 text-center" data-context-summary-metric="used">
+				<div className="text-muted-foreground">Used</div>
+				<div className="font-mono">{formatTokenNumber(tokenUsed)}</div>
+			</div>
+			<div className="min-w-0 text-center" data-context-summary-metric="remaining">
+				<div className="text-muted-foreground">Remaining</div>
+				<div className="font-mono">
+					{formatTokenNumber(indicatorViewModel?.remainingTokens ?? Math.max(0, contextWindow - tokenUsed))}
+				</div>
+			</div>
+			<div className="min-w-0 text-center" data-context-summary-metric="total">
+				<div className="text-muted-foreground">Total</div>
+				<div className="font-mono">{formatTokenNumber(contextWindow)}</div>
+			</div>
+		</div>
+		{indicatorViewModel && (
+			<div
+				className="grid grid-cols-2 gap-1.5 border-t border-foreground/10 pt-2"
+				data-testid="context-window-segment-details">
+				{indicatorViewModel.segments.map((segment) => (
+					<div
+						className="flex items-center justify-between gap-2 rounded px-2 py-1 text-[11px] text-white"
+						data-segment-detail={segment.kind}
+						key={segment.kind}
+						style={{ backgroundColor: SEGMENT_COLORS[segment.kind] }}>
+						<span className="font-semibold">{segment.label}</span>
+						<span className="font-mono">{formatTokenNumber(segment.authoritativeTokens)}</span>
+					</div>
+				))}
+			</div>
+		)}
+	</div>
+)

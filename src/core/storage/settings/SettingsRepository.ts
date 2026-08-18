@@ -115,13 +115,21 @@ export class SettingsRepository {
 	}
 
 	mutate(patch: Partial<Settings>, sourceId = this.sourceId): Promise<SettingsCommit> {
+		return this.mutateResolved(() => patch, sourceId)
+	}
+
+	/** Resolve a Settings patch from the latest disk snapshot while holding the cross-process file lock. */
+	mutateResolved(
+		resolvePatch: (values: Readonly<Settings>) => Partial<Settings>,
+		sourceId = this.sourceId,
+	): Promise<SettingsCommit> {
 		return this.enqueue(async () => {
 			this.ensureAvailable()
 			await fs.mkdir(path.dirname(this.filePath), { recursive: true })
 			let commit: SettingsCommit | undefined
 			await this.fileLock.withLock(this.filePath, async () => {
 				const parsed = parseSettingsDocument(await readDocument(this.filePath))
-				const nextValues = applySettingsPatch(parsed.values, patch)
+				const nextValues = applySettingsPatch(parsed.values, resolvePatch(parsed.values))
 				const keys = changedKeys(parsed.values, nextValues)
 				if (isDeepStrictEqual(parsed.values, nextValues)) {
 					this.currentSnapshot = snapshot(parsed.values, Math.max(parsed.revision, this.currentSnapshot.revision))

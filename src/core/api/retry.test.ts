@@ -1,8 +1,9 @@
 // @ts-nocheck — should library type issues
 import { afterEach, describe, it, vi } from "vitest"
 import "should"
-// sinon import removed: using vitest globals
 import { withRetry } from "./retry"
+// sinon import removed: using vitest globals
+import { OutputLimitExceededError } from "./stream/OutputLimitExceededError"
 
 describe("Retry Decorator", () => {
 	afterEach(() => {
@@ -103,6 +104,112 @@ describe("Retry Decorator", () => {
 				error.message.should.equal("Regular error")
 				callCount.should.equal(1)
 			}
+		})
+
+		it("delegates every compaction request error to the Task retry owner", async () => {
+			let callCount = 0
+			class TestClass {
+				@withRetry({ maxRetries: 3, baseDelay: 1, retryAllErrors: true })
+				async *failMethod(_system: string, _messages: unknown[], _tools: unknown, _options: unknown) {
+					callCount++
+					const error = new Error("Rate limit exceeded") as Error & { status: number }
+					error.status = 429
+					throw error
+				}
+			}
+
+			let caught: unknown
+			try {
+				for await (const _ of new TestClass().failMethod("system", [], undefined, {
+					generation: { purpose: "compaction", maxOutputTokens: 30_000 },
+				})) {
+					// Compaction retry must be orchestrated after Task-owned cleanup.
+				}
+			} catch (error) {
+				caught = error
+			}
+
+			;(caught instanceof Error).should.equal(true)
+			callCount.should.equal(1)
+		})
+
+		it("propagates Task-owned retry through nested decorated provider adapters", async () => {
+			let innerCallCount = 0
+			class TestClass {
+				@withRetry({ maxRetries: 3, baseDelay: 1, retryAllErrors: true })
+				async *innerMethod() {
+					innerCallCount++
+					const error = new Error("Nested rate limit exceeded") as Error & { status: number }
+					error.status = 429
+					throw error
+				}
+
+				@withRetry({ maxRetries: 3, baseDelay: 1, retryAllErrors: true })
+				async *outerMethod(_system: string, _messages: unknown[], _tools: unknown, _options: unknown) {
+					yield* this.innerMethod()
+				}
+			}
+
+			let caught: unknown
+			try {
+				for await (const _ of new TestClass().outerMethod("system", [], undefined, {
+					generation: { purpose: "compaction", maxOutputTokens: 30_000 },
+				})) {
+					// Nested providers must delegate retry to the Task boundary.
+				}
+			} catch (error) {
+				caught = error
+			}
+
+			;(caught instanceof Error).should.equal(true)
+			innerCallCount.should.equal(1)
+		})
+
+		it("forwards consumer cancellation to the provider iterator", async () => {
+			let released = false
+			class TestClass {
+				@withRetry()
+				async *streamMethod(_system: string, _messages: unknown[], _tools: unknown, _options: unknown) {
+					try {
+						yield "first"
+						yield "second"
+					} finally {
+						released = true
+					}
+				}
+			}
+
+			for await (const _ of new TestClass().streamMethod("system", [], undefined, {
+				generation: { purpose: "compaction", maxOutputTokens: 30_000 },
+			})) {
+				break
+			}
+
+			released.should.equal(true)
+		})
+
+		it("does not retry a typed output-limit error when retryAllErrors is enabled", async () => {
+			let callCount = 0
+			const outputLimitError = new OutputLimitExceededError("openai_chat", "length")
+			class TestClass {
+				@withRetry({ maxRetries: 3, baseDelay: 1, retryAllErrors: true })
+				async *failMethod() {
+					callCount++
+					throw outputLimitError
+				}
+			}
+
+			let caught: unknown
+			try {
+				for await (const _ of new TestClass().failMethod()) {
+					// Output-limit termination must escape before a generic retry is scheduled.
+				}
+			} catch (error) {
+				caught = error
+			}
+
+			;(caught === outputLimitError).should.equal(true)
+			callCount.should.equal(1)
 		})
 
 		it("should respect retry-after header with delta seconds", async () => {

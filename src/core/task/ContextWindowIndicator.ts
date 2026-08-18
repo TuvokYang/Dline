@@ -85,6 +85,10 @@ export interface AdoptContextWindowIndicatorScopeInput {
 	updatedAt?: number
 }
 
+export interface RefreshStableContextWindowIndicatorInput extends AdoptContextWindowIndicatorScopeInput {
+	environmentTokens: number
+}
+
 /** Own the only mutable context-window snapshot for one Task. */
 export class ContextWindowIndicator {
 	private current: ContextWindowIndicatorSnapshot
@@ -147,6 +151,23 @@ export class ContextWindowIndicator {
 		return this.getSnapshot()
 	}
 
+	/** Refresh dynamic environment occupancy and Provider scope without disturbing an active request lineage. */
+	refreshStable(input: RefreshStableContextWindowIndicatorInput): ContextWindowIndicatorSnapshot {
+		if (this.current.phase !== "stable") return this.getSnapshot()
+		this.current = {
+			...this.current,
+			revision: this.current.revision + 1,
+			environmentTokens: normalizeTokens(input.environmentTokens),
+			contextWindow: normalizeTokens(input.contextWindow),
+			profileId: input.profileId,
+			profileName: input.profileName,
+			mode: input.mode,
+			updatedAt: input.updatedAt ?? Date.now(),
+		}
+		this.durableBaseline = cloneSnapshot(this.current)
+		return this.getSnapshot()
+	}
+
 	beginSend(input: BeginContextWindowIndicatorSendInput): ContextWindowIndicatorSnapshot {
 		this.current = {
 			...this.current,
@@ -186,7 +207,9 @@ export class ContextWindowIndicator {
 				? Math.min(this.current.environmentTokens, Math.max(0, authoritativeContextTokens - receivingTokens))
 				: this.current.environmentTokens
 		const durableContextTokens =
-			authoritativeContextTokens > 0 ? Math.min(this.current.durableContextTokens, availableInputTokens) : this.current.durableContextTokens
+			authoritativeContextTokens > 0
+				? Math.min(this.current.durableContextTokens, availableInputTokens)
+				: this.current.durableContextTokens
 		const pendingSendTokens =
 			authoritativeContextTokens > 0
 				? Math.max(0, authoritativeContextTokens - environmentTokens - receivingTokens - durableContextTokens)

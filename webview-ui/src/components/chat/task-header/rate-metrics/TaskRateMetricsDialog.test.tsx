@@ -87,5 +87,21 @@ describe("TaskRateMetricsDialog", () => {
 		expect(screen.getByText("Showing the most recent available points.")).toBeInTheDocument()
 		expect(screen.getByText(/History retained from/)).toBeInTheDocument()
 		expect(screen.getByTestId("task-rate-metrics-chart")).toBeInTheDocument()
+		expect(screen.getByRole("radio", { name: "TPM" })).toHaveAttribute("aria-checked", "true")
+		expect(screen.getByRole("radio", { name: "Bar" })).toHaveAttribute("aria-checked", "true")
+		expect(screen.getByRole("img", { name: "API rate history chart" })).toHaveAttribute("data-metric", "tpm")
+		expect(screen.getByRole("img", { name: "API rate history chart" })).toHaveAttribute("data-chart-type", "bar")
+
+		fireEvent.click(screen.getByRole("radio", { name: "RPM" }))
+		expect(screen.getByRole("radio", { name: "RPM" })).toHaveAttribute("aria-checked", "true")
+		expect(screen.getByRole("img", { name: "API rate history chart" })).toHaveAttribute("data-metric", "rpm")
+
+		fireEvent.click(screen.getByRole("radio", { name: "Tokens" }))
+		expect(screen.getByRole("radio", { name: "Tokens" })).toHaveAttribute("aria-checked", "true")
+		expect(screen.getByRole("img", { name: "API rate history chart" })).toHaveAttribute("data-metric", "tokens")
+
+		fireEvent.click(screen.getByRole("radio", { name: "Line" }))
+		expect(screen.getByRole("radio", { name: "Line" })).toHaveAttribute("aria-checked", "true")
+		expect(screen.getByRole("img", { name: "API rate history chart" })).toHaveAttribute("data-chart-type", "line")
 	})
 })

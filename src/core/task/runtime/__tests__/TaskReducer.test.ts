@@ -486,6 +486,72 @@ describe("reduceTask lifecycle events", () => {
 		expect(result.effects.map((effect) => effect.type)).toEqual(["POST_TASK_VIEW", "CANCEL_RUNTIME", "PERSIST_SNAPSHOT"])
 	})
 
+	it("opens a durable Resume interaction for the rejected pending Hosted Web request", () => {
+		const result = reduceTask(
+			createTaskRuntimeState({
+				taskId: "task-1",
+				phase: TaskPhase.PAUSED,
+				revision: 7,
+				anchor: {
+					apiIndex: 0,
+					turnId: "hosted-web:task-1:3",
+					interactionId: "hosted-web:task-1:3",
+				},
+			}),
+			{
+				type: "HOSTED_WEB_REQUEST_REJECTED",
+				apiIndex: 3,
+				turnId: "hosted-web-rejected:task-1:3",
+				interactionId: "hosted-web-rejected:task-1:3",
+				presentation: "Hosted Web Search was rejected. Resume when you are ready to continue without this request.",
+			},
+		)
+
+		expect(result).toMatchObject({
+			accepted: true,
+			next: {
+				phase: TaskPhase.PAUSED,
+				interaction: {
+					kind: "resume",
+					status: "opening",
+					interactionId: "hosted-web-rejected:task-1:3",
+				},
+				anchor: { apiIndex: 3, interactionId: "hosted-web-rejected:task-1:3" },
+			},
+		})
+		expect(result.effects).toMatchObject([
+			{
+				type: "APPEND_ASK",
+				interactionId: "hosted-web-rejected:task-1:3",
+				taskAsk: "resume_task",
+			},
+		])
+	})
+
+	it("rejects a Hosted Web recovery event that does not own the current approval anchor", () => {
+		const state = createTaskRuntimeState({
+			taskId: "task-1",
+			phase: TaskPhase.PAUSED,
+			revision: 7,
+			anchor: {
+				apiIndex: 0,
+				turnId: "hosted-web:task-1:4",
+				interactionId: "hosted-web:task-1:4",
+			},
+		})
+
+		const result = reduceTask(state, {
+			type: "HOSTED_WEB_REQUEST_REJECTED",
+			apiIndex: 3,
+			turnId: "hosted-web-rejected:task-1:3",
+			interactionId: "hosted-web-rejected:task-1:3",
+			presentation: "Hosted Web Search was rejected. Resume when you are ready to continue without this request.",
+		})
+
+		expect(result).toMatchObject({ accepted: false, error: { code: "invalid_runtime_event" } })
+		expect(result.next).toBe(state)
+	})
+
 	it("completes cancellation into paused state", () => {
 		const result = reduceTask(stateAt(TaskPhase.CANCELLING), { type: "TASK_CANCELLED" })
 

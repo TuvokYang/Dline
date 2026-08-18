@@ -125,7 +125,6 @@ const AutoApproveModal: React.FC<AutoApproveModalProps> = ({ isVisible, setIsVis
 						onChange={async (e: any) => {
 							const checked = e.target.checked === true
 							await updateAutoApproveSettings({
-								...autoApprovalSettings,
 								version: (autoApprovalSettings.version ?? 1) + 1,
 								enableNotifications: checked,
 							})

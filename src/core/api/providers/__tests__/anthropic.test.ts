@@ -437,6 +437,31 @@ describe("AnthropicHandler", () => {
 			expect(requestBody?.max_tokens).to.equal(12_345)
 		})
 
+		it("uses the request-scoped compaction cap for Anthropic Messages", async () => {
+			const handler = new AnthropicHandler({
+				profile: ApiProfile.create({
+					provider: "anthropic",
+					apiKey: "test-api-key",
+					modelId: "claude-opus-4-7",
+					anthropic: { capabilities: { maxTokens: 12_345, supportsPromptCache: false } },
+				}),
+				mode: "act",
+			})
+			const standardCreate = vi.fn().mockResolvedValue(createAsyncIterable())
+			vi.spyOn(handler as unknown as { ensureClient: () => unknown }, "ensureClient").mockReturnValue({
+				messages: { create: standardCreate },
+				beta: { messages: { _client: {}, create: vi.fn().mockResolvedValue(createAsyncIterable()) } },
+			})
+
+			for await (const _chunk of handler.createMessage("system prompt", [{ role: "user", content: "Hello" }], undefined, {
+				generation: { purpose: "compaction", maxOutputTokens: 30_000 },
+			} as any)) {
+			}
+
+			const requestBody = standardCreate.mock.calls[0]?.[0] as { max_tokens?: unknown } | undefined
+			expect(requestBody?.max_tokens).to.equal(30_000)
+		})
+
 		it("should send the custom model id in Anthropic requests", async () => {
 			const customModelId = "custom-claude-compatible-model"
 			const handler = new AnthropicHandler({

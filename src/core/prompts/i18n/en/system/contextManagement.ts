@@ -2,6 +2,8 @@
 
 const prompts: Record<string, string> = {
 	summarizeMain: `<explicit_instructions type="summarize_task">
+@COMPACTION_WINDOW_BUDGET@
+
 The current conversation is rapidly running out of context. Now, your urgent task is to create a comprehensive detailed summary of the conversation so far, paying close attention to the user's explicit requests and your previous actions.
 This summary should be thorough in capturing technical details, code patterns, and architectural decisions that would be essential for continuing development work without losing context.
 
@@ -10,6 +12,11 @@ This summary should be thorough in capturing technical details, code patterns, a
 You must respond to this message by calling the summarize_task tool. Do not call attempt_completion or any other tool. Include ALL information in the summary required for continuing with the task at hand. This is because you will lose access to all messages other than this summary.
 
 When responding with the summarize_task tool call, follow these instructions:
+
+- Stop adding optional detail as the recommended upper bound or hard limit is approached.
+- Emit exactly one syntactically complete summarize_task call.
+- Close </context></summarize_task> before the hard limit; reserve that closing payload before adding optional detail.
+- Do not emit an additional empty <summarize_task /> call.
 
 Before providing your final summary, thoroughly analyze the conversation to ensure you've covered all necessary points. In your analysis process:
 1. Chronologically analyze each message and section of the conversation. For each section thoroughly identify:
@@ -49,9 +56,6 @@ Usage:
 Here's an example of how your output should be structured:
 
 <example>
-<thinking>
-[Your thought process, ensuring all points are covered thoroughly and accurately]
-</thinking>
 <summarize_task>
 <context>
 1. Previous Conversation:
@@ -87,7 +91,7 @@ Here's an example of how your output should be structured:
    [Precise description of current work]
 9. Next Step:
    [Next step with verbatim quote]
-10. Optional Required Files:
+10. Required Files:
    - [file path 1]
    - [file path 2]
 </context>

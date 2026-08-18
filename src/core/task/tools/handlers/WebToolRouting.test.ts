@@ -1,5 +1,6 @@
 import { resolveWebSearchRoutingPlan } from "@core/api/server-tools"
 import { PreToolUseHookCancellationError } from "@core/hooks/PreToolUseHookCancellationError"
+import { InteractionCancellationError } from "@core/task/interaction/InteractionCancellationError"
 import { ToolExecutor } from "@core/task/ToolExecutor"
 import { ApiFormat, ServerTool } from "@shared/proto/dline/models/metadata"
 import { WebSearchMode } from "@shared/proto/dline/provider/common"
@@ -333,6 +334,38 @@ describe("local Web Tool routing", () => {
 			error: "Browser / Bing search failed: navigation timed out",
 		})
 		expect(taskConfig.callbacks.say.mock.calls[1][5]).toBe(searchBlock.ts)
+	})
+
+	it("preserves a pending local Web Search approval when task termination cancels the waiter", async () => {
+		const taskConfig = config(true, "local")
+		taskConfig.services.stateManager.getGlobalSettingsKey = (key: string) =>
+			key === "clineWebToolsEnabled"
+				? true
+				: key === "hooksEnabled"
+					? false
+					: key === "localWebSearchEngine"
+						? "bing"
+						: undefined
+		taskConfig.services.stateManager.getSecretKey = vi.fn()
+		taskConfig.autoApprovalSettings = { enableNotifications: false }
+		taskConfig.callbacks.shouldAutoApproveTool = vi.fn(() => false)
+		taskConfig.callbacks.say = vi.fn(async () => undefined)
+		const cancellation = new InteractionCancellationError("task_terminated")
+		taskConfig.callbacks.ask = vi.fn(async () => {
+			throw cancellation
+		})
+		const search = vi.fn()
+		const provider: LocalSearchProvider = {
+			descriptor: { id: "bing", label: "Browser / Bing", execution: "dline" },
+			search,
+		}
+		const searchBlock = { ...block("web_search"), params: { query: "pending search" } } as ToolUse
+
+		await expect(
+			new WebSearchToolHandler(() => new LocalSearchRegistry([provider])).execute(taskConfig, searchBlock),
+		).rejects.toBe(cancellation)
+		expect(search).not.toHaveBeenCalled()
+		expect(taskConfig.callbacks.say).not.toHaveBeenCalled()
 	})
 
 	it("terminates the local Web Search card when PreToolUse cancels execution", async () => {

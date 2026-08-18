@@ -25,7 +25,6 @@ export function useAutoApproveActions() {
 		async (action: ActionMetadata, checked: boolean) => {
 			if (action.id === "enableNotifications") {
 				await updateAutoApproveSettings({
-					...autoApprovalSettings,
 					version: (autoApprovalSettings.version ?? 1) + 1,
 					enableNotifications: checked,
 				})
@@ -45,23 +44,21 @@ export function useAutoApproveActions() {
 				return
 			}
 
-			const newActions = {
-				...autoApprovalSettings.actions,
+			const actionPatch: Partial<AutoApprovalSettings["actions"]> = {
 				[actionId]: value,
 			}
 
 			if (value === false && subActionId) {
-				newActions[subActionId] = false
+				actionPatch[subActionId] = false
 			}
 
 			if (value === true && action.parentActionId) {
-				newActions[action.parentActionId as keyof AutoApprovalSettings["actions"]] = true
+				actionPatch[action.parentActionId as keyof AutoApprovalSettings["actions"]] = true
 			}
 
 			await updateAutoApproveSettings({
-				...autoApprovalSettings,
 				version: (autoApprovalSettings.version ?? 1) + 1,
-				actions: newActions,
+				actions: actionPatch,
 			})
 		},
 		[autoApprovalSettings, updateNotifications],

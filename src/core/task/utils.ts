@@ -1,4 +1,5 @@
 import { ApiHandler } from "@core/api"
+import { findLastIndex } from "@shared/array"
 import { showApprovalNotification } from "@/integrations/notifications"
 import { ClineApiReqCancelReason, ClineApiReqInfo } from "@/shared/ExtensionMessage"
 import { calculateApiCostAnthropic } from "@/utils/cost"
@@ -31,17 +32,30 @@ type UpdateApiReqMsgParams = {
  */
 export const updateApiReqMsg = async (params: UpdateApiReqMsgParams): Promise<void> => {
 	const clineMessages = params.messageStateHandler.clineMessages
-	const currentApiReqInfo: ClineApiReqInfo = JSON.parse(clineMessages[params.lastApiReqIndex].text || "{}")
+	const requestedMessage = clineMessages[params.lastApiReqIndex]
+	const currentApiReqIndex =
+		requestedMessage?.say === "api_req_started"
+			? params.lastApiReqIndex
+			: findLastIndex(clineMessages, (message) => message.say === "api_req_started")
+	if (currentApiReqIndex === -1) {
+		throw new Error(
+			`Unable to finalize API request message: no api_req_started message remains (requested index ${params.lastApiReqIndex})`,
+		)
+	}
+	const currentApiReqInfo: ClineApiReqInfo = JSON.parse(clineMessages[currentApiReqIndex].text || "{}")
 	delete currentApiReqInfo.retryStatus // Clear retry status when request is finalized
 
 	const modelInfo = params.api.getModel().info
 	const totalInputTokens = params.inputTokens + (params.cacheWriteTokens || 0) + (params.cacheReadTokens || 0)
 	const cacheHitRate = params.cacheHitRate ?? (totalInputTokens > 0 ? (params.cacheReadTokens / totalInputTokens) * 100 : 0)
 
-	await params.messageStateHandler.updateClineMessage(params.lastApiReqIndex, {
+	const hasReliableContextTokens = Number.isFinite(params.contextTokens) && params.contextTokens > 0
+	await params.messageStateHandler.updateClineMessage(currentApiReqIndex, {
 		text: JSON.stringify({
 			...currentApiReqInfo, // Spread the modified info (with retryStatus removed)
-			contextTokens: params.contextTokens,
+			...(hasReliableContextTokens
+				? { contextTokens: params.contextTokens, contextTokensSource: "provider" as const }
+				: {}),
 			tokensIn: params.inputTokens,
 			tokensOut: params.outputTokens,
 			cacheWrites: params.cacheWriteTokens,

@@ -2,6 +2,14 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { describe, expect, it, vi } from "vitest"
 import ContextWindow from "./ContextWindow"
 
+class TestResizeObserver implements ResizeObserver {
+	disconnect = vi.fn()
+	observe = vi.fn()
+	unobserve = vi.fn()
+}
+
+globalThis.ResizeObserver = TestResizeObserver
+
 describe("ContextWindow metrics", () => {
 	it("renders context usage without owning the compact action", () => {
 		render(<ContextWindow contextWindow={128_000} lastApiReqTotalTokens={64_000} useAutoCondense={false} />)
@@ -48,6 +56,68 @@ describe("ContextWindow metrics", () => {
 		await waitFor(() => expect(screen.queryByText("Compact the current task?")).not.toBeInTheDocument())
 	})
 
+	it("does not render Force Truncate actions without an explicit backend availability signal", () => {
+		const onForceTruncateTask = vi.fn(async () => true)
+		render(
+			<ContextWindow
+				contextWindow={128_000}
+				lastApiReqTotalTokens={64_000}
+				onForceTruncateTask={onForceTruncateTask}
+				useAutoCondense
+			/>,
+		)
+
+		expect(screen.queryByRole("button", { name: "More context actions" })).not.toBeInTheDocument()
+		expect(screen.queryByText("Force truncate conversation history")).not.toBeInTheDocument()
+	})
+
+	it("requires the guarded menu and exact TRUNCATE confirmation before force truncation", async () => {
+		const onCompactTask = vi.fn(async () => true)
+		const onForceTruncateTask = vi.fn(async () => true)
+		render(
+			<ContextWindow
+				contextWindow={128_000}
+				forceTruncateAvailable
+				lastApiReqTotalTokens={64_000}
+				onCompactTask={onCompactTask}
+				onForceTruncateTask={onForceTruncateTask}
+				useAutoCondense
+			/>,
+		)
+
+		fireEvent.click(screen.getByRole("button", { name: "More context actions" }))
+		const menuAction = screen.getByRole("button", { name: "Force truncate conversation history", exact: true })
+		fireEvent.click(menuAction)
+
+		expect(screen.getByRole("dialog")).toBeInTheDocument()
+		expect(screen.getByLabelText("Type TRUNCATE to confirm")).toHaveValue("")
+		expect(onForceTruncateTask).not.toHaveBeenCalled()
+
+		const confirmButton = screen.getByText("Force truncate conversation history", { exact: true })
+		expect(confirmButton.querySelector("input[disabled]")).toBeInTheDocument()
+
+		fireEvent.change(screen.getByLabelText("Type TRUNCATE to confirm"), { target: { value: "TRUNCATE" } })
+		expect(confirmButton.querySelector("input[disabled]")).not.toBeInTheDocument()
+		fireEvent.click(confirmButton)
+
+		await waitFor(() => expect(onForceTruncateTask).toHaveBeenCalledOnce())
+		expect(onCompactTask).not.toHaveBeenCalled()
+		await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument())
+	})
+
+	it("owns a shrink-safe three-column layout so the progress track cannot collapse at narrow widths", () => {
+		render(<ContextWindow contextWindow={128_000} lastApiReqTotalTokens={64_000} useAutoCondense={false} />)
+
+		expect(screen.getByTestId("context-window-indicator")).toHaveClass("min-w-0", "w-full")
+		expect(screen.getByTestId("context-window-progress-track")).toHaveClass("min-w-0", "w-full")
+		expect(screen.getByTestId("context-window-progress-track").parentElement).toHaveClass(
+			"grid",
+			"grid-cols-[auto_minmax(2rem,1fr)_auto]",
+			"min-w-0",
+			"w-full",
+		)
+	})
+
 	it("renders the authoritative four segments in durable, sending, receiving, ENV order", () => {
 		render(
 			<ContextWindow
@@ -70,11 +140,44 @@ describe("ContextWindow metrics", () => {
 		)
 
 		const progress = screen.getByTestId("context-window-segmented-progress")
-		expect(progress).toHaveAttribute("title", "Context phase: receiving")
+		expect(progress).not.toHaveAttribute("title")
+		expect(screen.getByTestId("context-window-tooltip-trigger")).toContainElement(progress)
+		expect(document.querySelectorAll('[data-slot="hover-card-content"]')).toHaveLength(0)
 		expect(screen.getByTestId("context-window-segment-durable")).toHaveAttribute("aria-label", "Durable: 40000 tokens")
 		expect(screen.getByTestId("context-window-segment-sending")).toHaveAttribute("aria-label", "Sending: 2000 tokens")
 		expect(screen.getByTestId("context-window-segment-receiving")).toHaveAttribute("aria-label", "Receiving: 3000 tokens")
 		expect(screen.getByTestId("context-window-segment-environment")).toHaveAttribute("aria-label", "ENV: 1000 tokens")
+		for (const kind of ["durable", "sending", "receiving", "environment"] as const) {
+			expect(screen.getByTestId(`context-window-segment-${kind}`)).not.toHaveAttribute("title")
+		}
+	})
+
+	it("opens the current snapshot immediately for the whole track and closes on mouse leave", async () => {
+		render(
+			<ContextWindow
+				contextWindowIndicator={{
+					taskId: "task-empty-hover",
+					revision: 1,
+					epoch: 1,
+					phase: "receiving",
+					durableContextTokens: 10_000,
+					pendingSendTokens: 0,
+					receivingTokens: 100,
+					environmentTokens: 1_000,
+					contextWindow: 100_000,
+					mode: "act",
+					updatedAt: 1,
+					lineage: { kind: "baseline" },
+				}}
+				useAutoCondense={false}
+			/>,
+		)
+
+		fireEvent.mouseEnter(screen.getByTestId("context-window-progress-track"))
+		expect(document.querySelector('[data-slot="hover-card-content"]')).toBeInTheDocument()
+
+		fireEvent.mouseLeave(screen.getByTestId("context-window-indicator"))
+		await waitFor(() => expect(document.querySelector('[data-slot="hover-card-content"]')).not.toBeInTheDocument())
 	})
 
 	it("renders nothing when context-window metrics are unavailable", () => {

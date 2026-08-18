@@ -12,7 +12,6 @@ import fs from "fs/promises"
 import { telemetryService } from "@/services/telemetry"
 import { Logger } from "@/shared/services/Logger"
 import {
-	condenseToolResponse,
 	deepPlanningToolResponse,
 	explainChangesToolResponse,
 	newRuleToolResponse,
@@ -134,8 +133,8 @@ export async function parseSlashCommands(
 
 	const commandReplacements: Record<string, string> = {
 		newtask: newTaskToolResponse(),
-		smol: condenseToolResponse(commandFocusChainSettings),
-		compact: condenseToolResponse(commandFocusChainSettings),
+		smol: "",
+		compact: "",
 		newrule: newRuleToolResponse(),
 		reportbug: reportBugToolResponse(),
 		"deep-planning": deepPlanningToolResponse(promptProfile, commandFocusChainSettings, providerInfo, enableNativeToolCalls),

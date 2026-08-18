@@ -261,23 +261,36 @@ function summarizeStoredRateMetrics(records: readonly StoredRateSecondRecord[]):
 
 async function expectRateMetricsDialog(frame: Frame, summary: RateSummary, exerciseResolutions: boolean): Promise<void> {
 	const rate = frame.getByTestId("task-rate-metrics")
-	await expect(rate).toHaveAttribute(
-		"aria-label",
-		`View API rate history. Requests per minute: ${summary.requestsPerMinute}; tokens per minute: ${summary.tokensPerMinute}`,
-	)
+	const ariaLabel = await rate.getAttribute("aria-label")
+	expect(ariaLabel).toContain("View API rate history")
+	expect(ariaLabel).toContain(`Requests per minute: ${summary.requestsPerMinute}`)
+	expect(ariaLabel).toContain(`Tokens per minute: ${summary.tokensPerMinute}`)
 	await rate.click()
 	const dialog = frame.getByRole("dialog")
 	await expect(dialog.getByRole("heading", { name: "API rate history", exact: true })).toBeVisible()
 	await expect(dialog.getByRole("tab", { name: "Minute", exact: true })).toHaveAttribute("aria-selected", "true")
-	await expect(dialog.getByRole("img", { name: "API rate history chart", exact: true })).toBeVisible({ timeout: 30_000 })
-	const points = dialog.locator('[data-testid^="task-rate-point-"]')
-	await expect(points.last()).toBeVisible()
-	await points.last().focus()
+	const chart = dialog.getByRole("img", { name: "API rate history chart", exact: true })
+	await expect(chart).toBeVisible({ timeout: 30_000 })
+	await expect(chart).toHaveAttribute("data-chart-type", "bar")
+	await expect(chart).toHaveAttribute("data-metric", "tpm")
+	const bars = dialog.locator('[data-testid^="task-rate-bar-"]')
+	await expect(bars.last()).toBeVisible()
+	await bars.last().focus()
 	const tooltip = dialog.getByRole("tooltip")
+	await expect(tooltip).toContainText(`Selected TPM: ${summary.lastMinute.tokensPerMinute.toLocaleString()}`)
 	await expect(tooltip).toContainText(`TPM: ${summary.lastMinute.tokensPerMinute.toLocaleString()}`)
 	await expect(tooltip).toContainText(`RPM: ${summary.lastMinute.requestsPerMinute.toLocaleString()}`)
+	await expect(tooltip).toContainText(`Tokens: ${summary.lastMinute.tokenCount.toLocaleString()}`)
 	await expect(tooltip).toContainText(`Active seconds: ${summary.lastMinute.activeSeconds}`)
 	await expect(tooltip).toContainText(`Quality: ${summary.lastMinute.quality}`)
+
+	for (const metric of ["RPM", "Tokens"] as const) {
+		await dialog.getByRole("radio", { name: metric, exact: true }).click()
+		await expect(chart).toHaveAttribute("data-metric", metric === "RPM" ? "rpm" : "tokens")
+	}
+	await dialog.getByRole("radio", { name: "Line", exact: true }).click()
+	await expect(chart).toHaveAttribute("data-chart-type", "line")
+	await expect(dialog.locator('[data-testid^="task-rate-point-"]').last()).toBeVisible()
 
 	if (exerciseResolutions) {
 		for (const resolution of ["Hour", "Day", "Minute"] as const) {

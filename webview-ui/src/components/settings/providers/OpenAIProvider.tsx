@@ -257,7 +257,9 @@ export const OpenAIProvider = ({ showModelOptions, isPopup, profile, onUpdate }:
 
 					<OpenAIServiceTierSelector
 						onServiceTierChange={(serviceTier) => onUpdate({ openai: { ...pc, serviceTier } })}
+						onServiceTierEnabledChange={(serviceTierEnabled) => onUpdate({ openai: { ...pc, serviceTierEnabled } })}
 						serviceTier={pc.serviceTier}
+						serviceTierEnabled={pc.serviceTierEnabled}
 					/>
 
 					<ModelConfiguration

@@ -253,6 +253,43 @@ describe("FileContextTracker", () => {
 		expect(modifiedFiles).to.not.include(filePath)
 	})
 
+	it("peeks recently modified files without consuming them", async () => {
+		await tracker.trackFileContext(filePath, "user_edited")
+
+		const firstSnapshot = tracker.peekRecentlyModifiedFiles()
+		const secondSnapshot = tracker.peekRecentlyModifiedFiles()
+
+		expect(firstSnapshot.files).to.deep.equal([filePath])
+		expect(secondSnapshot).to.deep.equal(firstSnapshot)
+	})
+
+	it("acknowledges only the exact recently modified snapshot", async () => {
+		await tracker.trackFileContext(filePath, "user_edited")
+		const snapshot = tracker.peekRecentlyModifiedFiles()
+
+		await tracker.trackFileContext(filePath, "user_edited")
+		tracker.acknowledgeRecentlyModifiedFiles(snapshot)
+
+		expect(tracker.peekRecentlyModifiedFiles().files).to.deep.equal([filePath])
+	})
+
+	it("restores checkpoint revisions without overwriting newer file edits", async () => {
+		await tracker.trackFileContext(filePath, "user_edited")
+		const checkpoint = tracker.peekRecentlyModifiedFiles()
+		await tracker.trackFileContext(filePath, "user_edited")
+
+		tracker.restoreRecentlyModifiedFiles({
+			files: [...checkpoint.files, "src/restored.ts"],
+			revisions: { ...checkpoint.revisions, "src/restored.ts": 7 },
+		})
+
+		const restored = tracker.peekRecentlyModifiedFiles()
+		expect(restored.files).to.include(filePath)
+		expect(restored.files).to.include("src/restored.ts")
+		expect(restored.revisions[filePath]).to.be.greaterThan(checkpoint.revisions[filePath])
+		expect(restored.revisions["src/restored.ts"]).to.equal(7)
+	})
+
 	it("should dispose file watchers when dispose is called", async () => {
 		// Track a file to set up the watcher
 		await tracker.trackFileContext(filePath, "read_tool")

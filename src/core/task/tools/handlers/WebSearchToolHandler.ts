@@ -1,4 +1,5 @@
 import { getPrompt } from "@core/prompts/i18n"
+import { isInteractionCancellationError } from "@core/task/interaction/InteractionCancellationError"
 import { ClineAsk, ClineSayTool } from "@shared/ExtensionMessage"
 import { ClineDefaultTool } from "@shared/tools"
 import { DEFAULT_LOCAL_SEARCH_ENGINE, isLocalSearchEngineId, LOCAL_SEARCH_ENGINE_LABELS } from "@shared/web-search"
@@ -260,6 +261,7 @@ export class WebSearchToolHandler implements IFullyManagedTool {
 			await config.callbacks.say("tool", JSON.stringify(completedMessage), undefined, undefined, false, block.ts)
 			return formatResponse.toolResult(formatSearchResults(descriptor.label, items))
 		} catch (error) {
+			if (isInteractionCancellationError(error)) throw error
 			const message = error instanceof Error ? error.message : String(error)
 			await writeFailure(message)
 			return `Error performing web search: ${message}`

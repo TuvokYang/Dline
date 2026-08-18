@@ -9,6 +9,7 @@ import { afterEach, describe, it, vi } from "vitest"
 import { openAiCodexOAuthManager } from "@/integrations/openai-codex/oauth"
 import type { ClineAssistantToolUseBlock, ClineStorageMessage, ClineUserToolResultContentBlock } from "@/shared/messages/content"
 import { mockFetchForTesting } from "@/shared/net"
+import { OutputLimitExceededError } from "../../stream/OutputLimitExceededError"
 import { StreamIdleTimeoutError } from "../../stream/openai-responses-stream-monitor"
 import { OpenAiHandler } from "../openai"
 import { OpenAiCodexHandler } from "../openai-codex"
@@ -142,6 +143,59 @@ describe("OpenAiHandler", () => {
 			should(requestBody?.temperature).equal(0.7)
 		})
 
+		it("uses the request-scoped compaction cap for Chat completions", async () => {
+			const handler = new OpenAiHandler({
+				profile: ApiProfile.create({
+					provider: "openai",
+					apiKey: "test-api-key",
+					modelId: "custom-openai-compatible-model",
+					openai: OpenAiProviderConfig.create({ capabilities: { maxTokens: 12_345 } }),
+				}),
+				mode: "act",
+			})
+			const create = vi.fn().mockResolvedValue(createAsyncIterable())
+			vi.spyOn(handler as unknown as { ensureClient: () => unknown }, "ensureClient").mockReturnValue({
+				chat: { completions: { create } },
+			})
+
+			for await (const _chunk of handler.createMessage("system prompt", [{ role: "user", content: "Hello" }], undefined, {
+				generation: { purpose: "compaction", maxOutputTokens: 30_000 },
+			} as any)) {
+			}
+
+			const requestBody = create.mock.calls[0]?.[0] as Record<string, unknown> | undefined
+			expect(requestBody?.max_tokens).to.equal(30_000)
+		})
+
+		it("throws a typed output-limit error for Chat finish_reason length", async () => {
+			const handler = new OpenAiHandler({
+				profile: ApiProfile.create({
+					provider: "openai",
+					apiKey: "test-api-key",
+					modelId: "custom-openai-compatible-model",
+					openai: OpenAiProviderConfig.create({ apiFormat: ApiFormat.OPENAI_CHAT }),
+				}),
+				mode: "act",
+			})
+			const create = vi
+				.fn()
+				.mockResolvedValue(createAsyncIterable([{ choices: [{ delta: {}, finish_reason: "length", index: 0 }] }]))
+			vi.spyOn(handler as unknown as { ensureClient: () => unknown }, "ensureClient").mockReturnValue({
+				chat: { completions: { create } },
+			})
+
+			let caught: unknown
+			try {
+				for await (const _chunk of handler.createMessage("system prompt", [{ role: "user", content: "Hello" }])) {
+				}
+			} catch (error) {
+				caught = error
+			}
+
+			expect(caught).to.be.instanceOf(OutputLimitExceededError)
+			expect(caught).to.deep.include({ protocol: "openai_chat", reason: "length" })
+		})
+
 		it("passes configured service tier and ultra effort to an OpenAI-compatible endpoint", async () => {
 			const handler = new OpenAiHandler({
 				profile: ApiProfile.create({
@@ -169,6 +223,28 @@ describe("OpenAiHandler", () => {
 			expect(requestBody.prompt_cache_key).to.be.a("string").and.not.equal("")
 			expect(requestBody.prompt_cache_options).to.equal(undefined)
 			expect(JSON.stringify(requestBody.messages)).not.to.contain("prompt_cache_breakpoint")
+		})
+
+		it("suppresses a configured service tier when the Profile disables Service Tier", async () => {
+			const handler = new OpenAiHandler({
+				profile: ApiProfile.create({
+					provider: "openai",
+					apiKey: "test-api-key",
+					modelId: "gpt-5.6-compatible",
+					openai: OpenAiProviderConfig.create({ serviceTier: "priority", serviceTierEnabled: false }),
+				}),
+				mode: "act",
+			})
+			const create = vi.fn().mockResolvedValue(createAsyncIterable())
+			vi.spyOn(handler as unknown as { ensureClient: () => unknown }, "ensureClient").mockReturnValue({
+				chat: { completions: { create } },
+			})
+
+			for await (const _chunk of handler.createMessage("system prompt", [{ role: "user", content: "Hello" }])) {
+			}
+
+			const requestBody = create.mock.calls[0]?.[0] as Record<string, unknown>
+			expect(requestBody).not.to.have.property("service_tier")
 		})
 
 		it("adds a stable Chat cache key while suppressing explicit controls across dynamic suffixes", async () => {
@@ -622,6 +698,33 @@ describe("OpenAiHandler", () => {
 			expect(requestBody.reasoning).to.deep.equal({ effort: "high", summary: "auto" })
 		})
 
+		it("uses the request-scoped compaction cap for Responses", async () => {
+			const handler = new OpenAiHandler({
+				profile: ApiProfile.create({
+					provider: "openai",
+					apiKey: "test-api-key",
+					modelId: "gpt-compatible-responses",
+					openai: OpenAiProviderConfig.create({
+						apiEndpoint: "responses",
+						capabilities: { maxTokens: 16_384 },
+					}),
+				}),
+				mode: "act",
+			})
+			const responsesCreate = vi.fn().mockResolvedValue(createAsyncIterable())
+			vi.spyOn(handler as unknown as { ensureClient: () => unknown }, "ensureClient").mockReturnValue({
+				responses: { create: responsesCreate },
+			})
+
+			for await (const _chunk of handler.createMessage("system prompt", [{ role: "user", content: "Hello" }], undefined, {
+				generation: { purpose: "compaction", maxOutputTokens: 30_000 },
+			} as any)) {
+			}
+
+			const requestBody = responsesCreate.mock.calls[0]?.[0] as Record<string, unknown>
+			expect(requestBody.max_output_tokens).to.equal(30_000)
+		})
+
 		it("projects hosted web search exactly once and removes the local function declaration", async () => {
 			const handler = new OpenAiHandler({
 				profile: ApiProfile.create({
@@ -860,6 +963,25 @@ describe("OpenAiCodexHandler request configuration", () => {
 		).buildRequestBody({ id: "gpt-5.6-sol", info: {} }, [], "system")
 
 		expect(body.service_tier).to.equal("scale")
+	})
+
+	it("suppresses service tier when the Codex Profile disables Service Tier", () => {
+		const handler = new OpenAiCodexHandler({
+			profile: ApiProfile.create({
+				provider: "openai-codex",
+				modelId: "gpt-5.6-sol",
+				openaiCodex: OpenAiCodexProviderConfig.create({ serviceTier: "scale", serviceTierEnabled: false }),
+			}),
+			mode: "act",
+		})
+
+		const body = (
+			handler as unknown as {
+				buildRequestBody: (...args: unknown[]) => Record<string, unknown>
+			}
+		).buildRequestBody({ id: "gpt-5.6-sol", info: {} }, [], "system")
+
+		expect(body).not.to.have.property("service_tier")
 	})
 })
 

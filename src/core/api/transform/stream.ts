@@ -28,6 +28,9 @@ export interface ApiStreamTextChunk {
 
 export interface ApiStreamUsageChunk {
 	type: "usage"
+	/** Usage chunks are Provider snapshots unless an adapter explicitly emits request-local deltas. */
+	usageMode?: "snapshot" | "delta"
+	/** Non-cache input only; cache read/write fields are disjoint segments of the request context. */
 	inputTokens: number
 	outputTokens: number
 	cacheWriteTokens?: number
@@ -65,6 +68,7 @@ export interface ApiStreamServerToolChunk extends ApiServerToolChunkBase {
 }
 
 export type ApiToolCallPhase = "delta" | "completed"
+export type ApiToolCallArgumentsMode = "delta" | "snapshot"
 
 export interface ApiRawStreamToolCallsChunk {
 	type: "tool_calls"
@@ -72,6 +76,8 @@ export interface ApiRawStreamToolCallsChunk {
 	function_id: string
 	/** Provider lifecycle boundary when the adapter can determine it. */
 	phase?: ApiToolCallPhase
+	/** Tool arguments are streaming deltas unless an adapter explicitly emits complete snapshots. */
+	argumentsMode?: ApiToolCallArgumentsMode
 	/** Provider-owned replay metadata, never used as runtime identity. */
 	provider_metadata?: ClineProviderMetadata
 	/** Provider response-local tool position used for interleaved deltas. */
@@ -92,6 +98,8 @@ export interface ApiStreamToolCallsChunk {
 	function_id: string
 	/** Provider lifecycle boundary when the adapter can determine it. */
 	phase?: ApiToolCallPhase
+	/** Tool arguments are streaming deltas unless an adapter explicitly emits complete snapshots. */
+	argumentsMode?: ApiToolCallArgumentsMode
 	/** Dline trace identity for the complete tool lifecycle. */
 	dline_tid: string
 	/** Provider-owned replay metadata, never used as runtime identity. */

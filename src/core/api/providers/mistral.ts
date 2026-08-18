@@ -118,6 +118,7 @@ export class MistralHandler implements ApiHandler {
 					yield {
 						type: "tool_calls",
 						function_id: toolCall.id,
+						argumentsMode: "snapshot",
 						tool_call: {
 							function: {
 								name: toolCall.function.name,

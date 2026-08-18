@@ -1,5 +1,4 @@
 import type { ApiProviderInfo } from "@core/api"
-import { COMPACTION_WINDOW_BUDGET_MARKER } from "@core/context/context-management/compaction-window-budget"
 import type { McpPromptResponse } from "@shared/mcp"
 import { createTaskCapabilityToggles } from "@shared/TaskCapabilityToggles"
 import { expect } from "chai"
@@ -163,8 +162,6 @@ describe("slash-commands", () => {
 	describe("parseSlashCommands explicit instruction injection", () => {
 		const cases = [
 			["newtask", "new_task"],
-			["compact", "summarize_task"],
-			["smol", "summarize_task"],
 			["newrule", "new_rule"],
 			["reportbug", "report_bug"],
 		] as const
@@ -218,18 +215,16 @@ describe("slash-commands", () => {
 			})
 		}
 
-		it("injects task_progress only for focus-enabled summarize instructions", async () => {
-			const withoutFocus = await parseSlashCommands("<task>/compact</task>", {}, {}, "test-ulid", {
+		it("keeps manual compaction guidance independent from focus-chain prompt generation", async () => {
+			const withoutFocus = await parseSlashCommands("<task>/compact Keep failures.</task>", {}, {}, "test-ulid", {
 				enabled: false,
 			})
-			const withFocus = await parseSlashCommands("<task>/compact</task>", {}, {}, "test-ulid", {
+			const withFocus = await parseSlashCommands("<task>/compact Keep failures.</task>", {}, {}, "test-ulid", {
 				enabled: true,
 			})
 
-			expect(withoutFocus.processedText).to.not.include("task_progress")
-			expect(withoutFocus.processedText).to.not.include("<task_progress>")
-			expect(withFocus.processedText).to.include("task_progress")
-			expect(withFocus.processedText).to.include("<task_progress>")
+			expect(withoutFocus.processedText).to.equal("<task> Keep failures.</task>")
+			expect(withFocus.processedText).to.equal(withoutFocus.processedText)
 		})
 
 		it("preserves user feedback written after /compact", async () => {
@@ -240,10 +235,9 @@ describe("slash-commands", () => {
 				"test-ulid",
 			)
 
-			expect(result.processedText).to.include("The current conversation is rapidly running out of context")
-			expect(result.processedText).to.include("<summarize_task>")
+			expect(result.processedText).to.equal("<task> Keep command decisions and unresolved failures.</task>")
+			expect(result.processedText).to.not.include("<summarize_task>")
 			expect(result.processedText).to.not.include("instruction_id")
-			expect(result.processedText).to.not.include("<condense>")
 			expect(result.explicitInstructions).to.deep.equal([
 				{
 					type: "summarize_task",
@@ -251,12 +245,11 @@ describe("slash-commands", () => {
 					targetTool: "summarize_task",
 				},
 			])
-			expect(result.processedText).to.include(COMPACTION_WINDOW_BUDGET_MARKER)
 			expect(result.processedText).to.include("Keep command decisions and unresolved failures.")
 			expect(result.processedText).to.not.include("/compact")
 		})
 
-		it("does not inject task_progress into Lite summarize instructions", async () => {
+		it("keeps compact command removal stable for Lite providers", async () => {
 			const result = await parseSlashCommands(
 				"<task>/compact</task>",
 				{},
@@ -267,8 +260,7 @@ describe("slash-commands", () => {
 				createProviderInfo(63_999),
 			)
 
-			expect(result.processedText).to.not.include("task_progress")
-			expect(result.processedText).to.not.include("<task_progress>")
+			expect(result.processedText).to.equal("<task></task>")
 		})
 	})
 

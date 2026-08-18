@@ -3,6 +3,7 @@ import type { ContextCompactionSessionEvent } from "@core/task/ContextCompaction
 import type { ContextWindowIndicatorLineage, ContextWindowIndicatorSnapshot } from "@shared/context-window-indicator"
 import { describe, expect, it, vi } from "vitest"
 import { ContextWindowIndicator } from "../ContextWindowIndicator"
+import { ContextWindowReceivingTracker } from "../ContextWindowReceivingTracker"
 import { Task } from "../index"
 
 type IndicatorTaskHarness = {
@@ -10,8 +11,8 @@ type IndicatorTaskHarness = {
 	taskState: { contextWindowIndicator?: ContextWindowIndicatorSnapshot }
 	contextWindowIndicator: ContextWindowIndicator
 	ordinaryContextIndicatorLineageByApiIndex: Map<number, ContextWindowIndicatorLineage>
-	ordinaryContextIndicatorReceivingByApiIndex: Map<number, { estimatedContentTokens: number; exactOutputTokens: number }>
-	contextCompactionIndicatorReceivingByAttemptId: Map<string, { estimatedContentTokens: number; exactOutputTokens: number }>
+	ordinaryContextIndicatorReceivingByApiIndex: Map<number, ContextWindowReceivingTracker>
+	contextCompactionIndicatorReceivingByAttemptId: Map<string, ContextWindowReceivingTracker>
 	postStateToWebview: ReturnType<typeof vi.fn>
 	publishContextWindowIndicatorSnapshot(snapshot: ContextWindowIndicatorSnapshot): Promise<void>
 	receiveOrdinaryContextWindowIndicator(
@@ -117,10 +118,8 @@ describe("Task context-window indicator stale protection", () => {
 		})
 		task.taskState.contextWindowIndicator = current
 		task.ordinaryContextIndicatorLineageByApiIndex.set(3, ordinaryAttempt1)
-		task.ordinaryContextIndicatorReceivingByApiIndex.set(3, {
-			estimatedContentTokens: 0,
-			exactOutputTokens: 0,
-		})
+		const activeReceiving = new ContextWindowReceivingTracker()
+		task.ordinaryContextIndicatorReceivingByApiIndex.set(3, activeReceiving)
 
 		await task.receiveOrdinaryContextWindowIndicator(3, ordinaryAttempt0, {
 			type: "text",
@@ -129,10 +128,8 @@ describe("Task context-window indicator stale protection", () => {
 		await task.rollbackOrdinaryContextWindowIndicator(3, ordinaryAttempt0)
 
 		expect(task.contextWindowIndicator.getSnapshot()).toEqual(current)
-		expect(task.ordinaryContextIndicatorReceivingByApiIndex.get(3)).toEqual({
-			estimatedContentTokens: 0,
-			exactOutputTokens: 0,
-		})
+		expect(task.ordinaryContextIndicatorReceivingByApiIndex.get(3)).toBe(activeReceiving)
+		expect(activeReceiving.getSnapshot().receivingTokens).toBe(0)
 		expect(task.ordinaryContextIndicatorLineageByApiIndex.get(3)).toEqual(ordinaryAttempt1)
 		expect(task.postStateToWebview).not.toHaveBeenCalled()
 	})
@@ -148,10 +145,8 @@ describe("Task context-window indicator stale protection", () => {
 			mode: "act",
 		})
 		task.taskState.contextWindowIndicator = current
-		task.contextCompactionIndicatorReceivingByAttemptId.set("pass-attempt-0", {
-			estimatedContentTokens: 0,
-			exactOutputTokens: 0,
-		})
+		const failedAttemptReceiving = new ContextWindowReceivingTracker()
+		task.contextCompactionIndicatorReceivingByAttemptId.set("pass-attempt-0", failedAttemptReceiving)
 		const staleReceiving = {
 			kind: "pass_receiving",
 			state: {},
@@ -164,10 +159,8 @@ describe("Task context-window indicator stale protection", () => {
 		await task.receiveContextCompactionIndicator(staleReceiving)
 
 		expect(task.contextWindowIndicator.getSnapshot()).toEqual(current)
-		expect(task.contextCompactionIndicatorReceivingByAttemptId.get("pass-attempt-0")).toEqual({
-			estimatedContentTokens: 0,
-			exactOutputTokens: 0,
-		})
+		expect(task.contextCompactionIndicatorReceivingByAttemptId.get("pass-attempt-0")).toBe(failedAttemptReceiving)
+		expect(failedAttemptReceiving.getSnapshot().receivingTokens).toBe(0)
 		expect(task.postStateToWebview).not.toHaveBeenCalled()
 	})
 
@@ -190,10 +183,8 @@ describe("Task context-window indicator stale protection", () => {
 			mode: "act",
 		})
 		task.taskState.contextWindowIndicator = restored
-		task.contextCompactionIndicatorReceivingByAttemptId.set("pass-attempt-0", {
-			estimatedContentTokens: 0,
-			exactOutputTokens: 0,
-		})
+		const detachedReceiving = new ContextWindowReceivingTracker()
+		task.contextCompactionIndicatorReceivingByAttemptId.set("pass-attempt-0", detachedReceiving)
 		const oldHead = checkpointHead("operation-stale")
 		const staleReceiving = {
 			kind: "pass_receiving",
@@ -235,10 +226,8 @@ describe("Task context-window indicator stale protection", () => {
 		await task.commitContextCompactionIndicator(staleCompleted)
 
 		expect(task.contextWindowIndicator.getSnapshot()).toEqual(restored)
-		expect(task.contextCompactionIndicatorReceivingByAttemptId.get("pass-attempt-0")).toEqual({
-			estimatedContentTokens: 0,
-			exactOutputTokens: 0,
-		})
+		expect(task.contextCompactionIndicatorReceivingByAttemptId.get("pass-attempt-0")).toBe(detachedReceiving)
+		expect(detachedReceiving.getSnapshot().receivingTokens).toBe(0)
 		expect(task.postStateToWebview).not.toHaveBeenCalled()
 	})
 })

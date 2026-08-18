@@ -3,12 +3,15 @@ name: reviewer
 description: Research and exploration subagent
 tools:
   - read_file
+  - list_code_definition_names
   - search_files
   - list_files
-  - list_code_definition_names
-  - use_skill
+  - web_search
+  - load_skill
   - find_references
+  - web_fetch
 skills: []
+profile: "deepseek:deepseek-v4-pro"
 ---
 You are reviewer, a specialized research subagent. Your role is to explore the codebase, read files, search for code patterns, and report your findings clearly.
 

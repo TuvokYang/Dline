@@ -18,6 +18,7 @@ function createController(): {
 	const controller = {
 		configureGlobalComponents,
 		stateManager: {
+			flushPendingState: vi.fn().mockResolvedValue(undefined),
 			setGlobalState: vi.fn(),
 			getGlobalSettingsKey: vi.fn((key: string) => (key === "planActSeparateModelsSetting" ? true : undefined)),
 			clearTaskSetting,
@@ -48,6 +49,7 @@ describe("updateTaskSettings account usage", () => {
 		const rebuildApiHandler = vi.fn()
 		const controller = {
 			stateManager: {
+				flushPendingState: vi.fn().mockResolvedValue(undefined),
 				setTaskSettingsBatch: vi.fn(),
 				setTaskSettings: vi.fn(),
 			},

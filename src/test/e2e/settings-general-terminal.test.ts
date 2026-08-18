@@ -671,6 +671,77 @@ e2e(
 )
 
 e2e(
+	"Terminal - timed out command returns its existing full-output log path",
+	async ({ dlineDir, helper, page, server, sidebar, userDataDir }) => {
+		e2e.setTimeout(180_000)
+		await helper.signin(sidebar)
+		await openSettings(page, sidebar)
+		await sidebar.getByTestId("tab-terminal").click()
+		await setDropdownValue(sidebar, sidebar.locator("#terminal-execution-mode"), "backgroundExec", "Background Exec")
+		if (process.platform === "win32") {
+			await setDropdownValue(sidebar, sidebar.locator("#default-terminal-profile"), "cmd", "Command Prompt")
+		}
+		await setRangeValue(sidebar.locator("#terminal-output-limit"), "100")
+		await expect.poll(async () => (await readSettings(dlineDir)).terminalOutputLineLimit).toBe(100)
+		await expect.poll(async () => (await readGlobalState(dlineDir)).vscodeTerminalExecutionMode).toBe("backgroundExec")
+		if (process.platform === "win32") {
+			await expect.poll(async () => (await readGlobalState(dlineDir)).defaultTerminalProfile).toBe("cmd")
+		}
+		await returnToChat(sidebar)
+		await setAutoApproveAction(sidebar, "Execute safe commands", false)
+
+		const outputPrefix = "E2E_TIMEOUT_LOG_LINE_"
+		const command = `node -e "setTimeout(()=>{for(let i=0;i<120;i++) console.log('${outputPrefix}'+i)},2000); setInterval(() => {}, 1000)"`
+		server.resetOpenAiMock()
+		server.enqueueOpenAiResponses(
+			{
+				type: "tool",
+				id: "call_timeout_log_contract",
+				name: "execute_command",
+				arguments: {
+					command,
+					workdirectory: ".",
+					requires_approval: true,
+					synchronous: true,
+					timeout: 10,
+				},
+			},
+			{
+				type: "tool",
+				id: "call_timeout_log_contract_completion",
+				name: "attempt_completion",
+				arguments: { result: "E2E_TIMEOUT_LOG_CONTRACT_OK" },
+				expectedToolResults: [
+					{
+						callId: "call_timeout_log_contract",
+						contentIncludes: "Command reached its 10-second timeout and was terminated.",
+					},
+				],
+			},
+		)
+
+		const input = sidebar.getByTestId("chat-input")
+		await input.fill("Run a bounded command until its absolute timeout.")
+		await sidebar.getByTestId("send-button").click()
+		await expect(sidebar.getByText("Approve", { exact: true })).toBeVisible({ timeout: 60_000 })
+		await sidebar.getByText("Approve", { exact: true }).click()
+		await expect(sidebar.getByText("E2E_TIMEOUT_LOG_CONTRACT_OK", { exact: false }).last()).toBeVisible({ timeout: 60_000 })
+
+		const continuation = server.getMockConsumptions("openai-compatible-chat")[1]
+		expect(continuation.contractError).toBeUndefined()
+		const timeoutResult = continuation.requestToolResults.find(({ callId }) => callId === "call_timeout_log_contract")
+		expect(timeoutResult?.content).toContain("Command reached its 10-second timeout and was terminated.")
+		const timeoutLogPath = timeoutResult?.content.match(/Full output saved to:\s*([^\r\n]+)/)?.[1]?.trim()
+		if (!timeoutLogPath) throw new Error("Timed out command result did not include its full-output log path")
+		expect(timeoutResult?.content.split("\n").at(-1)).toBe(`Full output saved to: ${timeoutLogPath}`)
+		const timeoutLog = await readFile(timeoutLogPath, "utf8")
+		expect(timeoutLog).toContain(`${outputPrefix}0`)
+		expect(timeoutLog).toContain(`${outputPrefix}119`)
+		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+	},
+)
+
+e2e(
 	"Terminal - automatic handoff exposes a background Activity and injects only status plus log metadata",
 	async ({ helper, page, server, sidebar, userDataDir }, testInfo) => {
 		e2e.setTimeout(240_000)

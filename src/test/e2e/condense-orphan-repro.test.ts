@@ -255,8 +255,31 @@ function assertNoOrphanToolOutputs(consumption: MockApiConsumption): void {
 	expect(JSON.stringify(body)).not.toContain("dline_function_")
 }
 
-function assertAnthropicToolPairing(consumption: MockApiConsumption): void {
+function summarizeAnthropicToolPairing(messages: unknown[]): unknown[] {
+	return messages.map((value, index) => {
+		if (typeof value !== "object" || value === null) return { index, role: "invalid" }
+		const message = value as { role?: unknown; content?: unknown }
+		const content = Array.isArray(message.content) ? message.content : []
+		return {
+			index,
+			role: message.role,
+			toolUseIds: content.flatMap((block) => {
+				if (typeof block !== "object" || block === null) return []
+				const record = block as { type?: unknown; id?: unknown }
+				return record.type === "tool_use" && typeof record.id === "string" ? [record.id] : []
+			}),
+			toolResultIds: content.flatMap((block) => {
+				if (typeof block !== "object" || block === null) return []
+				const record = block as { type?: unknown; tool_use_id?: unknown }
+				return record.type === "tool_result" && typeof record.tool_use_id === "string" ? [record.tool_use_id] : []
+			}),
+		}
+	})
+}
+
+function assertAnthropicToolPairing(consumption: MockApiConsumption, requestIndex: number): void {
 	const messages = (consumption.requestBody as { messages?: unknown[] }).messages ?? []
+	const diagnostic = JSON.stringify({ requestIndex, messages: summarizeAnthropicToolPairing(messages) }, null, 2)
 	for (const [index, value] of messages.entries()) {
 		if (typeof value !== "object" || value === null) continue
 		const message = value as { role?: unknown; content?: unknown }
@@ -273,7 +296,7 @@ function assertAnthropicToolPairing(consumption: MockApiConsumption): void {
 			typeof previousValue === "object" && previousValue !== null
 				? (previousValue as { role?: unknown; content?: unknown })
 				: undefined
-		expect(previous?.role).toBe("assistant")
+		expect(previous?.role, `Anthropic tool_result must immediately follow its tool_use:\n${diagnostic}`).toBe("assistant")
 		const useIds = new Set(
 			Array.isArray(previous?.content)
 				? previous.content.flatMap((content) => {
@@ -283,7 +306,10 @@ function assertAnthropicToolPairing(consumption: MockApiConsumption): void {
 					})
 				: [],
 		)
-		expect(resultIds.filter((id) => !useIds.has(id))).toEqual([])
+		expect(
+			resultIds.filter((id) => !useIds.has(id)),
+			`Anthropic tool_result IDs must match the immediately preceding tool_use IDs:\n${diagnostic}`,
+		).toEqual([])
 	}
 }
 
@@ -348,6 +374,7 @@ e2e(
 	async ({ dlineDir, helper, openVSCode, server, userDataDir, workspaceDir }) => {
 		e2e.setTimeout(180_000)
 		await configureManualCompact(dlineDir)
+		const restoredQnaReply = "E2E_CONDENSE_ORPHAN_REPLY continue after the confirmed summary."
 		server.enqueueResponses(
 			"openai-compatible-responses",
 			{
@@ -368,7 +395,7 @@ e2e(
 				id: "call_condense_orphan_completion",
 				name: "attempt_completion",
 				arguments: { result: "E2E_CONDENSE_ORPHAN_DONE" },
-				expectedRequestIncludes: ["E2E_CONDENSE_ORPHAN_SUMMARY"],
+				expectedRequestIncludes: ["E2E_CONDENSE_ORPHAN_SUMMARY", restoredQnaReply],
 				expectedRequestExcludes: ["__dline_mode_switch_compact__", COMPACT_INSTRUCTION_MARKER],
 			},
 		)
@@ -401,6 +428,16 @@ e2e(
 			await expect(confirmCompactionButton).toBeVisible({ timeout: 60_000 })
 			await attachScreenshot(app, "manual-compaction-summary-review")
 			await confirmCompactionButton.click()
+			await expect(confirmCompactionButton).toHaveCount(0)
+			await expect(sidebar.locator('vscode-button[aria-label="Regenerate Summary"]')).toHaveCount(0)
+
+			const input = sidebar.getByTestId("chat-input")
+			await expect(sidebar.getByText("E2E_CONDENSE_ORPHAN_READY", { exact: false }).last()).toBeVisible()
+			await expect(input).toBeEnabled()
+			await expect.poll(() => server.getRequestCount("openai-compatible-responses")).toBe(2)
+			await input.fill(restoredQnaReply)
+			await input.press("Enter")
+			await expect(input).toHaveValue("")
 
 			await expect(sidebar.getByText("E2E_CONDENSE_ORPHAN_DONE", { exact: false }).last()).toBeVisible({
 				timeout: 60_000,
@@ -417,6 +454,7 @@ e2e(
 				assertNoOrphanToolOutputs(request)
 			}
 			expect(responsesUserTextBlocks(requests[2]).every((text) => text.trim().length > 0)).toBe(true)
+			expect(requests[2].requestToolResults.some((result) => result.content.includes(restoredQnaReply))).toBe(true)
 			await attachScreenshot(app, "manual-compaction-confirmed-final-state")
 			await attachJson("manual-compaction-provider-consumptions", requests)
 			await attachDlineOutput(userDataDir, "manual-compaction-dline-output")
@@ -528,9 +566,9 @@ e2e(
 			const explicitContinuationRequestText = JSON.stringify(explicitContinuationRequest.requestBody)
 			expect(explicitContinuationRequestText).toContain(summaryMarker)
 			expect(explicitContinuationRequestText).toContain(continuationInput)
-			for (const request of requests) {
+			for (const [requestIndex, request] of requests.entries()) {
 				expect(request.contractError).toBeUndefined()
-				assertAnthropicToolPairing(request)
+				assertAnthropicToolPairing(request, requestIndex)
 			}
 			await attachScreenshot(app, "condense-input-confirmed-final-state")
 			await attachJson("condense-input-provider-consumptions", requests)
@@ -637,21 +675,33 @@ e2e(
 		e2e.setTimeout(210_000)
 		await configureAutoCompact(dlineDir)
 		const summary = "E2E_COMPACTION_RESTORE_SUMMARY must disappear after checkpoint restore."
+		const restoredSummary = "E2E_COMPACTION_RESTORE_RECOMPACTED must replace the restored summary."
 		server.enqueueResponses(
 			"openai-compatible-responses",
+			{
+				type: "tool",
+				id: "call_compaction_restore_history_ready",
+				name: "qna_respond",
+				arguments: { response: "E2E_COMPACTION_RESTORE_HISTORY_READY" },
+			},
 			{
 				type: "tool",
 				id: "call_compaction_restore_ready",
 				name: "qna_respond",
 				arguments: { response: "E2E_COMPACTION_RESTORE_READY" },
 				usage: { inputTokens: 125_000, outputTokens: 100 },
+				expectedRequestIncludes: ["E2E_COMPACTION_RESTORE_HISTORY"],
 			},
 			{
 				type: "tool",
 				id: "call_compaction_restore_summary",
 				name: "summarize_task",
 				arguments: { context: summary },
-				expectedRequestIncludes: [COMPACT_INSTRUCTION_MARKER, "E2E_COMPACTION_RESTORE_TASK"],
+				expectedRequestIncludes: [
+					COMPACT_INSTRUCTION_MARKER,
+					"E2E_COMPACTION_RESTORE_TASK",
+					"E2E_COMPACTION_RESTORE_HISTORY",
+				],
 				expectedRequestExcludes: ["E2E_COMPACTION_RESTORE_TRIGGER"],
 			},
 			{
@@ -669,14 +719,13 @@ e2e(
 		try {
 			const sidebar = await openSidebar(app, helper)
 			await sendTask(sidebar, "E2E_COMPACTION_RESTORE_TASK")
+			await expect(sidebar.getByText("E2E_COMPACTION_RESTORE_HISTORY_READY", { exact: false }).last()).toBeVisible({
+				timeout: 60_000,
+			})
+			await sendTask(sidebar, "E2E_COMPACTION_RESTORE_HISTORY")
 			await expect(sidebar.getByText("E2E_COMPACTION_RESTORE_READY", { exact: false }).last()).toBeVisible({
 				timeout: 60_000,
 			})
-
-			const checkpointLabels = sidebar.getByText("Checkpoint", { exact: true })
-			await expect.poll(() => checkpointLabels.count()).toBeGreaterThan(0)
-			const preCompactionCheckpointIndex = (await checkpointLabels.count()) - 1
-			const preCompactionCheckpoint = checkpointLabels.nth(preCompactionCheckpointIndex).locator("..").locator("..")
 
 			await sendTask(sidebar, "E2E_COMPACTION_RESTORE_TRIGGER")
 			await expect(sidebar.locator("span.ph-no-capture").filter({ hasText: summary }).last()).toContainText(summary, {
@@ -685,30 +734,54 @@ e2e(
 			await expect(sidebar.getByText("E2E_COMPACTION_RESTORE_COMMITTED", { exact: false }).last()).toBeVisible({
 				timeout: 60_000,
 			})
-			await expect.poll(() => server.getRequestCount("openai-compatible-responses")).toBe(3)
+			await expect.poll(() => server.getRequestCount("openai-compatible-responses")).toBe(4)
 
-			await preCompactionCheckpoint.hover()
-			await preCompactionCheckpoint.getByRole("button", { name: "Restore", exact: true }).click()
-			await sidebar.getByRole("button", { name: "More options", exact: true }).click()
+			const scrollToBottomButton = sidebar.getByRole("button", { name: "Scroll to bottom", exact: true })
+			if (await scrollToBottomButton.isVisible()) {
+				await scrollToBottomButton.click()
+			}
+			const completedPass = sidebar.getByTestId("compaction-pass").filter({ hasText: summary }).last()
+			await expect(completedPass).toHaveAttribute("data-compaction-status", "completed")
+			const checkpointControl = completedPass
+				.getByText("Compaction checkpoint", { exact: true })
+				.locator("..")
+				.locator("..")
+			await checkpointControl.hover()
+			const restoreButton = completedPass.getByRole("button", { name: "Restore", exact: true })
+			await expect(restoreButton).toBeVisible()
+			await restoreButton.focus()
+			await expect(restoreButton).toBeVisible()
+			await restoreButton.click()
 			const restoreTaskButton = sidebar.getByRole("button", { name: "Restore Task Only", exact: true })
 			await expect(restoreTaskButton).toBeVisible()
 			await restoreTaskButton.click()
 
 			await expect(sidebar.getByText(summary, { exact: false })).toHaveCount(0)
 			await expect(sidebar.getByText("E2E_COMPACTION_RESTORE_COMMITTED", { exact: false })).toHaveCount(0)
-			await expect(sidebar.getByText("E2E_COMPACTION_RESTORE_TRIGGER", { exact: true })).toHaveCount(0)
+			await expect(sidebar.getByTestId("compaction-pass").filter({ hasText: summary })).toHaveCount(0)
+			const messageTimeline = sidebar.getByTestId("virtuoso-item-list")
+			await expect(messageTimeline.getByText("E2E_COMPACTION_RESTORE_TASK", { exact: true })).toBeVisible()
+			await expect(messageTimeline.getByText("E2E_COMPACTION_RESTORE_HISTORY", { exact: true })).toBeVisible()
 			await expect(sidebar.locator('vscode-button[aria-label="Condense Conversation"]')).toHaveCount(0)
 			await expect(sidebar.locator('vscode-button[aria-label="Regenerate Summary"]')).toHaveCount(0)
-			await expect.poll(() => server.getRequestCount("openai-compatible-responses")).toBe(3)
+			await expect.poll(() => server.getRequestCount("openai-compatible-responses")).toBe(4)
 			server.clearPendingResponses("openai-compatible-responses")
 			server.enqueueResponses(
 				"openai-compatible-responses",
-				...Array.from({ length: 4 }, (_, index) => ({
-					type: "tool" as const,
-					id: `call_compaction_restore_resumed_${index}`,
+				{
+					type: "tool",
+					id: "call_compaction_restore_recompacted",
+					name: "summarize_task",
+					arguments: { context: restoredSummary },
+					expectedRequestIncludes: [COMPACT_INSTRUCTION_MARKER, "E2E_COMPACTION_RESTORE_TASK"],
+					expectedRequestExcludes: [summary, "E2E_COMPACTION_RESTORE_TRIGGER"],
+				},
+				{
+					type: "tool",
+					id: "call_compaction_restore_resumed",
 					name: "attempt_completion",
 					arguments: { result: "E2E_COMPACTION_RESTORE_RESUMED" },
-				})),
+				},
 			)
 
 			const resumeButton = sidebar.getByText("Resume", { exact: true })
@@ -716,20 +789,27 @@ e2e(
 			const input = sidebar.getByTestId("chat-input")
 			await input.fill("E2E_COMPACTION_RESTORE_AFTER_RESTORE")
 			await resumeButton.click()
+			await expect(input).toHaveValue("")
 			await expect(sidebar.getByText("E2E_COMPACTION_RESTORE_RESUMED", { exact: false }).last()).toBeVisible({
 				timeout: 60_000,
 			})
-			await expect.poll(() => server.getRequestCount("openai-compatible-responses")).toBe(4)
+			await expect.poll(() => server.getRequestCount("openai-compatible-responses")).toBe(6)
 
 			const requests = server.getMockConsumptions("openai-compatible-responses")
-			const resumedRequest = requests[3]
+			expect(requests[4]).toMatchObject({
+				responseType: "tool",
+				toolName: "summarize_task",
+				toolCallId: "call_compaction_restore_recompacted",
+			})
+			const resumedRequest = requests[5]
 			expect(resumedRequest.contractError).toBeUndefined()
 			const resumedRequestText = JSON.stringify(resumedRequest.requestBody)
-			expect(resumedRequestText).toContain("E2E_COMPACTION_RESTORE_TASK")
+			expect(resumedRequestText).not.toContain("E2E_COMPACTION_RESTORE_TASK")
 			expect(resumedRequestText).toContain("E2E_COMPACTION_RESTORE_AFTER_RESTORE")
+			expect(resumedRequestText).not.toContain("E2E_COMPACTION_RESTORE_TRIGGER")
 			expect(resumedRequestText).toContain("The previous task session was closed and has now been restored.")
 			expect(resumedRequestText).not.toContain(summary)
-			expect(resumedRequestText).not.toContain("E2E_COMPACTION_RESTORE_TRIGGER")
+			expect(resumedRequestText).toContain(restoredSummary)
 			expect(resumedRequestText).not.toContain(COMPACT_INSTRUCTION_MARKER)
 			assertNoOrphanToolOutputs(resumedRequest)
 			await attachScreenshot(app, "checkpoint-restore-resumed-final-state")
@@ -837,9 +917,9 @@ e2e(
 				toolCallId: "call_regenerate_empty_summary_second",
 			})
 			expect(requests[2].toolCallId).not.toBe(requests[1].toolCallId)
-			for (const request of requests) {
+			for (const [requestIndex, request] of requests.entries()) {
 				expect(request.contractError).toBeUndefined()
-				assertAnthropicToolPairing(request)
+				assertAnthropicToolPairing(request, requestIndex)
 			}
 			await attachScreenshot(app, "regenerate-empty-confirmed-final-state")
 			await attachJson("regenerate-empty-provider-consumptions", requests)
@@ -867,17 +947,29 @@ e2e(
 			"anthropic-messages",
 			{
 				type: "tool",
+				id: "call_regenerate_history_ready",
+				name: "qna_respond",
+				arguments: { response: "E2E_REGENERATE_HISTORY_READY" },
+			},
+			{
+				type: "tool",
 				id: "call_regenerate_ready",
 				name: "qna_respond",
 				arguments: { response: "E2E_REGENERATE_READY" },
 				usage: { inputTokens: 80_000, outputTokens: 100 },
+				expectedRequestIncludes: ["E2E_REGENERATE_HISTORY"],
 			},
 			{
 				type: "tool",
 				id: "call_regenerate_summary_first",
 				name: "summarize_task",
 				arguments: { context: firstSummary },
-				expectedRequestIncludes: [COMPACT_INSTRUCTION_MARKER, "E2E_REGENERATE_TASK", "E2E_REGENERATE_GUIDANCE"],
+				expectedRequestIncludes: [
+					COMPACT_INSTRUCTION_MARKER,
+					"E2E_REGENERATE_TASK",
+					"E2E_REGENERATE_HISTORY",
+					"E2E_REGENERATE_GUIDANCE",
+				],
 				expectedRequestExcludes: ["/compact", feedback],
 			},
 			{
@@ -886,7 +978,7 @@ e2e(
 				name: "summarize_task",
 				arguments: { context: regeneratedSummary },
 				matchRequestContract: true,
-				expectedRequestIncludes: [COMPACT_INSTRUCTION_MARKER, "E2E_REGENERATE_TASK", feedback],
+				expectedRequestIncludes: [COMPACT_INSTRUCTION_MARKER, "E2E_REGENERATE_TASK", "E2E_REGENERATE_HISTORY", feedback],
 				expectedRequestExcludes: ["/compact", firstSummary],
 			},
 			{
@@ -914,6 +1006,10 @@ e2e(
 		try {
 			const sidebar = await openSidebar(app, helper)
 			await sendTask(sidebar, "E2E_REGENERATE_TASK")
+			await expect(sidebar.getByText("E2E_REGENERATE_HISTORY_READY", { exact: false }).last()).toBeVisible({
+				timeout: 60_000,
+			})
+			await sendTask(sidebar, "E2E_REGENERATE_HISTORY")
 			await expect(sidebar.getByText("E2E_REGENERATE_READY", { exact: false }).last()).toBeVisible({ timeout: 60_000 })
 
 			await sendTask(sidebar, "/compact E2E_REGENERATE_GUIDANCE")
@@ -926,7 +1022,7 @@ e2e(
 			await expect(regenerateButton).toBeVisible()
 			await expect(confirmButton).toBeVisible()
 			await expect(sidebar.getByText("E2E_REGENERATE_DONE", { exact: false })).toHaveCount(0)
-			await expect.poll(() => server.getRequestCount("anthropic-messages")).toBe(2)
+			await expect.poll(() => server.getRequestCount("anthropic-messages")).toBe(3)
 			await attachScreenshot(app, "regenerate-first-summary-review")
 
 			const input = sidebar.getByTestId("chat-input")
@@ -940,34 +1036,34 @@ e2e(
 			await expect(regenerateButton).toBeVisible()
 			await expect(confirmButton).toBeVisible()
 			await expect(sidebar.getByText("E2E_REGENERATE_DONE", { exact: false })).toHaveCount(0)
-			await expect.poll(() => server.getRequestCount("anthropic-messages")).toBe(3)
+			await expect.poll(() => server.getRequestCount("anthropic-messages")).toBe(4)
 			await attachScreenshot(app, "regenerate-second-summary-review")
 
 			await confirmButton.click()
 			await expect(sidebar.getByText("E2E_REGENERATE_DONE", { exact: false }).last()).toBeVisible({ timeout: 60_000 })
-			await expect.poll(() => server.getRequestCount("anthropic-messages")).toBe(4)
+			await expect.poll(() => server.getRequestCount("anthropic-messages")).toBe(5)
 
 			const requests = server.getMockConsumptions("anthropic-messages")
-			expect(requests[1]).toMatchObject({
+			expect(requests[2]).toMatchObject({
 				responseType: "tool",
 				toolName: "summarize_task",
 				toolCallId: "call_regenerate_summary_first",
 			})
-			expect(requests[2]).toMatchObject({
+			expect(requests[3]).toMatchObject({
 				responseType: "tool",
 				toolName: "summarize_task",
 				toolCallId: "call_regenerate_summary_second",
 			})
-			expect(requests[2].toolCallId).not.toBe(requests[1].toolCallId)
-			expect(JSON.stringify(requests[2].requestBody)).toContain(feedback)
-			expect(requestToolNames(requests[2])).toEqual(requestToolNames(requests[1]))
-			expect(requestToolNames(requests[2])).not.toContain("summarize_task")
-			for (const request of requests) {
+			expect(requests[3].toolCallId).not.toBe(requests[2].toolCallId)
+			expect(JSON.stringify(requests[3].requestBody)).toContain(feedback)
+			expect(requestToolNames(requests[3])).toEqual(requestToolNames(requests[2]))
+			expect(requestToolNames(requests[3])).not.toContain("summarize_task")
+			await attachJson("regenerate-provider-consumptions", requests)
+			for (const [requestIndex, request] of requests.entries()) {
 				expect(request.contractError).toBeUndefined()
-				assertAnthropicToolPairing(request)
+				assertAnthropicToolPairing(request, requestIndex)
 			}
 			await attachScreenshot(app, "regenerate-confirmed-final-state")
-			await attachJson("regenerate-provider-consumptions", requests)
 			await attachDlineOutput(userDataDir, "regenerate-dline-output")
 			await attachVsCodeLogEvidence(userDataDir, "regenerate-vscode-log-scan")
 			await attachJson("regenerate-webview-errors", webviewDiagnostics.errors)

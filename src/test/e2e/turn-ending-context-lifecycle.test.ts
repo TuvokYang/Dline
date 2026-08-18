@@ -172,6 +172,7 @@ async function expectWaitingInteraction(input: {
 		segmentKinds: CONTEXT_SEGMENTS,
 		totalTokens: CONTEXT_TOTAL,
 	})
+	expect(visual.minorFactor).toBeGreaterThanOrEqual(1)
 	expect(visual.minorFactor).toBeLessThanOrEqual(3)
 	return state
 }
@@ -207,6 +208,7 @@ async function expectStreamingContinuation(input: {
 	expect(visual.phase).toBe("sending")
 	expect(visual.contextWindow).toBe(CONTEXT_WINDOW)
 	expect(visual.segmentKinds).toEqual(CONTEXT_SEGMENTS)
+	expect(visual.minorFactor).toBeGreaterThanOrEqual(1)
 	expect(visual.minorFactor).toBeLessThanOrEqual(3)
 	expect(visual.totalTokens).toBeGreaterThan(600_000)
 	expect(visual.totalTokens).toBeLessThan(CONTEXT_WINDOW)
@@ -246,6 +248,7 @@ async function expectCompleted(input: {
 		segmentKinds: CONTEXT_SEGMENTS,
 		totalTokens: CONTEXT_TOTAL,
 	})
+	expect(visual.minorFactor).toBeGreaterThanOrEqual(1)
 	expect(visual.minorFactor).toBeLessThanOrEqual(3)
 	return state
 }

@@ -158,6 +158,7 @@ export class ClaudeCodeHandler implements ApiHandler {
 							yield {
 								type: "tool_calls",
 								function_id: content.id,
+								argumentsMode: "snapshot",
 								tool_call: {
 									function: {
 										name: content.name,

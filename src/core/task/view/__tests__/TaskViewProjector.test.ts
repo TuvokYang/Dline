@@ -185,10 +185,55 @@ describe("projectTaskView", () => {
 		expect(view.footer.actions).toEqual([])
 	})
 
+	it("projects Profile invalid state for the request boundary without a footer action", () => {
+		const view = projectTaskView({
+			...runtime(TaskPhase.BETWEEN_TURNS),
+			profileInvalid: {
+				message: 'Profile not valid: "deleted-profile" no longer exists.',
+				displayName: "deleted-profile",
+				reason: "missing",
+			},
+		})
+
+		expect(view.profileInvalid).toEqual({
+			message: 'Profile not valid: "deleted-profile" no longer exists.',
+			displayName: "deleted-profile",
+			reason: "missing",
+		})
+		expect(view.footer.actions).toEqual([])
+		expect(view.input.enabled).toBe(false)
+	})
+
 	it("projects error recovery actions", () => {
 		const view = projectTaskView(runtime(TaskPhase.PAUSED, active("error_retry")))
 
 		expect(view.footer.actions.map((action) => action.type)).toEqual(["retry", "start_new_task"])
+	})
+
+	it("projects Force Truncate only for an awaiting error-retry interaction", () => {
+		const view = projectTaskView(runtime(TaskPhase.PAUSED, active("error_retry")), {
+			forceTruncateAvailable: true,
+		})
+
+		expect(view.forceTruncateAvailable).toBe(true)
+	})
+
+	it("does not project Force Truncate for a non-error interaction", () => {
+		const view = projectTaskView(runtime(TaskPhase.EXECUTING, active("followup")), {
+			forceTruncateAvailable: true,
+		})
+
+		expect(view.forceTruncateAvailable).toBeUndefined()
+	})
+
+	it("does not project Force Truncate while error recovery is resolving", () => {
+		const interaction = active("error_retry")
+		interaction.status = "resolving"
+		const view = projectTaskView(runtime(TaskPhase.PAUSED, interaction), {
+			forceTruncateAvailable: true,
+		})
+
+		expect(view.forceTruncateAvailable).toBeUndefined()
 	})
 
 	it("keeps Retry enabled while an automatic retry request is in flight", () => {
@@ -209,6 +254,17 @@ describe("projectTaskView", () => {
 
 		expect(view.footer.actions.map((action) => action.type)).toEqual(["retry", "cancel"])
 		expect(view.footer.actions[0].enabled).toBe(true)
+	})
+
+	it("projects the active context-compaction operation for Header anti-reentry", () => {
+		const view = projectTaskView(runtime(TaskPhase.AWAITING_APPROVAL, active("followup")), {
+			contextCompactionOperationId: "manual-compact:task-1:8",
+		})
+
+		expect(view.contextCompaction).toEqual({
+			active: true,
+			operationId: "manual-compact:task-1:8",
+		})
 	})
 
 	it("projects feedback input and only Start New Task for a completed anchored completion", () => {

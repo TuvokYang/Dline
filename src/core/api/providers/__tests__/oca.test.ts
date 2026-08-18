@@ -4,6 +4,7 @@ import type { ChatCompletionTool } from "openai/resources/chat/completions"
 import { afterEach, describe, it, vi } from "vitest"
 import { ClineStorageMessage } from "@/shared/messages/content"
 import { ApiFormat, ServerTool } from "@/shared/proto/dline/models/metadata"
+import { OutputLimitExceededError } from "../../stream/OutputLimitExceededError"
 import { OcaHandler } from "../oca"
 
 const messages: ClineStorageMessage[] = [{ role: "user", content: "Hello" }]
@@ -18,9 +19,15 @@ const tools: ChatCompletionTool[] = [
 	},
 ]
 
-const emptyStream = {
-	async *[Symbol.asyncIterator]() {},
+function createStream(events: readonly unknown[] = []) {
+	return {
+		async *[Symbol.asyncIterator]() {
+			yield* events
+		},
+	}
 }
+
+const emptyStream = createStream()
 
 async function collectChunks(stream: AsyncGenerator<any>) {
 	const chunks: any[] = []
@@ -113,7 +120,8 @@ describe("OcaHandler.createMessage", () => {
 
 			expect(chunks).to.deep.equal([{ type: "text", text: "chat" }])
 			expect(chatStub.mock.calls).to.have.length(1)
-			expect(chatStub.mock.calls[0]).to.have.length(3)
+			expect(chatStub.mock.calls[0]).to.have.length(4)
+			expect(chatStub.mock.calls[0]?.[3]).to.deep.equal({ serverTools: [ServerTool.WEB_SEARCH] })
 			expect(responsesStub.mock.calls).to.have.length(0)
 			expect(messagesStub.mock.calls).to.have.length(0)
 		}
@@ -157,6 +165,65 @@ describe("OcaHandler.createMessage", () => {
 			{ type: "web_search" },
 		])
 		expect(request.include).to.deep.equal(["web_search_call.results", "web_search_call.action.sources"])
+	})
+
+	it("uses the request-scoped compaction cap for every OCA protocol", async () => {
+		const cases = [
+			{ apiFormat: ApiFormat.OPENAI_CHAT, field: "max_completion_tokens", client: "openai-chat" },
+			{ apiFormat: ApiFormat.OPENAI_RESPONSES, field: "max_output_tokens", client: "openai-responses" },
+			{ apiFormat: ApiFormat.ANTHROPIC_CHAT, field: "max_tokens", client: "anthropic" },
+		] as const
+
+		for (const testCase of cases) {
+			const handler = new OcaHandler({
+				profile: ApiProfile.create({
+					provider: "oca",
+					modelId: "oca-model",
+					modelInfo: { apiFormats: [testCase.apiFormat], capabilities: { maxTokens: 8_192 } } as any,
+				}),
+				mode: "act",
+			})
+			const create = vi.fn().mockResolvedValue(emptyStream)
+			if (testCase.client === "openai-chat") {
+				vi.spyOn(handler as any, "ensureOpenAIClient").mockReturnValue({ chat: { completions: { create } } })
+			} else if (testCase.client === "openai-responses") {
+				vi.spyOn(handler as any, "ensureOpenAIClient").mockReturnValue({ responses: { create } })
+			} else {
+				vi.spyOn(handler as any, "ensureAnthropicClient").mockReturnValue({ messages: { create } })
+			}
+
+			await collectChunks(
+				handler.createMessage("system", messages, undefined, {
+					generation: { purpose: "compaction", maxOutputTokens: 30_000 },
+				} as any),
+			)
+
+			expect(create.mock.calls[0]?.[0]?.[testCase.field]).to.equal(30_000)
+			vi.restoreAllMocks()
+		}
+	})
+
+	it("throws a typed output-limit error for OCA Chat finish_reason length", async () => {
+		const handler = new OcaHandler({
+			profile: ApiProfile.create({
+				provider: "oca",
+				modelId: "oca-chat-model",
+				modelInfo: { apiFormats: [ApiFormat.OPENAI_CHAT], capabilities: { maxTokens: 8_192 } } as any,
+			}),
+			mode: "act",
+		})
+		const create = vi.fn().mockResolvedValue(createStream([{ choices: [{ delta: {}, finish_reason: "length" }] }]))
+		vi.spyOn(handler as any, "ensureOpenAIClient").mockReturnValue({ chat: { completions: { create } } })
+
+		let caught: unknown
+		try {
+			await collectChunks(handler.createMessage("system", messages))
+		} catch (error) {
+			caught = error
+		}
+
+		expect(caught).to.be.instanceOf(OutputLimitExceededError)
+		expect(caught).to.deep.include({ protocol: "openai_chat", reason: "length" })
 	})
 
 	it("keeps local Responses Web Search when hosted search was not selected", async () => {

@@ -44,6 +44,7 @@ export const systemPromptModules = [
 			"FOCUS_CHAIN_USAGE",
 			"FOCUS_CHAIN_EXAMPLE",
 			"SUMMARY_DECISION",
+			"COMPACTION_WINDOW_BUDGET",
 		),
 		continuationPrompt: createRuntimeContract("SUMMARY_TEXT"),
 	}),

@@ -70,6 +70,18 @@ function extractInitialTaskBlock(text: string): string | undefined {
 	return text.slice(start, end + closingTag.length).trim()
 }
 
+const DLINE_FUNCTION_PREFIX = "dline_function_"
+
+/** Identify a tool result created by Dline's non-native XML tool pipeline. */
+function isDlineOwnedFunctionId(functionId: string): boolean {
+	return functionId.startsWith(DLINE_FUNCTION_PREFIX)
+}
+
+/** Serialize a Dline-owned tool result before demoting it to ordinary user text. */
+function serializeToolResultContent(block: ClineUserToolResultContentBlock): string {
+	return typeof block.content === "string" ? block.content : JSON.stringify(block.content)
+}
+
 /** Recover only explicitly tagged user input before discarding an orphaned result. */
 function extractTaggedUserPrompt(block: ClineUserToolResultContentBlock): string | undefined {
 	const resultContent =
@@ -404,7 +416,9 @@ export class ContextManager {
 
 		const updatedMessages = this.applyContextHistoryUpdates(messages, deletedRange ? deletedRange[1] + 1 : 2)
 
-		// Validate and fix tool_use/tool_result pairing
+		// Remove results whose declaring tool use is no longer in the provider-ready history.
+		this.removeOrphanedToolResults(updatedMessages)
+		// Validate and fix tool_use/tool_result pairing.
 		this.ensureToolResultsFollowToolUse(updatedMessages)
 
 		// OLD NOTE: if you try to Logger log these, don't forget that logging a reference to an array may not provide the same result as logging a slice() snapshot of that array at that exact moment. The following DOES in fact include the latest assistant message.
@@ -442,6 +456,61 @@ export class ContextManager {
 			function_id: functionId,
 			dline_tid: toolBlock?.dline_tid ?? `recovered:${functionId}`,
 			content: [{ type: "text", text }],
+		}
+	}
+
+	/** Remove tool results that do not belong to the immediately preceding assistant message. */
+	private removeOrphanedToolResults(messages: ClineStorageMessage[]): void {
+		for (let index = 0; index < messages.length; index++) {
+			const message = messages[index]
+			if (message.role !== "user" || !Array.isArray(message.content)) {
+				continue
+			}
+
+			const previousMessage = messages[index - 1]
+			const validToolUseIds = new Set<string>()
+			if (previousMessage?.role === "assistant" && Array.isArray(previousMessage.content)) {
+				for (const block of previousMessage.content) {
+					if (block.type === "tool_use") {
+						validToolUseIds.add(this.getToolFunctionId(block))
+					}
+				}
+			}
+
+			const retainedContent: ClineContent[] = []
+			const preservedUserPrompts: string[] = []
+			let removedOrphan = false
+			for (const block of message.content) {
+				if (block.type !== "tool_result" || validToolUseIds.has(this.getResultFunctionId(block))) {
+					retainedContent.push(block)
+					continue
+				}
+
+				removedOrphan = true
+				if (isDlineOwnedFunctionId(this.getResultFunctionId(block))) {
+					const demotedOutput = serializeToolResultContent(block)
+					if (demotedOutput) {
+						retainedContent.push({ type: "text", text: demotedOutput })
+					}
+					continue
+				}
+
+				const preservedPrompt = extractTaggedUserPrompt(block)
+				if (preservedPrompt) {
+					preservedUserPrompts.push(preservedPrompt)
+				}
+			}
+
+			if (!removedOrphan) {
+				continue
+			}
+			if (preservedUserPrompts.length > 0) {
+				retainedContent.unshift({ type: "text", text: preservedUserPrompts.join("\n\n") })
+			}
+
+			const clonedMessage = cloneDeep(message)
+			clonedMessage.content = retainedContent
+			messages[index] = clonedMessage
 		}
 	}
 
@@ -640,29 +709,6 @@ export class ContextManager {
 		const firstChunk = messages.slice(0, 2) // get first user-assistant pair
 		const secondChunk = messages.slice(startFromIndex) // get remaining messages within context
 		const messagesToUpdate = [...firstChunk, ...secondChunk]
-
-		// Remove orphaned tool_results from the first message after truncation (if it's a user message)
-		if (startFromIndex > 2 && messagesToUpdate.length > 2) {
-			const firstMessageAfterTruncation = messagesToUpdate[2]
-			if (firstMessageAfterTruncation.role === "user" && Array.isArray(firstMessageAfterTruncation.content)) {
-				const hasToolResults = firstMessageAfterTruncation.content.some((block) => block.type === "tool_result")
-				if (hasToolResults) {
-					const preservedUserPrompts = firstMessageAfterTruncation.content
-						.filter((block): block is ClineUserToolResultContentBlock => block.type === "tool_result")
-						.map(extractTaggedUserPrompt)
-						.filter((prompt): prompt is string => prompt !== undefined)
-					const retainedContent = (firstMessageAfterTruncation.content as ClineContent[]).filter(
-						(block) => block.type !== "tool_result",
-					)
-					if (preservedUserPrompts.length > 0) {
-						retainedContent.unshift({ type: "text", text: preservedUserPrompts.join("\n\n") })
-					}
-
-					messagesToUpdate[2] = cloneDeep(firstMessageAfterTruncation)
-					;(messagesToUpdate[2].content as ClineContent[]) = retainedContent
-				}
-			}
-		}
 
 		// we need the mapping from the local indices in messagesToUpdate to the global array of updates in this.contextHistoryUpdates
 		const originalIndices = [

@@ -68,7 +68,11 @@ export const OpenAiCodexProvider = ({ showModelOptions, isPopup, profile, onUpda
 					/>
 					<OpenAIServiceTierSelector
 						onServiceTierChange={(serviceTier) => onUpdate({ openaiCodex: { ...pc, serviceTier } })}
+						onServiceTierEnabledChange={(serviceTierEnabled) =>
+							onUpdate({ openaiCodex: { ...pc, serviceTierEnabled } })
+						}
 						serviceTier={pc.serviceTier}
+						serviceTierEnabled={pc.serviceTierEnabled}
 					/>
 					<ModelInfoView isPopup={isPopup} modelInfo={modelInfo} selectedModelId={modelId} />
 				</>
