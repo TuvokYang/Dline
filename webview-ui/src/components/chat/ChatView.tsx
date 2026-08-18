@@ -85,6 +85,8 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 	const [pendingSuccessorDraft, setPendingSuccessorDraft] = useState<PendingSuccessorDraftTransfer>()
 	const [compactTaskRpcPending, setCompactTaskRpcPending] = useState(false)
 	const compactTaskRpcPendingRef = useRef(false)
+	const [forceTruncateTaskRpcPending, setForceTruncateTaskRpcPending] = useState(false)
+	const forceTruncateTaskRpcPendingRef = useRef(false)
 	const [activityFilters, setActivityFilters] = useState<TaskActivityFilters>(DEFAULT_TASK_ACTIVITY_FILTERS)
 	const task = taskTitleMessage
 	const taskId = task ? (taskViewState?.taskId ?? currentTaskItem?.id) : undefined
@@ -96,6 +98,8 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 		setActivityFilters(DEFAULT_TASK_ACTIVITY_FILTERS)
 		compactTaskRpcPendingRef.current = false
 		setCompactTaskRpcPending(false)
+		forceTruncateTaskRpcPendingRef.current = false
+		setForceTruncateTaskRpcPending(false)
 	}, [taskId])
 	const handleContentTabChange = useCallback((nextTab: TaskContentTab) => {
 		setContentTab(nextTab)
@@ -449,12 +453,16 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 	)
 	const taskInputEnabled = Boolean(taskViewState?.input.enabled && taskViewState.input.enterAction && interactionSynchronized)
 	const canRenderCompactTask = Boolean(taskViewState?.taskId)
+	const canRenderForceTruncate = taskViewState?.forceTruncateAvailable === true
 	useEffect(() => {
 		if (!contextCompactionActive || !compactTaskRpcPendingRef.current) return
 		compactTaskRpcPendingRef.current = false
 		setCompactTaskRpcPending(false)
 	}, [contextCompactionActive])
-	const compactTaskDisabled = !taskInputEnabled || contextCompactionActive || compactTaskRpcPending
+	const compactTaskDisabled =
+		!taskInputEnabled || contextCompactionActive || compactTaskRpcPending || forceTruncateTaskRpcPending
+	const forceTruncateTaskDisabled =
+		!taskInputEnabled || contextCompactionActive || compactTaskRpcPending || forceTruncateTaskRpcPending
 	const submitCompactTask = useCallback(async (): Promise<boolean> => {
 		if (!taskViewState?.taskId || !taskInputEnabled || contextCompactionActive || compactTaskRpcPendingRef.current) {
 			return false
@@ -476,6 +484,26 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 				compactTaskRpcPendingRef.current = false
 				setCompactTaskRpcPending(false)
 			}
+		}
+	}, [contextCompactionActive, forceTruncateTaskRpcPending, taskInputEnabled, taskViewState])
+	const submitForceTruncateTask = useCallback(async (): Promise<boolean> => {
+		if (!taskViewState?.taskId || !taskInputEnabled || contextCompactionActive || forceTruncateTaskRpcPendingRef.current) {
+			return false
+		}
+		forceTruncateTaskRpcPendingRef.current = true
+		setForceTruncateTaskRpcPending(true)
+		try {
+			const response = await TaskServiceClient.compactTask(
+				CompactTaskRequest.create({
+					forceTruncate: true,
+					taskId: taskViewState.taskId,
+					stateRevision: taskViewState.stateRevision,
+				}),
+			)
+			return response.accepted
+		} finally {
+			forceTruncateTaskRpcPendingRef.current = false
+			setForceTruncateTaskRpcPending(false)
 		}
 	}, [contextCompactionActive, taskInputEnabled, taskViewState])
 	const submitFollowupOption = useCallback(
@@ -521,10 +549,13 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 					<TaskSection
 						apiMetrics={displayedApiMetrics}
 						compactTaskDisabled={compactTaskDisabled}
+						forceTruncateAvailable={canRenderForceTruncate}
+						forceTruncateTaskDisabled={forceTruncateTaskDisabled}
 						lastApiReqTotalTokens={lastApiReqTotalTokens}
 						lastProgressMessageText={lastProgressMessageText}
 						messageHandlers={messageHandlers}
 						onCompactTask={canRenderCompactTask ? submitCompactTask : undefined}
+						onForceTruncateTask={canRenderForceTruncate ? submitForceTruncateTask : undefined}
 						selectedModelInfo={{
 							contextWindow: selectedModelInfo.capabilities?.contextWindow,
 							pricing: selectedModelInfo.pricing,
@@ -533,6 +564,7 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 						}}
 						showFocusChainPlaceholder={showFocusChainPlaceholder}
 						task={task}
+						taskId={taskViewState?.taskId}
 					/>
 				) : (
 					<WelcomeSection

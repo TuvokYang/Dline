@@ -150,11 +150,7 @@ describe("Task context-window final admission guard", () => {
 
 	it("rebuilds the complete ordinary target candidate with dynamic context after every accepted Pass", async () => {
 		const source = await readFile(taskSourcePath, "utf8")
-		const method = extractMethod(
-			source,
-			"private async reprojectContextCompactionTarget(",
-			"/** Journal canonical history",
-		)
+		const method = extractMethod(source, "private async reprojectContextCompactionTarget(", "/** Journal canonical history")
 		const loadContextIndex = method.indexOf("await this.loadContext(")
 		const environmentIndex = method.indexOf("parsedContent.push", loadContextIndex)
 		const backgroundIndex = method.indexOf("await this.appendBackgroundResults(parsedContent", environmentIndex)
@@ -235,7 +231,10 @@ describe("Task context-window final admission guard", () => {
 		])
 		const requestMethod = extractMethod(taskSource, "async recursivelyMakeClineRequests(", "async loadContext(")
 		const overwriteIndex = adapterSource.indexOf("await this.ports.overwriteCanonicalHistory(payload.canonicalCommitHistory)")
-		const rangeIndex = adapterSource.indexOf("this.ports.setDeletedRange(payload.canonicalCommitDeletedRange)", overwriteIndex)
+		const rangeIndex = adapterSource.indexOf(
+			"this.ports.setDeletedRange(payload.canonicalCommitDeletedRange)",
+			overwriteIndex,
+		)
 
 		expect(requestMethod).not.toContain("overwriteApiConversationHistory(")
 		expect(requestMethod).not.toContain("conversationHistoryDeletedRange = undefined")
@@ -254,6 +253,25 @@ describe("Task context-window final admission guard", () => {
 		expect(failedIndex).toBeGreaterThan(rollbackIndex)
 	})
 
+	it("presents terminal ordinary compaction failure without treating cancellation as failure", async () => {
+		const source = await readFile(taskSourcePath, "utf8")
+		const requestMethod = extractMethod(source, "async recursivelyMakeClineRequests(", "async loadContext(")
+		const presenter = extractMethod(
+			source,
+			"private async presentTerminalCompactionFailure(",
+			"private async restoreContextCompactionMemoryFallback(",
+		)
+
+		expect(source).toContain("this.contextCompactionFailureReasons.set(input.operationId, reason)")
+		expect(presenter).toContain("this.taskState.autoRetryAttempts = MAX_AUTO_RETRY_ATTEMPTS")
+		expect(presenter).toContain('"error_retry"')
+		expect(presenter).toContain("failed: true")
+		expect(presenter).toContain("await this.recoverApiFailure({")
+		expect(requestMethod.match(/if \(result === "failed"\)/g)).toHaveLength(2)
+		expect(requestMethod.match(/if \(result === "cancelled"\) return true/g)).toHaveLength(2)
+		expect(requestMethod.match(/if \(result !== "completed"\) return true/g)).toHaveLength(1)
+	})
+
 	it("checkpoints an accepted Pass before staging and publishing completion", async () => {
 		const sessionSource = await readFile(sessionSourcePath, "utf8")
 		const summaryIndex = sessionSource.indexOf('kind: "pass_partial"')
@@ -269,11 +287,7 @@ describe("Task context-window final admission guard", () => {
 
 	it("routes shared Session events through the per-Pass presentation owner without creating a started row", async () => {
 		const source = await readFile(taskSourcePath, "utf8")
-		const method = extractMethod(
-			source,
-			"private async publishContextCompactionEvent(",
-			"/** Wait for one Pass retry",
-		)
+		const method = extractMethod(source, "private async publishContextCompactionEvent(", "/** Wait for one Pass retry")
 		const startedBranch = method.slice(method.indexOf('case "pass_started"'), method.indexOf('case "pass_partial"'))
 
 		expect(source).toContain("private readonly contextCompactionPresentation = new ContextCompactionPresentation()")
@@ -297,10 +311,7 @@ describe("Task context-window final admission guard", () => {
 		const automaticGateIndex = requestMethod.indexOf("(!targetWindowFittingCommitted &&", resetIndex)
 		const finalGuardIndex = requestMethod.indexOf("!targetWindowFittingCommitted &&", automaticGateIndex + 1)
 		const adapterStart = source.indexOf("setFittingState: (state, head, committed) => {")
-		const committedAssignment = source.indexOf(
-			"this.taskState.targetWindowFittingCommitted = committed",
-			adapterStart,
-		)
+		const committedAssignment = source.indexOf("this.taskState.targetWindowFittingCommitted = committed", adapterStart)
 
 		expect(consumeIndex).toBeGreaterThanOrEqual(0)
 		expect(resetIndex).toBeGreaterThan(consumeIndex)
@@ -308,5 +319,74 @@ describe("Task context-window final admission guard", () => {
 		expect(finalGuardIndex).toBeGreaterThan(automaticGateIndex)
 		expect(adapterStart).toBeGreaterThanOrEqual(0)
 		expect(committedAssignment).toBeGreaterThan(adapterStart)
+	})
+
+	it("does not route Provider context errors through legacy truncation when auto-condense is enabled", async () => {
+		const source = await readFile(taskSourcePath, "utf8")
+		const requestMethod = extractMethod(source, "async *attemptApiRequest(", "// Block identity is now assigned")
+		const contextErrorBranch = extractMethod(
+			source,
+			"private async handleContextWindowExceededError(",
+			"/**\n\t * Build the current system prompt",
+		)
+
+		expect(requestMethod).toContain('const autoCondenseEnabled = this.stateManager.getGlobalSettingsKey("useAutoCondense")')
+		expect(requestMethod).toContain("if (")
+		expect(requestMethod).toContain("isContextWindowExceededError")
+		expect(requestMethod).toContain("!autoCondenseEnabled")
+		expect(requestMethod).toContain("!this.taskState.didAutomaticallyRetryFailedApiRequest")
+		expect(contextErrorBranch).toContain("getNextTruncationRange(")
+	})
+
+	it("keeps legacy truncation behind the explicit Task-owned force-truncate operation", async () => {
+		const source = await readFile(taskSourcePath, "utf8")
+		const forceTruncateMethod = extractMethod(
+			source,
+			"public async forceTruncateTask(",
+			"private async restoreCompactionState(",
+		)
+		const truncationHelper = extractMethod(
+			source,
+			"private async handleContextWindowExceededError(",
+			"/**\n\t * Build the current system prompt",
+		)
+
+		const truncateIndex = forceTruncateMethod.indexOf('await this.handleContextWindowExceededError(this.api, false, "none")')
+		const committedIndex = forceTruncateMethod.indexOf(
+			"this.taskState.manualHistoryTruncationCommitted = true",
+			truncateIndex,
+		)
+		const acceptedIndex = forceTruncateMethod.indexOf('return { accepted: true, result: "accepted" }', committedIndex)
+		const historyIndex = truncationHelper.indexOf("await this.messageStateHandler.updateTaskHistory()")
+		const noticeIndex = truncationHelper.indexOf(
+			"await this.contextManager.triggerApplyStandardContextTruncationNoticeChange(",
+			historyIndex,
+		)
+
+		expect(truncateIndex).toBeGreaterThanOrEqual(0)
+		expect(forceTruncateMethod).toContain('handleContextWindowExceededError(this.api, false, "none")')
+		expect(committedIndex).toBeGreaterThan(truncateIndex)
+		expect(acceptedIndex).toBeGreaterThan(committedIndex)
+		expect(truncationHelper).toContain("getNextTruncationRange(")
+		expect(truncationHelper).toContain('"quarter"')
+		expect(historyIndex).toBeGreaterThanOrEqual(0)
+		expect(noticeIndex).toBeGreaterThan(historyIndex)
+		expect(truncationHelper).toContain("if (markAutomaticRetry)")
+	})
+
+	it("consumes the manual history-truncation admission exactly once and skips both auto-compaction gates", async () => {
+		const source = await readFile(taskSourcePath, "utf8")
+		const requestMethod = extractMethod(source, "async recursivelyMakeClineRequests(", "async loadContext(")
+		const consumeIndex = requestMethod.indexOf(
+			"const manualHistoryTruncationCommitted = !persistedRequest && this.taskState.manualHistoryTruncationCommitted",
+		)
+		const resetIndex = requestMethod.indexOf("this.taskState.manualHistoryTruncationCommitted = false", consumeIndex)
+		const automaticGateIndex = requestMethod.indexOf("!manualHistoryTruncationCommitted &&", resetIndex)
+		const finalGateIndex = requestMethod.indexOf("!manualHistoryTruncationCommitted", automaticGateIndex + 1)
+
+		expect(consumeIndex).toBeGreaterThanOrEqual(0)
+		expect(resetIndex).toBeGreaterThan(consumeIndex)
+		expect(automaticGateIndex).toBeGreaterThan(resetIndex)
+		expect(finalGateIndex).toBeGreaterThan(automaticGateIndex)
 	})
 })

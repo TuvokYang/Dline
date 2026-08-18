@@ -5,6 +5,7 @@ import { compactTask } from "../compactTask"
 interface CompactTask {
 	taskId: string
 	compactTask(expectedRevision: number): Promise<{ accepted: boolean; result: string }>
+	forceTruncateTask?(expectedRevision: number): Promise<{ accepted: boolean; result: string }>
 }
 
 /** Create a controller-shaped test boundary with one optional active task. */
@@ -46,6 +47,23 @@ describe("compactTask", () => {
 		expect(compact).toHaveBeenCalledOnce()
 		expect(compact).toHaveBeenCalledWith(12)
 		expect(response).toMatchObject({ accepted: true, result: "accepted:12" })
+	})
+
+	it("routes an explicit force-truncate request without invoking rolling compaction", async () => {
+		const compact = vi.fn(async () => ({ accepted: true, result: "compacted" }))
+		const forceTruncate = vi.fn(async (expectedRevision: number) => ({
+			accepted: true,
+			result: `truncated:${expectedRevision}`,
+		}))
+		const response = await compactTask(
+			controller({ taskId: "task-1", compactTask: compact, forceTruncateTask: forceTruncate }) as never,
+			CompactTaskRequest.create({ taskId: "task-1", stateRevision: 12, forceTruncate: true }),
+		)
+
+		expect(forceTruncate).toHaveBeenCalledOnce()
+		expect(forceTruncate).toHaveBeenCalledWith(12)
+		expect(compact).not.toHaveBeenCalled()
+		expect(response).toMatchObject({ accepted: true, result: "truncated:12" })
 	})
 
 	it("preserves a stale-state rejection from the task", async () => {

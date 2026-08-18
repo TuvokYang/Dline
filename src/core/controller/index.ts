@@ -1658,6 +1658,7 @@ export class Controller {
 							autoRetryActive: this.task.hasAutoRetrySequence(),
 							autoRetryPending: this.task.hasPendingAutoRetry(),
 							contextCompactionOperationId: this.task.getContextCompactionOperationId(),
+							forceTruncateAvailable: this.task.isForceTruncateAvailable(),
 							commandHandoffActivityId,
 							commandHandoffRequested: commandHandoffActivityId
 								? this.task.isBackgroundHandoffRequested(commandHandoffActivityId)

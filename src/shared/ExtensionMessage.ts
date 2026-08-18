@@ -460,6 +460,8 @@ export interface TaskViewState {
 	diagnostic?: TaskViewDiagnostic
 	profileInvalid?: TaskProfileInvalidViewState
 	contextCompaction?: TaskContextCompactionViewState
+	/** True only while terminal automatic-compaction recovery offers explicit history truncation. */
+	forceTruncateAvailable?: boolean
 	input: TaskInputViewState
 	footer: TaskFooterViewState
 }

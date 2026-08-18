@@ -29,6 +29,8 @@ export interface RetryInteractionRequest {
 	interactionId: string
 	apiIndex: number
 	presentation: string
+	/** Whether the failed request already has a durable user message at apiIndex. */
+	persistedRequest?: boolean
 }
 
 /** Request used to present and resolve one mistake-limit transaction. */
@@ -446,7 +448,11 @@ export class InteractionCoordinator {
 	}
 
 	/** Commit one accepted API-error response through its typed lifecycle event. */
-	private async commitErrorRetryResponse(response: InteractionResponse, apiIndex: number): Promise<InteractionOutcome> {
+	private async commitErrorRetryResponse(
+		response: InteractionResponse,
+		apiIndex: number,
+		persistedRequest = true,
+	): Promise<InteractionOutcome> {
 		const continuation: TaskEvent =
 			response.actionId === "start_new_task"
 				? {
@@ -457,6 +463,7 @@ export class InteractionCoordinator {
 						type: "ERROR_RETRY_REQUESTED",
 						apiIndex,
 						draft: response.draft ?? { text: "", images: [], files: [] },
+						persistedRequest,
 					}
 		const committed = await this.runtime.dispatchAtAdmission(continuation)
 		if (!committed.accepted) {
@@ -506,7 +513,7 @@ export class InteractionCoordinator {
 				...request,
 			},
 		)
-		return this.commitErrorRetryResponse(response, request.apiIndex)
+		return this.commitErrorRetryResponse(response, request.apiIndex, request.persistedRequest !== false)
 	}
 
 	/** Present a mistake-limit recovery and commit the selected footer action. */

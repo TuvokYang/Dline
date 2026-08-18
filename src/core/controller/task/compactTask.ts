@@ -8,5 +8,8 @@ export async function compactTask(controller: Controller, request: CompactTaskRe
 		return CompactTaskResponse.create({ accepted: false, result: "missing_task" })
 	}
 
-	return CompactTaskResponse.create(await task.compactTask(request.stateRevision))
+	const result = request.forceTruncate
+		? await task.forceTruncateTask(request.stateRevision)
+		: await task.compactTask(request.stateRevision)
+	return CompactTaskResponse.create(result)
 }

@@ -216,6 +216,7 @@ message DispatchInteractionResponse {
 message CompactTaskRequest {
   string task_id = 1;
   int64 state_revision = 2;
+  bool force_truncate = 3;
 }
 
 // Expected result of requesting task-local context compaction

@@ -25,8 +25,12 @@ interface TaskSectionProps {
 		pricing?: ModelPricing
 	}
 	messageHandlers: MessageHandlers
+	taskId?: string
 	compactTaskDisabled?: boolean
+	forceTruncateAvailable?: boolean
+	forceTruncateTaskDisabled?: boolean
 	onCompactTask?: () => Promise<boolean>
+	onForceTruncateTask?: () => Promise<boolean>
 	lastProgressMessageText?: string
 	showFocusChainPlaceholder?: boolean
 }
@@ -38,11 +42,15 @@ interface TaskSectionProps {
 export const TaskSection: React.FC<TaskSectionProps> = ({
 	task,
 	apiMetrics,
+	taskId,
 	lastApiReqTotalTokens,
 	selectedModelInfo,
 	messageHandlers,
 	compactTaskDisabled,
+	forceTruncateAvailable,
+	forceTruncateTaskDisabled,
 	onCompactTask,
+	onForceTruncateTask,
 	lastProgressMessageText,
 	showFocusChainPlaceholder,
 }) => {
@@ -55,14 +63,18 @@ export const TaskSection: React.FC<TaskSectionProps> = ({
 			contextWindow={selectedModelInfo.contextWindow}
 			currency={apiMetrics.currency}
 			doesModelSupportPromptCache={selectedModelInfo.supportsPromptCache}
+			forceTruncateAvailable={forceTruncateAvailable}
+			forceTruncateTaskDisabled={forceTruncateTaskDisabled}
 			lastApiReqTotalTokens={lastApiReqTotalTokens}
 			lastProgressMessageText={lastProgressMessageText}
 			onClose={messageHandlers.handleTaskCloseButtonClick}
 			onCompactTask={onCompactTask}
+			onForceTruncateTask={onForceTruncateTask}
 			pricing={selectedModelInfo.pricing}
 			requestsPerMinute={apiMetrics.requestsPerMinute}
 			showFocusChainPlaceholder={showFocusChainPlaceholder}
 			task={task}
+			taskId={taskId}
 			tokensIn={apiMetrics.totalTokensIn}
 			tokensOut={apiMetrics.totalTokensOut}
 			tokensPerMinute={apiMetrics.tokensPerMinute}
