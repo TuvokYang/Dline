@@ -16,7 +16,7 @@ export class ApiRateMetricsHardLimitError extends Error {
 	}
 }
 
-export type ApiRateSignal = "request_start" | "stream_tokens" | "exact_usage"
+export type ApiRateSignal = "task_active" | "provider_active" | "request_start" | "stream_tokens" | "exact_usage"
 export type ApiRateTokenQuality = "estimated" | "mixed" | "exact"
 export type ApiRateMetricsResolution = "minute" | "hour" | "day"
 
@@ -38,6 +38,7 @@ export interface ApiRateSecondRecord {
 	effectiveTokens: number
 	tokenQuality: ApiRateTokenQuality
 	runningActiveSeconds: number
+	runningProviderActiveSeconds?: number
 	runningRequestCount: number
 	runningTokenCount: number
 	requestsPerMinute: number
@@ -51,6 +52,7 @@ export interface ApiRateRollupRecord {
 	bucketStartSecond: number
 	bucketSeconds: number
 	activeSeconds: number
+	providerActiveSeconds?: number
 	requestCount: number
 	tokenCount: number
 	requestsPerMinute: number
@@ -60,6 +62,22 @@ export interface ApiRateRollupRecord {
 
 export type ApiRateMetricsDataRecord = ApiRateSecondRecord | ApiRateRollupRecord
 export type ApiRateMetricsFileRecord = ApiRateMetricsMetaRecord | ApiRateMetricsDataRecord
+
+export interface ApiRateActivitySeconds {
+	activeSeconds: number
+	providerActiveSeconds: number
+}
+
+/** Interpret explicit activity signals while preserving schema-v1 records that predate them. */
+export function getApiRateSecondActivitySeconds(signals: readonly ApiRateSignal[]): ApiRateActivitySeconds {
+	const taskActive = signals.includes("task_active")
+	const providerActive = signals.includes("provider_active")
+	const legacyActive = !taskActive && !providerActive
+	return {
+		activeSeconds: taskActive || legacyActive ? 1 : 0,
+		providerActiveSeconds: providerActive || legacyActive ? 1 : 0,
+	}
+}
 
 export interface ApiRateRunningState {
 	activeSeconds: number

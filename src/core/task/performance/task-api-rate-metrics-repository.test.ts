@@ -80,6 +80,38 @@ describe("TaskApiRateMetricsRepository", () => {
 		})
 	})
 
+	it("restores separate task-active and provider-active rate denominators", async () => {
+		const filePath = path.join(root, "api_rate_metrics_separate_activity.jsonl")
+		const repository = new TaskApiRateMetricsRepository({ taskId: "task-a", filePath, now: () => 1_000 })
+		await repository.initialize()
+		await repository.append([
+			secondRecord(10, {
+				signals: ["task_active", "provider_active", "request_start", "stream_tokens"],
+			}),
+			secondRecord(11, {
+				signals: ["task_active"],
+				requestCount: 0,
+				estimatedTokens: 0,
+				effectiveTokens: 0,
+				runningActiveSeconds: 2,
+				runningProviderActiveSeconds: 1,
+				runningRequestCount: 1,
+				runningTokenCount: 120,
+				requestsPerMinute: 30,
+				tokensPerMinute: 7_200,
+			}),
+		])
+		await repository.waitForWrites()
+
+		const reopened = new TaskApiRateMetricsRepository({ taskId: "task-a", filePath })
+		await expect(reopened.initialize()).resolves.toMatchObject({
+			activeSeconds: 2,
+			requestCount: 1,
+			tokenCount: 120,
+			snapshot: { activeSeconds: 2, requestsPerMinute: 30, tokensPerMinute: 7_200 },
+		})
+	})
+
 	it("ignores a partial tail and marks a malformed middle line as degraded", async () => {
 		const filePath = path.join(root, "api_rate_metrics.jsonl")
 		await fs.writeFile(

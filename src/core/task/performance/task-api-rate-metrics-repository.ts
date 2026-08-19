@@ -19,6 +19,7 @@ import {
 	type ApiRateSecondRecord,
 	type ApiRateSignal,
 	type ApiRateTokenQuality,
+	getApiRateSecondActivitySeconds,
 } from "./api-rate-metrics-types"
 
 interface TaskApiRateMetricsRepositoryOptions {
@@ -33,7 +34,7 @@ interface ParsedMetricsFile extends ApiRateMetricsReadResult {
 	meta: ApiRateMetricsMetaRecord
 }
 
-const SIGNALS = new Set<ApiRateSignal>(["request_start", "stream_tokens", "exact_usage"])
+const SIGNALS = new Set<ApiRateSignal>(["task_active", "provider_active", "request_start", "stream_tokens", "exact_usage"])
 const TOKEN_QUALITIES = new Set<ApiRateTokenQuality>(["estimated", "mixed", "exact"])
 const RESOLUTIONS = new Set(["minute", "hour", "day"])
 const MAX_RECENT_ACTIVE_SECONDS = 60
@@ -155,7 +156,17 @@ export class TaskApiRateMetricsRepository implements ApiRateMetricsRepository {
 		this.meta = await this.readMeta(filePath, stat.size)
 		const tail = await this.readRecentSecondRecords(filePath, stat.size)
 		const recentRecords = tail.records
-		const activeSeconds = recentRecords.length
+		const activity = recentRecords.reduce(
+			(total, record) => {
+				const current = getApiRateSecondActivitySeconds(record.signals)
+				return {
+					activeSeconds: total.activeSeconds + current.activeSeconds,
+					providerActiveSeconds: total.providerActiveSeconds + current.providerActiveSeconds,
+				}
+			},
+			{ activeSeconds: 0, providerActiveSeconds: 0 },
+		)
+		const activeSeconds = activity.activeSeconds
 		const requestCount = recentRecords.reduce((total, record) => total + record.requestCount, 0)
 		const tokenCount = recentRecords.reduce((total, record) => total + record.effectiveTokens, 0)
 		const lastRecord = recentRecords.at(-1)
@@ -169,7 +180,7 @@ export class TaskApiRateMetricsRepository implements ApiRateMetricsRepository {
 					? {
 							activeSeconds,
 							requestsPerMinute: extrapolatePerMinute(requestCount, activeSeconds),
-							tokensPerMinute: extrapolatePerMinute(tokenCount, activeSeconds),
+							tokensPerMinute: extrapolatePerMinute(tokenCount, activity.providerActiveSeconds),
 						}
 					: {},
 			degraded: tail.degraded,
@@ -406,6 +417,7 @@ function sanitizeSecondRecord(value: Record<string, unknown>): ApiRateSecondReco
 		!isNonNegativeInteger(value.effectiveTokens) ||
 		!TOKEN_QUALITIES.has(value.tokenQuality as ApiRateTokenQuality) ||
 		!isNonNegativeInteger(value.runningActiveSeconds) ||
+		(value.runningProviderActiveSeconds !== undefined && !isNonNegativeInteger(value.runningProviderActiveSeconds)) ||
 		!isNonNegativeInteger(value.runningRequestCount) ||
 		!isNonNegativeInteger(value.runningTokenCount) ||
 		!isNonNegativeInteger(value.requestsPerMinute) ||
@@ -426,6 +438,7 @@ function sanitizeRollupRecord(value: Record<string, unknown>): ApiRateRollupReco
 		!isNonNegativeInteger(value.bucketStartSecond) ||
 		!isNonNegativeInteger(value.bucketSeconds) ||
 		!isNonNegativeInteger(value.activeSeconds) ||
+		(value.providerActiveSeconds !== undefined && !isNonNegativeInteger(value.providerActiveSeconds)) ||
 		!isNonNegativeInteger(value.requestCount) ||
 		!isNonNegativeInteger(value.tokenCount) ||
 		!isNonNegativeInteger(value.requestsPerMinute) ||

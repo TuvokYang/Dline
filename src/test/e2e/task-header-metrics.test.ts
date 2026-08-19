@@ -18,6 +18,7 @@ interface StoredRateRecord {
 	kind?: string
 	second?: number
 	revision?: number
+	signals?: string[]
 	requestCount?: number
 	effectiveTokens?: number
 	tokenQuality?: string
@@ -111,6 +112,21 @@ async function readFinalRequestInfo(dlineDocsDir: string, taskId: string): Promi
 	return requests.at(-1)
 }
 
+function storedActivitySeconds(record: StoredRateRecord): { activeSeconds: number; providerActiveSeconds: number } {
+	const signals = record.signals ?? []
+	const taskActive = signals.includes("task_active")
+	const providerActive = signals.includes("provider_active")
+	const legacyActive = !taskActive && !providerActive
+	return {
+		activeSeconds: taskActive || legacyActive ? 1 : 0,
+		providerActiveSeconds: providerActive || legacyActive ? 1 : 0,
+	}
+}
+
+function extrapolatePerMinute(value: number, activeSeconds: number): number {
+	return activeSeconds > 0 ? Math.round((value * 60) / activeSeconds) : 0
+}
+
 async function readRateSummary(dlineDocsDir: string, taskId: string): Promise<RateSummary | undefined> {
 	const raw = await readFile(path.join(dlineDocsDir, "tasks", taskId, "api_rate_metrics.jsonl"), "utf8").catch(() => "")
 	const canonical = new Map<number, StoredRateRecord>()
@@ -131,11 +147,21 @@ async function readRateSummary(dlineDocsDir: string, taskId: string): Promise<Ra
 	}
 	const records = [...canonical.values()]
 	if (records.length === 0) return undefined
+	const activity = records.reduce(
+		(total, record) => {
+			const current = storedActivitySeconds(record)
+			return {
+				activeSeconds: total.activeSeconds + current.activeSeconds,
+				providerActiveSeconds: total.providerActiveSeconds + current.providerActiveSeconds,
+			}
+		},
+		{ activeSeconds: 0, providerActiveSeconds: 0 },
+	)
 	const requestCount = records.reduce((total, record) => total + (record.requestCount ?? 0), 0)
 	const tokenCount = records.reduce((total, record) => total + (record.effectiveTokens ?? 0), 0)
 	return {
-		requestsPerMinute: Math.round((requestCount * 60) / records.length),
-		tokensPerMinute: Math.round((tokenCount * 60) / records.length),
+		requestsPerMinute: extrapolatePerMinute(requestCount, activity.activeSeconds),
+		tokensPerMinute: extrapolatePerMinute(tokenCount, activity.providerActiveSeconds),
 		tokenCount,
 	}
 }

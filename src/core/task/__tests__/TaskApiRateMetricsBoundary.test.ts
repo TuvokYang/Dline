@@ -16,7 +16,9 @@ describe("Task API rate metrics boundary", () => {
 		const source = await readFile(taskSourcePath, "utf8")
 
 		expect(source).toContain('import { TaskApiRateMetricsRepository } from "./performance/task-api-rate-metrics-repository"')
-		expect(source).toContain('import { TaskApiRateMetricsService } from "./performance/task-api-rate-metrics-service"')
+		expect(source).toContain(
+			'import { isTaskRateMetricsLoopActive, TaskApiRateMetricsService } from "./performance/task-api-rate-metrics-service"',
+		)
 		expect(source).toContain("private readonly apiRateMetricsService: TaskApiRateMetricsService")
 		expect(source).toContain("new TaskApiRateMetricsRepository({ taskId })")
 		expect(source).not.toContain("private readonly apiRateTracker: ApiRateTracker")
@@ -42,7 +44,8 @@ describe("Task API rate metrics boundary", () => {
 		const source = await readFile(taskSourcePath, "utf8")
 
 		expect(source).toContain("onStreamEstimatedTokens: (tokens) => this.apiRateMetricsService.recordEstimatedTokens(tokens)")
-		expect(source).toContain("this.apiRateMetricsService.recordRequestStarted()")
+		expect(source).toContain("this.apiRateMetricsService.setTaskLoopActive(isTaskRateMetricsLoopActive(state.phase))")
+		expect(source).toContain("this.apiRateMetricsService.trackProviderStream(")
 		expect(source).toContain("const usageTracker = new TaskRequestUsageTracker()")
 		expect(source).toContain("const usage = usageTracker.apply(chunk)")
 		expect(source).toContain("const usage = usageTracker.apply(apiStreamUsage)")

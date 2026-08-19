@@ -1,4 +1,5 @@
 import { Logger } from "@shared/services/Logger"
+import { TaskPhase } from "../TaskPhase"
 import { aggregateApiRateMetrics } from "./api-rate-metrics-aggregator"
 import {
 	API_RATE_METRICS_SCHEMA_VERSION,
@@ -11,6 +12,7 @@ import {
 	type ApiRateSecondRecord,
 	type ApiRateSignal,
 	type ApiRateTokenQuality,
+	getApiRateSecondActivitySeconds,
 } from "./api-rate-metrics-types"
 import type { ApiRateSnapshot } from "./api-rate-tracker"
 
@@ -41,6 +43,7 @@ interface MutableSecondBucket {
 interface RequestLedger {
 	id: number
 	startSecond: number
+	lastProviderSecond: number
 	estimatedBySecond: Map<number, number>
 }
 
@@ -48,9 +51,16 @@ const MILLISECONDS_PER_SECOND = 1_000
 const SECONDS_PER_MINUTE = 60
 const MAX_QUERY_POINTS = 512
 const MAX_RATE_WINDOW_ACTIVE_SECONDS = 60
-const SIGNAL_ORDER: readonly ApiRateSignal[] = ["request_start", "stream_tokens", "exact_usage"]
+const SIGNAL_ORDER: readonly ApiRateSignal[] = ["task_active", "provider_active", "request_start", "stream_tokens", "exact_usage"]
+const TASK_RATE_LOOP_PHASES = new Set<TaskPhase>([
+	TaskPhase.INITIALIZING,
+	TaskPhase.STREAMING,
+	TaskPhase.EXECUTING,
+	TaskPhase.BETWEEN_TURNS,
+	TaskPhase.RESUMING,
+])
 
-/** Coordinates sparse active-second samples and append-only exact-usage corrections for one Task. */
+/** Coordinates task-active seconds, provider-active seconds, and append-only usage corrections for one Task. */
 export class TaskApiRateMetricsService {
 	private readonly repository: ApiRateMetricsRepository
 	private readonly taskId: string
@@ -60,6 +70,8 @@ export class TaskApiRateMetricsService {
 	private readonly recentSeconds: number[] = []
 	private initialized = false
 	private disposed = false
+	private taskLoopActive = false
+	private providerRequestActive = false
 	private lastActiveSecond: number | undefined
 	private nextRequestId = 1
 	private currentRequest: RequestLedger | undefined
@@ -101,18 +113,54 @@ export class TaskApiRateMetricsService {
 			this.initialized = true
 			Logger.warn(`[Task ${this.taskId}] Failed to initialize API rate metrics; continuing with in-memory metrics`, error)
 		}
+		if (this.taskLoopActive || this.providerRequestActive) {
+			const bucket = this.ensureCurrentBucket()
+			this.markCurrentActivity(bucket)
+			this.notifyChanged()
+		}
+	}
+
+	setTaskLoopActive(active: boolean): void {
+		if (this.disposed || this.taskLoopActive === active) return
+		this.taskLoopActive = active
+		if (!this.initialized) return
+		if (active) {
+			const bucket = this.ensureCurrentBucket()
+			this.markCurrentActivity(bucket)
+		} else if (!this.providerRequestActive) {
+			this.sealCurrentBucket()
+		}
+		this.notifyChanged()
+	}
+
+	trackProviderStream<T>(stream: AsyncIterable<T>): AsyncIterable<T> {
+		this.recordRequestStarted()
+		const service = this
+		return {
+			async *[Symbol.asyncIterator]() {
+				try {
+					for await (const chunk of stream) yield chunk
+				} finally {
+					service.recordProviderRequestFinished()
+				}
+			},
+		}
 	}
 
 	recordRequestStarted(): void {
 		if (!this.canRecord()) return
+		this.providerRequestActive = false
 		this.closeCurrentRequest()
 		const bucket = this.ensureCurrentBucket()
 		const request: RequestLedger = {
 			id: this.nextRequestId++,
 			startSecond: bucket.second,
+			lastProviderSecond: bucket.second,
 			estimatedBySecond: new Map(),
 		}
 		this.currentRequest = request
+		this.providerRequestActive = true
+		this.markCurrentActivity(bucket)
 		bucket.signals.add("request_start")
 		bucket.requestCount += 1
 		this.notifyChanged()
@@ -125,6 +173,7 @@ export class TaskApiRateMetricsService {
 		const request = this.findOpenRequest()
 		if (!request) return
 		const bucket = this.ensureCurrentBucket()
+		this.markCurrentActivity(bucket)
 		bucket.signals.add("stream_tokens")
 		const contribution = this.getContribution(bucket, request.id)
 		contribution.estimatedTokens += roundedTokens
@@ -139,6 +188,7 @@ export class TaskApiRateMetricsService {
 		const request = this.findOpenRequest()
 		if (!request) return
 		const exactBucket = this.ensureCurrentBucket()
+		exactBucket.signals.add("task_active")
 		exactBucket.signals.add("exact_usage")
 		const inputTokens =
 			sanitizeTokenCount(usage.inputTokens) +
@@ -148,7 +198,7 @@ export class TaskApiRateMetricsService {
 		const allocations = new Map<number, number>()
 		addAllocation(allocations, request.startSecond, inputTokens)
 		const weightedAllocations = allocateByLargestRemainder(streamedTokens, request.estimatedBySecond)
-		if (weightedAllocations.size === 0) addAllocation(allocations, exactBucket.second, streamedTokens)
+		if (weightedAllocations.size === 0) addAllocation(allocations, request.lastProviderSecond, streamedTokens)
 		else for (const [second, tokens] of weightedAllocations) addAllocation(allocations, second, tokens)
 
 		const affectedSeconds = new Set<number>([...request.estimatedBySecond.keys(), ...allocations.keys()])
@@ -179,7 +229,7 @@ export class TaskApiRateMetricsService {
 		return {
 			activeSeconds: window.activeSeconds,
 			requestsPerMinute: extrapolatePerMinute(window.requestCount, window.activeSeconds),
-			tokensPerMinute: extrapolatePerMinute(window.tokenCount, window.activeSeconds),
+			tokensPerMinute: extrapolatePerMinute(window.tokenCount, window.providerActiveSeconds),
 		}
 	}
 
@@ -240,6 +290,8 @@ export class TaskApiRateMetricsService {
 
 	async dispose(): Promise<void> {
 		if (this.disposed) return
+		this.taskLoopActive = false
+		this.providerRequestActive = false
 		this.closeCurrentRequest()
 		this.clearBoundaryTimer()
 		this.sealCurrentBucket()
@@ -289,7 +341,12 @@ export class TaskApiRateMetricsService {
 		const delay = Math.max(1, (second + 1) * MILLISECONDS_PER_SECOND - this.now() + 1)
 		this.boundaryTimer = setTimeout(() => {
 			this.boundaryTimer = undefined
-			if (this.currentBucket?.second === second) this.sealCurrentBucket()
+			if (this.currentBucket?.second !== second) return
+			this.sealCurrentBucket()
+			if (!this.taskLoopActive && !this.providerRequestActive) return
+			const bucket = this.ensureCurrentBucket()
+			this.markCurrentActivity(bucket)
+			this.notifyChanged()
 		}, delay)
 	}
 
@@ -337,11 +394,26 @@ export class TaskApiRateMetricsService {
 			effectiveTokens: aggregate.effectiveTokens,
 			tokenQuality: aggregate.quality,
 			runningActiveSeconds: window.activeSeconds,
+			runningProviderActiveSeconds: window.providerActiveSeconds,
 			runningRequestCount: window.requestCount,
 			runningTokenCount: window.tokenCount,
 			requestsPerMinute: extrapolatePerMinute(window.requestCount, window.activeSeconds),
-			tokensPerMinute: extrapolatePerMinute(window.tokenCount, window.activeSeconds),
+			tokensPerMinute: extrapolatePerMinute(window.tokenCount, window.providerActiveSeconds),
 		}
+	}
+
+	private markCurrentActivity(bucket: MutableSecondBucket): void {
+		if (this.taskLoopActive || this.providerRequestActive) bucket.signals.add("task_active")
+		if (!this.providerRequestActive) return
+		bucket.signals.add("provider_active")
+		if (this.currentRequest) this.currentRequest.lastProviderSecond = bucket.second
+	}
+
+	recordProviderRequestFinished(): void {
+		if (!this.providerRequestActive) return
+		this.providerRequestActive = false
+		if (!this.taskLoopActive) this.sealCurrentBucket()
+		this.notifyChanged()
 	}
 
 	private getContribution(bucket: MutableSecondBucket, requestId: number): TokenContribution {
@@ -371,28 +443,35 @@ export class TaskApiRateMetricsService {
 		}
 	}
 
-	private getRateWindow(): { activeSeconds: number; requestCount: number; tokenCount: number } {
+	private getRateWindow(): { activeSeconds: number; providerActiveSeconds: number; requestCount: number; tokenCount: number } {
+		let activeSeconds = 0
+		let providerActiveSeconds = 0
 		let requestCount = 0
 		let tokenCount = 0
 		for (const second of this.recentSeconds) {
 			const bucket = this.buckets.get(second)
 			if (!bucket) continue
+			const activity = getApiRateSecondActivitySeconds([...bucket.signals])
 			const aggregate = aggregateBucket(bucket)
+			activeSeconds += activity.activeSeconds
+			providerActiveSeconds += activity.providerActiveSeconds
 			requestCount += bucket.requestCount
 			tokenCount += aggregate.effectiveTokens
 		}
-		return { activeSeconds: this.recentSeconds.length, requestCount, tokenCount }
+		return { activeSeconds, providerActiveSeconds, requestCount, tokenCount }
 	}
 
 	private isSecondReferencedByOpenRequest(second: number): boolean {
 		return (
 			this.currentRequest !== undefined &&
-			(this.currentRequest.startSecond === second || this.currentRequest.estimatedBySecond.has(second))
+			(this.currentRequest.startSecond === second ||
+				this.currentRequest.lastProviderSecond === second ||
+				this.currentRequest.estimatedBySecond.has(second))
 		)
 	}
 
 	private releaseExpiredRequestBuckets(request: RequestLedger): void {
-		const referencedSeconds = new Set([request.startSecond, ...request.estimatedBySecond.keys()])
+		const referencedSeconds = new Set([request.startSecond, request.lastProviderSecond, ...request.estimatedBySecond.keys()])
 		for (const second of referencedSeconds) {
 			if (!this.recentSeconds.includes(second) && !this.isSecondReferencedByOpenRequest(second)) {
 				this.buckets.delete(second)
@@ -466,4 +545,8 @@ function sanitizeTokenCount(tokens: number): number {
 
 function extrapolatePerMinute(value: number, activeSeconds: number): number {
 	return activeSeconds > 0 ? Math.round((value * SECONDS_PER_MINUTE) / activeSeconds) : 0
+}
+
+export function isTaskRateMetricsLoopActive(phase: TaskPhase): boolean {
+	return TASK_RATE_LOOP_PHASES.has(phase)
 }

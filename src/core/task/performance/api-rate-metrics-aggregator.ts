@@ -1,11 +1,12 @@
-import type {
-	ApiRateMetricPoint,
+import {
+	type ApiRateMetricPoint,
 	ApiRateMetricsDataRecord,
 	ApiRateMetricsQuery,
 	ApiRateMetricsResolution,
 	ApiRateRollupRecord,
 	ApiRateSecondRecord,
 	ApiRateTokenQuality,
+	getApiRateSecondActivitySeconds,
 } from "./api-rate-metrics-types"
 
 const RESOLUTION_SECONDS = {
@@ -21,6 +22,7 @@ const RESOLUTION_RANK: Record<ApiRateMetricsResolution, number> = { minute: 1, h
 
 interface BucketAccumulator {
 	activeSeconds: number
+	providerActiveSeconds: number
 	requestCount: number
 	tokenCount: number
 	tokenQuality?: ApiRateTokenQuality
@@ -58,11 +60,13 @@ export function compactApiRateMetrics(
 			output.push(record)
 			continue
 		}
+		const activity = getApiRateSecondActivitySeconds(record.signals)
 		addCompactionBucket(
 			rollupBuckets,
 			resolution,
 			record.second,
-			1,
+			activity.activeSeconds,
+			activity.providerActiveSeconds,
 			record.requestCount,
 			record.effectiveTokens,
 			record.tokenQuality,
@@ -78,6 +82,7 @@ export function compactApiRateMetrics(
 			resolution,
 			record.bucketStartSecond,
 			record.activeSeconds,
+			record.providerActiveSeconds ?? record.activeSeconds,
 			record.requestCount,
 			record.tokenCount,
 			record.tokenQuality,
@@ -102,7 +107,17 @@ export function aggregateApiRateMetrics(
 
 	for (const record of canonicalSeconds) {
 		if (record.second < query.startSecond || record.second >= query.endSecond) continue
-		addToBucket(buckets, bucketSeconds, record.second, 1, record.requestCount, record.effectiveTokens, record.tokenQuality)
+		const activity = getApiRateSecondActivitySeconds(record.signals)
+		addToBucket(
+			buckets,
+			bucketSeconds,
+			record.second,
+			activity.activeSeconds,
+			activity.providerActiveSeconds,
+			record.requestCount,
+			record.effectiveTokens,
+			record.tokenQuality,
+		)
 	}
 
 	for (const record of records) {
@@ -113,6 +128,7 @@ export function aggregateApiRateMetrics(
 			bucketSeconds,
 			record.bucketStartSecond,
 			record.activeSeconds,
+			record.providerActiveSeconds ?? record.activeSeconds,
 			record.requestCount,
 			record.tokenCount,
 			record.tokenQuality,
@@ -128,7 +144,7 @@ export function aggregateApiRateMetrics(
 			requestCount: bucket.requestCount,
 			tokenCount: bucket.tokenCount,
 			requestsPerMinute: extrapolatePerMinute(bucket.requestCount, bucket.activeSeconds),
-			tokensPerMinute: extrapolatePerMinute(bucket.tokenCount, bucket.activeSeconds),
+			tokensPerMinute: extrapolatePerMinute(bucket.tokenCount, bucket.providerActiveSeconds),
 			tokenQuality: bucket.tokenQuality ?? "estimated",
 		}))
 
@@ -141,17 +157,24 @@ function addToBucket(
 	bucketSeconds: number,
 	second: number,
 	activeSeconds: number,
+	providerActiveSeconds: number,
 	requestCount: number,
 	tokenCount: number,
 	tokenQuality: ApiRateTokenQuality,
 ): void {
-	if (activeSeconds <= 0) return
+	if (activeSeconds <= 0 && providerActiveSeconds <= 0) return
 	const bucketStartSecond = Math.floor(second / bucketSeconds) * bucketSeconds
-	const bucket = buckets.get(bucketStartSecond) ?? { activeSeconds: 0, requestCount: 0, tokenCount: 0 }
+	const bucket = buckets.get(bucketStartSecond) ?? {
+		activeSeconds: 0,
+		providerActiveSeconds: 0,
+		requestCount: 0,
+		tokenCount: 0,
+	}
 	bucket.activeSeconds += activeSeconds
+	bucket.providerActiveSeconds += providerActiveSeconds
 	bucket.requestCount += requestCount
 	bucket.tokenCount += tokenCount
-	bucket.tokenQuality = mergeTokenQuality(bucket.tokenQuality, tokenQuality)
+	if (tokenCount > 0) bucket.tokenQuality = mergeTokenQuality(bucket.tokenQuality, tokenQuality)
 	buckets.set(bucketStartSecond, bucket)
 }
 
@@ -160,6 +183,7 @@ function addCompactionBucket(
 	resolution: ApiRateMetricsResolution,
 	second: number,
 	activeSeconds: number,
+	providerActiveSeconds: number,
 	requestCount: number,
 	tokenCount: number,
 	tokenQuality: ApiRateTokenQuality,
@@ -170,12 +194,13 @@ function addCompactionBucket(
 	const entry = buckets.get(key) ?? {
 		resolution,
 		bucketStartSecond,
-		value: { activeSeconds: 0, requestCount: 0, tokenCount: 0 },
+		value: { activeSeconds: 0, providerActiveSeconds: 0, requestCount: 0, tokenCount: 0 },
 	}
 	entry.value.activeSeconds += activeSeconds
+	entry.value.providerActiveSeconds += providerActiveSeconds
 	entry.value.requestCount += requestCount
 	entry.value.tokenCount += tokenCount
-	entry.value.tokenQuality = mergeTokenQuality(entry.value.tokenQuality, tokenQuality)
+	if (tokenCount > 0) entry.value.tokenQuality = mergeTokenQuality(entry.value.tokenQuality, tokenQuality)
 	buckets.set(key, entry)
 }
 
@@ -191,10 +216,11 @@ function createRollupRecord(
 		bucketStartSecond,
 		bucketSeconds: RESOLUTION_SECONDS[resolution],
 		activeSeconds: bucket.activeSeconds,
+		providerActiveSeconds: bucket.providerActiveSeconds,
 		requestCount: bucket.requestCount,
 		tokenCount: bucket.tokenCount,
 		requestsPerMinute: extrapolatePerMinute(bucket.requestCount, bucket.activeSeconds),
-		tokensPerMinute: extrapolatePerMinute(bucket.tokenCount, bucket.activeSeconds),
+		tokensPerMinute: extrapolatePerMinute(bucket.tokenCount, bucket.providerActiveSeconds),
 		tokenQuality: bucket.tokenQuality ?? "estimated",
 	}
 }
@@ -211,7 +237,7 @@ function recordStartSecond(record: ApiRateMetricsDataRecord): number {
 }
 
 function extrapolatePerMinute(value: number, activeSeconds: number): number {
-	return Math.round((value * SECONDS_PER_MINUTE) / activeSeconds)
+	return activeSeconds > 0 ? Math.round((value * SECONDS_PER_MINUTE) / activeSeconds) : 0
 }
 
 function mergeTokenQuality(current: ApiRateTokenQuality | undefined, next: ApiRateTokenQuality): ApiRateTokenQuality {

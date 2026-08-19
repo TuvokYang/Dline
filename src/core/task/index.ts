@@ -270,7 +270,7 @@ import { createNewTaskHandoff } from "./new-task/new-task-handoff"
 import type { ApiRateMetricsQuery, ApiRateMetricsQueryResult } from "./performance/api-rate-metrics-types"
 import type { ApiRateSnapshot } from "./performance/api-rate-tracker"
 import { TaskApiRateMetricsRepository } from "./performance/task-api-rate-metrics-repository"
-import { TaskApiRateMetricsService } from "./performance/task-api-rate-metrics-service"
+import { isTaskRateMetricsLoopActive, TaskApiRateMetricsService } from "./performance/task-api-rate-metrics-service"
 import type { PresentationPriority } from "./presentation-types"
 import { PromptCacheHealthTracker } from "./prompt-cache/PromptCacheHealthTracker"
 import { RestoreHandler } from "./RestoreHandler"
@@ -1400,6 +1400,7 @@ export class Task {
 
 	/** Publish one committed runtime view after completing any phase-bound indicator transition. */
 	private async publishRuntimeTaskView(state: Readonly<TaskRuntimeState>): Promise<void> {
+		this.apiRateMetricsService.setTaskLoopActive(isTaskRateMetricsLoopActive(state.phase))
 		if (state.phase === TaskPhase.COMPLETED) {
 			await this.settleOrdinaryIndicatorRound()
 		}
@@ -1597,10 +1598,28 @@ export class Task {
 			attempt,
 			event.checkpointHead,
 		)
-		const segments = estimateContextWindowIndicatorSegments({
+		const estimatedSegments = estimateContextWindowIndicatorSegments({
 			providerInput: event.providerInput,
 			durableMessageCount: event.state.cumulativeSummary ? 1 : 0,
 		})
+		const currentIndicator = this.contextWindowIndicator.getSnapshot()
+		const latestProviderTokens =
+			this.getContextWindowRequestPressures()
+				.reverse()
+				.find(
+					(pressure) =>
+						pressure.contextTokensSource === "provider" &&
+						typeof pressure.contextTokens === "number" &&
+						pressure.contextTokens > 0,
+				)?.contextTokens ?? 0
+		const segments =
+			latestProviderTokens > 0
+				? projectAuthoritativeContextWindowIndicatorSegments({
+						projectedTotalTokens: latestProviderTokens,
+						durableContextTokens: currentIndicator.durableContextTokens,
+						estimatedEnvironmentTokens: currentIndicator.environmentTokens,
+					})
+				: estimatedSegments
 		const targetProfile = input.transition?.target.profile ?? this.getContextCompactionProfileBinding(input.targetMode)
 		this.contextCompactionIndicatorReceivingByAttemptId.set(
 			attempt.authorizationAttemptId,
@@ -6178,17 +6197,18 @@ export class Task {
 				providerOutputCap: providerOutputCap ?? null,
 			})
 		}
-		this.apiRateMetricsService.recordRequestStarted()
 		const providerRequestStartedAtMs = performance.now()
-		const stream = recordProviderAdapterOutput(
-			roundContext,
-			api.createMessage(systemPrompt, apiConversationMessages, tools, {
-				serverTools,
-				taskNamespace: this.taskId,
-				...(providerOutputCap === undefined
-					? {}
-					: { generation: { purpose: "compaction", maxOutputTokens: providerOutputCap } as const }),
-			}),
+		const stream = this.apiRateMetricsService.trackProviderStream(
+			recordProviderAdapterOutput(
+				roundContext,
+				api.createMessage(systemPrompt, apiConversationMessages, tools, {
+					serverTools,
+					taskNamespace: this.taskId,
+					...(providerOutputCap === undefined
+						? {}
+						: { generation: { purpose: "compaction", maxOutputTokens: providerOutputCap } as const }),
+				}),
+			),
 		)
 
 		const iterator = stream[Symbol.asyncIterator]()

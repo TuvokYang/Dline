@@ -225,35 +225,54 @@ function extrapolatePerMinute(count: number, activeSeconds: number): number {
 	return activeSeconds === 0 ? 0 : Math.round((count * 60) / activeSeconds)
 }
 
+function summarizeStoredActivity(records: readonly StoredRateSecondRecord[]): {
+	activeSeconds: number
+	providerActiveSeconds: number
+} {
+	return records.reduce(
+		(total, record) => {
+			const taskActive = record.signals.includes("task_active")
+			const providerActive = record.signals.includes("provider_active")
+			const legacyActive = !taskActive && !providerActive
+			return {
+				activeSeconds: total.activeSeconds + (taskActive || legacyActive ? 1 : 0),
+				providerActiveSeconds: total.providerActiveSeconds + (providerActive || legacyActive ? 1 : 0),
+			}
+		},
+		{ activeSeconds: 0, providerActiveSeconds: 0 },
+	)
+}
+
 function formatStoredQuality(records: readonly StoredRateSecondRecord[]): string {
-	const qualities = new Set(records.map((record) => record.tokenQuality))
+	const qualities = new Set(records.filter((record) => record.effectiveTokens > 0).map((record) => record.tokenQuality))
 	if (qualities.size !== 1) return "Mixed"
 	const quality = records[0]?.tokenQuality
 	return quality === "exact" ? "Exact" : quality === "mixed" ? "Mixed" : "Estimated"
 }
 
 function summarizeStoredRateMetrics(records: readonly StoredRateSecondRecord[]): RateSummary {
-	const activeSeconds = records.length
+	const activity = summarizeStoredActivity(records)
 	const requestCount = records.reduce((total, record) => total + record.requestCount, 0)
 	const tokenCount = records.reduce((total, record) => total + record.effectiveTokens, 0)
 	const lastSecond = records.at(-1)?.second
 	if (lastSecond === undefined) throw new Error("Expected at least one canonical API rate second")
 	const lastMinuteStart = Math.floor(lastSecond / 60) * 60
 	const lastMinuteRecords = records.filter((record) => record.second >= lastMinuteStart && record.second < lastMinuteStart + 60)
+	const lastMinuteActivity = summarizeStoredActivity(lastMinuteRecords)
 	const lastMinuteRequestCount = lastMinuteRecords.reduce((total, record) => total + record.requestCount, 0)
 	const lastMinuteTokenCount = lastMinuteRecords.reduce((total, record) => total + record.effectiveTokens, 0)
 	return {
-		activeSeconds,
+		activeSeconds: activity.activeSeconds,
 		requestCount,
 		tokenCount,
-		requestsPerMinute: extrapolatePerMinute(requestCount, activeSeconds),
-		tokensPerMinute: extrapolatePerMinute(tokenCount, activeSeconds),
+		requestsPerMinute: extrapolatePerMinute(requestCount, activity.activeSeconds),
+		tokensPerMinute: extrapolatePerMinute(tokenCount, activity.providerActiveSeconds),
 		lastMinute: {
-			activeSeconds: lastMinuteRecords.length,
+			activeSeconds: lastMinuteActivity.activeSeconds,
 			requestCount: lastMinuteRequestCount,
 			tokenCount: lastMinuteTokenCount,
-			requestsPerMinute: extrapolatePerMinute(lastMinuteRequestCount, lastMinuteRecords.length),
-			tokensPerMinute: extrapolatePerMinute(lastMinuteTokenCount, lastMinuteRecords.length),
+			requestsPerMinute: extrapolatePerMinute(lastMinuteRequestCount, lastMinuteActivity.activeSeconds),
+			tokensPerMinute: extrapolatePerMinute(lastMinuteTokenCount, lastMinuteActivity.providerActiveSeconds),
 			quality: formatStoredQuality(lastMinuteRecords),
 		},
 	}

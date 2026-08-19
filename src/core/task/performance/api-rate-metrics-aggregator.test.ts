@@ -56,7 +56,33 @@ describe("api rate metrics aggregation", () => {
 		])
 	})
 
-	it("recalculates active-only minute rates and omits idle buckets", () => {
+	it("uses task-active seconds for RPM and provider-active seconds for TPM", () => {
+		const records = Array.from({ length: 10 }, (_, second) =>
+			secondRecord({
+				second,
+				signals: second === 0 ? ["task_active", "provider_active", "request_start", "stream_tokens"] : ["task_active"],
+				requestCount: second === 0 ? 1 : 0,
+				estimatedTokens: second === 0 ? 120 : 0,
+				effectiveTokens: second === 0 ? 120 : 0,
+				tokenQuality: "exact",
+			}),
+		)
+
+		expect(aggregateApiRateMetrics(records, { resolution: "minute", startSecond: 0, endSecond: 60 })).toEqual([
+			{
+				bucketStartMs: 0,
+				bucketEndMs: 60_000,
+				activeSeconds: 10,
+				requestCount: 1,
+				tokenCount: 120,
+				requestsPerMinute: 6,
+				tokensPerMinute: 7_200,
+				tokenQuality: "exact",
+			},
+		])
+	})
+
+	it("recalculates legacy active-only minute rates and omits idle buckets", () => {
 		const points = aggregateApiRateMetrics(
 			[
 				secondRecord({ second: 5, requestCount: 1, effectiveTokens: 120, tokenQuality: "exact" }),
