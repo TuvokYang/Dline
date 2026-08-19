@@ -325,4 +325,25 @@ describe("TaskActivityStore", () => {
 		expect(store.get("subagent-1")?.status).toBe("cancelled")
 		expect(store.get("subagent-1")?.result).toBeUndefined()
 	})
+
+	it("moves an eligible foreground activity to explicit background ownership", async () => {
+		const move = vi.fn(async () => true)
+		const store = new TaskActivityStore("task-1")
+		store.create({
+			activityId: "subagent-foreground",
+			kind: "subagent",
+			executionMode: "foreground",
+			title: "research",
+			continueInBackground: move,
+		})
+
+		expect(await store.moveToBackground(["subagent-foreground"])).toEqual(["subagent-foreground"])
+		expect(move).toHaveBeenCalledTimes(1)
+		expect(store.get("subagent-foreground")).toMatchObject({
+			executionMode: "background",
+			cancellationOwner: "explicit",
+			latestEvent: "Continuing in background",
+		})
+		expect(await store.moveToBackground(["subagent-foreground"])).toEqual([])
+	})
 })

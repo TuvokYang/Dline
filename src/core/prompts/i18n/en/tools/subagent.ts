@@ -13,6 +13,6 @@ const prompts: Record<string, string> = {
 	prompt4Instruction: "Optional fourth subagent prompt. Must include <task> and <context> sections when provided.",
 	prompt5Instruction: "Optional fifth subagent prompt. Must include <task> and <context> sections when provided.",
 	backgroundInstruction: "Optional boolean. Set true to run in background. Defaults to false.",
-	timeoutInstruction: "Optional positive integer timeout in seconds for each subagent. Defaults to 600.",
+	timeoutInstruction: "Optional positive integer timeout in seconds for each subagent. Defaults to 1200.",
 }
 export default prompts

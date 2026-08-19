@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import type { ClineMessage } from "@shared/ExtensionMessage"
-import { fireEvent, render, screen } from "@testing-library/react"
+import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import SubagentStatusRow from "./SubagentStatusRow"
 
@@ -9,13 +9,15 @@ vi.mock("@/context/ExtensionStateContext", () => ({
 	useExtensionState: () => ({ currentTaskItem: { id: "task-1" } }),
 }))
 
-const { cancelTaskActivities, taskActivities } = vi.hoisted(() => ({
+const { cancelTaskActivities, moveSubagentToBackground, taskActivities } = vi.hoisted(() => ({
 	cancelTaskActivities: vi.fn(),
+	moveSubagentToBackground: vi.fn(async () => true),
 	taskActivities: [] as Array<Record<string, unknown>>,
 }))
 
 vi.mock("./activity/useTaskActivities", () => ({
 	cancelTaskActivities: (...args: unknown[]) => cancelTaskActivities(...args),
+	moveSubagentToBackground: (...args: unknown[]) => moveSubagentToBackground(...args),
 	useTaskActivities: () => ({
 		activities: taskActivities,
 		activeCount: taskActivities.length,
@@ -40,6 +42,7 @@ function makeMsg(overrides: Partial<ClineMessage> = {}): ClineMessage {
 describe("SubagentStatusRow", () => {
 	beforeEach(() => {
 		cancelTaskActivities.mockClear()
+		moveSubagentToBackground.mockClear()
 		taskActivities.length = 0
 	})
 
@@ -205,6 +208,50 @@ describe("SubagentStatusRow", () => {
 		expect(screen.queryByText("Running in background", { exact: true })).not.toBeInTheDocument()
 	})
 
+	it("offers Continue in Background for an eligible foreground subagent", async () => {
+		taskActivities.push({
+			activityId: "job-foreground",
+			taskId: "task-1",
+			kind: "subagent",
+			executionMode: "foreground",
+			status: "running",
+			cancellable: true,
+			createdAt: 1,
+			updatedAt: 1,
+			title: "reviewer",
+		})
+		const msg = makeMsg({
+			say: "subagent",
+			text: JSON.stringify({
+				status: "running",
+				items: [
+					{
+						index: 1,
+						jobId: "job-foreground",
+						prompt: "review",
+						status: "running",
+						background: false,
+						backgroundHandoffAvailable: true,
+						toolCalls: 0,
+						inputTokens: 0,
+						outputTokens: 0,
+						totalCost: 0,
+						currency: "USD",
+						contextTokens: 0,
+						contextWindow: 0,
+						contextUsagePercentage: 0,
+					},
+				],
+			}),
+		})
+
+		render(<SubagentStatusRow isLast={true} message={msg} />)
+		fireEvent.click(screen.getByRole("button", { name: "Continue in Background" }))
+
+		await waitFor(() => expect(moveSubagentToBackground).toHaveBeenCalledWith("task-1", "job-foreground"))
+		expect(screen.getByTestId("subagent-execution-mode")).toHaveTextContent("Foreground")
+	})
+
 	it("cancels only canonical cancellable activities in a batch", () => {
 		taskActivities.push(
 			{
@@ -261,9 +308,12 @@ describe("SubagentStatusRow", () => {
 		})
 
 		render(<SubagentStatusRow isLast={true} message={msg} />)
+		expect(screen.getByRole("button", { name: "Cancel all" })).toHaveClass("h-5")
 		fireEvent.click(screen.getByRole("button", { name: "Cancel all" }))
 
-		expect(screen.getAllByRole("button", { name: "Cancel" })).toHaveLength(2)
+		const cancelButtons = screen.getAllByRole("button", { name: "Cancel" })
+		expect(cancelButtons).toHaveLength(2)
+		for (const button of cancelButtons) expect(button).toHaveClass("h-5")
 		expect(cancelTaskActivities).toHaveBeenCalledWith("task-1", ["job-1", "job-3"])
 	})
 
@@ -310,7 +360,8 @@ describe("SubagentStatusRow", () => {
 		expect(contextContent).toHaveClass("truncate")
 		expect(contextContent).toHaveAttribute("title", "focus on cancellation\nthen verify cleanup")
 		expect(screen.queryByRole("button", { name: /subagent context/i })).not.toBeInTheDocument()
-		expect(item).toHaveTextContent("#1 · Foreground")
+		expect(screen.getByTestId("subagent-execution-mode")).toHaveTextContent("Foreground")
+		expect(item).toHaveTextContent("#1")
 		expect(item).not.toHaveTextContent(jobId)
 		expect(item.parentElement).not.toHaveClass("overflow-y-auto")
 		expect(screen.queryByText(/<task>/)).not.toBeInTheDocument()

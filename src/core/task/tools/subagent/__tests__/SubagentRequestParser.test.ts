@@ -24,7 +24,7 @@ describe("SubagentRequestParser", () => {
 		assert.equal(request.agentName, "reviewer")
 		assert.equal(request.context, "check quality")
 		assert.equal(request.options.background, false)
-		assert.equal(request.options.timeoutSeconds, 600)
+		assert.equal(request.options.timeoutSeconds, 1_200)
 		assert.match(request.prompt, /<task>\s*review code\s*<\/task>/)
 	})
 

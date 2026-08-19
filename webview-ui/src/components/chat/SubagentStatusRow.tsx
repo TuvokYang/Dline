@@ -8,6 +8,7 @@ import {
 import type { TaskActivityEvent } from "@shared/proto/dline/task"
 import {
 	BotIcon,
+	BringToFrontIcon,
 	CheckIcon,
 	ChevronDownIcon,
 	ChevronRightIcon,
@@ -15,12 +16,13 @@ import {
 	CircleXIcon,
 	LoaderCircleIcon,
 	NetworkIcon,
+	SendToBackIcon,
 } from "lucide-react"
 import { useEffect, useMemo, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { useExtensionState } from "@/context/ExtensionStateContext"
 import MarkdownBlock from "../common/MarkdownBlock"
-import { cancelTaskActivities, useTaskActivities } from "./activity/useTaskActivities"
+import { cancelTaskActivities, moveSubagentToBackground, useTaskActivities } from "./activity/useTaskActivities"
 
 interface SubagentStatusRowProps {
 	message: ClineMessage
@@ -94,21 +96,37 @@ const formatCost = (value: number | undefined, currency: string): string => {
 function getOrderedToolCalls(events: TaskActivityEvent[] | undefined): SubagentToolCallRow[] {
 	if (!events?.length) return []
 
-	const calls = new Map<string, SubagentToolCallRow>()
+	const calls: SubagentToolCallRow[] = []
+	const activeCalls = new Map<string, SubagentToolCallRow>()
+	const lastCalls = new Map<string, SubagentToolCallRow>()
 	const orderedEvents = [...events].sort((left, right) => left.sequence - right.sequence || left.timestamp - right.timestamp)
 	for (const event of orderedEvents) {
 		if (event.kind !== "tool_call" || !event.toolCallId || !event.toolName) continue
-		const existing = calls.get(event.toolCallId)
-		calls.set(event.toolCallId, {
-			toolCallId: event.toolCallId,
-			toolName: event.toolName,
-			toolStatus: event.toolStatus,
-			summary: event.summary || existing?.summary,
-			sequence: existing?.sequence ?? event.sequence,
-		})
+		let call = activeCalls.get(event.toolCallId)
+		if (!call) {
+			const last = lastCalls.get(event.toolCallId)
+			if (event.toolStatus !== "started" && last?.toolStatus === event.toolStatus && last?.summary === event.summary) {
+				continue
+			}
+			call = {
+				toolCallId: event.toolCallId,
+				toolName: event.toolName,
+				toolStatus: event.toolStatus,
+				summary: event.summary,
+				sequence: event.sequence,
+			}
+			calls.push(call)
+			activeCalls.set(event.toolCallId, call)
+		}
+		call.toolStatus = event.toolStatus
+		call.summary = event.summary || call.summary
+		lastCalls.set(event.toolCallId, call)
+		if (event.toolStatus === "completed" || event.toolStatus === "failed") {
+			activeCalls.delete(event.toolCallId)
+		}
 	}
 
-	return [...calls.values()].sort((left, right) => left.sequence - right.sequence)
+	return calls.sort((left, right) => left.sequence - right.sequence)
 }
 
 function SubagentContext({ context }: { context: string }) {
@@ -297,6 +315,7 @@ function SubagentPromptText({ prompt, isExpanded, onShowMore }: SubagentPromptTe
 export default function SubagentStatusRow({ message }: SubagentStatusRowProps) {
 	const [expandedItems, setExpandedItems] = useState<Record<number, boolean>>({})
 	const [expandedPrompts, setExpandedPrompts] = useState<Record<number, boolean>>({})
+	const [movingBackgroundIds, setMovingBackgroundIds] = useState<Record<string, boolean>>({})
 	const [collapsed, setCollapsed] = useState(false)
 	const { currentTaskItem } = useExtensionState()
 	const taskId = currentTaskItem?.id
@@ -316,6 +335,7 @@ export default function SubagentStatusRow({ message }: SubagentStatusRowProps) {
 				startedAt: activity.createdAt,
 				finishedAt: activity.finishedAt,
 				background: activity.executionMode === "background",
+				backgroundHandoffAvailable: entry.backgroundHandoffAvailable === true && activity.executionMode === "foreground",
 				toolCalls: activity.metrics?.toolCalls ?? entry.toolCalls,
 				inputTokens: activity.metrics?.inputTokens ?? entry.inputTokens,
 				outputTokens: activity.metrics?.outputTokens ?? entry.outputTokens,
@@ -378,6 +398,19 @@ export default function SubagentStatusRow({ message }: SubagentStatusRowProps) {
 			[index]: true,
 		}))
 	}
+	const moveToBackground = async (activityId: string) => {
+		if (!taskId || movingBackgroundIds[activityId]) return
+		setMovingBackgroundIds((prev) => ({ ...prev, [activityId]: true }))
+		try {
+			await moveSubagentToBackground(taskId, activityId)
+		} finally {
+			setMovingBackgroundIds((prev) => {
+				const next = { ...prev }
+				delete next[activityId]
+				return next
+			})
+		}
+	}
 
 	return (
 		<div className="mb-2">
@@ -394,7 +427,7 @@ export default function SubagentStatusRow({ message }: SubagentStatusRowProps) {
 				{statusSummary && <span className="text-[11px] opacity-70">{statusSummary}</span>}
 				{showCancelButton && (
 					<Button
-						className="ml-auto border"
+						className="ml-auto h-5 border px-2 py-0 text-[11px] leading-none"
 						onClick={(e) => {
 							e.stopPropagation()
 							if (taskId) void cancelTaskActivities(taskId, cancellableIds)
@@ -423,13 +456,29 @@ export default function SubagentStatusRow({ message }: SubagentStatusRowProps) {
 						const statsText = `${formatCount(entry.toolCalls)} tools called · ${formatCount(entry.contextTokens)} tokens · ${formatCost(entry.totalCost, entry.currency)}`
 						const metadataText = [
 							`#${entry.index}`,
-							entry.background ? "Background" : "Foreground",
 							entry.timeoutSeconds ? `timeout ${entry.timeoutSeconds}s` : undefined,
 							entry.injectionState ? `result ${entry.injectionState}` : undefined,
 						]
 							.filter((part): part is string => Boolean(part))
 							.join(" · ")
 						const latestToolCallText = entry.latestToolCall?.trim() || ""
+						const isBackground = entry.background === true
+						const ExecutionModeIcon = isBackground ? SendToBackIcon : BringToFrontIcon
+						const executionModeIndicator = (
+							<span
+								className={`inline-flex h-4 items-center gap-1 rounded-xs border px-1.5 text-[10px] font-medium ${
+									isBackground
+										? "border-editor-warning-foreground/40 bg-editor-warning-foreground/10 text-editor-warning-foreground"
+										: "border-info/40 bg-info/10 text-info"
+								}`}
+								data-testid="subagent-execution-mode">
+								<ExecutionModeIcon aria-hidden="true" className="size-2.5 shrink-0" />
+								{isBackground ? "Background" : "Foreground"}
+							</span>
+						)
+						const canMoveToBackground = Boolean(
+							taskId && entry.jobId && entry.backgroundHandoffAvailable && liveCancellableIds.has(entry.jobId),
+						)
 						return (
 							<div
 								className="rounded-xs border border-editor-group-border px-2 py-1.5"
@@ -439,11 +488,14 @@ export default function SubagentStatusRow({ message }: SubagentStatusRowProps) {
 								<div className="flex items-start gap-2">
 									{statusIcon(displayStatus)}
 									<div className="min-w-0 flex-1 space-y-1.5">
-										<div
-											className="truncate text-[11px] font-semibold uppercase tracking-wide opacity-70"
-											data-testid="subagent-name"
-											title={displaySubagentName}>
-											{displaySubagentName}
+										<div className="flex min-w-0 items-center gap-1.5">
+											<div
+												className="min-w-0 truncate text-[11px] font-semibold uppercase tracking-wide opacity-70"
+												data-testid="subagent-name"
+												title={displaySubagentName}>
+												{displaySubagentName}
+											</div>
+											{executionModeIndicator}
 										</div>
 										{hasStructuredPrompt ? (
 											<>
@@ -467,9 +519,19 @@ export default function SubagentStatusRow({ message }: SubagentStatusRowProps) {
 											/>
 										)}
 									</div>
+									{canMoveToBackground && (
+										<Button
+											className="h-5 border px-2 py-0 text-[11px] leading-none"
+											disabled={movingBackgroundIds[entry.jobId as string] === true}
+											onClick={() => void moveToBackground(entry.jobId as string)}
+											size="sm"
+											variant="secondary">
+											{movingBackgroundIds[entry.jobId as string] ? "Moving..." : "Continue in Background"}
+										</Button>
+									)}
 									{taskId && entry.jobId && liveCancellableIds.has(entry.jobId) && (
 										<Button
-											className="border"
+											className="h-5 border px-2 py-0 text-[11px] leading-none"
 											onClick={() => void cancelTaskActivities(taskId, [entry.jobId as string])}
 											size="sm"
 											variant="danger">

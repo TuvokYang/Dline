@@ -55,6 +55,11 @@ export async function moveCommandToBackground(taskId: string, activityId: string
 	return response.moved
 }
 
+/** Move one foreground subagent to task-local background execution. */
+export async function moveSubagentToBackground(taskId: string, activityId: string): Promise<boolean> {
+	return moveCommandToBackground(taskId, activityId)
+}
+
 /** Shared per-webview task activity subscription. */
 export function useTaskActivities(taskId: string | undefined): {
 	activities: TaskActivity[]

@@ -1,7 +1,7 @@
 import { MoveCommandToBackgroundRequest, MoveCommandToBackgroundResponse } from "@shared/proto/dline/task"
 import type { Controller } from ".."
 
-/** Move a synchronous foreground command to background tracking. */
+/** Move a foreground command or subagent to explicit background tracking. */
 export async function moveCommandToBackground(
 	controller: Controller,
 	request: MoveCommandToBackgroundRequest,
@@ -10,6 +10,8 @@ export async function moveCommandToBackground(
 	if (!task || task.taskId !== request.taskId || !request.activityId) {
 		return MoveCommandToBackgroundResponse.create({ moved: false })
 	}
-	const moved = await task.moveCommandToBackground(request.activityId)
-	return MoveCommandToBackgroundResponse.create({ moved })
+	const movedCommand = await task.moveCommandToBackground(request.activityId)
+	if (movedCommand) return MoveCommandToBackgroundResponse.create({ moved: true })
+	const movedActivities = await task.activityStore.moveToBackground([request.activityId])
+	return MoveCommandToBackgroundResponse.create({ moved: movedActivities.includes(request.activityId) })
 }

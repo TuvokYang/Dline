@@ -1,4 +1,4 @@
-const DEFAULT_TIMEOUT_SECONDS = 600
+const DEFAULT_TIMEOUT_SECONDS = 1_200
 const PROMPT_KEYS = ["prompt_1", "prompt_2", "prompt_3", "prompt_4", "prompt_5"] as const
 
 export interface SubagentToolOptions {

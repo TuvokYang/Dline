@@ -43,6 +43,7 @@ export interface CreateTaskActivityInput {
 	executionMode: TaskActivityExecutionMode
 	cancellationOwner?: TaskActivityCancellationOwner
 	title: string
+	continueInBackground?: () => Promise<boolean>
 	detail?: string
 	timeoutSeconds?: number
 	parentActivityId?: string
@@ -54,6 +55,7 @@ export interface CreateTaskActivityInput {
 export class TaskActivityStore {
 	private readonly activities = new Map<string, TaskActivityRecord>()
 	private readonly cancellers = new Map<string, CancelActivity>()
+	private readonly backgroundMovers = new Map<string, () => Promise<boolean>>()
 	private readonly listeners = new Map<ActivityListener, Promise<void>>()
 	private readonly dirtyIds = new Set<string>()
 	private flushTimer?: NodeJS.Timeout
@@ -102,6 +104,7 @@ export class TaskActivityStore {
 		const existing = this.activities.get(input.activityId)
 		if (existing) {
 			if (input.cancel) this.cancellers.set(input.activityId, input.cancel)
+			if (input.continueInBackground) this.backgroundMovers.set(input.activityId, input.continueInBackground)
 			return this.clone(existing)
 		}
 		const now = Date.now()
@@ -123,6 +126,7 @@ export class TaskActivityStore {
 		}
 		this.activities.set(activity.activityId, activity)
 		if (input.cancel) this.cancellers.set(activity.activityId, input.cancel)
+		if (input.continueInBackground) this.backgroundMovers.set(activity.activityId, input.continueInBackground)
 		this.appendEvent(input.activityId, { kind: "status", status: activity.status, text: "Activity started" }, true)
 		return this.clone(activity)
 	}
@@ -134,6 +138,29 @@ export class TaskActivityStore {
 	isCancellable(activityId: string): boolean {
 		const activity = this.activities.get(activityId)
 		return activity?.status === "running" && this.cancellers.has(activityId)
+	}
+
+	/** Move eligible foreground activities into explicit background ownership. */
+	async moveToBackground(activityIds: string[]): Promise<string[]> {
+		const moved: string[] = []
+		for (const activityId of activityIds) {
+			const activity = this.activities.get(activityId)
+			const move = this.backgroundMovers.get(activityId)
+			if (!activity || !move || activity.status !== "running" || activity.executionMode !== "foreground") continue
+			try {
+				if (!(await move())) continue
+				this.update(activityId, {
+					executionMode: "background",
+					cancellationOwner: "explicit",
+					latestEvent: "Continuing in background",
+				})
+				this.backgroundMovers.delete(activityId)
+				moved.push(activityId)
+			} catch (error) {
+				Logger.warn("[TaskActivityStore] Failed to move activity to background", error)
+			}
+		}
+		return moved
 	}
 
 	update(
@@ -181,7 +208,10 @@ export class TaskActivityStore {
 			this.appendEvent(activityId, { kind: "status", status: activity.status, text: activity.latestEvent }, false)
 		}
 		if (this.isTerminal(activity.status) && !activity.finishedAt) activity.finishedAt = activity.updatedAt
-		if (this.isTerminal(activity.status)) this.cancellers.delete(activityId)
+		if (this.isTerminal(activity.status)) {
+			this.cancellers.delete(activityId)
+			this.backgroundMovers.delete(activityId)
+		}
 		const priority = previousStatus !== activity.status || this.isTerminal(activity.status)
 		this.markDirty(activityId, priority)
 	}
@@ -268,6 +298,7 @@ export class TaskActivityStore {
 		this.flushTimer = undefined
 		this.listeners.clear()
 		this.cancellers.clear()
+		this.backgroundMovers.clear()
 	}
 
 	async waitForPersistence(): Promise<void> {

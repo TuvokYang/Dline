@@ -635,6 +635,7 @@ export interface SubagentStatusItem {
 	task?: string
 	context?: string
 	background?: boolean
+	backgroundHandoffAvailable?: boolean
 	timeoutSeconds?: number
 	startedAt?: number
 	finishedAt?: number

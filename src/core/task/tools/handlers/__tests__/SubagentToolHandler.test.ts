@@ -8,7 +8,7 @@ import { afterEach, describe, it, vi, expect as vitestExpect } from "vitest"
 // sinon import removed: using vitest globals
 import { TaskState } from "../../../TaskState"
 import * as AgentConfigModule from "../../subagent/AgentConfigLoader"
-import { SubagentRunner } from "../../subagent/SubagentRunner"
+import { SubagentRunner, type SubagentRunResult } from "../../subagent/SubagentRunner"
 import type { TaskConfig } from "../../types/TaskConfig"
 import { createUIHelpers } from "../../types/UIHelpers"
 import {
@@ -638,6 +638,60 @@ describe("SubagentToolHandler", () => {
 		vitestExpect(createActivity).toHaveBeenCalledWith(
 			vitestExpect.objectContaining({ executionMode: "foreground", cancellationOwner: "task" }),
 		)
+		assert.deepEqual(config.subagentJobManager?.listInjectableResults(), [])
+	})
+
+	it("hands a running foreground subagent to the background without blocking the parent tool turn", async () => {
+		const { config } = createConfig({ autoApproveSafe: true, autoApproveAll: true })
+		let activityInput: { continueInBackground?: () => Promise<boolean> } | undefined
+		const createActivity = vi.fn((input: { continueInBackground?: () => Promise<boolean> }) => {
+			activityInput = input
+		})
+		config.activityStore = {
+			create: createActivity,
+			update: vi.fn(),
+			appendEvent: vi.fn(),
+		} as unknown as TaskConfig["activityStore"]
+		const handler = new UseSubagentToolHandler()
+		let resolveRun!: (result: SubagentRunResult) => void
+		vi.spyOn(SubagentRunner.prototype, "run").mockImplementation(
+			() =>
+				new Promise<SubagentRunResult>((resolve) => {
+					resolveRun = resolve
+				}),
+		)
+
+		const execution = handler.execute(config, {
+			type: "tool_use",
+			name: ClineDefaultTool.USE_SUBAGENT,
+			params: { task: "review", context: "ctx" },
+			partial: false,
+			ts: Date.now(),
+		})
+		for (let attempt = 0; attempt < 10 && !activityInput; attempt += 1) await delay(0)
+
+		assert.ok(activityInput?.continueInBackground, "foreground activity should expose a background handoff")
+		assert.equal(await activityInput.continueInBackground(), true)
+		const result = await execution
+		assert.match(String(result), /Continued background subagent job: subagent_/)
+
+		resolveRun({
+			status: "completed",
+			result: "background completion",
+			stats: {
+				toolCalls: 0,
+				inputTokens: 0,
+				outputTokens: 0,
+				cacheWriteTokens: 0,
+				cacheReadTokens: 0,
+				totalCost: 0,
+				currency: "USD",
+				contextTokens: 0,
+				contextWindow: 200000,
+				contextUsagePercentage: 0,
+			},
+		})
+		await delay(0)
 	})
 
 	it("starts stable use_subagent background job", async () => {

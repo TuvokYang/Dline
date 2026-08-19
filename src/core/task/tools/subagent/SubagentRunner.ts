@@ -29,6 +29,7 @@ import { ApiFormat } from "@/shared/proto/dline/models/metadata"
 import { calculateApiCostAnthropic } from "@/utils/cost"
 import { isNativeToolCallingConfig, isNextGenModelFamily } from "@/utils/model-utils"
 import { TaskState } from "../../TaskState"
+import { canonicalizeAttemptCompletionParams } from "../attempt-completion-params"
 import { ServerToolLifecycle } from "../ServerToolLifecycle"
 import { ToolExecutorCoordinator } from "../ToolExecutorCoordinator"
 import { ToolValidator } from "../ToolValidator"
@@ -42,6 +43,7 @@ import {
 } from "./SubagentOutputBudget"
 
 const MAX_EMPTY_ASSISTANT_RETRIES = 3
+const MAX_INVALID_COMPLETION_RETRIES = 3
 const MAX_INITIAL_STREAM_ATTEMPTS = 6
 const INITIAL_STREAM_RETRY_BASE_DELAY_MS = 3_000
 const SUBAGENT_COMPLETION_CALL_EXAMPLE =
@@ -57,6 +59,10 @@ function buildMissingCompletionResultReminder(): string {
 
 function buildCompletionRequiredFailure(): string {
 	return `Subagent did not complete through the required protocol.\n\n${SUBAGENT_COMPLETION_CONTRACT}\n\n${SUBAGENT_COMPLETION_CALL_EXAMPLE}`
+}
+
+function buildInvalidCompletionFailure(): string {
+	return `Subagent repeatedly called attempt_completion without a non-empty result.\n\n${SUBAGENT_COMPLETION_CONTRACT}\n\n${SUBAGENT_COMPLETION_CALL_EXAMPLE}`
 }
 
 export type SubagentRunStatus = "completed" | "failed" | "cancelled"
@@ -366,6 +372,7 @@ export class SubagentRunner {
 		this.activeRetryAbortController = new AbortController()
 		const state = new TaskState()
 		let emptyAssistantResponseRetries = 0
+		let invalidCompletionRetries = 0
 		const contextState: SubagentContextState = {}
 		const contextManager = new ContextManager()
 		const usageState: SubagentUsageState = {
@@ -768,10 +775,28 @@ export class SubagentRunner {
 				for (const call of finalizedToolCalls) {
 					const toolName = call.name as ClineDefaultTool
 					const toolCallParams = toToolUseParams(call.input)
+					const toolCallBlock: ToolUse = {
+						type: "tool_use",
+						name: toolName,
+						params: toolCallParams,
+						partial: false,
+						ts: Date.now(),
+						isNativeToolCall: call.isNativeToolCall,
+						function_id: call.function_id,
+						dline_tid: call.dline_tid,
+						signature: call.signature,
+					}
+					canonicalizeAttemptCompletionParams(toolCallBlock)
 
 					if (toolName === ClineDefaultTool.ATTEMPT) {
 						const completionResult = toolCallParams.result?.trim()
 						if (!completionResult) {
+							invalidCompletionRetries += 1
+							if (invalidCompletionRetries > MAX_INVALID_COMPLETION_RETRIES) {
+								const error = buildInvalidCompletionFailure()
+								onProgress({ status: "failed", error, stats: { ...stats } })
+								return { status: "failed", error, stats }
+							}
 							pushSubagentToolResultBlock(toolResultBlocks, call, toolName, buildMissingCompletionResultReminder())
 							continue
 						}
@@ -801,18 +826,6 @@ export class SubagentRunner {
 						const deniedResult = formatResponse.toolError(`Tool '${toolName}' is not available inside subagent runs.`)
 						pushSubagentToolResultBlock(toolResultBlocks, call, toolName, deniedResult)
 						continue
-					}
-
-					const toolCallBlock: ToolUse = {
-						type: "tool_use",
-						name: toolName,
-						params: toolCallParams,
-						partial: false,
-						ts: Date.now(),
-						isNativeToolCall: call.isNativeToolCall,
-						function_id: call.function_id,
-						dline_tid: call.dline_tid,
-						signature: call.signature,
 					}
 
 					const latestToolCall = formatToolCallPreview(toolName, toolCallParams)

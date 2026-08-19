@@ -185,6 +185,7 @@ function createSubagentActivity(
 	executionMode: "foreground" | "background",
 	cancel: () => Promise<void>,
 	parentActivityId?: string,
+	continueInBackground?: () => Promise<boolean>,
 ): void {
 	if (!entry.jobId) return
 	config.activityStore?.create({
@@ -196,6 +197,7 @@ function createSubagentActivity(
 		detail: entry.prompt,
 		parentActivityId,
 		cancel,
+		continueInBackground,
 	})
 }
 
@@ -440,6 +442,7 @@ export class UseSubagentToolHandler implements IFullyManagedTool {
 			task: request.task,
 			context: request.context,
 			background: request.options.background,
+			backgroundHandoffAvailable: !request.options.background,
 			timeoutSeconds: request.options.timeoutSeconds,
 			injectionState: "pending",
 			status: "running",
@@ -505,15 +508,112 @@ export class UseSubagentToolHandler implements IFullyManagedTool {
 		config.taskState.consecutiveMistakeCount = 0
 		config.taskState.isExecutingSubagent = true
 		const foregroundRunner = new SubagentRunner(config, effectiveSubagentName, resolvedSubagent?.config)
-		entry.jobId = `subagent_fg_${block.function_id || block.ts}`
-		entry.startedAt = Date.now()
-		createSubagentActivity(config, entry, "foreground", () => foregroundRunner.abort())
+		let isContinuedInBackground = false
+		let resolveHandoff: (() => void) | undefined
+		const handoffPromise = new Promise<void>((resolve) => {
+			resolveHandoff = resolve
+		})
+		let resolveRunResult: ((result: SubagentExecResult) => void) | undefined
+		const runResultPromise = new Promise<SubagentExecResult>((resolve) => {
+			resolveRunResult = resolve
+		})
+		const subagentJobManager = getSubagentJobManager(config)
+		const foregroundJob = subagentJobManager.startJob({
+			subagentName: effectiveSubagentName,
+			task: request.task,
+			prompt: request.prompt,
+			timeoutSeconds: request.options.timeoutSeconds,
+			runner: async () => {
+				try {
+					const result = await runSubagent({
+						runner: foregroundRunner,
+						prompt: request.prompt,
+						timeoutSeconds: request.options.timeoutSeconds,
+						onProgress: (update) => applyProgress(config, entry, update),
+					})
+					resolveRunResult?.(result)
+					return result
+				} catch (error) {
+					const result: SubagentExecResult = {
+						status: "failed",
+						error: error instanceof Error ? error.message : String(error),
+						stats: emptyStats(),
+					}
+					resolveRunResult?.(result)
+					return result
+				}
+			},
+			onStatusChange: async (jobRecord) => {
+				entry.status = jobRecord.status
+				entry.result = jobRecord.result
+				entry.error = jobRecord.error
+				entry.background = isContinuedInBackground
+				entry.backgroundHandoffAvailable = false
+				if (jobRecord.stats) applyStats(entry, jobRecord.stats)
+				entry.finishedAt = jobRecord.finishedAt
+				updateActivityFromEntry(config, entry)
+				if (!isContinuedInBackground) return
+				await config.callbacks.say(
+					"subagent",
+					JSON.stringify(
+						buildStatusPayload("single", jobRecord.status, [entry], {
+							background: true,
+							timeoutSeconds: request.options.timeoutSeconds,
+							jobId: jobRecord.jobId,
+						}),
+					),
+					undefined,
+					undefined,
+					false,
+					block.ts,
+				)
+			},
+		})
+		entry.jobId = foregroundJob.jobId
+		entry.startedAt = foregroundJob.startedAt
+		createSubagentActivity(
+			config,
+			entry,
+			"foreground",
+			() => foregroundRunner.abort(),
+			undefined,
+			async () => {
+				if (isContinuedInBackground || entry.status !== "running") return false
+				isContinuedInBackground = true
+				entry.background = true
+				entry.backgroundHandoffAvailable = false
+				try {
+					await config.callbacks.say(
+						"subagent",
+						JSON.stringify(
+							buildStatusPayload("single", "running", [entry], {
+								background: true,
+								timeoutSeconds: request.options.timeoutSeconds,
+								jobId: foregroundJob.jobId,
+							}),
+						),
+						undefined,
+						undefined,
+						false,
+						block.ts,
+					)
+				} catch (error) {
+					isContinuedInBackground = false
+					entry.background = false
+					entry.backgroundHandoffAvailable = true
+					throw error
+				}
+				resolveHandoff?.()
+				return true
+			},
+		)
 		await config.callbacks.say(
 			"subagent",
 			JSON.stringify(
 				buildStatusPayload("single", "running", [entry], {
 					background: false,
 					timeoutSeconds: request.options.timeoutSeconds,
+					jobId: foregroundJob.jobId,
 				}),
 			),
 			undefined,
@@ -523,18 +623,24 @@ export class UseSubagentToolHandler implements IFullyManagedTool {
 		)
 		let result: SubagentExecResult
 		try {
-			result = await runSubagent({
-				runner: foregroundRunner,
-				prompt: request.prompt,
-				timeoutSeconds: request.options.timeoutSeconds,
-				onProgress: (update) => applyProgress(config, entry, update),
-			})
+			const outcome = await Promise.race([
+				runResultPromise.then((completedResult) => ({ kind: "completed" as const, result: completedResult })),
+				handoffPromise.then(() => ({ kind: "background" as const })),
+			])
+			if (outcome.kind === "background") {
+				return formatResponse.toolResult(`Continued background subagent job: ${foregroundJob.jobId}`)
+			}
+			result = outcome.result
+			subagentJobManager.markInjected([foregroundJob.jobId])
+			subagentJobManager.markConsumed([foregroundJob.jobId])
 		} finally {
 			config.taskState.isExecutingSubagent = false
 		}
 		entry.status = result.status
 		entry.result = result.result
 		entry.error = result.error
+		entry.background = false
+		entry.backgroundHandoffAvailable = false
 		entry.finishedAt = Date.now()
 		applyStats(entry, result.stats)
 		updateActivityFromEntry(config, entry)
@@ -544,6 +650,7 @@ export class UseSubagentToolHandler implements IFullyManagedTool {
 				buildStatusPayload("single", result.status === "completed" ? "completed" : result.status, [entry], {
 					background: false,
 					timeoutSeconds: request.options.timeoutSeconds,
+					jobId: foregroundJob.jobId,
 				}),
 			),
 			undefined,
@@ -648,6 +755,7 @@ export class UseSubagentsToolHandler implements IFullyManagedTool {
 			task: item.task,
 			context: item.context,
 			background: request.options.background,
+			backgroundHandoffAvailable: false,
 			timeoutSeconds: request.options.timeoutSeconds,
 			injectionState: "pending",
 			status: "running",

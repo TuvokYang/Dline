@@ -48,6 +48,7 @@ import { MessageStateHandler } from "./message-state"
 import { resolveRequestWebSearchRoutingPlan } from "./RequestApiScope"
 import { TaskController } from "./TaskController"
 import { TaskState } from "./TaskState"
+import { canonicalizeAttemptCompletionParams } from "./tools/attempt-completion-params"
 import { AutoApprove } from "./tools/autoApprove"
 import { isInternalNativeToolName, normalizeNativeToolName } from "./tools/NativeToolAdmission"
 import { ServerToolLifecycle } from "./tools/ServerToolLifecycle"
@@ -67,14 +68,7 @@ import { NO_TOOL_RESULT, ToolResultUtils } from "./tools/utils/ToolResultUtils"
 
 type ToolResponse = ClineToolResponseContent
 
-export function canonicalizeAttemptCompletionParams(block: ToolUse): boolean {
-	if (block.name === ClineDefaultTool.ATTEMPT && !block.params?.result && typeof block.params?.response === "string") {
-		block.params.result = block.params.response
-		return true
-	}
-
-	return false
-}
+export { canonicalizeAttemptCompletionParams } from "./tools/attempt-completion-params"
 
 /**
  * Resolve whether a tool use should be auto-approved from tool params.

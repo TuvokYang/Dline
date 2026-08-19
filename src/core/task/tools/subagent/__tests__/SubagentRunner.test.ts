@@ -764,6 +764,32 @@ describe("SubagentRunner", () => {
 		assert.equal(createMessage.mock.calls.length, 2)
 	})
 
+	it("accepts the legacy response field for attempt_completion", async () => {
+		const createMessage = vi.fn().mockImplementationOnce(async function* () {
+			yield {
+				type: "tool_calls",
+				function_id: "toolu_subagent_legacy_response",
+				tool_call: {
+					function: {
+						name: ClineDefaultTool.ATTEMPT,
+						arguments: JSON.stringify({ response: "legacy done" }),
+					},
+				},
+			}
+		})
+		stubSystemPrompt(false)
+		vi.spyOn(skills, "discoverSkills").mockResolvedValue([])
+		vi.spyOn(skills, "getAvailableSkills").mockReturnValue([])
+		stubApiHandler(createMessage)
+		initializeHostProvider()
+
+		const result = await new SubagentRunner(createTaskConfig(false)).run("Review files", () => {})
+
+		assert.equal(result.status, "completed")
+		assert.equal(result.result, "legacy done")
+		assert.equal(createMessage.mock.calls.length, 1)
+	})
+
 	it("requires a non-empty result after attempt_completion omits it", async () => {
 		const createMessage = vi.fn()
 		createMessage.mockImplementationOnce(async function* () {
@@ -804,6 +830,32 @@ describe("SubagentRunner", () => {
 
 		assert.equal(result.status, "completed")
 		assert.equal(result.result, "done")
+	})
+
+	it("bounds repeated empty attempt_completion calls instead of looping until timeout", async () => {
+		const createMessage = vi.fn().mockImplementation(async function* () {
+			yield {
+				type: "tool_calls",
+				function_id: "toolu_subagent_missing_result_loop",
+				tool_call: {
+					function: {
+						name: ClineDefaultTool.ATTEMPT,
+						arguments: JSON.stringify({}),
+					},
+				},
+			}
+		})
+		stubSystemPrompt(false)
+		vi.spyOn(skills, "discoverSkills").mockResolvedValue([])
+		vi.spyOn(skills, "getAvailableSkills").mockReturnValue([])
+		stubApiHandler(createMessage)
+		initializeHostProvider()
+
+		const result = await new SubagentRunner(createTaskConfig(false)).run("Review files", () => {})
+
+		assert.equal(result.status, "failed")
+		assert.match(result.error || "", /repeatedly called attempt_completion/)
+		assert.equal(createMessage.mock.calls.length, 4)
 	})
 
 	it("reports the required completion protocol after repeated plain responses", async () => {
