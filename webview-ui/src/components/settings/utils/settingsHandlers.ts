@@ -17,6 +17,9 @@ const settingsRequestTracker = new SettingsRequestTracker()
 /** Wait for every Settings RPC and surface the latest failure for each setting. */
 export const flushPendingSettingsRequests = () => settingsRequestTracker.flush()
 
+/** Wait for Task-scoped setting writes before starting that Task's next request. */
+export const flushPendingTaskSettingsRequests = (taskId: string) => settingsRequestTracker.flushPrefix(`task:${taskId}:`)
+
 function settingsRequestKeys(scope: string, fields: readonly string[]): string[] {
 	return fields.map((field) => `${scope}:${field}`)
 }
@@ -51,9 +54,9 @@ export const updateSettings = (settings: SettingsUpdate) => {
 		Object.assign(updateRequest, { [field]: convertToProtoValue(field, value) })
 	}
 
-	return settingsRequestTracker.track(
+	return settingsRequestTracker.trackQueued(
 		settingsRequestKeys("global", Object.keys(updateRequest)),
-		StateServiceClient.updateSettings(UpdateSettingsRequest.create(updateRequest)),
+		() => StateServiceClient.updateSettings(UpdateSettingsRequest.create(updateRequest)),
 		"Failed to update settings:",
 	)
 }
@@ -90,9 +93,9 @@ export const updateTaskSettings = (taskId: string | undefined, settings: Partial
 		settings,
 	})
 
-	return settingsRequestTracker.track(
+	return settingsRequestTracker.trackQueued(
 		settingsRequestKeys(`task:${taskId ?? "active"}`, Object.keys(settings)),
-		StateServiceClient.updateTaskSettings(request),
+		() => StateServiceClient.updateTaskSettings(request),
 		`Failed to update task settings for task ${taskId ?? "active"}:`,
 	)
 }

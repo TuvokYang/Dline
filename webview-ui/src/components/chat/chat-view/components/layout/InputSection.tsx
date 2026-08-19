@@ -1,3 +1,4 @@
+import { flushPendingTaskSettingsRequests } from "@components/settings/utils/settingsHandlers"
 import type { ClineAsk } from "@shared/ExtensionMessage"
 import React, { useEffect, useRef } from "react"
 import ChatTextArea from "@/components/chat/ChatTextArea"
@@ -58,6 +59,7 @@ export const InputSection: React.FC<InputSectionProps> = ({
 	const { isAtBottom, scrollToBottomAuto } = scrollBehavior
 	const deferredSubmitRef = useRef<{ scope: string | undefined; draft: ModeSwitchDraft }>()
 	const submitDraft = async (capturedDraft?: ModeSwitchDraft) => {
+		if (submissionScope) await flushPendingTaskSettingsRequests(submissionScope)
 		const draft: InteractionDraft = capturedDraft
 			? {
 					text: capturedDraft.text,

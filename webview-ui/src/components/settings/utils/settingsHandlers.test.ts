@@ -36,6 +36,64 @@ describe("SettingsRequestTracker", () => {
 		consoleError.mockRestore()
 	})
 
+	it("serializes overlapping requests for the same setting key", async () => {
+		const tracker = new SettingsRequestTracker()
+		const first = deferred<unknown>()
+		const starts: string[] = []
+
+		const firstRequest = tracker.trackQueued(
+			["task:task-1:actModeReasoningOverrideEffort"],
+			() => {
+				starts.push("first")
+				return first.promise
+			},
+			"Failed to update task settings:",
+		)
+		const secondRequest = tracker.trackQueued(
+			["task:task-1:actModeReasoningOverrideEffort"],
+			async () => {
+				starts.push("second")
+			},
+			"Failed to update task settings:",
+		)
+
+		await Promise.resolve()
+		expect(starts).toEqual(["first"])
+		first.resolve(undefined)
+		await expect(Promise.all([firstRequest, secondRequest])).resolves.toEqual([undefined, undefined])
+		expect(starts).toEqual(["first", "second"])
+	})
+
+	it("allows requests for independent setting keys to run concurrently", async () => {
+		const tracker = new SettingsRequestTracker()
+		const first = deferred<unknown>()
+		const second = deferred<unknown>()
+		const starts: string[] = []
+
+		const firstRequest = tracker.trackQueued(
+			["task:task-1:thinking"],
+			() => {
+				starts.push("thinking")
+				return first.promise
+			},
+			"Failed to update task settings:",
+		)
+		const secondRequest = tracker.trackQueued(
+			["task:task-1:tier"],
+			() => {
+				starts.push("tier")
+				return second.promise
+			},
+			"Failed to update task settings:",
+		)
+
+		await Promise.resolve()
+		expect(starts).toEqual(["thinking", "tier"])
+		first.resolve(undefined)
+		second.resolve(undefined)
+		await expect(Promise.all([firstRequest, secondRequest])).resolves.toEqual([undefined, undefined])
+	})
+
 	it("clears a field failure only after a newer request for that field succeeds", async () => {
 		const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined)
 		const tracker = new SettingsRequestTracker()

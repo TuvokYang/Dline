@@ -10,17 +10,10 @@ import { resolveProfileReasoningConfig, resolveTaskThinkingConfig } from "@share
 import { useEffect, useMemo, useState } from "react"
 import { TaskServiceTierControl } from "./TaskServiceTierControl"
 
-const ACTIVE_REQUEST_PHASES = new Set(["initializing", "streaming", "resuming", "cancelling"])
-
-function transitionPending(phase: string | undefined): boolean {
-	return phase !== undefined && phase !== "idle" && phase !== "failed"
-}
-
 /** Task-local reasoning and OpenAI service-tier controls for the chat input toolbar. */
 export function TaskRuntimeControls() {
-	const { apiConfiguration, currentTaskItem, mode, modeSwitch, profileSwitch, taskViewState } = useExtensionState()
+	const { apiConfiguration, currentTaskItem, mode, taskViewState } = useExtensionState()
 	const { profiles } = useApiProfiles()
-	const [pending, setPending] = useState(false)
 	const [error, setError] = useState<string>()
 
 	const taskId = taskViewState?.taskId ?? currentTaskItem?.id
@@ -78,27 +71,13 @@ export function TaskRuntimeControls() {
 	useEffect(() => setThinkingValue(configuredThinkingValue), [configuredThinkingValue])
 	useEffect(() => setBudgetValue(String(configuredBudget)), [configuredBudget])
 
-	const phase = taskViewState?.phase ?? "idle"
-	const requestActive = ACTIVE_REQUEST_PHASES.has(phase) || (phase === "executing" && taskViewState?.input?.enabled !== true)
-	const unavailable =
-		!taskId ||
-		pending ||
-		Boolean(taskViewState?.profileInvalid) ||
-		Boolean(taskViewState?.contextCompaction) ||
-		requestActive ||
-		transitionPending(modeSwitch?.phase) ||
-		transitionPending(profileSwitch?.phase)
-
 	const commit = async (settings: Record<string, string | number>) => {
-		if (!taskId || unavailable) return
-		setPending(true)
+		if (!taskId) return
 		setError(undefined)
 		try {
 			await updateTaskSettings(taskId, settings)
 		} catch (caught) {
 			setError(caught instanceof Error ? caught.message : "Failed to update Task runtime settings.")
-		} finally {
-			setPending(false)
 		}
 	}
 
@@ -134,7 +113,7 @@ export function TaskRuntimeControls() {
 		)
 	}
 
-	if (unavailable || (!supportsEffort && !supportsBudget && !supportsServiceTier)) return null
+	if (!taskId || (!supportsEffort && !supportsBudget && !supportsServiceTier)) return null
 
 	return (
 		<>
@@ -145,7 +124,7 @@ export function TaskRuntimeControls() {
 					<Select onValueChange={updateThinking} value={thinkingValue}>
 						<SelectTrigger
 							aria-label="Task thinking override"
-							className="!h-4 inline-flex w-auto min-w-0 max-w-full items-center justify-start gap-0 overflow-hidden rounded-none border-0 bg-transparent p-0 text-left text-xs leading-none shadow-none outline-none focus-visible:border-transparent focus-visible:ring-0"
+							className="!h-4 inline-flex w-auto min-w-0 max-w-full items-center justify-start gap-0 overflow-hidden rounded-none border-0 bg-transparent p-0 text-left text-xs leading-none text-description shadow-none outline-none focus-visible:border-transparent focus-visible:ring-0"
 							showIcon={false}
 							size="sm">
 							<SelectValue className="flex min-w-0 items-center truncate text-left leading-none" />

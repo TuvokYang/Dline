@@ -47,7 +47,6 @@ function createController() {
 	const postStateToWebview = vi.fn(async () => {
 		order.push("post")
 	})
-	const assertTaskRuntimeOverridesMutable = vi.fn()
 	const getApiConfigurationForTask = vi.fn(() => ({
 		planModeProfileId: "profile-1",
 		planModeProfile: "OpenAI profile",
@@ -55,7 +54,6 @@ function createController() {
 		actModeProfile: "OpenAI profile",
 	}))
 	const controller = {
-		assertTaskRuntimeOverridesMutable,
 		stateManager: {
 			setTaskSettingsBatch,
 			setTaskSettings,
@@ -75,7 +73,6 @@ function createController() {
 	} as unknown as Controller
 
 	return {
-		assertTaskRuntimeOverridesMutable,
 		clearTaskSetting,
 		controller,
 		flushPendingState,
@@ -122,7 +119,6 @@ describe("updateTaskSettings Task runtime overrides", () => {
 			}),
 		)
 
-		expect(fixture.assertTaskRuntimeOverridesMutable).toHaveBeenCalledOnce()
 		expect(fixture.setTaskSettings).toHaveBeenCalledWith("task-1", "actModeReasoningOverrideKind", "effort")
 		expect(fixture.setTaskSettings).toHaveBeenCalledWith("task-1", "actModeReasoningOverrideEffort", "high")
 		expect(fixture.setTaskSettings).toHaveBeenCalledWith("task-1", "actModeServiceTierOverrideKind", "tier")
@@ -229,28 +225,24 @@ describe("updateTaskSettings Task runtime overrides", () => {
 		expect(fixture.postStateToWebview).not.toHaveBeenCalled()
 	})
 
-	it("propagates a busy rejection before mutating or publishing", async () => {
+	it("commits an override while another request can retain its captured handler", async () => {
 		const fixture = createController()
-		fixture.assertTaskRuntimeOverridesMutable.mockImplementation(() => {
-			throw new Error("Task runtime overrides cannot change while a request is active.")
-		})
 
-		await expect(
-			updateTaskSettings(
-				fixture.controller,
-				UpdateTaskSettingsRequest.create({
-					taskId: "task-1",
-					settings: {
-						actModeServiceTierOverrideKind: "tier",
-						actModeServiceTierOverrideTier: "flex",
-					},
-				}),
-			),
-		).rejects.toThrow("Task runtime overrides cannot change while a request is active.")
+		await updateTaskSettings(
+			fixture.controller,
+			UpdateTaskSettingsRequest.create({
+				taskId: "task-1",
+				settings: {
+					actModeServiceTierOverrideKind: "tier",
+					actModeServiceTierOverrideTier: "flex",
+				},
+			}),
+		)
 
-		expect(fixture.setTaskSettings).not.toHaveBeenCalled()
-		expect(fixture.flushPendingState).not.toHaveBeenCalled()
-		expect(fixture.postStateToWebview).not.toHaveBeenCalled()
+		expect(fixture.setTaskSettings).toHaveBeenCalledWith("task-1", "actModeServiceTierOverrideTier", "flex")
+		expect(fixture.flushPendingState).toHaveBeenCalledOnce()
+		expect(fixture.rebuildApiHandler).toHaveBeenCalledOnce()
+		expect(fixture.postStateToWebview).toHaveBeenCalledOnce()
 	})
 
 	it("does not rebuild or publish when durable persistence fails", async () => {

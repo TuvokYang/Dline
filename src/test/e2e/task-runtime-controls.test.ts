@@ -220,6 +220,7 @@ async function startTaskAndWaitForRuntimeControls(
 	target: MockApiTarget,
 	server: ClineApiServerMock,
 	markers: { task: string; prompt: string; completion: string },
+	options: { onStreaming?: () => Promise<void>; streamingDelayMs?: number; supportsThinking?: boolean } = {},
 ): Promise<void> {
 	server.enqueueResponses(
 		target,
@@ -227,7 +228,7 @@ async function startTaskAndWaitForRuntimeControls(
 			type: "tool",
 			name: "qna_respond",
 			arguments: { response: markers.prompt },
-			delayMs: 1_000,
+			delayMs: options.streamingDelayMs ?? 5_000,
 		},
 		{
 			type: "tool",
@@ -239,11 +240,24 @@ async function startTaskAndWaitForRuntimeControls(
 	const input = sidebar.getByTestId("chat-input")
 	await input.fill(markers.task)
 	await sidebar.getByTestId("send-button").click()
-	await expect(sidebar.getByRole("combobox", { name: "Task thinking override" })).toHaveCount(0)
-	await expect(sidebar.getByRole("button", { name: "Task service tier" })).toHaveCount(0)
-	await expect(sidebar.locator("[data-chat-input-runtime-controls] [disabled]")).toHaveCount(0)
-	await expect(sidebar.getByText(markers.prompt, { exact: true })).toBeVisible({ timeout: 60_000 })
 	await expect.poll(() => server.getRequestCount(target)).toBe(1)
+	await expect(sidebar.getByRole("contentinfo").getByText("Cancel", { exact: true })).toBeVisible({ timeout: 30_000 })
+	const thinkingControl = sidebar.getByRole("combobox", { name: "Task thinking override" })
+	if (options.supportsThinking === false) {
+		await expect(thinkingControl).toHaveCount(0)
+	} else {
+		await expect(thinkingControl).toBeVisible()
+		await expect(thinkingControl).toBeEnabled()
+	}
+	const serviceTierControl = sidebar.getByRole("button", { name: "Task service tier" })
+	if (target === "openai-compatible-chat" || target === "openai-compatible-responses") {
+		await expect(serviceTierControl).toBeVisible()
+		await expect(serviceTierControl).toBeEnabled()
+	} else {
+		await expect(serviceTierControl).toHaveCount(0)
+	}
+	await options.onStreaming?.()
+	await expect(sidebar.getByText(markers.prompt, { exact: true })).toBeVisible({ timeout: 60_000 })
 }
 
 async function selectThinkingOverride(sidebar: Frame, optionName: string): Promise<void> {
@@ -283,6 +297,95 @@ async function captureRuntimeControls(page: Page, sidebar: Frame, testInfo: Test
 	const controlsPath = testInfo.outputPath(`${name}-controls.png`)
 	await sidebar.locator("[data-chat-input-runtime-controls]").screenshot({ path: controlsPath })
 	await testInfo.attach(`${name}-controls`, { path: controlsPath, contentType: "image/png" })
+}
+
+async function runtimeControlAppearance(sidebar: Frame) {
+	const profile = sidebar.getByRole("button", { name: "Select model" })
+	const thinking = sidebar.getByRole("combobox", { name: "Task thinking override" })
+	const serviceTier = sidebar.getByRole("button", { name: "Task service tier" })
+	const serviceTierIcon = sidebar.getByTestId("task-service-tier-icon")
+	const [profileAppearance, thinkingAppearance, serviceTierAppearance, iconAppearance] = await Promise.all([
+		profile.evaluate((element) => {
+			const style = getComputedStyle(element)
+			const rect = element.getBoundingClientRect()
+			return {
+				centerY: rect.top + rect.height / 2,
+				color: style.color,
+				fontSize: Number.parseFloat(style.fontSize),
+				height: rect.height,
+				lineHeight: style.lineHeight,
+			}
+		}),
+		thinking.evaluate((element) => {
+			const style = getComputedStyle(element)
+			const rect = element.getBoundingClientRect()
+			return {
+				centerY: rect.top + rect.height / 2,
+				color: style.color,
+				disabled: (element as HTMLButtonElement).disabled,
+				fontSize: Number.parseFloat(style.fontSize),
+				height: rect.height,
+				lineHeight: style.lineHeight,
+			}
+		}),
+		serviceTier.evaluate((element) => {
+			const rect = element.getBoundingClientRect()
+			return {
+				centerY: rect.top + rect.height / 2,
+				disabled: (element as HTMLButtonElement).disabled,
+				height: rect.height,
+				scale: element.offsetWidth > 0 ? rect.width / element.offsetWidth : 1,
+			}
+		}),
+		serviceTierIcon.evaluate((element) => {
+			const style = getComputedStyle(element)
+			const rect = element.getBoundingClientRect()
+			return {
+				centerY: rect.top + rect.height / 2,
+				cssHeight: Number.parseFloat(style.height),
+				cssWidth: Number.parseFloat(style.width),
+				display: style.display,
+				height: rect.height,
+				width: rect.width,
+			}
+		}),
+	])
+	return {
+		profile: profileAppearance,
+		thinking: thinkingAppearance,
+		serviceTier: serviceTierAppearance,
+		serviceTierIcon: iconAppearance,
+	}
+}
+
+function expectRuntimeControlAppearance(metrics: Awaited<ReturnType<typeof runtimeControlAppearance>>): void {
+	expect(metrics.thinking.fontSize).toBe(metrics.profile.fontSize)
+	expect(metrics.thinking.lineHeight).toBe(metrics.profile.lineHeight)
+	expect(metrics.thinking.color).toBe(metrics.profile.color)
+	expect(metrics.serviceTierIcon.display).toBe("block")
+	expect(Math.abs(metrics.serviceTierIcon.cssHeight - metrics.thinking.fontSize)).toBeLessThanOrEqual(0.1)
+	expect(Math.abs(metrics.serviceTierIcon.cssWidth - metrics.thinking.fontSize)).toBeLessThanOrEqual(0.1)
+	const expectedIconSize = metrics.thinking.fontSize * metrics.serviceTier.scale
+	expect(Math.abs(metrics.serviceTierIcon.height - expectedIconSize)).toBeLessThanOrEqual(1)
+	expect(Math.abs(metrics.serviceTierIcon.width - expectedIconSize)).toBeLessThanOrEqual(1)
+	expect(Math.abs(metrics.profile.centerY - metrics.thinking.centerY)).toBeLessThanOrEqual(1)
+	expect(Math.abs(metrics.thinking.centerY - metrics.serviceTier.centerY)).toBeLessThanOrEqual(1)
+	expect(Math.abs(metrics.serviceTier.centerY - metrics.serviceTierIcon.centerY)).toBeLessThanOrEqual(1)
+}
+
+async function captureRuntimeControlEvidence(
+	page: Page,
+	sidebar: Frame,
+	testInfo: TestInfo,
+	name: string,
+): Promise<Awaited<ReturnType<typeof runtimeControlAppearance>>> {
+	const metrics = await runtimeControlAppearance(sidebar)
+	await captureRuntimeControls(page, sidebar, testInfo, name)
+	const metricsPath = testInfo.outputPath(`${name}-metrics.json`)
+	await writeFile(metricsPath, `${JSON.stringify(metrics, null, 2)}\n`, "utf8")
+	await testInfo.attach(`${name}-metrics`, { path: metricsPath, contentType: "application/json" })
+	expectRuntimeControlAppearance(metrics)
+	return metrics
 }
 
 async function expectRuntimeControlsFit(sidebar: Frame): Promise<void> {
@@ -368,7 +471,7 @@ e2e(
 				prompt: "E2E_DEEPSEEK_PROVIDER_ENABLE_THINKING_READY",
 				completion: "E2E_DEEPSEEK_PROVIDER_ENABLE_THINKING_DONE",
 			}
-			await startTaskAndWaitForRuntimeControls(sidebar, "deepseek-chat", server, markers)
+			await startTaskAndWaitForRuntimeControls(sidebar, "deepseek-chat", server, markers, { supportsThinking: false })
 			await expect(sidebar.getByRole("combobox", { name: "Task thinking override" })).toHaveCount(0)
 
 			await openApiSettings(page, sidebar)
@@ -558,11 +661,52 @@ e2e(
 				prompt: "E2E_OPENAI_RUNTIME_CONTROLS_READY",
 				completion: "E2E_OPENAI_RUNTIME_CONTROLS_DONE",
 			}
-			await startTaskAndWaitForRuntimeControls(sidebar, "openai-compatible-chat", server, markers)
-			await expectRuntimeControlsFit(sidebar)
-			await selectThinkingOverride(sidebar, "Low")
+			await startTaskAndWaitForRuntimeControls(sidebar, "openai-compatible-chat", server, markers, {
+				onStreaming: async () => {
+					await expectRuntimeControlsFit(sidebar)
+					const streamingMetrics = await captureRuntimeControlEvidence(
+						page,
+						sidebar,
+						testInfo,
+						"openai-runtime-controls-streaming",
+					)
+					expect(streamingMetrics.thinking.disabled).toBe(false)
+					expect(streamingMetrics.serviceTier.disabled).toBe(false)
 
+					const firstRequest = server.getMockConsumptions("openai-compatible-chat")[0]
+					expect(firstRequest.thinking).toEqual({ mode: "effort", effort: "high" })
+					expect(asRecord(firstRequest.requestBody)).not.toHaveProperty("service_tier")
+
+					await selectThinkingOverride(sidebar, "Low")
+					await selectServiceTier(sidebar, "Ultrafast")
+					const streamingTaskId = await onlyTaskId(dlineDocsDir)
+					await expect
+						.poll(async () => readTaskSettings(dlineDocsDir, streamingTaskId), { timeout: 30_000 })
+						.toMatchObject({
+							actModeReasoningOverrideKind: "effort",
+							actModeReasoningOverrideEffort: "low",
+							actModeServiceTierOverrideKind: "tier",
+							actModeServiceTierOverrideTier: "ultrafast",
+						})
+				},
+				streamingDelayMs: 15_000,
+			})
+			const thinkingControl = sidebar.getByRole("combobox", { name: "Task thinking override" })
 			const serviceTierControl = sidebar.getByRole("button", { name: "Task service tier" })
+			await expect(thinkingControl).toBeEnabled()
+			await expect(serviceTierControl).toBeEnabled()
+			await expectRuntimeControlsFit(sidebar)
+			const stoppedMetrics = await captureRuntimeControlEvidence(
+				page,
+				sidebar,
+				testInfo,
+				"openai-runtime-controls-between-turns",
+			)
+			expect(stoppedMetrics.thinking.disabled).toBe(false)
+			expect(stoppedMetrics.serviceTier.disabled).toBe(false)
+			await expect(thinkingControl).toContainText("Low")
+			await expect(serviceTierControl).toHaveAttribute("title", "Service tier: Ultrafast")
+
 			await serviceTierControl.click()
 			const serviceTierMenu = sidebar.getByRole("listbox", { name: "Task service tier options" })
 			await expect(serviceTierMenu).toBeVisible()
@@ -577,7 +721,7 @@ e2e(
 			const menuPath = testInfo.outputPath("openai-service-tier-menu.png")
 			await serviceTierMenu.screenshot({ path: menuPath })
 			await testInfo.attach("openai-service-tier-menu", { path: menuPath, contentType: "image/png" })
-			await sidebar.getByRole("option", { name: "Ultrafast", exact: true }).click()
+			await sidebar.getByRole("button", { name: "Close service tier menu" }).click()
 			await expect(serviceTierControl).toHaveAttribute("title", "Service tier: Ultrafast")
 			await captureRuntimeControls(page, sidebar, testInfo, "openai-runtime-controls")
 
@@ -596,6 +740,63 @@ e2e(
 			const nextRequest = server.getMockConsumptions("openai-compatible-chat")[1]
 			expect(nextRequest.thinking).toEqual({ mode: "effort", effort: "low" })
 			expect(nextRequest.requestBody).toMatchObject({ service_tier: "ultrafast" })
+			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+		} finally {
+			await app.close()
+		}
+	},
+)
+
+e2e(
+	"Task runtime controls - a cancelled OpenAI Task keeps controls visible and restores editing",
+	async ({ dlineDir, helper, openVSCode, server, userDataDir, workspaceDir }, testInfo) => {
+		e2e.setTimeout(180_000)
+		await configureDefaultProfile(dlineDir, E2E_PROFILE_NAMES.mockOpenAi)
+		server.resetOpenAiMock()
+		server.enqueueResponses("openai-compatible-chat", {
+			type: "tool",
+			name: "attempt_completion",
+			arguments: { result: "E2E_CANCELLED_RUNTIME_CONTROLS_MUST_NOT_RENDER" },
+			delayMs: 30_000,
+		})
+		const app = await openVSCode(workspaceDir)
+		try {
+			const page = await app.firstWindow()
+			const sidebar = await openSidebar(page, helper)
+			const input = sidebar.getByTestId("chat-input")
+			await input.fill("E2E_CANCELLED_RUNTIME_CONTROLS_TASK")
+			await sidebar.getByTestId("send-button").click()
+			await expect.poll(() => server.getRequestCount("openai-compatible-chat")).toBe(1)
+
+			const taskFooter = sidebar.getByRole("contentinfo")
+			const cancelButton = taskFooter.getByText("Cancel", { exact: true })
+			await expect(cancelButton).toBeVisible({ timeout: 30_000 })
+			const thinkingControl = sidebar.getByRole("combobox", { name: "Task thinking override" })
+			const serviceTierControl = sidebar.getByRole("button", { name: "Task service tier" })
+			await expect(thinkingControl).toBeVisible()
+			await expect(thinkingControl).toBeEnabled()
+			await expect(serviceTierControl).toBeVisible()
+			await expect(serviceTierControl).toBeEnabled()
+			await cancelButton.click()
+			await expect
+				.poll(() => server.getMockConsumptions("openai-compatible-chat")[0]?.abortedAtMs, { timeout: 30_000 })
+				.not.toBeUndefined()
+
+			await expect(taskFooter.getByText("Resume", { exact: true })).toBeVisible({ timeout: 30_000 })
+			await expect(thinkingControl).toBeVisible()
+			await expect(thinkingControl).toBeEnabled()
+			await expect(serviceTierControl).toBeVisible()
+			await expect(serviceTierControl).toBeEnabled()
+			await expectRuntimeControlsFit(sidebar)
+			const cancelledMetrics = await captureRuntimeControlEvidence(
+				page,
+				sidebar,
+				testInfo,
+				"openai-runtime-controls-cancelled",
+			)
+			expect(cancelledMetrics.thinking.disabled).toBe(false)
+			expect(cancelledMetrics.serviceTier.disabled).toBe(false)
+			await expect(sidebar.getByText("E2E_CANCELLED_RUNTIME_CONTROLS_MUST_NOT_RENDER", { exact: false })).toHaveCount(0)
 			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
 		} finally {
 			await app.close()

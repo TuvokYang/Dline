@@ -6,7 +6,7 @@ export type ServiceTierIconComponent = ComponentType<ServiceTierIconProps>
 
 type StandardServiceTierIconProps = PropsWithChildren<ServiceTierIconProps>
 
-function StandardServiceTierIcon({ children, className, ...props }: StandardServiceTierIconProps) {
+function StandardServiceTierIcon({ children, className, style, ...props }: StandardServiceTierIconProps) {
 	return (
 		<svg
 			{...props}
@@ -16,6 +16,14 @@ function StandardServiceTierIcon({ children, className, ...props }: StandardServ
 			strokeLinecap="round"
 			strokeLinejoin="round"
 			strokeWidth="0.8"
+			style={{
+				...style,
+				display: "block",
+				flex: "0 0 auto",
+				fontSize: "inherit",
+				height: "1em",
+				width: "1em",
+			}}
 			viewBox="0 0 24 24"
 			xmlns="http://www.w3.org/2000/svg">
 			{children}
@@ -77,7 +85,7 @@ export function PriorityServiceTierIcon(props: ServiceTierIconProps) {
 const ULTRAFAST_LIGHTNING_PATH =
 	"M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"
 
-export function UltrafastServiceTierIcon({ className, ...props }: ServiceTierIconProps) {
+export function UltrafastServiceTierIcon({ className, style, ...props }: ServiceTierIconProps) {
 	return (
 		<svg
 			{...props}
@@ -85,6 +93,14 @@ export function UltrafastServiceTierIcon({ className, ...props }: ServiceTierIco
 			stroke="currentColor"
 			strokeLinecap="round"
 			strokeLinejoin="round"
+			style={{
+				...style,
+				display: "block",
+				flex: "0 0 auto",
+				fontSize: "inherit",
+				height: "1em",
+				width: "1em",
+			}}
 			viewBox="0 0 24 24"
 			xmlns="http://www.w3.org/2000/svg">
 			<path

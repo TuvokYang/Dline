@@ -44,10 +44,6 @@ export async function updateTaskSettings(controller: Controller, request: Update
 		const taskRuntimeOverrideUpdate = hasTaskRuntimeOverrideUpdate
 			? prepareTaskRuntimeOverrideUpdate(request.settings, controller.stateManager.getApiConfigurationForTask(taskId))
 			: { mutations: [], changed: false }
-		if (taskRuntimeOverrideUpdate.changed) {
-			controller.assertTaskRuntimeOverridesMutable(taskId)
-		}
-
 		const {
 			autoApprovalSettings,
 			planModeReasoningEffort,

@@ -33,12 +33,12 @@ export function TaskServiceTierControl({ onSelect, value }: TaskServiceTierContr
 	}
 
 	return (
-		<div className="relative flex shrink-0 items-center" data-chat-input-slot="service-tier">
+		<div className="relative flex shrink-0 items-center text-xs leading-none" data-chat-input-slot="service-tier">
 			<button
 				aria-expanded={open}
 				aria-haspopup="listbox"
 				aria-label="Task service tier"
-				className="inline-flex size-4 shrink-0 cursor-pointer items-center justify-center border-0 bg-transparent p-0 leading-none text-description shadow-none outline-none hover:text-foreground focus-visible:text-foreground"
+				className="inline-flex size-4 shrink-0 cursor-pointer items-center justify-center border-0 bg-transparent p-0 text-xs leading-none text-description shadow-none outline-none hover:text-foreground focus-visible:text-foreground"
 				data-icon-only="true"
 				onClick={() => setOpen((current) => !current)}
 				style={{ border: 0, boxShadow: "none" }}
@@ -81,7 +81,7 @@ export function TaskServiceTierControl({ onSelect, value }: TaskServiceTierContr
 							return (
 								<div
 									aria-selected={selected}
-									className="flex cursor-pointer items-center px-3 py-2 text-xs transition-colors"
+									className="flex cursor-pointer items-center px-3 py-2 text-xs leading-none transition-colors"
 									key={tier}
 									onClick={() => selectTier(tier)}
 									onKeyDown={(event) => {
@@ -102,7 +102,7 @@ export function TaskServiceTierControl({ onSelect, value }: TaskServiceTierContr
 									tabIndex={0}
 									title={SERVICE_TIER_DESCRIPTIONS[tier]}>
 									<span
-										className="mr-2 flex size-4 shrink-0 items-center justify-center"
+										className="mr-2 flex size-4 shrink-0 items-center justify-center text-xs leading-none"
 										data-service-tier-option-icon={tier}>
 										<OptionIcon aria-hidden="true" className="size-3" />
 									</span>

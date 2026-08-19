@@ -377,7 +377,15 @@ describe("chat input TaskRuntimeControls", () => {
 
 		expect(thinkingControl).toHaveTextContent("High")
 		expect(thinkingControl).not.toHaveTextContent("Default")
-		expect(thinkingControl).toHaveClass("border-0", "shadow-none", "p-0", "rounded-none")
+		expect(thinkingControl).toHaveClass(
+			"border-0",
+			"shadow-none",
+			"p-0",
+			"rounded-none",
+			"text-xs",
+			"leading-none",
+			"text-description",
+		)
 		expect(thinkingControl.querySelector("svg")).toBeNull()
 		expect(serviceTierControl).toBeInTheDocument()
 		expect(serviceTierControl.textContent).toBe("")
@@ -409,7 +417,12 @@ describe("chat input TaskRuntimeControls", () => {
 			const optionValue = tier.toLowerCase()
 			const option = screen.getByRole("option", { name: tier })
 			expect(option).toBeInTheDocument()
-			expect(option.querySelector(`[data-service-tier-option-icon="${optionValue}"]`)).toHaveClass("mr-2", "size-4")
+			expect(option.querySelector(`[data-service-tier-option-icon="${optionValue}"]`)).toHaveClass(
+				"mr-2",
+				"size-4",
+				"text-xs",
+				"leading-none",
+			)
 			expect(option.querySelector(`[data-service-tier-option-icon="${optionValue}"] svg`)).toHaveClass("size-3")
 			expect(option.querySelector(`[data-service-tier-option-label="${optionValue}"]`)).toHaveTextContent(tier)
 		}
@@ -428,6 +441,7 @@ describe("chat input TaskRuntimeControls", () => {
 			const icon = screen.getByTestId("task-service-tier-icon")
 			expect(icon).toHaveAttribute("data-service-tier-icon", tier)
 			expect(icon).toHaveClass("size-3")
+			expect(icon).toHaveStyle({ display: "block", flex: "0 0 auto", fontSize: "inherit", height: "1em", width: "1em" })
 			expect(icon).toHaveAttribute("fill", "none")
 			expect(icon).toHaveAttribute("stroke", "currentColor")
 			expect(icon).toHaveAttribute("stroke-width", "0.8")
@@ -455,6 +469,13 @@ describe("chat input TaskRuntimeControls", () => {
 		expect(ultrafastControl).toHaveClass("size-4", "items-center", "justify-center")
 		expect(ultrafastIcon).toHaveAttribute("data-service-tier-icon", "ultrafast")
 		expect(ultrafastIcon).toHaveClass("size-3")
+		expect(ultrafastIcon).toHaveStyle({
+			display: "block",
+			flex: "0 0 auto",
+			fontSize: "inherit",
+			height: "1em",
+			width: "1em",
+		})
 		expect(ultrafastIcon).toHaveAttribute("stroke", "currentColor")
 		expect(ultrafastIcon).toHaveAttribute("stroke-linecap", "round")
 		expect(ultrafastIcon).toHaveAttribute("stroke-linejoin", "round")
@@ -546,15 +567,100 @@ describe("chat input TaskRuntimeControls", () => {
 		expect(screen.queryByRole("button", { name: "Task service tier" })).not.toBeInTheDocument()
 	})
 
+	it("keeps controls editable and commits overrides while a request is streaming", async () => {
+		const user = userEvent.setup()
+		mocks.state.taskViewState = { taskId: "task-1", phase: "streaming" }
+		render(<TaskRuntimeControls />)
+
+		const thinkingControl = screen.getByRole("combobox", { name: "Task thinking override" })
+		const serviceTierControl = screen.getByRole("button", { name: "Task service tier" })
+		expect(thinkingControl).toBeEnabled()
+		expect(serviceTierControl).toBeEnabled()
+
+		await user.click(thinkingControl)
+		await user.click(screen.getByRole("option", { name: "Low" }))
+		await user.click(serviceTierControl)
+		await user.click(screen.getByRole("option", { name: "Flex" }))
+
+		await waitFor(() => expect(mocks.updateTaskSettings).toHaveBeenCalledTimes(2))
+		expect(mocks.updateTaskSettings).toHaveBeenNthCalledWith(1, "task-1", {
+			actModeReasoningOverrideKind: "effort",
+			actModeReasoningOverrideEffort: "low",
+		})
+		expect(mocks.updateTaskSettings).toHaveBeenNthCalledWith(2, "task-1", {
+			actModeServiceTierOverrideKind: "tier",
+			actModeServiceTierOverrideTier: "flex",
+		})
+	})
+
+	it("keeps a Thinking budget editable while a request is streaming", () => {
+		mocks.state.taskViewState = { taskId: "task-1", phase: "streaming" }
+		mocks.profiles = [
+			{
+				id: "openai-id",
+				name: "anthropic-budget",
+				provider: "anthropic",
+				modelId: "claude-test",
+				usedFor: [],
+				enabled: true,
+				anthropic: {
+					capabilities: { thinking: { supported: true, mode: "budget", maxBudget: 16_384 } },
+					reasoning: { enableThinking: true, thinkingBudget: 2_048 },
+				},
+			},
+		]
+		render(<TaskRuntimeControls />)
+
+		expect(screen.getByRole("combobox", { name: "Task thinking override" })).toBeEnabled()
+		expect(screen.getByRole("spinbutton", { name: "Task thinking budget" })).toBeEnabled()
+	})
+
+	it("keeps controls editable while a previous settings write is pending", async () => {
+		const user = userEvent.setup()
+		let resolveFirst!: () => void
+		mocks.updateTaskSettings.mockImplementationOnce(
+			() =>
+				new Promise<void>((resolve) => {
+					resolveFirst = resolve
+				}),
+		)
+		render(<TaskRuntimeControls />)
+
+		const thinkingControl = screen.getByRole("combobox", { name: "Task thinking override" })
+		await user.click(thinkingControl)
+		await user.click(screen.getByRole("option", { name: "Low" }))
+		expect(thinkingControl).toBeEnabled()
+
+		const serviceTierControl = screen.getByRole("button", { name: "Task service tier" })
+		expect(serviceTierControl).toBeEnabled()
+		await user.click(serviceTierControl)
+		await user.click(screen.getByRole("option", { name: "Flex" }))
+		await waitFor(() => expect(mocks.updateTaskSettings).toHaveBeenCalledTimes(2))
+		resolveFirst()
+	})
+
 	it.each([
-		["streaming", { phase: "idle" }, { phase: "idle" }, false],
-		["between_turns", { phase: "preflighting" }, { phase: "idle" }, false],
-		["between_turns", { phase: "idle" }, { phase: "compacting" }, false],
-		["between_turns", { phase: "idle" }, { phase: "idle" }, true],
-	] as const)("hides controls instead of exposing a disabled cursor for unsafe runtime state %#", (phase, modeSwitch, profileSwitch, invalid) => {
+		"between_turns",
+		"aborted",
+		"completed",
+		"paused",
+	] as const)("keeps controls visible and enabled for the stopped Task phase %s", (phase) => {
+		mocks.state.taskViewState = { taskId: "task-1", phase }
+		render(<TaskRuntimeControls />)
+
+		expect(screen.getByRole("combobox", { name: "Task thinking override" })).toBeEnabled()
+		expect(screen.getByRole("button", { name: "Task service tier" })).toBeEnabled()
+	})
+
+	it.each([
+		["between_turns", { phase: "preflighting" }, { phase: "idle" }, false, true],
+		["between_turns", { phase: "idle" }, { phase: "compacting" }, false, false],
+		["between_turns", { phase: "idle" }, { phase: "idle" }, true, false],
+	] as const)("keeps controls editable during Task transition state %#", (phase, modeSwitch, profileSwitch, invalid, compacting) => {
 		mocks.state.taskViewState = {
 			taskId: "task-1",
 			phase,
+			...(compacting ? { contextCompaction: { active: true as const, operationId: "compaction-1" } } : {}),
 			...(invalid
 				? {
 						profileInvalid: {
@@ -566,11 +672,9 @@ describe("chat input TaskRuntimeControls", () => {
 		}
 		mocks.state.modeSwitch = modeSwitch
 		mocks.state.profileSwitch = profileSwitch
-		const { container } = render(<TaskRuntimeControls />)
+		render(<TaskRuntimeControls />)
 
-		expect(screen.queryByRole("combobox", { name: "Task thinking override" })).not.toBeInTheDocument()
-		expect(screen.queryByRole("button", { name: "Task service tier" })).not.toBeInTheDocument()
-		expect(container.querySelector("[disabled]")).toBeNull()
-		expect(container.querySelector('[class*="cursor-not-allowed"]')).toBeNull()
+		expect(screen.getByRole("combobox", { name: "Task thinking override" })).toBeEnabled()
+		expect(screen.getByRole("button", { name: "Task service tier" })).toBeEnabled()
 	})
 })

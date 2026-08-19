@@ -36,6 +36,14 @@ vi.mock("@/components/chat/ChatTextArea", () => ({
 }))
 vi.mock("@/components/chat/QuotedMessagePreview", () => ({ default: ({ children }: { children?: ReactNode }) => children }))
 
+const mocks = vi.hoisted(() => ({
+	flushPendingTaskSettingsRequests: vi.fn(async () => undefined),
+}))
+
+vi.mock("@components/settings/utils/settingsHandlers", () => ({
+	flushPendingTaskSettingsRequests: mocks.flushPendingTaskSettingsRequests,
+}))
+
 const draft = (text: string): InteractionDraft => ({ text, images: [], files: [], activeQuote: null, ownerRevision: 1 })
 
 function props(currentDraft: InteractionDraft): ComponentProps<typeof InputSection> {
@@ -65,6 +73,26 @@ function props(currentDraft: InteractionDraft): ComponentProps<typeof InputSecti
 }
 
 describe("InputSection deferred task submission", () => {
+	it("waits for Task settings before submitting the next request", async () => {
+		let releaseSettings!: () => void
+		mocks.flushPendingTaskSettingsRequests.mockImplementationOnce(
+			() =>
+				new Promise<void>((resolve) => {
+					releaseSettings = resolve
+				}),
+		)
+		const onSubmit = vi.fn(async () => undefined)
+		const current = props(draft("pending settings"))
+		render(<InputSection {...current} enabled={true} onSubmit={onSubmit} submissionScope="task-1" />)
+
+		fireEvent.click(screen.getByRole("button", { name: "Submit" }))
+		await waitFor(() => expect(mocks.flushPendingTaskSettingsRequests).toHaveBeenCalledWith("task-1"))
+		expect(onSubmit).not.toHaveBeenCalled()
+
+		releaseSettings()
+		await waitFor(() => expect(onSubmit).toHaveBeenCalledOnce())
+	})
+
 	it("forwards the active interaction ask to mode-switch draft ownership", () => {
 		render(<InputSection {...props(draft("answer"))} clineAsk="qna_respond" />)
 
