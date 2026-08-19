@@ -509,4 +509,6 @@ message UpdateSubagentConfigRequest {
   repeated string skills = 4;
   optional string description = 5;
   optional string profile = 6;
+  bool replace_tools = 7;
+  bool replace_skills = 8;
 }

@@ -80,6 +80,7 @@ const SubagentRow: React.FC<SubagentRowProps> = ({ agent, isGlobal, onToggle, on
 			UpdateSubagentConfigRequest.create({
 				subagentPath: agent.path,
 				tools: Array.from(next),
+				replaceTools: true,
 			}),
 		).catch((err) => console.error("Failed to save tools:", err))
 	}

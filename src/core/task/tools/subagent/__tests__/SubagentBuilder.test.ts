@@ -66,10 +66,14 @@ describe("SubagentBuilder", () => {
 
 		assert.deepEqual(builder.getAllowedTools(), [ClineDefaultTool.LIST_FILES, ClineDefaultTool.ATTEMPT])
 		const prompt = builder.buildSystemPrompt("generated system prompt")
+		assert.match(prompt, /^generated system prompt/)
+		assert.match(prompt, /# Subagent Custom Instructions/)
+		assert.match(prompt, /cached system prompt/)
 		assert.match(prompt, /# Agent Profile/)
 		assert.match(prompt, /Name: cached-agent/)
 		assert.match(prompt, /Description: cached description/)
-		assert.match(prompt, /cached system prompt/)
+		assert.match(prompt, /Plain assistant text cannot complete a subagent run/)
+		assert.match(prompt, /attempt_completion/)
 		assert.match(prompt, new RegExp(SUBAGENT_SYSTEM_SUFFIX.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")))
 	})
 
@@ -83,7 +87,7 @@ describe("SubagentBuilder", () => {
 
 		assert.deepEqual(builder.getAllowedTools(), SUBAGENT_DEFAULT_ALLOWED_TOOLS)
 		const prompt = builder.buildSystemPrompt("generated prompt")
-		assert.equal(prompt, `generated prompt${SUBAGENT_SYSTEM_SUFFIX}`)
+		assert.equal(prompt, `generated prompt\n\n${SUBAGENT_SYSTEM_SUFFIX}`)
 	})
 
 	it("falls back to default act profile when configured profile is missing", () => {

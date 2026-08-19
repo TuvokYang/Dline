@@ -467,10 +467,12 @@ describe("SubagentRunner", () => {
 		assert.equal(result.result, "done")
 	})
 
-	it("uses the configured YAML body as the provider system prompt", async () => {
+	it("keeps platform rules when appending the configured YAML instructions", async () => {
 		const createMessage = vi.fn().mockImplementation(async function* (systemPrompt: string) {
-			assert.match(systemPrompt, /^Local YAML system prompt\./)
-			assert.doesNotMatch(systemPrompt, /^generated facade prompt/)
+			assert.match(systemPrompt, /^generated facade prompt/)
+			assert.match(systemPrompt, /# Subagent Custom Instructions/)
+			assert.match(systemPrompt, /Local YAML system prompt\./)
+			assert.match(systemPrompt, /Plain assistant text cannot complete a subagent run/)
 			yield {
 				type: "tool_calls",
 				function_id: "yaml-prompt-complete",
@@ -725,6 +727,101 @@ describe("SubagentRunner", () => {
 		assert.equal(result.status, "completed")
 		assert.equal(result.result, "done")
 		assert.equal(createMessage.mock.calls.length, 2)
+	})
+
+	it("requires attempt_completion after a plain assistant response", async () => {
+		const createMessage = vi.fn()
+		createMessage.mockImplementationOnce(async function* () {
+			yield { type: "text", text: "The review is complete." }
+		})
+		createMessage.mockImplementationOnce(async function* (_systemPrompt: string, conversation: unknown[]) {
+			const reminder = conversation.at(-1) as { role: string; content: Array<{ type: string; text?: string }> }
+			assert.equal(reminder.role, "user")
+			assert.match(reminder.content[0]?.text || "", /Plain assistant text cannot complete a subagent run/)
+			assert.match(reminder.content[0]?.text || "", /attempt_completion/)
+			assert.match(reminder.content[0]?.text || "", /result/)
+			yield {
+				type: "tool_calls",
+				function_id: "toolu_subagent_plain_text_complete",
+				tool_call: {
+					function: {
+						name: ClineDefaultTool.ATTEMPT,
+						arguments: JSON.stringify({ result: "done" }),
+					},
+				},
+			}
+		})
+		stubSystemPrompt(false)
+		vi.spyOn(skills, "discoverSkills").mockResolvedValue([])
+		vi.spyOn(skills, "getAvailableSkills").mockReturnValue([])
+		stubApiHandler(createMessage)
+		initializeHostProvider()
+
+		const result = await new SubagentRunner(createTaskConfig(false)).run("Review files", () => {})
+
+		assert.equal(result.status, "completed")
+		assert.equal(result.result, "done")
+		assert.equal(createMessage.mock.calls.length, 2)
+	})
+
+	it("requires a non-empty result after attempt_completion omits it", async () => {
+		const createMessage = vi.fn()
+		createMessage.mockImplementationOnce(async function* () {
+			yield {
+				type: "tool_calls",
+				function_id: "toolu_subagent_missing_result",
+				tool_call: {
+					function: {
+						name: ClineDefaultTool.ATTEMPT,
+						arguments: JSON.stringify({}),
+					},
+				},
+			}
+		})
+		createMessage.mockImplementationOnce(async function* (_systemPrompt: string, conversation: unknown[]) {
+			const reminder = conversation.at(-1) as { role: string; content: Array<{ type: string; text?: string }> }
+			assert.equal(reminder.role, "user")
+			assert.match(reminder.content[0]?.text || "", /attempt_completion/)
+			assert.match(reminder.content[0]?.text || "", /non-empty result/)
+			yield {
+				type: "tool_calls",
+				function_id: "toolu_subagent_retry_result",
+				tool_call: {
+					function: {
+						name: ClineDefaultTool.ATTEMPT,
+						arguments: JSON.stringify({ result: "done" }),
+					},
+				},
+			}
+		})
+		stubSystemPrompt(false)
+		vi.spyOn(skills, "discoverSkills").mockResolvedValue([])
+		vi.spyOn(skills, "getAvailableSkills").mockReturnValue([])
+		stubApiHandler(createMessage)
+		initializeHostProvider()
+
+		const result = await new SubagentRunner(createTaskConfig(false)).run("Review files", () => {})
+
+		assert.equal(result.status, "completed")
+		assert.equal(result.result, "done")
+	})
+
+	it("reports the required completion protocol after repeated plain responses", async () => {
+		const createMessage = vi.fn().mockImplementation(async function* () {
+			yield { type: "text", text: "I am finished." }
+		})
+		stubSystemPrompt(false)
+		vi.spyOn(skills, "discoverSkills").mockResolvedValue([])
+		vi.spyOn(skills, "getAvailableSkills").mockReturnValue([])
+		stubApiHandler(createMessage)
+		initializeHostProvider()
+
+		const result = await new SubagentRunner(createTaskConfig(false)).run("Review files", () => {})
+
+		assert.equal(result.status, "failed")
+		assert.match(result.error || "", /Plain assistant text cannot complete a subagent run/)
+		assert.match(result.error || "", /attempt_completion/)
+		assert.match(result.error || "", /result/)
 	})
 
 	it("retries empty assistant turns with a no-tools-used nudge before failing", async () => {

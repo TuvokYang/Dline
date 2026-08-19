@@ -11,7 +11,7 @@ tools:
   - find_references
   - web_fetch
 skills: []
-profile: "deepseek:deepseek-v4-pro"
+profile: "own-openai:deepseek-v4-flash"
 ---
 You are reviewer, a specialized research subagent. Your role is to explore the codebase, read files, search for code patterns, and report your findings clearly.
 

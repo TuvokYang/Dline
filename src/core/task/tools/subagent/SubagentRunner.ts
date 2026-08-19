@@ -34,7 +34,7 @@ import { ToolExecutorCoordinator } from "../ToolExecutorCoordinator"
 import { ToolValidator } from "../ToolValidator"
 import type { TaskConfig } from "../types/TaskConfig"
 import type { AgentBaseConfig } from "./AgentConfigLoader"
-import { SubagentBuilder } from "./SubagentBuilder"
+import { SUBAGENT_COMPLETION_CONTRACT, SubagentBuilder } from "./SubagentBuilder"
 import {
 	buildSubagentOutputBudgetPrompt,
 	resolveSubagentOutputBudget,
@@ -44,6 +44,20 @@ import {
 const MAX_EMPTY_ASSISTANT_RETRIES = 3
 const MAX_INITIAL_STREAM_ATTEMPTS = 6
 const INITIAL_STREAM_RETRY_BASE_DELAY_MS = 3_000
+const SUBAGENT_COMPLETION_CALL_EXAMPLE =
+	'Call attempt_completion with a non-empty result, for example: attempt_completion(result="...").'
+
+function buildCompletionRequiredReminder(usingNativeToolCalls: boolean): string {
+	return `${formatResponse.noToolsUsed(usingNativeToolCalls)}\n\n${SUBAGENT_COMPLETION_CONTRACT}\n\n${SUBAGENT_COMPLETION_CALL_EXAMPLE}`
+}
+
+function buildMissingCompletionResultReminder(): string {
+	return `The attempt_completion call was rejected because it did not include a non-empty result.\n\n${SUBAGENT_COMPLETION_CONTRACT}\n\n${SUBAGENT_COMPLETION_CALL_EXAMPLE}`
+}
+
+function buildCompletionRequiredFailure(): string {
+	return `Subagent did not complete through the required protocol.\n\n${SUBAGENT_COMPLETION_CONTRACT}\n\n${SUBAGENT_COMPLETION_CALL_EXAMPLE}`
+}
 
 export type SubagentRunStatus = "completed" | "failed" | "cancelled"
 
@@ -422,6 +436,7 @@ export class SubagentRunner {
 							.filter((skill): skill is (typeof availableSkills)[number] => Boolean(skill))
 					: availableSkills
 
+			const allowedTools = new Set(this.allowedTools)
 			const context: SystemPromptContext = {
 				providerInfo,
 				promptProfile: resolvePromptProfile({
@@ -437,13 +452,13 @@ export class SubagentRunner {
 				enableNativeToolCalls: useNativeToolCalls,
 				enableParallelToolCalling: false,
 				isSubagentRun: true,
+				disableTools: Object.values(ClineDefaultTool).filter((tool) => !allowedTools.has(tool)),
 				clineWebToolsEnabled: webToolsEnabled,
 				webSearchRoutingPlan,
 			}
 
 			const generated = await getSystemPrompt(context)
 			const systemPrompt = this.agent.buildSystemPrompt(generated.systemPrompt)
-			const allowedTools = new Set(this.allowedTools)
 			const nativeTools = generated.tools?.filter((tool) => {
 				if ("function" in tool) {
 					return allowedTools.has(tool.function.name as ClineDefaultTool)
@@ -716,7 +731,7 @@ export class SubagentRunner {
 				if (finalizedToolCalls.length === 0) {
 					emptyAssistantResponseRetries += 1
 					if (emptyAssistantResponseRetries > MAX_EMPTY_ASSISTANT_RETRIES) {
-						const error = "Subagent did not call attempt_completion."
+						const error = buildCompletionRequiredFailure()
 						onProgress({ status: "failed", error, stats: { ...stats } })
 						return { status: "failed", error, stats }
 					}
@@ -740,7 +755,7 @@ export class SubagentRunner {
 						content: [
 							{
 								type: "text",
-								text: formatResponse.noToolsUsed(useNativeToolCalls),
+								text: buildCompletionRequiredReminder(useNativeToolCalls),
 							},
 						],
 					})
@@ -757,8 +772,7 @@ export class SubagentRunner {
 					if (toolName === ClineDefaultTool.ATTEMPT) {
 						const completionResult = toolCallParams.result?.trim()
 						if (!completionResult) {
-							const missingResultError = formatResponse.missingToolParameterError("result")
-							pushSubagentToolResultBlock(toolResultBlocks, call, toolName, missingResultError)
+							pushSubagentToolResultBlock(toolResultBlocks, call, toolName, buildMissingCompletionResultReminder())
 							continue
 						}
 

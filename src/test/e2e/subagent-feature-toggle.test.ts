@@ -2,6 +2,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { expect, type Frame, type Page } from "@playwright/test"
 import type { MockApiConsumption } from "./fixtures/server"
+import { E2E_PROFILE_NAMES } from "./utils/api-profile"
 import { E2ETestHelper, e2e } from "./utils/helpers"
 import { MultiInstanceLauncher } from "./utils/multi-instance"
 
@@ -204,6 +205,115 @@ e2e(
 		await expect.poll(() => server.getRequestCount("openai-compatible-chat")).toBe(4)
 		const consumptions = server.getMockConsumptions("openai-compatible-chat")
 		expect(consumptions[3].contractError).toBeUndefined()
+		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+	},
+)
+
+e2e(
+	"Named YAML subagent - profile-only updates preserve configuration and enforce completion recovery",
+	async ({ helper, page, server, sidebar, userDataDir, workspaceDir }) => {
+		e2e.setTimeout(240_000)
+		await helper.signin(sidebar)
+		await setSubagentsEnabled(page, sidebar, true)
+
+		const agentName = "e2e-completion-contract"
+		const customMarker = "E2E_COMPLETION_CONTRACT_CUSTOM"
+		const childCompletionMarker = "E2E_COMPLETION_CONTRACT_CHILD_DONE"
+		const agentPath = path.join(workspaceDir, ".agents", "subagents", `${agentName}.yml`)
+		const originalYaml = `---
+name: ${agentName}
+description: E2E completion contract agent
+tools:
+  - read_file
+  - attempt_completion
+skills: []
+---
+${customMarker}
+Preserve this instruction body exactly.\n`
+		await mkdir(path.dirname(agentPath), { recursive: true })
+		await writeFile(agentPath, originalYaml, "utf8")
+
+		await openSubagentCapabilityTab(sidebar)
+		const row = capabilityRow(sidebar, agentName)
+		await expect(row).toBeVisible({ timeout: 30_000 })
+		await setNamedSubagentToggle(sidebar, agentName, true)
+		await row.locator("button").first().click()
+
+		const profileSelect = row.getByRole("combobox")
+		await expect(profileSelect).toBeVisible({ timeout: 30_000 })
+		await profileSelect.selectOption({ label: E2E_PROFILE_NAMES.mockOpenAi })
+		await expect
+			.poll(async () => (await readFile(agentPath, "utf8")).includes(`profile: "${E2E_PROFILE_NAMES.mockOpenAi}"`))
+			.toBe(true)
+
+		const updatedYaml = await readFile(agentPath, "utf8")
+		const originalBody = originalYaml.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n([\s\S]*)$/)?.[1]?.trim()
+		const updatedBody = updatedYaml.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n([\s\S]*)$/)?.[1]?.trim()
+		expect(updatedYaml).toContain("tools:\n  - read_file\n  - attempt_completion")
+		expect(updatedYaml).toContain("skills: []")
+		expect(updatedBody).toBe(originalBody)
+		expect(updatedYaml).toContain(`profile: "${E2E_PROFILE_NAMES.mockOpenAi}"`)
+
+		await sidebar.getByRole("button", { name: "Hide Dline Rules & Workflows", exact: true }).first().click()
+		server.resetOpenAiMock()
+		server.enqueueOpenAiResponses(
+			{
+				type: "tool",
+				id: "call_completion_contract_parent_subagent",
+				name: "use_subagent",
+				arguments: {
+					agent_name: agentName,
+					task: "E2E_COMPLETION_CONTRACT_CHILD_TASK",
+					context: "Return the requested child marker.",
+					timeout: 60,
+				},
+			},
+			{ type: "message", text: "I have finished the review in plain text." },
+			{
+				type: "tool",
+				id: "call_completion_contract_child_complete",
+				name: "attempt_completion",
+				arguments: { result: childCompletionMarker },
+				expectedRequestIncludes: [
+					customMarker,
+					"# Required Completion Protocol",
+					"Plain assistant text cannot complete a subagent run",
+					"Call attempt_completion with a non-empty result",
+				],
+			},
+			{
+				type: "tool",
+				id: "call_completion_contract_parent_complete",
+				name: "attempt_completion",
+				arguments: { result: "E2E_COMPLETION_CONTRACT_PARENT_DONE" },
+				expectedToolResults: [
+					{
+						callId: "call_completion_contract_parent_subagent",
+						contentIncludes: childCompletionMarker,
+					},
+				],
+			},
+		)
+
+		await sendTask(sidebar, "Run the named subagent and enforce its completion protocol.")
+		await expect(sidebar.getByText("E2E_COMPLETION_CONTRACT_PARENT_DONE", { exact: false }).last()).toBeVisible({
+			timeout: 60_000,
+		})
+		await expect.poll(() => server.getRequestCount("openai-compatible-chat")).toBe(4)
+
+		const consumptions = server.getMockConsumptions("openai-compatible-chat")
+		const childInitialRequest = consumptions[1]
+		const childRecoveryRequest = consumptions[2]
+		expect(childInitialRequest.contractError).toBeUndefined()
+		expect(requestToolNames(childInitialRequest)).toContain("attempt_completion")
+		expect(JSON.stringify(childInitialRequest.requestBody)).toContain(customMarker)
+		expect(JSON.stringify(childInitialRequest.requestBody)).toContain("# Required Completion Protocol")
+		expect(JSON.stringify(childInitialRequest.requestBody)).toContain("Plain assistant text cannot complete a subagent run")
+		expect(childRecoveryRequest.contractError).toBeUndefined()
+		expect(JSON.stringify(childRecoveryRequest.requestBody)).toContain("Call attempt_completion with a non-empty result")
+		expect(requestToolNames(childRecoveryRequest)).toContain("attempt_completion")
+		expect(consumptions[3].contractError).toBeUndefined()
+		await expect(sidebar.getByText(/Native tool 'use_subagent' was not available/, { exact: false })).toHaveCount(0)
 		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
 	},
 )

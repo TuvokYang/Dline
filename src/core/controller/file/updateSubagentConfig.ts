@@ -2,8 +2,8 @@
  * Handler for updateSubagentConfig RPC.
  *
  * Updates a subagent YAML configuration file in-place.
- * Supports incremental updates: only provided fields are modified.
- * Fields that are omitted (undefined) are left unchanged.
+ * Supports incremental updates: scalar fields use proto presence, while
+ * repeated fields require an explicit replacement intent.
  */
 import { Empty } from "@shared/proto/dline/common"
 import { UpdateSubagentConfigRequest } from "@shared/proto/dline/file"
@@ -18,7 +18,7 @@ import type { Controller } from ".."
  * while preserving the system prompt body and comments.
  */
 export async function updateSubagentConfig(_controller: Controller, request: UpdateSubagentConfigRequest): Promise<Empty> {
-	const { subagentPath, profile, tools, skills, description } = request
+	const { subagentPath, profile, tools, skills, description, replaceTools, replaceSkills } = request
 
 	if (!subagentPath) {
 		throw new Error("subagentPath is required")
@@ -52,13 +52,13 @@ export async function updateSubagentConfig(_controller: Controller, request: Upd
 		updatedFrontmatter = upsertYamlField(updatedFrontmatter, "profile", profile || null)
 	}
 
-	// Update tools if provided
-	if (tools !== undefined) {
+	// Repeated proto fields default to empty arrays, so replacement intent must
+	// be explicit to distinguish "preserve" from "clear this list".
+	if (replaceTools) {
 		updatedFrontmatter = upsertYamlListField(updatedFrontmatter, "tools", tools)
 	}
 
-	// Update skills if provided
-	if (skills !== undefined) {
+	if (replaceSkills) {
 		updatedFrontmatter = upsertYamlListField(updatedFrontmatter, "skills", skills)
 	}
 

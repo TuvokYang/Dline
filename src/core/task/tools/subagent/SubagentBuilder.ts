@@ -9,19 +9,23 @@ export type AgentConfig = Partial<AgentBaseConfig>
 
 export const SUBAGENT_DEFAULT_ALLOWED_TOOLS = DEFAULT_SUBAGENT_ALLOWED_TOOLS
 
-export const SUBAGENT_SYSTEM_SUFFIX = `\n\n# Subagent Execution Mode
+export const SUBAGENT_COMPLETION_CONTRACT = `# Required Completion Protocol
+A subagent run can finish and return to its parent only by calling the attempt_completion tool with a non-empty result field.
+Plain assistant text cannot complete a subagent run, even when it contains final findings, an error, or a blocker.
+When the work is complete or cannot proceed, call attempt_completion and put the full findings or blocker in result.`
+
+export const SUBAGENT_SYSTEM_SUFFIX = `# Subagent Execution Mode
 You are running as a research subagent. Your job is to explore the codebase and gather information to answer the question.
 Explore, read related files, trace through call chains, and build a complete picture before reporting back.
 You can read files, list directories, search for patterns, list code definitions, and run commands.
 Only use execute_command for readonly operations like ls, grep, git log, git diff, gh, etc.
 When it makes sense, be clever about chaining commands or in-command scripting in execute_command to quickly get relevant context - and using pipes / filters to help narrow results.
 Do not run commands that modify files or system state.
-When you have a comprehensive answer, call the attempt_completion tool.
-The attempt_completion result field is sent directly to the main agent, so put your full final findings there.
 Unless the subagent prompt explicitly asks for detailed analysis, keep the result concise and focus on the files the main agent should read next.
 Include a section titled "Relevant file paths" and list only file paths, one per line.
 Do not include line numbers, summaries, or per-file explanations unless explicitly requested.
-`
+
+${SUBAGENT_COMPLETION_CONTRACT}`
 
 export class SubagentBuilder {
 	private readonly agentConfig: AgentConfig = {}
@@ -62,9 +66,14 @@ export class SubagentBuilder {
 	}
 
 	buildSystemPrompt(generatedSystemPrompt: string): string {
-		const configuredSystemPrompt = this.agentConfig?.systemPrompt?.trim()
-		const systemPrompt = configuredSystemPrompt || generatedSystemPrompt
-		return `${systemPrompt}${this.buildAgentIdentitySystemPrefix()}${SUBAGENT_SYSTEM_SUFFIX}`
+		const configuredSystemPrompt = this.agentConfig.systemPrompt?.trim()
+		const sections = [
+			generatedSystemPrompt.trim(),
+			configuredSystemPrompt ? `# Subagent Custom Instructions\n${configuredSystemPrompt}` : "",
+			this.buildAgentIdentitySystemPrefix(),
+			SUBAGENT_SYSTEM_SUFFIX,
+		]
+		return sections.filter(Boolean).join("\n\n")
 	}
 
 	/**
@@ -115,6 +124,6 @@ export class SubagentBuilder {
 			lines.push(`Description: ${description}`)
 		}
 
-		return `${lines.join("\n")}\n\n`
+		return lines.join("\n")
 	}
 }
