@@ -21,10 +21,15 @@ interface TaskContextWindowButtonsProps extends TokenUsageInfoProps {
 
 const SEGMENT_COLORS = {
 	durable: "var(--vscode-charts-green, #3fb950)",
-	sending: "var(--vscode-charts-blue, #58a6ff)",
-	receiving: "var(--vscode-charts-yellow, #d29922)",
+	active: "var(--vscode-charts-blue, #58a6ff)",
+	staged: "var(--vscode-charts-orange, #d18616)",
 	environment: "var(--vscode-charts-purple, #bc8cff)",
 } as const
+
+function getSegmentColor(segment: ContextWindowIndicatorViewModel["segments"][number]): string {
+	if (segment.kind === "active" && segment.label === "Receiving") return "var(--vscode-charts-yellow, #d29922)"
+	return SEGMENT_COLORS[segment.kind]
+}
 
 export const ContextWindowSummary: React.FC<TaskContextWindowButtonsProps> = ({
 	contextWindow,
@@ -62,7 +67,7 @@ export const ContextWindowSummary: React.FC<TaskContextWindowButtonsProps> = ({
 						className="flex items-center justify-between gap-2 rounded px-2 py-1 text-[11px] text-white"
 						data-segment-detail={segment.kind}
 						key={segment.kind}
-						style={{ backgroundColor: SEGMENT_COLORS[segment.kind] }}>
+						style={{ backgroundColor: getSegmentColor(segment) }}>
 						<span className="font-semibold">{segment.label}</span>
 						<span className="font-mono">{formatTokenNumber(segment.authoritativeTokens)}</span>
 					</div>

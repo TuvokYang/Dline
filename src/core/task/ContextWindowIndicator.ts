@@ -89,10 +89,23 @@ export interface RefreshStableContextWindowIndicatorInput extends AdoptContextWi
 	environmentTokens: number
 }
 
+export interface RefreshStagedContextWindowIndicatorInput {
+	pendingInputTokens: number
+	updatedAt?: number
+}
+
+interface StableContextWindowIndicatorBaseline {
+	snapshot: ContextWindowIndicatorSnapshot
+	completedExchangeTokens: number
+	pendingInputTokens: number
+}
+
 /** Own the only mutable context-window snapshot for one Task. */
 export class ContextWindowIndicator {
 	private current: ContextWindowIndicatorSnapshot
-	private durableBaseline: ContextWindowIndicatorSnapshot
+	private stableBaseline: StableContextWindowIndicatorBaseline
+	private completedExchangeTokens = 0
+	private pendingInputTokens = 0
 
 	constructor(input: CreateContextWindowIndicatorInput) {
 		this.current = {
@@ -103,6 +116,7 @@ export class ContextWindowIndicator {
 			durableContextTokens: normalizeTokens(input.durableContextTokens),
 			pendingSendTokens: 0,
 			receivingTokens: 0,
+			stagedTokens: 0,
 			environmentTokens: normalizeTokens(input.environmentTokens),
 			contextWindow: normalizeTokens(input.contextWindow),
 			profileId: input.profileId,
@@ -111,7 +125,7 @@ export class ContextWindowIndicator {
 			updatedAt: input.updatedAt ?? Date.now(),
 			lineage: input.lineage ?? { kind: "baseline" },
 		}
-		this.durableBaseline = cloneSnapshot(this.current)
+		this.stableBaseline = this.createStableBaseline()
 	}
 
 	getSnapshot(): ContextWindowIndicatorSnapshot {
@@ -140,14 +154,7 @@ export class ContextWindowIndicator {
 			mode: input.mode,
 			updatedAt: input.updatedAt ?? Date.now(),
 		}
-		this.durableBaseline = {
-			...this.durableBaseline,
-			contextWindow,
-			profileId: input.profileId,
-			profileName: input.profileName,
-			mode: input.mode,
-			updatedAt: this.current.updatedAt,
-		}
+		this.stableBaseline = this.createStableBaseline()
 		return this.getSnapshot()
 	}
 
@@ -164,11 +171,29 @@ export class ContextWindowIndicator {
 			mode: input.mode,
 			updatedAt: input.updatedAt ?? Date.now(),
 		}
-		this.durableBaseline = cloneSnapshot(this.current)
+		this.stableBaseline = this.createStableBaseline()
+		return this.getSnapshot()
+	}
+
+	/** Replace only the unsent local portion of Staged while preserving the completed exchange portion. */
+	refreshStaged(input: RefreshStagedContextWindowIndicatorInput): ContextWindowIndicatorSnapshot {
+		if (this.current.phase !== "stable") return this.getSnapshot()
+		const pendingInputTokens = normalizeTokens(input.pendingInputTokens)
+		if (pendingInputTokens === this.pendingInputTokens) return this.getSnapshot()
+		this.pendingInputTokens = pendingInputTokens
+		this.current = {
+			...this.current,
+			revision: this.current.revision + 1,
+			stagedTokens: this.completedExchangeTokens + this.pendingInputTokens,
+			updatedAt: input.updatedAt ?? Date.now(),
+		}
+		this.stableBaseline = this.createStableBaseline()
 		return this.getSnapshot()
 	}
 
 	beginSend(input: BeginContextWindowIndicatorSendInput): ContextWindowIndicatorSnapshot {
+		this.completedExchangeTokens = 0
+		this.pendingInputTokens = 0
 		this.current = {
 			...this.current,
 			revision: this.current.revision + 1,
@@ -177,6 +202,7 @@ export class ContextWindowIndicator {
 			durableContextTokens: normalizeTokens(input.durableContextTokens),
 			pendingSendTokens: normalizeTokens(input.pendingSendTokens),
 			receivingTokens: 0,
+			stagedTokens: 0,
 			environmentTokens: normalizeTokens(input.environmentTokens),
 			contextWindow: normalizeTokens(input.contextWindow),
 			profileId: input.profileId,
@@ -198,29 +224,25 @@ export class ContextWindowIndicator {
 		) {
 			return this.getSnapshot()
 		}
-		const availableInputTokens = Math.max(
-			0,
-			authoritativeContextTokens - Math.min(this.current.environmentTokens, authoritativeContextTokens) - receivingTokens,
-		)
+		const sentInputTokens = normalizeTokens(this.current.pendingSendTokens + (this.current.stagedTokens ?? 0))
 		const environmentTokens =
 			authoritativeContextTokens > 0
 				? Math.min(this.current.environmentTokens, Math.max(0, authoritativeContextTokens - receivingTokens))
 				: this.current.environmentTokens
+		const availableInputTokens = Math.max(0, authoritativeContextTokens - environmentTokens - receivingTokens)
+		const stagedTokens = authoritativeContextTokens > 0 ? Math.min(sentInputTokens, availableInputTokens) : sentInputTokens
 		const durableContextTokens =
-			authoritativeContextTokens > 0
-				? Math.min(this.current.durableContextTokens, availableInputTokens)
-				: this.current.durableContextTokens
-		const pendingSendTokens =
-			authoritativeContextTokens > 0
-				? Math.max(0, authoritativeContextTokens - environmentTokens - receivingTokens - durableContextTokens)
-				: this.current.pendingSendTokens
+			authoritativeContextTokens > 0 ? Math.max(0, availableInputTokens - stagedTokens) : this.current.durableContextTokens
+		this.completedExchangeTokens = stagedTokens
+		this.pendingInputTokens = 0
 		this.current = {
 			...this.current,
 			revision: this.current.revision + 1,
 			phase: "receiving",
 			durableContextTokens,
-			pendingSendTokens,
+			pendingSendTokens: 0,
 			receivingTokens,
+			stagedTokens,
 			environmentTokens,
 			updatedAt: input.updatedAt ?? Date.now(),
 		}
@@ -237,6 +259,7 @@ export class ContextWindowIndicator {
 			durableContextTokens: mergeDurableTokens(input.durableContextTokens, input.pendingSendTokens),
 			pendingSendTokens: 0,
 			receivingTokens: 0,
+			stagedTokens: 0,
 			environmentTokens: normalizeTokens(input.environmentTokens),
 			contextWindow: normalizeTokens(input.contextWindow ?? this.current.contextWindow),
 			profileId: input.profileId ?? this.current.profileId,
@@ -245,14 +268,18 @@ export class ContextWindowIndicator {
 			updatedAt: input.updatedAt ?? Date.now(),
 			lineage,
 		}
-		this.durableBaseline = { ...cloneSnapshot(this.current), phase: "stable" }
+		this.completedExchangeTokens = 0
+		this.pendingInputTokens = 0
+		this.stableBaseline = this.createStableBaseline({ phase: "stable" })
 		return this.getSnapshot()
 	}
 
 	rollback(input: RollbackContextWindowIndicatorInput): ContextWindowIndicatorSnapshot {
 		if (!isSameContextWindowIndicatorLineage(this.current.lineage, input.lineage)) return this.getSnapshot()
+		this.completedExchangeTokens = this.stableBaseline.completedExchangeTokens
+		this.pendingInputTokens = this.stableBaseline.pendingInputTokens
 		this.current = {
-			...cloneSnapshot(this.durableBaseline),
+			...cloneSnapshot(this.stableBaseline.snapshot),
 			revision: this.current.revision + 1,
 			epoch: this.current.epoch + 1,
 			phase: "rolling_back",
@@ -281,6 +308,7 @@ export class ContextWindowIndicator {
 			durableContextTokens: mergeDurableTokens(input.durableContextTokens, input.pendingSendTokens),
 			pendingSendTokens: 0,
 			receivingTokens: 0,
+			stagedTokens: 0,
 			environmentTokens: normalizeTokens(input.environmentTokens),
 			contextWindow: normalizeTokens(input.contextWindow),
 			profileId: input.profileId,
@@ -289,19 +317,28 @@ export class ContextWindowIndicator {
 			updatedAt: input.updatedAt ?? Date.now(),
 			lineage: cloneLineage(input.lineage),
 		}
-		this.durableBaseline = { ...cloneSnapshot(this.current), phase: "stable" }
+		this.completedExchangeTokens = 0
+		this.pendingInputTokens = 0
+		this.stableBaseline = this.createStableBaseline({ phase: "stable" })
 		return this.getSnapshot()
 	}
 
-	/** Fold a fully completed round (including tool calls) into durable; ENV is never folded. */
+	/** Fold a fully completed round into durable for legacy compaction boundaries; ENV is never folded. */
 	foldRound(input: FoldContextWindowIndicatorRoundInput): ContextWindowIndicatorSnapshot {
 		if (!isSameContextWindowIndicatorLineage(this.current.lineage, input.lineage)) return this.getSnapshot()
-		if (this.current.pendingSendTokens <= 0 && this.current.receivingTokens <= 0) return this.getSnapshot()
+		if (this.current.pendingSendTokens <= 0 && this.current.receivingTokens <= 0 && (this.current.stagedTokens ?? 0) <= 0) {
+			return this.getSnapshot()
+		}
 		const authoritativeContextTokens = normalizeTokens(input.authoritativeContextTokens ?? 0)
 		const durableContextTokens =
 			authoritativeContextTokens > 0
 				? Math.max(0, authoritativeContextTokens - this.current.environmentTokens)
-				: this.current.durableContextTokens + this.current.pendingSendTokens + this.current.receivingTokens
+				: this.current.durableContextTokens +
+					this.current.pendingSendTokens +
+					this.current.receivingTokens +
+					(this.current.stagedTokens ?? 0)
+		this.completedExchangeTokens = 0
+		this.pendingInputTokens = 0
 		this.current = {
 			...this.current,
 			revision: this.current.revision + 1,
@@ -310,9 +347,10 @@ export class ContextWindowIndicator {
 			durableContextTokens,
 			pendingSendTokens: 0,
 			receivingTokens: 0,
+			stagedTokens: 0,
 			updatedAt: input.updatedAt ?? Date.now(),
 		}
-		this.durableBaseline = { ...cloneSnapshot(this.current), phase: "stable" }
+		this.stableBaseline = this.createStableBaseline({ phase: "stable" })
 		return this.getSnapshot()
 	}
 
@@ -320,14 +358,31 @@ export class ContextWindowIndicator {
 		if (!isSameContextWindowIndicatorLineage(this.current.lineage, input.lineage) || this.current.phase === "stable") {
 			return this.getSnapshot()
 		}
+		if (this.current.phase === "sending" || this.current.phase === "receiving") {
+			this.completedExchangeTokens = normalizeTokens(
+				(this.current.stagedTokens ?? 0) + this.current.pendingSendTokens + this.current.receivingTokens,
+			)
+			this.pendingInputTokens = 0
+		}
 		this.current = {
 			...this.current,
 			revision: this.current.revision + 1,
 			phase: "stable",
+			pendingSendTokens: 0,
+			receivingTokens: 0,
+			stagedTokens: this.completedExchangeTokens + this.pendingInputTokens,
 			updatedAt: input.updatedAt ?? Date.now(),
 		}
-		this.durableBaseline = cloneSnapshot(this.current)
+		this.stableBaseline = this.createStableBaseline()
 		return this.getSnapshot()
+	}
+
+	private createStableBaseline(overrides: Partial<ContextWindowIndicatorSnapshot> = {}): StableContextWindowIndicatorBaseline {
+		return {
+			snapshot: { ...cloneSnapshot(this.current), ...overrides },
+			completedExchangeTokens: this.completedExchangeTokens,
+			pendingInputTokens: this.pendingInputTokens,
+		}
 	}
 }
 

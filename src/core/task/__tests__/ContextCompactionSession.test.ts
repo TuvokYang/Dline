@@ -95,6 +95,38 @@ describe("ContextCompactionSession", () => {
 		expect(source).toHaveLength(5)
 	})
 
+	it("fails locally before Provider admission when no complete logical turn is available", async () => {
+		const ports = createPorts()
+		const api = { createMessage: vi.fn() } as unknown as ApiHandler
+		const session = new ContextCompactionSession(ports, { maxRetryAttempts: 1 })
+		const sourceHistory: ClineStorageMessage[] = [
+			{ role: "user", content: [{ type: "text", text: "<user_message>pending first turn</user_message>" }] },
+		]
+
+		const result = await session.run({
+			operationId: "operation-no-complete-turn",
+			trigger: "auto_compaction",
+			compactionApi: api,
+			targetApi: api,
+			targetMode: "act",
+			sourceHistory,
+		})
+
+		const reason = "No complete logical turn is available for context compaction."
+		expect(result).toBe("failed")
+		expect(api.createMessage).not.toHaveBeenCalled()
+		expect(ports.prepareRootCheckpoint).not.toHaveBeenCalled()
+		expect(ports.rollback).toHaveBeenCalledWith(
+			expect.objectContaining({ operationId: "operation-no-complete-turn" }),
+			undefined,
+			reason,
+		)
+		expect(ports.publish).toHaveBeenCalledWith(expect.objectContaining({ operationId: "operation-no-complete-turn" }), {
+			kind: "failed",
+			error: reason,
+		})
+	})
+
 	it.each([
 		["ordinary failure", new Error("manual compaction failed")],
 		["OpenAI max-output termination", new OutputLimitExceededError("openai_responses", "max_output_tokens")],
@@ -189,13 +221,16 @@ describe("ContextCompactionSession", () => {
 			checkpointHead: { chainRevision: 0, branchId: "branch-0" },
 			chunk: { type: "tool_calls" },
 		})
+		expect(events[1]).not.toHaveProperty("state")
 		expect(events[2]).toMatchObject({
 			kind: "pass_partial",
 			passIdentity: { operationId: "operation-1", passIndex: 0 },
 			attempt: { attemptIndex: 0, authorizationAttemptId: "attempt-0" },
 			content: "summary",
 		})
+		expect(events[2]).not.toHaveProperty("state")
 		expect(events[3]).toMatchObject({ kind: "pass_receiving", chunk: { type: "usage", outputTokens: 5 } })
+		expect(events[3]).not.toHaveProperty("state")
 		expect(events[4]).toMatchObject({
 			kind: "pass_completed",
 			passIdentity: { operationId: "operation-1", passIndex: 0 },
@@ -238,7 +273,9 @@ describe("ContextCompactionSession", () => {
 			})
 			buildCount += 1
 			return {
-				providerInput: { messages: feedback ? [{ role: "user", content: [...feedback] }] : [] } as CompactionProviderInput,
+				providerInput: {
+					messages: feedback ? [{ role: "user", content: [...feedback] }] : [],
+				} as CompactionProviderInput,
 				explicitInstructions,
 				initialAttemptId: `manual-attempt-${buildCount - 1}`,
 			}

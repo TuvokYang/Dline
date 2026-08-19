@@ -118,7 +118,7 @@ describe("ContextWindow metrics", () => {
 		)
 	})
 
-	it("renders the authoritative four segments in durable, sending, receiving, ENV order", () => {
+	it("renders the authoritative four segments in durable, active, staged, ENV order", () => {
 		render(
 			<ContextWindow
 				contextWindowIndicator={{
@@ -127,8 +127,9 @@ describe("ContextWindow metrics", () => {
 					epoch: 1,
 					phase: "receiving",
 					durableContextTokens: 40_000,
-					pendingSendTokens: 2_000,
+					pendingSendTokens: 0,
 					receivingTokens: 3_000,
+					stagedTokens: 2_000,
 					environmentTokens: 1_000,
 					contextWindow: 100_000,
 					mode: "act",
@@ -144,10 +145,10 @@ describe("ContextWindow metrics", () => {
 		expect(screen.getByTestId("context-window-tooltip-trigger")).toContainElement(progress)
 		expect(document.querySelectorAll('[data-slot="hover-card-content"]')).toHaveLength(0)
 		expect(screen.getByTestId("context-window-segment-durable")).toHaveAttribute("aria-label", "Durable: 40000 tokens")
-		expect(screen.getByTestId("context-window-segment-sending")).toHaveAttribute("aria-label", "Sending: 2000 tokens")
-		expect(screen.getByTestId("context-window-segment-receiving")).toHaveAttribute("aria-label", "Receiving: 3000 tokens")
+		expect(screen.getByTestId("context-window-segment-active")).toHaveAttribute("aria-label", "Receiving: 3000 tokens")
+		expect(screen.getByTestId("context-window-segment-staged")).toHaveAttribute("aria-label", "Staged: 2000 tokens")
 		expect(screen.getByTestId("context-window-segment-environment")).toHaveAttribute("aria-label", "ENV: 1000 tokens")
-		for (const kind of ["durable", "sending", "receiving", "environment"] as const) {
+		for (const kind of ["durable", "active", "staged", "environment"] as const) {
 			expect(screen.getByTestId(`context-window-segment-${kind}`)).not.toHaveAttribute("title")
 		}
 	})

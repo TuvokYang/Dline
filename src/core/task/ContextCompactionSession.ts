@@ -155,7 +155,6 @@ export type ContextCompactionSessionEvent =
 	  }
 	| {
 			kind: "pass_receiving"
-			state: TargetWindowFittingState
 			passIdentity: ReturnType<typeof getCompactionPassIdentity>
 			attempt: InternalCompactionAttemptIdentity
 			checkpointHead: CompactionCheckpointHead
@@ -163,7 +162,6 @@ export type ContextCompactionSessionEvent =
 	  }
 	| {
 			kind: "pass_partial"
-			state: TargetWindowFittingState
 			passIdentity: ReturnType<typeof getCompactionPassIdentity>
 			attempt: InternalCompactionAttemptIdentity
 			checkpointHead: CompactionCheckpointHead
@@ -353,7 +351,6 @@ export class ContextCompactionSession {
 									this.assertCurrent(input.operationId, signal)
 									await this.ports.publish(input, {
 										kind: "pass_receiving",
-										state: cloneDeep(state as TargetWindowFittingState),
 										passIdentity,
 										attempt,
 										checkpointHead: cloneDeep(checkpointHead),
@@ -364,7 +361,6 @@ export class ContextCompactionSession {
 									this.assertCurrent(input.operationId, signal)
 									await this.ports.publish(input, {
 										kind: "pass_partial",
-										state: cloneDeep(state as TargetWindowFittingState),
 										passIdentity,
 										attempt,
 										checkpointHead: cloneDeep(checkpointHead),

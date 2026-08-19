@@ -1,9 +1,9 @@
 import { estimateContextWindowCandidate } from "@core/context/context-management/context-window-projection"
-import type { ClineContent, ClineStorageMessage } from "@shared/messages/content"
+import type { ClineStorageMessage } from "@shared/messages/content"
 import cloneDeep from "clone-deep"
 import type { CompactionProviderInput } from "./compaction/CompactionRequestReplay"
 
-const ENVIRONMENT_DETAILS_PATTERN = /<environment_details>[\s\S]*?<\/environment_details>/gi
+const ENVIRONMENT_DETAILS_PATTERN = /^<environment_details>[\s\S]*<\/environment_details>$/i
 
 export interface ContextWindowIndicatorSegments {
 	durableContextTokens: number
@@ -29,7 +29,7 @@ export function estimateContextWindowIndicatorSegments(
 	input: EstimateContextWindowIndicatorSegmentsInput,
 ): ContextWindowIndicatorSegments {
 	const totalTokens = estimateContextWindowCandidate(input.providerInput)
-	const messagesWithoutEnvironment = stripEnvironmentDetails(input.providerInput.messages)
+	const messagesWithoutEnvironment = stripLatestEnvironmentDetails(input.providerInput.messages)
 	const withoutEnvironmentTokens = Math.min(
 		totalTokens,
 		estimateContextWindowCandidate({ ...input.providerInput, messages: messagesWithoutEnvironment }),
@@ -78,18 +78,19 @@ export function projectAuthoritativeContextWindowIndicatorSegments(
 	}
 }
 
-function stripEnvironmentDetails(messages: readonly ClineStorageMessage[]): ClineStorageMessage[] {
-	return cloneDeep(messages).map((message) => {
-		if (!Array.isArray(message.content)) return message
-		const content = message.content.flatMap((block) => stripEnvironmentBlock(block))
-		return { ...message, content }
-	})
-}
-
-function stripEnvironmentBlock(block: ClineContent): ClineContent[] {
-	if (block.type !== "text") return [block]
-	const text = block.text.replace(ENVIRONMENT_DETAILS_PATTERN, "").trim()
-	return text ? [{ ...block, text }] : []
+function stripLatestEnvironmentDetails(messages: readonly ClineStorageMessage[]): ClineStorageMessage[] {
+	const projected: ClineStorageMessage[] = cloneDeep(Array.from(messages))
+	for (let messageIndex = projected.length - 1; messageIndex >= 0; messageIndex--) {
+		const message = projected[messageIndex]
+		if (!message || !Array.isArray(message.content)) continue
+		for (let blockIndex = message.content.length - 1; blockIndex >= 0; blockIndex--) {
+			const block = message.content[blockIndex]
+			if (block?.type !== "text" || !ENVIRONMENT_DETAILS_PATTERN.test(block.text.trim())) continue
+			message.content.splice(blockIndex, 1)
+			return projected
+		}
+	}
+	return projected
 }
 
 function normalizeTokens(value: number): number {

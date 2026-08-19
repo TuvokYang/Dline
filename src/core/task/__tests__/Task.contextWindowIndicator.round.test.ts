@@ -38,7 +38,7 @@ interface RoundTaskHarness {
 		chunk: unknown,
 	): Promise<void>
 	publishRuntimeTaskView(state: Readonly<TaskRuntimeState>): Promise<void>
-	foldOrdinaryIndicatorRound(): Promise<void>
+	settleOrdinaryIndicatorRound(): Promise<void>
 }
 
 function createHarness(durableContextTokens = 100): RoundTaskHarness {
@@ -100,12 +100,13 @@ describe("Task ordinary indicator round folding", () => {
 		task.ordinaryContextIndicatorLineageByApiIndex.set(1, current.lineage)
 		task.ordinaryContextIndicatorReceivingByApiIndex.set(1, new ContextWindowReceivingTracker())
 
-		await task.foldOrdinaryIndicatorRound()
+		await task.settleOrdinaryIndicatorRound()
 
 		const snapshot = task.contextWindowIndicator.getSnapshot()
-		expect(snapshot.durableContextTokens).toBe(300)
+		expect(snapshot.durableContextTokens).toBe(100)
 		expect(snapshot.pendingSendTokens).toBe(0)
 		expect(snapshot.receivingTokens).toBe(0)
+		expect(snapshot.stagedTokens).toBe(200)
 		expect(snapshot.environmentTokens).toBe(30)
 		expect(snapshot.phase).toBe("stable")
 		expect(task.ordinaryContextIndicatorLineageByApiIndex.size).toBe(0)
@@ -194,7 +195,7 @@ describe("Task ordinary indicator round folding", () => {
 			inputTokens: 6_000,
 			outputTokens: 100,
 		})
-		await task.foldOrdinaryIndicatorRound()
+		await task.settleOrdinaryIndicatorRound()
 		task.getContextWindowRequestPressures = vi.fn(() => [
 			{ contextTokens: 6_100, estimatedContextTokens: firstEstimate, contextTokensSource: "provider" as const },
 			{ estimatedContextTokens: secondEstimate, contextTokensSource: "estimate" as const },
@@ -238,10 +239,10 @@ describe("Task ordinary indicator round folding", () => {
 			cacheReadTokens: 0,
 		})
 
-		await task.foldOrdinaryIndicatorRound()
+		await task.settleOrdinaryIndicatorRound()
 
 		const snapshot = task.contextWindowIndicator.getSnapshot()
-		expect(snapshot.durableContextTokens + snapshot.environmentTokens).toBe(140_100)
+		expect(snapshot.durableContextTokens + (snapshot.stagedTokens ?? 0) + snapshot.environmentTokens).toBe(140_100)
 		expect(snapshot.durableContextTokens).toBeGreaterThan(snapshot.environmentTokens)
 		expect(snapshot.phase).toBe("stable")
 	})
@@ -326,14 +327,18 @@ describe("Task ordinary indicator round folding", () => {
 		})
 		snapshot = task.contextWindowIndicator.getSnapshot()
 		expect(
-			snapshot.durableContextTokens + snapshot.pendingSendTokens + snapshot.receivingTokens + snapshot.environmentTokens,
+			snapshot.durableContextTokens +
+				(snapshot.stagedTokens ?? 0) +
+				snapshot.pendingSendTokens +
+				snapshot.receivingTokens +
+				snapshot.environmentTokens,
 		).toBe(140_115)
 		expect(snapshot.receivingTokens).toBe(100)
 
-		await task.foldOrdinaryIndicatorRound()
+		await task.settleOrdinaryIndicatorRound()
 
 		snapshot = task.contextWindowIndicator.getSnapshot()
-		expect(snapshot.durableContextTokens + snapshot.environmentTokens).toBe(140_115)
+		expect(snapshot.durableContextTokens + (snapshot.stagedTokens ?? 0) + snapshot.environmentTokens).toBe(140_115)
 		expect(snapshot.phase).toBe("stable")
 	})
 
@@ -359,14 +364,14 @@ describe("Task ordinary indicator round folding", () => {
 
 		const settled = task.contextWindowIndicator.getSnapshot()
 		expect(settled.phase).toBe("stable")
-		expect(settled.durableContextTokens + settled.environmentTokens).toBe(140_100)
-		expect(publishedIndicatorPhases).toEqual(["committing", "stable", "stable"])
+		expect(settled.durableContextTokens + (settled.stagedTokens ?? 0) + settled.environmentTokens).toBe(140_100)
+		expect(publishedIndicatorPhases).toEqual(["stable", "stable"])
 		const settledRevision = settled.revision
 
 		await task.publishRuntimeTaskView(completed)
 
 		expect(task.contextWindowIndicator.getSnapshot().revision).toBe(settledRevision)
-		expect(publishedIndicatorPhases).toEqual(["committing", "stable", "stable", "stable"])
+		expect(publishedIndicatorPhases).toEqual(["stable", "stable", "stable"])
 	})
 
 	it("recomputes ENV from each frozen request input instead of retaining a stale value", async () => {

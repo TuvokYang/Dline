@@ -10,7 +10,7 @@ function snapshot(overrides: Partial<ContextWindowIndicatorSnapshot> = {}): Cont
 		epoch: 1,
 		phase: "receiving",
 		durableContextTokens: 40_000,
-		pendingSendTokens: 20_000,
+		pendingSendTokens: 0,
 		receivingTokens: 10_000,
 		environmentTokens: 5_000,
 		contextWindow: 100_000,
@@ -22,21 +22,44 @@ function snapshot(overrides: Partial<ContextWindowIndicatorSnapshot> = {}): Cont
 }
 
 describe("ContextWindowSegmentedProgress", () => {
-	it("renders four colored segments in durable, sending, receiving, ENV order", () => {
-		render(<ContextWindowSegmentedProgress snapshot={snapshot()} />)
+	it("renders durable, phase-active, staged, and ENV as exactly four layout segments", () => {
+		const stagedSnapshot = {
+			...snapshot({ phase: "receiving", pendingSendTokens: 0, receivingTokens: 10_000 }),
+			stagedTokens: 8_000,
+		} as ContextWindowIndicatorSnapshot
+
+		render(<ContextWindowSegmentedProgress snapshot={stagedSnapshot} />)
+
+		const progress = screen.getByRole("progressbar", { name: "Context window usage progress" })
+		expect(
+			Array.from(progress.querySelectorAll("[data-segment]")).map((element) => element.getAttribute("data-segment")),
+		).toEqual(["durable", "active", "staged", "environment"])
+		expect(screen.queryByTestId("context-window-segment-sending")).not.toBeInTheDocument()
+		expect(screen.queryByTestId("context-window-segment-receiving")).not.toBeInTheDocument()
+		expect(screen.getByTestId("context-window-segment-active")).toHaveAttribute("aria-label", "Receiving: 10000 tokens")
+		expect(screen.getByTestId("context-window-segment-active")).toHaveAttribute("data-active", "true")
+		expect(screen.getByTestId("context-window-segment-staged")).toHaveAttribute("aria-label", "Staged: 8000 tokens")
+	})
+
+	it("renders four colored segments in durable, active, staged, ENV order", () => {
+		render(
+			<ContextWindowSegmentedProgress
+				snapshot={snapshot({ phase: "sending", pendingSendTokens: 20_000, receivingTokens: 0, stagedTokens: 10_000 })}
+			/>,
+		)
 
 		const progress = screen.getByRole("progressbar", { name: "Context window usage progress" })
 		const segments = [
 			screen.getByTestId("context-window-segment-durable"),
-			screen.getByTestId("context-window-segment-sending"),
-			screen.getByTestId("context-window-segment-receiving"),
+			screen.getByTestId("context-window-segment-active"),
+			screen.getByTestId("context-window-segment-staged"),
 			screen.getByTestId("context-window-segment-environment"),
 		]
 
-		expect(progress).toHaveAttribute("data-phase", "receiving")
+		expect(progress).toHaveAttribute("data-phase", "sending")
 		expect(
 			Array.from(progress.querySelectorAll("[data-segment]")).map((element) => element.getAttribute("data-segment")),
-		).toEqual(["durable", "sending", "receiving", "environment"])
+		).toEqual(["durable", "active", "staged", "environment"])
 		expect(segments.map((segment) => segment.getAttribute("data-tokens"))).toEqual(["40000", "20000", "10000", "5000"])
 		// Durable keeps its authoritative width while the minor group is visually amplified.
 		expect(segments[0].style.width).toBe("40%")
@@ -50,18 +73,18 @@ describe("ContextWindowSegmentedProgress", () => {
 		expect(segments.map((segment) => segment.style.backgroundColor)).toEqual([
 			"var(--vscode-charts-green, #3fb950)",
 			"var(--vscode-charts-blue, #58a6ff)",
-			"var(--vscode-charts-yellow, #d29922)",
+			"var(--vscode-charts-orange, #d18616)",
 			"var(--vscode-charts-purple, #bc8cff)",
 		])
-		expect(segments[2]).toHaveAttribute("data-active", "true")
-		expect(segments[2]).toHaveClass("animate-pulse")
+		expect(segments[1]).toHaveAttribute("data-active", "true")
+		expect(segments[1]).toHaveClass("animate-pulse")
 		expect(progress).not.toHaveAttribute("title")
 		expect(segments.every((segment) => !segment.hasAttribute("title"))).toBe(true)
 		expect(segments.map((segment) => segment.getAttribute("tabindex"))).toEqual([null, null, null, null])
 		expect(segments.map((segment) => segment.getAttribute("aria-label"))).toEqual([
 			"Durable: 40000 tokens",
 			"Sending: 20000 tokens",
-			"Receiving: 10000 tokens",
+			"Staged: 10000 tokens",
 			"ENV: 5000 tokens",
 		])
 	})
@@ -90,18 +113,13 @@ describe("ContextWindowSegmentedProgress", () => {
 
 		expect(screen.getByTestId("context-window-segmented-progress")).toHaveAttribute("data-motion", "commit")
 		expect(screen.getByTestId("context-window-segment-durable").style.filter).toBe("brightness(1.16)")
-		for (const [kind, previousTokens] of [
-			["sending", "20000"],
-			["receiving", "10000"],
-		] as const) {
-			const segment = screen.getByTestId(`context-window-segment-${kind}`)
-			expect(segment).toHaveAttribute("data-authoritative-tokens", "0")
-			expect(segment).toHaveAttribute("data-tokens", previousTokens)
-			expect(segment).toHaveAttribute("data-transition-source", "previous")
-			expect(segment.style.width).toBe("0%")
-			expect(segment.style.opacity).toBe("0")
-			expect(segment.style.transform).toBe("translateX(-8px)")
-		}
+		const active = screen.getByTestId("context-window-segment-active")
+		expect(active).toHaveAttribute("data-authoritative-tokens", "0")
+		expect(active).toHaveAttribute("data-tokens", "10000")
+		expect(active).toHaveAttribute("data-transition-source", "previous")
+		expect(active.style.width).toBe("0%")
+		expect(active.style.opacity).toBe("0")
+		expect(active.style.transform).toBe("translateX(-8px)")
 
 		rerender(
 			<ContextWindowSegmentedProgress
@@ -122,7 +140,7 @@ describe("ContextWindowSegmentedProgress", () => {
 			/>,
 		)
 		expect(screen.getByTestId("context-window-segmented-progress")).toHaveAttribute("data-motion", "commit")
-		expect(screen.getByTestId("context-window-segment-receiving")).toHaveAttribute("data-tokens", "10000")
+		expect(screen.getByTestId("context-window-segment-active")).toHaveAttribute("data-tokens", "10000")
 	})
 
 	it("infers coalesced commit from the epoch even when the durable total is unchanged", () => {
@@ -201,7 +219,7 @@ describe("ContextWindowSegmentedProgress", () => {
 			act(() => vi.advanceTimersByTime(720))
 
 			expect(screen.getByTestId("context-window-segmented-progress")).toHaveAttribute("data-motion", "none")
-			expect(screen.getByTestId("context-window-segment-receiving")).toHaveAttribute("data-tokens", "0")
+			expect(screen.getByTestId("context-window-segment-active")).toHaveAttribute("data-tokens", "0")
 		} finally {
 			vi.useRealTimers()
 		}
@@ -222,8 +240,8 @@ describe("ContextWindowSegmentedProgress", () => {
 			/>,
 		)
 		expect(screen.getByTestId("context-window-segmented-progress")).toHaveAttribute("data-motion", "rollback")
-		expect(screen.getByTestId("context-window-segment-sending")).toHaveAttribute("data-tokens", "20000")
-		expect(screen.getByTestId("context-window-segment-sending").style.transform).toBe("translateX(8px)")
+		expect(screen.getByTestId("context-window-segment-active")).toHaveAttribute("data-tokens", "10000")
+		expect(screen.getByTestId("context-window-segment-active").style.transform).toBe("translateX(8px)")
 
 		rerender(
 			<ContextWindowSegmentedProgress
@@ -280,13 +298,13 @@ describe("ContextWindowSegmentedProgress", () => {
 	it("provides reduced-motion fallbacks for every animated segment", () => {
 		render(<ContextWindowSegmentedProgress snapshot={snapshot()} />)
 
-		for (const kind of ["durable", "sending", "receiving", "environment"] as const) {
+		for (const kind of ["durable", "active", "staged", "environment"] as const) {
 			expect(screen.getByTestId(`context-window-segment-${kind}`)).toHaveClass(
 				"motion-reduce:transition-none",
 				"motion-reduce:transform-none",
 			)
 		}
-		expect(screen.getByTestId("context-window-segment-receiving")).toHaveClass("motion-reduce:animate-none")
+		expect(screen.getByTestId("context-window-segment-active")).toHaveClass("motion-reduce:animate-none")
 	})
 
 	it("gives every non-zero segment a real pixel minimum while zero-token segments remain absent", () => {
@@ -295,26 +313,29 @@ describe("ContextWindowSegmentedProgress", () => {
 				snapshot={snapshot({
 					contextWindow: 1_000_000,
 					durableContextTokens: 10_000,
-					pendingSendTokens: 2_000,
+					pendingSendTokens: 0,
 					receivingTokens: 1,
+					stagedTokens: 2_000,
 					environmentTokens: 1_000,
 				})}
 			/>,
 		)
 
-		for (const kind of ["durable", "sending", "receiving", "environment"] as const) {
+		for (const kind of ["durable", "active", "staged", "environment"] as const) {
 			expect(screen.getByTestId(`context-window-segment-${kind}`).style.minWidth).toBe("3px")
 		}
 	})
 
-	it("caps the shared minor-group factor when receiving starts with one token", () => {
+	it("caps the shared minor-group factor when the staged segment starts with one token", () => {
 		render(
 			<ContextWindowSegmentedProgress
 				snapshot={snapshot({
 					contextWindow: 1_000_000,
+					phase: "sending",
 					durableContextTokens: 10_000,
 					pendingSendTokens: 2_000,
-					receivingTokens: 1,
+					receivingTokens: 0,
+					stagedTokens: 1,
 					environmentTokens: 1_000,
 				})}
 			/>,
@@ -322,10 +343,10 @@ describe("ContextWindowSegmentedProgress", () => {
 
 		const progress = screen.getByTestId("context-window-segmented-progress")
 		expect(progress).toHaveAttribute("data-minor-factor", "3")
-		expect(screen.getByTestId("context-window-segment-sending").style.width).toBe("0.6%")
-		expect(Number.parseFloat(screen.getByTestId("context-window-segment-receiving").style.width)).toBeCloseTo(0.0003, 8)
+		expect(screen.getByTestId("context-window-segment-active").style.width).toBe("0.6%")
+		expect(Number.parseFloat(screen.getByTestId("context-window-segment-staged").style.width)).toBeCloseTo(0.0003, 8)
 		expect(screen.getByTestId("context-window-segment-environment").style.width).toBe("0.3%")
-		const totalWidth = ["durable", "sending", "receiving", "environment"].reduce(
+		const totalWidth = ["durable", "active", "staged", "environment"].reduce(
 			(total, kind) => total + Number.parseFloat(screen.getByTestId(`context-window-segment-${kind}`).style.width),
 			0,
 		)
@@ -337,9 +358,11 @@ describe("ContextWindowSegmentedProgress", () => {
 			<ContextWindowSegmentedProgress
 				snapshot={snapshot({
 					contextWindow: 1_000_000,
+					phase: "sending",
 					durableContextTokens: 10_000,
 					pendingSendTokens: 2_000,
-					receivingTokens: 1_000,
+					receivingTokens: 0,
+					stagedTokens: 1_000,
 					environmentTokens: 1_000,
 				})}
 			/>,
@@ -347,17 +370,17 @@ describe("ContextWindowSegmentedProgress", () => {
 
 		expect(screen.getByTestId("context-window-segmented-progress")).toHaveAttribute("data-minor-factor", "3")
 		expect(screen.getByTestId("context-window-segment-durable").style.width).toBe("1%")
-		expect(screen.getByTestId("context-window-segment-sending").style.width).toBe("0.6%")
-		expect(screen.getByTestId("context-window-segment-receiving").style.width).toBe("0.3%")
+		expect(screen.getByTestId("context-window-segment-active").style.width).toBe("0.6%")
+		expect(screen.getByTestId("context-window-segment-staged").style.width).toBe("0.3%")
 		expect(screen.getByTestId("context-window-segment-environment").style.width).toBe("0.3%")
 
-		const sending = screen.getByTestId("context-window-segment-sending")
-		expect(sending).toHaveAttribute("data-authoritative-tokens", "2000")
-		expect(sending).toHaveAttribute("data-tokens", "2000")
+		const active = screen.getByTestId("context-window-segment-active")
+		expect(active).toHaveAttribute("data-authoritative-tokens", "2000")
+		expect(active).toHaveAttribute("data-tokens", "2000")
 		expect(screen.getByTestId("context-window-segment-environment")).toHaveAttribute("data-tokens", "1000")
 		const minorRatio =
-			Number.parseFloat(sending.style.width) /
-			Number.parseFloat(screen.getByTestId("context-window-segment-receiving").style.width)
+			Number.parseFloat(active.style.width) /
+			Number.parseFloat(screen.getByTestId("context-window-segment-staged").style.width)
 		expect(minorRatio).toBeCloseTo(2, 8)
 	})
 
@@ -374,7 +397,7 @@ describe("ContextWindowSegmentedProgress", () => {
 			/>,
 		)
 
-		for (const kind of ["sending", "receiving", "environment"] as const) {
+		for (const kind of ["active", "staged", "environment"] as const) {
 			const segment = screen.getByTestId(`context-window-segment-${kind}`)
 			expect(segment.style.width).toBe("0%")
 			expect(segment.style.minWidth).toBe("0px")

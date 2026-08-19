@@ -39,6 +39,38 @@ describe("ContextWindowIndicatorProjection", () => {
 		expect(segments.totalTokens).toBe(estimateContextWindowCandidate(input))
 	})
 
+	it("counts only the latest dynamic environment while historical environments remain durable", () => {
+		const input = providerInput([
+			{
+				role: "user",
+				content: [
+					{ type: "text", text: "historical turn" },
+					{ type: "text", text: "<environment_details>historical environment snapshot</environment_details>" },
+				],
+			},
+			{ role: "assistant", content: [{ type: "text", text: "historical response" }] },
+			{
+				role: "user",
+				content: [
+					{ type: "text", text: "current turn" },
+					{ type: "text", text: "<environment_details>current environment snapshot</environment_details>" },
+				],
+			},
+		])
+		const withoutLatestEnvironment = providerInput([
+			...input.messages.slice(0, -1),
+			{ role: "user", content: [{ type: "text", text: "current turn" }] },
+		])
+		const expectedCurrentEnvironmentTokens =
+			estimateContextWindowCandidate(input) - estimateContextWindowCandidate(withoutLatestEnvironment)
+
+		const segments = estimateContextWindowIndicatorSegments({ providerInput: input, durableMessageCount: 2 })
+
+		expect(segments.environmentTokens).toBe(expectedCurrentEnvironmentTokens)
+		expect(segments.durableContextTokens).toBeGreaterThan(expectedCurrentEnvironmentTokens)
+		expect(segments.durableContextTokens + segments.pendingSendTokens + segments.environmentTokens).toBe(segments.totalTokens)
+	})
+
 	it("allocates an authoritative projected total without reusing the absolute local estimate", () => {
 		expect(
 			projectAuthoritativeContextWindowIndicatorSegments({

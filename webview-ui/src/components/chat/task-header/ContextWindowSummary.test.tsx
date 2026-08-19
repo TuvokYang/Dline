@@ -11,8 +11,9 @@ describe("ContextWindowSummary", () => {
 			epoch: 1,
 			phase: "receiving",
 			durableContextTokens: 137_000,
-			pendingSendTokens: 2_000,
+			pendingSendTokens: 0,
 			receivingTokens: 100,
+			stagedTokens: 2_000,
 			environmentTokens: 1_000,
 			contextWindow: 272_000,
 			mode: "act",
@@ -29,7 +30,7 @@ describe("ContextWindowSummary", () => {
 		)
 
 		expect(screen.getByText("Context Window")).toBeInTheDocument()
-		expect(screen.getByText("131.9k")).toBeInTheDocument()
+		expect(screen.getByText("140.1k")).toBeInTheDocument()
 		const metricCells = ["used", "remaining", "total"].map((metric) =>
 			document.querySelector<HTMLElement>(`[data-context-summary-metric="${metric}"]`),
 		)
@@ -38,8 +39,8 @@ describe("ContextWindowSummary", () => {
 		const segmentDetails = screen.getByTestId("context-window-segment-details")
 		for (const [kind, value, color] of [
 			["durable", "137.0k", "var(--vscode-charts-green, #3fb950)"],
-			["sending", "2.0k", "var(--vscode-charts-blue, #58a6ff)"],
-			["receiving", "100", "var(--vscode-charts-yellow, #d29922)"],
+			["active", "100", "var(--vscode-charts-yellow, #d29922)"],
+			["staged", "2.0k", "var(--vscode-charts-orange, #d18616)"],
 			["environment", "1.0k", "var(--vscode-charts-purple, #bc8cff)"],
 		] as const) {
 			const detail = segmentDetails.querySelector<HTMLElement>(`[data-segment-detail="${kind}"]`)

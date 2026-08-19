@@ -51,6 +51,8 @@ export interface ContextWindowIndicatorSnapshot {
 	durableContextTokens: number
 	pendingSendTokens: number
 	receivingTokens: number
+	/** Request-complete and pending local content not yet committed to the durable request baseline. */
+	stagedTokens?: number
 	environmentTokens: number
 	contextWindow: number
 	profileId?: string
@@ -62,5 +64,11 @@ export interface ContextWindowIndicatorSnapshot {
 
 /** Compatibility total for clients that have not migrated to the segmented indicator. */
 export function getContextWindowIndicatorTotalTokens(snapshot: ContextWindowIndicatorSnapshot): number {
-	return snapshot.durableContextTokens + snapshot.pendingSendTokens + snapshot.receivingTokens + snapshot.environmentTokens
+	return (
+		snapshot.durableContextTokens +
+		snapshot.pendingSendTokens +
+		snapshot.receivingTokens +
+		(snapshot.stagedTokens ?? 0) +
+		snapshot.environmentTokens
+	)
 }

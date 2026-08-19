@@ -72,6 +72,36 @@ describe("ContextWindowIndicator", () => {
 		expect(getContextWindowIndicatorTotalTokens(snapshot)).toBe(450)
 	})
 
+	it("moves sent input into staged while receiving and stages the response when the exchange settles", () => {
+		const indicator = createIndicator()
+		indicator.beginSend({
+			lineage: ordinaryAttempt0,
+			durableContextTokens: 100,
+			pendingSendTokens: 300,
+			environmentTokens: 50,
+			contextWindow: 1_000,
+			mode: "act",
+			updatedAt: 2,
+		})
+
+		const receiving = indicator.receive({ lineage: ordinaryAttempt0, receivingTokens: 40, updatedAt: 3 })
+		const settled = indicator.settle({ lineage: ordinaryAttempt0, updatedAt: 4 })
+
+		expect(receiving).toMatchObject({
+			phase: "receiving",
+			pendingSendTokens: 0,
+			receivingTokens: 40,
+			stagedTokens: 300,
+		})
+		expect(settled).toMatchObject({
+			phase: "stable",
+			pendingSendTokens: 0,
+			receivingTokens: 0,
+			stagedTokens: 340,
+		})
+		expect(getContextWindowIndicatorTotalTokens(settled)).toBe(490)
+	})
+
 	it("adopts a committed Profile scope without changing tokens or lineage", () => {
 		const indicator = createIndicator()
 

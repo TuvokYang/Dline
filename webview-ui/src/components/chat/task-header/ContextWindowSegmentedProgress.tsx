@@ -4,6 +4,7 @@ import {
 	type ContextWindowSegmentKind,
 	type ContextWindowSegmentViewModel,
 	createContextWindowIndicatorViewModel,
+	getContextWindowActiveTokens,
 } from "./ContextWindowIndicatorViewModel"
 export type ContextWindowSegmentMotion = "none" | "commit" | "rollback" | "restore"
 
@@ -29,9 +30,14 @@ const MIN_VISIBLE_SEGMENT_PX = 3
 
 const SEGMENT_COLORS: Record<ContextWindowSegmentKind, string> = {
 	durable: "var(--vscode-charts-green, #3fb950)",
-	sending: "var(--vscode-charts-blue, #58a6ff)",
-	receiving: "var(--vscode-charts-yellow, #d29922)",
+	active: "var(--vscode-charts-blue, #58a6ff)",
+	staged: "var(--vscode-charts-orange, #d18616)",
 	environment: "var(--vscode-charts-purple, #bc8cff)",
+}
+
+function getSegmentColor(segment: ContextWindowSegmentViewModel): string {
+	if (segment.kind === "active" && segment.label === "Receiving") return "var(--vscode-charts-yellow, #d29922)"
+	return SEGMENT_COLORS[segment.kind]
 }
 
 function explicitMotionForPhase(phase: ContextWindowIndicatorPhase): ContextWindowSegmentMotion {
@@ -47,7 +53,7 @@ function inferSettledMotion(
 ): ContextWindowSegmentMotion {
 	if (!previous || current.phase !== "stable") return "none"
 	if (current.lineage.kind === "restore" && previous.lineage.kind !== "restore") return "restore"
-	if (previous.pendingSendTokens + previous.receivingTokens <= 0) return "none"
+	if (previous.pendingSendTokens + previous.receivingTokens + (previous.stagedTokens ?? 0) <= 0) return "none"
 	return current.epoch > previous.epoch ? "rollback" : "commit"
 }
 
@@ -74,7 +80,9 @@ function useSegmentTransition(snapshot: ContextWindowIndicatorSnapshot): Segment
 
 	useLayoutEffect(() => {
 		previousRef.current = snapshot
-		if (snapshot.pendingSendTokens + snapshot.receivingTokens > 0) latestTemporaryRef.current = snapshot
+		if (snapshot.pendingSendTokens + snapshot.receivingTokens + (snapshot.stagedTokens ?? 0) > 0) {
+			latestTemporaryRef.current = snapshot
+		}
 	}, [snapshot])
 
 	useEffect(() => {
@@ -116,40 +124,43 @@ const ContextWindowSegmentedProgress = memo(({ snapshot, onOccupiedMouseEnter }:
 	const motion = transition.motion
 	const previousTemporaryTokens = transition.previous
 		? {
-				sending: transition.previous.pendingSendTokens,
-				receiving: transition.previous.receivingTokens,
+				active:
+					transition.previous.phase === "receiving"
+						? transition.previous.receivingTokens
+						: transition.previous.pendingSendTokens,
+				staged: transition.previous.stagedTokens ?? 0,
 			}
 		: undefined
-	const sendingDisplayTokens =
-		motion !== "none" && snapshot.pendingSendTokens === 0 && (previousTemporaryTokens?.sending ?? 0) > 0
-			? (previousTemporaryTokens?.sending ?? 0)
-			: snapshot.pendingSendTokens
-	const receivingDisplayTokens =
-		motion !== "none" && snapshot.receivingTokens === 0 && (previousTemporaryTokens?.receiving ?? 0) > 0
-			? (previousTemporaryTokens?.receiving ?? 0)
-			: snapshot.receivingTokens
+	const activeDisplayTokens =
+		motion !== "none" && getContextWindowActiveTokens(snapshot) === 0 && (previousTemporaryTokens?.active ?? 0) > 0
+			? (previousTemporaryTokens?.active ?? 0)
+			: getContextWindowActiveTokens(snapshot)
+	const stagedDisplayTokens =
+		motion !== "none" && (snapshot.stagedTokens ?? 0) === 0 && (previousTemporaryTokens?.staged ?? 0) > 0
+			? (previousTemporaryTokens?.staged ?? 0)
+			: (snapshot.stagedTokens ?? 0)
 	const viewModel = useMemo(
 		() =>
 			createContextWindowIndicatorViewModel(snapshot, {
-				sending: sendingDisplayTokens,
-				receiving: receivingDisplayTokens,
+				active: activeDisplayTokens,
+				staged: stagedDisplayTokens,
 			}),
-		[receivingDisplayTokens, sendingDisplayTokens, snapshot],
+		[activeDisplayTokens, stagedDisplayTokens, snapshot],
 	)
 	const segments = useMemo<SegmentDefinition[]>(
 		() =>
 			viewModel.segments.map((segment) => ({
 				...segment,
-				color: SEGMENT_COLORS[segment.kind],
-				temporary: segment.kind === "sending" || segment.kind === "receiving",
+				color: getSegmentColor(segment),
+				temporary: segment.kind === "active" || segment.kind === "staged",
 				transitionSource:
-					segment.kind === "sending" && sendingDisplayTokens !== snapshot.pendingSendTokens
+					segment.kind === "active" && activeDisplayTokens !== getContextWindowActiveTokens(snapshot)
 						? "previous"
-						: segment.kind === "receiving" && receivingDisplayTokens !== snapshot.receivingTokens
+						: segment.kind === "staged" && stagedDisplayTokens !== (snapshot.stagedTokens ?? 0)
 							? "previous"
 							: "authoritative",
 			})),
-		[receivingDisplayTokens, sendingDisplayTokens, snapshot.pendingSendTokens, snapshot.receivingTokens, viewModel.segments],
+		[activeDisplayTokens, stagedDisplayTokens, snapshot, viewModel.segments],
 	)
 
 	return (
@@ -172,9 +183,7 @@ const ContextWindowSegmentedProgress = memo(({ snapshot, onOccupiedMouseEnter }:
 			role="progressbar">
 			<div className="absolute inset-0 flex items-stretch overflow-hidden rounded-full">
 				{segments.map((segment) => {
-					const active =
-						(segment.kind === "sending" && snapshot.phase === "sending") ||
-						(segment.kind === "receiving" && snapshot.phase === "receiving")
+					const active = segment.kind === "active" && (snapshot.phase === "sending" || snapshot.phase === "receiving")
 					const settling = segment.temporary && motion !== "none"
 					return (
 						<div
@@ -191,6 +200,7 @@ const ContextWindowSegmentedProgress = memo(({ snapshot, onOccupiedMouseEnter }:
 							data-transition-source={segment.transitionSource}
 							key={segment.kind}
 							onMouseEnter={segment.displayTokens > 0 && !settling ? onOccupiedMouseEnter : undefined}
+							role="img"
 							style={{
 								backgroundColor: segment.color,
 								filter: motion === "commit" && segment.kind === "durable" ? "brightness(1.16)" : "none",
