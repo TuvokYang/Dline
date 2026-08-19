@@ -55,6 +55,8 @@ describe("Task.prepareFromHistory activity recovery", () => {
 					order.push("resume")
 				}),
 			},
+			startContextWindowEnvironmentRefresh: vi.fn(),
+			refreshStableContextWindowIndicator: vi.fn(async () => undefined),
 		} as unknown as Task
 
 		await Task.prototype.prepareFromHistory.call(task)

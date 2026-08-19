@@ -17,9 +17,9 @@ import type { ContextCompactionSession, ContextCompactionSessionRestoreRequest }
 const operationId = "operation-coordinator"
 const attempt = { attemptIndex: 0, authorizationAttemptId: "attempt-0" }
 
-function fittingState(passIndex = 0): TargetWindowFittingState {
+function fittingState(passIndex = 0, targetOperationId = operationId): TargetWindowFittingState {
 	return {
-		operationId,
+		operationId: targetOperationId,
 		sourceHistory: [],
 		turns: [],
 		protectedTail: [],
@@ -33,13 +33,18 @@ function fittingState(passIndex = 0): TargetWindowFittingState {
 	}
 }
 
-function payload(kind: "root" | "pass", passIndex = 0): ContextCompactionCheckpointPayload {
-	const state = fittingState(passIndex)
+function payload(
+	kind: "root" | "pass",
+	passIndex = 0,
+	targetOperationId = operationId,
+	runtimeTimestamp = 1,
+): ContextCompactionCheckpointPayload {
+	const state = fittingState(passIndex, targetOperationId)
 	return {
 		schemaVersion: 1,
 		kind,
 		taskId: "task-coordinator",
-		operationId,
+		operationId: targetOperationId,
 		trigger: "profile_switch",
 		canonicalHistory: [{ role: "user", content: "full context" }],
 		conversationHistoryDeletedRange: [1, 2],
@@ -56,7 +61,7 @@ function payload(kind: "root" | "pass", passIndex = 0): ContextCompactionCheckpo
 			taskId: "task-coordinator",
 			phase: "idle" as never,
 			apiIndex: 0,
-			timestamp: 1,
+			timestamp: runtimeTimestamp,
 			revision: 1,
 			anchor: { apiIndex: 0 },
 		},
@@ -64,7 +69,7 @@ function payload(kind: "root" | "pass", passIndex = 0): ContextCompactionCheckpo
 		oneShotState: { recentlyModifiedFiles: { files: [], revisions: {} } },
 		transition: {
 			kind: "profile_switch",
-			operationId,
+			operationId: targetOperationId,
 			phase: "compacting",
 			source: { mode: "act", profile: "source-profile" },
 			sourceProfiles: { act: "source-profile" },
@@ -101,14 +106,18 @@ function payload(kind: "root" | "pass", passIndex = 0): ContextCompactionCheckpo
 	}
 }
 
-async function appendPass(store: FittingRecoveryStore) {
-	const root = await store.createRoot({ operationId, branchId: "branch-0", payload: payload("root") })
+async function appendPass(store: FittingRecoveryStore, targetOperationId = operationId, runtimeTimestamp = 1) {
+	const root = await store.createRoot({
+		operationId: targetOperationId,
+		branchId: `branch:${targetOperationId}:0`,
+		payload: payload("root", 0, targetOperationId, runtimeTimestamp),
+	})
 	const pass = await store.appendCheckpoint({
-		operationId,
+		operationId: targetOperationId,
 		expectedHeadCheckpointId: root.head.headCheckpointId,
 		expectedChainRevision: root.head.chainRevision,
 		passIdentity: {
-			operationId,
+			operationId: targetOperationId,
 			passIndex: 0,
 			passStartTurnIndex: 0,
 			passEndTurnIndex: 0,
@@ -117,7 +126,7 @@ async function appendPass(store: FittingRecoveryStore) {
 			passHistoryHash: "history-0",
 		},
 		attempt,
-		payload: payload("pass", 1),
+		payload: payload("pass", 1, targetOperationId, runtimeTimestamp),
 	})
 	return { root, pass }
 }
@@ -289,6 +298,79 @@ describe("ContextCompactionRecoveryCoordinator", () => {
 			commitJournal: undefined,
 			committedCheckpointId: undefined,
 			head: { headCheckpointId: root.root.checkpointId },
+		})
+	})
+
+	it("ignores an older pending restore superseded by a newer completed operation during history preparation", async () => {
+		const olderOperationId = "auto-compaction:task-coordinator:3971:100"
+		const newerOperationId = "auto-compaction:task-coordinator:149:200"
+		const { root: olderRoot, pass: olderPass } = await appendPass(store, olderOperationId, 100)
+		await prepareCompactionCheckpointRestore<ContextCompactionCheckpointPayload>({
+			store,
+			operationId: olderOperationId,
+			checkpointId: olderRoot.root.checkpointId,
+			expectedHeadCheckpointId: olderPass.head.headCheckpointId,
+			expectedChainRevision: olderPass.head.chainRevision,
+			completionPhase: "cancelled",
+		})
+		const newerRoot = await store.createRoot({
+			operationId: newerOperationId,
+			branchId: `branch:${newerOperationId}:0`,
+			payload: payload("root", 0, newerOperationId, 200),
+		})
+		await commitCompactionCheckpoint<ContextCompactionCheckpointPayload>({
+			store,
+			operationId: newerOperationId,
+			expectedHeadCheckpointId: newerRoot.head.headCheckpointId,
+			expectedChainRevision: newerRoot.head.chainRevision,
+			requiresAdoption: false,
+			applyCanonical: async () => undefined,
+		})
+		const harness = createHarness(store)
+
+		await harness.coordinator.resumePendingJournals()
+
+		expect(harness.adapter.applyRestore).not.toHaveBeenCalled()
+		expect(await store.loadOperation(olderOperationId)).toMatchObject({
+			phase: "restore_pending",
+			restoreJournal: expect.any(Object),
+		})
+		expect(await store.loadOperation(newerOperationId)).toMatchObject({ phase: "completed" })
+	})
+
+	it("resumes a newer pending restore despite an older completed operation", async () => {
+		const olderOperationId = "auto-compaction:task-coordinator:3971:100"
+		const newerOperationId = "auto-compaction:task-coordinator:149:200"
+		const olderRoot = await store.createRoot({
+			operationId: olderOperationId,
+			branchId: `branch:${olderOperationId}:0`,
+			payload: payload("root", 0, olderOperationId, 100),
+		})
+		await commitCompactionCheckpoint<ContextCompactionCheckpointPayload>({
+			store,
+			operationId: olderOperationId,
+			expectedHeadCheckpointId: olderRoot.head.headCheckpointId,
+			expectedChainRevision: olderRoot.head.chainRevision,
+			requiresAdoption: false,
+			applyCanonical: async () => undefined,
+		})
+		const { root: newerRoot, pass: newerPass } = await appendPass(store, newerOperationId, 200)
+		await prepareCompactionCheckpointRestore<ContextCompactionCheckpointPayload>({
+			store,
+			operationId: newerOperationId,
+			checkpointId: newerRoot.root.checkpointId,
+			expectedHeadCheckpointId: newerPass.head.headCheckpointId,
+			expectedChainRevision: newerPass.head.chainRevision,
+			completionPhase: "cancelled",
+		})
+		const harness = createHarness(store)
+
+		await harness.coordinator.resumePendingJournals()
+
+		expect(harness.adapter.applyRestore).toHaveBeenCalledOnce()
+		expect(await store.loadOperation(newerOperationId)).toMatchObject({
+			phase: "cancelled",
+			restoreJournal: undefined,
 		})
 	})
 

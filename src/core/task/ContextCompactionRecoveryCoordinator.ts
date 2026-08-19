@@ -144,8 +144,16 @@ export class ContextCompactionRecoveryCoordinator {
 
 	async resumePendingJournals(): Promise<void> {
 		const store = await this.ports.store()
-		const pending = (await store.listOperations<ContextCompactionCheckpointPayload>()).filter(
-			(operation) => operation.restoreJournal || operation.commitJournal,
+		const operations = await store.listOperations<ContextCompactionCheckpointPayload>()
+		const latestCompletedTimestamp = operations.reduce(
+			(latest, operation) =>
+				operation.phase === "completed" ? Math.max(latest, operationSnapshotTimestamp(operation)) : latest,
+			Number.NEGATIVE_INFINITY,
+		)
+		const pending = operations.filter(
+			(operation) =>
+				(operation.restoreJournal || operation.commitJournal) &&
+				operationSnapshotTimestamp(operation) >= latestCompletedTimestamp,
 		)
 		if (pending.length > 1) {
 			throw new Error("Multiple unfinished context compaction journals require manual recovery.")
@@ -191,6 +199,11 @@ export class ContextCompactionRecoveryCoordinator {
 			this.ports.onRecoveryFailure?.(failed.head.operationId, error)
 		}
 	}
+}
+
+/** Return the persisted Task time captured when this compaction operation created C0. */
+function operationSnapshotTimestamp(operation: LoadedCompactionCheckpointOperation<ContextCompactionCheckpointPayload>): number {
+	return operation.root.artifact.payload.runtimeSnapshot.timestamp
 }
 
 function resolveRestoreCheckpointId(
