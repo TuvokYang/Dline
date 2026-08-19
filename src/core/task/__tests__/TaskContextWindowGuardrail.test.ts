@@ -298,6 +298,10 @@ describe("Task context-window final admission guard", () => {
 		expect(method).toContain("this.contextCompactionPresentation.retry(")
 		expect(method).toContain("this.contextCompactionPresentation.complete(")
 		expect(method).toContain("this.publishContextCompactionSnapshot(snapshot)")
+		const highFrequencyReturn = method.indexOf('if (event.kind === "pass_receiving" || event.kind === "pass_partial") return')
+		const fullStatePost = method.indexOf("await this.postStateToWebview()", highFrequencyReturn)
+		expect(highFrequencyReturn).toBeGreaterThanOrEqual(0)
+		expect(fullStatePost).toBeGreaterThan(highFrequencyReturn)
 		expect(method).not.toContain("contextCompactionMessageTs")
 	})
 

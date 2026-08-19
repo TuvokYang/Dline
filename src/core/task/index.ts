@@ -954,14 +954,22 @@ export class Task {
 		// genuinely new tasks whose task-local bindings are absent.
 		if (!historyItem && this.taskSm.planModeProfile === undefined && apiConfiguration.planModeProfile) {
 			if (apiConfiguration.planModeProfileId) {
-				this.taskSm.adoptProfileIdentity("plan", apiConfiguration.planModeProfileId, apiConfiguration.planModeProfile)
+				this.taskSm.adoptResolvedProfileIdentity(
+					"plan",
+					apiConfiguration.planModeProfileId,
+					apiConfiguration.planModeProfile,
+				)
 			} else {
 				this.taskSm.setPlanModeProfile(apiConfiguration.planModeProfile)
 			}
 		}
 		if (!historyItem && this.taskSm.actModeProfile === undefined && apiConfiguration.actModeProfile) {
 			if (apiConfiguration.actModeProfileId) {
-				this.taskSm.adoptProfileIdentity("act", apiConfiguration.actModeProfileId, apiConfiguration.actModeProfile)
+				this.taskSm.adoptResolvedProfileIdentity(
+					"act",
+					apiConfiguration.actModeProfileId,
+					apiConfiguration.actModeProfile,
+				)
 			} else {
 				this.taskSm.setActModeProfile(apiConfiguration.actModeProfile)
 			}
@@ -1024,7 +1032,7 @@ export class Task {
 			this.taskRuntime.restore({ ...this.taskRuntime.getState(), profileInvalid: initialProfileInvalid })
 		}
 		if (!profileResolution.usedFallback && profileResolution.resolvedProfileId && profileResolution.resolvedProfile) {
-			this.taskSm.adoptProfileIdentity(mode, profileResolution.resolvedProfileId, profileResolution.resolvedProfile)
+			this.taskSm.adoptResolvedProfileIdentity(mode, profileResolution.resolvedProfileId, profileResolution.resolvedProfile)
 		}
 		const currentProfileRecord = findEnabledProfileByName(currentProfile)
 		const { contextWindow: initialContextWindow } = getContextWindowInfo(this.api)
@@ -1359,7 +1367,7 @@ export class Task {
 			? createUnavailableApiHandler(profileResolution.error)
 			: buildApiHandler(profileResolution.configuration, mode)
 		if (!profileResolution.usedFallback && profileResolution.resolvedProfileId && profileResolution.resolvedProfile) {
-			this.taskSm.adoptProfileIdentity(mode, profileResolution.resolvedProfileId, profileResolution.resolvedProfile)
+			this.taskSm.adoptResolvedProfileIdentity(mode, profileResolution.resolvedProfileId, profileResolution.resolvedProfile)
 		}
 		const validity = await validateResolvedTaskApiProfile(profileResolution)
 		await this.commitProfileValidity(validity, options.allowProfileRecovery === true)
@@ -1393,7 +1401,7 @@ export class Task {
 	/** Publish one committed runtime view after completing any phase-bound indicator transition. */
 	private async publishRuntimeTaskView(state: Readonly<TaskRuntimeState>): Promise<void> {
 		if (state.phase === TaskPhase.COMPLETED) {
-			await this.foldOrdinaryIndicatorRound()
+			await this.settleOrdinaryIndicatorRound()
 		}
 		await this.postStateToWebview()
 	}
@@ -1514,22 +1522,35 @@ export class Task {
 		)
 	}
 
-	/** Fold one fully completed round (including tool calls) into durable; ENV is never folded. */
-	private async foldOrdinaryIndicatorRound(): Promise<void> {
+	/** Move the completed Provider exchange into Staged without committing it to Durable. */
+	private async settleOrdinaryIndicatorRound(): Promise<void> {
 		const pendingEntries = [...this.ordinaryContextIndicatorLineageByApiIndex.entries()]
 		if (pendingEntries.length === 0) return
 		const latestEntry = pendingEntries[pendingEntries.length - 1]
 		const latestLineage = latestEntry?.[1]
 		if (!latestLineage || latestEntry === undefined) return
-		const authoritativeContextTokens =
-			this.ordinaryContextIndicatorReceivingByApiIndex.get(latestEntry[0])?.getSnapshot().authoritativeContextTokens ?? 0
-		const folded = this.contextWindowIndicator.foldRound({ lineage: latestLineage, authoritativeContextTokens })
-		await this.publishContextWindowIndicatorSnapshot(folded)
-		await this.publishContextWindowIndicatorSnapshot(this.contextWindowIndicator.settle({ lineage: folded.lineage }))
+		await this.publishContextWindowIndicatorSnapshot(this.contextWindowIndicator.settle({ lineage: latestLineage }))
 		for (const [apiIndex] of pendingEntries) {
 			this.ordinaryContextIndicatorLineageByApiIndex.delete(apiIndex)
 			this.ordinaryContextIndicatorReceivingByApiIndex.delete(apiIndex)
 		}
+	}
+
+	/** Re-estimate the not-yet-frozen continuation as one replaceable Staged value. */
+	private async refreshOrdinaryIndicatorStaged(): Promise<void> {
+		if (this.contextWindowIndicator.getSnapshot().phase !== "stable") return
+		const pendingInputTokens = estimateContextWindowCandidate({
+			systemPrompt: "",
+			messages: [
+				{
+					role: "user",
+					content: cloneDeep(this.taskState.userMessageContent),
+				},
+			],
+			tools: [],
+			serverTools: [],
+		})
+		await this.publishContextWindowIndicatorSnapshot(this.contextWindowIndicator.refreshStaged({ pendingInputTokens }))
 	}
 
 	private async rollbackOrdinaryContextWindowIndicator(
@@ -1619,7 +1640,7 @@ export class Task {
 		) {
 			return
 		}
-		await this.publishContextWindowIndicatorSnapshot(
+		this.setContextWindowIndicatorSnapshot(
 			this.contextWindowIndicator.receive({
 				lineage,
 				receivingTokens: snapshot.receivingTokens,
@@ -2763,6 +2784,7 @@ export class Task {
 				break
 		}
 		if (snapshot) await this.publishContextCompactionSnapshot(snapshot)
+		if (event.kind === "pass_receiving" || event.kind === "pass_partial") return
 		await this.postStateToWebview()
 	}
 
@@ -8378,12 +8400,8 @@ export class Task {
 			}
 
 			const phaseAfterAssistantTurn = this.taskRuntime.getState().phase
-			if (phaseAfterAssistantTurn === TaskPhase.BETWEEN_TURNS || phaseAfterAssistantTurn === TaskPhase.COMPLETED) {
-				// The full round (including every tool call) has completed: fold the
-				// Provider-calibrated request snapshot into durable. ENV stays live.
-				await this.foldOrdinaryIndicatorRound()
-				if (phaseAfterAssistantTurn === TaskPhase.COMPLETED) return true
-			}
+			await this.settleOrdinaryIndicatorRound()
+			if (phaseAfterAssistantTurn === TaskPhase.COMPLETED) return true
 			if (
 				this.taskState.abort ||
 				phaseAfterAssistantTurn === TaskPhase.CANCELLING ||
@@ -8425,10 +8443,8 @@ export class Task {
 				this.endAutoRetrySequence()
 
 				const phaseBeforeContinuation = this.taskRuntime.getState().phase
-				if (phaseBeforeContinuation === TaskPhase.BETWEEN_TURNS || phaseBeforeContinuation === TaskPhase.COMPLETED) {
-					await this.foldOrdinaryIndicatorRound()
-					if (phaseBeforeContinuation === TaskPhase.COMPLETED) return true
-				}
+				if (phaseBeforeContinuation === TaskPhase.COMPLETED) return true
+				await this.refreshOrdinaryIndicatorStaged()
 
 				const recDidEndLoop = await this.recursivelyMakeClineRequests(this.taskState.userMessageContent)
 				didEndLoop = recDidEndLoop
