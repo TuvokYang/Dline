@@ -94,6 +94,61 @@ function streamingXmlSummaryStream(): ApiStream {
 }
 
 describe("internal compaction Pass retry owner", () => {
+	it("continues reading Provider chunks while presentation is slow", async () => {
+		let providerReadCount = 0
+		let releaseFirstCallback: (() => void) | undefined
+		let resolveFirstCallbackStarted: (() => void) | undefined
+		const firstCallbackStarted = new Promise<void>((resolve) => {
+			resolveFirstCallbackStarted = resolve
+		})
+		const firstCallbackRelease = new Promise<void>((resolve) => {
+			releaseFirstCallback = resolve
+		})
+		const api = {
+			createMessage: () =>
+				(async function* () {
+					providerReadCount += 1
+					yield {
+						type: "tool_calls" as const,
+						function_id: "call-summary-backpressure",
+						phase: "completed" as const,
+						tool_index: 0,
+						tool_call: {
+							function: {
+								name: ClineDefaultTool.SUMMARIZE_TASK,
+								arguments: JSON.stringify({ context: "summary" }),
+							},
+						},
+					}
+					providerReadCount += 1
+					yield { type: "usage" as const, inputTokens: 100, outputTokens: 20 }
+				})(),
+			getModel: () => ({ id: "test-model", info: { id: "test-model" } }),
+		} satisfies ApiHandler
+		let callbackCount = 0
+		const runPromise = runInternalCompactionPassWithRetry({
+			api,
+			providerInput,
+			explicitInstructions: createInstructions(),
+			passIdentity,
+			retryPolicy: new CompactionRetryPolicy(0),
+			attemptIdFactory: (attemptIndex) => `attempt-${attemptIndex}`,
+			waitForRetry: async () => undefined,
+			onChunk: async () => {
+				callbackCount += 1
+				if (callbackCount === 1) {
+					resolveFirstCallbackStarted?.()
+					await firstCallbackRelease
+				}
+			},
+		})
+
+		await firstCallbackStarted
+		await vi.waitFor(() => expect(providerReadCount).toBe(2), { timeout: 100 })
+		releaseFirstCallback?.()
+		await runPromise
+	})
+
 	it("streams partial summary snapshots with the current attempt identity", async () => {
 		const api = {
 			createMessage: () => streamingSummaryStream(),

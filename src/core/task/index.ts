@@ -2557,17 +2557,6 @@ export class Task {
 				preview: true,
 				conversationHistoryDeletedRange: null,
 			})
-			Logger.debug(`[Task ${this.taskId}] compaction pass request`, {
-				operationId: input.operationId,
-				passMessageRoles: passHistory.map((message) => message.role),
-				passTextPreview: passHistory.map((message) =>
-					typeof message.content === "string"
-						? message.content.slice(0, 120)
-						: message.content
-								.map((block) => (block.type === "text" ? block.text.slice(0, 120) : block.type))
-								.join(" | "),
-				),
-			})
 			return {
 				providerInput,
 				explicitInstructions: requestScope.explicitInstructions,
@@ -2628,15 +2617,6 @@ export class Task {
 				providerContextWindow: contextWindow,
 				maxContextTokens: this.stateManager.getGlobalSettingsKey("autoCondenseMaxContextTokens"),
 				hasMoreTurns: state.coveredTurnCount < state.turns.length,
-			})
-			Logger.debug(`[Task ${this.taskId}] compaction reprojection`, {
-				operationId: input.operationId,
-				coveredTurnCount: state.coveredTurnCount,
-				totalTurnCount: state.turns.length,
-				candidateEstimatedTokens,
-				decision: decision.status,
-				projectedUsageTokens: decision.projectedUsageTokens,
-				targetContextWindow: decision.targetContextWindow,
 			})
 			const segments = estimateContextWindowIndicatorSegments({
 				providerInput: targetInput,
@@ -6061,7 +6041,6 @@ export class Task {
 		if (replayProviderInput) {
 			providerInput = replayProviderInput
 			providerInputSource = "compaction_replay"
-			Logger.debug(`[Task ${this.taskId}] Reusing canonical compaction provider input for apiIndex=${apiIndex}`)
 		} else {
 			const preparedProviderInput = this.takePreparedOrdinaryProviderInput(apiIndex)
 			if (preparedProviderInput) {
@@ -7799,11 +7778,6 @@ export class Task {
 						cacheUsageReported = usage.cacheUsageReported
 						taskMetrics.totalCost = usage.totalCost
 						queueUsageChunkSideEffects()
-					},
-					onQueueMetrics: ({ queueDepth, maxQueueDepth, streamCompleted }) => {
-						Logger.debug(
-							`[Task ${this.taskId}] stream backlog: queueDepth=${queueDepth}, maxQueueDepth=${maxQueueDepth}, streamCompleted=${streamCompleted}`,
-						)
 					},
 				})
 

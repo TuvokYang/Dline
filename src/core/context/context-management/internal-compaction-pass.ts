@@ -72,6 +72,49 @@ export interface RunInternalCompactionPassWithRetryInput
 	onSummaryUpdate?(context: string, attempt: InternalCompactionAttemptIdentity): void | Promise<void>
 }
 
+class CompactionPresentationQueue {
+	private queue: Array<() => void | Promise<void>> = []
+	private drainPromise: Promise<void> | undefined
+	private failed = false
+	private failure: unknown
+
+	enqueue(operation: () => void | Promise<void>): void {
+		if (this.failed) return
+		this.queue.push(operation)
+		this.startDrain()
+	}
+
+	async flush(): Promise<void> {
+		this.startDrain()
+		if (this.drainPromise) await this.drainPromise
+		if (this.failed) throw this.failure
+	}
+
+	private startDrain(): void {
+		if (this.drainPromise) return
+		this.drainPromise = this.drain()
+	}
+
+	private async drain(): Promise<void> {
+		try {
+			while (this.queue.length > 0) {
+				const operation = this.queue.shift()
+				if (!operation) continue
+				try {
+					await operation()
+				} catch (error) {
+					this.failed = true
+					this.failure = error
+					this.queue = []
+					return
+				}
+			}
+		} finally {
+			this.drainPromise = undefined
+		}
+	}
+}
+
 /** Execute one compaction Provider request without ordinary UI or history side effects. */
 export async function runInternalCompactionPass(input: RunInternalCompactionPassInput): Promise<InternalCompactionPassResult> {
 	input.explicitInstructions.beginProviderAttempt(input.attemptId)
@@ -98,21 +141,22 @@ export async function runInternalCompactionPass(input: RunInternalCompactionPass
 	let nativeSummary: string | undefined
 	let usage: InternalCompactionUsage | undefined
 	const usageAccumulator = new ApiUsageAccumulator()
+	const presentationQueue = new CompactionPresentationQueue()
 	let lastPublishedSummary: string | undefined
 	const nativeArguments = new Map<string, string>()
-	const publishSummarySnapshot = async (context: string | undefined): Promise<void> => {
+	const publishSummarySnapshot = (context: string | undefined): void => {
 		const snapshot = context?.trim()
 		if (!snapshot || snapshot === lastPublishedSummary) return
 		lastPublishedSummary = snapshot
-		await input.onSummaryUpdate?.(snapshot)
+		if (input.onSummaryUpdate) presentationQueue.enqueue(() => input.onSummaryUpdate?.(snapshot))
 	}
 
 	for await (const chunk of stream) {
-		await input.onChunk?.(chunk)
+		if (input.onChunk) presentationQueue.enqueue(() => input.onChunk?.(chunk))
 		switch (chunk.type) {
 			case "text":
 				assistantText += chunk.text
-				await publishSummarySnapshot(parseXmlSummarySnapshot(assistantText))
+				publishSummarySnapshot(parseXmlSummarySnapshot(assistantText))
 				break
 			case "tool_calls": {
 				if (chunk.tool_call.function.name !== ClineDefaultTool.SUMMARIZE_TASK) break
@@ -126,17 +170,17 @@ export async function runInternalCompactionPass(input: RunInternalCompactionPass
 				if (completeSnapshot !== undefined) {
 					nativeArguments.set(key, next)
 					nativeSummary = completeSnapshot
-					await publishSummarySnapshot(completeSnapshot)
+					publishSummarySnapshot(completeSnapshot)
 				} else {
 					const accumulated = `${nativeArguments.get(key) ?? ""}${next}`
 					nativeArguments.set(key, accumulated)
-					await publishSummarySnapshot(parsePartialSummaryArguments(accumulated))
+					publishSummarySnapshot(parsePartialSummaryArguments(accumulated))
 					// Chat-family adapters emit complete argument chunks without a completion phase.
 					if (chunk.phase === undefined || chunk.phase === "completed") {
 						const completed = parseSummaryArguments(accumulated)
 						if (completed !== undefined) {
 							nativeSummary = completed
-							await publishSummarySnapshot(completed)
+							publishSummarySnapshot(completed)
 						}
 					}
 				}
@@ -156,6 +200,7 @@ export async function runInternalCompactionPass(input: RunInternalCompactionPass
 		}
 	}
 
+	await presentationQueue.flush()
 	const summary = nativeSummary ?? parseXmlSummary(assistantText)
 	if (!summary) {
 		throw new Error("Internal compaction Pass did not return a valid summarize_task context")

@@ -92,6 +92,25 @@ describe("auto-condense context trigger", () => {
 		expect(computeCompactTrigger(1_000_000, computeSummarizeBudget(), defaultPolicy)).toBe(272_000)
 	})
 
+	it("can trigger with 180K provider headroom when Maximum context is configured as an absolute cap", () => {
+		const providerContextWindow = 752_000
+		const configuredMaximumContext = 572_000
+		const policy = resolveCompactTriggerPolicy(providerContextWindow, computeSummarizeBudget(), {
+			triggerPercent: DEFAULT_AUTO_CONDENSE_TRIGGER_PERCENT,
+			minReserveTokens: 5_000,
+			maxReserveTokens: 30_000,
+			maxContextTokens: configuredMaximumContext,
+		})
+
+		expect(policy).toMatchObject({
+			branch: "absolute_cap",
+			compactTriggerTokens: configuredMaximumContext,
+			passInputCeilingTokens: 570_000,
+		})
+		expect(shouldCompactProjectedUsage(570_000, policy.compactTriggerTokens)).toBe(true)
+		expect(providerContextWindow - policy.compactTriggerTokens).toBe(180_000)
+	})
+
 	it("clamps the percentage reserve below, within, and above the configured interval", () => {
 		const summarizeBudget = computeSummarizeBudget()
 		const settings = {

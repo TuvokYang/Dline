@@ -768,6 +768,29 @@ e2e(
 )
 
 e2e(
+	"Auto compact trigger - first over-cap request exposes the local no-turn failure before Provider admission",
+	async ({ dlineDir, helper, openVSCode, server, userDataDir, workspaceDir }) => {
+		e2e.setTimeout(180_000)
+		await configureTriggerBoundary(dlineDir, 752_000, 1)
+
+		const app = await openVSCode(workspaceDir)
+		try {
+			const sidebar = await openSidebar(app, helper)
+			await sendTask(sidebar, "E2E_NO_COMPLETE_TURN_TASK")
+
+			await expect(sidebar.getByText("API Request Failed", { exact: true }).last()).toBeVisible({ timeout: 60_000 })
+			await expect(
+				sidebar.getByText("No complete logical turn is available for context compaction.", { exact: false }).last(),
+			).toBeVisible()
+			expect(server.getRequestCount("openai-compatible-responses")).toBe(0)
+			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir, [/No complete logical turn/i])
+		} finally {
+			await app.close()
+		}
+	},
+)
+
+e2e(
 	"OpenAI compaction - iterates until the projected context is below 80 percent",
 	async ({ dlineDir, helper, openVSCode, server, userDataDir, workspaceDir }) => {
 		e2e.setTimeout(240_000)
