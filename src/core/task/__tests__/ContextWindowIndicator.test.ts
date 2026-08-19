@@ -102,6 +102,56 @@ describe("ContextWindowIndicator", () => {
 		expect(getContextWindowIndicatorTotalTokens(settled)).toBe(490)
 	})
 
+	it("preserves prior staged occupancy and shows only new growth as Sending", () => {
+		const indicator = createIndicator()
+		indicator.beginSend({
+			lineage: ordinaryAttempt0,
+			durableContextTokens: 100,
+			pendingSendTokens: 300,
+			environmentTokens: 50,
+			contextWindow: 1_000,
+			mode: "act",
+			updatedAt: 2,
+		})
+		indicator.receive({
+			lineage: ordinaryAttempt0,
+			receivingTokens: 40,
+			authoritativeContextTokens: 490,
+			updatedAt: 3,
+		})
+		indicator.settle({ lineage: ordinaryAttempt0, updatedAt: 4 })
+
+		const sending = indicator.beginSend({
+			lineage: ordinaryAttempt1,
+			durableContextTokens: 100,
+			pendingSendTokens: 350,
+			environmentTokens: 50,
+			contextWindow: 1_000,
+			mode: "act",
+			updatedAt: 5,
+		})
+		const receiving = indicator.receive({
+			lineage: ordinaryAttempt1,
+			receivingTokens: 20,
+			authoritativeContextTokens: 540,
+			updatedAt: 6,
+		})
+
+		expect(sending).toMatchObject({
+			phase: "sending",
+			durableContextTokens: 100,
+			pendingSendTokens: 10,
+			stagedTokens: 340,
+		})
+		expect(receiving).toMatchObject({
+			phase: "receiving",
+			durableContextTokens: 460,
+			pendingSendTokens: 0,
+			receivingTokens: 20,
+			stagedTokens: 10,
+		})
+	})
+
 	it("adopts a committed Profile scope without changing tokens or lineage", () => {
 		const indicator = createIndicator()
 

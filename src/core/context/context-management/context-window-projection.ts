@@ -52,16 +52,23 @@ export function resolveContextWindowProjection(input: ResolveContextWindowProjec
 	let pendingDeltaTokens = 0
 	let pressureSource: ContextPressureSource = "unavailable"
 	let previousEstimatedTokens = 0
+	let hasEstimateAnchor = false
 
 	if (latestReliableIndex >= 0) {
 		const reliable = input.requestInfos[latestReliableIndex]
 		baselineTokens = normalizeTokens(reliable.contextTokens)
 		pressureSource = "provider"
-		previousEstimatedTokens = normalizeTokens(reliable.estimatedContextTokens) || baselineTokens
+		previousEstimatedTokens = normalizeTokens(reliable.estimatedContextTokens)
+		hasEstimateAnchor = previousEstimatedTokens > 0
 
 		for (const requestInfo of input.requestInfos.slice(latestReliableIndex + 1)) {
 			const estimatedTokens = normalizeTokens(requestInfo.estimatedContextTokens)
 			if (estimatedTokens <= 0) continue
+			if (!hasEstimateAnchor) {
+				previousEstimatedTokens = estimatedTokens
+				hasEstimateAnchor = true
+				continue
+			}
 			pendingDeltaTokens += Math.max(0, estimatedTokens - previousEstimatedTokens)
 			previousEstimatedTokens = Math.max(previousEstimatedTokens, estimatedTokens)
 		}
@@ -70,13 +77,18 @@ export function resolveContextWindowProjection(input: ResolveContextWindowProjec
 		if (latestEstimate > 0) {
 			baselineTokens = latestEstimate
 			previousEstimatedTokens = latestEstimate
+			hasEstimateAnchor = true
 			pressureSource = "estimate"
 		}
 	}
 
 	const candidateDeltaTokens =
 		input.candidateDeltaTokens === undefined
-			? Math.max(0, normalizedCandidateEstimate - previousEstimatedTokens)
+			? hasEstimateAnchor
+				? Math.max(0, normalizedCandidateEstimate - previousEstimatedTokens)
+				: latestReliableIndex < 0
+					? normalizedCandidateEstimate
+					: 0
 			: normalizeTokens(input.candidateDeltaTokens)
 	const projectedUsageTokens = baselineTokens + pendingDeltaTokens + candidateDeltaTokens
 	const remainingTokens = Math.max(0, normalizedWindow - projectedUsageTokens)

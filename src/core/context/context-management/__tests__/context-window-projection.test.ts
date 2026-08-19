@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest"
-import {
-	estimateContextWindowCandidate,
-	resolveContextWindowProjection,
-} from "../context-window-projection"
+import { estimateContextWindowCandidate, resolveContextWindowProjection } from "../context-window-projection"
 
 describe("context window projection", () => {
 	it("keeps the latest reliable provider usage and accumulates only uncovered positive estimate growth", () => {
@@ -68,11 +65,27 @@ describe("context window projection", () => {
 		})
 	})
 
+	it("does not manufacture growth by subtracting Provider usage from an incompatible local estimate", () => {
+		const projection = resolveContextWindowProjection({
+			requestInfos: [{ contextTokens: 217_409, contextTokensSource: "provider" }],
+			candidateEstimatedTokens: 570_000,
+			contextWindow: 572_000,
+			triggerTokens: 572_000,
+		})
+
+		expect(projection).toMatchObject({
+			baselineTokens: 217_409,
+			pendingDeltaTokens: 0,
+			candidateDeltaTokens: 0,
+			projectedUsageTokens: 217_409,
+			pressureSource: "provider",
+			shouldCompact: false,
+		})
+	})
+
 	it("does not let a smaller reconstructed candidate erase reliable provider occupancy", () => {
 		const projection = resolveContextWindowProjection({
-			requestInfos: [
-				{ contextTokens: 140_100, estimatedContextTokens: 16_083, contextTokensSource: "provider" },
-			],
+			requestInfos: [{ contextTokens: 140_100, estimatedContextTokens: 16_083, contextTokensSource: "provider" }],
 			candidateEstimatedTokens: 16_083,
 			contextWindow: 131_072,
 			triggerTokens: 131_072,

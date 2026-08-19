@@ -34,17 +34,33 @@ describe("target window fitting decision", () => {
 		})
 	})
 
-	it("fails without admitting the ordinary continuation when no complete turn remains to reduce pressure", () => {
+	it("accepts a candidate above the 80 percent target when no turn remains and the hard window still fits", () => {
 		expect(
 			decideTargetWindowFitting({
-				candidateEstimatedTokens: 217_600,
+				candidateEstimatedTokens: 250_000,
+				providerContextWindow: 1_000_000,
+				maxContextTokens: 272_000,
+				hasMoreTurns: false,
+			}),
+		).toEqual({
+			status: "complete",
+			projectedUsageTokens: 250_000,
+			targetContextWindow: 272_000,
+			fittingExitTarget: 217_600,
+		})
+	})
+
+	it("fails when no complete turn remains and the candidate reaches the hard target window", () => {
+		expect(
+			decideTargetWindowFitting({
+				candidateEstimatedTokens: 272_000,
 				providerContextWindow: 1_000_000,
 				maxContextTokens: 272_000,
 				hasMoreTurns: false,
 			}),
 		).toEqual({
 			status: "exhausted",
-			projectedUsageTokens: 217_600,
+			projectedUsageTokens: 272_000,
 			targetContextWindow: 272_000,
 			fittingExitTarget: 217_600,
 		})

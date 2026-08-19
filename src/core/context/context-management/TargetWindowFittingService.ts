@@ -24,8 +24,9 @@ export function decideTargetWindowFitting(input: DecideTargetWindowFittingInput)
 	})
 	const projectedUsageTokens = normalizeCandidateTokens(input.candidateEstimatedTokens)
 	const mustContinue = shouldContinueTargetWindowFitting(projectedUsageTokens, scope)
+	const fitsHardWindow = projectedUsageTokens < scope.targetContextWindow
 	return {
-		status: mustContinue ? (input.hasMoreTurns ? "continue" : "exhausted") : "complete",
+		status: mustContinue ? (input.hasMoreTurns ? "continue" : fitsHardWindow ? "complete" : "exhausted") : "complete",
 		projectedUsageTokens,
 		targetContextWindow: scope.targetContextWindow,
 		fittingExitTarget: scope.fittingExitTarget,

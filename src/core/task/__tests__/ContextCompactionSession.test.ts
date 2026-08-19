@@ -564,6 +564,10 @@ describe("ContextCompactionSession", () => {
 
 		expect(result).toBe("failed")
 		expect(ports.commit).not.toHaveBeenCalled()
-		expect(ports.rollback).toHaveBeenCalledOnce()
+		expect(ports.rollback).toHaveBeenCalledWith(
+			expect.objectContaining({ operationId: "operation-2" }),
+			expect.anything(),
+			"Context compaction could not fit the complete target request below the hard context limit of 1000 tokens because no complete logical turn remains.",
+		)
 	})
 })

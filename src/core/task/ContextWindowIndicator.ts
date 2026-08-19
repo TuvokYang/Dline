@@ -192,7 +192,9 @@ export class ContextWindowIndicator {
 	}
 
 	beginSend(input: BeginContextWindowIndicatorSendInput): ContextWindowIndicatorSnapshot {
-		this.completedExchangeTokens = 0
+		const stagedTokens = normalizeTokens(this.current.stagedTokens ?? 0)
+		const pendingSendTokens = Math.max(0, normalizeTokens(input.pendingSendTokens) - stagedTokens)
+		this.completedExchangeTokens = stagedTokens
 		this.pendingInputTokens = 0
 		this.current = {
 			...this.current,
@@ -200,9 +202,9 @@ export class ContextWindowIndicator {
 			epoch: this.current.epoch + 1,
 			phase: "sending",
 			durableContextTokens: normalizeTokens(input.durableContextTokens),
-			pendingSendTokens: normalizeTokens(input.pendingSendTokens),
+			pendingSendTokens,
 			receivingTokens: 0,
-			stagedTokens: 0,
+			stagedTokens,
 			environmentTokens: normalizeTokens(input.environmentTokens),
 			contextWindow: normalizeTokens(input.contextWindow),
 			profileId: input.profileId,
@@ -224,13 +226,17 @@ export class ContextWindowIndicator {
 		) {
 			return this.getSnapshot()
 		}
-		const sentInputTokens = normalizeTokens(this.current.pendingSendTokens + (this.current.stagedTokens ?? 0))
+		const pendingSendTokens = normalizeTokens(this.current.pendingSendTokens)
+		const priorStagedTokens = normalizeTokens(this.current.stagedTokens ?? 0)
 		const environmentTokens =
 			authoritativeContextTokens > 0
 				? Math.min(this.current.environmentTokens, Math.max(0, authoritativeContextTokens - receivingTokens))
 				: this.current.environmentTokens
 		const availableInputTokens = Math.max(0, authoritativeContextTokens - environmentTokens - receivingTokens)
-		const stagedTokens = authoritativeContextTokens > 0 ? Math.min(sentInputTokens, availableInputTokens) : sentInputTokens
+		const stagedTokens =
+			authoritativeContextTokens > 0
+				? Math.min(pendingSendTokens, availableInputTokens)
+				: priorStagedTokens + pendingSendTokens
 		const durableContextTokens =
 			authoritativeContextTokens > 0 ? Math.max(0, availableInputTokens - stagedTokens) : this.current.durableContextTokens
 		this.completedExchangeTokens = stagedTokens
