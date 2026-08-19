@@ -162,6 +162,10 @@ const ContextWindowSegmentedProgress = memo(({ snapshot, onOccupiedMouseEnter }:
 			})),
 		[activeDisplayTokens, stagedDisplayTokens, snapshot, viewModel.segments],
 	)
+	const nonZeroSegmentCount = segments.filter((segment) => segment.displayTokens > 0).length
+	const rawWidthPercent = segments.reduce((total, segment) => total + (segment.displayTokens > 0 ? segment.widthPercent : 0), 0)
+	const safeMinimumWidthPercent = nonZeroSegmentCount > 0 ? Math.max(0, (100 - rawWidthPercent) / nonZeroSegmentCount) : 0
+	const safeMinimumWidth = `min(${MIN_VISIBLE_SEGMENT_PX}px, ${safeMinimumWidthPercent}%)`
 
 	return (
 		<div
@@ -173,7 +177,7 @@ const ContextWindowSegmentedProgress = memo(({ snapshot, onOccupiedMouseEnter }:
 			className="relative h-3 w-full overflow-hidden rounded-full bg-code-foreground/20"
 			data-context-window={snapshot.contextWindow}
 			data-epoch={snapshot.epoch}
-			data-minor-factor={viewModel.minorGroupFactor}
+			data-minimum-width-percent={safeMinimumWidthPercent}
 			data-mode={snapshot.mode}
 			data-motion={motion}
 			data-phase={snapshot.phase}
@@ -204,7 +208,7 @@ const ContextWindowSegmentedProgress = memo(({ snapshot, onOccupiedMouseEnter }:
 							style={{
 								backgroundColor: segment.color,
 								filter: motion === "commit" && segment.kind === "durable" ? "brightness(1.16)" : "none",
-								minWidth: segment.displayTokens > 0 && !settling ? `${MIN_VISIBLE_SEGMENT_PX}px` : "0px",
+								minWidth: segment.displayTokens > 0 && !settling ? safeMinimumWidth : "0px",
 								opacity: settling ? 0 : segment.displayTokens > 0 ? 1 : 0,
 								pointerEvents: segment.displayTokens > 0 && !settling ? "auto" : "none",
 								transform: segment.temporary ? transientTransform(motion) : "translateX(0)",

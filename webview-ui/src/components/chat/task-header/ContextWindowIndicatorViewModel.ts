@@ -16,7 +16,6 @@ export interface ContextWindowIndicatorViewModel {
 	percentage: number
 	remainingTokens: number
 	displayDenominator: number
-	minorGroupFactor: number
 	segments: ContextWindowSegmentViewModel[]
 }
 
@@ -24,8 +23,6 @@ export interface ContextWindowIndicatorDisplayTokens {
 	active?: number
 	staged?: number
 }
-
-const MAX_MINOR_GROUP_FACTOR = 3
 
 /** Return the mutually exclusive visible activity amount for the current phase. */
 export function getContextWindowActiveTokens(snapshot: ContextWindowIndicatorSnapshot): number {
@@ -64,10 +61,6 @@ export function createContextWindowIndicatorViewModel(
 		authoritativeTokens.environment
 	const displayTotal = Object.values(displayedTokens).reduce((total, tokens) => total + tokens, 0)
 	const displayDenominator = Math.max(contextWindow, totalTokens, displayTotal)
-	const minorGroupTotal = displayedTokens.active + displayedTokens.staged + displayedTokens.environment
-	const availableMinorSpace = Math.max(0, displayDenominator - displayedTokens.durable)
-	const minorGroupFactor =
-		minorGroupTotal > 0 ? Math.min(MAX_MINOR_GROUP_FACTOR, Math.max(1, availableMinorSpace / minorGroupTotal)) : 1
 	const segments: ContextWindowSegmentViewModel[] = [
 		{
 			kind: "durable",
@@ -81,30 +74,21 @@ export function createContextWindowIndicatorViewModel(
 			label: getActiveLabel(snapshot),
 			authoritativeTokens: authoritativeTokens.active,
 			displayTokens: displayedTokens.active,
-			widthPercent:
-				displayDenominator > 0
-					? Math.min(100, ((displayedTokens.active * minorGroupFactor) / displayDenominator) * 100)
-					: 0,
+			widthPercent: displayDenominator > 0 ? Math.min(100, (displayedTokens.active / displayDenominator) * 100) : 0,
 		},
 		{
 			kind: "staged",
 			label: "Staged",
 			authoritativeTokens: authoritativeTokens.staged,
 			displayTokens: displayedTokens.staged,
-			widthPercent:
-				displayDenominator > 0
-					? Math.min(100, ((displayedTokens.staged * minorGroupFactor) / displayDenominator) * 100)
-					: 0,
+			widthPercent: displayDenominator > 0 ? Math.min(100, (displayedTokens.staged / displayDenominator) * 100) : 0,
 		},
 		{
 			kind: "environment",
 			label: "ENV",
 			authoritativeTokens: authoritativeTokens.environment,
 			displayTokens: displayedTokens.environment,
-			widthPercent:
-				displayDenominator > 0
-					? Math.min(100, ((displayedTokens.environment * minorGroupFactor) / displayDenominator) * 100)
-					: 0,
+			widthPercent: displayDenominator > 0 ? Math.min(100, (displayedTokens.environment / displayDenominator) * 100) : 0,
 		},
 	]
 
@@ -114,7 +98,6 @@ export function createContextWindowIndicatorViewModel(
 		percentage: contextWindow > 0 ? (totalTokens / contextWindow) * 100 : 0,
 		remainingTokens: Math.max(0, contextWindow - totalTokens),
 		displayDenominator,
-		minorGroupFactor,
 		segments,
 	}
 }

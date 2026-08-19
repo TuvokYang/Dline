@@ -61,15 +61,8 @@ describe("ContextWindowSegmentedProgress", () => {
 			Array.from(progress.querySelectorAll("[data-segment]")).map((element) => element.getAttribute("data-segment")),
 		).toEqual(["durable", "active", "staged", "environment"])
 		expect(segments.map((segment) => segment.getAttribute("data-tokens"))).toEqual(["40000", "20000", "10000", "5000"])
-		// Durable keeps its authoritative width while the minor group is visually amplified.
-		expect(segments[0].style.width).toBe("40%")
-		const minorWidths = segments.slice(1).map((segment) => Number.parseFloat(segment.style.width))
-		expect(minorWidths.every((width) => Number.isFinite(width) && width > 0)).toBe(true)
-		// Internal minor-group token ratio (20k : 10k : 5k = 4 : 2 : 1) is preserved.
-		expect(minorWidths[0] / minorWidths[1]).toBeCloseTo(2, 1)
-		expect(minorWidths[1] / minorWidths[2]).toBeCloseTo(2, 1)
-		// Every non-zero minor segment stays visually recognizable on the bar.
-		expect(minorWidths.every((width) => width >= 0.75)).toBe(true)
+		// Segment widths follow the actual token ratios without visual amplification.
+		expect(segments.map((segment) => segment.style.width)).toEqual(["40%", "20%", "10%", "5%"])
 		expect(segments.map((segment) => segment.style.backgroundColor)).toEqual([
 			"var(--vscode-charts-green, #3fb950)",
 			"var(--vscode-charts-blue, #58a6ff)",
@@ -322,11 +315,11 @@ describe("ContextWindowSegmentedProgress", () => {
 		)
 
 		for (const kind of ["durable", "active", "staged", "environment"] as const) {
-			expect(screen.getByTestId(`context-window-segment-${kind}`).style.minWidth).toBe("3px")
+			expect(screen.getByTestId(`context-window-segment-${kind}`).style.minWidth).toBe("min(3px, 24.674975%)")
 		}
 	})
 
-	it("caps the shared minor-group factor when the staged segment starts with one token", () => {
+	it("keeps raw widths when the staged segment starts with one token", () => {
 		render(
 			<ContextWindowSegmentedProgress
 				snapshot={snapshot({
@@ -342,18 +335,14 @@ describe("ContextWindowSegmentedProgress", () => {
 		)
 
 		const progress = screen.getByTestId("context-window-segmented-progress")
-		expect(progress).toHaveAttribute("data-minor-factor", "3")
-		expect(screen.getByTestId("context-window-segment-active").style.width).toBe("0.6%")
-		expect(Number.parseFloat(screen.getByTestId("context-window-segment-staged").style.width)).toBeCloseTo(0.0003, 8)
-		expect(screen.getByTestId("context-window-segment-environment").style.width).toBe("0.3%")
-		const totalWidth = ["durable", "active", "staged", "environment"].reduce(
-			(total, kind) => total + Number.parseFloat(screen.getByTestId(`context-window-segment-${kind}`).style.width),
-			0,
-		)
-		expect(totalWidth).toBeLessThan(5)
+		expect(screen.getByTestId("context-window-segment-active").style.width).toBe("0.2%")
+		expect(Number.parseFloat(screen.getByTestId("context-window-segment-staged").style.width)).toBeCloseTo(0.0001, 8)
+		expect(screen.getByTestId("context-window-segment-environment").style.width).toBe("0.1%")
+		expect(progress).toHaveAttribute("data-minimum-width-percent", "24.674975")
+		expect(screen.getByTestId("context-window-segment-active").style.minWidth).toBe("min(3px, 24.674975%)")
 	})
 
-	it("amplifies sub-pixel minor segments with one bounded shared factor", () => {
+	it("preserves raw token ratios for sub-pixel segments", () => {
 		render(
 			<ContextWindowSegmentedProgress
 				snapshot={snapshot({
@@ -368,20 +357,19 @@ describe("ContextWindowSegmentedProgress", () => {
 			/>,
 		)
 
-		expect(screen.getByTestId("context-window-segmented-progress")).toHaveAttribute("data-minor-factor", "3")
 		expect(screen.getByTestId("context-window-segment-durable").style.width).toBe("1%")
-		expect(screen.getByTestId("context-window-segment-active").style.width).toBe("0.6%")
-		expect(screen.getByTestId("context-window-segment-staged").style.width).toBe("0.3%")
-		expect(screen.getByTestId("context-window-segment-environment").style.width).toBe("0.3%")
+		expect(screen.getByTestId("context-window-segment-active").style.width).toBe("0.2%")
+		expect(screen.getByTestId("context-window-segment-staged").style.width).toBe("0.1%")
+		expect(screen.getByTestId("context-window-segment-environment").style.width).toBe("0.1%")
 
 		const active = screen.getByTestId("context-window-segment-active")
 		expect(active).toHaveAttribute("data-authoritative-tokens", "2000")
 		expect(active).toHaveAttribute("data-tokens", "2000")
 		expect(screen.getByTestId("context-window-segment-environment")).toHaveAttribute("data-tokens", "1000")
-		const minorRatio =
-			Number.parseFloat(active.style.width) /
-			Number.parseFloat(screen.getByTestId("context-window-segment-staged").style.width)
-		expect(minorRatio).toBeCloseTo(2, 8)
+		expect(Number.parseFloat(active.style.width)).toBeCloseTo(
+			Number.parseFloat(screen.getByTestId("context-window-segment-staged").style.width) * 2,
+			8,
+		)
 	})
 
 	it("keeps zero-token segments at zero width without a minimum-width placeholder", () => {
@@ -430,11 +418,11 @@ describe("ContextWindowSegmentedProgress", () => {
 		const envAfter = screen.getByTestId("context-window-segment-environment")
 		expect(envAfter).toHaveAttribute("data-tokens", "9000")
 		expect(envAfter).toHaveAttribute("data-authoritative-tokens", "9000")
-		expect(envAfter.style.width).toBe("27%")
-		expect(envAfter.style.minWidth).toBe("3px")
+		expect(envAfter.style.width).toBe("9%")
+		expect(envAfter.style.minWidth).toBe("min(3px, 25.5%)")
 	})
 
-	it("keeps ENV separate and applies the bounded shared factor after a round completes", () => {
+	it("keeps ENV separate and uses its raw token width after a round completes", () => {
 		render(
 			<ContextWindowSegmentedProgress
 				snapshot={snapshot({
@@ -451,10 +439,10 @@ describe("ContextWindowSegmentedProgress", () => {
 		const env = screen.getByTestId("context-window-segment-environment")
 		expect(durable).toHaveAttribute("data-authoritative-tokens", "500")
 		expect(env).toHaveAttribute("data-authoritative-tokens", "50")
-		expect(env.style.width).toBe("0.15%")
+		expect(env.style.width).toBe("0.05%")
 	})
 
-	it("caps the shared minor-group amplification so the bar never overflows", () => {
+	it("keeps raw widths within the track near the context limit", () => {
 		render(
 			<ContextWindowSegmentedProgress
 				snapshot={snapshot({
@@ -466,9 +454,11 @@ describe("ContextWindowSegmentedProgress", () => {
 			/>,
 		)
 
-		expect(screen.getByTestId("context-window-segmented-progress")).toHaveAttribute("data-minor-factor", "1")
+		expect(screen.getByTestId("context-window-segmented-progress")).toHaveAttribute("data-minimum-width-percent", "0")
 		expect(screen.getByTestId("context-window-segment-durable").style.width).toBe("99.5%")
 		expect(screen.getByTestId("context-window-segment-environment").style.width).toBe("0.5%")
+		expect(screen.getByTestId("context-window-segment-durable").style.minWidth).toBe("min(3px, 0%)")
+		expect(screen.getByTestId("context-window-segment-environment").style.minWidth).toBe("min(3px, 0%)")
 		const totalWidth =
 			Number.parseFloat(screen.getByTestId("context-window-segment-durable").style.width) +
 			Number.parseFloat(screen.getByTestId("context-window-segment-environment").style.width)
