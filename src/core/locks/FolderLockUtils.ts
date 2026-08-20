@@ -53,7 +53,7 @@ export async function tryAcquireFolderLockWithRetry(
 			const lockManager = await getStandaloneLockManager()
 
 			if (!lockManager) {
-				Logger.debug("Lock manager not available - skipping lock acquisition")
+				Logger.trace("Lock manager not available - skipping lock acquisition")
 				return { acquired: false, skipped: true }
 			}
 

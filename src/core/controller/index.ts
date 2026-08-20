@@ -339,9 +339,11 @@ export class Controller {
 	/** Apply the latest global configuration snapshot to every registered runtime component. */
 	async configureGlobalComponents(): Promise<GlobalConfigurationResult> {
 		const result = await this.globalConfigurationManager.configureAll()
-		Logger.debug(
-			`[GlobalConfiguration] configured ${result.components.length} component(s) in ${result.durationMs.toFixed(2)}ms`,
-		)
+		if (result.durationMs >= 100) {
+			Logger.debug(
+				`[GlobalConfiguration] slow configuration: components=${result.components.length}, durationMs=${result.durationMs.toFixed(2)}`,
+			)
+		}
 		return result
 	}
 
@@ -1669,7 +1671,7 @@ export class Controller {
 		}
 
 		const durationMs = Math.round(performance.now() - startTime)
-		if (durationMs > 10) {
+		if (durationMs >= 100) {
 			let activeTasks = 1
 			try {
 				const { OrchestratorController } = await import("@/core/orchestrator/OrchestratorController")

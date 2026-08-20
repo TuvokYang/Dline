@@ -68,14 +68,16 @@ export interface ApiRateActivitySeconds {
 	providerActiveSeconds: number
 }
 
-/** Interpret explicit activity signals while preserving schema-v1 records that predate them. */
+/** Count sparse API-active seconds while ignoring task-only work between Provider requests. */
 export function getApiRateSecondActivitySeconds(signals: readonly ApiRateSignal[]): ApiRateActivitySeconds {
-	const taskActive = signals.includes("task_active")
-	const providerActive = signals.includes("provider_active")
-	const legacyActive = !taskActive && !providerActive
+	const providerActive =
+		signals.includes("provider_active") ||
+		signals.includes("request_start") ||
+		signals.includes("stream_tokens") ||
+		signals.includes("exact_usage")
 	return {
-		activeSeconds: taskActive || legacyActive ? 1 : 0,
-		providerActiveSeconds: providerActive || legacyActive ? 1 : 0,
+		activeSeconds: providerActive ? 1 : 0,
+		providerActiveSeconds: providerActive ? 1 : 0,
 	}
 }
 

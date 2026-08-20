@@ -99,6 +99,7 @@ export class StreamResponseHandler {
  */
 class ToolUseHandler {
 	private pendingToolUses = new Map<string, PendingToolUse>()
+	private loggedFinalizedFunctionIds = new Set<string>()
 	private tsFactory: () => number
 
 	constructor(tsFactory: () => number) {
@@ -166,9 +167,12 @@ class ToolUseHandler {
 			dline_tid: pending.dline_tid,
 			provider_metadata: pending.provider_metadata,
 		}
-		Logger.debug(
-			`[ToolUseHandler] finalized ${pending.name} function_id=${pending.function_id} keys=${Object.keys(input as object).join(",")}`,
-		)
+		if (!this.loggedFinalizedFunctionIds.has(pending.function_id)) {
+			this.loggedFinalizedFunctionIds.add(pending.function_id)
+			Logger.debug(
+				`[ToolUseHandler] finalized ${pending.name} function_id=${pending.function_id} keys=${Object.keys(input as object).join(",")}`,
+			)
+		}
 		return block
 	}
 

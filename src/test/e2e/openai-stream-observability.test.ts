@@ -503,7 +503,7 @@ e2e(
 
 			const output = await E2ETestHelper.readDlineOutput(userDataDir)
 			for (const taskId of taskIdsByMarker.values()) {
-				expect(output).toContain(`[Task ${taskId}] API rate metrics append:`)
+				expect(output).not.toContain(`[Task ${taskId}] API rate metrics append:`)
 				expect(output).toContain(`[Task ${taskId}] API rate metrics query:`)
 				expect(output).toContain(`[Task ${taskId}] API rate metrics RPC:`)
 			}

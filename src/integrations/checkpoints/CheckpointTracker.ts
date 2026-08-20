@@ -222,11 +222,8 @@ class CheckpointTracker {
 	 * @throws Error if the restore point cannot be produced
 	 */
 	public async commit(): Promise<string | undefined> {
-		// Use tracked files for incremental checkpoint when available
+		// Use tracked files for incremental checkpoint when available.
 		const trackedFiles = this.taskFileTracker?.getModifiedFiles() ?? []
-		Logger.debug(
-			`[CheckpointTracker] commit: ${trackedFiles.length} tracked file(s) from TaskFileTracker for task ${this.taskId}`,
-		)
 		return this.commitForFiles(trackedFiles)
 	}
 
@@ -265,13 +262,9 @@ class CheckpointTracker {
 		let filesToCommit = files
 		if (filesToCommit.length === 0 && this.taskFileTracker) {
 			filesToCommit = this.taskFileTracker.getModifiedFiles()
-			Logger.debug(
-				`[CheckpointTracker] commitForFiles: resolved ${filesToCommit.length} file(s) from TaskFileTracker for task ${this.taskId}`,
-			)
 		}
 		try {
 			await this.sendCheckpointSubscriptionEvent("CHECKPOINT_COMMIT", true)
-			Logger.info(`Creating new checkpoint commit for task ${this.taskId}`)
 			const startTime = performance.now()
 
 			const lockResult: FolderLockWithRetryResult = await tryAcquireCheckpointLockWithRetry(this.cwdHash, this.taskId)
@@ -290,7 +283,7 @@ class CheckpointTracker {
 			// VS Code: fall back to process-level mutex to serialize
 			// operations on the shared shadow git repository
 			if (!lockResult.acquired && lockResult.skipped) {
-				Logger.log(`[Task ${this.taskId}] Using process-level mutex for checkpoint commit - VS Code`)
+				Logger.trace(`[Task ${this.taskId}] Using process-level mutex for checkpoint commit - VS Code`)
 				const commitHash = await CheckpointMutexRegistry.getInstance().runExclusive(this.cwdHash, async () => {
 					return this.doCommitFiles(filesToCommit)
 				})
@@ -344,7 +337,7 @@ class CheckpointTracker {
 		const git = simpleGit(path.dirname(gitPath))
 		const requiresWorkspaceScan = this.taskFileTracker?.isWorkspaceScanRequired() ?? false
 
-		Logger.info(`[Task ${this.taskId}] Using shadow git at: ${gitPath}`)
+		Logger.trace(`[Task ${this.taskId}] Using shadow git at: ${gitPath}`)
 
 		if (files.length > 0) {
 			Logger.debug(`[CheckpointTracker] doCommitFiles: tracked add ${files.length} file(s) for task ${this.taskId}`)
@@ -380,7 +373,6 @@ class CheckpointTracker {
 				return undefined
 			}
 		} else {
-			Logger.debug(`[CheckpointTracker] No tracked files for task ${this.taskId}; reusing shadow HEAD`)
 			return this.getCurrentRestorePoint(git)
 		}
 

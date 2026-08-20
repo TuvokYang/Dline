@@ -113,7 +113,7 @@ export class TaskApiRateMetricsService {
 			this.initialized = true
 			Logger.warn(`[Task ${this.taskId}] Failed to initialize API rate metrics; continuing with in-memory metrics`, error)
 		}
-		if (this.taskLoopActive || this.providerRequestActive) {
+		if (this.providerRequestActive) {
 			const bucket = this.ensureCurrentBucket()
 			this.markCurrentActivity(bucket)
 			this.notifyChanged()
@@ -124,13 +124,7 @@ export class TaskApiRateMetricsService {
 		if (this.disposed || this.taskLoopActive === active) return
 		this.taskLoopActive = active
 		if (!this.initialized) return
-		if (active) {
-			const bucket = this.ensureCurrentBucket()
-			this.markCurrentActivity(bucket)
-		} else if (!this.providerRequestActive) {
-			this.sealCurrentBucket()
-		}
-		this.notifyChanged()
+		if (!active && !this.providerRequestActive) this.sealCurrentBucket()
 	}
 
 	trackProviderStream<T>(stream: AsyncIterable<T>): AsyncIterable<T> {
@@ -343,7 +337,7 @@ export class TaskApiRateMetricsService {
 			this.boundaryTimer = undefined
 			if (this.currentBucket?.second !== second) return
 			this.sealCurrentBucket()
-			if (!this.taskLoopActive && !this.providerRequestActive) return
+			if (!this.providerRequestActive) return
 			const bucket = this.ensureCurrentBucket()
 			this.markCurrentActivity(bucket)
 			this.notifyChanged()

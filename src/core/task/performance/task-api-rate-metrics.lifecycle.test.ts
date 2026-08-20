@@ -42,7 +42,7 @@ afterEach(() => {
 })
 
 describe("TaskApiRateMetricsService rate semantics", () => {
-	it("does not count Provider activity as RPM when the Task runtime is inactive", async () => {
+	it("counts an actual Provider request even when the broader Task loop is inactive", async () => {
 		vi.useFakeTimers()
 		vi.setSystemTime(new Date("2026-08-20T10:00:00.000Z"))
 		const service = new TaskApiRateMetricsService({ repository: new MemoryRepository() })
@@ -53,28 +53,34 @@ describe("TaskApiRateMetricsService rate semantics", () => {
 		service.recordProviderRequestFinished()
 
 		expect(service.getSnapshot()).toEqual({
-			activeSeconds: 0,
-			requestsPerMinute: 0,
+			activeSeconds: 1,
+			requestsPerMinute: 60,
 			tokensPerMinute: 7_200,
 		})
 	})
 
-	it("uses Task runtime seconds for RPM and sending/receiving seconds for TPM", async () => {
+	it("uses only API-active seconds for RPM and does not persist task-only work", async () => {
 		vi.useFakeTimers()
 		vi.setSystemTime(new Date("2026-08-20T10:00:00.000Z"))
-		const service = new TaskApiRateMetricsService({ repository: new MemoryRepository() })
+		const repository = new MemoryRepository()
+		const service = new TaskApiRateMetricsService({ repository })
 		await service.initialize()
 
 		service.setTaskLoopActive(true)
 		await vi.advanceTimersByTimeAsync(5_000)
+		expect(repository.records).toHaveLength(0)
+
 		service.recordRequestStarted()
 		service.recordEstimatedTokens(120)
 		service.recordProviderRequestFinished()
 		service.setTaskLoopActive(false)
+		await service.waitForPersistence()
 
-		const snapshot = service.getSnapshot()
-		expect(snapshot.activeSeconds).toBe(6)
-		expect(snapshot.requestsPerMinute).toBe(10)
-		expect(snapshot.tokensPerMinute).toBe(7_200)
+		expect(service.getSnapshot()).toEqual({
+			activeSeconds: 1,
+			requestsPerMinute: 60,
+			tokensPerMinute: 7_200,
+		})
+		expect(repository.records).toHaveLength(1)
 	})
 })

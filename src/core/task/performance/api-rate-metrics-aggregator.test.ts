@@ -56,7 +56,7 @@ describe("api rate metrics aggregation", () => {
 		])
 	})
 
-	it("uses task-active seconds for RPM and provider-active seconds for TPM", () => {
+	it("uses API-active seconds for both RPM and TPM", () => {
 		const records = Array.from({ length: 10 }, (_, second) =>
 			secondRecord({
 				second,
@@ -72,10 +72,10 @@ describe("api rate metrics aggregation", () => {
 			{
 				bucketStartMs: 0,
 				bucketEndMs: 60_000,
-				activeSeconds: 10,
+				activeSeconds: 1,
 				requestCount: 1,
 				tokenCount: 120,
-				requestsPerMinute: 6,
+				requestsPerMinute: 60,
 				tokensPerMinute: 7_200,
 				tokenQuality: "exact",
 			},

@@ -1,6 +1,7 @@
 import fs from "node:fs/promises"
 import path from "node:path"
-import { afterEach, beforeEach, describe, expect, it } from "vitest"
+import { Logger } from "@shared/services/Logger"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import {
 	API_RATE_METRICS_SCHEMA_VERSION,
 	ApiRateMetricsFileIntegrityError,
@@ -39,6 +40,19 @@ describe("TaskApiRateMetricsRepository", () => {
 
 	afterEach(async () => {
 		await fs.rm(root, { recursive: true, force: true })
+	})
+
+	it("does not log ordinary append success", async () => {
+		const debug = vi.spyOn(Logger, "debug")
+		const filePath = path.join(root, "api_rate_metrics_quiet_append.jsonl")
+		const repository = new TaskApiRateMetricsRepository({ taskId: "task-a", filePath })
+		await repository.initialize()
+		debug.mockClear()
+
+		await repository.append([secondRecord(10)])
+
+		expect(debug.mock.calls.some(([message]) => message.includes("API rate metrics append:"))).toBe(false)
+		debug.mockRestore()
 	})
 
 	it("creates a Task-bound JSONL file and restores the latest running state", async () => {
@@ -80,7 +94,7 @@ describe("TaskApiRateMetricsRepository", () => {
 		})
 	})
 
-	it("restores separate task-active and provider-active rate denominators", async () => {
+	it("restores API-active records while ignoring task-only seconds", async () => {
 		const filePath = path.join(root, "api_rate_metrics_separate_activity.jsonl")
 		const repository = new TaskApiRateMetricsRepository({ taskId: "task-a", filePath, now: () => 1_000 })
 		await repository.initialize()
@@ -105,10 +119,12 @@ describe("TaskApiRateMetricsRepository", () => {
 
 		const reopened = new TaskApiRateMetricsRepository({ taskId: "task-a", filePath })
 		await expect(reopened.initialize()).resolves.toMatchObject({
-			activeSeconds: 2,
+			activeSeconds: 1,
 			requestCount: 1,
 			tokenCount: 120,
-			snapshot: { activeSeconds: 2, requestsPerMinute: 30, tokensPerMinute: 7_200 },
+			lastActiveSecond: 10,
+			snapshot: { activeSeconds: 1, requestsPerMinute: 60, tokensPerMinute: 7_200 },
+			recentRecords: [expect.objectContaining({ second: 10 })],
 		})
 	})
 

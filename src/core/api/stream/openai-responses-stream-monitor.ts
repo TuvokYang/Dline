@@ -19,15 +19,6 @@ export interface OpenAIResponsesStreamMonitorOptions {
 	onEstimatedTokens?: (tokens: number) => void
 }
 
-interface RateWindow {
-	startedAtMs: number
-	events: number
-	reasoningChunks: number
-	textChunks: number
-	toolChunks: number
-	contentBytes: number
-}
-
 interface CompletedUsage {
 	inputTokens: number
 	outputTokens: number
@@ -110,34 +101,14 @@ export class OpenAIResponsesStreamMonitor {
 		let totalContentBytes = 0
 		let completedLogged = false
 		let timedOut = false
-		let window: RateWindow = {
-			startedAtMs,
-			events: 0,
-			reasoningChunks: 0,
-			textChunks: 0,
-			toolChunks: 0,
-			contentBytes: 0,
-		}
+		let windowContentBytes = 0
 
-		const logRate = () => {
-			const currentTimeMs = this.now()
-			const elapsedMs = Math.max(1, currentTimeMs - window.startedAtMs)
-			const estimatedTokensInWindow = estimateTokens(window.contentBytes)
-			const estimatedTokensPerSecond = (estimatedTokensInWindow * 1_000) / elapsedMs
+		const reportEstimatedTokens = () => {
+			const estimatedTokensInWindow = estimateTokens(windowContentBytes)
 			if (estimatedTokensInWindow > 0) this.options.onEstimatedTokens?.(estimatedTokensInWindow)
-			this.options.log(
-				`[${this.options.requestLabel}] OpenAI Responses stream rate: eventsPerSecond=${formatRate((window.events * 1_000) / elapsedMs)}, reasoningChunksPerSecond=${formatRate((window.reasoningChunks * 1_000) / elapsedMs)}, textChunksPerSecond=${formatRate((window.textChunks * 1_000) / elapsedMs)}, toolChunksPerSecond=${formatRate((window.toolChunks * 1_000) / elapsedMs)}, estimatedTokensPerSecond=${formatRate(estimatedTokensPerSecond)}, estimatedTokensTotal=${estimateTokens(totalContentBytes)}, idleMs=${Math.max(0, currentTimeMs - lastEventAtMs)}, maxEventGapMs=${maxEventGapMs}`,
-			)
-			window = {
-				startedAtMs: currentTimeMs,
-				events: 0,
-				reasoningChunks: 0,
-				textChunks: 0,
-				toolChunks: 0,
-				contentBytes: 0,
-			}
+			windowContentBytes = 0
 		}
-		const rateTimer = setInterval(logRate, this.rateIntervalMs)
+		const rateTimer = setInterval(reportEstimatedTokens, this.rateIntervalMs)
 
 		try {
 			while (true) {
@@ -152,7 +123,6 @@ export class OpenAIResponsesStreamMonitor {
 				maxEventGapMs = Math.max(maxEventGapMs, eventGapMs)
 				lastEventAtMs = eventAtMs
 				totalEvents += 1
-				window.events += 1
 
 				const type = readEventType(event)
 				const delta = readDelta(event)
@@ -160,10 +130,7 @@ export class OpenAIResponsesStreamMonitor {
 				if (delta !== undefined && deltaType !== undefined) {
 					const bytes = Buffer.byteLength(delta, "utf8")
 					totalContentBytes += bytes
-					window.contentBytes += bytes
-					if (deltaType === "reasoning") window.reasoningChunks += 1
-					else if (deltaType === "text") window.textChunks += 1
-					else window.toolChunks += 1
+					windowContentBytes += bytes
 				}
 
 				const usage = readCompletedUsage(event)
@@ -181,6 +148,7 @@ export class OpenAIResponsesStreamMonitor {
 			}
 		} finally {
 			clearInterval(rateTimer)
+			reportEstimatedTokens()
 			if (!completedLogged && !timedOut) {
 				const durationMs = Math.max(0, this.now() - startedAtMs)
 				this.options.log(

@@ -129,7 +129,7 @@ describe("TaskApiRateMetricsService", () => {
 		service.recordRequestStarted()
 		service.recordEstimatedTokens(120)
 
-		expect(service.getSnapshot()).toEqual({ activeSeconds: 0, requestsPerMinute: 0, tokensPerMinute: 7_200 })
+		expect(service.getSnapshot()).toEqual({ activeSeconds: 1, requestsPerMinute: 60, tokensPerMinute: 7_200 })
 		await expect(
 			service.query({ resolution: "minute", startSecond: 1_786_356_000, endSecond: 1_786_356_060 }),
 		).resolves.toMatchObject({ degraded: true, points: [expect.objectContaining({ tokenCount: 120, provisional: true })] })
@@ -159,22 +159,22 @@ describe("TaskApiRateMetricsService", () => {
 				requestCount: 1,
 				estimatedTokens: 120,
 				effectiveTokens: 120,
-				runningActiveSeconds: 0,
+				runningActiveSeconds: 1,
 				runningProviderActiveSeconds: 1,
 				runningRequestCount: 1,
 				runningTokenCount: 120,
-				requestsPerMinute: 0,
+				requestsPerMinute: 60,
 				tokensPerMinute: 7_200,
 			}),
 		])
-		expect(service.getSnapshot()).toEqual({ activeSeconds: 0, requestsPerMinute: 0, tokensPerMinute: 7_200 })
+		expect(service.getSnapshot()).toEqual({ activeSeconds: 1, requestsPerMinute: 60, tokensPerMinute: 7_200 })
 
 		await vi.advanceTimersByTimeAsync(120_000)
 		await service.waitForPersistence()
 		expect(secondRecords(repository)).toHaveLength(1)
 	})
 
-	it("counts the full task work loop for RPM while excluding later idle time", async () => {
+	it("counts only API-active seconds for RPM while excluding task work and later idle time", async () => {
 		vi.useFakeTimers()
 		vi.setSystemTime(new Date("2026-08-10T10:00:00.000Z"))
 		const repository = new MemoryRepository()
@@ -193,11 +193,11 @@ describe("TaskApiRateMetricsService", () => {
 
 		const workingSnapshot = {
 			activeSeconds: 60,
-			requestsPerMinute: 6,
+			requestsPerMinute: 60,
 			tokensPerMinute: 600,
 		}
 		expect(service.getSnapshot()).toEqual(workingSnapshot)
-		expect(secondRecords(repository)).toHaveLength(610)
+		expect(secondRecords(repository)).toHaveLength(61)
 
 		await vi.advanceTimersByTimeAsync(120_000)
 		expect(service.getSnapshot()).toEqual(workingSnapshot)
@@ -234,11 +234,11 @@ describe("TaskApiRateMetricsService", () => {
 			{ second: 1_786_356_002, revision: 1, effectiveTokens: 0, tokenQuality: "exact" },
 		])
 		expect(canonical.at(-1)).toMatchObject({
-			runningActiveSeconds: 0,
+			runningActiveSeconds: 3,
 			runningProviderActiveSeconds: 3,
 			runningRequestCount: 1,
 			runningTokenCount: 200,
-			requestsPerMinute: 0,
+			requestsPerMinute: 20,
 			tokensPerMinute: 4_000,
 		})
 	})
@@ -286,6 +286,6 @@ describe("TaskApiRateMetricsService", () => {
 		expect(service.getSnapshot()).toEqual({ activeSeconds: 4, requestsPerMinute: 30, tokensPerMinute: 15_000 })
 
 		service.recordRequestStarted()
-		expect(service.getSnapshot()).toEqual({ activeSeconds: 4, requestsPerMinute: 45, tokensPerMinute: 12_000 })
+		expect(service.getSnapshot()).toEqual({ activeSeconds: 5, requestsPerMinute: 36, tokensPerMinute: 12_000 })
 	})
 })

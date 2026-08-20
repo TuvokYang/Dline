@@ -568,7 +568,6 @@ export class Task {
 	/** Stops automatic scheduling after the user takes ownership through Retry. */
 	private manualRetryTakeoverActive = false
 	private readonly presentationSchedulingDisabled = isPresentationSchedulingDisabled()
-	private lastLoggedPresentationTrigger = 0
 	restoreHandler!: RestoreHandler
 
 	constructor(params: TaskParams) {
@@ -1781,7 +1780,7 @@ export class Task {
 	}
 
 	private async scheduleAssistantPresentation(
-		trigger: TaskLatencyTrigger,
+		_trigger: TaskLatencyTrigger,
 		priority: PresentationPriority = "normal",
 	): Promise<void> {
 		if (this.presentationSchedulingDisabled) {
@@ -1794,12 +1793,6 @@ export class Task {
 			return
 		}
 
-		// Only log when trigger or priority changes to avoid log spam during streaming
-		const currentSecond = Math.floor(Date.now() / 1000)
-		if (this.lastLoggedPresentationTrigger !== currentSecond) {
-			this.lastLoggedPresentationTrigger = currentSecond
-			Logger.debug(`[Task ${this.taskId}] schedule assistant presentation (${trigger}, ${priority})`)
-		}
 		this.presentationScheduler.requestFlush(priority)
 	}
 

@@ -41,6 +41,8 @@ const MAX_RECENT_ACTIVE_SECONDS = 60
 const TAIL_READ_CHUNK_BYTES = 64 * 1_024
 const DEFAULT_COMPACTION_THRESHOLD_BYTES = 32 * 1_024 * 1_024
 const DEFAULT_HARD_LIMIT_BYTES = 64 * 1_024 * 1_024
+const SLOW_APPEND_QUEUE_WAIT_MS = 100
+const SLOW_APPEND_WRITE_MS = 25
 
 /** Owns append-only API rate metrics persistence for one Task. */
 export class TaskApiRateMetricsRepository implements ApiRateMetricsRepository {
@@ -75,9 +77,13 @@ export class TaskApiRateMetricsRepository implements ApiRateMetricsRepository {
 			const stat = await fs.stat(filePath)
 			this.assertWithinHardLimit(stat.size + payloadBytes, "append")
 			await fs.appendFile(filePath, payload, "utf8")
-			Logger.debug(
-				`[Task ${this.options.taskId}] API rate metrics append: queueWaitMs=${Math.round(startedAt - queuedAt)}, writeMs=${Math.round(performance.now() - startedAt)}, records=${records.length}, bytes=${Buffer.byteLength(payload)}`,
-			)
+			const queueWaitMs = Math.round(startedAt - queuedAt)
+			const writeMs = Math.round(performance.now() - startedAt)
+			if (queueWaitMs >= SLOW_APPEND_QUEUE_WAIT_MS || writeMs >= SLOW_APPEND_WRITE_MS) {
+				Logger.debug(
+					`[Task ${this.options.taskId}] API rate metrics slow append: queueWaitMs=${queueWaitMs}, writeMs=${writeMs}, records=${records.length}, bytes=${payloadBytes}`,
+				)
+			}
 		})
 	}
 
@@ -269,7 +275,10 @@ export class TaskApiRateMetricsRepository implements ApiRateMetricsRepository {
 				return
 			}
 			if (record.kind === "second" && !canonicalBySecond.has(record.second)) {
-				canonicalBySecond.set(record.second, record)
+				const activity = getApiRateSecondActivitySeconds(record.signals)
+				if (activity.activeSeconds > 0 || activity.providerActiveSeconds > 0) {
+					canonicalBySecond.set(record.second, record)
+				}
 			}
 		}
 

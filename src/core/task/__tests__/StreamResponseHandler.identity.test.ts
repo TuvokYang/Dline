@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest"
+import { Logger } from "@shared/services/Logger"
+import { describe, expect, it, vi } from "vitest"
 import { StreamResponseHandler } from "../StreamResponseHandler"
 
 describe("StreamResponseHandler identity propagation", () => {
@@ -37,5 +38,21 @@ describe("StreamResponseHandler identity propagation", () => {
 		})
 		expect(runtime).not.toHaveProperty("call_id")
 		expect(runtime).not.toHaveProperty("item_id")
+	})
+
+	it("logs each finalized function identity only once", () => {
+		const debug = vi.spyOn(Logger, "debug")
+		const handler = new StreamResponseHandler(() => 123)
+		const toolHandler = handler.getHandlers().toolUseHandler
+		toolHandler.processToolUseDelta(
+			{ type: "tool_use", name: "read_file", input: '{"path":"README.md"}' },
+			{ function_id: "call_once", dline_tid: "dline_tid_once", provider_metadata: {} },
+		)
+
+		toolHandler.getFinalizedToolUse("dline_tid_once")
+		toolHandler.getFinalizedToolUse("dline_tid_once")
+
+		expect(debug.mock.calls.filter(([message]) => message.includes("function_id=call_once"))).toHaveLength(1)
+		debug.mockRestore()
 	})
 })

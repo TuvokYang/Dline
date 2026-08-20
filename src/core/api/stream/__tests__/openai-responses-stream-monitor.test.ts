@@ -91,21 +91,22 @@ describe("OpenAIResponsesStreamMonitor", () => {
 		expect(abort).not.toHaveBeenCalled()
 	})
 
-	it("logs estimated per-second throughput without including streamed content", async () => {
+	it("reports estimated tokens without logging every sampling interval", async () => {
 		vi.useFakeTimers()
 		const controlled = createControlledStream()
 		const log = vi.fn()
+		const onEstimatedTokens = vi.fn()
 		const monitor = new OpenAIResponsesStreamMonitor({
 			idleTimeoutMs: 120_000,
 			abort: vi.fn(),
 			log,
 			requestLabel: "Task task-001",
+			onEstimatedTokens,
 		})
 		const iterator = monitor.observe(controlled.stream)[Symbol.asyncIterator]()
-		const secretText = "private streamed content"
 
 		const first = iterator.next()
-		controlled.push({ type: "response.reasoning_summary_text.delta", delta: secretText } as ResponseEvent)
+		controlled.push({ type: "response.reasoning_summary_text.delta", delta: "private streamed content" } as ResponseEvent)
 		await first
 		const second = iterator.next()
 		controlled.push({ type: "response.output_text.delta", delta: "hello" } as ResponseEvent)
@@ -113,12 +114,8 @@ describe("OpenAIResponsesStreamMonitor", () => {
 
 		await vi.advanceTimersByTimeAsync(1_000)
 
-		expect(log).toHaveBeenCalledWith(expect.stringContaining("estimatedTokensPerSecond="))
-		const logOutput = log.mock.calls.flat().join("\n")
-		expect(logOutput).toContain("eventsPerSecond=2")
-		expect(logOutput).toContain("reasoningChunksPerSecond=1")
-		expect(logOutput).toContain("textChunksPerSecond=1")
-		expect(logOutput).not.toContain(secretText)
+		expect(onEstimatedTokens).toHaveBeenCalledWith(8)
+		expect(log).not.toHaveBeenCalled()
 
 		controlled.complete()
 		await iterator.next()

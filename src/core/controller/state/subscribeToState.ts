@@ -22,6 +22,7 @@ type PendingUpdate = {
 const pendingUpdates = new Map<Controller, PendingUpdate>()
 const debounceTimers = new Map<Controller, ReturnType<typeof setTimeout>>()
 const controllerSendChains = new Map<Controller, Promise<void>>()
+const SLOW_STATE_OPERATION_MS = 100
 
 export interface StateSubscriptionCleanupResult {
 	subscriberCount: number
@@ -224,7 +225,7 @@ async function sendStateToSubscribers(
 		const stateJson = JSON.stringify(state)
 		const serializationMs = Math.round(performance.now() - serializationStartedAtMs)
 		const stateSizeBytes = Buffer.byteLength(stateJson, "utf8")
-		if (serializationMs > 10) {
+		if (serializationMs >= SLOW_STATE_OPERATION_MS) {
 			let activeTasks = 1
 			try {
 				const { OrchestratorController } = await import("@/core/orchestrator/OrchestratorController")
@@ -278,7 +279,7 @@ async function sendPayloadToSubscribers(
 	)
 
 	const durationMs = Math.round(performance.now() - startTime)
-	if (durationMs > 20) {
+	if (durationMs >= SLOW_STATE_OPERATION_MS) {
 		Logger.debug(
 			`[StateUpdate] delivery timing: taskId=${controller.task?.taskId ?? "none"}, deliveryMs=${durationMs}, sizeBytes=${stateSizeBytes}, subscribers=${subs.size}`,
 		)

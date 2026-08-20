@@ -7,11 +7,11 @@
  * validates provider switching capabilities, and ensures NoOpTelemetryProvider functionality
  */
 
+import { HostProvider } from "@hosts/host-provider"
+import { Logger } from "@shared/services/Logger"
 import * as assert from "assert"
-import { afterAll, beforeAll, describe, expect as vitestExpect, it, vi } from "vitest"
-// sinon import removed
-import { HostProvider } from "@/hosts/host-provider"
-import { setVscodeHostProviderMock } from "@/test/host-provider-test-utils"
+import { afterAll, beforeAll, describe, it, vi, expect as vitestExpect } from "vitest"
+import { setVscodeHostProviderMock } from "../../test/host-provider-test-utils"
 import { NoOpTelemetryProvider, TelemetryProviderFactory } from "./TelemetryProviderFactory"
 import { TelemetryMetadata, TelemetryService } from "./TelemetryService"
 
@@ -310,6 +310,22 @@ describe("Telemetry system is abstracted and can easily switch between providers
 			await noOpProvider.dispose()
 		})
 
+		it("does not write disabled telemetry events to the application log", async () => {
+			const debug = vi.spyOn(Logger, "debug")
+			const info = vi.spyOn(Logger, "info")
+			const noOpProvider = new NoOpTelemetryProvider()
+
+			noOpProvider.log("task.tool_used", { taskId: "task-1" })
+			noOpProvider.logRequired("task.required", { taskId: "task-1" })
+			noOpProvider.identifyUser(MOCK_USER_INFO, { source: "test" })
+			await noOpProvider.dispose()
+
+			vitestExpect(debug).not.toHaveBeenCalled()
+			vitestExpect(info).not.toHaveBeenCalled()
+			debug.mockRestore()
+			info.mockRestore()
+		})
+
 		it("should handle unsupported provider types by returning No-Op provider", async () => {
 			console.log("\n=== Testing Unsupported Provider Type ===")
 			// Test unsupported type - No-Op provider is the fallback
@@ -363,10 +379,7 @@ describe("Telemetry system is abstracted and can easily switch between providers
 			const providers = await TelemetryProviderFactory.createProviders()
 
 			assert.ok(providers.length > 0, "Should return at least one provider")
-			assert.ok(
-				providers[0] instanceof NoOpTelemetryProvider,
-				"Should return NoOpTelemetryProvider instance",
-			)
+			assert.ok(providers[0] instanceof NoOpTelemetryProvider, "Should return NoOpTelemetryProvider instance")
 			assert.strictEqual(providers[0].isEnabled(), false, "NoOp provider should be disabled")
 
 			await Promise.all(providers.map((p) => p.dispose()))
