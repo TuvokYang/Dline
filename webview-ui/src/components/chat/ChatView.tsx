@@ -60,6 +60,7 @@ interface ChatViewProps {
 const MAX_IMAGES_AND_FILES_PER_MESSAGE = CHAT_CONSTANTS.MAX_IMAGES_AND_FILES_PER_MESSAGE
 const QUICK_WINS_HISTORY_THRESHOLD = 3
 const EMPTY_MODEL_INFO: ModelInfo = { id: "", capabilities: {}, pricing: {} }
+const MANUAL_COMPACT_COMMAND = "/cmd:compact"
 
 const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryView }: ChatViewProps) => {
 	const showNavbar = useShowNavbar()
@@ -83,8 +84,8 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 	const [contentTab, setContentTab] = useState<TaskContentTab>("chat")
 	const [focusedActivityId, setFocusedActivityId] = useState<string>()
 	const [pendingSuccessorDraft, setPendingSuccessorDraft] = useState<PendingSuccessorDraftTransfer>()
-	const [compactTaskRpcPending, setCompactTaskRpcPending] = useState(false)
-	const compactTaskRpcPendingRef = useRef(false)
+	const [compactCommandPending, setCompactCommandPending] = useState(false)
+	const compactCommandPendingRef = useRef(false)
 	const [forceTruncateTaskRpcPending, setForceTruncateTaskRpcPending] = useState(false)
 	const forceTruncateTaskRpcPendingRef = useRef(false)
 	const [activityFilters, setActivityFilters] = useState<TaskActivityFilters>(DEFAULT_TASK_ACTIVITY_FILTERS)
@@ -96,8 +97,8 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 		setContentTab("chat")
 		setFocusedActivityId(undefined)
 		setActivityFilters(DEFAULT_TASK_ACTIVITY_FILTERS)
-		compactTaskRpcPendingRef.current = false
-		setCompactTaskRpcPending(false)
+		compactCommandPendingRef.current = false
+		setCompactCommandPending(false)
 		forceTruncateTaskRpcPendingRef.current = false
 		setForceTruncateTaskRpcPending(false)
 	}, [taskId])
@@ -455,37 +456,42 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 	const canRenderCompactTask = Boolean(taskViewState?.taskId)
 	const canRenderForceTruncate = taskViewState?.forceTruncateAvailable === true
 	useEffect(() => {
-		if (!contextCompactionActive || !compactTaskRpcPendingRef.current) return
-		compactTaskRpcPendingRef.current = false
-		setCompactTaskRpcPending(false)
+		if (!contextCompactionActive || !compactCommandPendingRef.current) return
+		compactCommandPendingRef.current = false
+		setCompactCommandPending(false)
 	}, [contextCompactionActive])
 	const compactTaskDisabled =
-		!taskInputEnabled || contextCompactionActive || compactTaskRpcPending || forceTruncateTaskRpcPending
+		!taskInputEnabled || contextCompactionActive || compactCommandPending || forceTruncateTaskRpcPending
 	const forceTruncateTaskDisabled =
-		!taskInputEnabled || contextCompactionActive || compactTaskRpcPending || forceTruncateTaskRpcPending
+		!taskInputEnabled || contextCompactionActive || compactCommandPending || forceTruncateTaskRpcPending
 	const submitCompactTask = useCallback(async (): Promise<boolean> => {
-		if (!taskViewState?.taskId || !taskInputEnabled || contextCompactionActive || compactTaskRpcPendingRef.current) {
+		const view = taskViewState
+		if (!view?.taskId || !taskInputEnabled || contextCompactionActive || compactCommandPendingRef.current) {
 			return false
 		}
-		compactTaskRpcPendingRef.current = true
-		setCompactTaskRpcPending(true)
+		const actionId = view.input.enterAction
+		if (!actionId) return false
+		const request = buildInteractionRequest(view, actionId, {
+			text: MANUAL_COMPACT_COMMAND,
+			images: [],
+			files: [],
+		})
+		if (request?.draft?.text !== MANUAL_COMPACT_COMMAND) return false
+
+		compactCommandPendingRef.current = true
+		setCompactCommandPending(true)
 		let accepted = false
 		try {
-			const response = await TaskServiceClient.compactTask(
-				CompactTaskRequest.create({
-					taskId: taskViewState.taskId,
-					stateRevision: taskViewState.stateRevision,
-				}),
-			)
+			const response = await TaskServiceClient.dispatchInteraction(request)
 			accepted = response.accepted
 			return accepted
 		} finally {
 			if (!accepted) {
-				compactTaskRpcPendingRef.current = false
-				setCompactTaskRpcPending(false)
+				compactCommandPendingRef.current = false
+				setCompactCommandPending(false)
 			}
 		}
-	}, [contextCompactionActive, forceTruncateTaskRpcPending, taskInputEnabled, taskViewState])
+	}, [contextCompactionActive, taskInputEnabled, taskViewState])
 	const submitForceTruncateTask = useCallback(async (): Promise<boolean> => {
 		if (!taskViewState?.taskId || !taskInputEnabled || contextCompactionActive || forceTruncateTaskRpcPendingRef.current) {
 			return false

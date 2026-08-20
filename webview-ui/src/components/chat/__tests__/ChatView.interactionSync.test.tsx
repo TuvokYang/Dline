@@ -217,7 +217,8 @@ describe("ChatView interaction anchor synchronization", () => {
 	beforeEach(() => {
 		mocks.compactTask.mockReset()
 		mocks.compactTask.mockResolvedValue({ accepted: true, result: "accepted" })
-		mocks.dispatchInteraction.mockClear()
+		mocks.dispatchInteraction.mockReset()
+		mocks.dispatchInteraction.mockResolvedValue({ accepted: true, result: "accepted" })
 		mocks.useChatState.mockClear()
 		mocks.chatState.inputValue = "draft"
 		mocks.chatState.activeQuote = null
@@ -284,6 +285,7 @@ describe("ChatView interaction anchor synchronization", () => {
 		const compactButton = screen.getByRole("button", { name: "Compact task" })
 		expect(compactButton).toBeDisabled()
 		fireEvent.click(compactButton)
+		expect(mocks.dispatchInteraction).not.toHaveBeenCalled()
 		expect(mocks.compactTask).not.toHaveBeenCalled()
 	})
 
@@ -291,7 +293,7 @@ describe("ChatView interaction anchor synchronization", () => {
 		const view = taskView()
 		view.contextCompaction = {
 			active: true,
-			operationId: "manual-compact:task-1:8",
+			operationId: "manual-compaction:task-1:8",
 		}
 		renderChat([ASK], view)
 
@@ -299,15 +301,16 @@ describe("ChatView interaction anchor synchronization", () => {
 		expect(compactButton).toBeInTheDocument()
 		expect(compactButton).toBeDisabled()
 		fireEvent.click(compactButton)
+		expect(mocks.dispatchInteraction).not.toHaveBeenCalled()
 		expect(mocks.compactTask).not.toHaveBeenCalled()
 	})
 
-	it("disables Compact immediately while its RPC is pending and rejects a duplicate dispatch", async () => {
-		let resolveCompact!: (value: { accepted: boolean; result: string }) => void
-		mocks.compactTask.mockImplementationOnce(
+	it("disables Compact immediately while the command dispatch is pending and rejects a duplicate dispatch", async () => {
+		let resolveDispatch!: (value: { accepted: boolean; result: string }) => void
+		mocks.dispatchInteraction.mockImplementationOnce(
 			() =>
 				new Promise((resolve) => {
-					resolveCompact = resolve
+					resolveDispatch = resolve
 				}),
 		)
 		renderChat([ASK])
@@ -316,33 +319,50 @@ describe("ChatView interaction anchor synchronization", () => {
 		fireEvent.click(compactButton)
 		await waitFor(() => expect(compactButton).toBeDisabled())
 		fireEvent.click(compactButton)
-		expect(mocks.compactTask).toHaveBeenCalledOnce()
+		expect(mocks.dispatchInteraction).toHaveBeenCalledOnce()
+		expect(mocks.compactTask).not.toHaveBeenCalled()
 
 		await act(async () => {
-			resolveCompact({ accepted: true, result: "accepted" })
+			resolveDispatch({ accepted: true, result: "accepted" })
 		})
 	})
 
-	it("re-enables Compact when the dedicated task RPC rejects the request", async () => {
-		mocks.compactTask.mockResolvedValueOnce({ accepted: false, result: "stale_state" })
+	it("re-enables Compact when the command dispatch rejects the request", async () => {
+		mocks.dispatchInteraction.mockResolvedValueOnce({ accepted: false, result: "stale_state" })
 		renderChat([ASK])
 		const compactButton = screen.getByRole("button", { name: "Compact task" })
 
 		fireEvent.click(compactButton)
-		await waitFor(() => expect(mocks.compactTask).toHaveBeenCalledOnce())
+		await waitFor(() => expect(mocks.dispatchInteraction).toHaveBeenCalledOnce())
 		await waitFor(() => expect(compactButton).toBeEnabled())
+		expect(mocks.compactTask).not.toHaveBeenCalled()
 	})
 
-	it("routes Compact through the dedicated task RPC instead of the active interaction", async () => {
+	it("routes Compact through the active interaction as /cmd:compact without clearing the current draft", async () => {
 		const view = taskView()
 		view.input.enterAction = "reject"
+		mocks.chatState.activeQuote = "quoted context"
+		mocks.chatState.selectedImages = ["draft-image.png"]
+		mocks.chatState.selectedFiles = ["draft-file.txt"]
 		renderChat([ASK], view)
 
 		fireEvent.click(screen.getByRole("button", { name: "Compact task" }))
 
-		await waitFor(() => expect(mocks.compactTask).toHaveBeenCalledOnce())
-		expect(mocks.compactTask).toHaveBeenCalledWith(expect.objectContaining({ taskId: "task-1" }))
-		expect(mocks.dispatchInteraction).not.toHaveBeenCalled()
+		await waitFor(() => expect(mocks.dispatchInteraction).toHaveBeenCalledOnce())
+		expect(mocks.dispatchInteraction).toHaveBeenCalledWith(
+			expect.objectContaining({
+				actionId: "reject",
+				draft: { text: "/cmd:compact", images: [], files: [] },
+				interactionId: "interaction-1",
+				stateRevision: 8,
+				taskId: "task-1",
+			}),
+		)
+		expect(mocks.compactTask).not.toHaveBeenCalled()
+		expect(mocks.chatState.setInputValue).not.toHaveBeenCalled()
+		expect(mocks.chatState.setActiveQuote).not.toHaveBeenCalled()
+		expect(mocks.chatState.setSelectedImages).not.toHaveBeenCalled()
+		expect(mocks.chatState.setSelectedFiles).not.toHaveBeenCalled()
 	})
 
 	it("enables InputSection and submits Enter for the exact anchor", async () => {

@@ -392,11 +392,19 @@ e2e(
 			},
 			{
 				type: "tool",
+				id: "call_condense_orphan_continued",
+				name: "qna_respond",
+				arguments: { response: "E2E_CONDENSE_ORPHAN_CONTINUED" },
+				expectedRequestIncludes: ["E2E_CONDENSE_ORPHAN_SUMMARY"],
+				expectedRequestExcludes: ["__dline_mode_switch_compact__", COMPACT_INSTRUCTION_MARKER, "/cmd:compact"],
+			},
+			{
+				type: "tool",
 				id: "call_condense_orphan_completion",
 				name: "attempt_completion",
 				arguments: { result: "E2E_CONDENSE_ORPHAN_DONE" },
 				expectedRequestIncludes: ["E2E_CONDENSE_ORPHAN_SUMMARY", restoredQnaReply],
-				expectedRequestExcludes: ["__dline_mode_switch_compact__", COMPACT_INSTRUCTION_MARKER],
+				expectedRequestExcludes: ["__dline_mode_switch_compact__", COMPACT_INSTRUCTION_MARKER, "/cmd:compact"],
 			},
 		)
 
@@ -432,9 +440,11 @@ e2e(
 			await expect(sidebar.locator('vscode-button[aria-label="Regenerate Summary"]')).toHaveCount(0)
 
 			const input = sidebar.getByTestId("chat-input")
-			await expect(sidebar.getByText("E2E_CONDENSE_ORPHAN_READY", { exact: false }).last()).toBeVisible()
+			await expect(sidebar.getByText("E2E_CONDENSE_ORPHAN_CONTINUED", { exact: false }).last()).toBeVisible({
+				timeout: 60_000,
+			})
 			await expect(input).toBeEnabled()
-			await expect.poll(() => server.getRequestCount("openai-compatible-responses")).toBe(2)
+			await expect.poll(() => server.getRequestCount("openai-compatible-responses")).toBe(3)
 			await input.fill(restoredQnaReply)
 			await input.press("Enter")
 			await expect(input).toHaveValue("")
@@ -442,7 +452,7 @@ e2e(
 			await expect(sidebar.getByText("E2E_CONDENSE_ORPHAN_DONE", { exact: false }).last()).toBeVisible({
 				timeout: 60_000,
 			})
-			await expect.poll(() => server.getRequestCount("openai-compatible-responses")).toBe(3)
+			await expect.poll(() => server.getRequestCount("openai-compatible-responses")).toBe(4)
 
 			const requests = server.getMockConsumptions("openai-compatible-responses")
 			expect(requests[1]).toMatchObject({ responseType: "message" })
@@ -453,8 +463,8 @@ e2e(
 				// The post-condense request must not carry orphaned tool outputs.
 				assertNoOrphanToolOutputs(request)
 			}
-			expect(responsesUserTextBlocks(requests[2]).every((text) => text.trim().length > 0)).toBe(true)
-			expect(requests[2].requestToolResults.some((result) => result.content.includes(restoredQnaReply))).toBe(true)
+			expect(responsesUserTextBlocks(requests[3]).every((text) => text.trim().length > 0)).toBe(true)
+			expect(requests[3].requestToolResults.some((result) => result.content.includes(restoredQnaReply))).toBe(true)
 			await attachScreenshot(app, "manual-compaction-confirmed-final-state")
 			await attachJson("manual-compaction-provider-consumptions", requests)
 			await attachDlineOutput(userDataDir, "manual-compaction-dline-output")
