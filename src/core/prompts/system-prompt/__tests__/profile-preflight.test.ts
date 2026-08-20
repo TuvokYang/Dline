@@ -112,7 +112,7 @@ describe("profile facade preflight", () => {
 		expect(result.profile).toBe(PromptProfile.Lite)
 		expect(result.warnings).toEqual([])
 		expect(result.systemPrompt).toContain("You are Dline, a senior software engineer + precise task runner")
-		expect(result.systemPrompt).toContain("MODES (STRICT)")
+		expect(result.systemPrompt).toContain("ACT MODE V.S. PLAN MODE (STRICT)")
 		expect(result.systemPrompt).toContain("CURIOSITY & FIRST CONTACT")
 		expect(result.systemPrompt).toContain("FILE EDITING RULES")
 		expect(names).toEqual([...LITE_TOOL_IDS])

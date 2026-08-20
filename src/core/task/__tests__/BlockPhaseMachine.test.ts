@@ -219,6 +219,10 @@ describe("BlockPhaseMachine.toolNameToAskType — conversational tools", () => {
 		})
 	}
 
+	it("maps the public TODO-list tool to the legacy approval kind", () => {
+		expect(BlockPhaseMachine.toolNameToAskType("change_todo_list")).toBe("change_todo_list")
+	})
+
 	it("non-conversational tool still returns expected ask types", () => {
 		expect(BlockPhaseMachine.toolNameToAskType("execute_command")).toBe("command")
 		expect(BlockPhaseMachine.toolNameToAskType("write_to_file")).toBe("tool")

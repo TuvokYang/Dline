@@ -47,6 +47,37 @@ describe("provider tool projector", () => {
 		})
 	})
 
+	it.each([
+		[true, true],
+		[false, false],
+		[undefined, false],
+	] as const)("projects read_file image guidance consistently for Native and XML (%s)", (supportsImages, shouldInclude) => {
+		const context = {
+			...BASE_CONTEXT,
+			providerInfo: {
+				providerId: "openai",
+				model: {
+					id: "model",
+					info: supportsImages === undefined ? {} : { capabilities: { supportsImages } },
+				},
+			},
+		} as unknown as SystemPromptContext
+		const generator = new ToolPromptGenerator()
+		const imageDescription = getPrompt("readFile", "imageSupportDescription")
+		const nativeDescription = toolDescription(
+			findTool(generator.generate(PromptProfile.Standard, context), ClineDefaultTool.FILE_READ),
+		)
+		const xmlDescription = generator.generateXml(PromptProfile.Standard, context)
+
+		if (shouldInclude) {
+			expect(nativeDescription).toContain(imageDescription)
+			expect(xmlDescription).toContain(imageDescription)
+		} else {
+			expect(nativeDescription).not.toContain(imageDescription)
+			expect(xmlDescription).not.toContain(imageDescription)
+		}
+	})
+
 	it("keeps the interactive blocking policy in the canonical ask tool description", () => {
 		const tools = new ToolPromptGenerator().generate(PromptProfile.Standard, BASE_CONTEXT)
 		const description = toolDescription(findTool(tools, ClineDefaultTool.ASK))
@@ -319,7 +350,7 @@ describe("provider tool projector", () => {
 		const tools = new ToolPromptGenerator().generate(PromptProfile.Lite, context)
 
 		expect(JSON.stringify(tools)).not.toContain("task_progress")
-		expect(JSON.stringify(tools)).not.toContain("focus_chain_change")
+		expect(JSON.stringify(tools)).not.toContain("change_todo_list")
 	})
 
 	it("keeps the active Native web descriptions and prompt parameter text", () => {

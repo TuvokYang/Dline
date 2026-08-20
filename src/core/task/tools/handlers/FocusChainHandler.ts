@@ -1,6 +1,7 @@
 import type { ToolUse } from "@core/assistant-message"
 import { getPrompt } from "@core/prompts/i18n"
 import { ClineDefaultTool } from "@/shared/tools"
+import { hasValidTodoItem } from "../../focus-chain/file-utils"
 import type { ToolResponse } from "../../index"
 import type { IToolHandler } from "../ToolExecutorCoordinator"
 import { interactionId, interactionTurnId, type TaskConfig } from "../types/TaskConfig"
@@ -11,17 +12,17 @@ import { sayFeedbackOnce } from "../utils/UserFeedbackUtils"
  * Allows AI to request plan changes with user approval.
  */
 export class FocusChainHandler implements IToolHandler {
-	readonly name = ClineDefaultTool.FOCUS_CHAIN_CHANGE
+	readonly name = ClineDefaultTool.CHANGE_TODO_LIST
 
 	getDescription(block: ToolUse): string {
-		return `[${block.name}] Request focus chain plan change`
+		return `[${block.name}] Request TODO list change`
 	}
 
 	async execute(config: TaskConfig, block: ToolUse): Promise<ToolResponse> {
-		const newPlan = (block.params as Record<string, string>).new_plan
+		const newPlan = (block.params as Record<string, string>).new_plan?.trim()
 		const reason = (block.params as Record<string, string>).reason || ""
 
-		if (!newPlan) {
+		if (!newPlan || !hasValidTodoItem(newPlan)) {
 			return getPrompt("focusChain", "focusChainChangeMissing")
 		}
 
@@ -44,7 +45,7 @@ export class FocusChainHandler implements IToolHandler {
 		const outcome = await config.interactions.open({
 			turnId: interactionTurnId(block),
 			interactionId: interactionId(block),
-			kind: "focus_chain_change",
+			kind: "change_todo_list",
 			presentation: askData,
 			existingTs: block.ts,
 		})
@@ -68,10 +69,11 @@ export class FocusChainHandler implements IToolHandler {
 		// - Convert "[+] - " prefix to "- " (approved items)
 		// - Remove empty section headings
 		// - Keep "- [x]" lines as-is (already completed)
-		const focusChainPlan = this.cleanForFocusChain(approvedPlan)
-		if (focusChainPlan) {
-			await config.callbacks.focusChainForceUpdate(focusChainPlan)
+		const focusChainPlan = this.cleanForFocusChain(approvedPlan).trim()
+		if (!hasValidTodoItem(focusChainPlan)) {
+			return getPrompt("focusChain", "focusChainChangeNoItemsApproved")
 		}
+		await config.callbacks.focusChainForceUpdate(focusChainPlan)
 		return getPrompt("focusChain", "focusChainChangeApproved")
 	}
 

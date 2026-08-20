@@ -9,7 +9,6 @@ import { englishPromptGroups, englishPrompts, englishTemplateStore } from "../en
 const EXPECTED_NAMESPACES = [
 	"accessMcpResource",
 	"actModeRespond",
-	"actVsPlanMode",
 	"agentRole",
 	"applyPatch",
 	"askFollowupQuestion",
@@ -112,13 +111,13 @@ async function collectSources(directory: string): Promise<string[]> {
 describe("prompt asset inventory", () => {
 	it("locks the final English namespace inventory", () => {
 		expect(sortValues(Object.keys(englishPrompts))).toEqual(sortValues(EXPECTED_NAMESPACES))
-		expect(EXPECTED_NAMESPACES).toHaveLength(62)
+		expect(EXPECTED_NAMESPACES).toHaveLength(61)
 	})
 
 	it("locks the static domain group order and coverage", () => {
 		expect(englishPromptGroups.map((group) => group.name)).toEqual(["system", "tools", "commands", "variants"])
-		expect(englishPromptGroups.map((group) => group.modules.length)).toEqual([24, 33, 3, 2])
-		expect(englishPromptGroups.flatMap((group) => group.modules)).toHaveLength(62)
+		expect(englishPromptGroups.map((group) => group.modules.length)).toEqual([23, 33, 3, 2])
+		expect(englishPromptGroups.flatMap((group) => group.modules)).toHaveLength(61)
 		expect(englishPromptGroups[3].modules.map((module) => module.name)).toEqual(["variants.standard", "variants.lite"])
 		for (const group of englishPromptGroups) {
 			for (const module of group.modules) {
@@ -140,7 +139,6 @@ describe("prompt asset inventory", () => {
 
 	it("provides system prompt modules from the system domain", async () => {
 		const systemEntries = [
-			"actVsPlanMode.ts",
 			"agentRole.ts",
 			"capabilities.ts",
 			"contextManagement.ts",

@@ -28,7 +28,7 @@ const TOOL_DESCRIPTIONS: Record<string, { description: string; isReadOnly: boole
 	[ClineDefaultTool.ATTEMPT]: { description: "Complete the task", isReadOnly: false },
 	[ClineDefaultTool.APPLY_PATCH]: { description: "Apply a unified diff patch", isReadOnly: false },
 	[ClineDefaultTool.SPAWN_TASK]: { description: "Spawn a new task", isReadOnly: false },
-	[ClineDefaultTool.FOCUS_CHAIN_CHANGE]: { description: "Change the focus chain", isReadOnly: false },
+	[ClineDefaultTool.CHANGE_TODO_LIST]: { description: "Change the TODO list", isReadOnly: false },
 	[ClineDefaultTool.RENAME]: { description: "Rename a symbol", isReadOnly: false },
 	[ClineDefaultTool.REPLACE_TEXT]: { description: "Replace text across files", isReadOnly: false },
 }

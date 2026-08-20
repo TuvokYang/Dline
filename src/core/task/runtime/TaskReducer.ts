@@ -65,7 +65,7 @@ function handlerFeedbackAcknowledgment(
 		case "subagent_approval":
 		case "spawn_task_approval":
 			return actionId === "approve" ? "yesButtonClicked" : actionId === "reject" ? "noButtonClicked" : undefined
-		case "focus_chain_change":
+		case "change_todo_list":
 			return actionId === "reject" ? "noButtonClicked" : undefined
 		case "new_task":
 			return "noButtonClicked"
@@ -637,7 +637,7 @@ function reduceInteractionOpen(
 		"mcp_approval",
 		"subagent_approval",
 		"spawn_task_approval",
-		"focus_chain_change",
+		"change_todo_list",
 		"new_task",
 	])
 	const approvalBlock = approvalKinds.has(event.kind)

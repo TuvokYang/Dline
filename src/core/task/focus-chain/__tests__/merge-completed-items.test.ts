@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, it } from "vitest"
-import { mergeCompletedItems, mergeInProgressItem } from "../file-utils"
+import { hasValidTodoItem, mergeCompletedItems, mergeInProgressItem } from "../file-utils"
 
 /**
  * Helper: build a simple checklist with sections and items.
@@ -27,6 +27,23 @@ function makeChecklist(items: Array<{ done: boolean; text: string }>, sections =
 function report(...texts: string[]): string {
 	return texts.map((t) => `- [x] ${t}`).join("\n")
 }
+
+describe("hasValidTodoItem", () => {
+	it.each([
+		undefined,
+		"",
+		"  \n\t",
+		"# Empty plan\n## Phase",
+		"- [ ]",
+		"- [x]   ",
+	])("rejects missing or structurally empty TODO content: %j", (value) => {
+		expect(hasValidTodoItem(value ?? "")).toBe(false)
+	})
+
+	it.each(["- [ ] Pending", "- [x] Done", "# Plan\n- [ ] Pending"])("accepts a TODO item with text: %j", (value) => {
+		expect(hasValidTodoItem(value)).toBe(true)
+	})
+})
 
 describe("mergeCompletedItems", () => {
 	it("should match reported completed items to unchecked checklist items", () => {

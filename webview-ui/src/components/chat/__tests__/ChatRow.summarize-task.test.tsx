@@ -109,7 +109,7 @@ describe("ChatRow summarizeTask rendering", () => {
 					partial: false,
 					text: JSON.stringify({
 						tool: "summarizeTask",
-						content: "",
+						content: "E2E_MANUAL_INCOMPLETE_PARTIAL_MUST_NOT_RENDER",
 						compactionStatus: "failed",
 						error: "The summary exceeded the request output limit.",
 					}),
@@ -118,6 +118,7 @@ describe("ChatRow summarizeTask rendering", () => {
 		)
 
 		expect(screen.getByText("Conversation compaction failed:")).toBeInTheDocument()
+		expect(screen.queryByText("E2E_MANUAL_INCOMPLETE_PARTIAL_MUST_NOT_RENDER")).not.toBeInTheDocument()
 		expect(screen.queryByText("The summary exceeded the request output limit.")).not.toBeInTheDocument()
 		expect(screen.queryByText("Dline is condensing the conversation:")).not.toBeInTheDocument()
 	})
@@ -225,7 +226,7 @@ describe("ChatRow summarizeTask rendering", () => {
 		const message = {
 			ts: 4,
 			type: "ask" as const,
-			ask: "focus_chain_change" as const,
+			ask: "change_todo_list" as const,
 			text: JSON.stringify({ plan: "- [ ] Keep the API boundary", reason: "Changed focus" }),
 		}
 		const rendered = render(

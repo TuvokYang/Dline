@@ -16,7 +16,7 @@ function focusChainTurn(): TurnState {
 			{
 				dlineTid: "tid-1",
 				functionId: "call-1",
-				toolName: "focus_chain_change",
+				toolName: "change_todo_list",
 				phase: BlockPhase.AWAITING_APPROVAL,
 				ts: 100,
 				requiresApproval: true,
@@ -32,7 +32,7 @@ function focusChainInteraction(): ActiveInteraction {
 		taskId: "task-1",
 		turnId: "turn-1",
 		interactionId: "interaction-1",
-		kind: "focus_chain_change",
+		kind: "change_todo_list",
 		status: "awaiting",
 		createdRevision: 7,
 	}
@@ -72,7 +72,7 @@ describe("TaskSnapshot v2 schema", () => {
 			revision: 7,
 			anchor: { apiIndex: 4, uiMessageTs: 100, turnId: "turn-1", interactionId: "interaction-1" },
 			turn: { activeDlineTid: "tid-1" },
-			interaction: { kind: "focus_chain_change", status: "awaiting" },
+			interaction: { kind: "change_todo_list", status: "awaiting" },
 			profileInvalid: {
 				profileId: "profile-deleted",
 				displayName: "deleted-profile",
@@ -111,7 +111,7 @@ describe("TaskSnapshot v2 schema", () => {
 
 		expect(snapshot).toMatchObject({
 			interaction: { kind: "condense", interactionId: "condense-1" },
-			interruptedInteraction: { kind: "focus_chain_change", interactionId: "interaction-1" },
+			interruptedInteraction: { kind: "change_todo_list", interactionId: "interaction-1" },
 		})
 		expect(snapshot.interaction).not.toBe(state.interaction)
 		expect(snapshot.interaction?.anchor).not.toBe(state.interaction.anchor)

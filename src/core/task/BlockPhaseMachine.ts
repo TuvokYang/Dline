@@ -388,8 +388,8 @@ export class BlockPhaseMachine {
 			case "use_subagent":
 			case "use_subagents":
 				return "use_subagents"
-			case "focus_chain_change":
-				return "focus_chain_change"
+			case "change_todo_list":
+				return "change_todo_list"
 			case "status_update":
 				return "status_acknowledgment"
 			case ClineDefaultTool.MAKE_PLAN:

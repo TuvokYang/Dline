@@ -27,7 +27,6 @@ export class ActModeRespondHandler implements IToolHandler, IPartialBlockHandler
 
 	async execute(config: TaskConfig, block: ToolUse): Promise<ToolResponse> {
 		const response: string | undefined = block.params.response
-		const taskProgress: string | undefined = block.params.task_progress
 
 		// Validate we're in ACT mode
 		if (config.mode !== "act") {
@@ -61,12 +60,7 @@ export class ActModeRespondHandler implements IToolHandler, IPartialBlockHandler
 		const toolMsg = JSON.stringify({ tool: "actModeRespond", content: response })
 		await config.callbacks.say("tool", toolMsg, undefined, undefined, false, block.ts)
 
-		// Update focus chain if task_progress provided
-		if (taskProgress) {
-			await config.callbacks.updateFCListFromToolResponse(taskProgress)
-		}
-
-		// Note: lastToolName is tracked centrally by ToolExecutor after tool execution
+		// Note: task_progress and lastToolName are handled centrally by ToolExecutor.
 
 		// Return success immediately to allow LLM to continue execution
 		// The key difference from make_plan: no blocking for user input

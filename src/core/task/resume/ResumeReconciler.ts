@@ -18,7 +18,7 @@ const ASK_INTERACTIONS: Partial<Record<ClineAsk, InteractionKind>> = {
 	use_mcp_server: "mcp_approval",
 	use_subagents: "subagent_approval",
 	spawn_task: "spawn_task_approval",
-	focus_chain_change: "focus_chain_change",
+	change_todo_list: "change_todo_list",
 	new_task: "new_task",
 	report_bug: "report_bug",
 	condense: "condense",
@@ -42,7 +42,7 @@ const BLOCK_APPROVAL_INTERACTIONS = new Set<InteractionKind>([
 	"mcp_approval",
 	"subagent_approval",
 	"spawn_task_approval",
-	"focus_chain_change",
+	"change_todo_list",
 ])
 
 function cloneSnapshot(snapshot: TaskSnapshot): TaskSnapshot {

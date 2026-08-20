@@ -15,13 +15,11 @@ import { ClineDefaultTool } from "@shared/tools"
 import { commitCompletion } from "../../completion/CompletionCommit"
 import type { ToolResponse } from "../../index"
 import type { InteractionOutcome } from "../../interaction/InteractionCoordinator"
-import { showNotificationForApproval } from "../../utils"
 import { buildUserFeedbackContent } from "../../utils/buildUserFeedbackContent"
 import type { IPartialBlockHandler, IToolHandler } from "../ToolExecutorCoordinator"
 import { interactionId, interactionTurnId, type TaskConfig } from "../types/TaskConfig"
 import type { StronglyTypedUIHelpers } from "../types/UIHelpers"
 import { getTaskCompletionTelemetry } from "../utils"
-import { ToolResultUtils } from "../utils/ToolResultUtils"
 import { sayFeedbackOnce } from "../utils/UserFeedbackUtils"
 
 const TASK_PREVIEW_MAX_CHARS = 8000
@@ -48,12 +46,11 @@ export class AttemptCompletionHandler implements IToolHandler, IPartialBlockHand
 	 * Handle partial block streaming for attempt_completion
 	 */
 	async handlePartialBlock(_block: ToolUse, _uiHelpers: StronglyTypedUIHelpers): Promise<void> {
-		// Completion remains provisional until optional command execution and all commit prerequisites succeed.
+		// Completion remains provisional until all commit prerequisites succeed.
 	}
 
 	async execute(config: TaskConfig, block: ToolUse): Promise<ToolResponse> {
 		const result: string | undefined = block.params.result
-		const command: string | undefined = block.params.command
 
 		// Validate required parameters
 		if (!result) {
@@ -101,109 +98,10 @@ export class AttemptCompletionHandler implements IToolHandler, IPartialBlockHand
 			})
 		}
 
-		if (command) {
-			// Check if command should be auto-approved
-			// attempt_completion commands don't have requires_approval param, so we treat them as safe commands
-			const autoApproveResult = config.autoApprover?.shouldAutoApproveTool(ClineDefaultTool.BASH)
-			const autoApproveSafe = Array.isArray(autoApproveResult) ? autoApproveResult[0] : autoApproveResult
-
-			if (autoApproveSafe) {
-				// Auto-approve flow - show command as 'say' instead of 'ask'
-				// Command is a separate UI message from completion_result; do NOT reuse block.ts.
-				const commandTs = await config.callbacks.say("command", command, undefined, undefined, false)
-				return this.executeApprovedCommandAndComplete(config, block, command, commandTs)
-			}
-
-			// Manual approval flow - need to ask for approval
-			showNotificationForApproval(
-				`Dline wants to execute a command: ${command}`,
-				config.autoApprovalSettings.enableNotifications,
-			)
-
-			const approval = await config.interactions.open({
-				turnId: interactionTurnId(block),
-				interactionId: interactionId(block),
-				kind: "command_approval",
-				presentation: command,
-			})
-			return this.continueCommandApproval(config, block, approval)
-		}
-
 		return this.commitAndPresentCompletion(config, block)
 	}
 
-	/** Continue only the side effects after an exact attempt_completion command decision. */
-	async continueCommandApproval(
-		config: TaskConfig,
-		block: ToolUse,
-		approval: InteractionOutcome,
-		commandTs?: number,
-	): Promise<ToolResponse> {
-		const result = block.params.result
-		const command = block.params.command
-		if (!result || !command || (approval.actionId !== "approve" && approval.actionId !== "reject")) {
-			throw new Error("Invalid attempt_completion command approval continuation")
-		}
-
-		const text = approval.draft?.text
-		const images = approval.draft?.images
-		const files = approval.draft?.files
-		if (text || images?.length || files?.length) {
-			const fileContent = files?.length ? await processFilesIntoText(files) : ""
-			ToolResultUtils.pushAdditionalToolFeedback(config.taskState.userMessageContent, text, images, fileContent)
-			await sayFeedbackOnce(
-				config,
-				approval.actionId === "approve" ? "yesButtonClicked" : "noButtonClicked",
-				text,
-				images,
-				files,
-			)
-		}
-		if (approval.actionId === "reject") {
-			config.taskController.rejectActiveBlock()
-			return formatResponse.toolDenied()
-		}
-
-		return this.executeApprovedCommandAndComplete(config, block, command, commandTs)
-	}
-
-	private findCommandMessageTs(config: TaskConfig): number | undefined {
-		for (let i = config.messageState.clineMessages.length - 1; i >= 0; i--) {
-			const message = config.messageState.clineMessages[i] as any
-			if ((message.ask === "command" || message.say === "command") && message.commandStatus !== "skipped") {
-				return message.ts
-			}
-		}
-		return undefined
-	}
-
-	private async executeApprovedCommandAndComplete(
-		config: TaskConfig,
-		block: ToolUse,
-		command: string,
-		commandTs?: number,
-	): Promise<ToolResponse> {
-		const exactCommandTs = commandTs ?? this.findCommandMessageTs(config)
-		const commandOutcome = await config.callbacks.executeCommandTool(command, undefined, {
-			commandTs: exactCommandTs,
-		})
-
-		if (commandOutcome.userRejected) {
-			config.taskController.rejectActiveBlock()
-			return commandOutcome.result
-		}
-		const commandSucceeded = commandOutcome.completed && commandOutcome.exitCode === 0 && commandOutcome.signal == null
-		if (!commandSucceeded) {
-			return commandOutcome.result
-		}
-		return this.commitAndPresentCompletion(config, block, commandOutcome.result)
-	}
-
-	private async commitAndPresentCompletion(
-		config: TaskConfig,
-		block: ToolUse,
-		commandResult?: ToolResponse,
-	): Promise<ToolResponse> {
+	private async commitAndPresentCompletion(config: TaskConfig, block: ToolUse): Promise<ToolResponse> {
 		const result = block.params.result
 		if (!result) throw new Error("Invalid attempt_completion continuation result")
 
@@ -212,18 +110,7 @@ export class AttemptCompletionHandler implements IToolHandler, IPartialBlockHand
 			saveCheckpoint: (completionMessageTs) => config.callbacks.saveCheckpoint(true, completionMessageTs),
 			markWorkspaceChanges: () => this.addNewChangesFlagToLastCompletionResultMessage(config),
 			captureTelemetry: () => telemetryService.captureTaskCompleted(config.ulid ?? "", getTaskCompletionTelemetry(config)),
-			updateFocusChain: async () => {
-				if (!block.partial && config.focusChainSettings.enabled) {
-					await config.callbacks.updateFCListFromToolResponse(block.params.task_progress)
-				}
-			},
 		})
-
-		// we already sent completion_result says, an empty string asks relinquishes control over button and field
-		// in case last command was interactive and in partial state, the UI is expecting an ask response. This ends the command ask response, freeing up the UI to proceed with the completion ask.
-		if (config.messageState.clineMessages.at(-1)?.ask === "command_output") {
-			await config.callbacks.say("command_output", "")
-		}
 
 		// Run TaskComplete hook BEFORE presenting the "Start New Task" button
 		// At this point we know: task is complete, checkpoint saved, result shown to user
@@ -245,16 +132,13 @@ export class AttemptCompletionHandler implements IToolHandler, IPartialBlockHand
 			presentation: result,
 			existingTs: block.ts,
 		})
-		return this.continueInteraction(config, block, outcome, commandResult)
+		return this.continueInteraction(config, block, outcome)
 	}
 
 	private async addNewChangesFlagToLastCompletionResultMessage(config: TaskConfig): Promise<void> {
 		const hasNewChanges = await config.callbacks.doesLatestTaskCompletionHaveNewChanges()
 		const clineMessages = config.messageState.clineMessages
-		const lastCompletionResultMessageIndex = findLastIndex(
-			clineMessages,
-			(message: any) => message.say === "completion_result",
-		)
+		const lastCompletionResultMessageIndex = findLastIndex(clineMessages, (message) => message.say === "completion_result")
 		const lastCompletionResultMessage =
 			lastCompletionResultMessageIndex !== -1 ? clineMessages[lastCompletionResultMessageIndex] : undefined
 		if (
@@ -269,13 +153,8 @@ export class AttemptCompletionHandler implements IToolHandler, IPartialBlockHand
 		}
 	}
 
-	/** Consume completion feedback without replaying command execution or completion commit. */
-	async continueInteraction(
-		config: TaskConfig,
-		_block: ToolUse,
-		outcome: InteractionOutcome,
-		commandResult?: ToolResponse,
-	): Promise<ToolResponse> {
+	/** Consume completion feedback without replaying the completion commit. */
+	async continueInteraction(config: TaskConfig, _block: ToolUse, outcome: InteractionOutcome): Promise<ToolResponse> {
 		const text = outcome.draft?.text
 		const images = outcome.draft?.images
 		const completionFiles = outcome.draft?.files
@@ -301,16 +180,6 @@ export class AttemptCompletionHandler implements IToolHandler, IPartialBlockHand
 		}
 
 		const toolResults: (Anthropic.TextBlockParam | Anthropic.ImageBlockParam)[] = []
-		if (commandResult) {
-			if (typeof commandResult === "string") {
-				toolResults.push({
-					type: "text",
-					text: commandResult,
-				})
-			} else if (Array.isArray(commandResult)) {
-				toolResults.push(...commandResult)
-			}
-		}
 
 		if (text) {
 			toolResults.push(
@@ -377,7 +246,6 @@ export class AttemptCompletionHandler implements IToolHandler, IPartialBlockHand
 							taskId: config.taskId,
 							ulid: config.ulid ?? "",
 							result: block.params.result || "",
-							command: block.params.command || "",
 						},
 					},
 				},

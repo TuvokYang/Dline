@@ -28,7 +28,7 @@ export const STANDARD_TOOL_IDS = [
 	ClineDefaultTool.REPLACE_TEXT,
 	ClineDefaultTool.APPLY_PATCH,
 	ClineDefaultTool.SPAWN_TASK,
-	ClineDefaultTool.FOCUS_CHAIN_CHANGE,
+	ClineDefaultTool.CHANGE_TODO_LIST,
 	ClineDefaultTool.USE_SUBAGENT,
 	ClineDefaultTool.USE_SUBAGENTS,
 	ClineDefaultTool.STATUS_UPDATE,

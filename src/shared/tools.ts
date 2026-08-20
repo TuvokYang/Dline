@@ -40,7 +40,7 @@ export enum ClineDefaultTool {
 	USE_SUBAGENT = "use_subagent",
 	USE_SUBAGENTS = "use_subagents",
 	SPAWN_TASK = "spawn_task",
-	FOCUS_CHAIN_CHANGE = "focus_chain_change",
+	CHANGE_TODO_LIST = "change_todo_list",
 	FIND_REFERENCES = "find_references",
 	RENAME = "rename",
 	REPLACE_TEXT = "replace_text",

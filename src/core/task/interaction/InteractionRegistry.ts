@@ -16,7 +16,7 @@ export const INTERACTION_KINDS = [
 	"mcp_approval",
 	"subagent_approval",
 	"spawn_task_approval",
-	"focus_chain_change",
+	"change_todo_list",
 	"new_task",
 	"report_bug",
 	"condense",
@@ -76,9 +76,9 @@ const DEFINITIONS: Readonly<Record<InteractionKind, InteractionDefinition>> = {
 	mcp_approval: define("mcp_approval", "use_mcp_server", APPROVAL_ACTIONS, APPROVAL_INPUT),
 	subagent_approval: define("subagent_approval", "use_subagents", APPROVAL_ACTIONS, APPROVAL_INPUT),
 	spawn_task_approval: define("spawn_task_approval", "spawn_task", APPROVAL_ACTIONS, APPROVAL_INPUT),
-	focus_chain_change: define(
-		"focus_chain_change",
-		"focus_chain_change",
+	change_todo_list: define(
+		"change_todo_list",
+		"change_todo_list",
 		[action("approve", "Approve", "draft_and_selection"), action("reject", "Reject", "draft", "danger")],
 		APPROVAL_INPUT,
 	),

@@ -99,6 +99,74 @@ describe("FocusChainManager - Task Resumption", () => {
 		expect(taskState.currentFocusChainChecklist).toBeNull()
 	})
 
+	it.each([undefined, "", "  \n\t"])("treats an absent or blank task_progress value as a no-op: %j", async (taskProgress) => {
+		const existingContent = `# Existing Task
+- [ ] Pending item`
+		const fileContent = createFocusChainMarkdownContent(taskId, existingContent)
+		await fs.writeFile(focusChainFilePath, fileContent, "utf8")
+
+		const taskState = new TaskState()
+		const mockSay = vi.fn()
+		manager = new FocusChainManager({
+			taskId,
+			taskState,
+			getMode: () => "act",
+			stateManager: {} as any,
+			postStateToWebview: vi.fn(),
+			say: mockSay,
+			focusChainSettings: { enabled: true, remindClineInterval: 10 },
+		})
+
+		await manager.updateFCListFromToolResponse(taskProgress)
+
+		expect(taskState.currentFocusChainChecklist).toBeNull()
+		expect(mockSay).not.toHaveBeenCalled()
+	})
+
+	it("ignores non-empty task_progress content without a valid TODO item", async () => {
+		const taskState = new TaskState()
+		const mockSay = vi.fn()
+		manager = new FocusChainManager({
+			taskId,
+			taskState,
+			getMode: () => "act",
+			stateManager: {} as any,
+			postStateToWebview: vi.fn(),
+			say: mockSay,
+			focusChainSettings: { enabled: true, remindClineInterval: 10 },
+		})
+
+		await manager.updateFCListFromToolResponse("# Empty plan\n## Phase")
+
+		expect(taskState.currentFocusChainChecklist).toBeNull()
+		expect(mockSay).not.toHaveBeenCalled()
+	})
+
+	it("hydrates the persisted TODO list when the first valid update arrives before watcher setup", async () => {
+		const existingContent = `# Resumed Task
+- [x] Step 1
+- [ ] Step 2`
+		const fileContent = createFocusChainMarkdownContent(taskId, existingContent)
+		await fs.writeFile(focusChainFilePath, fileContent, "utf8")
+
+		const taskState = new TaskState()
+		const mockSay = vi.fn()
+		manager = new FocusChainManager({
+			taskId,
+			taskState,
+			getMode: () => "act",
+			stateManager: {} as any,
+			postStateToWebview: vi.fn(),
+			say: mockSay,
+			focusChainSettings: { enabled: true, remindClineInterval: 10 },
+		})
+
+		await manager.updateFCListFromToolResponse("- [x] Step 2")
+
+		expect(taskState.currentFocusChainChecklist).toContain("- [x] Step 2")
+		expect(mockSay.mock.calls.filter((call) => call[0] === "error")).toEqual([])
+	})
+
 	it("should prevent 'no task plan exists' error after resumption", async () => {
 		// Arrange: Simulate a resumed task with existing focus chain
 		const existingContent = `# Resumed Task

@@ -7,6 +7,9 @@ import type { ProfilePromptFragment, ProfileToolParam, ProfileToolSpec } from ".
 const whenFocusTracking = (context: SystemPromptContext): boolean =>
 	context.promptProfile !== PromptProfile.Lite && context.focusChainSettings?.enabled === true
 const whenFocusTrackingDisabled = (context: SystemPromptContext): boolean => !whenFocusTracking(context)
+const whenImageSupportDisabled = (context: SystemPromptContext): boolean =>
+	context.providerInfo.model.info.capabilities?.supportsImages !== true
+const readFileImageSupportDescription = ` ${getPrompt("readFile", "imageSupportDescription")}`
 
 /** Creates one conditional canonical prompt fragment. */
 function fragment(text: string, contextRequirements: (context: SystemPromptContext) => boolean): ProfilePromptFragment {
@@ -123,12 +126,18 @@ export const STANDARD_TOOL_SPECS: readonly Omit<ProfileToolSpec, "profile">[] = 
 		param("diff", true, getPrompt("replaceInFile", "baseDiffInstructions")),
 		taskProgress,
 	]),
-	spec(ClineDefaultTool.FILE_READ, getPrompt("readFile", "description"), [
-		param("path", true, getPrompt("readFile", "pathInstruction")),
-		param("start_line", false, getPrompt("readFile", "startLineInstruction"), "integer"),
-		param("end_line", false, getPrompt("readFile", "endLineInstruction"), "integer"),
-		taskProgress,
-	]),
+	spec(
+		ClineDefaultTool.FILE_READ,
+		`${getPrompt("readFile", "description")}${readFileImageSupportDescription}`,
+		[
+			param("path", true, getPrompt("readFile", "pathInstruction")),
+			param("start_line", false, getPrompt("readFile", "startLineInstruction"), "integer"),
+			param("end_line", false, getPrompt("readFile", "endLineInstruction"), "integer"),
+			taskProgress,
+		],
+		undefined,
+		[fragment(readFileImageSupportDescription, whenImageSupportDisabled)],
+	),
 	spec(ClineDefaultTool.SEARCH, getPrompt("searchFiles", "description"), [
 		param("path", true, getPrompt("searchFiles", "pathInstruction")),
 		param("regex", true, getPrompt("searchFiles", "regexInstruction")),
@@ -158,10 +167,7 @@ export const STANDARD_TOOL_SPECS: readonly Omit<ProfileToolSpec, "profile">[] = 
 	spec(
 		ClineDefaultTool.ATTEMPT,
 		getPrompt("attemptCompletion", "standardDescription"),
-		[
-			param("result", true, getPrompt("attemptCompletion", "standardResultInstruction")),
-			param("command", false, getPrompt("attemptCompletion", "standardCommandInstruction")),
-		],
+		[param("result", true, getPrompt("attemptCompletion", "standardResultInstruction"))],
 		undefined,
 		[fragment(getPrompt("attemptCompletion", "focusOmissionChecklistSentence"), whenFocusTrackingDisabled)],
 	),
@@ -288,7 +294,7 @@ export const STANDARD_TOOL_SPECS: readonly Omit<ProfileToolSpec, "profile">[] = 
 		canSpawnTask,
 	),
 	spec(
-		ClineDefaultTool.FOCUS_CHAIN_CHANGE,
+		ClineDefaultTool.CHANGE_TODO_LIST,
 		getPrompt("focusChain", "focusChainChangeToolDescription"),
 		[
 			param("new_plan", true, getPrompt("focusChain", "focusChainChangeNewPlanNativeInstruction")),

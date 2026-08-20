@@ -16,7 +16,7 @@ describe("renderer registry", () => {
 		const message: ClineMessage = {
 			ts: 100,
 			type: "ask",
-			ask: "focus_chain_change",
+			ask: "change_todo_list",
 			text: JSON.stringify({ plan: "# Plan\n- [ ] First item\n- [ ] Second item", reason: "Review" }),
 		}
 		render(renderPresentation("focus_chain_change", { message, selection: [], onSelectionChange }))

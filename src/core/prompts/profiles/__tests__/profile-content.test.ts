@@ -107,16 +107,16 @@ describe("standard and lite profile content", () => {
 		})
 
 		expect(enabled).toContain("task_progress")
-		expect(enabled).toContain("focus_chain_change")
+		expect(enabled).toContain("change_todo_list")
 		expect(disabled).not.toContain("task_progress")
-		expect(disabled).not.toContain("focus_chain_change")
+		expect(disabled).not.toContain("change_todo_list")
 	})
 
 	it("keeps Lite free of focus-chain contracts", async () => {
 		const text = await generateProfile(PromptProfile.Lite)
 
 		expect(text).not.toContain("task_progress")
-		expect(text).not.toContain("focus_chain_change")
+		expect(text).not.toContain("change_todo_list")
 	})
 
 	it("does not name ask_followup_question in Lite YOLO mode", async () => {

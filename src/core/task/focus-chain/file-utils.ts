@@ -1,4 +1,4 @@
-import { isCompletedFocusChainItem, isFocusChainItem } from "@shared/focus-chain-utils"
+import { isCompletedFocusChainItem, isFocusChainItem, parseFocusChainItem } from "@shared/focus-chain-utils"
 import * as fs from "fs/promises"
 import * as path from "path"
 import { ensureTaskDirectoryExists } from "../../storage/disk"
@@ -124,6 +124,11 @@ export function extractFocusChainItemsFromText(text: string): string[] {
 		const trimmed = line.trim()
 		return isFocusChainItem(trimmed)
 	})
+}
+
+/** Return whether text contains at least one standard TODO item with non-empty item text. */
+export function hasValidTodoItem(text: string): boolean {
+	return text.split("\n").some((line) => parseFocusChainItem(line.trim()) !== null)
 }
 
 /**

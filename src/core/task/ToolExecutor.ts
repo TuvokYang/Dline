@@ -38,7 +38,7 @@ import { serializeDurableToolResult } from "./DurableToolResult"
 import { authorizeExplicitToolExecution } from "./explicit-instructions/explicit-tool-gate"
 import { isExplicitOnlyTool } from "./explicit-instructions/policy"
 import type { ExplicitInstructionConsumePort } from "./explicit-instructions/types"
-import { isAllItemsCompleted } from "./focus-chain/file-utils"
+import { hasValidTodoItem, isAllItemsCompleted } from "./focus-chain/file-utils"
 import type { InteractionKind } from "./interaction/Interaction"
 import { isInteractionCancellationError } from "./interaction/InteractionCancellationError"
 import type { InteractionOutcome } from "./interaction/InteractionCoordinator"
@@ -724,10 +724,16 @@ export class ToolExecutor {
 				if (!block.partial) {
 					const taskProgress = block.params?.task_progress
 					const focusChainEnabled = this.stateManager.getGlobalSettingsKey("focusChainSettings")?.enabled === true
-					if (focusChainEnabled && typeof taskProgress === "string" && taskProgress.trim().length > 0) {
+					const hasTodoUpdate = focusChainEnabled && typeof taskProgress === "string" && hasValidTodoItem(taskProgress)
+					if (hasTodoUpdate) {
 						await this.updateFCListFromToolResponse(taskProgress)
 					}
-					await this.commitToolResult("Task progress accepted.", block)
+					await this.commitToolResult(
+						hasTodoUpdate
+							? "TODO list update accepted."
+							: "No TODO list update provided; current TODO list unchanged.",
+						block,
+					)
 				}
 				return true
 			}
@@ -1171,9 +1177,15 @@ export class ToolExecutor {
 			return
 		}
 
-		// Handle focus chain updates
-		if (!block.partial && this.stateManager.getGlobalSettingsKey("focusChainSettings").enabled) {
-			await this.updateFCListFromToolResponse(block.params.task_progress)
+		// Apply one valid TODO update after the owning tool completes.
+		const taskProgress = block.params.task_progress
+		if (
+			!block.partial &&
+			this.stateManager.getGlobalSettingsKey("focusChainSettings").enabled &&
+			typeof taskProgress === "string" &&
+			hasValidTodoItem(taskProgress)
+		) {
+			await this.updateFCListFromToolResponse(taskProgress)
 		}
 		if (postCommitDirective) {
 			if (this.postCommitDirectives.has(block.dline_tid)) {

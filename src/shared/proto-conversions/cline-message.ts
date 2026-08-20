@@ -33,7 +33,7 @@ function convertClineAskToProtoEnum(ask: AppClineAsk | undefined): ClineAsk | un
 		use_subagents: ClineAsk.USE_SUBAGENTS,
 		spawn_task: ClineAsk.SPAWN_TASK,
 		qna_respond: ClineAsk.QNA_RESPOND,
-		focus_chain_change: ClineAsk.FOCUS_CHAIN_CHANGE,
+		change_todo_list: ClineAsk.CHANGE_TODO_LIST,
 		status_acknowledgment: ClineAsk.STATUS_ACKNOWLEDGMENT,
 		generate_report: ClineAsk.GENERATE_REPORT_ASK,
 	}
@@ -71,7 +71,7 @@ function convertProtoEnumToClineAsk(ask: ClineAsk): AppClineAsk | undefined {
 		[ClineAsk.USE_SUBAGENTS]: "use_subagents",
 		[ClineAsk.SPAWN_TASK]: "spawn_task",
 		[ClineAsk.QNA_RESPOND]: "qna_respond",
-		[ClineAsk.FOCUS_CHAIN_CHANGE]: "focus_chain_change",
+		[ClineAsk.CHANGE_TODO_LIST]: "change_todo_list",
 		[ClineAsk.STATUS_ACKNOWLEDGMENT]: "status_acknowledgment",
 		[ClineAsk.GENERATE_REPORT_ASK]: "generate_report",
 	}

@@ -119,7 +119,7 @@ export class ToolExecutorCoordinator {
 		[ClineDefaultTool.USE_SUBAGENTS]: (_v: ToolValidator) => new UseSubagentsToolHandler(),
 		[ClineDefaultTool.SPAWN_TASK]: (_v: ToolValidator) => new SpawnTaskHandler(),
 		[ClineDefaultTool.GENERATE_REPORT]: (_v: ToolValidator) => new GenerateReportHandler(),
-		[ClineDefaultTool.FOCUS_CHAIN_CHANGE]: (_v: ToolValidator) => new FocusChainHandler(),
+		[ClineDefaultTool.CHANGE_TODO_LIST]: (_v: ToolValidator) => new FocusChainHandler(),
 		[ClineDefaultTool.FIND_REFERENCES]: (_v: ToolValidator) => new FindReferencesHandler(),
 		[ClineDefaultTool.RENAME]: (_v: ToolValidator) => new RenameSymbolHandler(),
 		[ClineDefaultTool.REPLACE_TEXT]: (_v: ToolValidator) => new ReplaceTextHandler(),

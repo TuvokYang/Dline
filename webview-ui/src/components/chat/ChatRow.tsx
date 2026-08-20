@@ -462,7 +462,7 @@ export const ChatRowContent = memo(
 		const isAutoCollapsibleMessage =
 			message.ask === "completion_result" ||
 			message.say === "completion_result" ||
-			message.ask === "focus_chain_change" ||
+			message.ask === "change_todo_list" ||
 			tool?.tool === "summarizeTask" ||
 			tool?.tool === "focusChainChanged"
 
@@ -748,7 +748,7 @@ export const ChatRowContent = memo(
 					)
 				case "summarizeTask": {
 					const status = tool.compactionStatus ?? (message.partial ? "running" : "completed")
-					const content = typeof tool.content === "string" ? tool.content : ""
+					const content = status === "failed" ? "" : typeof tool.content === "string" ? tool.content : ""
 					const compactionRestore =
 						status === "completed" &&
 						tool.compactionOperationId !== undefined &&
@@ -1299,7 +1299,7 @@ export const ChatRowContent = memo(
 				}
 			case "ask":
 				switch (message.ask) {
-					case "focus_chain_change":
+					case "change_todo_list":
 						try {
 							const data = message.text ? JSON.parse(message.text) : { plan: "", reason: "" }
 							if (data.plan) {

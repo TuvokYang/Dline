@@ -20,7 +20,7 @@ const CASES: InteractionCase[] = [
 		continuation: "api",
 	},
 	{ kind: "command_approval", taskAsk: "command", actions: ["approve", "reject"], enterAction: "reject" },
-	{ kind: "focus_chain_change", taskAsk: "focus_chain_change", actions: ["approve", "reject"], enterAction: "reject" },
+	{ kind: "change_todo_list", taskAsk: "change_todo_list", actions: ["approve", "reject"], enterAction: "reject" },
 	{ kind: "new_task", taskAsk: "new_task", actions: ["approve", "reject"], enterAction: "reject" },
 	{ kind: "followup", taskAsk: "followup", actions: [], enterAction: "reply", continuation: "handler" },
 	{ kind: "make_plan", taskAsk: "make_plan", actions: [], enterAction: "reply", continuation: "handler" },
@@ -87,7 +87,7 @@ describe("InteractionRegistry", () => {
 	})
 
 	it("requires draft and selection for focus-chain approval", () => {
-		const definition = getInteraction("focus_chain_change")
+		const definition = getInteraction("change_todo_list")
 		expect(definition.actions[0].payloadPolicy).toBe("draft_and_selection")
 	})
 

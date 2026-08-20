@@ -48,7 +48,8 @@ export function projectInteraction(interaction: Readonly<ActiveInteraction>, sta
 			status: interaction.status,
 			stateRevision,
 			taskAsk: definition.taskAsk,
-			presentationKind: definition.presentationKind,
+			// Keep the legacy renderer key only at the Webview presentation boundary.
+			presentationKind: interaction.kind === "change_todo_list" ? "focus_chain_change" : definition.presentationKind,
 			askMessageTs: interaction.anchor.messageTs,
 		},
 		input,

@@ -18,6 +18,7 @@ export const PRESENTATION_KINDS = [
 	"mcp_approval",
 	"subagent_approval",
 	"spawn_task_approval",
+	// Legacy presentation key retained for the existing FocusChainRenderer.
 	"focus_chain_change",
 	"new_task",
 	"report_bug",

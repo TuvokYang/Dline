@@ -1,20 +1,20 @@
 ### allCompletedAlready
-Focus chain update rejected. All items are already completed. Create a NEW checklist (with `# Title`, `## Section`, `- [ ]` items) or call attempt_completion. If plan must change, use focus_chain_change.
+TODO list update rejected. All stored items are already complete. Create a new TODO list for a genuine next phase or call `attempt_completion`.
 
 ### apiRequestCount
-# task_progress
+# TODO LIST NEEDED
 
-42 API requests without task_progress. Create one now.
+42 API requests have been made without a TODO list. Create one in the next tool call that supports `task_progress`.
 
 
-Update task_progress each step:
-- `- [x]` mark done — report COMPLETED items with EXACT text from the checklist. Do NOT send the full checklist.
-- `- [ ]` mark in-progress — signal your current step. Only ONE in-progress item per update; pass it alongside completed items.
-- Copy the EXACT item text from the checklist shown in environment_details — character-for-character, no rephrasing.
-- Complete items in strict order FIRST. If plan must change, use focus_chain_change to get user authorization.
+Use `task_progress` only when a TODO item changes:
+- Report newly completed items as `- [x]` with exact text from the stored list.
+- You may include one exact current `- [ ]` item alongside completed items.
+- Omit `task_progress` when no TODO item changed.
+- Complete items in order. Use `change_todo_list` with user approval to change list structure.
 
 ### attemptCompletionBlocked
-ATTEMPT_COMPLETION BLOCKED — Focus chain has unchecked items remaining. You attempted to call attempt_completion before all items are finished. Do not try to shortcut or pretend the task is complete.
+ATTEMPT_COMPLETION BLOCKED — The TODO list still has unchecked items.
 
 Your current checklist is shown above in environment_details. You MUST:
 1. Finish ALL remaining `- [ ]` items in strict order
@@ -23,7 +23,7 @@ Your current checklist is shown above in environment_details. You MUST:
 
 For stage-by-stage progress summaries, use status_update (set requires_acknowledgment to false — it does not block for user approval). Do NOT try other tools to bypass this restriction.
 
-If the plan genuinely needs to change, use focus_chain_change to request user approval.
+If the plan genuinely needs to change, use change_todo_list to request user approval.
 
 ### completed
 
@@ -36,28 +36,27 @@ All 6 items completed.
 - **Present plan:** Call make_plan with the complete plan (in ACT MODE, only when the user explicitly requested a plan).
 
 ### inProgressMismatchRejected
-Focus chain update rejected. The in-progress item you reported (`- [ ]`) does NOT match the plan. Use EXACT item text from the checklist.
+TODO list update rejected. The submitted current item (`- [ ]`) does not match the stored TODO list. Use exact item text.
 
 Expected items (copy ONE exactly):
 - [ ] Create login component
 - [ ] Add form validation
 
-Complete items in strict order FIRST. If plan must change, use focus_chain_change.
+Complete items in strict order FIRST. If plan must change, use change_todo_list.
 
 ### initial
-# task_progress CREATION REQUIRED - ACT MODE ACTIVATED
+# TODO LIST CREATION REQUIRED
 
-You switched from PLAN to ACT. Create a checklist in your NEXT tool call via task_progress parameter.
-Pass the complete initial list (with `# Title`, `## Section`, `- [ ]` items). This is the ONLY time you pass the full checklist — afterward, only report completed items (`- [x]`) with exact text.
+ACT MODE is active. In the next tool call that supports `task_progress`, create the initial TODO list with a `# Title`, optional `## Section` headings, and at least one non-empty `- [ ]` item.
 
-**Rules:**
-- Plans made in PLAN must be followed in ACT
-- The focus chain is your execution plan — task_progress must match it exactly. Do not modify the plan during ACT mode. To change it, use focus_chain_change to get user authorization.
-- After initial creation: report `- [x]` for completed items with EXACT item text. To signal your current step, also pass ONE `- [ ]` item alongside completed items.
-- The full checklist is shown in environment_details each turn
+After creation:
+- Follow the stored item text and order exactly.
+- Report only newly completed `- [x]` items and, optionally, one exact current `- [ ]` item.
+- Use `change_todo_list` with user approval to change the list structure.
+- The full TODO list is shown in `environment_details`.
 
 ### itemMismatchRejected
-Focus chain update rejected — NEXT TOOL CALLS BLOCKED. You reported fabricated progress that does NOT match the plan.
+TODO list update rejected — NEXT TOOL CALLS BLOCKED. The submitted completed items do not match the stored TODO list.
 
 Unmatched items:
 - Fake item A
@@ -67,30 +66,28 @@ Expected format (use EXACT text from the checklist):
 - [ ] Create login component
 - [ ] Add form validation
 
-Complete items in strict order FIRST. If plan must change, use focus_chain_change to get user authorization.
+Complete items in strict order FIRST. If plan must change, use change_todo_list to get user authorization.
 
 ### planModeReminder
-# task_progress List (Recommended - Plan Mode)
+# TODO LIST (RECOMMENDED IN PLAN MODE)
 
-Create a task_progress list when presenting a finalized plan via make_plan.
-Append items as analysis progresses; rewriting the plan requires focus_chain_change tool.
-Use `# Title` and `## Section` so user can verify your approach.
+When presenting a finalized plan through `make_plan`, include a TODO list with a `# Title`, optional `## Section` headings, and at least one non-empty item.
+After the list is active, changing its structure requires `change_todo_list` and user approval.
 
 
-Update task_progress each step:
-- `- [x]` mark done — report COMPLETED items with EXACT text from the checklist. Do NOT send the full checklist.
-- `- [ ]` mark in-progress — signal your current step. Only ONE in-progress item per update; pass it alongside completed items.
-- Copy the EXACT item text from the checklist shown in environment_details — character-for-character, no rephrasing.
-- Complete items in strict order FIRST. If plan must change, use focus_chain_change to get user authorization.
+Use `task_progress` only when a TODO item changes:
+- Report newly completed items as `- [x]` with exact text from the stored list.
+- You may include one exact current `- [ ]` item alongside completed items.
+- Omit `task_progress` when no TODO item changed.
+- Complete items in order. Use `change_todo_list` with user approval to change list structure.
 
 ### recommended
-# task_progress RECOMMENDED
+# TODO LIST RECOMMENDED
 
-When starting a new task, create a todo list via task_progress parameter.
-Organize with `# Title` and `## Section` headings.
+When starting a multi-step task, create a TODO list through `task_progress` with a `# Title`, optional `## Section` headings, and at least one non-empty `- [ ]` item.
 
 
-Create an initial todo list via task_progress parameter. Pass the complete list (with `# Title`, `## Section`, `- [ ]` items) once. Afterward, only report completed items (`- [x]`) with exact text.
+Create the initial TODO list through `task_progress`. Pass the complete list once, with a `# Title`, optional `## Section` headings, and at least one non-empty `- [ ]` item. Afterward, report only exact existing items whose checkbox state changed.
 
 **Example initial creation:**
 ```
@@ -114,24 +111,24 @@ Create an initial todo list via task_progress parameter. Pass the complete list 
 
 ### reminder
 
-Update task_progress each step:
-- `- [x]` mark done — report COMPLETED items with EXACT text from the checklist. Do NOT send the full checklist.
-- `- [ ]` mark in-progress — signal your current step. Only ONE in-progress item per update; pass it alongside completed items.
-- Copy the EXACT item text from the checklist shown in environment_details — character-for-character, no rephrasing.
-- Complete items in strict order FIRST. If plan must change, use focus_chain_change to get user authorization.
+Use `task_progress` only when a TODO item changes:
+- Report newly completed items as `- [x]` with exact text from the stored list.
+- You may include one exact current `- [ ]` item alongside completed items.
+- Omit `task_progress` when no TODO item changed.
+- Complete items in order. Use `change_todo_list` with user approval to change list structure.
 
 ### skipOrderRejected
-Focus chain update rejected. Items must be completed in STRICT order. You skipped unchecked items (`[ ]`) and marked a later item as done (`[x]`). This is your SECOND skip-order violation — the first was accepted with a warning, this one is REJECTED.
+TODO list update rejected. Items must be completed in order. You marked a later item complete while an earlier item remains unchecked. This is the second order violation, so the update was not applied.
 
 Complete these items FIRST (in order):
 - [ ] Create login component
 - [ ] Add form validation
 - [ ] Wire up API call
 
-To change the order, use focus_chain_change to get user authorization. Continue reporting progress via task_progress parameter.
+To change the order, use change_todo_list to get user authorization. Continue reporting progress via task_progress parameter.
 
 ### skipOrderWarning
-Focus chain WARNING — SEVERE VIOLATION. You marked an item as complete while earlier items remain unchecked. Tasks MUST be completed in strict sequential order FIRST. If plan must change, use focus_chain_change. This warning has been recorded. The NEXT time you skip order, your task_progress update will be REJECTED entirely.
+TODO list warning. You marked a later item complete while an earlier item remains unchecked. The update was accepted once; the next order violation will be rejected. Use `change_todo_list` with user approval if the order must change.
 
 ### tamperingRejected
-Focus chain update rejected. The task_progress checklist (called the "focus chain") tracks your assigned work. Your job: complete items one by one and honestly toggle checkmarks (`[ ]` <-> `[x]`). Do NOT modify the plan content (title, sections, items) -- you may ONLY toggle checkmarks. Any change to the text of items or headings is forbidden. If the plan genuinely needs to change, use focus_chain_change to request user approval. If all items are `[x]`, you may create a new checklist. Continue from where you left off — you MUST keep reporting progress via task_progress parameter.
+TODO list update rejected. The submitted `task_progress` changes the stored list structure while unchecked items remain. Continue from the stored TODO list and report only exact existing items whose checkbox state changed. Use `change_todo_list` with user approval to change the structure.

@@ -5,6 +5,7 @@ import type { ToolUse } from "@core/assistant-message"
 import { ClineDefaultTool } from "@shared/tools"
 import { describe, expect, it, vi } from "vitest"
 import { TaskState } from "../../TaskState"
+import { ActModeRespondHandler } from "../../tools/handlers/ActModeRespondHandler"
 import { ExecuteCommandToolHandler } from "../../tools/handlers/ExecuteCommandToolHandler"
 import { FocusChainHandler } from "../../tools/handlers/FocusChainHandler"
 import { QnaRespondHandler } from "../../tools/handlers/QnaRespondHandler"
@@ -86,6 +87,21 @@ describe("handler interaction matrix", () => {
 		expect(taskConfig.interactions.open).toHaveBeenCalledWith(
 			expect.objectContaining({ kind: "qna_response", presentation: JSON.stringify({ response: "Answer" }) }),
 		)
+	})
+
+	it("leaves act_mode_respond task_progress updates to the central executor", async () => {
+		const taskConfig = config()
+		taskConfig.callbacks.updateFCListFromToolResponse = vi.fn(async () => undefined)
+
+		await new ActModeRespondHandler().execute(
+			taskConfig,
+			block(ClineDefaultTool.ACT_MODE, {
+				response: "Starting implementation",
+				task_progress: "# Plan\n- [ ] Implement",
+			}),
+		)
+
+		expect(taskConfig.callbacks.updateFCListFromToolResponse).not.toHaveBeenCalled()
 	})
 
 	it("opens acknowledged status as status_acknowledgment", async () => {
@@ -312,15 +328,38 @@ describe("handler interaction matrix", () => {
 		expect(taskConfig.interactions.open).not.toHaveBeenCalled()
 	})
 
-	it("applies focus-chain selection with canonical block identity", async () => {
+	it("rejects a TODO list replacement without any valid items", async () => {
+		const taskConfig = config()
+		const result = await new FocusChainHandler().execute(
+			taskConfig,
+			block(ClineDefaultTool.CHANGE_TODO_LIST, { new_plan: "# Empty plan\n## Phase", reason: "Change" }),
+		)
+
+		expect(result).toBe("prompt")
+		expect(taskConfig.interactions.open).not.toHaveBeenCalled()
+		expect(taskConfig.callbacks.focusChainForceUpdate).not.toHaveBeenCalled()
+	})
+
+	it("keeps the current TODO list when no proposed items are approved", async () => {
+		const taskConfig = config({ actionId: "approve", selection: [] })
+		const result = await new FocusChainHandler().execute(
+			taskConfig,
+			block(ClineDefaultTool.CHANGE_TODO_LIST, { new_plan: "# Plan\n- [ ] First", reason: "Change" }),
+		)
+
+		expect(result).toBe("prompt")
+		expect(taskConfig.callbacks.focusChainForceUpdate).not.toHaveBeenCalled()
+	})
+
+	it("applies TODO-list selection with canonical block identity", async () => {
 		const taskConfig = config({ actionId: "approve", selection: ["1"] })
 		const focusChainForceUpdate = taskConfig.callbacks.focusChainForceUpdate
 		await new FocusChainHandler().execute(
 			taskConfig,
-			block(ClineDefaultTool.FOCUS_CHAIN_CHANGE, { new_plan: "# Plan\n- [ ] First\n- [ ] Second", reason: "Change" }),
+			block(ClineDefaultTool.CHANGE_TODO_LIST, { new_plan: "# Plan\n- [ ] First\n- [ ] Second", reason: "Change" }),
 		)
 		expect(taskConfig.interactions.open).toHaveBeenCalledWith(
-			expect.objectContaining({ kind: "focus_chain_change", interactionId: `tid-${ClineDefaultTool.FOCUS_CHAIN_CHANGE}` }),
+			expect.objectContaining({ kind: "change_todo_list", interactionId: `tid-${ClineDefaultTool.CHANGE_TODO_LIST}` }),
 		)
 		expect(focusChainForceUpdate).toHaveBeenCalledWith("# Plan\n- [ ] Second")
 	})

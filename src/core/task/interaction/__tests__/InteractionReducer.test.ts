@@ -89,7 +89,7 @@ describe("reduceInteraction", () => {
 	})
 
 	it("rejects focus-chain approval without selection", () => {
-		const state = awaiting("focus_chain_change")
+		const state = awaiting("change_todo_list")
 		const result = reduceInteraction(state, {
 			taskId: "task-1",
 			turnId: "turn-1",

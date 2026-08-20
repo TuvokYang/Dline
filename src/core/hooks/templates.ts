@@ -191,8 +191,8 @@ function getTaskCompleteTemplate(): string {
 # Input: { 
 #   taskId, 
 #   taskComplete: { 
-#     taskMetadata: { taskId: string, ulid: string, result: string, command: string } 
-#   }, 
+#     taskMetadata: { taskId: string, ulid: string, result: string }
+#   },
 #   clineVersion, timestamp, ... 
 # }
 # Output: { cancel: boolean, contextModification?: string, errorMessage?: string }

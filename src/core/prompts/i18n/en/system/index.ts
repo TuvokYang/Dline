@@ -1,7 +1,6 @@
 import { createRuntimeContract } from "../../helpers/create-contract"
 import { defineLegacyModule } from "../../helpers/define-legacy-module"
 
-import actVsPlanMode from "./actVsPlanMode"
 import agentRole from "./agentRole"
 import capabilities from "./capabilities"
 import capabilityCatalog from "./capabilityCatalog"
@@ -27,7 +26,6 @@ import userInstructions from "./userInstructions"
 import workflows from "./workflows"
 
 export const systemPromptModules = [
-	defineLegacyModule("actVsPlanMode", "system", actVsPlanMode),
 	defineLegacyModule("agentRole", "system", agentRole),
 	defineLegacyModule("capabilities", "system", capabilities, {
 		main: createRuntimeContract("BROWSER_SUPPORT", "YOLO_ASK_TEXT", "CWD", "BROWSER_CAPABILITIES", "WEB_TOOLS_CAPABILITIES"),

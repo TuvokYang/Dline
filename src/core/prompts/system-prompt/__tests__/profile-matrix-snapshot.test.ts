@@ -18,8 +18,7 @@ import {
 
 const UPDATE_NEW_SNAPSHOTS = process.env.UPDATE_NEW_PROMPT_SNAPSHOTS === "true"
 const SNAPSHOTS_ROOT = path.join(__dirname, "__snapshots__")
-const SNAPSHOTS_DIR = path.join(SNAPSHOTS_ROOT, "profiles-v2")
-const legacySnapshotBaseline = new Map<string, string>()
+const SNAPSHOTS_DIR = path.join(SNAPSHOTS_ROOT, "profiles")
 
 const BASE_CONTEXT = {
 	cwd: "/workspace/project",
@@ -125,19 +124,20 @@ function expectedSnapshotNames(): readonly string[] {
 	).sort()
 }
 
-async function readLegacySnapshotBaseline(): Promise<void> {
-	const entries = await fs.readdir(SNAPSHOTS_ROOT, { withFileTypes: true })
-	for (const entry of entries) {
-		if (entry.isFile() && entry.name.endsWith(".snap")) {
-			legacySnapshotBaseline.set(entry.name, await fs.readFile(path.join(SNAPSHOTS_ROOT, entry.name), "utf-8"))
-		}
-	}
-}
-
 describe("complete explicit-profile snapshot matrix", () => {
 	beforeAll(async () => {
 		await fs.mkdir(SNAPSHOTS_DIR, { recursive: true })
-		await readLegacySnapshotBaseline()
+		const expectedNames = expectedSnapshotNames()
+		const actualNames = (await fs.readdir(SNAPSHOTS_DIR, { withFileTypes: true }))
+			.filter((entry) => entry.isFile() && entry.name.endsWith(".snap"))
+			.map((entry) => entry.name)
+		if (UPDATE_NEW_SNAPSHOTS) {
+			await Promise.all(
+				actualNames
+					.filter((name) => !expectedNames.includes(name))
+					.map((name) => fs.unlink(path.join(SNAPSHOTS_DIR, name))),
+			)
+		}
 	})
 
 	afterAll(async () => {
@@ -147,9 +147,6 @@ describe("complete explicit-profile snapshot matrix", () => {
 			.sort()
 		expect(generatedNames).toEqual(expectedSnapshotNames())
 		expect(generatedNames).toHaveLength(54)
-		for (const [name, content] of legacySnapshotBaseline) {
-			expect(await fs.readFile(path.join(SNAPSHOTS_ROOT, name), "utf-8"), `legacy snapshot changed: ${name}`).toBe(content)
-		}
 	})
 
 	for (const profile of SNAPSHOT_PROFILES) {
@@ -164,6 +161,8 @@ describe("complete explicit-profile snapshot matrix", () => {
 					expect(generated.warnings).toEqual([])
 					expect(generated.systemPrompt).not.toContain("\n====\n")
 					expect(generated.systemPrompt).toContain(profile === "standard" ? "# TOOL USE" : "# TOOLS")
+					expect(generated.systemPrompt.match(/^## Explicit Instructions$/gm)).toHaveLength(1)
+					expect(generated.systemPrompt.match(/^# ACT MODE V\.S\. PLAN MODE(?: \(STRICT\))?$/gm)).toHaveLength(1)
 					expect(generated.systemPrompt).toContain("# CAPABILITIES")
 					expect(generated.systemPrompt).not.toMatch(/^# SKILLS$/gm)
 					expect(generated.systemPrompt).toContain("# USER'S CUSTOM INSTRUCTIONS")

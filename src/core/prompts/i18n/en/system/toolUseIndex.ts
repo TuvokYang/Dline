@@ -23,13 +23,7 @@ EVERY response must include at least one tool call, except when processing expli
 
 @TOOL_USE_EXAMPLES_SECTION@
 
-@TOOL_USE_GUIDELINES_SECTION@
-
-## TURN-END Tools
-Tools marked [TURN-END] hand control back to the user. Calling one terminates the current execution turn: the runtime stops the automatic API/tool loop and opens the tool's user interaction. Do not emit additional tool calls after a TURN-END call in the same response. Execution resumes from the user's submitted feedback or selected action.
-
-## Explicit Instructions
-When you see \`<explicit_instructions type="tool_name">\` in the conversation, call the <tool_name> tool using the example XML format provided inside the instructions. Do NOT look for this tool in the standard tool list. Output the XML directly as defined, without wrapping it inside attempt_completion or any other tool.`,
+@TOOL_USE_GUIDELINES_SECTION@`,
 }
 
 export default prompts

@@ -16,7 +16,7 @@ import { PromptProfile } from "../../profiles/types"
 import { assertPromptContent } from "./snapshot-content"
 
 const UPDATE_NEW_SNAPSHOTS = process.env.UPDATE_NEW_PROMPT_SNAPSHOTS === "true"
-const SNAPSHOTS_DIR = path.join(__dirname, "__snapshots__", "profiles-v2", "commands")
+const SNAPSHOTS_DIR = path.join(__dirname, "__snapshots__", "profiles", "commands")
 const PROFILES = [PromptProfile.Standard, PromptProfile.Lite] as const
 const TRANSPORTS = ["native", "xml"] as const
 const FOCUS_CASES = ["focus-on", "focus-off"] as const

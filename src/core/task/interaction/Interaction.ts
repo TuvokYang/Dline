@@ -9,7 +9,7 @@ export type InteractionKind =
 	| "mcp_approval"
 	| "subagent_approval"
 	| "spawn_task_approval"
-	| "focus_chain_change"
+	| "change_todo_list"
 	| "new_task"
 	| "report_bug"
 	| "condense"

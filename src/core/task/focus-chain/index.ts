@@ -20,6 +20,7 @@ import {
 	getFocusChainFilePath,
 	getFocusChainHistoryFilePath,
 	hasNewChecklistHeader,
+	hasValidTodoItem,
 	isAllItemsCompleted,
 	mergeCompletedItems,
 	mergeInProgressItem,
@@ -312,8 +313,8 @@ export class FocusChainManager {
 	}
 
 	/**
-	 * Processes focus chain list updates from the AI model's task_progress parameter and persists them to disk.
-	 * Handles telemetry tracking for progress updates and falls back to reading existing files if no update provided.
+	 * Processes TODO list updates from the AI model's task_progress parameter and persists them to disk.
+	 * Missing, blank, or structurally empty values are treated as no-ops.
 	 * Also manages the apiRequestsSinceLastTodoUpdate counter and includes comprehensive error handling.
 	 * @param taskProgress - Optional focus chain list string from AI model's task_progress parameter
 	 * @requires this.taskState, this.say method, and telemetryService to be available
@@ -322,18 +323,23 @@ export class FocusChainManager {
 	public async updateFCListFromToolResponse(taskProgress: string | undefined) {
 		try {
 			if (!taskProgress?.trim()) {
-				const markdownTodoList = await this.readFocusChainFromDisk()
-				if (markdownTodoList) {
-					this.taskState.currentFocusChainChecklist = markdownTodoList
-					await this.say("task_progress", markdownTodoList)
-				}
+				return
+			}
+
+			const newContent = taskProgress.trim()
+			if (!hasValidTodoItem(newContent)) {
 				return
 			}
 
 			this.taskState.apiRequestsSinceLastTodoUpdate = 0
-
-			const newContent = taskProgress.trim()
-			const previousList = this.taskState.currentFocusChainChecklist
+			let previousList = this.taskState.currentFocusChainChecklist
+			if (!previousList) {
+				const persistedList = await this.readFocusChainFromDisk()
+				if (persistedList) {
+					this.taskState.currentFocusChainChecklist = persistedList
+					previousList = persistedList
+				}
+			}
 			const isNewChecklist = hasNewChecklistHeader(newContent)
 
 			if (isNewChecklist) {
@@ -651,6 +657,11 @@ export class FocusChainManager {
 	 * Used by FocusChainHandler for user-approved plan overrides.
 	 */
 	public async forceReplaceFocusChain(newPlan: string): Promise<void> {
+		const normalizedPlan = newPlan.trim()
+		if (!hasValidTodoItem(normalizedPlan)) {
+			return
+		}
+
 		const oldPlan = this.taskState.currentFocusChainChecklist
 		if (oldPlan) {
 			try {
@@ -661,11 +672,11 @@ export class FocusChainManager {
 				Logger.error(`[Task ${this.taskId}] focus chain: Failed to archive old plan:`, error)
 			}
 		}
-		this.taskState.currentFocusChainChecklist = newPlan
+		this.taskState.currentFocusChainChecklist = normalizedPlan
 		this.taskState.focusChainRejectionMessage = null
 		try {
-			await this.writeFocusChainToDisk(newPlan)
-			await this.say("task_progress", newPlan)
+			await this.writeFocusChainToDisk(normalizedPlan)
+			await this.say("task_progress", normalizedPlan)
 		} catch (error) {
 			Logger.error(`[Task ${this.taskId}] focus chain: Failed to write new plan:`, error)
 		}

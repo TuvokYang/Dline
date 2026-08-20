@@ -109,9 +109,14 @@ describe("projectTaskView", () => {
 		])
 	})
 
-	it("projects focus-chain selection requirements", () => {
-		const view = projectTaskView(runtime(TaskPhase.AWAITING_APPROVAL, active("focus_chain_change")))
+	it("projects TODO-list selection requirements with Webview presentation compatibility", () => {
+		const view = projectTaskView(runtime(TaskPhase.AWAITING_APPROVAL, active("change_todo_list")))
 
+		expect(view.activeInteraction).toMatchObject({
+			kind: "change_todo_list",
+			taskAsk: "change_todo_list",
+			presentationKind: "focus_chain_change",
+		})
 		expect(view.footer.actions[0]).toMatchObject({ type: "approve", payloadPolicy: "draft_and_selection" })
 	})
 

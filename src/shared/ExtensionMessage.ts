@@ -259,7 +259,7 @@ export type ClineAsk =
 	| "new_task"
 	| "spawn_task"
 	| "condense"
-	| "focus_chain_change"
+	| "change_todo_list"
 	| "qna_respond"
 	| "summarize_task"
 	| "report_bug"

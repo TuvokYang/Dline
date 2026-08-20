@@ -31,7 +31,7 @@ describe("TaskComplete Hook", () => {
 	})
 
 	describe("Hook Input Format", () => {
-		it("should receive task metadata with result and command", async () => {
+		it("should receive task metadata with result", async () => {
 			const hookPath = path.join(tempDir, ".clinerules", "hooks", "TaskComplete")
 			const hookScript = `#!/usr/bin/env node
 const input = JSON.parse(require('fs').readFileSync(0, 'utf-8'));
@@ -55,7 +55,6 @@ console.log(JSON.stringify({
 						taskId: "test-task-id",
 						ulid: "test-ulid",
 						result: "Task completed successfully",
-						command: "npm start",
 					},
 				},
 			})
@@ -64,15 +63,15 @@ console.log(JSON.stringify({
 			result.contextModification?.should.equal("All metadata present")
 		})
 
-		it("should handle completion without command", async () => {
+		it("should handle completion metadata without a command field", async () => {
 			const hookPath = path.join(tempDir, ".clinerules", "hooks", "TaskComplete")
 			const hookScript = `#!/usr/bin/env node
 const input = JSON.parse(require('fs').readFileSync(0, 'utf-8'));
 const metadata = input.taskComplete.taskMetadata;
-const command = metadata.command || "";
+const hasNoCommandField = !Object.prototype.hasOwnProperty.call(metadata, "command");
 console.log(JSON.stringify({
   cancel: false,
-  contextModification: "Command: '" + command + "'",
+  contextModification: hasNoCommandField ? "No command field" : "Unexpected command field",
   errorMessage: ""
 }))`
 
@@ -88,13 +87,12 @@ console.log(JSON.stringify({
 						taskId: "test-task-id",
 						ulid: "test-ulid",
 						result: "Task completed",
-						command: "",
 					},
 				},
 			})
 
 			result.cancel.should.be.false()
-			result.contextModification?.should.equal("Command: ''")
+			result.contextModification?.should.equal("No command field")
 		})
 
 		it("should receive all common hook input fields", async () => {
@@ -123,7 +121,6 @@ console.log(JSON.stringify({
 						taskId: "test-task-id",
 						ulid: "test-ulid",
 						result: "Test task",
-						command: "",
 					},
 				},
 			})
@@ -155,7 +152,6 @@ console.log(JSON.stringify({
 						taskId: "test-task-id",
 						ulid: "test-ulid",
 						result: "I've successfully completed the task by implementing all required features.",
-						command: "",
 					},
 				},
 			})
@@ -187,7 +183,6 @@ console.log(JSON.stringify({
 						taskId: "test-task-id",
 						ulid: "test-ulid",
 						result: "Test task",
-						command: "",
 					},
 				},
 			})
@@ -218,7 +213,6 @@ console.log(JSON.stringify({
 						taskId: "test-task-id",
 						ulid: "test-ulid",
 						result: "Build a todo app",
-						command: "",
 					},
 				},
 			})
@@ -248,7 +242,6 @@ console.log(JSON.stringify({
 						taskId: "test-task-id",
 						ulid: "test-ulid",
 						result: "Test task",
-						command: "",
 					},
 				},
 			})
@@ -280,7 +273,6 @@ process.exit(1);`
 							taskId: "test-task-id",
 							ulid: "test-ulid",
 							result: "Test task",
-							command: "",
 						},
 					},
 				})
@@ -308,7 +300,6 @@ console.log("not valid json")`
 						taskId: "test-task-id",
 						ulid: "test-ulid",
 						result: "Test task",
-						command: "",
 					},
 				},
 			})
@@ -363,7 +354,6 @@ console.log(JSON.stringify({
 						taskId: "test-task-id",
 						ulid: "test-ulid",
 						result: "Test task",
-						command: "",
 					},
 				},
 			})
@@ -401,7 +391,6 @@ console.log(JSON.stringify({
 							taskId: "test-task-id",
 							ulid: "test-ulid",
 							result: "Test task",
-							command: "",
 						},
 					},
 				})
@@ -424,7 +413,6 @@ console.log(JSON.stringify({
 						taskId: "test-task-id",
 						ulid: "test-ulid",
 						result: "Test task",
-						command: "",
 					},
 				},
 			})
@@ -471,7 +459,6 @@ console.log(JSON.stringify({
 									taskId: "test-task-id",
 									ulid: "test-ulid",
 									result: scenario.resultText,
-									command: "",
 								},
 							},
 						})
@@ -492,7 +479,6 @@ console.log(JSON.stringify({
 								taskId: "test-task-id",
 								ulid: "test-ulid",
 								result: "Test task",
-								command: "",
 							},
 						},
 					})

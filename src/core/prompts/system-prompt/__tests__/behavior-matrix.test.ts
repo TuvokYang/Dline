@@ -214,7 +214,7 @@ describe("Standard/Lite transport and capability behavior matrix", () => {
 			enableParallelToolCalling: false,
 		})
 
-		expect(exposes(result, transport, "focus_chain_change")).toBe(false)
+		expect(exposes(result, transport, "change_todo_list")).toBe(false)
 		expect(exposes(result, transport, "use_subagents")).toBe(false)
 		expect(exposes(result, transport, "web_search")).toBe(false)
 		expect(exposes(result, transport, "generate_explanation")).toBe(false)
@@ -231,7 +231,7 @@ describe("Standard/Lite transport and capability behavior matrix", () => {
 			focusChainSettings: { enabled: false, remindClineInterval: 0 },
 		})
 
-		expect(exposes(enabled, transport, "focus_chain_change")).toBe(true)
+		expect(exposes(enabled, transport, "change_todo_list")).toBe(true)
 		expect(enabled.systemPrompt).toContain("task_progress")
 		expect(enabled.systemPrompt).toContain("## TURN-END Tools")
 		expect(enabled.systemPrompt).toContain("## Task Closure Contract")
@@ -244,8 +244,8 @@ describe("Standard/Lite transport and capability behavior matrix", () => {
 		expect(enabled.systemPrompt).toContain(
 			"status_update / act_mode_respond: progress-only, MUST be followed by actual work tool. NOT for completion.",
 		)
-		expect(enabled.systemPrompt).toContain("attempt_completion: FORBIDDEN while any focus chain items remain [ ]")
-		expect(exposes(disabled, transport, "focus_chain_change")).toBe(false)
+		expect(enabled.systemPrompt).toContain("attempt_completion: FORBIDDEN while any TODO list item remains [ ]")
+		expect(exposes(disabled, transport, "change_todo_list")).toBe(false)
 		expect(disabled.systemPrompt).not.toContain("task_progress")
 		expect(disabled.systemPrompt).toContain("## TURN-END Tools")
 		expect(disabled.systemPrompt).toContain("## Task Closure Contract")
@@ -254,7 +254,7 @@ describe("Standard/Lite transport and capability behavior matrix", () => {
 		expect(disabled.systemPrompt).toContain(
 			"status_update / act_mode_respond: progress-only, MUST be followed by actual work tool. NOT for completion.",
 		)
-		expect(disabled.systemPrompt).not.toContain("attempt_completion: FORBIDDEN while any focus chain items remain [ ]")
+		expect(disabled.systemPrompt).not.toContain("attempt_completion: FORBIDDEN while any TODO list item remains [ ]")
 		for (const toolName of ["ask_followup_question", "make_plan", "qna_respond", "generate_report"]) {
 			expect(exposes(enabled, transport, toolName)).toBe(true)
 		}
@@ -268,7 +268,7 @@ describe("Standard/Lite transport and capability behavior matrix", () => {
 			focusChainSettings: { enabled: true, remindClineInterval: 6 },
 		})
 
-		expect(exposes(result, transport, "focus_chain_change")).toBe(false)
+		expect(exposes(result, transport, "change_todo_list")).toBe(false)
 		expect(result.systemPrompt).not.toContain("task_progress")
 		expect(JSON.stringify(result.tools ?? [])).not.toContain("task_progress")
 	})

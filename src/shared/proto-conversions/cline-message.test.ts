@@ -1,3 +1,4 @@
+import { ClineAsk } from "@shared/proto/dline/ui"
 import { describe, expect, it } from "vitest"
 import { convertClineMessageToProto, convertProtoToClineMessage } from "./cline-message"
 
@@ -25,5 +26,21 @@ describe("ClineMessage command identity conversion", () => {
 			commandExecutionMode: "background",
 			commandCanMoveToBackground: true,
 		})
+	})
+
+	it("round-trips the canonical TODO-list interaction through proto enum 20", () => {
+		const applicationMessage = {
+			ts: 101,
+			type: "ask" as const,
+			ask: "change_todo_list" as const,
+			text: JSON.stringify({ plan: "# Plan\n- [ ] First item", reason: "Review" }),
+		}
+
+		const protoMessage = convertClineMessageToProto(applicationMessage)
+		const roundTripMessage = convertProtoToClineMessage(protoMessage)
+
+		expect(ClineAsk.CHANGE_TODO_LIST).toBe(20)
+		expect(protoMessage.ask).toBe(ClineAsk.CHANGE_TODO_LIST)
+		expect(roundTripMessage.ask).toBe("change_todo_list")
 	})
 })
