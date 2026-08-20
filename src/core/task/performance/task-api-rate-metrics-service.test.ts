@@ -129,7 +129,7 @@ describe("TaskApiRateMetricsService", () => {
 		service.recordRequestStarted()
 		service.recordEstimatedTokens(120)
 
-		expect(service.getSnapshot()).toEqual({ activeSeconds: 1, requestsPerMinute: 60, tokensPerMinute: 7_200 })
+		expect(service.getSnapshot()).toEqual({ activeSeconds: 0, requestsPerMinute: 0, tokensPerMinute: 7_200 })
 		await expect(
 			service.query({ resolution: "minute", startSecond: 1_786_356_000, endSecond: 1_786_356_060 }),
 		).resolves.toMatchObject({ degraded: true, points: [expect.objectContaining({ tokenCount: 120, provisional: true })] })
@@ -155,19 +155,19 @@ describe("TaskApiRateMetricsService", () => {
 			expect.objectContaining({
 				schemaVersion: API_RATE_METRICS_SCHEMA_VERSION,
 				revision: 0,
-				signals: ["task_active", "provider_active", "request_start", "stream_tokens"],
+				signals: ["provider_active", "request_start", "stream_tokens"],
 				requestCount: 1,
 				estimatedTokens: 120,
 				effectiveTokens: 120,
-				runningActiveSeconds: 1,
+				runningActiveSeconds: 0,
 				runningProviderActiveSeconds: 1,
 				runningRequestCount: 1,
 				runningTokenCount: 120,
-				requestsPerMinute: 60,
+				requestsPerMinute: 0,
 				tokensPerMinute: 7_200,
 			}),
 		])
-		expect(service.getSnapshot()).toEqual({ activeSeconds: 1, requestsPerMinute: 60, tokensPerMinute: 7_200 })
+		expect(service.getSnapshot()).toEqual({ activeSeconds: 0, requestsPerMinute: 0, tokensPerMinute: 7_200 })
 
 		await vi.advanceTimersByTimeAsync(120_000)
 		await service.waitForPersistence()
@@ -234,11 +234,11 @@ describe("TaskApiRateMetricsService", () => {
 			{ second: 1_786_356_002, revision: 1, effectiveTokens: 0, tokenQuality: "exact" },
 		])
 		expect(canonical.at(-1)).toMatchObject({
-			runningActiveSeconds: 3,
+			runningActiveSeconds: 0,
 			runningProviderActiveSeconds: 3,
 			runningRequestCount: 1,
 			runningTokenCount: 200,
-			requestsPerMinute: 20,
+			requestsPerMinute: 0,
 			tokensPerMinute: 4_000,
 		})
 	})
@@ -286,6 +286,6 @@ describe("TaskApiRateMetricsService", () => {
 		expect(service.getSnapshot()).toEqual({ activeSeconds: 4, requestsPerMinute: 30, tokensPerMinute: 15_000 })
 
 		service.recordRequestStarted()
-		expect(service.getSnapshot()).toEqual({ activeSeconds: 5, requestsPerMinute: 36, tokensPerMinute: 12_000 })
+		expect(service.getSnapshot()).toEqual({ activeSeconds: 4, requestsPerMinute: 45, tokensPerMinute: 12_000 })
 	})
 })

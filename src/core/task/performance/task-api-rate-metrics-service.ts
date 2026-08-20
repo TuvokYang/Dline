@@ -188,7 +188,7 @@ export class TaskApiRateMetricsService {
 		const request = this.findOpenRequest()
 		if (!request) return
 		const exactBucket = this.ensureCurrentBucket()
-		exactBucket.signals.add("task_active")
+		if (this.taskLoopActive) exactBucket.signals.add("task_active")
 		exactBucket.signals.add("exact_usage")
 		const inputTokens =
 			sanitizeTokenCount(usage.inputTokens) +
@@ -225,7 +225,7 @@ export class TaskApiRateMetricsService {
 
 	getSnapshot(): ApiRateSnapshot {
 		const window = this.getRateWindow()
-		if (window.activeSeconds === 0) return {}
+		if (window.activeSeconds === 0 && window.providerActiveSeconds === 0) return {}
 		return {
 			activeSeconds: window.activeSeconds,
 			requestsPerMinute: extrapolatePerMinute(window.requestCount, window.activeSeconds),
@@ -403,7 +403,7 @@ export class TaskApiRateMetricsService {
 	}
 
 	private markCurrentActivity(bucket: MutableSecondBucket): void {
-		if (this.taskLoopActive || this.providerRequestActive) bucket.signals.add("task_active")
+		if (this.taskLoopActive) bucket.signals.add("task_active")
 		if (!this.providerRequestActive) return
 		bucket.signals.add("provider_active")
 		if (this.currentRequest) this.currentRequest.lastProviderSecond = bucket.second

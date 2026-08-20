@@ -67,6 +67,8 @@ export type RecoverCommitContextWindowIndicatorInput = RestoreContextWindowIndic
 
 export interface SettleContextWindowIndicatorInput {
 	lineage: ContextWindowIndicatorLineage
+	/** Provider-reported total context for the completed ordinary round, when available. */
+	authoritativeContextTokens?: number
 	updatedAt?: number
 }
 
@@ -192,19 +194,39 @@ export class ContextWindowIndicator {
 	}
 
 	beginSend(input: BeginContextWindowIndicatorSendInput): ContextWindowIndicatorSnapshot {
-		const stagedTokens = normalizeTokens(this.current.stagedTokens ?? 0)
-		const pendingSendTokens = Math.max(0, normalizeTokens(input.pendingSendTokens) - stagedTokens)
-		this.completedExchangeTokens = stagedTokens
+		const completedExchangeTokens = normalizeTokens(this.completedExchangeTokens)
+		const pendingInputTokens = normalizeTokens(this.pendingInputTokens)
+		const durableContextTokens = Math.max(
+			normalizeTokens(input.durableContextTokens),
+			this.current.durableContextTokens + completedExchangeTokens,
+		)
+		const pendingSendTokens = Math.max(
+			pendingInputTokens,
+			Math.max(0, normalizeTokens(input.pendingSendTokens) - completedExchangeTokens),
+		)
+		this.stableBaseline = {
+			snapshot: {
+				...cloneSnapshot(this.current),
+				durableContextTokens,
+				pendingSendTokens: 0,
+				receivingTokens: 0,
+				stagedTokens: pendingInputTokens,
+				phase: "stable",
+			},
+			completedExchangeTokens: 0,
+			pendingInputTokens,
+		}
+		this.completedExchangeTokens = 0
 		this.pendingInputTokens = 0
 		this.current = {
 			...this.current,
 			revision: this.current.revision + 1,
 			epoch: this.current.epoch + 1,
 			phase: "sending",
-			durableContextTokens: normalizeTokens(input.durableContextTokens),
+			durableContextTokens,
 			pendingSendTokens,
 			receivingTokens: 0,
-			stagedTokens,
+			stagedTokens: 0,
 			environmentTokens: normalizeTokens(input.environmentTokens),
 			contextWindow: normalizeTokens(input.contextWindow),
 			profileId: input.profileId,
@@ -227,29 +249,20 @@ export class ContextWindowIndicator {
 			return this.getSnapshot()
 		}
 		const pendingSendTokens = normalizeTokens(this.current.pendingSendTokens)
-		const priorStagedTokens = normalizeTokens(this.current.stagedTokens ?? 0)
-		const environmentTokens =
-			authoritativeContextTokens > 0
-				? Math.min(this.current.environmentTokens, Math.max(0, authoritativeContextTokens - receivingTokens))
-				: this.current.environmentTokens
-		const availableInputTokens = Math.max(0, authoritativeContextTokens - environmentTokens - receivingTokens)
-		const stagedTokens =
-			authoritativeContextTokens > 0
-				? Math.min(pendingSendTokens, availableInputTokens)
-				: priorStagedTokens + pendingSendTokens
-		const durableContextTokens =
-			authoritativeContextTokens > 0 ? Math.max(0, availableInputTokens - stagedTokens) : this.current.durableContextTokens
+		const availableCurrentInputTokens = Math.max(
+			0,
+			authoritativeContextTokens - this.current.durableContextTokens - this.current.environmentTokens - receivingTokens,
+		)
+		const stagedTokens = authoritativeContextTokens > 0 ? availableCurrentInputTokens : pendingSendTokens
 		this.completedExchangeTokens = stagedTokens
 		this.pendingInputTokens = 0
 		this.current = {
 			...this.current,
 			revision: this.current.revision + 1,
 			phase: "receiving",
-			durableContextTokens,
 			pendingSendTokens: 0,
 			receivingTokens,
 			stagedTokens,
-			environmentTokens,
 			updatedAt: input.updatedAt ?? Date.now(),
 		}
 		return this.getSnapshot()
@@ -262,7 +275,10 @@ export class ContextWindowIndicator {
 			...this.current,
 			revision: this.current.revision + 1,
 			phase: "committing",
-			durableContextTokens: mergeDurableTokens(input.durableContextTokens, input.pendingSendTokens),
+			durableContextTokens: Math.max(
+				this.current.durableContextTokens,
+				mergeDurableTokens(input.durableContextTokens, input.pendingSendTokens),
+			),
 			pendingSendTokens: 0,
 			receivingTokens: 0,
 			stagedTokens: 0,
@@ -295,23 +311,27 @@ export class ContextWindowIndicator {
 	}
 
 	recoverCommit(input: RecoverCommitContextWindowIndicatorInput): ContextWindowIndicatorSnapshot {
-		return this.replaceDurable(input, "committing")
+		return this.replaceDurable(input, "committing", false)
 	}
 
 	restore(input: RestoreContextWindowIndicatorInput): ContextWindowIndicatorSnapshot {
-		return this.replaceDurable(input, "restoring")
+		return this.replaceDurable(input, "restoring", true)
 	}
 
 	private replaceDurable(
 		input: RestoreContextWindowIndicatorInput,
 		phase: "committing" | "restoring",
+		allowDecrease: boolean,
 	): ContextWindowIndicatorSnapshot {
+		const replacementDurableTokens = mergeDurableTokens(input.durableContextTokens, input.pendingSendTokens)
 		this.current = {
 			...this.current,
 			revision: this.current.revision + 1,
 			epoch: this.current.epoch + 1,
 			phase,
-			durableContextTokens: mergeDurableTokens(input.durableContextTokens, input.pendingSendTokens),
+			durableContextTokens: allowDecrease
+				? replacementDurableTokens
+				: Math.max(this.current.durableContextTokens, replacementDurableTokens),
 			pendingSendTokens: 0,
 			receivingTokens: 0,
 			stagedTokens: 0,
@@ -329,20 +349,22 @@ export class ContextWindowIndicator {
 		return this.getSnapshot()
 	}
 
-	/** Fold a fully completed round into durable for legacy compaction boundaries; ENV is never folded. */
+	/** Commit a fully completed round into Durable; ENV is never folded. */
 	foldRound(input: FoldContextWindowIndicatorRoundInput): ContextWindowIndicatorSnapshot {
 		if (!isSameContextWindowIndicatorLineage(this.current.lineage, input.lineage)) return this.getSnapshot()
 		if (this.current.pendingSendTokens <= 0 && this.current.receivingTokens <= 0 && (this.current.stagedTokens ?? 0) <= 0) {
 			return this.getSnapshot()
 		}
 		const authoritativeContextTokens = normalizeTokens(input.authoritativeContextTokens ?? 0)
-		const durableContextTokens =
+		const durableContextTokens = Math.max(
+			this.current.durableContextTokens,
 			authoritativeContextTokens > 0
 				? Math.max(0, authoritativeContextTokens - this.current.environmentTokens)
 				: this.current.durableContextTokens +
-					this.current.pendingSendTokens +
-					this.current.receivingTokens +
-					(this.current.stagedTokens ?? 0)
+						this.current.pendingSendTokens +
+						this.current.receivingTokens +
+						(this.current.stagedTokens ?? 0),
+		)
 		this.completedExchangeTokens = 0
 		this.pendingInputTokens = 0
 		this.current = {
@@ -365,10 +387,11 @@ export class ContextWindowIndicator {
 			return this.getSnapshot()
 		}
 		if (this.current.phase === "sending" || this.current.phase === "receiving") {
-			this.completedExchangeTokens = normalizeTokens(
-				(this.current.stagedTokens ?? 0) + this.current.pendingSendTokens + this.current.receivingTokens,
-			)
-			this.pendingInputTokens = 0
+			this.foldRound({
+				lineage: input.lineage,
+				authoritativeContextTokens: input.authoritativeContextTokens,
+				updatedAt: input.updatedAt,
+			})
 		}
 		this.current = {
 			...this.current,
