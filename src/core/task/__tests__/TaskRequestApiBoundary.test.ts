@@ -14,14 +14,16 @@ function extractMethod(source: string, startMarker: string, endMarker: string): 
 }
 
 describe("Task request API boundary", () => {
-	it("captures the API scope before the first request-local await", async () => {
+	it("refreshes the latest Profile before freezing the request API scope", async () => {
 		const source = await readFile(taskSourcePath, "utf8")
 		const method = extractMethod(source, "async recursivelyMakeClineRequests(", "async loadContext(")
+		const refreshIndex = method.indexOf("await this.rebuildApiHandler()")
 		const scopeIndex = method.indexOf("const requestScope = createRequestApiScope(")
-		const firstAwaitIndex = method.indexOf("await ")
+		const requestLocalAwaitIndex = method.indexOf("await this.remoteWorkspaceDetectionPromise")
 
-		expect(scopeIndex).toBeGreaterThanOrEqual(0)
-		expect(firstAwaitIndex).toBeGreaterThan(scopeIndex)
+		expect(refreshIndex).toBeGreaterThanOrEqual(0)
+		expect(scopeIndex).toBeGreaterThan(refreshIndex)
+		expect(requestLocalAwaitIndex).toBeGreaterThan(scopeIndex)
 	})
 
 	it("lets an explicit manual compaction command reach slash-command parsing before auto compaction", async () => {
@@ -209,7 +211,10 @@ describe("Task request API boundary", () => {
 			'const isManual = input.trigger === "task_header" || input.trigger === "manual_compact_command"',
 		)
 		const manualAssignment = method.indexOf("this.taskState.isManualContextCompactionRequest = isManual", classificationStart)
-		const internalAssignment = method.indexOf("this.taskState.isInternalContextCompactionRequest = !isManual", manualAssignment)
+		const internalAssignment = method.indexOf(
+			"this.taskState.isInternalContextCompactionRequest = !isManual",
+			manualAssignment,
+		)
 
 		expect(classificationStart).toBeGreaterThanOrEqual(0)
 		expect(manualAssignment).toBeGreaterThan(classificationStart)
@@ -340,11 +345,7 @@ describe("Task request API boundary", () => {
 
 	it("restores the pre-attempt mistake counter while discarding automatic compaction output", async () => {
 		const source = await readFile(taskSourcePath, "utf8")
-		const method = extractMethod(
-			source,
-			"private async discardFailedCompactionAttempt(",
-			"private parsePreviousTokens(",
-		)
+		const method = extractMethod(source, "private async discardFailedCompactionAttempt(", "private parsePreviousTokens(")
 		const baselineRead = method.indexOf("getInitialConsecutiveMistakeCount(apiIndex)")
 		const historyRollback = method.indexOf("overwriteApiConversationHistory", baselineRead)
 		const counterRestore = method.indexOf(
@@ -398,6 +399,23 @@ describe("Task request API boundary", () => {
 		expect(promptBranch).toContain("await this.recoverApiFailure({")
 		expect(promptBranch).toContain("return true")
 		expect(promptBranch).not.toContain('return outcome.actionId === "start_new_task"')
+	})
+
+	it("marks automatic compaction recovery as an unsaved continuation", async () => {
+		const source = await readFile(taskSourcePath, "utf8")
+		const recoveryMethod = extractMethod(
+			source,
+			"private async recoverAutomaticCompactionFailure(",
+			"async handleWebviewAskResponse(",
+		)
+		const promptBranchStart = recoveryMethod.indexOf('await this.updateContextCompactionStatus("failed"')
+		const recoveryCallStart = recoveryMethod.indexOf("await this.recoverApiFailure({", promptBranchStart)
+		const recoveryCallEnd = recoveryMethod.indexOf("})", recoveryCallStart)
+		const recoveryCall = recoveryMethod.slice(recoveryCallStart, recoveryCallEnd)
+
+		expect(promptBranchStart).toBeGreaterThanOrEqual(0)
+		expect(recoveryCallStart).toBeGreaterThan(promptBranchStart)
+		expect(recoveryCall).toContain("persistedRequest: false")
 	})
 
 	it("closes or cancels explicit authority at every terminal request boundary", async () => {

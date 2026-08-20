@@ -120,7 +120,13 @@ export const OpenAIProvider = ({ showModelOptions, isPopup, profile, onUpdate }:
 	}
 
 	const handlePricingUpdate = (updates: Partial<ModelPricing>) => {
-		onUpdate({ openai: { ...pc, pricing: mergePricing(pc.pricing, updates) } })
+		onUpdate({
+			openai: {
+				...pc,
+				pricing: mergePricing(pc.pricing, updates),
+				...(updates.tiers === undefined ? {} : { pricingTiersEnabled: true }),
+			},
+		})
 	}
 
 	const handleStreamIdleTimeoutChange = (value: string) => {
@@ -283,6 +289,7 @@ export const OpenAIProvider = ({ showModelOptions, isPopup, profile, onUpdate }:
 						onCapabilitiesUpdate={handleCapabilitiesUpdate}
 						onPricingUpdate={handlePricingUpdate}
 						pricing={pc.pricing}
+						pricingTiersEnabled={pc.pricingTiersEnabled === true}
 						tiersEditable={true}
 					/>
 				</>

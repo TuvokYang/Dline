@@ -113,7 +113,7 @@ describe("messages_api_support", () => {
 
 			expect(converted).to.deep.equal([
 				{ name: "read_file", description: "Read", input_schema: { type: "object" } },
-				{ type: "web_search_20250305", name: "web_search" },
+				{ type: "web_search" },
 			])
 		})
 
@@ -371,6 +371,17 @@ describe("messages_api_support", () => {
 					type: "content_block_start",
 					index: 0,
 					content_block: {
+						type: "server_tool_use",
+						id: "srv_web_error",
+						name: "web_search",
+						input: {},
+						caller: { type: "direct" },
+					},
+				},
+				{
+					type: "content_block_start",
+					index: 1,
+					content_block: {
 						type: "web_search_tool_result",
 						tool_use_id: "srv_web_error",
 						content: error,
@@ -384,10 +395,34 @@ describe("messages_api_support", () => {
 					type: "server_tool",
 					function_id: "srv_web_error",
 					tool: ServerTool.WEB_SEARCH,
+					phase: "started",
+					input: {},
+				},
+				{
+					type: "server_tool",
+					function_id: "srv_web_error",
+					tool: ServerTool.WEB_SEARCH,
 					phase: "failed",
 					error,
 				},
 			])
+		})
+
+		it("ignores an orphan Anthropic hosted web search result", async () => {
+			const chunks = await collectChunks([
+				{
+					type: "content_block_start",
+					index: 0,
+					content_block: {
+						type: "web_search_tool_result",
+						tool_use_id: "srv_web_orphan",
+						content: [],
+						caller: { type: "direct" },
+					},
+				},
+			])
+
+			expect(chunks).to.deep.equal([])
 		})
 
 		it("throws a typed output-limit error when Anthropic stops at max_tokens", async () => {

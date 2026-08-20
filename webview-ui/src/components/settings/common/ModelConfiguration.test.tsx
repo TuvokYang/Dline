@@ -175,6 +175,28 @@ describe("ModelConfiguration", () => {
 		expect(screen.getByRole("button", { name: "Add Pricing Tier" })).toBeTruthy()
 	})
 
+	it("does not restore registry pricing tiers after an explicit empty override", () => {
+		render(
+			<ModelConfiguration
+				defaults={{
+					pricing: {
+						tiers: [{ contextWindow: 128_000, inputPrice: 1, outputPrice: 2 }],
+					} as ModelPricing,
+				}}
+				fields={{ pricing: ["pricingTiers"] }}
+				onCapabilitiesUpdate={vi.fn()}
+				onPricingUpdate={vi.fn()}
+				pricing={{ tiers: [] } as unknown as ModelPricing}
+				pricingTiersEnabled={true}
+				tiersEditable={true}
+			/>,
+		)
+
+		fireEvent.click(screen.getByRole("button", { name: /Model Configuration/i }))
+		expect(screen.queryByLabelText("Up To Input Tokens")).toBeNull()
+		expect(screen.getByRole("button", { name: "Add Pricing Tier" })).toBeTruthy()
+	})
+
 	it("persists edits to registry default tiers as provider overrides", () => {
 		const onCapabilitiesUpdate = vi.fn()
 		const defaults: Partial<ModelInfo> = {

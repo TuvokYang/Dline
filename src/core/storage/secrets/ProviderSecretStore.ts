@@ -34,6 +34,10 @@ export function setProviderSecretsBatch(entries: Record<string, ProviderSecretEn
 	return getStore().setBatch(entries)
 }
 
+export function reloadProviderSecretStore(): void {
+	getStore().reload()
+}
+
 export function getAllProviderSecrets(): Record<string, ProviderSecretEntry> {
 	const result: Record<string, ProviderSecretEntry> = {}
 	const providerSecrets = getStore()

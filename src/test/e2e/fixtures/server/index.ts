@@ -137,6 +137,12 @@ export type OpenAiMockResponse =
 			actions?: readonly MockHostedWebSearchActionCall[]
 			followupTools?: readonly MockToolCall[]
 	  } & MockResponseOptions)
+	| ({
+			type: "anthropic-orphan-web-search-result"
+			id?: string
+			results: readonly MockHostedWebSearchResult[]
+			followupTools?: readonly MockToolCall[]
+	  } & MockResponseOptions)
 	| {
 			type: "error"
 			status: number
@@ -152,6 +158,7 @@ export type MockThinkingConfig = { mode: "effort"; effort: string } | { mode: "b
 
 export interface MockApiConsumption {
 	receivedAtMs: number
+	authorization?: string
 	abortedAtMs?: number
 	target: MockApiTarget
 	provider: string
@@ -228,7 +235,9 @@ function getResponseToolCalls(response: Exclude<OpenAiMockResponse, { type: "err
 		return [response]
 	}
 	if (response.type === "tools") return response.tools
-	if (response.type === "hosted-web-search") return response.followupTools ?? []
+	if (response.type === "hosted-web-search" || response.type === "anthropic-orphan-web-search-result") {
+		return response.followupTools ?? []
+	}
 	return []
 }
 
@@ -503,7 +512,7 @@ export class ClineApiServerMock {
 		this.currentUser = user
 	}
 
-	private consumeMockResponse(target: MockApiTarget, path: string, requestBody: unknown) {
+	private consumeMockResponse(target: MockApiTarget, path: string, requestBody: unknown, authorization?: string) {
 		const receivedAtMs = Date.now()
 		const route = E2E_MOCK_PROVIDER_ROUTES[target]
 		const requestText = JSON.stringify(requestBody)
@@ -554,6 +563,7 @@ export class ClineApiServerMock {
 		const responseToolCalls = response.type === "error" ? [] : getResponseToolCalls(response)
 		const consumption: MockApiConsumption = {
 			receivedAtMs,
+			...(authorization ? { authorization } : {}),
 			target,
 			provider: route.provider,
 			protocol: route.protocol,
@@ -860,7 +870,7 @@ export class ClineApiServerMock {
 						response: scriptedResponse,
 						usage,
 						consumption,
-					} = controller.consumeMockResponse(target, path, parsed)
+					} = controller.consumeMockResponse(target, path, parsed, authHeader)
 					const markAborted = () => {
 						if (!res.writableFinished) consumption.abortedAtMs ??= Date.now()
 					}
@@ -1405,11 +1415,30 @@ export class ClineApiServerMock {
 								}))
 							: [{ type: "text", text: messageText }]
 					const hostedSearchId =
-						scriptedResponse.type === "hosted-web-search"
+						scriptedResponse.type === "hosted-web-search" ||
+						scriptedResponse.type === "anthropic-orphan-web-search-result"
 							? (scriptedResponse.id ?? `srv_web_${generationId}`)
 							: undefined
+					const hostedResultBlock =
+						hostedSearchId &&
+						(scriptedResponse.type === "hosted-web-search" ||
+							scriptedResponse.type === "anthropic-orphan-web-search-result")
+							? {
+									type: "web_search_tool_result",
+									tool_use_id: hostedSearchId,
+									content: scriptedResponse.results.map((result) => ({
+										type: "web_search_result",
+										url: result.url,
+										title: result.title,
+										...(result.snippet ? { snippet: result.snippet } : {}),
+										page_age: null,
+										encrypted_content: `e2e:${result.url}`,
+									})),
+									caller: { type: "direct" },
+								}
+							: undefined
 					const hostedContentBlocks =
-						scriptedResponse.type === "hosted-web-search" && hostedSearchId
+						scriptedResponse.type === "hosted-web-search" && hostedSearchId && hostedResultBlock
 							? [
 									{
 										type: "server_tool_use",
@@ -1418,21 +1447,11 @@ export class ClineApiServerMock {
 										input: { query: scriptedResponse.query },
 										caller: { type: "direct" },
 									},
-									{
-										type: "web_search_tool_result",
-										tool_use_id: hostedSearchId,
-										content: scriptedResponse.results.map((result) => ({
-											type: "web_search_result",
-											url: result.url,
-											title: result.title,
-											...(result.snippet ? { snippet: result.snippet } : {}),
-											page_age: null,
-											encrypted_content: `e2e:${result.url}`,
-										})),
-										caller: { type: "direct" },
-									},
+									hostedResultBlock,
 								]
-							: []
+							: scriptedResponse.type === "anthropic-orphan-web-search-result" && hostedResultBlock
+								? [hostedResultBlock]
+								: []
 					const contentBlocks = [...hostedContentBlocks, ...ordinaryContentBlocks]
 					const thinkingBlock = scriptedResponse.reasoning
 						? {

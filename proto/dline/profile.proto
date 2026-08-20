@@ -102,4 +102,6 @@ message ApiProfilesResponse {
 /** Request for updateApiProfiles RPC. */
 message UpdateApiProfilesRequest {
   repeated ApiProfile profiles = 1;
+  // Profile IDs whose flat API key should be explicitly removed.
+  repeated string clear_api_key_profile_ids = 2;
 }

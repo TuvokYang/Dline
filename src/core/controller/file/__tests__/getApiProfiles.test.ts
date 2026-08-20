@@ -132,7 +132,7 @@ describe("getApiProfiles", () => {
 			}),
 		)
 
-		await updateApiProfiles({} as any, { profiles })
+		await updateApiProfiles({} as any, { profiles, clearApiKeyProfileIds: [] })
 
 		const profilesPath = path.join(process.env.DLINE_DIR!, "data", "settings", "api_profiles.json")
 		const raw = await fs.readFile(profilesPath, "utf8")
@@ -150,6 +150,46 @@ describe("getApiProfiles", () => {
 		for (const profile of profiles) {
 			expect(restored.find((candidate) => candidate.id === profile.id)?.apiKey).to.equal(profile.apiKey)
 		}
+	})
+
+	it("preserves empty-key snapshots unless the Profile explicitly clears or deletes the secret", async () => {
+		const controller = { postStateToWebview: vi.fn() } as any
+		const profileId = "profile-key-lifecycle"
+		const createProfile = (name: string, apiKey = "") =>
+			ApiProfile.create({
+				id: profileId,
+				name,
+				provider: "anthropic",
+				modelId: "claude-sonnet-4-6",
+				apiKey,
+				usedFor: ["act"],
+				enabled: true,
+			})
+
+		await updateApiProfiles(controller, {
+			profiles: [createProfile("Original Profile", "sk-preserved")],
+			clearApiKeyProfileIds: [],
+		})
+		expect(getAllApiKeys()[profileId]).to.deep.equal({ apiKey: "sk-preserved", name: "Original Profile" })
+
+		await updateApiProfiles(controller, {
+			profiles: [createProfile("Renamed Profile")],
+			clearApiKeyProfileIds: [],
+		})
+		expect(getAllApiKeys()[profileId]).to.deep.equal({ apiKey: "sk-preserved", name: "Renamed Profile" })
+
+		await updateApiProfiles(controller, {
+			profiles: [createProfile("Renamed Profile")],
+			clearApiKeyProfileIds: [profileId],
+		})
+		expect(getAllApiKeys()).not.to.have.property(profileId)
+
+		await updateApiProfiles(controller, {
+			profiles: [createProfile("Restored Profile", "sk-restored")],
+			clearApiKeyProfileIds: [],
+		})
+		await updateApiProfiles(controller, { profiles: [], clearApiKeyProfileIds: [] })
+		expect(getAllApiKeys()).not.to.have.property(profileId)
 	})
 
 	it("moves nested provider credentials to provider_secrets.json while preserving non-secret options", async () => {
@@ -187,7 +227,7 @@ describe("getApiProfiles", () => {
 			}),
 		]
 
-		await updateApiProfiles({} as any, { profiles })
+		await updateApiProfiles({} as any, { profiles, clearApiKeyProfileIds: [] })
 
 		const profilesPath = path.join(process.env.DLINE_DIR!, "data", "settings", "api_profiles.json")
 		const raw = await fs.readFile(profilesPath, "utf8")

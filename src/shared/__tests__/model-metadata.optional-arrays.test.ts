@@ -1,5 +1,5 @@
 import { ModelInfo } from "@shared/proto/dline/models"
-import { ApiFormat, ModelCapabilities, ServerTool } from "@shared/proto/dline/models/metadata"
+import { ApiFormat, ModelCapabilities, ModelPricing, ServerTool } from "@shared/proto/dline/models/metadata"
 import { describe, expect, it } from "vitest"
 
 describe("optional repeated model metadata", () => {
@@ -26,5 +26,13 @@ describe("optional repeated model metadata", () => {
 		expect(decoded.apiFormats).toEqual([ApiFormat.OPENAI_CHAT, ApiFormat.OPENAI_RESPONSES])
 		expect(decoded.capabilities?.tools).toEqual([ServerTool.WEB_SEARCH])
 		expect(decoded.capabilities?.supportsBrowserAction).toBe(true)
+	})
+
+	it("preserves explicitly empty context and pricing tiers in JSON conversion", () => {
+		const capabilities = ModelCapabilities.create({ contextWindowTiers: [] })
+		const pricing = ModelPricing.create({ tiers: [] })
+
+		expect(ModelCapabilities.fromJSON(ModelCapabilities.toJSON(capabilities)).contextWindowTiers).toEqual([])
+		expect(ModelPricing.fromJSON(ModelPricing.toJSON(pricing)).tiers).toEqual([])
 	})
 })

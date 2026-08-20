@@ -133,6 +133,86 @@ e2e(
 )
 
 e2e(
+	"Settings API Config - preserves an API key across an ordinary Profile edit and VS Code restart",
+	async ({ dlineDir, helper, openVSCode, userDataDir, workspaceDir }) => {
+		e2e.setTimeout(180_000)
+		const profilesPath = path.join(dlineDir, "data", "settings", "api_profiles.json")
+		const apiKeysPath = path.join(dlineDir, "data", "secrets", "api_keys.json")
+		const apiKey = "e2e-profile-preserved-key"
+		const renamedProfile = "Anthropic key persistence"
+		let firstApp: ElectronApplication | undefined
+		let reopenedApp: ElectronApplication | undefined
+
+		try {
+			firstApp = await openVSCode(workspaceDir)
+			const firstPage = await firstApp.firstWindow()
+			await E2ETestHelper.openClineSidebar(firstPage)
+			const firstSidebar = await helper.getSidebar(firstPage)
+			await helper.signin(firstSidebar)
+			await firstPage.getByRole("button", { name: "Settings", exact: true }).click()
+			await expect(firstSidebar.getByRole("heading", { name: "API Configuration" })).toBeVisible()
+
+			const existingProfileIds = new Set((await readJson<StoredProfile[]>(profilesPath)).map((profile) => profile.id))
+			await firstSidebar.getByRole("button", { name: "Add API" }).click()
+			const profileCard = firstSidebar.getByTestId("api-profile-card").last()
+			const profileId = await E2ETestHelper.waitForValue(async () => {
+				const profiles = await readJson<StoredProfile[]>(profilesPath)
+				return profiles.find((profile) => !existingProfileIds.has(profile.id))?.id
+			})
+			await profileCard.getByRole("combobox", { name: "Provider", exact: true }).selectOption("anthropic")
+			await E2ETestHelper.waitUntil(async () => {
+				const profile = (await readJson<StoredProfile[]>(profilesPath)).find((candidate) => candidate.id === profileId)
+				return profile?.provider === "anthropic"
+			})
+
+			const apiKeyInput = profileCard.getByRole("textbox", { name: "Anthropic API Key", exact: true })
+			await apiKeyInput.fill(apiKey)
+			await apiKeyInput.press("Tab")
+			await E2ETestHelper.waitUntil(async () => {
+				const apiKeys = await readJson<Record<string, { apiKey?: string }>>(apiKeysPath)
+				return apiKeys[profileId]?.apiKey === apiKey
+			})
+
+			const storedProfile = (await readJson<StoredProfile[]>(profilesPath)).find((profile) => profile.id === profileId)
+			if (!storedProfile) throw new Error("Created Anthropic Profile is missing")
+			const profileNameInput = profileCard.getByRole("textbox", { name: storedProfile.name, exact: true })
+			await profileNameInput.fill(renamedProfile)
+			await profileNameInput.blur()
+			await E2ETestHelper.waitUntil(async () => {
+				const profiles = await readJson<StoredProfile[]>(profilesPath)
+				return profiles.find((profile) => profile.id === profileId)?.name === renamedProfile
+			})
+			expect((await readJson<Record<string, { apiKey?: string }>>(apiKeysPath))[profileId]?.apiKey).toBe(apiKey)
+			expect(await readFile(profilesPath, "utf8")).not.toContain(apiKey)
+
+			await firstApp.close()
+			firstApp = undefined
+			helper.clearCachedFrame()
+
+			reopenedApp = await openVSCode(workspaceDir)
+			const reopenedPage = await reopenedApp.firstWindow()
+			await E2ETestHelper.openClineSidebar(reopenedPage)
+			const reopenedSidebar = await helper.getSidebar(reopenedPage)
+			await helper.signin(reopenedSidebar)
+			await reopenedPage.getByRole("button", { name: "Settings", exact: true }).click()
+
+			const reopenedCard = reopenedSidebar
+				.getByTestId("api-profile-card")
+				.filter({ has: reopenedSidebar.locator(`input[value="${renamedProfile}"]`) })
+			await expect(reopenedCard).toHaveCount(1)
+			await reopenedCard.locator('[role="button"][tabindex="0"]').press("Enter")
+			await expect(reopenedCard.getByRole("combobox", { name: "Provider", exact: true })).toBeVisible()
+			await expect(reopenedCard.getByRole("textbox", { name: "Anthropic API Key", exact: true })).toHaveValue(apiKey)
+			expect((await readJson<Record<string, { apiKey?: string }>>(apiKeysPath))[profileId]?.apiKey).toBe(apiKey)
+			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+		} finally {
+			await reopenedApp?.close()
+			await firstApp?.close()
+		}
+	},
+)
+
+e2e(
 	"Settings API Config - stores Bedrock and SAP structured credentials only in provider secrets and restores them",
 	async ({ dlineDir, helper, openVSCode, workspaceDir }) => {
 		e2e.setTimeout(180_000)

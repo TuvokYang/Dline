@@ -88,6 +88,7 @@ export const AnthropicProvider = ({ showModelOptions, isPopup, profile, onUpdate
 			anthropic: {
 				...pc,
 				pricing: mergePricing(pc.pricing, updates),
+				...(updates.tiers === undefined ? {} : { pricingTiersEnabled: true }),
 			},
 		})
 	}
@@ -192,6 +193,7 @@ export const AnthropicProvider = ({ showModelOptions, isPopup, profile, onUpdate
 								onCapabilitiesUpdate={handleCapabilitiesUpdate}
 								onPricingUpdate={handlePricingUpdate}
 								pricing={pc.pricing}
+								pricingTiersEnabled={pc.pricingTiersEnabled === true}
 								// Official models show registry tiers editable; custom models can add their own tiers.
 								tiersEditable={true}
 							/>
@@ -305,6 +307,7 @@ const CustomModelConfig = ({
 				onCapabilitiesUpdate={onCapabilitiesUpdate}
 				onPricingUpdate={onPricingUpdate}
 				pricing={pricing}
+				pricingTiersEnabled={pc.pricingTiersEnabled === true}
 				tiersEditable={true}
 			/>
 		</>

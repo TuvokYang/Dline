@@ -12,6 +12,8 @@ import {
 	getApiKey,
 	getProviderSecret,
 	type ProviderSecretEntry,
+	reloadApiKeyStore,
+	reloadProviderSecretStore,
 	setApiKey,
 	setProviderSecretsBatch,
 } from "@core/storage/secrets"
@@ -642,8 +644,12 @@ export async function readApiProfilesFresh(): Promise<ApiProfile[]> {
 	try {
 		const raw = await fs.readFile(filePath, "utf8")
 		const profiles = parseApiProfilesJson(raw).profiles
+		reloadApiKeyStore()
+		reloadProviderSecretStore()
 		hydrateApiKeys(profiles)
 		hydrateProviderSecrets(profiles)
+		applyRegistryModelDefaults(profiles)
+		applyRegistryModelInfo(profiles)
 		return profiles
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code === "ENOENT") return []

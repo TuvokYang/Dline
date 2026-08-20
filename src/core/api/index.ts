@@ -295,15 +295,7 @@ export function resolveProvider(config: ApiConfiguration, mode: Mode): string | 
  * Looks up the profile by name from api_profiles.json and passes the full
  * ApiProfile into the handler via ApiHandlerContext.
  */
-export function buildApiHandler(configuration: ApiConfiguration, mode: Mode): ApiHandler {
-	const profileName = mode === "plan" ? configuration.planModeProfile : configuration.actModeProfile
-	if (!profileName) {
-		throw new Error(`No profile configured for ${mode} mode`)
-	}
-	const profile = findEnabledProfileByName(profileName)
-	if (!profile) {
-		throw new Error(`Profile "${profileName}" not found`)
-	}
+export function buildApiHandlerFromProfile(configuration: ApiConfiguration, mode: Mode, profile: ApiProfile): ApiHandler {
 	const runtimeProfile = applyTaskRuntimeOverrides({ ...profile, modelInfo: getProfileModelInfo(profile) }, configuration, mode)
 	return createHandlerForProvider({
 		profile: runtimeProfile,
@@ -314,4 +306,16 @@ export function buildApiHandler(configuration: ApiConfiguration, mode: Mode): Ap
 		enableParallelToolCalling: configuration.enableParallelToolCalling,
 		onStreamEstimatedTokens: configuration.onStreamEstimatedTokens,
 	})
+}
+
+export function buildApiHandler(configuration: ApiConfiguration, mode: Mode): ApiHandler {
+	const profileName = mode === "plan" ? configuration.planModeProfile : configuration.actModeProfile
+	if (!profileName) {
+		throw new Error(`No profile configured for ${mode} mode`)
+	}
+	const profile = findEnabledProfileByName(profileName)
+	if (!profile) {
+		throw new Error(`Profile "${profileName}" not found`)
+	}
+	return buildApiHandlerFromProfile(configuration, mode, profile)
 }

@@ -213,7 +213,7 @@ describe("AnthropicHandler", () => {
 					description: "Read",
 					input_schema: { type: "object", properties: {} },
 				},
-				{ type: "web_search_20250305", name: "web_search" },
+				{ type: "web_search" },
 			])
 			expect(standardCreate.mock.calls[0]?.[0]?.tool_choice).to.deep.equal({ type: "any" })
 			expect(handler.supportsServerTool(ServerTool.WEB_SEARCH)).to.equal(true)
@@ -242,7 +242,7 @@ describe("AnthropicHandler", () => {
 			)) {
 			}
 
-			expect(standardCreate.mock.calls[0]?.[0]?.tools).to.deep.equal([{ type: "web_search_20250305", name: "web_search" }])
+			expect(standardCreate.mock.calls[0]?.[0]?.tools).to.deep.equal([{ type: "web_search" }])
 			should(standardCreate.mock.calls[0]?.[0]?.tool_choice).equal(undefined)
 		})
 

@@ -979,6 +979,89 @@ e2e(
 )
 
 e2e(
+	"ServerTool runtime - Anthropic Auto advertises plain web_search without inventing a hosted action",
+	async ({ dlineDir, dlineDocsDir, dlineHomeDir, helper, openVSCode, server, userDataDir, workspaceDir }) => {
+		e2e.setTimeout(180_000)
+		expectIsolatedDirectories(dlineDir, dlineHomeDir, dlineDocsDir)
+		await prepareRuntimeProfile(dlineDir, E2E_PROFILE_NAMES.mockAnthropic, {
+			enabled: true,
+			mode: "WEB_SEARCH_MODE_AUTO",
+			supportsWebSearch: true,
+		})
+		const completion = "E2E_ANTHROPIC_NO_HOSTED_ACTION_OK"
+		server.enqueueResponses("anthropic-messages", {
+			type: "tool",
+			id: "call_anthropic_no_hosted_action_done",
+			name: "attempt_completion",
+			arguments: { result: completion },
+		})
+
+		let app: ElectronApplication | undefined
+		try {
+			const opened = await openSidebar(openVSCode, workspaceDir, helper)
+			app = opened.app
+			await setAutoApproveAction(opened.sidebar, "Use Web", true)
+			await sendTask(opened.sidebar, "Finish without executing web search.")
+			await expect(opened.sidebar.getByText(completion, { exact: false }).last()).toBeVisible({ timeout: 60_000 })
+
+			const firstRequest = await E2ETestHelper.waitForValue(
+				async () => server.getMockConsumptions("anthropic-messages")[0],
+				30_000,
+			)
+			expect(searchMechanisms(firstRequest).hosted).toEqual([{ type: "web_search" }])
+			await expect(opened.sidebar.getByText("Dline searched the web for:", { exact: true })).toHaveCount(0)
+			await expect(opened.sidebar.getByTestId("web-search-card")).toHaveCount(0)
+			expect(server.getSearxngSearchRequests()).toHaveLength(0)
+			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+		} finally {
+			await app?.close()
+		}
+	},
+)
+
+e2e(
+	"ServerTool runtime - Anthropic ignores an orphan hosted Web Search result",
+	async ({ dlineDir, dlineDocsDir, dlineHomeDir, helper, openVSCode, server, userDataDir, workspaceDir }) => {
+		e2e.setTimeout(180_000)
+		expectIsolatedDirectories(dlineDir, dlineHomeDir, dlineDocsDir)
+		await prepareRuntimeProfile(dlineDir, E2E_PROFILE_NAMES.mockAnthropic, {
+			enabled: true,
+			mode: "WEB_SEARCH_MODE_AUTO",
+			supportsWebSearch: true,
+		})
+		const completion = "E2E_ANTHROPIC_ORPHAN_HOSTED_RESULT_IGNORED"
+		server.enqueueResponses("anthropic-messages", {
+			type: "anthropic-orphan-web-search-result",
+			id: "srv_web_anthropic_orphan_e2e",
+			results: [{ title: "Orphan result", url: "https://example.test/anthropic-orphan" }],
+			followupTools: [
+				{
+					id: "call_anthropic_orphan_done",
+					name: "attempt_completion",
+					arguments: { result: completion },
+				},
+			],
+		})
+
+		let app: ElectronApplication | undefined
+		try {
+			const opened = await openSidebar(openVSCode, workspaceDir, helper)
+			app = opened.app
+			await setAutoApproveAction(opened.sidebar, "Use Web", true)
+			await sendTask(opened.sidebar, "Finish without executing web search.")
+			await expect(opened.sidebar.getByText(completion, { exact: false }).last()).toBeVisible({ timeout: 60_000 })
+
+			await expect(opened.sidebar.getByText("Dline searched the web for:", { exact: true })).toHaveCount(0)
+			await expect(opened.sidebar.getByTestId("web-search-card")).toHaveCount(0)
+			expect(server.getSearxngSearchRequests()).toHaveLength(0)
+			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+		} finally {
+			await app?.close()
+		}
+	},
+)
+
+e2e(
 	"ServerTool runtime - Auto falls back to local Web Search and returns its result to the provider",
 	async ({ dlineDir, dlineDocsDir, dlineHomeDir, helper, openVSCode, server, userDataDir, workspaceDir }) => {
 		e2e.setTimeout(180_000)

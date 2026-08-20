@@ -99,10 +99,12 @@ export function buildEffectiveModelInfo(
 	} as ModelCapabilities
 	const mergedPricing = overrides.pricing ? (mergeDefined(base.pricing, overrides.pricing) as ModelPricing) : base.pricing
 	const overrideTiers = overrides.pricing?.tiers ?? []
-	const selectedTiers = overrides.pricingTiersEnabled === true && overrideTiers.length > 0 ? overrideTiers : base.pricing?.tiers
+	const selectedTiers = overrides.pricingTiersEnabled === true ? overrideTiers : base.pricing?.tiers
 	const pricing = mergedPricing
 		? ({ ...mergedPricing, ...(selectedTiers !== undefined && { tiers: selectedTiers }) } as ModelPricing)
-		: mergedPricing
+		: selectedTiers !== undefined
+			? ({ tiers: selectedTiers } as ModelPricing)
+			: undefined
 
 	return {
 		...base,

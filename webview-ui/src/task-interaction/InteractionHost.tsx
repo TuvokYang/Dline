@@ -97,6 +97,11 @@ export function InteractionHost({
 
 	return (
 		<section>
+			{view.profileInvalid ? (
+				<div className="mx-3.5 mb-1 text-xs text-(--vscode-errorForeground)" role="alert">
+					{view.profileInvalid.message}
+				</div>
+			) : null}
 			{view.diagnostic ? (
 				<div className="mx-3.5 mb-1 text-xs text-(--vscode-errorForeground)" role="alert">
 					{DIAGNOSTIC_MESSAGES[view.diagnostic.code]}

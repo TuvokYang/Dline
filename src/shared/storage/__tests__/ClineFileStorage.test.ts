@@ -53,6 +53,22 @@ describe("ClineFileStorage", () => {
 		expect(JSON.parse(fs.readFileSync(storagePath, "utf8"))).toEqual({ profile: { apiKey: "secret" } })
 	})
 
+	it("merges completed writes from another storage instance before persisting", () => {
+		const storagePath = path.join(tempDir, "api_keys.json")
+		const first = new ClineFileStorage<{ apiKey: string }>(storagePath, "FirstApiKeyStore")
+		const second = new ClineFileStorage<{ apiKey: string }>(storagePath, "SecondApiKeyStore")
+
+		first.setBatch({ first: { apiKey: "secret-1" } })
+		second.setBatch({ second: { apiKey: "secret-2" } })
+
+		expect(JSON.parse(fs.readFileSync(storagePath, "utf8"))).toEqual({
+			first: { apiKey: "secret-1" },
+			second: { apiKey: "secret-2" },
+		})
+		first.reload()
+		expect(first.get("second")).toEqual({ apiKey: "secret-2" })
+	})
+
 	it("propagates permanent write failures without committing the in-memory value", () => {
 		const storagePath = path.join(tempDir, "api_keys.json")
 		const storage = new ClineFileStorage<{ apiKey: string }>(storagePath, "ApiKeyStore")

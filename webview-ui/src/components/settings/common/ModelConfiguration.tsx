@@ -70,6 +70,9 @@ interface ModelConfigurationProps {
 
 	// Whether tier arrays can be added, edited, and removed.
 	tiersEditable?: boolean
+
+	// Whether pricing tiers are an explicit provider override, including an empty list.
+	pricingTiersEnabled?: boolean
 }
 
 /**
@@ -85,6 +88,7 @@ export const ModelConfiguration = ({
 	fields,
 	defaults,
 	tiersEditable = false,
+	pricingTiersEnabled = false,
 }: ModelConfigurationProps) => {
 	const [expanded, setExpanded] = useState(false)
 	const [draftChecks, setDraftChecks] = useState<Partial<Record<CapabilityCheckField, boolean>>>({})
@@ -93,7 +97,9 @@ export const ModelConfiguration = ({
 	const [draftContextTiers, setDraftContextTiers] = useState(
 		capabilityOverrides?.contextWindowTiers ?? defaults?.capabilities?.contextWindowTiers ?? [],
 	)
-	const [draftPricingTiers, setDraftPricingTiers] = useState(pricingOverrides?.tiers ?? defaults?.pricing?.tiers ?? [])
+	const [draftPricingTiers, setDraftPricingTiers] = useState(
+		pricingTiersEnabled ? (pricingOverrides?.tiers ?? []) : (pricingOverrides?.tiers ?? defaults?.pricing?.tiers ?? []),
+	)
 
 	// Extract current values from provider overrides
 	const capabilities: ModelCapabilities = capabilityOverrides ?? ({} as ModelCapabilities)
@@ -157,8 +163,10 @@ export const ModelConfiguration = ({
 	}, [capabilityOverrides?.contextWindowTiers, defaults?.capabilities?.contextWindowTiers])
 
 	useEffect(() => {
-		setDraftPricingTiers(pricingOverrides?.tiers ?? defaults?.pricing?.tiers ?? [])
-	}, [pricingOverrides?.tiers, defaults?.pricing?.tiers])
+		setDraftPricingTiers(
+			pricingTiersEnabled ? (pricingOverrides?.tiers ?? []) : (pricingOverrides?.tiers ?? defaults?.pricing?.tiers ?? []),
+		)
+	}, [pricingOverrides?.tiers, defaults?.pricing?.tiers, pricingTiersEnabled])
 
 	// Derive currency symbol from pricing.currency
 	const currencySymbol = (() => {

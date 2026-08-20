@@ -22,11 +22,13 @@ export const deleteApiKey = ApiKeyStore.deleteApiKey
 export const getAllApiKeys = ApiKeyStore.getAllApiKeys
 export const migrateApiKey = ApiKeyStore.migrateApiKey
 export const setApiKeysBatch = ApiKeyStore.setApiKeysBatch
+export const reloadApiKeyStore = ApiKeyStore.reloadApiKeyStore
 
 // Provider-specific credentials that do not fit the single ApiProfile.apiKey field
 export const getProviderSecret = ProviderSecretStore.getProviderSecret
 export const getAllProviderSecrets = ProviderSecretStore.getAllProviderSecrets
 export const setProviderSecretsBatch = ProviderSecretStore.setProviderSecretsBatch
+export const reloadProviderSecretStore = ProviderSecretStore.reloadProviderSecretStore
 
 // OpenAI Codex OAuth
 export const getOpenAiCodexAuth = OpenAiCodexAuthStore.getOpenAiCodexAuth

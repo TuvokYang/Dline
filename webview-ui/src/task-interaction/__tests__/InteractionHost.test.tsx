@@ -166,13 +166,13 @@ describe("InteractionHost", () => {
 		if (!view.activeInteraction) throw new Error("Expected active interaction")
 		view.activeInteraction = {
 			...view.activeInteraction,
-			kind: "focus_chain_change",
+			kind: "change_todo_list",
 			presentationKind: "focus_chain_change",
-			taskAsk: "focus_chain_change",
+			taskAsk: "change_todo_list",
 		}
 		const message: ClineMessage = {
 			...ASK,
-			ask: "focus_chain_change",
+			ask: "change_todo_list",
 			text: JSON.stringify({ plan: "# Plan\n- [ ] First item\n- [ ] Second item", reason: "Review" }),
 		}
 		render(<InteractionHost dispatch={dispatch} messages={[message]} view={view} />)
@@ -229,7 +229,7 @@ describe("InteractionHost", () => {
 		expect(screen.queryByRole("button", { name: "Approve" })).toBeNull()
 	})
 
-	it("uses the API error row and bottom Profile selector as the Profile validity surfaces", () => {
+	it("renders the Profile validity diagnostic while recovery remains owned by the bottom Profile selector", () => {
 		const view = taskView()
 		delete view.activeInteraction
 		view.phase = "between_turns"
@@ -244,7 +244,7 @@ describe("InteractionHost", () => {
 
 		render(<InteractionHost dispatch={vi.fn()} messages={[SAY]} view={view} />)
 
-		expect(screen.queryByText("Profile not valid")).toBeNull()
+		expect(screen.getByRole("alert")).toHaveTextContent('Profile not valid: "deleted-profile" no longer exists.')
 		expect(screen.queryByRole("button", { name: "Select profile" })).toBeNull()
 		expect(TaskServiceClient.cancelTask).not.toHaveBeenCalled()
 	})

@@ -1,4 +1,4 @@
-import { ApiHandler, ApiProviderInfo, buildApiHandler, resolveProviderFromProfile } from "@core/api"
+import { ApiHandler, ApiProviderInfo, buildApiHandlerFromProfile, resolveProviderFromProfile } from "@core/api"
 import { recordProviderAdapterInput, recordProviderAdapterOutput } from "@core/api/debug/api-conversation-log"
 import type { WebSearchRoutingPlan } from "@core/api/server-tools"
 import { createIdentityFactory } from "@core/api/transform/block-identity"
@@ -237,6 +237,7 @@ import {
 	createUnavailableApiHandler,
 	reconcileTaskProfileInvalidState,
 	resolveTaskApiProfile,
+	resolveTaskApiProfileFresh,
 	toTaskProfileInvalidState,
 	validateResolvedTaskApiProfile,
 } from "./ApiProfileRecovery"
@@ -693,7 +694,13 @@ export class Task {
 						})
 						return
 					}
-					if (effect.persistedRequest === false) {
+					const hasContinuationDraft = Boolean(
+						effect.draft &&
+							(effect.draft.text.trim().length > 0 ||
+								effect.draft.images.length > 0 ||
+								effect.draft.files.length > 0),
+					)
+					if (effect.persistedRequest === false && !hasContinuationDraft) {
 						const pendingContinuation = this.pendingAutomaticCompactionContinuation
 						if (!pendingContinuation) {
 							throw new Error("Automatic compaction continuation is missing")
@@ -1024,9 +1031,10 @@ export class Task {
 
 		// Keep history readable even when no profile can be resolved. Continuing the task
 		// fails at the provider boundary with an actionable diagnostic.
-		this.api = profileResolution.error
-			? createUnavailableApiHandler(profileResolution.error)
-			: buildApiHandler(profileResolution.configuration, mode)
+		this.api =
+			profileResolution.error || !profileResolution.resolvedApiProfile
+				? createUnavailableApiHandler(profileResolution.error ?? "Profile not valid: resolved Profile is unavailable.")
+				: buildApiHandlerFromProfile(profileResolution.configuration, mode, profileResolution.resolvedApiProfile)
 		const initialProfileInvalid = toTaskProfileInvalidState(profileResolution.validity)
 		if (initialProfileInvalid) {
 			this.taskRuntime.restore({ ...this.taskRuntime.getState(), profileInvalid: initialProfileInvalid })
@@ -1354,7 +1362,7 @@ export class Task {
 
 	/** Reconcile the active binding against the latest Catalog without replacing its handler. */
 	public async reconcileApiProfileValidity(): Promise<void> {
-		const resolution = resolveTaskApiProfile(this.getEffectiveApiConfiguration(), this.taskSm.mode)
+		const resolution = await resolveTaskApiProfileFresh(this.getEffectiveApiConfiguration(), this.taskSm.mode)
 		const validity = await validateResolvedTaskApiProfile(resolution)
 		await this.commitProfileValidity(validity, false)
 	}
@@ -1362,10 +1370,12 @@ export class Task {
 	/** Rebuild the active handler and synchronize canonical Profile validity. */
 	public async rebuildApiHandler(options: { allowProfileRecovery?: boolean } = {}): Promise<void> {
 		const mode = this.taskSm.mode
-		const profileResolution = resolveTaskApiProfile(this.getEffectiveApiConfiguration(), mode)
-		this.api = profileResolution.error
-			? createUnavailableApiHandler(profileResolution.error)
-			: buildApiHandler(profileResolution.configuration, mode)
+		const previousPromptScope = this.getApiHandlerPromptScope(this.api)
+		const profileResolution = await resolveTaskApiProfileFresh(this.getEffectiveApiConfiguration(), mode)
+		this.api =
+			profileResolution.error || !profileResolution.resolvedApiProfile
+				? createUnavailableApiHandler(profileResolution.error ?? "Profile not valid: resolved Profile is unavailable.")
+				: buildApiHandlerFromProfile(profileResolution.configuration, mode, profileResolution.resolvedApiProfile)
 		if (!profileResolution.usedFallback && profileResolution.resolvedProfileId && profileResolution.resolvedProfile) {
 			this.taskSm.adoptResolvedProfileIdentity(mode, profileResolution.resolvedProfileId, profileResolution.resolvedProfile)
 		}
@@ -1374,7 +1384,21 @@ export class Task {
 		if (this.toolExecutor) {
 			;(this.toolExecutor as any).api = this.api
 		}
-		this.promptCacheHealth.reset("profile_changed")
+		if (previousPromptScope !== this.getApiHandlerPromptScope(this.api)) {
+			this.promptCacheHealth.reset("profile_changed")
+		}
+	}
+
+	/** Capture the handler fields that affect prompt shape and context accounting. */
+	private getApiHandlerPromptScope(api: ApiHandler): string {
+		const model = api.getModel()
+		return JSON.stringify({
+			providerId: api.getProviderId?.(),
+			modelId: model.id,
+			modelInfo: model.info,
+			webSearchMode: api.getWebSearchMode?.(),
+			mode: this.taskSm.mode,
+		})
 	}
 
 	/** Return the operation currently owning the Task-local compaction Session. */
@@ -1408,11 +1432,11 @@ export class Task {
 	}
 
 	/** Synchronize the authoritative indicator after an active runtime scope is durably adopted. */
-	private syncContextWindowIndicatorScope(): void {
+	private syncContextWindowIndicatorScope(): boolean {
 		const mode = this.taskSm.mode
 		const profile = this.getContextWindowIndicatorProfile(mode)
 		const { contextWindow } = getContextWindowInfo(this.api)
-		this.setContextWindowIndicatorSnapshot(
+		return this.setContextWindowIndicatorSnapshot(
 			this.contextWindowIndicator.adoptScope({
 				contextWindow,
 				...profile,
@@ -1469,8 +1493,7 @@ export class Task {
 		// Use the same authoritative occupancy projection as admission. The frozen
 		// Provider durable baseline and the local absolute estimate are different
 		// measurement scales and must never be subtracted directly.
-		const frozenDurable = this.contextWindowIndicator.getSnapshot().durableContextTokens
-		const durableContextTokens = frozenDurable > 0 ? frozenDurable : estimatedSegments.durableContextTokens
+		const durableContextTokens = this.contextWindowIndicator.getSnapshot().durableContextTokens
 		const occupancy = resolveContextWindowProjection({
 			requestInfos: this.getContextWindowRequestPressures(),
 			candidateEstimatedTokens: estimatedSegments.totalTokens,
@@ -1523,14 +1546,20 @@ export class Task {
 		)
 	}
 
-	/** Move the completed Provider exchange into Staged without committing it to Durable. */
+	/** Commit the completed Provider exchange into Durable and clear per-request bookkeeping. */
 	private async settleOrdinaryIndicatorRound(): Promise<void> {
 		const pendingEntries = [...this.ordinaryContextIndicatorLineageByApiIndex.entries()]
 		if (pendingEntries.length === 0) return
 		const latestEntry = pendingEntries[pendingEntries.length - 1]
 		const latestLineage = latestEntry?.[1]
 		if (!latestLineage || latestEntry === undefined) return
-		await this.publishContextWindowIndicatorSnapshot(this.contextWindowIndicator.settle({ lineage: latestLineage }))
+		const latestReceiving = this.ordinaryContextIndicatorReceivingByApiIndex.get(latestEntry[0])?.getSnapshot()
+		await this.publishContextWindowIndicatorSnapshot(
+			this.contextWindowIndicator.settle({
+				lineage: latestLineage,
+				authoritativeContextTokens: latestReceiving?.authoritativeContextTokens || undefined,
+			}),
+		)
 		for (const [apiIndex] of pendingEntries) {
 			this.ordinaryContextIndicatorLineageByApiIndex.delete(apiIndex)
 			this.ordinaryContextIndicatorReceivingByApiIndex.delete(apiIndex)
@@ -1870,8 +1899,8 @@ export class Task {
 				return "subagent_approval"
 			case "spawn_task":
 				return "spawn_task_approval"
-			case "focus_chain_change":
-				return "focus_chain_change"
+			case "change_todo_list":
+				return "change_todo_list"
 			default:
 				return undefined
 		}
@@ -3512,12 +3541,15 @@ export class Task {
 			await this.updateContextCompactionStatus("failed", { error: errorMessage })
 			this.taskState.forceTruncateAvailable = true
 			this.compactionRetryPolicy.reset()
+			this.manualRetryTakeoverActive = false
+			this.endAutoRetrySequence(false)
 			const retryId = `retry:${this.taskId}:${this.getRuntimeState().revision}`
 			await this.recoverApiFailure({
 				turnId: retryId,
 				interactionId: retryId,
 				apiIndex,
 				presentation: errorMessage,
+				persistedRequest: false,
 			})
 			return
 		}
@@ -4448,7 +4480,7 @@ export class Task {
 			ask === "use_mcp_server" ||
 			ask === "use_subagents" ||
 			ask === "spawn_task" ||
-			ask === "focus_chain_change" ||
+			ask === "change_todo_list" ||
 			ask === "status_acknowledgment"
 		)
 	}
@@ -6882,7 +6914,7 @@ export class Task {
 
 	/** Refresh Profile validity for admission without silently replacing the running handler. */
 	private async validateApiProfileAdmission(): Promise<boolean> {
-		const resolution = resolveTaskApiProfile(this.getEffectiveApiConfiguration(), this.taskSm.mode)
+		const resolution = await resolveTaskApiProfileFresh(this.getEffectiveApiConfiguration(), this.taskSm.mode)
 		const validity = await validateResolvedTaskApiProfile(resolution)
 		await this.commitProfileValidity(validity, false)
 		return this.taskRuntime.getState().profileInvalid === undefined
@@ -7050,9 +7082,15 @@ export class Task {
 		if (this.taskState.abort) {
 			throw new Error("Task instance aborted")
 		}
-		// Profile changes can occur while request setup awaits workspace/runtime work.
-		// Capture the request boundary first so every adapter and parser below stays consistent.
+		// Profile changes can occur between turns. Refresh the active handler before freezing this request.
 		const transitionScope = this.modeSwitchCompaction.getExecutionScope()
+		if (!transitionScope) {
+			await this.rebuildApiHandler()
+			if (this.syncContextWindowIndicatorScope()) {
+				await this.postStateToWebview({ immediate: true })
+			}
+		}
+		// Capture the request boundary after refresh so every adapter and parser stays consistent.
 		const requestScope = createRequestApiScope(
 			transitionScope?.api ?? this.api,
 			transitionScope?.mode ?? this.taskSm.mode,

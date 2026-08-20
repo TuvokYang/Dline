@@ -24,6 +24,7 @@ export interface ApiProfileRecoveryResult {
 	requestedProfile?: string
 	resolvedProfile?: string
 	resolvedProfileId?: string
+	resolvedApiProfile?: ApiProfile
 	usedFallback: boolean
 	validity: ApiProfileValidity
 	error?: string
@@ -313,10 +314,10 @@ export function resolveTaskApiProfile(
 	configuration: ApiConfiguration,
 	mode: Mode,
 	historyProviderId?: string,
+	profiles: readonly ApiProfile[] = readApiProfiles(),
 ): ApiProfileRecoveryResult {
 	const requestedProfile = profileForMode(configuration, mode)
 	const requestedProfileId = profileIdForMode(configuration, mode)
-	const profiles = readApiProfiles()
 	const selectedProfile = requestedProfileId
 		? profiles.find((profile) => profile.id === requestedProfileId)
 		: requestedProfile
@@ -344,6 +345,7 @@ export function resolveTaskApiProfile(
 			requestedProfile,
 			resolvedProfile: selectedProfile.name,
 			resolvedProfileId: selectedProfile.id,
+			resolvedApiProfile: selectedProfile,
 			usedFallback: false,
 			validity,
 		}
@@ -368,9 +370,19 @@ export function resolveTaskApiProfile(
 		requestedProfile,
 		resolvedProfile: fallback.name,
 		resolvedProfileId: fallback.id,
+		resolvedApiProfile: fallback,
 		usedFallback: true,
 		validity,
 	}
+}
+
+/** Resolve the selected Profile from the latest persisted Catalog and hydrated Secret Store. */
+export async function resolveTaskApiProfileFresh(
+	configuration: ApiConfiguration,
+	mode: Mode,
+	historyProviderId?: string,
+): Promise<ApiProfileRecoveryResult> {
+	return resolveTaskApiProfile(configuration, mode, historyProviderId, await readApiProfilesFresh())
 }
 
 export function createUnavailableApiHandler(message: string): ApiHandler {

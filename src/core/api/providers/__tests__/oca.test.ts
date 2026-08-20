@@ -262,7 +262,7 @@ describe("OcaHandler.createMessage", () => {
 		const request = create.mock.calls[0]?.[0] as { tools?: unknown[] }
 		expect(request.tools).to.deep.equal([
 			{ name: "read_file", description: "Read a file", input_schema: { type: "object" } },
-			{ type: "web_search_20250305", name: "web_search" },
+			{ type: "web_search" },
 		])
 	})
 })

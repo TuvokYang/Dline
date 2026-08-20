@@ -99,6 +99,26 @@ describe("buildEffectiveModelInfo", () => {
 		result.capabilities?.contextWindow?.should.equal(200_000)
 	})
 
+	it("should preserve an explicitly empty pricing tier override", () => {
+		const registryModel: ModelInfo = {
+			id: "tiered-pricing-model",
+			pricing: {
+				inputPrice: 1,
+				outputPrice: 2,
+				tiers: [{ contextWindow: 128_000, inputPrice: 3, outputPrice: 4 }],
+			} as ModelPricing,
+		}
+
+		const result = buildEffectiveModelInfo("tiered-pricing-model", registryModel, {
+			pricing: { tiers: [] } as unknown as ModelPricing,
+			pricingTiersEnabled: true,
+		})
+
+		should(result.pricing?.tiers).deepEqual([])
+		result.pricing?.inputPrice?.should.equal(1)
+		result.pricing?.outputPrice?.should.equal(2)
+	})
+
 	it("should compose model info from provider overrides when model id is empty", () => {
 		const result = buildEffectiveModelInfo(undefined, undefined, {
 			capabilities: {

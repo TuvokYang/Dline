@@ -59,6 +59,10 @@ export function setApiKeysBatch(entries: Record<string, ApiKeyEntry | undefined>
 }
 
 /** Get all stored API key entries. */
+export function reloadApiKeyStore(): void {
+	getStore().reload()
+}
+
 export function getAllApiKeys(): Record<string, ApiKeyEntry> {
 	const store = getStore()
 	const result: Record<string, ApiKeyEntry> = {}

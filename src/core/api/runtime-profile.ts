@@ -24,10 +24,15 @@ export function applyTaskRuntimeOverrides(profile: ApiProfile, configuration: Ap
 
 	let runtimeProfile = { ...profile }
 	if (reasoningOverride) {
-		const modelCapabilities = getProfileModelInfo(profile).capabilities
+		const modelInfo = getProfileModelInfo(profile)
 		const validation = validateTaskReasoningOverride(
 			reasoningOverride,
-			resolveTaskThinkingConfig(profile.provider, modelCapabilities, resolveProfileReasoningConfig(profile)),
+			resolveTaskThinkingConfig(
+				profile.provider,
+				modelInfo.capabilities,
+				resolveProfileReasoningConfig(profile),
+				modelInfo.id,
+			),
 		)
 		if (!validation.valid) throw new Error(validation.message)
 		runtimeProfile = applyTaskReasoningOverride(runtimeProfile, validation.override)

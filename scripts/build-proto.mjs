@@ -171,6 +171,11 @@ function makeOptionalRepeatedField(content, { interfaceName, fieldName }) {
 		new RegExp(`(message\\.${fieldName}\\s*=\\s*object\\.${fieldName}\\?\\.map\\([\\s\\S]*?\\))\\s*\\|\\|\\s*\\[\\];`, "g"),
 		"$1 || undefined;",
 	)
+	// Preserve the distinction between an omitted optional array and an explicit empty override.
+	block = block.replace(
+		new RegExp(`if \\(message\\.${fieldName}\\?\\.length\\) \\{`, "g"),
+		`if (message.${fieldName} !== undefined) {`,
+	)
 
 	if (block !== originalBlock) {
 		content = `${content.slice(0, blockStart)}${block}${content.slice(blockEnd)}`

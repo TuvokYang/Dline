@@ -1,10 +1,6 @@
 import { Anthropic } from "@anthropic-ai/sdk"
 import type { BetaRawMessageStreamEvent } from "@anthropic-ai/sdk/resources/beta/messages/messages"
-import {
-	Tool as AnthropicTool,
-	type ToolUnion as AnthropicToolUnion,
-	type WebSearchTool20250305,
-} from "@anthropic-ai/sdk/resources/messages/messages"
+import { Tool as AnthropicTool, type ToolUnion as AnthropicToolUnion } from "@anthropic-ai/sdk/resources/messages/messages"
 import type { ChatCompletionTool as OpenAITool } from "openai/resources/chat/completions"
 import { ServerTool } from "@/shared/proto/dline/models/metadata"
 import { OutputLimitExceededError } from "../stream/OutputLimitExceededError"
@@ -28,7 +24,8 @@ export function mergeAnthropicServerTools(
 		.map((tool) => ({ ...tool }))
 
 	if (hostedWebSearch) {
-		merged.push({ type: "web_search_20250305", name: "web_search" } satisfies WebSearchTool20250305)
+		// The Dline Anthropic wire contract uses the unversioned hosted-search declaration.
+		merged.push({ type: "web_search" } as unknown as AnthropicToolUnion)
 	}
 
 	return merged.length > 0 ? merged : undefined
@@ -37,6 +34,7 @@ export function mergeAnthropicServerTools(
 export async function* handleAnthropicMessagesApiStreamResponse(stream: AsyncIterable<AnthropicMessagesStreamEvent>): ApiStream {
 	const lastStartedToolCall = { id: "", name: "", arguments: "" }
 	const activeServerToolCall = { id: "", name: "", arguments: "", input: undefined as unknown }
+	const startedServerToolCallIds = new Set<string>()
 
 	for await (const chunk of stream) {
 		switch (chunk?.type) {
@@ -98,6 +96,7 @@ export async function* handleAnthropicMessagesApiStreamResponse(stream: AsyncIte
 						break
 					case "server_tool_use":
 						if (chunk.content_block.name === "web_search") {
+							startedServerToolCallIds.add(chunk.content_block.id)
 							lastStartedToolCall.id = ""
 							lastStartedToolCall.name = ""
 							lastStartedToolCall.arguments = ""
@@ -115,6 +114,7 @@ export async function* handleAnthropicMessagesApiStreamResponse(stream: AsyncIte
 						}
 						break
 					case "web_search_tool_result": {
+						if (!startedServerToolCallIds.delete(chunk.content_block.tool_use_id)) break
 						const result = chunk.content_block.content
 						const failed = !Array.isArray(result) && result.type === "web_search_tool_result_error"
 						yield {

@@ -68,11 +68,13 @@ function loadSharedProfiles(catalogRevision?: number, force = false): Promise<Ap
 	return request
 }
 
-function persistSharedProfiles(profiles: ApiProfile[]): void {
+function persistSharedProfiles(profiles: ApiProfile[], clearApiKeyProfileIds: readonly string[] = []): void {
 	sharedPersistQueue = sharedPersistQueue
 		.catch(() => undefined)
 		.then(async () => {
-			await FileServiceClient.updateApiProfiles(UpdateApiProfilesRequest.create({ profiles }))
+			await FileServiceClient.updateApiProfiles(
+				UpdateApiProfilesRequest.create({ profiles, clearApiKeyProfileIds: [...clearApiKeyProfileIds] }),
+			)
 		})
 		.catch((error: unknown) => {
 			sharedLoadError = error instanceof Error ? error : new Error(String(error))
@@ -150,10 +152,10 @@ export function useApiProfiles() {
 		void loadSharedProfiles(profileCatalogRevision).catch(() => undefined)
 	}, [profileCatalogRevision])
 
-	const persist = useCallback((profiles: ApiProfile[]) => {
+	const persist = useCallback((profiles: ApiProfile[], clearApiKeyProfileIds: readonly string[] = []) => {
 		if (!sharedLoaded) return
 		replaceSharedProfiles(profiles)
-		persistSharedProfiles(profiles)
+		persistSharedProfiles(profiles, clearApiKeyProfileIds)
 	}, [])
 
 	const addProfile = useCallback(() => {
@@ -167,7 +169,10 @@ export function useApiProfiles() {
 	const updateProfile = useCallback(
 		(id: string, updates: Partial<ApiProfile>) => {
 			const result = applyProfileUpdate(sharedProfiles, id, updates)
-			if (result.changed) persist(result.profiles)
+			if (result.changed) {
+				const clearApiKeyProfileIds = "apiKey" in updates && updates.apiKey === "" ? [id] : []
+				persist(result.profiles, clearApiKeyProfileIds)
+			}
 		},
 		[persist],
 	)

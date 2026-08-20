@@ -35,6 +35,7 @@ export async function updateApiProfiles(controller: Controller, request: UpdateA
 function buildApiKeyChanges(
 	previous: readonly ApiProfile[],
 	profiles: readonly ApiProfile[],
+	clearApiKeyProfileIds: ReadonlySet<string>,
 ): Record<string, ApiKeyEntry | undefined> {
 	const nextIds = new Set(profiles.map((profile) => profile.id))
 	const storedKeys = getAllApiKeys()
@@ -45,12 +46,15 @@ function buildApiKeyChanges(
 	}
 	for (const profile of profiles) {
 		const stored = storedKeys[profile.id]
-		if (profile.apiKey) {
+		if (clearApiKeyProfileIds.has(profile.id)) {
+			profile.apiKey = ""
+			if (stored) changes[profile.id] = undefined
+		} else if (profile.apiKey) {
 			if (!stored || stored.apiKey !== profile.apiKey || stored.name !== profile.name) {
 				changes[profile.id] = { apiKey: profile.apiKey, name: profile.name }
 			}
-		} else if (stored) {
-			changes[profile.id] = undefined
+		} else if (stored && stored.name !== profile.name) {
+			changes[profile.id] = { apiKey: stored.apiKey, name: profile.name }
 		}
 	}
 	return changes
@@ -92,7 +96,7 @@ async function updateApiProfilesImpl(controller: Controller, request: UpdateApiP
 		throw new Error("Failed to save Profile Catalog", { cause: error })
 	}
 
-	const keyChanges = buildApiKeyChanges(previous, profiles)
+	const keyChanges = buildApiKeyChanges(previous, profiles, new Set(request.clearApiKeyProfileIds))
 	try {
 		await setApiKeysBatch(keyChanges)
 	} catch (error) {

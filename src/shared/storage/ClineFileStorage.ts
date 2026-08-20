@@ -53,7 +53,9 @@ export class ClineFileStorage<T = any> extends ClineSyncStorage<T> {
 	 * since it only writes to disk once.
 	 */
 	public setBatch(entries: Record<string, T | undefined>): Thenable<void> {
-		const nextData = { ...this.data }
+		// Merge writes against the latest persisted snapshot so another process's
+		// completed updates are not discarded by this instance's stale cache.
+		const nextData = this.readFromDisk()
 		const changedKeys: string[] = []
 		for (const [key, value] of Object.entries(entries)) {
 			if (value === undefined) {
@@ -68,12 +70,17 @@ export class ClineFileStorage<T = any> extends ClineSyncStorage<T> {
 		}
 		if (changedKeys.length > 0) {
 			this.writeToDisk(nextData)
-			this.data = nextData
-			for (const key of changedKeys) {
-				this.fireChange(key)
-			}
+		}
+		this.data = nextData
+		for (const key of changedKeys) {
+			this.fireChange(key)
 		}
 		return Promise.resolve()
+	}
+
+	/** Reload the in-memory snapshot from disk before a freshness-sensitive read. */
+	public reload(): void {
+		this.data = this.readFromDisk()
 	}
 
 	protected _keys(): readonly string[] {

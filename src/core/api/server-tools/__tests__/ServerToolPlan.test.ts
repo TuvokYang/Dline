@@ -115,7 +115,7 @@ describe("resolveServerToolPlan", () => {
 		const projection = projectServerTools(hostedPlan(ApiFormat.ANTHROPIC_CHAT))
 
 		expect(projection).toEqual({
-			declarations: [{ type: "web_search_20250305", name: "web_search" }],
+			declarations: [{ type: "web_search" }],
 		})
 	})
 
