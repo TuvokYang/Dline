@@ -495,7 +495,7 @@ export async function appendApiConversationMessage(taskId: string, message: Clin
 
 /**
  * Append one canonical API round event to the debug JSONL file.
- * Controlled by DLINE_LOG_API_CONTEXT=1 or IS_DEV=true environment variables.
+ * Requires both IS_DEV=true and DLINE_LOG_API_CONTEXT=1.
  * Request, response chunk, and response-end events are written separately so
  * the file reflects the actual ordering of every main-task and subagent round.
  *
@@ -503,7 +503,8 @@ export async function appendApiConversationMessage(taskId: string, message: Clin
  * @param entry Full request context object to append
  */
 export async function appendApiConversationEvent(taskId: string, entry: object): Promise<void> {
-	if (!envFlagEnabled(process.env.IS_DEV) && !envFlagEnabled(process.env.DLINE_LOG_API_CONTEXT)) return
+	const shouldLogApiContext = envFlagEnabled(process.env.IS_DEV) && envFlagEnabled(process.env.DLINE_LOG_API_CONTEXT)
+	if (!shouldLogApiContext) return
 	try {
 		const p = path.join(await ensureTaskDirectoryExists(taskId), GlobalFileNames.apiConversationAll)
 		await appendJsonl(p, entry)

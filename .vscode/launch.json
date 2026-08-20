@@ -25,6 +25,7 @@
 			"preLaunchTask": "${defaultBuildTask}",
 			"envFile": "${workspaceFolder}/.env",
 			"env": {
+				"DLINE_LOG_API_CONTEXT": "1",
 				"IS_DEV": "true",
 				"DEV_WORKSPACE_FOLDER": "${workspaceFolder}",
 				"DLINE_ENVIRONMENT": "production",
@@ -51,6 +52,7 @@
 			"preLaunchTask": "${defaultBuildTask}",
 			"envFile": "${workspaceFolder}/.env",
 			"env": {
+				"DLINE_LOG_API_CONTEXT": "1",
 				"IS_DEV": "true",
 				"DEV_WORKSPACE_FOLDER": "${workspaceFolder}",
 				"DLINE_ENVIRONMENT": "staging",
@@ -77,6 +79,7 @@
 			"preLaunchTask": "watch:debug",
 			"envFile": "${workspaceFolder}/.env",
 			"env": {
+				"DLINE_LOG_API_CONTEXT": "1",
 				"IS_DEV": "true",
 				"DEV_WORKSPACE_FOLDER": "${workspaceFolder}",
 				"DLINE_ENVIRONMENT": "local",
@@ -102,6 +105,7 @@
 			"preLaunchTask": "clean-tmp-user",
 			"envFile": "${workspaceFolder}/.env",
 			"env": {
+				"DLINE_LOG_API_CONTEXT": "1",
 				"IS_DEV": "true",
 				"DEV_WORKSPACE_FOLDER": "${workspaceFolder}",
 				"DLINE_ENVIRONMENT": "production",
@@ -135,6 +139,7 @@
 			"internalConsoleOptions": "openOnSessionStart",
 			"envFile": "${workspaceFolder}/.env",
 			"env": {
+				"DLINE_LOG_API_CONTEXT": "1",
 				"IS_DEV": "true",
 				"DEV_WORKSPACE_FOLDER": "${workspaceFolder}",
 				"DLINE_ENVIRONMENT": "production",
@@ -168,6 +173,7 @@
 			"postDebugTask": "stop",
 			"envFile": "${workspaceFolder}/.env",
 			"env": {
+				"DLINE_LOG_API_CONTEXT": "1",
 				"IS_DEV": "true",
 				"DEV_WORKSPACE_FOLDER": "${workspaceFolder}",
 				"DLINE_ENVIRONMENT": "production",
@@ -203,6 +209,7 @@
 			"program": "scripts/test-standalone-core-api-server.ts",
 			"envFile": "${workspaceFolder}/.env",
 			"env": {
+				"DLINE_LOG_API_CONTEXT": "1",
 				"PROTOBUS_PORT": "26040",
 				"HOSTBRIDGE_PORT": "26041",
 				"WORKSPACE_DIR": "${workspaceFolder}",
@@ -244,6 +251,7 @@
 			],
 			"envFile": "${workspaceFolder}/.env",
 			"env": {
+				"DLINE_LOG_API_CONTEXT": "1",
 				"TS_NODE_PROJECT": "./tsconfig.unit-test.json",
 				"NODE_ENV": "test",
 				"IS_DEV": "true",
@@ -278,6 +286,7 @@
 			"internalConsoleOptions": "openOnSessionStart",
 			"envFile": "${workspaceFolder}/.env",
 			"env": {
+				"DLINE_LOG_API_CONTEXT": "1",
 				"IS_DEV": "true",
 				"DEV_WORKSPACE_FOLDER": "${workspaceFolder}",
 				"DLINE_ENVIRONMENT": "production",
@@ -311,6 +320,7 @@
 			"internalConsoleOptions": "openOnSessionStart",
 			"envFile": "${workspaceFolder}/.env",
 			"env": {
+				"DLINE_LOG_API_CONTEXT": "1",
 				"IS_DEV": "true",
 				"DEV_WORKSPACE_FOLDER": "${workspaceFolder}",
 				"DLINE_ENVIRONMENT": "production",
@@ -347,6 +357,7 @@
 			"postDebugTask": "stop",
 			"envFile": "${workspaceFolder}/.env",
 			"env": {
+				"DLINE_LOG_API_CONTEXT": "1",
 				"IS_DEV": "true",
 				"DEV_WORKSPACE_FOLDER": "${workspaceFolder}",
 				"DLINE_ENVIRONMENT": "production",
@@ -375,6 +386,7 @@
 				"action": "openExternally"
 			},
 			"env": {
+				"DLINE_LOG_API_CONTEXT": "1",
 				"IS_DEV": "true"
 			}
 		}
