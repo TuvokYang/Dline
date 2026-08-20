@@ -519,6 +519,23 @@ e2e(
 			{ type: "error", status: 400, message: "E2E_TERMINAL_FAILURE_RETRY_1" },
 			{ type: "error", status: 400, message: "E2E_TERMINAL_FAILURE_RETRY_2" },
 			{ type: "error", status: 400, message: "E2E_TERMINAL_FAILURE_RETRY_3" },
+			{
+				type: "tool",
+				id: "call_terminal_failure_recovered_summary",
+				name: "summarize_task",
+				arguments: {
+					context: "E2E_TERMINAL_FAILURE_RECOVERED_SUMMARY preserves the failed turn and the pending continuation.",
+				},
+				expectedRequestIncludes: ["The current conversation is rapidly running out of context"],
+				expectedRequestExcludes: ["E2E_TERMINAL_FAILURE_CONTINUE"],
+			},
+			{
+				type: "tool",
+				id: "call_terminal_failure_recovered_complete",
+				name: "attempt_completion",
+				arguments: { result: "E2E_TERMINAL_FAILURE_RECOVERED" },
+				expectedRequestIncludes: ["E2E_TERMINAL_FAILURE_RECOVERED_SUMMARY", "E2E_TERMINAL_FAILURE_CONTINUE"],
+			},
 		)
 
 		const app = await openVSCode(workspaceDir)
@@ -540,8 +557,35 @@ e2e(
 			await expect(sidebar.getByText("E2E_TERMINAL_FAILURE_RETRY_3", { exact: false }).last()).toBeVisible()
 
 			await expect.poll(() => server.getRequestCount("openai-compatible-responses")).toBe(6)
-			const requests = server.getMockConsumptions("openai-compatible-responses")
-			expect(requests.slice(2).every((request) => request.responseType === "error")).toBe(true)
+			const requestsBeforeManualRetry = server.getMockConsumptions("openai-compatible-responses")
+			expect(requestsBeforeManualRetry.slice(2).every((request) => request.responseType === "error")).toBe(true)
+
+			const retry = sidebar.getByRole("button", { name: "Retry", exact: true }).last()
+			await expect(retry).toBeVisible()
+			await expect(retry).toBeEnabled()
+			const retryClickedAt = Date.now()
+			await retry.click()
+
+			await expect.poll(() => server.getRequestCount("openai-compatible-responses"), { timeout: 3_000 }).toBe(7)
+			const firstRecoveryRequest = server.getMockConsumptions("openai-compatible-responses")[6]
+			expect(firstRecoveryRequest.receivedAtMs - retryClickedAt).toBeLessThan(3_000)
+			expect(firstRecoveryRequest.responseType).toBe("tool")
+			expect(firstRecoveryRequest.toolName).toBe("summarize_task")
+
+			await expect(sidebar.getByText("E2E_TERMINAL_FAILURE_RECOVERED", { exact: false }).last()).toBeVisible({
+				timeout: 60_000,
+			})
+			await expect.poll(() => server.getRequestCount("openai-compatible-responses")).toBe(8)
+			const recoveredRequests = server.getMockConsumptions("openai-compatible-responses")
+			expect(recoveredRequests[7].responseType).toBe("tool")
+			expect(recoveredRequests[7].toolName).toBe("attempt_completion")
+			expect(recoveredRequests.every((request) => request.contractError === undefined)).toBe(true)
+			await expect(sidebar.getByTestId("error-retry-box")).toHaveCount(0)
+			await expect(sidebar.getByTestId("chat-input")).toBeEnabled()
+
+			// No delayed automatic retry may fire after the manual recovery has completed.
+			await sidebar.page().waitForTimeout(9_000)
+			expect(server.getRequestCount("openai-compatible-responses")).toBe(8)
 			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
 		} finally {
 			await app.close()

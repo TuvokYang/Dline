@@ -127,6 +127,41 @@ describe("ContextCompactionSession", () => {
 		})
 	})
 
+	it("blocks Provider admission when the durable C0 checkpoint cannot be prepared", async () => {
+		const ports = createPorts()
+		const rootError = new Error("root checkpoint write failed")
+		ports.prepareRootCheckpoint = vi.fn(async () => {
+			throw rootError
+		})
+		const api = { createMessage: vi.fn() } as unknown as ApiHandler
+		const session = new ContextCompactionSession(ports, { maxRetryAttempts: 3 })
+
+		const result = await session.run({
+			operationId: "operation-root-checkpoint-failure",
+			trigger: "auto_compaction",
+			compactionApi: api,
+			targetApi: api,
+			targetMode: "act",
+			sourceHistory: HISTORY,
+		})
+
+		expect(result).toBe("failed")
+		expect(ports.prepareRootCheckpoint).toHaveBeenCalledOnce()
+		expect(ports.buildPassRequest).not.toHaveBeenCalled()
+		expect(api.createMessage).not.toHaveBeenCalled()
+		expect(ports.stageAcceptedPass).not.toHaveBeenCalled()
+		expect(ports.commit).not.toHaveBeenCalled()
+		expect(ports.rollback).toHaveBeenCalledWith(
+			expect.objectContaining({ operationId: "operation-root-checkpoint-failure" }),
+			expect.objectContaining({ passIndex: 0, coveredTurnCount: 0 }),
+			rootError.message,
+		)
+		expect(ports.publish).toHaveBeenCalledWith(
+			expect.objectContaining({ operationId: "operation-root-checkpoint-failure" }),
+			expect.objectContaining({ kind: "failed", error: rootError.message }),
+		)
+	})
+
 	it.each([
 		["ordinary failure", new Error("manual compaction failed")],
 		["OpenAI max-output termination", new OutputLimitExceededError("openai_responses", "max_output_tokens")],
