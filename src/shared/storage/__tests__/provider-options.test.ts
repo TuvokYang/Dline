@@ -77,6 +77,24 @@ describe("provider reasoning and service-tier options", () => {
 		})
 	})
 
+	it("resolves DeepSeek efforts from a compatible Provider model ID", () => {
+		const thinking = resolveTaskThinkingConfig(
+			"openrouter",
+			{ supportsReasoning: true },
+			{ enableThinking: true, effort: "high" },
+			"deepseek/deepseek-chat",
+		)
+
+		expect(thinking).to.include({ supported: true, mode: "effort" })
+		expect(thinking?.effortLevels).to.deep.equal([...DEEPSEEK_REASONING_EFFORT_OPTIONS])
+		for (const effort of DEEPSEEK_REASONING_EFFORT_OPTIONS) {
+			expect(validateTaskReasoningOverride({ kind: "effort", effort }, thinking)).to.deep.equal({
+				valid: true,
+				override: { kind: "effort", effort },
+			})
+		}
+	})
+
 	it("accepts only OpenAI service tiers supported by the SDK", () => {
 		expect(OPENAI_SERVICE_TIER_OPTIONS).to.deep.equal(["auto", "default", "flex", "scale", "priority", "ultrafast"])
 		expect(normalizeOpenAiServiceTier("priority")).to.equal("priority")

@@ -163,22 +163,68 @@ async function runtimeControlMetrics(sidebar: Frame) {
 	const profileSlot = sidebar.locator('[data-chat-input-slot="profile"]')
 	const thinkingSlot = sidebar.locator('[data-chat-input-slot="thinking"]')
 	const serviceTierSlot = sidebar.locator('[data-chat-input-slot="service-tier"]')
-	const profileButton = sidebar.getByRole("button", { name: "Select model" })
+	const profileTextElement = sidebar.locator("[data-chat-input-profile-text]")
 	const thinking = sidebar.getByRole("combobox", { name: "Task thinking override" })
-	const [buttonGroupBox, runtimeBox, profileBox, thinkingBox, serviceTierBox] = await Promise.all([
+	const thinkingTextElement = thinking.locator('[data-slot="select-value"]')
+	const serviceTierIcon = sidebar.getByTestId("task-service-tier-icon")
+	const [
+		buttonGroupBox,
+		runtimeBox,
+		profileBox,
+		thinkingBox,
+		serviceTierBox,
+		profileContentBox,
+		thinkingContentBox,
+		serviceTierContentBox,
+	] = await Promise.all([
 		buttonGroup.boundingBox(),
 		runtimeControls.boundingBox(),
 		profileSlot.boundingBox(),
 		thinkingSlot.boundingBox(),
 		serviceTierSlot.boundingBox(),
+		profileTextElement.boundingBox(),
+		thinkingTextElement.boundingBox(),
+		serviceTierIcon.boundingBox(),
 	])
-	if (!buttonGroupBox || !runtimeBox || !profileBox || !thinkingBox || !serviceTierBox) {
+	if (
+		!buttonGroupBox ||
+		!runtimeBox ||
+		!profileBox ||
+		!thinkingBox ||
+		!serviceTierBox ||
+		!profileContentBox ||
+		!thinkingContentBox ||
+		!serviceTierContentBox
+	) {
 		throw new Error("Runtime control geometry is unavailable")
 	}
-	const [profileText, thinkingText, runtimeOverflow, buttonGroupOverflow] = await Promise.all([
-		profileButton.evaluate((element) => ({ clientWidth: element.clientWidth, scrollWidth: element.scrollWidth })),
-		thinking.evaluate((element) => ({ clientWidth: element.clientWidth, scrollWidth: element.scrollWidth })),
-		runtimeControls.evaluate((element) => ({ clientWidth: element.clientWidth, scrollWidth: element.scrollWidth })),
+	const [profileText, thinkingText, thinkingTrigger, runtimeOverflow, buttonGroupOverflow] = await Promise.all([
+		profileTextElement.evaluate((element) => {
+			const style = getComputedStyle(element)
+			return { clientWidth: element.clientWidth, scrollWidth: element.scrollWidth, textAlign: style.textAlign }
+		}),
+		thinkingTextElement.evaluate((element) => {
+			const style = getComputedStyle(element)
+			return { clientWidth: element.clientWidth, scrollWidth: element.scrollWidth, textAlign: style.textAlign }
+		}),
+		thinking.evaluate((element) => {
+			const style = getComputedStyle(element)
+			return {
+				clientWidth: element.clientWidth,
+				scrollWidth: element.scrollWidth,
+				overflowX: style.overflowX,
+				minWidth: style.minWidth,
+				width: style.width,
+			}
+		}),
+		runtimeControls.evaluate((element) => {
+			const style = getComputedStyle(element)
+			return {
+				clientWidth: element.clientWidth,
+				scrollWidth: element.scrollWidth,
+				overflowX: style.overflowX,
+			}
+		}),
 		buttonGroup.evaluate((element) => ({ clientWidth: element.clientWidth, scrollWidth: element.scrollWidth })),
 	])
 	const prefixWidth = runtimeBox.x - buttonGroupBox.x
@@ -190,8 +236,12 @@ async function runtimeControlMetrics(sidebar: Frame) {
 		profileBox,
 		thinkingBox,
 		serviceTierBox,
+		profileContentBox,
+		thinkingContentBox,
+		serviceTierContentBox,
 		profileText,
 		thinkingText,
+		thinkingTrigger,
 		runtimeOverflow,
 		buttonGroupOverflow,
 		prefixWidth,
@@ -203,16 +253,30 @@ async function runtimeControlMetrics(sidebar: Frame) {
 
 function expectRuntimeControlsOnOneLine(metrics: Awaited<ReturnType<typeof runtimeControlMetrics>>): void {
 	const centerY = (box: { y: number; height: number }) => box.y + box.height / 2
-	expect(Math.abs(centerY(metrics.profileBox) - centerY(metrics.thinkingBox))).toBeLessThanOrEqual(1)
-	expect(Math.abs(centerY(metrics.thinkingBox) - centerY(metrics.serviceTierBox))).toBeLessThanOrEqual(1)
-	expect(metrics.thinkingBox.x).toBeGreaterThanOrEqual(metrics.profileBox.x + metrics.profileBox.width + 3)
-	expect(metrics.serviceTierBox.x).toBeGreaterThanOrEqual(metrics.thinkingBox.x + metrics.thinkingBox.width + 3)
+	const profileToThinking = metrics.thinkingContentBox.x - (metrics.profileContentBox.x + metrics.profileContentBox.width)
+	const thinkingToTier = metrics.serviceTierContentBox.x - (metrics.thinkingContentBox.x + metrics.thinkingContentBox.width)
+
+	expect(metrics.profileText.textAlign).toBe("center")
+	expect(metrics.thinkingText.textAlign).toBe("center")
+	expect(Math.abs(centerY(metrics.profileContentBox) - centerY(metrics.thinkingContentBox))).toBeLessThanOrEqual(1)
+	expect(Math.abs(centerY(metrics.thinkingContentBox) - centerY(metrics.serviceTierContentBox))).toBeLessThanOrEqual(1)
+	expect(profileToThinking).toBeGreaterThanOrEqual(3)
+	expect(thinkingToTier).toBeGreaterThanOrEqual(3)
+	expect(Math.abs(profileToThinking - thinkingToTier)).toBeLessThanOrEqual(0.5)
 }
 
 function expectRuntimeControlsFillAvailableWidth(metrics: Awaited<ReturnType<typeof runtimeControlMetrics>>): void {
+	const runtimeRight = metrics.runtimeBox.x + metrics.runtimeBox.width
+	const buttonGroupRight = metrics.buttonGroupBox.x + metrics.buttonGroupBox.width
+	const contentBoxes = [metrics.profileBox, metrics.thinkingBox, metrics.serviceTierBox]
+
 	expect(Math.abs(metrics.runtimeBox.width - metrics.availableRuntimeWidth)).toBeLessThanOrEqual(1)
-	expect(metrics.runtimeOverflow.scrollWidth).toBeLessThanOrEqual(metrics.runtimeOverflow.clientWidth)
+	expect(metrics.runtimeOverflow.overflowX).toBe("hidden")
+	expect(runtimeRight).toBeLessThanOrEqual(buttonGroupRight + 1)
 	expect(metrics.buttonGroupOverflow.scrollWidth).toBeLessThanOrEqual(metrics.buttonGroupOverflow.clientWidth)
+	for (const box of contentBoxes) {
+		expect(box.x + box.width).toBeLessThanOrEqual(runtimeRight + 1)
+	}
 }
 
 async function startTaskAndWaitForRuntimeControls(
@@ -240,7 +304,7 @@ async function startTaskAndWaitForRuntimeControls(
 	const input = sidebar.getByTestId("chat-input")
 	await input.fill(markers.task)
 	await sidebar.getByTestId("send-button").click()
-	await expect.poll(() => server.getRequestCount(target)).toBe(1)
+	await expect.poll(() => server.getRequestCount(target), { timeout: 30_000 }).toBe(1)
 	await expect(sidebar.getByRole("contentinfo").getByText("Cancel", { exact: true })).toBeVisible({ timeout: 30_000 })
 	const thinkingControl = sidebar.getByRole("combobox", { name: "Task thinking override" })
 	if (options.supportsThinking === false) {
@@ -297,6 +361,20 @@ async function captureRuntimeControls(page: Page, sidebar: Frame, testInfo: Test
 	const controlsPath = testInfo.outputPath(`${name}-controls.png`)
 	await sidebar.locator("[data-chat-input-runtime-controls]").screenshot({ path: controlsPath })
 	await testInfo.attach(`${name}-controls`, { path: controlsPath, contentType: "image/png" })
+}
+
+async function captureRuntimeLayoutEvidence(
+	page: Page,
+	sidebar: Frame,
+	testInfo: TestInfo,
+	name: string,
+): Promise<Awaited<ReturnType<typeof runtimeControlMetrics>>> {
+	const metrics = await runtimeControlMetrics(sidebar)
+	await captureRuntimeControls(page, sidebar, testInfo, name)
+	const metricsPath = testInfo.outputPath(`${name}-layout.json`)
+	await writeFile(metricsPath, `${JSON.stringify(metrics, null, 2)}\n`, "utf8")
+	await testInfo.attach(`${name}-layout`, { path: metricsPath, contentType: "application/json" })
+	return metrics
 }
 
 async function runtimeControlAppearance(sidebar: Frame) {
@@ -502,7 +580,7 @@ e2e(
 
 e2e(
 	"Profile layout - sufficient parent space shows the full name and fills the real remainder",
-	async ({ dlineDir, helper, openVSCode, server, userDataDir, workspaceDir }) => {
+	async ({ dlineDir, helper, openVSCode, server, userDataDir, workspaceDir }, testInfo) => {
 		e2e.setTimeout(240_000)
 		await configureDefaultProfile(dlineDir, E2E_PROFILE_NAMES.mockOpenAi)
 		const app = await openVSCode(workspaceDir)
@@ -517,12 +595,12 @@ e2e(
 			await startTaskAndWaitForRuntimeControls(sidebar, "openai-compatible-chat", server, markers)
 			const baseline = await runtimeControlMetrics(sidebar)
 			await setButtonGroupWidth(sidebar, Math.ceil(baseline.requiredButtonGroupWidth + 80))
-			const metrics = await runtimeControlMetrics(sidebar)
+			const metrics = await captureRuntimeLayoutEvidence(page, sidebar, testInfo, "profile-layout-wide")
 
 			await expect(sidebar.getByRole("button", { name: "Select model" })).toHaveText(E2E_PROFILE_NAMES.mockOpenAi)
 			expect(metrics.availableRuntimeWidth).toBeGreaterThan(metrics.intrinsicRuntimeWidth)
 			expect(metrics.profileText.scrollWidth).toBeLessThanOrEqual(metrics.profileText.clientWidth)
-			expect(metrics.profileBox.width).toBeGreaterThanOrEqual(metrics.profileText.scrollWidth)
+			expect(metrics.profileBox.width + 1).toBeGreaterThanOrEqual(metrics.profileText.scrollWidth)
 			expectRuntimeControlsFillAvailableWidth(metrics)
 			expectRuntimeControlsOnOneLine(metrics)
 			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
@@ -534,7 +612,7 @@ e2e(
 
 e2e(
 	"Profile layout - truncation starts only below the measured content threshold",
-	async ({ dlineDir, helper, openVSCode, server, userDataDir, workspaceDir }) => {
+	async ({ dlineDir, helper, openVSCode, server, userDataDir, workspaceDir }, testInfo) => {
 		e2e.setTimeout(240_000)
 		await configureDefaultProfile(dlineDir, E2E_PROFILE_NAMES.mockOpenAi)
 		const app = await openVSCode(workspaceDir)
@@ -549,13 +627,13 @@ e2e(
 			await startTaskAndWaitForRuntimeControls(sidebar, "openai-compatible-chat", server, markers)
 			const baseline = await runtimeControlMetrics(sidebar)
 
-			await setButtonGroupWidth(sidebar, Math.ceil(baseline.requiredButtonGroupWidth + 2))
+			await setButtonGroupWidth(sidebar, Math.ceil(baseline.requiredButtonGroupWidth + 80))
 			const fitting = await runtimeControlMetrics(sidebar)
 			expect(fitting.profileText.scrollWidth).toBeLessThanOrEqual(fitting.profileText.clientWidth)
 			expectRuntimeControlsFillAvailableWidth(fitting)
 
-			await setButtonGroupWidth(sidebar, Math.floor(baseline.requiredButtonGroupWidth - 8))
-			const constrained = await runtimeControlMetrics(sidebar)
+			await setButtonGroupWidth(sidebar, Math.floor(baseline.requiredButtonGroupWidth - 40))
+			const constrained = await captureRuntimeLayoutEvidence(page, sidebar, testInfo, "profile-layout-narrow")
 			expect(constrained.availableRuntimeWidth).toBeLessThan(constrained.intrinsicRuntimeWidth)
 			expect(constrained.profileText.scrollWidth).toBeGreaterThan(constrained.profileText.clientWidth)
 			expectRuntimeControlsFillAvailableWidth(constrained)

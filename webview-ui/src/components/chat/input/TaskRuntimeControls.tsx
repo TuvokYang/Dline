@@ -30,7 +30,12 @@ export function TaskRuntimeControls() {
 		? resolveProfileModelInfo(profile, { models: providerModels, defaultModelId: providerDefaultModelId })
 		: undefined
 	const profileReasoning = resolveProfileReasoningConfig(profile)
-	const thinking = resolveTaskThinkingConfig(profile?.provider, effectiveModelInfo?.capabilities, profileReasoning)
+	const thinking = resolveTaskThinkingConfig(
+		profile?.provider,
+		effectiveModelInfo?.capabilities,
+		profileReasoning,
+		effectiveModelInfo?.id ?? profile?.modelId,
+	)
 	const effortLevels = thinking?.effortLevels ?? []
 	const maxBudget = thinking?.maxBudget
 	const supportsEffort = effortLevels.length > 0
@@ -119,15 +124,15 @@ export function TaskRuntimeControls() {
 		<>
 			{(supportsEffort || supportsBudget) && (
 				<div
-					className="flex min-w-[4ch] max-w-[8ch] flex-[0_1_auto] items-center overflow-hidden"
+					className="flex h-4 min-w-0 max-w-full flex-[0_1_auto] items-center justify-center overflow-hidden"
 					data-chat-input-slot="thinking">
 					<Select onValueChange={updateThinking} value={thinkingValue}>
 						<SelectTrigger
 							aria-label="Task thinking override"
-							className="!h-4 inline-flex w-auto min-w-0 max-w-full items-center justify-start gap-0 overflow-hidden rounded-none border-0 bg-transparent p-0 text-left text-xs leading-none text-description shadow-none outline-none focus-visible:border-transparent focus-visible:ring-0"
+							className="!h-4 inline-flex w-auto min-w-0 max-w-full items-center justify-center gap-0 overflow-hidden rounded-none border-0 bg-transparent p-0 text-center text-xs leading-none text-description shadow-none outline-none focus-visible:border-transparent focus-visible:ring-0"
 							showIcon={false}
 							size="sm">
-							<SelectValue className="flex min-w-0 items-center truncate text-left leading-none" />
+							<SelectValue className="flex min-w-0 items-center justify-center truncate text-center leading-none" />
 						</SelectTrigger>
 						<SelectContent align="start" className="min-w-28" position="popper" side="top" sideOffset={4}>
 							{supportsEffort &&

@@ -98,10 +98,15 @@ function prepareModeUpdate(settings: ProtoSettings, configuration: ApiConfigurat
 	const mutations: TaskSettingMutation[] = []
 	if (hasReasoningUpdate) {
 		const override = parseReasoningOverride(settings, fields)
-		const modelCapabilities = getProfileModelInfo(profile).capabilities
+		const modelInfo = getProfileModelInfo(profile)
 		const validation = validateTaskReasoningOverride(
 			override,
-			resolveTaskThinkingConfig(profile.provider, modelCapabilities, resolveProfileReasoningConfig(profile)),
+			resolveTaskThinkingConfig(
+				profile.provider,
+				modelInfo.capabilities,
+				resolveProfileReasoningConfig(profile),
+				modelInfo.id,
+			),
 		)
 		if (!validation.valid) throw new Error(validation.message)
 		mutations.push(...reasoningMutations(fields, validation.override))

@@ -76,10 +76,33 @@ describe("UsageBar", () => {
 		expect(container.querySelector(".font-medium")).toHaveTextContent("Weekly 40%")
 	})
 
-	it("shows an empty value when the active profile has no usage", () => {
+	it("does not render when the active profile has no usage or balance", () => {
 		mockedContext.value = {}
+		const { container } = render(<UsageBar />)
+		expect(container).toBeEmptyDOMElement()
+		expect(screen.queryByText("--")).not.toBeInTheDocument()
+	})
+
+	it("does not render an account usage object without a valid quota or balance", () => {
+		mockedContext.value = {
+			accountUsage: {
+				currency: "USD",
+				quotas: [{ type: "weekly", label: "Weekly", used: 0, limit: 0 }],
+			},
+		}
+		const { container } = render(<UsageBar />)
+		expect(container).toBeEmptyDOMElement()
+	})
+
+	it("keeps a zero balance visible", () => {
+		mockedContext.value = {
+			accountUsage: {
+				currency: "USD",
+				remainingBalance: 0,
+			},
+		}
 		render(<UsageBar />)
-		expect(screen.getByText("--")).toBeInTheDocument()
+		expect(screen.getByText("$0.00")).toBeInTheDocument()
 	})
 })
 

@@ -24,23 +24,23 @@ describe("ChatInputRuntimeControls", () => {
 		expect(screen.getAllByRole("button", { name: "Existing Profile selector" })).toHaveLength(1)
 	})
 
-	it("uses one explicit gap for Profile, Thinking, and Service Tier", () => {
+	it("uses one consistent gap for Profile, Thinking, and Service Tier", () => {
 		const { container } = render(
 			<ChatInputRuntimeControls profileControl={<button type="button">Existing Profile selector</button>} />,
 		)
 
 		const controls = container.querySelector<HTMLElement>("[data-chat-input-runtime-controls]")
-		expect(controls).toHaveClass("flex", "items-center", "gap-[3px]")
+		expect(controls).toHaveClass("flex", "h-4", "min-w-0", "flex-1", "items-center", "gap-1", "overflow-hidden")
 		expect(controls?.children).toHaveLength(3)
 	})
 
-	it("caps long Profile names and lets Profile shrink before Task-local controls", () => {
+	it("lets Profile use available space and shrink before Task-local controls", () => {
 		const { container } = render(
 			<ChatInputRuntimeControls profileControl={<button type="button">Existing Profile selector</button>} />,
 		)
 
 		const profileSlot = container.querySelector<HTMLElement>('[data-chat-input-slot="profile"]')
-		expect(profileSlot).toHaveClass("min-w-0", "max-w-[12ch]", "flex-[0_1_auto]", "overflow-hidden")
-		expect(profileSlot).not.toHaveClass("min-w-[10ch]", "max-w-[24ch]", "flex-[1_0_12ch]")
+		expect(profileSlot).toHaveClass("min-w-0", "max-w-full", "flex-[0_1_auto]", "overflow-hidden")
+		expect(profileSlot).not.toHaveClass("flex-1", "max-w-[12ch]", "min-w-[10ch]", "max-w-[24ch]", "flex-[1_0_12ch]")
 	})
 })

@@ -163,7 +163,7 @@ const ModelSwitcher: React.FC<ModelSwitcherProps> = ({ onOpenSettings }) => {
 			/>
 			<button
 				aria-label="Select model"
-				className="inline-flex h-4 w-full min-w-0 items-center bg-transparent border-0 cursor-pointer p-0 text-xs leading-none text-description text-left truncate disabled:cursor-not-allowed disabled:opacity-60"
+				className="inline-flex h-4 w-full min-w-0 items-center overflow-hidden bg-transparent border-0 cursor-pointer p-0 text-xs leading-none text-description text-left disabled:cursor-not-allowed disabled:opacity-60"
 				disabled={profileSwitchFlow.isSwitchPending}
 				onClick={() => {
 					if (open) {
@@ -176,7 +176,9 @@ const ModelSwitcher: React.FC<ModelSwitcherProps> = ({ onOpenSettings }) => {
 				}}
 				title={tooltip}
 				type="button">
-				{profileSwitchFlow.statusText ? `${displayLine} · ${profileSwitchFlow.statusText}` : displayLine}
+				<span className="block min-w-0 flex-1 truncate text-center" data-chat-input-profile-text>
+					{profileSwitchFlow.statusText ? `${displayLine} · ${profileSwitchFlow.statusText}` : displayLine}
+				</span>
 			</button>
 
 			{open &&

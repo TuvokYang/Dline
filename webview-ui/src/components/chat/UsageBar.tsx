@@ -45,19 +45,9 @@ export const UsageBar = () => {
 	const { accountUsage } = useExtensionState()
 
 	const baseClass =
-		"inline-flex items-center gap-1 text-xs text-description select-none whitespace-nowrap cursor-default group relative"
+		"inline-flex shrink-0 items-center gap-1 text-xs text-description select-none whitespace-nowrap cursor-default group relative"
 
-	if (!accountUsage) {
-		return (
-			<span className={baseClass}>
-				<span className="font-medium text-description">--</span>
-				<span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 hidden group-hover:inline-flex flex-col gap-0.5 bg-dropdown-background border border-editor-group-border rounded-[3px] px-2 py-1 shadow-lg z-50 text-[10px] whitespace-nowrap">
-					<span>Usage unavailable for this profile</span>
-					<span>Provider does not expose account usage data</span>
-				</span>
-			</span>
-		)
-	}
+	if (!accountUsage) return null
 
 	const quotas = accountUsage.quotas?.filter((quota) => quota.limit > 0) ?? []
 	if (quotas.length > 0) {
@@ -84,9 +74,7 @@ export const UsageBar = () => {
 		)
 	}
 
-	if (accountUsage.remainingBalance === undefined) {
-		return <span className={baseClass}>--</span>
-	}
+	if (accountUsage.remainingBalance === undefined) return null
 
 	const balance = accountUsage.remainingBalance
 	const dailyIn = accountUsage?.dailyInputTokens ?? 0

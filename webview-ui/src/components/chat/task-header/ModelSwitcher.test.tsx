@@ -80,8 +80,10 @@ describe("ModelSwitcher Profile transitions", () => {
 		render(<ModelSwitcher onOpenSettings={vi.fn()} />)
 
 		const profileButton = screen.getByRole("button", { name: "Select model" })
+		const profileText = profileButton.querySelector<HTMLElement>("[data-chat-input-profile-text]")
 		expect(profileButton).toHaveTextContent("large-profile")
-		expect(profileButton).toHaveClass("inline-flex", "h-4", "items-center", "leading-none")
+		expect(profileButton).toHaveClass("inline-flex", "h-4", "items-center", "overflow-hidden", "leading-none")
+		expect(profileText).toHaveClass("block", "min-w-0", "flex-1", "truncate")
 	})
 
 	it("routes an active Task selection through the Profile transition transaction", () => {

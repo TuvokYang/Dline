@@ -3,7 +3,7 @@ import type { ApiProfile } from "@shared/proto/dline/profile"
 import type { ReasoningConfig } from "@shared/proto/dline/provider/common"
 import { PROFILE_PROVIDER_KEYS } from "@shared/providers/profile-model-info"
 import { OPENAI_REASONING_EFFORT_OPTIONS } from "@shared/storage/types"
-import { DEEPSEEK_REASONING_EFFORT_OPTIONS } from "@shared/utils/reasoning-support"
+import { DEEPSEEK_REASONING_EFFORT_OPTIONS, isDeepSeekReasoningModel } from "@shared/utils/reasoning-support"
 
 const DEFAULT_TASK_THINKING_BUDGET = 6_000
 const ANTHROPIC_ADAPTIVE_REASONING_EFFORT_OPTIONS = ["none", "low", "medium", "high", "xhigh"] as const
@@ -22,6 +22,7 @@ export function resolveTaskThinkingConfig(
 	provider: string | undefined,
 	capabilities: ModelCapabilities | undefined,
 	reasoning?: ReasoningConfig,
+	modelId?: string,
 ): ThinkingConfig | undefined {
 	const thinking = capabilities?.thinking
 	const configured = resolveConfiguredThinkingState(reasoning)
@@ -38,6 +39,14 @@ export function resolveTaskThinkingConfig(
 		thinking?.maxBudget ??
 		(configuredBudget ? Math.max(DEFAULT_TASK_THINKING_BUDGET, reasoning?.thinkingBudget ?? 0) : undefined)
 
+	if (provider === "deepseek" || isDeepSeekReasoningModel(modelId)) {
+		return {
+			...thinking,
+			supported: true,
+			mode: "effort",
+			effortLevels: [...DEEPSEEK_REASONING_EFFORT_OPTIONS],
+		}
+	}
 	if (provider === "openai" || provider === "openai-codex") {
 		return {
 			...thinking,
@@ -48,14 +57,6 @@ export function resolveTaskThinkingConfig(
 				(thinking?.effortLevels?.length ?? 0) > 0
 					? [...(thinking?.effortLevels ?? [])]
 					: [...OPENAI_REASONING_EFFORT_OPTIONS],
-		}
-	}
-	if (provider === "deepseek") {
-		return {
-			...thinking,
-			supported: true,
-			mode: "effort",
-			effortLevels: [...DEEPSEEK_REASONING_EFFORT_OPTIONS],
 		}
 	}
 	if (provider === "anthropic") {

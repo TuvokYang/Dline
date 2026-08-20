@@ -11,6 +11,11 @@ export const DEEPSEEK_REASONING_EFFORT_OPTIONS = ["low", "high", "max"] as const
 
 export type DeepSeekReasoningEffort = (typeof DEEPSEEK_REASONING_EFFORT_OPTIONS)[number]
 
+/** Identify DeepSeek model IDs across native and OpenAI-compatible providers. */
+export function isDeepSeekReasoningModel(modelId?: string): boolean {
+	return modelId?.toLowerCase().includes("deepseek") === true
+}
+
 export interface DeepSeekAdaptiveThinkingSettings {
 	enabled: boolean
 	effort?: DeepSeekReasoningEffort

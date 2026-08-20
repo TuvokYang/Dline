@@ -263,6 +263,46 @@ describe("chat input TaskRuntimeControls", () => {
 		expect(screen.getByRole("combobox", { name: "Task thinking override" })).toHaveTextContent("Max")
 	})
 
+	it("projects DeepSeek efforts for a compatible Provider model", async () => {
+		const user = userEvent.setup()
+		mocks.providerCatalogAvailable = false
+		mocks.state.apiConfiguration = {
+			...mocks.state.apiConfiguration,
+			actModeProfileId: "openrouter-id",
+			actModeProfile: "openrouter-deepseek-thinking",
+		}
+		mocks.profiles = [
+			{
+				id: "openrouter-id",
+				name: "openrouter-deepseek-thinking",
+				provider: "openrouter",
+				modelId: "deepseek/deepseek-chat",
+				usedFor: [],
+				enabled: true,
+				openrouter: {
+					reasoning: { enableThinking: true, effort: "high", thinkingBudget: 0 },
+				},
+				modelInfo: { capabilities: { supportsReasoning: true } },
+			},
+		]
+
+		render(<TaskRuntimeControls />)
+
+		const thinkingControl = screen.getByRole("combobox", { name: "Task thinking override" })
+		expect(thinkingControl).toHaveTextContent("High")
+		await user.click(thinkingControl)
+		expect(screen.getByRole("option", { name: "Low" })).toBeInTheDocument()
+		expect(screen.getByRole("option", { name: "High" })).toBeInTheDocument()
+		expect(screen.getByRole("option", { name: "Max" })).toBeInTheDocument()
+		await user.click(screen.getByRole("option", { name: "Max" }))
+
+		await waitFor(() => expect(mocks.updateTaskSettings).toHaveBeenCalledTimes(1))
+		expect(mocks.updateTaskSettings).toHaveBeenCalledWith("task-1", {
+			actModeReasoningOverrideKind: "effort",
+			actModeReasoningOverrideEffort: "max",
+		})
+	})
+
 	it("hides Thinking when the Provider explicitly disables it despite model support", () => {
 		mocks.profiles = [
 			{
@@ -391,18 +431,27 @@ describe("chat input TaskRuntimeControls", () => {
 		expect(serviceTierControl.textContent).toBe("")
 		expect(serviceTierControl).toHaveAttribute("data-icon-only", "true")
 		expect(serviceTierControl).toHaveAttribute("title", "Service tier: Priority")
-		expect(serviceTierControl).toHaveClass("border-0", "shadow-none", "p-0", "size-4")
+		expect(serviceTierControl).toHaveClass("border-0", "shadow-none", "p-0", "size-3")
 		expect(screen.getByTestId("task-service-tier-icon")).toHaveAttribute("data-service-tier-icon", "priority")
-		expect(screen.getByTestId("task-service-tier-icon")).toHaveClass("size-3")
+		expect(screen.getByTestId("task-service-tier-icon")).toHaveClass("size-3", "text-foreground")
 		expect(screen.queryByText("Tier")).not.toBeInTheDocument()
 		expect(screen.queryByText("Thinking", { exact: true })).not.toBeInTheDocument()
 		expect(container.querySelector('[data-chat-input-slot="thinking"]')).toHaveClass(
-			"min-w-[4ch]",
-			"max-w-[8ch]",
+			"h-4",
+			"min-w-0",
+			"max-w-full",
 			"flex-[0_1_auto]",
+			"items-center",
+			"justify-center",
 			"overflow-hidden",
 		)
-		expect(container.querySelector('[data-chat-input-slot="service-tier"]')).toHaveClass("shrink-0")
+		expect(container.querySelector('[data-chat-input-slot="service-tier"]')).toHaveClass(
+			"h-4",
+			"w-3",
+			"shrink-0",
+			"items-center",
+			"justify-center",
+		)
 
 		await user.click(serviceTierControl)
 		const tierOptions = screen.getByRole("listbox", { name: "Task service tier options" })
@@ -423,7 +472,10 @@ describe("chat input TaskRuntimeControls", () => {
 				"text-xs",
 				"leading-none",
 			)
-			expect(option.querySelector(`[data-service-tier-option-icon="${optionValue}"] svg`)).toHaveClass("size-3")
+			expect(option.querySelector(`[data-service-tier-option-icon="${optionValue}"] svg`)).toHaveClass(
+				"size-3",
+				"text-foreground",
+			)
 			expect(option.querySelector(`[data-service-tier-option-label="${optionValue}"]`)).toHaveTextContent(tier)
 		}
 		await user.click(serviceTierControl)
@@ -440,11 +492,17 @@ describe("chat input TaskRuntimeControls", () => {
 		const expectStandardIcon = (tier: string, pathCount: number) => {
 			const icon = screen.getByTestId("task-service-tier-icon")
 			expect(icon).toHaveAttribute("data-service-tier-icon", tier)
-			expect(icon).toHaveClass("size-3")
-			expect(icon).toHaveStyle({ display: "block", flex: "0 0 auto", fontSize: "inherit", height: "1em", width: "1em" })
+			expect(icon).toHaveClass("size-3", "text-foreground")
+			expect(icon).toHaveStyle({
+				display: "block",
+				flex: "0 0 auto",
+				fontSize: "inherit",
+				height: "0.75rem",
+				width: "0.75rem",
+			})
 			expect(icon).toHaveAttribute("fill", "none")
 			expect(icon).toHaveAttribute("stroke", "currentColor")
-			expect(icon).toHaveAttribute("stroke-width", "0.8")
+			expect(icon).toHaveAttribute("stroke-width", "1.5")
 			expect(icon).toHaveAttribute("viewBox", "0 0 24 24")
 			expect(icon.querySelectorAll("path")).toHaveLength(pathCount)
 		}
@@ -466,15 +524,15 @@ describe("chat input TaskRuntimeControls", () => {
 		rerender(<TaskServiceTierControl onSelect={onSelect} value="ultrafast" />)
 		const ultrafastControl = screen.getByRole("button", { name: "Task service tier" })
 		const ultrafastIcon = screen.getByTestId("task-service-tier-icon")
-		expect(ultrafastControl).toHaveClass("size-4", "items-center", "justify-center")
+		expect(ultrafastControl).toHaveClass("size-3", "items-center", "justify-center")
 		expect(ultrafastIcon).toHaveAttribute("data-service-tier-icon", "ultrafast")
-		expect(ultrafastIcon).toHaveClass("size-3")
+		expect(ultrafastIcon).toHaveClass("size-3", "text-foreground")
 		expect(ultrafastIcon).toHaveStyle({
 			display: "block",
 			flex: "0 0 auto",
 			fontSize: "inherit",
-			height: "1em",
-			width: "1em",
+			height: "0.75rem",
+			width: "0.75rem",
 		})
 		expect(ultrafastIcon).toHaveAttribute("stroke", "currentColor")
 		expect(ultrafastIcon).toHaveAttribute("stroke-linecap", "round")
@@ -487,7 +545,11 @@ describe("chat input TaskRuntimeControls", () => {
 			"middle",
 			"primary",
 		])
-		expect([...lightningPaths].map((path) => path.getAttribute("fill"))).toEqual(["#202020", "#202020", "#202020"])
+		expect([...lightningPaths].map((path) => path.getAttribute("fill"))).toEqual([
+			"currentColor",
+			"currentColor",
+			"currentColor",
+		])
 		expect([...lightningPaths].map((path) => path.getAttribute("stroke-width"))).toEqual(["1.36", "1.19", "1.07"])
 		expect([...lightningPaths].map((path) => path.getAttribute("transform"))).toEqual([
 			"translate(7.4 1.45) scale(0.59)",

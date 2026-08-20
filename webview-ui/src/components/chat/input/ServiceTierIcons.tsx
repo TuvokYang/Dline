@@ -10,19 +10,20 @@ function StandardServiceTierIcon({ children, className, style, ...props }: Stand
 	return (
 		<svg
 			{...props}
+			aria-hidden="true"
 			className={className}
 			fill="none"
 			stroke="currentColor"
 			strokeLinecap="round"
 			strokeLinejoin="round"
-			strokeWidth="0.8"
+			strokeWidth="1.5"
 			style={{
-				...style,
 				display: "block",
 				flex: "0 0 auto",
 				fontSize: "inherit",
 				height: "1em",
 				width: "1em",
+				...style,
 			}}
 			viewBox="0 0 24 24"
 			xmlns="http://www.w3.org/2000/svg">
@@ -89,38 +90,39 @@ export function UltrafastServiceTierIcon({ className, style, ...props }: Service
 	return (
 		<svg
 			{...props}
+			aria-hidden="true"
 			className={className}
 			stroke="currentColor"
 			strokeLinecap="round"
 			strokeLinejoin="round"
 			style={{
-				...style,
 				display: "block",
 				flex: "0 0 auto",
 				fontSize: "inherit",
 				height: "1em",
 				width: "1em",
+				...style,
 			}}
 			viewBox="0 0 24 24"
 			xmlns="http://www.w3.org/2000/svg">
 			<path
 				d={ULTRAFAST_LIGHTNING_PATH}
 				data-ultrafast-layer="rear"
-				fill="#202020"
+				fill="currentColor"
 				strokeWidth="1.36"
 				transform="translate(7.4 1.45) scale(0.59)"
 			/>
 			<path
 				d={ULTRAFAST_LIGHTNING_PATH}
 				data-ultrafast-layer="middle"
-				fill="#202020"
+				fill="currentColor"
 				strokeWidth="1.19"
 				transform="translate(4.05 3.15) scale(0.67)"
 			/>
 			<path
 				d={ULTRAFAST_LIGHTNING_PATH}
 				data-ultrafast-layer="primary"
-				fill="#202020"
+				fill="currentColor"
 				strokeWidth="1.07"
 				transform="translate(0.85 4.85) scale(0.75)"
 			/>

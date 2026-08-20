@@ -11,7 +11,6 @@ import type React from "react"
 import { forwardRef, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import DynamicTextArea from "react-textarea-autosize"
 import styled from "styled-components"
-import { ChatInputRuntimeControls } from "./input/ChatInputRuntimeControls"
 import ContextMenu from "@/components/chat/ContextMenu"
 import { CHAT_CONSTANTS } from "@/components/chat/chat-view/constants"
 import { ModeSwitchDialog } from "@/components/chat/mode-switch/ModeSwitchDialog"
@@ -50,6 +49,7 @@ import {
 	validateSlashCommand,
 } from "@/utils/slash-commands"
 import ClineRulesToggleModal from "../agent-capabilities/ClineRulesToggleModal"
+import { ChatInputRuntimeControls } from "./input/ChatInputRuntimeControls"
 import ServersToggleModal from "./ServersToggleModal"
 import { UsageBar } from "./UsageBar"
 
@@ -137,8 +137,9 @@ const ButtonGroup = styled.div`
 	display: flex;
 	align-items: center;
 	gap: 4px;
-	flex: 0 1 auto;
+	flex: 1 1 auto;
 	min-width: 0;
+	max-width: 100%;
 `
 
 const ButtonContainer = styled.div`
@@ -1748,7 +1749,7 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 					</div>
 				</div>
 				<div className="flex items-center -mt-0.5 px-3 pb-2 gap-2">
-					<ButtonGroup className="ease-in-out h-5 z-10 flex items-center min-w-0 max-w-[60%]">
+					<ButtonGroup className="ease-in-out h-5 z-10 flex items-center min-w-0">
 						<Tooltip>
 							<TooltipContent>Add Context</TooltipContent>
 							<TooltipTrigger asChild>
@@ -1790,13 +1791,9 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 
 						<ClineRulesToggleModal />
 
-						<ChatInputRuntimeControls
-							profileControl={<ModelSwitcher onOpenSettings={handleModelButtonClick} />}
-						/>
+						<ChatInputRuntimeControls profileControl={<ModelSwitcher onOpenSettings={handleModelButtonClick} />} />
 					</ButtonGroup>
-					<span className="shrink-0">
-						<UsageBar />
-					</span>
+					<UsageBar />
 					{/* Tooltip for Plan/Act toggle remains outside the conditional rendering */}
 					<div className="ml-auto shrink-0">
 						<ModeSwitchDialog
