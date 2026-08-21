@@ -4,6 +4,14 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 import { TaskRuntimeControls } from "./TaskRuntimeControls"
 import { TaskServiceTierControl } from "./TaskServiceTierControl"
 
+class TestResizeObserver implements ResizeObserver {
+	disconnect = vi.fn()
+	observe = vi.fn()
+	unobserve = vi.fn()
+}
+
+globalThis.ResizeObserver = TestResizeObserver
+
 const mocks = vi.hoisted(() => ({
 	state: {
 		apiConfiguration: {
@@ -418,26 +426,41 @@ describe("chat input TaskRuntimeControls", () => {
 		expect(thinkingControl).toHaveTextContent("High")
 		expect(thinkingControl).not.toHaveTextContent("Default")
 		expect(thinkingControl).toHaveClass(
+			"!h-[18.5px]",
 			"border-0",
 			"shadow-none",
-			"p-0",
-			"rounded-none",
-			"text-xs",
+			"px-1",
+			"py-0",
+			"rounded-sm",
+			"text-[12.5px]",
 			"leading-none",
 			"text-description",
+			"transition-colors",
+			"hover:bg-toolbar-hover",
+			"hover:text-foreground",
 		)
 		expect(thinkingControl.querySelector("svg")).toBeNull()
 		expect(serviceTierControl).toBeInTheDocument()
 		expect(serviceTierControl.textContent).toBe("")
 		expect(serviceTierControl).toHaveAttribute("data-icon-only", "true")
-		expect(serviceTierControl).toHaveAttribute("title", "Service tier: Priority")
-		expect(serviceTierControl).toHaveClass("border-0", "shadow-none", "p-0", "size-3")
+		expect(serviceTierControl).toHaveAttribute("data-service-tier-label", "Priority")
+		expect(serviceTierControl).toHaveClass(
+			"border-0",
+			"shadow-none",
+			"p-0",
+			"size-[18.5px]",
+			"rounded-sm",
+			"transition-colors",
+			"hover:bg-toolbar-hover",
+			"hover:text-foreground",
+		)
 		expect(screen.getByTestId("task-service-tier-icon")).toHaveAttribute("data-service-tier-icon", "priority")
-		expect(screen.getByTestId("task-service-tier-icon")).toHaveClass("size-3", "text-foreground")
+		expect(screen.getByTestId("task-service-tier-icon")).toHaveClass("text-foreground")
+		expect(screen.getByTestId("task-service-tier-icon")).toHaveStyle({ height: "12.5px", width: "12.5px" })
 		expect(screen.queryByText("Tier")).not.toBeInTheDocument()
 		expect(screen.queryByText("Thinking", { exact: true })).not.toBeInTheDocument()
 		expect(container.querySelector('[data-chat-input-slot="thinking"]')).toHaveClass(
-			"h-4",
+			"h-[18.5px]",
 			"min-w-0",
 			"max-w-full",
 			"flex-[0_1_auto]",
@@ -446,16 +469,28 @@ describe("chat input TaskRuntimeControls", () => {
 			"overflow-hidden",
 		)
 		expect(container.querySelector('[data-chat-input-slot="service-tier"]')).toHaveClass(
-			"h-4",
-			"w-3",
+			"size-[18.5px]",
 			"shrink-0",
 			"items-center",
 			"justify-center",
 		)
 
+		const thinkingTooltipTrigger = thinkingControl.closest<HTMLElement>('[data-slot="tooltip-trigger"]')
+		const serviceTierTooltipTrigger = serviceTierControl.closest<HTMLElement>('[data-slot="tooltip-trigger"]')
+		expect(thinkingTooltipTrigger).not.toBeNull()
+		expect(serviceTierTooltipTrigger).not.toBeNull()
+		await user.hover(thinkingTooltipTrigger!)
+		await waitFor(() => expect(document.querySelector('[data-slot="tooltip-content"]')).toHaveTextContent("Thinking: High"))
+		await user.hover(serviceTierTooltipTrigger!)
+		await waitFor(() =>
+			expect(document.querySelector('[data-slot="tooltip-content"]')).toHaveTextContent("Service Tier: Priority"),
+		)
+
 		await user.click(serviceTierControl)
 		const tierOptions = screen.getByRole("listbox", { name: "Task service tier options" })
 		expect(tierOptions).toBeInTheDocument()
+		expect(container.querySelector('[data-chat-input-slot="service-tier"]')?.contains(tierOptions)).toBe(false)
+		expect(tierOptions).toHaveAttribute("data-slot", "popover-content")
 		expect(tierOptions.getAttribute("style")).toContain("background: var(--vscode-dropdown-background)")
 		expect(tierOptions.getAttribute("style")).toContain("border-color: var(--vscode-dropdown-border)")
 		const selectedTier = screen.getByRole("option", { name: "Priority" })
@@ -492,17 +527,17 @@ describe("chat input TaskRuntimeControls", () => {
 		const expectStandardIcon = (tier: string, pathCount: number) => {
 			const icon = screen.getByTestId("task-service-tier-icon")
 			expect(icon).toHaveAttribute("data-service-tier-icon", tier)
-			expect(icon).toHaveClass("size-3", "text-foreground")
+			expect(icon).toHaveClass("text-foreground")
 			expect(icon).toHaveStyle({
 				display: "block",
 				flex: "0 0 auto",
 				fontSize: "inherit",
-				height: "0.75rem",
-				width: "0.75rem",
+				height: "12.5px",
+				width: "12.5px",
 			})
 			expect(icon).toHaveAttribute("fill", "none")
 			expect(icon).toHaveAttribute("stroke", "currentColor")
-			expect(icon).toHaveAttribute("stroke-width", "1.5")
+			expect(icon).toHaveAttribute("stroke-width", "2")
 			expect(icon).toHaveAttribute("viewBox", "0 0 24 24")
 			expect(icon.querySelectorAll("path")).toHaveLength(pathCount)
 		}
@@ -511,6 +546,12 @@ describe("chat input TaskRuntimeControls", () => {
 
 		rerender(<TaskServiceTierControl onSelect={onSelect} value="default" />)
 		expectStandardIcon("default", 2)
+		const defaultIcon = screen.getByTestId("task-service-tier-icon")
+		expect(defaultIcon.querySelector('[data-default-tier-part="ring"]')).toHaveAttribute(
+			"d",
+			"M12 2a10 10 0 1 1-10 10A10 10 0 0 1 12 2z",
+		)
+		expect(defaultIcon.querySelector('[data-default-tier-part="needle"]')).toHaveAttribute("d", "m12 12 4-4")
 
 		rerender(<TaskServiceTierControl onSelect={onSelect} value="flex" />)
 		expectStandardIcon("flex", 5)
@@ -524,40 +565,32 @@ describe("chat input TaskRuntimeControls", () => {
 		rerender(<TaskServiceTierControl onSelect={onSelect} value="ultrafast" />)
 		const ultrafastControl = screen.getByRole("button", { name: "Task service tier" })
 		const ultrafastIcon = screen.getByTestId("task-service-tier-icon")
-		expect(ultrafastControl).toHaveClass("size-3", "items-center", "justify-center")
+		expect(ultrafastControl).toHaveClass("size-[18.5px]", "items-center", "justify-center")
 		expect(ultrafastIcon).toHaveAttribute("data-service-tier-icon", "ultrafast")
-		expect(ultrafastIcon).toHaveClass("size-3", "text-foreground")
+		expect(ultrafastIcon).toHaveClass("text-foreground")
 		expect(ultrafastIcon).toHaveStyle({
 			display: "block",
 			flex: "0 0 auto",
 			fontSize: "inherit",
-			height: "0.75rem",
-			width: "0.75rem",
+			height: "12.5px",
+			width: "12.5px",
 		})
+		expect(ultrafastIcon).toHaveAttribute("fill", "none")
 		expect(ultrafastIcon).toHaveAttribute("stroke", "currentColor")
 		expect(ultrafastIcon).toHaveAttribute("stroke-linecap", "round")
 		expect(ultrafastIcon).toHaveAttribute("stroke-linejoin", "round")
+		expect(ultrafastIcon).toHaveAttribute("stroke-width", "2")
 		expect(ultrafastIcon).toHaveAttribute("viewBox", "0 0 24 24")
 		const lightningPaths = ultrafastIcon.querySelectorAll("path")
-		expect(lightningPaths).toHaveLength(3)
-		expect([...lightningPaths].map((path) => path.getAttribute("data-ultrafast-layer"))).toEqual([
-			"rear",
-			"middle",
+		expect(lightningPaths).toHaveLength(4)
+		expect([...lightningPaths].map((path) => path.getAttribute("data-ultrafast-part"))).toEqual([
+			"speed-top",
+			"speed-middle",
+			"speed-bottom",
 			"primary",
 		])
-		expect([...lightningPaths].map((path) => path.getAttribute("fill"))).toEqual([
-			"currentColor",
-			"currentColor",
-			"currentColor",
-		])
-		expect([...lightningPaths].map((path) => path.getAttribute("stroke-width"))).toEqual(["1.36", "1.19", "1.07"])
-		expect([...lightningPaths].map((path) => path.getAttribute("transform"))).toEqual([
-			"translate(7.4 1.45) scale(0.59)",
-			"translate(4.05 3.15) scale(0.67)",
-			"translate(0.85 4.85) scale(0.75)",
-		])
-		expect(lightningPaths[0]).toHaveAttribute("d", lightningPaths[1].getAttribute("d") ?? "")
-		expect(lightningPaths[1]).toHaveAttribute("d", lightningPaths[2].getAttribute("d") ?? "")
+		expect([...lightningPaths].every((path) => path.getAttribute("transform") === null)).toBe(true)
+		expect(lightningPaths[3]).toHaveAttribute("d", "m14 2-7 11h6l-2 9 8-12h-6z")
 	})
 
 	it("commits an effort and service tier only to the active Task and mode", async () => {
@@ -600,7 +633,7 @@ describe("chat input TaskRuntimeControls", () => {
 
 		await user.keyboard("{Escape}")
 		const serviceTierControl = screen.getByRole("button", { name: "Task service tier" })
-		expect(serviceTierControl).toHaveAttribute("title", "Service tier: Priority")
+		expect(serviceTierControl).toHaveAttribute("data-service-tier-label", "Priority")
 		await user.click(serviceTierControl)
 		expect(screen.queryByRole("option", { name: "Profile" })).not.toBeInTheDocument()
 		expect(mocks.updateTaskSettings).not.toHaveBeenCalled()

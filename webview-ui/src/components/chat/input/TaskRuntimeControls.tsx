@@ -2,6 +2,7 @@ import { useApiProfiles } from "@components/settings/providers/useApiProfiles"
 import { useProviderModels } from "@components/settings/providers/useProviderModels"
 import { updateTaskSettings } from "@components/settings/utils/settingsHandlers"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@components/ui/select"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@components/ui/tooltip"
 import { useExtensionState } from "@context/ExtensionStateContext"
 import { resolveProfileModelInfo } from "@shared/providers/profile-model-info"
 import type { OpenAiServiceTier } from "@shared/storage/types"
@@ -72,6 +73,12 @@ export function TaskRuntimeControls() {
 		serviceTierOverride?.kind === "tier" ? serviceTierOverride.tier : resolveProfileServiceTier(profile)
 	const [thinkingValue, setThinkingValue] = useState(configuredThinkingValue)
 	const [budgetValue, setBudgetValue] = useState(String(configuredBudget))
+	const thinkingLabel =
+		thinkingValue === "budget"
+			? "Budget"
+			: thinkingValue.startsWith("effort:")
+				? thinkingValue.slice("effort:".length).replace(/^./, (character) => character.toUpperCase())
+				: "Thinking"
 
 	useEffect(() => setThinkingValue(configuredThinkingValue), [configuredThinkingValue])
 	useEffect(() => setBudgetValue(String(configuredBudget)), [configuredBudget])
@@ -124,16 +131,23 @@ export function TaskRuntimeControls() {
 		<>
 			{(supportsEffort || supportsBudget) && (
 				<div
-					className="flex h-4 min-w-0 max-w-full flex-[0_1_auto] items-center justify-center overflow-hidden"
+					className="flex h-[18.5px] min-w-0 max-w-full flex-[0_1_auto] items-center justify-center overflow-hidden"
 					data-chat-input-slot="thinking">
 					<Select onValueChange={updateThinking} value={thinkingValue}>
-						<SelectTrigger
-							aria-label="Task thinking override"
-							className="!h-4 inline-flex w-auto min-w-0 max-w-full items-center justify-center gap-0 overflow-hidden rounded-none border-0 bg-transparent p-0 text-center text-xs leading-none text-description shadow-none outline-none focus-visible:border-transparent focus-visible:ring-0"
-							showIcon={false}
-							size="sm">
-							<SelectValue className="flex min-w-0 items-center justify-center truncate text-center leading-none" />
-						</SelectTrigger>
+						<Tooltip>
+							<TooltipContent side="top">Thinking: {thinkingLabel}</TooltipContent>
+							<TooltipTrigger asChild>
+								<div className="inline-flex h-[18.5px] min-w-0 max-w-full items-center">
+									<SelectTrigger
+										aria-label="Task thinking override"
+										className="!h-[18.5px] inline-flex w-auto min-w-0 max-w-full items-center justify-center gap-0 overflow-hidden rounded-sm border-0 bg-transparent px-1 py-0 text-center text-[12.5px] leading-none text-description shadow-none outline-none transition-colors duration-150 hover:bg-toolbar-hover hover:text-foreground focus-visible:border-transparent focus-visible:bg-toolbar-hover focus-visible:ring-0"
+										showIcon={false}
+										size="sm">
+										<SelectValue className="flex min-w-0 items-center justify-center truncate text-center leading-none" />
+									</SelectTrigger>
+								</div>
+							</TooltipTrigger>
+						</Tooltip>
 						<SelectContent align="start" className="min-w-28" position="popper" side="top" sideOffset={4}>
 							{supportsEffort &&
 								effortLevels.map((effort) => (

@@ -5,6 +5,7 @@ import { useApiProfiles } from "@/components/settings/providers/useApiProfiles"
 import { updateSetting } from "@/components/settings/utils/settingsHandlers"
 import { Switch } from "@/components/ui/switch"
 import { useExtensionState } from "@/context/ExtensionStateContext"
+import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip"
 import { ProfileSwitchDialog } from "../profile-switch/ProfileSwitchDialog"
 import { useProfileSwitch } from "../profile-switch/useProfileSwitch"
 
@@ -148,7 +149,7 @@ const ModelSwitcher: React.FC<ModelSwitcherProps> = ({ onOpenSettings }) => {
 
 	return (
 		<div
-			className="flex h-4 min-w-0 items-center"
+			className="flex h-[18.5px] min-w-0 items-center"
 			ref={containerRef}
 			style={{ flex: "1 1 auto", position: "relative", zIndex: open ? 50 : undefined }}>
 			<ProfileSwitchDialog
@@ -161,45 +162,47 @@ const ModelSwitcher: React.FC<ModelSwitcherProps> = ({ onOpenSettings }) => {
 				}}
 				state={profileSwitch ?? { phase: "idle" }}
 			/>
-			<button
-				aria-label="Select model"
-				className="inline-flex h-4 w-full min-w-0 items-center overflow-hidden bg-transparent border-0 cursor-pointer p-0 text-xs leading-none text-description text-left disabled:cursor-not-allowed disabled:opacity-60"
-				disabled={profileSwitchFlow.isSwitchPending}
-				onClick={() => {
-					if (open) {
-						setOpen(false)
-						return
-					}
-					const anchor = containerRef.current?.getBoundingClientRect()
-					if (anchor) setMenuPosition({ left: anchor.left, bottom: window.innerHeight - anchor.top + 4 })
-					setOpen(true)
-				}}
-				title={tooltip}
-				type="button">
-				<span className="block min-w-0 flex-1 truncate text-center" data-chat-input-profile-text>
-					{profileSwitchFlow.statusText ? `${displayLine} · ${profileSwitchFlow.statusText}` : displayLine}
-				</span>
-			</button>
+			<Tooltip>
+				{!open && (
+					<TooltipContent side="top">
+						<span className="whitespace-pre-line">{tooltip}</span>
+					</TooltipContent>
+				)}
+				<TooltipTrigger asChild>
+					<button
+						aria-label="Select model"
+						className="inline-flex h-[18.5px] w-full min-w-0 cursor-pointer items-center overflow-hidden rounded-sm border-0 bg-transparent px-1 py-0 text-left text-[12.5px] leading-none text-description transition-colors duration-150 hover:bg-toolbar-hover hover:text-foreground focus-visible:bg-toolbar-hover disabled:cursor-not-allowed disabled:opacity-60"
+						disabled={profileSwitchFlow.isSwitchPending}
+						onClick={() => {
+							if (open) {
+								setOpen(false)
+								return
+							}
+							const anchor = containerRef.current?.getBoundingClientRect()
+							if (anchor) setMenuPosition({ left: anchor.left, bottom: window.innerHeight - anchor.top + 4 })
+							setOpen(true)
+						}}
+						type="button">
+						<span className="block min-w-0 flex-1 truncate text-center" data-chat-input-profile-text>
+							{profileSwitchFlow.statusText ? `${displayLine} · ${profileSwitchFlow.statusText}` : displayLine}
+						</span>
+					</button>
+				</TooltipTrigger>
+			</Tooltip>
 
 			{open &&
 				menuPosition &&
 				createPortal(
 					<div
-						className="fixed z-[2000] rounded border shadow-lg"
+						className="fixed z-[2000] max-h-[360px] min-w-[280px] overflow-y-auto rounded border border-editor-group-border bg-menu text-menu-foreground shadow-lg"
+						data-testid="profile-menu"
 						ref={menuRef}
 						style={{
 							bottom: menuPosition.bottom,
 							left: menuPosition.left,
-							minWidth: 280,
-							maxHeight: 360,
-							overflowY: "auto",
-							background: "var(--vscode-dropdown-background)",
-							borderColor: "var(--vscode-dropdown-border)",
 						}}>
 						{/* Title row with separation toggle */}
-						<div
-							className="flex items-center justify-between px-3 py-2"
-							style={{ borderBottom: "1px solid var(--vscode-dropdown-border)" }}>
+						<div className="flex items-center justify-between border-b border-editor-group-border px-3 py-2">
 							<span className="text-xs font-medium" style={{ color: "var(--vscode-foreground)" }}>
 								Available Models
 							</span>
@@ -231,7 +234,7 @@ const ModelSwitcher: React.FC<ModelSwitcherProps> = ({ onOpenSettings }) => {
 
 						{/* Act/Plan tabs (only in separated mode) */}
 						{planActSeparateModelsSetting && (
-							<div className="flex" style={{ borderBottom: "1px solid var(--vscode-dropdown-border)" }}>
+							<div className="flex border-b border-editor-group-border">
 								{(["act", "plan"] as ModeTab[]).map((tab) => (
 									<button
 										className="flex-1 cursor-pointer bg-transparent border-0 py-1.5 text-xs font-medium"
@@ -299,7 +302,6 @@ const ModelSwitcher: React.FC<ModelSwitcherProps> = ({ onOpenSettings }) => {
 										onMouseLeave={() => setHoveredId(null)}
 										role="option"
 										style={{
-											borderBottom: "1px solid var(--vscode-dropdown-border)",
 											background: selected
 												? "var(--vscode-list-activeSelectionBackground)"
 												: isHovered

@@ -16,7 +16,7 @@ function StandardServiceTierIcon({ children, className, style, ...props }: Stand
 			stroke="currentColor"
 			strokeLinecap="round"
 			strokeLinejoin="round"
-			strokeWidth="1.5"
+			strokeWidth="2"
 			style={{
 				display: "block",
 				flex: "0 0 auto",
@@ -47,8 +47,8 @@ export function AutoServiceTierIcon(props: ServiceTierIconProps) {
 export function DefaultServiceTierIcon(props: ServiceTierIconProps) {
 	return (
 		<StandardServiceTierIcon {...props}>
-			<path d="m12 14 4-4" />
-			<path d="M3.34 19a10 10 0 1 1 17.32 0" />
+			<path d="M12 2a10 10 0 1 1-10 10A10 10 0 0 1 12 2z" data-default-tier-part="ring" />
+			<path d="m12 12 4-4" data-default-tier-part="needle" />
 		</StandardServiceTierIcon>
 	)
 }
@@ -83,18 +83,17 @@ export function PriorityServiceTierIcon(props: ServiceTierIconProps) {
 	)
 }
 
-const ULTRAFAST_LIGHTNING_PATH =
-	"M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"
-
 export function UltrafastServiceTierIcon({ className, style, ...props }: ServiceTierIconProps) {
 	return (
 		<svg
 			{...props}
 			aria-hidden="true"
 			className={className}
+			fill="none"
 			stroke="currentColor"
 			strokeLinecap="round"
 			strokeLinejoin="round"
+			strokeWidth="2"
 			style={{
 				display: "block",
 				flex: "0 0 auto",
@@ -105,27 +104,10 @@ export function UltrafastServiceTierIcon({ className, style, ...props }: Service
 			}}
 			viewBox="0 0 24 24"
 			xmlns="http://www.w3.org/2000/svg">
-			<path
-				d={ULTRAFAST_LIGHTNING_PATH}
-				data-ultrafast-layer="rear"
-				fill="currentColor"
-				strokeWidth="1.36"
-				transform="translate(7.4 1.45) scale(0.59)"
-			/>
-			<path
-				d={ULTRAFAST_LIGHTNING_PATH}
-				data-ultrafast-layer="middle"
-				fill="currentColor"
-				strokeWidth="1.19"
-				transform="translate(4.05 3.15) scale(0.67)"
-			/>
-			<path
-				d={ULTRAFAST_LIGHTNING_PATH}
-				data-ultrafast-layer="primary"
-				fill="currentColor"
-				strokeWidth="1.07"
-				transform="translate(0.85 4.85) scale(0.75)"
-			/>
+			<path d="M3 7h4" data-ultrafast-part="speed-top" />
+			<path d="M2 12h5" data-ultrafast-part="speed-middle" />
+			<path d="M3 17h4" data-ultrafast-part="speed-bottom" />
+			<path d="m14 2-7 11h6l-2 9 8-12h-6z" data-ultrafast-part="primary" />
 		</svg>
 	)
 }

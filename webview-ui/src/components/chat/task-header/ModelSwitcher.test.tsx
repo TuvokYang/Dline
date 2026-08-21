@@ -82,8 +82,31 @@ describe("ModelSwitcher Profile transitions", () => {
 		const profileButton = screen.getByRole("button", { name: "Select model" })
 		const profileText = profileButton.querySelector<HTMLElement>("[data-chat-input-profile-text]")
 		expect(profileButton).toHaveTextContent("large-profile")
-		expect(profileButton).toHaveClass("inline-flex", "h-4", "items-center", "overflow-hidden", "leading-none")
+		expect(profileButton).toHaveClass(
+			"inline-flex",
+			"h-[18.5px]",
+			"items-center",
+			"overflow-hidden",
+			"rounded-sm",
+			"px-1",
+			"text-[12.5px]",
+			"leading-none",
+			"transition-colors",
+			"hover:bg-toolbar-hover",
+			"hover:text-foreground",
+		)
 		expect(profileText).toHaveClass("block", "min-w-0", "flex-1", "truncate")
+	})
+
+	it("uses the shared menu surface for the Profile list", () => {
+		render(<ModelSwitcher onOpenSettings={vi.fn()} />)
+
+		fireEvent.click(screen.getByRole("button", { name: "Select model" }))
+
+		expect(screen.getByTestId("profile-menu")).toHaveClass("bg-menu", "text-menu-foreground", "border-editor-group-border")
+		expect(screen.getByTestId("profile-menu")).not.toHaveStyle({
+			background: "var(--vscode-dropdown-background)",
+		})
 	})
 
 	it("routes an active Task selection through the Profile transition transaction", () => {

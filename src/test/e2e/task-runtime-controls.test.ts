@@ -229,7 +229,7 @@ async function runtimeControlMetrics(sidebar: Frame) {
 	])
 	const prefixWidth = runtimeBox.x - buttonGroupBox.x
 	const availableRuntimeWidth = buttonGroupBox.x + buttonGroupBox.width - runtimeBox.x
-	const intrinsicRuntimeWidth = profileText.scrollWidth + thinkingText.scrollWidth + serviceTierBox.width + 6
+	const intrinsicRuntimeWidth = profileText.scrollWidth + thinkingText.scrollWidth + serviceTierBox.width + 8
 	return {
 		buttonGroupBox,
 		runtimeBox,
@@ -342,7 +342,12 @@ async function selectServiceTier(sidebar: Frame, optionName: string): Promise<vo
 	await expect(sidebar.getByRole("listbox", { name: "Task service tier options" })).toBeVisible()
 	await expect(sidebar.getByRole("option", { name: "Profile", exact: true })).toHaveCount(0)
 	await sidebar.getByRole("option", { name: optionName, exact: true }).click()
-	await expect(control).toHaveAttribute("title", `Service tier: ${optionName}`)
+	await expect(control).toHaveAttribute("data-service-tier-label", optionName)
+}
+
+async function expectRuntimeControlTooltip(sidebar: Frame, control: Locator, text: string): Promise<void> {
+	await control.hover()
+	await expect(sidebar.locator('[data-slot="tooltip-content"]').filter({ hasText: text })).toBeVisible()
 }
 
 async function submitFeedback(sidebar: Frame, feedback: string, completion: string): Promise<void> {
@@ -377,12 +382,43 @@ async function captureRuntimeLayoutEvidence(
 	return metrics
 }
 
+async function svgPaintMetrics(icon: Locator): Promise<{ height: number; maxPartHeight: number; width: number }> {
+	return icon.evaluate((element) => {
+		const parts = [...element.querySelectorAll<SVGGraphicsElement>("path, circle, rect, line, polyline, polygon")]
+		const rects = parts.map((part) => part.getBoundingClientRect()).filter((rect) => rect.width > 0 || rect.height > 0)
+		if (rects.length === 0) throw new Error("SVG icon has no measurable painted geometry")
+		const left = Math.min(...rects.map((rect) => rect.left))
+		const right = Math.max(...rects.map((rect) => rect.right))
+		const top = Math.min(...rects.map((rect) => rect.top))
+		const bottom = Math.max(...rects.map((rect) => rect.bottom))
+		return {
+			height: bottom - top,
+			maxPartHeight: Math.max(...rects.map((rect) => rect.height)),
+			width: right - left,
+		}
+	})
+}
+
 async function runtimeControlAppearance(sidebar: Frame) {
 	const profile = sidebar.getByRole("button", { name: "Select model" })
 	const thinking = sidebar.getByRole("combobox", { name: "Task thinking override" })
 	const serviceTier = sidebar.getByRole("button", { name: "Task service tier" })
 	const serviceTierIcon = sidebar.getByTestId("task-service-tier-icon")
-	const [profileAppearance, thinkingAppearance, serviceTierAppearance, iconAppearance] = await Promise.all([
+	const contextIcon = sidebar.getByTestId("context-button").locator("svg")
+	const filesIcon = sidebar.getByTestId("files-button").locator("svg")
+	const mcpIcon = sidebar.locator('vscode-button[aria-label*="MCP Servers"] > .codicon-server')
+	const rulesIcon = sidebar.locator('vscode-button[aria-label*="Dline Rules"] > .codicon-law')
+	const [
+		profileAppearance,
+		thinkingAppearance,
+		serviceTierAppearance,
+		iconAppearance,
+		serviceTierPaint,
+		contextPaint,
+		filesPaint,
+		mcpIconSize,
+		rulesIconSize,
+	] = await Promise.all([
 		profile.evaluate((element) => {
 			const style = getComputedStyle(element)
 			const rect = element.getBoundingClientRect()
@@ -412,7 +448,7 @@ async function runtimeControlAppearance(sidebar: Frame) {
 				centerY: rect.top + rect.height / 2,
 				disabled: (element as HTMLButtonElement).disabled,
 				height: rect.height,
-				scale: element.offsetWidth > 0 ? rect.width / element.offsetWidth : 1,
+				width: rect.width,
 			}
 		}),
 		serviceTierIcon.evaluate((element) => {
@@ -427,12 +463,22 @@ async function runtimeControlAppearance(sidebar: Frame) {
 				width: rect.width,
 			}
 		}),
+		svgPaintMetrics(serviceTierIcon),
+		svgPaintMetrics(contextIcon),
+		svgPaintMetrics(filesIcon),
+		mcpIcon.evaluate((element) => Number.parseFloat(getComputedStyle(element).fontSize)),
+		rulesIcon.evaluate((element) => Number.parseFloat(getComputedStyle(element).fontSize)),
 	])
 	return {
 		profile: profileAppearance,
 		thinking: thinkingAppearance,
 		serviceTier: serviceTierAppearance,
 		serviceTierIcon: iconAppearance,
+		serviceTierPaint,
+		contextPaint,
+		filesPaint,
+		mcpIconSize,
+		rulesIconSize,
 	}
 }
 
@@ -440,12 +486,15 @@ function expectRuntimeControlAppearance(metrics: Awaited<ReturnType<typeof runti
 	expect(metrics.thinking.fontSize).toBe(metrics.profile.fontSize)
 	expect(metrics.thinking.lineHeight).toBe(metrics.profile.lineHeight)
 	expect(metrics.thinking.color).toBe(metrics.profile.color)
+	expect(Math.abs(metrics.profile.fontSize - metrics.mcpIconSize)).toBeLessThanOrEqual(0.1)
+	expect(Math.abs(metrics.thinking.fontSize - metrics.rulesIconSize)).toBeLessThanOrEqual(0.1)
 	expect(metrics.serviceTierIcon.display).toBe("block")
-	expect(Math.abs(metrics.serviceTierIcon.cssHeight - metrics.thinking.fontSize)).toBeLessThanOrEqual(0.1)
-	expect(Math.abs(metrics.serviceTierIcon.cssWidth - metrics.thinking.fontSize)).toBeLessThanOrEqual(0.1)
-	const expectedIconSize = metrics.thinking.fontSize * metrics.serviceTier.scale
-	expect(Math.abs(metrics.serviceTierIcon.height - expectedIconSize)).toBeLessThanOrEqual(1)
-	expect(Math.abs(metrics.serviceTierIcon.width - expectedIconSize)).toBeLessThanOrEqual(1)
+	expect(Math.abs(metrics.serviceTierIcon.cssHeight - metrics.mcpIconSize)).toBeLessThanOrEqual(0.1)
+	expect(Math.abs(metrics.serviceTierIcon.cssWidth - metrics.rulesIconSize)).toBeLessThanOrEqual(0.1)
+	expect(metrics.serviceTierPaint.maxPartHeight).toBeGreaterThanOrEqual(metrics.contextPaint.maxPartHeight - 0.5)
+	expect(metrics.serviceTierPaint.height).toBeGreaterThanOrEqual(metrics.filesPaint.height)
+	expect(metrics.serviceTier.height - metrics.serviceTierIcon.height).toBeGreaterThanOrEqual(5.5)
+	expect(metrics.serviceTier.width - metrics.serviceTierIcon.width).toBeGreaterThanOrEqual(5.5)
 	expect(Math.abs(metrics.profile.centerY - metrics.thinking.centerY)).toBeLessThanOrEqual(1)
 	expect(Math.abs(metrics.thinking.centerY - metrics.serviceTier.centerY)).toBeLessThanOrEqual(1)
 	expect(Math.abs(metrics.serviceTier.centerY - metrics.serviceTierIcon.centerY)).toBeLessThanOrEqual(1)
@@ -467,21 +516,38 @@ async function captureRuntimeControlEvidence(
 }
 
 async function expectRuntimeControlsFit(sidebar: Frame): Promise<void> {
+	const contextButton = sidebar.getByTestId("context-button")
+	const filesButton = sidebar.getByTestId("files-button")
+	const mcpButton = sidebar.getByRole("button", { name: /MCP Servers/ })
+	const rulesButton = sidebar.getByRole("button", { name: /Dline Rules & Workflows/ })
 	const profile = sidebar.getByRole("button", { name: "Select model" })
 	const thinking = sidebar.getByRole("combobox", { name: "Task thinking override" })
 	const tier = sidebar.getByRole("button", { name: "Task service tier" })
 	const profileSlot = sidebar.locator('[data-chat-input-slot="profile"]')
 	const runtimeControls = sidebar.locator("[data-chat-input-runtime-controls]")
 	const boxes = await Promise.all([
+		contextButton.boundingBox(),
+		filesButton.boundingBox(),
+		mcpButton.boundingBox(),
+		rulesButton.boundingBox(),
 		profile.boundingBox(),
 		thinking.boundingBox(),
 		tier.boundingBox(),
 		runtimeControls.boundingBox(),
 	])
 	if (boxes.some((box) => box === null)) throw new Error("Runtime control geometry is unavailable")
-	const [profileBox, thinkingBox, tierBox, runtimeBox] = boxes as NonNullable<Awaited<ReturnType<Locator["boundingBox"]>>>[]
-	const profileToThinking = thinkingBox.x - (profileBox.x + profileBox.width)
-	const thinkingToTier = tierBox.x - (thinkingBox.x + thinkingBox.width)
+	const [contextBox, filesBox, mcpBox, rulesBox, profileBox, thinkingBox, tierBox, runtimeBox] = boxes as NonNullable<
+		Awaited<ReturnType<Locator["boundingBox"]>>
+	>[]
+	const gaps = [
+		filesBox.x - (contextBox.x + contextBox.width),
+		mcpBox.x - (filesBox.x + filesBox.width),
+		rulesBox.x - (mcpBox.x + mcpBox.width),
+		profileBox.x - (rulesBox.x + rulesBox.width),
+		thinkingBox.x - (profileBox.x + profileBox.width),
+		tierBox.x - (thinkingBox.x + thinkingBox.width),
+	]
+	const standardGap = gaps[0]
 	const profileLayout = await profileSlot.evaluate((element) => {
 		const style = getComputedStyle(element)
 		return {
@@ -493,8 +559,12 @@ async function expectRuntimeControlsFit(sidebar: Frame): Promise<void> {
 	})
 	const centerY = (box: NonNullable<Awaited<ReturnType<Locator["boundingBox"]>>>) => box.y + box.height / 2
 
-	expect(profileToThinking).toBeGreaterThanOrEqual(3)
-	expect(thinkingToTier).toBeGreaterThanOrEqual(3)
+	expect(standardGap).toBeGreaterThanOrEqual(3)
+	for (const gap of gaps.slice(1)) expect(Math.abs(gap - standardGap)).toBeLessThanOrEqual(0.5)
+	expect(Math.abs(profileBox.height - mcpBox.height)).toBeLessThanOrEqual(0.5)
+	expect(Math.abs(thinkingBox.height - rulesBox.height)).toBeLessThanOrEqual(0.5)
+	expect(Math.abs(tierBox.height - mcpBox.height)).toBeLessThanOrEqual(0.5)
+	expect(Math.abs(tierBox.width - rulesBox.width)).toBeLessThanOrEqual(0.5)
 	expect(Math.abs(centerY(profileBox) - centerY(thinkingBox))).toBeLessThanOrEqual(1)
 	expect(Math.abs(centerY(thinkingBox) - centerY(tierBox))).toBeLessThanOrEqual(1)
 	expect(profileLayout.flexShrink).toBe("1")
@@ -783,7 +853,14 @@ e2e(
 			expect(stoppedMetrics.thinking.disabled).toBe(false)
 			expect(stoppedMetrics.serviceTier.disabled).toBe(false)
 			await expect(thinkingControl).toContainText("Low")
-			await expect(serviceTierControl).toHaveAttribute("title", "Service tier: Ultrafast")
+			await expect(serviceTierControl).toHaveAttribute("data-service-tier-label", "Ultrafast")
+			await expectRuntimeControlTooltip(
+				sidebar,
+				sidebar.getByRole("button", { name: "Select model" }),
+				E2E_PROFILE_NAMES.mockOpenAi,
+			)
+			await expectRuntimeControlTooltip(sidebar, thinkingControl, "Thinking: Low")
+			await expectRuntimeControlTooltip(sidebar, serviceTierControl, "Service Tier: Ultrafast")
 
 			await serviceTierControl.click()
 			const serviceTierMenu = sidebar.getByRole("listbox", { name: "Task service tier options" })
@@ -799,8 +876,8 @@ e2e(
 			const menuPath = testInfo.outputPath("openai-service-tier-menu.png")
 			await serviceTierMenu.screenshot({ path: menuPath })
 			await testInfo.attach("openai-service-tier-menu", { path: menuPath, contentType: "image/png" })
-			await sidebar.getByRole("button", { name: "Close service tier menu" }).click()
-			await expect(serviceTierControl).toHaveAttribute("title", "Service tier: Ultrafast")
+			await page.keyboard.press("Escape")
+			await expect(serviceTierControl).toHaveAttribute("data-service-tier-label", "Ultrafast")
 			await captureRuntimeControls(page, sidebar, testInfo, "openai-runtime-controls")
 
 			const taskId = await onlyTaskId(dlineDocsDir)
