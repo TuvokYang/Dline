@@ -38,6 +38,8 @@ export interface CommitContextWindowIndicatorInput {
 	nextLineage?: ContextWindowIndicatorLineage
 	durableContextTokens: number
 	pendingSendTokens?: number
+	/** Adopt a smaller authoritative Durable baseline for history-replacing commits such as compaction. */
+	allowDecrease?: boolean
 	environmentTokens: number
 	contextWindow?: number
 	profileId?: string
@@ -271,14 +273,14 @@ export class ContextWindowIndicator {
 	commit(input: CommitContextWindowIndicatorInput): ContextWindowIndicatorSnapshot {
 		if (!isSameContextWindowIndicatorLineage(this.current.lineage, input.lineage)) return this.getSnapshot()
 		const lineage = cloneLineage(input.nextLineage ?? input.lineage)
+		const replacementDurableTokens = mergeDurableTokens(input.durableContextTokens, input.pendingSendTokens)
 		this.current = {
 			...this.current,
 			revision: this.current.revision + 1,
 			phase: "committing",
-			durableContextTokens: Math.max(
-				this.current.durableContextTokens,
-				mergeDurableTokens(input.durableContextTokens, input.pendingSendTokens),
-			),
+			durableContextTokens: input.allowDecrease
+				? replacementDurableTokens
+				: Math.max(this.current.durableContextTokens, replacementDurableTokens),
 			pendingSendTokens: 0,
 			receivingTokens: 0,
 			stagedTokens: 0,
@@ -311,7 +313,7 @@ export class ContextWindowIndicator {
 	}
 
 	recoverCommit(input: RecoverCommitContextWindowIndicatorInput): ContextWindowIndicatorSnapshot {
-		return this.replaceDurable(input, "committing", false)
+		return this.replaceDurable(input, "committing", true)
 	}
 
 	restore(input: RestoreContextWindowIndicatorInput): ContextWindowIndicatorSnapshot {

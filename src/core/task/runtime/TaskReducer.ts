@@ -754,16 +754,15 @@ function reduceInteractionPresented(
 	)
 }
 
-/** Remove one resolved interaction only after its response was consumed. */
+/** Remove one resolved interaction after its response was consumed or its failed continuation was retired. */
 function reduceInteractionResolved(
 	state: TaskRuntimeState,
 	event: Extract<TaskEvent, { type: "INTERACTION_RESOLVED" }>,
 ): TransitionResult {
-	if (
-		!state.interaction ||
-		state.interaction.status !== "resolving" ||
-		state.interaction.interactionId !== event.interactionId
-	) {
+	const interaction = state.interaction
+	const hasAcceptedContinuation =
+		interaction?.status === "resolving" || (interaction?.status === "awaiting" && interaction.acceptedResponse !== undefined)
+	if (!interaction || !hasAcceptedContinuation || interaction.interactionId !== event.interactionId) {
 		return reject(state, event.type)
 	}
 	if (!state.interruptedInteraction) return acceptInteraction(state, undefined)

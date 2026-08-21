@@ -1742,6 +1742,7 @@ export class Task {
 			nextLineage: checkpointLineage,
 			durableContextTokens: projection.durableContextTokens,
 			pendingSendTokens: projection.pendingSendTokens,
+			allowDecrease: true,
 			environmentTokens: projection.environmentTokens,
 			contextWindow: projection.contextWindow,
 			profileId: projection.profileId,
@@ -2727,6 +2728,7 @@ export class Task {
 		this.contextCompactionFailureReasons.delete(operationId)
 		this.taskState.autoRetryAttempts = MAX_AUTO_RETRY_ATTEMPTS
 		this.endAutoRetrySequence(false)
+		await this.interactionCoordinator.releaseApiContinuationForRequestGate()
 		await this.say(
 			"error_retry",
 			JSON.stringify({
@@ -5193,9 +5195,12 @@ export class Task {
 		return this.commandExecutor.cancelBackgroundCommand()
 	}
 
-	/** Return the synchronous foreground command currently eligible for manual background handoff. */
+	/** Return the foreground command or subagent currently eligible for manual background handoff. */
 	public getReadyBackgroundHandoffActivityId(): string | undefined {
-		return this.commandExecutor.getReadyBackgroundHandoffActivityId()
+		return (
+			this.commandExecutor.getReadyBackgroundHandoffActivityId() ??
+			this.activityStore.getReadyBackgroundHandoffActivityId("subagent")
+		)
 	}
 
 	/** Return whether the current manual handoff is already transitioning. */

@@ -68,7 +68,9 @@ export function projectContextCompactionBoundary(
 	const naturalContinuationStart = Math.min(sourceEndIndex, activeHistory.length)
 	const targetContinuationHistory = activeHistory.filter(
 		(message, messageIndex) =>
-			messageIndex >= naturalContinuationStart || messageContainsToolUse(message, completedUnpairedFunctionIds),
+			messageIndex >= naturalContinuationStart ||
+			messageContainsToolUse(message, completedUnpairedFunctionIds) ||
+			messageContainsToolUse(message, pendingResultFunctionIds),
 	)
 
 	return {

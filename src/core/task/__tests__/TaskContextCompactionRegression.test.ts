@@ -1,0 +1,95 @@
+import type { ContextWindowIndicatorLineage } from "@shared/context-window-indicator"
+import { describe, expect, it, vi } from "vitest"
+import { ContextWindowIndicator } from "../ContextWindowIndicator"
+import { Task } from "../index"
+
+const compactionLineage: ContextWindowIndicatorLineage = {
+	kind: "compaction_pass",
+	operationId: "operation-1",
+	passIndex: 0,
+	attemptIndex: 0,
+	attemptId: "attempt-0",
+	headCheckpointId: "checkpoint-0",
+	chainRevision: 0,
+	branchId: "branch-0",
+}
+
+const checkpointLineage: ContextWindowIndicatorLineage = {
+	kind: "checkpoint",
+	operationId: "operation-1",
+	checkpointId: "checkpoint-1",
+	chainRevision: 1,
+	branchId: "branch-0",
+}
+
+describe("Task context compaction regressions", () => {
+	it("adopts a smaller authoritative Durable value after compaction commit and recovery", () => {
+		const indicator = new ContextWindowIndicator({
+			taskId: "task-1",
+			durableContextTokens: 500,
+			environmentTokens: 20,
+			contextWindow: 1_000,
+			mode: "act",
+		})
+		indicator.beginSend({
+			lineage: compactionLineage,
+			durableContextTokens: 500,
+			pendingSendTokens: 100,
+			environmentTokens: 20,
+			contextWindow: 1_000,
+			mode: "act",
+		})
+
+		const committed = indicator.commit({
+			lineage: compactionLineage,
+			nextLineage: checkpointLineage,
+			durableContextTokens: 120,
+			pendingSendTokens: 10,
+			environmentTokens: 20,
+			allowDecrease: true,
+		})
+		expect(committed.durableContextTokens).toBe(130)
+
+		const recovered = indicator.recoverCommit({
+			lineage: checkpointLineage,
+			durableContextTokens: 80,
+			pendingSendTokens: 20,
+			environmentTokens: 20,
+			contextWindow: 1_000,
+			mode: "act",
+		})
+		expect(recovered.durableContextTokens).toBe(100)
+	})
+
+	it("releases an accepted API continuation before presenting terminal compaction Retry", async () => {
+		const order: string[] = []
+		const recoverApiFailure = vi.fn(async () => {
+			order.push("recover")
+		})
+		const task = {
+			taskId: "task-1",
+			taskState: { forceTruncateAvailable: false, autoRetryAttempts: 0 },
+			contextCompactionFailureReasons: new Map([["operation-1", "No tool output found"]]),
+			endAutoRetrySequence: vi.fn(),
+			say: vi.fn(async () => undefined),
+			getRuntimeState: () => ({ revision: 9 }),
+			interactionCoordinator: {
+				releaseApiContinuationForRequestGate: vi.fn(async () => {
+					order.push("release")
+					return true
+				}),
+			},
+			recoverApiFailure,
+		}
+		const presentTerminalCompactionFailure = Reflect.get(Task.prototype, "presentTerminalCompactionFailure") as (
+			this: typeof task,
+			operationId: string,
+			apiIndex: number,
+		) => Promise<void>
+
+		await presentTerminalCompactionFailure.call(task, "operation-1", 79)
+
+		expect(order).toEqual(["release", "recover"])
+		expect(recoverApiFailure).toHaveBeenCalledWith(expect.objectContaining({ apiIndex: 79, persistedRequest: false }))
+	})
+})

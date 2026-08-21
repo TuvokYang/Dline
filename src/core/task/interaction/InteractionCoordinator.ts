@@ -162,7 +162,8 @@ export class InteractionCoordinator {
 		const interaction = this.runtime.getState().interaction
 		const acceptedAction = interaction?.acceptedResponse?.actionId
 		const ownsAdmittedApiContinuation =
-			interaction?.status === "resolving" &&
+			(interaction?.status === "resolving" ||
+				(interaction?.status === "awaiting" && interaction.acceptedResponse !== undefined)) &&
 			((interaction.kind === "resume" && acceptedAction === "resume") ||
 				(interaction.kind === "error_retry" && acceptedAction === "retry") ||
 				(interaction.kind === "mistake_limit" && acceptedAction === "process_anyway"))
@@ -513,7 +514,12 @@ export class InteractionCoordinator {
 				...request,
 			},
 		)
-		return this.commitErrorRetryResponse(response, request.apiIndex, request.persistedRequest !== false)
+		const hasContinuationDraft = Boolean(
+			response.draft &&
+				(response.draft.text.trim().length > 0 || response.draft.images.length > 0 || response.draft.files.length > 0),
+		)
+		const persistedRequest = hasContinuationDraft ? false : request.persistedRequest !== false
+		return this.commitErrorRetryResponse(response, request.apiIndex, persistedRequest)
 	}
 
 	/** Present a mistake-limit recovery and commit the selected footer action. */

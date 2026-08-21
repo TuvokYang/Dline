@@ -599,6 +599,47 @@ describe("InteractionCoordinator", () => {
 		await expect(approval).resolves.toMatchObject({ actionId: "approve" })
 	})
 
+	it("retires an accepted Resume continuation reopened after START_API failure", async () => {
+		const interactionId = "resume-failed-request-gate"
+		const turnId = "resume-turn"
+		const response: InteractionResponse = {
+			taskId: "task-1",
+			turnId,
+			interactionId,
+			actionId: "resume",
+			stateRevision: 5,
+			draft: { text: "Continue", images: [], files: [] },
+		}
+		const runtime = new TaskRuntime(
+			{
+				...createTaskRuntimeState({
+					taskId: "task-1",
+					phase: TaskPhase.PAUSED,
+					revision: 7,
+					anchor: { apiIndex: 2, turnId, interactionId },
+				}),
+				interaction: {
+					taskId: "task-1",
+					turnId,
+					interactionId,
+					kind: "resume",
+					status: "awaiting",
+					createdRevision: 7,
+					anchor: { messageTs: 100, messageType: "ask" },
+					acceptedResponse: response,
+				},
+			},
+			createPorts(),
+		)
+
+		await expect(new InteractionCoordinator(runtime).releaseApiContinuationForRequestGate()).resolves.toBe(true)
+		expect(runtime.getState()).toMatchObject({
+			phase: TaskPhase.PAUSED,
+			interaction: undefined,
+			anchor: { apiIndex: 2 },
+		})
+	})
+
 	it("does not release interaction ownership before an API continuation is accepted", async () => {
 		const runtime = new TaskRuntime(
 			{
@@ -974,6 +1015,7 @@ describe("InteractionCoordinator", () => {
 				type: "START_API",
 				apiIndex: 7,
 				draft: { text: "context", images: ["image"], files: ["file"] },
+				persistedRequest: false,
 			}),
 		)
 		expect(runtime.getState().phase).toBe(TaskPhase.STREAMING)
@@ -1067,75 +1109,71 @@ describe("InteractionCoordinator", () => {
 		expect(runtime.getState().interaction).toBeUndefined()
 	})
 
-	it.each(INTERACTION_KINDS.filter((kind) => kind !== "condense"))(
-		"temporarily interrupts and restores a live %s interaction",
-		async (kind) => {
-			const runtime = new TaskRuntime(
-				createTaskRuntimeState({ taskId: "task-1", phase: TaskPhase.STREAMING }),
-				createPorts(),
-			)
-			const coordinator = new InteractionCoordinator(runtime)
-			const originalInteractionId = `original-${kind}`
-			const originalOutcome = coordinator.open({
-				turnId: `turn-${kind}`,
-				interactionId: originalInteractionId,
-				kind,
-				presentation: `Original ${kind}`,
-			})
-			await vi.waitFor(() => expect(runtime.getState().interaction?.interactionId).toBe(originalInteractionId))
+	it.each(
+		INTERACTION_KINDS.filter((kind) => kind !== "condense"),
+	)("temporarily interrupts and restores a live %s interaction", async (kind) => {
+		const runtime = new TaskRuntime(createTaskRuntimeState({ taskId: "task-1", phase: TaskPhase.STREAMING }), createPorts())
+		const coordinator = new InteractionCoordinator(runtime)
+		const originalInteractionId = `original-${kind}`
+		const originalOutcome = coordinator.open({
+			turnId: `turn-${kind}`,
+			interactionId: originalInteractionId,
+			kind,
+			presentation: `Original ${kind}`,
+		})
+		await vi.waitFor(() => expect(runtime.getState().interaction?.interactionId).toBe(originalInteractionId))
 
-			const interruptionId = `interrupt-${kind}`
-			const interruptionOutcome = coordinator.interrupt({
-				turnId: interruptionId,
-				interactionId: interruptionId,
-				kind: "condense",
-				presentation: "Compaction review",
-			})
-			await vi.waitFor(() => expect(runtime.getState().interaction?.interactionId).toBe(interruptionId))
-			expect(runtime.getState().interruptedInteraction).toMatchObject({
-				interactionId: originalInteractionId,
-				kind,
-				status: "awaiting",
-			})
+		const interruptionId = `interrupt-${kind}`
+		const interruptionOutcome = coordinator.interrupt({
+			turnId: interruptionId,
+			interactionId: interruptionId,
+			kind: "condense",
+			presentation: "Compaction review",
+		})
+		await vi.waitFor(() => expect(runtime.getState().interaction?.interactionId).toBe(interruptionId))
+		expect(runtime.getState().interruptedInteraction).toMatchObject({
+			interactionId: originalInteractionId,
+			kind,
+			status: "awaiting",
+		})
 
-			await coordinator.respond({
-				taskId: "task-1",
-				turnId: interruptionId,
-				interactionId: interruptionId,
-				actionId: "confirm_utility",
-				stateRevision: runtime.getState().revision,
-			})
-			await expect(interruptionOutcome).resolves.toMatchObject({ actionId: "confirm_utility" })
-			expect(runtime.getState().interaction).toMatchObject({
-				interactionId: originalInteractionId,
-				kind,
-				status: "awaiting",
-			})
-			expect(runtime.getState().interruptedInteraction).toBeUndefined()
+		await coordinator.respond({
+			taskId: "task-1",
+			turnId: interruptionId,
+			interactionId: interruptionId,
+			actionId: "confirm_utility",
+			stateRevision: runtime.getState().revision,
+		})
+		await expect(interruptionOutcome).resolves.toMatchObject({ actionId: "confirm_utility" })
+		expect(runtime.getState().interaction).toMatchObject({
+			interactionId: originalInteractionId,
+			kind,
+			status: "awaiting",
+		})
+		expect(runtime.getState().interruptedInteraction).toBeUndefined()
 
-			const definition = getInteraction(kind)
-			const action = definition.actions[0]
-			const actionId = action?.type ?? definition.input.enterAction
-			if (!actionId) throw new Error(`Interaction ${kind} has no response action`)
-			const payloadPolicy = action?.payloadPolicy ?? "draft"
-			const response = await coordinator.respond({
-				taskId: "task-1",
-				turnId: `turn-${kind}`,
-				interactionId: originalInteractionId,
-				actionId,
-				stateRevision: runtime.getState().revision,
-				...(payloadPolicy === "draft" || payloadPolicy === "draft_and_selection"
-					? { draft: { text: `Continue ${kind}`, images: [], files: [] } }
-					: {}),
-				...(payloadPolicy === "selection" || payloadPolicy === "draft_and_selection"
-					? { selection: { values: [`selection-${kind}`] } }
-					: {}),
-			})
-			expect(response.accepted).toBe(true)
-			await expect(originalOutcome).resolves.toMatchObject({ actionId })
-			expect(runtime.getState().interaction).toBeUndefined()
-		},
-	)
+		const definition = getInteraction(kind)
+		const action = definition.actions[0]
+		const actionId = action?.type ?? definition.input.enterAction
+		if (!actionId) throw new Error(`Interaction ${kind} has no response action`)
+		const payloadPolicy = action?.payloadPolicy ?? "draft"
+		const response = await coordinator.respond({
+			taskId: "task-1",
+			turnId: `turn-${kind}`,
+			interactionId: originalInteractionId,
+			actionId,
+			stateRevision: runtime.getState().revision,
+			...(payloadPolicy === "draft" || payloadPolicy === "draft_and_selection"
+				? { draft: { text: `Continue ${kind}`, images: [], files: [] } }
+				: {}),
+			...(payloadPolicy === "selection" || payloadPolicy === "draft_and_selection"
+				? { selection: { values: [`selection-${kind}`] } }
+				: {}),
+		})
+		expect(response.accepted).toBe(true)
+		await expect(originalOutcome).resolves.toMatchObject({ actionId })
+		expect(runtime.getState().interaction).toBeUndefined()
+	})
 
 	it("rejects a second primary interaction while one is active", async () => {
 		const runtime = new TaskRuntime(createTaskRuntimeState({ taskId: "task-1", phase: TaskPhase.STREAMING }), createPorts())

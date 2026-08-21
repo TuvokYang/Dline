@@ -80,7 +80,7 @@ describe("Task ordinary context compaction boundary", () => {
 
 		const boundary = task.getOrdinaryContextCompactionBoundary()
 
-		expect(boundary.targetContinuationHistory).toEqual([])
+		expect(boundary.targetContinuationHistory).toEqual([task.messageStateHandler.apiConversationHistory[1]])
 		expect(boundary.sourceHistory.length).toBe(3)
 		expect(boundary.sourceHistory[1]?.role).toBe("assistant")
 		expect(boundary.sourceHistory[2]?.role).toBe("user")
@@ -94,7 +94,7 @@ describe("Task ordinary context compaction boundary", () => {
 		const boundary = task.getOrdinaryContextCompactionBoundary(requestLocalContent)
 
 		expect(task.taskState.userMessageContent).toEqual([])
-		expect(boundary.targetContinuationHistory).toEqual([])
+		expect(boundary.targetContinuationHistory).toEqual([task.messageStateHandler.apiConversationHistory[1]])
 		expect(boundary.sourceHistory.length).toBe(3)
 		expect(boundary.sourceHistory[1]?.role).toBe("assistant")
 		expect(boundary.sourceHistory[2]?.role).toBe("user")
@@ -295,7 +295,7 @@ describe("Task ordinary context compaction boundary", () => {
 
 		const boundary = task.getOrdinaryContextCompactionBoundary()
 
-		expect(boundary.targetContinuationHistory).toEqual([])
+		expect(boundary.targetContinuationHistory).toEqual([task.messageStateHandler.apiConversationHistory[1]])
 		expect(boundary.sourceHistory.length).toBe(3)
 		const lastSourceMessage = boundary.sourceHistory[boundary.sourceHistory.length - 1]
 		const results = (lastSourceMessage?.content as ClineContent[]).filter(

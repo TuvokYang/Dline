@@ -121,6 +121,12 @@ e2e(
 			await expect(sidebar.getByText("Compact the current task?", { exact: true })).toBeVisible()
 			await sidebar.getByTitle("Yes, compact the task").click()
 
+			const progress = sidebar.getByTestId("context-window-segmented-progress")
+			const durableSegment = sidebar.getByTestId("context-window-segment-durable")
+			await expect(progress).toHaveAttribute("data-phase", "sending", { timeout: 30_000 })
+			const durableBeforeCompaction = Number(await durableSegment.getAttribute("data-authoritative-tokens"))
+			expect(durableBeforeCompaction).toBeGreaterThan(50_000)
+
 			await expect(sidebar.getByText("E2E_TASK_HEADER_COMPACT_SUMMARY", { exact: false }).last()).toBeVisible({
 				timeout: 60_000,
 			})
@@ -132,6 +138,9 @@ e2e(
 				timeout: 60_000,
 			})
 			await expect(compactionPass).toHaveAttribute("data-compaction-status", "completed", { timeout: 60_000 })
+			await expect
+				.poll(async () => Number(await durableSegment.getAttribute("data-authoritative-tokens")), { timeout: 30_000 })
+				.toBeLessThan(durableBeforeCompaction)
 			await expect(sidebar.getByText("E2E_TASK_HEADER_COMPACT_CONTINUED", { exact: false }).last()).toBeVisible({
 				timeout: 60_000,
 			})
