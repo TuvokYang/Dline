@@ -9,6 +9,7 @@ import {
 import { formatResponse } from "@core/prompts/responses"
 import { ensureRulesDirectoryExists, GlobalFileNames } from "@core/storage/disk"
 import { StateManager } from "@core/storage/StateManager"
+import { reconcileGlobalCapabilities } from "@core/storage/settings/global-capability-settings"
 import { ClineRulesToggles } from "@shared/cline-rules"
 import { fileExistsAtPath, isDirectory, readDirectory } from "@utils/fs"
 import fs from "fs/promises"
@@ -152,10 +153,13 @@ export async function refreshClineRulesToggles(
 	localToggles: ClineRulesToggles
 }> {
 	// Global toggles
-	const globalClineRulesToggles = controller.stateManager.getGlobalSettingsKey("globalClineRulesToggles")
 	const globalClineRulesFilePath = await ensureRulesDirectoryExists()
-	const updatedGlobalToggles = await synchronizeRuleToggles(globalClineRulesFilePath, globalClineRulesToggles)
-	controller.stateManager.setGlobalState("globalClineRulesToggles", updatedGlobalToggles)
+	const discoveredGlobalToggles = await synchronizeRuleToggles(globalClineRulesFilePath, {})
+	const updatedGlobalToggles = await reconcileGlobalCapabilities(
+		controller.stateManager,
+		"globalClineRulesToggles",
+		discoveredGlobalToggles,
+	)
 
 	// Local toggles
 	const localClineRulesToggles = controller.stateManager.getWorkspaceStateKey("localClineRulesToggles")

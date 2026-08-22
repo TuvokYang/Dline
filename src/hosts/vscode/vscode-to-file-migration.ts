@@ -32,13 +32,14 @@
  *   and vice versa. See also: checkpoints at {globalStorageFsPath}/checkpoints/.
  */
 
+import { isSettingsKey } from "@shared/storage/state-keys"
 import type * as vscode from "vscode"
 import { Logger } from "@/shared/services/Logger"
 import { GlobalStateAndSettingKeys, LocalStateKeys, SecretKeys } from "@/shared/storage/state-keys"
 import type { StorageContext } from "@/shared/storage/storage-context"
 
 /** Bump this when adding new migration steps. */
-const CURRENT_MIGRATION_VERSION = 1
+const CURRENT_MIGRATION_VERSION = 2
 
 /** Sentinel key written to both globalState and workspaceState to track migration independently. */
 const MIGRATION_VERSION_KEY = "__vscodeMigrationVersion"
@@ -51,53 +52,6 @@ const MIGRATION_VERSION_KEY = "__vscodeMigrationVersion"
  */
 const SKIP_GLOBAL_STATE_KEYS = new Set<string>([
 	"taskHistory", // Already file-based in tasks/taskHistory.json
-])
-
-// Settings keys migrated to settings.json — route to storage.settings
-const MIGRATED_SETTINGS_KEYS = new Set<string>([
-	"planModeProfile",
-	"actModeProfile",
-	"requestTimeoutMs",
-	"enableParallelToolCalling",
-	"autoApprovalSettings",
-	"browserSettings",
-	"mode",
-	"telemetrySetting",
-	"planActSeparateModelsSetting",
-	"enableCheckpointsSetting",
-	"hooksEnabled",
-	"yoloModeToggled",
-	"autoApproveAllToggled",
-	"subagentsEnabled",
-	"preferredLanguage",
-	"focusChainSettings",
-	"customPrompt",
-	"backgroundEditEnabled",
-	"strictPlanModeEnabled",
-	"shellIntegrationTimeout",
-	"defaultTerminalProfile",
-	"terminalOutputLineLimit",
-	"maxConsecutiveMistakes",
-	"useAutoCondense",
-	"clineWebToolsEnabled",
-	"worktreesEnabled",
-	"doubleCheckCompletionEnabled",
-	"lazyTeammateModeEnabled",
-	"showFeatureTips",
-	"openTelemetryEnabled",
-	"openTelemetryMetricsExporter",
-	"openTelemetryLogsExporter",
-	"openTelemetryOtlpProtocol",
-	"openTelemetryOtlpEndpoint",
-	"openTelemetryOtlpMetricsProtocol",
-	"openTelemetryOtlpMetricsEndpoint",
-	"openTelemetryOtlpLogsProtocol",
-	"openTelemetryOtlpLogsEndpoint",
-	"openTelemetryMetricExportInterval",
-	"openTelemetryOtlpInsecure",
-	"openTelemetryLogBatchSize",
-	"openTelemetryLogBatchTimeout",
-	"openTelemetryLogMaxQueueSize",
 ])
 
 export interface MigrationResult {
@@ -168,7 +122,7 @@ export async function exportVSCodeStorageToSharedFiles(
 					continue
 				}
 
-				if (MIGRATED_SETTINGS_KEYS.has(key)) {
+				if (isSettingsKey(key)) {
 					// Settings key → write to settings.json
 					const existingSettingsValue = storage.settings.get(key)
 					if (existingSettingsValue !== undefined) {

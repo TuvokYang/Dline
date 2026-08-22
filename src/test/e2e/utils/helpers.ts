@@ -1,6 +1,7 @@
 import {
 	cpSync,
 	existsSync,
+	mkdirSync,
 	mkdtempSync,
 	type PathLike,
 	type RmOptions,
@@ -54,6 +55,7 @@ export interface E2ETestConfigs {
 	channel: "stable" | "insiders"
 	forceStaleInitialState: boolean
 	mockConda: boolean
+	isolateOsHome: boolean
 }
 
 export class E2ETestHelper {
@@ -429,6 +431,7 @@ export const e2e = test
 		channel: "stable",
 		forceStaleInitialState: [false, { option: true }],
 		mockConda: [false, { option: true }],
+		isolateOsHome: [false, { option: true }],
 	})
 	.extend<E2ETestDirectories, E2EWorkerFixtures>({
 		profileMode: ["mock", { scope: "worker", option: true }],
@@ -568,7 +571,17 @@ export const e2e = test
 	})
 	.extend<{ openVSCode: (workspacePath: string) => Promise<ElectronApplication> }>({
 		openVSCode: async (
-			{ userDataDir, dlineDir, dlineHomeDir, dlineDocsDir, channel, forceStaleInitialState, mockConda, server },
+			{
+				userDataDir,
+				dlineDir,
+				dlineHomeDir,
+				dlineDocsDir,
+				channel,
+				forceStaleInitialState,
+				mockConda,
+				isolateOsHome,
+				server,
+			},
 			use,
 			testInfo,
 		) => {
@@ -588,6 +601,12 @@ export const e2e = test
 				if (/^(?:CONDA_|_CONDA_|_CE_)/i.test(name)) delete electronEnvironment[name]
 			}
 			electronEnvironment.CONDA_AUTO_ACTIVATE_BASE = "false"
+			if (isolateOsHome) {
+				const isolatedOsHome = path.join(userDataDir, "os-home")
+				mkdirSync(isolatedOsHome, { recursive: true })
+				electronEnvironment.HOME = isolatedOsHome
+				electronEnvironment.USERPROFILE = isolatedOsHome
+			}
 			const configuredCdpPort = process.env.DLINE_E2E_CDP_PORT?.trim()
 			if (configuredCdpPort && (!/^\d+$/.test(configuredCdpPort) || Number(configuredCdpPort) < 1)) {
 				throw new Error(`Invalid DLINE_E2E_CDP_PORT: ${configuredCdpPort}`)

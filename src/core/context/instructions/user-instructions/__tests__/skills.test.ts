@@ -60,7 +60,7 @@ describe("Skills Utility Functions", () => {
 	let readFileStub: typeof mockReadFile
 
 	const TEST_CWD = path.join("/test", "project")
-	const GLOBAL_SKILLS_DIR = path.join("/home", "user", ".dline", "skills")
+	const GLOBAL_SKILLS_DIR = path.join("/home", "user", "Documents", "dline", "skills")
 
 	beforeEach(async () => {
 		vi.resetModules()
@@ -84,7 +84,6 @@ describe("Skills Utility Functions", () => {
 			{ path: path.join(TEST_CWD, ".claude", "skills"), source: "project" },
 			{ path: path.join(TEST_CWD, ".agents", "skills"), source: "project" },
 			{ path: GLOBAL_SKILLS_DIR, source: "global" },
-			{ path: path.join("/home", "user", ".agents", "skills"), source: "global" },
 		])
 		const mod = await import("../skills")
 		discoverSkills = mod.discoverSkills

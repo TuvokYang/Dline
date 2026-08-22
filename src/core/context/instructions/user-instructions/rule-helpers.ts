@@ -1,4 +1,5 @@
 import { ensureRulesDirectoryExists, ensureWorkflowsDirectoryExists, GlobalFileNames } from "@core/storage/disk"
+import { removeGlobalCapability } from "@core/storage/settings/global-capability-settings"
 import { ClineRulesToggles } from "@shared/cline-rules"
 import { GlobalInstructionsFile } from "@shared/remote-config/schema"
 import { fileExistsAtPath, isDirectory, readDirectory } from "@utils/fs"
@@ -384,15 +385,11 @@ export async function deleteRuleFile(
 
 		// Update the appropriate toggles
 		if (isGlobal) {
-			if (type === "workflow") {
-				const toggles = controller.stateManager.getGlobalSettingsKey("globalWorkflowToggles")
-				delete toggles[rulePath]
-				controller.stateManager.setGlobalState("globalWorkflowToggles", toggles)
-			} else {
-				const toggles = controller.stateManager.getGlobalSettingsKey("globalClineRulesToggles")
-				delete toggles[rulePath]
-				controller.stateManager.setGlobalState("globalClineRulesToggles", toggles)
-			}
+			await removeGlobalCapability(
+				controller.stateManager,
+				type === "workflow" ? "globalWorkflowToggles" : "globalClineRulesToggles",
+				rulePath,
+			)
 		} else {
 			if (type === "workflow") {
 				const toggles = controller.stateManager.getWorkspaceStateKey("workflowToggles")

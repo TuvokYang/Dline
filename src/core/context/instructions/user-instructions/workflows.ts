@@ -1,5 +1,6 @@
 import { synchronizeRuleToggles } from "@core/context/instructions/user-instructions/rule-helpers"
 import { getWorkflowsScanDirectories } from "@core/storage/disk"
+import { reconcileGlobalCapabilities } from "@core/storage/settings/global-capability-settings"
 import { ClineRulesToggles } from "@shared/cline-rules"
 import { Controller } from "@/core/controller"
 
@@ -18,7 +19,6 @@ export async function refreshWorkflowToggles(
 }> {
 	const scanDirs = getWorkflowsScanDirectories(workingDirectory)
 
-	const currentGlobal = controller.stateManager.getGlobalSettingsKey("globalWorkflowToggles") || {}
 	const currentLocal = controller.stateManager.getWorkspaceStateKey("workflowToggles") || {}
 	const discoveredGlobal: ClineRulesToggles = {}
 	const discoveredLocal: ClineRulesToggles = {}
@@ -32,16 +32,12 @@ export async function refreshWorkflowToggles(
 		else Object.assign(discoveredLocal, discovered)
 	}
 
-	const globalToggles: ClineRulesToggles = {}
-	for (const [workflowPath, defaultEnabled] of Object.entries(discoveredGlobal)) {
-		globalToggles[workflowPath] = currentGlobal[workflowPath] ?? defaultEnabled
-	}
+	const globalToggles = await reconcileGlobalCapabilities(controller.stateManager, "globalWorkflowToggles", discoveredGlobal)
 	const localToggles: ClineRulesToggles = {}
 	for (const [workflowPath, defaultEnabled] of Object.entries(discoveredLocal)) {
 		localToggles[workflowPath] = currentLocal[workflowPath] ?? defaultEnabled
 	}
 
-	controller.stateManager.setGlobalState("globalWorkflowToggles", globalToggles)
 	controller.stateManager.setWorkspaceState("workflowToggles", localToggles)
 
 	return {

@@ -203,6 +203,20 @@ describe("StateManager — Per-Task Settings Isolation", () => {
 			sm.getGlobalSettingsKey("showFeatureTips").should.equal(true)
 		})
 
+		it("persists atomic global capability map mutations across restart", async () => {
+			await sm.mutateGlobalSettingsKey("globalSkillsToggles", (current) => ({
+				...current,
+				"/global/skill/SKILL.md": false,
+			}))
+
+			await StateManager.resetForTest()
+			const restarted = await StateManager.initialize(createStorageContext({ clineDir: tempDir }))
+
+			restarted.getGlobalSettingsKey("globalSkillsToggles").should.deepEqual({
+				"/global/skill/SKILL.md": false,
+			})
+		})
+
 		it("routes Settings keys in a batch through the canonical repository", async () => {
 			sm.setGlobalStateBatch({
 				chatInputSendShortcut: "ctrlEnter",
@@ -318,7 +332,46 @@ describe("StateManager — Per-Task Settings Isolation", () => {
 			// Verify sentinel and migrated value exist in settings store.
 			const storageCtx = createStorageContext({ clineDir: tempDir })
 			const sentinel = storageCtx.settings.get("__settingsMigrationVersion")
-			sentinel?.should.equal(1)
+			sentinel?.should.equal(2)
+		})
+
+		it("should fill missing global capability toggles from legacy global state during the v2 upgrade", async () => {
+			await StateManager.resetForTest()
+			const storageCtx = createStorageContext({ clineDir: tempDir })
+			await storageCtx.settings.update("__settingsMigrationVersion", 1)
+			await storageCtx.globalState.update("globalSkillsToggles", { "/global/skill/SKILL.md": false })
+
+			const migrated = await StateManager.initialize(createStorageContext({ clineDir: tempDir }))
+
+			migrated.getGlobalSettingsKey("globalSkillsToggles").should.deepEqual({
+				"/global/skill/SKILL.md": false,
+			})
+			const migratedStorage = createStorageContext({ clineDir: tempDir })
+			migratedStorage.settings.get("__settingsMigrationVersion")?.should.equal(2)
+			migratedStorage.settings.get("globalSkillsToggles")?.should.deepEqual({
+				"/global/skill/SKILL.md": false,
+			})
+		})
+
+		it("should preserve canonical global capability toggles during the v2 upgrade", async () => {
+			await StateManager.resetForTest()
+			const storageCtx = createStorageContext({ clineDir: tempDir })
+			await storageCtx.settings.setBatch({
+				__settingsMigrationVersion: 1,
+				globalWorkflowToggles: { "/canonical/workflow.md": false },
+			})
+			await storageCtx.globalState.update("globalWorkflowToggles", { "/legacy/workflow.md": true })
+
+			const migrated = await StateManager.initialize(createStorageContext({ clineDir: tempDir }))
+
+			migrated.getGlobalSettingsKey("globalWorkflowToggles").should.deepEqual({
+				"/canonical/workflow.md": false,
+			})
+			const migratedStorage = createStorageContext({ clineDir: tempDir })
+			migratedStorage.settings.get("__settingsMigrationVersion")?.should.equal(2)
+			migratedStorage.settings.get("globalWorkflowToggles")?.should.deepEqual({
+				"/canonical/workflow.md": false,
+			})
 		})
 
 		it("should keep task history inside the injected storage boundary", () => {

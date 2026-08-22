@@ -1,4 +1,5 @@
 import { getSubagentsScanDirectories } from "@core/storage/disk"
+import { reconcileGlobalCapabilities } from "@core/storage/settings/global-capability-settings"
 import { parseAgentConfigFromYaml } from "@core/task/tools/subagent/AgentConfigLoader"
 import { RefreshedSubagents, SubagentInfo } from "@shared/proto/dline/file"
 import fs from "fs/promises"
@@ -102,13 +103,13 @@ export async function refreshSubagents(controller: Controller): Promise<Refreshe
 		// discovered files the same default as the existing capability pickers.
 		const localNames = new Set(localSubagents.map((agent) => agent.name))
 		const visibleGlobalSubagents = globalSubagents.filter((agent) => !localNames.has(agent.name))
-		const globalToggles = controller.stateManager.getGlobalSettingsKey("globalSubagentsToggles") || {}
-		const globalPaths = new Set(globalSubagents.map((agent) => agent.path))
-		for (const togglePath of Object.keys(globalToggles)) {
-			if (!globalPaths.has(togglePath)) delete globalToggles[togglePath]
-		}
+		const discoveredGlobalToggles = Object.fromEntries(globalSubagents.map((agent) => [agent.path, true]))
+		const globalToggles = await reconcileGlobalCapabilities(
+			controller.stateManager,
+			"globalSubagentsToggles",
+			discoveredGlobalToggles,
+		)
 		for (const agent of visibleGlobalSubagents) {
-			if (!(agent.path in globalToggles)) globalToggles[agent.path] = true
 			agent.enabled = globalToggles[agent.path] !== false
 		}
 
@@ -122,7 +123,6 @@ export async function refreshSubagents(controller: Controller): Promise<Refreshe
 			agent.enabled = localToggles[agent.path] !== false
 		}
 
-		controller.stateManager.setGlobalState("globalSubagentsToggles", globalToggles)
 		controller.stateManager.setWorkspaceState("localSubagentsToggles", localToggles)
 
 		return RefreshedSubagents.create({

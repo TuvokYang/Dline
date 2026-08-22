@@ -1,3 +1,4 @@
+import { setGlobalCapabilityEnabled } from "@core/storage/settings/global-capability-settings"
 import { ClineRulesToggles, RuleScope, ToggleWorkflowRequest } from "@shared/proto/dline/file"
 import { Logger } from "@/shared/services/Logger"
 import { Controller } from ".."
@@ -25,9 +26,7 @@ export async function toggleWorkflow(controller: Controller, request: ToggleWork
 
 	switch (scope) {
 		case RuleScope.GLOBAL: {
-			toggles = controller.stateManager.getGlobalSettingsKey("globalWorkflowToggles")
-			toggles[workflowPath] = enabled
-			controller.stateManager.setGlobalState("globalWorkflowToggles", toggles)
+			toggles = await setGlobalCapabilityEnabled(controller.stateManager, "globalWorkflowToggles", workflowPath, enabled)
 			break
 		}
 		case RuleScope.LOCAL: {

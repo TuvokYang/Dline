@@ -1,3 +1,4 @@
+import { removeGlobalCapability } from "@core/storage/settings/global-capability-settings"
 import { DeleteSubagentRequest, SubagentToggles } from "@shared/proto/dline/file"
 import fs from "fs/promises"
 import { Logger } from "@/shared/services/Logger"
@@ -32,9 +33,7 @@ export async function deleteSubagentFile(controller: Controller, request: Delete
 	let localToggles: Record<string, boolean> = {}
 
 	if (isGlobal) {
-		globalToggles = controller.stateManager.getGlobalSettingsKey("globalSubagentsToggles") || {}
-		delete globalToggles[subagentPath]
-		controller.stateManager.setGlobalState("globalSubagentsToggles", globalToggles)
+		globalToggles = await removeGlobalCapability(controller.stateManager, "globalSubagentsToggles", subagentPath)
 	} else {
 		localToggles = controller.stateManager.getWorkspaceStateKey("localSubagentsToggles") || {}
 		delete localToggles[subagentPath]

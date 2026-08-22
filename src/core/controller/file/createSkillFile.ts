@@ -55,7 +55,7 @@ export async function createSkillFile(controller: Controller, request: CreateSki
 	let skillDir: string
 
 	if (isGlobal) {
-		// Create in ~/.agents/skills using the unified helper
+		// Global skills share Dline's Documents-backed configuration root.
 		const globalSkillsDir = await ensureAgentSkillsDirectoryExists({ isGlobal: true })
 		skillDir = path.join(globalSkillsDir, sanitizedName)
 	} else {

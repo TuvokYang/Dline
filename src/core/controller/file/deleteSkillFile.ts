@@ -1,3 +1,4 @@
+import { removeGlobalCapability } from "@core/storage/settings/global-capability-settings"
 import { DeleteSkillRequest, SkillsToggles } from "@shared/proto/dline/file"
 import fs from "fs/promises"
 import path from "path"
@@ -45,9 +46,7 @@ export async function deleteSkillFile(controller: Controller, request: DeleteSki
 	let localToggles = controller.stateManager.getWorkspaceStateKey("localSkillsToggles") || {}
 
 	if (isGlobal) {
-		const { [skillPath]: _, ...remaining } = globalToggles
-		globalToggles = remaining
-		controller.stateManager.setGlobalState("globalSkillsToggles", globalToggles)
+		globalToggles = await removeGlobalCapability(controller.stateManager, "globalSkillsToggles", skillPath)
 	} else {
 		const { [skillPath]: _, ...remaining } = localToggles
 		localToggles = remaining

@@ -105,14 +105,14 @@ describe("vscode-to-file-migration", () => {
 			result.globalStateCount.should.be.greaterThan(0)
 			storageContext.globalState.get("mode")?.should.equal("act")
 			// Both sentinels should be written
-			storageContext.globalState.get("__vscodeMigrationVersion")?.should.equal(1)
-			storageContext.workspaceState.get("__vscodeMigrationVersion")?.should.equal(1)
+			storageContext.globalState.get("__vscodeMigrationVersion")?.should.equal(2)
+			storageContext.workspaceState.get("__vscodeMigrationVersion")?.should.equal(2)
 		})
 
 		it("should skip everything when both sentinels are current version", async () => {
 			// Pre-set BOTH sentinels
-			storageContext.globalState.update("__vscodeMigrationVersion", 1)
-			storageContext.workspaceState.set("__vscodeMigrationVersion", 1)
+			storageContext.globalState.update("__vscodeMigrationVersion", 2)
+			storageContext.workspaceState.set("__vscodeMigrationVersion", 2)
 
 			const mockCtx = createMockVSCodeContext()
 			mockCtx._globalStateStore.set("mode", "plan")
@@ -141,8 +141,8 @@ describe("vscode-to-file-migration", () => {
 		})
 
 		it("should re-run migration if sentinels are lower version", async () => {
-			storageContext.globalState.update("__vscodeMigrationVersion", 0)
-			storageContext.workspaceState.set("__vscodeMigrationVersion", 0)
+			storageContext.globalState.update("__vscodeMigrationVersion", 1)
+			storageContext.workspaceState.set("__vscodeMigrationVersion", 1)
 
 			const mockCtx = createMockVSCodeContext()
 			mockCtx._globalStateStore.set("mode", "plan")
@@ -154,7 +154,7 @@ describe("vscode-to-file-migration", () => {
 
 		it("should migrate workspace state when globals already migrated (new workspace)", async () => {
 			// Simulate: globals+secrets already migrated, but this is a fresh workspace
-			storageContext.globalState.update("__vscodeMigrationVersion", 1)
+			storageContext.globalState.update("__vscodeMigrationVersion", 2)
 			// workspaceState has NO sentinel — this is a new workspace
 
 			const mockCtx = createMockVSCodeContext()
@@ -173,12 +173,12 @@ describe("vscode-to-file-migration", () => {
 			const stored = storageContext.workspaceState.get("localClineRulesToggles") as any
 			stored.should.deepEqual({ "rule-1": true })
 			// Workspace sentinel should now be set
-			storageContext.workspaceState.get("__vscodeMigrationVersion")?.should.equal(1)
+			storageContext.workspaceState.get("__vscodeMigrationVersion")?.should.equal(2)
 		})
 
 		it("should migrate globals when workspace already migrated", async () => {
 			// Edge case: workspace was somehow migrated but globals were not
-			storageContext.workspaceState.set("__vscodeMigrationVersion", 1)
+			storageContext.workspaceState.set("__vscodeMigrationVersion", 2)
 			// globalState has NO sentinel
 
 			const mockCtx = createMockVSCodeContext()
@@ -194,7 +194,7 @@ describe("vscode-to-file-migration", () => {
 			// Workspace state should NOT have been migrated
 			result.workspaceStateCount.should.equal(0)
 			// Global sentinel should now be set
-			storageContext.globalState.get("__vscodeMigrationVersion")?.should.equal(1)
+			storageContext.globalState.get("__vscodeMigrationVersion")?.should.equal(2)
 		})
 	})
 
@@ -211,6 +211,21 @@ describe("vscode-to-file-migration", () => {
 			storageContext.settings.get("mode")?.should.equal("plan")
 			storageContext.settings.get("yoloModeToggled")?.should.equal(true)
 			storageContext.settings.get("enableCheckpointsSetting")?.should.equal(false)
+		})
+
+		it("should route all global capability toggles to settings", async () => {
+			const mockCtx = createMockVSCodeContext()
+			mockCtx._globalStateStore.set("globalClineRulesToggles", { "/global/rule.md": false })
+			mockCtx._globalStateStore.set("globalWorkflowToggles", { "/global/workflow.md": false })
+			mockCtx._globalStateStore.set("globalSkillsToggles", { "/global/skill/SKILL.md": false })
+			mockCtx._globalStateStore.set("globalSubagentsToggles", { "/global/subagent.yml": false })
+
+			await exportVSCodeStorageToSharedFiles(mockCtx as any, storageContext)
+
+			storageContext.settings.get("globalClineRulesToggles")?.should.deepEqual({ "/global/rule.md": false })
+			storageContext.settings.get("globalWorkflowToggles")?.should.deepEqual({ "/global/workflow.md": false })
+			storageContext.settings.get("globalSkillsToggles")?.should.deepEqual({ "/global/skill/SKILL.md": false })
+			storageContext.settings.get("globalSubagentsToggles")?.should.deepEqual({ "/global/subagent.yml": false })
 		})
 
 		it("should NOT overwrite existing file store values", async () => {

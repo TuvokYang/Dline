@@ -1,3 +1,4 @@
+import { setGlobalCapabilityEnabled } from "@core/storage/settings/global-capability-settings"
 import { getWorkspaceBasename } from "@core/workspace"
 import type { ToggleClineRuleRequest } from "@shared/proto/dline/file"
 import { RuleScope, ToggleClineRules } from "@shared/proto/dline/file"
@@ -26,9 +27,7 @@ export async function toggleClineRule(controller: Controller, request: ToggleCli
 	// Handle the three different scopes
 	switch (scope) {
 		case RuleScope.GLOBAL: {
-			const toggles = controller.stateManager.getGlobalSettingsKey("globalClineRulesToggles")
-			toggles[rulePath] = enabled
-			controller.stateManager.setGlobalState("globalClineRulesToggles", toggles)
+			await setGlobalCapabilityEnabled(controller.stateManager, "globalClineRulesToggles", rulePath, enabled)
 			break
 		}
 		case RuleScope.LOCAL: {

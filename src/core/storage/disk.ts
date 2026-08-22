@@ -249,7 +249,7 @@ export async function ensureHooksDirectoryExists(): Promise<string> {
 	return dir
 }
 
-function getDlineSkillsDirectoryPath(): string {
+export function getDlineSkillsDirectoryPath(): string {
 	return path.join(getDlineDocumentsPathSync(), "skills")
 }
 
@@ -281,13 +281,9 @@ export function getDlineCacheDir(): string {
 	return dir
 }
 
-function getAgentSkillsDirectoryPath(): string {
-	return path.join(os.homedir(), ".agents", "skills")
-}
-
 export async function ensureAgentSkillsDirectoryExists(opts: { isGlobal: boolean; workspacePath?: string }): Promise<string> {
 	const dir = opts.isGlobal
-		? getAgentSkillsDirectoryPath()
+		? getDlineSkillsDirectoryPath()
 		: path.join(opts.workspacePath ?? "", GlobalFileNames.agentsSkillsDir)
 	try {
 		await fs.mkdir(dir, { recursive: true })
@@ -339,7 +335,6 @@ export function getSkillsDirectoriesForScan(cwd: string): SkillsScanDirectory[] 
 		{ path: path.join(cwd, GlobalFileNames.claudeSkillsDir), source: "project" },
 		{ path: path.join(cwd, GlobalFileNames.agentsSkillsDir), source: "project" },
 		{ path: getDlineSkillsDirectoryPath(), source: "global" },
-		{ path: getAgentSkillsDirectoryPath(), source: "global" },
 	]
 }
 

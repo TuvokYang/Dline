@@ -1,4 +1,5 @@
 import { parseRemoteSkillEntries } from "@core/context/instructions/user-instructions/skills"
+import { reconcileGlobalCapabilities } from "@core/storage/settings/global-capability-settings"
 import { RefreshedSkills, SkillInfo } from "@shared/proto/dline/file"
 import fs from "fs/promises"
 import path from "path"
@@ -92,16 +93,15 @@ export async function refreshSkills(controller: Controller): Promise<RefreshedSk
 		}
 	}
 
-	// Reconcile disk-backed toggle maps with the current filesystem snapshot.
+	// Reconcile disk-backed toggle maps with the latest committed Settings snapshot.
 	// Remote entries use a separate name-keyed map and are handled below.
-	const globalToggles = controller.stateManager.getGlobalSettingsKey("globalSkillsToggles") || {}
-	const globalPaths = new Set(globalSkills.map((skill) => skill.path).filter((skillPath) => !skillPath.startsWith("remote:")))
-	for (const togglePath of Object.keys(globalToggles)) {
-		if (!globalPaths.has(togglePath)) delete globalToggles[togglePath]
-	}
+	const discoveredGlobalToggles = Object.fromEntries(globalSkills.map((skill) => [skill.path, true]))
+	const globalToggles = await reconcileGlobalCapabilities(
+		controller.stateManager,
+		"globalSkillsToggles",
+		discoveredGlobalToggles,
+	)
 	for (const skill of globalSkills) {
-		if (skill.path.startsWith("remote:")) continue
-		if (!(skill.path in globalToggles)) globalToggles[skill.path] = true
 		skill.enabled = globalToggles[skill.path] !== false
 	}
 
@@ -138,8 +138,6 @@ export async function refreshSkills(controller: Controller): Promise<RefreshedSk
 		skill.enabled = localToggles[skill.path] !== false
 	}
 
-	// Persist updated toggles to StateManager
-	controller.stateManager.setGlobalState("globalSkillsToggles", globalToggles)
 	controller.stateManager.setWorkspaceState("localSkillsToggles", localToggles)
 
 	return RefreshedSkills.create({

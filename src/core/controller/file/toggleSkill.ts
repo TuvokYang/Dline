@@ -1,3 +1,4 @@
+import { setGlobalCapabilityEnabled } from "@core/storage/settings/global-capability-settings"
 import { SkillsToggles, ToggleSkillRequest } from "@shared/proto/dline/file"
 import { Logger } from "@/shared/services/Logger"
 import { Controller } from ".."
@@ -32,8 +33,7 @@ export async function toggleSkill(controller: Controller, request: ToggleSkillRe
 		remoteToggles = { ...remoteToggles, [name]: enabled }
 		controller.stateManager.setGlobalState("remoteSkillsToggles", remoteToggles)
 	} else if (isGlobal) {
-		globalToggles = { ...globalToggles, [skillPath]: enabled }
-		controller.stateManager.setGlobalState("globalSkillsToggles", globalToggles)
+		globalToggles = await setGlobalCapabilityEnabled(controller.stateManager, "globalSkillsToggles", skillPath, enabled)
 	} else {
 		localToggles = { ...localToggles, [skillPath]: enabled }
 		controller.stateManager.setWorkspaceState("localSkillsToggles", localToggles)

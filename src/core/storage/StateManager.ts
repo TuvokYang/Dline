@@ -256,9 +256,10 @@ export class StateManager {
 	 * If settings.json doesn't exist or hasn't been migrated, extract non-deprecated
 	 * SettingsKeys from globalState and write to settings.json.
 	 */
-	private static async loadAndMigrateSettings(storage: StorageContext, globalState: GlobalStateAndSettings): Promise<void> {
+	private static async loadAndMigrateSettings(storage: StorageContext, _globalState: GlobalStateAndSettings): Promise<void> {
 		const instance = StateManager.instance!
 		const SETTINGS_MIGRATION_VERSION_KEY = "__settingsMigrationVersion"
+		const SETTINGS_MIGRATION_VERSION = 2
 		const repository = new SettingsRepository({ filePath: storage.settingsFilePath })
 		instance.settingsRepository = repository
 		instance.settingsRepositoryUnsubscribe = repository.subscribe((commit) => instance.applySettingsCommit(commit))
@@ -266,8 +267,9 @@ export class StateManager {
 		await repository.initialize()
 		instance.applySettingsSnapshot(repository.readSnapshot())
 
-		const existingSentinel = (repository.readSnapshot().values as Record<string, unknown>)[SETTINGS_MIGRATION_VERSION_KEY]
-		if (typeof existingSentinel === "number" && existingSentinel >= 1) {
+		const existingValues = repository.readSnapshot().values as Record<string, unknown>
+		const existingSentinel = existingValues[SETTINGS_MIGRATION_VERSION_KEY]
+		if (typeof existingSentinel === "number" && existingSentinel >= SETTINGS_MIGRATION_VERSION) {
 			instance.disableSettingsFallback()
 			return
 		}
@@ -293,13 +295,14 @@ export class StateManager {
 		])
 		const settingsEntries: Record<string, unknown> = {}
 		for (const key of SettingsKeys) {
-			if (deprecatedSettings.has(key as string)) continue
-			const value = (globalState as Record<string, unknown>)[key as string]
-			if (value !== undefined) {
-				settingsEntries[key as string] = value
+			const keyName = key as string
+			if (deprecatedSettings.has(keyName) || existingValues[keyName] !== undefined) continue
+			const legacyValue = storage.globalState.get(keyName)
+			if (legacyValue !== undefined) {
+				settingsEntries[keyName] = legacyValue
 			}
 		}
-		settingsEntries[SETTINGS_MIGRATION_VERSION_KEY] = 1
+		settingsEntries[SETTINGS_MIGRATION_VERSION_KEY] = SETTINGS_MIGRATION_VERSION
 
 		await repository.mutate(settingsEntries as Partial<Settings>)
 		instance.applySettingsSnapshot(repository.readSnapshot())
@@ -1096,6 +1099,24 @@ export class StateManager {
 			return this.settingsCache[key]
 		}
 		return this.globalStateCache[key]
+	}
+
+	/** Atomically mutate one global Setting against the latest cross-process committed snapshot. */
+	async mutateGlobalSettingsKey<K extends SettingsKey>(
+		key: K,
+		resolveValue: (currentValue: Settings[K]) => Settings[K] | undefined,
+	): Promise<Settings[K]> {
+		this.ensureMutationAllowed()
+		await this.flushPendingState()
+		const repository = this.settingsRepository
+		if (!repository) throw new Error("Settings repository is not initialized")
+
+		const commit = await repository.mutateResolved((values) => {
+			const currentValue = (values[key] ?? getDefaultValue(key)) as Settings[K]
+			return { [key]: resolveValue(currentValue) } as Partial<Settings>
+		})
+		this.applySettingsSnapshot(commit.snapshot)
+		return this.getCanonicalSettingsKey(key)
 	}
 
 	/** Atomically merge Auto-Approve changes against the latest cross-process Settings snapshot. */

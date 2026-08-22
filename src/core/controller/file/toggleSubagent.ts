@@ -1,3 +1,4 @@
+import { setGlobalCapabilityEnabled } from "@core/storage/settings/global-capability-settings"
 import { SubagentToggles, ToggleSubagentRequest } from "@shared/proto/dline/file"
 import { Logger } from "@/shared/services/Logger"
 import { Controller } from ".."
@@ -20,9 +21,7 @@ export async function toggleSubagent(controller: Controller, request: ToggleSuba
 	let localToggles: Record<string, boolean> = {}
 
 	if (isGlobal) {
-		globalToggles = controller.stateManager.getGlobalSettingsKey("globalSubagentsToggles") || {}
-		globalToggles[subagentPath] = enabled
-		controller.stateManager.setGlobalState("globalSubagentsToggles", globalToggles)
+		globalToggles = await setGlobalCapabilityEnabled(controller.stateManager, "globalSubagentsToggles", subagentPath, enabled)
 	} else {
 		localToggles = controller.stateManager.getWorkspaceStateKey("localSubagentsToggles") || {}
 		localToggles[subagentPath] = enabled
