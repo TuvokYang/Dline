@@ -44,6 +44,16 @@ export interface MockObservedToolResult {
 	content: string
 }
 
+export interface MockToolPairingDiagnostic {
+	callIds: string[]
+	outputIds: string[]
+	missingOutputIds: string[]
+	orphanOutputIds: string[]
+	duplicateCallIds: string[]
+	duplicateOutputIds: string[]
+	complete: boolean
+}
+
 export interface MockToolCall {
 	id?: string
 	name: string
@@ -119,6 +129,8 @@ interface MockResponseOptions {
 	expectedToolResultCount?: number
 	expectedRequestIncludes?: readonly string[]
 	expectedRequestExcludes?: readonly string[]
+	/** Reject incomplete historical tool-call pairing like strict production Providers do. */
+	requireCompleteToolPairing?: boolean
 }
 
 export type OpenAiMockResponse =
@@ -166,6 +178,7 @@ export interface MockApiConsumption {
 	path: string
 	requestBody: unknown
 	requestToolResults: MockObservedToolResult[]
+	requestToolPairing: MockToolPairingDiagnostic
 	responseType: OpenAiMockResponse["type"]
 	toolName?: string
 	toolCallId?: string
@@ -267,6 +280,64 @@ function stringifyToolResultContent(value: unknown): string {
 	return value === undefined ? "" : JSON.stringify(value)
 }
 
+function duplicateIds(ids: readonly string[]): string[] {
+	const counts = new Map<string, number>()
+	for (const id of ids) counts.set(id, (counts.get(id) ?? 0) + 1)
+	return [...counts.entries()].filter(([, count]) => count > 1).map(([id]) => id)
+}
+
+/** Summarize the bidirectional tool-call pairing contract of one Provider request. */
+function extractRequestToolPairing(requestBody: unknown): MockToolPairingDiagnostic {
+	const body = asRecord(requestBody)
+	const callIds: string[] = []
+	const outputIds: string[] = []
+	if (body) {
+		for (const value of Array.isArray(body.input) ? body.input : []) {
+			const item = asRecord(value)
+			if (item?.type === "function_call" && typeof item.call_id === "string") callIds.push(item.call_id)
+			if (item?.type === "function_call_output" && typeof item.call_id === "string") outputIds.push(item.call_id)
+		}
+
+		for (const value of Array.isArray(body.messages) ? body.messages : []) {
+			const message = asRecord(value)
+			if (!message) continue
+			if (message.role === "assistant") {
+				for (const toolCallValue of Array.isArray(message.tool_calls) ? message.tool_calls : []) {
+					const toolCall = asRecord(toolCallValue)
+					if (typeof toolCall?.id === "string") callIds.push(toolCall.id)
+				}
+			}
+			if (message.role === "tool" && typeof message.tool_call_id === "string") outputIds.push(message.tool_call_id)
+			for (const contentValue of Array.isArray(message.content) ? message.content : []) {
+				const content = asRecord(contentValue)
+				if (content?.type === "tool_use" && typeof content.id === "string") callIds.push(content.id)
+				if (content?.type === "tool_result" && typeof content.tool_use_id === "string")
+					outputIds.push(content.tool_use_id)
+			}
+		}
+	}
+
+	const callIdSet = new Set(callIds)
+	const outputIdSet = new Set(outputIds)
+	const missingOutputIds = [...callIdSet].filter((id) => !outputIdSet.has(id))
+	const orphanOutputIds = [...outputIdSet].filter((id) => !callIdSet.has(id))
+	const duplicateCallIds = duplicateIds(callIds)
+	const duplicateOutputIds = duplicateIds(outputIds)
+	return {
+		callIds,
+		outputIds,
+		missingOutputIds,
+		orphanOutputIds,
+		duplicateCallIds,
+		duplicateOutputIds,
+		complete:
+			missingOutputIds.length === 0 &&
+			orphanOutputIds.length === 0 &&
+			duplicateCallIds.length === 0 &&
+			duplicateOutputIds.length === 0,
+	}
+}
+
 function extractRequestToolResults(requestBody: unknown): MockObservedToolResult[] {
 	const body = asRecord(requestBody)
 	if (!body) return []
@@ -303,19 +374,49 @@ function extractRequestToolResults(requestBody: unknown): MockObservedToolResult
 	return results
 }
 
+type MockRequestContractFailure = {
+	kind: "request" | "tool-pairing"
+	message: string
+}
+
 function validateMockRequestContract(
 	response: Exclude<OpenAiMockResponse, { type: "error" }>,
 	requestText: string,
 	toolResults: readonly MockObservedToolResult[],
-): string | undefined {
+	toolPairing?: MockToolPairingDiagnostic,
+): MockRequestContractFailure | undefined {
+	if (response.requireCompleteToolPairing && toolPairing && !toolPairing.complete) {
+		if (toolPairing.missingOutputIds[0]) {
+			return {
+				kind: "tool-pairing",
+				message: `No tool output found for function call ${toolPairing.missingOutputIds[0]}.`,
+			}
+		}
+		if (toolPairing.orphanOutputIds[0]) {
+			return {
+				kind: "tool-pairing",
+				message: `No tool call found for function output ${toolPairing.orphanOutputIds[0]}.`,
+			}
+		}
+		return {
+			kind: "tool-pairing",
+			message: `Duplicate tool identity found in Provider request: ${[
+				...toolPairing.duplicateCallIds,
+				...toolPairing.duplicateOutputIds,
+			].join(", ")}`,
+		}
+	}
 	for (const marker of response.expectedRequestIncludes ?? []) {
-		if (!requestText.includes(marker)) return `Request is missing required text: ${marker}`
+		if (!requestText.includes(marker)) return { kind: "request", message: `Request is missing required text: ${marker}` }
 	}
 	for (const marker of response.expectedRequestExcludes ?? []) {
-		if (requestText.includes(marker)) return `Request contains forbidden text: ${marker}`
+		if (requestText.includes(marker)) return { kind: "request", message: `Request contains forbidden text: ${marker}` }
 	}
 	if (response.expectedToolResultCount !== undefined && toolResults.length !== response.expectedToolResultCount) {
-		return `Expected ${response.expectedToolResultCount} tool results, observed ${toolResults.length}`
+		return {
+			kind: "request",
+			message: `Expected ${response.expectedToolResultCount} tool results, observed ${toolResults.length}`,
+		}
 	}
 
 	for (const expectation of response.expectedToolResults ?? []) {
@@ -323,11 +424,17 @@ function validateMockRequestContract(
 		const candidates = expectation.callId ? toolResults.filter((result) => result.callId === expectation.callId) : toolResults
 		if (candidates.length === 0) {
 			const observedIds = toolResults.map((result) => result.callId ?? "<missing>").join(", ") || "<none>"
-			return `Tool result ${expectation.callId ?? "<any>"} was not observed; observed call IDs: ${observedIds}`
+			return {
+				kind: "request",
+				message: `Tool result ${expectation.callId ?? "<any>"} was not observed; observed call IDs: ${observedIds}`,
+			}
 		}
 		for (const marker of markers) {
 			if (!candidates.some((candidate) => candidate.content.includes(marker))) {
-				return `Tool result ${expectation.callId ?? "<any>"} is missing required text: ${marker}`
+				return {
+					kind: "request",
+					message: `Tool result ${expectation.callId ?? "<any>"} is missing required text: ${marker}`,
+				}
 			}
 		}
 	}
@@ -338,6 +445,7 @@ function takeMockResponse(
 	queue: OpenAiMockResponse[],
 	requestText: string,
 	toolResults: readonly MockObservedToolResult[],
+	toolPairing: MockToolPairingDiagnostic,
 ): OpenAiMockResponse | undefined {
 	const first = queue[0]
 	if (!first || first.type === "error" || !first.matchRequestContract) return queue.shift()
@@ -346,7 +454,7 @@ function takeMockResponse(
 		(response) =>
 			response.type !== "error" &&
 			response.matchRequestContract === true &&
-			validateMockRequestContract(response, requestText, toolResults) === undefined,
+			validateMockRequestContract(response, requestText, toolResults, toolPairing) === undefined,
 	)
 	if (matchingIndex < 0) return queue.shift()
 	return queue.splice(matchingIndex, 1)[0]
@@ -517,7 +625,13 @@ export class ClineApiServerMock {
 		const route = E2E_MOCK_PROVIDER_ROUTES[target]
 		const requestText = JSON.stringify(requestBody)
 		const requestToolResults = extractRequestToolResults(requestBody)
-		const scriptedResponse = takeMockResponse(this.mockResponses[target], requestText, requestToolResults) ?? {
+		const requestToolPairing = extractRequestToolPairing(requestBody)
+		const scriptedResponse = takeMockResponse(
+			this.mockResponses[target],
+			requestText,
+			requestToolResults,
+			requestToolPairing,
+		) ?? {
 			type: "error",
 			status: 500,
 			code: "e2e_mock_queue_exhausted",
@@ -526,16 +640,18 @@ export class ClineApiServerMock {
 			details: { target, retryable: true },
 		}
 		const thinking = getRequestThinking(requestBody)
-		const contractError =
+		const contractFailure =
 			scriptedResponse.type === "error"
 				? undefined
-				: validateMockRequestContract(scriptedResponse, requestText, requestToolResults)
-		const contractedResponse: OpenAiMockResponse = contractError
+				: validateMockRequestContract(scriptedResponse, requestText, requestToolResults, requestToolPairing)
+		const contractError = contractFailure?.message
+		const toolPairingContractFailed = contractFailure?.kind === "tool-pairing"
+		const contractedResponse: OpenAiMockResponse = contractFailure
 			? {
 					type: "error",
-					status: 500,
-					code: "e2e_tool_result_contract_failed",
-					message: contractError,
+					status: toolPairingContractFailed ? 400 : 500,
+					code: toolPairingContractFailed ? "e2e_tool_pairing_contract_failed" : "e2e_tool_result_contract_failed",
+					message: contractFailure.message,
 				}
 			: scriptedResponse
 		const scriptedToolCall = scriptedResponse.type === "error" ? undefined : getResponseToolCalls(scriptedResponse)[0]
@@ -570,6 +686,7 @@ export class ClineApiServerMock {
 			path,
 			requestBody,
 			requestToolResults,
+			requestToolPairing,
 			responseType: response.type,
 			...(response.type === "tool" ? { toolName: response.name } : {}),
 			...(response.type === "tool" && response.id ? { toolCallId: response.id } : {}),
