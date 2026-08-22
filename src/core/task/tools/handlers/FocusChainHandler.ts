@@ -1,7 +1,7 @@
 import type { ToolUse } from "@core/assistant-message"
 import { getPrompt } from "@core/prompts/i18n"
 import { ClineDefaultTool } from "@/shared/tools"
-import { hasValidTodoItem } from "../../focus-chain/file-utils"
+import { hasChecklistTitle, hasValidTodoItem } from "../../focus-chain/file-utils"
 import type { ToolResponse } from "../../index"
 import type { IToolHandler } from "../ToolExecutorCoordinator"
 import { interactionId, interactionTurnId, type TaskConfig } from "../types/TaskConfig"
@@ -22,7 +22,7 @@ export class FocusChainHandler implements IToolHandler {
 		const newPlan = (block.params as Record<string, string>).new_plan?.trim()
 		const reason = (block.params as Record<string, string>).reason || ""
 
-		if (!newPlan || !hasValidTodoItem(newPlan)) {
+		if (!newPlan || !hasChecklistTitle(newPlan) || !hasValidTodoItem(newPlan)) {
 			return getPrompt("focusChain", "focusChainChangeMissing")
 		}
 
@@ -70,7 +70,7 @@ export class FocusChainHandler implements IToolHandler {
 		// - Remove empty section headings
 		// - Keep "- [x]" lines as-is (already completed)
 		const focusChainPlan = this.cleanForFocusChain(approvedPlan).trim()
-		if (!hasValidTodoItem(focusChainPlan)) {
+		if (!hasChecklistTitle(focusChainPlan) || !hasValidTodoItem(focusChainPlan)) {
 			return getPrompt("focusChain", "focusChainChangeNoItemsApproved")
 		}
 		await config.callbacks.focusChainForceUpdate(focusChainPlan)

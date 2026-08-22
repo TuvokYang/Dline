@@ -1306,7 +1306,7 @@ Return only the highest-value findings.`,
 )
 
 e2e(
-	"Tools - subagent renders its name, single-line context, bounded sections, and ordered tool calls",
+	"Tools - subagent aligns header actions, wraps context, and orders Tools before output",
 	async ({ helper, server, sidebar, userDataDir }) => {
 		e2e.setTimeout(180_000)
 		const subagentTask = "E2E_SUBAGENT_RENDERING_TASK"
@@ -1374,8 +1374,13 @@ e2e(
 		await expect(taskHeading).toBeVisible()
 		const subagentCard = taskHeading.locator("xpath=ancestor::*[@data-testid='subagent-item'][1]")
 		await expect(subagentCard.getByTestId("subagent-name")).toHaveText("default")
-		await expect(subagentCard).toContainText("#1 · Foreground")
+		await expect(subagentCard).toContainText("#1")
 		await expect(subagentCard).not.toContainText("subagent_1")
+		const itemHeader = subagentCard.getByTestId("subagent-item-header")
+		const executionMode = itemHeader.getByTestId("subagent-execution-mode")
+		await expect(executionMode).toHaveText("Foreground")
+		await expect(itemHeader.getByRole("button", { name: "Cancel", exact: true })).toHaveCount(0)
+		await expect(subagentCard.getByRole("button", { name: "Continue in Background", exact: true })).toHaveCount(0)
 
 		const taskContainer = taskHeading.locator("..")
 		expect(
@@ -1393,23 +1398,23 @@ e2e(
 			const style = getComputedStyle(element)
 			return {
 				clientHeight: element.clientHeight,
-				scrollHeight: element.scrollHeight,
-				overflowY: style.overflowY,
+				scrollWidth: element.scrollWidth,
+				clientWidth: element.clientWidth,
+				overflowX: style.overflowX,
 			}
 		})
 		expect(contextLayout.clientHeight).toBeGreaterThan(0)
-		expect(contextLayout.scrollHeight).toBeLessThanOrEqual(contextLayout.clientHeight + 1)
-		expect(contextLayout.overflowY).toBe("visible")
-		expect(
-			await contextContent.evaluate((element) => {
-				const style = getComputedStyle(element)
-				return {
-					overflow: style.overflow,
-					textOverflow: style.textOverflow,
-					whiteSpace: style.whiteSpace,
-				}
-			}),
-		).toEqual({ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" })
+		expect(contextLayout.scrollWidth).toBeLessThanOrEqual(contextLayout.clientWidth + 1)
+		expect(contextLayout.overflowX).toBe("hidden")
+		const contextTextLayout = await contextContent.evaluate((element) => {
+			const style = getComputedStyle(element)
+			return {
+				overflowWrap: style.overflowWrap,
+				whiteSpace: style.whiteSpace,
+			}
+		})
+		expect(contextTextLayout.whiteSpace).toBe("pre-wrap")
+		expect(["anywhere", "break-word"]).toContain(contextTextLayout.overflowWrap)
 		await expect(subagentCard.getByRole("button", { name: "Show full subagent context", exact: true })).toHaveCount(0)
 
 		const toolRows = subagentCard.getByTestId("subagent-tool-call")
@@ -1426,6 +1431,17 @@ e2e(
 				return { maxHeight: style.maxHeight, overflowY: style.overflowY }
 			}),
 		).toEqual({ maxHeight: "96px", overflowY: "auto" })
+		const showOutput = subagentCard.getByRole("button", { name: "Show subagent output", exact: true })
+		expect(
+			await subagentCard.evaluate((card) => {
+				const tools = Array.from(card.querySelectorAll("div")).find(
+					(element) => element.textContent?.trim() === "Tools",
+				)?.parentElement
+				const toggle = card.querySelector<HTMLElement>('[aria-label="Show subagent output"]')
+				if (!tools || !toggle) throw new Error("Subagent Tools or output toggle is missing")
+				return Boolean(tools.compareDocumentPosition(toggle) & Node.DOCUMENT_POSITION_FOLLOWING)
+			}),
+		).toBe(true)
 
 		const itemsContainer = subagentCard.locator("..")
 		expect(
@@ -1435,8 +1451,16 @@ e2e(
 			}),
 		).toEqual({ maxHeight: "none", overflowY: "visible" })
 
-		await subagentCard.getByRole("button", { name: "Show subagent output", exact: true }).click()
+		await showOutput.click()
 		const output = subagentCard.getByTestId("subagent-output")
+		expect(
+			await subagentCard.evaluate((card) => {
+				const toggle = card.querySelector<HTMLElement>('[aria-label="Hide subagent output"]')
+				const result = card.querySelector<HTMLElement>('[data-testid="subagent-output"]')
+				if (!toggle || !result) throw new Error("Subagent output hierarchy is incomplete")
+				return Boolean(toggle.compareDocumentPosition(result) & Node.DOCUMENT_POSITION_FOLLOWING)
+			}),
+		).toBe(true)
 		await expect(output).toContainText("E2E_SUBAGENT_RENDERING_CHILD_DONE")
 		expect(
 			await output.locator("..").evaluate((element) => {
@@ -1497,9 +1521,17 @@ e2e(
 		const subagentTask = sidebar.getByText("E2E_FOREGROUND_SUBAGENT_CANCEL_TASK", { exact: true }).last()
 		await expect(subagentTask).toBeVisible({ timeout: 60_000 })
 		await expect.poll(() => server.openAiRequestCount).toBe(2)
-		const subagentCard = subagentTask.locator("xpath=ancestor::div[.//button[normalize-space()='Cancel']][1]")
-		const cancelButton = subagentCard.getByRole("button", { name: "Cancel", exact: true })
+		const subagentCard = subagentTask.locator("xpath=ancestor::*[@data-testid='subagent-item'][1]")
+		const itemHeader = subagentCard.getByTestId("subagent-item-header")
+		await expect(itemHeader.getByTestId("subagent-execution-mode")).toHaveText("Foreground")
+		const cancelButton = itemHeader.getByRole("button", { name: "Cancel", exact: true })
 		await expect(cancelButton).toBeVisible()
+		await expect(subagentCard.getByRole("button", { name: "Continue in Background", exact: true })).toHaveCount(0)
+		const taskFooter = sidebar.getByRole("contentinfo")
+		await expect(taskFooter.locator('vscode-button[aria-label="Continue in Background"]')).toBeVisible()
+		await expect(taskFooter.locator('vscode-button[aria-label="Cancel"]')).toBeVisible()
+		await subagentCard.screenshot({ path: e2e.info().outputPath("foreground-subagent-card-actions.png") })
+		await taskFooter.screenshot({ path: e2e.info().outputPath("foreground-subagent-chat-footer.png") })
 		await cancelButton.evaluate((element) => element.setAttribute("data-e2e-footer-stability", "subagent-cancel"))
 		await startFooterActionStabilityObserver(sidebar, ["Cancel"], '[data-e2e-footer-stability="subagent-cancel"]')
 		await sidebar.page().waitForTimeout(750)
@@ -1593,8 +1625,8 @@ e2e("Tools - batch subagent Cancel keeps siblings active before Cancel all", asy
 	const rowCancelButtons = batchRow.getByRole("button", { name: "Cancel", exact: true })
 	await expect(rowCancelButtons).toHaveCount(3)
 
-	const firstCard = firstTask.locator("xpath=ancestor::div[.//button[normalize-space()='Cancel']][1]")
-	await firstCard.getByRole("button", { name: "Cancel", exact: true }).click()
+	const firstCard = firstTask.locator("xpath=ancestor::*[@data-testid='subagent-item'][1]")
+	await firstCard.getByTestId("subagent-item-header").getByRole("button", { name: "Cancel", exact: true }).click()
 	await expect(rowCancelButtons).toHaveCount(2)
 	await expect(sidebar.getByText("E2E_BATCH_CANCEL_TWO", { exact: true }).last()).toBeVisible()
 	await expect(sidebar.getByText("E2E_BATCH_CANCEL_THREE", { exact: true }).last()).toBeVisible()

@@ -340,6 +340,18 @@ describe("handler interaction matrix", () => {
 		expect(taskConfig.callbacks.focusChainForceUpdate).not.toHaveBeenCalled()
 	})
 
+	it("rejects a TODO list replacement without the required Title", async () => {
+		const taskConfig = config()
+		const result = await new FocusChainHandler().execute(
+			taskConfig,
+			block(ClineDefaultTool.CHANGE_TODO_LIST, { new_plan: "## Phase\n- [ ] First", reason: "Change" }),
+		)
+
+		expect(result).toBe("prompt")
+		expect(taskConfig.interactions.open).not.toHaveBeenCalled()
+		expect(taskConfig.callbacks.focusChainForceUpdate).not.toHaveBeenCalled()
+	})
+
 	it("keeps the current TODO list when no proposed items are approved", async () => {
 		const taskConfig = config({ actionId: "approve", selection: [] })
 		const result = await new FocusChainHandler().execute(

@@ -81,7 +81,7 @@ export class TaskState {
 	currentFocusChainChecklist: string | null = null
 	focusChainHistory: string | null = null
 	focusChainRejectionMessage: string | null = null
-	/** Index of the current in-progress item in the checklist (0-based), used to render <- CURRENT marker in environment_details. null when no active item. */
+	/** Index of the current unchecked item (0-based), projected in the separate CURRENT environment section. */
 	currentInProgressItemIndex: number | null = null
 	todoListWasUpdatedByUser = false
 	hasWarnedSkipOrder = false

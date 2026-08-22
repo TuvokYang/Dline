@@ -175,6 +175,43 @@ describe("ToolExecutor durable tool results", () => {
 		})
 	})
 
+	it("applies one valid TODO update after an ordinary tool completes", async () => {
+		const { coordinator, executor, updateFCListFromToolResponse } = createHarness({
+			allowedNativeToolNames: [ClineDefaultTool.ACT_MODE],
+			focusChainEnabled: true,
+		})
+		const taskProgress = "# Plan\n- [ ] Implement"
+		const block = createBlock(ClineDefaultTool.ACT_MODE, { response: "Starting", task_progress: taskProgress })
+
+		await executor.execute(block, {})
+
+		expect(coordinator.execute).toHaveBeenCalledOnce()
+		expect(updateFCListFromToolResponse).toHaveBeenCalledOnce()
+		expect(updateFCListFromToolResponse).toHaveBeenCalledWith(taskProgress)
+	})
+
+	it.each([
+		{},
+		{ task_progress: "" },
+		{ task_progress: "  \n\t" },
+	])("treats an empty internal task_progress call as a no-op: %j", async (params) => {
+		const { coordinator, executor, say, updateFCListFromToolResponse } = createHarness({
+			allowedNativeToolNames: [],
+			coordinatorHas: false,
+			focusChainEnabled: true,
+		})
+		const block = createBlock("task_progress", params)
+
+		await executor.execute(block, {})
+
+		expect(coordinator.execute).not.toHaveBeenCalled()
+		expect(updateFCListFromToolResponse).not.toHaveBeenCalled()
+		expect(JSON.parse(partialResultRows(say)[0])).toMatchObject({
+			content: [{ text: expect.stringContaining("No TODO list update provided") }],
+			is_error: null,
+		})
+	})
+
 	it("rejects an unadvertised native function non-fatally instead of invoking its registered handler", async () => {
 		const { coordinator, executor, say } = createHarness({ allowedNativeToolNames: [] })
 		const block = createBlock(ClineDefaultTool.FILE_READ)

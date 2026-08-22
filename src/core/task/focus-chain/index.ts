@@ -19,7 +19,10 @@ import {
 	extractFocusChainListFromText,
 	getFocusChainFilePath,
 	getFocusChainHistoryFilePath,
+	getUncheckedFocusChainItemAtIndex,
+	hasChecklistTitle,
 	hasNewChecklistHeader,
+	hasUncheckedFocusChainItem,
 	hasValidTodoItem,
 	isAllItemsCompleted,
 	mergeCompletedItems,
@@ -95,6 +98,11 @@ export class FocusChainManager {
 			const existingChecklist = await this.readFocusChainFromDisk()
 			if (existingChecklist) {
 				this.taskState.currentFocusChainChecklist = existingChecklist
+				this.taskState.currentInProgressItemIndex =
+					getUncheckedFocusChainItemAtIndex(existingChecklist, this.taskState.currentInProgressItemIndex) !== null
+						? this.taskState.currentInProgressItemIndex
+						: null
+				await this.postStateToWebview()
 			}
 
 			// Initialize chokidar watcher
@@ -117,6 +125,7 @@ export class FocusChainManager {
 				})
 				.on("unlink", async () => {
 					this.taskState.currentFocusChainChecklist = null
+					this.taskState.currentInProgressItemIndex = null
 					await this.postStateToWebview()
 				})
 				.on("error", (error) => {
@@ -150,6 +159,11 @@ export class FocusChainManager {
 					// Only update if the content actually changed
 					if (previousList !== markdownTodoList) {
 						this.taskState.currentFocusChainChecklist = markdownTodoList
+						this.taskState.currentInProgressItemIndex =
+							getUncheckedFocusChainItemAtIndex(markdownTodoList, this.taskState.currentInProgressItemIndex) !==
+							null
+								? this.taskState.currentInProgressItemIndex
+								: null
 						this.taskState.todoListWasUpdatedByUser = true
 
 						await this.postStateToWebview()
@@ -187,7 +201,8 @@ export class FocusChainManager {
 
 			const policy = selectFocusChainInstructionPolicy(completedItems, totalItems)
 			const listCurrentProgress = `**Current Progress: ${completedItems}/${totalItems} items completed (${percentComplete}%)**`
-			const noteChecklistInEnv = "(Full checklist shown in environment_details above — only report completed items.)"
+			const noteChecklistInEnv =
+				"(Full checklist shown in environment_details above — report exact completed updates and, when current work changes, one exact unchecked item.)"
 
 			if (policy.kind === "terminal") {
 				return `\n
@@ -340,7 +355,24 @@ export class FocusChainManager {
 					previousList = persistedList
 				}
 			}
-			const isNewChecklist = hasNewChecklistHeader(newContent)
+			const hasChecklistHeader = hasNewChecklistHeader(newContent)
+			const isNewChecklist = hasChecklistTitle(newContent)
+
+			if (hasChecklistHeader && !isNewChecklist) {
+				this.taskState.consecutiveMistakeCount++
+				this.taskState.focusChainRejectionMessage = FocusChainPrompts.titleRequired
+				await this.say("error", "Focus Chain: A new checklist requires a # Title. Update rejected.")
+				this.checkConsecutiveErrors()
+				return
+			}
+
+			if (isNewChecklist && !hasUncheckedFocusChainItem(newContent)) {
+				this.taskState.consecutiveMistakeCount++
+				this.taskState.focusChainRejectionMessage = FocusChainPrompts.uncheckedItemRequired
+				await this.say("error", "Focus Chain: A new checklist requires at least one unchecked item. Update rejected.")
+				this.checkConsecutiveErrors()
+				return
+			}
 
 			if (isNewChecklist) {
 				if (previousList && !isAllItemsCompleted(previousList)) {
@@ -420,6 +452,10 @@ export class FocusChainManager {
 
 			const mergeResult = mergeCompletedItems(previousList, newContent)
 			let mergedText = mergeResult.mergedText
+			let nextCurrentInProgressItemIndex =
+				getUncheckedFocusChainItemAtIndex(mergedText, this.taskState.currentInProgressItemIndex) !== null
+					? this.taskState.currentInProgressItemIndex
+					: null
 			const unmatchedItems = mergeResult.unmatchedItems
 
 			if (unmatchedItems.length > 0) {
@@ -449,7 +485,7 @@ export class FocusChainManager {
 				const progressResult = mergeInProgressItem(mergedText, newContent)
 				if (progressResult.updatedText) {
 					mergedText = progressResult.updatedText
-					this.taskState.currentInProgressItemIndex = progressResult.matchedItemIndex
+					nextCurrentInProgressItemIndex = progressResult.matchedItemIndex
 				}
 				// If in-progress item didn't match, silently ignore
 			}
@@ -515,6 +551,7 @@ export class FocusChainManager {
 			}
 
 			this.taskState.currentFocusChainChecklist = mergedText
+			this.taskState.currentInProgressItemIndex = nextCurrentInProgressItemIndex
 			this.trackTelemetry(mergedText)
 			await this.persistAndNotify(mergedText)
 		} catch (error) {
@@ -586,17 +623,8 @@ export class FocusChainManager {
 
 		const hasPendingRejection = this.taskState.focusChainRejectionMessage !== null
 
-		// Include when all items are completed (to show completion prompt)
-		const allItemsCompleted =
-			this.taskState.currentFocusChainChecklist !== null && isAllItemsCompleted(this.taskState.currentFocusChainChecklist)
-
 		const shouldInclude =
-			reachedReminderInterval ||
-			justSwitchedFromPlanMode ||
-			userUpdatedList ||
-			isFirstApiRequest ||
-			hasPendingRejection ||
-			allItemsCompleted
+			reachedReminderInterval || justSwitchedFromPlanMode || userUpdatedList || isFirstApiRequest || hasPendingRejection
 
 		return shouldInclude
 	}
@@ -673,6 +701,8 @@ export class FocusChainManager {
 			}
 		}
 		this.taskState.currentFocusChainChecklist = normalizedPlan
+		this.taskState.currentInProgressItemIndex = null
+		this.taskState.hasWarnedSkipOrder = false
 		this.taskState.focusChainRejectionMessage = null
 		try {
 			await this.writeFocusChainToDisk(normalizedPlan)

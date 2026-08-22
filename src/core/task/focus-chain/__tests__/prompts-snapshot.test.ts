@@ -123,6 +123,14 @@ describe("Focus Chain Prompt Snapshots", () => {
 		await assertSnapshot("tamperingRejected", FocusChainPrompts.tamperingRejected)
 	})
 
+	it("titleRequired", async () => {
+		await assertSnapshot("titleRequired", FocusChainPrompts.titleRequired)
+	})
+
+	it("uncheckedItemRequired", async () => {
+		await assertSnapshot("uncheckedItemRequired", FocusChainPrompts.uncheckedItemRequired)
+	})
+
 	it("skipOrderWarning", async () => {
 		await assertSnapshot("skipOrderWarning", FocusChainPrompts.skipOrderWarning)
 	})

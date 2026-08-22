@@ -23,6 +23,8 @@ export const FocusChainPrompts = {
 			REMINDER: reminder,
 		}),
 	tamperingRejected: getPrompt("focusChain", "tamperingRejected"),
+	titleRequired: getPrompt("focusChain", "titleRequired"),
+	uncheckedItemRequired: getPrompt("focusChain", "uncheckedItemRequired"),
 	skipOrderRejected: getPrompt("focusChain", "skipOrderRejected"),
 	skipOrderWarning: getPrompt("focusChain", "skipOrderWarning"),
 	itemMismatchRejected: getPrompt("focusChain", "itemMismatchRejected"),

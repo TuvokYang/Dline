@@ -126,6 +126,26 @@ export function extractFocusChainItemsFromText(text: string): string[] {
 	})
 }
 
+/** Return the exact unchecked item at a checklist item index, or null when the index is stale. */
+export function getUncheckedFocusChainItemAtIndex(checklist: string, itemIndex: number | null): string | null {
+	if (itemIndex === null || itemIndex < 0) {
+		return null
+	}
+
+	const item = extractFocusChainItemsFromText(checklist)[itemIndex]?.trim()
+	if (!item || isCompletedFocusChainItem(item)) {
+		return null
+	}
+	return item
+}
+
+/** Format the environment task_progress section without mutating canonical checklist item text. */
+export function formatFocusChainTaskProgressSection(checklist: string, itemIndex: number | null): string {
+	const currentItem = getUncheckedFocusChainItemAtIndex(checklist, itemIndex)
+	const currentSection = currentItem ? `\n\nCURRENT:\n${currentItem}` : ""
+	return `# task_progress\n${checklist}${currentSection}`
+}
+
 /** Return whether text contains at least one standard TODO item with non-empty item text. */
 export function hasValidTodoItem(text: string): boolean {
 	return text.split("\n").some((line) => parseFocusChainItem(line.trim()) !== null)
@@ -225,6 +245,16 @@ export function hasNewChecklistHeader(text: string): boolean {
 		const trimmed = line.trim()
 		return trimmed.startsWith("# ") || trimmed.startsWith("## ")
 	})
+}
+
+/** Return whether text contains the required top-level checklist title. */
+export function hasChecklistTitle(text: string): boolean {
+	return text.split("\n").some((line) => line.trim().startsWith("# "))
+}
+
+/** Return whether text contains at least one non-empty unchecked checklist item. */
+export function hasUncheckedFocusChainItem(text: string): boolean {
+	return extractFocusChainItemsFromText(text).some((item) => !isCompletedFocusChainItem(item))
 }
 
 /**

@@ -89,12 +89,12 @@ describe("skip-order detection via updateFCListFromToolResponse", () => {
 
 		// generateFocusChainInstructions should return the warning and clear it
 		const instructions = mgr.generateFocusChainInstructions()
-		expect(instructions).toContain("WARNING")
+		expect(instructions).toContain("TODO list warning")
 		expect(ts.focusChainRejectionMessage).toBeNull() // cleared after read
 
 		// Second call: no pending rejection
 		const instructions2 = mgr.generateFocusChainInstructions()
-		expect(instructions2).not.toContain("WARNING")
+		expect(instructions2).not.toContain("TODO list warning")
 	})
 
 	it("second skip-order violation: rejects update", async () => {
@@ -114,7 +114,7 @@ describe("skip-order detection via updateFCListFromToolResponse", () => {
 		)
 
 		// Second offense: rejected (message has examples placeholder replaced)
-		expect(ts.focusChainRejectionMessage).toContain("REJECTED")
+		expect(ts.focusChainRejectionMessage).toContain("update rejected")
 		expect(ts.consecutiveMistakeCount).toBe(1)
 		// Checklist was NOT changed (rejected)
 		expect(ts.currentFocusChainChecklist).toBe(previousChecklist)
@@ -122,7 +122,29 @@ describe("skip-order detection via updateFCListFromToolResponse", () => {
 
 		// Rejection message is preserved (not cleared by persistAndNotify — was rejected before persist)
 		const instructions = mgr.generateFocusChainInstructions()
-		expect(instructions).toContain("REJECTED")
+		expect(instructions).toContain("update rejected")
+	})
+
+	it("does not commit a replacement current item when a skip-order update is rejected", async () => {
+		const ts = new TaskState()
+		ts.currentFocusChainChecklist = checklist([{ text: "Task A" }, { text: "Task B" }, { text: "Task C" }])
+		ts.currentInProgressItemIndex = 0
+		ts.hasWarnedSkipOrder = true
+		const { fn: say } = mockSay()
+		const mgr = createManager(ts, say)
+
+		const previousChecklist = ts.currentFocusChainChecklist
+		await mgr.updateFCListFromToolResponse(
+			report([
+				{ done: true, text: "Task A" },
+				{ done: true, text: "Task C" },
+				{ done: false, text: "Task B" },
+			]),
+		)
+
+		expect(ts.focusChainRejectionMessage).toContain("update rejected")
+		expect(ts.currentFocusChainChecklist).toBe(previousChecklist)
+		expect(ts.currentInProgressItemIndex).toBe(0)
 	})
 
 	it("cross-section skip-order: global counter applies", async () => {
@@ -168,7 +190,7 @@ describe("skip-order detection via updateFCListFromToolResponse", () => {
 			]),
 		)
 
-		expect(ts.focusChainRejectionMessage).toContain("REJECTED")
+		expect(ts.focusChainRejectionMessage).toContain("update rejected")
 		expect(ts.consecutiveMistakeCount).toBe(2)
 		expect(ts.currentFocusChainChecklist).toBe(previousChecklist)
 	})
@@ -216,9 +238,54 @@ describe("skip-order detection via updateFCListFromToolResponse", () => {
 		expect(mgr.shouldIncludeFocusChainInstructions()).toBe(true)
 		// generateFocusChainInstructions must return the warning
 		const injected = mgr.generateFocusChainInstructions()
-		expect(injected).toContain("WARNING")
+		expect(injected).toContain("TODO list warning")
 		// After read, cleared
 		expect(ts.focusChainRejectionMessage).toBeNull()
+	})
+
+	it("clears the current item when that item is completed without a replacement", async () => {
+		const ts = new TaskState()
+		ts.currentFocusChainChecklist = checklist([{ text: "Task A" }, { text: "Task B" }])
+		ts.currentInProgressItemIndex = 0
+		const { fn: say } = mockSay()
+		const mgr = createManager(ts, say)
+
+		await mgr.updateFCListFromToolResponse(report([{ done: true, text: "Task A" }]))
+
+		expect(ts.currentFocusChainChecklist).toContain("- [x] Task A")
+		expect(ts.currentInProgressItemIndex).toBeNull()
+	})
+
+	it("switches current work when a completed update includes a new unchecked item", async () => {
+		const ts = new TaskState()
+		ts.currentFocusChainChecklist = checklist([{ text: "Task A" }, { text: "Task B" }, { text: "Task C" }])
+		ts.currentInProgressItemIndex = 0
+		const { fn: say } = mockSay()
+		const mgr = createManager(ts, say)
+
+		await mgr.updateFCListFromToolResponse(
+			report([
+				{ done: true, text: "Task A" },
+				{ done: false, text: "Task B" },
+				{ done: false, text: "Task C" },
+			]),
+		)
+
+		expect(ts.currentInProgressItemIndex).toBe(1)
+	})
+
+	it("applies the reminder interval to a completed checklist", () => {
+		const ts = new TaskState()
+		ts.currentFocusChainChecklist = "# Test Plan\n- [x] Task A"
+		ts.apiRequestsSinceLastTodoUpdate = 5
+		const { fn: say } = mockSay()
+		const mgr = createManager(ts, say)
+
+		expect(mgr.shouldIncludeFocusChainInstructions()).toBe(false)
+
+		ts.apiRequestsSinceLastTodoUpdate = 6
+		expect(mgr.shouldIncludeFocusChainInstructions()).toBe(true)
+		expect(mgr.generateFocusChainInstructions()).toContain("All 1 items completed")
 	})
 
 	it("backfill of historically skipped item is accepted after first-skip warning", async () => {
@@ -305,8 +372,8 @@ describe("skip-order detection via updateFCListFromToolResponse", () => {
 		// Second skip SHOULD be rejected because hasWarnedSkipOrder is true
 		// and E is a NEWLY completed item that skips C
 		// Note: skipOrderRejected template has {{examples}} replaced with actual items
-		expect(ts.focusChainRejectionMessage).toContain("SECOND skip-order violation")
-		expect(ts.focusChainRejectionMessage).toContain("REJECTED")
+		expect(ts.focusChainRejectionMessage).toContain("second order violation")
+		expect(ts.focusChainRejectionMessage).toContain("update rejected")
 		expect(ts.focusChainRejectionMessage).toContain("Task C")
 		expect(ts.consecutiveMistakeCount).toBeGreaterThanOrEqual(1)
 		expect(ts.currentFocusChainChecklist).not.toContain("- [x] Task E")

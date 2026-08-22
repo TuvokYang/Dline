@@ -75,6 +75,11 @@ body:focus-within .code-block-scrollable {
 	border-color: var(--vscode-scrollbarSlider-activeBackground);
 }
 
+/* Focus Chain uses a bounded panel, so keep its scroll affordance visible. */
+.focus-chain-scrollable {
+	border-color: var(--vscode-scrollbarSlider-background);
+}
+
 /*
 Fix VSCode ignoring webkit scrollbar modifiers
 https://github.com/microsoft/vscode/issues/213045

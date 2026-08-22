@@ -176,7 +176,7 @@ const parseCurrentTodoInfo = (text: string): TodoInfo | null => {
 
 // History entry with timestamp, main title and sections
 interface HistorySection {
-	title: string
+	title: string | null
 	items: string[]
 }
 
@@ -191,11 +191,11 @@ const parseHistoryContent = (historyText: string): { entries: HistoryEntry[] } =
 	const entries: HistoryEntry[] = []
 	const lines = historyText.split("\n")
 	let currentEntry: HistoryEntry | null = null
-	let currentSectionTitle = ""
+	let currentSectionTitle: string | null = null
 	let currentSectionItems: string[] = []
 
 	const flushSection = () => {
-		if (currentEntry && currentSectionTitle && currentSectionItems.length > 0) {
+		if (currentEntry && currentSectionItems.length > 0) {
 			currentEntry.sections.push({ title: currentSectionTitle, items: [...currentSectionItems] })
 		}
 	}
@@ -206,7 +206,7 @@ const parseHistoryContent = (historyText: string): { entries: HistoryEntry[] } =
 			entries.push(currentEntry)
 			currentEntry = null
 		}
-		currentSectionTitle = ""
+		currentSectionTitle = null
 		currentSectionItems = []
 	}
 
@@ -320,7 +320,10 @@ export const FocusChain: React.FC<FocusChainProps> = memo(
 				}}>
 				<ToDoListHeader isExpanded={isExpanded} mainTitle={mainTitle} todoInfo={todoInfo} />
 				{isExpanded && (
-					<div className="mx-1 pb-2 px-1 relative" onClick={handleEditClick}>
+					<div
+						className="focus-chain-scrollable scrollable mx-1 max-h-[40vh] overflow-y-auto pb-2 px-1 relative"
+						data-testid="focus-chain-expanded-content"
+						onClick={handleEditClick}>
 						{/* Main Title */}
 						{mainTitle && <div className="text-xs font-bold text-foreground/80 mb-1.5">{mainTitle}</div>}
 						{/* Active Tasks Section */}
@@ -334,7 +337,7 @@ export const FocusChain: React.FC<FocusChainProps> = memo(
 						{/* Completed History Section */}
 						{hasHistory && (
 							<div className="border-t border-border/50 pt-2 mt-2">
-								<div className="max-h-[40vh] overflow-y-auto flex flex-col gap-2">
+								<div className="flex flex-col gap-2" data-testid="focus-chain-history">
 									{historyEntries.map((entry, entryIdx) => (
 										<div className={entryIdx > 0 ? "border-t border-border/20 pt-2" : ""} key={entryIdx}>
 											<div className="text-[10px] font-semibold text-muted-foreground/50 mb-1">
@@ -348,21 +351,20 @@ export const FocusChain: React.FC<FocusChainProps> = memo(
 											<div className="opacity-75">
 												{entry.sections.map((section, sectionIdx) => (
 													<div className="mb-1 last:mb-0" key={sectionIdx}>
-														<div className="text-[10px] font-medium text-muted-foreground/70 mb-0.5">
-															{section.title}
-														</div>
+														{section.title && (
+															<div className="text-[10px] font-medium text-muted-foreground/70 mb-0.5">
+																{section.title}
+															</div>
+														)}
 														{section.items.map((item, itemIdx) => {
 															const isCompleted =
 																item.startsWith("- [x]") || item.startsWith("- [X]")
 															return (
-																<div className="flex items-start gap-1 pl-1" key={itemIdx}>
+																<div className="flex items-center gap-1 pl-1" key={itemIdx}>
 																	{isCompleted ? (
-																		<CheckIcon
-																			className="mt-0.5 shrink-0 text-success"
-																			size={8}
-																		/>
+																		<CheckIcon className="shrink-0 text-success" size={8} />
 																	) : (
-																		<XIcon className="mt-0.5 shrink-0 text-error" size={8} />
+																		<XIcon className="shrink-0 text-error" size={8} />
 																	)}
 																	<span className="text-[11px] text-muted-foreground">
 																		{item.replace(/^-\s*\[[xX ]\]\s*/, "")}

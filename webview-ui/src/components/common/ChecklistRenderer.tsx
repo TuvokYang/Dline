@@ -141,7 +141,10 @@ const ChecklistRenderer: React.FC<ChecklistRendererProps> = ({ text }) => {
 
 	return (
 		<div
-			className={cn("text-sm flex flex-col gap-1", items.length >= 10 ? "max-h-52 overflow-y-auto" : "h-auto visible")}
+			className={cn(
+				"scrollable text-sm flex flex-col gap-1",
+				items.length >= 10 ? "max-h-52 overflow-y-auto" : "h-auto visible",
+			)}
 			onScroll={handleScroll}
 			ref={containerRef}
 			style={{
@@ -158,9 +161,8 @@ const ChecklistRenderer: React.FC<ChecklistRendererProps> = ({ text }) => {
 						// Calculate global index for key generation
 						const _globalIdx = items.indexOf(item)
 						return (
-							<div className="flex items-start gap-1.5 p-0.5" key={`checklist-item-${sectionIdx}-${itemIdx}`}>
-								<span
-									className={cn("text-sm shrink-0 mt-0.5", item.checked ? "text-success" : "text-foreground")}>
+							<div className="flex items-center gap-1.5 p-0.5" key={`checklist-item-${sectionIdx}-${itemIdx}`}>
+								<span className={cn("text-sm shrink-0", item.checked ? "text-success" : "text-foreground")}>
 									{item.checked ? <CheckIcon size={10} /> : <CircleIcon size={10} />}
 								</span>
 								<div

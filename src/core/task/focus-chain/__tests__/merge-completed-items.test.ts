@@ -7,7 +7,13 @@
  */
 
 import { describe, expect, it } from "vitest"
-import { hasValidTodoItem, mergeCompletedItems, mergeInProgressItem } from "../file-utils"
+import {
+	formatFocusChainTaskProgressSection,
+	getUncheckedFocusChainItemAtIndex,
+	hasValidTodoItem,
+	mergeCompletedItems,
+	mergeInProgressItem,
+} from "../file-utils"
 
 /**
  * Helper: build a simple checklist with sections and items.
@@ -164,5 +170,32 @@ describe("mergeInProgressItem", () => {
 		expect(result.matchedItem).toBeNull()
 		expect(result.matchedItemIndex).toBeNull()
 		expect(result.updatedText).toBeNull()
+	})
+})
+
+describe("focus chain current-item projection", () => {
+	const checklist = `# Test Plan\n## Work\n- [x] Inspect prompts\n- [ ] Update projection\n- [ ] Run tests`
+
+	it("returns only an unchecked item for a valid current index", () => {
+		expect(getUncheckedFocusChainItemAtIndex(checklist, 1)).toBe("- [ ] Update projection")
+	})
+
+	it.each([0, 3, -1, null])("rejects completed, out-of-range, or absent current indexes: %s", (itemIndex) => {
+		expect(getUncheckedFocusChainItemAtIndex(checklist, itemIndex)).toBeNull()
+	})
+
+	it("renders CURRENT as separate metadata without mutating the checklist item", () => {
+		const section = formatFocusChainTaskProgressSection(checklist, 1)
+
+		expect(section).toBe(`${"# task_progress"}\n${checklist}\n\nCURRENT:\n- [ ] Update projection`)
+		expect(section).not.toContain("<- CURRENT")
+		expect(section).not.toContain("Update projection CURRENT")
+	})
+
+	it("omits CURRENT when the stored index points to a completed item", () => {
+		const section = formatFocusChainTaskProgressSection(checklist, 0)
+
+		expect(section).toBe(`${"# task_progress"}\n${checklist}`)
+		expect(section).not.toContain("CURRENT:")
 	})
 })

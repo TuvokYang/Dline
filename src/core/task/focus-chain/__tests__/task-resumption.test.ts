@@ -44,6 +44,7 @@ describe("FocusChainManager - Task Resumption", () => {
 
 		// Create TaskState and FocusChainManager
 		const taskState = new TaskState()
+		const postStateToWebview = vi.fn().mockResolvedValue(undefined)
 		expect(taskState.currentFocusChainChecklist).toBeNull() // Initially null
 
 		manager = new FocusChainManager({
@@ -51,7 +52,7 @@ describe("FocusChainManager - Task Resumption", () => {
 			taskState,
 			getMode: () => "act",
 			stateManager: {} as any,
-			postStateToWebview: vi.fn(),
+			postStateToWebview,
 			say: vi.fn(),
 			focusChainSettings: { enabled: true, remindClineInterval: 10 },
 		})
@@ -64,6 +65,31 @@ describe("FocusChainManager - Task Resumption", () => {
 		expect(taskState.currentFocusChainChecklist).toContain("# Test Task")
 		expect(taskState.currentFocusChainChecklist).toContain("- [x] Completed item")
 		expect(taskState.currentFocusChainChecklist).toContain("- [ ] Pending item")
+		expect(postStateToWebview).toHaveBeenCalledOnce()
+	})
+
+	it("clears a stale current index when loading a completed persisted item", async () => {
+		const existingContent = `# Test Task
+- [x] Completed item
+- [ ] Pending item`
+		const fileContent = createFocusChainMarkdownContent(taskId, existingContent)
+		await fs.writeFile(focusChainFilePath, fileContent, "utf8")
+
+		const taskState = new TaskState()
+		taskState.currentInProgressItemIndex = 0
+		manager = new FocusChainManager({
+			taskId,
+			taskState,
+			getMode: () => "act",
+			stateManager: {} as any,
+			postStateToWebview: vi.fn().mockResolvedValue(undefined),
+			say: vi.fn(),
+			focusChainSettings: { enabled: true, remindClineInterval: 10 },
+		})
+
+		await manager.setupFocusChainFileWatcher()
+
+		expect(taskState.currentInProgressItemIndex).toBeNull()
 	})
 
 	it("should create focus chain file for new tasks", async () => {
@@ -123,6 +149,53 @@ describe("FocusChainManager - Task Resumption", () => {
 		expect(mockSay).not.toHaveBeenCalled()
 	})
 
+	it("rejects a complete checklist that has a Section but no required Title", async () => {
+		const taskState = new TaskState()
+		const mockSay = vi.fn()
+		manager = new FocusChainManager({
+			taskId,
+			taskState,
+			getMode: () => "act",
+			stateManager: {
+				getGlobalSettingsKey: vi.fn(() => 3),
+			} as any,
+			postStateToWebview: vi.fn(),
+			say: mockSay,
+			focusChainSettings: { enabled: true, remindClineInterval: 10 },
+		})
+
+		await manager.updateFCListFromToolResponse("## Phase\n- [ ] Pending item")
+
+		expect(taskState.currentFocusChainChecklist).toBeNull()
+		expect(taskState.focusChainRejectionMessage).toContain("requires a top-level `# Title`")
+		expect(mockSay).toHaveBeenCalledWith("error", "Focus Chain: A new checklist requires a # Title. Update rejected.")
+	})
+
+	it("rejects a new complete checklist that has no unchecked work", async () => {
+		const taskState = new TaskState()
+		const mockSay = vi.fn()
+		manager = new FocusChainManager({
+			taskId,
+			taskState,
+			getMode: () => "act",
+			stateManager: {
+				getGlobalSettingsKey: vi.fn(() => 3),
+			} as any,
+			postStateToWebview: vi.fn(),
+			say: mockSay,
+			focusChainSettings: { enabled: true, remindClineInterval: 10 },
+		})
+
+		await manager.updateFCListFromToolResponse("# Completed Phase\n- [x] Already done")
+
+		expect(taskState.currentFocusChainChecklist).toBeNull()
+		expect(taskState.focusChainRejectionMessage).toContain("requires at least one non-empty `- [ ]` item")
+		expect(mockSay).toHaveBeenCalledWith(
+			"error",
+			"Focus Chain: A new checklist requires at least one unchecked item. Update rejected.",
+		)
+	})
+
 	it("ignores non-empty task_progress content without a valid TODO item", async () => {
 		const taskState = new TaskState()
 		const mockSay = vi.fn()
@@ -165,6 +238,28 @@ describe("FocusChainManager - Task Resumption", () => {
 
 		expect(taskState.currentFocusChainChecklist).toContain("- [x] Step 2")
 		expect(mockSay.mock.calls.filter((call) => call[0] === "error")).toEqual([])
+	})
+
+	it("clears current and skip-order state when a user-approved plan replaces the checklist", async () => {
+		const taskState = new TaskState()
+		taskState.currentFocusChainChecklist = "# Old Plan\n- [ ] Old item"
+		taskState.currentInProgressItemIndex = 0
+		taskState.hasWarnedSkipOrder = true
+		manager = new FocusChainManager({
+			taskId,
+			taskState,
+			getMode: () => "act",
+			stateManager: {} as any,
+			postStateToWebview: vi.fn(),
+			say: vi.fn().mockResolvedValue(1),
+			focusChainSettings: { enabled: true, remindClineInterval: 10 },
+		})
+
+		await manager.forceReplaceFocusChain("# New Plan\n- [ ] New item")
+
+		expect(taskState.currentFocusChainChecklist).toBe("# New Plan\n- [ ] New item")
+		expect(taskState.currentInProgressItemIndex).toBeNull()
+		expect(taskState.hasWarnedSkipOrder).toBe(false)
 	})
 
 	it("should prevent 'no task plan exists' error after resumption", async () => {
