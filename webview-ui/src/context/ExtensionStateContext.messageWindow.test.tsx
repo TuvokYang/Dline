@@ -459,6 +459,51 @@ describe("ExtensionStateContext persisted message reconciliation", () => {
 		).toBeTruthy()
 	})
 
+	it("replaces a stale realtime partial when durable state publishes a different tail at the same total", async () => {
+		const initial = convertClineMessageToProto({ ts: 10, type: "say", say: "text", text: "assistant" })
+		const stalePartial = convertClineMessageToProto({
+			ts: 20,
+			type: "say",
+			say: "text",
+			text: "stale partial",
+			partial: true,
+		})
+		const durableReplacement = convertClineMessageToProto({
+			ts: 30,
+			type: "say",
+			say: "text",
+			text: "durable replacement",
+			partial: false,
+		})
+		vi.mocked(TaskServiceClient.fetchMessage)
+			.mockResolvedValueOnce({ messages: [initial], startIndex: 0 })
+			.mockResolvedValueOnce({ messages: [initial, durableReplacement], startIndex: 0 })
+
+		render(
+			<ExtensionStateContextProvider>
+				<MessageProbe />
+			</ExtensionStateContextProvider>,
+		)
+		await waitFor(() => expect(subscriptions.state).toBeDefined())
+		act(() => {
+			subscriptions.state?.onResponse({ stateJson: JSON.stringify(stateSnapshot({ revision: 1, total: 1 })) })
+		})
+		await waitFor(() => expect(screen.getByText("assistant")).toBeVisible())
+
+		act(() => {
+			subscriptions.partial?.onResponse(stalePartial)
+		})
+		await waitFor(() => expect(screen.getByText("stale partial")).toBeVisible())
+
+		act(() => {
+			subscriptions.state?.onResponse({ stateJson: JSON.stringify(stateSnapshot({ revision: 2, total: 2 })) })
+		})
+
+		await waitFor(() => expect(TaskServiceClient.fetchMessage).toHaveBeenCalledTimes(2))
+		await waitFor(() => expect(screen.getByText("durable replacement")).toBeVisible())
+		expect(screen.queryByText("stale partial")).toBeNull()
+	})
+
 	it("deduplicates a delayed partial event after the persisted tail has already been recovered", async () => {
 		const initial = convertClineMessageToProto({ ts: 10, type: "say", say: "text", text: "assistant" })
 		const feedback = convertClineMessageToProto({ ts: 20, type: "say", say: "user_feedback", text: "visible feedback" })

@@ -471,7 +471,26 @@ export const ExtensionStateContextProvider: React.FC<{
 			return
 		}
 		const knownEndIndex = firstItemIndex + clineMessages.length
-		if (knownEndIndex < total && !refetchLockRef.current) {
+		const localTail = clineMessages.at(-1)
+		const durableTailMayHaveReplacedPartial =
+			total > prevTotalRef.current && knownEndIndex === total && localTail?.partial === true
+		if (durableTailMayHaveReplacedPartial && !refetchLockRef.current) {
+			const scheduledTaskViewKey = currentTaskViewKeyRef.current
+			refetchLockRef.current = true
+			TaskServiceClient.fetchMessage(FetchMessageRequest.create({ referenceIndex: -1, count: 200 }))
+				.then((resp) => {
+					if (currentTaskViewKeyRef.current !== scheduledTaskViewKey) {
+						return
+					}
+					const converted = resp.messages.map((message) => convertProtoToClineMessage(message))
+					setClineMessages(converted)
+					setFirstItemIndex(Math.max(0, resp.startIndex))
+				})
+				.catch(() => {})
+				.finally(() => {
+					refetchLockRef.current = false
+				})
+		} else if (knownEndIndex < total && !refetchLockRef.current) {
 			const scheduledTaskViewKey = currentTaskViewKeyRef.current
 			refetchLockRef.current = true
 			TaskServiceClient.fetchMessage(FetchMessageRequest.create({ referenceIndex: -1, count: 200 }))
