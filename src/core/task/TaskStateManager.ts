@@ -163,6 +163,18 @@ export class TaskStateManager {
 		this.globalSm.markTaskSettingDirty(this.taskId, "actModeProfile")
 	}
 
+	/** Persist a resolved identity to one split binding or both unified bindings. */
+	adoptResolvedProfileIdentity(mode: Mode, profileId: string, profileName: string): void {
+		if (this.globalSm.getCanonicalSettingsKey("planActSeparateModelsSetting")) {
+			this.adoptProfileIdentity(mode, profileId, profileName)
+			return
+		}
+		this.setProfileIdentityBindings({
+			plan: { profileId, profileName },
+			act: { profileId, profileName },
+		})
+	}
+
 	/**
 	 * Atomically update one or both task-local Profile bindings.
 	 *

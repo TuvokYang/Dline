@@ -41,6 +41,35 @@ describe("updateSettings profile isolation", () => {
 		expect(rebuildApiHandler.mock.calls).to.have.length(0)
 		expect(configureGlobalComponents.mock.calls).to.have.length(1)
 	})
+
+	it("collapses active task bindings when Profile split is disabled", async () => {
+		const commitProfileBindings = vi.fn().mockResolvedValue(undefined)
+		const controller = {
+			configureGlobalComponents: vi.fn().mockResolvedValue({ components: [], durationMs: 0 }),
+			stateManager: {
+				flushPendingState: vi.fn().mockResolvedValue(undefined),
+				setGlobalState: vi.fn(),
+				setGlobalStateBatch: vi.fn(),
+				getCanonicalSettingsKey: vi.fn((key: string) => (key === "planActSeparateModelsSetting" ? true : undefined)),
+				getGlobalSettingsKey: vi.fn((key: string) => (key === "planActSeparateModelsSetting" ? true : undefined)),
+			},
+			task: {
+				commitProfileBindings,
+				taskSm: {
+					mode: "act",
+					actModeProfileId: "act-profile-id",
+					actModeProfile: "act-profile",
+				},
+			},
+			postStateToWebview: vi.fn().mockResolvedValue(undefined),
+		} as unknown as Controller
+
+		await updateSettings(controller, UpdateSettingsRequest.create({ planActSeparateModelsSetting: false }))
+
+		expect(commitProfileBindings.mock.calls).to.deep.equal([
+			[{ profileId: "act-profile-id", profileName: "act-profile" }, ["plan", "act"]],
+		])
+	})
 })
 
 describe("updateTaskSettings account usage", () => {

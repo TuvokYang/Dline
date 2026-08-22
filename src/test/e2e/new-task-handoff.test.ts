@@ -27,6 +27,7 @@ async function configurePlanModeProfiles(dlineDir: string): Promise<void> {
 		`${JSON.stringify(
 			{
 				...settings,
+				mode: "plan",
 				planActSeparateModelsSetting: true,
 				planModeProfile: E2E_PROFILE_NAMES.mockOpenAiResponses,
 				actModeProfile: E2E_PROFILE_NAMES.mockDeepSeek,

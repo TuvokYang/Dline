@@ -116,8 +116,25 @@ export async function updateSettings(controller: Controller, request: UpdateSett
 			await controller.updateTelemetrySetting(request.telemetrySetting as TelemetrySetting)
 		}
 
-		// Update plan/act separate models setting
+		// Update plan/act separate models setting. An active Task must collapse
+		// its split bindings before the global unified-mode default is published.
 		if (request.planActSeparateModelsSetting !== undefined) {
+			const wasSeparate = controller.stateManager.getCanonicalSettingsKey("planActSeparateModelsSetting")
+			if (wasSeparate && !request.planActSeparateModelsSetting && controller.task) {
+				const taskState = controller.task.taskSm
+				const profileId = taskState.mode === "plan" ? taskState.planModeProfileId : taskState.actModeProfileId
+				const profileName = taskState.mode === "plan" ? taskState.planModeProfile : taskState.actModeProfile
+				if (!profileName) {
+					throw new Error("Cannot disable Profile split without an active task Profile binding.")
+				}
+				await controller.task.commitProfileBindings(profileId ? { profileId, profileName } : profileName, ["plan", "act"])
+				controller.stateManager.setGlobalStateBatch({
+					planModeProfileId: profileId,
+					planModeProfile: profileName,
+					actModeProfileId: profileId,
+					actModeProfile: profileName,
+				})
+			}
 			controller.stateManager.setGlobalState("planActSeparateModelsSetting", request.planActSeparateModelsSetting)
 		}
 

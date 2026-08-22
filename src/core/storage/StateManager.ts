@@ -48,6 +48,16 @@ export interface PersistenceErrorEvent {
 	error: Error
 }
 
+interface ProfileBinding {
+	profileId?: string
+	profileName?: string
+}
+
+interface ProfileBindings {
+	plan?: ProfileBinding
+	act?: ProfileBinding
+}
+
 export type StateSyncEvent =
 	| { readonly source: "settings"; readonly commit: SettingsCommit }
 	| { readonly source: "task_history" }
@@ -1473,6 +1483,51 @@ export class StateManager {
 		return this.secretsCache[key]
 	}
 
+	private readProfileBinding(source: Partial<Settings> | undefined, mode: "plan" | "act"): ProfileBinding | undefined {
+		const profileId = mode === "plan" ? source?.planModeProfileId : source?.actModeProfileId
+		const profileName = mode === "plan" ? source?.planModeProfile : source?.actModeProfile
+		return profileId !== undefined || profileName !== undefined ? { profileId, profileName } : undefined
+	}
+
+	private selectUnifiedProfileBinding(bindings: ProfileBindings, mode: "plan" | "act"): ProfileBinding | undefined {
+		const current = bindings[mode]
+		const alternate = bindings[mode === "plan" ? "act" : "plan"]
+		const complete = (binding: ProfileBinding | undefined): boolean =>
+			binding?.profileId !== undefined && binding.profileName !== undefined
+		return complete(current) ? current : complete(alternate) ? alternate : (current ?? alternate)
+	}
+
+	private resolveProfileBindings(taskId?: string): ProfileBindings {
+		const separateModels = this.getCanonicalSettingsKey("planActSeparateModelsSetting")
+		const taskCache = taskId ? this.taskStateCache.get(taskId) : undefined
+		const taskBindings: ProfileBindings = {
+			plan: this.readProfileBinding(taskCache, "plan"),
+			act: this.readProfileBinding(taskCache, "act"),
+		}
+		const hasTaskBinding = taskBindings.plan !== undefined || taskBindings.act !== undefined
+		if (hasTaskBinding) {
+			if (separateModels) return taskBindings
+			const taskMode = taskCache?.mode === "act" ? "act" : "plan"
+			const binding = this.selectUnifiedProfileBinding(taskBindings, taskMode)
+			return { plan: binding, act: binding }
+		}
+
+		const globalBindings: ProfileBindings = {
+			plan: {
+				profileId: this.getCanonicalSettingsKey("planModeProfileId"),
+				profileName: this.getCanonicalSettingsKey("planModeProfile"),
+			},
+			act: {
+				profileId: this.getCanonicalSettingsKey("actModeProfileId"),
+				profileName: this.getCanonicalSettingsKey("actModeProfile"),
+			},
+		}
+		if (separateModels) return globalBindings
+		const globalMode = this.getCanonicalSettingsKey("mode") === "act" ? "act" : "plan"
+		const binding = this.selectUnifiedProfileBinding(globalBindings, globalMode)
+		return { plan: binding, act: binding }
+	}
+
 	/**
 	 * Construct API configuration from cached component keys.
 	 * Additionally fills in apiKey fields from data/secrets/api_keys.json
@@ -1509,6 +1564,7 @@ export class StateManager {
 		}
 
 		const taskCache = taskId ? this.taskStateCache.get(taskId) : undefined
+		const profileBindings = this.resolveProfileBindings(taskId)
 		const planModeReasoningOverride = taskReasoningOverrideFromFields(
 			{
 				kind: taskCache?.planModeReasoningOverrideKind,
@@ -1535,10 +1591,10 @@ export class StateManager {
 		})
 
 		return {
-			planModeProfileId: this.getSettingWithOverrideForTask("planModeProfileId", taskId),
-			planModeProfile: this.getSettingWithOverrideForTask("planModeProfile", taskId),
-			actModeProfileId: this.getSettingWithOverrideForTask("actModeProfileId", taskId),
-			actModeProfile: this.getSettingWithOverrideForTask("actModeProfile", taskId),
+			planModeProfileId: profileBindings.plan?.profileId,
+			planModeProfile: profileBindings.plan?.profileName,
+			actModeProfileId: profileBindings.act?.profileId,
+			actModeProfile: profileBindings.act?.profileName,
 			...(planModeReasoningOverride && { planModeReasoningOverride }),
 			...(actModeReasoningOverride && { actModeReasoningOverride }),
 			...(planModeServiceTierOverride && { planModeServiceTierOverride }),

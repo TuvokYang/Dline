@@ -5,7 +5,9 @@ import type { StartSuccessorTaskPostCommitDirective } from "../tools/ToolExecuti
 /** Task-local bindings intentionally inherited by an independent New Task successor. */
 export interface NewTaskInheritedSettings {
 	readonly mode: Mode
+	readonly planModeProfileId?: string
 	readonly planModeProfile?: string
+	readonly actModeProfileId?: string
 	readonly actModeProfile?: string
 }
 
@@ -33,7 +35,9 @@ export interface NewTaskHandoff {
 /** Read-only source for capturing task-local bindings without global active-task routing. */
 export interface NewTaskSettingsSource {
 	readonly mode: Mode
+	readonly planModeProfileId?: string
 	readonly planModeProfile?: string
+	readonly actModeProfileId?: string
 	readonly actModeProfile?: string
 }
 
@@ -52,7 +56,9 @@ export function createNewTaskHandoff(
 		initialUserContent: [...initialUserContent],
 		taskSettings: {
 			mode: source.mode,
+			...(source.planModeProfileId === undefined ? {} : { planModeProfileId: source.planModeProfileId }),
 			...(source.planModeProfile === undefined ? {} : { planModeProfile: source.planModeProfile }),
+			...(source.actModeProfileId === undefined ? {} : { actModeProfileId: source.actModeProfileId }),
 			...(source.actModeProfile === undefined ? {} : { actModeProfile: source.actModeProfile }),
 		},
 	}

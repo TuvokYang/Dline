@@ -77,6 +77,7 @@ describe("TaskStateManager - Multi-window Profile Isolation", () => {
 	it("builds API configuration for an explicit task without using the active task cursor", async () => {
 		await sm.loadTaskSettings("task-window-1")
 		await sm.loadTaskSettings("task-window-2")
+		sm.setGlobalState("planActSeparateModelsSetting", true)
 		sm.setTaskSettingsBatch("task-window-1", {
 			mode: "plan",
 			planModeProfile: "deepseek-plan",
@@ -110,6 +111,29 @@ describe("TaskStateManager - Multi-window Profile Isolation", () => {
 
 		expect(newTaskConfig.planModeProfile).toBe("global-chat")
 		expect(newTaskConfig.actModeProfile).toBe("global-chat")
+	})
+
+	it("reuses an existing task identity for a missing mode when Profile split is disabled", async () => {
+		await sm.loadTaskSettings("task-unified-partial")
+		sm.setGlobalState("planActSeparateModelsSetting", false)
+		sm.setGlobalState("planModeProfileId", "global-id")
+		sm.setGlobalState("planModeProfile", "global-deepseek")
+		sm.setGlobalState("actModeProfileId", "global-id")
+		sm.setGlobalState("actModeProfile", "global-deepseek")
+		sm.setTaskSettingsBatch("task-unified-partial", {
+			mode: "act",
+			planModeProfileId: "task-id",
+			planModeProfile: "task-responses",
+		})
+
+		const configuration = sm.getApiConfigurationForTask("task-unified-partial")
+
+		expect(configuration).toMatchObject({
+			planModeProfileId: "task-id",
+			planModeProfile: "task-responses",
+			actModeProfileId: "task-id",
+			actModeProfile: "task-responses",
+		})
 	})
 
 	it("clears only the requested task cache when another window is active", async () => {
