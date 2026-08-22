@@ -31,6 +31,7 @@ function redactSensitiveText(text: string): string {
 
 type ActivityListener = (update: TaskActivityUpdate) => void | Promise<void>
 type CancelActivity = () => void | Promise<void>
+type ControlActivity = () => boolean | Promise<boolean>
 
 export interface TaskActivityPersistencePort {
 	load(): Promise<TaskActivityRecord[]>
@@ -49,12 +50,16 @@ export interface CreateTaskActivityInput {
 	parentActivityId?: string
 	status?: TaskActivityStatus
 	cancel?: CancelActivity
+	finish?: ControlActivity
+	retry?: ControlActivity
 }
 
 /** Task-local activity state with bounded output and batched incremental notifications. */
 export class TaskActivityStore {
 	private readonly activities = new Map<string, TaskActivityRecord>()
 	private readonly cancellers = new Map<string, CancelActivity>()
+	private readonly finishers = new Map<string, ControlActivity>()
+	private readonly retriers = new Map<string, ControlActivity>()
 	private readonly backgroundMovers = new Map<string, () => Promise<boolean>>()
 	private readonly listeners = new Map<ActivityListener, Promise<void>>()
 	private readonly dirtyIds = new Set<string>()
@@ -104,6 +109,8 @@ export class TaskActivityStore {
 		const existing = this.activities.get(input.activityId)
 		if (existing) {
 			if (input.cancel) this.cancellers.set(input.activityId, input.cancel)
+			if (input.finish) this.finishers.set(input.activityId, input.finish)
+			if (input.retry) this.retriers.set(input.activityId, input.retry)
 			if (input.continueInBackground) this.backgroundMovers.set(input.activityId, input.continueInBackground)
 			return this.clone(existing)
 		}
@@ -126,18 +133,57 @@ export class TaskActivityStore {
 		}
 		this.activities.set(activity.activityId, activity)
 		if (input.cancel) this.cancellers.set(activity.activityId, input.cancel)
+		if (input.finish) this.finishers.set(activity.activityId, input.finish)
+		if (input.retry) this.retriers.set(activity.activityId, input.retry)
 		if (input.continueInBackground) this.backgroundMovers.set(activity.activityId, input.continueInBackground)
 		this.appendEvent(input.activityId, { kind: "status", status: activity.status, text: "Activity started" }, true)
 		return this.clone(activity)
 	}
 
 	setCancel(activityId: string, cancel: CancelActivity): void {
-		if (this.activities.has(activityId)) this.cancellers.set(activityId, cancel)
+		if (!this.activities.has(activityId)) return
+		this.cancellers.set(activityId, cancel)
+		this.markDirty(activityId, true)
+	}
+
+	setFinish(activityId: string, finish: ControlActivity): void {
+		if (!this.activities.has(activityId)) return
+		this.finishers.set(activityId, finish)
+		this.markDirty(activityId, true)
+	}
+
+	setRetry(activityId: string, retry: ControlActivity | undefined): void {
+		if (!this.activities.has(activityId)) return
+		const hadRetry = this.retriers.has(activityId)
+		if (retry) this.retriers.set(activityId, retry)
+		else this.retriers.delete(activityId)
+		if (hadRetry !== Boolean(retry)) this.markDirty(activityId, true)
 	}
 
 	isCancellable(activityId: string): boolean {
 		const activity = this.activities.get(activityId)
 		return activity?.status === "running" && this.cancellers.has(activityId)
+	}
+
+	isFinishable(activityId: string): boolean {
+		const activity = this.activities.get(activityId)
+		return activity?.kind === "subagent" && activity.status === "running" && this.finishers.has(activityId)
+	}
+
+	isRetryable(activityId: string): boolean {
+		const activity = this.activities.get(activityId)
+		return activity?.kind === "subagent" && activity.status === "failed" && this.retriers.has(activityId)
+	}
+
+	/** Return the newest running foreground activity of the requested kind with a live handoff callback. */
+	getReadyBackgroundHandoffActivityId(kind: TaskActivityKind): string | undefined {
+		return this.list().find(
+			(activity) =>
+				activity.kind === kind &&
+				activity.status === "running" &&
+				activity.executionMode === "foreground" &&
+				this.backgroundMovers.has(activity.activityId),
+		)?.activityId
 	}
 
 	/** Move eligible foreground activities into explicit background ownership. */
@@ -210,7 +256,9 @@ export class TaskActivityStore {
 		if (this.isTerminal(activity.status) && !activity.finishedAt) activity.finishedAt = activity.updatedAt
 		if (this.isTerminal(activity.status)) {
 			this.cancellers.delete(activityId)
+			this.finishers.delete(activityId)
 			this.backgroundMovers.delete(activityId)
+			if (activity.status !== "failed") this.retriers.delete(activityId)
 		}
 		const priority = previousStatus !== activity.status || this.isTerminal(activity.status)
 		this.markDirty(activityId, priority)
@@ -272,6 +320,59 @@ export class TaskActivityStore {
 		return () => this.listeners.delete(listener)
 	}
 
+	async finish(activityIds: string[]): Promise<string[]> {
+		const finished: string[] = []
+		for (const activityId of activityIds) {
+			const activity = this.activities.get(activityId)
+			const finish = this.finishers.get(activityId)
+			if (!activity || !finish || activity.kind !== "subagent" || activity.status !== "running") continue
+			this.finishers.delete(activityId)
+			try {
+				if (!(await finish())) {
+					if (activity.status === "running") this.finishers.set(activityId, finish)
+					continue
+				}
+				this.update(activityId, { latestEvent: "Finish requested" })
+				finished.push(activityId)
+			} catch (error) {
+				if (activity.status === "running") this.finishers.set(activityId, finish)
+				Logger.warn("[TaskActivityStore] Failed to finish activity", error)
+			}
+		}
+		return finished
+	}
+
+	async retry(activityIds: string[]): Promise<string[]> {
+		const retried: string[] = []
+		for (const activityId of activityIds) {
+			const activity = this.activities.get(activityId)
+			const retry = this.retriers.get(activityId)
+			if (!activity || !retry || activity.kind !== "subagent" || activity.status !== "failed") continue
+			const previousError = activity.error
+			activity.result = undefined
+			activity.error = undefined
+			activity.finishedAt = undefined
+			this.update(activityId, {
+				status: "running",
+				latestEvent: "Retry requested",
+			})
+			try {
+				if (!(await retry())) {
+					this.update(activityId, { status: "failed", error: previousError, latestEvent: "Retry unavailable" })
+					continue
+				}
+				retried.push(activityId)
+			} catch (error) {
+				this.update(activityId, {
+					status: "failed",
+					error: error instanceof Error ? error.message : String(error),
+					latestEvent: "Retry failed to start",
+				})
+			}
+		}
+		return retried
+	}
+
 	async cancel(activityIds: string[]): Promise<string[]> {
 		const cancelled: string[] = []
 		for (const activityId of activityIds) {
@@ -298,6 +399,8 @@ export class TaskActivityStore {
 		this.flushTimer = undefined
 		this.listeners.clear()
 		this.cancellers.clear()
+		this.finishers.clear()
+		this.retriers.clear()
 		this.backgroundMovers.clear()
 	}
 

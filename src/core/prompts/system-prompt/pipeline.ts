@@ -1,3 +1,4 @@
+import { DEFAULT_SUBAGENT_TIMEOUT_SECONDS } from "@shared/subagent-settings"
 import { DEFAULT_TERMINAL_COMMAND_TIMEOUT_SECONDS } from "@shared/terminal-settings"
 import { getShellForProfile } from "@utils/shell"
 import { getPrompt } from "../i18n"
@@ -43,6 +44,7 @@ const COMPLETE_TEMPLATE_ENV_KEYS = [
 	"MULTI_ROOT_HINT",
 	"BROWSER_VIEWPORT_WIDTH",
 	"BROWSER_VIEWPORT_HEIGHT",
+	"SUBAGENT_TIMEOUT_SECONDS",
 	"TERMINAL_COMMAND_TIMEOUT_SECONDS",
 ] as const
 
@@ -189,6 +191,7 @@ export function prepareSystemRuntimeEnv(context: SystemPromptContext, config: Sy
 		MULTI_ROOT_HINT: multiRootHint,
 		BROWSER_VIEWPORT_WIDTH: String(context.browserSettings?.viewport.width ?? 0),
 		BROWSER_VIEWPORT_HEIGHT: String(context.browserSettings?.viewport.height ?? 0),
+		SUBAGENT_TIMEOUT_SECONDS: String(DEFAULT_SUBAGENT_TIMEOUT_SECONDS),
 		TERMINAL_COMMAND_TIMEOUT_SECONDS: String(
 			context.terminalCommandTimeoutSeconds ?? DEFAULT_TERMINAL_COMMAND_TIMEOUT_SECONDS,
 		),

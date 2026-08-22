@@ -1,6 +1,8 @@
 import {
 	CancelTaskActivitiesRequest,
+	FinishTaskActivitiesRequest,
 	MoveCommandToBackgroundRequest,
+	RetryTaskActivitiesRequest,
 	type TaskActivity,
 	TaskActivitySubscriptionRequest,
 } from "@shared/proto/dline/task"
@@ -45,6 +47,20 @@ export async function cancelTaskActivities(taskId: string, activityIds: string[]
 	if (activityIds.length === 0) return []
 	const response = await TaskServiceClient.cancelTaskActivities(CancelTaskActivitiesRequest.create({ taskId, activityIds }))
 	return response.cancelledActivityIds
+}
+
+/** Request soft completion for running subagents. */
+export async function finishTaskActivities(taskId: string, activityIds: string[]): Promise<string[]> {
+	if (activityIds.length === 0) return []
+	const response = await TaskServiceClient.finishTaskActivities(FinishTaskActivitiesRequest.create({ taskId, activityIds }))
+	return response.finishedActivityIds
+}
+
+/** Retry retained retryable subagents. */
+export async function retryTaskActivities(taskId: string, activityIds: string[]): Promise<string[]> {
+	if (activityIds.length === 0) return []
+	const response = await TaskServiceClient.retryTaskActivities(RetryTaskActivitiesRequest.create({ taskId, activityIds }))
+	return response.retriedActivityIds
 }
 
 /** Move one synchronous foreground command to background tracking. */

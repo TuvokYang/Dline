@@ -1,4 +1,4 @@
-import type { TaskActivity, TaskActivityEvent, TaskActivityMetrics } from "@shared/proto/dline/task"
+import type { TaskActivity } from "@shared/proto/dline/task"
 import {
 	AlarmClockIcon,
 	BotIcon,
@@ -18,7 +18,11 @@ import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { CommandOutputContent } from "../CommandOutputRow"
 import { getCommandEnvironmentLabel, getCommandOutputSummary } from "../command-output"
-import { cancelTaskActivities, useTaskActivities } from "./useTaskActivities"
+import { SubagentMetrics } from "./SubagentMetrics"
+import { SubagentRetryTimeline } from "./SubagentRetryTimeline"
+import { SubagentToolTimeline } from "./SubagentToolTimeline"
+import { useActivityControlGuard } from "./useActivityControlGuard"
+import { cancelTaskActivities, finishTaskActivities, retryTaskActivities, useTaskActivities } from "./useTaskActivities"
 
 export type StatusFilter = "active" | "all"
 export type KindFilter = "all" | "subagent" | "command"
@@ -64,53 +68,43 @@ function statusAccentClass(status: string): string {
 	return "bg-description"
 }
 
-function formatMetrics(metrics: TaskActivityMetrics | undefined): string {
-	if (!metrics) return "Metrics unavailable"
-	const tokens = metrics.inputTokens + metrics.outputTokens
-	const cost = metrics.currency && metrics.totalCost > 0 ? ` · ${metrics.totalCost.toFixed(4)} ${metrics.currency}` : ""
-	return `${metrics.toolCalls} tools · ${tokens} tokens${cost}`
+function statusChipClass(status: string): string {
+	if (status === "running" || status === "cancelling") return "bg-link/10 text-link"
+	if (status === "completed") return "bg-success/10 text-success"
+	if (status === "failed" || status === "timeout") return "bg-error/10 text-error"
+	if (status === "awaiting_approval") return "bg-editor-warning-foreground/10 text-editor-warning-foreground"
+	return "bg-description/10 text-description"
 }
 
-function eventLabel(event: TaskActivityEvent): string {
-	if (event.kind === "thinking") return "Thinking"
-	if (event.kind === "assistant_message") return "Assistant"
-	if (event.kind === "tool_call") return event.toolStatus ? `Tool ${event.toolStatus}` : "Tool call"
-	if (event.kind === "tool_result") return "Tool result"
-	if (event.kind === "metrics") return "Metrics"
-	if (event.kind === "status") return "Status"
-	return "Output"
-}
-
-function eventBody(event: TaskActivityEvent): string {
-	if (event.kind === "tool_call") {
-		const duration = event.durationMs !== undefined ? ` · ${event.durationMs}ms` : ""
-		return `${event.toolName ?? "tool"}${duration}${event.summary ? `\n${event.summary}` : ""}`
-	}
-	if (event.kind === "tool_result") return `${event.toolName ?? "tool"}\n${event.text ?? event.error ?? ""}`
-	if (event.kind === "metrics") return formatMetrics(event.metrics)
-	if (event.kind === "status") return event.text ?? event.status ?? ""
-	return event.text ?? event.error ?? ""
-}
-
-function ActivityTimeline({ events }: { events: TaskActivityEvent[] }) {
-	const ordered = [...events].sort((left, right) => left.sequence - right.sequence || left.timestamp - right.timestamp)
-	if (ordered.length === 0) return null
+function ActivityStatusChip({ status }: { status: string }) {
 	return (
-		<div className="space-y-1.5" data-testid="activity-timeline">
-			{ordered.map((event) => (
-				<div
-					className="rounded-xs border border-editor-group-border px-2 py-1.5"
-					data-testid="activity-event"
-					key={`${event.sequence}:${event.kind}`}>
-					<div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wide text-description">
-						<span>{eventLabel(event)}</span>
-						<span className="ml-auto font-normal normal-case">#{event.sequence}</span>
-					</div>
-					<div className="mt-1 whitespace-pre-wrap break-words text-[11px] text-foreground">{eventBody(event)}</div>
-				</div>
-			))}
+		<span
+			className={cn("rounded-xs px-1.5 py-0.5 text-[10px] capitalize", statusChipClass(status))}
+			data-testid="activity-status-chip">
+			{status.replaceAll("_", " ")}
+		</span>
+	)
+}
+
+function ActivityTitle({ activity, isSubagent }: { activity: TaskActivity; isSubagent: boolean }) {
+	const KindIcon = activity.kind === "command" ? TerminalIcon : BotIcon
+	return (
+		<div className="flex flex-wrap items-center gap-1.5">
+			<KindIcon className="size-3 shrink-0 opacity-70" data-testid="activity-kind-icon" />
+			<span
+				className={cn("truncate text-xs font-semibold text-foreground", {
+					"font-mono": activity.kind === "command",
+				})}>
+				{activity.title}
+			</span>
+			{isSubagent && <ActivityStatusChip status={activity.status} />}
 		</div>
 	)
+}
+
+function ActivityStatusText({ isSubagent, status }: { isSubagent: boolean; status: string }) {
+	if (isSubagent) return null
+	return <span className="capitalize">{status.replaceAll("_", " ")}</span>
 }
 
 function CommandActivityOutput({ activity }: { activity: TaskActivity }) {
@@ -144,6 +138,7 @@ export function TaskActivityPanel({
 	const [internalFilters, setInternalFilters] = useState<TaskActivityFilters>(DEFAULT_TASK_ACTIVITY_FILTERS)
 	const selectedFilters = filters ?? internalFilters
 	const [expanded, setExpanded] = useState<Record<string, boolean>>({})
+	const { isPending, runControl } = useActivityControlGuard()
 	const itemRefs = useRef(new Map<string, HTMLDivElement>())
 	const handledFocusId = useRef<string>()
 	const updateFilters = (nextFilters: TaskActivityFilters) => {
@@ -211,20 +206,22 @@ export function TaskActivityPanel({
 				</div>
 			</div>
 
-			<div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-3" data-testid="activity-list">
+			<div className="min-h-0 flex-1 space-y-2 overflow-y-auto px-4 py-3" data-testid="activity-list">
 				{filtered.length === 0 && (
 					<div className="py-8 text-center text-xs text-description">No matching activities.</div>
 				)}
 				{filtered.map((activity) => {
 					const isExpanded = expanded[activity.activityId] === true
 					const isActive = ACTIVE_STATUSES.has(activity.status)
-					const KindIcon = activity.kind === "command" ? TerminalIcon : BotIcon
+					const isSubagent = activity.kind === "subagent"
 					const ExecutionModeIcon = activity.executionMode === "background" ? SendToBackIcon : BringToFrontIcon
 					const environmentLabel = activity.kind === "command" ? getCommandEnvironmentLabel(activity.output) : undefined
 					const activitySummary =
 						activity.kind === "command"
 							? (getCommandOutputSummary(activity.output) ?? getCommandOutputSummary(activity.latestEvent))
-							: activity.latestEvent
+							: undefined
+					const finishKey = `finish:${activity.activityId}`
+					const retryKey = `retry:${activity.activityId}`
 					return (
 						<div
 							className="relative overflow-hidden rounded-sm border border-editor-widget-border/60 bg-editor-background [box-shadow:0_1px_2px_var(--vscode-widget-shadow,transparent)]"
@@ -242,54 +239,81 @@ export function TaskActivityPanel({
 								data-testid="activity-status-accent"
 							/>
 							<div
-								className="flex items-start gap-2 bg-toolbar-hover/30 py-2.5 pr-2.5 pl-3"
+								className={cn(
+									"flex gap-2 pr-2.5 pl-3",
+									isSubagent ? "items-center py-2" : "items-start bg-toolbar-hover/30 py-2.5",
+								)}
 								data-testid="activity-header">
 								<button
-									className="flex min-w-0 flex-1 items-start gap-2 border-0 bg-transparent p-0 text-left cursor-pointer"
+									className={cn(
+										"flex min-w-0 flex-1 gap-2 border-0 bg-transparent p-0 text-left cursor-pointer",
+										isSubagent ? "items-center" : "items-start",
+									)}
 									data-testid="activity-toggle"
 									onClick={() => setExpanded((value) => ({ ...value, [activity.activityId]: !isExpanded }))}
 									type="button">
 									<StatusIcon status={activity.status} />
 									<div className="min-w-0 flex-1">
-										<div className="flex items-center gap-1.5">
-											<KindIcon className="size-3 shrink-0 opacity-70" data-testid="activity-kind-icon" />
-											<span
-												className={cn("truncate text-xs font-semibold text-foreground", {
-													"font-mono": activity.kind === "command",
-												})}>
-												{activity.title}
-											</span>
-										</div>
+										<ActivityTitle activity={activity} isSubagent={isSubagent} />
 										<div
-											className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[11px] text-description"
+											className={cn(
+												"flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[11px] text-description",
+												isSubagent ? "mt-0.5" : "mt-1",
+											)}
 											data-testid="activity-metadata">
-											<span
-												className="inline-flex w-fit max-w-full min-w-0 flex-nowrap items-center gap-1.5"
-												data-testid="activity-environment-mode">
-												{environmentLabel && (
+											{activity.kind === "command" ? (
+												<span
+													className="inline-flex w-fit max-w-full min-w-0 flex-nowrap items-center gap-1.5"
+													data-testid="activity-environment-mode">
+													{environmentLabel && (
+														<span
+															className="inline-block min-w-0 max-w-[60%] flex-auto truncate rounded-xs bg-code/70 px-1.5 py-0.5 font-mono text-[10px] text-foreground"
+															data-testid="activity-environment-label"
+															title={`Environment: ${environmentLabel}`}>
+															({environmentLabel})
+														</span>
+													)}
 													<span
-														className="inline-block min-w-0 max-w-[60%] flex-auto truncate rounded-xs bg-code/70 px-1.5 py-0.5 font-mono text-[10px] text-foreground"
-														data-testid="activity-environment-label"
-														title={`Environment: ${environmentLabel}`}>
-														({environmentLabel})
+														className={cn(
+															"inline-flex shrink-0 items-center gap-1 rounded-xs px-1.5 py-0.5",
+															{
+																"bg-editor-warning-foreground/10 text-editor-warning-foreground":
+																	activity.executionMode === "background",
+																"bg-info/10 text-info": activity.executionMode !== "background",
+															},
+														)}
+														data-testid="activity-execution-mode">
+														<ExecutionModeIcon aria-hidden="true" className="size-2.5 shrink-0" />
+														{activity.executionMode === "background" ? "Background" : "Foreground"}
 													</span>
-												)}
+												</span>
+											) : (
 												<span
 													className={cn(
-														"inline-flex shrink-0 items-center gap-1 rounded-xs px-1.5 py-0.5",
-														{
-															"bg-editor-warning-foreground/10 text-editor-warning-foreground":
-																activity.executionMode === "background",
-															"bg-info/10 text-info": activity.executionMode !== "background",
-														},
+														"inline-flex items-center gap-1 rounded-xs px-1.5 py-0.5",
+														activity.executionMode === "background"
+															? "bg-editor-warning-foreground/10 text-editor-warning-foreground"
+															: "bg-info/10 text-info",
 													)}
 													data-testid="activity-execution-mode">
 													<ExecutionModeIcon aria-hidden="true" className="size-2.5 shrink-0" />
 													{activity.executionMode === "background" ? "Background" : "Foreground"}
 												</span>
-											</span>
-											<span className="capitalize">{activity.status.replaceAll("_", " ")}</span>
-											<span>{formatDuration(activity)}</span>
+											)}
+											<ActivityStatusText isSubagent={isSubagent} status={activity.status} />
+											{isSubagent ? (
+												<SubagentMetrics
+													currency={activity.metrics?.currency}
+													finishedAt={activity.finishedAt}
+													inputTokens={activity.metrics?.inputTokens}
+													outputTokens={activity.metrics?.outputTokens}
+													startedAt={activity.createdAt}
+													toolCalls={activity.metrics?.toolCalls}
+													totalCost={activity.metrics?.totalCost}
+												/>
+											) : (
+												<span>{formatDuration(activity)}</span>
+											)}
 											{activity.kind === "command" &&
 												activity.timeoutSeconds !== undefined &&
 												activity.timeoutSeconds > 0 && (
@@ -326,12 +350,35 @@ export function TaskActivityPanel({
 										textToCopy={activity.detail ?? activity.title}
 									/>
 								)}
-								{activity.cancellable && isActive && activity.status !== "awaiting_approval" && (
+								{activity.kind === "subagent" && activity.finishable && activity.status === "running" && (
 									<Button
 										className="h-5 self-center bg-button-background px-2 py-0 text-[11px] leading-none text-button-foreground hover:bg-button-hover"
+										disabled={isPending(finishKey)}
+										onClick={() =>
+											void runControl(finishKey, () => finishTaskActivities(taskId, [activity.activityId]))
+										}
+										size="xs">
+										Finish
+									</Button>
+								)}
+								{activity.kind === "subagent" && activity.retryable && activity.status === "failed" && (
+									<Button
+										className="h-5 self-center bg-button-background px-2 py-0 text-[11px] leading-none text-button-foreground hover:bg-button-hover"
+										disabled={isPending(retryKey)}
+										onClick={() =>
+											void runControl(retryKey, () => retryTaskActivities(taskId, [activity.activityId]))
+										}
+										size="xs">
+										Retry
+									</Button>
+								)}
+								{activity.cancellable && isActive && activity.status !== "awaiting_approval" && (
+									<Button
+										className="h-5 self-center px-2 py-0 text-[11px] leading-none"
 										disabled={activity.status === "cancelling"}
 										onClick={() => void cancelTaskActivities(taskId, [activity.activityId])}
-										size="xs">
+										size="xs"
+										variant="danger">
 										Cancel
 									</Button>
 								)}
@@ -366,25 +413,17 @@ export function TaskActivityPanel({
 											)}
 										</>
 									) : (
-										<div className="p-2.5">
-											{activity.detail && (
-												<div className="max-h-[72px] overflow-y-auto whitespace-pre-wrap text-description">
-													{activity.detail}
-												</div>
-											)}
+										<div className="space-y-2 px-3 py-2" data-testid="subagent-activity-body">
+											<SubagentRetryTimeline events={activity.events} />
+											<SubagentToolTimeline events={activity.events} />
 											{activity.result && (
-												<div className="mt-2 max-h-[240px] overflow-y-auto whitespace-pre-wrap break-words">
+												<div className="max-h-[240px] overflow-y-auto whitespace-pre-wrap break-words border-t border-editor-widget-border/25 pt-2">
 													{activity.result}
 												</div>
 											)}
 											{activity.error && (
-												<div className="mt-2 max-h-[120px] overflow-y-auto whitespace-pre-wrap break-words text-error">
+												<div className="max-h-[120px] overflow-y-auto whitespace-pre-wrap break-words border-t border-editor-widget-border/25 pt-2 text-error">
 													{activity.error}
-												</div>
-											)}
-											{activity.events.length > 0 && (
-												<div className="mt-2 max-h-[240px] overflow-y-auto">
-													<ActivityTimeline events={activity.events} />
 												</div>
 											)}
 										</div>

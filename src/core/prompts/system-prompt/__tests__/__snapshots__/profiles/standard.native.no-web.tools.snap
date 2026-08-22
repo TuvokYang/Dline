@@ -18,7 +18,7 @@
           },
           "task_progress": {
             "type": "string",
-            "description": "Omit task_progress when no TODO item is being created or updated. When provided, it must contain at least one non-empty checklist item. During an existing checklist, send only exact completed item text and at most one exact current item. Do not repeat the full checklist or change its structure. Use a full checklist only for initial creation or after all current items are complete and a new phase begins."
+            "description": "Omit task_progress when no TODO item is being created or updated. When provided, it must contain at least one non-empty checklist item. During an existing checklist, send exact newly completed items and at most one exact current item; the current item may be sent by itself. Do not repeat the full checklist or change its structure. Use a full checklist only for initial creation or after all current items are complete and a new phase begins."
           }
         },
         "required": [
@@ -48,7 +48,7 @@
           },
           "task_progress": {
             "type": "string",
-            "description": "Omit task_progress when no TODO item is being created or updated. When provided, it must contain at least one non-empty checklist item. During an existing checklist, send only exact completed item text and at most one exact current item. Do not repeat the full checklist or change its structure. Use a full checklist only for initial creation or after all current items are complete and a new phase begins."
+            "description": "Omit task_progress when no TODO item is being created or updated. When provided, it must contain at least one non-empty checklist item. During an existing checklist, send exact newly completed items and at most one exact current item; the current item may be sent by itself. Do not repeat the full checklist or change its structure. Use a full checklist only for initial creation or after all current items are complete and a new phase begins."
           }
         },
         "required": [
@@ -82,7 +82,7 @@
           },
           "task_progress": {
             "type": "string",
-            "description": "Omit task_progress when no TODO item is being created or updated. When provided, it must contain at least one non-empty checklist item. During an existing checklist, send only exact completed item text and at most one exact current item. Do not repeat the full checklist or change its structure. Use a full checklist only for initial creation or after all current items are complete and a new phase begins."
+            "description": "Omit task_progress when no TODO item is being created or updated. When provided, it must contain at least one non-empty checklist item. During an existing checklist, send exact newly completed items and at most one exact current item; the current item may be sent by itself. Do not repeat the full checklist or change its structure. Use a full checklist only for initial creation or after all current items are complete and a new phase begins."
           }
         },
         "required": [
@@ -115,7 +115,7 @@
           },
           "task_progress": {
             "type": "string",
-            "description": "Omit task_progress when no TODO item is being created or updated. When provided, it must contain at least one non-empty checklist item. During an existing checklist, send only exact completed item text and at most one exact current item. Do not repeat the full checklist or change its structure. Use a full checklist only for initial creation or after all current items are complete and a new phase begins."
+            "description": "Omit task_progress when no TODO item is being created or updated. When provided, it must contain at least one non-empty checklist item. During an existing checklist, send exact newly completed items and at most one exact current item; the current item may be sent by itself. Do not repeat the full checklist or change its structure. Use a full checklist only for initial creation or after all current items are complete and a new phase begins."
           }
         },
         "required": [
@@ -149,7 +149,7 @@
           },
           "task_progress": {
             "type": "string",
-            "description": "Omit task_progress when no TODO item is being created or updated. When provided, it must contain at least one non-empty checklist item. During an existing checklist, send only exact completed item text and at most one exact current item. Do not repeat the full checklist or change its structure. Use a full checklist only for initial creation or after all current items are complete and a new phase begins."
+            "description": "Omit task_progress when no TODO item is being created or updated. When provided, it must contain at least one non-empty checklist item. During an existing checklist, send exact newly completed items and at most one exact current item; the current item may be sent by itself. Do not repeat the full checklist or change its structure. Use a full checklist only for initial creation or after all current items are complete and a new phase begins."
           }
         },
         "required": [
@@ -174,7 +174,7 @@
           },
           "task_progress": {
             "type": "string",
-            "description": "Omit task_progress when no TODO item is being created or updated. When provided, it must contain at least one non-empty checklist item. During an existing checklist, send only exact completed item text and at most one exact current item. Do not repeat the full checklist or change its structure. Use a full checklist only for initial creation or after all current items are complete and a new phase begins."
+            "description": "Omit task_progress when no TODO item is being created or updated. When provided, it must contain at least one non-empty checklist item. During an existing checklist, send exact newly completed items and at most one exact current item; the current item may be sent by itself. Do not repeat the full checklist or change its structure. Use a full checklist only for initial creation or after all current items are complete and a new phase begins."
           }
         },
         "required": [
@@ -203,7 +203,7 @@
           },
           "task_progress": {
             "type": "string",
-            "description": "Omit task_progress when no TODO item is being created or updated. When provided, it must contain at least one non-empty checklist item. During an existing checklist, send only exact completed item text and at most one exact current item. Do not repeat the full checklist or change its structure. Use a full checklist only for initial creation or after all current items are complete and a new phase begins."
+            "description": "Omit task_progress when no TODO item is being created or updated. When provided, it must contain at least one non-empty checklist item. During an existing checklist, send exact newly completed items and at most one exact current item; the current item may be sent by itself. Do not repeat the full checklist or change its structure. Use a full checklist only for initial creation or after all current items are complete and a new phase begins."
           }
         },
         "required": [
@@ -239,7 +239,7 @@
     "type": "function",
     "function": {
       "name": "make_plan",
-      "description": "[TURN-END] Present a COMPLETE implementation or design plan covering ALL user requirements. Available in both ACT and PLAN modes. In ACT MODE, use this tool only when the user explicitly requests a plan. In PLAN MODE, use it after thorough exploration and analysis when ready to present the plan. Your response MUST include the full plan with detailed analysis, architecture decisions, and a complete task_progress checklist organized with # Title and ## Section headings covering every step needed to fulfill ALL requirements. Do not simplify or omit parts of the plan - the user needs to see the entire plan to review it. Do not call repeatedly - use qna_respond for questions and discussion.\nHowever, if while writing your response you realize you need more exploration before providing a complete plan, set the optional needs_more_exploration parameter.",
+      "description": "[TURN-END] Present a COMPLETE implementation or design plan covering ALL user requirements. Available in both ACT and PLAN modes. In ACT MODE, use this tool only when the user explicitly requests a plan. In PLAN MODE, use it after thorough exploration and analysis when ready to present the plan. Your response MUST include the full plan with detailed analysis, architecture decisions, and a complete task_progress checklist organized with a required # Title and optional ## Section headings covering every step needed to fulfill ALL requirements. Do not simplify or omit parts of the plan - the user needs to see the entire plan to review it. Do not call repeatedly - use qna_respond for questions and discussion.\nHowever, if while writing your response you realize you need more exploration before providing a complete plan, set the optional needs_more_exploration parameter.",
       "strict": false,
       "parameters": {
         "type": "object",
@@ -254,7 +254,7 @@
           },
           "task_progress": {
             "type": "string",
-            "description": "Omit task_progress when no TODO item is being created or updated. When provided, it must contain at least one non-empty checklist item. During an existing checklist, send only exact completed item text and at most one exact current item. Do not repeat the full checklist or change its structure. Use a full checklist only for initial creation or after all current items are complete and a new phase begins."
+            "description": "Omit task_progress when no TODO item is being created or updated. When provided, it must contain at least one non-empty checklist item. During an existing checklist, send exact newly completed items and at most one exact current item; the current item may be sent by itself. Do not repeat the full checklist or change its structure. Use a full checklist only for initial creation or after all current items are complete and a new phase begins."
           }
         },
         "required": [
@@ -300,7 +300,7 @@
           },
           "task_progress": {
             "type": "string",
-            "description": "Omit task_progress when no TODO item is being created or updated. When provided, it must contain at least one non-empty checklist item. During an existing checklist, send only exact completed item text and at most one exact current item. Do not repeat the full checklist or change its structure. Use a full checklist only for initial creation or after all current items are complete and a new phase begins."
+            "description": "Omit task_progress when no TODO item is being created or updated. When provided, it must contain at least one non-empty checklist item. During an existing checklist, send exact newly completed items and at most one exact current item; the current item may be sent by itself. Do not repeat the full checklist or change its structure. Use a full checklist only for initial creation or after all current items are complete and a new phase begins."
           }
         },
         "required": [
@@ -433,7 +433,7 @@
           },
           "task_progress": {
             "type": "string",
-            "description": "Omit task_progress when no TODO item is being created or updated. When provided, it must contain at least one non-empty checklist item. During an existing checklist, send only exact completed item text and at most one exact current item. Do not repeat the full checklist or change its structure. Use a full checklist only for initial creation or after all current items are complete and a new phase begins."
+            "description": "Omit task_progress when no TODO item is being created or updated. When provided, it must contain at least one non-empty checklist item. During an existing checklist, send exact newly completed items and at most one exact current item; the current item may be sent by itself. Do not repeat the full checklist or change its structure. Use a full checklist only for initial creation or after all current items are complete and a new phase begins."
           }
         },
         "required": [
@@ -464,7 +464,7 @@
           },
           "task_progress": {
             "type": "string",
-            "description": "Omit task_progress when no TODO item is being created or updated. When provided, it must contain at least one non-empty checklist item. During an existing checklist, send only exact completed item text and at most one exact current item. Do not repeat the full checklist or change its structure. Use a full checklist only for initial creation or after all current items are complete and a new phase begins."
+            "description": "Omit task_progress when no TODO item is being created or updated. When provided, it must contain at least one non-empty checklist item. During an existing checklist, send exact newly completed items and at most one exact current item; the current item may be sent by itself. Do not repeat the full checklist or change its structure. Use a full checklist only for initial creation or after all current items are complete and a new phase begins."
           }
         },
         "required": [
@@ -575,7 +575,7 @@
           },
           "task_progress": {
             "type": "string",
-            "description": "Omit task_progress when no TODO item is being created or updated. When provided, it must contain at least one non-empty checklist item. During an existing checklist, send only exact completed item text and at most one exact current item. Do not repeat the full checklist or change its structure. Use a full checklist only for initial creation or after all current items are complete and a new phase begins."
+            "description": "Omit task_progress when no TODO item is being created or updated. When provided, it must contain at least one non-empty checklist item. During an existing checklist, send exact newly completed items and at most one exact current item; the current item may be sent by itself. Do not repeat the full checklist or change its structure. Use a full checklist only for initial creation or after all current items are complete and a new phase begins."
           }
         },
         "required": [
@@ -618,7 +618,7 @@
           },
           "task_progress": {
             "type": "string",
-            "description": "Omit task_progress when no TODO item is being created or updated. When provided, it must contain at least one non-empty checklist item. During an existing checklist, send only exact completed item text and at most one exact current item. Do not repeat the full checklist or change its structure. Use a full checklist only for initial creation or after all current items are complete and a new phase begins."
+            "description": "Omit task_progress when no TODO item is being created or updated. When provided, it must contain at least one non-empty checklist item. During an existing checklist, send exact newly completed items and at most one exact current item; the current item may be sent by itself. Do not repeat the full checklist or change its structure. Use a full checklist only for initial creation or after all current items are complete and a new phase begins."
           }
         },
         "required": [
@@ -662,7 +662,7 @@
           },
           "task_progress": {
             "type": "string",
-            "description": "Omit task_progress when no TODO item is being created or updated. When provided, it must contain at least one non-empty checklist item. During an existing checklist, send only exact completed item text and at most one exact current item. Do not repeat the full checklist or change its structure. Use a full checklist only for initial creation or after all current items are complete and a new phase begins."
+            "description": "Omit task_progress when no TODO item is being created or updated. When provided, it must contain at least one non-empty checklist item. During an existing checklist, send exact newly completed items and at most one exact current item; the current item may be sent by itself. Do not repeat the full checklist or change its structure. Use a full checklist only for initial creation or after all current items are complete and a new phase begins."
           }
         },
         "required": [
@@ -689,7 +689,7 @@
           },
           "task_progress": {
             "type": "string",
-            "description": "Omit task_progress when no TODO item is being created or updated. When provided, it must contain at least one non-empty checklist item. During an existing checklist, send only exact completed item text and at most one exact current item. Do not repeat the full checklist or change its structure. Use a full checklist only for initial creation or after all current items are complete and a new phase begins."
+            "description": "Omit task_progress when no TODO item is being created or updated. When provided, it must contain at least one non-empty checklist item. During an existing checklist, send exact newly completed items and at most one exact current item; the current item may be sent by itself. Do not repeat the full checklist or change its structure. Use a full checklist only for initial creation or after all current items are complete and a new phase begins."
           }
         },
         "required": [
@@ -753,7 +753,7 @@
     "type": "function",
     "function": {
       "name": "use_subagent",
-      "description": "Run one focused default or named subagent. Omit agent_name or use 'default' for the built-in readonly research subagent; use an advertised YAML name for a configured agent.",
+      "description": "Run one focused default or named subagent. Omit agent_name or use 'default' for the built-in readonly research subagent; use an advertised YAML name for a configured agent. Use this to preserve the main task's context window through self-contained research. Keep the delegated research boundary independent from the main task's modification boundary, and do not infer write authorization from files the subagent explores or reports.",
       "strict": false,
       "parameters": {
         "type": "object",
@@ -768,7 +768,7 @@
           },
           "context": {
             "type": "string",
-            "description": "Relevant context, constraints, and expected result for the subagent."
+            "description": "Relevant context, constraints, and expected result for the subagent. Include enough context for independent research, but do not use this field to expand or redefine the main task's modification boundary."
           },
           "background": {
             "type": "boolean",
@@ -791,7 +791,7 @@
     "type": "function",
     "function": {
       "name": "use_subagents",
-      "description": "Run up to five built-in default subagents in parallel. Each subagent gets its own prompt and returns a comprehensive research result with tool and token stats. Use this for broad exploration when reading many files would consume the main agent's context window. Using one subagent is valid.",
+      "description": "Run up to five built-in default subagents in parallel. Each subagent gets its own prompt and returns a comprehensive research result with tool and token stats. Use this to preserve the main task's context window by delegating self-contained research. Keep each delegated research boundary independent from the main task's modification boundary: provide only the context needed for investigation, and do not treat files explored or reported by a subagent as authorized write scope. Using one subagent is valid.",
       "strict": false,
       "parameters": {
         "type": "object",
@@ -851,7 +851,7 @@
           },
           "task_progress": {
             "type": "string",
-            "description": "Omit task_progress when no TODO item is being created or updated. When provided, it must contain at least one non-empty checklist item. During an existing checklist, send only exact completed item text and at most one exact current item. Do not repeat the full checklist or change its structure. Use a full checklist only for initial creation or after all current items are complete and a new phase begins."
+            "description": "Omit task_progress when no TODO item is being created or updated. When provided, it must contain at least one non-empty checklist item. During an existing checklist, send exact newly completed items and at most one exact current item; the current item may be sent by itself. Do not repeat the full checklist or change its structure. Use a full checklist only for initial creation or after all current items are complete and a new phase begins."
           }
         },
         "required": [
@@ -880,7 +880,7 @@
           },
           "task_progress": {
             "type": "string",
-            "description": "Omit task_progress when no TODO item is being created or updated. When provided, it must contain at least one non-empty checklist item. During an existing checklist, send only exact completed item text and at most one exact current item. Do not repeat the full checklist or change its structure. Use a full checklist only for initial creation or after all current items are complete and a new phase begins."
+            "description": "Omit task_progress when no TODO item is being created or updated. When provided, it must contain at least one non-empty checklist item. During an existing checklist, send exact newly completed items and at most one exact current item; the current item may be sent by itself. Do not repeat the full checklist or change its structure. Use a full checklist only for initial creation or after all current items are complete and a new phase begins."
           }
         },
         "required": [

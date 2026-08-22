@@ -155,6 +155,51 @@ describe("BackgroundContextInjector", () => {
 		assert.deepEqual(result.commandIds, [command.id])
 	})
 
+	it("injects only the recovered subagent result after a retryable failure and consumes it once", async () => {
+		const subagentJobManager = new SubagentJobManager()
+		let attempt = 0
+		const job = subagentJobManager.startJob({
+			task: "recover provider request",
+			prompt: "<task>recover provider request</task><context>ctx</context>",
+			timeoutSeconds: 30,
+			runner: async () => {
+				attempt += 1
+				return attempt === 1
+					? {
+							status: "failed",
+							error: "sensitive provider diagnostic",
+							retryable: true,
+							stats: createStats(),
+						}
+					: {
+							status: "completed",
+							result: "recovered findings",
+							stats: createStats(),
+						}
+			},
+		})
+		await flushJobs()
+		const injector = new BackgroundContextInjector({ subagentJobManager })
+
+		const failedResult = await injector.buildResultSection()
+		assert.equal(failedResult.text, "")
+		assert.deepEqual(failedResult.subagentIds, [])
+		assert.doesNotMatch(failedResult.text, /sensitive provider diagnostic/)
+
+		assert.equal(await subagentJobManager.retryJob(job.jobId), true)
+		await flushJobs()
+		const recoveredResult = await injector.buildResultSection()
+		assert.deepEqual(recoveredResult.subagentIds, [job.jobId])
+		assert.match(recoveredResult.text, /recovered findings/)
+		assert.doesNotMatch(recoveredResult.text, /sensitive provider diagnostic/)
+
+		subagentJobManager.markInjected(recoveredResult.subagentIds)
+		assert.equal((await injector.buildResultSection()).text, "")
+		subagentJobManager.markConsumed(recoveredResult.subagentIds)
+		assert.equal((await injector.buildResultSection()).text, "")
+		assert.equal(subagentJobManager.getJob(job.jobId)?.injectionState, "consumed")
+	})
+
 	it("injects only metadata and a log path for small completed background output", async () => {
 		const subagentJobManager = new SubagentJobManager()
 		const manager = new StandaloneTerminalManager()

@@ -258,4 +258,136 @@ describe("SubagentJobManager", () => {
 		if (injectable?.kind !== "batch") assert.fail("cancelled batch should remain injectable")
 		assert.equal(injectable.batch.status, "cancelled")
 	})
+
+	it("retains a retryable failure without injecting diagnostics and injects the successful retry once", async () => {
+		const manager = new SubagentJobManager()
+		let attempt = 0
+		const job = manager.startJob({
+			task: "review api",
+			prompt: "<task>review api</task><context>ctx</context>",
+			timeoutSeconds: 30,
+			runner: async () => {
+				attempt += 1
+				return attempt === 1
+					? {
+							status: "failed",
+							error: "temporary provider failure",
+							retryable: true,
+							stats: {
+								toolCalls: 0,
+								inputTokens: 0,
+								outputTokens: 0,
+								cacheWriteTokens: 0,
+								cacheReadTokens: 0,
+								totalCost: 0,
+								currency: "USD",
+								contextTokens: 0,
+								contextWindow: 1000,
+								contextUsagePercentage: 0,
+							},
+						}
+					: {
+							status: "completed",
+							result: "recovered result",
+							stats: {
+								toolCalls: 1,
+								inputTokens: 10,
+								outputTokens: 5,
+								cacheWriteTokens: 0,
+								cacheReadTokens: 0,
+								totalCost: 0,
+								currency: "USD",
+								contextTokens: 15,
+								contextWindow: 1000,
+								contextUsagePercentage: 1.5,
+							},
+						}
+			},
+		})
+		await flushJobs()
+
+		expect(manager.getJob(job.jobId)).toMatchObject({ status: "failed", retryable: true, attempt: 1 })
+		expect(manager.listInjectableResults()).toEqual([])
+		expect(await manager.retryJob(job.jobId)).toBe(true)
+		expect(await manager.retryJob(job.jobId)).toBe(false)
+		await flushJobs()
+
+		expect(manager.getJob(job.jobId)).toMatchObject({
+			status: "completed",
+			result: "recovered result",
+			retryable: false,
+			attempt: 2,
+			injectionState: "pending",
+		})
+		expect(manager.listInjectableResults()).toHaveLength(1)
+		manager.markInjected([job.jobId])
+		expect(manager.listInjectableResults()).toEqual([])
+		manager.markConsumed([job.jobId])
+		expect(manager.getJob(job.jobId)?.injectionState).toBe("consumed")
+	})
+
+	it("holds an entire batch while any item awaits retry", async () => {
+		const manager = new SubagentJobManager()
+		const batch = manager.startBatch({
+			timeoutSeconds: 30,
+			items: [
+				{
+					task: "stable",
+					prompt: "stable",
+					runner: async () => ({ status: "completed", result: "stable", stats: {} as never }),
+				},
+				{
+					task: "retry",
+					prompt: "retry",
+					runner: async () => ({
+						status: "failed",
+						error: "temporary",
+						retryable: true,
+						stats: {} as never,
+					}),
+				},
+			],
+		})
+		await flushJobs()
+
+		expect(manager.getBatch(batch.batchJobId)?.status).toBe("failed")
+		expect(manager.listInjectableResults()).toEqual([])
+	})
+
+	it("notifies single job creation before starting its runner", async () => {
+		const manager = new SubagentJobManager()
+		let createdBeforeRun = false
+		let runnerStarted = false
+
+		manager.startJob({
+			task: "review api",
+			prompt: "<task>review api</task><context>ctx</context>",
+			timeoutSeconds: 30,
+			runner: async () => {
+				runnerStarted = true
+				return {
+					status: "completed",
+					result: "api ok",
+					stats: {
+						toolCalls: 1,
+						inputTokens: 10,
+						outputTokens: 5,
+						cacheWriteTokens: 0,
+						cacheReadTokens: 0,
+						totalCost: 0,
+						currency: "USD",
+						contextTokens: 100,
+						contextWindow: 1000,
+						contextUsagePercentage: 10,
+					},
+				}
+			},
+			onCreated: () => {
+				createdBeforeRun = !runnerStarted
+			},
+		})
+
+		await flushJobs()
+		assert.equal(createdBeforeRun, true)
+	})
 })

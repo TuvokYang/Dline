@@ -65,6 +65,10 @@ service TaskService {
   rpc subscribeToTaskActivities(TaskActivitySubscriptionRequest) returns (stream TaskActivityUpdate);
   // Cancels one or more task-local activities by stable activity id
   rpc cancelTaskActivities(CancelTaskActivitiesRequest) returns (CancelTaskActivitiesResponse);
+  // Requests one or more running subagents to stop exploring and complete
+  rpc finishTaskActivities(FinishTaskActivitiesRequest) returns (FinishTaskActivitiesResponse);
+  // Retries one or more retained retryable subagent activities
+  rpc retryTaskActivities(RetryTaskActivitiesRequest) returns (RetryTaskActivitiesResponse);
   // Moves a synchronous foreground command to background tracking
   rpc moveCommandToBackground(MoveCommandToBackgroundRequest) returns (MoveCommandToBackgroundResponse);
 }
@@ -297,6 +301,24 @@ message CancelTaskActivitiesResponse {
   repeated string cancelled_activity_ids = 1;
 }
 
+message FinishTaskActivitiesRequest {
+  string task_id = 1;
+  repeated string activity_ids = 2;
+}
+
+message FinishTaskActivitiesResponse {
+  repeated string finished_activity_ids = 1;
+}
+
+message RetryTaskActivitiesRequest {
+  string task_id = 1;
+  repeated string activity_ids = 2;
+}
+
+message RetryTaskActivitiesResponse {
+  repeated string retried_activity_ids = 1;
+}
+
 message MoveCommandToBackgroundRequest {
   string task_id = 1;
   string activity_id = 2;
@@ -331,6 +353,10 @@ message TaskActivityEvent {
   optional string error = 11;
   optional string status = 12;
   optional TaskActivityMetrics metrics = 13;
+  optional int32 retry_attempt = 14;
+  optional int32 max_retries = 15;
+  optional int64 delay_ms = 16;
+  optional int64 cumulative_delay_ms = 17;
 }
 
 message TaskActivity {
@@ -355,6 +381,8 @@ message TaskActivity {
   int32 schema_version = 19;
   repeated TaskActivityEvent events = 20;
   optional int32 timeout_seconds = 21;
+  bool finishable = 22;
+  bool retryable = 23;
 }
 
 message TaskActivityUpdate {

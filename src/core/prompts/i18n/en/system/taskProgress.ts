@@ -77,9 +77,9 @@ Pass the complete checklist with a \`# Title\`, optional \`## Section\` headings
 
 ### 2. Report progress during work — incremental update only
 
-The current checklist must already exist. Pass only items that are already in that stored checklist and were completed in this update, using the exact original item text character-for-character with \`- [x]\`. You may include at most one unchanged existing \`- [ ]\` item to identify the current next step, and it must remain in strict order.
+The current checklist must already exist. Pass only exact items already present in the stored checklist. Report newly completed items with \`- [x]\`. You may also report exactly one unchanged existing \`- [ ]\` item, either by itself to identify the current work or after completed items to identify the next current work. Preserve strict item order.
 
-Do not repeat the full checklist during an incremental update, even when copying it without changes. An incremental update must not contain \`# Title\`, \`## Section\`, a new heading, or any other unchecked item. Do not add, remove, reorder, rename, rephrase, or regroup checklist items. If the plan structure must change, stop using task_progress and request user authorization with \`change_todo_list\`.
+Do not repeat the full checklist during an ordinary incremental update, even when copying it without changes. An ordinary incremental update must not contain \`# Title\`, \`## Section\`, a new heading, or unrelated unchecked items. The explicit \`summarize_task\` operation is the only exception: it may request an ordered sequence of completed and subsequent unchecked items for continuation. Do not add, remove, reorder, rename, rephrase, or regroup checklist items. If the plan structure must change, stop using task_progress and request user authorization with \`change_todo_list\`.
 
 ### 3. Continue after all items are complete
 
@@ -129,9 +129,19 @@ Use this XML parameter form with the exact completed items:
 </task_progress>
 \`\`\`
 
-### Report completed items and the current item
+### Report current work only
 
-Use this XML parameter form with the exact completed items followed by one unchanged current item:
+Use this XML parameter form with one exact existing unchecked item:
+
+\`\`\`xml
+<task_progress>
+- [ ] Create components
+</task_progress>
+\`\`\`
+
+### Report completed items and the next current item
+
+Use this XML parameter form with the exact completed items followed by one exact existing unchecked item:
 
 \`\`\`xml
 <task_progress>
@@ -154,7 +164,7 @@ When all current items are complete and work continues, use this XML parameter f
 </task_progress>
 \`\`\``,
 
-	paramInstruction: `Omit task_progress when no TODO item is being created or updated. When provided, it must contain at least one non-empty checklist item. During an existing checklist, send only exact completed item text and at most one exact current item. Do not repeat the full checklist or change its structure. Use a full checklist only for initial creation or after all current items are complete and a new phase begins.`,
+	paramInstruction: `Omit task_progress when no TODO item is being created or updated. When provided, it must contain at least one non-empty checklist item. During an existing checklist, send exact newly completed items and at most one exact current item; the current item may be sent by itself. Do not repeat the full checklist or change its structure. Use a full checklist only for initial creation or after all current items are complete and a new phase begins.`,
 }
 
 export default prompts

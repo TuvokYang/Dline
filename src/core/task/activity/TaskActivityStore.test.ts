@@ -83,6 +83,95 @@ describe("TaskActivityStore", () => {
 		expect(store.listRunning("task").map((activity) => activity.activityId)).toEqual(["foreground-command"])
 	})
 
+	it("requests soft finish without cancelling or terminating the subagent activity", async () => {
+		const finish = vi.fn(async () => true)
+		const store = new TaskActivityStore("task-1")
+		store.create({
+			activityId: "subagent-finish",
+			kind: "subagent",
+			executionMode: "background",
+			title: "research",
+			finish,
+		})
+
+		expect(store.isFinishable("subagent-finish")).toBe(true)
+		expect(await store.finish(["subagent-finish"])).toEqual(["subagent-finish"])
+		expect(finish).toHaveBeenCalledTimes(1)
+		expect(store.get("subagent-finish")).toMatchObject({
+			status: "running",
+			latestEvent: "Finish requested",
+		})
+		expect(store.isFinishable("subagent-finish")).toBe(false)
+		expect(await store.finish(["subagent-finish"])).toEqual([])
+	})
+
+	it("publishes capability-only changes to activity subscribers", async () => {
+		const store = new TaskActivityStore("task-1")
+		store.create({
+			activityId: "subagent-capabilities",
+			kind: "subagent",
+			executionMode: "background",
+			title: "research",
+		})
+		store.update("subagent-capabilities", { status: "failed" })
+		const listener = vi.fn()
+		store.subscribe(listener)
+		await vi.waitFor(() => expect(listener).toHaveBeenCalled())
+		listener.mockClear()
+
+		store.setRetry("subagent-capabilities", async () => true)
+
+		await vi.waitFor(() => expect(listener).toHaveBeenCalled())
+		expect(store.isRetryable("subagent-capabilities")).toBe(true)
+		expect(listener.mock.calls.at(-1)?.[0]).toMatchObject({
+			snapshot: false,
+			activities: [{ activityId: "subagent-capabilities", status: "failed" }],
+		})
+	})
+
+	it("retries a retained failed subagent with the same activity identity", async () => {
+		const retry = vi.fn(async () => true)
+		const store = new TaskActivityStore("task-1")
+		store.create({
+			activityId: "subagent-retry",
+			kind: "subagent",
+			executionMode: "background",
+			title: "research",
+			retry,
+		})
+		store.update("subagent-retry", { status: "failed", error: "temporary provider failure" })
+
+		expect(store.isRetryable("subagent-retry")).toBe(true)
+		expect(await store.retry(["subagent-retry"])).toEqual(["subagent-retry"])
+		expect(retry).toHaveBeenCalledTimes(1)
+		expect(store.get("subagent-retry")).toMatchObject({
+			activityId: "subagent-retry",
+			status: "running",
+			latestEvent: "Retry requested",
+		})
+		expect(store.get("subagent-retry")?.error).toBeUndefined()
+		expect(store.get("subagent-retry")?.finishedAt).toBeUndefined()
+		expect(store.isRetryable("subagent-retry")).toBe(false)
+	})
+
+	it("does not expose subagent finish or retry controls for command activities", async () => {
+		const store = new TaskActivityStore("task-1")
+		store.create({
+			activityId: "command-controls",
+			kind: "command",
+			executionMode: "background",
+			title: "npm test",
+			finish: async () => true,
+			retry: async () => true,
+		})
+		store.update("command-controls", { status: "failed" })
+
+		expect(store.isFinishable("command-controls")).toBe(false)
+		expect(store.isRetryable("command-controls")).toBe(false)
+		expect(await store.finish(["command-controls"])).toEqual([])
+		expect(await store.retry(["command-controls"])).toEqual([])
+	})
+
 	it("exposes cancellation only while a live canceller is bound", () => {
 		const store = new TaskActivityStore("task-1")
 		store.create({
@@ -324,6 +413,36 @@ describe("TaskActivityStore", () => {
 		expect(cancel).toHaveBeenCalledTimes(1)
 		expect(store.get("subagent-1")?.status).toBe("cancelled")
 		expect(store.get("subagent-1")?.result).toBeUndefined()
+	})
+
+	it("exposes only the active foreground subagent that can continue in the background", () => {
+		const store = new TaskActivityStore("task-1")
+		store.create({
+			activityId: "subagent-ready",
+			kind: "subagent",
+			executionMode: "foreground",
+			title: "ready",
+			continueInBackground: async () => true,
+		})
+		store.create({
+			activityId: "subagent-no-handoff",
+			kind: "subagent",
+			executionMode: "foreground",
+			title: "no handoff",
+		})
+		store.create({
+			activityId: "subagent-background",
+			kind: "subagent",
+			executionMode: "background",
+			title: "background",
+			continueInBackground: async () => true,
+		})
+
+		expect(store.getReadyBackgroundHandoffActivityId("subagent")).toBe("subagent-ready")
+		expect(store.getReadyBackgroundHandoffActivityId("command")).toBeUndefined()
+
+		store.update("subagent-ready", { status: "completed" })
+		expect(store.getReadyBackgroundHandoffActivityId("subagent")).toBeUndefined()
 	})
 
 	it("moves an eligible foreground activity to explicit background ownership", async () => {

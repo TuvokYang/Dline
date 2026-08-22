@@ -5,12 +5,12 @@ ACT MODE is active. In the next tool call that supports \`task_progress\`, creat
 
 After creation:
 - Follow the stored item text and order exactly.
-- Report only newly completed \`- [x]\` items and, optionally, one exact current \`- [ ]\` item.
+- Report only newly completed exact \`- [x]\` items. You may also report one exact \`- [ ]\` item, either by itself to identify the current work or after completed items to identify the next work.
 - Use \`change_todo_list\` with user approval to change the list structure.
 - The full TODO list is shown in \`environment_details\`.`,
 
 	listInstructionsRecommended: `
-Create the initial TODO list through \`task_progress\`. Pass the complete list once, with a \`# Title\`, optional \`## Section\` headings, and at least one non-empty \`- [ ]\` item. Afterward, report only exact existing items whose checkbox state changed.
+Create the initial TODO list through \`task_progress\`. Pass the complete list once, with a \`# Title\`, optional \`## Section\` headings, and at least one non-empty \`- [ ]\` item. Afterward, report only exact existing items whose completion state or current-work selection changed.
 
 **Example initial creation:**
 \`\`\`
@@ -26,21 +26,28 @@ Create the initial TODO list through \`task_progress\`. Pass the complete list o
 - [ ] Check edge cases
 \`\`\`
 
-**After initial creation, only pass completed items:**
+**After initial creation, report only exact existing items whose completion or current-work state changed:**
 \`\`\`
 - [x] Review existing code
-- [x] Write core logic
+- [x] Identify affected modules
+- [ ] Write core logic
+\`\`\`
+
+A single exact unchecked item may be sent by itself to identify the current work:
+\`\`\`
+- [ ] Add error handling
 \`\`\``,
 
 	progressUpdateWhenSupported:
-		"# TODO LIST UPDATE: If your next tool supports task_progress and at least one TODO item changed, include the exact update. Otherwise omit task_progress. Tools without task_progress remain valid and must not be blocked.",
+		"# TODO LIST UPDATE: If your next tool supports task_progress and either completion state or the current work changed, include the exact update. Otherwise omit task_progress. Tools without task_progress remain valid and must not be blocked.",
 
 	reminder: `
-Use \`task_progress\` only when a TODO item changes:
-- Report newly completed items as \`- [x]\` with exact text from the stored list.
-- You may include one exact current \`- [ ]\` item alongside completed items.
-- Omit \`task_progress\` when no TODO item changed.
-- Complete items in order. Use \`change_todo_list\` with user approval to change list structure.`,
+Use \`task_progress\` only when completion state or the current work changes:
+- Report newly completed items as exact \`- [x]\` lines from the stored list.
+- You may report exactly one existing \`- [ ]\` item by itself to identify the current work.
+- When reporting completed items, you may append exactly one existing \`- [ ]\` item to identify the next current work.
+- Omit \`task_progress\` when neither completion state nor current work changed.
+- Complete items in strict order. Use \`change_todo_list\` with user approval to change list structure.`,
 
 	planModeReminder: `# TODO LIST (RECOMMENDED IN PLAN MODE)
 
@@ -65,12 +72,14 @@ When starting a multi-step task, create a TODO list through \`task_progress\` wi
 All {{totalItems}} items completed.
 
 **Next — choose ONE:**
-- **Continue work:** Pass a NEW full checklist via task_progress (with \`# Title\`, \`## Section\`, \`- [ ]\` items) to start the next phase.
+- **Continue work:** Pass a NEW full checklist via task_progress with a required \`# Title\`, optional \`## Section\` headings, and at least one non-empty \`- [ ]\` item to start the next phase.
 - **Finish task:** Call attempt_completion. Summarize what was accomplished, methods used, and test/verification results.
 - **Deliver report:** Call generate_report with findings, analysis, and recommendations.
 - **Present plan:** Call make_plan with the complete plan (in ACT MODE, only when the user explicitly requested a plan).`,
 
-	tamperingRejected: `TODO list update rejected. The submitted \`task_progress\` changes the stored list structure while unchecked items remain. Continue from the stored TODO list and report only exact existing items whose checkbox state changed. Use \`change_todo_list\` with user approval to change the structure.`,
+	tamperingRejected: `TODO list update rejected. The submitted \`task_progress\` changes the stored list structure while unchecked items remain. Continue from the stored TODO list and report only exact existing items whose completion state or current-work selection changed. Use \`change_todo_list\` with user approval to change the structure.`,
+	titleRequired: `TODO list update rejected. A complete checklist requires a top-level \`# Title\`. \`## Section\` headings are optional and cannot replace the title.`,
+	uncheckedItemRequired: `TODO list update rejected. A new complete checklist requires at least one non-empty \`- [ ]\` item. A checklist containing only completed items does not start a new work phase.`,
 	skipOrderRejected: `TODO list update rejected. Items must be completed in order. You marked a later item complete while an earlier item remains unchecked. This is the second order violation, so the update was not applied.
 
 Complete these items FIRST (in order):
@@ -111,7 +120,7 @@ If the plan genuinely needs to change, use change_todo_list to request user appr
 
 	focusChainChangeDenied: `The TODO list change was denied. Continue with the current TODO list.`,
 
-	focusChainChangeMissing: `The proposed TODO list must contain at least one non-empty \`- [ ]\` or \`- [x]\` item.`,
+	focusChainChangeMissing: `The proposed TODO list must contain a required top-level \`# Title\` and at least one non-empty \`- [ ]\` or \`- [x]\` item.`,
 
 	focusChainChangeNoItemsApproved: `No TODO items were approved. The current TODO list remains unchanged.`,
 
@@ -127,14 +136,14 @@ If the plan genuinely needs to change, use change_todo_list to request user appr
 
 	main: `TODO LIST MANAGEMENT
 
-When TODO tracking is enabled, tools that expose \`task_progress\` can create or update the TODO list shown in \`environment_details\`.
+Tools that expose \`task_progress\` can create or update the TODO list shown in \`environment_details\`.
 
 - Create the initial list once with a \`# Title\`, optional \`## Section\` headings, and at least one non-empty \`- [ ]\` item.
-- During work, report only exact existing items whose checkbox state changed, plus at most one exact current \`- [ ]\` item.
-- Omit \`task_progress\` when no TODO item changed. Blank or structurally empty values do not update the list.
+- During work, report exact newly completed items and at most one exact current \`- [ ]\` item; the current item may be sent by itself.
+- Omit \`task_progress\` when neither completion state nor current work changed. Blank or structurally empty values do not update the list.
 - Do not add, remove, rename, reorder, regroup, or repeat the full list while unchecked items remain.
 - Use \`change_todo_list\` with user approval to change the list structure.
-- Complete items in order. \`attempt_completion\` remains blocked until every TODO item is \`[x]\`.
+- Complete items in strict order. \`attempt_completion\` remains blocked until every TODO item is \`[x]\`.
 
 See Updating Task Progress for the lifecycle and examples.`,
 }

@@ -44,7 +44,7 @@ Description: [IMPORTANT: Always output the absolutePath first] Request to write 
 Parameters:
 - absolutePath: (required) The absolute path to the file to write to.
 - content: (required) The content to write to the file. ALWAYS provide the COMPLETE intended content of the file, without any truncation or omissions. You MUST include ALL parts of the file, even if they haven't been modified.
-- task_progress: (optional) Omit task_progress when no TODO item is being created or updated. When provided, it must contain at least one non-empty checklist item. During an existing checklist, send only exact completed item text and at most one exact current item. Do not repeat the full checklist or change its structure. Use a full checklist only for initial creation or after all current items are complete and a new phase begins.
+- task_progress: (optional) Omit task_progress when no TODO item is being created or updated. When provided, it must contain at least one non-empty checklist item. During an existing checklist, send exact newly completed items and at most one exact current item; the current item may be sent by itself. Do not repeat the full checklist or change its structure. Use a full checklist only for initial creation or after all current items are complete and a new phase begins.
 Usage:
 <write_to_file>
 <absolutePath></absolutePath>
@@ -87,7 +87,7 @@ Critical rules:
     - The match text may not exist exactly in the file due to character differences, whitespace, or indentation. Read the file and copy/paste the EXACT text you need to match.
     - NEVER use command-line tools (sed, awk, ripgrep, etc.) to edit files. Only use replace_in_file for editing existing files.
     - Always re-read the file before retrying after a failed match.
-- task_progress: (optional) Omit task_progress when no TODO item is being created or updated. When provided, it must contain at least one non-empty checklist item. During an existing checklist, send only exact completed item text and at most one exact current item. Do not repeat the full checklist or change its structure. Use a full checklist only for initial creation or after all current items are complete and a new phase begins.
+- task_progress: (optional) Omit task_progress when no TODO item is being created or updated. When provided, it must contain at least one non-empty checklist item. During an existing checklist, send exact newly completed items and at most one exact current item; the current item may be sent by itself. Do not repeat the full checklist or change its structure. Use a full checklist only for initial creation or after all current items are complete and a new phase begins.
 Usage:
 <replace_in_file>
 <absolutePath></absolutePath>
@@ -101,7 +101,7 @@ Parameters:
 - path: (required) The path of the file to read (relative to the current working directory /workspace/project)
 - start_line: (optional) The 1-based line number to start reading from (inclusive). Defaults to 1.
 - end_line: (optional) The 1-based line number to stop reading at (inclusive). Defaults to start_line + 1000. Use with start_line to read specific sections of large files.
-- task_progress: (optional) Omit task_progress when no TODO item is being created or updated. When provided, it must contain at least one non-empty checklist item. During an existing checklist, send only exact completed item text and at most one exact current item. Do not repeat the full checklist or change its structure. Use a full checklist only for initial creation or after all current items are complete and a new phase begins.
+- task_progress: (optional) Omit task_progress when no TODO item is being created or updated. When provided, it must contain at least one non-empty checklist item. During an existing checklist, send exact newly completed items and at most one exact current item; the current item may be sent by itself. Do not repeat the full checklist or change its structure. Use a full checklist only for initial creation or after all current items are complete and a new phase begins.
 Usage:
 <read_file>
 <path></path>
@@ -116,7 +116,7 @@ Parameters:
 - path: (required) The path of the directory to search in (relative to the current working directory /workspace/project). This directory will be recursively searched.
 - regex: (required) The regular expression pattern to search for. Uses Rust regex syntax.
 - file_pattern: (optional) Glob pattern to filter files (e.g., '*.ts' for TypeScript files). If not provided, it will search all files (*).
-- task_progress: (optional) Omit task_progress when no TODO item is being created or updated. When provided, it must contain at least one non-empty checklist item. During an existing checklist, send only exact completed item text and at most one exact current item. Do not repeat the full checklist or change its structure. Use a full checklist only for initial creation or after all current items are complete and a new phase begins.
+- task_progress: (optional) Omit task_progress when no TODO item is being created or updated. When provided, it must contain at least one non-empty checklist item. During an existing checklist, send exact newly completed items and at most one exact current item; the current item may be sent by itself. Do not repeat the full checklist or change its structure. Use a full checklist only for initial creation or after all current items are complete and a new phase begins.
 Usage:
 <search_files>
 <path></path>
@@ -131,7 +131,7 @@ Parameters:
 - path: (required) The path of the directory to list contents for.
 - recursive: (optional) Whether to list files recursively. Use true for recursive listing, false or omit for top-level only.
 - show_metadata: (optional) Whether to include file size, modification time, and line count metadata in the output. Defaults to true. Set to false for lightweight listings.
-- task_progress: (optional) Omit task_progress when no TODO item is being created or updated. When provided, it must contain at least one non-empty checklist item. During an existing checklist, send only exact completed item text and at most one exact current item. Do not repeat the full checklist or change its structure. Use a full checklist only for initial creation or after all current items are complete and a new phase begins.
+- task_progress: (optional) Omit task_progress when no TODO item is being created or updated. When provided, it must contain at least one non-empty checklist item. During an existing checklist, send exact newly completed items and at most one exact current item; the current item may be sent by itself. Do not repeat the full checklist or change its structure. Use a full checklist only for initial creation or after all current items are complete and a new phase begins.
 Usage:
 <list_files>
 <path></path>
@@ -144,7 +144,7 @@ Usage:
 Description: Request to list definition names (classes, functions, methods, etc.) used in source code files at the top level of the specified directory. This tool provides insights into the codebase structure and important constructs, encapsulating high-level concepts and relationships that are crucial for understanding the overall architecture. Each definition is prefixed with its start-end line range (e.g., '23-45 | function foo() {').
 Parameters:
 - path: (required) The path of a directory (not a file) relative to the current working directory /workspace/project. Lists definitions across all source files in that directory. To inspect a single file, use read_file instead.
-- task_progress: (optional) Omit task_progress when no TODO item is being created or updated. When provided, it must contain at least one non-empty checklist item. During an existing checklist, send only exact completed item text and at most one exact current item. Do not repeat the full checklist or change its structure. Use a full checklist only for initial creation or after all current items are complete and a new phase begins.
+- task_progress: (optional) Omit task_progress when no TODO item is being created or updated. When provided, it must contain at least one non-empty checklist item. During an existing checklist, send exact newly completed items and at most one exact current item; the current item may be sent by itself. Do not repeat the full checklist or change its structure. Use a full checklist only for initial creation or after all current items are complete and a new phase begins.
 Usage:
 <list_code_definition_names>
 <path></path>
@@ -156,7 +156,7 @@ Description: [TURN-END] Ask one focused question only when continuing requires a
 Parameters:
 - question: (required) The question to ask the user. This should be a clear, specific question that addresses the information you need. Ask only one question.
 - options: (required) An array of 2-5 options (e.x: "["Option 1", "Option 2", "Option 3"]") for the user to choose from. Each option should be a string describing a possible answer to the single question. You may not always need to provide options, but it may be helpful in many cases where it can save the user from having to type out a response manually. IMPORTANT: NEVER include an option to toggle to Act mode, as this would be something you need to direct the user to do manually themselves if needed.
-- task_progress: (optional) Omit task_progress when no TODO item is being created or updated. When provided, it must contain at least one non-empty checklist item. During an existing checklist, send only exact completed item text and at most one exact current item. Do not repeat the full checklist or change its structure. Use a full checklist only for initial creation or after all current items are complete and a new phase begins.
+- task_progress: (optional) Omit task_progress when no TODO item is being created or updated. When provided, it must contain at least one non-empty checklist item. During an existing checklist, send exact newly completed items and at most one exact current item; the current item may be sent by itself. Do not repeat the full checklist or change its structure. Use a full checklist only for initial creation or after all current items are complete and a new phase begins.
 Usage:
 <ask_followup_question>
 <question></question>
@@ -176,12 +176,12 @@ Usage:
 </attempt_completion>
 
 ## make_plan
-Description: [TURN-END] Present a COMPLETE implementation or design plan covering ALL user requirements. Available in both ACT and PLAN modes. In ACT MODE, use this tool only when the user explicitly requests a plan. In PLAN MODE, use it after thorough exploration and analysis when ready to present the plan. Your response MUST include the full plan with detailed analysis, architecture decisions, and a complete task_progress checklist organized with # Title and ## Section headings covering every step needed to fulfill ALL requirements. Do not simplify or omit parts of the plan - the user needs to see the entire plan to review it. Do not call repeatedly - use qna_respond for questions and discussion.
+Description: [TURN-END] Present a COMPLETE implementation or design plan covering ALL user requirements. Available in both ACT and PLAN modes. In ACT MODE, use this tool only when the user explicitly requests a plan. In PLAN MODE, use it after thorough exploration and analysis when ready to present the plan. Your response MUST include the full plan with detailed analysis, architecture decisions, and a complete task_progress checklist organized with a required # Title and optional ## Section headings covering every step needed to fulfill ALL requirements. Do not simplify or omit parts of the plan - the user needs to see the entire plan to review it. Do not call repeatedly - use qna_respond for questions and discussion.
 However, if while writing your response you realize you need more exploration before providing a complete plan, set the optional needs_more_exploration parameter.
 Parameters:
 - response: (required) The complete implementation or design plan to provide to the user.
 - needs_more_exploration: (optional) Set to true if formulating the plan reveals that more exploration with read/search tools is required. Defaults to false.
-- task_progress: (optional) Omit task_progress when no TODO item is being created or updated. When provided, it must contain at least one non-empty checklist item. During an existing checklist, send only exact completed item text and at most one exact current item. Do not repeat the full checklist or change its structure. Use a full checklist only for initial creation or after all current items are complete and a new phase begins.
+- task_progress: (optional) Omit task_progress when no TODO item is being created or updated. When provided, it must contain at least one non-empty checklist item. During an existing checklist, send exact newly completed items and at most one exact current item; the current item may be sent by itself. Do not repeat the full checklist or change its structure. Use a full checklist only for initial creation or after all current items are complete and a new phase begins.
 Usage:
 <make_plan>
 <response></response>
@@ -216,7 +216,7 @@ Do NOT use this tool when you have completed all required actions and are ready 
 CRITICAL CONSTRAINT: You MUST NOT call this tool more than once in a row. After using act_mode_respond, your next assistant message MUST either call a different tool or perform additional work without using act_mode_respond again. If you attempt to call act_mode_respond consecutively, the tool call will fail with an explicit error.
 Parameters:
 - response: (required) The message to provide to the user. This should explain what you're about to do, your current progress, or your reasoning. The response should be brief and conversational in tone, aiming to keep the user informed without overwhelming them with details.
-- task_progress: (optional) Omit task_progress when no TODO item is being created or updated. When provided, it must contain at least one non-empty checklist item. During an existing checklist, send only exact completed item text and at most one exact current item. Do not repeat the full checklist or change its structure. Use a full checklist only for initial creation or after all current items are complete and a new phase begins.
+- task_progress: (optional) Omit task_progress when no TODO item is being created or updated. When provided, it must contain at least one non-empty checklist item. During an existing checklist, send exact newly completed items and at most one exact current item; the current item may be sent by itself. Do not repeat the full checklist or change its structure. Use a full checklist only for initial creation or after all current items are complete and a new phase begins.
 Usage:
 <act_mode_respond>
 <response></response>
@@ -290,7 +290,7 @@ Parameters:
 - server_name: (required) The name of the MCP server providing the tool
 - tool_name: (required) The name of the tool to execute
 - arguments: (required) A JSON object containing the tool's input parameters, following the tool's input schema
-- task_progress: (optional) Omit task_progress when no TODO item is being created or updated. When provided, it must contain at least one non-empty checklist item. During an existing checklist, send only exact completed item text and at most one exact current item. Do not repeat the full checklist or change its structure. Use a full checklist only for initial creation or after all current items are complete and a new phase begins.
+- task_progress: (optional) Omit task_progress when no TODO item is being created or updated. When provided, it must contain at least one non-empty checklist item. During an existing checklist, send exact newly completed items and at most one exact current item; the current item may be sent by itself. Do not repeat the full checklist or change its structure. Use a full checklist only for initial creation or after all current items are complete and a new phase begins.
 Usage:
 <use_mcp_tool>
 <server_name></server_name>
@@ -304,7 +304,7 @@ Description: Request to access a resource provided by a connected MCP server. Re
 Parameters:
 - server_name: (required) The name of the MCP server providing the resource
 - uri: (required) The URI identifying the specific resource to access
-- task_progress: (optional) Omit task_progress when no TODO item is being created or updated. When provided, it must contain at least one non-empty checklist item. During an existing checklist, send only exact completed item text and at most one exact current item. Do not repeat the full checklist or change its structure. Use a full checklist only for initial creation or after all current items are complete and a new phase begins.
+- task_progress: (optional) Omit task_progress when no TODO item is being created or updated. When provided, it must contain at least one non-empty checklist item. During an existing checklist, send exact newly completed items and at most one exact current item; the current item may be sent by itself. Do not repeat the full checklist or change its structure. Use a full checklist only for initial creation or after all current items are complete and a new phase begins.
 Usage:
 <access_mcp_resource>
 <server_name></server_name>
@@ -352,7 +352,7 @@ Parameters:
 - file_path: (required) Absolute path to the file containing the symbol. Use the exact path as shown in the workspace file listing.
 - line: (required) 1-based line number where the symbol appears.
 - character: (required) 1-based character offset on the line where the symbol starts.
-- task_progress: (optional) Omit task_progress when no TODO item is being created or updated. When provided, it must contain at least one non-empty checklist item. During an existing checklist, send only exact completed item text and at most one exact current item. Do not repeat the full checklist or change its structure. Use a full checklist only for initial creation or after all current items are complete and a new phase begins.
+- task_progress: (optional) Omit task_progress when no TODO item is being created or updated. When provided, it must contain at least one non-empty checklist item. During an existing checklist, send exact newly completed items and at most one exact current item; the current item may be sent by itself. Do not repeat the full checklist or change its structure. Use a full checklist only for initial creation or after all current items are complete and a new phase begins.
 Usage:
 <find_references>
 <file_path></file_path>
@@ -369,7 +369,7 @@ Parameters:
 - character: (required) 1-based character offset on the line where the symbol starts.
 - new_name: (required) The new name for the symbol. Use camelCase/PascalCase/snake_case as appropriate for the language.
 - dry_run: (optional) When true, returns a preview of all changes without actually modifying any files. Defaults to false.
-- task_progress: (optional) Omit task_progress when no TODO item is being created or updated. When provided, it must contain at least one non-empty checklist item. During an existing checklist, send only exact completed item text and at most one exact current item. Do not repeat the full checklist or change its structure. Use a full checklist only for initial creation or after all current items are complete and a new phase begins.
+- task_progress: (optional) Omit task_progress when no TODO item is being created or updated. When provided, it must contain at least one non-empty checklist item. During an existing checklist, send exact newly completed items and at most one exact current item; the current item may be sent by itself. Do not repeat the full checklist or change its structure. Use a full checklist only for initial creation or after all current items are complete and a new phase begins.
 Usage:
 <rename>
 <file_path></file_path>
@@ -388,7 +388,7 @@ Parameters:
 - file_pattern: (required) Glob pattern to filter files (e.g., '*.ts', '*.md', 'src/**/*.ts'). Only files matching this pattern in the workspace will be checked.
 - dry_run: (optional) When true, returns a preview of all matches without modifying any files. Defaults to false.
 - literal: (optional) When true (default), 'find' is treated as a literal string. When false, 'find' is treated as a regex pattern.
-- task_progress: (optional) Omit task_progress when no TODO item is being created or updated. When provided, it must contain at least one non-empty checklist item. During an existing checklist, send only exact completed item text and at most one exact current item. Do not repeat the full checklist or change its structure. Use a full checklist only for initial creation or after all current items are complete and a new phase begins.
+- task_progress: (optional) Omit task_progress when no TODO item is being created or updated. When provided, it must contain at least one non-empty checklist item. During an existing checklist, send exact newly completed items and at most one exact current item; the current item may be sent by itself. Do not repeat the full checklist or change its structure. Use a full checklist only for initial creation or after all current items are complete and a new phase begins.
 Usage:
 <replace_text>
 <find></find>
@@ -458,7 +458,7 @@ apply_patch <<"EOF"
 EOF
 Parameters:
 - input: (required) The apply_patch command that you wish to execute.
-- task_progress: (optional) Omit task_progress when no TODO item is being created or updated. When provided, it must contain at least one non-empty checklist item. During an existing checklist, send only exact completed item text and at most one exact current item. Do not repeat the full checklist or change its structure. Use a full checklist only for initial creation or after all current items are complete and a new phase begins.
+- task_progress: (optional) Omit task_progress when no TODO item is being created or updated. When provided, it must contain at least one non-empty checklist item. During an existing checklist, send exact newly completed items and at most one exact current item; the current item may be sent by itself. Do not repeat the full checklist or change its structure. Use a full checklist only for initial creation or after all current items are complete and a new phase begins.
 Usage:
 <apply_patch>
 <input></input>
@@ -488,11 +488,11 @@ Usage:
 </change_todo_list>
 
 ## use_subagent
-Description: Run one focused default or named subagent. Omit agent_name or use 'default' for the built-in readonly research subagent; use an advertised YAML name for a configured agent.
+Description: Run one focused default or named subagent. Omit agent_name or use 'default' for the built-in readonly research subagent; use an advertised YAML name for a configured agent. Use this to preserve the main task's context window through self-contained research. Keep the delegated research boundary independent from the main task's modification boundary, and do not infer write authorization from files the subagent explores or reports.
 Parameters:
 - agent_name: (optional) Optional advertised subagent name. Omit or use 'default' for the built-in default profile.
 - task: (required) Focused task for the subagent.
-- context: (required) Relevant context, constraints, and expected result for the subagent.
+- context: (required) Relevant context, constraints, and expected result for the subagent. Include enough context for independent research, but do not use this field to expand or redefine the main task's modification boundary.
 - background: (optional) Optional boolean. Set true to run in background. Defaults to false.
 - timeout: (optional) Optional positive integer timeout in seconds for each subagent. Defaults to 1200.
 Usage:
@@ -505,7 +505,7 @@ Usage:
 </use_subagent>
 
 ## use_subagents
-Description: Run up to five built-in default subagents in parallel. Each subagent gets its own prompt and returns a comprehensive research result with tool and token stats. Use this for broad exploration when reading many files would consume the main agent's context window. Using one subagent is valid.
+Description: Run up to five built-in default subagents in parallel. Each subagent gets its own prompt and returns a comprehensive research result with tool and token stats. Use this to preserve the main task's context window by delegating self-contained research. Keep each delegated research boundary independent from the main task's modification boundary: provide only the context needed for investigation, and do not treat files explored or reported by a subagent as authorized write scope. Using one subagent is valid.
 Parameters:
 - prompt_1: (required) First subagent prompt. Must include <task> and <context> sections.
 - prompt_2: (optional) Optional second subagent prompt. Must include <task> and <context> sections when provided.
@@ -534,7 +534,7 @@ IMPORTANT: Do NOT use this tool consecutively. After calling status_update, your
 Parameters:
 - response: (required) The progress statement or announcement text. Be concise and informative.
 - requires_acknowledgment: (optional) Set to true if you need the user to explicitly acknowledge before continuing. Defaults to false — execution continues immediately.
-- task_progress: (optional) Omit task_progress when no TODO item is being created or updated. When provided, it must contain at least one non-empty checklist item. During an existing checklist, send only exact completed item text and at most one exact current item. Do not repeat the full checklist or change its structure. Use a full checklist only for initial creation or after all current items are complete and a new phase begins.
+- task_progress: (optional) Omit task_progress when no TODO item is being created or updated. When provided, it must contain at least one non-empty checklist item. During an existing checklist, send exact newly completed items and at most one exact current item; the current item may be sent by itself. Do not repeat the full checklist or change its structure. Use a full checklist only for initial creation or after all current items are complete and a new phase begins.
 Usage:
 <status_update>
 <response></response>
@@ -549,7 +549,7 @@ The report should include relevant code snippets, architectural decisions, error
 Parameters:
 - title: (required) A concise, descriptive title for the report.
 - content: (required) The full report content. Use markdown formatting for readability. Include sections like Background, Findings, Analysis, Recommendations as appropriate.
-- task_progress: (optional) Omit task_progress when no TODO item is being created or updated. When provided, it must contain at least one non-empty checklist item. During an existing checklist, send only exact completed item text and at most one exact current item. Do not repeat the full checklist or change its structure. Use a full checklist only for initial creation or after all current items are complete and a new phase begins.
+- task_progress: (optional) Omit task_progress when no TODO item is being created or updated. When provided, it must contain at least one non-empty checklist item. During an existing checklist, send exact newly completed items and at most one exact current item; the current item may be sent by itself. Do not repeat the full checklist or change its structure. Use a full checklist only for initial creation or after all current items are complete and a new phase begins.
 Usage:
 <generate_report>
 <title></title>
@@ -730,14 +730,14 @@ Invoke the operation by filling that template and emitting exactly one complete,
 
 # TODO LIST MANAGEMENT
 
-When TODO tracking is enabled, tools that expose `task_progress` can create or update the TODO list shown in `environment_details`.
+Tools that expose `task_progress` can create or update the TODO list shown in `environment_details`.
 
 - Create the initial list once with a `# Title`, optional `## Section` headings, and at least one non-empty `- [ ]` item.
-- During work, report only exact existing items whose checkbox state changed, plus at most one exact current `- [ ]` item.
-- Omit `task_progress` when no TODO item changed. Blank or structurally empty values do not update the list.
+- During work, report exact newly completed items and at most one exact current `- [ ]` item; the current item may be sent by itself.
+- Omit `task_progress` when neither completion state nor current work changed. Blank or structurally empty values do not update the list.
 - Do not add, remove, rename, reorder, regroup, or repeat the full list while unchecked items remain.
 - Use `change_todo_list` with user approval to change the list structure.
-- Complete items in order. `attempt_completion` remains blocked until every TODO item is `[x]`.
+- Complete items in strict order. `attempt_completion` remains blocked until every TODO item is `[x]`.
 
 See Updating Task Progress for the lifecycle and examples.
 
@@ -753,9 +753,9 @@ Pass the complete checklist with a `# Title`, optional `## Section` headings, an
 
 ### 2. Report progress during work — incremental update only
 
-The current checklist must already exist. Pass only items that are already in that stored checklist and were completed in this update, using the exact original item text character-for-character with `- [x]`. You may include at most one unchanged existing `- [ ]` item to identify the current next step, and it must remain in strict order.
+The current checklist must already exist. Pass only exact items already present in the stored checklist. Report newly completed items with `- [x]`. You may also report exactly one unchanged existing `- [ ]` item, either by itself to identify the current work or after completed items to identify the next current work. Preserve strict item order.
 
-Do not repeat the full checklist during an incremental update, even when copying it without changes. An incremental update must not contain `# Title`, `## Section`, a new heading, or any other unchecked item. Do not add, remove, reorder, rename, rephrase, or regroup checklist items. If the plan structure must change, stop using task_progress and request user authorization with `change_todo_list`.
+Do not repeat the full checklist during an ordinary incremental update, even when copying it without changes. An ordinary incremental update must not contain `# Title`, `## Section`, a new heading, or unrelated unchecked items. The explicit `summarize_task` operation is the only exception: it may request an ordered sequence of completed and subsequent unchecked items for continuation. Do not add, remove, reorder, rename, rephrase, or regroup checklist items. If the plan structure must change, stop using task_progress and request user authorization with `change_todo_list`.
 
 ### 3. Continue after all items are complete
 
@@ -805,9 +805,19 @@ Use this XML parameter form with the exact completed items:
 </task_progress>
 ```
 
-### Report completed items and the current item
+### Report current work only
 
-Use this XML parameter form with the exact completed items followed by one unchanged current item:
+Use this XML parameter form with one exact existing unchecked item:
+
+```xml
+<task_progress>
+- [ ] Create components
+</task_progress>
+```
+
+### Report completed items and the next current item
+
+Use this XML parameter form with the exact completed items followed by one exact existing unchecked item:
 
 ```xml
 <task_progress>

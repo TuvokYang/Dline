@@ -12,6 +12,7 @@ export interface StartSubagentJobInput {
 	prompt: string
 	timeoutSeconds: number
 	runner: SubagentJobRunner
+	onCreated?: (job: SubagentJobRecord) => void
 	onStatusChange?: SubagentJobListener
 }
 
@@ -29,6 +30,18 @@ export interface StartSubagentBatchInput {
 	onCreated?: (batch: SubagentBatchRecord) => void
 }
 
+export interface RetainRetryableSubagentJobInput {
+	jobId: string
+	subagentName?: string
+	task: string
+	prompt: string
+	timeoutSeconds: number
+	startedAt: number
+	result: SubagentExecResult
+	runner: SubagentJobRunner
+	onStatusChange?: SubagentJobListener
+}
+
 export interface SubagentJobRecord {
 	jobId: string
 	batchJobId?: string
@@ -42,6 +55,8 @@ export interface SubagentJobRecord {
 	result?: string
 	error?: string
 	stats?: SubagentExecResult["stats"]
+	retryable?: boolean
+	attempt: number
 	injectionState: SubagentInjectionState
 }
 
@@ -63,6 +78,8 @@ export type SubagentInjectableResult =
 export class SubagentJobManager {
 	private jobs = new Map<string, SubagentJobRecord>()
 	private batches = new Map<string, SubagentBatchRecord>()
+	private runners = new Map<string, SubagentJobRunner>()
+	private listeners = new Map<string, SubagentJobListener>()
 	private nextJobNumber = 1
 	private nextBatchNumber = 1
 
@@ -73,6 +90,7 @@ export class SubagentJobManager {
 	 */
 	startJob(input: StartSubagentJobInput): SubagentJobRecord {
 		const job = this.createJob(input)
+		input.onCreated?.({ ...job })
 		void this.runJob(job.jobId, input.runner, undefined, input.onStatusChange)
 		return job
 	}
@@ -96,7 +114,10 @@ export class SubagentJobManager {
 		this.batches.set(batchJobId, batch)
 		const runners: Array<{ jobId: string; runner: SubagentJobRunner }> = []
 		for (const item of input.items) {
-			const job = this.createJob({ ...item, timeoutSeconds: input.timeoutSeconds }, batchJobId)
+			const job = this.createJob(
+				{ ...item, timeoutSeconds: input.timeoutSeconds, onStatusChange: input.onStatusChange },
+				batchJobId,
+			)
 			batch.itemJobIds.push(job.jobId)
 			runners.push({ jobId: job.jobId, runner: item.runner })
 		}
@@ -148,7 +169,59 @@ export class SubagentJobManager {
 	 * @returns Job records pending result injection.
 	 */
 	listInjectableJobs(): SubagentJobRecord[] {
-		return this.listJobs().filter((job) => job.status !== "running" && job.injectionState === "pending")
+		return this.listJobs().filter((job) => job.status !== "running" && !job.retryable && job.injectionState === "pending")
+	}
+
+	retainRetryableJob(input: RetainRetryableSubagentJobInput): SubagentJobRecord {
+		const existing = this.jobs.get(input.jobId)
+		if (existing) return { ...existing }
+		if (input.result.status !== "failed" || input.result.retryable !== true) {
+			throw new Error("Only retryable failed subagent results can be retained.")
+		}
+		const job: SubagentJobRecord = {
+			jobId: input.jobId,
+			subagentName: input.subagentName,
+			task: input.task,
+			prompt: input.prompt,
+			status: "failed",
+			startedAt: input.startedAt,
+			finishedAt: Date.now(),
+			timeoutSeconds: input.timeoutSeconds,
+			error: input.result.error,
+			stats: input.result.stats,
+			retryable: true,
+			attempt: 1,
+			injectionState: "pending",
+		}
+		this.jobs.set(job.jobId, job)
+		this.runners.set(job.jobId, input.runner)
+		if (input.onStatusChange) this.listeners.set(job.jobId, input.onStatusChange)
+		return { ...job }
+	}
+
+	async retryJob(jobId: string): Promise<boolean> {
+		const job = this.jobs.get(jobId)
+		const runner = this.runners.get(jobId)
+		if (!job || !runner || job.status !== "failed" || !job.retryable) return false
+		job.status = "running"
+		job.startedAt = Date.now()
+		job.finishedAt = undefined
+		job.result = undefined
+		job.error = undefined
+		job.stats = undefined
+		job.retryable = false
+		job.attempt += 1
+		job.injectionState = "pending"
+		if (job.batchJobId) {
+			const batch = this.batches.get(job.batchJobId)
+			if (batch) {
+				batch.status = "running"
+				batch.finishedAt = undefined
+				batch.injectionState = "pending"
+			}
+		}
+		void this.runJob(jobId, runner, job.batchJobId, this.listeners.get(jobId))
+		return true
 	}
 
 	/**
@@ -161,9 +234,12 @@ export class SubagentJobManager {
 		for (const batch of this.listBatches()) {
 			if (batch.status === "running" || batch.injectionState !== "pending") continue
 			const jobs = batch.itemJobIds.map((jobId) => this.getJob(jobId)).filter((job): job is SubagentJobRecord => !!job)
-			if (jobs.length === 0) continue
-			jobs.forEach((job) => batchedJobIds.add(job.jobId))
-			results.push({ kind: "batch", batch, jobs })
+			const pendingJobs = jobs.filter((job) => job.injectionState === "pending")
+			if (pendingJobs.length === 0 || pendingJobs.some((job) => job.retryable)) continue
+			pendingJobs.forEach((job) => {
+				batchedJobIds.add(job.jobId)
+			})
+			results.push({ kind: "batch", batch, jobs: pendingJobs })
 		}
 		for (const job of this.listInjectableJobs()) {
 			if (job.batchJobId || batchedJobIds.has(job.jobId)) continue
@@ -204,9 +280,12 @@ export class SubagentJobManager {
 			status: "running",
 			startedAt: Date.now(),
 			timeoutSeconds: input.timeoutSeconds,
+			attempt: 1,
 			injectionState: "pending",
 		}
 		this.jobs.set(job.jobId, job)
+		this.runners.set(job.jobId, input.runner)
+		if (input.onStatusChange) this.listeners.set(job.jobId, input.onStatusChange)
 		return { ...job }
 	}
 
@@ -255,6 +334,7 @@ export class SubagentJobManager {
 		job.result = result.result
 		job.error = result.error
 		job.stats = result.stats
+		job.retryable = result.status === "failed" && result.retryable === true
 	}
 
 	/**
@@ -268,6 +348,7 @@ export class SubagentJobManager {
 		job.status = "failed"
 		job.finishedAt = Date.now()
 		job.error = error instanceof Error ? error.message : String(error)
+		job.retryable = false
 	}
 
 	/**

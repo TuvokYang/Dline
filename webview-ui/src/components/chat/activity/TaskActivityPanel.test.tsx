@@ -11,7 +11,12 @@ import {
 	TaskActivityPanel,
 } from "./TaskActivityPanel"
 
-const cancelTaskActivities = vi.fn()
+const { cancelTaskActivities, finishTaskActivities, retryTaskActivities, extraActivities } = vi.hoisted(() => ({
+	cancelTaskActivities: vi.fn(),
+	finishTaskActivities: vi.fn(),
+	retryTaskActivities: vi.fn(),
+	extraActivities: [] as Array<Record<string, unknown>>,
+}))
 
 function ActivitiesTabHarness() {
 	const [tab, setTab] = useState<"work" | "activities">("work")
@@ -57,6 +62,8 @@ vi.mock("@/services/grpc-client", () => ({
 
 vi.mock("./useTaskActivities", () => ({
 	cancelTaskActivities: (...args: unknown[]) => cancelTaskActivities(...args),
+	finishTaskActivities: (...args: unknown[]) => finishTaskActivities(...args),
+	retryTaskActivities: (...args: unknown[]) => retryTaskActivities(...args),
 	useTaskActivities: () => ({
 		activities: [
 			{
@@ -150,7 +157,9 @@ vi.mock("./useTaskActivities", () => ({
 				status: "completed",
 				createdAt: 100,
 				updatedAt: 150,
+				finishedAt: 5_100,
 				title: "old agent",
+				metrics: { toolCalls: 1, inputTokens: 10, outputTokens: 5, totalCost: 0.01, currency: "USD" },
 				events: [
 					{
 						sequence: 1,
@@ -192,6 +201,7 @@ vi.mock("./useTaskActivities", () => ({
 					},
 				],
 			},
+			...extraActivities,
 		],
 	}),
 }))
@@ -199,6 +209,9 @@ vi.mock("./useTaskActivities", () => ({
 describe("TaskActivityPanel", () => {
 	beforeEach(() => {
 		cancelTaskActivities.mockClear()
+		finishTaskActivities.mockClear()
+		retryTaskActivities.mockClear()
+		extraActivities.length = 0
 		vi.mocked(FileServiceClient.openFile).mockClear()
 		Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
 			configurable: true,
@@ -231,7 +244,7 @@ describe("TaskActivityPanel", () => {
 		const items = screen.getAllByTestId("activity-item")
 		expect(items).toHaveLength(1)
 		expect(items[0]).toHaveAttribute("data-activity-id", "old-agent")
-		expect(within(items[0]).getByTestId("activity-timeline")).toBeInTheDocument()
+		expect(within(items[0]).getByTestId("subagent-tool-timeline")).toBeInTheDocument()
 	})
 
 	it("preserves filters when switching away from and back to Activities", () => {
@@ -267,7 +280,7 @@ describe("TaskActivityPanel", () => {
 
 		const items = screen.getAllByTestId("activity-item")
 		expect(items).toHaveLength(1)
-		expect(screen.getByTestId("activity-list")).toHaveClass("space-y-3")
+		expect(screen.getByTestId("activity-list")).toHaveClass("space-y-2")
 		expect(items[0]).toHaveClass("border-editor-widget-border/60", "overflow-hidden")
 		expect(within(items[0]).getByTestId("activity-header")).toHaveClass("bg-toolbar-hover/30")
 		expect(within(items[0]).getByTestId("activity-status-accent")).toHaveClass("bg-link")
@@ -297,9 +310,126 @@ describe("TaskActivityPanel", () => {
 		expect(summary).not.toHaveTextContent("old progress")
 
 		const cancelButton = within(items[0]).getByRole("button", { name: "Cancel" })
-		expect(cancelButton).toHaveClass("h-5", "self-center", "bg-button-background", "text-[11px]")
+		expect(cancelButton).toHaveClass("h-5", "self-center", "bg-[#c42b2b]", "text-white!", "text-[11px]")
+		expect(cancelButton).not.toHaveClass("bg-button-background", "text-button-foreground", "hover:bg-button-hover")
 		fireEvent.click(cancelButton)
 		expect(cancelTaskActivities).toHaveBeenCalledWith("task-1", ["new-command"])
+	})
+
+	it("shows Finish and Retry only for capable subagent activities", async () => {
+		extraActivities.push(
+			{
+				activityId: "running-agent",
+				taskId: "task-1",
+				kind: "subagent",
+				executionMode: "background",
+				status: "running",
+				cancellable: true,
+				finishable: true,
+				retryable: false,
+				createdAt: 250,
+				updatedAt: 250,
+				title: "running agent",
+				events: [],
+			},
+			{
+				activityId: "retry-agent",
+				taskId: "task-1",
+				kind: "subagent",
+				executionMode: "background",
+				status: "failed",
+				cancellable: false,
+				finishable: false,
+				retryable: true,
+				createdAt: 240,
+				updatedAt: 240,
+				finishedAt: 240,
+				title: "retry agent",
+				events: [],
+			},
+		)
+		let resolveFinish!: () => void
+		let resolveRetry!: () => void
+		finishTaskActivities.mockImplementationOnce(() => new Promise<void>((resolve) => (resolveFinish = resolve)))
+		retryTaskActivities.mockImplementationOnce(() => new Promise<void>((resolve) => (resolveRetry = resolve)))
+		render(<TaskActivityPanel filters={{ status: "all", kind: "subagent" }} taskId="task-1" />)
+		const finishButton = screen.getByRole("button", { name: "Finish" })
+		const retryButton = screen.getByRole("button", { name: "Retry" })
+
+		fireEvent.click(finishButton)
+		fireEvent.click(finishButton)
+		fireEvent.click(retryButton)
+		fireEvent.click(retryButton)
+
+		expect(finishTaskActivities).toHaveBeenCalledTimes(1)
+		expect(finishTaskActivities).toHaveBeenCalledWith("task-1", ["running-agent"])
+		expect(retryTaskActivities).toHaveBeenCalledTimes(1)
+		expect(retryTaskActivities).toHaveBeenCalledWith("task-1", ["retry-agent"])
+		expect(finishButton).toBeDisabled()
+		expect(retryButton).toBeDisabled()
+		expect(screen.getAllByRole("button", { name: "Finish" })).toHaveLength(1)
+		expect(screen.getAllByRole("button", { name: "Retry" })).toHaveLength(1)
+		resolveFinish()
+		resolveRetry()
+		await waitFor(() => {
+			expect(finishButton).not.toBeDisabled()
+			expect(retryButton).not.toBeDisabled()
+		})
+	})
+
+	it("shows automatic retry timing in expanded subagent activity output", () => {
+		extraActivities.push({
+			activityId: "retry-history-agent",
+			taskId: "task-1",
+			kind: "subagent",
+			executionMode: "foreground",
+			status: "failed",
+			cancellable: false,
+			finishable: false,
+			retryable: true,
+			createdAt: 240,
+			updatedAt: 55_240,
+			finishedAt: 55_240,
+			title: "retry history agent",
+			error: "Temporary provider failure",
+			events: [
+				{
+					sequence: 1,
+					timestamp: 1,
+					kind: "retry",
+					retryAttempt: 1,
+					maxRetries: 5,
+					delayMs: 5_000,
+					cumulativeDelayMs: 5_000,
+				},
+				{
+					sequence: 2,
+					timestamp: 2,
+					kind: "retry",
+					retryAttempt: 5,
+					maxRetries: 5,
+					delayMs: 17_000,
+					cumulativeDelayMs: 55_000,
+				},
+			],
+		})
+		render(<TaskActivityPanel filters={{ status: "all", kind: "subagent" }} taskId="task-1" />)
+		const item = screen
+			.getAllByTestId("activity-item")
+			.find((candidate) => candidate.textContent?.includes("retry history agent"))
+		expect(item).toBeDefined()
+		const scopedItem = item as HTMLElement
+		fireEvent.click(within(scopedItem).getByTestId("activity-toggle"))
+
+		const retries = within(scopedItem).getByTestId("subagent-retry-timeline")
+		expect(retries).toHaveTextContent("Automatic retries (2)")
+		expect(retries).toHaveTextContent("Retry 1/5")
+		expect(retries).toHaveTextContent("wait 5s")
+		expect(retries).toHaveTextContent("total 5s")
+		expect(retries).toHaveTextContent("Retry 5/5")
+		expect(retries).toHaveTextContent("wait 17s")
+		expect(retries).toHaveTextContent("total 55s")
+		expect(within(scopedItem).getByTestId("subagent-activity-body")).toHaveTextContent("Temporary provider failure")
 	})
 
 	it("renders recovered activities as interrupted without a spinner or cancellation action", () => {
@@ -385,22 +515,31 @@ describe("TaskActivityPanel", () => {
 		expect(item).not.toHaveTextContent(/\d+ tokens/)
 	})
 
-	it("renders an ordered typed timeline with thinking, conversation, tools, results, and metrics", () => {
+	it("renders one expandable tool step and filters internal activity events", () => {
 		render(<TaskActivityPanel taskId="task-1" />)
 		fireEvent.click(screen.getAllByRole("button", { name: "All" })[0])
 		const oldAgent = screen.getAllByTestId("activity-item").find((item) => item.textContent?.includes("old agent"))
 		expect(oldAgent).toBeDefined()
 		fireEvent.click(within(oldAgent as HTMLElement).getByRole("button", { name: /old agent/i }))
 
-		const timeline = within(oldAgent as HTMLElement).getByTestId("activity-timeline")
-		const events = within(timeline).getAllByTestId("activity-event")
-		expect(events.map((event) => event.textContent)).toEqual([
-			expect.stringContaining("Thinking"),
-			expect.stringContaining("Assistant"),
-			expect.stringContaining("read_file"),
-			expect.stringContaining("executor content"),
-			expect.stringContaining("1 tools"),
-		])
+		const scopedOldAgent = oldAgent as HTMLElement
+		const timeline = within(scopedOldAgent).getByTestId("subagent-tool-timeline")
+		expect(within(timeline).getAllByTestId("subagent-tool-step")).toHaveLength(1)
+		expect(within(timeline).getByTestId("subagent-tool-step-name")).toHaveTextContent("read_file")
+		expect(within(timeline).getByTestId("subagent-tool-step-summary")).toHaveTextContent("read executor")
+		expect(within(scopedOldAgent).queryByTestId("activity-event")).not.toBeInTheDocument()
+		expect(scopedOldAgent).not.toHaveTextContent("Thinking")
+		expect(scopedOldAgent).not.toHaveTextContent("Assistant")
+		const metrics = within(scopedOldAgent).getByTestId("subagent-metrics")
+		expect(metrics).toHaveTextContent("1 tool")
+		expect(metrics).toHaveTextContent("5s")
+		expect(metrics).toHaveTextContent("In:10")
+		expect(metrics).toHaveTextContent("Out:5")
+		expect(metrics).toHaveTextContent("$0.01")
+		expect(within(scopedOldAgent).queryByTestId("subagent-tool-step-details")).not.toBeInTheDocument()
+
+		fireEvent.click(within(timeline).getByRole("button"))
+		expect(within(scopedOldAgent).getByTestId("subagent-tool-step-details")).toHaveTextContent("executor content")
 	})
 
 	it("shows all activities and filters the vertical list by type", () => {

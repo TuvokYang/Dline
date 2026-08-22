@@ -22,7 +22,17 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { useExtensionState } from "@/context/ExtensionStateContext"
 import MarkdownBlock from "../common/MarkdownBlock"
-import { cancelTaskActivities, moveSubagentToBackground, useTaskActivities } from "./activity/useTaskActivities"
+import { SubagentMetrics } from "./activity/SubagentMetrics"
+import { SubagentRetryTimeline } from "./activity/SubagentRetryTimeline"
+import { SubagentToolTimeline } from "./activity/SubagentToolTimeline"
+import { SubagentWorkSection } from "./activity/SubagentWorkSection"
+import {
+	buildSubagentRetryAttempts,
+	buildSubagentToolSteps,
+	normalizeSubagentDisplayText,
+} from "./activity/subagent-activity-model"
+import { useActivityControlGuard } from "./activity/useActivityControlGuard"
+import { cancelTaskActivities, finishTaskActivities, retryTaskActivities, useTaskActivities } from "./activity/useTaskActivities"
 
 interface SubagentStatusRowProps {
 	message: ClineMessage
@@ -32,6 +42,7 @@ interface SubagentStatusRowProps {
 
 type DisplayStatus = SubagentExecutionStatus
 type SubagentRowStatus = SubagentExecutionStatus
+type SubagentWorkSectionKey = "task" | "tools" | "output"
 
 interface SubagentRowData {
 	status: SubagentRowStatus
@@ -46,14 +57,8 @@ interface SubagentPromptTextProps {
 
 interface SubagentDisplayItem extends SubagentStatusItem {
 	activityEvents?: TaskActivityEvent[]
-}
-
-interface SubagentToolCallRow {
-	toolCallId: string
-	toolName: string
-	toolStatus?: string
-	summary?: string
-	sequence: number
+	finishable?: boolean
+	retryable?: boolean
 }
 
 const statusIcon = (status: DisplayStatus) => {
@@ -73,104 +78,19 @@ const statusIcon = (status: DisplayStatus) => {
 	}
 }
 
-const formatCount = (value: number | undefined): string => {
-	if (!Number.isFinite(value)) {
-		return "0"
-	}
-
-	return Intl.NumberFormat("en-US").format(value || 0)
-}
-
-const formatCost = (value: number | undefined, currency: string): string => {
-	const normalized = Number.isFinite(value) ? Math.max(0, value || 0) : 0
-	const maximumFractionDigits = normalized >= 0.01 ? 2 : 4
-	const currencyCode = currency || "USD"
-	return Intl.NumberFormat("en-US", {
-		style: "currency",
-		currency: currencyCode,
-		minimumFractionDigits: 2,
-		maximumFractionDigits,
-	}).format(normalized)
-}
-
-function getOrderedToolCalls(events: TaskActivityEvent[] | undefined): SubagentToolCallRow[] {
-	if (!events?.length) return []
-
-	const calls: SubagentToolCallRow[] = []
-	const activeCalls = new Map<string, SubagentToolCallRow>()
-	const lastCalls = new Map<string, SubagentToolCallRow>()
-	const orderedEvents = [...events].sort((left, right) => left.sequence - right.sequence || left.timestamp - right.timestamp)
-	for (const event of orderedEvents) {
-		if (event.kind !== "tool_call" || !event.toolCallId || !event.toolName) continue
-		let call = activeCalls.get(event.toolCallId)
-		if (!call) {
-			const last = lastCalls.get(event.toolCallId)
-			if (event.toolStatus !== "started" && last?.toolStatus === event.toolStatus && last?.summary === event.summary) {
-				continue
-			}
-			call = {
-				toolCallId: event.toolCallId,
-				toolName: event.toolName,
-				toolStatus: event.toolStatus,
-				summary: event.summary,
-				sequence: event.sequence,
-			}
-			calls.push(call)
-			activeCalls.set(event.toolCallId, call)
-		}
-		call.toolStatus = event.toolStatus
-		call.summary = event.summary || call.summary
-		lastCalls.set(event.toolCallId, call)
-		if (event.toolStatus === "completed" || event.toolStatus === "failed") {
-			activeCalls.delete(event.toolCallId)
-		}
-	}
-
-	return calls.sort((left, right) => left.sequence - right.sequence)
-}
-
 function SubagentContext({ context }: { context: string }) {
+	const displayContext = normalizeSubagentDisplayText(context)
 	return (
 		<div
-			className="flex h-5 min-w-0 items-center gap-1 rounded-xs border border-editor-group-border px-2 text-[11px] text-foreground opacity-80"
+			className="flex w-full min-w-0 max-w-full items-start gap-1 overflow-hidden rounded-xs border border-editor-group-border px-2 py-1 text-[11px] text-foreground opacity-80"
 			data-testid="subagent-context">
 			<span className="shrink-0 font-semibold">Context</span>
-			<span className="min-w-0 truncate" data-testid="subagent-context-content" title={context}>
-				{context}
+			<span
+				className="min-w-0 flex-1 whitespace-pre-wrap break-words [overflow-wrap:anywhere]"
+				data-testid="subagent-context-content"
+				title={displayContext}>
+				{displayContext}
 			</span>
-		</div>
-	)
-}
-
-function SubagentToolCalls({ events }: { events: TaskActivityEvent[] | undefined }) {
-	const calls = useMemo(() => getOrderedToolCalls(events), [events])
-	if (calls.length === 0) return null
-
-	return (
-		<div className="mt-1.5 max-h-[96px] overflow-y-auto border-t border-editor-group-border pt-1.5">
-			<div className="mb-0.5 text-[10px] font-semibold uppercase opacity-60">Tools</div>
-			<ol className="m-0 list-none space-y-0.5 p-0">
-				{calls.map((call, index) => {
-					const text = call.summary?.trim() || call.toolName
-					return (
-						<li
-							className="flex h-4 min-w-0 items-center gap-1 font-mono text-[10px] leading-4 opacity-75"
-							data-testid="subagent-tool-call"
-							key={call.toolCallId}
-							title={text}>
-							<span className="w-3 shrink-0 text-right tabular-nums">{index + 1}.</span>
-							{call.toolStatus === "started" ? (
-								<LoaderCircleIcon className="size-2.5 shrink-0 animate-spin text-link" />
-							) : call.toolStatus === "failed" ? (
-								<CircleXIcon className="size-2.5 shrink-0 text-error" />
-							) : (
-								<CheckIcon className="size-2.5 shrink-0 text-success" />
-							)}
-							<span className="min-w-0 truncate">{text}</span>
-						</li>
-					)
-				})}
-			</ol>
 		</div>
 	)
 }
@@ -286,12 +206,14 @@ function SubagentPromptText({ prompt, isExpanded, onShowMore }: SubagentPromptTe
 		return () => observer.disconnect()
 	}, [isExpanded])
 
+	const displayPrompt = normalizeSubagentDisplayText(prompt)
 	return (
 		<div className="relative">
 			<div
 				className={`text-xs font-medium text-foreground whitespace-pre-wrap break-words ${!isExpanded ? "overflow-hidden [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2]" : ""}`}
-				ref={promptRef}>
-				"{prompt}"
+				ref={promptRef}
+				title={displayPrompt}>
+				"{displayPrompt}"
 			</div>
 			{!isExpanded && showMoreVisible && (
 				<button
@@ -313,10 +235,11 @@ function SubagentPromptText({ prompt, isExpanded, onShowMore }: SubagentPromptTe
 }
 
 export default function SubagentStatusRow({ message }: SubagentStatusRowProps) {
-	const [expandedItems, setExpandedItems] = useState<Record<number, boolean>>({})
 	const [expandedPrompts, setExpandedPrompts] = useState<Record<number, boolean>>({})
-	const [movingBackgroundIds, setMovingBackgroundIds] = useState<Record<string, boolean>>({})
+	const [collapsedItems, setCollapsedItems] = useState<Record<string, boolean>>({})
+	const [expandedSections, setExpandedSections] = useState<Record<string, Partial<Record<SubagentWorkSectionKey, boolean>>>>({})
 	const [collapsed, setCollapsed] = useState(false)
+	const { isPending, runControl } = useActivityControlGuard()
 	const { currentTaskItem } = useExtensionState()
 	const taskId = currentTaskItem?.id
 	const { activities, getById } = useTaskActivities(taskId)
@@ -344,6 +267,8 @@ export default function SubagentStatusRow({ message }: SubagentStatusRowProps) {
 				contextTokens: activity.metrics?.contextTokens ?? entry.contextTokens,
 				contextWindow: activity.metrics?.contextWindow ?? entry.contextWindow,
 				activityEvents: activity.events,
+				finishable: activity.finishable,
+				retryable: activity.retryable,
 			}
 		})
 		const statuses = items.map((entry) => entry.status)
@@ -386,11 +311,18 @@ export default function SubagentStatusRow({ message }: SubagentStatusRowProps) {
 				: data.status === "running" && data.items.some((entry) => entry.background)
 					? "Running in background"
 					: undefined
-	const toggleItem = (index: number) => {
-		setExpandedItems((prev) => ({
-			...prev,
-			[index]: !prev[index],
-		}))
+	const toggleSection = (itemKey: string, section: SubagentWorkSectionKey) => {
+		setExpandedSections((previous) => {
+			const defaultExpanded = section !== "output"
+			const currentExpanded = previous[itemKey]?.[section] ?? defaultExpanded
+			return {
+				...previous,
+				[itemKey]: {
+					...previous[itemKey],
+					[section]: !currentExpanded,
+				},
+			}
+		})
 	}
 	const expandPrompt = (index: number) => {
 		setExpandedPrompts((prev) => ({
@@ -398,20 +330,12 @@ export default function SubagentStatusRow({ message }: SubagentStatusRowProps) {
 			[index]: true,
 		}))
 	}
-	const moveToBackground = async (activityId: string) => {
-		if (!taskId || movingBackgroundIds[activityId]) return
-		setMovingBackgroundIds((prev) => ({ ...prev, [activityId]: true }))
-		try {
-			await moveSubagentToBackground(taskId, activityId)
-		} finally {
-			setMovingBackgroundIds((prev) => {
-				const next = { ...prev }
-				delete next[activityId]
-				return next
-			})
-		}
+	const toggleCollapsedItem = (itemKey: string) => {
+		setCollapsedItems((prev) => ({
+			...prev,
+			[itemKey]: !prev[itemKey],
+		}))
 	}
-
 	return (
 		<div className="mb-2">
 			<div className="flex items-center gap-2.5 mb-3">
@@ -442,145 +366,205 @@ export default function SubagentStatusRow({ message }: SubagentStatusRowProps) {
 				<div className="space-y-2 pr-0.5">
 					{data.items.map((entry, index) => {
 						const displayStatus: DisplayStatus = entry.status
-						const hasDetails = Boolean(
-							(entry.result && entry.status === "completed") ||
+						const itemKey = entry.jobId ?? String(entry.index)
+						const isItemCollapsed = collapsedItems[itemKey] === true
+						const retryAttempts = buildSubagentRetryAttempts(entry.activityEvents)
+						const toolSteps = buildSubagentToolSteps(entry.activityEvents)
+						const hasOutput = Boolean(
+							retryAttempts.length > 0 ||
+								(entry.result && entry.status === "completed") ||
 								(entry.error &&
 									(entry.status === "failed" || entry.status === "timeout" || entry.status === "cancelled")),
 						)
-						const isExpanded = expandedItems[entry.index] === true
+						const taskExpanded = expandedSections[itemKey]?.task ?? true
+						const toolsExpanded = expandedSections[itemKey]?.tools ?? true
+						const outputExpanded = expandedSections[itemKey]?.output ?? false
 						const hasStructuredPrompt = Boolean(entry.task || entry.context)
 						const displaySubagentName = entry.subagentName?.trim() || "default"
 						const isStreamingPromptUnderConstruction =
 							isPromptConstructionRow && message.partial === true && index === data.items.length - 1
-						const shouldShowStats = !isStreamingPromptUnderConstruction
-						const statsText = `${formatCount(entry.toolCalls)} tools called · ${formatCount(entry.contextTokens)} tokens · ${formatCost(entry.totalCost, entry.currency)}`
-						const metadataText = [
-							`#${entry.index}`,
-							entry.timeoutSeconds ? `timeout ${entry.timeoutSeconds}s` : undefined,
-							entry.injectionState ? `result ${entry.injectionState}` : undefined,
-						]
-							.filter((part): part is string => Boolean(part))
-							.join(" · ")
-						const latestToolCallText = entry.latestToolCall?.trim() || ""
+						const showToolsSection = !isStreamingPromptUnderConstruction && toolSteps.length > 0
+						const showOutputSection = !isStreamingPromptUnderConstruction && hasOutput
+						const expandedSectionCount =
+							Number(taskExpanded) +
+							Number(showToolsSection && toolsExpanded) +
+							Number(showOutputSection && outputExpanded)
+						const shareAvailableHeight = expandedSectionCount > 1
 						const isBackground = entry.background === true
 						const ExecutionModeIcon = isBackground ? SendToBackIcon : BringToFrontIcon
+						const executionModeLabel = isBackground ? "Background" : "Foreground"
 						const executionModeIndicator = (
-							<span
-								className={`inline-flex h-4 items-center gap-1 rounded-xs border px-1.5 text-[10px] font-medium ${
+							<div
+								aria-label={`Execution mode: ${executionModeLabel}`}
+								className={`flex min-w-[88px] shrink-0 items-center justify-center gap-1 rounded-xs border px-1.5 py-0.5 text-[11px] font-medium ${
 									isBackground
 										? "border-editor-warning-foreground/40 bg-editor-warning-foreground/10 text-editor-warning-foreground"
 										: "border-info/40 bg-info/10 text-info"
 								}`}
-								data-testid="subagent-execution-mode">
+								data-testid="subagent-execution-mode"
+								role="status">
 								<ExecutionModeIcon aria-hidden="true" className="size-2.5 shrink-0" />
-								{isBackground ? "Background" : "Foreground"}
-							</span>
+								<span>{executionModeLabel}</span>
+							</div>
 						)
-						const canMoveToBackground = Boolean(
-							taskId && entry.jobId && entry.backgroundHandoffAvailable && liveCancellableIds.has(entry.jobId),
-						)
+						const showItemCancelButton = Boolean(taskId && entry.jobId && liveCancellableIds.has(entry.jobId))
+						const showItemFinishButton = Boolean(taskId && entry.jobId && entry.finishable)
+						const showItemRetryButton = Boolean(taskId && entry.jobId && entry.retryable)
+						const finishKey = `finish:${entry.jobId ?? ""}`
+						const retryKey = `retry:${entry.jobId ?? ""}`
 						return (
 							<div
-								className="rounded-xs border border-editor-group-border px-2 py-1.5"
+								className={`flex max-h-[30vh] flex-col overflow-hidden rounded-xs border border-editor-group-border ${
+									!isItemCollapsed && shareAvailableHeight ? "h-[30vh]" : ""
+								}`}
 								data-testid="subagent-item"
-								key={entry.index}
+								key={itemKey}
 								style={{ backgroundColor: "var(--vscode-editor-background)" }}>
-								<div className="flex items-start gap-2">
-									{statusIcon(displayStatus)}
-									<div className="min-w-0 flex-1 space-y-1.5">
-										<div className="flex min-w-0 items-center gap-1.5">
-											<div
-												className="min-w-0 truncate text-[11px] font-semibold uppercase tracking-wide opacity-70"
-												data-testid="subagent-name"
-												title={displaySubagentName}>
-												{displaySubagentName}
-											</div>
-											{executionModeIndicator}
+								<div
+									className="flex min-w-0 shrink-0 flex-wrap items-center gap-x-2 gap-y-1 overflow-hidden px-2 py-1.5"
+									data-testid="subagent-item-header">
+									<button
+										aria-label={`${isItemCollapsed ? "Expand" : "Collapse"} subagent ${displaySubagentName}`}
+										className="flex min-w-0 flex-1 items-center gap-1.5 border-0 bg-transparent p-0 text-left text-foreground cursor-pointer"
+										onClick={() => toggleCollapsedItem(itemKey)}
+										type="button">
+										{isItemCollapsed ? (
+											<ChevronRightIcon className="size-3 shrink-0" />
+										) : (
+											<ChevronDownIcon className="size-3 shrink-0" />
+										)}
+										{statusIcon(displayStatus)}
+										<div
+											className="min-w-0 flex-1 truncate text-[11px] font-semibold uppercase tracking-wide opacity-70"
+											data-testid="subagent-name"
+											title={displaySubagentName}>
+											{displaySubagentName}
 										</div>
-										{hasStructuredPrompt ? (
-											<>
-												{entry.task && (
-													<div>
-														<div className="text-[10px] font-semibold uppercase opacity-60">Task</div>
-														<div className="max-h-[72px] overflow-y-auto">
-															<h4 className="m-0 whitespace-pre-wrap break-words text-xs font-semibold text-foreground">
-																{entry.task}
+									</button>
+									<div className="flex shrink-0 items-center gap-2">
+										{executionModeIndicator}
+										{showItemFinishButton && (
+											<Button
+												className="h-5 border px-2 py-0 text-[11px] leading-none"
+												disabled={isPending(finishKey)}
+												onClick={() =>
+													void runControl(finishKey, () =>
+														finishTaskActivities(taskId as string, [entry.jobId as string]),
+													)
+												}
+												size="sm">
+												Finish
+											</Button>
+										)}
+										{showItemRetryButton && (
+											<Button
+												className="h-5 border px-2 py-0 text-[11px] leading-none"
+												disabled={isPending(retryKey)}
+												onClick={() =>
+													void runControl(retryKey, () =>
+														retryTaskActivities(taskId as string, [entry.jobId as string]),
+													)
+												}
+												size="sm">
+												Retry
+											</Button>
+										)}
+										{showItemCancelButton && (
+											<Button
+												className="h-5 border px-2 py-0 text-[11px] leading-none"
+												onClick={() =>
+													void cancelTaskActivities(taskId as string, [entry.jobId as string])
+												}
+												size="sm"
+												variant="danger">
+												Cancel
+											</Button>
+										)}
+									</div>
+									<SubagentMetrics
+										className="basis-full pl-8"
+										currency={entry.currency}
+										finishedAt={entry.finishedAt}
+										inputTokens={entry.inputTokens}
+										outputTokens={entry.outputTokens}
+										startedAt={entry.startedAt}
+										toolCalls={entry.toolCalls}
+										totalCost={entry.totalCost}
+									/>
+								</div>
+								{!isItemCollapsed && (
+									<div
+										className="flex min-h-0 flex-1 flex-col overflow-hidden px-2 pb-1.5"
+										data-testid="subagent-item-body">
+										<SubagentWorkSection
+											ariaLabel={`${taskExpanded ? "Collapse" : "Expand"} subagent task`}
+											expanded={taskExpanded}
+											onToggle={() => toggleSection(itemKey, "task")}
+											scrollTestId="subagent-task-scroll"
+											shareAvailableHeight={shareAvailableHeight}
+											title="Task">
+											<div className="min-w-0 max-w-full space-y-1.5">
+												{hasStructuredPrompt ? (
+													<>
+														{entry.task && (
+															<h4 className="m-0 whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-xs font-semibold text-foreground">
+																{normalizeSubagentDisplayText(entry.task)}
 															</h4>
-														</div>
+														)}
+														{entry.context && <SubagentContext context={entry.context} />}
+													</>
+												) : (
+													<SubagentPromptText
+														isExpanded={expandedPrompts[entry.index] === true}
+														onShowMore={() => expandPrompt(entry.index)}
+														prompt={entry.prompt}
+													/>
+												)}
+											</div>
+										</SubagentWorkSection>
+										{showToolsSection && (
+											<SubagentWorkSection
+												ariaLabel={`${toolsExpanded ? "Collapse" : "Expand"} subagent tools`}
+												expanded={toolsExpanded}
+												onToggle={() => toggleSection(itemKey, "tools")}
+												scrollTestId="subagent-tools-scroll"
+												shareAvailableHeight={shareAvailableHeight}
+												title={`Tools (${toolSteps.length})`}>
+												<SubagentToolTimeline
+													compact
+													detailsMode="none"
+													events={entry.activityEvents}
+													showHeader={false}
+												/>
+											</SubagentWorkSection>
+										)}
+										{showOutputSection && (
+											<SubagentWorkSection
+												ariaLabel={`${outputExpanded ? "Hide" : "Show"} subagent output`}
+												contentClassName="space-y-2 text-xs"
+												expanded={outputExpanded}
+												onToggle={() => toggleSection(itemKey, "output")}
+												scrollTestId="subagent-output-scroll"
+												shareAvailableHeight={shareAvailableHeight}
+												title="Output">
+												<SubagentRetryTimeline events={entry.activityEvents} />
+												{entry.result && entry.status === "completed" && (
+													<div className="opacity-80 wrap-anywhere" data-testid="subagent-output">
+														<MarkdownBlock markdown={entry.result} />
 													</div>
 												)}
-												{entry.context && <SubagentContext context={entry.context} />}
-											</>
-										) : (
-											<SubagentPromptText
-												isExpanded={expandedPrompts[entry.index] === true}
-												onShowMore={() => expandPrompt(entry.index)}
-												prompt={entry.prompt}
-											/>
+												{entry.error &&
+													(entry.status === "failed" ||
+														entry.status === "timeout" ||
+														entry.status === "cancelled") && (
+														<div className="whitespace-pre-wrap break-words text-error">
+															{entry.error}
+														</div>
+													)}
+											</SubagentWorkSection>
 										)}
 									</div>
-									{canMoveToBackground && (
-										<Button
-											className="h-5 border px-2 py-0 text-[11px] leading-none"
-											disabled={movingBackgroundIds[entry.jobId as string] === true}
-											onClick={() => void moveToBackground(entry.jobId as string)}
-											size="sm"
-											variant="secondary">
-											{movingBackgroundIds[entry.jobId as string] ? "Moving..." : "Continue in Background"}
-										</Button>
-									)}
-									{taskId && entry.jobId && liveCancellableIds.has(entry.jobId) && (
-										<Button
-											className="h-5 border px-2 py-0 text-[11px] leading-none"
-											onClick={() => void cancelTaskActivities(taskId, [entry.jobId as string])}
-											size="sm"
-											variant="danger">
-											Cancel
-										</Button>
-									)}
-								</div>
-								{shouldShowStats && (
-									<div className="mt-1 text-[11px] opacity-70 min-w-0 whitespace-pre-wrap break-words">
-										<span>{metadataText ? `${metadataText} · ${statsText}` : statsText}</span>
-									</div>
 								)}
-								{shouldShowStats && hasDetails && (
-									<button
-										aria-label={isExpanded ? "Hide subagent output" : "Show subagent output"}
-										className="mt-1 text-[11px] opacity-80 flex items-center gap-1 bg-transparent border-0 p-0 cursor-pointer text-left text-foreground w-full"
-										onClick={() => toggleItem(entry.index)}
-										type="button">
-										{isExpanded ? (
-											<ChevronDownIcon className="size-2 shrink-0" />
-										) : (
-											<ChevronRightIcon className="size-2 shrink-0" />
-										)}
-										<span className="shrink-0">{isExpanded ? "Hide output" : "Show output"}</span>
-									</button>
-								)}
-								{shouldShowStats &&
-									!hasDetails &&
-									latestToolCallText &&
-									!entry.activityEvents?.some((event) => event.kind === "tool_call") && (
-										<div className="mt-1 text-[10px] opacity-70 min-w-0 truncate font-mono">
-											{latestToolCallText}
-										</div>
-									)}
-								{shouldShowStats && <SubagentToolCalls events={entry.activityEvents} />}
-								{isExpanded && entry.result && entry.status === "completed" && (
-									<div className="mt-2 max-h-[240px] overflow-y-auto text-xs opacity-80 wrap-anywhere">
-										<div data-testid="subagent-output">
-											<MarkdownBlock markdown={entry.result} />
-										</div>
-									</div>
-								)}
-								{isExpanded &&
-									entry.error &&
-									(entry.status === "failed" || entry.status === "timeout" || entry.status === "cancelled") && (
-										<div className="mt-2 max-h-[120px] overflow-y-auto text-xs text-error whitespace-pre-wrap break-words">
-											{entry.error}
-										</div>
-									)}
 							</div>
 						)
 					})}

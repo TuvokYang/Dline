@@ -228,12 +228,14 @@ describe("provider tool projector", () => {
 
 		expect(tool).toMatchObject({
 			function: {
+				description: expect.stringContaining("main task's context window"),
 				parameters: {
 					required: ["task", "context"],
 					properties: {
 						agent_name: { type: "string" },
 						task: { type: "string" },
-						context: { type: "string" },
+						context: { type: "string", description: expect.stringContaining("modification boundary") },
+						timeout: { type: "integer", description: expect.stringContaining("Defaults to 1200.") },
 					},
 				},
 			},

@@ -462,7 +462,16 @@ describe("SubagentRunner", () => {
 
 		const result = await new SubagentRunner(createTaskConfig(false)).run("Use facade", () => {})
 
-		assert.equal(facade.mock.calls.length, 1)
+		assert.equal(facade.mock.calls.length, 2)
+		const [ordinaryContext] = facade.mock.calls[0]
+		const [completionContext] = facade.mock.calls[1]
+		assert.equal(ordinaryContext.isSubagentRun, true)
+		assert.equal(completionContext.isSubagentRun, true)
+		assert.equal(completionContext.clineWebToolsEnabled, false)
+		assert.equal(completionContext.disableTools?.includes(ClineDefaultTool.ATTEMPT), false)
+		for (const tool of Object.values(ClineDefaultTool)) {
+			if (tool !== ClineDefaultTool.ATTEMPT) assert.equal(completionContext.disableTools?.includes(tool), true)
+		}
 		assert.equal(result.status, "completed")
 		assert.equal(result.result, "done")
 	})
@@ -572,6 +581,77 @@ describe("SubagentRunner", () => {
 				{ toolName: ClineDefaultTool.ATTEMPT, summary: "attempt_completion(result=done)" },
 			],
 		)
+	})
+
+	it("switches a manual finish request to an attempt_completion-only next turn", async () => {
+		let runner: SubagentRunner
+		const createMessage = vi.fn()
+		createMessage.mockImplementationOnce(async function* () {
+			yield {
+				type: "tool_calls",
+				function_id: "toolu_finish_list",
+				tool_index: 0,
+				tool_call: {
+					function: {
+						name: ClineDefaultTool.LIST_FILES,
+						arguments: JSON.stringify({ path: ".", recursive: false }),
+					},
+				},
+			}
+		})
+		createMessage.mockImplementationOnce(async function* (_systemPrompt: string, conversation: unknown[], tools: unknown[]) {
+			const reminder = conversation.at(-1) as { role: string; content: Array<{ type: string; text?: string }> }
+			assert.equal(reminder.role, "user")
+			assert.match(reminder.content[0]?.text || "", /user requested/i)
+			assert.match(reminder.content[0]?.text || "", /Do not call any other tool/i)
+			assert.deepEqual(
+				(tools as Array<{ function: { name: string } }>).map((tool) => tool.function.name),
+				[ClineDefaultTool.ATTEMPT],
+			)
+			yield {
+				type: "tool_calls",
+				function_id: "toolu_finish_complete",
+				tool_index: 0,
+				tool_call: {
+					function: {
+						name: ClineDefaultTool.ATTEMPT,
+						arguments: JSON.stringify({ result: "finished with current findings" }),
+					},
+				},
+			}
+		})
+		vi.spyOn(systemPromptFacade, "getSystemPrompt").mockResolvedValue({
+			systemPrompt: "system prompt",
+			tools: [
+				{ type: "function", function: { name: ClineDefaultTool.LIST_FILES, description: "List files" } },
+				{ type: "function", function: { name: ClineDefaultTool.ATTEMPT, description: "Complete" } },
+			] as never,
+			profile: PromptProfile.Standard,
+			warnings: [],
+		})
+		vi.spyOn(skills, "discoverSkills").mockResolvedValue([])
+		vi.spyOn(skills, "getAvailableSkills").mockReturnValue([])
+		stubApiHandler(createMessage)
+		initializeHostProvider()
+		const config = createTaskConfig(true)
+		config.coordinator.getHandler = vi.fn().mockImplementation((toolName: ClineDefaultTool) =>
+			toolName === ClineDefaultTool.LIST_FILES
+				? {
+						execute: vi.fn().mockImplementation(async () => {
+							assert.equal(await runner.requestFinish("user"), true)
+							return "ok"
+						}),
+						getDescription: vi.fn().mockReturnValue("list_files"),
+					}
+				: undefined,
+		)
+		runner = new SubagentRunner(config)
+
+		const result = await runner.run("Explore then finish", () => {})
+
+		assert.equal(result.status, "completed", result.error)
+		assert.equal(result.result, "finished with current findings")
+		assert.equal(createMessage.mock.calls.length, 2)
 	})
 
 	it("passes prior request token totals into the next-turn compaction check", async () => {
@@ -927,11 +1007,12 @@ describe("SubagentRunner", () => {
 		const runner = new SubagentRunner(createTaskConfig(false))
 		const result = await runner.run("List files", () => {})
 		assert.equal(result.status, "failed")
+		assert.equal(result.retryable, true)
 		assert.equal(createMessage.mock.calls.length, 6)
 		assert.match(result.error || "", /stream_initialization_failed/i)
 	})
 
-	it("retries retryable initial API failures five times with linear 3*n delays", async () => {
+	it("retries retryable initial API failures five times with cumulative progress events", async () => {
 		const createMessage = vi.fn().mockImplementation(async function* () {
 			yield* []
 			throw new Error('{"code":"stream_initialization_failed","message":"Temporary provider failure"}')
@@ -947,15 +1028,52 @@ describe("SubagentRunner", () => {
 		initializeHostProvider()
 
 		const runner = new SubagentRunner(createTaskConfig(false))
-		const result = await runner.run("Retry the provider request", () => {})
+		const progressEvents: Array<Record<string, unknown>> = []
+		const result = await runner.run("Retry the provider request", (update) => {
+			if (update.event) progressEvents.push(update.event as unknown as Record<string, unknown>)
+		})
 
 		assert.equal(result.status, "failed")
+		assert.equal(result.retryable, true)
 		assert.equal(createMessage.mock.calls.length, 6)
 		assert.deepEqual(
 			setTimeoutSpy.mock.calls.map(([, timeout]) => timeout),
-			[3_000, 6_000, 9_000, 12_000, 15_000],
+			[5_000, 8_000, 11_000, 14_000, 17_000],
 		)
+		assert.deepEqual(progressEvents, [
+			{ kind: "retry", retryAttempt: 1, maxRetries: 5, delayMs: 5_000, cumulativeDelayMs: 5_000 },
+			{ kind: "retry", retryAttempt: 2, maxRetries: 5, delayMs: 8_000, cumulativeDelayMs: 13_000 },
+			{ kind: "retry", retryAttempt: 3, maxRetries: 5, delayMs: 11_000, cumulativeDelayMs: 24_000 },
+			{ kind: "retry", retryAttempt: 4, maxRetries: 5, delayMs: 14_000, cumulativeDelayMs: 38_000 },
+			{ kind: "retry", retryAttempt: 5, maxRetries: 5, delayMs: 17_000, cumulativeDelayMs: 55_000 },
+		])
 		assert.match(result.error || "", /stream_initialization_failed|Temporary provider failure/i)
+	})
+
+	it.each([408, 409])("retries HTTP %s before returning a retryable failure", async (status) => {
+		const createMessage = vi.fn().mockImplementation(async function* () {
+			yield* []
+			throw Object.assign(new Error(`${status} Temporary provider failure`), { status })
+		})
+		const setTimeoutSpy = vi.spyOn(global, "setTimeout").mockImplementation(((callback: (...args: unknown[]) => void) => {
+			queueMicrotask(callback)
+			return {} as NodeJS.Timeout
+		}) as typeof setTimeout)
+		stubSystemPrompt(false)
+		vi.spyOn(skills, "discoverSkills").mockResolvedValue([])
+		vi.spyOn(skills, "getAvailableSkills").mockReturnValue([])
+		stubApiHandler(createMessage)
+		initializeHostProvider()
+
+		const result = await new SubagentRunner(createTaskConfig(false)).run("Retry the provider request", () => {})
+
+		assert.equal(result.status, "failed")
+		assert.equal(result.retryable, true)
+		assert.equal(createMessage.mock.calls.length, 6)
+		assert.deepEqual(
+			setTimeoutSpy.mock.calls.map(([, timeout]) => timeout),
+			[5_000, 8_000, 11_000, 14_000, 17_000],
+		)
 	})
 
 	it.each([
@@ -976,6 +1094,57 @@ describe("SubagentRunner", () => {
 
 		assert.equal(result.status, "failed")
 		assert.equal(createMessage.mock.calls.length, 1)
+	})
+
+	it("finishes a pending retry wait through an attempt_completion-only next turn", async () => {
+		const createMessage = vi.fn()
+		createMessage.mockImplementationOnce(async function* () {
+			yield* []
+			throw new Error('{"code":"stream_initialization_failed","message":"Temporary provider failure"}')
+		})
+		createMessage.mockImplementationOnce(async function* (_systemPrompt: string, conversation: unknown[], tools: unknown[]) {
+			const reminder = conversation.at(-1) as { role: string; content: Array<{ type: string; text?: string }> }
+			assert.equal(reminder.role, "user")
+			assert.match(reminder.content[0]?.text || "", /user requested/i)
+			assert.deepEqual(
+				(tools as Array<{ function: { name: string } }>).map((tool) => tool.function.name),
+				[ClineDefaultTool.ATTEMPT],
+			)
+			yield {
+				type: "tool_calls",
+				function_id: "toolu_retry_finish_complete",
+				tool_index: 0,
+				tool_call: {
+					function: {
+						name: ClineDefaultTool.ATTEMPT,
+						arguments: JSON.stringify({ result: "finished after retry interruption" }),
+					},
+				},
+			}
+		})
+		vi.spyOn(systemPromptFacade, "getSystemPrompt").mockResolvedValue({
+			systemPrompt: "system prompt",
+			tools: [
+				{ type: "function", function: { name: ClineDefaultTool.LIST_FILES, description: "List files" } },
+				{ type: "function", function: { name: ClineDefaultTool.ATTEMPT, description: "Complete" } },
+			] as never,
+			profile: PromptProfile.Standard,
+			warnings: [],
+		})
+		vi.spyOn(skills, "discoverSkills").mockResolvedValue([])
+		vi.spyOn(skills, "getAvailableSkills").mockReturnValue([])
+		stubApiHandler(createMessage)
+		initializeHostProvider()
+
+		const runner = new SubagentRunner(createTaskConfig(true))
+		const runPromise = runner.run("Finish the provider retry", () => {})
+		await vi.waitFor(() => assert.equal(createMessage.mock.calls.length, 1))
+		assert.equal(await runner.requestFinish("user"), true)
+		const result = await runPromise
+
+		assert.equal(result.status, "completed", result.error)
+		assert.equal(result.result, "finished after retry interruption")
+		assert.equal(createMessage.mock.calls.length, 2)
 	})
 
 	it("cancels a pending retry wait without issuing another API request", async () => {

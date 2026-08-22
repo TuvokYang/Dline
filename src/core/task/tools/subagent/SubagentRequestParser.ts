@@ -1,4 +1,5 @@
-const DEFAULT_TIMEOUT_SECONDS = 1_200
+import { DEFAULT_SUBAGENT_TIMEOUT_SECONDS } from "@shared/subagent-settings"
+
 const PROMPT_KEYS = ["prompt_1", "prompt_2", "prompt_3", "prompt_4", "prompt_5"] as const
 
 export interface SubagentToolOptions {
@@ -76,7 +77,7 @@ function parseBoolean(value: unknown): boolean {
  * @returns Positive integer timeout in seconds.
  */
 function parseTimeout(value: unknown): number {
-	if (value === undefined || value === "") return DEFAULT_TIMEOUT_SECONDS
+	if (value === undefined || value === "") return DEFAULT_SUBAGENT_TIMEOUT_SECONDS
 	const parsed = typeof value === "number" ? value : typeof value === "string" ? Number(value.trim()) : Number.NaN
 	if (!Number.isInteger(parsed) || parsed <= 0) {
 		throw new Error("Invalid timeout value. Expected a positive integer number of seconds.")

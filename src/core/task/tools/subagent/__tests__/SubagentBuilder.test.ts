@@ -150,6 +150,34 @@ describe("SubagentBuilder", () => {
 		assert.equal((effectiveApiConfig as Record<string, unknown>).actModeProfile, "act-default-profile")
 	})
 
+	it("removes execute_command from the built-in default even when a legacy YAML still declares it", () => {
+		const agentConfig = {
+			name: "default",
+			description: "legacy default",
+			tools: [ClineDefaultTool.FILE_READ, ClineDefaultTool.BASH],
+			systemPrompt: "legacy prompt",
+		}
+		vi.spyOn(api, "buildApiHandler").mockReturnValue({ getModel: vi.fn(), createMessage: vi.fn() } as never)
+
+		const builder = new SubagentBuilder(createTaskConfig("act", "anthropic"), "default", agentConfig)
+
+		assert.deepEqual(builder.getAllowedTools(), [ClineDefaultTool.FILE_READ, ClineDefaultTool.ATTEMPT])
+	})
+
+	it("preserves explicitly configured execute_command for a named custom subagent", () => {
+		const agentConfig = {
+			name: "ops-reviewer",
+			description: "custom reviewer",
+			tools: [ClineDefaultTool.BASH],
+			systemPrompt: "custom prompt",
+		}
+		vi.spyOn(api, "buildApiHandler").mockReturnValue({ getModel: vi.fn(), createMessage: vi.fn() } as never)
+
+		const builder = new SubagentBuilder(createTaskConfig("act", "anthropic"), "ops-reviewer", agentConfig)
+
+		assert.deepEqual(builder.getAllowedTools(), [ClineDefaultTool.BASH, ClineDefaultTool.ATTEMPT])
+	})
+
 	it("exposes the exact configured allowlist for facade filtering", () => {
 		const agentConfig = {
 			name: "tools-agent",

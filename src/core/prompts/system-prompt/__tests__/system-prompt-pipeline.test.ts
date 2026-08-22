@@ -147,6 +147,7 @@ describe("canonical system prompt pipeline", () => {
 			CUSTOM_INSTRUCTIONS: "Preferred language: zh-CN.\n\nGlobal project rules.",
 			OS: "macOS",
 			IDE: "TestIde",
+			SUBAGENT_TIMEOUT_SECONDS: "1200",
 		})
 		expect(Reflect.set(env, "CWD", "/mutated")).toBe(false)
 		expect(env).not.toHaveProperty("XML_TOOLS_SECTION")

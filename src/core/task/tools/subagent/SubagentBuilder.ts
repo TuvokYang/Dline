@@ -3,7 +3,7 @@ import { readApiProfiles } from "@core/controller/file/getApiProfiles"
 import { ClineDefaultTool } from "@shared/tools"
 import type { TaskConfig } from "../types/TaskConfig"
 import type { AgentBaseConfig } from "./AgentConfigLoader"
-import { DEFAULT_SUBAGENT_ALLOWED_TOOLS } from "./DefaultSubagentConfig"
+import { DEFAULT_SUBAGENT_ALLOWED_TOOLS, isDefaultSubagentName } from "./DefaultSubagentConfig"
 
 export type AgentConfig = Partial<AgentBaseConfig>
 
@@ -17,10 +17,7 @@ When the work is complete or cannot proceed, call attempt_completion and put the
 export const SUBAGENT_SYSTEM_SUFFIX = `# Subagent Execution Mode
 You are running as a research subagent. Your job is to explore the codebase and gather information to answer the question.
 Explore, read related files, trace through call chains, and build a complete picture before reporting back.
-You can read files, list directories, search for patterns, list code definitions, and run commands.
-Only use execute_command for readonly operations like ls, grep, git log, git diff, gh, etc.
-When it makes sense, be clever about chaining commands or in-command scripting in execute_command to quickly get relevant context - and using pipes / filters to help narrow results.
-Do not run commands that modify files or system state.
+Use only the tools exposed for this subagent profile.
 Unless the subagent prompt explicitly asks for detailed analysis, keep the result concise and focus on the files the main agent should read next.
 Include a section titled "Relevant file paths" and list only file paths, one per line.
 Do not include line numbers, summaries, or per-file explanations unless explicitly requested.
@@ -34,11 +31,11 @@ export class SubagentBuilder {
 
 	constructor(
 		private readonly baseConfig: TaskConfig,
-		_subagentName?: string,
+		subagentName?: string,
 		agentConfig?: AgentBaseConfig,
 	) {
 		this.agentConfig = agentConfig ?? {}
-		this.allowedTools = this.resolveAllowedTools(this.agentConfig.tools)
+		this.allowedTools = this.resolveAllowedTools(this.agentConfig.tools, !subagentName || isDefaultSubagentName(subagentName))
 
 		const apiConfiguration = this.baseConfig.services.stateManager.getApiConfiguration()
 		const effectiveApiConfiguration = {
@@ -100,9 +97,10 @@ export class SubagentBuilder {
 	 * @param configuredTools Optional YAML configured tools.
 	 * @returns De-duplicated tool allowlist with attempt_completion enforced.
 	 */
-	private resolveAllowedTools(configuredTools?: ClineDefaultTool[]): ClineDefaultTool[] {
+	private resolveAllowedTools(configuredTools: ClineDefaultTool[] | undefined, builtInDefault: boolean): ClineDefaultTool[] {
 		const sourceTools = configuredTools && configuredTools.length > 0 ? configuredTools : SUBAGENT_DEFAULT_ALLOWED_TOOLS
-		return Array.from(new Set([...sourceTools, ClineDefaultTool.ATTEMPT]))
+		const boundedTools = builtInDefault ? sourceTools.filter((tool) => tool !== ClineDefaultTool.BASH) : sourceTools
+		return Array.from(new Set([...boundedTools, ClineDefaultTool.ATTEMPT]))
 	}
 
 	/**

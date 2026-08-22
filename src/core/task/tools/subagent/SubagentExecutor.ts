@@ -14,7 +14,7 @@ export interface SubagentRunStats {
 }
 
 export interface SubagentProgressEvent {
-	kind: "thinking" | "assistant_message" | "tool_call" | "tool_result"
+	kind: "thinking" | "assistant_message" | "tool_call" | "tool_result" | "retry"
 	phase?: "delta" | "final"
 	text?: string
 	toolCallId?: string
@@ -23,6 +23,10 @@ export interface SubagentProgressEvent {
 	summary?: string
 	durationMs?: number
 	error?: string
+	retryAttempt?: number
+	maxRetries?: number
+	delayMs?: number
+	cumulativeDelayMs?: number
 }
 
 export interface SubagentProgressUpdate {
@@ -38,12 +42,16 @@ export interface SubagentExecResult {
 	status: SubagentExecStatus
 	result?: string
 	error?: string
+	retryable?: boolean
 	stats: SubagentRunStats
 }
+
+export type SubagentFinishReason = "timeout" | "user"
 
 export interface SubagentRunnerLike {
 	run(prompt: string, onProgress: (update: SubagentProgressUpdate) => void): Promise<SubagentExecResult>
 	abort(): Promise<void>
+	requestFinish(reason: SubagentFinishReason): Promise<boolean>
 }
 
 export interface RunSubagentInput {
@@ -53,51 +61,21 @@ export interface RunSubagentInput {
 	onProgress: (update: SubagentProgressUpdate) => void
 }
 
-const EMPTY_STATS: SubagentRunStats = {
-	toolCalls: 0,
-	inputTokens: 0,
-	outputTokens: 0,
-	cacheWriteTokens: 0,
-	cacheReadTokens: 0,
-	totalCost: 0,
-	currency: "",
-	contextTokens: 0,
-	contextWindow: 0,
-	contextUsagePercentage: 0,
-}
-
 /**
  * Run a subagent with timeout and abort handling.
  * @param input Runner, prompt, timeout, and progress callback.
  * @returns Completed, failed, timeout, or cancelled execution result.
  */
 export async function runSubagent(input: RunSubagentInput): Promise<SubagentExecResult> {
-	let didTimeout = false
 	let timeoutHandle: NodeJS.Timeout | undefined
-	const timeoutPromise = new Promise<SubagentExecResult>((resolve) => {
+	if (input.timeoutSeconds > 0) {
 		timeoutHandle = setTimeout(() => {
-			didTimeout = true
-			void input.runner.abort().finally(() => {
-				resolve({
-					status: "timeout",
-					error: `Subagent timed out after ${input.timeoutSeconds} seconds.`,
-					stats: EMPTY_STATS,
-				})
-			})
+			void input.runner.requestFinish("timeout")
 		}, input.timeoutSeconds * 1000)
-	})
-	const runPromise = input.runner.run(input.prompt, input.onProgress).then((result) => {
-		if (!didTimeout) return result
-		return {
-			status: "timeout" as const,
-			error: `Subagent timed out after ${input.timeoutSeconds} seconds.`,
-			stats: result.stats,
-		}
-	})
+	}
 	try {
-		return await Promise.race([runPromise, timeoutPromise])
+		return await input.runner.run(input.prompt, input.onProgress)
 	} finally {
 		if (timeoutHandle) clearTimeout(timeoutHandle)
-		runPromise.catch(() => undefined)
 	}
 }

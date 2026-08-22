@@ -103,15 +103,15 @@ Here's an example of how your output should be structured:
 `,
 
 	summarizeFocusChainParam: `Updating task progress:
-There is an optional task_progress parameter. Only report COMPLETED items (\`- [x]\`) with EXACT item text from the existing checklist — do NOT send the full checklist. If no task_progress list was included in the previous context, do NOT create a new one.`,
+There is an optional task_progress parameter. If a checklist exists, report the exact completed items that represent the current progress, followed by the subsequent items that still need to be completed, preserving their order from the existing checklist. Use \`- [x]\` for completed items and \`- [ ]\` for the remaining items. The first \`- [ ]\` item identifies the current work after continuation; later \`- [ ]\` items preserve the remaining execution order. Do not send the full checklist, title, or section headings. If no task_progress list was included in the previous context, do not create a new one.`,
 
-	summarizeFocusChainUsage: `<task_progress>task_progress list here</task_progress>`,
+	summarizeFocusChainUsage: `<task_progress>ordered completed and remaining checklist items</task_progress>`,
 
 	summarizeFocusChainExample: `<task_progress>
-- [x] Completed task example
-- [x] Completed task example
-- [ ] Remaining task example
-- [ ] Remaining task example
+- [x] Trace refresh-token failure
+- [x] Correct refresh retry state
+- [ ] Verify expired-session recovery
+- [ ] Verify explicit logout behavior
 </task_progress>`,
 
 	summarizeDecisionWithFocus:

@@ -2,6 +2,7 @@ import { strict as assert } from "node:assert"
 import { setTimeout as delay } from "node:timers/promises"
 import { ClineSubagentUsageInfo } from "@shared/ExtensionMessage"
 import { createTaskCapabilityToggles } from "@shared/TaskCapabilityToggles"
+import type { TaskActivityEventInput } from "@shared/task-activity"
 import { ClineDefaultTool } from "@shared/tools"
 import { expect } from "chai"
 import { afterEach, describe, it, vi, expect as vitestExpect } from "vitest"
@@ -152,6 +153,21 @@ function createConfig(options?: {
 	return { config, callbacks, taskState }
 }
 
+function emptyTestStats() {
+	return {
+		toolCalls: 0,
+		inputTokens: 0,
+		outputTokens: 0,
+		cacheWriteTokens: 0,
+		cacheReadTokens: 0,
+		totalCost: 0,
+		currency: "USD",
+		contextTokens: 0,
+		contextWindow: 200000,
+		contextUsagePercentage: 0,
+	}
+}
+
 describe("SubagentToolHandler", () => {
 	afterEach(() => {
 		vi.restoreAllMocks()
@@ -283,7 +299,7 @@ describe("SubagentToolHandler", () => {
 	})
 
 	it("uses one approval for the full batch and stops on denial", async () => {
-		const { config, callbacks, taskState } = createConfig({ taskAskResponse: "noButtonClicked" })
+		const { config, callbacks } = createConfig({ taskAskResponse: "noButtonClicked" })
 		const runStub = vi.spyOn(SubagentRunner.prototype, "run")
 		const handler = new UseSubagentsToolHandler()
 
@@ -477,6 +493,70 @@ describe("SubagentToolHandler", () => {
 		assert.ok((result as string).includes("boom"))
 	})
 
+	it("retains only a retryable foreground batch item and injects its recovered result", async () => {
+		const { config } = createConfig({ autoApproveSafe: true, autoApproveAll: true })
+		const setRetry = vi.fn()
+		config.activityStore = {
+			create: vi.fn(),
+			update: vi.fn(),
+			appendEvent: vi.fn(),
+			setRetry,
+			setCancel: vi.fn(),
+			setFinish: vi.fn(),
+		} as unknown as TaskConfig["activityStore"]
+		let retryAttempt = 0
+		vi.spyOn(SubagentRunner.prototype, "run").mockImplementation(async (prompt: string) => {
+			if (prompt.includes("retry")) {
+				retryAttempt += 1
+				if (retryAttempt === 1) {
+					return {
+						status: "failed",
+						error: "sensitive provider diagnostic",
+						retryable: true,
+						stats: { ...emptyTestStats(), toolCalls: 1 },
+					}
+				}
+				return {
+					status: "completed",
+					result: "recovered batch item",
+					stats: { ...emptyTestStats(), toolCalls: 2 },
+				}
+			}
+			return {
+				status: "completed",
+				result: "stable item",
+				stats: emptyTestStats(),
+			}
+		})
+
+		const result = await new UseSubagentsToolHandler().execute(config, {
+			type: "tool_use",
+			name: ClineDefaultTool.USE_SUBAGENTS,
+			params: {
+				prompt_1: "<task>stable</task><context>ctx</context>",
+				prompt_2: "<task>retry</task><context>ctx</context>",
+			},
+			partial: false,
+			ts: Date.now(),
+		})
+
+		assert.doesNotMatch(String(result), /sensitive provider diagnostic/)
+		assert.match(String(result), /Retryable API failure/)
+		assert.match(String(result), /user can restart it with the Retry control/i)
+		assert.match(String(result), /do not treat this failure as a completed result/i)
+		assert.equal(config.subagentJobManager?.listJobs().length, 1)
+		assert.equal(config.subagentJobManager?.listInjectableResults().length, 0)
+		const retryRegistration = setRetry.mock.calls.find(([, callback]) => typeof callback === "function")
+		assert.ok(retryRegistration)
+		assert.equal(await retryRegistration[1](), true)
+		await vi.waitFor(() => assert.equal(config.subagentJobManager?.listJobs()[0]?.status, "completed"))
+		const [injectable] = config.subagentJobManager?.listInjectableResults() ?? []
+		assert.equal(injectable?.kind, "single")
+		if (injectable?.kind !== "single") assert.fail("recovered foreground batch item should inject as one job")
+		assert.equal(injectable.job.result, "recovered batch item")
+		assert.equal(injectable.job.task, "retry")
+	})
+
 	it("reports cancelled batch entries without counting them as successes", async () => {
 		const { config, callbacks } = createConfig({ autoApproveSafe: true, autoApproveAll: true })
 
@@ -558,6 +638,92 @@ describe("SubagentToolHandler", () => {
 		)
 		assert.ok(runningCall, "should emit the foreground running status")
 		assert.equal(runningCall[4], false, "foreground running status must be published to the Webview")
+	})
+
+	it("binds the activity before persisting subagent tool and retry events", async () => {
+		const { config } = createConfig({ autoApproveSafe: true, autoApproveAll: true })
+		const lifecycle: string[] = []
+		const createActivity = vi.fn((input: { activityId: string }) => {
+			lifecycle.push(`create:${input.activityId}`)
+		})
+		const appendEvent = vi.fn((jobId: string, event: TaskActivityEventInput) => {
+			lifecycle.push(`append:${jobId}`)
+			return event
+		})
+		config.activityStore = {
+			create: createActivity,
+			update: vi.fn(),
+			appendEvent,
+		} as unknown as TaskConfig["activityStore"]
+		const handler = new UseSubagentToolHandler()
+		vi.spyOn(SubagentRunner.prototype, "run").mockImplementation(async (_prompt, onProgress) => {
+			onProgress({
+				event: {
+					kind: "tool_call",
+					toolCallId: "first-tool",
+					toolName: "read_file",
+					toolStatus: "completed",
+					summary: "read_file(path=README.md)",
+				},
+			})
+			onProgress({
+				event: {
+					kind: "retry",
+					retryAttempt: 1,
+					maxRetries: 5,
+					delayMs: 5_000,
+					cumulativeDelayMs: 5_000,
+				},
+			})
+			return {
+				status: "completed",
+				result: "event persisted",
+				stats: {
+					toolCalls: 1,
+					inputTokens: 1,
+					outputTokens: 1,
+					cacheWriteTokens: 0,
+					cacheReadTokens: 0,
+					totalCost: 0,
+					currency: "USD",
+					contextTokens: 2,
+					contextWindow: 200000,
+					contextUsagePercentage: 0.001,
+				},
+			}
+		})
+
+		const result = await handler.execute(config, {
+			type: "tool_use",
+			name: ClineDefaultTool.USE_SUBAGENT,
+			params: { task: "review", context: "ctx" },
+			partial: false,
+			ts: Date.now(),
+		})
+
+		assert.match(String(result), /event persisted/)
+		assert.equal(createActivity.mock.calls.length, 1)
+		assert.equal(appendEvent.mock.calls.length, 2)
+		const jobId = createActivity.mock.calls[0][0].activityId
+		assert.equal(appendEvent.mock.calls[0][0], jobId)
+		assert.equal(appendEvent.mock.calls[1][0], jobId)
+		assert.deepEqual(lifecycle, [`create:${jobId}`, `append:${jobId}`, `append:${jobId}`])
+		assert.deepEqual(appendEvent.mock.calls[0][1], {
+			kind: "tool_call",
+			toolCallId: "first-tool",
+			toolName: "read_file",
+			toolStatus: "completed",
+			summary: "read_file(path=README.md)",
+			durationMs: undefined,
+			error: undefined,
+		})
+		assert.deepEqual(appendEvent.mock.calls[1][1], {
+			kind: "retry",
+			retryAttempt: 1,
+			maxRetries: 5,
+			delayMs: 5_000,
+			cumulativeDelayMs: 5_000,
+		})
 	})
 
 	it("lists default and bounded configured names for an unknown stable subagent", async () => {
@@ -694,6 +860,84 @@ describe("SubagentToolHandler", () => {
 		await delay(0)
 	})
 
+	it("registers soft Finish and exposes Retry only after a retryable background failure", async () => {
+		const { config } = createConfig({ autoApproveSafe: true, autoApproveAll: true })
+		let activityInput: { finish?: () => Promise<boolean> } | undefined
+		const setRetry = vi.fn()
+		const setCancel = vi.fn()
+		const setFinish = vi.fn()
+		config.activityStore = {
+			create: vi.fn((input: { finish?: () => Promise<boolean> }) => {
+				activityInput = input
+			}),
+			update: vi.fn(),
+			appendEvent: vi.fn(),
+			setRetry,
+			setCancel,
+			setFinish,
+		} as unknown as TaskConfig["activityStore"]
+		const handler = new UseSubagentToolHandler()
+		vi.spyOn(AgentConfigModule, "resolveAgentConfig").mockResolvedValue(undefined)
+		const requestFinish = vi.spyOn(SubagentRunner.prototype, "requestFinish").mockResolvedValue(true)
+		vi.spyOn(SubagentRunner.prototype, "run")
+			.mockResolvedValueOnce({
+				status: "failed",
+				error: "temporary provider failure",
+				retryable: true,
+				stats: {
+					toolCalls: 0,
+					inputTokens: 0,
+					outputTokens: 0,
+					cacheWriteTokens: 0,
+					cacheReadTokens: 0,
+					totalCost: 0,
+					currency: "USD",
+					contextTokens: 0,
+					contextWindow: 200000,
+					contextUsagePercentage: 0,
+				},
+			})
+			.mockResolvedValueOnce({
+				status: "completed",
+				result: "recovered background result",
+				stats: {
+					toolCalls: 1,
+					inputTokens: 5,
+					outputTokens: 3,
+					cacheWriteTokens: 0,
+					cacheReadTokens: 0,
+					totalCost: 0,
+					currency: "USD",
+					contextTokens: 8,
+					contextWindow: 200000,
+					contextUsagePercentage: 0.004,
+				},
+			})
+
+		const response = await handler.execute(config, {
+			type: "tool_use",
+			name: ClineDefaultTool.USE_SUBAGENT,
+			params: { task: "review", context: "ctx", background: "true" },
+			partial: false,
+			ts: Date.now(),
+		})
+		assert.match(String(response), /Started background subagent job/)
+		assert.ok(activityInput?.finish, "running subagent activity should expose Finish")
+		assert.equal(await activityInput.finish(), true)
+		vitestExpect(requestFinish).toHaveBeenCalledWith("user")
+
+		await vi.waitFor(() => {
+			const retryRegistration = setRetry.mock.calls.find(([, retry]) => typeof retry === "function")
+			assert.ok(retryRegistration, "retryable failure should register Retry")
+		})
+		const retry = setRetry.mock.calls.find(([, callback]) => typeof callback === "function")?.[1] as () => Promise<boolean>
+		assert.equal(await retry(), true)
+		await vi.waitFor(() => assert.equal(config.subagentJobManager?.getJob("subagent_1")?.status, "completed"))
+		assert.equal(config.subagentJobManager?.listInjectableResults().length, 1)
+		vitestExpect(setCancel).toHaveBeenCalledWith("subagent_1", vitestExpect.any(Function))
+		vitestExpect(setFinish).toHaveBeenCalledWith("subagent_1", vitestExpect.any(Function))
+	})
+
 	it("starts stable use_subagent background job", async () => {
 		const { config, callbacks } = createConfig({ autoApproveSafe: true, autoApproveAll: true })
 		const createActivity = vi.fn()
@@ -823,7 +1067,7 @@ describe("SubagentToolHandler", () => {
 	})
 
 	it("allows exactly max prompts without error", async () => {
-		const { config, callbacks, taskState } = createConfig({ autoApproveSafe: true })
+		const { config, taskState } = createConfig({ autoApproveSafe: true })
 		const handler = new UseSubagentsToolHandler()
 		vi.spyOn(SubagentRunner.prototype, "run").mockResolvedValue({
 			status: "completed",

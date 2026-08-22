@@ -11,7 +11,13 @@ import { getSystemPrompt, type SystemPromptContext } from "@core/prompts/system-
 import { resolveRequestWebSearchRoutingPlan } from "@core/task/RequestApiScope"
 import { StreamResponseHandler } from "@core/task/StreamResponseHandler"
 import { DEFAULT_API_PROVIDER } from "@shared/api"
-import { ClineAssistantToolUseBlock, ClineStorageMessage, ClineTextContentBlock, ClineUserContent } from "@shared/messages"
+import {
+	ClineAssistantContent,
+	ClineAssistantToolUseBlock,
+	ClineStorageMessage,
+	ClineTextContentBlock,
+	ClineUserContent,
+} from "@shared/messages"
 import { resolvePromptProfile } from "@shared/resolve-prompt-profile"
 import { Logger } from "@shared/services/Logger"
 import { ClineDefaultTool, ClineTool } from "@shared/tools"
@@ -36,6 +42,7 @@ import { ToolValidator } from "../ToolValidator"
 import type { TaskConfig } from "../types/TaskConfig"
 import type { AgentBaseConfig } from "./AgentConfigLoader"
 import { SUBAGENT_COMPLETION_CONTRACT, SubagentBuilder } from "./SubagentBuilder"
+import type { SubagentFinishReason, SubagentProgressUpdate, SubagentRunStats } from "./SubagentExecutor"
 import {
 	buildSubagentOutputBudgetPrompt,
 	resolveSubagentOutputBudget,
@@ -44,8 +51,8 @@ import {
 
 const MAX_EMPTY_ASSISTANT_RETRIES = 3
 const MAX_INVALID_COMPLETION_RETRIES = 3
-const MAX_INITIAL_STREAM_ATTEMPTS = 6
-const INITIAL_STREAM_RETRY_BASE_DELAY_MS = 3_000
+const INITIAL_STREAM_RETRY_DELAYS_MS = [5_000, 8_000, 11_000, 14_000, 17_000] as const
+const MAX_INITIAL_STREAM_ATTEMPTS = INITIAL_STREAM_RETRY_DELAYS_MS.length + 1
 const SUBAGENT_COMPLETION_CALL_EXAMPLE =
 	'Call attempt_completion with a non-empty result, for example: attempt_completion(result="...").'
 
@@ -65,45 +72,20 @@ function buildInvalidCompletionFailure(): string {
 	return `Subagent repeatedly called attempt_completion without a non-empty result.\n\n${SUBAGENT_COMPLETION_CONTRACT}\n\n${SUBAGENT_COMPLETION_CALL_EXAMPLE}`
 }
 
+function buildFinishReminder(reason: SubagentFinishReason): string {
+	const trigger =
+		reason === "timeout" ? "The subagent time limit was reached." : "The user requested that the subagent finish now."
+	return `${trigger}\n\nStop all further exploration. On your next response, call attempt_completion with a non-empty result that summarizes the useful findings already collected. Do not call any other tool. If the investigation is incomplete, state the remaining limitations in the result.\n\n${SUBAGENT_COMPLETION_CALL_EXAMPLE}`
+}
+
 export type SubagentRunStatus = "completed" | "failed" | "cancelled"
 
 export interface SubagentRunResult {
 	status: SubagentRunStatus
 	result?: string
 	error?: string
+	retryable?: boolean
 	stats: SubagentRunStats
-}
-
-interface SubagentProgressUpdate {
-	stats?: SubagentRunStats
-	latestToolCall?: string
-	status?: "running" | "completed" | "failed" | "cancelled"
-	result?: string
-	error?: string
-	event?: {
-		kind: "thinking" | "assistant_message" | "tool_call" | "tool_result"
-		phase?: "delta" | "final"
-		text?: string
-		toolCallId?: string
-		toolName?: string
-		toolStatus?: "started" | "completed" | "failed"
-		summary?: string
-		durationMs?: number
-		error?: string
-	}
-}
-
-interface SubagentRunStats {
-	toolCalls: number
-	inputTokens: number
-	outputTokens: number
-	cacheWriteTokens: number
-	cacheReadTokens: number
-	totalCost: number
-	currency: string
-	contextTokens: number
-	contextWindow: number
-	contextUsagePercentage: number
 }
 
 interface SubagentRequestUsageState {
@@ -280,7 +262,12 @@ function parseNonNativeToolCalls(assistantText: string): SubagentToolCall[] {
 		}))
 }
 
-function pushSubagentToolResultBlock(toolResultBlocks: any[], call: SubagentToolCall, label: string, content: string): void {
+function pushSubagentToolResultBlock(
+	toolResultBlocks: ClineUserContent[],
+	call: SubagentToolCall,
+	label: string,
+	content: string,
+): void {
 	if (call.isNativeToolCall) {
 		toolResultBlocks.push({
 			type: "tool_result",
@@ -304,6 +291,9 @@ export class SubagentRunner {
 	private activeApiAbort: (() => void) | undefined
 	private activeRetryAbortController: AbortController | undefined
 	private abortRequested = false
+	private finishRequested: SubagentFinishReason | undefined
+	private completionOnly = false
+	private running = false
 	private activeCommandExecutions = 0
 	private abortingCommands = false
 	private apiLogRequestIndex = 0
@@ -320,12 +310,22 @@ export class SubagentRunner {
 
 	async abort(): Promise<void> {
 		this.abortRequested = true
-		this.activeRetryAbortController?.abort()
+		await this.interruptActiveWork("abort")
+	}
 
+	async requestFinish(reason: SubagentFinishReason): Promise<boolean> {
+		if (!this.running || this.finishRequested || this.completionOnly || this.shouldAbort()) return false
+		this.finishRequested = reason
+		await this.interruptActiveWork("finish")
+		return true
+	}
+
+	private async interruptActiveWork(action: "abort" | "finish"): Promise<void> {
+		this.activeRetryAbortController?.abort()
 		try {
 			this.activeApiAbort?.()
 		} catch (error) {
-			Logger.error("[SubagentRunner] failed to abort active API stream", error)
+			Logger.error(`[SubagentRunner] failed to ${action} active API stream`, error)
 		}
 
 		if (this.activeCommandExecutions > 0 && !this.abortingCommands && this.baseConfig.callbacks.cancelRunningCommandTool) {
@@ -333,7 +333,7 @@ export class SubagentRunner {
 			try {
 				await this.baseConfig.callbacks.cancelRunningCommandTool()
 			} catch (error) {
-				Logger.error("[SubagentRunner] failed to cancel running command execution", error)
+				Logger.error(`[SubagentRunner] failed to ${action} running command execution`, error)
 			} finally {
 				this.abortingCommands = false
 			}
@@ -369,6 +369,9 @@ export class SubagentRunner {
 
 	async run(prompt: string, onProgress: (update: SubagentProgressUpdate) => void): Promise<SubagentRunResult> {
 		this.abortRequested = false
+		this.finishRequested = undefined
+		this.completionOnly = false
+		this.running = true
 		this.activeRetryAbortController = new AbortController()
 		const state = new TaskState()
 		let emptyAssistantResponseRetries = 0
@@ -412,6 +415,7 @@ export class SubagentRunner {
 			const webToolsEnabled = this.baseConfig.services.stateManager.getGlobalSettingsKey("clineWebToolsEnabled") === true
 			const webSearchAllowed = this.allowedTools.includes(ClineDefaultTool.WEB_SEARCH)
 			const webSearchRoutingPlan = resolveRequestWebSearchRoutingPlan(api, webToolsEnabled && webSearchAllowed)
+			const completionWebSearchRoutingPlan = resolveRequestWebSearchRoutingPlan(api, false)
 			stats.contextWindow = providerInfo.model.info.capabilities?.contextWindow || 0
 			stats.currency = providerInfo.model.info.pricing?.currency || "USD"
 			const apiFormat = providerInfo.model.info.apiFormats?.[0]
@@ -466,6 +470,13 @@ export class SubagentRunner {
 
 			const generated = await getSystemPrompt(context)
 			const systemPrompt = this.agent.buildSystemPrompt(generated.systemPrompt)
+			const completionGenerated = await getSystemPrompt({
+				...context,
+				disableTools: Object.values(ClineDefaultTool).filter((tool) => tool !== ClineDefaultTool.ATTEMPT),
+				clineWebToolsEnabled: false,
+				webSearchRoutingPlan: undefined,
+			})
+			const completionSystemPrompt = this.agent.buildSystemPrompt(completionGenerated.systemPrompt)
 			const nativeTools = generated.tools?.filter((tool) => {
 				if ("function" in tool) {
 					return allowedTools.has(tool.function.name as ClineDefaultTool)
@@ -474,6 +485,10 @@ export class SubagentRunner {
 					return allowedTools.has(tool.name as ClineDefaultTool)
 				}
 				return false
+			})
+			const completionNativeTools = nativeTools?.filter((tool) => {
+				if ("function" in tool) return tool.function.name === ClineDefaultTool.ATTEMPT
+				return "name" in tool && tool.name === ClineDefaultTool.ATTEMPT
 			})
 			const workspaceMetadataEnvironmentBlock = await this.getWorkspaceMetadataEnvironmentBlock()
 
@@ -519,6 +534,14 @@ export class SubagentRunner {
 					onProgress({ status: "cancelled", error, stats: { ...stats } })
 					return { status: "cancelled", error, stats }
 				}
+				if (this.finishRequested && !this.completionOnly) {
+					this.completionOnly = true
+					this.activeRetryAbortController = new AbortController()
+					conversation.push({
+						role: "user",
+						content: [{ type: "text", text: buildFinishReminder(this.finishRequested) }],
+					})
+				}
 
 				if (
 					usageState.lastRequest &&
@@ -551,7 +574,8 @@ export class SubagentRunner {
 				let assistantTextSignature: string | undefined
 				let requestId: string | undefined
 				const countedHostedServerToolIds = new Set<string>()
-				activeHostedServerToolLifecycle = new ServerToolLifecycle(webSearchRoutingPlan, true, (update) => {
+				const requestWebSearchRoutingPlan = this.completionOnly ? completionWebSearchRoutingPlan : webSearchRoutingPlan
+				activeHostedServerToolLifecycle = new ServerToolLifecycle(requestWebSearchRoutingPlan, true, (update) => {
 					if (!countedHostedServerToolIds.has(update.dlineTid)) {
 						countedHostedServerToolIds.add(update.dlineTid)
 						stats.toolCalls += 1
@@ -581,14 +605,15 @@ export class SubagentRunner {
 
 				const providerStream = this.createMessageWithInitialChunkRetry(
 					api,
-					systemPrompt,
+					this.completionOnly ? completionSystemPrompt : systemPrompt,
 					conversation,
-					nativeTools,
+					this.completionOnly ? completionNativeTools : nativeTools,
 					providerInfo.providerId,
 					providerInfo.model.id,
 					contextManager,
 					contextState,
-					webSearchRoutingPlan,
+					requestWebSearchRoutingPlan,
+					onProgress,
 				)
 				const stream = normalizeApiStream(providerStream, createStreamNormalizer(createIdentityFactory()))
 
@@ -714,7 +739,24 @@ export class SubagentRunner {
 					)
 					finalizedToolCalls = fallbackNonNativeToolCalls
 				}
-				const assistantContent = [] as any[]
+				if (this.finishRequested && !this.completionOnly) {
+					const validCompletion = finalizedToolCalls.some((call) => {
+						if (call.name !== ClineDefaultTool.ATTEMPT) return false
+						return Boolean(toToolUseParams(call.input).result?.trim())
+					})
+					if (!validCompletion) {
+						this.completionOnly = true
+						this.activeRetryAbortController = new AbortController()
+						conversation.push({
+							role: "user",
+							content: [{ type: "text", text: buildFinishReminder(this.finishRequested) }],
+						})
+						await Promise.resolve()
+						continue
+					}
+				}
+
+				const assistantContent: ClineAssistantContent[] = []
 				if (assistantText.trim().length > 0) {
 					onProgress({ event: { kind: "assistant_message", phase: "final", text: assistantText } })
 					assistantContent.push({
@@ -787,6 +829,22 @@ export class SubagentRunner {
 						signature: call.signature,
 					}
 					canonicalizeAttemptCompletionParams(toolCallBlock)
+
+					if (this.completionOnly && toolName !== ClineDefaultTool.ATTEMPT) {
+						invalidCompletionRetries += 1
+						if (invalidCompletionRetries > MAX_INVALID_COMPLETION_RETRIES) {
+							const error = buildInvalidCompletionFailure()
+							onProgress({ status: "failed", error, stats: { ...stats } })
+							return { status: "failed", error, stats }
+						}
+						pushSubagentToolResultBlock(
+							toolResultBlocks,
+							call,
+							toolName,
+							buildFinishReminder(this.finishRequested ?? "user"),
+						)
+						continue
+					}
 
 					if (toolName === ClineDefaultTool.ATTEMPT) {
 						const completionResult = toolCallParams.result?.trim()
@@ -914,13 +972,19 @@ export class SubagentRunner {
 			}
 
 			const errorText = (error as Error).message || "Subagent execution failed."
+			const retryable = this.shouldRetryInitialStreamError(
+				error,
+				this.apiHandler.getProviderId?.() ?? DEFAULT_API_PROVIDER,
+				this.apiHandler.getModel().id,
+			)
 			Logger.error("[SubagentRunner] run failed", error)
 			onProgress({ status: "failed", error: errorText, stats: { ...stats } })
-			return { status: "failed", error: errorText, stats }
+			return { status: "failed", error: errorText, retryable, stats }
 		} finally {
 			await activeHostedServerToolLifecycle?.finalizeOpen("Subagent hosted web search ended without a result.")
 			this.activeApiAbort = undefined
 			this.activeRetryAbortController = undefined
+			this.running = false
 		}
 	}
 
@@ -971,15 +1035,6 @@ export class SubagentRunner {
 		// Mirror main loop behavior: do not auto-retry auth, quota, or account-limit failures.
 		if (error instanceof Error && error.name === "AbortError") return false
 
-		const parsedError = ClineError.transform(error, modelId, providerId)
-		const nonRetryableTypes = [
-			ClineErrorType.Auth,
-			ClineErrorType.Balance,
-			ClineErrorType.SpendLimit,
-			ClineErrorType.QuotaExceeded,
-		]
-		if (nonRetryableTypes.some((type) => parsedError.isErrorType(type))) return false
-
 		const raw = error !== null && typeof error === "object" ? (error as Record<string, unknown>) : undefined
 		const messageRecord =
 			error instanceof Error
@@ -1002,6 +1057,15 @@ export class SubagentRunner {
 		const isRetryableStatus =
 			Number.isFinite(numericStatus) &&
 			(numericStatus === 408 || numericStatus === 409 || numericStatus === 429 || numericStatus >= 500)
+		const parsedError = ClineError.transform(error, modelId, providerId)
+		const isRetryableRequestStatus = numericStatus === 408 || numericStatus === 409
+		const isNonRetryableError =
+			parsedError.isErrorType(ClineErrorType.Balance) ||
+			parsedError.isErrorType(ClineErrorType.SpendLimit) ||
+			parsedError.isErrorType(ClineErrorType.QuotaExceeded) ||
+			(parsedError.isErrorType(ClineErrorType.Auth) && !isRetryableRequestStatus)
+		if (isNonRetryableError) return false
+
 		const isNetworkError =
 			code === "ECONNRESET" ||
 			code === "ECONNREFUSED" ||
@@ -1111,7 +1175,9 @@ export class SubagentRunner {
 		contextManager: ContextManager,
 		contextState: SubagentContextState,
 		webSearchRoutingPlan: WebSearchRoutingPlan,
+		onProgress: (update: SubagentProgressUpdate) => void,
 	) {
+		let cumulativeRetryDelayMs = 0
 		for (let attempt = 1; attempt <= MAX_INITIAL_STREAM_ATTEMPTS; attempt += 1) {
 			const truncatedConversation = contextManager
 				.getTruncatedMessages(fullConversation, contextState.conversationHistoryDeletedRange)
@@ -1147,6 +1213,8 @@ export class SubagentRunner {
 				yield* iterator
 				return
 			} catch (error) {
+				if (this.finishRequested && !this.shouldAbort()) return
+
 				// Once the caller has observed any response content, replaying the request
 				// would duplicate streamed text and hosted/native tool lifecycles.
 				if (didYieldChunk) {
@@ -1177,9 +1245,25 @@ export class SubagentRunner {
 					throw error
 				}
 
-				const delayMs = INITIAL_STREAM_RETRY_BASE_DELAY_MS * attempt
-				Logger.warn(`[SubagentRunner] Initial stream failed. Retrying attempt ${attempt + 1}.`, error)
-				await waitForSubagentRetry(delayMs, this.activeRetryAbortController?.signal)
+				const delayMs = INITIAL_STREAM_RETRY_DELAYS_MS[attempt - 1]
+				if (delayMs === undefined) throw error
+				cumulativeRetryDelayMs += delayMs
+				onProgress({
+					event: {
+						kind: "retry",
+						retryAttempt: attempt,
+						maxRetries: INITIAL_STREAM_RETRY_DELAYS_MS.length,
+						delayMs,
+						cumulativeDelayMs: cumulativeRetryDelayMs,
+					},
+				})
+				Logger.warn(`[SubagentRunner] Initial stream failed. Retrying attempt ${attempt + 1} after ${delayMs}ms.`, error)
+				try {
+					await waitForSubagentRetry(delayMs, this.activeRetryAbortController?.signal)
+				} catch (waitError) {
+					if (this.finishRequested && !this.shouldAbort()) return
+					throw waitError
+				}
 			}
 		}
 	}

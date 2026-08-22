@@ -101,7 +101,9 @@ export const toolPromptModules = [
 	}),
 	defineLegacyModule("spawnTask", "tools", spawnTask),
 	defineLegacyModule("statusUpdate", "tools", statusUpdate),
-	defineLegacyModule("subagent", "tools", subagent),
+	defineLegacyModule("subagent", "tools", subagent, {
+		timeoutInstruction: createRuntimeContract("SUBAGENT_TIMEOUT_SECONDS"),
+	}),
 	defineLegacyModule("toolHandlers", "tools", toolHandlers, {
 		toolError: createRuntimeContract("ERROR"),
 		noToolsUsed: createRuntimeContract("TOOL_REMINDER"),

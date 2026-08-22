@@ -174,6 +174,20 @@ function applyProgress(config: TaskConfig, entry: SubagentStatusItem, update: Su
 				text: event.text,
 				error: event.error,
 			})
+		} else if (
+			event.kind === "retry" &&
+			event.retryAttempt !== undefined &&
+			event.maxRetries !== undefined &&
+			event.delayMs !== undefined &&
+			event.cumulativeDelayMs !== undefined
+		) {
+			config.activityStore?.appendEvent(entry.jobId, {
+				kind: "retry",
+				retryAttempt: event.retryAttempt,
+				maxRetries: event.maxRetries,
+				delayMs: event.delayMs,
+				cumulativeDelayMs: event.cumulativeDelayMs,
+			})
 		}
 	}
 	updateActivityFromEntry(config, entry)
@@ -186,6 +200,8 @@ function createSubagentActivity(
 	cancel: () => Promise<void>,
 	parentActivityId?: string,
 	continueInBackground?: () => Promise<boolean>,
+	finish?: () => Promise<boolean>,
+	retry?: () => Promise<boolean>,
 ): void {
 	if (!entry.jobId) return
 	config.activityStore?.create({
@@ -198,6 +214,8 @@ function createSubagentActivity(
 		parentActivityId,
 		cancel,
 		continueInBackground,
+		finish,
+		retry,
 	})
 }
 
@@ -462,6 +480,19 @@ export class UseSubagentToolHandler implements IFullyManagedTool {
 						timeoutSeconds: request.options.timeoutSeconds,
 						onProgress: (update) => applyProgress(config, entry, update),
 					}),
+				onCreated: (jobRecord) => {
+					entry.jobId = jobRecord.jobId
+					entry.startedAt = jobRecord.startedAt
+					createSubagentActivity(
+						config,
+						entry,
+						"background",
+						() => runner.abort(),
+						undefined,
+						undefined,
+						() => runner.requestFinish("user"),
+					)
+				},
 				onStatusChange: async (jobRecord) => {
 					entry.status = jobRecord.status
 					entry.result = jobRecord.result
@@ -469,6 +500,16 @@ export class UseSubagentToolHandler implements IFullyManagedTool {
 					if (jobRecord.stats) applyStats(entry, jobRecord.stats)
 					entry.finishedAt = jobRecord.finishedAt
 					updateActivityFromEntry(config, entry)
+					config.activityStore?.setRetry?.(
+						jobRecord.jobId,
+						jobRecord.retryable
+							? async () => {
+									config.activityStore?.setCancel(jobRecord.jobId, () => runner.abort())
+									config.activityStore?.setFinish(jobRecord.jobId, () => runner.requestFinish("user"))
+									return getSubagentJobManager(config).retryJob(jobRecord.jobId)
+								}
+							: undefined,
+					)
 					await config.callbacks.say(
 						"subagent",
 						JSON.stringify(
@@ -485,9 +526,6 @@ export class UseSubagentToolHandler implements IFullyManagedTool {
 					)
 				},
 			})
-			entry.jobId = job.jobId
-			entry.startedAt = job.startedAt
-			createSubagentActivity(config, entry, "background", () => runner.abort())
 			await config.callbacks.say(
 				"subagent",
 				JSON.stringify(
@@ -543,6 +581,47 @@ export class UseSubagentToolHandler implements IFullyManagedTool {
 					return result
 				}
 			},
+			onCreated: (jobRecord) => {
+				entry.jobId = jobRecord.jobId
+				entry.startedAt = jobRecord.startedAt
+				createSubagentActivity(
+					config,
+					entry,
+					"foreground",
+					() => foregroundRunner.abort(),
+					undefined,
+					async () => {
+						if (isContinuedInBackground || entry.status !== "running") return false
+						isContinuedInBackground = true
+						entry.background = true
+						entry.backgroundHandoffAvailable = false
+						try {
+							await config.callbacks.say(
+								"subagent",
+								JSON.stringify(
+									buildStatusPayload("single", "running", [entry], {
+										background: true,
+										timeoutSeconds: request.options.timeoutSeconds,
+										jobId: foregroundJob.jobId,
+									}),
+								),
+								undefined,
+								undefined,
+								false,
+								block.ts,
+							)
+						} catch (error) {
+							isContinuedInBackground = false
+							entry.background = false
+							entry.backgroundHandoffAvailable = true
+							throw error
+						}
+						resolveHandoff?.()
+						return true
+					},
+					() => foregroundRunner.requestFinish("user"),
+				)
+			},
 			onStatusChange: async (jobRecord) => {
 				entry.status = jobRecord.status
 				entry.result = jobRecord.result
@@ -552,6 +631,19 @@ export class UseSubagentToolHandler implements IFullyManagedTool {
 				if (jobRecord.stats) applyStats(entry, jobRecord.stats)
 				entry.finishedAt = jobRecord.finishedAt
 				updateActivityFromEntry(config, entry)
+				config.activityStore?.setRetry?.(
+					jobRecord.jobId,
+					jobRecord.retryable
+						? async () => {
+								isContinuedInBackground = true
+								entry.background = true
+								entry.backgroundHandoffAvailable = false
+								config.activityStore?.setCancel(jobRecord.jobId, () => foregroundRunner.abort())
+								config.activityStore?.setFinish(jobRecord.jobId, () => foregroundRunner.requestFinish("user"))
+								return subagentJobManager.retryJob(jobRecord.jobId)
+							}
+						: undefined,
+				)
 				if (!isContinuedInBackground) return
 				await config.callbacks.say(
 					"subagent",
@@ -569,44 +661,6 @@ export class UseSubagentToolHandler implements IFullyManagedTool {
 				)
 			},
 		})
-		entry.jobId = foregroundJob.jobId
-		entry.startedAt = foregroundJob.startedAt
-		createSubagentActivity(
-			config,
-			entry,
-			"foreground",
-			() => foregroundRunner.abort(),
-			undefined,
-			async () => {
-				if (isContinuedInBackground || entry.status !== "running") return false
-				isContinuedInBackground = true
-				entry.background = true
-				entry.backgroundHandoffAvailable = false
-				try {
-					await config.callbacks.say(
-						"subagent",
-						JSON.stringify(
-							buildStatusPayload("single", "running", [entry], {
-								background: true,
-								timeoutSeconds: request.options.timeoutSeconds,
-								jobId: foregroundJob.jobId,
-							}),
-						),
-						undefined,
-						undefined,
-						false,
-						block.ts,
-					)
-				} catch (error) {
-					isContinuedInBackground = false
-					entry.background = false
-					entry.backgroundHandoffAvailable = true
-					throw error
-				}
-				resolveHandoff?.()
-				return true
-			},
-		)
 		await config.callbacks.say(
 			"subagent",
 			JSON.stringify(
@@ -631,8 +685,10 @@ export class UseSubagentToolHandler implements IFullyManagedTool {
 				return formatResponse.toolResult(`Continued background subagent job: ${foregroundJob.jobId}`)
 			}
 			result = outcome.result
-			subagentJobManager.markInjected([foregroundJob.jobId])
-			subagentJobManager.markConsumed([foregroundJob.jobId])
+			if (!result.retryable) {
+				subagentJobManager.markInjected([foregroundJob.jobId])
+				subagentJobManager.markConsumed([foregroundJob.jobId])
+			}
 		} finally {
 			config.taskState.isExecutingSubagent = false
 		}
@@ -659,7 +715,11 @@ export class UseSubagentToolHandler implements IFullyManagedTool {
 			block.ts,
 		)
 		await emitUsage(config, [entry])
-		return formatResponse.toolResult(formatSummary([entry]))
+		return formatResponse.toolResult(
+			result.retryable
+				? `Subagent paused after a retryable API failure. The activity is preserved. The user can restart it with the Retry control; do not treat this failure as a completed result. Job: ${foregroundJob.jobId}`
+				: formatSummary([entry]),
+		)
 	}
 }
 
@@ -783,7 +843,15 @@ export class UseSubagentsToolHandler implements IFullyManagedTool {
 					entries.forEach((entry, index) => {
 						entry.jobId = batchRecord.itemJobIds[index]
 						entry.startedAt = batchRecord.startedAt
-						createSubagentActivity(config, entry, "background", () => runners[index].abort(), batchRecord.batchJobId)
+						createSubagentActivity(
+							config,
+							entry,
+							"background",
+							() => runners[index].abort(),
+							batchRecord.batchJobId,
+							undefined,
+							() => runners[index].requestFinish("user"),
+						)
 					})
 				},
 				onStatusChange: async (jobRecord, batchRecord) => {
@@ -795,6 +863,18 @@ export class UseSubagentsToolHandler implements IFullyManagedTool {
 						if (jobRecord.stats) applyStats(entry, jobRecord.stats)
 						entry.finishedAt = jobRecord.finishedAt
 						updateActivityFromEntry(config, entry)
+						config.activityStore?.setRetry?.(
+							jobRecord.jobId,
+							jobRecord.retryable
+								? async () => {
+										config.activityStore?.setCancel(jobRecord.jobId, () => runners[entry.index - 1].abort())
+										config.activityStore?.setFinish(jobRecord.jobId, () =>
+											runners[entry.index - 1].requestFinish("user"),
+										)
+										return getSubagentJobManager(config).retryJob(jobRecord.jobId)
+									}
+								: undefined,
+						)
 					}
 					await config.callbacks.say(
 						"subagent",
@@ -836,7 +916,15 @@ export class UseSubagentsToolHandler implements IFullyManagedTool {
 		entries.forEach((entry, index) => {
 			entry.jobId = `${foregroundBatchId}_${index + 1}`
 			entry.startedAt = Date.now()
-			createSubagentActivity(config, entry, "foreground", () => foregroundRunners[index].abort(), foregroundBatchId)
+			createSubagentActivity(
+				config,
+				entry,
+				"foreground",
+				() => foregroundRunners[index].abort(),
+				foregroundBatchId,
+				undefined,
+				() => foregroundRunners[index].requestFinish("user"),
+			)
 		})
 		await config.callbacks.say(
 			"subagent",
@@ -874,6 +962,69 @@ export class UseSubagentsToolHandler implements IFullyManagedTool {
 			entry.finishedAt = Date.now()
 			applyStats(entry, result.stats)
 			updateActivityFromEntry(config, entry)
+			if (!result.retryable || !entry.jobId) return
+			const retainedManager = getSubagentJobManager(config)
+			retainedManager.retainRetryableJob({
+				jobId: entry.jobId,
+				subagentName: effectiveSubagentName,
+				task: request.items[index].task,
+				prompt: request.items[index].prompt,
+				timeoutSeconds: request.options.timeoutSeconds,
+				startedAt: entry.startedAt ?? Date.now(),
+				result,
+				runner: () =>
+					runSubagent({
+						runner: foregroundRunners[index],
+						prompt: request.items[index].prompt,
+						timeoutSeconds: request.options.timeoutSeconds,
+						onProgress: (update: SubagentProgressUpdate) => applyProgress(config, entry, update),
+					}),
+				onStatusChange: async (jobRecord) => {
+					entry.status = jobRecord.status
+					entry.result = jobRecord.result
+					entry.error = jobRecord.error
+					entry.background = true
+					if (jobRecord.stats) applyStats(entry, jobRecord.stats)
+					entry.finishedAt = jobRecord.finishedAt
+					updateActivityFromEntry(config, entry)
+					config.activityStore?.setRetry?.(
+						jobRecord.jobId,
+						jobRecord.retryable
+							? async () => {
+									config.activityStore?.setCancel(jobRecord.jobId, () => foregroundRunners[index].abort())
+									config.activityStore?.setFinish(jobRecord.jobId, () =>
+										foregroundRunners[index].requestFinish("user"),
+									)
+									return retainedManager.retryJob(jobRecord.jobId)
+								}
+							: undefined,
+					)
+					await config.callbacks.say(
+						"subagent",
+						JSON.stringify(
+							buildStatusPayload("batch", jobRecord.status, entries, {
+								background: true,
+								timeoutSeconds: request.options.timeoutSeconds,
+								batchJobId: foregroundBatchId,
+							}),
+						),
+						undefined,
+						undefined,
+						false,
+						block.ts,
+					)
+				},
+			})
+			config.activityStore?.setRetry?.(entry.jobId, async () => {
+				entry.background = true
+				config.activityStore?.update(entry.jobId as string, {
+					executionMode: "background",
+					cancellationOwner: "explicit",
+				})
+				config.activityStore?.setCancel(entry.jobId as string, () => foregroundRunners[index].abort())
+				config.activityStore?.setFinish(entry.jobId as string, () => foregroundRunners[index].requestFinish("user"))
+				return retainedManager.retryJob(entry.jobId as string)
+			})
 		})
 		const finalStatus: ClineSaySubagentStatus["status"] = entries.some((entry) => entry.status === "timeout")
 			? "timeout"
@@ -896,6 +1047,14 @@ export class UseSubagentsToolHandler implements IFullyManagedTool {
 			block.ts,
 		)
 		await emitUsage(config, entries)
-		return formatResponse.toolResult(formatSummary(entries))
+		const modelSummaryEntries = entries.map((entry, index) =>
+			results[index]?.retryable
+				? {
+						...entry,
+						error: "Retryable API failure. The activity is preserved. The user can restart it with the Retry control; do not treat this failure as a completed result.",
+					}
+				: entry,
+		)
+		return formatResponse.toolResult(formatSummary(modelSummaryEntries))
 	}
 }

@@ -24,7 +24,12 @@ function toProtoMetrics(metrics: TaskActivityRecord["metrics"]): ProtoTaskActivi
 		: undefined
 }
 
-function toProtoActivity(activity: TaskActivityRecord, cancellable: boolean): ProtoTaskActivity {
+function toProtoActivity(
+	activity: TaskActivityRecord,
+	cancellable: boolean,
+	finishable: boolean,
+	retryable: boolean,
+): ProtoTaskActivity {
 	return ProtoTaskActivity.create({
 		activityId: activity.activityId,
 		taskId: activity.taskId,
@@ -44,6 +49,8 @@ function toProtoActivity(activity: TaskActivityRecord, cancellable: boolean): Pr
 		logPath: activity.logPath,
 		parentActivityId: activity.parentActivityId,
 		cancellable,
+		finishable,
+		retryable,
 		schemaVersion: activity.schemaVersion,
 		metrics: toProtoMetrics(activity.metrics),
 		events: activity.events.map((event) =>
@@ -61,16 +68,31 @@ function toProtoActivity(activity: TaskActivityRecord, cancellable: boolean): Pr
 				error: "error" in event ? event.error : undefined,
 				status: "status" in event ? event.status : undefined,
 				metrics: "metrics" in event ? toProtoMetrics(event.metrics) : undefined,
+				retryAttempt: "retryAttempt" in event ? event.retryAttempt : undefined,
+				maxRetries: "maxRetries" in event ? event.maxRetries : undefined,
+				delayMs: "delayMs" in event ? event.delayMs : undefined,
+				cumulativeDelayMs: "cumulativeDelayMs" in event ? event.cumulativeDelayMs : undefined,
 			}),
 		),
 	})
 }
 
-function toProtoUpdate(update: TaskActivityUpdate, isCancellable: (activityId: string) => boolean): ProtoTaskActivityUpdate {
+function toProtoUpdate(
+	update: TaskActivityUpdate,
+	capabilities: (activityId: string) => { cancellable: boolean; finishable: boolean; retryable: boolean },
+): ProtoTaskActivityUpdate {
 	return ProtoTaskActivityUpdate.create({
 		sequence: update.sequence,
 		snapshot: update.snapshot,
-		activities: update.activities.map((activity) => toProtoActivity(activity, isCancellable(activity.activityId))),
+		activities: update.activities.map((activity) => {
+			const activityCapabilities = capabilities(activity.activityId)
+			return toProtoActivity(
+				activity,
+				activityCapabilities.cancellable,
+				activityCapabilities.finishable,
+				activityCapabilities.retryable,
+			)
+		}),
 	})
 }
 
@@ -89,7 +111,11 @@ export async function subscribeToTaskActivities(
 
 	const unsubscribe = task.activityStore.subscribe(async (update) => {
 		await responseStream(
-			toProtoUpdate(update, (activityId) => task.activityStore.isCancellable(activityId)),
+			toProtoUpdate(update, (activityId) => ({
+				cancellable: task.activityStore.isCancellable(activityId),
+				finishable: task.activityStore.isFinishable(activityId),
+				retryable: task.activityStore.isRetryable(activityId),
+			})),
 			false,
 			update.sequence,
 		)

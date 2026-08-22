@@ -119,6 +119,26 @@ describe("XML tool projection", () => {
 		expect(xml).toContain("<spawn_task>")
 	})
 
+	it("documents subagent context boundaries and resolves its default timeout through runtime env", async () => {
+		const context = {
+			...BASE_CONTEXT,
+			promptProfile: PromptProfile.Standard,
+			subagentsEnabled: true,
+			isSubagentRun: false,
+		}
+		const generator = new ToolPromptGenerator()
+		const xml = generator.generateXml(PromptProfile.Standard, context)
+
+		expect(xml).toContain("main task's context window")
+		expect(xml).toContain("modification boundary")
+		expect(xml).toContain("Defaults to @SUBAGENT_TIMEOUT_SECONDS@.")
+
+		const output = await new SystemPromptGenerator(generator).generate(context)
+
+		expect(output.systemPrompt).toContain("Defaults to 1200.")
+		expect(output.systemPrompt).not.toContain("@SUBAGENT_TIMEOUT_SECONDS@")
+	})
+
 	it("keeps spawn_task out of the Lite XML projection", () => {
 		const xml = new ToolPromptGenerator().generateXml(PromptProfile.Lite, {
 			...BASE_CONTEXT,

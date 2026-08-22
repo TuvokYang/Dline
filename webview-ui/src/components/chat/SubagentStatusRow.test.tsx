@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import type { ClineMessage } from "@shared/ExtensionMessage"
-import { fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import SubagentStatusRow from "./SubagentStatusRow"
 
@@ -9,15 +9,17 @@ vi.mock("@/context/ExtensionStateContext", () => ({
 	useExtensionState: () => ({ currentTaskItem: { id: "task-1" } }),
 }))
 
-const { cancelTaskActivities, moveSubagentToBackground, taskActivities } = vi.hoisted(() => ({
+const { cancelTaskActivities, finishTaskActivities, retryTaskActivities, taskActivities } = vi.hoisted(() => ({
 	cancelTaskActivities: vi.fn(),
-	moveSubagentToBackground: vi.fn(async () => true),
+	finishTaskActivities: vi.fn(),
+	retryTaskActivities: vi.fn(),
 	taskActivities: [] as Array<Record<string, unknown>>,
 }))
 
 vi.mock("./activity/useTaskActivities", () => ({
 	cancelTaskActivities: (...args: unknown[]) => cancelTaskActivities(...args),
-	moveSubagentToBackground: (...args: unknown[]) => moveSubagentToBackground(...args),
+	finishTaskActivities: (...args: unknown[]) => finishTaskActivities(...args),
+	retryTaskActivities: (...args: unknown[]) => retryTaskActivities(...args),
 	useTaskActivities: () => ({
 		activities: taskActivities,
 		activeCount: taskActivities.length,
@@ -42,7 +44,8 @@ function makeMsg(overrides: Partial<ClineMessage> = {}): ClineMessage {
 describe("SubagentStatusRow", () => {
 	beforeEach(() => {
 		cancelTaskActivities.mockClear()
-		moveSubagentToBackground.mockClear()
+		finishTaskActivities.mockClear()
+		retryTaskActivities.mockClear()
 		taskActivities.length = 0
 	})
 
@@ -136,6 +139,80 @@ describe("SubagentStatusRow", () => {
 		expect(cancelTaskActivities).toHaveBeenCalledWith("task-1", ["job-1"])
 	})
 
+	it("uses canonical Finish and Retry capabilities for exact subagent activities", async () => {
+		taskActivities.push(
+			{
+				activityId: "job-finish",
+				taskId: "task-1",
+				kind: "subagent",
+				executionMode: "background",
+				status: "running",
+				cancellable: true,
+				finishable: true,
+				retryable: false,
+				createdAt: 1,
+				updatedAt: 1,
+				title: "running reviewer",
+			},
+			{
+				activityId: "job-retry",
+				taskId: "task-1",
+				kind: "subagent",
+				executionMode: "background",
+				status: "failed",
+				cancellable: false,
+				finishable: false,
+				retryable: true,
+				createdAt: 2,
+				updatedAt: 2,
+				title: "failed reviewer",
+			},
+		)
+		const items = [
+			{ index: 1, jobId: "job-finish", prompt: "finish", status: "running" },
+			{ index: 2, jobId: "job-retry", prompt: "retry", status: "failed" },
+		].map((item) => ({
+			...item,
+			toolCalls: 0,
+			inputTokens: 0,
+			outputTokens: 0,
+			totalCost: 0,
+			currency: "USD",
+			contextTokens: 0,
+			contextWindow: 0,
+			contextUsagePercentage: 0,
+		}))
+		const msg = makeMsg({
+			say: "subagent",
+			text: JSON.stringify({ status: "running", items }),
+		})
+
+		let resolveFinish!: () => void
+		let resolveRetry!: () => void
+		finishTaskActivities.mockImplementationOnce(() => new Promise<void>((resolve) => (resolveFinish = resolve)))
+		retryTaskActivities.mockImplementationOnce(() => new Promise<void>((resolve) => (resolveRetry = resolve)))
+		render(<SubagentStatusRow isLast={true} message={msg} />)
+		const finishButton = screen.getByRole("button", { name: "Finish" })
+		const retryButton = screen.getByRole("button", { name: "Retry" })
+		fireEvent.click(finishButton)
+		fireEvent.click(finishButton)
+		fireEvent.click(retryButton)
+		fireEvent.click(retryButton)
+
+		expect(finishTaskActivities).toHaveBeenCalledTimes(1)
+		expect(finishTaskActivities).toHaveBeenCalledWith("task-1", ["job-finish"])
+		expect(retryTaskActivities).toHaveBeenCalledTimes(1)
+		expect(retryTaskActivities).toHaveBeenCalledWith("task-1", ["job-retry"])
+		expect(finishButton).toBeDisabled()
+		expect(retryButton).toBeDisabled()
+		resolveFinish()
+		resolveRetry()
+		await waitFor(() => {
+			expect(finishButton).not.toBeDisabled()
+			expect(retryButton).not.toBeDisabled()
+		})
+	})
+
 	it("hides cancellation for a running activity without a live canceller", () => {
 		taskActivities.push({
 			activityId: "job-stale",
@@ -208,7 +285,7 @@ describe("SubagentStatusRow", () => {
 		expect(screen.queryByText("Running in background", { exact: true })).not.toBeInTheDocument()
 	})
 
-	it("offers Continue in Background for an eligible foreground subagent", async () => {
+	it("keeps Continue in Background out of the subagent card and aligns its mode and Cancel with the command header", () => {
 		taskActivities.push({
 			activityId: "job-foreground",
 			taskId: "task-1",
@@ -246,10 +323,21 @@ describe("SubagentStatusRow", () => {
 		})
 
 		render(<SubagentStatusRow isLast={true} message={msg} />)
-		fireEvent.click(screen.getByRole("button", { name: "Continue in Background" }))
+		const item = screen.getByTestId("subagent-item")
+		const header = screen.getByTestId("subagent-item-header")
+		const mode = screen.getByTestId("subagent-execution-mode")
+		const cancel = screen.getByRole("button", { name: "Cancel" })
 
-		await waitFor(() => expect(moveSubagentToBackground).toHaveBeenCalledWith("task-1", "job-foreground"))
-		expect(screen.getByTestId("subagent-execution-mode")).toHaveTextContent("Foreground")
+		expect(screen.queryByRole("button", { name: "Continue in Background" })).not.toBeInTheDocument()
+		expect(header).toContainElement(screen.getByTestId("subagent-name"))
+		expect(header).toContainElement(mode)
+		expect(header).toContainElement(cancel)
+		expect(mode).toHaveTextContent("Foreground")
+		expect(mode).toHaveClass("min-w-[88px]", "text-[11px]", "py-0.5")
+		expect(cancel).toHaveClass("h-5")
+		expect(item).not.toHaveTextContent("Moving...")
+		fireEvent.click(cancel)
+		expect(cancelTaskActivities).toHaveBeenCalledWith("task-1", ["job-foreground"])
 	})
 
 	it("cancels only canonical cancellable activities in a batch", () => {
@@ -317,7 +405,7 @@ describe("SubagentStatusRow", () => {
 		expect(cancelTaskActivities).toHaveBeenCalledWith("task-1", ["job-1", "job-3"])
 	})
 
-	it("renders the subagent name, sequence, bounded task, and single-line context without exposing the job id", () => {
+	it("keeps structured task and context text within the full card width without exposing the job id", () => {
 		const jobId = "subagent_batch_fg_call_AvllKHRBjVSaDfW6gFJJVvhL_1"
 		const msg = makeMsg({
 			say: "subagent",
@@ -350,22 +438,105 @@ describe("SubagentStatusRow", () => {
 		const item = screen.getByTestId("subagent-item")
 		const name = screen.getByTestId("subagent-name")
 		const task = screen.getByRole("heading", { name: "review code" })
+		const taskScroll = screen.getByTestId("subagent-task-scroll")
 		const context = screen.getByTestId("subagent-context")
 		const contextContent = screen.getByTestId("subagent-context-content")
 		expect(name).toHaveTextContent("reviewer")
 		expect(screen.getAllByText("reviewer")).toHaveLength(1)
-		expect(task.parentElement).toHaveClass("max-h-[72px]", "overflow-y-auto")
-		expect(context).toHaveClass("h-5")
+		expect(taskScroll).toHaveClass("min-h-0", "flex-1", "overflow-y-auto", "overflow-x-hidden")
+		expect(taskScroll).toContainElement(task)
+		expect(task).toHaveClass("whitespace-pre-wrap", "break-words", "[overflow-wrap:anywhere]")
+		expect(context).toHaveClass("w-full", "max-w-full", "overflow-hidden")
+		expect(context).not.toHaveClass("h-5")
 		expect(context).toHaveTextContent("Context")
-		expect(contextContent).toHaveClass("truncate")
+		expect(contextContent).toHaveClass("whitespace-pre-wrap", "break-words", "[overflow-wrap:anywhere]")
+		expect(contextContent).not.toHaveClass("truncate")
 		expect(contextContent).toHaveAttribute("title", "focus on cancellation\nthen verify cleanup")
 		expect(screen.queryByRole("button", { name: /subagent context/i })).not.toBeInTheDocument()
 		expect(screen.getByTestId("subagent-execution-mode")).toHaveTextContent("Foreground")
-		expect(item).toHaveTextContent("#1")
+		expect(item).not.toHaveTextContent("#1")
+		expect(item).not.toHaveTextContent(/\d+ tools called/)
 		expect(item).not.toHaveTextContent(jobId)
 		expect(item.parentElement).not.toHaveClass("overflow-y-auto")
 		expect(screen.queryByText(/<task>/)).not.toBeInTheDocument()
 		expect(screen.queryByText(/<context>/)).not.toBeInTheDocument()
+	})
+
+	it("ignores a raw latest-tool fallback until structured activity events arrive", () => {
+		const activity: Record<string, unknown> = {
+			activityId: "job-delayed-tools",
+			taskId: "task-1",
+			kind: "subagent",
+			executionMode: "foreground",
+			status: "running",
+			cancellable: false,
+			createdAt: 1,
+			updatedAt: 2,
+			title: "reviewer",
+			latestEvent: "read_file(path=README.md)",
+		}
+		taskActivities.push(activity)
+		const msg = makeMsg({
+			say: "subagent",
+			text: JSON.stringify({
+				status: "running",
+				items: [
+					{
+						index: 1,
+						jobId: "job-delayed-tools",
+						prompt: "review",
+						status: "running",
+						latestToolCall: "read_file(path=README.md)",
+						toolCalls: 2,
+						inputTokens: 0,
+						outputTokens: 0,
+						totalCost: 0,
+						currency: "USD",
+						contextTokens: 0,
+						contextWindow: 0,
+						contextUsagePercentage: 0,
+					},
+				],
+			}),
+		})
+
+		const { rerender } = render(<SubagentStatusRow isLast={true} message={msg} />)
+		expect(screen.queryByText("read_file(path=README.md)")).not.toBeInTheDocument()
+		expect(screen.queryAllByTestId("subagent-tool-step")).toHaveLength(0)
+
+		activity.latestEvent = "list_files(path=.)"
+		activity.events = [
+			{
+				sequence: 1,
+				timestamp: 1,
+				kind: "tool_call",
+				toolCallId: "first",
+				toolName: "read_file",
+				toolStatus: "completed",
+				summary: "read_file(path=README.md)",
+			},
+			{
+				sequence: 2,
+				timestamp: 2,
+				kind: "tool_call",
+				toolCallId: "second",
+				toolName: "list_files",
+				toolStatus: "completed",
+				summary: "list_files(path=.)",
+			},
+		]
+		rerender(<SubagentStatusRow isLast={true} message={msg} />)
+
+		const toolSteps = screen.getAllByTestId("subagent-tool-step")
+		expect(toolSteps).toHaveLength(2)
+		expect(toolSteps.map((step) => within(step).getByTestId("subagent-tool-step-name").textContent)).toEqual([
+			"read_file",
+			"list_files",
+		])
+		expect(toolSteps.map((step) => within(step).getByTestId("subagent-tool-step-summary").textContent)).toEqual([
+			"(path=README.md)",
+			"(path=.)",
+		])
 	})
 
 	it("renders each activity tool call once in execution order", () => {
@@ -434,9 +605,367 @@ describe("SubagentStatusRow", () => {
 
 		render(<SubagentStatusRow isLast={true} message={msg} />)
 
-		const toolCalls = screen.getAllByTestId("subagent-tool-call")
-		expect(toolCalls.map((row) => row.textContent)).toEqual(["1.read_file(path=README.md)", "2.list_files(path=.)"])
-		expect(screen.getByText("Tools").parentElement).toHaveClass("max-h-[96px]", "overflow-y-auto")
+		const toolSteps = screen.getAllByTestId("subagent-tool-step")
+		expect(toolSteps).toHaveLength(2)
+		expect(toolSteps.map((step) => within(step).getByTestId("subagent-tool-step-name").textContent)).toEqual([
+			"read_file",
+			"list_files",
+		])
+		expect(screen.getByRole("button", { name: "Collapse subagent tools" })).toHaveTextContent("Tools (2)")
+	})
+
+	it("renders Tools before Show output and keeps expanded output after the control", () => {
+		taskActivities.push({
+			activityId: "job-output-order",
+			taskId: "task-1",
+			kind: "subagent",
+			executionMode: "foreground",
+			status: "completed",
+			cancellable: false,
+			createdAt: 1,
+			updatedAt: 2,
+			title: "reviewer",
+			events: [
+				{
+					sequence: 1,
+					timestamp: 1,
+					kind: "tool_call",
+					toolCallId: "read",
+					toolName: "read_file",
+					toolStatus: "completed",
+					summary: "read_file(path=README.md)",
+				},
+			],
+			result: "ordered result",
+		})
+		const msg = makeMsg({
+			say: "subagent",
+			text: JSON.stringify({
+				status: "completed",
+				items: [
+					{
+						index: 1,
+						jobId: "job-output-order",
+						prompt: "review",
+						status: "completed",
+						result: "ordered result",
+						toolCalls: 1,
+						inputTokens: 10,
+						outputTokens: 5,
+						totalCost: 0,
+						currency: "USD",
+						contextTokens: 15,
+						contextWindow: 200000,
+						contextUsagePercentage: 0.01,
+					},
+				],
+			}),
+		})
+
+		render(<SubagentStatusRow isLast={true} message={msg} />)
+		const item = screen.getByTestId("subagent-item")
+		const tools = screen.getByRole("button", { name: "Collapse subagent tools" })
+		const toggle = screen.getByRole("button", { name: "Show subagent output" })
+
+		expect(tools.compareDocumentPosition(toggle) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
+		fireEvent.click(toggle)
+		const output = screen.getByTestId("subagent-output")
+		expect(toggle.compareDocumentPosition(output) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
+		expect(item).toContainElement(output)
+	})
+
+	it("keeps Work tool results out of the DOM while showing compact execution metrics", () => {
+		taskActivities.push({
+			activityId: "job-work-summary",
+			taskId: "task-1",
+			kind: "subagent",
+			executionMode: "foreground",
+			status: "completed",
+			cancellable: false,
+			createdAt: 1_000,
+			updatedAt: 66_000,
+			finishedAt: 66_000,
+			title: "reviewer",
+			metrics: { toolCalls: 1, inputTokens: 1_250, outputTokens: 2_000, totalCost: 0.01, currency: "USD" },
+			events: [
+				{
+					sequence: 1,
+					timestamp: 1_010,
+					kind: "tool_call",
+					toolCallId: "read",
+					toolName: "read_file",
+					toolStatus: "completed",
+					summary: "read_file(path=README.md)",
+					durationMs: 25,
+				},
+				{
+					sequence: 2,
+					timestamp: 1_035,
+					kind: "tool_result",
+					toolCallId: "read",
+					toolName: "read_file",
+					text: "hidden Work result",
+				},
+			],
+		})
+		const msg = makeMsg({
+			say: "subagent",
+			text: JSON.stringify({
+				status: "completed",
+				items: [
+					{
+						index: 1,
+						jobId: "job-work-summary",
+						prompt: "review",
+						subagentName: "reviewer",
+						status: "completed",
+						toolCalls: 0,
+						inputTokens: 0,
+						outputTokens: 0,
+						totalCost: 0,
+						currency: "USD",
+						contextTokens: 0,
+						contextWindow: 0,
+						contextUsagePercentage: 0,
+					},
+				],
+			}),
+		})
+
+		render(<SubagentStatusRow isLast={true} message={msg} />)
+		const item = screen.getByTestId("subagent-item")
+		const metrics = within(item).getByTestId("subagent-metrics")
+		expect(metrics).toHaveClass("basis-full", "pl-8")
+		expect(within(item).getByTestId("subagent-item-header")).toContainElement(metrics)
+		expect(metrics).toHaveTextContent("1 tool")
+		expect(metrics).toHaveTextContent("1:05")
+		expect(metrics).toHaveTextContent("In:1.3K")
+		expect(metrics).toHaveTextContent("Out:2.0K")
+		expect(metrics).toHaveTextContent("$0.01")
+
+		const toolStep = within(item).getByTestId("subagent-tool-step")
+		const toolButton = within(toolStep).getByRole("button")
+		expect(toolButton).not.toHaveAttribute("aria-expanded")
+		expect(toolStep.querySelector(".lucide-chevron-right")).toBeNull()
+		expect(toolStep.querySelector(".lucide-chevron-down")).toBeNull()
+		expect(within(item).queryByText("hidden Work result")).not.toBeInTheDocument()
+		fireEvent.click(toolButton)
+		expect(within(item).queryByTestId("subagent-tool-step-details")).not.toBeInTheDocument()
+		expect(within(item).queryByText("hidden Work result")).not.toBeInTheDocument()
+	})
+
+	it("independently collapses and scrolls Task, Tools, and Output while showing retry timing", () => {
+		taskActivities.push({
+			activityId: "job-section-layout",
+			taskId: "task-1",
+			kind: "subagent",
+			executionMode: "foreground",
+			status: "failed",
+			cancellable: false,
+			finishable: false,
+			retryable: true,
+			createdAt: 1_000,
+			updatedAt: 56_000,
+			finishedAt: 56_000,
+			title: "retry reviewer",
+			error: "Temporary provider failure",
+			events: [
+				{
+					sequence: 1,
+					timestamp: 1_010,
+					kind: "tool_call",
+					toolCallId: "read",
+					toolName: "read_file",
+					toolStatus: "completed",
+					summary: "read_file(path=README.md)",
+				},
+				...[
+					[1, 5_000, 5_000],
+					[2, 8_000, 13_000],
+					[3, 11_000, 24_000],
+					[4, 14_000, 38_000],
+					[5, 17_000, 55_000],
+				].map(([retryAttempt, delayMs, cumulativeDelayMs], index) => ({
+					sequence: index + 2,
+					timestamp: 2_000 + index,
+					kind: "retry",
+					retryAttempt,
+					maxRetries: 5,
+					delayMs,
+					cumulativeDelayMs,
+				})),
+			],
+		})
+		const msg = makeMsg({
+			say: "subagent",
+			text: JSON.stringify({
+				status: "failed",
+				items: [
+					{
+						index: 1,
+						jobId: "job-section-layout",
+						prompt: "Review the implementation",
+						subagentName: "retry reviewer",
+						task: "Review the implementation",
+						context: "Preserve the nested indentation.\n  Inspect the retry path.",
+						status: "failed",
+						error: "Temporary provider failure",
+						toolCalls: 1,
+						inputTokens: 0,
+						outputTokens: 0,
+						totalCost: 0,
+						currency: "USD",
+						contextTokens: 0,
+						contextWindow: 200000,
+						contextUsagePercentage: 0,
+					},
+				],
+			}),
+		})
+
+		render(<SubagentStatusRow isLast={true} message={msg} />)
+		const item = screen.getByTestId("subagent-item")
+		const body = within(item).getByTestId("subagent-item-body")
+		expect(body).toHaveClass("flex", "min-h-0", "flex-1", "flex-col", "overflow-hidden")
+		expect(body).not.toHaveClass("overflow-y-auto")
+
+		const taskScroll = within(item).getByTestId("subagent-task-scroll")
+		const toolsScroll = within(item).getByTestId("subagent-tools-scroll")
+		const taskSection = taskScroll.parentElement
+		const toolsSection = toolsScroll.parentElement
+		expect(item).toHaveClass("h-[30vh]", "max-h-[30vh]")
+		expect(taskSection).toHaveClass("flex", "min-h-[24px]", "flex-1", "basis-0", "overflow-hidden")
+		expect(toolsSection).toHaveClass("flex", "min-h-[24px]", "flex-1", "basis-0", "overflow-hidden")
+		expect(taskScroll).toHaveClass("min-h-0", "overflow-y-auto")
+		expect(toolsScroll).toHaveClass("min-h-0", "overflow-y-auto")
+		expect(within(item).queryByTestId("subagent-output-scroll")).not.toBeInTheDocument()
+
+		fireEvent.click(within(item).getByRole("button", { name: "Collapse subagent task" }))
+		expect(within(item).queryByTestId("subagent-task-scroll")).not.toBeInTheDocument()
+		const singleToolsScroll = within(item).getByTestId("subagent-tools-scroll")
+		expect(singleToolsScroll).toBeInTheDocument()
+		expect(item).not.toHaveClass("h-[30vh]")
+		expect(singleToolsScroll.parentElement).toHaveClass("flex-[1_1_auto]")
+		expect(singleToolsScroll.parentElement).not.toHaveClass("basis-0")
+
+		fireEvent.click(within(item).getByRole("button", { name: "Collapse subagent tools" }))
+		expect(within(item).queryByTestId("subagent-tools-scroll")).not.toBeInTheDocument()
+		fireEvent.click(within(item).getByRole("button", { name: "Expand subagent task" }))
+		expect(within(item).getByTestId("subagent-task-scroll")).toBeInTheDocument()
+
+		fireEvent.click(within(item).getByRole("button", { name: "Show subagent output" }))
+		const outputScroll = within(item).getByTestId("subagent-output-scroll")
+		expect(item).toHaveClass("h-[30vh]")
+		expect(within(item).getByTestId("subagent-task-scroll").parentElement).toHaveClass("flex-1", "basis-0")
+		expect(outputScroll.parentElement).toHaveClass("flex-1", "basis-0")
+		expect(outputScroll).toHaveClass("min-h-0", "overflow-y-auto")
+		expect(outputScroll).toHaveTextContent("Automatic retries")
+		expect(outputScroll).toHaveTextContent("Retry 1/5")
+		expect(outputScroll).toHaveTextContent("wait 5s")
+		expect(outputScroll).toHaveTextContent("total 5s")
+		expect(outputScroll).toHaveTextContent("Retry 5/5")
+		expect(outputScroll).toHaveTextContent("wait 17s")
+		expect(outputScroll).toHaveTextContent("total 55s")
+		expect(outputScroll).toHaveTextContent("Temporary provider failure")
+		expect(within(item).queryByTestId("activity-event")).not.toBeInTheDocument()
+
+		fireEvent.click(within(item).getByRole("button", { name: "Hide subagent output" }))
+		expect(within(item).queryByTestId("subagent-output-scroll")).not.toBeInTheDocument()
+		expect(within(item).getByTestId("subagent-task-scroll")).toBeInTheDocument()
+	})
+
+	it("bounds and independently collapses each Work card while keeping controls available", async () => {
+		taskActivities.push(
+			{
+				activityId: "job-runner",
+				taskId: "task-1",
+				kind: "subagent",
+				executionMode: "foreground",
+				status: "running",
+				cancellable: true,
+				finishable: true,
+				retryable: false,
+				createdAt: 1,
+				updatedAt: 1,
+				title: "runner",
+			},
+			{
+				activityId: "job-retryer",
+				taskId: "task-1",
+				kind: "subagent",
+				executionMode: "background",
+				status: "failed",
+				cancellable: false,
+				finishable: false,
+				retryable: true,
+				createdAt: 2,
+				updatedAt: 2,
+				finishedAt: 2,
+				title: "retryer",
+			},
+		)
+		const items = [
+			{ index: 1, jobId: "job-runner", prompt: "run task", subagentName: "runner", status: "running" },
+			{ index: 2, jobId: "job-retryer", prompt: "retry task", subagentName: "retryer", status: "failed" },
+		].map((item) => ({
+			...item,
+			toolCalls: 0,
+			inputTokens: 0,
+			outputTokens: 0,
+			totalCost: 0,
+			currency: "USD",
+			contextTokens: 0,
+			contextWindow: 0,
+			contextUsagePercentage: 0,
+		}))
+		const msg = makeMsg({
+			say: "subagent",
+			text: JSON.stringify({ status: "running", items }),
+		})
+
+		render(<SubagentStatusRow isLast={true} message={msg} />)
+		const cards = screen.getAllByTestId("subagent-item")
+		const runner = cards.find((card) => within(card).getByTestId("subagent-name").textContent === "runner")
+		const retryer = cards.find((card) => within(card).getByTestId("subagent-name").textContent === "retryer")
+		if (!runner || !retryer) throw new Error("Expected runner and retryer Work cards")
+
+		expect(runner).toHaveClass("flex", "max-h-[30vh]", "flex-col", "overflow-hidden")
+		expect(within(runner).getByTestId("subagent-item-header")).toHaveClass("shrink-0")
+		expect(within(runner).getByTestId("subagent-item-body")).toHaveClass(
+			"flex",
+			"min-h-0",
+			"flex-1",
+			"flex-col",
+			"overflow-hidden",
+		)
+		expect(within(runner).getByTestId("subagent-item-body")).not.toHaveClass("overflow-y-auto")
+		expect(within(retryer).getByTestId("subagent-item-body")).toBeInTheDocument()
+
+		fireEvent.click(within(runner).getByRole("button", { name: "Collapse subagent runner" }))
+		expect(within(runner).queryByTestId("subagent-item-body")).not.toBeInTheDocument()
+		expect(within(retryer).getByTestId("subagent-item-body")).toBeInTheDocument()
+		expect(within(runner).getByTestId("subagent-name")).toHaveTextContent("runner")
+		expect(within(runner).getByTestId("subagent-execution-mode")).toHaveTextContent("Foreground")
+		expect(runner.querySelector(".lucide-loader-circle")).not.toBeNull()
+
+		const finishButton = within(runner).getByRole("button", { name: "Finish" })
+		fireEvent.click(finishButton)
+		fireEvent.click(within(runner).getByRole("button", { name: "Cancel" }))
+		expect(finishTaskActivities).toHaveBeenCalledWith("task-1", ["job-runner"])
+		expect(cancelTaskActivities).toHaveBeenCalledWith("task-1", ["job-runner"])
+		expect(within(runner).queryByTestId("subagent-item-body")).not.toBeInTheDocument()
+
+		fireEvent.click(within(retryer).getByRole("button", { name: "Collapse subagent retryer" }))
+		const retryButton = within(retryer).getByRole("button", { name: "Retry" })
+		fireEvent.click(retryButton)
+		expect(retryTaskActivities).toHaveBeenCalledWith("task-1", ["job-retryer"])
+		expect(within(retryer).queryByTestId("subagent-item-body")).not.toBeInTheDocument()
+		fireEvent.click(within(retryer).getByRole("button", { name: "Expand subagent retryer" }))
+		expect(within(retryer).getByTestId("subagent-item-body")).toBeInTheDocument()
+		await waitFor(() => {
+			expect(finishButton).not.toBeDisabled()
+			expect(retryButton).not.toBeDisabled()
+		})
 	})
 
 	it("bounds expanded subagent output inside the individual item", () => {
@@ -466,6 +995,7 @@ describe("SubagentStatusRow", () => {
 		render(<SubagentStatusRow isLast={true} message={msg} />)
 		fireEvent.click(screen.getByRole("button", { name: "Show subagent output" }))
 
-		expect(screen.getByTestId("subagent-output").parentElement).toHaveClass("max-h-[240px]", "overflow-y-auto")
+		expect(screen.getByTestId("subagent-output").parentElement).toHaveClass("min-h-0", "overflow-y-auto")
+		expect(screen.getByTestId("subagent-output").parentElement).toHaveAttribute("data-testid", "subagent-output-scroll")
 	})
 })

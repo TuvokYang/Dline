@@ -69,6 +69,13 @@ export type TaskActivityEvent =
 			kind: "output"
 			text: string
 	  })
+	| (TaskActivityEventBase & {
+			kind: "retry"
+			retryAttempt: number
+			maxRetries: number
+			delayMs: number
+			cumulativeDelayMs: number
+	  })
 
 export type TaskActivityEventInput = TaskActivityEvent extends infer Event
 	? Event extends TaskActivityEventBase
