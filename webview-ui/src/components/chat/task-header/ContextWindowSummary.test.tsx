@@ -75,10 +75,14 @@ describe("ContextWindowSummary", () => {
 		)
 
 		const segmentDetails = screen.getByTestId("context-window-segment-details")
+		expect(segmentDetails.closest(".context-window-tooltip-content")).toHaveClass("w-72")
 		for (const kind of ["durable", "active", "staged", "environment"] as const) {
 			const detail = segmentDetails.querySelector<HTMLElement>(`[data-segment-detail="${kind}"]`)
+			const label = detail?.querySelector<HTMLElement>("span:first-child")
 			const value = detail?.querySelector<HTMLElement>(".font-mono")
-			expect(detail).toHaveClass("grid", "grid-cols-[minmax(0,1fr)_6ch]")
+			expect(detail).toHaveClass("grid", "grid-cols-[max-content_6ch]")
+			expect(label).toHaveClass("whitespace-nowrap")
+			expect(label).not.toHaveClass("overflow-hidden", "text-ellipsis")
 			expect(value).toHaveClass("w-[6ch]", "whitespace-nowrap", "text-right")
 			expect(value?.textContent?.length).toBeLessThanOrEqual(6)
 		}

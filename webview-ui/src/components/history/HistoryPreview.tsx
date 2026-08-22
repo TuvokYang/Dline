@@ -187,9 +187,16 @@ const HistoryPreview = ({ showHistoryView }: HistoryPreviewProps) => {
 					.history-meta-stack {
 						display: flex;
 						flex-direction: column;
-						align-items: center;
+						align-items: flex-end;
 						gap: 4px;
 						flex-shrink: 0;
+					}
+					.history-meta-row {
+						display: flex;
+						align-items: center;
+						justify-content: flex-end;
+						gap: 4px;
+						min-height: 18px;
 					}
 					.history-date {
 						color: var(--vscode-descriptionForeground);
@@ -234,7 +241,6 @@ const HistoryPreview = ({ showHistoryView }: HistoryPreviewProps) => {
 						opacity: 1;
 					}
 					.history-completion-status {
-						align-self: center;
 						color: var(--vscode-testing-iconPassed, var(--vscode-button-background));
 						display: inline-flex;
 						flex-shrink: 0;
@@ -351,23 +357,27 @@ const HistoryPreview = ({ showHistoryView }: HistoryPreviewProps) => {
 								<span className="history-date" title={`Last edited ${formatHistoryTimestamp(item.ts)}`}>
 									{formatHistoryTimestamp(item.ts)}
 								</span>
-								{item.totalCost != null && (
-									<span className="history-cost-chip">
-										{getCostSymbol(item.currency)}
-										{item.totalCost.toFixed(2)}
-									</span>
+								{(item.totalCost != null || item.isCompleted) && (
+									<div className="history-meta-row">
+										{item.totalCost != null && (
+											<span className="history-cost-chip">
+												{getCostSymbol(item.currency)}
+												{item.totalCost.toFixed(2)}
+											</span>
+										)}
+										{item.isCompleted && (
+											<Tooltip>
+												<TooltipTrigger asChild>
+													<span aria-label="Completed" className="history-completion-status" role="img">
+														<CheckIcon aria-hidden="true" size={14} strokeWidth={2.4} />
+													</span>
+												</TooltipTrigger>
+												<TooltipContent side="left">Completed</TooltipContent>
+											</Tooltip>
+										)}
+									</div>
 								)}
 							</div>
-							{item.isCompleted && (
-								<Tooltip>
-									<TooltipTrigger asChild>
-										<span aria-label="完成" className="history-completion-status">
-											<CheckIcon aria-hidden="true" size={16} strokeWidth={2.4} />
-										</span>
-									</TooltipTrigger>
-									<TooltipContent side="left">完成</TooltipContent>
-								</Tooltip>
-							)}
 						</div>
 					))
 				) : (

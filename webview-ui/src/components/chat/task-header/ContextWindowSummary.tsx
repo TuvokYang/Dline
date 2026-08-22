@@ -63,7 +63,7 @@ export const ContextWindowSummary: React.FC<TaskContextWindowButtonsProps> = ({
 	percentage,
 	indicatorViewModel,
 }) => (
-	<div className="context-window-tooltip-content flex w-60 flex-col gap-2 rounded bg-menu p-2 shadow-sm z-100">
+	<div className="context-window-tooltip-content flex w-72 flex-col gap-2 rounded bg-menu p-2 shadow-sm z-100">
 		<div className="flex items-center justify-between gap-3">
 			<span className="font-semibold">Context Window</span>
 			<span className="font-mono text-muted-foreground">{percentage.toFixed(1)}%</span>
@@ -90,13 +90,11 @@ export const ContextWindowSummary: React.FC<TaskContextWindowButtonsProps> = ({
 				data-testid="context-window-segment-details">
 				{indicatorViewModel.segments.map((segment) => (
 					<div
-						className="grid min-w-0 grid-cols-[minmax(0,1fr)_6ch] items-center gap-1 rounded px-2 py-1 text-[11px] text-white"
+						className="grid grid-cols-[max-content_6ch] items-center justify-between gap-1 rounded px-2 py-1 text-[11px] text-white"
 						data-segment-detail={segment.kind}
 						key={segment.kind}
 						style={{ backgroundColor: getSegmentColor(segment) }}>
-						<span className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap font-semibold">
-							{segment.label}
-						</span>
+						<span className="whitespace-nowrap font-semibold">{segment.label}</span>
 						<span className="w-[6ch] justify-self-end whitespace-nowrap text-right font-mono">
 							{formatSummaryTokenNumber(segment.authoritativeTokens)}
 						</span>

@@ -22,6 +22,7 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { useExtensionState } from "@/context/ExtensionStateContext"
 import MarkdownBlock from "../common/MarkdownBlock"
+import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover"
 import { SubagentMetrics } from "./activity/SubagentMetrics"
 import { SubagentRetryTimeline } from "./activity/SubagentRetryTimeline"
 import { SubagentToolTimeline } from "./activity/SubagentToolTimeline"
@@ -81,17 +82,31 @@ const statusIcon = (status: DisplayStatus) => {
 function SubagentContext({ context }: { context: string }) {
 	const displayContext = normalizeSubagentDisplayText(context)
 	return (
-		<div
-			className="flex w-full min-w-0 max-w-full items-start gap-1 overflow-hidden rounded-xs border border-editor-group-border px-2 py-1 text-[11px] text-foreground opacity-80"
-			data-testid="subagent-context">
-			<span className="shrink-0 font-semibold">Context</span>
-			<span
-				className="min-w-0 flex-1 whitespace-pre-wrap break-words [overflow-wrap:anywhere]"
-				data-testid="subagent-context-content"
-				title={displayContext}>
-				{displayContext}
-			</span>
-		</div>
+		<Popover>
+			<PopoverTrigger asChild>
+				<button
+					aria-label="Show full subagent context"
+					className="flex w-full min-w-0 max-w-full items-center gap-1 overflow-hidden rounded-xs border border-editor-group-border bg-transparent px-2 py-1 text-left text-[11px] text-foreground opacity-80 cursor-pointer"
+					data-testid="subagent-context"
+					type="button">
+					<span className="shrink-0 font-semibold">Context</span>
+					<span className="min-w-0 flex-1 truncate whitespace-nowrap" data-testid="subagent-context-content">
+						{displayContext}
+					</span>
+				</button>
+			</PopoverTrigger>
+			<PopoverContent
+				align="start"
+				className="max-h-[60vh] w-(--radix-popover-trigger-width) overflow-y-auto p-3"
+				data-testid="subagent-context-popover"
+				sideOffset={6}>
+				<div
+					className="whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-left text-xs text-foreground"
+					data-testid="subagent-context-popover-content">
+					{displayContext}
+				</div>
+			</PopoverContent>
+		</Popover>
 	)
 }
 
@@ -385,11 +400,9 @@ export default function SubagentStatusRow({ message }: SubagentStatusRowProps) {
 							isPromptConstructionRow && message.partial === true && index === data.items.length - 1
 						const showToolsSection = !isStreamingPromptUnderConstruction && toolSteps.length > 0
 						const showOutputSection = !isStreamingPromptUnderConstruction && hasOutput
-						const expandedSectionCount =
-							Number(taskExpanded) +
-							Number(showToolsSection && toolsExpanded) +
-							Number(showOutputSection && outputExpanded)
-						const shareAvailableHeight = expandedSectionCount > 1
+						const expandedScrollableSectionCount =
+							Number(showToolsSection && toolsExpanded) + Number(showOutputSection && outputExpanded)
+						const shareAvailableHeight = expandedScrollableSectionCount > 1
 						const isBackground = entry.background === true
 						const ExecutionModeIcon = isBackground ? SendToBackIcon : BringToFrontIcon
 						const executionModeLabel = isBackground ? "Background" : "Foreground"
@@ -500,8 +513,9 @@ export default function SubagentStatusRow({ message }: SubagentStatusRowProps) {
 											ariaLabel={`${taskExpanded ? "Collapse" : "Expand"} subagent task`}
 											expanded={taskExpanded}
 											onToggle={() => toggleSection(itemKey, "task")}
+											scrollable={false}
 											scrollTestId="subagent-task-scroll"
-											shareAvailableHeight={shareAvailableHeight}
+											shareAvailableHeight={false}
 											title="Task">
 											<div className="min-w-0 max-w-full space-y-1.5">
 												{hasStructuredPrompt ? (

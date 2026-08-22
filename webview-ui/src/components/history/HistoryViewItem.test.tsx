@@ -220,9 +220,14 @@ describe("HistoryPreview", () => {
 
 		render(<HistoryPreview showHistoryView={vi.fn()} />)
 
-		const completionStatus = await screen.findByLabelText("完成")
+		const completionStatus = await screen.findByLabelText("Completed")
+		const metadataRow = completionStatus.closest(".history-meta-row")
+		const cost = screen.getByText("$0.00")
+		expect(metadataRow).toContainElement(cost)
+		expect(metadataRow).toContainElement(completionStatus)
+		expect(cost.compareDocumentPosition(completionStatus) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
 		await user.hover(completionStatus)
-		expect(await screen.findByRole("tooltip")).toHaveTextContent("完成")
+		expect(await screen.findByRole("tooltip")).toHaveTextContent("Completed")
 	})
 
 	it("never counts a partially visible row", () => {
