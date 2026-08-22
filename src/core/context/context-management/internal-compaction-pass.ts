@@ -8,6 +8,7 @@ import type { ExplicitInstructionRequestScope } from "@core/task/explicit-instru
 import { ClineDefaultTool } from "@shared/tools"
 import cloneDeep from "clone-deep"
 import type { CompactionRetryPolicy } from "./compaction-retry-policy"
+import { isRetryableCompactionError } from "./compaction-retryability"
 import type { CompactionPassIdentity } from "./target-window-fitting"
 
 export interface InternalCompactionUsage {
@@ -256,7 +257,7 @@ export async function runInternalCompactionPassWithRetry(
 				currentAttempt = nextAttempt
 				continue
 			}
-			if (isOpenAiMaxOutputFailure(error)) {
+			if (isOpenAiMaxOutputFailure(error) || !isRetryableCompactionError(error)) {
 				throw error
 			}
 

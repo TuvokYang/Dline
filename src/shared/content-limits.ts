@@ -1,10 +1,10 @@
-/**
- * Content size limits to prevent massive files/responses from bricking conversations.
- * 400KB ≈ ~100,000 tokens, which is a reasonable limit for context.
- */
+/** Content size limits that keep file extraction and canonical tool results bounded. */
 
-/** Maximum content size in bytes (400KB) */
+/** Maximum raw extracted content size in bytes (400KB). */
 export const MAX_CONTENT_SIZE_BYTES = 400 * 1024
+
+/** Maximum text contributed by one canonical tool result (64KB). */
+export const MAX_TOOL_RESULT_TEXT_BYTES = 64 * 1024
 
 /**
  * Format bytes into a human-readable string (e.g., "1.5 MB", "400 KB").
@@ -28,12 +28,41 @@ export function formatBytes(bytes: number): string {
  * @returns The original content if under limit, or truncated content with message at end
  */
 export function truncateContent(content: string, maxSize: number = MAX_CONTENT_SIZE_BYTES): string {
-	if (content.length <= maxSize) {
+	const normalizedMaxSize = Math.max(0, Math.floor(maxSize))
+	const contentBytes = Buffer.byteLength(content, "utf8")
+	if (contentBytes <= normalizedMaxSize) {
 		return content
 	}
+	if (normalizedMaxSize === 0) {
+		return ""
+	}
 
-	const truncatedContent = content.slice(0, maxSize)
-	const truncatedAmount = content.length - maxSize
+	const marker = `\n\n---\n\n[FILE TRUNCATED: This content is ${formatBytes(contentBytes)} but exceeds the ${formatBytes(normalizedMaxSize)} result limit. Read a smaller range or use search_files for targeted reading.]`
+	const markerBytes = Buffer.byteLength(marker, "utf8")
+	if (markerBytes >= normalizedMaxSize) {
+		return sliceUtf8ToByteLimit(marker, normalizedMaxSize)
+	}
 
-	return `${truncatedContent}\n\n---\n\n[FILE TRUNCATED: This content is ${formatBytes(content.length)} but only the first ${formatBytes(maxSize)} is shown (${formatBytes(truncatedAmount)} truncated). Use search_files to find specific patterns, or execute_command with grep/head/tail for targeted reading.]`
+	const body = sliceUtf8ToByteLimit(content, normalizedMaxSize - markerBytes)
+	return `${body}${marker}`
+}
+
+function sliceUtf8ToByteLimit(content: string, maxBytes: number): string {
+	let low = 0
+	let high = content.length
+	let best = 0
+	while (low <= high) {
+		const middle = Math.floor((low + high) / 2)
+		const candidate = content.slice(0, middle)
+		if (Buffer.byteLength(candidate, "utf8") <= maxBytes) {
+			best = middle
+			low = middle + 1
+		} else {
+			high = middle - 1
+		}
+	}
+	if (best > 0 && /[\uD800-\uDBFF]/.test(content.charAt(best - 1))) {
+		best--
+	}
+	return content.slice(0, best)
 }

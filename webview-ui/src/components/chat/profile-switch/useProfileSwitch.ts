@@ -97,7 +97,12 @@ export function useProfileSwitch({ stateRevision, profileSwitch }: UseProfileSwi
 	const confirmSwitch = useCallback(async (operationId: string): Promise<void> => {
 		try {
 			const response = await StateServiceClient.confirmProfileSwitch(ProfileSwitchOperationRequest.create({ operationId }))
-			if (response.status === ProfileSwitchStatus.PROFILE_SWITCH_STATUS_REJECTED) {
+			if (
+				response.status === ProfileSwitchStatus.PROFILE_SWITCH_STATUS_SWITCHED ||
+				response.status === ProfileSwitchStatus.PROFILE_SWITCH_STATUS_REJECTED ||
+				response.status === ProfileSwitchStatus.PROFILE_SWITCH_STATUS_UNSPECIFIED ||
+				response.status === ProfileSwitchStatus.UNRECOGNIZED
+			) {
 				setPending((current) => (current?.operationId === operationId ? undefined : current))
 			}
 		} catch {
@@ -124,7 +129,7 @@ export function useProfileSwitch({ stateRevision, profileSwitch }: UseProfileSwi
 			case "committing":
 				return `Activating ${profileSwitch.targetProfile ?? "target Profile"}...`
 			case "failed":
-				return `Switch failed — ${profileSwitch.sourceProfile ?? "source Profile"} remains active.`
+				return undefined
 			default:
 				return undefined
 		}

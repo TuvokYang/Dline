@@ -39,7 +39,7 @@ describe("ContextCompactionPresentation", () => {
 		expect(retriedPartial).toMatchObject({ existingTs: 101, content: "partial one", status: "running", attempt: attempt1 })
 	})
 
-	it("unbinds a deleted Pass row before publishing terminal failure after rollback", () => {
+	it("keeps the Pass row identity when publishing terminal failure after rollback", () => {
 		const presentation = new ContextCompactionPresentation()
 		const firstPass = pass(0)
 
@@ -48,7 +48,7 @@ describe("ContextCompactionPresentation", () => {
 		presentation.bindMessageTs(firstPass, 101)
 
 		expect(presentation.fail("operation-1")).toMatchObject({
-			existingTs: undefined,
+			existingTs: 101,
 			content: "",
 			status: "failed",
 		})

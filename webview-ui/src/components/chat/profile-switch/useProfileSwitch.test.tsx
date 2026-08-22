@@ -77,7 +77,7 @@ describe("useProfileSwitch", () => {
 		expect(result.current.statusText).toBe("Compacting with small-profile...")
 	})
 
-	it("surfaces a failed switch while making source retention explicit", async () => {
+	it("keeps terminal compaction failure out of the persistent Profile selector status", async () => {
 		const { result } = renderHook(() =>
 			useProfileSwitch({
 				stateRevision: 2,
@@ -86,8 +86,17 @@ describe("useProfileSwitch", () => {
 		)
 
 		await waitFor(() => expect(result.current.isSwitchPending).toBe(false))
-		expect(result.current.statusText).toBe("Switch failed — large-profile remains active.")
+		expect(result.current.statusText).toBeUndefined()
 		expect(result.current.error).toBe("Compaction failed.")
+	})
+
+	it("releases local pending after a confirmed Profile switch succeeds", async () => {
+		const { result } = renderHook(() => useProfileSwitch({ stateRevision: 1, profileSwitch: { phase: "idle" } }))
+
+		await act(async () => result.current.requestSwitch("small-profile", ["act"]))
+		await act(async () => result.current.confirmSwitch("profile-operation-1"))
+
+		await waitFor(() => expect(result.current.isSwitchPending).toBe(false))
 	})
 
 	it("confirms and cancels by immutable operation identity", async () => {

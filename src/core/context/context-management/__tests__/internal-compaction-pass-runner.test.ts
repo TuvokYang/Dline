@@ -245,6 +245,57 @@ describe("internal compaction Pass retry owner", () => {
 		)
 	})
 
+	it("does not replay an immutable Pass after a deterministic HTTP 400", async () => {
+		const error = Object.assign(new Error("400 No tool output found for function call fc_compaction."), { status: 400 })
+		const createMessage = vi.fn(() => failingStream(error))
+		const api = {
+			createMessage,
+			getModel: () => ({ id: "test-model", info: { id: "test-model" } }),
+		} satisfies ApiHandler
+		const waitForRetry = vi.fn(async () => undefined)
+
+		await expect(
+			runInternalCompactionPassWithRetry({
+				api,
+				providerInput,
+				explicitInstructions: createInstructions(),
+				passIdentity,
+				retryPolicy: new CompactionRetryPolicy(3),
+				attemptIdFactory: (attemptIndex) => `attempt-${attemptIndex}`,
+				waitForRetry,
+			}),
+		).rejects.toThrow("No tool output found")
+		expect(createMessage).toHaveBeenCalledOnce()
+		expect(waitForRetry).not.toHaveBeenCalled()
+	})
+
+	it("retains Pass retry for transient HTTP 503 failures", async () => {
+		let requestCount = 0
+		const api = {
+			createMessage: () => {
+				requestCount++
+				return requestCount === 1
+					? failingStream(Object.assign(new Error("Service unavailable"), { status: 503 }))
+					: successfulStream("Recovered summary")
+			},
+			getModel: () => ({ id: "test-model", info: { id: "test-model" } }),
+		} satisfies ApiHandler
+		const waitForRetry = vi.fn(async () => undefined)
+
+		const result = await runInternalCompactionPassWithRetry({
+			api,
+			providerInput,
+			explicitInstructions: createInstructions(),
+			passIdentity,
+			retryPolicy: new CompactionRetryPolicy(3),
+			attemptIdFactory: (attemptIndex) => `attempt-${attemptIndex}`,
+			waitForRetry,
+		})
+
+		expect(result).toMatchObject({ summary: "Recovered summary", attemptIndex: 1 })
+		expect(waitForRetry).toHaveBeenCalledOnce()
+	})
+
 	it("fails after the Pass retry policy is exhausted without invoking another retry owner", async () => {
 		const api = {
 			createMessage: () => failingStream(new Error("network failure")),

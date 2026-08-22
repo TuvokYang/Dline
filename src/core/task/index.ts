@@ -161,7 +161,6 @@ import {
 	type ClineSayTool,
 	type CommandStatus,
 } from "@shared/ExtensionMessage"
-import { isFocusChainItem } from "@shared/focus-chain-utils"
 import { HistoryItem } from "@shared/HistoryItem"
 import { DEFAULT_LANGUAGE_SETTINGS, getLanguageKey, LanguageDisplay } from "@shared/Languages"
 import { USER_CONTENT_TAGS } from "@shared/messages/constants"
@@ -252,6 +251,7 @@ import {
 } from "./ContextWindowIndicatorProjection"
 import { detectAvailableCliTools } from "./cli-tool-detector"
 import { FocusChainManager } from "./focus-chain"
+import { formatFocusChainTaskProgressSection } from "./focus-chain/file-utils"
 import { hostedWebApprovalApiIndex, requestHostedWebApproval } from "./interaction/HostedWebApproval"
 import type { InteractionKind } from "./interaction/Interaction"
 import { type DetachedInteractionContinuationContext, InteractionCoordinator } from "./interaction/InteractionCoordinator"
@@ -487,6 +487,7 @@ export class Task {
 		}
 	>()
 	private readonly contextCompactionFailureReasons = new Map<string, string>()
+	private readonly contextCompactionRetryProgress = new Map<string, { retryAttempt: number; maxRetryAttempts: number }>()
 	private pendingAutomaticCompactionContinuation?: {
 		userContent: ClineContent[]
 		includeFileDetails: boolean
@@ -1068,9 +1069,10 @@ export class Task {
 				Logger.error(`[Task ${this.taskId}] Failed to setup focus chain file watcher:`, error)
 			})
 			this.FocusChainManager.readFocusChainHistory()
-				.then((history) => {
+				.then(async (history) => {
 					if (history) {
 						this.taskState.focusChainHistory = history
+						await this.postStateToWebview()
 					}
 				})
 				.catch((error) => {
@@ -2723,22 +2725,29 @@ export class Task {
 	private async presentTerminalCompactionFailure(operationId: string, apiIndex: number): Promise<void> {
 		this.taskState.forceTruncateAvailable = true
 		const errorMessage =
-			this.contextCompactionFailureReasons.get(operationId) ??
-			"Context compaction failed after all automatic attempts were exhausted."
+			this.contextCompactionFailureReasons.get(operationId) ?? "Context compaction failed before completion."
+		const retryProgress = this.contextCompactionRetryProgress.get(operationId)
+		const retriesExhausted =
+			retryProgress !== undefined &&
+			retryProgress.maxRetryAttempts > 0 &&
+			retryProgress.retryAttempt >= retryProgress.maxRetryAttempts
 		this.contextCompactionFailureReasons.delete(operationId)
-		this.taskState.autoRetryAttempts = MAX_AUTO_RETRY_ATTEMPTS
+		this.contextCompactionRetryProgress.delete(operationId)
+		this.taskState.autoRetryAttempts = retriesExhausted ? retryProgress.retryAttempt : 0
 		this.endAutoRetrySequence(false)
 		await this.interactionCoordinator.releaseApiContinuationForRequestGate()
-		await this.say(
-			"error_retry",
-			JSON.stringify({
-				attempt: MAX_AUTO_RETRY_ATTEMPTS,
-				maxAttempts: MAX_AUTO_RETRY_ATTEMPTS,
-				delaySeconds: 0,
-				failed: true,
-				errorMessage,
-			}),
-		)
+		if (retriesExhausted) {
+			await this.say(
+				"error_retry",
+				JSON.stringify({
+					attempt: retryProgress.retryAttempt,
+					maxAttempts: retryProgress.maxRetryAttempts,
+					delaySeconds: 0,
+					failed: true,
+					errorMessage,
+				}),
+			)
+		}
 		const retryId = `retry:${this.taskId}:${this.getRuntimeState().revision}`
 		await this.recoverApiFailure({
 			turnId: retryId,
@@ -2775,6 +2784,7 @@ export class Task {
 		let snapshot: ContextCompactionPresentationSnapshot | undefined
 		switch (event.kind) {
 			case "pass_started":
+				if (input.trigger === "auto_compaction") this.contextCompactionRetryProgress.delete(input.operationId)
 				this.contextCompactionPresentation.startPass(event.passIdentity, event.attempt)
 				await this.beginContextCompactionIndicator(input, event, event.attempt)
 				break
@@ -2786,6 +2796,12 @@ export class Task {
 				break
 			case "pass_retry":
 				await this.retryContextCompactionIndicator(input, event)
+				if (input.trigger === "auto_compaction" && event.event.kind === "pass_retry") {
+					this.contextCompactionRetryProgress.set(input.operationId, {
+						retryAttempt: event.event.retryAttempt,
+						maxRetryAttempts: event.event.maxRetryAttempts,
+					})
+				}
 				snapshot = this.contextCompactionPresentation.retry(
 					event.passIdentity,
 					event.event.failedAttempt,
@@ -2795,6 +2811,7 @@ export class Task {
 				)
 				break
 			case "pass_completed":
+				this.contextCompactionRetryProgress.delete(input.operationId)
 				await this.commitContextCompactionIndicator(event)
 				snapshot = this.contextCompactionPresentation.complete(event.passIdentity, event.attempt, event.content, {
 					prePass: event.previousCheckpointHead,
@@ -2802,6 +2819,7 @@ export class Task {
 				})
 				break
 			case "failed":
+				if (input.signal?.aborted) this.contextCompactionRetryProgress.delete(input.operationId)
 				this.contextCompactionIndicatorReceivingByAttemptId.clear()
 				snapshot = this.contextCompactionPresentation.fail(input.operationId)
 				break
@@ -9134,24 +9152,7 @@ export class Task {
 			this.taskState.currentFocusChainChecklist
 		) {
 			const checklist = this.taskState.currentFocusChainChecklist
-			const inProgressIdx = this.taskState.currentInProgressItemIndex
-			let renderedChecklist = checklist
-			// Dynamically append <- CURRENT marker to the in-progress item
-			if (inProgressIdx !== null && inProgressIdx >= 0) {
-				const lines = checklist.split("\n")
-				let itemCount = 0
-				for (let i = 0; i < lines.length; i++) {
-					if (isFocusChainItem(lines[i].trim())) {
-						if (itemCount === inProgressIdx) {
-							lines[i] = `${lines[i]} <- CURRENT`
-							break
-						}
-						itemCount++
-					}
-				}
-				renderedChecklist = lines.join("\n")
-			}
-			details += `\n\n# task_progress\n${renderedChecklist}`
+			details += `\n\n${formatFocusChainTaskProgressSection(checklist, this.taskState.currentInProgressItemIndex)}`
 		}
 
 		return `<environment_details>\n${details.trim()}\n</environment_details>`

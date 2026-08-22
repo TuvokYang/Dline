@@ -15,6 +15,8 @@ export interface ProfileSwitchSnapshot {
 	targetModes?: Mode[]
 	sourceProfile?: string
 	targetProfile?: string
+	/** Whether the target binding was durably adopted before a later compaction failure. */
+	targetAdopted?: boolean
 	/** Model id used by the frozen target handler for any required compaction. */
 	compactionModel?: string
 	currentTokens?: number

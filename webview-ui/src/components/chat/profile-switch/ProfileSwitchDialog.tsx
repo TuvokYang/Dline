@@ -17,6 +17,7 @@ export function ProfileSwitchDialog({ state, onCancel, onConfirm, onRetry }: Pro
 		operationId: state.operationId,
 		sourceLabel: state.sourceProfile,
 		targetLabel: state.targetProfile,
+		targetAdopted: state.targetAdopted,
 		compactionModel: state.compactionModel,
 		targetContextWindow: state.targetContextWindow,
 		currentTokens: state.currentTokens,

@@ -513,12 +513,8 @@ e2e(
 				usage: { inputTokens: 300_000, outputTokens: 100 },
 				matchRequestContract: true,
 			},
-			// First hidden Pass attempt plus all ordinary Pass retries fail; the terminal
-			// branch must explain the stop without recovering the ordinary continuation.
+			// A deterministic client error fails this immutable hidden Pass once.
 			{ type: "error", status: 400, message: "E2E_TERMINAL_FAILURE_ATTEMPT_0" },
-			{ type: "error", status: 400, message: "E2E_TERMINAL_FAILURE_RETRY_1" },
-			{ type: "error", status: 400, message: "E2E_TERMINAL_FAILURE_RETRY_2" },
-			{ type: "error", status: 400, message: "E2E_TERMINAL_FAILURE_RETRY_3" },
 			{
 				type: "tool",
 				id: "call_terminal_failure_recovered_summary",
@@ -547,18 +543,21 @@ e2e(
 			await expect(sidebar.getByText(turnBMarker, { exact: false }).last()).toBeVisible({ timeout: 60_000 })
 			await sendTask(sidebar, "E2E_TERMINAL_FAILURE_CONTINUE")
 
-			// The terminal hidden-Pass failure is presented by the api-request error
-			// rendering: the exhausted retry card shows the complete error and the
-			// retry count, and the compaction row no longer shows a red error detail.
-			await expect(sidebar.getByText("Automatic retry stopped", { exact: false }).last()).toBeVisible({
+			// Deterministic 400s surface the canonical Retry interaction without claiming
+			// that transient retry attempts were consumed. The raw Provider diagnostic remains in logs.
+			await expect(sidebar.getByText("Conversation compaction failed:", { exact: true })).toBeVisible({
 				timeout: 120_000,
 			})
-			await expect(sidebar.getByText(/All .* automatic attempts were used\./).last()).toBeVisible()
-			await expect(sidebar.getByText("E2E_TERMINAL_FAILURE_RETRY_3", { exact: false }).last()).toBeVisible()
+			await expect(sidebar.getByText("Automatic retry stopped", { exact: true })).toHaveCount(0)
+			await expect(sidebar.getByText(/All .* automatic attempts were used\./)).toHaveCount(0)
 
-			await expect.poll(() => server.getRequestCount("openai-compatible-responses")).toBe(6)
+			await expect.poll(() => server.getRequestCount("openai-compatible-responses")).toBe(3)
+			// Cross the former 2-second first retry delay and prove the immutable request stays terminal.
+			await sidebar.page().waitForTimeout(3_000)
+			expect(server.getRequestCount("openai-compatible-responses")).toBe(3)
 			const requestsBeforeManualRetry = server.getMockConsumptions("openai-compatible-responses")
-			expect(requestsBeforeManualRetry.slice(2).every((request) => request.responseType === "error")).toBe(true)
+			expect(requestsBeforeManualRetry.slice(2)).toHaveLength(1)
+			expect(requestsBeforeManualRetry[2].responseType).toBe("error")
 
 			const retry = sidebar.getByRole("button", { name: "Retry", exact: true }).last()
 			await expect(retry).toBeVisible()
@@ -566,8 +565,8 @@ e2e(
 			const retryClickedAt = Date.now()
 			await retry.click()
 
-			await expect.poll(() => server.getRequestCount("openai-compatible-responses"), { timeout: 3_000 }).toBe(7)
-			const firstRecoveryRequest = server.getMockConsumptions("openai-compatible-responses")[6]
+			await expect.poll(() => server.getRequestCount("openai-compatible-responses"), { timeout: 3_000 }).toBe(4)
+			const firstRecoveryRequest = server.getMockConsumptions("openai-compatible-responses")[3]
 			expect(firstRecoveryRequest.receivedAtMs - retryClickedAt).toBeLessThan(3_000)
 			expect(firstRecoveryRequest.responseType).toBe("tool")
 			expect(firstRecoveryRequest.toolName).toBe("summarize_task")
@@ -575,17 +574,17 @@ e2e(
 			await expect(sidebar.getByText("E2E_TERMINAL_FAILURE_RECOVERED", { exact: false }).last()).toBeVisible({
 				timeout: 60_000,
 			})
-			await expect.poll(() => server.getRequestCount("openai-compatible-responses")).toBe(8)
+			await expect.poll(() => server.getRequestCount("openai-compatible-responses")).toBe(5)
 			const recoveredRequests = server.getMockConsumptions("openai-compatible-responses")
-			expect(recoveredRequests[7].responseType).toBe("tool")
-			expect(recoveredRequests[7].toolName).toBe("attempt_completion")
+			expect(recoveredRequests[4].responseType).toBe("tool")
+			expect(recoveredRequests[4].toolName).toBe("attempt_completion")
 			expect(recoveredRequests.every((request) => request.contractError === undefined)).toBe(true)
 			await expect(sidebar.getByTestId("error-retry-box")).toHaveCount(0)
 			await expect(sidebar.getByTestId("chat-input")).toBeEnabled()
 
 			// No delayed automatic retry may fire after the manual recovery has completed.
 			await sidebar.page().waitForTimeout(9_000)
-			expect(server.getRequestCount("openai-compatible-responses")).toBe(8)
+			expect(server.getRequestCount("openai-compatible-responses")).toBe(5)
 			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
 		} finally {
 			await app.close()
@@ -1450,9 +1449,6 @@ e2e(
 				matchRequestContract: true,
 			},
 			{ type: "error", status: 400, message: "E2E_FORCE_TRUNCATE_COMPACTION_ATTEMPT_0" },
-			{ type: "error", status: 400, message: "E2E_FORCE_TRUNCATE_COMPACTION_RETRY_1" },
-			{ type: "error", status: 400, message: "E2E_FORCE_TRUNCATE_COMPACTION_RETRY_2" },
-			{ type: "error", status: 400, message: "E2E_FORCE_TRUNCATE_COMPACTION_RETRY_3" },
 			{
 				type: "tool",
 				id: "call_force_truncate_recovered",
@@ -1475,13 +1471,18 @@ e2e(
 			await expect(sidebar.getByText(turnBMarker, { exact: false }).last()).toBeVisible({ timeout: 60_000 })
 			await sendTask(sidebar, continueMarker)
 
-			await expect(sidebar.getByText("Automatic retry stopped", { exact: false }).last()).toBeVisible({
+			await expect(sidebar.getByText("Conversation compaction failed:", { exact: true })).toBeVisible({
 				timeout: 120_000,
 			})
-			await expect.poll(() => server.getRequestCount("openai-compatible-responses")).toBe(6)
+			await expect(sidebar.getByText("Automatic retry stopped", { exact: true })).toHaveCount(0)
+			await expect.poll(() => server.getRequestCount("openai-compatible-responses")).toBe(3)
+			// Force Truncate must remain an explicit recovery choice, not an automatic retry side effect.
+			await sidebar.page().waitForTimeout(3_000)
+			expect(server.getRequestCount("openai-compatible-responses")).toBe(3)
 			const failedRequests = server.getMockConsumptions("openai-compatible-responses")
-			expect(failedRequests.slice(2).every((request) => request.responseType === "error")).toBe(true)
-			expect(JSON.stringify(failedRequests[5].requestBody)).not.toContain(
+			expect(failedRequests.slice(2)).toHaveLength(1)
+			expect(failedRequests[2].responseType).toBe("error")
+			expect(JSON.stringify(failedRequests[2].requestBody)).not.toContain(
 				"[NOTE] Some previous conversation history with the user has been removed",
 			)
 
@@ -1497,7 +1498,7 @@ e2e(
 			await expect(forceTruncateMenuItem).toBeVisible()
 			await forceTruncateMenuItem.click()
 			await expect(sidebar.getByText("Force truncate conversation history?", { exact: true })).toBeVisible()
-			await expect.poll(() => server.getRequestCount("openai-compatible-responses")).toBe(6)
+			await expect.poll(() => server.getRequestCount("openai-compatible-responses")).toBe(3)
 			const forceTruncateConfirmation = sidebar.getByLabel("Type TRUNCATE to confirm")
 			await forceTruncateConfirmation.fill("TRUNCATE")
 			await sidebar.getByText("Force truncate conversation history", { exact: true }).last().click()
@@ -1507,8 +1508,8 @@ e2e(
 			await expect(sidebar.getByText("E2E_FORCE_TRUNCATE_RECOVERED", { exact: false }).last()).toBeVisible({
 				timeout: 60_000,
 			})
-			await expect.poll(() => server.getRequestCount("openai-compatible-responses")).toBe(7)
-			const recoveredRequest = server.getMockConsumptions("openai-compatible-responses")[6]
+			await expect.poll(() => server.getRequestCount("openai-compatible-responses")).toBe(4)
+			const recoveredRequest = server.getMockConsumptions("openai-compatible-responses")[3]
 			expect(recoveredRequest.contractError).toBeUndefined()
 			expect(recoveredRequest.responseType).toBe("tool")
 			expect(JSON.stringify(recoveredRequest.requestBody)).toContain(

@@ -127,6 +127,52 @@ describe("ContextCompactionSession", () => {
 		})
 	})
 
+	it("admits a complete tool round whose paired result is the final canonical message", async () => {
+		const ports = createPorts()
+		const session = new ContextCompactionSession(ports, { maxRetryAttempts: 1 })
+		useSuccessfulCompactionStream()
+		const sourceHistory: ClineStorageMessage[] = [
+			{ role: "user", content: [{ type: "text", text: "Inspect the file" }] },
+			{
+				role: "assistant",
+				content: [
+					{
+						type: "tool_use",
+						function_id: "call-read-final",
+						dline_tid: "tid-read-final",
+						name: "read_file",
+						input: { path: "src/example.ts" },
+					},
+				],
+			},
+			{
+				role: "user",
+				content: [
+					{
+						type: "tool_result",
+						function_id: "call-read-final",
+						dline_tid: "tid-read-final",
+						content: [{ type: "text", text: "file contents" }],
+					},
+				],
+			},
+		]
+
+		const result = await session.run({
+			operationId: "operation-final-tool-result",
+			trigger: "auto_compaction",
+			compactionApi: API,
+			targetApi: API,
+			targetMode: "act",
+			sourceHistory,
+		})
+
+		expect(result).toBe("completed")
+		expect(API.createMessage).toHaveBeenCalledOnce()
+		expect(ports.prepareRootCheckpoint).toHaveBeenCalledOnce()
+		expect(ports.rollback).not.toHaveBeenCalled()
+	})
+
 	it("blocks Provider admission when the durable C0 checkpoint cannot be prepared", async () => {
 		const ports = createPorts()
 		const rootError = new Error("root checkpoint write failed")

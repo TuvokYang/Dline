@@ -132,10 +132,12 @@ describe("formatFileContentWithLineNumbers", () => {
 			assert.ok(result.includes(`start_line=${DEFAULT_MAX_LINES + 1}`))
 		})
 
-		it("allows reading beyond default limit with explicit end_line", () => {
-			const endLine = DEFAULT_MAX_LINES + 200
-			const result = formatFileContentWithLineNumbers(bigContent, 1, endLine)
-			assert.ok(result.includes(`${endLine} | row${endLine}`))
+		it("caps an explicit end_line at the per-read line limit", () => {
+			const requestedEnd = DEFAULT_MAX_LINES + 200
+			const result = formatFileContentWithLineNumbers(bigContent, 1, requestedEnd)
+			assert.ok(result.includes(`${DEFAULT_MAX_LINES} | row${DEFAULT_MAX_LINES}`))
+			assert.ok(!result.includes(`${DEFAULT_MAX_LINES + 1} |`))
+			assert.ok(result.includes(`start_line=${DEFAULT_MAX_LINES + 1}`))
 		})
 	})
 

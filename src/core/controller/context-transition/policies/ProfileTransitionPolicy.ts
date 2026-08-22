@@ -13,6 +13,7 @@ import type {
 	ContextTransitionPhase,
 	ContextTransitionPolicy,
 	ContextTransitionPreparation,
+	ContextTransitionSnapshotContext,
 } from "../ContextTransitionEngine"
 
 export interface ProfileTransitionPolicyDeps {
@@ -22,11 +23,12 @@ export interface ProfileTransitionPolicyDeps {
 	getTaskId: () => string | undefined
 }
 
-/** Express Profile-specific binding projection and final adoption only. */
+/** Express Profile-specific projection and confirmation-first binding adoption. */
 export class ProfileTransitionPolicy
 	implements ContextTransitionPolicy<ProfileSwitchRequest, ProfileSwitchOperation, ProfileSwitchSnapshot>
 {
 	readonly kind = "profile" as const
+	readonly confirmationOrder = "commit_then_compact" as const
 
 	constructor(private readonly deps: ProfileTransitionPolicyDeps) {}
 
@@ -78,6 +80,8 @@ export class ProfileTransitionPolicy
 	createCompactionRequest(operation: ProfileSwitchOperation): ContextTransitionCompactionRequest {
 		const target = operation.activeTarget
 		if (!target) throw new Error("Profile transition target request scope is unavailable.")
+		const adoptedProfiles: Partial<Record<Mode, string>> = {}
+		for (const mode of operation.targetModes) adoptedProfiles[mode] = target.profile
 		return {
 			operationId: operation.operationId,
 			targetApi: target.executionApi,
@@ -89,9 +93,9 @@ export class ProfileTransitionPolicy
 				phase: "compacting",
 				source: {
 					mode: operation.activeMode,
-					profile: operation.sourceBindings[operation.activeMode],
+					profile: target.profile,
 				},
-				sourceProfiles: { ...operation.sourceBindings },
+				sourceProfiles: adoptedProfiles,
 				target: {
 					mode: operation.activeMode,
 					profile: target.profile,
@@ -113,7 +117,12 @@ export class ProfileTransitionPolicy
 		return this.deps.commit.commit(operation)
 	}
 
-	createSnapshot(operation: ProfileSwitchOperation, phase: ContextTransitionPhase, error?: string): ProfileSwitchSnapshot {
+	createSnapshot(
+		operation: ProfileSwitchOperation,
+		phase: ContextTransitionPhase,
+		error?: string,
+		context?: ContextTransitionSnapshotContext,
+	): ProfileSwitchSnapshot {
 		const target = operation.activeTarget
 		return {
 			phase,
@@ -123,6 +132,7 @@ export class ProfileTransitionPolicy
 			targetModes: [...operation.targetModes],
 			sourceProfile: operation.sourceBindings[operation.activeMode],
 			targetProfile: operation.targetProfile,
+			targetAdopted: context?.targetAdopted,
 			compactionModel: target?.executionApi?.getModel?.()?.id,
 			currentTokens: operation.currentTokens,
 			targetContextWindow: target?.contextWindow,

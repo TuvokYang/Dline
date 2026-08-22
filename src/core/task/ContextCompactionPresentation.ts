@@ -114,7 +114,6 @@ export class ContextCompactionPresentation {
 			return undefined
 		this.active = {
 			...this.active,
-			existingTs: undefined,
 			content: "",
 			status: "failed",
 			error: undefined,

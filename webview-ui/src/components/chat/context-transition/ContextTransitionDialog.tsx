@@ -19,6 +19,7 @@ export interface ContextTransitionDialogState {
 	operationId: string
 	sourceLabel?: string
 	targetLabel?: string
+	targetAdopted?: boolean
 	compactionModel?: string
 	sourceContextWindow?: number
 	targetContextWindow?: number
@@ -52,6 +53,7 @@ export function ContextTransitionDialog({ state, onCancel, onConfirm, onRetry }:
 	if (!state || (state.phase === "failed" && state.operationId === dismissedFailureId)) return null
 
 	const isFailure = state.phase === "failed"
+	const isProfile = state.kind === "profile"
 	const operationId = state.operationId
 	const sourceLabel = state.sourceLabel ?? "source settings"
 	const targetLabel = state.targetLabel ?? "target settings"
@@ -68,15 +70,28 @@ export function ContextTransitionDialog({ state, onCancel, onConfirm, onRetry }:
 				<AlertDialogHeader>
 					<AlertDialogTitle>
 						<AlertTriangle className="h-5 w-5 text-(--vscode-errorForeground)" />
-						{isFailure ? "Switch not completed" : "Compact context before switching?"}
+						{isFailure
+							? isProfile && state.targetAdopted
+								? "Context compaction not completed"
+								: "Switch not completed"
+							: "Compact context before switching?"}
 					</AlertDialogTitle>
 					<AlertDialogDescription>
 						{isFailure ? (
-							<>{sourceLabel} remains active. The target settings were not adopted.</>
+							isProfile && state.targetAdopted ? (
+								<>{targetLabel} remains active. Retry compaction or choose another Profile.</>
+							) : (
+								<>{sourceLabel} remains active. The target settings were not adopted.</>
+							)
+						) : isProfile ? (
+							<>
+								The target context window cannot safely hold the complete candidate. {targetLabel} will be
+								activated first, then context compaction will run with that Profile.
+							</>
 						) : (
 							<>
-								The target context window cannot safely hold the complete candidate. Compaction will run with {targetLabel},
-								 the target Profile, before the switch is committed.
+								The target context window cannot safely hold the complete candidate. Compaction will run with{" "}
+								{targetLabel}, the target Profile, before the switch is committed.
 							</>
 						)}
 					</AlertDialogDescription>

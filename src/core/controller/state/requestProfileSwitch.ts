@@ -35,7 +35,7 @@ function fromProtoModes(modes: PlanActMode[]): Mode[] {
 	})
 }
 
-/** Request a delayed-adoption Profile transition for the active Task. */
+/** Request a confirmation-gated Profile transition for the active Task. */
 export async function requestProfileSwitch(
 	controller: Controller,
 	request: ProfileSwitchRequest,

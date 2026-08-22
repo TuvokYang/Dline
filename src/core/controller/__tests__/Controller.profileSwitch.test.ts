@@ -49,12 +49,13 @@ describe("Controller Profile switch integration", () => {
 		const projectProfileSwitchTargetUsage = vi.fn(async () => 128_001)
 		const compact = vi.fn(async () => "completed" as const)
 		const release = vi.fn()
+		const commitProfileBindings = vi.fn(async () => undefined)
 		const fakeController = {
 			task: {
 				taskId: "task-1",
 				getMode: () => "act" as const,
 				projectProfileSwitchTargetUsage,
-				commitProfileBindings: vi.fn(async () => undefined),
+				commitProfileBindings,
 			},
 			contextTransitionEngine: new ContextTransitionEngine({
 				lease: new ContextTransitionLease(),
@@ -106,10 +107,12 @@ describe("Controller Profile switch integration", () => {
 			transition: expect.objectContaining({
 				kind: "profile_switch",
 				chatContent: draft,
-				source: { mode: "act", profile: "source-profile" },
+				source: { mode: "act", profile: "target-profile" },
 				target: { mode: "act", profile: "target-profile", contextWindow: 128_000 },
 			}),
 		})
+		expect(commitProfileBindings).toHaveBeenCalledWith({ profileId: "target-id", profileName: "target-profile" }, ["act"])
+		expect(commitProfileBindings.mock.invocationCallOrder[0]).toBeLessThan(compact.mock.invocationCallOrder[0])
 		expect(release).toHaveBeenCalledWith("profile-operation-1")
 	})
 })

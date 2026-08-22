@@ -12,6 +12,7 @@ import type {
 	ContextTransitionPhase,
 	ContextTransitionPolicy,
 	ContextTransitionPreparation,
+	ContextTransitionSnapshotContext,
 } from "../ContextTransitionEngine"
 
 export interface ModeTransitionPolicyDeps {
@@ -24,8 +25,29 @@ export interface ModeTransitionPolicyDeps {
 /** Express Mode-specific target resolution and final adoption only. */
 export class ModeTransitionPolicy implements ContextTransitionPolicy<ModeSwitchRequest, ModeSwitchOperation, ModeSwitchSnapshot> {
 	readonly kind = "mode" as const
+	readonly confirmationOrder = "compact_then_commit" as const
 
 	constructor(private readonly deps: ModeTransitionPolicyDeps) {}
+
+	/** Resolve same-Profile split modes without acquiring the shared transition lease or projecting context pressure. */
+	prepareWithoutLease(input: ModeSwitchRequest, operationId: string): ModeSwitchOperation | undefined {
+		if (this.deps.getTaskId() !== input.taskId) {
+			throw new Error("Active task changed before mode switch request.")
+		}
+		const source = this.deps.profiles.getSource()
+		const target = this.deps.profiles.resolve(input.targetMode)
+		const executionApi = target?.executionApi
+		if (!source || !target || !executionApi || source.profileId !== target.profileId) return undefined
+		return {
+			operationId,
+			taskId: input.taskId,
+			source,
+			target: { ...target, executionApi },
+			currentTokens: 0,
+			triggerTokens: target.contextWindow,
+			chatContent: input.chatContent,
+		}
+	}
 
 	async prepare(input: ModeSwitchRequest, operationId: string): Promise<ContextTransitionPreparation<ModeSwitchOperation>> {
 		if (this.deps.getTaskId() !== input.taskId) {
@@ -95,7 +117,12 @@ export class ModeTransitionPolicy implements ContextTransitionPolicy<ModeSwitchR
 		return this.deps.commit.commit(operation)
 	}
 
-	createSnapshot(operation: ModeSwitchOperation, phase: ContextTransitionPhase, error?: string): ModeSwitchSnapshot {
+	createSnapshot(
+		operation: ModeSwitchOperation,
+		phase: ContextTransitionPhase,
+		error?: string,
+		_context?: ContextTransitionSnapshotContext,
+	): ModeSwitchSnapshot {
 		return {
 			phase,
 			operationId: operation.operationId,

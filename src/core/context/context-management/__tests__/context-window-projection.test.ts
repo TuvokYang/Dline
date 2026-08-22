@@ -65,7 +65,7 @@ describe("context window projection", () => {
 		})
 	})
 
-	it("does not manufacture growth by subtracting Provider usage from an incompatible local estimate", () => {
+	it("uses the larger complete candidate when Provider usage has no comparable estimate anchor", () => {
 		const projection = resolveContextWindowProjection({
 			requestInfos: [{ contextTokens: 217_409, contextTokensSource: "provider" }],
 			candidateEstimatedTokens: 570_000,
@@ -76,10 +76,27 @@ describe("context window projection", () => {
 		expect(projection).toMatchObject({
 			baselineTokens: 217_409,
 			pendingDeltaTokens: 0,
-			candidateDeltaTokens: 0,
-			projectedUsageTokens: 217_409,
+			candidateDeltaTokens: 352_591,
+			projectedUsageTokens: 570_000,
 			pressureSource: "provider",
-			shouldCompact: false,
+			shouldCompact: true,
+		})
+	})
+
+	it("fails closed to the complete candidate when Provider usage has no local estimate anchor", () => {
+		const projection = resolveContextWindowProjection({
+			requestInfos: [{ contextTokens: 135_000, contextTokensSource: "provider" }],
+			candidateEstimatedTokens: 382_000,
+			contextWindow: 372_000,
+			triggerTokens: 360_000,
+		})
+
+		expect(projection).toMatchObject({
+			baselineTokens: 135_000,
+			candidateDeltaTokens: 247_000,
+			projectedUsageTokens: 382_000,
+			pressureSource: "provider",
+			shouldCompact: true,
 		})
 	})
 

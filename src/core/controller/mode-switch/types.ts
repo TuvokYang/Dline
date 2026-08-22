@@ -7,6 +7,7 @@ export type { ContextPressureReader, TaskCompactionPort } from "@core/controller
 /** Effective task-local profile information for one mode. */
 export interface ResolvedModeProfile {
 	mode: Mode
+	profileId: string
 	profile: string
 	contextWindow: number
 	/** Strict fitting exit target resolved from the same target scope as the actual compaction. */

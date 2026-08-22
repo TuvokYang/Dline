@@ -1,6 +1,7 @@
 import { ToolUse } from "@core/assistant-message"
 import { formatResponse } from "@core/prompts/responses"
 import { ToolResponse } from "@core/task"
+import { MAX_TOOL_RESULT_TEXT_BYTES, truncateContent } from "@shared/content-limits"
 import { processFilesIntoText } from "@/integrations/misc/extract-text"
 import { ClineAsk } from "@/shared/ExtensionMessage"
 import type { ClineUserToolResultContentBlock } from "@/shared/messages/content"
@@ -90,6 +91,24 @@ export class ToolResultUtils {
 		return [...baseContent, ...ToolResultUtils.flattenFeedback(feedbackContent)]
 	}
 
+	/** Bound one tool result's generated text while preserving non-text blocks and user feedback. */
+	private static boundStructuredResult(content: Exclude<ToolResponse, string>): ToolResponse {
+		let remainingBytes = MAX_TOOL_RESULT_TEXT_BYTES
+		const bounded: typeof content = []
+		for (const block of content) {
+			if (block.type !== "text") {
+				bounded.push(block)
+				continue
+			}
+			if (remainingBytes <= 0) continue
+			const text = truncateContent(block.text, remainingBytes)
+			if (!text) continue
+			bounded.push({ ...block, text })
+			remainingBytes = Math.max(0, remainingBytes - Buffer.byteLength(text, "utf8"))
+		}
+		return bounded
+	}
+
 	/**
 	 * Flatten formatted feedback into tool_result-compatible content blocks.
 	 *
@@ -164,12 +183,13 @@ export class ToolResultUtils {
 			// replaces the older one (e.g. "SEARCH block not found"). The final
 			// result is what the AI sees, and ensureToolResultsFollowToolUse
 			// deduplicates by function_id before sending to the API.
-			const mergedContent = ToolResultUtils.mergeTextResult(`${description} Result:\n${resultText}`, pendingFeedback)
+			const boundedResult = truncateContent(`${description} Result:\n${resultText}`, MAX_TOOL_RESULT_TEXT_BYTES)
+			const mergedContent = ToolResultUtils.mergeTextResult(boundedResult, pendingFeedback)
 			return storeResult(ToolResultUtils.createResult(mergedContent, block, isError))
 		}
-		// For complex content (arrays with text/image blocks), pass it through directly
-		// The content array should already be properly formatted with type, text, source, etc.
-		const mergedContent = ToolResultUtils.mergeStructuredResult(content, pendingFeedback)
+		// Bound tool-generated text before user approval feedback is merged.
+		const boundedContent = ToolResultUtils.boundStructuredResult(content)
+		const mergedContent = ToolResultUtils.mergeStructuredResult(boundedContent, pendingFeedback)
 		return storeResult(ToolResultUtils.createResult(mergedContent, block, isError))
 	}
 

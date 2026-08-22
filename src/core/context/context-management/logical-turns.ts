@@ -1,5 +1,6 @@
 import { USER_CONTENT_TAGS } from "@shared/messages/constants"
 import type { ClineAssistantToolUseBlock, ClineStorageMessage, ClineUserToolResultContentBlock } from "@shared/messages/content"
+import { ClineDefaultTool, CONVERSATIONAL_TOOL_NAMES } from "@shared/tools"
 
 export type LogicalTurnIssueKind = "orphan_tool_result" | "unpaired_tool_use"
 
@@ -33,7 +34,8 @@ export function indexLogicalTurns(history: readonly ClineStorageMessage[]): Logi
 	let boundaryBeforeNext = false
 	let hasAssistantResponse = false
 	let terminalTaggedFeedback = false
-	const openToolUses = new Map<string, number>()
+	let hasCompletedToolResult = false
+	const openToolUses = new Map<string, { messageIndex: number; toolName: string }>()
 	const turnFunctionIds: string[] = []
 
 	const resetTurn = (start: number | undefined): void => {
@@ -41,6 +43,7 @@ export function indexLogicalTurns(history: readonly ClineStorageMessage[]): Logi
 		boundaryBeforeNext = false
 		hasAssistantResponse = false
 		terminalTaggedFeedback = false
+		hasCompletedToolResult = false
 		openToolUses.clear()
 		turnFunctionIds.length = 0
 	}
@@ -85,14 +88,25 @@ export function indexLogicalTurns(history: readonly ClineStorageMessage[]): Logi
 		}
 
 		if (message.role === "assistant") {
+			if (uses.length > 0 && hasCompletedToolResult && turnStart !== undefined && messageIndex > turnStart) {
+				finalizeTurn(messageIndex - 1)
+				turnStart = messageIndex
+			}
 			hasAssistantResponse = true
 		}
 		for (const use of uses) {
-			openToolUses.set(use.function_id, messageIndex)
+			openToolUses.set(use.function_id, { messageIndex, toolName: use.name })
 			if (!turnFunctionIds.includes(use.function_id)) turnFunctionIds.push(use.function_id)
 		}
 
-		const taggedResult = results.find(hasTaggedUserFeedback)
+		const taggedResult = results.find((result) => {
+			const matchingUse = openToolUses.get(result.function_id)
+			return (
+				matchingUse !== undefined &&
+				CONVERSATIONAL_TOOL_NAMES.has(matchingUse.toolName as ClineDefaultTool) &&
+				hasTaggedUserFeedback(result)
+			)
+		})
 		if (taggedResult) {
 			// A tagged tool result is the user's reply to a conversational tool
 			// (qna_respond, make_plan, followup, generate_report, attempt_completion
@@ -125,6 +139,7 @@ export function indexLogicalTurns(history: readonly ClineStorageMessage[]): Logi
 				return buildIndex(history, turns, protectedStartIndex, issues)
 			}
 			openToolUses.delete(result.function_id)
+			hasCompletedToolResult = true
 		}
 
 		terminalTaggedFeedback = false
@@ -135,8 +150,8 @@ export function indexLogicalTurns(history: readonly ClineStorageMessage[]): Logi
 
 	if (protectedStartIndex === history.length && turnStart !== undefined) {
 		if (openToolUses.size > 0) {
-			for (const [functionId, messageIndex] of openToolUses) {
-				issues.push({ kind: "unpaired_tool_use", messageIndex, functionId })
+			for (const [functionId, openUse] of openToolUses) {
+				issues.push({ kind: "unpaired_tool_use", messageIndex: openUse.messageIndex, functionId })
 			}
 			protectedStartIndex = turnStart
 		} else if (hasAssistantResponse) {

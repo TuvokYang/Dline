@@ -98,7 +98,7 @@ function createHarness(
 	}
 }
 
-/** Verify delayed Profile adoption independently from Controller and Task persistence. */
+/** Verify confirmation-first Profile adoption independently from Controller and Task persistence. */
 describe("ProfileSwitchCoordinator", () => {
 	let harness: TestHarness
 
@@ -175,7 +175,7 @@ describe("ProfileSwitchCoordinator", () => {
 		})
 	})
 
-	it("uses the selected target Profile handler for compaction before adopting bindings", async () => {
+	it("adopts the selected target Profile before compacting with its handler", async () => {
 		await harness.coordinator.request({
 			taskId: "task-1",
 			targetProfileId: "target-id",
@@ -193,12 +193,13 @@ describe("ProfileSwitchCoordinator", () => {
 			chatContent: undefined,
 			transition: expect.objectContaining({
 				kind: "profile_switch",
-				source: { mode: "act", profile: "act-source" },
-				sourceProfiles: { act: "act-source" },
+				source: { mode: "act", profile: "target-profile" },
+				sourceProfiles: { act: "target-profile" },
 				target: { mode: "act", profile: "target-profile", contextWindow: 128_000 },
 			}),
 		})
 		expect(harness.commitProfile).toHaveBeenCalledOnce()
+		expect(harness.commitProfile.mock.invocationCallOrder[0]).toBeLessThan(harness.compact.mock.invocationCallOrder[0])
 		expect(harness.release).toHaveBeenCalledWith("profile-operation-1")
 		expect(harness.lease.getActive()).toBeUndefined()
 	})
@@ -218,7 +219,7 @@ describe("ProfileSwitchCoordinator", () => {
 		expect(harness.lease.getActive()).toBeUndefined()
 	})
 
-	it("preserves source bindings after target compaction fails", async () => {
+	it("keeps the adopted target Profile after target compaction fails", async () => {
 		harness.compact.mockResolvedValueOnce("failed")
 		await harness.coordinator.request({
 			taskId: "task-1",
@@ -229,9 +230,77 @@ describe("ProfileSwitchCoordinator", () => {
 		const result = await harness.coordinator.confirm("profile-operation-1")
 
 		expect(result.status).toBe("rejected")
-		expect(harness.commitProfile).not.toHaveBeenCalled()
-		expect(harness.coordinator.getSnapshot()).toMatchObject({ phase: "failed" })
+		expect(harness.commitProfile).toHaveBeenCalledOnce()
+		expect(harness.commitProfile.mock.invocationCallOrder[0]).toBeLessThan(harness.compact.mock.invocationCallOrder[0])
+		expect(harness.coordinator.getSnapshot()).toMatchObject({ phase: "failed", targetAdopted: true })
 		expect(harness.lease.getActive()).toBeUndefined()
+	})
+
+	it("reports failed adoption without claiming the target became active", async () => {
+		harness.commitProfile.mockRejectedValueOnce(new Error("adoption failed"))
+		await harness.coordinator.request({
+			taskId: "task-1",
+			targetProfileId: "target-id",
+			targetProfile: "target-profile",
+			targetModes: ["act"],
+		})
+
+		await expect(harness.coordinator.confirm("profile-operation-1")).resolves.toMatchObject({
+			status: "rejected",
+			error: "adoption failed",
+		})
+		expect(harness.compact).not.toHaveBeenCalled()
+		expect(harness.coordinator.getSnapshot()).toMatchObject({ phase: "failed", targetAdopted: false })
+		expect(harness.lease.getActive()).toBeUndefined()
+	})
+
+	it("releases the shared transition lease when target compaction rejects", async () => {
+		harness.compact.mockRejectedValueOnce(new Error("provider failed"))
+		await harness.coordinator.request({
+			taskId: "task-1",
+			targetProfileId: "target-id",
+			targetProfile: "target-profile",
+			targetModes: ["act"],
+		})
+
+		await expect(harness.coordinator.confirm("profile-operation-1")).resolves.toMatchObject({
+			status: "rejected",
+			error: "provider failed",
+		})
+		expect(harness.lease.getActive()).toBeUndefined()
+
+		await expect(
+			harness.coordinator.request({
+				taskId: "task-1",
+				targetProfileId: "target-id",
+				targetProfile: "target-profile",
+				targetModes: ["act"],
+			}),
+		).resolves.toMatchObject({ status: "confirmation_required" })
+	})
+
+	it("releases the shared transition lease even when failure cleanup rejects", async () => {
+		harness.compact.mockResolvedValueOnce("failed")
+		harness.fail.mockRejectedValueOnce(new Error("rollback failed"))
+		harness.release.mockRejectedValueOnce(new Error("release failed"))
+		await harness.coordinator.request({
+			taskId: "task-1",
+			targetProfileId: "target-id",
+			targetProfile: "target-profile",
+			targetModes: ["act"],
+		})
+
+		await expect(harness.coordinator.confirm("profile-operation-1")).resolves.toMatchObject({ status: "rejected" })
+		expect(harness.lease.getActive()).toBeUndefined()
+
+		await expect(
+			harness.coordinator.request({
+				taskId: "task-1",
+				targetProfileId: "target-id",
+				targetProfile: "target-profile",
+				targetModes: ["act"],
+			}),
+		).resolves.toMatchObject({ status: "confirmation_required" })
 	})
 
 	it("holds the shared transition lease while asynchronous preflight is unresolved", async () => {

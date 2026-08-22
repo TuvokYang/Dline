@@ -2,11 +2,13 @@ import { readdir, readFile, writeFile } from "node:fs/promises"
 import * as path from "node:path"
 import { expect, type Frame, type TestInfo } from "@playwright/test"
 import type { ElectronApplication } from "playwright"
+import { MAX_TOOL_RESULT_TEXT_BYTES } from "../../shared/content-limits"
 import type { MockApiConsumption } from "./fixtures/server"
 import { E2E_PROFILE_NAMES } from "./utils/api-profile"
 import { E2ETestHelper, e2e } from "./utils/helpers"
 
 interface StoredProfile {
+	id: string
 	name: string
 	modelId?: string
 	webSearchMode?: "WEB_SEARCH_MODE_FORCE_OFF"
@@ -56,6 +58,9 @@ async function configureModeProfiles(
 	}
 	await writeFile(profilesPath(dlineDir), `${JSON.stringify(profiles, null, 2)}\n`, "utf8")
 
+	const actProfile = profiles.find((candidate) => candidate.name === options.actProfile)
+	const planProfile = profiles.find((candidate) => candidate.name === options.planProfile)
+	if (!actProfile || !planProfile) throw new Error("Configured mode Profiles disappeared before settings write")
 	const settings = JSON.parse(await readFile(settingsPath(dlineDir), "utf8")) as Record<string, unknown>
 	await writeFile(
 		settingsPath(dlineDir),
@@ -63,8 +68,10 @@ async function configureModeProfiles(
 			{
 				...settings,
 				planActSeparateModelsSetting: true,
-				actModeProfile: options.actProfile,
-				planModeProfile: options.planProfile,
+				actModeProfileId: actProfile.id,
+				actModeProfile: actProfile.name,
+				planModeProfileId: planProfile.id,
+				planModeProfile: planProfile.name,
 			},
 			null,
 			2,
@@ -88,8 +95,10 @@ async function configureAutoCompact(dlineDir: string, enabled: boolean): Promise
 		`${JSON.stringify(
 			{
 				...settings,
-				actModeProfile: E2E_PROFILE_NAMES.mockOpenAiResponses,
-				planModeProfile: E2E_PROFILE_NAMES.mockOpenAiResponses,
+				actModeProfileId: profile.id,
+				actModeProfile: profile.name,
+				planModeProfileId: profile.id,
+				planModeProfile: profile.name,
 				useAutoCondense: enabled,
 			},
 			null,
@@ -112,8 +121,10 @@ async function configureDeepSeekAutoCompact(dlineDir: string, useAutoCondense = 
 		`${JSON.stringify(
 			{
 				...settings,
-				actModeProfile: E2E_PROFILE_NAMES.mockDeepSeek,
-				planModeProfile: E2E_PROFILE_NAMES.mockDeepSeek,
+				actModeProfileId: profile.id,
+				actModeProfile: profile.name,
+				planModeProfileId: profile.id,
+				planModeProfile: profile.name,
 				useAutoCondense,
 				autoCondenseTriggerPercent: 97,
 				autoCondenseMinReserveTokens: 5_000,
@@ -146,8 +157,10 @@ async function configureTaskProfileSwitch(dlineDir: string): Promise<void> {
 			{
 				...settings,
 				planActSeparateModelsSetting: false,
-				actModeProfile: E2E_PROFILE_NAMES.mockDeepSeek,
-				planModeProfile: E2E_PROFILE_NAMES.mockDeepSeek,
+				actModeProfileId: sourceProfile.id,
+				actModeProfile: sourceProfile.name,
+				planModeProfileId: sourceProfile.id,
+				planModeProfile: sourceProfile.name,
 				useAutoCondense: true,
 				autoCondenseTriggerPercent: 97,
 				autoCondenseMaxContextTokens: 0,
@@ -181,8 +194,10 @@ async function configureProfileCompactionSwitch(dlineDir: string): Promise<void>
 			{
 				...settings,
 				planActSeparateModelsSetting: false,
-				actModeProfile: E2E_PROFILE_NAMES.mockOpenAiResponses,
-				planModeProfile: E2E_PROFILE_NAMES.mockOpenAiResponses,
+				actModeProfileId: sourceProfile.id,
+				actModeProfile: sourceProfile.name,
+				planModeProfileId: sourceProfile.id,
+				planModeProfile: sourceProfile.name,
 				useAutoCondense: false,
 			},
 			null,
@@ -279,11 +294,11 @@ async function expectCompactionSummary(sidebar: Frame, summary: string): Promise
 	await expectNoInternalCompactionEcho(sidebar)
 }
 
-const CONTEXT_WINDOW_SEGMENT_ORDER = ["durable", "sending", "receiving", "environment"] as const
+const CONTEXT_WINDOW_SEGMENT_ORDER = ["durable", "active", "staged", "environment"] as const
 const CONTEXT_WINDOW_SEGMENT_COLORS = [
 	"var(--vscode-charts-green, #3fb950)",
 	"var(--vscode-charts-blue, #58a6ff)",
-	"var(--vscode-charts-yellow, #d29922)",
+	"var(--vscode-charts-orange, #d18616)",
 	"var(--vscode-charts-purple, #bc8cff)",
 ] as const
 
@@ -307,6 +322,7 @@ async function readContextWindowVisual(sidebar: Frame) {
 			revision: Number(progressElement.dataset.revision ?? 0),
 			segments: Array.from(progressElement.querySelectorAll<HTMLElement>("[data-segment]")).map((segment) => ({
 				active: segment.dataset.active,
+				label: segment.getAttribute("aria-label")?.split(":", 1)[0],
 				authoritativeTokens: Number(segment.dataset.authoritativeTokens ?? 0),
 				computedColor: getComputedStyle(segment).backgroundColor,
 				inlineColor: segment.style.backgroundColor,
@@ -321,7 +337,11 @@ async function readContextWindowVisual(sidebar: Frame) {
 
 function expectFourContextSegments(visual: Awaited<ReturnType<typeof readContextWindowVisual>>): void {
 	expect(visual.segments.map((segment) => segment.kind)).toEqual(CONTEXT_WINDOW_SEGMENT_ORDER)
-	expect(visual.segments.map((segment) => segment.inlineColor)).toEqual(CONTEXT_WINDOW_SEGMENT_COLORS)
+	const expectedColors = [...CONTEXT_WINDOW_SEGMENT_COLORS]
+	if (visual.segments[1]?.label === "Receiving") {
+		expectedColors[1] = "var(--vscode-charts-yellow, #d29922)"
+	}
+	expect(visual.segments.map((segment) => segment.inlineColor)).toEqual(expectedColors)
 	expect(new Set(visual.segments.map((segment) => segment.computedColor)).size).toBe(4)
 	expect(visual.segments.at(-1)?.kind).toBe("environment")
 }
@@ -438,7 +458,7 @@ e2e(
 )
 
 e2e(
-	"Task-local profile switch - smaller target compacts with the target Profile and restores C0",
+	"Task-local profile switch - smaller target compacts with the target Profile and restores C0 without reverting it",
 	async ({ dlineDir, dlineDocsDir, helper, openVSCode, server, userDataDir, workspaceDir }, testInfo) => {
 		e2e.setTimeout(240_000)
 		await configureProfileCompactionSwitch(dlineDir)
@@ -491,60 +511,18 @@ e2e(
 			await expect(modelSwitcher).toContainText(E2E_PROFILE_NAMES.mockOpenAiResponses)
 			const dialog = sidebar.getByRole("dialog")
 			await expect(dialog.getByRole("heading", { name: "Compact context before switching?" })).toBeVisible()
-			await expect(dialog).toContainText(`Compaction will run with ${E2E_PROFILE_NAMES.mockOpenAi}`)
+			await expect(dialog).toContainText(`${E2E_PROFILE_NAMES.mockOpenAi} will be activated first`)
 			await expect(dialog).toContainText("Must fit below")
 			await dialog.getByRole("button", { name: "Compact & Switch" }).click()
 
 			const progress = sidebar.getByTestId("context-window-segmented-progress")
-			await expect(progress).toHaveAttribute("data-phase", "sending", { timeout: 60_000 })
-			let visual = await readContextWindowVisual(sidebar)
-			expectFourContextSegments(visual)
-			expect(visual).toMatchObject({
-				contextWindow: 131_072,
-				mode: "act",
-				motion: "none",
-				phase: "sending",
-				profileName: E2E_PROFILE_NAMES.mockOpenAi,
-			})
-			expect(visual.segments[1]).toMatchObject({ active: "true", kind: "sending" })
-			expect(visual.segments[1].authoritativeTokens).toBeGreaterThan(0)
-			expect(visual.segments[2]).toMatchObject({ active: "false", authoritativeTokens: 0, kind: "receiving" })
-			await captureContextWindowEvidence(sidebar, testInfo, "context-sending")
-
-			await expect(progress).toHaveAttribute("data-phase", "receiving", { timeout: 60_000 })
-			visual = await readContextWindowVisual(sidebar)
-			expectFourContextSegments(visual)
-			expect(visual).toMatchObject({
-				contextWindow: 131_072,
-				mode: "act",
-				motion: "none",
-				phase: "receiving",
-				profileName: E2E_PROFILE_NAMES.mockOpenAi,
-			})
-			expect(visual.segments[1].authoritativeTokens).toBeGreaterThan(0)
-			expect(visual.segments[2]).toMatchObject({ active: "true", kind: "receiving" })
-			expect(visual.segments[2].authoritativeTokens).toBeGreaterThan(0)
-			expectContextVisualAllocation(visual)
-			await captureContextWindowEvidence(sidebar, testInfo, "context-receiving")
-
-			await expect(progress).toHaveAttribute("data-motion", "commit", { timeout: 60_000 })
-			visual = await readContextWindowVisual(sidebar)
-			expectFourContextSegments(visual)
-			expect(visual.contextWindow).toBe(131_072)
-			expect(visual.profileName).toBe(E2E_PROFILE_NAMES.mockOpenAi)
-			expect(visual.segments[1]).toMatchObject({ authoritativeTokens: 0, transitionSource: "previous" })
-			expect(visual.segments[2]).toMatchObject({ authoritativeTokens: 0, transitionSource: "previous" })
-			expect(visual.segments[1].tokens).toBeGreaterThan(0)
-			expect(visual.segments[2].tokens).toBeGreaterThan(0)
-			await captureContextWindowEvidence(sidebar, testInfo, "context-committing")
-
 			await expect(modelSwitcher).toHaveText(E2E_PROFILE_NAMES.mockOpenAi, { timeout: 60_000 })
 			await expect(sidebar.getByText("E2E_PROFILE_TARGET_SUMMARY", { exact: false }).last()).toBeVisible({
 				timeout: 60_000,
 			})
 			await expect(progress).toHaveAttribute("data-phase", "stable", { timeout: 60_000 })
 			await expect(progress).toHaveAttribute("data-motion", "none", { timeout: 60_000 })
-			visual = await readContextWindowVisual(sidebar)
+			let visual = await readContextWindowVisual(sidebar)
 			expectFourContextSegments(visual)
 			expect(visual).toMatchObject({
 				contextWindow: 131_072,
@@ -590,10 +568,10 @@ e2e(
 			visual = await readContextWindowVisual(sidebar)
 			expectFourContextSegments(visual)
 			expect(visual).toMatchObject({
-				contextWindow: 272_000,
+				contextWindow: 131_072,
 				mode: "act",
 				motion: "restore",
-				profileName: E2E_PROFILE_NAMES.mockOpenAiResponses,
+				profileName: E2E_PROFILE_NAMES.mockOpenAi,
 			})
 			expect(visual.segments[1]).toMatchObject({ authoritativeTokens: 0, tokens: 0 })
 			expect(visual.segments[2]).toMatchObject({ authoritativeTokens: 0, tokens: 0 })
@@ -603,17 +581,17 @@ e2e(
 
 			await expect(restoreTaskButton).toHaveCount(0)
 			await expect(sidebar.getByText("Restore was not completed", { exact: false })).toHaveCount(0)
-			await expect(modelSwitcher).toHaveText(E2E_PROFILE_NAMES.mockOpenAiResponses)
+			await expect(modelSwitcher).toHaveText(E2E_PROFILE_NAMES.mockOpenAi)
 			await expect(progress).toHaveAttribute("data-phase", "stable", { timeout: 60_000 })
 			await expect(progress).toHaveAttribute("data-motion", "none", { timeout: 60_000 })
 			visual = await readContextWindowVisual(sidebar)
 			expectFourContextSegments(visual)
 			expect(visual).toMatchObject({
-				contextWindow: 272_000,
+				contextWindow: 131_072,
 				mode: "act",
 				motion: "none",
 				phase: "stable",
-				profileName: E2E_PROFILE_NAMES.mockOpenAiResponses,
+				profileName: E2E_PROFILE_NAMES.mockOpenAi,
 			})
 			expect(visual.segments[3].tokens).toBeGreaterThan(0)
 			const restoredRevision = visual.revision
@@ -621,7 +599,7 @@ e2e(
 				.poll(async () => (await readContextWindowVisual(sidebar)).revision, { timeout: 20_000 })
 				.toBeGreaterThan(restoredRevision)
 			visual = await readContextWindowVisual(sidebar)
-			expect(visual.contextWindow).toBe(272_000)
+			expect(visual.contextWindow).toBe(131_072)
 			expect(visual.segments[3].tokens).toBeGreaterThan(0)
 			await captureContextWindowEvidence(sidebar, testInfo, "context-restored")
 			await expect
@@ -730,7 +708,7 @@ e2e(
 )
 
 e2e(
-	"Mode switch context - same profile switches directly without compaction",
+	"Mode switch context - over-limit same profile switches directly without compaction",
 	async ({ dlineDir, helper, openVSCode, server, userDataDir, workspaceDir }) => {
 		e2e.setTimeout(150_000)
 		await configureModeProfiles(dlineDir, {
@@ -746,7 +724,7 @@ e2e(
 				id: "call_same_profile_completion",
 				name: "attempt_completion",
 				arguments: { result: "E2E_SAME_PROFILE_READY" },
-				usage: { inputTokens: 128_000, outputTokens: 100 },
+				usage: { inputTokens: 400_000, outputTokens: 100 },
 			},
 			{
 				type: "tool",
@@ -771,7 +749,7 @@ e2e(
 			await startInputValueObserver(sidebar)
 			await sidebar.getByTestId("mode-switch").evaluate((element) => element.click())
 			await expectPlanMode(sidebar)
-			await expect(sidebar.getByRole("heading", { name: "Switch to a smaller context window?" })).toHaveCount(0)
+			await expect(sidebar.getByRole("heading", { name: "Compact context before switching?" })).toHaveCount(0)
 			await expect(sidebar.getByText("E2E_SAME_PROFILE_PLAN_OK", { exact: false }).last()).toBeVisible({
 				timeout: 60_000,
 			})
@@ -1125,15 +1103,20 @@ e2e(
 				arguments: {
 					context: "E2E_MODE_SWITCH_SUMMARY preserves E2E_SMALLER_TARGET_TASK and E2E_SMALLER_TARGET_LATEST.",
 				},
-				expectedRequestIncludes: [COMPACT_INSTRUCTION_MARKER, "E2E_SMALLER_TARGET_TASK", "E2E_SMALLER_TARGET_LATEST"],
-				expectedRequestExcludes: [COMPACT_SIGNAL, "E2E_SMALLER_TARGET_PLAN_DRAFT"],
+				expectedRequestIncludes: [COMPACT_INSTRUCTION_MARKER, "E2E_SMALLER_TARGET_TASK"],
+				expectedRequestExcludes: [COMPACT_SIGNAL, "E2E_SMALLER_TARGET_LATEST", "E2E_SMALLER_TARGET_PLAN_DRAFT"],
 			},
 			{
 				type: "tool",
 				id: "call_smaller_target_plan",
 				name: "make_plan",
 				arguments: { response: "E2E_SMALLER_TARGET_PLAN_OK", needs_more_exploration: false },
-				expectedRequestIncludes: ["E2E_MODE_SWITCH_SUMMARY", "E2E_SMALLER_TARGET_PLAN_DRAFT", "PLAN MODE"],
+				expectedRequestIncludes: [
+					"E2E_MODE_SWITCH_SUMMARY",
+					"E2E_SMALLER_TARGET_LATEST",
+					"E2E_SMALLER_TARGET_PLAN_DRAFT",
+					"PLAN MODE",
+				],
 				expectedRequestExcludes: [COMPACT_SIGNAL],
 			},
 		)
@@ -1255,16 +1238,20 @@ e2e(
 					"E2E_OVER_LIMIT_TASK",
 					"E2E_OVER_LIMIT_MIDDLE_ONE",
 					"E2E_OVER_LIMIT_MIDDLE_TWO",
-					"E2E_OVER_LIMIT_LATE_TURN",
 				],
-				expectedRequestExcludes: [COMPACT_SIGNAL, "E2E_OVER_LIMIT_PLAN_DRAFT"],
+				expectedRequestExcludes: [COMPACT_SIGNAL, "E2E_OVER_LIMIT_LATE_TURN", "E2E_OVER_LIMIT_PLAN_DRAFT"],
 			},
 			{
 				type: "tool",
 				id: "call_over_limit_plan",
 				name: "make_plan",
 				arguments: { response: "E2E_OVER_LIMIT_PLAN_OK", needs_more_exploration: false },
-				expectedRequestIncludes: ["E2E_OVER_LIMIT_SUMMARY", "E2E_OVER_LIMIT_PLAN_DRAFT", "PLAN MODE"],
+				expectedRequestIncludes: [
+					"E2E_OVER_LIMIT_SUMMARY",
+					"E2E_OVER_LIMIT_LATE_TURN",
+					"E2E_OVER_LIMIT_PLAN_DRAFT",
+					"PLAN MODE",
+				],
 				expectedRequestExcludes: [COMPACT_SIGNAL],
 			},
 		)
@@ -1314,7 +1301,7 @@ e2e(
 				expect(requestText).toContain("E2E_OVER_LIMIT_TASK")
 				expect(requestText).toContain("E2E_OVER_LIMIT_MIDDLE_ONE")
 				expect(requestText).toContain("E2E_OVER_LIMIT_MIDDLE_TWO")
-				expect(requestText).toContain("E2E_OVER_LIMIT_LATE_TURN")
+				expect(requestText).not.toContain("E2E_OVER_LIMIT_LATE_TURN")
 			}
 			expect(requestToolNames(firstSummary)).toEqual(requestToolNames(retriedSummary))
 			expect(firstSummary).toMatchObject({ responseType: "error" })
@@ -1935,7 +1922,7 @@ e2e(
 			expectContextVisualAllocation(receivingVisual)
 			expect(receivingVisual.segments.reduce((total, segment) => total + segment.authoritativeTokens, 0)).toBe(630100)
 
-			const focusableContextSegment = sidebar.getByTestId("context-window-segment-durable")
+			const focusableContextSegment = sidebar.getByTestId("context-window-tooltip-trigger")
 			await focusableContextSegment.focus()
 			await page.waitForTimeout(800)
 			const hoverCardContent = sidebar.locator('[data-slot="hover-card-content"]')
@@ -1945,7 +1932,7 @@ e2e(
 			await contextWindowSummary.click()
 			const segmentDetails = hoverCardContent.getByTestId("context-window-segment-details")
 			await expect(segmentDetails).toBeVisible()
-			for (const kind of ["durable", "sending", "receiving", "environment"] as const) {
+			for (const kind of ["durable", "active", "staged", "environment"] as const) {
 				await expect(segmentDetails.locator(`[data-segment-detail="${kind}"]`)).toBeVisible()
 			}
 			const screenshotPath = e2e.info().outputPath("deepseek-context-630k.png")
@@ -2029,7 +2016,7 @@ e2e(
 )
 
 e2e(
-	"DeepSeek context - 630K plus large successful tool results compacts under the real 1M window",
+	"DeepSeek context - 930K plus bounded large tool results compacts under the real 1M window",
 	async ({ dlineDir, dlineDocsDir, helper, openVSCode, server, userDataDir, workspaceDir }) => {
 		e2e.setTimeout(300_000)
 		await configureDeepSeekAutoCompact(dlineDir)
@@ -2068,7 +2055,7 @@ e2e(
 			{
 				type: "tools",
 				tools: protectedFiles.map((file) => ({ id: file.callId, name: "read_file", arguments: { path: file.path } })),
-				usage: { inputTokens: 630_000, outputTokens: 100 },
+				usage: { inputTokens: 930_000, outputTokens: 100 },
 				expectedToolResults: seedFiles.map((file) => ({ callId: file.callId, contentIncludes: file.marker })),
 			},
 			{
@@ -2101,16 +2088,30 @@ e2e(
 			const ordinaryRequest = requestsAtSummary[1]
 			const summaryRequest = requestsAtSummary[2]
 			const ordinaryEstimatedTokens = Math.ceil(Buffer.byteLength(JSON.stringify(ordinaryRequest.requestBody), "utf8") / 4)
-			expect(ordinaryEstimatedTokens).toBeGreaterThan(500_000)
 			expect(ordinaryEstimatedTokens).toBeLessThan(800_000)
-			expect(ordinaryRequest).toMatchObject({ responseType: "tools", usage: { inputTokens: 630_000 } })
-			expect(summaryRequest).toMatchObject({ responseType: "tool", toolName: "summarize_task" })
+			expect(ordinaryRequest).toMatchObject({ responseType: "tools", usage: { inputTokens: 930_000 } })
+			const seedResults = ordinaryRequest.requestToolResults.filter((result) =>
+				seedFiles.some((file) => file.callId === result.callId),
+			)
+			expect(seedResults).toHaveLength(seedFiles.length)
+			for (const result of seedResults) {
+				expect(Buffer.byteLength(result.content, "utf8")).toBeLessThanOrEqual(MAX_TOOL_RESULT_TEXT_BYTES)
+				expect(result.content).toContain("[FILE TRUNCATED:")
+			}
 			expect(summaryRequest.contractError).toBeUndefined()
+			expect(summaryRequest).toMatchObject({ responseType: "tool", toolName: "summarize_task" })
 
 			const expandTaskHeader = sidebar.getByLabel("Expand task header")
 			if (await expandTaskHeader.isVisible()) await expandTaskHeader.click()
 			await expect(sidebar.locator('[title="Maximum context window size for this model"]')).toHaveText("1.0m")
-			await expect(sidebar.locator('[title="Current tokens used in this request"]')).toHaveText("630.1k")
+			const contextProgress = sidebar.getByRole("progressbar", { name: "Context window usage progress" })
+			let projectedTokens = 0
+			await expect
+				.poll(async () => {
+					projectedTokens = Number(await contextProgress.getAttribute("aria-valuenow"))
+					return projectedTokens > 930_100 && projectedTokens < 1_000_000
+				})
+				.toBe(true)
 
 			await expect(sidebar.getByText("E2E_DEEPSEEK_PRESSURE_COMPLETE", { exact: false }).last()).toBeVisible({
 				timeout: 120_000,
@@ -2122,17 +2123,19 @@ e2e(
 			expect(finalRequest).toMatchObject({ responseType: "tool", toolName: "attempt_completion" })
 			expect(finalRequest.contractError).toBeUndefined()
 			expect(finalEstimatedTokens).toBeLessThan(800_000)
+			const protectedResults = finalRequest.requestToolResults.filter((result) =>
+				protectedFiles.some((file) => file.callId === result.callId),
+			)
+			expect(protectedResults).toHaveLength(protectedFiles.length)
+			for (const result of protectedResults) {
+				expect(Buffer.byteLength(result.content, "utf8")).toBeLessThanOrEqual(MAX_TOOL_RESULT_TEXT_BYTES)
+				expect(result.content).toContain("[FILE TRUNCATED:")
+			}
 			expect(requests.every((request) => request.status === undefined && request.contractError === undefined)).toBe(true)
 			await expectCompactionSummary(sidebar, summary)
 			await expect
-				.poll(async () =>
-					Number(
-						await sidebar
-							.getByRole("progressbar", { name: "Context window usage progress" })
-							.getAttribute("aria-valuenow"),
-					),
-				)
-				.toBeLessThan(63.01)
+				.poll(async () => Number(await contextProgress.getAttribute("aria-valuenow")))
+				.toBeLessThan(projectedTokens)
 
 			const screenshotPath = e2e.info().outputPath("deepseek-context-1m-large-tool-result.png")
 			await page.screenshot({ path: screenshotPath })
@@ -2147,7 +2150,21 @@ e2e(
 			for (const file of protectedFiles) expect(apiHistory).toContain(file.marker)
 			for (const file of seedFiles) expect(apiHistory).not.toContain(file.marker)
 			expect(uiMessages).toContain(summary)
-			expect(uiMessages).toContain('"compactionStatus":"completed"')
+			const persistedCompactionTools = uiMessages
+				.split(/\r?\n/)
+				.filter(Boolean)
+				.flatMap((line): Array<{ tool?: string; compactionStatus?: string }> => {
+					const message = JSON.parse(line) as { say?: string; text?: string }
+					if (message.say !== "tool" || !message.text) return []
+					try {
+						return [JSON.parse(message.text) as { tool?: string; compactionStatus?: string }]
+					} catch {
+						return []
+					}
+				})
+			expect(persistedCompactionTools).toContainEqual(
+				expect.objectContaining({ tool: "summarizeTask", compactionStatus: "completed" }),
+			)
 			expect(uiMessages).not.toMatch(/"conversationHistoryDeletedRange":\s*\[/)
 			await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
 		} finally {

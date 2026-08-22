@@ -48,9 +48,9 @@ function getDisplayedLineSlice(content: string, startLine?: number, endLine?: nu
 
 	const requestedStart = Math.max(1, startLine ?? 1)
 	const requestedEnd = endLine !== undefined ? Math.max(1, endLine) : requestedStart + DEFAULT_MAX_LINES - 1
-	const shouldSwapBounds = endLine !== undefined && requestedEnd < requestedStart
-	const start = shouldSwapBounds ? requestedEnd : requestedStart
-	const end = Math.min(totalLines, shouldSwapBounds ? requestedStart : requestedEnd)
+	const start = Math.min(requestedStart, requestedEnd)
+	const requestedRangeEnd = Math.max(requestedStart, requestedEnd)
+	const end = Math.min(totalLines, requestedRangeEnd, start + DEFAULT_MAX_LINES - 1)
 
 	return { start, end, totalLines, lines, truncationSuffix }
 }

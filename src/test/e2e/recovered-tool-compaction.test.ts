@@ -347,9 +347,6 @@ e2e(
 				usage: { inputTokens: 60_000, outputTokens: 100 },
 			},
 			{ type: "error", status: 400, message: failureMessage },
-			{ type: "error", status: 400, message: failureMessage },
-			{ type: "error", status: 400, message: failureMessage },
-			{ type: "error", status: 400, message: failureMessage },
 			{
 				type: "tool",
 				id: "call_recovered_resume_summary",
@@ -398,11 +395,14 @@ e2e(
 			await resumeButton.click()
 			await expect(input).toHaveValue("")
 
-			await expect(resumed.sidebar.getByText("Automatic retry stopped", { exact: false }).last()).toBeVisible({
+			await expect(resumed.sidebar.getByText("Conversation compaction failed:", { exact: true })).toBeVisible({
 				timeout: 120_000,
 			})
-			await expect(resumed.sidebar.getByText(failureMessage, { exact: false }).last()).toBeVisible()
-			await expect.poll(() => server.getRequestCount("openai-compatible-responses")).toBe(5)
+			await expect(resumed.sidebar.getByText("Automatic retry stopped", { exact: true })).toHaveCount(0)
+			await expect.poll(() => server.getRequestCount("openai-compatible-responses")).toBe(2)
+			// Cross the former 2-second first retry delay and prove the immutable 400 request stays terminal.
+			await resumed.page.waitForTimeout(3_000)
+			expect(server.getRequestCount("openai-compatible-responses")).toBe(2)
 			const outputBeforeRetry = E2ETestHelper.readDlineOutputIfPresent(userDataDir) ?? ""
 			expect(outputBeforeRetry).not.toContain("hydrated_interaction_mismatch")
 
@@ -413,7 +413,7 @@ e2e(
 			await expect(resumed.sidebar.getByText("E2E_RECOVERED_RESUME_RETRY_OK", { exact: false }).last()).toBeVisible({
 				timeout: 60_000,
 			})
-			await expect.poll(() => server.getRequestCount("openai-compatible-responses")).toBe(7)
+			await expect.poll(() => server.getRequestCount("openai-compatible-responses")).toBe(4)
 			await expect(resumed.sidebar.getByTestId("error-retry-box")).toHaveCount(0)
 			const outputAfterRetry = await E2ETestHelper.readDlineOutput(userDataDir)
 			expect(outputAfterRetry).not.toContain("hydrated_interaction_mismatch")

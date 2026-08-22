@@ -88,7 +88,7 @@ export function resolveContextWindowProjection(input: ResolveContextWindowProjec
 				? Math.max(0, normalizedCandidateEstimate - previousEstimatedTokens)
 				: latestReliableIndex < 0
 					? normalizedCandidateEstimate
-					: 0
+					: Math.max(0, normalizedCandidateEstimate - baselineTokens)
 			: normalizeTokens(input.candidateDeltaTokens)
 	const projectedUsageTokens = baselineTokens + pendingDeltaTokens + candidateDeltaTokens
 	const remainingTokens = Math.max(0, normalizedWindow - projectedUsageTokens)

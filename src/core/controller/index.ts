@@ -765,6 +765,15 @@ export class Controller {
 		return new ProfileSwitchCoordinator({ engine: this.contextTransitionEngine, policy })
 	}
 
+	/** Resolve the stable task-local Profile identity for one mode. */
+	private resolveTaskProfileId(mode: Mode): string | undefined {
+		if (!this.task) return undefined
+		const config = this.stateManager.getApiConfigurationForTask(this.task.taskId)
+		return mode === "plan"
+			? (this.task.taskSm.planModeProfileId ?? config.planModeProfileId)
+			: (this.task.taskSm.actModeProfileId ?? config.actModeProfileId)
+	}
+
 	/** Resolve the effective task-local Profile name for one mode. */
 	private resolveTaskProfileName(mode: Mode): string | undefined {
 		if (!this.task) return undefined
@@ -778,16 +787,21 @@ export class Controller {
 	private resolveModeProfile(mode: Mode): ResolvedModeProfile | undefined {
 		if (!this.task) return undefined
 		const config = this.stateManager.getApiConfigurationForTask(this.task.taskId)
-		const profileName = this.resolveTaskProfileName(mode)
-		const profile = findEnabledProfileByName(profileName)
-		const providerContextWindow = profile ? getProfileModelInfo(profile).capabilities?.contextWindow : undefined
-		if (!profileName || !providerContextWindow) return undefined
+		const profileReference = this.resolveTaskProfileId(mode) ?? this.resolveTaskProfileName(mode)
+		const resolution = resolveProfileReference(readApiProfiles(), profileReference)
+		if (resolution.status !== "resolved") return undefined
+		const providerContextWindow = getProfileModelInfo(resolution.profile).capabilities?.contextWindow
+		if (!providerContextWindow) return undefined
 
 		const effectiveConfig = {
 			...config,
+			...(this.task.taskSm.planModeProfileId !== undefined && { planModeProfileId: this.task.taskSm.planModeProfileId }),
 			...(this.task.taskSm.planModeProfile !== undefined && { planModeProfile: this.task.taskSm.planModeProfile }),
+			...(this.task.taskSm.actModeProfileId !== undefined && { actModeProfileId: this.task.taskSm.actModeProfileId }),
 			...(this.task.taskSm.actModeProfile !== undefined && { actModeProfile: this.task.taskSm.actModeProfile }),
-			...(mode === "plan" ? { planModeProfile: profileName } : { actModeProfile: profileName }),
+			...(mode === "plan"
+				? { planModeProfileId: resolution.profileId, planModeProfile: resolution.profileName }
+				: { actModeProfileId: resolution.profileId, actModeProfile: resolution.profileName }),
 			ulid: this.task.ulid,
 		}
 		const executionApi = buildApiHandler(effectiveConfig, mode)
@@ -795,7 +809,14 @@ export class Controller {
 			providerContextWindow,
 			maxContextTokens: this.stateManager.getGlobalSettingsKey("autoCondenseMaxContextTokens"),
 		})
-		return { mode, profile: profileName, contextWindow: targetContextWindow, fittingExitTarget, executionApi }
+		return {
+			mode,
+			profileId: resolution.profileId,
+			profile: resolution.profileName,
+			contextWindow: targetContextWindow,
+			fittingExitTarget,
+			executionApi,
+		}
 	}
 
 	/** Resolve one user-selected Profile into a frozen active-mode request scope. */
@@ -834,7 +855,7 @@ export class Controller {
 		return Boolean(
 			this.task?.taskId === operation.taskId &&
 				source?.mode === operation.source.mode &&
-				source.profile === operation.source.profile &&
+				source.profileId === operation.source.profileId &&
 				source.contextWindow === operation.source.contextWindow,
 		)
 	}
@@ -896,7 +917,7 @@ export class Controller {
 		return this.modeSwitchCoordinator.cancel(operationId)
 	}
 
-	/** Request a delayed-adoption Profile transition for the active task. */
+	/** Request a confirmation-gated Profile transition for the active task. */
 	async requestProfileSwitch(
 		targetProfileReference: string,
 		targetModes: Mode[],

@@ -70,6 +70,7 @@ describe("Task context compaction regressions", () => {
 			taskId: "task-1",
 			taskState: { forceTruncateAvailable: false, autoRetryAttempts: 0 },
 			contextCompactionFailureReasons: new Map([["operation-1", "No tool output found"]]),
+			contextCompactionRetryProgress: new Map(),
 			endAutoRetrySequence: vi.fn(),
 			say: vi.fn(async () => undefined),
 			getRuntimeState: () => ({ revision: 9 }),
@@ -90,6 +91,32 @@ describe("Task context compaction regressions", () => {
 		await presentTerminalCompactionFailure.call(task, "operation-1", 79)
 
 		expect(order).toEqual(["release", "recover"])
+		expect(task.say).not.toHaveBeenCalled()
+		expect(task.taskState.autoRetryAttempts).toBe(0)
 		expect(recoverApiFailure).toHaveBeenCalledWith(expect.objectContaining({ apiIndex: 79, persistedRequest: false }))
+	})
+
+	it("marks terminal compaction as exhausted only after the Pass retry budget was actually used", async () => {
+		const task = {
+			taskId: "task-1",
+			taskState: { forceTruncateAvailable: false, autoRetryAttempts: 0 },
+			contextCompactionFailureReasons: new Map([["operation-1", "Service unavailable"]]),
+			contextCompactionRetryProgress: new Map([["operation-1", { retryAttempt: 3, maxRetryAttempts: 3 }]]),
+			endAutoRetrySequence: vi.fn(),
+			say: vi.fn(async () => undefined),
+			getRuntimeState: () => ({ revision: 9 }),
+			interactionCoordinator: { releaseApiContinuationForRequestGate: vi.fn(async () => true) },
+			recoverApiFailure: vi.fn(async () => undefined),
+		}
+		const presentTerminalCompactionFailure = Reflect.get(Task.prototype, "presentTerminalCompactionFailure") as (
+			this: typeof task,
+			operationId: string,
+			apiIndex: number,
+		) => Promise<void>
+
+		await presentTerminalCompactionFailure.call(task, "operation-1", 79)
+
+		expect(task.taskState.autoRetryAttempts).toBe(3)
+		expect(task.say).toHaveBeenCalledWith("error_retry", expect.stringContaining('"failed":true'))
 	})
 })

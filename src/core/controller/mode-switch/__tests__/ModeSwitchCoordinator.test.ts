@@ -34,6 +34,7 @@ interface TestHarness {
 
 const SOURCE: ResolvedModeProfile = {
 	mode: "plan",
+	profileId: "large-id",
 	profile: "large",
 	contextWindow: 272_000,
 	fittingExitTarget: 217_600,
@@ -43,6 +44,7 @@ const TARGET_API = { getModel: vi.fn() } as unknown as ApiHandler
 
 const TARGET: ResolvedModeProfile = {
 	mode: "act",
+	profileId: "small-id",
 	profile: "small",
 	contextWindow: 128_000,
 	fittingExitTarget: 102_400,
@@ -120,8 +122,10 @@ describe("ModeSwitchCoordinator", () => {
 		expect(harness.coordinator.getSnapshot()).toEqual({ phase: "idle" })
 	})
 
-	/** Directly commit when source and target profiles are identical. */
-	it("switches directly for the same profile", async () => {
+	/** Bypass preflight and the shared lease when split modes resolve to the same Profile, even above the target window. */
+	it("switches directly for the same profile even when the target candidate exceeds the window", async () => {
+		harness = createHarness(400_000)
+		const acquire = vi.spyOn(harness.lease, "acquire")
 		const sharedProfile: ModeProfileResolver = {
 			getSource: () => ({ ...SOURCE, profile: "shared" }),
 			resolve: (mode) => ({ ...SOURCE, mode, profile: "shared", executionApi: TARGET_API }),
@@ -140,11 +144,81 @@ describe("ModeSwitchCoordinator", () => {
 		const result = await harness.coordinator.request({ taskId: "task-1", targetMode: "act" })
 
 		expect(result.status).toBe("switched")
+		expect(harness.preflight).not.toHaveBeenCalled()
+		expect(acquire).not.toHaveBeenCalled()
+		expect(harness.lease.getActive()).toBeUndefined()
 		expect(harness.compact).not.toHaveBeenCalled()
+		expect(harness.commitMode).toHaveBeenCalledOnce()
+		expect(harness.coordinator.getSnapshot()).toEqual({ phase: "idle" })
+	})
+
+	/** Treat duplicate display names with different stable IDs as different Profiles. */
+	it("does not bypass preflight for different profile ids with the same display name", async () => {
+		const acquire = vi.spyOn(harness.lease, "acquire")
+		const duplicateNames: ModeProfileResolver = {
+			getSource: () => ({ ...SOURCE, profileId: "source-id", profile: "duplicate" }),
+			resolve: (mode) => ({ ...TARGET, mode, profileId: "target-id", profile: "duplicate", executionApi: TARGET_API }),
+		}
+		harness.coordinator = new ModeSwitchCoordinator({
+			profiles: duplicateNames,
+			pressure: harness.pressure,
+			compaction: harness.compaction,
+			commit: harness.commit,
+			lease: harness.lease,
+			postState: harness.postState,
+			createId: () => "operation-1",
+			getTaskId: () => "task-1",
+		})
+
+		const result = await harness.coordinator.request({ taskId: "task-1", targetMode: "act" })
+
+		expect(result).toEqual({ status: "confirmation_required", operationId: "operation-1" })
+		expect(acquire).toHaveBeenCalledOnce()
+		expect(harness.preflight).toHaveBeenCalledWith(TARGET_API, "act", undefined)
+		expect(harness.commitMode).not.toHaveBeenCalled()
+	})
+
+	/** Serialize the actual same-Profile commit without publishing transition state or acquiring the shared lease. */
+	it("rejects re-entry while a same-profile direct commit is unresolved", async () => {
+		let resolveCommit: (() => void) | undefined
+		harness.commitMode.mockReturnValueOnce(
+			new Promise<void>((resolve) => {
+				resolveCommit = resolve
+			}),
+		)
+		const acquire = vi.spyOn(harness.lease, "acquire")
+		const sharedProfile: ModeProfileResolver = {
+			getSource: () => ({ ...SOURCE, profile: "shared" }),
+			resolve: (mode) => ({ ...SOURCE, mode, profile: "shared", executionApi: TARGET_API }),
+		}
+		harness.coordinator = new ModeSwitchCoordinator({
+			profiles: sharedProfile,
+			pressure: harness.pressure,
+			compaction: harness.compaction,
+			commit: harness.commit,
+			lease: harness.lease,
+			postState: harness.postState,
+			createId: () => "operation-1",
+			getTaskId: () => "task-1",
+		})
+
+		const first = harness.coordinator.request({ taskId: "task-1", targetMode: "act" })
+		await Promise.resolve()
+		const second = await harness.coordinator.request({ taskId: "task-1", targetMode: "act" })
+
+		expect(second).toEqual({ status: "in_progress", operationId: "operation-1" })
+		expect(harness.preflight).not.toHaveBeenCalled()
+		expect(acquire).not.toHaveBeenCalled()
+		expect(harness.lease.getActive()).toBeUndefined()
+		expect(harness.coordinator.getSnapshot()).toEqual({ phase: "idle" })
+		expect(harness.commitMode).toHaveBeenCalledOnce()
+		resolveCommit?.()
+		await expect(first).resolves.toEqual({ status: "switched", operationId: "operation-1" })
 	})
 
 	/** Project confirmation details from the complete target candidate without committing target mode. */
 	it("requests confirmation only when the target candidate strictly exceeds the target window", async () => {
+		const acquire = vi.spyOn(harness.lease, "acquire")
 		const result = await harness.coordinator.request({ taskId: "task-1", targetMode: "act" })
 
 		expect(result).toEqual({ status: "confirmation_required", operationId: "operation-1" })
@@ -157,6 +231,8 @@ describe("ModeSwitchCoordinator", () => {
 			currentTokens: 128_001,
 			fittingExitTarget: 102_400,
 		})
+		expect(acquire).toHaveBeenCalledOnce()
+		expect(harness.preflight).toHaveBeenCalledWith(TARGET_API, "act", undefined)
 		expect(harness.commitMode).not.toHaveBeenCalled()
 	})
 
@@ -264,6 +340,31 @@ describe("ModeSwitchCoordinator", () => {
 
 		expect(result).toEqual({ status: "in_progress", operationId: "profile-operation-1" })
 		expect(harness.preflight).not.toHaveBeenCalled()
+	})
+
+	/** Preserve an already-active shared transition even when the requested split modes use the same Profile. */
+	it("does not bypass an existing shared lease for the same profile", async () => {
+		const sharedProfile: ModeProfileResolver = {
+			getSource: () => ({ ...SOURCE, profile: "shared" }),
+			resolve: (mode) => ({ ...SOURCE, mode, profile: "shared", executionApi: TARGET_API }),
+		}
+		harness.coordinator = new ModeSwitchCoordinator({
+			profiles: sharedProfile,
+			pressure: harness.pressure,
+			compaction: harness.compaction,
+			commit: harness.commit,
+			lease: harness.lease,
+			postState: harness.postState,
+			createId: () => "operation-1",
+			getTaskId: () => "task-1",
+		})
+		harness.lease.acquire({ kind: "profile", operationId: "profile-operation-1", taskId: "task-1" })
+
+		const result = await harness.coordinator.request({ taskId: "task-1", targetMode: "act" })
+
+		expect(result).toEqual({ status: "in_progress", operationId: "profile-operation-1" })
+		expect(harness.preflight).not.toHaveBeenCalled()
+		expect(harness.commitMode).not.toHaveBeenCalled()
 	})
 
 	/** Reject a second request until the active transaction reaches a terminal state. */

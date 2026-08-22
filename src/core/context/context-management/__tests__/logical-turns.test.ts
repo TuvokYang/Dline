@@ -96,6 +96,59 @@ describe("logical turn indexing", () => {
 		expect(serialized(result.protectedTail)).toContain("Turn C request")
 	})
 
+	it("keeps parallel ordinary tool results atomic when their payload contains user-content tags", () => {
+		const history: ClineStorageMessage[] = [
+			textMessage("user", "<task>Inspect the implementation</task>"),
+			{
+				role: "assistant",
+				content: [
+					{
+						type: "tool_use",
+						function_id: "call-read-a",
+						dline_tid: "tid-call-read-a",
+						name: "read_file",
+						input: {},
+					},
+					{
+						type: "tool_use",
+						function_id: "call-read-b",
+						dline_tid: "tid-call-read-b",
+						name: "read_file",
+						input: {},
+					},
+				],
+			},
+			{
+				role: "user",
+				content: [
+					{
+						type: "tool_result",
+						function_id: "call-read-a",
+						dline_tid: "tid-call-read-a",
+						content: [{ type: "text", text: 'prompt_1: "<task>E2E_BATCH_CANCEL_ONE</task>"' }],
+					},
+					{
+						type: "tool_result",
+						function_id: "call-read-b",
+						dline_tid: "tid-call-read-b",
+						content: [{ type: "text", text: "const sample = '<feedback>fixture</feedback>'" }],
+					},
+				],
+			},
+		]
+
+		const result = indexLogicalTurns(history)
+
+		expect(result.turns).toHaveLength(1)
+		expect(result.turns[0]).toMatchObject({
+			startIndex: 0,
+			endIndex: 2,
+			functionIds: ["call-read-a", "call-read-b"],
+		})
+		expect(result.protectedTail).toEqual([])
+		expect(result.issues).toEqual([])
+	})
+
 	it("protects an incomplete tool-use tail instead of exposing it as a compressible turn", () => {
 		const completeTurn = [textMessage("user", "<task>Complete</task>"), textMessage("assistant", "Complete response")]
 		const incompleteTail = [
@@ -122,6 +175,37 @@ describe("logical turn indexing", () => {
 
 		expect(result.turns.map(({ startIndex, endIndex }) => [startIndex, endIndex])).toEqual([[0, 2]])
 		expect(result.turns[0]).toMatchObject({ functionIds: ["call-a"] })
+		expect(result.protectedTail).toEqual([])
+		expect(result.issues).toEqual([])
+	})
+
+	it("protects an unpaired tool-use after an earlier completed tool turn", () => {
+		const history = [
+			textMessage("user", "<task>Read files</task>"),
+			toolUse("call-seed", "read_file"),
+			toolResult("call-seed", "large seed result"),
+			toolUse("call-protected", "read_file"),
+		]
+
+		const result = indexLogicalTurns(history)
+
+		expect(result.turns.map(({ startIndex, endIndex }) => [startIndex, endIndex])).toEqual([[0, 2]])
+		expect(result.protectedStartIndex).toBe(3)
+		expect(result.protectedTail).toEqual([history[3]])
+		expect(result.issues).toEqual([{ kind: "unpaired_tool_use", messageIndex: 3, functionId: "call-protected" }])
+	})
+
+	it("keeps a plain assistant continuation in the completed tool turn", () => {
+		const history = [
+			textMessage("user", "<task>Ask a question</task>"),
+			toolUse("call-a"),
+			toolResult("call-a", "plain tool output without feedback tags"),
+			textMessage("assistant", "The tool result has been processed."),
+		]
+
+		const result = indexLogicalTurns(history)
+
+		expect(result.turns.map(({ startIndex, endIndex }) => [startIndex, endIndex])).toEqual([[0, 3]])
 		expect(result.protectedTail).toEqual([])
 		expect(result.issues).toEqual([])
 	})

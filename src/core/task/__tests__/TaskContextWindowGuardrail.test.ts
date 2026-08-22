@@ -263,7 +263,9 @@ describe("Task context-window final admission guard", () => {
 		)
 
 		expect(source).toContain("this.contextCompactionFailureReasons.set(input.operationId, reason)")
-		expect(presenter).toContain("this.taskState.autoRetryAttempts = MAX_AUTO_RETRY_ATTEMPTS")
+		expect(source).toContain("private readonly contextCompactionRetryProgress = new Map")
+		expect(presenter).toContain("this.contextCompactionRetryProgress.get(operationId)")
+		expect(presenter).toContain("if (retriesExhausted)")
 		expect(presenter).toContain('"error_retry"')
 		expect(presenter).toContain("failed: true")
 		expect(presenter).toContain("await this.recoverApiFailure({")
