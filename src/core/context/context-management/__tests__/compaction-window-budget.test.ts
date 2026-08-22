@@ -34,7 +34,7 @@ describe("compaction window budget", () => {
 		expect(result.budget.estimatedInputTokens).toBeGreaterThan(0)
 		expect(result.budget.rawRemainder).toBe(32_000 - result.budget.estimatedInputTokens)
 		expect(result.budget.availableRemainder).toBe(Math.max(0, result.budget.rawRemainder))
-		expect(result.budget.providerOutputCap).toBe(Math.min(result.budget.availableRemainder, 30_000))
+		expect(result.budget.providerOutputCap).toBe(Math.min(result.budget.availableRemainder, 4_096))
 		expect(result.budget.outputHardLimit).toBe(result.budget.providerOutputCap)
 		expect(result.budget.decision).toBe("ready")
 		expect(result.budget.recommendedMin).toBe(Math.min(Math.floor(result.budget.availableRemainder * 0.8), 5_000))
@@ -71,7 +71,7 @@ describe("compaction window budget", () => {
 		expect(rendered).toContain("Preserve user feedback.")
 	})
 
-	it("ignores model output metadata when resolving the compaction policy cap", () => {
+	it("caps the summary response at the model output limit without exceeding context remainder", () => {
 		const common = {
 			contextWindow: 64_000,
 			systemPrompt: "system",
@@ -81,9 +81,10 @@ describe("compaction window budget", () => {
 		const small = resolveCompactionWindowBudget({ ...common, maxOutputTokens: 1_024 })
 		const large = resolveCompactionWindowBudget({ ...common, maxOutputTokens: 500_000 })
 
-		expect(missing.budget.providerOutputCap).toBeGreaterThan(0)
-		expect(small.budget.providerOutputCap).toBe(missing.budget.providerOutputCap)
-		expect(large.budget.providerOutputCap).toBe(missing.budget.providerOutputCap)
+		expect(missing.budget.providerOutputCap).toBe(missing.budget.availableRemainder)
+		expect(small.budget.providerOutputCap).toBe(Math.min(small.budget.availableRemainder, 1_024))
+		expect(large.budget.providerOutputCap).toBe(Math.min(large.budget.availableRemainder, 500_000))
+		expect(small.budget.providerOutputCap).toBeLessThan(missing.budget.providerOutputCap)
 	})
 
 	it("requests a smaller input instead of inventing an output cap when no remainder exists", () => {

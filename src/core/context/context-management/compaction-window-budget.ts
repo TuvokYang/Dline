@@ -72,7 +72,11 @@ function computeBudget(input: ResolveCompactionWindowBudgetInput, messages: Clin
 	})
 	const rawRemainder = Math.floor(input.contextWindow) - estimatedInputTokens
 	const availableRemainder = Math.max(0, rawRemainder)
-	const providerOutputCap = Math.min(30_000, availableRemainder)
+	const modelOutputLimit =
+		typeof input.maxOutputTokens === "number" && Number.isFinite(input.maxOutputTokens) && input.maxOutputTokens > 0
+			? Math.floor(input.maxOutputTokens)
+			: availableRemainder
+	const providerOutputCap = Math.min(modelOutputLimit, availableRemainder)
 	const recommendedMin = Math.min(Math.floor(availableRemainder * 0.8), 5_000)
 	const recommendedMax = Math.min(Math.floor(availableRemainder * 0.9), 30_000)
 

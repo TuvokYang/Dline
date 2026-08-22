@@ -442,6 +442,31 @@ describe("ContextWindowSegmentedProgress", () => {
 		expect(env.style.width).toBe("0.05%")
 	})
 
+	it("quantizes repeating segment widths without overflowing the track", () => {
+		render(
+			<ContextWindowSegmentedProgress
+				snapshot={snapshot({
+					phase: "sending",
+					durableContextTokens: 1,
+					pendingSendTokens: 1,
+					receivingTokens: 0,
+					stagedTokens: 0,
+					environmentTokens: 1,
+					contextWindow: 3,
+				})}
+			/>,
+		)
+
+		const widths = [
+			screen.getByTestId("context-window-segment-durable"),
+			screen.getByTestId("context-window-segment-active"),
+			screen.getByTestId("context-window-segment-staged"),
+			screen.getByTestId("context-window-segment-environment"),
+		].map((segment) => segment.style.width)
+		expect(widths).toEqual(["33.333333%", "33.333333%", "0%", "33.333284%"])
+		expect(widths.reduce((total, width) => total + Number.parseFloat(width), 0)).toBeLessThanOrEqual(100)
+	})
+
 	it("keeps raw widths within the track near the context limit", () => {
 		render(
 			<ContextWindowSegmentedProgress

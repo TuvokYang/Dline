@@ -1494,18 +1494,23 @@ export class Task {
 		// Use the same authoritative occupancy projection as admission. The frozen
 		// Provider durable baseline and the local absolute estimate are different
 		// measurement scales and must never be subtracted directly.
-		const durableContextTokens = this.contextWindowIndicator.getSnapshot().durableContextTokens
+		const currentIndicator = this.contextWindowIndicator.getSnapshot()
+		const durableContextTokens = currentIndicator.durableContextTokens
+		const requestPressures = this.getContextWindowRequestPressures()
 		const occupancy = resolveContextWindowProjection({
-			requestInfos: this.getContextWindowRequestPressures(),
+			requestInfos: requestPressures,
 			candidateEstimatedTokens: estimatedSegments.totalTokens,
 			contextWindow,
 			triggerTokens: contextWindow,
 		})
-		const segments = projectAuthoritativeContextWindowIndicatorSegments({
-			projectedTotalTokens: occupancy.projectedUsageTokens,
-			durableContextTokens,
-			estimatedEnvironmentTokens: estimatedSegments.environmentTokens,
-		})
+		const segments =
+			requestPressures.length === 0 && currentIndicator.revision === 0
+				? estimatedSegments
+				: projectAuthoritativeContextWindowIndicatorSegments({
+						projectedTotalTokens: occupancy.projectedUsageTokens,
+						durableContextTokens,
+						estimatedEnvironmentTokens: estimatedSegments.environmentTokens,
+					})
 		this.ordinaryContextIndicatorLineageByApiIndex.set(apiIndex, lineage)
 		this.ordinaryContextIndicatorReceivingByApiIndex.set(apiIndex, new ContextWindowReceivingTracker())
 		await this.publishContextWindowIndicatorSnapshot(
@@ -1547,7 +1552,7 @@ export class Task {
 		)
 	}
 
-	/** Commit the completed Provider exchange into Durable and clear per-request bookkeeping. */
+	/** Stage the completed Provider exchange and clear per-request bookkeeping. */
 	private async settleOrdinaryIndicatorRound(): Promise<void> {
 		const pendingEntries = [...this.ordinaryContextIndicatorLineageByApiIndex.entries()]
 		if (pendingEntries.length === 0) return

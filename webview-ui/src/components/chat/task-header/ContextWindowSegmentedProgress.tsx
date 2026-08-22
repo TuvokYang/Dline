@@ -27,6 +27,8 @@ interface SegmentTransitionState {
 
 const MOTION_SETTLE_MS = 720
 const MIN_VISIBLE_SEGMENT_PX = 3
+const WIDTH_PERCENT_SCALE = 1_000_000
+const TRACK_WIDTH_SAFETY_PERCENT = 0.000_05
 
 const SEGMENT_COLORS: Record<ContextWindowSegmentKind, string> = {
 	durable: "var(--vscode-charts-green, #3fb950)",
@@ -118,6 +120,11 @@ function transientTransform(motion: ContextWindowSegmentMotion): string {
 	return "translateX(0)"
 }
 
+function quantizeWidthPercent(widthPercent: number): number {
+	const bounded = Math.max(0, Math.min(100, widthPercent))
+	return Math.floor(bounded * WIDTH_PERCENT_SCALE + 1e-6) / WIDTH_PERCENT_SCALE
+}
+
 /** Render the authoritative context snapshot as four ordered, independently animated segments. */
 const ContextWindowSegmentedProgress = memo(({ snapshot, onOccupiedMouseEnter }: ContextWindowSegmentedProgressProps) => {
 	const transition = useSegmentTransition(snapshot)
@@ -147,24 +154,48 @@ const ContextWindowSegmentedProgress = memo(({ snapshot, onOccupiedMouseEnter }:
 			}),
 		[activeDisplayTokens, stagedDisplayTokens, snapshot],
 	)
-	const segments = useMemo<SegmentDefinition[]>(
-		() =>
-			viewModel.segments.map((segment) => ({
-				...segment,
-				color: getSegmentColor(segment),
-				temporary: segment.kind === "active" || segment.kind === "staged",
-				transitionSource:
-					segment.kind === "active" && activeDisplayTokens !== getContextWindowActiveTokens(snapshot)
-						? "previous"
-						: segment.kind === "staged" && stagedDisplayTokens !== (snapshot.stagedTokens ?? 0)
-							? "previous"
-							: "authoritative",
-			})),
-		[activeDisplayTokens, stagedDisplayTokens, snapshot, viewModel.segments],
-	)
+	const segments = useMemo<SegmentDefinition[]>(() => {
+		const projected = viewModel.segments.map((segment) => ({
+			...segment,
+			widthPercent: quantizeWidthPercent(segment.widthPercent),
+			color: getSegmentColor(segment),
+			temporary: segment.kind === "active" || segment.kind === "staged",
+			transitionSource:
+				segment.kind === "active" && activeDisplayTokens !== getContextWindowActiveTokens(snapshot)
+					? ("previous" as const)
+					: segment.kind === "staged" && stagedDisplayTokens !== (snapshot.stagedTokens ?? 0)
+						? ("previous" as const)
+						: ("authoritative" as const),
+		}))
+		const totalWidth = projected.reduce((total, segment) => total + segment.widthPercent, 0)
+		const hasQuantizedWidth = projected.some(
+			(segment, index) => segment.widthPercent !== viewModel.segments[index]?.widthPercent,
+		)
+		const maximumTrackWidth = 100 - TRACK_WIDTH_SAFETY_PERCENT
+		if (!hasQuantizedWidth || totalWidth <= maximumTrackWidth) return projected
+		let lastVisibleIndex = -1
+		for (let index = projected.length - 1; index >= 0; index -= 1) {
+			const segment = projected[index]
+			if (segment && segment.displayTokens > 0) {
+				lastVisibleIndex = index
+				break
+			}
+		}
+		if (lastVisibleIndex < 0) return projected
+		const reduction = totalWidth - maximumTrackWidth
+		return projected.map((segment, index) =>
+			index === lastVisibleIndex
+				? { ...segment, widthPercent: quantizeWidthPercent(Math.max(0, segment.widthPercent - reduction)) }
+				: segment,
+		)
+	}, [activeDisplayTokens, stagedDisplayTokens, snapshot, viewModel.segments])
 	const nonZeroSegmentCount = segments.filter((segment) => segment.displayTokens > 0).length
-	const rawWidthPercent = segments.reduce((total, segment) => total + (segment.displayTokens > 0 ? segment.widthPercent : 0), 0)
-	const safeMinimumWidthPercent = nonZeroSegmentCount > 0 ? Math.max(0, (100 - rawWidthPercent) / nonZeroSegmentCount) : 0
+	const rawWidthPercent = viewModel.segments.reduce(
+		(total, segment) => total + (segment.displayTokens > 0 ? segment.widthPercent : 0),
+		0,
+	)
+	const safeMinimumWidthPercent =
+		nonZeroSegmentCount > 0 ? quantizeWidthPercent(Math.max(0, (100 - rawWidthPercent) / nonZeroSegmentCount)) : 0
 	const safeMinimumWidth = `min(${MIN_VISIBLE_SEGMENT_PX}px, ${safeMinimumWidthPercent}%)`
 
 	return (

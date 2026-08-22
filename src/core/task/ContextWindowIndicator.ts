@@ -251,9 +251,16 @@ export class ContextWindowIndicator {
 			return this.getSnapshot()
 		}
 		const pendingSendTokens = normalizeTokens(this.current.pendingSendTokens)
+		const durableContextTokens =
+			authoritativeContextTokens > 0
+				? Math.min(
+						this.current.durableContextTokens,
+						Math.max(0, authoritativeContextTokens - this.current.environmentTokens - receivingTokens),
+					)
+				: this.current.durableContextTokens
 		const availableCurrentInputTokens = Math.max(
 			0,
-			authoritativeContextTokens - this.current.durableContextTokens - this.current.environmentTokens - receivingTokens,
+			authoritativeContextTokens - durableContextTokens - this.current.environmentTokens - receivingTokens,
 		)
 		const stagedTokens = authoritativeContextTokens > 0 ? availableCurrentInputTokens : pendingSendTokens
 		this.completedExchangeTokens = stagedTokens
@@ -262,6 +269,7 @@ export class ContextWindowIndicator {
 			...this.current,
 			revision: this.current.revision + 1,
 			phase: "receiving",
+			durableContextTokens,
 			pendingSendTokens: 0,
 			receivingTokens,
 			stagedTokens,
@@ -388,13 +396,11 @@ export class ContextWindowIndicator {
 		if (!isSameContextWindowIndicatorLineage(this.current.lineage, input.lineage) || this.current.phase === "stable") {
 			return this.getSnapshot()
 		}
-		if (this.current.phase === "sending" || this.current.phase === "receiving") {
-			this.foldRound({
-				lineage: input.lineage,
-				authoritativeContextTokens: input.authoritativeContextTokens,
-				updatedAt: input.updatedAt,
-			})
-		}
+		const authoritativeContextTokens = normalizeTokens(input.authoritativeContextTokens ?? 0)
+		this.completedExchangeTokens =
+			authoritativeContextTokens > 0
+				? Math.max(0, authoritativeContextTokens - this.current.durableContextTokens - this.current.environmentTokens)
+				: normalizeTokens(this.completedExchangeTokens + this.current.pendingSendTokens + this.current.receivingTokens)
 		this.current = {
 			...this.current,
 			revision: this.current.revision + 1,

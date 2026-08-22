@@ -3,7 +3,11 @@ import {
 	estimateContextWindowCandidate,
 	resolveContextWindowProjection,
 } from "@core/context/context-management/context-window-projection"
-import type { ContextWindowIndicatorLineage, ContextWindowIndicatorSnapshot } from "@shared/context-window-indicator"
+import {
+	type ContextWindowIndicatorLineage,
+	type ContextWindowIndicatorSnapshot,
+	getContextWindowIndicatorTotalTokens,
+} from "@shared/context-window-indicator"
 import { describe, expect, it, vi } from "vitest"
 import { ContextWindowIndicator } from "../ContextWindowIndicator"
 import { estimateContextWindowIndicatorSegments } from "../ContextWindowIndicatorProjection"
@@ -19,6 +23,7 @@ interface RoundTaskHarness {
 	contextWindowIndicator: ContextWindowIndicator
 	ordinaryContextIndicatorLineageByApiIndex: Map<number, ContextWindowIndicatorLineage>
 	ordinaryContextIndicatorReceivingByApiIndex: Map<number, ContextWindowReceivingTracker>
+	apiRateMetricsService: { setTaskLoopActive: ReturnType<typeof vi.fn> }
 	postStateToWebview: ReturnType<typeof vi.fn>
 	getContextWindowIndicatorProfile(mode: string, profileName?: string): { profileId?: string; profileName?: string }
 	getContextWindowRequestPressures(): Array<{
@@ -59,6 +64,7 @@ function createHarness(durableContextTokens = 100): RoundTaskHarness {
 		contextWindowIndicator,
 		ordinaryContextIndicatorLineageByApiIndex: new Map(),
 		ordinaryContextIndicatorReceivingByApiIndex: new Map(),
+		apiRateMetricsService: { setTaskLoopActive: vi.fn() },
 		postStateToWebview: vi.fn(async () => undefined),
 		getContextWindowIndicatorProfile: vi.fn(() => ({})),
 		getContextWindowRequestPressures: vi.fn(() => []),
@@ -275,12 +281,7 @@ describe("Task ordinary indicator round folding", () => {
 
 		const calibrated = task.contextWindowIndicator.getSnapshot()
 		expect(calibrated.receivingTokens).toBe(800)
-		expect(
-			calibrated.durableContextTokens +
-				calibrated.pendingSendTokens +
-				calibrated.receivingTokens +
-				calibrated.environmentTokens,
-		).toBe(2_000)
+		expect(getContextWindowIndicatorTotalTokens(calibrated)).toBe(2_000)
 	})
 
 	it("accepts split Provider usage and does not double-count repeated output snapshots", async () => {
@@ -297,9 +298,7 @@ describe("Task ordinary indicator round folding", () => {
 		})
 
 		let snapshot = task.contextWindowIndicator.getSnapshot()
-		expect(
-			snapshot.durableContextTokens + snapshot.pendingSendTokens + snapshot.receivingTokens + snapshot.environmentTokens,
-		).toBe(140_015)
+		expect(getContextWindowIndicatorTotalTokens(snapshot)).toBe(140_015)
 		expect(snapshot.receivingTokens).toBe(0)
 		expect(snapshot.phase).toBe("receiving")
 

@@ -1,6 +1,10 @@
 import type { CompactionCheckpointHead } from "@core/context/context-management/compaction-checkpoint-chain"
-import type { ContextCompactionSessionEvent } from "@core/task/ContextCompactionSession"
-import type { ContextWindowIndicatorLineage, ContextWindowIndicatorSnapshot } from "@shared/context-window-indicator"
+import type { ContextCompactionSessionEvent, ContextCompactionSessionInput } from "@core/task/ContextCompactionSession"
+import {
+	type ContextWindowIndicatorLineage,
+	type ContextWindowIndicatorSnapshot,
+	getContextWindowIndicatorTotalTokens,
+} from "@shared/context-window-indicator"
 import { describe, expect, it, vi } from "vitest"
 import { ContextWindowIndicator } from "../ContextWindowIndicator"
 import { ContextWindowReceivingTracker } from "../ContextWindowReceivingTracker"
@@ -9,11 +13,18 @@ import { Task } from "../index"
 type IndicatorTaskHarness = {
 	taskId: string
 	taskState: { contextWindowIndicator?: ContextWindowIndicatorSnapshot }
+	messageStateHandler: { clineMessages: Array<{ say?: string; text?: string }> }
 	contextWindowIndicator: ContextWindowIndicator
 	ordinaryContextIndicatorLineageByApiIndex: Map<number, ContextWindowIndicatorLineage>
 	ordinaryContextIndicatorReceivingByApiIndex: Map<number, ContextWindowReceivingTracker>
 	contextCompactionIndicatorReceivingByAttemptId: Map<string, ContextWindowReceivingTracker>
 	postStateToWebview: ReturnType<typeof vi.fn>
+	getContextWindowIndicatorProfile(mode: string, profileName?: string): { profileId?: string; profileName?: string }
+	beginContextCompactionIndicator(
+		input: ContextCompactionSessionInput,
+		event: Extract<ContextCompactionSessionEvent, { kind: "pass_started" }>,
+		attempt: { attemptIndex: number; authorizationAttemptId: string },
+	): Promise<void>
 	publishContextWindowIndicatorSnapshot(snapshot: ContextWindowIndicatorSnapshot): Promise<void>
 	receiveOrdinaryContextWindowIndicator(
 		apiIndex: number,
@@ -53,11 +64,20 @@ function createHarness(): IndicatorTaskHarness {
 		taskState: {
 			contextWindowIndicator: contextWindowIndicator.getSnapshot(),
 		},
+		messageStateHandler: {
+			clineMessages: [
+				{
+					say: "api_req_started",
+					text: JSON.stringify({ contextTokens: 630_100, contextTokensSource: "provider" }),
+				},
+			],
+		},
 		contextWindowIndicator,
 		ordinaryContextIndicatorLineageByApiIndex: new Map(),
 		ordinaryContextIndicatorReceivingByApiIndex: new Map(),
 		contextCompactionIndicatorReceivingByAttemptId: new Map(),
 		postStateToWebview: vi.fn(async () => undefined),
+		getContextWindowIndicatorProfile: vi.fn(() => ({})),
 	}) as IndicatorTaskHarness
 }
 
@@ -87,6 +107,62 @@ const passAttempt1: ContextWindowIndicatorLineage = {
 }
 
 describe("Task context-window indicator stale protection", () => {
+	it("keeps the authoritative total while a hidden compaction Pass is being sent", async () => {
+		const task = createHarness()
+		const checkpoint = checkpointHead("operation-stale", {
+			headCheckpointId: "checkpoint-pass",
+		})
+		const stable = task.contextWindowIndicator.restore({
+			lineage: {
+				kind: "checkpoint",
+				operationId: "operation-stale",
+				checkpointId: "checkpoint-0",
+				chainRevision: 0,
+				branchId: "branch-0",
+			},
+			durableContextTokens: 630_100,
+			environmentTokens: 0,
+			contextWindow: 1_000_000,
+			mode: "act",
+		})
+		task.taskState.contextWindowIndicator = stable
+
+		const input = {
+			operationId: "operation-stale",
+			trigger: "auto_compaction",
+			compactionApi: {
+				getModel: () => ({ id: "deepseek-v4-flash", info: { capabilities: { contextWindow: 1_000_000 } } }),
+			},
+			targetApi: {},
+			targetMode: "act",
+			sourceHistory: [],
+			transition: {
+				kind: "mode_switch",
+				operationId: "operation-stale",
+				phase: "compacting",
+				source: { mode: "act" },
+				target: { mode: "act", profile: "target-profile", contextWindow: 1_000_000 },
+			},
+		} as unknown as ContextCompactionSessionInput
+		const event = {
+			kind: "pass_started",
+			state: { cumulativeSummary: undefined },
+			passIdentity: { operationId: "operation-stale", passIndex: 0 },
+			attempt: { attemptIndex: 0, authorizationAttemptId: "pass-attempt-0" },
+			checkpointHead: checkpoint,
+			providerInput: {
+				systemPrompt: "system",
+				messages: [{ role: "user", content: [{ type: "text", text: "hidden pass source" }] }],
+				tools: [],
+				serverTools: [],
+			},
+		} as unknown as Extract<ContextCompactionSessionEvent, { kind: "pass_started" }>
+
+		await task.beginContextCompactionIndicator(input, event, event.attempt)
+
+		expect(getContextWindowIndicatorTotalTokens(task.contextWindowIndicator.getSnapshot())).toBe(630_100)
+	})
+
 	it("publishes only snapshots with a strictly greater Task revision", async () => {
 		const task = createHarness()
 		const current = task.contextWindowIndicator.beginSend({
