@@ -21,6 +21,7 @@ import { retryWithBackoff } from "@/utils/retry"
 import { MessageStateHandler } from "../../core/task/message-state"
 import { TaskState } from "../../core/task/TaskState"
 import type { ClineContent } from "../../shared/messages/content"
+import { CHECKPOINT_TRACKER_ATTEMPT_TIMEOUT_MS } from "./initializer"
 import { ICheckpointManager } from "./types"
 
 // Type definitions for better code organization
@@ -141,15 +142,10 @@ export class TaskCheckpointManager implements ICheckpointManager {
 	 */
 	async saveCheckpoint(isAttemptCompletionMessage = false, completionMessageTs?: number): Promise<void> {
 		try {
-			// If checkpoints are disabled or previously encountered a timeout error, return early
-			if (
-				!this.config.enableCheckpoints ||
-				this.state.checkpointManagerErrorMessage?.includes("Checkpoints initialization timed out.")
-			) {
+			if (!this.config.enableCheckpoints) {
 				return
 			}
 
-			// Set isCheckpointCheckedOut to false for all prior checkpoint_created messages
 			const clineMessages = this.services.messageStateHandler.clineMessages
 			clineMessages.forEach((message) => {
 				if (message.say === "checkpoint_created") {
@@ -157,101 +153,79 @@ export class TaskCheckpointManager implements ICheckpointManager {
 				}
 			})
 
-			// Prevent repetitive checkpointTracker initialization errors on non-attempt completion messages
-			if (!this.state.checkpointTracker && !isAttemptCompletionMessage && !this.state.checkpointManagerErrorMessage) {
-				await this.checkpointTrackerCheckAndInit()
+			let checkpointMessageIndex: number | undefined
+			if (!isAttemptCompletionMessage) {
+				if (clineMessages.at(-1)?.say === "checkpoint_created") {
+					return
+				}
+
+				const messageTs = await this.callbacks.say("checkpoint_created")
+				if (messageTs !== undefined) {
+					const targetMessageIndex = this.services.messageStateHandler.clineMessages.findIndex(
+						(m) => m.ts === messageTs,
+					)
+					if (targetMessageIndex !== -1) {
+						checkpointMessageIndex = targetMessageIndex
+					}
+				}
 			}
-			// attempt completion messages give it one last chance. Skip if there was a previous checkpoints initialization timeout error.
-			else if (
-				!this.state.checkpointTracker &&
-				isAttemptCompletionMessage &&
-				!this.state.checkpointManagerErrorMessage?.includes("Checkpoints initialization timed out.")
-			) {
+
+			if (!this.state.checkpointTracker && !this.state.checkpointManagerErrorMessage) {
 				await this.checkpointTrackerCheckAndInit()
 			}
 
-			// Critical failure to initialize checkpoint tracker, return early
 			if (!this.state.checkpointTracker) {
-				Logger.error(
-					`[TaskCheckpointManager] Failed to save checkpoint for task ${this.task.taskId}: Checkpoint tracker not available`,
+				Logger.debug(
+					`[TaskCheckpointManager] File checkpoint unavailable for task ${this.task.taskId}; keeping chat checkpoint only`,
 				)
 				return
 			}
 
-			// Non attempt-completion messages call for a checkpoint_created message to be added
 			if (!isAttemptCompletionMessage) {
-				// Ensure we aren't creating back-to-back checkpoint_created messages
-				const lastMessage = clineMessages.at(-1)
-				if (lastMessage?.say === "checkpoint_created") {
+				if (checkpointMessageIndex === undefined) {
 					return
 				}
 
-				// Create the checkpoint_created message, then synchronously commit
-				// so the hash matches the file state at the time of the message.
-				// Incremental `git add -f` on tracked files is fast (~10-50ms).
-				const messageTs = await this.callbacks.say("checkpoint_created")
-				if (messageTs) {
-					const messages = this.services.messageStateHandler.clineMessages
-					const targetMessageIndex = messages.findIndex((m) => m.ts === messageTs)
-
-					if (targetMessageIndex !== -1 && this.state.checkpointTracker) {
-						try {
-							const commitHash = await this.state.checkpointTracker.commit()
-							if (commitHash) {
-								await this.persistCheckpointHash(targetMessageIndex, commitHash)
-							}
-						} catch (error) {
-							Logger.error(
-								`[TaskCheckpointManager] Failed to create checkpoint commit for task ${this.task.taskId}:`,
-								error,
-							)
-						}
-					}
-				}
-			} else {
-				// attempt_completion messages are special
-				// First check last 3 messages to see if we already have a recent completion checkpoint
-				// If we do, skip creating a duplicate checkpoint
-				const lastFiveclineMessages = this.services.messageStateHandler.clineMessages.slice(-3)
-				const lastCompletionResultMessage = findLast(lastFiveclineMessages, (m) => m.say === "completion_result")
-				if (lastCompletionResultMessage?.lastCheckpointHash) {
-					Logger.log("Completion checkpoint already exists, skipping duplicate checkpoint creation")
-					return
-				}
-
-				// For attempt_completion, commit then update the completion_result message with the checkpoint hash
-				if (this.state.checkpointTracker) {
+				try {
 					const commitHash = await this.state.checkpointTracker.commit()
-					if (!commitHash) {
-						Logger.debug(
-							`[TaskCheckpointManager] No file checkpoint hash for completion message in task ${this.task.taskId}; using chat checkpoint only`,
-						)
-						return
+					if (commitHash) {
+						await this.persistCheckpointHash(checkpointMessageIndex, commitHash)
 					}
-
-					// If a completionMessageTs is provided, update that specific message with the checkpoint hash
-					if (completionMessageTs) {
-						const targetMessageIndex = this.services.messageStateHandler.clineMessages.findIndex(
-							(m) => m.ts === completionMessageTs,
-						)
-						if (targetMessageIndex !== -1) {
-							await this.persistCheckpointHash(targetMessageIndex, commitHash)
-						}
-					} else {
-						// Fallback to findLast if no timestamp provided - update the last completion_result message
-						if (lastCompletionResultMessage) {
-							const targetMessageIndex = this.services.messageStateHandler.clineMessages.findIndex(
-								(message) => message === lastCompletionResultMessage,
-							)
-							if (targetMessageIndex !== -1) {
-								await this.persistCheckpointHash(targetMessageIndex, commitHash)
-							}
-						}
-					}
-				} else {
+				} catch (error) {
 					Logger.error(
-						`[TaskCheckpointManager] Checkpoint tracker does not exist and could not be initialized for attempt completion for task ${this.task.taskId}`,
+						`[TaskCheckpointManager] Failed to create checkpoint commit for task ${this.task.taskId}:`,
+						error,
 					)
+				}
+				return
+			}
+
+			const recentMessages = this.services.messageStateHandler.clineMessages.slice(-3)
+			const lastCompletionResultMessage = findLast(recentMessages, (m) => m.say === "completion_result")
+			if (lastCompletionResultMessage?.lastCheckpointHash) {
+				Logger.log("Completion checkpoint already exists, skipping duplicate checkpoint creation")
+				return
+			}
+
+			const commitHash = await this.state.checkpointTracker.commit()
+			if (!commitHash) {
+				Logger.debug(
+					`[TaskCheckpointManager] No file checkpoint hash for completion message in task ${this.task.taskId}; using chat checkpoint only`,
+				)
+				return
+			}
+
+			if (completionMessageTs !== undefined) {
+				const targetMessageIndex = this.services.messageStateHandler.clineMessages.findIndex(
+					(m) => m.ts === completionMessageTs,
+				)
+				if (targetMessageIndex !== -1) {
+					await this.persistCheckpointHash(targetMessageIndex, commitHash)
+				}
+			} else if (lastCompletionResultMessage) {
+				const targetMessageIndex = this.services.messageStateHandler.clineMessages.indexOf(lastCompletionResultMessage)
+				if (targetMessageIndex !== -1) {
+					await this.persistCheckpointHash(targetMessageIndex, commitHash)
 				}
 			}
 		} catch (error) {
@@ -839,7 +813,7 @@ export class TaskCheckpointManager implements ICheckpointManager {
 			const tracker = await retryWithBackoff(
 				() =>
 					pTimeout(createTracker(this.task.taskId, this.config.enableCheckpoints, workspacePath), {
-						milliseconds: 30_000,
+						milliseconds: CHECKPOINT_TRACKER_ATTEMPT_TIMEOUT_MS,
 						message:
 							"Checkpoints taking too long to initialize. Consider re-opening Dline in a project that uses git, or disabling checkpoints.",
 					}),

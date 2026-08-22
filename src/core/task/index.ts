@@ -7207,11 +7207,11 @@ export class Task {
 		const isFirstRequest =
 			!persistedRequest && this.messageStateHandler.clineMessages.filter((m) => m.say === "api_req_started").length === 0
 
-		// Initialize checkpointManager first if enabled and it's the first request
+		// Initialize the file checkpoint backend before creating the first chat checkpoint.
 		if (
 			isFirstRequest &&
 			this.stateManager.getGlobalSettingsKey("enableCheckpointsSetting") &&
-			this.checkpointManager && // TODO REVIEW: may be able to implement a replacement for the 15s timer
+			this.checkpointManager &&
 			!this.taskState.checkpointManagerErrorMessage
 		) {
 			try {
@@ -7227,22 +7227,16 @@ export class Task {
 			}
 		}
 
-		// Now, if it's the first request AND checkpoints are enabled AND tracker was successfully initialized,
-		// then say "checkpoint_created" and perform the commit.
-		if (
-			isFirstRequest &&
-			this.stateManager.getGlobalSettingsKey("enableCheckpointsSetting") &&
-			this.checkpointManager &&
-			!this.taskState.checkpointManagerErrorMessage
-		) {
-			await this.say("checkpoint_created") // Now this is conditional
+		// The chat checkpoint remains available even when the file checkpoint backend failed.
+		if (isFirstRequest && this.stateManager.getGlobalSettingsKey("enableCheckpointsSetting") && this.checkpointManager) {
+			await this.say("checkpoint_created")
 			const lastCheckpointMessageIndex = findLastIndex(
 				this.messageStateHandler.clineMessages,
 				(m) => m.say === "checkpoint_created",
 			)
-			if (lastCheckpointMessageIndex !== -1) {
-				const commitPromise = this.checkpointManager?.commit()
-				const persistCommitPromise = commitPromise?.then(async (commitHash) => {
+			if (lastCheckpointMessageIndex !== -1 && !this.taskState.checkpointManagerErrorMessage) {
+				const commitPromise = this.checkpointManager.commit()
+				const persistCommitPromise = commitPromise.then(async (commitHash) => {
 					if (commitHash) {
 						await this.persistCheckpointHashToMessage(lastCheckpointMessageIndex, commitHash)
 					}

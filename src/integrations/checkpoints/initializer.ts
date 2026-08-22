@@ -1,6 +1,9 @@
 import type { ICheckpointManager } from "@integrations/checkpoints/types"
 import pTimeout from "p-timeout"
 
+export const CHECKPOINT_INITIALIZATION_TOTAL_TIMEOUT_MS = 120_000
+export const CHECKPOINT_TRACKER_ATTEMPT_TIMEOUT_MS = 55_000
+
 /**
  * Ensures a checkpoint manager is initialized, handling both single-root and multi-root implementations.
  * - TaskCheckpointManager exposes `checkpointTrackerCheckAndInit()`
@@ -8,7 +11,7 @@ import pTimeout from "p-timeout"
  */
 export async function ensureCheckpointInitialized({
 	checkpointManager,
-	timeoutMs = 15_000,
+	timeoutMs = CHECKPOINT_INITIALIZATION_TOTAL_TIMEOUT_MS,
 	timeoutMessage = "Checkpoints taking too long to initialize. Consider re-opening Dline in a project that uses git, or disabling checkpoints.",
 }: {
 	checkpointManager: ICheckpointManager | undefined

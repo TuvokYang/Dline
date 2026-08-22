@@ -4,9 +4,11 @@ import { CheckpointsServiceClient } from "@/services/grpc-client"
 import { CheckmarkControl } from "./CheckmarkControl"
 
 const relinquishListeners = new Set<() => void>()
+let checkpointManagerErrorMessage: string | undefined
 
 vi.mock("@/context/ExtensionStateContext", () => ({
 	useExtensionState: () => ({
+		checkpointManagerErrorMessage,
 		onRelinquishControl: (listener: () => void) => {
 			relinquishListeners.add(listener)
 			return () => relinquishListeners.delete(listener)
@@ -23,6 +25,7 @@ vi.mock("@/services/grpc-client", () => ({
 
 describe("CheckmarkControl", () => {
 	beforeEach(() => {
+		checkpointManagerErrorMessage = undefined
 		relinquishListeners.clear()
 		vi.mocked(CheckpointsServiceClient.checkpointDiff).mockClear()
 		vi.mocked(CheckpointsServiceClient.checkpointRestore).mockClear()
@@ -40,6 +43,24 @@ describe("CheckmarkControl", () => {
 		})
 		expect(CheckpointsServiceClient.checkpointRestore).toHaveBeenCalledWith(
 			expect.objectContaining({ number: 42, restoreType: "taskAndWorkspace" }),
+		)
+	})
+
+	it("keeps chat restore available when the Git checkpoint backend is unavailable", async () => {
+		checkpointManagerErrorMessage = "Git must be installed to use checkpoints."
+		render(<CheckmarkControl hasWorkspaceCheckpoint={false} messageTs={42} />)
+
+		expect(screen.queryByRole("button", { name: "Compare", exact: true, hidden: true })).not.toBeInTheDocument()
+		fireEvent.click(screen.getByRole("button", { name: "Restore", exact: true, hidden: true }))
+
+		expect(screen.queryByRole("button", { name: "Restore Files & Task", exact: true })).not.toBeInTheDocument()
+		expect(screen.queryByRole("button", { name: "Restore Files Only", exact: true })).not.toBeInTheDocument()
+
+		await act(async () => {
+			fireEvent.click(screen.getByRole("button", { name: "Restore Task Only", exact: true }))
+		})
+		expect(CheckpointsServiceClient.checkpointRestore).toHaveBeenCalledWith(
+			expect.objectContaining({ number: 42, restoreType: "task" }),
 		)
 	})
 

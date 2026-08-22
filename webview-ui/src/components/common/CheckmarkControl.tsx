@@ -23,16 +23,24 @@ interface CheckmarkControlProps {
 	messageTs?: number
 	isCheckpointCheckedOut?: boolean
 	compactionRestore?: CompactionRestoreReference
+	hasWorkspaceCheckpoint?: boolean
 }
 
-export const CheckmarkControl = ({ messageTs, isCheckpointCheckedOut, compactionRestore }: CheckmarkControlProps) => {
+export const CheckmarkControl = ({
+	messageTs,
+	isCheckpointCheckedOut,
+	compactionRestore,
+	hasWorkspaceCheckpoint = true,
+}: CheckmarkControlProps) => {
 	const [compareDisabled, setCompareDisabled] = useState(false)
 	const [restoreTaskDisabled, setRestoreTaskDisabled] = useState(false)
 	const [restoreWorkspaceDisabled, setRestoreWorkspaceDisabled] = useState(false)
 	const [restoreBothDisabled, setRestoreBothDisabled] = useState(false)
 	const [showRestoreConfirm, setShowRestoreConfirm] = useState(false)
 	const [showMoreOptions, setShowMoreOptions] = useState(false)
-	const { onRelinquishControl } = useExtensionState()
+	const { checkpointManagerErrorMessage, onRelinquishControl } = useExtensionState()
+	const workspaceCheckpointAvailable =
+		!compactionRestore && hasWorkspaceCheckpoint && checkpointManagerErrorMessage === undefined
 
 	// Clear "Restore Files" button when checkpoint is no longer checked out
 	useEffect(() => {
@@ -194,7 +202,7 @@ export const CheckmarkControl = ({ messageTs, isCheckpointCheckedOut, compaction
 				</span>
 				<DottedLine $isCheckedOut={isCheckpointCheckedOut} />
 				<ButtonGroup>
-					{!compactionRestore && (
+					{workspaceCheckpointAvailable && (
 						<>
 							<CustomButton
 								$isCheckedOut={isCheckpointCheckedOut}
@@ -229,7 +237,7 @@ export const CheckmarkControl = ({ messageTs, isCheckpointCheckedOut, compaction
 						{showRestoreConfirm &&
 							createPortal(
 								<RestoreConfirmTooltip data-placement={placement} ref={refs.setFloating} style={floatingStyles}>
-									{compactionRestore ? (
+									{compactionRestore || !workspaceCheckpointAvailable ? (
 										<RestoreOption>
 											<Button
 												disabled={restoreTaskDisabled}
@@ -238,8 +246,9 @@ export const CheckmarkControl = ({ messageTs, isCheckpointCheckedOut, compaction
 												Restore Task Only
 											</Button>
 											<p>
-												Restore the conversation to the checkpoint before this Pass. Workspace files are
-												unchanged.
+												{compactionRestore
+													? "Restore the conversation to the checkpoint before this Pass. Workspace files are unchanged."
+													: "Restore the conversation to this checkpoint. Workspace files are unchanged."}
 											</p>
 										</RestoreOption>
 									) : (

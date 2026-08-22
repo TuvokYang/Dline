@@ -2,6 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import type CheckpointTracker from "@integrations/checkpoints/CheckpointTracker"
+import { ensureCheckpointInitialized } from "@integrations/checkpoints/initializer"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { UIMessage } from "@/core/storage/UIMessage"
 import { MessageStateHandler } from "@/core/task/message-state"
@@ -90,6 +91,56 @@ describe("TaskCheckpointManager checkpoint initialization", () => {
 		expect(harness.setCheckpointTracker).toHaveBeenCalledWith(tracker)
 		expect(harness.taskState.checkpointManagerErrorMessage).toBeUndefined()
 		expect(harness.postStateToWebview).toHaveBeenCalled()
+	})
+
+	it("uses a 120 second total initialization budget by default", async () => {
+		vi.useFakeTimers()
+		try {
+			const checkpointManager = {
+				checkpointTrackerCheckAndInit: vi.fn(() => new Promise<void>((resolve) => setTimeout(resolve, 90_000))),
+			} as never
+			const initialization = expect(ensureCheckpointInitialized({ checkpointManager })).resolves.toBeUndefined()
+
+			await vi.advanceTimersByTimeAsync(90_000)
+
+			await initialization
+		} finally {
+			vi.useRealTimers()
+		}
+	})
+
+	it("allows a slow shadow initialization to complete within the extended attempt budget", async () => {
+		vi.useFakeTimers()
+		try {
+			const tracker = { setTaskFileTracker: vi.fn() } as never
+			const slowTracker = new Promise<CheckpointTracker | undefined>((resolve) =>
+				setTimeout(() => resolve(tracker), 45_000),
+			)
+			const create = vi.fn<CreateCheckpointTracker>(() => slowTracker)
+			const harness = createManager(create)
+
+			const initialization = harness.manager.retryCheckpointInitialization()
+			await vi.advanceTimersByTimeAsync(45_000)
+
+			await expect(initialization).resolves.toBe(true)
+			expect(create).toHaveBeenCalledOnce()
+			expect(harness.setCheckpointTracker).toHaveBeenCalledWith(tracker)
+		} finally {
+			vi.useRealTimers()
+		}
+	})
+
+	it("creates a chat-only checkpoint when Git initialization is unavailable", async () => {
+		const messages: ClineMessage[] = []
+		const create = vi.fn<CreateCheckpointTracker>().mockRejectedValue(new Error("Git must be installed to use checkpoints."))
+		const harness = createManager(create, undefined, { messages })
+
+		await harness.manager.saveCheckpoint()
+
+		expect(create).toHaveBeenCalledOnce()
+		expect(messages).toEqual([expect.objectContaining({ say: "checkpoint_created" })])
+		expect(messages[0]).not.toHaveProperty("lastCheckpointHash")
+		expect(harness.taskState.checkpointManagerErrorMessage).toContain("Git must be installed")
 	})
 
 	it("binds the first chat checkpoint to the initialized shadow baseline when no files were tracked", async () => {
