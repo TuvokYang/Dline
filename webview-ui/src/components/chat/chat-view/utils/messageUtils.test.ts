@@ -1,6 +1,6 @@
 import type { ClineMessage, TaskViewState } from "@shared/ExtensionMessage"
 import { describe, expect, it } from "vitest"
-import { groupLowStakesTools, isToolGroup, resolveApiErrorMessage } from "./messageUtils"
+import { groupLowStakesTools, groupMessages, isToolGroup, resolveApiErrorMessage } from "./messageUtils"
 
 const createTextMessage = (ts: number, text: string): ClineMessage => ({
 	type: "say",
@@ -127,6 +127,23 @@ describe("resolveApiErrorMessage", () => {
 		})
 
 		expect(resolved).toBeUndefined()
+	})
+})
+
+describe("groupMessages", () => {
+	it("keeps consecutive browser sessions in separate virtual rows", () => {
+		const grouped = groupMessages([
+			{ ts: 1, type: "say", say: "browser_action_launch", text: "https://one.example" },
+			{ ts: 2, type: "say", say: "browser_action_result", text: JSON.stringify({ currentUrl: "https://one.example" }) },
+			createReasoningMessage(3, "First session reasoning"),
+			{ ts: 4, type: "say", say: "browser_action_launch", text: "https://two.example" },
+			{ ts: 5, type: "say", say: "browser_action_result", text: JSON.stringify({ currentUrl: "https://two.example" }) },
+		])
+
+		expect(grouped).toHaveLength(2)
+		expect(grouped.every(Array.isArray)).toBe(true)
+		expect((grouped[0] as ClineMessage[]).map((message) => message.ts)).toEqual([1, 2, 3])
+		expect((grouped[1] as ClineMessage[]).map((message) => message.ts)).toEqual([4, 5])
 	})
 })
 

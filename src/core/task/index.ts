@@ -7895,6 +7895,9 @@ export class Task {
 									assistantMessage.length === 0 &&
 									!hasPendingNativeToolUse
 								) {
+									if (this.taskState.reasoningTs === undefined) {
+										this.taskState.reasoningTs = this.genMessageTs()
+									}
 									this.pendingReasoningText = thinkingBlock.thinking
 								}
 							}

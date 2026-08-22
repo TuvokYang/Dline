@@ -1065,7 +1065,7 @@ export const ChatRowContent = memo(
 						)
 					}
 					case "reasoning": {
-						const isReasoningStreaming = message.partial === true
+						const isReasoningStreaming = message.partial === true && taskViewState?.phase !== "completed"
 						const hasReasoningText = !!message.text?.trim()
 						// Show feature tips throughout the entire thinking/reasoning phase
 						const _showFeatureTip = isReasoningStreaming
