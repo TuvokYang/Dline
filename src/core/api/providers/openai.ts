@@ -94,7 +94,7 @@ export class OpenAiHandler implements ApiHandler {
 		return this.config?.reasoning?.effort
 	}
 	private get serviceTier() {
-		return this.config?.serviceTierEnabled === false ? undefined : normalizeOpenAiServiceTier(this.config?.serviceTier)
+		return this.config?.serviceTierEnabled === true ? normalizeOpenAiServiceTier(this.config?.serviceTier) : undefined
 	}
 	private get apiFormat() {
 		const selected = this.config?.apiFormat ?? openAiEndpointToApiFormat(this.config?.apiEndpoint)

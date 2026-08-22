@@ -196,7 +196,7 @@ describe("OpenAiHandler", () => {
 			expect(caught).to.deep.include({ protocol: "openai_chat", reason: "length" })
 		})
 
-		it("passes configured service tier and ultra effort to an OpenAI-compatible endpoint", async () => {
+		it("passes explicitly enabled service tier and ultra effort to an OpenAI-compatible endpoint", async () => {
 			const handler = new OpenAiHandler({
 				profile: ApiProfile.create({
 					provider: "openai",
@@ -204,6 +204,7 @@ describe("OpenAiHandler", () => {
 					modelId: "gpt-5.6-compatible",
 					openai: OpenAiProviderConfig.create({
 						serviceTier: "priority",
+						serviceTierEnabled: true,
 						reasoning: { enableThinking: true, effort: "ultra" },
 					}),
 				}),
@@ -225,13 +226,13 @@ describe("OpenAiHandler", () => {
 			expect(JSON.stringify(requestBody.messages)).not.to.contain("prompt_cache_breakpoint")
 		})
 
-		it("suppresses a configured service tier when the Profile disables Service Tier", async () => {
+		it("suppresses a configured service tier unless the Profile explicitly enables Service Tier", async () => {
 			const handler = new OpenAiHandler({
 				profile: ApiProfile.create({
 					provider: "openai",
 					apiKey: "test-api-key",
 					modelId: "gpt-5.6-compatible",
-					openai: OpenAiProviderConfig.create({ serviceTier: "priority", serviceTierEnabled: false }),
+					openai: OpenAiProviderConfig.create({ serviceTier: "priority" }),
 				}),
 				mode: "act",
 			})
@@ -671,6 +672,7 @@ describe("OpenAiHandler", () => {
 					openai: OpenAiProviderConfig.create({
 						apiEndpoint: "responses",
 						serviceTier: "priority",
+						serviceTierEnabled: true,
 						reasoning: { enableThinking: true, effort: "high" },
 						capabilities: { maxTokens: 16_384 },
 					}),

@@ -305,6 +305,7 @@ e2e(
 			await setTextField(card, "Output Price ($/1M tokens)", "2.5")
 			await setTextField(card, "Cache Writes ($/M)", "0.75")
 			await setTextField(card, "Cache Reads ($/M)", "0.25")
+			await waitForProfile(dlineDir, profileName, (profile) => profile.openai?.pricing?.outputPrice === 2.5)
 			await expect(card.getByText("235K", { exact: true })).toBeVisible()
 			await expectModelInfoValue(card, "Input:", "$1.25/M")
 			await expectModelInfoValue(card, "Output:", "$2.50/M")
@@ -616,21 +617,28 @@ e2e(
 		await modelSwitcher.click()
 		const enableSplitModels = sidebar.getByTitle("Use different models per mode")
 		if (await enableSplitModels.isVisible()) {
-			await enableSplitModels.click()
+			await expect(enableSplitModels).toHaveAttribute("aria-checked", "false")
+			await enableSplitModels.focus()
+			await enableSplitModels.press("Enter")
+			await expect(sidebar.getByTitle("Disable per-mode models")).toHaveAttribute("aria-checked", "true")
+			await E2ETestHelper.waitForValue(async () => {
+				const settings = await readSettings(dlineDir)
+				return settings.planActSeparateModelsSetting === true ? true : undefined
+			})
 		}
-		await sidebar.getByRole("button", { name: "Act", exact: true }).click()
+		await sidebar.getByRole("button", { name: "Act", exact: true }).press("Enter")
 		await sidebar
 			.getByRole("option")
 			.filter({ has: sidebar.getByText(E2E_PROFILE_NAMES.mockAnthropic, { exact: true }) })
-			.click()
+			.press("Enter")
 		await expect(modelSwitcher).toHaveText(E2E_PROFILE_NAMES.mockAnthropic)
 
 		await modelSwitcher.click()
-		await sidebar.getByRole("button", { name: "Plan", exact: true }).click()
+		await sidebar.getByRole("button", { name: "Plan", exact: true }).press("Enter")
 		await sidebar
 			.getByRole("option")
 			.filter({ has: sidebar.getByText(E2E_PROFILE_NAMES.mockOpenAi, { exact: true }) })
-			.click()
+			.press("Enter")
 		await E2ETestHelper.waitForValue(async () => {
 			const settings = await readSettings(dlineDir)
 			return settings.planActSeparateModelsSetting === true &&
@@ -670,6 +678,8 @@ e2e(
 		await expect(sidebar.getByText("E2E_MODE_PROFILE_PLAN_OPENAI_OK", { exact: true })).toBeVisible({
 			timeout: 60_000,
 		})
+		await expect(input).toBeEnabled()
+		await expect(input).toHaveValue("")
 		await expect.poll(() => server.getRequestCount("openai-compatible-chat")).toBe(1)
 		const planRequest = server.getMockConsumptions("openai-compatible-chat")[0]
 		expect(planRequest).toMatchObject({
@@ -681,7 +691,7 @@ e2e(
 			reasoning_effort: "max",
 		})
 
-		await actMode.click()
+		await actMode.evaluate((element) => element.click())
 		await expect(actMode).toHaveAttribute("aria-checked", "true")
 		await expect(modelSwitcher).toHaveText(E2E_PROFILE_NAMES.mockAnthropic)
 		await expect(sidebar.getByText("E2E_MODE_PROFILE_ACT_ANTHROPIC_OK", { exact: false }).last()).toBeVisible({

@@ -51,6 +51,7 @@ describe("OpenAIServiceTierSelector", () => {
 			<OpenAIServiceTierSelector
 				onServiceTierChange={onServiceTierChange}
 				onServiceTierEnabledChange={onServiceTierEnabledChange}
+				serviceTierEnabled={true}
 			/>,
 		)
 
@@ -68,6 +69,7 @@ describe("OpenAIServiceTierSelector", () => {
 				onServiceTierChange={onServiceTierChange}
 				onServiceTierEnabledChange={onServiceTierEnabledChange}
 				serviceTier="priority"
+				serviceTierEnabled={true}
 			/>,
 		)
 		expect(screen.getByTestId("service-tier")).toHaveAttribute("data-value", "priority")
@@ -76,26 +78,26 @@ describe("OpenAIServiceTierSelector", () => {
 		expect(onServiceTierChange).toHaveBeenLastCalledWith(undefined)
 	})
 
-	it("defaults Service Tier to enabled and hides the selector when explicitly disabled", () => {
+	it("shows Service Tier options only after explicit enablement", () => {
 		const onServiceTierEnabledChange = vi.fn()
 		const { rerender } = render(
 			<OpenAIServiceTierSelector onServiceTierChange={vi.fn()} onServiceTierEnabledChange={onServiceTierEnabledChange} />,
 		)
 
 		const enableCheckbox = screen.getByRole("checkbox", { name: "Enable Service Tier" })
-		expect(enableCheckbox).toBeChecked()
-		expect(screen.getByTestId("service-tier")).toBeInTheDocument()
+		expect(enableCheckbox).not.toBeChecked()
+		expect(screen.queryByTestId("service-tier")).not.toBeInTheDocument()
 		fireEvent.click(enableCheckbox)
-		expect(onServiceTierEnabledChange).toHaveBeenCalledWith(false)
+		expect(onServiceTierEnabledChange).toHaveBeenCalledWith(true)
 
 		rerender(
 			<OpenAIServiceTierSelector
 				onServiceTierChange={vi.fn()}
 				onServiceTierEnabledChange={onServiceTierEnabledChange}
-				serviceTierEnabled={false}
+				serviceTierEnabled={true}
 			/>,
 		)
-		expect(screen.getByRole("checkbox", { name: "Enable Service Tier" })).not.toBeChecked()
-		expect(screen.queryByTestId("service-tier")).not.toBeInTheDocument()
+		expect(screen.getByRole("checkbox", { name: "Enable Service Tier" })).toBeChecked()
+		expect(screen.getByTestId("service-tier")).toBeInTheDocument()
 	})
 })

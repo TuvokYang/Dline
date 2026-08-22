@@ -37,6 +37,7 @@ const mocks = vi.hoisted(() => ({
 			openai: {
 				reasoning: { enableThinking: true, effort: "high", thinkingBudget: 0 },
 				serviceTier: "priority",
+				serviceTierEnabled: true,
 			},
 			modelInfo: {
 				capabilities: {
@@ -127,6 +128,7 @@ describe("chat input TaskRuntimeControls", () => {
 				openai: {
 					reasoning: { enableThinking: true, effort: "high", thinkingBudget: 0 },
 					serviceTier: "priority",
+					serviceTierEnabled: true,
 				},
 				modelInfo: {
 					capabilities: {
@@ -163,11 +165,11 @@ describe("chat input TaskRuntimeControls", () => {
 		expect(screen.getByRole("button", { name: "Task service tier" })).toBeInTheDocument()
 	})
 
-	it("keeps Thinking visible but hides Task Service Tier when the Profile disables it", () => {
+	it("keeps Thinking visible but hides Task Service Tier until the Profile explicitly enables it", () => {
 		mocks.profiles = [
 			{
 				...mocks.profiles[0],
-				openai: { ...mocks.profiles[0].openai, serviceTierEnabled: false },
+				openai: { ...mocks.profiles[0].openai, serviceTierEnabled: undefined },
 			},
 		]
 

@@ -140,7 +140,7 @@ vi.mock("../OpenAIServiceTierSelector", () => ({
 		serviceTierEnabled?: boolean
 	}) => (
 		<>
-			<span data-testid="service-tier-enabled">{String(serviceTierEnabled !== false)}</span>
+			<span data-testid="service-tier-enabled">{String(serviceTierEnabled === true)}</span>
 			<button onClick={() => onServiceTierChange("priority")} type="button">
 				Set Priority Tier
 			</button>
@@ -286,6 +286,19 @@ describe("OpenAIProvider", () => {
 		})
 	})
 
+	it("keeps Service Tier disabled when the OpenAI Profile has not explicitly enabled it", () => {
+		const profile = {
+			id: "profile-1",
+			provider: "openai",
+			modelId: "gpt-multi",
+			openai: OpenAiProviderConfig.create(),
+		} as unknown as ApiProfile
+
+		render(<OpenAIProvider onUpdate={vi.fn()} profile={profile} showModelOptions={true} />)
+
+		expect(screen.getByTestId("service-tier-enabled")).toHaveTextContent("false")
+	})
+
 	it("shows the default Responses stream idle timeout and persists a positive number of seconds", () => {
 		const onUpdate = vi.fn()
 		const profile = {
@@ -311,7 +324,7 @@ describe("OpenAIProvider", () => {
 			id: "profile-1",
 			provider: "openai",
 			modelId: "gpt-custom",
-			openai: OpenAiProviderConfig.create({ customModelEnabled: true, serviceTier: "auto" }),
+			openai: OpenAiProviderConfig.create({ customModelEnabled: true, serviceTier: "auto", serviceTierEnabled: true }),
 		} as unknown as ApiProfile
 
 		render(<OpenAIProvider onUpdate={onUpdate} profile={profile} showModelOptions={true} />)

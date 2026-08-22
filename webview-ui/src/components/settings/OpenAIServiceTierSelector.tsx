@@ -29,7 +29,7 @@ const OpenAIServiceTierSelector = ({
 	onServiceTierChange,
 	onServiceTierEnabledChange,
 }: OpenAIServiceTierSelectorProps) => {
-	const enabled = serviceTierEnabled !== false
+	const enabled = serviceTierEnabled === true
 	const selectedValue = isOpenAiServiceTier(serviceTier) ? serviceTier : PROVIDER_DEFAULT_VALUE
 
 	return (

@@ -1,5 +1,7 @@
 import { CLAUDE_SONNET_1M_SUFFIX, openRouterDefaultModelId } from "@shared/api"
 import { StringRequest } from "@shared/proto/dline/common"
+import type { ApiProfile } from "@shared/proto/dline/profile"
+import { OpenRouterProviderConfig } from "@shared/proto/dline/provider/openrouter"
 import { isClaudeOpusAdaptiveThinkingModel, resolveClaudeOpusAdaptiveThinking } from "@shared/utils/reasoning-support"
 import { VSCodeLink, VSCodeTextField } from "@vscode/webview-ui-toolkit/react"
 import Fuse from "fuse.js"
@@ -14,13 +16,7 @@ import { ContextWindowSwitcher } from "./common/ContextWindowSwitcher"
 import { ModelInfoView } from "./common/ModelInfoView"
 import ReasoningEffortSelector from "./ReasoningEffortSelector"
 import ThinkingBudgetSlider from "./ThinkingBudgetSlider"
-import {
-	filterOpenRouterModelIds,
-	getModeSpecificFields,
-	normalizeApiConfiguration,
-	supportsReasoningEffortForModelId,
-} from "./utils/providerUtils"
-import { useApiConfigurationHandlers } from "./utils/useApiConfigurationHandlers"
+import { filterOpenRouterModelIds, supportsReasoningEffortForModelId } from "./utils/providerUtils"
 
 // Star icon for favorites
 const StarIcon = ({ isFavorite, onClick }: { isFavorite: boolean; onClick: (e: React.MouseEvent) => void }) => {
@@ -45,20 +41,17 @@ const StarIcon = ({ isFavorite, onClick }: { isFavorite: boolean; onClick: (e: R
 
 export interface OpenRouterModelPickerProps {
 	isPopup?: boolean
+	onUpdate: (updates: Partial<ApiProfile>) => void
+	profile: ApiProfile
 	showProviderRouting?: boolean
 }
 
-const OpenRouterModelPicker: React.FC<OpenRouterModelPickerProps> = ({ isPopup, showProviderRouting }) => {
-	const { handleModeFieldsChange, handleFieldChange } = useApiConfigurationHandlers()
-	const {
-		apiConfiguration,
-		favoritedModelIds,
-		openRouterModels,
-		refreshOpenRouterModels,
-		mode: currentMode,
-	} = useExtensionState()
-	const modeFields = getModeSpecificFields(apiConfiguration, currentMode)
-	const [searchTerm, setSearchTerm] = useState(modeFields.openRouterModelId || openRouterDefaultModelId)
+const OpenRouterModelPicker: React.FC<OpenRouterModelPickerProps> = ({ isPopup, onUpdate, profile, showProviderRouting }) => {
+	const { favoritedModelIds, openRouterModels, refreshOpenRouterModels } = useExtensionState()
+	const selectedModelId = profile.modelId || openRouterDefaultModelId
+	const selectedModelInfo = openRouterModels[selectedModelId] ?? profile.modelInfo
+	const providerConfig = profile.openrouter ?? OpenRouterProviderConfig.create()
+	const [searchTerm, setSearchTerm] = useState(selectedModelId)
 	const [isDropdownVisible, setIsDropdownVisible] = useState(false)
 	const [selectedIndex, setSelectedIndex] = useState(-1)
 	const dropdownRef = useRef<HTMLDivElement>(null)
@@ -66,27 +59,9 @@ const OpenRouterModelPicker: React.FC<OpenRouterModelPickerProps> = ({ isPopup, 
 	const dropdownListRef = useRef<HTMLDivElement>(null)
 
 	const handleModelChange = (newModelId: string) => {
-		// could be setting invalid model id/undefined info but validation will catch it
-
 		setSearchTerm(newModelId)
-
-		handleModeFieldsChange(
-			{
-				openRouterModelId: { plan: "planModeProfile", act: "actModeProfile" },
-				openRouterModelInfo: { plan: "planModeProfile", act: "actModeProfile" },
-			},
-			{
-				openRouterModelId: newModelId,
-				openRouterModelInfo: openRouterModels[newModelId],
-			},
-			currentMode,
-		)
+		onUpdate({ modelId: newModelId, modelInfo: openRouterModels[newModelId] })
 	}
-
-	const { selectedModelId, selectedModelInfo } = useMemo(() => {
-		const selected = normalizeApiConfiguration(apiConfiguration, currentMode)
-		return selected
-	}, [apiConfiguration, currentMode])
 
 	useMount(() => {
 		refreshOpenRouterModels()
@@ -94,9 +69,14 @@ const OpenRouterModelPicker: React.FC<OpenRouterModelPickerProps> = ({ isPopup, 
 
 	// Sync external changes when the modelId changes
 	useEffect(() => {
-		const currentModelId = modeFields.openRouterModelId || openRouterDefaultModelId
-		setSearchTerm(currentModelId)
-	}, [modeFields.openRouterModelId])
+		setSearchTerm(selectedModelId)
+	}, [selectedModelId])
+
+	useEffect(() => {
+		if (!profile.modelId && selectedModelInfo) {
+			onUpdate({ modelId: selectedModelId, modelInfo: selectedModelInfo })
+		}
+	}, [onUpdate, profile.modelId, selectedModelId, selectedModelInfo])
 
 	useEffect(() => {
 		const handleClickOutside = (event: MouseEvent) => {
@@ -182,14 +162,6 @@ const OpenRouterModelPicker: React.FC<OpenRouterModelPickerProps> = ({ isPopup, 
 		}
 	}
 
-	const hasInfo = useMemo(() => {
-		try {
-			return modelIds.some((id) => id.toLowerCase() === searchTerm.toLowerCase())
-		} catch {
-			return false
-		}
-	}, [modelIds, searchTerm])
-
 	useEffect(() => {
 		setSelectedIndex(-1)
 		if (dropdownListRef.current) {
@@ -209,8 +181,10 @@ const OpenRouterModelPicker: React.FC<OpenRouterModelPickerProps> = ({ isPopup, 
 	const selectedModelIdLower = selectedModelId?.toLowerCase() || ""
 	const showAdaptiveThinkingEffort = useMemo(() => isClaudeOpusAdaptiveThinkingModel(selectedModelId), [selectedModelId])
 	const adaptiveThinkingDefaultEffort = useMemo(
-		() => resolveClaudeOpusAdaptiveThinking(modeFields.reasoningEffort, modeFields.thinkingBudgetTokens).effort ?? "none",
-		[modeFields.reasoningEffort, modeFields.thinkingBudgetTokens],
+		() =>
+			resolveClaudeOpusAdaptiveThinking(providerConfig.reasoning?.effort, providerConfig.reasoning?.thinkingBudget)
+				.effort ?? "none",
+		[providerConfig.reasoning?.effort, providerConfig.reasoning?.thinkingBudget],
 	)
 	const showReasoningEffort = useMemo(
 		() => showAdaptiveThinkingEffort || supportsReasoningEffortForModelId(selectedModelId),
@@ -255,6 +229,7 @@ const OpenRouterModelPicker: React.FC<OpenRouterModelPickerProps> = ({ isPopup, 
 
 				<DropdownWrapper ref={dropdownRef}>
 					<VSCodeTextField
+						aria-label="Model"
 						id="model-search"
 						onBlur={() => {
 							if (searchTerm !== selectedModelId) {
@@ -368,9 +343,22 @@ const OpenRouterModelPicker: React.FC<OpenRouterModelPickerProps> = ({ isPopup, 
 				/>
 			</div>
 
-			{hasInfo ? (
+			{selectedModelInfo ? (
 				<>
-					{showBudgetSlider && <ThinkingBudgetSlider />}
+					{showBudgetSlider && (
+						<ThinkingBudgetSlider
+							maxBudget={selectedModelInfo.capabilities?.thinking?.maxBudget}
+							onThinkingBudgetTokensChange={(thinkingBudget) =>
+								onUpdate({
+									openrouter: {
+										...providerConfig,
+										reasoning: { ...providerConfig.reasoning, thinkingBudget },
+									},
+								})
+							}
+							thinkingBudgetTokens={providerConfig.reasoning?.thinkingBudget}
+						/>
+					)}
 					{showReasoningEffort && (
 						<ReasoningEffortSelector
 							allowedEfforts={
@@ -383,14 +371,25 @@ const OpenRouterModelPicker: React.FC<OpenRouterModelPickerProps> = ({ isPopup, 
 									: undefined
 							}
 							label={showAdaptiveThinkingEffort ? "Adaptive Thinking" : undefined}
+							onReasoningEffortChange={(effort) =>
+								onUpdate({
+									openrouter: {
+										...providerConfig,
+										reasoning: { ...providerConfig.reasoning, effort },
+									},
+								})
+							}
+							reasoningEffort={providerConfig.reasoning?.effort}
 						/>
 					)}
 
 					<ModelInfoView
 						isPopup={isPopup}
 						modelInfo={selectedModelInfo}
-						onProviderSortingChange={(value) => handleFieldChange("planModeProfile", value)}
-						providerSorting={modeFields.openRouterProviderSorting}
+						onProviderSortingChange={(openRouterProviderSorting) =>
+							onUpdate({ openrouter: { ...providerConfig, openRouterProviderSorting } })
+						}
+						providerSorting={providerConfig.openRouterProviderSorting}
 						selectedModelId={selectedModelId}
 						showProviderRouting={showProviderRouting}
 					/>

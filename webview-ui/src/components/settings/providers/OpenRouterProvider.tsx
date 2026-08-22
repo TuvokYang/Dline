@@ -97,7 +97,9 @@ export const OpenRouterProvider = ({ showModelOptions, isPopup, profile, onUpdat
 				</p>
 			</div>
 
-			{showModelOptions && <OpenRouterModelPicker isPopup={isPopup} showProviderRouting={true} />}
+			{showModelOptions && (
+				<OpenRouterModelPicker isPopup={isPopup} onUpdate={onUpdate} profile={profile} showProviderRouting={true} />
+			)}
 		</div>
 	)
 }

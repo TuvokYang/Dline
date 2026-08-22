@@ -36,7 +36,7 @@ export function taskServiceTierOverrideToFields(override: TaskServiceTierOverrid
 
 /** Whether one Profile exposes Service Tier configuration and Task-local overrides. */
 export function profileServiceTierEnabled(profile: ApiProfile | undefined): boolean {
-	if (profile?.provider === "openai") return profile.openai !== undefined && profile.openai.serviceTierEnabled !== false
+	if (profile?.provider === "openai") return profile.openai?.serviceTierEnabled === true
 	if (profile?.provider === "openai-codex") {
 		return profile.openaiCodex !== undefined && profile.openaiCodex.serviceTierEnabled !== false
 	}

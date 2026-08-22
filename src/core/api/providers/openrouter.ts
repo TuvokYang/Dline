@@ -76,7 +76,7 @@ export class OpenRouterHandler implements ApiHandler {
 			this.getModel(),
 			this.reasoningEffort,
 			this.thinkingBudgetTokens,
-			(this.config as any)?.providerSorting,
+			this.config?.openRouterProviderSorting,
 			tools,
 			this.ctx.enableParallelToolCalling,
 		)
@@ -187,6 +187,9 @@ export class OpenRouterHandler implements ApiHandler {
 			try {
 				const generationIterator = this.fetchGenerationDetails(this.lastGenerationId)
 				const generation = (await generationIterator.next()).value
+				if (!generation) {
+					return undefined
+				}
 				// Logger.log("OpenRouter generation details:", generation)
 				return {
 					type: "usage",
@@ -218,7 +221,14 @@ export class OpenRouterHandler implements ApiHandler {
 			})
 			yield response.data?.data
 		} catch (error) {
-			// ignore if fails
+			const status =
+				typeof error === "object" && error !== null
+					? ((error as { status?: unknown }).status ?? (error as { response?: { status?: unknown } }).response?.status)
+					: undefined
+			if (status === 404) {
+				Logger.warn("OpenRouter generation details are unavailable (HTTP 404); continuing without usage fallback.")
+				return
+			}
 			Logger.error("Error fetching OpenRouter generation details:", error)
 			throw error
 		}
@@ -229,7 +239,7 @@ export class OpenRouterHandler implements ApiHandler {
 		const cachedModelInfo = StateManager.get().getModelInfo("openRouter", modelId)
 		return {
 			id: modelId,
-			info: cachedModelInfo || openRouterDefaultModelInfo,
+			info: cachedModelInfo || this.modelInfo || openRouterDefaultModelInfo,
 		}
 	}
 }

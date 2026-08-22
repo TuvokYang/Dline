@@ -1,8 +1,14 @@
 import "should"
+import { StateManager } from "@core/storage/StateManager"
 import { openRouterDefaultModelInfo } from "@shared/api"
+import { ModelInfo } from "@shared/proto/dline/models"
 import { ApiProfile } from "@shared/proto/dline/profile"
-import { afterEach, describe, it, vi } from "vitest"
+import { Logger } from "@shared/services/Logger"
+import axios from "axios"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import { OpenRouterHandler } from "../openrouter"
+
+vi.mock("axios", () => ({ default: { get: vi.fn() } }))
 
 describe("OpenRouterHandler", () => {
 	afterEach(() => {
@@ -16,6 +22,57 @@ describe("OpenRouterHandler", () => {
 	})
 
 	const tools = [{ type: "function", function: { name: "read_file", description: "", parameters: { type: "object" } } }] as any
+
+	it("does not retry a missing generation record or log its Authorization header", async () => {
+		const secret = "openrouter-generation-secret"
+		const error = {
+			isAxiosError: true,
+			name: "AxiosError",
+			message: "Request failed with status code 404",
+			code: "ERR_BAD_REQUEST",
+			config: { headers: { Authorization: `Bearer ${secret}` } },
+			response: { status: 404 },
+		}
+		const get = vi.mocked(axios.get).mockRejectedValue(error)
+		const loggerError = vi.spyOn(Logger, "error").mockImplementation(() => undefined)
+		const loggerWarn = vi.spyOn(Logger, "warn").mockImplementation(() => undefined)
+		const handler = new OpenRouterHandler({
+			profile: ApiProfile.create({ provider: "openrouter", apiKey: secret }),
+			mode: "act",
+		})
+		;(handler as any).lastGenerationId = "generation-404"
+
+		const usage = await handler.getApiStreamUsage()
+
+		expect(usage).toBeUndefined()
+		get.mock.calls.length.should.equal(1)
+		expect(loggerError.mock.calls.flat().join(" ")).not.toContain(secret)
+		expect(loggerWarn.mock.calls.flat().join(" ")).toContain("404")
+	})
+
+	it("uses the Profile model metadata when the dynamic OpenRouter cache is unavailable", () => {
+		const profileModelInfo = ModelInfo.create({
+			id: "vendor/native-1m-model",
+			name: "Native 1M Model",
+			capabilities: { contextWindow: 1_000_000, maxTokens: 128_000 },
+		})
+		vi.spyOn(StateManager, "get").mockReturnValue({
+			getModelInfo: vi.fn().mockReturnValue(undefined),
+		} as unknown as StateManager)
+		const handler = new OpenRouterHandler({
+			profile: ApiProfile.create({
+				provider: "openrouter",
+				modelId: "vendor/native-1m-model",
+				modelInfo: profileModelInfo,
+			}),
+			mode: "act",
+		})
+
+		handler.getModel().should.deepEqual({
+			id: "vendor/native-1m-model",
+			info: profileModelInfo,
+		})
+	})
 
 	it("should handle usage-only chunks when delta is missing", async () => {
 		const handler = new OpenRouterHandler({
