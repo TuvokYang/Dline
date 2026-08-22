@@ -74,6 +74,56 @@ async function pathExists(filePath: string): Promise<boolean> {
 		.catch(() => false)
 }
 
+async function findTaskIdByHistoryMarker(dlineDocsDir: string, marker: string): Promise<string> {
+	return E2ETestHelper.waitForValue(async () => {
+		const entries = await readdir(path.join(dlineDocsDir, "tasks"), { withFileTypes: true }).catch((error: unknown) => {
+			if ((error as NodeJS.ErrnoException).code === "ENOENT") return []
+			throw error
+		})
+		for (const entry of entries) {
+			if (!entry.isDirectory()) continue
+			const history = await readFile(
+				path.join(dlineDocsDir, "tasks", entry.name, "api_conversation_history.jsonl"),
+				"utf8",
+			).catch((error: unknown) => {
+				if ((error as NodeJS.ErrnoException).code === "ENOENT") return ""
+				throw error
+			})
+			if (history.includes(marker)) return entry.name
+		}
+		return undefined
+	}, 30_000)
+}
+
+async function waitForQnaInteraction(dlineDocsDir: string, taskId: string): Promise<void> {
+	const readState = async () => {
+		const snapshotText = await readFile(path.join(dlineDocsDir, "tasks", taskId, "snapshot.json"), "utf8")
+		const snapshot = JSON.parse(snapshotText) as {
+			phase?: string
+			interaction?: { interactionId?: string; kind?: string; status?: string }
+			turn?: { blocks?: Array<{ dlineTid?: string; phase?: string; toolName?: string }> }
+		}
+		const block = snapshot.turn?.blocks?.find((candidate) => candidate.toolName === "qna_respond")
+		return {
+			phase: snapshot.phase,
+			interactionId: snapshot.interaction?.interactionId,
+			interactionKind: snapshot.interaction?.kind,
+			interactionStatus: snapshot.interaction?.status,
+			blockId: block?.dlineTid,
+			blockPhase: block?.phase,
+		}
+	}
+	await expect.poll(readState, { timeout: 30_000 }).toMatchObject({
+		phase: "executing",
+		interactionKind: "qna_response",
+		interactionStatus: "awaiting",
+		blockPhase: "auto_executing",
+	})
+	const state = await readState()
+	expect(state.interactionId).toBeTruthy()
+	expect(state.interactionId).toBe(state.blockId)
+}
+
 function normalizeNewlines(value: string): string {
 	return value.replaceAll("\r\n", "\n")
 }
@@ -1089,6 +1139,170 @@ e2e(
 		await expect(panelA.getByText("E2E_CONCURRENT_PANEL_A_RESTORE_CONTINUES", { exact: false }).last()).toBeVisible({
 			timeout: 60_000,
 		})
+		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
+	},
+)
+
+e2e(
+	"Three concurrent OpenAI Responses tasks keep cache partitions and histories isolated",
+	async ({ dlineDocsDir, helper, page, server, sidebar, userDataDir }) => {
+		e2e.setTimeout(240_000)
+		await helper.signin(sidebar)
+		await dismissExtensionsDisabledNotification(page)
+
+		const taskCases = [
+			{
+				marker: "E2E_RESPONSES_CACHE_CONCURRENT_A",
+				firstResult: "E2E_RESPONSES_CACHE_A_FIRST_OK",
+				followUp: "E2E_RESPONSES_CACHE_A_FOLLOW_UP",
+				followUpResult: "E2E_RESPONSES_CACHE_A_SECOND_OK",
+			},
+			{
+				marker: "E2E_RESPONSES_CACHE_CONCURRENT_B",
+				firstResult: "E2E_RESPONSES_CACHE_B_FIRST_OK",
+				followUp: "E2E_RESPONSES_CACHE_B_FOLLOW_UP",
+				followUpResult: "E2E_RESPONSES_CACHE_B_SECOND_OK",
+			},
+			{
+				marker: "E2E_RESPONSES_CACHE_CONCURRENT_C",
+				firstResult: "E2E_RESPONSES_CACHE_C_FIRST_OK",
+				followUp: "E2E_RESPONSES_CACHE_C_FOLLOW_UP",
+				followUpResult: "E2E_RESPONSES_CACHE_C_SECOND_OK",
+			},
+		] as const
+
+		server.resetOpenAiMock()
+		for (const [index, taskCase] of taskCases.entries()) {
+			server.enqueueResponses("openai-compatible-responses", {
+				type: "tool",
+				id: `call_responses_cache_concurrent_${index}_first`,
+				name: "qna_respond",
+				arguments: { response: taskCase.firstResult },
+				expectedRequestIncludes: [taskCase.marker],
+				matchRequestContract: true,
+				delayMs: 10_000,
+				usage: { inputTokens: 100, outputTokens: 20, cacheReadTokens: 0, cacheWriteTokens: 10_000 },
+			})
+		}
+
+		const tasks: Array<{
+			marker: string
+			firstResult: string
+			frame: Frame
+			tab: Locator
+			followUp: string
+			followUpResult: string
+		}> = []
+		for (const [index, taskCase] of taskCases.entries()) {
+			const frame = await createDlinePanelFromTitleAction(page)
+			await E2ETestHelper.dismissWhatsNewModal(frame)
+			const tab = await findActiveDlineTab(page)
+			await activateDlinePanel(tab, frame)
+			await selectProfile(frame, E2E_PROFILE_NAMES.mockOpenAiResponses)
+			const task = {
+				marker: taskCase.marker,
+				firstResult: taskCase.firstResult,
+				frame,
+				tab,
+				followUp: taskCase.followUp,
+				followUpResult: taskCase.followUpResult,
+			}
+			tasks.push(task)
+			const input = frame.getByTestId("chat-input")
+			await input.fill(task.marker)
+			await frame.getByTestId("send-button").click()
+			await expect(input).toHaveValue("")
+			await expect.poll(() => server.getRequestCount("openai-compatible-responses"), { timeout: 30_000 }).toBe(index + 1)
+		}
+		await expect.poll(() => server.getRequestCount("openai-compatible-responses"), { timeout: 60_000 }).toBe(3)
+		const firstRoundRequests = server.getMockConsumptions("openai-compatible-responses")
+		expect(firstRoundRequests).toHaveLength(3)
+		expect(
+			Math.max(...firstRoundRequests.map(({ receivedAtMs }) => receivedAtMs)) -
+				Math.min(...firstRoundRequests.map(({ receivedAtMs }) => receivedAtMs)),
+		).toBeLessThan(10_000)
+		for (const task of tasks) {
+			await activateDlinePanel(task.tab, task.frame)
+			await expect(task.frame.getByText(task.firstResult, { exact: false }).last()).toBeVisible({ timeout: 60_000 })
+			const taskId = await findTaskIdByHistoryMarker(dlineDocsDir, task.marker)
+			await waitForQnaInteraction(dlineDocsDir, taskId)
+		}
+
+		for (const [index, taskCase] of taskCases.entries()) {
+			server.enqueueResponses("openai-compatible-responses", {
+				type: "tool",
+				id: `call_responses_cache_concurrent_${index}_second`,
+				name: "qna_respond",
+				arguments: { response: taskCase.followUpResult },
+				expectedRequestIncludes: [taskCase.marker, taskCase.followUp],
+				matchRequestContract: true,
+				delayMs: 10_000,
+				usage: { inputTokens: 100, outputTokens: 20, cacheReadTokens: 10_000, cacheWriteTokens: 0 },
+			})
+		}
+		for (const [index, task] of tasks.entries()) {
+			await activateDlinePanel(task.tab, task.frame)
+			const input = task.frame.getByTestId("chat-input")
+			await expect(input).toBeEnabled()
+			await input.fill(task.followUp)
+			await input.press("Enter")
+			await expect(input).toHaveValue("")
+			const feedback = task.frame.locator("span.ph-no-capture:not(button span)").filter({ hasText: task.followUp })
+			await expect(feedback).toHaveCount(1)
+			await expect(feedback).toHaveText(task.followUp)
+			await expect.poll(() => server.getRequestCount("openai-compatible-responses"), { timeout: 30_000 }).toBe(index + 4)
+		}
+		await expect.poll(() => server.getRequestCount("openai-compatible-responses"), { timeout: 60_000 }).toBe(6)
+		const secondRoundRequests = server.getMockConsumptions("openai-compatible-responses").slice(3)
+		expect(secondRoundRequests).toHaveLength(3)
+		expect(
+			Math.max(...secondRoundRequests.map(({ receivedAtMs }) => receivedAtMs)) -
+				Math.min(...secondRoundRequests.map(({ receivedAtMs }) => receivedAtMs)),
+		).toBeLessThan(10_000)
+		for (const task of tasks) {
+			await activateDlinePanel(task.tab, task.frame)
+			await expect(task.frame.getByText(task.followUpResult, { exact: false }).last()).toBeVisible({ timeout: 60_000 })
+		}
+
+		const consumptions = server.getMockConsumptions("openai-compatible-responses")
+		expect(consumptions).toHaveLength(6)
+		expect(consumptions.map((entry) => entry.contractError).filter((error) => error !== undefined)).toEqual([])
+		const taskKeys = new Map<string, string>()
+		for (const [index, taskCase] of taskCases.entries()) {
+			const firstRequest = consumptions.find(
+				(entry) => entry.toolCallId === `call_responses_cache_concurrent_${index}_first`,
+			)
+			const secondRequest = consumptions.find(
+				(entry) => entry.toolCallId === `call_responses_cache_concurrent_${index}_second`,
+			)
+			if (!firstRequest || !secondRequest) throw new Error(`Missing Requests for ${taskCase.marker}`)
+			const firstBody = firstRequest.requestBody as Record<string, unknown>
+			const secondBody = secondRequest.requestBody as Record<string, unknown>
+			expect(firstBody).not.toHaveProperty("previous_response_id")
+			expect(secondBody).not.toHaveProperty("previous_response_id")
+			expect(firstBody).not.toHaveProperty("conversation")
+			expect(secondBody).not.toHaveProperty("conversation")
+			expect(firstBody.prompt_cache_options).toBeUndefined()
+			expect(secondBody.prompt_cache_options).toBeUndefined()
+			const firstHistory = JSON.stringify(firstBody).replace(/<environment_details>[\s\S]*?<\/environment_details>/g, "")
+			const secondHistory = JSON.stringify(secondBody).replace(/<environment_details>[\s\S]*?<\/environment_details>/g, "")
+			for (const otherCase of taskCases.filter((candidate) => candidate.marker !== taskCase.marker)) {
+				expect(firstHistory).not.toContain(otherCase.marker)
+				expect(secondHistory).not.toContain(otherCase.marker)
+				expect(secondHistory).not.toContain(otherCase.followUp)
+			}
+			expect(firstHistory).not.toContain("prompt_cache_breakpoint")
+			expect(secondHistory).not.toContain("prompt_cache_breakpoint")
+			expect(typeof firstBody.prompt_cache_key).toBe("string")
+			expect(secondBody.prompt_cache_key).toBe(firstBody.prompt_cache_key)
+			expect(firstRequest.cacheDiagnostic?.state).toBe("cold")
+			expect(secondRequest.cacheDiagnostic?.state).toBe("warm")
+			expect(secondRequest.cacheDiagnostic?.cacheReadTokens).toBeGreaterThan(
+				firstRequest.cacheDiagnostic?.cacheReadTokens ?? 0,
+			)
+			taskKeys.set(taskCase.marker, String(firstBody.prompt_cache_key))
+		}
+		expect(new Set(taskKeys.values()).size).toBe(taskCases.length)
 		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
 	},
 )
