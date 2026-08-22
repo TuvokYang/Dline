@@ -48,4 +48,69 @@ describe("ContextWindowSummary", () => {
 			expect(detail).toHaveStyle({ backgroundColor: color })
 		}
 	})
+
+	it("reserves a six-character value column for every segment card", () => {
+		const indicatorViewModel = createContextWindowIndicatorViewModel({
+			taskId: "task-summary-width",
+			revision: 1,
+			epoch: 1,
+			phase: "receiving",
+			durableContextTokens: 229_400,
+			pendingSendTokens: 0,
+			receivingTokens: 14_100,
+			stagedTokens: 3_900,
+			environmentTokens: 2_200,
+			contextWindow: 1_000_000,
+			mode: "act",
+			updatedAt: 1,
+			lineage: { kind: "baseline" },
+		})
+		render(
+			<ContextWindowSummary
+				contextWindow={indicatorViewModel.contextWindow}
+				indicatorViewModel={indicatorViewModel}
+				percentage={indicatorViewModel.percentage}
+				tokenUsed={indicatorViewModel.totalTokens}
+			/>,
+		)
+
+		const segmentDetails = screen.getByTestId("context-window-segment-details")
+		for (const kind of ["durable", "active", "staged", "environment"] as const) {
+			const detail = segmentDetails.querySelector<HTMLElement>(`[data-segment-detail="${kind}"]`)
+			const value = detail?.querySelector<HTMLElement>(".font-mono")
+			expect(detail).toHaveClass("grid", "grid-cols-[minmax(0,1fr)_6ch]")
+			expect(value).toHaveClass("w-[6ch]", "whitespace-nowrap", "text-right")
+			expect(value?.textContent?.length).toBeLessThanOrEqual(6)
+		}
+	})
+
+	it("promotes rounded threshold values before they exceed six characters", () => {
+		const indicatorViewModel = createContextWindowIndicatorViewModel({
+			taskId: "task-summary-threshold",
+			revision: 1,
+			epoch: 1,
+			phase: "receiving",
+			durableContextTokens: 999_999,
+			pendingSendTokens: 0,
+			receivingTokens: 0,
+			stagedTokens: 0,
+			environmentTokens: 0,
+			contextWindow: 1_000_000,
+			mode: "act",
+			updatedAt: 1,
+			lineage: { kind: "baseline" },
+		})
+		render(
+			<ContextWindowSummary
+				contextWindow={indicatorViewModel.contextWindow}
+				indicatorViewModel={indicatorViewModel}
+				percentage={indicatorViewModel.percentage}
+				tokenUsed={indicatorViewModel.totalTokens}
+			/>,
+		)
+
+		expect(screen.queryAllByText("1000.0k")).toHaveLength(0)
+		expect(screen.getAllByText("1.000M")).toHaveLength(2)
+		expect(screen.getByText("1.0M")).toBeInTheDocument()
+	})
 })
