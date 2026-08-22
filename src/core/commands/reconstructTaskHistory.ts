@@ -5,6 +5,7 @@ import {
 	readTaskHistoryJsonl,
 	writeTaskHistoryToState,
 } from "@core/storage/disk"
+import { isTaskHistoryCompleted } from "@core/task/history-completion"
 import { HostProvider } from "@hosts/host-provider"
 import { ClineMessage } from "@shared/ExtensionMessage"
 import { HistoryItem } from "@shared/HistoryItem"
@@ -187,6 +188,7 @@ async function reconstructTaskHistoryItem(taskId: string): Promise<HistoryItem |
 			totalCost: taskInfo.totalCost,
 			size: taskInfo.size,
 			isFavorited: taskInfo.isFavorited,
+			isCompleted: isTaskHistoryCompleted(clineMessages),
 			conversationHistoryDeletedRange: taskInfo.conversationHistoryDeletedRange,
 		}
 

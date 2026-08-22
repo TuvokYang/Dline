@@ -1,15 +1,39 @@
 import type { HistoryItem } from "@shared/HistoryItem"
 import { StringArrayRequest } from "@shared/proto/dline/common"
-import { fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { TaskServiceClient } from "@/services/grpc-client"
-import HistoryPreview, { filterHistoryPreview, formatHistoryTimestamp, HISTORY_PREVIEW_LIMIT } from "./HistoryPreview"
+import HistoryPreview, {
+	filterHistoryPreview,
+	formatHistoryTimestamp,
+	getVisibleHistoryTaskCount,
+	HISTORY_PREVIEW_LIMIT,
+} from "./HistoryPreview"
 import HistoryViewItem from "./HistoryViewItem"
 
 const extensionState = vi.hoisted(() => ({
 	taskHistory: [] as HistoryItem[],
 	workspaceRoots: [{ path: "C:\\work\\current", name: "current" }],
 }))
+
+let historyListHeight = 136
+let resizeObserverCallback: ResizeObserverCallback | undefined
+
+class TestResizeObserver implements ResizeObserver {
+	disconnect = vi.fn()
+	observe = vi.fn((target: Element) => {
+		Object.defineProperty(target, "clientHeight", { configurable: true, get: () => historyListHeight })
+		this.callback([], this)
+	})
+	unobserve = vi.fn()
+
+	constructor(private readonly callback: ResizeObserverCallback) {
+		resizeObserverCallback = callback
+	}
+}
+
+globalThis.ResizeObserver = TestResizeObserver
 
 vi.mock("@/context/ExtensionStateContext", () => ({
 	useExtensionState: () => extensionState,
@@ -80,6 +104,8 @@ describe("HistoryViewItem", () => {
 
 describe("HistoryPreview", () => {
 	beforeEach(() => {
+		historyListHeight = 136
+		resizeObserverCallback = undefined
 		extensionState.taskHistory = []
 		extensionState.workspaceRoots = [{ path: "C:\\work\\current", name: "current" }]
 		vi.mocked(TaskServiceClient.getTaskHistory).mockReset().mockResolvedValue({ tasks: [], totalCount: 0 })
@@ -99,7 +125,13 @@ describe("HistoryPreview", () => {
 		expect(screen.getByText("2026/01/01 02:03:04")).toBeInTheDocument()
 		await waitFor(() =>
 			expect(TaskServiceClient.getTaskHistory).toHaveBeenCalledWith(
-				expect.objectContaining({ currentWorkspaceOnly: true, favoritesOnly: false, sortBy: "newest" }),
+				expect.objectContaining({
+					currentWorkspaceOnly: true,
+					favoritesOnly: false,
+					includeCompletionStatus: true,
+					resultLimit: HISTORY_PREVIEW_LIMIT,
+					sortBy: "newest",
+				}),
 			),
 		)
 	})
@@ -144,6 +176,60 @@ describe("HistoryPreview", () => {
 
 		await waitFor(() => expect(TaskServiceClient.getTaskHistory).toHaveBeenCalledTimes(2))
 		expect(await screen.findByText("Task workspace")).toBeInTheDocument()
+	})
+
+	it("renders only complete rows that fit the available list height", async () => {
+		extensionState.taskHistory = Array.from({ length: 4 }, (_, index) => historyItem(String(index + 1), 4 - index))
+		vi.mocked(TaskServiceClient.getTaskHistory).mockResolvedValue({ tasks: extensionState.taskHistory, totalCount: 4 })
+
+		render(<HistoryPreview showHistoryView={vi.fn()} />)
+
+		await waitFor(() => expect(screen.queryByText("Task 3")).not.toBeInTheDocument())
+		expect(screen.getByText("Task 1")).toBeInTheDocument()
+		expect(screen.getByText("Task 2")).toBeInTheDocument()
+		expect(screen.queryByText("Task 4")).not.toBeInTheDocument()
+	})
+
+	it("recalculates complete rows when the list height changes", async () => {
+		extensionState.taskHistory = Array.from({ length: 4 }, (_, index) => historyItem(String(index + 1), 4 - index))
+		vi.mocked(TaskServiceClient.getTaskHistory).mockResolvedValue({ tasks: extensionState.taskHistory, totalCount: 4 })
+
+		render(<HistoryPreview showHistoryView={vi.fn()} />)
+		expect(await screen.findByText("Task 2")).toBeInTheDocument()
+		expect(screen.queryByText("Task 3")).not.toBeInTheDocument()
+
+		act(() => {
+			historyListHeight = 208
+			resizeObserverCallback?.([], {} as ResizeObserver)
+		})
+		expect(screen.getByText("Task 3")).toBeInTheDocument()
+
+		act(() => {
+			historyListHeight = 135
+			resizeObserverCallback?.([], {} as ResizeObserver)
+		})
+		expect(screen.getByText("Task 1")).toBeInTheDocument()
+		expect(screen.queryByText("Task 2")).not.toBeInTheDocument()
+	})
+
+	it("shows a completion check with a completion tooltip", async () => {
+		const user = userEvent.setup()
+		const completed = historyItem("completed", 1, { isCompleted: true })
+		extensionState.taskHistory = [completed]
+		vi.mocked(TaskServiceClient.getTaskHistory).mockResolvedValue({ tasks: [completed], totalCount: 1 })
+
+		render(<HistoryPreview showHistoryView={vi.fn()} />)
+
+		const completionStatus = await screen.findByLabelText("完成")
+		await user.hover(completionStatus)
+		expect(await screen.findByRole("tooltip")).toHaveTextContent("完成")
+	})
+
+	it("never counts a partially visible row", () => {
+		expect(getVisibleHistoryTaskCount(135)).toBe(1)
+		expect(getVisibleHistoryTaskCount(136)).toBe(2)
+		expect(getVisibleHistoryTaskCount(207)).toBe(2)
+		expect(getVisibleHistoryTaskCount(208)).toBe(3)
 	})
 
 	it("shows up to ten newest tasks for the selected workspace", () => {

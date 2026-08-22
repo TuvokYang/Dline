@@ -13,6 +13,7 @@ import { getCwd, getDesktopDir } from "@/utils/path"
 import { ApiConversation } from "../storage/ApiConversation"
 import { ensureTaskDirectoryExists } from "../storage/disk"
 import { UIMessage } from "../storage/UIMessage"
+import { isTaskHistoryCompleted } from "./history-completion"
 import { TaskState } from "./TaskState"
 
 // Event types for clineMessages changes
@@ -180,6 +181,7 @@ export class MessageStateHandler extends EventEmitter<MessageStateHandlerEvents>
 				cwdOnTaskInitialization: cwd,
 				conversationHistoryDeletedRange: this.taskState.conversationHistoryDeletedRange,
 				isFavorited: this.taskIsFavorited,
+				isCompleted: isTaskHistoryCompleted(persisted),
 				checkpointManagerErrorMessage: this.taskState.checkpointManagerErrorMessage,
 				modelId: lastModelInfo?.modelInfo?.modelId,
 				providerId: lastModelInfo?.modelInfo?.providerId,

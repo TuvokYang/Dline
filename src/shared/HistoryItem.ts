@@ -19,6 +19,8 @@ export type HistoryItem = {
 	cwdOnTaskInitialization?: string
 	conversationHistoryDeletedRange?: [number, number]
 	isFavorited?: boolean
+	/** Whether the latest user-visible conversation ended through attempt_completion. */
+	isCompleted?: boolean
 	checkpointManagerErrorMessage?: string
 
 	modelId?: string

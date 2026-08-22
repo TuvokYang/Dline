@@ -1,7 +1,10 @@
+import { getSavedClineMessages } from "@core/storage/disk"
+import { isTaskHistoryCompleted } from "@core/task/history-completion"
+import type { HistoryItem } from "@shared/HistoryItem"
 import { GetTaskHistoryRequest, TaskHistoryArray } from "@shared/proto/dline/task"
 import { Logger } from "@/shared/services/Logger"
 import { arePathsEqual, getWorkspacePath } from "../../../utils/path"
-import { Controller } from ".."
+import type { Controller } from ".."
 
 /**
  * Gets filtered task history
@@ -11,7 +14,7 @@ import { Controller } from ".."
  */
 export async function getTaskHistory(controller: Controller, request: GetTaskHistoryRequest): Promise<TaskHistoryArray> {
 	try {
-		const { favoritesOnly, currentWorkspaceOnly, searchQuery, sortBy } = request
+		const { favoritesOnly, currentWorkspaceOnly, includeCompletionStatus, resultLimit, searchQuery, sortBy } = request
 
 		// Get task history from global state
 		const taskHistory = controller.stateManager.getGlobalStateKey("taskHistory")
@@ -96,12 +99,34 @@ export async function getTaskHistory(controller: Controller, request: GetTaskHis
 			filteredTasks.sort((a, b) => b.ts - a.ts)
 		}
 
+		let responseTasks = resultLimit > 0 ? filteredTasks.slice(0, resultLimit) : filteredTasks
+		if (includeCompletionStatus) {
+			const enrichedTasks: HistoryItem[] = []
+			for (const item of responseTasks) {
+				if (item.isCompleted !== undefined) {
+					enrichedTasks.push(item)
+					continue
+				}
+				try {
+					const isCompleted = isTaskHistoryCompleted(await getSavedClineMessages(item.id))
+					const updatedItem = { ...item, isCompleted }
+					await controller.updateTaskHistory(updatedItem)
+					enrichedTasks.push(updatedItem)
+				} catch (error) {
+					Logger.warn(`Failed to resolve completion status for task ${item.id}:`, error)
+					enrichedTasks.push(item)
+				}
+			}
+			responseTasks = enrichedTasks
+		}
+
 		// Map to response format
-		const tasks = filteredTasks.map((item) => ({
+		const tasks = responseTasks.map((item) => ({
 			id: item.id,
 			task: item.task,
 			ts: item.ts,
 			isFavorited: item.isFavorited || false,
+			isCompleted: item.isCompleted === true,
 			size: item.size || 0,
 			totalCost: item.totalCost || 0,
 			currency: item.currency || "",

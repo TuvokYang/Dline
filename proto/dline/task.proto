@@ -113,6 +113,8 @@ message GetTaskHistoryRequest {
   string search_query = 3;
   string sort_by = 4;
   bool current_workspace_only = 5;
+  bool include_completion_status = 6;
+  int32 result_limit = 7;
 }
 
 // Response for task history
@@ -176,6 +178,7 @@ message TaskItem {
   string model_id = 11;
   optional double cache_hit_rate = 12;
   optional string currency = 13;
+  optional bool is_completed = 14;
 }
 
 // Request for ask response operation

@@ -74,7 +74,7 @@ export const WelcomeSection: React.FC<WelcomeSectionProps> = ({
 	return (
 		<div className="flex flex-col flex-1 w-full h-full p-0 m-0">
 			<WhatsNewModal onClose={handleCloseWhatsNewModal} open={showWhatsNewModal} version={version} />
-			<div className="overflow-hidden flex flex-col pb-2.5">
+			<div className={`overflow-hidden flex flex-col pb-2.5 ${shouldShowQuickWins ? "" : "flex-1 min-h-0"}`}>
 				<HomeHeader shouldShowQuickWins={shouldShowQuickWins} />
 				{!showWhatsNewModal && (
 					<>

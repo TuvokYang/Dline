@@ -56,7 +56,7 @@ export function FooterActions({
 					{error}
 				</div>
 			) : null}
-			<div className="flex border border-(--vscode-panel-border) rounded gap-1.5">
+			<div className="flex gap-1.5">
 				{actions.map((action) => {
 					const targetsTask = action.dispatchTarget === "task"
 					const carriesDraft = action.payloadPolicy === "draft" || action.payloadPolicy === "draft_and_selection"
@@ -68,7 +68,7 @@ export function FooterActions({
 							appearance={action.appearance === "primary" ? "primary" : "secondary"}
 							aria-disabled={buttonDisabled}
 							aria-label={action.label}
-							className="flex-1 focus:ring-2 focus:ring-[--vscode-focusBorder] rounded"
+							className="flex-1 border border-(--vscode-panel-border) rounded focus:ring-2 focus:ring-[--vscode-focusBorder]"
 							disabled={buttonDisabled}
 							key={action.type}
 							onClick={() => {

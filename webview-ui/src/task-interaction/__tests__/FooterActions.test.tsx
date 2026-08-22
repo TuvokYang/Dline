@@ -399,6 +399,11 @@ describe("FooterActions", () => {
 		)
 		const actionButtons = screen.getAllByRole("button")
 		expect(actionButtons.map((button) => button.getAttribute("aria-label"))).toEqual(["Continue in Background", "Cancel"])
+		const actionGroup = actionButtons[0].parentElement
+		expect(actionGroup).toHaveClass("flex", "gap-1.5")
+		expect(actionGroup).not.toHaveClass("border", "rounded")
+		expect(actionButtons[0]).toHaveClass("border", "border-(--vscode-panel-border)", "rounded")
+		expect(actionButtons[1]).toHaveClass("border", "border-(--vscode-panel-border)", "rounded")
 		fireEvent.click(actionButtons[0])
 
 		await waitFor(() =>

@@ -1,10 +1,11 @@
 import type { HistoryItem } from "@shared/HistoryItem"
 import { StringRequest } from "@shared/proto/dline/common"
 import { GetTaskHistoryRequest } from "@shared/proto/dline/task"
-import { ExternalLinkIcon } from "lucide-react"
-import { memo, useEffect, useMemo, useState } from "react"
+import { CheckIcon, ExternalLinkIcon } from "lucide-react"
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { useExtensionState } from "@/context/ExtensionStateContext"
 import { TaskServiceClient } from "@/services/grpc-client"
+import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip"
 
 type HistoryPreviewProps = {
 	showHistoryView: () => void
@@ -12,9 +13,12 @@ type HistoryPreviewProps = {
 
 export type HistoryPreviewFilter = "workspace" | "favorite" | "all"
 
-type PreviewTask = Pick<HistoryItem, "id" | "task" | "ts"> & Partial<Pick<HistoryItem, "currency" | "isFavorited" | "totalCost">>
+type PreviewTask = Pick<HistoryItem, "id" | "task" | "ts"> &
+	Partial<Pick<HistoryItem, "currency" | "isCompleted" | "isFavorited" | "totalCost">>
 
 export const HISTORY_PREVIEW_LIMIT = 10
+export const HISTORY_PREVIEW_ROW_HEIGHT_PX = 64
+export const HISTORY_PREVIEW_ROW_GAP_PX = 8
 const INITIAL_HISTORY_LOAD_RETRY_DELAY_MS = 250
 
 const FILTERS: Array<{ value: HistoryPreviewFilter; label: string }> = [
@@ -25,6 +29,12 @@ const FILTERS: Array<{ value: HistoryPreviewFilter; label: string }> = [
 
 function normalizeWorkspacePath(value: string): string {
 	return value.replace(/\\/g, "/").replace(/\/+$/, "").toLocaleLowerCase()
+}
+
+/** Return the number of fixed-height rows that fit without clipping. */
+export function getVisibleHistoryTaskCount(containerHeight: number): number {
+	const rowStride = HISTORY_PREVIEW_ROW_HEIGHT_PX + HISTORY_PREVIEW_ROW_GAP_PX
+	return Math.min(HISTORY_PREVIEW_LIMIT, Math.max(0, Math.floor((containerHeight + HISTORY_PREVIEW_ROW_GAP_PX) / rowStride)))
 }
 
 /** Format a task's last-edit timestamp using local time. */
@@ -68,7 +78,10 @@ const HistoryPreview = ({ showHistoryView }: HistoryPreviewProps) => {
 		requestKey: string
 		tasks: PreviewTask[]
 	}>()
+	const listRef = useRef<HTMLDivElement>(null)
+	const [visibleTaskCount, setVisibleTaskCount] = useState(0)
 	const tasks = loadedTasks?.requestKey === requestKey ? loadedTasks.tasks : fallbackTasks
+	const visibleTasks = tasks.slice(0, visibleTaskCount)
 
 	useEffect(() => {
 		let cancelled = false
@@ -79,6 +92,8 @@ const HistoryPreview = ({ showHistoryView }: HistoryPreviewProps) => {
 					GetTaskHistoryRequest.create({
 						currentWorkspaceOnly: filter === "workspace",
 						favoritesOnly: filter === "favorite",
+						includeCompletionStatus: true,
+						resultLimit: HISTORY_PREVIEW_LIMIT,
 						sortBy: "newest",
 					}),
 				)
@@ -101,6 +116,21 @@ const HistoryPreview = ({ showHistoryView }: HistoryPreviewProps) => {
 			if (retryTimer) clearTimeout(retryTimer)
 		}
 	}, [filter, requestKey])
+
+	useLayoutEffect(() => {
+		const list = listRef.current
+		if (!list) return
+		const updateVisibleTaskCount = () => setVisibleTaskCount(getVisibleHistoryTaskCount(list.clientHeight))
+		updateVisibleTaskCount()
+		if (typeof ResizeObserver === "undefined") {
+			window.addEventListener("resize", updateVisibleTaskCount)
+			return () => window.removeEventListener("resize", updateVisibleTaskCount)
+		}
+		const observer = new ResizeObserver(updateVisibleTaskCount)
+		observer.observe(list)
+		return () => observer.disconnect()
+	}, [])
+
 	const handleHistorySelect = (id: string) => {
 		TaskServiceClient.showTaskWithId(StringRequest.create({ value: id })).catch((error) =>
 			console.error("Error showing task:", error),
@@ -110,16 +140,24 @@ const HistoryPreview = ({ showHistoryView }: HistoryPreviewProps) => {
 	const getCostSymbol = (currency?: string) => (currency === "CNY" ? "￥" : "$")
 
 	return (
-		<div style={{ flexShrink: 0 }}>
+		<div className="history-preview">
 			<style>
 				{`
+					.history-preview {
+						display: flex;
+						flex: 1;
+						flex-direction: column;
+						min-height: 0;
+					}
 					.history-preview-item {
 						background-color: color-mix(in srgb, var(--vscode-toolbar-hoverBackground) 65%, transparent);
 						border-radius: 4px;
 						position: relative;
 						overflow: hidden;
+						box-sizing: border-box;
 						cursor: pointer;
-						margin-bottom: 8px;
+						height: ${HISTORY_PREVIEW_ROW_HEIGHT_PX}px;
+						min-height: ${HISTORY_PREVIEW_ROW_HEIGHT_PX}px;
 						padding: 10px 12px;
 						display: flex;
 						align-items: flex-start;
@@ -195,10 +233,18 @@ const HistoryPreview = ({ showHistoryView }: HistoryPreviewProps) => {
 					.history-preview-item:hover .history-preview-btns {
 						opacity: 1;
 					}
+					.history-completion-status {
+						align-self: center;
+						color: var(--vscode-testing-iconPassed, var(--vscode-button-background));
+						display: inline-flex;
+						flex-shrink: 0;
+					}
 					.history-preview-list {
-						/* Fill 70vh of the Welcome page with RECENT task entries.
-						   No scrolling capability: the list just fills the height. */
-						height: 70vh;
+						display: flex;
+						flex: 1;
+						flex-direction: column;
+						gap: ${HISTORY_PREVIEW_ROW_GAP_PX}px;
+						min-height: 0;
 						overflow: hidden;
 					}
 					.history-preview-filters {
@@ -262,9 +308,9 @@ const HistoryPreview = ({ showHistoryView }: HistoryPreviewProps) => {
 				</div>
 			</div>
 
-			<div className="px-4 history-preview-list">
+			<div className="px-4 history-preview-list" ref={listRef}>
 				{tasks.length > 0 ? (
-					tasks.map((item) => (
+					visibleTasks.map((item) => (
 						<div
 							className="history-preview-item"
 							key={item.id}
@@ -312,6 +358,16 @@ const HistoryPreview = ({ showHistoryView }: HistoryPreviewProps) => {
 									</span>
 								)}
 							</div>
+							{item.isCompleted && (
+								<Tooltip>
+									<TooltipTrigger asChild>
+										<span aria-label="完成" className="history-completion-status">
+											<CheckIcon aria-hidden="true" size={16} strokeWidth={2.4} />
+										</span>
+									</TooltipTrigger>
+									<TooltipContent side="left">完成</TooltipContent>
+								</Tooltip>
+							)}
 						</div>
 					))
 				) : (
