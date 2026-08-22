@@ -104,7 +104,7 @@ export function projectTaskView(
 			}
 		: undefined
 	const actions = commandHandoffAction
-		? projectedActions.map((action) => (action.type === "cancel" ? commandHandoffAction : action))
+		? projectedActions.flatMap((action) => (action.type === "cancel" ? [commandHandoffAction, action] : [action]))
 		: projectedActions
 	return {
 		taskId: state.taskId,

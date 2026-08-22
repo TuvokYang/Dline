@@ -364,7 +364,7 @@ describe("FooterActions", () => {
 		await waitFor(() => expect(dispatchTaskAction).toHaveBeenCalledWith(expect.objectContaining({ type: "cancel" })))
 	})
 
-	it("dispatches Continue in Background with the projected command activity identity", async () => {
+	it("renders Continue in Background before Cancel and dispatches both task actions", async () => {
 		const view = approvalView()
 		delete view.activeInteraction
 		view.phase = "executing"
@@ -378,6 +378,14 @@ describe("FooterActions", () => {
 				dispatchTarget: "task",
 				activityId: "command-1",
 			},
+			{
+				type: "cancel",
+				label: "Cancel",
+				appearance: "danger",
+				enabled: true,
+				payloadPolicy: "none",
+				dispatchTarget: "task",
+			},
 		]
 		const dispatchTaskAction = vi.fn(async () => undefined)
 
@@ -389,13 +397,17 @@ describe("FooterActions", () => {
 				view={view}
 			/>,
 		)
-		fireEvent.click(screen.getByRole("button", { name: "Continue in Background" }))
+		const actionButtons = screen.getAllByRole("button")
+		expect(actionButtons.map((button) => button.getAttribute("aria-label"))).toEqual(["Continue in Background", "Cancel"])
+		fireEvent.click(actionButtons[0])
 
 		await waitFor(() =>
 			expect(dispatchTaskAction).toHaveBeenCalledWith(
 				expect.objectContaining({ type: "continue_in_background", activityId: "command-1" }),
 			),
 		)
+		fireEvent.click(actionButtons[1])
+		await waitFor(() => expect(dispatchTaskAction).toHaveBeenCalledWith(expect.objectContaining({ type: "cancel" })))
 	})
 
 	it("shows a task action dispatch failure and restores the action", async () => {

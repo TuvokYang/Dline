@@ -987,9 +987,13 @@ e2e(
 		await expect(sidebar.getByTestId("command-execution-mode").last()).toHaveText("Foreground", { timeout: 60_000 })
 		const taskFooter = sidebar.getByRole("contentinfo")
 		await expect(sidebar.getByRole("button", { name: "Move to background" })).toHaveCount(0)
-		const continueInBackground = taskFooter.getByText("Continue in Background", { exact: true })
+		const continueInBackground = taskFooter.locator('vscode-button[aria-label="Continue in Background"]')
+		const actionRow = continueInBackground.locator("xpath=..")
+		const cancel = actionRow.locator('vscode-button[aria-label="Cancel"]')
 		await expect(continueInBackground).toBeVisible({ timeout: 40_000 })
-		await expect(taskFooter.getByText("Cancel", { exact: true })).toHaveCount(0)
+		await expect(cancel).toBeVisible()
+		await expect(actionRow.locator("vscode-button")).toHaveText(["Continue in Background", "Cancel"])
+		await taskFooter.screenshot({ path: e2e.info().outputPath("command-chat-footer-handoff.png") })
 		await continueInBackground.click()
 
 		await expect(sidebar.getByText("E2E_MANUAL_HANDOFF_MOVED", { exact: false }).last()).toBeVisible({

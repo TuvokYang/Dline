@@ -198,6 +198,14 @@ describe("InteractionHost", () => {
 				dispatchTarget: "task",
 				activityId: "command-1",
 			},
+			{
+				type: "cancel",
+				label: "Cancel",
+				appearance: "danger",
+				enabled: true,
+				payloadPolicy: "none",
+				dispatchTarget: "task",
+			},
 		]
 		render(<InteractionHost dispatch={vi.fn()} messages={[SAY]} view={view} />)
 
@@ -209,6 +217,9 @@ describe("InteractionHost", () => {
 			),
 		)
 		expect(TaskServiceClient.cancelTask).not.toHaveBeenCalled()
+
+		fireEvent.click(screen.getByRole("button", { name: "Cancel" }))
+		await waitFor(() => expect(TaskServiceClient.cancelTask).toHaveBeenCalledOnce())
 	})
 
 	it.each([

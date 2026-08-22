@@ -280,7 +280,7 @@ describe("projectTaskView", () => {
 		expect(view.footer.actions.map((action) => action.type)).toEqual(["start_new_task"])
 	})
 
-	it("replaces task Cancel with Continue in Background for the ready foreground command", () => {
+	it("projects Continue in Background before task Cancel for the ready foreground command", () => {
 		const view = projectTaskView(runtime(TaskPhase.EXECUTING), {
 			commandHandoffActivityId: "command-1",
 		})
@@ -294,6 +294,14 @@ describe("projectTaskView", () => {
 				payloadPolicy: "none",
 				dispatchTarget: "task",
 				activityId: "command-1",
+			},
+			{
+				type: "cancel",
+				label: "Cancel",
+				appearance: "danger",
+				enabled: true,
+				payloadPolicy: "none",
+				dispatchTarget: "task",
 			},
 		])
 	})
