@@ -201,9 +201,9 @@ function stubSystemPrompt(native: boolean, inspectContext?: (context: SystemProm
 	})
 }
 
-function stubApiHandler(createMessage: any, contextWindow = 200_000, hostedWebSearch = false) {
+function stubApiHandler(createMessage: any, contextWindow = 200_000, hostedWebSearch = false, abort = vi.fn()) {
 	vi.spyOn(coreApi, "buildApiHandler").mockReturnValue({
-		abort: vi.fn(),
+		abort,
 		getProviderId: () => "anthropic",
 		supportsServerTool: (tool: ServerTool) => hostedWebSearch && tool === ServerTool.WEB_SEARCH,
 		getModel: () => ({
@@ -571,16 +571,107 @@ describe("SubagentRunner", () => {
 		assert.equal(result.status, "completed", result.error)
 		assert.equal(result.result, "done")
 		assert.equal(createMessage.mock.calls.length, 2)
+		const completedToolEvents = progress.mock.calls
+			.map(([update]) => update.event)
+			.filter((event) => event?.kind === "tool_call" && event.toolStatus === "completed")
 		assert.deepEqual(
-			progress.mock.calls
-				.map(([update]) => update.event)
-				.filter((event) => event?.kind === "tool_call" && event.toolStatus === "completed")
-				.map((event) => ({ toolName: event.toolName, summary: event.summary })),
+			completedToolEvents.map((event) => ({ toolName: event.toolName, summary: event.summary })),
 			[
 				{ toolName: ClineDefaultTool.LIST_FILES, summary: "list_files(path=., recursive=false)" },
 				{ toolName: ClineDefaultTool.ATTEMPT, summary: "attempt_completion(result=done)" },
 			],
 		)
+		assert.equal(new Set(completedToolEvents.map((event) => event.toolCallId)).size, 2)
+		assert.ok(completedToolEvents.every((event) => event.toolCallId?.startsWith("dline_tid_")))
+	})
+
+	it("switches a timeout finish request to an attempt_completion-only next turn", async () => {
+		let runner: SubagentRunner
+		const abort = vi.fn()
+		const createMessage = vi.fn()
+		createMessage.mockImplementationOnce(async function* () {
+			await runner.requestFinish("timeout")
+			yield { type: "text", text: "partial findings" }
+		})
+		createMessage.mockImplementationOnce(async function* (_systemPrompt: string, conversation: unknown[], tools: unknown[]) {
+			const reminder = conversation.at(-1) as { role: string; content: Array<{ type: string; text?: string }> }
+			assert.equal(reminder.role, "user")
+			assert.match(reminder.content[0]?.text || "", /time limit/i)
+			assert.match(reminder.content[0]?.text || "", /Do not call any other tool/i)
+			assert.deepEqual(
+				(tools as Array<{ function: { name: string } }>).map((tool) => tool.function.name),
+				[ClineDefaultTool.ATTEMPT],
+			)
+			yield {
+				type: "tool_calls",
+				function_id: "toolu_timeout_complete",
+				tool_index: 0,
+				tool_call: {
+					function: {
+						name: ClineDefaultTool.ATTEMPT,
+						arguments: JSON.stringify({ result: "finished after timeout reminder" }),
+					},
+				},
+			}
+		})
+		vi.spyOn(systemPromptFacade, "getSystemPrompt").mockResolvedValue({
+			systemPrompt: "system prompt",
+			tools: [
+				{ type: "function", function: { name: ClineDefaultTool.LIST_FILES, description: "List files" } },
+				{ type: "function", function: { name: ClineDefaultTool.ATTEMPT, description: "Complete" } },
+			] as never,
+			profile: PromptProfile.Standard,
+			warnings: [],
+		})
+		vi.spyOn(skills, "discoverSkills").mockResolvedValue([])
+		vi.spyOn(skills, "getAvailableSkills").mockReturnValue([])
+		stubApiHandler(createMessage, 200_000, false, abort)
+		initializeHostProvider()
+		runner = new SubagentRunner(createTaskConfig(true))
+
+		const result = await runner.run("Explore until timeout", () => {})
+
+		assert.equal(result.status, "completed", result.error)
+		assert.equal(result.result, "finished after timeout reminder")
+		assert.equal(createMessage.mock.calls.length, 2)
+		assert.equal(abort.mock.calls.length, 1)
+	})
+
+	it("reports the effective runtime configuration before the first provider request", async () => {
+		const createMessage = vi.fn().mockImplementation(async function* () {
+			yield {
+				type: "tool_calls",
+				function_id: "runtime-config-complete",
+				tool_call: {
+					function: {
+						name: ClineDefaultTool.ATTEMPT,
+						arguments: JSON.stringify({ result: "done" }),
+					},
+				},
+			}
+		})
+		stubSystemPrompt(false)
+		vi.spyOn(skills, "discoverSkills").mockResolvedValue([])
+		vi.spyOn(skills, "getAvailableSkills").mockReturnValue([])
+		stubApiHandler(createMessage)
+		initializeHostProvider()
+		const progress = vi.fn()
+
+		const result = await new SubagentRunner(createTaskConfig(false), "reviewer", {
+			name: "reviewer",
+			description: "Review code",
+			profile: "anthropic",
+			tools: [ClineDefaultTool.ATTEMPT],
+			systemPrompt: "Review carefully.",
+		}).run("Review", progress)
+
+		assert.equal(result.status, "completed", result.error)
+		expect(progress.mock.calls[0]?.[0].runtime).toMatchObject({
+			profileName: "anthropic",
+			providerId: "anthropic",
+			modelId: "anthropic/claude-sonnet-4.5",
+			apiFormat: "anthropic_chat",
+		})
 	})
 
 	it("switches a manual finish request to an attempt_completion-only next turn", async () => {

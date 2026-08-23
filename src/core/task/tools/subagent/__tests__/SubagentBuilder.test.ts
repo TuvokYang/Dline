@@ -15,7 +15,11 @@ import { SUBAGENT_DEFAULT_ALLOWED_TOOLS, SUBAGENT_SYSTEM_SUFFIX, SubagentBuilder
  * @param provider Current act and plan profile name.
  * @returns TaskConfig test double.
  */
-function createTaskConfig(mode: "act" | "plan", provider: string): TaskConfig {
+function createTaskConfig(
+	mode: "act" | "plan",
+	provider: string,
+	actModeReasoningOverride?: { kind: "effort"; effort: string },
+): TaskConfig {
 	return {
 		ulid: "ulid-123",
 		services: {
@@ -25,6 +29,7 @@ function createTaskConfig(mode: "act" | "plan", provider: string): TaskConfig {
 					({
 						actModeProfile: provider,
 						planModeProfile: provider,
+						actModeReasoningOverride,
 						actModeApiModelId: "act-default",
 						planModeApiModelId: "plan-default",
 						actModeOpenAiModelId: "openai-act-default",
@@ -75,6 +80,33 @@ describe("SubagentBuilder", () => {
 		assert.match(prompt, /Plain assistant text cannot complete a subagent run/)
 		assert.match(prompt, /attempt_completion/)
 		assert.match(prompt, new RegExp(SUBAGENT_SYSTEM_SUFFIX.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")))
+	})
+
+	it("reports reasoning after applying the same task override used by the API handler", () => {
+		vi.spyOn(profileStore, "readApiProfiles").mockReturnValue([
+			{
+				id: "profile-1",
+				name: "anthropic",
+				provider: "anthropic",
+				apiKey: "",
+				modelId: "claude-opus-4-7",
+				usedFor: ["act", "subagents"],
+				enabled: true,
+				modelInfo: {
+					id: "claude-opus-4-7",
+					capabilities: {
+						supportsReasoning: true,
+						thinking: { supported: true, mode: "effort", effortLevels: ["low", "high"] },
+					},
+				},
+				anthropic: { reasoning: { enableThinking: true, effort: "low" } },
+			},
+		] as ReturnType<typeof profileStore.readApiProfiles>)
+		vi.spyOn(api, "buildApiHandler").mockReturnValue({ getModel: vi.fn(), createMessage: vi.fn() } as never)
+
+		const builder = new SubagentBuilder(createTaskConfig("act", "anthropic", { kind: "effort", effort: "high" }))
+
+		assert.deepEqual(builder.getReasoningConfig(), { enableThinking: true, effort: "high", thinkingBudget: undefined })
 	})
 
 	it("uses defaults when no cached config is provided", () => {

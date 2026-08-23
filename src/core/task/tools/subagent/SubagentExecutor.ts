@@ -1,5 +1,15 @@
 export type SubagentExecStatus = "completed" | "failed" | "timeout" | "cancelled"
 
+export interface SubagentRuntimeConfig {
+	profileName?: string
+	providerId: string
+	modelId: string
+	apiFormat?: string
+	thinkingEnabled?: boolean
+	reasoningEffort?: string
+	thinkingBudgetTokens?: number
+}
+
 export interface SubagentRunStats {
 	toolCalls: number
 	inputTokens: number
@@ -30,6 +40,7 @@ export interface SubagentProgressEvent {
 }
 
 export interface SubagentProgressUpdate {
+	runtime?: SubagentRuntimeConfig
 	stats?: SubagentRunStats
 	latestToolCall?: string
 	status?: "running" | "completed" | "failed" | "cancelled"

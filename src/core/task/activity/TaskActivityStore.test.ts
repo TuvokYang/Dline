@@ -245,6 +245,119 @@ describe("TaskActivityStore", () => {
 		expect(reopened.isCancellable("subagent-1")).toBe(false)
 	})
 
+	it("preserves complete tool history when verbose streaming exceeds the activity event cap", async () => {
+		const persisted: Array<ReturnType<TaskActivityStore["list"]>> = []
+		const persistence = {
+			load: vi.fn(async () => persisted.at(-1) ?? []),
+			save: vi.fn(async (activities: ReturnType<TaskActivityStore["list"]>) => {
+				persisted.push(activities)
+			}),
+		}
+		const store = new TaskActivityStore("task-1", persistence)
+		store.create({
+			activityId: "subagent-verbose",
+			kind: "subagent",
+			executionMode: "background",
+			title: "verbose research",
+		})
+		store.appendEvent("subagent-verbose", {
+			kind: "tool_call",
+			toolCallId: "early-tool",
+			toolName: "read_file",
+			toolStatus: "completed",
+			summary: "read_file(path=README.md)",
+		})
+		store.appendEvent("subagent-verbose", {
+			kind: "tool_result",
+			toolCallId: "early-tool",
+			toolName: "read_file",
+			text: "early result",
+		})
+
+		for (let index = 0; index < 600; index += 1) {
+			store.appendEvent("subagent-verbose", {
+				kind: index % 2 === 0 ? "thinking" : "assistant_message",
+				phase: "delta",
+				text: `stream-${index}`,
+			})
+		}
+
+		store.appendEvent("subagent-verbose", {
+			kind: "tool_call",
+			toolCallId: "late-tool",
+			toolName: "list_files",
+			toolStatus: "completed",
+			summary: "list_files(path=src)",
+		})
+		store.appendEvent("subagent-verbose", {
+			kind: "tool_result",
+			toolCallId: "late-tool",
+			toolName: "list_files",
+			text: "late result",
+		})
+		await store.waitForPersistence()
+
+		const events = store.get("subagent-verbose")?.events ?? []
+		expect(events.length).toBeLessThanOrEqual(500)
+		expect(events.filter((event) => event.kind === "tool_call").map((event) => event.toolCallId)).toEqual([
+			"early-tool",
+			"late-tool",
+		])
+		expect(events.filter((event) => event.kind === "tool_result").map((event) => event.toolCallId)).toEqual([
+			"early-tool",
+			"late-tool",
+		])
+
+		const reopened = new TaskActivityStore("task-1", persistence)
+		await reopened.hydrate()
+		expect(
+			reopened
+				.get("subagent-verbose")
+				?.events.filter((event) => event.kind === "tool_call")
+				.map((event) => event.toolCallId),
+		).toEqual(["early-tool", "late-tool"])
+	})
+
+	it("retains one ordered tool row per call when tool lifecycle events alone exceed the cap", () => {
+		const store = new TaskActivityStore("task-1")
+		store.create({
+			activityId: "subagent-many-tools",
+			kind: "subagent",
+			executionMode: "background",
+			title: "many tools",
+		})
+		for (let index = 0; index < 260; index += 1) {
+			const toolCallId = `tool-${index}`
+			store.appendEvent("subagent-many-tools", {
+				kind: "tool_call",
+				toolCallId,
+				toolName: "read_file",
+				toolStatus: "started",
+			})
+			store.appendEvent("subagent-many-tools", {
+				kind: "tool_call",
+				toolCallId,
+				toolName: "read_file",
+				toolStatus: "completed",
+				summary: `read_file(path=file-${index}.ts)`,
+			})
+			store.appendEvent("subagent-many-tools", {
+				kind: "tool_result",
+				toolCallId,
+				toolName: "read_file",
+				text: `result-${index}`,
+			})
+		}
+
+		const toolCalls =
+			store
+				.get("subagent-many-tools")
+				?.events.filter((event) => event.kind === "tool_call")
+				.filter((event) => event.toolStatus === "completed") ?? []
+		expect(toolCalls).toHaveLength(260)
+		expect(toolCalls.map((event) => event.toolCallId)).toEqual(Array.from({ length: 260 }, (_, index) => `tool-${index}`))
+	})
+
 	it("merges hydrated history before persisting an opening live activity", async () => {
 		let resolveLoad!: (activities: ReturnType<TaskActivityStore["list"]>) => void
 		const load = vi.fn(

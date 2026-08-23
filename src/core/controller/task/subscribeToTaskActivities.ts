@@ -2,6 +2,7 @@ import {
 	TaskActivity as ProtoTaskActivity,
 	TaskActivityEvent as ProtoTaskActivityEvent,
 	TaskActivityMetrics as ProtoTaskActivityMetrics,
+	TaskActivityRuntimeConfig as ProtoTaskActivityRuntimeConfig,
 	TaskActivityUpdate as ProtoTaskActivityUpdate,
 	TaskActivitySubscriptionRequest,
 } from "@shared/proto/dline/task"
@@ -15,11 +16,28 @@ function toProtoMetrics(metrics: TaskActivityRecord["metrics"]): ProtoTaskActivi
 				toolCalls: metrics.toolCalls ?? 0,
 				inputTokens: metrics.inputTokens ?? 0,
 				outputTokens: metrics.outputTokens ?? 0,
+				cacheWriteTokens: metrics.cacheWriteTokens ?? 0,
+				cacheReadTokens: metrics.cacheReadTokens ?? 0,
+				cacheHitRate: metrics.cacheHitRate ?? 0,
 				totalCost: metrics.totalCost ?? 0,
 				currency: metrics.currency ?? "",
 				contextTokens: metrics.contextTokens ?? 0,
 				contextWindow: metrics.contextWindow ?? 0,
 				lineCount: metrics.lineCount ?? 0,
+			})
+		: undefined
+}
+
+function toProtoRuntime(runtime: TaskActivityRecord["runtime"]): ProtoTaskActivityRuntimeConfig | undefined {
+	return runtime
+		? ProtoTaskActivityRuntimeConfig.create({
+				profileName: runtime.profileName,
+				providerId: runtime.providerId ?? "",
+				modelId: runtime.modelId ?? "",
+				apiFormat: runtime.apiFormat,
+				thinkingEnabled: runtime.thinkingEnabled,
+				reasoningEffort: runtime.reasoningEffort,
+				thinkingBudgetTokens: runtime.thinkingBudgetTokens,
 			})
 		: undefined
 }
@@ -53,6 +71,7 @@ function toProtoActivity(
 		retryable,
 		schemaVersion: activity.schemaVersion,
 		metrics: toProtoMetrics(activity.metrics),
+		runtime: toProtoRuntime(activity.runtime),
 		events: activity.events.map((event) =>
 			ProtoTaskActivityEvent.create({
 				sequence: event.sequence,

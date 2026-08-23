@@ -1,5 +1,7 @@
 import { buildApiHandler } from "@core/api"
+import { applyTaskRuntimeOverrides } from "@core/api/runtime-profile"
 import { readApiProfiles } from "@core/controller/file/getApiProfiles"
+import { resolveProfileReasoningConfig } from "@shared/task-reasoning"
 import { ClineDefaultTool } from "@shared/tools"
 import type { TaskConfig } from "../types/TaskConfig"
 import type { AgentBaseConfig } from "./AgentConfigLoader"
@@ -28,6 +30,8 @@ export class SubagentBuilder {
 	private readonly agentConfig: AgentConfig = {}
 	private readonly allowedTools: ClineDefaultTool[]
 	private readonly apiHandler: ReturnType<typeof buildApiHandler>
+	private readonly profileName: string | undefined
+	private readonly reasoningConfig: ReturnType<typeof resolveProfileReasoningConfig>
 
 	constructor(
 		private readonly baseConfig: TaskConfig,
@@ -38,11 +42,15 @@ export class SubagentBuilder {
 		this.allowedTools = this.resolveAllowedTools(this.agentConfig.tools, !subagentName || isDefaultSubagentName(subagentName))
 
 		const apiConfiguration = this.baseConfig.services.stateManager.getApiConfiguration()
+		this.profileName = this.resolveProfile(this.agentConfig.profile, apiConfiguration.actModeProfile)
 		const effectiveApiConfiguration = {
 			...apiConfiguration,
-			actModeProfile: this.resolveProfile(this.agentConfig.profile, apiConfiguration.actModeProfile),
+			actModeProfile: this.profileName,
 			ulid: this.baseConfig.ulid,
 		}
+		const profile = readApiProfiles().find((candidate) => candidate.name === this.profileName)
+		const runtimeProfile = profile ? applyTaskRuntimeOverrides(profile, effectiveApiConfiguration, "act") : undefined
+		this.reasoningConfig = resolveProfileReasoningConfig(runtimeProfile)
 		this.apiHandler = buildApiHandler(effectiveApiConfiguration, "act")
 	}
 
@@ -60,6 +68,14 @@ export class SubagentBuilder {
 
 	getConfiguredMaxOutputTokens(): number | undefined {
 		return this.agentConfig.maxOutputTokens
+	}
+
+	getProfileName(): string | undefined {
+		return this.profileName
+	}
+
+	getReasoningConfig(): ReturnType<typeof resolveProfileReasoningConfig> {
+		return this.reasoningConfig
 	}
 
 	buildSystemPrompt(generatedSystemPrompt: string): string {

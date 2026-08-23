@@ -5,7 +5,7 @@ import {
 	SubagentExecutionStatus,
 	SubagentStatusItem,
 } from "@shared/ExtensionMessage"
-import type { TaskActivityEvent } from "@shared/proto/dline/task"
+import type { TaskActivityEvent, TaskActivityRuntimeConfig } from "@shared/proto/dline/task"
 import {
 	BotIcon,
 	BringToFrontIcon,
@@ -25,6 +25,7 @@ import MarkdownBlock from "../common/MarkdownBlock"
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover"
 import { SubagentMetrics } from "./activity/SubagentMetrics"
 import { SubagentRetryTimeline } from "./activity/SubagentRetryTimeline"
+import { SubagentRuntimeConfig } from "./activity/SubagentRuntimeConfig"
 import { SubagentToolTimeline } from "./activity/SubagentToolTimeline"
 import { SubagentWorkSection } from "./activity/SubagentWorkSection"
 import {
@@ -58,6 +59,7 @@ interface SubagentPromptTextProps {
 
 interface SubagentDisplayItem extends SubagentStatusItem {
 	activityEvents?: TaskActivityEvent[]
+	runtime?: TaskActivityRuntimeConfig
 	finishable?: boolean
 	retryable?: boolean
 }
@@ -279,9 +281,11 @@ export default function SubagentStatusRow({ message }: SubagentStatusRowProps) {
 				outputTokens: activity.metrics?.outputTokens ?? entry.outputTokens,
 				totalCost: activity.metrics?.totalCost ?? entry.totalCost,
 				currency: activity.metrics?.currency ?? entry.currency,
+				cacheHitRate: activity.metrics?.cacheHitRate ?? entry.cacheHitRate,
 				contextTokens: activity.metrics?.contextTokens ?? entry.contextTokens,
 				contextWindow: activity.metrics?.contextWindow ?? entry.contextWindow,
 				activityEvents: activity.events,
+				runtime: activity.runtime,
 				finishable: activity.finishable,
 				retryable: activity.retryable,
 			}
@@ -458,7 +462,7 @@ export default function SubagentStatusRow({ message }: SubagentStatusRowProps) {
 										{executionModeIndicator}
 										{showItemFinishButton && (
 											<Button
-												className="h-5 border px-2 py-0 text-[11px] leading-none"
+												className="h-5 border border-button-background px-2 py-0 text-[11px] leading-none hover:border-button-hover"
 												disabled={isPending(finishKey)}
 												onClick={() =>
 													void runControl(finishKey, () =>
@@ -495,6 +499,7 @@ export default function SubagentStatusRow({ message }: SubagentStatusRowProps) {
 										)}
 									</div>
 									<SubagentMetrics
+										cacheHitRate={entry.cacheHitRate}
 										className="basis-full pl-8"
 										currency={entry.currency}
 										finishedAt={entry.finishedAt}
@@ -504,6 +509,7 @@ export default function SubagentStatusRow({ message }: SubagentStatusRowProps) {
 										toolCalls={entry.toolCalls}
 										totalCost={entry.totalCost}
 									/>
+									<SubagentRuntimeConfig className="basis-full pl-8" runtime={entry.runtime} />
 								</div>
 								{!isItemCollapsed && (
 									<div

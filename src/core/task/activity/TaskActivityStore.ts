@@ -6,6 +6,7 @@ import type {
 	TaskActivityKind,
 	TaskActivityMetrics,
 	TaskActivityRecord,
+	TaskActivityRuntimeConfig,
 	TaskActivityStatus,
 	TaskActivityUpdate,
 } from "@shared/task-activity"
@@ -224,7 +225,7 @@ export class TaskActivityStore {
 				| "error"
 				| "finishedAt"
 			>
-		> & { metrics?: Partial<TaskActivityMetrics> },
+		> & { metrics?: Partial<TaskActivityMetrics>; runtime?: TaskActivityRuntimeConfig },
 	): void {
 		const activity = this.activities.get(activityId)
 		if (!activity) return
@@ -236,7 +237,7 @@ export class TaskActivityStore {
 			return
 		}
 		const previousStatus = activity.status
-		const { metrics, ...activityPatch } = patch
+		const { metrics, runtime, ...activityPatch } = patch
 		const sanitizedPatch = {
 			...activityPatch,
 			...(activityPatch.title === undefined ? {} : { title: redactSensitiveText(activityPatch.title) }),
@@ -246,6 +247,9 @@ export class TaskActivityStore {
 			...(activityPatch.error === undefined ? {} : { error: redactSensitiveText(activityPatch.error) }),
 		}
 		Object.assign(activity, sanitizedPatch, { updatedAt: Date.now() })
+		if (runtime && activity.kind === "subagent") {
+			activity.runtime = { ...activity.runtime, ...runtime }
+		}
 		if (metrics && activity.kind === "subagent") {
 			activity.metrics = { ...activity.metrics, ...metrics }
 			this.appendEvent(activityId, { kind: "metrics", metrics: { ...activity.metrics } }, false)
@@ -284,9 +288,7 @@ export class TaskActivityStore {
 		if (!activity) return undefined
 		const event = this.createEvent(input)
 		activity.events.push(event)
-		if (activity.events.length > MAX_EVENTS_PER_ACTIVITY) {
-			activity.events.splice(0, activity.events.length - MAX_EVENTS_PER_ACTIVITY)
-		}
+		this.trimEvents(activity)
 		activity.updatedAt = event.timestamp
 		this.markDirty(activityId, priority)
 		return event
@@ -442,6 +444,19 @@ export class TaskActivityStore {
 		this.listeners.set(listener, delivery)
 	}
 
+	private trimEvents(activity: TaskActivityRecord): void {
+		while (activity.events.length > MAX_EVENTS_PER_ACTIVITY) {
+			const removableIndex = [
+				activity.events.findIndex(
+					(event) => event.kind === "thinking" || event.kind === "assistant_message" || event.kind === "metrics",
+				),
+				activity.events.findIndex((event) => event.kind === "tool_result"),
+				activity.events.findIndex((event) => event.kind === "tool_call" && event.toolStatus === "started"),
+			].find((index) => index >= 0)
+			activity.events.splice(removableIndex ?? 0, 1)
+		}
+	}
+
 	private createEvent(input: TaskActivityEventInput): TaskActivityEvent {
 		return this.redactEvent({
 			...input,
@@ -459,6 +474,7 @@ export class TaskActivityStore {
 			output: activity.output === undefined ? undefined : redactSensitiveText(activity.output),
 			result: activity.result === undefined ? undefined : redactSensitiveText(activity.result),
 			error: activity.error === undefined ? undefined : redactSensitiveText(activity.error),
+			runtime: activity.runtime ? { ...activity.runtime } : undefined,
 			metrics: activity.metrics ? { ...activity.metrics } : undefined,
 			events: activity.events.map((event) => this.redactEvent({ ...event })),
 		}

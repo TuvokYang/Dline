@@ -18,11 +18,24 @@ export interface TaskActivityMetrics {
 	toolCalls?: number
 	inputTokens?: number
 	outputTokens?: number
+	cacheWriteTokens?: number
+	cacheReadTokens?: number
+	cacheHitRate?: number
 	totalCost?: number
 	currency?: string
 	contextTokens?: number
 	contextWindow?: number
 	lineCount?: number
+}
+
+export interface TaskActivityRuntimeConfig {
+	profileName?: string
+	providerId?: string
+	modelId?: string
+	apiFormat?: string
+	thinkingEnabled?: boolean
+	reasoningEffort?: string
+	thinkingBudgetTokens?: number
 }
 
 export type TaskActivityEventPhase = "delta" | "final"
@@ -103,6 +116,7 @@ export interface TaskActivityRecord {
 	error?: string
 	logPath?: string
 	parentActivityId?: string
+	runtime?: TaskActivityRuntimeConfig
 	metrics?: TaskActivityMetrics
 	events: TaskActivityEvent[]
 }

@@ -625,6 +625,9 @@ export interface SubagentStatusItem {
 	toolCalls: number
 	inputTokens: number
 	outputTokens: number
+	cacheWriteTokens?: number
+	cacheReadTokens?: number
+	cacheHitRate?: number
 	totalCost: number
 	currency: string
 	contextTokens: number

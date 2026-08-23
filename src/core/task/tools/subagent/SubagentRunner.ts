@@ -56,6 +56,11 @@ const MAX_INITIAL_STREAM_ATTEMPTS = INITIAL_STREAM_RETRY_DELAYS_MS.length + 1
 const SUBAGENT_COMPLETION_CALL_EXAMPLE =
 	'Call attempt_completion with a non-empty result, for example: attempt_completion(result="...").'
 
+function formatApiFormat(apiFormat: ApiFormat | undefined): string | undefined {
+	if (apiFormat === undefined) return undefined
+	return ApiFormat[apiFormat]?.toLowerCase()
+}
+
 function buildCompletionRequiredReminder(usingNativeToolCalls: boolean): string {
 	return `${formatResponse.noToolsUsed(usingNativeToolCalls)}\n\n${SUBAGENT_COMPLETION_CONTRACT}\n\n${SUBAGENT_COMPLETION_CALL_EXAMPLE}`
 }
@@ -393,8 +398,6 @@ export class SubagentRunner {
 			contextWindow: 0,
 			contextUsagePercentage: 0,
 		}
-
-		onProgress({ status: "running", stats })
 		let activeHostedServerToolLifecycle: ServerToolLifecycle | undefined
 
 		try {
@@ -424,6 +427,20 @@ export class SubagentRunner {
 				apiFormat === ApiFormat.OPENAI_RESPONSES_WEBSOCKET_MODE ||
 				!!this.baseConfig.services.stateManager.getGlobalStateKey("nativeToolCallEnabled")
 			const useNativeToolCalls = isNativeToolCallingConfig(providerInfo, nativeToolCallsRequested)
+			const reasoning = this.agent.getReasoningConfig()
+			onProgress({
+				status: "running",
+				runtime: {
+					profileName: this.agent.getProfileName(),
+					providerId,
+					modelId: providerInfo.model.id,
+					apiFormat: formatApiFormat(apiFormat),
+					thinkingEnabled: reasoning?.enableThinking,
+					reasoningEffort: reasoning?.effort,
+					thinkingBudgetTokens: reasoning?.thinkingBudget,
+				},
+				stats: { ...stats },
+			})
 
 			const host = HostRegistryInfo.get()
 			const remoteSkillEntries = this.baseConfig.services.stateManager.getRemoteConfigSettings().remoteGlobalSkills || []

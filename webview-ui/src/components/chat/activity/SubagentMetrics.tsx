@@ -6,6 +6,7 @@ interface SubagentMetricsProps {
 	finishedAt: number | undefined
 	inputTokens: number | undefined
 	outputTokens: number | undefined
+	cacheHitRate?: number
 	totalCost: number | undefined
 	currency: string | undefined
 	className?: string
@@ -29,17 +30,9 @@ function formatSubagentCost(totalCost: number | undefined, currency: string | un
 	const normalizedCost = Number.isFinite(totalCost) ? Math.max(0, totalCost ?? 0) : 0
 	const currencyCode = currency?.trim().toUpperCase() || "USD"
 	const maximumFractionDigits = normalizedCost >= 0.01 ? 2 : 4
-
-	try {
-		return Intl.NumberFormat("en-US", {
-			style: "currency",
-			currency: currencyCode,
-			minimumFractionDigits: 2,
-			maximumFractionDigits,
-		}).format(normalizedCost)
-	} catch {
-		return `${currencyCode} ${normalizedCost.toFixed(maximumFractionDigits)}`
-	}
+	const currencySymbols: Record<string, string> = { CNH: "¥", CNY: "¥", RMB: "¥", JPY: "¥", USD: "$", EUR: "€", GBP: "£" }
+	const symbol = currencySymbols[currencyCode] ?? currencyCode
+	return `${symbol}${normalizedCost.toFixed(maximumFractionDigits)}`
 }
 
 export function SubagentMetrics({
@@ -48,6 +41,7 @@ export function SubagentMetrics({
 	finishedAt,
 	inputTokens,
 	outputTokens,
+	cacheHitRate,
 	totalCost,
 	currency,
 	className,
@@ -55,6 +49,7 @@ export function SubagentMetrics({
 	const normalizedToolCalls = normalizeCount(toolCalls)
 	const normalizedInputTokens = normalizeCount(inputTokens)
 	const normalizedOutputTokens = normalizeCount(outputTokens)
+	const normalizedCacheHitRate = Number.isFinite(cacheHitRate) ? Math.max(0, Math.min(100, cacheHitRate ?? 0)) : undefined
 	const classes = [
 		"inline-flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[10px] text-description tabular-nums",
 		className,
@@ -70,6 +65,9 @@ export function SubagentMetrics({
 			<span aria-hidden="true">·</span>
 			<span>{`In:${formatTokenMetric(normalizedInputTokens)}`}</span>
 			<span>{`Out:${formatTokenMetric(normalizedOutputTokens)}`}</span>
+			{normalizedCacheHitRate !== undefined && (
+				<span>{`Cache:${normalizedCacheHitRate.toFixed(2).replace(/\.00$/, "")}%`}</span>
+			)}
 			<span aria-hidden="true">·</span>
 			<span>{formatSubagentCost(totalCost, currency)}</span>
 		</span>

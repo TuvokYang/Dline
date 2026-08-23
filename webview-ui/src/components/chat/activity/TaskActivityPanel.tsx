@@ -20,6 +20,7 @@ import { CommandOutputContent } from "../CommandOutputRow"
 import { getCommandEnvironmentLabel, getCommandOutputSummary } from "../command-output"
 import { SubagentMetrics } from "./SubagentMetrics"
 import { SubagentRetryTimeline } from "./SubagentRetryTimeline"
+import { SubagentRuntimeConfig } from "./SubagentRuntimeConfig"
 import { SubagentToolTimeline } from "./SubagentToolTimeline"
 import { useActivityControlGuard } from "./useActivityControlGuard"
 import { cancelTaskActivities, finishTaskActivities, retryTaskActivities, useTaskActivities } from "./useTaskActivities"
@@ -303,6 +304,7 @@ export function TaskActivityPanel({
 											<ActivityStatusText isSubagent={isSubagent} status={activity.status} />
 											{isSubagent ? (
 												<SubagentMetrics
+													cacheHitRate={activity.metrics?.cacheHitRate}
 													currency={activity.metrics?.currency}
 													finishedAt={activity.finishedAt}
 													inputTokens={activity.metrics?.inputTokens}
@@ -329,6 +331,7 @@ export function TaskActivityPanel({
 													</span>
 												)}
 										</div>
+										{isSubagent && <SubagentRuntimeConfig runtime={activity.runtime} />}
 										{!isExpanded && activitySummary && (
 											<div
 												className="mt-1.5 truncate rounded-xs bg-code/70 px-2 py-1 font-mono text-[10px] text-description"

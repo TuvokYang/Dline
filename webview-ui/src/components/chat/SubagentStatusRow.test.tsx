@@ -202,6 +202,7 @@ describe("SubagentStatusRow", () => {
 		render(<SubagentStatusRow isLast={true} message={msg} />)
 		const finishButton = screen.getByRole("button", { name: "Finish" })
 		const retryButton = screen.getByRole("button", { name: "Retry" })
+		expect(finishButton).toHaveClass("border-button-background", "hover:border-button-hover")
 		fireEvent.click(finishButton)
 		fireEvent.click(finishButton)
 		fireEvent.click(retryButton)
@@ -773,6 +774,75 @@ describe("SubagentStatusRow", () => {
 		fireEvent.click(toolButton)
 		expect(within(item).queryByTestId("subagent-tool-step-details")).not.toBeInTheDocument()
 		expect(within(item).queryByText("hidden Work result")).not.toBeInTheDocument()
+	})
+
+	it("renders canonical runtime configuration, cache rate, and symbol-only cost from the live activity", () => {
+		taskActivities.push({
+			activityId: "job-runtime-details",
+			taskId: "task-1",
+			kind: "subagent",
+			executionMode: "foreground",
+			status: "completed",
+			cancellable: false,
+			createdAt: 1_000,
+			updatedAt: 2_000,
+			finishedAt: 2_000,
+			title: "reviewer",
+			runtime: {
+				profileName: "review-profile",
+				providerId: "openai",
+				modelId: "gpt-5.4",
+				apiFormat: "openai_responses",
+				reasoningEffort: "high",
+			},
+			metrics: {
+				toolCalls: 1,
+				inputTokens: 1_000,
+				outputTokens: 200,
+				cacheWriteTokens: 500,
+				cacheReadTokens: 8_500,
+				cacheHitRate: 85,
+				totalCost: 0.0123,
+				currency: "CNY",
+			},
+			events: [],
+		})
+		const msg = makeMsg({
+			say: "subagent",
+			text: JSON.stringify({
+				status: "completed",
+				items: [
+					{
+						index: 1,
+						jobId: "job-runtime-details",
+						prompt: "review",
+						status: "completed",
+						toolCalls: 0,
+						inputTokens: 0,
+						outputTokens: 0,
+						totalCost: 0,
+						currency: "USD",
+						contextTokens: 0,
+						contextWindow: 0,
+						contextUsagePercentage: 0,
+					},
+				],
+			}),
+		})
+
+		render(<SubagentStatusRow isLast={true} message={msg} />)
+
+		const item = screen.getByTestId("subagent-item")
+		const runtime = within(item).getByTestId("subagent-runtime-config")
+		expect(runtime).toHaveTextContent("review-profile")
+		expect(runtime).toHaveTextContent("openai")
+		expect(runtime).toHaveTextContent("gpt-5.4")
+		expect(runtime).toHaveTextContent("openai_responses")
+		expect(runtime).toHaveTextContent("high")
+		const metrics = within(item).getByTestId("subagent-metrics")
+		expect(metrics).toHaveTextContent("Cache:85%")
+		expect(metrics).toHaveTextContent("¥0.01")
+		expect(metrics).not.toHaveTextContent("CN")
 	})
 
 	it("keeps Task natural while independently constraining scrollable Tools and Output", () => {

@@ -542,6 +542,53 @@ describe("TaskActivityPanel", () => {
 		expect(within(scopedOldAgent).getByTestId("subagent-tool-step-details")).toHaveTextContent("executor content")
 	})
 
+	it("uses the same runtime configuration and cache metric projection as the chat card", () => {
+		extraActivities.push({
+			activityId: "runtime-agent",
+			taskId: "task-1",
+			kind: "subagent",
+			executionMode: "background",
+			status: "completed",
+			createdAt: 300,
+			updatedAt: 400,
+			finishedAt: 400,
+			title: "runtime agent",
+			runtime: {
+				profileName: "review-profile",
+				providerId: "anthropic",
+				modelId: "claude-sonnet-4-6",
+				apiFormat: "anthropic_chat",
+				thinkingBudgetTokens: 8_000,
+			},
+			metrics: {
+				toolCalls: 2,
+				inputTokens: 1_000,
+				outputTokens: 100,
+				cacheWriteTokens: 1_000,
+				cacheReadTokens: 8_000,
+				cacheHitRate: 80,
+				totalCost: 0.01,
+				currency: "CNY",
+			},
+			events: [],
+		})
+
+		render(<TaskActivityPanel taskId="task-1" />)
+		fireEvent.click(screen.getAllByRole("button", { name: "All" })[0])
+		const runtimeAgent = screen.getAllByTestId("activity-item").find((item) => item.textContent?.includes("runtime agent"))
+		expect(runtimeAgent).toBeDefined()
+		const runtime = within(runtimeAgent as HTMLElement).getByTestId("subagent-runtime-config")
+		expect(runtime).toHaveTextContent("review-profile")
+		expect(runtime).toHaveTextContent("anthropic")
+		expect(runtime).toHaveTextContent("claude-sonnet-4-6")
+		expect(runtime).toHaveTextContent("anthropic_chat")
+		expect(runtime).toHaveTextContent("8,000 tokens")
+		const metrics = within(runtimeAgent as HTMLElement).getByTestId("subagent-metrics")
+		expect(metrics).toHaveTextContent("Cache:80%")
+		expect(metrics).toHaveTextContent("¥0.01")
+		expect(metrics).not.toHaveTextContent("CN")
+	})
+
 	it("shows all activities and filters the vertical list by type", () => {
 		render(<TaskActivityPanel taskId="task-1" />)
 		fireEvent.click(screen.getAllByRole("button", { name: "All" })[0])

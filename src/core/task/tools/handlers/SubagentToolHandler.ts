@@ -113,6 +113,10 @@ function applyStats(entry: SubagentStatusItem, stats: SubagentRunStats): void {
 	entry.toolCalls = stats.toolCalls || 0
 	entry.inputTokens = stats.inputTokens || 0
 	entry.outputTokens = stats.outputTokens || 0
+	entry.cacheWriteTokens = stats.cacheWriteTokens || 0
+	entry.cacheReadTokens = stats.cacheReadTokens || 0
+	const totalInputTokens = entry.inputTokens + entry.cacheWriteTokens + entry.cacheReadTokens
+	entry.cacheHitRate = totalInputTokens > 0 ? Math.round((entry.cacheReadTokens / totalInputTokens) * 10_000) / 100 : 0
 	entry.totalCost = stats.totalCost || 0
 	entry.currency = stats.currency || ""
 	entry.contextTokens = stats.contextTokens || 0
@@ -132,6 +136,9 @@ function updateActivityFromEntry(config: TaskConfig, entry: SubagentStatusItem):
 			toolCalls: entry.toolCalls,
 			inputTokens: entry.inputTokens,
 			outputTokens: entry.outputTokens,
+			cacheWriteTokens: entry.cacheWriteTokens,
+			cacheReadTokens: entry.cacheReadTokens,
+			cacheHitRate: entry.cacheHitRate,
 			totalCost: entry.totalCost,
 			currency: entry.currency,
 			contextTokens: entry.contextTokens,
@@ -146,6 +153,9 @@ function applyProgress(config: TaskConfig, entry: SubagentStatusItem, update: Su
 	if (update.stats) applyStats(entry, update.stats)
 	if (update.result) entry.result = update.result
 	if (update.error) entry.error = update.error
+	if (entry.jobId && update.runtime) {
+		config.activityStore?.update(entry.jobId, { runtime: update.runtime })
+	}
 	if (entry.jobId && update.event) {
 		const event = update.event
 		if (event.kind === "thinking" || event.kind === "assistant_message") {
