@@ -194,7 +194,8 @@ const HistoryPreview = ({ showHistoryView }: HistoryPreviewProps) => {
 					.history-meta-row {
 						display: flex;
 						align-items: center;
-						justify-content: flex-end;
+						align-self: stretch;
+						justify-content: flex-start;
 						gap: 4px;
 						min-height: 18px;
 					}
@@ -244,6 +245,7 @@ const HistoryPreview = ({ showHistoryView }: HistoryPreviewProps) => {
 						color: var(--vscode-testing-iconPassed, var(--vscode-button-background));
 						display: inline-flex;
 						flex-shrink: 0;
+						margin-left: auto;
 					}
 					.history-preview-list {
 						display: flex;
