@@ -210,26 +210,16 @@ function estimateTokens(text: string): number {
 	return Math.max(1, Math.ceil(Buffer.byteLength(text, "utf8") / 4))
 }
 
-function commonPrefixLength(left: string, right: string): number {
-	const limit = Math.min(left.length, right.length)
-	let index = 0
-	while (index < limit && left[index] === right[index]) index++
-	return index
-}
-
 function getResponseUsage(
 	response: Exclude<OpenAiMockResponse, { type: "error" }>,
 	requestText: string,
-	previousRequestText?: string,
+	derivedCacheUsage?: Pick<MockTokenUsage, "inputTokens" | "cacheReadTokens" | "cacheWriteTokens">,
 ): MockTokenUsage {
 	if (response.usage) return response.usage
 
-	const totalInputTokens = estimateTokens(requestText)
-	const sharedPrefix = previousRequestText ? requestText.slice(0, commonPrefixLength(previousRequestText, requestText)) : ""
-	const cacheReadTokens = sharedPrefix ? Math.min(Math.max(0, totalInputTokens - 2), estimateTokens(sharedPrefix)) : 0
-	const uncachedTokens = totalInputTokens - cacheReadTokens
-	const cacheWriteTokens = uncachedTokens > 2 ? Math.max(1, Math.floor(uncachedTokens * 0.4)) : 0
-	const inputTokens = Math.max(1, totalInputTokens - cacheReadTokens - cacheWriteTokens)
+	const inputTokens = derivedCacheUsage?.inputTokens ?? estimateTokens(requestText)
+	const cacheReadTokens = derivedCacheUsage?.cacheReadTokens ?? 0
+	const cacheWriteTokens = derivedCacheUsage?.cacheWriteTokens ?? 0
 	const reasoningText = response.reasoning ?? response.hiddenReasoning ?? ""
 	const reasoningTokens = reasoningText ? estimateTokens(reasoningText) : 0
 	const responseText =
@@ -519,7 +509,6 @@ export class ClineApiServerMock {
 	private mockModelListRequests: MockModelListRequest[] = []
 	private mockSearxngSearchRequests: MockSearxngSearchRequest[] = []
 	private mockWebFetchPageRequests: MockWebFetchPageRequest[] = []
-	private previousSuccessfulRequestText = new Map<MockApiTarget, string>()
 	private readonly openAiCacheDiagnostics = new OpenAiCacheDiagnostics()
 	public generationCounter = 0
 
@@ -577,7 +566,6 @@ export class ClineApiServerMock {
 		this.mockModelListRequests = []
 		this.mockSearxngSearchRequests = []
 		this.mockWebFetchPageRequests = []
-		this.previousSuccessfulRequestText.clear()
 		this.openAiCacheDiagnostics.reset()
 	}
 
@@ -613,6 +601,36 @@ export class ClineApiServerMock {
 
 	public getCacheWarnings(target?: MockApiTarget): readonly MockCacheWarning[] {
 		return this.openAiCacheDiagnostics.getWarnings(target)
+	}
+
+	/** Return the complete isolated E2E cache report, including test-owned request text. */
+	public getCacheDiagnosticReport(): {
+		readonly generatedAt: string
+		readonly requests: readonly Record<string, unknown>[]
+		readonly warnings: readonly MockCacheWarning[]
+	} {
+		return {
+			generatedAt: new Date().toISOString(),
+			requests: this.mockConsumptions.flatMap((consumption, requestIndex) =>
+				consumption.cacheDiagnostic
+					? [
+							{
+								requestIndex,
+								receivedAtMs: consumption.receivedAtMs,
+								target: consumption.target,
+								protocol: consumption.protocol,
+								responseType: consumption.responseType,
+								...(consumption.toolName ? { toolName: consumption.toolName } : {}),
+								...(consumption.toolCallId ? { toolCallId: consumption.toolCallId } : {}),
+								requestBody: consumption.requestBody,
+								usage: consumption.usage,
+								cacheDiagnostic: consumption.cacheDiagnostic,
+							},
+						]
+					: [],
+			),
+			warnings: this.openAiCacheDiagnostics.getWarnings(),
+		}
 	}
 
 	public setCurrentUser(user: UserResponse | null) {
@@ -668,14 +686,34 @@ export class ClineApiServerMock {
 			}),
 		)
 		const response = contractedResponse
-		const usage =
-			response.type === "error"
-				? undefined
-				: getResponseUsage(response, requestText, this.previousSuccessfulRequestText.get(target))
+		const derivedCacheUsage =
+			response.type === "error" ? undefined : this.openAiCacheDiagnostics.deriveUsage(target, route.protocol, requestBody)
+		const usage = response.type === "error" ? undefined : getResponseUsage(response, requestText, derivedCacheUsage)
 		const cacheDiagnostic = usage
 			? this.openAiCacheDiagnostics.observe(target, route.protocol, requestBody, usage)
 			: undefined
-		if (response.type !== "error") this.previousSuccessfulRequestText.set(target, requestText)
+		if (cacheDiagnostic) {
+			log(
+				"OpenAI cache diagnostic:",
+				JSON.stringify({
+					target,
+					identity: cacheDiagnostic.identity,
+					requestIndex: cacheDiagnostic.requestIndex,
+					previousRequestIndex: cacheDiagnostic.previousRequestIndex,
+					totalInputTokens: cacheDiagnostic.totalInputTokens,
+					inputGrowthTokens: cacheDiagnostic.inputGrowthTokens,
+					reusablePrefixTokens: cacheDiagnostic.reusablePrefixTokens,
+					cacheReadTokens: cacheDiagnostic.cacheReadTokens,
+					cacheReadGrowthTokens: cacheDiagnostic.cacheReadGrowthTokens,
+					stablePrefixTokens: cacheDiagnostic.stablePrefixTokens,
+					expectedPrefixHash: cacheDiagnostic.expectedPrefixHash,
+					actualPrefixHash: cacheDiagnostic.actualPrefixHash,
+					prefixHashMatched: cacheDiagnostic.prefixHashMatched,
+					firstDivergence: cacheDiagnostic.firstDivergence,
+					warnings: cacheDiagnostic.warnings.map(({ code }) => code),
+				}),
+			)
+		}
 		const responseToolCalls = response.type === "error" ? [] : getResponseToolCalls(response)
 		const consumption: MockApiConsumption = {
 			receivedAtMs,

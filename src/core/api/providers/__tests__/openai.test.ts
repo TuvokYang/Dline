@@ -167,6 +167,107 @@ describe("OpenAiHandler", () => {
 			expect(requestBody?.max_tokens).to.equal(30_000)
 		})
 
+		it("emits a completed tool-call boundary only for compaction Chat requests", async () => {
+			const handler = new OpenAiHandler({
+				profile: ApiProfile.create({
+					provider: "openai",
+					apiKey: "test-api-key",
+					modelId: "custom-openai-compatible-model",
+					openai: OpenAiProviderConfig.create({ apiFormat: ApiFormat.OPENAI_CHAT }),
+				}),
+				mode: "act",
+			})
+			const create = vi.fn().mockResolvedValue(
+				createAsyncIterable([
+					{
+						choices: [
+							{
+								index: 0,
+								delta: {
+									tool_calls: [
+										{
+											index: 0,
+											id: "call_summary",
+											type: "function",
+											function: { name: "summarize_task", arguments: '{"context":"Completed summary"}' },
+										},
+									],
+								},
+								finish_reason: null,
+							},
+						],
+					},
+					{ choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] },
+				]),
+			)
+			vi.spyOn(handler as unknown as { ensureClient: () => unknown }, "ensureClient").mockReturnValue({
+				chat: { completions: { create } },
+			})
+
+			const chunks = []
+			for await (const chunk of handler.createMessage(
+				"system prompt",
+				[{ role: "user", content: "Summarize" }],
+				undefined,
+				{
+					generation: { purpose: "compaction", maxOutputTokens: 30_000 },
+				},
+			)) {
+				chunks.push(chunk)
+			}
+
+			expect(chunks).to.have.length(2)
+			expect(chunks[0]).to.deep.include({ function_id: "call_summary", tool_index: 0 })
+			expect(chunks[1]).to.deep.include({ function_id: "call_summary", phase: "completed", tool_index: 0 })
+		})
+
+		it("does not add a completion chunk to ordinary Chat tool calls", async () => {
+			const handler = new OpenAiHandler({
+				profile: ApiProfile.create({
+					provider: "openai",
+					apiKey: "test-api-key",
+					modelId: "custom-openai-compatible-model",
+					openai: OpenAiProviderConfig.create({ apiFormat: ApiFormat.OPENAI_CHAT }),
+				}),
+				mode: "act",
+			})
+			const create = vi.fn().mockResolvedValue(
+				createAsyncIterable([
+					{
+						choices: [
+							{
+								index: 0,
+								delta: {
+									tool_calls: [
+										{
+											index: 0,
+											id: "call_qna",
+											type: "function",
+											function: { name: "qna_respond", arguments: '{"response":"Continue"}' },
+										},
+									],
+								},
+								finish_reason: null,
+							},
+						],
+					},
+					{ choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] },
+				]),
+			)
+			vi.spyOn(handler as unknown as { ensureClient: () => unknown }, "ensureClient").mockReturnValue({
+				chat: { completions: { create } },
+			})
+
+			const chunks = []
+			for await (const chunk of handler.createMessage("system prompt", [{ role: "user", content: "Continue" }])) {
+				chunks.push(chunk)
+			}
+
+			expect(chunks).to.have.length(1)
+			expect(chunks[0]).to.deep.include({ function_id: "call_qna", tool_index: 0 })
+			expect(chunks[0]).not.to.have.property("phase")
+		})
+
 		it("throws a typed output-limit error for Chat finish_reason length", async () => {
 			const handler = new OpenAiHandler({
 				profile: ApiProfile.create({

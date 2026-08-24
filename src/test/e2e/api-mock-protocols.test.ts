@@ -378,7 +378,285 @@ e2e("Mock API - tracks growing OpenAI prompt prefixes without false cache warnin
 	expect(diagnostics[1].cacheReadTokens).toBeGreaterThan(0)
 	expect(diagnostics[2].cacheReadTokens).toBeGreaterThan(diagnostics[1].cacheReadTokens)
 	expect(diagnostics[2].reusablePrefixTokens).toBeGreaterThan(diagnostics[1].reusablePrefixTokens)
+	expect(diagnostics[0].stablePrefixTokens).toBeGreaterThan(0)
+	for (const diagnostic of diagnostics.slice(1)) {
+		expect(diagnostic.prefixHashMatched).toBe(true)
+		expect(diagnostic.expectedPrefixHash).toBe(diagnostic.actualPrefixHash)
+		expect(diagnostic.componentHashes.system).toBe(diagnostics[0].componentHashes.system)
+		expect(diagnostic.componentHashes.tools).toBe(diagnostics[0].componentHashes.tools)
+	}
 	expect(cacheWarningsOf(server, target)).toEqual([])
+})
+
+e2e("Mock API - keeps multi-tool prompt caching across temporary reasoning and service tier changes", async ({ server }) => {
+	const target = "openai-compatible-responses" as const
+	const promptCacheKey = "runtime-overrides-multi-tool-cache-key"
+	const instructions =
+		"Inspect every adjacent request without changing the frozen system instructions or native tool declarations."
+	const tools = [
+		{
+			type: "function",
+			name: "read_file",
+			description: "Read one project file.",
+			parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
+		},
+		{
+			type: "function",
+			name: "search_files",
+			description: "Search project files for a focused expression.",
+			parameters: {
+				type: "object",
+				properties: { path: { type: "string" }, regex: { type: "string" } },
+				required: ["path", "regex"],
+			},
+		},
+	]
+	const firstInput = [
+		{
+			type: "message",
+			role: "user",
+			content: [{ type: "input_text", text: "Inspect the runtime override and prompt-cache boundaries." }],
+		},
+	]
+	const secondInput = [
+		...firstInput,
+		{
+			type: "function_call",
+			call_id: "call_read_runtime_1",
+			name: "read_file",
+			arguments: '{"path":"src/core/api/runtime-profile.ts"}',
+		},
+		{
+			type: "function_call",
+			call_id: "call_search_runtime_1",
+			name: "search_files",
+			arguments: '{"path":"src/core","regex":"serviceTier|reasoning"}',
+		},
+		{ type: "function_call_output", call_id: "call_read_runtime_1", output: "Runtime overrides clone the Profile." },
+		{
+			type: "function_call_output",
+			call_id: "call_search_runtime_1",
+			output: "Request options remain outside prompt content.",
+		},
+		{
+			type: "message",
+			role: "user",
+			content: [{ type: "input_text", text: "Switch temporarily to low reasoning and ultrafast service." }],
+		},
+	]
+	const thirdInput = [
+		...secondInput,
+		{
+			type: "function_call",
+			call_id: "call_read_runtime_2",
+			name: "read_file",
+			arguments: '{"path":"src/core/api/providers/openai.ts"}',
+		},
+		{
+			type: "function_call",
+			call_id: "call_search_runtime_2",
+			name: "search_files",
+			arguments: '{"path":"src/test/e2e","regex":"cacheDiagnostic"}',
+		},
+		{
+			type: "function_call_output",
+			call_id: "call_read_runtime_2",
+			output: "The prompt cache key excludes request scheduling controls.",
+		},
+		{
+			type: "function_call_output",
+			call_id: "call_search_runtime_2",
+			output: "The diagnostic compares semantic prompt prefixes.",
+		},
+		{
+			type: "message",
+			role: "user",
+			content: [{ type: "input_text", text: "Switch again while preserving both completed multi-tool rounds." }],
+		},
+	]
+
+	server.resetOpenAiMock()
+	server.enqueueResponses(
+		target,
+		{
+			type: "tools",
+			tools: [
+				{ id: "call_read_runtime_1", name: "read_file", arguments: { path: "src/core/api/runtime-profile.ts" } },
+				{
+					id: "call_search_runtime_1",
+					name: "search_files",
+					arguments: { path: "src/core", regex: "serviceTier|reasoning" },
+				},
+			],
+		},
+		{
+			type: "tools",
+			tools: [
+				{ id: "call_read_runtime_2", name: "read_file", arguments: { path: "src/core/api/providers/openai.ts" } },
+				{
+					id: "call_search_runtime_2",
+					name: "search_files",
+					arguments: { path: "src/test/e2e", regex: "cacheDiagnostic" },
+				},
+			],
+		},
+		{ type: "message", text: "Runtime override cache continuity verified." },
+	)
+	const requests = [
+		{ input: firstInput, reasoning: { effort: "high" }, service_tier: "default" },
+		{ input: secondInput, reasoning: { effort: "low" }, service_tier: "ultrafast" },
+		{ input: thirdInput, reasoning: { effort: "medium" }, service_tier: "flex" },
+	]
+	for (const request of requests) {
+		const response = await post(getE2EMockProviderUrl(server.baseUrl, target), {
+			model: "gpt-5.6-sol",
+			prompt_cache_key: promptCacheKey,
+			instructions,
+			tools,
+			...request,
+			stream: true,
+			store: false,
+		})
+		expect(response.status).toBe(200)
+		await response.text()
+	}
+
+	const consumptions = server.getMockConsumptions(target)
+	expect(consumptions.map(({ responseType }) => responseType)).toEqual(["tools", "tools", "message"])
+	expect(consumptions.slice(0, 2).map(({ responseToolCalls }) => responseToolCalls?.length)).toEqual([2, 2])
+	const diagnostics = consumptions.map(cacheDiagnosticOf)
+	expect(diagnostics.map(({ state }) => state)).toEqual(["cold", "warm", "warm"])
+	expect(diagnostics[1].cacheReadTokens).toBeGreaterThan(0)
+	expect(diagnostics[2].cacheReadTokens).toBeGreaterThan(diagnostics[1].cacheReadTokens)
+	for (const diagnostic of diagnostics.slice(1)) {
+		expect(diagnostic.prefixHashMatched).toBe(true)
+		expect(diagnostic.actualPrefixHash).toBe(diagnostics[0].actualPrefixHash)
+	}
+	expect(cacheWarningsOf(server, target)).toEqual([])
+})
+
+e2e("Mock API - reports the first semantic OpenAI prompt divergence with complete E2E text", async ({ server }) => {
+	const target = "openai-compatible-responses" as const
+	const instructions =
+		"You are reviewing a production incident. Preserve the established architecture, distinguish confirmed evidence from hypotheses, and report the earliest request-field change that could invalidate a continuous prompt-cache prefix."
+	const tools = [
+		{
+			type: "function",
+			name: "read_file",
+			description: "Read a project file so the investigation can cite the exact implementation boundary.",
+			parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
+		},
+	]
+	const inputs = [
+		[
+			{
+				role: "user",
+				content:
+					"The first request asks for a careful comparison of two adjacent provider payloads, including the stable system instructions, ordered conversation history, and ordered native tool declarations.",
+			},
+		],
+		[
+			{
+				role: "user",
+				content:
+					"The second request asks for a careful comparison of two adjacent provider payloads, including the stable system instructions, ordered conversation history, and ordered native tool declarations.",
+			},
+		],
+	]
+
+	server.resetOpenAiMock()
+	server.enqueueResponses(
+		target,
+		{ type: "message", text: "first diagnostic response" },
+		{ type: "message", text: "second diagnostic response" },
+	)
+	for (const input of inputs) {
+		const response = await post(getE2EMockProviderUrl(server.baseUrl, target), {
+			model: "gpt-5.4-mini",
+			prompt_cache_key: "semantic-divergence-task-cache-key",
+			instructions,
+			tools,
+			input,
+			stream: true,
+			store: false,
+		})
+		expect(response.status).toBe(200)
+		await response.text()
+	}
+
+	const diagnostic = cacheDiagnosticOf(server.getMockConsumptions(target)[1]) as MockCacheDiagnostic & {
+		firstDivergence?: {
+			component: string
+			path: string
+			byteOffset: number
+			estimatedTokenOffset: number
+			beforeHash: string
+			afterHash: string
+		}
+		projection?: { mode: string }
+	}
+	expect(diagnostic.firstDivergence).toMatchObject({
+		component: "input",
+		path: "input[0].content",
+	})
+	expect(diagnostic.firstDivergence?.byteOffset).toBeGreaterThan(0)
+	expect(diagnostic.firstDivergence?.estimatedTokenOffset).toBeGreaterThan(0)
+	expect(diagnostic.firstDivergence?.beforeHash).toMatch(/^[0-9a-f]{16}$/)
+	expect(diagnostic.firstDivergence?.afterHash).toMatch(/^[0-9a-f]{16}$/)
+	expect(diagnostic.firstDivergence?.beforeText).toContain(inputs[0][0].content)
+	expect(diagnostic.firstDivergence?.afterText).toContain(inputs[1][0].content)
+	expect(diagnostic.prefixHashMatched).toBe(true)
+	expect(diagnostic.expectedPrefixHash).toBe(diagnostic.actualPrefixHash)
+	expect(diagnostic.projection).toMatchObject({ mode: "automatic" })
+	const reportText = JSON.stringify(server.getCacheDiagnosticReport())
+	expect(reportText).toContain(inputs[0][0].content)
+	expect(reportText).toContain(inputs[1][0].content)
+})
+
+e2e("Mock API - detects an exact OpenAI system/tools prefix hash replacement", async ({ server }) => {
+	const target = "openai-compatible-responses" as const
+	const firstInstructions = "E2E_PREFIX_HASH_SYSTEM_ALPHA includes Rules, Skills, Workflows, and MCP catalog entries."
+	const secondInstructions = "E2E_PREFIX_HASH_SYSTEM_BETA replaces one frozen system field unexpectedly."
+	const tools = [
+		{
+			type: "function",
+			name: "read_file",
+			description: "E2E_PREFIX_HASH_TOOL reads a project file.",
+			parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
+		},
+	]
+
+	server.resetOpenAiMock()
+	server.enqueueResponses(target, { type: "message", text: "first" }, { type: "message", text: "second" })
+	for (const instructions of [firstInstructions, secondInstructions]) {
+		const response = await post(getE2EMockProviderUrl(server.baseUrl, target), {
+			model: "gpt-5.6-sol",
+			prompt_cache_key: "exact-prefix-hash-task",
+			instructions,
+			tools,
+			input: [{ role: "user", content: "E2E_PREFIX_HASH_CONTENT" }],
+			stream: true,
+			store: false,
+		})
+		expect(response.status).toBe(200)
+		await response.text()
+	}
+
+	const diagnostics = server.getMockConsumptions(target).map(cacheDiagnosticOf)
+	expect(diagnostics[1].state).toBe("prefix_mismatch")
+	expect(diagnostics[1].prefixHashMatched).toBe(false)
+	expect(diagnostics[1].expectedPrefixHash).not.toBe(diagnostics[1].actualPrefixHash)
+	expect(diagnostics[1].warnings.map(({ code }) => code)).toContain("prefix_hash_mismatch")
+	expect(diagnostics[1].firstDivergence).toMatchObject({
+		component: "instructions",
+		path: "instructions",
+	})
+	expect(diagnostics[1].firstDivergence?.beforeText).toContain(firstInstructions)
+	expect(diagnostics[1].firstDivergence?.afterText).toContain(secondInstructions)
+	const reportText = JSON.stringify(server.getCacheDiagnosticReport())
+	expect(reportText).toContain(firstInstructions)
+	expect(reportText).toContain(secondInstructions)
+	expect(reportText).toContain("E2E_PREFIX_HASH_TOOL")
 })
 
 e2e("Mock API - warns when reported OpenAI cache reads plateau while the prompt keeps growing", async ({ server }) => {

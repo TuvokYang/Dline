@@ -19,9 +19,16 @@ export interface InternalCompactionUsage {
 	totalTokens: number
 }
 
+export interface InternalCompactionSettlement {
+	usage?: InternalCompactionUsage
+	error?: unknown
+}
+
 export interface InternalCompactionPassResult {
 	summary: string
-	usage: InternalCompactionUsage
+	usage?: InternalCompactionUsage
+	/** Provider stream settlement that may finish after the summary is safe to checkpoint. */
+	settlement?: Promise<InternalCompactionSettlement>
 }
 
 export interface RunInternalCompactionPassInput {
@@ -144,6 +151,11 @@ export async function runInternalCompactionPass(input: RunInternalCompactionPass
 	const usageAccumulator = new ApiUsageAccumulator()
 	const presentationQueue = new CompactionPresentationQueue()
 	let lastPublishedSummary: string | undefined
+	let completedSummary: string | undefined
+	let resolveCompletedSummary!: (summary: string) => void
+	const completedSummaryPromise = new Promise<string>((resolve) => {
+		resolveCompletedSummary = resolve
+	})
 	const nativeArguments = new Map<string, string>()
 	const publishSummarySnapshot = (context: string | undefined): void => {
 		const snapshot = context?.trim()
@@ -152,8 +164,9 @@ export async function runInternalCompactionPass(input: RunInternalCompactionPass
 		if (input.onSummaryUpdate) presentationQueue.enqueue(() => input.onSummaryUpdate?.(snapshot))
 	}
 
-	for await (const chunk of stream) {
-		if (input.onChunk) presentationQueue.enqueue(() => input.onChunk?.(chunk))
+	const processChunk = (chunk: Awaited<ReturnType<typeof stream.next>>["value"], publishChunk: boolean): void => {
+		if (!chunk) return
+		if (publishChunk && input.onChunk) presentationQueue.enqueue(() => input.onChunk?.(chunk))
 		switch (chunk.type) {
 			case "text":
 				assistantText += chunk.text
@@ -185,6 +198,13 @@ export async function runInternalCompactionPass(input: RunInternalCompactionPass
 						}
 					}
 				}
+				if (chunk.phase === "completed") {
+					const completed = nativeSummary ?? parseSummaryArguments(nativeArguments.get(key) ?? "")
+					if (completed !== undefined && completedSummary === undefined) {
+						completedSummary = completed
+						resolveCompletedSummary(completed)
+					}
+				}
 				break
 			}
 			case "usage": {
@@ -201,19 +221,49 @@ export async function runInternalCompactionPass(input: RunInternalCompactionPass
 		}
 	}
 
+	const pumpStream = async (): Promise<InternalCompactionSettlement> => {
+		try {
+			for await (const chunk of stream) {
+				processChunk(chunk, completedSummary === undefined)
+			}
+			await presentationQueue.flush()
+			if (completedSummary === undefined) {
+				const summary = nativeSummary ?? parseXmlSummary(assistantText)
+				if (!summary) {
+					throw new Error("Internal compaction Pass did not return a valid summarize_task context")
+				}
+				completedSummary = summary
+				resolveCompletedSummary(summary)
+			}
+			if (!usage || usage.totalTokens <= 0) {
+				throw new Error("Internal compaction Pass did not return reliable usage")
+			}
+			return { usage }
+		} catch (error) {
+			await presentationQueue.flush()
+			if (completedSummary !== undefined) return { usage, error }
+			throw error
+		}
+	}
+
+	const settlement = pumpStream()
+	const summary = await Promise.race([
+		completedSummaryPromise,
+		settlement.then(() => {
+			if (!completedSummary) throw new Error("Internal compaction Pass completed without an accepted summary")
+			return completedSummary
+		}),
+	])
 	await presentationQueue.flush()
-	const summary = nativeSummary ?? parseXmlSummary(assistantText)
-	if (!summary) {
-		throw new Error("Internal compaction Pass did not return a valid summarize_task context")
-	}
-	if (!usage || usage.totalTokens <= 0) {
-		throw new Error("Internal compaction Pass did not return reliable usage")
-	}
 	const consumed = consumePort.consumeTool(ClineDefaultTool.SUMMARIZE_TASK)
 	if (!consumed.ok) {
 		throw new Error(`Internal compaction summarize_task authorization failed: ${consumed.code}`)
 	}
-	return { summary, usage }
+	return {
+		summary,
+		...(usage && usage.totalTokens > 0 ? { usage } : {}),
+		settlement,
+	}
 }
 
 /** Own every attempt for one immutable hidden Pass without entering Task auto-retry. */

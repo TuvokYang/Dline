@@ -12,7 +12,7 @@ import type { ApiRawStreamToolCallsChunk } from "./stream"
  * and yields properly formatted tool call chunks when arguments are received.
  */
 export class ToolCallProcessor {
-	private toolCallStateByIndex: Map<number, { id: string; name: string }>
+	private toolCallStateByIndex: Map<number, { id: string; name: string; completed: boolean }>
 
 	constructor() {
 		this.toolCallStateByIndex = new Map()
@@ -63,13 +63,34 @@ export class ToolCallProcessor {
 		}
 	}
 
-	private getOrCreateToolCallState(index: number): { id: string; name: string } {
+	/** Emit one completion boundary for each accumulated tool call. */
+	*completeToolCalls(): Generator<ApiRawStreamToolCallsChunk> {
+		for (const [toolCallIndex, toolCallState] of [...this.toolCallStateByIndex.entries()].sort(
+			([left], [right]) => left - right,
+		)) {
+			if (!toolCallState.id || !toolCallState.name || toolCallState.completed) continue
+			toolCallState.completed = true
+			yield {
+				type: "tool_calls",
+				function_id: toolCallState.id,
+				phase: "completed",
+				tool_index: toolCallIndex,
+				tool_call: {
+					function: {
+						name: toolCallState.name,
+					},
+				},
+			}
+		}
+	}
+
+	private getOrCreateToolCallState(index: number): { id: string; name: string; completed: boolean } {
 		const existingState = this.toolCallStateByIndex.get(index)
 		if (existingState) {
 			return existingState
 		}
 
-		const initialState = { id: "", name: "" }
+		const initialState = { id: "", name: "", completed: false }
 		this.toolCallStateByIndex.set(index, initialState)
 		return initialState
 	}
@@ -84,7 +105,7 @@ export class ToolCallProcessor {
 	/**
 	 * Get the current accumulated tool call state (useful for debugging).
 	 */
-	getState(): Record<number, { id: string; name: string }> {
+	getState(): Record<number, { id: string; name: string; completed: boolean }> {
 		return Object.fromEntries(this.toolCallStateByIndex.entries())
 	}
 }

@@ -1,7 +1,10 @@
 import type { ApiHandler } from "@core/api"
 import { OutputLimitExceededError } from "@core/api/stream/OutputLimitExceededError"
 import type { CompactionCheckpointHead } from "@core/context/context-management/compaction-checkpoint-chain"
+import { estimateContextWindowCandidate } from "@core/context/context-management/context-window-projection"
+import { computeSummarizeBudget, resolveCompactTriggerPolicy } from "@core/context/context-management/context-window-utils"
 import type { TargetWindowFittingDecision } from "@core/context/context-management/TargetWindowFittingService"
+import { buildCompactionPassHistory } from "@core/context/context-management/target-window-fitting"
 import type { CompactionProviderInput } from "@core/task/compaction/CompactionRequestReplay"
 import { ExplicitInstructionRegistry } from "@core/task/explicit-instructions/ExplicitInstructionRegistry"
 import { ExplicitInstructionRequestScope } from "@core/task/explicit-instructions/ExplicitInstructionRequestScope"
@@ -173,6 +176,108 @@ describe("ContextCompactionSession", () => {
 		expect(ports.rollback).not.toHaveBeenCalled()
 	})
 
+	it("admits one complete 450K multi-tool logical turn when the full hidden request fits the 472K Provider window", async () => {
+		const createSourceHistory = (payload: string): ClineStorageMessage[] => [
+			{ role: "user", content: [{ type: "text", text: "Inspect both large files without splitting this logical turn." }] },
+			{
+				role: "assistant",
+				content: [
+					{
+						type: "tool_use",
+						function_id: "call-large-read-a",
+						dline_tid: "tid-large-read-a",
+						name: "read_file",
+						input: { path: "dist/large-a.map" },
+					},
+					{
+						type: "tool_use",
+						function_id: "call-large-read-b",
+						dline_tid: "tid-large-read-b",
+						name: "read_file",
+						input: { path: "dist/large-b.map" },
+					},
+				],
+			},
+			{
+				role: "user",
+				content: [
+					{
+						type: "tool_result",
+						function_id: "call-large-read-a",
+						dline_tid: "tid-large-read-a",
+						content: [{ type: "text", text: payload }],
+					},
+					{
+						type: "tool_result",
+						function_id: "call-large-read-b",
+						dline_tid: "tid-large-read-b",
+						content: [{ type: "text", text: "SECOND_LARGE_TOOL_RESULT" }],
+					},
+				],
+			},
+		]
+		const createProviderInput = (messages: readonly ClineStorageMessage[]): CompactionProviderInput => ({
+			systemPrompt: "stable compaction system prompt",
+			messages: [...messages, { role: "user", content: [{ type: "text", text: "Summarize this complete logical turn." }] }],
+			tools: [],
+			serverTools: [],
+			providerOutputCap: 20_000,
+		})
+		const targetInputTokens = 450_000
+		const emptyPayloadTokens = estimateContextWindowCandidate(createProviderInput(createSourceHistory("")))
+		const sourceHistory = createSourceHistory("x".repeat((targetInputTokens - emptyPayloadTokens) * 4))
+		const fullRequestTokens = estimateContextWindowCandidate(createProviderInput(sourceHistory))
+		const passInputCeiling = resolveCompactTriggerPolicy(472_000, computeSummarizeBudget(), {
+			triggerPercent: 95,
+			minReserveTokens: 5_000,
+			maxReserveTokens: 30_000,
+			maxContextTokens: 0,
+		}).passInputCeilingTokens
+		const ports = createPorts()
+		ports.getPassInputCeiling = () => passInputCeiling
+		ports.estimatePassInput = async (_input, passHistory) => estimateContextWindowCandidate(createProviderInput(passHistory))
+		ports.buildPassRequest = vi.fn(async (_input, state) => {
+			const explicitInstructions = new ExplicitInstructionRequestScope(new ExplicitInstructionRegistry(), {
+				requestId: `request-${state.passIndex}`,
+				attemptId: `attempt-${state.passIndex}`,
+			})
+			explicitInstructions.register({
+				type: "summarize_task",
+				source: "auto_compaction",
+				targetTool: ClineDefaultTool.SUMMARIZE_TASK,
+				operationId: state.operationId,
+			})
+			return {
+				providerInput: createProviderInput(buildCompactionPassHistory(state)),
+				explicitInstructions,
+				initialAttemptId: `attempt-${state.passIndex}`,
+			}
+		})
+		const session = new ContextCompactionSession(ports, { maxRetryAttempts: 1 })
+		useSuccessfulCompactionStream()
+
+		expect(fullRequestTokens).toBe(targetInputTokens)
+		expect(fullRequestTokens).toBeGreaterThan(446_400)
+		expect(fullRequestTokens).toBeLessThan(472_000)
+
+		const result = await session.run({
+			operationId: "operation-large-complete-turn",
+			trigger: "auto_compaction",
+			compactionApi: API,
+			targetApi: API,
+			targetMode: "act",
+			sourceHistory,
+		})
+
+		expect(result).toBe("completed")
+		expect(API.createMessage).toHaveBeenCalledOnce()
+		const sentMessages = JSON.stringify(vi.mocked(API.createMessage).mock.calls[0]?.[1])
+		expect(sentMessages).toContain("call-large-read-a")
+		expect(sentMessages).toContain("call-large-read-b")
+		expect(sentMessages).toContain("SECOND_LARGE_TOOL_RESULT")
+		expect(ports.rollback).not.toHaveBeenCalled()
+	})
+
 	it("blocks Provider admission when the durable C0 checkpoint cannot be prepared", async () => {
 		const ports = createPorts()
 		const rootError = new Error("root checkpoint write failed")
@@ -336,6 +441,108 @@ describe("ContextCompactionSession", () => {
 		expect(ports.stageAcceptedPass).toHaveBeenCalledOnce()
 		expect(ports.commit).toHaveBeenCalledOnce()
 		expect(ports.rollback).not.toHaveBeenCalled()
+	})
+
+	it("commits and completes an accepted checkpoint without waiting for tail settlement", async () => {
+		const ports = createPorts()
+		let releaseTail!: () => void
+		const tailGate = new Promise<void>((resolve) => {
+			releaseTail = resolve
+		})
+		const api = {
+			createMessage: vi.fn(async function* () {
+				yield {
+					type: "tool_calls",
+					function_id: "call-summary-checkpoint-boundary",
+					phase: "completed",
+					tool_index: 0,
+					tool_call: {
+						function: {
+							name: ClineDefaultTool.SUMMARIZE_TASK,
+							arguments: JSON.stringify({
+								context:
+									"The accepted summary records the stable architecture, the completed implementation work, the remaining verification boundary, and the precise next action.",
+							}),
+						},
+					},
+				}
+				await tailGate
+				throw new Error("provider connection closed after summary completion")
+			}),
+		} as unknown as ApiHandler
+		const session = new ContextCompactionSession(ports, { maxRetryAttempts: 3 })
+
+		const completion = session.run({
+			operationId: "operation-completed-summary-tail-error",
+			trigger: "auto_compaction",
+			compactionApi: api,
+			targetApi: api,
+			targetMode: "act",
+			sourceHistory: HISTORY,
+		})
+
+		await vi.waitFor(() => {
+			expect(ports.checkpointAcceptedPass).toHaveBeenCalledOnce()
+			const events = vi.mocked(ports.publish).mock.calls.map(([, event]) => event)
+			expect(events.some((event) => event.kind === "pass_completed")).toBe(true)
+		})
+		expect(ports.rollback).not.toHaveBeenCalled()
+
+		try {
+			await vi.waitFor(() => expect(ports.commit).toHaveBeenCalledOnce(), { timeout: 100 })
+			await expect(completion).resolves.toBe("completed")
+		} finally {
+			releaseTail()
+		}
+		expect(api.createMessage).toHaveBeenCalledOnce()
+		expect(ports.commit).toHaveBeenCalledOnce()
+		expect(ports.rollback).not.toHaveBeenCalled()
+		const events = vi.mocked(ports.publish).mock.calls.map(([, event]) => event)
+		expect(events.some((event) => event.kind === "pass_retry")).toBe(false)
+		expect(events.at(-1)).toMatchObject({ kind: "pass_completed" })
+	})
+
+	it("keeps a manually accepted checkpoint after the completed summary stream fails at the tail", async () => {
+		const ports = createPorts()
+		const api = {
+			createMessage: vi.fn(async function* () {
+				yield {
+					type: "tool_calls",
+					function_id: "call-manual-summary-tail-failure",
+					phase: "completed",
+					tool_index: 0,
+					tool_call: {
+						function: {
+							name: ClineDefaultTool.SUMMARIZE_TASK,
+							arguments: JSON.stringify({
+								context:
+									"The manually reviewed summary preserves the approved design, the accepted implementation state, and the remaining verification work.",
+							}),
+						},
+					},
+				}
+				throw new Error("manual provider stream failed after summary completion")
+			}),
+		} as unknown as ApiHandler
+		const session = new ContextCompactionSession(ports, { maxRetryAttempts: 3 })
+
+		const result = await session.run({
+			operationId: "operation-manual-completed-summary-tail-error",
+			trigger: "task_header",
+			compactionApi: api,
+			targetApi: api,
+			targetMode: "act",
+			sourceHistory: HISTORY,
+		})
+
+		expect(result).toBe("completed")
+		expect(api.createMessage).toHaveBeenCalledOnce()
+		expect(ports.checkpointAcceptedPass).toHaveBeenCalledOnce()
+		expect(ports.commit).toHaveBeenCalledOnce()
+		expect(ports.rollback).not.toHaveBeenCalled()
+		const events = vi.mocked(ports.publish).mock.calls.map(([, event]) => event)
+		expect(events.some((event) => event.kind === "pass_retry")).toBe(false)
+		expect(events.at(-1)).toMatchObject({ kind: "pass_completed" })
 	})
 
 	it("regenerates the same manual Pass before checkpointing only the confirmed summary", async () => {

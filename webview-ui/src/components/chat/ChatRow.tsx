@@ -788,6 +788,13 @@ export const ChatRowContent = memo(
 								<FoldVerticalIcon className="size-2" />
 								<span className="font-bold">{title}</span>
 							</div>
+							{status === "failed" && tool.error && (
+								<ApiErrorBox
+									error={tool.error}
+									testId="compaction-error-box"
+									title="Conversation Compaction Failed"
+								/>
+							)}
 							{status === "retrying" && tool.retryAttempt !== undefined && tool.maxRetryAttempts !== undefined && (
 								<div className="text-description mb-2">
 									Attempt {tool.retryAttempt} of {tool.maxRetryAttempts}

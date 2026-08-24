@@ -1,6 +1,8 @@
+import sizeOf from "image-size"
 import { shouldCompactProjectedUsage } from "./context-window-utils"
 
 const TOKEN_ESTIMATE_BYTES = 4
+const OPENAI_IMAGE_PATCH_PIXELS = 32
 
 export type ContextPressureSource = "provider" | "estimate" | "unavailable"
 
@@ -16,6 +18,11 @@ export interface EstimateContextWindowCandidateInput {
 	messages: unknown
 	tools?: unknown
 	serverTools?: unknown
+}
+
+export interface ContextWindowCandidateEstimator {
+	providerId?: string
+	modelId?: string
 }
 
 export interface ResolveContextWindowProjectionInput {
@@ -37,9 +44,20 @@ export interface ContextWindowProjection {
 	shouldCompact: boolean
 }
 
-/** Estimate the complete provider-neutral request candidate. */
-export function estimateContextWindowCandidate(input: EstimateContextWindowCandidateInput): number {
-	return Math.max(1, Math.ceil(Buffer.byteLength(JSON.stringify(input), "utf8") / TOKEN_ESTIMATE_BYTES))
+/** Estimate the complete request candidate without charging binary image encoding as text. */
+export function estimateContextWindowCandidate(
+	input: EstimateContextWindowCandidateInput,
+	estimator: ContextWindowCandidateEstimator = {},
+): number {
+	let imageTokens = 0
+	const normalized = JSON.stringify(input, (_key, value: unknown) => {
+		if (!isBase64ImageSource(value) || !isOpenAiPatchImageModel(estimator)) return value
+		const estimatedImageTokens = estimateOpenAiPatchImageTokens(value)
+		if (estimatedImageTokens === undefined) return value
+		imageTokens += estimatedImageTokens
+		return { ...value, data: "" }
+	})
+	return Math.max(1, Math.ceil(Buffer.byteLength(normalized, "utf8") / TOKEN_ESTIMATE_BYTES) + imageTokens)
 }
 
 /** Resolve reliable usage, uncovered sent growth, and the current unsent candidate into one pressure projection. */
@@ -126,6 +144,36 @@ function findLatestEstimate(requestInfos: readonly ContextWindowRequestPressure[
 		if (estimatedTokens > 0) return estimatedTokens
 	}
 	return 0
+}
+
+function isBase64ImageSource(value: unknown): value is { type: "base64"; media_type: string; data: string } {
+	if (typeof value !== "object" || value === null) return false
+	const source = value as { type?: unknown; media_type?: unknown; data?: unknown }
+	return (
+		source.type === "base64" &&
+		typeof source.media_type === "string" &&
+		source.media_type.startsWith("image/") &&
+		typeof source.data === "string"
+	)
+}
+
+function estimateOpenAiPatchImageTokens(source: { type: "base64"; media_type: string; data: string }): number | undefined {
+	try {
+		const buffer = Buffer.from(source.data, "base64")
+		const dimensions = sizeOf(new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength))
+		if (!dimensions.width || !dimensions.height) return undefined
+		return Math.max(
+			1,
+			Math.ceil(dimensions.width / OPENAI_IMAGE_PATCH_PIXELS) * Math.ceil(dimensions.height / OPENAI_IMAGE_PATCH_PIXELS),
+		)
+	} catch {
+		return undefined
+	}
+}
+
+function isOpenAiPatchImageModel(estimator: ContextWindowCandidateEstimator): boolean {
+	if (estimator.providerId !== "openai") return false
+	return ["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"].includes(estimator.modelId?.toLowerCase() ?? "")
 }
 
 function normalizeTokens(value: unknown): number {

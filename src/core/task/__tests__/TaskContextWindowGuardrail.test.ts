@@ -84,6 +84,20 @@ describe("Task context-window final admission guard", () => {
 		expect(helper).not.toContain("conversationHistoryDeletedRange =")
 	})
 
+	it("enters automatic compaction without rewriting an already-sent provider prefix", async () => {
+		const source = await readFile(taskSourcePath, "utf8")
+		const requestMethod = extractMethod(source, "async recursivelyMakeClineRequests(", "async loadContext(")
+		const pressureDecisionIndex = requestMethod.indexOf("this.contextManager.shouldCompactContextWindow(")
+		const compactionRouteIndex = requestMethod.indexOf(
+			"if (!persistedRequest && shouldCompact && !manualCompactionRequested)",
+			pressureDecisionIndex,
+		)
+
+		expect(pressureDecisionIndex).toBeGreaterThanOrEqual(0)
+		expect(compactionRouteIndex).toBeGreaterThan(pressureDecisionIndex)
+		expect(requestMethod.slice(pressureDecisionIndex, compactionRouteIndex)).not.toContain("attemptFileReadOptimization(")
+	})
+
 	it("peeks recently modified files and acknowledges only after an ordinary request reaches a valid first chunk", async () => {
 		const source = await readFile(taskSourcePath, "utf8")
 		const environmentMethod = extractMethod(source, "async getEnvironmentDetails(", "\n\t}\n}")
@@ -156,7 +170,7 @@ describe("Task context-window final admission guard", () => {
 		const backgroundIndex = method.indexOf("await this.appendBackgroundResults(parsedContent", environmentIndex)
 		const historyIndex = method.indexOf("buildTargetCandidateHistory(", backgroundIndex)
 		const providerInputIndex = method.indexOf("this.buildOrdinaryProviderInput(", historyIndex)
-		const estimateIndex = method.indexOf("estimateContextWindowCandidate(targetInput)", providerInputIndex)
+		const estimateIndex = method.indexOf("estimateContextWindowCandidate(targetInput,", providerInputIndex)
 		const decisionIndex = method.indexOf("decideTargetWindowFitting({", estimateIndex)
 
 		expect(loadContextIndex).toBeGreaterThanOrEqual(0)
@@ -176,7 +190,7 @@ describe("Task context-window final admission guard", () => {
 			"private async projectContextTransitionTargetUsage(",
 			"/** Create the sole Task-local execution boundary",
 		)
-		const estimateIndex = method.indexOf("estimateContextWindowCandidate(providerInput)")
+		const estimateIndex = method.indexOf("estimateContextWindowCandidate(providerInput, {")
 		const pressureIndex = method.indexOf("this.getContextWindowRequestPressures()", estimateIndex)
 		const projectionIndex = method.indexOf("resolveContextWindowProjection({", estimateIndex)
 		const resultIndex = method.indexOf("projectedUsageTokens", projectionIndex)
@@ -274,6 +288,13 @@ describe("Task context-window final admission guard", () => {
 		expect(requestMethod.match(/if \(result !== "completed"\) return true/g)).toHaveLength(1)
 	})
 
+	it("does not keep or replay unsent ordinary input outside the durable compaction checkpoint", async () => {
+		const source = await readFile(taskSourcePath, "utf8")
+
+		expect(source).not.toContain("pendingAutomaticCompactionContinuation")
+		expect(source).not.toContain("Automatic compaction continuation is missing")
+	})
+
 	it("checkpoints an accepted Pass before staging and publishing completion", async () => {
 		const sessionSource = await readFile(sessionSourcePath, "utf8")
 		const summaryIndex = sessionSource.indexOf('kind: "pass_partial"')
@@ -299,7 +320,9 @@ describe("Task context-window final admission guard", () => {
 		expect(method).toContain("this.contextCompactionPresentation.partial(")
 		expect(method).toContain("this.contextCompactionPresentation.retry(")
 		expect(method).toContain("this.contextCompactionPresentation.complete(")
+		expect(method).toContain("this.contextCompactionPresentation.fail(input.operationId, event.error)")
 		expect(method).toContain("this.publishContextCompactionSnapshot(snapshot)")
+		expect(method).toContain("...(snapshot.error ? { error: snapshot.error } : {})")
 		const highFrequencyReturn = method.indexOf('if (event.kind === "pass_receiving" || event.kind === "pass_partial") return')
 		const fullStatePost = method.indexOf("await this.postStateToWebview()", highFrequencyReturn)
 		expect(highFrequencyReturn).toBeGreaterThanOrEqual(0)

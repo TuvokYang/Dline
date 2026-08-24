@@ -61,9 +61,11 @@ export function projectContextCompactionBoundary(
 		? activeIndex.protectedStartIndex
 		: Math.min(boundaryIndex.protectedStartIndex, boundaryHistory.length)
 	const sourceHistory = boundaryHistory.slice(0, sourceEndIndex)
-	const sourcePairingEvidence = pendingCompletesProtectedTurn
-		? [...collectToolResults(activeBoundaryHistory.slice(sourceEndIndex)), ...pendingBlocks]
-		: pendingBlocks
+	// Tool results in the protected tail may close a source tool use without making
+	// their user-authored payload eligible for the hidden Pass. The pairing helper
+	// consumes only identity and emits neutral evidence, while the real result stays
+	// in targetContinuationHistory.
+	const sourcePairingEvidence = [...collectToolResults(activeBoundaryHistory.slice(sourceEndIndex)), ...pendingBlocks]
 
 	const naturalContinuationStart = Math.min(sourceEndIndex, activeHistory.length)
 	const targetContinuationHistory = activeHistory.filter(

@@ -1181,7 +1181,6 @@ e2e(
 				expectedRequestIncludes: [taskCase.marker],
 				matchRequestContract: true,
 				delayMs: 10_000,
-				usage: { inputTokens: 100, outputTokens: 20, cacheReadTokens: 0, cacheWriteTokens: 10_000 },
 			})
 		}
 
@@ -1237,7 +1236,6 @@ e2e(
 				expectedRequestIncludes: [taskCase.marker, taskCase.followUp],
 				matchRequestContract: true,
 				delayMs: 10_000,
-				usage: { inputTokens: 100, outputTokens: 20, cacheReadTokens: 10_000, cacheWriteTokens: 0 },
 			})
 		}
 		for (const [index, task] of tasks.entries()) {
@@ -1300,6 +1298,13 @@ e2e(
 			expect(secondRequest.cacheDiagnostic?.cacheReadTokens).toBeGreaterThan(
 				firstRequest.cacheDiagnostic?.cacheReadTokens ?? 0,
 			)
+			expect(secondRequest.cacheDiagnostic?.reusablePrefixTokens).toBeGreaterThan(
+				(firstRequest.cacheDiagnostic?.totalInputTokens ?? 0) * 0.9,
+			)
+			expect(secondRequest.cacheDiagnostic?.componentHashes.system).toBe(
+				firstRequest.cacheDiagnostic?.componentHashes.system,
+			)
+			expect(secondRequest.cacheDiagnostic?.componentHashes.tools).toBe(firstRequest.cacheDiagnostic?.componentHashes.tools)
 			taskKeys.set(taskCase.marker, String(firstBody.prompt_cache_key))
 		}
 		expect(new Set(taskKeys.values()).size).toBe(taskCases.length)

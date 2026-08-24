@@ -102,7 +102,9 @@ export function resolveCompactTriggerPolicy(
 		branch: "percentage_guarded",
 		guardedReserveTokens,
 		compactTriggerTokens: Math.max(0, normalizedContextWindow - normalizedInstructionBudget - guardedReserveTokens),
-		passInputCeilingTokens: Math.max(0, normalizedContextWindow - guardedReserveTokens - ESTIMATION_TOLERANCE),
+		// The proactive trigger reserve decides when fitting starts; hidden Pass admission
+		// uses the complete rendered request and leaves only estimation tolerance unused.
+		passInputCeilingTokens: Math.max(0, normalizedContextWindow - ESTIMATION_TOLERANCE),
 	}
 }
 

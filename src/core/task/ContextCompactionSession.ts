@@ -369,7 +369,6 @@ export class ContextCompactionSession {
 								},
 							})
 							this.assertCurrent(input.operationId, signal)
-							this.ports.recordUsage?.(result.usage)
 							const completedAttempt: InternalCompactionAttemptIdentity = {
 								attemptIndex: result.attemptIndex,
 								authorizationAttemptId: result.authorizationAttemptId,
@@ -437,6 +436,7 @@ export class ContextCompactionSession {
 								projection,
 								content: result.summary,
 							})
+							this.recordAcceptedPassUsage(result)
 							request.explicitInstructions.close()
 							break
 						}
@@ -563,6 +563,19 @@ export class ContextCompactionSession {
 
 	getActiveOperationId(): string | undefined {
 		return this.active?.operationId
+	}
+
+	private recordAcceptedPassUsage(result: Awaited<ReturnType<typeof runInternalCompactionPassWithRetry>>): void {
+		if (!result.settlement) {
+			if (result.usage) this.ports.recordUsage?.(result.usage)
+			return
+		}
+		void result.settlement
+			.then((settlement) => {
+				const usage = settlement.usage ?? result.usage
+				if (usage) this.ports.recordUsage?.(usage)
+			})
+			.catch(() => undefined)
 	}
 
 	private async handleRestoreInterruption(operationId: string): Promise<ContextCompactionSessionRestoreState | undefined> {

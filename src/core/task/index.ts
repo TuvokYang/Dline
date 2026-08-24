@@ -488,10 +488,6 @@ export class Task {
 	>()
 	private readonly contextCompactionFailureReasons = new Map<string, string>()
 	private readonly contextCompactionRetryProgress = new Map<string, { retryAttempt: number; maxRetryAttempts: number }>()
-	private pendingAutomaticCompactionContinuation?: {
-		userContent: ClineContent[]
-		includeFileDetails: boolean
-	}
 	private diffViewProvider: DiffViewProvider
 	public checkpointManager?: ICheckpointManager
 	private initialCheckpointCommitPromise?: Promise<string | undefined>
@@ -692,28 +688,6 @@ export class Task {
 							persistedRequestApiIndex,
 							logicalApiIndex: effect.apiIndex,
 						})
-						return
-					}
-					const hasContinuationDraft = Boolean(
-						effect.draft &&
-							(effect.draft.text.trim().length > 0 ||
-								effect.draft.images.length > 0 ||
-								effect.draft.files.length > 0),
-					)
-					if (effect.persistedRequest === false && !hasContinuationDraft) {
-						const pendingContinuation = this.pendingAutomaticCompactionContinuation
-						if (!pendingContinuation) {
-							throw new Error("Automatic compaction continuation is missing")
-						}
-						this.pendingAutomaticCompactionContinuation = undefined
-						await this.recursivelyMakeClineRequests(
-							pendingContinuation.userContent,
-							pendingContinuation.includeFileDetails,
-							{
-								reuseRequestAccounting: true,
-								logicalApiIndex: effect.apiIndex,
-							},
-						)
 						return
 					}
 					if (effect.draft) {
@@ -1488,6 +1462,8 @@ export class Task {
 		const estimatedSegments = estimateContextWindowIndicatorSegments({
 			providerInput,
 			durableMessageCount: Math.max(0, providerInput.messages.length - 1),
+			providerId: requestScope.providerInfo.providerId,
+			modelId: requestScope.providerInfo.model.id,
 		})
 		const profile = this.getContextWindowIndicatorProfile(requestScope.providerInfo.mode)
 		const contextWindow = getContextWindowInfo(requestScope.api).contextWindow
@@ -1575,17 +1551,20 @@ export class Task {
 	/** Re-estimate the not-yet-frozen continuation as one replaceable Staged value. */
 	private async refreshOrdinaryIndicatorStaged(): Promise<void> {
 		if (this.contextWindowIndicator.getSnapshot().phase !== "stable") return
-		const pendingInputTokens = estimateContextWindowCandidate({
-			systemPrompt: "",
-			messages: [
-				{
-					role: "user",
-					content: cloneDeep(this.taskState.userMessageContent),
-				},
-			],
-			tools: [],
-			serverTools: [],
-		})
+		const pendingInputTokens = estimateContextWindowCandidate(
+			{
+				systemPrompt: "",
+				messages: [
+					{
+						role: "user",
+						content: cloneDeep(this.taskState.userMessageContent),
+					},
+				],
+				tools: [],
+				serverTools: [],
+			},
+			{ providerId: this.api.getProviderId?.() ?? DEFAULT_API_PROVIDER, modelId: this.api.getModel().id },
+		)
 		await this.publishContextWindowIndicatorSnapshot(this.contextWindowIndicator.refreshStaged({ pendingInputTokens }))
 	}
 
@@ -1636,6 +1615,8 @@ export class Task {
 		const estimatedSegments = estimateContextWindowIndicatorSegments({
 			providerInput: event.providerInput,
 			durableMessageCount: event.state.cumulativeSummary ? 1 : 0,
+			providerId: input.compactionApi.getProviderId?.() ?? DEFAULT_API_PROVIDER,
+			modelId: input.compactionApi.getModel().id,
 		})
 		const currentIndicator = this.contextWindowIndicator.getSnapshot()
 		const latestProviderTokens =
@@ -2151,7 +2132,10 @@ export class Task {
 			const providerInput = await this.buildOrdinaryProviderInput(previousApiReqIndex, requestScope, targetHistory, {
 				preview: true,
 			})
-			const candidateEstimatedTokens = estimateContextWindowCandidate(providerInput)
+			const candidateEstimatedTokens = estimateContextWindowCandidate(providerInput, {
+				providerId: targetApi.getProviderId?.() ?? DEFAULT_API_PROVIDER,
+				modelId: targetApi.getModel().id,
+			})
 			const { contextWindow } = getContextWindowInfo(targetApi)
 			return resolveContextWindowProjection({
 				requestInfos: this.getContextWindowRequestPressures(),
@@ -2181,7 +2165,10 @@ export class Task {
 				estimatePassInput: async (input, passHistory) => {
 					const request = await this.buildContextCompactionPassRequest(input, passHistory)
 					try {
-						return estimateContextWindowCandidate(request.providerInput)
+						return estimateContextWindowCandidate(request.providerInput, {
+							providerId: input.compactionApi.getProviderId?.() ?? DEFAULT_API_PROVIDER,
+							modelId: input.compactionApi.getModel().id,
+						})
 					} finally {
 						request.explicitInstructions.cancel()
 					}
@@ -2364,6 +2351,8 @@ export class Task {
 				serverTools: [],
 			},
 			durableMessageCount: 0,
+			providerId: api.getProviderId?.() ?? DEFAULT_API_PROVIDER,
+			modelId: model.id,
 		}).environmentTokens
 	}
 
@@ -2659,7 +2648,10 @@ export class Task {
 			const targetInput = await this.buildOrdinaryProviderInput(previousApiReqIndex, requestScope, targetHistory, {
 				preview: true,
 			})
-			const candidateEstimatedTokens = estimateContextWindowCandidate(targetInput)
+			const candidateEstimatedTokens = estimateContextWindowCandidate(targetInput, {
+				providerId: input.targetApi.getProviderId?.() ?? DEFAULT_API_PROVIDER,
+				modelId: input.targetApi.getModel().id,
+			})
 			const { contextWindow } = getContextWindowInfo(input.targetApi)
 			const decision = decideTargetWindowFitting({
 				candidateEstimatedTokens,
@@ -2670,6 +2662,8 @@ export class Task {
 			const segments = estimateContextWindowIndicatorSegments({
 				providerInput: targetInput,
 				durableMessageCount: Math.max(0, targetInput.messages.length - continuation.length),
+				providerId: input.targetApi.getProviderId?.() ?? DEFAULT_API_PROVIDER,
+				modelId: input.targetApi.getModel().id,
 			})
 			return {
 				...decision,
@@ -2826,7 +2820,7 @@ export class Task {
 			case "failed":
 				if (input.signal?.aborted) this.contextCompactionRetryProgress.delete(input.operationId)
 				this.contextCompactionIndicatorReceivingByAttemptId.clear()
-				snapshot = this.contextCompactionPresentation.fail(input.operationId)
+				snapshot = this.contextCompactionPresentation.fail(input.operationId, event.error)
 				break
 		}
 		if (snapshot) await this.publishContextCompactionSnapshot(snapshot)
@@ -2840,6 +2834,7 @@ export class Task {
 			tool: "summarizeTask",
 			content: snapshot.content,
 			compactionStatus: snapshot.status,
+			...(snapshot.error ? { error: snapshot.error } : {}),
 			...(snapshot.retryAttempt !== undefined ? { retryAttempt: snapshot.retryAttempt } : {}),
 			...(snapshot.maxRetryAttempts !== undefined ? { maxRetryAttempts: snapshot.maxRetryAttempts } : {}),
 			compactionOperationId: snapshot.passIdentity.operationId,
@@ -4318,9 +4313,6 @@ export class Task {
 					(event.response.actionId === "retry" || event.response.actionId === "start_new_task")
 				if (isAcceptedErrorRetryTakeover) {
 					this.taskState.forceTruncateAvailable = false
-					if (event.response.actionId === "start_new_task") {
-						this.pendingAutomaticCompactionContinuation = undefined
-					}
 				}
 				return result
 			})
@@ -7045,7 +7037,11 @@ export class Task {
 		const { contextWindow } = getContextWindowInfo(requestScope.api)
 		const triggerTokens = computeCompactTrigger(contextWindow, computeSummarizeBudget(), this.getAutoCondenseTriggerOptions())
 		let candidateInput = await buildCandidate()
-		let candidateEstimatedTokens = estimateContextWindowCandidate(candidateInput)
+		const candidateEstimator = {
+			providerId: requestScope.providerInfo.providerId,
+			modelId: requestScope.providerInfo.model.id,
+		}
+		let candidateEstimatedTokens = estimateContextWindowCandidate(candidateInput, candidateEstimator)
 		let projection = resolveContextWindowProjection({
 			requestInfos: this.getContextWindowRequestPressures(),
 			candidateEstimatedTokens,
@@ -7060,7 +7056,7 @@ export class Task {
 		if (warning) {
 			this.appendHighContextPressureWarning(userContent, warning)
 			candidateInput = await buildCandidate()
-			candidateEstimatedTokens = estimateContextWindowCandidate(candidateInput)
+			candidateEstimatedTokens = estimateContextWindowCandidate(candidateInput, candidateEstimator)
 			projection = resolveContextWindowProjection({
 				requestInfos: this.getContextWindowRequestPressures(),
 				candidateEstimatedTokens,
@@ -7317,16 +7313,6 @@ export class Task {
 						previousApiReqIndex,
 						autoCondenseTriggerOptions,
 					))
-
-			if (shouldCompact && !forceFinalGuardCompact) {
-				shouldCompact = await this.contextManager.attemptFileReadOptimization(
-					this.messageStateHandler.apiConversationHistory,
-					this.taskState.conversationHistoryDeletedRange,
-					this.messageStateHandler.clineMessages,
-					previousApiReqIndex,
-					await ensureTaskDirectoryExists(this.taskId),
-				)
-			}
 		}
 
 		if (!persistedRequest && shouldCompact && !manualCompactionRequested) {
@@ -7340,10 +7326,6 @@ export class Task {
 				includeFileDetails,
 			)
 			if (result === "failed") {
-				this.pendingAutomaticCompactionContinuation = {
-					userContent: cloneDeep(originalUserContent),
-					includeFileDetails,
-				}
 				await this.presentTerminalCompactionFailure(operationId, apiIndex)
 				return true
 			}
@@ -7530,10 +7512,6 @@ export class Task {
 					includeFileDetails,
 				)
 				if (result === "failed") {
-					this.pendingAutomaticCompactionContinuation = {
-						userContent: cloneDeep(originalUserContent),
-						includeFileDetails,
-					}
 					await this.presentTerminalCompactionFailure(operationId, apiIndex)
 					return true
 				}

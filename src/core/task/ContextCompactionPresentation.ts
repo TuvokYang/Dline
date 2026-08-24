@@ -109,14 +109,14 @@ export class ContextCompactionPresentation {
 		return this.snapshot()
 	}
 
-	fail(operationId: string): ContextCompactionPresentationSnapshot | undefined {
+	fail(operationId: string, error: string): ContextCompactionPresentationSnapshot | undefined {
 		if (!this.active || this.active.passIdentity.operationId !== operationId || this.active.status === "completed")
 			return undefined
 		this.active = {
 			...this.active,
 			content: "",
 			status: "failed",
-			error: undefined,
+			error,
 			retryAttempt: undefined,
 			maxRetryAttempts: undefined,
 		}

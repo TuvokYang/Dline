@@ -1,4 +1,7 @@
-import { estimateContextWindowCandidate } from "@core/context/context-management/context-window-projection"
+import {
+	type ContextWindowCandidateEstimator,
+	estimateContextWindowCandidate,
+} from "@core/context/context-management/context-window-projection"
 import type { ClineStorageMessage } from "@shared/messages/content"
 import cloneDeep from "clone-deep"
 import type { CompactionProviderInput } from "./compaction/CompactionRequestReplay"
@@ -12,7 +15,7 @@ export interface ContextWindowIndicatorSegments {
 	totalTokens: number
 }
 
-export interface EstimateContextWindowIndicatorSegmentsInput {
+export interface EstimateContextWindowIndicatorSegmentsInput extends ContextWindowCandidateEstimator {
 	providerInput: CompactionProviderInput
 	/** Number of leading messages already represented by the durable segment. */
 	durableMessageCount: number
@@ -28,18 +31,19 @@ export interface ProjectAuthoritativeContextWindowIndicatorSegmentsInput {
 export function estimateContextWindowIndicatorSegments(
 	input: EstimateContextWindowIndicatorSegmentsInput,
 ): ContextWindowIndicatorSegments {
-	const totalTokens = estimateContextWindowCandidate(input.providerInput)
+	const estimator = { providerId: input.providerId, modelId: input.modelId }
+	const totalTokens = estimateContextWindowCandidate(input.providerInput, estimator)
 	const messagesWithoutEnvironment = stripLatestEnvironmentDetails(input.providerInput.messages)
 	const withoutEnvironmentTokens = Math.min(
 		totalTokens,
-		estimateContextWindowCandidate({ ...input.providerInput, messages: messagesWithoutEnvironment }),
+		estimateContextWindowCandidate({ ...input.providerInput, messages: messagesWithoutEnvironment }, estimator),
 	)
 	const environmentTokens = Math.max(0, totalTokens - withoutEnvironmentTokens)
 	const durableMessageCount = Math.max(0, Math.min(messagesWithoutEnvironment.length, Math.floor(input.durableMessageCount)))
 	const durableMessages = messagesWithoutEnvironment.slice(0, durableMessageCount)
 	let durableContextTokens = Math.min(
 		withoutEnvironmentTokens,
-		estimateContextWindowCandidate({ ...input.providerInput, messages: durableMessages }),
+		estimateContextWindowCandidate({ ...input.providerInput, messages: durableMessages }, estimator),
 	)
 	let pendingSendTokens = Math.max(0, withoutEnvironmentTokens - durableContextTokens)
 

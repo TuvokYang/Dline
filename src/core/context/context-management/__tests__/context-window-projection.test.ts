@@ -148,4 +148,49 @@ describe("context window projection", () => {
 		expect(small).toBeGreaterThan(0)
 		expect(large).toBeGreaterThan(small)
 	})
+
+	it("does not treat an unsent base64 image payload as ordinary text pressure", () => {
+		const text = "x".repeat(960_000)
+		const previousCandidate = {
+			systemPrompt: "system",
+			messages: [{ role: "user", content: [{ type: "text", text }] }],
+		}
+		const previousEstimate = estimateContextWindowCandidate(previousCandidate)
+		const onePixelPng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z8WQAAAAASUVORK5CYII="
+		const candidate = {
+			...previousCandidate,
+			messages: [
+				{
+					role: "user",
+					content: [
+						{ type: "text", text },
+						{
+							type: "image",
+							source: { type: "base64", media_type: "image/png", data: `${onePixelPng}${"A".repeat(900_000)}` },
+						},
+					],
+				},
+			],
+		}
+		const conservativeEstimate = estimateContextWindowCandidate(candidate)
+		const candidateEstimate = estimateContextWindowCandidate(candidate, { providerId: "openai", modelId: "gpt-5.6-sol" })
+		const projection = resolveContextWindowProjection({
+			requestInfos: [
+				{
+					contextTokens: 240_000,
+					estimatedContextTokens: previousEstimate,
+					contextTokensSource: "provider",
+				},
+			],
+			candidateEstimatedTokens: candidateEstimate,
+			contextWindow: 472_000,
+			triggerTokens: 446_400,
+		})
+
+		expect(previousEstimate).toBeGreaterThan(200_000)
+		expect(conservativeEstimate - previousEstimate).toBeGreaterThan(200_000)
+		expect(candidateEstimate - previousEstimate).toBeLessThan(10_000)
+		expect(projection.candidateDeltaTokens).toBeLessThan(10_000)
+		expect(projection.shouldCompact).toBe(false)
+	})
 })

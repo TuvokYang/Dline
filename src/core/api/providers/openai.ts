@@ -363,6 +363,9 @@ export class OpenAiHandler implements ApiHandler {
 			if (delta?.tool_calls) {
 				yield* toolCallProcessor.processToolCallDeltas(delta.tool_calls)
 			}
+			if (options?.generation?.purpose === "compaction" && chunk.choices?.[0]?.finish_reason === "tool_calls") {
+				yield* toolCallProcessor.completeToolCalls()
+			}
 
 			if (chunk.usage && !usageYielded) {
 				usageYielded = true

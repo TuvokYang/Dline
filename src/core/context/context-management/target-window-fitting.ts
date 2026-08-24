@@ -1,4 +1,4 @@
-import type { ClineContent, ClineStorageMessage } from "@shared/messages/content"
+import type { ClineStorageMessage } from "@shared/messages/content"
 import cloneDeep from "clone-deep"
 import { hashCompactionSummary, hashCompactionValue } from "./compaction-hash"
 import type { LogicalTurn, LogicalTurnIndex } from "./logical-turns"
@@ -47,10 +47,7 @@ export interface AcceptedCompactionPass {
 }
 
 /** Start rolling fitting only when canonical history contains a complete logical turn. */
-export function tryStartTargetWindowFitting(
-	index: LogicalTurnIndex,
-	operationId: string,
-): TargetWindowFittingState | undefined {
+export function tryStartTargetWindowFitting(index: LogicalTurnIndex, operationId: string): TargetWindowFittingState | undefined {
 	return index.turns.length === 0 ? undefined : startTargetWindowFitting(index, operationId)
 }
 
@@ -141,7 +138,7 @@ export function buildCompactionPassHistoryForRange(
 	}
 	return [
 		...(state.cumulativeSummary ? [summaryMessage(state.cumulativeSummary)] : []),
-		...sanitizeStagedMessages(passTurns.flatMap((turn) => turn.messages)),
+		...cloneCompactionPassMessages(passTurns),
 	]
 }
 
@@ -156,8 +153,13 @@ export function buildCompactionPassHistory(state: TargetWindowFittingState): Cli
 	}
 	return [
 		...(state.cumulativeSummary ? [summaryMessage(state.cumulativeSummary)] : []),
-		...sanitizeStagedMessages(passTurns.flatMap((turn) => turn.messages)),
+		...cloneCompactionPassMessages(passTurns),
 	]
+}
+
+/** Preserve every selected logical turn verbatim; cumulative summaries are prepended separately. */
+function cloneCompactionPassMessages(passTurns: readonly LogicalTurn[]): ClineStorageMessage[] {
+	return cloneDeep(passTurns.flatMap((turn) => turn.messages))
 }
 
 /** Accept one valid cumulative summary and advance coverage to the next complete turn. */
@@ -268,33 +270,17 @@ export function buildFittingSourceHistory(state: TargetWindowFittingState): Clin
 	return cloneDeep(state.sourceHistory)
 }
 
-/** Build the staged ordinary target history; dynamic environment belongs only in continuation messages. */
+/** Build the staged ordinary target history without inspecting or rewriting message content. */
 export function buildTargetCandidateHistory(
 	state: TargetWindowFittingState,
 	continuation: readonly ClineStorageMessage[],
 ): ClineStorageMessage[] {
 	return [
 		...(state.cumulativeSummary ? [summaryMessage(state.cumulativeSummary)] : []),
-		...sanitizeStagedMessages(state.turns.slice(state.coveredTurnCount).flatMap((turn) => turn.messages)),
-		...sanitizeStagedMessages(state.protectedTail),
+		...cloneDeep(state.turns.slice(state.coveredTurnCount).flatMap((turn) => turn.messages)),
+		...cloneDeep(state.protectedTail),
 		...cloneDeep(continuation),
 	]
-}
-
-function sanitizeStagedMessages(messages: readonly ClineStorageMessage[]): ClineStorageMessage[] {
-	return messages.flatMap((message): ClineStorageMessage[] => {
-		if (typeof message.content === "string") {
-			return isEnvironmentDetails(message.content) ? [] : [cloneDeep(message)]
-		}
-		const content = message.content.filter((block): block is ClineContent => {
-			return block.type !== "text" || !isEnvironmentDetails(block.text)
-		})
-		return content.length === 0 ? [] : [{ ...cloneDeep(message), content: cloneDeep(content) }]
-	})
-}
-
-function isEnvironmentDetails(text: string): boolean {
-	return /^<environment_details>[\s\S]*<\/environment_details>$/i.test(text.trim())
 }
 
 function hashSummaryBaseline(summary: string): string {

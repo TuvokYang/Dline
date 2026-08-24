@@ -52,6 +52,29 @@ describe("ToolCallProcessor", () => {
 		expect(secondToolCall.tool_call.function.arguments).toBe('{"path":"README.md"}')
 	})
 
+	it("emits one completion boundary for every accumulated tool call", () => {
+		const processor = new ToolCallProcessor()
+		const chunks = [
+			{
+				index: 1,
+				id: "call_search",
+				function: { name: "search_files", arguments: '{"path":"src"}' },
+			},
+			{
+				index: 0,
+				id: "call_read",
+				function: { name: "read_file", arguments: '{"path":"README.md"}' },
+			},
+		] as any
+
+		expect([...processor.processToolCallDeltas(chunks)]).toHaveLength(2)
+		expect([...processor.completeToolCalls()]).toEqual([
+			expect.objectContaining({ function_id: "call_read", phase: "completed", tool_index: 0 }),
+			expect.objectContaining({ function_id: "call_search", phase: "completed", tool_index: 1 }),
+		])
+		expect([...processor.completeToolCalls()]).toEqual([])
+	})
+
 	it("should clear accumulated state on reset", () => {
 		const processor = new ToolCallProcessor()
 

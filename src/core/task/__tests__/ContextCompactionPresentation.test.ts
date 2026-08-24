@@ -47,10 +47,11 @@ describe("ContextCompactionPresentation", () => {
 		presentation.partial(firstPass, attempt0, "partial zero")
 		presentation.bindMessageTs(firstPass, 101)
 
-		expect(presentation.fail("operation-1")).toMatchObject({
+		expect(presentation.fail("operation-1", "The summary stream timed out after checkpoint recovery.")).toMatchObject({
 			existingTs: 101,
 			content: "",
 			status: "failed",
+			error: "The summary stream timed out after checkpoint recovery.",
 		})
 	})
 
@@ -88,11 +89,11 @@ describe("ContextCompactionPresentation", () => {
 		expect(presentation.partial(secondPass, attempt0, "second")).toMatchObject({ existingTs: undefined, status: "running" })
 		expect(presentation.partial(firstPass, attempt0, "late first")).toBeUndefined()
 		expect(presentation.partial(secondPass, attempt1, "unannounced retry")).toBeUndefined()
-		expect(presentation.fail("operation-1")).toMatchObject({
+		expect(presentation.fail("operation-1", "Terminal compaction failure")).toMatchObject({
 			existingTs: undefined,
 			content: "",
 			status: "failed",
-			error: undefined,
+			error: "Terminal compaction failure",
 			passIdentity: secondPass,
 			attempt: attempt0,
 		})

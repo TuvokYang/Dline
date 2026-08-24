@@ -97,7 +97,7 @@ describe("ChatRow summarizeTask rendering", () => {
 		expect(screen.queryByText(/Preparing a context-safe summary/i)).not.toBeInTheDocument()
 	})
 
-	it("renders a failed compaction marker without duplicating the API request error detail", () => {
+	it("renders the terminal failure detail on the compaction card", () => {
 		render(
 			<ChatRowContent
 				{...baseProps}
@@ -119,7 +119,7 @@ describe("ChatRow summarizeTask rendering", () => {
 
 		expect(screen.getByText("Conversation compaction failed:")).toBeInTheDocument()
 		expect(screen.queryByText("E2E_MANUAL_INCOMPLETE_PARTIAL_MUST_NOT_RENDER")).not.toBeInTheDocument()
-		expect(screen.queryByText("The summary exceeded the request output limit.")).not.toBeInTheDocument()
+		expect(screen.getByText("The summary exceeded the request output limit.")).toBeInTheDocument()
 		expect(screen.queryByText("Dline is condensing the conversation:")).not.toBeInTheDocument()
 	})
 

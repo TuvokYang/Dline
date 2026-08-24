@@ -245,6 +245,57 @@ describe("internal compaction Pass retry owner", () => {
 		)
 	})
 
+	it("accepts a completed summary when the Provider stream fails during tail settlement", async () => {
+		const tailError = new Error("connection closed after the completed summary")
+		const createMessage = vi.fn(() =>
+			(async function* (): ApiStream {
+				yield {
+					type: "tool_calls" as const,
+					function_id: "call-summary-tail-failure",
+					phase: "completed" as const,
+					tool_index: 0,
+					tool_call: {
+						function: {
+							name: ClineDefaultTool.SUMMARIZE_TASK,
+							arguments: JSON.stringify({
+								context:
+									"The completed summary preserves the confirmed architecture, the current implementation boundary, and the exact next verification step.",
+							}),
+						},
+					},
+				}
+				throw tailError
+			})(),
+		)
+		const api = {
+			createMessage,
+			getModel: () => ({ id: "test-model", info: { id: "test-model" } }),
+		} satisfies ApiHandler
+		const onRetry = vi.fn()
+		const waitForRetry = vi.fn(async () => undefined)
+
+		const result = await runInternalCompactionPassWithRetry({
+			api,
+			providerInput,
+			explicitInstructions: createInstructions(),
+			passIdentity,
+			retryPolicy: new CompactionRetryPolicy(3),
+			attemptIdFactory: (attemptIndex) => `attempt-${attemptIndex}`,
+			waitForRetry,
+			onRetry,
+		})
+
+		expect(result).toMatchObject({
+			summary:
+				"The completed summary preserves the confirmed architecture, the current implementation boundary, and the exact next verification step.",
+			attemptIndex: 0,
+			authorizationAttemptId: "attempt-0",
+		})
+		expect(createMessage).toHaveBeenCalledOnce()
+		expect(onRetry).not.toHaveBeenCalled()
+		expect(waitForRetry).not.toHaveBeenCalled()
+	})
+
 	it("does not replay an immutable Pass after a deterministic HTTP 400", async () => {
 		const error = Object.assign(new Error("400 No tool output found for function call fc_compaction."), { status: 400 })
 		const createMessage = vi.fn(() => failingStream(error))

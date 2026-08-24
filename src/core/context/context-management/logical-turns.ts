@@ -215,11 +215,5 @@ function toolResultTexts(block: ClineUserToolResultContentBlock): string[] {
 }
 
 function hasUserText(text: string): boolean {
-	const trimmed = text.trim()
-	if (!trimmed) return false
-	const lower = trimmed.toLowerCase()
-	if (USER_CONTENT_TAGS.some((tag) => lower.includes(tag.toLowerCase()))) return true
-	if (lower.includes("<environment_details>")) return false
-	if (lower.startsWith("# task_progress recommended") || lower.startsWith("# todo list update")) return false
-	return true
+	return text.trim().length > 0
 }

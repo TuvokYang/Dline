@@ -1,4 +1,4 @@
-import type { ClineContent, ClineStorageMessage } from "@shared/messages/content"
+import type { ClineStorageMessage } from "@shared/messages/content"
 import { describe, expect, it } from "vitest"
 import { indexLogicalTurns } from "../logical-turns"
 
@@ -225,15 +225,25 @@ describe("logical turn indexing", () => {
 		expect(result.issues).toEqual([{ kind: "orphan_tool_result", messageIndex: 2, functionId: "call-orphan" }])
 	})
 
-	it("does not treat dynamic environment metadata as a user-authored turn", () => {
-		const metadataOnly: ClineStorageMessage = {
-			role: "user",
-			content: [{ type: "text", text: "<environment_details>dynamic state</environment_details>" } satisfies ClineContent],
-		}
+	it.each([
+		"plain second request",
+		"<environment_details>dynamic state</environment_details>",
+		"# task_progress recommended\n- [ ] next step",
+		"# TODO LIST UPDATE: checklist changed",
+	])("uses the same logical-turn boundary for every non-empty canonical user text: %s", (secondUserText) => {
+		const history = [
+			textMessage("user", "first request"),
+			textMessage("assistant", "first response"),
+			textMessage("user", secondUserText),
+			textMessage("assistant", "second response"),
+		]
 
-		const result = indexLogicalTurns([metadataOnly])
+		const result = indexLogicalTurns(history)
 
-		expect(result.turns).toEqual([])
-		expect(result.protectedTail).toEqual([metadataOnly])
+		expect(result.turns.map(({ startIndex, endIndex }) => [startIndex, endIndex])).toEqual([
+			[0, 1],
+			[2, 3],
+		])
+		expect(result.protectedTail).toEqual([])
 	})
 })

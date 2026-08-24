@@ -240,6 +240,111 @@ describe("Task context-window indicator stale protection", () => {
 		expect(task.postStateToWebview).not.toHaveBeenCalled()
 	})
 
+	it("publishes the new Durable at the accepted checkpoint and retains it as the retry baseline", async () => {
+		const task = createHarness()
+		const previousHead = checkpointHead("operation-durable-commit", {
+			headCheckpointId: "checkpoint-before-summary",
+		})
+		const passLineage: ContextWindowIndicatorLineage = {
+			kind: "compaction_pass",
+			operationId: "operation-durable-commit",
+			passIndex: 0,
+			attemptIndex: 0,
+			attemptId: "pass-attempt-durable-commit",
+			headCheckpointId: previousHead.headCheckpointId,
+			chainRevision: previousHead.chainRevision,
+			branchId: previousHead.branchId,
+		}
+		const sending = task.contextWindowIndicator.beginSend({
+			lineage: passLineage,
+			durableContextTokens: 700,
+			pendingSendTokens: 120,
+			environmentTokens: 30,
+			contextWindow: 1_000,
+			mode: "act",
+		})
+		task.taskState.contextWindowIndicator = sending
+		task.contextCompactionIndicatorReceivingByAttemptId.set(
+			"pass-attempt-durable-commit",
+			new ContextWindowReceivingTracker(),
+		)
+		const published: ContextWindowIndicatorSnapshot[] = []
+		task.postStateToWebview.mockImplementation(async () => {
+			const snapshot = task.taskState.contextWindowIndicator
+			if (snapshot) published.push(snapshot)
+		})
+		const nextHead = checkpointHead("operation-durable-commit", {
+			headCheckpointId: "checkpoint-after-summary",
+			chainRevision: 1,
+			sequence: 1,
+			depth: 1,
+		})
+		const completed = {
+			kind: "pass_completed",
+			state: {},
+			passIdentity: { operationId: "operation-durable-commit", passIndex: 0 },
+			attempt: { attemptIndex: 0, authorizationAttemptId: "pass-attempt-durable-commit" },
+			previousCheckpointHead: previousHead,
+			checkpointHead: nextHead,
+			projection: {
+				status: "complete",
+				projectedUsageTokens: 300,
+				targetContextWindow: 1_000,
+				fittingExitTarget: 800,
+				indicator: {
+					durableContextTokens: 240,
+					pendingSendTokens: 40,
+					environmentTokens: 20,
+					contextWindow: 1_000,
+					mode: "act",
+				},
+			},
+			content:
+				"The accepted summary preserves the confirmed design, the completed implementation, and the remaining verification work.",
+		} as unknown as Extract<ContextCompactionSessionEvent, { kind: "pass_completed" }>
+
+		await task.commitContextCompactionIndicator(completed)
+
+		expect(published.map(({ phase, durableContextTokens }) => ({ phase, durableContextTokens }))).toEqual([
+			{ phase: "committing", durableContextTokens: 280 },
+			{ phase: "stable", durableContextTokens: 280 },
+		])
+		const checkpointSnapshot = task.contextWindowIndicator.getSnapshot()
+		expect(checkpointSnapshot).toMatchObject({
+			phase: "stable",
+			durableContextTokens: 280,
+			pendingSendTokens: 0,
+			receivingTokens: 0,
+			stagedTokens: 0,
+			lineage: {
+				kind: "checkpoint",
+				operationId: "operation-durable-commit",
+				checkpointId: "checkpoint-after-summary",
+				chainRevision: 1,
+				branchId: "branch-0",
+			},
+		})
+		expect(task.contextCompactionIndicatorReceivingByAttemptId.has("pass-attempt-durable-commit")).toBe(false)
+
+		const ordinaryLineage: ContextWindowIndicatorLineage = {
+			kind: "ordinary",
+			requestId: "ordinary-after-checkpoint",
+			requestSequence: 1,
+			attemptId: "ordinary-attempt-0",
+		}
+		task.contextWindowIndicator.beginSend({
+			lineage: ordinaryLineage,
+			durableContextTokens: 280,
+			pendingSendTokens: 80,
+			environmentTokens: 20,
+			contextWindow: 1_000,
+			mode: "act",
+		})
+		const rolledBack = task.contextWindowIndicator.rollback({ lineage: ordinaryLineage })
+		expect(rolledBack.durableContextTokens).toBe(280)
+		expect(rolledBack.lineage).toEqual(checkpointSnapshot.lineage)
+	})
+
 	it("rejects receiving and completion from a detached branch after restore", async () => {
 		const task = createHarness()
 		const restoreLineage: ContextWindowIndicatorLineage = {

@@ -124,7 +124,24 @@ describe("auto-condense context trigger", () => {
 		expect(computeCompactTrigger(2_000_000, summarizeBudget, settings)).toBe(1_967_500)
 	})
 
-	it("does not deduct summarize instructions twice from the pass input ceiling", () => {
+	it("keeps proactive trigger reserve out of a sendable hidden Pass admission ceiling", () => {
+		const policy = resolveCompactTriggerPolicy(472_000, computeSummarizeBudget(), {
+			triggerPercent: 95,
+			minReserveTokens: 5_000,
+			maxReserveTokens: 30_000,
+			maxContextTokens: 0,
+		})
+
+		expect(policy).toMatchObject({
+			branch: "percentage_guarded",
+			guardedReserveTokens: 23_600,
+			compactTriggerTokens: 445_900,
+			passInputCeilingTokens: 470_000,
+		})
+		expect(policy.passInputCeilingTokens - 450_000).toBe(20_000)
+	})
+
+	it("deducts only estimation tolerance from percentage and absolute Pass admission ceilings", () => {
 		const percentagePolicy = resolveCompactTriggerPolicy(272_000, computeSummarizeBudget(), {
 			triggerPercent: DEFAULT_AUTO_CONDENSE_TRIGGER_PERCENT,
 			minReserveTokens: 5_000,
@@ -142,7 +159,7 @@ describe("auto-condense context trigger", () => {
 			branch: "percentage_guarded",
 			guardedReserveTokens: 8_160,
 			compactTriggerTokens: 261_340,
-			passInputCeilingTokens: 261_840,
+			passInputCeilingTokens: 270_000,
 		})
 		expect(absolutePolicy).toMatchObject({
 			branch: "absolute_cap",

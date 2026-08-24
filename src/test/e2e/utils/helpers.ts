@@ -551,6 +551,15 @@ export const e2e = test
 			try {
 				await use(dlineDir)
 			} finally {
+				const cacheReport = server.getCacheDiagnosticReport()
+				if (cacheReport.requests.length > 0) {
+					const cacheArtifact = testInfo.outputPath("openai-cache-diagnostics.json")
+					writeFileSync(cacheArtifact, `${JSON.stringify(cacheReport, null, 2)}\n`, "utf8")
+					await testInfo.attach("openai-cache-diagnostics.json", {
+						path: cacheArtifact,
+						contentType: "application/json",
+					})
+				}
 				const taskStateDir = path.join(dlineDocsDir, "tasks")
 				if (testInfo.status !== testInfo.expectedStatus && existsSync(taskStateDir)) {
 					cpSync(taskStateDir, testInfo.outputPath("dline-task-state"), { recursive: true })

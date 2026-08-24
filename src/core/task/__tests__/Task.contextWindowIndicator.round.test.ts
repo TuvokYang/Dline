@@ -77,11 +77,15 @@ function providerInput(
 	contextWindow: number,
 ): {
 	providerInput: CompactionProviderInput
-	requestScope: { api: ApiHandler; providerInfo: { mode: "act" } }
+	requestScope: {
+		api: ApiHandler
+		providerInfo: { providerId: string; model: ReturnType<ApiHandler["getModel"]>; mode: "act" }
+	}
 } {
+	const model = { id: "m", info: { id: "m", capabilities: { contextWindow } } }
 	const requestScope = {
-		api: { getModel: () => ({ id: "m", info: { capabilities: { contextWindow } } }) } as unknown as ApiHandler,
-		providerInfo: { mode: "act" as const },
+		api: { getModel: () => model, getProviderId: () => "test" } as unknown as ApiHandler,
+		providerInfo: { providerId: "test", model, mode: "act" as const },
 	}
 	return { providerInput: { systemPrompt: "system", messages, tools: [], serverTools: [] }, requestScope }
 }
