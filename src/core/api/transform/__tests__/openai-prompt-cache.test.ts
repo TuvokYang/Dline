@@ -16,7 +16,7 @@ describe("OpenAI prompt cache projection", () => {
 		expect(JSON.stringify(projection.messages)).not.to.contain("prompt_cache_breakpoint")
 	})
 
-	it("keeps prompt cache keys within the upstream 64-character limit", () => {
+	it("namespaces prompt cache keys with a 32-character stable identifier", () => {
 		const chat = projectOpenAIChatPromptCache({
 			modelId: "gpt-5.6-sol",
 			systemPrompt: "stable system",
@@ -30,11 +30,10 @@ describe("OpenAI prompt cache projection", () => {
 			tools: [],
 		})
 
-		expect(chat.promptCacheKey.length).to.be.at.most(64)
-		expect(responses.promptCacheKey.length).to.be.at.most(64)
-		// Raw SHA-256 hex digest: exactly 64 chars, no algorithm prefix.
-		expect(chat.promptCacheKey).to.match(/^[0-9a-f]{64}$/)
-		expect(responses.promptCacheKey).to.match(/^[0-9a-f]{64}$/)
+		expect(chat.promptCacheKey).to.match(/^dline_cache_[0-9a-f]{32}$/)
+		expect(responses.promptCacheKey).to.match(/^dline_cache_[0-9a-f]{32}$/)
+		expect(chat.promptCacheKey).to.have.length(44)
+		expect(responses.promptCacheKey).to.have.length(44)
 	})
 
 	it("keeps cache keys stable within one Task namespace and isolates different Tasks", () => {
@@ -177,7 +176,17 @@ describe("OpenAI prompt cache projection", () => {
 		expect(projection.instructions).to.equal(undefined)
 		expect(projection.promptCacheOptions).to.deep.equal({ mode: "explicit" })
 		expect(projection.promptCacheKey).to.be.a("string").and.not.equal("")
-		expect(JSON.stringify(projection.input[0])).to.contain("prompt_cache_breakpoint")
+		expect(projection.input[0]).to.deep.equal({
+			type: "message",
+			role: "developer",
+			content: [
+				{
+					type: "input_text",
+					text: "stable system",
+					prompt_cache_breakpoint: { mode: "explicit" },
+				},
+			],
+		})
 		expect(JSON.stringify(projection.input[1])).to.contain("dynamic")
 	})
 

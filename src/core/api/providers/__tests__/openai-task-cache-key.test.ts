@@ -53,6 +53,7 @@ describe("OpenAI Task-scoped prompt cache keys", () => {
 		const first = create.mock.calls[0]?.[0] as OpenAI.Chat.ChatCompletionCreateParamsStreaming
 		const appended = create.mock.calls[1]?.[0] as OpenAI.Chat.ChatCompletionCreateParamsStreaming
 		const otherTask = create.mock.calls[2]?.[0] as OpenAI.Chat.ChatCompletionCreateParamsStreaming
+		expect(first.prompt_cache_key).to.match(/^dline_cache_[0-9a-f]{32}$/)
 		expect(appended.prompt_cache_key).to.equal(first.prompt_cache_key)
 		expect(otherTask.prompt_cache_key).not.to.equal(first.prompt_cache_key)
 		expect(first.prompt_cache_options).to.equal(undefined)
@@ -85,6 +86,7 @@ describe("OpenAI Task-scoped prompt cache keys", () => {
 
 		const first = create.mock.calls[0]?.[0] as OpenAI.Responses.ResponseCreateParamsStreaming
 		const otherTask = create.mock.calls[1]?.[0] as OpenAI.Responses.ResponseCreateParamsStreaming
+		expect(first.prompt_cache_key).to.match(/^dline_cache_[0-9a-f]{32}$/)
 		expect(otherTask.prompt_cache_key).not.to.equal(first.prompt_cache_key)
 		expect(first.prompt_cache_options).to.equal(undefined)
 		expect(JSON.stringify(first.input)).not.to.contain("prompt_cache_breakpoint")

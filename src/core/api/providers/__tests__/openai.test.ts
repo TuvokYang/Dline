@@ -757,7 +757,18 @@ describe("OpenAiHandler", () => {
 			const fallbackRequest = responsesCreate.mock.calls[1]?.[0] as OpenAI.Responses.ResponseCreateParamsStreaming
 			expect(explicitRequest.instructions).to.equal(undefined)
 			expect(explicitRequest.prompt_cache_options).to.deep.equal({ mode: "explicit" })
-			expect(JSON.stringify(explicitRequest.input)).to.contain("prompt_cache_breakpoint")
+			expect(explicitRequest.prompt_cache_key).to.match(/^dline_cache_[0-9a-f]{32}$/)
+			expect(explicitRequest.input?.[0]).to.deep.equal({
+				type: "message",
+				role: "developer",
+				content: [
+					{
+						type: "input_text",
+						text: "system prompt",
+						prompt_cache_breakpoint: { mode: "explicit" },
+					},
+				],
+			})
 			expect(fallbackRequest.instructions).to.equal("system prompt")
 			expect(fallbackRequest.prompt_cache_options).to.equal(undefined)
 			expect(JSON.stringify(fallbackRequest.input)).not.to.contain("prompt_cache_breakpoint")

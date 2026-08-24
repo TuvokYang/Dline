@@ -2,6 +2,8 @@ import type OpenAI from "openai"
 import { hashPromptContentHex } from "@/core/prompts/system-prompt-cache/hash"
 
 const EXPLICIT_BREAKPOINT = { mode: "explicit" as const }
+const PROMPT_CACHE_KEY_PREFIX = "dline_cache_"
+const PROMPT_CACHE_KEY_IDENTIFIER_LENGTH = 32
 
 export type OpenAIPromptCacheProjectionMode = "automatic" | "explicit"
 type PromptCacheApiFormat = "chat" | "responses"
@@ -56,9 +58,9 @@ interface MutableContentBlock {
 	readonly [key: string]: unknown
 }
 
-/** Build a non-sensitive routing key from the stable rendered-prefix inputs. */
+/** Build a non-sensitive, namespaced routing key from the stable rendered-prefix inputs. */
 function createPromptCacheKey(input: PromptCacheIdentityInput): string {
-	return hashPromptContentHex(
+	const identifier = hashPromptContentHex(
 		JSON.stringify({
 			apiFormat: input.apiFormat,
 			model: input.modelId,
@@ -66,7 +68,8 @@ function createPromptCacheKey(input: PromptCacheIdentityInput): string {
 			taskNamespace: input.taskNamespace,
 			tools: input.tools,
 		}),
-	)
+	).slice(0, PROMPT_CACHE_KEY_IDENTIFIER_LENGTH)
+	return `${PROMPT_CACHE_KEY_PREFIX}${identifier}`
 }
 
 function addBreakpointToChatMessage(
@@ -154,9 +157,9 @@ export function projectOpenAIResponsesPromptCache(input: OpenAIResponsesPromptCa
 		}
 	}
 
-	const systemMessage: OpenAI.Responses.EasyInputMessage = {
+	const developerMessage: OpenAI.Responses.EasyInputMessage = {
 		type: "message",
-		role: "system",
+		role: "developer",
 		content: [
 			{
 				type: "input_text",
@@ -166,7 +169,7 @@ export function projectOpenAIResponsesPromptCache(input: OpenAIResponsesPromptCa
 		],
 	}
 	return {
-		input: [systemMessage, ...input.input],
+		input: [developerMessage, ...input.input],
 		promptCacheKey,
 		promptCacheOptions: { mode: "explicit" },
 	}
