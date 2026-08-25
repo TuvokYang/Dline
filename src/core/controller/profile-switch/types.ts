@@ -11,6 +11,8 @@ export interface ResolvedProfileTarget {
 	profile: string
 	mode: Mode
 	contextWindow: number
+	/** Exact projected-usage boundary where target-profile compaction starts. */
+	triggerTokens: number
 	/** Strict fitting exit target resolved from the same target scope as the actual compaction. */
 	fittingExitTarget: number
 	executionApi: ApiHandler

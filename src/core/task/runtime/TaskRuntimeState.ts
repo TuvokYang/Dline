@@ -32,21 +32,6 @@ export interface TaskCompletionState {
 	completionId: string
 }
 
-/** Reason the Task-bound Profile cannot admit a Provider request. */
-export type TaskProfileInvalidReason =
-	| "missing"
-	| "disabled"
-	| "credential_unavailable"
-	| "configuration_invalid"
-
-/** Durable Task-local Profile validity used by request admission and UI projection. */
-export interface TaskProfileInvalidState {
-	profileId?: string
-	displayName?: string
-	reason: TaskProfileInvalidReason
-	message: string
-}
-
 /** Canonical state for one assistant turn and its tool blocks. */
 export interface TurnState {
 	turnId: string
@@ -69,8 +54,6 @@ export interface TaskRuntimeState {
 	cancellation?: TaskCancellationState
 	error?: TaskRuntimeError
 	completion?: TaskCompletionState
-	/** Task-bound Profile failure that blocks Provider admission until explicit replacement. */
-	profileInvalid?: TaskProfileInvalidState
 	/** Canonical New Task identity already consumed before this Task exited. */
 	newTaskConsumed?: NewTaskConsumedState
 	/** Highest effect-origin revision invalidated by a cancellation transaction. */

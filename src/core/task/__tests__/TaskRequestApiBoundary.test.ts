@@ -17,13 +17,16 @@ describe("Task request API boundary", () => {
 	it("refreshes the latest Profile before freezing the request API scope", async () => {
 		const source = await readFile(taskSourcePath, "utf8")
 		const method = extractMethod(source, "async recursivelyMakeClineRequests(", "async loadContext(")
-		const refreshIndex = method.indexOf("await this.rebuildApiHandler()")
-		const scopeIndex = method.indexOf("const requestScope = createRequestApiScope(")
+		const transitionIndex = method.indexOf("const transitionScope = this.modeSwitchCompaction.getExecutionScope()")
+		const refreshIndex = method.indexOf("await this.rebuildApiHandler({ validateCredentials: true })")
 		const requestLocalAwaitIndex = method.indexOf("await this.remoteWorkspaceDetectionPromise")
+		const scopeIndex = method.indexOf("const requestScope = createRequestApiScope(")
 
-		expect(refreshIndex).toBeGreaterThanOrEqual(0)
-		expect(scopeIndex).toBeGreaterThan(refreshIndex)
-		expect(requestLocalAwaitIndex).toBeGreaterThan(scopeIndex)
+		expect(transitionIndex).toBeGreaterThanOrEqual(0)
+		expect(refreshIndex).toBeGreaterThan(transitionIndex)
+		expect(method).toContain('? { status: "valid" }\n\t\t\t: await this.rebuildApiHandler({ validateCredentials: true })')
+		expect(requestLocalAwaitIndex).toBeGreaterThan(refreshIndex)
+		expect(scopeIndex).toBeGreaterThan(requestLocalAwaitIndex)
 	})
 
 	it("lets an explicit manual compaction command reach slash-command parsing before auto compaction", async () => {
@@ -90,13 +93,16 @@ describe("Task request API boundary", () => {
 			"persistedRequestApiIndex !== this.messageStateHandler.apiConversationHistory.length - 1",
 		)
 		const newRequestPlaceholder = method.indexOf("if (!persistedRequest) {\n\t\t\tawait this.say(")
-		const gateSelection = method.indexOf("const requestApproved = persistedRequest")
+		const gateSelection = method.indexOf("let requestApproved: boolean")
+		const retryAdmission = method.indexOf("if (persistedRequest) {\n\t\t\tawait this.admitApiRequest(apiIndex)")
+		const ordinaryPersistence = method.indexOf("requestApproved = await this.persistApiRequestUserMessage(")
 
 		expect(persistedIndex).toBeGreaterThanOrEqual(0)
 		expect(tailValidation).toBeGreaterThan(persistedIndex)
 		expect(newRequestPlaceholder).toBeGreaterThan(tailValidation)
 		expect(gateSelection).toBeGreaterThan(newRequestPlaceholder)
-		expect(method).toContain("? true\n\t\t\t: await this.persistApiRequestUserMessage(")
+		expect(retryAdmission).toBeGreaterThan(gateSelection)
+		expect(ordinaryPersistence).toBeGreaterThan(retryAdmission)
 		expect(method).toContain("if (persistedRequest) {\n\t\t\tparsedUserContent = userContent")
 		expect(method).toContain("if (!persistedRequest && !shouldCompact)")
 	})

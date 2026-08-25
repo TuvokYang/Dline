@@ -190,25 +190,6 @@ describe("projectTaskView", () => {
 		expect(view.footer.actions).toEqual([])
 	})
 
-	it("projects Profile invalid state for the request boundary without a footer action", () => {
-		const view = projectTaskView({
-			...runtime(TaskPhase.BETWEEN_TURNS),
-			profileInvalid: {
-				message: 'Profile not valid: "deleted-profile" no longer exists.',
-				displayName: "deleted-profile",
-				reason: "missing",
-			},
-		})
-
-		expect(view.profileInvalid).toEqual({
-			message: 'Profile not valid: "deleted-profile" no longer exists.',
-			displayName: "deleted-profile",
-			reason: "missing",
-		})
-		expect(view.footer.actions).toEqual([])
-		expect(view.input.enabled).toBe(false)
-	})
-
 	it("projects error recovery actions", () => {
 		const view = projectTaskView(runtime(TaskPhase.PAUSED, active("error_retry")))
 
@@ -321,6 +302,20 @@ describe("projectTaskView", () => {
 				dispatchTarget: "task",
 			},
 		])
+	})
+
+	it("projects ordinary input without Cancel between turns", () => {
+		const view = projectTaskView(runtime(TaskPhase.BETWEEN_TURNS))
+
+		expect(view.activeInteraction).toBeUndefined()
+		expect(view.input).toEqual({
+			enabled: true,
+			acceptsText: true,
+			acceptsImages: true,
+			acceptsFiles: true,
+			enterAction: "reply",
+		})
+		expect(view.footer.actions).toEqual([])
 	})
 
 	it("projects cancel from working runtime phase without message inference", () => {

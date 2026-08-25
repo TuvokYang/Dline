@@ -52,36 +52,6 @@ describe("reduceTask lifecycle events", () => {
 		expect(result.effects.map((effect) => effect.type)).toEqual(["POST_TASK_VIEW", "PERSIST_SNAPSHOT"])
 	})
 
-	it("commits and clears Profile validity without changing the Task phase", () => {
-		const invalid = reduceTask(stateAt(TaskPhase.BETWEEN_TURNS), {
-			type: "PROFILE_VALIDITY_UPDATED",
-			profileInvalid: {
-				profileId: "profile-deleted",
-				displayName: "deleted-profile",
-				reason: "missing",
-				message: 'Profile not valid: "deleted-profile" no longer exists.',
-			},
-		})
-
-		expect(invalid).toMatchObject({
-			accepted: true,
-			next: {
-				phase: TaskPhase.BETWEEN_TURNS,
-				profileInvalid: { profileId: "profile-deleted", reason: "missing" },
-			},
-		})
-		expect(invalid.effects.map((effect) => effect.type)).toEqual(["POST_TASK_VIEW", "PERSIST_SNAPSHOT"])
-
-		const valid = reduceTask(invalid.next, {
-			type: "PROFILE_VALIDITY_UPDATED",
-			profileInvalid: undefined,
-		})
-
-		expect(valid).toMatchObject({ accepted: true, next: { phase: TaskPhase.BETWEEN_TURNS } })
-		expect(valid.next.profileInvalid).toBeUndefined()
-		expect(valid.effects.map((effect) => effect.type)).toEqual(["POST_TASK_VIEW", "PERSIST_SNAPSHOT"])
-	})
-
 	it("starts exactly one reconciled API continuation through an ordered effect", () => {
 		const result = reduceTask(
 			createTaskRuntimeState({ taskId: "task-1", phase: TaskPhase.STREAMING, anchor: { apiIndex: 3 } }),

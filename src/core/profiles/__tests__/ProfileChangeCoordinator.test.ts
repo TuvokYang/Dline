@@ -43,7 +43,6 @@ function createController(planProfile: string, actProfile: string, profileId?: s
 				}),
 			},
 			rebuildApiHandler: vi.fn(),
-			reconcileApiProfileValidity: vi.fn().mockResolvedValue(undefined),
 		},
 		stateManager: {
 			getGlobalSettingsKey: vi.fn((key: string) => {
@@ -74,7 +73,6 @@ describe("ProfileChangeCoordinator", () => {
 
 		for (const controller of [first, second, third]) {
 			expect((controller.task?.rebuildApiHandler as ReturnType<typeof vi.fn>).mock.calls).to.have.length(0)
-			expect((controller.task?.reconcileApiProfileValidity as ReturnType<typeof vi.fn>).mock.calls).to.have.length(1)
 			expect((controller.restartAccountUsagePolling as ReturnType<typeof vi.fn>).mock.calls).to.have.length(0)
 			expect((controller.postStateToWebview as ReturnType<typeof vi.fn>).mock.calls).to.have.length(1)
 		}
@@ -120,6 +118,5 @@ describe("ProfileChangeCoordinator", () => {
 		expect(controller.task?.taskSm.planModeProfile).to.equal("deleted-profile")
 		expect(controller.task?.taskSm.actModeProfile).to.equal("deleted-profile")
 		expect((controller.task?.rebuildApiHandler as ReturnType<typeof vi.fn>).mock.calls).to.have.length(0)
-		expect((controller.task?.reconcileApiProfileValidity as ReturnType<typeof vi.fn>).mock.calls).to.have.length(1)
 	})
 })

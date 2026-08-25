@@ -7,7 +7,6 @@ import { PROVIDER_API_KEY_MAP, readApiProfiles, readApiProfilesFresh } from "@co
 import type { ApiConfiguration } from "@shared/api"
 import type { ApiProfile } from "@shared/proto/dline/profile"
 import type { Mode } from "@shared/storage/types"
-import type { TaskProfileInvalidState } from "./runtime/TaskRuntimeState"
 
 export type ApiProfileInvalidReason = "missing" | "disabled" | "credential_unavailable" | "configuration_invalid"
 
@@ -28,26 +27,6 @@ export interface ApiProfileRecoveryResult {
 	usedFallback: boolean
 	validity: ApiProfileValidity
 	error?: string
-}
-
-/** Convert resolver validity into the canonical Task admission state. */
-export function toTaskProfileInvalidState(validity: ApiProfileValidity): TaskProfileInvalidState | undefined {
-	if (validity.status === "valid" || !validity.reason || !validity.message) return undefined
-	return {
-		...(validity.profileId ? { profileId: validity.profileId } : {}),
-		...(validity.displayName ? { displayName: validity.displayName } : {}),
-		reason: validity.reason,
-		message: validity.message,
-	}
-}
-
-/** Preserve an admitted invalid state until explicit user selection allows recovery. */
-export function reconcileTaskProfileInvalidState(
-	current: TaskProfileInvalidState | undefined,
-	validity: ApiProfileValidity,
-	allowRecovery: boolean,
-): TaskProfileInvalidState | undefined {
-	return toTaskProfileInvalidState(validity) ?? (allowRecovery ? undefined : current)
 }
 
 function profileForMode(configuration: ApiConfiguration, mode: Mode): string | undefined {

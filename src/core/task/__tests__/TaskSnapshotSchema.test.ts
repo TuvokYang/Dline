@@ -52,12 +52,6 @@ function runtimeState(): TaskRuntimeState {
 		},
 		turn: focusChainTurn(),
 		interaction: focusChainInteraction(),
-		profileInvalid: {
-			profileId: "profile-deleted",
-			displayName: "deleted-profile",
-			reason: "missing",
-			message: 'Profile not valid: "deleted-profile" no longer exists.',
-		},
 	}
 }
 
@@ -73,14 +67,20 @@ describe("TaskSnapshot v2 schema", () => {
 			anchor: { apiIndex: 4, uiMessageTs: 100, turnId: "turn-1", interactionId: "interaction-1" },
 			turn: { activeDlineTid: "tid-1" },
 			interaction: { kind: "change_todo_list", status: "awaiting" },
-			profileInvalid: {
-				profileId: "profile-deleted",
-				displayName: "deleted-profile",
-				reason: "missing",
-				message: 'Profile not valid: "deleted-profile" no longer exists.',
-			},
 		})
 		expect(hydrateSnapshot(snapshot)).toEqual(state)
+	})
+
+	it("ignores a legacy persisted Profile validity error during hydration", () => {
+		const snapshot = createSnapshot(runtimeState(), 200)
+		snapshot.profileInvalid = {
+			profileId: "profile-deleted",
+			displayName: "deleted-profile",
+			reason: "missing",
+			message: 'Profile not valid: "deleted-profile" no longer exists.',
+		}
+
+		expect(hydrateSnapshot(snapshot)).not.toHaveProperty("profileInvalid")
 	})
 
 	it("round-trips an interrupting interaction and its hidden original without shared anchors", () => {

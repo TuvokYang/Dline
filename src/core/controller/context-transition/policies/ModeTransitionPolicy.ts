@@ -44,7 +44,7 @@ export class ModeTransitionPolicy implements ContextTransitionPolicy<ModeSwitchR
 			source,
 			target: { ...target, executionApi },
 			currentTokens: 0,
-			triggerTokens: target.contextWindow,
+			triggerTokens: target.triggerTokens,
 			chatContent: input.chatContent,
 		}
 	}
@@ -65,7 +65,7 @@ export class ModeTransitionPolicy implements ContextTransitionPolicy<ModeSwitchR
 			source,
 			target: { ...target, executionApi },
 			currentTokens: await this.deps.pressure.read(executionApi, target.mode, input.chatContent),
-			triggerTokens: target.contextWindow,
+			triggerTokens: target.triggerTokens,
 			chatContent: input.chatContent,
 		}
 		if (this.deps.getTaskId() !== input.taskId) {
@@ -73,7 +73,7 @@ export class ModeTransitionPolicy implements ContextTransitionPolicy<ModeSwitchR
 		}
 		const decision = decideContextTransition({
 			projectedUsageTokens: operation.currentTokens,
-			targetContextWindow: target.contextWindow,
+			targetContextWindow: target.triggerTokens,
 		})
 		return decision.kind === "confirm" ? { kind: "confirm", operation } : { kind: "direct", operation }
 	}

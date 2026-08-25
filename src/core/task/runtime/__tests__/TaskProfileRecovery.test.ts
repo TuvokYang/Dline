@@ -20,10 +20,6 @@ function profileErrorState(kind: "error_retry" | "tool_approval" = "error_retry"
 			createdRevision: 4,
 			anchor: { messageTs: 100, messageType: "ask" },
 		},
-		profileInvalid: {
-			reason: "missing",
-			message: 'Profile not valid: "missing" no longer exists.',
-		},
 	}
 }
 
@@ -37,7 +33,6 @@ describe("Task Profile recovery runtime", () => {
 		expect(result.accepted).toBe(true)
 		expect(result.next.phase).toBe(TaskPhase.BETWEEN_TURNS)
 		expect(result.next.interaction).toBeUndefined()
-		expect(result.next.profileInvalid).toBeUndefined()
 		expect(result.next.anchor).toEqual({ apiIndex: 2, uiMessageTs: 100 })
 		expect(result.effects.map((effect) => effect.type)).toEqual(["POST_TASK_VIEW", "PERSIST_SNAPSHOT"])
 	})

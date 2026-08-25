@@ -4,8 +4,10 @@ import { writeFileSync } from "node:fs"
 import tailwindcss from "@tailwindcss/vite"
 import react from "@vitejs/plugin-react-swc"
 import { resolve } from "path"
-import { defineConfig, type Plugin, type ViteDevServer } from "vite"
+import * as typescript from "typescript"
+import { defineConfig, type Plugin, type PluginOption, type ViteDevServer } from "vite"
 import checker from "vite-plugin-checker"
+import { supportsVitePluginCheckerTypeScript } from "./vite-checker-compatibility"
 
 // Custom plugin to write the server port to a file
 const writePortToFile = (): Plugin => {
@@ -28,6 +30,14 @@ const writePortToFile = (): Plugin => {
 }
 
 const isDevBuild = process.argv.includes("--dev-build")
+const plugins: PluginOption[] = [react(), tailwindcss(), writePortToFile()]
+if (supportsVitePluginCheckerTypeScript(typescript)) {
+	plugins.push(checker({ typescript: true }) as Plugin)
+} else {
+	console.warn(
+		"[vite] Skipping vite-plugin-checker because the installed TypeScript package does not expose its legacy compiler host API; use the existing tsc watch process for type diagnostics.",
+	)
+}
 
 // Valid platforms, these should the keys in platform-configs.json
 const VALID_PLATFORMS = ["vscode", "standalone"]
@@ -43,7 +53,7 @@ export default defineConfig({
 	optimizeDeps: {
 		force: true, // Forces re-optimization
 	},
-	plugins: [react(), tailwindcss(), writePortToFile(), checker({ typescript: true }) as Plugin],
+	plugins,
 	test: {
 		name: "webview",
 		environment: "jsdom",

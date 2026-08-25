@@ -10,6 +10,14 @@ const DISABLED_INPUT: TaskInputViewState = {
 	acceptsFiles: false,
 }
 
+const READY_INPUT: TaskInputViewState = {
+	enabled: true,
+	acceptsText: true,
+	acceptsImages: true,
+	acceptsFiles: true,
+	enterAction: "reply",
+}
+
 const CANCELLING_ACTION: TaskViewAction = {
 	type: "cancel",
 	label: "Cancel",
@@ -33,7 +41,6 @@ const CANCELLABLE_PHASES = new Set<TaskPhase>([
 	TaskPhase.INITIALIZING,
 	TaskPhase.STREAMING,
 	TaskPhase.EXECUTING,
-	TaskPhase.BETWEEN_TURNS,
 	TaskPhase.RESUMING,
 ])
 
@@ -64,18 +71,6 @@ export function projectTaskView(
 			footer: { actions: [{ ...CANCELLING_ACTION }] },
 		}
 	}
-	if (state.profileInvalid) {
-		return {
-			taskId: state.taskId,
-			phase: state.phase,
-			stateRevision: state.revision,
-			profileInvalid: { ...state.profileInvalid },
-			...(contextCompaction ? { contextCompaction } : {}),
-			input: { ...DISABLED_INPUT },
-			footer: { actions: [] },
-		}
-	}
-
 	const interaction = state.interaction ? projectInteraction(state.interaction, state.revision) : undefined
 	const diagnostic = state.interaction?.status === "opening" && !state.error ? undefined : interaction?.diagnostic
 	const forceTruncateAvailable =
@@ -114,7 +109,7 @@ export function projectTaskView(
 		...(diagnostic ? { diagnostic } : {}),
 		...(contextCompaction ? { contextCompaction } : {}),
 		...(forceTruncateAvailable ? { forceTruncateAvailable: true } : {}),
-		input: interaction?.input ?? { ...DISABLED_INPUT },
+		input: interaction?.input ?? (state.phase === TaskPhase.BETWEEN_TURNS ? { ...READY_INPUT } : { ...DISABLED_INPUT }),
 		footer: { actions },
 	}
 }

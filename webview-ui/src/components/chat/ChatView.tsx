@@ -5,7 +5,7 @@ import { combineHookSequences } from "@shared/combineHookSequences"
 import type { ClineMessage } from "@shared/ExtensionMessage"
 import { BooleanRequest, StringRequest } from "@shared/proto/dline/common"
 import type { ModelInfo } from "@shared/proto/dline/models"
-import { CompactTaskRequest } from "@shared/proto/dline/task"
+import { AskResponseRequest, CompactTaskRequest } from "@shared/proto/dline/task"
 import { resolveProfileModelInfo } from "@shared/providers/profile-model-info"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useApiProfiles } from "@/components/settings/providers/useApiProfiles"
@@ -23,6 +23,7 @@ import {
 	createAcceptedInteractionSettlement,
 	type InteractionDraft,
 	isActiveInteractionSynchronized,
+	isSameInteractionDraft,
 	type PendingSuccessorDraftTransfer,
 } from "@/task-interaction/types"
 import { Navbar } from "../menu/Navbar"
@@ -452,6 +453,31 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 		},
 		[clearOwnedDraft, interactionSynchronized, taskViewState],
 	)
+	const submitOrdinaryTaskDraft = useCallback(
+		async (draft: InteractionDraft): Promise<undefined> => {
+			const view = taskViewState
+			if (!view || view.activeInteraction || view.input.enterAction !== "reply" || !interactionSynchronized) {
+				return undefined
+			}
+			const capturedDraft = captureInteractionDraft(draft)
+			await TaskServiceClient.askResponse(
+				AskResponseRequest.create({
+					responseType: "messageResponse",
+					text: capturedDraft.text,
+					images: capturedDraft.images,
+					files: capturedDraft.files,
+				}),
+			)
+			if (currentTaskIdRef.current === view.taskId && isSameInteractionDraft(currentDraftRef.current, capturedDraft)) {
+				setInputValue("")
+				setSelectedImages([])
+				setSelectedFiles([])
+				setActiveQuote(null)
+			}
+			return undefined
+		},
+		[interactionSynchronized, setActiveQuote, setInputValue, setSelectedFiles, setSelectedImages, taskViewState],
+	)
 	const taskInputEnabled = Boolean(taskViewState?.input.enabled && taskViewState.input.enterAction && interactionSynchronized)
 	const canRenderCompactTask = Boolean(taskViewState?.taskId)
 	const canRenderForceTruncate = taskViewState?.forceTruncateAvailable === true
@@ -631,7 +657,9 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 					enabled={task ? taskInputEnabled : undefined}
 					messageHandlers={messageHandlers}
 					onDraftAccepted={clearOwnedDraft}
-					onSubmit={task ? submitInteractionDraft : undefined}
+					onSubmit={
+						task ? (taskViewState?.activeInteraction ? submitInteractionDraft : submitOrdinaryTaskDraft) : undefined
+					}
 					placeholderText={placeholderText}
 					scrollBehavior={scrollBehavior}
 					selectFilesAndImages={selectFilesAndImages}

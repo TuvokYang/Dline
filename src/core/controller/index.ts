@@ -71,6 +71,7 @@ import { getLatestAnnouncementId } from "@/utils/announcements"
 import { getCwd, getDesktopDir } from "@/utils/path"
 import { ModelRegistry } from "../model-registry/ModelRegistry"
 import { ApiConversation } from "../storage/ApiConversation"
+import { readJsonl } from "../storage/backend/jsonl/jsonl-utils"
 import {
 	ensureCacheDirectoryExists,
 	ensureMcpServersDirectoryExists,
@@ -78,7 +79,6 @@ import {
 	GlobalFileNames,
 	writeMcpMarketplaceCatalogToCache,
 } from "../storage/disk"
-import { readJsonl } from "../storage/jsonl-utils"
 import { fetchRemoteConfig } from "../storage/remote-config/fetch"
 import { clearRemoteConfig } from "../storage/remote-config/utils"
 import { type PersistenceErrorEvent, StateManager } from "../storage/StateManager"
@@ -805,8 +805,11 @@ export class Controller {
 			ulid: this.task.ulid,
 		}
 		const executionApi = buildApiHandler(effectiveConfig, mode)
-		const { targetContextWindow, fittingExitTarget } = resolveTargetContextScope({
+		const { targetContextWindow, compactTriggerTokens, fittingExitTarget } = resolveTargetContextScope({
 			providerContextWindow,
+			triggerPercent: this.stateManager.getGlobalSettingsKey("autoCondenseTriggerPercent"),
+			minReserveTokens: this.stateManager.getGlobalSettingsKey("autoCondenseMinReserveTokens"),
+			maxReserveTokens: this.stateManager.getGlobalSettingsKey("autoCondenseMaxReserveTokens"),
 			maxContextTokens: this.stateManager.getGlobalSettingsKey("autoCondenseMaxContextTokens"),
 		})
 		return {
@@ -814,6 +817,7 @@ export class Controller {
 			profileId: resolution.profileId,
 			profile: resolution.profileName,
 			contextWindow: targetContextWindow,
+			triggerTokens: compactTriggerTokens,
 			fittingExitTarget,
 			executionApi,
 		}
@@ -835,8 +839,11 @@ export class Controller {
 			ulid: this.task.ulid,
 		}
 		const executionApi = buildApiHandler(effectiveConfig, mode)
-		const { targetContextWindow, fittingExitTarget } = resolveTargetContextScope({
+		const { targetContextWindow, compactTriggerTokens, fittingExitTarget } = resolveTargetContextScope({
 			providerContextWindow,
+			triggerPercent: this.stateManager.getGlobalSettingsKey("autoCondenseTriggerPercent"),
+			minReserveTokens: this.stateManager.getGlobalSettingsKey("autoCondenseMinReserveTokens"),
+			maxReserveTokens: this.stateManager.getGlobalSettingsKey("autoCondenseMaxReserveTokens"),
 			maxContextTokens: this.stateManager.getGlobalSettingsKey("autoCondenseMaxContextTokens"),
 		})
 		return {
@@ -844,6 +851,7 @@ export class Controller {
 			profile: resolution.profileName,
 			mode,
 			contextWindow: targetContextWindow,
+			triggerTokens: compactTriggerTokens,
 			fittingExitTarget,
 			executionApi,
 		}
@@ -872,9 +880,6 @@ export class Controller {
 		if (!task || task.taskId !== taskId) return
 
 		const runtimeState = task.getRuntimeState()
-		if (runtimeState.profileInvalid) {
-			throw new Error(runtimeState.profileInvalid.message)
-		}
 		if (
 			["initializing", "streaming", "resuming", "cancelling"].includes(runtimeState.phase) ||
 			task.taskState.isStreaming ||

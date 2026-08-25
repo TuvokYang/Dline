@@ -443,14 +443,6 @@ export interface TaskContextCompactionViewState {
 	operationId: string
 }
 
-/** Task-bound Profile failure projected for an actionable Webview card. */
-export interface TaskProfileInvalidViewState {
-	profileId?: string
-	displayName?: string
-	reason: "missing" | "disabled" | "credential_unavailable" | "configuration_invalid"
-	message: string
-}
-
 /** Complete backend projection consumed by the Webview interaction host. */
 export interface TaskViewState {
 	taskId: string
@@ -458,7 +450,6 @@ export interface TaskViewState {
 	stateRevision: number
 	activeInteraction?: ActiveInteractionView
 	diagnostic?: TaskViewDiagnostic
-	profileInvalid?: TaskProfileInvalidViewState
 	contextCompaction?: TaskContextCompactionViewState
 	/** True only while terminal automatic-compaction recovery offers explicit history truncation. */
 	forceTruncateAvailable?: boolean

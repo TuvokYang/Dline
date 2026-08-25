@@ -55,7 +55,7 @@ interface MessageStateHandlerParams {
  * Coordinates message state across UIMessage and ApiConversation stores.
  *
  * All data persistence is delegated to UIMessage / ApiConversation,
- * which themselves delegate to JsonlIndexedStore (with built-in Mutex + FileLock).
+ * which themselves delegate to the backend-neutral buffered storage layer.
  * This class focuses on cross-store coordination and event emission.
  */
 export class MessageStateHandler extends EventEmitter<MessageStateHandlerEvents> {

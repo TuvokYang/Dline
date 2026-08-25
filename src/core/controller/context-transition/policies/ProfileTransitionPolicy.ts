@@ -68,7 +68,7 @@ export class ProfileTransitionPolicy
 		}
 		const decision = decideContextTransition({
 			projectedUsageTokens: operation.currentTokens,
-			targetContextWindow: target.contextWindow,
+			targetContextWindow: target.triggerTokens,
 		})
 		return decision.kind === "confirm" ? { kind: "confirm", operation } : { kind: "direct", operation }
 	}

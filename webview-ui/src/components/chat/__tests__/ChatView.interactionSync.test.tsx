@@ -35,6 +35,7 @@ const mocks = vi.hoisted(() => {
 	return {
 		chatState,
 		extensionState: {} as Record<string, unknown>,
+		askResponse: vi.fn(async () => ({})),
 		dispatchInteraction: vi.fn(async () => ({ accepted: true, result: "accepted" })),
 		compactTask: vi.fn(async () => ({ accepted: true, result: "accepted" })),
 		useChatState: vi.fn(() => chatState),
@@ -57,6 +58,7 @@ vi.mock("@/services/grpc-client", () => ({
 		selectFiles: vi.fn(async () => ({ values1: [], values2: [] })),
 	},
 	TaskServiceClient: {
+		askResponse: mocks.askResponse,
 		compactTask: mocks.compactTask,
 		dispatchInteraction: mocks.dispatchInteraction,
 	},
@@ -215,6 +217,8 @@ function renderChat(
 
 describe("ChatView interaction anchor synchronization", () => {
 	beforeEach(() => {
+		mocks.askResponse.mockReset()
+		mocks.askResponse.mockResolvedValue({})
 		mocks.compactTask.mockReset()
 		mocks.compactTask.mockResolvedValue({ accepted: true, result: "accepted" })
 		mocks.dispatchInteraction.mockReset()
@@ -229,6 +233,41 @@ describe("ChatView interaction anchor synchronization", () => {
 		mocks.chatState.setSelectedImages.mockClear()
 		mocks.chatState.setSelectedFiles.mockClear()
 		mocks.chatState.restoreDraft.mockClear()
+	})
+
+	it("submits an ordinary between-turns request without an active interaction", async () => {
+		const view = taskView()
+		view.phase = "between_turns"
+		view.activeInteraction = undefined
+		view.input = {
+			enabled: true,
+			acceptsText: true,
+			acceptsImages: true,
+			acceptsFiles: true,
+			enterAction: "reply",
+		}
+		mocks.chatState.activeQuote = "quoted context"
+		mocks.chatState.selectedImages = ["image.png"]
+		mocks.chatState.selectedFiles = ["file.txt"]
+		renderChat([], view)
+
+		expect(screen.getByRole("textbox", { name: "Task input" })).toBeEnabled()
+		fireEvent.click(screen.getByRole("button", { name: "Invoke Enter" }))
+
+		await waitFor(() => expect(mocks.askResponse).toHaveBeenCalledOnce())
+		expect(mocks.askResponse).toHaveBeenCalledWith(
+			expect.objectContaining({
+				responseType: "messageResponse",
+				text: "draft",
+				images: ["image.png"],
+				files: ["file.txt"],
+			}),
+		)
+		expect(mocks.dispatchInteraction).not.toHaveBeenCalled()
+		expect(mocks.chatState.setInputValue).toHaveBeenCalledWith("")
+		expect(mocks.chatState.setSelectedImages).toHaveBeenCalledWith([])
+		expect(mocks.chatState.setSelectedFiles).toHaveBeenCalledWith([])
+		expect(mocks.chatState.setActiveQuote).toHaveBeenCalledWith(null)
 	})
 
 	it("keeps runtime task ownership when the shared history item is temporarily unavailable", () => {

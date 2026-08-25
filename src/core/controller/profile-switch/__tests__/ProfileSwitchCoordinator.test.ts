@@ -51,6 +51,7 @@ function createHarness(
 			profile: profileName,
 			mode,
 			contextWindow: 128_000,
+			triggerTokens: 117_500,
 			fittingExitTarget: 102_400,
 			executionApi: TARGET_API,
 		}),
@@ -106,8 +107,8 @@ describe("ProfileSwitchCoordinator", () => {
 		harness = createHarness()
 	})
 
-	it("commits an active binding directly when the complete target candidate exactly fits", async () => {
-		harness = createHarness({ projectedUsageTokens: 128_000 })
+	it("commits an active binding directly below the compaction trigger", async () => {
+		harness = createHarness({ projectedUsageTokens: 117_499 })
 
 		const result = await harness.coordinator.request({
 			taskId: "task-1",
@@ -139,7 +140,7 @@ describe("ProfileSwitchCoordinator", () => {
 	})
 
 	it("retains both bindings for one unified atomic commit while projecting only the active mode", async () => {
-		harness = createHarness({ projectedUsageTokens: 128_000 })
+		harness = createHarness({ projectedUsageTokens: 117_499 })
 
 		await harness.coordinator.request({
 			taskId: "task-1",
@@ -153,7 +154,8 @@ describe("ProfileSwitchCoordinator", () => {
 		expect(harness.commitProfile.mock.calls[0]?.[0].targetModes).toEqual(["plan", "act"])
 	})
 
-	it("requires confirmation only when the active target candidate strictly exceeds the target window", async () => {
+	it("requires confirmation when the active target candidate reaches the compaction trigger", async () => {
+		harness = createHarness({ projectedUsageTokens: 117_500 })
 		const result = await harness.coordinator.request({
 			taskId: "task-1",
 			targetProfileId: "target-id",
@@ -169,7 +171,7 @@ describe("ProfileSwitchCoordinator", () => {
 			sourceProfile: "act-source",
 			targetProfile: "target-profile",
 			activeMode: "act",
-			currentTokens: 128_001,
+			currentTokens: 117_500,
 			targetContextWindow: 128_000,
 			fittingExitTarget: 102_400,
 		})
@@ -327,7 +329,7 @@ describe("ProfileSwitchCoordinator", () => {
 		})
 
 		expect(second).toEqual({ status: "in_progress", operationId: "profile-operation-1" })
-		deferred.resolve(128_000)
+		deferred.resolve(117_499)
 		await expect(first).resolves.toMatchObject({ status: "switched" })
 	})
 

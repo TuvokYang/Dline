@@ -24,6 +24,7 @@ import {
 	resolveContextWindowProjection,
 } from "@core/context/context-management/context-window-projection"
 import {
+	COMPACTION_CLOSURE_RESERVE_TOKENS,
 	type CompactTriggerOptions,
 	computeCompactTrigger,
 	computeSummarizeBudget,
@@ -168,6 +169,7 @@ import type { PromptCacheHealthSnapshot } from "@shared/PromptCacheHealth"
 import type { PromptFreshnessSnapshot } from "@shared/PromptFreshness"
 import type { ReasoningConfig } from "@shared/proto/dline/provider/common"
 import { convertClineMessageToProto } from "@shared/proto-conversions/cline-message"
+import { bindProviderAttemptScope } from "@shared/provider-attempt-observer"
 import { PROFILE_PROVIDER_KEYS } from "@shared/providers/profile-model-info"
 import { resolvePromptProfile } from "@shared/resolve-prompt-profile"
 import type { Mode } from "@shared/storage/types"
@@ -233,12 +235,11 @@ import { executeHook } from "../hooks/hook-executor"
 import { OrchestratorController } from "../orchestrator/OrchestratorController"
 import { StateManager } from "../storage/StateManager"
 import {
+	type ApiProfileValidity,
 	createUnavailableApiHandler,
-	reconcileTaskProfileInvalidState,
 	resolveTaskApiProfile,
 	resolveTaskApiProfileFresh,
-	toTaskProfileInvalidState,
-	validateResolvedTaskApiProfile,
+	validateApiProfileCredentials,
 } from "./ApiProfileRecovery"
 import { buildActiveTasksSection } from "./active-tasks/ActiveTaskContextProvider"
 import { isTurnEndingToolName, orderTurnEndingContentBlocks, orderTurnEndingNativeToolBlocks } from "./assistant-message-order"
@@ -254,6 +255,7 @@ import { FocusChainManager } from "./focus-chain"
 import { formatFocusChainTaskProgressSection } from "./focus-chain/file-utils"
 import { hostedWebApprovalApiIndex, requestHostedWebApproval } from "./interaction/HostedWebApproval"
 import type { InteractionKind } from "./interaction/Interaction"
+import { isInteractionCancellationError } from "./interaction/InteractionCancellationError"
 import { type DetachedInteractionContinuationContext, InteractionCoordinator } from "./interaction/InteractionCoordinator"
 import { getInteraction } from "./interaction/InteractionRegistry"
 import type { InteractionDraft } from "./interaction/InteractionResponse"
@@ -270,6 +272,9 @@ import { buildNewTaskFeedbackContent, findLatestNewTaskFeedback } from "./new-ta
 import { createNewTaskHandoff } from "./new-task/new-task-handoff"
 import type { ApiRateMetricsQuery, ApiRateMetricsQueryResult } from "./performance/api-rate-metrics-types"
 import type { ApiRateSnapshot } from "./performance/api-rate-tracker"
+import { ApiRequestRoundLifecycle } from "./performance/api-request-round-lifecycle"
+import { TaskApiRequestRoundRepository } from "./performance/api-request-round-repository"
+import { ApiRequestRoundTracker } from "./performance/api-request-round-tracker"
 import { TaskApiRateMetricsRepository } from "./performance/task-api-rate-metrics-repository"
 import { isTaskRateMetricsLoopActive, TaskApiRateMetricsService } from "./performance/task-api-rate-metrics-service"
 import type { PresentationPriority } from "./presentation-types"
@@ -548,6 +553,7 @@ export class Task {
 	private pendingSystemPromptRefreshReason?: SystemPromptRefreshReason
 	private readonly promptCacheHealth: PromptCacheHealthTracker
 	private readonly apiRateMetricsService: TaskApiRateMetricsService
+	private readonly apiRequestRoundLifecycle: ApiRequestRoundLifecycle
 	private apiRateMetricsInitialization?: Promise<void>
 	private pendingBackgroundResultIds?: { subagentIds: string[]; commandIds: string[] }
 	private pendingBackgroundCommandLineCounts?: Array<{ id: string; lineCount: number }>
@@ -618,6 +624,12 @@ export class Task {
 				})
 			},
 		})
+		this.apiRequestRoundLifecycle = new ApiRequestRoundLifecycle(
+			new ApiRequestRoundTracker({
+				taskId,
+				repository: new TaskApiRequestRoundRepository({ taskId }),
+			}),
+		)
 		this.reinitExistingTaskFromId = reinitExistingTaskFromId
 		this.cancelTask = cancelTask
 		this.clineIgnoreController = new ClineIgnoreController(cwd)
@@ -1009,10 +1021,6 @@ export class Task {
 			profileResolution.error || !profileResolution.resolvedApiProfile
 				? createUnavailableApiHandler(profileResolution.error ?? "Profile not valid: resolved Profile is unavailable.")
 				: buildApiHandlerFromProfile(profileResolution.configuration, mode, profileResolution.resolvedApiProfile)
-		const initialProfileInvalid = toTaskProfileInvalidState(profileResolution.validity)
-		if (initialProfileInvalid) {
-			this.taskRuntime.restore({ ...this.taskRuntime.getState(), profileInvalid: initialProfileInvalid })
-		}
 		if (!profileResolution.usedFallback && profileResolution.resolvedProfileId && profileResolution.resolvedProfile) {
 			this.taskSm.adoptResolvedProfileIdentity(mode, profileResolution.resolvedProfileId, profileResolution.resolvedProfile)
 		}
@@ -1315,35 +1323,8 @@ export class Task {
 		return { profileId: profile.id, profileName: profile.name }
 	}
 
-	private async commitProfileValidity(
-		validity: ReturnType<typeof resolveTaskApiProfile>["validity"],
-		allowProfileRecovery: boolean,
-	): Promise<void> {
-		const current = this.taskRuntime.getState().profileInvalid
-		const profileInvalid = reconcileTaskProfileInvalidState(current, validity, allowProfileRecovery)
-		if (
-			current?.profileId === profileInvalid?.profileId &&
-			current?.displayName === profileInvalid?.displayName &&
-			current?.reason === profileInvalid?.reason &&
-			current?.message === profileInvalid?.message
-		) {
-			return
-		}
-		const result = await this.dispatchRuntime({ type: "PROFILE_VALIDITY_UPDATED", profileInvalid })
-		if (!result.accepted) {
-			throw new Error(`Profile validity update rejected: ${result.error?.code ?? "invalid_runtime_event"}`)
-		}
-	}
-
-	/** Reconcile the active binding against the latest Catalog without replacing its handler. */
-	public async reconcileApiProfileValidity(): Promise<void> {
-		const resolution = await resolveTaskApiProfileFresh(this.getEffectiveApiConfiguration(), this.taskSm.mode)
-		const validity = await validateResolvedTaskApiProfile(resolution)
-		await this.commitProfileValidity(validity, false)
-	}
-
-	/** Rebuild the active handler and synchronize canonical Profile validity. */
-	public async rebuildApiHandler(options: { allowProfileRecovery?: boolean } = {}): Promise<void> {
+	/** Rebuild the active handler from one fresh Profile snapshot. */
+	public async rebuildApiHandler(options: { validateCredentials?: boolean } = {}): Promise<ApiProfileValidity> {
 		const mode = this.taskSm.mode
 		const previousPromptScope = this.getApiHandlerPromptScope(this.api)
 		const profileResolution = await resolveTaskApiProfileFresh(this.getEffectiveApiConfiguration(), mode)
@@ -1354,14 +1335,19 @@ export class Task {
 		if (!profileResolution.usedFallback && profileResolution.resolvedProfileId && profileResolution.resolvedProfile) {
 			this.taskSm.adoptResolvedProfileIdentity(mode, profileResolution.resolvedProfileId, profileResolution.resolvedProfile)
 		}
-		const validity = await validateResolvedTaskApiProfile(profileResolution)
-		await this.commitProfileValidity(validity, options.allowProfileRecovery === true)
+		const validity =
+			options.validateCredentials === true &&
+			profileResolution.validity.status === "valid" &&
+			profileResolution.resolvedApiProfile
+				? await validateApiProfileCredentials(profileResolution.resolvedApiProfile)
+				: profileResolution.validity
 		if (this.toolExecutor) {
 			;(this.toolExecutor as any).api = this.api
 		}
 		if (previousPromptScope !== this.getApiHandlerPromptScope(this.api)) {
 			this.promptCacheHealth.reset("profile_changed")
 		}
+		return validity
 	}
 
 	/** Capture the handler fields that affect prompt shape and context accounting. */
@@ -1956,7 +1942,7 @@ export class Task {
 		const profileRecoveryInteractionId = rebuildActiveHandler ? this.getProfileRecoveryInteractionId() : undefined
 		const sourceProfileState = this.taskSm.setProfileIdentityBindings(targetBindings, { clearRuntimeOverrides: true })
 		try {
-			if (rebuildActiveHandler) await this.rebuildApiHandler({ allowProfileRecovery: true })
+			if (rebuildActiveHandler) await this.rebuildApiHandler()
 			await this.stateManager.flushPendingState()
 			if (rebuildActiveHandler) this.syncContextWindowIndicatorScope()
 		} catch (error) {
@@ -2656,7 +2642,7 @@ export class Task {
 			const decision = decideTargetWindowFitting({
 				candidateEstimatedTokens,
 				providerContextWindow: contextWindow,
-				maxContextTokens: this.stateManager.getGlobalSettingsKey("autoCondenseMaxContextTokens"),
+				...this.getAutoCondenseTriggerOptions(),
 				hasMoreTurns: state.coveredTurnCount < state.turns.length,
 			})
 			const segments = estimateContextWindowIndicatorSegments({
@@ -5121,6 +5107,7 @@ export class Task {
 			const asyncCleanups: Array<Promise<void>> = [
 				withTerminateTimeout(taskCancelHookPromise, 5_000, "taskCancelHook"),
 				withTerminateTimeout(this.apiRateMetricsService.dispose(), 5_000, "apiRateMetricsService.dispose"),
+				withTerminateTimeout(this.apiRequestRoundLifecycle.close(), 5_000, "apiRequestRoundLifecycle.close"),
 				withTerminateTimeout(this.activityStore.waitForPersistence(), 5_000, "activityStore.waitForPersistence"),
 				withTerminateTimeout(this.browserSession.dispose(), 5_000, "browserSession.dispose"),
 				withTerminateTimeout(this.diffViewProvider.revertChanges(), 5_000, "diffViewProvider.revertChanges"),
@@ -5447,6 +5434,10 @@ export class Task {
 		} catch (error) {
 			Logger.error("Failed to write prompt metadata artifacts:", error)
 		}
+	}
+
+	private getApiRequestRoundLogicalId(apiIndex: number): string {
+		return `${this.taskId}:api:${apiIndex}`
 	}
 
 	private getApiRequestIdSafe(api: ApiHandler = this.api): string | undefined {
@@ -6053,13 +6044,19 @@ export class Task {
 		let providerOutputCap: number | undefined
 		if (hasCompactionWindowBudgetMarker(messages)) {
 			const { contextWindow } = getContextWindowInfo(api)
-			const resolvedBudget = resolveCompactionWindowBudget({
+			const policy = resolveCompactTriggerPolicy(
 				contextWindow,
+				computeSummarizeBudget(),
+				this.getAutoCondenseTriggerOptions(),
+			)
+			const resolvedBudget = resolveCompactionWindowBudget({
+				contextWindow: policy.hardPassContextWindowTokens,
 				maxOutputTokens: providerInfo.model.info.capabilities?.maxTokens,
 				systemPrompt,
 				messages,
 				tools,
 				serverTools,
+				closureReserveTokens: COMPACTION_CLOSURE_RESERVE_TOKENS,
 			})
 			messages = resolvedBudget.messages
 			providerOutputCap = resolvedBudget.budget.providerOutputCap
@@ -6243,7 +6240,13 @@ export class Task {
 			})
 		}
 		const providerRequestStartedAtMs = performance.now()
-		const stream = this.apiRateMetricsService.trackProviderStream(
+		const logicalRequestId = this.getApiRequestRoundLogicalId(apiIndex)
+		const providerAttemptObserver = this.apiRequestRoundLifecycle.createObserver({
+			logicalRequestId,
+			apiIndex,
+			taskAttempt: providerAttempt,
+		})
+		const providerStream = bindProviderAttemptScope(
 			recordProviderAdapterOutput(
 				roundContext,
 				api.createMessage(systemPrompt, apiConversationMessages, tools, {
@@ -6254,7 +6257,9 @@ export class Task {
 						: { generation: { purpose: "compaction", maxOutputTokens: providerOutputCap } as const }),
 				}),
 			),
+			providerAttemptObserver,
 		)
+		const stream = this.apiRateMetricsService.trackProviderStream(providerStream)
 
 		const iterator = stream[Symbol.asyncIterator]()
 		let firstChunkAtMs = providerRequestStartedAtMs
@@ -6925,12 +6930,49 @@ export class Task {
 		Session.get().updateToolCall(tool.function_id, tool.name)
 	}
 
-	/** Refresh Profile validity for admission without silently replacing the running handler. */
-	private async validateApiProfileAdmission(): Promise<boolean> {
-		const resolution = await resolveTaskApiProfileFresh(this.getEffectiveApiConfiguration(), this.taskSm.mode)
-		const validity = await validateResolvedTaskApiProfile(resolution)
-		await this.commitProfileValidity(validity, false)
-		return this.taskRuntime.getState().profileInvalid === undefined
+	/** Present one request-local Profile admission failure without locking future sends. */
+	private async presentApiProfileAdmissionFailure(
+		userContent: ClineContent[],
+		apiIndex: number,
+		validity: ApiProfileValidity,
+		persistedRequest: boolean,
+	): Promise<boolean> {
+		const presentation = validity.message ?? "Profile not valid: the current Profile is unavailable."
+		if (!persistedRequest) {
+			const request = userContent.map((block) => formatContentBlockToMarkdown(block)).join("\n\n")
+			await this.say(
+				"api_req_started",
+				JSON.stringify({ request, streamingFailedMessage: presentation } satisfies ClineApiReqInfo),
+			)
+			await this.messageStateHandler.addToApiConversationHistory({ role: "user", content: userContent, ts: Date.now() })
+			await this.messageStateHandler.flushApiConversationHistory()
+		}
+		await this.admitApiRequest(apiIndex)
+		const interactionId = `profile-admission:${this.taskId}:${this.getRuntimeState().revision}`
+		try {
+			await this.recoverApiFailure({
+				turnId: interactionId,
+				interactionId,
+				apiIndex,
+				presentation,
+				persistedRequest: true,
+			})
+			return true
+		} catch (error) {
+			if (!isInteractionCancellationError(error) || error.reason !== "profile_recovered") {
+				throw error
+			}
+		}
+
+		// A Profile switch resolves only the failed request. Keep this Task loop
+		// alive until the user submits a new request, which will validate the new binding.
+		this.taskState.userMessageContent = []
+		this.taskState.userMessageContentReady = false
+		await pWaitFor(() => this.taskState.abort || this.taskState.userMessageContentReady, { interval: 10 })
+		if (this.taskState.abort) return true
+		const continuationContent = [...this.taskState.userMessageContent]
+		this.taskState.userMessageContentReady = false
+		return this.recursivelyMakeClineRequests(continuationContent)
 	}
 
 	/** Admit one provider request through the canonical runtime gate. */
@@ -6948,7 +6990,6 @@ export class Task {
 		beforeApiRequestStarted?: () => Promise<void>,
 	): Promise<boolean> {
 		await beforeApiRequestStarted?.()
-		if (!(await this.validateApiProfileAdmission())) return false
 		const autoApprovalSettings = this.stateManager.getGlobalSettingsKey("autoApprovalSettings")
 		const settingsVersion = autoApprovalSettings.version ?? 1
 		const webSearchAutoApproved = this.toolExecutor.isAutoApproved(ClineDefaultTool.WEB_SEARCH)
@@ -7099,22 +7140,15 @@ export class Task {
 		if (this.taskState.abort) {
 			throw new Error("Task instance aborted")
 		}
-		// Profile changes can occur between turns. Refresh the active handler before freezing this request.
+		// Internal transition compaction owns a frozen target scope; user requests revalidate the current binding.
 		const transitionScope = this.modeSwitchCompaction.getExecutionScope()
-		if (!transitionScope) {
-			await this.rebuildApiHandler()
-			if (this.syncContextWindowIndicatorScope()) {
-				await this.postStateToWebview({ immediate: true })
-			}
+		const requestMode = transitionScope?.mode ?? this.taskSm.mode
+		const profileValidity: ApiProfileValidity = transitionScope
+			? { status: "valid" }
+			: await this.rebuildApiHandler({ validateCredentials: true })
+		if (!transitionScope && this.syncContextWindowIndicatorScope()) {
+			await this.postStateToWebview({ immediate: true })
 		}
-		// Capture the request boundary after refresh so every adapter and parser stays consistent.
-		const requestScope = createRequestApiScope(
-			transitionScope?.api ?? this.api,
-			transitionScope?.mode ?? this.taskSm.mode,
-			this.stateManager.getGlobalSettingsKey("customPrompt"),
-			this.stateManager.getGlobalSettingsKey("clineWebToolsEnabled"),
-			this.explicitInstructionRegistry,
-		)
 		const persistedRequestApiIndex = transaction.persistedRequestApiIndex
 		const persistedRequest = persistedRequestApiIndex !== undefined
 		if (!persistedRequest) {
@@ -7142,6 +7176,17 @@ export class Task {
 				`Persisted API request is not the active history tail: logicalApiIndex=${apiIndex}, historyIndex=${persistedRequestApiIndex}`,
 			)
 		}
+		if (profileValidity.status === "invalid") {
+			return this.presentApiProfileAdmissionFailure(userContent, apiIndex, profileValidity, persistedRequest)
+		}
+		// Capture the request boundary from the same Profile snapshot that passed admission.
+		const requestScope = createRequestApiScope(
+			transitionScope?.api ?? this.api,
+			requestMode,
+			this.stateManager.getGlobalSettingsKey("customPrompt"),
+			this.stateManager.getGlobalSettingsKey("clineWebToolsEnabled"),
+			this.explicitInstructionRegistry,
+		)
 		if (persistedRequest) {
 			const replayDeclaration = this.compactionRequestReplay.getDeclaration(apiIndex)
 			if (replayDeclaration) {
@@ -7540,9 +7585,18 @@ export class Task {
 			)
 		}
 
-		const requestApproved = persistedRequest
-			? true
-			: await this.persistApiRequestUserMessage(userContent, apiIndex, requestScope, transaction.beforeApiRequestStarted)
+		let requestApproved: boolean
+		if (persistedRequest) {
+			await this.admitApiRequest(apiIndex)
+			requestApproved = true
+		} else {
+			requestApproved = await this.persistApiRequestUserMessage(
+				userContent,
+				apiIndex,
+				requestScope,
+				transaction.beforeApiRequestStarted,
+			)
+		}
 		if (!requestApproved) {
 			requestScope.explicitInstructions.cancel()
 			this.compactionRequestReplay.clear(apiIndex)
@@ -7584,6 +7638,7 @@ export class Task {
 			} = { cacheWriteTokens: 0, cacheReadTokens: 0, inputTokens: 0, outputTokens: 0, totalCost: undefined }
 			let didFinalizeApiReqMsg = false
 			let didCommitFinalUsage = false
+			let usageReported = false
 			let cacheUsageReported = false
 			let usageChunkSideEffectsQueue = Promise.resolve()
 			/*
@@ -7645,6 +7700,18 @@ export class Task {
 					finalUsage.outputTokens > 0 ||
 					finalUsage.cacheWriteTokens > 0 ||
 					finalUsage.cacheReadTokens > 0
+				if (usageReported) {
+					this.apiRequestRoundLifecycle.attachExactUsage(this.getApiRequestRoundLogicalId(apiIndex), {
+						inputTokens: finalUsage.inputTokens,
+						outputTokens: finalUsage.outputTokens,
+						thoughtsTokens: finalUsage.thoughtsTokens,
+						cacheWriteTokens: finalUsage.cacheWriteTokens,
+						cacheReadTokens: finalUsage.cacheReadTokens,
+						cacheUsageReported: finalUsage.cacheUsageReported,
+						totalCost: finalUsage.totalCost,
+						currency: model.info.pricing?.currency || "USD",
+					})
+				}
 				if (!hasUsage) return
 				this.apiRateMetricsService.recordExactUsage({
 					inputTokens: finalUsage.inputTokens,
@@ -7821,6 +7888,7 @@ export class Task {
 					onUsageChunk: (chunk) => {
 						this.streamHandler.setRequestId(chunk.provider_metadata?.response_id)
 						didReceiveUsageChunk = true
+						usageReported = true
 						const usage = usageTracker.apply(chunk)
 						taskMetrics.inputTokens = usage.inputTokens
 						taskMetrics.outputTokens = usage.outputTokens
@@ -8248,6 +8316,7 @@ export class Task {
 			if (!didReceiveUsageChunk) {
 				const apiStreamUsage = await requestScope.api.getApiStreamUsage?.()
 				if (apiStreamUsage) {
+					usageReported = true
 					const usage = usageTracker.apply(apiStreamUsage)
 					taskMetrics.inputTokens = usage.inputTokens
 					taskMetrics.outputTokens = usage.outputTokens

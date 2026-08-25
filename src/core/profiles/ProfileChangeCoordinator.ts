@@ -44,7 +44,6 @@ export class ProfileChangeCoordinator {
 						task.taskSm,
 					)
 					this.adoptTaskBinding(task.taskSm.actModeProfileId, task.taskSm.actModeProfile, "act", changes, task.taskSm)
-					await task.reconcileApiProfileValidity()
 				}
 
 				this.adoptGlobalBinding(

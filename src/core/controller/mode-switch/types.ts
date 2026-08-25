@@ -10,6 +10,8 @@ export interface ResolvedModeProfile {
 	profileId: string
 	profile: string
 	contextWindow: number
+	/** Exact projected-usage boundary where target-profile compaction starts. */
+	triggerTokens: number
 	/** Strict fitting exit target resolved from the same target scope as the actual compaction. */
 	fittingExitTarget: number
 	/** In-memory handler frozen for a pending target transition; never persisted. */

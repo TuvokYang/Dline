@@ -205,22 +205,6 @@ function acceptInteraction(
 	}
 }
 
-/** Commit Task-local Profile validity without changing the lifecycle phase. */
-function acceptProfileValidity(state: TaskRuntimeState, profileInvalid: TaskRuntimeState["profileInvalid"]): TransitionResult {
-	const revision = state.revision + 1
-	const next: TaskRuntimeState = { ...state, revision }
-	if (profileInvalid) {
-		next.profileInvalid = { ...profileInvalid }
-	} else {
-		delete next.profileInvalid
-	}
-	return {
-		accepted: true,
-		next,
-		effects: stateEffects(revision),
-	}
-}
-
 /** Close only the Profile-related retry interaction after a durable replacement commit. */
 function acceptProfileRecovery(state: TaskRuntimeState, interactionId: string): TransitionResult {
 	if (
@@ -242,7 +226,6 @@ function acceptProfileRecovery(state: TaskRuntimeState, interactionId: string): 
 	}
 	delete next.interaction
 	delete next.error
-	delete next.profileInvalid
 	return {
 		accepted: true,
 		next,
@@ -1415,8 +1398,6 @@ export function reduceTask(state: TaskRuntimeState, event: TaskEvent): Transitio
 		case "TASK_INITIALIZE_REQUESTED":
 		case "TASK_INITIALIZED":
 			return reduceInitialize(state, event)
-		case "PROFILE_VALIDITY_UPDATED":
-			return acceptProfileValidity(state, event.profileInvalid)
 		case "PROFILE_RECOVERY_COMMITTED":
 			return acceptProfileRecovery(state, event.interactionId)
 		case "API_REQUEST_STARTED":

@@ -4,7 +4,7 @@ import path from "node:path"
 import type { ApiProfile } from "@shared/proto/dline/profile"
 import { Logger } from "@shared/services/Logger"
 import chokidar, { type FSWatcher } from "chokidar"
-import { FileLock } from "../storage/FileLock"
+import { FileLock } from "../storage/backend/jsonl/FileLock"
 
 export interface ProfileCatalogCommit {
 	previous: ApiProfile[]

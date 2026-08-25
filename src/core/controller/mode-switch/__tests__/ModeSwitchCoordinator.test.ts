@@ -37,6 +37,7 @@ const SOURCE: ResolvedModeProfile = {
 	profileId: "large-id",
 	profile: "large",
 	contextWindow: 272_000,
+	triggerTokens: 266_500,
 	fittingExitTarget: 217_600,
 }
 
@@ -47,6 +48,7 @@ const TARGET: ResolvedModeProfile = {
 	profileId: "small-id",
 	profile: "small",
 	contextWindow: 128_000,
+	triggerTokens: 117_500,
 	fittingExitTarget: 102_400,
 	executionApi: TARGET_API,
 }
@@ -110,9 +112,9 @@ describe("ModeSwitchCoordinator", () => {
 		harness = createHarness()
 	})
 
-	/** Directly commit when the complete target candidate exactly fits the target window. */
-	it("switches directly when the target candidate equals the target window", async () => {
-		harness = createHarness(128_000)
+	/** Directly commit only while the complete target candidate remains below the compaction trigger. */
+	it("switches directly when the target candidate is one token below the compaction trigger", async () => {
+		harness = createHarness(117_499)
 		const result = await harness.coordinator.request({ taskId: "task-1", targetMode: "act" })
 
 		expect(result).toEqual({ status: "switched", operationId: "operation-1" })
@@ -216,8 +218,9 @@ describe("ModeSwitchCoordinator", () => {
 		await expect(first).resolves.toEqual({ status: "switched", operationId: "operation-1" })
 	})
 
-	/** Project confirmation details from the complete target candidate without committing target mode. */
-	it("requests confirmation only when the target candidate strictly exceeds the target window", async () => {
+	/** Project confirmation details when the complete target candidate reaches the compaction trigger. */
+	it("requests confirmation when the target candidate reaches the compaction trigger", async () => {
+		harness = createHarness(117_500)
 		const acquire = vi.spyOn(harness.lease, "acquire")
 		const result = await harness.coordinator.request({ taskId: "task-1", targetMode: "act" })
 
@@ -228,7 +231,7 @@ describe("ModeSwitchCoordinator", () => {
 			taskId: "task-1",
 			sourceMode: "plan",
 			targetMode: "act",
-			currentTokens: 128_001,
+			currentTokens: 117_500,
 			fittingExitTarget: 102_400,
 		})
 		expect(acquire).toHaveBeenCalledOnce()
@@ -328,7 +331,7 @@ describe("ModeSwitchCoordinator", () => {
 		const second = await harness.coordinator.request({ taskId: "task-1", targetMode: "act" })
 
 		expect(second).toEqual({ status: "in_progress", operationId: "operation-1" })
-		resolvePreflight?.(128_000)
+		resolvePreflight?.(117_499)
 		await expect(first).resolves.toMatchObject({ status: "switched" })
 	})
 
