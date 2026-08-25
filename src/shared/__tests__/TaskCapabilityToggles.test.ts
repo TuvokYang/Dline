@@ -18,7 +18,7 @@ describe("TaskCapabilityToggles", () => {
 		expect(parsed?.mcpServers).toEqual({})
 	})
 
-	it("preserves existing choices, adds discoveries, and removes stale entries", () => {
+	it("preserves existing choices and temporarily undiscovered entries while adding discoveries", () => {
 		const current = createTaskCapabilityToggles({
 			localSkillsToggles: { kept: false, removed: true },
 			mcpServers: { existing: false },
@@ -28,7 +28,7 @@ describe("TaskCapabilityToggles", () => {
 			mcpServers: { existing: true, added: false },
 		})
 
-		expect(reconciled.localSkillsToggles).toEqual({ kept: false, added: true })
+		expect(reconciled.localSkillsToggles).toEqual({ kept: false, removed: true, added: true })
 		expect(reconciled.mcpServers).toEqual({ existing: false, added: false })
 	})
 

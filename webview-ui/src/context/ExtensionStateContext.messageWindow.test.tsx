@@ -61,6 +61,19 @@ import { TaskServiceClient } from "../services/grpc-client"
 import { InteractionHost } from "../task-interaction/InteractionHost"
 import { ExtensionStateContextProvider, useExtensionState } from "./ExtensionStateContext"
 
+function CapabilitySetterProbe({
+	observed,
+}: {
+	observed: Array<{
+		global: ReturnType<typeof useExtensionState>["setGlobalClineRulesToggles"]
+		task: ReturnType<typeof useExtensionState>["setTaskCapabilityToggles"]
+	}>
+}) {
+	const { setGlobalClineRulesToggles, setTaskCapabilityToggles, stateRevision } = useExtensionState()
+	observed.push({ global: setGlobalClineRulesToggles, task: setTaskCapabilityToggles })
+	return <div data-testid="setter-state-revision">{stateRevision ?? 0}</div>
+}
+
 function MessageProbe() {
 	const { clineMessages } = useExtensionState()
 	return (
@@ -223,6 +236,34 @@ describe("ExtensionStateContext persisted message reconciliation", () => {
 		subscriptions.partial = undefined
 	})
 
+	it("keeps capability setter identities stable across extension state revisions", async () => {
+		const observed: Array<{
+			global: ReturnType<typeof useExtensionState>["setGlobalClineRulesToggles"]
+			task: ReturnType<typeof useExtensionState>["setTaskCapabilityToggles"]
+		}> = []
+		render(
+			<ExtensionStateContextProvider>
+				<CapabilitySetterProbe observed={observed} />
+			</ExtensionStateContextProvider>,
+		)
+		await waitFor(() => expect(subscriptions.state).toBeDefined())
+		const initialGlobal = observed.at(-1)?.global
+		const initialTask = observed.at(-1)?.task
+
+		act(() => {
+			subscriptions.state?.onResponse({ stateJson: JSON.stringify(stateSnapshot({ revision: 1, total: 0 })) })
+		})
+		await waitFor(() => expect(screen.getByTestId("setter-state-revision")).toHaveTextContent("1"))
+		act(() => {
+			subscriptions.state?.onResponse({ stateJson: JSON.stringify(stateSnapshot({ revision: 2, total: 0 })) })
+		})
+		await waitFor(() => expect(screen.getByTestId("setter-state-revision")).toHaveTextContent("2"))
+
+		expect(initialGlobal).toBeDefined()
+		expect(initialTask).toBeDefined()
+		expect(observed.every((entry) => entry.global === initialGlobal && entry.task === initialTask)).toBe(true)
+	})
+
 	it("dispatches anchored Resume without clearing the active task identity or draft", async () => {
 		const resumeAsk = convertClineMessageToProto({
 			ts: 100,
@@ -264,6 +305,46 @@ describe("ExtensionStateContext persisted message reconciliation", () => {
 		)
 		expect(screen.getByLabelText("Interaction draft")).toHaveValue("continue carefully")
 		expect(observedTaskIds).not.toContain(undefined)
+	})
+
+	it("retries an ordinary history window when the first response is empty despite a positive total", async () => {
+		const persisted = convertClineMessageToProto({ ts: 20, type: "say", say: "text", text: "persisted history" })
+		vi.mocked(TaskServiceClient.fetchMessage)
+			.mockResolvedValueOnce({ messages: [], startIndex: 0, totalCount: 2 })
+			.mockResolvedValueOnce({ messages: [persisted], startIndex: 1, totalCount: 2 })
+		render(
+			<ExtensionStateContextProvider>
+				<MessageProbe />
+			</ExtensionStateContextProvider>,
+		)
+		await waitFor(() => expect(subscriptions.state).toBeDefined())
+
+		act(() => {
+			subscriptions.state?.onResponse({ stateJson: JSON.stringify(stateSnapshot({ revision: 1, total: 2 })) })
+		})
+
+		await waitFor(() => expect(screen.getByText("persisted history")).toBeVisible())
+		expect(TaskServiceClient.fetchMessage).toHaveBeenCalledTimes(2)
+	})
+
+	it("retries an ordinary history window after the first fetch throws", async () => {
+		const persisted = convertClineMessageToProto({ ts: 20, type: "say", say: "text", text: "recovered history" })
+		vi.mocked(TaskServiceClient.fetchMessage)
+			.mockRejectedValueOnce(new Error("transient fetch failure"))
+			.mockResolvedValueOnce({ messages: [persisted], startIndex: 0, totalCount: 1 })
+		render(
+			<ExtensionStateContextProvider>
+				<MessageProbe />
+			</ExtensionStateContextProvider>,
+		)
+		await waitFor(() => expect(subscriptions.state).toBeDefined())
+
+		act(() => {
+			subscriptions.state?.onResponse({ stateJson: JSON.stringify(stateSnapshot({ revision: 1, total: 1 })) })
+		})
+
+		await waitFor(() => expect(screen.getByText("recovered history")).toBeVisible())
+		expect(TaskServiceClient.fetchMessage).toHaveBeenCalledTimes(2)
 	})
 
 	it("automatically refetches a missing exact anchor without clearing the draft", async () => {

@@ -1,3 +1,4 @@
+import { applyE2EUnaryRequestFault, applyE2EUnaryResponseFault } from "@core/controller/e2e/grpc-unary-faults"
 import { Controller } from "@core/controller/index"
 import { serviceHandlers } from "@generated/hosts/vscode/protobus-services"
 import { GrpcRecorderBuilder } from "@/core/controller/grpc-recorder/grpc-recorder.builder"
@@ -80,13 +81,15 @@ async function handleUnaryRequest(
 	try {
 		// Get the service handler from the config
 		const handler = getHandler(request.service, request.method)
+		const occurrence = await applyE2EUnaryRequestFault(request)
 		// Handle unary request
 		const response = await handler(controller, request.message)
+		const deliveredResponse = await applyE2EUnaryResponseFault(request, occurrence, response)
 		// Send response to the webview
 		await postMessageToWebview({
 			type: "grpc_response",
 			grpc_response: {
-				message: response,
+				message: deliveredResponse,
 				request_id: request.request_id,
 			},
 		})

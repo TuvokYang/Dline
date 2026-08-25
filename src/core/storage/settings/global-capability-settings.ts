@@ -36,12 +36,11 @@ export async function reconcileGlobalCapabilities(
 	key: GlobalCapabilitySettingsKey,
 	discovered: Readonly<Record<string, boolean>>,
 ): Promise<ToggleMap> {
-	return stateManager.mutateGlobalSettingsKey(key, (current) =>
-		Object.fromEntries(
-			Object.entries(discovered).map(([resourcePath, defaultEnabled]) => [
-				resourcePath,
-				current[resourcePath] ?? defaultEnabled,
-			]),
-		),
-	) as Promise<Settings[GlobalCapabilitySettingsKey]>
+	return stateManager.mutateGlobalSettingsKey(key, (current) => {
+		const next = { ...current }
+		for (const [resourcePath, defaultEnabled] of Object.entries(discovered)) {
+			if (!(resourcePath in next)) next[resourcePath] = defaultEnabled
+		}
+		return next
+	}) as Promise<Settings[GlobalCapabilitySettingsKey]>
 }

@@ -1,6 +1,5 @@
 import { EmptyRequest } from "@shared/proto/dline/common"
 import {
-	ClineRulesToggles,
 	RefreshedDlineToggles,
 	RefreshedSubagents,
 	RuleScope,
@@ -26,6 +25,7 @@ import { useTaskCapabilityToggles } from "@/hooks/useTaskCapabilityToggles"
 import { FileServiceClient } from "@/services/grpc-client"
 import { isMacOSOrLinux } from "@/utils/platformUtils"
 import HookRow from "./HookRow"
+import { KeyedMutationQueue } from "./keyed-mutation-queue"
 import NewRuleRow from "./NewRuleRow"
 import RuleRow from "./RuleRow"
 import RulesToggleList from "./RulesToggleList"
@@ -79,6 +79,14 @@ const ClineRulesToggleModal: React.FC = () => {
 	const [localSkills, setLocalSkills] = useState<SkillInfo[]>([])
 	const [globalSubagents, setGlobalSubagents] = useState<SubagentInfo[]>([])
 	const [localSubagents, setLocalSubagents] = useState<SubagentInfo[]>([])
+	const mutationEpochRef = useRef(0)
+	const mutationQueueRef = useRef(new KeyedMutationQueue())
+	const runCapabilityMutation = (mutationKey: string, operation: () => Promise<void>) => {
+		mutationEpochRef.current++
+		return mutationQueueRef.current.enqueue(mutationKey, operation).finally(() => {
+			mutationEpochRef.current++
+		})
+	}
 
 	const isWindows = !isMacOSOrLinux()
 	const [isVisible, setIsVisible] = useState(false)
@@ -104,9 +112,10 @@ const ClineRulesToggleModal: React.FC = () => {
 		let isCancelled = false
 		const refreshAllToggles = () => {
 			if (isCancelled) return
+			const refreshEpoch = mutationEpochRef.current
 			FileServiceClient.refreshRules({} as EmptyRequest)
 				.then((response: RefreshedDlineToggles) => {
-					if (isCancelled) return
+					if (isCancelled || refreshEpoch !== mutationEpochRef.current) return
 					if (response.globalClineRulesToggles?.toggles)
 						setGlobalClineRulesToggles(response.globalClineRulesToggles.toggles)
 					if (response.localClineRulesToggles?.toggles)
@@ -206,10 +215,11 @@ const ClineRulesToggleModal: React.FC = () => {
 
 		const refreshSkills = () => {
 			if (isCancelled) return
+			const refreshEpoch = mutationEpochRef.current
 
 			FileServiceClient.refreshSkills({} as EmptyRequest)
 				.then((response) => {
-					if (!isCancelled) {
+					if (!isCancelled && refreshEpoch === mutationEpochRef.current) {
 						setGlobalSkills(response.globalSkills || [])
 						setLocalSkills(response.localSkills || [])
 						void capabilityScope.reconcile({
@@ -258,10 +268,11 @@ const ClineRulesToggleModal: React.FC = () => {
 
 		const refreshSubagents = () => {
 			if (isCancelled) return
+			const refreshEpoch = mutationEpochRef.current
 
 			FileServiceClient.refreshSubagents({} as EmptyRequest)
 				.then((response: RefreshedSubagents) => {
-					if (!isCancelled) {
+					if (!isCancelled && refreshEpoch === mutationEpochRef.current) {
 						setGlobalSubagents(response.globalSubagents || [])
 						setLocalSubagents(response.localSubagents || [])
 						void capabilityScope.reconcile({
@@ -354,98 +365,67 @@ const ClineRulesToggleModal: React.FC = () => {
 	])
 
 	// Handle toggle rule using gRPC
-	const toggleRule = (isGlobal: boolean, rulePath: string, enabled: boolean) => {
-		if (capabilityScope.isTaskScoped) {
-			void capabilityScope.updateToggle(isGlobal ? "globalClineRulesToggles" : "localClineRulesToggles", rulePath, enabled)
-			return
-		}
-		FileServiceClient.toggleClineRule(
-			ToggleClineRuleRequest.create({
-				scope: isGlobal ? RuleScope.GLOBAL : RuleScope.LOCAL,
-				rulePath,
-				enabled,
-			}),
-		)
-			.then((response) => {
-				// Update the local state with the response
-				if (response.globalClineRulesToggles?.toggles) {
-					setGlobalClineRulesToggles(response.globalClineRulesToggles.toggles)
-				}
-				if (response.localClineRulesToggles?.toggles) {
-					setLocalClineRulesToggles(response.localClineRulesToggles.toggles)
-				}
-				if (response.remoteRulesToggles?.toggles) {
-					setRemoteRulesToggles(response.remoteRulesToggles.toggles)
-				}
-			})
-			.catch((error) => {
-				console.error("Error toggling Cline rule:", error)
-			})
-	}
+	const toggleRule = (isGlobal: boolean, rulePath: string, enabled: boolean) =>
+		runCapabilityMutation(`${isGlobal ? "global" : "local"}:rule:${rulePath}`, async () => {
+			if (capabilityScope.isTaskScoped) {
+				await capabilityScope.updateToggle(
+					isGlobal ? "globalClineRulesToggles" : "localClineRulesToggles",
+					rulePath,
+					enabled,
+				)
+				return
+			}
+			const response = await FileServiceClient.toggleClineRule(
+				ToggleClineRuleRequest.create({
+					scope: isGlobal ? RuleScope.GLOBAL : RuleScope.LOCAL,
+					rulePath,
+					enabled,
+				}),
+			)
+			if (response.globalClineRulesToggles?.toggles) {
+				setGlobalClineRulesToggles(response.globalClineRulesToggles.toggles)
+			}
+			if (response.localClineRulesToggles?.toggles) {
+				setLocalClineRulesToggles(response.localClineRulesToggles.toggles)
+			}
+			if (response.remoteRulesToggles?.toggles) {
+				setRemoteRulesToggles(response.remoteRulesToggles.toggles)
+			}
+		})
 
-	const toggleCursorRule = (rulePath: string, enabled: boolean) => {
-		if (capabilityScope.isTaskScoped) {
-			void capabilityScope.updateToggle("localCursorRulesToggles", rulePath, enabled)
-			return
-		}
-		FileServiceClient.toggleCursorRule(
-			ToggleCursorRuleRequest.create({
-				rulePath,
-				enabled,
-			}),
-		)
-			.then((response) => {
-				// Update the local state with the response
-				if (response.toggles) {
-					setLocalCursorRulesToggles(response.toggles)
-				}
-			})
-			.catch((error) => {
-				console.error("Error toggling Cursor rule:", error)
-			})
-	}
+	const toggleCursorRule = (rulePath: string, enabled: boolean) =>
+		runCapabilityMutation(`local:cursor-rule:${rulePath}`, async () => {
+			if (capabilityScope.isTaskScoped) {
+				await capabilityScope.updateToggle("localCursorRulesToggles", rulePath, enabled)
+				return
+			}
+			const response = await FileServiceClient.toggleCursorRule(ToggleCursorRuleRequest.create({ rulePath, enabled }))
+			if (response.toggles) setLocalCursorRulesToggles(response.toggles)
+		})
 
-	const toggleWindsurfRule = (rulePath: string, enabled: boolean) => {
-		if (capabilityScope.isTaskScoped) {
-			void capabilityScope.updateToggle("localWindsurfRulesToggles", rulePath, enabled)
-			return
-		}
-		FileServiceClient.toggleWindsurfRule(
-			ToggleWindsurfRuleRequest.create({
-				rulePath,
-				enabled,
-			} as ToggleWindsurfRuleRequest),
-		)
-			.then((response: ClineRulesToggles) => {
-				if (response.toggles) {
-					setLocalWindsurfRulesToggles(response.toggles)
-				}
-			})
-			.catch((error) => {
-				console.error("Error toggling Windsurf rule:", error)
-			})
-	}
+	const toggleWindsurfRule = (rulePath: string, enabled: boolean) =>
+		runCapabilityMutation(`local:windsurf-rule:${rulePath}`, async () => {
+			if (capabilityScope.isTaskScoped) {
+				await capabilityScope.updateToggle("localWindsurfRulesToggles", rulePath, enabled)
+				return
+			}
+			const response = await FileServiceClient.toggleWindsurfRule(
+				ToggleWindsurfRuleRequest.create({ rulePath, enabled } as ToggleWindsurfRuleRequest),
+			)
+			if (response.toggles) setLocalWindsurfRulesToggles(response.toggles)
+		})
 
-	const toggleAgentsRule = (rulePath: string, enabled: boolean) => {
-		if (capabilityScope.isTaskScoped) {
-			void capabilityScope.updateToggle("localAgentsRulesToggles", rulePath, enabled)
-			return
-		}
-		FileServiceClient.toggleAgentsRule(
-			ToggleAgentsRuleRequest.create({
-				rulePath,
-				enabled,
-			} as ToggleAgentsRuleRequest),
-		)
-			.then((response: ClineRulesToggles) => {
-				if (response.toggles) {
-					setLocalAgentsRulesToggles(response.toggles)
-				}
-			})
-			.catch((error) => {
-				console.error("Error toggling Agents rule:", error)
-			})
-	}
+	const toggleAgentsRule = (rulePath: string, enabled: boolean) =>
+		runCapabilityMutation(`local:agents-rule:${rulePath}`, async () => {
+			if (capabilityScope.isTaskScoped) {
+				await capabilityScope.updateToggle("localAgentsRulesToggles", rulePath, enabled)
+				return
+			}
+			const response = await FileServiceClient.toggleAgentsRule(
+				ToggleAgentsRuleRequest.create({ rulePath, enabled } as ToggleAgentsRuleRequest),
+			)
+			if (response.toggles) setLocalAgentsRulesToggles(response.toggles)
+		})
 
 	// Toggle hook handler
 	const toggleHook = (isGlobal: boolean, hookName: string, enabled: boolean, workspaceName?: string) => {
@@ -465,98 +445,76 @@ const ClineRulesToggleModal: React.FC = () => {
 			})
 	}
 
-	const toggleWorkflow = (isGlobal: boolean, workflowPath: string, enabled: boolean) => {
-		if (capabilityScope.isTaskScoped) {
-			void capabilityScope.updateToggle(isGlobal ? "globalWorkflowToggles" : "localWorkflowToggles", workflowPath, enabled)
-			return
-		}
-		FileServiceClient.toggleWorkflow(
-			ToggleWorkflowRequest.create({
-				workflowPath,
-				enabled,
-				scope: isGlobal ? RuleScope.GLOBAL : RuleScope.LOCAL,
-			}),
-		)
-			.then((response) => {
-				if (response.toggles) {
-					if (isGlobal) {
-						setGlobalWorkflowToggles(response.toggles)
-					} else {
-						setLocalWorkflowToggles(response.toggles)
-					}
-				}
-			})
-			.catch((err: Error) => {
-				console.error("Failed to toggle workflow:", err)
-			})
-	}
+	const toggleWorkflow = (isGlobal: boolean, workflowPath: string, enabled: boolean) =>
+		runCapabilityMutation(`${isGlobal ? "global" : "local"}:workflow:${workflowPath}`, async () => {
+			if (capabilityScope.isTaskScoped) {
+				await capabilityScope.updateToggle(
+					isGlobal ? "globalWorkflowToggles" : "localWorkflowToggles",
+					workflowPath,
+					enabled,
+				)
+				return
+			}
+			const response = await FileServiceClient.toggleWorkflow(
+				ToggleWorkflowRequest.create({
+					workflowPath,
+					enabled,
+					scope: isGlobal ? RuleScope.GLOBAL : RuleScope.LOCAL,
+				}),
+			)
+			if (response.toggles) {
+				if (isGlobal) setGlobalWorkflowToggles(response.toggles)
+				else setLocalWorkflowToggles(response.toggles)
+			}
+		})
 
 	// Handle toggle for remote rules
-	const toggleRemoteRule = (ruleName: string, enabled: boolean) => {
-		if (capabilityScope.isTaskScoped) {
-			void capabilityScope.updateToggle("remoteRulesToggles", ruleName, enabled)
-			return
-		}
-		FileServiceClient.toggleClineRule(
-			ToggleClineRuleRequest.create({
-				scope: RuleScope.REMOTE,
-				rulePath: ruleName,
-				enabled,
-			}),
-		)
-			.then((response) => {
-				// Update the local state with the response
-				if (response.remoteRulesToggles?.toggles) {
-					setRemoteRulesToggles(response.remoteRulesToggles.toggles)
-				}
-			})
-			.catch((error) => {
-				console.error("Error toggling remote rule:", error)
-			})
-	}
+	const toggleRemoteRule = (ruleName: string, enabled: boolean) =>
+		runCapabilityMutation(`remote:rule:${ruleName}`, async () => {
+			if (capabilityScope.isTaskScoped) {
+				await capabilityScope.updateToggle("remoteRulesToggles", ruleName, enabled)
+				return
+			}
+			const response = await FileServiceClient.toggleClineRule(
+				ToggleClineRuleRequest.create({ scope: RuleScope.REMOTE, rulePath: ruleName, enabled }),
+			)
+			if (response.remoteRulesToggles?.toggles) setRemoteRulesToggles(response.remoteRulesToggles.toggles)
+		})
 
 	// Handle toggle for remote workflows
-	const toggleRemoteWorkflow = (workflowName: string, enabled: boolean) => {
-		if (capabilityScope.isTaskScoped) {
-			void capabilityScope.updateToggle("remoteWorkflowToggles", workflowName, enabled)
-			return
-		}
-		FileServiceClient.toggleWorkflow(
-			ToggleWorkflowRequest.create({
-				workflowPath: workflowName,
-				enabled,
-				scope: RuleScope.REMOTE,
-			}),
-		)
-			.then((response) => {
-				if (response.toggles) {
-					setRemoteWorkflowToggles(response.toggles)
-				}
-			})
-			.catch((error) => {
-				console.error("Error toggling remote workflow:", error)
-			})
-	}
+	const toggleRemoteWorkflow = (workflowName: string, enabled: boolean) =>
+		runCapabilityMutation(`remote:workflow:${workflowName}`, async () => {
+			if (capabilityScope.isTaskScoped) {
+				await capabilityScope.updateToggle("remoteWorkflowToggles", workflowName, enabled)
+				return
+			}
+			const response = await FileServiceClient.toggleWorkflow(
+				ToggleWorkflowRequest.create({ workflowPath: workflowName, enabled, scope: RuleScope.REMOTE }),
+			)
+			if (response.toggles) setRemoteWorkflowToggles(response.toggles)
+		})
 
 	// Handle toggle for skills
-	const toggleSkill = (isGlobal: boolean, skillPath: string, enabled: boolean) => {
-		if (capabilityScope.isTaskScoped) {
-			const isRemote = skillPath.startsWith("remote:")
-			void capabilityScope.updateToggle(
-				isRemote ? "remoteSkillsToggles" : isGlobal ? "globalSkillsToggles" : "localSkillsToggles",
-				isRemote ? skillPath.slice("remote:".length) : skillPath,
-				enabled,
-			)
-			return
-		}
-		FileServiceClient.toggleSkill(
-			ToggleSkillRequest.create({
-				skillPath,
-				isGlobal,
-				enabled,
-			}),
-		)
-			.then((response) => {
+	const toggleSkill = (isGlobal: boolean, skillPath: string, enabled: boolean) =>
+		runCapabilityMutation(
+			`${skillPath.startsWith("remote:") ? "remote" : isGlobal ? "global" : "local"}:skill:${skillPath}`,
+			async () => {
+				if (capabilityScope.isTaskScoped) {
+					const isRemote = skillPath.startsWith("remote:")
+					await capabilityScope.updateToggle(
+						isRemote ? "remoteSkillsToggles" : isGlobal ? "globalSkillsToggles" : "localSkillsToggles",
+						isRemote ? skillPath.slice("remote:".length) : skillPath,
+						enabled,
+					)
+					return
+				}
+				const response = await FileServiceClient.toggleSkill(
+					ToggleSkillRequest.create({
+						skillPath,
+						isGlobal,
+						enabled,
+					}),
+				)
 				if (response.globalSkillsToggles) {
 					setGlobalSkillsToggles(response.globalSkillsToggles)
 				}
@@ -574,29 +532,39 @@ const ClineRulesToggleModal: React.FC = () => {
 				} else {
 					setLocalSkills((prev) => prev.map((s) => (s.path === skillPath ? { ...s, enabled } : s)))
 				}
-			})
-			.catch((error) => {
-				console.error("Error toggling skill:", error)
-			})
-	}
+			},
+		)
 
-	const toggleSubagent = (isGlobal: boolean, subagentPath: string, enabled: boolean) => {
-		if (capabilityScope.isTaskScoped) {
-			void capabilityScope.updateToggle(
-				isGlobal ? "globalSubagentsToggles" : "localSubagentsToggles",
-				subagentPath,
-				enabled,
+	const toggleSubagent = (isGlobal: boolean, subagentPath: string, enabled: boolean) =>
+		runCapabilityMutation(`${isGlobal ? "global" : "local"}:subagent:${subagentPath}`, async () => {
+			if (capabilityScope.isTaskScoped) {
+				await capabilityScope.updateToggle(
+					isGlobal ? "globalSubagentsToggles" : "localSubagentsToggles",
+					subagentPath,
+					enabled,
+				)
+				return
+			}
+			const response = await FileServiceClient.toggleSubagent(
+				ToggleSubagentRequest.create({ subagentPath, isGlobal, enabled }),
 			)
-			return
-		}
-		FileServiceClient.toggleSubagent(
-			ToggleSubagentRequest.create({
-				subagentPath,
-				isGlobal,
-				enabled,
-			}),
-		).catch(console.error)
-	}
+			if (response.globalSubagentsToggles) {
+				setGlobalSubagents((current) =>
+					current.map((agent) => ({
+						...agent,
+						enabled: response.globalSubagentsToggles[agent.path] ?? agent.enabled,
+					})),
+				)
+			}
+			if (response.localSubagentsToggles) {
+				setLocalSubagents((current) =>
+					current.map((agent) => ({
+						...agent,
+						enabled: response.localSubagentsToggles[agent.path] ?? agent.enabled,
+					})),
+				)
+			}
+		})
 
 	// Close modal when clicking outside
 	useClickAway(modalRef, () => {

@@ -1,5 +1,5 @@
 import { SubagentInfo } from "@shared/proto/dline/file"
-import { fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { FileServiceClient } from "../../services/grpc-client"
 import SubagentRow from "./SubagentRow"
@@ -48,6 +48,33 @@ describe("SubagentRow", () => {
 				],
 			})
 		vi.mocked(FileServiceClient.updateSubagentConfig).mockClear()
+	})
+
+	it("does not let an older failed toggle clear a newer pending intent", async () => {
+		let rejectFirst: ((error: Error) => void) | undefined
+		const onToggle = vi
+			.fn()
+			.mockImplementationOnce(
+				() =>
+					new Promise<void>((_resolve, reject) => {
+						rejectFirst = reject
+					}),
+			)
+			.mockImplementation(() => new Promise<void>(() => {}))
+		render(<SubagentRow agent={agent} isGlobal={true} onDelete={vi.fn()} onToggle={onToggle} />)
+		const toggle = screen.getByRole("switch")
+
+		fireEvent.click(toggle)
+		fireEvent.click(toggle)
+		fireEvent.click(toggle)
+		expect(toggle).toHaveAttribute("data-state", "unchecked")
+		expect(onToggle).toHaveBeenCalledTimes(3)
+
+		await act(async () => {
+			rejectFirst?.(new Error("first write failed"))
+			await Promise.resolve()
+		})
+		expect(toggle).toHaveAttribute("data-state", "unchecked")
 	})
 
 	it("keeps list replacement intent off for profile updates and enables it for tool updates", async () => {

@@ -120,22 +120,20 @@ export function updateTaskCapabilityToggle(
 
 /**
  * Reconcile a task snapshot against currently discovered resources.
- * Existing values are preserved, new resources inherit their discovered
- * default, and entries that no longer exist are removed.
+ * Existing values are preserved across partial or temporarily empty scans,
+ * while newly discovered resources inherit their discovered default.
+ * Explicit delete flows remove entries from their canonical stores.
  */
 export function reconcileTaskCapabilityToggles(
 	current: TaskCapabilityToggles,
 	discovered: Partial<TaskCapabilityToggles>,
 ): TaskCapabilityToggles {
-	const result = emptyTaskCapabilityToggles()
+	const result = normalizeTaskCapabilityToggles(current)
 	for (const key of TOGGLE_MAP_KEYS) {
 		const discoveredMap = discovered[key]
-		if (!discoveredMap) {
-			result[key] = { ...current[key] }
-			continue
-		}
+		if (!discoveredMap) continue
 		for (const [resourceId, defaultEnabled] of Object.entries(discoveredMap)) {
-			result[key][resourceId] = current[key][resourceId] ?? defaultEnabled
+			if (!(resourceId in result[key])) result[key][resourceId] = defaultEnabled
 		}
 	}
 	return result

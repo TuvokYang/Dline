@@ -18,6 +18,7 @@ vi.mock("@/components/settings/utils/settingsHandlers", () => ({
 import { useTaskCapabilityToggles } from "./useTaskCapabilityToggles"
 
 const baseState = () => ({
+	stateRevision: 0,
 	currentTaskItem: undefined,
 	taskViewState: undefined,
 	taskCapabilityToggles: undefined,
@@ -76,7 +77,188 @@ describe("useTaskCapabilityToggles", () => {
 		expect(parseTaskCapabilityToggles(settings.taskCapabilityToggles)?.mcpServers).toEqual({ docs: false })
 	})
 
-	it("reconciles discoveries without overwriting an existing task choice", async () => {
+	it("keeps a pending intent over stale state revisions until a newer authoritative revision acknowledges it", async () => {
+		let resolveWrite: (() => void) | undefined
+		mocks.updateTaskSettings.mockImplementationOnce(
+			() =>
+				new Promise<void>((resolve) => {
+					resolveWrite = resolve
+				}),
+		)
+		mocks.state = {
+			...baseState(),
+			stateRevision: 10,
+			taskViewState: { taskId: "task-1" },
+			taskCapabilityToggles: createTaskCapabilityToggles({ mcpServers: { docs: true } }),
+		}
+		const { result, rerender } = renderHook(() => useTaskCapabilityToggles())
+		let write: Promise<void> | undefined
+
+		act(() => {
+			write = result.current.updateToggle("mcpServers", "docs", false)
+		})
+		expect(result.current.snapshot?.mcpServers.docs).toBe(false)
+
+		mocks.state = { ...mocks.state, stateRevision: 10 }
+		rerender()
+		expect(result.current.snapshot?.mcpServers.docs).toBe(false)
+
+		await act(async () => {
+			resolveWrite?.()
+			await write
+		})
+		mocks.state = {
+			...mocks.state,
+			stateRevision: 11,
+			taskCapabilityToggles: createTaskCapabilityToggles({ mcpServers: { docs: false } }),
+		}
+		rerender()
+		expect(result.current.snapshot?.mcpServers.docs).toBe(false)
+	})
+
+	it("rolls back the pending display when task settings persistence fails", async () => {
+		mocks.updateTaskSettings.mockRejectedValueOnce(new Error("write failed"))
+		mocks.state = {
+			...baseState(),
+			taskViewState: { taskId: "task-1" },
+			taskCapabilityToggles: createTaskCapabilityToggles({ mcpServers: { docs: true } }),
+		}
+		const { result } = renderHook(() => useTaskCapabilityToggles())
+
+		await act(async () => {
+			await expect(result.current.updateToggle("mcpServers", "docs", false)).rejects.toThrow("write failed")
+		})
+
+		expect(result.current.snapshot?.mcpServers.docs).toBe(true)
+		expect(mocks.state.setTaskCapabilityToggles).toHaveBeenLastCalledWith(
+			createTaskCapabilityToggles({ mcpServers: { docs: true } }),
+		)
+	})
+
+	it("isolates a delayed task write from the next task", async () => {
+		let resolveWrite: (() => void) | undefined
+		mocks.updateTaskSettings.mockImplementationOnce(
+			() =>
+				new Promise<void>((resolve) => {
+					resolveWrite = resolve
+				}),
+		)
+		mocks.state = {
+			...baseState(),
+			taskViewState: { taskId: "task-1" },
+			taskCapabilityToggles: createTaskCapabilityToggles({ mcpServers: { docs: true } }),
+		}
+		const { result, rerender } = renderHook(() => useTaskCapabilityToggles())
+		let write: Promise<void> | undefined
+		act(() => {
+			write = result.current.updateToggle("mcpServers", "docs", false)
+		})
+
+		mocks.state = {
+			...baseState(),
+			taskViewState: { taskId: "task-2" },
+			taskCapabilityToggles: createTaskCapabilityToggles({ mcpServers: { docs: true } }),
+		}
+		rerender()
+		expect(result.current.snapshot?.mcpServers.docs).toBe(true)
+		mocks.state.setTaskCapabilityToggles.mockClear()
+
+		await act(async () => {
+			resolveWrite?.()
+			await write
+		})
+		expect(result.current.snapshot?.mcpServers.docs).toBe(true)
+		expect(mocks.state.setTaskCapabilityToggles).not.toHaveBeenCalled()
+	})
+
+	it("serializes rapid inverse writes so the newest intent is persisted last", async () => {
+		const resolvers: Array<() => void> = []
+		mocks.updateTaskSettings.mockImplementation(
+			() =>
+				new Promise<void>((resolve) => {
+					resolvers.push(resolve)
+				}),
+		)
+		mocks.state = {
+			...baseState(),
+			taskViewState: { taskId: "task-1" },
+			taskCapabilityToggles: createTaskCapabilityToggles({ mcpServers: { docs: true } }),
+		}
+		const { result } = renderHook(() => useTaskCapabilityToggles())
+		let firstWrite: Promise<void> | undefined
+		let secondWrite: Promise<void> | undefined
+
+		act(() => {
+			firstWrite = result.current.updateToggle("mcpServers", "docs", false)
+			secondWrite = result.current.updateToggle("mcpServers", "docs", true)
+		})
+		expect(result.current.snapshot?.mcpServers.docs).toBe(true)
+		expect(mocks.updateTaskSettings).toHaveBeenCalledTimes(1)
+
+		await act(async () => {
+			resolvers[0]()
+			await firstWrite
+		})
+		await vi.waitFor(() => expect(mocks.updateTaskSettings).toHaveBeenCalledTimes(2))
+		expect(parseTaskCapabilityToggles(mocks.updateTaskSettings.mock.calls[0][1].taskCapabilityToggles)?.mcpServers.docs).toBe(
+			false,
+		)
+		expect(parseTaskCapabilityToggles(mocks.updateTaskSettings.mock.calls[1][1].taskCapabilityToggles)?.mcpServers.docs).toBe(
+			true,
+		)
+
+		await act(async () => {
+			resolvers[1]()
+			await secondWrite
+		})
+		expect(result.current.snapshot?.mcpServers.docs).toBe(true)
+	})
+
+	it("does not roll back the newest intent when an earlier queued write fails", async () => {
+		let rejectFirst: ((error: Error) => void) | undefined
+		let resolveSecond: (() => void) | undefined
+		mocks.updateTaskSettings
+			.mockImplementationOnce(
+				() =>
+					new Promise<void>((_resolve, reject) => {
+						rejectFirst = reject
+					}),
+			)
+			.mockImplementationOnce(
+				() =>
+					new Promise<void>((resolve) => {
+						resolveSecond = resolve
+					}),
+			)
+		mocks.state = {
+			...baseState(),
+			taskViewState: { taskId: "task-1" },
+			taskCapabilityToggles: createTaskCapabilityToggles({ mcpServers: { docs: true } }),
+		}
+		const { result } = renderHook(() => useTaskCapabilityToggles())
+		let firstWrite: Promise<void> | undefined
+		let secondWrite: Promise<void> | undefined
+		act(() => {
+			firstWrite = result.current.updateToggle("mcpServers", "docs", false)
+			secondWrite = result.current.updateToggle("mcpServers", "docs", true)
+		})
+		expect(result.current.snapshot?.mcpServers.docs).toBe(true)
+
+		await act(async () => {
+			rejectFirst?.(new Error("first write failed"))
+			await expect(firstWrite).rejects.toThrow("first write failed")
+		})
+		await vi.waitFor(() => expect(mocks.updateTaskSettings).toHaveBeenCalledTimes(2))
+		expect(result.current.snapshot?.mcpServers.docs).toBe(true)
+
+		await act(async () => {
+			resolveSecond?.()
+			await secondWrite
+		})
+		expect(result.current.snapshot?.mcpServers.docs).toBe(true)
+	})
+
+	it("reconciles discoveries without overwriting an existing task choice or pruning a temporarily missing resource", async () => {
 		mocks.state = {
 			...baseState(),
 			taskViewState: { taskId: "task-1" },
@@ -91,6 +273,7 @@ describe("useTaskCapabilityToggles", () => {
 		const settings = mocks.updateTaskSettings.mock.calls[0][1]
 		expect(parseTaskCapabilityToggles(settings.taskCapabilityToggles)?.localWorkflowToggles).toEqual({
 			kept: false,
+			stale: true,
 			added: true,
 		})
 	})

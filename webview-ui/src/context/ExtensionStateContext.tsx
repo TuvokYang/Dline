@@ -20,7 +20,7 @@ import { convertProtoToClineMessage } from "@shared/proto-conversions/cline-mess
 import { convertProtoMcpServersToMcpServers } from "@shared/proto-conversions/mcp/mcp-server-conversion"
 import { fromProtobufModels } from "@shared/proto-conversions/models/typeConversion"
 import type React from "react"
-import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react"
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react"
 import {
 	basetenDefaultModelId,
 	basetenModels,
@@ -384,6 +384,10 @@ export const ExtensionStateContextProvider: React.FC<{
 	// Atomic sliding window state via React 18 auto-batching
 	const [clineMessages, setClineMessages] = useState<ClineMessage[]>([])
 	const [firstItemIndex, setFirstItemIndex] = useState(0)
+	const clineMessagesRef = useRef<ClineMessage[]>([])
+	const bootstrapResolvedRef = useRef(false)
+	clineMessagesRef.current = clineMessages
+	if (clineMessages.length > 0) bootstrapResolvedRef.current = true
 
 	const prevTotalRef = useRef(0)
 	const refetchLockRef = useRef(false)
@@ -393,6 +397,7 @@ export const ExtensionStateContextProvider: React.FC<{
 	const cancelStabilizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 	const initialTaskViewKey = getTaskViewKey(state.currentTaskItem?.id, state.taskTitleMessage?.ts)
 	const currentTaskViewKeyRef = useRef<string | undefined>(initialTaskViewKey)
+	const messageFetchGenerationRef = useRef(0)
 	const prevRefetchTaskViewKeyRef = useRef<string | undefined>(initialTaskViewKey)
 	const prevHistoryTaskViewKeyRef = useRef<string | undefined>(initialTaskViewKey)
 	const lastInteractionFetchKeyRef = useRef<string | undefined>(undefined)
@@ -408,16 +413,50 @@ export const ExtensionStateContextProvider: React.FC<{
 		const total = state.totalMessageCount ?? 0
 
 		const fetchLatestWindow = (scheduledTaskViewKey: string | undefined, expectedInteraction?: ActiveInteractionView) => {
+			const scheduledGeneration = messageFetchGenerationRef.current
 			if (expectedInteraction) {
 				lastInteractionFetchKeyRef.current = interactionFetchKey(scheduledTaskViewKey, expectedInteraction)
 			}
-			const fetchAttempt = async (referenceIndex: number, retryLatestAtStart: boolean): Promise<void> => {
+			const retryDelaysMs = [100, 300, 750] as const
+			const retryLatest = async (attempt: number, retryLatestAtStart: boolean): Promise<void> => {
+				if (attempt >= retryDelaysMs.length) return
+				await new Promise<void>((resolve) => setTimeout(resolve, retryDelaysMs[attempt]))
+				if (
+					messageFetchGenerationRef.current !== scheduledGeneration ||
+					currentTaskViewKeyRef.current !== scheduledTaskViewKey
+				) {
+					return
+				}
+				await fetchAttempt(-1, retryLatestAtStart, attempt + 1)
+			}
+			const fetchAttempt = async (
+				referenceIndex: number,
+				retryLatestAtStart: boolean,
+				bootstrapRetryAttempt = 0,
+			): Promise<void> => {
 				try {
 					const resp = await TaskServiceClient.fetchMessage(FetchMessageRequest.create({ referenceIndex, count: 200 }))
-					if (currentTaskViewKeyRef.current !== scheduledTaskViewKey) {
+					if (
+						messageFetchGenerationRef.current !== scheduledGeneration ||
+						currentTaskViewKeyRef.current !== scheduledTaskViewKey
+					) {
 						return
 					}
 					const converted = resp.messages.map((message) => convertProtoToClineMessage(message))
+					const responseTotal = Number(resp.totalCount ?? 0)
+					if (
+						!expectedInteraction &&
+						referenceIndex === -1 &&
+						converted.length === 0 &&
+						!bootstrapResolvedRef.current &&
+						clineMessagesRef.current.length === 0 &&
+						Math.max(total, responseTotal) > 0 &&
+						bootstrapRetryAttempt < retryDelaysMs.length
+					) {
+						await retryLatest(bootstrapRetryAttempt, retryLatestAtStart)
+						return
+					}
+					if (converted.length > 0) bootstrapResolvedRef.current = true
 					setClineMessages((prev) => mergeFetchedClineMessagesByTs(prev, converted))
 					const startIndex = Math.max(0, resp.startIndex)
 					setFirstItemIndex((current) => (referenceIndex === -1 ? startIndex : Math.min(current, startIndex)))
@@ -429,13 +468,22 @@ export const ExtensionStateContextProvider: React.FC<{
 						}
 					}
 				} catch {
-					// State-stream updates can schedule another bounded reconciliation attempt.
+					if (
+						!expectedInteraction &&
+						referenceIndex === -1 &&
+						total > 0 &&
+						!bootstrapResolvedRef.current &&
+						clineMessagesRef.current.length === 0
+					) {
+						await retryLatest(bootstrapRetryAttempt, retryLatestAtStart)
+					}
 				}
 			}
 			void fetchAttempt(-1, Boolean(expectedInteraction))
 		}
 
 		if (currentTaskViewKey !== prevRefetchTaskViewKeyRef.current) {
+			messageFetchGenerationRef.current++
 			currentTaskViewKeyRef.current = currentTaskViewKey
 			prevRefetchTaskViewKeyRef.current = currentTaskViewKey
 			if (cancelStabilizeTimerRef.current) {
@@ -444,6 +492,7 @@ export const ExtensionStateContextProvider: React.FC<{
 			}
 			refetchLockRef.current = false
 			lastInteractionFetchKeyRef.current = undefined
+			bootstrapResolvedRef.current = false
 			setClineMessages([])
 			setFirstItemIndex(0)
 			prevTotalRef.current = total
@@ -463,6 +512,7 @@ export const ExtensionStateContextProvider: React.FC<{
 			setFirstItemIndex(0)
 			prevTotalRef.current = 0
 			lastInteractionFetchKeyRef.current = undefined
+			bootstrapResolvedRef.current = false
 			return
 		}
 		if (prevTotalRef.current === 0 && total > 0 && clineMessages.length === 0) {
@@ -559,6 +609,7 @@ export const ExtensionStateContextProvider: React.FC<{
 
 	useEffect(() => {
 		return () => {
+			messageFetchGenerationRef.current++
 			if (cancelStabilizeTimerRef.current) {
 				clearTimeout(cancelStabilizeTimerRef.current)
 				cancelStabilizeTimerRef.current = null
@@ -1113,6 +1164,31 @@ export const ExtensionStateContextProvider: React.FC<{
 		}
 	}, [state.apiConfiguration?.actModeProfile, state.apiConfiguration?.planModeProfile, clineModels, refreshClineModels])
 
+	const capabilityStateSetters = useMemo<
+		Pick<ExtensionStateContextType, Extract<keyof ExtensionStateContextType, `set${string}Toggles`>>
+	>(
+		() => ({
+			setGlobalClineRulesToggles: (toggles) =>
+				setState((prevState) => ({ ...prevState, globalClineRulesToggles: toggles })),
+			setLocalClineRulesToggles: (toggles) => setState((prevState) => ({ ...prevState, localClineRulesToggles: toggles })),
+			setLocalCursorRulesToggles: (toggles) =>
+				setState((prevState) => ({ ...prevState, localCursorRulesToggles: toggles })),
+			setLocalWindsurfRulesToggles: (toggles) =>
+				setState((prevState) => ({ ...prevState, localWindsurfRulesToggles: toggles })),
+			setLocalAgentsRulesToggles: (toggles) =>
+				setState((prevState) => ({ ...prevState, localAgentsRulesToggles: toggles })),
+			setLocalWorkflowToggles: (toggles) => setState((prevState) => ({ ...prevState, localWorkflowToggles: toggles })),
+			setGlobalWorkflowToggles: (toggles) => setState((prevState) => ({ ...prevState, globalWorkflowToggles: toggles })),
+			setGlobalSkillsToggles: (toggles) => setState((prevState) => ({ ...prevState, globalSkillsToggles: toggles })),
+			setLocalSkillsToggles: (toggles) => setState((prevState) => ({ ...prevState, localSkillsToggles: toggles })),
+			setRemoteSkillsToggles: (toggles) => setState((prevState) => ({ ...prevState, remoteSkillsToggles: toggles })),
+			setTaskCapabilityToggles: (toggles) => setState((prevState) => ({ ...prevState, taskCapabilityToggles: toggles })),
+			setRemoteRulesToggles: (toggles) => setState((prevState) => ({ ...prevState, remoteRulesToggles: toggles })),
+			setRemoteWorkflowToggles: (toggles) => setState((prevState) => ({ ...prevState, remoteWorkflowToggles: toggles })),
+		}),
+		[],
+	)
+
 	const contextValue: ExtensionStateContextType = {
 		...state,
 		clineMessages,
@@ -1188,71 +1264,7 @@ export const ExtensionStateContextProvider: React.FC<{
 		setMcpMarketplaceCatalog,
 		setShowMcp,
 		closeMcpView,
-		setGlobalClineRulesToggles: (toggles) =>
-			setState((prevState) => ({
-				...prevState,
-				globalClineRulesToggles: toggles,
-			})),
-		setLocalClineRulesToggles: (toggles) =>
-			setState((prevState) => ({
-				...prevState,
-				localClineRulesToggles: toggles,
-			})),
-		setLocalCursorRulesToggles: (toggles) =>
-			setState((prevState) => ({
-				...prevState,
-				localCursorRulesToggles: toggles,
-			})),
-		setLocalWindsurfRulesToggles: (toggles) =>
-			setState((prevState) => ({
-				...prevState,
-				localWindsurfRulesToggles: toggles,
-			})),
-		setLocalAgentsRulesToggles: (toggles) =>
-			setState((prevState) => ({
-				...prevState,
-				localAgentsRulesToggles: toggles,
-			})),
-		setLocalWorkflowToggles: (toggles) =>
-			setState((prevState) => ({
-				...prevState,
-				localWorkflowToggles: toggles,
-			})),
-		setGlobalWorkflowToggles: (toggles) =>
-			setState((prevState) => ({
-				...prevState,
-				globalWorkflowToggles: toggles,
-			})),
-		setGlobalSkillsToggles: (toggles) =>
-			setState((prevState) => ({
-				...prevState,
-				globalSkillsToggles: toggles,
-			})),
-		setLocalSkillsToggles: (toggles) =>
-			setState((prevState) => ({
-				...prevState,
-				localSkillsToggles: toggles,
-			})),
-		setRemoteSkillsToggles: (toggles) =>
-			setState((prevState) => ({
-				...prevState,
-				remoteSkillsToggles: toggles,
-			})),
-		setTaskCapabilityToggles: (toggles) =>
-			setState((prevState) => ({
-				...prevState,
-				taskCapabilityToggles: toggles,
-			})),
-		setRemoteRulesToggles: (toggles) =>
-			setState((prevState) => ({
-				...prevState,
-				remoteRulesToggles: toggles,
-			})),
-		setRemoteWorkflowToggles: (toggles) =>
-			setState((prevState) => ({
-				...prevState,
-				remoteWorkflowToggles: toggles,
-			})),
+		...capabilityStateSetters,
 		setMcpTab,
 		setTotalTasksSize,
 		refreshClineModels,

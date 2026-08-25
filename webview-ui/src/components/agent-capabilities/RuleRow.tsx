@@ -2,6 +2,7 @@ import { StringRequest } from "@shared/proto/dline/common"
 import { DeleteSkillRequest, RuleFileRequest } from "@shared/proto/index.dline"
 import { REMOTE_URI_SCHEME } from "@shared/remote-config/constants"
 import { EyeIcon, InfoIcon, PenIcon, Trash2Icon } from "lucide-react"
+import { useEffect, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
@@ -33,7 +34,7 @@ const RuleRow: React.FC<{
 	enabled: boolean
 	isGlobal: boolean
 	ruleType: string
-	toggleRule: (rulePath: string, enabled: boolean) => void
+	toggleRule: (rulePath: string, enabled: boolean) => Promise<void> | void
 	isRemote?: boolean
 	alwaysEnabled?: boolean
 	onDeleteSkill?: () => void
@@ -44,6 +45,22 @@ const RuleRow: React.FC<{
 	// For remote rules, the rulePath is already the display name
 	const finalDisplayName = isRemote ? rulePath : ruleType === "skill" ? skillDisplayName : displayName
 	const isDisabled = isRemote && alwaysEnabled
+	const [pendingEnabled, setPendingEnabled] = useState<boolean | undefined>(undefined)
+	const toggleIntentRef = useRef(0)
+	const displayedEnabled = pendingEnabled ?? enabled
+
+	useEffect(() => {
+		if (pendingEnabled === enabled) setPendingEnabled(undefined)
+	}, [enabled, pendingEnabled])
+
+	const handleToggle = () => {
+		const nextEnabled = !displayedEnabled
+		const intent = ++toggleIntentRef.current
+		setPendingEnabled(nextEnabled)
+		Promise.resolve(toggleRule(rulePath, nextEnabled)).catch(() => {
+			if (toggleIntentRef.current === intent) setPendingEnabled(undefined)
+		})
+	}
 
 	const getRuleTypeIcon = () => {
 		switch (ruleType) {
@@ -156,11 +173,11 @@ const RuleRow: React.FC<{
 				{/* Toggle Switch */}
 				<div className="flex items-center space-x-2 gap-2">
 					<Switch
-						checked={enabled}
+						checked={displayedEnabled}
 						className="mx-1"
 						disabled={isDisabled}
 						key={rulePath}
-						onClick={() => toggleRule(rulePath, !enabled)}
+						onClick={handleToggle}
 						title={isDisabled ? "This rule is required and cannot be disabled" : undefined}
 					/>
 					<Button

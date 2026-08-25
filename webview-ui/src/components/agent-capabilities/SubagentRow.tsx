@@ -8,7 +8,7 @@ import {
 } from "@shared/proto/dline/file"
 import type { ApiProfile } from "@shared/proto/dline/profile"
 import { ChevronDownIcon, ChevronRightIcon, PenIcon, Trash2Icon } from "lucide-react"
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
 import { FileServiceClient } from "@/services/grpc-client"
@@ -16,7 +16,7 @@ import { FileServiceClient } from "@/services/grpc-client"
 interface SubagentRowProps {
 	agent: SubagentInfo
 	isGlobal: boolean
-	onToggle: (path: string, enabled: boolean) => void
+	onToggle: (path: string, enabled: boolean) => Promise<void> | void
 	onDelete: () => void
 }
 
@@ -32,6 +32,13 @@ const SubagentRow: React.FC<SubagentRowProps> = ({ agent, isGlobal, onToggle, on
 	const [selectedProfile, setSelectedProfile] = useState<string>(agent.profile || "")
 	const [profilesLoading, setProfilesLoading] = useState(false)
 	const [toolsLoading, setToolsLoading] = useState(false)
+	const [pendingEnabled, setPendingEnabled] = useState<boolean | undefined>(undefined)
+	const toggleIntentRef = useRef(0)
+	const displayedEnabled = pendingEnabled ?? agent.enabled
+
+	useEffect(() => {
+		if (pendingEnabled === agent.enabled) setPendingEnabled(undefined)
+	}, [agent.enabled, pendingEnabled])
 
 	// Load available tools and profiles when expanded
 	useEffect(() => {
@@ -95,6 +102,15 @@ const SubagentRow: React.FC<SubagentRowProps> = ({ agent, isGlobal, onToggle, on
 		).catch((err) => console.error("Failed to save profile:", err))
 	}
 
+	const handleToggle = () => {
+		const nextEnabled = !displayedEnabled
+		const intent = ++toggleIntentRef.current
+		setPendingEnabled(nextEnabled)
+		Promise.resolve(onToggle(agent.path, nextEnabled)).catch(() => {
+			if (toggleIntentRef.current === intent) setPendingEnabled(undefined)
+		})
+	}
+
 	const handleDelete = () => {
 		FileServiceClient.deleteSubagentFile(
 			DeleteSubagentRequest.create({
@@ -135,12 +151,7 @@ const SubagentRow: React.FC<SubagentRowProps> = ({ agent, isGlobal, onToggle, on
 
 				{/* Toggle Switch */}
 				<div className="flex items-center space-x-2 gap-2">
-					<Switch
-						checked={agent.enabled}
-						className="mx-1"
-						key={agent.path}
-						onClick={() => onToggle(agent.path, !agent.enabled)}
-					/>
+					<Switch checked={displayedEnabled} className="mx-1" key={agent.path} onClick={handleToggle} />
 					<Button
 						aria-label="Edit subagent file"
 						onClick={handleEdit}

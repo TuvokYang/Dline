@@ -56,6 +56,7 @@ export interface E2ETestConfigs {
 	forceStaleInitialState: boolean
 	mockConda: boolean
 	isolateOsHome: boolean
+	grpcUnaryFaults: string | undefined
 }
 
 export class E2ETestHelper {
@@ -432,6 +433,7 @@ export const e2e = test
 		forceStaleInitialState: [false, { option: true }],
 		mockConda: [false, { option: true }],
 		isolateOsHome: [false, { option: true }],
+		grpcUnaryFaults: [undefined, { option: true }],
 	})
 	.extend<E2ETestDirectories, E2EWorkerFixtures>({
 		profileMode: ["mock", { scope: "worker", option: true }],
@@ -589,6 +591,7 @@ export const e2e = test
 				forceStaleInitialState,
 				mockConda,
 				isolateOsHome,
+				grpcUnaryFaults,
 				server,
 			},
 			use,
@@ -650,6 +653,7 @@ export const e2e = test
 						DLINE_SKIP_MIGRATION: "1",
 						DLINE_DOCS_DIR: dlineDocsDir,
 						...(forceStaleInitialState ? { DLINE_E2E_FORCE_STALE_INITIAL_STATE: "true" } : {}),
+						...(grpcUnaryFaults ? { DLINE_E2E_GRPC_UNARY_FAULTS: grpcUnaryFaults } : {}),
 						GRPC_RECORDER_FILE_NAME: E2ETestHelper.generateTestFileName(testInfo.title, testInfo.project.name),
 						// GRPC_RECORDER_ENABLED: "true",
 						// GRPC_RECORDER_TESTS_FILTERS_ENABLED: "true"
