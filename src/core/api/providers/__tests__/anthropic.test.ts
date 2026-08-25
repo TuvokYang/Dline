@@ -330,7 +330,17 @@ describe("AnthropicHandler", () => {
 					provider: "anthropic",
 					apiKey: "test-api-key",
 					modelId: "claude-opus-5",
-					anthropic: { enableLongContext: true, reasoning: { effort: "high" } },
+					anthropic: {
+						enableLongContext: true,
+						reasoning: { effort: "high" },
+						capabilities: {
+							contextWindow: 1_250_000,
+							contextWindowTiers: [
+								{ id: "standard", contextWindow: 200_000, label: "200K" },
+								{ id: "long", contextWindow: 1_000_000, label: "1M", apiModelSuffix: ":1m" },
+							],
+						},
+					},
 				}),
 				mode: "act",
 			})
@@ -345,7 +355,42 @@ describe("AnthropicHandler", () => {
 
 			const requestBody = standardCreate.mock.calls[0]?.[0] as Record<string, unknown> | undefined
 			expect(requestBody?.model).to.equal("claude-opus-5")
+			expect(handler.getModel().info.capabilities?.contextWindow).to.equal(1_250_000)
+			expect(handler.getModel().info.capabilities?.contextWindowTiers).to.equal(undefined)
 			expect(requestBody?.thinking).to.deep.equal({ type: "adaptive" })
+			should(standardCreate.mock.calls[0]?.[1]).equal(undefined)
+		})
+
+		it("should omit the long-context suffix and beta header when the standard tier is selected", async () => {
+			const handler = new AnthropicHandler({
+				profile: ApiProfile.create({
+					provider: "anthropic",
+					apiKey: "test-api-key",
+					modelId: "claude-opus-4-7",
+					anthropic: {
+						enableLongContext: false,
+						capabilities: {
+							contextWindowTiers: [
+								{ id: "standard", contextWindow: 160_000, label: "160K" },
+								{ id: "long", contextWindow: 1_500_000, label: "1.5M", apiModelSuffix: ":1m" },
+							],
+						},
+					},
+				}),
+				mode: "act",
+			})
+			const standardCreate = vi.fn().mockResolvedValue(createAsyncIterable())
+			vi.spyOn(handler as unknown as { ensureClient: () => unknown }, "ensureClient").mockReturnValue({
+				messages: { create: standardCreate },
+				beta: { messages: { _client: {}, create: vi.fn().mockResolvedValue(createAsyncIterable()) } },
+			})
+
+			for await (const _chunk of handler.createMessage("system prompt", [{ role: "user", content: "Hello" }])) {
+			}
+
+			const requestBody = standardCreate.mock.calls[0]?.[0] as Record<string, unknown> | undefined
+			expect(requestBody?.model).to.equal("claude-opus-4-7")
+			expect(handler.getModel().info.capabilities?.contextWindow).to.equal(160_000)
 			should(standardCreate.mock.calls[0]?.[1]).equal(undefined)
 		})
 
@@ -355,7 +400,16 @@ describe("AnthropicHandler", () => {
 					provider: "anthropic",
 					apiKey: "test-api-key",
 					modelId: "claude-opus-4-7",
-					anthropic: { enableLongContext: true, reasoning: { effort: "high" } },
+					anthropic: {
+						enableLongContext: true,
+						reasoning: { effort: "high" },
+						capabilities: {
+							contextWindowTiers: [
+								{ id: "standard", contextWindow: 200_000, label: "200K" },
+								{ id: "long", contextWindow: 1_500_000, label: "1.5M", apiModelSuffix: ":1m" },
+							],
+						},
+					},
 				}),
 				mode: "act",
 			})
@@ -381,6 +435,7 @@ describe("AnthropicHandler", () => {
 			const requestBody = standardCreate.mock.calls[0][0] as Record<string, any>
 			const requestOptions = standardCreate.mock.calls[0][1] as Record<string, any>
 			requestBody.model.should.equal("claude-opus-4-7:1m")
+			expect(handler.getModel().info.capabilities?.contextWindow).to.equal(1_500_000)
 			requestBody.thinking.should.deepEqual({ type: "adaptive" })
 			requestOptions.should.deepEqual({
 				headers: {

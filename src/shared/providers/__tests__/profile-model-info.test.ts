@@ -123,6 +123,53 @@ describe("resolveProfileModelInfo", () => {
 		expect(result.capabilities?.contextWindow).to.equal(1_000_000)
 	})
 
+	it("uses the selected tier window instead of a legacy standalone context override", () => {
+		const profile = ApiProfile.create({
+			provider: "anthropic",
+			modelId: "claude-sonnet-4-6",
+			anthropic: AnthropicProviderConfig.create({
+				enableLongContext: false,
+				capabilities: {
+					contextWindow: 999_999,
+					contextWindowTiers: [
+						{ id: "standard", contextWindow: 160_000, label: "160K" },
+						{ id: "long", contextWindow: 1_500_000, label: "1.5M", apiModelSuffix: ":1m" },
+					],
+				},
+			}),
+		})
+
+		const result = resolveProfileModelInfo(profile, {
+			models: anthropicModels,
+			defaultModelId: "claude-sonnet-4-6",
+		})
+
+		expect(result.capabilities?.contextWindow).to.equal(160_000)
+	})
+
+	it("allows the selected long tier window to exceed one million tokens", () => {
+		const profile = ApiProfile.create({
+			provider: "anthropic",
+			modelId: "claude-sonnet-4-6",
+			anthropic: AnthropicProviderConfig.create({
+				enableLongContext: true,
+				capabilities: {
+					contextWindowTiers: [
+						{ id: "standard", contextWindow: 200_000, label: "200K" },
+						{ id: "long", contextWindow: 1_500_000, label: "1.5M", apiModelSuffix: ":1m" },
+					],
+				},
+			}),
+		})
+
+		const result = resolveProfileModelInfo(profile, {
+			models: anthropicModels,
+			defaultModelId: "claude-sonnet-4-6",
+		})
+
+		expect(result.capabilities?.contextWindow).to.equal(1_500_000)
+	})
+
 	it("falls back to the standard 200K tier when long context is explicitly disabled", () => {
 		const profile = ApiProfile.create({
 			provider: "anthropic",

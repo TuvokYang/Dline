@@ -1,3 +1,4 @@
+import { AnthropicProviderConfig } from "@shared/proto/dline/provider/anthropic"
 import { PROFILE_PROVIDER_KEYS } from "@shared/providers/profile-model-info"
 import type { Mode } from "@shared/storage/types"
 import { ChevronDownIcon, ChevronRightIcon } from "lucide-react"
@@ -199,6 +200,9 @@ const ApiProfileCard: React.FC<ApiProfileCardProps> = ({
 								} as Partial<ApiProfile> & Record<string, unknown>
 								for (const key of Object.values(PROFILE_PROVIDER_KEYS)) {
 									if (key) updates[key] = undefined
+								}
+								if (e.target.value === "anthropic") {
+									updates.anthropic = AnthropicProviderConfig.create({ enableLongContext: true })
 								}
 								onUpdate(updates)
 							}}

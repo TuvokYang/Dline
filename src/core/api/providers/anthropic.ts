@@ -7,12 +7,12 @@ import { Tool as AnthropicTool } from "@anthropic-ai/sdk/resources/index"
 import type { MessageCreateParamsStreaming as AnthropicMessageCreateParamsStreaming } from "@anthropic-ai/sdk/resources/messages/messages"
 import { Stream as AnthropicStream } from "@anthropic-ai/sdk/streaming"
 import { ANTHROPIC_FAST_MODE_SUFFIX, AnthropicModelId, anthropicDefaultModelId, anthropicModels, ModelInfo } from "@shared/api"
+import { providerFetch } from "@shared/net"
 import { prioritizeApiFormat } from "@shared/providers/api-format"
 import { buildEffectiveModelInfo, selectContextTier } from "@shared/providers/effective-model-info"
 import { isClaudeOpusAdaptiveThinkingModel, resolveClaudeOpusAdaptiveThinking } from "@shared/utils/reasoning-support"
 import { buildExternalBasicHeaders } from "@/services/EnvUtils"
 import { ClineStorageMessage } from "@/shared/messages/content"
-import { fetch } from "@/shared/net"
 import { ApiFormat, ServerTool } from "@/shared/proto/dline/models/metadata"
 import { ApiHandler, ApiHandlerContext, type ApiRequestOptions } from "../index"
 import { withRetry } from "../retry"
@@ -53,6 +53,11 @@ export class AnthropicHandler implements ApiHandler {
 		return tool === ServerTool.WEB_SEARCH
 	}
 
+	private contextWindowTiersEnabled(modelId: string): boolean {
+		const registryModel = anthropicModels[modelId]
+		return registryModel === undefined || Boolean(registryModel.capabilities?.contextWindowTiers?.length)
+	}
+
 	/**
 	 * Build model metadata for custom Anthropic-compatible models.
 	 *
@@ -67,6 +72,8 @@ export class AnthropicHandler implements ApiHandler {
 			pricing: this.config?.pricing,
 			enableLongContext: this.config?.enableLongContext !== false,
 			pricingTiersEnabled: this.config?.pricingTiersEnabled,
+			preferContextWindowTier: true,
+			contextWindowTiersEnabled: this.contextWindowTiersEnabled(modelId),
 		})
 	}
 
@@ -82,6 +89,8 @@ export class AnthropicHandler implements ApiHandler {
 			pricing: this.config?.pricing,
 			enableLongContext: this.config?.enableLongContext !== false,
 			pricingTiersEnabled: this.config?.pricingTiersEnabled,
+			preferContextWindowTier: true,
+			contextWindowTiersEnabled: this.contextWindowTiersEnabled(modelId),
 		})
 	}
 
@@ -110,7 +119,7 @@ export class AnthropicHandler implements ApiHandler {
 					apiKey: this.apiKey,
 					baseURL: this.baseUrl || undefined,
 					defaultHeaders: buildExternalBasicHeaders(),
-					fetch, // Use configured fetch with proxy support
+					fetch: providerFetch,
 				})
 			} catch (error) {
 				throw new Error(`Error creating Anthropic client: ${error.message}`)
@@ -270,6 +279,8 @@ export class AnthropicHandler implements ApiHandler {
 						pricing: this.config?.pricing,
 						enableLongContext: this.config?.enableLongContext !== false,
 						pricingTiersEnabled: this.config?.pricingTiersEnabled,
+						preferContextWindowTier: true,
+						contextWindowTiersEnabled: this.contextWindowTiersEnabled(mid),
 					}),
 					ApiFormat.ANTHROPIC_CHAT,
 				),

@@ -2,7 +2,13 @@ import { type ModelInfo } from "@shared/proto/dline/models"
 import type { ModelCapabilities, ModelPricing } from "@shared/proto/dline/models/metadata"
 import type { ApiProfile } from "@shared/proto/dline/profile"
 import { AnthropicProviderConfig } from "@shared/proto/dline/provider/anthropic"
-import { buildEffectiveModelInfo, mergeCapabilities, mergePricing } from "@shared/providers/effective-model-info"
+import {
+	buildEffectiveModelInfo,
+	mergeCapabilities,
+	mergePricing,
+	selectContextTier,
+	updateSelectedContextWindow,
+} from "@shared/providers/effective-model-info"
 import { isClaudeOpusAdaptiveThinkingModel } from "@shared/utils/reasoning-support"
 import { VSCodeCheckbox } from "@vscode/webview-ui-toolkit/react"
 import { useState } from "react"
@@ -54,6 +60,7 @@ export const AnthropicProvider = ({ showModelOptions, isPopup, profile, onUpdate
 	const modelId = profile.modelId || anthropicDefaultModelId
 	const customModelEnabled = pc?.customModelEnabled ?? false
 	const registryModel = anthropicModels[modelId] ?? anthropicModelInfoSaneDefaults
+	const contextWindowTiersEnabled = customModelEnabled || Boolean(registryModel.capabilities?.contextWindowTiers?.length)
 	// The 1M long-context option is enabled by default; only an explicit false disables it.
 	const enableLongContext = pc.enableLongContext !== false
 	const modelInfo = buildEffectiveModelInfo(modelId, registryModel, {
@@ -61,7 +68,11 @@ export const AnthropicProvider = ({ showModelOptions, isPopup, profile, onUpdate
 		pricing: pc.pricing,
 		enableLongContext,
 		pricingTiersEnabled: pc.pricingTiersEnabled,
+		preferContextWindowTier: true,
+		contextWindowTiersEnabled,
 	})
+	const selectedContextTier = selectContextTier(modelInfo.capabilities, enableLongContext)
+	const contextWindowValue = selectedContextTier?.contextWindow ?? modelInfo.capabilities?.contextWindow
 
 	const [useCustomModel, setUseCustomModel] = useState(customModelEnabled)
 
@@ -83,6 +94,21 @@ export const AnthropicProvider = ({ showModelOptions, isPopup, profile, onUpdate
 	}
 
 	// Update provider pricing without writing profile.modelInfo.
+	const handleContextWindowUpdate = (contextWindow: number) => {
+		onUpdate({
+			anthropic: {
+				...pc,
+				capabilities: updateSelectedContextWindow(
+					registryModel.capabilities,
+					pc.capabilities,
+					enableLongContext,
+					contextWindow,
+					contextWindowTiersEnabled,
+				),
+			},
+		})
+	}
+
 	const handlePricingUpdate = (updates: Partial<ModelPricing>) => {
 		onUpdate({
 			anthropic: {
@@ -144,6 +170,7 @@ export const AnthropicProvider = ({ showModelOptions, isPopup, profile, onUpdate
 							modelId={modelId}
 							modelInfo={modelInfo}
 							onCapabilitiesUpdate={handleCapabilitiesUpdate}
+							onContextWindowUpdate={handleContextWindowUpdate}
 							onModelIdChange={handleModelChange}
 							onPricingUpdate={handlePricingUpdate}
 							onUpdate={onUpdate}
@@ -176,6 +203,7 @@ export const AnthropicProvider = ({ showModelOptions, isPopup, profile, onUpdate
 
 							<ModelConfiguration
 								capabilities={pc.capabilities}
+								contextWindowValue={contextWindowValue}
 								defaults={registryModel}
 								fields={{
 									capabilities: [
@@ -191,6 +219,7 @@ export const AnthropicProvider = ({ showModelOptions, isPopup, profile, onUpdate
 									pricing: ["inputPrice", "outputPrice", "cacheWritesPrice", "cacheReadsPrice", "pricingTiers"],
 								}}
 								onCapabilitiesUpdate={handleCapabilitiesUpdate}
+								onContextWindowUpdate={handleContextWindowUpdate}
 								onPricingUpdate={handlePricingUpdate}
 								pricing={pc.pricing}
 								pricingTiersEnabled={pc.pricingTiersEnabled === true}
@@ -240,6 +269,7 @@ interface CustomModelConfigProps {
 	pc: AnthropicProviderConfig
 	onModelIdChange: (modelId: string) => void
 	onCapabilitiesUpdate: (updates: Partial<ModelCapabilities>) => void
+	onContextWindowUpdate: (contextWindow: number) => void
 	onPricingUpdate: (updates: Partial<ModelPricing>) => void
 	onUpdate: (updates: Partial<ApiProfile>) => void
 }
@@ -253,6 +283,7 @@ const CustomModelConfig = ({
 	pc,
 	onModelIdChange,
 	onCapabilitiesUpdate,
+	onContextWindowUpdate,
 	onPricingUpdate,
 	onUpdate,
 }: CustomModelConfigProps) => {
@@ -287,9 +318,28 @@ const CustomModelConfig = ({
 				/>
 			)}
 
+			{modelInfo.capabilities?.contextWindowTiers?.length ? (
+				<StyledCheckbox
+					checked={pc.enableLongContext !== false}
+					onChange={(event: Event | React.FormEvent<HTMLElement>) =>
+						onUpdate({
+							anthropic: {
+								...pc,
+								enableLongContext: (event.target as HTMLInputElement | null)?.checked === true,
+							},
+						})
+					}>
+					Enable Long Context
+				</StyledCheckbox>
+			) : null}
+
 			{/* ModelConfiguration component */}
 			<ModelConfiguration
 				capabilities={capabilities}
+				contextWindowValue={
+					selectContextTier(modelInfo.capabilities, pc.enableLongContext !== false)?.contextWindow ??
+					modelInfo.capabilities?.contextWindow
+				}
 				defaults={defaults}
 				fields={{
 					capabilities: [
@@ -305,6 +355,7 @@ const CustomModelConfig = ({
 					pricing: ["inputPrice", "outputPrice", "cacheWritesPrice", "cacheReadsPrice", "pricingTiers"],
 				}}
 				onCapabilitiesUpdate={onCapabilitiesUpdate}
+				onContextWindowUpdate={onContextWindowUpdate}
 				onPricingUpdate={onPricingUpdate}
 				pricing={pricing}
 				pricingTiersEnabled={pc.pricingTiersEnabled === true}

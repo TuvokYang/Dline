@@ -1,4 +1,5 @@
 import { ApiProfile } from "@shared/proto/dline/profile"
+import { AnthropicProviderConfig } from "@shared/proto/dline/provider/anthropic"
 import { fireEvent, render, screen } from "@testing-library/react"
 import { describe, expect, it, vi } from "vitest"
 import ProviderProfileCard from "./ProviderProfileCard"
@@ -13,7 +14,10 @@ vi.mock("./ProviderProfileEditor", () => ({
 	default: () => <div>Provider editor</div>,
 }))
 
-const providerOptions = [{ value: "openai", label: "OpenAI" }]
+const providerOptions = [
+	{ value: "openai", label: "OpenAI" },
+	{ value: "anthropic", label: "Anthropic" },
+]
 
 /**
  * Build a profile fixture for card rendering tests.
@@ -75,6 +79,31 @@ describe("ProviderProfileCard", () => {
 		expect(card).toHaveClass("border-editor-widget-border/40")
 		expect(card).toHaveClass("bg-(--vscode-editor-background)")
 		expect(body).toHaveClass("border-editor-widget-border/30")
+	})
+
+	it("initializes a newly selected Anthropic provider with long context enabled", () => {
+		const onUpdate = vi.fn()
+		render(
+			<ProviderProfileCard
+				currentMode="act"
+				editMode={false}
+				isExpanded={true}
+				onDelete={vi.fn()}
+				onToggleExpand={vi.fn()}
+				onUpdate={onUpdate}
+				profile={ApiProfile.create({ ...buildProfile(), provider: "", modelId: "" })}
+				providerOptions={providerOptions}
+			/>,
+		)
+
+		fireEvent.change(screen.getByRole("combobox", { name: "Provider" }), { target: { value: "anthropic" } })
+
+		expect(onUpdate).toHaveBeenCalledWith(
+			expect.objectContaining({
+				provider: "anthropic",
+				anthropic: AnthropicProviderConfig.create({ enableLongContext: true }),
+			}),
+		)
 	})
 
 	it("delegates Web Search settings to the provider editor without rendering a duplicate outer control", () => {

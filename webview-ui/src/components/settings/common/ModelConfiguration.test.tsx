@@ -407,6 +407,28 @@ describe("ModelConfiguration", () => {
 		expect(screen.queryByLabelText(/Cache Reads/)).toBeNull()
 	})
 
+	it("delegates context window edits to a provider-selected handler", () => {
+		const onCapabilitiesUpdate = vi.fn()
+		const onContextWindowUpdate = vi.fn()
+		render(
+			<ModelConfiguration
+				capabilities={{ contextWindow: 128_000 } as ModelCapabilities}
+				contextWindowValue={1_200_000}
+				fields={{ capabilities: ["contextWindow"] }}
+				onCapabilitiesUpdate={onCapabilitiesUpdate}
+				onContextWindowUpdate={onContextWindowUpdate}
+				onPricingUpdate={vi.fn()}
+			/>,
+		)
+
+		fireEvent.click(screen.getByRole("button", { name: /Model Configuration/i }))
+		fireEvent.change(screen.getByLabelText("Context Window Size"), { target: { value: "1500000" } })
+
+		expect(screen.getByLabelText("Context Window Size")).toHaveValue("1500000")
+		expect(onContextWindowUpdate).toHaveBeenCalledWith(1_500_000)
+		expect(onCapabilitiesUpdate).not.toHaveBeenCalled()
+	})
+
 	it("uses built-in defaults for context and max output", () => {
 		render(
 			<ModelConfiguration

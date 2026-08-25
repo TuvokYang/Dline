@@ -28,13 +28,23 @@ const registryModel: ModelInfo = {
 	} as ModelPricing,
 }
 
+const nativeContextModel: ModelInfo = {
+	id: "claude-native",
+	name: "Native Context Claude",
+	capabilities: {
+		contextWindow: 1_000_000,
+		maxTokens: 128_000,
+		supportsPromptCache: true,
+	} as ModelCapabilities,
+}
+
 vi.mock("@/context/ExtensionStateContext", () => ({
 	useExtensionState: () => ({ remoteConfigSettings: {} }),
 }))
 
 vi.mock("./useProviderModels", () => ({
 	useProviderModels: () => ({
-		models: { "claude-custom": registryModel },
+		models: { "claude-custom": registryModel, "claude-native": nativeContextModel },
 		defaultModelId: "claude-custom",
 		modelInfoSaneDefaults: registryModel,
 		loading: false,
@@ -43,14 +53,22 @@ vi.mock("./useProviderModels", () => ({
 
 vi.mock("../common/ModelConfiguration", () => ({
 	ModelConfiguration: ({
+		contextWindowValue,
 		fields,
 		onCapabilitiesUpdate,
+		onContextWindowUpdate,
 	}: {
+		contextWindowValue?: number
 		fields: { capabilities?: string[] }
 		onCapabilitiesUpdate: (updates: Partial<ModelCapabilities>) => void
+		onContextWindowUpdate?: (value: number) => void
 	}) => (
 		<>
 			<span data-testid="capability-fields">{fields.capabilities?.join(",")}</span>
+			<span data-testid="current-context-window">{contextWindowValue}</span>
+			<button onClick={() => onContextWindowUpdate?.(1_500_000)} type="button">
+				Update Current Window
+			</button>
 			<button onClick={() => onCapabilitiesUpdate({ supportsPromptCache: false })} type="button">
 				Update Cache
 			</button>
@@ -135,6 +153,41 @@ describe("AnthropicProvider", () => {
 		})
 	})
 
+	it("replaces a custom model's selected tier window without preserving a legacy direct window", () => {
+		const onUpdate = vi.fn()
+		const profile = {
+			id: "profile-custom-tier-window",
+			provider: "anthropic",
+			modelId: "claude-custom",
+			anthropic: AnthropicProviderConfig.create({
+				customModelEnabled: true,
+				enableLongContext: true,
+				capabilities: {
+					contextWindow: 999_999,
+					contextWindowTiers: [
+						{ id: "standard", contextWindow: 160_000, label: "160K" },
+						{ id: "long", contextWindow: 1_200_000, label: "1.2M", apiModelSuffix: ":1m" },
+					],
+				} as ModelCapabilities,
+			}),
+		} as unknown as ApiProfile
+
+		render(<AnthropicProvider onUpdate={onUpdate} profile={profile} showModelOptions={true} />)
+		fireEvent.click(screen.getByText("Update Current Window"))
+
+		expect(onUpdate).toHaveBeenCalledWith({
+			anthropic: {
+				...profile.anthropic,
+				capabilities: {
+					contextWindowTiers: [
+						{ id: "standard", contextWindow: 160_000, label: "160K" },
+						{ id: "long", contextWindow: 1_500_000, label: "1.2M", apiModelSuffix: ":1m" },
+					],
+				},
+			},
+		})
+	})
+
 	it("exposes context window tier editing for official models and persists updates", () => {
 		const onUpdate = vi.fn()
 		const profile = {
@@ -155,6 +208,82 @@ describe("AnthropicProvider", () => {
 			anthropic: {
 				...profile.anthropic,
 				capabilities: { contextWindowTiers: [{ id: "long", contextWindow: 1_000_000, label: "1M" }] },
+			},
+		})
+	})
+
+	it("uses the selected tier for the explicit context window and preserves both tier values", () => {
+		const onUpdate = vi.fn()
+		const profile = {
+			id: "profile-tier-window",
+			provider: "anthropic",
+			modelId: "claude-custom",
+			anthropic: AnthropicProviderConfig.create({
+				enableLongContext: true,
+				capabilities: {
+					contextWindowTiers: [
+						{ id: "standard", contextWindow: 160_000, label: "160K" },
+						{ id: "long", contextWindow: 1_200_000, label: "1.2M", apiModelSuffix: ":1m" },
+					],
+				} as ModelCapabilities,
+			}),
+		} as unknown as ApiProfile
+
+		const { rerender } = render(<AnthropicProvider onUpdate={onUpdate} profile={profile} showModelOptions={true} />)
+
+		expect(screen.getByRole("checkbox", { name: "Enable Long Context" })).toBeChecked()
+		expect(screen.getByTestId("current-context-window")).toHaveTextContent("1200000")
+		fireEvent.click(screen.getByText("Update Current Window"))
+		expect(onUpdate).toHaveBeenCalledWith({
+			anthropic: {
+				...profile.anthropic,
+				capabilities: {
+					contextWindowTiers: [
+						{ id: "standard", contextWindow: 160_000, label: "160K" },
+						{ id: "long", contextWindow: 1_500_000, label: "1.2M", apiModelSuffix: ":1m" },
+					],
+				},
+			},
+		})
+
+		rerender(
+			<AnthropicProvider
+				onUpdate={onUpdate}
+				profile={{ ...profile, anthropic: { ...profile.anthropic!, enableLongContext: false } }}
+				showModelOptions={true}
+			/>,
+		)
+		expect(screen.getByRole("checkbox", { name: "Enable Long Context" })).not.toBeChecked()
+		expect(screen.getByTestId("current-context-window")).toHaveTextContent("160000")
+	})
+
+	it("edits direct context windows without adding a long-context suffix tier", () => {
+		const onUpdate = vi.fn()
+		const profile = {
+			id: "profile-native-window",
+			provider: "anthropic",
+			modelId: "claude-native",
+			anthropic: AnthropicProviderConfig.create({
+				enableLongContext: true,
+				capabilities: {
+					contextWindow: 1_250_000,
+					contextWindowTiers: [
+						{ id: "standard", contextWindow: 200_000, label: "200K" },
+						{ id: "long", contextWindow: 1_000_000, label: "1M", apiModelSuffix: ":1m" },
+					],
+				} as ModelCapabilities,
+			}),
+		} as unknown as ApiProfile
+
+		render(<AnthropicProvider onUpdate={onUpdate} profile={profile} showModelOptions={true} />)
+
+		expect(screen.queryByRole("checkbox", { name: "Enable Long Context" })).not.toBeInTheDocument()
+		expect(screen.getByTestId("current-context-window")).toHaveTextContent("1250000")
+		fireEvent.click(screen.getByText("Update Current Window"))
+		expect(onUpdate).toHaveBeenCalledWith({
+			anthropic: {
+				...profile.anthropic,
+				capabilities: { contextWindow: 1_500_000 },
 			},
 		})
 	})

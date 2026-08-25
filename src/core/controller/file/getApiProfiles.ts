@@ -4,6 +4,7 @@
  * Reads ApiProfile configurations from ~/.dline/data/settings/api_profiles.json.
  */
 
+import { anthropicModels } from "@core/api/providers/models/anthropic"
 import { ModelRegistry } from "@core/model-registry/ModelRegistry"
 import { recordProfileCatalogBaseline } from "@core/profiles/profile-catalog-state"
 import { getDlineDataDir, getDlineHomePath } from "@core/storage/disk"
@@ -19,10 +20,12 @@ import {
 } from "@core/storage/secrets"
 import { EmptyRequest } from "@shared/proto/dline/common"
 import { ApiProfile, ApiProfilesResponse } from "@shared/proto/dline/profile"
+import { AnthropicProviderConfig } from "@shared/proto/dline/provider/anthropic"
 import { BedrockProviderConfig } from "@shared/proto/dline/provider/bedrock"
 import { OpenAiProviderConfig } from "@shared/proto/dline/provider/openai"
 import { SapAiCoreProviderConfig } from "@shared/proto/dline/provider/sapaicore"
 import { openAiEndpointToApiFormat } from "@shared/providers/api-format"
+import { updateSelectedContextWindow } from "@shared/providers/effective-model-info"
 import {
 	canStoreRegistryModelInfoOverrides,
 	getModelInfoOverrideFields,
@@ -172,6 +175,54 @@ export function normalizeApiProfile(profile: unknown): ApiProfile {
 		const rawModelInfo = rawProfile.modelInfo ?? rawProfile.model_info
 		if (rawModelInfo && typeof rawModelInfo === "object") {
 			normalized.modelInfo = rawModelInfo as ApiProfile["modelInfo"]
+		}
+	}
+
+	if (normalized.provider === "anthropic" && normalized.modelId) {
+		const migratedModelId = normalized.modelId.endsWith(":1m:fast")
+			? `${normalized.modelId.slice(0, -":1m:fast".length)}:fast`
+			: normalized.modelId.endsWith(":1m")
+				? normalized.modelId.slice(0, -":1m".length)
+				: undefined
+
+		if (migratedModelId && anthropicModels[migratedModelId]) {
+			normalized.modelId = migratedModelId
+			normalized.anthropic = AnthropicProviderConfig.create({
+				...normalized.anthropic,
+				enableLongContext: true,
+			})
+			migrated = true
+		}
+
+		const registryCapabilities = anthropicModels[normalized.modelId]?.capabilities
+		const anthropic = normalized.anthropic ?? AnthropicProviderConfig.create()
+		const providerCapabilities = anthropic.capabilities
+		const contextWindowTiers = providerCapabilities?.contextWindowTiers?.length
+			? providerCapabilities.contextWindowTiers
+			: registryCapabilities?.contextWindowTiers
+		const legacyContextWindow = providerCapabilities?.contextWindow
+		if (
+			registryCapabilities &&
+			!registryCapabilities.contextWindowTiers?.length &&
+			providerCapabilities?.contextWindowTiers?.length
+		) {
+			const { contextWindowTiers: _staleTiers, ...remainingCapabilities } = providerCapabilities
+			normalized.anthropic = AnthropicProviderConfig.create({
+				...anthropic,
+				capabilities: remainingCapabilities,
+			})
+			migrated = true
+		} else if (contextWindowTiers?.length && legacyContextWindow !== undefined) {
+			normalized.anthropic = AnthropicProviderConfig.create({
+				...anthropic,
+				capabilities: updateSelectedContextWindow(
+					registryCapabilities,
+					anthropic.capabilities,
+					anthropic.enableLongContext !== false,
+					legacyContextWindow,
+				),
+			})
+			migrated = true
 		}
 	}
 

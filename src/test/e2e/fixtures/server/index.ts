@@ -25,6 +25,12 @@ export type MockApiProtocol = E2EMockApiProtocol
 export type MockApiTarget = E2EMockProviderTarget
 export type { MockCacheDiagnostic, MockCacheWarning, MockCacheWarningCode } from "./openai-cache-diagnostics"
 
+function normalizeRequestHeaders(request: IncomingMessage): Readonly<Record<string, string | string[]>> {
+	return Object.fromEntries(
+		Object.entries(request.headers).flatMap(([name, value]) => (value === undefined ? [] : [[name, value]])),
+	)
+}
+
 export interface MockTokenUsage {
 	/** Input tokens excluding cache reads and writes. */
 	inputTokens: number
@@ -171,6 +177,7 @@ export type MockThinkingConfig = { mode: "effort"; effort: string } | { mode: "b
 export interface MockApiConsumption {
 	receivedAtMs: number
 	authorization?: string
+	requestHeaders: Readonly<Record<string, string | string[]>>
 	abortedAtMs?: number
 	target: MockApiTarget
 	provider: string
@@ -638,7 +645,13 @@ export class ClineApiServerMock {
 		this.currentUser = user
 	}
 
-	private consumeMockResponse(target: MockApiTarget, path: string, requestBody: unknown, authorization?: string) {
+	private consumeMockResponse(
+		target: MockApiTarget,
+		path: string,
+		requestBody: unknown,
+		authorization: string | undefined,
+		requestHeaders: Readonly<Record<string, string | string[]>>,
+	) {
 		const receivedAtMs = Date.now()
 		const route = E2E_MOCK_PROVIDER_ROUTES[target]
 		const requestText = JSON.stringify(requestBody)
@@ -718,6 +731,7 @@ export class ClineApiServerMock {
 		const consumption: MockApiConsumption = {
 			receivedAtMs,
 			...(authorization ? { authorization } : {}),
+			requestHeaders,
 			target,
 			provider: route.provider,
 			protocol: route.protocol,
@@ -1025,7 +1039,7 @@ export class ClineApiServerMock {
 						response: scriptedResponse,
 						usage,
 						consumption,
-					} = controller.consumeMockResponse(target, path, parsed, authHeader)
+					} = controller.consumeMockResponse(target, path, parsed, authHeader, normalizeRequestHeaders(req))
 					const markAborted = () => {
 						if (!res.writableFinished) consumption.abortedAtMs ??= Date.now()
 					}

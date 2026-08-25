@@ -31,6 +31,113 @@ describe("getApiProfiles", () => {
 		expect(profile.enabled).to.equal(true)
 	})
 
+	it("migrates legacy Anthropic 1M model ids to tier selection", () => {
+		const profile = normalizeApiProfile({
+			id: "legacy-anthropic-1m",
+			name: "anthropic:claude-opus-4-7:1m",
+			provider: "anthropic",
+			modelId: "claude-opus-4-7:1m",
+		})
+
+		expect(profile.modelId).to.equal("claude-opus-4-7")
+		expect(profile.anthropic?.enableLongContext).to.equal(true)
+	})
+
+	it("migrates legacy Anthropic fast 1M model ids without changing the fast suffix", () => {
+		const profile = normalizeApiProfile({
+			id: "legacy-anthropic-fast-1m",
+			name: "anthropic:claude-opus-4-6:1m:fast",
+			provider: "anthropic",
+			modelId: "claude-opus-4-6:1m:fast",
+		})
+
+		expect(profile.modelId).to.equal("claude-opus-4-6:fast")
+		expect(profile.anthropic?.enableLongContext).to.equal(true)
+	})
+
+	it("does not migrate a legacy-looking custom Anthropic model id", () => {
+		const profile = normalizeApiProfile({
+			id: "custom-anthropic-1m",
+			name: "anthropic:vendor-model:1m",
+			provider: "anthropic",
+			modelId: "vendor-model:1m",
+		})
+
+		expect(profile.modelId).to.equal("vendor-model:1m")
+		expect(profile.anthropic?.enableLongContext).to.equal(undefined)
+	})
+
+	it("migrates a legacy standalone Anthropic window into the selected tier", () => {
+		const profile = normalizeApiProfile({
+			id: "legacy-anthropic-window",
+			name: "anthropic:claude-opus-4-7",
+			provider: "anthropic",
+			modelId: "claude-opus-4-7",
+			anthropic: {
+				enableLongContext: false,
+				capabilities: { contextWindow: 180_000 },
+			},
+		})
+
+		expect(profile.anthropic?.capabilities?.contextWindow).to.equal(undefined)
+		const tiers = profile.anthropic?.capabilities?.contextWindowTiers ?? []
+		expect(tiers.find((tier) => tier.id === "standard")).to.include({
+			contextWindow: 180_000,
+			label: "200K",
+		})
+		expect(tiers.find((tier) => tier.id === "long")).to.include({
+			contextWindow: 1_000_000,
+			label: "1M",
+			apiModelSuffix: ":1m",
+		})
+	})
+
+	it("removes stale tiers while preserving a direct window for Anthropic models without tiers", () => {
+		const profile = normalizeApiProfile({
+			id: "native-anthropic-window",
+			name: "anthropic:claude-opus-5",
+			provider: "anthropic",
+			modelId: "claude-opus-5",
+			anthropic: {
+				enableLongContext: true,
+				capabilities: {
+					contextWindow: 1_500_000,
+					contextWindowTiers: [
+						{ id: "standard", contextWindow: 200_000, label: "200K" },
+						{ id: "long", contextWindow: 1_000_000, label: "1M", apiModelSuffix: ":1m" },
+					],
+				},
+			},
+		})
+
+		expect(profile.anthropic?.capabilities?.contextWindow).to.equal(1_500_000)
+		expect(profile.anthropic?.capabilities?.contextWindowTiers).to.equal(undefined)
+	})
+
+	it("migrates a custom tiered Anthropic standalone window into the selected tier", () => {
+		const profile = normalizeApiProfile({
+			id: "custom-tiered-anthropic-window",
+			name: "anthropic:vendor-tiered",
+			provider: "anthropic",
+			modelId: "vendor-tiered",
+			anthropic: {
+				enableLongContext: true,
+				capabilities: {
+					contextWindow: 1_400_000,
+					contextWindowTiers: [
+						{ id: "standard", contextWindow: 200_000, label: "200K" },
+						{ id: "long", contextWindow: 1_000_000, label: "1M", apiModelSuffix: ":1m" },
+					],
+				},
+			},
+		})
+
+		expect(profile.anthropic?.capabilities?.contextWindow).to.equal(undefined)
+		expect(profile.anthropic?.capabilities?.contextWindowTiers?.find((tier) => tier.id === "long")?.contextWindow).to.equal(
+			1_400_000,
+		)
+	})
+
 	it("persists an explicitly disabled Profile as disabled", () => {
 		const stored = serializeApiProfilesForStorage([
 			ApiProfile.create({

@@ -43,13 +43,15 @@ interface StoredProfile {
 		}
 	}
 	anthropic?: {
+		enableLongContext?: boolean
 		reasoning?: {
 			enableThinking?: boolean
 			effort?: string
 			thinkingBudget?: number
 		}
 		capabilities?: {
-			contextWindowTiers?: Array<{ id: string; contextWindow: number; label?: string }>
+			contextWindow?: number
+			contextWindowTiers?: Array<{ id: string; contextWindow: number; label?: string; apiModelSuffix?: string }>
 		}
 		pricing?: {
 			tiers?: Array<{ contextWindow: number; inputPrice?: number; outputPrice?: number }>
@@ -708,6 +710,7 @@ e2e(
 			thinking: { type: "adaptive" },
 			output_config: { effort: "high" },
 		})
+		expect(actRequest.requestHeaders["anthropic-beta"]).toBe("context-1m-2025-08-07")
 		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
 	},
 )
@@ -735,40 +738,114 @@ e2e(
 )
 
 e2e(
-	"Model configuration - official Anthropic models add and persist context and pricing tiers",
-	async ({ dlineDir, helper, page, sidebar, userDataDir }) => {
+	"Model configuration - Anthropic context tiers switch, persist, drive TaskHeader, and control the API variant",
+	async ({ dlineDir, helper, page, server, sidebar, userDataDir }) => {
+		e2e.setTimeout(180_000)
 		const profileName = E2E_PROFILE_NAMES.mockAnthropic
 
 		await helper.signin(sidebar)
 		await openApiSettings(page, sidebar)
 		const card = await openModelConfiguration(sidebar, profileName)
+		const webSearchMode = card.getByRole("combobox", { name: "Web Search mode" })
+		await webSearchMode.selectOption({ label: "Off" })
+		await waitForProfile(dlineDir, profileName, (profile) => profile.webSearchMode === "WEB_SEARCH_MODE_FORCE_OFF")
+		const longContext = card.locator("vscode-checkbox").filter({ hasText: "Enable Long Context" })
+		const contextWindow = card.getByRole("textbox", { name: "Context Window Size" })
 
-		// Anthropic context tiers (200K / 1M) are editable and persist as provider overrides.
-		const addContextTier = card.getByRole("button", { name: "Add Context Tier" })
-		await expect(addContextTier).toBeVisible()
-		await addContextTier.click()
-		await expect
-			.poll(
-				async () => {
-					const profiles = await readProfiles(dlineDir)
-					const persisted = profiles.find((candidate) => candidate.name === profileName)?.anthropic
-					return persisted ? JSON.stringify(persisted) : null
-				},
-				{ timeout: 15_000 },
-			)
-			.toContain("contextWindowTiers")
-
-		// Usage-based pricing tiers stay editable and persist as provider overrides.
-		// Registry tiers (200K / 1M) are pre-filled in the editor, so the added
-		// default tier (128K threshold) must appear among the persisted tiers.
-		const addPricingTier = card.getByRole("button", { name: "Add Pricing Tier" })
-		await expect(addPricingTier).toBeVisible()
-		await addPricingTier.click()
+		await expect(longContext).toHaveCount(1)
+		await expect.poll(() => longContext.evaluate((element) => Boolean((element as HTMLInputElement).checked))).toBe(true)
+		await expect(contextWindow).toHaveValue("1000000")
+		await setTextField(card, "Context Window Size", "1500000")
 		await waitForProfile(
 			dlineDir,
 			profileName,
-			(profile) => profile.anthropic?.pricing?.tiers?.some((tier) => tier.contextWindow === 128_000) === true,
+			(profile) =>
+				profile.anthropic?.enableLongContext !== false &&
+				profile.anthropic.capabilities?.contextWindow === undefined &&
+				profile.anthropic.capabilities?.contextWindowTiers?.find((tier) => tier.id === "long")?.contextWindow ===
+					1_500_000,
 		)
+
+		await longContext.click()
+		await expect.poll(() => longContext.evaluate((element) => Boolean((element as HTMLInputElement).checked))).toBe(false)
+		await expect(contextWindow).toHaveValue("200000")
+		await setTextField(card, "Context Window Size", "160000")
+		await waitForProfile(
+			dlineDir,
+			profileName,
+			(profile) =>
+				profile.anthropic?.enableLongContext === false &&
+				profile.anthropic.capabilities?.contextWindowTiers?.find((tier) => tier.id === "standard")?.contextWindow ===
+					160_000 &&
+				profile.anthropic.capabilities?.contextWindowTiers?.find((tier) => tier.id === "long")?.contextWindow ===
+					1_500_000,
+		)
+
+		await longContext.click()
+		await expect.poll(() => longContext.evaluate((element) => Boolean((element as HTMLInputElement).checked))).toBe(true)
+		await expect(contextWindow).toHaveValue("1500000")
+		await longContext.click()
+		await expect.poll(() => longContext.evaluate((element) => Boolean((element as HTMLInputElement).checked))).toBe(false)
+		await expect(contextWindow).toHaveValue("160000")
+
+		await sidebar.getByRole("button", { name: "Done" }).click()
+		const modelSwitcher = sidebar.getByRole("button", { name: "Select model" })
+		if ((await modelSwitcher.innerText()).trim() !== profileName) {
+			await modelSwitcher.click()
+			await sidebar
+				.getByRole("option")
+				.filter({ has: sidebar.getByText(profileName, { exact: true }) })
+				.click()
+		}
+
+		server.resetOpenAiMock()
+		server.enqueueResponses(
+			"anthropic-messages",
+			{
+				type: "tool",
+				name: "qna_respond",
+				arguments: { response: "E2E_ANTHROPIC_STANDARD_READY" },
+				expectedRequestIncludes: ["E2E_ANTHROPIC_STANDARD_TASK"],
+			},
+			{
+				type: "tool",
+				name: "attempt_completion",
+				arguments: { result: "E2E_ANTHROPIC_LONG_DONE" },
+				expectedRequestIncludes: ["E2E_ANTHROPIC_LONG_CONTINUE"],
+			},
+		)
+
+		const input = sidebar.getByTestId("chat-input")
+		await input.fill("E2E_ANTHROPIC_STANDARD_TASK")
+		await sidebar.getByTestId("send-button").click()
+		await expect(sidebar.getByText("E2E_ANTHROPIC_STANDARD_READY", { exact: true })).toBeVisible({ timeout: 60_000 })
+		const expandTaskHeader = sidebar.getByLabel("Expand task header")
+		if (await expandTaskHeader.isVisible()) await expandTaskHeader.click()
+		await expect(sidebar.locator('[title="Maximum context window size for this model"]')).toHaveText("160.0k")
+		await expect.poll(() => server.getRequestCount("anthropic-messages")).toBe(1)
+		const standardRequest = server.getMockConsumptions("anthropic-messages")[0]
+		expect(standardRequest.requestBody).toMatchObject({ model: "claude-sonnet-4-6" })
+		expect(standardRequest.requestHeaders["anthropic-beta"]).toBeUndefined()
+
+		await openApiSettings(page, sidebar)
+		const activeCard = await openModelConfiguration(sidebar, profileName)
+		const activeLongContext = activeCard.locator("vscode-checkbox").filter({ hasText: "Enable Long Context" })
+		await activeLongContext.click()
+		await expect
+			.poll(() => activeLongContext.evaluate((element) => Boolean((element as HTMLInputElement).checked)))
+			.toBe(true)
+		await expect(activeCard.getByRole("textbox", { name: "Context Window Size" })).toHaveValue("1500000")
+		await waitForProfile(dlineDir, profileName, (profile) => profile.anthropic?.enableLongContext === true)
+		await sidebar.getByRole("button", { name: "Done" }).click()
+
+		await input.fill("E2E_ANTHROPIC_LONG_CONTINUE")
+		await input.press("Enter")
+		await expect(sidebar.getByText("E2E_ANTHROPIC_LONG_DONE", { exact: false }).last()).toBeVisible({ timeout: 60_000 })
+		await expect.poll(() => server.getRequestCount("anthropic-messages")).toBe(2)
+		const longRequest = server.getMockConsumptions("anthropic-messages")[1]
+		expect(longRequest.requestBody).toMatchObject({ model: "claude-sonnet-4-6:1m" })
+		expect(longRequest.requestHeaders["anthropic-beta"]).toBe("context-1m-2025-08-07")
+		await expect(sidebar.locator('[title="Maximum context window size for this model"]')).toHaveText("1.5m")
 
 		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir)
 	},

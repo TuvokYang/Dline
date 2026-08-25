@@ -73,6 +73,10 @@ interface ModelConfigurationProps {
 
 	// Whether pricing tiers are an explicit provider override, including an empty list.
 	pricingTiersEnabled?: boolean
+
+	// Optional provider-selected context window projection and update handler.
+	contextWindowValue?: number
+	onContextWindowUpdate?: (value: number) => void
 }
 
 /**
@@ -89,6 +93,8 @@ export const ModelConfiguration = ({
 	defaults,
 	tiersEditable = false,
 	pricingTiersEnabled = false,
+	contextWindowValue: selectedContextWindowValue,
+	onContextWindowUpdate,
 }: ModelConfigurationProps) => {
 	const [expanded, setExpanded] = useState(false)
 	const [draftChecks, setDraftChecks] = useState<Partial<Record<CapabilityCheckField, boolean>>>({})
@@ -274,7 +280,7 @@ export const ModelConfiguration = ({
 		supportsPromptCache && (pricingFields.includes("cacheWritesPrice") || pricingFields.includes("cacheReadsPrice"))
 	const defaultContextWindow = defaults?.capabilities?.contextWindow ?? BUILT_IN_CONTEXT_WINDOW
 	const defaultMaxTokens = defaults?.capabilities?.maxTokens ?? BUILT_IN_MAX_TOKENS
-	const contextWindowValue = capabilities.contextWindow ?? defaultContextWindow
+	const contextWindowValue = selectedContextWindowValue ?? capabilities.contextWindow ?? defaultContextWindow
 	const maxTokensValue = capabilities.maxTokens ?? defaultMaxTokens
 	const contextTiers = draftContextTiers
 	const pricingTiers = draftPricingTiers
@@ -388,7 +394,11 @@ export const ModelConfiguration = ({
 								{capabilityFields.includes("contextWindow") && (
 									<DebouncedTextField
 										initialValue={String(contextWindowValue)}
-										onChange={(value) => updateCapability("contextWindow", Number(value) || 0)}
+										onChange={(value) =>
+											onContextWindowUpdate
+												? onContextWindowUpdate(Number(value) || 0)
+												: updateCapability("contextWindow", Number(value) || 0)
+										}
 										placeholder={String(defaultContextWindow)}
 										style={{ flex: 1 }}>
 										<span style={fieldLabelStyle}>Context Window Size</span>

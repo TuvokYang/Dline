@@ -6,6 +6,8 @@ export interface ProviderModelOverrides {
 	pricing?: ModelPricing
 	enableLongContext?: boolean
 	pricingTiersEnabled?: boolean
+	preferContextWindowTier?: boolean
+	contextWindowTiersEnabled?: boolean
 }
 
 /**
@@ -70,6 +72,37 @@ export function selectContextTier(
 	)
 }
 
+/** Update the selected context tier, or the direct window for models without tiers. */
+export function updateSelectedContextWindow(
+	baseCapabilities: ModelCapabilities | undefined,
+	overrideCapabilities: ModelCapabilities | undefined,
+	enableLongContext: boolean | undefined,
+	contextWindow: number,
+	contextWindowTiersEnabled = true,
+): ModelCapabilities {
+	if (!contextWindowTiersEnabled) {
+		const { contextWindowTiers: _staleTiers, ...remainingOverrides } = overrideCapabilities ?? {}
+		return { ...remainingOverrides, contextWindow } as ModelCapabilities
+	}
+
+	const tiers = overrideCapabilities?.contextWindowTiers ?? baseCapabilities?.contextWindowTiers ?? []
+	if (tiers.length === 0) {
+		return mergeCapabilities(overrideCapabilities, { contextWindow })
+	}
+
+	const selectedTier = selectContextTier(
+		{ ...baseCapabilities, ...overrideCapabilities, contextWindowTiers: tiers },
+		enableLongContext,
+	)
+	const { contextWindow: _legacyContextWindow, ...remainingOverrides } = overrideCapabilities ?? {}
+	return {
+		...remainingOverrides,
+		contextWindowTiers: tiers.map((tier) =>
+			tier === selectedTier || tier.id === selectedTier?.id ? { ...tier, contextWindow } : tier,
+		),
+	} as ModelCapabilities
+}
+
 /**
  * Build effective model metadata from registry metadata and provider overrides.
  *
@@ -84,14 +117,18 @@ export function buildEffectiveModelInfo(
 	overrides: ProviderModelOverrides,
 ): ModelInfo {
 	const base: ModelInfo = registryModel ?? ({ id: modelId ?? "" } as ModelInfo)
-	const mergedCapabilities = overrides.capabilities
+	const mergedCapabilitiesValue = overrides.capabilities
 		? (mergeDefined(base.capabilities, overrides.capabilities) as ModelCapabilities)
 		: base.capabilities
-	// An explicit provider context window must win over inherited context tiers;
-	// tier selection only applies when the provider did not override the window.
+	const mergedCapabilities =
+		overrides.contextWindowTiersEnabled === false && mergedCapabilitiesValue
+			? ({ ...mergedCapabilitiesValue, contextWindowTiers: undefined } as ModelCapabilities)
+			: mergedCapabilitiesValue
 	const explicitContextWindow = overrides.capabilities?.contextWindow
 	const contextTier =
-		explicitContextWindow === undefined ? selectContextTier(mergedCapabilities, overrides.enableLongContext) : undefined
+		overrides.preferContextWindowTier === true || explicitContextWindow === undefined
+			? selectContextTier(mergedCapabilities, overrides.enableLongContext)
+			: undefined
 	const capabilities = {
 		...mergedCapabilities,
 		...(contextTier ? { contextWindow: contextTier.contextWindow } : {}),

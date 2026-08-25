@@ -131,5 +131,12 @@ export function resolveProfileModelInfo(
 
 	const baseModel = registryModel ?? profile.modelInfo ?? (profile.modelId ? undefined : defaultModel)
 
-	return buildEffectiveModelInfo(modelId || baseModel?.id, baseModel, resolveProfileOverrides(profile))
+	return buildEffectiveModelInfo(modelId || baseModel?.id, baseModel, {
+		...resolveProfileOverrides(profile),
+		preferContextWindowTier: profile.provider === "anthropic",
+		contextWindowTiersEnabled:
+			profile.provider === "anthropic" && registryModel
+				? Boolean(registryModel.capabilities?.contextWindowTiers?.length)
+				: undefined,
+	})
 }
