@@ -85,7 +85,11 @@ describe("canonical system prompt pipeline", () => {
 		expect(config.webToolsEnabled).toBe(true)
 		expect(config.localWebSearchEnabled).toBe(false)
 		expect(config.serverWebSearchEnabled).toBe(true)
-		expect(env.WEB_TOOLS_CAPABILITIES).toContain("provider-hosted web search")
+		expect(env.WEB_TOOLS_CAPABILITIES).toContain(
+			"Use web search only when the user explicitly requests external search or verification, or when the task cannot be completed reliably without external retrieval.",
+		)
+		expect(env.WEB_TOOLS_CAPABILITIES).toContain("Do not search merely because information may be current or recent.")
+		expect(env.WEB_TOOLS_CAPABILITIES).not.toContain("provider-hosted")
 		expect(env.WEB_TOOLS_CAPABILITIES).not.toContain("local executor")
 	})
 
@@ -111,7 +115,7 @@ describe("canonical system prompt pipeline", () => {
 
 		expect(config.serverWebSearchEnabled).toBe(false)
 		expect(config.localWebSearchEnabled).toBe(false)
-		expect(env.WEB_TOOLS_CAPABILITIES).not.toContain("provider-hosted web search")
+		expect(env.WEB_TOOLS_CAPABILITIES).not.toContain("Use web search only when")
 		expect(env.WEB_TOOLS_CAPABILITIES).not.toContain("local executor")
 	})
 
@@ -126,10 +130,11 @@ describe("canonical system prompt pipeline", () => {
 		).WEB_TOOLS_CAPABILITIES
 
 		expect(local).toContain("local executor")
-		expect(local).not.toContain("provider-hosted web search")
-		expect(hosted).toContain("provider-hosted web search")
+		expect(local).not.toContain("Use web search only when")
+		expect(hosted).toContain("Use web search only when")
+		expect(hosted).not.toContain("provider-hosted")
 		expect(hosted).not.toContain("local executor")
-		expect(disabled).not.toContain("provider-hosted web search")
+		expect(disabled).not.toContain("Use web search only when")
 		expect(disabled).not.toContain("local executor")
 	})
 

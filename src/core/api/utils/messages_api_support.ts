@@ -1,12 +1,21 @@
 import { Anthropic } from "@anthropic-ai/sdk"
 import type { BetaRawMessageStreamEvent } from "@anthropic-ai/sdk/resources/beta/messages/messages"
-import { Tool as AnthropicTool, type ToolUnion as AnthropicToolUnion } from "@anthropic-ai/sdk/resources/messages/messages"
+import {
+	Tool as AnthropicTool,
+	type ToolUnion as AnthropicToolUnion,
+	type WebSearchTool20260209,
+} from "@anthropic-ai/sdk/resources/messages/messages"
 import type { ChatCompletionTool as OpenAITool } from "openai/resources/chat/completions"
 import { ServerTool } from "@/shared/proto/dline/models/metadata"
 import { OutputLimitExceededError } from "../stream/OutputLimitExceededError"
 import { ApiStream } from "../transform/stream"
 
 type AnthropicMessagesStreamEvent = Anthropic.RawMessageStreamEvent | BetaRawMessageStreamEvent
+
+const ANTHROPIC_WEB_SEARCH_TOOL = {
+	type: "web_search_20260209",
+	name: "web_search",
+} satisfies WebSearchTool20260209
 
 function getServerToolUsage(usage: { server_tool_use?: { web_search_requests?: number } | null }) {
 	const webSearchRequests = usage.server_tool_use?.web_search_requests
@@ -24,8 +33,7 @@ export function mergeAnthropicServerTools(
 		.map((tool) => ({ ...tool }))
 
 	if (hostedWebSearch) {
-		// The Dline Anthropic wire contract uses the unversioned hosted-search declaration.
-		merged.push({ type: "web_search" } as unknown as AnthropicToolUnion)
+		merged.push({ ...ANTHROPIC_WEB_SEARCH_TOOL })
 	}
 
 	return merged.length > 0 ? merged : undefined

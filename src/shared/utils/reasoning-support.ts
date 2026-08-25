@@ -27,8 +27,8 @@ export function isClaudeOpusAdaptiveThinkingModel(modelId?: string): boolean {
 	}
 
 	const id = modelId.toLowerCase()
-	// Fable 5, Opus 4.6/4.7/4.8, and Sonnet 5 support adaptive thinking
-	if (id.includes("claude-fable-5") || id.includes("claude-sonnet-5")) {
+	// Fable 5, Opus 5, Opus 4.6/4.7/4.8, and Sonnet 5 support adaptive thinking
+	if (id.includes("claude-fable-5") || id.includes("claude-opus-5") || id.includes("claude-sonnet-5")) {
 		return true
 	}
 	const adaptiveVersions = ["4-6", "4.6", "4-7", "4.7", "4-8", "4.8"]

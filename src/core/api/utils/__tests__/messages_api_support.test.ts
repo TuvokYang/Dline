@@ -113,7 +113,7 @@ describe("messages_api_support", () => {
 
 			expect(converted).to.deep.equal([
 				{ name: "read_file", description: "Read", input_schema: { type: "object" } },
-				{ type: "web_search" },
+				{ type: "web_search_20260209", name: "web_search" },
 			])
 		})
 

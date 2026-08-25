@@ -10,7 +10,9 @@ const SUPPORTED_TOOLS_BY_API_FORMAT: Readonly<Partial<Record<ApiFormat, Readonly
 	[ApiFormat.OPENAI_RESPONSES_WEBSOCKET_MODE]: new Set([ServerTool.WEB_SEARCH]),
 }
 
-export type ServerToolDeclaration = Readonly<{ type: "web_search" }>
+export type ServerToolDeclaration =
+	| Readonly<{ type: "web_search" }>
+	| Readonly<{ type: "web_search_20260209"; name: "web_search" }>
 
 export interface ServerToolProjection {
 	readonly declarations: readonly ServerToolDeclaration[]
@@ -185,7 +187,7 @@ export function projectServerTools(plan: WebSearchRoutingPlan): ServerToolProjec
 			})
 		case ApiFormat.ANTHROPIC_CHAT:
 			return Object.freeze({
-				declarations: Object.freeze([{ type: "web_search" as const }]),
+				declarations: Object.freeze([{ type: "web_search_20260209" as const, name: "web_search" as const }]),
 			})
 		default:
 			return Object.freeze({ declarations: Object.freeze([]) })

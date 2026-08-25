@@ -213,7 +213,7 @@ describe("AnthropicHandler", () => {
 					description: "Read",
 					input_schema: { type: "object", properties: {} },
 				},
-				{ type: "web_search" },
+				{ type: "web_search_20260209", name: "web_search" },
 			])
 			expect(standardCreate.mock.calls[0]?.[0]?.tool_choice).to.deep.equal({ type: "any" })
 			expect(handler.supportsServerTool(ServerTool.WEB_SEARCH)).to.equal(true)
@@ -242,7 +242,7 @@ describe("AnthropicHandler", () => {
 			)) {
 			}
 
-			expect(standardCreate.mock.calls[0]?.[0]?.tools).to.deep.equal([{ type: "web_search" }])
+			expect(standardCreate.mock.calls[0]?.[0]?.tools).to.deep.equal([{ type: "web_search_20260209", name: "web_search" }])
 			should(standardCreate.mock.calls[0]?.[0]?.tool_choice).equal(undefined)
 		})
 
@@ -322,6 +322,31 @@ describe("AnthropicHandler", () => {
 			expect(callArgs?.betas).to.deep.equal([ANTHROPIC_FAST_MODE_BETA, "context-1m-2025-08-07"])
 			expect(callArgs?.speed).to.equal("fast")
 			expect(callArgs?.stream).to.equal(true)
+		})
+
+		it("should keep the Claude Opus 5 model id without a legacy long-context suffix or beta header", async () => {
+			const handler = new AnthropicHandler({
+				profile: ApiProfile.create({
+					provider: "anthropic",
+					apiKey: "test-api-key",
+					modelId: "claude-opus-5",
+					anthropic: { enableLongContext: true, reasoning: { effort: "high" } },
+				}),
+				mode: "act",
+			})
+			const standardCreate = vi.fn().mockResolvedValue(createAsyncIterable())
+			vi.spyOn(handler as unknown as { ensureClient: () => unknown }, "ensureClient").mockReturnValue({
+				messages: { create: standardCreate },
+				beta: { messages: { _client: {}, create: vi.fn().mockResolvedValue(createAsyncIterable()) } },
+			})
+
+			for await (const _chunk of handler.createMessage("system prompt", [{ role: "user", content: "Hello" }])) {
+			}
+
+			const requestBody = standardCreate.mock.calls[0]?.[0] as Record<string, unknown> | undefined
+			expect(requestBody?.model).to.equal("claude-opus-5")
+			expect(requestBody?.thinking).to.deep.equal({ type: "adaptive" })
+			should(standardCreate.mock.calls[0]?.[1]).equal(undefined)
 		})
 
 		it("should append the long-context suffix and beta header at the API boundary", async () => {

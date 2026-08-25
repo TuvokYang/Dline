@@ -270,7 +270,7 @@ function searchMechanisms(consumption: MockApiConsumption): SearchMechanisms {
 		const type = tool.type
 		const name = tool.name
 		const functionName = (tool.function as { name?: unknown } | undefined)?.name
-		if (type === "web_search" || type === "web_search_20250305") hosted.push(tool)
+		if (type === "web_search" || type === "web_search_20260209") hosted.push(tool)
 		if (
 			(type === "function" && (functionName === "web_search" || name === "web_search")) ||
 			(type === undefined && name === "web_search")
@@ -979,7 +979,7 @@ e2e(
 )
 
 e2e(
-	"ServerTool runtime - Anthropic Auto advertises plain web_search without inventing a hosted action",
+	"ServerTool runtime - Anthropic Auto advertises versioned web search without inventing a hosted action",
 	async ({ dlineDir, dlineDocsDir, dlineHomeDir, helper, openVSCode, server, userDataDir, workspaceDir }) => {
 		e2e.setTimeout(180_000)
 		expectIsolatedDirectories(dlineDir, dlineHomeDir, dlineDocsDir)
@@ -1008,7 +1008,7 @@ e2e(
 				async () => server.getMockConsumptions("anthropic-messages")[0],
 				30_000,
 			)
-			expect(searchMechanisms(firstRequest).hosted).toEqual([{ type: "web_search" }])
+			expect(searchMechanisms(firstRequest).hosted).toEqual([{ type: "web_search_20260209", name: "web_search" }])
 			await expect(opened.sidebar.getByText("Dline searched the web for:", { exact: true })).toHaveCount(0)
 			await expect(opened.sidebar.getByTestId("web-search-card")).toHaveCount(0)
 			expect(server.getSearxngSearchRequests()).toHaveLength(0)

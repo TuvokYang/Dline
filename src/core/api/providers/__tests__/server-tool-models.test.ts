@@ -14,4 +14,30 @@ describe("built-in hosted Web Search metadata", () => {
 			expect(model.capabilities?.tools).toContain(ServerTool.WEB_SEARCH)
 		}
 	})
+
+	it("declares the official Claude Opus 5 model metadata", () => {
+		const model = anthropicModels["claude-opus-5"]
+
+		expect(model).toBeDefined()
+		expect(model).toMatchObject({
+			id: "claude-opus-5",
+			name: "claude-opus-5",
+			capabilities: {
+				contextWindow: 1_000_000,
+				maxTokens: 128_000,
+				supportsImages: true,
+				supportsPromptCache: true,
+				supportsReasoning: true,
+				supportsTools: true,
+				tools: [ServerTool.WEB_SEARCH],
+			},
+			pricing: {
+				inputPrice: 5,
+				outputPrice: 25,
+				cacheWritesPrice: 6.25,
+				cacheReadsPrice: 0.5,
+			},
+		})
+		expect(model.capabilities?.contextWindowTiers).toBeUndefined()
+	})
 })

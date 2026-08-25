@@ -144,16 +144,17 @@ describe("Standard/Lite transport and capability behavior matrix", () => {
 		expect(exposes(local, transport, "web_fetch")).toBe(true)
 		expect(exposes(local, transport, "web_search")).toBe(true)
 		expect(local.systemPrompt).toContain("local executor")
-		expect(local.systemPrompt).not.toContain("provider-hosted web search")
+		expect(local.systemPrompt).not.toContain("Use web search only when")
 
 		expect(exposes(hosted, transport, "web_fetch")).toBe(true)
 		expect(exposes(hosted, transport, "web_search")).toBe(false)
-		expect(hosted.systemPrompt).toContain("provider-hosted web search")
+		expect(hosted.systemPrompt).toContain("Use web search only when")
+		expect(hosted.systemPrompt).not.toContain("provider-hosted")
 		expect(hosted.systemPrompt).not.toContain("local executor")
 
 		expect(exposes(disabled, transport, "web_fetch")).toBe(true)
 		expect(exposes(disabled, transport, "web_search")).toBe(false)
-		expect(disabled.systemPrompt).not.toContain("provider-hosted web search")
+		expect(disabled.systemPrompt).not.toContain("Use web search only when")
 		expect(disabled.systemPrompt).not.toContain("local executor")
 	})
 
@@ -163,7 +164,7 @@ describe("Standard/Lite transport and capability behavior matrix", () => {
 		})
 
 		expect(exposes(hosted, transport, "web_search")).toBe(false)
-		expect(hosted.systemPrompt).not.toContain("provider-hosted web search")
+		expect(hosted.systemPrompt).not.toContain("Use web search only when")
 		expect(hosted.systemPrompt).not.toContain("local executor")
 	})
 

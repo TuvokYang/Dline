@@ -60,6 +60,25 @@ const CLAUDE_FABLE_1M_TIERS = [
 ]
 
 export const anthropicModels: Record<string, ModelInfo> = {
+	"claude-opus-5": {
+		id: "claude-opus-5",
+		name: "claude-opus-5",
+		capabilities: {
+			supportsTools: true,
+			tools: [ServerTool.WEB_SEARCH],
+			maxTokens: 128_000,
+			contextWindow: 1_000_000,
+			supportsImages: true,
+			supportsPromptCache: true,
+			supportsReasoning: true,
+		},
+		pricing: {
+			inputPrice: 5.0,
+			outputPrice: 25.0,
+			cacheWritesPrice: 6.25,
+			cacheReadsPrice: 0.5,
+		},
+	},
 	"claude-fable-5": {
 		id: "claude-fable-5",
 		name: "claude-fable-5",

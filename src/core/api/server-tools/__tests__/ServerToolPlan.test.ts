@@ -111,11 +111,11 @@ describe("resolveServerToolPlan", () => {
 		expect(projection.declarations[0]).not.toHaveProperty("function")
 	})
 
-	it("projects web search as an Anthropic server tool", () => {
+	it("projects the versioned Anthropic web search server tool", () => {
 		const projection = projectServerTools(hostedPlan(ApiFormat.ANTHROPIC_CHAT))
 
 		expect(projection).toEqual({
-			declarations: [{ type: "web_search" }],
+			declarations: [{ type: "web_search_20260209", name: "web_search" }],
 		})
 	})
 
