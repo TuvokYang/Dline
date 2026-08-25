@@ -144,6 +144,15 @@ describe("StateManager — Per-Task Settings Isolation", () => {
 	})
 
 	describe("getApiConfiguration with per-task overrides", () => {
+		it("should project the canonical workspace identity into every API configuration", () => {
+			const current = sm.getApiConfiguration()
+			const explicitTask = sm.getApiConfigurationForTask("task-A")
+			if (!current.workspaceId || !explicitTask.workspaceId) throw new Error("Workspace identity was not projected")
+
+			current.workspaceId.should.match(/^dline_workspace_[0-9a-f]{32}$/)
+			explicitTask.workspaceId.should.equal(current.workspaceId)
+		})
+
 		it("should return per-task provider in ApiConfiguration", () => {
 			sm.setGlobalState("planModeProfile" as any, "openrouter" as any)
 			sm.setActiveTask("task-A")

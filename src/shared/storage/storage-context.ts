@@ -1,3 +1,4 @@
+import crypto from "node:crypto"
 import fsSync from "node:fs"
 import path from "node:path"
 import { getDlineDataDir, getDlineDocumentsPathSync } from "@core/storage/disk"
@@ -46,6 +47,9 @@ export interface StorageContext {
 	/** The resolved path to the workspace storage directory (contains workspaceState.json) */
 	readonly workspaceStoragePath: string
 
+	/** Stable, non-sensitive identity derived from the resolved workspace storage boundary. */
+	readonly workspaceId: string
+
 	/** The task history JSONL path owned by this storage boundary. */
 	readonly taskHistoryPath: string
 }
@@ -88,6 +92,16 @@ function hashString(str: string): string {
 		hash = hash & hash // Convert to 32-bit integer
 	}
 	return Math.abs(hash).toString(16).substring(0, 8)
+}
+
+/** Derive a stable, non-sensitive identity from the resolved workspace storage boundary. */
+export function createWorkspaceId(workspaceStoragePath: string): string {
+	const isWindowsPath = /^[a-zA-Z]:[\\/]/.test(workspaceStoragePath) || workspaceStoragePath.includes("\\")
+	const normalizedPath = isWindowsPath
+		? workspaceStoragePath.replaceAll("\\", "/").replace(/\/+$/, "").toLowerCase()
+		: path.resolve(workspaceStoragePath).replace(/\/+$/, "")
+	const identifier = crypto.createHash("sha256").update(normalizedPath, "utf8").digest("hex").slice(0, 32)
+	return `dline_workspace_${identifier}`
 }
 
 /**
@@ -145,6 +159,7 @@ export function createStorageContext(opts: StorageContextOptions = {}): StorageC
 		workspaceState: new ClineFileStorage(path.join(workspaceDir, "workspaceState.json"), "WorkspaceState"),
 		dataDir,
 		workspaceStoragePath: workspaceDir,
+		workspaceId: createWorkspaceId(workspaceDir),
 		taskHistoryPath,
 	}
 }

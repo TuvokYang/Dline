@@ -70,6 +70,8 @@ export interface ApiConfiguration {
 	planModeServiceTierOverride?: TaskServiceTierOverride
 	/** Task-local OpenAI service tier override for act mode. */
 	actModeServiceTierOverride?: TaskServiceTierOverride
+	/** Stable workspace identity for provider-side routing affinity. */
+	workspaceId?: string
 	/** Task identifier */
 	ulid?: string
 	/** Retry callback */

@@ -2,13 +2,18 @@ import { ApiFormat, ServerTool } from "@shared/proto/dline/models/metadata"
 import { ApiProfile } from "@shared/proto/dline/profile"
 import { OpenAiPromptCacheMode, OpenAiProviderConfig } from "@shared/proto/dline/provider/openai"
 import { OpenAiCodexProviderConfig } from "@shared/proto/dline/provider/openai_codex"
+import {
+	bindProviderAttemptScope,
+	type ProviderAttemptObserver,
+	type ProviderAttemptTerminalStatus,
+} from "@shared/provider-attempt-observer"
 import { expect } from "chai"
 import OpenAI from "openai"
 import should from "should"
 import { afterEach, describe, it, vi } from "vitest"
 import { openAiCodexOAuthManager } from "@/integrations/openai-codex/oauth"
 import type { ClineAssistantToolUseBlock, ClineStorageMessage, ClineUserToolResultContentBlock } from "@/shared/messages/content"
-import { mockFetchForTesting } from "@/shared/net"
+import { mockFetchForTesting, providerFetch } from "@/shared/net"
 import { OutputLimitExceededError } from "../../stream/OutputLimitExceededError"
 import { StreamIdleTimeoutError } from "../../stream/openai-responses-stream-monitor"
 import { OpenAiHandler } from "../openai"
@@ -25,6 +30,27 @@ const createAsyncIterable = (data: readonly unknown[] = []) => ({
 		yield* data
 	},
 })
+
+function createProviderAttemptObserver() {
+	const statuses: ProviderAttemptTerminalStatus[] = []
+	let nextHandle = 0
+	const observer: ProviderAttemptObserver<number> = {
+		beginAttempt: () => nextHandle++,
+		finishAttempt: (_handle, status) => {
+			statuses.push(status)
+		},
+	}
+	return { observer, statuses }
+}
+
+function createTransportBackedResponsesCreate() {
+	return vi.fn(async (_params: OpenAI.Responses.ResponseCreateParamsStreaming, _options?: { signal?: AbortSignal }) => {
+		const response = await providerFetch("https://compatible.example/v1/responses", { method: "POST" })
+		const body = await response.text()
+		if (!response.ok) throw Object.assign(new Error(body), { status: response.status })
+		return createAsyncIterable()
+	})
+}
 
 describe("OpenAiHandler", () => {
 	afterEach(() => {
@@ -152,6 +178,8 @@ describe("OpenAiHandler", () => {
 					openai: OpenAiProviderConfig.create({ capabilities: { maxTokens: 12_345 } }),
 				}),
 				mode: "act",
+				workspaceId: "dline_workspace_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+				ulid: "task-compaction",
 			})
 			const create = vi.fn().mockResolvedValue(createAsyncIterable())
 			vi.spyOn(handler as unknown as { ensureClient: () => unknown }, "ensureClient").mockReturnValue({
@@ -164,7 +192,13 @@ describe("OpenAiHandler", () => {
 			}
 
 			const requestBody = create.mock.calls[0]?.[0] as Record<string, unknown> | undefined
+			const requestOptions = create.mock.calls[0]?.[1] as { headers?: Record<string, string> }
 			expect(requestBody?.max_tokens).to.equal(30_000)
+			expect(requestOptions.headers).to.deep.equal({
+				"session-id": "dline_workspace_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+				"thread-id": "task-compaction",
+				"x-client-request-id": "task-compaction",
+			})
 		})
 
 		it("emits a completed tool-call boundary only for compaction Chat requests", async () => {
@@ -437,6 +471,8 @@ describe("OpenAiHandler", () => {
 					openai: config,
 				}),
 				mode: "act",
+				workspaceId: "dline_workspace_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+				ulid: "01ARZ3NDEKTSV4RRFFQ69G5FAV",
 			})
 			const protocolError = Object.assign(new Error("prompt_cache_breakpoint is not supported on this model"), {
 				status: 400,
@@ -452,6 +488,14 @@ describe("OpenAiHandler", () => {
 			expect(create.mock.calls).to.have.length(2)
 			const explicitRequest = create.mock.calls[0]?.[0] as OpenAI.Chat.ChatCompletionCreateParamsStreaming
 			const fallbackRequest = create.mock.calls[1]?.[0] as OpenAI.Chat.ChatCompletionCreateParamsStreaming
+			const explicitOptions = create.mock.calls[0]?.[1] as { headers?: Record<string, string> }
+			const fallbackOptions = create.mock.calls[1]?.[1] as { headers?: Record<string, string> }
+			expect(explicitOptions.headers).to.deep.equal({
+				"session-id": "dline_workspace_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+				"thread-id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+				"x-client-request-id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+			})
+			expect(fallbackOptions.headers).to.deep.equal(explicitOptions.headers)
 			expect(explicitRequest.prompt_cache_options).to.deep.equal({ mode: "explicit" })
 			expect(JSON.stringify(explicitRequest.messages)).to.contain("prompt_cache_breakpoint")
 			expect(fallbackRequest.prompt_cache_options).to.equal(undefined)
@@ -534,16 +578,28 @@ describe("OpenAiHandler", () => {
 				}),
 				mode: "act",
 			})
-			const upstreamError = Object.assign(new Error("502 status code (no body)"), { status: 502 })
-			const responsesCreate = vi.fn().mockRejectedValueOnce(upstreamError).mockResolvedValueOnce(createAsyncIterable())
+			const responsesCreate = createTransportBackedResponsesCreate()
 			vi.spyOn(handler as unknown as { ensureClient: () => unknown }, "ensureClient").mockReturnValue({
 				responses: { create: responsesCreate },
 			})
+			const transport = vi
+				.fn<typeof globalThis.fetch>()
+				.mockResolvedValueOnce(new Response("502 status code (no body)", { status: 502 }))
+				.mockResolvedValueOnce(new Response("", { status: 200 }))
+			const { observer, statuses } = createProviderAttemptObserver()
 
-			for await (const _chunk of handler.createMessage("system prompt", [{ role: "user", content: "Hello" }])) {
-			}
+			await mockFetchForTesting(transport, async () => {
+				const stream = bindProviderAttemptScope(
+					handler.createMessage("system prompt", [{ role: "user", content: "Hello" }]),
+					observer,
+				)
+				for await (const _chunk of stream) {
+				}
+			})
 
 			expect(responsesCreate.mock.calls).to.have.length(2)
+			expect(transport.mock.calls).to.have.length(2)
+			expect(statuses).to.deep.equal(["failed", "completed"])
 		})
 
 		it("does not retry an OpenAI Responses 400 before the stream starts", async () => {
@@ -668,6 +724,7 @@ describe("OpenAiHandler", () => {
 					openai: OpenAiProviderConfig.create({ apiFormat: ApiFormat.OPENAI_RESPONSES }),
 				}),
 				mode: "act",
+				workspaceId: "dline_workspace_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 				ulid: "task-001",
 			})
 			const responsesCreate = vi.fn().mockResolvedValue(createAsyncIterable())
@@ -741,20 +798,41 @@ describe("OpenAiHandler", () => {
 					openai: config,
 				}),
 				mode: "act",
+				workspaceId: "dline_workspace_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 				ulid: "task-001",
 			})
-			const protocolError = Object.assign(new Error("Unknown parameter: prompt_cache_options"), { status: 400 })
-			const responsesCreate = vi.fn().mockRejectedValueOnce(protocolError).mockResolvedValue(createAsyncIterable())
+			const responsesCreate = createTransportBackedResponsesCreate()
 			vi.spyOn(handler as unknown as { ensureClient: () => unknown }, "ensureClient").mockReturnValue({
 				responses: { create: responsesCreate },
 			})
+			const transport = vi
+				.fn<typeof globalThis.fetch>()
+				.mockResolvedValueOnce(new Response("Unknown parameter: prompt_cache_options", { status: 400 }))
+				.mockResolvedValueOnce(new Response("", { status: 200 }))
+			const { observer, statuses } = createProviderAttemptObserver()
 
-			for await (const _chunk of handler.createMessage("system prompt", [{ role: "user", content: "Hello" }])) {
-			}
+			await mockFetchForTesting(transport, async () => {
+				const stream = bindProviderAttemptScope(
+					handler.createMessage("system prompt", [{ role: "user", content: "Hello" }]),
+					observer,
+				)
+				for await (const _chunk of stream) {
+				}
+			})
 
 			expect(responsesCreate.mock.calls).to.have.length(2)
+			expect(transport.mock.calls).to.have.length(2)
+			expect(statuses).to.deep.equal(["failed", "completed"])
 			const explicitRequest = responsesCreate.mock.calls[0]?.[0] as OpenAI.Responses.ResponseCreateParamsStreaming
 			const fallbackRequest = responsesCreate.mock.calls[1]?.[0] as OpenAI.Responses.ResponseCreateParamsStreaming
+			const explicitOptions = responsesCreate.mock.calls[0]?.[1] as { headers?: Record<string, string> }
+			const fallbackOptions = responsesCreate.mock.calls[1]?.[1] as { headers?: Record<string, string> }
+			expect(explicitOptions.headers).to.deep.equal({
+				"session-id": "dline_workspace_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+				"thread-id": "task-001",
+				"x-client-request-id": "task-001",
+			})
+			expect(fallbackOptions.headers).to.deep.equal(explicitOptions.headers)
 			expect(explicitRequest.instructions).to.equal(undefined)
 			expect(explicitRequest.prompt_cache_options).to.deep.equal({ mode: "explicit" })
 			expect(explicitRequest.prompt_cache_key).to.match(/^dline_cache_[0-9a-f]{32}$/)
@@ -824,6 +902,8 @@ describe("OpenAiHandler", () => {
 					}),
 				}),
 				mode: "act",
+				workspaceId: "dline_workspace_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+				ulid: "task-compaction",
 			})
 			const responsesCreate = vi.fn().mockResolvedValue(createAsyncIterable())
 			vi.spyOn(handler as unknown as { ensureClient: () => unknown }, "ensureClient").mockReturnValue({
@@ -836,7 +916,13 @@ describe("OpenAiHandler", () => {
 			}
 
 			const requestBody = responsesCreate.mock.calls[0]?.[0] as Record<string, unknown>
+			const requestOptions = responsesCreate.mock.calls[0]?.[1] as { headers?: Record<string, string> }
 			expect(requestBody.max_output_tokens).to.equal(30_000)
+			expect(requestOptions.headers).to.deep.equal({
+				"session-id": "dline_workspace_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+				"thread-id": "task-compaction",
+				"x-client-request-id": "task-compaction",
+			})
 		})
 
 		it("projects hosted web search exactly once and removes the local function declaration", async () => {

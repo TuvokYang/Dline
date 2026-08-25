@@ -26,9 +26,9 @@ import { initializeDistinctId } from "@/services/logging/distinctId"
 import { Logger } from "@/shared/services/Logger"
 import { fileExistsAtPath } from "@/utils/fs"
 import { AgentConfigLoader } from "../task/tools/subagent/AgentConfigLoader"
+import { openBufferedJsonlStore } from "./backend/jsonl/JsonlUnifyStore"
 import { readTaskSettingsFromStorage, writeTaskHistoryToState, writeTaskSettingsToStorage } from "./disk"
 import { STATE_MANAGER_NOT_INITIALIZED } from "./error-messages"
-import { JsonlIndexedStore } from "./JsonlIndexedStore"
 import { filterAllowedRemoteConfigFields } from "./remote-config/utils"
 import {
 	getAccountApiKey,
@@ -156,7 +156,7 @@ export class StateManager {
 	// Callbacks to sync external state changes — multiple controllers may register.
 	private onSyncExternalChangeCallbacks = new Set<(event: StateSyncEvent) => void | Promise<void>>()
 
-	/** TaskHistory instance (cross-process safe via JsonlIndexedStore). */
+	/** TaskHistory instance backed by the buffered raw JSONL store. */
 	private _taskHistory: TaskHistory | null = null
 
 	/** @deprecated Use the Set-based callbacks below. Kept for external compatibility. */
@@ -218,7 +218,11 @@ export class StateManager {
 				}
 			}
 
-			const store = await JsonlIndexedStore.open<HistoryItem>(filePath, 10000) // 10s flush for global file
+			const store = await openBufferedJsonlStore<HistoryItem>(filePath, {
+				schemaId: "task-history",
+				flushIntervalMs: 10_000,
+				acceptInitialItem: (item) => item.ts > 0,
+			})
 			const taskHistory = new TaskHistory(store)
 			await taskHistory.startWatcher(filePath)
 			taskHistory.onChange(async () => {
@@ -1612,6 +1616,7 @@ export class StateManager {
 		})
 
 		return {
+			workspaceId: this.storage.workspaceId,
 			planModeProfileId: profileBindings.plan?.profileId,
 			planModeProfile: profileBindings.plan?.profileName,
 			actModeProfileId: profileBindings.act?.profileId,
@@ -1645,7 +1650,7 @@ export class StateManager {
 		return { ...this.workspaceStateCache }
 	}
 
-	/** TaskHistory instance (cross-process safe via JsonlIndexedStore + FileLock). */
+	/** TaskHistory instance backed by the buffered raw JSONL store. */
 	get taskHistory(): TaskHistory {
 		if (!this._taskHistory) {
 			throw new Error("TaskHistory not initialized.")

@@ -75,8 +75,14 @@ export class OpenAiHandler implements ApiHandler {
 
 	constructor(private ctx: ApiHandlerContext) {}
 
-	private get sessionHeaders(): Record<string, string> | undefined {
-		return this.ctx.ulid ? { "session-id": this.ctx.ulid } : undefined
+	private get routingHeaders(): Record<string, string> | undefined {
+		const headers: Record<string, string> = {}
+		if (this.ctx.workspaceId) headers["session-id"] = this.ctx.workspaceId
+		if (this.ctx.ulid) {
+			headers["thread-id"] = this.ctx.ulid
+			headers["x-client-request-id"] = this.ctx.ulid
+		}
+		return Object.keys(headers).length > 0 ? headers : undefined
 	}
 
 	private get config() {
@@ -344,7 +350,7 @@ export class OpenAiHandler implements ApiHandler {
 			(mode) =>
 				(client.chat.completions as any).create(buildRequestParams(mode), {
 					signal: requestController.signal,
-					...(this.sessionHeaders ? { headers: this.sessionHeaders } : {}),
+					...(this.routingHeaders ? { headers: this.routingHeaders } : {}),
 				}),
 		)
 
@@ -432,7 +438,7 @@ export class OpenAiHandler implements ApiHandler {
 		try {
 			return await client.responses.create(params, {
 				signal,
-				...(this.sessionHeaders ? { headers: this.sessionHeaders } : {}),
+				...(this.routingHeaders ? { headers: this.routingHeaders } : {}),
 			})
 		} catch (error) {
 			const status =
@@ -448,7 +454,7 @@ export class OpenAiHandler implements ApiHandler {
 			await setTimeoutPromise(retryDelay, undefined, { signal })
 			return await client.responses.create(params, {
 				signal,
-				...(this.sessionHeaders ? { headers: this.sessionHeaders } : {}),
+				...(this.routingHeaders ? { headers: this.routingHeaders } : {}),
 			})
 		}
 	}

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, it, vi } from "vitest"
 import "should"
 import { ClineFileStorage } from "@shared/storage/ClineFileStorage"
-import { createStorageContext, type StorageContext } from "@shared/storage/storage-context"
+import { createStorageContext, createWorkspaceId, type StorageContext } from "@shared/storage/storage-context"
 import fs from "fs"
 import os from "os"
 import path from "path"
@@ -436,6 +436,9 @@ describe("createStorageContext", () => {
 		const ctx2 = createStorageContext({ clineDir: tempDir, workspacePath: "/some/project" })
 
 		ctx1.workspaceStoragePath.should.equal(ctx2.workspaceStoragePath)
+		ctx1.workspaceId.should.equal(ctx2.workspaceId)
+		ctx1.workspaceId.should.match(/^dline_workspace_[0-9a-f]{32}$/)
+		ctx1.workspaceId.includes("some/project").should.be.false()
 	})
 
 	it("should produce different hashes for different workspaces", () => {
@@ -443,6 +446,13 @@ describe("createStorageContext", () => {
 		const ctx2 = createStorageContext({ clineDir: tempDir, workspacePath: "/project-b" })
 
 		ctx1.workspaceStoragePath.should.not.equal(ctx2.workspaceStoragePath)
+	})
+
+	it("should normalize equivalent Windows workspace storage paths before deriving workspace identity", () => {
+		const lower = createWorkspaceId("C:\\Users\\Example\\Workspace\\")
+		const mixed = createWorkspaceId("c:/users/example/workspace")
+
+		lower.should.equal(mixed)
 	})
 
 	it("should use explicit workspaceStorageDir when provided", () => {
@@ -454,6 +464,7 @@ describe("createStorageContext", () => {
 		})
 
 		ctx.workspaceStoragePath.should.equal(explicitDir)
+		ctx.workspaceId.should.match(/^dline_workspace_[0-9a-f]{32}$/)
 	})
 
 	it("should store and retrieve values correctly", () => {

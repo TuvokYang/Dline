@@ -66,6 +66,7 @@ export type CommonApiHandlerOptions = {
 export interface ApiHandlerContext {
 	profile: ApiProfile
 	mode: Mode
+	workspaceId?: string
 	ulid?: string
 	onRetryAttempt?: (attempt: number, maxRetries: number, delay: number, error: unknown) => void
 	requestTimeoutMs?: number
@@ -300,6 +301,7 @@ export function buildApiHandlerFromProfile(configuration: ApiConfiguration, mode
 	return createHandlerForProvider({
 		profile: runtimeProfile,
 		mode,
+		workspaceId: configuration.workspaceId,
 		ulid: configuration.ulid,
 		onRetryAttempt: configuration.onRetryAttempt,
 		requestTimeoutMs: configuration.requestTimeoutMs,
