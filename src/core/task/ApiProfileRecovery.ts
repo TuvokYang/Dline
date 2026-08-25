@@ -127,7 +127,7 @@ function validateProfile(profile: ApiProfile): ApiProfileValidity {
 	if (profile.provider === "openai" && profile.openai?.azureIdentity) {
 		const baseUrl = profile.baseUrl?.toLowerCase() ?? ""
 		const isAzureEndpoint = baseUrl.includes("azure.com") || baseUrl.includes("azure.us")
-		if (!isAzureEndpoint && !profile.openai.azureApiVersion) {
+		if (!isAzureEndpoint) {
 			return invalidProfile(
 				profile,
 				"configuration_invalid",

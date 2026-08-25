@@ -192,6 +192,28 @@ describe("resolveTaskApiProfile", () => {
 		expect(result.status).toBe("valid")
 	})
 
+	it("requires an Azure endpoint even when an Azure API version is configured", async () => {
+		const result = await validateApiProfileCredentials({
+			id: "azure-id",
+			name: "azure-profile",
+			provider: "openai",
+			modelId: "gpt-test",
+			apiKey: "",
+			baseUrl: "https://api.example.test",
+			enabled: true,
+			openai: {
+				azureApiVersion: "2025-04-01-preview",
+				azureIdentity: true,
+			} as ApiProfile["openai"],
+		} as ApiProfile)
+
+		expect(result).toMatchObject({
+			status: "invalid",
+			reason: "configuration_invalid",
+			message: 'Profile not valid: "azure-profile" requires an Azure endpoint for Azure Identity authentication.',
+		})
+	})
+
 	it("requires SAP AI Core credentials from its provider config", async () => {
 		const result = await validateApiProfileCredentials({
 			id: "sap-id",

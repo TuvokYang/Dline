@@ -71,9 +71,26 @@ async function setAzureIdentity(
 	dlineDir: string,
 	profileName: string,
 	enabled: boolean,
+	azureApiVersion?: string | null,
 ): Promise<void> {
 	await openApiSettings(page, sidebar)
 	const card = await openProfileEditor(sidebar, profileName)
+	if (azureApiVersion !== undefined) {
+		const versionToggle = card.locator("vscode-checkbox").filter({ hasText: "Set Azure API version" })
+		await expect(versionToggle).toHaveCount(1)
+		const versionEnabled = await versionToggle.evaluate((element) => Boolean((element as HTMLInputElement).checked))
+		if (azureApiVersion === null) {
+			if (versionEnabled) await versionToggle.click()
+			await waitForProfile(dlineDir, profileName, (profile) => !profile.openai?.azureApiVersion)
+		} else {
+			if (!versionEnabled) await versionToggle.click()
+			const versionField = card.locator('vscode-text-field[placeholder="Default: 2024-10-01-preview"] input')
+			await expect(versionField).toHaveCount(1)
+			await versionField.fill(azureApiVersion)
+			await versionField.press("Tab")
+			await waitForProfile(dlineDir, profileName, (profile) => profile.openai?.azureApiVersion === azureApiVersion)
+		}
+	}
 	const checkbox = card.locator("vscode-checkbox").filter({ hasText: "Use Azure Identity Authentication" })
 	await expect(checkbox).toHaveCount(1)
 	await expect(checkbox).toBeVisible()
@@ -161,7 +178,7 @@ e2e(
 		const error = profileError(profileName)
 
 		await helper.signin(sidebar)
-		await setAzureIdentity(page, sidebar, dlineDir, profileName, true)
+		await setAzureIdentity(page, sidebar, dlineDir, profileName, true, "2025-04-01-preview")
 		await sendTask(sidebar, taskText)
 
 		const retry = sidebar.locator('vscode-button[aria-label="Retry"]')
@@ -169,7 +186,7 @@ e2e(
 		await expect(retry).toBeVisible()
 		expect(server.getRequestCount("openai-compatible-chat")).toBe(0)
 
-		await setAzureIdentity(page, sidebar, dlineDir, profileName, false)
+		await setAzureIdentity(page, sidebar, dlineDir, profileName, false, null)
 		server.enqueueResponses("openai-compatible-chat", {
 			type: "tool",
 			name: "attempt_completion",
@@ -181,7 +198,10 @@ e2e(
 		await expect(sidebar.getByText(completion, { exact: false }).last()).toBeVisible({ timeout: 60_000 })
 		await expect(sidebar.getByTestId("error-retry-box")).toHaveCount(0)
 		await expect.poll(() => server.getRequestCount("openai-compatible-chat")).toBe(1)
-		expect(server.getMockConsumptions("openai-compatible-chat")[0]?.contractError).toBeUndefined()
+		const consumption = server.getMockConsumptions("openai-compatible-chat")[0]
+		if (!consumption) throw new Error("Missing OpenAI Chat mock consumption")
+		expect(consumption.contractError).toBeUndefined()
+		expect(JSON.stringify(consumption.requestBody).split(taskText)).toHaveLength(2)
 		await E2ETestHelper.expectNoUnexpectedDlineErrors(userDataDir, [/Profile not valid:/])
 	},
 )
