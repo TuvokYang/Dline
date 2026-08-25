@@ -17,7 +17,7 @@ import type {
 } from "openai/resources/chat/completions"
 import { buildExternalBasicHeaders } from "@/services/EnvUtils"
 import { ClineStorageMessage } from "@/shared/messages/content"
-import { createOpenAIClient, fetch } from "@/shared/net"
+import { createOpenAIClient, providerFetch } from "@/shared/net"
 import { isO1Model } from "@/shared/resolve-prompt-profile"
 import { Logger } from "@/shared/services/Logger"
 import { ApiHandler, ApiHandlerContext, type ApiRequestOptions } from "../index"
@@ -74,6 +74,10 @@ export class OpenAiHandler implements ApiHandler {
 	private explicitPromptCacheRejected = false
 
 	constructor(private ctx: ApiHandlerContext) {}
+
+	private get sessionHeaders(): Record<string, string> | undefined {
+		return this.ctx.ulid ? { "session-id": this.ctx.ulid } : undefined
+	}
 
 	private get config() {
 		return this.ctx.profile.openai
@@ -187,7 +191,7 @@ export class OpenAiHandler implements ApiHandler {
 								...externalHeaders,
 								...this.openAiHeaders,
 							},
-							fetch,
+							fetch: providerFetch,
 						})
 					} else {
 						this.client = new AzureOpenAI({
@@ -199,7 +203,7 @@ export class OpenAiHandler implements ApiHandler {
 								...externalHeaders,
 								...this.openAiHeaders,
 							},
-							fetch,
+							fetch: providerFetch,
 						})
 					}
 				} else {
@@ -337,7 +341,11 @@ export class OpenAiHandler implements ApiHandler {
 
 		const stream = await this.createWithPromptCacheFallback<AsyncIterable<ChatCompletionChunk>>(
 			this.promptCacheProjectionMode,
-			(mode) => (client.chat.completions as any).create(buildRequestParams(mode), { signal: requestController.signal }),
+			(mode) =>
+				(client.chat.completions as any).create(buildRequestParams(mode), {
+					signal: requestController.signal,
+					...(this.sessionHeaders ? { headers: this.sessionHeaders } : {}),
+				}),
 		)
 
 		const toolCallProcessor = new ToolCallProcessor()
@@ -422,7 +430,10 @@ export class OpenAiHandler implements ApiHandler {
 		signal?: AbortSignal,
 	) {
 		try {
-			return await client.responses.create(params, { signal })
+			return await client.responses.create(params, {
+				signal,
+				...(this.sessionHeaders ? { headers: this.sessionHeaders } : {}),
+			})
 		} catch (error) {
 			const status =
 				typeof error === "object" && error !== null && "status" in error
@@ -435,7 +446,10 @@ export class OpenAiHandler implements ApiHandler {
 			const retryDelay = 250
 			this.ctx.onRetryAttempt?.(1, 2, retryDelay, error)
 			await setTimeoutPromise(retryDelay, undefined, { signal })
-			return await client.responses.create(params, { signal })
+			return await client.responses.create(params, {
+				signal,
+				...(this.sessionHeaders ? { headers: this.sessionHeaders } : {}),
+			})
 		}
 	}
 

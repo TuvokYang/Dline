@@ -6,10 +6,8 @@ const PROMPT_CACHE_KEY_PREFIX = "dline_cache_"
 const PROMPT_CACHE_KEY_IDENTIFIER_LENGTH = 32
 
 export type OpenAIPromptCacheProjectionMode = "automatic" | "explicit"
-type PromptCacheApiFormat = "chat" | "responses"
 
 interface PromptCacheIdentityInput {
-	readonly apiFormat: PromptCacheApiFormat
 	readonly modelId: string
 	readonly systemPrompt: string
 	readonly taskNamespace?: string
@@ -62,7 +60,6 @@ interface MutableContentBlock {
 function createPromptCacheKey(input: PromptCacheIdentityInput): string {
 	const identifier = hashPromptContentHex(
 		JSON.stringify({
-			apiFormat: input.apiFormat,
 			model: input.modelId,
 			systemPrompt: input.systemPrompt,
 			taskNamespace: input.taskNamespace,
@@ -123,7 +120,6 @@ function addChatBreakpoints(messages: OpenAI.Chat.ChatCompletionMessageParam[]):
 /** Project official prompt-cache controls onto a Chat Completions request. */
 export function projectOpenAIChatPromptCache(input: OpenAIChatPromptCacheInput): OpenAIChatPromptCacheProjection {
 	const promptCacheKey = createPromptCacheKey({
-		apiFormat: "chat",
 		modelId: input.modelId,
 		systemPrompt: input.systemPrompt,
 		taskNamespace: input.taskNamespace,
@@ -143,7 +139,6 @@ export function projectOpenAIChatPromptCache(input: OpenAIChatPromptCacheInput):
 /** Project official prompt-cache controls onto a Responses request. */
 export function projectOpenAIResponsesPromptCache(input: OpenAIResponsesPromptCacheInput): OpenAIResponsesPromptCacheProjection {
 	const promptCacheKey = createPromptCacheKey({
-		apiFormat: "responses",
 		modelId: input.modelId,
 		systemPrompt: input.systemPrompt,
 		taskNamespace: input.taskNamespace,

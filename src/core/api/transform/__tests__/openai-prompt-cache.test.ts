@@ -190,7 +190,7 @@ describe("OpenAI prompt cache projection", () => {
 		expect(JSON.stringify(projection.input[1])).to.contain("dynamic")
 	})
 
-	it("separates Chat and Responses cache routing keys", () => {
+	it("shares cache routing keys across Chat and Responses for the same stable prefix", () => {
 		const chat = projectOpenAIChatPromptCache({
 			modelId: "gpt-5.6-sol",
 			systemPrompt: "stable system",
@@ -204,6 +204,6 @@ describe("OpenAI prompt cache projection", () => {
 			tools: [],
 		})
 
-		expect(chat.promptCacheKey).not.to.equal(responses.promptCacheKey)
+		expect(chat.promptCacheKey).to.equal(responses.promptCacheKey)
 	})
 })
