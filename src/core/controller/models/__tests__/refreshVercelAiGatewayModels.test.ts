@@ -52,7 +52,10 @@ describe("persistVercelProviderModels", () => {
 
 		await persistVercelProviderModels({ postStateToWebview } as unknown as Controller, models)
 
-		const persisted = JSON.parse(await fs.readFile(path.join(tempDir, "vercel.json"), "utf8"))
+		const raw = await fs.readFile(path.join(tempDir, "vercel.json"), "utf8")
+		const persisted = JSON.parse(raw)
+		expect(raw).toContain('\n\t"provider": "vercel-ai-gateway"')
+		expect(raw.endsWith("\n")).toBe(true)
 		expect(persisted.provider).toBe("vercel-ai-gateway")
 		expect(persisted.defaultModelId).toBe("openai/gpt-5")
 		expect(persisted.models["openai/gpt-5"]).toMatchObject({

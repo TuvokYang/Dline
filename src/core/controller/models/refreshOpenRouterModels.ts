@@ -1,10 +1,8 @@
-import { ensureCacheDirectoryExists, GlobalFileNames } from "@core/storage/disk"
-import type { ModelInfo } from "@shared/api"
+import { persistProviderCatalog } from "@core/model-registry/provider-catalog-storage"
+import { type ModelInfo, openRouterDefaultModelId } from "@shared/api"
 import { GEMINI_FLASH_MAX_OUTPUT_TOKENS, isGeminiFlashModel } from "@utils/model-utils"
 import axios from "axios"
 import cloneDeep from "clone-deep"
-import fs from "fs/promises"
-import path from "path"
 import { StateManager } from "@/core/storage/StateManager"
 import {
 	ANTHROPIC_MAX_THINKING_BUDGET,
@@ -77,6 +75,8 @@ interface OpenRouterRawModelInfo {
 	supported_parameters?: OpenRouterSupportedParams[] | null
 }
 
+const OPENROUTER_PROVIDER_ID = "openrouter"
+
 // Track pending refresh promise to prevent duplicate concurrent fetches
 let pendingRefresh: Promise<Record<string, ModelInfo>> | null = null
 
@@ -111,8 +111,6 @@ export async function refreshOpenRouterModels(controller: Controller): Promise<R
 }
 
 async function fetchAndCacheModels(controller: Controller): Promise<Record<string, ModelInfo>> {
-	const openRouterModelsFilePath = path.join(await ensureCacheDirectoryExists(), GlobalFileNames.openRouterModels)
-
 	let models: Record<string, ModelInfo> = {}
 	try {
 		const response = await axios.get("https://openrouter.ai/api/v1/models", getAxiosSettings())
@@ -322,8 +320,7 @@ async function fetchAndCacheModels(controller: Controller): Promise<Record<strin
 					}
 				}
 			}
-			// Save models and cache them in memory
-			await fs.writeFile(openRouterModelsFilePath, JSON.stringify(models))
+			await persistOpenRouterProviderModels(controller, models)
 			Logger.log("OpenRouter models fetched and saved")
 		} else {
 			throw new Error("Invalid response data when fetching OpenRouter models")
@@ -345,6 +342,19 @@ async function fetchAndCacheModels(controller: Controller): Promise<Record<strin
 	StateManager.get().setModelsCache("openRouter", finalModels)
 
 	return finalModels
+}
+
+/** Persist the dynamic catalog where ModelRegistry and provider editors preload it. */
+export async function persistOpenRouterProviderModels(controller: Controller, models: Record<string, ModelInfo>): Promise<void> {
+	await persistProviderCatalog({
+		providerId: OPENROUTER_PROVIDER_ID,
+		providerName: "OpenRouter",
+		baseUrl: "https://openrouter.ai/api/v1",
+		billingMode: "token",
+		models,
+		preferredDefaultModelId: openRouterDefaultModelId,
+	})
+	await controller.postStateToWebview()
 }
 
 /**

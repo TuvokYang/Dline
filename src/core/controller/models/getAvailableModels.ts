@@ -19,6 +19,7 @@ export async function getAvailableModels(_controller: Controller): Promise<Avail
 	if (!registry.isInitialized) {
 		await registry.initialize()
 	}
+	await registry.waitForDeferredProviders()
 
 	const allModels = registry.getAllModels()
 

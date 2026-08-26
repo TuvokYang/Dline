@@ -29,14 +29,17 @@ export async function initializeWebview(controller: Controller, _request: EmptyR
 		// Start cross-process Catalog reconciliation even when this window only reads Profiles.
 		await getProfileCatalogRepository()
 
-		// Post last cached models as soon as possible for immediate availability in the UI
-		const lastCachedModels = await controller.readOpenRouterModels()
-		if (lastCachedModels) {
-			const models = Object.fromEntries(
-				Object.entries(lastCachedModels).map(([modelId, modelInfo]) => [modelId, toProtobufModelInfo(modelInfo)]),
-			)
-			sendOpenRouterModelsEvent(OpenRouterCompatibleModelInfo.create({ models }))
-		}
+		// Load the persisted OpenRouter catalog in the background so Webview initialization never waits for a large JSON file.
+		void controller
+			.readOpenRouterModels()
+			.then((lastCachedModels) => {
+				if (!lastCachedModels) return
+				const models = Object.fromEntries(
+					Object.entries(lastCachedModels).map(([modelId, modelInfo]) => [modelId, toProtobufModelInfo(modelInfo)]),
+				)
+				void sendOpenRouterModelsEvent(OpenRouterCompatibleModelInfo.create({ models }))
+			})
+			.catch((error) => Logger.error("Failed to load cached OpenRouter models:", error))
 
 		// Refresh OpenRouter models from API (public API, always available)
 		refreshOpenRouterModels(controller).then(async (models) => {

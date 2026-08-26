@@ -1,12 +1,7 @@
 import { ModelRegistry } from "@core/model-registry/ModelRegistry"
-import { getProviderConfigFileName } from "@core/model-registry/provider-config-file"
-import { ensureCacheDirectoryExists, GlobalFileNames } from "@core/storage/disk"
+import { persistProviderCatalog } from "@core/model-registry/provider-catalog-storage"
 import { ModelInfo } from "@shared/api"
-import type { ProviderModelsConfig } from "@shared/providers/types"
-import { fileExistsAtPath } from "@utils/fs"
 import axios from "axios"
-import fs from "fs/promises"
-import path from "path"
 import { StateManager } from "@/core/storage/StateManager"
 import { getAxiosSettings } from "@/shared/net"
 import { Logger } from "@/shared/services/Logger"
@@ -112,8 +107,6 @@ export async function refreshVercelAiGatewayModels(controller: Controller): Prom
 }
 
 async function fetchAndCacheModels(controller: Controller): Promise<Record<string, ModelInfo>> {
-	const vercelAiGatewayModelsFilePath = path.join(await ensureCacheDirectoryExists(), GlobalFileNames.vercelAiGatewayModels)
-
 	let models: Record<string, ModelInfo> = {}
 
 	try {
@@ -155,9 +148,6 @@ async function fetchAndCacheModels(controller: Controller): Promise<Record<strin
 
 				models[modelId] = modelInfo
 			}
-
-			await fs.writeFile(vercelAiGatewayModelsFilePath, JSON.stringify(models))
-			Logger.log("Vercel AI Gateway models fetched and saved")
 		} else {
 			throw new Error("Invalid response from Vercel AI Gateway API")
 		}
@@ -165,7 +155,7 @@ async function fetchAndCacheModels(controller: Controller): Promise<Record<strin
 		Logger.error("Error fetching Vercel AI Gateway models:", error)
 
 		// If we failed to fetch models, try to read cached models
-		const cachedModels = (await readVercelAiGatewayModels()) ?? readPersistedVercelProviderModels()
+		const cachedModels = await readPersistedVercelProviderModels()
 		if (cachedModels) {
 			models = cachedModels
 		}
@@ -173,6 +163,7 @@ async function fetchAndCacheModels(controller: Controller): Promise<Record<strin
 
 	if (Object.keys(models).length > 0) {
 		await persistVercelProviderModels(controller, models)
+		Logger.log("Vercel AI Gateway models fetched and saved")
 	}
 
 	// Store in StateManager's in-memory cache
@@ -181,58 +172,21 @@ async function fetchAndCacheModels(controller: Controller): Promise<Record<strin
 	return models
 }
 
-function readPersistedVercelProviderModels(): Record<string, ModelInfo> | undefined {
-	const models = ModelRegistry.getInstance().getProviderModels(VERCEL_PROVIDER_ID)?.models
+async function readPersistedVercelProviderModels(): Promise<Record<string, ModelInfo> | undefined> {
+	const registry = ModelRegistry.getInstance()
+	await registry.waitForDeferredProviders()
+	const models = registry.getProviderModels(VERCEL_PROVIDER_ID)?.models
 	return models && Object.keys(models).length > 0 ? models : undefined
 }
 
 /** Persist the dynamic catalog where ModelRegistry and provider editors preload it. */
 export async function persistVercelProviderModels(controller: Controller, models: Record<string, ModelInfo>): Promise<void> {
-	const registry = ModelRegistry.getInstance()
-	const existing = registry.getProviderModels(VERCEL_PROVIDER_ID)
-	const remoteModels = Object.fromEntries(
-		Object.entries(models).map(([modelId, model]) => [
-			modelId,
-			{ ...model, id: modelId, name: model.name || modelId, userDefined: false },
-		]),
-	)
-	const persistedModels = remoteModels
-	const modelIds = Object.keys(persistedModels).sort((left, right) => left.localeCompare(right))
-	const defaultModelId =
-		existing?.defaultModelId && persistedModels[existing.defaultModelId] ? existing.defaultModelId : modelIds[0]
-	const config: ProviderModelsConfig = {
-		provider: VERCEL_PROVIDER_ID,
+	await persistProviderCatalog({
+		providerId: VERCEL_PROVIDER_ID,
 		providerName: "Vercel AI Gateway",
 		baseUrl: "https://ai-gateway.vercel.sh/v1",
 		billingMode: "token",
-		models: persistedModels,
-		...(defaultModelId ? { defaultModelId } : {}),
-	}
-
-	await fs.mkdir(registry.providersDir, { recursive: true })
-	await fs.writeFile(
-		path.join(registry.providersDir, getProviderConfigFileName(VERCEL_PROVIDER_ID)),
-		JSON.stringify(config, null, "\t"),
-		"utf8",
-	)
-	await registry.reload()
+		models,
+	})
 	await controller.postStateToWebview()
-}
-
-/**
- * Reads cached Vercel AI Gateway models from disk (application types)
- */
-async function readVercelAiGatewayModels(): Promise<Record<string, ModelInfo> | undefined> {
-	const vercelAiGatewayModelsFilePath = path.join(await ensureCacheDirectoryExists(), GlobalFileNames.vercelAiGatewayModels)
-	const fileExists = await fileExistsAtPath(vercelAiGatewayModelsFilePath)
-	if (fileExists) {
-		try {
-			const fileContents = await fs.readFile(vercelAiGatewayModelsFilePath, "utf8")
-			return JSON.parse(fileContents)
-		} catch (error) {
-			Logger.error("Error reading cached Vercel AI Gateway models:", error)
-			return undefined
-		}
-	}
-	return undefined
 }

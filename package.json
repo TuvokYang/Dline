@@ -5,7 +5,7 @@
 	"version": "0.9.1",
 	"icon": "assets/icons/icon.png",
 	"engines": {
-		"vscode": "^1.84.0"
+		"vscode": "^1.134.0"
 	},
 	"author": {
 		"name": "Tuvokyang"
@@ -487,7 +487,7 @@
 		"@types/get-folder-size": "^3.0.4",
 		"@types/js-yaml": "^4.0.9",
 		"@types/mocha": "^10.0.7",
-		"@types/node": "20.x",
+		"@types/node": "24.13.3",
 		"@types/pdf-parse": "^1.1.4",
 		"@types/picomatch": "^4.0.2",
 		"@types/proxyquire": "^1.3.31",
@@ -525,7 +525,7 @@
 		"ts-node": "^10.9.2",
 		"ts-proto": "^2.6.1",
 		"tsconfig-paths": "^4.2.0",
-		"typescript": "^5.4.5",
+		"typescript": "7.0.2",
 		"vite-plugin-checker": "^0.14.4",
 		"vitest": "^4.1.10"
 	},

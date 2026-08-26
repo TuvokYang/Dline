@@ -15,8 +15,8 @@ const BINARIES_DIR = `${BUILD_DIR}/binaries`
 const RUNTIME_DEPS_DIR = "standalone/runtime-files"
 const IS_DEBUG_BUILD = process.env.IS_DEBUG_BUILD === "true"
 
-// This should match the node version packaged with the JetBrains plugin.
-const TARGET_NODE_VERSION = "22.15.0"
+// This should match the Node 24 LTS runtime packaged with the JetBrains plugin.
+const TARGET_NODE_VERSION = "24.19.0"
 const TARGET_PLATFORMS = [
 	{ platform: "win32", arch: "x64", targetDir: "win-x64" },
 	{ platform: "darwin", arch: "x64", targetDir: "darwin-x64" },

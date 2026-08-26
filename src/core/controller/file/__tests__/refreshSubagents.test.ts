@@ -49,10 +49,14 @@ describe("refreshSubagents", () => {
 			"utf8",
 		)
 
+		const globalToggles = { [path.join(globalDir, "code-reviewer.yaml")]: false }
 		const controller = {
 			stateManager: {
-				getGlobalSettingsKey: (key: string) =>
-					key === "globalSubagentsToggles" ? { [path.join(globalDir, "code-reviewer.yaml")]: false } : undefined,
+				getGlobalSettingsKey: (key: string) => (key === "globalSubagentsToggles" ? globalToggles : undefined),
+				mutateGlobalSettingsKey: vi.fn(
+					async (_key: string, mutate: (current: Record<string, boolean>) => Record<string, boolean>) =>
+						mutate(globalToggles),
+				),
 				getWorkspaceStateKey: (key: string) =>
 					key === "localSubagentsToggles" ? { [path.join(localDir, "code-reviewer.yaml")]: true } : undefined,
 				setGlobalState: vi.fn(),

@@ -213,29 +213,47 @@ describe("seed-initializer", () => {
 		expect("tiers" in model).to.be.false
 	})
 
-	it("migrates the legacy Vercel catalog to providers/vercel.json", async () => {
+	it("does not read or rewrite an existing deferred provider catalog during startup seeding", async () => {
 		const providerId = "vercel-ai-gateway"
-		const legacyConfig: ProviderModelsConfig = {
+		mockAllProviderModels[providerId] = {
 			provider: providerId,
 			providerName: "Vercel AI Gateway",
 			billingMode: "token",
-			models: {
-				"openai/gpt-5": { id: "openai/gpt-5", name: "GPT-5", userDefined: true },
-			},
+			models: {},
 		}
-		mockAllProviderModels[providerId] = legacyConfig
 		try {
 			vi.spyOn(fs, "existsSync").mockImplementation(
 				(filePath) => filePath.toString() === path.join(tempDir, "vercel-ai-gateway.json"),
 			)
-			vi.spyOn(fsPromises, "readFile").mockResolvedValue(JSON.stringify(legacyConfig))
+			const readFileStub = vi.spyOn(fsPromises, "readFile")
+
+			await ensureSeedProviders(tempDir)
+
+			expect(readFileStub.mock.calls).to.have.lengthOf(0)
+			expect(writeFileStub.mock.calls.some((call: unknown[]) => call[0] === path.join(tempDir, "vercel.json"))).to.be.false
+		} finally {
+			delete mockAllProviderModels[providerId]
+		}
+	})
+
+	it("creates a formatted lightweight file when a deferred provider catalog is missing", async () => {
+		const providerId = "vercel-ai-gateway"
+		mockAllProviderModels[providerId] = {
+			provider: providerId,
+			providerName: "Vercel AI Gateway",
+			billingMode: "token",
+			models: {},
+		}
+		try {
+			vi.spyOn(fs, "existsSync").mockReturnValue(false)
 
 			await ensureSeedProviders(tempDir)
 
 			const writeCall = writeFileStub.mock.calls.find((call: unknown[]) => call[0] === path.join(tempDir, "vercel.json"))
 			expect(writeCall).not.to.be.undefined
-			const migrated = JSON.parse(writeCall?.[1] as string) as ProviderModelsConfig
-			expect(migrated.models["openai/gpt-5"].userDefined).to.be.false
+			const jsonContent = writeCall?.[1] as string
+			expect(jsonContent).to.include('\n\t"provider": "vercel-ai-gateway"')
+			expect(jsonContent.endsWith("\n")).to.be.true
 		} finally {
 			delete mockAllProviderModels[providerId]
 		}

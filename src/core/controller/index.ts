@@ -48,7 +48,6 @@ import type { TelemetrySetting } from "@shared/TelemetrySetting"
 import type { UserInfo } from "@shared/UserInfo"
 import { fileExistsAtPath } from "@utils/fs"
 import axios from "axios"
-import fs from "fs/promises"
 import open from "open"
 import Mutex from "p-mutex"
 import * as path from "path"
@@ -73,7 +72,6 @@ import { ModelRegistry } from "../model-registry/ModelRegistry"
 import { ApiConversation } from "../storage/ApiConversation"
 import { readJsonl } from "../storage/backend/jsonl/jsonl-utils"
 import {
-	ensureCacheDirectoryExists,
 	ensureMcpServersDirectoryExists,
 	ensureSettingsDirectoryExists,
 	GlobalFileNames,
@@ -1278,20 +1276,17 @@ export class Controller {
 		}
 	}
 
-	// Read OpenRouter models from disk cache
+	// Read OpenRouter models from the asynchronously loaded provider catalog.
 	async readOpenRouterModels(): Promise<Record<string, ModelInfo> | undefined> {
-		const openRouterModelsFilePath = path.join(await ensureCacheDirectoryExists(), GlobalFileNames.openRouterModels)
 		try {
-			if (await fileExistsAtPath(openRouterModelsFilePath)) {
-				const fileContents = await fs.readFile(openRouterModelsFilePath, "utf8")
-				const models = JSON.parse(fileContents)
-				// Append stealth models
-				return appendClineStealthModels(models)
-			}
+			const registry = ModelRegistry.getInstance()
+			await registry.waitForDeferredProviders()
+			const models = registry.getProviderModels("openrouter")?.models
+			return models && Object.keys(models).length > 0 ? appendClineStealthModels(models) : undefined
 		} catch (error) {
 			Logger.error("Error reading cached OpenRouter models:", error)
+			return undefined
 		}
-		return undefined
 	}
 
 	// Hicap

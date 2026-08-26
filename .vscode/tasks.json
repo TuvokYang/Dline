@@ -130,7 +130,7 @@
 					"background": {
 						"activeOnStart": true,
 						"beginsPattern": "^Building webview for",
-						"endsPattern": "^\\[TypeScript\\] Found \\d+ errors?\\. Watching for file changes\\."
+						"endsPattern": "^\\s*VITE v\\S+\\s+ready in \\d+ ms\\s*$"
 					}
 				}
 			],

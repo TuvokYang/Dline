@@ -11,19 +11,9 @@ import { Logger } from "@shared/services/Logger"
 import fs from "fs"
 import fsPromises from "fs/promises"
 import * as path from "path"
+import { isDeferredProvider } from "./provider-catalog-policy"
 import { getLegacyProviderConfigFileNames, getProviderConfigFileName } from "./provider-config-file"
 import { markBuiltInModels, reconcileProviderModels } from "./provider-model-reconciliation"
-
-const REMOTE_CATALOG_PROVIDER_IDS = new Set(["vercel-ai-gateway"])
-
-function normalizeRemoteCatalog(config: ProviderModelsConfig): ProviderModelsConfig {
-	return {
-		...config,
-		models: Object.fromEntries(
-			Object.entries(config.models).map(([modelId, model]) => [modelId, { ...model, userDefined: false }]),
-		),
-	}
-}
 
 /**
  * Ensure that ~/.dline/providers/ contains a JSON file for every provider
@@ -48,13 +38,24 @@ export async function ensureSeedProviders(providersDir: string): Promise<number>
 			...getLegacyProviderConfigFileNames(providerId).map((name) => path.join(providersDir, name)),
 		].find((candidate) => fs.existsSync(candidate))
 
+		if (isDeferredProvider(providerId)) {
+			if (!existingFilePath) {
+				try {
+					await fsPromises.writeFile(filePath, serializeConfig(markBuiltInModels(config)), "utf8")
+					created++
+					Logger.log(`[seed-initializer] Created deferred provider config: ${path.basename(filePath)}`)
+				} catch (err) {
+					Logger.warn(`[seed-initializer] Failed to create deferred provider config for ${providerId}:`, err)
+				}
+			}
+			continue
+		}
+
 		// Refresh built-ins while preserving explicitly marked and unknown user models.
 		if (existingFilePath) {
 			try {
 				const stored = JSON.parse(await fsPromises.readFile(existingFilePath, "utf8")) as ProviderModelsConfig
-				const reconciled = REMOTE_CATALOG_PROVIDER_IDS.has(providerId)
-					? normalizeRemoteCatalog({ ...stored, ...config, models: stored.models })
-					: reconcileProviderModels(config, stored, "refresh-built-ins")
+				const reconciled = reconcileProviderModels(config, stored, "refresh-built-ins")
 				if (existingFilePath !== filePath || serializeConfig(reconciled) !== serializeConfig(stored)) {
 					await fsPromises.writeFile(filePath, serializeConfig(reconciled), "utf8")
 					Logger.log(`[seed-initializer] Refreshed built-in models: ${path.basename(filePath)}`)
@@ -87,5 +88,5 @@ export async function ensureSeedProviders(providersDir: string): Promise<number>
  * Serialize a ProviderModelsConfig to formatted JSON string.
  */
 function serializeConfig(config: ProviderModelsConfig): string {
-	return JSON.stringify(config, null, "\t")
+	return `${JSON.stringify(config, null, "\t")}\n`
 }

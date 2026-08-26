@@ -112,6 +112,48 @@ describe("ModelRegistry", () => {
 		})
 	})
 
+	describe("deferred provider loading", () => {
+		it("does not wait for dynamic provider catalogs during initialization", async () => {
+			const staticConfig = {
+				provider: "anthropic",
+				providerName: "Anthropic",
+				billingMode: "token",
+				models: { static: { id: "static", name: "Static" } },
+			}
+			const dynamicConfig = {
+				provider: "openrouter",
+				providerName: "OpenRouter",
+				billingMode: "token",
+				models: { dynamic: { id: "dynamic", name: "Dynamic" } },
+			}
+			await fsPromises.writeFile(path.join(tempDir, "anthropic.json"), JSON.stringify(staticConfig))
+			await fsPromises.writeFile(path.join(tempDir, "openrouter.json"), JSON.stringify(dynamicConfig))
+
+			let releaseDynamicRead: (() => void) | undefined
+			const dynamicReadStarted = new Promise<void>((resolveStarted) => {
+				vi.spyOn(fsPromises, "readFile").mockImplementation(async (filePath) => {
+					if (path.basename(filePath.toString()) === "openrouter.json") {
+						resolveStarted()
+						await new Promise<void>((resolve) => {
+							releaseDynamicRead = resolve
+						})
+						return JSON.stringify(dynamicConfig)
+					}
+					return JSON.stringify(staticConfig)
+				})
+			})
+
+			await registry.initialize()
+
+			expect(registry.getProviderModels("anthropic")?.models).to.have.property("static")
+			expect(registry.getProviderModels("openrouter")).to.be.undefined
+			await dynamicReadStarted
+			releaseDynamicRead?.()
+			await registry.waitForDeferredProviders()
+			expect(registry.getProviderModels("openrouter")?.models).to.have.property("dynamic")
+		})
+	})
+
 	describe("getAllModels", () => {
 		it("loads vercel.json under the Vercel provider ID and ignores the legacy duplicate", async () => {
 			const legacyConfig = {
@@ -133,6 +175,7 @@ describe("ModelRegistry", () => {
 			await fsPromises.writeFile(path.join(tempDir, "vercel.json"), JSON.stringify(canonicalConfig))
 
 			await registry.initialize()
+			await registry.waitForDeferredProviders()
 
 			expect(registry.getProviderModels("vercel-ai-gateway")?.models).to.have.property("anthropic/claude-sonnet")
 			expect(registry.getAllProviders().filter((provider) => provider.provider === "vercel-ai-gateway")).to.have.lengthOf(1)

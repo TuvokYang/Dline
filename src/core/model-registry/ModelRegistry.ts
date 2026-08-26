@@ -12,6 +12,7 @@ import { Logger } from "@shared/services/Logger"
 import chokidar, { type FSWatcher } from "chokidar"
 import fs from "fs/promises"
 import * as path from "path"
+import { DEFERRED_PROVIDER_IDS } from "./provider-catalog-policy"
 import { getProviderConfigFileName, getProviderIdFromConfigFile } from "./provider-config-file"
 import { reconcileProviderModels } from "./provider-model-reconciliation"
 
@@ -49,6 +50,7 @@ export class ModelRegistry {
 	private watcher: FSWatcher | null = null
 	private initialized = false
 	private onChangeCallbacks: Array<() => void> = []
+	private deferredProvidersPromise: Promise<void> | null = null
 	private _version = 0
 
 	/** Monotonically increasing version number, incremented on each reload. */
@@ -97,23 +99,40 @@ export class ModelRegistry {
 		// Ensure the providers directory exists
 		await fs.mkdir(this.providersDir, { recursive: true })
 
-		// Load all existing JSON files
-		await this.reload()
+		// Load lightweight provider catalogs before the extension continues initializing.
+		await this.reload({ excludeProviderIds: DEFERRED_PROVIDER_IDS })
 
 		// Start watching for changes
 		this.startWatch()
 
 		this.initialized = true
+		this.deferredProvidersPromise = this.reload({ includeProviderIds: DEFERRED_PROVIDER_IDS })
+			.then(() => {
+				this.onChangeCallbacks.forEach((cb) => cb())
+			})
+			.catch((err) => Logger.error("[ModelRegistry] Failed to load deferred provider configs:", err))
 		Logger.log(`[ModelRegistry] Initialized, ${this.cache.size} provider(s) loaded from ${this.providersDir}`)
 	}
 
 	/**
 	 * Reload all provider configs from disk.
 	 */
-	async reload(): Promise<void> {
+	async reload(options?: {
+		includeProviderIds?: ReadonlySet<string>
+		excludeProviderIds?: ReadonlySet<string>
+	}): Promise<void> {
 		try {
 			const entries = await fs.readdir(this.providersDir)
-			const jsonFiles = entries.filter((f) => f.endsWith(".json"))
+			const jsonFiles = entries.filter((fileName) => {
+				if (!fileName.endsWith(".json")) return false
+				const providerId = getProviderIdFromConfigFile(fileName)
+				if (options?.includeProviderIds && !options.includeProviderIds.has(providerId)) return false
+				if (options?.excludeProviderIds?.has(providerId)) return false
+				return true
+			})
+			if (jsonFiles.length === 0 && options?.includeProviderIds) {
+				return
+			}
 			const loadedConfigs = new Map<string, { config: ProviderModelsConfig; fileName: string }>()
 
 			for (const fileName of jsonFiles) {
@@ -137,10 +156,12 @@ export class ModelRegistry {
 				this.cache.set(providerId, config)
 			}
 
-			// Remove cached entries for deleted files
+			// Remove cached entries for deleted files within the reloaded scope.
 			const loadedIds = new Set(loadedConfigs.keys())
 			for (const id of this.cache.keys()) {
-				if (!loadedIds.has(id)) {
+				const isInScope =
+					(!options?.includeProviderIds || options.includeProviderIds.has(id)) && !options?.excludeProviderIds?.has(id)
+				if (isInScope && !loadedIds.has(id)) {
 					this.cache.delete(id)
 				}
 			}
@@ -177,6 +198,11 @@ export class ModelRegistry {
 		}
 	}
 
+	/** Wait for startup-deferred provider catalogs to finish loading. */
+	async waitForDeferredProviders(): Promise<void> {
+		await this.deferredProvidersPromise
+	}
+
 	private reloadTimer: NodeJS.Timeout | null = null
 
 	private debouncedReload(): void {
@@ -201,6 +227,7 @@ export class ModelRegistry {
 		}
 		this.cache.clear()
 		this.initialized = false
+		this.deferredProvidersPromise = null
 		this.onChangeCallbacks = []
 	}
 
