@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-import { spawn } from "node:child_process"
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod/v4"
@@ -7,70 +6,13 @@ import { boundStructuredPayload, stringifyBoundedPayload } from "./lib/bounded-p
 import {
 	collectFailures,
 	connectVitestUi,
-	DEFAULT_HOST,
-	DEFAULT_PORT,
 	filterFiles,
-	normalizeBaseUrl,
 	rerunWithScope,
 	simplifyFile,
 	summarizeFiles,
 	waitForIdle,
 } from "./lib/client.mjs"
-import { createSpawnCommand } from "./lib/spawn-command.mjs"
-
-function sleep(ms) {
-	return new Promise((resolve) => setTimeout(resolve, ms))
-}
-
-async function isReachable(url) {
-	try {
-		const response = await fetch(url)
-		return response.ok
-	} catch {
-		return false
-	}
-}
-
-async function waitForReachable(url, timeoutMs = 60_000) {
-	const started = Date.now()
-	while (Date.now() - started < timeoutMs) {
-		if (await isReachable(url)) {
-			return
-		}
-		await sleep(1_000)
-	}
-	throw new Error(`Vitest UI did not become reachable at ${url} within ${timeoutMs}ms`)
-}
-
-async function ensureVitestUiServer() {
-	const host = process.env.VITEST_UI_HOST || DEFAULT_HOST
-	const port = Number(process.env.VITEST_UI_PORT || DEFAULT_PORT)
-	const url = normalizeBaseUrl(process.env.VITEST_UI_URL || `http://${host}:${port}/__vitest__/`)
-
-	if (process.env.VITEST_UI_MCP_START === "false" || (await isReachable(url))) {
-		return { url, child: null }
-	}
-
-	const config = process.env.VITEST_UI_CONFIG || "vitest.config.ts"
-	const args = ["vitest", "--ui", "--host", host, "--port", String(port), "--config", config]
-	console.error(`[vitest-ui-mcp] starting: npx ${args.join(" ")}`)
-
-	const spawnCommand = createSpawnCommand({ executable: "npx" })
-	const child = spawn(spawnCommand.file, args, {
-		cwd: process.cwd(),
-		env: process.env,
-		stdio: ["ignore", "pipe", "pipe"],
-		...spawnCommand.options,
-	})
-	child.stdout.on("data", (chunk) => process.stderr.write(chunk))
-	child.stderr.on("data", (chunk) => process.stderr.write(chunk))
-	child.on("exit", (code, signal) => {
-		console.error(`[vitest-ui-mcp] vitest ui exited code=${code ?? ""} signal=${signal ?? ""}`)
-	})
-
-	await waitForReachable(url, Number(process.env.VITEST_UI_MCP_START_TIMEOUT || 60_000))
-	return { url, child }
-}
+import { ensureVitestUiServer } from "./lib/managed-server.mjs"
 
 function textResult(structuredContent) {
 	const bounded = boundStructuredPayload(structuredContent)
@@ -94,7 +36,11 @@ async function withClient(url, callback) {
 	}
 }
 
-const { url, child } = await ensureVitestUiServer()
+const { url, child } = await ensureVitestUiServer({
+	onExit: (code, signal) => {
+		console.error(`[vitest-ui-mcp] vitest ui exited code=${code ?? ""} signal=${signal ?? ""}`)
+	},
+})
 
 const server = new McpServer({
 	name: "dline-vitest-ui",

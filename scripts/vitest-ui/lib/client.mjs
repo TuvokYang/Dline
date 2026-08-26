@@ -368,12 +368,16 @@ export function findMatchingTasks(files, { file, testName, taskId, exact = false
 
 export async function waitForIdle(client, { timeoutMs = 180_000, pollMs = 1_500, since = 0, allowUnknown = false } = {}) {
 	const started = Date.now()
+	const targetPaths = await client.getPaths()
+	const expectedFileCount = new Set(targetPaths.map(normalizePathForMatch)).size
 	let lastFiles = await client.getFiles()
 	let lastSummary = summarizeFiles(lastFiles)
 
 	while (Date.now() - started < timeoutMs) {
 		lastSummary = summarizeFiles(lastFiles)
+		const collectionComplete = expectedFileCount === 0 || lastFiles.length >= expectedFileCount
 		if (
+			collectionComplete &&
 			lastSummary.running === 0 &&
 			(allowUnknown || lastSummary.unknown === 0) &&
 			(!since || client.state.lastFinishedAt >= since)
@@ -385,7 +389,7 @@ export async function waitForIdle(client, { timeoutMs = 180_000, pollMs = 1_500,
 	}
 
 	throw new Error(
-		`Timed out waiting for Vitest UI to become idle after ${timeoutMs}ms. Last summary: ${JSON.stringify(lastSummary)}`,
+		`Timed out waiting for Vitest UI to become idle after ${timeoutMs}ms. Collected ${lastFiles.length}/${expectedFileCount} files. Last summary: ${JSON.stringify(lastSummary)}`,
 	)
 }
 

@@ -24,13 +24,13 @@ export function parseServerArgs(argv, env, defaults) {
 }
 
 /**
- * Build Vitest UI CLI arguments for Vitest 3.x.
+ * Build Vitest 4 UI CLI arguments.
  *
  * @param {{ host: string, port: number, config?: string }} options Vitest UI server options.
- * @returns {string[]} Arguments passed to npx.
+ * @returns {string[]} Arguments passed to the local Vitest CLI.
  */
 export function buildVitestUiArgs(options) {
-	const args = ["vitest", "--ui", "--api.host", options.host, "--api.port", String(options.port)]
+	const args = ["--ui", "--watch", "--no-open", "--api.host", options.host, "--api.port", String(options.port)]
 	if (options.config) {
 		args.push("--config", options.config)
 	}

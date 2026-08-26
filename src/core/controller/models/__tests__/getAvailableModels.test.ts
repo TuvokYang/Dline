@@ -24,6 +24,7 @@ describe("getAvailableModels handler", () => {
 		// Stub ModelRegistry
 		const mockRegistry = {
 			isInitialized: true,
+			waitForDeferredProviders: vi.fn().mockResolvedValue(undefined),
 			getAllModels: vi.fn().mockReturnValue([
 				{
 					provider: "doubao",
@@ -61,6 +62,7 @@ describe("getAvailableModels handler", () => {
 	it("should pass thinking config when model declares thinking metadata", async () => {
 		const mockRegistry = {
 			isInitialized: true,
+			waitForDeferredProviders: vi.fn().mockResolvedValue(undefined),
 			getAllModels: vi.fn().mockReturnValue([
 				{
 					provider: "gemini",
@@ -98,6 +100,7 @@ describe("getAvailableModels handler", () => {
 		const mockRegistry = {
 			isInitialized: false,
 			initialize: initStub,
+			waitForDeferredProviders: vi.fn().mockResolvedValue(undefined),
 			getAllModels: vi.fn().mockReturnValue([]),
 		}
 		vi.spyOn(ModelRegistry, "getInstance").mockReturnValue(mockRegistry as any)
@@ -111,6 +114,7 @@ describe("getAvailableModels handler", () => {
 	it("should return multiple providers in response", async () => {
 		const mockRegistry = {
 			isInitialized: true,
+			waitForDeferredProviders: vi.fn().mockResolvedValue(undefined),
 			getAllModels: vi.fn().mockReturnValue([
 				{
 					provider: "anthropic",
@@ -165,6 +169,7 @@ describe("getAvailableModels handler", () => {
 	it("should include optional model fields like supportsImages and description", async () => {
 		const mockRegistry = {
 			isInitialized: true,
+			waitForDeferredProviders: vi.fn().mockResolvedValue(undefined),
 			getAllModels: vi.fn().mockReturnValue([
 				{
 					provider: "test-provider",
@@ -204,6 +209,7 @@ describe("getAvailableModels handler", () => {
 	it("preserves API formats and server-tool capabilities for the Webview catalog", async () => {
 		const mockRegistry = {
 			isInitialized: true,
+			waitForDeferredProviders: vi.fn().mockResolvedValue(undefined),
 			getAllModels: vi.fn().mockReturnValue([
 				{
 					provider: "deepseek",
@@ -236,6 +242,7 @@ describe("getAvailableModels handler", () => {
 	it("should handle empty model list gracefully", async () => {
 		const mockRegistry = {
 			isInitialized: true,
+			waitForDeferredProviders: vi.fn().mockResolvedValue(undefined),
 			getAllModels: vi.fn().mockReturnValue([]),
 		}
 		vi.spyOn(ModelRegistry, "getInstance").mockReturnValue(mockRegistry as any)

@@ -2,16 +2,17 @@
 import { spawn } from "node:child_process"
 import { DEFAULT_HOST, DEFAULT_PORT } from "./lib/client.mjs"
 import { buildVitestUiArgs, parseServerArgs } from "./lib/server-args.mjs"
-import { createSpawnCommand } from "./lib/spawn-command.mjs"
+import { createVitestSpawnCommand } from "./lib/spawn-command.mjs"
 
 const options = parseServerArgs(process.argv.slice(2), process.env, { host: DEFAULT_HOST, port: DEFAULT_PORT })
 const args = buildVitestUiArgs(options)
 
-console.error(`[vitest-ui] starting: npx ${args.join(" ")}`)
+const spawnCommand = createVitestSpawnCommand({ cwd: process.cwd() })
+const spawnArgs = [...spawnCommand.args, ...args]
+console.error(`[vitest-ui] starting: ${spawnCommand.file} ${spawnArgs.join(" ")}`)
 console.error(`[vitest-ui] url: http://${options.host}:${options.port}/__vitest__/`)
 
-const spawnCommand = createSpawnCommand({ executable: "npx" })
-const child = spawn(spawnCommand.file, args, {
+const child = spawn(spawnCommand.file, spawnArgs, {
 	cwd: process.cwd(),
 	env: process.env,
 	stdio: "inherit",

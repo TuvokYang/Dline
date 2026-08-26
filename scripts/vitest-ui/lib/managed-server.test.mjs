@@ -1,0 +1,132 @@
+import assert from "node:assert/strict"
+import { EventEmitter } from "node:events"
+import test from "node:test"
+import { ensureVitestUiServer } from "./managed-server.mjs"
+
+function createChild() {
+	const child = new EventEmitter()
+	child.stdout = new EventEmitter()
+	child.stderr = new EventEmitter()
+	child.killed = false
+	child.exitCode = null
+	child.kill = (signal) => {
+		child.killed = true
+		child.killSignal = signal
+		return true
+	}
+	return child
+}
+
+function createStderr() {
+	let text = ""
+	return {
+		stream: { write: (chunk) => (text += String(chunk)) },
+		read: () => text,
+	}
+}
+
+test("reuses an already reachable Vitest UI without spawning", async () => {
+	let spawnCalls = 0
+	const result = await ensureVitestUiServer({
+		env: { VITEST_UI_URL: "http://localhost:51205/__vitest__/" },
+		fetchImpl: async () => ({ ok: true }),
+		spawnImpl: () => {
+			spawnCalls++
+			return createChild()
+		},
+	})
+
+	assert.equal(result.started, false)
+	assert.equal(result.child, null)
+	assert.equal(result.url, "http://localhost:51205/__vitest__/")
+	assert.equal(spawnCalls, 0)
+})
+
+test("fails immediately when automatic startup is disabled and the UI is unreachable", async () => {
+	let spawnCalls = 0
+	await assert.rejects(
+		ensureVitestUiServer({
+			env: {
+				VITEST_UI_URL: "http://localhost:51205/__vitest__/",
+				VITEST_UI_MCP_START: "false",
+			},
+			fetchImpl: async () => ({ ok: false }),
+			spawnImpl: () => {
+				spawnCalls++
+				return createChild()
+			},
+		}),
+		/Start it with "npm run vitest:ui:server"/,
+	)
+	assert.equal(spawnCalls, 0)
+})
+
+test("starts the local Vitest 4 UI without a shell and waits for readiness", async () => {
+	const child = createChild()
+	const stderr = createStderr()
+	let fetchCalls = 0
+	let spawnCall
+	const result = await ensureVitestUiServer({
+		cwd: process.cwd(),
+		execPath: "C:\\Program Files\\nodejs\\node.exe",
+		env: {
+			VITEST_UI_HOST: "127.0.0.1",
+			VITEST_UI_PORT: "51208",
+			VITEST_UI_CONFIG: "vitest.config.ts",
+			VITEST_UI_MCP_START_TIMEOUT: "100",
+		},
+		fetchImpl: async () => ({ ok: ++fetchCalls >= 2 }),
+		pollMs: 0,
+		stderr: stderr.stream,
+		spawnImpl: (file, args, options) => {
+			spawnCall = { file, args, options }
+			return child
+		},
+	})
+
+	assert.equal(result.started, true)
+	assert.equal(result.child, child)
+	assert.equal(result.url, "http://127.0.0.1:51208/__vitest__/")
+	assert.equal(spawnCall.file, "C:\\Program Files\\nodejs\\node.exe")
+	assert.equal(spawnCall.options.shell, false)
+	assert.equal(
+		spawnCall.args[0].endsWith("node_modules\\vitest\\vitest.mjs") ||
+			spawnCall.args[0].endsWith("node_modules/vitest/vitest.mjs"),
+		true,
+	)
+	assert.deepEqual(spawnCall.args.slice(1), [
+		"--ui",
+		"--watch",
+		"--no-open",
+		"--api.host",
+		"127.0.0.1",
+		"--api.port",
+		"51208",
+		"--config",
+		"vitest.config.ts",
+	])
+	assert.match(stderr.read(), /--api\.host 127\.0\.0\.1 --api\.port 51208/)
+	assert.doesNotMatch(stderr.read(), /(?:^|\s)--host(?:\s|$)|(?:^|\s)--port(?:\s|$)/)
+})
+
+test("surfaces a child startup exit before the reachability timeout", async () => {
+	const child = createChild()
+	const started = Date.now()
+	await assert.rejects(
+		ensureVitestUiServer({
+			env: {
+				VITEST_UI_PORT: "51209",
+				VITEST_UI_MCP_START_TIMEOUT: "1000",
+			},
+			fetchImpl: async () => ({ ok: false }),
+			pollMs: 1,
+			stderr: { write() {} },
+			spawnImpl: () => {
+				queueMicrotask(() => child.emit("exit", 1, null))
+				return child
+			},
+		}),
+		/Vitest UI exited before becoming reachable \(code=1, signal=\)/,
+	)
+	assert.equal(Date.now() - started < 500, true)
+})

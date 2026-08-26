@@ -1,21 +1,19 @@
 ---
 name: use-vitest
-description: Run, rerun, inspect, and diagnose Vitest tests in the Dline repository without blocking the agent on Vitest UI or watch processes. Use whenever an agent needs to execute focused or full backend, task, prompt, hook, or Webview tests; investigate Vitest failures or 60-second timeouts; query an already-running Vitest UI server; or report Vitest results.
+description: Run, rerun, inspect, and diagnose Vitest tests in the Dline repository without blocking the agent on watch processes. Use bounded one-shot commands for focused tests, and automatically start or reuse a background Vitest UI server for full-suite runs before reading results through scripts/vitest-ui/cli.mjs.
 ---
 
 # Use Vitest
 
-Run Dline tests as bounded, one-shot processes by default. Select the smallest useful test scope, collect the command through completion, and report the actual failing assertion or stack.
+Use bounded one-shot processes for focused tests. When the user requests all Vitest tests or all configured projects, use the background Vitest UI workflow so the long-lived server is detached from the execution turn and all results are read through the repository wrapper.
 
-## Hard Safety Boundary
+## Execution Safety Boundary
 
-Never start Vitest UI, a Vitest watch process, or the Vitest UI MCP server unless the user explicitly requests that startup in the current turn.
+Never start Vitest UI or a Vitest watch process for a focused test unless the user explicitly requests UI/watch startup. A request to run all Vitest tests, the full suite, or all configured projects is explicit authorization to automatically start or reuse the background Vitest UI server.
 
 Do not run these commands by default:
 
 ```text
-npm run vitest:ui:server
-npm run vitest:ui:mcp
 npx vitest --ui
 vitest --ui
 npm run test:watch
@@ -23,11 +21,21 @@ npm run watch-tests
 vitest
 ```
 
-The last command starts watch mode when `run` is omitted. Do not open the Vitest UI URL in a browser.
+The last command starts watch mode when `run` is omitted. Background Vitest UI startup must include the shared `--no-open` argument and must never open the UI URL in a system browser. Use `npm run vitest:ui:server` for an authorized full-suite run and use `scripts/vitest-ui/cli.mjs` for status and reruns.
 
-`npm run vitest:ui:mcp` is especially unsafe for routine agent use: when the configured UI URL is unreachable, `scripts/vitest-ui/mcp-server.mjs` automatically starts Vitest UI unless `VITEST_UI_MCP_START=false`; the MCP process is also long-lived. Never launch it from an agent terminal merely to inspect tests.
+Always start the authorized UI server with `execute_command` using both `background=true` and `timeout=0`. `background=true` detaches the server from the tool turn and marks it as explicit background work; `timeout=0` means no finite command deadline, so the server remains resident until it exits or is explicitly cancelled. Record the returned `function_id` and URL, and never attach the foreground server command to the conversation execution session. Keep a healthy UI server running after the test task completes unless the user asks to stop it or it must be replaced because it is unhealthy.
 
-If the user explicitly asks to start Vitest UI, start it as a detached/background process with a clear PID and URL. Never leave the foreground command attached to the conversation's execution session.
+### Background Server Cancellation
+
+Dline exposes different Cancel controls with intentionally different ownership semantics:
+
+- The running command card's **Cancel** button in the Work view cancels the exact command activity by `activityId`; it will terminate the Vitest UI server.
+- The matching **Cancel** button in the Activities view uses the same exact activity cancellation and will also terminate the server.
+- The task footer's **Cancel** button pauses the foreground Task and cancels only Task-owned work. It does not terminate a server started with `background=true`, because that command has explicit cancellation ownership.
+- `kill_command` with the server's exact `function_id` explicitly terminates that one server without cancelling the Task or other commands.
+- Closing or destroying the Task performs full cleanup and can terminate all commands associated with that Task, including explicit background work.
+
+When reporting the resident server, identify its `function_id`, URL, and the distinction above. Do not claim that every Work-view Cancel preserves the server: the command card's own Cancel is an explicit process cancellation, while the task footer Cancel is not.
 
 ## Confirm The Contract
 
@@ -37,8 +45,7 @@ Treat these files as the source of truth if commands appear stale:
 - `vitest.config.ts`: root projects, aliases, workers, and the 60-second test timeout.
 - `webview-ui/vitest.config.ts`: Webview test root and jsdom setup.
 - `scripts/vitest-ui/cli.mjs`: supported status and rerun arguments.
-- `scripts/vitest-ui/server.mjs`: foreground UI server behavior.
-- `scripts/vitest-ui/mcp-server.mjs`: automatic server startup behavior.
+- `scripts/vitest-ui/server.mjs`: UI server startup behavior.
 
 Do not infer a command from memory when one of these files has changed.
 
@@ -51,9 +58,9 @@ Escalate test scope deliberately:
 1. Reproduce and diagnose with one named test or one test file whenever possible.
 2. After the fix, rerun the original focused scope first.
 3. Then run the owning Vitest project when the changed boundary warrants broader confidence.
-4. Run all projects only when the change has repository-wide impact or the user explicitly requests a full rerun.
+4. When the user requests all projects, switch to the background Vitest UI workflow instead of launching a foreground one-shot full run.
 
-A full Dline rerun normally takes about 7-8 minutes. Give it a command timeout of at least 10 minutes, keep collecting the same process until it exits, and do not start another full run because output is temporarily quiet. Prefer separate project runs over a full run so failures are available sooner and unrelated projects do not extend the feedback loop.
+A full Dline rerun normally takes about 7-8 minutes. Give Vitest UI CLI wait/rerun operations a timeout of at least 10 minutes, keep querying the same server, and do not start another server or full run because output is temporarily quiet. Prefer separate one-shot project runs for local changes; reserve the UI workflow for explicit full-suite validation.
 
 Run focused root tests:
 
@@ -85,11 +92,7 @@ Run Webview tests from the Webview package so paths are relative to `webview-ui`
 npm --prefix webview-ui test -- src/components/settings/OpenAIServiceTierSelector.test.tsx
 ```
 
-Run all configured root projects only when the change warrants the cost:
-
-```powershell
-npm run test:run
-```
+For all configured root projects, do not run a foreground `npm run test:run`. Follow the background Vitest UI workflow below so the server survives command handoffs and the repository CLI provides the durable result channel.
 
 Do not use `npm test` for routine focused validation. Its `pretest` hook runs `npm run protos`, which can regenerate and format files before the tests. Use it only when that lifecycle behavior is intentionally required.
 
@@ -110,11 +113,11 @@ Start with the changed module's focused test. Then run adjacent tests for shared
 
 When broader validation is appropriate, run the owning project before considering all projects. Do not use a full rerun merely to validate a local test or fixture change.
 
-## Use An Existing Vitest UI Server
+## Run Or Reuse The Background Vitest UI
 
-The CLI in `scripts/vitest-ui/cli.mjs` only connects to an existing server; it does not start one. Use it only when the user says a Vitest UI server is already running or explicitly asks to inspect that server.
+The CLI in `scripts/vitest-ui/cli.mjs` only connects to an existing server; it does not start one. For an explicit full-suite request, first reuse a healthy server or automatically start one in the background.
 
-Before connecting, probe at most five consecutive ports. Start at the default port `51205`, then increment by one through `51209`; the default port counts as the first attempt. Stop at the first reachable Vitest UI and use that exact URL for subsequent CLI commands:
+Probe at most five consecutive ports. Start at the default port `51205`, then increment by one through `51209`; the default port counts as the first attempt. Stop at the first reachable Vitest UI and use that exact URL for all subsequent CLI commands:
 
 ```powershell
 $vitestUiUrl = $null
@@ -134,12 +137,33 @@ $vitestUiUrl
 
 Pass the discovered URL through `--url`; do not keep assuming port `51205` after a later port succeeds.
 
-Only after all five probes fail may you conclude that the Vitest UI server is not running. If no server is reachable:
+If all five probes fail during a full-suite request, start the server automatically on the first candidate port with `execute_command`:
 
-- Use a one-shot `test:run` command instead of starting a server.
-- Prefer one named test or one file; use the owning `--project` only when the focused scope is insufficient.
-- Report that the existing UI server is unavailable when the goal is to inspect its retained state.
-- Never fall back to `vitest:ui:server` or `vitest:ui:mcp` automatically.
+```text
+command: npm run vitest:ui:server -- --host localhost --port 51205 --config vitest.config.ts
+workdirectory: <repository-root>
+background: true
+timeout: 0
+requires_approval: false
+```
+
+The server wrapper supplies `--watch --no-open` to Vitest, so it remains resident without launching a system browser. Record the returned `function_id` and candidate URL. Because the server was started with `background=true` and `timeout=0`, do not wait for that command to exit. Probe that exact URL for up to 30 seconds before using the CLI. If the background command exits or the port is occupied by a non-Vitest service, inspect the command result and try the next candidate port, stopping after `51209`. Do not start duplicate servers on ports that already expose a healthy Vitest UI.
+
+If no candidate can start, report the environment/startup failure and do not claim that the full suite ran. Do not silently replace the requested UI workflow with a foreground full run.
+
+A newly started UI automatically begins its initial full run. Avoid the empty-collection race: query `status --json` until `summary.total` is greater than zero, retrying for up to 30 seconds. Then wait for the same run to become idle without `--allow-unknown`:
+
+```powershell
+npm run vitest:ui -- status --url <vitest-ui-url> --wait-idle --timeout 900000 --rpc-timeout 900000
+```
+
+For a reused UI server, first wait for any active run to become idle, then explicitly rerun all collected files so the result reflects the current workspace:
+
+```powershell
+npm run vitest:ui -- rerun all --url <vitest-ui-url> --wait --timeout 900000 --rpc-timeout 900000
+```
+
+Persistent `unknown` files are not passing files. Diagnose collection failures or report them as unresolved; use `--allow-unknown` only when the user explicitly accepts placeholder files.
 
 Read current failures:
 
@@ -155,10 +179,10 @@ Read status without waiting:
 npm run vitest:ui -- status --filter fail --details --timeout 10000 --rpc-timeout 15000
 ```
 
-Wait for an existing run to become idle only when waiting is part of the request:
+Wait for an existing focused rerun to become idle when waiting is part of the request:
 
 ```powershell
-npm run vitest:ui -- status --wait-idle --allow-unknown --timeout 180000 --rpc-timeout 180000
+npm run vitest:ui -- status --wait-idle --timeout 180000 --rpc-timeout 180000
 ```
 
 Rerun failures on the existing server:
@@ -178,7 +202,7 @@ Use `--all-matches` only after confirming that rerunning every match is intended
 
 ## Handle Running Commands
 
-When a command yields a continuation or process handle, keep collecting it until exit. Wait in intervals of at most 30 seconds, send concise progress updates, and do not start duplicate test runs because output is temporarily quiet.
+When a bounded one-shot or CLI command yields a continuation/process handle, keep collecting it until exit. Wait in intervals of at most 30 seconds, send concise progress updates, and do not start duplicate test runs because output is temporarily quiet. The background Vitest UI server is the exception: verify it through its URL and retained `function_id`, but leave the healthy long-lived process running rather than waiting for it to exit.
 
 If a one-shot test exceeds its expected duration, inspect the active process and the test's awaited boundary. Do not switch to watch/UI mode to obtain output.
 
@@ -189,9 +213,10 @@ The root config sets `testTimeout: 60_000`. A failure at approximately 60 second
 Always report:
 
 - The exact command scope or test files.
-- Test files passed/failed and tests passed/failed.
+- For a full run, the Vitest UI URL, whether it was started or reused, and the CLI command used to obtain the result.
+- Test files passed/failed and tests passed/failed; never count `unknown` files as passing.
 - The first meaningful assertion, stack, or timeout boundary.
-- Whether a failure came from test behavior or command/environment startup.
+- Whether a failure came from test behavior, collection, or command/environment startup.
 - Any validation that could not be run.
 
 After a fix, rerun the original RED test first. Then run adjacent tests and static checks appropriate to the changed production boundary.
