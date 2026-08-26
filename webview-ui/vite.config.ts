@@ -19,6 +19,8 @@ const writePortToFile = (): Plugin => {
 				const port = typeof address === "object" && address ? address.port : null
 
 				if (port) {
+					const origin = `http://localhost:${port}`
+					server.config.server.origin = origin
 					const portFilePath = resolve(__dirname, ".vite-port")
 					writeFileSync(portFilePath, port.toString())
 				} else {
@@ -119,6 +121,9 @@ export default defineConfig({
 	},
 	server: {
 		port: 25463,
+		fs: {
+			allow: [resolve(__dirname, "..")],
+		},
 		hmr: {
 			host: "localhost",
 			protocol: "ws",

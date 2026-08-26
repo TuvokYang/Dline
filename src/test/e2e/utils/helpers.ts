@@ -58,6 +58,8 @@ export interface E2ETestConfigs {
 	isolateOsHome: boolean
 	grpcRecorderEnabled: boolean
 	grpcUnaryFaults: string | undefined
+	installVsix: boolean
+	devWebview: boolean
 }
 
 export class E2ETestHelper {
@@ -436,6 +438,8 @@ export const e2e = test
 		isolateOsHome: [false, { option: true }],
 		grpcRecorderEnabled: [false, { option: true }],
 		grpcUnaryFaults: [undefined, { option: true }],
+		installVsix: [true, { option: true }],
+		devWebview: [false, { option: true }],
 	})
 	.extend<E2ETestDirectories, E2EWorkerFixtures>({
 		profileMode: ["mock", { scope: "worker", option: true }],
@@ -595,6 +599,8 @@ export const e2e = test
 				isolateOsHome,
 				grpcRecorderEnabled,
 				grpcUnaryFaults,
+				installVsix,
+				devWebview,
 				server,
 			},
 			use,
@@ -649,6 +655,7 @@ export const e2e = test
 					env: {
 						...electronEnvironment,
 						E2E_TEST: "true",
+						...(devWebview ? { IS_DEV: "true", DLINE_E2E_DEV_WEBVIEW: "true" } : {}),
 						DLINE_ENVIRONMENT: "local",
 						DLINE_DIR: dlineDir,
 						DLINE_HOME_DIR: dlineHomeDir,
@@ -679,7 +686,9 @@ export const e2e = test
 						"--skip-welcome",
 						"--skip-release-notes",
 						`--user-data-dir=${userDataDir}`,
-						`--install-extension=${path.join(E2ETestHelper.CODEBASE_ROOT_DIR, "dist", "e2e.vsix")}`,
+						...(installVsix
+							? [`--install-extension=${path.join(E2ETestHelper.CODEBASE_ROOT_DIR, "dist", "e2e.vsix")}`]
+							: []),
 						`--extensionDevelopmentPath=${E2ETestHelper.CODEBASE_ROOT_DIR}`,
 						workspacePath,
 					],

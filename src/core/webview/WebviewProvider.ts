@@ -10,8 +10,19 @@ import { Logger } from "@/shared/services/Logger"
 import { getNonce } from "./getNonce"
 import { WebviewProviderRegistry } from "./WebviewProviderRegistry"
 
-export function shouldUseWebviewHmr(extensionMode: number, e2eTest = process.env.E2E_TEST): boolean {
-	return extensionMode === 2 && !envFlagEnabled(e2eTest)
+export function shouldUseWebviewHmr(
+	extensionMode: number,
+	e2eTest = process.env.E2E_TEST,
+	e2eDevWebview = process.env.DLINE_E2E_DEV_WEBVIEW,
+): boolean {
+	return extensionMode === 2 && (!envFlagEnabled(e2eTest) || envFlagEnabled(e2eDevWebview))
+}
+
+export function shouldLoadWebviewReactDevtools(
+	isDev = process.env.IS_DEV,
+	reactDevtools = process.env.DLINE_WEBVIEW_REACT_DEVTOOLS,
+): boolean {
+	return envFlagEnabled(isDev) && envFlagEnabled(reactDevtools)
 }
 
 export abstract class WebviewProvider {
@@ -251,7 +262,7 @@ export abstract class WebviewProvider {
 
 		const csp = [
 			"default-src 'none'",
-			`font-src ${this.getCspSource()}`,
+			`font-src ${this.getCspSource()} http://${localServerUrl} http://0.0.0.0:${localPort}`,
 			`style-src ${this.getCspSource()} 'unsafe-inline' https://* http://${localServerUrl} http://0.0.0.0:${localPort}`,
 			`img-src ${this.getCspSource()} https: data:`,
 			`media-src ${this.getCspSource()} https: data: blob: http://${localServerUrl} http://0.0.0.0:${localPort}`,
@@ -263,7 +274,7 @@ export abstract class WebviewProvider {
 			<!DOCTYPE html>
 			<html lang="en">
 				<head>
-					${envFlagEnabled(process.env.IS_DEV) ? '<script src="http://localhost:8097"></script>' : ""}
+					${shouldLoadWebviewReactDevtools() ? '<script src="http://localhost:8097"></script>' : ""}
 					<meta charset="utf-8">
 					<meta name="viewport" content="width=device-width,initial-scale=1,shrink-to-fit=no">
 					<meta http-equiv="Content-Security-Policy" content="${csp.join("; ")}">
