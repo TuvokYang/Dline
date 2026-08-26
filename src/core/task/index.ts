@@ -13,10 +13,7 @@ import {
 } from "@core/context/context-management/compaction-context-projection"
 import { createCompactionConversationRange } from "@core/context/context-management/compaction-conversation-range"
 import { CompactionRetryPolicy } from "@core/context/context-management/compaction-retry-policy"
-import {
-	hasCompactionWindowBudgetMarker,
-	resolveCompactionWindowBudget,
-} from "@core/context/context-management/compaction-window-budget"
+import { resolveCompactionWindowBudget } from "@core/context/context-management/compaction-window-budget"
 import { projectContextCompactionBoundary } from "@core/context/context-management/context-compaction-boundary"
 import { checkContextWindowExceededError } from "@core/context/context-management/context-error-handling"
 import {
@@ -2351,20 +2348,28 @@ export class Task {
 			targetTool: ClineDefaultTool.SUMMARIZE_TASK,
 			operationId: input.operationId,
 		})
-		const summaryPrompt = summarizeTask(
+		const focusChainSettings =
 			resolvePromptProfile({
 				modelId: requestScope.providerInfo.model.id,
 				contextWindow: requestScope.providerInfo.model.info.capabilities?.contextWindow,
 			}) === PromptProfile.Standard
 				? this.stateManager.getGlobalSettingsKey("focusChainSettings")
-				: undefined,
-			this.cwd,
-			isMultiRootEnabled(this.stateManager),
-		)
+				: undefined
 		const passGuidance = cloneDeep(feedback ?? input.passGuidance ?? [])
-		const candidateHistory: ClineStorageMessage[] = [
+		const requestTimestamp = Date.now()
+		const buildCandidateHistory = (budgetGuidance: string): ClineStorageMessage[] => [
 			...cloneDeep(passHistory),
-			{ role: "user", content: [{ type: "text", text: summaryPrompt }, ...passGuidance], ts: Date.now() },
+			{
+				role: "user",
+				content: [
+					{
+						type: "text",
+						text: summarizeTask(focusChainSettings, this.cwd, isMultiRootEnabled(this.stateManager), budgetGuidance),
+					},
+					...cloneDeep(passGuidance),
+				],
+				ts: requestTimestamp,
+			},
 		]
 		const previousApiReqIndex = findLastIndex(
 			this.messageStateHandler.clineMessages,
@@ -2372,14 +2377,33 @@ export class Task {
 		)
 		try {
 			const providerInput = await this.buildProviderInput(previousApiReqIndex, requestScope, {
-				apiConversationHistory: candidateHistory,
+				apiConversationHistory: buildCandidateHistory(""),
 				applyContextManagement: false,
 				applyCompactionProjection: false,
 				preview: true,
 				conversationHistoryDeletedRange: null,
 			})
+			const { contextWindow } = getContextWindowInfo(input.compactionApi)
+			const policy = resolveCompactTriggerPolicy(
+				contextWindow,
+				computeSummarizeBudget(),
+				this.getAutoCondenseTriggerOptions(),
+			)
+			const resolvedBudget = resolveCompactionWindowBudget({
+				contextWindow: policy.hardPassContextWindowTokens,
+				maxOutputTokens: requestScope.providerInfo.model.info.capabilities?.maxTokens,
+				systemPrompt: providerInput.systemPrompt,
+				tools: providerInput.tools,
+				serverTools: providerInput.serverTools,
+				closureReserveTokens: COMPACTION_CLOSURE_RESERVE_TOKENS,
+				buildMessages: buildCandidateHistory,
+			})
 			return {
-				providerInput,
+				providerInput: {
+					...providerInput,
+					messages: resolvedBudget.messages,
+					providerOutputCap: resolvedBudget.budget.providerOutputCap,
+				},
 				explicitInstructions: requestScope.explicitInstructions,
 				initialAttemptId: requestScope.explicitInstructions.createConsumePort().identity.attemptId,
 			}
@@ -5839,30 +5863,10 @@ export class Task {
 					: this.contextManager.getTruncatedMessages(cloneDeep(apiConversationHistory), deletedRange)
 		}
 
-		let messages = ensureApiMessages(managedMessages, apiConversationHistory)
+		const messages = ensureApiMessages(managedMessages, apiConversationHistory)
 		const serverTools = requestScope.webSearchRoutingPlan.serverTools
-		let providerOutputCap: number | undefined
-		if (hasCompactionWindowBudgetMarker(messages)) {
-			const { contextWindow } = getContextWindowInfo(api)
-			const policy = resolveCompactTriggerPolicy(
-				contextWindow,
-				computeSummarizeBudget(),
-				this.getAutoCondenseTriggerOptions(),
-			)
-			const resolvedBudget = resolveCompactionWindowBudget({
-				contextWindow: policy.hardPassContextWindowTokens,
-				maxOutputTokens: providerInfo.model.info.capabilities?.maxTokens,
-				systemPrompt,
-				messages,
-				tools,
-				serverTools,
-				closureReserveTokens: COMPACTION_CLOSURE_RESERVE_TOKENS,
-			})
-			messages = resolvedBudget.messages
-			providerOutputCap = resolvedBudget.budget.providerOutputCap
-		}
 
-		return { systemPrompt, messages, tools, serverTools, providerOutputCap }
+		return { systemPrompt, messages, tools, serverTools, providerOutputCap: undefined }
 	}
 
 	/** Build the exact ordinary candidate used by the final admission projection. */

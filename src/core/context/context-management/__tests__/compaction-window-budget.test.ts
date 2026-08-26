@@ -1,33 +1,32 @@
 import { describe, expect, it } from "vitest"
 import type { ClineStorageMessage } from "@/shared/messages"
-import { COMPACTION_WINDOW_BUDGET_MARKER, resolveCompactionWindowBudget } from "../compaction-window-budget"
+import { resolveCompactionWindowBudget } from "../compaction-window-budget"
 
-function compactionMessages(): ClineStorageMessage[] {
+function compactionMessages(budgetGuidance = ""): ClineStorageMessage[] {
 	return [
 		{ role: "user", content: [{ type: "text", text: "Preserve this canonical history." }] },
 		{
 			role: "user",
-			content: [{ type: "text", text: `Summarize now.\n\n${COMPACTION_WINDOW_BUDGET_MARKER}` }],
+			content: [{ type: "text", text: `Summarize now.\n\n${budgetGuidance}` }],
 		},
 	]
 }
 
 describe("compaction window budget", () => {
-	it("resolves the marker from the complete request without mutating canonical messages", () => {
+	it("rebuilds only the explicit instruction without mutating canonical messages", () => {
 		const messages = compactionMessages()
 		const original = JSON.stringify(messages)
 		const result = resolveCompactionWindowBudget({
 			contextWindow: 32_000,
 			maxOutputTokens: 4_096,
 			systemPrompt: "SYSTEM ".repeat(400),
-			messages,
+			buildMessages: compactionMessages,
 			tools: [{ type: "function", function: { name: "summarize_task", description: "tool".repeat(300) } }],
 			serverTools: [{ type: "web_search" }],
 		})
 		const rendered = JSON.stringify(result.messages)
 
 		expect(JSON.stringify(messages)).toBe(original)
-		expect(rendered).not.toContain(COMPACTION_WINDOW_BUDGET_MARKER)
 		expect(rendered).toContain("# Compaction Window Budget")
 		expect(rendered).toContain(`${result.budget.availableRemainder}`)
 		expect(rendered).toContain(`${result.budget.outputHardLimit}`)
@@ -54,8 +53,8 @@ describe("compaction window budget", () => {
 		expect(result.budget.recommendedMax).toBeLessThanOrEqual(result.budget.availableRemainder)
 	})
 
-	it("resolves the marker nested inside a manual compaction tool result", () => {
-		const messages: ClineStorageMessage[] = [
+	it("preserves existing tool results while rebuilding the explicit instruction", () => {
+		const history: ClineStorageMessage[] = [
 			{
 				role: "user",
 				content: [
@@ -63,7 +62,7 @@ describe("compaction window budget", () => {
 						type: "tool_result",
 						function_id: "call_manual_compact",
 						dline_tid: "dline_tid_manual_compact",
-						content: [{ type: "text", text: `${COMPACTION_WINDOW_BUDGET_MARKER}\n\nPreserve user feedback.` }],
+						content: [{ type: "text", text: "Preserve user feedback exactly." }],
 					},
 				],
 			},
@@ -73,20 +72,22 @@ describe("compaction window budget", () => {
 			contextWindow: 32_000,
 			maxOutputTokens: 4_096,
 			systemPrompt: "system",
-			messages,
+			buildMessages: (budgetGuidance) => [
+				...history,
+				{ role: "user", content: [{ type: "text", text: `Summarize now.\n\n${budgetGuidance}` }] },
+			],
 		})
 		const rendered = JSON.stringify(result.messages)
 
-		expect(rendered).not.toContain(COMPACTION_WINDOW_BUDGET_MARKER)
 		expect(rendered).toContain("# Compaction Window Budget")
-		expect(rendered).toContain("Preserve user feedback.")
+		expect(rendered).toContain("Preserve user feedback exactly.")
 	})
 
 	it("caps the summary response at the model output limit without exceeding context remainder", () => {
 		const common = {
 			contextWindow: 64_000,
 			systemPrompt: "system",
-			messages: compactionMessages(),
+			buildMessages: compactionMessages,
 		}
 		const missing = resolveCompactionWindowBudget(common)
 		const small = resolveCompactionWindowBudget({ ...common, maxOutputTokens: 1_024 })
@@ -109,7 +110,7 @@ describe("compaction window budget", () => {
 			contextWindow: 128,
 			maxOutputTokens: 500_000,
 			systemPrompt: "system".repeat(1_000),
-			messages: compactionMessages(),
+			buildMessages: compactionMessages,
 		})
 
 		expect(result.budget.rawRemainder).toBeLessThan(0)
@@ -123,7 +124,7 @@ describe("compaction window budget", () => {
 		const common = {
 			contextWindow: 64_000,
 			maxOutputTokens: 32_000,
-			messages: compactionMessages(),
+			buildMessages: compactionMessages,
 		}
 		const small = resolveCompactionWindowBudget({ ...common, systemPrompt: "small", tools: [] })
 		const large = resolveCompactionWindowBudget({

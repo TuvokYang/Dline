@@ -1,8 +1,5 @@
-import cloneDeep from "clone-deep"
 import type { ClineStorageMessage } from "@/shared/messages"
 import { COMPACTION_CLOSURE_RESERVE_TOKENS } from "./context-window-utils"
-
-export const COMPACTION_WINDOW_BUDGET_MARKER = "<compaction_window_budget />"
 
 export type CompactionWindowBudgetDecision = "ready" | "needs_smaller_input"
 
@@ -24,10 +21,10 @@ export interface ResolveCompactionWindowBudgetInput {
 	contextWindow: number
 	maxOutputTokens?: number
 	systemPrompt: string
-	messages: ClineStorageMessage[]
 	tools?: readonly unknown[]
 	serverTools?: readonly unknown[]
 	closureReserveTokens?: number
+	buildMessages: (guidance: string) => ClineStorageMessage[]
 }
 
 export interface ResolvedCompactionWindowBudget {
@@ -38,19 +35,13 @@ export interface ResolvedCompactionWindowBudget {
 const TOKEN_ESTIMATE_BYTES = 4
 const MAX_RENDER_PASSES = 3
 
-/** Detect whether a request still contains a compaction-budget marker. */
-export function hasCompactionWindowBudgetMarker(messages: readonly ClineStorageMessage[]): boolean {
-	return messages.some((message) => JSON.stringify(message.content).includes(COMPACTION_WINDOW_BUDGET_MARKER))
-}
-
-/** Resolve a request-scoped compaction budget without mutating canonical history. */
+/** Resolve a request-scoped compaction budget by rebuilding only the explicit summarize_task instruction. */
 export function resolveCompactionWindowBudget(input: ResolveCompactionWindowBudgetInput): ResolvedCompactionWindowBudget {
-	let messages = cloneDeep(input.messages)
+	let messages = input.buildMessages("")
 	let budget = computeBudget(input, messages)
 
 	for (let pass = 0; pass < MAX_RENDER_PASSES; pass++) {
-		const guidance = renderBudgetGuidance(budget)
-		messages = replaceBudgetMarker(input.messages, guidance)
+		messages = input.buildMessages(renderBudgetGuidance(budget))
 		const nextBudget = computeBudget(input, messages)
 		if (
 			nextBudget.estimatedInputTokens === budget.estimatedInputTokens &&
@@ -62,7 +53,7 @@ export function resolveCompactionWindowBudget(input: ResolveCompactionWindowBudg
 		budget = nextBudget
 	}
 
-	messages = replaceBudgetMarker(input.messages, renderBudgetGuidance(budget))
+	messages = input.buildMessages(renderBudgetGuidance(budget))
 	budget = computeBudget(input, messages)
 	return { budget, messages }
 }
@@ -110,35 +101,6 @@ function normalizeNonNegativeInteger(value: number): number {
 
 function estimateTokens(value: unknown): number {
 	return Math.max(1, Math.ceil(Buffer.byteLength(JSON.stringify(value), "utf8") / TOKEN_ESTIMATE_BYTES))
-}
-
-function replaceBudgetMarker(messages: ClineStorageMessage[], guidance: string): ClineStorageMessage[] {
-	const cloned = cloneDeep(messages)
-	for (const message of cloned) {
-		if (typeof message.content === "string") {
-			message.content = message.content.replaceAll(COMPACTION_WINDOW_BUDGET_MARKER, guidance)
-			continue
-		}
-		for (const block of message.content) {
-			if (block.type === "text") {
-				block.text = block.text.replaceAll(COMPACTION_WINDOW_BUDGET_MARKER, guidance)
-				continue
-			}
-			if (block.type !== "tool_result" || !block.content) {
-				continue
-			}
-			if (typeof block.content === "string") {
-				block.content = block.content.replaceAll(COMPACTION_WINDOW_BUDGET_MARKER, guidance)
-				continue
-			}
-			for (const contentBlock of block.content) {
-				if (contentBlock.type === "text") {
-					contentBlock.text = contentBlock.text.replaceAll(COMPACTION_WINDOW_BUDGET_MARKER, guidance)
-				}
-			}
-		}
-	}
-	return cloned
 }
 
 function renderBudgetGuidance(budget: CompactionWindowBudget): string {

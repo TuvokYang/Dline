@@ -1,10 +1,14 @@
-import { COMPACTION_WINDOW_BUDGET_MARKER } from "@core/context/context-management/compaction-window-budget"
 import { RuntimePromptGenerator } from "./generators/RuntimePromptGenerator"
 import { englishTemplateStore } from "./i18n/en"
 
 const runtimeGenerator = new RuntimePromptGenerator(englishTemplateStore)
 
-export const summarizeTask = (focusChainSettings?: { enabled: boolean }, cwd?: string, isMultiRootEnabled?: boolean) => {
+export const summarizeTask = (
+	focusChainSettings?: { enabled: boolean },
+	cwd?: string,
+	isMultiRootEnabled?: boolean,
+	compactionWindowBudget = "",
+) => {
 	const CWD = cwd ? cwd.toPosix() : ""
 
 	const MULTI_ROOT_HINT = isMultiRootEnabled
@@ -34,7 +38,7 @@ export const summarizeTask = (focusChainSettings?: { enabled: boolean }, cwd?: s
 			FOCUS_CHAIN_USAGE: focusChainUsage,
 			FOCUS_CHAIN_EXAMPLE: focusChainExample,
 			SUMMARY_DECISION: summaryDecision,
-			COMPACTION_WINDOW_BUDGET: COMPACTION_WINDOW_BUDGET_MARKER,
+			COMPACTION_WINDOW_BUDGET: compactionWindowBudget,
 		}).text
 	}\n`
 }

@@ -1,7 +1,6 @@
 import { ClineDefaultTool } from "@shared/tools"
 import { describe, expect, it, vi } from "vitest"
 
-import { COMPACTION_WINDOW_BUDGET_MARKER } from "../../../context/context-management/compaction-window-budget"
 import { summarizeTask } from "../../contextManagement"
 import { englishTemplateStore } from "../../i18n/en"
 import { createPromptGroup } from "../../i18n/helpers/create-pack"
@@ -198,9 +197,10 @@ describe("RuntimePromptGenerator", () => {
 	})
 
 	it("keeps the compaction budget and closure contract inside the explicit instruction", () => {
-		const prompt = summarizeTask({ enabled: false })
+		const budgetGuidance = "# Compaction Window Budget\n- Hard limit for the complete response: 4096 tokens."
+		const prompt = summarizeTask({ enabled: false }, undefined, undefined, budgetGuidance)
 		const instructionStart = prompt.indexOf('<explicit_instructions type="summarize_task">')
-		const budgetIndex = prompt.indexOf(COMPACTION_WINDOW_BUDGET_MARKER)
+		const budgetIndex = prompt.indexOf(budgetGuidance)
 		const instructionEnd = prompt.indexOf("</explicit_instructions>")
 
 		expect(instructionStart).toBeGreaterThanOrEqual(0)
